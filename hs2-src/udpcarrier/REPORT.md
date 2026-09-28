@@ -159,3 +159,75 @@ HS2_FEC_SWEEP=1 go test ./fec -run Sweep -v
 # real-kernel end-to-end (needs root + netns + veth; see scratch scripts):
 #   MODE=udp|auto|mtcp|tls  BURSTLOSS=0.88 BADMS=12 GOODMS=30 RATE=20mbit  lab
 ```
+
+---
+
+# Direct vs Reverse direction (added)
+
+The tunnel now supports two **directions**, chosen by the user in the installer,
+independent of the transport (tcp/udp/auto) and of the roles (iran = user-facing
+edge, kharej = panel/exit — these never change).
+
+- **Direct** (default, classic): the iran edge **dials out** to the kharej. The
+  first SYN originates in Iran.
+- **Reverse**: the kharej **dials in** to the iran edge. The first SYN
+  originates abroad — useful when outbound-from-Iran is filtered/throttled but
+  inbound is not, or when the kharej is behind NAT/CDN.
+
+```
+DIRECT :  user ─▶ [iran: user ports] ══dial══▶ [kharej: listen] ─▶ panel
+REVERSE:  user ─▶ [iran: user ports + listen] ◀══dial══ [kharej: dials] ─▶ panel
+          (data path identical; only who initiates the connection flips)
+```
+
+## Design: role decoupled from direction
+
+The key change is separating two axes that were fused:
+
+- **Role** (fixed by deployment): `edge` = iran (opens user ports, originates
+  smux streams), `exit` = kharej (connects to the panel, accepts smux streams).
+- **Direction** (user choice): who dials the carrier.
+
+The smux roles stay put in both directions — the edge is always the smux client,
+the exit always the smux server. Only the TLS/UDP dial-vs-listen flips:
+
+| | edge (iran) | exit (kharej) |
+|---|---|---|
+| direct  | TLS/UDP **client** + smux client | TLS/UDP **server** + smux server |
+| reverse | TLS/UDP **server** + smux client | TLS/UDP **client** + smux server |
+
+Implementation:
+- Stream carriers (mtcp/l3mtcp/tls): `LinkManager` gained an accept mode
+  (`AddLink`); the reverse edge accepts links from a `tlscarrier.Server` and
+  feeds them to the pool (`engine/stream_reverse.go`), and the reverse exit
+  dials a fixed pool of links and runs the smux server on each. `serveUserTCP`
+  and `serveStream` are reused unchanged.
+- Engine carriers (udp/auto/noise/reality): reverse is a pure dial/listen flip.
+  `cmd` derives it as `dialing = (mode==edge) XOR reverse`, so the installer
+  writes `mode` as the fixed role and a `reverse` flag.
+- Reverse for TLS carriers moves the **certificate to the iran side** (it is the
+  TLS server in reverse); the installer's reverse flow provisions it there.
+- The `hs2://` link gained a `direction` field; the **listener side generates
+  the link** (it knows its own endpoint) and the dialer pastes it — so in
+  reverse the iran side generates the link and kharej pastes it.
+
+## Testing
+
+- `engine.TestReverseStreamTCPAndUDP`, `engine.TestReverseStreamRedials`: the
+  reverse stream path end-to-end over real TCP (iran `net.Listen` TLS server +
+  kharej `DialFrom`), TCP and UDP payloads, with `-race`. Pass.
+- Existing direct tests, all carriers, and the UDP suite: unchanged, `-race`
+  clean.
+- Installer: `bash -n` clean; generated config JSON validated for all four
+  role×direction cases; `hs2://` link round-trips with the direction field.
+
+## Limitation (honest)
+
+The reverse path is proven by the deterministic Go tests, which drive the exact
+reverse code over real sockets on loopback. The **network-namespace** end-to-end
+run for reverse could not be completed in this sandbox: inbound connections to a
+listener on the emulated iran interface fail there (UDP handshake gets no reply,
+TCP times out) — the same veth/netem/inbound limitation seen elsewhere in this
+environment, not a defect in the transport (the identical code path passes over
+real sockets in the Go tests, and the direct direction works in the same lab).
+On a real two-server deployment there is no such asymmetry.

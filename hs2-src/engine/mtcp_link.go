@@ -129,15 +129,28 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 	if err != nil {
 		return nil, err
 	}
+	return newEdgeLink(car, d.sampler)
+}
+
+// newEdgeLink wraps an authenticated TLS carrier as an edge-side mtcp link: a
+// smux CLIENT that opens one stream per user connection. It is shared by the
+// direct edge (which DIALS the carrier) and the reverse edge (which ACCEPTS it),
+// because the edge's smux role is the same either way — only who established the
+// TLS connection differs.
+func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLink, error) {
 	sess, err := newSession(car.RawConn(), false)
 	if err != nil {
 		car.Close()
 		return nil, err
 	}
-	l := &mtcpLink{tls: car, sess: sess, sampler: d.sampler}
+	l := &mtcpLink{tls: car, sess: sess, sampler: sampler}
 	go l.healthProbe(context.Background())
 	return l, nil
 }
+
+// closed reports when the link's smux session ends, so a reverse-edge accept
+// handler can hold the carrier open for the link's lifetime.
+func (l *mtcpLink) closed() <-chan struct{} { return l.sess.CloseChan() }
 
 // NewMTCPDialer builds a link dialer for the manager. bindIP (optional) is the
 // local source address links are dialled from.

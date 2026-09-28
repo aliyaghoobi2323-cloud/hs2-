@@ -39,6 +39,12 @@ type fileConfig struct {
 	Carrier string `json:"carrier"` // "reality" or "noise"
 	Addr    string `json:"addr"`    // dial target or listen bind
 
+	// Direction. Direct (default): the edge (iran, mode=dial) initiates the
+	// connection to the exit (kharej, mode=listen). Reverse: the exit initiates
+	// to the edge, so the edge LISTENS and the exit DIALS — the data path and
+	// roles (edge=user ports, exit=panel) are unchanged, only who dials flips.
+	Reverse bool `json:"reverse"`
+
 	// custom tunnel IP (optional): egress/listen on a specific server IP
 	BindLocalIP  string `json:"bind_local_ip"`  // iran: source IP to dial from
 	UserListenIP string `json:"user_listen_ip"` // iran: IP the user ports listen on
@@ -163,9 +169,14 @@ func runCmd(args []string) {
 	}
 }
 
+// dialing reports whether this side initiates the connection. mode is the fixed
+// role ("dial"=edge/iran, "listen"=exit/kharej); Reverse flips who dials. So the
+// edge dials in direct and listens in reverse, and vice versa for the exit.
+func dialing(fc fileConfig) bool { return (fc.Mode == "dial") != fc.Reverse }
+
 func runReality(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 	key := unhex(fc.SharedKey)
-	if fc.Mode == "dial" {
+	if dialing(fc) {
 		d := engine.NewRealityDialer(fc.Addr, fc.SNI, key)
 		must(eng.RunDial(ctx, d))
 		return
@@ -180,6 +191,10 @@ func runReality(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 // runStream runs any TLS carrier in stream mode (see engine/stream.go). User
 // TCP (and optionally UDP) always rides smux streams; withTUN adds hs0 as a
 // side channel for other traffic; links > 0 pins the pool size.
+//
+// The role is the config mode: "dial" = edge (iran, user ports), "listen" =
+// exit (kharej, panel). fc.Reverse flips WHO dials the TLS carrier without
+// changing those roles: in reverse the edge LISTENS and the exit DIALS.
 func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	key := unhex(fc.SharedKey)
 	logf := func(f string, a ...any) { log.Printf(f, a...) }
@@ -195,7 +210,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		dev = d
 		logf("tun %s up: %s peer %s (side channel)", d.Name(), fc.LocalCIDR, fc.PeerIP)
 	}
-	if fc.Mode == "dial" {
+	edge := fc.Mode == "dial"
+
+	if edge {
 		// Defaults chosen in the lab: 4 links cannot get past per-connection
 		// throttling, 8 can; the pool grows toward 16 with users.
 		min, max, per := fc.MinLinks, fc.MaxLinks, fc.PerLink
@@ -212,8 +229,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			min, max = links, links
 		}
 		cfg := engine.IranConfig{
-			Dialer: engine.NewMTCPDialer(fc.Addr, fc.SNI, key, fc.BindLocalIP),
-			Min:    min, Max: max, PerLink: per,
+			Min: min, Max: max, PerLink: per,
 			ListenIP: fc.UserListenIP,
 			Ports:    splitComma(fc.ForwardPorts),
 			UDP:      fc.UDP,
@@ -222,25 +238,65 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		if dev != nil {
 			cfg.TUN = dev
 		}
+		if fc.Reverse {
+			// Reverse edge: the iran side LISTENS for links the kharej dials in.
+			// It needs a cert (it is the TLS server now) and a probe backend.
+			cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
+			must(err)
+			ln, err := engine.ListenReuse(fc.Addr)
+			must(err)
+			cfg.RevServer = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
+			cfg.RevListener = ln
+			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
+		} else {
+			cfg.Dialer = engine.NewMTCPDialer(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+		}
 		must(engine.RunIran(ctx, cfg))
+		return
+	}
+
+	// exit (kharej): has the panel.
+	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf}
+	if dev != nil {
+		cfg.TUN = dev
+	}
+	if fc.Reverse {
+		// Reverse exit: the kharej DIALS the iran edge (a TLS server) and runs
+		// a fixed pool of links. No cert here; it is the TLS client now.
+		n := fc.MinLinks
+		if links > 0 {
+			n = links
+		}
+		if n == 0 {
+			n = 8
+		}
+		cfg.RevLinks = n
+		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
+			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+		}
+		logf("stream exit (reverse): dialing %d links to edge %s", n, fc.Addr)
+		must(engine.RunKharej(ctx, cfg))
 		return
 	}
 	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
 	must(err)
+	ln, err := engine.ListenReuse(fc.Addr)
+	must(err)
+	cfg.Listener = ln
+	cfg.Server = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
+	must(engine.RunKharej(ctx, cfg))
+}
+
+// streamBackend returns the probe-forwarding backend for a TLS-server side,
+// starting the built-in boring website when none is configured.
+func streamBackend(fc fileConfig) string {
 	backend := fc.BackendAddr
 	if backend == "" || backend == "builtin" {
 		addr, err := startBuiltinBackend()
 		must(err)
 		backend = addr
 	}
-	ln, err := engine.ListenReuse(fc.Addr)
-	must(err)
-	srv := &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: backend, Logf: logf}
-	cfg := engine.KharejConfig{Listener: ln, Server: srv, Panel: fc.Expose, Log: logf}
-	if dev != nil {
-		cfg.TUN = dev
-	}
-	must(engine.RunKharej(ctx, cfg))
+	return backend
 }
 
 // runUDP runs the UDP transport (Noise + adaptive FEC). With auto=true the
@@ -254,7 +310,7 @@ func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
 		mtu = 1280
 	}
 	logf := func(f string, a ...any) { log.Printf(f, a...) }
-	if fc.Mode == "dial" {
+	if dialing(fc) {
 		var d engine.CarrierDialer
 		if auto {
 			d = engine.NewAutoDialer(fc.Addr, shared, mtu, logf)
@@ -277,7 +333,7 @@ func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
 
 func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 	local := core.StaticKey{Public: unhex(fc.LocalPub), Private: unhex(fc.LocalPriv)}
-	if fc.Mode == "dial" {
+	if dialing(fc) {
 		d := engine.NewNoiseDialer(fc.Addr, local, unhex(fc.RemoteStatic), unhex(fc.PSK))
 		must(eng.RunDial(ctx, d))
 		return

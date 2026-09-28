@@ -11,13 +11,21 @@ import (
 	"github.com/xtaci/smux"
 )
 
-// KharejConfig configures the kharej (accepting) side of stream mode.
+// KharejConfig configures the kharej (exit) side of stream mode: the side with
+// the panel. In the DIRECT direction it LISTENS for links the iran edge dials;
+// in the REVERSE direction it DIALS RevLinks parallel links to the iran edge
+// (RevDial set) and runs the smux server on each.
 type KharejConfig struct {
 	Listener net.Listener
 	Server   *tlscarrier.Server
 	Panel    string    // where TCP and UDP streams are delivered
 	TUN      tunWriter // non-nil: accept hs0 side-channel streams
 	Log      func(string, ...any)
+
+	// Reverse exit: dial the iran edge instead of listening. RevDial returns a
+	// fresh authenticated TLS carrier to the edge; RevLinks is how many to keep.
+	RevDial  func() (*tlscarrier.Carrier, error)
+	RevLinks int
 }
 
 // RunKharej accepts links and serves their streams until ctx ends.
@@ -31,6 +39,9 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		l3 = &l3Set{}
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
+	}
+	if cfg.RevDial != nil {
+		return runKharejReverse(ctx, cfg, l3, logf)
 	}
 	var links atomic.Int32
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
