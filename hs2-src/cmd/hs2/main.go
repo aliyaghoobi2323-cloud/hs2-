@@ -120,6 +120,9 @@ func runCmd(args []string) {
 	must(err)
 	var fc fileConfig
 	must(json.Unmarshal(raw, &fc))
+	if err := validate(fc); err != nil {
+		log.Fatalf("%s: %v", *cfgPath, err)
+	}
 
 	eng := engine.New(engine.Config{
 		Iface: fc.Iface, LocalCIDR: fc.LocalCIDR, PeerIP: fc.PeerIP, MTU: fc.MTU,
@@ -277,7 +280,9 @@ func splitComma(s string) []string {
 	return out
 }
 
-func unhex(s string) []byte { b, _ := hex.DecodeString(s); return b }
+// unhex decodes a hex key. Keys used by the TLS carriers are checked by
+// validate first, so a decode error here cannot silently yield an empty key.
+func unhex(s string) []byte { b, _ := hex.DecodeString(strings.TrimSpace(s)); return b }
 func must(err error) {
 	if err != nil {
 		log.Fatal(err)

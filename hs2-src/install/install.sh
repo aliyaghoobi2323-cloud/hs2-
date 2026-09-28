@@ -32,7 +32,83 @@ hr(){   _c '0;36' "────────────────────�
 [ "$(id -u)" = 0 ] || die "Please run as root."
 
 # ---------- helpers ----------------------------------------------------------
-port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
+# ---------- input validation ---------------------------------------------------
+# Every value typed by the user ends up in JSON and in listen/dial addresses, so
+# each one is checked before use; a bad answer is asked again, not written.
+is_port(){ [[ "$1" =~ ^[1-9][0-9]{0,4}$ ]] && [ "$1" -le 65535 ]; }
+is_ipv4(){
+  [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  local o; for o in "${BASH_REMATCH[@]:1}"; do
+    [[ "$o" =~ ^(0|[1-9][0-9]{0,2})$ ]] && [ "$o" -le 255 ] || return 1
+  done
+}
+is_ipv6(){
+  local s=$1 g n=0
+  [[ "$s" == *:* && "$s" =~ ^[0-9A-Fa-f:]+$ && ${#s} -le 39 ]] || return 1
+  [[ "$s" == *:::* ]] && return 1
+  [ "$(grep -o '::' <<< "$s" | wc -l)" -le 1 ] || return 1
+  local IFS=:
+  for g in $s; do
+    [ -z "$g" ] && continue
+    [ ${#g} -le 4 ] || return 1
+    n=$((n+1))
+  done
+  if [[ "$s" == *::* ]]; then [ "$n" -le 7 ]; else [ "$n" -eq 8 ]; fi
+}
+is_ip(){ is_ipv4 "$1" || is_ipv6 "$1"; }
+is_domain(){ [ ${#1} -le 253 ] && [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]]; }
+is_key(){ [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
+# host:port, or [ipv6]:port; host = IPv4, IPv6 (bracketed), domain or localhost
+is_hostport(){
+  local h p
+  if [[ "$1" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+    h=${BASH_REMATCH[1]}; p=${BASH_REMATCH[2]}; is_ipv6 "$h" || return 1
+  elif [[ "$1" =~ ^([^:]+):([0-9]+)$ ]]; then
+    h=${BASH_REMATCH[1]}; p=${BASH_REMATCH[2]}
+    is_ipv4 "$h" || is_domain "$h" || [ "$h" = localhost ] || return 1
+  else
+    return 1
+  fi
+  is_port "$p"
+}
+# join host and port, bracketing IPv6
+hostport(){ if [[ "$1" == *:* ]]; then printf '[%s]:%s' "$1" "$2"; else printf '%s:%s' "$1" "$2"; fi; }
+is_local_ip(){ ip -br addr 2>/dev/null | tr -s ' ' '\n' | sed 's#/.*##' | grep -qxF "$1"; }
+opt_local_ip(){ [ -z "$1" ] || { is_ip "$1" && is_local_ip "$1"; }; }
+
+port_free(){ is_port "$1" && ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
+udp_free(){ is_port "$1" && ! ss -Hlun "sport = :$1" 2>/dev/null | grep -q .; }
+
+# ask VAR "prompt" default check "why it was rejected"
+# Whitespace is removed from the answer; up to three tries.
+ask(){
+  local __var=$1 prompt=$2 def=$3 check=$4 why=$5 ans i
+  for i in 1 2 3; do
+    read -rp "$prompt" ans </dev/tty || ans=""
+    ans=${ans:-$def}
+    ans=$(printf '%s' "$ans" | tr -d '[:space:]')
+    if "$check" "$ans"; then printf -v "$__var" '%s' "$ans"; return 0; fi
+    warn "$why"
+  done
+  die "too many invalid answers; run the installer again"
+}
+
+# user ports: comma-separated, each valid, no duplicates, free (TCP, and UDP
+# too when UDP forwarding is on)
+ports_ok(){
+  local list=$1 p seen=","
+  [ -n "$list" ] || return 1
+  local IFS=,
+  for p in $list; do
+    is_port "$p" || { warn "  '$p' is not a port number (1-65535)"; return 1; }
+    [[ "$seen" == *",$p,"* ]] && { warn "  port $p is listed twice"; return 1; }
+    seen="$seen$p,"
+    port_free "$p" || { warn "  TCP port $p is already in use (Backhaul or panel?)"; return 1; }
+    if [ "${UDP:-false}" = true ]; then
+      udp_free "$p" || { warn "  UDP port $p is already in use"; return 1; }
+    fi
+  done
+}
 
 show_ips(){ ip -4 -br addr 2>/dev/null | awk '$1!="lo"{print $3}' | sed 's#/.*##' | sed 's/^/   /' >&2; }
 
@@ -164,25 +240,43 @@ setup_kharej(){
 
   echo >&2; info "This server's IP addresses:"; show_ips
   local defip; defip=$(first_public_ip)
-  read -rp "Public IP of THIS kharej server [$defip]: " PUBIP </dev/tty; PUBIP=${PUBIP:-$defip}
-  [ -n "$PUBIP" ] || die "public IP required"
+  ask PUBIP "Public IP of THIS kharej server [$defip]: " "$defip" is_ip \
+    "not a valid IPv4/IPv6 address (example: 203.0.113.5)"
+  # On NAT'd clouds the public IP is not on any interface and cannot be bound;
+  # then listen on all addresses and still hand out the public IP in the link.
+  local LISTEN_HOST=$PUBIP
+  if ! is_local_ip "$PUBIP"; then
+    warn "$PUBIP is not assigned to this server (NAT?) — listening on all addresses."
+    if is_ipv6 "$PUBIP"; then LISTEN_HOST="::"; else LISTEN_HOST="0.0.0.0"; fi
+  fi
 
-  read -rp "Domain (its A record must point to $PUBIP): " DOMAIN </dev/tty
-  [ -n "$DOMAIN" ] || die "domain required"
+  ask DOMAIN "Domain (its A record must point to $PUBIP): " "" is_domain \
+    "not a valid domain name (example: vpn.example.com)"
+  if command -v getent >/dev/null 2>&1; then
+    getent ahosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | grep -qxF "$PUBIP" \
+      || warn "$DOMAIN does not resolve to $PUBIP (yet) — the certificate step needs it to."
+  fi
 
-  read -rp "Tunnel port (clients never see this) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
-  port_free "$TPORT" || die "port $TPORT is already in use — pick another."
+  tport_ok(){ port_free "$1"; }
+  ask TPORT "Tunnel port (clients never see this) [2096]: " 2096 tport_ok \
+    "not a port number (1-65535), or it is already in use"
 
-  read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
-  PANEL=${PANEL:-127.0.0.1:8443}
+  panel_ok(){
+    is_hostport "$1" || return 1
+    # the panel cannot be on the tunnel port of this server
+    [ "${1##*:}" != "$TPORT" ] || { warn "  the panel port must differ from the tunnel port $TPORT"; return 1; }
+  }
+  ask PANEL "Panel inbound address on this server [127.0.0.1:8443]: " 127.0.0.1:8443 panel_ok \
+    "want host:port, e.g. 127.0.0.1:8443 (IPv6 as [::1]:8443)"
 
   echo >&2
   echo "  Tunnel mode:" >&2
   echo "    1) mtcp    — multi-link, fastest (recommended)" >&2
   echo "    2) l3mtcp  — mtcp + tunnel IPs 10.77.0.1/2 on hs0 (ping, non-TCP)" >&2
   echo "    3) tls     — a single link + hs0" >&2
-  read -rp "Choose [1]: " M </dev/tty
-  case "${M:-1}" in 1) CARRIER=mtcp ;; 2) CARRIER=l3mtcp ;; 3) CARRIER=tls ;; *) die "invalid mode" ;; esac
+  mode_ok(){ [[ "$1" =~ ^[123]$ ]]; }
+  ask M "Choose [1]: " 1 mode_ok "choose 1, 2 or 3"
+  case "$M" in 1) CARRIER=mtcp ;; 2) CARRIER=l3mtcp ;; 3) CARRIER=tls ;; esac
   read -rp "Also forward UDP on the user ports (e.g. for Hysteria/WireGuard)? [y/N]: " U </dev/tty
   case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
 
@@ -195,7 +289,7 @@ setup_kharej(){
   cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER",
-  "addr": "$PUBIP:$TPORT",
+  "addr": "$(hostport "$LISTEN_HOST" "$TPORT")",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -208,7 +302,7 @@ EOF
   start_service kharej
 
   # auto-link for the Iran side: endpoint|domain|shared|panel|mode|udp
-  local LINK; LINK=$(encode_link "$PUBIP:$TPORT|$DOMAIN|$SHARED|$PANEL|$CARRIER|$UDP")
+  local LINK; LINK=$(encode_link "$(hostport "$PUBIP" "$TPORT")|$DOMAIN|$SHARED|$PANEL|$CARRIER|$UDP")
   echo >&2; hr
   ok "KHAREJ ready. Copy this SETUP LINK to the Iran server:"
   _c '1;33' "hs2://$LINK"
@@ -227,20 +321,23 @@ setup_iran(){
   local DEC; DEC=$(decode_link "$RAW") || die "invalid link"
   local ENDPOINT DOMAIN SHARED PANEL CARRIER UDP
   IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP <<< "$DEC"
-  [ -n "$ENDPOINT" ] && [ -n "$SHARED" ] || die "link is missing fields"
   CARRIER=${CARRIER:-mtcp}; UDP=${UDP:-false}   # links from older kharej installs
+  local broken="the setup link is incomplete or damaged; copy the whole hs2:// line again"
+  is_hostport "$ENDPOINT" || die "$broken (endpoint)"
+  is_domain "$DOMAIN"     || die "$broken (domain)"
+  is_key "$SHARED"        || die "$broken (key)"
+  is_hostport "$PANEL"    || die "$broken (panel)"
+  case "$CARRIER" in mtcp|l3mtcp|tls) ;; *) die "$broken (mode)" ;; esac
+  case "$UDP" in true|false) ;; *) die "$broken (udp)" ;; esac
   ok "Link OK — kharej endpoint $ENDPOINT, domain $DOMAIN, mode $CARRIER, udp $UDP"
 
   echo >&2; info "This Iran server's IP addresses:"; show_ips
-  read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
-
-  read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
-
-  read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
-  [ -n "$PORTS" ] || die "at least one port is required"
-  for p in ${PORTS//,/ }; do
-    port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
-  done
+  ask EGRESSIP "Dial out FROM which local IP? (Enter = automatic): " "" opt_local_ip \
+    "must be one of this server's IP addresses listed above, or empty"
+  ask USERIP "IP that USERS connect to on this server (Enter = all IPs): " "" opt_local_ip \
+    "must be one of this server's IP addresses listed above, or empty"
+  ask PORTS "User port(s) to open here, comma-separated (e.g. 8443,443): " "" ports_ok \
+    "enter free port numbers separated by commas"
 
   info "Links auto-scale between $LINK_MIN and $LINK_MAX by load."
 
@@ -314,6 +411,9 @@ upgrade(){
     exit 1
   fi
 }
+
+# Tests source this file with HS2_LIB=1 to reach the helpers without the menu.
+if [ "${HS2_LIB:-0}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
 
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
 if [ "${1:-}" = "upgrade" ]; then upgrade; exit 0; fi
