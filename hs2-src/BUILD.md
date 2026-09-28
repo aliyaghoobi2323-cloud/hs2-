@@ -17,6 +17,7 @@ go test -race ./...
 - `tlscarrier/` — TLS carrier: real cert, channel-bound mutual auth, probe resistance, socket tuning
 - `engine/`     — stream core (link pool, TCP/UDP forwarding, hs0 side channel), legacy engine for noise/reality
 - `reality/`    — experimental Reality-style carrier (not used by default)
+- `fec/`        — adaptive interleaved Reed-Solomon FEC (standalone; see `fec/README.md`)
 - `obfs/`       — traffic shaping (length/timing), used by the noise/reality carriers
 - `tun/`        — Linux TUN device
 - `cmd/hs2/`    — the binary (run, keygen, version)

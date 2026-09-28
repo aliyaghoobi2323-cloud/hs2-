@@ -105,8 +105,9 @@ func randomiseTopBit(msg []byte) {
 
 // Initiator drives the dialling side.
 type Initiator struct {
-	hs  *noise.HandshakeState
-	psk []byte
+	hs      *noise.HandshakeState
+	psk     []byte
+	binding []byte // handshake hash, set once message 2 verified
 }
 
 // NewInitiator builds the initiator state. remoteStatic is the responder's
@@ -134,8 +135,15 @@ func NewInitiator(local StaticKey, remoteStatic, psk []byte) (*Initiator, error)
 // WriteMessage1 produces the first handshake message, with the probe-resistance
 // MAC prepended.
 func (i *Initiator) WriteMessage1() ([]byte, error) {
+	return i.WriteMessage1Payload(nil)
+}
+
+// WriteMessage1Payload is WriteMessage1 carrying an encrypted payload inside
+// the Noise message (IK message 1 payloads are encrypted and authenticated,
+// though not forward secret).
+func (i *Initiator) WriteMessage1Payload(payload []byte) ([]byte, error) {
 	bucket := nowBucket()
-	msg, _, _, err := i.hs.WriteMessage(nil, nil)
+	msg, _, _, err := i.hs.WriteMessage(nil, payload)
 	if err != nil {
 		return nil, err
 	}
@@ -147,11 +155,8 @@ func (i *Initiator) WriteMessage1() ([]byte, error) {
 // ReadMessage2 consumes the responder's reply and, on success, returns the two
 // cipher states as a single 64-byte secret (32 per direction) folded together.
 func (i *Initiator) ReadMessage2(msg []byte) (secret []byte, err error) {
-	_, cs1, cs2, err := i.hs.ReadMessage(nil, msg)
-	if err != nil {
-		return nil, ErrHandshakeAuth
-	}
-	return foldSecret(cs1, cs2), nil
+	secret, _, err = i.ReadMessage2Payload(msg)
+	return secret, err
 }
 
 // Responder drives the listening side and holds the anti-replay memory.
@@ -172,8 +177,15 @@ func NewResponder(local StaticKey, psk []byte) *Responder {
 // returns an error and the carrier is expected to fall through to the decoy
 // without replying.
 func (r *Responder) ReadMessage1(in []byte) (hs *noise.HandshakeState, err error) {
+	hs, _, err = r.ReadMessage1Payload(in)
+	return hs, err
+}
+
+// ReadMessage1Payload is ReadMessage1 that also returns the decrypted payload
+// the initiator put in message 1.
+func (r *Responder) ReadMessage1Payload(in []byte) (hs *noise.HandshakeState, payload []byte, err error) {
 	if len(in) < 16+firstMsgMinLen {
-		return nil, ErrHandshakeAuth
+		return nil, nil, ErrHandshakeAuth
 	}
 	mac := in[:16]
 	msg := append([]byte(nil), in[16:]...)
@@ -189,13 +201,13 @@ func (r *Responder) ReadMessage1(in []byte) (hs *noise.HandshakeState, err error
 		}
 	}
 	if !matched {
-		return nil, ErrHandshakeAuth
+		return nil, nil, ErrHandshakeAuth
 	}
 	if !withinWindow(okBucket) {
-		return nil, ErrHandshakeStale
+		return nil, nil, ErrHandshakeStale
 	}
 	if !r.seen.add(mac) {
-		return nil, ErrHandshakeReplay
+		return nil, nil, ErrHandshakeReplay
 	}
 	msg[ephemeralLen-1] &^= 0x80
 	cfg := noise.Config{
@@ -209,17 +221,23 @@ func (r *Responder) ReadMessage1(in []byte) (hs *noise.HandshakeState, err error
 	}
 	hs, err = noise.NewHandshakeState(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	if _, _, _, err := hs.ReadMessage(nil, msg); err != nil {
-		return nil, ErrHandshakeAuth
+	payload, _, _, err = hs.ReadMessage(nil, msg)
+	if err != nil {
+		return nil, nil, ErrHandshakeAuth
 	}
-	return hs, nil
+	return hs, payload, nil
 }
 
 // WriteMessage2 produces the responder's reply and the folded secret.
 func (r *Responder) WriteMessage2(hs *noise.HandshakeState) (msg, secret []byte, err error) {
-	msg, cs1, cs2, err := hs.WriteMessage(nil, nil)
+	return r.WriteMessage2Payload(hs, nil)
+}
+
+// WriteMessage2Payload is WriteMessage2 carrying an encrypted payload.
+func (r *Responder) WriteMessage2Payload(hs *noise.HandshakeState, payload []byte) (msg, secret []byte, err error) {
+	msg, cs1, cs2, err := hs.WriteMessage(nil, payload)
 	if err != nil {
 		return nil, nil, err
 	}

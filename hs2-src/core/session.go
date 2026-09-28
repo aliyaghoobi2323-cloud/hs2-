@@ -34,6 +34,10 @@ type Session struct {
 	// migration to a new path presents this so the peer continues the session
 	// rather than starting a new one. Not yet wired to carriers in v0.1.
 	id uint64
+
+	// exporter is the root of Exporter values (see datagram.go): a secret
+	// both ends derive from the handshake, never used as a traffic key.
+	exporter []byte
 }
 
 var errReplayed = errors.New("core: replayed or stale frame")
@@ -72,7 +76,8 @@ func NewSession(secret []byte, initiator bool, id uint64) (*Session, error) {
 	return &Session{
 		sendAEAD: sa, recvAEAD: ra,
 		sendLen: sendLen, recvLen: recvLen,
-		id: id,
+		id:       id,
+		exporter: deriveKey(secret, "hs2 exporter root"),
 	}, nil
 }
 
