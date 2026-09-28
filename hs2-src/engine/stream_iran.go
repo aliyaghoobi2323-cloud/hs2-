@@ -5,9 +5,14 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
-// IranConfig configures the Iran (dialing) side of stream mode.
+// IranConfig configures the Iran (edge) side of stream mode: the side users
+// connect to. In the DIRECT direction it dials the link pool to the kharej; in
+// the REVERSE direction it instead LISTENS and accepts links the kharej dials
+// in (RevServer/RevListener set), while still originating the user streams.
 type IranConfig struct {
 	Dialer   LinkDialer
 	Min, Max int // link pool bounds (tls mode: 1, 1)
@@ -17,6 +22,12 @@ type IranConfig struct {
 	UDP      bool      // also forward UDP on Ports
 	TUN      tunWriter // non-nil: carry hs0 packets as a side channel
 	Log      func(string, ...any)
+
+	// Reverse edge: accept links from the kharej instead of dialing. When set,
+	// Dialer/Min/Max are ignored and the pool grows/shrinks with what the peer
+	// dials in.
+	RevServer   *tlscarrier.Server
+	RevListener net.Listener
 }
 
 // RunIran brings up the link pool and the user-facing listeners and serves
@@ -27,7 +38,14 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	lm := NewLinkManager(cfg.Dialer, cfg.Min, cfg.Max, cfg.PerLink, logf)
+	reverse := cfg.RevServer != nil
+	var lm *LinkManager
+	if reverse {
+		lm = NewLinkManager(nil, 1, 1, cfg.PerLink, logf)
+		lm.accept = true
+	} else {
+		lm = NewLinkManager(cfg.Dialer, cfg.Min, cfg.Max, cfg.PerLink, logf)
+	}
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = &l3Set{}
@@ -36,6 +54,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		go l3.logDrops(ctx, logf)
 	}
 	go lm.Run(ctx)
+	if reverse {
+		go acceptReverseLinks(ctx, cfg.RevListener, cfg.RevServer, lm, logf)
+	}
 
 	for _, p := range cfg.Ports {
 		bind := net.JoinHostPort(cfg.ListenIP, p)

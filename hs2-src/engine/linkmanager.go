@@ -53,6 +53,7 @@ type stream interface {
 
 type LinkManager struct {
 	dialer  LinkDialer
+	accept  bool // reverse edge: links are injected via AddLink, never dialed
 	min     int
 	max     int
 	perLink int // desired users per link before scaling up
@@ -101,10 +102,30 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 	return &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf}
 }
 
+// AddLink injects an externally acquired link into the pool. It is used by the
+// reverse edge, which does not dial links but accepts them from the peer that
+// dials in; the pool, load-balancing and reaping are otherwise identical.
+func (m *LinkManager) AddLink(l Link) {
+	m.mu.Lock()
+	id := len(m.links)
+	m.links = append(m.links, &managedLink{link: l, id: id, born: time.Now()})
+	n := len(m.links)
+	m.mu.Unlock()
+	m.log("mtcp: accepted reverse link (now %d)", n)
+	if m.OnLink != nil {
+		go m.OnLink(l)
+	}
+}
+
 // Run brings the pool up to Min links and then maintains it: rebuilds dead
-// links, and scales the count with load until ctx ends.
+// links, and scales the count with load until ctx ends. In accept mode (reverse
+// edge) it never dials or scales — it only reaps links the peer has dropped.
 func (m *LinkManager) Run(ctx context.Context) {
 	m.scaleCtx = ctx
+	if m.accept {
+		m.runAccept(ctx)
+		return
+	}
 	// initial fill
 	for i := 0; i < m.min; i++ {
 		m.addLink(ctx)
@@ -138,6 +159,32 @@ func (m *LinkManager) Run(ctx context.Context) {
 			} else {
 				lowSince = time.Now()
 			}
+		}
+	}
+}
+
+// runAccept maintains the reverse-edge pool: it only drops dead links (the peer
+// dials new ones in via AddLink), never dials or scales.
+func (m *LinkManager) runAccept(ctx context.Context) {
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			m.closeAll()
+			return
+		case <-tick.C:
+			m.mu.Lock()
+			alive := m.links[:0]
+			for _, ml := range m.links {
+				if ml.link.Alive() {
+					alive = append(alive, ml)
+				} else {
+					ml.link.Close()
+				}
+			}
+			m.links = alive
+			m.mu.Unlock()
 		}
 	}
 }
