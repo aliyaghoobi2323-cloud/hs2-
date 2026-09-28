@@ -8,7 +8,7 @@
 set -euo pipefail
 
 BIN=/usr/local/bin/hs2
-REPO_RAW="${HS2_REPO_RAW:-https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d}"
+REPO_RAW="${HS2_REPO_RAW:-https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main}"
 CFG=/etc/hs2/config.json
 SVC=/etc/systemd/system/hs2.service
 TUN_SUBNET_IRAN="10.77.0.1/30"

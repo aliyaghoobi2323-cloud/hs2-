@@ -62,7 +62,7 @@ the per-connection cap; use `mtcp` there.
 ### 1. Kharej (foreign server)
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main/install.sh)
 ```
 
 Choose **1**, answer the prompts (domain, tunnel port, panel inbound, mode,
@@ -71,7 +71,7 @@ UDP). At the end it prints a **`hs2://…` setup link** — copy it.
 ### 2. Iran server
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main/install.sh)
 ```
 
 Choose **2**, paste the `hs2://` link, pick the user port(s).
@@ -93,7 +93,7 @@ Iran**; the tunnel is down only between the two. Config and the `hs2://` link
 stay the same:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d/install.sh | bash -s upgrade
+curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main/install.sh | bash -s upgrade
 ```
 
 If the Iran server cannot reach GitHub, copy the new binary from kharej first
