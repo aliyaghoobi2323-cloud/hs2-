@@ -300,12 +300,12 @@ EOF
 kharej_dialer(){
   parse_link
   [ "$DIRECTION" = "reverse" ] || die "this link is a DIRECT link; for reverse, generate the link on the IRAN side first."
-  read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
-  PANEL=${PANEL:-127.0.0.1:8443}
   read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
   ok "Link OK — will dial the iran edge at $ENDPOINT (transport $TRANSPORT)."
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
+    read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
+    PANEL=${PANEL:-127.0.0.1:8443}
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
@@ -317,21 +317,24 @@ kharej_dialer(){
   "bind_local_ip": "$EGRESSIP"
 }
 EOF
+    chmod 600 "$CFG"; write_service kharej; start_service kharej
+    echo >&2; hr
+    ok "KHAREJ ready (reverse, tcp). It dials in to the Iran edge and forwards to $PANEL."
   else
+    # udp/auto: TUN IP tunnel on hs0, no panel forwarding here.
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
-  "shared_key": "$SHARED",
-  "expose": "$PANEL",
-  "bind_local_ip": "$EGRESSIP"
+  "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP"
 }
 EOF
+    chmod 600 "$CFG"; write_service kharej; start_service kharej
+    echo >&2; hr
+    ok "KHAREJ ready (reverse, $TRANSPORT / UDP+FEC). It dials in to the Iran edge."
+    info "An IP tunnel is up on hs0 (kharej 10.77.0.2, iran 10.77.0.1). Route panel traffic over hs0."
   fi
-  chmod 600 "$CFG"; write_service kharej; start_service kharej
-  echo >&2; hr
-  ok "KHAREJ ready (reverse, transport: $TRANSPORT). It dials in to the Iran edge."
   info "Backhaul is untouched. Status/logs any time:  bash install.sh → 4"
 }
 
@@ -360,14 +363,14 @@ iran_dialer(){
   ok "Link OK — kharej endpoint $ENDPOINT, transport $TRANSPORT (carrier $CARRIER)."
   echo >&2; info "This Iran server's IP addresses:"; show_ips
   read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
-  read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
-  read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
-  [ -n "$PORTS" ] || die "at least one port is required"
-  for p in ${PORTS//,/ }; do
-    port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
-  done
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
+    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
+    [ -n "$PORTS" ] || die "at least one port is required"
+    for p in ${PORTS//,/ }; do
+      port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
+    done
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
@@ -379,38 +382,45 @@ iran_dialer(){
   "bind_local_ip": "$EGRESSIP", "user_listen_ip": "$USERIP"
 }
 EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    echo >&2; hr
+    ok "IRAN ready (direct, tcp). Users connect on port(s): $PORTS"
   else
+    # udp/auto is a TUN IP tunnel on hs0 (not a port forwarder); no user ports.
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false,
   "addr": "$ENDPOINT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
-  "shared_key": "$SHARED",
-  "forward_ports": "$PORTS", "user_listen_ip": "$USERIP", "bind_local_ip": "$EGRESSIP"
+  "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP"
 }
 EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    echo >&2; hr
+    ok "IRAN ready (direct, $TRANSPORT / UDP+FEC)."
+    info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2)."
+    info "Route panel/user traffic over hs0 (e.g. to 10.77.0.2)."
+    [ "$TRANSPORT" = "auto" ] && info "auto: if UDP is blocked or too lossy, it falls back to TCP silently."
   fi
-  chmod 600 "$CFG"; write_service iran; start_service iran
-  echo >&2; hr
-  ok "IRAN ready (direct). Users connect on port(s): $PORTS"
   info "Backhaul is untouched. Status/logs any time:  bash install.sh → 4"
 }
 
 # iran_listener: reverse edge. Iran listens for the kharej (which dials in) and
-# generates the link. It still opens the user ports.
+# generates the link. For tcp it also opens the user ports; for udp/auto it is a
+# TUN IP tunnel on hs0.
 iran_listener(){
   read -rp "Tunnel port to LISTEN on (kharej dials it) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
-  read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
-  read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
-  [ -n "$PORTS" ] || die "at least one port is required"
-  for p in ${PORTS//,/ }; do
-    port_free "$p" || die "user port $p is already in use on Iran. Pick another."
-  done
   local SHARED; SHARED=$(openssl rand -hex 32)
   mkdir -p "$(dirname "$CFG")"
 
   if [ "$TRANSPORT" = "tcp" ]; then
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
+    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
+    [ -n "$PORTS" ] || die "at least one port is required"
+    for p in ${PORTS//,/ }; do
+      port_free "$p" || die "user port $p is already in use on Iran. Pick another."
+    done
     read -rp "Domain for THIS iran server (its A record must point to $PUBIP): " DOMAIN </dev/tty
     [ -n "$DOMAIN" ] || die "domain required (the kharej validates it as the TLS name)"
     echo >&2
@@ -432,6 +442,8 @@ iran_listener(){
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP"
 }
 EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    ok "IRAN ready (reverse, tcp). Users connect on port(s): $PORTS"
   else
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
@@ -441,13 +453,13 @@ EOF
   "mode": "dial", "carrier": "$CARRIER", "reverse": true,
   "addr": "$PUBIP:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
-  "shared_key": "$SHARED",
-  "forward_ports": "$PORTS", "user_listen_ip": "$USERIP"
+  "shared_key": "$SHARED"
 }
 EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    ok "IRAN ready (reverse, $TRANSPORT / UDP+FEC)."
+    info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2). Route traffic over hs0."
   fi
-  chmod 600 "$CFG"; write_service iran; start_service iran
-  ok "IRAN ready (reverse, transport: $TRANSPORT). Users connect on port(s): $PORTS"
   # panel is set on the kharej side; leave it blank in the link.
   show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse"
   info "On the Kharej server: bash install.sh → 1 (Kharej) → direction 'reverse' → paste the link."

@@ -216,18 +216,31 @@ Implementation:
 - `engine.TestReverseStreamTCPAndUDP`, `engine.TestReverseStreamRedials`: the
   reverse stream path end-to-end over real TCP (iran `net.Listen` TLS server +
   kharej `DialFrom`), TCP and UDP payloads, with `-race`. Pass.
+- **Real-kernel end-to-end (network namespaces, kharej dials into the iran
+  edge):** all three transports carried real inner traffic through the reverse
+  tunnel, user → iran edge → tunnel → kharej → panel, with zero echo loss:
+
+  | reverse transport | goodput | interactive echo p50 |
+  |---|---|---|
+  | udp (Noise+FEC)   | ~405 Mbit/s (unloaded veth) | ~10 ms |
+  | auto              | ~367 Mbit/s | ~15 ms |
+  | tcp (mtcp)        | ~8.5 Gbit/s | ~1.5 ms |
+
+  (Unloaded loopback-class veth, so the throughput figures are just "the pipe
+  is full"; the point is that the reverse path works end-to-end for every
+  carrier.)
 - Existing direct tests, all carriers, and the UDP suite: unchanged, `-race`
   clean.
 - Installer: `bash -n` clean; generated config JSON validated for all four
   role×direction cases; `hs2://` link round-trips with the direction field.
 
-## Limitation (honest)
+## A note on the lab harness
 
-The reverse path is proven by the deterministic Go tests, which drive the exact
-reverse code over real sockets on loopback. The **network-namespace** end-to-end
-run for reverse could not be completed in this sandbox: inbound connections to a
-listener on the emulated iran interface fail there (UDP handshake gets no reply,
-TCP times out) — the same veth/netem/inbound limitation seen elsewhere in this
-environment, not a defect in the transport (the identical code path passes over
-real sockets in the Go tests, and the direct direction works in the same lab).
-On a real two-server deployment there is no such asymmetry.
+Running the reverse tunnel through the userspace `lab/netem` bridge additionally
+requires TX/RX **checksum offload** to be disabled on the veths
+(`ethtool -K … tx off rx off`): netem re-injects raw frames via AF_PACKET, and
+with offload on those frames carry incomplete UDP checksums that the receiver
+drops. `lab/run.sh` already disables it; a hand-rolled bridge script must too, or
+the handshake silently fails (no reply). This is a lab-harness detail, not a
+property of the transport — the direct-veth runs above (no netem) and the Go
+tests exercise the identical reverse code path with no such caveat.

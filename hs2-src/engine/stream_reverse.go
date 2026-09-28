@@ -92,6 +92,17 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 			car.Close()
 			continue
 		}
+		// Close the session when ctx ends, so AcceptStream unblocks and this
+		// goroutine exits instead of hanging on a link the edge keeps alive with
+		// keepalives (mirrors the direct exit path in stream_kharej.go).
+		closed := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+				sess.Close()
+			case <-closed:
+			}
+		}()
 		logf("reverse link up to edge (now %d)", links.Add(1))
 		for {
 			st, err := sess.AcceptStream()
@@ -100,6 +111,7 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 			}
 			go serveStream(ctx, st, cfg, l3)
 		}
+		close(closed)
 		sess.Close()
 		car.Close()
 		logf("reverse link down (now %d); redial", links.Add(-1))

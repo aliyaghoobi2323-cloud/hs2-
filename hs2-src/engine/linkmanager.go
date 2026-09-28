@@ -61,6 +61,7 @@ type LinkManager struct {
 
 	mu       sync.RWMutex
 	links    []*managedLink
+	linkSeq  int          // monotonic id source, so ids never collide after reaps
 	users    atomic.Int32 // total active user connections across the pool
 	closing  atomic.Bool
 	scaleCtx context.Context
@@ -107,7 +108,8 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 // dials in; the pool, load-balancing and reaping are otherwise identical.
 func (m *LinkManager) AddLink(l Link) {
 	m.mu.Lock()
-	id := len(m.links)
+	id := m.linkSeq
+	m.linkSeq++
 	m.links = append(m.links, &managedLink{link: l, id: id, born: time.Now()})
 	n := len(m.links)
 	m.mu.Unlock()
@@ -212,7 +214,8 @@ func (m *LinkManager) addLink(ctx context.Context) {
 		return
 	}
 	m.mu.Lock()
-	id := len(m.links)
+	id := m.linkSeq
+	m.linkSeq++
 	m.links = append(m.links, &managedLink{link: l, id: id, born: time.Now()})
 	m.mu.Unlock()
 	if m.OnLink != nil {
