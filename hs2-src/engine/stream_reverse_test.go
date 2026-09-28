@@ -23,11 +23,17 @@ func startReverseTunnel(t *testing.T, nLinks int) *tunnel {
 	t.Cleanup(cancel)
 	panel := echoPanel(t)
 
-	// iran edge: a TLS-carrier server the kharej dials into.
-	iranLn, err := net.Listen("tcp", "127.0.0.1:0")
+	// iran edge: a TLS-carrier server the kharej dials into. Wrap the listener so
+	// the test can close the accepted links (the reverse carriers) to force the
+	// kharej to redial.
+	rawIranLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
+	var lmu = make(chan struct{}, 1)
+	lmu <- struct{}{}
+	var live []net.Conn
+	iranLn := &trackListener{Listener: rawIranLn, onAccept: func(c net.Conn) { <-lmu; live = append(live, c); lmu <- struct{}{} }}
 	iranSrv := &tlscarrier.Server{SharedKey: key, Cert: testCert(t), BackendAddr: "127.0.0.1:1"}
 	port := freePort(t)
 	go RunIran(ctx, IranConfig{
@@ -46,7 +52,14 @@ func startReverseTunnel(t *testing.T, nLinks int) *tunnel {
 		},
 	})
 
-	tn := &tunnel{userAddr: "127.0.0.1:" + port, cancel: cancel}
+	tn := &tunnel{userAddr: "127.0.0.1:" + port, cancel: cancel, kill: func() {
+		<-lmu
+		for _, c := range live {
+			c.Close()
+		}
+		live = nil
+		lmu <- struct{}{}
+	}}
 	// Wait until an end-to-end echo actually works (a reverse link is up).
 	for i := 0; i < 120; i++ {
 		if echoOnce(tn.userAddr, 256) {
@@ -103,9 +116,19 @@ func TestReverseStreamTCPAndUDP(t *testing.T) {
 func TestReverseStreamRedials(t *testing.T) {
 	tn := startReverseTunnel(t, 2)
 	tcpEcho(t, tn.userAddr, 4096)
-	// force reconnection by cancelling is too coarse; instead just verify the
-	// tunnel keeps working across several transfers (redial happens under load).
-	for i := 0; i < 10; i++ {
-		tcpEcho(t, tn.userAddr, 64<<10)
+	// Kill every accepted reverse link; the kharej's maintainExitLink must redial
+	// and the tunnel must carry traffic again.
+	tn.kill()
+	ok := false
+	for i := 0; i < 100; i++ {
+		if echoOnce(tn.userAddr, 512) {
+			ok = true
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
+	if !ok {
+		t.Fatal("reverse tunnel did not recover after its links were killed")
+	}
+	tcpEcho(t, tn.userAddr, 64<<10)
 }
