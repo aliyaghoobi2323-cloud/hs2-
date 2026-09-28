@@ -39,6 +39,52 @@ type dirCfg struct {
 	loss      float64
 	flowRate  float64 // per-flow policer, bits/s, 0 = off
 	flowBurst int     // bytes
+	// Bursty (Gilbert-Elliott) loss: when burstBadMs>0 the path alternates
+	// between a good state (loss `loss`) and a bad state (loss `burstLoss`),
+	// each lasting an exponentially distributed time. This makes genuine loss
+	// bursts, which correlated random loss cannot, matching the real target
+	// path far better than i.i.d. loss.
+	burstLoss   float64
+	burstGoodMs float64
+	burstBadMs  float64
+	dropUDP     bool // drop all UDP frames (isolation test: block the UDP carrier)
+}
+
+// isUDP reports whether an Ethernet frame carries IPv4 UDP.
+func isUDP(f []byte) bool {
+	if len(f) < 14+20 || binary.BigEndian.Uint16(f[12:14]) != 0x0800 {
+		return false
+	}
+	return f[14+9] == 17
+}
+
+// geState is one direction's Gilbert-Elliott channel.
+type geState struct {
+	bad   bool
+	until time.Time
+}
+
+// drop decides whether a frame is lost under the direction's loss model.
+func (c *dirCfg) drop(g *geState, now time.Time) bool {
+	if c.burstBadMs <= 0 {
+		return c.loss > 0 && rand.Float64() < c.loss
+	}
+	if g.until.IsZero() {
+		g.until = now
+	}
+	for !now.Before(g.until) {
+		g.bad = !g.bad
+		m := c.burstGoodMs
+		if g.bad {
+			m = c.burstBadMs
+		}
+		g.until = g.until.Add(time.Duration(rand.ExpFloat64() * m * float64(time.Millisecond)))
+	}
+	p := c.loss
+	if g.bad {
+		p = c.burstLoss
+	}
+	return p > 0 && rand.Float64() < p
 }
 
 type pkt struct {
@@ -107,6 +153,7 @@ func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 	}()
 	var nextFree time.Time // when the bottleneck finishes the last frame
 	flows := map[uint64]*policer{}
+	ge := &geState{}
 	buf := make([]byte, 65536)
 	for {
 		n, from, err := unix.Recvfrom(inFd, buf, 0)
@@ -121,7 +168,11 @@ func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 		}
 		now := time.Now()
 		stats.add(name, "in", n)
-		if c.loss > 0 && rand.Float64() < c.loss {
+		if c.dropUDP && isUDP(buf[:n]) {
+			stats.add(name, "udpblock", n)
+			continue
+		}
+		if c.drop(ge, now) {
 			stats.add(name, "loss", n)
 			continue
 		}
@@ -197,14 +248,19 @@ func main() {
 	rateBA := flag.String("rate-ba", "", "rate B->A if different")
 	delay := flag.Duration("delay", 0, "one-way delay")
 	queue := flag.Duration("queue", 200*time.Millisecond, "max queueing delay")
-	loss := flag.Float64("loss", 0, "random loss probability each way")
+	loss := flag.Float64("loss", 0, "random (good-state) loss probability each way")
+	burstLoss := flag.Float64("burstloss", 0, "loss probability in the bad state (enables bursty GE loss)")
+	goodMs := flag.Float64("goodms", 150, "mean good-state duration, ms (bursty loss)")
+	badMs := flag.Float64("badms", 0, "mean bad-state duration, ms (bursty loss; >0 enables it)")
 	flowRate := flag.String("flowrate", "0", "per-flow policer rate each way")
 	flowBurst := flag.Int("flowburst", 64<<10, "per-flow policer burst, bytes")
+	dropUDP := flag.Bool("dropudp", false, "drop all UDP frames (block the UDP carrier)")
 	flag.Parse()
 	fa, ia := openPacket(*a)
 	fb, ib := openPacket(*b)
 	ab := dirCfg{rate: parseRate(*rate), delay: *delay, queue: *queue, loss: *loss,
-		flowRate: parseRate(*flowRate), flowBurst: *flowBurst}
+		flowRate: parseRate(*flowRate), flowBurst: *flowBurst,
+		burstLoss: *burstLoss, burstGoodMs: *goodMs, burstBadMs: *badMs, dropUDP: *dropUDP}
 	ba := ab
 	if *rateBA != "" {
 		ba.rate = parseRate(*rateBA)

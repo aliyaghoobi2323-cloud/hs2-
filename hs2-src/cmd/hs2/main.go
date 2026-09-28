@@ -77,7 +77,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version", "-v", "--version":
-		fmt.Println("hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls; auth: tls-exporter bound, mutual)")
+		fmt.Println("hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto; auth: tls-exporter bound, mutual)")
 	case "keygen":
 		k, err := core.GenerateStatic()
 		must(err)
@@ -121,6 +121,13 @@ func runCmd(args []string) {
 	var fc fileConfig
 	must(json.Unmarshal(raw, &fc))
 
+	// The UDP/auto transports carry datagrams: keep the tunnel MTU small enough
+	// that a sealed, FEC-wrapped IP packet still fits a 1500-byte path without
+	// fragmenting (≈ MTU + 47 bytes on the wire).
+	if (fc.Carrier == "udp" || fc.Carrier == "auto") && fc.MTU == 0 {
+		fc.MTU = 1280
+	}
+
 	eng := engine.New(engine.Config{
 		Iface: fc.Iface, LocalCIDR: fc.LocalCIDR, PeerIP: fc.PeerIP, MTU: fc.MTU,
 	}, func(f string, a ...any) { log.Printf(f, a...) })
@@ -147,6 +154,10 @@ func runCmd(args []string) {
 		runStream(ctx, fc, true, 1)
 	case "noise", "":
 		runNoise(ctx, eng, fc)
+	case "udp": // Noise + adaptive FEC over UDP (udp-only transport)
+		runUDP(ctx, eng, fc, false)
+	case "auto": // probe UDP, else fall back to TCP (default transport)
+		runUDP(ctx, eng, fc, true)
 	default:
 		log.Fatalf("unknown carrier %q", fc.Carrier)
 	}
@@ -230,6 +241,38 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		cfg.TUN = dev
 	}
 	must(engine.RunKharej(ctx, cfg))
+}
+
+// runUDP runs the UDP transport (Noise + adaptive FEC). With auto=true the
+// dialer probes UDP and silently falls back to the TCP noise carrier when UDP
+// is unreachable or too lossy; the listener serves both. Keys are derived from
+// shared_key, so no static keypair config is needed.
+func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
+	shared := unhex(fc.SharedKey)
+	mtu := fc.MTU
+	if mtu == 0 {
+		mtu = 1280
+	}
+	logf := func(f string, a ...any) { log.Printf(f, a...) }
+	if fc.Mode == "dial" {
+		var d engine.CarrierDialer
+		if auto {
+			d = engine.NewAutoDialer(fc.Addr, shared, mtu, logf)
+		} else {
+			d = engine.NewUDPDialer(fc.Addr, shared, mtu)
+		}
+		must(eng.RunDial(ctx, d))
+		return
+	}
+	var ln engine.CarrierListener
+	var err error
+	if auto {
+		ln, err = engine.NewAutoListener(fc.Addr, shared, mtu)
+	} else {
+		ln, err = engine.NewUDPListener(fc.Addr, shared, mtu)
+	}
+	must(err)
+	must(eng.RunListen(ctx, ln))
 }
 
 func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {
