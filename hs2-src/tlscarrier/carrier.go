@@ -17,6 +17,31 @@ import (
 type Carrier struct {
 	conn   net.Conn // *tls.Conn (server) or *utls.UConn (client)
 	sendMu sync.Mutex
+	rbuf   []byte // body buffer reused by ReadFrameReuse
+}
+
+// writeTimeout bounds one write; a link that cannot drain for this long is
+// treated as dead.
+const writeTimeout = 5 * time.Second
+
+// NewCarrier wraps an already-authenticated connection as a Carrier.
+func NewCarrier(conn net.Conn) *Carrier { return &Carrier{conn: conn} }
+
+// AppendFrame appends one unpadded frame to dst in the wire format SendFrame
+// uses, so a caller can coalesce several frames into one WriteRaw.
+func AppendFrame(dst []byte, ftype byte, payload []byte) []byte {
+	n := len(payload)
+	dst = append(dst, ftype, byte(n>>16), byte(n>>8), byte(n), 0, 0, 0)
+	return append(dst, payload...)
+}
+
+// WriteRaw writes frames built with AppendFrame in a single write.
+func (c *Carrier) WriteRaw(b []byte) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	_, err := c.conn.Write(b)
+	return err
 }
 
 // Frame inside TLS: [ftype:1][reallen:3][padlen:3][payload(reallen)][pad(padlen)]
@@ -46,12 +71,27 @@ func (c *Carrier) writeFrame(ftype byte, payload []byte, pad int) error {
 	buf[4], buf[5], buf[6] = byte(pad>>16), byte(pad>>8), byte(pad)
 	copy(buf[7:], payload)
 	// pad bytes are left zero; they are inside TLS so unobservable and harmless
-	c.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	_, err := c.conn.Write(buf)
 	return err
 }
 
 func (c *Carrier) ReadFrame() (byte, []byte, error) {
+	return c.readFrame(nil)
+}
+
+// ReadFrameReuse is ReadFrame without a per-frame allocation: the returned
+// payload is only valid until the next ReadFrameReuse call.
+func (c *Carrier) ReadFrameReuse() (byte, []byte, error) {
+	ft, p, err := c.readFrame(c.rbuf)
+	if cap(p) > cap(c.rbuf) {
+		c.rbuf = p[:cap(p)]
+	}
+	return ft, p, err
+}
+
+// readFrame reads one frame, using buf for the body when it is large enough.
+func (c *Carrier) readFrame(buf []byte) (byte, []byte, error) {
 	var hdr [7]byte
 	if _, err := io.ReadFull(c.conn, hdr[:]); err != nil {
 		return 0, nil, err
@@ -61,7 +101,11 @@ func (c *Carrier) ReadFrame() (byte, []byte, error) {
 	if reallen > 1<<20 || pad > 1<<20 {
 		return 0, nil, io.ErrUnexpectedEOF
 	}
-	body := make([]byte, reallen+pad)
+	body := buf
+	if cap(body) < reallen+pad {
+		body = make([]byte, reallen+pad)
+	}
+	body = body[:reallen+pad]
 	if _, err := io.ReadFull(c.conn, body); err != nil {
 		return 0, nil, err
 	}
@@ -103,6 +147,7 @@ func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, erro
 		tc.SetKeepAlive(true)
 		tc.SetKeepAlivePeriod(3 * time.Second)
 	}
+	tuneTCP(raw)
 	u := utls.UClient(raw, &utls.Config{ServerName: sni, InsecureSkipVerify: true}, utls.HelloChrome_133)
 	if err := u.Handshake(); err != nil {
 		raw.Close()

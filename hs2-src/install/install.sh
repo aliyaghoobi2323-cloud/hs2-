@@ -40,7 +40,27 @@ install_prereqs(){
   apt-get install -y -q iproute2 iptables curl ca-certificates >/dev/null 2>&1 || true
   # tun module
   modprobe tun 2>/dev/null || true
+  tune_kernel
   ok "Prerequisites ready."
+}
+
+# BBR copes with lossy long-haul links far better than cubic, fq paces it, and
+# a low notsent_lowat keeps the kernel from queueing seconds of data on each
+# tunnel link (the delay users see under load).
+tune_kernel(){
+  modprobe tcp_bbr 2>/dev/null || true
+  cat > /etc/sysctl.d/99-hs2.conf <<'EOF'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.ipv4.tcp_notsent_lowat = 131072
+net.ipv4.tcp_slow_start_after_idle = 0
+net.ipv4.tcp_mtu_probing = 1
+EOF
+  if sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1; then
+    ok "Kernel network tuning applied (BBR, fq, low send-queue latency)."
+  else
+    warn "Some kernel tuning could not be applied (see /etc/sysctl.d/99-hs2.conf)."
+  fi
 }
 
 install_binary(){
@@ -227,7 +247,7 @@ uninstall(){
   sleep 1
   pkill -TERM -x hs2 2>/dev/null || true; sleep 1; pkill -KILL -x hs2 2>/dev/null || true
   ip link del hs0 2>/dev/null || true
-  rm -f "$SVC" "$CFG"; systemctl daemon-reload
+  rm -f "$SVC" "$CFG" /etc/sysctl.d/99-hs2.conf; systemctl daemon-reload
   ok "hs2 removed (service stopped, hs0 deleted). Backhaul untouched."
 }
 

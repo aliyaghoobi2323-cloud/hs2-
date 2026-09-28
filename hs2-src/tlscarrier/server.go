@@ -26,6 +26,7 @@ func (s *Server) init() { s.once.Do(func() { s.replay = newReplayMem() }) }
 // proxies the decrypted stream to the backend so the peer gets real content.
 func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrier)) {
 	s.init()
+	tuneTCP(raw)
 	tconn := tls.Server(raw, &tls.Config{
 		Certificates: []tls.Certificate{s.Cert},
 		MinVersion:   tls.VersionTLS12,
