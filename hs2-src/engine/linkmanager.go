@@ -2,9 +2,12 @@ package engine
 
 import (
 	"context"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/xtaci/smux"
 )
 
 // LinkManager maintains a pool of N parallel TLS links to the same kharej
@@ -60,6 +63,15 @@ type LinkManager struct {
 	users    atomic.Int32 // total active user connections across the pool
 	closing  atomic.Bool
 	scaleCtx context.Context
+
+	// OnLink, if set, is called (in its own goroutine) for every new link.
+	OnLink func(Link)
+}
+
+// rawStreamOpener is implemented by links that can open a stream which does
+// not count as user load (e.g. the TUN side channel).
+type rawStreamOpener interface {
+	OpenRawStream() (*smux.Stream, error)
 }
 
 type managedLink struct {
@@ -67,6 +79,10 @@ type managedLink struct {
 	id   int
 	dead atomic.Bool
 	born time.Time
+	// users is the number of user connections assigned here. It is raised
+	// inside Pick, under the lock, so a burst of simultaneous connections
+	// spreads across links instead of every one seeing the same counts.
+	users atomic.Int32
 }
 
 func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, ...any)) *LinkManager {
@@ -152,6 +168,9 @@ func (m *LinkManager) addLink(ctx context.Context) {
 	id := len(m.links)
 	m.links = append(m.links, &managedLink{link: l, id: id, born: time.Now()})
 	m.mu.Unlock()
+	if m.OnLink != nil {
+		go m.OnLink(l)
+	}
 }
 
 // reap rebuilds links that died, keeping the pool at least Min.
@@ -193,7 +212,7 @@ func (m *LinkManager) removeIdleLink() {
 			best, idx = a, i
 		}
 	}
-	if idx >= 0 && best == 0 { // only retire a truly idle link, to not cut users
+	if idx >= 0 && best == 0 && m.links[idx].users.Load() == 0 { // only retire a truly idle link
 		ml := m.links[idx]
 		ml.link.Close()
 		m.links = append(m.links[:idx], m.links[idx+1:]...)
@@ -201,27 +220,44 @@ func (m *LinkManager) removeIdleLink() {
 }
 
 // Pick returns the least-loaded alive link for a NEW user connection, and a
-// release func to call when that user disconnects. This is the load-based
-// assignment: fewest active streams wins.
+// release func to call when that user disconnects. Choosing and counting
+// happen under one lock, so N connections arriving together land on N
+// different links (the old read-then-open-later count sent a whole burst to
+// the first link, which per-connection throttling then capped). Ties are
+// broken at random so load does not pile onto the oldest link.
 func (m *LinkManager) Pick() (Link, func(), bool) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	var chosen Link
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var chosen *managedLink
 	var best int32 = 1 << 30
+	ties := 0
 	for _, ml := range m.links {
 		if !ml.link.Alive() {
 			continue
 		}
-		if a := ml.link.Active(); a < best {
-			best, chosen = a, ml.link
+		switch u := ml.users.Load(); {
+		case u < best:
+			best, chosen, ties = u, ml, 1
+		case u == best:
+			ties++
+			if rand.IntN(ties) == 0 {
+				chosen = ml
+			}
 		}
 	}
 	if chosen == nil {
 		return nil, func() {}, false
 	}
+	chosen.users.Add(1)
 	m.users.Add(1)
-	release := func() { m.users.Add(-1) }
-	return chosen, release, true
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			chosen.users.Add(-1)
+			m.users.Add(-1)
+		})
+	}
+	return chosen.link, release, true
 }
 
 func (m *LinkManager) count() int {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  hs2 — DPI-resistant tunnel (layer: L3-GRE over multi-link TLS)
+#  hs2 — DPI-resistant tunnel (stream mode over multi-link TLS)
 #  Runs ALONGSIDE Backhaul without touching it.
 #      bash install.sh            (menu)
 #      bash install.sh upgrade    (update an existing install in place)
@@ -15,6 +15,10 @@ TUN_SUBNET_IRAN="10.77.0.1/30"
 TUN_SUBNET_KHAREJ="10.77.0.2/30"
 TUN_PEER_IRAN="10.77.0.2"
 TUN_PEER_KHAREJ="10.77.0.1"
+# Link pool written into new Iran configs (tuned in the lab; see BUILD.md).
+LINK_MIN=8
+LINK_MAX=16
+LINK_PER=8
 
 # ---------- pretty output (all to stderr so $(...) captures only real values) --
 _c(){ printf '\033[%sm%s\033[0m\n' "$1" "$2" >&2; }
@@ -83,12 +87,12 @@ install_binary(){
     die "download failed. On the Iran server, copy hs2-linux-amd64 from the kharej server into $(pwd) and run again."
   fi
   chmod 755 "$tmp"
-  "$tmp" version 2>/dev/null | grep -q "l3mtcp" \
-    || { rm -f "$tmp"; die "binary is outdated/corrupt (no l3mtcp). Re-download hs2-linux-amd64."; }
+  "$tmp" version 2>/dev/null | grep -q "hs2 v3" \
+    || { rm -f "$tmp"; die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."; }
   systemctl stop hs2 2>/dev/null || true
   install -m755 "$tmp" "$BIN"; rm -f "$tmp"
   info "sha256: $(sha256sum "$BIN" | cut -c1-16)…"
-  "$BIN" version 2>/dev/null | grep -q "l3mtcp"     || die "binary is outdated/corrupt (no l3mtcp). Re-download hs2-linux-amd64."
+  "$BIN" version 2>/dev/null | grep -q "hs2 v3"     || die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."
   ok "Installed $("$BIN" version 2>/dev/null)"
 }
 
@@ -96,7 +100,7 @@ write_service(){
   local role="$1"
   cat > "$SVC" <<EOF
 [Unit]
-Description=hs2 DPI-resistant tunnel (L3-GRE, $role)
+Description=hs2 DPI-resistant tunnel ($role)
 After=network-online.target
 Wants=network-online.target
 
@@ -172,6 +176,16 @@ setup_kharej(){
   read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
   PANEL=${PANEL:-127.0.0.1:8443}
 
+  echo >&2
+  echo "  Tunnel mode:" >&2
+  echo "    1) mtcp    — multi-link, fastest (recommended)" >&2
+  echo "    2) l3mtcp  — mtcp + tunnel IPs 10.77.0.1/2 on hs0 (ping, non-TCP)" >&2
+  echo "    3) tls     — a single link + hs0" >&2
+  read -rp "Choose [1]: " M </dev/tty
+  case "${M:-1}" in 1) CARRIER=mtcp ;; 2) CARRIER=l3mtcp ;; 3) CARRIER=tls ;; *) die "invalid mode" ;; esac
+  read -rp "Also forward UDP on the user ports (e.g. for Hysteria/WireGuard)? [y/N]: " U </dev/tty
+  case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
+
   local certpair CERT KEY
   certpair=$(get_cert "$DOMAIN"); CERT=${certpair%%|*}; KEY=${certpair##*|}
 
@@ -180,7 +194,7 @@ setup_kharej(){
   mkdir -p "$(dirname "$CFG")"
   cat > "$CFG" <<EOF
 {
-  "mode": "listen", "carrier": "l3mtcp",
+  "mode": "listen", "carrier": "$CARRIER",
   "addr": "$PUBIP:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "backend_addr": "builtin",
@@ -193,8 +207,8 @@ EOF
   write_service kharej
   start_service kharej
 
-  # auto-link for the Iran side: endpoint|domain|shared|panel
-  local LINK; LINK=$(encode_link "$PUBIP:$TPORT|$DOMAIN|$SHARED|$PANEL")
+  # auto-link for the Iran side: endpoint|domain|shared|panel|mode|udp
+  local LINK; LINK=$(encode_link "$PUBIP:$TPORT|$DOMAIN|$SHARED|$PANEL|$CARRIER|$UDP")
   echo >&2; hr
   ok "KHAREJ ready. Copy this SETUP LINK to the Iran server:"
   _c '1;33' "hs2://$LINK"
@@ -211,10 +225,11 @@ setup_iran(){
   read -rp "Paste the hs2:// setup link from the kharej server: " RAW </dev/tty
   RAW=${RAW#hs2://}
   local DEC; DEC=$(decode_link "$RAW") || die "invalid link"
-  local ENDPOINT DOMAIN SHARED PANEL
-  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL <<< "$DEC"
+  local ENDPOINT DOMAIN SHARED PANEL CARRIER UDP
+  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP <<< "$DEC"
   [ -n "$ENDPOINT" ] && [ -n "$SHARED" ] || die "link is missing fields"
-  ok "Link OK — kharej endpoint $ENDPOINT, domain $DOMAIN"
+  CARRIER=${CARRIER:-mtcp}; UDP=${UDP:-false}   # links from older kharej installs
+  ok "Link OK — kharej endpoint $ENDPOINT, domain $DOMAIN, mode $CARRIER, udp $UDP"
 
   echo >&2; info "This Iran server's IP addresses:"; show_ips
   read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
@@ -227,17 +242,17 @@ setup_iran(){
     port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
   done
 
-  info "Multi-link auto-scales between 4 and 16 parallel links by load."
+  info "Links auto-scale between $LINK_MIN and $LINK_MAX by load."
 
   mkdir -p "$(dirname "$CFG")"
   cat > "$CFG" <<EOF
 {
-  "mode": "dial", "carrier": "l3mtcp",
+  "mode": "dial", "carrier": "$CARRIER", "udp": $UDP,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
   "shared_key": "$SHARED",
   "forward_ports": "$PORTS", "peer_panel": "$PANEL",
-  "min_links": 4, "max_links": 16, "per_link": 50,
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
   "bind_local_ip": "$EGRESSIP",
   "user_listen_ip": "$USERIP"
 }
@@ -281,6 +296,13 @@ upgrade(){
   hr; info "Upgrading hs2 (config and link stay the same)"; hr
   install_prereqs
   install_binary
+  # Configs written by the v2 installer use 4 links, too few against
+  # per-connection throttling. Move them to the new defaults, but only if the
+  # line is exactly the old default (hand-edited values are left alone).
+  if grep -q '"min_links": 4, "max_links": 16, "per_link": 50,' "$CFG"; then
+    sed -i "s/\"min_links\": 4, \"max_links\": 16, \"per_link\": 50,/\"min_links\": $LINK_MIN, \"max_links\": $LINK_MAX, \"per_link\": $LINK_PER,/" "$CFG"
+    ok "Link pool updated to $LINK_MIN-$LINK_MAX links."
+  fi
   systemctl restart hs2
   sleep 2
   if systemctl is-active --quiet hs2; then
@@ -299,7 +321,7 @@ if [ "${1:-}" = "upgrade" ]; then upgrade; exit 0; fi
 # ---------- menu -------------------------------------------------------------
 echo >&2
 _c '1;36' "╔══════════════════════════════════════════╗"
-_c '1;36' "║   hs2 — DPI-resistant tunnel (L3-GRE)     ║"
+_c '1;36' "║   hs2 v3 — DPI-resistant tunnel           ║"
 _c '1;36' "║   runs alongside Backhaul                 ║"
 _c '1;36' "╚══════════════════════════════════════════╝"
 echo >&2

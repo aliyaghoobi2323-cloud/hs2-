@@ -161,3 +161,36 @@ func TestLengthPrefixIsMasked(t *testing.T) {
 		t.Fatal("equal-length frames produced identical length prefixes; mask ineffective")
 	}
 }
+
+// Several clients (or one client reconnecting) must be able to handshake with
+// the same responder inside one timestamp bucket; only exact replays fail.
+func TestManyHandshakesSameBucket(t *testing.T) {
+	psk := bytes.Repeat([]byte{8}, 32)
+	srv, _ := GenerateStatic()
+	resp := NewResponder(srv, psk)
+	topBits := map[byte]bool{}
+	for i := 0; i < 32; i++ {
+		cli, _ := GenerateStatic()
+		ini, _ := NewInitiator(cli, srv.Public, psk)
+		m1, err := ini.WriteMessage1()
+		if err != nil {
+			t.Fatal(err)
+		}
+		topBits[m1[16+ephemeralLen-1]&0x80] = true
+		hs, err := resp.ReadMessage1(m1)
+		if err != nil {
+			t.Fatalf("handshake %d rejected: %v", i, err)
+		}
+		m2, sSecret, err := resp.WriteMessage2(hs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cSecret, err := ini.ReadMessage2(m2)
+		if err != nil || !bytes.Equal(sSecret, cSecret) {
+			t.Fatalf("handshake %d did not complete: %v", i, err)
+		}
+	}
+	if len(topBits) != 2 {
+		t.Fatal("ephemeral key top bit is constant on the wire")
+	}
+}

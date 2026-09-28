@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xtaci/smux"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
+	"github.com/xtaci/smux"
 )
 
 // mtcpLink is one parallel TLS link carrying many user streams via smux. Each
@@ -53,6 +53,9 @@ func (l *mtcpLink) OpenStream() (stream, error) {
 	return &countedStream{Stream: s, link: l}, nil
 }
 
+// OpenRawStream opens a stream that is not counted as a user.
+func (l *mtcpLink) OpenRawStream() (*smux.Stream, error) { return l.sess.OpenStream() }
+
 func (l *mtcpLink) Active() int32 { return l.active.Load() }
 
 // Alive reports usability. We treat a link as dead if smux closed it OR if it
@@ -92,25 +95,41 @@ func (c *countedStream) Close() error {
 type mtcpDialer struct {
 	addr, sni string
 	sharedKey []byte
+	bindIP    string // optional local source IP
 	sampler   *obfs.LengthSampler
 }
+
+// smux tuning, shared by both ends of a link.
+var (
+	// SmuxFrameSize is the largest data frame. Streams take turns frame by
+	// frame, so this bounds how long a small reply waits behind a bulk
+	// transfer sharing the link.
+	SmuxFrameSize = 16 << 10
+	// SmuxStreamBuffer is the per-stream receive window: how far one stream
+	// may run ahead of its reader. Flow control keeps a slow reader from
+	// piling data into the link.
+	SmuxStreamBuffer = 2 << 20
+	// SmuxSessionBuffer bounds all streams of one link together.
+	SmuxSessionBuffer = 8 << 20
+)
 
 func newSmuxConfig() *smux.Config {
 	c := smux.DefaultConfig()
 	c.Version = 2
 	c.KeepAliveInterval = 5 * time.Second
 	c.KeepAliveTimeout = 15 * time.Second
-	c.MaxReceiveBuffer = 8 * 1024 * 1024
-	c.MaxStreamBuffer = 2 * 1024 * 1024
+	c.MaxFrameSize = SmuxFrameSize
+	c.MaxReceiveBuffer = SmuxSessionBuffer
+	c.MaxStreamBuffer = SmuxStreamBuffer
 	return c
 }
 
 func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
-	car, err := tlscarrier.Dial(d.addr, d.sni, d.sharedKey)
+	car, err := tlscarrier.DialFrom(d.addr, d.sni, d.sharedKey, d.bindIP)
 	if err != nil {
 		return nil, err
 	}
-	sess, err := smux.Client(car.RawConn(), newSmuxConfig())
+	sess, err := newSession(car.RawConn(), false)
 	if err != nil {
 		car.Close()
 		return nil, err
@@ -120,9 +139,10 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 	return l, nil
 }
 
-// NewMTCPDialer builds a link dialer for the manager.
-func NewMTCPDialer(addr, sni string, sharedKey []byte) LinkDialer {
-	return &mtcpDialer{addr: addr, sni: sni, sharedKey: sharedKey, sampler: obfs.NewHTTPSLengthSampler()}
+// NewMTCPDialer builds a link dialer for the manager. bindIP (optional) is the
+// local source address links are dialled from.
+func NewMTCPDialer(addr, sni string, sharedKey []byte, bindIP string) LinkDialer {
+	return &mtcpDialer{addr: addr, sni: sni, sharedKey: sharedKey, bindIP: bindIP, sampler: obfs.NewHTTPSLengthSampler()}
 }
 
 var _ net.Conn = (*net.TCPConn)(nil)

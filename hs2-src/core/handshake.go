@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"time"
@@ -75,13 +76,31 @@ func nowBucket() int64 { return time.Now().Unix() / 30 }
 // firstMAC is a keyed tag over the timestamp bucket, keyed by the psk. A
 // responder can check it before touching Noise, which is what makes an invalid
 // probe cheap to reject and silent.
-func firstMAC(psk []byte, bucket int64) []byte {
+//
+// It also covers the handshake's ephemeral key, so every handshake carries a
+// different tag: a tag over the bucket alone was identical for all handshakes
+// in a 30s window, which made the replay memory reject every legitimate
+// reconnect after the first and gave observers a repeating 16-byte prefix.
+func firstMAC(psk []byte, bucket int64, ephemeral []byte) []byte {
 	h, _ := blake2s.New256(psk)
 	var b [8]byte
 	binary.BigEndian.PutUint64(b[:], uint64(bucket))
-	h.Write([]byte("hs2 first mac"))
+	h.Write([]byte("hs2 first mac v2"))
 	h.Write(b[:])
+	h.Write(ephemeral)
 	return h.Sum(nil)[:16]
+}
+
+// ephemeralLen is the size of the X25519 ephemeral key that opens an IK
+// message 1. Its top bit is always 0 as generated; the sender randomises it
+// on the wire (X25519 ignores that bit, RFC 7748 §5) and the receiver clears
+// it again, so the key does not carry a constant bit observers could count.
+const ephemeralLen = 32
+
+func randomiseTopBit(msg []byte) {
+	var r [1]byte
+	rand.Read(r[:])
+	msg[ephemeralLen-1] |= r[0] & 0x80
 }
 
 // Initiator drives the dialling side.
@@ -120,7 +139,8 @@ func (i *Initiator) WriteMessage1() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := append(firstMAC(i.psk, bucket), msg...)
+	randomiseTopBit(msg)
+	out := append(firstMAC(i.psk, bucket, msg[:ephemeralLen]), msg...)
 	return out, nil
 }
 
@@ -155,14 +175,15 @@ func (r *Responder) ReadMessage1(in []byte) (hs *noise.HandshakeState, err error
 	if len(in) < 16+firstMsgMinLen {
 		return nil, ErrHandshakeAuth
 	}
-	mac, msg := in[:16], in[16:]
+	mac := in[:16]
+	msg := append([]byte(nil), in[16:]...)
 	// Accept the current bucket or the one before it, to tolerate clock skew
 	// and a message in flight across a boundary.
 	now := nowBucket()
 	var okBucket int64
 	matched := false
 	for _, b := range []int64{now, now - 1, now + 1} {
-		if constEq(mac, firstMAC(r.psk, b)) {
+		if constEq(mac, firstMAC(r.psk, b, msg[:ephemeralLen])) {
 			okBucket, matched = b, true
 			break
 		}
@@ -176,6 +197,7 @@ func (r *Responder) ReadMessage1(in []byte) (hs *noise.HandshakeState, err error
 	if !r.seen.add(mac) {
 		return nil, ErrHandshakeReplay
 	}
+	msg[ephemeralLen-1] &^= 0x80
 	cfg := noise.Config{
 		CipherSuite:           cipherSuite(),
 		Pattern:               noise.HandshakeIK,

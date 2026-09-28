@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -41,7 +42,7 @@ type fileConfig struct {
 	// custom tunnel IP (optional): egress/listen on a specific server IP
 	BindLocalIP  string `json:"bind_local_ip"`  // iran: source IP to dial from
 	UserListenIP string `json:"user_listen_ip"` // iran: IP the user ports listen on
-	Stream       bool   `json:"stream"`         // true = stream mode (TCP-only), false/absent = L3 (default)
+	UDP          bool   `json:"udp"`            // also forward UDP on forward_ports
 
 	// mtcp (multi-link) settings
 	MinLinks int `json:"min_links"`
@@ -76,7 +77,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version", "-v", "--version":
-		fmt.Println("hs2 v2 (carriers: l3mtcp, mtcp, tls)")
+		fmt.Println("hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls; auth: tls-exporter bound, mutual)")
 	case "keygen":
 		k, err := core.GenerateStatic()
 		must(err)
@@ -89,7 +90,29 @@ func main() {
 	}
 }
 
+// applyTuning lets the test lab override data-path tuning without a rebuild.
+// Production runs use the built-in defaults; these are not config options.
+func applyTuning() {
+	num := func(name string, dst *int) {
+		if v := os.Getenv(name); v != "" {
+			if n, err := strconv.Atoi(v); err == nil {
+				*dst = n
+				log.Printf("tuning: %s=%d", name, n)
+			}
+		}
+	}
+	num("HS2_TUNE_NOTSENT", &tlscarrier.NotSentLowat)
+	num("HS2_TUNE_SMUX_FRAME", &engine.SmuxFrameSize)
+	num("HS2_TUNE_SMUX_STREAMBUF", &engine.SmuxStreamBuffer)
+	num("HS2_TUNE_SMUX_SESSBUF", &engine.SmuxSessionBuffer)
+	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
+		tlscarrier.CongestionControl = v
+		log.Printf("tuning: HS2_TUNE_CC=%q", v)
+	}
+}
+
 func runCmd(args []string) {
+	applyTuning()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	fs.Parse(args)
@@ -116,12 +139,12 @@ func runCmd(args []string) {
 	switch fc.Carrier {
 	case "reality":
 		runReality(ctx, eng, fc)
-	case "tls":
-		runTLS(ctx, eng, fc)
-	case "mtcp":
-		runMTCP(ctx, fc) // stream mode (TCP-only)
-	case "l3mtcp", "l3":
-		runL3MTCP(ctx, fc) // L3 over multi-link (default)
+	case "mtcp": // link pool, no TUN
+		runStream(ctx, fc, false, 0)
+	case "l3mtcp", "l3": // link pool + hs0 side channel
+		runStream(ctx, fc, true, 0)
+	case "tls": // one link + hs0 side channel
+		runStream(ctx, fc, true, 1)
 	case "noise", "":
 		runNoise(ctx, eng, fc)
 	default:
@@ -143,83 +166,54 @@ func runReality(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 	must(eng.RunListen(ctx, ln))
 }
 
-func runL3MTCP(ctx context.Context, fc fileConfig) {
+// runStream runs any TLS carrier in stream mode (see engine/stream.go). User
+// TCP (and optionally UDP) always rides smux streams; withTUN adds hs0 as a
+// side channel for other traffic; links > 0 pins the pool size.
+func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	key := unhex(fc.SharedKey)
 	logf := func(f string, a ...any) { log.Printf(f, a...) }
-	mtu := fc.MTU
-	if mtu == 0 {
-		mtu = 1380
+	var dev *tun.Device
+	if withTUN {
+		mtu := fc.MTU
+		if mtu == 0 {
+			mtu = 1380
+		}
+		d, err := tun.Open(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu)
+		must(err)
+		defer d.Close()
+		dev = d
+		logf("tun %s up: %s peer %s (side channel)", d.Name(), fc.LocalCIDR, fc.PeerIP)
 	}
-	dev, err := tun.Open(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu)
-	must(err)
-	defer dev.Close()
-	logf("tun %s up: %s peer %s", dev.Name(), fc.LocalCIDR, fc.PeerIP)
-
 	if fc.Mode == "dial" {
-		min, max := fc.MinLinks, fc.MaxLinks
-		if min == 0 {
-			min = 4
-		}
-		if max == 0 {
-			max = 16
-		}
-		d := &l3DialerCfg{addr: fc.Addr, sni: fc.SNI, key: key, bindIP: fc.BindLocalIP}
-		pool := engine.NewL3PoolFromCfg(d.addr, d.sni, d.key, d.bindIP, min, max, fc.PerLink, logf)
-		// start user port forwarders (DNAT-free: forward over tunnel to peer panel)
-		if fc.ForwardPorts != "" {
-			go func() {
-				time.Sleep(4 * time.Second)
-				engine.RunPortForwardersOn(fc.UserListenIP, splitComma(fc.ForwardPorts), "10.77.0.2:9999", logf)
-			}()
-		}
-		pool.Run(ctx, dev)
-		return
-	}
-	// kharej: panel forwarder + accept links into shared TUN
-	if fc.Expose != "" {
-		go engine.RunPanelForwarder("10.77.0.2:9999", fc.Expose, logf)
-	}
-	cert, cerr := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
-	must(cerr)
-	backend := fc.BackendAddr
-	if backend == "" || backend == "builtin" {
-		addr, berr := startBuiltinBackend()
-		must(berr)
-		backend = addr
-	}
-	bind := fc.Addr
-	ln, lerr := engine.ListenReuse(bind)
-	must(lerr)
-	srv := &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: backend}
-	pool := engine.NewL3KharejPool(dev, logf)
-	must(pool.Serve(ctx, ln, srv))
-}
-
-type l3DialerCfg struct {
-	addr, sni string
-	key       []byte
-	bindIP    string
-}
-
-func runMTCP(ctx context.Context, fc fileConfig) {
-	key := unhex(fc.SharedKey)
-	logf := func(f string, a ...any) { log.Printf(f, a...) }
-	if fc.Mode == "dial" {
-		d := engine.NewMTCPDialer(fc.Addr, fc.SNI, key)
+		// Defaults chosen in the lab: 4 links cannot get past per-connection
+		// throttling, 8 can; the pool grows toward 16 with users.
 		min, max, per := fc.MinLinks, fc.MaxLinks, fc.PerLink
 		if min == 0 {
-			min = 4
+			min = 8
 		}
 		if max == 0 {
 			max = 16
 		}
 		if per == 0 {
-			per = 50
+			per = 8
 		}
-		must(engine.RunMTCPIran(ctx, d, splitComma(fc.ForwardPorts), min, max, per, logf))
+		if links > 0 {
+			min, max = links, links
+		}
+		cfg := engine.IranConfig{
+			Dialer: engine.NewMTCPDialer(fc.Addr, fc.SNI, key, fc.BindLocalIP),
+			Min:    min, Max: max, PerLink: per,
+			ListenIP: fc.UserListenIP,
+			Ports:    splitComma(fc.ForwardPorts),
+			UDP:      fc.UDP,
+			Log:      logf,
+		}
+		if dev != nil {
+			cfg.TUN = dev
+		}
+		must(engine.RunIran(ctx, cfg))
 		return
 	}
-	// listen (kharej)
 	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
 	must(err)
 	backend := fc.BackendAddr
@@ -227,51 +221,15 @@ func runMTCP(ctx context.Context, fc fileConfig) {
 		addr, err := startBuiltinBackend()
 		must(err)
 		backend = addr
-		log.Printf("builtin probe backend on %s", addr)
 	}
 	ln, err := engine.ListenReuse(fc.Addr)
 	must(err)
-	srv := &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: backend}
-	must(engine.RunMTCPKharej(ctx, ln, srv, fc.Expose, logf))
-}
-
-func runTLS(ctx context.Context, eng *engine.Engine, fc fileConfig) {
-	key := unhex(fc.SharedKey)
-	if fc.Mode == "dial" {
-		d := engine.NewTLSDialer(fc.Addr, fc.SNI, key)
-		if fc.ForwardPorts != "" {
-			ports := splitComma(fc.ForwardPorts)
-			go func() {
-				// give the tunnel a moment to bring hs0 up, then open user ports
-				time.Sleep(4 * time.Second)
-				if err := engine.RunPortForwarders(ports, "10.77.0.2:9999", func(f string, a ...any) { log.Printf(f, a...) }); err != nil {
-					log.Printf("port forwarders: %v", err)
-				}
-			}()
-		}
-		must(eng.RunDial(ctx, d))
-		return
+	srv := &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: backend, Logf: logf}
+	cfg := engine.KharejConfig{Listener: ln, Server: srv, Panel: fc.Expose, Log: logf}
+	if dev != nil {
+		cfg.TUN = dev
 	}
-	if fc.BackendAddr == "" || fc.BackendAddr == "builtin" {
-		addr, err := startBuiltinBackend()
-		must(err)
-		fc.BackendAddr = addr
-		log.Printf("builtin probe backend on %s", addr)
-	}
-	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
-	must(err)
-	// Panel forwarder listens on the kharej tunnel IP; the Iran side dials it
-	// across the tunnel and it relays to the real panel.
-	if fc.Expose != "" {
-		go func() {
-			if err := engine.RunPanelForwarder("10.77.0.2:9999", fc.Expose, func(f string, a ...any) { log.Printf(f, a...) }); err != nil {
-				log.Printf("panel forwarder: %v", err)
-			}
-		}()
-	}
-	ln, err := engine.NewTLSListener(fc.Addr, fc.BackendAddr, key, cert)
-	must(err)
-	must(eng.RunListen(ctx, ln))
+	must(engine.RunKharej(ctx, cfg))
 }
 
 func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {

@@ -11,6 +11,22 @@ import (
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
+// tunWriter is the TUN device as the L3 path uses it.
+type tunWriter interface {
+	Write([]byte) (int, error)
+	Read([]byte) (int, error)
+	MTU() int
+}
+
+// pktConn is what an L3 link sends framed packets over: a whole TLS carrier,
+// or (in stream mode) one smux stream of a shared link.
+type pktConn interface {
+	WriteRaw([]byte) error
+	ReadFrameReuse() (byte, []byte, error)
+	SetReadDeadline(time.Time)
+	Close() error
+}
+
 // Shared L3 link machinery for both the Iran (dialing) and kharej (accepting)
 // pools.
 //
@@ -37,6 +53,12 @@ const (
 	// l3BatchBytes is the most payload one coalesced write carries (about one
 	// full TLS record).
 	l3BatchBytes = 16 << 10
+	// l3MaxSojourn drops a packet that has waited this long in a link's queue.
+	// A queue bounded only in packets is bounded in time only on a fast link:
+	// on a slow or throttled one 256 packets are seconds of delay (the
+	// multi-second pings under load). Bounding the wait instead keeps latency
+	// low at any rate, and the inner TCP reads the drops as congestion.
+	l3MaxSojourn = 60 * time.Millisecond
 	// l3KeepaliveEvery / l3DeadAfter: an idle link sends a keepalive this
 	// often, and a link that delivers no frame at all for l3DeadAfter is
 	// dropped. Shorter than the single-carrier values because the pool has
@@ -47,20 +69,26 @@ const (
 
 // l3Link is one link in L3 mode: a TLS carrier used as a framed packet pipe.
 type l3Link struct {
-	car  *tlscarrier.Carrier
+	car  pktConn
 	id   uint32        // rendezvous hash seed
-	q    chan *[]byte  // packets waiting for the writer
+	q    chan qpkt     // packets waiting for the writer
 	ka   time.Duration // idle time before a keepalive is sent
 	dead atomic.Bool
 	once sync.Once
 	done chan struct{}
 }
 
-func newL3Link(car *tlscarrier.Carrier) *l3Link {
+// qpkt is a queued packet and when it was queued.
+type qpkt struct {
+	b *[]byte
+	t time.Time
+}
+
+func newL3Link(car pktConn) *l3Link {
 	return &l3Link{
 		car:  car,
 		id:   rand.Uint32(),
-		q:    make(chan *[]byte, l3QueueLen),
+		q:    make(chan qpkt, l3QueueLen),
 		ka:   l3KeepaliveEvery,
 		done: make(chan struct{}),
 	}
@@ -81,7 +109,7 @@ func (l *l3Link) markDead() {
 // enqueue hands a packet to the link without ever blocking.
 func (l *l3Link) enqueue(b *[]byte) bool {
 	select {
-	case l.q <- b:
+	case l.q <- qpkt{b, time.Now()}:
 		return true
 	default:
 		return false
@@ -89,27 +117,37 @@ func (l *l3Link) enqueue(b *[]byte) bool {
 }
 
 // writeLoop is the only goroutine that writes to the link's carrier.
-func (l *l3Link) writeLoop(pool *sync.Pool) {
+func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 	batch := make([]byte, 0, l3BatchBytes+4096)
 	idle := time.NewTimer(l.ka)
 	defer idle.Stop()
+	add := func(p qpkt, now time.Time) {
+		if now.Sub(p.t) > l3MaxSojourn {
+			drops.Add(1)
+		} else {
+			batch = tlscarrier.AppendFrame(batch, core.TypeData, *p.b)
+		}
+		pool.Put(p.b)
+	}
 	for {
 		batch = batch[:0]
 		select {
 		case <-l.done:
 			return
-		case b := <-l.q:
-			batch = tlscarrier.AppendFrame(batch, core.TypeData, *b)
-			pool.Put(b)
+		case p := <-l.q:
+			now := time.Now()
+			add(p, now)
 		drain:
 			for len(batch) < l3BatchBytes {
 				select {
-				case b := <-l.q:
-					batch = tlscarrier.AppendFrame(batch, core.TypeData, *b)
-					pool.Put(b)
+				case p := <-l.q:
+					add(p, now)
 				default:
 					break drain
 				}
+			}
+			if len(batch) == 0 {
+				continue // everything was stale
 			}
 		case <-idle.C:
 			batch = tlscarrier.AppendFrame(batch, core.TypePing, make([]byte, core.KeepalivePad()))
@@ -127,8 +165,8 @@ func (l *l3Link) writeLoop(pool *sync.Pool) {
 type l3Set struct {
 	mu    sync.RWMutex
 	links []*l3Link
-	pool  sync.Pool // *[]byte packet buffers
-	drops atomic.Uint64
+	pool  sync.Pool     // *[]byte packet buffers
+	drops atomic.Uint64 // no link, queue full, or waited too long
 }
 
 func (s *l3Set) add(l *l3Link) {
@@ -205,7 +243,7 @@ func (s *l3Set) pick(pkt []byte) *l3Link {
 // serveLink runs a link's writer and reader. The reader runs on the calling
 // goroutine and returns when the link dies.
 func (s *l3Set) serveLink(ctx context.Context, l *l3Link, dev tunWriter) {
-	go l.writeLoop(&s.pool)
+	go l.writeLoop(&s.pool, &s.drops)
 	s.linkToTun(ctx, l, dev)
 }
 
@@ -262,7 +300,7 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 			return
 		case <-t.C:
 			if n := s.drops.Swap(0); n > 0 {
-				logf("l3: dropped %d packets in 30s (queue full or no link)", n)
+				logf("l3: dropped %d packets in 30s (congestion or no link)", n)
 			}
 		}
 	}

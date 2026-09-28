@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -148,16 +149,46 @@ func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, erro
 		tc.SetKeepAlivePeriod(3 * time.Second)
 	}
 	tuneTCP(raw)
-	u := utls.UClient(raw, &utls.Config{ServerName: sni, InsecureSkipVerify: true}, utls.HelloChrome_133)
+	cfg := &utls.Config{ServerName: sni, InsecureSkipVerify: true}
+	u := utls.UClient(raw, cfg, utls.HelloChrome_133)
+	raw.SetDeadline(time.Now().Add(authTimeout))
 	if err := u.Handshake(); err != nil {
 		raw.Close()
 		return nil, err
 	}
-	if _, err := u.Write(makeAuthRecord(sharedKey)); err != nil {
+	// The certificate is not validated (the Iran side may lack CA roots, and a
+	// domain may be fronted); instead both sides prove the shared key bound to
+	// this TLS session, which defeats interception. See auth.go.
+	ekm, err := clientEKM(u, cfg)
+	if err != nil {
 		raw.Close()
 		return nil, err
 	}
+	rec, nonce := makeClientAuth(sharedKey, ekm)
+	if _, err := u.Write(rec); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	if err := readServerProof(u, sharedKey, nonce, ekm); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	raw.SetDeadline(time.Time{})
 	return &Carrier{conn: u}, nil
+}
+
+// clientEKM exports the channel-binding secret of a finished uTLS handshake.
+// The Chrome preset advertises renegotiation support, which makes uTLS refuse
+// to export; TLS 1.3 has no renegotiation at all, so once 1.3 is confirmed
+// the flag can be cleared safely. Links are refused on anything older.
+func clientEKM(u *utls.UConn, cfg *utls.Config) ([]byte, error) {
+	cs := u.ConnectionState()
+	if cs.Version != utls.VersionTLS13 {
+		return nil, errors.New("tlscarrier: server did not negotiate TLS 1.3")
+	}
+	cfg.Renegotiation = utls.RenegotiateNever
+	cs = u.ConnectionState()
+	return exportEKM(&cs)
 }
 
 var _ = binary.BigEndian

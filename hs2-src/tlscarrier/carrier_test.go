@@ -2,12 +2,16 @@ package tlscarrier
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"hash"
+
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"golang.org/x/crypto/blake2s"
 	"io"
 	"math/big"
 	"net"
@@ -124,7 +128,8 @@ func TestProbeGetsBackend(t *testing.T) {
 	}
 }
 
-// A replayed auth record is rejected (forwarded to backend), not accepted twice.
+// A captured auth record replayed on a new connection is rejected (it is bound
+// to the original TLS session) and the replayer is served the website.
 func TestReplayRejected(t *testing.T) {
 	key := bytes.Repeat([]byte{0x33}, 32)
 	cert := testCert(t, "vpn.example.com")
@@ -135,26 +140,172 @@ func TestReplayRejected(t *testing.T) {
 	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { mu.Lock(); count++; mu.Unlock(); c.Close() })
 	defer stop()
 
-	rec := makeAuthRecord(key) // one fixed record, sent twice
-	send := func() []byte {
+	dial := func() (*utls.UConn, *utls.Config) {
 		raw, _ := net.Dial("tcp", addr)
-		u := utls.UClient(raw, &utls.Config{ServerName: "vpn.example.com", InsecureSkipVerify: true}, utls.HelloChrome_133)
-		u.Handshake()
-		u.Write(rec)
-		u.SetReadDeadline(time.Now().Add(time.Second))
-		out, _ := io.ReadAll(u)
-		return out
+		cfg := &utls.Config{ServerName: "vpn.example.com", InsecureSkipVerify: true}
+		u := utls.UClient(raw, cfg, utls.HelloChrome_133)
+		if err := u.Handshake(); err != nil {
+			t.Fatal(err)
+		}
+		return u, cfg
 	}
-	send()
-	out2 := send()
-	time.Sleep(200 * time.Millisecond)
+	// first connection: a genuine record for its own session
+	u1, cfg1 := dial()
+	ekm, err := clientEKM(u1, cfg1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, nonce := makeClientAuth(key, ekm)
+	u1.Write(rec)
+	u1.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := readServerProof(u1, key, nonce, ekm); err != nil {
+		t.Fatalf("genuine client refused: %v", err)
+	}
+	u1.Close()
+	// second connection replays the captured record
+	u2, _ := dial()
+	u2.Write(rec)
+	u2.SetReadDeadline(time.Now().Add(2 * time.Second))
+	out, _ := io.ReadAll(u2)
+	time.Sleep(100 * time.Millisecond)
 	mu.Lock()
 	c := count
 	mu.Unlock()
-	if c > 1 {
-		t.Fatalf("replayed record accepted %d times", c)
+	if c != 1 {
+		t.Fatalf("tunnel accepted %d times, want 1", c)
 	}
-	if !bytes.Contains(out2, []byte("real-backend")) {
-		t.Fatalf("replayed connection not forwarded to backend: %q", out2)
+	if !bytes.Contains(out, []byte("real-backend")) {
+		t.Fatalf("replayed connection not forwarded to backend: %q", out)
 	}
+}
+
+// mitm terminates the client's TLS with its own certificate and relays the
+// decrypted bytes over its own TLS connection to the real server, which is
+// exactly what an interceptor with a forged certificate would do.
+func mitm(t *testing.T, target string) (string, func()) {
+	cert := testCert(t, "vpn.example.com") // a different, attacker-made cert
+	ln, _ := net.Listen("tcp", "127.0.0.1:0")
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				front := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{cert}})
+				if front.Handshake() != nil {
+					return
+				}
+				raw, err := net.Dial("tcp", target)
+				if err != nil {
+					return
+				}
+				back := utls.UClient(raw, &utls.Config{ServerName: "vpn.example.com", InsecureSkipVerify: true}, utls.HelloChrome_133)
+				if back.Handshake() != nil {
+					return
+				}
+				defer back.Close()
+				done := make(chan struct{}, 2)
+				go func() { io.Copy(back, front); done <- struct{}{} }()
+				go func() { io.Copy(front, back); done <- struct{}{} }()
+				<-done
+			}(c)
+		}
+	}()
+	return ln.Addr().String(), func() { ln.Close() }
+}
+
+// An interceptor in the middle can neither get a tunnel from the server nor
+// make the client believe it reached the server.
+func TestMITMRejected(t *testing.T) {
+	key := bytes.Repeat([]byte{0x44}, 32)
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	hit := make(chan struct{}, 1)
+	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { hit <- struct{}{}; c.Close() })
+	defer stop()
+	maddr, stopM := mitm(t, addr)
+	defer stopM()
+
+	car, err := Dial(maddr, "vpn.example.com", key)
+	if err == nil {
+		car.Close()
+		t.Fatal("client accepted a link through a man-in-the-middle")
+	}
+	select {
+	case <-hit:
+		t.Fatal("server granted a tunnel to a relayed (intercepted) client")
+	case <-time.After(300 * time.Millisecond):
+	}
+	// sanity: the same client reaches the real server directly
+	car, err = Dial(addr, "vpn.example.com", key)
+	if err != nil {
+		t.Fatalf("direct dial failed: %v", err)
+	}
+	car.Close()
+}
+
+// A server that does not know the key cannot pass the client's check.
+func TestWrongServerKey(t *testing.T) {
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	addr, stop := startServer(t, bytes.Repeat([]byte{0x55}, 32), cert, be, func(c *Carrier) { c.Close() })
+	defer stop()
+	if _, err := Dial(addr, "vpn.example.com", bytes.Repeat([]byte{0x66}, 32)); err == nil {
+		t.Fatal("dial with the wrong key succeeded")
+	}
+}
+
+// A short request (fewer bytes than an auth record) must be answered by the
+// backend promptly, like a real web server, not left hanging.
+func TestShortProbeAnswered(t *testing.T) {
+	key := bytes.Repeat([]byte{0x77}, 32)
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { c.Close() })
+	defer stop()
+	raw, _ := net.Dial("tcp", addr)
+	u := utls.UClient(raw, &utls.Config{ServerName: "vpn.example.com", InsecureSkipVerify: true}, utls.HelloChrome_133)
+	if err := u.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	u.Write([]byte("GET / HTTP/1.0\r\n\r\n")) // 18 bytes
+	u.SetReadDeadline(time.Now().Add(2 * time.Second))
+	out, _ := io.ReadAll(u)
+	if !bytes.Contains(out, []byte("real-backend")) {
+		t.Fatalf("short probe not answered by backend: %q", out)
+	}
+}
+
+// A pre-v2 (unbound) auth record is refused and logged.
+func TestLegacyClientRefused(t *testing.T) {
+	key := bytes.Repeat([]byte{0x88}, 32)
+	if !isLegacyAuth(key, legacyRecord(key)) {
+		t.Fatal("legacy record not recognised")
+	}
+	cs := &fakeEKM{}
+	ekm, _ := exportEKM(cs)
+	if _, _, ok := parseClientAuth(key, ekm, legacyRecord(key)); ok {
+		t.Fatal("legacy record accepted as v2")
+	}
+}
+
+type fakeEKM struct{}
+
+func (fakeEKM) ExportKeyingMaterial(string, []byte, int) ([]byte, error) {
+	return bytes.Repeat([]byte{1}, 32), nil
+}
+
+// legacyRecord builds a v1 (pre channel binding) auth record.
+func legacyRecord(key []byte) []byte {
+	nonce := bytes.Repeat([]byte{9}, 16)
+	m := hmac.New(func() hash.Hash { h, _ := blake2s.New256(nil); return h }, key)
+	m.Write([]byte("hs2-tls-auth"))
+	m.Write(nonce)
+	m.Write(be64(minuteBucket()))
+	return append(nonce, m.Sum(nil)[:16]...)
 }

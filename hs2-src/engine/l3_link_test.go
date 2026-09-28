@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,7 +114,7 @@ func TestPumpNeverBlocksOnStuckLink(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var s l3Set
-	s.add(&l3Link{id: 1, q: make(chan *[]byte, l3QueueLen)}) // no writer
+	s.add(&l3Link{id: 1, q: make(chan qpkt, l3QueueLen)}) // no writer
 	dev := &fakeTun{n: 5000, ctx: ctx}
 	go s.pumpTun(ctx, dev)
 	deadline := time.Now().Add(2 * time.Second)
@@ -141,7 +142,8 @@ func TestWriteLoopDeliversAndKeepsAlive(t *testing.T) {
 			t.Fatal("enqueue failed")
 		}
 	}
-	go l.writeLoop(&pool)
+	var drops atomic.Uint64
+	go l.writeLoop(&pool, &drops)
 	defer l.markDead()
 
 	peer := tlscarrier.NewCarrier(b)
@@ -158,5 +160,29 @@ func TestWriteLoopDeliversAndKeepsAlive(t *testing.T) {
 	ft, _, err := peer.ReadFrame()
 	if err != nil || ft != core.TypePing {
 		t.Fatalf("expected keepalive, got ft=%d err=%v", ft, err)
+	}
+}
+
+// Packets that waited longer than l3MaxSojourn are dropped, not sent late.
+func TestWriteLoopDropsStalePackets(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	l := newL3Link(tlscarrier.NewCarrier(a))
+	stale := tcpPacket(1, 1)
+	fresh := tcpPacket(2, 1)
+	l.q <- qpkt{&stale, time.Now().Add(-time.Second)}
+	l.q <- qpkt{&fresh, time.Now()}
+	var pool sync.Pool
+	var drops atomic.Uint64
+	go l.writeLoop(&pool, &drops)
+	defer l.markDead()
+	peer := tlscarrier.NewCarrier(b)
+	peer.SetReadDeadline(time.Now().Add(2 * time.Second))
+	ft, p, err := peer.ReadFrame()
+	if err != nil || ft != core.TypeData || binary.BigEndian.Uint16(p[20:]) != 2 {
+		t.Fatalf("expected only the fresh packet, got ft=%d err=%v", ft, err)
+	}
+	if drops.Load() != 1 {
+		t.Fatalf("drops = %d, want 1", drops.Load())
 	}
 }
