@@ -9,13 +9,42 @@ package core
 // numbers below it. A sequence above the top slides the window up; one inside
 // is accepted once and then marked; one below the floor is refused outright.
 // This is the WireGuard/IPsec construction (RFC 6479-style), sized modestly.
+//
+// The bitmap is addressed by (seq mod replayBits) in 64-bit words, so sliding
+// up by one only clears the single bit that enters the window. The first
+// version shifted a 2048-entry array on every packet, which cost a 2 KiB
+// memmove per packet — invisible on a stream carrier that calls it a few
+// thousand times a second, but the UDP carrier runs it on every datagram.
 
-const replayBits = 2048
+const (
+	replayBits  = 2048
+	replayWords = replayBits / 64
+)
 
 type replayWindow struct {
-	top    uint64           // highest accepted sequence
-	bitmap [replayBits]bool // bitmap[i] => (top - i) has been seen
+	top    uint64 // highest accepted sequence
+	bm     [replayWords]uint64
 	primed bool
+}
+
+func (w *replayWindow) bit(seq uint64) (word uint64, mask uint64) {
+	i := seq % replayBits
+	return i / 64, 1 << (i % 64)
+}
+
+func (w *replayWindow) get(seq uint64) bool {
+	i, m := w.bit(seq)
+	return w.bm[i]&m != 0
+}
+
+func (w *replayWindow) set(seq uint64) {
+	i, m := w.bit(seq)
+	w.bm[i] |= m
+}
+
+func (w *replayWindow) clear(seq uint64) {
+	i, m := w.bit(seq)
+	w.bm[i] &^= m
 }
 
 // check reports whether seq is fresh, and records it if so. A false return
@@ -24,41 +53,32 @@ func (w *replayWindow) check(seq uint64) bool {
 	if !w.primed {
 		w.primed = true
 		w.top = seq
-		w.bitmap[0] = true
+		w.set(seq)
 		return true
 	}
 	if seq > w.top {
-		// Slide up by (seq - top): clear the bits that fall off the new bottom.
-		shift := seq - w.top
-		if shift >= replayBits {
-			for i := range w.bitmap {
-				w.bitmap[i] = false
+		// The sequences between the old top and the new one have not been
+		// seen: clear their bits so a later arrival is still accepted once.
+		if seq-w.top >= replayBits {
+			for i := range w.bm {
+				w.bm[i] = 0
 			}
 		} else {
-			// Move existing marks down by shift.
-			for i := replayBits - 1; i >= 0; i-- {
-				var src bool
-				if uint64(i) >= shift {
-					src = w.bitmap[uint64(i)-shift]
-				}
-				w.bitmap[i] = src
-			}
-			for i := uint64(0); i < shift; i++ {
-				w.bitmap[i] = false
+			for s := w.top + 1; s <= seq; s++ {
+				w.clear(s)
 			}
 		}
 		w.top = seq
-		w.bitmap[0] = true
+		w.set(seq)
 		return true
 	}
 	// seq <= top
-	diff := w.top - seq
-	if diff >= replayBits {
+	if w.top-seq >= replayBits {
 		return false // too old
 	}
-	if w.bitmap[diff] {
+	if w.get(seq) {
 		return false // already seen
 	}
-	w.bitmap[diff] = true
+	w.set(seq)
 	return true
 }
