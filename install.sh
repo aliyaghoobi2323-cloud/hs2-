@@ -2,12 +2,13 @@
 # ============================================================================
 #  hs2 — DPI-resistant tunnel (layer: L3-GRE over multi-link TLS)
 #  Runs ALONGSIDE Backhaul without touching it.
-#      bash install.sh
+#      bash install.sh            (menu)
+#      bash install.sh upgrade    (update an existing install in place)
 # ============================================================================
 set -euo pipefail
 
 BIN=/usr/local/bin/hs2
-REPO_RAW="https://raw.githubusercontent.com/hosseintaghipoursori-alt/hs2-tunnel/main"
+REPO_RAW="${HS2_REPO_RAW:-https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d}"
 CFG=/etc/hs2/config.json
 SVC=/etc/systemd/system/hs2.service
 TUN_SUBNET_IRAN="10.77.0.1/30"
@@ -64,18 +65,29 @@ EOF
 }
 
 install_binary(){
-  systemctl stop hs2 2>/dev/null || true
-  local d tmp; d=$(cd "$(dirname "$0")" && pwd); tmp=$(mktemp)
-  # Prefer a binary sitting next to install.sh (offline / Iran server); otherwise
-  # download the latest from GitHub. ALWAYS replace the old binary.
-  if [ -f "$d/hs2-linux-amd64" ]; then
-    cp "$d/hs2-linux-amd64" "$tmp"
-    info "Using local hs2 binary."
+  local d tmp; tmp=$(mktemp)
+  d=$(cd "$(dirname "$0")" 2>/dev/null && pwd || pwd)
+  # Download the latest from GitHub first, so a stale binary lying around can
+  # never be reinstalled by mistake. Only if GitHub is unreachable (Iran
+  # server) fall back to a hs2-linux-amd64 next to install.sh or in the
+  # current directory. ALWAYS replace the old binary.
+  info "Downloading hs2 binary from GitHub…"
+  if curl -fL --connect-timeout 10 --retry 2 -o "$tmp" "$REPO_RAW/hs2-linux-amd64" 2>/dev/null; then
+    ok "Downloaded."
+  elif [ -f "$d/hs2-linux-amd64" ] || [ -f "./hs2-linux-amd64" ]; then
+    local f="$d/hs2-linux-amd64"; [ -f "$f" ] || f="./hs2-linux-amd64"
+    warn "GitHub unreachable — using local $f (make sure it is the NEW one)."
+    cp "$f" "$tmp"
   else
-    info "Downloading hs2 binary from GitHub…"
-    curl -fL --retry 3 -o "$tmp" "$REPO_RAW/hs2-linux-amd64"       || die "download failed. On the Iran server, copy hs2-linux-amd64 next to install.sh instead."
+    rm -f "$tmp"
+    die "download failed. On the Iran server, copy hs2-linux-amd64 from the kharej server into $(pwd) and run again."
   fi
+  chmod 755 "$tmp"
+  "$tmp" version 2>/dev/null | grep -q "l3mtcp" \
+    || { rm -f "$tmp"; die "binary is outdated/corrupt (no l3mtcp). Re-download hs2-linux-amd64."; }
+  systemctl stop hs2 2>/dev/null || true
   install -m755 "$tmp" "$BIN"; rm -f "$tmp"
+  info "sha256: $(sha256sum "$BIN" | cut -c1-16)…"
   "$BIN" version 2>/dev/null | grep -q "l3mtcp"     || die "binary is outdated/corrupt (no l3mtcp). Re-download hs2-linux-amd64."
   ok "Installed $("$BIN" version 2>/dev/null)"
 }
@@ -263,6 +275,27 @@ status(){
   fi
 }
 
+# Upgrade in place: new binary + kernel tuning, same config and hs2:// link.
+upgrade(){
+  [ -f "$CFG" ] || die "hs2 is not installed on this server ($CFG missing). Run without 'upgrade' to install."
+  hr; info "Upgrading hs2 (config and link stay the same)"; hr
+  install_prereqs
+  install_binary
+  systemctl restart hs2
+  sleep 2
+  if systemctl is-active --quiet hs2; then
+    ok "hs2 upgraded and running. Upgrade the OTHER server too (both sides must match)."
+    info "Watch the log:  journalctl -u hs2 -f"
+  else
+    err "hs2 failed to start after upgrade. Last log:"
+    journalctl -u hs2 -n 20 --no-pager >&2
+    exit 1
+  fi
+}
+
+# Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
+if [ "${1:-}" = "upgrade" ]; then upgrade; exit 0; fi
+
 # ---------- menu -------------------------------------------------------------
 echo >&2
 _c '1;36' "╔══════════════════════════════════════════╗"
@@ -274,12 +307,14 @@ echo "  1) Kharej  (foreign server — panel side)" >&2
 echo "  2) Iran    (opens user ports → panel)" >&2
 echo "  3) Uninstall hs2" >&2
 echo "  4) Status / logs" >&2
+echo "  5) Upgrade (new binary, keep config)" >&2
 echo >&2
-read -rp "Choose [1-4]: " CH </dev/tty
+read -rp "Choose [1-5]: " CH </dev/tty
 case "$CH" in
   1) setup_kharej ;;
   2) setup_iran ;;
   3) uninstall ;;
   4) status ;;
+  5) upgrade ;;
   *) die "invalid choice" ;;
 esac

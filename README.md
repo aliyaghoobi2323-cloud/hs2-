@@ -30,9 +30,7 @@ certificate, active-probe resistance), auto-scaled by load.
 ### 1. Kharej (foreign server)
 
 ```bash
-mkdir -p /root/hs2 && cd /root/hs2
-curl -fL -o install.sh https://raw.githubusercontent.com/hosseintaghipoursori-alt/hs2-tunnel/main/install.sh
-bash install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d/install.sh)
 ```
 
 Choose **1**, answer the prompts (domain, tunnel port, panel inbound address).
@@ -41,9 +39,7 @@ At the end it prints a **`hs2://…` setup link** — copy it.
 ### 2. Iran server
 
 ```bash
-mkdir -p /root/hs2 && cd /root/hs2
-curl -fL -o install.sh https://raw.githubusercontent.com/hosseintaghipoursori-alt/hs2-tunnel/main/install.sh
-bash install.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d/install.sh)
 ```
 
 Choose **2**, paste the `hs2://` link, pick the user port(s).
@@ -58,10 +54,23 @@ In your panel, take a client config and change only its **address** to the Iran
 server's IP (and port, if you chose a different one). Everything else — UUID,
 SNI, security — stays the same.
 
+## Upgrade an existing install (one command)
+
+Run on **both** servers (kharej first, then Iran). Config and the `hs2://`
+link stay the same; only the binary and kernel tuning are updated:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/claude/amazing-meitner-vl4b5d/install.sh | bash -s upgrade
+```
+
+If the Iran server cannot reach GitHub, copy the new binary from kharej first
+(`scp /usr/local/bin/hs2 root@IRAN_IP:/root/hs2/hs2-linux-amd64`), then on Iran
+run `cd /root/hs2 && bash install.sh upgrade`.
+
 ## Managing
 
 ```bash
-bash install.sh    # 3 = uninstall, 4 = status/logs
+bash install.sh    # 3 = uninstall, 4 = status/logs, 5 = upgrade
 systemctl status hs2
 journalctl -u hs2 -f
 ```
