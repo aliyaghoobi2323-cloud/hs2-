@@ -184,43 +184,39 @@ func Residual(k, r int, p float64) float64 {
 	return res / float64(k)
 }
 
-// parityTable caches ParityFor results by (k, loss in 0.5% steps).
-var parityTable sync.Map // [3]int{k, pIdx, residual‰} -> int
-
 // ParityFor returns the smallest r in [1, maxR] with Residual(k, r, p) at
-// most target, or maxR if none reaches it.
+// most target, or maxR if none reaches it. The loss is rounded up to the next
+// 0.5% first, so callers can cache by that step (see Encoder).
 func ParityFor(k int, p, target float64, maxR int) int {
 	if k < 1 {
 		return 0
 	}
+	return parityForStep(k, lossStep(p), target, maxR)
+}
+
+// lossStep rounds a loss estimate up to the next 0.5% step.
+func lossStep(p float64) int {
+	if p > 0.9 {
+		p = 0.9 // beyond this the binomial tail underflows; parity is capped anyway
+	}
+	if p < 0 {
+		p = 0
+	}
+	return int(math.Ceil(p * 200))
+}
+
+func parityForStep(k, step int, target float64, maxR int) int {
 	if maxR < 1 {
 		maxR = 1
 	}
 	if maxR > MaxShards-k {
 		maxR = MaxShards - k
 	}
-	if p > 0.9 {
-		p = 0.9 // beyond this the binomial tail underflows; parity is capped anyway
-	}
-	pIdx := int(math.Ceil(p * 200)) // round the loss up to the next 0.5%
-	key := [3]int{k, pIdx, int(target * 1e4)}
-	if v, ok := parityTable.Load(key); ok {
-		r := v.(int)
-		if r > maxR {
-			r = maxR
-		}
-		return r
-	}
-	pq := float64(pIdx) / 200
-	r := 1
-	for ; r < MaxShards-k; r++ {
+	pq := float64(step) / 200
+	for r := 1; r < maxR; r++ {
 		if Residual(k, r, pq) <= target {
-			break
+			return r
 		}
 	}
-	parityTable.Store(key, r)
-	if r > maxR {
-		r = maxR
-	}
-	return r
+	return maxR
 }

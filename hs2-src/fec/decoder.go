@@ -16,6 +16,13 @@ type Decoder struct {
 	groups map[uint32]*rxGroup
 	order  []uint32 // arrival order of groups, for eviction
 	stats  DecoderStats
+
+	// Buffer reuse: shard copies come from a free list of maxShard-capacity
+	// buffers and go back when their group is decoded or retired; groups and
+	// the shard table used for reconstruction are reused as well.
+	bufs  bufFree
+	spare []*rxGroup
+	all   [][]byte
 }
 
 // DecoderStats counts what the decoder has seen.
@@ -45,11 +52,38 @@ func (g *rxGroup) markDelivered(i int) {
 	g.nDeliv++
 }
 
-func (g *rxGroup) put(i int, b []byte) {
+func (d *Decoder) put(g *rxGroup, i int, b []byte) {
 	for len(g.shards) <= i {
 		g.shards = append(g.shards, nil)
 	}
-	g.shards[i] = append([]byte(nil), b...)
+	g.shards[i] = append(d.bufs.get(), b...)
+}
+
+// finish marks a group decoded (or given up on) and recycles its shard
+// buffers; the group entry stays for de-duplication until it expires.
+func (d *Decoder) finish(g *rxGroup) {
+	g.done = true
+	for i, s := range g.shards {
+		if s != nil {
+			d.bufs.put(s)
+			g.shards[i] = nil
+		}
+	}
+	g.shards = g.shards[:0]
+}
+
+func (d *Decoder) newGroup(now time.Time) *rxGroup {
+	var g *rxGroup
+	if n := len(d.spare); n > 0 {
+		g = d.spare[n-1]
+		d.spare = d.spare[:n-1]
+		shards := g.shards[:0]
+		*g = rxGroup{shards: shards}
+	} else {
+		g = &rxGroup{}
+	}
+	g.born = now
+	return g
 }
 
 // NewDecoder builds a decoder. ttl bounds how long an incomplete group is
@@ -63,6 +97,7 @@ func NewDecoder(ttl time.Duration, maxShard int) *Decoder {
 		maxGroups: 4096,
 		maxShard:  maxShard,
 		groups:    make(map[uint32]*rxGroup),
+		bufs:      bufFree{size: maxShard, max: 2048},
 	}
 }
 
@@ -84,7 +119,7 @@ func (d *Decoder) Decode(pkt []byte, now time.Time, deliver func(payload []byte)
 		if len(d.groups) >= d.maxGroups {
 			d.evictOldest()
 		}
-		g = &rxGroup{born: now}
+		g = d.newGroup(now)
 		d.groups[h.group] = g
 		d.order = append(d.order, h.group)
 	}
@@ -109,7 +144,7 @@ func (d *Decoder) Decode(pkt []byte, now time.Time, deliver func(payload []byte)
 		if g.done {
 			return nil
 		}
-		g.put(h.idx, body)
+		d.put(g, h.idx, body)
 	} else { // parity shard
 		if h.r < 1 || h.k+h.r > MaxShards || h.idx < h.k || h.idx >= h.k+h.r ||
 			h.size < lenPrefix || h.size > d.maxShard || len(body) != h.size {
@@ -130,17 +165,16 @@ func (d *Decoder) Decode(pkt []byte, now time.Time, deliver func(payload []byte)
 			// group's shard size, or has an index past k, is corrupt.
 			for i, s := range g.shards {
 				if s != nil && (i >= g.k || len(s) > g.size) {
-					g.done = true
-					g.shards = nil
+					d.finish(g)
 					d.stats.Invalid++
 					return errBadShard
 				}
 			}
 		}
-		if g.shards != nil && h.idx < len(g.shards) && g.shards[h.idx] != nil {
+		if h.idx < len(g.shards) && g.shards[h.idx] != nil {
 			return nil // duplicate parity
 		}
-		g.put(h.idx, body)
+		d.put(g, h.idx, body)
 		g.nParity++
 	}
 	d.tryRecover(g, deliver)
@@ -154,8 +188,7 @@ func (d *Decoder) tryRecover(g *rxGroup, deliver func([]byte)) {
 		return
 	}
 	if g.nDeliv >= g.k { // every data shard arrived: parity not needed
-		g.done = true
-		g.shards = nil
+		d.finish(g)
 		return
 	}
 	if g.nDeliv+g.nParity < g.k {
@@ -165,23 +198,38 @@ func (d *Decoder) tryRecover(g *rxGroup, deliver func([]byte)) {
 	if err != nil {
 		return
 	}
-	all := make([][]byte, g.k+g.r)
-	for i := 0; i < g.k+g.r && i < len(g.shards); i++ {
-		s := g.shards[i]
-		if s == nil {
-			continue
+	n := g.k + g.r
+	if cap(d.all) < n {
+		d.all = make([][]byte, n)
+	}
+	all := d.all[:n]
+	for i := range all {
+		var s []byte
+		if i < len(g.shards) {
+			s = g.shards[i]
 		}
-		if len(s) < g.size { // data shard: zero-extend to the coded size
-			z := make([]byte, g.size)
-			copy(z, s)
-			s = z
+		switch {
+		case s != nil:
+			// A data shard arrived at its natural length: zero-extend it to
+			// the coded size in place (its buffer holds maxShard >= size).
+			m := len(s)
+			s = s[:g.size]
+			clear(s[m:])
+			g.shards[i] = s
+		case i < g.k:
+			// Missing data shard: an empty buffer with capacity, which the
+			// library fills instead of allocating.
+			s = d.bufs.get()
+			for len(g.shards) <= i {
+				g.shards = append(g.shards, nil)
+			}
+			g.shards[i] = s
 		}
 		all[i] = s
 	}
 	if err := enc.ReconstructData(all); err != nil {
 		d.stats.Invalid++
-		g.done = true
-		g.shards = nil
+		d.finish(g)
 		return
 	}
 	for i := 0; i < g.k; i++ {
@@ -197,8 +245,8 @@ func (d *Decoder) tryRecover(g *rxGroup, deliver func([]byte)) {
 		d.stats.Recovered++
 		deliver(p)
 	}
-	g.done = true
-	g.shards = nil
+	clear(all)
+	d.finish(g)
 }
 
 // Expire drops groups older than the ttl and counts the data shards that
@@ -235,6 +283,10 @@ func (d *Decoder) retire(id uint32, g *rxGroup) {
 		d.stats.Lost += uint64(g.k - g.nDeliv)
 	}
 	delete(d.groups, id)
+	d.finish(g)
+	if len(d.spare) < 256 {
+		d.spare = append(d.spare, g)
+	}
 }
 
 // shardPayload returns the payload inside shard content [len:2][payload].

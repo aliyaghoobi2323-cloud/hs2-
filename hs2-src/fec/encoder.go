@@ -89,8 +89,17 @@ type Encoder struct {
 	cur   int
 	next  uint32
 	loss  float64
-	buf   []byte // scratch for the packet being emitted
 	stats EncoderStats
+
+	// Buffer reuse. A shard buffer has HeaderLen bytes of headroom in front
+	// of the shard content, so the data packet is emitted from the same
+	// buffer the group keeps for parity (no second copy). Parity buffers and
+	// the shard table are scratch reused by every group.
+	bufs   bufFree
+	parity [][]byte
+	all    [][]byte
+	spare  []*txGroup     // closed groups, reused with their shard table
+	rcache map[[2]int]int // (k, loss step) -> parity count
 
 	// input rate, for the derived depth
 	rateAt time.Time
@@ -107,10 +116,10 @@ type EncoderStats struct {
 }
 
 type txGroup struct {
-	id     uint32
-	born   time.Time
-	shards [][]byte // shard content [len:2][payload], unpadded
-	max    int      // longest content
+	id   uint32
+	born time.Time
+	bufs [][]byte // per data shard: header headroom + content [len:2][payload]
+	max  int      // longest content
 }
 
 // NewEncoder builds an encoder; zero config fields take defaults.
@@ -123,8 +132,11 @@ func NewEncoder(cfg Config) *Encoder {
 	return &Encoder{
 		cfg:   cfg,
 		lanes: make([]*txGroup, depth),
-		buf:   make([]byte, HeaderLen+lenPrefix+cfg.MaxPayload),
 		loss:  DefaultAdapterConfig().Floor,
+		bufs: bufFree{
+			size: HeaderLen + lenPrefix + cfg.MaxPayload,
+			max:  cfg.K * cfg.MaxDepth,
+		},
 	}
 }
 
@@ -160,8 +172,20 @@ func (e *Encoder) ParityRatio() float64 {
 }
 
 func (e *Encoder) parityLocked(k int) int {
+	if k < 1 {
+		return 0
+	}
+	key := [2]int{k, lossStep(e.loss)}
+	if r, ok := e.rcache[key]; ok {
+		return r
+	}
+	if e.rcache == nil {
+		e.rcache = make(map[[2]int]int)
+	}
 	maxR := int(math.Ceil(float64(k) * e.cfg.CeilRatio))
-	return ParityFor(k, e.loss, e.cfg.TargetResidual, maxR)
+	r := parityForStep(k, key[1], e.cfg.TargetResidual, maxR)
+	e.rcache[key] = r
+	return r
 }
 
 // Encode emits the data packet for payload, then the parity of any group the
@@ -177,27 +201,30 @@ func (e *Encoder) Encode(payload []byte, now time.Time, emit func(pkt []byte)) e
 	e.cur = (lane + 1) % len(e.lanes)
 	g := e.lanes[lane]
 	if g == nil {
-		g = &txGroup{id: e.next, born: now}
+		if n := len(e.spare); n > 0 {
+			g = e.spare[n-1]
+			e.spare = e.spare[:n-1]
+		} else {
+			g = &txGroup{}
+		}
+		g.id, g.born, g.max = e.next, now, 0
 		e.next++
 		e.lanes[lane] = g
 	}
-	idx := len(g.shards)
-	content := make([]byte, lenPrefix+len(payload))
-	binary.BigEndian.PutUint16(content, uint16(len(payload)))
-	copy(content[lenPrefix:], payload)
-	g.shards = append(g.shards, content)
-	if len(content) > g.max {
-		g.max = len(content)
-	}
-
-	pkt := e.buf[:HeaderLen+len(content)]
+	idx := len(g.bufs)
+	pkt := e.bufs.get()[:HeaderLen+lenPrefix+len(payload)]
 	putHeader(pkt, header{group: g.id, idx: idx})
-	copy(pkt[HeaderLen:], content)
+	binary.BigEndian.PutUint16(pkt[HeaderLen:], uint16(len(payload)))
+	copy(pkt[HeaderLen+lenPrefix:], payload)
+	g.bufs = append(g.bufs, pkt)
+	if n := len(pkt) - HeaderLen; n > g.max {
+		g.max = n
+	}
 	e.stats.Data++
 	e.stats.DataBytes += uint64(len(payload))
 	emit(pkt)
 
-	if len(g.shards) >= e.cfg.K {
+	if len(g.bufs) >= e.cfg.K {
 		e.lanes[lane] = nil
 		return e.closeLocked(g, emit)
 	}
@@ -287,7 +314,8 @@ func (e *Encoder) NextDeadline() time.Time {
 }
 
 func (e *Encoder) closeLocked(g *txGroup, emit func(pkt []byte)) error {
-	k := len(g.shards)
+	defer e.release(g)
+	k := len(g.bufs)
 	r := e.parityLocked(k)
 	e.stats.Groups++
 	if r == 0 {
@@ -298,24 +326,47 @@ func (e *Encoder) closeLocked(g *txGroup, emit func(pkt []byte)) error {
 		return err
 	}
 	size := g.max
-	all := make([][]byte, k+r)
-	backing := make([]byte, (k+r)*size)
-	for i := range all {
-		all[i] = backing[i*size : (i+1)*size]
-		if i < k {
-			copy(all[i], g.shards[i]) // zero-extended
-		}
+	for len(e.parity) < r {
+		e.parity = append(e.parity, make([]byte, e.bufs.size))
+	}
+	if cap(e.all) < k+r {
+		e.all = make([][]byte, k+r)
+	}
+	all := e.all[:k+r]
+	for i, b := range g.bufs {
+		// Zero-extend the content to the coded size in place: the buffer
+		// has room (size never exceeds lenPrefix+MaxPayload).
+		s := b[HeaderLen:]
+		n := len(s)
+		s = s[:size]
+		clear(s[n:])
+		all[i] = s
+	}
+	for j := 0; j < r; j++ {
+		all[k+j] = e.parity[j][HeaderLen : HeaderLen+size]
 	}
 	if err := enc.Encode(all); err != nil {
 		return err
 	}
-	pkt := make([]byte, HeaderLen+size)
 	for j := 0; j < r; j++ {
+		pkt := e.parity[j][:HeaderLen+size]
 		putHeader(pkt, header{group: g.id, idx: k + j, k: k, r: r, size: size})
-		copy(pkt[HeaderLen:], all[k+j])
 		e.stats.Parity++
 		e.stats.ParityBytes += uint64(size)
 		emit(pkt)
 	}
 	return nil
+}
+
+// release returns a closed group's shard buffers to the free list and the
+// group itself to the spare list.
+func (e *Encoder) release(g *txGroup) {
+	for i, b := range g.bufs {
+		e.bufs.put(b)
+		g.bufs[i] = nil
+	}
+	g.bufs = g.bufs[:0]
+	if len(e.spare) < e.cfg.MaxDepth {
+		e.spare = append(e.spare, g)
+	}
 }

@@ -286,14 +286,3 @@ func TestSmallGroupsAndOrder(t *testing.T) {
 		t.Fatal("bad payload")
 	}
 }
-
-func BenchmarkEncodeFullGroup(b *testing.B) {
-	enc := NewEncoder(Config{})
-	enc.SetLoss(0.28)
-	p := make([]byte, 1300)
-	now := time.Now()
-	b.SetBytes(int64(len(p)))
-	for i := 0; i < b.N; i++ {
-		enc.Encode(p, now, func([]byte) {})
-	}
-}
