@@ -38,6 +38,14 @@ func randID() uint64 {
 // handshake over datagrams, then the exporter-bound key confirmation, and
 // returns a live Conn. The shared secret is the tunnel's shared_key.
 func Dial(ctx context.Context, addr string, shared []byte, innerMTU int) (*Conn, error) {
+	return DialFrom(ctx, addr, "", shared, innerMTU)
+}
+
+// DialFrom is Dial sending from a chosen local source IP (a config's
+// bind_local_ip); empty lets the kernel choose. Every datagram of the carrier
+// leaves from that IP, so a multi-IP server whose default address is filtered
+// can still egress from its clean one.
+func DialFrom(ctx context.Context, addr, bindIP string, shared []byte, innerMTU int) (*Conn, error) {
 	if innerMTU <= 0 {
 		innerMTU = DefaultInnerMTU
 	}
@@ -49,7 +57,11 @@ func Dial(ctx context.Context, addr string, shared []byte, innerMTU int) (*Conn,
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.DialUDP("udp", nil, ua)
+	laddr, err := localUDPAddr(bindIP)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := net.DialUDP("udp", laddr, ua)
 	if err != nil {
 		return nil, err
 	}

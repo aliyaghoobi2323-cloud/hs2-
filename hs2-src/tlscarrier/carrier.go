@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -148,7 +149,13 @@ func Dial(addr, sni string, sharedKey []byte) (*Carrier, error) {
 func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, error) {
 	d := net.Dialer{Timeout: 8 * time.Second}
 	if bindIP != "" {
-		d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(bindIP)}
+		ip := net.ParseIP(bindIP)
+		if ip == nil {
+			// Never fall back to the default source: on a multi-IP server that may be
+			// the filtered address, and a typo would look like a dead path.
+			return nil, fmt.Errorf("tlscarrier: invalid bind_local_ip %q", bindIP)
+		}
+		d.LocalAddr = &net.TCPAddr{IP: ip}
 	}
 	raw, err := d.Dial("tcp", addr)
 	if err != nil {

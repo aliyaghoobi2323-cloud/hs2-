@@ -81,6 +81,12 @@ type ProbeResult struct {
 // Probe sends n small probes to addr, spaced by interval, and reports loss and
 // RTT. It opens its own socket and never touches a data carrier.
 func Probe(ctx context.Context, addr string, shared []byte, n int, interval, timeout time.Duration) (ProbeResult, error) {
+	return ProbeFrom(ctx, addr, "", shared, n, interval, timeout)
+}
+
+// ProbeFrom is Probe sending from a chosen local source IP, so the probe
+// measures the same path the carrier will actually use.
+func ProbeFrom(ctx context.Context, addr, bindIP string, shared []byte, n int, interval, timeout time.Duration) (ProbeResult, error) {
 	if n <= 0 {
 		n = 20
 	}
@@ -94,7 +100,11 @@ func Probe(ctx context.Context, addr string, shared []byte, n int, interval, tim
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	conn, err := net.DialUDP("udp", nil, ua)
+	laddr, err := localUDPAddr(bindIP)
+	if err != nil {
+		return ProbeResult{}, err
+	}
+	conn, err := net.DialUDP("udp", laddr, ua)
 	if err != nil {
 		return ProbeResult{}, err
 	}

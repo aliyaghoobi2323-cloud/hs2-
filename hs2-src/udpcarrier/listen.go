@@ -43,6 +43,7 @@ type Listener struct {
 type peerLink struct {
 	c      *Conn
 	m1, m2 []byte
+	local  net.IP // the local address this peer targeted; replies leave from it
 }
 
 // Listen binds a UDP socket and serves carriers derived from the shared secret.
@@ -58,10 +59,11 @@ func Listen(addr string, shared []byte, innerMTU int) (*Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.ListenUDP("udp", ua)
+	conn, err := net.ListenUDP(listenNetwork(ua), ua)
 	if err != nil {
 		return nil, err
 	}
+	enablePktinfo(conn) // wildcard bind: reply from the IP each peer targeted
 	l := &Listener{
 		conn:      conn,
 		shared:    shared,
@@ -84,8 +86,9 @@ func (l *Listener) LocalAddr() net.Addr { return l.conn.LocalAddr() }
 func (l *Listener) serve() {
 	defer l.wg.Done()
 	buf := make([]byte, 2048)
+	oob := make([]byte, pktinfoOOB)
 	for {
-		n, addr, err := l.conn.ReadFromUDP(buf)
+		n, addr, dst, err := readWithDst(l.conn, buf, oob)
 		if err != nil {
 			select {
 			case <-l.done:
@@ -104,7 +107,7 @@ func (l *Listener) serve() {
 			// A retransmitted first message (message 2 was lost) is answered
 			// from cache; everything else is carrier traffic.
 			if bytes.Equal(pkt, pl.m1) {
-				l.conn.WriteToUDP(pl.m2, addr)
+				l.send(pl.m2, addr, pl.local)
 			} else {
 				pl.c.feed(pkt)
 			}
@@ -113,15 +116,22 @@ func (l *Listener) serve() {
 		// A datagram from a new address is a probe or a handshake. Probes are
 		// answered on this same port so the selector can measure the real data
 		// path; anything else is a candidate first message.
-		if l.probe.handle(pkt, func(b []byte) { l.conn.WriteToUDP(b, addr) }) {
+		if l.probe.handle(pkt, func(b []byte) { l.send(b, addr, dst) }) {
 			continue
 		}
-		l.tryHandshake(pkt, addr)
+		l.tryHandshake(pkt, addr, dst)
 	}
 }
 
+// send writes one datagram to addr from source src (nil: kernel's choice).
+func (l *Listener) send(b []byte, addr *net.UDPAddr, src net.IP) error {
+	return writeFrom(l.conn, b, addr, src)
+}
+
 // tryHandshake runs the responder handshake for a datagram from a new address.
-func (l *Listener) tryHandshake(m1 []byte, addr *net.UDPAddr) {
+// dst is the local address the peer sent to; every reply to this peer leaves
+// from it, so the peer's connected socket accepts them.
+func (l *Listener) tryHandshake(m1 []byte, addr *net.UDPAddr, dst net.IP) {
 	hs, _, err := l.resp.ReadMessage1Payload(m1)
 	if err != nil {
 		return // not a valid first message: silent drop (probe resistance)
@@ -136,7 +146,7 @@ func (l *Listener) tryHandshake(m1 []byte, addr *net.UDPAddr) {
 	if err != nil {
 		return
 	}
-	if _, err := l.conn.WriteToUDP(m2, addr); err != nil {
+	if err := l.send(m2, addr, dst); err != nil {
 		return
 	}
 	sess, err := core.NewSession(secret, false, randID())
@@ -145,7 +155,7 @@ func (l *Listener) tryHandshake(m1 []byte, addr *net.UDPAddr) {
 	}
 	binding := core.HandshakeBinding(hs)
 
-	write := func(b []byte) error { _, e := l.conn.WriteToUDP(b, addr); return e }
+	write := func(b []byte) error { return l.send(b, addr, dst) }
 	key := addr.String()
 	var c *Conn
 	c = newConn(sess, write, l.shared, binding, l.innerMTU, nil, func() {
@@ -159,7 +169,7 @@ func (l *Listener) tryHandshake(m1 []byte, addr *net.UDPAddr) {
 	if old := l.conns[key]; old != nil {
 		old.c.Close()
 	}
-	l.conns[key] = &peerLink{c: c, m1: m1, m2: m2}
+	l.conns[key] = &peerLink{c: c, m1: m1, m2: m2, local: dst}
 	l.mu.Unlock()
 
 	// Confirmation: require the client's proof, answer with ours, then yield.

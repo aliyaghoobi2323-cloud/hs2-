@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"time"
@@ -20,8 +21,15 @@ import (
 
 // dialCarrier connects to the listen side and completes the handshake as
 // initiator. On success it returns a live session and the connection.
-func dialCarrier(ctx context.Context, addr string, local core.StaticKey, remoteStatic, psk []byte, sessID uint64) (*core.Session, net.Conn, error) {
+func dialCarrier(ctx context.Context, addr, bindIP string, local core.StaticKey, remoteStatic, psk []byte, sessID uint64) (*core.Session, net.Conn, error) {
 	d := net.Dialer{Timeout: 8 * time.Second}
+	if bindIP != "" {
+		ip := net.ParseIP(bindIP)
+		if ip == nil {
+			return nil, nil, fmt.Errorf("invalid source IP %q", bindIP)
+		}
+		d.LocalAddr = &net.TCPAddr{IP: ip}
+	}
 	conn, err := d.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		return nil, nil, err

@@ -26,12 +26,13 @@ const maxRecoverableLoss = 0.45
 // udpDialer dials a pure UDP (Noise+FEC) carrier.
 type udpDialer struct {
 	addr   string
+	bindIP string // optional local source IP
 	shared []byte
 	mtu    int
 }
 
 func (d *udpDialer) Dial(ctx context.Context) (Carrier, error) {
-	return udpcarrier.Dial(ctx, d.addr, d.shared, d.mtu)
+	return udpcarrier.DialFrom(ctx, d.addr, d.bindIP, d.shared, d.mtu)
 }
 
 // udpListener accepts UDP carriers.
@@ -59,15 +60,16 @@ func (l *udpListener) Close() error { return l.ln.Close() }
 // need distributing.
 type autoDialer struct {
 	addr   string
+	bindIP string // optional local source IP: the probe, UDP and TCP fallback all use it
 	shared []byte
 	mtu    int
 	log    func(string, ...any)
 }
 
 func (d *autoDialer) Dial(ctx context.Context) (Carrier, error) {
-	res, err := udpcarrier.Probe(ctx, d.addr, d.shared, 16, 8*time.Millisecond, 300*time.Millisecond)
+	res, err := udpcarrier.ProbeFrom(ctx, d.addr, d.bindIP, d.shared, 16, 8*time.Millisecond, 300*time.Millisecond)
 	if err == nil && res.Reachable && res.Loss <= maxRecoverableLoss {
-		c, derr := udpcarrier.Dial(ctx, d.addr, d.shared, d.mtu)
+		c, derr := udpcarrier.DialFrom(ctx, d.addr, d.bindIP, d.shared, d.mtu)
 		if derr == nil {
 			d.logf("transport: UDP selected (probe loss %.0f%%, rtt %s)", res.Loss*100, res.RTTMedian)
 			return c, nil
@@ -84,7 +86,7 @@ func (d *autoDialer) Dial(ctx context.Context) (Carrier, error) {
 func (d *autoDialer) tcpFallback() CarrierDialer {
 	local, _ := core.StaticFromSeed(d.shared, "hs2-udp-initiator")
 	server, _ := core.StaticFromSeed(d.shared, "hs2-udp-responder")
-	return &noiseDialer{addr: d.addr, local: local, remoteStatic: server.Public, psk: d.shared}
+	return &noiseDialer{addr: d.addr, bindIP: d.bindIP, local: local, remoteStatic: server.Public, psk: d.shared}
 }
 
 func (d *autoDialer) logf(f string, a ...any) {
