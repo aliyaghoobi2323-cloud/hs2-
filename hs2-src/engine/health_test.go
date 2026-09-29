@@ -27,11 +27,19 @@ func (f *meteredFakeLink) Close() error                { f.alive.Store(false); r
 func (f *meteredFakeLink) meter() *linkMeter           { return f.m }
 func (f *meteredFakeLink) linkRetrans() (uint64, bool) { return f.retrans.Load(), true }
 
-// active simulates one health interval of traffic: `bytes` carried and `rt`
-// retransmits added.
+// active simulates one health interval of UPLOAD traffic: `bytes` sent and `rt`
+// local (upload-path) retransmits added.
 func (f *meteredFakeLink) active(bytes, rt uint64) {
-	f.m.bytes.Add(bytes)
+	f.m.wrBytes.Add(bytes)
 	f.retrans.Add(rt)
+}
+
+// download simulates one interval of DOWNLOAD traffic with `rt` peer-reported
+// (download-path) retransmits, as the control channel would deliver them.
+func (f *meteredFakeLink) download(bytes, rt uint64) {
+	f.m.rdBytes.Add(bytes)
+	f.m.peerRetrans.Add(rt)
+	f.m.peerSeen.Store(true)
 }
 
 type fakeDialer struct{ dials atomic.Int32 }
@@ -145,6 +153,43 @@ func TestNoDegradeIdleLink(t *testing.T) {
 	}
 	if im.degraded {
 		t.Fatal("idle link degraded despite being below the activity gate")
+	}
+}
+
+// Phase 3: a link that is lossy only in the DOWNLOAD direction (invisible to the
+// local upload-path retransmit signal) is degraded via the peer's retransmits
+// delivered by the control channel.
+func TestDegradeOnDownloadLoss(t *testing.T) {
+	m := NewLinkManager(&fakeDialer{}, 4, 8, 50, nil)
+	good := []*meteredFakeLink{newMeteredFake(), newMeteredFake(), newMeteredFake()}
+	bad := newMeteredFake()
+	for _, g := range good {
+		gm := &managedLink{link: g, mtr: g.m}
+		gm.users.Store(5)
+		m.links = append(m.links, gm)
+	}
+	badML := &managedLink{link: bad, mtr: bad.m}
+	badML.users.Store(5)
+	m.links = append(m.links, badML)
+
+	step := func() {
+		for _, g := range good {
+			g.download(200<<10, 0) // clean download
+		}
+		bad.download(200<<10, 30) // ~20% download loss
+		m.sampleHealth()
+	}
+	step()
+	for i := 0; i < degradeStreak; i++ {
+		step()
+	}
+	if !badML.degraded {
+		t.Fatalf("download-lossy link not degraded (streak=%d)", badML.lowStreak)
+	}
+	for i := range good {
+		if m.links[i].degraded {
+			t.Fatalf("clean-download link %d wrongly degraded", i)
+		}
 	}
 }
 

@@ -109,7 +109,7 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 			if err != nil {
 				break
 			}
-			go serveStream(ctx, st, cfg, l3)
+			go serveStream(ctx, st, cfg, l3, car)
 		}
 		close(closed)
 		sess.Close()

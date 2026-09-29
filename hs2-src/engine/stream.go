@@ -29,9 +29,10 @@ import (
 // carried as packets on a dedicated stream per link.
 
 const (
-	kindTCP byte = 1 // a user TCP connection to the panel
-	kindUDP byte = 2 // one UDP flow to the panel, length-prefixed datagrams
-	kindL3  byte = 3 // TUN packets, tlscarrier frame format
+	kindTCP  byte = 1 // a user TCP connection to the panel
+	kindUDP  byte = 2 // one UDP flow to the panel, length-prefixed datagrams
+	kindL3   byte = 3 // TUN packets, tlscarrier frame format
+	kindCtrl byte = 4 // per-link health control channel (ping/pong stats)
 )
 
 // kindTimeout bounds how long the kharej side waits for a new stream's kind.

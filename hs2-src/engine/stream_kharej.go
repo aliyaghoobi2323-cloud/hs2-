@@ -72,7 +72,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 				if err != nil {
 					break
 				}
-				go serveStream(ctx, st, cfg, l3)
+				go serveStream(ctx, st, cfg, l3, car)
 			}
 			sess.Close()
 			car.Close()
@@ -81,7 +81,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	}
 }
 
-func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set) {
+func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier) {
 	var kind [1]byte
 	st.SetReadDeadline(time.Now().Add(kindTimeout))
 	if _, err := io.ReadFull(st, kind[:]); err != nil {
@@ -90,6 +90,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	}
 	st.SetReadDeadline(time.Time{})
 	switch kind[0] {
+	case kindCtrl:
+		serveControl(ctx, st, car)
 	case kindTCP:
 		up, err := net.DialTimeout("tcp", cfg.Panel, 5*time.Second)
 		if err != nil {

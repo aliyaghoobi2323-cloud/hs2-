@@ -49,9 +49,16 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = &l3Set{}
-		lm.OnLink = func(l Link) { openL3(ctx, l, l3, cfg.TUN, logf) }
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
+	}
+	// Every new link gets a control channel (health feedback) in its own
+	// goroutine, and, in TUN mode, its L3 side-channel stream.
+	lm.OnLink = func(l Link) {
+		go openControl(ctx, l, logf)
+		if l3 != nil {
+			openL3(ctx, l, l3, cfg.TUN, logf)
+		}
 	}
 	go lm.Run(ctx)
 	if reverse {
