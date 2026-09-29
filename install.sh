@@ -408,7 +408,7 @@ kharej_listener(){
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
-  "addr": "$PUBIP:$TPORT",
+  "addr": "0.0.0.0:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -429,7 +429,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "l3mtcp", "reverse": false,
-  "addr": "$PUBIP:$TPORT",
+  "addr": "0.0.0.0:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -443,7 +443,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
-  "addr": "$PUBIP:$TPORT",
+  "addr": "0.0.0.0:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED"
 }
@@ -643,7 +643,7 @@ iran_listener(){
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true, "udp": $UDP,
-  "addr": "$PUBIP:$TPORT",
+  "addr": "0.0.0.0:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -665,7 +665,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "l3mtcp", "reverse": true,
-  "addr": "$PUBIP:$TPORT",
+  "addr": "0.0.0.0:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -682,7 +682,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true,
-  "addr": "$PUBIP:$TPORT",
+  "addr": "0.0.0.0:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
   "shared_key": "$SHARED"
 }
