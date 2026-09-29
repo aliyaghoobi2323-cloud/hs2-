@@ -219,7 +219,11 @@ func (m *LinkManager) autoscale(ctx context.Context) {
 		}
 		m.probing, m.plateauSize = false, 0
 		m.lowSince = now
-		m.log("mtcp: scaled up to %d links (users=%d)", m.count(), m.users.Load())
+		if got := m.count(); got > have {
+			m.log("mtcp: scaled up to %d links (users=%d)", got, m.users.Load())
+		} else {
+			m.log("mtcp: need %d links but only %d up — dials failing (peer down or path blocked; see dial errors)", userWant, got)
+		}
 		return
 	}
 
@@ -378,7 +382,7 @@ func (m *LinkManager) reap(ctx context.Context) {
 		}
 	}
 	if dead > 0 {
-		m.log("mtcp: rebuilt %d dead link(s), now %d", dead, m.count())
+		m.log("mtcp: %d link(s) died; redialing — now %d up", dead, m.count())
 	}
 }
 

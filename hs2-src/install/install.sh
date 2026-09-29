@@ -4,6 +4,8 @@
 #  Runs ALONGSIDE Backhaul without touching it.
 #      bash install.sh            (menu)
 #      bash install.sh upgrade    (update an existing install in place)
+#      bash install.sh backup     (save config+cert+binary to /root/hs2-backups)
+#      bash install.sh restore [file]  (roll back to a backup; newest by default)
 # ============================================================================
 set -euo pipefail
 
@@ -407,6 +409,7 @@ parse_link(){
 # ---------- KHAREJ (foreign server, the panel side) --------------------------
 setup_kharej(){
   hr; info "KHAREJ setup (foreign server — the panel side)"; hr
+  auto_backup
   install_prereqs
   install_binary
   ask_direction
@@ -565,6 +568,7 @@ EOF
 # ---------- IRAN (the user-facing edge) --------------------------------------
 setup_iran(){
   hr; info "IRAN setup (the edge — where users connect)"; hr
+  auto_backup
   install_prereqs
   install_binary
   ask_direction
@@ -739,6 +743,7 @@ EOF
 # ---------- uninstall & status ----------------------------------------------
 uninstall(){
   info "Removing hs2…"
+  auto_backup
   systemctl disable --now hs2 2>/dev/null || true
   sleep 1
   pkill -TERM -x hs2 2>/dev/null || true; sleep 1; pkill -KILL -x hs2 2>/dev/null || true
@@ -764,10 +769,93 @@ status(){
   fi
 }
 
+# ---------- backup & restore -------------------------------------------------
+# A backup is one tar.gz holding everything hs2 installs: config, service unit,
+# binary, kernel tuning and the TLS cert the config points to (the whole
+# letsencrypt lineage when it is a certbot cert, so renewal keeps working).
+BACKUP_DIR=/root/hs2-backups
+
+cfg_field(){ # key -> value of a "key": "value" string field in $CFG
+  grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$CFG" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/'
+}
+
+backup(){
+  [ -f "$CFG" ] || { warn "Nothing to back up ($CFG missing)."; return 0; }
+  mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+  local f="$BACKUP_DIR/hs2-$(hostname -s 2>/dev/null || echo host)-$(date +%Y%m%d-%H%M%S).tar.gz"
+  local items=("${CFG#/}") p
+  for p in "$SVC" "$BIN" /etc/sysctl.d/99-hs2.conf; do [ -e "$p" ] && items+=("${p#/}"); done
+  for p in "$(cfg_field cert_file)" "$(cfg_field key_file)"; do
+    [ -n "$p" ] || continue
+    case "$p" in
+      /etc/letsencrypt/live/*)
+        local d; d=$(echo "$p" | cut -d/ -f5)
+        for q in "/etc/letsencrypt/live/$d" "/etc/letsencrypt/archive/$d" "/etc/letsencrypt/renewal/$d.conf"; do
+          [ -e "$q" ] && items+=("${q#/}")
+        done ;;
+      *) [ -e "$p" ] && items+=("${p#/}") ;;
+    esac
+  done
+  # Dedupe (cert and key share a lineage) and write a human-readable summary.
+  mapfile -t items < <(printf '%s\n' "${items[@]}" | sort -u)
+  local meta; meta=$(mktemp -d)
+  {
+    echo "hs2 backup $(date -Is) on $(hostname)"
+    "$BIN" version 2>/dev/null || true
+    echo "mode=$(cfg_field mode) carrier=$(cfg_field carrier) addr=$(cfg_field addr) iface=$(cfg_field iface) bind_local_ip=$(cfg_field bind_local_ip)"
+    grep -o '"reverse"[[:space:]]*:[[:space:]]*[a-z]*' "$CFG" || true
+    echo "service: $(systemctl is-active hs2 2>/dev/null)"
+  } > "$meta/hs2-backup-info.txt"
+  tar -czf "$f" -C / "${items[@]}" -C "$meta" hs2-backup-info.txt || { rm -rf "$meta"; die "backup failed"; }
+  rm -rf "$meta"; chmod 600 "$f"
+  ok "Backup saved: $f"
+  tar -tzf "$f" | sed 's/^/     /' >&2
+  echo "$f"
+}
+
+restore(){
+  local f="${1:-}"
+  if [ -z "$f" ]; then
+    f=$(ls -1t "$BACKUP_DIR"/hs2-*.tar.gz 2>/dev/null | head -1)
+    [ -n "$f" ] || die "no backups in $BACKUP_DIR"
+    info "Backups (newest first):"; ls -1t "$BACKUP_DIR"/hs2-*.tar.gz | sed 's/^/   /' >&2
+    if [ -t 0 ] || [ -r /dev/tty ]; then
+      read -rp "Restore which file? [$f]: " ans </dev/tty 2>/dev/null || true
+      f=${ans:-$f}
+    fi
+  fi
+  [ -f "$f" ] || die "backup not found: $f"
+  tar -tzf "$f" 2>/dev/null | grep -qx "${CFG#/}" || die "$f is not an hs2 backup (no ${CFG#/} inside)."
+  hr; info "Restoring $f"; tar -xzOf "$f" hs2-backup-info.txt 2>/dev/null | sed 's/^/   /' >&2; hr
+  # Take down the running tunnel (and its interface: the restored config may use
+  # another name) before files are replaced.
+  systemctl stop hs2 2>/dev/null || true
+  local IFACE; IFACE=$(cfg_field iface)
+  [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
+  tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
+  systemctl daemon-reload
+  [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
+  systemctl enable --now hs2 >/dev/null 2>&1; systemctl restart hs2; sleep 2
+  if systemctl is-active --quiet hs2; then
+    ok "Restored and running: $("$BIN" version 2>/dev/null)"
+    info "Watch the log:  journalctl -u hs2 -f"
+  else
+    err "hs2 failed to start after restore. Last log:"; journalctl -u hs2 -n 20 --no-pager >&2; exit 1
+  fi
+}
+
+# Before anything replaces an existing install, keep a copy to roll back to.
+auto_backup(){
+  [ -f "$CFG" ] || return 0
+  info "Existing hs2 install found — backing it up first (restore: bash install.sh restore)."
+  backup >/dev/null
+}
+
 # Upgrade in place: new binary + kernel tuning, same config and hs2:// link.
 upgrade(){
   [ -f "$CFG" ] || die "hs2 is not installed on this server ($CFG missing). Run without 'upgrade' to install."
   hr; info "Upgrading hs2 (config and link stay the same)"; hr
+  auto_backup
   install_prereqs
   install_binary
   # Configs written by the v2 installer use 4 links, too few against
@@ -790,7 +878,11 @@ upgrade(){
 }
 
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
-if [ "${1:-}" = "upgrade" ]; then upgrade; exit 0; fi
+case "${1:-}" in
+  upgrade) upgrade; exit 0 ;;
+  backup)  backup >/dev/null; exit 0 ;;
+  restore) restore "${2:-}"; exit 0 ;;
+esac
 
 # ---------- menu -------------------------------------------------------------
 echo >&2
@@ -804,13 +896,17 @@ echo "  2) Iran    (opens user ports → panel)" >&2
 echo "  3) Uninstall hs2" >&2
 echo "  4) Status / logs" >&2
 echo "  5) Upgrade (new binary, keep config)" >&2
+echo "  6) Backup current config" >&2
+echo "  7) Restore a backup" >&2
 echo >&2
-read -rp "Choose [1-5]: " CH </dev/tty
+read -rp "Choose [1-7]: " CH </dev/tty
 case "$CH" in
   1) setup_kharej ;;
   2) setup_iran ;;
   3) uninstall ;;
   4) status ;;
   5) upgrade ;;
+  6) backup >/dev/null ;;
+  7) restore ;;
   *) die "invalid choice" ;;
 esac
