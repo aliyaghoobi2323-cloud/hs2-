@@ -49,6 +49,38 @@ show_ips(){ ip -4 -br addr 2>/dev/null | awk '$1!="lo"{print $3}' | sed 's#/.*##
 
 first_public_ip(){ ip -4 -br addr 2>/dev/null | awk '$1!="lo"{print $3}' | sed 's#/.*##' | head -1; }
 
+# ip_is_local reports whether an IPv4 address is assigned to a local interface.
+ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##' | grep -qx "$1"; }
+
+# ask_bind_ip sets BINDADDR: the local IP this server LISTENS on. A specific IP
+# lets a multi-IP server dedicate one address to the tunnel; it is validated to
+# actually exist locally, so a non-local IP (e.g. a NAT public IP that is not on
+# any interface) is rejected here with a clear message instead of failing at
+# runtime with "cannot assign requested address". Enter = all interfaces.
+ask_bind_ip(){
+  echo >&2; info "This server's local IPs:"; show_ips
+  read -rp "LISTEN on which local IP? (Enter = all interfaces): " BINDIP </dev/tty
+  if [ -n "$BINDIP" ]; then
+    ip_is_local "$BINDIP" || die "IP $BINDIP is not on any local interface here. Pick one from the list above, or press Enter for all interfaces."
+    BINDADDR="$BINDIP"
+    ok "Listening on $BINDIP."
+  else
+    BINDADDR="0.0.0.0"
+  fi
+}
+
+# ask_egress_ip sets EGRESSIP: the local source IP this server DIALS from. A
+# specific IP is validated to exist locally (same reason as ask_bind_ip). The
+# rp_filter=2 tuning above lets a non-default source IP's return traffic through.
+ask_egress_ip(){
+  echo >&2; info "This server's local IPs:"; show_ips
+  read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
+  if [ -n "$EGRESSIP" ]; then
+    ip_is_local "$EGRESSIP" || die "IP $EGRESSIP is not on any local interface here. Pick one from the list above, or press Enter for automatic."
+    ok "Dialing from $EGRESSIP."
+  fi
+}
+
 install_prereqs(){
   info "Installing prerequisites…"
   export DEBIAN_FRONTEND=noninteractive
@@ -65,12 +97,19 @@ install_prereqs(){
 # tunnel link (the delay users see under load).
 tune_kernel(){
   modprobe tcp_bbr 2>/dev/null || true
+  # rp_filter=2 (loose reverse-path): on a multi-IP server, dialing FROM or
+  # listening ON a non-default local IP means return packets can arrive by a
+  # path strict rp_filter (=1) would drop — which shows up as links that connect
+  # then die. Loose mode accepts them as long as the source is routable at all,
+  # so a chosen bind/egress IP works. It never loosens single-IP setups.
   cat > /etc/sysctl.d/99-hs2.conf <<'EOF'
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 net.ipv4.tcp_notsent_lowat = 131072
 net.ipv4.tcp_slow_start_after_idle = 0
 net.ipv4.tcp_mtu_probing = 1
+net.ipv4.conf.all.rp_filter = 2
+net.ipv4.conf.default.rp_filter = 2
 EOF
   if sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1; then
     ok "Kernel network tuning applied (BBR, fq, low send-queue latency)."
@@ -387,6 +426,7 @@ setup_kharej(){
 # the link. (This is the classic flow.)
 kharej_listener(){
   read -rp "Tunnel port (clients never see this) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
+  ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
   local PANEL="-" LMTU=""
   mkdir -p "$(dirname "$CFG")"
@@ -408,7 +448,7 @@ kharej_listener(){
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
-  "addr": "0.0.0.0:$TPORT",
+  "addr": "$BINDADDR:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -429,7 +469,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "l3mtcp", "reverse": false,
-  "addr": "0.0.0.0:$TPORT",
+  "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -443,7 +483,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
-  "addr": "0.0.0.0:$TPORT",
+  "addr": "$BINDADDR:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED"
 }
@@ -464,7 +504,7 @@ EOF
 kharej_dialer(){
   parse_link
   [ "$DIRECTION" = "reverse" ] || die "this link is a DIRECT link; for reverse, generate the link on the IRAN side first."
-  read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
+  ask_egress_ip
   ok "Link OK — will dial the iran edge at $ENDPOINT (transport $TRANSPORT)."
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
@@ -545,8 +585,7 @@ iran_dialer(){
   parse_link
   [ "$DIRECTION" = "direct" ] || die "this link is a REVERSE link; for reverse, run KHAREJ setup and paste it there instead."
   ok "Link OK — kharej endpoint $ENDPOINT, transport $TRANSPORT (carrier $CARRIER)."
-  echo >&2; info "This Iran server's IP addresses:"; show_ips
-  read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
+  ask_egress_ip
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
     read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
@@ -615,6 +654,7 @@ EOF
 # TUN IP tunnel on hs0.
 iran_listener(){
   read -rp "Tunnel port to LISTEN on (kharej dials it) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
+  ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
   local LMTU=""
   mkdir -p "$(dirname "$CFG")"
@@ -643,7 +683,7 @@ iran_listener(){
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true, "udp": $UDP,
-  "addr": "0.0.0.0:$TPORT",
+  "addr": "$BINDADDR:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -665,7 +705,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "l3mtcp", "reverse": true,
-  "addr": "0.0.0.0:$TPORT",
+  "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
@@ -682,7 +722,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true,
-  "addr": "0.0.0.0:$TPORT",
+  "addr": "$BINDADDR:$TPORT",
   "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
   "shared_key": "$SHARED"
 }
