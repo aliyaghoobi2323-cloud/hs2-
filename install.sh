@@ -297,13 +297,29 @@ ask_transport(){
   echo "    1) auto — UDP+FEC when the path allows it, silent TCP fallback (recommended)" >&2
   echo "    2) udp  — UDP+FEC only (best on high, bursty packet loss; needs UDP open)" >&2
   echo "    3) tcp  — TLS multi-link only (the original transport)" >&2
+  echo "    4) tun  — Backhaul-style L3 IP tunnel over multi-link TLS (mtcp): a routed" >&2
+  echo "              interface, real TLS encryption, high throughput (no user ports)" >&2
   read -rp "Choose [1]: " TR </dev/tty
   case "${TR:-1}" in
     1) TRANSPORT=auto ;;
     2) TRANSPORT=udp ;;
     3) TRANSPORT=tcp ;;
+    4) TRANSPORT=tun ;;
     *) die "invalid transport" ;;
   esac
+}
+
+# ask_tun_params sets TUNIF (interface name, cosmetic/per-server) and TUNMTU for
+# tun mode. The MTU is carried in the hs2:// link so both sides always match; the
+# interface name may differ per server.
+ask_tun_params(){
+  read -rp "TUN interface name on THIS server [hs0]: " TUNIF </dev/tty; TUNIF=${TUNIF:-hs0}
+  case "$TUNIF" in ''|*[!a-zA-Z0-9_-]*) die "invalid interface name" ;; esac
+}
+ask_tun_mtu(){
+  read -rp "TUN MTU (1320 matches Backhaul; kept in sync with the other side) [1320]: " TUNMTU </dev/tty
+  TUNMTU=${TUNMTU:-1320}
+  case "$TUNMTU" in ''|*[!0-9]*) die "MTU must be a number" ;; esac
 }
 
 # ask_direction sets DIRECTION=direct|reverse. Direction is WHO STARTS the
@@ -325,8 +341,8 @@ ask_direction(){
 #   direct : listener = kharej (exit) , dialer = iran (edge)
 #   reverse: listener = iran  (edge) , dialer = kharej (exit)
 
-show_link(){ # endpoint domain shared panel carrier udp transport direction
-  local L; L=$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8")
+show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu]
+  local L; L=$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}")
   echo >&2; hr
   ok "SETUP LINK — copy it to the OTHER server:"
   _c '1;33' "hs2://$L"
@@ -334,12 +350,13 @@ show_link(){ # endpoint domain shared panel carrier udp transport direction
 }
 
 # parse_link reads a pasted hs2:// link into ENDPOINT DOMAIN SHARED PANEL
-# CARRIER UDP TRANSPORT DIRECTION (with sensible defaults for older links).
+# CARRIER UDP TRANSPORT DIRECTION MTU (with sensible defaults for older links;
+# the trailing MTU field is optional and only used by tun mode).
 parse_link(){
   read -rp "Paste the hs2:// setup link from the OTHER server: " RAW </dev/tty
   RAW=${RAW#hs2://}
   local DEC; DEC=$(decode_link "$RAW") || die "invalid link"
-  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION <<< "$DEC"
+  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU <<< "$DEC"
   [ -n "$ENDPOINT" ] && [ -n "$SHARED" ] || die "link is missing fields"
   CARRIER=${CARRIER:-mtcp}; UDP=${UDP:-false}
   if [ -z "$TRANSPORT" ]; then
@@ -370,12 +387,13 @@ setup_kharej(){
 # the link. (This is the classic flow.)
 kharej_listener(){
   read -rp "Tunnel port (clients never see this) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
-  read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
-  PANEL=${PANEL:-127.0.0.1:8443}
   local SHARED; SHARED=$(openssl rand -hex 32)
+  local PANEL="-" LMTU=""
   mkdir -p "$(dirname "$CFG")"
 
   if [ "$TRANSPORT" = "tcp" ]; then
+    read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
+    PANEL=${PANEL:-127.0.0.1:8443}
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
     read -rp "Domain (its A record must point to $PUBIP): " DOMAIN </dev/tty
     [ -n "$DOMAIN" ] || die "domain required"
@@ -398,6 +416,26 @@ kharej_listener(){
   "expose": "$PANEL"
 }
 EOF
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Backhaul-style L3 tunnel over multi-link TLS (l3mtcp). Kharej is the TLS
+    # server here, so the cert lives on kharej (like direct tcp). No user ports:
+    # it is a routed interface, not a port forwarder.
+    port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
+    read -rp "Domain (its A record must point to $PUBIP): " DOMAIN </dev/tty
+    [ -n "$DOMAIN" ] || die "domain required"
+    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp; UDP=false
+    local certpair CERT KEY
+    certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
+    cat > "$CFG" <<EOF
+{
+  "mode": "listen", "carrier": "l3mtcp", "reverse": false,
+  "addr": "$PUBIP:$TPORT",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $TUNMTU,
+  "backend_addr": "builtin",
+  "shared_key": "$SHARED",
+  "cert_file": "$CERT", "key_file": "$KEY"
+}
+EOF
   else
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
@@ -413,7 +451,11 @@ EOF
   fi
   chmod 600 "$CFG"; write_service kharej; start_service kharej
   ok "KHAREJ ready (direct, transport: $TRANSPORT)."
-  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct"
+  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU"
+  if [ "$TRANSPORT" = "tun" ]; then
+    info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $LMTU)."
+    info "Your panel stays on this kharej; iran reaches it over the tunnel."
+  fi
   info "On the Iran server: bash install.sh → 2 (Iran) → direction 'direct' → paste the link."
 }
 
@@ -442,6 +484,26 @@ EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
     ok "KHAREJ ready (reverse, tcp). It dials in to the Iran edge and forwards to $PANEL."
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Reverse tun: kharej DIALS the iran edge (TLS client) and runs the L3 pipe.
+    # MTU comes from the link so both sides match.
+    [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the iran edge with the new installer."
+    ask_tun_params
+    cat > "$CFG" <<EOF
+{
+  "mode": "listen", "carrier": "l3mtcp", "reverse": true,
+  "addr": "$ENDPOINT", "sni": "$DOMAIN",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $MTU,
+  "shared_key": "$SHARED",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  "bind_local_ip": "$EGRESSIP"
+}
+EOF
+    chmod 600 "$CFG"; write_service kharej; start_service kharej
+    echo >&2; hr
+    ok "KHAREJ ready (reverse, tun / L3 over multi-link TLS). It dials in to the Iran edge."
+    info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $MTU)."
+    info "Your panel stays on this kharej; iran reaches it over the tunnel."
   else
     # udp/auto: TUN IP tunnel on hs0, no panel forwarding here.
     cat > "$CFG" <<EOF
@@ -507,6 +569,27 @@ EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
     ok "IRAN ready (direct, tcp). Users connect on port(s): $PORTS"
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Backhaul-style L3 tunnel over multi-link TLS (l3mtcp). Iran is the TLS
+    # client here (validates the kharej's domain as SNI). MTU comes from the link
+    # so both sides match; the interface name is a local choice.
+    [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the kharej with the new installer."
+    ask_tun_params
+    cat > "$CFG" <<EOF
+{
+  "mode": "dial", "carrier": "l3mtcp", "reverse": false,
+  "addr": "$ENDPOINT", "sni": "$DOMAIN",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $MTU,
+  "shared_key": "$SHARED",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  "bind_local_ip": "$EGRESSIP"
+}
+EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    echo >&2; hr
+    ok "IRAN ready (direct, tun / L3 over multi-link TLS)."
+    info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $MTU)."
+    info "Route the traffic you want tunneled toward 10.77.0.2 over $TUNIF."
   else
     # udp/auto is a TUN IP tunnel on hs0 (not a port forwarder); no user ports.
     cat > "$CFG" <<EOF
@@ -533,6 +616,7 @@ EOF
 iran_listener(){
   read -rp "Tunnel port to LISTEN on (kharej dials it) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
   local SHARED; SHARED=$(openssl rand -hex 32)
+  local LMTU=""
   mkdir -p "$(dirname "$CFG")"
 
   if [ "$TRANSPORT" = "tcp" ]; then
@@ -569,6 +653,28 @@ iran_listener(){
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN ready (reverse, tcp). Users connect on port(s): $PORTS"
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Reverse tun: iran LISTENS and is the TLS server, so the cert lives HERE.
+    # The kharej dials in. L3 routed interface, no user ports.
+    port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
+    read -rp "Domain for THIS iran server (its A record must point to $PUBIP): " DOMAIN </dev/tty
+    [ -n "$DOMAIN" ] || die "domain required (the kharej validates it as the TLS name)"
+    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp; UDP=false
+    local certpair CERT KEY
+    certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
+    cat > "$CFG" <<EOF
+{
+  "mode": "dial", "carrier": "l3mtcp", "reverse": true,
+  "addr": "$PUBIP:$TPORT",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $TUNMTU,
+  "backend_addr": "builtin",
+  "shared_key": "$SHARED",
+  "cert_file": "$CERT", "key_file": "$KEY"
+}
+EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    ok "IRAN ready (reverse, tun / L3 over multi-link TLS)."
+    info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $LMTU)."
   else
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
@@ -586,7 +692,7 @@ EOF
     info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2). Route traffic over hs0."
   fi
   # panel is set on the kharej side; leave it blank in the link.
-  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse"
+  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse" "$LMTU"
   info "On the Kharej server: bash install.sh → 1 (Kharej) → direction 'reverse' → paste the link."
 }
 
@@ -596,6 +702,11 @@ uninstall(){
   systemctl disable --now hs2 2>/dev/null || true
   sleep 1
   pkill -TERM -x hs2 2>/dev/null || true; sleep 1; pkill -KILL -x hs2 2>/dev/null || true
+  # Delete the tunnel interface. Usually hs0, but tun mode may have renamed it, so
+  # also read the name from the config before deleting it.
+  local IFACE=""
+  [ -f "$CFG" ] && IFACE=$(grep -o '"iface"[[:space:]]*:[[:space:]]*"[^"]*"' "$CFG" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/')
+  [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
   ip link del hs0 2>/dev/null || true
   rm -f "$SVC" "$CFG" /etc/sysctl.d/99-hs2.conf; systemctl daemon-reload
   ok "hs2 removed (service stopped, hs0 deleted). Backhaul untouched."
