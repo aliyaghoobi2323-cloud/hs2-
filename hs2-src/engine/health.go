@@ -35,6 +35,19 @@ const (
 	// maxDrain bounds how long a degraded link is kept for its existing users
 	// before it is force-closed (they reconnect onto a healthy link).
 	maxDrain = 45 * time.Second
+
+	// Throughput autoscaling (phase 2):
+	// probeGain: a speculative link must raise aggregate goodput by at least this
+	// fraction within a tick to be judged "it helped" and justify growing more.
+	probeGain = 0.08
+	// reprobeGain: after settling at a plateau, only probe again once aggregate
+	// goodput climbs this much above the plateau (demand genuinely grew).
+	reprobeGain = 0.20
+	// probeCooldownDur: minimum quiet time after a plateau before re-probing.
+	probeCooldownDur = 20 * time.Second
+	// scaleDownAfter: how long load must stay at/under the floor before a link is
+	// retired (slow shrink, so a brief lull does not thrash the pool).
+	scaleDownAfter = 30 * time.Second
 )
 
 // linkMeter holds the raw counters for one link. It is deliberately dumb: it
