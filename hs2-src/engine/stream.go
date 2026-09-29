@@ -88,10 +88,15 @@ func (w *watchConn) Write(p []byte) (int, error) {
 // is length-shaped: smux runs over a shapedConn so the TLS records it produces
 // follow an HTTPS-like size distribution instead of smux's own framing. Both
 // ends build their session here, so the shaping is symmetric. A nil sampler gets
-// a default HTTPS sampler.
-func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler) (*smux.Session, error) {
+// a default HTTPS sampler. When meter is non-nil (edge links), a meteredConn
+// above the shaper counts real payload/stalls for health-aware routing.
+func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, error) {
 	var sp atomic.Pointer[smux.Session]
-	w := &watchConn{Conn: newShapedConn(conn, sampler)}
+	var c net.Conn = newShapedConn(conn, sampler)
+	if meter != nil {
+		c = &meteredConn{Conn: c, m: meter}
+	}
+	w := &watchConn{Conn: c}
 	w.onErr = func() {
 		conn.Close()
 		if s := sp.Load(); s != nil {

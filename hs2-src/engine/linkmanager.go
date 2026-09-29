@@ -85,6 +85,23 @@ type managedLink struct {
 	// inside Pick, under the lock, so a burst of simultaneous connections
 	// spreads across links instead of every one seeing the same counts.
 	users atomic.Int32
+
+	// Health fields, read/written only under LinkManager.mu in the maintain
+	// tick and in Pick, so they need no atomics.
+	mtr         *linkMeter // nil for links without metering (never soft-degrades)
+	prevBytes   uint64     // byte counter at the last sample, for rate deltas
+	prevRetrans uint64     // TCP retransmit counter at the last sample
+	goodput     float64    // EWMA bytes/sec (diagnostic only)
+	lowStreak   int        // consecutive high-loss samples
+	sampled     bool       // prev* are valid (skips the first delta)
+	degraded    bool       // soft-bad: excluded from new-user routing
+	draining    bool       // being retired after its replacement is up
+	drainSince  time.Time
+}
+
+// newManaged wraps a Link with a managed entry, capturing its meter (if any).
+func (m *LinkManager) newManaged(l Link, id int) *managedLink {
+	return &managedLink{link: l, id: id, born: time.Now(), mtr: linkMeterOf(l)}
 }
 
 func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, ...any)) *LinkManager {
@@ -120,7 +137,7 @@ func (m *LinkManager) AddLink(l Link) {
 	m.mu.Lock()
 	id := m.linkSeq
 	m.linkSeq++
-	m.links = append(m.links, &managedLink{link: l, id: id, born: time.Now()})
+	m.links = append(m.links, m.newManaged(l, id))
 	n := len(m.links)
 	m.mu.Unlock()
 	m.log("mtcp: accepted reverse link (now %d)", n)
@@ -150,7 +167,7 @@ func (m *LinkManager) Run(ctx context.Context) {
 		}
 		m.addLink(ctx)
 	}
-	tick := time.NewTicker(2 * time.Second)
+	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
 	lowSince := time.Now()
 	for {
@@ -160,6 +177,8 @@ func (m *LinkManager) Run(ctx context.Context) {
 			return
 		case <-tick.C:
 			m.reap(ctx)
+			m.sampleHealth() // measure per-link goodput, flag soft-bad links
+			m.heal(ctx)      // dial replacements, then drain the bad ones
 			want := m.desiredCount()
 			have := m.count()
 			if want > have {
@@ -183,10 +202,11 @@ func (m *LinkManager) Run(ctx context.Context) {
 	}
 }
 
-// runAccept maintains the reverse-edge pool: it only drops dead links (the peer
-// dials new ones in via AddLink), never dials or scales.
+// runAccept maintains the reverse-edge pool: it never dials, but it still watches
+// health so it can route users away from a soft-bad link and drop it — the peer
+// (which does dial) then redials a fresh one to keep its link count.
 func (m *LinkManager) runAccept(ctx context.Context) {
-	tick := time.NewTicker(2 * time.Second)
+	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
 	for {
 		select {
@@ -194,14 +214,25 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			m.closeAll()
 			return
 		case <-tick.C:
+			m.sampleHealth()
 			m.mu.Lock()
 			alive := m.links[:0]
+			now := time.Now()
 			for _, ml := range m.links {
-				if ml.link.Alive() {
-					alive = append(alive, ml)
-				} else {
+				if !ml.link.Alive() {
 					ml.link.Close()
+					continue
 				}
+				if ml.degraded && !ml.draining {
+					ml.draining = true
+					ml.drainSince = now
+					m.log("mtcp: reverse link %d degraded — draining (peer will redial)", ml.id)
+				}
+				if ml.draining && (ml.users.Load() == 0 || now.Sub(ml.drainSince) > maxDrain) {
+					ml.link.Close() // peer's maintainExitLink redials to restore the count
+					continue
+				}
+				alive = append(alive, ml)
 			}
 			m.links = alive
 			m.mu.Unlock()
@@ -234,11 +265,32 @@ func (m *LinkManager) addLink(ctx context.Context) {
 	m.mu.Lock()
 	id := m.linkSeq
 	m.linkSeq++
-	m.links = append(m.links, &managedLink{link: l, id: id, born: time.Now()})
+	m.links = append(m.links, m.newManaged(l, id))
 	m.mu.Unlock()
 	if m.OnLink != nil {
 		go m.OnLink(l)
 	}
+}
+
+// addReplacement dials a fresh link for make-before-break healing. Unlike
+// addLink it bypasses the max cap: it is a temporary over-provision so a degraded
+// link's users keep full capacity until they drain onto the new link, after which
+// heal drops the degraded one and the pool returns to size.
+func (m *LinkManager) addReplacement(ctx context.Context) {
+	l, err := m.dialer.DialLink(ctx)
+	if err != nil {
+		m.log("mtcp: replacement dial failed: %v", err)
+		return
+	}
+	m.mu.Lock()
+	id := m.linkSeq
+	m.linkSeq++
+	m.links = append(m.links, m.newManaged(l, id))
+	m.mu.Unlock()
+	if m.OnLink != nil {
+		go m.OnLink(l)
+	}
+	m.log("mtcp: dialed replacement link %d (make-before-break)", id)
 }
 
 // reap rebuilds links that died, keeping the pool at least Min.
@@ -296,22 +348,12 @@ func (m *LinkManager) removeIdleLink() {
 func (m *LinkManager) Pick() (Link, func(), bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	var chosen *managedLink
-	var best int32 = 1 << 30
-	ties := 0
-	for _, ml := range m.links {
-		if !ml.link.Alive() {
-			continue
-		}
-		switch u := ml.users.Load(); {
-		case u < best:
-			best, chosen, ties = u, ml, 1
-		case u == best:
-			ties++
-			if rand.IntN(ties) == 0 {
-				chosen = ml
-			}
-		}
+	// Prefer a healthy link with headroom; only if every link is degraded or
+	// draining do we fall back to one of those (a soft-bad link still beats
+	// refusing the user).
+	chosen := m.leastLoaded(false)
+	if chosen == nil {
+		chosen = m.leastLoaded(true)
 	}
 	if chosen == nil {
 		return nil, func() {}, false
@@ -326,6 +368,130 @@ func (m *LinkManager) Pick() (Link, func(), bool) {
 		})
 	}
 	return chosen.link, release, true
+}
+
+// leastLoaded returns the alive link carrying the fewest users, breaking ties at
+// random. With allowBad=false it skips degraded/draining links (new users go to
+// healthy links only); allowBad=true considers every alive link as a fallback.
+// Caller holds m.mu.
+func (m *LinkManager) leastLoaded(allowBad bool) *managedLink {
+	var chosen *managedLink
+	var best int32 = 1 << 30
+	ties := 0
+	for _, ml := range m.links {
+		if !ml.link.Alive() {
+			continue
+		}
+		if !allowBad && (ml.degraded || ml.draining) {
+			continue
+		}
+		switch u := ml.users.Load(); {
+		case u < best:
+			best, chosen, ties = u, ml, 1
+		case u == best:
+			ties++
+			if rand.IntN(ties) == 0 {
+				chosen = ml
+			}
+		}
+	}
+	return chosen
+}
+
+// sampleHealth measures each metered link's throughput and, from the kernel's
+// TCP retransmit counter, its path loss. A link that is actively moving data and
+// retransmitting more than lossFrac of its packets for degradeStreak samples is
+// flagged degraded. The activity gate (activeBytes) is the key safety property:
+// an idle link — low throughput because its users are quiet, not because the link
+// is bad — is never judged, so healthy users are never drained by mistake.
+func (m *LinkManager) sampleHealth() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ml := range m.links {
+		if ml.mtr == nil {
+			continue
+		}
+		b := ml.mtr.bytes.Load()
+		rt, haveRT := ml.linkRetransSource()
+		if !ml.sampled {
+			ml.prevBytes, ml.prevRetrans, ml.sampled = b, rt, true
+			continue
+		}
+		dBytes := b - ml.prevBytes
+		dRetrans := rt - ml.prevRetrans
+		ml.prevBytes, ml.prevRetrans = b, rt
+
+		rate := float64(dBytes) / healthTick.Seconds()
+		if ml.goodput == 0 {
+			ml.goodput = rate
+		} else {
+			ml.goodput = gpAlpha*rate + (1-gpAlpha)*ml.goodput
+		}
+
+		if ml.degraded || ml.draining {
+			continue
+		}
+		// Only judge an active link on a platform that reports loss.
+		if !haveRT || dBytes < activeBytes {
+			ml.lowStreak = 0
+			continue
+		}
+		pkts := float64(dBytes) / mss
+		if pkts > 0 && float64(dRetrans)/pkts > lossFrac {
+			ml.lowStreak++
+		} else {
+			ml.lowStreak = 0
+		}
+		if ml.lowStreak >= degradeStreak {
+			ml.degraded = true
+			m.log("mtcp: link %d degraded (loss %.0f/%0.f pkts over %d samples, goodput %.0f B/s) — draining",
+				ml.id, float64(dRetrans), pkts, ml.lowStreak, ml.goodput)
+		}
+	}
+}
+
+// linkRetransSource reads the link's retransmit counter (0,false if the link has
+// no metered source). Split out so tests can drive it.
+func (ml *managedLink) linkRetransSource() (uint64, bool) { return linkRetransOf(ml.link) }
+
+// heal performs make-before-break on degraded links: it dials a replacement for
+// each newly-degraded link FIRST (so capacity never dips), then drops any
+// draining link that has emptied or overstayed maxDrain. Existing users on a
+// draining link are never yanked — they finish or reconnect onto a fresh link.
+func (m *LinkManager) heal(ctx context.Context) {
+	m.mu.Lock()
+	now := time.Now()
+	newDrain := 0
+	for _, ml := range m.links {
+		if ml.degraded && !ml.draining {
+			ml.draining = true
+			ml.drainSince = now
+			newDrain++
+		}
+	}
+	m.mu.Unlock()
+
+	// Dial replacements before dropping anything (make-before-break).
+	for i := 0; i < newDrain; i++ {
+		m.addReplacement(ctx)
+	}
+
+	m.mu.Lock()
+	kept := m.links[:0]
+	dropped := 0
+	for _, ml := range m.links {
+		if ml.draining && (ml.users.Load() == 0 || now.Sub(ml.drainSince) > maxDrain) {
+			ml.link.Close()
+			dropped++
+			continue
+		}
+		kept = append(kept, ml)
+	}
+	m.links = kept
+	m.mu.Unlock()
+	if dropped > 0 {
+		m.log("mtcp: retired %d drained link(s), now %d", dropped, m.count())
+	}
 }
 
 func (m *LinkManager) count() int {
