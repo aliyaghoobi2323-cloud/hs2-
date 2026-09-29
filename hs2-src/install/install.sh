@@ -47,9 +47,11 @@ transport_to_carrier(){
   esac
 }
 
-show_ips(){ ip -4 -br addr 2>/dev/null | awk '$1!="lo"{print $3}' | sed 's#/.*##' | sed 's/^/   /' >&2; }
-
-first_public_ip(){ ip -4 -br addr 2>/dev/null | awk '$1!="lo"{print $3}' | sed 's#/.*##' | head -1; }
+# Every IPv4 on every interface (ip -br prints only the first address of each
+# interface, which hid secondary IPs on multi-IP servers).
+local_ips(){ ip -4 -o addr show 2>/dev/null | awk '$2!="lo"{print $4}' | sed 's#/.*##'; }
+show_ips(){ local_ips | sed 's/^/   /' >&2; }
+first_public_ip(){ local_ips | head -1; }
 
 # ip_is_local reports whether an IPv4 address is assigned to a local interface.
 ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##' | grep -qx "$1"; }
@@ -60,27 +62,43 @@ ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##'
 # any interface) is rejected here with a clear message instead of failing at
 # runtime with "cannot assign requested address". Enter = all interfaces.
 ask_bind_ip(){
-  echo >&2; info "This server's local IPs:"; show_ips
-  read -rp "LISTEN on which local IP? (Enter = all interfaces): " BINDIP </dev/tty
-  if [ -n "$BINDIP" ]; then
-    ip_is_local "$BINDIP" || die "IP $BINDIP is not on any local interface here. Pick one from the list above, or press Enter for all interfaces."
-    BINDADDR="$BINDIP"
-    ok "Listening on $BINDIP."
-  else
+  local n; n=$(local_ips | wc -l)
+  if [ "$n" -le 1 ]; then
     BINDADDR="0.0.0.0"
+    info "Only one local IP here ($(first_public_ip)) — listening on it (all interfaces)."
+    return 0
   fi
+  # Default to the public IP given above when it is one of ours.
+  local def=""; [ -n "${PUBIP:-}" ] && ip_is_local "$PUBIP" && def="$PUBIP"
+  echo >&2; info "This server has several IPs:"; show_ips
+  while :; do
+    read -rp "LISTEN on which local IP? [${def:-Enter = all}]: " BINDIP </dev/tty
+    BINDIP=${BINDIP:-$def}
+    if [ -z "$BINDIP" ]; then BINDADDR="0.0.0.0"; ok "Listening on all interfaces."; return 0; fi
+    if ip_is_local "$BINDIP"; then BINDADDR="$BINDIP"; ok "Listening on $BINDIP."; return 0; fi
+    warn "$BINDIP is not on this server. Pick one from the list, or Enter for all."
+    warn "(A public IP that your provider NATs to this server is not local — keep it as the"
+    warn " 'Public IP' above and press Enter here.)"
+  done
 }
 
 # ask_egress_ip sets EGRESSIP: the local source IP this server DIALS from. A
 # specific IP is validated to exist locally (same reason as ask_bind_ip). The
 # rp_filter=2 tuning above lets a non-default source IP's return traffic through.
 ask_egress_ip(){
-  echo >&2; info "This server's local IPs:"; show_ips
-  read -rp "Dial out FROM which local IP? (Enter = automatic): " EGRESSIP </dev/tty
-  if [ -n "$EGRESSIP" ]; then
-    ip_is_local "$EGRESSIP" || die "IP $EGRESSIP is not on any local interface here. Pick one from the list above, or press Enter for automatic."
-    ok "Dialing from $EGRESSIP."
+  EGRESSIP=""
+  local n; n=$(local_ips | wc -l)
+  if [ "$n" -le 1 ]; then
+    info "Only one local IP here ($(first_public_ip)) — tunnel connections leave from it."
+    return 0
   fi
+  echo >&2; info "This server has several IPs:"; show_ips
+  while :; do
+    read -rp "Dial out FROM which local IP? (use the one that is NOT filtered; Enter = automatic): " EGRESSIP </dev/tty
+    if [ -z "$EGRESSIP" ]; then warn "Automatic: the kernel picks the source (usually the first IP)."; return 0; fi
+    if ip_is_local "$EGRESSIP"; then ok "Dialing from $EGRESSIP."; return 0; fi
+    warn "$EGRESSIP is not on this server. Pick one from the list above."
+  done
 }
 
 install_prereqs(){
@@ -415,8 +433,10 @@ setup_kharej(){
   ask_direction
   if [ "$DIRECTION" = "direct" ]; then
     echo >&2; info "This server's IP addresses:"; show_ips
+    echo "   (Public IP = the address the OTHER server connects to; it goes into the link.)" >&2
     local defip; defip=$(first_public_ip)
     read -rp "Public IP of THIS kharej server [$defip]: " PUBIP </dev/tty; PUBIP=${PUBIP:-$defip}
+    ip_is_local "$PUBIP" || info "$PUBIP is not on a local interface — treating it as a NAT/public IP of this server (the other side will connect to it)."
     [ -n "$PUBIP" ] || die "public IP required"
     ask_transport
     kharej_listener      # direct: kharej listens and generates the link
@@ -576,8 +596,10 @@ setup_iran(){
     iran_dialer          # direct: iran dials out to kharej (pastes the link)
   else
     echo >&2; info "This server's IP addresses:"; show_ips
+    echo "   (Public IP = the address the OTHER server connects to; it goes into the link.)" >&2
     local defip; defip=$(first_public_ip)
     read -rp "Public IP of THIS iran server [$defip]: " PUBIP </dev/tty; PUBIP=${PUBIP:-$defip}
+    ip_is_local "$PUBIP" || info "$PUBIP is not on a local interface — treating it as a NAT/public IP of this server (the other side will connect to it)."
     [ -n "$PUBIP" ] || die "public IP required"
     ask_transport
     iran_listener        # reverse: iran listens for kharej and generates the link
