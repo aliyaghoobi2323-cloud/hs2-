@@ -103,11 +103,14 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 	return &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf}
 }
 
-// jitterGap returns a randomized inter-dial gap (~120–480ms) used to stagger
-// link establishment so the pool does not appear as one synchronized burst of
-// identical connections.
+// jitterGap returns a randomized inter-dial gap (~40–160ms) used to stagger link
+// establishment so the pool does not appear as one synchronized burst. The window
+// is deliberately small: over a typical pool it spreads establishment across
+// roughly a second — enough to defeat a "N connections within a few ms" burst
+// detector, but not so long that the spread itself becomes anomalous versus a
+// real page load opening its parallel connections.
 func jitterGap() time.Duration {
-	return 120*time.Millisecond + time.Duration(rand.IntN(360))*time.Millisecond
+	return 40*time.Millisecond + time.Duration(rand.IntN(120))*time.Millisecond
 }
 
 // AddLink injects an externally acquired link into the pool. It is used by the
