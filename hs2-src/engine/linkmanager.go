@@ -98,15 +98,17 @@ type managedLink struct {
 
 	// Health fields, read/written only under LinkManager.mu in the maintain
 	// tick and in Pick, so they need no atomics.
-	mtr         *linkMeter // nil for links without metering (never soft-degrades)
-	prevBytes   uint64     // byte counter at the last sample, for rate deltas
-	prevRetrans uint64     // TCP retransmit counter at the last sample
-	goodput     float64    // EWMA bytes/sec (diagnostic only)
-	lowStreak   int        // consecutive high-loss samples
-	sampled     bool       // prev* are valid (skips the first delta)
-	degraded    bool       // soft-bad: excluded from new-user routing
-	draining    bool       // being retired after its replacement is up
-	drainSince  time.Time
+	mtr             *linkMeter // nil for links without metering (never soft-degrades)
+	prevRd          uint64     // download byte counter at the last sample
+	prevWr          uint64     // upload byte counter at the last sample
+	prevRetrans     uint64     // local (upload) TCP retransmit counter at last sample
+	prevPeerRetrans uint64     // peer (download) TCP retransmit counter at last sample
+	goodput         float64    // EWMA bytes/sec, both directions (diagnostic)
+	lowStreak       int        // consecutive high-loss samples (either direction)
+	sampled         bool       // prev* are valid (skips the first delta)
+	degraded        bool       // soft-bad: excluded from new-user routing
+	draining        bool       // being retired after its replacement is up
+	drainSince      time.Time
 }
 
 // newManaged wraps a Link with a managed entry, capturing its meter (if any).
@@ -474,17 +476,22 @@ func (m *LinkManager) sampleHealth() {
 		if ml.mtr == nil {
 			continue
 		}
-		b := ml.mtr.bytes.Load()
-		rt, haveRT := ml.linkRetransSource()
+		rd := ml.mtr.rdBytes.Load()
+		wr := ml.mtr.wrBytes.Load()
+		upRT, haveRT := ml.linkRetransSource() // local: upload-path retransmits
+		peerRT := ml.mtr.peerRetrans.Load()    // from control channel: download-path
+		peerSeen := ml.mtr.peerSeen.Load()
 		if !ml.sampled {
-			ml.prevBytes, ml.prevRetrans, ml.sampled = b, rt, true
+			ml.prevRd, ml.prevWr, ml.prevRetrans, ml.prevPeerRetrans, ml.sampled = rd, wr, upRT, peerRT, true
 			continue
 		}
-		dBytes := b - ml.prevBytes
-		dRetrans := rt - ml.prevRetrans
-		ml.prevBytes, ml.prevRetrans = b, rt
+		dRd := rd - ml.prevRd
+		dWr := wr - ml.prevWr
+		dUp := upRT - ml.prevRetrans
+		dDown := peerRT - ml.prevPeerRetrans
+		ml.prevRd, ml.prevWr, ml.prevRetrans, ml.prevPeerRetrans = rd, wr, upRT, peerRT
 
-		rate := float64(dBytes) / healthTick.Seconds()
+		rate := float64(dRd+dWr) / healthTick.Seconds()
 		if ml.goodput == 0 {
 			ml.goodput = rate
 		} else {
@@ -495,21 +502,30 @@ func (m *LinkManager) sampleHealth() {
 		if ml.degraded || ml.draining {
 			continue
 		}
-		// Only judge an active link on a platform that reports loss.
-		if !haveRT || dBytes < activeBytes {
-			ml.lowStreak = 0
-			continue
+		// A direction is "bad" when it is actively moving data and retransmitting
+		// more than lossFrac of its packets. Upload uses local TCP_INFO; download
+		// uses the exit's retransmits from the control channel (phase 3), so a link
+		// bad only on the download path is caught too.
+		bad := false
+		if haveRT && dWr >= activeBytes {
+			if pkts := float64(dWr) / mss; pkts > 0 && float64(dUp)/pkts > lossFrac {
+				bad = true
+			}
 		}
-		pkts := float64(dBytes) / mss
-		if pkts > 0 && float64(dRetrans)/pkts > lossFrac {
+		if peerSeen && dRd >= activeBytes {
+			if pkts := float64(dRd) / mss; pkts > 0 && float64(dDown)/pkts > lossFrac {
+				bad = true
+			}
+		}
+		if bad {
 			ml.lowStreak++
 		} else {
 			ml.lowStreak = 0
 		}
 		if ml.lowStreak >= degradeStreak {
 			ml.degraded = true
-			m.log("mtcp: link %d degraded (loss %.0f/%0.f pkts over %d samples, goodput %.0f B/s) — draining",
-				ml.id, float64(dRetrans), pkts, ml.lowStreak, ml.goodput)
+			m.log("mtcp: link %d degraded (up-loss +%d/%dKB, down-loss +%d/%dKB, rtt %dms) — draining",
+				ml.id, dUp, dWr>>10, dDown, dRd>>10, ml.mtr.rttMicros.Load()/1000)
 		}
 	}
 	m.aggGoodput = agg

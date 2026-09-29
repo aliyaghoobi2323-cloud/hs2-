@@ -48,18 +48,30 @@ const (
 	// scaleDownAfter: how long load must stay at/under the floor before a link is
 	// retired (slow shrink, so a brief lull does not thrash the pool).
 	scaleDownAfter = 30 * time.Second
+
+	// Control channel (phase 3): the edge opens one control stream per link and
+	// exchanges a tiny ping/pong with the exit every controlInterval to learn the
+	// download-direction retransmits and the round-trip time.
+	controlInterval = 3 * time.Second
 )
 
 // linkMeter holds the raw counters for one link. It is deliberately dumb: it
-// only sums bytes and stalls; the manager turns deltas into an EWMA goodput on
-// its own cadence.
+// sums bytes (split by direction) and stalls; the manager turns deltas into an
+// EWMA goodput on its own cadence. peerRetrans and rttMicros are filled by the
+// per-link control channel (phase 3) with the far side's download-path
+// retransmits and the measured round-trip time.
 type linkMeter struct {
-	bytes  atomic.Uint64 // read+written payload bytes (pre-shaping)
-	stalls atomic.Uint64 // write errors / timeouts
+	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
+	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
+	stalls  atomic.Uint64 // write errors / timeouts
+
+	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
+	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
+	peerSeen    atomic.Bool   // a control response has been received at least once
 }
 
-// meteredConn counts the bytes a link carries. It sits above the length shaper
-// so it measures real payload, not padding.
+// meteredConn counts the bytes a link carries, by direction. It sits above the
+// length shaper so it measures real payload, not padding.
 type meteredConn struct {
 	net.Conn
 	m *linkMeter
@@ -68,7 +80,7 @@ type meteredConn struct {
 func (c *meteredConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
-		c.m.bytes.Add(uint64(n))
+		c.m.rdBytes.Add(uint64(n))
 	}
 	return n, err
 }
@@ -76,7 +88,7 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 func (c *meteredConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	if n > 0 {
-		c.m.bytes.Add(uint64(n))
+		c.m.wrBytes.Add(uint64(n))
 	}
 	if err != nil {
 		c.m.stalls.Add(1)
