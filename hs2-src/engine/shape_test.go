@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
+	"github.com/xtaci/smux"
 )
 
 // A shapedConn writer feeding a shapedConn reader must deliver the exact byte
@@ -118,7 +119,8 @@ func TestShapedConnPadsSmallWrite(t *testing.T) {
 	}
 }
 
-// captureConn records the size of every Write (each becomes one TLS record).
+// captureConn records the size of every Write (each becomes one TLS record). If
+// an underlying Conn is set the write is forwarded, so it can sit on a real link.
 type captureConn struct {
 	net.Conn
 	mu    sync.Mutex
@@ -131,7 +133,110 @@ func (c *captureConn) Write(p []byte) (int, error) {
 	c.sizes = append(c.sizes, len(p))
 	c.total += len(p)
 	c.mu.Unlock()
+	if c.Conn != nil {
+		return c.Conn.Write(p)
+	}
 	return len(p), nil
 }
 
+func (c *captureConn) snapshot() []int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]int(nil), c.sizes...)
+}
+
 var _ io.Writer = (*captureConn)(nil)
+
+// Every stream carrier (mtcp, l3mtcp, tls) builds its smux session through
+// newSession, so shaping is applied at that one seam for all of them. This test
+// drives a full smux session built by newSession over a real socket and proves
+// the underlying record sizes are shaped — i.e. the shaping is not specific to
+// mtcp but covers any carrier that rides newSession.
+func TestNewSessionShapesAnyStreamCarrier(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	got := make(chan *smux.Session, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		s, err := newSession(c, true, nil) // server end (like the exit/kharej)
+		if err != nil {
+			return
+		}
+		got <- s
+	}()
+
+	raw, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cap := &captureConn{Conn: raw}
+	cli, err := newSession(cap, false, nil) // client end (like the edge/iran)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	srv := <-got
+	defer srv.Close()
+
+	// Server echoes one stream.
+	go func() {
+		st, err := srv.AcceptStream()
+		if err != nil {
+			return
+		}
+		io.Copy(st, st)
+	}()
+
+	st, err := cli.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+
+	msg := make([]byte, 256<<10)
+	rand.Read(msg)
+	done := make(chan error, 1)
+	go func() {
+		if _, err := st.Write(msg); err != nil {
+			done <- err
+			return
+		}
+		done <- nil
+	}()
+	st.SetReadDeadline(time.Now().Add(10 * time.Second))
+	back := make([]byte, len(msg))
+	if _, err := io.ReadFull(st, back); err != nil {
+		t.Fatalf("read echo: %v", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if !bytes.Equal(back, msg) {
+		t.Fatal("echo mismatch through shaped newSession")
+	}
+
+	sizes := cap.snapshot()
+	const maxSampler = 1400
+	distinct := map[int]int{}
+	big := 0
+	for _, s := range sizes {
+		if s > maxSampler {
+			big++
+		}
+		distinct[s]++
+	}
+	t.Logf("underlying writes=%d distinct-sizes=%d over-max=%d", len(sizes), len(distinct), big)
+	if big > 0 {
+		t.Fatalf("%d underlying records exceeded the sampler max %d — shaping not applied on this carrier", big, maxSampler)
+	}
+	if len(distinct) < 3 {
+		t.Fatalf("record sizes not varied (%d distinct) — shaping ineffective", len(distinct))
+	}
+}
