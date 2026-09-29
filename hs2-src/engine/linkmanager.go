@@ -68,6 +68,16 @@ type LinkManager struct {
 
 	// OnLink, if set, is called (in its own goroutine) for every new link.
 	OnLink func(Link)
+
+	// Autoscale controller state — touched only by the Run goroutine (aggGoodput
+	// is written in sampleHealth and read in autoscale, both in that goroutine).
+	aggGoodput  float64   // EWMA-summed goodput across links, bytes/sec
+	probing     bool      // a speculative link was just added; measuring its effect
+	preProbeAgg float64   // aggregate goodput before the current probe add
+	plateauAgg  float64   // aggregate goodput where growth last stopped helping
+	plateauSize int       // pool size at that plateau (0 = never plateaued)
+	probeCoolAt time.Time // do not start a new probe before this time
+	lowSince    time.Time // load has been at/under the floor since this time
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
@@ -169,7 +179,7 @@ func (m *LinkManager) Run(ctx context.Context) {
 	}
 	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
-	lowSince := time.Now()
+	m.lowSince = time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -177,28 +187,80 @@ func (m *LinkManager) Run(ctx context.Context) {
 			return
 		case <-tick.C:
 			m.reap(ctx)
-			m.sampleHealth() // measure per-link goodput, flag soft-bad links
+			m.sampleHealth() // per-link goodput + loss; flags soft-bad links
 			m.heal(ctx)      // dial replacements, then drain the bad ones
-			want := m.desiredCount()
-			have := m.count()
-			if want > have {
-				// scale up quickly
-				for i := 0; i < want-have; i++ {
-					m.addLink(ctx)
-				}
-				lowSince = time.Now()
-				m.log("mtcp: scaled up to %d links (users=%d)", m.count(), m.users.Load())
-			} else if want < have {
-				// scale down slowly: only after load stayed low for a while
-				if time.Since(lowSince) > 30*time.Second {
-					m.removeIdleLink()
-					lowSince = time.Now()
-					m.log("mtcp: scaled down to %d links (users=%d)", m.count(), m.users.Load())
-				}
-			} else {
-				lowSince = time.Now()
-			}
+			m.autoscale(ctx) // size the pool by user-count floor + throughput demand
 		}
+	}
+}
+
+// autoscale sizes the pool. It keeps the user-count floor (ceil(users/perLink),
+// clamped to [min,max]) as a fast baseline, and on top of that runs a
+// throughput probe: when there is load and room to grow, it speculatively adds
+// ONE link and, a tick later, keeps growing only if aggregate goodput actually
+// rose. That directly measures "would another link move more bytes?" — which is
+// true exactly when per-connection throttling is the limit and there are new
+// connections to fill a fresh link — and stops when it plateaus, finding the
+// right size for the current bandwidth on its own. Growth never disrupts anyone
+// (adding capacity is free); shrink only ever removes a truly idle link.
+func (m *LinkManager) autoscale(ctx context.Context) {
+	now := time.Now()
+	have := m.count()
+	userWant := m.desiredCount()
+	agg := m.aggGoodput
+
+	// 1) Satisfy the user-count floor immediately; a load change restarts the
+	// throughput search.
+	if userWant > have {
+		for i := 0; i < userWant-have; i++ {
+			m.addLink(ctx)
+		}
+		m.probing, m.plateauSize = false, 0
+		m.lowSince = now
+		m.log("mtcp: scaled up to %d links (users=%d)", m.count(), m.users.Load())
+		return
+	}
+
+	canGrow := have < m.max && m.users.Load() > 0
+
+	// 2) Throughput probe.
+	if m.probing {
+		if agg > m.preProbeAgg*(1+probeGain) {
+			m.preProbeAgg = agg // the last link helped; keep climbing while there is room
+			if canGrow {
+				m.addLink(ctx)
+			} else {
+				m.probing = false
+			}
+		} else {
+			// Plateau: extra links no longer move more bytes. Settle here and
+			// cool down; re-probe only if demand later grows past this level.
+			m.probing = false
+			m.plateauAgg, m.plateauSize = agg, have
+			m.probeCoolAt = now.Add(probeCooldownDur)
+			m.log("mtcp: throughput plateau at %d links (%.0f KB/s)", have, agg/1024)
+		}
+		m.lowSince = now
+		return
+	}
+	if canGrow && now.After(m.probeCoolAt) && (m.plateauSize == 0 || agg > m.plateauAgg*(1+reprobeGain)) {
+		m.preProbeAgg, m.probing = agg, true
+		m.addLink(ctx)
+		m.lowSince = now
+		return
+	}
+
+	// 3) Scale down slowly: only when above the user-count floor and load stays
+	// low, and removeIdleLink only retires a link with no users — so shrinking
+	// never disturbs active connections.
+	if have > userWant {
+		if now.Sub(m.lowSince) > scaleDownAfter {
+			m.removeIdleLink()
+			m.lowSince = now
+			m.log("mtcp: scaled down to %d links (users=%d)", m.count(), m.users.Load())
+		}
+	} else {
+		m.lowSince = now
 	}
 }
 
@@ -407,6 +469,7 @@ func (m *LinkManager) leastLoaded(allowBad bool) *managedLink {
 func (m *LinkManager) sampleHealth() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var agg float64
 	for _, ml := range m.links {
 		if ml.mtr == nil {
 			continue
@@ -427,6 +490,7 @@ func (m *LinkManager) sampleHealth() {
 		} else {
 			ml.goodput = gpAlpha*rate + (1-gpAlpha)*ml.goodput
 		}
+		agg += ml.goodput
 
 		if ml.degraded || ml.draining {
 			continue
@@ -448,6 +512,7 @@ func (m *LinkManager) sampleHealth() {
 				ml.id, float64(dRetrans), pkts, ml.lowStreak, ml.goodput)
 		}
 	}
+	m.aggGoodput = agg
 }
 
 // linkRetransSource reads the link's retransmit counter (0,false if the link has
