@@ -87,7 +87,7 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 			continue
 		}
 		backoff = 500 * time.Millisecond
-		sess, err := newSession(car.RawConn(), true) // smux server
+		sess, err := newSession(car.RawConn(), true, nil) // smux server
 		if err != nil {
 			car.Close()
 			continue

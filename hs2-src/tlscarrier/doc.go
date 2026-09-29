@@ -22,7 +22,8 @@
 //   - content fingerprint: it IS real TLS, so entropy/handshake look normal
 //   - TLS-library fingerprint: client uses uTLS (Chrome), so JA3/JA4 = Chrome
 //   - active probing: unauthorised -> real backend, real cert, real response
-//   - traffic shape: the obfs shaper wraps SendFrame (added when wired to engine)
+//   - traffic shape: the engine runs smux over a length-shaping conn, so the
+//     TLS-record size distribution matches bulk HTTPS (see engine/shape.go)
 //
 // Honest limits: against a DOMAIN-WHITELIST regime (only specific SNIs allowed)
 // this needs the domain to be one that is allowed; against SNI-based blocking of

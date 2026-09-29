@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
 	"github.com/xtaci/smux"
 )
 
@@ -83,10 +84,14 @@ func (w *watchConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// newSession starts an smux session over conn that dies with conn.
-func newSession(conn net.Conn, server bool) (*smux.Session, error) {
+// newSession starts an smux session over conn that dies with conn. The session
+// is length-shaped: smux runs over a shapedConn so the TLS records it produces
+// follow an HTTPS-like size distribution instead of smux's own framing. Both
+// ends build their session here, so the shaping is symmetric. A nil sampler gets
+// a default HTTPS sampler.
+func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler) (*smux.Session, error) {
 	var sp atomic.Pointer[smux.Session]
-	w := &watchConn{Conn: conn}
+	w := &watchConn{Conn: newShapedConn(conn, sampler)}
 	w.onErr = func() {
 		conn.Close()
 		if s := sp.Load(); s != nil {
