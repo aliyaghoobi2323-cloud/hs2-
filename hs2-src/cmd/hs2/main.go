@@ -351,17 +351,51 @@ func startBuiltinBackend() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	page := []byte("<!doctype html><html><head><title>Welcome</title></head><body><h1>Welcome</h1><p>This site is under construction.</p></body></html>")
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/" {
-			http.NotFound(w, r)
+	// The nginx default welcome page: the single most common page on the public
+	// internet, so a probe that reaches the backend sees the most unremarkable
+	// site possible. Served with an nginx Server header and ordinary caching
+	// headers to match a real default install.
+	page := []byte(`<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+`)
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Server", "nginx")
+		if r.URL.Path == "/favicon.ico" {
+			http.Error(w, "404 Not Found", http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		if r.URL.Path != "/" {
+			http.Error(w, "404 Not Found", http.StatusNotFound)
+			return
+		}
+		h.Set("Content-Type", "text/html; charset=utf-8")
+		h.Set("Last-Modified", "Tue, 15 Oct 2024 09:03:12 GMT")
+		h.Set("Cache-Control", "max-age=3600")
 		w.Write(page)
-	})
-	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(handler), ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln)
 	return ln.Addr().String(), nil
 }

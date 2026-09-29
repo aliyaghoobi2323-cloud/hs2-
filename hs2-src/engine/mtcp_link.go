@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"math/rand/v2"
 	"net"
 	"sync/atomic"
 	"time"
@@ -116,8 +117,15 @@ var (
 func newSmuxConfig() *smux.Config {
 	c := smux.DefaultConfig()
 	c.Version = 2
-	c.KeepAliveInterval = 5 * time.Second
-	c.KeepAliveTimeout = 15 * time.Second
+	// Randomize the keepalive cadence per session so idle links across the pool
+	// (and across servers) do not all emit the same fixed ~5s beat — a
+	// cross-session timing fingerprint. The NOP frame itself is already
+	// size-disguised by the length shaper (shape.go). Keepalive only fires when a
+	// link is otherwise idle, so links carrying user traffic are unaffected and
+	// throughput is untouched. Timeout stays well above the largest interval so a
+	// couple of missed beats never falsely kill a link.
+	c.KeepAliveInterval = time.Duration(4000+rand.IntN(4000)) * time.Millisecond // 4–8s
+	c.KeepAliveTimeout = 24 * time.Second
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer

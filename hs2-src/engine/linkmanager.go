@@ -103,6 +103,13 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 	return &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf}
 }
 
+// jitterGap returns a randomized inter-dial gap (~120–480ms) used to stagger
+// link establishment so the pool does not appear as one synchronized burst of
+// identical connections.
+func jitterGap() time.Duration {
+	return 120*time.Millisecond + time.Duration(rand.IntN(360))*time.Millisecond
+}
+
 // AddLink injects an externally acquired link into the pool. It is used by the
 // reverse edge, which does not dial links but accepts them from the peer that
 // dials in; the pool, load-balancing and reaping are otherwise identical.
@@ -128,8 +135,16 @@ func (m *LinkManager) Run(ctx context.Context) {
 		m.runAccept(ctx)
 		return
 	}
-	// initial fill
+	// Initial fill, staggered with jitter. Opening the whole pool as one
+	// simultaneous burst of identical TLS connections is a behavioral tell, so
+	// establishment is spread over a short randomized window. Steady-state
+	// capacity is unchanged (still m.min links, scaling to m.max under load), so
+	// this costs only a one-time startup ramp — never throughput once warm.
 	for i := 0; i < m.min; i++ {
+		if i > 0 && !sleepCtx(ctx, jitterGap()) {
+			m.closeAll()
+			return
+		}
 		m.addLink(ctx)
 	}
 	tick := time.NewTicker(2 * time.Second)
