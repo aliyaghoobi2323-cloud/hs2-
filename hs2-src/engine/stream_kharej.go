@@ -54,7 +54,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			continue
 		}
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
-			sess, err := newSession(car.RawConn(), true)
+			sess, err := newSession(car.RawConn(), true, nil)
 			if err != nil {
 				car.Close()
 				return
