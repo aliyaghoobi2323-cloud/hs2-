@@ -126,6 +126,15 @@ func runCmd(args []string) {
 	must(err)
 	var fc fileConfig
 	must(json.Unmarshal(raw, &fc))
+	// A mistyped bind_local_ip used to be silently ignored, so traffic left from
+	// the server's default IP — on a multi-IP host possibly the filtered one — and
+	// the tunnel looked mysteriously dead. Refuse to start instead.
+	if fc.BindLocalIP != "" && net.ParseIP(fc.BindLocalIP) == nil {
+		log.Fatalf("config: bind_local_ip %q is not a valid IP address", fc.BindLocalIP)
+	}
+	if fc.BindLocalIP != "" {
+		log.Printf("egress: all tunnel connections will leave from %s", fc.BindLocalIP)
+	}
 
 	// The UDP/auto transports carry datagrams: keep the tunnel MTU small enough
 	// that a sealed, FEC-wrapped IP packet still fits a 1500-byte path without
@@ -313,9 +322,9 @@ func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
 	if dialing(fc) {
 		var d engine.CarrierDialer
 		if auto {
-			d = engine.NewAutoDialer(fc.Addr, shared, mtu, logf)
+			d = engine.NewAutoDialer(fc.Addr, fc.BindLocalIP, shared, mtu, logf)
 		} else {
-			d = engine.NewUDPDialer(fc.Addr, shared, mtu)
+			d = engine.NewUDPDialer(fc.Addr, fc.BindLocalIP, shared, mtu)
 		}
 		must(eng.RunDial(ctx, d))
 		return
@@ -334,7 +343,7 @@ func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
 func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 	local := core.StaticKey{Public: unhex(fc.LocalPub), Private: unhex(fc.LocalPriv)}
 	if dialing(fc) {
-		d := engine.NewNoiseDialer(fc.Addr, local, unhex(fc.RemoteStatic), unhex(fc.PSK))
+		d := engine.NewNoiseDialer(fc.Addr, fc.BindLocalIP, local, unhex(fc.RemoteStatic), unhex(fc.PSK))
 		must(eng.RunDial(ctx, d))
 		return
 	}

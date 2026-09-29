@@ -35,7 +35,7 @@ func TestAutoSelectsUDPWhenGood(t *testing.T) {
 	accCh := make(chan Carrier, 1)
 	go func() { c, _ := acceptOne(t, ln, 5*time.Second); accCh <- c }()
 
-	d := NewAutoDialer(addr, shared, 1200, t.Logf)
+	d := NewAutoDialer(addr, "", shared, 1200, t.Logf)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	car, err := d.Dial(ctx)
@@ -101,7 +101,7 @@ func TestAutoFallsBackToTCP(t *testing.T) {
 	accCh := make(chan Carrier, 1)
 	go func() { c, _ := acceptOne(t, tcpLn, 6*time.Second); accCh <- c }()
 
-	d := NewAutoDialer(addr, shared, 1200, t.Logf)
+	d := NewAutoDialer(addr, "", shared, 1200, t.Logf)
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	car, err := d.Dial(ctx)

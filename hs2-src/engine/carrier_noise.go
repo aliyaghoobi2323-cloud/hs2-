@@ -43,13 +43,14 @@ func (c *noiseCarrier) Close() error { return c.conn.Close() }
 // noiseDialer dials a raw TCP carrier and runs the Noise initiator handshake.
 type noiseDialer struct {
 	addr         string
+	bindIP       string // optional local source IP
 	local        core.StaticKey
 	remoteStatic []byte
 	psk          []byte
 }
 
 func (d *noiseDialer) Dial(ctx context.Context) (Carrier, error) {
-	sess, conn, err := dialCarrier(ctx, d.addr, d.local, d.remoteStatic, d.psk, 1)
+	sess, conn, err := dialCarrier(ctx, d.addr, d.bindIP, d.local, d.remoteStatic, d.psk, 1)
 	if err != nil {
 		return nil, err
 	}

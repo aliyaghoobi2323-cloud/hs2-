@@ -16,8 +16,9 @@ func NewRealityListener(addr, coverAddr string, sharedKey []byte, cert tls.Certi
 	return newRealityListener(addr, coverAddr, sharedKey, cert)
 }
 
-func NewNoiseDialer(addr string, local core.StaticKey, remoteStatic, psk []byte) CarrierDialer {
-	return &noiseDialer{addr: addr, local: local, remoteStatic: remoteStatic, psk: psk}
+// bindIP (optional) is the local source IP the carrier dials from.
+func NewNoiseDialer(addr, bindIP string, local core.StaticKey, remoteStatic, psk []byte) CarrierDialer {
+	return &noiseDialer{addr: addr, bindIP: bindIP, local: local, remoteStatic: remoteStatic, psk: psk}
 }
 
 func NewNoiseListener(addr string, local core.StaticKey, psk []byte) (CarrierListener, error) {
@@ -27,8 +28,8 @@ func NewNoiseListener(addr string, local core.StaticKey, psk []byte) (CarrierLis
 // UDP carrier (Noise + adaptive FEC over a datagram socket). Keys are derived
 // from the shared secret inside udpcarrier, so only the shared key is needed.
 
-func NewUDPDialer(addr string, shared []byte, mtu int) CarrierDialer {
-	return &udpDialer{addr: addr, shared: shared, mtu: mtu}
+func NewUDPDialer(addr, bindIP string, shared []byte, mtu int) CarrierDialer {
+	return &udpDialer{addr: addr, bindIP: bindIP, shared: shared, mtu: mtu}
 }
 
 func NewUDPListener(addr string, shared []byte, mtu int) (CarrierListener, error) {
@@ -39,8 +40,8 @@ func NewUDPListener(addr string, shared []byte, mtu int) (CarrierListener, error
 // loss, otherwise fall back to the TCP (noise) carrier — silently, without
 // dropping the engine's persistent TUN.
 
-func NewAutoDialer(addr string, shared []byte, mtu int, logf func(string, ...any)) CarrierDialer {
-	return &autoDialer{addr: addr, shared: shared, mtu: mtu, log: logf}
+func NewAutoDialer(addr, bindIP string, shared []byte, mtu int, logf func(string, ...any)) CarrierDialer {
+	return &autoDialer{addr: addr, bindIP: bindIP, shared: shared, mtu: mtu, log: logf}
 }
 
 func NewAutoListener(addr string, shared []byte, mtu int) (CarrierListener, error) {
