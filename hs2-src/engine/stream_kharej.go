@@ -67,16 +67,18 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 				}
 			}()
 			logf("link up from %s (now %d)", conn.RemoteAddr(), links.Add(1))
+			var downErr error
 			for {
 				st, err := sess.AcceptStream()
 				if err != nil {
+					downErr = err
 					break
 				}
 				go serveStream(ctx, st, cfg, l3, car)
 			}
 			sess.Close()
 			car.Close()
-			logf("link down from %s (now %d)", conn.RemoteAddr(), links.Add(-1))
+			logf("link down from %s: %v (now %d)", conn.RemoteAddr(), downErr, links.Add(-1))
 		})
 	}
 }

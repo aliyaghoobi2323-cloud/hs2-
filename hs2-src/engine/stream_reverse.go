@@ -104,9 +104,11 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 			}
 		}()
 		logf("reverse link up to edge (now %d)", links.Add(1))
+		var downErr error
 		for {
 			st, err := sess.AcceptStream()
 			if err != nil {
+				downErr = err
 				break
 			}
 			go serveStream(ctx, st, cfg, l3, car)
@@ -114,6 +116,6 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 		close(closed)
 		sess.Close()
 		car.Close()
-		logf("reverse link down (now %d); redial", links.Add(-1))
+		logf("reverse link down: %v (now %d); redial", downErr, links.Add(-1))
 	}
 }
