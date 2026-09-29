@@ -165,7 +165,7 @@ func TestNewSessionShapesAnyStreamCarrier(t *testing.T) {
 		if err != nil {
 			return
 		}
-		s, err := newSession(c, true, nil) // server end (like the exit/kharej)
+		s, err := newSession(c, true, nil, nil) // server end (like the exit/kharej)
 		if err != nil {
 			return
 		}
@@ -177,7 +177,7 @@ func TestNewSessionShapesAnyStreamCarrier(t *testing.T) {
 		t.Fatal(err)
 	}
 	cap := &captureConn{Conn: raw}
-	cli, err := newSession(cap, false, nil) // client end (like the edge/iran)
+	cli, err := newSession(cap, false, nil, nil) // client end (like the edge/iran)
 	if err != nil {
 		t.Fatal(err)
 	}

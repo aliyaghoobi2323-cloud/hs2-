@@ -120,6 +120,19 @@ func (c *Carrier) Close() error { return c.conn.Close() }
 // this is used, do not also call SendFrame/ReadFrame on the carrier.
 func (c *Carrier) RawConn() net.Conn { return c.conn }
 
+// TCPConn returns the underlying *net.TCPConn beneath TLS, or nil if it is not a
+// TCP socket. It lets the engine read kernel TCP stats (retransmits) for per-link
+// health without a second measurement path.
+func (c *Carrier) TCPConn() *net.TCPConn {
+	type netConner interface{ NetConn() net.Conn }
+	if nc, ok := c.conn.(netConner); ok {
+		if tc, ok := nc.NetConn().(*net.TCPConn); ok {
+			return tc
+		}
+	}
+	return nil
+}
+
 // SetReadDeadline lets the engine bound reads for keepalive/dead detection.
 func (c *Carrier) SetReadDeadline(t time.Time) { c.conn.SetReadDeadline(t) }
 

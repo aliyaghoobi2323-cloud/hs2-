@@ -23,7 +23,14 @@ type mtcpLink struct {
 	active  atomic.Int32
 	dead    atomic.Bool
 	sampler *obfs.LengthSampler
+	mtr     *linkMeter
 }
+
+func (l *mtcpLink) meter() *linkMeter { return l.mtr }
+
+// linkRetrans reports the link's kernel TCP retransmit counter, for loss-based
+// health. It reads TCP_INFO off the carrier's underlying socket (Linux).
+func (l *mtcpLink) linkRetrans() (uint64, bool) { return retransmits(l.tls.TCPConn()) }
 
 // healthProbe actively verifies the link. Every few seconds it opens a throwaway
 // smux stream and immediately closes it; if that fails, the underlying TLS/TCP
@@ -146,12 +153,13 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 // because the edge's smux role is the same either way — only who established the
 // TLS connection differs.
 func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLink, error) {
-	sess, err := newSession(car.RawConn(), false, sampler)
+	mtr := &linkMeter{}
+	sess, err := newSession(car.RawConn(), false, sampler, mtr)
 	if err != nil {
 		car.Close()
 		return nil, err
 	}
-	l := &mtcpLink{tls: car, sess: sess, sampler: sampler}
+	l := &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr}
 	go l.healthProbe(context.Background())
 	return l, nil
 }
