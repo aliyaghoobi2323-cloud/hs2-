@@ -148,23 +148,145 @@ encode_link(){ printf '%s' "$1" | base64 -w0; }
 decode_link(){ printf '%s' "$1" | base64 -d 2>/dev/null; }
 
 # ---------- certificate ------------------------------------------------------
-get_cert(){
-  local domain="$1"
-  command -v certbot >/dev/null 2>&1 || {
-    info "Installing certbot…"
-    apt-get install -y -q certbot >/dev/null 2>&1 || die "could not install certbot"
-  }
-  if [ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
-    info "Using existing certificate for $domain"
-  elif port_free 80; then
-    info "Getting Let's Encrypt certificate (standalone on port 80)…"
-    certbot certonly --standalone -d "$domain" --non-interactive --agree-tos \
-      --register-unsafely-without-email --deploy-hook "systemctl restart hs2" \
-      >/dev/null 2>&1 || die "certbot failed — check that $domain points here and port 80 is open."
+# The certificate always lives on whichever side is the TLS SERVER:
+#   direct : kharej is the TLS server -> cert on kharej
+#   reverse: iran   is the TLS server -> cert on iran
+# get_cert is therefore called from kharej_listener (direct) and from
+# iran_listener (reverse), always on the machine that terminates TLS.
+
+# resolve_a prints the A records a domain resolves to, one per line (best-effort
+# across the tools that might be present).
+resolve_a(){
+  local d="$1"
+  if command -v getent >/dev/null 2>&1; then
+    getent ahostsv4 "$d" 2>/dev/null | awk '{print $1}' | sort -u
+  elif command -v dig >/dev/null 2>&1; then
+    dig +short A "$d" 2>/dev/null
+  elif command -v host >/dev/null 2>&1; then
+    host -t A "$d" 2>/dev/null | awk '/has address/{print $NF}'
+  elif command -v nslookup >/dev/null 2>&1; then
+    nslookup -type=A "$d" 2>/dev/null | awk '/^Address: /{print $2}'
+  fi
+}
+
+# check_domain_ip warns (loudly, but does not abort) when the domain does not
+# resolve to the IP of the server that will terminate TLS. Getting this wrong is
+# the #1 reason HTTP-01 validation fails, so the user is told before certbot runs.
+check_domain_ip(){ # domain expected_ip
+  local d="$1" ip="$2" got
+  [ -n "$d" ] && [ "$d" != "-" ] || return 0
+  # `|| true`: an NXDOMAIN must warn, not abort the script under `set -e`.
+  got=$(resolve_a "$d" || true)
+  if [ -z "$got" ]; then
+    warn "$d does not resolve to any IP yet."
+    warn "For HTTP-01 (port 80) validation its A record must point to THIS server ($ip)."
+    return 0
+  fi
+  if printf '%s\n' "$got" | grep -qx "$ip"; then
+    ok "$d resolves to $ip (this server) — good."
   else
-    die "port 80 is busy and no existing cert for $domain. Free port 80 or place a cert at /etc/letsencrypt/live/$domain/."
+    warn "$d resolves to: $(printf '%s ' $got)"
+    warn "…which is NOT this server's IP ($ip)."
+    warn "HTTP-01 (port 80) validation will fail unless the A record points here."
+    warn "Fix the A record, or use DNS-01 / an existing certificate below."
+  fi
+}
+
+ensure_certbot(){
+  command -v certbot >/dev/null 2>&1 && return 0
+  info "Installing certbot…"
+  apt-get install -y -q certbot >/dev/null 2>&1 \
+    || die "could not install certbot. Install it manually, or re-run and choose 'existing certificate'."
+}
+
+# cert_standalone: Let's Encrypt HTTP-01 on port 80 (the classic path).
+cert_standalone(){ # domain
+  local domain="$1"
+  ensure_certbot
+  port_free 80 || die "port 80 is busy — free it, or re-run and choose DNS-01 / an existing certificate."
+  info "Getting Let's Encrypt certificate (standalone HTTP-01 on port 80)…"
+  if certbot certonly --standalone -d "$domain" --non-interactive --agree-tos \
+       --register-unsafely-without-email --deploy-hook "systemctl restart hs2" >/dev/null 2>&1; then
+    ok "Certificate obtained for $domain."
+  else
+    err "certbot HTTP-01 failed for $domain."
+    warn "Usual causes on an Iran server: inbound port 80 is filtered, the A record"
+    warn "does not point here, or a firewall blocks it."
+    warn "Re-run this setup and choose DNS-01 (no port 80) or 'existing certificate'."
+    die  "certificate not obtained."
   fi
   printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
+}
+
+# cert_dns01: Let's Encrypt DNS-01. Needs no inbound port 80 — ideal when the
+# Iran server's inbound 80 is filtered. certbot pauses and prints a TXT record
+# for the operator to add, so this prompt is interactive (reads from the tty).
+cert_dns01(){ # domain
+  local domain="$1"
+  ensure_certbot
+  echo >&2
+  info "DNS-01: certbot will print a _acme-challenge TXT record for $domain."
+  info "Add it at your DNS provider, wait ~1 min for it to propagate, then continue in certbot."
+  if certbot certonly --manual --preferred-challenges dns -d "$domain" --agree-tos \
+       --register-unsafely-without-email --deploy-hook "systemctl restart hs2" </dev/tty >&2; then
+    ok "Certificate obtained for $domain via DNS-01."
+  else
+    err "certbot DNS-01 did not complete for $domain."
+    warn "Obtain a certificate another way and re-run choosing 'existing certificate'."
+    die  "certificate not obtained."
+  fi
+  printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
+}
+
+# cert_existing: the user already has a cert/key pair (bought, wildcard, or from
+# another tool). We validate the files rather than fail silently at runtime.
+cert_existing(){ # domain
+  local domain="$1" c k
+  read -rp "Path to certificate (fullchain) PEM: " c </dev/tty
+  read -rp "Path to private key PEM: " k </dev/tty
+  [ -n "$c" ] && [ -f "$c" ] || die "certificate file not found: '$c'"
+  [ -n "$k" ] && [ -f "$k" ] || die "key file not found: '$k'"
+  if command -v openssl >/dev/null 2>&1; then
+    openssl x509 -in "$c" -noout >/dev/null 2>&1 || die "'$c' is not a valid PEM certificate."
+    openssl pkey -in "$k" -noout >/dev/null 2>&1 || warn "'$k' does not parse as a PEM key — double-check it."
+    # Best-effort: confirm the cert actually covers the domain the peer expects.
+    # openssl -checkhost always exits 0, so match on its output text instead.
+    if [ -n "$domain" ] && [ "$domain" != "-" ]; then
+      if openssl x509 -in "$c" -noout -checkhost "$domain" 2>/dev/null | grep -q "does match"; then
+        ok "Certificate covers $domain."
+      else
+        warn "Certificate does not appear to cover $domain — the peer's SNI must match its names, or TLS auth will fail."
+      fi
+    fi
+  fi
+  ok "Using existing certificate: $c"
+  printf '%s|%s' "$c" "$k"
+}
+
+# get_cert obtains a cert for THIS (TLS-server) side and prints "cert|key".
+# It first checks DNS, reuses an existing Let's Encrypt cert if present, and
+# otherwise offers HTTP-01 / DNS-01 / bring-your-own — so a filtered port 80 on
+# the Iran side never means a silent failure.
+get_cert(){ # domain expected_ip
+  local domain="$1" expip="${2:-}"
+  check_domain_ip "$domain" "$expip"
+  if [ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
+    info "Reusing existing Let's Encrypt certificate for $domain"
+    printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
+    return 0
+  fi
+  echo >&2
+  echo "  Certificate for $domain (this server terminates TLS):" >&2
+  echo "    1) Let's Encrypt — HTTP-01, standalone on port 80 (needs port 80 open + A record here)" >&2
+  echo "    2) Let's Encrypt — DNS-01, add a TXT record (no port 80 — best when inbound 80 is filtered)" >&2
+  echo "    3) I already have a certificate (give the file paths)" >&2
+  read -rp "Choose [1]: " CM </dev/tty
+  case "${CM:-1}" in
+    1) cert_standalone "$domain" ;;
+    2) cert_dns01 "$domain" ;;
+    3) cert_existing "$domain" ;;
+    *) die "invalid certificate choice" ;;
+  esac
 }
 
 # ---------- KHAREJ (foreign server) ------------------------------------------
@@ -264,7 +386,7 @@ kharej_listener(){
     read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
     case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
     local certpair CERT KEY
-    certpair=$(get_cert "$DOMAIN"); CERT=${certpair%%|*}; KEY=${certpair##*|}
+    certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
@@ -429,8 +551,11 @@ iran_listener(){
     case "${M:-1}" in 1) CARRIER=mtcp ;; 2) CARRIER=l3mtcp ;; 3) CARRIER=tls ;; *) die "invalid mode" ;; esac
     read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
     case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
+    # Reverse: THIS iran server is the TLS server, so the cert is obtained HERE
+    # (in direct it would be on the kharej). The kharej dials in and validates
+    # this domain as the TLS name, so it must match the cert.
     local certpair CERT KEY
-    certpair=$(get_cert "$DOMAIN"); CERT=${certpair%%|*}; KEY=${certpair##*|}
+    certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true, "udp": $UDP,
