@@ -4,6 +4,7 @@ import (
 	"context"
 	"math/rand/v2"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -25,6 +26,9 @@ type mtcpLink struct {
 	sampler *obfs.LengthSampler
 	mtr     *linkMeter
 	why     func() string // why the underlying connection failed, "" if it has not
+
+	flowMu sync.Mutex
+	flows  map[*countedStream]struct{} // open user streams, for activity sampling
 }
 
 func (l *mtcpLink) meter() *linkMeter { return l.mtr }
@@ -77,7 +81,37 @@ func (l *mtcpLink) OpenStream() (stream, error) {
 		return nil, err
 	}
 	l.active.Add(1)
-	return &countedStream{Stream: s, link: l}, nil
+	cs := &countedStream{Stream: s, link: l, lastActive: time.Now()}
+	l.flowMu.Lock()
+	if l.flows == nil {
+		l.flows = map[*countedStream]struct{}{}
+	}
+	l.flows[cs] = struct{}{}
+	l.flowMu.Unlock()
+	return cs, nil
+}
+
+// flowActivity reports how many of this link's user streams moved at least one
+// byte within window (active), how many are open (total), and the most recent
+// activity of any of them. It is called only from the pool's sampler goroutine,
+// which alone touches each stream's prev/lastActive bookkeeping; the data path
+// only does an atomic add per Read/Write.
+func (l *mtcpLink) flowActivity(now time.Time, window time.Duration) (active, total int, last time.Time) {
+	l.flowMu.Lock()
+	defer l.flowMu.Unlock()
+	for cs := range l.flows {
+		if b := cs.bytes.Load(); b != cs.prevBytes {
+			cs.prevBytes, cs.lastActive = b, now
+		}
+		total++
+		if now.Sub(cs.lastActive) <= window {
+			active++
+		}
+		if cs.lastActive.After(last) {
+			last = cs.lastActive
+		}
+	}
+	return active, total, last
 }
 
 // OpenRawStream opens a stream that is not counted as a user.
@@ -106,13 +140,37 @@ func (l *mtcpLink) Close() error {
 // so load-based assignment stays accurate.
 type countedStream struct {
 	*smux.Stream
-	link *mtcpLink
-	done atomic.Bool
+	link  *mtcpLink
+	done  atomic.Bool
+	bytes atomic.Uint64 // payload bytes moved either way (data path: atomic add only)
+
+	// sampler-only bookkeeping (see mtcpLink.flowActivity)
+	prevBytes  uint64
+	lastActive time.Time
+}
+
+func (c *countedStream) Read(p []byte) (int, error) {
+	n, err := c.Stream.Read(p)
+	if n > 0 {
+		c.bytes.Add(uint64(n))
+	}
+	return n, err
+}
+
+func (c *countedStream) Write(p []byte) (int, error) {
+	n, err := c.Stream.Write(p)
+	if n > 0 {
+		c.bytes.Add(uint64(n))
+	}
+	return n, err
 }
 
 func (c *countedStream) Close() error {
 	if c.done.CompareAndSwap(false, true) {
 		c.link.active.Add(-1)
+		c.link.flowMu.Lock()
+		delete(c.link.flows, c)
+		c.link.flowMu.Unlock()
 	}
 	return c.Stream.Close()
 }

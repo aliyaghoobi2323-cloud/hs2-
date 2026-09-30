@@ -37,6 +37,11 @@ const (
 	// taking, a per-connection cap biting. Kept above TCP_NOTSENT_LOWAT's own
 	// small backlog so an ordinary send does not read as pressure.
 	notsentPressBytes = 48 << 10
+	// blockedMin: a Write shorter than this is CPU work (copying/encrypting a
+	// 16 KiB frame takes microseconds), not a wait for the network; only longer
+	// waits count as the link being path-limited. Without this filter a writer
+	// that always has data reads as ~90% "blocked" even on an unlimited path.
+	blockedMin = time.Millisecond
 	// maxDrain bounds how long a degraded link is kept for its existing users
 	// before it is force-closed (they reconnect onto a healthy link).
 	maxDrain = 45 * time.Second
@@ -85,6 +90,14 @@ type linkMeter struct {
 	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
 	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
 	stalls  atomic.Uint64 // write errors / timeouts
+	// wrBlocked is the cumulative time the link's single smux writer spent
+	// waiting for the socket to accept data (only waits > blockedMin count).
+	// Divided by elapsed time it is the fraction of time the PATH, not the
+	// application, was the limit: with TCP_NOTSENT_LOWAT set, sendmsg waits once
+	// ~32 KiB is queued unsent, so a link whose network is not taking data
+	// shows ~100%, and one with spare capacity ~0% however busy it is. Measured
+	// on the loopback: unlimited path 0%, a 2 MB/s bottleneck 99.8%.
+	wrBlocked atomic.Int64 // nanoseconds
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
@@ -107,7 +120,11 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 }
 
 func (c *meteredConn) Write(p []byte) (int, error) {
+	t0 := time.Now()
 	n, err := c.Conn.Write(p)
+	if d := time.Since(t0); d > blockedMin {
+		c.m.wrBlocked.Add(int64(d))
+	}
 	if n > 0 {
 		c.m.wrBytes.Add(uint64(n))
 	}
