@@ -20,14 +20,3 @@ func localUDPAddr(bindIP string) (*net.UDPAddr, error) {
 	}
 	return &net.UDPAddr{IP: ip}, nil
 }
-
-// listenNetwork picks the socket family for a listen address. An IPv4 or empty
-// host gets a plain IPv4 socket ("udp4"): Go would otherwise open a dual-stack
-// IPv6 socket for a wildcard, on which IPv4 reply-source pinning (IP_PKTINFO)
-// does not apply. The tunnel's endpoints are IPv4.
-func listenNetwork(ua *net.UDPAddr) string {
-	if ua.IP == nil || ua.IP.To4() != nil {
-		return "udp4"
-	}
-	return "udp6"
-}
