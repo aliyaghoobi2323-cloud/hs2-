@@ -38,8 +38,13 @@ type fileConfig struct {
 	MTU       int    `json:"mtu"`
 
 	// Carrier selection
-	Carrier string `json:"carrier"` // "reality" or "noise"
+	Carrier string `json:"carrier"` // reality|noise|mtcp|l3mtcp|tls|udp|auto|dgtun
 	Addr    string `json:"addr"`    // dial target or listen bind
+
+	// Datagram tun (carrier "dgtun"): the encapsulation the carrier POOL rides
+	// on, and (ipx only) its IP protocol number. "" / "udp" is the default.
+	Encap string `json:"encap"`
+	Proto int    `json:"proto"`
 
 	// Direction. Direct (default): the edge (iran, mode=dial) initiates the
 	// connection to the exit (kharej, mode=listen). Reverse: the exit initiates
@@ -92,7 +97,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version", "-v", "--version":
-		fmt.Println("hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto; auth: tls-exporter bound, mutual)")
+		fmt.Println("hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)")
 	case "keygen":
 		k, err := core.GenerateStatic()
 		must(err)
@@ -176,7 +181,7 @@ func runCmd(args []string) {
 	// The UDP/auto transports carry datagrams: keep the tunnel MTU small enough
 	// that a sealed, FEC-wrapped IP packet still fits a 1500-byte path without
 	// fragmenting (MTU + udpcarrier.CarrierOverhead = 52 bytes, plus the encapsulation header).
-	if (fc.Carrier == "udp" || fc.Carrier == "auto") && fc.MTU == 0 {
+	if (fc.Carrier == "udp" || fc.Carrier == "auto" || fc.Carrier == "dgtun") && fc.MTU == 0 {
 		fc.MTU = 1280
 	}
 
@@ -228,6 +233,8 @@ func runCmd(args []string) {
 		runUDP(ctx, eng, fc, false)
 	case "auto": // probe UDP, else fall back to TCP (default transport)
 		runUDP(ctx, eng, fc, true)
+	case "dgtun": // routed TUN over a POOL of datagram carriers (any encap) + autopilot
+		runDgTun(ctx, fc)
 	default:
 		log.Fatalf("unknown carrier %q", fc.Carrier)
 	}
@@ -471,6 +478,80 @@ func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
 	}
 	must(err)
 	must(eng.RunListen(ctx, ln))
+}
+
+// runDgTun runs the gen-2 datagram TUN: a routed interface carried over a POOL
+// of datagram carriers (udpcarrier over the configured encapsulation), sized by
+// the same autopilot as the stream pool, with an optional userspace port
+// forwarder so user ports on the edge reach the panel over the tun. There is no
+// TCP inside the carrier — user connections ride as ordinary IP packets, so no
+// TCP-in-TCP.
+func runDgTun(ctx context.Context, fc fileConfig) {
+	shared := unhex(fc.SharedKey)
+	mtu := fc.MTU
+	if mtu == 0 {
+		mtu = 1280
+	}
+	logf := func(f string, a ...any) { log.Printf(f, a...) }
+	dev, err := tun.Open(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu)
+	must(err)
+	defer dev.Close()
+	logf("tun %s up: %s peer %s mtu %d (datagram pool, encap %s)", dev.Name(), fc.LocalCIDR, fc.PeerIP, mtu, encapName(fc))
+
+	ec := engine.EncapConfig{Kind: fc.Encap, BindIP: fc.BindLocalIP, Proto: fc.Proto}
+	min, max, per := linkEnvelope(fc)
+	edge := fc.Mode == "dial" // iran = edge (users), kharej = exit (panel)
+
+	cfg := engine.DgConfig{Dev: dev, Min: min, Max: max, PerLink: per, Reverse: fc.Reverse, Log: logf,
+		OnStart: func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) }}
+
+	// Who dials the carriers: direct = edge dials; reverse = exit dials.
+	if engineDialsTransport(fc) {
+		cfg.Dialer = engine.NewDgDialer(fc.Addr, ec, shared, mtu)
+	} else {
+		ln, err := engine.NewDgListener(fc.Addr, ec, shared, mtu)
+		must(err)
+		cfg.Listener = ln
+	}
+
+	// User-port forwarder (Backhaul-style [ports]): edge opens user ports and
+	// proxies to the peer's tun IP; exit opens the same ports on its tun IP and
+	// proxies to the panel. Both read forward_ports.
+	ports := splitComma(fc.ForwardPorts)
+	if len(ports) > 0 {
+		if edge {
+			must(engine.StartDgForwarders(ctx, true, ports, fc.UserListenIP, fc.PeerIP, "", "", fc.UDP, logf))
+		} else {
+			localIP := ipOfCIDR(fc.LocalCIDR)
+			must(engine.StartDgForwarders(ctx, false, ports, "", "", localIP, fc.Expose, fc.UDP, logf))
+		}
+	}
+
+	if edge {
+		must(engine.RunDgEdge(ctx, cfg))
+	} else {
+		must(engine.RunDgExit(ctx, cfg))
+	}
+}
+
+// engineDialsTransport reports whether THIS side dials the datagram carriers.
+// Direct: the edge (mode=dial) dials. Reverse: the exit (mode=listen) dials.
+func engineDialsTransport(fc fileConfig) bool { return (fc.Mode == "dial") != fc.Reverse }
+
+// encapName is the encapsulation label for logs ("udp" when unset).
+func encapName(fc fileConfig) string {
+	if fc.Encap == "" {
+		return "udp"
+	}
+	return fc.Encap
+}
+
+// ipOfCIDR returns the IP part of a CIDR ("10.77.0.2/30" -> "10.77.0.2").
+func ipOfCIDR(cidr string) string {
+	if i := strings.IndexByte(cidr, '/'); i >= 0 {
+		return cidr[:i]
+	}
+	return cidr
 }
 
 func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {

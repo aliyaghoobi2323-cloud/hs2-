@@ -498,11 +498,20 @@ type Stats struct {
 	RTProp       time.Duration
 	LossPPM      uint32
 	ParityRatio  float64
+	Startup      bool // the rate model is still ramping (no capacity estimate yet)
+}
+
+// Warm reports whether the carrier's rate model has a capacity estimate (it
+// has left startup), so a pool can tell path backpressure from a carrier that
+// is merely still ramping. Concurrency-safe.
+func (c *Conn) Warm() bool {
+	_, _, _, startup := c.rc.snapshot()
+	return !startup
 }
 
 func (c *Conn) Stats() Stats {
 	_, dropped, _ := c.pacer.stats()
-	bw, rtt, loss, _ := c.rc.snapshot()
+	bw, rtt, loss, startup := c.rc.snapshot()
 	var dec fec.DecoderStats
 	if sp := c.decStats.Load(); sp != nil {
 		dec = *sp
@@ -515,5 +524,6 @@ func (c *Conn) Stats() Stats {
 		RTProp:       time.Duration(rtt * float64(time.Second)),
 		LossPPM:      loss,
 		ParityRatio:  c.enc.ParityRatio(),
+		Startup:      startup,
 	}
 }
