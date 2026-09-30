@@ -171,6 +171,7 @@ def phase_adaptive():
         time.sleep(1)
     res("status JSON carries serving/reason/exit_stats (pool v2)",
         all(k in j for k in ('"serving"', '"reason"', '"exit_stats":"ok"')), j[:300])
+    st = sh("ir", "hs2 status -c /etc/hs2/config.json")
     res("hs2 status: explains the pattern (why: line)", "why:" in st, st.replace("\n", " | ")[:300])
     # drain_idle_sec is editable and validated.
     ok_set = sh("ir", "hs2 config -c /etc/hs2/config.json set drain_idle_sec 600 >/dev/null && hs2 config -c /etc/hs2/config.json get drain_idle_sec")

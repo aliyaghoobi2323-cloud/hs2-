@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"strings"
 	"sync"
 	"testing"
 )
@@ -212,5 +213,14 @@ func TestPickTiesByOpenConnections(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Fatal("a full tie always went to the same link (ties must be broken at random)")
+	}
+}
+
+// Before the pool's first decision (the direct edge is still dialing its
+// warm links) the monitor still says what is happening.
+func TestStatsReasonBeforeFirstTick(t *testing.T) {
+	m := NewLinkManager(nil, 2, 32, 8, nil)
+	if r := m.Stats().Reason; !strings.Contains(r, "starting") {
+		t.Fatalf("reason before the first tick: %q", r)
 	}
 }

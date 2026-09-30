@@ -1383,7 +1383,8 @@ func (m *LinkManager) publishStats() {
 // Stats returns a snapshot of the pool for monitoring: the counts are read
 // live, the measurements come from the last pool tick.
 func (m *LinkManager) Stats() PoolStats {
-	st := PoolStats{Min: m.min, Max: m.max, Phase: apSteady.String()}
+	st := PoolStats{Min: m.min, Max: m.max, Phase: apSteady.String(),
+		Reason: fmt.Sprintf("starting — bringing up the first %d links", warmSize(m.min, m.max))}
 	if p := m.stats.Load(); p != nil {
 		st = *p
 	}
