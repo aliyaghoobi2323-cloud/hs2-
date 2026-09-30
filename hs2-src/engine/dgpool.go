@@ -835,6 +835,12 @@ func RunDgEdge(ctx context.Context, cfg DgConfig) error {
 	}
 	pp := p
 	poolProbe.Store(&pp)
+	if cfg.Listener != nil {
+		// Closed HERE, before this returns: closing releases what the listener
+		// holds in the kernel (the icmp reply rule), and once Run returns the
+		// process may exit at once — a close left to a goroutine never ran.
+		defer cfg.Listener.Close()
+	}
 	if cfg.OnStart != nil {
 		cfg.OnStart(p.Stats)
 	}
@@ -867,6 +873,9 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 		logf = func(string, ...any) {}
 	}
 	p := newDgPool(cfg.Dev, cfg.Min, cfg.Max, cfg.PerLink, logf)
+	if cfg.Listener != nil {
+		defer cfg.Listener.Close() // before returning: see RunDgEdge
+	}
 	if cfg.OnStart != nil {
 		cfg.OnStart(p.Stats)
 	}

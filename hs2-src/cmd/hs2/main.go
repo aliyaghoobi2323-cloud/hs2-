@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tun"
@@ -112,6 +113,8 @@ func main() {
 		tuneCmd(os.Args[2:])
 	case "config":
 		configCmd(os.Args[2:])
+	case "cleanup":
+		cleanupCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)
@@ -144,6 +147,9 @@ func applyTuning() {
 }
 
 func runCmd(args []string) {
+	// Whatever path runCmd leaves by, no icmp reply rule outlives the daemon
+	// (the listeners release theirs on close; this catches the rest).
+	defer encap.ReleaseAllEchoGuards()
 	applyTuning()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
@@ -197,6 +203,7 @@ func runCmd(args []string) {
 	go func() {
 		<-ctx.Done()
 		time.Sleep(3 * time.Second)
+		encap.ReleaseAllEchoGuards() // os.Exit skips defers
 		os.Exit(0)
 	}()
 
@@ -634,6 +641,7 @@ func splitComma(s string) []string {
 func unhex(s string) []byte { b, _ := hex.DecodeString(s); return b }
 func must(err error) {
 	if err != nil {
+		encap.ReleaseAllEchoGuards() // log.Fatal exits without running defers
 		log.Fatal(err)
 	}
 }

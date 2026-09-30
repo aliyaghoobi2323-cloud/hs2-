@@ -130,10 +130,106 @@ func guardRuleLeft(method string, magic uint16) string {
 	case "iptables":
 		out, _ := exec.Command("iptables", "-w", "-S", "OUTPUT").CombinedOutput()
 		for _, l := range strings.Split(string(out), "\n") {
-			if strings.Contains(l, fmt.Sprintf("hs2-icmp-%04x", magic)) {
+			if strings.Contains(l, iptGuardTag(magic)) {
 				return strings.TrimSpace(l)
 			}
 		}
 	}
 	return ""
+}
+
+// The sweep removes rules whose owner is gone — a daemon SIGKILLed or crashed
+// before its listener closed — and nothing else: a rule of a live hs2 (another
+// tunnel) stays, and a PID-less rule from an older binary stays unless the
+// caller says no older binary can own it (legacy).
+func TestSweepStaleEchoGuards(t *testing.T) {
+	needRawNetns(t)
+	for _, tool := range []string{"nft", "iptables"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s not installed", tool)
+		}
+	}
+	// a PID that is certainly dead: a child that has exited and been reaped
+	c := exec.Command("true")
+	if err := c.Run(); err != nil {
+		t.Fatal(err)
+	}
+	dead := c.Process.Pid
+	self := os.Getpid()
+	nftAdd := func(name string) {
+		if out, err := exec.Command("nft", "add", "table", "inet", name).CombinedOutput(); err != nil {
+			t.Fatalf("nft add %s: %v %s", name, err, out)
+		}
+	}
+	iptAdd := func(tag string, magic uint16) {
+		if out, err := exec.Command("iptables", iptGuardArgsTag("-I", magic, tag)...).CombinedOutput(); err != nil {
+			t.Fatalf("iptables add %s: %v %s", tag, err, out)
+		}
+	}
+	nftAdd(fmt.Sprintf("hs2_icmp_aa01_%d", dead))
+	nftAdd(fmt.Sprintf("hs2_icmp_aa02_%d", self))
+	nftAdd("hs2_icmp_aa03")
+	nftAdd("unrelated_table")
+	iptAdd(fmt.Sprintf("hs2-icmp-bb01-%d", dead), 0xbb01)
+	iptAdd(fmt.Sprintf("hs2-icmp-bb02-%d", self), 0xbb02)
+	iptAdd("hs2-icmp-bb03", 0xbb03)
+	defer func() {
+		for _, n := range []string{"hs2_icmp_aa02_" + fmt.Sprint(self), "hs2_icmp_aa03", "unrelated_table"} {
+			exec.Command("nft", "delete", "table", "inet", n).Run()
+		}
+		exec.Command("iptables", iptGuardArgsTag("-D", 0xbb02, fmt.Sprintf("hs2-icmp-bb02-%d", self))...).Run()
+		exec.Command("iptables", iptGuardArgsTag("-D", 0xbb03, "hs2-icmp-bb03")...).Run()
+	}()
+	has := func() string {
+		a, _ := exec.Command("nft", "list", "tables").CombinedOutput()
+		b, _ := exec.Command("iptables", "-w", "-S", "OUTPUT").CombinedOutput()
+		return string(a) + string(b)
+	}
+
+	got := SweepStaleEchoGuards(false)
+	h := has()
+	if len(got) != 2 || strings.Contains(h, fmt.Sprintf("aa01_%d", dead)) || strings.Contains(h, fmt.Sprintf("bb01-%d", dead)) {
+		t.Fatalf("dead owner's rules not both removed: removed=%v\n%s", got, h)
+	}
+	for _, keep := range []string{fmt.Sprintf("aa02_%d", self), "hs2_icmp_aa03", "unrelated_table", fmt.Sprintf("bb02-%d", self), "hs2-icmp-bb03"} {
+		if !strings.Contains(h, keep) {
+			t.Fatalf("sweep removed %s, which it must keep\n%s", keep, h)
+		}
+	}
+	got = SweepStaleEchoGuards(true)
+	h = has()
+	if len(got) != 2 || strings.Contains(h, "hs2_icmp_aa03") || strings.Contains(h, "hs2-icmp-bb03") {
+		t.Fatalf("legacy sweep did not remove the PID-less rules: removed=%v\n%s", got, h)
+	}
+	if !strings.Contains(h, fmt.Sprintf("aa02_%d", self)) || !strings.Contains(h, "unrelated_table") {
+		t.Fatalf("legacy sweep removed a live or foreign rule\n%s", h)
+	}
+}
+
+// A daemon that died with the global fallback on (icmp_echo_ignore_all=1)
+// leaves a marker; the next sweep in the same namespace turns ping replies
+// back on — unless a live daemon still holds the setting.
+func TestSweepRestoresGlobalEchoIgnore(t *testing.T) {
+	needRawNetns(t)
+	dir := t.TempDir()
+	defer func(d string) { echoMarkDir = d }(echoMarkDir)
+	echoMarkDir = dir
+	c := exec.Command("true")
+	if err := c.Run(); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(echoIgnorePath, []byte("1\n"), 0o644)
+	defer os.WriteFile(echoIgnorePath, []byte("0\n"), 0o644)
+	os.WriteFile(fmt.Sprintf("%s/%d.%s", dir, os.Getpid(), netnsID()), nil, 0o644) // live (us)
+	os.WriteFile(fmt.Sprintf("%s/%d.%s", dir, c.Process.Pid, netnsID()), nil, 0o644)
+	SweepStaleEchoGuards(false)
+	if !EchoIgnored() {
+		t.Fatal("ping replies turned on while a live daemon still holds the setting")
+	}
+	os.Remove(fmt.Sprintf("%s/%d.%s", dir, os.Getpid(), netnsID()))
+	os.WriteFile(fmt.Sprintf("%s/%d.%s", dir, c.Process.Pid, netnsID()), nil, 0o644)
+	SweepStaleEchoGuards(false)
+	if EchoIgnored() {
+		t.Fatal("a dead daemon's icmp_echo_ignore_all=1 was not undone")
+	}
 }

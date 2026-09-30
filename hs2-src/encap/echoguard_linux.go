@@ -7,6 +7,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -27,6 +29,11 @@ import (
 // first (a private table, removed as a whole on close), then iptables with the
 // u32 match; only when neither works does it fall back to the global sysctl,
 // with a log line saying so. HS2_ICMP_SUPPRESS=nft|iptables|global forces one.
+//
+// Every rule is named after its magic AND the owning process's PID
+// (hs2_icmp_<magic>_<pid>), so a later daemon — or `hs2 cleanup` — can remove
+// the rules of a daemon that died without cleaning up (SIGKILL, OOM, a power
+// cut) without ever touching those of another tunnel that is still running.
 
 type echoGuard struct {
 	refs    int
@@ -83,7 +90,27 @@ func echoGuardMethod(magic uint16) string {
 	return ""
 }
 
+// ReleaseAllEchoGuards removes every reply suppression this process holds,
+// whatever its refcount. The daemon calls it on the way out (also on the
+// forced-exit path), so no rule outlives its process.
+func ReleaseAllEchoGuards() {
+	guardMu.Lock()
+	defer guardMu.Unlock()
+	for m, g := range guards {
+		g.release()
+		delete(guards, m)
+	}
+}
+
+var sweepOnce sync.Once
+
 func installEchoGuard(magic uint16) (method string, release func(), err error) {
+	// First install in this process: clear what dead daemons left behind.
+	sweepOnce.Do(func() {
+		for _, r := range SweepStaleEchoGuards(false) {
+			log.Printf("encap icmp: removed a stale reply rule left by a stopped daemon: %s", r)
+		}
+	})
 	want := strings.ToLower(strings.TrimSpace(os.Getenv("HS2_ICMP_SUPPRESS")))
 	try := []string{"nft", "iptables", "global"}
 	switch want {
@@ -106,14 +133,14 @@ func installEchoGuard(magic uint16) (method string, release func(), err error) {
 				errs = append(errs, "iptables: "+err.Error())
 			}
 		case "global":
-			if err := acquireEchoIgnore(); err != nil {
+			if err := acquireEchoIgnoreMarked(); err != nil {
 				errs = append(errs, err.Error())
 				return "", nil, fmt.Errorf("encap icmp: cannot stop the kernel answering the tunnel's echo requests (%s)", strings.Join(errs, "; "))
 			}
 			if len(try) > 1 {
 				log.Printf("encap icmp: neither nft nor iptables worked (%s) — turned off ALL ping replies on this server while the tunnel runs (net.ipv4.icmp_echo_ignore_all=1); install nftables to keep normal ping working", strings.Join(errs, "; "))
 			}
-			return "global", releaseEchoIgnore, nil
+			return "global", releaseEchoIgnoreMarked, nil
 		}
 	}
 	return "", nil, fmt.Errorf("encap icmp: cannot stop the kernel answering the tunnel's echo requests (%s)", strings.Join(errs, "; "))
@@ -121,7 +148,7 @@ func installEchoGuard(magic uint16) (method string, release func(), err error) {
 
 // ---- nft ---------------------------------------------------------------------
 
-func nftGuardTable(magic uint16) string { return fmt.Sprintf("hs2_icmp_%04x", magic) }
+func nftGuardTable(magic uint16) string { return fmt.Sprintf("hs2_icmp_%04x_%d", magic, os.Getpid()) }
 
 // nftGuardInstall (re)creates a private table whose output chain drops echo
 // replies with magic at ICMP offset 8 (@th,64,16). Declaring then deleting the
@@ -149,13 +176,19 @@ func nftGuardRemove(magic uint16) {
 
 // ---- iptables ----------------------------------------------------------------
 
+func iptGuardTag(magic uint16) string { return fmt.Sprintf("hs2-icmp-%04x-%d", magic, os.Getpid()) }
+
 // iptGuardArgs is the rule spec (after the -I/-D verb): an echo reply whose ICMP
 // bytes 8..9 are magic. u32: 0>>22&0x3C = IP header length, @8 moves to ICMP
 // offset 8, >>16 keeps its first two bytes.
 func iptGuardArgs(verb string, magic uint16) []string {
+	return iptGuardArgsTag(verb, magic, iptGuardTag(magic))
+}
+
+func iptGuardArgsTag(verb string, magic uint16, tag string) []string {
 	return []string{"-w", verb, "OUTPUT", "-p", "icmp", "--icmp-type", "echo-reply",
 		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@8>>16=0x%04x", magic),
-		"-m", "comment", "--comment", fmt.Sprintf("hs2-icmp-%04x", magic), "-j", "DROP"}
+		"-m", "comment", "--comment", tag, "-j", "DROP"}
 }
 
 func iptGuardInstall(magic uint16) error {
@@ -175,4 +208,169 @@ func iptGuardRemove(magic uint16) {
 			return
 		}
 	}
+}
+
+// ---- stale rules ---------------------------------------------------------------
+
+// ownerAlive: pid is a running hs2 daemon. A recycled PID that belongs to
+// something else does not keep a rule alive.
+func ownerAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	return pid == os.Getpid() || IsHs2Daemon(pid)
+}
+
+// IsHs2Daemon: pid runs `hs2… run …` — an hs2 binary (whatever its file is
+// called: hs2, or a lab build) in daemon mode.
+func IsHs2Daemon(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/cmdline", pid))
+	if err != nil {
+		return false
+	}
+	args := strings.Split(strings.TrimRight(string(b), "\x00"), "\x00")
+	return len(args) >= 2 && strings.HasPrefix(filepath.Base(args[0]), "hs2") && args[1] == "run"
+}
+
+// parseGuardName splits hs2_icmp_<magic>[_<pid>] / hs2-icmp-<magic>[-<pid>]
+// (sep '_' or '-'). pid 0 = a PID-less name from an older binary.
+func parseGuardName(name, prefix string, sep byte) (magic uint16, pid int, ok bool) {
+	rest, found := strings.CutPrefix(name, prefix)
+	if !found {
+		return 0, 0, false
+	}
+	mh, ph, hasPid := strings.Cut(rest, string(sep))
+	m, err := strconv.ParseUint(mh, 16, 16)
+	if err != nil || len(mh) != 4 {
+		return 0, 0, false
+	}
+	if !hasPid {
+		return uint16(m), 0, true
+	}
+	p, err := strconv.Atoi(ph)
+	if err != nil || p <= 0 {
+		return 0, 0, false
+	}
+	return uint16(m), p, true
+}
+
+// SweepStaleEchoGuards removes the reply-suppression rules whose owner is
+// gone — the nft tables and iptables rules named after a PID that is no longer
+// a running hs2 — and returns what it removed. It never touches a rule whose
+// owner still runs (another tunnel on this server). legacy also removes the
+// PID-less names older binaries used; pass it only when no older hs2 binary can
+// still be running (`hs2 cleanup` checks that). It also undoes the global
+// icmp_echo_ignore_all fallback of a dead daemon when no live one needs it.
+func SweepStaleEchoGuards(legacy bool) []string {
+	var removed []string
+	stale := func(pid int) bool { return (pid == 0 && legacy) || (pid != 0 && !ownerAlive(pid)) }
+	if _, err := exec.LookPath("nft"); err == nil {
+		out, _ := exec.Command("nft", "list", "tables", "inet").CombinedOutput()
+		for _, ln := range strings.Split(string(out), "\n") {
+			f := strings.Fields(ln)
+			if len(f) != 3 || f[0] != "table" {
+				continue
+			}
+			if _, pid, ok := parseGuardName(f[2], "hs2_icmp_", '_'); ok && stale(pid) {
+				if exec.Command("nft", "delete", "table", "inet", f[2]).Run() == nil {
+					removed = append(removed, "nft table "+f[2])
+				}
+			}
+		}
+	}
+	if _, err := exec.LookPath("iptables"); err == nil {
+		out, _ := exec.Command("iptables", "-w", "-S", "OUTPUT").CombinedOutput()
+		for _, ln := range strings.Split(string(out), "\n") {
+			f := strings.Fields(ln)
+			for i := 0; i+1 < len(f); i++ {
+				if f[i] != "--comment" {
+					continue
+				}
+				tag := strings.Trim(f[i+1], `"`)
+				if magic, pid, ok := parseGuardName(tag, "hs2-icmp-", '-'); ok && stale(pid) {
+					if exec.Command("iptables", iptGuardArgsTag("-D", magic, tag)...).Run() == nil {
+						removed = append(removed, "iptables rule "+tag)
+					}
+				}
+			}
+		}
+	}
+	if sweepEchoIgnoreMarkers() {
+		removed = append(removed, "net.ipv4.icmp_echo_ignore_all back to 0 (a stopped daemon had turned it on)")
+	}
+	return removed
+}
+
+// ---- the global fallback, crash-safe ---------------------------------------------
+
+// echoMarkDir holds one marker per daemon that turned icmp_echo_ignore_all on
+// (the fallback when neither nft nor iptables works), named <pid>.<netns>. A
+// daemon that dies with it on leaves its marker behind, and the next sweep in
+// the same network namespace turns ping replies back on once no live daemon
+// there holds one.
+var echoMarkDir = "/run/hs2/icmp-echo-ignore"
+
+func netnsID() string {
+	l, err := os.Readlink("/proc/self/ns/net")
+	if err != nil {
+		return "0"
+	}
+	return strings.Trim(strings.TrimPrefix(l, "net:"), "[]")
+}
+
+func echoMarkPath() string {
+	return filepath.Join(echoMarkDir, fmt.Sprintf("%d.%s", os.Getpid(), netnsID()))
+}
+
+func acquireEchoIgnoreMarked() error {
+	if err := acquireEchoIgnore(); err != nil {
+		return err
+	}
+	echoMu.Lock()
+	weSet := echoWeSet
+	echoMu.Unlock()
+	if weSet {
+		_ = os.MkdirAll(echoMarkDir, 0o755)
+		_ = os.WriteFile(echoMarkPath(), nil, 0o644)
+	}
+	return nil
+}
+
+func releaseEchoIgnoreMarked() {
+	releaseEchoIgnore()
+	echoMu.Lock()
+	refs := echoRefs
+	echoMu.Unlock()
+	if refs == 0 {
+		_ = os.Remove(echoMarkPath())
+	}
+}
+
+// sweepEchoIgnoreMarkers removes this namespace's markers of dead daemons; if
+// there was one and no live daemon here still holds the setting, ping replies
+// are turned back on. Reports whether it turned them on.
+func sweepEchoIgnoreMarkers() bool {
+	ents, err := os.ReadDir(echoMarkDir)
+	if err != nil {
+		return false
+	}
+	ns := netnsID()
+	dead, live := 0, 0
+	for _, e := range ents {
+		pidS, nsS, ok := strings.Cut(e.Name(), ".")
+		if !ok || nsS != ns {
+			continue
+		}
+		pid, _ := strconv.Atoi(pidS)
+		if ownerAlive(pid) {
+			live++
+			continue
+		}
+		dead++
+		_ = os.Remove(filepath.Join(echoMarkDir, e.Name()))
+	}
+	if dead > 0 && live == 0 && EchoIgnored() {
+		return os.WriteFile(echoIgnorePath, []byte("0\n"), 0o644) == nil
+	}
+	return false
 }

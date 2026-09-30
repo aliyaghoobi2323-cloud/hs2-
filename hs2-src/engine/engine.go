@@ -89,6 +89,9 @@ func (e *Engine) RunListen(ctx context.Context, ln CarrierListener) error {
 		return err
 	}
 	defer e.dev.Close()
+	// Closed before this returns (not only from the goroutine that unblocks
+	// Accept): the process may exit as soon as RunListen returns.
+	defer ln.Close()
 	go e.tunToCarrier(ctx)
 	go func() { <-ctx.Done(); ln.Close() }()
 
