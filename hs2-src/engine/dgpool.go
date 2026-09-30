@@ -248,6 +248,10 @@ type dgPool struct {
 	// gov watches the pool as a whole for a policer on the path to the peer
 	// (all carriers share its IP) and caps the pool's total send rate.
 	gov *udpcarrier.Governor
+
+	fecCeilLogged bool   // "FEC at its ceiling" was logged and not yet cleared
+	fecCeilRun    int    // consecutive samples at (+) / below (-) the ceiling
+	phaseLabel    string // fixed phase for the snapshot (the direct exit: "listening")
 }
 
 func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) *dgPool {
@@ -723,8 +727,75 @@ func (p *dgPool) publishStats(s apSample) {
 		Users: s.open, Flowing: s.flowing, Phase: p.dec.phase.String(),
 		Reason: p.dec.reason, MbitPerS: mbitps(s.G),
 	}
+	if p.phaseLabel != "" {
+		ps.Phase = p.phaseLabel
+	}
+	p.carrierStats(&ps)
 	p.stats.Store(&ps)
 }
+
+// carrierStats fills the datagram fields of the snapshot from the live
+// carriers and the governor, and logs FEC reaching / leaving its ceiling.
+func (p *dgPool) carrierStats(ps *PoolStats) {
+	type statser interface{ Stats() udpcarrier.Stats }
+	ps.Datagram = true
+	var parSum float64
+	active := 0
+	p.mu.RLock()
+	for _, l := range p.set {
+		if !l.alive() {
+			continue
+		}
+		c, ok := l.car.(statser)
+		if !ok {
+			continue
+		}
+		st := c.Stats()
+		ps.FECRecovered += st.Dec.Recovered
+		ps.FECLost += st.Dec.Lost
+		ps.PacerDropped += st.PacerDropped
+		ps.RxDropped += st.RxDropped
+		if l.rate < 1000 { // idle carriers say nothing about the path
+			continue
+		}
+		active++
+		parSum += st.ParityRatio
+		if st.FECAtCeiling {
+			ps.FECAtCeiling++
+		}
+		if lp := float64(st.LossPPM) / 1e4; lp > ps.MaxLossPct {
+			ps.MaxLossPct = lp
+		}
+	}
+	p.mu.RUnlock()
+	if active > 0 {
+		ps.ParityPct = round1f(parSum / float64(active) * 100)
+	}
+	ps.MaxLossPct = round1f(ps.MaxLossPct)
+	if _, loss := p.gov.Last(); loss > 0 {
+		ps.LossPct = round1f(loss * 100)
+	}
+	ps.TunDrops = p.drops.Load()
+	ps.Policed = p.gov.Capped()
+	ps.PoliceCapMbit = round1f(mbitps(p.gov.CapBytes()))
+	// Hysteresis: at the ceiling for 2 samples in a row to say so, clear of it
+	// for 5 to take it back — a bursty path would otherwise flap the log.
+	if ps.FECAtCeiling > 0 {
+		p.fecCeilRun = max(p.fecCeilRun, 0) + 1
+	} else {
+		p.fecCeilRun = min(p.fecCeilRun, 0) - 1
+	}
+	switch {
+	case p.fecCeilRun >= 2 && !p.fecCeilLogged:
+		p.fecCeilLogged = true
+		p.log("dg: FEC at its ceiling on %d of %d carriers (parity %.0f%% of data) — loss %.1f%% (worst carrier %.1f%%) is more than it is sized to repair", ps.FECAtCeiling, active, ps.ParityPct, ps.LossPct, ps.MaxLossPct)
+	case p.fecCeilRun <= -5 && p.fecCeilLogged:
+		p.fecCeilLogged = false
+		p.log("dg: FEC below its ceiling again (parity %.0f%% of data)", ps.ParityPct)
+	}
+}
+
+func round1f(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
 
 // Stats returns the last published snapshot.
 func (p *dgPool) Stats() PoolStats {
@@ -900,9 +971,21 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 			return nil
 		}
 		go p.acceptLoop(ctx, cfg.Listener)
-		<-ctx.Done()
-		p.closeAll()
-		return nil
+		// no sizing here, but the live snapshot (links, loss, parity, policer)
+		// is this side's: it sends the downloads
+		p.phaseLabel = "listening"
+		t := time.NewTicker(healthTick)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				p.closeAll()
+				return nil
+			case <-t.C:
+				s := p.sampleHealth()
+				p.publishStats(s)
+			}
+		}
 	}
 	// Reverse exit: dial to match the edge's target (learned via pool control).
 	p.dialer = cfg.Dialer

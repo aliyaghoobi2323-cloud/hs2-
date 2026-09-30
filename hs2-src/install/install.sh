@@ -970,6 +970,8 @@ ask_tun_tls_mode(){
   echo "  TLS mode for the tun:" >&2
   echo "    1) mtcp + tun — the mtcp multi-link pool (2–32 TLS links) + a tun interface (recommended, fastest)" >&2
   echo "    2) tls  + tun — one TLS link + a tun interface (fewer connections, but far slower where each connection is throttled)" >&2
+  echo "    (Users' traffic rides the user ports. The tun here is a side channel for ping and light" >&2
+  echo "     traffic, not for bulk — for bulk over a routed tun choose tun → udp or icmp.)" >&2
   read -rp "Choose [1]: " M </dev/tty
   case "${M:-1}" in 1) CARRIER=l3mtcp ;; 2) CARRIER=tls ;; *) die "invalid mode" ;; esac
 }
@@ -1928,6 +1930,27 @@ tm_list(){
   done
   TM_UNITS=("${units[@]}")
 }
+# tm_health_lines SF: loss / FEC / policer / drops / CPU from a fresh status
+# file (datagram tunnels report loss of what THIS side sends, as its peer sees it).
+tm_health_lines(){ # status file
+  local sf="$1" car loss mloss par ceil rec lost pol pcap pd rd td cpu cores
+  status_fresh "$sf" || return 0
+  car=$(jget "$sf" carrier); pol=$(jraw "$sf" policed)
+  loss=$(jraw "$sf" loss_pct); mloss=$(jraw "$sf" max_loss_pct); par=$(jraw "$sf" parity_pct)
+  ceil=$(jraw "$sf" fec_at_ceiling); rec=$(jraw "$sf" fec_recovered); lost=$(jraw "$sf" fec_lost)
+  pcap=$(jraw "$sf" police_cap_mbit); pd=$(jraw "$sf" pacer_dropped); rd=$(jraw "$sf" rx_dropped); td=$(jraw "$sf" tun_drops)
+  cpu=$(jraw "$sf" cpu_pct); cores=$(jraw "$sf" cpu_cores)
+  case "$car" in dgtun*)
+    say " Loss:        ${loss:-0}% of what this side sends (worst carrier ${mloss:-0}%)"
+    say " FEC:         parity ${par:-0}% of data$([ -n "$ceil" ] && echo " · ${C_Y}at its ceiling on $ceil carrier(s)${C_0}") · received ${rec:-0} rebuilt, ${lost:-0} lost"
+    [ "$pol" = true ] && say " Policer:     ${C_Y}detected on the path${C_0} — whole pool capped at ${pcap} Mbit/s (re-probes slowly)"
+    [ -n "$pd$rd$td" ] && say " Drops:       pacer ${pd:-0} · receive queue ${rd:-0} · tunnel queue ${td:-0}"
+    ;;
+  esac
+  [ -n "$cores" ] && say " CPU:         ${cpu:-0}% of one core ($cores core(s))"
+  return 0
+}
+
 tm_endpoint(){
   local addr; addr=$(jget "$1" addr)
   if tm_dials "$1"; then echo "connects to $addr"; else echo "listens on $addr"; fi
@@ -1959,6 +1982,7 @@ tm_details(){
     pat=$(tm_pattern "$cfg")
     [ -n "$pat" ] && say " Pattern:     $pat"
     sf=$(status_path "$cfg")
+    tm_health_lines "$sf"
     if status_fresh "$sf"; then
       cd=$(jraw "$sf" cert_days)
       if [ -n "$cd" ] && [ "$cd" != -1 ]; then
@@ -2034,6 +2058,7 @@ tm_monitor(){
       [ -n "$mbit" ] && [ "$mbit" != 0 ] && say " Speed:   ${mbit} Mbit/s (tunnel goodput)"
       local peers; peers=$(tm_peers "$cfg")
       [ -n "$peers" ] && say " Peer:    $peers"
+      tm_health_lines "$sf"
     else
       say " Waiting for live status… (needs the new binary; older tunnels show links only)"
       local links; links=$(tm_links "$cfg")

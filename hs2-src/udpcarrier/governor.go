@@ -18,11 +18,15 @@ import (
 // eight icmp carriers pushing ~1.8x the policer's rate, most of it parity, and
 // a drop episode every few seconds).
 //
-// So the pool watches the pattern a policer leaves: loss episodes that hit
-// most carriers at once with no queue standing (a full buffer would show a
-// queue first; random loss is spread in time and over carriers). Two such
-// episodes within govDetectWindow cap the WHOLE pool at govCapFrac of the rate
-// it was sending cleanly before them, enforced by one token bucket every
+// So the pool watches the pattern a policer leaves: loss episodes — far above
+// the pool's usual loss (the median over the last 30 s), so steady random loss
+// never counts however high it is — that hit most carriers at once with no
+// queue standing (a full buffer would show a queue first). Two such
+// episodes within govDetectWindow cap the WHOLE pool at govCapFrac of what got
+// THROUGH on average over that window (rate x (1 - loss), episodes included:
+// a policer's long-run pass rate — not the rate before the episodes, which a
+// policer with an allowance lets through at line rate for a while), enforced
+// by one token bucket every
 // carrier's pacer draws from — data and parity alike, so parity counts
 // against the budget. More episodes under the cap lower it; a clean spell
 // while the cap is the limit raises it slowly (re-probe). If episodes go on
@@ -87,8 +91,11 @@ type govTick struct {
 
 const (
 	govTickEvery     = 500 * time.Millisecond
-	govHist          = 60 // ticks kept (30 s)
-	govBurstLoss     = 0.05
+	govHist          = 60   // ticks kept (30 s)
+	govBurstLoss     = 0.05 // an episode tick loses at least this much…
+	govBurstOverMed  = 3.0  // …and at least this many times the usual (median) loss…
+	govBurstOverAdd  = 0.03 // …plus this
+	govMinHist       = 10   // active ticks of history before anything is called an episode
 	govCarrierLossy  = 0.02
 	govSimultaneous  = 0.6
 	govActiveRate    = 20_000 // bytes/s: a carrier below this is idle for detection
@@ -98,7 +105,7 @@ const (
 	govRaiseEvery    = 10 * time.Second
 	govRaiseGain     = 1.05
 	govBindingFrac   = 0.85 // the cap is "the limit" when the pool sends at least this share of it
-	govFloorFrac     = 0.25 // of the first cap: lowest cap tried
+	govFloorFrac     = 0.4  // of the first cap: lowest cap tried (a policer far below its own average pass rate is unlikely)
 	govFloorEpisodes = 2
 	govRest          = 5 * time.Minute
 	govMinCap        = 125_000 // 1 Mbit/s
@@ -255,7 +262,9 @@ func (g *Governor) tick() {
 		tk.queue = qs[len(qs)/2]
 	}
 	simultaneous := tk.active < 2 || float64(tk.lossy) >= govSimultaneous*float64(tk.active)
-	tk.burst = tk.active > 0 && tk.loss >= govBurstLoss && tk.queue < lowQueue.Seconds() && simultaneous
+	med, n := g.medianLoss()
+	tk.burst = tk.active > 0 && n >= govMinHist && tk.loss >= govBurstLoss &&
+		tk.loss >= govBurstOverMed*med+govBurstOverAdd && tk.queue < lowQueue.Seconds() && simultaneous
 	if tk.active > 0 && !tk.burst {
 		g.cleanLoss += 0.1 * (tk.loss - g.cleanLoss)
 		g.cleanBit.Store(math.Float64bits(g.cleanLoss))
@@ -281,16 +290,16 @@ func (g *Governor) tick() {
 		if !newEpisode || now.Before(g.restUntil) || len(g.episodes) < 2 {
 			return
 		}
-		before := g.cleanRateBefore()
-		if before <= 0 {
-			before = tk.rate
+		passed := g.passedRate(govDetectWindow)
+		if passed <= 0 {
+			passed = tk.rate * (1 - tk.loss)
 		}
 		g.state = govCapped
 		g.cappedAt, g.lastRaise, g.floorEps = now, now, 0
-		g.setCap(govCapFrac * before)
+		g.setCap(govCapFrac * passed)
 		g.floorB = math.Max(govFloorFrac*g.capB, govMinCap)
-		g.log("dg: policer on the path: %d loss episodes in %s (%.0f%% loss on %d of %d carriers at once, no queue) — whole pool capped at %.1f Mbit/s (%.0f%% of the %.1f Mbit/s it sent cleanly before); parity held to the path's own loss",
-			len(g.episodes), govDetectWindow, tk.loss*100, tk.lossy, tk.active, mbit(g.capB), govCapFrac*100, mbit(before))
+		g.log("dg: policer on the path: %d loss episodes in %s (%.0f%% loss on %d of %d carriers at once, no queue) — whole pool capped at %.1f Mbit/s (%.0f%% of the %.1f Mbit/s that got through on average); parity held to the path's own loss",
+			len(g.episodes), govDetectWindow, tk.loss*100, tk.lossy, tk.active, mbit(g.capB), govCapFrac*100, mbit(passed))
 	case govCapped:
 		binding := tk.rate >= govBindingFrac*g.capB
 		switch {
@@ -305,7 +314,14 @@ func (g *Governor) tick() {
 				}
 				return
 			}
-			g.setCap(math.Max(govLowerFrac*g.capB, g.floorB))
+			// Down to what the policer has been passing, if that is lower
+			// than one step: far above it, a single step would take many
+			// episodes to get there.
+			next := govLowerFrac * g.capB
+			if p := govCapFrac * g.passedRate(govDetectWindow/2); p > 0 && p < next {
+				next = p
+			}
+			g.setCap(math.Max(next, g.floorB))
 			g.lastRaise = now
 			g.log("dg: policer: loss episode under the cap — lowered to %.1f Mbit/s", mbit(g.capB))
 		case newEpisode:
@@ -319,32 +335,41 @@ func (g *Governor) tick() {
 	}
 }
 
-// cleanRateBefore: the median pool rate over the clean ticks in the 5 s before
-// the first burst tick of the latest episode — what the pool sent while the
-// policer still let it through.
-func (g *Governor) cleanRateBefore() float64 {
-	start := -1
-	for i := len(g.hist) - 1; i >= 0; i-- {
-		if !g.hist[i].burst {
-			break
-		}
-		start = i
-	}
-	if start <= 0 {
-		return 0
-	}
-	from := g.hist[start].at.Add(-5 * time.Second)
-	var rs []float64
-	for i := start - 1; i >= 0 && g.hist[i].at.After(from); i-- {
-		if !g.hist[i].burst && g.hist[i].active > 0 {
-			rs = append(rs, g.hist[i].rate)
+// medianLoss is the pool's usual loss: the median over the active ticks of the
+// history (episodes are a minority of ticks, so they barely move it; steady
+// random loss IS it). n is how many ticks it is based on.
+func (g *Governor) medianLoss() (float64, int) {
+	var ls []float64
+	for _, h := range g.hist {
+		if h.active > 0 {
+			ls = append(ls, h.loss)
 		}
 	}
-	if len(rs) == 0 {
+	if len(ls) == 0 {
+		return 0, 0
+	}
+	sort.Float64s(ls)
+	return ls[len(ls)/2], len(ls)
+}
+
+// passedRate: the mean rate that got through (sent x (1 - loss)) over the
+// ticks of the last window in which the pool was sending — for a policer, its
+// long-run pass rate, episodes included.
+func (g *Governor) passedRate(window time.Duration) float64 {
+	from := g.now().Add(-window)
+	var sum float64
+	n := 0
+	for i := len(g.hist) - 1; i >= 0 && g.hist[i].at.After(from); i-- {
+		if g.hist[i].active == 0 {
+			continue
+		}
+		sum += g.hist[i].rate * (1 - g.hist[i].loss)
+		n++
+	}
+	if n == 0 {
 		return 0
 	}
-	sort.Float64s(rs)
-	return rs[len(rs)/2]
+	return sum / float64(n)
 }
 
 func (g *Governor) cleanSince(t time.Time) bool {

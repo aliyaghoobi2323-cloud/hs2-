@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +63,25 @@ type liveStatus struct {
 	Reason     string  `json:"reason,omitempty"`      // why the pattern is this size
 	NextProbeS int     `json:"next_probe_s,omitempty"`
 	ExitStats  string  `json:"exit_stats,omitempty"` // ok / partial / older exit: ...
+
+	// Datagram tunnels (dgtun): loss of what this side SENDS (the peer
+	// reports it), FEC, drops and the policer cap. Absent = 0 / false.
+	LossPct       float64 `json:"loss_pct,omitempty"`     // pool-wide, rate-weighted
+	MaxLossPct    float64 `json:"max_loss_pct,omitempty"` // worst active carrier
+	ParityPct     float64 `json:"parity_pct,omitempty"`   // FEC parity per data byte
+	FECAtCeiling  int     `json:"fec_at_ceiling,omitempty"`
+	FECRecovered  uint64  `json:"fec_recovered,omitempty"` // received data rebuilt (live carriers)
+	FECLost       uint64  `json:"fec_lost,omitempty"`      // received data lost for good
+	PacerDropped  uint64  `json:"pacer_dropped,omitempty"`
+	RxDropped     uint64  `json:"rx_dropped,omitempty"`
+	TunDrops      uint64  `json:"tun_drops,omitempty"`
+	Policed       bool    `json:"policed,omitempty"`
+	PoliceCapMbit float64 `json:"police_cap_mbit,omitempty"`
+
+	// Process CPU over the last interval, % of ONE core (a 2-core box can
+	// show up to 200), and the core count.
+	CPUPct   float64 `json:"cpu_pct"`
+	CPUCores int     `json:"cpu_cores"`
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -82,6 +104,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 	if err := os.MkdirAll(statusRunDir, 0o755); err != nil {
 		return // /run not writable (unusual); the manager falls back to `ss`
 	}
+	cpu := &cpuMeter{logf: func(f string, a ...any) { log.Printf(f, a...) }}
 	base := liveStatus{
 		Role: role(fc), Dir: direction(fc), Carrier: carrierName(fc),
 		Transport: transportLabel(fc), Endpoint: endpointLabel(fc), PID: os.Getpid(),
@@ -102,6 +125,13 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.CapMbit, ls.PeakMbit = round1(s.CapMbit), round1(s.PeakMbit)
 			ls.Reason, ls.NextProbeS, ls.ExitStats = s.Reason, s.NextProbeS, s.ExitStats
 		}
+		if s.Datagram {
+			ls.LossPct, ls.MaxLossPct, ls.ParityPct = s.LossPct, s.MaxLossPct, s.ParityPct
+			ls.FECAtCeiling, ls.FECRecovered, ls.FECLost = s.FECAtCeiling, s.FECRecovered, s.FECLost
+			ls.PacerDropped, ls.RxDropped, ls.TunDrops = s.PacerDropped, s.RxDropped, s.TunDrops
+			ls.Policed, ls.PoliceCapMbit = s.Policed, s.PoliceCapMbit
+		}
+		ls.CPUPct, ls.CPUCores = cpu.sample(), runtime.NumCPU()
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
@@ -120,6 +150,57 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			}
 		}
 	}()
+}
+
+// cpuMeter measures this process's CPU (utime + stime from /proc/self/stat)
+// between samples, as % of one core, and logs when the daemon itself becomes
+// the bottleneck — it uses nearly all the cores it has for several samples in a
+// row — and when it no longer is.
+type cpuMeter struct {
+	logf     func(string, ...any)
+	lastT    time.Time
+	lastTick uint64
+	hot      int
+	logged   bool
+}
+
+// clkTck is USER_HZ, 100 on every Linux the binary targets.
+const clkTck = 100
+
+func (m *cpuMeter) sample() float64 {
+	b, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		return 0
+	}
+	// fields after the ")" of comm: state is field 3; utime/stime are 14/15
+	f := strings.Fields(string(b[strings.LastIndexByte(string(b), ')')+1:]))
+	if len(f) < 13 {
+		return 0
+	}
+	ut, _ := strconv.ParseUint(f[11], 10, 64)
+	st, _ := strconv.ParseUint(f[12], 10, 64)
+	now, tick := time.Now(), ut+st
+	defer func() { m.lastT, m.lastTick = now, tick }()
+	if m.lastT.IsZero() {
+		return 0
+	}
+	pct := float64(tick-m.lastTick) / clkTck / now.Sub(m.lastT).Seconds() * 100
+	pct = float64(int(pct*10+0.5)) / 10
+	cores := float64(runtime.NumCPU())
+	switch {
+	case pct >= 90*cores:
+		if m.hot++; m.hot >= 3 && !m.logged {
+			m.logged = true
+			m.logf("cpu: hs2 is using %.0f%% of its %d core(s) — the CPU is the bottleneck now, not the path (a bigger VPS, or fewer/other carriers, would carry more)", pct, int(cores))
+		}
+	case pct < 70*cores:
+		m.hot = 0
+		if m.logged {
+			m.logged = false
+			m.logf("cpu: back to %.0f%% of %d core(s) — no longer the bottleneck", pct, int(cores))
+		}
+	}
+	return pct
 }
 
 // writeStatusFile writes the status atomically (temp file + rename) so a reader
@@ -186,6 +267,23 @@ func printStatus(path string) {
 	}
 	if ls.ExitStats != "" && ls.ExitStats != "ok" {
 		fmt.Printf("  exit stats: %s\n", ls.ExitStats)
+	}
+	if strings.HasPrefix(ls.Carrier, "dgtun") || ls.LossPct > 0 || ls.ParityPct > 0 || ls.Policed {
+		fmt.Printf("  loss:       %.1f%% of what this side sends (worst carrier %.1f%%)\n", ls.LossPct, ls.MaxLossPct)
+		fec := fmt.Sprintf("parity %.0f%% of data", ls.ParityPct)
+		if ls.FECAtCeiling > 0 {
+			fec += fmt.Sprintf(" — at its ceiling on %d carrier(s)", ls.FECAtCeiling)
+		}
+		fmt.Printf("  fec:        %s · received: %d rebuilt, %d lost\n", fec, ls.FECRecovered, ls.FECLost)
+		if ls.Policed {
+			fmt.Printf("  policer:    detected on the path — whole pool capped at %.1f Mbit/s\n", ls.PoliceCapMbit)
+		}
+		if ls.PacerDropped+ls.RxDropped+ls.TunDrops > 0 {
+			fmt.Printf("  drops:      pacer %d · receive queue %d · tunnel queue %d\n", ls.PacerDropped, ls.RxDropped, ls.TunDrops)
+		}
+	}
+	if ls.CPUCores > 0 {
+		fmt.Printf("  cpu:        %.0f%% of one core (%d core(s))\n", ls.CPUPct, ls.CPUCores)
 	}
 	if ls.CertDays >= 0 {
 		fmt.Printf("  certificate: valid for %d more day(s)%s\n", ls.CertDays, certWarn(ls.CertDays))
@@ -301,6 +399,8 @@ func transportLabel(fc fileConfig) string {
 		return "auto (udp, tcp fallback)"
 	case "reality":
 		return "reality"
+	case "dgtun":
+		return "tun (datagram pool over " + encapName(fc) + ")"
 	default:
 		return "tcp (noise)"
 	}

@@ -109,6 +109,30 @@ started, stopped, edited and deleted on its own.
   of them (delete one in the manager). The certificate-renewal hook reloads
   every hs2 tunnel, so no renewal ever points at a deleted service.
 
+## Datagram tunnels on throttled paths (tun over udp / icmp)
+
+All carriers of a datagram tunnel go to the same server IP, and a policer on
+the way (an ICMP rate limit, a per-IP throttle) sees their **sum**. hs2 watches
+the pool as a whole: loss episodes that hit most carriers at once with no queue
+building are a policer's signature (random loss is spread out; congestion shows
+a queue first). Two such episodes within 30 s cap the whole pool at 90% of what
+got through on average; more episodes under the cap lower it, a clean spell
+raises it 5% every 10 s, and if episodes continue even at a low cap the loss is
+not rate-dependent and the cap is lifted. While capped, FEC parity is sized for
+the path's own loss (not the policer's drops, which more parity would only
+feed), parity counts inside the cap, and the autopilot adds no links for it.
+The log says what happens (`dg: policer on the path: … capped at N Mbit/s`,
+`lowered to …`, `cap lifted`, `FEC at its ceiling …`, `cpu: … the CPU is the
+bottleneck`).
+
+`hs2 status -c <config>` and the tunnel manager show, per tunnel: loss of what
+this side sends (pool-wide and the worst carrier), FEC parity and what it
+rebuilt / lost, the policer cap when one is active, drops (pacer, receive
+queue, tunnel queue) and the daemon's CPU use. The same fields are in the live
+status file under `/run/hs2/` (`loss_pct`, `max_loss_pct`, `parity_pct`,
+`fec_at_ceiling`, `fec_recovered`, `fec_lost`, `pacer_dropped`, `rx_dropped`,
+`tun_drops`, `policed`, `police_cap_mbit`, `cpu_pct`, `cpu_cores`).
+
 ## What the installer checks for you
 
 - **"Ready" means packets cross.** The server that pastes the link starts
@@ -122,7 +146,9 @@ started, stopped, edited and deleted on its own.
   rides a bare IP protocol, so no port is asked or put in the link.
 - **The icmp tunnel keeps normal ping working.** Only the kernel's replies to
   the tunnel's own packets are dropped (an nftables rule, iptables as a
-  fallback) — the server still answers ordinary ping on every IP.
+  fallback) — the server still answers ordinary ping on every IP. The rule is
+  removed when the tunnel stops; one left by a killed daemon is removed by the
+  next start or by `hs2 cleanup` (never another running tunnel's).
 - **The download is checked** against `hs2-linux-amd64.sha256` (catches a
   broken or altered download; it is not a signature — protect the GitHub
   account with 2FA, and pin a reviewed commit with
@@ -136,8 +162,12 @@ started, stopped, edited and deleted on its own.
 
 - **One data path for all modes.** `tls` and `l3mtcp` used to carry IP packets
   (TCP inside TCP) and built multi-second queues under load; they now use the
-  stream core. hs0 (10.77.0.1/2) remains in those modes as a side channel for
-  ping and non-TCP traffic, with a 60 ms queue-time limit.
+  stream core. The tun interface remains in those modes as a **side channel**
+  for ping and light non-TCP traffic, with a 60 ms queue-time limit — it is
+  not a bulk path: under load it drops (the log then says `l3: dropped N
+  packets in 30s on the tun side channel`), while the user ports, which ride
+  the streams, are unaffected. For bulk traffic over a routed tun, use tun
+  over udp/icmp (the datagram pool).
 - **Connections spread across links.** Connections that arrived together all
   landed on the first link, so per-connection throttling capped the whole
   burst. They are now spread evenly.

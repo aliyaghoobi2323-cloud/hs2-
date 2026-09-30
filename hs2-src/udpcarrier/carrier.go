@@ -78,6 +78,9 @@ type Conn struct {
 	// the pool's governor (nil outside a pool): shared cap, pool-wide loss
 	gov atomic.Pointer[Governor]
 
+	// the FEC adapter's current loss estimate (float bits), for status
+	lossEst atomic.Uint64
+
 	// feedback we send (describes what WE receive)
 	rxDataBytes atomic.Uint64
 	echoMu      sync.Mutex
@@ -404,6 +407,7 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 	}
 	est := c.adapter.Observe(loss, now)
 	c.enc.SetLoss(est)
+	c.lossEst.Store(math.Float64bits(est))
 
 	// Remember this report so our next feedback can echo it for the peer's RTT.
 	c.echoMu.Lock()
@@ -536,8 +540,9 @@ type Stats struct {
 	BtlBwBytes   float64
 	RTProp       time.Duration
 	LossPPM      uint32
-	ParityRatio  float64
-	Startup      bool // the rate model is still ramping (no capacity estimate yet)
+	ParityRatio  float64 // parity shards per data shard now (0.5 = +50% bytes)
+	FECAtCeiling bool    // parity is at its maximum: loss beyond what FEC is sized for
+	Startup      bool    // the rate model is still ramping (no capacity estimate yet)
 }
 
 // AttachGovernor puts the carrier under its pool's governor (engine/dgpool).
@@ -573,6 +578,7 @@ func (c *Conn) Stats() Stats {
 		RTProp:       time.Duration(rtt * float64(time.Second)),
 		LossPPM:      loss,
 		ParityRatio:  c.enc.ParityRatio(),
+		FECAtCeiling: math.Float64frombits(c.lossEst.Load()) >= fec.DefaultAdapterConfig().Max-1e-9,
 		Startup:      startup,
 	}
 }

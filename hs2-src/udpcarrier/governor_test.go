@@ -102,6 +102,24 @@ func TestGovernorIgnoresRandomLoss(t *testing.T) {
 	}
 }
 
+// Steady random loss on every carrier at once (the Iran UDP path: ~10% on
+// everything, all the time) is simultaneous and queue-free too — but it is
+// the pool's usual loss, not an episode above it, so it must never cap. (It
+// did, in the lab: goodput 29 -> 23 Mbit/s.)
+func TestGovernorIgnoresSteadyRandomLossOnAllCarriers(t *testing.T) {
+	s := newGovSim(4)
+	r := rand.New(rand.NewPCG(3, 4))
+	for i := 0; i < 400; i++ {
+		// one value per tick: over a few hundred packets the measured loss
+		// swings widely around its mean (here 8%), dipping below 5% and back
+		cur := 0.02 + 0.12*r.Float64()
+		s.step(50*mb, func(int, float64) float64 { return cur }, 0.001)
+	}
+	if s.g.Capped() || len(s.logs) > 0 {
+		t.Fatalf("steady 2-14%% random loss on every carrier capped the pool: %v", s.logs)
+	}
+}
+
 // Loss with a standing queue is congestion at a buffer — the carriers' own
 // delay control handles that; the governor must not cap.
 func TestGovernorIgnoresCongestionLoss(t *testing.T) {
