@@ -7,12 +7,22 @@ import (
 
 // Per-encapsulation wire overhead around each sealed datagram (transport header
 // only; the 20-byte outer IP header is common to all and budgeted by the
-// carrier). These are fixed by the framing in raw_linux.go.
+// carrier). These are fixed by the framing in rawframe.go:
+//
+//	icmp : [type][code][csum:2][id:2][seq:2] [magic:2]      echo header + magic
+//	gre  : [flags/ver:2][ptype:2] [key = magic:2 | id:2]    RFC 2890 GRE with key
+//	ipip : [magic:2][id:2]                                  on IP protocol 4
+//	ipx  : [magic:2][id:2]                                  on a chosen IP protocol
+//
+// id names one link (one dialed transport) so a listener can tell apart several
+// links from the same peer IP — raw IP has no ports; for icmp it is the echo
+// identifier, which NAT rewrites consistently. magic is keyed per kind and per
+// direction (see Options.Key).
 const (
-	icmpOverhead = 8 // ICMP echo header: type/code/checksum/id/seq
-	greOverhead  = 4 // GRE: flags/version + protocol type
-	ipipOverhead = 4 // our 4-byte magic+seq framing on IP proto 4
-	ipxOverhead  = 4 // our 4-byte magic+seq framing on a chosen IP proto
+	icmpOverhead = 10
+	greOverhead  = 8
+	ipipOverhead = 4
+	ipxOverhead  = 4
 )
 
 // errRawUnsupported is returned by the non-Linux build: raw ICMP/GRE/IPIP

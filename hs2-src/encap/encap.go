@@ -60,9 +60,34 @@ type Options struct {
 	// stateful middlebox sees an ordinary ping exchange. Set by the carrier
 	// side (dial=client, listen=server); ignored by other kinds.
 	ICMPRole string
-	// Proto is the IP protocol number for the ipx encapsulation (1..255,
-	// avoiding the well-known ones the other kinds use). Ignored otherwise.
+	// Proto is the IP protocol number for the ipx encapsulation (1..254,
+	// avoiding the well-known ones the other kinds use; 0 = DefaultIPXProto).
+	// Ignored otherwise.
 	Proto int
+	// Key keys the raw encapsulations' 16-bit framing magic (one per kind and
+	// per direction), so a host's other traffic of the same IP protocol — a real
+	// GRE/IPIP tunnel, the internet's pings — is discarded with one compare
+	// instead of costing a handshake attempt, and so the magic is not a fixed
+	// fingerprint shared by every deployment. The carrier passes a value
+	// derived from the tunnel's shared secret. Empty uses an unkeyed default.
+	// Ignored by udp.
+	Key []byte
+}
+
+// DefaultIPXProto is the IP protocol the ipx encapsulation uses when none is
+// configured: 253, reserved for experimentation (RFC 3692), which no kernel
+// module claims.
+const DefaultIPXProto = 253
+
+// ValidIPXProto reports whether p may be used by the ipx encapsulation: a real
+// IP protocol number that is not one the kernel or another kind already owns
+// (ICMP 1, IPIP 4, TCP 6, UDP 17, GRE 47), nor 0/255 (reserved).
+func ValidIPXProto(p int) bool {
+	switch p {
+	case 0, 1, 4, 6, 17, 47, 255:
+		return false
+	}
+	return p > 0 && p < 255
 }
 
 // Dial opens a connected datagram transport of the named kind to addr. For udp,

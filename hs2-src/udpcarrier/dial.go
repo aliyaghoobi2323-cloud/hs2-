@@ -22,18 +22,22 @@ type EncapConfig struct {
 	Proto  int    // IP protocol number for the ipx encapsulation
 }
 
-func (ec EncapConfig) dialOptions() encap.Options {
-	return encap.Options{BindIP: ec.BindIP, ICMPRole: "client", Proto: ec.Proto}
+// The raw encapsulations key their framing magic from the tunnel's shared
+// secret (encap derives it through HMAC with its own label, so the magic
+// reveals nothing about the secret and differs per kind and direction).
+func (ec EncapConfig) dialOptions(shared []byte) encap.Options {
+	return encap.Options{BindIP: ec.BindIP, ICMPRole: "client", Proto: ec.Proto, Key: shared}
 }
 
-func (ec EncapConfig) listenOptions() encap.Options {
-	return encap.Options{BindIP: ec.BindIP, ICMPRole: "server", Proto: ec.Proto}
+func (ec EncapConfig) listenOptions(shared []byte) encap.Options {
+	return encap.Options{BindIP: ec.BindIP, ICMPRole: "server", Proto: ec.Proto, Key: shared}
 }
 
 // DefaultInnerMTU is the tunnel-side MTU the carrier is sized for. It is
 // smaller than the TCP carriers' 1380 to leave room for the datagram overhead
-// (8-byte sequence + 28-byte Noise frame overhead + 11-byte FEC shard header)
-// inside a 1500-byte path without fragmenting.
+// (CarrierOverhead, 52 bytes, plus the encapsulation header) inside a
+// 1500-byte path without fragmenting, with margin for paths below 1500 (see
+// InnerMTUFor for the exact limit per encapsulation).
 const DefaultInnerMTU = 1280
 
 // staticPair derives the pinned server and client static keys from the tunnel's
@@ -81,7 +85,7 @@ func DialCfg(ctx context.Context, addr string, ec EncapConfig, shared []byte, in
 	if err != nil {
 		return nil, err
 	}
-	conn, err := encap.Dial(ec.Kind, addr, ec.dialOptions())
+	conn, err := encap.Dial(ec.Kind, addr, ec.dialOptions(shared))
 	if err != nil {
 		return nil, err
 	}

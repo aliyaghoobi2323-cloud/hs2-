@@ -52,14 +52,19 @@ type Conn struct {
 	onClose func()             // listener-side deregistration; nil for dialer
 	rawConn interface{ Close() error }
 
-	rx     chan []byte   // inbound datagrams awaiting FEC decode
+	rx     chan rxPkt    // inbound datagrams awaiting FEC decode
 	frames chan frameMsg // decoded hs2 frames awaiting ReadFrame
 	confCh chan []byte   // received key-confirmation tags (setup only)
 	done   chan struct{}
 
+	// Data and control sends are serialised separately: a data send can block
+	// on the pacer's full queue while holding sendMu, and a control frame
+	// (feedback above all) must not wait behind it — its timing is what the
+	// peer's delay measurement reads. Sealing itself is concurrency-safe.
 	sendMu   sync.Mutex
 	sendScr  []byte // reused data seq||ct scratch, guarded by sendMu
-	ctrlScr  []byte // reused control seq||ct scratch, guarded by sendMu
+	ctrlMu   sync.Mutex
+	ctrlScr  []byte // reused control seq||ct scratch, guarded by ctrlMu
 	closeOne sync.Once
 
 	// liveness
@@ -77,6 +82,14 @@ type Conn struct {
 
 	// last peer feedback timestamp seen, for ordering (processLoop only)
 	lastFbNanos int64
+
+	// Stamped data (tagDataTS): peerStamps is set once the peer's feedback
+	// shows it understands them (the pacer then stamps every data datagram);
+	// owdMin is the minimum one-way delay of the peer's stamped data this
+	// feedback interval, as 1<<32|ticks (0 = none yet), written by the decode
+	// loop and swapped out by the feedback loop.
+	peerStamps atomic.Bool
+	owdMin     atomic.Uint64
 
 	// wire-loss measurement: wireHigh/wireRecv are written by the decode loop
 	// (trackWire) and read by the feedback loop (wireLossPPM).
@@ -107,7 +120,7 @@ func newConn(sess *core.Session, write func([]byte) error, shared, binding []byt
 		write:   write,
 		onClose: onClose,
 		rawConn: rawConn,
-		rx:      make(chan []byte, 1024),
+		rx:      make(chan rxPkt, 1024),
 		frames:  make(chan frameMsg, 2048),
 		confCh:  make(chan []byte, 4),
 		done:    make(chan struct{}),
@@ -117,7 +130,7 @@ func newConn(sess *core.Session, write func([]byte) error, shared, binding []byt
 	c.dec = fec.NewDecoder(220*time.Millisecond, c.enc.Config().MaxPayload+2)
 	// Shallow pacer queue: it holds ~one BDP so backpressure reaches the sender
 	// fast and per-packet queueing latency stays small.
-	c.pacer = newPacer(rc, write, 64)
+	c.pacer = newPacer(rc, write, 64, &c.peerStamps)
 	c.lastRxNanos.Store(time.Now().UnixNano())
 	c.wg.Add(3)
 	go c.processLoop()
@@ -132,8 +145,9 @@ func newConn(sess *core.Session, write func([]byte) error, shared, binding []byt
 // feedback that was delayed and reordered by FEC recovery made the rate and RTT
 // estimates useless.
 const (
-	tagData = 0x00 // followed by one FEC shard packet
-	tagCtrl = 0x01 // followed by one sealed control frame (seq||ciphertext)
+	tagData   = 0x00 // [tag][wireSeq:4] then one FEC shard packet
+	tagCtrl   = 0x01 // followed by one sealed control frame (seq||ciphertext)
+	tagDataTS = 0x02 // [tag][wireSeq:4][sendStamp:4] then one FEC shard packet
 )
 
 // SendFrame is the engine's send path. TypeData rides FEC and the pacer;
@@ -179,15 +193,15 @@ func (c *Conn) sendControl(ftype byte, payload []byte) error {
 		return errClosed
 	default:
 	}
-	c.sendMu.Lock()
+	c.ctrlMu.Lock()
 	seq, sealed, err := c.sess.SealDatagram(ftype, 0, payload, 0)
 	if err != nil {
-		c.sendMu.Unlock()
+		c.ctrlMu.Unlock()
 		return err
 	}
 	c.ctrlScr = packDatagram(c.ctrlScr[:0:cap(c.ctrlScr)], seq, sealed)
 	dg := append([]byte{tagCtrl}, c.ctrlScr...)
-	c.sendMu.Unlock()
+	c.ctrlMu.Unlock()
 	return c.write(dg)
 }
 
@@ -229,11 +243,19 @@ func (c *Conn) Close() error {
 	return nil
 }
 
+// rxPkt is one received datagram and when it came off the socket.
+type rxPkt struct {
+	b  []byte
+	at time.Time
+}
+
 // feed hands one received datagram to the decode loop. Used by the listener's
-// demux; the dialer's own read goroutine calls it too.
+// demux; the dialer's own read goroutine calls it too. The datagram is
+// stamped here, at the socket, so the delay measurements (RTT, one-way delay)
+// do not include time spent queued behind FEC decoding.
 func (c *Conn) feed(pkt []byte) {
 	select {
-	case c.rx <- pkt:
+	case c.rx <- rxPkt{b: pkt, at: time.Now()}:
 	case <-c.done:
 	}
 }
@@ -247,20 +269,27 @@ func (c *Conn) processLoop() {
 		select {
 		case <-c.done:
 			return
-		case pkt := <-c.rx:
-			now := time.Now()
+		case rp := <-c.rx:
+			pkt, now := rp.b, rp.at
 			c.lastRxNanos.Store(now.UnixNano())
 			if len(pkt) < 1 {
 				continue
 			}
 			switch pkt[0] {
-			case tagData:
-				if len(pkt) < 5 {
+			case tagData, tagDataTS:
+				hdr := 5
+				if pkt[0] == tagDataTS {
+					hdr = 9
+				}
+				if len(pkt) < hdr {
 					continue
 				}
 				c.trackWire(binary.BigEndian.Uint32(pkt[1:5]))
 				c.wireBytes.Add(uint64(len(pkt)))
-				c.dec.Decode(pkt[5:], now, func(payload []byte) { c.onPayload(payload, now) })
+				if hdr == 9 {
+					c.noteOWD(stampOf(now) - binary.BigEndian.Uint32(pkt[5:9]))
+				}
+				c.dec.Decode(pkt[hdr:], now, func(payload []byte) { c.onPayload(payload, now) })
 				if now.Sub(lastExpire) >= expireEvery {
 					c.dec.Expire(now)
 					lastExpire = now
@@ -295,7 +324,7 @@ func (c *Conn) onPayload(wire []byte, now time.Time) {
 	case core.TypeData:
 		c.rxDataBytes.Add(uint64(len(payload)))
 		c.deliver(core.TypeData, payload)
-	case core.TypePing, core.TypePong, core.TypeClose:
+	case core.TypePing, core.TypePong, core.TypeClose, core.TypePoolCtl, core.TypeLinkStats:
 		c.deliver(ftype, payload)
 	}
 }
@@ -329,7 +358,10 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 			rttSec = float64(rtt) / 1e9
 		}
 	}
-	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM)
+	if fb.flags&fbStamps != 0 && !c.peerStamps.Load() {
+		c.peerStamps.Store(true)
+	}
+	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM, fb.echoNanos, fb.owdTicks, fb.flags&fbOWD != 0)
 
 	// Loss sizes parity, never rate.
 	est := c.adapter.Observe(float64(fb.lossPPM)/1e6, now)
@@ -376,6 +408,10 @@ func (c *Conn) sendFeedback(now time.Time) {
 		// cannot spiral the pacing rate down and starve the interleaving.
 		rxDataBytes: c.wireBytes.Load(),
 		lossPPM:     c.wireLossPPM(),
+		flags:       fbStamps,
+	}
+	if m := c.owdMin.Swap(0); m != 0 {
+		fb.owdTicks, fb.flags = uint32(m), fb.flags|fbOWD
 	}
 	_ = c.sendControl(core.TypeFeedback, fb.encode())
 }
@@ -420,6 +456,21 @@ func (c *Conn) trackWire(seq uint32) {
 		c.wireHigh.Store(seq)
 	}
 	c.wireRecv.Add(1)
+}
+
+// noteOWD folds one stamped datagram's one-way delay (receive stamp minus
+// send stamp, modulo 2^32) into this interval's minimum. Decode loop only
+// writes; the feedback loop swaps the value out.
+func (c *Conn) noteOWD(d uint32) {
+	for {
+		cur := c.owdMin.Load()
+		if cur != 0 && int32(d-uint32(cur)) >= 0 {
+			return
+		}
+		if c.owdMin.CompareAndSwap(cur, 1<<32|uint64(d)) {
+			return
+		}
+	}
 }
 
 // flushLoop closes FEC groups that have been open for their window, emitting

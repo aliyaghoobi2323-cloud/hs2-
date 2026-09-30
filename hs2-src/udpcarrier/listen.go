@@ -64,7 +64,7 @@ func ListenCfg(addr string, ec EncapConfig, shared []byte, innerMTU int) (*Liste
 	if err != nil {
 		return nil, err
 	}
-	pc, err := encap.Listen(ec.Kind, addr, ec.listenOptions())
+	pc, err := encap.Listen(ec.Kind, addr, ec.listenOptions(shared))
 	if err != nil {
 		return nil, err
 	}

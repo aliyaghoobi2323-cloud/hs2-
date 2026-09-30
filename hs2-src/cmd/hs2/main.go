@@ -175,7 +175,7 @@ func runCmd(args []string) {
 
 	// The UDP/auto transports carry datagrams: keep the tunnel MTU small enough
 	// that a sealed, FEC-wrapped IP packet still fits a 1500-byte path without
-	// fragmenting (≈ MTU + 47 bytes on the wire).
+	// fragmenting (MTU + udpcarrier.CarrierOverhead = 52 bytes, plus the encapsulation header).
 	if (fc.Carrier == "udp" || fc.Carrier == "auto") && fc.MTU == 0 {
 		fc.MTU = 1280
 	}

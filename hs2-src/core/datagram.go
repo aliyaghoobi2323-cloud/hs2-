@@ -17,6 +17,11 @@ const (
 	TypeAuth     = 11 // post-handshake key confirmation (see udpcarrier/auth.go)
 	TypePathChal = 12 // path validation challenge (address change)
 	TypePathResp = 13 // path validation response
+
+	// Link-pool control over datagram carriers (engine/dgpool.go). A peer
+	// that predates them drops them unread, so they are safe to send to it.
+	TypePoolCtl   = 14 // edge -> exit: serving-link target [u16]
+	TypeLinkStats = 15 // exit -> edge: the link's send-side stats record
 )
 
 // Exporter returns an n-byte (n <= 32) value bound to this session's handshake
