@@ -514,17 +514,15 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 		cfg.Listener = ln
 	}
 
-	// User-port forwarder (Backhaul-style [ports]): edge opens user ports and
-	// proxies to the peer's tun IP; exit opens the same ports on its tun IP and
-	// proxies to the panel. Both read forward_ports.
-	ports := splitComma(fc.ForwardPorts)
-	if len(ports) > 0 {
-		if edge {
+	// User-port forwarder (Backhaul-style [ports]): the edge opens forward_ports
+	// and sends them over the tun to the exit's single on-tun port; the exit hands
+	// what arrives there to the panel (expose). The ports live only on the edge.
+	if edge {
+		if ports := splitComma(fc.ForwardPorts); len(ports) > 0 {
 			must(engine.StartDgForwarders(ctx, true, ports, fc.UserListenIP, fc.PeerIP, "", "", fc.UDP, logf))
-		} else {
-			localIP := ipOfCIDR(fc.LocalCIDR)
-			must(engine.StartDgForwarders(ctx, false, ports, "", "", localIP, fc.Expose, fc.UDP, logf))
 		}
+	} else if fc.Expose != "" {
+		must(engine.StartDgForwarders(ctx, false, nil, "", "", ipOfCIDR(fc.LocalCIDR), fc.Expose, fc.UDP, logf))
 	}
 
 	if edge {

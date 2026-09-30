@@ -15,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 )
 
 // checkCmd validates a config file without starting anything:
@@ -307,10 +309,16 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			}
 			seen[pt] = true
 		}
-		// The exit maps the forwarded ports to the panel, so it needs one.
-		if !edge && len(ports) > 0 {
-			if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
-				bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443") when "forward_ports" is set, got %q`, fc.Expose)
+		// The exit hands everything arriving on the tun forwarder port to the
+		// panel; the user ports live only on the edge (forward_ports is ignored
+		// here). No panel is a valid pure routed tunnel, but never silently.
+		if !edge {
+			if fc.Expose == "" {
+				warn(`"expose" is empty: connections from the edge's user ports have no panel to go to on this server (set it to the panel inbound, e.g. "127.0.0.1:8443")`)
+			} else if _, pport, err := net.SplitHostPort(fc.Expose); err != nil {
+				bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)
+			} else if pport == engine.DgTunPort {
+				warn(`"expose" uses port %s, which the tunnel's own forwarder listens on (on the tun IP): a panel bound on 0.0.0.0:%s stops the forwarder from starting — move the panel to another port`, pport, pport)
 			}
 		}
 	}

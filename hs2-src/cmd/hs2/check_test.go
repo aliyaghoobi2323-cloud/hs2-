@@ -104,7 +104,7 @@ func TestCheckAcceptsInstallerConfigs(t *testing.T) {
 			"shared_key": "` + testKey + `", "bind_local_ip": "5.57.38.168"}`,
 		"kharej dgtun udp": `{"mode": "listen", "carrier": "dgtun", "encap": "udp", "reverse": false,
 			"addr": "0.0.0.0:2096", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
-			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "forward_ports": "8443",
+			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443",
 			"min_links": 2, "max_links": 32, "per_link": 8}`,
 		"iran dgtun gre": `{"mode": "dial", "carrier": "dgtun", "encap": "gre", "reverse": false,
 			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
@@ -283,11 +283,27 @@ func TestCheckDgTun(t *testing.T) {
 	if _, warns := checkConfig(icmpExit, local, time.Now()); !strings.Contains(strings.Join(warns, "|"), "ping") {
 		t.Errorf("icmp ping warning missing: %v", warns)
 	}
-	// exit with forward_ports but no panel
-	exit := []byte(`{"mode": "listen", "carrier": "dgtun", "encap": "udp", "addr": "0.0.0.0:2096",
-		"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
-		"shared_key": "` + testKey + `", "forward_ports": "8443"}`)
-	if errs, _ := checkConfig(exit, local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "expose") {
-		t.Errorf("exit missing panel not caught: %v", errs)
+	// The exit needs only the panel: the user ports live on the edge. No panel is
+	// a valid pure routed tunnel but warns; a malformed one is an error; a panel on
+	// the forwarder's own tun port warns; a legacy exit that still carries
+	// forward_ports (older installers wrote it) passes clean.
+	exit := func(extra string) []byte {
+		return []byte(`{"mode": "listen", "carrier": "dgtun", "encap": "udp", "addr": "0.0.0.0:2096",
+			"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
+			"shared_key": "` + testKey + `"` + extra + `}`)
+	}
+	if errs, warns := checkConfig(exit(""), local, time.Now()); len(errs) != 0 || !strings.Contains(strings.Join(warns, "|"), `"expose" is empty`) {
+		t.Errorf("exit without a panel: want only an expose warning, got errs=%v warns=%v", errs, warns)
+	}
+	if errs, _ := checkConfig(exit(`, "expose": "8443"`), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "expose") {
+		t.Errorf("exit with a malformed panel not rejected: %v", errs)
+	}
+	if _, warns := checkConfig(exit(`, "expose": "127.0.0.1:28443"`), local, time.Now()); !strings.Contains(strings.Join(warns, "|"), "28443") {
+		t.Errorf("panel on the forwarder's own tun port not warned: %v", warns)
+	}
+	for _, extra := range []string{`, "expose": "127.0.0.1:8443"`, `, "expose": "127.0.0.1:8443", "forward_ports": "8443"`} {
+		if errs, warns := checkConfig(exit(extra), local, time.Now()); len(errs)+len(warns) != 0 {
+			t.Errorf("exit %s: errs=%v warns=%v", extra, errs, warns)
+		}
 	}
 }
