@@ -81,6 +81,17 @@ func TestCheckAcceptsInstallerConfigs(t *testing.T) {
 		"iran auto": `{"mode": "dial", "carrier": "auto", "reverse": false, "addr": "91.107.166.13:2096",
 			"iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1280,
 			"shared_key": "` + testKey + `", "bind_local_ip": "5.57.38.168"}`,
+		"kharej dgtun udp": `{"mode": "listen", "carrier": "dgtun", "encap": "udp", "reverse": false,
+			"addr": "0.0.0.0:2096", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
+			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "forward_ports": "8443",
+			"min_links": 2, "max_links": 32, "per_link": 8}`,
+		"iran dgtun gre": `{"mode": "dial", "carrier": "dgtun", "encap": "gre", "reverse": false,
+			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
+			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443,443",
+			"min_links": 2, "max_links": 32, "per_link": 8, "bind_local_ip": "5.57.38.168"}`,
+		"iran dgtun ipx proto": `{"mode": "dial", "carrier": "dgtun", "encap": "ipx", "proto": 143, "reverse": false,
+			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
+			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443", "min_links": 2, "max_links": 8, "per_link": 8}`,
 	}
 	local := localIs("5.57.38.168", "91.107.166.13")
 	for name, cfg := range cases {
@@ -171,5 +182,45 @@ func TestCheckDrainIdle(t *testing.T) {
 		if got := drainIdle(fc); got != want {
 			t.Errorf("drainIdle(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+// dgtun (datagram tun) config checks.
+func TestCheckDgTun(t *testing.T) {
+	local := localIs("5.57.38.168", "91.107.166.13")
+	base := func(extra string) []byte {
+		return []byte(`{"mode": "dial", "carrier": "dgtun", "encap": "udp", "reverse": false,
+			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
+			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443"` + extra + `}`)
+	}
+	if errs, warns := checkConfig(base(""), local, time.Now()); len(errs) != 0 || len(warns) != 0 {
+		t.Fatalf("base dgtun should pass: errs=%v warns=%v", errs, warns)
+	}
+	// bad encap
+	if errs, _ := checkConfig([]byte(strings.Replace(string(base("")), `"encap": "udp"`, `"encap": "wireguard"`, 1)), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "encap") {
+		t.Errorf("bad encap not caught: %v", errs)
+	}
+	// ipx with a reserved proto
+	if errs, _ := checkConfig([]byte(strings.Replace(string(base(`, "proto": 47`)), `"encap": "udp"`, `"encap": "ipx"`, 1)), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "proto") {
+		t.Errorf("reserved ipx proto not caught: %v", errs)
+	}
+	// min>max
+	if errs, _ := checkConfig(base(`, "min_links": 20, "max_links": 4`), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "max_links") {
+		t.Errorf("min>max not caught: %v", errs)
+	}
+	// the icmp encap warns (on the listener side) that inner pings to its tun IP
+	// are not answered — a real behavioral surprise, real traffic unaffected.
+	icmpExit := []byte(`{"mode": "listen", "carrier": "dgtun", "encap": "icmp", "addr": "0.0.0.0:2096",
+		"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
+		"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "forward_ports": "8443"}`)
+	if _, warns := checkConfig(icmpExit, local, time.Now()); !strings.Contains(strings.Join(warns, "|"), "ping") {
+		t.Errorf("icmp ping warning missing: %v", warns)
+	}
+	// exit with forward_ports but no panel
+	exit := []byte(`{"mode": "listen", "carrier": "dgtun", "encap": "udp", "addr": "0.0.0.0:2096",
+		"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
+		"shared_key": "` + testKey + `", "forward_ports": "8443"}`)
+	if errs, _ := checkConfig(exit, local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "expose") {
+		t.Errorf("exit missing panel not caught: %v", errs)
 	}
 }

@@ -21,7 +21,7 @@ VI=dvi$ID; VK=dvk$ID; MA=dxa$ID; MB=dxb$ID
 BIN=${BIN:-}; ENCAP=${ENCAP:-udp}; PROTO=${PROTO:-0}; REVERSE=${REVERSE:-0}
 RATE=${RATE:-50mbit}; DELAY=${DELAY:-20ms}; QUEUE=${QUEUE:-300ms}; LOSS=${LOSS:-0}
 BURSTLOSS=${BURSTLOSS:-0}; BADMS=${BADMS:-0}; FLOWRATE=${FLOWRATE:-0}; ALLOW=${ALLOW:-}
-BULK=${BULK:-4}; UP=${UP:-0}; T=${T:-12s}; MIN=${MIN:-2}; MAX=${MAX:-8}
+BULK=${BULK:-4}; UP=${UP:-0}; SEG=${SEG:-0}; T=${T:-12s}; MIN=${MIN:-2}; MAX=${MAX:-8}
 
 cleanup(){
   for p in $(cat "$W"/pids 2>/dev/null); do kill "$p" 2>/dev/null; done
@@ -106,7 +106,8 @@ fi
 PROBE=null
 if ip netns exec $IR bash -c 'for i in $(seq 1 40); do exec 3<>/dev/tcp/127.0.0.1/8443 && exit 0; sleep 0.25; done; exit 1' 2>/dev/null; then
   UFLAG=""; [ "${UDP:-0}" = 1 ] && UFLAG="-udp"
-  PROBE=$(ip netns exec $IR "$W/probe" -addr 127.0.0.1:8443 -bulk "$BULK" -up "$UP" -t "$T" $UFLAG 2>/dev/null || echo null)
+  SEGF=""; [ "$SEG" != 0 ] && SEGF="-seg $SEG"
+  PROBE=$(ip netns exec $IR "$W/probe" -addr 127.0.0.1:8443 -bulk "$BULK" -up "$UP" -t "$T" $UFLAG $SEGF 2>/dev/null || echo null)
 fi
 LINKS=$(grep -oE 'carrier .* up \(now [0-9]+\)' "$W/ir.log" | grep -oE 'now [0-9]+' | grep -oE '[0-9]+' | sort -n | tail -1)
 [ "${KEEP:-0}" = 1 ] || cleanup
