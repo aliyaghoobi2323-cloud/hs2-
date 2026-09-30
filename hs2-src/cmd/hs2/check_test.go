@@ -70,12 +70,24 @@ func TestCheckAcceptsInstallerConfigs(t *testing.T) {
 			"sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1380,
 			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "min_links": 8, "max_links": 16,
 			"per_link": 8, "bind_local_ip": "91.107.166.13"}`,
+		// tun over TLS (l3mtcp): the TUN is a routed side channel and the panel
+		// inbound is forwarded like tcp — the edge opens forward_ports, the exit
+		// delivers them to expose. All four direction/role shapes.
 		"kharej direct tun": `{"mode": "listen", "carrier": "l3mtcp", "reverse": false, "addr": "91.107.166.13:2096",
 			"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1320,
-			"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `}`,
-		"iran direct tun": `{"mode": "dial", "carrier": "l3mtcp", "reverse": false, "addr": "91.107.166.13:2096",
+			"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `, "expose": "127.0.0.1:8443"}`,
+		"iran direct tun": `{"mode": "dial", "carrier": "l3mtcp", "reverse": false, "udp": false, "addr": "91.107.166.13:2096",
 			"sni": "t.example", "iface": "tun9", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1320,
-			"shared_key": "` + testKey + `", "min_links": 8, "max_links": 16, "per_link": 8, "bind_local_ip": ""}`,
+			"shared_key": "` + testKey + `", "forward_ports": "8443,443", "peer_panel": "127.0.0.1:8443", "user_listen_ip": "",
+			"min_links": 8, "max_links": 16, "per_link": 8, "bind_local_ip": ""}`,
+		"iran reverse tun": `{"mode": "dial", "carrier": "l3mtcp", "reverse": true, "udp": true, "addr": "5.57.38.168:2082",
+			"iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1320,
+			"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `,
+			"forward_ports": "8443,443", "user_listen_ip": "", "min_links": 2, "max_links": 32, "per_link": 8}`,
+		"kharej reverse tun": `{"mode": "listen", "carrier": "l3mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+			"sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1320,
+			"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "min_links": 2, "max_links": 32,
+			"per_link": 8, "bind_local_ip": "91.107.166.13"}`,
 		"kharej udp": `{"mode": "listen", "carrier": "udp", "reverse": false, "addr": "0.0.0.0:2096",
 			"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280, "shared_key": "` + testKey + `"}`,
 		"iran auto": `{"mode": "dial", "carrier": "auto", "reverse": false, "addr": "91.107.166.13:2096",
@@ -182,6 +194,52 @@ func TestCheckDrainIdle(t *testing.T) {
 		if got := drainIdle(fc); got != want {
 			t.Errorf("drainIdle(%q) = %s, want %s", in, got, want)
 		}
+	}
+}
+
+// A tun over TLS (l3mtcp) without user ports / panel is a valid pure routed
+// tunnel, but it is exactly the "users cannot reach the panel" setup, so it
+// must not pass silently: the edge warns about forward_ports, the exit about
+// expose. A malformed panel address is an error. mtcp keeps requiring ports.
+func TestCheckL3TunPortsAndPanel(t *testing.T) {
+	c, k := writeCert(t, time.Now().Add(60*24*time.Hour))
+	cert := fmt.Sprintf(`"cert_file": %q, "key_file": %q`, c, k)
+	local := localIs("5.57.38.168", "91.107.166.13")
+	edge := `{"mode": "dial", "carrier": "l3mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+		"iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2", "mtu": 1320,
+		"backend_addr": "builtin", "shared_key": "` + testKey + `", ` + cert + `}`
+	exit := func(extra string) []byte {
+		return []byte(`{"mode": "listen", "carrier": "l3mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+			"sni": "t.example", "iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1320,
+			"shared_key": "` + testKey + `"` + extra + `}`)
+	}
+
+	errs, warns := checkConfig([]byte(edge), local, time.Now())
+	if len(errs) != 0 {
+		t.Errorf("pure routed l3mtcp edge must stay valid: errs=%v", errs)
+	}
+	if !strings.Contains(strings.Join(warns, "|"), `"forward_ports" is empty`) {
+		t.Errorf("l3mtcp edge without user ports not warned: warns=%v", warns)
+	}
+
+	errs, warns = checkConfig(exit(""), local, time.Now())
+	if len(errs) != 0 {
+		t.Errorf("pure routed l3mtcp exit must stay valid: errs=%v", errs)
+	}
+	if !strings.Contains(strings.Join(warns, "|"), `"expose" is empty`) {
+		t.Errorf("l3mtcp exit without a panel not warned: warns=%v", warns)
+	}
+
+	if errs, _ := checkConfig(exit(`, "expose": "8443"`), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "expose") {
+		t.Errorf("l3mtcp exit with a malformed panel address not rejected: errs=%v", errs)
+	}
+	if errs, warns := checkConfig(exit(`, "expose": "127.0.0.1:8443"`), local, time.Now()); len(errs)+len(warns) != 0 {
+		t.Errorf("l3mtcp exit with a panel: errs=%v warns=%v", errs, warns)
+	}
+
+	mtcpEdge := strings.Replace(edge, `"carrier": "l3mtcp"`, `"carrier": "mtcp"`, 1)
+	if errs, _ := checkConfig([]byte(mtcpEdge), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "forward_ports") {
+		t.Errorf("mtcp edge without user ports must still be an error: errs=%v", errs)
 	}
 }
 

@@ -202,8 +202,42 @@ install_binary(){
   install_self
 }
 
+# unit_unmask UNIT: a MASKED unit is a symlink to /dev/null (in /etc, or in /run
+# for a runtime mask). Writing the unit file then goes nowhere or is overridden,
+# `enable`/`restart` fail, and an instance started BEFORE the mask keeps running
+# the OLD config while still reporting "active" — so a new config would silently
+# never load. This installer never masks hs2; if something else did, undo it
+# loudly so the config we write is the config that runs.
+unit_unmask(){ # unit
+  local u="$1" f="/etc/systemd/system/$1.service"
+  case "$(systemctl is-enabled "$u" 2>/dev/null || true)" in
+    masked*) ;;
+    *) return 0 ;;
+  esac
+  warn "$u was MASKED (by something outside this installer) — unmasking it so the new config actually runs."
+  systemctl unmask "$u" >/dev/null 2>&1 || true
+  systemctl unmask --runtime "$u" >/dev/null 2>&1 || true
+  if [ -L "$f" ] && [ "$(readlink -f "$f" 2>/dev/null)" = /dev/null ]; then rm -f "$f"; fi
+  systemctl daemon-reload
+}
+
+# restart_unit UNIT: (re)start it and prove the NEW process is the one running —
+# active with a stable PID (tm_healthy) AND a different PID than before. A
+# restart that did not happen (the old instance still running, e.g. a unit that
+# was masked while it ran) is a failure here, never a false "running".
+restart_unit(){ # unit
+  local u="$1" before after
+  unit_unmask "$u"
+  before=$(tm_prop "$u" MainPID)
+  systemctl restart "$u" 2>/dev/null || return 1
+  tm_healthy "$u" || return 1
+  after=$(tm_prop "$u" MainPID)
+  [ "${after:-0}" != 0 ] && [ "$after" != "${before:-0}" ]
+}
+
 write_service(){
   local role="$1"
+  unit_unmask hs2   # before writing: a masked unit file is a /dev/null symlink
   # Built to come back on its own after a reboot or a crash:
   #  - enabled for multi-user.target (start_service/upgrade run `enable`)
   #  - waits for network-online, but never depends on it: if the IP is not up
@@ -248,15 +282,15 @@ EOF
 
 start_service(){
   local role="$1"
+  unit_unmask hs2
   systemctl enable hs2 >/dev/null 2>&1 || true
-  systemctl restart hs2 2>/dev/null || true
-  if tm_healthy hs2; then
-    ok "hs2 ($role) is running."
+  if restart_unit hs2; then
+    ok "hs2 ($role) is running with the new config."
     ok "Autostart on boot: ON — it comes back by itself after a reboot or crash."
     info "Manage it any time with:  hs2-menu   → 3) Tunnel manager"
   else
-    err "hs2 failed to start. Last log:"
-    journalctl -u hs2 -n 20 --no-pager >&2
+    err "hs2 did not start with the new config. Last log:"
+    journalctl -u hs2 -n 20 --no-pager >&2 || true
     bail
   fi
 }
@@ -618,13 +652,19 @@ kharej_listener(){
 }
 EOF
   elif [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
-    # Backhaul-style L3 tunnel over multi-link TLS (l3mtcp). Kharej is the TLS
-    # server here, so the cert lives on kharej (like direct tcp). No user ports:
-    # it is a routed interface, not a port forwarder.
+    # L3 tunnel over multi-link TLS (l3mtcp). Kharej is the TLS server here, so
+    # the cert lives on kharej (like direct tcp). The TUN is a routed side
+    # channel; the panel inbound is forwarded exactly like the tcp transport:
+    # the iran edge opens the user ports and every connection rides a stream to
+    # the panel set here (expose).
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
+    read -rp "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: " PANEL </dev/tty
+    PANEL=${PANEL:-127.0.0.1:8443}
     read -rp "Domain (its A record must point to $PUBIP): " DOMAIN </dev/tty
     [ -n "$DOMAIN" ] || die "domain required"
-    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp; UDP=false
+    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp
+    read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
+    case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
     cat > "$CFG" <<EOF
@@ -634,7 +674,8 @@ EOF
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
-  "cert_file": "$CERT", "key_file": "$KEY"
+  "cert_file": "$CERT", "key_file": "$KEY",
+  "expose": "$PANEL"
 }
 EOF
   elif [ "$TRANSPORT" = "tun" ]; then
@@ -682,7 +723,7 @@ EOF
   show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU" "$ENCAP_ARG"
   if [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $LMTU)."
-    info "Your panel stays on this kharej; iran reaches it over the tunnel."
+    info "Panel $PANEL receives the user ports you open on the iran side (asked there)."
   elif [ "$TRANSPORT" = "tun" ]; then
     info "Datagram L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (encap $TUN_ENCAP)."
     [ -n "$PORTS" ] && info "Panel $PANEL is reached over the tunnel on port(s): $PORTS (open the SAME port(s) on iran)."
@@ -717,24 +758,27 @@ EOF
     ok "KHAREJ ready (reverse, tcp). It dials in to the Iran edge and forwards to $PANEL."
   elif [ "$TRANSPORT" = "tun" ] && [ "$ENCAP" = "tcp" ]; then
     # Reverse tun: kharej DIALS the iran edge (TLS client) and runs the L3 pipe.
-    # MTU comes from the link so both sides match.
+    # MTU comes from the link so both sides match. The user ports iran opens
+    # ride streams to the panel set here (expose), exactly like reverse tcp.
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the iran edge with the new installer."
     ask_tun_params
+    read -rp "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: " PANEL </dev/tty
+    PANEL=${PANEL:-127.0.0.1:8443}
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "l3mtcp", "reverse": true,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $MTU,
   "shared_key": "$SHARED",
+  "expose": "$PANEL",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
   "bind_local_ip": "$EGRESSIP"
 }
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
-    ok "KHAREJ ready (reverse, tun / L3 over multi-link TLS). It dials in to the Iran edge."
+    ok "KHAREJ ready (reverse, tun / L3 over multi-link TLS). It dials in to the Iran edge and forwards to $PANEL."
     info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $MTU)."
-    info "Your panel stays on this kharej; iran reaches it over the tunnel."
   elif [ "$TRANSPORT" = "tun" ]; then
     # Reverse datagram tun (carrier "dgtun", encap $ENCAP from the link): kharej
     # DIALS the iran edge. No cert/domain. Kharej is the exit/panel side, so it
@@ -833,17 +877,24 @@ EOF
     echo >&2; hr
     ok "IRAN ready (direct, tcp). Users connect on port(s): $PORTS"
   elif [ "$TRANSPORT" = "tun" ] && [ "$ENCAP" = "tcp" ]; then
-    # Backhaul-style L3 tunnel over multi-link TLS (l3mtcp). Iran is the TLS
-    # client here (validates the kharej's domain as SNI). MTU comes from the link
-    # so both sides match; the interface name is a local choice.
+    # L3 tunnel over multi-link TLS (l3mtcp). Iran is the TLS client here
+    # (validates the kharej's domain as SNI). MTU comes from the link so both
+    # sides match; the interface name is a local choice. The user ports opened
+    # here ride streams to the kharej panel, exactly like the tcp transport.
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the kharej with the new installer."
     ask_tun_params
+    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    for p in ${PORTS//,/ }; do
+      port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
+    done
     cat > "$CFG" <<EOF
 {
-  "mode": "dial", "carrier": "l3mtcp", "reverse": false,
+  "mode": "dial", "carrier": "l3mtcp", "reverse": false, "udp": $UDP,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $MTU,
   "shared_key": "$SHARED",
+  "forward_ports": "$PORTS", "peer_panel": "$PANEL", "user_listen_ip": "$USERIP",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
   "bind_local_ip": "$EGRESSIP"
 }
@@ -852,7 +903,8 @@ EOF
     echo >&2; hr
     ok "IRAN ready (direct, tun / L3 over multi-link TLS)."
     info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $MTU)."
-    info "Route the traffic you want tunneled toward 10.77.0.2 over $TUNIF."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
+    else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward 10.77.0.2 yourself."; fi
   elif [ "$TRANSPORT" = "tun" ]; then
     # Datagram tun (carrier "dgtun", encap $ENCAP from the link): iran is the
     # edge, so it opens the user ports (forward_ports) and rides them over the
@@ -895,7 +947,7 @@ EOF
     echo >&2; hr
     ok "IRAN ready (direct, $TRANSPORT / UDP+FEC)."
     info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2)."
-    info "Route panel/user traffic over hs0 (e.g. to 10.77.0.2)."
+    warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over hs0 yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
     [ "$TRANSPORT" = "auto" ] && info "auto: if UDP is blocked or too lossy, it falls back to TCP silently."
   fi
   info "Backhaul is untouched. Status/logs any time:  bash install.sh → 4"
@@ -948,27 +1000,42 @@ EOF
     ok "IRAN ready (reverse, tcp). Users connect on port(s): $PORTS"
   elif [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     # Reverse tun: iran LISTENS and is the TLS server, so the cert lives HERE.
-    # The kharej dials in. L3 routed interface, no user ports.
+    # The kharej dials in. The TUN is a routed side channel; the user ports
+    # opened here ride streams to the kharej panel, exactly like reverse tcp.
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
+    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    for p in ${PORTS//,/ }; do
+      [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
+      port_free "$p" || die "user port $p is already in use on Iran. Pick another."
+    done
     read -rp "Domain for THIS iran server (its A record must point to $PUBIP): " DOMAIN </dev/tty
     [ -n "$DOMAIN" ] || die "domain required (the kharej validates it as the TLS name)"
-    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp; UDP=false
+    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp
+    UDP=false
+    if [ -n "$PORTS" ]; then
+      read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
+      case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
+    fi
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
     cat > "$CFG" <<EOF
 {
-  "mode": "dial", "carrier": "l3mtcp", "reverse": true,
+  "mode": "dial", "carrier": "l3mtcp", "reverse": true, "udp": $UDP,
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
+  "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN ready (reverse, tun / L3 over multi-link TLS)."
     info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $LMTU)."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
+    else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward 10.77.0.2 yourself."; fi
   elif [ "$TRANSPORT" = "tun" ]; then
     # Reverse datagram tun (carrier "dgtun", encap $TUN_ENCAP): iran LISTENS
     # (kharej dials in). No cert, no domain — shared-key auth only. Iran is the
@@ -1010,7 +1077,8 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN ready (reverse, $TRANSPORT / UDP+FEC)."
-    info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2). Route traffic over hs0."
+    info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2)."
+    warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over hs0 yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
   fi
   # panel is set on the kharej side; leave it blank in the link.
   local ENCAP_ARG=""; [ "$TRANSPORT" = "tun" ] && ENCAP_ARG="$TUN_ENCAP"
@@ -1363,8 +1431,7 @@ tm_start(){
   if [ "$(tm_state "$u")" = running ]; then ok "$u is already running."; return 0; fi
   since=$(date '+%Y-%m-%d %H:%M:%S')
   info "Starting $u…"
-  systemctl start "$u" 2>/dev/null || true
-  if tm_healthy "$u"; then ok "$u is running."; else err "$u did not stay up. Log:"; fi
+  if restart_unit "$u"; then ok "$u is running."; else err "$u did not stay up. Log:"; fi
   tm_log_since "$u" "$since"
 }
 tm_stop(){
@@ -1381,8 +1448,7 @@ tm_restart(){
   local u="$1" since
   since=$(date '+%Y-%m-%d %H:%M:%S')
   info "Restarting $u…"
-  systemctl restart "$u" 2>/dev/null || true
-  if tm_healthy "$u"; then ok "$u restarted and running."; else err "$u did not stay up. Log:"; fi
+  if restart_unit "$u"; then ok "$u restarted and running."; else err "$u did not stay up. Log:"; fi
   tm_log_since "$u" "$since"
 }
 tm_toggle_autostart(){
@@ -1489,12 +1555,10 @@ tm_apply_restart(){ # unit cfg
   local u="$1" cfg="$2" since
   since=$(date '+%Y-%m-%d %H:%M:%S')
   info "Restarting $u to apply the change…"
-  systemctl restart "$u" 2>/dev/null || true
-  if tm_healthy "$u"; then ok "Applied — $u is running."; tm_log_since "$u" "$since"; return 0; fi
+  if restart_unit "$u"; then ok "Applied — $u is running with the change."; tm_log_since "$u" "$since"; return 0; fi
   err "$u did not come up with the change. Rolling back."
   if [ -f "$cfg.prev" ]; then cat "$cfg.prev" > "$cfg"; fi
-  systemctl restart "$u" 2>/dev/null || true
-  if tm_healthy "$u"; then ok "Rolled back — $u is running again."; else err "$u is still down. Check the log."; tm_log_since "$u" "$since"; fi
+  if restart_unit "$u"; then ok "Rolled back — $u is running again."; else err "$u is still down. Check the log."; tm_log_since "$u" "$since"; fi
   # Always 0: the outcome is reported above, and callers use this as the last
   # command of an && list — a non-zero status there would end the whole menu
   # under set -e.
@@ -1708,12 +1772,12 @@ restore(){
   systemctl stop hs2 2>/dev/null || true
   local IFACE; IFACE=$(cfg_field iface)
   [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
+  unit_unmask hs2   # else the restored unit file lands on a /dev/null symlink
   tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
   systemctl daemon-reload
   [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
   systemctl enable hs2 >/dev/null 2>&1 || true
-  systemctl restart hs2 2>/dev/null || true
-  if tm_healthy hs2; then
+  if restart_unit hs2; then
     ok "Restored and running: $("$BIN" version 2>/dev/null)"
     ok "Autostart on boot: ON"
     info "Watch the log:  journalctl -u hs2 -f"
@@ -1805,8 +1869,7 @@ upgrade(){
   local role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
   write_service "$role"
   systemctl enable hs2 >/dev/null 2>&1 || true
-  systemctl restart hs2 2>/dev/null || true
-  if tm_healthy hs2; then
+  if restart_unit hs2; then
     ok "Autostart on boot: $(systemctl is-enabled hs2 2>/dev/null)"
     info "Tunnel manager: run  hs2-menu  → 3"
     ok "hs2 upgraded and running. Upgrade the OTHER server too (both sides must match)."
