@@ -47,13 +47,13 @@ type autopilot struct {
 	tun               apTunables
 	rnd               func() float64
 
-	T    int            // committed SERVING target
-	hist []apTick       // ring of the last tun.histTicks ticks
-	caps []apCap        // sustained rates of pressed serving links
-	pr   *apProbe       // an in-flight growth probe
-	k    int            // failed-probe backoff exponent
-	next time.Time      // no new probe before this
-	fail struct {       // where growth last stopped helping
+	T    int       // committed SERVING target
+	hist []apTick  // ring of the last tun.histTicks ticks
+	caps []apCap   // sustained rates of pressed serving links
+	pr   *apProbe  // an in-flight growth probe
+	k    int       // failed-probe backoff exponent
+	next time.Time // no new probe before this
+	fail struct {  // where growth last stopped helping
 		at    time.Time
 		g     float64
 		flows int
@@ -78,8 +78,8 @@ type autopilot struct {
 // apTunables holds every clock and threshold, so tests can shorten them.
 type apTunables struct {
 	tick              time.Duration
-	histTicks         int     // ticks of history the windows look back over (60 s)
-	shortWin, shortN  int     // shortage = shortTick on >= shortN of the last shortWin ticks
+	histTicks         int // ticks of history the windows look back over (60 s)
+	shortWin, shortN  int // shortage = shortTick on >= shortN of the last shortWin ticks
 	armTimeout        time.Duration
 	settleTicks       int
 	looks             []int   // eval ticks at which the probe verdict is checked
@@ -221,17 +221,17 @@ type apCap struct {
 }
 
 type apProbe struct {
-	from, to   int
-	start      time.Time
-	armed      bool
-	armedAt    time.Time
-	settled    int
-	gb, varB   float64
-	before     map[int]float64
-	evalG      []float64
-	evalNew    []float64
-	triggerP   int
-	triggerS   int
+	from, to int
+	start    time.Time
+	armed    bool
+	armedAt  time.Time
+	settled  int
+	gb, varB float64
+	before   map[int]float64
+	evalG    []float64
+	evalNew  []float64
+	triggerP int
+	triggerS int
 }
 
 func newAutopilot(min, max, perLink int) *autopilot {
