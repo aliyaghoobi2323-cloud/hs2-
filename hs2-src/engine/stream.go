@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,14 +66,31 @@ type watchConn struct {
 	net.Conn
 	once  sync.Once
 	onErr func()
+	// why records the first read/write error, so the log can say why a link
+	// went down instead of only that it did.
+	why atomic.Pointer[string]
 }
 
-func (w *watchConn) fail() { w.once.Do(func() { go w.onErr() }) }
+func (w *watchConn) fail(op string, err error) {
+	w.once.Do(func() {
+		s := op + ": " + describeNetErr(err)
+		w.why.Store(&s)
+		go w.onErr()
+	})
+}
+
+// reason returns why the connection failed, or "" if it has not.
+func (w *watchConn) reason() string {
+	if s := w.why.Load(); s != nil {
+		return *s
+	}
+	return ""
+}
 
 func (w *watchConn) Read(p []byte) (int, error) {
 	n, err := w.Conn.Read(p)
 	if err != nil {
-		w.fail()
+		w.fail("read", err)
 	}
 	return n, err
 }
@@ -80,9 +98,33 @@ func (w *watchConn) Read(p []byte) (int, error) {
 func (w *watchConn) Write(p []byte) (int, error) {
 	n, err := w.Conn.Write(p)
 	if err != nil {
-		w.fail()
+		w.fail("write", err)
 	}
 	return n, err
+}
+
+// describeNetErr turns the usual socket errors into words an operator can act
+// on; anything else is passed through.
+func describeNetErr(err error) string {
+	var ne net.Error
+	switch {
+	case errors.Is(err, io.EOF):
+		return "closed by the other server"
+	case errors.Is(err, net.ErrClosed):
+		return "closed locally"
+	case errors.As(err, &ne) && ne.Timeout():
+		return "timed out (path stalled)"
+	}
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "connection reset"):
+		return "reset by the network or the other server"
+	case strings.Contains(s, "broken pipe"):
+		return "broken pipe (the other side went away)"
+	case strings.Contains(s, "no route to host"), strings.Contains(s, "network is unreachable"):
+		return "network unreachable"
+	}
+	return s
 }
 
 // newSession starts an smux session over conn that dies with conn. The session
@@ -90,8 +132,9 @@ func (w *watchConn) Write(p []byte) (int, error) {
 // follow an HTTPS-like size distribution instead of smux's own framing. Both
 // ends build their session here, so the shaping is symmetric. A nil sampler gets
 // a default HTTPS sampler. When meter is non-nil (edge links), a meteredConn
-// above the shaper counts real payload/stalls for health-aware routing.
-func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, error) {
+// above the shaper counts real payload/stalls for health-aware routing. The
+// returned func reports why the connection failed ("" while it is healthy).
+func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
 	var c net.Conn = newShapedConn(conn, sampler)
 	if meter != nil {
@@ -112,10 +155,10 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 		sess, err = smux.Client(w, newSmuxConfig())
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	sp.Store(sess)
-	return sess, nil
+	return sess, w.reason, nil
 }
 
 // streamPkt carries L3 frames over one smux stream (see pktConn).

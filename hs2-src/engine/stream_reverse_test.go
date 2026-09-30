@@ -4,9 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +22,10 @@ import (
 // smux roles stay the same as direct (iran originates user streams, kharej
 // delivers to the panel).
 func startReverseTunnel(t *testing.T, nLinks int) *tunnel {
+	return startReverseTunnelLog(t, nLinks, nil)
+}
+
+func startReverseTunnelLog(t *testing.T, nLinks int, iranLog func(string, ...any)) *tunnel {
 	key := bytes.Repeat([]byte{0x5a}, 32)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -40,6 +48,7 @@ func startReverseTunnel(t *testing.T, nLinks int) *tunnel {
 		RevServer: iranSrv, RevListener: iranLn,
 		PerLink:  50,
 		ListenIP: "127.0.0.1", Ports: []string{port}, UDP: true,
+		Log: iranLog,
 	})
 
 	// kharej exit: dials nLinks carriers to the iran edge.
@@ -131,4 +140,63 @@ func TestReverseStreamRedials(t *testing.T) {
 		t.Fatal("reverse tunnel did not recover after its links were killed")
 	}
 	tcpEcho(t, tn.userAddr, 64<<10)
+}
+
+// The iran edge logs every reverse link that goes down, with a reason, and its
+// "now N" counts only live links: after all links are killed and redialed the
+// count must never exceed the number the kharej keeps (the old code counted
+// dead links still waiting for the next health tick and printed "now 16" for 8).
+func TestReverseLinkLogsAreHonest(t *testing.T) {
+	var mu sync.Mutex
+	var lines []string
+	logf := func(f string, a ...any) {
+		mu.Lock()
+		lines = append(lines, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	}
+	const n = 3
+	tn := startReverseTunnelLog(t, n, logf)
+	waitFor := func(what string, ok func() bool) {
+		t.Helper()
+		for i := 0; i < 200; i++ {
+			if ok() {
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		t.Fatalf("%s; log:\n%s", what, strings.Join(lines, "\n"))
+	}
+	count := func(sub string) int {
+		mu.Lock()
+		defer mu.Unlock()
+		c := 0
+		for _, l := range lines {
+			if strings.Contains(l, sub) {
+				c++
+			}
+		}
+		return c
+	}
+	waitFor("links never came up", func() bool { return count("up from 127.0.0.1") >= n })
+	tn.kill()
+	waitFor("link closures were not logged", func() bool { return count("down: ") >= n })
+	waitFor("links were not redialed", func() bool { return count("up from 127.0.0.1") >= 2*n })
+	re := regexp.MustCompile(`\(now (\d+)\)`)
+	mu.Lock()
+	defer mu.Unlock()
+	for _, l := range lines {
+		if !strings.Contains(l, "reverse link") {
+			continue
+		}
+		if m := re.FindStringSubmatch(l); m != nil {
+			if v, _ := strconv.Atoi(m[1]); v > n {
+				t.Fatalf("log claims %d links but only %d exist: %q", v, n, l)
+			}
+		}
+		if strings.Contains(l, "down: ") && strings.HasSuffix(strings.TrimSpace(strings.SplitN(l, "down: ", 2)[1]), ":") {
+			t.Fatalf("empty reason: %q", l)
+		}
+	}
 }

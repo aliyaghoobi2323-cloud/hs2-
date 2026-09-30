@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync/atomic"
@@ -54,7 +55,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			continue
 		}
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
-			sess, err := newSession(car.RawConn(), true, nil, nil)
+			sess, why, err := newSession(car.RawConn(), true, nil, nil)
 			if err != nil {
 				car.Close()
 				return
@@ -78,9 +79,23 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			}
 			sess.Close()
 			car.Close()
-			logf("link down from %s: %v (now %d)", conn.RemoteAddr(), downErr, links.Add(-1))
+			logf("link down from %s: %s (now %d)", conn.RemoteAddr(), sessionEndReason(why, downErr), links.Add(-1))
 		})
 	}
+}
+
+// sessionEndReason explains why an exit-side smux session ended: the socket
+// error that killed it if there was one, else smux's own reason.
+func sessionEndReason(why func() string, sessErr error) string {
+	if why != nil {
+		if r := why(); r != "" {
+			return r
+		}
+	}
+	if sessErr == nil || errors.Is(sessErr, io.ErrClosedPipe) {
+		return "session ended (keepalive timeout or closed by the other server)"
+	}
+	return describeNetErr(sessErr)
 }
 
 func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier) {

@@ -37,20 +37,26 @@ func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Se
 			}
 			continue
 		}
+		from := conn.RemoteAddr().String()
+		if h, _, err := net.SplitHostPort(from); err == nil {
+			from = h
+		}
 		go srv.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
 			l, err := newEdgeLink(car, sampler)
 			if err != nil {
 				car.Close()
 				return
 			}
-			lm.AddLink(l)
-			// Hold the carrier open until the link's smux session ends; the pool
-			// reaps it after that.
+			lm.AddLink(l, from)
+			// Hold the carrier open until the link's smux session ends, then take
+			// it out of the pool at once (and log why) instead of waiting for the
+			// next health tick.
 			select {
 			case <-ctx.Done():
+				l.Close()
 			case <-l.closed():
+				lm.DropLink(l, from)
 			}
-			l.Close()
 		})
 	}
 }
@@ -87,7 +93,7 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 			continue
 		}
 		backoff = 500 * time.Millisecond
-		sess, err := newSession(car.RawConn(), true, nil, nil) // smux server
+		sess, why, err := newSession(car.RawConn(), true, nil, nil) // smux server
 		if err != nil {
 			car.Close()
 			continue
@@ -116,6 +122,6 @@ func maintainExitLink(ctx context.Context, cfg KharejConfig, l3 *l3Set, links *a
 		close(closed)
 		sess.Close()
 		car.Close()
-		logf("reverse link down: %v (now %d); redial", downErr, links.Add(-1))
+		logf("reverse link down: %s (now %d); redial", sessionEndReason(why, downErr), links.Add(-1))
 	}
 }

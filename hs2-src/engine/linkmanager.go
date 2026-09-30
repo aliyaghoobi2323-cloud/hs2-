@@ -144,18 +144,62 @@ func jitterGap() time.Duration {
 
 // AddLink injects an externally acquired link into the pool. It is used by the
 // reverse edge, which does not dial links but accepts them from the peer that
-// dials in; the pool, load-balancing and reaping are otherwise identical.
-func (m *LinkManager) AddLink(l Link) {
+// dials in; the pool, load-balancing and reaping are otherwise identical. from
+// names the peer for the log. It returns the link's id.
+func (m *LinkManager) AddLink(l Link, from string) int {
 	m.mu.Lock()
 	id := m.linkSeq
 	m.linkSeq++
 	m.links = append(m.links, m.newManaged(l, id))
-	n := len(m.links)
+	n := m.aliveLocked()
 	m.mu.Unlock()
-	m.log("mtcp: accepted reverse link (now %d)", n)
+	m.log("mtcp: reverse link %d up from %s (now %d)", id, from, n)
 	if m.OnLink != nil {
 		go m.OnLink(l)
 	}
+	return id
+}
+
+// DropLink removes a reverse link as soon as it closes, and logs why, so the
+// pool and its "now N" count never include links that are already gone.
+func (m *LinkManager) DropLink(l Link, from string) {
+	m.mu.Lock()
+	id := -1
+	kept := m.links[:0]
+	for _, ml := range m.links {
+		if ml.link == l {
+			id = ml.id
+			continue
+		}
+		kept = append(kept, ml)
+	}
+	m.links = kept
+	n := m.aliveLocked()
+	m.mu.Unlock()
+	l.Close()
+	if id < 0 || m.closing.Load() {
+		return // already reaped, or the whole pool is shutting down
+	}
+	m.log("mtcp: reverse link %d from %s down: %s (now %d)", id, from, linkDownReason(l), n)
+}
+
+// aliveLocked counts usable links. Caller holds m.mu.
+func (m *LinkManager) aliveLocked() int {
+	n := 0
+	for _, ml := range m.links {
+		if ml.link.Alive() {
+			n++
+		}
+	}
+	return n
+}
+
+// linkDownReason asks a link why it stopped, when it can tell.
+func linkDownReason(l Link) string {
+	if r, ok := l.(interface{ downReason() string }); ok {
+		return r.downReason()
+	}
+	return "closed"
 }
 
 // Run brings the pool up to Min links and then maintains it: rebuilds dead
@@ -289,6 +333,7 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			for _, ml := range m.links {
 				if !ml.link.Alive() {
 					ml.link.Close()
+					m.log("mtcp: reverse link %d down: %s", ml.id, linkDownReason(ml.link))
 					continue
 				}
 				if ml.degraded && !ml.draining {
@@ -361,28 +406,32 @@ func (m *LinkManager) addReplacement(ctx context.Context) {
 	m.log("mtcp: dialed replacement link %d (make-before-break)", id)
 }
 
-// reap rebuilds links that died, keeping the pool at least Min.
+// reap rebuilds links that died, keeping the pool at least Min. Each death is
+// logged with its reason.
 func (m *LinkManager) reap(ctx context.Context) {
 	m.mu.Lock()
 	alive := m.links[:0]
-	dead := 0
+	var dead []*managedLink
 	for _, ml := range m.links {
 		if ml.link.Alive() {
 			alive = append(alive, ml)
 		} else {
 			ml.link.Close()
-			dead++
+			dead = append(dead, ml)
 		}
 	}
 	m.links = alive
 	m.mu.Unlock()
-	for i := 0; i < dead; i++ {
+	for _, ml := range dead {
+		m.log("mtcp: link %d down: %s", ml.id, linkDownReason(ml.link))
+	}
+	for range dead {
 		if m.count() < m.desiredCount() || m.count() < m.min {
 			m.addLink(ctx)
 		}
 	}
-	if dead > 0 {
-		m.log("mtcp: %d link(s) died; redialing — now %d up", dead, m.count())
+	if len(dead) > 0 {
+		m.log("mtcp: redialed after %d link(s) went down — now %d up", len(dead), m.count())
 	}
 }
 
@@ -586,6 +635,7 @@ func (m *LinkManager) count() int {
 }
 
 func (m *LinkManager) closeAll() {
+	m.closing.Store(true)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, ml := range m.links {
