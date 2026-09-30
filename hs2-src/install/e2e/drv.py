@@ -180,7 +180,9 @@ def phase_adaptive():
     i = ch.expect(["Applied — hs2 is running", "Rolled back", "did not come up"], timeout=60)
     ch.expect("Choose:")
     res("tuning: change qdisc, applied, tunnel healthy", i == 0)
-    ch.sendline("0"); ch.expect("Choose:"); ch.sendline("0")
+    ch.sendline("0"); ch.expect("Choose:")             # leave Tuning -> tunnel menu
+    ch.sendline("0"); ch.expect("Pick a tunnel number") # leave tunnel menu -> list
+    ch.expect("Choose:"); ch.sendline("0")              # leave list -> main menu
     ch.expect(r"Choose \[0-8\]"); ch.sendline("0"); ch.expect(pexpect.EOF)
     res("tuning: config gained a tuning block", '"tuning"' in sh("ir", "cat /etc/hs2/config.json"))
     res("tuning: tunnel still carries data", wait_data() is not None)

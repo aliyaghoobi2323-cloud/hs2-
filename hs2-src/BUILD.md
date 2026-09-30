@@ -20,9 +20,52 @@ go test -race ./...
 - `fec/`        — adaptive interleaved Reed-Solomon FEC (standalone; see `fec/README.md`)
 - `obfs/`       — traffic shaping (length/timing), used by the noise/reality carriers
 - `tun/`        — Linux TUN device
-- `cmd/hs2/`    — the binary (run, keygen, version)
+- `tune/`       — RAM/CPU-aware kernel tuning applied at every start (`hs2 tune`)
+- `cmd/hs2/`    — the binary (run, keygen, version, check, status, tune, config)
 - `install/`    — installer script
 - `lab/`        — network emulator and benchmark harness (see below)
+
+## Commands
+
+- `hs2 run -c cfg`        — run the tunnel
+- `hs2 check -c cfg`      — validate a config (used by the tunnel manager on edit)
+- `hs2 status -c cfg [--watch]` — live dashboard: link pattern, throughput, cert
+- `hs2 tune -c cfg [--apply]`   — show (and optionally apply) the kernel tuning plan
+- `hs2 config -c cfg set|get|unset <key> [val]` — safe JSON-aware config edits
+- `hs2 keygen`, `hs2 version`
+
+The daemon also reacts to signals: SIGHUP hot-reloads the TLS certificate
+(`systemctl reload hs2`, the certbot deploy-hook) with no dropped connections.
+
+## Adaptive link pool (autopilot)
+
+`engine/autopilot.go` is a pure controller that sizes the parallel-link pool
+between `min_links` and `max_links` (installer default 2–32). Each health tick
+it is fed a sample (users, live links, aggregate goodput, saturation) and
+returns the desired link count; `engine/linkmanager.go` (direct edge) and
+`engine/exit_pool.go` (reverse exit) are the actuators. Two pressures set the
+size: the connection floor `ceil(users/per_link)`, and a throughput probe that
+grows a link only while the links are saturated and an added link raises
+goodput, settling at the path ceiling and re-probing as demand/the path change.
+The pool starts warm (`warmStartLinks`) so a startup burst spreads at once.
+
+In reverse, only the exit dials, so the edge sends its target down a
+pool-control stream (`kindPool`); the exit's dial pool follows it. Additive and
+backward-compatible — an old peer just closes the stream.
+
+The controller is covered by a per-connection-throttling simulator in
+`engine/autopilot_test.go`; the reverse target propagation end-to-end in
+`engine/stream_reverse_test.go` (`TestReverseExitPoolFollowsEdgeTarget`).
+
+## Kernel tuning (`tune/`)
+
+`hs2 tune` detects RAM and cores, picks a low/medium/high profile (buffers,
+backlogs, somaxconn), a congestion control (default bbr) and a qdisc (default
+fq_codel, with fallback), plus fixed BBR-/multi-IP-friendly sysctls. It is
+applied on every `hs2 run` (single source of truth — no static sysctl file) and
+overridable via the config `"tuning"` section (`mode` auto|manual|off). Unit
+tests in `tune/tune_test.go`. Set `HS2_NO_TUNE=1` to skip applying (the lab does
+this so experiments control tuning via `HS2_TUNE_*`).
 
 ## Carriers (config `"carrier"`)
 
@@ -31,11 +74,11 @@ All three TLS carriers share one data path, the **stream core**
 bytes ride an smux stream over a pool of TLS links; the kharej server opens
 its own connection to the panel. There is no TCP-inside-TCP anywhere.
 
-| carrier  | links                 | hs0 (10.77.0.1/2)          |
-|----------|-----------------------|----------------------------|
-| `mtcp`   | pool, `min_links`..`max_links` | no                 |
-| `l3mtcp` | pool                  | yes, as a side channel     |
-| `tls`    | exactly 1             | yes, as a side channel     |
+| carrier  | links                          | hs0 (10.77.0.1/2)      |
+|----------|--------------------------------|------------------------|
+| `mtcp`   | adaptive pool `min_links`..`max_links` (autopilot) | no |
+| `l3mtcp` | adaptive pool                  | yes, as a side channel |
+| `tls`    | exactly 1                      | yes, as a side channel |
 
 `"udp": true` (Iran config) also forwards UDP on `forward_ports`; each client
 address gets its own stream. The side channel carries hs0 packets (ping,
