@@ -87,6 +87,9 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	pool.serve = func(ctx context.Context, car dialedLink) {
 		serveReverseLink(ctx, car.(*tlscarrier.Carrier), cfg, l3, pool)
 	}
+	if cfg.OnStart != nil {
+		cfg.OnStart(pool.stats)
+	}
 	pool.setTarget(initial)
 	<-ctx.Done()
 	return nil

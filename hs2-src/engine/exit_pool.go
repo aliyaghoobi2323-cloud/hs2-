@@ -142,6 +142,15 @@ func (p *exitPool) incLive(d int) int {
 	return p.live
 }
 
+// stats reports the reverse exit pool for the live monitor. The exit follows the
+// edge's target, so phase is always "following"; throughput and users are only
+// visible on the edge, not here.
+func (p *exitPool) stats() PoolStats {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return PoolStats{Links: p.live, Target: p.want, Min: p.min, Max: p.max, Phase: "following"}
+}
+
 // openPoolCtl runs the EDGE side of pool-control for one link: it opens a
 // kindPool stream and sends the autopilot's desired link count periodically and
 // whenever it changes, until the link or ctx ends. get returns the current

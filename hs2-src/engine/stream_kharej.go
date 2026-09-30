@@ -31,6 +31,10 @@ type KharejConfig struct {
 	RevLinks int
 	RevMin   int
 	RevMax   int
+
+	// OnStart, if set, is called once with a function that returns a live
+	// snapshot of the link pattern, for monitoring.
+	OnStart func(StatsFn)
 }
 
 // RunKharej accepts links and serves their streams until ctx ends.
@@ -49,6 +53,9 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
 	var links atomic.Int32
+	if cfg.OnStart != nil {
+		cfg.OnStart(func() PoolStats { return PoolStats{Links: int(links.Load()), Phase: "listening"} })
+	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
 	for {
 		conn, err := cfg.Listener.Accept()

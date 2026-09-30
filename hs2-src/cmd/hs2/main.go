@@ -93,11 +93,17 @@ func main() {
 		runCmd(os.Args[2:])
 	case "check":
 		checkCmd(os.Args[2:])
+	case "status":
+		statusCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)
 	}
 }
+
+// configPath is the path of the config the running daemon loaded, so the status
+// writer can derive its live-status file. Set once in runCmd.
+var configPath string
 
 // applyTuning lets the test lab override data-path tuning without a rebuild.
 // Production runs use the built-in defaults; these are not config options.
@@ -125,6 +131,7 @@ func runCmd(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	fs.Parse(args)
+	configPath = *cfgPath
 	raw, err := os.ReadFile(*cfgPath)
 	must(err)
 	var fc fileConfig
@@ -235,6 +242,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			Ports:    splitComma(fc.ForwardPorts),
 			UDP:      fc.UDP,
 			Log:      logf,
+			OnStart:  func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) },
 		}
 		if dev != nil {
 			cfg.TUN = dev
@@ -257,7 +265,8 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	}
 
 	// exit (kharej): has the panel.
-	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf}
+	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf,
+		OnStart: func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) }}
 	if dev != nil {
 		cfg.TUN = dev
 	}

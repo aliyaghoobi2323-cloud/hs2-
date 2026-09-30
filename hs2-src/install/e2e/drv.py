@@ -263,7 +263,7 @@ def phase_manager():
     res("live log: Ctrl+C returns to the menu", i == 0)
 
     # autostart OFF
-    ch.sendline("6"); ch.expect("Autostart OFF"); ch.expect("Choose:")
+    ch.sendline("7"); ch.expect("Autostart OFF"); ch.expect("Choose:")
     res("autostart OFF -> disabled, still running", state("ir") == ["active", "disabled"], str(state("ir")))
     ch.sendline("0")
     ch.expect("Pick a tunnel number")
@@ -314,7 +314,7 @@ def phase_reboot():
     # turn it back ON with the manager (and start it)
     ch = menu_open("ir", "manager_iran2")
     ch.expect("Choose:"); ch.sendline("1"); ch.expect("Choose:")
-    ch.sendline("6"); ch.expect("Autostart ON"); ch.expect("Choose:")
+    ch.sendline("7"); ch.expect("Autostart ON"); ch.expect("Choose:")
     ch.sendline("1"); ch.expect(["hs2 is running", "did not stay up"], timeout=60); ch.expect("Choose:")
     ch.sendline("0"); ch.expect("Choose:"); ch.sendline("0"); ch.expect(r"Choose \[0-8\]"); ch.sendline("0"); ch.expect(pexpect.EOF)
     res("autostart ON + start from manager", state("ir") == ["active", "enabled"] and wait_data() is not None)

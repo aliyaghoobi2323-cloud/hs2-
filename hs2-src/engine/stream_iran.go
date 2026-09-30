@@ -28,7 +28,14 @@ type IranConfig struct {
 	// dials in.
 	RevServer   *tlscarrier.Server
 	RevListener net.Listener
+
+	// OnStart, if set, is called once with a function that returns a live
+	// snapshot of the link pattern, so the caller can publish it for monitoring.
+	OnStart func(StatsFn)
 }
+
+// StatsFn returns a live snapshot of the link pattern.
+type StatsFn func() PoolStats
 
 // RunIran brings up the link pool and the user-facing listeners and serves
 // until ctx ends. Listeners never depend on a link being up: a user who
@@ -68,6 +75,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		if l3 != nil {
 			openL3(ctx, l, l3, cfg.TUN, logf)
 		}
+	}
+	if cfg.OnStart != nil {
+		cfg.OnStart(lm.Stats)
 	}
 	go lm.Run(ctx)
 	if reverse {

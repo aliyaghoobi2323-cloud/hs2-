@@ -828,7 +828,25 @@ pause(){ read -rp "Press Enter to continue… " _ </dev/tty || true; }
 
 # jget FILE KEY -> string value; jraw FILE KEY -> bare value (true/false/number)
 jget(){ { grep -o "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$1" 2>/dev/null || true; } | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
-jraw(){ { grep -o "\"$2\"[[:space:]]*:[[:space:]]*[a-z0-9]*" "$1" 2>/dev/null || true; } | head -1 | sed 's/.*:[[:space:]]*//'; }
+jraw(){ { grep -o "\"$2\"[[:space:]]*:[[:space:]]*[a-z0-9.]*" "$1" 2>/dev/null || true; } | head -1 | sed 's/.*:[[:space:]]*//'; }
+
+# The daemon publishes a live status file (see cmd/hs2/status.go). status_path
+# derives it from a config path exactly as the binary does: /run/hs2/ + the
+# absolute config path with '/'->'-' and ' '->'_', + .status.json.
+status_path(){
+  local p="$1"
+  case "$p" in /*) ;; *) p="$PWD/$p" ;; esac
+  p=${p#/}; p=${p//\//-}; p=${p// /_}
+  echo "/run/hs2/$p.status.json"
+}
+# status_fresh FILE -> 0 if the file exists and was updated in the last ~7s.
+status_fresh(){
+  local f="$1" upd now
+  [ -f "$f" ] || return 1
+  upd=$(jraw "$f" updated); [ -n "$upd" ] || return 1
+  now=$(date +%s)
+  [ $((now - upd)) -le 7 ]
+}
 
 tm_units(){
   local f
@@ -878,17 +896,50 @@ tm_dials(){
   local mode rev; mode=$(jget "$1" mode); rev=$(jraw "$1" reverse)
   if [ "$mode" = dial ]; then [ "$rev" != true ]; else [ "$rev" = true ]; fi
 }
-# Live TLS links of a TCP tunnel (empty for udp/auto, which are not TCP links).
+# Live TLS links of a TCP tunnel. Prefer the daemon's own live count (it knows
+# exactly how many links are up, and its dynamic target); fall back to counting
+# established sockets when no fresh status file is there (older binary).
 tm_links(){
-  local cfg="$1" car addr host port
+  local cfg="$1" car addr host port sf
   car=$(jget "$cfg" carrier)
   case "$car" in mtcp|l3mtcp|l3|tls) ;; *) return 0 ;; esac
+  sf=$(status_path "$cfg")
+  if status_fresh "$sf"; then
+    jraw "$sf" links; return 0
+  fi
   addr=$(jget "$cfg" addr); host=${addr%:*}; port=${addr##*:}
   if tm_dials "$cfg"; then
     ss -Htn state established "( dport = :$port and dst $host )" 2>/dev/null | wc -l
   else
     ss -Htn state established "( sport = :$port )" 2>/dev/null | wc -l
   fi
+}
+
+# tm_pattern CFG -> a live one-line description of the adaptive parallel-link
+# pattern from the status file, e.g. "8→10 links (probing, 2–32) · 40 users ·
+# 42.5 Mbit/s". Empty when there is no fresh status (older binary or not up).
+tm_pattern(){
+  local sf; sf=$(status_path "$1")
+  status_fresh "$sf" || return 0
+  local links target min max users mbit phase sat out
+  links=$(jraw "$sf" links); target=$(jraw "$sf" target)
+  min=$(jraw "$sf" min); max=$(jraw "$sf" max)
+  users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
+  phase=$(jget "$sf" phase); sat=$(jraw "$sf" sat)
+  if [ -n "$target" ] && [ "$target" != "$links" ] && [ "$target" != 0 ]; then
+    out="${links}→${target} links"
+  else
+    out="${links} links"
+  fi
+  if [ -n "$max" ] && [ "$max" != 0 ]; then
+    out="$out (${phase:-steady}, ${min}–${max})"
+  elif [ -n "$phase" ]; then
+    out="$out (${phase})"
+  fi
+  [ -n "$users" ] && [ "$users" != 0 ] && out="$out · ${users} users"
+  [ -n "$mbit" ] && [ "$mbit" != 0 ] && out="$out · ${mbit} Mbit/s"
+  [ "$sat" = true ] && out="$out · saturated"
+  echo "$out"
 }
 # Peers connected to a listening tunnel (who is actually on the other end).
 tm_peers(){
@@ -961,9 +1012,65 @@ tm_details(){
     [ -n "$(jget "$cfg" forward_ports)" ] && say " User ports:  $(jget "$cfg" forward_ports)  (users connect here)"
     [ -n "$(jget "$cfg" expose)" ] && say " Panel:       $(jget "$cfg" expose)"
   fi
+  if [ "$st" = running ]; then
+    local pat; pat=$(tm_pattern "$cfg")
+    [ -n "$pat" ] && say " Pattern:     $pat"
+  fi
   if tm_autostart "$u"; then say " Autostart:   ${C_G}ON${C_0} — comes back by itself after a reboot"
   else say " Autostart:   ${C_Y}OFF${C_0} — will NOT start after a reboot"; fi
   hr
+}
+
+# tm_monitor shows the adaptive link pattern live, refreshing every 2s until the
+# user presses a key. This is where the connection pattern is watched changing.
+tm_monitor(){
+  local u="$1" cfg="$2" st pat sf
+  sf=$(status_path "$cfg")
+  info "Live pattern of $u — press Enter to go back."
+  # Read one key with a 2s timeout as the refresh clock; Enter (or any key) exits.
+  while :; do
+    st=$(tm_state "$u")
+    printf '\033[2J\033[H' >&2
+    say " ${C_B}$u${C_0}  $(tm_state_label "$st")$([ "$st" = running ] && echo " · $(tm_uptime "$u")")"
+    say " $(tm_role "$cfg") · $(tm_dir "$cfg") · $(tm_transport "$cfg") · $(tm_endpoint "$cfg")"
+    hr
+    if [ "$st" != running ]; then
+      say " (not running)"
+    elif status_fresh "$sf"; then
+      local links target min max users mbit phase sat
+      links=$(jraw "$sf" links); target=$(jraw "$sf" target)
+      min=$(jraw "$sf" min); max=$(jraw "$sf" max)
+      users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
+      phase=$(jget "$sf" phase); sat=$(jraw "$sf" sat)
+      local bar="" i=0
+      # A little gauge of live/target links inside the min–max envelope.
+      if [ -n "$max" ] && [ "$max" != 0 ]; then
+        while [ "$i" -lt "$max" ]; do
+          if [ "$i" -lt "${links:-0}" ]; then bar="$bar${C_G}█${C_0}"
+          elif [ "$i" -lt "${target:-0}" ]; then bar="$bar${C_Y}▒${C_0}"
+          else bar="$bar${C_D}·${C_0}"; fi
+          i=$((i+1))
+        done
+        say " Links:   ${C_B}${links}${C_0} up$([ -n "$target" ] && [ "$target" != "$links" ] && echo " → ${target} target") · range ${min}–${max}"
+        say "          [$bar]"
+        say " Mode:    ${phase:-steady}$([ "$sat" = true ] && echo " · saturated (a bigger pattern may help)")"
+      else
+        say " Links:   ${C_B}${links}${C_0} up (${phase:-running})"
+      fi
+      [ -n "$users" ] && say " Users:   ${users} active connections"
+      [ -n "$mbit" ] && [ "$mbit" != 0 ] && say " Speed:   ${mbit} Mbit/s (tunnel goodput)"
+      local peers; peers=$(tm_peers "$cfg")
+      [ -n "$peers" ] && say " Peer:    $peers"
+    else
+      say " Waiting for live status… (needs the new binary; older tunnels show links only)"
+      local links; links=$(tm_links "$cfg")
+      [ -n "$links" ] && say " Links:   ${links} (from open sockets)"
+    fi
+    hr
+    say " ${C_D}refreshing every 2s · press Enter to go back${C_0}"
+    read -rp "" -t 2 _ </dev/tty && break || true
+  done
+  echo >&2
 }
 
 tm_start(){
@@ -1101,7 +1208,8 @@ tm_tunnel_menu(){
     say "  3) Restart"
     say "  4) Edit config (nano) — applied automatically when you close it"
     say "  5) Live log"
-    if tm_autostart "$u"; then say "  6) Turn autostart OFF"; else say "  6) Turn autostart ON"; fi
+    say "  6) Live pattern monitor (parallel links, updating)"
+    if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in
@@ -1110,7 +1218,8 @@ tm_tunnel_menu(){
       3) tm_restart "$u" ;;
       4) tm_edit "$u" "$cfg" ;;
       5) tm_follow "$u" ;;
-      6) tm_toggle_autostart "$u" ;;
+      6) tm_monitor "$u" "$cfg" ;;
+      7) tm_toggle_autostart "$u" ;;
       0|b|B|"") return 0 ;;
       *) warn "Invalid choice." ;;
     esac
