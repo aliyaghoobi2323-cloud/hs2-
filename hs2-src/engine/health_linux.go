@@ -8,52 +8,43 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// retransmits reads the kernel's cumulative TCP retransmit count for a link via
-// TCP_INFO. It is an activity-independent measure of path loss: a link moving
-// data with a high retransmit fraction is genuinely degraded, whether or not its
-// users are busy — unlike raw throughput, which also drops when users are idle.
-func retransmits(tc *net.TCPConn) (uint64, bool) {
+// tcpStats reads one TCP_INFO snapshot of a link socket: the cumulative
+// retransmits (path loss, used by the degrade logic) and the kernel's "chrono"
+// counters (Linux ≥ 4.10), which say how long the socket was busy sending and
+// how much of that it was limited by the peer's receive window or by its own
+// send buffer. The pool uses the receive-window share to tell "the network will
+// not take more" (more links may help) from "the receiver is slow" (they won't).
+func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 	if tc == nil {
-		return 0, false
+		return tcpStat{}, false
 	}
 	rc, err := tc.SyscallConn()
 	if err != nil {
-		return 0, false
+		return tcpStat{}, false
 	}
-	var total uint32
+	var st tcpStat
 	var ok bool
 	rc.Control(func(fd uintptr) {
 		info, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
 		if e != nil {
 			return
 		}
-		total = info.Total_retrans
-		ok = true
-	})
-	return uint64(total), ok
-}
-
-// sendPressure reads TCP_INFO and reports whether the socket has bytes queued
-// that the network has not yet accepted (notsent_bytes) — i.e. the writer is
-// held back by the path, the fingerprint of a per-connection throttle. With
-// TCP_NOTSENT_LOWAT set low the kernel keeps only a small backlog, so any
-// non-trivial notsent while sending means "wants to push more".
-func sendPressure(tc *net.TCPConn) (bool, bool) {
-	if tc == nil {
-		return false, false
-	}
-	rc, err := tc.SyscallConn()
-	if err != nil {
-		return false, false
-	}
-	var pressing, ok bool
-	rc.Control(func(fd uintptr) {
-		info, e := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
-		if e != nil {
-			return
+		st = tcpStat{
+			retrans:      uint64(info.Total_retrans),
+			busyUs:       info.Busy_time,
+			rwndUs:       info.Rwnd_limited,
+			sndbufUs:     info.Sndbuf_limited,
+			deliveryRate: info.Delivery_rate,
+			notsent:      info.Notsent_bytes,
+			chronoValid:  info.Busy_time > 0,
 		}
 		ok = true
-		pressing = info.Notsent_bytes >= notsentPressBytes
 	})
-	return pressing, ok
+	return st, ok
+}
+
+// retransmits is kept for the exit's control-channel pong.
+func retransmits(tc *net.TCPConn) (uint64, bool) {
+	st, ok := tcpStats(tc)
+	return st.retrans, ok
 }

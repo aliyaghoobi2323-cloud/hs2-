@@ -32,30 +32,29 @@ const (
 	// degradeStreak: consecutive bad samples before a link is declared degraded,
 	// so a brief loss burst is not enough.
 	degradeStreak = 3
-	// notsentPressBytes: unsent bytes queued on a link socket above which the
-	// link counts as "pressing" — the writer has more to send than the path is
-	// taking, a per-connection cap biting. Kept above TCP_NOTSENT_LOWAT's own
-	// small backlog so an ordinary send does not read as pressure.
-	notsentPressBytes = 48 << 10
+	// flowTau / flowingRate / flowRecent: a user stream is "flowing" (real
+	// traffic, counted for sizing) while its rate EWMA with time constant
+	// flowTau is at least flowingRate and it moved a byte within flowRecent,
+	// or while it moves data steadily (flowSteadyRate).
+	// Handshakes and keepalives stay far below the rate; the recency cut ends
+	// a finished burst (a page load) at once instead of along the EWMA's tail.
+	flowTau     = 10 * time.Second
+	flowingRate = 2 << 10 // bytes/s (16 kbit/s)
+	flowRecent  = 6 * time.Second
+	// flowSteadyRate: a stream that moved at least this much in each of the
+	// last 3 samples is flowing whatever its average — many flows sharing a
+	// severely throttled link each get very little, but they never pause,
+	// unlike a handshake (one sample) or a keepalive (one every half minute).
+	flowSteadyRate = 256 // bytes/s
+	// blockedMin: a Write shorter than this is CPU work (copying/encrypting a
+	// 16 KiB frame takes microseconds), not a wait for the network; only longer
+	// waits count as the link being path-limited. Without this filter a writer
+	// that always has data reads as ~90% "blocked" even on an unlimited path.
+	blockedMin = time.Millisecond
 	// maxDrain bounds how long a degraded link is kept for its existing users
 	// before it is force-closed (they reconnect onto a healthy link).
 	maxDrain = 45 * time.Second
 
-	// Throughput autoscaling (phase 2):
-	// probeGain: a speculative link must raise aggregate goodput by at least this
-	// fraction within a tick to be judged "it helped" and justify growing more.
-	probeGain = 0.08
-	// reprobeGain: after settling at a plateau, only probe again once aggregate
-	// goodput climbs this much above the plateau (demand genuinely grew).
-	reprobeGain = 0.20
-	// probeCooldownDur: minimum quiet time after a plateau before re-probing.
-	probeCooldownDur = 20 * time.Second
-	// reProbeEveryDur: even with no demand jump, re-check whether the path has
-	// widened this often while the pool stays saturated (slow background probe).
-	reProbeEveryDur = 90 * time.Second
-	// scaleDownAfter: how long load must stay at/under the floor before a link is
-	// retired (slow shrink, so a brief lull does not thrash the pool).
-	scaleDownAfter = 30 * time.Second
 	// warmStartLinks: the pool comes up at this size (clamped to the envelope)
 	// rather than at min, so a burst of connections arriving right after start
 	// spreads across enough links to beat per-connection throttling immediately —
@@ -85,6 +84,22 @@ type linkMeter struct {
 	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
 	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
 	stalls  atomic.Uint64 // write errors / timeouts
+	// wrBlocked is the cumulative time the link's single smux writer spent
+	// waiting for the socket to accept data (only waits > blockedMin count).
+	// Divided by elapsed time it is the fraction of time the PATH, not the
+	// application, was the limit: with TCP_NOTSENT_LOWAT set, sendmsg waits once
+	// ~32 KiB is queued unsent, so a link whose network is not taking data
+	// shows ~100%, and one with spare capacity ~0% however busy it is. Measured
+	// on the loopback: unlimited path 0%, a 2 MB/s bottleneck 99.8%.
+	wrBlocked atomic.Int64 // nanoseconds
+
+	// Exit-side download stats (edge only; see stats.go). statsPoll carries the
+	// sampler's "poll now" (cap 1); statsState is statsPending/OK/Unsupported;
+	// peer holds the latest record received from the exit.
+	statsPoll  chan struct{}
+	statsState atomic.Int32
+	statsSeq   atomic.Uint32
+	peer       atomic.Pointer[statsRec]
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
@@ -107,7 +122,11 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 }
 
 func (c *meteredConn) Write(p []byte) (int, error) {
+	t0 := time.Now()
 	n, err := c.Conn.Write(p)
+	if d := time.Since(t0); d > blockedMin {
+		c.m.wrBlocked.Add(int64(d))
+	}
 	if n > 0 {
 		c.m.wrBytes.Add(uint64(n))
 	}
@@ -117,19 +136,23 @@ func (c *meteredConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// metered is implemented by a link that carries a linkMeter and can report its
-// kernel TCP retransmit counter, so the manager can judge path loss. Links that
-// do not implement it never soft-degrade (they still reap on hard death).
+// tcpStat is one TCP_INFO snapshot of a link socket (see tcpStats).
+type tcpStat struct {
+	retrans      uint64 // cumulative retransmitted segments
+	busyUs       uint64 // time with data in flight or queued (chrono)
+	rwndUs       uint64 // part of busy limited by the peer's receive window
+	sndbufUs     uint64 // part of busy limited by our send buffer
+	deliveryRate uint64 // kernel delivery-rate estimate, bytes/s
+	notsent      uint32 // bytes queued but not yet sent
+	chronoValid  bool   // the kernel reports chrono counters (busy > 0)
+}
+
+// metered is implemented by a link that carries a linkMeter and can read its
+// socket's TCP_INFO. Links that do not implement it never soft-degrade and never
+// count as pressed (they still reap on hard death).
 type metered interface {
 	meter() *linkMeter
-	// linkRetrans returns the cumulative TCP retransmits and whether the platform
-	// supports the reading (false disables loss-based degradation for the link).
-	linkRetrans() (uint64, bool)
-	// sendPressure reports whether the link's socket has data queued that the
-	// network has not yet taken — i.e. the writer wants to push more than the
-	// path allows (a per-connection cap biting). ok is false where the platform
-	// cannot tell. It is one of the signals that says "another link might help".
-	sendPressure() (pressing bool, ok bool)
+	tcpStats() (tcpStat, bool)
 }
 
 // linkMeterOf returns the meter of a Link, or nil if it has none.
@@ -140,18 +163,10 @@ func linkMeterOf(l Link) *linkMeter {
 	return nil
 }
 
-// linkRetransOf returns a Link's cumulative TCP retransmits, or (0,false).
-func linkRetransOf(l Link) (uint64, bool) {
+// linkTCPStatsOf returns a Link's TCP_INFO snapshot, or (zero,false).
+func linkTCPStatsOf(l Link) (tcpStat, bool) {
 	if m, ok := l.(metered); ok {
-		return m.linkRetrans()
+		return m.tcpStats()
 	}
-	return 0, false
-}
-
-// linkPressureOf reports whether a Link's socket is send-pressured, or (false,false).
-func linkPressureOf(l Link) (bool, bool) {
-	if m, ok := l.(metered); ok {
-		return m.sendPressure()
-	}
-	return false, false
+	return tcpStat{}, false
 }

@@ -113,6 +113,7 @@ func main() {
 	every := flag.Duration("every", 100*time.Millisecond, "echo interval")
 	warm := flag.Duration("warm", 3*time.Second, "warm-up excluded from stats")
 	udp := flag.Bool("udp", false, "also run a UDP echo probe")
+	seg := flag.Int64("seg", 0, "bytes per download connection before it reconnects (0 = one connection for the whole run)")
 	flag.Parse()
 	if *srv {
 		server(*listen)
@@ -128,6 +129,49 @@ func main() {
 	for i := 0; i < *bulk+*up; i++ {
 		isUp := i >= *bulk
 		wg.Add(1)
+		if !isUp && *seg > 0 {
+			// A user who downloads file after file (or segment after segment),
+			// each on a new connection.
+			go func() {
+				defer wg.Done()
+				buf := make([]byte, 64<<10)
+				for {
+					select {
+					case <-stop:
+						return
+					default:
+					}
+					c, err := net.DialTimeout("tcp", *addr, 10*time.Second)
+					if err != nil {
+						bulkErr.Add(1)
+						time.Sleep(time.Second)
+						continue
+					}
+					done := make(chan struct{})
+					go func() {
+						select {
+						case <-stop:
+						case <-done:
+						}
+						c.Close()
+					}()
+					c.Write([]byte{'B'})
+					var got int64
+					for got < *seg {
+						n, err := c.Read(buf)
+						got += int64(n)
+						if measuring() {
+							down.Add(int64(n))
+						}
+						if err != nil {
+							break
+						}
+					}
+					close(done)
+				}
+			}()
+			continue
+		}
 		go func() {
 			defer wg.Done()
 			c, err := net.DialTimeout("tcp", *addr, 10*time.Second)

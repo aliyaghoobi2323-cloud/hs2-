@@ -18,27 +18,45 @@ connection to the panel. There is never TCP inside TCP.
 - Survives link drops: user ports stay up, dead links are detected in about
   two seconds and rebuilt.
 
-## The adaptive connection pattern (v3.1)
+## The adaptive connection pattern (v3.2)
 
-The number of parallel TLS links is no longer fixed. A dedicated controller
-(the *autopilot*) sizes the pool continuously between **2 and 32 links** from
-two live signals:
+The number of parallel TLS links is not fixed. A dedicated controller (the
+*autopilot*) sizes the pool continuously between **2 and 32 links** — up when
+traffic needs more, and **back down when it does not**:
 
-- **the number of user connections** — enough links that no link carries a
-  crowd; and
-- **measured throughput** — while the links are saturated it speculatively adds
-  one link and keeps it only if aggregate goodput actually rises, settling at
-  the point where more links stop helping (the path's own ceiling), and
-  re-checking as demand or the path changes over time.
+- **active flows** — at least one link per `per_link` (default 8) connections
+  that are actually moving data. Idle connections (an xray panel keeps
+  hundreds open) do not count.
+- **links at their limit** — a link whose sender is blocked by the network
+  (measured on this side for uploads and reported by the other server for
+  downloads) is "at its limit". When the links at their limit leave no free
+  link for new connections, the autopilot tries ~25% more links and keeps them
+  only if the traffic they carry *adds* to the total. If the path itself is
+  full, more links do not add anything: the try is undone and retried later
+  with an increasing pause (up to 8 minutes).
+- **shrinking** — once demand has stayed below the current size for a minute,
+  the pool steps down toward what the recent peak needs. A link that is no
+  longer needed is marked *retiring*: it takes no new connections and closes
+  by itself once its connections have ended. **Shrinking never cuts a
+  connection that is still in use.** A connection on a retiring link that has
+  been completely idle for `drain_idle_sec` (default 310 s, just above xray's
+  300 s idle timeout; `0` = never) is closed so the link can finish.
 
-It comes up "warm" so a burst of connections at start spreads immediately, then
-shrinks toward the minimum when idle. In **reverse** mode the edge (which alone
-sees the users) drives the exit's link count over a control channel, so the
-dial pool on the foreign side is adaptive too.
+It comes up "warm" (8 links) so a burst of connections at start spreads
+immediately. In **reverse** mode the edge (which alone sees the users) drives
+the exit's link count over a control channel, so the dial pool on the foreign
+side follows it in both directions.
 
 Watch it live: `hs2 status -c /etc/hs2/config.json` (or the **Live pattern
-monitor** in `hs2-menu` → tunnel manager) shows links up, the target, the phase
-(calibrating / probing / steady / shrinking) and throughput as they change.
+monitor** in `hs2-menu` → tunnel manager) shows the links up (serving +
+retiring), the target, the phase (steady / scaling / probing / holding /
+shrinking), *why* the pool is that size, and the traffic, e.g.:
+
+```
+links:   7 up = 5 serving + 2 retiring / target 5 (shrinking, range 2–32)
+why:     18 active of 251 open connections, 1 of 5 serving links at their limit, peak 6.8 Mbit/s; 2 retiring link(s) close as their connections end (held by 38 open, 1 active)
+traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4 Mbit/s each)
+```
 
 ## Automatic kernel tuning
 
@@ -153,9 +171,9 @@ Existing configs keep their mode. To switch, edit `"carrier"` in
 
 On a slow path that is **not** throttled per connection, fewer links give
 lower latency under full load, because several parallel flows keep a standing
-queue in the path. The autopilot handles this automatically — it stops adding
-links once they no longer raise throughput — but you can also cap it by
-lowering `max_links` in the Iran config.
+queue in the path. The autopilot handles this automatically — it keeps added
+links only when they raise throughput — but you can also cap it by lowering
+`max_links` in the Iran config.
 
 ## Security
 

@@ -55,7 +55,11 @@ type fileConfig struct {
 	// mtcp (multi-link) settings
 	MinLinks int `json:"min_links"`
 	MaxLinks int `json:"max_links"`
-	PerLink  int `json:"per_link"`
+	PerLink  int `json:"per_link"` // concurrently active flows per link the pool sizes for
+	// DrainIdleSec: when the pool shrinks, a connection on a retiring link
+	// that has moved nothing for this many seconds is closed so the link can
+	// finish. Unset = 310 (just above xray's 300 s connIdle); 0 = never.
+	DrainIdleSec *int `json:"drain_idle_sec,omitempty"`
 
 	// port forwarding (Backhaul-style reverse path)
 	Expose       string `json:"expose"`        // kharej: real panel addr, e.g. 127.0.0.1:443
@@ -278,7 +282,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			min, max = links, links
 		}
 		cfg := engine.IranConfig{
-			Min: min, Max: max, PerLink: per,
+			Min: min, Max: max, PerLink: per, DrainIdle: drainIdle(fc),
 			ListenIP: fc.UserListenIP,
 			Ports:    splitComma(fc.ForwardPorts),
 			UDP:      fc.UDP,
@@ -390,10 +394,11 @@ func tuneCmd(args []string) {
 }
 
 // linkEnvelope resolves the adaptive link-pool bounds from the config, applying
-// the defaults: the pattern lives anywhere in 2–32 links and grows a link for
-// every per_link (default 8) user connections. The pool is never fixed at these
-// numbers — the autopilot moves it continuously inside the envelope from the
-// live user count and measured throughput (see engine/autopilot.go).
+// the defaults: the pattern lives anywhere in 2–32 links, with at least one link
+// for every per_link (default 8) connections that are actively moving data. The
+// pool is never fixed at these numbers — the autopilot moves it continuously
+// inside the envelope from the measured traffic, up and back down (see
+// engine/autopilot.go).
 func linkEnvelope(fc fileConfig) (min, max, per int) {
 	min, max, per = fc.MinLinks, fc.MaxLinks, fc.PerLink
 	if min <= 0 {
@@ -409,6 +414,19 @@ func linkEnvelope(fc fileConfig) (min, max, per int) {
 		per = 8
 	}
 	return min, max, per
+}
+
+// drainIdle maps drain_idle_sec to the engine's setting: unset → 0 (the
+// engine default), 0 → never (negative), n → n seconds.
+func drainIdle(fc fileConfig) time.Duration {
+	switch {
+	case fc.DrainIdleSec == nil:
+		return 0
+	case *fc.DrainIdleSec <= 0:
+		return -1
+	default:
+		return time.Duration(*fc.DrainIdleSec) * time.Second
+	}
 }
 
 // streamBackend returns the probe-forwarding backend for a TLS-server side,

@@ -18,8 +18,8 @@ import (
 //	hs2 config -c cfg set  <key> <value>
 //	hs2 config -c cfg unset <key>
 //
-// Only a whitelist of keys is editable — the adaptive link envelope and the
-// tuning section — and each is type-checked, so a typo can never turn a number
+// Only a whitelist of keys is editable — the adaptive link envelope, the idle
+// reclaim of a shrinking pool and the tuning section — and each is type-checked, so a typo can never turn a number
 // into a string or introduce an unknown key. Numbers keep their integer form
 // (no scientific notation), and after a set the whole file is re-validated with
 // the same checker as `hs2 check`; a change that would not pass is refused and
@@ -37,6 +37,8 @@ var configKeys = map[string]configKey{
 	"min_links": {"", "min_links", true},
 	"max_links": {"", "max_links", true},
 	"per_link":  {"", "per_link", true},
+
+	"drain_idle_sec": {"", "drain_idle_sec", true},
 
 	"tuning.mode":           {"tuning", "mode", false},
 	"tuning.congestion":     {"tuning", "congestion", false},

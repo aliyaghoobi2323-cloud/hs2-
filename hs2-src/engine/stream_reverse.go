@@ -99,7 +99,8 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 // its streams to the panel, returning when the link dies or ctx ends. pool (may
 // be nil) lets the link's pool-control stream resize the exit pool.
 func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejConfig, l3 *l3Set, pool *exitPool) {
-	sess, _, err := newSession(car.RawConn(), true, nil, nil) // smux server
+	mtr := &linkMeter{}                                       // download-side counters, reported over kindStats
+	sess, _, err := newSession(car.RawConn(), true, nil, mtr) // smux server
 	if err != nil {
 		return
 	}
@@ -118,7 +119,7 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		if err != nil {
 			break
 		}
-		go serveStream(ctx, st, cfg, l3, car, pool)
+		go serveStream(ctx, st, cfg, l3, car, pool, mtr)
 	}
 	close(closed)
 	sess.Close()

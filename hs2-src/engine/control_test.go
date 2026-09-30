@@ -23,8 +23,7 @@ func (l *ctrlFakeLink) Active() int32                        { return 0 }
 func (l *ctrlFakeLink) Alive() bool                          { return !l.sess.IsClosed() }
 func (l *ctrlFakeLink) Close() error                         { return l.sess.Close() }
 func (l *ctrlFakeLink) meter() *linkMeter                    { return l.m }
-func (l *ctrlFakeLink) linkRetrans() (uint64, bool)          { return 0, false }
-func (l *ctrlFakeLink) sendPressure() (bool, bool)           { return false, false }
+func (l *ctrlFakeLink) tcpStats() (tcpStat, bool)            { return tcpStat{}, false }
 
 // The edge's openControl and the exit's serveControl must complete a ping/pong
 // over a real smux link: the edge's meter ends up with a measured RTT and the

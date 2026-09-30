@@ -2,98 +2,258 @@ package engine
 
 import (
 	"fmt"
+	"math"
+	"math/rand/v2"
+	"sort"
 	"time"
 )
 
-// autopilot is the pure decision core of the adaptive link pool — the "engine
-// that measures everything and sizes the pattern from it". It is fed one sample
-// per health tick and returns how many parallel links the pool SHOULD have right
-// now, clamped to [min,max]. It holds no locks, opens no sockets and never
-// touches a link, so its entire behaviour is driven by a deterministic simulator
-// in autopilot_test.go. The LinkManager (direct edge) and the exit pool (reverse)
-// are only actuators: they feed a sample in and move the real link count toward
-// the target the autopilot returns.
+// autopilot is the pure decision core of the adaptive link pool: one sample per
+// health tick in, the number of SERVING links the pool should have out. It holds
+// no locks, opens no sockets and never reads the clock (time and randomness come
+// in through the sample and a.rnd), so its whole behaviour is exercised by the
+// flow-level simulator in autopilot_test.go. LinkManager is the actuator.
 //
-// Two independent pressures set the size, and the larger always wins:
+// What the count means. T is the number of links that accept NEW user
+// connections ("serving"). A link beyond T is "retiring": it takes no new
+// connections and is closed once its connections have ended — shrinking never
+// cuts a connection that is still moving data.
 //
-//  1. Connection floor — ceil(users / perLink), so no single link is ever asked
-//     to carry a crowd. It reacts the instant users connect or leave.
+// What moves T:
 //
-//  2. Throughput demand — the tunnel exists to defeat per-connection throttling:
-//     N links carry up to N× a single flow's policed cap. Whether one more link
-//     would actually move more bytes is answered by experiment, not a guess:
-//     while the live links are SATURATED (pushing as hard as the path allows)
-//     and there is room, it speculatively adds one link and, a tick later, keeps
-//     growing only if aggregate goodput really rose by probeGain. The moment an
-//     added link stops helping — the path's own bandwidth, not per-flow
-//     throttling, is now the ceiling — it settles there and remembers the size.
+//   - Floor: enough links for the flows that are really moving data
+//     (ceil(flowing/per_link) over the last 10 s). Idle connections — an xray
+//     panel keeps hundreds — do not count.
+//   - Growth, only when links are PRESSED (their sender is blocked by the path,
+//     measured at whichever end sends) and no unpressed link is left for new
+//     flows to land on. Growth is a probe: T grows by ~25%, the probe arms only
+//     once the new links exist, and it is kept only if the traffic the new links
+//     carry ADDED to the total (per-connection throttling: it does) rather than
+//     being taken from the old links (the path itself is full: it is not). A
+//     failed probe backs off exponentially; a probe that no new flow reached is
+//     inconclusive and keeps its links as spares.
+//   - Shrink, driven by demand: after 60 s below target, T steps down toward
+//     max(floor, what recent pressure needs, what the recent peak throughput
+//     needs at 70% of the measured per-link capacity), capped by the links the
+//     active flows can actually use. If a shrink immediately causes a shortage,
+//     it is undone at once (the retiring links are still up) and held.
 //
-// It calibrates at start: until it has ever found a ceiling it is in the
-// "calibrating" phase and, under load, probes every tick, so a fresh tunnel
-// climbs to the right size in a few seconds rather than one link per re-probe.
-// Afterwards it holds steady, re-probes only when demand climbs past the
-// remembered ceiling (reprobeGain), and shrinks one link at a time when the pool
-// has sat idle above its floor for scaleDownAfter — never yanking a busy link.
+// Nothing that keeps T up is latched: every input forgets within 60 s (the
+// capacity estimate only scales how many links a given throughput needs, and
+// the hold expires and is void once demand drops), so when traffic falls the
+// pool comes down — the defect of the first version, which ratcheted to 32.
 type autopilot struct {
 	min, max, perLink int
+	tun               apTunables
+	rnd               func() float64
 
-	// Tunables, copied from package constants so a test can shorten the clocks.
-	probeGain      float64       // a probe link must raise agg goodput this much to justify more
-	reprobeGain    float64       // re-probe at once when demand climbs this far past the ceiling
-	probeCooldown  time.Duration // quiet time after a plateau before re-probing
-	reProbeEvery   time.Duration // even without a demand jump, re-probe this often while saturated
-	scaleDownAfter time.Duration // idle-above-floor time before retiring one link
+	T     int      // committed SERVING target
+	hist  []apTick // ring of the last tun.histTicks ticks
+	caps  []apCap  // sustained rates of pressed serving links
+	pr    *apProbe // an in-flight growth probe
+	k     int      // failed-probe backoff exponent
+	chain int      // consecutive successful probes: bigger steps while demand climbs
+	// aborts counts consecutive probes whose links never came up (backoff);
+	// waitWhy says why the next probe is being waited for (for the monitor).
+	aborts  int
+	waitWhy string
+	confirm apConfirm
+	ceil    apCeil
+	next    time.Time // no new probe before this
+	fail    struct {  // where growth last stopped helping
+		at    time.Time
+		g     float64
+		flows int
+	}
+	belowSince   time.Time
+	lastGrowAt   time.Time
+	lastShrinkAt time.Time
+	shrinkFrom   int
+	hold         struct {
+		n     int
+		g     float64
+		until time.Time
+	}
+	undos []time.Time
 
-	// State, mutated only inside decide (single-goroutine, no locks).
-	probing       bool
-	preProbeAgg   float64   // aggregate goodput just before the current probe add
-	ceilingAgg    float64   // aggregate goodput at the last plateau (0 = none found yet)
-	ceilingSize   int       // pool size at that plateau (0 = never plateaued)
-	coolUntil     time.Time // no new probe before this
-	lastPlateauAt time.Time // when the pool last settled at a ceiling
-	lowSince      time.Time // load has been at/under the floor since this
-	lastPhase     apPhase
+	phase  apPhase
+	reason string
+	cCap   float64 // last per-link capacity estimate, bytes/s (0 = unknown)
+	gPeak  float64 // last 60 s peak aggregate, bytes/s
+}
+
+// apTunables holds every clock and threshold, so tests can shorten them.
+type apTunables struct {
+	tick              time.Duration
+	histTicks         int // ticks of history the windows look back over (60 s)
+	shortWin, shortN  int // shortage = shortTick on >= shortN of the last shortWin ticks
+	armTimeout        time.Duration
+	settleTicks       int
+	looks             []int   // eval ticks at which the probe verdict is checked
+	baseTicks         int     // ticks of baseline before a probe
+	z                 float64 // noise margin in standard errors
+	additivity        float64 // the total must rise by at least this share of what new links carry
+	minGain           float64 // ... and by at least this share of the baseline
+	earlyFail         float64
+	rMinAbs           float64 // bytes/s the new links must carry for a verdict
+	rMinFrac          float64 // ... or this share of the per-link baseline
+	backoffBase       time.Duration
+	backoffMax        time.Duration
+	jitter            float64
+	successNext       time.Duration
+	inconclusiveNext  time.Duration
+	abortNext         time.Duration
+	capWindow         time.Duration
+	capMinSamples     int
+	capMax            int
+	util              float64 // links run at <= this share of capacity at the recent peak
+	minBWForNeed      float64 // below this peak, bandwidth does not justify extra links
+	shrinkDwell       time.Duration
+	shrinkStep        time.Duration
+	noShrinkAfterGrow time.Duration
+	overshootWin      time.Duration
+	holdBase          time.Duration
+	holdMax           time.Duration
+	holdVoid          float64
+	undoWindow        time.Duration
+	kResetAfter       time.Duration
+	chainWindow       time.Duration // a success this recent lets the next probe step by half
+	activeRate        float64       // bytes/s: a link below this carries no traffic to judge
+	confirmWin        time.Duration // a gain found after a path-full verdict must last this long
+	ceilTTL           time.Duration // a path-full ceiling not re-confirmed for this long is forgotten
+}
+
+func defaultTunables() apTunables {
+	return apTunables{
+		tick:              healthTick,
+		histTicks:         30,
+		shortWin:          5,
+		shortN:            3,
+		armTimeout:        15 * time.Second,
+		settleTicks:       2,
+		looks:             []int{5, 10, 15},
+		baseTicks:         10,
+		z:                 2.5,
+		additivity:        0.5,
+		minGain:           0.05,
+		earlyFail:         0.25,
+		rMinAbs:           32 << 10,
+		rMinFrac:          0.25,
+		backoffBase:       30 * time.Second,
+		backoffMax:        8 * time.Minute,
+		jitter:            0.2,
+		successNext:       4 * time.Second,
+		inconclusiveNext:  30 * time.Second,
+		abortNext:         60 * time.Second,
+		capWindow:         30 * time.Minute,
+		capMinSamples:     6,
+		capMax:            256,
+		util:              0.7,
+		minBWForNeed:      16 << 10,
+		shrinkDwell:       60 * time.Second,
+		shrinkStep:        30 * time.Second,
+		noShrinkAfterGrow: 60 * time.Second,
+		overshootWin:      60 * time.Second,
+		holdBase:          10 * time.Minute,
+		holdMax:           2 * time.Hour,
+		holdVoid:          0.6,
+		undoWindow:        2 * time.Hour,
+		kResetAfter:       30 * time.Minute,
+		chainWindow:       60 * time.Second,
+		activeRate:        float64(pressMinBytes) / healthTick.Seconds(),
+		confirmWin:        60 * time.Second,
+		ceilTTL:           time.Hour,
+	}
 }
 
 type apPhase int
 
 const (
-	apSteady      apPhase = iota // holding the size the measurements chose
-	apCalibrating                // first ramp: no ceiling found yet, probing fast under load
-	apProbing                    // speculatively grown by one, measuring the effect
-	apShrinking                  // retiring an idle link
-	apFloor                      // growing to meet the connection-count floor
+	apSteady    apPhase = iota // holding the size the measurements chose
+	apScaling                  // raised to the active-flow floor, or a shrink undone
+	apProbing                  // grown by a probe; measuring whether it helped
+	apHolding                  // growth backed off after the path proved full
+	apShrinking                // stepping down toward what demand needs
 )
 
 func (p apPhase) String() string {
 	switch p {
-	case apCalibrating:
-		return "calibrating"
+	case apScaling:
+		return "scaling"
 	case apProbing:
 		return "probing"
+	case apHolding:
+		return "holding"
 	case apShrinking:
 		return "shrinking"
-	case apFloor:
-		return "scaling"
 	default:
 		return "steady"
 	}
 }
 
-// apSample is one health tick's worth of measurements.
-type apSample struct {
-	now        time.Time
-	users      int     // active user connections across the pool
-	have       int     // live links right now
-	aggGoodput float64 // EWMA aggregate goodput, bytes/sec
-	saturated  bool    // the live links are network-limited (want to push more)
+// apLink is one link as the sampler saw it this tick.
+type apLink struct {
+	id           int
+	serving      bool // accepts new connections
+	retiring     bool // shrinking: no new connections, closes when empty
+	servingSince time.Time
+	pressed      bool    // its sender is blocked by the path (either direction)
+	rate         float64 // bytes/s both directions, this tick
+	rate10       float64 // mean rate over the last 5 ticks
+	sustained    float64 // min over 3 ticks of the dominant direction's rate
+	flowing      int     // user streams really moving data
+	open         int     // user streams open
 }
 
-// apDecision is what the pool should do about its size.
+// apSample is one health tick's measurements.
+type apSample struct {
+	now      time.Time
+	links    []apLink
+	G        float64 // aggregate bytes/s over every live link
+	flowing  int     // flowing user streams over every link
+	open     int     // open user connections
+	growable bool    // false: the peer cannot add links (reverse exit without pool control)
+}
+
+// apDecision is what the pool should do.
 type apDecision struct {
-	target int     // desired link count, already clamped to [min,max]
-	phase  apPhase // why, for the live monitor
-	note   string  // one human sentence worth logging, or "" when unremarkable
+	target int     // serving links wanted, clamped to [min,max]
+	phase  apPhase // for the live monitor
+	reason string  // why, with the numbers — shown in the live monitor
+	note   string  // one log line when something was decided, else ""
+}
+
+type apTick struct {
+	g       float64
+	flowing int
+	p, s    int
+	short   bool
+}
+
+type apCap struct {
+	t time.Time
+	v float64
+}
+
+type apProbe struct {
+	from, to int
+	start    time.Time
+	armed    bool
+	armedAt  time.Time
+	settled  int
+	gb, varB float64
+	nb       int // baseline ticks
+	before   map[int]float64
+	evalG    []float64
+	evalNew  []float64
+	// evalProbe: total rate of the probe links (a link brought back from
+	// retiring keeps the flows it had, so it can be busy without new traffic).
+	evalProbe []float64
+	// evalShort counts eval ticks on which the links carrying traffic were
+	// still short of headroom; below half, the probe relieved the pressure.
+	evalShort int
+	triggerP  int
+	triggerS  int
 }
 
 func newAutopilot(min, max, perLink int) *autopilot {
@@ -106,120 +266,620 @@ func newAutopilot(min, max, perLink int) *autopilot {
 	if perLink < 1 {
 		perLink = 8
 	}
-	return &autopilot{
-		min: min, max: max, perLink: perLink,
-		probeGain:      probeGain,
-		reprobeGain:    reprobeGain,
-		probeCooldown:  probeCooldownDur,
-		reProbeEvery:   reProbeEveryDur,
-		scaleDownAfter: scaleDownAfter,
-	}
+	return &autopilot{min: min, max: max, perLink: perLink, tun: defaultTunables(),
+		rnd: rand.Float64, T: warmSize(min, max)}
 }
 
-// floor is the connection-count baseline: enough links that no link carries
-// more than perLink users, clamped to the envelope.
-func (a *autopilot) floor(users int) int {
-	want := (users + a.perLink - 1) / a.perLink // ceil
-	if want < a.min {
-		want = a.min
+// spare is how many unpressed links should be left for new flows when p links
+// are pressed: one pinned capped flow never triggers growth, several do.
+func spare(p int) int {
+	if p == 0 {
+		return 0
 	}
-	if want > a.max {
-		want = a.max
+	s := (p + 3) / 4
+	if s < 1 {
+		s = 1
 	}
-	return want
+	if s > 4 {
+		s = 4
+	}
+	return s
 }
 
-// calibrating reports whether the autopilot has yet to find any throughput
-// ceiling — during which it probes aggressively so a new tunnel sizes itself
-// quickly.
-func (a *autopilot) calibrating() bool { return a.ceilingSize == 0 }
+func ceilDiv(a, b int) int {
+	if a <= 0 {
+		return 0
+	}
+	return (a + b - 1) / b
+}
+
+func (a *autopilot) clamp(n int) int {
+	if n < a.min {
+		return a.min
+	}
+	if n > a.max {
+		return a.max
+	}
+	return n
+}
+
+// last returns the most recent n ticks (fewer if the history is shorter),
+// newest last.
+func (a *autopilot) last(n int) []apTick {
+	if n > len(a.hist) {
+		n = len(a.hist)
+	}
+	return a.hist[len(a.hist)-n:]
+}
 
 func (a *autopilot) decide(s apSample) apDecision {
-	if a.lowSince.IsZero() {
-		a.lowSince = s.now
-	}
-	floor := a.floor(s.users)
-
-	// 1) Meet the connection floor first — fast and unconditional. A jump in
-	// users restarts the throughput search from here.
-	if s.have < floor {
-		a.probing = false
-		a.lowSince = s.now
-		return a.decide2(floor, apFloor, "")
+	t := &a.tun
+	now := s.now
+	if len(s.links) == 0 {
+		// No link is up (an outage, or the reverse edge before the exit has
+		// dialed): nothing was measured, which is not the same as no demand.
+		// Keep the size and the history as they are.
+		a.T = a.clamp(a.T)
+		a.reason = "no link is up — waiting for links"
+		return apDecision{target: a.T, phase: a.phase, reason: a.reason}
 	}
 
-	canGrow := s.have < a.max && s.users > 0 && s.saturated
-
-	// 2) Evaluate an in-flight probe: did the extra link move more bytes?
-	if a.probing {
-		if s.aggGoodput > a.preProbeAgg*(1+a.probeGain) && canGrow {
-			a.preProbeAgg = s.aggGoodput // it helped and there is room — keep climbing
-			a.lowSince = s.now
-			return a.decide2(s.have+1, a.rampPhase(), "")
+	// ---- measurements for this tick -------------------------------------
+	S, R, P := 0, 0, 0
+	for _, l := range s.links {
+		switch {
+		case l.serving:
+			S++
+			if l.pressed {
+				P++
+				if l.sustained > 0 {
+					a.caps = append(a.caps, apCap{now, l.sustained})
+				}
+			}
+		case l.retiring:
+			R++
 		}
-		// Growth ended — either the extra link stopped helping, or the path is now
-		// full (saturated cleared) or we hit max. Settle here and remember the
-		// ceiling so we hold this size until demand or the path changes.
-		a.settle(s.now, s.have, s.aggGoodput)
-		return a.decide2(s.have, apSteady,
-			fmt.Sprintf("sized to %d links at ~%.1f Mbit/s — more links stopped helping", s.have, mbitps(s.aggGoodput)))
+	}
+	if len(a.caps) > t.capMax {
+		a.caps = a.caps[len(a.caps)-t.capMax:]
+	}
+	shortTick := P >= 1 && S-P < spare(P)
+	a.hist = append(a.hist, apTick{g: s.G, flowing: s.flowing, p: P, s: S, short: shortTick})
+	if len(a.hist) > t.histTicks {
+		a.hist = a.hist[len(a.hist)-t.histTicks:]
 	}
 
-	// 3) Start a probe when the pool is saturated and there is room, once the
-	// cooldown has elapsed and either no ceiling is known, demand has climbed
-	// past it (react fast), or enough time has passed to re-check whether the
-	// path has since widened (slow background exploration, BBR-style).
-	if canGrow && !s.now.Before(a.coolUntil) &&
-		(a.ceilingSize == 0 ||
-			s.aggGoodput > a.ceilingAgg*(1+a.reprobeGain) ||
-			(!a.lastPlateauAt.IsZero() && s.now.Sub(a.lastPlateauAt) >= a.reProbeEvery)) {
-		a.probing = true
-		a.preProbeAgg = s.aggGoodput
-		a.lowSince = s.now
-		return a.decide2(s.have+1, a.rampPhase(), "")
-	}
-
-	// 4) Shrink slowly: only above the floor, only after the pool has stayed
-	// idle-or-unsaturated for scaleDownAfter, and only by one link (the actuator
-	// retires a link with no users, so a busy link is never dropped).
-	if s.have > floor && !s.saturated {
-		if s.now.Sub(a.lowSince) > a.scaleDownAfter {
-			a.lowSince = s.now
-			return a.decide2(s.have-1, apShrinking, "")
+	shortage := 0
+	for _, h := range a.last(t.shortWin) {
+		if h.short {
+			shortage++
 		}
-		return a.decide2(s.have, apSteady, "")
 	}
-	a.lowSince = s.now
-	return a.decide2(s.have, apSteady, "")
+	isShort := shortage >= t.shortN
+	shortIn60 := false
+	fl5 := math.MaxInt
+	for _, h := range a.last(5) {
+		if h.flowing < fl5 {
+			fl5 = h.flowing
+		}
+	}
+	fl60, p60 := 0, 0
+	gPeak := 0.0
+	prevG := -1.0
+	for _, h := range a.hist {
+		if h.flowing > fl60 {
+			fl60 = h.flowing
+		}
+		if h.p > p60 {
+			p60 = h.p
+		}
+		if h.short {
+			shortIn60 = true
+		}
+		g := h.g
+		if prevG >= 0 {
+			g = (h.g + prevG) / 2 // a single-tick spike is not a peak
+		}
+		if g > gPeak {
+			gPeak = g
+		}
+		prevG = h.g
+	}
+	fGrow := ceilDiv(fl5, a.perLink)
+	fHold := ceilDiv(fl60, a.perLink)
+	// Links the active flows can use (connections are pinned): one each plus
+	// two for arrivals, and never fewer than the pressed links plus their
+	// spares (a pressed link carries at least one active flow even when its
+	// flows are too throttled to be counted).
+	U := a.clamp(max(fl60+2, p60+spare(p60)))
+	cCap := a.capEstimate(now)
+	needBW := 0
+	if cCap > 0 && gPeak >= t.minBWForNeed {
+		needBW = int(math.Ceil(gPeak / (t.util * cCap)))
+	}
+	needSat := p60 + spare(p60)
+	holdN := 0
+	if now.Before(a.hold.until) && gPeak >= t.holdVoid*a.hold.g {
+		holdN = a.hold.n
+	}
+	need := needSat
+	if needBW > need {
+		need = needBW
+	}
+	if need > U {
+		need = U
+	}
+	// A hold (a shrink that proved too deep) is not capped by U: U is what
+	// the model says flows can use; the hold is what was measured.
+	if holdN > need {
+		need = holdN
+	}
+	if fHold > need {
+		need = fHold
+	}
+	H := a.clamp(need)
+	a.cCap, a.gPeak = cCap, gPeak
+
+	// Backoff resets when demand clearly and steadily outgrew the last ceiling
+	// (re-check soon) or long after the last failure. "Steadily": over the last
+	// 20 s, not a peak — a queue draining can burst above the path's rate.
+	if a.k > 0 {
+		gSus, _ := meanVar(a.last(10), func(h apTick) float64 { return h.g })
+		switch {
+		case a.confirm.active:
+			// a probe's gain is being confirmed: judge that first
+		case gSus > 1.3*a.fail.g || fl5 > int(1.5*float64(a.fail.flows))+2:
+			a.k = 0
+			if a.next.After(now.Add(t.backoffBase)) {
+				a.next = now.Add(t.backoffBase)
+			}
+		case now.Sub(a.fail.at) >= t.kResetAfter:
+			a.k = 0
+		}
+	}
+
+	why := fmt.Sprintf("%d active of %d open connections, %d of %d serving links at their limit, peak %.1f Mbit/s",
+		s.flowing, s.open, P, S, mbitps(gPeak))
+	if cCap > 0 {
+		why += fmt.Sprintf(" (one link carries ~%.1f Mbit/s)", mbitps(cCap))
+	}
+
+	// ---- 0 CONFIRM: a gain found after the path was already full must last --
+	if c := &a.confirm; c.active {
+		if a.T != c.to || a.pr != nil {
+			c.active = false // the size moved on for other reasons
+		} else {
+			c.sum += s.G
+			c.sumSq += s.G * s.G
+			c.n++
+			if !now.Before(c.until) {
+				c.active = false
+				g := c.sum / float64(c.n)
+				varC := 0.0
+				if c.n > 1 {
+					varC = max(0, (c.sumSq-float64(c.n)*g*g)/float64(c.n-1))
+				}
+				need := max(c.need, c.gb+2*math.Sqrt(c.varB/float64(max(c.nb, 1))+varC/float64(c.n)))
+				if g < need {
+					a.T = c.from
+					a.chain = 0
+					a.k = c.kPrev + 1
+					a.fail.at, a.fail.g, a.fail.flows = now, max(c.gb, a.gPeak), fl60
+					back := a.backoff()
+					a.next = now.Add(back)
+					a.waitWhy = fmt.Sprintf("more links did not add throughput at ~%.1f Mbit/s (path full)", mbitps(c.gb))
+					return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: the last gain did not last; next check in %s", mbitps(c.gb), fmtDur(back)),
+						fmt.Sprintf("pattern %d → %d links: the gain after the last probe did not last (%.1f Mbit/s over the next minute, %.1f needed) — the path is full; next check in %s",
+							c.to, c.from, mbitps(g), mbitps(need), fmtDur(back)))
+				}
+				a.k = 0
+			}
+		}
+	}
+
+	// ---- 1 FLOOR: enough links for the flows really moving data ----------
+	floor := a.clamp(fGrow)
+	if !s.growable && S+R >= a.min && floor > S+R {
+		floor = S + R // the peer cannot add links; do not ask every tick
+	}
+	if floor > a.T {
+		old := a.T
+		a.pr = nil
+		a.T = floor
+		a.lastGrowAt = now
+		return a.out(s, S, R, apScaling, fmt.Sprintf("%d active connections need %d links (per_link %d)", fl5, a.T, a.perLink),
+			fmt.Sprintf("pattern %d → %d links: %d active connections (per_link %d)", old, a.T, fl5, a.perLink))
+	}
+
+	// ---- 2 PROBE in flight ------------------------------------------------
+	if a.pr != nil {
+		return a.judge(s, S, R, fl60, why)
+	}
+
+	// ---- 3 RESTORE: a shrink caused a shortage — undo it at once ----------
+	if isShort && a.shrinkFrom > a.T && now.Sub(a.lastShrinkAt) <= t.overshootWin {
+		old := a.T
+		a.T = a.shrinkFrom
+		a.shrinkFrom = 0
+		j := 0
+		kept := a.undos[:0]
+		for _, u := range a.undos {
+			if now.Sub(u) <= t.undoWindow {
+				kept = append(kept, u)
+			}
+		}
+		a.undos = append(kept, now)
+		j = len(a.undos) - 1
+		ttl := t.holdBase << j
+		if ttl > t.holdMax || ttl <= 0 {
+			ttl = t.holdMax
+		}
+		a.hold.n, a.hold.g, a.hold.until = a.T, gPeak, now.Add(ttl)
+		a.lastGrowAt = now
+		return a.out(s, S, R, apScaling, fmt.Sprintf("shrinking to %d left links at their limit — back to %d, held %s", old, a.T, fmtDur(ttl)),
+			fmt.Sprintf("pattern %d → %d links: the shrink to %d left links at their limit — undone, held for %s", old, a.T, old, fmtDur(ttl)))
+	}
+
+	// ---- 4 GROW: pressed links and nowhere unpressed for new flows ---------
+	// (A probe needs a full baseline to be judged against, and the pressure
+	// must still be there now, not only in the last few ticks.)
+	if isShort && shortTick && s.growable && S >= a.T && a.T < U && a.T < a.max && !now.Before(a.next) && len(a.hist) >= t.baseTicks {
+		// Grow by a quarter; while probes keep succeeding back to back (demand
+		// is climbing), by half — each step is still verified before it is
+		// kept, so a full path costs one failed probe either way.
+		step := (a.T + 3) / 4
+		if a.chain > 0 && now.Sub(a.lastGrowAt) <= t.chainWindow {
+			step = (a.T + 1) / 2
+		}
+		to := a.T + step
+		if to > U {
+			to = U
+		}
+		if to > a.max {
+			to = a.max
+		}
+		if to > a.T {
+			base := a.last(t.baseTicks)
+			gb, varB := meanVar(base, func(h apTick) float64 { return h.g })
+			nb := len(base)
+			before := map[int]float64{}
+			for _, l := range s.links {
+				if l.retiring {
+					before[l.id] = l.rate10
+				}
+			}
+			a.pr = &apProbe{from: a.T, to: to, start: now, gb: gb, varB: varB, nb: nb, before: before, triggerP: P, triggerS: S}
+			old := a.T
+			a.T = to
+			return a.out(s, S, R, apProbing, fmt.Sprintf("%d of %d links at their limit — trying %d", P, S, to),
+				fmt.Sprintf("pattern %d → %d links (probe): %d of %d serving links at their limit, %s", old, to, P, S, why))
+		}
+	}
+
+	// ---- 5 SHRINK: demand is below the target ------------------------------
+	if H < a.T {
+		if a.belowSince.IsZero() {
+			a.belowSince = now
+		}
+	} else {
+		a.belowSince = time.Time{}
+	}
+	if H < a.T && now.Sub(a.belowSince) >= t.shrinkDwell && (!shortIn60 || a.T > U) &&
+		now.Sub(a.lastShrinkAt) >= t.shrinkStep && now.Sub(a.lastGrowAt) >= t.noShrinkAfterGrow {
+		old := a.T
+		step := (a.T - H + 1) / 2
+		if step < 1 {
+			step = 1
+		}
+		a.T -= step
+		if a.T < H {
+			a.T = H
+		}
+		a.shrinkFrom, a.lastShrinkAt = old, now
+		return a.out(s, S, R, apShrinking, fmt.Sprintf("demand needs ~%d links: %s", H, why),
+			fmt.Sprintf("pattern %d → %d links: demand needs ~%d — %s; extra links take no new connections and close when theirs end", old, a.T, H, why))
+	}
+
+	// ---- 6 hold ------------------------------------------------------------
+	if isShort && now.Before(a.next) {
+		return a.out(s, S, R, apHolding, fmt.Sprintf("links at their limit, but %s; next check in %s",
+			a.waitWhy, fmtDur(a.next.Sub(now))), "")
+	}
+	r := "sized for current demand: " + why
+	if H < a.T {
+		r = fmt.Sprintf("demand needs ~%d; stepping down after a steady minute — %s", H, why)
+	}
+	return a.out(s, S, R, apSteady, r, "")
 }
 
-// settle ends a probe: record the current size as the throughput ceiling and
-// start the cooldown before the next probe.
-func (a *autopilot) settle(now time.Time, size int, agg float64) {
-	a.probing = false
-	a.ceilingAgg, a.ceilingSize = agg, size
-	a.coolUntil = now.Add(a.probeCooldown)
-	a.lastPlateauAt = now
-	a.lowSince = now
+// judge runs the in-flight probe for one tick.
+func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
+	t := &a.tun
+	pr := a.pr
+	now := s.now
+	if !pr.armed {
+		if S >= pr.to {
+			pr.armed, pr.armedAt = true, now
+			a.aborts = 0
+		} else if now.Sub(pr.start) > t.armTimeout {
+			a.T = pr.from
+			a.pr = nil
+			a.chain = 0
+			// Links that do not come up (the exit is at its own max, or dials
+			// fail) will not come up next minute either: back off like a failed
+			// probe, 60 s doubling to the cap.
+			a.aborts++
+			back := t.abortNext << (a.aborts - 1)
+			if back > t.backoffMax || back <= 0 {
+				back = t.backoffMax
+			}
+			a.next = now.Add(back)
+			a.waitWhy = fmt.Sprintf("the last try wanted %d links but only %d came up", pr.to, S)
+			return a.out(s, S, R, apHolding, fmt.Sprintf("wanted %d links, only %d came up; next try in %s", pr.to, S, fmtDur(back)),
+				fmt.Sprintf("pattern back to %d links: wanted %d but only %d came up in %s (peer not dialing or dials failing); retry in %s",
+					pr.from, pr.to, S, fmtDur(t.armTimeout), fmtDur(back)))
+		}
+		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — waiting for them to come up (%d up)", pr.to, S), "")
+	}
+	if pr.settled < t.settleTicks {
+		pr.settled++
+		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — letting new connections land", pr.to), "")
+	}
+	newSum, probeSum := 0.0, 0.0
+	for _, l := range s.links {
+		if l.serving && !l.servingSince.Before(pr.start) {
+			newSum += l.rate - pr.before[l.id]
+			probeSum += l.rate
+		}
+	}
+	pr.evalG = append(pr.evalG, s.G)
+	pr.evalNew = append(pr.evalNew, newSum)
+	pr.evalProbe = append(pr.evalProbe, probeSum)
+	// Did the probe give the links that carry traffic headroom? When the
+	// path itself is full, every link moving data stays blocked by it, however
+	// many there are; when demand was simply met, they stop being blocked.
+	// Links without traffic (a probe link nothing reached yet, an old link
+	// whose flows moved) say nothing either way.
+	act, pAct := 0, 0
+	for _, l := range s.links {
+		if l.serving && l.rate >= t.activeRate {
+			act++
+			if l.pressed {
+				pAct++
+			}
+		}
+	}
+	if pAct >= 1 && act-pAct < spare(pAct) {
+		pr.evalShort++
+	}
+	n := len(pr.evalG)
+	isLook := false
+	for _, l := range t.looks {
+		if n == l {
+			isLook = true
+		}
+	}
+	lastLook := t.looks[len(t.looks)-1]
+	if !isLook {
+		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — measuring (%d/%d)", pr.to, n, lastLook), "")
+	}
+	rNew := mean(pr.evalNew)
+	pTot := mean(pr.evalProbe)
+	relieved := 2*pr.evalShort < n
+	gA, varA := meanVarF(pr.evalG)
+	dG := gA - pr.gb
+	se := math.Sqrt(pr.varB/float64(pr.nb) + varA/float64(n))
+	rMin := t.rMinAbs
+	if pr.from > 0 {
+		if v := t.rMinFrac * pr.gb / float64(pr.from); v > rMin {
+			rMin = v
+		}
+	}
+	busy := pTot >= rMin
+	need := t.additivity * rNew
+	if v := t.z * se; v > need {
+		need = v
+	}
+	if v := t.minGain * pr.gb; v > need {
+		need = v
+	}
+	switch {
+	case rNew >= rMin && dG >= need:
+		a.pr = nil
+		a.chain++
+		a.next = now.Add(t.successNext)
+		a.waitWhy = "the last added links are still filling"
+		a.lastGrowAt = now
+		if !a.startConfirm(pr, dG, now) {
+			a.k = 0
+		}
+		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: the new links added %.1f Mbit/s", a.T, mbitps(dG)),
+			fmt.Sprintf("pattern %d → %d links kept: +%.1f Mbit/s (new links carried %.1f)", pr.from, pr.to, mbitps(dG), mbitps(rNew)))
+	case rNew >= rMin && relieved && n == lastLook && dG > 0 && dG >= t.minGain*pr.gb:
+		// The added links took new connections and no link is short any more,
+		// but the total barely moved: demand was nearly met already. Keep them
+		// as headroom (the shrink rule returns them if demand does not need
+		// them), without the backoff a full path earns.
+		a.pr = nil
+		a.chain = 0
+		a.next = now.Add(t.inconclusiveNext)
+		a.waitWhy = "the last added links are kept as headroom"
+		a.lastGrowAt = now
+		a.startConfirm(pr, dG, now)
+		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no link is short of capacity any more", a.T),
+			fmt.Sprintf("pattern %d → %d links kept as headroom: new links carried %.1f Mbit/s and no link is at its limit any more (total %+.1f)",
+				pr.from, pr.to, mbitps(rNew), mbitps(dG)))
+	case (rNew >= rMin || busy) && n == lastLook,
+		!relieved && rNew >= rMin && n == t.looks[1] && dG < t.earlyFail*rNew:
+		// The added links carried traffic and the total did not rise enough:
+		// the path itself is full. (busy covers links brought back from
+		// retiring: they carry the flows they already had, so little of it is
+		// new, yet nothing was gained. A probe that seemed to relieve the
+		// pressure but raised nothing is judged the same way: keeping links
+		// needs a measured gain.)
+		a.pr = nil
+		a.chain = 0
+		a.T = pr.from
+		a.k++
+		a.fail.at, a.fail.g, a.fail.flows = now, max(pr.gb, a.gPeak), fl60
+		back := a.backoff()
+		a.next = now.Add(back)
+		a.waitWhy = fmt.Sprintf("more links did not add throughput at ~%.1f Mbit/s (path full)", mbitps(pr.gb))
+		// The ceiling: the fewest links at which the path was found full, and
+		// the throughput then. Found full again at more links with no more
+		// throughput, those links are no better than the ceiling's: go back
+		// to it. On a full path every link reads as pressed, so nothing else
+		// would ever take back links a lucky probe once added.
+		c := &a.ceil
+		switch {
+		case c.n > 0 && now.Sub(c.at) < t.ceilTTL && pr.from > c.n && pr.gb <= 1.1*c.g:
+			old := pr.from
+			a.T, c.at = c.n, now
+			return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: %d links carry no more than %d; next check in %s", mbitps(pr.gb), old, c.n, fmtDur(back)),
+				fmt.Sprintf("pattern %d → %d links: %d links carry no more than %d did (~%.1f Mbit/s; the path is full); next check in %s",
+					old, c.n, old, c.n, mbitps(pr.gb), fmtDur(back)))
+		case c.n == 0 || now.Sub(c.at) >= t.ceilTTL || pr.gb > 1.1*c.g || pr.from < c.n:
+			*c = apCeil{n: pr.from, g: pr.gb, at: now}
+		default:
+			c.at = now
+		}
+		return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: more links did not add throughput; next check in %s", mbitps(pr.gb), fmtDur(back)),
+			fmt.Sprintf("sized to %d links at ~%.1f Mbit/s — %d more links carried %.1f Mbit/s but the total rose only %.1f (path is full); next check in %s",
+				pr.from, mbitps(pr.gb), pr.to-pr.from, mbitps(max(rNew, pTot)), mbitps(dG), fmtDur(back)))
+	case n == lastLook:
+		a.pr = nil
+		a.chain = 0
+		a.next = now.Add(t.inconclusiveNext)
+		a.waitWhy = "no new connection reached the last added links yet"
+		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no new connection reached the added links yet — kept as spares", a.T),
+			fmt.Sprintf("pattern %d → %d links kept as spares: no new connection reached them yet (connections stay on their link)", pr.from, pr.to))
+	}
+	return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — measuring (%d/%d)", pr.to, n, lastLook), "")
 }
 
-// rampPhase labels a growth step calibrating until a ceiling has been found.
-func (a *autopilot) rampPhase() apPhase {
-	if a.calibrating() {
-		return apCalibrating
+// backoff is the pause after the k-th failed probe: 30 s doubling, capped,
+// with jitter so it does not lock onto a periodic traffic pattern.
+func (a *autopilot) backoff() time.Duration {
+	t := &a.tun
+	back := t.backoffBase << (a.k - 1)
+	if back > t.backoffMax || back <= 0 {
+		back = t.backoffMax
 	}
-	return apProbing
+	return time.Duration(float64(back) * (1 - t.jitter + 2*t.jitter*a.rnd()))
 }
 
-func (a *autopilot) decide2(target int, phase apPhase, note string) apDecision {
-	if target < a.min {
-		target = a.min
+// startConfirm puts a kept probe on probation when the path was found full
+// recently: on a noisy path a probe can pass by chance, and on a full path
+// nothing would ever take its links back (every link reads as pressed). The
+// gain must last: over the next confirmWin the mean total must stay above the
+// probe's baseline by half the gain seen (at least minGain), and by two
+// standard errors of that comparison. No new probe until then. It reports
+// whether probation started.
+func (a *autopilot) startConfirm(pr *apProbe, dG float64, now time.Time) bool {
+	t := &a.tun
+	if a.k == 0 && (a.fail.at.IsZero() || now.Sub(a.fail.at) >= t.kResetAfter) {
+		return false
 	}
-	if target > a.max {
-		target = a.max
+	a.confirm = apConfirm{active: true, from: pr.from, to: pr.to, gb: pr.gb, varB: pr.varB, nb: pr.nb,
+		kPrev: a.k, need: pr.gb + max(0.5*dG, t.minGain*pr.gb), until: now.Add(t.confirmWin)}
+	a.next = a.confirm.until
+	a.waitWhy = "checking that the last gain lasts"
+	a.chain = 0
+	return true
+}
+
+// apCeil is where the path was last found full: n links carrying ~g.
+type apCeil struct {
+	n  int
+	g  float64
+	at time.Time
+}
+
+// apConfirm is a probe gain on probation (see decide, step 0).
+type apConfirm struct {
+	active     bool
+	from, to   int
+	gb, need   float64
+	varB       float64
+	nb, kPrev  int
+	until      time.Time
+	sum, sumSq float64
+	n          int
+}
+
+// out finalises a decision: clamp T and remember phase and reason for the
+// monitor. Without pool control on the peer the pool cannot grow past what is up.
+func (a *autopilot) out(s apSample, S, R int, ph apPhase, reason, note string) apDecision {
+	a.T = a.clamp(a.T)
+	if !s.growable && a.T > S+R && S+R >= a.min {
+		a.T = S + R
 	}
-	a.lastPhase = phase
-	return apDecision{target: target, phase: phase, note: note}
+	a.phase, a.reason = ph, reason
+	return apDecision{target: a.T, phase: ph, reason: reason, note: note}
+}
+
+// capEstimate is the median sustained rate of pressed serving links over the
+// capacity window — the per-link limit where one has actually been observed,
+// 0 (unknown) otherwise, so an unconstrained path never holds links for
+// bandwidth it does not need.
+func (a *autopilot) capEstimate(now time.Time) float64 {
+	var vs []float64
+	kept := a.caps[:0]
+	for _, c := range a.caps {
+		if now.Sub(c.t) <= a.tun.capWindow {
+			kept = append(kept, c)
+			vs = append(vs, c.v)
+		}
+	}
+	a.caps = kept
+	if len(vs) < a.tun.capMinSamples {
+		return 0
+	}
+	sort.Float64s(vs)
+	return vs[len(vs)/2]
+}
+
+func mean(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	s := 0.0
+	for _, x := range xs {
+		s += x
+	}
+	return s / float64(len(xs))
+}
+
+func meanVarF(xs []float64) (float64, float64) {
+	m := mean(xs)
+	if len(xs) < 2 {
+		return m, 0
+	}
+	v := 0.0
+	for _, x := range xs {
+		v += (x - m) * (x - m)
+	}
+	return m, v / float64(len(xs)-1)
+}
+
+func meanVar(ts []apTick, f func(apTick) float64) (float64, float64) {
+	xs := make([]float64, len(ts))
+	for i, t := range ts {
+		xs[i] = f(t)
+	}
+	return meanVarF(xs)
+}
+
+// fmtDur prints a duration the way an operator reads it: 45s, 4m, 1h10m.
+func fmtDur(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()+0.5))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()+0.5))
+	default:
+		return fmt.Sprintf("%dh%02dm", int(d.Hours()), int(d.Minutes())%60)
+	}
 }
 
 // mbitps converts bytes/sec to Mbit/s for human-readable notes.
