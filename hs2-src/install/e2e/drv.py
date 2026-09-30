@@ -162,6 +162,13 @@ def phase_adaptive():
     res("status JSON carries links/target/min/max/phase", all(k in j for k in ('"links"', '"target"', '"min"', '"max"', '"phase"')), j[:200])
     # Pool v2 detail: serving vs retiring links, why, and the exit's link stats
     # (both ends run this build, so the exit must report them).
+    # (right after a reboot the links and the exit-stats handshake may still be
+    # coming up: give them half a minute)
+    for _ in range(30):
+        j = sh("ir", "cat /run/hs2/*.status.json 2>/dev/null")
+        if all(k in j for k in ('"serving"', '"reason"', '"exit_stats":"ok"')):
+            break
+        time.sleep(1)
     res("status JSON carries serving/reason/exit_stats (pool v2)",
         all(k in j for k in ('"serving"', '"reason"', '"exit_stats":"ok"')), j[:300])
     res("hs2 status: explains the pattern (why: line)", "why:" in st, st.replace("\n", " | ")[:300])

@@ -95,12 +95,6 @@ const (
 	churnTrips    = 3
 	churnHold     = 10 * time.Minute
 
-	// bornSpare grace: a reverse link that arrives while the pool already has
-	// its target may be the exit replacing a serving link that died without
-	// this side noticing yet (smux notices within its 24 s keepalive timeout).
-	// It is kept this long before it can be closed, so it can take over.
-	bornSpareGrace = 30 * time.Second
-
 	dialFailLogEvery = 30 * time.Second
 	rwndHintEvery    = 10 * time.Minute
 )
@@ -229,6 +223,13 @@ type managedLink struct {
 func (ml *managedLink) serving() bool {
 	return !ml.retiring && !ml.degraded && !ml.draining && ml.link.Alive() && !ml.suspect
 }
+
+// bornSpareGrace: a reverse link that arrives while the pool already has its
+// target may be the exit replacing a serving link that died without this side
+// noticing yet (smux notices within its 24 s keepalive timeout). It is kept
+// this long before it can be closed, so it can take over. (A variable only so
+// the real-socket tests can shorten it.)
+var bornSpareGrace = 30 * time.Second
 
 // suspectAfter: a link that has received nothing at all — not even the
 // other side's smux keepalive (every 4–8 s) or a control reply (every 3 s) —

@@ -122,6 +122,11 @@ func (r *v2Rig) exitView() PoolStats {
 
 func startV2(t *testing.T, o v2Opts) *v2Rig {
 	t.Helper()
+	// Surplus links an exit dials are kept 30 s in production (they may be
+	// replacing a link that died unnoticed); these tests watch many resizes.
+	old := bornSpareGrace
+	bornSpareGrace = 3 * time.Second
+	t.Cleanup(func() { bornSpareGrace = old })
 	key := bytes.Repeat([]byte{0x5a}, 32)
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &v2Rig{t: t, edge: &logSink{}, exit: &logSink{}}
