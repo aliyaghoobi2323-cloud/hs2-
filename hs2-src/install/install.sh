@@ -6,6 +6,8 @@
 #      bash install.sh upgrade    (update an existing install in place)
 #      bash install.sh backup     (save config+cert+binary to /root/hs2-backups)
 #      bash install.sh restore [file]  (roll back to a backup; newest by default)
+#      bash install.sh manage     (tunnel manager: start/stop/restart/edit/logs)
+#      hs2-menu                   (this menu, installed locally by setup/upgrade)
 # ============================================================================
 set -euo pipefail
 
@@ -54,7 +56,7 @@ show_ips(){ local_ips | sed 's/^/   /' >&2; }
 first_public_ip(){ local_ips | head -1; }
 
 # ip_is_local reports whether an IPv4 address is assigned to a local interface.
-ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##' | grep -qx "$1"; }
+ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##' | grep -x "$1" >/dev/null; }
 
 # ask_bind_ip sets BINDADDR: the local IP this server LISTENS on. A specific IP
 # lets a multi-IP server dedicate one address to the tunnel; it is validated to
@@ -104,8 +106,8 @@ ask_egress_ip(){
 install_prereqs(){
   info "Installing prerequisites…"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -q >/dev/null 2>&1 || true
-  apt-get install -y -q iproute2 iptables curl ca-certificates >/dev/null 2>&1 || true
+  apt-get update -q </dev/null >/dev/null 2>&1 || true
+  apt-get install -y -q iproute2 iptables curl ca-certificates </dev/null >/dev/null 2>&1 || true
   # tun module
   modprobe tun 2>/dev/null || true
   tune_kernel
@@ -152,6 +154,12 @@ install_binary(){
     local f="$d/hs2-linux-amd64"; [ -f "$f" ] || f="./hs2-linux-amd64"
     warn "GitHub unreachable — using local $f (make sure it is the NEW one)."
     cp "$f" "$tmp"
+  elif [ -x "$BIN" ] && "$BIN" version 2>/dev/null | grep -q "hs2 v3"; then
+    # Re-running setup (e.g. from hs2-menu) on a server that cannot reach
+    # GitHub: the binary already installed is good enough to build a tunnel.
+    warn "GitHub unreachable — keeping the hs2 already installed on this server."
+    warn "(Run 'Upgrade' later when GitHub is reachable, on BOTH servers.)"
+    cp "$BIN" "$tmp"
   else
     rm -f "$tmp"
     die "download failed. On the Iran server, copy hs2-linux-amd64 from the kharej server into $(pwd) and run again."
@@ -164,18 +172,28 @@ install_binary(){
   info "sha256: $(sha256sum "$BIN" | cut -c1-16)…"
   "$BIN" version 2>/dev/null | grep -q "hs2 v3"     || die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."
   ok "Installed $("$BIN" version 2>/dev/null)"
+  install_self
 }
 
 write_service(){
   local role="$1"
+  # Built to come back on its own after a reboot or a crash:
+  #  - enabled for multi-user.target (start_service/upgrade run `enable`)
+  #  - waits for network-online, but never depends on it: if the IP is not up
+  #    yet it simply fails and is restarted 3 s later
+  #  - StartLimitIntervalSec=0: systemd never gives up restarting it
+  #  - loads the tun module first (the tunnel interface needs /dev/net/tun)
   cat > "$SVC" <<EOF
 [Unit]
 Description=hs2 DPI-resistant tunnel ($role)
+Documentation=https://github.com/aliyaghoobi2323-cloud/hs2-
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
+ExecStartPre=-/sbin/modprobe tun
 ExecStart=$BIN run -c $CFG
 Restart=always
 RestartSec=3
@@ -192,10 +210,12 @@ EOF
 
 start_service(){
   local role="$1"
-  systemctl enable --now hs2 >/dev/null 2>&1
-  sleep 2
-  if systemctl is-active --quiet hs2; then
+  systemctl enable hs2 >/dev/null 2>&1 || true
+  systemctl restart hs2 2>/dev/null || true
+  if tm_healthy hs2; then
     ok "hs2 ($role) is running."
+    ok "Autostart on boot: ON — it comes back by itself after a reboot or crash."
+    info "Manage it any time with:  hs2-menu   → 3) Tunnel manager"
   else
     err "hs2 failed to start. Last log:"
     journalctl -u hs2 -n 20 --no-pager >&2
@@ -764,6 +784,9 @@ EOF
 
 # ---------- uninstall & status ----------------------------------------------
 uninstall(){
+  local a
+  read -rp "Remove the hs2 tunnel from this server? (a backup is saved first) [y/N]: " a </dev/tty || a=n
+  case "$a" in y|Y|yes) ;; *) info "Nothing removed."; return 0 ;; esac
   info "Removing hs2…"
   auto_backup
   systemctl disable --now hs2 2>/dev/null || true
@@ -772,7 +795,7 @@ uninstall(){
   # Delete the tunnel interface. Usually hs0, but tun mode may have renamed it, so
   # also read the name from the config before deleting it.
   local IFACE=""
-  [ -f "$CFG" ] && IFACE=$(grep -o '"iface"[[:space:]]*:[[:space:]]*"[^"]*"' "$CFG" 2>/dev/null | sed 's/.*"\([^"]*\)"$/\1/')
+  [ -f "$CFG" ] && IFACE=$(cfg_field iface)
   [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
   ip link del hs0 2>/dev/null || true
   rm -f "$SVC" "$CFG" /etc/sysctl.d/99-hs2.conf; systemctl daemon-reload
@@ -791,6 +814,337 @@ status(){
   fi
 }
 
+# ---------- tunnel manager ---------------------------------------------------
+# Lists every hs2 tunnel on this server with its live state and lets you
+# start / stop / restart it, edit its config (validated, applied, rolled back
+# if it fails) and follow its log. Tunnels are found from their systemd units,
+# so this works for hs2.service today and hs2-<name>.service later.
+MENU_BIN=/usr/local/bin/hs2-menu
+
+# Colours for the manager screens (stderr, like the rest of the UI).
+C_G=$'\033[1;32m'; C_R=$'\033[1;31m'; C_Y=$'\033[1;33m'; C_B=$'\033[1;34m'; C_D=$'\033[2m'; C_0=$'\033[0m'
+say(){ printf '%s\n' "$*" >&2; }
+pause(){ read -rp "Press Enter to continue… " _ </dev/tty || true; }
+
+# jget FILE KEY -> string value; jraw FILE KEY -> bare value (true/false/number)
+jget(){ { grep -o "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$1" 2>/dev/null || true; } | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
+jraw(){ { grep -o "\"$2\"[[:space:]]*:[[:space:]]*[a-z0-9]*" "$1" 2>/dev/null || true; } | head -1 | sed 's/.*:[[:space:]]*//'; }
+
+tm_units(){
+  local f
+  for f in /etc/systemd/system/hs2.service /etc/systemd/system/hs2-*.service; do
+    [ -f "$f" ] && basename "$f" .service
+  done
+  return 0
+}
+tm_cfg(){ { sed -n 's/^ExecStart=.* -c \([^ ]*\).*/\1/p' "/etc/systemd/system/$1.service" 2>/dev/null || true; } | head -1; }
+tm_prop(){ systemctl show -p "$2" --value "$1" 2>/dev/null || true; }
+
+# tm_state UNIT -> running | starting | failing | failed | stopped
+tm_state(){
+  local a; a=$(tm_prop "$1" ActiveState)
+  case "$a" in
+    active) echo running ;;
+    activating)
+      if [ "$(tm_prop "$1" NRestarts)" -gt 0 ] 2>/dev/null; then echo failing; else echo starting; fi ;;
+    failed) echo failed ;;
+    *) echo stopped ;;
+  esac
+}
+tm_state_label(){
+  case "$1" in
+    running)  printf '%s● running%s' "$C_G" "$C_0" ;;
+    starting) printf '%s◐ starting%s' "$C_Y" "$C_0" ;;
+    failing)  printf '%s✗ crashing (restarting every 3s — see the log)%s' "$C_R" "$C_0" ;;
+    failed)   printf '%s✗ failed%s' "$C_R" "$C_0" ;;
+    *)        printf '%s○ stopped%s' "$C_Y" "$C_0" ;;
+  esac
+}
+tm_uptime(){
+  local t s d
+  t=$(tm_prop "$1" ActiveEnterTimestamp); [ -n "$t" ] || return 0
+  s=$(date -d "$t" +%s 2>/dev/null) || return 0
+  d=$(( $(date +%s) - s ))
+  if   [ $d -ge 86400 ]; then printf 'up %dd %dh' $((d/86400)) $((d%86400/3600))
+  elif [ $d -ge 3600 ];  then printf 'up %dh %dm' $((d/3600)) $((d%3600/60))
+  elif [ $d -ge 60 ];    then printf 'up %dm' $((d/60))
+  else printf 'up %ds' $d; fi
+}
+tm_autostart(){ [ "$(systemctl is-enabled "$1" 2>/dev/null || true)" = enabled ]; }
+
+# Does this side open the tunnel connections? mode=dial is the Iran side,
+# reverse flips who connects (same rule as the engine).
+tm_dials(){
+  local mode rev; mode=$(jget "$1" mode); rev=$(jraw "$1" reverse)
+  if [ "$mode" = dial ]; then [ "$rev" != true ]; else [ "$rev" = true ]; fi
+}
+# Live TLS links of a TCP tunnel (empty for udp/auto, which are not TCP links).
+tm_links(){
+  local cfg="$1" car addr host port
+  car=$(jget "$cfg" carrier)
+  case "$car" in mtcp|l3mtcp|l3|tls) ;; *) return 0 ;; esac
+  addr=$(jget "$cfg" addr); host=${addr%:*}; port=${addr##*:}
+  if tm_dials "$cfg"; then
+    ss -Htn state established "( dport = :$port and dst $host )" 2>/dev/null | wc -l
+  else
+    ss -Htn state established "( sport = :$port )" 2>/dev/null | wc -l
+  fi
+}
+# Peers connected to a listening tunnel (who is actually on the other end).
+tm_peers(){
+  local port; port=$(jget "$1" addr); port=${port##*:}
+  ss -Htn state established "( sport = :$port )" 2>/dev/null | awk '{print $4}' | sed 's/:[0-9]*$//' | sort -u | tr '\n' ' '
+}
+tm_transport(){
+  case "$(jget "$1" carrier)" in
+    mtcp) echo "tcp (mtcp)" ;; tls) echo "tcp (tls)" ;; l3mtcp|l3) echo "tun (L3 over mtcp)" ;;
+    udp) echo "udp" ;; auto) echo "auto (udp, tcp fallback)" ;; reality) echo "reality" ;; *) echo "tcp (noise)" ;;
+  esac
+}
+tm_role(){ [ "$(jget "$1" mode)" = dial ] && echo "Iran side" || echo "Kharej side"; }
+tm_dir(){ [ "$(jraw "$1" reverse)" = true ] && echo reverse || echo direct; }
+
+# tm_healthy UNIT: running and not crash-restarting (same PID over ~5 s).
+tm_healthy(){
+  local p1 p2
+  sleep 1.5; p1=$(tm_prop "$1" MainPID)
+  sleep 4;   p2=$(tm_prop "$1" MainPID)
+  [ "$(systemctl is-active "$1" 2>/dev/null || true)" = active ] && [ "${p1:-0}" != 0 ] && [ "$p1" = "$p2" ]
+}
+tm_log_since(){ # UNIT SINCE
+  journalctl -u "$1" --since "$2" --no-pager -o cat 2>/dev/null | tail -n 12 | sed 's/^/     /' >&2 || true
+}
+
+tm_list(){
+  local units=() u cfg st i=0 links extra
+  mapfile -t units < <(tm_units)
+  echo >&2; hr; say " ${C_B}Tunnel manager${C_0}   ${C_D}($(hostname))${C_0}"; hr
+  if [ ${#units[@]} -eq 0 ]; then
+    warn "No hs2 tunnel on this server yet."
+    info "Create one from the main menu: 1) Kharej or 2) Iran."
+    TM_UNITS=(); return 0
+  fi
+  for u in "${units[@]}"; do
+    i=$((i+1)); cfg=$(tm_cfg "$u"); st=$(tm_state "$u")
+    extra=""
+    [ "$st" = running ] && extra=" · $(tm_uptime "$u")"
+    links=$(tm_links "$cfg"); [ "$st" = running ] && [ -n "$links" ] && extra="$extra · $links links"
+    if tm_autostart "$u"; then extra="$extra · autostart ON"; else extra="$extra · ${C_Y}autostart OFF${C_0}"; fi
+    say "  $i) ${C_B}$u${C_0}  $(tm_state_label "$st")$extra"
+    if [ -f "$cfg" ]; then
+      say "      $(tm_role "$cfg") · $(tm_dir "$cfg") · $(tm_transport "$cfg") · $(tm_endpoint "$cfg")"
+    else
+      say "      ${C_R}config file missing: ${cfg:-?}${C_0}"
+    fi
+  done
+  TM_UNITS=("${units[@]}")
+}
+tm_endpoint(){
+  local addr; addr=$(jget "$1" addr)
+  if tm_dials "$1"; then echo "connects to $addr"; else echo "listens on $addr"; fi
+}
+
+tm_details(){
+  local u="$1" cfg="$2" st links bind
+  st=$(tm_state "$u"); links=$(tm_links "$cfg")
+  echo >&2; hr
+  say " Tunnel:      ${C_B}$u${C_0}   ${C_D}config: $cfg${C_0}"
+  say " Status:      $(tm_state_label "$st")$([ "$st" = running ] && echo " · $(tm_uptime "$u")")$([ "$st" = running ] && [ -n "$links" ] && echo " · $links links")"
+  if [ -f "$cfg" ]; then
+    say " Side:        $(tm_role "$cfg") · $(tm_dir "$cfg") · $(tm_transport "$cfg")"
+    if tm_dials "$cfg"; then
+      bind=$(jget "$cfg" bind_local_ip)
+      say " Connection:  connects to $(jget "$cfg" addr) from ${bind:-the default IP}"
+    else
+      say " Connection:  listens on $(jget "$cfg" addr)$([ "$st" = running ] && [ -n "$(tm_peers "$cfg")" ] && echo " · connected: $(tm_peers "$cfg")")"
+    fi
+    [ -n "$(jget "$cfg" forward_ports)" ] && say " User ports:  $(jget "$cfg" forward_ports)  (users connect here)"
+    [ -n "$(jget "$cfg" expose)" ] && say " Panel:       $(jget "$cfg" expose)"
+  fi
+  if tm_autostart "$u"; then say " Autostart:   ${C_G}ON${C_0} — comes back by itself after a reboot"
+  else say " Autostart:   ${C_Y}OFF${C_0} — will NOT start after a reboot"; fi
+  hr
+}
+
+tm_start(){
+  local u="$1" since
+  if [ "$(tm_state "$u")" = running ]; then ok "$u is already running."; return 0; fi
+  since=$(date '+%Y-%m-%d %H:%M:%S')
+  info "Starting $u…"
+  systemctl start "$u" 2>/dev/null || true
+  if tm_healthy "$u"; then ok "$u is running."; else err "$u did not stay up. Log:"; fi
+  tm_log_since "$u" "$since"
+}
+tm_stop(){
+  local u="$1" a
+  if [ "$(tm_state "$u")" = stopped ]; then ok "$u is already stopped."; return 0; fi
+  read -rp "Stop $u now? Users are disconnected until it is started again. [y/N]: " a </dev/tty
+  case "$a" in y|Y|yes) ;; *) info "Not stopped."; return 0 ;; esac
+  systemctl stop "$u" 2>/dev/null || true
+  ok "$u stopped."
+  tm_autostart "$u" && info "Autostart is ON, so it starts again after a reboot. To keep it off, turn autostart OFF."
+  return 0
+}
+tm_restart(){
+  local u="$1" since
+  since=$(date '+%Y-%m-%d %H:%M:%S')
+  info "Restarting $u…"
+  systemctl restart "$u" 2>/dev/null || true
+  if tm_healthy "$u"; then ok "$u restarted and running."; else err "$u did not stay up. Log:"; fi
+  tm_log_since "$u" "$since"
+}
+tm_toggle_autostart(){
+  local u="$1"
+  if tm_autostart "$u"; then
+    systemctl disable "$u" >/dev/null 2>&1 || true
+    warn "Autostart OFF: $u will NOT start after a reboot (it keeps running now)."
+  else
+    systemctl enable "$u" >/dev/null 2>&1 || true
+    ok "Autostart ON: $u starts by itself after a reboot."
+  fi
+}
+tm_follow(){
+  info "Live log of $1 — press Ctrl+C to go back to the menu."
+  # A no-op INT handler (not "ignore") lets Ctrl+C stop journalctl but not us.
+  trap ':' INT
+  journalctl -u "$1" -f -n 30 -o cat --no-pager </dev/null || true
+  trap - INT
+  echo >&2
+}
+
+tm_editor(){
+  if command -v nano >/dev/null 2>&1; then echo nano; return 0; fi
+  info "Installing nano…"
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -q nano </dev/null >/dev/null 2>&1 || true
+  if command -v nano >/dev/null 2>&1; then echo nano; elif command -v vi >/dev/null 2>&1; then echo vi; fi
+}
+# tm_validate FILE: full check with `hs2 check` (old binaries: JSON syntax only).
+tm_validate(){
+  local out rc=0 line
+  out=$("$BIN" check -c "$1" 2>&1) || rc=$?
+  if printf '%s' "$out" | grep -q "unknown command"; then
+    warn "This hs2 binary is too old for the full check (upgrade: option 5). Checking JSON syntax only."
+    if command -v python3 >/dev/null 2>&1; then
+      out=$(python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$1" 2>&1) && { ok "JSON syntax OK."; return 0; }
+      err "Not valid JSON: $(printf '%s' "$out" | tail -1)"; return 1
+    fi
+    warn "python3 not found — could not check the file."; return 0
+  fi
+  while IFS= read -r line; do
+    case "$line" in
+      ERROR:*) say "  ${C_R}✗ ${line#ERROR: }${C_0}" ;;
+      WARN:*)  say "  ${C_Y}! ${line#WARN:  }${C_0}" ;;
+      "config OK") say "  ${C_G}✓ config OK${C_0}" ;;
+      *) [ -n "$line" ] && say "  $line" ;;
+    esac
+  done <<<"$out"
+  return $rc
+}
+tm_edit(){
+  local u="$1" cfg="$2" ed tmp c a since
+  [ -f "$cfg" ] || { err "Config file not found: $cfg"; return 0; }
+  ed=$(tm_editor); [ -n "$ed" ] || { err "No text editor available (apt install nano)."; return 0; }
+  tmp=$(mktemp /tmp/hs2-edit.XXXXXX); chmod 600 "$tmp"; cp "$cfg" "$tmp"
+  echo >&2
+  info "The config opens in $ed."
+  [ "$ed" = nano ] && info "Save: Ctrl+O then Enter  ·  Close: Ctrl+X"
+  info "After you close it, the change is checked and $u restarts automatically."
+  info "If the new config fails, you can put the old one back with one key."
+  read -rp "Press Enter to open the editor… " _ </dev/tty || true
+  while :; do
+    "$ed" "$tmp" </dev/tty >/dev/tty 2>&1 || true
+    if cmp -s "$tmp" "$cfg"; then
+      rm -f "$tmp"; info "No changes — $u was not restarted."; return 0
+    fi
+    say ""; say " Your changes:"
+    diff -u "$cfg" "$tmp" 2>/dev/null | tail -n +3 | grep '^[-+]' | sed -e "s/^-/  ${C_R}- /" -e "s/^+/  ${C_G}+ /" -e "s/\$/${C_0}/" >&2 || true
+    say ""; info "Checking the new config…"
+    if tm_validate "$tmp"; then break; fi
+    say ""; say "  The new config has errors, so it was NOT applied. $u is untouched."
+    say "    1) Open the editor again to fix it"
+    say "    2) Throw away my changes"
+    read -rp "  Choose [1]: " c </dev/tty || c=2
+    case "${c:-1}" in 2) rm -f "$tmp"; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
+  done
+  cp -p "$cfg" "$cfg.prev"
+  cat "$tmp" > "$cfg"; rm -f "$tmp"
+  ok "Saved. The previous version is kept as $cfg.prev"
+  since=$(date '+%Y-%m-%d %H:%M:%S')
+  info "Restarting $u to apply the change…"
+  systemctl restart "$u" 2>/dev/null || true
+  if tm_healthy "$u"; then
+    ok "Applied — $u is running with the new config."
+    tm_log_since "$u" "$since"
+    return 0
+  fi
+  err "$u did not come up with the new config. Log:"
+  tm_log_since "$u" "$since"
+  read -rp "Put the previous config back and restart? [Y/n]: " a </dev/tty || a=y
+  case "${a:-y}" in
+    n|N|no) warn "Left the new config in place. Fix it with Edit, or restore $cfg.prev." ;;
+    *)
+      cat "$cfg.prev" > "$cfg"
+      since=$(date '+%Y-%m-%d %H:%M:%S')
+      systemctl restart "$u" 2>/dev/null || true
+      if tm_healthy "$u"; then ok "Previous config restored — $u is running again."
+      else err "$u is still not running with the previous config. Log:"; tm_log_since "$u" "$since"; fi ;;
+  esac
+}
+
+tm_tunnel_menu(){
+  local u="$1" cfg c
+  cfg=$(tm_cfg "$u")
+  while :; do
+    tm_details "$u" "$cfg"
+    say "  1) Start"
+    say "  2) Stop"
+    say "  3) Restart"
+    say "  4) Edit config (nano) — applied automatically when you close it"
+    say "  5) Live log"
+    if tm_autostart "$u"; then say "  6) Turn autostart OFF"; else say "  6) Turn autostart ON"; fi
+    say "  0) Back"
+    read -rp "Choose: " c </dev/tty || return 0
+    case "$c" in
+      1) tm_start "$u" ;;
+      2) tm_stop "$u" ;;
+      3) tm_restart "$u" ;;
+      4) tm_edit "$u" "$cfg" ;;
+      5) tm_follow "$u" ;;
+      6) tm_toggle_autostart "$u" ;;
+      0|b|B|"") return 0 ;;
+      *) warn "Invalid choice." ;;
+    esac
+  done
+}
+
+tunnel_manager(){
+  local c
+  while :; do
+    tm_list
+    [ ${#TM_UNITS[@]} -gt 0 ] || { pause; return 0; }
+    say ""; say "  Pick a tunnel number to manage it · r) Refresh · 0) Back"
+    read -rp "Choose: " c </dev/tty || return 0
+    case "$c" in
+      0|b|B|q) return 0 ;;
+      r|R|"") continue ;;
+      *[!0-9]*) warn "Invalid choice." ;;
+      *) if [ "$c" -ge 1 ] && [ "$c" -le ${#TM_UNITS[@]} ]; then tm_tunnel_menu "${TM_UNITS[$((c-1))]}"
+         else warn "There is no tunnel $c."; fi ;;
+    esac
+  done
+}
+
+# Keep a copy of this script as the `hs2-menu` command, so the menu works even
+# when GitHub is unreachable (Iran side).
+install_self(){
+  local tmp; tmp=$(mktemp)
+  if curl -fsSL --connect-timeout 10 -o "$tmp" "$REPO_RAW/install.sh" 2>/dev/null && grep -q 'hs2 v3' "$tmp"; then :
+  elif [ -f "$0" ] && grep -q 'hs2 v3' "$0" 2>/dev/null; then cp "$0" "$tmp"
+  else rm -f "$tmp"; return 0; fi
+  install -m755 "$tmp" "$MENU_BIN"; rm -f "$tmp"
+  return 0
+}
+
 # ---------- backup & restore -------------------------------------------------
 # A backup is one tar.gz holding everything hs2 installs: config, service unit,
 # binary, kernel tuning and the TLS cert the config points to (the whole
@@ -798,7 +1152,10 @@ status(){
 BACKUP_DIR=/root/hs2-backups
 
 cfg_field(){ # key -> value of a "key": "value" string field in $CFG
-  grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$CFG" 2>/dev/null | head -1 | sed 's/.*"\([^"]*\)"$/\1/'
+  # Never fails: a missing file or key yields "" (under set -e + pipefail a
+  # failing grep here would silently end the whole script, e.g. in restore
+  # right after an uninstall).
+  { grep -o "\"$1\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$CFG" 2>/dev/null || true; } | head -1 | sed 's/.*"\([^"]*\)"$/\1/'
 }
 
 backup(){
@@ -841,13 +1198,17 @@ restore(){
     f=$(ls -1t "$BACKUP_DIR"/hs2-*.tar.gz 2>/dev/null | head -1)
     [ -n "$f" ] || die "no backups in $BACKUP_DIR"
     info "Backups (newest first):"; ls -1t "$BACKUP_DIR"/hs2-*.tar.gz | sed 's/^/   /' >&2
-    if [ -t 0 ] || [ -r /dev/tty ]; then
-      read -rp "Restore which file? [$f]: " ans </dev/tty 2>/dev/null || true
+    # read -p prints its prompt on stderr, so stderr must stay visible here.
+    local ans=""
+    if [ -r /dev/tty ]; then
+      read -rp "Restore which file? (Enter = newest) [$f]: " ans </dev/tty || true
       f=${ans:-$f}
     fi
   fi
   [ -f "$f" ] || die "backup not found: $f"
-  tar -tzf "$f" 2>/dev/null | grep -qx "${CFG#/}" || die "$f is not an hs2 backup (no ${CFG#/} inside)."
+  # No `grep -q` here: it exits at the first match, tar then dies of SIGPIPE
+  # while still listing, and pipefail turns that into a false "not a backup".
+  tar -tzf "$f" 2>/dev/null | grep -x "${CFG#/}" >/dev/null || die "$f is not an hs2 backup (no ${CFG#/} inside)."
   hr; info "Restoring $f"; tar -xzOf "$f" hs2-backup-info.txt 2>/dev/null | sed 's/^/   /' >&2; hr
   # Take down the running tunnel (and its interface: the restored config may use
   # another name) before files are replaced.
@@ -857,9 +1218,11 @@ restore(){
   tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
   systemctl daemon-reload
   [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
-  systemctl enable --now hs2 >/dev/null 2>&1; systemctl restart hs2; sleep 2
-  if systemctl is-active --quiet hs2; then
+  systemctl enable hs2 >/dev/null 2>&1 || true
+  systemctl restart hs2 2>/dev/null || true
+  if tm_healthy hs2; then
     ok "Restored and running: $("$BIN" version 2>/dev/null)"
+    ok "Autostart on boot: ON"
     info "Watch the log:  journalctl -u hs2 -f"
   else
     err "hs2 failed to start after restore. Last log:"; journalctl -u hs2 -n 20 --no-pager >&2; exit 1
@@ -887,9 +1250,14 @@ upgrade(){
     sed -i "s/\"min_links\": 4, \"max_links\": 16, \"per_link\": 50,/\"min_links\": $LINK_MIN, \"max_links\": $LINK_MAX, \"per_link\": $LINK_PER,/" "$CFG"
     ok "Link pool updated to $LINK_MIN-$LINK_MAX links."
   fi
-  systemctl restart hs2
-  sleep 2
-  if systemctl is-active --quiet hs2; then
+  # Old installs have an older unit: rewrite it and make sure it starts on boot.
+  local role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
+  write_service "$role"
+  systemctl enable hs2 >/dev/null 2>&1 || true
+  systemctl restart hs2 2>/dev/null || true
+  if tm_healthy hs2; then
+    ok "Autostart on boot: $(systemctl is-enabled hs2 2>/dev/null)"
+    info "Tunnel manager: run  hs2-menu  → 3"
     ok "hs2 upgraded and running. Upgrade the OTHER server too (both sides must match)."
     info "Watch the log:  journalctl -u hs2 -f"
   else
@@ -901,34 +1269,47 @@ upgrade(){
 
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
 case "${1:-}" in
+  manage)  tunnel_manager; exit 0 ;;
   upgrade) upgrade; exit 0 ;;
   backup)  backup >/dev/null; exit 0 ;;
   restore) restore "${2:-}"; exit 0 ;;
 esac
 
 # ---------- menu -------------------------------------------------------------
-echo >&2
-_c '1;36' "╔══════════════════════════════════════════╗"
-_c '1;36' "║   hs2 v3 — DPI-resistant tunnel           ║"
-_c '1;36' "║   runs alongside Backhaul                 ║"
-_c '1;36' "╚══════════════════════════════════════════╝"
-echo >&2
-echo "  1) Kharej  (foreign server — panel side)" >&2
-echo "  2) Iran    (opens user ports → panel)" >&2
-echo "  3) Uninstall hs2" >&2
-echo "  4) Status / logs" >&2
-echo "  5) Upgrade (new binary, keep config)" >&2
-echo "  6) Backup current config" >&2
-echo "  7) Restore a backup" >&2
-echo >&2
-read -rp "Choose [1-7]: " CH </dev/tty
-case "$CH" in
-  1) setup_kharej ;;
-  2) setup_iran ;;
-  3) uninstall ;;
-  4) status ;;
-  5) upgrade ;;
-  6) backup >/dev/null ;;
-  7) restore ;;
-  *) die "invalid choice" ;;
-esac
+main_menu(){
+  local CH
+  while :; do
+    echo >&2
+    _c '1;36' "╔══════════════════════════════════════════╗"
+    _c '1;36' "║   hs2 v3 — DPI-resistant tunnel           ║"
+    _c '1;36' "║   runs alongside Backhaul                 ║"
+    _c '1;36' "╚══════════════════════════════════════════╝"
+    echo >&2
+    echo "  Set up a tunnel" >&2
+    echo "    1) Kharej  (foreign server — panel side)" >&2
+    echo "    2) Iran    (opens user ports → panel)" >&2
+    echo "  Manage" >&2
+    echo "    3) Tunnel manager  (list · start/stop/restart · edit · logs)" >&2
+    echo "    4) Status / logs" >&2
+    echo "    5) Upgrade (new binary, keep config)" >&2
+    echo "    6) Backup current config" >&2
+    echo "    7) Restore a backup" >&2
+    echo "    8) Uninstall hs2" >&2
+    echo "    0) Exit" >&2
+    echo >&2
+    read -rp "Choose [0-8]: " CH </dev/tty || exit 0
+    case "$CH" in
+      1) setup_kharej; exit 0 ;;
+      2) setup_iran; exit 0 ;;
+      3) tunnel_manager ;;
+      4) status; pause ;;
+      5) upgrade; exit 0 ;;
+      6) backup >/dev/null; pause ;;
+      7) restore; exit 0 ;;
+      8) uninstall; exit 0 ;;
+      0|q|Q) exit 0 ;;
+      *) warn "Invalid choice: pick a number from the list." ;;
+    esac
+  done
+}
+main_menu
