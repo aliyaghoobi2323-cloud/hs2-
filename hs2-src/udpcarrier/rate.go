@@ -120,6 +120,7 @@ const (
 	fullLossAlpha  = 0.1   // per report: loss at full rate
 	noQueueFor     = 2 * time.Second
 	capAlpha       = 0.25 // capacity EWMA weight per report while a queue stands
+	capFloorFrac   = 0.4  // capEst never below this x windowed-max delivery (anti-collapse)
 	minDrainGain   = 0.5  // deepest drain: half the capacity
 	maxQueueGain   = 1.1  // most the queue term paces above capacity
 	probeGrow      = 1.04 // capacity probe per RTT while no queue stands
@@ -132,16 +133,17 @@ const (
 	// long enough for the queue to empty and a report to see the true base —
 	// and, sending less, to measure how much of the loss is the path's own
 	// (see adjustLocked). Cost ~2%.
-	baseProbeEvery  = 4 * time.Second
-	firstProbeDelay = 1 * time.Second // first probe after startup: settle fast
-	baseProbeDur    = 300 * time.Millisecond
-	baseProbeGain   = 0.75
-	limitedShare    = 0.8  // sent >= this share of the allowance = rate-limited
-	maxLossComp     = 0.5  // loss compensation never assumes more than this
-	baseLossAlpha   = 0.02 // per report, before the first probe: a ~5 s average
-	probeLossAlpha  = 0.5  // per report inside a probe
-	overflowQueue   = 3 * targetQueue
-	minRTTScale     = 0.03 // floor for the per-RTT growth scale, seconds
+	baseProbeEvery = 4 * time.Second
+	baseProbeDur   = 300 * time.Millisecond
+	maxProbeDur    = 1 * time.Second // an inflated RTT must not stretch a probe
+	baseProbeGain  = 0.75
+	limitedShare   = 0.8  // sent >= this share of the allowance = rate-limited
+	maxLossComp    = 0.5  // loss compensation never assumes more than this
+	baseLossAlpha  = 0.02 // per report, before the first probe: a ~5 s average
+	probeLossAlpha = 0.5  // per report inside a probe
+	overflowQueue  = 3 * targetQueue
+	minRTTScale    = 0.03             // floor for the per-RTT growth scale, seconds
+	rttSaneMax     = 30 * time.Second // an RTT sample above this is a clock glitch
 )
 
 // minFilter is a windowed minimum over roughly [window, 2×window): two buckets
@@ -205,9 +207,17 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 		r.lastEcho = echoNanos
 	}
 	if rttSampleSec > 0 && fresh {
-		r.rttMin.add(rttSampleSec, now)
-		r.rtProp = r.rttMin.min()
-		r.srtt += 0.25 * (rttSampleSec - r.srtt)
+		// Reject an absurd RTT sample (a wall-clock step while a report is in
+		// flight can make (now - echo) huge or negative): it would poison srtt,
+		// the base delay and the queue estimate. Anything over rttSaneMax or
+		// more than 8x the smoothed RTT is dropped for pacing.
+		if rttSampleSec <= rttSaneMax.Seconds() && (r.srtt == 0 || rttSampleSec <= 8*r.srtt) {
+			r.rttMin.add(rttSampleSec, now)
+			r.rtProp = r.rttMin.min()
+			r.srtt += 0.25 * (rttSampleSec - r.srtt)
+		} else {
+			rttSampleSec, fresh = 0, false // do not use it for the queue either
+		}
 	}
 
 	// Queue sample for this report.
@@ -357,8 +367,15 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		switch {
 		case q >= lowQueue.Seconds():
 			// A queue stands, so the bottleneck is busy and what the peer
-			// receives is what the path can give us: learn it.
+			// receives is what the path can give us: learn it. But a queue we
+			// did NOT build (cross traffic filling the buffer) also drops our
+			// delivery, and EWMA-ing capEst down to that would spiral the rate
+			// toward the floor. Floor capEst at a fraction of the windowed-max
+			// delivery (btlBw is robust to a transient dip), so a shared path
+			// costs throughput but never collapses; real capacity drops of more
+			// than that fraction still track down through btlBw.
 			r.capEst += capAlpha * (dComp - r.capEst)
+			r.capEst = math.Max(r.capEst, capFloorFrac*r.btlBw*comp)
 			r.emptyRuns = 0
 		case probing:
 			r.emptyRuns = 0
@@ -383,7 +400,11 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		r.probeAt = now.Add(baseProbeEvery)
 	}
 	if !now.Before(r.probeAt) && limited {
+		// Bounded: a single inflated RTT (e.g. a wall-clock step while a
+		// feedback frame is in flight) must not stretch the probe — during
+		// which the rate is turned down — to seconds or minutes.
 		d := math.Max(baseProbeDur.Seconds(), r.srtt+feedbackEvery.Seconds())
+		d = math.Min(d, maxProbeDur.Seconds())
 		r.probeStart = now
 		r.probeEnd = now.Add(time.Duration(d * float64(time.Second)))
 		r.probeAt = now.Add(baseProbeEvery)

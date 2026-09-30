@@ -108,12 +108,13 @@ var bufPool = sync.Pool{New: func() any { b := make([]byte, 0, 2048); return &b 
 // Dial side: a connected raw socket to one peer IP, one link id.
 
 type rawConn struct {
-	ipc   *net.IPConn
-	f     *framer
-	id    uint16
-	seq   atomic.Uint32 // icmp echo sequence, like ping's
-	laddr *Addr
-	raddr *Addr
+	ipc     *net.IPConn
+	f       *framer
+	id      uint16
+	seq     atomic.Uint32 // icmp echo sequence, like ping's
+	laddr   *Addr
+	raddr   *Addr
+	raddrIP *net.IPAddr // the peer, for WriteToIP (the socket is unconnected)
 }
 
 func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
@@ -129,24 +130,35 @@ func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	var la *net.IPAddr
+	// The dial socket is UNCONNECTED (net.ListenIP, not DialIP). A connected
+	// raw socket reports ICMP errors for the flow as fatal read/write errors,
+	// so one ICMP packet — a router's frag-needed, a stray port/protocol
+	// unreachable from an ip_gre/ipip module on the server, or a spoofed one
+	// from an off-path attacker who knows only the two IPs and the protocol —
+	// would tear the carrier (and every pooled carrier to that server) down.
+	// An unconnected socket ignores those errors; we restrict delivery to the
+	// peer ourselves, with a source-IP match in the BPF filter and in Read.
+	la := &net.IPAddr{IP: net.IPv4zero}
 	if bip != nil {
 		la = &net.IPAddr{IP: bip}
 	}
-	// connect(2) makes the kernel deliver only packets from the peer's IP.
-	ipc, err := net.DialIP(rawNetwork(f.proto), la, ra)
+	ipc, err := net.ListenIP(rawNetwork(f.proto), la)
 	if err != nil {
 		return nil, rawErr(f.kind, err)
 	}
 	id := randLinkID()
-	if err := tuneRawSocket(ipc, f.recvFilter(id)); err != nil {
+	srcIP := binary.BigEndian.Uint32(ra.IP.To4())
+	if err := tuneRawSocket(ipc, f.recvFilter(id, srcIP)); err != nil {
 		ipc.Close()
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
-	c := &rawConn{ipc: ipc, f: f, id: id, raddr: &Addr{IP: ra.IP.To4(), ID: id, Kind: f.kind}}
-	if l, ok := ipc.LocalAddr().(*net.IPAddr); ok {
-		c.laddr = &Addr{IP: l.IP, ID: id, Kind: f.kind}
+	c := &rawConn{ipc: ipc, f: f, id: id, raddrIP: &net.IPAddr{IP: ra.IP.To4()},
+		raddr: &Addr{IP: ra.IP.To4(), ID: id, Kind: f.kind}}
+	local := net.IPv4zero
+	if bip != nil {
+		local = bip
 	}
+	c.laddr = &Addr{IP: local, ID: id, Kind: f.kind}
 	var s [2]byte
 	rand.Read(s[:])
 	c.seq.Store(uint32(binary.BigEndian.Uint16(s[:])))
@@ -162,9 +174,9 @@ func (c *rawConn) Read(b []byte) (int, error) {
 			}
 			return 0, err
 		}
-		_, _, tp, ok := c.f.ipv4Payload(b[:n])
-		if !ok {
-			continue
+		src, _, tp, ok := c.f.ipv4Payload(b[:n])
+		if !ok || !src.Equal(c.raddrIP.IP) {
+			continue // not from the peer (the socket is unconnected)
 		}
 		id, _, ok := c.f.parse(tp)
 		if !ok || id != c.id {
@@ -177,7 +189,7 @@ func (c *rawConn) Read(b []byte) (int, error) {
 func (c *rawConn) Write(p []byte) (int, error) {
 	bp := bufPool.Get().(*[]byte)
 	pkt := c.f.build(*bp, c.id, uint16(c.seq.Add(1)), p)
-	_, err := c.ipc.Write(pkt)
+	_, err := c.ipc.WriteToIP(pkt, c.raddrIP)
 	*bp = pkt[:0]
 	bufPool.Put(bp)
 	if err != nil && !softErr(err) {
@@ -252,7 +264,7 @@ func listenRawLinux(kind, addr string, opt Options) (net.PacketConn, error) {
 	if err != nil {
 		return nil, rawErr(f.kind, err)
 	}
-	if err := tuneRawSocket(ipc, f.recvFilter(0)); err != nil {
+	if err := tuneRawSocket(ipc, f.recvFilter(0, 0)); err != nil {
 		ipc.Close()
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
@@ -403,7 +415,9 @@ func softErr(err error) bool {
 	return errors.Is(err, unix.EHOSTUNREACH) || errors.Is(err, unix.ECONNREFUSED) ||
 		errors.Is(err, unix.ENETUNREACH) || errors.Is(err, unix.ECONNRESET) ||
 		errors.Is(err, unix.EHOSTDOWN) || errors.Is(err, unix.ENETDOWN) ||
-		errors.Is(err, unix.EMSGSIZE) || errors.Is(err, unix.ENOBUFS)
+		errors.Is(err, unix.EMSGSIZE) || errors.Is(err, unix.ENOBUFS) ||
+		errors.Is(err, unix.ENOPROTOOPT) || errors.Is(err, unix.ENONET) ||
+		errors.Is(err, unix.EPROTO)
 }
 
 func rawErr(kind string, err error) error {

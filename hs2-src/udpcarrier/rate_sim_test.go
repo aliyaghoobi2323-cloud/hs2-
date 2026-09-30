@@ -32,6 +32,8 @@ type simPath struct {
 	capAfter    float64 // if > 0, capacity changes to this at changeAt
 	policeBps   float64 // if > 0, a per-flow token-bucket policer (DPI throttling) before the bottleneck
 	policeBurst float64 // bytes
+	crossFrac   float64 // if > 0, cross-traffic takes this fraction of the bottleneck while active
+	crossOnMs   float64 // cross-traffic on/off period (ms); it builds a queue we did not build
 	changeAt    time.Duration
 }
 
@@ -167,6 +169,18 @@ func runRateSim(p simPath, dur, warm time.Duration, seed uint64) simResult {
 	for now := 0.0; now < endMs; now += step {
 		if p.capAfter > 0 && now >= float64(p.changeAt/time.Millisecond) {
 			capB = p.capAfter / 8 / 1000
+		}
+		if p.crossFrac > 0 && p.crossOnMs > 0 {
+			base := p.capBps
+			if p.capAfter > 0 && now >= float64(p.changeAt/time.Millisecond) {
+				base = p.capAfter
+			}
+			// square wave: cross-traffic present for the first half of each period
+			if int(now/p.crossOnMs)%2 == 0 {
+				capB = base * (1 - p.crossFrac) / 8 / 1000
+			} else {
+				capB = base / 8 / 1000
+			}
 		}
 		// Sender: pace data.
 		rate := rc.pacingRate(at(now)) / 1000 // bytes per ms
@@ -420,5 +434,24 @@ func TestRateSimAppLimitedStartThenBurst(t *testing.T) {
 	t.Logf("app-limited start then saturate: %s", r)
 	if r.util < 0.9 {
 		t.Errorf("did not ramp after the app-limited start: util %.0f%%", r.util*100)
+	}
+}
+
+// Cross-traffic that periodically takes half the bottleneck (building a queue
+// the carrier did not build) must not collapse the carrier's rate to the floor:
+// when the cross-traffic ebbs, the carrier must use the freed capacity again.
+func TestRateSimCrossTraffic(t *testing.T) {
+	ms := time.Millisecond
+	p := simPath{capBps: 50e6, oneWay: 20 * ms, buffer: 300 * ms, crossFrac: 0.5, crossOnMs: 3000}
+	r := runRateSim(p, 60*time.Second, 20*time.Second, 8)
+	t.Logf("cross-traffic 50%%/3s: %s", r)
+	// Average available capacity is ~75% of 50 Mbit = 37.5 Mbit. The carrier
+	// should deliver a healthy share of what is available, far above the floor,
+	// and not have spiralled down (final rate well above minRate).
+	if r.finalRate < 10 {
+		t.Errorf("rate collapsed under cross-traffic: final %.1f Mbit/s", r.finalRate)
+	}
+	if r.util < 0.5 {
+		t.Errorf("carrier used only %.0f%% of the bottleneck under cross-traffic", r.util*100)
 	}
 }

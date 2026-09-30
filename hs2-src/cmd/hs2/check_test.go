@@ -89,7 +89,7 @@ func TestCheckAcceptsInstallerConfigs(t *testing.T) {
 			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
 			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443,443",
 			"min_links": 2, "max_links": 32, "per_link": 8, "bind_local_ip": "5.57.38.168"}`,
-		"iran dgtun ipx proto": `{"mode": "dial", "carrier": "dgtun", "encap": "ipx", "proto": 143, "reverse": false,
+		"iran dgtun ipx proto": `{"mode": "dial", "carrier": "dgtun", "encap": "ipx", "proto": 200, "reverse": false,
 			"addr": "91.107.166.13:2096", "iface": "hs0", "local_cidr": "10.77.0.1/30", "peer_ip": "10.77.0.2",
 			"mtu": 1280, "shared_key": "` + testKey + `", "forward_ports": "8443", "min_links": 2, "max_links": 8, "per_link": 8}`,
 	}

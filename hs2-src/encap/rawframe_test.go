@@ -154,12 +154,18 @@ func TestIPXProto(t *testing.T) {
 	if err != nil || f.proto != DefaultIPXProto {
 		t.Fatalf("default ipx proto: %v %d", err, f.proto)
 	}
-	f, err = newFramer(KindIPX, Options{Proto: 143}, false)
-	if err != nil || f.proto != 143 {
-		t.Fatalf("ipx proto 143: %v", err)
+	f, err = newFramer(KindIPX, Options{Proto: 200}, false)
+	if err != nil || f.proto != 200 {
+		t.Fatalf("ipx proto 200: %v", err)
+	}
+	// A kernel-handled protocol (41 = 6in4, 137 = MPLS-in-IP) is refused.
+	for _, bad := range []int{41, 137, 2, 50, 132} {
+		if ValidIPXProto(bad) {
+			t.Fatalf("kernel-handled proto %d should be refused for ipx", bad)
+		}
 	}
 	// Different ipx protocols derive different magics.
-	a, _ := framingMagics(nil, KindIPX, 143)
+	a, _ := framingMagics(nil, KindIPX, 200)
 	b, _ := framingMagics(nil, KindIPX, 253)
 	if a == b {
 		t.Log("note: equal magics for two ipx protocols (2^-16 chance)")
@@ -220,6 +226,12 @@ func runBPF(t *testing.T, prog []bpfInsn, pkt []byte) uint32 {
 				return 0
 			}
 			x = 4 * uint32(pkt[in.K]&0x0f)
+		case bpfLdwAbs:
+			o := int(in.K)
+			if o+4 > len(pkt) {
+				return 0
+			}
+			a = binary.BigEndian.Uint32(pkt[o:])
 		case bpfLdhInd:
 			o := int(x + in.K)
 			if o+2 > len(pkt) {
@@ -255,7 +267,7 @@ func TestRecvFilter(t *testing.T) {
 		other, _ := testFramers(t, k, []byte("other-key"))
 		proto := byte(cli.proto)
 		// listener filter: any id, peer's direction and magic only
-		lf := srv.recvFilter(0)
+		lf := srv.recvFilter(0, 0)
 		if runBPF(t, lf, ipv4(proto, src, dst, cli.build(nil, 5, 1, []byte("d")), 0)) == 0 {
 			t.Fatalf("%s: listener filter dropped a client packet", k)
 		}
@@ -269,7 +281,7 @@ func TestRecvFilter(t *testing.T) {
 			t.Fatalf("%s: listener filter passed a foreign key", k)
 		}
 		// dial filter: only its own id
-		df := cli.recvFilter(5)
+		df := cli.recvFilter(5, binary.BigEndian.Uint32(net.IPv4(2,2,2,2).To4()))
 		if runBPF(t, df, ipv4(proto, dst, src, srv.build(nil, 5, 1, []byte("d")), 0)) == 0 {
 			t.Fatalf("%s: dial filter dropped its reply", k)
 		}

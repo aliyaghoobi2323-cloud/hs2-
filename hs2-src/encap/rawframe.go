@@ -85,7 +85,7 @@ func newFramer(kind string, opt Options, dial bool) (*framer, error) {
 			f.proto = DefaultIPXProto
 		}
 		if !ValidIPXProto(f.proto) {
-			return nil, fmt.Errorf("encap ipx: IP protocol %d is not usable (1..254, not 1/4/6/17/47)", f.proto)
+			return nil, fmt.Errorf("encap ipx: IP protocol %d is not usable for ipx (1..254, and not one the kernel handles)", f.proto)
 		}
 	default:
 		return nil, fmt.Errorf("encap: %q is not a raw encapsulation", kind)
@@ -220,6 +220,7 @@ type bpfInsn struct {
 // Classic BPF opcodes used by the receive filter.
 const (
 	bpfLdxMsh = 0xb1 // BPF_LDX|BPF_B|BPF_MSH : X = 4*(P[k]&0xf)
+	bpfLdwAbs = 0x20 // BPF_LD|BPF_W|BPF_ABS   : A = P[k:4]  (IP header is absolute)
 	bpfLdhInd = 0x48 // BPF_LD|BPF_H|BPF_IND  : A = P[X+k:2]
 	bpfLdbInd = 0x50 // BPF_LD|BPF_B|BPF_IND  : A = P[X+k:1]
 	bpfJeqK   = 0x15 // BPF_JMP|BPF_JEQ|BPF_K
@@ -229,16 +230,22 @@ const (
 
 // recvFilter compiles the kernel-side receive filter for this framer: the
 // socket only wakes up for packets of our kind, in the peer's direction, with
-// the peer's magic — and, on the dial side, for our own link id. It is a cheap
-// first cut (a raw socket otherwise sees every packet of its protocol the host
-// receives); parse still checks everything in userspace.
-func (f *framer) recvFilter(id uint16) []bpfInsn {
+// the peer's magic — and, on the dial side, for our own link id AND from the
+// peer's source IP (srcIP, big-endian; 0 skips it). The source check matters
+// because the dial socket is UNCONNECTED (a connected raw socket takes ICMP
+// errors as fatal read errors, so one spoofed packet could kill the carrier),
+// so the kernel would otherwise deliver every packet of the protocol from any
+// host. It is a cheap first cut; parse and Read verify everything in userspace.
+func (f *framer) recvFilter(id uint16, srcIP uint32) []bpfInsn {
 	type check struct {
 		code uint16
 		off  uint32
 		val  uint32
 	}
 	var cs []check
+	if f.dial && srcIP != 0 {
+		cs = append(cs, check{bpfLdwAbs, 12, srcIP}) // IP source address
+	}
 	switch f.kind {
 	case KindICMP:
 		cs = append(cs, check{bpfLdbInd, 0, uint32(f.rxType)}, check{bpfLdhInd, 8, uint32(f.rxMagic)})

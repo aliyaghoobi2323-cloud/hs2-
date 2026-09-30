@@ -71,6 +71,17 @@ var knownCarriers = map[string]bool{
 	"dgtun": true,
 }
 
+// ipxHandledProtos mirrors encap.ipxHandledProtos: IP protocol numbers the
+// kernel handles or that are reserved, which ipx must avoid.
+var ipxHandledProtos = map[int]bool{
+	0: true, 1: true, 2: true, 4: true, 6: true, 17: true, 33: true, 41: true,
+	43: true, 44: true, 46: true, 47: true, 50: true, 51: true, 58: true, 59: true,
+	60: true, 88: true, 89: true, 92: true, 94: true, 97: true, 98: true, 103: true,
+	108: true, 112: true, 115: true, 132: true, 136: true, 137: true, 143: true, 255: true,
+}
+
+func validIPXProto(p int) bool { return p >= 1 && p <= 254 && !ipxHandledProtos[p] }
+
 // knownEncaps are the datagram-tun encapsulations (carrier "dgtun"). Empty is
 // udp. Kept here (not imported from encap) so check builds without cgo/root.
 var knownEncaps = map[string]bool{
@@ -258,11 +269,8 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			bad(`unknown "encap" %q (udp, icmp, gre, ipip, ipx)`, fc.Encap)
 		}
 		if fc.Encap == "ipx" {
-			switch p := fc.Proto; {
-			case p == 0:
-				// default (253), fine
-			case p == 1 || p == 4 || p == 6 || p == 17 || p == 47 || p < 1 || p > 254:
-				bad(`"proto" %d cannot be used for ipx (pick 1..254, not 1/4/6/17/47)`, p)
+			if p := fc.Proto; p != 0 && !validIPXProto(p) {
+				bad(`"proto" %d cannot be used for ipx: it is a reserved number or one the kernel already handles (ICMP/IGMP/IPIP/TCP/UDP/GRE/ESP/AH/OSPF/SCTP/MPLS/…). Pick an unassigned number; 253 (the default) is safe`, p)
 			}
 		} else if fc.Proto != 0 {
 			warn(`"proto" only applies to the ipx encapsulation; it is ignored for %q`, fc.Encap)

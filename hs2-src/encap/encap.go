@@ -79,15 +79,32 @@ type Options struct {
 // module claims.
 const DefaultIPXProto = 253
 
-// ValidIPXProto reports whether p may be used by the ipx encapsulation: a real
-// IP protocol number that is not one the kernel or another kind already owns
-// (ICMP 1, IPIP 4, TCP 6, UDP 17, GRE 47), nor 0/255 (reserved).
+// ipxHandledProtos are the IP protocol numbers the Linux kernel has a handler
+// for (or that are reserved). ipx must avoid them: a raw socket does not stop
+// the kernel's own handler from also seeing the packet, so it would be
+// processed twice — a real IPIP/GRE/ESP tunnel would eat it, and an unhandled
+// but assigned number risks the kernel replying protocol-unreachable. Only
+// numbers with no in-kernel consumer are safe to reuse for the tunnel.
+var ipxHandledProtos = map[int]bool{
+	0: true, 1: true /*ICMP*/, 2: true /*IGMP*/, 4: true /*IPIP*/, 6: true /*TCP*/,
+	17: true /*UDP*/, 33: true /*DCCP*/, 41: true /*IPv6/6in4*/, 43: true /*IPv6-Route*/,
+	44: true /*IPv6-Frag*/, 46: true /*RSVP*/, 47: true /*GRE*/, 50: true /*ESP*/,
+	51: true /*AH*/, 58: true /*ICMPv6*/, 59: true, 60: true, 88: true /*EIGRP*/,
+	89: true /*OSPF*/, 92: true /*MTP*/, 94: true /*KA/IPIP*/, 97: true /*ETHERIP*/,
+	98: true /*ENCAP*/, 103: true /*PIM*/, 108: true /*IPComp*/, 112: true /*VRRP*/,
+	115: true /*L2TP*/, 132: true /*SCTP*/, 136: true /*UDPLite*/, 137: true /*MPLS-in-IP*/,
+	143: true /*Ethernet*/, 255: true /*reserved*/,
+}
+
+// ValidIPXProto reports whether p may be used by the ipx encapsulation: a
+// protocol number in 1..254 that the kernel has no handler for and that no
+// other encapsulation owns. The default (DefaultIPXProto, 253) is one of the
+// RFC 3692 experimentation numbers, which are guaranteed unhandled.
 func ValidIPXProto(p int) bool {
-	switch p {
-	case 0, 1, 4, 6, 17, 47, 255:
+	if p < 1 || p > 254 {
 		return false
 	}
-	return p > 0 && p < 255
+	return !ipxHandledProtos[p]
 }
 
 // Dial opens a connected datagram transport of the named kind to addr. For udp,
