@@ -96,8 +96,9 @@ type rateControl struct {
 }
 
 type bwSample struct {
-	rate  float64
-	round int
+	rate    float64
+	round   int
+	limited bool // taken while the sender used its allowance (a real capacity sample)
 }
 
 const (
@@ -262,7 +263,7 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 	limited := sendRate >= limitedShare*r.rate
 	if limited || dRate > r.btlBw {
 		r.round++
-		r.bwWindow = append(r.bwWindow, bwSample{rate: dRate, round: r.round})
+		r.bwWindow = append(r.bwWindow, bwSample{rate: dRate, round: r.round, limited: limited})
 		i := 0
 		for i < len(r.bwWindow) && r.bwWindow[i].round <= r.round-bwWindowRounds {
 			i++
@@ -322,7 +323,16 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		// that long to show at the receiver, so per report (every 100 ms) a
 		// long path would look flat and end startup at a fraction of its
 		// capacity.
-		r.startRounds++
+		//
+		// The backstop counts only reports where we used the allowance: it is
+		// there for a saturated path that shows no queue, not for a carrier
+		// that simply had little to send. Counting idle reports too ended
+		// startup after ~10 s of light load (a pool carrier with only ACKs or
+		// keepalives on it), and the next flow hashed onto it then crawled up
+		// from the floor instead of ramping.
+		if limited {
+			r.startRounds++
+		}
 		if !now.Before(r.plateauAt) {
 			if r.btlBw > r.lastDRate*1.25 {
 				r.plateauRuns = 0
@@ -416,7 +426,12 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 	// multiple of it. That also makes the sender wait on the pacer, which is
 	// how the link pool sees the link as full and adds another. Otherwise a
 	// loose cap only guards against a starved delay signal.
-	if r.btlBw > 0 {
+	//
+	// Both are multiples of MEASURED delivery, so they apply only once the
+	// window holds a sample taken at full allowance: delivery measured while
+	// the carrier was nearly idle says nothing about the path, and capping at
+	// a multiple of it would crush the allowance to the floor.
+	if r.btlBw > 0 && r.hasLimitedSample() {
 		c := looseCap * r.btlBw * comp
 		if r.policed {
 			c = deliveryCap * r.meanDelivery() * comp
@@ -425,6 +440,17 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		r.capEst = math.Min(r.capEst, c)
 	}
 	r.clampRateLocked()
+}
+
+// hasLimitedSample: the bandwidth window holds at least one sample taken while
+// the sender used its allowance.
+func (r *rateControl) hasLimitedSample() bool {
+	for _, s := range r.bwWindow {
+		if s.limited {
+			return true
+		}
+	}
+	return false
 }
 
 // meanDelivery is the mean delivered rate over the bandwidth window: the
