@@ -11,6 +11,7 @@
 #   MIN_LINKS [4]  MAX_LINKS [16]
 #   IRAN_EXTRA / KHAREJ_EXTRA: extra JSON fields, e.g. '"per_link":4,'
 #   KEEP=1 leaves the namespaces and logs in place.
+#   PROBE_EXTRA: extra probe flags, e.g. "-seg 4000000" (reconnect per 4 MB download).
 #   LAB_ID=n runs in namespaces irn/khn/midn so experiments can run in parallel.
 #   HS2_TUNE_* variables are passed through to hs2 (see cmd/hs2 applyTuning).
 set -u
@@ -82,7 +83,7 @@ if ip -n $IR link show hs0 >/dev/null 2>&1; then
   PP=$!
 fi
 UFLAG=""; [ "$UDP" = 1 ] && UFLAG="-udp"
-OUT=$(ip netns exec $IR "$W/probe" -addr 127.0.0.1:8443 -bulk "$BULK" -up "$UP" -t "$T" $UFLAG)
+OUT=$(ip netns exec $IR "$W/probe" -addr 127.0.0.1:8443 -bulk "$BULK" -up "$UP" -t "$T" $UFLAG ${PROBE_EXTRA:-})
 [ -n "${PP:-}" ] && wait "$PP" 2>/dev/null
 PING=$(awk -F'= ' '/rtt/{split($2,a,"/"); print a[2]"/"a[3]}' "$PINGF")
 PLOSS=$(grep -o '[0-9.]*% packet loss' "$PINGF" | cut -d% -f1)

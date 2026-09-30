@@ -91,7 +91,10 @@ func (p *exitPool) setTarget(n int) {
 	for len(p.slots) < n { // grow
 		p.startSlotLocked()
 	}
-	if n != prev {
+	switch {
+	case prev == 0:
+		p.log("mtcp: exit pool starting %d links (the edge sets the count once it is connected)", n)
+	case n != prev:
 		p.log("mtcp: exit pool target %d links (edge asked; was %d, %d up)", n, prev, p.live)
 	}
 }

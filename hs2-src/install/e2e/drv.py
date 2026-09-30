@@ -160,6 +160,16 @@ def phase_adaptive():
     # The pattern reports links within the 2..32 envelope, and a target.
     j = sh("ir", "cat /run/hs2/*.status.json 2>/dev/null")
     res("status JSON carries links/target/min/max/phase", all(k in j for k in ('"links"', '"target"', '"min"', '"max"', '"phase"')), j[:200])
+    # Pool v2 detail: serving vs retiring links, why, and the exit's link stats
+    # (both ends run this build, so the exit must report them).
+    res("status JSON carries serving/reason/exit_stats (pool v2)",
+        all(k in j for k in ('"serving"', '"reason"', '"exit_stats":"ok"')), j[:300])
+    res("hs2 status: explains the pattern (why: line)", "why:" in st, st.replace("\n", " | ")[:300])
+    # drain_idle_sec is editable and validated.
+    ok_set = sh("ir", "hs2 config -c /etc/hs2/config.json set drain_idle_sec 600 >/dev/null && hs2 config -c /etc/hs2/config.json get drain_idle_sec")
+    bad_set = sh("ir", "hs2 config -c /etc/hs2/config.json set drain_idle_sec -5 2>&1; hs2 config -c /etc/hs2/config.json get drain_idle_sec")
+    sh("ir", "hs2 config -c /etc/hs2/config.json unset drain_idle_sec >/dev/null")
+    res("hs2 config: drain_idle_sec set 600, -5 refused", ok_set.strip() == "600" and bad_set.strip().endswith("600"), (ok_set + " / " + bad_set)[:200])
 
     # `hs2 tune` shows the RAM/CPU-derived plan.
     tn = sh("ir", "hs2 tune -c /etc/hs2/config.json")
