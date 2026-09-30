@@ -24,9 +24,13 @@ type KharejConfig struct {
 	Log      func(string, ...any)
 
 	// Reverse exit: dial the iran edge instead of listening. RevDial returns a
-	// fresh authenticated TLS carrier to the edge; RevLinks is how many to keep.
+	// fresh authenticated TLS carrier to the edge. The link count is dynamic: the
+	// edge drives it over the pool-control channel between RevMin and RevMax, and
+	// RevLinks is only the count to hold until the edge first speaks.
 	RevDial  func() (*tlscarrier.Carrier, error)
 	RevLinks int
+	RevMin   int
+	RevMax   int
 }
 
 // RunKharej accepts links and serves their streams until ctx ends.
@@ -75,7 +79,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 					downErr = err
 					break
 				}
-				go serveStream(ctx, st, cfg, l3, car)
+				go serveStream(ctx, st, cfg, l3, car, nil)
 			}
 			sess.Close()
 			car.Close()
@@ -98,7 +102,7 @@ func sessionEndReason(why func() string, sessErr error) string {
 	return describeNetErr(sessErr)
 }
 
-func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier) {
+func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier, pool *exitPool) {
 	var kind [1]byte
 	st.SetReadDeadline(time.Now().Add(kindTimeout))
 	if _, err := io.ReadFull(st, kind[:]); err != nil {
@@ -109,6 +113,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	switch kind[0] {
 	case kindCtrl:
 		serveControl(ctx, st, car)
+	case kindPool:
+		servePoolCtl(ctx, st, pool)
 	case kindTCP:
 		up, err := net.DialTimeout("tcp", cfg.Panel, 5*time.Second)
 		if err != nil {

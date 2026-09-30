@@ -46,6 +46,11 @@ func (l *mtcpLink) downReason() string {
 // health. It reads TCP_INFO off the carrier's underlying socket (Linux).
 func (l *mtcpLink) linkRetrans() (uint64, bool) { return retransmits(l.tls.TCPConn()) }
 
+// sendPressure reports whether this link's socket has unsent bytes queued (the
+// path is not taking data as fast as smux offers it) — a per-connection cap
+// biting. It reads TCP_INFO; unsupported platforms return (false,false).
+func (l *mtcpLink) sendPressure() (bool, bool) { return sendPressure(l.tls.TCPConn()) }
+
 // healthProbe actively verifies the link. Every few seconds it opens a throwaway
 // smux stream and immediately closes it; if that fails, the underlying TLS/TCP
 // is gone and the link is marked dead so the manager rebuilds it. This catches

@@ -41,7 +41,11 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	reverse := cfg.RevServer != nil
 	var lm *LinkManager
 	if reverse {
-		lm = NewLinkManager(nil, 1, 1, cfg.PerLink, logf)
+		// The reverse edge cannot dial, but it still runs the full autopilot over
+		// the same [min,max] envelope: it decides the link count from the users
+		// and throughput it sees and sends it to the exit (which dials) over the
+		// pool-control channel.
+		lm = NewLinkManager(nil, cfg.Min, cfg.Max, cfg.PerLink, logf)
 		lm.accept = true
 	} else {
 		lm = NewLinkManager(cfg.Dialer, cfg.Min, cfg.Max, cfg.PerLink, logf)
@@ -53,9 +57,14 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		go l3.logDrops(ctx, logf)
 	}
 	// Every new link gets a control channel (health feedback) in its own
-	// goroutine, and, in TUN mode, its L3 side-channel stream.
+	// goroutine, and, in TUN mode, its L3 side-channel stream. On the reverse
+	// edge each link also carries the pool-control stream that tells the exit the
+	// desired link count.
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, logf)
+		if reverse {
+			go openPoolCtl(ctx, l, lm.Target, logf)
+		}
 		if l3 != nil {
 			openL3(ctx, l, l3, cfg.TUN, logf)
 		}

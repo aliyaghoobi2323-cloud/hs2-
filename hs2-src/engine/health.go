@@ -32,6 +32,11 @@ const (
 	// degradeStreak: consecutive bad samples before a link is declared degraded,
 	// so a brief loss burst is not enough.
 	degradeStreak = 3
+	// notsentPressBytes: unsent bytes queued on a link socket above which the
+	// link counts as "pressing" — the writer has more to send than the path is
+	// taking, a per-connection cap biting. Kept above TCP_NOTSENT_LOWAT's own
+	// small backlog so an ordinary send does not read as pressure.
+	notsentPressBytes = 48 << 10
 	// maxDrain bounds how long a degraded link is kept for its existing users
 	// before it is force-closed (they reconnect onto a healthy link).
 	maxDrain = 45 * time.Second
@@ -45,9 +50,20 @@ const (
 	reprobeGain = 0.20
 	// probeCooldownDur: minimum quiet time after a plateau before re-probing.
 	probeCooldownDur = 20 * time.Second
+	// reProbeEveryDur: even with no demand jump, re-check whether the path has
+	// widened this often while the pool stays saturated (slow background probe).
+	reProbeEveryDur = 90 * time.Second
 	// scaleDownAfter: how long load must stay at/under the floor before a link is
 	// retired (slow shrink, so a brief lull does not thrash the pool).
 	scaleDownAfter = 30 * time.Second
+	// warmStartLinks: the pool comes up at this size (clamped to the envelope)
+	// rather than at min, so a burst of connections arriving right after start
+	// spreads across enough links to beat per-connection throttling immediately —
+	// user connections pin to a link for life, so links that appear only later
+	// cannot rescue a flow that already landed on a crowded one. The autopilot
+	// then shrinks toward min when the tunnel turns out to be idle, or grows
+	// toward max under sustained load: sized right at the start, adjusted after.
+	warmStartLinks = 8
 
 	// Control channel (phase 3): the edge opens one control stream per link and
 	// exchanges a tiny ping/pong with the exit every controlInterval to learn the
@@ -104,6 +120,11 @@ type metered interface {
 	// linkRetrans returns the cumulative TCP retransmits and whether the platform
 	// supports the reading (false disables loss-based degradation for the link).
 	linkRetrans() (uint64, bool)
+	// sendPressure reports whether the link's socket has data queued that the
+	// network has not yet taken — i.e. the writer wants to push more than the
+	// path allows (a per-connection cap biting). ok is false where the platform
+	// cannot tell. It is one of the signals that says "another link might help".
+	sendPressure() (pressing bool, ok bool)
 }
 
 // linkMeterOf returns the meter of a Link, or nil if it has none.
@@ -120,4 +141,12 @@ func linkRetransOf(l Link) (uint64, bool) {
 		return m.linkRetrans()
 	}
 	return 0, false
+}
+
+// linkPressureOf reports whether a Link's socket is send-pressured, or (false,false).
+func linkPressureOf(l Link) (bool, bool) {
+	if m, ok := l.(metered); ok {
+		return m.sendPressure()
+	}
+	return false, false
 }

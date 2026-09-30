@@ -225,19 +225,8 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	edge := fc.Mode == "dial"
 
 	if edge {
-		// Defaults chosen in the lab: 4 links cannot get past per-connection
-		// throttling, 8 can; the pool grows toward 16 with users.
-		min, max, per := fc.MinLinks, fc.MaxLinks, fc.PerLink
-		if min == 0 {
-			min = 8
-		}
-		if max == 0 {
-			max = 16
-		}
-		if per == 0 {
-			per = 8
-		}
-		if links > 0 {
+		min, max, per := linkEnvelope(fc)
+		if links > 0 { // tls carrier: pin to a single link
 			min, max = links, links
 		}
 		cfg := engine.IranConfig{
@@ -273,20 +262,27 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		cfg.TUN = dev
 	}
 	if fc.Reverse {
-		// Reverse exit: the kharej DIALS the iran edge (a TLS server) and runs
-		// a fixed pool of links. No cert here; it is the TLS client now.
-		n := fc.MinLinks
-		if links > 0 {
-			n = links
+		// Reverse exit: the kharej DIALS the iran edge (a TLS server) and runs a
+		// DYNAMIC pool of links. No cert here; it is the TLS client now. The edge
+		// drives the count over the pool-control channel between RevMin and RevMax;
+		// RevLinks is only the size held until the edge first speaks.
+		min, max, _ := linkEnvelope(fc)
+		if links > 0 { // tls carrier: single link
+			min, max = links, links
 		}
-		if n == 0 {
-			n = 8
+		cfg.RevMin, cfg.RevMax = min, max
+		initial := 8
+		if initial < min {
+			initial = min
 		}
-		cfg.RevLinks = n
+		if initial > max {
+			initial = max
+		}
+		cfg.RevLinks = initial
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
 			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
 		}
-		logf("stream exit (reverse): dialing %d links to edge %s", n, fc.Addr)
+		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
 		must(engine.RunKharej(ctx, cfg))
 		return
 	}
@@ -297,6 +293,28 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	cfg.Listener = ln
 	cfg.Server = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
 	must(engine.RunKharej(ctx, cfg))
+}
+
+// linkEnvelope resolves the adaptive link-pool bounds from the config, applying
+// the defaults: the pattern lives anywhere in 2–32 links and grows a link for
+// every per_link (default 8) user connections. The pool is never fixed at these
+// numbers — the autopilot moves it continuously inside the envelope from the
+// live user count and measured throughput (see engine/autopilot.go).
+func linkEnvelope(fc fileConfig) (min, max, per int) {
+	min, max, per = fc.MinLinks, fc.MaxLinks, fc.PerLink
+	if min <= 0 {
+		min = 2
+	}
+	if max <= 0 {
+		max = 32
+	}
+	if max < min {
+		max = min
+	}
+	if per <= 0 {
+		per = 8
+	}
+	return min, max, per
 }
 
 // streamBackend returns the probe-forwarding backend for a TLS-server side,

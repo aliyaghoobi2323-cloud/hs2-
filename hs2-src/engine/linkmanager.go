@@ -69,15 +69,18 @@ type LinkManager struct {
 	// OnLink, if set, is called (in its own goroutine) for every new link.
 	OnLink func(Link)
 
-	// Autoscale controller state — touched only by the Run goroutine (aggGoodput
-	// is written in sampleHealth and read in autoscale, both in that goroutine).
-	aggGoodput  float64   // EWMA-summed goodput across links, bytes/sec
-	probing     bool      // a speculative link was just added; measuring its effect
-	preProbeAgg float64   // aggregate goodput before the current probe add
-	plateauAgg  float64   // aggregate goodput where growth last stopped helping
-	plateauSize int       // pool size at that plateau (0 = never plateaued)
-	probeCoolAt time.Time // do not start a new probe before this time
-	lowSince    time.Time // load has been at/under the floor since this time
+	// The adaptive sizing brain and the measurements that feed it — all touched
+	// only by the Run/runAccept goroutine, except target and the monitor fields
+	// which are atomic so the pool-control sender and the status reporter can
+	// read them from other goroutines.
+	ap            *autopilot // pure controller: samples in, desired link count out
+	aggGoodput    float64    // EWMA-summed goodput across links, bytes/sec
+	poolSaturated bool       // last sample: links are network-limited (want to push more)
+
+	target  atomic.Int32  // latest desired link count (published for the reverse exit)
+	phase   atomic.Int32  // last apPhase, for the live monitor
+	lastAgg atomic.Uint64 // last aggregate goodput, bytes/sec, for the live monitor
+	lastSat atomic.Bool   // last saturation reading, for the live monitor
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
@@ -124,12 +127,15 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 		max = min
 	}
 	if perLink < 1 {
-		perLink = 50
+		perLink = 8
 	}
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	return &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf}
+	m := &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf,
+		ap: newAutopilot(min, max, perLink)}
+	m.target.Store(int32(min))
+	return m
 }
 
 // jitterGap returns a randomized inter-dial gap (~40–160ms) used to stagger link
@@ -213,10 +219,19 @@ func (m *LinkManager) Run(ctx context.Context) {
 	}
 	// Initial fill, staggered with jitter. Opening the whole pool as one
 	// simultaneous burst of identical TLS connections is a behavioral tell, so
-	// establishment is spread over a short randomized window. Steady-state
-	// capacity is unchanged (still m.min links, scaling to m.max under load), so
-	// this costs only a one-time startup ramp — never throughput once warm.
-	for i := 0; i < m.min; i++ {
+	// establishment is spread over a short randomized window. The pool comes up
+	// warm (warmStartLinks, clamped to the envelope) rather than at min, so a
+	// burst of user connections arriving right after start spreads across enough
+	// links to beat per-connection throttling at once; the autopilot then shrinks
+	// toward min if the tunnel is idle. This costs only a one-time startup ramp.
+	warm := warmStartLinks
+	if warm < m.min {
+		warm = m.min
+	}
+	if warm > m.max {
+		warm = m.max
+	}
+	for i := 0; i < warm; i++ {
 		if i > 0 && !sleepCtx(ctx, jitterGap()) {
 			m.closeAll()
 			return
@@ -225,7 +240,6 @@ func (m *LinkManager) Run(ctx context.Context) {
 	}
 	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
-	m.lowSince = time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -240,77 +254,52 @@ func (m *LinkManager) Run(ctx context.Context) {
 	}
 }
 
-// autoscale sizes the pool. It keeps the user-count floor (ceil(users/perLink),
-// clamped to [min,max]) as a fast baseline, and on top of that runs a
-// throughput probe: when there is load and room to grow, it speculatively adds
-// ONE link and, a tick later, keeps growing only if aggregate goodput actually
-// rose. That directly measures "would another link move more bytes?" — which is
-// true exactly when per-connection throttling is the limit and there are new
-// connections to fill a fresh link — and stops when it plateaus, finding the
-// right size for the current bandwidth on its own. Growth never disrupts anyone
-// (adding capacity is free); shrink only ever removes a truly idle link.
-func (m *LinkManager) autoscale(ctx context.Context) {
-	now := time.Now()
-	have := m.count()
-	userWant := m.desiredCount()
-	agg := m.aggGoodput
+// decideTarget runs one autopilot tick from the current measurements, publishes
+// the result for the reverse exit and the live monitor, logs a note when the
+// controller has one to make, and returns the desired link count. It is the one
+// place both the direct edge (which then dials to match) and the reverse edge
+// (which sends the target to the exit) get their number, so both directions size
+// the pattern by exactly the same logic.
+func (m *LinkManager) decideTarget(have int) int {
+	d := m.ap.decide(apSample{
+		now:        time.Now(),
+		users:      int(m.users.Load()),
+		have:       have,
+		aggGoodput: m.aggGoodput,
+		saturated:  m.poolSaturated,
+	})
+	m.target.Store(int32(d.target))
+	m.phase.Store(int32(d.phase))
+	m.lastAgg.Store(uint64(m.aggGoodput))
+	m.lastSat.Store(m.poolSaturated)
+	if d.note != "" {
+		m.log("mtcp: %s", d.note)
+	}
+	return d.target
+}
 
-	// 1) Satisfy the user-count floor immediately; a load change restarts the
-	// throughput search.
-	if userWant > have {
-		for i := 0; i < userWant-have; i++ {
+// autoscale sizes the DIRECT pool: it asks the autopilot for the desired link
+// count and moves the real pool toward it — dialing up quickly (adding capacity
+// disturbs no one) and shrinking one idle link at a time. The autopilot itself
+// decides by the connection floor and a throughput probe (see autopilot.go).
+func (m *LinkManager) autoscale(ctx context.Context) {
+	have := m.count()
+	want := m.decideTarget(have)
+	switch {
+	case want > have:
+		for i := 0; i < want-have && m.count() < m.max; i++ {
 			m.addLink(ctx)
 		}
-		m.probing, m.plateauSize = false, 0
-		m.lowSince = now
 		if got := m.count(); got > have {
-			m.log("mtcp: scaled up to %d links (users=%d)", got, m.users.Load())
-		} else {
-			m.log("mtcp: need %d links but only %d up — dials failing (peer down or path blocked; see dial errors)", userWant, got)
+			m.log("mtcp: pattern now %d links (%s; users=%d, ~%.1f Mbit/s)",
+				got, apPhase(m.phase.Load()), m.users.Load(), mbitps(m.aggGoodput))
+		} else if want > have {
+			m.log("mtcp: want %d links but only %d up — dials failing (peer down or path blocked; see dial errors)", want, got)
 		}
-		return
-	}
-
-	canGrow := have < m.max && m.users.Load() > 0
-
-	// 2) Throughput probe.
-	if m.probing {
-		if agg > m.preProbeAgg*(1+probeGain) {
-			m.preProbeAgg = agg // the last link helped; keep climbing while there is room
-			if canGrow {
-				m.addLink(ctx)
-			} else {
-				m.probing = false
-			}
-		} else {
-			// Plateau: extra links no longer move more bytes. Settle here and
-			// cool down; re-probe only if demand later grows past this level.
-			m.probing = false
-			m.plateauAgg, m.plateauSize = agg, have
-			m.probeCoolAt = now.Add(probeCooldownDur)
-			m.log("mtcp: throughput plateau at %d links (%.0f KB/s)", have, agg/1024)
+	case want < have:
+		if m.removeIdleLink() {
+			m.log("mtcp: pattern now %d links (shrinking; users=%d)", m.count(), m.users.Load())
 		}
-		m.lowSince = now
-		return
-	}
-	if canGrow && now.After(m.probeCoolAt) && (m.plateauSize == 0 || agg > m.plateauAgg*(1+reprobeGain)) {
-		m.preProbeAgg, m.probing = agg, true
-		m.addLink(ctx)
-		m.lowSince = now
-		return
-	}
-
-	// 3) Scale down slowly: only when above the user-count floor and load stays
-	// low, and removeIdleLink only retires a link with no users — so shrinking
-	// never disturbs active connections.
-	if have > userWant {
-		if now.Sub(m.lowSince) > scaleDownAfter {
-			m.removeIdleLink()
-			m.lowSince = now
-			m.log("mtcp: scaled down to %d links (users=%d)", m.count(), m.users.Load())
-		}
-	} else {
-		m.lowSince = now
 	}
 }
 
@@ -327,6 +316,10 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			return
 		case <-tick.C:
 			m.sampleHealth()
+			// The reverse edge cannot dial, but it is still the brain: it runs the
+			// same autopilot and publishes the desired count for the exit to match
+			// over the pool-control channel (see exit_pool.go / openPoolCtl).
+			m.decideTarget(m.count())
 			m.mu.Lock()
 			alive := m.links[:0]
 			now := time.Now()
@@ -435,11 +428,14 @@ func (m *LinkManager) reap(ctx context.Context) {
 	}
 }
 
-func (m *LinkManager) removeIdleLink() {
+// removeIdleLink retires one truly-idle link (no active streams, no assigned
+// users) when the pool is above its floor, and reports whether it did. A busy
+// link is never dropped, so shrinking cannot disturb a live connection.
+func (m *LinkManager) removeIdleLink() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.links) <= m.min {
-		return
+		return false
 	}
 	// pick the least-loaded link to retire
 	idx := -1
@@ -453,7 +449,9 @@ func (m *LinkManager) removeIdleLink() {
 		ml := m.links[idx]
 		ml.link.Close()
 		m.links = append(m.links[:idx], m.links[idx+1:]...)
+		return true
 	}
+	return false
 }
 
 // Pick returns the least-loaded alive link for a NEW user connection, and a
@@ -525,6 +523,7 @@ func (m *LinkManager) sampleHealth() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	var agg float64
+	activeLinks, pressLinks := 0, 0
 	for _, ml := range m.links {
 		if ml.mtr == nil {
 			continue
@@ -551,6 +550,17 @@ func (m *LinkManager) sampleHealth() {
 			ml.goodput = gpAlpha*rate + (1-gpAlpha)*ml.goodput
 		}
 		agg += ml.goodput
+
+		// Saturation signals for the autopilot: a link that moved a real amount of
+		// data this tick is "active"; one whose socket still has bytes the network
+		// would not take is "pressing" (a per-connection cap biting). Either way,
+		// another link might carry more — so the pool is a candidate to grow.
+		if dRd+dWr >= activeBytes {
+			activeLinks++
+		}
+		if p, ok := linkPressureOf(ml.link); ok && p {
+			pressLinks++
+		}
 
 		if ml.degraded || ml.draining {
 			continue
@@ -582,6 +592,10 @@ func (m *LinkManager) sampleHealth() {
 		}
 	}
 	m.aggGoodput = agg
+	// The pool is saturated (worth probing bigger) when there is user load and
+	// the links are actually pushing data or straining against a cap. With no
+	// load it is never saturated, so an idle tunnel is free to shrink.
+	m.poolSaturated = m.users.Load() > 0 && (activeLinks > 0 || pressLinks > 0)
 }
 
 // linkRetransSource reads the link's retransmit counter (0,false if the link has
@@ -632,6 +646,43 @@ func (m *LinkManager) count() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.links)
+}
+
+// Target is the link count the autopilot currently wants; the reverse exit reads
+// it over the pool-control channel to size its own dial pool.
+func (m *LinkManager) Target() int { return int(m.target.Load()) }
+
+// PoolStats is a snapshot of the pattern for the live monitor.
+type PoolStats struct {
+	Links     int     // live links now
+	Target    int     // links the autopilot wants
+	Min, Max  int     // envelope
+	Users     int     // active user connections
+	MbitPerS  float64 // aggregate goodput, Mbit/s
+	Phase     string  // calibrating | probing | steady | shrinking | scaling
+	Saturated bool    // links are pushing against a limit
+}
+
+// Stats returns a consistent snapshot of the pool for monitoring.
+func (m *LinkManager) Stats() PoolStats {
+	m.mu.RLock()
+	links := 0
+	for _, ml := range m.links {
+		if ml.link.Alive() {
+			links++
+		}
+	}
+	m.mu.RUnlock()
+	return PoolStats{
+		Links:     links,
+		Target:    int(m.target.Load()),
+		Min:       m.min,
+		Max:       m.max,
+		Users:     int(m.users.Load()),
+		MbitPerS:  mbitps(float64(m.lastAgg.Load())),
+		Phase:     apPhase(m.phase.Load()).String(),
+		Saturated: m.lastSat.Load(),
+	}
 }
 
 func (m *LinkManager) closeAll() {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,16 +47,16 @@ func startReverseTunnelLog(t *testing.T, nLinks int, iranLog func(string, ...any
 	port := freePort(t)
 	go RunIran(ctx, IranConfig{
 		RevServer: iranSrv, RevListener: iranLn,
-		PerLink:  50,
+		Min: nLinks, Max: nLinks, PerLink: 50, // pin the pattern so the test is deterministic
 		ListenIP: "127.0.0.1", Ports: []string{port}, UDP: true,
 		Log: iranLog,
 	})
 
-	// kharej exit: dials nLinks carriers to the iran edge.
+	// kharej exit: dials nLinks carriers to the iran edge (pinned pool).
 	iranAddr := iranLn.Addr().String()
 	go RunKharej(ctx, KharejConfig{
 		Panel:    panel,
-		RevLinks: nLinks,
+		RevLinks: nLinks, RevMin: nLinks, RevMax: nLinks,
 		RevDial: func() (*tlscarrier.Carrier, error) {
 			return tlscarrier.DialFrom(iranAddr, "lab.example.com", key, "")
 		},
@@ -199,4 +200,92 @@ func TestReverseLinkLogsAreHonest(t *testing.T) {
 			t.Fatalf("empty reason: %q", l)
 		}
 	}
+}
+
+// End to end over real TLS: the reverse exit's live link count follows the
+// edge's autopilot target sent on the pool-control channel. We drive the edge's
+// published target directly (bypassing the load-based decision, which needs a
+// sustained bulk flow) and check the kharej dials to match, then shrinks back.
+func TestReverseExitPoolFollowsEdgeTarget(t *testing.T) {
+	key := bytesRepeat(0x5a, 32)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	panel := echoPanel(t)
+
+	rawIranLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	iranSrv := &tlscarrier.Server{SharedKey: key, Cert: testCert(t), BackendAddr: "127.0.0.1:1"}
+	port := freePort(t)
+
+	// Build the reverse edge by hand so we can hold its LinkManager and force the
+	// published target. Envelope 2..8.
+	lm := NewLinkManager(nil, 2, 8, 50, nil)
+	lm.accept = true
+	var forced atomic.Int32
+	forced.Store(2)
+	lm.OnLink = func(l Link) {
+		go openControl(ctx, l, func(string, ...any) {})
+		go openPoolCtl(ctx, l, func() int { return int(forced.Load()) }, func(string, ...any) {})
+	}
+	go lm.Run(ctx)
+	go acceptReverseLinks(ctx, rawIranLn, iranSrv, lm, func(string, ...any) {})
+	// user port, so the tunnel is a normal reverse edge
+	userLn, err := ListenReuse("127.0.0.1:" + port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { <-ctx.Done(); userLn.Close() }()
+	go func() {
+		for {
+			c, err := userLn.Accept()
+			if err != nil {
+				return
+			}
+			go serveUserTCP(ctx, c, lm)
+		}
+	}()
+
+	iranAddr := rawIranLn.Addr().String()
+	go RunKharej(ctx, KharejConfig{
+		Panel:    panel,
+		RevLinks: 2, RevMin: 2, RevMax: 8,
+		RevDial: func() (*tlscarrier.Carrier, error) {
+			return tlscarrier.DialFrom(iranAddr, "lab.example.com", key, "")
+		},
+	})
+
+	waitLinks := func(n int) bool {
+		for i := 0; i < 300; i++ {
+			if lm.count() == n {
+				return true
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		return false
+	}
+	if !waitLinks(2) {
+		t.Fatalf("did not settle at the initial 2 links (have %d)", lm.count())
+	}
+	forced.Store(6)
+	if !waitLinks(6) {
+		t.Fatalf("exit did not grow to the edge's target of 6 (have %d)", lm.count())
+	}
+	forced.Store(3)
+	if !waitLinks(3) {
+		t.Fatalf("exit did not shrink to the edge's target of 3 (have %d)", lm.count())
+	}
+	// The tunnel still carries data at the new size.
+	if !echoOnce("127.0.0.1:"+port, 4096) {
+		t.Fatal("tunnel did not carry data after resizing")
+	}
+}
+
+func bytesRepeat(b byte, n int) []byte {
+	s := make([]byte, n)
+	for i := range s {
+		s[i] = b
+	}
+	return s
 }
