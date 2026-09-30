@@ -86,14 +86,14 @@ const DefaultIPXProto = 253
 // but assigned number risks the kernel replying protocol-unreachable. Only
 // numbers with no in-kernel consumer are safe to reuse for the tunnel.
 var ipxHandledProtos = map[int]bool{
-	0: true, 1: true /*ICMP*/, 2: true /*IGMP*/, 4: true /*IPIP*/, 6: true /*TCP*/,
-	17: true /*UDP*/, 33: true /*DCCP*/, 41: true /*IPv6/6in4*/, 43: true /*IPv6-Route*/,
-	44: true /*IPv6-Frag*/, 46: true /*RSVP*/, 47: true /*GRE*/, 50: true /*ESP*/,
-	51: true /*AH*/, 58: true /*ICMPv6*/, 59: true, 60: true, 88: true /*EIGRP*/,
-	89: true /*OSPF*/, 92: true /*MTP*/, 94: true /*KA/IPIP*/, 97: true /*ETHERIP*/,
-	98: true /*ENCAP*/, 103: true /*PIM*/, 108: true /*IPComp*/, 112: true /*VRRP*/,
-	115: true /*L2TP*/, 132: true /*SCTP*/, 136: true /*UDPLite*/, 137: true /*MPLS-in-IP*/,
-	143: true /*Ethernet*/, 255: true /*reserved*/,
+	0: true, 1: true /*ICMP*/, 2: true /*IGMP*/, 4: true /*IPIP*/, 6: true, /*TCP*/
+	17: true /*UDP*/, 33: true /*DCCP*/, 41: true /*IPv6/6in4*/, 43: true, /*IPv6-Route*/
+	44: true /*IPv6-Frag*/, 46: true /*RSVP*/, 47: true /*GRE*/, 50: true, /*ESP*/
+	51: true /*AH*/, 58: true /*ICMPv6*/, 59: true, 60: true, 88: true, /*EIGRP*/
+	89: true /*OSPF*/, 92: true /*MTP*/, 94: true /*KA/IPIP*/, 97: true, /*ETHERIP*/
+	98: true /*ENCAP*/, 103: true /*PIM*/, 108: true /*IPComp*/, 112: true, /*VRRP*/
+	115: true /*L2TP*/, 132: true /*SCTP*/, 136: true /*UDPLite*/, 137: true, /*MPLS-in-IP*/
+	143: true /*Ethernet*/, 255: true, /*reserved*/
 }
 
 // ValidIPXProto reports whether p may be used by the ipx encapsulation: a

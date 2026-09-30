@@ -75,7 +75,7 @@ func waitTunUp(t *testing.T, a, b *fakeTUN) {
 	t.Helper()
 	for i := 0; i < 200; i++ {
 		a.inject(ipPacket(1111, 2222, []byte("probe")))
-		if b.recv(50 * time.Millisecond) != nil {
+		if b.recv(50*time.Millisecond) != nil {
 			return
 		}
 	}
@@ -144,8 +144,8 @@ func startTunTunnel(t *testing.T, min, max int) (*fakeTUN, *fakeTUN, func()) {
 	srv := &tlscarrier.Server{SharedKey: key, Cert: testCert(t), BackendAddr: "127.0.0.1:1"}
 	go RunKharej(ctx, KharejConfig{Listener: raw, Server: srv, TUN: ktun})
 	go RunIran(ctx, IranConfig{
-		Dialer:  NewMTCPDialer(raw.Addr().String(), "lab.example.com", key, ""),
-		Min:     min, Max: max, PerLink: 50,
+		Dialer: NewMTCPDialer(raw.Addr().String(), "lab.example.com", key, ""),
+		Min:    min, Max: max, PerLink: 50,
 		TUN: itun,
 	})
 	cleanup := func() { cancel(); raw.Close(); itun.close(); ktun.close() }
@@ -231,7 +231,7 @@ func TestTunModeReverseWithUserPorts(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	tcpEcho(t, "127.0.0.1:"+port, 256<<10) // a user connection on the stream path
-	exerciseTun(t, itun, ktun, "i2k")        // and the L3 pipe, both ways
+	exerciseTun(t, itun, ktun, "i2k")      // and the L3 pipe, both ways
 	exerciseTun(t, ktun, itun, "k2i")
 	tcpEcho(t, "127.0.0.1:"+port, 64<<10)
 }
