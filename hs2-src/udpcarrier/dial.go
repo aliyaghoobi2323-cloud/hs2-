@@ -9,7 +9,26 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 )
+
+// EncapConfig selects the datagram encapsulation the carrier rides on and its
+// transport-level options. The zero value is plain UDP with a kernel-chosen
+// source, i.e. exactly the carrier's original behaviour, so every existing
+// caller keeps working through the udp-defaulting wrappers below.
+type EncapConfig struct {
+	Kind   string // encap kind: "" / "udp" (default), "icmp", "gre", "ipip", "ipx"
+	BindIP string // local source IP (a config's bind_local_ip / listen_ip)
+	Proto  int    // IP protocol number for the ipx encapsulation
+}
+
+func (ec EncapConfig) dialOptions() encap.Options {
+	return encap.Options{BindIP: ec.BindIP, ICMPRole: "client", Proto: ec.Proto}
+}
+
+func (ec EncapConfig) listenOptions() encap.Options {
+	return encap.Options{BindIP: ec.BindIP, ICMPRole: "server", Proto: ec.Proto}
+}
 
 // DefaultInnerMTU is the tunnel-side MTU the carrier is sized for. It is
 // smaller than the TCP carriers' 1380 to leave room for the datagram overhead
@@ -46,6 +65,15 @@ func Dial(ctx context.Context, addr string, shared []byte, innerMTU int) (*Conn,
 // leaves from that IP, so a multi-IP server whose default address is filtered
 // can still egress from its clean one.
 func DialFrom(ctx context.Context, addr, bindIP string, shared []byte, innerMTU int) (*Conn, error) {
+	return DialCfg(ctx, addr, EncapConfig{BindIP: bindIP}, shared, innerMTU)
+}
+
+// DialCfg is the general dialer: it establishes the carrier over the chosen
+// encapsulation (udp by default, or a raw icmp/gre/ipip/ipx transport). The
+// carrier's Noise handshake, key confirmation, FEC and pacing are identical for
+// every encapsulation — only the outer datagram envelope differs — so a path
+// that passes only ICMP can carry exactly the same secure tunnel as UDP.
+func DialCfg(ctx context.Context, addr string, ec EncapConfig, shared []byte, innerMTU int) (*Conn, error) {
 	if innerMTU <= 0 {
 		innerMTU = DefaultInnerMTU
 	}
@@ -53,15 +81,7 @@ func DialFrom(ctx context.Context, addr, bindIP string, shared []byte, innerMTU 
 	if err != nil {
 		return nil, err
 	}
-	ua, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		return nil, err
-	}
-	laddr, err := localUDPAddr(bindIP)
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.DialUDP("udp", laddr, ua)
+	conn, err := encap.Dial(ec.Kind, addr, ec.dialOptions())
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +130,7 @@ func DialFrom(ctx context.Context, addr, bindIP string, shared []byte, innerMTU 
 
 // dialHandshake runs Noise message 1/2 with retransmission (message 1 may be
 // lost on a lossy UDP path) and returns the session and the transcript binding.
-func dialHandshake(ctx context.Context, conn *net.UDPConn, local core.StaticKey, remoteStatic, psk []byte) (*core.Session, []byte, error) {
+func dialHandshake(ctx context.Context, conn net.Conn, local core.StaticKey, remoteStatic, psk []byte) (*core.Session, []byte, error) {
 	ini, err := core.NewInitiator(local, remoteStatic, psk)
 	if err != nil {
 		return nil, nil, err

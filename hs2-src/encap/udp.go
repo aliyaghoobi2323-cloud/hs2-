@@ -32,10 +32,16 @@ func listenUDP(addr string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	network := "udp"
-	if ua.IP == nil || ua.IP.IsUnspecified() {
-		// A wildcard bind: keep it AF-agnostic exactly as the carrier did.
-		network = "udp"
+	return net.ListenUDP(listenNetwork(ua), ua)
+}
+
+// listenNetwork picks the socket family for a UDP listen address. An IPv4 or
+// empty host gets a plain IPv4 socket ("udp4"): Go would otherwise open a
+// dual-stack IPv6 socket for a wildcard, on which IPv4 reply-source pinning
+// (IP_PKTINFO) does not apply. The tunnel's endpoints are IPv4.
+func listenNetwork(ua *net.UDPAddr) string {
+	if ua.IP == nil || ua.IP.To4() != nil {
+		return "udp4"
 	}
-	return net.ListenUDP(network, ua)
+	return "udp6"
 }
