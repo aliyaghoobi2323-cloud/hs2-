@@ -27,6 +27,13 @@ LINK_MIN=2
 LINK_MAX=32
 LINK_PER=8
 
+# How the L3 tun (transport "tun") crosses the wire. Set by ask_tun_encap.
+#   udp/icmp/gre/ipip/ipx = carrier "dgtun" (a routed TUN over a datagram pool)
+#   tcp                   = carrier "l3mtcp" (classic L3 over multi-link TLS)
+# TUN_PROTO is the raw IP protocol number for the "ipx" encapsulation only.
+TUN_ENCAP=udp
+TUN_PROTO=""
+
 # ---------- pretty output (all to stderr so $(...) captures only real values) --
 _c(){ printf '\033[%sm%s\033[0m\n' "$1" "$2" >&2; }
 info(){ _c '1;34' "→ $1"; }
@@ -203,6 +210,14 @@ write_service(){
   #    yet it simply fails and is restarted 3 s later
   #  - StartLimitIntervalSec=0: systemd never gives up restarting it
   #  - loads the tun module first (the tunnel interface needs /dev/net/tun)
+  # Capabilities: the unit sets no User=, DynamicUser=, NoNewPrivileges= or
+  # CapabilityBoundingSet=, so it runs as root with the FULL capability set. That
+  # already grants CAP_NET_ADMIN (the TUN interface, used by every tun/udp mode
+  # today), CAP_NET_RAW (raw sockets for the dgtun icmp/gre/ipip/ipx encaps) and
+  # CAP_SYS_ADMIN (hs2's RAM/CPU-aware sysctl tuning at startup). Adding a
+  # restrictive CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN would DROP
+  # CAP_SYS_ADMIN and break that tuning, so no capability directives are added:
+  # the raw encaps already have the permissions they need.
   cat > "$SVC" <<EOF
 [Unit]
 Description=hs2 DPI-resistant tunnel ($role)
@@ -430,16 +445,61 @@ ask_transport(){
   echo "    1) auto — UDP+FEC when the path allows it, silent TCP fallback (recommended)" >&2
   echo "    2) udp  — UDP+FEC only (best on high, bursty packet loss; needs UDP open)" >&2
   echo "    3) tcp  — TLS multi-link only (the original transport)" >&2
-  echo "    4) tun  — Backhaul-style L3 IP tunnel over multi-link TLS (mtcp): a routed" >&2
-  echo "              interface, real TLS encryption, high throughput (no user ports)" >&2
+  echo "    4) tun  — L3 IP tunnel; sub-menu picks how it crosses the wire" >&2
+  echo "              (udp/icmp/gre/ipip/ipx datagram pool, or tcp/TLS)" >&2
   read -rp "Choose [1]: " TR </dev/tty
   case "${TR:-1}" in
     1) TRANSPORT=auto ;;
     2) TRANSPORT=udp ;;
     3) TRANSPORT=tcp ;;
-    4) TRANSPORT=tun ;;
+    4) TRANSPORT=tun; ask_tun_encap ;;
     *) die "invalid transport" ;;
   esac
+}
+
+# ask_tun_encap picks HOW the L3 tun (transport "tun") crosses the wire and sets
+# TUN_ENCAP. The datagram encaps (udp/icmp/gre/ipip/ipx) use carrier "dgtun" — a
+# routed TUN over a pool of datagram carriers, shared-key auth, no cert/domain.
+# "tcp" keeps the classic L3-over-multi-link-TLS (carrier "l3mtcp", needs a cert).
+ask_tun_encap(){
+  echo >&2
+  echo "  How should the L3 tunnel cross the wire?" >&2
+  echo "    1) udp  — datagram pool over UDP (recommended)" >&2
+  echo "    2) icmp — datagram pool inside ping/ICMP (best when only ICMP gets through)" >&2
+  echo "    3) gre  — datagram pool as GRE" >&2
+  echo "    4) ipip — datagram pool as IP-in-IP" >&2
+  echo "    5) ipx  — datagram pool over a raw IP protocol number" >&2
+  echo "    6) tcp  — classic L3 over multi-link TLS (needs a domain + certificate)" >&2
+  read -rp "Choose [1]: " TE </dev/tty
+  TUN_PROTO=""
+  case "${TE:-1}" in
+    1) TUN_ENCAP=udp ;;
+    2) TUN_ENCAP=icmp ;;
+    3) TUN_ENCAP=gre ;;
+    4) TUN_ENCAP=ipip ;;
+    5) TUN_ENCAP=ipx; ask_ipx_proto ;;
+    6) TUN_ENCAP=tcp ;;
+    *) die "invalid tun encapsulation" ;;
+  esac
+}
+
+# ask_ipx_proto sets TUN_PROTO: the raw IP protocol number the ipx encapsulation
+# rides on. It must be the SAME number on both servers. 253 is the default
+# (experimental range); 1/4/6/17/47 are taken by ICMP/IPIP/TCP/UDP/GRE.
+ask_ipx_proto(){
+  read -rp "IPX raw IP protocol number (same on both servers) [253]: " IPXP </dev/tty
+  IPXP=${IPXP:-253}
+  case "$IPXP" in ''|*[!0-9]*) die "protocol number must be a number" ;; esac
+  TUN_PROTO="$IPXP"
+}
+
+# dgtun_proto_line ENCAP prints the optional  "proto": N  config line — only for
+# the ipx encapsulation and only when a non-default protocol number was chosen
+# (253/0 = default, left out of the config). Empty for every other case.
+dgtun_proto_line(){
+  if [ "$1" = ipx ] && [ -n "$TUN_PROTO" ] && [ "$TUN_PROTO" != 253 ] && [ "$TUN_PROTO" != 0 ]; then
+    printf '\n  "proto": %s,' "$TUN_PROTO"
+  fi
 }
 
 # ask_tun_params sets TUNIF (interface name, cosmetic/per-server) and TUNMTU for
@@ -474,8 +534,8 @@ ask_direction(){
 #   direct : listener = kharej (exit) , dialer = iran (edge)
 #   reverse: listener = iran  (edge) , dialer = kharej (exit)
 
-show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu]
-  local L; L=$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}")
+show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu] [encap]
+  local L; L=$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}")
   echo >&2; hr
   ok "SETUP LINK — copy it to the OTHER server:"
   _c '1;33' "hs2://$L"
@@ -483,19 +543,23 @@ show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu
 }
 
 # parse_link reads a pasted hs2:// link into ENDPOINT DOMAIN SHARED PANEL
-# CARRIER UDP TRANSPORT DIRECTION MTU (with sensible defaults for older links;
-# the trailing MTU field is optional and only used by tun mode).
+# CARRIER UDP TRANSPORT DIRECTION MTU ENCAP (with sensible defaults for older
+# links; the trailing MTU/ENCAP fields are optional and only used by tun mode).
 parse_link(){
   read -rp "Paste the hs2:// setup link from the OTHER server: " RAW </dev/tty
   RAW=${RAW#hs2://}
   local DEC; DEC=$(decode_link "$RAW") || die "invalid link"
-  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU <<< "$DEC"
+  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU ENCAP <<< "$DEC"
   [ -n "$ENDPOINT" ] && [ -n "$SHARED" ] || die "link is missing fields"
   CARRIER=${CARRIER:-mtcp}; UDP=${UDP:-false}
   if [ -z "$TRANSPORT" ]; then
     case "$CARRIER" in udp) TRANSPORT=udp ;; auto) TRANSPORT=auto ;; *) TRANSPORT=tcp ;; esac
   fi
   DIRECTION=${DIRECTION:-direct}
+  # An OLD 9-field tun link had no ENCAP and was always the classic l3mtcp path,
+  # so default a tun link's ENCAP to "tcp" to keep those links working.
+  [ -z "${ENCAP:-}" ] && [ "$TRANSPORT" = "tun" ] && ENCAP=tcp
+  ENCAP=${ENCAP:-}
 }
 
 # ---------- KHAREJ (foreign server, the panel side) --------------------------
@@ -553,7 +617,7 @@ kharej_listener(){
   "expose": "$PANEL"
 }
 EOF
-  elif [ "$TRANSPORT" = "tun" ]; then
+  elif [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     # Backhaul-style L3 tunnel over multi-link TLS (l3mtcp). Kharej is the TLS
     # server here, so the cert lives on kharej (like direct tcp). No user ports:
     # it is a routed interface, not a port forwarder.
@@ -573,6 +637,32 @@ EOF
   "cert_file": "$CERT", "key_file": "$KEY"
 }
 EOF
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Datagram tun (carrier "dgtun"): a routed TUN over a POOL of datagram
+    # carriers ($TUN_ENCAP). Shared-key auth only — NO cert, NO domain. Kharej is
+    # the exit/panel side, so it carries the user ports (forward_ports, the SAME
+    # list the iran edge opens) and maps them to the panel (expose).
+    [ "$TUN_ENCAP" != "udp" ] || udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
+    ask_tun_params
+    read -rp "User port(s) to forward to the panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    local EXPOSELINE=""
+    if [ -n "$PORTS" ]; then
+      read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
+      PANEL=${PANEL:-127.0.0.1:8443}
+      EXPOSELINE=$'\n  "expose": "'"$PANEL"$'",'
+    fi
+    LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
+    local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$TUN_ENCAP")
+    cat > "$CFG" <<EOF
+{
+  "mode": "listen", "carrier": "dgtun", "encap": "$TUN_ENCAP", "reverse": false,
+  "addr": "$BINDADDR:$TPORT",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
+  "shared_key": "$SHARED",${PROTOLINE}${EXPOSELINE}
+  "forward_ports": "$PORTS",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
+}
+EOF
   else
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
@@ -588,10 +678,14 @@ EOF
   fi
   chmod 600 "$CFG"; write_service kharej; start_service kharej
   ok "KHAREJ ready (direct, transport: $TRANSPORT)."
-  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU"
-  if [ "$TRANSPORT" = "tun" ]; then
+  local ENCAP_ARG=""; [ "$TRANSPORT" = "tun" ] && ENCAP_ARG="$TUN_ENCAP"
+  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU" "$ENCAP_ARG"
+  if [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $LMTU)."
     info "Your panel stays on this kharej; iran reaches it over the tunnel."
+  elif [ "$TRANSPORT" = "tun" ]; then
+    info "Datagram L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (encap $TUN_ENCAP)."
+    [ -n "$PORTS" ] && info "Panel $PANEL is reached over the tunnel on port(s): $PORTS (open the SAME port(s) on iran)."
   fi
   info "On the Iran server: bash install.sh → 2 (Iran) → direction 'direct' → paste the link."
 }
@@ -621,7 +715,7 @@ EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
     ok "KHAREJ ready (reverse, tcp). It dials in to the Iran edge and forwards to $PANEL."
-  elif [ "$TRANSPORT" = "tun" ]; then
+  elif [ "$TRANSPORT" = "tun" ] && [ "$ENCAP" = "tcp" ]; then
     # Reverse tun: kharej DIALS the iran edge (TLS client) and runs the L3 pipe.
     # MTU comes from the link so both sides match.
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the iran edge with the new installer."
@@ -641,6 +735,36 @@ EOF
     ok "KHAREJ ready (reverse, tun / L3 over multi-link TLS). It dials in to the Iran edge."
     info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $MTU)."
     info "Your panel stays on this kharej; iran reaches it over the tunnel."
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Reverse datagram tun (carrier "dgtun", encap $ENCAP from the link): kharej
+    # DIALS the iran edge. No cert/domain. Kharej is the exit/panel side, so it
+    # carries the SAME forward_ports as the iran edge and maps them to the panel.
+    [ "$ENCAP" = ipx ] && ask_ipx_proto
+    ask_tun_params
+    read -rp "User port(s) to forward to the panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    local EXPOSELINE=""
+    if [ -n "$PORTS" ]; then
+      read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
+      PANEL=${PANEL:-127.0.0.1:8443}
+      EXPOSELINE=$'\n  "expose": "'"$PANEL"$'",'
+    fi
+    local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$ENCAP")
+    cat > "$CFG" <<EOF
+{
+  "mode": "listen", "carrier": "dgtun", "encap": "$ENCAP", "reverse": true,
+  "addr": "$ENDPOINT",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
+  "shared_key": "$SHARED",${PROTOLINE}${EXPOSELINE}
+  "forward_ports": "$PORTS",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  "bind_local_ip": "$EGRESSIP"
+}
+EOF
+    chmod 600 "$CFG"; write_service kharej; start_service kharej
+    echo >&2; hr
+    ok "KHAREJ ready (reverse, tun / datagram pool over $ENCAP). It dials in to the Iran edge."
+    info "Datagram L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (encap $ENCAP)."
+    [ -n "$PORTS" ] && info "Panel ${PANEL:-} is reached over the tunnel on port(s): $PORTS (open the SAME port(s) on iran)."
   else
     # udp/auto: TUN IP tunnel on hs0, no panel forwarding here.
     cat > "$CFG" <<EOF
@@ -708,7 +832,7 @@ EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
     ok "IRAN ready (direct, tcp). Users connect on port(s): $PORTS"
-  elif [ "$TRANSPORT" = "tun" ]; then
+  elif [ "$TRANSPORT" = "tun" ] && [ "$ENCAP" = "tcp" ]; then
     # Backhaul-style L3 tunnel over multi-link TLS (l3mtcp). Iran is the TLS
     # client here (validates the kharej's domain as SNI). MTU comes from the link
     # so both sides match; the interface name is a local choice.
@@ -729,6 +853,34 @@ EOF
     ok "IRAN ready (direct, tun / L3 over multi-link TLS)."
     info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $MTU)."
     info "Route the traffic you want tunneled toward 10.77.0.2 over $TUNIF."
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Datagram tun (carrier "dgtun", encap $ENCAP from the link): iran is the
+    # edge, so it opens the user ports (forward_ports) and rides them over the
+    # pool to the kharej exit. No cert, no domain — shared-key auth only.
+    [ "$ENCAP" = ipx ] && ask_ipx_proto
+    ask_tun_params
+    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    for p in ${PORTS//,/ }; do
+      port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
+    done
+    local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$ENCAP")
+    cat > "$CFG" <<EOF
+{
+  "mode": "dial", "carrier": "dgtun", "encap": "$ENCAP", "reverse": false,
+  "addr": "$ENDPOINT",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
+  "shared_key": "$SHARED",${PROTOLINE}
+  "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  "bind_local_ip": "$EGRESSIP"
+}
+EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    echo >&2; hr
+    ok "IRAN ready (direct, tun / datagram pool over $ENCAP)."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS (the kharej exit must forward the SAME port(s) to its panel)."
+    else info "Pure routed L3 tunnel on $TUNIF: this iran = 10.77.0.1, kharej = 10.77.0.2. Route traffic toward 10.77.0.2."; fi
   else
     # udp/auto is a TUN IP tunnel on hs0 (not a port forwarder); no user ports.
     cat > "$CFG" <<EOF
@@ -794,7 +946,7 @@ iran_listener(){
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN ready (reverse, tcp). Users connect on port(s): $PORTS"
-  elif [ "$TRANSPORT" = "tun" ]; then
+  elif [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     # Reverse tun: iran LISTENS and is the TLS server, so the cert lives HERE.
     # The kharej dials in. L3 routed interface, no user ports.
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
@@ -817,6 +969,33 @@ EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN ready (reverse, tun / L3 over multi-link TLS)."
     info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $LMTU)."
+  elif [ "$TRANSPORT" = "tun" ]; then
+    # Reverse datagram tun (carrier "dgtun", encap $TUN_ENCAP): iran LISTENS
+    # (kharej dials in). No cert, no domain — shared-key auth only. Iran is the
+    # edge, so it opens the user ports (forward_ports) and rides them over the pool.
+    [ "$TUN_ENCAP" != "udp" ] || udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
+    ask_tun_params
+    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    for p in ${PORTS//,/ }; do
+      port_free "$p" || die "user port $p is already in use on Iran. Pick another."
+    done
+    LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
+    local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$TUN_ENCAP")
+    cat > "$CFG" <<EOF
+{
+  "mode": "dial", "carrier": "dgtun", "encap": "$TUN_ENCAP", "reverse": true,
+  "addr": "$BINDADDR:$TPORT",
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
+  "shared_key": "$SHARED",${PROTOLINE}
+  "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
+}
+EOF
+    chmod 600 "$CFG"; write_service iran; start_service iran
+    ok "IRAN ready (reverse, tun / datagram pool over $TUN_ENCAP)."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS (the kharej exit must forward the SAME port(s) to its panel)."
+    else info "Pure routed L3 tunnel on $TUNIF: this iran = 10.77.0.1, kharej = 10.77.0.2."; fi
   else
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
@@ -834,7 +1013,8 @@ EOF
     info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2). Route traffic over hs0."
   fi
   # panel is set on the kharej side; leave it blank in the link.
-  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse" "$LMTU"
+  local ENCAP_ARG=""; [ "$TRANSPORT" = "tun" ] && ENCAP_ARG="$TUN_ENCAP"
+  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse" "$LMTU" "$ENCAP_ARG"
   info "On the Kharej server: bash install.sh → 1 (Kharej) → direction 'reverse' → paste the link."
 }
 
@@ -1022,6 +1202,7 @@ tm_peers(){
 tm_transport(){
   case "$(jget "$1" carrier)" in
     mtcp) echo "tcp (mtcp)" ;; tls) echo "tcp (tls)" ;; l3mtcp|l3) echo "tun (L3 over mtcp)" ;;
+    dgtun) local e; e=$(jget "$1" encap); echo "tun (datagram pool over ${e:-udp})" ;;
     udp) echo "udp" ;; auto) echo "auto (udp, tcp fallback)" ;; reality) echo "reality" ;; *) echo "tcp (noise)" ;;
   esac
 }
