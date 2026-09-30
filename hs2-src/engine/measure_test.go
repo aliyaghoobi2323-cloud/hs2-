@@ -47,9 +47,10 @@ func TestMeteredConnBlockedTime(t *testing.T) {
 	}
 }
 
-// flowActivity counts only streams that moved a byte within the window, and
-// forgets closed ones.
-func TestFlowActivityCountsOnlyActiveStreams(t *testing.T) {
+// flowStats counts a stream as flowing only while its rate EWMA is at least
+// flowingRate: a handshake-sized write is not, a sustained transfer is, and
+// closed streams are forgotten.
+func TestFlowStatsFlowingNeedsSustainedRate(t *testing.T) {
 	ca, cb := net.Pipe()
 	cli, err := smux.Client(ca, newSmuxConfig())
 	if err != nil {
@@ -79,19 +80,38 @@ func TestFlowActivityCountsOnlyActiveStreams(t *testing.T) {
 		}
 		ss = append(ss, s)
 	}
+	echo := func(s stream, n int) {
+		b := make([]byte, n)
+		if _, err := s.Write(b); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.ReadFull(s, b); err != nil {
+			t.Fatal(err)
+		}
+	}
 	t0 := time.Now()
-	if a, tot, _ := l.flowActivity(t0, 20*time.Second); a != 3 || tot != 3 {
-		t.Fatalf("fresh streams: active=%d total=%d, want 3/3", a, tot)
+	const dt = 2 * time.Second
+	if fs := l.flowStats(t0, dt, 20*time.Second); fs.open != 3 || fs.flowing != 0 {
+		t.Fatalf("fresh streams: %+v, want 3 open, 0 flowing", fs)
 	}
-	// Move data on stream 0 only.
-	ss[0].Write([]byte("hello"))
-	buf := make([]byte, 5)
-	io.ReadFull(ss[0], buf)
-	if a, tot, _ := l.flowActivity(t0.Add(30*time.Second), 20*time.Second); a != 1 || tot != 3 {
-		t.Fatalf("after 30s with traffic on one stream: active=%d total=%d, want 1/3", a, tot)
+	echo(ss[1], 2<<10) // a handshake: 4 KiB once (both ways)
+	for i := 1; i <= 3; i++ {
+		echo(ss[0], 64<<10) // 128 KiB per tick both ways: a real transfer
+		fs := l.flowStats(t0.Add(time.Duration(i)*dt), dt, 20*time.Second)
+		if i >= 2 && fs.flowing != 1 {
+			t.Fatalf("tick %d: flowing=%d, want 1 (only the sustained stream): %+v", i, fs.flowing, fs)
+		}
 	}
-	ss[1].Close()
-	if _, tot, _ := l.flowActivity(t0.Add(31*time.Second), 20*time.Second); tot != 2 {
-		t.Fatalf("closed stream still counted: total=%d, want 2", tot)
+	ss[2].Close()
+	if fs := l.flowStats(t0.Add(8*time.Second), dt, 20*time.Second); fs.open != 2 {
+		t.Fatalf("closed stream still counted: %+v", fs)
+	}
+	// Idle for a minute: the EWMA decays and nothing flows.
+	var fs flowSnap
+	for i := 0; i < 30; i++ {
+		fs = l.flowStats(t0.Add(8*time.Second+time.Duration(i+1)*dt), dt, 20*time.Second)
+	}
+	if fs.flowing != 0 || fs.recent != 0 {
+		t.Fatalf("after a quiet minute: %+v, want nothing flowing or recent", fs)
 	}
 }

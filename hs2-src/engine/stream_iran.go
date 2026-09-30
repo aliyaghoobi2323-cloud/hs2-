@@ -16,7 +16,7 @@ import (
 type IranConfig struct {
 	Dialer   LinkDialer
 	Min, Max int // link pool bounds (tls mode: 1, 1)
-	PerLink  int // user connections per link before the pool grows
+	PerLink  int // concurrently active flows per link the pool sizes for
 	ListenIP string
 	Ports    []string
 	UDP      bool      // also forward UDP on Ports
@@ -28,6 +28,11 @@ type IranConfig struct {
 	// dials in.
 	RevServer   *tlscarrier.Server
 	RevListener net.Listener
+
+	// DrainIdle: a connection on a retiring link that has moved nothing for
+	// this long is closed so the link can finish. 0 = the default (310 s, above
+	// xray's 300 s connIdle); negative = never.
+	DrainIdle time.Duration
 
 	// OnStart, if set, is called once with a function that returns a live
 	// snapshot of the link pattern, so the caller can publish it for monitoring.
@@ -57,20 +62,25 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	} else {
 		lm = NewLinkManager(cfg.Dialer, cfg.Min, cfg.Max, cfg.PerLink, logf)
 	}
+	if cfg.DrainIdle != 0 {
+		lm.SetDrainIdle(cfg.DrainIdle)
+	}
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = &l3Set{}
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}
-	// Every new link gets a control channel (health feedback) in its own
-	// goroutine, and, in TUN mode, its L3 side-channel stream. On the reverse
-	// edge each link also carries the pool-control stream that tells the exit the
-	// desired link count.
+	// Every new link gets a control channel (health feedback) and a stats
+	// channel (the exit's download-side pressure), each in its own goroutine,
+	// and, in TUN mode, its L3 side-channel stream. On the reverse edge each
+	// link also carries the pool-control stream that tells the exit the desired
+	// link count.
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, logf)
+		go openStats(ctx, l, logf)
 		if reverse {
-			go openPoolCtl(ctx, l, lm.Target, logf)
+			go openPoolCtl(ctx, l, lm.Target, logf, func() { lm.markPoolRefused(l) })
 		}
 		if l3 != nil {
 			openL3(ctx, l, l3, cfg.TUN, logf)

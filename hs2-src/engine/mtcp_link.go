@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"math"
 	"math/rand/v2"
 	"net"
 	"sync"
@@ -46,14 +47,9 @@ func (l *mtcpLink) downReason() string {
 	return "session ended (keepalive timeout or closed by the other server)"
 }
 
-// linkRetrans reports the link's kernel TCP retransmit counter, for loss-based
-// health. It reads TCP_INFO off the carrier's underlying socket (Linux).
-func (l *mtcpLink) linkRetrans() (uint64, bool) { return retransmits(l.tls.TCPConn()) }
-
-// sendPressure reports whether this link's socket has unsent bytes queued (the
-// path is not taking data as fast as smux offers it) — a per-connection cap
-// biting. It reads TCP_INFO; unsupported platforms return (false,false).
-func (l *mtcpLink) sendPressure() (bool, bool) { return sendPressure(l.tls.TCPConn()) }
+// tcpStats reads the link socket's TCP_INFO (retransmits for loss-based health,
+// chrono counters for upload pressure). Linux only; (zero,false) elsewhere.
+func (l *mtcpLink) tcpStats() (tcpStat, bool) { return tcpStats(l.tls.TCPConn()) }
 
 // healthProbe actively verifies the link. Every few seconds it opens a throwaway
 // smux stream and immediately closes it; if that fails, the underlying TLS/TCP
@@ -91,27 +87,89 @@ func (l *mtcpLink) OpenStream() (stream, error) {
 	return cs, nil
 }
 
-// flowActivity reports how many of this link's user streams moved at least one
-// byte within window (active), how many are open (total), and the most recent
-// activity of any of them. It is called only from the pool's sampler goroutine,
-// which alone touches each stream's prev/lastActive bookkeeping; the data path
-// only does an atomic add per Read/Write.
-func (l *mtcpLink) flowActivity(now time.Time, window time.Duration) (active, total int, last time.Time) {
+// flowSnap summarises a link's user streams for one sampler tick.
+type flowSnap struct {
+	open    int       // user streams open on the link
+	flowing int       // streams whose rate EWMA is >= flowingRate (real traffic)
+	recent  int       // streams that moved a byte within the recent window
+	last    time.Time // most recent byte on any stream
+}
+
+// flowSource is implemented by links that can report per-stream activity (the
+// real mtcpLink; test fakes too). A link without it reports open = Active() and
+// no flowing streams.
+type flowSource interface {
+	flowStats(now time.Time, dt, recent time.Duration) flowSnap
+}
+
+// flowStats updates each open user stream's rate EWMA (τ = flowTau) from the
+// bytes it moved since the last call and reports how many are "flowing". A
+// stream counts as flowing at >= flowingRate: a reconnect handshake (~4 KiB
+// once) peaks well below that and keepalives never reach it, while any real
+// transfer — even one of eight flows sharing a 400 kbit/s throttled link —
+// does. Only the pool's sampler goroutine calls this, so the per-stream
+// bookkeeping needs no atomics; the data path only does one atomic add.
+func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
+	var fs flowSnap
+	alpha := flowAlpha(dt)
 	l.flowMu.Lock()
 	defer l.flowMu.Unlock()
 	for cs := range l.flows {
-		if b := cs.bytes.Load(); b != cs.prevBytes {
+		b := cs.bytes.Load()
+		if b != cs.prevBytes {
+			if dt > 0 {
+				rate := float64(b-cs.prevBytes) / dt.Seconds()
+				cs.ewma += float32(alpha * (rate - float64(cs.ewma)))
+			}
 			cs.prevBytes, cs.lastActive = b, now
+		} else if dt > 0 {
+			cs.ewma -= float32(alpha * float64(cs.ewma))
 		}
-		total++
-		if now.Sub(cs.lastActive) <= window {
-			active++
+		fs.open++
+		if float64(cs.ewma) >= flowingRate {
+			fs.flowing++
 		}
-		if cs.lastActive.After(last) {
-			last = cs.lastActive
+		if now.Sub(cs.lastActive) <= recent {
+			fs.recent++
+		}
+		if cs.lastActive.After(fs.last) {
+			fs.last = cs.lastActive
 		}
 	}
-	return active, total, last
+	return fs
+}
+
+// idleCand is a user stream that has been silent for the reclaim window,
+// with its byte counter at the time it was chosen.
+type idleCand struct {
+	cs   *countedStream
+	snap uint64
+}
+
+// idleStreams returns up to max user streams that have not moved a byte for at
+// least idle. The caller closes them outside the lock, and only if their byte
+// counter is still unchanged (a stream that woke up in between is spared).
+func (l *mtcpLink) idleStreams(now time.Time, idle time.Duration, max int) []idleCand {
+	l.flowMu.Lock()
+	defer l.flowMu.Unlock()
+	var out []idleCand
+	for cs := range l.flows {
+		if len(out) >= max {
+			break
+		}
+		if b := cs.bytes.Load(); b == cs.prevBytes && now.Sub(cs.lastActive) >= idle {
+			out = append(out, idleCand{cs: cs, snap: b})
+		}
+	}
+	return out
+}
+
+// flowAlpha is the EWMA weight for a sample dt apart with time constant flowTau.
+func flowAlpha(dt time.Duration) float64 {
+	if dt <= 0 {
+		return 0
+	}
+	return 1 - math.Exp(-dt.Seconds()/flowTau.Seconds())
 }
 
 // OpenRawStream opens a stream that is not counted as a user.
@@ -144,9 +202,10 @@ type countedStream struct {
 	done  atomic.Bool
 	bytes atomic.Uint64 // payload bytes moved either way (data path: atomic add only)
 
-	// sampler-only bookkeeping (see mtcpLink.flowActivity)
+	// sampler-only bookkeeping (see mtcpLink.flowStats)
 	prevBytes  uint64
 	lastActive time.Time
+	ewma       float32 // bytes/s, time constant flowTau
 }
 
 func (c *countedStream) Read(p []byte) (int, error) {
@@ -230,7 +289,7 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 // because the edge's smux role is the same either way — only who established the
 // TLS connection differs.
 func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLink, error) {
-	mtr := &linkMeter{}
+	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}
 	sess, why, err := newSession(car.RawConn(), false, sampler, mtr)
 	if err != nil {
 		car.Close()

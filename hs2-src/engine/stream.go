@@ -35,6 +35,7 @@ const (
 	kindL3   byte = 3 // TUN packets, tlscarrier frame format
 	kindCtrl byte = 4 // per-link health control channel (ping/pong stats)
 	kindPool byte = 5 // reverse pool-control: edge tells the exit its desired link count
+	kindStats byte = 6 // exit -> edge per-link send-side stats (download pressure)
 )
 
 // kindTimeout bounds how long the kharej side waits for a new stream's kind.

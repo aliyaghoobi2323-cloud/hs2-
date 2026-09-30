@@ -226,7 +226,7 @@ func TestReverseExitPoolFollowsEdgeTarget(t *testing.T) {
 	lm.pin.Store(4)
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, func(string, ...any) {})
-		go openPoolCtl(ctx, l, lm.Target, func(string, ...any) {})
+		go openPoolCtl(ctx, l, lm.Target, func(string, ...any) {}, func() { lm.markPoolRefused(l) })
 	}
 	go lm.Run(ctx)
 	go acceptReverseLinks(ctx, rawIranLn, iranSrv, lm, func(string, ...any) {})

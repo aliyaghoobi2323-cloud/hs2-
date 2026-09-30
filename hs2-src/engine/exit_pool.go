@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -173,11 +174,14 @@ func (p *exitPool) stats() PoolStats {
 }
 
 // openPoolCtl runs the EDGE side of pool-control for one link: it opens a
-// kindPool stream and sends the autopilot's desired link count periodically and
-// whenever it changes, until the link or ctx ends. get returns the current
-// target. Against an old exit the stream is refused (its serveStream has no
-// kindPool case) and this simply returns — the exit keeps its default count.
-func openPoolCtl(ctx context.Context, l Link, get func() int, logf func(string, ...any)) {
+// kindPool stream and sends the autopilot's desired serving-link count
+// periodically and whenever it changes, until the link or ctx ends. get returns
+// the current target. An exit never writes on this stream, so a reader watches
+// for the one thing it can say: an exit older than pool control closes the
+// stream at once (its serveStream has no kindPool case). If that happens while
+// the link is still up, refused is called — the exit keeps its own fixed count,
+// so the edge must not close links to shrink it (they would be redialed).
+func openPoolCtl(ctx context.Context, l Link, get func() int, logf func(string, ...any), refused func()) {
 	ro, ok := l.(rawStreamOpener)
 	if !ok {
 		return
@@ -190,6 +194,25 @@ func openPoolCtl(ctx context.Context, l Link, get func() int, logf func(string, 
 	if _, err := st.Write([]byte{kindPool}); err != nil {
 		return
 	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		var b [1]byte
+		for {
+			if _, err := st.Read(b[:]); err != nil {
+				// io.EOF is the exit's FIN; a local close or a dying session
+				// reads differently, and a link lost at the same moment is
+				// told apart by whether it is still up a moment later.
+				if errors.Is(err, io.EOF) && ctx.Err() == nil && refused != nil {
+					time.Sleep(200 * time.Millisecond)
+					if l.Alive() {
+						refused()
+					}
+				}
+				return
+			}
+		}
+	}()
 	buf := make([]byte, poolCtlLen)
 	last, lastSent := -1, time.Time{}
 	t := time.NewTicker(time.Second)
@@ -208,6 +231,8 @@ func openPoolCtl(ctx context.Context, l Link, get func() int, logf func(string, 
 		}
 		select {
 		case <-ctx.Done():
+			return
+		case <-done:
 			return
 		case <-t.C:
 		}

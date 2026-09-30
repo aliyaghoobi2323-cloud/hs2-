@@ -66,7 +66,8 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			continue
 		}
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
-			sess, why, err := newSession(car.RawConn(), true, nil, nil)
+			mtr := &linkMeter{} // download-side counters, reported over kindStats
+			sess, why, err := newSession(car.RawConn(), true, nil, mtr)
 			if err != nil {
 				car.Close()
 				return
@@ -86,7 +87,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 					downErr = err
 					break
 				}
-				go serveStream(ctx, st, cfg, l3, car, nil)
+				go serveStream(ctx, st, cfg, l3, car, nil, mtr)
 			}
 			sess.Close()
 			car.Close()
@@ -109,7 +110,7 @@ func sessionEndReason(why func() string, sessErr error) string {
 	return describeNetErr(sessErr)
 }
 
-func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier, pool *exitPool) {
+func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier, pool *exitPool, mtr *linkMeter) {
 	var kind [1]byte
 	st.SetReadDeadline(time.Now().Add(kindTimeout))
 	if _, err := io.ReadFull(st, kind[:]); err != nil {
@@ -122,6 +123,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		serveControl(ctx, st, car)
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
+	case kindStats:
+		serveStats(ctx, st, car, mtr)
 	case kindTCP:
 		up, err := net.DialTimeout("tcp", cfg.Panel, 5*time.Second)
 		if err != nil {

@@ -4,9 +4,9 @@ package engine
 
 import "net"
 
-// retransmits is Linux-only (TCP_INFO). On other platforms per-link loss is
-// unavailable, so soft-degrade detection is disabled and links are still healed
-// on hard death. Production runs on Linux.
-func retransmits(tc *net.TCPConn) (uint64, bool) { return 0, false }
+// TCP_INFO is Linux-only. Elsewhere per-link loss and send-side chrono stats are
+// unavailable: soft-degrade and upload-pressure detection are off, and links are
+// still healed on hard death. Production runs on Linux.
+func tcpStats(tc *net.TCPConn) (tcpStat, bool) { return tcpStat{}, false }
 
-func sendPressure(tc *net.TCPConn) (bool, bool) { return false, false }
+func retransmits(tc *net.TCPConn) (uint64, bool) { return 0, false }
