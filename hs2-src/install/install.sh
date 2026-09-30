@@ -1746,6 +1746,21 @@ migrate_config(){
   done
   [ -n "$changed" ] && ok "Adaptive link pool updated to $LINK_MIN–$LINK_MAX (auto-sized; was a fixed default)."
 
+  # Old tun configs keep working as they are: the classic L3-over-multi-link-TLS
+  # (carrier l3mtcp) and the single-carrier udp/auto TUN are unchanged in the new
+  # binary, so an upgrade never rewrites them — a datagram-tun cutover changes the
+  # wire protocol and must be done on BOTH servers at once, so it is never forced
+  # here. Just let the operator know the new option exists. (Detected, not changed.)
+  local car ifc
+  car=$(cfg_field carrier); ifc=$(cfg_field iface)
+  if [ "$car" = l3mtcp ] || [ "$car" = l3 ]; then
+    info "This is a classic tun over multi-link TLS (l3mtcp) — still supported and unchanged."
+    info "New: a datagram tun (udp/icmp/gre/ipip/ipx, no TCP-in-TCP) is available. To switch, reconfigure BOTH servers (menu → Iran/Kharej → tun) with the same encapsulation."
+  elif { [ "$car" = udp ] || [ "$car" = auto ]; } && [ -n "$ifc" ] && grep -q '"local_cidr"' "$CFG" 2>/dev/null; then
+    info "This is a single-carrier $car TUN — still supported and unchanged."
+    info "New: the datagram tun (carrier dgtun) runs a self-sizing POOL of $car carriers with the autopilot and optional user-port forwarding. To switch, reconfigure BOTH servers (menu → tun → $car)."
+  fi
+
   # hs2 now owns tuning at runtime — drop the old static file, keep BBR for boot.
   if [ -f /etc/sysctl.d/99-hs2.conf ]; then
     rm -f /etc/sysctl.d/99-hs2.conf
