@@ -54,6 +54,11 @@ the exit's for downloads, reported over the optional `kindStats` stream).
   is kept only if the new links' traffic *added* to the total. A full path
   fails the probe (exponential backoff, capped at 8 min); a probe that no new
   flow reached keeps its links as spares.
+- **Full path:** once growth was found not to help, a later gain must last a
+  minute before it is kept, and a path found full again at more links with
+  no more throughput goes back to the smaller size — on a full path every
+  link reads as pressed, so nothing else would take back links a lucky
+  probe added (tested for 8 h with ±20% cross-traffic noise).
 - **Shrink:** after 60 s below target, step down every 30 s toward what the
   last minute needed (active flows, pressure, peak throughput at 70% of the
   measured per-link capacity), capped by the links the active flows can use.
@@ -64,12 +69,16 @@ the exit's for downloads, reported over the optional `kindStats` stream).
 `engine/linkmanager.go` is the actuator: un-retire before dialing, retire the
 links that will empty soonest, close empty retiring links (asynchronously, 2
 per tick), and close connections idle for `drain_idle_sec` on retiring links.
+A link that has received nothing for 12 s (not even the other side's
+keepalive or a control reply) is suspect: no new users and not counted as
+serving, so a replacement is used at once.
 
 In reverse, only the exit dials, so the edge publishes its serving target down
 a pool-control stream (`kindPool`); the exit dials only while it has fewer
 slots than the target and retires a slot whose link the edge closed while it
 holds more (`exit_pool.go`). A link that arrives while the edge already has its
-target is born retiring. Close guards keep an exit that has not yet learned a
+target is born retiring (and kept 30 s first: it may be replacing a link that
+died on the exit's side before this side noticed). Close guards keep an exit that has not yet learned a
 lower target, redials what is retired (its `min_links` above the edge's
 target) or predates pool control from churning links. All additions are
 backward compatible: an older peer closes the unknown streams and the pool
