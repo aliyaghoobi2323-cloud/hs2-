@@ -248,6 +248,26 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 	if fc.MTU != 0 && (fc.MTU < 576 || fc.MTU > 9000) {
 		warn(`"mtu" %d is unusual (normal range 1200-1500)`, fc.MTU)
 	}
+
+	// Optional tuning section. Auto is the default; validate what is set so a
+	// typo does not silently disable tuning at the next restart.
+	if fc.Tuning != nil {
+		t := fc.Tuning
+		switch t.Mode {
+		case "", "auto", "manual", "off":
+		default:
+			bad(`"tuning.mode" must be "auto", "manual" or "off", got %q`, t.Mode)
+		}
+		if t.RmemMax < 0 || t.WmemMax < 0 || t.Backlog < 0 || t.Somaxconn < 0 {
+			bad(`"tuning" buffer/backlog values cannot be negative`)
+		}
+		if (t.RmemMax > 0 || t.WmemMax > 0 || t.Backlog > 0 || t.Somaxconn > 0) && t.Mode != "manual" {
+			warn(`"tuning" has manual values but "mode" is not "manual" — they are ignored (set "mode":"manual" to use them)`)
+		}
+		if t.RmemMax > 0 && t.RmemMax < 65536 {
+			warn(`"tuning.rmem_max" %d is very small (bytes); a normal value is a few MB, e.g. 16777216`, t.RmemMax)
+		}
+	}
 	return
 }
 

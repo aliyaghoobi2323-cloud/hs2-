@@ -26,6 +26,7 @@ import (
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tun"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 )
 
 type fileConfig struct {
@@ -74,6 +75,9 @@ type fileConfig struct {
 	LocalPub     string `json:"local_pub"`
 	RemoteStatic string `json:"remote_static"`
 	PSK          string `json:"psk"`
+
+	// kernel tuning (RAM/CPU-aware; applied at every start). Omitted = auto.
+	Tuning *tune.Config `json:"tuning"`
 }
 
 func main() {
@@ -95,6 +99,8 @@ func main() {
 		checkCmd(os.Args[2:])
 	case "status":
 		statusCmd(os.Args[2:])
+	case "tune":
+		tuneCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)
@@ -144,6 +150,21 @@ func runCmd(args []string) {
 	}
 	if fc.BindLocalIP != "" {
 		log.Printf("egress: all tunnel connections will leave from %s", fc.BindLocalIP)
+	}
+
+	// Apply RAM/CPU-aware kernel tuning at every start, so it always matches the
+	// current hardware and config (a resized VPS is picked up on restart). The
+	// chosen congestion control is also used on the tunnel's own link sockets.
+	// HS2_NO_TUNE=1 (used by the lab, where tuning is controlled by HS2_TUNE_*)
+	// or lack of root skips the system sysctls but still logs the plan.
+	plan := buildTunePlan(fc)
+	if os.Geteuid() == 0 && os.Getenv("HS2_NO_TUNE") == "" {
+		plan.Apply(func(f string, a ...any) { log.Printf(f, a...) })
+	} else {
+		log.Printf("tuning: %s (not applied: %s)", plan.Summary(), tuneSkipReason())
+	}
+	if _, envCC := os.LookupEnv("HS2_TUNE_CC"); !envCC && plan.Congestion != "" {
+		tlscarrier.CongestionControl = plan.Congestion
 	}
 
 	// The UDP/auto transports carry datagrams: keep the tunnel MTU small enough
@@ -302,6 +323,50 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	cfg.Listener = ln
 	cfg.Server = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
 	must(engine.RunKharej(ctx, cfg))
+}
+
+// buildTunePlan turns the config's tuning section (or the auto default) plus the
+// detected hardware into a tuning Plan.
+func buildTunePlan(fc fileConfig) *tune.Plan {
+	var cfg tune.Config
+	if fc.Tuning != nil {
+		cfg = *fc.Tuning
+	}
+	ramMB, cpus := tune.Detect()
+	return tune.Build(cfg, ramMB, cpus, tune.AvailableCC, tune.AvailableQdisc)
+}
+
+func tuneSkipReason() string {
+	if os.Geteuid() != 0 {
+		return "not root"
+	}
+	return "HS2_NO_TUNE set"
+}
+
+// tuneCmd implements `hs2 tune -c config [--apply]`: print the tuning plan for
+// this server and config, and optionally apply it. It lets the operator see
+// exactly what auto-tuning chose, and try manual overrides, without starting the
+// tunnel.
+func tuneCmd(args []string) {
+	fs := flag.NewFlagSet("tune", flag.ExitOnError)
+	cfgPath := fs.String("c", "", "config file (JSON); optional — without it, shows the auto plan for this server")
+	apply := fs.Bool("apply", false, "apply the plan now (needs root)")
+	fs.Parse(args)
+	var fc fileConfig
+	if *cfgPath != "" {
+		if raw, err := os.ReadFile(*cfgPath); err == nil {
+			json.Unmarshal(raw, &fc)
+		}
+	}
+	plan := buildTunePlan(fc)
+	fmt.Print(plan.Report())
+	if *apply {
+		if os.Geteuid() != 0 {
+			fmt.Println("(need root to apply)")
+			os.Exit(1)
+		}
+		plan.Apply(func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+	}
 }
 
 // linkEnvelope resolves the adaptive link-pool bounds from the config, applying
