@@ -195,3 +195,43 @@ func TestTunModeReverse(t *testing.T) {
 	exerciseTun(t, itun, ktun, "i2k")
 	exerciseTun(t, ktun, itun, "k2i")
 }
+
+// The mode the installer builds from "tcp" transport + TLS mode "l3mtcp" in
+// REVERSE: user TCP ports carried on the multi-link stream path (no TCP inside
+// TCP), and at the same time the hs0 L3 interface for everything else (ping,
+// UDP, other ports routed via 10.77.0.x). Both must work over the same links.
+func TestTunModeReverseWithUserPorts(t *testing.T) {
+	key := bytes.Repeat([]byte{0x5a}, 32)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	itun, ktun := newFakeTUN(1380), newFakeTUN(1380)
+	defer itun.close()
+	defer ktun.close()
+	panel := echoPanel(t)
+	port := freePort(t)
+
+	iranLn, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer iranLn.Close()
+	iranSrv := &tlscarrier.Server{SharedKey: key, Cert: testCert(t), BackendAddr: "127.0.0.1:1"}
+	go RunIran(ctx, IranConfig{RevServer: iranSrv, RevListener: iranLn, Min: 2, Max: 8, PerLink: 8,
+		ListenIP: "127.0.0.1", Ports: []string{port}, TUN: itun})
+	addr := iranLn.Addr().String()
+	go RunKharej(ctx, KharejConfig{
+		Panel: panel, TUN: ktun,
+		RevLinks: 4, RevMin: 2, RevMax: 8,
+		RevDial: func() (*tlscarrier.Carrier, error) { return tlscarrier.DialFrom(addr, "lab.example.com", key, "") },
+	})
+
+	waitTunUp(t, itun, ktun)
+	waitTunUp(t, ktun, itun)
+	for i := 0; i < 50 && !echoOnce("127.0.0.1:"+port, 1024); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	tcpEcho(t, "127.0.0.1:"+port, 256<<10) // a user connection on the stream path
+	exerciseTun(t, itun, ktun, "i2k")        // and the L3 pipe, both ways
+	exerciseTun(t, ktun, itun, "k2i")
+	tcpEcho(t, "127.0.0.1:"+port, 64<<10)
+}
