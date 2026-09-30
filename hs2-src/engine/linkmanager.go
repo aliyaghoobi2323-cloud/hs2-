@@ -138,8 +138,8 @@ type LinkManager struct {
 	reclaimLogAt time.Time
 	reclaimed    atomic.Int64 // idle connections closed on retiring links, not yet logged
 
-	// drainIdle: idle-connection reclaim on retiring links (0 = never).
-	drainIdle time.Duration
+	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
+	drainIdle atomic.Int64
 
 	// Reverse close guards, under mu.
 	retireCloses []time.Time // edge retire-closes in the churn window
@@ -238,7 +238,8 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 		logf = func(string, ...any) {}
 	}
 	m := &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf,
-		ap: newAutopilot(min, max, perLink), drainIdle: drainIdleDefault, growable: true}
+		ap: newAutopilot(min, max, perLink), growable: true}
+	m.drainIdle.Store(int64(drainIdleDefault))
 	m.target.Store(int32(warmSize(min, max)))
 	return m
 }
@@ -249,7 +250,7 @@ func (m *LinkManager) SetDrainIdle(d time.Duration) {
 	if d < 0 {
 		d = 0
 	}
-	m.drainIdle = d
+	m.drainIdle.Store(int64(d))
 }
 
 func (m *LinkManager) now() time.Time {
@@ -610,6 +611,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 // found to redial what is retired or cannot take pool control at all.
 func (m *LinkManager) drainTick() {
 	now := m.now()
+	drainIdle := time.Duration(m.drainIdle.Load())
 	m.mu.Lock()
 	guard := true
 	if m.accept {
@@ -635,7 +637,7 @@ func (m *LinkManager) drainTick() {
 			continue
 		}
 		kept = append(kept, ml)
-		if m.drainIdle > 0 && ml.open > 0 && ml.reclaiming.CompareAndSwap(false, true) {
+		if drainIdle > 0 && ml.open > 0 && ml.reclaiming.CompareAndSwap(false, true) {
 			reclaim = append(reclaim, ml)
 		}
 		if age := now.Sub(ml.retireSince); age >= heldLogFirst && (ml.heldLogAt.IsZero() || now.Sub(ml.heldLogAt) >= heldLogEvery) {
@@ -645,6 +647,13 @@ func (m *LinkManager) drainTick() {
 	}
 	m.links = kept
 	if m.accept {
+		kept := m.retireCloses[:0]
+		for _, c := range m.retireCloses {
+			if now.Sub(c) <= churnWindow {
+				kept = append(kept, c)
+			}
+		}
+		m.retireCloses = kept
 		for range closing {
 			m.retireCloses = append(m.retireCloses, now)
 		}
@@ -666,7 +675,7 @@ func (m *LinkManager) drainTick() {
 		}(ml.link)
 	}
 	for _, ml := range reclaim {
-		go m.reclaimIdle(ml, now)
+		go m.reclaimIdle(ml, now, drainIdle)
 	}
 	for _, h := range held {
 		m.log("mtcp: %s", h)
@@ -674,7 +683,7 @@ func (m *LinkManager) drainTick() {
 	if n := m.reclaimed.Load(); n > 0 && now.Sub(m.reclaimLogAt) >= time.Minute {
 		m.reclaimed.Add(-n)
 		m.reclaimLogAt = now
-		m.log("mtcp: closed %d connection(s) idle for over %s on retiring links", n, fmtDur(m.drainIdle))
+		m.log("mtcp: closed %d connection(s) idle for over %s on retiring links", n, fmtDur(drainIdle))
 	}
 }
 
@@ -682,13 +691,13 @@ func (m *LinkManager) drainTick() {
 // not moved a byte for drainIdle. A connection that moves anything between
 // being chosen and being closed is spared. Closing a stream can block, so this
 // runs in its own goroutine, one per link at a time.
-func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time) {
+func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Duration) {
 	defer ml.reclaiming.Store(false)
 	ir, ok := ml.link.(idleReclaimer)
 	if !ok {
 		return
 	}
-	for i, c := range ir.idleStreams(now, m.drainIdle, idleReclaimMax) {
+	for i, c := range ir.idleStreams(now, idle, idleReclaimMax) {
 		if i > 0 {
 			time.Sleep(closeJitter())
 		}
@@ -974,7 +983,7 @@ func (m *LinkManager) sampleHealth() {
 		}
 	}
 	m.lastSampleAt = now
-	recentWin := m.drainIdle
+	recentWin := time.Duration(m.drainIdle.Load())
 	if recentWin <= 0 {
 		recentWin = drainIdleDefault
 	}

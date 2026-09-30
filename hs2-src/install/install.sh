@@ -972,17 +972,25 @@ tm_links(){
 }
 
 # tm_pattern CFG -> a live one-line description of the adaptive parallel-link
-# pattern from the status file, e.g. "8→10 links (probing, 2–32) · 40 users ·
-# 42.5 Mbit/s". Empty when there is no fresh status (older binary or not up).
+# pattern from the status file, e.g. "7 links (5 serving) (shrinking, 2–32) ·
+# 251 connections, 18 active · 6.1 Mbit/s · 1 link at its limit". Empty when
+# there is no fresh status (older binary or not up).
 tm_pattern(){
   local sf; sf=$(status_path "$1")
   status_fresh "$sf" || return 0
-  local links target min max users mbit phase sat out
+  local links target min max users mbit phase sat serving flowing pressed out
   links=$(jraw "$sf" links); target=$(jraw "$sf" target)
   min=$(jraw "$sf" min); max=$(jraw "$sf" max)
   users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
   phase=$(jget "$sf" phase); sat=$(jraw "$sf" sat)
-  if [ -n "$target" ] && [ "$target" != "$links" ] && [ "$target" != 0 ]; then
+  serving=$(jraw "$sf" serving); flowing=$(jraw "$sf" flowing); pressed=$(jraw "$sf" pressed)
+  if [ -n "$serving" ]; then
+    # Newer daemon: the target counts serving links; retiring ones close
+    # by themselves once their connections end.
+    out="${links} links"
+    [ "$serving" != "$links" ] && out="$out (${serving} serving)"
+    [ -n "$target" ] && [ "$target" != "$serving" ] && [ "$target" != 0 ] && out="$out → ${target}"
+  elif [ -n "$target" ] && [ "$target" != "$links" ] && [ "$target" != 0 ]; then
     out="${links}→${target} links"
   else
     out="${links} links"
@@ -992,9 +1000,16 @@ tm_pattern(){
   elif [ -n "$phase" ]; then
     out="$out (${phase})"
   fi
-  [ -n "$users" ] && [ "$users" != 0 ] && out="$out · ${users} users"
+  if [ -n "$users" ] && [ "$users" != 0 ]; then
+    if [ -n "$flowing" ]; then out="$out · ${users} connections, ${flowing} active"
+    else out="$out · ${users} users"; fi
+  fi
   [ -n "$mbit" ] && [ "$mbit" != 0 ] && out="$out · ${mbit} Mbit/s"
-  [ "$sat" = true ] && out="$out · saturated"
+  if [ -n "$pressed" ] && [ "$pressed" != 0 ]; then
+    if [ "$pressed" = 1 ]; then out="$out · 1 link at its limit"; else out="$out · ${pressed} links at their limit"; fi
+  elif [ -z "$serving" ] && [ "$sat" = true ]; then
+    out="$out · saturated"
+  fi
   echo "$out"
 }
 # Peers connected to a listening tunnel (who is actually on the other end).
@@ -1102,27 +1117,48 @@ tm_monitor(){
     if [ "$st" != running ]; then
       say " (not running)"
     elif status_fresh "$sf"; then
-      local links target min max users mbit phase sat
+      local links target min max users mbit phase sat serving retiring held heldact flowing pressed capm reason xstats
       links=$(jraw "$sf" links); target=$(jraw "$sf" target)
       min=$(jraw "$sf" min); max=$(jraw "$sf" max)
       users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
       phase=$(jget "$sf" phase); sat=$(jraw "$sf" sat)
+      serving=$(jraw "$sf" serving); retiring=$(jraw "$sf" retiring)
+      held=$(jraw "$sf" held_by); heldact=$(jraw "$sf" held_active)
+      flowing=$(jraw "$sf" flowing); pressed=$(jraw "$sf" pressed); capm=$(jraw "$sf" cap_mbit)
+      reason=$(jget "$sf" reason); xstats=$(jget "$sf" exit_stats)
       local bar="" i=0
-      # A little gauge of live/target links inside the min–max envelope.
+      # A little gauge inside the min–max envelope: serving links (█),
+      # retiring links still up (▓), links wanted but not up yet (▒).
       if [ -n "$max" ] && [ "$max" != 0 ]; then
+        local sv=${serving:-$links} rt=${retiring:-0}
         while [ "$i" -lt "$max" ]; do
-          if [ "$i" -lt "${links:-0}" ]; then bar="$bar${C_G}█${C_0}"
+          if [ "$i" -lt "$sv" ]; then bar="$bar${C_G}█${C_0}"
+          elif [ "$i" -lt $((sv+rt)) ]; then bar="$bar${C_D}▓${C_0}"
           elif [ "$i" -lt "${target:-0}" ]; then bar="$bar${C_Y}▒${C_0}"
           else bar="$bar${C_D}·${C_0}"; fi
           i=$((i+1))
         done
-        say " Links:   ${C_B}${links}${C_0} up$([ -n "$target" ] && [ "$target" != "$links" ] && echo " → ${target} target") · range ${min}–${max}"
+        if [ -n "$serving" ]; then
+          say " Links:   ${C_B}${links}${C_0} up = ${serving} serving$([ "${retiring:-0}" != 0 ] && echo " + ${retiring} retiring")$([ -n "$target" ] && [ "$target" != "$serving" ] && echo " · target ${target}") · range ${min}–${max}"
+        else
+          say " Links:   ${C_B}${links}${C_0} up$([ -n "$target" ] && [ "$target" != "$links" ] && echo " → ${target} target") · range ${min}–${max}"
+        fi
         say "          [$bar]"
-        say " Mode:    ${phase:-steady}$([ "$sat" = true ] && echo " · saturated (a bigger pattern may help)")"
+        if [ -n "$pressed" ] && [ "$pressed" != 0 ]; then
+          say " Mode:    ${phase:-steady} · ${pressed} link(s) at their limit$([ -n "$capm" ] && echo " (~${capm} Mbit/s each)")"
+        else
+          say " Mode:    ${phase:-steady}$([ -z "$serving" ] && [ "$sat" = true ] && echo " · saturated (a bigger pattern may help)")"
+        fi
+        [ -n "$reason" ] && say " Why:     ${reason}"
+        [ "${retiring:-0}" != 0 ] && say " Retiring: ${retiring} link(s) take no new connections and close when theirs end$([ -n "$held" ] && echo " (held by ${held} open$([ -n "$heldact" ] && echo ", ${heldact} active"))")"
+        [ -n "$xstats" ] && [ "$xstats" != ok ] && say " Exit:    link stats: ${xstats}"
       else
         say " Links:   ${C_B}${links}${C_0} up (${phase:-running})"
       fi
-      [ -n "$users" ] && say " Users:   ${users} active connections"
+      if [ -n "$users" ]; then
+        if [ -n "$flowing" ]; then say " Users:   ${users} open connections, ${flowing} active"
+        else say " Users:   ${users} active connections"; fi
+      fi
       [ -n "$mbit" ] && [ "$mbit" != 0 ] && say " Speed:   ${mbit} Mbit/s (tunnel goodput)"
       local peers; peers=$(tm_peers "$cfg")
       [ -n "$peers" ] && say " Peer:    $peers"

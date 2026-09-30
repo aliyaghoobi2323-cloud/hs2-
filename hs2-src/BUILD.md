@@ -39,27 +39,47 @@ The daemon also reacts to signals: SIGHUP hot-reloads the TLS certificate
 
 ## Adaptive link pool (autopilot)
 
-`engine/autopilot.go` is a pure controller that sizes the parallel-link pool
-between `min_links` and `max_links` (installer default 2–32). Each health tick
-it is fed a sample (users, live links, aggregate goodput, saturation) and
-returns the desired link count; `engine/linkmanager.go` (direct edge) and
-`engine/exit_pool.go` (reverse exit) are the actuators. Two pressures set the
-size: the connection floor `ceil(users/per_link)`, and a throughput probe that
-grows a link only while the links are saturated and an added link raises
-goodput, settling at the path ceiling and re-probing as demand/the path change.
-The pool starts warm (`warmStartLinks`) so a startup burst spreads at once.
+`engine/autopilot.go` is a pure controller (no locks, sockets or clock) that
+decides how many links should be **serving** — taking new connections —
+between `min_links` and `max_links` (installer default 2–32). Links beyond that
+are **retiring**: no new connections, closed once empty. Each 2 s health tick
+`LinkManager.sampleHealth` feeds it per-link throughput, active flows (a
+per-stream rate EWMA; idle connections never count) and pressure (the link's
+sender blocked by the network: the edge's own writer + TCP_INFO for uploads,
+the exit's for downloads, reported over the optional `kindStats` stream).
 
-In reverse, only the exit dials, so the edge sends its target down a
-pool-control stream (`kindPool`); the exit's dial pool follows it. Additive and
-backward-compatible — an old peer just closes the stream. Growing is immediate.
-Shrinking never cuts a connection: the exit cannot see which of its links carry
-users, so it never closes one itself; the edge closes one link with **no**
-users, and the exit retires that slot instead of redialing it. Both ends start
-at the same warm size, so a restart causes no churn.
+- **Floor:** `ceil(active flows / per_link)`.
+- **Grow:** only when pressed links leave no free link for new flows; a probe
+  adds ~25% (50% while probes keep succeeding), arms once the links exist, and
+  is kept only if the new links' traffic *added* to the total. A full path
+  fails the probe (exponential backoff, capped at 8 min); a probe that no new
+  flow reached keeps its links as spares.
+- **Shrink:** after 60 s below target, step down every 30 s toward what the
+  last minute needed (active flows, pressure, peak throughput at 70% of the
+  measured per-link capacity), capped by the links the active flows can use.
+  A shrink that immediately leaves links short is undone by un-retiring
+  (no dials) and held (10 min, doubling). Nothing that holds the size up is
+  latched, so an idle pool always returns to `min_links`.
 
-The controller is covered by a per-connection-throttling simulator in
-`engine/autopilot_test.go`; the reverse target propagation end-to-end in
-`engine/stream_reverse_test.go` (`TestReverseExitPoolFollowsEdgeTarget`).
+`engine/linkmanager.go` is the actuator: un-retire before dialing, retire the
+links that will empty soonest, close empty retiring links (asynchronously, 2
+per tick), and close connections idle for `drain_idle_sec` on retiring links.
+
+In reverse, only the exit dials, so the edge publishes its serving target down
+a pool-control stream (`kindPool`); the exit dials only while it has fewer
+slots than the target and retires a slot whose link the edge closed while it
+holds more (`exit_pool.go`). A link that arrives while the edge already has its
+target is born retiring. Close guards keep an exit that has not yet learned a
+lower target, redials what is retired (its `min_links` above the edge's
+target) or predates pool control from churning links. All additions are
+backward compatible: an older peer closes the unknown streams and the pool
+falls back to what that peer supports.
+
+Tests: a flow-level simulator of the whole loop (`engine/autopilot_sim_test.go`,
+scenarios in `engine/autopilot_test.go`), actuator and wire unit tests
+(`engine/pool_v2_test.go`, `engine/stats_test.go`), and real-TLS integration
+tests including mixed versions (`engine/stream_reverse_test.go`,
+`engine/stream_v2_test.go`).
 
 ## Kernel tuning (`tune/`)
 

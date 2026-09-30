@@ -98,6 +98,7 @@ type linkMeter struct {
 	// peer holds the latest record received from the exit.
 	statsPoll  chan struct{}
 	statsState atomic.Int32
+	statsSeq   atomic.Uint32
 	peer       atomic.Pointer[statsRec]
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)

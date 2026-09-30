@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -141,5 +142,34 @@ func TestCheckCertificate(t *testing.T) {
 	errs, _ = checkConfig([]byte(strings.Replace(string(cfg(c, k)), `"8443"`, `"2082"`, 1)), localIs(), time.Now())
 	if !strings.Contains(strings.Join(errs, "|"), "tunnel port") {
 		t.Errorf("port clash not reported: %v", errs)
+	}
+}
+
+// drain_idle_sec: accepted when unset, 0 (never) or >= 300; negative is an
+// error; below xray's 300 s connIdle is a warning.
+func TestCheckDrainIdle(t *testing.T) {
+	cfg := func(extra string) []byte {
+		return []byte(`{"mode": "dial", "carrier": "mtcp", "reverse": false, "addr": "91.107.166.13:2096",
+			"sni": "t.example", "shared_key": "` + testKey + `", "forward_ports": "8443"` + extra + `}`)
+	}
+	for _, ok := range []string{``, `, "drain_idle_sec": 0`, `, "drain_idle_sec": 310`, `, "drain_idle_sec": 3600`} {
+		if errs, warns := checkConfig(cfg(ok), localIs(), time.Now()); len(errs)+len(warns) != 0 {
+			t.Errorf("%q: errs=%v warns=%v", ok, errs, warns)
+		}
+	}
+	if errs, _ := checkConfig(cfg(`, "drain_idle_sec": -1`), localIs(), time.Now()); !strings.Contains(strings.Join(errs, "|"), "drain_idle_sec") {
+		t.Errorf("negative drain_idle_sec not rejected: %v", errs)
+	}
+	if _, warns := checkConfig(cfg(`, "drain_idle_sec": 60`), localIs(), time.Now()); !strings.Contains(strings.Join(warns, "|"), "connIdle") {
+		t.Errorf("short drain_idle_sec not warned: %v", warns)
+	}
+	for in, want := range map[string]time.Duration{``: 0, `, "drain_idle_sec": 0`: -1, `, "drain_idle_sec": 400`: 400 * time.Second} {
+		var fc fileConfig
+		if err := json.Unmarshal(cfg(in), &fc); err != nil {
+			t.Fatal(err)
+		}
+		if got := drainIdle(fc); got != want {
+			t.Errorf("drainIdle(%q) = %s, want %s", in, got, want)
+		}
 	}
 }

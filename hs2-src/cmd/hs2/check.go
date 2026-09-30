@@ -208,6 +208,14 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			} else if fc.MinLinks > 0 && fc.MaxLinks > 0 && fc.MinLinks > fc.MaxLinks {
 				bad(`"min_links" (%d) is larger than "max_links" (%d)`, fc.MinLinks, fc.MaxLinks)
 			}
+			if d := fc.DrainIdleSec; d != nil {
+				switch {
+				case *d < 0:
+					bad(`"drain_idle_sec" cannot be negative (0 = never close idle connections on retiring links)`)
+				case *d > 0 && *d < 300:
+					warn(`"drain_idle_sec" %d is below xray's default connIdle (300 s): connections the panel would still keep may be closed when the pool shrinks`, *d)
+				}
+			}
 		} else if carrier == "mtcp" || carrier == "tls" {
 			if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
 				bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)

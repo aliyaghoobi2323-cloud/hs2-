@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -88,26 +88,47 @@ func parseStatsRec(b []byte) statsRec {
 	}
 }
 
-// statsUnsupportedOnce logs the older-exit fallback once per process.
-var statsUnsupportedOnce sync.Once
+// statsOldLogged makes the older-exit fallback log once per process.
+var statsOldLogged atomic.Bool
 
-// openStats runs the EDGE side for one link: handshake, then one poll per
-// signal on mtr.statsPoll (the sampler signals only when the link moved data,
-// so an idle link carries no extra timing beat), with a reader goroutine that
-// stores each record in mtr.peer. It returns when the link or ctx ends.
+// statsReopenAfter: a stats stream that ended while its link is still up
+// (a reply stalled past its deadline on a congested link) is reopened after
+// this long; until then the link's download pressure is unknown.
+var statsReopenAfter = 5 * time.Second
+
+// openStats runs the EDGE side for one link until the link or ctx ends: it
+// opens the stats stream and keeps it open, reopening it if it ends while the
+// link is up, so one stalled reply never costs a link its download signal for
+// good. It stops for good only when the exit does not speak kindStats.
 func openStats(ctx context.Context, l Link, logf func(string, ...any)) {
 	mtr := linkMeterOf(l)
 	ro, ok := l.(rawStreamOpener)
 	if mtr == nil || !ok || mtr.statsPoll == nil {
 		return
 	}
+	for ctx.Err() == nil && l.Alive() {
+		if !runStats(ctx, l, ro, mtr, logf) {
+			return
+		}
+		mtr.statsState.Store(statsPending) // unknown until the stream is back
+		if !sleepCtx(ctx, statsReopenAfter) {
+			return
+		}
+	}
+}
+
+// runStats runs one stats stream: handshake, then one poll per signal on
+// mtr.statsPoll (the sampler signals only when the link moved data, so an idle
+// link carries no extra timing beat), with a reader goroutine that stores each
+// record in mtr.peer. It reports false when the exit does not support stats.
+func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, logf func(string, ...any)) bool {
 	st, err := ro.OpenRawStream()
 	if err != nil {
-		return
+		return true
 	}
 	defer st.Close()
 	if _, err := st.Write([]byte{kindStats, statsVer}); err != nil {
-		return
+		return true
 	}
 	st.SetReadDeadline(time.Now().Add(statsHandshakeTimeout))
 	var hdr [3]byte
@@ -116,15 +137,14 @@ func openStats(ctx context.Context, l Link, logf func(string, ...any)) {
 		// same read. Tell them apart by whether the link is still up a moment
 		// later, so a link lost during the handshake is not misreported.
 		time.Sleep(200 * time.Millisecond)
-		if l.Alive() {
-			mtr.statsState.Store(statsUnsupported)
-			statsUnsupportedOnce.Do(func() {
-				if logf != nil {
-					logf("mtcp: the other server does not report link stats (older hs2) — download pressure unknown; sizing by activity and upload pressure until it is upgraded")
-				}
-			})
+		if !l.Alive() || ctx.Err() != nil {
+			return true
 		}
-		return
+		mtr.statsState.Store(statsUnsupported)
+		if statsOldLogged.CompareAndSwap(false, true) && logf != nil {
+			logf("mtcp: the other server does not report link stats (older hs2) — download pressure unknown; sizing by activity and upload pressure until it is upgraded")
+		}
+		return false
 	}
 	st.SetReadDeadline(time.Time{})
 	recLen := int(hdr[1])
@@ -143,21 +163,21 @@ func openStats(ctx context.Context, l Link, logf func(string, ...any)) {
 			mtr.peer.Store(&r)
 		}
 	}()
-	var seq uint32
 	var p [4]byte
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return true
 		case <-done:
-			return
+			return true
 		case <-mtr.statsPoll:
 		}
-		seq++
-		binary.BigEndian.PutUint32(p[:], seq)
+		// Sequence numbers run on across reopened streams, so a record from a
+		// new stream is never mistaken for one already consumed.
+		binary.BigEndian.PutUint32(p[:], mtr.statsSeq.Add(1))
 		st.SetWriteDeadline(time.Now().Add(statsHandshakeTimeout))
 		if _, err := st.Write(p[:]); err != nil {
-			return
+			return true
 		}
 	}
 }

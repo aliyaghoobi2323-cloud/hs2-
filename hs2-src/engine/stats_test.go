@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -120,7 +119,7 @@ func TestStatsFallbackPreviousExit(t *testing.T) {
 	// The fallback line is logged once per process; this test owns it. Every
 	// openStats goroutine of the tests in this file is joined before its test
 	// ends, so resetting it here races with none of them.
-	statsUnsupportedOnce = sync.Once{}
+	statsOldLogged.Store(false)
 	lg := &v2Log{}
 	ctx := context.Background()
 	for i := 0; i < 2; i++ { // a pool of two links to the older exit
@@ -451,5 +450,51 @@ func TestSampleHealthPollsOnlyBusyLinks(t *testing.T) {
 	f.m.statsState.Store(statsUnsupported)
 	if n := tick(1<<20, 1<<20); n != 0 {
 		t.Fatal("polled a link whose exit does not report stats")
+	}
+}
+
+// A stats stream that ends while its link stays up (an exit reply stalled
+// past its write deadline) is not lost for good: the link's download pressure
+// reads unknown until the edge has reopened the stream, then it works again.
+func TestStatsStreamReopensAfterStall(t *testing.T) {
+	old := statsReopenAfter
+	statsReopenAfter = 100 * time.Millisecond
+	t.Cleanup(func() { statsReopenAfter = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var opened atomic.Int32
+	p := newStatsPair(t, ctx, nil, func(ctx context.Context, srv *smux.Session, st *smux.Stream, mtr *linkMeter) {
+		var kind [1]byte
+		if _, err := io.ReadFull(st, kind[:]); err != nil || kind[0] != kindStats {
+			st.Close()
+			return
+		}
+		if opened.Add(1) == 1 {
+			// First stream: answer the handshake and one poll, then give up
+			// as a stalled exit does.
+			var ver [1]byte
+			io.ReadFull(st, ver[:])
+			st.Write([]byte{statsVer, statsRecLen, 3})
+			var q [4]byte
+			io.ReadFull(st, q[:])
+			rec := make([]byte, statsRecLen)
+			putStatsRec(rec, statsRec{seq: binary.BigEndian.Uint32(q[:]), mono: 1})
+			st.Write(rec)
+			st.Close()
+			return
+		}
+		serveStats(ctx, st, nil, mtr)
+	})
+	p.startStats(t, ctx, nil)
+	waitStatsState(t, p.edge.m, statsOK, 5*time.Second)
+	pollRecord(t, p.edge.m, 1)
+	v2Wait(t, 5*time.Second, "a second stats stream", func() bool { return opened.Load() >= 2 })
+	waitStatsState(t, p.edge.m, statsOK, 5*time.Second)
+	r := pollRecord(t, p.edge.m, 2) // sequence numbers continue across streams
+	if r.mono == 1 || r.seq != 2 {
+		t.Fatalf("no fresh record from the reopened stream: %+v", r)
+	}
+	if p.edge.sess.IsClosed() {
+		t.Fatal("the link was closed")
 	}
 }

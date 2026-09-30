@@ -1064,7 +1064,7 @@ func TestReclaimSparesStreamThatWakes(t *testing.T) {
 	ml := addManaged(m, wl)
 	ml.retiring = true
 	ml.reclaiming.Store(true) // as drainTick's CAS leaves it
-	m.reclaimIdle(ml, time.Now().Add(time.Hour))
+	m.reclaimIdle(ml, time.Now().Add(time.Hour), drainIdleDefault)
 	if ml.reclaiming.Load() {
 		t.Fatal("reclaimIdle did not release the per-link reclaim flag")
 	}

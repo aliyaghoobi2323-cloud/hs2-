@@ -40,11 +40,26 @@ type liveStatus struct {
 	Max       int     `json:"max"`
 	Users     int     `json:"users"`     // active user connections
 	Mbit      float64 `json:"mbit"`      // aggregate goodput, Mbit/s
-	Phase     string  `json:"phase"`     // calibrating/probing/steady/shrinking/following/listening
-	Sat       bool    `json:"sat"`       // links pushing against a limit
+	Phase     string  `json:"phase"`     // steady/scaling/probing/holding/shrinking; exit: following/listening
+	Sat       bool    `json:"sat"`       // some serving link is at its limit
 	CertDays  int     `json:"cert_days"` // days until the TLS cert expires (-1 if none/unknown)
 	PID       int     `json:"pid"`       // the daemon's PID (staleness check)
 	Updated   int64   `json:"updated"`   // unix seconds of this write
+
+	// The edge's pool detail (absent on the exit side). "target" counts
+	// SERVING links; "links" also includes retiring ones, which take no new
+	// connections and close once theirs have ended.
+	Serving    *int    `json:"serving,omitempty"`
+	Retiring   int     `json:"retiring,omitempty"`
+	HeldBy     int     `json:"held_by,omitempty"`     // open connections still on retiring links
+	HeldActive int     `json:"held_active,omitempty"` // ... of which moving data
+	Flowing    int     `json:"flowing,omitempty"`     // connections actively moving data
+	Pressed    int     `json:"pressed,omitempty"`     // serving links at their limit
+	CapMbit    float64 `json:"cap_mbit,omitempty"`    // measured per-link limit (absent: none seen)
+	PeakMbit   float64 `json:"peak_mbit,omitempty"`   // last minute's peak throughput
+	Reason     string  `json:"reason,omitempty"`      // why the pattern is this size
+	NextProbeS int     `json:"next_probe_s,omitempty"`
+	ExitStats  string  `json:"exit_stats,omitempty"` // ok / partial / older exit: ...
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -78,6 +93,14 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		ls.Users, ls.Mbit, ls.Sat = s.Users, round1(s.MbitPerS), s.Saturated
 		if s.Phase != "" {
 			ls.Phase = s.Phase
+		}
+		if s.Max > 0 && s.Phase != "following" && s.Phase != "listening" { // the edge's pool
+			serving := s.Serving
+			ls.Serving = &serving
+			ls.Retiring, ls.HeldBy, ls.HeldActive = s.Retiring, s.HeldBy, s.HeldActive
+			ls.Flowing, ls.Pressed = s.Flowing, s.Pressed
+			ls.CapMbit, ls.PeakMbit = round1(s.CapMbit), round1(s.PeakMbit)
+			ls.Reason, ls.NextProbeS, ls.ExitStats = s.Reason, s.NextProbeS, s.ExitStats
 		}
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
@@ -155,8 +178,14 @@ func printStatus(path string) {
 	fmt.Printf("hs2 — %s · %s · %s%s\n", ls.Role, ls.Dir, ls.Transport, stale)
 	fmt.Printf("  %s\n", ls.Endpoint)
 	fmt.Printf("  links:      %s\n", patternLine(ls))
+	if w := whyLine(ls); w != "" {
+		fmt.Printf("  why:        %s\n", w)
+	}
 	if ls.Users > 0 || ls.Mbit > 0 {
-		fmt.Printf("  traffic:    %d user connections · %.1f Mbit/s%s\n", ls.Users, ls.Mbit, satLabel(ls.Sat))
+		fmt.Printf("  traffic:    %s\n", trafficLine(ls))
+	}
+	if ls.ExitStats != "" && ls.ExitStats != "ok" {
+		fmt.Printf("  exit stats: %s\n", ls.ExitStats)
 	}
 	if ls.CertDays >= 0 {
 		fmt.Printf("  certificate: valid for %d more day(s)%s\n", ls.CertDays, certWarn(ls.CertDays))
@@ -171,24 +200,66 @@ func certWarn(days int) string {
 }
 
 // patternLine renders the live parallel-link pattern, e.g.
-// "8 up / 10 target (probing, range 2–32)".
+// "7 up = 5 serving + 2 retiring / target 5 (shrinking, range 2–32)".
 func patternLine(ls liveStatus) string {
 	if ls.Max == 0 { // exit side with no envelope of its own
 		return fmt.Sprintf("%d up (%s)", ls.Links, ls.Phase)
 	}
 	s := fmt.Sprintf("%d up", ls.Links)
-	if ls.Target != ls.Links {
-		s += fmt.Sprintf(" / %d target", ls.Target)
+	if ls.Serving != nil && ls.Retiring > 0 {
+		s += fmt.Sprintf(" = %d serving + %d retiring", *ls.Serving, ls.Retiring)
+	}
+	serving := ls.Links
+	if ls.Serving != nil {
+		serving = *ls.Serving
+	}
+	if ls.Target != serving {
+		s += fmt.Sprintf(" / target %d", ls.Target)
 	}
 	s += fmt.Sprintf(" (%s, range %d–%d)", ls.Phase, ls.Min, ls.Max)
 	return s
 }
 
-func satLabel(b bool) string {
-	if b {
-		return " · saturated (a bigger pattern may help)"
+// whyLine explains the size: the controller's reason, plus what keeps any
+// retiring links up.
+func whyLine(ls liveStatus) string {
+	w := ls.Reason
+	if ls.Retiring > 0 {
+		held := fmt.Sprintf("%d retiring link(s) close as their connections end", ls.Retiring)
+		if ls.HeldBy > 0 {
+			held += fmt.Sprintf(" (held by %d open", ls.HeldBy)
+			if ls.HeldActive > 0 {
+				held += fmt.Sprintf(", %d active", ls.HeldActive)
+			}
+			held += ")"
+		}
+		if w != "" {
+			w += "; "
+		}
+		w += held
 	}
-	return ""
+	return w
+}
+
+// trafficLine renders "251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit".
+func trafficLine(ls liveStatus) string {
+	s := fmt.Sprintf("%d connections", ls.Users)
+	if ls.Flowing > 0 {
+		s += fmt.Sprintf(" (%d active)", ls.Flowing)
+	}
+	s += fmt.Sprintf(" · %.1f Mbit/s", ls.Mbit)
+	switch {
+	case ls.Pressed == 1:
+		s += " · 1 link at its limit"
+	case ls.Pressed > 1:
+		s += fmt.Sprintf(" · %d links at their limit", ls.Pressed)
+	case ls.Serving == nil && ls.Sat: // an older daemon's file
+		s += " · links at their limit"
+	}
+	if ls.CapMbit > 0 {
+		s += fmt.Sprintf(" (~%.1f Mbit/s each)", ls.CapMbit)
+	}
+	return s
 }
 
 func round1(f float64) float64 { return float64(int(f*10+0.5)) / 10 }

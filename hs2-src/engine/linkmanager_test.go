@@ -90,12 +90,26 @@ func TestPickSkipsRetiringDegradedPressed(t *testing.T) {
 	)
 	retiring, degraded, draining, pressed, plain := ls[0], ls[1], ls[2], ls[3], ls[4]
 	for i := 0; i < 50; i++ {
+		plain.picks, plain.pickHist = 0, [pickWindow - 1]int{} // one pick per sample window
 		l, rel, ok := m.Pick()
 		if !ok || l != plain.link {
 			t.Fatalf("pick %d: got link %v, want the only unpressed serving link", i, l)
 		}
 		rel()
 	}
+	// Within one pressure-measurement window an unpressed link takes at most
+	// per_link/2 new connections; after that it competes as if pressed (here
+	// it loses to the pressed link on load), so a burst cannot pile onto it.
+	plain.picks, plain.pickHist = 0, [pickWindow - 1]int{}
+	for i := 0; i < 4; i++ {
+		if l, _, _ := m.Pick(); l != plain.link {
+			t.Fatalf("burst pick %d: want the unpressed link", i)
+		}
+	}
+	if l, _, _ := m.Pick(); l != pressed.link {
+		t.Fatal("5th pick of a burst: the unpressed link should count as pressed by now")
+	}
+	plain.picks, plain.pickHist = 0, [pickWindow - 1]int{}
 	kill := func(ml *managedLink) { ml.link.(*fakeLink).alive = false }
 	kill(plain)
 	if l, _, _ := m.Pick(); l != pressed.link {

@@ -750,7 +750,7 @@ const childEnv = "HS2_ENGINE_TEST_CHILD"
 
 // inChild reports whether this is the fresh process running t; otherwise it
 // re-runs t alone in a fresh process, fails t if that run fails, and returns
-// false. Used where a process-wide once (statsUnsupportedOnce) must be unused.
+// false. Used where a process-wide once-log (statsOldLogged) must be unused.
 func inChild(t *testing.T) bool {
 	t.Helper()
 	if os.Getenv(childEnv) == t.Name() {
