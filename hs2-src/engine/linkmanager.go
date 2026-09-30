@@ -201,6 +201,7 @@ type managedLink struct {
 	upHist       uint8     // last 3 raw upload-pressure samples
 	dnHist       uint8     // last 3 raw download-pressure samples (exit records)
 	pressed      bool      // serving and its sender is blocked by the path
+	suspect      bool      // nothing received for suspectAfter (see serving)
 	rates        [5]float64
 	doms         [3]float64
 	nSamples     int
@@ -218,14 +219,25 @@ type managedLink struct {
 	lastRecAt    time.Time
 	poolRefused  atomic.Bool // the exit refused kindPool on this link (older exit)
 	bornSpare    bool        // reverse: arrived while the pool already had its target
+	lastRx       time.Time   // when the link last received anything (keepalives included)
+	rxSeen       bool        // it has received something at all
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
 }
 
 // serving reports whether the link takes new users. Caller holds m.mu.
 func (ml *managedLink) serving() bool {
-	return !ml.retiring && !ml.degraded && !ml.draining && ml.link.Alive()
+	return !ml.retiring && !ml.degraded && !ml.draining && ml.link.Alive() && !ml.suspect
 }
+
+// suspectAfter: a link that has received nothing at all — not even the
+// other side's smux keepalive (every 4–8 s) or a control reply (every 3 s) —
+// for this long has probably died on the far side first (a NAT rebinding in
+// front of the exit, say); this side's TCP only gives up after 20 s or more.
+// A suspect link takes no new users and does not count as serving, so the
+// exit's replacement is used at once; it is serving again the moment
+// anything arrives.
+const suspectAfter = 12 * time.Second
 
 // newManaged wraps a Link with a managed entry, capturing its meter (if any).
 func (m *LinkManager) newManaged(l Link, id int, now time.Time) *managedLink {
@@ -401,7 +413,7 @@ func (m *LinkManager) aliveLocked() int {
 func (m *LinkManager) countsLocked() (serving, retiring int) {
 	for _, ml := range m.links {
 		switch {
-		case !ml.link.Alive() || ml.degraded || ml.draining:
+		case !ml.link.Alive() || ml.degraded || ml.draining || ml.suspect:
 		case ml.retiring:
 			retiring++
 		default:
@@ -526,7 +538,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 	var serving, retiring []*managedLink
 	for _, ml := range m.links {
 		switch {
-		case !ml.link.Alive() || ml.degraded || ml.draining:
+		case !ml.link.Alive() || ml.degraded || ml.draining || ml.suspect:
 		case ml.retiring:
 			retiring = append(retiring, ml)
 		default:
@@ -933,11 +945,11 @@ func (m *LinkManager) pickLocked() *managedLink {
 			}
 			switch tier {
 			case 0:
-				if ml.retiring || ml.degraded || ml.draining {
+				if ml.retiring || ml.degraded || ml.draining || ml.suspect {
 					continue
 				}
 			case 1:
-				if ml.degraded || ml.draining {
+				if ml.degraded || ml.draining || ml.suspect {
 					continue
 				}
 			}
@@ -1064,6 +1076,16 @@ func (m *LinkManager) sampleHealth() {
 				nOK++
 			case statsUnsupported:
 				nOld++
+			}
+		}
+		if ml.mtr != nil {
+			if o.rd != ml.prevRd || !ml.sampled && o.rd > 0 {
+				ml.lastRx, ml.rxSeen = now, true
+			}
+			wasSuspect := ml.suspect
+			ml.suspect = ml.rxSeen && now.Sub(ml.lastRx) >= suspectAfter
+			if ml.suspect && !wasSuspect {
+				logs = append(logs, fmt.Sprintf("link %d: nothing received for %s — not used for new connections until it answers", ml.id, fmtDur(now.Sub(ml.lastRx))))
 			}
 		}
 		if ml.mtr == nil || !ml.sampled {

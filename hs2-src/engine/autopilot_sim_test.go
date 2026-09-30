@@ -69,6 +69,7 @@ type simLink struct {
 type simCfg struct {
 	min, max, perLink int
 	linkCap, pathCap  float64 // bytes/s; 0 = none
+	pathCV            float64 // per-tick lognormal noise on the path cap (cross traffic)
 	reverse           bool
 	exitDials         bool // reverse: the exit dials the shortfall (false: it never does)
 	statsOK           bool // download pressure visible (false: older exit)
@@ -343,7 +344,7 @@ func (s *sim) allocate() {
 	}
 	pc := math.Inf(1)
 	if s.cfg.pathCap > 0 {
-		pc = s.cfg.pathCap
+		pc = s.cfg.pathCap * s.lognormal(s.cfg.pathCV)
 	}
 	la2 := waterFill(linkDem, pc)
 	s.carried = 0

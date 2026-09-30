@@ -731,8 +731,8 @@ func TestProbeBackoffAndReset(t *testing.T) {
 		}
 		a.decide(smp)
 	}
-	if a.k != 0 || a.next.After(now) {
-		t.Fatalf("after demand rose 2×: k=%d next in %s, want reset", a.k, a.next.Sub(now))
+	if a.k != 0 || a.next.After(now.Add(a.tun.backoffBase)) {
+		t.Fatalf("after demand rose 2×: k=%d next in %s, want reset (next check within %s)", a.k, a.next.Sub(now), a.tun.backoffBase)
 	}
 	// And 30 min after a failure, even without that.
 	b := newAutopilot(2, 32, 8)
@@ -849,5 +849,32 @@ func TestAutopilotNoShrinkRestoreFlap(t *testing.T) {
 	}
 	if changes > 0 || a.T != 12 {
 		t.Fatalf("%d size changes, T=%d; want the pool left at 12", changes, a.T)
+	}
+}
+
+// 5b. A full path whose capacity is noisy (cross traffic: ±20% per tick). A
+// probe can pass by chance, and on a full path every link reads as pressed, so
+// nothing else would take its links back: gains found after a path-full
+// verdict must last a minute, and a path found full again at more links with
+// no more throughput goes back to the smaller size. Over 8 hours the pool must
+// not drift up (the reviewer's rig reached 32).
+func TestSimNoisyFullPathNoDrift(t *testing.T) {
+	d, seeds := 8*time.Hour, uint64(4)
+	if testing.Short() {
+		d, seeds = 2*time.Hour, 2
+	}
+	for seed := uint64(1); seed <= seeds; seed++ {
+		s := newSim(t, simCfg{min: 2, max: 32, reverse: true, exitDials: true, statsOK: true,
+			linkCap: 2 * mbit, pathCap: 8 * mbit, pathCV: 0.2, seed: seed})
+		for i := 0; i < 20; i++ {
+			s.bulk(2e6, 30*time.Hour)
+		}
+		s.run(d)
+		for s.a.pr != nil || s.a.confirm.active {
+			s.step()
+		}
+		if s.a.T > 10 || s.maxT > 17 {
+			t.Fatalf("seed %d: T=%d after %s (max %d); want <= 10 (max <= 17)\n%s", seed, s.a.T, d, s.maxT, s.dump())
+		}
 	}
 }

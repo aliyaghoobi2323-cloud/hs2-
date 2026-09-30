@@ -57,6 +57,8 @@ type autopilot struct {
 	// waitWhy says why the next probe is being waited for (for the monitor).
 	aborts  int
 	waitWhy string
+	confirm apConfirm
+	ceil    apCeil
 	next    time.Time // no new probe before this
 	fail    struct {  // where growth last stopped helping
 		at    time.Time
@@ -117,6 +119,8 @@ type apTunables struct {
 	kResetAfter       time.Duration
 	chainWindow       time.Duration // a success this recent lets the next probe step by half
 	activeRate        float64       // bytes/s: a link below this carries no traffic to judge
+	confirmWin        time.Duration // a gain found after a path-full verdict must last this long
+	ceilTTL           time.Duration // a path-full ceiling not re-confirmed for this long is forgotten
 }
 
 func defaultTunables() apTunables {
@@ -157,6 +161,8 @@ func defaultTunables() apTunables {
 		kResetAfter:       30 * time.Minute,
 		chainWindow:       60 * time.Second,
 		activeRate:        float64(pressMinBytes) / healthTick.Seconds(),
+		confirmWin:        60 * time.Second,
+		ceilTTL:           time.Hour,
 	}
 }
 
@@ -415,15 +421,17 @@ func (a *autopilot) decide(s apSample) apDecision {
 	a.cCap, a.gPeak = cCap, gPeak
 
 	// Backoff resets when demand clearly and steadily outgrew the last ceiling
-	// (re-check now) or long after the last failure. "Steadily": over the last
-	// 10 s, not a peak — a queue draining can burst above the path's rate.
+	// (re-check soon) or long after the last failure. "Steadily": over the last
+	// 20 s, not a peak — a queue draining can burst above the path's rate.
 	if a.k > 0 {
-		gSus, _ := meanVar(a.last(5), func(h apTick) float64 { return h.g })
+		gSus, _ := meanVar(a.last(10), func(h apTick) float64 { return h.g })
 		switch {
+		case a.confirm.active:
+			// a probe's gain is being confirmed: judge that first
 		case gSus > 1.3*a.fail.g || fl5 > int(1.5*float64(a.fail.flows))+2:
 			a.k = 0
-			if a.next.After(now) {
-				a.next = now
+			if a.next.After(now.Add(t.backoffBase)) {
+				a.next = now.Add(t.backoffBase)
 			}
 		case now.Sub(a.fail.at) >= t.kResetAfter:
 			a.k = 0
@@ -434,6 +442,39 @@ func (a *autopilot) decide(s apSample) apDecision {
 		s.flowing, s.open, P, S, mbitps(gPeak))
 	if cCap > 0 {
 		why += fmt.Sprintf(" (one link carries ~%.1f Mbit/s)", mbitps(cCap))
+	}
+
+	// ---- 0 CONFIRM: a gain found after the path was already full must last --
+	if c := &a.confirm; c.active {
+		if a.T != c.to || a.pr != nil {
+			c.active = false // the size moved on for other reasons
+		} else {
+			c.sum += s.G
+			c.sumSq += s.G * s.G
+			c.n++
+			if !now.Before(c.until) {
+				c.active = false
+				g := c.sum / float64(c.n)
+				varC := 0.0
+				if c.n > 1 {
+					varC = max(0, (c.sumSq-float64(c.n)*g*g)/float64(c.n-1))
+				}
+				need := max(c.need, c.gb+2*math.Sqrt(c.varB/float64(max(c.nb, 1))+varC/float64(c.n)))
+				if g < need {
+					a.T = c.from
+					a.chain = 0
+					a.k = c.kPrev + 1
+					a.fail.at, a.fail.g, a.fail.flows = now, max(c.gb, a.gPeak), fl60
+					back := a.backoff()
+					a.next = now.Add(back)
+					a.waitWhy = fmt.Sprintf("more links did not add throughput at ~%.1f Mbit/s (path full)", mbitps(c.gb))
+					return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: the last gain did not last; next check in %s", mbitps(c.gb), fmtDur(back)),
+						fmt.Sprintf("pattern %d → %d links: the gain after the last probe did not last (%.1f Mbit/s over the next minute, %.1f needed) — the path is full; next check in %s",
+							c.to, c.from, mbitps(g), mbitps(need), fmtDur(back)))
+				}
+				a.k = 0
+			}
+		}
 	}
 
 	// ---- 1 FLOOR: enough links for the flows really moving data ----------
@@ -645,11 +686,13 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 	switch {
 	case rNew >= rMin && dG >= need:
 		a.pr = nil
-		a.k = 0
 		a.chain++
 		a.next = now.Add(t.successNext)
 		a.waitWhy = "the last added links are still filling"
 		a.lastGrowAt = now
+		if !a.startConfirm(pr, dG, now) {
+			a.k = 0
+		}
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: the new links added %.1f Mbit/s", a.T, mbitps(dG)),
 			fmt.Sprintf("pattern %d → %d links kept: +%.1f Mbit/s (new links carried %.1f)", pr.from, pr.to, mbitps(dG), mbitps(rNew)))
 	case rNew >= rMin && relieved && n == lastLook && dG > 0 && dG >= t.minGain*pr.gb:
@@ -662,6 +705,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		a.next = now.Add(t.inconclusiveNext)
 		a.waitWhy = "the last added links are kept as headroom"
 		a.lastGrowAt = now
+		a.startConfirm(pr, dG, now)
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no link is short of capacity any more", a.T),
 			fmt.Sprintf("pattern %d → %d links kept as headroom: new links carried %.1f Mbit/s and no link is at its limit any more (total %+.1f)",
 				pr.from, pr.to, mbitps(rNew), mbitps(dG)))
@@ -677,14 +721,28 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		a.chain = 0
 		a.T = pr.from
 		a.k++
-		a.fail.at, a.fail.g, a.fail.flows = now, pr.gb, fl60
-		back := t.backoffBase << (a.k - 1)
-		if back > t.backoffMax || back <= 0 {
-			back = t.backoffMax
-		}
-		back = time.Duration(float64(back) * (1 - t.jitter + 2*t.jitter*a.rnd()))
+		a.fail.at, a.fail.g, a.fail.flows = now, max(pr.gb, a.gPeak), fl60
+		back := a.backoff()
 		a.next = now.Add(back)
 		a.waitWhy = fmt.Sprintf("more links did not add throughput at ~%.1f Mbit/s (path full)", mbitps(pr.gb))
+		// The ceiling: the fewest links at which the path was found full, and
+		// the throughput then. Found full again at more links with no more
+		// throughput, those links are no better than the ceiling's: go back
+		// to it. On a full path every link reads as pressed, so nothing else
+		// would ever take back links a lucky probe once added.
+		c := &a.ceil
+		switch {
+		case c.n > 0 && now.Sub(c.at) < t.ceilTTL && pr.from > c.n && pr.gb <= 1.1*c.g:
+			old := pr.from
+			a.T, c.at = c.n, now
+			return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: %d links carry no more than %d; next check in %s", mbitps(pr.gb), old, c.n, fmtDur(back)),
+				fmt.Sprintf("pattern %d → %d links: %d links carry no more than %d did (~%.1f Mbit/s; the path is full); next check in %s",
+					old, c.n, old, c.n, mbitps(pr.gb), fmtDur(back)))
+		case c.n == 0 || now.Sub(c.at) >= t.ceilTTL || pr.gb > 1.1*c.g || pr.from < c.n:
+			*c = apCeil{n: pr.from, g: pr.gb, at: now}
+		default:
+			c.at = now
+		}
 		return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: more links did not add throughput; next check in %s", mbitps(pr.gb), fmtDur(back)),
 			fmt.Sprintf("sized to %d links at ~%.1f Mbit/s — %d more links carried %.1f Mbit/s but the total rose only %.1f (path is full); next check in %s",
 				pr.from, mbitps(pr.gb), pr.to-pr.from, mbitps(max(rNew, pTot)), mbitps(dG), fmtDur(back)))
@@ -697,6 +755,56 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 			fmt.Sprintf("pattern %d → %d links kept as spares: no new connection reached them yet (connections stay on their link)", pr.from, pr.to))
 	}
 	return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — measuring (%d/%d)", pr.to, n, lastLook), "")
+}
+
+// backoff is the pause after the k-th failed probe: 30 s doubling, capped,
+// with jitter so it does not lock onto a periodic traffic pattern.
+func (a *autopilot) backoff() time.Duration {
+	t := &a.tun
+	back := t.backoffBase << (a.k - 1)
+	if back > t.backoffMax || back <= 0 {
+		back = t.backoffMax
+	}
+	return time.Duration(float64(back) * (1 - t.jitter + 2*t.jitter*a.rnd()))
+}
+
+// startConfirm puts a kept probe on probation when the path was found full
+// recently: on a noisy path a probe can pass by chance, and on a full path
+// nothing would ever take its links back (every link reads as pressed). The
+// gain must last: over the next confirmWin the mean total must stay above the
+// probe's baseline by half the gain seen (at least minGain), and by two
+// standard errors of that comparison. No new probe until then. It reports
+// whether probation started.
+func (a *autopilot) startConfirm(pr *apProbe, dG float64, now time.Time) bool {
+	t := &a.tun
+	if a.k == 0 && (a.fail.at.IsZero() || now.Sub(a.fail.at) >= t.kResetAfter) {
+		return false
+	}
+	a.confirm = apConfirm{active: true, from: pr.from, to: pr.to, gb: pr.gb, varB: pr.varB, nb: pr.nb,
+		kPrev: a.k, need: pr.gb + max(0.5*dG, t.minGain*pr.gb), until: now.Add(t.confirmWin)}
+	a.next = a.confirm.until
+	a.waitWhy = "checking that the last gain lasts"
+	a.chain = 0
+	return true
+}
+
+// apCeil is where the path was last found full: n links carrying ~g.
+type apCeil struct {
+	n  int
+	g  float64
+	at time.Time
+}
+
+// apConfirm is a probe gain on probation (see decide, step 0).
+type apConfirm struct {
+	active     bool
+	from, to   int
+	gb, need   float64
+	varB       float64
+	nb, kPrev  int
+	until      time.Time
+	sum, sumSq float64
+	n          int
 }
 
 // out finalises a decision: clamp T and remember phase and reason for the
