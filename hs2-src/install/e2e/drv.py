@@ -137,11 +137,55 @@ def phase_install():
     src = sh("kh", "ss -Htn state established '( dport = :2082 )' | awk '{print $3}' | sed 's/:[0-9]*$//' | sort | uniq -c")
     res("kharej links leave from 10.30.0.21 only", "10.30.0.21" in src and "10.30.0.20" not in src, src.replace("\n", "; "))
     unit = sh("ir", "cat /etc/systemd/system/hs2.service")
-    res("unit: StartLimitIntervalSec=0 + modprobe tun + Restart=always",
-        all(k in unit for k in ("StartLimitIntervalSec=0", "ExecStartPre=-/sbin/modprobe tun", "Restart=always", "WantedBy=multi-user.target")))
+    res("unit: StartLimitIntervalSec=0 + modprobe tun + Restart=always + ExecReload",
+        all(k in unit for k in ("StartLimitIntervalSec=0", "ExecStartPre=-/sbin/modprobe tun", "Restart=always", "WantedBy=multi-user.target", "ExecReload=/bin/kill -HUP")))
     for c in ("ir", "kh"):
         a, e = state(c)
         res(f"{c}: active + enabled", (a, e) == ("active", "enabled"), f"{a}/{e}")
+    # runtime tuning owns the kernel now: no static sysctl file, bbr module persisted
+    res("install: no static /etc/sysctl.d/99-hs2.conf (hs2 tunes at runtime)",
+        sh("ir", "test -f /etc/sysctl.d/99-hs2.conf && echo present || echo gone") == "gone")
+    res("install: bbr module persisted for boot",
+        sh("ir", "cat /etc/modules-load.d/hs2.conf 2>/dev/null") == "tcp_bbr")
+
+
+def phase_adaptive():
+    """Adaptive link pool, live status/monitoring, and runtime tuning."""
+    # `hs2 status` reads the live status file the daemon publishes.
+    st = sh("ir", "hs2 status -c /etc/hs2/config.json")
+    res("hs2 status: shows the live link pattern", "links:" in st and "Iran side" in st, st.replace("\n", " | ")[:200])
+    # The status file exists at the path the installer derives.
+    res("status file published on tmpfs",
+        sh("ir", "ls /run/hs2/*.status.json 2>/dev/null | wc -l") != "0")
+    # The pattern reports links within the 2..32 envelope, and a target.
+    j = sh("ir", "cat /run/hs2/*.status.json 2>/dev/null")
+    res("status JSON carries links/target/min/max/phase", all(k in j for k in ('"links"', '"target"', '"min"', '"max"', '"phase"')), j[:200])
+
+    # `hs2 tune` shows the RAM/CPU-derived plan.
+    tn = sh("ir", "hs2 tune -c /etc/hs2/config.json")
+    res("hs2 tune: shows a profile + congestion + qdisc",
+        "profile:" in tn and "congestion:" in tn and "qdisc:" in tn, tn.replace("\n", " | ")[:200])
+
+    # tunnel manager: details show the live Pattern line.
+    ch = menu_open("ir", "adaptive_iran")
+    ch.expect("Choose:"); ch.sendline("1"); ch.expect("Choose:")
+    det = clean(ch.before)
+    res("manager details: live Pattern line", "Pattern:" in det, det.replace("\n", " | ")[-200:])
+
+    # Tuning screen (option 8): switch to a manual profile and confirm it applies.
+    ch.sendline("8")
+    ch.expect("Kernel tuning")
+    ch.expect("Choose:"); ch.sendline("5")             # queue discipline
+    ch.expect("Queue discipline"); ch.sendline("fq")   # fq exists on the test kernel
+    i = ch.expect(["Applied — hs2 is running", "Rolled back", "did not come up"], timeout=60)
+    ch.expect("Choose:")
+    res("tuning: change qdisc, applied, tunnel healthy", i == 0)
+    ch.sendline("0"); ch.expect("Choose:"); ch.sendline("0")
+    ch.expect(r"Choose \[0-8\]"); ch.sendline("0"); ch.expect(pexpect.EOF)
+    res("tuning: config gained a tuning block", '"tuning"' in sh("ir", "cat /etc/hs2/config.json"))
+    res("tuning: tunnel still carries data", wait_data() is not None)
+    # cc took effect on the box
+    res("tuning: bbr is the congestion control", sh("ir", "sysctl -n net.ipv4.tcp_congestion_control") == "bbr")
 
 
 def menu_open(c, log):
@@ -357,12 +401,20 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 """
     sh("kh", f"cat > /etc/systemd/system/hs2.service <<'EOF'\n{old_unit}EOF\nsystemctl daemon-reload; systemctl disable hs2 >/dev/null 2>&1; rm -f /usr/local/bin/hs2-menu /root/hs2-backups/*")
+    # Simulate an OLD install: a fixed link pool and the old static sysctl file.
+    sh("kh", "sed -i 's/\"min_links\": [0-9]*, \"max_links\": [0-9]*, \"per_link\": [0-9]*,/\"min_links\": 8, \"max_links\": 16, \"per_link\": 8,/' /etc/hs2/config.json; "
+             "mkdir -p /etc/sysctl.d; echo 'net.ipv4.tcp_congestion_control = bbr' > /etc/sysctl.d/99-hs2.conf")
     ch = spawn("kh", f"curl -fsSL {RAW}/install.sh | HS2_REPO_RAW={RAW} bash -s upgrade", "upgrade_kharej")
     i = ch.expect(["hs2 upgraded and running", "failed to start"], timeout=180); ch.expect(pexpect.EOF)
     unit = sh("kh", "cat /etc/systemd/system/hs2.service")
     res("upgrade: running", i == 0)
-    res("upgrade: old unit rewritten (StartLimitIntervalSec=0, modprobe) + role kept",
-        "StartLimitIntervalSec=0" in unit and "modprobe tun" in unit and "(kharej)" in unit)
+    res("upgrade: old unit rewritten (StartLimitIntervalSec=0, modprobe, ExecReload) + role kept",
+        "StartLimitIntervalSec=0" in unit and "modprobe tun" in unit and "ExecReload=/bin/kill -HUP" in unit and "(kharej)" in unit)
+    cfg = sh("kh", "cat /etc/hs2/config.json")
+    res("upgrade: fixed link pool migrated to the 2–32 adaptive envelope",
+        '"min_links": 2, "max_links": 32, "per_link": 8,' in cfg, [l for l in cfg.split("\n") if "min_links" in l])
+    res("upgrade: old static sysctl file removed (runtime tuning now)",
+        sh("kh", "test -f /etc/sysctl.d/99-hs2.conf && echo present || echo gone") == "gone")
     res("upgrade: autostart re-enabled", state("kh") == ["active", "enabled"], str(state("kh")))
     res("upgrade: hs2-menu installed + backup taken",
         sh("kh", "test -x /usr/local/bin/hs2-menu && ls /root/hs2-backups/*.tar.gz | wc -l") == "1")

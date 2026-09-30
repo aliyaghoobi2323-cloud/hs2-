@@ -101,6 +101,8 @@ func main() {
 		statusCmd(os.Args[2:])
 	case "tune":
 		tuneCmd(os.Args[2:])
+	case "config":
+		configCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)

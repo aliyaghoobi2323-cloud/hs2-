@@ -19,9 +19,12 @@ TUN_SUBNET_IRAN="10.77.0.1/30"
 TUN_SUBNET_KHAREJ="10.77.0.2/30"
 TUN_PEER_IRAN="10.77.0.2"
 TUN_PEER_KHAREJ="10.77.0.1"
-# Link pool written into new Iran configs (tuned in the lab; see BUILD.md).
-LINK_MIN=8
-LINK_MAX=16
+# Adaptive parallel-link envelope written into new configs. The pool is NOT
+# fixed at these numbers: hs2 sizes it continuously between LINK_MIN and LINK_MAX
+# from the live user count and measured throughput (see engine/autopilot.go), and
+# grows a link roughly per LINK_PER users. See BUILD.md.
+LINK_MIN=2
+LINK_MAX=32
 LINK_PER=8
 
 # ---------- pretty output (all to stderr so $(...) captures only real values) --
@@ -114,30 +117,19 @@ install_prereqs(){
   ok "Prerequisites ready."
 }
 
-# BBR copes with lossy long-haul links far better than cubic, fq paces it, and
-# a low notsent_lowat keeps the kernel from queueing seconds of data on each
-# tunnel link (the delay users see under load).
+# Kernel tuning now lives IN the binary: it is sized to the server's RAM and CPU
+# cores and re-applied on every start (see `hs2 tune` and tune/tune.go), so there
+# is a single source of truth and a resized VPS is picked up automatically. Here
+# we only make BBR available early (load the module and persist it for boot) and
+# remove the old static sysctl file so it cannot be a stale second source.
 tune_kernel(){
   modprobe tcp_bbr 2>/dev/null || true
-  # rp_filter=2 (loose reverse-path): on a multi-IP server, dialing FROM or
-  # listening ON a non-default local IP means return packets can arrive by a
-  # path strict rp_filter (=1) would drop — which shows up as links that connect
-  # then die. Loose mode accepts them as long as the source is routable at all,
-  # so a chosen bind/egress IP works. It never loosens single-IP setups.
-  cat > /etc/sysctl.d/99-hs2.conf <<'EOF'
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-net.ipv4.tcp_notsent_lowat = 131072
-net.ipv4.tcp_slow_start_after_idle = 0
-net.ipv4.tcp_mtu_probing = 1
-net.ipv4.conf.all.rp_filter = 2
-net.ipv4.conf.default.rp_filter = 2
-EOF
-  if sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1; then
-    ok "Kernel network tuning applied (BBR, fq, low send-queue latency)."
-  else
-    warn "Some kernel tuning could not be applied (see /etc/sysctl.d/99-hs2.conf)."
+  echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
+  if [ -f /etc/sysctl.d/99-hs2.conf ]; then
+    rm -f /etc/sysctl.d/99-hs2.conf
+    info "Kernel tuning is now applied by hs2 at runtime (RAM/CPU-aware). Removed the old static file."
   fi
+  ok "BBR available. hs2 applies RAM/CPU-aware tuning at startup (see 'hs2-menu' → tunnel → Tuning)."
 }
 
 install_binary(){
@@ -195,6 +187,9 @@ StartLimitIntervalSec=0
 Type=simple
 ExecStartPre=-/sbin/modprobe tun
 ExecStart=$BIN run -c $CFG
+# reload = hot-swap the TLS certificate (SIGHUP) without dropping the tunnel;
+# the certbot renewal deploy-hook calls `systemctl reload hs2`.
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=3
 TimeoutStopSec=8
@@ -285,7 +280,7 @@ cert_standalone(){ # domain
   port_free 80 || die "port 80 is busy — free it, or re-run and choose DNS-01 / an existing certificate."
   info "Getting Let's Encrypt certificate (standalone HTTP-01 on port 80)…"
   if certbot certonly --standalone -d "$domain" --non-interactive --agree-tos \
-       --register-unsafely-without-email --deploy-hook "systemctl restart hs2" >/dev/null 2>&1; then
+       --register-unsafely-without-email --deploy-hook "systemctl reload hs2" >/dev/null 2>&1; then
     ok "Certificate obtained for $domain."
   else
     err "certbot HTTP-01 failed for $domain."
@@ -294,6 +289,7 @@ cert_standalone(){ # domain
     warn "Re-run this setup and choose DNS-01 (no port 80) or 'existing certificate'."
     die  "certificate not obtained."
   fi
+  configure_renewal "$domain"
   printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
 }
 
@@ -307,14 +303,38 @@ cert_dns01(){ # domain
   info "DNS-01: certbot will print a _acme-challenge TXT record for $domain."
   info "Add it at your DNS provider, wait ~1 min for it to propagate, then continue in certbot."
   if certbot certonly --manual --preferred-challenges dns -d "$domain" --agree-tos \
-       --register-unsafely-without-email --deploy-hook "systemctl restart hs2" </dev/tty >&2; then
+       --register-unsafely-without-email --deploy-hook "systemctl reload hs2" </dev/tty >&2; then
     ok "Certificate obtained for $domain via DNS-01."
   else
     err "certbot DNS-01 did not complete for $domain."
     warn "Obtain a certificate another way and re-run choosing 'existing certificate'."
     die  "certificate not obtained."
   fi
+  configure_renewal "$domain"
   printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
+}
+
+# configure_renewal makes an existing certbot renewal do two things the tunnel
+# wants: renew about a week before expiry (as requested), and reload hs2 (hot
+# cert swap, no dropped connections) instead of restarting it. It edits the
+# renewal conf in place and makes sure the twice-daily certbot timer is on.
+configure_renewal(){ # domain
+  local conf="/etc/letsencrypt/renewal/$1.conf"
+  [ -f "$conf" ] || return 0
+  # deploy hook -> reload
+  if grep -q '^renew_hook' "$conf"; then
+    sed -i 's#^renew_hook.*#renew_hook = systemctl reload hs2#' "$conf"
+  else
+    printf 'renew_hook = systemctl reload hs2\n' >> "$conf"
+  fi
+  # renew one week before expiry
+  if grep -q '^renew_before_expiry' "$conf"; then
+    sed -i 's#^renew_before_expiry.*#renew_before_expiry = 7 days#' "$conf"
+  else
+    printf 'renew_before_expiry = 7 days\n' >> "$conf"
+  fi
+  systemctl enable --now certbot.timer >/dev/null 2>&1 || true
+  ok "Renewal set: ~7 days before expiry, hot-reload (no downtime). Timer: certbot.timer."
 }
 
 # cert_existing: the user already has a cert/key pair (bought, wildcard, or from
@@ -351,6 +371,7 @@ get_cert(){ # domain expected_ip
   check_domain_ip "$domain" "$expip"
   if [ -f "/etc/letsencrypt/live/$domain/fullchain.pem" ]; then
     info "Reusing existing Let's Encrypt certificate for $domain"
+    configure_renewal "$domain"
     printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
     return 0
   fi
@@ -734,7 +755,8 @@ iran_listener(){
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
-  "forward_ports": "$PORTS", "user_listen_ip": "$USERIP"
+  "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -755,7 +777,8 @@ EOF
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $TUNMTU,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
-  "cert_file": "$CERT", "key_file": "$KEY"
+  "cert_file": "$CERT", "key_file": "$KEY",
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -798,7 +821,7 @@ uninstall(){
   [ -f "$CFG" ] && IFACE=$(cfg_field iface)
   [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
   ip link del hs0 2>/dev/null || true
-  rm -f "$SVC" "$CFG" /etc/sysctl.d/99-hs2.conf; systemctl daemon-reload
+  rm -f "$SVC" "$CFG" "$CFG.prev" /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf; systemctl daemon-reload
   ok "hs2 removed (service stopped, hs0 deleted). Backhaul untouched."
 }
 
@@ -1013,8 +1036,17 @@ tm_details(){
     [ -n "$(jget "$cfg" expose)" ] && say " Panel:       $(jget "$cfg" expose)"
   fi
   if [ "$st" = running ]; then
-    local pat; pat=$(tm_pattern "$cfg")
+    local pat sf cd
+    pat=$(tm_pattern "$cfg")
     [ -n "$pat" ] && say " Pattern:     $pat"
+    sf=$(status_path "$cfg")
+    if status_fresh "$sf"; then
+      cd=$(jraw "$sf" cert_days)
+      if [ -n "$cd" ] && [ "$cd" != -1 ]; then
+        if [ "$cd" -le 7 ] 2>/dev/null; then say " Certificate: ${C_Y}$cd day(s) left${C_0} — auto-renews (hot reload, no downtime)"
+        else say " Certificate: valid for $cd more day(s)"; fi
+      fi
+    fi
   fi
   if tm_autostart "$u"; then say " Autostart:   ${C_G}ON${C_0} — comes back by itself after a reboot"
   else say " Autostart:   ${C_Y}OFF${C_0} — will NOT start after a reboot"; fi
@@ -1198,6 +1230,99 @@ tm_edit(){
   esac
 }
 
+# tm_apply_restart restarts a tunnel after a config change and rolls back to
+# $cfg.prev if it does not come up — the same safety net as the editor.
+tm_apply_restart(){ # unit cfg
+  local u="$1" cfg="$2" since
+  since=$(date '+%Y-%m-%d %H:%M:%S')
+  info "Restarting $u to apply the change…"
+  systemctl restart "$u" 2>/dev/null || true
+  if tm_healthy "$u"; then ok "Applied — $u is running."; tm_log_since "$u" "$since"; return 0; fi
+  err "$u did not come up with the change. Rolling back."
+  [ -f "$cfg.prev" ] && cat "$cfg.prev" > "$cfg"
+  systemctl restart "$u" 2>/dev/null || true
+  if tm_healthy "$u"; then ok "Rolled back — $u is running again."; else err "$u is still down. Check the log."; tm_log_since "$u" "$since"; fi
+  return 1
+}
+
+# tm_cfgset writes one config key via the binary (JSON-aware, validated). It
+# refuses cleanly on an old binary that has no `config` command.
+tm_cfgset(){ # cfg key value
+  local out; out=$("$BIN" config -c "$1" set "$2" "$3" 2>&1) || { err "$out"; return 1; }
+  return 0
+}
+
+# tm_tune is the tuning screen: it shows exactly what hs2 will apply on this
+# server (so nothing is a mystery) and lets the operator choose auto / manual /
+# off and the congestion control and qdisc. Changes are written to the config
+# and applied with the rollback safety net.
+tm_tune(){
+  local u="$1" cfg="$2" c v
+  if "$BIN" tune -c "$cfg" 2>&1 | grep -q "unknown command"; then
+    warn "This hs2 binary is too old for tuning control. Upgrade first (menu → 5)."; pause; return 0
+  fi
+  while :; do
+    echo >&2; hr; say " ${C_B}Kernel tuning${C_0} — $u"; hr
+    "$BIN" tune -c "$cfg" 2>/dev/null | sed 's/^/  /' >&2 || true
+    hr
+    say "  hs2 sizes kernel tuning from this server's RAM and CPU cores and"
+    say "  re-applies it every time the service starts."
+    say "  1) Auto (recommended)  — sized automatically from RAM & CPU"
+    say "  2) Manual              — auto values plus your own buffer sizes"
+    say "  3) Off                 — do not touch system sysctls (you tune it yourself)"
+    say "  4) Congestion control  — bbr (default) / cubic / …"
+    say "  5) Queue discipline    — fq_codel (default) / fq / cake"
+    say "  0) Back"
+    read -rp "Choose: " c </dev/tty || return 0
+    case "$c" in
+      1) cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
+         tm_cfgset "$cfg" tuning.mode auto && tm_apply_restart "$u" "$cfg" ;;
+      2) tm_tune_manual "$u" "$cfg" ;;
+      3) cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
+         tm_cfgset "$cfg" tuning.mode off && tm_apply_restart "$u" "$cfg" ;;
+      4) read -rp "Congestion control [bbr]: " v </dev/tty; v=${v:-bbr}
+         cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
+         tm_cfgset "$cfg" tuning.congestion "$v" && tm_apply_restart "$u" "$cfg" ;;
+      5) read -rp "Queue discipline [fq_codel]: " v </dev/tty; v=${v:-fq_codel}
+         cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
+         tm_cfgset "$cfg" tuning.qdisc "$v" && tm_apply_restart "$u" "$cfg" ;;
+      0|b|B|"") return 0 ;;
+      *) warn "Invalid choice." ;;
+    esac
+  done
+}
+
+# tm_tune_manual offers RAM/CPU-tier presets (examples the operator asked for),
+# switches the config to manual mode and applies them.
+tm_tune_manual(){ # unit cfg
+  local u="$1" cfg="$2" c m r w b s
+  echo >&2
+  say "  Manual presets (a good starting point for the server's size):"
+  say "   1) Low    — ~1 GB RAM / 1 core     · buffers 8 MB,  backlog 2048, somaxconn 1024"
+  say "   2) Medium — 2–4 GB RAM             · buffers 16 MB, backlog 8192, somaxconn 4096"
+  say "   3) High   — ≥4 GB RAM, ≥4 cores    · buffers 32 MB, backlog 16384, somaxconn 8192"
+  say "   4) Custom — enter the send/receive buffer size in MB"
+  say "   0) Back"
+  read -rp "Choose: " c </dev/tty || return 0
+  case "$c" in
+    1) r=8388608;  w=8388608;  b=2048;  s=1024 ;;
+    2) r=16777216; w=16777216; b=8192;  s=4096 ;;
+    3) r=33554432; w=33554432; b=16384; s=8192 ;;
+    4) read -rp "Buffer size in MB (e.g. 24): " m </dev/tty
+       case "$m" in ''|*[!0-9]*) warn "Not a number."; return 0 ;; esac
+       r=$((m*1024*1024)); w=$r; b=8192; s=4096 ;;
+    0|b|B|"") return 0 ;;
+    *) warn "Invalid choice."; return 0 ;;
+  esac
+  cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
+  tm_cfgset "$cfg" tuning.mode manual || return 0
+  tm_cfgset "$cfg" tuning.rmem_max "$r" || return 0
+  tm_cfgset "$cfg" tuning.wmem_max "$w" || return 0
+  tm_cfgset "$cfg" tuning.netdev_backlog "$b" || return 0
+  tm_cfgset "$cfg" tuning.somaxconn "$s" || return 0
+  tm_apply_restart "$u" "$cfg"
+}
+
 tm_tunnel_menu(){
   local u="$1" cfg c
   cfg=$(tm_cfg "$u")
@@ -1210,6 +1335,7 @@ tm_tunnel_menu(){
     say "  5) Live log"
     say "  6) Live pattern monitor (parallel links, updating)"
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
+    say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in
@@ -1220,6 +1346,7 @@ tm_tunnel_menu(){
       5) tm_follow "$u" ;;
       6) tm_monitor "$u" "$cfg" ;;
       7) tm_toggle_autostart "$u" ;;
+      8) tm_tune "$u" "$cfg" ;;
       0|b|B|"") return 0 ;;
       *) warn "Invalid choice." ;;
     esac
@@ -1338,6 +1465,48 @@ restore(){
   fi
 }
 
+# migrate_config brings an older install's config and system state up to date on
+# upgrade, without disturbing anything the operator has hand-tuned:
+#   - the parallel-link pool moves to the new adaptive envelope, but ONLY when it
+#     is still exactly an old default line (hand-edited values are left alone);
+#   - the old static sysctl file is removed (hs2 now tunes at runtime) and BBR is
+#     made available for boot;
+#   - existing Let's Encrypt renewals switch to hot-reload + 7-day renewal.
+migrate_config(){
+  local changed=""
+  local olds=(
+    '"min_links": 4, "max_links": 16, "per_link": 50,'
+    '"min_links": 8, "max_links": 16, "per_link": 8,'
+  )
+  local new="\"min_links\": $LINK_MIN, \"max_links\": $LINK_MAX, \"per_link\": $LINK_PER,"
+  local o
+  for o in "${olds[@]}"; do
+    if grep -qF "$o" "$CFG"; then
+      # sed with | delimiter; the pattern has no | so this is safe.
+      sed -i "s|$(printf '%s' "$o" | sed 's/[.[\*^$/]/\\&/g')|$new|" "$CFG"
+      changed=1
+    fi
+  done
+  [ -n "$changed" ] && ok "Adaptive link pool updated to $LINK_MIN–$LINK_MAX (auto-sized; was a fixed default)."
+
+  # hs2 now owns tuning at runtime — drop the old static file, keep BBR for boot.
+  if [ -f /etc/sysctl.d/99-hs2.conf ]; then
+    rm -f /etc/sysctl.d/99-hs2.conf
+    info "Removed the old /etc/sysctl.d/99-hs2.conf — hs2 now applies RAM/CPU-aware tuning at startup."
+  fi
+  modprobe tcp_bbr 2>/dev/null || true
+  echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
+
+  # Point any existing certbot renewal at reload + 7-day window.
+  local d conf
+  for conf in /etc/letsencrypt/renewal/*.conf; do
+    [ -f "$conf" ] || continue
+    d=$(basename "$conf" .conf)
+    # Only touch a domain this config actually uses as its cert.
+    grep -q "/etc/letsencrypt/live/$d/" "$CFG" 2>/dev/null && configure_renewal "$d"
+  done
+}
+
 # Before anything replaces an existing install, keep a copy to roll back to.
 auto_backup(){
   [ -f "$CFG" ] || return 0
@@ -1352,13 +1521,7 @@ upgrade(){
   auto_backup
   install_prereqs
   install_binary
-  # Configs written by the v2 installer use 4 links, too few against
-  # per-connection throttling. Move them to the new defaults, but only if the
-  # line is exactly the old default (hand-edited values are left alone).
-  if grep -q '"min_links": 4, "max_links": 16, "per_link": 50,' "$CFG"; then
-    sed -i "s/\"min_links\": 4, \"max_links\": 16, \"per_link\": 50,/\"min_links\": $LINK_MIN, \"max_links\": $LINK_MAX, \"per_link\": $LINK_PER,/" "$CFG"
-    ok "Link pool updated to $LINK_MIN-$LINK_MAX links."
-  fi
+  migrate_config
   # Old installs have an older unit: rewrite it and make sure it starts on boot.
   local role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
   write_service "$role"
