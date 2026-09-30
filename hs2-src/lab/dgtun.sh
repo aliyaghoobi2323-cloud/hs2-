@@ -79,9 +79,7 @@ sleep 1
 ip netns exec $IR env HS2_NO_TUNE=1 "$BIN" run -c "$W/ir.json" >"$W/ir.log" 2>&1 & echo $! >> "$W/pids"
 
 # Wait for the tun to come up and carry traffic. The up-check is a TCP connect
-# through the forwarded port (which rides the tun), so it is encap-agnostic:
-# with the icmp encap the listener disables the kernel's echo replies, so an
-# inner ping to its tun IP is not answered even though TCP/UDP flow fine.
+# through the forwarded port (which rides the tun), so it is encap-agnostic.
 TUNUP=0
 for i in $(seq 1 80); do
   if ip -n $IR link show hs0 >/dev/null 2>&1 && ip -n $KH link show hs0 >/dev/null 2>&1; then
@@ -90,12 +88,11 @@ for i in $(seq 1 80); do
   sleep 0.25
 done
 
-# Ping is a latency diagnostic only. For icmp the listener side will not answer
-# it (echo replies are off for the carrier), so ping the DIALER's tun IP, which
-# does answer, when the listener would not.
+# Ping is a latency diagnostic. It also covers the icmp encap: its listener
+# drops only the kernel's replies to the tunnel's own packets (nft/iptables
+# rule keyed on the tunnel magic), so the listener's tun IP still answers ping.
 PING=""; PLOSS=""
 PINGDST=10.77.0.2
-[ "$ENCAP" = icmp ] && [ "$REVERSE" != 1 ] && PINGDST=""   # kharej is silent to echo
 if [ "$TUNUP" = 1 ] && [ -n "$PINGDST" ]; then
   P=$(ip netns exec $IR ping -i 0.2 -w "${T%s}" -q "$PINGDST" 2>/dev/null)
   PING=$(echo "$P" | awk -F'= ' '/rtt/{split($2,a,"/"); print a[2]"/"a[3]}')

@@ -148,12 +148,23 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 	dials := dialing(fc)
 	edge := fc.Mode == "dial"
 
-	// addr: where this side listens, or the peer it dials.
+	// addr: where this side listens, or the peer it dials. The raw datagram
+	// encapsulations (icmp/gre/ipip/ipx) ride bare IP protocols with no ports,
+	// so for them addr is just the IP; an IP:PORT (older configs) is accepted and
+	// the port ignored.
+	rawEncap := dgtun && fc.Encap != "" && fc.Encap != "udp"
 	host, port, err := net.SplitHostPort(fc.Addr)
+	if err != nil && rawEncap && fc.Addr != "" && !strings.Contains(fc.Addr, ":") {
+		host, port, err = fc.Addr, "", nil
+	}
 	if err != nil {
-		bad(`"addr" must be IP:PORT, got %q`, fc.Addr)
+		if rawEncap {
+			bad(`"addr" must be an IP (encap %s has no ports), got %q`, fc.Encap, fc.Addr)
+		} else {
+			bad(`"addr" must be IP:PORT, got %q`, fc.Addr)
+		}
 	} else {
-		if p, perr := strconv.Atoi(port); perr != nil || p < 1 || p > 65535 {
+		if p, perr := strconv.Atoi(port); !rawEncap && (perr != nil || p < 1 || p > 65535) {
 			bad(`"addr" port %q is not a valid port`, port)
 		}
 		if !dials {

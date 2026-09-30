@@ -140,11 +140,36 @@ ask_egress_ip(){
   done
 }
 
+# ask_user_ip sets USERIP (user_listen_ip): the local IP the USER ports open on.
+# Enter keeps every address — all IPv4 AND IPv6 — which on a multi-IP server
+# is easy to do by accident, so there the IPs are listed and the choice spelled
+# out. A typed IP is validated like ask_bind_ip (a typo would otherwise only
+# show up as a failed start). 'all' or 0.0.0.0 also mean every address.
+ask_user_ip(){
+  local n; n=$(local_ips | wc -l)
+  if [ "$n" -gt 1 ]; then echo >&2; info "IPs on this server (the user ports can open on one of them, or on all):"; show_ips; fi
+  while :; do
+    read -rp "IP that USERS connect to on this server (Enter = ALL IPs, IPv4 and IPv6): " USERIP </dev/tty
+    case "$USERIP" in
+      ''|all|ALL|0.0.0.0|'*') USERIP=""
+        [ "$n" -gt 1 ] && info "User ports open on all $n IPv4 addresses (and IPv6)."
+        return 0 ;;
+    esac
+    if ip_is_local "$USERIP"; then ok "User ports open on $USERIP only."; return 0; fi
+    warn "$USERIP is not on this server. Pick one from the list, or Enter for all."
+  done
+}
+
 install_prereqs(){
   info "Installing prerequisites…"
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -q </dev/null >/dev/null 2>&1 || true
   apt-get install -y -q iproute2 iptables curl ca-certificates </dev/null >/dev/null 2>&1 || true
+  # nftables: the icmp tunnel drops only the kernel's replies to ITS OWN packets
+  # with an nft rule (iptables u32 as a fallback), so the server keeps answering
+  # normal ping. ping: the installer proves the tunnel carries packets. Asked
+  # separately so a missing package name can never block the ones above.
+  apt-get install -y -q nftables iputils-ping </dev/null >/dev/null 2>&1 || true
   # tun module
   modprobe tun 2>/dev/null || true
   tune_kernel
@@ -166,6 +191,30 @@ tune_kernel(){
   ok "BBR available. hs2 applies RAM/CPU-aware tuning at startup (see 'hs2-menu' → tunnel → Tuning)."
 }
 
+# verify_download FILE: check a downloaded binary against the sha256 published
+# next to it (hs2-linux-amd64.sha256). It catches a truncated or altered
+# download — a middlebox, a broken proxy, a CDN hiccup. It is NOT a signature:
+# whoever can change the repository can change both files, so protect the
+# GitHub account (2FA), and pin a reviewed commit with
+# HS2_REPO_RAW=https://raw.githubusercontent.com/<owner>/<repo>/<commit> when that
+# matters. A repository without the .sha256 file (older) only warns.
+verify_download(){ # file [url-suffix]
+  local want got
+  want=$(curl -fsSL --connect-timeout 10 --retry 2 "$REPO_RAW/hs2-linux-amd64.sha256${2:-}" 2>/dev/null | awk 'NR==1{print $1}' || true)
+  case "$want" in
+    [0-9a-f]*) [ ${#want} = 64 ] || want="" ;;
+    *) want="" ;;
+  esac
+  if [ -z "$want" ]; then
+    warn "No published sha256 to check the download against (hs2-linux-amd64.sha256 missing) — relying on the version check only."
+    return 0
+  fi
+  got=$(sha256sum "$1" | cut -d' ' -f1)
+  if [ "$got" = "$want" ]; then ok "sha256 matches the published hash."; return 0; fi
+  err "sha256 mismatch: published $want, downloaded $got"
+  return 1
+}
+
 install_binary(){
   local d tmp; tmp=$(mktemp)
   d=$(cd "$(dirname "$0")" 2>/dev/null && pwd || pwd)
@@ -176,6 +225,18 @@ install_binary(){
   info "Downloading hs2 binary from GitHub…"
   if curl -fL --connect-timeout 10 --retry 2 -o "$tmp" "$REPO_RAW/hs2-linux-amd64" 2>/dev/null; then
     ok "Downloaded."
+    if ! verify_download "$tmp"; then
+      # Right after a release the CDN can serve the new binary with the old hash
+      # (or the reverse) for a few minutes: fetch both once more past the cache
+      # before calling the download bad.
+      local q="?v=$(date +%s)"
+      warn "Fetching the binary and its hash once more (bypassing the CDN cache)…"
+      if ! curl -fL --connect-timeout 10 --retry 2 -o "$tmp" "$REPO_RAW/hs2-linux-amd64$q" 2>/dev/null \
+         || ! verify_download "$tmp" "$q"; then
+        rm -f "$tmp"
+        die "the downloaded binary does not match its published sha256 — NOT installed. Run again in a few minutes; if it keeps failing, something on the path is altering the download."
+      fi
+    fi
   elif [ -f "$d/hs2-linux-amd64" ] || [ -f "./hs2-linux-amd64" ]; then
     local f="$d/hs2-linux-amd64"; [ -f "$f" ] || f="./hs2-linux-amd64"
     warn "GitHub unreachable — using local $f (make sure it is the NEW one)."
@@ -196,7 +257,9 @@ install_binary(){
   [ -f "$SVC" ] && HS2_STOPPED=1
   systemctl stop hs2 2>/dev/null || true
   install -m755 "$tmp" "$BIN"; rm -f "$tmp"
-  info "sha256: $(sha256sum "$BIN" | cut -c1-16)…"
+  # The full hash: compare it between the two servers (the Iran side may have
+  # been given a copy by hand).
+  info "sha256: $(sha256sum "$BIN" | cut -d' ' -f1)"
   "$BIN" version 2>/dev/null | grep -q "hs2 v3"     || die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."
   ok "Installed $("$BIN" version 2>/dev/null)"
   install_self
@@ -293,6 +356,75 @@ start_service(){
     journalctl -u hs2 -n 20 --no-pager >&2 || true
     bail
   fi
+  # The side that pasted the link starts second: the other server is already
+  # waiting, so the tunnel must connect NOW. A running service is not proof —
+  # a raw encapsulation the path filters (gre/ipip often are) runs happily and
+  # carries nothing — so nothing says "ready" until packets really cross.
+  if [ "${VERIFY_PEER:-0}" = 1 ] && ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-40}"; then
+    tunnel_down_help "$CFG"
+    bail
+  fi
+}
+
+# tunnel_up CFG: 0 when the tunnel really carries packets to the other server.
+# Every carrier counts a link only after the peer answered its authenticated
+# handshake, so a live link in the daemon's status file is proof; the carriers
+# without one (udp/auto) are proven by the peer's tun IP answering ping.
+tunnel_up(){ # cfg
+  local cfg="$1" sf links ifc peer
+  sf=$(status_path "$cfg")
+  if status_fresh "$sf"; then
+    links=$(jraw "$sf" links)
+    [ "${links:-0}" -gt 0 ] 2>/dev/null && return 0
+  fi
+  ifc=$(jget "$cfg" iface); peer=$(jget "$cfg" peer_ip)
+  [ -n "$ifc" ] && [ -n "$peer" ] && ip link show "$ifc" >/dev/null 2>&1 \
+    && ping -c1 -W1 -I "$ifc" "$peer" >/dev/null 2>&1
+}
+
+# verify_tunnel CFG SECS: wait up to SECS for tunnel_up.
+verify_tunnel(){ # cfg secs
+  local end=$(( $(date +%s) + ${2:-40} ))
+  info "Checking that the tunnel really reaches the other server (up to ${2:-40} s)…"
+  while :; do
+    if tunnel_up "$1"; then ok "Tunnel is UP — the other server answered through it."; return 0; fi
+    [ "$(date +%s)" -lt "$end" ] || return 1
+    sleep 2
+  done
+}
+
+# tunnel_down_help CFG: the tunnel did not connect — say so plainly, with the
+# likely cause for this transport, and leave the service running (it retries on
+# its own, so a path that opens later still connects without a re-install).
+tunnel_down_help(){ # cfg
+  local car enc proto
+  car=$(jget "$1" carrier); enc=$(jget "$1" encap); proto=$(jraw "$1" proto)
+  echo >&2; hr
+  err "The tunnel did NOT connect: hs2 is running here, but nothing came back from the other server."
+  if [ "$car" = dgtun ]; then
+    case "${enc:-udp}" in
+      gre)  warn "GRE (IP protocol 47) is dropped by many providers and at the Iran border — the most likely cause." ;;
+      ipip) warn "IP-in-IP (IP protocol 4) is dropped by many providers and at the Iran border — the most likely cause." ;;
+      ipx)  warn "Raw IP protocol ${proto:-253} is probably filtered on this path (most networks pass only TCP/UDP/ICMP)." ;;
+      icmp) warn "ICMP echo may be filtered or rate-limited on this path (or ping is blocked in a firewall on either server)." ;;
+      *)    warn "The UDP tunnel port may be blocked on this path or in a firewall on the other server." ;;
+    esac
+    case "${enc:-udp}" in
+      gre|ipip|ipx) warn "Run setup again on BOTH servers and pick tun → udp, icmp, or tcp (tcp + mtcp is the most robust)." ;;
+    esac
+  elif [ "$car" = udp ] || [ "$car" = auto ]; then
+    warn "The UDP tunnel port may be blocked on this path or in a firewall on the other server."
+  else
+    warn "TLS: the TCP tunnel port must be reachable from the dialing side, and the listening side's"
+    warn "certificate must be valid for the domain in the link (see its log for TLS errors)."
+  fi
+  warn "Also check: the other server finished its setup and runs; the link you pasted is its CURRENT one"
+  warn "(running setup there again makes a NEW key); its tunnel port is open in its firewall / provider panel;"
+  warn "and the dial-out IP chosen here is not a filtered one."
+  info "hs2 stays installed and keeps retrying — if the path opens later it connects by itself."
+  info "Last log:"
+  journalctl -u hs2 -n 15 --no-pager -o cat 2>/dev/null | sed 's/^/     /' >&2 || true
+  hr
 }
 
 encode_link(){ printf '%s' "$1" | base64 -w0; }
@@ -392,7 +524,9 @@ cert_dns01(){ # domain
 }
 
 # configure_renewal makes an existing certbot renewal do two things the tunnel
-# wants: renew about a week before expiry (as requested), and reload hs2 (hot
+# wants: renew 30 days before expiry (certbot's own default — a week left too
+# little room when Let's Encrypt or port 80 is unreachable for a few days), and
+# reload hs2 (hot
 # cert swap, no dropped connections) instead of restarting it. It edits the
 # renewal conf in place and makes sure the twice-daily certbot timer is on.
 configure_renewal(){ # domain
@@ -406,17 +540,17 @@ configure_renewal(){ # domain
   else
     printf '[renewalparams]\nrenew_hook = systemctl reload hs2\n' >> "$conf"
   fi
-  # renew one week before expiry. certbot only reads this key at the TOP of the
+  # renew 30 days before expiry. certbot only reads this key at the TOP of the
   # file (before [renewalparams]); appended at the end it would be ignored.
   if grep -q '^renew_before_expiry' "$conf"; then
-    sed -i 's#^renew_before_expiry.*#renew_before_expiry = 7 days#' "$conf"
+    sed -i 's#^renew_before_expiry.*#renew_before_expiry = 30 days#' "$conf"
   elif grep -q '^\[' "$conf"; then
-    sed -i '0,/^\[/s//renew_before_expiry = 7 days\n[/' "$conf"
+    sed -i '0,/^\[/s//renew_before_expiry = 30 days\n[/' "$conf"
   else
-    printf 'renew_before_expiry = 7 days\n' >> "$conf"
+    printf 'renew_before_expiry = 30 days\n' >> "$conf"
   fi
   systemctl enable --now certbot.timer >/dev/null 2>&1 || true
-  ok "Renewal set: ~7 days before expiry, hot-reload (no downtime). Timer: certbot.timer."
+  ok "Renewal set: 30 days before expiry, hot-reload (no downtime). Timer: certbot.timer."
 }
 
 # cert_existing: the user already has a cert/key pair (bought, wildcard, or from
@@ -549,6 +683,34 @@ ask_ipx_proto(){
   TUN_PROTO="$IPXP"
 }
 
+# raw_encap: the tun rides a bare IP protocol (icmp/gre/ipip/ipx) — no ports.
+raw_encap(){ [ "${TRANSPORT:-}" = tun ] && case "${TUN_ENCAP:-}" in icmp|gre|ipip|ipx) true ;; *) false ;; esac; }
+
+# raw_encap_wire names what a raw encapsulation needs open on the path.
+raw_encap_wire(){
+  case "$TUN_ENCAP" in
+    icmp) echo "ICMP echo (ping)" ;;
+    gre)  echo "IP protocol 47 (GRE)" ;;
+    ipip) echo "IP protocol 4 (IP-in-IP)" ;;
+    ipx)  echo "IP protocol ${TUN_PROTO:-253}" ;;
+  esac
+}
+
+# ask_tunnel_port PROMPT sets TPORT and PSUF (":PORT", appended to the listen
+# address and to the link's endpoint). The raw encapsulations have no ports, so
+# nothing is asked for them: the address is the bare IP and PSUF is empty.
+ask_tunnel_port(){ # prompt
+  if raw_encap; then
+    TPORT=""; PSUF=""
+    info "tun over $TUN_ENCAP is a bare IP protocol: no tunnel port. The path must pass $(raw_encap_wire)."
+    return 0
+  fi
+  read -rp "$1 [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
+  case "$TPORT" in *[!0-9]*) die "the tunnel port must be a number" ;; esac
+  [ "$TPORT" -ge 1 ] && [ "$TPORT" -le 65535 ] || die "the tunnel port must be 1-65535"
+  PSUF=":$TPORT"
+}
+
 # dgtun_proto_line ENCAP prints the optional  "proto": N  config line — only for
 # the ipx encapsulation and only when a non-default protocol number was chosen
 # (253/0 = default, left out of the config). Empty for every other case.
@@ -655,7 +817,7 @@ setup_kharej(){
 # kharej_listener: direct exit. Kharej listens for the iran edge and generates
 # the link. (This is the classic flow.)
 kharej_listener(){
-  read -rp "Tunnel port (clients never see this) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
+  ask_tunnel_port "Tunnel port (clients never see this)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
   local PANEL="-" LMTU=""
@@ -728,7 +890,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "dgtun", "encap": "$TUN_ENCAP", "reverse": false,
-  "addr": "$BINDADDR:$TPORT",
+  "addr": "$BINDADDR$PSUF",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED",${PROTOLINE}
   "expose": "$PANEL",
@@ -749,10 +911,11 @@ EOF
 EOF
   fi
   chmod 600 "$CFG"; write_service kharej; start_service kharej
-  ok "KHAREJ ready (direct, transport: $TRANSPORT)."
+  ok "KHAREJ side is running (direct, transport: $TRANSPORT) and waits for the Iran server."
+  info "The tunnel is tested end-to-end when you paste the link on the Iran server."
   local ENCAP_ARG="" PROTO_ARG=""; [ "$TRANSPORT" = "tun" ] && ENCAP_ARG="$TUN_ENCAP"
   [ "$ENCAP_ARG" = ipx ] && PROTO_ARG="${TUN_PROTO:-253}"
-  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU" "$ENCAP_ARG" "$PROTO_ARG"
+  show_link "$PUBIP$PSUF" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU" "$ENCAP_ARG" "$PROTO_ARG"
   if [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $LMTU)."
     info "Panel $PANEL receives the user ports you open on the iran side (asked there)."
@@ -766,6 +929,7 @@ EOF
 # kharej_dialer: reverse exit. Kharej DIALS the iran edge; it pastes the link
 # iran generated (which carries iran's endpoint) and forwards to the panel.
 kharej_dialer(){
+  VERIFY_PEER=1   # the iran edge is already waiting: start_service proves the tunnel
   parse_link
   [ "$DIRECTION" = "reverse" ] || die "this link is a DIRECT link; for reverse, generate the link on the IRAN side first."
   ask_egress_ip
@@ -879,13 +1043,14 @@ setup_iran(){
 
 # iran_dialer: direct edge. Iran dials out to kharej; it pastes kharej's link.
 iran_dialer(){
+  VERIFY_PEER=1   # the kharej is already waiting: start_service proves the tunnel
   parse_link
   [ "$DIRECTION" = "direct" ] || die "this link is a REVERSE link; for reverse, run KHAREJ setup and paste it there instead."
   ok "Link OK — kharej endpoint $ENDPOINT, transport $TRANSPORT (carrier $CARRIER)."
   ask_egress_ip
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
-    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    ask_user_ip
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
     [ -n "$PORTS" ] || die "at least one port is required"
     for p in ${PORTS//,/ }; do
@@ -913,7 +1078,7 @@ EOF
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the kharej with the new installer."
     tun_tls_carrier   # the link says mtcp pool (l3mtcp) or one TLS link (tls)
     ask_tun_params
-    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    ask_user_ip
     read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
@@ -942,7 +1107,7 @@ EOF
     # shared-key auth only. The ipx number comes with the link.
     [ "$ENCAP" = ipx ] && ipx_proto_from_link
     ask_tun_params
-    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    ask_user_ip
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
@@ -988,7 +1153,7 @@ EOF
 # generates the link. For tcp it also opens the user ports; for udp/auto it is a
 # TUN IP tunnel on hs0.
 iran_listener(){
-  read -rp "Tunnel port to LISTEN on (kharej dials it) [2096]: " TPORT </dev/tty; TPORT=${TPORT:-2096}
+  ask_tunnel_port "Tunnel port to LISTEN on (kharej dials it)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
   local LMTU=""
@@ -996,10 +1161,11 @@ iran_listener(){
 
   if [ "$TRANSPORT" = "tcp" ]; then
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
-    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    ask_user_ip
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
     [ -n "$PORTS" ] || die "at least one port is required"
     for p in ${PORTS//,/ }; do
+      [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
       port_free "$p" || die "user port $p is already in use on Iran. Pick another."
     done
     read -rp "Domain for THIS iran server (its A record must point to $PUBIP): " DOMAIN </dev/tty
@@ -1028,13 +1194,13 @@ iran_listener(){
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
-    ok "IRAN ready (reverse, tcp). Users connect on port(s): $PORTS"
+    ok "IRAN side is running (reverse, tcp) and waits for the Kharej server to dial in. Users will connect on port(s): $PORTS"
   elif [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     # Reverse tun: iran LISTENS and is the TLS server, so the cert lives HERE.
     # The kharej dials in. The TUN is a routed side channel; the user ports
     # opened here ride streams to the kharej panel, exactly like reverse tcp.
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
-    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    ask_user_ip
     read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
       [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
@@ -1063,7 +1229,7 @@ EOF
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
-    ok "IRAN ready (reverse, tun over TLS: $(tun_tls_label))."
+    ok "IRAN side is running (reverse, tun over TLS: $(tun_tls_label)) and waits for the Kharej server to dial in."
     info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $LMTU)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
     else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward 10.77.0.2 yourself."; fi
@@ -1073,9 +1239,10 @@ EOF
     # edge, so it opens the user ports (forward_ports) and rides them over the pool.
     [ "$TUN_ENCAP" != "udp" ] || udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     ask_tun_params
-    read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
+    ask_user_ip
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
+      [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
       port_free "$p" || die "user port $p is already in use on Iran. Pick another."
     done
     LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
@@ -1083,7 +1250,7 @@ EOF
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "dgtun", "encap": "$TUN_ENCAP", "reverse": true,
-  "addr": "$BINDADDR:$TPORT",
+  "addr": "$BINDADDR$PSUF",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
   "shared_key": "$SHARED",${PROTOLINE}
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
@@ -1091,7 +1258,7 @@ EOF
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
-    ok "IRAN ready (reverse, tun / datagram pool over $TUN_ENCAP)."
+    ok "IRAN side is running (reverse, tun / datagram pool over $TUN_ENCAP) and waits for the Kharej server to dial in."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
     else info "Pure routed L3 tunnel on $TUNIF: this iran = 10.77.0.1, kharej = 10.77.0.2."; fi
   else
@@ -1107,7 +1274,7 @@ EOF
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
-    ok "IRAN ready (reverse, $TRANSPORT / UDP+FEC)."
+    ok "IRAN side is running (reverse, $TRANSPORT / UDP+FEC) and waits for the Kharej server to dial in."
     info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2)."
     warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over hs0 yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
   fi
@@ -1115,8 +1282,9 @@ EOF
   # goes in the link so the kharej uses the same one without asking.
   local ENCAP_ARG="" PROTO_ARG=""; [ "$TRANSPORT" = "tun" ] && ENCAP_ARG="$TUN_ENCAP"
   [ "$ENCAP_ARG" = ipx ] && PROTO_ARG="${TUN_PROTO:-253}"
-  show_link "$PUBIP:$TPORT" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse" "$LMTU" "$ENCAP_ARG" "$PROTO_ARG"
+  show_link "$PUBIP$PSUF" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse" "$LMTU" "$ENCAP_ARG" "$PROTO_ARG"
   info "On the Kharej server: bash install.sh → 1 (Kharej) → direction 'reverse' → paste the link."
+  info "The tunnel is tested end-to-end there: that side only says ready once packets really cross."
 }
 
 # ---------- uninstall & status ----------------------------------------------
@@ -1126,9 +1294,13 @@ uninstall(){
   case "$a" in y|Y|yes) ;; *) info "Nothing removed."; return 0 ;; esac
   info "Removing hs2…"
   auto_backup
+  local pid; pid=$(tm_prop hs2 MainPID)
   systemctl disable --now hs2 2>/dev/null || true
   sleep 1
-  pkill -TERM -x hs2 2>/dev/null || true; sleep 1; pkill -KILL -x hs2 2>/dev/null || true
+  # Stop a straggler of THIS tunnel only — its unit's last PID and any process
+  # running this config. Never `pkill -x hs2`: other tunnels on the server
+  # (hs2-<name>.service) run the same binary and must keep running.
+  kill_this_tunnel TERM "$pid"; sleep 1; kill_this_tunnel KILL "$pid"
   # Delete the tunnel interface. Usually hs0, but tun mode may have renamed it, so
   # also read the name from the config before deleting it.
   local IFACE=""
@@ -1137,6 +1309,25 @@ uninstall(){
   ip link del hs0 2>/dev/null || true
   rm -f "$SVC" "$CFG" "$CFG.prev" /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf; systemctl daemon-reload
   ok "hs2 removed (service stopped, hs0 deleted). Backhaul untouched."
+  if ls "$BACKUP_DIR"/hs2-*.tar.gz >/dev/null 2>&1; then
+    warn "Backups are kept in $BACKUP_DIR (readable by root only). They contain the tunnel key —"
+    warn "delete that folder if this server is being handed over or the tunnel is gone for good."
+  fi
+}
+
+# kill_this_tunnel SIGNAL [PID]: signal this tunnel's hs2 process — PID when it
+# is still an hs2 process, and any `hs2 run -c $CFG` — and nothing else.
+kill_this_tunnel(){ # signal [pid]
+  local sig="$1" pid="${2:-}" p args
+  if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -r "/proc/$pid/cmdline" ]; then
+    args=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    case "$args" in *hs2*) kill -"$sig" "$pid" 2>/dev/null || true ;; esac
+  fi
+  for p in $(pgrep -x hs2 2>/dev/null || true); do
+    args=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || true)
+    case "$args" in *" -c $CFG "*) kill -"$sig" "$p" 2>/dev/null || true ;; esac
+  done
+  return 0
 }
 
 status(){
@@ -1297,7 +1488,8 @@ tm_pattern(){
 }
 # Peers connected to a listening tunnel (who is actually on the other end).
 tm_peers(){
-  local port; port=$(jget "$1" addr); port=${port##*:}
+  local port; port=$(jget "$1" addr)
+  case "$port" in *:*) port=${port##*:} ;; *) return 0 ;; esac   # raw encap: no port, no TCP peers
   ss -Htn state established "( sport = :$port )" 2>/dev/null | awk '{print $4}' | sed 's/:[0-9]*$//' | sort -u | tr '\n' ' '
 }
 tm_transport(){
@@ -1778,7 +1970,21 @@ backup(){
   rm -rf "$meta"; chmod 600 "$f"
   ok "Backup saved: $f"
   tar -tzf "$f" | sed 's/^/     /' >&2
+  prune_backups
   echo "$f"
+}
+
+# prune_backups keeps the newest $BACKUP_KEEP backups (HS2_KEEP_BACKUPS, default
+# 10). Every setup, upgrade and uninstall saves one and each holds the tunnel
+# key, so without a limit they pile up (dozens after a few weeks of testing).
+BACKUP_KEEP=${HS2_KEEP_BACKUPS:-10}
+prune_backups(){
+  local old n=0 f
+  case "$BACKUP_KEEP" in ''|*[!0-9]*|0) return 0 ;; esac
+  old=$(ls -1t "$BACKUP_DIR"/hs2-*.tar.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) || true)
+  for f in $old; do rm -f "$f" && n=$((n + 1)); done
+  [ "$n" = 0 ] || info "Removed $n old backup(s); the newest $BACKUP_KEEP are kept in $BACKUP_DIR."
+  return 0
 }
 
 restore(){
@@ -1825,7 +2031,7 @@ restore(){
 #     is still exactly an old default line (hand-edited values are left alone);
 #   - the old static sysctl file is removed (hs2 now tunes at runtime) and BBR is
 #     made available for boot;
-#   - existing Let's Encrypt renewals switch to hot-reload + 7-day renewal.
+#   - existing Let's Encrypt renewals switch to hot-reload + 30-day renewal.
 migrate_config(){
   local changed=""
   local olds=(
@@ -1867,7 +2073,7 @@ migrate_config(){
   echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
 
   # Point the certbot renewal of the certificate THIS tunnel uses at reload +
-  # 7-day window. Other certbot lineages on the box (a panel's own certificate,
+  # 30-day window. Other certbot lineages on the box (a panel's own certificate,
   # say) are not ours and are left alone.
   # NB: written with `if`, never `grep … && …` as the last command of a loop or
   # function: under set -e a non-matching last lineage used to end the whole
@@ -1906,6 +2112,10 @@ upgrade(){
     ok "Autostart on boot: $(systemctl is-enabled hs2 2>/dev/null)"
     info "Tunnel manager: run  hs2-menu  → 3"
     ok "hs2 upgraded and running. Upgrade the OTHER server too (both sides must match)."
+    if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-30}"; then
+      warn "The tunnel has not reconnected yet. If the OTHER server still runs the old version, upgrade it"
+      warn "too — it reconnects then. If both are upgraded and it stays down: journalctl -u hs2 -n 40 --no-pager"
+    fi
     info "Watch the log:  journalctl -u hs2 -f"
   else
     err "hs2 failed to start after upgrade. Last log:"

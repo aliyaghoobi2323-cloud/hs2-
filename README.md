@@ -71,10 +71,34 @@ config's `"tuning"` section — nothing is hidden in a stray sysctl file.
 
 ## Certificate renewal without downtime
 
-Let's Encrypt certificates renew about a week before expiry and are
+Let's Encrypt certificates renew 30 days before expiry (certbot's default,
+so a few days with port 80 or Let's Encrypt unreachable never matter) and are
 **hot-reloaded** (SIGHUP / `systemctl reload`) — new connections pick up the
 fresh certificate while existing ones keep running, so a renewal never drops
 the tunnel.
+
+## What the installer checks for you
+
+- **"Ready" means packets cross.** The server that pastes the link starts
+  second, so the installer waits (up to 40 s) until the tunnel really carries
+  traffic — a live authenticated link, or the other side's tun IP answering —
+  before it says ready. If nothing comes back (typical: GRE / IP-in-IP / a raw
+  protocol dropped on the path) it says so, names the likely cause and exits
+  with an error; the service stays installed and connects by itself if the
+  path opens later.
+- **No tunnel port for raw encapsulations.** tun over icmp / gre / ipip / ipx
+  rides a bare IP protocol, so no port is asked or put in the link.
+- **The icmp tunnel keeps normal ping working.** Only the kernel's replies to
+  the tunnel's own packets are dropped (an nftables rule, iptables as a
+  fallback) — the server still answers ordinary ping on every IP.
+- **The download is checked** against `hs2-linux-amd64.sha256` (catches a
+  broken or altered download; it is not a signature — protect the GitHub
+  account with 2FA, and pin a reviewed commit with
+  `HS2_REPO_RAW=https://raw.githubusercontent.com/<owner>/<repo>/<commit>` if
+  you need that). The full sha256 is printed so both servers can be compared.
+- **Backups** (`/root/hs2-backups`, root-only, they contain the tunnel key)
+  keep the newest 10 (`HS2_KEEP_BACKUPS`). Uninstall stops only this tunnel's
+  process, never another hs2 tunnel on the same server.
 
 ## What changed in v3
 

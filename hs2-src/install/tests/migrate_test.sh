@@ -34,13 +34,17 @@ check "upgrade continues past migrate_config with a foreign certbot lineage" '[ 
 check "fixed 8/16/8 pool migrated to 2/32/8" 'grep -F "\"min_links\": 2, \"max_links\": 32, \"per_link\": 8," "$T/cfg.json" >/dev/null'
 check "config is still valid JSON" 'python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$T/cfg.json"'
 check "renew_hook switched to reload (in place)" 'grep -x "renew_hook = systemctl reload hs2" "$T/renewal/a.example.conf" >/dev/null && ! grep -q "restart hs2" "$T/renewal/a.example.conf"'
-check "renew_before_expiry is top-level (before [renewalparams])" '[ "$(grep -n -m1 "^renew_before_expiry = 7 days" "$T/renewal/a.example.conf" | cut -d: -f1)" -lt "$(grep -n -m1 "^\[renewalparams\]" "$T/renewal/a.example.conf" | cut -d: -f1)" ]'
+check "renew_before_expiry is top-level (before [renewalparams])" '[ "$(grep -n -m1 "^renew_before_expiry = 30 days" "$T/renewal/a.example.conf" | cut -d: -f1)" -lt "$(grep -n -m1 "^\[renewalparams\]" "$T/renewal/a.example.conf" | cut -d: -f1)" ]'
 check "the panel's own lineage is left untouched" 'cmp -s "$T/panel.orig" "$T/renewal/z-panel.example.conf"'
 check "old static sysctl file removed" '[ ! -e "$T/sysctl.conf" ]'
 # idempotent: running the migration a second time changes nothing and still succeeds
 cp "$T/cfg.json" "$T/cfg.1"; cp "$T/renewal/a.example.conf" "$T/a.1"
 out=$(bash "$T/run.sh" 2>&1); rc=$?
 check "second run succeeds and is a no-op" '[ $rc = 0 ] && cmp -s "$T/cfg.1" "$T/cfg.json" && cmp -s "$T/a.1" "$T/renewal/a.example.conf"'
+# an install from the 7-day era moves to 30 days in place (one line, not two)
+sed -i 's/^renew_before_expiry = 30 days/renew_before_expiry = 7 days/' "$T/renewal/a.example.conf"
+out=$(bash "$T/run.sh" 2>&1); rc=$?
+check "old 7-day renewal window moved to 30 days in place" '[ $rc = 0 ] && [ "$(grep -c "^renew_before_expiry" "$T/renewal/a.example.conf")" = 1 ] && grep -x "renew_before_expiry = 30 days" "$T/renewal/a.example.conf" >/dev/null'
 # no certbot at all (typical kharej)
 rm -rf "$T/renewal"; mkdir "$T/renewal"
 out=$(bash "$T/run.sh" 2>&1); rc=$?

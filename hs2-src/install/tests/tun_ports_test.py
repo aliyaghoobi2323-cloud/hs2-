@@ -18,7 +18,12 @@ panel; and on a server where hs2.service had been masked, the installer printed
      is unmasked, and a restart that did not happen is a failure, not "running".
   3. tunnel (root + network namespaces): runs the real hs2 binary with the
      configs from part 1 and moves real traffic from iran's user ports to a
-     panel on kharej, direct and reverse, on two user ports each, per TLS mode.
+     panel on kharej, direct and reverse, on two user ports each, per TLS mode
+     and datagram encap (udp, ipx, gre — the raw ones with no tunnel port) —
+     and runs the installer's own verify_tunnel on the dialing side.
+  4. blocked path: gre with GRE dropped toward the kharej. Both services run,
+     so the old installer said "ready"; verify_tunnel must fail and name the
+     cause, and connect by itself once the path passes GRE again.
 
 Parts 1-2 need only bash/python/openssl. Part 3 needs root and `ip netns`; it
 builds hs2 and the lab probe with `go` (or takes HS2_BIN / PROBE_BIN).
@@ -233,6 +238,13 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
     tag = "dgtun-" + encap
     sfx = "_" + tag
     ports, panel = "8443,9443", "127.0.0.1:18443"
+    # The raw encaps (icmp/gre/ipip/ipx) are bare IP protocols: no tunnel port
+    # is asked (an unexpected prompt blocks the branch) and addr is the bare IP.
+    raw = encap != "udp"
+    kport = [] if raw else [(r"Tunnel port \(clients never see this\)", "2096")]
+    iport = [] if raw else [(r"Tunnel port to LISTEN on", "2082")]
+    kh_ep = kh_ip if raw else "%s:2096" % kh_ip
+    ir_ep = ir_ip if raw else "%s:2082" % ir_ip
     choice = {"udp": "1", "icmp": "2", "gre": "3", "ipip": "4", "ipx": "5"}[encap]
     menu = [(r"Transport:[\s\S]*?Choose \[1\]: ", "4"),
             (r"cross the wire\?[\s\S]*?Choose \[1\]: ", choice)]
@@ -247,15 +259,14 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
     # direct: kharej listens and makes the link (asks the panel, never the ports).
     ok, why = run_branch(lib, sb, "kh_direct" + sfx, kh_ip, "DIRECTION=direct; PUBIP=%s" % kh_ip,
                          "ask_transport; kharej_listener",
-                         menu + [(r"Tunnel port \(clients never see this\)", "2096"),
-                                 (r"TUN interface name", ""),
-                                 (r"Panel inbound address on this server", panel)])
-    res(t + "installer: kharej direct asks only the panel (no port list)", ok, why)
+                         menu + kport + [(r"TUN interface name", ""),
+                                         (r"Panel inbound address on this server", panel)])
+    res(t + "installer: kharej direct asks only the panel (no port list%s)" % (", no tunnel port" if raw else ""), ok, why)
     if ok:
         c = cfg(sb, "kh_direct" + sfx)
         res(t + "installer: kharej direct writes the panel and no port list", c.get("carrier") == "dgtun"
-            and c.get("encap") == encap and c.get("expose") == panel and "forward_ports" not in c and proto_ok(c),
-            json.dumps(c)[:220])
+            and c.get("encap") == encap and c.get("expose") == panel and "forward_ports" not in c and proto_ok(c)
+            and c.get("addr") == ("0.0.0.0" if raw else "0.0.0.0:2096"), json.dumps(c)[:220])
         ok, why = run_branch(lib, sb, "ir_direct" + sfx, ir_ip, "", "iran_dialer",
                              [(r"Paste the hs2:// setup link", "LINK"),
                               (r"TUN interface name", ""),
@@ -265,16 +276,15 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
         if ok:
             c = cfg(sb, "ir_direct" + sfx)
             res(t + "installer: iran direct writes the ports", c.get("encap") == encap
-                and c.get("forward_ports") == ports and c.get("addr") == "%s:2096" % kh_ip and proto_ok(c),
+                and c.get("forward_ports") == ports and c.get("addr") == kh_ep and proto_ok(c),
                 json.dumps(c)[:220])
 
     # reverse: iran listens and makes the link (asks the ports), kharej pastes it.
     ok, why = run_branch(lib, sb, "ir_reverse" + sfx, ir_ip, "DIRECTION=reverse; PUBIP=%s" % ir_ip,
                          "ask_transport; iran_listener",
-                         menu + [(r"Tunnel port to LISTEN on", "2082"),
-                                 (r"TUN interface name", ""),
-                                 (r"IP that USERS connect to", ""),
-                                 (r"User port\(s\) to open here", ports)])
+                         menu + iport + [(r"TUN interface name", ""),
+                                         (r"IP that USERS connect to", ""),
+                                         (r"User port\(s\) to open here", ports)])
     res(t + "installer: iran reverse asks the ports", ok, why)
     if ok:
         c = cfg(sb, "ir_reverse" + sfx)
@@ -289,7 +299,7 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
             c = cfg(sb, "kh_reverse" + sfx)
             res(t + "installer: kharej reverse writes the panel, no port list, ipx number from the link",
                 c.get("encap") == encap and c.get("expose") == panel and "forward_ports" not in c
-                and c.get("addr") == "%s:2082" % ir_ip and proto_ok(c), json.dumps(c)[:220])
+                and c.get("addr") == ir_ep and proto_ok(c), json.dumps(c)[:220])
     return tag
 
 
@@ -346,7 +356,30 @@ def sh(cmd, timeout=60, check=False):
     return p
 
 
-def part3(sb, kh_ip, ir_ip, bins, carrier):
+VERIFY = r'''
+source "$LIB"
+trap - EXIT
+set +e
+if [ "$NOPING" = 1 ]; then ping(){ return 1; }; fi
+verify_tunnel "$VCFG" "$SECS"; rc=$?
+[ $rc = 0 ] || tunnel_down_help "$VCFG"
+echo "VERIFY_RC=$rc"
+'''
+
+
+def verify(ns, lib, cfgpath, secs, noping=False):
+    """Run the installer's own verify_tunnel (and tunnel_down_help on failure)
+    inside netns ns against a running tunnel. noping=True stubs ping out, so only
+    the daemon's live-link count in its status file can prove the tunnel."""
+    env = dict(os.environ, LIB=lib, VCFG=cfgpath, SECS=str(secs), NOPING="1" if noping else "0", TERM="dumb")
+    p = subprocess.run(["ip", "netns", "exec", ns, "bash", "-c", VERIFY], env=env,
+                       capture_output=True, text=True, timeout=secs + 30)
+    out = p.stdout + p.stderr
+    m = re.search(r"VERIFY_RC=(\d+)", out)
+    return (int(m.group(1)) if m else -1), out
+
+
+def part3(sb, lib, kh_ip, ir_ip, bins, carrier):
     hs2, probe = bins
     IR, KH = "tpir", "tpkh"
     procs = []
@@ -396,6 +429,18 @@ def part3(sb, kh_ip, ir_ip, bins, carrier):
             time.sleep(0.5)
         res("tunnel %s: the L3 tun is up (iran pings kharej's tun IP)" % label, up)
 
+        # The installer's end-to-end check on the side that pasted the link
+        # (direct: iran dials; reverse: kharej dials) — and, with ping stubbed
+        # out, from the daemon's live-link count alone.
+        vns, vrole = (IR, ir_role) if "direct" in label else (KH, kh_role)
+        vcfg = os.path.join(sb, vrole + ".json")
+        rc, out = verify(vns, lib, vcfg, 20)
+        res("tunnel %s: installer verify_tunnel on the dialing side says UP" % label,
+            rc == 0 and "Tunnel is UP" in out, out.strip()[-300:])
+        rc, out = verify(vns, lib, vcfg, 20, noping=True)
+        res("tunnel %s: the status file's live links alone prove it (no ping)" % label,
+            rc == 0, out.strip()[-300:])
+
         for port in ("8443", "9443"):
             p = sh("ip netns exec %s %s -addr 127.0.0.1:%s -bulk 2 -t 4s -warm 1s" % (IR, probe, port), timeout=60)
             try:
@@ -413,6 +458,55 @@ def part3(sb, kh_ip, ir_ip, bins, carrier):
                 print("---- " + log + " (tail)")
                 print(open(os.path.join(sb, log)).read()[-1500:])
     cleanup()
+
+
+def part_blocked(sb, lib, kh_ip, ir_ip, bins):
+    """gre filtered on the path — the case the installer used to call "ready":
+    both servers run, GRE never arrives. verify_tunnel must fail and say why;
+    once the path opens the running service connects by itself (no re-install)."""
+    hs2, _ = bins
+    IR, KH = "tbir", "tbkh"
+    kh_cfg, ir_cfg = (os.path.join(sb, r + "_dgtun-gre.json") for r in ("kh_direct", "ir_direct"))
+    if not (os.path.exists(kh_cfg) and os.path.exists(ir_cfg)):
+        res("blocked gre: configs from the installer part are available", False)
+        return
+    procs = []
+
+    def cleanup():
+        for p in procs:
+            p.terminate()
+        for p in procs:
+            try:
+                p.wait(5)
+            except subprocess.TimeoutExpired:
+                p.kill()
+        sh("ip netns del %s 2>/dev/null; ip netns del %s 2>/dev/null" % (IR, KH))
+
+    try:
+        cleanup()
+        sh("ip netns add %s && ip netns add %s" % (IR, KH), check=True)
+        sh("ip link add tbvi netns %s type veth peer name tbvk netns %s" % (IR, KH), check=True)
+        sh("ip -n %s addr add %s/24 dev tbvi && ip -n %s addr add %s/24 dev tbvk" % (IR, ir_ip, KH, kh_ip), check=True)
+        sh("for n in %s %s; do ip -n $n link set lo up; done; ip -n %s link set tbvi up; ip -n %s link set tbvk up"
+           % (IR, KH, IR, KH), check=True)
+        # the path drops GRE (IP protocol 47) toward the kharej
+        sh("ip netns exec %s iptables -w -I INPUT -p gre -j DROP" % KH, check=True)
+        for ns, c, log in ((KH, kh_cfg, "blk_kh.log"), (IR, ir_cfg, "blk_ir.log")):
+            f = open(os.path.join(sb, log), "w")
+            procs.append(subprocess.Popen(["ip", "netns", "exec", ns, "env", "HS2_NO_TUNE=1", hs2, "run", "-c", c],
+                                          stdout=f, stderr=subprocess.STDOUT))
+            time.sleep(0.5)
+        rc, out = verify(IR, lib, ir_cfg, 8)
+        res("blocked gre: verify_tunnel fails although both services run", rc == 1, out.strip()[-300:])
+        res("blocked gre: the failure names the cause (GRE filtered) and the way out",
+            "did NOT connect" in out and "GRE (IP protocol 47)" in out and "udp, icmp, or tcp" in out,
+            out.strip()[-400:])
+        sh("ip netns exec %s iptables -w -D INPUT -p gre -j DROP" % KH, check=True)
+        rc, out = verify(IR, lib, ir_cfg, 30)
+        res("blocked gre: once the path passes GRE the running service connects by itself", rc == 0,
+            out.strip()[-300:])
+    finally:
+        cleanup()
 
 
 def build_bins(sb):
@@ -438,7 +532,7 @@ def main():
         lib = make_lib(sb)
         kh_ip, ir_ip = "192.168.61.2", "192.168.61.1"
         carriers = [part1(sb, lib, kh_ip, ir_ip, mode) for mode in ("1", "2")]
-        carriers += [part1_dgtun(sb, lib, kh_ip, ir_ip, encap) for encap in ("udp", "ipx")]
+        carriers += [part1_dgtun(sb, lib, kh_ip, ir_ip, encap) for encap in ("udp", "ipx", "gre")]
         part2(sb, lib)
         if os.environ.get("HS2_SKIP_TUNNEL") == "1":
             print("SKIP tunnel part (HS2_SKIP_TUNNEL=1)")
@@ -452,7 +546,9 @@ def main():
                     res("tunnel %s: configs from the installer part are available" % carrier, False)
                     continue
                 bins = bins or build_bins(sb)
-                part3(sb, kh_ip, ir_ip, bins, carrier)
+                part3(sb, lib, kh_ip, ir_ip, bins, carrier)
+            bins = bins or build_bins(sb)
+            part_blocked(sb, lib, kh_ip, ir_ip, bins)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
     print("\n%s: %d failure(s)" % ("FAIL" if FAILS else "OK", len(FAILS)))
