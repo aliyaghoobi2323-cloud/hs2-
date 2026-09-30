@@ -8,14 +8,17 @@ panel; and on a server where hs2.service had been masked, the installer printed
 "running" while the new config never loaded. This test covers all of it:
 
   1. installer: drives the REAL interactive installer functions (sourced from
-     install.sh, run under its own `set -euo pipefail`) through a pty for the
-     four tun+tcp branches (kharej/iran x direct/reverse), with the setup link
-     carried from one side to the other, and checks the configs they write.
+     install.sh, run under its own `set -euo pipefail`) through a pty from the
+     Transport menu (tun -> tcp -> TLS mode) for the four branches
+     (kharej/iran x direct/reverse) and both TLS modes (mtcp pool + tun =
+     l3mtcp, one TLS link + tun = tls), with the setup link carried from one
+     side to the other, and checks the configs they write — including that the
+     pasting side picks the TLS mode up from the link.
   2. service: restart_unit/unit_unmask against a fake systemctl — a masked unit
      is unmasked, and a restart that did not happen is a failure, not "running".
   3. tunnel (root + network namespaces): runs the real hs2 binary with the
      configs from part 1 and moves real traffic from iran's user ports to a
-     panel on kharej, direct and reverse, on two user ports each.
+     panel on kharej, direct and reverse, on two user ports each, per TLS mode.
 
 Parts 1-2 need only bash/python/openssl. Part 3 needs root and `ip netns`; it
 builds hs2 and the lab probe with `go` (or takes HS2_BIN / PROBE_BIN).
@@ -155,60 +158,70 @@ def cfg(sb, role):
     return json.load(open(os.path.join(sb, role + ".json")))
 
 
-def part1(sb, lib, kh_ip, ir_ip):
-    """Generate all four tun+tcp configs through the real prompts."""
+def part1(sb, lib, kh_ip, ir_ip, mode):
+    """Generate all four tun+tcp configs through the real prompts, starting at
+    the Transport menu: tun -> tcp -> TLS mode. mode is the TLS-mode menu
+    choice ("1" = mtcp pool + tun = l3mtcp, "2" = one TLS link + tun = tls);
+    the side that pastes the link must pick the same carrier up from it."""
+    carrier = {"1": "l3mtcp", "2": "tls"}[mode]
+    sfx = "_" + carrier
     ports = "8443,9443"
     panel = "127.0.0.1:18443"
+    menu = [(r"Transport:[\s\S]*?Choose \[1\]: ", "4"),
+            (r"cross the wire\?[\s\S]*?Choose \[1\]: ", "6"),
+            (r"TLS mode for the tun:[\s\S]*?Choose \[1\]: ", mode)]
+    tag = "[%s] " % carrier
     # direct: kharej listens and generates the link, iran pastes it.
-    ok, why = run_branch(lib, sb, "kh_direct", kh_ip,
-                         "TRANSPORT=tun; TUN_ENCAP=tcp; DIRECTION=direct; PUBIP=%s" % kh_ip, "kharej_listener",
-                         [(r"Tunnel port \(clients never see this\)", "2096"),
-                          (r"Panel inbound address on this server", panel),
-                          (r"Domain \(its A record", "test.local"),
-                          (r"TUN interface name", ""), (r"TUN MTU", ""),
-                          (r"Also forward UDP", "n")])
-    res("installer: kharej direct tun/tcp asks for the panel inbound", ok, why)
+    ok, why = run_branch(lib, sb, "kh_direct" + sfx, kh_ip, "DIRECTION=direct; PUBIP=%s" % kh_ip,
+                         "ask_transport; kharej_listener",
+                         menu + [(r"Tunnel port \(clients never see this\)", "2096"),
+                                 (r"Panel inbound address on this server", panel),
+                                 (r"Domain \(its A record", "test.local"),
+                                 (r"TUN interface name", ""), (r"TUN MTU", ""),
+                                 (r"Also forward UDP", "n")])
+    res(tag + "installer: kharej direct tun/tcp asks for the panel inbound", ok, why)
     if ok:
-        c = cfg(sb, "kh_direct")
-        res("installer: kharej direct tun/tcp writes expose", c.get("carrier") == "l3mtcp" and c.get("expose") == panel
+        c = cfg(sb, "kh_direct" + sfx)
+        res(tag + "installer: kharej direct tun/tcp writes expose", c.get("carrier") == carrier and c.get("expose") == panel
             and c.get("mode") == "listen" and c.get("reverse") is False, json.dumps(c)[:200])
-        ok, why = run_branch(lib, sb, "ir_direct", ir_ip, "", "iran_dialer",
+        ok, why = run_branch(lib, sb, "ir_direct" + sfx, ir_ip, "", "iran_dialer",
                              [(r"Paste the hs2:// setup link", "LINK"),
                               (r"TUN interface name", ""),
                               (r"IP that USERS connect to", ""),
                               (r"User port\(s\) to open here", ports)])
-        res("installer: iran direct tun/tcp asks for the user ports", ok, why)
+        res(tag + "installer: iran direct tun/tcp asks for the user ports", ok, why)
         if ok:
-            c = cfg(sb, "ir_direct")
-            res("installer: iran direct tun/tcp writes forward_ports", c.get("carrier") == "l3mtcp"
+            c = cfg(sb, "ir_direct" + sfx)
+            res(tag + "installer: iran direct tun/tcp writes forward_ports (carrier from the link)", c.get("carrier") == carrier
                 and c.get("forward_ports") == ports and c.get("mode") == "dial" and c.get("reverse") is False
                 and c.get("addr") == "%s:2096" % kh_ip and c.get("udp") is False, json.dumps(c)[:200])
 
     # reverse: iran listens and generates the link, kharej pastes it.
-    ok, why = run_branch(lib, sb, "ir_reverse", ir_ip,
-                         "TRANSPORT=tun; TUN_ENCAP=tcp; DIRECTION=reverse; PUBIP=%s" % ir_ip, "iran_listener",
-                         [(r"Tunnel port to LISTEN on", "2082"),
-                          (r"IP that USERS connect to", ""),
-                          (r"User port\(s\) to open here", ports),
-                          (r"Domain for THIS iran server", "test.local"),
-                          (r"TUN interface name", ""), (r"TUN MTU", ""),
-                          (r"Also forward UDP", "y")])
-    res("installer: iran reverse tun/tcp asks for the user ports", ok, why)
+    ok, why = run_branch(lib, sb, "ir_reverse" + sfx, ir_ip, "DIRECTION=reverse; PUBIP=%s" % ir_ip,
+                         "ask_transport; iran_listener",
+                         menu + [(r"Tunnel port to LISTEN on", "2082"),
+                                 (r"IP that USERS connect to", ""),
+                                 (r"User port\(s\) to open here", ports),
+                                 (r"Domain for THIS iran server", "test.local"),
+                                 (r"TUN interface name", ""), (r"TUN MTU", ""),
+                                 (r"Also forward UDP", "y")])
+    res(tag + "installer: iran reverse tun/tcp asks for the user ports", ok, why)
     if ok:
-        c = cfg(sb, "ir_reverse")
-        res("installer: iran reverse tun/tcp writes forward_ports (+udp)", c.get("carrier") == "l3mtcp"
+        c = cfg(sb, "ir_reverse" + sfx)
+        res(tag + "installer: iran reverse tun/tcp writes forward_ports (+udp)", c.get("carrier") == carrier
             and c.get("forward_ports") == ports and c.get("reverse") is True and c.get("udp") is True,
             json.dumps(c)[:200])
-        ok, why = run_branch(lib, sb, "kh_reverse", kh_ip, "", "kharej_dialer",
+        ok, why = run_branch(lib, sb, "kh_reverse" + sfx, kh_ip, "", "kharej_dialer",
                              [(r"Paste the hs2:// setup link", "LINK"),
                               (r"TUN interface name", ""),
                               (r"Panel inbound address on this server", panel)])
-        res("installer: kharej reverse tun/tcp asks for the panel inbound", ok, why)
+        res(tag + "installer: kharej reverse tun/tcp asks for the panel inbound", ok, why)
         if ok:
-            c = cfg(sb, "kh_reverse")
-            res("installer: kharej reverse tun/tcp writes expose", c.get("carrier") == "l3mtcp"
+            c = cfg(sb, "kh_reverse" + sfx)
+            res(tag + "installer: kharej reverse tun/tcp writes expose (carrier from the link)", c.get("carrier") == carrier
                 and c.get("expose") == panel and c.get("reverse") is True
                 and c.get("addr") == "%s:2082" % ir_ip, json.dumps(c)[:200])
+    return carrier
 
 
 # ---------------------------------------------------------------- part 2 -----
@@ -264,7 +277,7 @@ def sh(cmd, timeout=60, check=False):
     return p
 
 
-def part3(sb, kh_ip, ir_ip, bins):
+def part3(sb, kh_ip, ir_ip, bins, carrier):
     hs2, probe = bins
     IR, KH = "tpir", "tpkh"
     procs = []
@@ -286,7 +299,9 @@ def part3(sb, kh_ip, ir_ip, bins):
         procs.append(p)
         return p
 
-    for label, kh_role, ir_role in (("direct", "kh_direct", "ir_direct"), ("reverse", "kh_reverse", "ir_reverse")):
+    sfx = "_" + carrier
+    for label, kh_role, ir_role in (("%s direct" % carrier, "kh_direct" + sfx, "ir_direct" + sfx),
+                                    ("%s reverse" % carrier, "kh_reverse" + sfx, "ir_reverse" + sfx)):
         cleanup()
         sh("ip netns add %s && ip netns add %s" % (IR, KH), check=True)
         sh("ip link add tpvi netns %s type veth peer name tpvk netns %s" % (IR, KH), check=True)
@@ -353,17 +368,21 @@ def main():
                        check=True, capture_output=True)
         lib = make_lib(sb)
         kh_ip, ir_ip = "192.168.61.2", "192.168.61.1"
-        part1(sb, lib, kh_ip, ir_ip)
+        carriers = [part1(sb, lib, kh_ip, ir_ip, mode) for mode in ("1", "2")]
         part2(sb, lib)
-        have = all(os.path.exists(os.path.join(sb, r + ".json")) for r in ("kh_direct", "ir_direct", "kh_reverse", "ir_reverse"))
         if os.environ.get("HS2_SKIP_TUNNEL") == "1":
             print("SKIP tunnel part (HS2_SKIP_TUNNEL=1)")
         elif os.geteuid() != 0 or shutil.which("ip") is None:
             print("SKIP tunnel part (needs root and iproute2)")
-        elif not have:
-            res("tunnel: configs from the installer part are available", False)
         else:
-            part3(sb, kh_ip, ir_ip, build_bins(sb))
+            bins = None
+            for carrier in carriers:
+                roles = [r + "_" + carrier for r in ("kh_direct", "ir_direct", "kh_reverse", "ir_reverse")]
+                if not all(os.path.exists(os.path.join(sb, r + ".json")) for r in roles):
+                    res("tunnel %s: configs from the installer part are available" % carrier, False)
+                    continue
+                bins = bins or build_bins(sb)
+                part3(sb, kh_ip, ir_ip, bins, carrier)
     finally:
         shutil.rmtree(sb, ignore_errors=True)
     print("\n%s: %d failure(s)" % ("FAIL" if FAILS else "OK", len(FAILS)))
