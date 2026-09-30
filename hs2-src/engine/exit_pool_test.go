@@ -237,7 +237,7 @@ func TestExitPoolSlotsTrackEdgeServingPlusRetiring(t *testing.T) {
 	_, retiring := p.entries()
 	retiring[0].users.Store(1) // two surplus links hold connections
 	retiring[1].users.Store(1)
-	p.clk.Advance(retireAfterDrop + time.Second)
+	p.clk.Advance(bornSpareGrace + time.Second) // born spare: kept for its grace first
 	for i := 0; i < 3; i++ {
 		p.lm.drainTick()
 	}

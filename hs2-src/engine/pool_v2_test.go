@@ -1166,7 +1166,9 @@ func TestReverseBornRetiringCloseGuards(t *testing.T) {
 	}{
 		{2 * time.Second, true, "t0+3 s: the target drop is 3 s old"},
 		{1500 * time.Millisecond, true, "t0+4.5 s: the link is only 3.5 s old"},
-		{500 * time.Millisecond, false, "t0+5 s: both guards pass"},
+		{500 * time.Millisecond, true, "t0+5 s: a link born spare is kept for its grace (it may be replacing a link that died unnoticed)"},
+		{bornSpareGrace - 4500*time.Millisecond, true, "the link is 0.5 s short of its grace"},
+		{500 * time.Millisecond, false, "grace over, both guards pass"},
 	} {
 		clk.Advance(step.adv)
 		m.drainTick()
@@ -1183,7 +1185,7 @@ func TestReverseBornRetiringCloseGuards(t *testing.T) {
 	// An old surplus link is still held for 4 s after a fresh target drop.
 	y := newMeteredFake()
 	m.AddLink(y, "exit")
-	clk.Advance(10 * time.Second)
+	clk.Advance(bornSpareGrace + time.Second)
 	m.setTarget(3)
 	m.setTarget(2) // drop now
 	for i, adv := range []time.Duration{0, 3 * time.Second} {
@@ -1227,7 +1229,7 @@ func TestReverseChurnGuard(t *testing.T) {
 		clk.Advance(5 * time.Second)
 		x := surplus(t, m)
 		for i := 1; i <= churnTrips; i++ {
-			clk.Advance(retireAfterDrop)
+			clk.Advance(bornSpareGrace)
 			m.drainTick()
 			if inPool(m, x) {
 				t.Fatalf("cycle %d: surplus link not retire-closed", i)
@@ -1264,7 +1266,7 @@ func TestReverseChurnGuard(t *testing.T) {
 		clk.Advance(5 * time.Second)
 		x := surplus(t, m)
 		for i := 1; i <= 5; i++ {
-			clk.Advance(retireAfterDrop)
+			clk.Advance(bornSpareGrace)
 			m.drainTick()
 			if inPool(m, x) {
 				t.Fatalf("cycle %d: surplus link not retire-closed", i)
@@ -1313,10 +1315,15 @@ func TestReversePoolRefusedNoClosesNotGrowable(t *testing.T) {
 	m.AddLink(c, "exit") // a link on which pool control works
 	clk.Advance(healthTick)
 	m.sampleHealth()
+	if m.sample.growable {
+		t.Fatal("growable on a link too young to have been refused yet")
+	}
+	clk.Advance(retireAfterDrop)
+	m.sampleHealth()
 	if !m.sample.growable {
 		t.Fatal("not growable with a link that takes pool control")
 	}
-	clk.Advance(retireAfterDrop)
+	clk.Advance(bornSpareGrace)
 	m.drainTick()
 	if inPool(m, x) {
 		t.Fatal("surplus link not closed once pool control works")
@@ -1365,6 +1372,7 @@ func TestOpenPoolCtlDetectsOldExit(t *testing.T) {
 	t.Run("old exit refuses", func(t *testing.T) {
 		m, ml, _ := run(t, func(_ context.Context, _ *smux.Session, st *smux.Stream) { st.Close() })
 		v2Wait(t, 3*time.Second, "kindPool refusal noticed", func() bool { return ml.poolRefused.Load() })
+		ml.born = ml.born.Add(-retireAfterDrop) // the link is old enough to judge
 		m.sampleHealth()
 		if m.sample.growable {
 			t.Fatal("growable although the only link's exit refused pool control")

@@ -984,6 +984,8 @@ tm_pattern(){
   users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
   phase=$(jget "$sf" phase); sat=$(jraw "$sf" sat)
   serving=$(jraw "$sf" serving); flowing=$(jraw "$sf" flowing); pressed=$(jraw "$sf" pressed)
+  # A newer daemon (it writes "serving") omits zero counts: absent = 0.
+  [ -n "$serving" ] && flowing=${flowing:-0}
   if [ -n "$serving" ]; then
     # Newer daemon: the target counts serving links; retiring ones close
     # by themselves once their connections end.
@@ -1126,6 +1128,7 @@ tm_monitor(){
       held=$(jraw "$sf" held_by); heldact=$(jraw "$sf" held_active)
       flowing=$(jraw "$sf" flowing); pressed=$(jraw "$sf" pressed); capm=$(jraw "$sf" cap_mbit)
       reason=$(jget "$sf" reason); xstats=$(jget "$sf" exit_stats)
+      [ -n "$serving" ] && flowing=${flowing:-0}  # newer daemon: absent count = 0
       local bar="" i=0
       # A little gauge inside the min–max envelope: serving links (█),
       # retiring links still up (▓), links wanted but not up yet (▒).

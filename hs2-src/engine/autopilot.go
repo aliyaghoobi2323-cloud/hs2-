@@ -47,14 +47,18 @@ type autopilot struct {
 	tun               apTunables
 	rnd               func() float64
 
-	T     int       // committed SERVING target
-	hist  []apTick  // ring of the last tun.histTicks ticks
-	caps  []apCap   // sustained rates of pressed serving links
-	pr    *apProbe  // an in-flight growth probe
-	k     int       // failed-probe backoff exponent
-	chain int       // consecutive successful probes: bigger steps while demand climbs
-	next  time.Time // no new probe before this
-	fail  struct {  // where growth last stopped helping
+	T     int      // committed SERVING target
+	hist  []apTick // ring of the last tun.histTicks ticks
+	caps  []apCap  // sustained rates of pressed serving links
+	pr    *apProbe // an in-flight growth probe
+	k     int      // failed-probe backoff exponent
+	chain int      // consecutive successful probes: bigger steps while demand climbs
+	// aborts counts consecutive probes whose links never came up (backoff);
+	// waitWhy says why the next probe is being waited for (for the monitor).
+	aborts  int
+	waitWhy string
+	next    time.Time // no new probe before this
+	fail    struct {  // where growth last stopped helping
 		at    time.Time
 		g     float64
 		flows int
@@ -537,8 +541,8 @@ func (a *autopilot) decide(s apSample) apDecision {
 
 	// ---- 6 hold ------------------------------------------------------------
 	if isShort && now.Before(a.next) {
-		return a.out(s, S, R, apHolding, fmt.Sprintf("links at their limit but more did not help at %.1f Mbit/s; next check in %s",
-			mbitps(a.fail.g), fmtDur(a.next.Sub(now))), "")
+		return a.out(s, S, R, apHolding, fmt.Sprintf("links at their limit, but %s; next check in %s",
+			a.waitWhy, fmtDur(a.next.Sub(now))), "")
 	}
 	r := "sized for current demand: " + why
 	if H < a.T {
@@ -555,14 +559,24 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 	if !pr.armed {
 		if S >= pr.to {
 			pr.armed, pr.armedAt = true, now
+			a.aborts = 0
 		} else if now.Sub(pr.start) > t.armTimeout {
 			a.T = pr.from
 			a.pr = nil
 			a.chain = 0
-			a.next = now.Add(t.abortNext)
-			return a.out(s, S, R, apHolding, fmt.Sprintf("wanted %d links, only %d came up", pr.to, S),
+			// Links that do not come up (the exit is at its own max, or dials
+			// fail) will not come up next minute either: back off like a failed
+			// probe, 60 s doubling to the cap.
+			a.aborts++
+			back := t.abortNext << (a.aborts - 1)
+			if back > t.backoffMax || back <= 0 {
+				back = t.backoffMax
+			}
+			a.next = now.Add(back)
+			a.waitWhy = fmt.Sprintf("the last try wanted %d links but only %d came up", pr.to, S)
+			return a.out(s, S, R, apHolding, fmt.Sprintf("wanted %d links, only %d came up; next try in %s", pr.to, S, fmtDur(back)),
 				fmt.Sprintf("pattern back to %d links: wanted %d but only %d came up in %s (peer not dialing or dials failing); retry in %s",
-					pr.from, pr.to, S, fmtDur(t.armTimeout), fmtDur(t.abortNext)))
+					pr.from, pr.to, S, fmtDur(t.armTimeout), fmtDur(back)))
 		}
 		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — waiting for them to come up (%d up)", pr.to, S), "")
 	}
@@ -634,6 +648,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		a.k = 0
 		a.chain++
 		a.next = now.Add(t.successNext)
+		a.waitWhy = "the last added links are still filling"
 		a.lastGrowAt = now
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: the new links added %.1f Mbit/s", a.T, mbitps(dG)),
 			fmt.Sprintf("pattern %d → %d links kept: +%.1f Mbit/s (new links carried %.1f)", pr.from, pr.to, mbitps(dG), mbitps(rNew)))
@@ -645,6 +660,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		a.pr = nil
 		a.chain = 0
 		a.next = now.Add(t.inconclusiveNext)
+		a.waitWhy = "the last added links are kept as headroom"
 		a.lastGrowAt = now
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no link is short of capacity any more", a.T),
 			fmt.Sprintf("pattern %d → %d links kept as headroom: new links carried %.1f Mbit/s and no link is at its limit any more (total %+.1f)",
@@ -668,6 +684,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		}
 		back = time.Duration(float64(back) * (1 - t.jitter + 2*t.jitter*a.rnd()))
 		a.next = now.Add(back)
+		a.waitWhy = fmt.Sprintf("more links did not add throughput at ~%.1f Mbit/s (path full)", mbitps(pr.gb))
 		return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: more links did not add throughput; next check in %s", mbitps(pr.gb), fmtDur(back)),
 			fmt.Sprintf("sized to %d links at ~%.1f Mbit/s — %d more links carried %.1f Mbit/s but the total rose only %.1f (path is full); next check in %s",
 				pr.from, mbitps(pr.gb), pr.to-pr.from, mbitps(max(rNew, pTot)), mbitps(dG), fmtDur(back)))
@@ -675,6 +692,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		a.pr = nil
 		a.chain = 0
 		a.next = now.Add(t.inconclusiveNext)
+		a.waitWhy = "no new connection reached the last added links yet"
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no new connection reached the added links yet — kept as spares", a.T),
 			fmt.Sprintf("pattern %d → %d links kept as spares: no new connection reached them yet (connections stay on their link)", pr.from, pr.to))
 	}

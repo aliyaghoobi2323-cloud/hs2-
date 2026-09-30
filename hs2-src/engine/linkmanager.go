@@ -88,11 +88,18 @@ const (
 	// Reverse churn guard: an exit whose own min_links is above the edge's
 	// target redials every link the edge retires. churnTrips links arriving
 	// surplus within churnReArrive of a retire-close, inside churnWindow, stop
-	// retire-closes for churnHold.
+	// retire-closes for churnHold. (A surplus link lives bornSpareGrace before
+	// it can be closed, so one close/redial cycle takes ~30 s.)
 	churnReArrive = 10 * time.Second
-	churnWindow   = 60 * time.Second
+	churnWindow   = 3 * time.Minute // > churnTrips cycles of bornSpareGrace
 	churnTrips    = 3
 	churnHold     = 10 * time.Minute
+
+	// bornSpare grace: a reverse link that arrives while the pool already has
+	// its target may be the exit replacing a serving link that died without
+	// this side noticing yet (smux notices within its 24 s keepalive timeout).
+	// It is kept this long before it can be closed, so it can take over.
+	bornSpareGrace = 30 * time.Second
 
 	dialFailLogEvery = 30 * time.Second
 	rwndHintEvery    = 10 * time.Minute
@@ -210,6 +217,7 @@ type managedLink struct {
 	haveRec      bool
 	lastRecAt    time.Time
 	poolRefused  atomic.Bool // the exit refused kindPool on this link (older exit)
+	bornSpare    bool        // reverse: arrived while the pool already had its target
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
 }
@@ -288,7 +296,7 @@ func (m *LinkManager) AddLink(l Link, from string) int {
 	m.linkSeq++
 	ml := m.newManaged(l, id, now)
 	if S, _ := m.countsLocked(); S >= int(m.target.Load()) {
-		ml.retiring, ml.retireSince = true, now
+		ml.retiring, ml.retireSince, ml.bornSpare = true, now, true
 	}
 	spare := ml.retiring
 	tripped := spare && m.noteSurplusArrivalLocked(now)
@@ -537,7 +545,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 		for len(serving) < T && len(retiring) > 0 {
 			ml := retiring[0]
 			retiring = retiring[1:]
-			ml.retiring, ml.servingSince, ml.heldLogAt = false, now, time.Time{}
+			ml.retiring, ml.servingSince, ml.heldLogAt, ml.bornSpare = false, now, time.Time{}, false
 			serving = append(serving, ml)
 			back = append(back, fmt.Sprint(ml.id))
 		}
@@ -633,7 +641,8 @@ func (m *LinkManager) drainTick() {
 			continue
 		}
 		if guard && len(closing) < maxClosesPerTick && ml.users.Load() == 0 && ml.link.Active() == 0 &&
-			(!m.accept || now.Sub(ml.born) >= retireAfterDrop) {
+			(!m.accept || now.Sub(ml.born) >= retireAfterDrop) &&
+			(!ml.bornSpare || now.Sub(ml.born) >= bornSpareGrace) {
 			closing = append(closing, ml)
 			continue
 		}
@@ -643,7 +652,11 @@ func (m *LinkManager) drainTick() {
 		}
 		if age := now.Sub(ml.retireSince); age >= heldLogFirst && (ml.heldLogAt.IsZero() || now.Sub(ml.heldLogAt) >= heldLogEvery) {
 			ml.heldLogAt = now
-			held = append(held, fmt.Sprintf("link %d retiring %s: held by %d open connection(s), %d active", ml.id, fmtDur(age), ml.open, ml.flowing))
+			if n := max(ml.open, int(ml.users.Load())); n > 0 {
+				held = append(held, fmt.Sprintf("link %d retiring %s: held by %d open connection(s), %d active", ml.id, fmtDur(age), n, ml.flowing))
+			} else {
+				held = append(held, fmt.Sprintf("link %d retiring %s: empty but kept up — the exit would redial it (no pool control, or its min_links is above this server's target)", ml.id, fmtDur(age)))
+			}
 		}
 	}
 	m.links = kept
@@ -1019,7 +1032,7 @@ func (m *LinkManager) sampleHealth() {
 	secs := dt.Seconds()
 	perTick := func(b uint64) float64 { return float64(b) * healthTick.Seconds() / secs }
 	s := apSample{now: now, open: int(m.users.Load())}
-	nOK, nOld, poolOK := 0, 0, 0
+	nOK, nOld, poolOK, aged := 0, 0, 0, 0
 
 	m.mu.Lock()
 	for _, ml := range m.links {
@@ -1039,8 +1052,11 @@ func (m *LinkManager) sampleHealth() {
 		if o.fs.last.After(ml.lastByte) {
 			ml.lastByte = o.fs.last
 		}
-		if !ml.poolRefused.Load() {
-			poolOK++
+		if now.Sub(ml.born) >= retireAfterDrop { // old enough to have been refused
+			aged++
+			if !ml.poolRefused.Load() {
+				poolOK++
+			}
 		}
 		if ml.mtr != nil {
 			switch o.statsState {
@@ -1141,7 +1157,10 @@ func (m *LinkManager) sampleHealth() {
 		s.flowing += ml.flowing
 		s.links = append(s.links, ml.apLink())
 	}
-	s.growable = !m.accept || len(s.links) == 0 || poolOK > 0
+	// Growable unless every link old enough to have been refused pool control
+	// was refused (a pre-pool-control exit); while all links are fresh, as at
+	// start, assume it can.
+	s.growable = !m.accept || aged == 0 || poolOK > 0
 	noPool := m.growable && !s.growable && !m.noPoolLogged
 	if noPool {
 		m.noPoolLogged = true
