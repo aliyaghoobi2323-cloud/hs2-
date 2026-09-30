@@ -371,8 +371,8 @@ def phase_reboot():
     t = wait_data(secs=90)
     res("reboot both: hs2 up on both by itself", state("ir")[0] == "active" and state("kh")[0] == "active", f"{state('ir')} {state('kh')}")
     res("reboot both: tunnel carries data again", t is not None, f"boot ir {bi:.0f}s kh {bk:.0f}s, data {t:.0f}s after boot" if t and bi and bk else "")
-    log = sh("kh", "journalctl -u hs2 -b --no-pager -o cat | grep -E 'reverse dial to edge failed|reverse link up' | head -3")
-    res("kharej waited for its late IP instead of giving up", "reverse link up" in log, log.replace("\n", " | ")[:300])
+    log = sh("kh", "journalctl -u hs2 -b --no-pager -o cat | grep -E 'dial to edge failed|exit link up to edge' | head -3")
+    res("kharej waited for its late IP instead of giving up", "exit link up to edge" in log, log.replace("\n", " | ")[:300])
     src = sh("kh", "ss -Htn state established '( dport = :2082 )' | awk '{print $3}' | sed 's/:[0-9]*$//' | sort -u")
     res("after reboot still leaves from 10.30.0.21", src == "10.30.0.21", src)
 
@@ -414,7 +414,8 @@ WantedBy=multi-user.target
         "StartLimitIntervalSec=0" in unit and "modprobe tun" in unit and "ExecReload=/bin/kill -HUP" in unit and "(kharej)" in unit)
     cfg = sh("kh", "cat /etc/hs2/config.json")
     res("upgrade: fixed link pool migrated to the 2–32 adaptive envelope",
-        '"min_links": 2, "max_links": 32, "per_link": 8,' in cfg, [l for l in cfg.split("\n") if "min_links" in l])
+        '"min_links": 2, "max_links": 32, "per_link": 8,' in cfg,
+        " ".join(l.strip() for l in cfg.split("\n") if "min_links" in l))
     res("upgrade: old static sysctl file removed (runtime tuning now)",
         sh("kh", "test -f /etc/sysctl.d/99-hs2.conf && echo present || echo gone") == "gone")
     res("upgrade: autostart re-enabled", state("kh") == ["active", "enabled"], str(state("kh")))
