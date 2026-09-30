@@ -29,7 +29,7 @@ LINK_PER=8
 
 # How the L3 tun (transport "tun") crosses the wire. Set by ask_tun_encap.
 #   udp/icmp/gre/ipip/ipx = carrier "dgtun" (a routed TUN over a datagram pool)
-#   tcp                   = carrier "l3mtcp" (classic L3 over multi-link TLS)
+#   tcp                   = carrier "l3mtcp" (mtcp pool + tun) or "tls" (one link + tun)
 # TUN_PROTO is the raw IP protocol number for the "ipx" encapsulation only.
 TUN_ENCAP=udp
 TUN_PROTO=""
@@ -503,7 +503,7 @@ ask_tun_encap(){
   echo "    3) gre  — datagram pool as GRE" >&2
   echo "    4) ipip — datagram pool as IP-in-IP" >&2
   echo "    5) ipx  — datagram pool over a raw IP protocol number" >&2
-  echo "    6) tcp  — classic L3 over multi-link TLS (needs a domain + certificate)" >&2
+  echo "    6) tcp  — L3 over TLS: the mtcp multi-link pool or one TLS link (needs a domain + certificate)" >&2
   read -rp "Choose [1]: " TE </dev/tty
   TUN_PROTO=""
   case "${TE:-1}" in
@@ -512,10 +512,32 @@ ask_tun_encap(){
     3) TUN_ENCAP=gre ;;
     4) TUN_ENCAP=ipip ;;
     5) TUN_ENCAP=ipx; ask_ipx_proto ;;
-    6) TUN_ENCAP=tcp ;;
+    6) TUN_ENCAP=tcp; ask_tun_tls_mode ;;
     *) die "invalid tun encapsulation" ;;
   esac
 }
+
+# ask_tun_tls_mode sets CARRIER for a tun carried over TLS (tun -> tcp). Both
+# choices run the stream engine with hs0 as a side channel and forward the user
+# ports exactly like the tcp transport; they differ only in the link pool:
+#   l3mtcp = the mtcp multi-link pool (2..32 TLS links sized by the autopilot)
+#   tls    = a single TLS link
+# Plain mtcp (no TUN) is transport tcp -> mtcp; under "tun" there is always hs0.
+ask_tun_tls_mode(){
+  echo >&2
+  echo "  TLS mode for the tun:" >&2
+  echo "    1) mtcp + tun — the mtcp multi-link pool (2–32 TLS links) + hs0 (recommended, fastest)" >&2
+  echo "    2) tls  + tun — one TLS link + hs0 (fewer connections, but far slower where each connection is throttled)" >&2
+  read -rp "Choose [1]: " M </dev/tty
+  case "${M:-1}" in 1) CARRIER=l3mtcp ;; 2) CARRIER=tls ;; *) die "invalid mode" ;; esac
+}
+
+# tun_tls_carrier normalizes the carrier a tun -> tcp link carries: l3mtcp or
+# tls; anything else (an old link) is the multi-link pool, as it always was.
+tun_tls_carrier(){ case "${CARRIER:-}" in tls) CARRIER=tls ;; *) CARRIER=l3mtcp ;; esac; }
+
+# tun_tls_label names the carrier for messages.
+tun_tls_label(){ [ "$CARRIER" = tls ] && echo "one TLS link" || echo "mtcp multi-link pool"; }
 
 # ask_ipx_proto sets TUN_PROTO: the raw IP protocol number the ipx encapsulation
 # rides on. It must be the SAME number on both servers. 253 is the default
@@ -662,14 +684,14 @@ EOF
     PANEL=${PANEL:-127.0.0.1:8443}
     read -rp "Domain (its A record must point to $PUBIP): " DOMAIN </dev/tty
     [ -n "$DOMAIN" ] || die "domain required"
-    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp
+    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; tun_tls_carrier
     read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
     case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
     cat > "$CFG" <<EOF
 {
-  "mode": "listen", "carrier": "l3mtcp", "reverse": false,
+  "mode": "listen", "carrier": "$CARRIER", "reverse": false,
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $TUNMTU,
   "backend_addr": "builtin",
@@ -761,12 +783,13 @@ EOF
     # MTU comes from the link so both sides match. The user ports iran opens
     # ride streams to the panel set here (expose), exactly like reverse tcp.
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the iran edge with the new installer."
+    tun_tls_carrier   # the link says mtcp pool (l3mtcp) or one TLS link (tls)
     ask_tun_params
     read -rp "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: " PANEL </dev/tty
     PANEL=${PANEL:-127.0.0.1:8443}
     cat > "$CFG" <<EOF
 {
-  "mode": "listen", "carrier": "l3mtcp", "reverse": true,
+  "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $MTU,
   "shared_key": "$SHARED",
@@ -777,7 +800,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
-    ok "KHAREJ ready (reverse, tun / L3 over multi-link TLS). It dials in to the Iran edge and forwards to $PANEL."
+    ok "KHAREJ ready (reverse, tun over TLS: $(tun_tls_label)). It dials in to the Iran edge and forwards to $PANEL."
     info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $MTU)."
   elif [ "$TRANSPORT" = "tun" ]; then
     # Reverse datagram tun (carrier "dgtun", encap $ENCAP from the link): kharej
@@ -877,11 +900,12 @@ EOF
     echo >&2; hr
     ok "IRAN ready (direct, tcp). Users connect on port(s): $PORTS"
   elif [ "$TRANSPORT" = "tun" ] && [ "$ENCAP" = "tcp" ]; then
-    # L3 tunnel over multi-link TLS (l3mtcp). Iran is the TLS client here
-    # (validates the kharej's domain as SNI). MTU comes from the link so both
+    # L3 tunnel over TLS (l3mtcp = mtcp pool, or tls = one link). Iran is the
+    # TLS client here (validates the kharej's domain as SNI). MTU comes from the link so both
     # sides match; the interface name is a local choice. The user ports opened
     # here ride streams to the kharej panel, exactly like the tcp transport.
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the kharej with the new installer."
+    tun_tls_carrier   # the link says mtcp pool (l3mtcp) or one TLS link (tls)
     ask_tun_params
     read -rp "IP that USERS connect to on this server (Enter = all IPs): " USERIP </dev/tty
     read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
@@ -890,7 +914,7 @@ EOF
     done
     cat > "$CFG" <<EOF
 {
-  "mode": "dial", "carrier": "l3mtcp", "reverse": false, "udp": $UDP,
+  "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $MTU,
   "shared_key": "$SHARED",
@@ -901,7 +925,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
-    ok "IRAN ready (direct, tun / L3 over multi-link TLS)."
+    ok "IRAN ready (direct, tun over TLS: $(tun_tls_label))."
     info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $MTU)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
     else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward 10.77.0.2 yourself."; fi
@@ -1011,7 +1035,7 @@ EOF
     done
     read -rp "Domain for THIS iran server (its A record must point to $PUBIP): " DOMAIN </dev/tty
     [ -n "$DOMAIN" ] || die "domain required (the kharej validates it as the TLS name)"
-    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; CARRIER=l3mtcp
+    ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; tun_tls_carrier
     UDP=false
     if [ -n "$PORTS" ]; then
       read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
@@ -1021,7 +1045,7 @@ EOF
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
     cat > "$CFG" <<EOF
 {
-  "mode": "dial", "carrier": "l3mtcp", "reverse": true, "udp": $UDP,
+  "mode": "dial", "carrier": "$CARRIER", "reverse": true, "udp": $UDP,
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $TUNMTU,
   "backend_addr": "builtin",
@@ -1032,7 +1056,7 @@ EOF
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
-    ok "IRAN ready (reverse, tun / L3 over multi-link TLS)."
+    ok "IRAN ready (reverse, tun over TLS: $(tun_tls_label))."
     info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $LMTU)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
     else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward 10.77.0.2 yourself."; fi
@@ -1269,7 +1293,7 @@ tm_peers(){
 }
 tm_transport(){
   case "$(jget "$1" carrier)" in
-    mtcp) echo "tcp (mtcp)" ;; tls) echo "tcp (tls)" ;; l3mtcp|l3) echo "tun (L3 over mtcp)" ;;
+    mtcp) echo "tcp (mtcp)" ;; tls) echo "tun over TLS (one link)" ;; l3mtcp|l3) echo "tun over TLS (mtcp pool)" ;;
     dgtun) local e; e=$(jget "$1" encap); echo "tun (datagram pool over ${e:-udp})" ;;
     udp) echo "udp" ;; auto) echo "auto (udp, tcp fallback)" ;; reality) echo "reality" ;; *) echo "tcp (noise)" ;;
   esac
