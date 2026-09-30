@@ -38,12 +38,13 @@ type liveStatus struct {
 	Target    int     `json:"target"`    // links the autopilot wants
 	Min       int     `json:"min"`
 	Max       int     `json:"max"`
-	Users     int     `json:"users"`   // active user connections
-	Mbit      float64 `json:"mbit"`    // aggregate goodput, Mbit/s
-	Phase     string  `json:"phase"`   // calibrating/probing/steady/shrinking/following/listening
-	Sat       bool    `json:"sat"`     // links pushing against a limit
-	PID       int     `json:"pid"`     // the daemon's PID (staleness check)
-	Updated   int64   `json:"updated"` // unix seconds of this write
+	Users     int     `json:"users"`     // active user connections
+	Mbit      float64 `json:"mbit"`      // aggregate goodput, Mbit/s
+	Phase     string  `json:"phase"`     // calibrating/probing/steady/shrinking/following/listening
+	Sat       bool    `json:"sat"`       // links pushing against a limit
+	CertDays  int     `json:"cert_days"` // days until the TLS cert expires (-1 if none/unknown)
+	PID       int     `json:"pid"`       // the daemon's PID (staleness check)
+	Updated   int64   `json:"updated"`   // unix seconds of this write
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -78,6 +79,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		if s.Phase != "" {
 			ls.Phase = s.Phase
 		}
+		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
 	}
@@ -156,6 +158,16 @@ func printStatus(path string) {
 	if ls.Users > 0 || ls.Mbit > 0 {
 		fmt.Printf("  traffic:    %d user connections · %.1f Mbit/s%s\n", ls.Users, ls.Mbit, satLabel(ls.Sat))
 	}
+	if ls.CertDays >= 0 {
+		fmt.Printf("  certificate: valid for %d more day(s)%s\n", ls.CertDays, certWarn(ls.CertDays))
+	}
+}
+
+func certWarn(days int) string {
+	if days <= 7 {
+		return "  (renewal due — certbot renews automatically; hot-reloaded, no restart)"
+	}
+	return ""
 }
 
 // patternLine renders the live parallel-link pattern, e.g.

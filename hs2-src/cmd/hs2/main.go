@@ -189,6 +189,24 @@ func runCmd(args []string) {
 		os.Exit(0)
 	}()
 
+	// SIGHUP hot-reloads the TLS certificate (the renewal deploy-hook sends it via
+	// `systemctl reload`), so a Let's Encrypt renewal swaps the cert without
+	// dropping the tunnel. A background watcher also picks up an on-disk change
+	// and warns as expiry nears.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				reloadAllCerts("SIGHUP")
+			}
+		}
+	}()
+	go watchCerts(ctx)
+
 	switch fc.Carrier {
 	case "reality":
 		runReality(ctx, eng, fc)
@@ -271,11 +289,11 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		if fc.Reverse {
 			// Reverse edge: the iran side LISTENS for links the kharej dials in.
 			// It needs a cert (it is the TLS server now) and a probe backend.
-			cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
+			cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
 			must(err)
 			ln, err := engine.ListenReuse(fc.Addr)
 			must(err)
-			cfg.RevServer = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
+			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 			cfg.RevListener = ln
 			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
 		} else {
@@ -316,12 +334,12 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		must(engine.RunKharej(ctx, cfg))
 		return
 	}
-	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
+	cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
 	must(err)
 	ln, err := engine.ListenReuse(fc.Addr)
 	must(err)
 	cfg.Listener = ln
-	cfg.Server = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
+	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 	must(engine.RunKharej(ctx, cfg))
 }
 
