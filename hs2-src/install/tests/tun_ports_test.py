@@ -133,7 +133,7 @@ ip_is_local(){ [ "$1" = "$LABIP" ]; }
 port_free(){ return 0; }; udp_port_free(){ return 0; }
 get_cert(){ printf '%s|%s' "$SB/cert.pem" "$SB/key.pem"; }
 write_service(){ :; }; start_service(){ echo "STARTED $1" >&2; }
-show_link(){ encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}" > "$SB/link.txt"; }
+show_link(){ encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}|${11:-}" > "$SB/link.txt"; }
 '''
 
 
@@ -222,6 +222,75 @@ def part1(sb, lib, kh_ip, ir_ip, mode):
                 and c.get("expose") == panel and c.get("reverse") is True
                 and c.get("addr") == "%s:2082" % ir_ip, json.dumps(c)[:200])
     return carrier
+
+
+def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
+    """The datagram tun (transport tun -> udp/icmp/gre/ipip/ipx), all four
+    branches through the real prompts. The user ports are asked ONCE, on iran;
+    the kharej asks only the panel; the ipx protocol number is asked only where
+    the link is made and travels in the link. Any extra prompt on the side that
+    pastes the link (a port list, the ipx number) blocks the branch and fails."""
+    tag = "dgtun-" + encap
+    sfx = "_" + tag
+    ports, panel = "8443,9443", "127.0.0.1:18443"
+    choice = {"udp": "1", "icmp": "2", "gre": "3", "ipip": "4", "ipx": "5"}[encap]
+    menu = [(r"Transport:[\s\S]*?Choose \[1\]: ", "4"),
+            (r"cross the wire\?[\s\S]*?Choose \[1\]: ", choice)]
+    if encap == "ipx":
+        menu.append((r"IPX raw IP protocol number", "200"))
+    want_proto = 200 if encap == "ipx" else None
+    t = "[%s] " % tag
+
+    def proto_ok(c):
+        return c.get("proto") == want_proto if want_proto else "proto" not in c
+
+    # direct: kharej listens and makes the link (asks the panel, never the ports).
+    ok, why = run_branch(lib, sb, "kh_direct" + sfx, kh_ip, "DIRECTION=direct; PUBIP=%s" % kh_ip,
+                         "ask_transport; kharej_listener",
+                         menu + [(r"Tunnel port \(clients never see this\)", "2096"),
+                                 (r"TUN interface name", ""),
+                                 (r"Panel inbound address on this server", panel)])
+    res(t + "installer: kharej direct asks only the panel (no port list)", ok, why)
+    if ok:
+        c = cfg(sb, "kh_direct" + sfx)
+        res(t + "installer: kharej direct writes the panel and no port list", c.get("carrier") == "dgtun"
+            and c.get("encap") == encap and c.get("expose") == panel and "forward_ports" not in c and proto_ok(c),
+            json.dumps(c)[:220])
+        ok, why = run_branch(lib, sb, "ir_direct" + sfx, ir_ip, "", "iran_dialer",
+                             [(r"Paste the hs2:// setup link", "LINK"),
+                              (r"TUN interface name", ""),
+                              (r"IP that USERS connect to", ""),
+                              (r"User port\(s\) to open here", ports)])
+        res(t + "installer: iran direct asks the ports once (ipx number from the link)", ok, why)
+        if ok:
+            c = cfg(sb, "ir_direct" + sfx)
+            res(t + "installer: iran direct writes the ports", c.get("encap") == encap
+                and c.get("forward_ports") == ports and c.get("addr") == "%s:2096" % kh_ip and proto_ok(c),
+                json.dumps(c)[:220])
+
+    # reverse: iran listens and makes the link (asks the ports), kharej pastes it.
+    ok, why = run_branch(lib, sb, "ir_reverse" + sfx, ir_ip, "DIRECTION=reverse; PUBIP=%s" % ir_ip,
+                         "ask_transport; iran_listener",
+                         menu + [(r"Tunnel port to LISTEN on", "2082"),
+                                 (r"TUN interface name", ""),
+                                 (r"IP that USERS connect to", ""),
+                                 (r"User port\(s\) to open here", ports)])
+    res(t + "installer: iran reverse asks the ports", ok, why)
+    if ok:
+        c = cfg(sb, "ir_reverse" + sfx)
+        res(t + "installer: iran reverse writes the ports", c.get("encap") == encap
+            and c.get("forward_ports") == ports and c.get("reverse") is True and proto_ok(c), json.dumps(c)[:220])
+        ok, why = run_branch(lib, sb, "kh_reverse" + sfx, kh_ip, "", "kharej_dialer",
+                             [(r"Paste the hs2:// setup link", "LINK"),
+                              (r"TUN interface name", ""),
+                              (r"Panel inbound address on this server", panel)])
+        res(t + "installer: kharej reverse asks only the panel (no port list, no ipx number)", ok, why)
+        if ok:
+            c = cfg(sb, "kh_reverse" + sfx)
+            res(t + "installer: kharej reverse writes the panel, no port list, ipx number from the link",
+                c.get("encap") == encap and c.get("expose") == panel and "forward_ports" not in c
+                and c.get("addr") == "%s:2082" % ir_ip and proto_ok(c), json.dumps(c)[:220])
+    return tag
 
 
 # ---------------------------------------------------------------- part 2 -----
@@ -369,6 +438,7 @@ def main():
         lib = make_lib(sb)
         kh_ip, ir_ip = "192.168.61.2", "192.168.61.1"
         carriers = [part1(sb, lib, kh_ip, ir_ip, mode) for mode in ("1", "2")]
+        carriers += [part1_dgtun(sb, lib, kh_ip, ir_ip, encap) for encap in ("udp", "ipx")]
         part2(sb, lib)
         if os.environ.get("HS2_SKIP_TUNNEL") == "1":
             print("SKIP tunnel part (HS2_SKIP_TUNNEL=1)")

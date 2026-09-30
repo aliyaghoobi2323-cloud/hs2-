@@ -4,9 +4,10 @@
 # A panel (x-ui/marzban) binds the user port on 0.0.0.0. The dgtun EXIT
 # forwarder used to listen on <tun_ip>:<user_port>, which on Linux fails with
 # "bind: address already in use" against that wildcard even with SO_REUSEADDR, so
-# hs2 crash-looped on the kharej. The forwarder now uses a shifted, tunnel-
-# private on-tun port (engine.tunForwardPort), so the exit listens fine and a
-# user on iran:<port> still reaches the panel.
+# hs2 crash-looped on the kharej. The exit now listens on one tunnel-private port
+# (engine.DgTunPort) and needs only the panel address — the user ports live on
+# the iran edge alone — so it starts fine and a user on iran:<port> still
+# reaches the panel.
 #
 # This runs a REAL reverse dgtun (encap ipx) in two network namespaces with a
 # panel on 0.0.0.0:<port> and forward port == panel port, and asserts the exit
@@ -48,7 +49,7 @@ J
 cat > "$W/kh.json" <<J
 {"mode":"listen","carrier":"dgtun","encap":"ipx","reverse":true,"addr":"192.168.72.1:2082",
  "iface":"hs0","local_cidr":"10.77.0.2/30","peer_ip":"10.77.0.1","mtu":1280,"shared_key":"$KEY",
- "expose":"127.0.0.1:$PORT","forward_ports":"$PORT","min_links":2,"max_links":8,"per_link":8}
+ "expose":"127.0.0.1:$PORT","min_links":2,"max_links":8,"per_link":8}
 J
 
 ip netns exec $IR env HS2_NO_TUNE=1 "$BIN" run -c "$W/ir.json" >"$W/ir.log" 2>&1 & echo $! >> "$W/pids"
