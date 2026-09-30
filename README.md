@@ -18,6 +18,46 @@ connection to the panel. There is never TCP inside TCP.
 - Survives link drops: user ports stay up, dead links are detected in about
   two seconds and rebuilt.
 
+## The adaptive connection pattern (v3.1)
+
+The number of parallel TLS links is no longer fixed. A dedicated controller
+(the *autopilot*) sizes the pool continuously between **2 and 32 links** from
+two live signals:
+
+- **the number of user connections** — enough links that no link carries a
+  crowd; and
+- **measured throughput** — while the links are saturated it speculatively adds
+  one link and keeps it only if aggregate goodput actually rises, settling at
+  the point where more links stop helping (the path's own ceiling), and
+  re-checking as demand or the path changes over time.
+
+It comes up "warm" so a burst of connections at start spreads immediately, then
+shrinks toward the minimum when idle. In **reverse** mode the edge (which alone
+sees the users) drives the exit's link count over a control channel, so the
+dial pool on the foreign side is adaptive too.
+
+Watch it live: `hs2 status -c /etc/hs2/config.json` (or the **Live pattern
+monitor** in `hs2-menu` → tunnel manager) shows links up, the target, the phase
+(calibrating / probing / steady / shrinking) and throughput as they change.
+
+## Automatic kernel tuning
+
+hs2 sizes kernel network tuning from the server's **RAM and CPU cores** and
+re-applies it every time the service starts (so a resized VPS is picked up on
+restart). It picks BBR + fq_codel by default, scales socket buffers and
+backlogs to a low/medium/high profile, and sets the multi-IP-friendly knobs.
+See exactly what it chose with `hs2 tune -c /etc/hs2/config.json`. It is fully
+adjustable from `hs2-menu` → tunnel → **Tuning** (auto / manual with size
+presets / off, and the congestion control and queue discipline), or in the
+config's `"tuning"` section — nothing is hidden in a stray sysctl file.
+
+## Certificate renewal without downtime
+
+Let's Encrypt certificates renew about a week before expiry and are
+**hot-reloaded** (SIGHUP / `systemctl reload`) — new connections pick up the
+fresh certificate while existing ones keep running, so a renewal never drops
+the tunnel.
+
 ## What changed in v3
 
 - **One data path for all modes.** `tls` and `l3mtcp` used to carry IP packets
@@ -29,7 +69,7 @@ connection to the panel. There is never TCP inside TCP.
   burst. They are now spread evenly.
 - **Latency tuning measured in a lab** (lossy, throttled, long-haul paths):
   BBR on every link socket, a 32 KiB unsent-data limit, 16 KiB stream frames,
-  8–16 links.
+  and an adaptive 2–32 link pool sized live by the autopilot (see above).
 - **Authenticated links.** Both ends prove the shared key bound to the exact
   TLS session (TLS exporter), so an interceptor with a forged certificate can
   neither read nor hijack the tunnel. v2 had no protection against that.
@@ -107,15 +147,15 @@ Existing configs keep their mode. To switch, edit `"carrier"` in
 
 | mode     | links | hs0 tunnel IPs | use it when                                  |
 |----------|-------|----------------|----------------------------------------------|
-| `mtcp`   | 8–16  | no             | default — fastest, beats per-connection caps |
-| `l3mtcp` | 8–16  | yes            | you also need 10.77.0.x (ping, non-TCP)      |
+| `mtcp`   | 2–32  | no             | default — fastest, beats per-connection caps |
+| `l3mtcp` | 2–32  | yes            | you also need 10.77.0.x (ping, non-TCP)      |
 | `tls`    | 1     | yes            | you want a single connection on the wire     |
 
 On a slow path that is **not** throttled per connection, fewer links give
-lower latency under full load: on the 8 Mbit lab path a single link (`tls`)
-measured 333 ms against 628 ms for 8 links, because several parallel flows
-keep a standing queue in the path. Lower `min_links`/`max_links` in the Iran
-config for such a path; on throttled paths keep 8.
+lower latency under full load, because several parallel flows keep a standing
+queue in the path. The autopilot handles this automatically — it stops adding
+links once they no longer raise throughput — but you can also cap it by
+lowering `max_links` in the Iran config.
 
 ## Security
 

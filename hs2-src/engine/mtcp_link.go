@@ -24,13 +24,32 @@ type mtcpLink struct {
 	dead    atomic.Bool
 	sampler *obfs.LengthSampler
 	mtr     *linkMeter
+	why     func() string // why the underlying connection failed, "" if it has not
 }
 
 func (l *mtcpLink) meter() *linkMeter { return l.mtr }
 
+// downReason says why the link is no longer usable, for the log.
+func (l *mtcpLink) downReason() string {
+	if l.why != nil {
+		if r := l.why(); r != "" {
+			return r
+		}
+	}
+	if l.dead.Load() {
+		return "health probe found the session closed"
+	}
+	return "session ended (keepalive timeout or closed by the other server)"
+}
+
 // linkRetrans reports the link's kernel TCP retransmit counter, for loss-based
 // health. It reads TCP_INFO off the carrier's underlying socket (Linux).
 func (l *mtcpLink) linkRetrans() (uint64, bool) { return retransmits(l.tls.TCPConn()) }
+
+// sendPressure reports whether this link's socket has unsent bytes queued (the
+// path is not taking data as fast as smux offers it) — a per-connection cap
+// biting. It reads TCP_INFO; unsupported platforms return (false,false).
+func (l *mtcpLink) sendPressure() (bool, bool) { return sendPressure(l.tls.TCPConn()) }
 
 // healthProbe actively verifies the link. Every few seconds it opens a throwaway
 // smux stream and immediately closes it; if that fails, the underlying TLS/TCP
@@ -154,12 +173,12 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 // TLS connection differs.
 func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLink, error) {
 	mtr := &linkMeter{}
-	sess, err := newSession(car.RawConn(), false, sampler, mtr)
+	sess, why, err := newSession(car.RawConn(), false, sampler, mtr)
 	if err != nil {
 		car.Close()
 		return nil, err
 	}
-	l := &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr}
+	l := &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}
 	go l.healthProbe(context.Background())
 	return l, nil
 }

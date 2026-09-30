@@ -7,7 +7,7 @@
 #   usage: install/e2e/run.sh [phases…]   (default: all)
 set -euo pipefail
 E=$(cd "$(dirname "$0")" && pwd); SRC=$(cd "$E/../.." && pwd); GH=$E/.fakegh
-PHASES=${*:-install manager reboot upgrade lifecycle direct}
+PHASES=${*:-install manager reboot upgrade lifecycle direct adaptive}
 mkdir -p "$GH"
 (cd "$SRC" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "$GH/hs2-linux-amd64" ./cmd/hs2)
 cp "$SRC/install/install.sh" "$GH/install.sh"

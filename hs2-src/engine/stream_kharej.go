@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"sync/atomic"
@@ -23,9 +24,17 @@ type KharejConfig struct {
 	Log      func(string, ...any)
 
 	// Reverse exit: dial the iran edge instead of listening. RevDial returns a
-	// fresh authenticated TLS carrier to the edge; RevLinks is how many to keep.
+	// fresh authenticated TLS carrier to the edge. The link count is dynamic: the
+	// edge drives it over the pool-control channel between RevMin and RevMax, and
+	// RevLinks is only the count to hold until the edge first speaks.
 	RevDial  func() (*tlscarrier.Carrier, error)
 	RevLinks int
+	RevMin   int
+	RevMax   int
+
+	// OnStart, if set, is called once with a function that returns a live
+	// snapshot of the link pattern, for monitoring.
+	OnStart func(StatsFn)
 }
 
 // RunKharej accepts links and serves their streams until ctx ends.
@@ -44,6 +53,9 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
 	var links atomic.Int32
+	if cfg.OnStart != nil {
+		cfg.OnStart(func() PoolStats { return PoolStats{Links: int(links.Load()), Phase: "listening"} })
+	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
 	for {
 		conn, err := cfg.Listener.Accept()
@@ -54,7 +66,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			continue
 		}
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
-			sess, err := newSession(car.RawConn(), true, nil, nil)
+			sess, why, err := newSession(car.RawConn(), true, nil, nil)
 			if err != nil {
 				car.Close()
 				return
@@ -74,16 +86,30 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 					downErr = err
 					break
 				}
-				go serveStream(ctx, st, cfg, l3, car)
+				go serveStream(ctx, st, cfg, l3, car, nil)
 			}
 			sess.Close()
 			car.Close()
-			logf("link down from %s: %v (now %d)", conn.RemoteAddr(), downErr, links.Add(-1))
+			logf("link down from %s: %s (now %d)", conn.RemoteAddr(), sessionEndReason(why, downErr), links.Add(-1))
 		})
 	}
 }
 
-func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier) {
+// sessionEndReason explains why an exit-side smux session ended: the socket
+// error that killed it if there was one, else smux's own reason.
+func sessionEndReason(why func() string, sessErr error) string {
+	if why != nil {
+		if r := why(); r != "" {
+			return r
+		}
+	}
+	if sessErr == nil || errors.Is(sessErr, io.ErrClosedPipe) {
+		return "session ended (keepalive timeout or closed by the other server)"
+	}
+	return describeNetErr(sessErr)
+}
+
+func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier, pool *exitPool) {
 	var kind [1]byte
 	st.SetReadDeadline(time.Now().Add(kindTimeout))
 	if _, err := io.ReadFull(st, kind[:]); err != nil {
@@ -94,6 +120,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	switch kind[0] {
 	case kindCtrl:
 		serveControl(ctx, st, car)
+	case kindPool:
+		servePoolCtl(ctx, st, pool)
 	case kindTCP:
 		up, err := net.DialTimeout("tcp", cfg.Panel, 5*time.Second)
 		if err != nil {

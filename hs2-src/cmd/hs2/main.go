@@ -26,6 +26,7 @@ import (
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tun"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 )
 
 type fileConfig struct {
@@ -74,6 +75,9 @@ type fileConfig struct {
 	LocalPub     string `json:"local_pub"`
 	RemoteStatic string `json:"remote_static"`
 	PSK          string `json:"psk"`
+
+	// kernel tuning (RAM/CPU-aware; applied at every start). Omitted = auto.
+	Tuning *tune.Config `json:"tuning"`
 }
 
 func main() {
@@ -93,11 +97,21 @@ func main() {
 		runCmd(os.Args[2:])
 	case "check":
 		checkCmd(os.Args[2:])
+	case "status":
+		statusCmd(os.Args[2:])
+	case "tune":
+		tuneCmd(os.Args[2:])
+	case "config":
+		configCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)
 	}
 }
+
+// configPath is the path of the config the running daemon loaded, so the status
+// writer can derive its live-status file. Set once in runCmd.
+var configPath string
 
 // applyTuning lets the test lab override data-path tuning without a rebuild.
 // Production runs use the built-in defaults; these are not config options.
@@ -125,6 +139,7 @@ func runCmd(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	fs.Parse(args)
+	configPath = *cfgPath
 	raw, err := os.ReadFile(*cfgPath)
 	must(err)
 	var fc fileConfig
@@ -137,6 +152,21 @@ func runCmd(args []string) {
 	}
 	if fc.BindLocalIP != "" {
 		log.Printf("egress: all tunnel connections will leave from %s", fc.BindLocalIP)
+	}
+
+	// Apply RAM/CPU-aware kernel tuning at every start, so it always matches the
+	// current hardware and config (a resized VPS is picked up on restart). The
+	// chosen congestion control is also used on the tunnel's own link sockets.
+	// HS2_NO_TUNE=1 (used by the lab, where tuning is controlled by HS2_TUNE_*)
+	// or lack of root skips the system sysctls but still logs the plan.
+	plan := buildTunePlan(fc)
+	if os.Geteuid() == 0 && os.Getenv("HS2_NO_TUNE") == "" {
+		plan.Apply(func(f string, a ...any) { log.Printf(f, a...) })
+	} else {
+		log.Printf("tuning: %s (not applied: %s)", plan.Summary(), tuneSkipReason())
+	}
+	if _, envCC := os.LookupEnv("HS2_TUNE_CC"); !envCC && plan.Congestion != "" {
+		tlscarrier.CongestionControl = plan.Congestion
 	}
 
 	// The UDP/auto transports carry datagrams: keep the tunnel MTU small enough
@@ -160,6 +190,24 @@ func runCmd(args []string) {
 		time.Sleep(3 * time.Second)
 		os.Exit(0)
 	}()
+
+	// SIGHUP hot-reloads the TLS certificate (the renewal deploy-hook sends it via
+	// `systemctl reload`), so a Let's Encrypt renewal swaps the cert without
+	// dropping the tunnel. A background watcher also picks up an on-disk change
+	// and warns as expiry nears.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				reloadAllCerts("SIGHUP")
+			}
+		}
+	}()
+	go watchCerts(ctx)
 
 	switch fc.Carrier {
 	case "reality":
@@ -225,19 +273,8 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	edge := fc.Mode == "dial"
 
 	if edge {
-		// Defaults chosen in the lab: 4 links cannot get past per-connection
-		// throttling, 8 can; the pool grows toward 16 with users.
-		min, max, per := fc.MinLinks, fc.MaxLinks, fc.PerLink
-		if min == 0 {
-			min = 8
-		}
-		if max == 0 {
-			max = 16
-		}
-		if per == 0 {
-			per = 8
-		}
-		if links > 0 {
+		min, max, per := linkEnvelope(fc)
+		if links > 0 { // tls carrier: pin to a single link
 			min, max = links, links
 		}
 		cfg := engine.IranConfig{
@@ -246,6 +283,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			Ports:    splitComma(fc.ForwardPorts),
 			UDP:      fc.UDP,
 			Log:      logf,
+			OnStart:  func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) },
 		}
 		if dev != nil {
 			cfg.TUN = dev
@@ -253,11 +291,11 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		if fc.Reverse {
 			// Reverse edge: the iran side LISTENS for links the kharej dials in.
 			// It needs a cert (it is the TLS server now) and a probe backend.
-			cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
+			cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
 			must(err)
 			ln, err := engine.ListenReuse(fc.Addr)
 			must(err)
-			cfg.RevServer = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
+			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 			cfg.RevListener = ln
 			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
 		} else {
@@ -268,35 +306,109 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	}
 
 	// exit (kharej): has the panel.
-	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf}
+	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf,
+		OnStart: func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) }}
 	if dev != nil {
 		cfg.TUN = dev
 	}
 	if fc.Reverse {
-		// Reverse exit: the kharej DIALS the iran edge (a TLS server) and runs
-		// a fixed pool of links. No cert here; it is the TLS client now.
-		n := fc.MinLinks
-		if links > 0 {
-			n = links
+		// Reverse exit: the kharej DIALS the iran edge (a TLS server) and runs a
+		// DYNAMIC pool of links. No cert here; it is the TLS client now. The edge
+		// drives the count over the pool-control channel between RevMin and RevMax;
+		// RevLinks is only the size held until the edge first speaks.
+		min, max, _ := linkEnvelope(fc)
+		if links > 0 { // tls carrier: single link
+			min, max = links, links
 		}
-		if n == 0 {
-			n = 8
+		cfg.RevMin, cfg.RevMax = min, max
+		initial := 8
+		if initial < min {
+			initial = min
 		}
-		cfg.RevLinks = n
+		if initial > max {
+			initial = max
+		}
+		cfg.RevLinks = initial
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
 			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
 		}
-		logf("stream exit (reverse): dialing %d links to edge %s", n, fc.Addr)
+		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
 		must(engine.RunKharej(ctx, cfg))
 		return
 	}
-	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
+	cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
 	must(err)
 	ln, err := engine.ListenReuse(fc.Addr)
 	must(err)
 	cfg.Listener = ln
-	cfg.Server = &tlscarrier.Server{SharedKey: key, Cert: cert, BackendAddr: streamBackend(fc), Logf: logf}
+	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 	must(engine.RunKharej(ctx, cfg))
+}
+
+// buildTunePlan turns the config's tuning section (or the auto default) plus the
+// detected hardware into a tuning Plan.
+func buildTunePlan(fc fileConfig) *tune.Plan {
+	var cfg tune.Config
+	if fc.Tuning != nil {
+		cfg = *fc.Tuning
+	}
+	ramMB, cpus := tune.Detect()
+	return tune.Build(cfg, ramMB, cpus, tune.AvailableCC, tune.AvailableQdisc)
+}
+
+func tuneSkipReason() string {
+	if os.Geteuid() != 0 {
+		return "not root"
+	}
+	return "HS2_NO_TUNE set"
+}
+
+// tuneCmd implements `hs2 tune -c config [--apply]`: print the tuning plan for
+// this server and config, and optionally apply it. It lets the operator see
+// exactly what auto-tuning chose, and try manual overrides, without starting the
+// tunnel.
+func tuneCmd(args []string) {
+	fs := flag.NewFlagSet("tune", flag.ExitOnError)
+	cfgPath := fs.String("c", "", "config file (JSON); optional — without it, shows the auto plan for this server")
+	apply := fs.Bool("apply", false, "apply the plan now (needs root)")
+	fs.Parse(args)
+	var fc fileConfig
+	if *cfgPath != "" {
+		if raw, err := os.ReadFile(*cfgPath); err == nil {
+			json.Unmarshal(raw, &fc)
+		}
+	}
+	plan := buildTunePlan(fc)
+	fmt.Print(plan.Report())
+	if *apply {
+		if os.Geteuid() != 0 {
+			fmt.Println("(need root to apply)")
+			os.Exit(1)
+		}
+		plan.Apply(func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+	}
+}
+
+// linkEnvelope resolves the adaptive link-pool bounds from the config, applying
+// the defaults: the pattern lives anywhere in 2–32 links and grows a link for
+// every per_link (default 8) user connections. The pool is never fixed at these
+// numbers — the autopilot moves it continuously inside the envelope from the
+// live user count and measured throughput (see engine/autopilot.go).
+func linkEnvelope(fc fileConfig) (min, max, per int) {
+	min, max, per = fc.MinLinks, fc.MaxLinks, fc.PerLink
+	if min <= 0 {
+		min = 2
+	}
+	if max <= 0 {
+		max = 32
+	}
+	if max < min {
+		max = min
+	}
+	if per <= 0 {
+		per = 8
+	}
+	return min, max, per
 }
 
 // streamBackend returns the probe-forwarding backend for a TLS-server side,

@@ -10,9 +10,10 @@ import (
 // retransmit counter, so the manager's loss-based health logic can be driven
 // deterministically without real sockets.
 type meteredFakeLink struct {
-	alive   atomic.Bool
-	m       *linkMeter
-	retrans atomic.Uint64
+	alive    atomic.Bool
+	m        *linkMeter
+	retrans  atomic.Uint64
+	pressing atomic.Bool
 }
 
 func newMeteredFake() *meteredFakeLink {
@@ -26,6 +27,7 @@ func (f *meteredFakeLink) Alive() bool                 { return f.alive.Load() }
 func (f *meteredFakeLink) Close() error                { f.alive.Store(false); return nil }
 func (f *meteredFakeLink) meter() *linkMeter           { return f.m }
 func (f *meteredFakeLink) linkRetrans() (uint64, bool) { return f.retrans.Load(), true }
+func (f *meteredFakeLink) sendPressure() (bool, bool)  { return f.pressing.Load(), true }
 
 // active simulates one health interval of UPLOAD traffic: `bytes` sent and `rt`
 // local (upload-path) retransmits added.

@@ -8,3 +8,5 @@ import "net"
 // unavailable, so soft-degrade detection is disabled and links are still healed
 // on hard death. Production runs on Linux.
 func retransmits(tc *net.TCPConn) (uint64, bool) { return 0, false }
+
+func sendPressure(tc *net.TCPConn) (bool, bool) { return false, false }

@@ -13,9 +13,14 @@ import (
 // Server terminates real TLS (standard crypto/tls, real cert), then decides per
 // connection: authorised tunnel, or probe/browser to be served real content.
 type Server struct {
-	SharedKey   []byte
-	Cert        tls.Certificate
-	BackendAddr string // a real local web server; probes are proxied here
+	SharedKey []byte
+	Cert      tls.Certificate
+	// GetCertificate, if set, supplies the certificate per handshake instead of
+	// the static Cert. It lets the certificate be hot-swapped after a renewal
+	// without restarting the tunnel (see cmd/hs2 certReloader): new connections
+	// pick up the fresh cert, existing ones are undisturbed.
+	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	BackendAddr    string // a real local web server; probes are proxied here
 	// Logf, if set, receives rare diagnostic messages (e.g. an old client).
 	Logf    func(string, ...any)
 	replay  *replayMem
@@ -36,11 +41,16 @@ const firstReadTimeout = 30 * time.Second
 func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrier)) {
 	s.init()
 	tuneTCP(raw)
-	tconn := tls.Server(raw, &tls.Config{
-		Certificates: []tls.Certificate{s.Cert},
-		MinVersion:   tls.VersionTLS12,
-		NextProtos:   []string{"http/1.1"},
-	})
+	tcfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"http/1.1"},
+	}
+	if s.GetCertificate != nil {
+		tcfg.GetCertificate = s.GetCertificate
+	} else {
+		tcfg.Certificates = []tls.Certificate{s.Cert}
+	}
+	tconn := tls.Server(raw, tcfg)
 	tconn.SetDeadline(time.Now().Add(authTimeout))
 	if err := tconn.Handshake(); err != nil {
 		raw.Close()

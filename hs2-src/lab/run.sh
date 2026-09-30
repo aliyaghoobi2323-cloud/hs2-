@@ -67,9 +67,9 @@ cat > "$W/ir.json" <<J
  "shared_key":"$KEY","forward_ports":"8443","min_links":${MIN_LINKS:-4},"max_links":${MAX_LINKS:-16}}
 J
 ip netns exec $KH "$W/probe" -server -listen 127.0.0.1:5201 & echo $! >> "$W/pids"
-ip netns exec $KH "$W/hs2kh" run -c "$W/kh.json" >"$W/kh.log" 2>&1 & echo $! >> "$W/pids"
+ip netns exec $KH env HS2_NO_TUNE=1 "$W/hs2kh" run -c "$W/kh.json" >"$W/kh.log" 2>&1 & echo $! >> "$W/pids"
 sleep 1
-ip netns exec $IR "$W/hs2" run -c "$W/ir.json" >"$W/ir.log" 2>&1 & echo $! >> "$W/pids"
+ip netns exec $IR env HS2_NO_TUNE=1 "$W/hs2" run -c "$W/ir.json" >"$W/ir.log" 2>&1 & echo $! >> "$W/pids"
 # wait until the forwarded port answers (max ~15s)
 for i in $(seq 1 60); do
   ip netns exec $IR bash -c 'exec 3<>/dev/tcp/127.0.0.1/8443' 2>/dev/null && break
