@@ -426,6 +426,10 @@ WantedBy=multi-user.target
     res("upgrade: a foreign certbot lineage does not stop the upgrade, and is left untouched",
         i == 0 and sh("kh", "cat /etc/letsencrypt/renewal/zz-panel.example.conf") == panel_conf.strip())
 
+    res("upgrade: autostart re-enabled", state("kh") == ["active", "enabled"], str(state("kh")))
+    res("upgrade: hs2-menu installed + backup taken",
+        sh("kh", "test -x /usr/local/bin/hs2-menu && ls /root/hs2-backups/*.tar.gz | wc -l") == "1")
+    res("upgrade: tunnel carries data", wait_data() is not None)
     # Safety net: an upgrade interrupted halfway (Ctrl+C after the new binary is
     # installed, i.e. after hs2 was stopped) must not leave the tunnel down.
     ch = spawn("kh", f"curl -fsSL {RAW}/install.sh | HS2_REPO_RAW={RAW} bash -s upgrade", "upgrade_interrupted")
@@ -435,10 +439,6 @@ WantedBy=multi-user.target
     t = wait_data(secs=60)
     res("interrupted upgrade: hs2 is running again by itself, data flows",
         state("kh")[0] == "active" and t is not None, str(state("kh")))
-    res("upgrade: autostart re-enabled", state("kh") == ["active", "enabled"], str(state("kh")))
-    res("upgrade: hs2-menu installed + backup taken",
-        sh("kh", "test -x /usr/local/bin/hs2-menu && ls /root/hs2-backups/*.tar.gz | wc -l") == "1")
-    res("upgrade: tunnel carries data", wait_data() is not None)
     # hs2 check on the real configs of both sides
     for c in ("ir", "kh"):
         out = sh(c, "hs2 check -c /etc/hs2/config.json")
