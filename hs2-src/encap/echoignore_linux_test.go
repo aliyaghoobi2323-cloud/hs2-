@@ -8,7 +8,10 @@ import (
 	"testing"
 )
 
-// These tests toggle net.ipv4.icmp_echo_ignore_all, so they must run in the
+// These tests cover the LAST-RESORT path of the icmp listener's echo-reply
+// suppression (echoguard_linux.go): the global net.ipv4.icmp_echo_ignore_all,
+// used only when neither nft nor iptables works. They force it with
+// HS2_ICMP_SUPPRESS=global. They toggle the sysctl, so they must run in the
 // package's private network namespace (TestMain re-execs into one). They reach
 // the package-internal refcount directly to start from a known state, since it
 // is process-global and other tests may have used ICMP listeners before them.
@@ -41,6 +44,7 @@ func resetEchoRefs() {
 // last one closes (refcounted).
 func TestICMPEchoRestoredOnClose(t *testing.T) {
 	needRawNetns(t)
+	t.Setenv("HS2_ICMP_SUPPRESS", "global") // the sysctl fallback (no nft/iptables)
 	resetEchoRefs()
 	setEchoIgnore(t, "0") // host answers pings to begin with
 	defer resetEchoRefs()
@@ -85,6 +89,7 @@ func TestICMPEchoRestoredOnClose(t *testing.T) {
 // tunnel stops: we only put back a value we ourselves changed.
 func TestICMPEchoLeftAloneWhenPreSet(t *testing.T) {
 	needRawNetns(t)
+	t.Setenv("HS2_ICMP_SUPPRESS", "global") // the sysctl fallback (no nft/iptables)
 	resetEchoRefs()
 	setEchoIgnore(t, "1") // operator has disabled echo replies globally
 	defer resetEchoRefs()

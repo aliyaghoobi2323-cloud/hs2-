@@ -226,7 +226,7 @@ type rawPacketConn struct {
 	f         *framer
 	wildcard  bool
 	laddr     *Addr
-	closeEcho sync.Once // releases this listener's icmp-echo-ignore hold, once
+	closeEcho sync.Once // releases this listener's echo-reply suppression, once
 
 	mu        sync.Mutex
 	peers     map[rawKey]*rawPeer
@@ -255,25 +255,24 @@ func listenRawLinux(kind, addr string, opt Options) (net.PacketConn, error) {
 	}
 	if f.kind == KindICMP {
 		// The server side receives echo REQUESTS; if the kernel also answered
-		// them it would echo every sealed datagram straight back to the peer,
-		// doubling the return path's traffic. Close() restores the kernel's
-		// setting when the last ICMP listener goes, so stopping the tunnel does
-		// not leave the operator's host silent to real pings.
-		if err := acquireEchoIgnore(); err != nil {
+		// them it would echo every sealed datagram straight back to the peer.
+		// Suppress just those replies (echoguard_linux.go), so the server still
+		// answers ordinary ping; Close() removes the suppression.
+		if err := acquireEchoGuard(f.rxMagic); err != nil {
 			return nil, err
 		}
 	}
 	ipc, err := net.ListenIP(rawNetwork(f.proto), &net.IPAddr{IP: ip})
 	if err != nil {
 		if f.kind == KindICMP {
-			releaseEchoIgnore()
+			releaseEchoGuard(f.rxMagic)
 		}
 		return nil, rawErr(f.kind, err)
 	}
 	if err := tuneRawSocket(ipc, f.recvFilter(0, 0)); err != nil {
 		ipc.Close()
 		if f.kind == KindICMP {
-			releaseEchoIgnore()
+			releaseEchoGuard(f.rxMagic)
 		}
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
@@ -385,7 +384,7 @@ func (c *rawPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 func (c *rawPacketConn) Close() error {
 	err := c.ipc.Close()
 	if c.f.kind == KindICMP {
-		c.closeEcho.Do(releaseEchoIgnore)
+		c.closeEcho.Do(func() { releaseEchoGuard(c.f.rxMagic) })
 	}
 	return err
 }

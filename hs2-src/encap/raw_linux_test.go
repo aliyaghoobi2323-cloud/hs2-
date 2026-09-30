@@ -291,19 +291,19 @@ func (s *icmpReplySniffer) replies() int {
 	return s.n
 }
 
-// The icmp listener turns off the kernel's own echo replies, so the dialer
-// hears only the listener — not its own datagrams echoed back. The listener here
-// is a bare packet socket that sends no replies, so the ONLY ICMP echo replies
-// (type 0) that could reach the wire are the kernel's answers to the dialer's
-// echo requests; with icmp_echo_ignore_all set there must be none. A sniffer
-// confirms that directly: the dialer's read timing out proves nothing on its own
-// (the dialer's BPF filter would drop a kernel echo regardless of the sysctl).
+// The icmp listener keeps the kernel from answering the tunnel's echo requests,
+// so the dialer hears only the listener — not its own datagrams echoed back. The
+// listener here is a bare packet socket that sends no replies, so the ONLY ICMP
+// echo replies (type 0) that could reach the wire are the kernel's answers to
+// the dialer's echo requests; there must be none, whichever suppression method
+// is in use. A sniffer confirms that directly: the dialer's read timing out
+// proves nothing on its own (the dialer's BPF filter would drop a kernel echo).
 func TestRawSocketICMPKernelSilent(t *testing.T) {
 	needRawNetns(t)
 	os.WriteFile(echoIgnorePath, []byte("0\n"), 0o644)
 	srv := listenT(t, KindICMP, "127.0.0.1", Options{})
-	if !EchoIgnored() {
-		t.Fatal("icmp listener did not set icmp_echo_ignore_all")
+	if m := echoGuardMethod(srv.(*rawPacketConn).f.rxMagic); m == "" {
+		t.Fatal("icmp listener holds no echo-reply suppression")
 	}
 	sn := newICMPReplySniffer(t)
 	cli := dialT(t, KindICMP, "127.0.0.1", Options{})
@@ -315,7 +315,7 @@ func TestRawSocketICMPKernelSilent(t *testing.T) {
 	}
 	time.Sleep(250 * time.Millisecond) // let any kernel echo reply reach the sniffer
 	if n := sn.replies(); n != 0 {
-		t.Fatalf("kernel emitted %d ICMP echo replies despite icmp_echo_ignore_all", n)
+		t.Fatalf("kernel emitted %d ICMP echo replies to the tunnel's requests", n)
 	}
 	cli.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	buf := make([]byte, 2048)

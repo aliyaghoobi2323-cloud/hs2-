@@ -275,13 +275,45 @@ func TestCheckDgTun(t *testing.T) {
 	if errs, _ := checkConfig(base(`, "min_links": 20, "max_links": 4`), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "max_links") {
 		t.Errorf("min>max not caught: %v", errs)
 	}
-	// the icmp encap warns (on the listener side) that inner pings to its tun IP
-	// are not answered — a real behavioral surprise, real traffic unaffected.
+	// The raw encaps have no ports: addr is a bare IP (what the installer writes
+	// now) or an older IP:PORT whose port is ignored. udp still needs its port.
+	withAddr := func(encap, addr string) []byte {
+		s := strings.Replace(string(base("")), `"encap": "udp"`, `"encap": "`+encap+`"`, 1)
+		return []byte(strings.Replace(s, `"91.107.166.13:2096"`, `"`+addr+`"`, 1))
+	}
+	for _, e := range []string{"icmp", "gre", "ipip", "ipx"} {
+		for _, a := range []string{"91.107.166.13", "91.107.166.13:2096"} {
+			if errs, warns := checkConfig(withAddr(e, a), local, time.Now()); len(errs)+len(warns) != 0 {
+				t.Errorf("encap %s addr %s: errs=%v warns=%v", e, a, errs, warns)
+			}
+		}
+	}
+	if errs, _ := checkConfig(withAddr("udp", "91.107.166.13"), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "IP:PORT") {
+		t.Errorf("udp encap without a port not rejected: %v", errs)
+	}
+	if errs, _ := checkConfig(withAddr("gre", "0.0.0.0"), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "OTHER server") {
+		t.Errorf("gre dialer to 0.0.0.0 not rejected: %v", errs)
+	}
+	rawExit := []byte(`{"mode": "listen", "carrier": "dgtun", "encap": "gre", "addr": "0.0.0.0",
+		"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
+		"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443"}`)
+	if errs, warns := checkConfig(rawExit, local, time.Now()); len(errs)+len(warns) != 0 {
+		t.Errorf("gre listener on a bare 0.0.0.0: errs=%v warns=%v", errs, warns)
+	}
+	// The icmp listener keeps normal ping working when nft or iptables exists (it
+	// drops only the kernel's replies to the tunnel's packets); without either it
+	// has to silence all ping on the server, and check says so.
 	icmpExit := []byte(`{"mode": "listen", "carrier": "dgtun", "encap": "icmp", "addr": "0.0.0.0:2096",
 		"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
-		"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "forward_ports": "8443"}`)
+		"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443"}`)
+	defer func(f func() bool) { haveEchoGuardTool = f }(haveEchoGuardTool)
+	haveEchoGuardTool = func() bool { return false }
 	if _, warns := checkConfig(icmpExit, local, time.Now()); !strings.Contains(strings.Join(warns, "|"), "ping") {
-		t.Errorf("icmp ping warning missing: %v", warns)
+		t.Errorf("icmp without nft/iptables: ping warning missing: %v", warns)
+	}
+	haveEchoGuardTool = func() bool { return true }
+	if errs, warns := checkConfig(icmpExit, local, time.Now()); len(errs)+len(warns) != 0 {
+		t.Errorf("icmp with nft/iptables must pass clean: errs=%v warns=%v", errs, warns)
 	}
 	// The exit needs only the panel: the user ports live on the edge. No panel is
 	// a valid pure routed tunnel but warns; a malformed one is an error; a panel on
