@@ -667,6 +667,20 @@ tunnel_up(){ # cfg
     && ping -c1 -W1 -I "$ifc" "$peer" >/dev/null 2>&1
 }
 
+# tunnel_conn_label CFG: whether the tunnel really reaches the other server
+# right now (tunnel_up: live authenticated links, or the peer's tun IP answers)
+# — "the service runs" and "its interface is up" say nothing about that.
+tunnel_conn_label(){ # cfg
+  local sf links
+  if tunnel_up "$1"; then
+    sf=$(status_path "$1"); links=""
+    status_fresh "$sf" && links=$(jraw "$sf" links)
+    printf '%s✓ connected%s%s' "$C_G" "$C_0" "$([ -n "$links" ] && [ "$links" != 0 ] && echo " ($links links)")"
+  else
+    printf '%s✗ NOT connected%s — nothing comes back from the other server' "$C_R" "$C_0"
+  fi
+}
+
 # verify_tunnel CFG SECS: wait up to SECS for tunnel_up.
 verify_tunnel(){ # cfg secs
   local end=$(( $(date +%s) + ${2:-40} ))
@@ -703,9 +717,11 @@ tunnel_down_help(){ # cfg
     warn "TLS: the TCP tunnel port must be reachable from the dialing side, and the listening side's"
     warn "certificate must be valid for the domain in the link (see its log for TLS errors)."
   fi
-  warn "Also check: the other server finished its setup and runs; the link you pasted is its CURRENT one"
-  warn "(running setup there again makes a NEW key); its tunnel port is open in its firewall / provider panel;"
-  warn "and the dial-out IP chosen here is not a filtered one."
+  warn "Also check:"
+  warn " · the shared key: the link you pasted must be the other server's CURRENT one — running its setup"
+  warn "   again makes a NEW key, and with a different key the other side stays silent (or shows a website);"
+  warn " · the other server finished its setup and its tunnel runs (hs2-menu → Tunnel manager there);"
+  warn " · its tunnel port is open in its firewall / provider panel, and the dial-out IP here is not filtered."
   info "hs2 stays installed and keeps retrying — if the path opens later it connects by itself."
   info "Last log:"
   journalctl -u "$UNIT" -n 15 --no-pager -o cat 2>/dev/null | sed 's/^/     /' >&2 || true
@@ -1639,6 +1655,20 @@ remove_tunnel(){ # unit
   rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$(status_path "$cfg")"
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed "$u" >/dev/null 2>&1 || true
+  kernel_cleanup
+}
+
+# kernel_cleanup: remove what stopped tunnels left in the kernel — an icmp
+# tunnel's reply rule (nft/iptables) whose daemon is gone, or ping replies a
+# dead daemon turned off. Rules of running tunnels are never touched. (An older
+# binary has no `cleanup` command; then there is nothing to do.)
+kernel_cleanup(){
+  local out ln
+  out=$("$BIN" cleanup 2>/dev/null) || return 0
+  while IFS= read -r ln; do
+    case "$ln" in removed:*) info "Cleaned up ${ln#removed: }" ;; esac
+  done <<<"$out"
+  return 0
 }
 
 # uninstall: remove EVERY hs2 tunnel from this server (the tunnel manager
@@ -1686,6 +1716,8 @@ status(){
   for u in $units; do
     cfg=$(tm_cfg "$u")
     hr; say " ${C_B}$u${C_0} — $(unit_desc "$u")"; hr
+    say " Service:     $(tm_state_label "$(tm_state "$u")")"
+    if [ "$(tm_state "$u")" = running ]; then say " Connection:  $(tunnel_conn_label "$cfg")"; fi
     systemctl status "$u" --no-pager 2>/dev/null | head -8 >&2 || true
     ifc=$(jget "$cfg" iface)
     if [ "$(jget "$cfg" carrier)" != mtcp ] && [ -n "$ifc" ]; then
@@ -1789,11 +1821,11 @@ tm_dials(){
 tm_links(){
   local cfg="$1" car addr host port sf
   car=$(jget "$cfg" carrier)
-  case "$car" in mtcp|l3mtcp|l3|tls) ;; *) return 0 ;; esac
   sf=$(status_path "$cfg")
   if status_fresh "$sf"; then
     jraw "$sf" links; return 0
   fi
+  case "$car" in mtcp|l3mtcp|l3|tls) ;; *) return 0 ;; esac
   addr=$(jget "$cfg" addr); host=${addr%:*}; port=${addr##*:}
   if tm_dials "$cfg"; then
     ss -Htn state established "( dport = :$port and dst $host )" 2>/dev/null | wc -l
@@ -1907,6 +1939,7 @@ tm_details(){
   echo >&2; hr
   say " Tunnel:      ${C_B}$u${C_0}   ${C_D}config: $cfg${C_0}"
   say " Status:      $(tm_state_label "$st")$([ "$st" = running ] && echo " · $(tm_uptime "$u")")$([ "$st" = running ] && [ -n "$links" ] && echo " · $links links")"
+  if [ "$st" = running ] && [ -f "$cfg" ]; then say " Connection:  $(tunnel_conn_label "$cfg")"; fi
   if [ -f "$cfg" ]; then
     say " Side:        $(tm_role "$cfg") · $(tm_dir "$cfg") · $(tm_transport "$cfg")"
     if tm_dials "$cfg"; then
@@ -2544,6 +2577,9 @@ upgrade(){
     fi
   done
   echo >&2
+  # Every tunnel now runs the new binary: rules older binaries left behind
+  # (they could not always clean up on stop) can go.
+  kernel_cleanup
   [ "$fails" = 0 ] || { err "$fails tunnel(s) did not start — see above."; bail; }
   ok "hs2 upgraded. Upgrade the OTHER server(s) too (both sides of a tunnel must match)."
   info "Tunnel manager: run  hs2-menu  → 3"
