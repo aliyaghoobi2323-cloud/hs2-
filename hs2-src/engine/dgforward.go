@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -17,15 +18,39 @@ import (
 // endpoints' own TCP provides reliability end to end. There is no TCP inside
 // the carrier.
 //
-//	iran (edge):  user connects to <user_listen_ip>:P  ->  dial <peer_tun_ip>:P
+//	iran (edge):  user connects to <user_listen_ip>:P  ->  dial <peer_tun_ip>:T(P)
 //	                (kernel routes peer_tun_ip over the TUN, so it rides the pool)
-//	kharej (exit): listen on <local_tun_ip>:P          ->  dial <panel>
+//	kharej (exit): listen on <local_tun_ip>:T(P)       ->  dial <panel>
 //
 // Both sides read the same port list from forward_ports, so port P on the edge
 // reaches the panel on the exit. TCP and (optionally) UDP.
+//
+// The ON-TUN port is T(P), not P. A panel almost always binds the user port on
+// 0.0.0.0 (all interfaces), and on Linux a bind of the SPECIFIC tun address
+// <local_tun_ip>:P then fails with EADDRINUSE against that wildcard — even with
+// SO_REUSEADDR — so the exit could not listen and hs2 crash-looped. The tun
+// address is private to the tunnel, so shifting the on-tun port into a high,
+// tunnel-private range (tunForwardPort) keeps the exit's listener clear of the
+// panel while both ends still derive it from the same user port.
 
 // forwardTarget builds "host:port".
 func forwardTarget(host, port string) string { return net.JoinHostPort(host, port) }
+
+// dgForwardBase shifts the on-tun forwarder port away from the user/panel port.
+const dgForwardBase = 20000
+
+// tunForwardPort maps a user port to the port the forwarder uses ON THE TUN
+// between the two servers. It is a bijection on 1..65535, so distinct user
+// ports never collide, and it lands in a high range a panel does not use. Both
+// sides compute it from the same user port. Non-numeric input (never produced
+// by the installer or check) is returned unchanged.
+func tunForwardPort(port string) string {
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return port
+	}
+	return strconv.Itoa((n-1+dgForwardBase)%65535 + 1)
+}
 
 // runForwarder opens a TCP (and optionally UDP) listener on listenAddr and
 // proxies every connection to dialAddr. Used on both ends of the datagram tun:
@@ -159,11 +184,11 @@ func StartDgForwarders(ctx context.Context, edge bool, ports []string, userListe
 	for _, p := range ports {
 		var listenAddr, dialAddr string
 		if edge {
-			listenAddr = forwardTarget(userListenIP, p) // where users connect
-			dialAddr = forwardTarget(peerTunIP, p)      // over the TUN to the exit
+			listenAddr = forwardTarget(userListenIP, p)            // where users connect
+			dialAddr = forwardTarget(peerTunIP, tunForwardPort(p)) // over the TUN to the exit
 		} else {
-			listenAddr = forwardTarget(localTunIP, p) // arrives over the TUN
-			dialAddr = panel                          // to the real panel
+			listenAddr = forwardTarget(localTunIP, tunForwardPort(p)) // arrives over the TUN
+			dialAddr = panel                                          // to the real panel
 		}
 		if err := runForwarder(ctx, listenAddr, dialAddr, udp, logf); err != nil {
 			return err
