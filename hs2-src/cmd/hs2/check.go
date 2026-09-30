@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"reflect"
 	"sort"
 	"strconv"
@@ -288,8 +289,8 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		} else if fc.Proto != 0 {
 			warn(`"proto" only applies to the ipx encapsulation; it is ignored for %q`, fc.Encap)
 		}
-		if fc.Encap == "icmp" && !dials {
-			warn(`encap icmp: this side answers the tunnel's echo requests, so the kernel's own ping replies to its tun IP are turned off — real traffic is unaffected, but "ping %s" from the peer will not answer`, ipOfCIDR(fc.LocalCIDR))
+		if fc.Encap == "icmp" && !dials && !haveEchoGuardTool() {
+			warn(`encap icmp: neither nft nor iptables is installed, so to keep the kernel from answering the tunnel's echo requests hs2 must turn off ALL ping replies on this server while it runs (public IP and tun IP) — install nftables to keep normal ping working`)
 		}
 		if fc.MinLinks < 0 || fc.MaxLinks < 0 || fc.PerLink < 0 {
 			bad(`"min_links", "max_links" and "per_link" cannot be negative`)
@@ -383,4 +384,17 @@ func lineCol(b []byte, off int64) (int, int) {
 		}
 	}
 	return line, col
+}
+
+// haveEchoGuardTool reports whether nft or iptables is present, which an icmp
+// listener uses to drop only the kernel's replies to the tunnel's own echo
+// requests (encap/echoguard_linux.go). Without either it must silence all ping.
+// A variable so tests can pin it.
+var haveEchoGuardTool = func() bool {
+	for _, t := range []string{"nft", "iptables"} {
+		if _, err := exec.LookPath(t); err == nil {
+			return true
+		}
+	}
+	return false
 }

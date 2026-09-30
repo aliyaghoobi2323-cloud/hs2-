@@ -275,13 +275,20 @@ func TestCheckDgTun(t *testing.T) {
 	if errs, _ := checkConfig(base(`, "min_links": 20, "max_links": 4`), local, time.Now()); !strings.Contains(strings.Join(errs, "|"), "max_links") {
 		t.Errorf("min>max not caught: %v", errs)
 	}
-	// the icmp encap warns (on the listener side) that inner pings to its tun IP
-	// are not answered — a real behavioral surprise, real traffic unaffected.
+	// The icmp listener keeps normal ping working when nft or iptables exists (it
+	// drops only the kernel's replies to the tunnel's packets); without either it
+	// has to silence all ping on the server, and check says so.
 	icmpExit := []byte(`{"mode": "listen", "carrier": "dgtun", "encap": "icmp", "addr": "0.0.0.0:2096",
 		"iface": "hs0", "local_cidr": "10.77.0.2/30", "peer_ip": "10.77.0.1", "mtu": 1280,
-		"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "forward_ports": "8443"}`)
+		"shared_key": "` + testKey + `", "expose": "127.0.0.1:8443"}`)
+	defer func(f func() bool) { haveEchoGuardTool = f }(haveEchoGuardTool)
+	haveEchoGuardTool = func() bool { return false }
 	if _, warns := checkConfig(icmpExit, local, time.Now()); !strings.Contains(strings.Join(warns, "|"), "ping") {
-		t.Errorf("icmp ping warning missing: %v", warns)
+		t.Errorf("icmp without nft/iptables: ping warning missing: %v", warns)
+	}
+	haveEchoGuardTool = func() bool { return true }
+	if errs, warns := checkConfig(icmpExit, local, time.Now()); len(errs)+len(warns) != 0 {
+		t.Errorf("icmp with nft/iptables must pass clean: errs=%v warns=%v", errs, warns)
 	}
 	// The exit needs only the panel: the user ports live on the edge. No panel is
 	// a valid pure routed tunnel but warns; a malformed one is an error; a panel on
