@@ -222,10 +222,11 @@ type rawPeer struct {
 }
 
 type rawPacketConn struct {
-	ipc      *net.IPConn
-	f        *framer
-	wildcard bool
-	laddr    *Addr
+	ipc       *net.IPConn
+	f         *framer
+	wildcard  bool
+	laddr     *Addr
+	closeEcho sync.Once // releases this listener's icmp-echo-ignore hold, once
 
 	mu        sync.Mutex
 	peers     map[rawKey]*rawPeer
@@ -255,17 +256,25 @@ func listenRawLinux(kind, addr string, opt Options) (net.PacketConn, error) {
 	if f.kind == KindICMP {
 		// The server side receives echo REQUESTS; if the kernel also answered
 		// them it would echo every sealed datagram straight back to the peer,
-		// doubling the return path's traffic.
-		if err := ignoreKernelEcho(); err != nil {
+		// doubling the return path's traffic. Close() restores the kernel's
+		// setting when the last ICMP listener goes, so stopping the tunnel does
+		// not leave the operator's host silent to real pings.
+		if err := acquireEchoIgnore(); err != nil {
 			return nil, err
 		}
 	}
 	ipc, err := net.ListenIP(rawNetwork(f.proto), &net.IPAddr{IP: ip})
 	if err != nil {
+		if f.kind == KindICMP {
+			releaseEchoIgnore()
+		}
 		return nil, rawErr(f.kind, err)
 	}
 	if err := tuneRawSocket(ipc, f.recvFilter(0, 0)); err != nil {
 		ipc.Close()
+		if f.kind == KindICMP {
+			releaseEchoIgnore()
+		}
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
 	return &rawPacketConn{
@@ -373,7 +382,13 @@ func (c *rawPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	return len(p), nil
 }
 
-func (c *rawPacketConn) Close() error                       { return c.ipc.Close() }
+func (c *rawPacketConn) Close() error {
+	err := c.ipc.Close()
+	if c.f.kind == KindICMP {
+		c.closeEcho.Do(releaseEchoIgnore)
+	}
+	return err
+}
 func (c *rawPacketConn) LocalAddr() net.Addr                { return c.laddr }
 func (c *rawPacketConn) SetDeadline(t time.Time) error      { return c.ipc.SetDeadline(t) }
 func (c *rawPacketConn) SetReadDeadline(t time.Time) error  { return c.ipc.SetReadDeadline(t) }
@@ -383,18 +398,55 @@ func (c *rawPacketConn) SetWriteDeadline(t time.Time) error { return c.ipc.SetWr
 
 const echoIgnorePath = "/proc/sys/net/ipv4/icmp_echo_ignore_all"
 
-// ignoreKernelEcho makes this network namespace's kernel stop answering echo
-// requests (net.ipv4.icmp_echo_ignore_all=1), which an icmp listener needs.
-// Already set is fine; unable to set it is an error that says what to do.
-func ignoreKernelEcho() error {
-	if b, err := os.ReadFile(echoIgnorePath); err == nil && strings.TrimSpace(string(b)) == "1" {
-		return nil
+// icmp-echo-ignore is refcounted across the ICMP listeners in this process: the
+// first to open sets net.ipv4.icmp_echo_ignore_all=1 (so the kernel stops
+// answering the echo requests the tunnel carries), and the last to close puts
+// it back — but only to a value this process itself changed. A host where the
+// operator had already disabled echo replies (or does so while we run) is left
+// untouched. echoWeSet records that 0->1 transition.
+var (
+	echoMu    sync.Mutex
+	echoRefs  int
+	echoWeSet bool
+)
+
+// acquireEchoIgnore takes one ICMP listener's hold on icmp_echo_ignore_all,
+// turning it on if it was off. Unable to set it is an error that says what to
+// do. Every successful call must be paired with exactly one releaseEchoIgnore.
+func acquireEchoIgnore() error {
+	echoMu.Lock()
+	defer echoMu.Unlock()
+	if echoRefs == 0 {
+		already := false
+		if b, err := os.ReadFile(echoIgnorePath); err == nil && strings.TrimSpace(string(b)) == "1" {
+			already = true
+		}
+		if !already {
+			if err := os.WriteFile(echoIgnorePath, []byte("1\n"), 0o644); err != nil {
+				return fmt.Errorf("encap icmp: the kernel would answer the tunnel's echo requests itself; "+
+					"set net.ipv4.icmp_echo_ignore_all=1 (sysctl -w) or run as root: %w", err)
+			}
+			echoWeSet = true
+		}
 	}
-	if err := os.WriteFile(echoIgnorePath, []byte("1\n"), 0o644); err != nil {
-		return fmt.Errorf("encap icmp: the kernel would answer the tunnel's echo requests itself; "+
-			"set net.ipv4.icmp_echo_ignore_all=1 (sysctl -w) or run as root: %w", err)
-	}
+	echoRefs++
 	return nil
+}
+
+// releaseEchoIgnore drops one hold; when the last ICMP listener in this process
+// goes and we were the one that turned echo off, turn it back on. A best-effort
+// write: if it fails there is nothing useful to do and the socket is closing.
+func releaseEchoIgnore() {
+	echoMu.Lock()
+	defer echoMu.Unlock()
+	if echoRefs == 0 {
+		return
+	}
+	echoRefs--
+	if echoRefs == 0 && echoWeSet {
+		_ = os.WriteFile(echoIgnorePath, []byte("0\n"), 0o644)
+		echoWeSet = false
+	}
 }
 
 // EchoIgnored reports whether the kernel's automatic echo replies are off in
