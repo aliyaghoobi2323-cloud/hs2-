@@ -115,7 +115,7 @@ func (l *Listener) serve() {
 			if bytes.Equal(pkt, pl.m1) {
 				l.send(pl.m2, addr, pl.local)
 			} else {
-				pl.c.feed(pkt)
+				pl.c.tryFeed(pkt)
 			}
 			continue
 		}

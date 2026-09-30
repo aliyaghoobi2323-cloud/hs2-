@@ -70,6 +70,10 @@ type Conn struct {
 	// liveness
 	lastRxNanos atomic.Int64
 
+	// inbound datagrams the listener dropped because this carrier's queue was
+	// full (tryFeed)
+	rxDropped atomic.Uint64
+
 	// feedback we send (describes what WE receive)
 	rxDataBytes atomic.Uint64
 	echoMu      sync.Mutex
@@ -257,6 +261,21 @@ func (c *Conn) feed(pkt []byte) {
 	select {
 	case c.rx <- rxPkt{b: pkt, at: time.Now()}:
 	case <-c.done:
+	}
+}
+
+// tryFeed is feed for the listener, where every carrier shares ONE socket and
+// ONE read loop: it never blocks. A carrier whose reader has stalled (decode
+// and frame queues full) loses the datagram — plain loss, which FEC and the
+// inner transport already handle — instead of freezing every other carrier on
+// the socket until the stalled one is torn down. (A dialer owns its socket, so
+// feed may block there: the backpressure stays on that one carrier.)
+func (c *Conn) tryFeed(pkt []byte) {
+	select {
+	case c.rx <- rxPkt{b: pkt, at: time.Now()}:
+	case <-c.done:
+	default:
+		c.rxDropped.Add(1)
 	}
 }
 
@@ -494,6 +513,7 @@ type Stats struct {
 	Enc          fec.EncoderStats
 	Dec          fec.DecoderStats
 	PacerDropped uint64
+	RxDropped    uint64 // listener only: inbound datagrams dropped, this carrier's queue full
 	BtlBwBytes   float64
 	RTProp       time.Duration
 	LossPPM      uint32
@@ -520,6 +540,7 @@ func (c *Conn) Stats() Stats {
 		Enc:          c.enc.Stats(),
 		Dec:          dec,
 		PacerDropped: dropped,
+		RxDropped:    c.rxDropped.Load(),
 		BtlBwBytes:   bw,
 		RTProp:       time.Duration(rtt * float64(time.Second)),
 		LossPPM:      loss,
