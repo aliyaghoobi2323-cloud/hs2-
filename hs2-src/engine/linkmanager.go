@@ -666,9 +666,10 @@ func (m *LinkManager) drainTick() {
 	if m.accept {
 		what = "reverse link"
 	}
-	for _, ml := range closing {
+	for i, ml := range closing {
+		left := len(closing) - i - 1 // closed in this batch after this one
 		m.log("mtcp: %s %d retired: its connections ended (%s after retiring) — now %d up (%d serving, %d retiring)",
-			what, ml.id, fmtDur(now.Sub(ml.retireSince)), up, S, R)
+			what, ml.id, fmtDur(now.Sub(ml.retireSince)), up+left, S, R+left)
 		go func(l Link) {
 			time.Sleep(closeJitter())
 			l.Close() // DropLink then finds nothing and stays quiet
