@@ -35,6 +35,14 @@ type simPath struct {
 	crossFrac   float64 // if > 0, cross-traffic takes this fraction of the bottleneck while active
 	crossOnMs   float64 // cross-traffic on/off period (ms); it builds a queue we did not build
 	changeAt    time.Duration
+	// noStamps models a peer too old to stamp one-way delay: reports never carry
+	// OWD, so the controller must fall back to the RTT-minus-base queue (rttQ).
+	noStamps bool
+	// noDelaySignal models a path with NO usable delay signal at all: no OWD, and
+	// the reported RTT is pinned to the bare propagation RTT however much we
+	// overdrive, so a standing queue is invisible. Startup can then end only via
+	// the round-count backstop (startCap). Implies no stamps.
+	noDelaySignal bool
 }
 
 type simResult struct {
@@ -232,14 +240,30 @@ func runRateSim(p simPath, dur, warm time.Duration, seed uint64) simResult {
 			}
 			r := report{arrive: now + float64(p.oneWay/time.Millisecond), rx: rxBytes, lossPPM: ppm}
 			if haveOWD {
-				r.owdTicks, r.haveOWD = uint32(int64(owdMin*8)), true
+				// A peer that stamps reports the min OWD. noStamps/noDelaySignal
+				// model a peer (or path) that does not, so the OWD is withheld
+				// while the interval min is still reset for the next window.
+				if !p.noStamps && !p.noDelaySignal {
+					r.owdTicks, r.haveOWD = uint32(int64(owdMin*8)), true
+				}
 				haveOWD = false
 			}
 			if havePeerFb {
 				r.haveEcho = true
-				r.echo = peerLastFbSend
-				r.echoDelay = (now + peerOffset) - peerLastFbRecv
-				r.owd = peerLastFbRecv - peerLastFbSend
+				if p.noDelaySignal {
+					// Pin the reported RTT to the bare propagation RTT (2*oneWay):
+					// with r.echo one propagation ahead of send and no hold, the
+					// consumer computes rtt = arrive - echo = 2*oneWay regardless
+					// of the real forward queue. The queue estimate stays ~0, so
+					// no delay signal ever reaches the controller.
+					r.echo = now - float64(p.oneWay/time.Millisecond)
+					r.echoDelay = 0
+					r.owd = 0
+				} else {
+					r.echo = peerLastFbSend
+					r.echoDelay = (now + peerOffset) - peerLastFbRecv
+					r.owd = peerLastFbRecv - peerLastFbSend
+				}
 			}
 			if !lost(now) {
 				toUs = append(toUs, r)
@@ -299,6 +323,7 @@ type simCase struct {
 	minUtil  float64
 	maxQp95  float64 // ms
 	maxDrops int
+	maxQMean float64 // ms; 0 = skip (used where a shallow buffer clips p95)
 }
 
 func rateSimCases() []simCase {
@@ -310,22 +335,37 @@ func rateSimCases() []simCase {
 	}{{2, 20 * ms}, {10, 40 * ms}, {20, 25 * ms}, {50, 60 * ms}, {100, 10 * ms}, {100, 150 * ms}, {500, 20 * ms}} {
 		name := fmt.Sprintf("%gmbit-rtt%dms", c.mbit, 2*c.ow/ms)
 		base := simPath{capBps: c.mbit * 1e6, oneWay: c.ow, buffer: 300 * ms}
-		cs = append(cs, simCase{name + "-clean", base, 0.95, 30, 0})
+		cs = append(cs, simCase{name + "-clean", base, 0.95, 30, 0, 0})
 		iid := base
 		iid.lossIID = 0.05
-		cs = append(cs, simCase{name + "-iid5", iid, 0.95, 45, 0})
+		cs = append(cs, simCase{name + "-iid5", iid, 0.95, 45, 0, 0})
 		// ~26% bursty loss (the real target path's profile): arrivals at
 		// the bottleneck swing with the bursts, so the queue random-walks
 		// around the target; it must still stay bounded, far from the buffer.
 		b := base
 		b.lossIID, b.burstLoss, b.burstGoodMs, b.burstBadMs = 0.02, 0.88, 30, 12
-		cs = append(cs, simCase{name + "-bursty26", b, 0.90, 150, 0})
+		cs = append(cs, simCase{name + "-bursty26", b, 0.90, 150, 0, 0})
 	}
-	// A shallow bottleneck buffer: 15 ms, clean and with 5% loss. Tail drops
-	// here are the carrier's own doing; keep them rare.
-	for _, lossP := range []float64{0, 0.05} {
-		p := simPath{capBps: 30e6, oneWay: 30 * ms, buffer: 15 * ms, lossIID: lossP}
-		cs = append(cs, simCase{fmt.Sprintf("30mbit-rtt60ms-buf15ms-loss%g", lossP), p, 0.9, 16, 1000})
+	// A shallow bottleneck buffer: 15 ms, clean and with 5% loss. The 15 ms
+	// buffer tail-drops anything queued past it, so a p95 bound there is a
+	// tautology (it can never exceed the buffer). The biting assertions are
+	// instead: the queue MEAN stays near the 10 ms target, tail drops stay rare,
+	// and utilisation stays high — all three break the instant the controller
+	// overdrives a shallow buffer (verified: aiming the queue above the buffer
+	// pushes tail drops to tens of thousands and the mean to the buffer).
+	for _, tc := range []struct {
+		lossP    float64
+		maxDrops int
+	}{{0, 100}, {0.05, 400}} {
+		p := simPath{capBps: 30e6, oneWay: 30 * ms, buffer: 15 * ms, lossIID: tc.lossP}
+		cs = append(cs, simCase{
+			name:     fmt.Sprintf("30mbit-rtt60ms-buf15ms-loss%g", tc.lossP),
+			p:        p,
+			minUtil:  0.9,
+			maxQp95:  16,
+			maxDrops: tc.maxDrops,
+			maxQMean: 13,
+		})
 	}
 	return cs
 }
@@ -346,8 +386,11 @@ func TestRateSimMatrix(t *testing.T) {
 			if r.qP95 > c.maxQp95 {
 				t.Errorf("queue p95 %.1f ms > %.0f ms", r.qP95, c.maxQp95)
 			}
+			if c.maxQMean > 0 && r.qMean > c.maxQMean {
+				t.Errorf("queue mean %.1f ms > %.0f ms (queue not held near target)", r.qMean, c.maxQMean)
+			}
 			if r.tailDrops > c.maxDrops {
-				t.Errorf("%d tail drops after settling", r.tailDrops)
+				t.Errorf("%d tail drops after settling (> %d)", r.tailDrops, c.maxDrops)
 			}
 		})
 	}
@@ -379,8 +422,12 @@ func TestRateSimAppLimited(t *testing.T) {
 	p := simPath{capBps: 50e6, oneWay: 20 * ms, buffer: 300 * ms, appRateBps: 5e6}
 	r := runRateSim(p, 30*time.Second, 10*time.Second, 4)
 	t.Logf("app-limited 5/50 Mbit: %s", r)
-	if r.finalRate > 60 {
-		t.Errorf("idle allowance grew to %.0f Mbit/s", r.finalRate)
+	// The app never offers more than 5 Mbit/s, so the allowance must stay near
+	// the delivered rate — not climb toward the 50 Mbit/s path (which the old
+	// 60 Mbit/s bar, above capacity, could not catch). If the startup limited
+	// gate is dropped and the loose cap doubled the allowance runs to ~50 Mbit/s.
+	if r.finalRate > 15 {
+		t.Errorf("idle allowance grew to %.1f Mbit/s (delivered ~5 Mbit/s)", r.finalRate)
 	}
 	if r.qP95 > 10 {
 		t.Errorf("app-limited sender built a queue: %s", r)
@@ -413,15 +460,54 @@ func TestRateSimTrace(t *testing.T) {
 // startup ramp the rate to maxRate: the round-count backstop ends startup.
 func TestRateSimSlowPathNoRunaway(t *testing.T) {
 	ms := time.Millisecond
-	// 300 kbit/s, a big buffer, and NO queue signal modelled by giving the
-	// path a huge buffer so overdriving barely raises delay within the run.
-	r := runRateSim(simPath{capBps: 300e3, oneWay: 20 * ms, buffer: 5 * time.Second}, 40*time.Second, 20*time.Second, 6)
-	t.Logf("slow 300kbit: %s", r)
-	if r.finalRate > 5 { // Mbit/s — must stay near 0.3, never near maxRate
+	// 300 kbit/s with NO usable delay signal: the peer reports a flat
+	// propagation RTT and never stamps OWD, so a standing queue is invisible to
+	// the controller. Startup therefore cannot end on the queue, and the plateau
+	// rule cannot fire either (it needs dRate > 4×minRate, and 300 kbit/s is
+	// below that) — only the round-count backstop (startCap) can stop it.
+	// Without that backstop the rate ramps to maxRate (verified: it reaches
+	// ~32 Gbit when startCap is removed).
+	r := runRateSim(simPath{capBps: 300e3, oneWay: 20 * ms, buffer: 5 * time.Second, noDelaySignal: true}, 40*time.Second, 20*time.Second, 6)
+	t.Logf("slow 300kbit no-signal: %s", r)
+	if r.finalRate > 5 { // Mbit/s — must stay near the path, never near maxRate
 		t.Errorf("rate ran away on a slow path: %.1f Mbit/s", r.finalRate)
 	}
 	if r.util < 0.7 {
 		t.Errorf("slow path under-utilised: %.0f%%", r.util*100)
+	}
+}
+
+// The RTT-fallback control path. A peer too old to stamp one-way delay never
+// reports OWD, so the controller must derive the forward queue from the
+// round-trip time over its minimum (rate.go's rttQ) rather than from stamps.
+// With no stamps at all it must still fill the path and hold the queue bounded —
+// clean and bursty, at a couple of bandwidths. (The stamped OWD path is what the
+// rest of the matrix exercises; without this, that fallback was never run.)
+func TestRateSimRTTFallback(t *testing.T) {
+	ms := time.Millisecond
+	for _, c := range []struct {
+		name             string
+		p                simPath
+		minUtil, maxQp95 float64
+	}{
+		{"10mbit-clean", simPath{capBps: 10e6, oneWay: 40 * ms, buffer: 300 * ms, noStamps: true}, 0.90, 30},
+		{"20mbit-clean", simPath{capBps: 20e6, oneWay: 25 * ms, buffer: 300 * ms, noStamps: true}, 0.90, 30},
+		{"20mbit-bursty", simPath{capBps: 20e6, oneWay: 25 * ms, buffer: 300 * ms, lossIID: 0.02, burstLoss: 0.88, burstGoodMs: 30, burstBadMs: 12, noStamps: true}, 0.85, 140},
+		{"10mbit-bursty", simPath{capBps: 10e6, oneWay: 40 * ms, buffer: 300 * ms, lossIID: 0.02, burstLoss: 0.88, burstGoodMs: 30, burstBadMs: 12, noStamps: true}, 0.85, 160},
+	} {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			r := runRateSim(c.p, 60*time.Second, 15*time.Second, 9)
+			t.Logf("rtt-fallback %s: %s", c.name, r)
+			if r.util < c.minUtil {
+				t.Errorf("utilisation %.0f%% < %.0f%%", r.util*100, c.minUtil*100)
+			}
+			// If the RTT-fallback branch is broken (queue forced to 0 when the
+			// peer does not stamp) the queue runs to the buffer (~300 ms p95).
+			if r.qP95 > c.maxQp95 {
+				t.Errorf("queue p95 %.1f ms > %.0f ms (RTT fallback not bounding the queue)", r.qP95, c.maxQp95)
+			}
+		})
 	}
 }
 

@@ -233,17 +233,23 @@ func TestLabBursty26(t *testing.T) {
 	// The rate controller keeps the 20 Mbit/s bottleneck full: with ~140%
 	// parity that is ~7.5-8 Mbit/s of goodput (the old controller left the
 	// path a third idle and got 4.6-5.8). Filling the path exposes more
-	// packets to the bursts, so more ride FEC recovery — the tail latency
-	// below is that recovery time, not pacing queue (the sim suite holds the
-	// pacing queue near 10 ms), and it is the cost of recovering 26% loss at
-	// the full rate rather than leaving bandwidth unused.
+	// packets to the bursts, so more ride FEC recovery — the tail latency below
+	// is FEC recovery time ON TOP of the pacing queue. Under 26% bursty loss the
+	// queue does NOT sit at the 10 ms target: the bursts swing the bottleneck's
+	// arrivals, so the queue random-walks around the target and runs tens of ms
+	// (the matching sim case, 20mbit-rtt50ms-bursty26, measures queue mean ~38 ms
+	// and p95 ~87 ms). This is the cost of recovering 26% loss at the full rate
+	// rather than leaving bandwidth unused.
 	if res.goodputMbps < 6.5 {
 		t.Fatalf("goodput %.2f Mbit/s: the bottleneck is not being filled", res.goodputMbps)
 	}
 	// Tail latency is dominated by FEC recovery of the bursts (a rebuilt
 	// packet waits up to the decoder ttl), which grows with how much of the
-	// path is used; on this profile p95-p50 runs ~90-260 ms. The pacing queue
-	// itself stays near the 10 ms target (the sim suite asserts that directly).
+	// path is used; on this profile p95-p50 runs ~90-260 ms. That FEC recovery
+	// sits on top of the pacing queue, which under this bursty profile itself
+	// runs tens of ms — the sim suite bounds that queue (its bursty26 cases cap
+	// p95 at 150 ms and measure ~38 ms mean / ~87 ms p95), well short of the
+	// 300 ms buffer, rather than holding it at 10 ms.
 	if res.jitterMs > 320 {
 		t.Fatalf("jitter too high even for FEC recovery: %.1f ms", res.jitterMs)
 	}

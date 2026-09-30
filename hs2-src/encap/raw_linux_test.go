@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func listenT(t *testing.T, kind, addr string, opt Options) net.PacketConn {
@@ -105,8 +108,26 @@ func TestRawSocketLinksDemux(t *testing.T) {
 			srv := listenT(t, k, "127.0.0.1", opt)
 			var clis []net.Conn
 			addrs := map[string]net.Addr{}
+			// Link ids are random 16-bit values with no uniqueness check
+			// (randLinkID), so two links from this one IP can collide. That is a
+			// known production limitation — a colliding pair fails its handshake
+			// and the pool redials — not something this demux test should trip
+			// over, so retry each dial until its link id is distinct.
+			seenIDs := map[uint16]bool{}
 			for i := 0; i < 4; i++ {
-				c := dialT(t, k, "127.0.0.1", opt)
+				var c net.Conn
+				for tries := 0; ; tries++ {
+					c = dialT(t, k, "127.0.0.1", opt)
+					id := c.LocalAddr().(*Addr).ID
+					if !seenIDs[id] {
+						seenIDs[id] = true
+						break
+					}
+					c.Close() // collision: discard and redial for a unique id
+					if tries >= 20 {
+						t.Fatalf("%s: could not get a unique link id in 20 tries", k)
+					}
+				}
 				clis = append(clis, c)
 				c.Write([]byte(fmt.Sprintf("link-%d", i)))
 				got, from := readFromT(t, srv, 2*time.Second)
@@ -197,8 +218,86 @@ func TestRawSocketBindIP(t *testing.T) {
 	}
 }
 
+// icmpReplySniffer counts ICMP echo REPLIES (type 0) to loopback seen on the
+// wire, so a test can prove the kernel did not answer the tunnel's echo requests
+// itself (the dialer's BPF filter drops a kernel echo — it carries the c2s
+// magic — so the dialer's own read can never observe one).
+type icmpReplySniffer struct {
+	fd   int
+	mu   sync.Mutex
+	n    int
+	done chan struct{}
+}
+
+func newICMPReplySniffer(t *testing.T) *icmpReplySniffer {
+	t.Helper()
+	hs := func(v uint16) uint16 { return v<<8 | v>>8 }
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW|unix.SOCK_CLOEXEC, int(hs(unix.ETH_P_IP)))
+	if err != nil {
+		t.Fatalf("AF_PACKET: %v", err)
+	}
+	lo, err := net.InterfaceByName("lo")
+	if err != nil {
+		unix.Close(fd)
+		t.Fatalf("lo: %v", err)
+	}
+	if err := unix.Bind(fd, &unix.SockaddrLinklayer{Protocol: hs(unix.ETH_P_IP), Ifindex: lo.Index}); err != nil {
+		unix.Close(fd)
+		t.Fatalf("bind lo: %v", err)
+	}
+	unix.SetNonblock(fd, true)
+	s := &icmpReplySniffer{fd: fd, done: make(chan struct{})}
+	go s.loop()
+	t.Cleanup(func() { close(s.done); unix.Close(fd) })
+	return s
+}
+
+func (s *icmpReplySniffer) loop() {
+	buf := make([]byte, 65536)
+	for {
+		select {
+		case <-s.done:
+			return
+		default:
+		}
+		n, _, err := unix.Recvfrom(s.fd, buf, 0)
+		if err != nil {
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		// Find the IPv4 header after the link-layer header (whatever its length),
+		// then count an ICMP echo reply (protocol 1, type 0) between 127.x hosts.
+		for off := 0; off <= 18 && off+20 <= n; off++ {
+			if buf[off]>>4 != 4 || buf[off+9] != 1 { // IPv4 carrying ICMP
+				continue
+			}
+			if buf[off+12] != 127 || buf[off+16] != 127 { // loopback src/dst
+				continue
+			}
+			ihl := int(buf[off]&0x0f) * 4
+			if off+ihl < n && buf[off+ihl] == icmpEchoReply {
+				s.mu.Lock()
+				s.n++
+				s.mu.Unlock()
+			}
+			break
+		}
+	}
+}
+
+func (s *icmpReplySniffer) replies() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.n
+}
+
 // The icmp listener turns off the kernel's own echo replies, so the dialer
-// hears only the listener — not its own datagrams echoed back.
+// hears only the listener — not its own datagrams echoed back. The listener here
+// is a bare packet socket that sends no replies, so the ONLY ICMP echo replies
+// (type 0) that could reach the wire are the kernel's answers to the dialer's
+// echo requests; with icmp_echo_ignore_all set there must be none. A sniffer
+// confirms that directly: the dialer's read timing out proves nothing on its own
+// (the dialer's BPF filter would drop a kernel echo regardless of the sysctl).
 func TestRawSocketICMPKernelSilent(t *testing.T) {
 	needRawNetns(t)
 	os.WriteFile(echoIgnorePath, []byte("0\n"), 0o644)
@@ -206,12 +305,17 @@ func TestRawSocketICMPKernelSilent(t *testing.T) {
 	if !EchoIgnored() {
 		t.Fatal("icmp listener did not set icmp_echo_ignore_all")
 	}
+	sn := newICMPReplySniffer(t)
 	cli := dialT(t, KindICMP, "127.0.0.1", Options{})
 	for i := 0; i < 10; i++ {
 		cli.Write([]byte("req"))
 	}
 	for i := 0; i < 10; i++ {
 		readFromT(t, srv, 2*time.Second)
+	}
+	time.Sleep(250 * time.Millisecond) // let any kernel echo reply reach the sniffer
+	if n := sn.replies(); n != 0 {
+		t.Fatalf("kernel emitted %d ICMP echo replies despite icmp_echo_ignore_all", n)
 	}
 	cli.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
 	buf := make([]byte, 2048)

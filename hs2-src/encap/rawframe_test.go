@@ -87,6 +87,18 @@ func TestRawFrameGREWellFormed(t *testing.T) {
 	}
 }
 
+// protoOf returns the IP protocol number a real framer of this kind uses (icmp
+// 1, gre 47, ipip 4, ipx 253), so the magic tests derive magics for the SAME
+// (kind, proto) the sockets actually use — not one fixed constant for every kind.
+func protoOf(t *testing.T, kind string) int {
+	t.Helper()
+	f, err := newFramer(kind, Options{}, true)
+	if err != nil {
+		t.Fatalf("%s framer: %v", kind, err)
+	}
+	return f.proto
+}
+
 // A different shared secret means different magics: a second hs2 (or anything
 // else) using the same protocol on the host is discarded at the framing.
 func TestRawFrameKeySeparation(t *testing.T) {
@@ -97,18 +109,29 @@ func TestRawFrameKeySeparation(t *testing.T) {
 			t.Fatalf("%s: a packet keyed with another secret was accepted", k)
 		}
 	}
-	// Magics differ per kind and direction for one key.
-	seen := map[uint16]string{}
+	// For each kind, at the REAL protocol its socket uses, assert (not just log)
+	// the properties the framing relies on. The inputs are fixed constants, so
+	// these are deterministic, not probabilistic:
+	//   - the two direction magics differ, so a side never mistakes its own
+	//     packet (or an echo of it) for the peer's;
+	//   - the magic is stable for a given (key, kind, proto);
+	//   - changing ONLY the key changes the magic — the framing is keyed by the
+	//     shared secret, not a per-deployment constant. This is what makes the
+	//     magic separate two tunnels with different secrets (the end-to-end path
+	//     is TestRawFramingMagicKeyedBySecret at the socket and udpcarrier's
+	//     TestEncapFramingKeyedBySecret through the carrier's option mapping).
 	for _, k := range rawKinds {
-		c2s, s2c := framingMagics([]byte("same"), k, 253)
-		if c2s == s2c {
-			t.Fatalf("%s: c2s == s2c", k)
+		proto := protoOf(t, k)
+		c2sA, s2cA := framingMagics([]byte("key-A"), k, proto)
+		if c2sA == s2cA {
+			t.Fatalf("%s: c2s == s2c (a side would accept its own packets)", k)
 		}
-		for _, m := range []uint16{c2s, s2c} {
-			if prev, dup := seen[m]; dup {
-				t.Logf("note: magic %#x shared by %s and %s (2^-16 chance)", m, prev, k)
-			}
-			seen[m] = k
+		if c2sA2, s2cA2 := framingMagics([]byte("key-A"), k, proto); c2sA2 != c2sA || s2cA2 != s2cA {
+			t.Fatalf("%s: framingMagics is not deterministic for a fixed (key,kind,proto)", k)
+		}
+		c2sB, s2cB := framingMagics([]byte("key-B"), k, proto)
+		if c2sB == c2sA && s2cB == s2cA {
+			t.Fatalf("%s: magics did not change with the key — framing is not keyed by the secret", k)
 		}
 	}
 }
@@ -164,11 +187,13 @@ func TestIPXProto(t *testing.T) {
 			t.Fatalf("kernel-handled proto %d should be refused for ipx", bad)
 		}
 	}
-	// Different ipx protocols derive different magics.
+	// Different ipx protocols derive different magics: the protocol number is
+	// folded into the framing, so two ipx tunnels on different IP protocols do
+	// not share a magic. Deterministic for these fixed inputs, so assert it.
 	a, _ := framingMagics(nil, KindIPX, 200)
 	b, _ := framingMagics(nil, KindIPX, 253)
 	if a == b {
-		t.Log("note: equal magics for two ipx protocols (2^-16 chance)")
+		t.Fatalf("ipx proto 200 and 253 derive the same magic %#x (proto not folded into the framing)", a)
 	}
 }
 
@@ -281,7 +306,7 @@ func TestRecvFilter(t *testing.T) {
 			t.Fatalf("%s: listener filter passed a foreign key", k)
 		}
 		// dial filter: only its own id
-		df := cli.recvFilter(5, binary.BigEndian.Uint32(net.IPv4(2,2,2,2).To4()))
+		df := cli.recvFilter(5, binary.BigEndian.Uint32(net.IPv4(2, 2, 2, 2).To4()))
 		if runBPF(t, df, ipv4(proto, dst, src, srv.build(nil, 5, 1, []byte("d")), 0)) == 0 {
 			t.Fatalf("%s: dial filter dropped its reply", k)
 		}
@@ -291,20 +316,36 @@ func TestRecvFilter(t *testing.T) {
 		if runBPF(t, df, ipv4(proto, dst, src, cli.build(nil, 5, 1, []byte("d")), 0)) != 0 {
 			t.Fatalf("%s: dial filter passed its own request", k)
 		}
-		// a header with options (IHL 6) still filters correctly
-		p := ipv4(proto, src, dst, cli.build(nil, 5, 1, []byte("d")), 0)
+		// The dial filter drops a reply whose source IP is not the peer's, even
+		// when kind, magic and link id all match: the source-IP BPF check that
+		// keeps an off-path host from injecting into the unconnected dial socket.
+		foreign := net.IPv4(9, 9, 9, 9)
+		if runBPF(t, df, ipv4(proto, foreign, src, srv.build(nil, 5, 1, []byte("d")), 0)) != 0 {
+			t.Fatalf("%s: dial filter accepted a reply from a foreign source IP", k)
+		}
+		// A header WITH options (IHL 6, four option bytes). The total-length
+		// field must match the real, options-extended length; otherwise
+		// ipv4Payload sees a packet whose declared length fits within 20 bytes of
+		// header and returns ok with a TRUNCATED payload, and the IP-options path
+		// (slicing at ihl, not a fixed 20) is never exercised. With the length
+		// set, require the options packet to parse and yield EXACTLY the
+		// transport bytes — a fixed-offset-20 slice would return the 4 option
+		// bytes plus a short payload instead.
+		tp := cli.build(nil, 5, 1, []byte("d"))
+		p := ipv4(proto, src, dst, tp, 0)
 		opt := append(append([]byte(nil), p[:20]...), 0, 0, 0, 0)
 		opt = append(opt, p[20:]...)
-		opt[0] = 0x46
+		opt[0] = 0x46                                         // IHL = 6 (24-byte header)
+		binary.BigEndian.PutUint16(opt[2:], uint16(len(opt))) // total length now includes the options
 		if runBPF(t, lf, opt) == 0 {
 			t.Fatalf("%s: filter mis-handles IP options", k)
 		}
-		if _, _, _, ok := srv.ipv4Payload(opt); !ok {
-			// total length must be fixed for this synthetic packet
-			binary.BigEndian.PutUint16(opt[2:], uint16(len(opt)))
-			if _, _, tp, ok := srv.ipv4Payload(opt); !ok || len(tp) != len(p)-20 {
-				t.Fatalf("%s: ipv4Payload mis-handles IP options", k)
-			}
+		_, _, got, ok := srv.ipv4Payload(opt)
+		if !ok {
+			t.Fatalf("%s: ipv4Payload rejected a valid options packet", k)
+		}
+		if !bytes.Equal(got, tp) {
+			t.Fatalf("%s: ipv4Payload with options returned %d bytes, want the %d transport bytes (IHL not honoured)", k, len(got), len(tp))
 		}
 	}
 }

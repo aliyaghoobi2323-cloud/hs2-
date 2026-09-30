@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"runtime"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -17,9 +18,31 @@ import (
 // interface, nothing of the host touched. Without root they skip.
 const netnsEnv = "HS2_ENCAP_NETNS"
 
+// netnsPermitted reports whether this process can create a private network
+// namespace. It probes in a throwaway goroutine that locks its OS thread and
+// never unlocks: when the goroutine returns the runtime destroys that thread,
+// discarding the new netns it entered, so the probe leaves the process's own
+// threads (and their netns) untouched.
+func netnsPermitted() bool {
+	done := make(chan bool, 1)
+	go func() {
+		runtime.LockOSThread() // intentionally not unlocked: thread is discarded
+		done <- unix.Unshare(unix.CLONE_NEWNET) == nil
+	}()
+	return <-done
+}
+
 func TestMain(m *testing.M) {
 	if os.Geteuid() == 0 && os.Getenv(netnsEnv) == "" {
-		if path, err := exec.LookPath("unshare"); err == nil {
+		// Re-exec into a private netns ONLY when we can actually create one. As
+		// root inside a restricted container (e.g. Docker without CAP_SYS_ADMIN,
+		// or a seccomp/userns policy that blocks CLONE_NEWNET) `unshare -n` exits
+		// 1 because it cannot set up the namespace — not because a test failed.
+		// Propagating that exit code would fail the whole package with zero tests
+		// run. So probe first: if a netns is not permitted, fall through and run
+		// in-process, where the raw tests SKIP (needRawNetns) instead of failing.
+		// The happy path (root with CAP_SYS_ADMIN) still re-execs as before.
+		if path, err := exec.LookPath("unshare"); err == nil && netnsPermitted() {
 			cmd := exec.Command(path, append([]string{"-n", "--", os.Args[0]}, os.Args[1:]...)...)
 			cmd.Env = append(os.Environ(), netnsEnv+"=1")
 			cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
@@ -29,10 +52,12 @@ func TestMain(m *testing.M) {
 			case err == nil:
 				os.Exit(0)
 			case errors.As(err, &ee):
+				// The child ran the tests (it set up the namespace, since the
+				// probe confirmed it could) and this is its real test exit code.
 				os.Exit(ee.ExitCode())
 			}
-			// unshare itself failed (no permission for namespaces): run here,
-			// the raw tests will skip.
+			// Some other failure launching the child (not a test result): fall
+			// through and run in-process, where the raw tests skip.
 		}
 	}
 	if os.Getenv(netnsEnv) == "1" {
