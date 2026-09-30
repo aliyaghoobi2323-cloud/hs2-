@@ -2,6 +2,7 @@
 //
 //	hs2 keygen                 -> print a fresh static keypair
 //	hs2 run -c <config.json>   -> run the engine with the configured carrier
+//	hs2 check -c <config.json> -> validate a config without starting anything
 package main
 
 import (
@@ -78,7 +79,7 @@ type fileConfig struct {
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	if len(os.Args) < 2 {
-		fmt.Println("usage: hs2 keygen | hs2 run -c config.json")
+		fmt.Println("usage: hs2 keygen | hs2 run -c config.json | hs2 check -c config.json")
 		os.Exit(2)
 	}
 	switch os.Args[1] {
@@ -90,6 +91,8 @@ func main() {
 		fmt.Printf("private: %s\npublic:  %s\n", hex.EncodeToString(k.Private), hex.EncodeToString(k.Public))
 	case "run":
 		runCmd(os.Args[2:])
+	case "check":
+		checkCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)
