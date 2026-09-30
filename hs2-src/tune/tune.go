@@ -180,7 +180,10 @@ func Build(cfg Config, ramMB, cpus int, availCC, availQ func(string) bool) *Plan
 	add("net.ipv4.tcp_slow_start_after_idle", "0")
 	add("net.ipv4.tcp_mtu_probing", "1")
 	add("net.ipv4.tcp_fin_timeout", "20")
-	add("net.ipv4.ip_local_port_range", "10240 65535") // room for many outgoing links
+	// ip_local_port_range is deliberately NOT touched: widening it down into
+	// 10240+ makes ports that panels commonly bind for inbounds (x-ui, 10000–32767)
+	// ephemeral, so a new inbound could fail with "address in use". The kernel
+	// default already leaves ~28k outgoing ports — far more than 32 links need.
 	// rp_filter=2 (loose): a multi-IP server dialing/listening on a non-default
 	// local IP gets return packets strict rp_filter would drop.
 	add("net.ipv4.conf.all.rp_filter", "2")
@@ -215,6 +218,12 @@ func pick(want string, candidates []string, avail func(string) bool, notes *[]st
 func (p *Plan) Apply(logf func(string, ...any)) {
 	if logf == nil {
 		logf = func(string, ...any) {}
+	}
+	// Undo a setting an earlier hs2 build applied and this one no longer does —
+	// only when the live value is exactly the one hs2 set, so an operator's own
+	// value is never touched.
+	if undoLegacyPortRange(readSysctl, writeSysctl) {
+		p.Notes = append(p.Notes, "restored net.ipv4.ip_local_port_range to the kernel default 32768 60999 (an earlier hs2 build had widened it)")
 	}
 	// Load the modules the choices need, so the sysctl writes below succeed.
 	if p.Congestion != "" {
@@ -351,6 +360,32 @@ func writeQdiscWithFallback(want string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// legacyPortRange is the value an earlier hs2 build wrote; defaultPortRange is
+// the Linux default it replaced.
+const (
+	legacyPortRange  = "10240 65535"
+	defaultPortRange = "32768 60999"
+)
+
+// undoLegacyPortRange restores the default ephemeral port range if, and only if,
+// the live value is exactly the one an earlier hs2 build set. read/write are
+// injected for tests.
+func undoLegacyPortRange(read func(string) (string, bool), write func(string, string) bool) bool {
+	cur, ok := read("net.ipv4.ip_local_port_range")
+	if !ok || strings.Join(strings.Fields(cur), " ") != legacyPortRange {
+		return false
+	}
+	return write("net.ipv4.ip_local_port_range", defaultPortRange)
+}
+
+func readSysctl(key string) (string, bool) {
+	b, err := os.ReadFile("/proc/sys/" + strings.ReplaceAll(key, ".", "/"))
+	if err != nil {
+		return "", false
+	}
+	return strings.TrimSpace(string(b)), true
 }
 
 func writeSysctl(key, val string) bool {

@@ -33,10 +33,37 @@ info(){ _c '1;34' "→ $1"; }
 ok(){   _c '1;32' "✓ $1"; }
 warn(){ _c '1;33' "! $1"; }
 err(){  _c '1;31' "✗ $1"; }
-die(){  err "$1"; exit 1; }
+die(){  err "$1"; HS2_DIED=1; exit 1; }
+# bail: exit 1 after an error that has already been explained on screen.
+bail(){ HS2_DIED=1; exit 1; }
 hr(){   _c '0;36' "────────────────────────────────────────────"; }
 
 [ "$(id -u)" = 0 ] || die "Please run as root."
+
+# Safety net. Installing the binary stops hs2 (HS2_STOPPED=1). If the script
+# ends for ANY reason before hs2 is running again — an error, an unexpected
+# set -e stop, Ctrl+C at a prompt — start it again with whatever config is in
+# place, so an upgrade or re-run can never leave the tunnel down. An exit that
+# was not a deliberate `die` also says exactly which command stopped it.
+HS2_STOPPED=0
+HS2_DIED=0
+on_exit(){
+  local rc=$? cmd=$BASH_COMMAND
+  if [ "$rc" != 0 ] && [ "$HS2_DIED" != 1 ]; then
+    err "The installer stopped unexpectedly (status $rc) at: $cmd"
+    err "Please send this line to the developer."
+  fi
+  if [ "$HS2_STOPPED" = 1 ] && [ -f "$CFG" ] && [ -f "$SVC" ] \
+     && [ "$(systemctl is-active hs2 2>/dev/null || true)" != active ]; then
+    warn "hs2 was stopped for the update and is not running — starting it again with the current config…"
+    systemctl start hs2 2>/dev/null || true
+    sleep 2
+    if [ "$(systemctl is-active hs2 2>/dev/null || true)" = active ]; then ok "hs2 is running again."
+    else err "hs2 could not be started — see: journalctl -u hs2 -n 40 --no-pager"; fi
+  fi
+  return 0
+}
+trap on_exit EXIT
 
 # ---------- helpers ----------------------------------------------------------
 port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
@@ -159,6 +186,7 @@ install_binary(){
   chmod 755 "$tmp"
   "$tmp" version 2>/dev/null | grep -q "hs2 v3" \
     || { rm -f "$tmp"; die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."; }
+  [ -f "$SVC" ] && HS2_STOPPED=1
   systemctl stop hs2 2>/dev/null || true
   install -m755 "$tmp" "$BIN"; rm -f "$tmp"
   info "sha256: $(sha256sum "$BIN" | cut -c1-16)…"
@@ -214,7 +242,7 @@ start_service(){
   else
     err "hs2 failed to start. Last log:"
     journalctl -u hs2 -n 20 --no-pager >&2
-    exit 1
+    bail
   fi
 }
 
@@ -324,12 +352,17 @@ configure_renewal(){ # domain
   # deploy hook -> reload
   if grep -q '^renew_hook' "$conf"; then
     sed -i 's#^renew_hook.*#renew_hook = systemctl reload hs2#' "$conf"
+  elif grep -q '^\[renewalparams\]' "$conf"; then
+    sed -i '/^\[renewalparams\]/a renew_hook = systemctl reload hs2' "$conf"
   else
-    printf 'renew_hook = systemctl reload hs2\n' >> "$conf"
+    printf '[renewalparams]\nrenew_hook = systemctl reload hs2\n' >> "$conf"
   fi
-  # renew one week before expiry
+  # renew one week before expiry. certbot only reads this key at the TOP of the
+  # file (before [renewalparams]); appended at the end it would be ignored.
   if grep -q '^renew_before_expiry' "$conf"; then
     sed -i 's#^renew_before_expiry.*#renew_before_expiry = 7 days#' "$conf"
+  elif grep -q '^\[' "$conf"; then
+    sed -i '0,/^\[/s//renew_before_expiry = 7 days\n[/' "$conf"
   else
     printf 'renew_before_expiry = 7 days\n' >> "$conf"
   fi
@@ -1239,10 +1272,13 @@ tm_apply_restart(){ # unit cfg
   systemctl restart "$u" 2>/dev/null || true
   if tm_healthy "$u"; then ok "Applied — $u is running."; tm_log_since "$u" "$since"; return 0; fi
   err "$u did not come up with the change. Rolling back."
-  [ -f "$cfg.prev" ] && cat "$cfg.prev" > "$cfg"
+  if [ -f "$cfg.prev" ]; then cat "$cfg.prev" > "$cfg"; fi
   systemctl restart "$u" 2>/dev/null || true
   if tm_healthy "$u"; then ok "Rolled back — $u is running again."; else err "$u is still down. Check the log."; tm_log_since "$u" "$since"; fi
-  return 1
+  # Always 0: the outcome is reported above, and callers use this as the last
+  # command of an && list — a non-zero status there would end the whole menu
+  # under set -e.
+  return 0
 }
 
 # tm_cfgset writes one config key via the binary (JSON-aware, validated). It
@@ -1448,6 +1484,7 @@ restore(){
   hr; info "Restoring $f"; tar -xzOf "$f" hs2-backup-info.txt 2>/dev/null | sed 's/^/   /' >&2; hr
   # Take down the running tunnel (and its interface: the restored config may use
   # another name) before files are replaced.
+  HS2_STOPPED=1
   systemctl stop hs2 2>/dev/null || true
   local IFACE; IFACE=$(cfg_field iface)
   [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
@@ -1461,7 +1498,7 @@ restore(){
     ok "Autostart on boot: ON"
     info "Watch the log:  journalctl -u hs2 -f"
   else
-    err "hs2 failed to start after restore. Last log:"; journalctl -u hs2 -n 20 --no-pager >&2; exit 1
+    err "hs2 failed to start after restore. Last log:"; journalctl -u hs2 -n 20 --no-pager >&2; bail
   fi
 }
 
@@ -1497,14 +1534,21 @@ migrate_config(){
   modprobe tcp_bbr 2>/dev/null || true
   echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
 
-  # Point any existing certbot renewal at reload + 7-day window.
+  # Point the certbot renewal of the certificate THIS tunnel uses at reload +
+  # 7-day window. Other certbot lineages on the box (a panel's own certificate,
+  # say) are not ours and are left alone.
+  # NB: written with `if`, never `grep … && …` as the last command of a loop or
+  # function: under set -e a non-matching last lineage used to end the whole
+  # upgrade silently — after the service had been stopped for the new binary.
   local d conf
   for conf in /etc/letsencrypt/renewal/*.conf; do
     [ -f "$conf" ] || continue
     d=$(basename "$conf" .conf)
-    # Only touch a domain this config actually uses as its cert.
-    grep -q "/etc/letsencrypt/live/$d/" "$CFG" 2>/dev/null && configure_renewal "$d"
+    if grep -q "/etc/letsencrypt/live/$d/" "$CFG" 2>/dev/null; then
+      configure_renewal "$d"
+    fi
   done
+  return 0
 }
 
 # Before anything replaces an existing install, keep a copy to roll back to.
@@ -1535,7 +1579,7 @@ upgrade(){
   else
     err "hs2 failed to start after upgrade. Last log:"
     journalctl -u hs2 -n 20 --no-pager >&2
-    exit 1
+    bail
   fi
 }
 

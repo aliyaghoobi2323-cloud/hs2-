@@ -14,7 +14,13 @@ installs a reverse mtcp tunnel through the real interactive installer
 - reboot: autostart OFF stays down; both servers rebooted come back by themselves,
   including when the egress IP appears only after boot; `kill -9` recovery
 - upgrade from an old unit + fixed link pool → migrated to the 2–32 envelope and
-  old sysctl file removed; `hs2 check` on live configs, `bash -s manage`
+  old sysctl file removed, with a second (foreign) certbot lineage present — the
+  condition that once ended `upgrade` silently with hs2 stopped; an upgrade
+  interrupted with Ctrl+C still leaves hs2 running; `hs2 check` on live configs,
+  `bash -s manage`
 - uninstall → restore → fresh direct tunnel → reboot
 
 Run a subset: `./run.sh install manager`. Transcripts land in `tr_*.txt`.
+
+Quick, no-Docker regression test of the upgrade migration (runs anywhere):
+`../tests/migrate_test.sh`.
