@@ -16,7 +16,10 @@ printf 'version = 2.9.0\n[renewalparams]\nauthenticator = standalone\n' > "$T/re
 cp "$T/renewal/z-panel.example.conf" "$T/panel.orig"
 : > "$T/sysctl.conf"   # an old static sysctl file that must be removed
 
-sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p' "$INST" \
+# migrate_config also calls the installer helpers cfg_field and say; extract
+# them too (say is a one-liner, so it is matched as a single line — a range
+# would run on into the functions after it).
+sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p' "$INST" \
  | sed "s#/etc/letsencrypt/renewal#$T/renewal#g; s#/etc/modules-load.d/hs2.conf#/dev/null#; s#/etc/sysctl.d/99-hs2.conf#$T/sysctl.conf#g" > "$T/fns.sh"
 cat > "$T/run.sh" <<RUN
 set -euo pipefail
