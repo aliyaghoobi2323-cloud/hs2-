@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier"
 )
 
 // Datagram tun pool: a routed TUN carried over a POOL of datagram carriers
@@ -243,6 +244,10 @@ type dgPool struct {
 	// clamps learned from it.
 	poolCtlMu sync.Mutex
 	poolCtl   *dgLink
+
+	// gov watches the pool as a whole for a policer on the path to the peer
+	// (all carriers share its IP) and caps the pool's total send rate.
+	gov *udpcarrier.Governor
 }
 
 func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) *dgPool {
@@ -259,7 +264,7 @@ func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) 
 		logf = func(string, ...any) {}
 	}
 	p := &dgPool{dev: dev, min: min, max: max, perLink: perLink, log: logf,
-		ap: newAutopilot(min, max, perLink), growable: true}
+		ap: newAutopilot(min, max, perLink), growable: true, gov: udpcarrier.NewGovernor(logf)}
 	p.pool.New = func() any { b := make([]byte, 0, 2048); return &b }
 	p.target.Store(int32(warmSize(min, max)))
 	return p
@@ -314,6 +319,9 @@ func (p *dgPool) countsLocked() (serving, retiring int) {
 func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	now := p.now()
 	l := newDgLink(car, now)
+	if a, ok := car.(interface{ AttachGovernor(*udpcarrier.Governor) }); ok {
+		a.AttachGovernor(p.gov)
+	}
 	p.mu.Lock()
 	if s, _ := p.countsLocked(); p.accept && s >= int(p.target.Load()) {
 		l.retiring, l.retireSince, l.bornSpare = true, now, true
@@ -437,6 +445,7 @@ func (p *dgPool) sampleHealth() apSample {
 	p.lastSampleAt = now
 	secs := dt.Seconds()
 
+	capped := p.gov.Capped()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := apSample{now: now, growable: p.growable}
@@ -466,7 +475,9 @@ func (p *dgPool) sampleHealth() apSample {
 		// startup), so a still-ramping carrier is not mistaken for a full path.
 		warm := warmOf(l.car) || now.Sub(l.servingSince) >= dgWarmGrace
 		dropped := l.droppedAt.Load()
-		l.pressed = !l.retiring && warm && dropped != 0 && now.Sub(time.Unix(0, dropped)) <= dt
+		// Under a policer cap a full queue is the cap, not the path: another
+		// carrier would share the same budget, so it never counts as pressure.
+		l.pressed = !capped && !l.retiring && warm && dropped != 0 && now.Sub(time.Unix(0, dropped)) <= dt
 		s.links = append(s.links, apLink{
 			id: int(l.id), serving: l.alive() && !l.retiring, retiring: l.retiring,
 			servingSince: l.servingSince, pressed: l.pressed,
@@ -846,6 +857,7 @@ func RunDgEdge(ctx context.Context, cfg DgConfig) error {
 	}
 	go p.pumpTun(ctx)
 	go p.reapLoop(ctx)
+	go p.gov.Run(ctx)
 	if cfg.Reverse {
 		go p.acceptLoop(ctx, cfg.Listener)
 		go p.publishTarget(ctx)
@@ -881,6 +893,7 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 	}
 	go p.pumpTun(ctx)
 	go p.reapLoop(ctx)
+	go p.gov.Run(ctx)
 	if !cfg.Reverse {
 		// Direct exit: accept carriers, no autopilot (the edge decides).
 		if err := ctx.Err(); err != nil {

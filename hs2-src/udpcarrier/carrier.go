@@ -3,6 +3,7 @@ package udpcarrier
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -74,6 +75,9 @@ type Conn struct {
 	// full (tryFeed)
 	rxDropped atomic.Uint64
 
+	// the pool's governor (nil outside a pool): shared cap, pool-wide loss
+	gov atomic.Pointer[Governor]
+
 	// feedback we send (describes what WE receive)
 	rxDataBytes atomic.Uint64
 	echoMu      sync.Mutex
@@ -135,6 +139,7 @@ func newConn(sess *core.Session, write func([]byte) error, shared, binding []byt
 	// Shallow pacer queue: it holds ~one BDP so backpressure reaches the sender
 	// fast and per-packet queueing latency stays small.
 	c.pacer = newPacer(rc, write, 64, &c.peerStamps)
+	c.pacer.gov = &c.gov
 	c.lastRxNanos.Store(time.Now().UnixNano())
 	c.wg.Add(3)
 	go c.processLoop()
@@ -237,6 +242,9 @@ func (c *Conn) Close() error {
 	c.closeOne.Do(func() {
 		close(c.done)
 		c.pacer.close()
+		if g := c.gov.Load(); g != nil {
+			g.detach(c)
+		}
 		if c.onClose != nil {
 			c.onClose()
 		}
@@ -381,9 +389,20 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 		c.peerStamps.Store(true)
 	}
 	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM, fb.echoNanos, fb.owdTicks, fb.flags&fbOWD != 0)
+	loss := float64(fb.lossPPM) / 1e6
+	g := c.gov.Load()
+	if g != nil {
+		g.report(c, loss, c.rc.queueSec())
+	}
 
-	// Loss sizes parity, never rate.
-	est := c.adapter.Observe(float64(fb.lossPPM)/1e6, now)
+	// Loss sizes parity, never rate. But while the pool is held under a
+	// policer, the policer's drops are ours to avoid by rate, not to repair:
+	// parity sizes for the path's own loss (seen between episodes). More
+	// parity would only put more bytes into the policer.
+	if g.Capped() {
+		loss = math.Min(loss, g.CleanLoss()+0.01)
+	}
+	est := c.adapter.Observe(loss, now)
 	c.enc.SetLoss(est)
 
 	// Remember this report so our next feedback can echo it for the peer's RTT.
@@ -519,6 +538,15 @@ type Stats struct {
 	LossPPM      uint32
 	ParityRatio  float64
 	Startup      bool // the rate model is still ramping (no capacity estimate yet)
+}
+
+// AttachGovernor puts the carrier under its pool's governor (engine/dgpool).
+func (c *Conn) AttachGovernor(g *Governor) {
+	if g == nil {
+		return
+	}
+	c.gov.Store(g)
+	g.attach(c)
 }
 
 // Warm reports whether the carrier's rate model has a capacity estimate (it
