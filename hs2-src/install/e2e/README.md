@@ -22,5 +22,12 @@ installs a reverse mtcp tunnel through the real interactive installer
 
 Run a subset: `./run.sh install manager`. Transcripts land in `tr_*.txt`.
 
-Quick, no-Docker regression test of the upgrade migration (runs anywhere):
-`../tests/migrate_test.sh`.
+Quick, no-Docker regression tests:
+
+- `../tests/migrate_test.sh` — the upgrade migration (runs anywhere).
+- `../tests/tun_ports_test.py` — the panel inbound over a tun carried by TLS
+  (transport tun → tcp): drives the real installer prompts for kharej/iran ×
+  direct/reverse through a pty, checks that a masked or silently-not-restarted
+  unit is caught instead of reported as running, and — as root, with network
+  namespaces — runs the generated configs with the real binary and moves
+  traffic from iran's user ports to a panel on kharej.

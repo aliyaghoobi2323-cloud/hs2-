@@ -206,6 +206,11 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			ports := splitComma(fc.ForwardPorts)
 			if len(ports) == 0 && carrier == "mtcp" {
 				bad(`"forward_ports" is empty: mtcp needs at least one user port (e.g. "8443")`)
+			} else if len(ports) == 0 {
+				// l3mtcp/tls also carry a TUN, so no user ports is a valid pure
+				// routed tunnel — but then nothing listens for users here, which
+				// is almost never what an edge in front of a panel wants.
+				warn(`"forward_ports" is empty: no user port listens on this server, so users cannot reach the panel through it (pure routed tunnel — route traffic toward the peer's tun IP yourself, or set the user ports, e.g. "8443,443")`)
 			}
 			seen := map[string]bool{}
 			for _, p := range ports {
@@ -239,6 +244,12 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
 				bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)
 			}
+		} else if fc.Expose == "" {
+			// l3mtcp exit without a panel: a pure routed tunnel works, but any
+			// user port the edge opens would reach nothing on this server.
+			warn(`"expose" is empty: connections from the edge's user ports have no panel to go to on this server (set it to the panel inbound, e.g. "127.0.0.1:8443")`)
+		} else if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
+			bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)
 		}
 		if dials && fc.SNI == "" {
 			warn(`"sni" is empty: the TLS handshake goes out without a domain name, which stands out to DPI`)
