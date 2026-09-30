@@ -236,6 +236,9 @@ type apProbe struct {
 	before   map[int]float64
 	evalG    []float64
 	evalNew  []float64
+	// evalProbe: total rate of the probe links (a link brought back from
+	// retiring keeps the flows it had, so it can be busy without new traffic).
+	evalProbe []float64
 	// evalShort counts eval ticks on which the links carrying traffic were
 	// still short of headroom; below half, the probe relieved the pressure.
 	evalShort int
@@ -396,11 +399,13 @@ func (a *autopilot) decide(s apSample) apDecision {
 	H := a.clamp(need)
 	a.cCap, a.gPeak = cCap, gPeak
 
-	// Backoff resets when demand clearly outgrew the last ceiling (re-check now)
-	// or long after the last failure.
+	// Backoff resets when demand clearly and steadily outgrew the last ceiling
+	// (re-check now) or long after the last failure. "Steadily": over the last
+	// 10 s, not a peak — a queue draining can burst above the path's rate.
 	if a.k > 0 {
+		gSus, _ := meanVar(a.last(5), func(h apTick) float64 { return h.g })
 		switch {
-		case gPeak > 1.3*a.fail.g || fl60 > int(1.5*float64(a.fail.flows))+2:
+		case gSus > 1.3*a.fail.g || fl5 > int(1.5*float64(a.fail.flows))+2:
 			a.k = 0
 			if a.next.After(now) {
 				a.next = now
@@ -549,14 +554,16 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		pr.settled++
 		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — letting new connections land", pr.to), "")
 	}
-	newSum := 0.0
+	newSum, probeSum := 0.0, 0.0
 	for _, l := range s.links {
 		if l.serving && !l.servingSince.Before(pr.start) {
 			newSum += l.rate - pr.before[l.id]
+			probeSum += l.rate
 		}
 	}
 	pr.evalG = append(pr.evalG, s.G)
 	pr.evalNew = append(pr.evalNew, newSum)
+	pr.evalProbe = append(pr.evalProbe, probeSum)
 	// Did the probe give the links that carry traffic headroom? When the
 	// path itself is full, every link moving data stays blocked by it, however
 	// many there are; when demand was simply met, they stop being blocked.
@@ -586,6 +593,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — measuring (%d/%d)", pr.to, n, lastLook), "")
 	}
 	rNew := mean(pr.evalNew)
+	pTot := mean(pr.evalProbe)
 	relieved := 2*pr.evalShort < n
 	gA, varA := meanVarF(pr.evalG)
 	dG := gA - pr.gb
@@ -596,6 +604,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 			rMin = v
 		}
 	}
+	busy := pTot >= rMin
 	need := t.additivity * rNew
 	if v := t.z * se; v > need {
 		need = v
@@ -624,7 +633,12 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no link is short of capacity any more", a.T),
 			fmt.Sprintf("pattern %d → %d links kept as headroom: new links carried %.1f Mbit/s and no link is at its limit any more (total %+.1f)",
 				pr.from, pr.to, mbitps(rNew), mbitps(dG)))
-	case rNew >= rMin && !relieved && (n == lastLook || (n == t.looks[1] && dG < t.earlyFail*rNew)):
+	case !relieved && (rNew >= rMin && (n == lastLook || (n == t.looks[1] && dG < t.earlyFail*rNew)) ||
+		n == lastLook && busy):
+		// The added links carried traffic, the others stayed at their limit,
+		// and the total did not rise enough: the path itself is full. (busy
+		// covers links brought back from retiring: they carry the flows they
+		// already had, so little of it is new, yet nothing was gained.)
 		a.pr = nil
 		a.chain = 0
 		a.T = pr.from
@@ -638,7 +652,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		a.next = now.Add(back)
 		return a.out(s, S, R, apHolding, fmt.Sprintf("path full at ~%.1f Mbit/s: more links did not add throughput; next check in %s", mbitps(pr.gb), fmtDur(back)),
 			fmt.Sprintf("sized to %d links at ~%.1f Mbit/s — %d more links carried %.1f Mbit/s but the total rose only %.1f (path is full); next check in %s",
-				pr.from, mbitps(pr.gb), pr.to-pr.from, mbitps(rNew), mbitps(dG), fmtDur(back)))
+				pr.from, mbitps(pr.gb), pr.to-pr.from, mbitps(max(rNew, pTot)), mbitps(dG), fmtDur(back)))
 	case n == lastLook:
 		a.pr = nil
 		a.chain = 0

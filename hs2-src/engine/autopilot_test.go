@@ -678,10 +678,11 @@ func TestProbeBackoffAndReset(t *testing.T) {
 			t.Fatalf("backoff after fail %d = %s, want %s ±20%%", k, got, base)
 		}
 	}
-	// Demand clearly above the ceiling: re-check at once.
-	now = now.Add(healthTick)
-	smp := apSample{now: now, G: 2 * gb, flowing: 60, open: 200, growable: true}
-	a.decide(smp)
+	// Demand clearly and steadily above the ceiling: re-check at once.
+	for i := 0; i < 5; i++ {
+		now = now.Add(healthTick)
+		a.decide(apSample{now: now, G: 2 * gb, flowing: 60, open: 200, growable: true})
+	}
 	if a.k != 0 || a.next.After(now) {
 		t.Fatalf("after demand rose 2×: k=%d next in %s, want reset", a.k, a.next.Sub(now))
 	}
@@ -697,5 +698,83 @@ func TestProbeBackoffAndReset(t *testing.T) {
 	b.decide(apSample{now: now2, G: gb / 2, flowing: 10, open: 100, growable: true})
 	if b.k != 0 {
 		t.Fatalf("k=%d 31 min after the failure, want 0", b.k)
+	}
+}
+
+// Lab finding (full 20 Mbit/s path): right after a failed probe its links are
+// retiring but still carry the flows that landed on them. A probe that starts
+// again brings exactly those links back, so little of their traffic is new —
+// that must be judged "path full", not "no flow reached them, keep as spares"
+// (which kept the links and let the pool creep on a full path).
+func TestProbeUnretiredBusyLinksWithoutGainFails(t *testing.T) {
+	a := newAutopilot(2, 32, 8)
+	a.rnd = func() float64 { return 0.5 }
+	now := time.Unix(1e9, 0)
+	const G = 2.2e6 // bytes/s, the whole path
+	var probeStart time.Time
+	for i := 0; i < 400; i++ {
+		now = now.Add(healthTick)
+		smp := apSample{now: now, G: G, flowing: 20, open: 21, growable: true}
+		// 10 links exist throughout: 8 original + 2 that a previous probe
+		// added. While no probe runs, the extra 2 are retiring but busy.
+		for id := 0; id < 10; id++ {
+			serving := id < 8 || a.pr != nil
+			l := apLink{id: id, serving: serving, retiring: !serving, pressed: serving,
+				rate: G / 10, rate10: G / 10, sustained: G / 10, flowing: 2, open: 2}
+			if id >= 8 && a.pr != nil {
+				l.servingSince = probeStart
+			}
+			smp.links = append(smp.links, l)
+		}
+		had := a.pr != nil
+		d := a.decide(smp)
+		if !had && a.pr != nil {
+			probeStart = a.pr.start
+		}
+		if had && a.pr == nil {
+			if v := verdict(d.note); v != "fail" {
+				t.Fatalf("verdict %q (%s), want fail", v, d.note)
+			}
+			if a.T != 8 {
+				t.Fatalf("T=%d after the failed probe, want back to 8", a.T)
+			}
+			return
+		}
+	}
+	t.Fatal("no probe was judged")
+}
+
+// A throughput burst (a queue draining) must not cancel the backoff after a
+// failed probe; only demand that stays above the old ceiling does.
+func TestBackoffNotResetBySpike(t *testing.T) {
+	a := newAutopilot(2, 32, 8)
+	a.rnd = func() float64 { return 0.5 }
+	now := time.Unix(1e9, 0)
+	gb := 8 * 250e3
+	rnd := rand.New(rand.NewPCG(9, 9))
+	if v := verdict(probeRig(a, &now, rnd, 8, gb, 0.02, 500e3, 0, true)); v != "fail" {
+		t.Fatalf("setup: %s", v)
+	}
+	next := a.next
+	sample := func(g float64) {
+		now = now.Add(healthTick)
+		smp := apSample{now: now, G: g, flowing: 60, open: 200, growable: true}
+		for id := 0; id < 8; id++ {
+			smp.links = append(smp.links, apLink{id: id, serving: true, pressed: true, rate: g / 8, rate10: g / 8, sustained: g / 8, flowing: 4})
+		}
+		a.decide(smp)
+	}
+	sample(gb)
+	sample(1.4 * gb) // two-tick burst
+	sample(1.4 * gb)
+	sample(gb)
+	if a.k == 0 || !a.next.Equal(next) {
+		t.Fatalf("a 4 s burst reset the backoff (k=%d)", a.k)
+	}
+	for i := 0; i < 6; i++ { // demand really grew
+		sample(1.5 * gb)
+	}
+	if a.k != 0 {
+		t.Fatalf("sustained growth did not reset the backoff (k=%d)", a.k)
 	}
 }
