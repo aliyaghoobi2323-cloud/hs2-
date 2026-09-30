@@ -3,22 +3,42 @@
 #  hs2 — DPI-resistant tunnel (stream mode over multi-link TLS)
 #  Runs ALONGSIDE Backhaul without touching it.
 #      bash install.sh            (menu)
-#      bash install.sh upgrade    (update an existing install in place)
-#      bash install.sh backup     (save config+cert+binary to /root/hs2-backups)
+#      bash install.sh upgrade    (new binary; every tunnel restarted on its own config)
+#      bash install.sh backup     (save every tunnel's config+unit+cert and the binary)
 #      bash install.sh restore [file]  (roll back to a backup; newest by default)
-#      bash install.sh manage     (tunnel manager: start/stop/restart/edit/logs)
+#      bash install.sh manage     (tunnel manager: start/stop/restart/edit/logs/delete)
+#  Several tunnels run side by side, each its own service: "hs2" (the default)
+#  and "hs2-<name>". The name is chosen where the setup link is made and
+#  travels in the link, with the tunnel's own tun subnet.
 #      hs2-menu                   (this menu, installed locally by setup/upgrade)
 # ============================================================================
 set -euo pipefail
 
 BIN=/usr/local/bin/hs2
 REPO_RAW="${HS2_REPO_RAW:-https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main}"
-CFG=/etc/hs2/config.json
-SVC=/etc/systemd/system/hs2.service
+CFG_DIR=/etc/hs2
+UNIT_DIR=/etc/systemd/system
+
+# Every tunnel is its own systemd service, so several run side by side and each
+# is started, stopped, edited and deleted on its own. The default tunnel is
+# "hs2" (config /etc/hs2/config.json — what every older install has); more are
+# "hs2-<name>" (config /etc/hs2/hs2-<name>.json). UNIT/CFG/SVC always describe
+# the tunnel being set up or operated on; use_unit switches all three.
+UNIT=hs2
+CFG=$CFG_DIR/config.json
+SVC=$UNIT_DIR/hs2.service
+
+# Each tunnel has its own /30 inside 10.77.0.0/16 for the tun addresses: iran is
+# base+1, kharej base+2. It travels in the setup link, so both sides always
+# agree; set_tun_subnet fills these in. 10.77.0.0/30 is what older links and
+# installs use.
+TUN_BASE=10.77.0.0
 TUN_SUBNET_IRAN="10.77.0.1/30"
 TUN_SUBNET_KHAREJ="10.77.0.2/30"
 TUN_PEER_IRAN="10.77.0.2"
 TUN_PEER_KHAREJ="10.77.0.1"
+TUN_IP_IRAN=10.77.0.1
+TUN_IP_KHAREJ=10.77.0.2
 # Adaptive parallel-link envelope written into new configs. The pool is NOT
 # fixed at these numbers: hs2 sizes it continuously between LINK_MIN and LINK_MAX
 # from the live user count and measured throughput (see engine/autopilot.go), and
@@ -47,27 +67,31 @@ hr(){   _c '0;36' "────────────────────�
 
 [ "$(id -u)" = 0 ] || die "Please run as root."
 
-# Safety net. Installing the binary stops hs2 (HS2_STOPPED=1). If the script
-# ends for ANY reason before hs2 is running again — an error, an unexpected
-# set -e stop, Ctrl+C at a prompt — start it again with whatever config is in
-# place, so an upgrade or re-run can never leave the tunnel down. An exit that
-# was not a deliberate `die` also says exactly which command stopped it.
-HS2_STOPPED=0
+# Safety net. Restore stops the tunnels before files are replaced and records
+# them in HS2_STOPPED_UNITS. If the script ends for ANY reason before they run
+# again — an error, an unexpected set -e stop, Ctrl+C at a prompt — each one is
+# started again with whatever config is in place, so nothing is left down. An
+# exit that was not a deliberate `die` also says exactly which command stopped
+# it. (Setting up or upgrading never stops a tunnel up front: the new binary
+# replaces the file under a running one, which keeps running until its own
+# restart — so an aborted setup leaves every tunnel as it was.)
+HS2_STOPPED_UNITS=""
 HS2_DIED=0
 on_exit(){
-  local rc=$? cmd=$BASH_COMMAND
+  local rc=$? cmd=$BASH_COMMAND u
   if [ "$rc" != 0 ] && [ "$HS2_DIED" != 1 ]; then
     err "The installer stopped unexpectedly (status $rc) at: $cmd"
     err "Please send this line to the developer."
   fi
-  if [ "$HS2_STOPPED" = 1 ] && [ -f "$CFG" ] && [ -f "$SVC" ] \
-     && [ "$(systemctl is-active hs2 2>/dev/null || true)" != active ]; then
-    warn "hs2 was stopped for the update and is not running — starting it again with the current config…"
-    systemctl start hs2 2>/dev/null || true
+  for u in $HS2_STOPPED_UNITS; do
+    [ -f "$UNIT_DIR/$u.service" ] || continue
+    [ "$(systemctl is-active "$u" 2>/dev/null || true)" != active ] || continue
+    warn "$u was stopped and is not running — starting it again with its current config…"
+    systemctl start "$u" 2>/dev/null || true
     sleep 2
-    if [ "$(systemctl is-active hs2 2>/dev/null || true)" = active ]; then ok "hs2 is running again."
-    else err "hs2 could not be started — see: journalctl -u hs2 -n 40 --no-pager"; fi
-  fi
+    if [ "$(systemctl is-active "$u" 2>/dev/null || true)" = active ]; then ok "$u is running again."
+    else err "$u could not be started — see: journalctl -u $u -n 40 --no-pager"; fi
+  done
   return 0
 }
 trap on_exit EXIT
@@ -87,8 +111,16 @@ transport_to_carrier(){
 }
 
 # Every IPv4 on every interface (ip -br prints only the first address of each
-# interface, which hid secondary IPs on multi-IP servers).
-local_ips(){ ip -4 -o addr show 2>/dev/null | awk '$2!="lo"{print $4}' | sed 's#/.*##'; }
+# interface, which hid secondary IPs on multi-IP servers) — except the tun
+# interfaces of hs2's own tunnels: with one tunnel up, its 10.77.x.y must not be
+# offered as this server's public / listen / dial-out IP for the next one.
+local_ips(){
+  local tunifs; tunifs=" $(for u in $(tm_units); do cfg_tun_iface "$(tm_cfg "$u")"; done | tr '\n' ' ') "
+  ip -4 -o addr show 2>/dev/null | awk '$2!="lo"{print $2, $4}' | while read -r ifc a; do
+    case "$tunifs" in *" $ifc "*) continue ;; esac
+    echo "${a%%/*}"
+  done
+}
 show_ips(){ local_ips | sed 's/^/   /' >&2; }
 first_public_ip(){ local_ips | head -1; }
 
@@ -254,8 +286,9 @@ install_binary(){
   chmod 755 "$tmp"
   "$tmp" version 2>/dev/null | grep -q "hs2 v3" \
     || { rm -f "$tmp"; die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."; }
-  [ -f "$SVC" ] && HS2_STOPPED=1
-  systemctl stop hs2 2>/dev/null || true
+  # No tunnel is stopped here: install replaces the file (unlink + new file), so
+  # running tunnels keep the old binary until their own restart. The tunnel
+  # being set up restarts at the end; the others move with Upgrade.
   install -m755 "$tmp" "$BIN"; rm -f "$tmp"
   # The full hash: compare it between the two servers (the Iran side may have
   # been given a copy by hand).
@@ -265,6 +298,257 @@ install_binary(){
   install_self
 }
 
+# ---------- tunnels as services ------------------------------------------------
+# unit_cfg UNIT -> its config path by convention (hs2 keeps the historic name).
+unit_cfg(){ if [ "$1" = hs2 ]; then echo "$CFG_DIR/config.json"; else echo "$CFG_DIR/$1.json"; fi; }
+
+# use_unit UNIT points UNIT/CFG/SVC at one tunnel. An existing tunnel keeps the
+# config its unit file actually runs (ExecStart -c ...), whatever its name.
+use_unit(){ # unit
+  UNIT="$1"; SVC="$UNIT_DIR/$1.service"
+  CFG=$(tm_cfg "$1"); [ -n "$CFG" ] || CFG=$(unit_cfg "$1")
+}
+
+# norm_unit NAME -> the tunnel's service name, or failure for a bad name.
+# Enter/"hs2" is the default tunnel; anything else becomes hs2-<name>, so a
+# tunnel can never overwrite an unrelated system service (a name like "ssh").
+norm_unit(){ # name
+  local n; n=$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr -d '[:space:]')
+  n=${n%.service}
+  case "$n" in ''|hs2) echo hs2; return 0 ;; esac
+  n=${n#hs2-}
+  case "$n" in ''|*[!a-z0-9-]*|-*|*-|menu) return 1 ;; esac
+  [ ${#n} -le 20 ] || return 1
+  echo "hs2-$n"
+}
+
+unit_exists(){ [ -f "$UNIT_DIR/$1.service" ]; }
+
+# unit_desc UNIT -> one line saying what that tunnel is.
+unit_desc(){ # unit
+  local c; c=$(tm_cfg "$1")
+  if [ -f "$c" ]; then echo "$(tm_role "$c") · $(tm_dir "$c") · $(tm_transport "$c") · $(tm_endpoint "$c")"
+  else echo "config missing"; fi
+}
+
+# free_unit_name BASE -> BASE, or BASE-2, BASE-3 … whichever is not taken.
+free_unit_name(){ # base
+  local b="$1" i=2
+  unit_exists "$b" || { echo "$b"; return 0; }
+  while unit_exists "$b-$i"; do i=$((i + 1)); done
+  echo "$b-$i"
+}
+
+# list_tunnels prints the tunnels already on this server (for the name prompt).
+list_tunnels(){
+  local u n=0
+  for u in $(tm_units); do
+    [ "$n" = 0 ] && info "Tunnels already on this server:"
+    n=$((n + 1)); say "     $u — $(unit_desc "$u")"
+  done
+  return 0
+}
+
+# ask_service_name: the side that MAKES the link names the tunnel. Enter keeps
+# the default "hs2"; a name like "de1" runs as service hs2-de1 next to the
+# others. The name travels in the link, so the other server uses the same one.
+# Re-using a name replaces that tunnel (asked first; its tun subnet and
+# interface are kept so routes that point at them keep working).
+ask_service_name(){
+  local n u a
+  echo >&2
+  info "Service name: every tunnel runs as its own service, so several can run side by side."
+  list_tunnels
+  while :; do
+    read -rp "Service name for this tunnel [hs2] (e.g. de1 → hs2-de1): " n </dev/tty
+    if ! u=$(norm_unit "$n"); then
+      warn "Use letters, digits and '-' only (up to 20, not starting or ending with '-')."
+      continue
+    fi
+    if unit_exists "$u"; then
+      warn "A tunnel named $u already exists here: $(unit_desc "$u")"
+      read -rp "Replace it with this new tunnel? [y/N]: " a </dev/tty
+      case "$a" in y|Y|yes) REPLACING=1 ;; *) info "Pick another name then."; continue ;; esac
+    else
+      REPLACING=0
+    fi
+    break
+  done
+  use_unit "$u"
+  ok "Service: $UNIT (config $CFG)"
+  stop_for_replace
+}
+
+# adopt_service_name: the side that PASTES the link takes the name from it. If
+# a tunnel of that name already exists here, it is either the same tunnel being
+# set up again (it talks to the same server: replace it — the default then) or
+# another one (keep it and give this one a free name — the default then).
+adopt_service_name(){
+  local u a same=0 old oh lh n
+  u=$(norm_unit "${LNAME:-hs2}") || u=hs2
+  REPLACING=0
+  if ! unit_exists "$u"; then
+    use_unit "$u"; ok "Service name from the link: $UNIT"; return 0
+  fi
+  old=$(jget "$(tm_cfg "$u")" addr); oh=${old%:*}; lh=${ENDPOINT%:*}
+  [ -n "$oh" ] && [ "$oh" = "$lh" ] && same=1
+  echo >&2
+  warn "The link names this tunnel $u, and a tunnel with that name already exists here:"
+  say "     $u — $(unit_desc "$u")"
+  if [ "$same" = 1 ]; then
+    info "It talks to the same server ($lh), so this is most likely the same tunnel set up again."
+  fi
+  say "    1) Replace it with this one"
+  say "    2) Keep it, and run this one under another name"
+  read -rp "Choose [$([ "$same" = 1 ] && echo 1 || echo 2)]: " a </dev/tty
+  a=${a:-$([ "$same" = 1 ] && echo 1 || echo 2)}
+  case "$a" in
+    1) REPLACING=1 ;;
+    2) while :; do
+         read -rp "Service name for this tunnel here [$(free_unit_name "$u")]: " n </dev/tty
+         n=${n:-$(free_unit_name "$u")}
+         if ! u=$(norm_unit "$n"); then warn "Use letters, digits and '-' only (up to 20)."; continue; fi
+         if unit_exists "$u"; then warn "$u exists too — pick another name."; continue; fi
+         break
+       done ;;
+    *) die "invalid choice" ;;
+  esac
+  use_unit "$u"
+  ok "Service: $UNIT (config $CFG)"
+  stop_for_replace
+}
+
+# stop_for_replace: a tunnel that is being set up again still holds its ports
+# (tunnel port, user ports), so it is stopped now — only that one. If the setup
+# ends early (an error, Ctrl+C) the safety net starts it again on its old
+# config; a finished setup restarts it on the new one.
+stop_for_replace(){
+  [ "${REPLACING:-0}" = 1 ] || return 0
+  [ "$(systemctl is-active "$UNIT" 2>/dev/null || true)" = active ] || return 0
+  HS2_STOPPED_UNITS="$HS2_STOPPED_UNITS $UNIT"
+  info "Stopping $UNIT for the new setup (it is started again if the setup is cancelled)…"
+  systemctl stop "$UNIT" 2>/dev/null || true
+}
+
+# ---------- per-tunnel tun subnet and interface -------------------------------
+# set_tun_subnet BASE: the tunnel's /30 — iran = BASE+1, kharej = BASE+2.
+set_tun_subnet(){ # base (a.b.c.d, d a multiple of 4)
+  local p=${1%.*} l=${1##*.}
+  TUN_BASE="$1"
+  TUN_IP_IRAN="$p.$((l + 1))"; TUN_IP_KHAREJ="$p.$((l + 2))"
+  TUN_SUBNET_IRAN="$TUN_IP_IRAN/30"; TUN_SUBNET_KHAREJ="$TUN_IP_KHAREJ/30"
+  TUN_PEER_IRAN="$TUN_IP_KHAREJ"; TUN_PEER_KHAREJ="$TUN_IP_IRAN"
+}
+
+# block_of IP -> the /30 it belongs to.
+block_of(){ local l=${1##*.}; echo "${1%.*}.$(( l / 4 * 4 ))"; }
+
+# valid_block BASE: a /30 base inside 10.77.0.0/16.
+valid_block(){ # base
+  local a b c d
+  IFS=. read -r a b c d <<<"$1"
+  [ "$a" = 10 ] && [ "$b" = 77 ] || return 1
+  case "$c$d" in *[!0-9]*|'') return 1 ;; esac
+  [ "$c" -le 255 ] && [ "$d" -le 252 ] && [ $((d % 4)) = 0 ]
+}
+
+# used_blocks: the /30s taken on this server — by the other tunnels' configs
+# (running or not) and by any interface address — except the tunnel being
+# replaced ($UNIT when REPLACING=1), whose subnet is free to reuse.
+used_blocks(){
+  local u c lc own="" ifc a
+  for u in $(tm_units); do
+    [ "$u" = "$UNIT" ] && [ "${REPLACING:-0}" = 1 ] && continue
+    c=$(tm_cfg "$u"); lc=$(jget "$c" local_cidr)
+    [ -n "$lc" ] && block_of "${lc%/*}"
+  done
+  [ "${REPLACING:-0}" = 1 ] && own=$(cfg_tun_iface "$CFG")
+  ip -4 -o addr show 2>/dev/null | awk '{print $2, $4}' | while read -r ifc a; do
+    [ -n "$own" ] && [ "$ifc" = "$own" ] && continue
+    case "$a" in 10.77.*) block_of "${a%/*}" ;; esac
+  done
+  return 0
+}
+
+# pick_subnet (the side that makes the link): the tunnel being replaced keeps
+# its subnet; a new one gets a random free /30 in 10.77.0.0/16 — random, so two
+# servers that each make a link for the same third server almost never pick the
+# same one (the side that pastes checks anyway). 10.77.0.0/30 stays for the
+# default tunnel of older installs.
+pick_subnet(){
+  local used b i=0 lc
+  if [ "${REPLACING:-0}" = 1 ]; then
+    lc=$(jget "$CFG" local_cidr)
+    if [ -n "$lc" ] && valid_block "$(block_of "${lc%/*}")"; then set_tun_subnet "$(block_of "${lc%/*}")"; return 0; fi
+  fi
+  used=$(used_blocks)
+  while [ $i -lt 500 ]; do
+    i=$((i + 1))
+    b="10.77.$(( RANDOM % 256 )).$(( (RANDOM % 64) * 4 ))"
+    [ "$b" = 10.77.0.0 ] && continue
+    printf '%s
+' "$used" | grep -qx "$b" && continue
+    set_tun_subnet "$b"; return 0
+  done
+  die "could not find a free tunnel subnet in 10.77.0.0/16"
+}
+
+# check_link_subnet (the side that pastes): the subnet from the link must be
+# free here too — two tunnels on one subnet would break each other.
+check_link_subnet(){
+  local b="${LSUBNET:-10.77.0.0}" u c lc by=""
+  valid_block "$b" || die "the link carries an invalid tunnel subnet ($b) — make a new link on the other server."
+  if used_blocks | grep -qx "$b"; then
+    for u in $(tm_units); do
+      [ "$u" = "$UNIT" ] && [ "${REPLACING:-0}" = 1 ] && continue
+      c=$(tm_cfg "$u"); lc=$(jget "$c" local_cidr)
+      if [ -n "$lc" ] && [ "$(block_of "${lc%/*}")" = "$b" ]; then by=$u; break; fi
+    done
+    if [ -n "$by" ]; then err "The link's tunnel subnet $b/30 is already used here by tunnel $by ($(unit_desc "$by"))."
+    else err "The link's tunnel subnet $b/30 is already used by an interface on this server."; fi
+    die "Run the setup again on the OTHER server (it picks a new random subnet) and paste the new link. Nothing was changed here."
+  fi
+  set_tun_subnet "$b"
+}
+
+# cfg_tun_iface CFG -> the tun interface that tunnel really creates. Empty for
+# carrier mtcp: it runs without one, although its config names one (older
+# installs wrote "hs0" there) — so it never reserves, lists or deletes a name
+# another tunnel's real interface may carry.
+cfg_tun_iface(){ # cfg
+  [ "$(jget "$1" carrier)" = mtcp ] && return 0
+  jget "$1" iface
+}
+
+# used_ifaces: tun interface names the other tunnels' configs use.
+used_ifaces(){
+  local u c
+  for u in $(tm_units); do
+    [ "$u" = "$UNIT" ] && [ "${REPLACING:-0}" = 1 ] && continue
+    c=$(tm_cfg "$u"); cfg_tun_iface "$c"
+  done
+  return 0
+}
+
+# iface_taken NAME: another tunnel uses it, or it is an interface that is not
+# the replaced tunnel's own.
+iface_taken(){ # name
+  local own=""
+  [ "${REPLACING:-0}" = 1 ] && own=$(cfg_tun_iface "$CFG")
+  used_ifaces | grep -qx "$1" && return 0
+  [ "$1" != "$own" ] && ip link show "$1" >/dev/null 2>&1
+}
+
+# free_iface -> the interface this tunnel should use: the replaced tunnel's
+# own, else the first free of hs0, hs1, …
+free_iface(){
+  local i=0 own=""
+  [ "${REPLACING:-0}" = 1 ] && own=$(cfg_tun_iface "$CFG")
+  if [ -n "$own" ] && ! used_ifaces | grep -qx "$own"; then echo "$own"; return 0; fi
+  while iface_taken "hs$i"; do i=$((i + 1)); done
+  echo "hs$i"
+}
+
 # unit_unmask UNIT: a MASKED unit is a symlink to /dev/null (in /etc, or in /run
 # for a runtime mask). Writing the unit file then goes nowhere or is overridden,
 # `enable`/`restart` fail, and an instance started BEFORE the mask keeps running
@@ -272,7 +556,7 @@ install_binary(){
 # never load. This installer never masks hs2; if something else did, undo it
 # loudly so the config we write is the config that runs.
 unit_unmask(){ # unit
-  local u="$1" f="/etc/systemd/system/$1.service"
+  local u="$1" f="$UNIT_DIR/$1.service"
   case "$(systemctl is-enabled "$u" 2>/dev/null || true)" in
     masked*) ;;
     *) return 0 ;;
@@ -300,7 +584,7 @@ restart_unit(){ # unit
 
 write_service(){
   local role="$1"
-  unit_unmask hs2   # before writing: a masked unit file is a /dev/null symlink
+  unit_unmask "$UNIT"   # before writing: a masked unit file is a /dev/null symlink
   # Built to come back on its own after a reboot or a crash:
   #  - enabled for multi-user.target (start_service/upgrade run `enable`)
   #  - waits for network-online, but never depends on it: if the IP is not up
@@ -317,7 +601,7 @@ write_service(){
   # the raw encaps already have the permissions they need.
   cat > "$SVC" <<EOF
 [Unit]
-Description=hs2 DPI-resistant tunnel ($role)
+Description=hs2 tunnel $UNIT ($role)
 Documentation=https://github.com/aliyaghoobi2323-cloud/hs2-
 After=network-online.target
 Wants=network-online.target
@@ -328,7 +612,7 @@ Type=simple
 ExecStartPre=-/sbin/modprobe tun
 ExecStart=$BIN run -c $CFG
 # reload = hot-swap the TLS certificate (SIGHUP) without dropping the tunnel;
-# the certbot renewal deploy-hook calls `systemctl reload hs2`.
+# the certbot renewal hook sends SIGHUP to every hs2 tunnel.
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=3
@@ -345,15 +629,16 @@ EOF
 
 start_service(){
   local role="$1"
-  unit_unmask hs2
-  systemctl enable hs2 >/dev/null 2>&1 || true
-  if restart_unit hs2; then
-    ok "hs2 ($role) is running with the new config."
+  mkdir -p "$(dirname "$CFG")"; chmod 700 "$(dirname "$CFG")" 2>/dev/null || true
+  unit_unmask "$UNIT"
+  systemctl enable "$UNIT" >/dev/null 2>&1 || true
+  if restart_unit "$UNIT"; then
+    ok "$UNIT ($role) is running with the new config."
     ok "Autostart on boot: ON — it comes back by itself after a reboot or crash."
-    info "Manage it any time with:  hs2-menu   → 3) Tunnel manager"
+    info "Manage it any time with:  hs2-menu   → 3) Tunnel manager → $UNIT"
   else
-    err "hs2 did not start with the new config. Last log:"
-    journalctl -u hs2 -n 20 --no-pager >&2 || true
+    err "$UNIT did not start with the new config. Last log:"
+    journalctl -u "$UNIT" -n 20 --no-pager >&2 || true
     bail
   fi
   # The side that pasted the link starts second: the other server is already
@@ -423,7 +708,7 @@ tunnel_down_help(){ # cfg
   warn "and the dial-out IP chosen here is not a filtered one."
   info "hs2 stays installed and keeps retrying — if the path opens later it connects by itself."
   info "Last log:"
-  journalctl -u hs2 -n 15 --no-pager -o cat 2>/dev/null | sed 's/^/     /' >&2 || true
+  journalctl -u "$UNIT" -n 15 --no-pager -o cat 2>/dev/null | sed 's/^/     /' >&2 || true
   hr
 }
 
@@ -489,7 +774,7 @@ cert_standalone(){ # domain
   port_free 80 || die "port 80 is busy — free it, or re-run and choose DNS-01 / an existing certificate."
   info "Getting Let's Encrypt certificate (standalone HTTP-01 on port 80)…"
   if certbot certonly --standalone -d "$domain" --non-interactive --agree-tos \
-       --register-unsafely-without-email --deploy-hook "systemctl reload hs2" >/dev/null 2>&1; then
+       --register-unsafely-without-email --deploy-hook "$CERT_HOOK" >/dev/null 2>&1; then
     ok "Certificate obtained for $domain."
   else
     err "certbot HTTP-01 failed for $domain."
@@ -512,7 +797,7 @@ cert_dns01(){ # domain
   info "DNS-01: certbot will print a _acme-challenge TXT record for $domain."
   info "Add it at your DNS provider, wait ~1 min for it to propagate, then continue in certbot."
   if certbot certonly --manual --preferred-challenges dns -d "$domain" --agree-tos \
-       --register-unsafely-without-email --deploy-hook "systemctl reload hs2" </dev/tty >&2; then
+       --register-unsafely-without-email --deploy-hook "$CERT_HOOK" </dev/tty >&2; then
     ok "Certificate obtained for $domain via DNS-01."
   else
     err "certbot DNS-01 did not complete for $domain."
@@ -522,6 +807,13 @@ cert_dns01(){ # domain
   configure_renewal "$domain"
   printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
 }
+
+# CERT_HOOK runs after every renewal: SIGHUP to every running hs2 tunnel, which
+# hot-swaps the certificate of those that have one and is ignored by the rest.
+# One hook for all tunnels, so adding or deleting a tunnel never leaves a
+# renewal pointing at a service that is gone (it used to be `systemctl reload
+# hs2`, which only reached the default tunnel).
+CERT_HOOK="pkill -HUP -x hs2"
 
 # configure_renewal makes an existing certbot renewal do two things the tunnel
 # wants: renew 30 days before expiry (certbot's own default — a week left too
@@ -534,11 +826,11 @@ configure_renewal(){ # domain
   [ -f "$conf" ] || return 0
   # deploy hook -> reload
   if grep -q '^renew_hook' "$conf"; then
-    sed -i 's#^renew_hook.*#renew_hook = systemctl reload hs2#' "$conf"
+    sed -i "s#^renew_hook.*#renew_hook = $CERT_HOOK#" "$conf"
   elif grep -q '^\[renewalparams\]' "$conf"; then
-    sed -i '/^\[renewalparams\]/a renew_hook = systemctl reload hs2' "$conf"
+    sed -i "/^\[renewalparams\]/a renew_hook = $CERT_HOOK" "$conf"
   else
-    printf '[renewalparams]\nrenew_hook = systemctl reload hs2\n' >> "$conf"
+    printf '[renewalparams]\nrenew_hook = %s\n' "$CERT_HOOK" >> "$conf"
   fi
   # renew 30 days before expiry. certbot only reads this key at the TOP of the
   # file (before [renewalparams]); appended at the end it would be ignored.
@@ -660,8 +952,8 @@ ask_tun_encap(){
 ask_tun_tls_mode(){
   echo >&2
   echo "  TLS mode for the tun:" >&2
-  echo "    1) mtcp + tun — the mtcp multi-link pool (2–32 TLS links) + hs0 (recommended, fastest)" >&2
-  echo "    2) tls  + tun — one TLS link + hs0 (fewer connections, but far slower where each connection is throttled)" >&2
+  echo "    1) mtcp + tun — the mtcp multi-link pool (2–32 TLS links) + a tun interface (recommended, fastest)" >&2
+  echo "    2) tls  + tun — one TLS link + a tun interface (fewer connections, but far slower where each connection is throttled)" >&2
   read -rp "Choose [1]: " M </dev/tty
   case "${M:-1}" in 1) CARRIER=l3mtcp ;; 2) CARRIER=tls ;; *) die "invalid mode" ;; esac
 }
@@ -724,8 +1016,14 @@ dgtun_proto_line(){
 # tun mode. The MTU is carried in the hs2:// link so both sides always match; the
 # interface name may differ per server.
 ask_tun_params(){
-  read -rp "TUN interface name on THIS server [hs0]: " TUNIF </dev/tty; TUNIF=${TUNIF:-hs0}
-  case "$TUNIF" in ''|*[!a-zA-Z0-9_-]*) die "invalid interface name" ;; esac
+  local def; def=$(free_iface)
+  while :; do
+    read -rp "TUN interface name on THIS server [$def]: " TUNIF </dev/tty; TUNIF=${TUNIF:-$def}
+    case "$TUNIF" in ''|*[!a-zA-Z0-9_-]*) warn "Use letters, digits, '_' and '-' only."; continue ;; esac
+    [ ${#TUNIF} -le 15 ] || { warn "An interface name is at most 15 characters."; continue; }
+    if iface_taken "$TUNIF"; then warn "$TUNIF is already used by another tunnel or interface here — pick another (Enter = $def)."; continue; fi
+    break
+  done
 }
 ask_tun_mtu(){
   read -rp "TUN MTU (1320 matches Backhaul; kept in sync with the other side) [1320]: " TUNMTU </dev/tty
@@ -753,7 +1051,9 @@ ask_direction(){
 #   reverse: listener = iran  (edge) , dialer = kharej (exit)
 
 show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu] [encap] [proto]
-  local L; L=$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}|${11:-}")
+  # Fields 12 and 13 are this tunnel's service name and tun subnet, so the
+  # other server runs it under the same name on the same addresses.
+  local L; L=$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}|${11:-}|$UNIT|$TUN_BASE")
   echo >&2; hr
   ok "SETUP LINK — copy it to the OTHER server:"
   _c '1;33' "hs2://$L"
@@ -761,14 +1061,16 @@ show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu
 }
 
 # parse_link reads a pasted hs2:// link into ENDPOINT DOMAIN SHARED PANEL
-# CARRIER UDP TRANSPORT DIRECTION MTU ENCAP PROTO (with sensible defaults for
-# older links; the trailing MTU/ENCAP/PROTO fields are optional and only used by
-# tun mode — PROTO is the ipx protocol number, so the other side never asks it).
+# CARRIER UDP TRANSPORT DIRECTION MTU ENCAP PROTO LNAME LSUBNET (with sensible
+# defaults for older links; MTU/ENCAP/PROTO are only used by tun mode — PROTO is
+# the ipx protocol number, so the other side never asks it; LNAME/LSUBNET are
+# the tunnel's service name and tun subnet — an older link means the default
+# tunnel "hs2" on 10.77.0.0/30, exactly what it always was).
 parse_link(){
   read -rp "Paste the hs2:// setup link from the OTHER server: " RAW </dev/tty
   RAW=${RAW#hs2://}
   local DEC; DEC=$(decode_link "$RAW") || die "invalid link"
-  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU ENCAP PROTO <<< "$DEC"
+  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU ENCAP PROTO LNAME LSUBNET <<< "$DEC"
   [ -n "$ENDPOINT" ] && [ -n "$SHARED" ] || die "link is missing fields"
   CARRIER=${CARRIER:-mtcp}; UDP=${UDP:-false}
   if [ -z "$TRANSPORT" ]; then
@@ -780,6 +1082,7 @@ parse_link(){
   [ -z "${ENCAP:-}" ] && [ "$TRANSPORT" = "tun" ] && ENCAP=tcp
   ENCAP=${ENCAP:-}
   case "${PROTO:-}" in ''|*[!0-9]*) PROTO="" ;; esac
+  LNAME=${LNAME:-hs2}; LSUBNET=${LSUBNET:-10.77.0.0}
 }
 
 # ipx_proto_from_link sets TUN_PROTO for the ipx encapsulation from the link:
@@ -801,6 +1104,7 @@ setup_kharej(){
   install_binary
   ask_direction
   if [ "$DIRECTION" = "direct" ]; then
+    ask_service_name     # this side makes the link, so it names the tunnel
     echo >&2; info "This server's IP addresses:"; show_ips
     echo "   (Public IP = the address the OTHER server connects to; it goes into the link.)" >&2
     local defip; defip=$(first_public_ip)
@@ -817,6 +1121,7 @@ setup_kharej(){
 # kharej_listener: direct exit. Kharej listens for the iran edge and generates
 # the link. (This is the classic flow.)
 kharej_listener(){
+  pick_subnet; TUNIF=$(free_iface)
   ask_tunnel_port "Tunnel port (clients never see this)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
@@ -841,7 +1146,7 @@ kharej_listener(){
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
   "addr": "$BINDADDR:$TPORT",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
@@ -905,7 +1210,7 @@ EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
   "addr": "$BINDADDR:$TPORT",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED"
 }
 EOF
@@ -917,13 +1222,15 @@ EOF
   [ "$ENCAP_ARG" = ipx ] && PROTO_ARG="${TUN_PROTO:-253}"
   show_link "$PUBIP$PSUF" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU" "$ENCAP_ARG" "$PROTO_ARG"
   if [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
-    info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $LMTU)."
+    info "L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (MTU $LMTU)."
     info "Panel $PANEL receives the user ports you open on the iran side (asked there)."
   elif [ "$TRANSPORT" = "tun" ]; then
-    info "Datagram L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (encap $TUN_ENCAP)."
+    info "Datagram L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (encap $TUN_ENCAP)."
     info "Panel $PANEL receives the user ports you open on the iran side (asked there)."
   fi
   info "On the Iran server: bash install.sh → 2 (Iran) → direction 'direct' → paste the link."
+  info "It runs there as service $UNIT too (the name is in the link)."
+  tunnel_summary
 }
 
 # kharej_dialer: reverse exit. Kharej DIALS the iran edge; it pastes the link
@@ -932,6 +1239,7 @@ kharej_dialer(){
   VERIFY_PEER=1   # the iran edge is already waiting: start_service proves the tunnel
   parse_link
   [ "$DIRECTION" = "reverse" ] || die "this link is a DIRECT link; for reverse, generate the link on the IRAN side first."
+  adopt_service_name; check_link_subnet; TUNIF=$(free_iface)
   ask_egress_ip
   ok "Link OK — will dial the iran edge at $ENDPOINT (transport $TRANSPORT)."
   mkdir -p "$(dirname "$CFG")"
@@ -942,7 +1250,7 @@ kharej_dialer(){
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "shared_key": "$SHARED",
   "expose": "$PANEL",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
@@ -975,7 +1283,7 @@ EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
     ok "KHAREJ ready (reverse, tun over TLS: $(tun_tls_label)). It dials in to the Iran edge and forwards to $PANEL."
-    info "L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (MTU $MTU)."
+    info "L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (MTU $MTU)."
   elif [ "$TRANSPORT" = "tun" ]; then
     # Reverse datagram tun (carrier "dgtun", encap $ENCAP from the link): kharej
     # DIALS the iran edge. No cert/domain. Kharej is the exit/panel side: every
@@ -1001,23 +1309,24 @@ EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
     ok "KHAREJ ready (reverse, tun / datagram pool over $ENCAP). It dials in to the Iran edge and forwards to $PANEL."
-    info "Datagram L3 tunnel on $TUNIF once up: this kharej = 10.77.0.2, iran = 10.77.0.1 (encap $ENCAP)."
+    info "Datagram L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (encap $ENCAP)."
   else
-    # udp/auto: TUN IP tunnel on hs0, no panel forwarding here.
+    # udp/auto: TUN IP tunnel on $TUNIF, no panel forwarding here.
     cat > "$CFG" <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP"
 }
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
     ok "KHAREJ ready (reverse, $TRANSPORT / UDP+FEC). It dials in to the Iran edge."
-    info "An IP tunnel is up on hs0 (kharej 10.77.0.2, iran 10.77.0.1). Route panel traffic over hs0."
+    info "An IP tunnel is up on $TUNIF (kharej $TUN_IP_KHAREJ, iran $TUN_IP_IRAN). Route panel traffic over $TUNIF."
   fi
   info "Backhaul is untouched. Status/logs any time:  bash install.sh → 4"
+  tunnel_summary
 }
 
 # ---------- IRAN (the user-facing edge) --------------------------------------
@@ -1030,6 +1339,7 @@ setup_iran(){
   if [ "$DIRECTION" = "direct" ]; then
     iran_dialer          # direct: iran dials out to kharej (pastes the link)
   else
+    ask_service_name     # this side makes the link, so it names the tunnel
     echo >&2; info "This server's IP addresses:"; show_ips
     echo "   (Public IP = the address the OTHER server connects to; it goes into the link.)" >&2
     local defip; defip=$(first_public_ip)
@@ -1046,6 +1356,7 @@ iran_dialer(){
   VERIFY_PEER=1   # the kharej is already waiting: start_service proves the tunnel
   parse_link
   [ "$DIRECTION" = "direct" ] || die "this link is a REVERSE link; for reverse, run KHAREJ setup and paste it there instead."
+  adopt_service_name; check_link_subnet; TUNIF=$(free_iface)
   ok "Link OK — kharej endpoint $ENDPOINT, transport $TRANSPORT (carrier $CARRIER)."
   ask_egress_ip
   mkdir -p "$(dirname "$CFG")"
@@ -1060,7 +1371,7 @@ iran_dialer(){
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
   "shared_key": "$SHARED",
   "forward_ports": "$PORTS", "peer_panel": "$PANEL",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
@@ -1097,9 +1408,9 @@ EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
     ok "IRAN ready (direct, tun over TLS: $(tun_tls_label))."
-    info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $MTU)."
+    info "L3 tunnel on $TUNIF once up: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ (MTU $MTU)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
-    else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward 10.77.0.2 yourself."; fi
+    else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward $TUN_IP_KHAREJ yourself."; fi
   elif [ "$TRANSPORT" = "tun" ]; then
     # Datagram tun (carrier "dgtun", encap $ENCAP from the link): iran is the
     # edge, so it opens the user ports (forward_ports) and rides them over the
@@ -1128,31 +1439,33 @@ EOF
     echo >&2; hr
     ok "IRAN ready (direct, tun / datagram pool over $ENCAP)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
-    else info "Pure routed L3 tunnel on $TUNIF: this iran = 10.77.0.1, kharej = 10.77.0.2. Route traffic toward 10.77.0.2."; fi
+    else info "Pure routed L3 tunnel on $TUNIF: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ. Route traffic toward $TUN_IP_KHAREJ."; fi
   else
-    # udp/auto is a TUN IP tunnel on hs0 (not a port forwarder); no user ports.
+    # udp/auto is a TUN IP tunnel on $TUNIF (not a port forwarder); no user ports.
     cat > "$CFG" <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false,
   "addr": "$ENDPOINT",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
   "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP"
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
     ok "IRAN ready (direct, $TRANSPORT / UDP+FEC)."
-    info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2)."
-    warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over hs0 yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
+    info "An IP tunnel is up on $TUNIF (iran $TUN_IP_IRAN, kharej $TUN_IP_KHAREJ)."
+    warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over $TUNIF yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
     [ "$TRANSPORT" = "auto" ] && info "auto: if UDP is blocked or too lossy, it falls back to TCP silently."
   fi
   info "Backhaul is untouched. Status/logs any time:  bash install.sh → 4"
+  tunnel_summary
 }
 
 # iran_listener: reverse edge. Iran listens for the kharej (which dials in) and
 # generates the link. For tcp it also opens the user ports; for udp/auto it is a
 # TUN IP tunnel on hs0.
 iran_listener(){
+  pick_subnet; TUNIF=$(free_iface)
   ask_tunnel_port "Tunnel port to LISTEN on (kharej dials it)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
@@ -1185,7 +1498,7 @@ iran_listener(){
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true, "udp": $UDP,
   "addr": "$BINDADDR:$TPORT",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
   "backend_addr": "builtin",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
@@ -1230,9 +1543,9 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN side is running (reverse, tun over TLS: $(tun_tls_label)) and waits for the Kharej server to dial in."
-    info "L3 tunnel on $TUNIF once up: this iran = 10.77.0.1, kharej = 10.77.0.2 (MTU $LMTU)."
+    info "L3 tunnel on $TUNIF once up: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ (MTU $LMTU)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
-    else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward 10.77.0.2 yourself."; fi
+    else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward $TUN_IP_KHAREJ yourself."; fi
   elif [ "$TRANSPORT" = "tun" ]; then
     # Reverse datagram tun (carrier "dgtun", encap $TUN_ENCAP): iran LISTENS
     # (kharej dials in). No cert, no domain — shared-key auth only. Iran is the
@@ -1260,7 +1573,7 @@ EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN side is running (reverse, tun / datagram pool over $TUN_ENCAP) and waits for the Kharej server to dial in."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
-    else info "Pure routed L3 tunnel on $TUNIF: this iran = 10.77.0.1, kharej = 10.77.0.2."; fi
+    else info "Pure routed L3 tunnel on $TUNIF: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ."; fi
   else
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
@@ -1269,14 +1582,14 @@ EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true,
   "addr": "$BINDADDR:$TPORT",
-  "iface": "hs0", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
+  "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
   "shared_key": "$SHARED"
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN side is running (reverse, $TRANSPORT / UDP+FEC) and waits for the Kharej server to dial in."
-    info "An IP tunnel is up on hs0 (iran 10.77.0.1, kharej 10.77.0.2)."
-    warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over hs0 yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
+    info "An IP tunnel is up on $TUNIF (iran $TUN_IP_IRAN, kharej $TUN_IP_KHAREJ)."
+    warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over $TUNIF yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
   fi
   # panel is set on the kharej side; leave it blank in the link. The ipx number
   # goes in the link so the kharej uses the same one without asking.
@@ -1285,61 +1598,104 @@ EOF
   show_link "$PUBIP$PSUF" "$DOMAIN" "$SHARED" "-" "$CARRIER" "$UDP" "$TRANSPORT" "reverse" "$LMTU" "$ENCAP_ARG" "$PROTO_ARG"
   info "On the Kharej server: bash install.sh → 1 (Kharej) → direction 'reverse' → paste the link."
   info "The tunnel is tested end-to-end there: that side only says ready once packets really cross."
+  info "It runs there as service $UNIT too (the name is in the link)."
+  tunnel_summary
+}
+
+# tunnel_summary: the facts to keep about the tunnel just set up.
+tunnel_summary(){
+  local ifc lc peer car
+  ifc=$(jget "$CFG" iface); lc=$(jget "$CFG" local_cidr); peer=$(jget "$CFG" peer_ip); car=$(jget "$CFG" carrier)
+  echo >&2; hr
+  say " Service:  ${C_B}$UNIT${C_0}   (systemctl status $UNIT · journalctl -u $UNIT -f)"
+  say " Config:   $CFG"
+  if [ "$car" != mtcp ] && [ -n "$ifc" ]; then say " Tun:      $ifc  ${lc%/*} ↔ $peer"; fi
+  say " Manage:   hs2-menu → 3) Tunnel manager → $UNIT"
+  hr
 }
 
 # ---------- uninstall & status ----------------------------------------------
-uninstall(){
-  local a
-  read -rp "Remove the hs2 tunnel from this server? (a backup is saved first) [y/N]: " a </dev/tty || a=n
-  case "$a" in y|Y|yes) ;; *) info "Nothing removed."; return 0 ;; esac
-  info "Removing hs2…"
-  auto_backup
-  local pid; pid=$(tm_prop hs2 MainPID)
-  systemctl disable --now hs2 2>/dev/null || true
+# remove_tunnel UNIT: take one tunnel off this server — stop and disable its
+# service, stop a straggler of THAT tunnel only, delete its tun interface (when
+# no other tunnel's config names it), and remove its unit, config (+ .prev) and
+# live status file. Other tunnels are not touched. Callers back up first.
+remove_tunnel(){ # unit
+  local u="$1" cfg pid ifc other c
+  cfg=$(tm_cfg "$u"); [ -n "$cfg" ] || cfg=$(unit_cfg "$u")
+  pid=$(tm_prop "$u" MainPID)
+  systemctl disable --now "$u" >/dev/null 2>&1 || true
   sleep 1
-  # Stop a straggler of THIS tunnel only — its unit's last PID and any process
-  # running this config. Never `pkill -x hs2`: other tunnels on the server
-  # (hs2-<name>.service) run the same binary and must keep running.
-  kill_this_tunnel TERM "$pid"; sleep 1; kill_this_tunnel KILL "$pid"
-  # Delete the tunnel interface. Usually hs0, but tun mode may have renamed it, so
-  # also read the name from the config before deleting it.
-  local IFACE=""
-  [ -f "$CFG" ] && IFACE=$(cfg_field iface)
-  [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
-  ip link del hs0 2>/dev/null || true
-  rm -f "$SVC" "$CFG" "$CFG.prev" /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf; systemctl daemon-reload
-  ok "hs2 removed (service stopped, hs0 deleted). Backhaul untouched."
+  # Never `pkill -x hs2`: the other tunnels run the same binary.
+  kill_this_tunnel TERM "$pid" "$cfg"; sleep 1; kill_this_tunnel KILL "$pid" "$cfg"
+  ifc=$(cfg_tun_iface "$cfg")
+  if [ -n "$ifc" ]; then
+    other=""
+    for c in $(tm_units); do
+      [ "$c" = "$u" ] && continue
+      [ "$(cfg_tun_iface "$(tm_cfg "$c")")" = "$ifc" ] && other=$c
+    done
+    if [ -z "$other" ]; then ip link del "$ifc" 2>/dev/null || true; fi
+  fi
+  rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$(status_path "$cfg")"
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl reset-failed "$u" >/dev/null 2>&1 || true
+}
+
+# uninstall: remove EVERY hs2 tunnel from this server (the tunnel manager
+# deletes one at a time). The binary and hs2-menu stay, so setting up again
+# needs no download.
+uninstall(){
+  local a u units
+  units=$(tm_units)
+  if [ -z "$units" ]; then info "No hs2 tunnel on this server — nothing to remove."; return 0; fi
+  echo >&2; info "This removes ALL hs2 tunnels on this server:"
+  for u in $units; do say "     $u — $(unit_desc "$u")"; done
+  info "(To remove just one, use the Tunnel manager → the tunnel → Delete.)"
+  read -rp "Remove all of them? (a backup is saved first) [y/N]: " a </dev/tty || a=n
+  case "$a" in y|Y|yes) ;; *) info "Nothing removed."; return 0 ;; esac
+  auto_backup
+  for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
+  rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
+  ok "All hs2 tunnels removed (services stopped, tun interfaces deleted). Backhaul untouched."
   if ls "$BACKUP_DIR"/hs2-*.tar.gz >/dev/null 2>&1; then
-    warn "Backups are kept in $BACKUP_DIR (readable by root only). They contain the tunnel key —"
-    warn "delete that folder if this server is being handed over or the tunnel is gone for good."
+    warn "Backups are kept in $BACKUP_DIR (readable by root only). They contain the tunnel keys —"
+    warn "delete that folder if this server is being handed over or the tunnels are gone for good."
   fi
 }
 
-# kill_this_tunnel SIGNAL [PID]: signal this tunnel's hs2 process — PID when it
-# is still an hs2 process, and any `hs2 run -c $CFG` — and nothing else.
-kill_this_tunnel(){ # signal [pid]
-  local sig="$1" pid="${2:-}" p args
+# kill_this_tunnel SIGNAL [PID] [CFG]: signal one tunnel's hs2 process — PID
+# when it is still an hs2 process, and any `hs2 run -c CFG` — and nothing else.
+kill_this_tunnel(){ # signal [pid] [cfg]
+  local sig="$1" pid="${2:-}" cfg="${3:-$CFG}" p args
   if [ -n "$pid" ] && [ "$pid" != 0 ] && [ -r "/proc/$pid/cmdline" ]; then
     args=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
     case "$args" in *hs2*) kill -"$sig" "$pid" 2>/dev/null || true ;; esac
   fi
   for p in $(pgrep -x hs2 2>/dev/null || true); do
     args=$(tr '\0' ' ' < "/proc/$p/cmdline" 2>/dev/null || true)
-    case "$args" in *" -c $CFG "*) kill -"$sig" "$p" 2>/dev/null || true ;; esac
+    case "$args" in *" -c $cfg "*) kill -"$sig" "$p" 2>/dev/null || true ;; esac
   done
   return 0
 }
 
+# status: every tunnel — service state, its tun interface, and its recent log.
 status(){
-  hr; systemctl status hs2 --no-pager 2>/dev/null | head -12 || true; hr
-  info "Recent log:"
-  journalctl -u hs2 -n 25 --no-pager 2>/dev/null || true
-  echo >&2
-  if ip -br addr show hs0 >/dev/null 2>&1; then
-    ok "Tunnel interface hs0: $(ip -br addr show hs0 | awk '{print $3}')"
-  else
-    warn "Tunnel interface hs0 is not up."
-  fi
+  local u cfg ifc units
+  units=$(tm_units)
+  if [ -z "$units" ]; then warn "No hs2 tunnel on this server yet."; return 0; fi
+  for u in $units; do
+    cfg=$(tm_cfg "$u")
+    hr; say " ${C_B}$u${C_0} — $(unit_desc "$u")"; hr
+    systemctl status "$u" --no-pager 2>/dev/null | head -8 >&2 || true
+    ifc=$(jget "$cfg" iface)
+    if [ "$(jget "$cfg" carrier)" != mtcp ] && [ -n "$ifc" ]; then
+      if ip -br addr show "$ifc" >/dev/null 2>&1; then ok "Tunnel interface $ifc: $(ip -br addr show "$ifc" | awk '{print $3}')"
+      else warn "Tunnel interface $ifc is not up."; fi
+    fi
+    info "Recent log of $u:"
+    journalctl -u "$u" -n 12 --no-pager -o cat 2>/dev/null | sed 's/^/     /' >&2 || true
+    echo >&2
+  done
 }
 
 # ---------- tunnel manager ---------------------------------------------------
@@ -1376,14 +1732,17 @@ status_fresh(){
   [ $((now - upd)) -le 7 ]
 }
 
+# tm_units lists every tunnel (hs2.service first, then hs2-*.service by name).
+# A MASKED unit is a /dev/null symlink, not a tunnel file — it is listed too, so
+# setting one up again (which unmasks it) and the manager can see it.
 tm_units(){
   local f
-  for f in /etc/systemd/system/hs2.service /etc/systemd/system/hs2-*.service; do
-    [ -f "$f" ] && basename "$f" .service
+  for f in "$UNIT_DIR/hs2.service" "$UNIT_DIR"/hs2-*.service; do
+    { [ -f "$f" ] || [ -L "$f" ]; } && basename "$f" .service
   done
   return 0
 }
-tm_cfg(){ { sed -n 's/^ExecStart=.* -c \([^ ]*\).*/\1/p' "/etc/systemd/system/$1.service" 2>/dev/null || true; } | head -1; }
+tm_cfg(){ { sed -n 's/^ExecStart=.* -c \([^ ]*\).*/\1/p' "$UNIT_DIR/$1.service" 2>/dev/null || true; } | head -1; }
 tm_prop(){ systemctl show -p "$2" --value "$1" 2>/dev/null || true; }
 
 # tm_state UNIT -> running | starting | failing | failed | stopped
@@ -1555,6 +1914,9 @@ tm_details(){
       say " Connection:  connects to $(jget "$cfg" addr) from ${bind:-the default IP}"
     else
       say " Connection:  listens on $(jget "$cfg" addr)$([ "$st" = running ] && [ -n "$(tm_peers "$cfg")" ] && echo " · connected: $(tm_peers "$cfg")")"
+    fi
+    if [ "$(jget "$cfg" carrier)" != mtcp ] && [ -n "$(jget "$cfg" iface)" ]; then
+      say " Tun:         $(jget "$cfg" iface)  $(jget "$cfg" local_cidr | sed 's#/.*##') ↔ $(jget "$cfg" peer_ip)"
     fi
     [ -n "$(jget "$cfg" forward_ports)" ] && say " User ports:  $(jget "$cfg" forward_ports)  (users connect here)"
     [ -n "$(jget "$cfg" expose)" ] && say " Panel:       $(jget "$cfg" expose)"
@@ -1868,6 +2230,28 @@ tm_tune_manual(){ # unit cfg
   tm_apply_restart "$u" "$cfg"
 }
 
+# tm_delete UNIT: remove one tunnel from this server after the operator types
+# its name (a destructive step deserves more than a y). Everything is backed up
+# first; the other tunnels keep running untouched. 0 = deleted.
+tm_delete(){ # unit
+  local u="$1" a v
+  echo >&2; hr
+  warn "Delete ${u}: its service, config and tun interface are removed from this server."
+  say "     $u — $(unit_desc "$u")"
+  info "The other tunnels keep running untouched. A backup is saved first (restore: bash install.sh restore)."
+  info "The other server keeps its side of this tunnel — delete it there too if the tunnel is gone for good."
+  hr
+  read -rp "Type the service name to delete it ($u), or Enter to cancel: " a </dev/tty || a=""
+  v=$(norm_unit "$a" 2>/dev/null || true)
+  if [ -z "$a" ] || [ "$v" != "$u" ]; then info "Not deleted."; return 1; fi
+  auto_backup
+  info "Deleting $u…"
+  remove_tunnel "$u"
+  if unit_exists "$u"; then err "$u could not be removed completely — check $UNIT_DIR/$u.service"; return 1; fi
+  ok "$u deleted."
+  return 0
+}
+
 tm_tunnel_menu(){
   local u="$1" cfg c
   cfg=$(tm_cfg "$u")
@@ -1881,6 +2265,7 @@ tm_tunnel_menu(){
     say "  6) Live pattern monitor (parallel links, updating)"
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
+    say "  9) Delete this tunnel (service, config and tun interface)"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in
@@ -1892,6 +2277,7 @@ tm_tunnel_menu(){
       6) tm_monitor "$u" "$cfg" ;;
       7) tm_toggle_autostart "$u" ;;
       8) tm_tune "$u" "$cfg" ;;
+      9) if tm_delete "$u"; then pause; return 0; fi ;;
       0|b|B|"") return 0 ;;
       *) warn "Invalid choice." ;;
     esac
@@ -1940,31 +2326,42 @@ cfg_field(){ # key -> value of a "key": "value" string field in $CFG
 }
 
 backup(){
-  [ -f "$CFG" ] || { warn "Nothing to back up ($CFG missing)."; return 0; }
+  local units u c p d q f meta items=()
+  units=$(tm_units)
+  [ -n "$units" ] || { warn "Nothing to back up (no hs2 tunnel on this server)."; return 0; }
   mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
-  local f="$BACKUP_DIR/hs2-$(hostname -s 2>/dev/null || echo host)-$(date +%Y%m%d-%H%M%S).tar.gz"
-  local items=("${CFG#/}") p
-  for p in "$SVC" "$BIN" /etc/sysctl.d/99-hs2.conf; do [ -e "$p" ] && items+=("${p#/}"); done
-  for p in "$(cfg_field cert_file)" "$(cfg_field key_file)"; do
-    [ -n "$p" ] || continue
-    case "$p" in
-      /etc/letsencrypt/live/*)
-        local d; d=$(echo "$p" | cut -d/ -f5)
-        for q in "/etc/letsencrypt/live/$d" "/etc/letsencrypt/archive/$d" "/etc/letsencrypt/renewal/$d.conf"; do
-          [ -e "$q" ] && items+=("${q#/}")
-        done ;;
-      *) [ -e "$p" ] && items+=("${p#/}") ;;
-    esac
+  f="$BACKUP_DIR/hs2-$(hostname -s 2>/dev/null || echo host)-$(date +%Y%m%d-%H%M%S).tar.gz"
+  # Every tunnel: its unit, its config (+ the .prev the editor keeps) and the
+  # certificate it uses — the whole letsencrypt lineage when it is a certbot
+  # cert, so renewal keeps working after a restore.
+  for u in $units; do
+    [ -f "$UNIT_DIR/$u.service" ] && items+=("${UNIT_DIR#/}/$u.service")
+    c=$(tm_cfg "$u")
+    for p in "$c" "$c.prev"; do [ -n "$c" ] && [ -f "$p" ] && items+=("${p#/}"); done
+    for p in "$(jget "$c" cert_file)" "$(jget "$c" key_file)"; do
+      [ -n "$p" ] || continue
+      case "$p" in
+        /etc/letsencrypt/live/*)
+          d=$(echo "$p" | cut -d/ -f5)
+          for q in "/etc/letsencrypt/live/$d" "/etc/letsencrypt/archive/$d" "/etc/letsencrypt/renewal/$d.conf"; do
+            [ -e "$q" ] && items+=("${q#/}")
+          done ;;
+        *) [ -e "$p" ] && items+=("${p#/}") ;;
+      esac
+    done
   done
+  for p in "$BIN" /etc/sysctl.d/99-hs2.conf; do [ -e "$p" ] && items+=("${p#/}"); done
+  [ ${#items[@]} -gt 0 ] || { warn "Nothing to back up."; return 0; }
   # Dedupe (cert and key share a lineage) and write a human-readable summary.
   mapfile -t items < <(printf '%s\n' "${items[@]}" | sort -u)
-  local meta; meta=$(mktemp -d)
+  meta=$(mktemp -d)
   {
     echo "hs2 backup $(date -Is) on $(hostname)"
     "$BIN" version 2>/dev/null || true
-    echo "mode=$(cfg_field mode) carrier=$(cfg_field carrier) addr=$(cfg_field addr) iface=$(cfg_field iface) bind_local_ip=$(cfg_field bind_local_ip)"
-    grep -o '"reverse"[[:space:]]*:[[:space:]]*[a-z]*' "$CFG" || true
-    echo "service: $(systemctl is-active hs2 2>/dev/null)"
+    for u in $units; do
+      c=$(tm_cfg "$u")
+      echo "$u: $(unit_desc "$u") · iface=$(jget "$c" iface) tun=$(jget "$c" local_cidr) · service $(systemctl is-active "$u" 2>/dev/null || true)"
+    done
   } > "$meta/hs2-backup-info.txt"
   tar -czf "$f" -C / "${items[@]}" -C "$meta" hs2-backup-info.txt || { rm -rf "$meta"; die "backup failed"; }
   rm -rf "$meta"; chmod 600 "$f"
@@ -1987,42 +2384,60 @@ prune_backups(){
   return 0
 }
 
+# restore FILE: put back every tunnel in the backup, exactly as saved. Tunnels
+# added after the backup was made are not in it and are left running as they
+# are. A backup from before named tunnels holds just "hs2" — same path.
 restore(){
-  local f="${1:-}"
+  local f="${1:-}" list units u c ifc fails=0 ans=""
   if [ -z "$f" ]; then
     f=$(ls -1t "$BACKUP_DIR"/hs2-*.tar.gz 2>/dev/null | head -1)
     [ -n "$f" ] || die "no backups in $BACKUP_DIR"
     info "Backups (newest first):"; ls -1t "$BACKUP_DIR"/hs2-*.tar.gz | sed 's/^/   /' >&2
     # read -p prints its prompt on stderr, so stderr must stay visible here.
-    local ans=""
     if [ -r /dev/tty ]; then
       read -rp "Restore which file? (Enter = newest) [$f]: " ans </dev/tty || true
       f=${ans:-$f}
     fi
   fi
   [ -f "$f" ] || die "backup not found: $f"
-  # No `grep -q` here: it exits at the first match, tar then dies of SIGPIPE
-  # while still listing, and pipefail turns that into a false "not a backup".
-  tar -tzf "$f" 2>/dev/null | grep -x "${CFG#/}" >/dev/null || die "$f is not an hs2 backup (no ${CFG#/} inside)."
+  list=$(tar -tzf "$f" 2>/dev/null || true)
+  # The tunnels in the backup = its hs2 unit files. (Plain sed, never grep -q:
+  # an early exit would kill tar with SIGPIPE and pipefail would call a good
+  # backup bad.)
+  units=$(printf '%s\n' "$list" | sed -n 's#^.*systemd/system/\(hs2[a-z0-9-]*\)\.service$#\1#p' | sort -u)
+  if [ -z "$units" ] && printf '%s\n' "$list" | grep -x "${CFG_DIR#/}/config.json" >/dev/null; then units=hs2; fi
+  [ -n "$units" ] || die "$f is not an hs2 backup (no tunnel inside)."
   hr; info "Restoring $f"; tar -xzOf "$f" hs2-backup-info.txt 2>/dev/null | sed 's/^/   /' >&2; hr
-  # Take down the running tunnel (and its interface: the restored config may use
-  # another name) before files are replaced.
-  HS2_STOPPED=1
-  systemctl stop hs2 2>/dev/null || true
-  local IFACE; IFACE=$(cfg_field iface)
-  [ -n "$IFACE" ] && ip link del "$IFACE" 2>/dev/null || true
-  unit_unmask hs2   # else the restored unit file lands on a /dev/null symlink
+  info "Tunnels in this backup: $(echo $units)"
+  for u in $(tm_units); do
+    printf '%s\n' "$units" | grep -qx "$u" || info "$u is not in this backup — left as it is."
+  done
+  # Take the backed-up tunnels down (and their interfaces: the restored config
+  # may use another name) before files are replaced; the safety net starts them
+  # again if anything below fails.
+  for u in $units; do
+    unit_exists "$u" || continue
+    HS2_STOPPED_UNITS="$HS2_STOPPED_UNITS $u"
+    c=$(tm_cfg "$u"); ifc=$(cfg_tun_iface "$c")
+    systemctl stop "$u" 2>/dev/null || true
+    [ -n "$ifc" ] && ip link del "$ifc" 2>/dev/null || true
+  done
+  for u in $units; do unit_unmask "$u"; done   # else a restored unit file lands on a /dev/null symlink
   tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
   systemctl daemon-reload
   [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
-  systemctl enable hs2 >/dev/null 2>&1 || true
-  if restart_unit hs2; then
-    ok "Restored and running: $("$BIN" version 2>/dev/null)"
-    ok "Autostart on boot: ON"
-    info "Watch the log:  journalctl -u hs2 -f"
-  else
-    err "hs2 failed to start after restore. Last log:"; journalctl -u hs2 -n 20 --no-pager >&2; bail
-  fi
+  for u in $units; do
+    use_unit "$u"
+    if [ ! -f "$SVC" ] && [ -f "$CFG" ]; then   # a very old backup without the unit
+      if grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG"; then write_service iran; else write_service kharej; fi
+    fi
+    systemctl enable "$u" >/dev/null 2>&1 || true
+    if restart_unit "$u"; then ok "$u restored and running."
+    else err "$u failed to start after restore. Last log:"; journalctl -u "$u" -n 20 --no-pager >&2 || true; fails=$((fails + 1)); fi
+  done
+  ok "Binary: $("$BIN" version 2>/dev/null)"
+  [ "$fails" = 0 ] || bail
+  ok "Autostart on boot: ON"
 }
 
 # migrate_config brings an older install's config and system state up to date on
@@ -2091,37 +2506,47 @@ migrate_config(){
 
 # Before anything replaces an existing install, keep a copy to roll back to.
 auto_backup(){
-  [ -f "$CFG" ] || return 0
-  info "Existing hs2 install found — backing it up first (restore: bash install.sh restore)."
+  [ -n "$(tm_units)" ] || return 0
+  info "Existing hs2 tunnel(s) found — backing them up first (restore: bash install.sh restore)."
   backup >/dev/null
 }
 
-# Upgrade in place: new binary + kernel tuning, same config and hs2:// link.
+# Upgrade in place: new binary, and EVERY tunnel restarted on it with its own
+# config and hs2:// link unchanged (each is checked, and reconnects checked).
 upgrade(){
-  [ -f "$CFG" ] || die "hs2 is not installed on this server ($CFG missing). Run without 'upgrade' to install."
-  hr; info "Upgrading hs2 (config and link stay the same)"; hr
+  local units u role fails=0
+  units=$(tm_units)
+  [ -n "$units" ] || die "hs2 is not installed on this server (no tunnel). Run without 'upgrade' to install."
+  hr; info "Upgrading hs2 — configs and links stay the same. Tunnels: $(echo $units)"; hr
   auto_backup
   install_prereqs
   install_binary
-  migrate_config
-  # Old installs have an older unit: rewrite it and make sure it starts on boot.
-  local role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
-  write_service "$role"
-  systemctl enable hs2 >/dev/null 2>&1 || true
-  if restart_unit hs2; then
-    ok "Autostart on boot: $(systemctl is-enabled hs2 2>/dev/null)"
-    info "Tunnel manager: run  hs2-menu  → 3"
-    ok "hs2 upgraded and running. Upgrade the OTHER server too (both sides must match)."
-    if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-30}"; then
-      warn "The tunnel has not reconnected yet. If the OTHER server still runs the old version, upgrade it"
-      warn "too — it reconnects then. If both are upgraded and it stays down: journalctl -u hs2 -n 40 --no-pager"
+  for u in $units; do
+    use_unit "$u"
+    echo >&2; info "Tunnel $u"
+    if [ ! -f "$CFG" ]; then warn "$u: its config $CFG is missing — skipped (delete it in the Tunnel manager)."; continue; fi
+    migrate_config
+    # Old installs have an older unit: rewrite it (same config path) and make
+    # sure it starts on boot.
+    role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
+    write_service "$role"
+    systemctl enable "$u" >/dev/null 2>&1 || true
+    if restart_unit "$u"; then
+      ok "$u upgraded and running (autostart: $(systemctl is-enabled "$u" 2>/dev/null || true))."
+      if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-30}"; then
+        warn "$u has not reconnected yet. If the OTHER server still runs the old version, upgrade it"
+        warn "too — it reconnects then. If both are upgraded and it stays down: journalctl -u $u -n 40 --no-pager"
+      fi
+    else
+      err "$u failed to start after the upgrade. Last log:"
+      journalctl -u "$u" -n 20 --no-pager >&2 || true
+      fails=$((fails + 1))
     fi
-    info "Watch the log:  journalctl -u hs2 -f"
-  else
-    err "hs2 failed to start after upgrade. Last log:"
-    journalctl -u hs2 -n 20 --no-pager >&2
-    bail
-  fi
+  done
+  echo >&2
+  [ "$fails" = 0 ] || { err "$fails tunnel(s) did not start — see above."; bail; }
+  ok "hs2 upgraded. Upgrade the OTHER server(s) too (both sides of a tunnel must match)."
+  info "Tunnel manager: run  hs2-menu  → 3"
 }
 
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
@@ -2146,12 +2571,12 @@ main_menu(){
     echo "    1) Kharej  (foreign server — panel side)" >&2
     echo "    2) Iran    (opens user ports → panel)" >&2
     echo "  Manage" >&2
-    echo "    3) Tunnel manager  (list · start/stop/restart · edit · logs)" >&2
+    echo "    3) Tunnel manager  (list · start/stop/restart · edit · logs · delete)" >&2
     echo "    4) Status / logs" >&2
     echo "    5) Upgrade (new binary, keep config)" >&2
     echo "    6) Backup current config" >&2
     echo "    7) Restore a backup" >&2
-    echo "    8) Uninstall hs2" >&2
+    echo "    8) Uninstall hs2 (removes ALL tunnels)" >&2
     echo "    0) Exit" >&2
     echo >&2
     read -rp "Choose [0-8]: " CH </dev/tty || exit 0

@@ -541,3 +541,34 @@ func TestRateSimCrossTraffic(t *testing.T) {
 		t.Errorf("carrier used only %.0f%% of the bottleneck under cross-traffic", r.util*100)
 	}
 }
+
+// A carrier in the datagram pool often carries almost nothing for a long time
+// (a few keepalives, or only the TCP ACKs of a flow that runs on another
+// carrier), and then a new flow is hashed onto it. It must ramp at once — the
+// flow is often a short TCP transfer — not crawl up from the floor. It used to:
+// the startup backstop counted idle reports too, so after ~10 s of light load
+// startup ended, and the post-startup delivery cap (a multiple of the tiny
+// idle delivery) crushed the allowance to minRate; 4% growth per report then
+// took tens of seconds (lab: a second download on a dgtun tunnel ran at
+// 0.1-0.2 Mbit/s on a 200 Mbit/s path).
+func TestRateSimIdleThenBurstRampsFast(t *testing.T) {
+	ms := time.Millisecond
+	for _, c := range []struct {
+		name string
+		p    simPath
+	}{
+		{"50mbit-20ms", simPath{capBps: 50e6, oneWay: 20 * ms, buffer: 300 * ms, appRateBps: 50e3, appUntilMs: 30000}},
+		{"200mbit-5ms", simPath{capBps: 200e6, oneWay: 5 * ms, buffer: 100 * ms, appRateBps: 50e3, appUntilMs: 30000}},
+		{"20mbit-80ms", simPath{capBps: 20e6, oneWay: 80 * ms, buffer: 300 * ms, appRateBps: 50e3, appUntilMs: 30000}},
+	} {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			// utilisation over the 2.5 s right after 30 s of near-idle
+			r := runRateSim(c.p, 32500*ms, 30*time.Second, 11)
+			t.Logf("idle 30 s then saturate (%s), first 2.5 s: %s", c.name, r)
+			if r.util < 0.5 {
+				t.Errorf("slow ramp after an idle spell: only %.0f%% of the path in the first 2.5 s", r.util*100)
+			}
+		})
+	}
+}
