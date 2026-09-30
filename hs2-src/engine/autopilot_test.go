@@ -603,15 +603,16 @@ func probeRig(a *autopilot, now *time.Time, rnd *rand.Rand, from int, gb, cv, rN
 }
 
 // relievedRig: like probeRig, but once the probe starts the old links are no
-// longer pressed and the total does not change (demand was nearly met).
-func relievedRig(a *autopilot, now *time.Time, from int, gb, rNew float64) string {
+// longer pressed and the total changes by dG (demand was nearly met).
+func relievedRig(a *autopilot, now *time.Time, from int, gb, rNew, dG float64) string {
 	for i := 0; i < 200; i++ {
 		*now = now.Add(healthTick)
 		smp := apSample{now: *now, flowing: 60, open: 200, growable: true, G: gb}
 		pr := a.pr
 		per := gb / float64(from)
 		if pr != nil {
-			per = (gb - rNew) / float64(from)
+			per = (gb + dG - rNew) / float64(from)
+			smp.G = gb + dG
 		}
 		for id := 0; id < from; id++ {
 			smp.links = append(smp.links, apLink{id: id, serving: true, pressed: pr == nil, rate: per, rate10: per, sustained: per, flowing: 4})
@@ -654,7 +655,8 @@ func TestProbeVerdictTable(t *testing.T) {
 	}{
 		{"additive (per-connection throttling)", 500e3, 500e3, true, "success"},
 		{"substitutive (path full)", 500e3, 0, true, "fail"},
-		{"substitutive, pressure relieved (demand met)", 500e3, 0, false, "relieved"},
+		{"pressure relieved, total rose a little (demand nearly met)", 500e3, 0.08 * gb, false, "relieved"},
+		{"pressure relieved but the total did not rise", 500e3, 0, false, "fail"},
 		{"no new flow reached the links", 0, 0, false, "inconclusive"},
 	}
 	for _, c := range cases {
@@ -663,7 +665,7 @@ func TestProbeVerdictTable(t *testing.T) {
 		if !c.newPressed && c.rNew > 0 {
 			// Demand met: once the probe links take flows, the old links
 			// stop being pressed. Model it by a rig variant below.
-			got := verdict(relievedRig(a, &now, 8, gb, c.rNew))
+			got := verdict(relievedRig(a, &now, 8, gb, c.rNew, c.dG))
 			if got != c.want {
 				t.Errorf("%s: verdict %q, want %q", c.name, got, c.want)
 			}

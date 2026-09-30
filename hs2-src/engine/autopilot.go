@@ -476,8 +476,9 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 
 	// ---- 4 GROW: pressed links and nowhere unpressed for new flows ---------
-	// (A probe needs a full baseline to be judged against.)
-	if isShort && s.growable && S >= a.T && a.T < U && a.T < a.max && !now.Before(a.next) && len(a.hist) >= t.baseTicks {
+	// (A probe needs a full baseline to be judged against, and the pressure
+	// must still be there now, not only in the last few ticks.)
+	if isShort && shortTick && s.growable && S >= a.T && a.T < U && a.T < a.max && !now.Before(a.next) && len(a.hist) >= t.baseTicks {
 		// Grow by a quarter; while probes keep succeeding back to back (demand
 		// is climbing), by half — each step is still verified before it is
 		// kept, so a full path costs one failed probe either way.
@@ -636,7 +637,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		a.lastGrowAt = now
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: the new links added %.1f Mbit/s", a.T, mbitps(dG)),
 			fmt.Sprintf("pattern %d → %d links kept: +%.1f Mbit/s (new links carried %.1f)", pr.from, pr.to, mbitps(dG), mbitps(rNew)))
-	case rNew >= rMin && relieved && n == lastLook:
+	case rNew >= rMin && relieved && n == lastLook && dG > 0 && dG >= t.minGain*pr.gb:
 		// The added links took new connections and no link is short any more,
 		// but the total barely moved: demand was nearly met already. Keep them
 		// as headroom (the shrink rule returns them if demand does not need
@@ -648,12 +649,14 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no link is short of capacity any more", a.T),
 			fmt.Sprintf("pattern %d → %d links kept as headroom: new links carried %.1f Mbit/s and no link is at its limit any more (total %+.1f)",
 				pr.from, pr.to, mbitps(rNew), mbitps(dG)))
-	case !relieved && (rNew >= rMin && (n == lastLook || (n == t.looks[1] && dG < t.earlyFail*rNew)) ||
-		n == lastLook && busy):
-		// The added links carried traffic, the others stayed at their limit,
-		// and the total did not rise enough: the path itself is full. (busy
-		// covers links brought back from retiring: they carry the flows they
-		// already had, so little of it is new, yet nothing was gained.)
+	case (rNew >= rMin || busy) && n == lastLook,
+		!relieved && rNew >= rMin && n == t.looks[1] && dG < t.earlyFail*rNew:
+		// The added links carried traffic and the total did not rise enough:
+		// the path itself is full. (busy covers links brought back from
+		// retiring: they carry the flows they already had, so little of it is
+		// new, yet nothing was gained. A probe that seemed to relieve the
+		// pressure but raised nothing is judged the same way: keeping links
+		// needs a measured gain.)
 		a.pr = nil
 		a.chain = 0
 		a.T = pr.from
