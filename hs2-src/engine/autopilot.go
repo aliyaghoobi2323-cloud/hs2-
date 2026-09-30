@@ -47,13 +47,14 @@ type autopilot struct {
 	tun               apTunables
 	rnd               func() float64
 
-	T    int       // committed SERVING target
-	hist []apTick  // ring of the last tun.histTicks ticks
-	caps []apCap   // sustained rates of pressed serving links
-	pr   *apProbe  // an in-flight growth probe
-	k    int       // failed-probe backoff exponent
-	next time.Time // no new probe before this
-	fail struct {  // where growth last stopped helping
+	T     int       // committed SERVING target
+	hist  []apTick  // ring of the last tun.histTicks ticks
+	caps  []apCap   // sustained rates of pressed serving links
+	pr    *apProbe  // an in-flight growth probe
+	k     int       // failed-probe backoff exponent
+	chain int       // consecutive successful probes: bigger steps while demand climbs
+	next  time.Time // no new probe before this
+	fail  struct {  // where growth last stopped helping
 		at    time.Time
 		g     float64
 		flows int
@@ -110,6 +111,8 @@ type apTunables struct {
 	holdVoid          float64
 	undoWindow        time.Duration
 	kResetAfter       time.Duration
+	chainWindow       time.Duration // a success this recent lets the next probe step by half
+	activeRate        float64       // bytes/s: a link below this carries no traffic to judge
 }
 
 func defaultTunables() apTunables {
@@ -148,6 +151,8 @@ func defaultTunables() apTunables {
 		holdVoid:          0.6,
 		undoWindow:        2 * time.Hour,
 		kResetAfter:       30 * time.Minute,
+		chainWindow:       60 * time.Second,
+		activeRate:        float64(pressMinBytes) / healthTick.Seconds(),
 	}
 }
 
@@ -227,11 +232,15 @@ type apProbe struct {
 	armedAt  time.Time
 	settled  int
 	gb, varB float64
+	nb       int // baseline ticks
 	before   map[int]float64
 	evalG    []float64
 	evalNew  []float64
-	triggerP int
-	triggerS int
+	// evalShort counts eval ticks on which the links carrying traffic were
+	// still short of headroom; below half, the probe relieved the pressure.
+	evalShort int
+	triggerP  int
+	triggerS  int
 }
 
 func newAutopilot(min, max, perLink int) *autopilot {
@@ -357,7 +366,10 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 	fGrow := ceilDiv(fl5, a.perLink)
 	fHold := ceilDiv(fl60, a.perLink)
-	U := a.clamp(fl60 + 2) // links the active flows can use (connections are pinned)
+	// Links the active flows can use (connections are pinned). A pressed link
+	// carries at least one active flow even if its flows are too throttled to
+	// be counted.
+	U := a.clamp(max(fl60, p60) + 2)
 	cCap := a.capEstimate(now)
 	needBW := 0
 	if cCap > 0 && gPeak >= t.minBWForNeed {
@@ -444,8 +456,16 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 
 	// ---- 4 GROW: pressed links and nowhere unpressed for new flows ---------
-	if isShort && s.growable && S >= a.T && a.T < U && a.T < a.max && !now.Before(a.next) {
-		to := a.T + (a.T+3)/4
+	// (A probe needs a full baseline to be judged against.)
+	if isShort && s.growable && S >= a.T && a.T < U && a.T < a.max && !now.Before(a.next) && len(a.hist) >= t.baseTicks {
+		// Grow by a quarter; while probes keep succeeding back to back (demand
+		// is climbing), by half — each step is still verified before it is
+		// kept, so a full path costs one failed probe either way.
+		step := (a.T + 3) / 4
+		if a.chain > 0 && now.Sub(a.lastGrowAt) <= t.chainWindow {
+			step = (a.T + 1) / 2
+		}
+		to := a.T + step
 		if to > U {
 			to = U
 		}
@@ -455,13 +475,14 @@ func (a *autopilot) decide(s apSample) apDecision {
 		if to > a.T {
 			base := a.last(t.baseTicks)
 			gb, varB := meanVar(base, func(h apTick) float64 { return h.g })
+			nb := len(base)
 			before := map[int]float64{}
 			for _, l := range s.links {
 				if l.retiring {
 					before[l.id] = l.rate10
 				}
 			}
-			a.pr = &apProbe{from: a.T, to: to, start: now, gb: gb, varB: varB, before: before, triggerP: P, triggerS: S}
+			a.pr = &apProbe{from: a.T, to: to, start: now, gb: gb, varB: varB, nb: nb, before: before, triggerP: P, triggerS: S}
 			old := a.T
 			a.T = to
 			return a.out(s, S, R, apProbing, fmt.Sprintf("%d of %d links at their limit — trying %d", P, S, to),
@@ -516,6 +537,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		} else if now.Sub(pr.start) > t.armTimeout {
 			a.T = pr.from
 			a.pr = nil
+			a.chain = 0
 			a.next = now.Add(t.abortNext)
 			return a.out(s, S, R, apHolding, fmt.Sprintf("wanted %d links, only %d came up", pr.to, S),
 				fmt.Sprintf("pattern back to %d links: wanted %d but only %d came up in %s (peer not dialing or dials failing); retry in %s",
@@ -535,6 +557,23 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 	}
 	pr.evalG = append(pr.evalG, s.G)
 	pr.evalNew = append(pr.evalNew, newSum)
+	// Did the probe give the links that carry traffic headroom? When the
+	// path itself is full, every link moving data stays blocked by it, however
+	// many there are; when demand was simply met, they stop being blocked.
+	// Links without traffic (a probe link nothing reached yet, an old link
+	// whose flows moved) say nothing either way.
+	act, pAct := 0, 0
+	for _, l := range s.links {
+		if l.serving && l.rate >= t.activeRate {
+			act++
+			if l.pressed {
+				pAct++
+			}
+		}
+	}
+	if pAct >= 1 && act-pAct < spare(pAct) {
+		pr.evalShort++
+	}
 	n := len(pr.evalG)
 	isLook := false
 	for _, l := range t.looks {
@@ -547,9 +586,10 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — measuring (%d/%d)", pr.to, n, lastLook), "")
 	}
 	rNew := mean(pr.evalNew)
+	relieved := 2*pr.evalShort < n
 	gA, varA := meanVarF(pr.evalG)
 	dG := gA - pr.gb
-	se := math.Sqrt(pr.varB/float64(t.baseTicks) + varA/float64(n))
+	se := math.Sqrt(pr.varB/float64(pr.nb) + varA/float64(n))
 	rMin := t.rMinAbs
 	if pr.from > 0 {
 		if v := t.rMinFrac * pr.gb / float64(pr.from); v > rMin {
@@ -567,12 +607,26 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 	case rNew >= rMin && dG >= need:
 		a.pr = nil
 		a.k = 0
+		a.chain++
 		a.next = now.Add(t.successNext)
 		a.lastGrowAt = now
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: the new links added %.1f Mbit/s", a.T, mbitps(dG)),
 			fmt.Sprintf("pattern %d → %d links kept: +%.1f Mbit/s (new links carried %.1f)", pr.from, pr.to, mbitps(dG), mbitps(rNew)))
-	case rNew >= rMin && (n == lastLook || (n == t.looks[1] && dG < t.earlyFail*rNew)):
+	case rNew >= rMin && relieved && n == lastLook:
+		// The added links took new connections and no link is short any more,
+		// but the total barely moved: demand was nearly met already. Keep them
+		// as headroom (the shrink rule returns them if demand does not need
+		// them), without the backoff a full path earns.
 		a.pr = nil
+		a.chain = 0
+		a.next = now.Add(t.inconclusiveNext)
+		a.lastGrowAt = now
+		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no link is short of capacity any more", a.T),
+			fmt.Sprintf("pattern %d → %d links kept as headroom: new links carried %.1f Mbit/s and no link is at its limit any more (total %+.1f)",
+				pr.from, pr.to, mbitps(rNew), mbitps(dG)))
+	case rNew >= rMin && !relieved && (n == lastLook || (n == t.looks[1] && dG < t.earlyFail*rNew)):
+		a.pr = nil
+		a.chain = 0
 		a.T = pr.from
 		a.k++
 		a.fail.at, a.fail.g, a.fail.flows = now, pr.gb, fl60
@@ -587,6 +641,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 				pr.from, mbitps(pr.gb), pr.to-pr.from, mbitps(rNew), mbitps(dG), fmtDur(back)))
 	case n == lastLook:
 		a.pr = nil
+		a.chain = 0
 		a.next = now.Add(t.inconclusiveNext)
 		return a.out(s, S, R, apSteady, fmt.Sprintf("%d links: no new connection reached the added links yet — kept as spares", a.T),
 			fmt.Sprintf("pattern %d → %d links kept as spares: no new connection reached them yet (connections stay on their link)", pr.from, pr.to))

@@ -204,7 +204,8 @@ type managedLink struct {
 	open         int     // user streams open
 	recent       int     // user streams that moved a byte within drainIdle
 	lastByte     time.Time
-	picks        int // connections placed since the last sample
+	picks        int                 // connections placed since the last sample
+	pickHist     [pickWindow - 1]int // ... and in the samples before
 	lastRec      statsRec
 	haveRec      bool
 	lastRecAt    time.Time
@@ -849,8 +850,25 @@ func (a pickKey) less(b pickKey) bool {
 	return a.users < b.users
 }
 
-func (ml *managedLink) pickKey() pickKey {
-	return pickKey{pressed: ml.pressed, load: ml.flowing + ml.picks, users: int(ml.users.Load())}
+// newPickKey builds a link's key. Pressure is measured a few seconds late
+// (2 of 3 samples), so an unpressed link that has already taken half of
+// perLink new connections within that window counts as pressed until its
+// measurement catches up: a burst spreads over every link instead of piling
+// onto the few that looked free. recentPicks covers the last pickWindow
+// samples, picks only the current one.
+func newPickKey(pressed bool, flowing, picks, recentPicks, users, perLink int) pickKey {
+	return pickKey{pressed: pressed || recentPicks >= max(1, perLink/2), load: flowing + picks, users: users}
+}
+
+// pickWindow is how many samples of placements count toward the burst cap.
+const pickWindow = 3
+
+func (ml *managedLink) recentPicks() int {
+	n := ml.picks
+	for _, p := range ml.pickHist {
+		n += p
+	}
+	return n
 }
 
 // Pick returns the best link for a NEW user connection, and a release func to
@@ -899,7 +917,7 @@ func (m *LinkManager) pickLocked() *managedLink {
 					continue
 				}
 			}
-			k := ml.pickKey()
+			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
 			switch {
 			case chosen == nil || k.less(best):
 				chosen, best, ties = ml, k, 1
@@ -1004,7 +1022,8 @@ func (m *LinkManager) sampleHealth() {
 		if !o.alive {
 			continue
 		}
-		ml.picks = 0
+		copy(ml.pickHist[1:], ml.pickHist[:len(ml.pickHist)-1])
+		ml.pickHist[0], ml.picks = ml.picks, 0
 		ml.flowing, ml.open, ml.recent = o.fs.flowing, o.fs.open, o.fs.recent
 		if o.fs.last.After(ml.lastByte) {
 			ml.lastByte = o.fs.last

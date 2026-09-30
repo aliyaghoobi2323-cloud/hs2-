@@ -32,11 +32,20 @@ const (
 	// degradeStreak: consecutive bad samples before a link is declared degraded,
 	// so a brief loss burst is not enough.
 	degradeStreak = 3
-	// flowTau / flowingRate: a user stream is "flowing" (real traffic, counted
-	// for sizing) while its rate EWMA with time constant flowTau is at least
-	// flowingRate. Handshakes and keepalives stay far below it.
+	// flowTau / flowingRate / flowRecent: a user stream is "flowing" (real
+	// traffic, counted for sizing) while its rate EWMA with time constant
+	// flowTau is at least flowingRate and it moved a byte within flowRecent,
+	// or while it moves data steadily (flowSteadyRate).
+	// Handshakes and keepalives stay far below the rate; the recency cut ends
+	// a finished burst (a page load) at once instead of along the EWMA's tail.
 	flowTau     = 10 * time.Second
 	flowingRate = 2 << 10 // bytes/s (16 kbit/s)
+	flowRecent  = 6 * time.Second
+	// flowSteadyRate: a stream that moved at least this much in each of the
+	// last 3 samples is flowing whatever its average — many flows sharing a
+	// severely throttled link each get very little, but they never pause,
+	// unlike a handshake (one sample) or a keepalive (one every half minute).
+	flowSteadyRate = 256 // bytes/s
 	// blockedMin: a Write shorter than this is CPU work (copying/encrypting a
 	// 16 KiB frame takes microseconds), not a wait for the network; only longer
 	// waits count as the link being path-limited. Without this filter a writer

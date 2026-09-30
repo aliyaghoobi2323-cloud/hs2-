@@ -104,10 +104,10 @@ type flowSource interface {
 
 // flowStats updates each open user stream's rate EWMA (τ = flowTau) from the
 // bytes it moved since the last call and reports how many are "flowing". A
-// stream counts as flowing at >= flowingRate: a reconnect handshake (~4 KiB
-// once) peaks well below that and keepalives never reach it, while any real
-// transfer — even one of eight flows sharing a 400 kbit/s throttled link —
-// does. Only the pool's sampler goroutine calls this, so the per-stream
+// stream counts as flowing at >= flowingRate while it is still moving data
+// (within flowRecent): a reconnect handshake (~4 KiB once) peaks well below
+// the rate and keepalives never reach it, while any real transfer — even one
+// of eight flows sharing a 400 kbit/s throttled link — does. Only the pool's sampler goroutine calls this, so the per-stream
 // bookkeeping needs no atomics; the data path only does one atomic add.
 func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 	var fs flowSnap
@@ -116,17 +116,20 @@ func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 	defer l.flowMu.Unlock()
 	for cs := range l.flows {
 		b := cs.bytes.Load()
+		steady := false
 		if b != cs.prevBytes {
 			if dt > 0 {
 				rate := float64(b-cs.prevBytes) / dt.Seconds()
 				cs.ewma += float32(alpha * (rate - float64(cs.ewma)))
+				steady = rate >= flowSteadyRate
 			}
 			cs.prevBytes, cs.lastActive = b, now
 		} else if dt > 0 {
 			cs.ewma -= float32(alpha * float64(cs.ewma))
 		}
+		cs.steady = (cs.steady<<1 | b2u(steady)) & 7
 		fs.open++
-		if float64(cs.ewma) >= flowingRate {
+		if float64(cs.ewma) >= flowingRate && now.Sub(cs.lastActive) <= flowRecent || cs.steady == 7 {
 			fs.flowing++
 		}
 		if now.Sub(cs.lastActive) <= recent {
@@ -206,6 +209,7 @@ type countedStream struct {
 	prevBytes  uint64
 	lastActive time.Time
 	ewma       float32 // bytes/s, time constant flowTau
+	steady     uint8   // last 3 samples: moved at least flowSteadyRate
 }
 
 func (c *countedStream) Read(p []byte) (int, error) {
