@@ -121,7 +121,7 @@ func runLab(t *testing.T, cfg netsim.Config, dur time.Duration, payloadSize int,
 					return
 				case <-tk.C:
 					s := cli.Stats()
-					t.Logf("  [rate] btlBw=%.2f Mbit rtProp=%s loss=%dppm parity=%.2f", s.BtlBwBytes*8/1e6, s.RTProp, s.LossPPM, s.ParityRatio)
+					t.Logf("  [rate] btlBw=%.2f Mbit rtProp=%s loss=%dppm parity=%.2f queue=%.1fms", s.BtlBwBytes*8/1e6, s.RTProp, s.LossPPM, s.ParityRatio, cli.rc.queueSec()*1000)
 				}
 			}
 		}()
@@ -221,16 +221,37 @@ func TestLabBursty26(t *testing.T) {
 		t.Fatalf("expected a substantially lossy path, got %.1f%%", res.wireLossPct)
 	}
 	// FEC should recover most of the burst loss: residual well below the wire
-	// loss. The absolute residual on this profile lands around 3-6%%.
+	// loss. The absolute residual on this profile lands around 6-9% with the
+	// path kept full (the pre-2026-09 controller left ~30% of this path idle
+	// and landed at 4-10%, which made a 7% bar flaky).
 	if res.residualPct > res.wireLossPct*0.4 {
 		t.Fatalf("FEC recovered too little: residual %.2f%% vs wire %.1f%%", res.residualPct, res.wireLossPct)
 	}
-	if res.residualPct > 7 {
+	if res.residualPct > 14 {
 		t.Fatalf("residual loss too high: %.2f%%", res.residualPct)
 	}
-	// The point of the carrier: latency stays stable (low jitter) despite bursts.
-	if res.jitterMs > 200 {
-		t.Fatalf("jitter too high for a stable path: %.1f ms", res.jitterMs)
+	// The rate controller keeps the 20 Mbit/s bottleneck full: with ~140%
+	// parity that is ~7.5-8 Mbit/s of goodput (the old controller left the
+	// path a third idle and got 4.6-5.8). Filling the path exposes more
+	// packets to the bursts, so more ride FEC recovery — the tail latency below
+	// is FEC recovery time ON TOP of the pacing queue. Under 26% bursty loss the
+	// queue does NOT sit at the 10 ms target: the bursts swing the bottleneck's
+	// arrivals, so the queue random-walks around the target and runs tens of ms
+	// (the matching sim case, 20mbit-rtt50ms-bursty26, measures queue mean ~38 ms
+	// and p95 ~87 ms). This is the cost of recovering 26% loss at the full rate
+	// rather than leaving bandwidth unused.
+	if res.goodputMbps < 6.5 {
+		t.Fatalf("goodput %.2f Mbit/s: the bottleneck is not being filled", res.goodputMbps)
+	}
+	// Tail latency is dominated by FEC recovery of the bursts (a rebuilt
+	// packet waits up to the decoder ttl), which grows with how much of the
+	// path is used; on this profile p95-p50 runs ~90-260 ms. That FEC recovery
+	// sits on top of the pacing queue, which under this bursty profile itself
+	// runs tens of ms — the sim suite bounds that queue (its bursty26 cases cap
+	// p95 at 150 ms and measure ~38 ms mean / ~87 ms p95), well short of the
+	// 300 ms buffer, rather than holding it at 10 ms.
+	if res.jitterMs > 320 {
+		t.Fatalf("jitter too high even for FEC recovery: %.1f ms", res.jitterMs)
 	}
 }
 
@@ -257,9 +278,13 @@ func TestLabAdaptiveStep(t *testing.T) {
 	if res.parityRatioEnd < 0.3 {
 		t.Fatalf("FEC did not raise parity after the loss jump: r/k=%.2f", res.parityRatioEnd)
 	}
-	// The run spans the transition, so residual is higher than steady state.
-	if res.residualPct > 10 {
-		t.Fatalf("residual loss too high after adaptation: %.3f%%", res.residualPct)
+	// The run spans the transition, so residual is higher than steady state;
+	// at ~50% bursty loss the parity ceiling (1.5·k) leaves residual loss
+	// whatever the pacing, and a controller that keeps sending through the
+	// lossy half (more goodput) weights it more. FEC must still recover at
+	// least half of the wire loss.
+	if res.residualPct > res.wireLossPct*0.6 || res.residualPct > 20 {
+		t.Fatalf("residual loss too high after adaptation: %.3f%% (wire %.1f%%)", res.residualPct, res.wireLossPct)
 	}
 }
 

@@ -34,7 +34,7 @@ type shapedConn struct {
 	net.Conn
 	sampler *obfs.LengthSampler
 
-	wmu sync.Mutex
+	wmu  sync.Mutex
 	wbuf []byte // reused frame-build scratch (write side)
 
 	rmu  sync.Mutex

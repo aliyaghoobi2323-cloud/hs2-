@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 )
 
 // Listener is the responder side of the UDP carrier. It owns one shared
@@ -19,7 +20,7 @@ import (
 // fails is dropped silently, so a probe with a random or stale first message
 // gets no reply — the same probe resistance the TCP carriers have.
 type Listener struct {
-	conn      *net.UDPConn
+	conn      *packetSocket
 	shared    []byte
 	innerMTU  int
 	cliStatic core.StaticKey
@@ -43,11 +44,19 @@ type Listener struct {
 type peerLink struct {
 	c      *Conn
 	m1, m2 []byte
-	local  net.IP // the local address this peer targeted; replies leave from it
+	local  net.IP // the local address this peer targeted; replies leave from it (udp pktinfo)
 }
 
 // Listen binds a UDP socket and serves carriers derived from the shared secret.
 func Listen(addr string, shared []byte, innerMTU int) (*Listener, error) {
+	return ListenCfg(addr, EncapConfig{}, shared, innerMTU)
+}
+
+// ListenCfg is the general listener: it serves carriers over the chosen
+// encapsulation (udp by default, or a raw icmp/gre/ipip/ipx transport). The
+// per-peer demux, responder handshake, key confirmation, FEC and pacing are
+// identical for every encapsulation; only the outer socket differs.
+func ListenCfg(addr string, ec EncapConfig, shared []byte, innerMTU int) (*Listener, error) {
 	if innerMTU <= 0 {
 		innerMTU = DefaultInnerMTU
 	}
@@ -55,17 +64,12 @@ func Listen(addr string, shared []byte, innerMTU int) (*Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	ua, err := net.ResolveUDPAddr("udp", addr)
+	pc, err := encap.Listen(ec.Kind, addr, ec.listenOptions(shared))
 	if err != nil {
 		return nil, err
 	}
-	conn, err := net.ListenUDP(listenNetwork(ua), ua)
-	if err != nil {
-		return nil, err
-	}
-	enablePktinfo(conn) // wildcard bind: reply from the IP each peer targeted
 	l := &Listener{
-		conn:      conn,
+		conn:      newPacketSocket(pc), // wildcard UDP: reply from the IP each peer targeted
 		shared:    shared,
 		innerMTU:  innerMTU,
 		cliStatic: client,
@@ -81,14 +85,13 @@ func Listen(addr string, shared []byte, innerMTU int) (*Listener, error) {
 }
 
 // LocalAddr is the bound address (useful when the port was chosen as :0).
-func (l *Listener) LocalAddr() net.Addr { return l.conn.LocalAddr() }
+func (l *Listener) LocalAddr() net.Addr { return l.conn.localAddr() }
 
 func (l *Listener) serve() {
 	defer l.wg.Done()
 	buf := make([]byte, 2048)
-	oob := make([]byte, pktinfoOOB)
 	for {
-		n, addr, dst, err := readWithDst(l.conn, buf, oob)
+		n, addr, dst, err := l.conn.readFrom(buf)
 		if err != nil {
 			select {
 			case <-l.done:
@@ -96,6 +99,9 @@ func (l *Listener) serve() {
 			default:
 			}
 			// transient read error: keep serving
+			continue
+		}
+		if addr == nil {
 			continue
 		}
 		key := addr.String()
@@ -124,14 +130,14 @@ func (l *Listener) serve() {
 }
 
 // send writes one datagram to addr from source src (nil: kernel's choice).
-func (l *Listener) send(b []byte, addr *net.UDPAddr, src net.IP) error {
-	return writeFrom(l.conn, b, addr, src)
+func (l *Listener) send(b []byte, addr net.Addr, src net.IP) error {
+	return l.conn.writeTo(b, addr, src)
 }
 
 // tryHandshake runs the responder handshake for a datagram from a new address.
 // dst is the local address the peer sent to; every reply to this peer leaves
 // from it, so the peer's connected socket accepts them.
-func (l *Listener) tryHandshake(m1 []byte, addr *net.UDPAddr, dst net.IP) {
+func (l *Listener) tryHandshake(m1 []byte, addr net.Addr, dst net.IP) {
 	hs, _, err := l.resp.ReadMessage1Payload(m1)
 	if err != nil {
 		return // not a valid first message: silent drop (probe resistance)
@@ -199,7 +205,7 @@ func (l *Listener) Accept(ctx context.Context) (*Conn, error) {
 func (l *Listener) Close() error {
 	l.closed.Do(func() {
 		close(l.done)
-		l.conn.Close()
+		l.conn.close()
 		// Collect the carriers under the lock, then close them WITHOUT holding
 		// it: Conn.Close calls back into onClose, which locks l.mu.
 		l.mu.Lock()

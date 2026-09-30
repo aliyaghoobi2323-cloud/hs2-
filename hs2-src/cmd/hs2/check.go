@@ -68,6 +68,24 @@ func isLocalIP(ip net.IP) bool {
 var knownCarriers = map[string]bool{
 	"mtcp": true, "l3mtcp": true, "l3": true, "tls": true,
 	"udp": true, "auto": true, "noise": true, "reality": true,
+	"dgtun": true,
+}
+
+// ipxHandledProtos mirrors encap.ipxHandledProtos: IP protocol numbers the
+// kernel handles or that are reserved, which ipx must avoid.
+var ipxHandledProtos = map[int]bool{
+	0: true, 1: true, 2: true, 4: true, 6: true, 17: true, 33: true, 41: true,
+	43: true, 44: true, 46: true, 47: true, 50: true, 51: true, 58: true, 59: true,
+	60: true, 88: true, 89: true, 92: true, 94: true, 97: true, 98: true, 103: true,
+	108: true, 112: true, 115: true, 132: true, 136: true, 137: true, 143: true, 255: true,
+}
+
+func validIPXProto(p int) bool { return p >= 1 && p <= 254 && !ipxHandledProtos[p] }
+
+// knownEncaps are the datagram-tun encapsulations (carrier "dgtun"). Empty is
+// udp. Kept here (not imported from encap) so check builds without cgo/root.
+var knownEncaps = map[string]bool{
+	"": true, "udp": true, "icmp": true, "gre": true, "ipip": true, "ipx": true,
 }
 
 // checkConfig returns the errors and warnings for one config. localIP decides
@@ -118,10 +136,11 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		carrier = "noise"
 	}
 	if !knownCarriers[carrier] {
-		bad(`unknown "carrier" %q (mtcp, l3mtcp, tls, udp, auto)`, fc.Carrier)
+		bad(`unknown "carrier" %q (mtcp, l3mtcp, tls, udp, auto, dgtun)`, fc.Carrier)
 		return
 	}
 	stream := carrier == "mtcp" || carrier == "l3mtcp" || carrier == "l3" || carrier == "tls"
+	dgtun := carrier == "dgtun"
 	withTUN := carrier != "mtcp"
 	dials := dialing(fc)
 	edge := fc.Mode == "dial"
@@ -238,6 +257,49 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 				warn("certificate expired on %s — renew it (certbot renew), then restart", leaf.NotAfter.Format("2006-01-02"))
 			case left < 14*24*time.Hour:
 				warn("certificate expires in %d days (%s)", int(left.Hours()/24), leaf.NotAfter.Format("2006-01-02"))
+			}
+		}
+	}
+
+	// Datagram tun (carrier "dgtun"): a routed TUN over a pool of datagram
+	// carriers. Validate the encapsulation, the pool envelope, and — when the
+	// userspace port forwarder is used — the ports and the panel.
+	if dgtun {
+		if !knownEncaps[fc.Encap] {
+			bad(`unknown "encap" %q (udp, icmp, gre, ipip, ipx)`, fc.Encap)
+		}
+		if fc.Encap == "ipx" {
+			if p := fc.Proto; p != 0 && !validIPXProto(p) {
+				bad(`"proto" %d cannot be used for ipx: it is a reserved number or one the kernel already handles (ICMP/IGMP/IPIP/TCP/UDP/GRE/ESP/AH/OSPF/SCTP/MPLS/…). Pick an unassigned number; 253 (the default) is safe`, p)
+			}
+		} else if fc.Proto != 0 {
+			warn(`"proto" only applies to the ipx encapsulation; it is ignored for %q`, fc.Encap)
+		}
+		if fc.Encap == "icmp" && !dials {
+			warn(`encap icmp: this side answers the tunnel's echo requests, so the kernel's own ping replies to its tun IP are turned off — real traffic is unaffected, but "ping %s" from the peer will not answer`, ipOfCIDR(fc.LocalCIDR))
+		}
+		if fc.MinLinks < 0 || fc.MaxLinks < 0 || fc.PerLink < 0 {
+			bad(`"min_links", "max_links" and "per_link" cannot be negative`)
+		} else if fc.MinLinks > 0 && fc.MaxLinks > 0 && fc.MinLinks > fc.MaxLinks {
+			bad(`"min_links" (%d) is larger than "max_links" (%d)`, fc.MinLinks, fc.MaxLinks)
+		}
+		ports := splitComma(fc.ForwardPorts)
+		seen := map[string]bool{}
+		for _, pt := range ports {
+			n, err := strconv.Atoi(pt)
+			if err != nil || n < 1 || n > 65535 {
+				bad(`"forward_ports": %q is not a valid port`, pt)
+				continue
+			}
+			if seen[pt] {
+				warn(`"forward_ports": port %s is listed twice`, pt)
+			}
+			seen[pt] = true
+		}
+		// The exit maps the forwarded ports to the panel, so it needs one.
+		if !edge && len(ports) > 0 {
+			if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
+				bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443") when "forward_ports" is set, got %q`, fc.Expose)
 			}
 		}
 	}

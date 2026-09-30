@@ -1,0 +1,543 @@
+package udpcarrier
+
+import (
+	"fmt"
+	"math"
+	"math/rand/v2"
+	"os"
+	"sort"
+	"testing"
+	"time"
+)
+
+// A deterministic path simulator for the rate controller: the real
+// rateControl (onSent/onFeedback/pacingRate) drives a saturating sender into a
+// modelled path — loss before the bottleneck (i.i.d. or time-based bursty), a
+// FIFO bottleneck of fixed capacity with a tail-drop buffer, propagation delay
+// each way — and receives the same feedback the carrier sends (every 100 ms,
+// with the one-way delay of our last report measured on a peer clock that is
+// offset from ours). It runs in simulated time, so a 60 s scenario takes
+// milliseconds and every run is reproducible.
+
+type simPath struct {
+	capBps      float64       // bottleneck, bits/s
+	oneWay      time.Duration // propagation, each way
+	buffer      time.Duration // bottleneck buffer before tail drop
+	lossIID     float64       // pre-bottleneck i.i.d. loss
+	burstLoss   float64       // bursty: loss in the bad state
+	burstGoodMs float64
+	burstBadMs  float64
+	appRateBps  float64 // 0 = saturating sender; else the app offers this much
+	appUntilMs  float64 // if > 0, appRateBps applies only before this time; saturating after
+	capAfter    float64 // if > 0, capacity changes to this at changeAt
+	policeBps   float64 // if > 0, a per-flow token-bucket policer (DPI throttling) before the bottleneck
+	policeBurst float64 // bytes
+	crossFrac   float64 // if > 0, cross-traffic takes this fraction of the bottleneck while active
+	crossOnMs   float64 // cross-traffic on/off period (ms); it builds a queue we did not build
+	changeAt    time.Duration
+	// noStamps models a peer too old to stamp one-way delay: reports never carry
+	// OWD, so the controller must fall back to the RTT-minus-base queue (rttQ).
+	noStamps bool
+	// noDelaySignal models a path with NO usable delay signal at all: no OWD, and
+	// the reported RTT is pinned to the bare propagation RTT however much we
+	// overdrive, so a standing queue is invisible. Startup can then end only via
+	// the round-count backstop (startCap). Implies no stamps.
+	noDelaySignal bool
+}
+
+type simResult struct {
+	util      float64 // delivered / capacity, after warm-up
+	qMean     float64 // ms, bottleneck queueing delay seen by data
+	qP95      float64
+	tailDrops int // after warm-up
+	rateCV    float64
+	finalRate float64 // Mbit/s
+}
+
+func (r simResult) String() string {
+	return fmt.Sprintf("util=%.0f%% queue mean=%.1fms p95=%.1fms tail-drops=%d rate-cv=%.2f final=%.1fMbit",
+		r.util*100, r.qMean, r.qP95, r.tailDrops, r.rateCV, r.finalRate)
+}
+
+var (
+	simTrace      func(string)
+	simTraceUntil = 30 * time.Second
+)
+
+type ge struct {
+	bad   bool
+	until float64 // ms
+}
+
+func runRateSim(p simPath, dur, warm time.Duration, seed uint64) simResult {
+	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
+	rc := newRateControl()
+	base := time.Unix(1_700_000_000, 0)
+	at := func(ms float64) time.Time { return base.Add(time.Duration(ms * float64(time.Millisecond))) }
+	const pkt = 1200.0
+	const step = 0.25        // ms
+	peerOffset := 123456.789 // ms: the peer's clock runs this far ahead of ours
+
+	capB := p.capBps / 8 / 1000 // bytes per ms
+	var g ge
+	lost := func(now float64) bool {
+		if p.burstBadMs > 0 {
+			for now >= g.until {
+				g.bad = !g.bad
+				m := p.burstGoodMs
+				if g.bad {
+					m = p.burstBadMs
+				}
+				g.until += rng.ExpFloat64() * m
+			}
+			if g.bad {
+				return rng.Float64() < p.burstLoss
+			}
+			return rng.Float64() < p.lossIID
+		}
+		return p.lossIID > 0 && rng.Float64() < p.lossIID
+	}
+
+	type inflight struct {
+		arrive float64
+		bytes  float64
+		fb     bool    // our feedback frame (carries sendMs)
+		sendMs float64 // our clock
+		seq    uint64  // data wire sequence
+	}
+	// Bottleneck: departures computed from a busy-until clock.
+	busyUntil := 0.0
+	var toPeer []inflight // ordered by arrival (FIFO bottleneck keeps order)
+
+	// Peer (receiver) state.
+	var rxBytes, wireSeq, wireHigh, wireRecv uint64
+	var lastHigh, lastRecv uint64
+	owdMin, haveOWD := 0.0, false              // this interval's min stamped one-way delay, ms
+	var peerLastFbSend, peerLastFbRecv float64 // ms, ours / peer clock
+	havePeerFb := false
+	// Reports in flight back to us (reverse path uncongested).
+	type report struct {
+		arrive                       float64
+		rx                           uint64
+		lossPPM                      uint32
+		echo, echoDelay, owd, sentAt float64
+		haveEcho                     bool
+		owdTicks                     uint32
+		haveOWD                      bool
+	}
+	var toUs []report
+
+	tokens := 0.0
+	appTokens := 0.0
+	var qs []float64
+	var rates []float64
+	delivered := 0.0
+	tailDrops := 0
+	lastFb := 0.0
+	nextPeerFb := 50.0
+	endMs := float64(dur / time.Millisecond)
+	warmMs := float64(warm / time.Millisecond)
+
+	polTokens, polLast := p.policeBurst, 0.0
+	policed := func(now, bytes float64) bool {
+		if p.policeBps <= 0 {
+			return false
+		}
+		polTokens = math.Min(p.policeBurst, polTokens+(now-polLast)*p.policeBps/8/1000)
+		polLast = now
+		if polTokens < bytes {
+			return true
+		}
+		polTokens -= bytes
+		return false
+	}
+	send := func(now float64, bytes float64, fb bool) {
+		var seq uint64
+		if !fb {
+			wireSeq++
+			seq = wireSeq
+		}
+		if lost(now) || policed(now, bytes) {
+			return
+		}
+		start := math.Max(now, busyUntil)
+		if start-now > float64(p.buffer/time.Millisecond) {
+			if now >= warmMs && !fb {
+				tailDrops++
+			}
+			return
+		}
+		busyUntil = start + bytes/capB
+		if !fb && now >= warmMs {
+			qs = append(qs, start-now)
+		}
+		toPeer = append(toPeer, inflight{arrive: busyUntil + float64(p.oneWay/time.Millisecond), bytes: bytes, fb: fb, sendMs: now, seq: seq})
+	}
+
+	for now := 0.0; now < endMs; now += step {
+		if p.capAfter > 0 && now >= float64(p.changeAt/time.Millisecond) {
+			capB = p.capAfter / 8 / 1000
+		}
+		if p.crossFrac > 0 && p.crossOnMs > 0 {
+			base := p.capBps
+			if p.capAfter > 0 && now >= float64(p.changeAt/time.Millisecond) {
+				base = p.capAfter
+			}
+			// square wave: cross-traffic present for the first half of each period
+			if int(now/p.crossOnMs)%2 == 0 {
+				capB = base * (1 - p.crossFrac) / 8 / 1000
+			} else {
+				capB = base / 8 / 1000
+			}
+		}
+		// Sender: pace data.
+		rate := rc.pacingRate(at(now)) / 1000 // bytes per ms
+		tokens = math.Min(tokens+rate*step, math.Max(2*pkt, rate*2))
+		appLimited := p.appRateBps > 0 && (p.appUntilMs == 0 || now < p.appUntilMs)
+		if appLimited {
+			appTokens = math.Min(appTokens+p.appRateBps/8/1000*step, 64*pkt)
+		}
+		for tokens >= pkt && (!appLimited || appTokens >= pkt) {
+			tokens -= pkt
+			appTokens -= pkt
+			rc.onSent(int(pkt))
+			send(now, pkt, false)
+		}
+		// Sender: our feedback frame every 100 ms (raw, unpaced).
+		if now-lastFb >= 100 {
+			lastFb = now
+			send(now, 60, true)
+		}
+		// Deliveries to the peer.
+		for len(toPeer) > 0 && toPeer[0].arrive <= now {
+			d := toPeer[0]
+			toPeer = toPeer[1:]
+			if d.fb {
+				peerLastFbSend, peerLastFbRecv, havePeerFb = d.sendMs, now+peerOffset, true
+				continue
+			}
+			wireRecv++
+			if d.seq > wireHigh {
+				wireHigh = d.seq
+			}
+			if o := now + peerOffset - d.sendMs; !haveOWD || o < owdMin {
+				owdMin, haveOWD = o, true
+			}
+			rxBytes += uint64(d.bytes)
+			if now >= warmMs {
+				delivered += d.bytes
+			}
+		}
+		// Peer: report every 100 ms over the reverse path.
+		if now >= nextPeerFb {
+			nextPeerFb += 100
+			span := wireHigh - lastHigh
+			recv := wireRecv - lastRecv
+			lastHigh, lastRecv = wireHigh, wireRecv
+			var ppm uint32
+			if span > 0 && recv < span {
+				ppm = uint32(float64(span-recv) / float64(span) * 1e6)
+			}
+			r := report{arrive: now + float64(p.oneWay/time.Millisecond), rx: rxBytes, lossPPM: ppm}
+			if haveOWD {
+				// A peer that stamps reports the min OWD. noStamps/noDelaySignal
+				// model a peer (or path) that does not, so the OWD is withheld
+				// while the interval min is still reset for the next window.
+				if !p.noStamps && !p.noDelaySignal {
+					r.owdTicks, r.haveOWD = uint32(int64(owdMin*8)), true
+				}
+				haveOWD = false
+			}
+			if havePeerFb {
+				r.haveEcho = true
+				if p.noDelaySignal {
+					// Pin the reported RTT to the bare propagation RTT (2*oneWay):
+					// with r.echo one propagation ahead of send and no hold, the
+					// consumer computes rtt = arrive - echo = 2*oneWay regardless
+					// of the real forward queue. The queue estimate stays ~0, so
+					// no delay signal ever reaches the controller.
+					r.echo = now - float64(p.oneWay/time.Millisecond)
+					r.echoDelay = 0
+					r.owd = 0
+				} else {
+					r.echo = peerLastFbSend
+					r.echoDelay = (now + peerOffset) - peerLastFbRecv
+					r.owd = peerLastFbRecv - peerLastFbSend
+				}
+			}
+			if !lost(now) {
+				toUs = append(toUs, r)
+			}
+		}
+		for len(toUs) > 0 && toUs[0].arrive <= now {
+			r := toUs[0]
+			toUs = toUs[1:]
+			var rtt float64
+			var echo int64
+			if r.haveEcho {
+				rtt = (now - r.echo - r.echoDelay) / 1000
+				echo = at(r.echo).UnixNano()
+			}
+			rc.onFeedback(at(now), r.rx, rtt, r.lossPPM, echo, r.owdTicks, r.haveOWD)
+			if simTrace != nil && now < float64(simTraceUntil/time.Millisecond) {
+				simTrace(fmt.Sprintf("t=%6.0fms rate=%7.2f bl=%4.2f fl=%4.2f qs=%6.1f busy=%6.1f st=%v cap=%.1f btl=%.1f loss=%d",
+					now, rc.rate*8/1e6, rc.baseLoss, rc.fullLoss, rc.queue*1000, math.Max(0, busyUntil-now), rc.startup, rc.capEst*8/1e6, rc.btlBw*8/1e6, r.lossPPM))
+			}
+			if now >= warmMs {
+				rates = append(rates, rc.pacingRate(at(now))*8/1e6)
+			}
+		}
+	}
+	res := simResult{tailDrops: tailDrops, finalRate: rc.pacingRate(at(endMs)) * 8 / 1e6}
+	capWin := capB * (endMs - warmMs)
+	if p.capAfter > 0 {
+		capWin = p.capAfter / 8 / 1000 * (endMs - warmMs)
+	}
+	res.util = delivered / capWin
+	if len(qs) > 0 {
+		sort.Float64s(qs)
+		s := 0.0
+		for _, q := range qs {
+			s += q
+		}
+		res.qMean = s / float64(len(qs))
+		res.qP95 = qs[int(0.95*float64(len(qs)-1))]
+	}
+	if len(rates) > 1 {
+		m, v := 0.0, 0.0
+		for _, x := range rates {
+			m += x
+		}
+		m /= float64(len(rates))
+		for _, x := range rates {
+			v += (x - m) * (x - m)
+		}
+		res.rateCV = math.Sqrt(v/float64(len(rates))) / m
+	}
+	return res
+}
+
+type simCase struct {
+	name     string
+	p        simPath
+	minUtil  float64
+	maxQp95  float64 // ms
+	maxDrops int
+	maxQMean float64 // ms; 0 = skip (used where a shallow buffer clips p95)
+}
+
+func rateSimCases() []simCase {
+	ms := time.Millisecond
+	var cs []simCase
+	for _, c := range []struct {
+		mbit float64
+		ow   time.Duration
+	}{{2, 20 * ms}, {10, 40 * ms}, {20, 25 * ms}, {50, 60 * ms}, {100, 10 * ms}, {100, 150 * ms}, {500, 20 * ms}} {
+		name := fmt.Sprintf("%gmbit-rtt%dms", c.mbit, 2*c.ow/ms)
+		base := simPath{capBps: c.mbit * 1e6, oneWay: c.ow, buffer: 300 * ms}
+		cs = append(cs, simCase{name + "-clean", base, 0.95, 30, 0, 0})
+		iid := base
+		iid.lossIID = 0.05
+		cs = append(cs, simCase{name + "-iid5", iid, 0.95, 45, 0, 0})
+		// ~26% bursty loss (the real target path's profile): arrivals at
+		// the bottleneck swing with the bursts, so the queue random-walks
+		// around the target; it must still stay bounded, far from the buffer.
+		b := base
+		b.lossIID, b.burstLoss, b.burstGoodMs, b.burstBadMs = 0.02, 0.88, 30, 12
+		cs = append(cs, simCase{name + "-bursty26", b, 0.90, 150, 0, 0})
+	}
+	// A shallow bottleneck buffer: 15 ms, clean and with 5% loss. The 15 ms
+	// buffer tail-drops anything queued past it, so a p95 bound there is a
+	// tautology (it can never exceed the buffer). The biting assertions are
+	// instead: the queue MEAN stays near the 10 ms target, tail drops stay rare,
+	// and utilisation stays high — all three break the instant the controller
+	// overdrives a shallow buffer (verified: aiming the queue above the buffer
+	// pushes tail drops to tens of thousands and the mean to the buffer).
+	for _, tc := range []struct {
+		lossP    float64
+		maxDrops int
+	}{{0, 100}, {0.05, 400}} {
+		p := simPath{capBps: 30e6, oneWay: 30 * ms, buffer: 15 * ms, lossIID: tc.lossP}
+		cs = append(cs, simCase{
+			name:     fmt.Sprintf("30mbit-rtt60ms-buf15ms-loss%g", tc.lossP),
+			p:        p,
+			minUtil:  0.9,
+			maxQp95:  16,
+			maxDrops: tc.maxDrops,
+			maxQMean: 13,
+		})
+	}
+	return cs
+}
+
+// The controller fills the bottleneck while keeping its queue near the target
+// band — at low and high bandwidth, short and long RTT, clean, 5% i.i.d. and
+// 26% bursty loss — and never overflows a 300 ms buffer once it has settled.
+func TestRateSimMatrix(t *testing.T) {
+	for _, c := range rateSimCases() {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			r := runRateSim(c.p, 60*time.Second, 15*time.Second, 1)
+			t.Logf("%s: %s", c.name, r)
+			if r.util < c.minUtil {
+				t.Errorf("utilisation %.0f%% < %.0f%%", r.util*100, c.minUtil*100)
+			}
+			if r.qP95 > c.maxQp95 {
+				t.Errorf("queue p95 %.1f ms > %.0f ms", r.qP95, c.maxQp95)
+			}
+			if c.maxQMean > 0 && r.qMean > c.maxQMean {
+				t.Errorf("queue mean %.1f ms > %.0f ms (queue not held near target)", r.qMean, c.maxQMean)
+			}
+			if r.tailDrops > c.maxDrops {
+				t.Errorf("%d tail drops after settling (> %d)", r.tailDrops, c.maxDrops)
+			}
+		})
+	}
+}
+
+// When the path's capacity halves (or doubles) mid-run, the controller follows
+// it: no standing queue after the drop, and it grows into the new capacity.
+func TestRateSimCapacityChange(t *testing.T) {
+	ms := time.Millisecond
+	down := simPath{capBps: 40e6, oneWay: 30 * ms, buffer: 300 * ms, capAfter: 20e6, changeAt: 20 * time.Second}
+	r := runRateSim(down, 60*time.Second, 25*time.Second, 2)
+	t.Logf("40->20 Mbit: %s", r)
+	if r.util < 0.95 || r.qP95 > 30 {
+		t.Errorf("after a capacity drop: %s", r)
+	}
+	up := simPath{capBps: 10e6, oneWay: 30 * ms, buffer: 300 * ms, capAfter: 60e6, changeAt: 20 * time.Second}
+	r = runRateSim(up, 60*time.Second, 35*time.Second, 3)
+	t.Logf("10->60 Mbit: %s", r)
+	if r.util < 0.95 || r.qP95 > 30 {
+		t.Errorf("after a capacity rise: %s", r)
+	}
+}
+
+// An application-limited sender (the tunnel is idle or light) must not let
+// its allowance run away: when traffic later saturates, the first burst meets a
+// rate near what the path was last shown to carry, not an inflated one.
+func TestRateSimAppLimited(t *testing.T) {
+	ms := time.Millisecond
+	p := simPath{capBps: 50e6, oneWay: 20 * ms, buffer: 300 * ms, appRateBps: 5e6}
+	r := runRateSim(p, 30*time.Second, 10*time.Second, 4)
+	t.Logf("app-limited 5/50 Mbit: %s", r)
+	// The app never offers more than 5 Mbit/s, so the allowance must stay near
+	// the delivered rate — not climb toward the 50 Mbit/s path (which the old
+	// 60 Mbit/s bar, above capacity, could not catch). If the startup limited
+	// gate is dropped and the loose cap doubled the allowance runs to ~50 Mbit/s.
+	if r.finalRate > 15 {
+		t.Errorf("idle allowance grew to %.1f Mbit/s (delivered ~5 Mbit/s)", r.finalRate)
+	}
+	if r.qP95 > 10 {
+		t.Errorf("app-limited sender built a queue: %s", r)
+	}
+}
+
+func TestRateSimTrace(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	simTrace = func(s string) { t.Log(s) }
+	defer func() { simTrace = nil }()
+	ms := time.Millisecond
+	p := simPath{capBps: 20e6, oneWay: 25 * ms, buffer: 300 * ms}
+	switch os.Getenv("SIMTRACE") {
+	case "rtt300":
+		p = simPath{capBps: 100e6, oneWay: 150 * ms, buffer: 300 * ms}
+	case "police":
+		p = simPath{capBps: 100e6, oneWay: 20 * ms, buffer: 300 * ms, policeBps: 5e6, policeBurst: 64 << 10}
+	case "bursty":
+		p = simPath{capBps: 20e6, oneWay: 25 * ms, buffer: 300 * ms, lossIID: 0.02, burstLoss: 0.88, burstGoodMs: 30, burstBadMs: 12}
+	}
+	runRateSim(p, 30*time.Second, 5*time.Second, 5)
+}
+
+// Regression tests for the rate controller's startup and steady-state guards
+// (found by adversarial review of the 2026-09 rewrite).
+
+// A very slow path (well under 4×minRate) with no delay signal must not let
+// startup ramp the rate to maxRate: the round-count backstop ends startup.
+func TestRateSimSlowPathNoRunaway(t *testing.T) {
+	ms := time.Millisecond
+	// 300 kbit/s with NO usable delay signal: the peer reports a flat
+	// propagation RTT and never stamps OWD, so a standing queue is invisible to
+	// the controller. Startup therefore cannot end on the queue, and the plateau
+	// rule cannot fire either (it needs dRate > 4×minRate, and 300 kbit/s is
+	// below that) — only the round-count backstop (startCap) can stop it.
+	// Without that backstop the rate ramps to maxRate (verified: it reaches
+	// ~32 Gbit when startCap is removed).
+	r := runRateSim(simPath{capBps: 300e3, oneWay: 20 * ms, buffer: 5 * time.Second, noDelaySignal: true}, 40*time.Second, 20*time.Second, 6)
+	t.Logf("slow 300kbit no-signal: %s", r)
+	if r.finalRate > 5 { // Mbit/s — must stay near the path, never near maxRate
+		t.Errorf("rate ran away on a slow path: %.1f Mbit/s", r.finalRate)
+	}
+	if r.util < 0.7 {
+		t.Errorf("slow path under-utilised: %.0f%%", r.util*100)
+	}
+}
+
+// The RTT-fallback control path. A peer too old to stamp one-way delay never
+// reports OWD, so the controller must derive the forward queue from the
+// round-trip time over its minimum (rate.go's rttQ) rather than from stamps.
+// With no stamps at all it must still fill the path and hold the queue bounded —
+// clean and bursty, at a couple of bandwidths. (The stamped OWD path is what the
+// rest of the matrix exercises; without this, that fallback was never run.)
+func TestRateSimRTTFallback(t *testing.T) {
+	ms := time.Millisecond
+	for _, c := range []struct {
+		name             string
+		p                simPath
+		minUtil, maxQp95 float64
+	}{
+		{"10mbit-clean", simPath{capBps: 10e6, oneWay: 40 * ms, buffer: 300 * ms, noStamps: true}, 0.90, 30},
+		{"20mbit-clean", simPath{capBps: 20e6, oneWay: 25 * ms, buffer: 300 * ms, noStamps: true}, 0.90, 30},
+		{"20mbit-bursty", simPath{capBps: 20e6, oneWay: 25 * ms, buffer: 300 * ms, lossIID: 0.02, burstLoss: 0.88, burstGoodMs: 30, burstBadMs: 12, noStamps: true}, 0.85, 140},
+		{"10mbit-bursty", simPath{capBps: 10e6, oneWay: 40 * ms, buffer: 300 * ms, lossIID: 0.02, burstLoss: 0.88, burstGoodMs: 30, burstBadMs: 12, noStamps: true}, 0.85, 160},
+	} {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			r := runRateSim(c.p, 60*time.Second, 15*time.Second, 9)
+			t.Logf("rtt-fallback %s: %s", c.name, r)
+			if r.util < c.minUtil {
+				t.Errorf("utilisation %.0f%% < %.0f%%", r.util*100, c.minUtil*100)
+			}
+			// If the RTT-fallback branch is broken (queue forced to 0 when the
+			// peer does not stamp) the queue runs to the buffer (~300 ms p95).
+			if r.qP95 > c.maxQp95 {
+				t.Errorf("queue p95 %.1f ms > %.0f ms (RTT fallback not bounding the queue)", r.qP95, c.maxQp95)
+			}
+		})
+	}
+}
+
+// An app-limited start (the tunnel opens carrying light traffic) must not
+// leave the controller stuck at a tiny rate: when real traffic arrives it
+// must ramp. Models 2 Mbit/s of app traffic for 15 s, then saturating.
+func TestRateSimAppLimitedStartThenBurst(t *testing.T) {
+	ms := time.Millisecond
+	r := runRateSim(simPath{capBps: 50e6, oneWay: 20 * ms, buffer: 300 * ms, appRateBps: 2e6, appUntilMs: 15000}, 40*time.Second, 20*time.Second, 7)
+	t.Logf("app-limited start then saturate: %s", r)
+	if r.util < 0.9 {
+		t.Errorf("did not ramp after the app-limited start: util %.0f%%", r.util*100)
+	}
+}
+
+// Cross-traffic that periodically takes half the bottleneck (building a queue
+// the carrier did not build) must not collapse the carrier's rate to the floor:
+// when the cross-traffic ebbs, the carrier must use the freed capacity again.
+func TestRateSimCrossTraffic(t *testing.T) {
+	ms := time.Millisecond
+	p := simPath{capBps: 50e6, oneWay: 20 * ms, buffer: 300 * ms, crossFrac: 0.5, crossOnMs: 3000}
+	r := runRateSim(p, 60*time.Second, 20*time.Second, 8)
+	t.Logf("cross-traffic 50%%/3s: %s", r)
+	// Average available capacity is ~75% of 50 Mbit = 37.5 Mbit. The carrier
+	// should deliver a healthy share of what is available, far above the floor,
+	// and not have spiralled down (final rate well above minRate).
+	if r.finalRate < 10 {
+		t.Errorf("rate collapsed under cross-traffic: final %.1f Mbit/s", r.finalRate)
+	}
+	if r.util < 0.5 {
+		t.Errorf("carrier used only %.0f%% of the bottleneck under cross-traffic", r.util*100)
+	}
+}

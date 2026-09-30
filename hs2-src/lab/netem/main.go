@@ -25,6 +25,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -48,6 +50,10 @@ type dirCfg struct {
 	burstGoodMs float64
 	burstBadMs  float64
 	dropUDP     bool // drop all UDP frames (isolation test: block the UDP carrier)
+	// allow, when non-nil, is the set of IP protocols the path passes; every
+	// other IPv4 frame is dropped (ARP always passes). {1} models a path that
+	// carries only ICMP, like some Iran<->abroad links.
+	allow map[int]bool
 }
 
 // isUDP reports whether an Ethernet frame carries IPv4 UDP.
@@ -112,26 +118,41 @@ func openPacket(ifname string) (int, int) {
 	return fd, ifi.Index
 }
 
-// flowKey returns an IPv4 5-tuple key for TCP/UDP frames, or 0.
+// flowKey returns a per-flow key for an IPv4 frame, the way a DPI box that
+// polices each flow would see it: the 5-tuple for TCP/UDP, (src, dst, echo id)
+// for ICMP echo, (src, dst, key) for keyed GRE, and (src, dst, proto) for any
+// other IP protocol — which is why several links over a portless protocol are
+// still one flow to such a box. 0 = not IPv4.
 func flowKey(f []byte) uint64 {
 	if len(f) < 14+20 || binary.BigEndian.Uint16(f[12:14]) != 0x0800 {
 		return 0
 	}
 	ip := f[14:]
 	proto := ip[9]
-	if proto != 6 && proto != 17 {
-		return 0
-	}
 	ihl := int(ip[0]&0x0f) * 4
-	if len(ip) < ihl+4 {
-		return 0
+	key := append([]byte{proto}, ip[12:20]...)
+	switch {
+	case (proto == 6 || proto == 17) && len(ip) >= ihl+4:
+		key = append(key, ip[ihl:ihl+4]...) // ports
+	case proto == 1 && len(ip) >= ihl+8 && (ip[ihl] == 0 || ip[ihl] == 8):
+		key = append(key, ip[ihl+4:ihl+6]...) // echo identifier
+	case proto == 47 && len(ip) >= ihl+8 && ip[ihl]&0x20 != 0:
+		key = append(key, ip[ihl+4:ihl+8]...) // GRE key
 	}
 	h := uint64(14695981039346656037)
-	for _, c := range append(append([]byte{proto}, ip[12:20]...), ip[ihl:ihl+4]...) {
+	for _, c := range key {
 		h ^= uint64(c)
 		h *= 1099511628211
 	}
 	return h
+}
+
+// ipProto returns the IPv4 protocol of a frame, or -1 for non-IPv4 (ARP etc.).
+func ipProto(f []byte) int {
+	if len(f) < 14+20 || binary.BigEndian.Uint16(f[12:14]) != 0x0800 {
+		return -1
+	}
+	return int(f[14+9])
 }
 
 type policer struct {
@@ -171,6 +192,12 @@ func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 		if c.dropUDP && isUDP(buf[:n]) {
 			stats.add(name, "udpblock", n)
 			continue
+		}
+		if c.allow != nil {
+			if p := ipProto(buf[:n]); p >= 0 && !c.allow[p] {
+				stats.add(name, "blocked", n)
+				continue
+			}
 		}
 		if c.drop(ge, now) {
 			stats.add(name, "loss", n)
@@ -255,12 +282,24 @@ func main() {
 	flowRate := flag.String("flowrate", "0", "per-flow policer rate each way")
 	flowBurst := flag.Int("flowburst", 64<<10, "per-flow policer burst, bytes")
 	dropUDP := flag.Bool("dropudp", false, "drop all UDP frames (block the UDP carrier)")
+	allowP := flag.String("allow", "", "comma-separated IP protocol numbers the path passes (others dropped), e.g. 1 = ICMP only")
 	flag.Parse()
+	var allow map[int]bool
+	if *allowP != "" {
+		allow = map[int]bool{}
+		for _, f := range strings.Split(*allowP, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(f))
+			if err != nil {
+				log.Fatalf("netem: -allow %q: %v", *allowP, err)
+			}
+			allow[n] = true
+		}
+	}
 	fa, ia := openPacket(*a)
 	fb, ib := openPacket(*b)
 	ab := dirCfg{rate: parseRate(*rate), delay: *delay, queue: *queue, loss: *loss,
 		flowRate: parseRate(*flowRate), flowBurst: *flowBurst,
-		burstLoss: *burstLoss, burstGoodMs: *goodMs, burstBadMs: *badMs, dropUDP: *dropUDP}
+		burstLoss: *burstLoss, burstGoodMs: *goodMs, burstBadMs: *badMs, dropUDP: *dropUDP, allow: allow}
 	ba := ab
 	if *rateBA != "" {
 		ba.rate = parseRate(*rateBA)

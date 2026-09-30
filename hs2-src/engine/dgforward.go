@@ -1,0 +1,178 @@
+package engine
+
+import (
+	"context"
+	"net"
+	"sync"
+	"time"
+)
+
+// Userspace port forwarder for the datagram tun.
+//
+// The datagram carrier is unreliable (FEC recovers most loss, the rest is
+// ordinary packet loss), so user connections are NOT carried as a reliable
+// mux over the carrier — that would need a reliability layer, which is exactly
+// the TCP-in-TCP trap. Instead a user connection is proxied to the PEER'S TUN
+// ADDRESS, so its packets ride the tunnel as ordinary IP packets and the
+// endpoints' own TCP provides reliability end to end. There is no TCP inside
+// the carrier.
+//
+//	iran (edge):  user connects to <user_listen_ip>:P  ->  dial <peer_tun_ip>:P
+//	                (kernel routes peer_tun_ip over the TUN, so it rides the pool)
+//	kharej (exit): listen on <local_tun_ip>:P          ->  dial <panel>
+//
+// Both sides read the same port list from forward_ports, so port P on the edge
+// reaches the panel on the exit. TCP and (optionally) UDP.
+
+// forwardTarget builds "host:port".
+func forwardTarget(host, port string) string { return net.JoinHostPort(host, port) }
+
+// runForwarder opens a TCP (and optionally UDP) listener on listenAddr and
+// proxies every connection to dialAddr. Used on both ends of the datagram tun:
+// the edge dials the peer's tun address, the exit dials the panel.
+func runForwarder(ctx context.Context, listenAddr, dialAddr string, udp bool, logf func(string, ...any)) error {
+	ln, err := ListenReuse(listenAddr)
+	if err != nil {
+		return err
+	}
+	go func() { <-ctx.Done(); ln.Close() }()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go proxyTCP(ctx, c, dialAddr)
+		}
+	}()
+	if udp {
+		pc, err := net.ListenPacket("udp", listenAddr)
+		if err != nil {
+			ln.Close()
+			return err
+		}
+		go func() { <-ctx.Done(); pc.Close() }()
+		go proxyUDP(ctx, pc, dialAddr, logf)
+	}
+	return nil
+}
+
+// proxyTCP dials dialAddr and relays bytes both ways until either end closes.
+func proxyTCP(ctx context.Context, user net.Conn, dialAddr string) {
+	up, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", dialAddr)
+	if err != nil {
+		user.Close()
+		return
+	}
+	relay(user, up)
+}
+
+// udpProxyIdle is how long a UDP flow with no traffic is kept before its
+// upstream socket is closed.
+const udpProxyIdle = 90 * time.Second
+
+// proxyUDP forwards datagrams between clients and dialAddr, one upstream socket
+// per client source address, so the return path finds its way back.
+func proxyUDP(ctx context.Context, pc net.PacketConn, dialAddr string, logf func(string, ...any)) {
+	ua, err := net.ResolveUDPAddr("udp", dialAddr)
+	if err != nil {
+		return
+	}
+	type flow struct {
+		up   *net.UDPConn
+		last time.Time
+	}
+	var mu sync.Mutex
+	flows := map[string]*flow{}
+	go func() {
+		t := time.NewTicker(30 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+			mu.Lock()
+			for k, f := range flows {
+				if time.Since(f.last) > udpProxyIdle {
+					f.up.Close()
+					delete(flows, k)
+				}
+			}
+			mu.Unlock()
+		}
+	}()
+	buf := make([]byte, 65535)
+	for {
+		n, caddr, err := pc.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		key := caddr.String()
+		mu.Lock()
+		f := flows[key]
+		mu.Unlock()
+		if f == nil {
+			up, err := net.DialUDP("udp", nil, ua)
+			if err != nil {
+				continue
+			}
+			f = &flow{up: up, last: time.Now()}
+			mu.Lock()
+			flows[key] = f
+			mu.Unlock()
+			go func(f *flow, caddr net.Addr) {
+				rb := make([]byte, 65535)
+				for {
+					f.up.SetReadDeadline(time.Now().Add(udpProxyIdle))
+					m, err := f.up.Read(rb)
+					if err != nil {
+						break
+					}
+					pc.WriteTo(rb[:m], caddr)
+					mu.Lock()
+					f.last = time.Now()
+					mu.Unlock()
+				}
+				f.up.Close()
+				mu.Lock()
+				if flows[key] == f {
+					delete(flows, key)
+				}
+				mu.Unlock()
+			}(f, caddr)
+		}
+		f.up.Write(buf[:n])
+		mu.Lock()
+		f.last = time.Now()
+		mu.Unlock()
+	}
+}
+
+// startDgForwarders wires the userspace forwarders for the datagram tun on one
+// side. On the edge (iran) it opens each user port and proxies to the peer's
+// tun address; on the exit (kharej) it opens each port on the local tun address
+// and proxies to the panel. ports is forward_ports; both ends use the same list.
+// StartDgForwarders is the exported entry for cmd.
+func StartDgForwarders(ctx context.Context, edge bool, ports []string, userListenIP, peerTunIP, localTunIP, panel string, udp bool, logf func(string, ...any)) error {
+	for _, p := range ports {
+		var listenAddr, dialAddr string
+		if edge {
+			listenAddr = forwardTarget(userListenIP, p) // where users connect
+			dialAddr = forwardTarget(peerTunIP, p)      // over the TUN to the exit
+		} else {
+			listenAddr = forwardTarget(localTunIP, p) // arrives over the TUN
+			dialAddr = panel                          // to the real panel
+		}
+		if err := runForwarder(ctx, listenAddr, dialAddr, udp, logf); err != nil {
+			return err
+		}
+		if edge {
+			logf("dg: user port %s open, forwarded over the tun to the panel", p)
+		} else {
+			logf("dg: tun port %s -> panel %s", p, panel)
+		}
+	}
+	return nil
+}

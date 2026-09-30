@@ -2,6 +2,7 @@ package udpcarrier
 
 import (
 	"encoding/binary"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,9 +39,30 @@ type pacer struct {
 	sent     uint64
 	wireSeq  uint32 // pacer goroutine only
 	writeErr atomic.Pointer[error]
+	stamps   *atomic.Bool // the peer takes stamped datagrams (tagDataTS)
+
+	// Time bound on the data queue: queued counts the bytes waiting (data
+	// and parity), and enqueue of DATA waits while it exceeds what the
+	// current rate sends in pacerQueueTime. A fixed packet count is a time
+	// bound only at one rate: 64 datagrams are 5 ms at 100 Mbit/s but 300 ms
+	// at 2 Mbit/s — self-inflicted latency the path never asked for. Parity
+	// is never held back (it must beat its group's ttl).
+	queued atomic.Int64
+	room   chan struct{} // signalled when queued drops
 }
 
-func newPacer(rc *rateControl, write func([]byte) error, queueDepth int) *pacer {
+// pacerQueueTime / pacerQueueMin bound the send queue in time (see pacer).
+const (
+	pacerQueueTime = 20 * time.Millisecond
+	pacerQueueMin  = 8 * 1500
+)
+
+// pacerQuantum is the pacing burst the bucket may hold: two timer wake-ups'
+// worth of the current rate (Go sleeps in ~1 ms steps). At 100 Mbit/s that is
+// 25 KB — 2 ms of line rate, far below any buffer that would add latency.
+const pacerQuantum = 2 * time.Millisecond
+
+func newPacer(rc *rateControl, write func([]byte) error, queueDepth int, stamps *atomic.Bool) *pacer {
 	if queueDepth < 64 {
 		queueDepth = 64
 	}
@@ -50,7 +72,12 @@ func newPacer(rc *rateControl, write func([]byte) error, queueDepth int) *pacer 
 		in:    make(chan []byte, queueDepth),
 		pri:   make(chan []byte, queueDepth),
 		done:  make(chan struct{}),
+		room:  make(chan struct{}, 1),
 	}
+	if stamps == nil {
+		stamps = new(atomic.Bool)
+	}
+	p.stamps = stamps
 	p.pool.New = func() any { b := make([]byte, 0, 2048); return &b }
 	p.wg.Add(1)
 	go p.loop()
@@ -62,14 +89,26 @@ func newPacer(rc *rateControl, write func([]byte) error, queueDepth int) *pacer 
 // sender. It returns once queued, or when the carrier closes.
 func (p *pacer) enqueue(pkt []byte) {
 	bp := p.pool.Get().(*[]byte)
-	// Reserve a 5-byte datagram header (tag + wire sequence) that the pacer
-	// fills at write time; the copy the pacer already makes carries the payload.
-	b := append((*bp)[:0], 0, 0, 0, 0, 0)
+	// Reserve a datagram header the pacer fills at write time — tag, wire
+	// sequence and (stamped form) send time: 9 bytes, of which the unstamped
+	// form uses the last 5. The copy the pacer already makes carries the payload.
+	b := append((*bp)[:0], 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	b = append(b, pkt...)
 	dst := p.in
 	if fec.IsParity(pkt) {
 		dst = p.pri // parity jumps the queue so it beats the group's ttl
+	} else {
+		for p.queued.Load() > p.budget() {
+			select {
+			case <-p.done:
+				*bp = b
+				p.pool.Put(bp)
+				return
+			case <-p.room:
+			}
+		}
 	}
+	p.queued.Add(int64(len(b)))
 	select {
 	case <-p.done:
 		*bp = b
@@ -77,6 +116,25 @@ func (p *pacer) enqueue(pkt []byte) {
 		return
 	case dst <- b:
 		atomic.AddUint64(&p.enqueued, 1)
+	}
+}
+
+// budget is the most data bytes the queue may hold before enqueue waits:
+// pacerQueueTime at the current rate, never below a few datagrams.
+func (p *pacer) budget() int64 {
+	b := int64(p.rc.pacingRate(time.Now()) * pacerQueueTime.Seconds())
+	if b < pacerQueueMin {
+		b = pacerQueueMin
+	}
+	return b
+}
+
+// dequeued releases n bytes of queue budget and wakes a waiting enqueue.
+func (p *pacer) dequeued(n int) {
+	p.queued.Add(-int64(n))
+	select {
+	case p.room <- struct{}{}:
+	default:
 	}
 }
 
@@ -100,17 +158,15 @@ func (p *pacer) loop() {
 			case b = <-p.in:
 			}
 		}
-		// Fill the reserved header in wire (send) order: tag + 4-byte wire
-		// sequence, so the receiver measures loss on the actual wire order.
-		b[0] = tagData
-		binary.BigEndian.PutUint32(b[1:5], p.wireSeq)
-		p.wireSeq++
 		now := time.Now()
 		rate := p.rc.pacingRate(now)
 		tokens += now.Sub(last).Seconds() * rate
-		// cap the burst the bucket can accumulate at ~2 datagrams so an idle
-		// period cannot release a flood that spikes queueing latency.
-		if maxBurst := 2 * float64(len(b)+64); tokens > maxBurst {
+		// Cap the burst the bucket can accumulate so an idle period cannot
+		// release a flood that spikes queueing latency — but never below what
+		// the rate earns in one timer wake-up: Go's timers sleep at least
+		// ~1 ms, so a 2-datagram cap would limit ANY carrier to ~2 datagrams
+		// per millisecond (~20 Mbit/s) whatever the path could take.
+		if maxBurst := math.Max(2*float64(len(b)+64), rate*pacerQuantum.Seconds()); tokens > maxBurst {
 			tokens = maxBurst
 		}
 		last = now
@@ -126,6 +182,7 @@ func (p *pacer) loop() {
 				select {
 				case <-p.done:
 					t.Stop()
+					p.dequeued(len(b))
 					p.recycle(b)
 					return
 				case <-t.C:
@@ -136,13 +193,30 @@ func (p *pacer) loop() {
 			last = now
 		}
 		tokens -= need
-		if err := p.write(b); err != nil {
+		// Fill the reserved header in wire (send) order, so the receiver
+		// measures loss on the actual wire order and the stamp is the moment
+		// the datagram leaves.
+		out := b
+		if p.stamps.Load() {
+			b[0] = tagDataTS
+			binary.BigEndian.PutUint32(b[1:5], p.wireSeq)
+			binary.BigEndian.PutUint32(b[5:9], stampOf(time.Now()))
+		} else {
+			out = b[4:]
+			out[0] = tagData
+			binary.BigEndian.PutUint32(out[1:5], p.wireSeq)
+		}
+		p.wireSeq++
+		if err := p.write(out); err != nil {
 			e := err
 			p.writeErr.Store(&e)
+			p.dequeued(len(b))
 			p.recycle(b)
 			return
 		}
 		atomic.AddUint64(&p.sent, 1)
+		p.rc.onSent(len(out))
+		p.dequeued(len(b))
 		p.recycle(b)
 	}
 }
