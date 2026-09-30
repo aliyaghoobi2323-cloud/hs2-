@@ -2,17 +2,26 @@ package engine
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // meteredFakeLink is a fakeLink carrying a linkMeter plus a test-controlled
 // retransmit counter, so the manager's loss-based health logic can be driven
-// deterministically without real sockets.
+// deterministically without real sockets. The pool tests also set its open
+// stream count, its TCP_INFO chrono counters and its per-stream activity.
 type meteredFakeLink struct {
 	alive   atomic.Bool
 	m       *linkMeter
 	retrans atomic.Uint64
+	act     atomic.Int32 // Active(): user streams open
+	closes  atomic.Int32 // Close calls
+
+	mu sync.Mutex
+	ts tcpStat   // TCP_INFO besides retrans (setTCP)
+	fs *flowSnap // flowStats result (setFlows); nil: open = Active(), none flowing
 }
 
 func newMeteredFake() *meteredFakeLink {
@@ -21,12 +30,43 @@ func newMeteredFake() *meteredFakeLink {
 	return f
 }
 func (f *meteredFakeLink) OpenStream() (stream, error) { return nil, nil }
-func (f *meteredFakeLink) Active() int32               { return 0 }
+func (f *meteredFakeLink) Active() int32               { return f.act.Load() }
 func (f *meteredFakeLink) Alive() bool                 { return f.alive.Load() }
-func (f *meteredFakeLink) Close() error                { f.alive.Store(false); return nil }
-func (f *meteredFakeLink) meter() *linkMeter           { return f.m }
+func (f *meteredFakeLink) Close() error {
+	f.closes.Add(1)
+	f.alive.Store(false)
+	return nil
+}
+func (f *meteredFakeLink) meter() *linkMeter { return f.m }
 func (f *meteredFakeLink) tcpStats() (tcpStat, bool) {
-	return tcpStat{retrans: f.retrans.Load()}, true
+	f.mu.Lock()
+	st := f.ts
+	f.mu.Unlock()
+	st.retrans = f.retrans.Load()
+	return st, true
+}
+
+// setTCP sets the chrono part of the fake's TCP_INFO (retrans stays separate).
+func (f *meteredFakeLink) setTCP(st tcpStat) {
+	f.mu.Lock()
+	f.ts = st
+	f.mu.Unlock()
+}
+
+// setFlows fixes what the fake reports as its per-stream activity.
+func (f *meteredFakeLink) setFlows(fs flowSnap) {
+	f.mu.Lock()
+	f.fs = &fs
+	f.mu.Unlock()
+}
+
+func (f *meteredFakeLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fs == nil {
+		return flowSnap{open: int(f.act.Load())}
+	}
+	return *f.fs
 }
 
 // active simulates one health interval of UPLOAD traffic: `bytes` sent and `rt`

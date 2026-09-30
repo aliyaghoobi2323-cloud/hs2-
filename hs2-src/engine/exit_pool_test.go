@@ -159,3 +159,130 @@ func TestServePoolCtlApplies(t *testing.T) {
 	})
 	pw.Close()
 }
+
+// ---- the exit pool against the v2 reverse edge --------------------------------
+
+// carrierLink is the edge's side of a fake exit carrier: alive until the
+// carrier ends, and closing it ends the carrier (the exit sees its link go).
+type carrierLink struct{ c *fakeCarrier }
+
+func (l *carrierLink) OpenStream() (stream, error) { return nil, nil }
+func (l *carrierLink) Active() int32               { return 0 }
+func (l *carrierLink) Close() error                { return l.c.Close() }
+func (l *carrierLink) Alive() bool {
+	select {
+	case <-l.c.ended():
+		return false
+	default:
+		return true
+	}
+}
+
+// edgeExitPair couples an exit pool of fake carriers with a reverse edge
+// (accept-mode LinkManager on a fake clock), wired as acceptReverseLinks
+// wires them: every carrier the exit dials arrives at the edge through
+// AddLink, and leaves it through DropLink when it ends. The exit's target is
+// set by the test, standing in for kindPool.
+type edgeExitPair struct {
+	tp  *testPool
+	lm  *LinkManager
+	clk *v2Clock
+}
+
+func newEdgeExitPair(t *testing.T, edgeT, exitWarm int) *edgeExitPair {
+	tp := newTestPool(t, 2, 8)
+	lm, clk, _ := newV2Manager(nil, 2, 8, true)
+	lm.setTarget(edgeT)
+	hold := tp.serve
+	tp.serve = func(ctx context.Context, c dialedLink) {
+		l := &carrierLink{c: c.(*fakeCarrier)}
+		lm.AddLink(l, "exit")
+		hold(ctx, c) // until the carrier ends or its slot is cancelled
+		lm.DropLink(l, "exit")
+	}
+	tp.setTarget(exitWarm)
+	return &edgeExitPair{tp: tp, lm: lm, clk: clk}
+}
+
+// entries returns the edge's alive serving and retiring entries.
+func (p *edgeExitPair) entries() (serving, retiring []*managedLink) {
+	p.lm.mu.RLock()
+	defer p.lm.mu.RUnlock()
+	for _, ml := range p.lm.links {
+		switch {
+		case !ml.link.Alive() || ml.degraded || ml.draining:
+		case ml.retiring:
+			retiring = append(retiring, ml)
+		default:
+			serving = append(serving, ml)
+		}
+	}
+	return
+}
+
+func (p *edgeExitPair) state(S, R, slots int) func() bool {
+	return func() bool {
+		s, r := poolCounts(p.lm)
+		return s == S && r == R && p.tp.slots() == slots && p.tp.liveCount() == slots
+	}
+}
+
+// The exit's slots track the edge's physical links, serving + retiring: links
+// it dialed beyond the edge's target are born retiring, and as the edge closes
+// each one once it is empty the exit retires that slot — no redial, ever.
+func TestExitPoolSlotsTrackEdgeServingPlusRetiring(t *testing.T) {
+	p := newEdgeExitPair(t, 3, 8) // edge wants 3; exit comes up warm at 8
+	eventually(t, "8 links at the edge: 3 serving + 5 born retiring", p.state(3, 5, 8))
+	p.tp.setTarget(p.lm.Target()) // the exit learns the edge's target
+	_, retiring := p.entries()
+	retiring[0].users.Store(1) // two surplus links hold connections
+	retiring[1].users.Store(1)
+	p.clk.Advance(retireAfterDrop + time.Second)
+	for i := 0; i < 3; i++ {
+		p.lm.drainTick()
+	}
+	eventually(t, "3 empty surplus links closed and their slots retired: 5 = 3 + 2", p.state(3, 2, 5))
+
+	retiring[0].users.Store(0)
+	retiring[1].users.Store(0)
+	p.lm.drainTick()
+	eventually(t, "the held links closed once empty: 3 = 3 + 0", p.state(3, 0, 3))
+	time.Sleep(50 * time.Millisecond)
+	if d := p.tp.dials.Load(); d != 8 {
+		t.Fatalf("the exit redialed %d link(s) the edge retired", d-8)
+	}
+}
+
+// A serving link that dies while the edge has retiring links: the exit, above
+// its target, retires that slot instead of redialing, and the edge brings a
+// retiring link back into service — no dial on either side.
+func TestExitPoolServingDeathWithRetiringRetiresSlot(t *testing.T) {
+	p := newEdgeExitPair(t, 3, 5)
+	eventually(t, "5 links: 3 serving + 2 retiring", p.state(3, 2, 5))
+	p.tp.setTarget(3)
+	serving, retiring := p.entries()
+	for _, ml := range retiring {
+		ml.users.Store(1)
+	}
+	serving[0].link.(*carrierLink).c.end() // lost on the network
+	eventually(t, "slot retired, link dropped: 4 = 2 + 2", p.state(2, 2, 4))
+	p.lm.reconcile(context.Background(), 3)
+	if s, r := poolCounts(p.lm); s != 3 || r != 1 || p.tp.slots() != s+r {
+		t.Fatalf("after reconcile: %d serving + %d retiring, %d exit slots; want 3 + 1 = 4", s, r, p.tp.slots())
+	}
+	time.Sleep(50 * time.Millisecond)
+	if d := p.tp.dials.Load(); d != 5 {
+		t.Fatalf("%d redial(s) although a retiring link could take over", d-5)
+	}
+}
+
+// With no retiring link a serving link that dies is redialed, and the new link
+// arrives at the edge serving.
+func TestExitPoolServingDeathWithoutRetiringRedials(t *testing.T) {
+	p := newEdgeExitPair(t, 3, 3)
+	eventually(t, "3 serving links", p.state(3, 0, 3))
+	p.tp.setTarget(3)
+	serving, _ := p.entries()
+	serving[0].link.(*carrierLink).c.end()
+	eventually(t, "redialed back to 3 serving", func() bool { return p.state(3, 0, 3)() && p.tp.dials.Load() == 4 })
+}
