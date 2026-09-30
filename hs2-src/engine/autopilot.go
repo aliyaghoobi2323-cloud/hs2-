@@ -305,6 +305,14 @@ func (a *autopilot) last(n int) []apTick {
 func (a *autopilot) decide(s apSample) apDecision {
 	t := &a.tun
 	now := s.now
+	if len(s.links) == 0 {
+		// No link is up (an outage, or the reverse edge before the exit has
+		// dialed): nothing was measured, which is not the same as no demand.
+		// Keep the size and the history as they are.
+		a.T = a.clamp(a.T)
+		a.reason = "no link is up — waiting for links"
+		return apDecision{target: a.T, phase: a.phase, reason: a.reason}
+	}
 
 	// ---- measurements for this tick -------------------------------------
 	S, R, P := 0, 0, 0
@@ -369,10 +377,11 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 	fGrow := ceilDiv(fl5, a.perLink)
 	fHold := ceilDiv(fl60, a.perLink)
-	// Links the active flows can use (connections are pinned). A pressed link
-	// carries at least one active flow even if its flows are too throttled to
-	// be counted.
-	U := a.clamp(max(fl60, p60) + 2)
+	// Links the active flows can use (connections are pinned): one each plus
+	// two for arrivals, and never fewer than the pressed links plus their
+	// spares (a pressed link carries at least one active flow even when its
+	// flows are too throttled to be counted).
+	U := a.clamp(max(fl60+2, p60+spare(p60)))
 	cCap := a.capEstimate(now)
 	needBW := 0
 	if cCap > 0 && gPeak >= t.minBWForNeed {
@@ -387,11 +396,13 @@ func (a *autopilot) decide(s apSample) apDecision {
 	if needBW > need {
 		need = needBW
 	}
-	if holdN > need {
-		need = holdN
-	}
 	if need > U {
 		need = U
+	}
+	// A hold (a shrink that proved too deep) is not capped by U: U is what
+	// the model says flows can use; the hold is what was measured.
+	if holdN > need {
+		need = holdN
 	}
 	if fHold > need {
 		need = fHold
@@ -422,10 +433,14 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 
 	// ---- 1 FLOOR: enough links for the flows really moving data ----------
-	if fGrow > a.T && a.clamp(fGrow) > a.T {
+	floor := a.clamp(fGrow)
+	if !s.growable && S+R >= a.min && floor > S+R {
+		floor = S + R // the peer cannot add links; do not ask every tick
+	}
+	if floor > a.T {
 		old := a.T
 		a.pr = nil
-		a.T = a.clamp(fGrow)
+		a.T = floor
 		a.lastGrowAt = now
 		return a.out(s, S, R, apScaling, fmt.Sprintf("%d active connections need %d links (per_link %d)", fl5, a.T, a.perLink),
 			fmt.Sprintf("pattern %d → %d links: %d active connections (per_link %d)", old, a.T, fl5, a.perLink))

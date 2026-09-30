@@ -290,12 +290,13 @@ func (m *LinkManager) AddLink(l Link, from string) int {
 	if S, _ := m.countsLocked(); S >= int(m.target.Load()) {
 		ml.retiring, ml.retireSince = true, now
 	}
-	tripped := ml.retiring && m.noteSurplusArrivalLocked(now)
+	spare := ml.retiring
+	tripped := spare && m.noteSurplusArrivalLocked(now)
 	m.links = append(m.links, ml)
 	n := m.aliveLocked()
 	S, _ := m.countsLocked()
 	m.mu.Unlock()
-	if ml.retiring {
+	if spare {
 		m.log("mtcp: reverse link %d up from %s (now %d) — spare: the pattern needs %d serving; it takes no connections and closes unless needed",
 			id, from, n, S)
 	} else {
@@ -615,9 +616,9 @@ func (m *LinkManager) drainTick() {
 	m.mu.Lock()
 	guard := true
 	if m.accept {
-		ok := 0
+		ok := 0 // links whose pool control has had time to be refused and was not
 		for _, ml := range m.links {
-			if ml.link.Alive() && !ml.poolRefused.Load() {
+			if ml.link.Alive() && !ml.poolRefused.Load() && now.Sub(ml.born) >= retireAfterDrop {
 				ok++
 			}
 		}

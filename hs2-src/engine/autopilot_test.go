@@ -494,6 +494,48 @@ func TestSimProbeArmsOnlyWhenLinksUp(t *testing.T) {
 	}
 }
 
+// A total outage (no links in the sample) is not zero demand: the pool keeps
+// its size instead of decaying to min while nothing can be measured.
+func TestAutopilotOutageKeepsSize(t *testing.T) {
+	a := newAutopilot(2, 32, 8)
+	a.T = 12
+	now := time.Unix(1e9, 0)
+	for i := 0; i < 300; i++ { // 10 minutes without a single link
+		now = now.Add(healthTick)
+		if d := a.decide(apSample{now: now, growable: true}); d.target != 12 {
+			t.Fatalf("tick %d: target %d during an outage, want 12 kept", i, d.target)
+		}
+	}
+	if len(a.hist) != 0 {
+		t.Fatalf("the outage entered the history (%d ticks)", len(a.hist))
+	}
+}
+
+// With an exit that cannot add links (no pool control), the active-flow floor
+// is capped at what is up and does not re-fire (and log) every tick.
+func TestAutopilotFloorNotRepeatedWhenNotGrowable(t *testing.T) {
+	a := newAutopilot(2, 32, 8)
+	now := time.Unix(1e9, 0)
+	notes := 0
+	for i := 0; i < 30; i++ {
+		now = now.Add(healthTick)
+		smp := apSample{now: now, flowing: 200, open: 300, growable: false}
+		for id := 0; id < 4; id++ {
+			smp.links = append(smp.links, apLink{id: id, serving: true, rate: 1e5, flowing: 50})
+		}
+		d := a.decide(smp)
+		if d.note != "" {
+			notes++
+		}
+		if d.target > 4 {
+			t.Fatalf("target %d with 4 links and no pool control", d.target)
+		}
+	}
+	if notes > 1 {
+		t.Fatalf("%d decision notes in 30 ticks, want at most 1", notes)
+	}
+}
+
 // 17. The envelope holds: unlimited demand never exceeds max, and an idle
 // pool settles at exactly min.
 func TestSimEnvelope(t *testing.T) {
@@ -681,7 +723,11 @@ func TestProbeBackoffAndReset(t *testing.T) {
 	// Demand clearly and steadily above the ceiling: re-check at once.
 	for i := 0; i < 5; i++ {
 		now = now.Add(healthTick)
-		a.decide(apSample{now: now, G: 2 * gb, flowing: 60, open: 200, growable: true})
+		smp := apSample{now: now, G: 2 * gb, flowing: 60, open: 200, growable: true}
+		for id := 0; id < 8; id++ {
+			smp.links = append(smp.links, apLink{id: id, serving: true, rate: 2 * gb / 8, flowing: 8})
+		}
+		a.decide(smp)
 	}
 	if a.k != 0 || a.next.After(now) {
 		t.Fatalf("after demand rose 2×: k=%d next in %s, want reset", a.k, a.next.Sub(now))
@@ -695,7 +741,8 @@ func TestProbeBackoffAndReset(t *testing.T) {
 		t.Fatalf("k=%d after one failure", b.k)
 	}
 	now2 = now2.Add(31 * time.Minute)
-	b.decide(apSample{now: now2, G: gb / 2, flowing: 10, open: 100, growable: true})
+	b.decide(apSample{now: now2, G: gb / 2, flowing: 10, open: 100, growable: true,
+		links: []apLink{{id: 0, serving: true, rate: gb / 2}}})
 	if b.k != 0 {
 		t.Fatalf("k=%d 31 min after the failure, want 0", b.k)
 	}
@@ -776,5 +823,29 @@ func TestBackoffNotResetBySpike(t *testing.T) {
 	}
 	if a.k != 0 {
 		t.Fatalf("sustained growth did not reset the backoff (k=%d)", a.k)
+	}
+}
+
+// Many pressed links whose flows are too throttled to count as active: the
+// useful-links cap must leave room for the pressed links and their spares, or
+// the pool shrinks, is short at once, restores, and repeats every minute.
+func TestAutopilotNoShrinkRestoreFlap(t *testing.T) {
+	a := newAutopilot(2, 32, 8)
+	a.T = 12
+	now := time.Unix(1e9, 0)
+	changes := 0
+	for i := 0; i < 600; i++ { // 20 minutes
+		now = now.Add(healthTick)
+		smp := apSample{now: now, G: 12 * 50e3, flowing: 5, open: 100, growable: true}
+		for id := 0; id < a.T; id++ {
+			smp.links = append(smp.links, apLink{id: id, serving: true, pressed: id < 9,
+				rate: 50e3, rate10: 50e3, sustained: 50e3})
+		}
+		if d := a.decide(smp); d.note != "" {
+			changes++
+		}
+	}
+	if changes > 0 || a.T != 12 {
+		t.Fatalf("%d size changes, T=%d; want the pool left at 12", changes, a.T)
 	}
 }

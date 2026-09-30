@@ -498,3 +498,30 @@ func TestStatsStreamReopensAfterStall(t *testing.T) {
 		t.Fatal("the link was closed")
 	}
 }
+
+// A handshake reply that does not arrive in time (a congested link) says
+// nothing about the exit's version: the link stays "pending" and is retried,
+// never marked as an older exit.
+func TestStatsHandshakeTimeoutIsNotOldExit(t *testing.T) {
+	old := statsReopenAfter
+	statsReopenAfter = 50 * time.Millisecond
+	t.Cleanup(func() { statsReopenAfter = old })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var opened atomic.Int32
+	p := newStatsPair(t, ctx, nil, func(ctx context.Context, srv *smux.Session, st *smux.Stream, mtr *linkMeter) {
+		var kind [1]byte
+		if _, err := io.ReadFull(st, kind[:]); err != nil || kind[0] != kindStats {
+			st.Close()
+			return
+		}
+		if opened.Add(1) == 1 {
+			<-ctx.Done() // never answer the first handshake
+			return
+		}
+		serveStats(ctx, st, nil, mtr)
+	})
+	p.startStats(t, ctx, nil)
+	v2Wait(t, 15*time.Second, "a second handshake after the timeout", func() bool { return opened.Load() >= 2 })
+	waitStatsState(t, p.edge.m, statsOK, 5*time.Second)
+}

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"sync/atomic"
@@ -133,9 +134,14 @@ func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, l
 	st.SetReadDeadline(time.Now().Add(statsHandshakeTimeout))
 	var hdr [3]byte
 	if _, err := io.ReadFull(st, hdr[:]); err != nil || hdr[0] != statsVer || int(hdr[1]) < statsRecLen {
-		// An older exit closes the unknown kind at once; a dying link fails the
-		// same read. Tell them apart by whether the link is still up a moment
-		// later, so a link lost during the handshake is not misreported.
+		// An older exit closes the unknown kind at once (EOF); a dying link
+		// fails the same read. Tell them apart by whether the link is still up
+		// a moment later, so a link lost during the handshake is not
+		// misreported. A reply that merely did not come in time (a congested
+		// link) says nothing about the exit's version: try again later.
+		if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+			return true
+		}
 		time.Sleep(200 * time.Millisecond)
 		if !l.Alive() || ctx.Err() != nil {
 			return true
