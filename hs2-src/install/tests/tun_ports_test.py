@@ -132,13 +132,15 @@ def make_lib(sb):
 STUBS = r'''
 source "$LIB"
 trap - EXIT
-CFG="$SB/$ROLE.json"; SVC="$SB/$ROLE.service"
+# every role is its own "server": its own tunnel directories, never /etc
+CFG_DIR="$SB/cfg-$ROLE"; UNIT_DIR="$SB/units-$ROLE"; mkdir -p "$CFG_DIR" "$UNIT_DIR"
+use_unit hs2
 local_ips(){ echo "$LABIP"; }
 ip_is_local(){ [ "$1" = "$LABIP" ]; }
 port_free(){ return 0; }; udp_port_free(){ return 0; }
 get_cert(){ printf '%s|%s' "$SB/cert.pem" "$SB/key.pem"; }
 write_service(){ :; }; start_service(){ echo "STARTED $1" >&2; }
-show_link(){ encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}|${11:-}" > "$SB/link.txt"; }
+show_link(){ encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}|${11:-}|$UNIT|$TUN_BASE" > "$SB/link.txt"; }
 '''
 
 
@@ -146,7 +148,8 @@ def run_branch(lib, sb, role, labip, pre, call, steps):
     """Run one installer branch; steps = [(prompt regex, answer)]. The link a
     branch emits is left in $SB/link.txt; LINK in an answer is replaced by it."""
     env = dict(os.environ, LIB=lib, SB=sb, ROLE=role, LABIP=labip, TERM="dumb")
-    p = Pty(STUBS + pre + "\n" + call + "\necho BRANCH_DONE\n", env)
+    # the tunnel's config (wherever its name put it) is copied to $SB/$ROLE.json
+    p = Pty(STUBS + pre + "\n" + call + '\n[ -f "$CFG" ] && cp "$CFG" "$SB/$ROLE.json"\necho BRANCH_DONE\n', env)
     for rx, ans in steps:
         if not p.expect(rx):
             p.finish(5)
@@ -421,9 +424,12 @@ def part3(sb, lib, kh_ip, ir_ip, bins, carrier):
         time.sleep(0.5)
         start(IR, [hs2, "run", "-c", os.path.join(sb, ir_role + ".json")], "ir_%s.log" % label)
 
+        # each tunnel has its own /30 (it travels in the link): ping kharej's
+        # end of THIS tunnel
+        peer = json.load(open(os.path.join(sb, ir_role + ".json")))["peer_ip"]
         up = False
         for _ in range(60):
-            if sh("ip netns exec %s ping -c1 -W1 10.77.0.2" % IR, timeout=5).returncode == 0:
+            if sh("ip netns exec %s ping -c1 -W1 %s" % (IR, peer), timeout=5).returncode == 0:
                 up = True
                 break
             time.sleep(0.5)

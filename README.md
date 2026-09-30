@@ -77,6 +77,38 @@ so a few days with port 80 or Let's Encrypt unreachable never matter) and are
 fresh certificate while existing ones keep running, so a renewal never drops
 the tunnel.
 
+## Several tunnels on one server (service names)
+
+Every tunnel is its own systemd service, so one server can run several side by
+side — to different servers, or over different transports — and each one is
+started, stopped, edited and deleted on its own.
+
+- **Naming.** The server that *makes* the setup link asks for a service name.
+  Enter keeps the default `hs2` (config `/etc/hs2/config.json`, as always); a
+  name like `de1` runs as `hs2-de1` (config `/etc/hs2/hs2-de1.json`). The
+  prefix means a tunnel can never overwrite an unrelated system service.
+- **The other side needs nothing.** The name travels in the link, so the
+  server that pastes it creates `hs2-de1` too — direct or reverse. If a tunnel
+  with that name already exists there, it asks: *replace it* (the default when
+  it talks to the same server — the same tunnel set up again) or *keep it and
+  run this one under another name* (the default otherwise).
+- **No clashes.** Each tunnel gets its own tun interface (`hs0`, `hs1`, …) and
+  its own /30 in `10.77.0.0/16`, which also travels in the link so both sides
+  agree. A link whose subnet is already used on the pasting server is refused
+  with a clear message and nothing is changed there. A tcp/mtcp tunnel has no
+  tun device and never reserves or deletes an interface name.
+- **Setting a tunnel up again** (same name) asks before replacing it, keeps
+  its subnet and interface, and stops only that tunnel; if the setup is
+  cancelled halfway, it is started again on its old config.
+- **Tunnel manager** (`hs2-menu` → 3) lists every tunnel by service name, with
+  start / stop / restart / edit / logs / live pattern / tuning / **delete**.
+  Delete asks you to type the name, saves a backup first, and removes only
+  that tunnel's service, config and interface — the others keep running.
+- **Upgrade** restarts every tunnel on the new binary and checks each one
+  reconnects. **Backup / restore** cover all tunnels. **Uninstall** removes all
+  of them (delete one in the manager). The certificate-renewal hook reloads
+  every hs2 tunnel, so no renewal ever points at a deleted service.
+
 ## What the installer checks for you
 
 - **"Ready" means packets cross.** The server that pastes the link starts
