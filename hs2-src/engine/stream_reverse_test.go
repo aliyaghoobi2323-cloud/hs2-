@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -203,9 +202,11 @@ func TestReverseLinkLogsAreHonest(t *testing.T) {
 }
 
 // End to end over real TLS: the reverse exit's live link count follows the
-// edge's autopilot target sent on the pool-control channel. We drive the edge's
-// published target directly (bypassing the load-based decision, which needs a
-// sustained bulk flow) and check the kharej dials to match, then shrinks back.
+// edge's target sent on the pool-control channel — growing at once, and
+// shrinking only by the edge retiring IDLE links. A user connection that is
+// open during the shrink must survive it (the old exit closed its newest link
+// whether or not users were on it). The target is pinned via the test hook so
+// the load-based decision (which needs a sustained bulk flow) is bypassed.
 func TestReverseExitPoolFollowsEdgeTarget(t *testing.T) {
 	key := bytesRepeat(0x5a, 32)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -219,19 +220,16 @@ func TestReverseExitPoolFollowsEdgeTarget(t *testing.T) {
 	iranSrv := &tlscarrier.Server{SharedKey: key, Cert: testCert(t), BackendAddr: "127.0.0.1:1"}
 	port := freePort(t)
 
-	// Build the reverse edge by hand so we can hold its LinkManager and force the
-	// published target. Envelope 2..8.
+	// The reverse edge, built by hand so the test can pin its target. Envelope 2..8.
 	lm := NewLinkManager(nil, 2, 8, 50, nil)
 	lm.accept = true
-	var forced atomic.Int32
-	forced.Store(2)
+	lm.pin.Store(4)
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, func(string, ...any) {})
-		go openPoolCtl(ctx, l, func() int { return int(forced.Load()) }, func(string, ...any) {})
+		go openPoolCtl(ctx, l, lm.Target, func(string, ...any) {})
 	}
 	go lm.Run(ctx)
 	go acceptReverseLinks(ctx, rawIranLn, iranSrv, lm, func(string, ...any) {})
-	// user port, so the tunnel is a normal reverse edge
 	userLn, err := ListenReuse("127.0.0.1:" + port)
 	if err != nil {
 		t.Fatal(err)
@@ -250,35 +248,62 @@ func TestReverseExitPoolFollowsEdgeTarget(t *testing.T) {
 	iranAddr := rawIranLn.Addr().String()
 	go RunKharej(ctx, KharejConfig{
 		Panel:    panel,
-		RevLinks: 2, RevMin: 2, RevMax: 8,
+		RevLinks: 8, RevMin: 2, RevMax: 8, // exit comes up warm at 8, like production
 		RevDial: func() (*tlscarrier.Carrier, error) {
 			return tlscarrier.DialFrom(iranAddr, "lab.example.com", key, "")
 		},
 	})
 
-	waitLinks := func(n int) bool {
-		for i := 0; i < 300; i++ {
-			if lm.count() == n {
+	links := func() int { lm.mu.RLock(); defer lm.mu.RUnlock(); return len(lm.links) }
+	waitLinks := func(n int, secs int) bool {
+		for i := 0; i < secs*50; i++ {
+			if links() == n {
 				return true
 			}
 			time.Sleep(20 * time.Millisecond)
 		}
 		return false
 	}
-	if !waitLinks(2) {
-		t.Fatalf("did not settle at the initial 2 links (have %d)", lm.count())
+	// Warm exit (8) is shrunk to the edge's target 4 by retiring idle links.
+	if !waitLinks(4, 20) {
+		t.Fatalf("did not shrink from the warm 8 to the target 4 (have %d)", links())
 	}
-	forced.Store(6)
-	if !waitLinks(6) {
-		t.Fatalf("exit did not grow to the edge's target of 6 (have %d)", lm.count())
+	// Grow at once.
+	lm.pin.Store(7)
+	if !waitLinks(7, 10) {
+		t.Fatalf("exit did not grow to the target 7 (have %d)", links())
 	}
-	forced.Store(3)
-	if !waitLinks(3) {
-		t.Fatalf("exit did not shrink to the edge's target of 3 (have %d)", lm.count())
+
+	// Hold a user connection open (it is pinned to one link), then shrink hard.
+	held, err := net.DialTimeout("tcp", "127.0.0.1:"+port, 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
 	}
-	// The tunnel still carries data at the new size.
+	defer held.Close()
+	roundTrip := func(msg string) error {
+		held.SetDeadline(time.Now().Add(3 * time.Second))
+		if _, err := held.Write([]byte(msg)); err != nil {
+			return err
+		}
+		b := make([]byte, len(msg))
+		_, err := io.ReadFull(held, b)
+		if err == nil && string(b) != msg {
+			return fmt.Errorf("echo mismatch %q", b)
+		}
+		return err
+	}
+	if err := roundTrip("before-shrink"); err != nil {
+		t.Fatalf("held connection not working before shrink: %v", err)
+	}
+	lm.pin.Store(2)
+	if !waitLinks(2, 25) {
+		t.Fatalf("did not shrink to the target 2 (have %d)", links())
+	}
+	if err := roundTrip("after-shrink"); err != nil {
+		t.Fatalf("a busy link was cut while shrinking — the held connection broke: %v", err)
+	}
 	if !echoOnce("127.0.0.1:"+port, 4096) {
-		t.Fatal("tunnel did not carry data after resizing")
+		t.Fatal("tunnel did not carry new connections after resizing")
 	}
 }
 

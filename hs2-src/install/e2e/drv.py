@@ -406,6 +406,11 @@ WantedBy=multi-user.target
     # Simulate an OLD install: a fixed link pool and the old static sysctl file.
     sh("kh", "sed -i 's/\"min_links\": [0-9]*, \"max_links\": [0-9]*, \"per_link\": [0-9]*,/\"min_links\": 8, \"max_links\": 16, \"per_link\": 8,/' /etc/hs2/config.json; "
              "mkdir -p /etc/sysctl.d; echo 'net.ipv4.tcp_congestion_control = bbr' > /etc/sysctl.d/99-hs2.conf")
+    # The production outage: a certbot lineage on the server that this tunnel does
+    # NOT use (e.g. the panel's own certificate). It used to end `upgrade` silently
+    # right after the service had been stopped for the new binary.
+    panel_conf = "version = 2.9.0\n[renewalparams]\nauthenticator = standalone\n"
+    sh("kh", f"mkdir -p /etc/letsencrypt/renewal && printf '{panel_conf}' > /etc/letsencrypt/renewal/zz-panel.example.conf")
     ch = spawn("kh", f"curl -fsSL {RAW}/install.sh | HS2_REPO_RAW={RAW} bash -s upgrade", "upgrade_kharej")
     i = ch.expect(["hs2 upgraded and running", "failed to start"], timeout=180); ch.expect(pexpect.EOF)
     unit = sh("kh", "cat /etc/systemd/system/hs2.service")
@@ -418,6 +423,18 @@ WantedBy=multi-user.target
         " ".join(l.strip() for l in cfg.split("\n") if "min_links" in l))
     res("upgrade: old static sysctl file removed (runtime tuning now)",
         sh("kh", "test -f /etc/sysctl.d/99-hs2.conf && echo present || echo gone") == "gone")
+    res("upgrade: a foreign certbot lineage does not stop the upgrade, and is left untouched",
+        i == 0 and sh("kh", "cat /etc/letsencrypt/renewal/zz-panel.example.conf") == panel_conf.strip())
+
+    # Safety net: an upgrade interrupted halfway (Ctrl+C after the new binary is
+    # installed, i.e. after hs2 was stopped) must not leave the tunnel down.
+    ch = spawn("kh", f"curl -fsSL {RAW}/install.sh | HS2_REPO_RAW={RAW} bash -s upgrade", "upgrade_interrupted")
+    ch.expect("Installed hs2", timeout=180)
+    ch.sendcontrol("c")
+    ch.expect(pexpect.EOF, timeout=60)
+    t = wait_data(secs=60)
+    res("interrupted upgrade: hs2 is running again by itself, data flows",
+        state("kh")[0] == "active" and t is not None, str(state("kh")))
     res("upgrade: autostart re-enabled", state("kh") == ["active", "enabled"], str(state("kh")))
     res("upgrade: hs2-menu installed + backup taken",
         sh("kh", "test -x /usr/local/bin/hs2-menu && ls /root/hs2-backups/*.tar.gz | wc -l") == "1")

@@ -116,3 +116,36 @@ func containsAny(ss []string, sub string) bool {
 	}
 	return false
 }
+
+// The ephemeral port range must never be changed: it would let outgoing
+// connections occupy ports a panel binds for inbounds.
+func TestNeverTouchesLocalPortRange(t *testing.T) {
+	for _, prof := range []struct{ ram, cpu int }{{512, 1}, {2048, 2}, {16384, 8}} {
+		p := Build(Config{}, prof.ram, prof.cpu, allAvail, allAvail)
+		if _, ok := find(p, "net.ipv4.ip_local_port_range"); ok {
+			t.Fatalf("plan for %dMB/%dcpu changes ip_local_port_range", prof.ram, prof.cpu)
+		}
+	}
+}
+
+// Only our own earlier value is reverted; any other value is left alone.
+func TestUndoLegacyPortRange(t *testing.T) {
+	cases := []struct {
+		cur     string
+		undone  bool
+		written string
+	}{
+		{"10240\t65535", true, "32768 60999"}, // what the earlier build set (kernel prints a tab)
+		{"32768\t60999", false, ""},           // kernel default: untouched
+		{"20000\t40000", false, ""},           // operator's own value: untouched
+	}
+	for _, c := range cases {
+		var wrote string
+		read := func(string) (string, bool) { return c.cur, true }
+		write := func(_, v string) bool { wrote = v; return true }
+		got := undoLegacyPortRange(read, write)
+		if got != c.undone || wrote != c.written {
+			t.Errorf("cur=%q: undone=%v wrote=%q, want %v %q", c.cur, got, wrote, c.undone, c.written)
+		}
+	}
+}

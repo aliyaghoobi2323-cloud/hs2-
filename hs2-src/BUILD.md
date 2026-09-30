@@ -51,7 +51,11 @@ The pool starts warm (`warmStartLinks`) so a startup burst spreads at once.
 
 In reverse, only the exit dials, so the edge sends its target down a
 pool-control stream (`kindPool`); the exit's dial pool follows it. Additive and
-backward-compatible — an old peer just closes the stream.
+backward-compatible — an old peer just closes the stream. Growing is immediate.
+Shrinking never cuts a connection: the exit cannot see which of its links carry
+users, so it never closes one itself; the edge closes one link with **no**
+users, and the exit retires that slot instead of redialing it. Both ends start
+at the same warm size, so a restart causes no churn.
 
 The controller is covered by a per-connection-throttling simulator in
 `engine/autopilot_test.go`; the reverse target propagation end-to-end in

@@ -64,6 +64,11 @@ const (
 	// then shrinks toward min when the tunnel turns out to be idle, or grows
 	// toward max under sustained load: sized right at the start, adjusted after.
 	warmStartLinks = 8
+	// retireAfterDrop: after the reverse edge lowers its target it waits this
+	// long before closing an idle link, so the exit has already learned the lower
+	// target (pool-control sends within ~1s) and retires that slot rather than
+	// redialing it.
+	retireAfterDrop = 4 * time.Second
 
 	// Control channel (phase 3): the edge opens one control stream per link and
 	// exchanges a tiny ping/pong with the exit every controlInterval to learn the

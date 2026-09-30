@@ -70,8 +70,12 @@ func newExitPool(ctx context.Context, min, max int, dial func() (dialedLink, err
 	return &exitPool{dial: dial, min: min, max: max, log: logf, parent: ctx}
 }
 
-// setTarget grows or shrinks the pool toward n (clamped to [min,max]). It is
-// called from the edge's pool-control messages and at startup.
+// setTarget sets the pool's target to n (clamped to [min,max]). Growing starts
+// new dial slots at once. Shrinking only lowers the target: the exit cannot see
+// which of its links carry users, so it never closes one itself. The edge, which
+// can, closes an idle link, and the slot whose link that was retires instead of
+// redialing (see runSlot). A link with users on it is therefore never cut to
+// shrink the pool.
 func (p *exitPool) setTarget(n int) {
 	if n < p.min {
 		n = p.min
@@ -81,22 +85,32 @@ func (p *exitPool) setTarget(n int) {
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if n == p.want && len(p.slots) == n {
-		return
-	}
 	prev := p.want
 	p.want = n
 	for len(p.slots) < n { // grow
 		p.startSlotLocked()
 	}
-	for len(p.slots) > n { // shrink
-		s := p.slots[len(p.slots)-1]
-		p.slots = p.slots[:len(p.slots)-1]
-		s.cancel() // drops its link and stops redialing
-	}
 	if n != prev {
-		p.log("mtcp: exit pool target %d links (edge asked; was %d)", n, prev)
+		p.log("mtcp: exit pool target %d links (edge asked; was %d, %d up)", n, prev, p.live)
 	}
+}
+
+// retireIfOver removes slot s when the pool holds more slots than the target,
+// reporting whether it did. Called when a slot's link has ended.
+func (p *exitPool) retireIfOver(s *exitSlot) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.slots) <= p.want {
+		return false
+	}
+	for i, x := range p.slots {
+		if x == s {
+			p.slots = append(p.slots[:i], p.slots[i+1:]...)
+			s.cancel()
+			return true
+		}
+	}
+	return false
 }
 
 // startSlotLocked launches one dial slot. Caller holds p.mu.
@@ -129,9 +143,16 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		p.serve(ctx, car) // returns when the link dies or ctx ends
 		car.Close()
 		n = p.incLive(-1)
-		if ctx.Err() == nil {
-			p.log("mtcp: exit link down (slot %d; now %d); redial", s.id, n)
+		if ctx.Err() != nil {
+			return
 		}
+		// The edge closed an idle link to shrink the pattern (or a link dropped
+		// while the pool is above target): retire this slot instead of redialing.
+		if p.retireIfOver(s) {
+			p.log("mtcp: exit slot %d retired — pattern shrinking (now %d)", s.id, n)
+			return
+		}
+		p.log("mtcp: exit link down (slot %d; now %d); redial", s.id, n)
 	}
 }
 
@@ -170,37 +191,25 @@ func openPoolCtl(ctx context.Context, l Link, get func() int, logf func(string, 
 		return
 	}
 	buf := make([]byte, poolCtlLen)
-	last := -1
-	t := time.NewTicker(poolCtlInterval)
+	last, lastSent := -1, time.Time{}
+	t := time.NewTicker(time.Second)
 	defer t.Stop()
-	send := func() bool {
-		n := get()
-		binary.BigEndian.PutUint16(buf, uint16(n))
-		st.SetWriteDeadline(time.Now().Add(poolCtlInterval))
-		if _, err := st.Write(buf); err != nil {
-			return false
-		}
-		last = n
-		return true
-	}
-	if !send() {
-		return
-	}
 	for {
+		// Send on every change (within a second) and refresh every
+		// poolCtlInterval so a freshly started exit learns the target quickly.
+		// Nothing is sent until the edge has a real target (> 0).
+		if n := get(); n > 0 && (n != last || time.Since(lastSent) >= poolCtlInterval) {
+			binary.BigEndian.PutUint16(buf, uint16(n))
+			st.SetWriteDeadline(time.Now().Add(poolCtlInterval))
+			if _, err := st.Write(buf); err != nil {
+				return
+			}
+			last, lastSent = n, time.Now()
+		}
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if get() != last { // send on change, plus a periodic refresh below
-				if !send() {
-					return
-				}
-				continue
-			}
-			// periodic keep-alive of the target so a fresh exit slot learns it soon
-			if !send() {
-				return
-			}
 		}
 	}
 }

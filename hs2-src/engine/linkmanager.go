@@ -77,10 +77,16 @@ type LinkManager struct {
 	aggGoodput    float64    // EWMA-summed goodput across links, bytes/sec
 	poolSaturated bool       // last sample: links are network-limited (want to push more)
 
-	target  atomic.Int32  // latest desired link count (published for the reverse exit)
-	phase   atomic.Int32  // last apPhase, for the live monitor
-	lastAgg atomic.Uint64 // last aggregate goodput, bytes/sec, for the live monitor
-	lastSat atomic.Bool   // last saturation reading, for the live monitor
+	target atomic.Int32 // latest desired link count (published for the reverse exit)
+	// pin, when > 0, overrides the autopilot's decision (tests only).
+	pin atomic.Int32
+	// targetDropAt is when the reverse edge's target last went down; an idle link
+	// is only retired once the exit has had time to learn the lower target, so it
+	// retires that slot instead of redialing it.
+	targetDropAt time.Time
+	phase        atomic.Int32  // last apPhase, for the live monitor
+	lastAgg      atomic.Uint64 // last aggregate goodput, bytes/sec, for the live monitor
+	lastSat      atomic.Bool   // last saturation reading, for the live monitor
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
@@ -134,7 +140,7 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 	}
 	m := &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf,
 		ap: newAutopilot(min, max, perLink)}
-	m.target.Store(int32(min))
+	m.target.Store(int32(warmSize(min, max)))
 	return m
 }
 
@@ -224,13 +230,7 @@ func (m *LinkManager) Run(ctx context.Context) {
 	// burst of user connections arriving right after start spreads across enough
 	// links to beat per-connection throttling at once; the autopilot then shrinks
 	// toward min if the tunnel is idle. This costs only a one-time startup ramp.
-	warm := warmStartLinks
-	if warm < m.min {
-		warm = m.min
-	}
-	if warm > m.max {
-		warm = m.max
-	}
+	warm := warmSize(m.min, m.max)
 	for i := 0; i < warm; i++ {
 		if i > 0 && !sleepCtx(ctx, jitterGap()) {
 			m.closeAll()
@@ -261,6 +261,10 @@ func (m *LinkManager) Run(ctx context.Context) {
 // (which sends the target to the exit) get their number, so both directions size
 // the pattern by exactly the same logic.
 func (m *LinkManager) decideTarget(have int) int {
+	if p := int(m.pin.Load()); p > 0 {
+		m.setTarget(p)
+		return p
+	}
 	d := m.ap.decide(apSample{
 		now:        time.Now(),
 		users:      int(m.users.Load()),
@@ -268,7 +272,7 @@ func (m *LinkManager) decideTarget(have int) int {
 		aggGoodput: m.aggGoodput,
 		saturated:  m.poolSaturated,
 	})
-	m.target.Store(int32(d.target))
+	m.setTarget(d.target)
 	m.phase.Store(int32(d.phase))
 	m.lastAgg.Store(uint64(m.aggGoodput))
 	m.lastSat.Store(m.poolSaturated)
@@ -276,6 +280,68 @@ func (m *LinkManager) decideTarget(have int) int {
 		m.log("mtcp: %s", d.note)
 	}
 	return d.target
+}
+
+// setTarget publishes a new desired link count and remembers when it went down.
+func (m *LinkManager) setTarget(n int) {
+	if old := int(m.target.Swap(int32(n))); n < old {
+		m.targetDropAt = time.Now()
+	}
+}
+
+// warmSize is the pool size a tunnel comes up at: warmStartLinks, clamped to the
+// envelope. Both ends use it so the exit's first dial count and the edge's first
+// published target agree — no churn at start.
+func warmSize(min, max int) int {
+	w := warmStartLinks
+	if w < min {
+		w = min
+	}
+	if w > max {
+		w = max
+	}
+	return w
+}
+
+// retireIdleReverse shrinks the REVERSE pool safely. The exit cannot tell which
+// of its links carry users, so it never closes one on its own when the target
+// drops; the edge — which knows every link's users — closes one link that has
+// none, and the exit then retires that slot instead of redialing it. At most one
+// link per tick, and only after the exit has had time to learn the lower target.
+// A link carrying a user is never closed to shrink, so shrinking cannot reset a
+// connection.
+func (m *LinkManager) retireIdleReverse(now time.Time) {
+	want := int(m.target.Load())
+	if now.Sub(m.targetDropAt) < retireAfterDrop {
+		return
+	}
+	m.mu.Lock()
+	live := 0
+	for _, ml := range m.links {
+		if ml.link.Alive() {
+			live++
+		}
+	}
+	if live <= want || live <= m.min {
+		m.mu.Unlock()
+		return
+	}
+	idx := -1
+	for i, ml := range m.links {
+		if ml.link.Alive() && !ml.draining && ml.users.Load() == 0 && ml.link.Active() == 0 {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		m.mu.Unlock()
+		return // every link is busy: keep them, never cut a live connection
+	}
+	ml := m.links[idx]
+	m.links = append(m.links[:idx], m.links[idx+1:]...)
+	m.mu.Unlock()
+	ml.link.Close() // DropLink finds it already gone and stays quiet
+	m.log("mtcp: pattern → %d links: retired idle reverse link %d (%d up)", want, ml.id, live-1)
 }
 
 // autoscale sizes the DIRECT pool: it asks the autopilot for the desired link
@@ -319,7 +385,12 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			// The reverse edge cannot dial, but it is still the brain: it runs the
 			// same autopilot and publishes the desired count for the exit to match
 			// over the pool-control channel (see exit_pool.go / openPoolCtl).
-			m.decideTarget(m.count())
+			// It decides from the COMMITTED size (its current target), not the
+			// momentary link count: links arrive one by one after a restart, and
+			// "hold what is up right now" would tell the exit to cut back to
+			// whatever had connected so far.
+			m.decideTarget(int(m.target.Load()))
+			m.retireIdleReverse(time.Now())
 			m.mu.Lock()
 			alive := m.links[:0]
 			now := time.Now()
