@@ -50,16 +50,6 @@ type pacer struct {
 	// is never held back (it must beat its group's ttl).
 	queued atomic.Int64
 	room   chan struct{} // signalled when queued drops
-
-	// held is set whenever a DATA enqueue had to wait for queue room: the sender
-	// was offering faster than the rate drains, i.e. PACING-limited, not
-	// application-limited. The rate controller reads and clears it each feedback
-	// (tookDemand) and counts it as "using the allowance", so a bursty inner TCP
-	// flow that drains the shallow queue between wake-ups — under-filling the
-	// averaged send rate for whole reports while it has a full backlog — still
-	// lets the rate grow instead of freezing at the floor it was left at after an
-	// ACK-only download (the after-idle stall seen in the field).
-	held atomic.Bool
 }
 
 // pacerQueueTime / pacerQueueMin bound the send queue in time (see pacer).
@@ -110,10 +100,6 @@ func (p *pacer) enqueue(pkt []byte) {
 		dst = p.pri // parity jumps the queue so it beats the group's ttl
 	} else {
 		for p.queued.Load() > p.budget() {
-			// The queue stands above budget and we have another datagram to add:
-			// the sender is offering as much as the rate allows (standing demand),
-			// not idle. Record it for the rate controller.
-			p.held.Store(true)
 			select {
 			case <-p.done:
 				*bp = b
@@ -143,11 +129,6 @@ func (p *pacer) budget() int64 {
 	}
 	return b
 }
-
-// tookDemand reports whether a data enqueue had to wait for queue room since the
-// last call, clearing the flag. True means the sender was pacing-limited
-// (offering more than the rate drained), not application-limited.
-func (p *pacer) tookDemand() bool { return p.held.Swap(false) }
 
 // dequeued releases n bytes of queue budget and wakes a waiting enqueue.
 func (p *pacer) dequeued(n int) {
