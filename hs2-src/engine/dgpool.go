@@ -199,6 +199,12 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 			return
 		case p := <-l.q:
 			if time.Since(p.t) > dgSojourn {
+				// The packet aged out behind a writer blocked in the pacer: the
+				// carrier could not drain its queue within the sojourn, so it is
+				// at its limit just as surely as on a queue-full drop. Record it
+				// as pressure, or a starved carrier reads as "not at its limit"
+				// and the pool shrinks under exactly the load that needs it.
+				l.droppedAt.Store(time.Now().UnixNano())
 				drops.Add(1)
 				aged.Add(1)
 				pool.Put(p.b)
