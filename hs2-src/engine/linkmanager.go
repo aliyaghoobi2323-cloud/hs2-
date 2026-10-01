@@ -1417,9 +1417,12 @@ type PoolStats struct {
 	DropQueueFull uint64  // tun packets dropped: the carrier's queue was full
 	DropAged      uint64  // tun packets dropped: waited > 50 ms in a carrier's queue
 	Carriers      string  // per carrier: id:state:sent/loss%
-	Policed       bool    // the pool is held under a policer cap (being tested or confirmed)
-	PoliceConfirm bool    // the cap stretched the loss episodes: a confirmed policer
-	PoliceCapMbit float64 // that cap, Mbit/s (wire: data + parity)
+	// TCP reorder buffer before the TUN (live carriers): segments held behind a
+	// gap, gaps that filled while held, and gaps given up after the hold.
+	ReorderHeld, ReorderFilled, ReorderTimedOut uint64
+	Policed                                     bool    // the pool is held under a policer cap (being tested or confirmed)
+	PoliceConfirm                               bool    // the cap stretched the loss episodes: a confirmed policer
+	PoliceCapMbit                               float64 // that cap, Mbit/s (wire: data + parity)
 }
 
 // publishStats stores the monitor snapshot at the end of a pool tick.

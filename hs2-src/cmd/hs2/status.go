@@ -66,26 +66,29 @@ type liveStatus struct {
 
 	// Datagram tunnels (dgtun): loss of what this side SENDS (the peer
 	// reports it), FEC, drops and the policer cap. Absent = 0 / false.
-	LossPct       float64 `json:"loss_pct,omitempty"`     // pool-wide, rate-weighted
-	MaxLossPct    float64 `json:"max_loss_pct,omitempty"` // worst active carrier
-	ParityPct     float64 `json:"parity_pct,omitempty"`   // FEC parity per data byte
-	FECAtCeiling  int     `json:"fec_at_ceiling,omitempty"`
-	FECRecovered  uint64  `json:"fec_recovered,omitempty"` // received data rebuilt (live carriers)
-	FECLost       uint64  `json:"fec_lost,omitempty"`      // received data lost for good
-	PacerDropped  uint64  `json:"pacer_dropped,omitempty"`
-	RxDropped     uint64  `json:"rx_dropped,omitempty"`
-	TunDrops      uint64  `json:"tun_drops,omitempty"`
-	TunRead       uint64  `json:"tun_read,omitempty"`
-	SentPkts      uint64  `json:"sent_pkts,omitempty"`
-	RecvPkts      uint64  `json:"recv_pkts,omitempty"`
-	TunWritten    uint64  `json:"tun_written,omitempty"`
-	DropNoCarrier uint64  `json:"drop_no_carrier,omitempty"`
-	DropQueueFull uint64  `json:"drop_queue_full,omitempty"`
-	DropAged      uint64  `json:"drop_aged,omitempty"`
-	Carriers      string  `json:"carriers,omitempty"` // id:state:sent/loss% per carrier
-	Policed       bool    `json:"policed,omitempty"`
-	PoliceConfirm bool    `json:"police_confirmed,omitempty"`
-	PoliceCapMbit float64 `json:"police_cap_mbit,omitempty"`
+	LossPct         float64 `json:"loss_pct,omitempty"`     // pool-wide, rate-weighted
+	MaxLossPct      float64 `json:"max_loss_pct,omitempty"` // worst active carrier
+	ParityPct       float64 `json:"parity_pct,omitempty"`   // FEC parity per data byte
+	FECAtCeiling    int     `json:"fec_at_ceiling,omitempty"`
+	FECRecovered    uint64  `json:"fec_recovered,omitempty"` // received data rebuilt (live carriers)
+	FECLost         uint64  `json:"fec_lost,omitempty"`      // received data lost for good
+	PacerDropped    uint64  `json:"pacer_dropped,omitempty"`
+	RxDropped       uint64  `json:"rx_dropped,omitempty"`
+	TunDrops        uint64  `json:"tun_drops,omitempty"`
+	TunRead         uint64  `json:"tun_read,omitempty"`
+	SentPkts        uint64  `json:"sent_pkts,omitempty"`
+	RecvPkts        uint64  `json:"recv_pkts,omitempty"`
+	TunWritten      uint64  `json:"tun_written,omitempty"`
+	DropNoCarrier   uint64  `json:"drop_no_carrier,omitempty"`
+	DropQueueFull   uint64  `json:"drop_queue_full,omitempty"`
+	DropAged        uint64  `json:"drop_aged,omitempty"`
+	Carriers        string  `json:"carriers,omitempty"` // id:state:sent/loss% per carrier
+	ReorderHeld     uint64  `json:"reorder_held,omitempty"`
+	ReorderFilled   uint64  `json:"reorder_filled,omitempty"`
+	ReorderTimedOut uint64  `json:"reorder_timed_out,omitempty"`
+	Policed         bool    `json:"policed,omitempty"`
+	PoliceConfirm   bool    `json:"police_confirmed,omitempty"`
+	PoliceCapMbit   float64 `json:"police_cap_mbit,omitempty"`
 
 	// Process CPU over the last interval, % of ONE core (a 2-core box can
 	// show up to 200), and the core count.
@@ -141,6 +144,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.Policed, ls.PoliceConfirm, ls.PoliceCapMbit = s.Policed, s.PoliceConfirm, s.PoliceCapMbit
 			ls.TunRead, ls.SentPkts, ls.RecvPkts, ls.TunWritten = s.TunRead, s.SentPkts, s.RecvPkts, s.TunWritten
 			ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.Carriers = s.DropNoCarrier, s.DropQueueFull, s.DropAged, s.Carriers
+			ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut = s.ReorderHeld, s.ReorderFilled, s.ReorderTimedOut
 		}
 		ls.CPUPct, ls.CPUCores = cpu.sample(), runtime.NumCPU()
 		ls.CertDays = firstCertExpiryDays()
@@ -302,6 +306,10 @@ func printStatus(path string) {
 		}
 		if ls.Carriers != "" {
 			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup)\n", ls.Carriers)
+		}
+		if ls.ReorderHeld > 0 {
+			fmt.Printf("  reorder:    %d segments held behind a gap; %d gaps filled in order, %d released after the hold\n",
+				ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut)
 		}
 	}
 	if ls.CPUCores > 0 {

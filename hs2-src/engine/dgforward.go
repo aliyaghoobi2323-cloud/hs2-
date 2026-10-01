@@ -3,7 +3,11 @@ package engine
 import (
 	"context"
 	"net"
+	"os"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -41,11 +45,50 @@ func forwardTarget(host, port string) string { return net.JoinHostPort(host, por
 // port 8443, so an edge that is not upgraded yet keeps working for that port.
 const DgTunPort = "28443"
 
+// dgTunRcvBuf is the receive buffer, in bytes, set and locked on the
+// forwarder's sockets that run OVER the tun (the edge's connection to
+// <peer_tun_ip>:28443 and the exit's accepted end of it).
+//
+// Why: that TCP connection rides the datagram carriers, which deliver a packet
+// FEC rebuilt after the ones behind it, and the real path reorders too, so its
+// receiver routinely holds thousands of out-of-order segments. With the
+// kernel's autotuned buffer, which starts small and grows only from what the
+// application read in the last RTT, that out-of-order data overflows the
+// buffer, and the kernel then clamps the advertised window to two segments
+// (tcp_clamp_window) and regrows it slowly. The field measured exactly this:
+// the in-tunnel connection rwnd-limited at ~4 segments per 80 ms RTT (~0.5
+// Mbit/s per connection) with rcv_space ~30 KB, against 0.3-1 MB on healthy
+// runs. A fixed, large buffer keeps the window open from the start. Memory is
+// committed only as data actually queues, and 4 MB is below the 16 MB the
+// autotuner may grow to anyway.
+//
+// HS2_TUN_RCVBUF overrides it in bytes; 0 restores the kernel's autotuning.
+var dgTunRcvBuf = func() int {
+	if v := strings.TrimSpace(os.Getenv("HS2_TUN_RCVBUF")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			return n
+		}
+	}
+	return 4 << 20
+}()
+
+// tunLeg says which side of a forwarder rides the tun, so only that socket
+// gets the large receive buffer (the user and panel legs are local).
+type tunLeg struct{ listen, dial bool }
+
 // runForwarder opens a TCP (and optionally UDP) listener on listenAddr and
 // proxies every connection to dialAddr. Used on both ends of the datagram tun:
-// the edge dials the peer's tun address, the exit dials the panel.
-func runForwarder(ctx context.Context, listenAddr, dialAddr string, udp bool, logf func(string, ...any)) error {
-	ln, err := ListenReuse(listenAddr)
+// the edge dials the peer's tun address, the exit dials the panel. tun marks
+// the leg that rides the tunnel (the exit's listener, the edge's dial).
+func runForwarder(ctx context.Context, listenAddr, dialAddr string, udp bool, tun tunLeg, logf func(string, ...any)) error {
+	lrb, drb := 0, 0
+	if tun.listen {
+		lrb = dgTunRcvBuf
+	}
+	if tun.dial {
+		drb = dgTunRcvBuf
+	}
+	ln, err := listenReuseRcvBuf(listenAddr, lrb)
 	if err != nil {
 		return err
 	}
@@ -56,7 +99,7 @@ func runForwarder(ctx context.Context, listenAddr, dialAddr string, udp bool, lo
 			if err != nil {
 				return
 			}
-			go proxyTCP(ctx, c, dialAddr)
+			go proxyTCP(ctx, c, dialAddr, drb)
 		}
 	}()
 	if udp {
@@ -72,13 +115,27 @@ func runForwarder(ctx context.Context, listenAddr, dialAddr string, udp bool, lo
 }
 
 // proxyTCP dials dialAddr and relays bytes both ways until either end closes.
-func proxyTCP(ctx context.Context, user net.Conn, dialAddr string) {
-	up, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", dialAddr)
+// rcvbuf > 0 sets (locks) the dialed socket's receive buffer before connect,
+// so the SYN advertises a window scale that fits it.
+func proxyTCP(ctx context.Context, user net.Conn, dialAddr string, rcvbuf int) {
+	up, err := forwardDialer(rcvbuf).DialContext(ctx, "tcp", dialAddr)
 	if err != nil {
 		user.Close()
 		return
 	}
 	relay(user, up)
+}
+
+// forwardDialer returns the forwarder's dialer; rcvbuf > 0 sets (locks) the
+// receive buffer on the socket before connect.
+func forwardDialer(rcvbuf int) *net.Dialer {
+	d := &net.Dialer{Timeout: 10 * time.Second}
+	if rcvbuf > 0 {
+		d.Control = func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) { setRcvBuf(fd, rcvbuf) })
+		}
+	}
+	return d
 }
 
 // udpProxyIdle is how long a UDP flow with no traffic is kept before its
@@ -174,14 +231,14 @@ func StartDgForwarders(ctx context.Context, edge bool, ports []string, userListe
 		if panel == "" {
 			return nil
 		}
-		if err := runForwarder(ctx, forwardTarget(localTunIP, DgTunPort), panel, udp, logf); err != nil {
+		if err := runForwarder(ctx, forwardTarget(localTunIP, DgTunPort), panel, udp, tunLeg{listen: true}, logf); err != nil {
 			return err
 		}
 		logf("dg: tun port %s -> panel %s (all user ports)", DgTunPort, panel)
 		return nil
 	}
 	for _, p := range ports {
-		if err := runForwarder(ctx, forwardTarget(userListenIP, p), forwardTarget(peerTunIP, DgTunPort), udp, logf); err != nil {
+		if err := runForwarder(ctx, forwardTarget(userListenIP, p), forwardTarget(peerTunIP, DgTunPort), udp, tunLeg{dial: true}, logf); err != nil {
 			return err
 		}
 		logf("dg: user port %s open, forwarded over the tun to the panel", p)

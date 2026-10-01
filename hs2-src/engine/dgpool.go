@@ -122,6 +122,10 @@ type dgLink struct {
 
 	flowMu sync.Mutex
 	flows  map[uint32]*dgFlow
+
+	// ro puts each TCP flow's segments from this carrier back in order before
+	// the TUN (see reorder.go). Set by the pool when the carrier joins.
+	ro *reorderer
 }
 
 // dgFlow is one L3 flow's activity on a carrier.
@@ -268,7 +272,7 @@ type dgPool struct {
 	// reports it to the edge as a TypeLinkStats frame; the edge folds it into
 	// sampleHealth so the autopilot sizes for the busier of the two directions.
 	// A peer that predates the frame drops it unread, so it is safe to send.
-	downSender bool         // EXIT: measure and report; EDGE: consume and fold in
+	downSender bool          // EXIT: measure and report; EDGE: consume and fold in
 	dnPressed  atomic.Uint32 // EDGE: exit's serving carriers pressed on download
 	dnServing  atomic.Uint32 // EDGE: exit's serving carriers (for clamping)
 	dnStatsAt  atomic.Int64  // EDGE: unixnano the last report arrived (0 = none)
@@ -382,6 +386,11 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	p.set = append(p.set, l)
 	n := len(p.set)
 	p.mu.Unlock()
+	l.ro = newReorderer(dgReorderHold, func(b []byte) {
+		if _, err := p.dev.Write(b); err == nil {
+			p.tunWritten.Add(1)
+		}
+	})
 	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	go p.readLoop(ctx, l)
 	if l.bornSpare {
@@ -395,6 +404,7 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 // readLoop pumps received frames from one carrier into the TUN until it dies.
 func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 	defer l.markDead()
+	defer l.ro.Close() // release anything still held behind a gap
 	for ctx.Err() == nil {
 		ft, payload, err := l.car.ReadFrame()
 		if err != nil {
@@ -405,7 +415,9 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 			now := p.now()
 			p.recvPkts.Add(1)
 			l.noteFlowRecv(flowHash(payload), len(payload), now)
-			if _, err := p.dev.Write(payload); err == nil {
+			if l.ro != nil {
+				l.ro.Push(payload) // in TCP order, or held briefly behind a gap
+			} else if _, err := p.dev.Write(payload); err == nil {
 				p.tunWritten.Add(1)
 			}
 		case core.TypePing:
@@ -931,6 +943,16 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 	ps.SentPkts, ps.RecvPkts = p.sentPkts.Load(), p.recvPkts.Load()
 	ps.DropNoCarrier, ps.DropQueueFull, ps.DropAged = p.dropNoCarrier.Load(), p.dropQueueFull.Load(), p.dropAged.Load()
 	ps.Carriers = p.carrierLine()
+	p.mu.RLock()
+	for _, l := range p.set {
+		if l.alive() && l.ro != nil {
+			st := l.ro.Stats()
+			ps.ReorderHeld += st.Held
+			ps.ReorderFilled += st.Filled
+			ps.ReorderTimedOut += st.TimedOut
+		}
+	}
+	p.mu.RUnlock()
 	ps.Policed, ps.PoliceConfirm = p.gov.Capped(), p.gov.Confirmed()
 	ps.PoliceCapMbit = round1f(mbitps(p.gov.CapBytes()))
 	// Hysteresis: at the ceiling for 2 samples in a row to say so, clear of it

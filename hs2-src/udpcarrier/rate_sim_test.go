@@ -278,16 +278,7 @@ func runRateSim(p simPath, dur, warm time.Duration, seed uint64) simResult {
 				rtt = (now - r.echo - r.echoDelay) / 1000
 				echo = at(r.echo).UnixNano()
 			}
-			// Pacer "demand" (the real pacer's held): the sender has a standing
-			// backlog above the pacing budget — it is offering faster than the
-			// rate drains (pacing-limited), not application-limited. A saturating
-			// sender always has it; an app-limited one has it only while the app
-			// offers more than the rate (ramping), and loses it once the rate
-			// catches up, so a genuinely light flow never inflates the rate.
-			appLimitedNow := p.appRateBps > 0 && (p.appUntilMs == 0 || now < p.appUntilMs)
-			budgetBytes := rc.pacingRate(at(now)) * pacerQueueTime.Seconds()
-			demand := !appLimitedNow || appTokens > budgetBytes
-			rc.onFeedback(at(now), r.rx, rtt, r.lossPPM, echo, r.owdTicks, r.haveOWD, demand)
+			rc.onFeedback(at(now), r.rx, rtt, r.lossPPM, echo, r.owdTicks, r.haveOWD)
 			if simTrace != nil && now < float64(simTraceUntil/time.Millisecond) {
 				simTrace(fmt.Sprintf("t=%6.0fms rate=%7.2f bl=%4.2f fl=%4.2f qs=%6.1f busy=%6.1f st=%v cap=%.1f btl=%.1f loss=%d",
 					now, rc.rate*8/1e6, rc.baseLoss, rc.fullLoss, rc.queue*1000, math.Max(0, busyUntil-now), rc.startup, rc.capEst*8/1e6, rc.btlBw*8/1e6, r.lossPPM))
