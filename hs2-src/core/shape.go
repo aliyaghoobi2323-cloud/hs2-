@@ -34,6 +34,36 @@ func PadTarget(n int) int {
 	return n // larger than the top bucket: sent as-is (already full-size)
 }
 
+// dgPadBuckets are the datagram-path size buckets. They stop at 1024 (there is
+// no full-MTU bucket like padBuckets' 1400): a datagram carrier has a strict
+// per-packet MTU budget, so a bucket near it risks pushing a near-full packet
+// over the path MTU and fragmenting — itself a loud tell and a breakage. Bulk
+// packets (already ~MTU and near-uniform) are left exactly as they are, so the
+// bulk direction a tunnel actually sizes for carries ZERO padding overhead; the
+// buckets only collapse the small/medium sizes (acks, control, keepalives,
+// fillers) that otherwise track the payload and individually identify a flow.
+var dgPadBuckets = []int{64, 128, 256, 512, 1024}
+
+// PadDatagramTarget returns the padded plaintext length for a datagram payload
+// of n bytes: n rounded up to the next bucket, but never to a value at or above
+// max (the carrier's inner MTU) so the sealed frame still fits one unfragmented
+// path datagram, and never padding a payload larger than the largest bucket
+// (bulk is sent as-is). max <= 0 disables padding (returns n).
+func PadDatagramTarget(n, max int) int {
+	if max <= 0 {
+		return n
+	}
+	for _, b := range dgPadBuckets {
+		if b >= max {
+			break // a bucket at/over the MTU budget would risk fragmenting
+		}
+		if n <= b {
+			return b
+		}
+	}
+	return n // bulk (above the largest safe bucket): already ~MTU, sent as-is
+}
+
 // randInt returns a uniform int in [0,max).
 func randInt(max int) int {
 	if max <= 0 {

@@ -142,6 +142,43 @@ status file under `/run/hs2/` (`loss_pct`, `max_loss_pct`, `parity_pct`,
 
 Each inner flow is pinned to one carrier for as long as it lives (a pool resize never moves a live flow), so inner TCP never sees reordering from the pool.
 
+## How the icmp tunnel looks on the wire (and what it cannot hide)
+
+The icmp encapsulation is shaped so a passive or stateful classifier cannot pick
+it out of ordinary ping by its *form*:
+
+- **No fixed constant.** There is no framing magic. The only thing that tells the
+  two directions apart is a keyed byte in the echo **sequence** (not the echo id,
+  which NAT may rewrite), and the structured header after it is XOR-masked with a
+  ChaCha20 keystream from an 8-byte per-packet nonce — so nothing above the ICMP
+  type/code is a stable value or a readable counter.
+- **Ping-like exchange.** Requests carry DF=1 and replies DF=0, exactly as the
+  kernel's own ping does. Each reply takes its own ascending echo sequence (never
+  a repeat), and the tunnel keeps roughly **one reply per request** like a real
+  ping — in reverse mode at near-zero cost, in direct mode by padding the gap with
+  cheap filler echoes.
+- **Size.** Small packets, keepalives and fillers are padded to a handful of size
+  buckets, so a frame's size no longer tracks its payload. Bulk packets (already
+  near the MTU) are left as they are, so the bulk direction carries no padding
+  overhead; set `HS2_DG_PAD=0` to turn padding off entirely for the last few
+  percent of goodput.
+
+The data itself is always end-to-end AEAD-encrypted (ChaCha20-Poly1305); the
+obfuscation is cosmetic and keyed separately — it only removes patterns, it is
+not the security boundary.
+
+**What it cannot hide — volume.** You cannot move real throughput and still look
+like an ordinary ping. A normal ping is a slow trickle of tiny, low-entropy
+packets; encrypted bulk is a stream of large, high-entropy ones. Framing erases
+*patterns*, not raw rate, so a single server IP exchanging ICMP echo with one peer
+at hundreds or thousands of packets per second is itself the tell — no amount of
+header shaping changes that. The real mitigation is **deployment, not framing**:
+spread the load across several server IPs so no single IP pair carries a
+ping-unlike rate (the pool already spreads across several carriers; `bind_local_ip`
+and multiple exit IPs let you split it further), and reserve icmp for paths that
+pass *only* ICMP — where a path also passes udp or tls, those carry far more per
+IP without pretending to be ping.
+
 ## What the installer checks for you
 
 - **"Ready" means packets cross.** The server that pastes the link starts

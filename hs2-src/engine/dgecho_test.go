@@ -134,6 +134,80 @@ func TestDgEchoDirectEdgePullsRequests(t *testing.T) {
 	}
 }
 
+// icmpFakeDialer / icmpFakeAccepter produce in-memory carriers that report the
+// icmp encap kind, so a full pool run turns the echo balancer ON at both ends —
+// the case where TWO balancers face each other, which the single-link tests
+// above cannot exercise.
+type icmpFakeDialer struct{ accept chan Carrier }
+
+func (d *icmpFakeDialer) Dial(ctx context.Context) (Carrier, error) {
+	e, x := newDgFakePair()
+	select {
+	case d.accept <- kindCarrier{dgFakeCarrier: x, kind: "icmp"}:
+		return kindCarrier{dgFakeCarrier: e, kind: "icmp"}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+type icmpFakeAccepter struct{ accept chan Carrier }
+
+func (a *icmpFakeAccepter) Accept(ctx context.Context) (Carrier, error) {
+	select {
+	case c := <-a.accept:
+		return c, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+func (a *icmpFakeAccepter) Close() error { return nil }
+
+func newICMPFakeLink() (*icmpFakeDialer, *icmpFakeAccepter) {
+	ch := make(chan Carrier, 64)
+	return &icmpFakeDialer{ch}, &icmpFakeAccepter{ch}
+}
+
+// With the echo balancer active on BOTH ends (icmp carriers), data must still
+// flow both ways in direct AND reverse, and fillers must stay bounded: a filler
+// storm would fill the carrier channels, stall the pumps and time out a recv.
+// This is the end-to-end check the single-link balancer tests cannot give — two
+// balancers facing each other through the real pool run loops.
+func TestDgPoolICMPShapedBothModes(t *testing.T) {
+	for _, reverse := range []bool{false, true} {
+		name := "direct"
+		if reverse {
+			name = "reverse"
+		}
+		t.Run(name, func(t *testing.T) {
+			edgeTUN, exitTUN := newFakeTUN(1400), newFakeTUN(1400)
+			dialer, accepter := newICMPFakeLink()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			logf := func(string, ...any) {}
+			if reverse { // reverse: exit dials, edge accepts
+				go RunDgEdge(ctx, DgConfig{Dev: edgeTUN, Min: 2, Max: 8, PerLink: 8, Reverse: true, Listener: accepter, Log: logf})
+				go RunDgExit(ctx, DgConfig{Dev: exitTUN, Min: 2, Max: 8, PerLink: 8, Reverse: true, Dialer: dialer, Log: logf})
+			} else { // direct: edge dials, exit accepts
+				go RunDgEdge(ctx, DgConfig{Dev: edgeTUN, Min: 2, Max: 8, PerLink: 8, Dialer: dialer, Log: logf})
+				go RunDgExit(ctx, DgConfig{Dev: exitTUN, Min: 2, Max: 8, PerLink: 8, Listener: accepter, Log: logf})
+			}
+			waitTunUp(t, edgeTUN, exitTUN)
+			drain(edgeTUN)
+			drain(exitTUN)
+			for i := 0; i < 20; i++ {
+				exitTUN.inject(ipPacket(80, 5555, []byte("down")))
+				if edgeTUN.recv(2*time.Second) == nil {
+					t.Fatalf("%s: exit->edge packet %d lost (balancer stall?)", name, i)
+				}
+				edgeTUN.inject(ipPacket(5555, 80, []byte("up")))
+				if exitTUN.recv(2*time.Second) == nil {
+					t.Fatalf("%s: edge->exit packet %d lost (balancer stall?)", name, i)
+				}
+			}
+		})
+	}
+}
+
 // The heavy direction (frames sent already ahead of frames received) emits no
 // filler, so a filler never begets a filler across the two ends — there is no
 // request/reply runaway. Upload data already sent counts toward txFrames, so an

@@ -434,7 +434,13 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 		if err != nil {
 			return
 		}
-		if l.echoShaped {
+		// Count only REAL frames (data, pool control) toward the echo balance —
+		// never a received filler (Ping/Pong). If a received filler were counted,
+		// this side would owe a reply to it and the peer would owe one back, so
+		// two balancers could trade fillers without end. Anchoring on real traffic
+		// keeps the data-heavy direction ahead (it never fills) and only the light
+		// one catching up, so fillers stay bounded by the real data they match.
+		if l.echoShaped && ft != core.TypePing && ft != core.TypePong {
 			l.rxFrames.Add(1)
 		}
 		switch ft {
@@ -449,10 +455,8 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 			}
 		case core.TypePing, core.TypePong, core.TypeClose:
 			// Inert in the datagram pool — the carrier handles its own liveness.
-			// A TypePing here is the peer's echo-shaping filler (one echo
-			// request); echoBalance below already counted it as a received frame
-			// and answers it like any other, so we must NOT pong it, or that one
-			// request would draw two replies and push the ratio past 1:1.
+			// A Ping/Pong here is the peer's echo-shaping filler; it is neither
+			// counted (above) nor answered, so fillers can never chain.
 		case core.TypePoolCtl:
 			p.onPoolCtl(l, payload)
 		case core.TypeLinkStats:
@@ -508,9 +512,10 @@ func carrierEchoShaped(c Carrier) bool {
 // Data (writeLoop) and control frames also count toward txFrames, so a side
 // already sending enough on its own emits no filler; the filler only fills the
 // gap the LIGHT direction leaves (upload replies on a download-heavy reverse
-// edge; upload requests on a download-heavy direct edge). The HEAVY direction
-// has txFrames > rxFrames and never fills, so a filler never begets a filler —
-// no feedback loop. It is purely additive: it never gates, delays or drops a
+// edge; upload requests on a download-heavy direct edge). Received fillers are
+// not counted (see readLoop), so a filler never begets a filler and the HEAVY
+// direction (txFrames > rxFrames) never fills — no feedback loop whatsoever. It
+// is purely additive: it never gates, delays or drops a
 // data frame, so the carrier's throughput is unchanged. The ratio is only
 // approximate (FEC fans one data frame into several wire shards, feedback rides
 // below the engine), which is all a real-ping ratio check needs.

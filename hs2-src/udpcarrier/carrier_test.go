@@ -106,6 +106,33 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// Datagram size-bucket padding (B6) is inside the AEAD, so it must be invisible
+// to the receiver: every payload size, in both directions, decodes to the exact
+// bytes sent — small packets that get padded up to a bucket, boundary sizes, and
+// bulk that is left as-is. This runs with padding on (the default).
+func TestDatagramPaddingTransparent(t *testing.T) {
+	cli, srv, l := pair(t)
+	defer l.Close()
+	defer cli.Close()
+	defer srv.Close()
+
+	for _, n := range []int{0, 1, 40, 63, 64, 65, 100, 255, 256, 300, 512, 600, 1024, 1025, 1200} {
+		msg := bytes.Repeat([]byte{byte(n + 1)}, n)
+		if err := cli.SendFrame(core.TypeData, msg); err != nil {
+			t.Fatalf("cli send %d: %v", n, err)
+		}
+		if ft, got := readOne(t, srv, 3*time.Second); ft != core.TypeData || !bytes.Equal(got, msg) {
+			t.Fatalf("cli->srv %d bytes: ft=%d, got %d bytes (padding not transparent)", n, ft, len(got))
+		}
+		if err := srv.SendFrame(core.TypeData, msg); err != nil {
+			t.Fatalf("srv send %d: %v", n, err)
+		}
+		if ft, got := readOne(t, cli, 3*time.Second); ft != core.TypeData || !bytes.Equal(got, msg) {
+			t.Fatalf("srv->cli %d bytes: ft=%d, got %d bytes (padding not transparent)", n, ft, len(got))
+		}
+	}
+}
+
 func TestManyFrames(t *testing.T) {
 	cli, srv, l := pair(t)
 	defer l.Close()

@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -11,6 +12,11 @@ import (
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/fec"
 )
+
+// dgPadDisabled turns off datagram size-bucket padding (B6) when HS2_DG_PAD=0,
+// for a user who wants the last few percent of goodput over size shaping. On by
+// default; it only pads small/medium frames, never bulk, so the cost is bounded.
+var dgPadDisabled = os.Getenv("HS2_DG_PAD") == "0"
 
 // deadAfter mirrors the engine's own liveness timeout: if no frame arrives for
 // this long the link is considered dead and ReadFrame returns an error so the
@@ -39,10 +45,11 @@ type frameMsg struct {
 // like the TCP and reality carriers, unaware that underneath it is Noise over
 // FEC over UDP.
 type Conn struct {
-	sess    *core.Session
-	shared  []byte
-	binding []byte
-	kind    string // encap kind ("" / "udp" / "icmp" / ...); lets a pool shape ICMP
+	sess     *core.Session
+	shared   []byte
+	binding  []byte
+	kind     string // encap kind ("" / "udp" / "icmp" / ...); lets a pool shape ICMP
+	innerMTU int    // tunnel MTU; the ceiling for datagram size-bucket padding (B6)
 
 	enc     *fec.Encoder
 	dec     *fec.Decoder
@@ -134,19 +141,20 @@ func newConn(sess *core.Session, write func([]byte) error, shared, binding []byt
 	fcfg := fec.Config{MaxPayload: maxPayload, K: 8, Window: 60 * time.Millisecond, MaxDepth: 64}
 	rc := newRateControl()
 	c := &Conn{
-		sess:    sess,
-		shared:  shared,
-		binding: binding,
-		enc:     fec.NewEncoder(fcfg),
-		adapter: fec.NewAdapter(fec.AdapterConfig{}),
-		rc:      rc,
-		write:   write,
-		onClose: onClose,
-		rawConn: rawConn,
-		rx:      make(chan rxPkt, 1024),
-		frames:  make(chan frameMsg, 2048),
-		confCh:  make(chan []byte, 4),
-		done:    make(chan struct{}),
+		sess:     sess,
+		shared:   shared,
+		binding:  binding,
+		innerMTU: innerMTU,
+		enc:      fec.NewEncoder(fcfg),
+		adapter:  fec.NewAdapter(fec.AdapterConfig{}),
+		rc:       rc,
+		write:    write,
+		onClose:  onClose,
+		rawConn:  rawConn,
+		rx:       make(chan rxPkt, 1024),
+		frames:   make(chan frameMsg, 2048),
+		confCh:   make(chan []byte, 4),
+		done:     make(chan struct{}),
 	}
 	// ttl a bit over the window so a group waits long enough for its parity but
 	// a permanently lost group is given up on quickly (bounding recovery delay).
@@ -213,7 +221,7 @@ func (c *Conn) sendData(payload []byte) error {
 		return err
 	}
 	c.sendMu.Lock()
-	seq, sealed, err := c.sess.SealDatagram(core.TypeData, 0, payload, 0)
+	seq, sealed, err := c.sess.SealDatagram(core.TypeData, 0, payload, c.dgPadTo(len(payload)))
 	if err != nil {
 		c.sendMu.Unlock()
 		return err
@@ -235,7 +243,7 @@ func (c *Conn) sendControl(ftype byte, payload []byte) error {
 	default:
 	}
 	c.ctrlMu.Lock()
-	seq, sealed, err := c.sess.SealDatagram(ftype, 0, payload, 0)
+	seq, sealed, err := c.sess.SealDatagram(ftype, 0, payload, c.dgPadTo(len(payload)))
 	if err != nil {
 		c.ctrlMu.Unlock()
 		return err
@@ -631,6 +639,18 @@ func (c *Conn) AttachGovernor(g *Governor) {
 // stateful classifier expects to be ~1:1). Fixed at construction, so safe to
 // read without locking.
 func (c *Conn) Encap() string { return c.kind }
+
+// dgPadTo returns the padTo for a datagram frame of n payload bytes: n rounded
+// up to the next size bucket (B6), capped at the inner MTU so the sealed frame
+// cannot push the packet past the path MTU and fragment, or 0 (no padding) when
+// shaping is disabled. A full-size data frame is already above the largest
+// bucket, so bulk traffic carries no padding overhead.
+func (c *Conn) dgPadTo(n int) int {
+	if dgPadDisabled {
+		return 0
+	}
+	return core.PadDatagramTarget(n, c.innerMTU)
+}
 
 // Warm reports whether the carrier's rate model has a capacity estimate (it
 // has left startup), so a pool can tell path backpressure from a carrier that

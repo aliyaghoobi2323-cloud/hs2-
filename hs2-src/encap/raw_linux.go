@@ -111,6 +111,14 @@ func randLinkID() uint16 {
 	}
 }
 
+// randReplyCtr seeds a peer's reply counter (icmp) with a random 16-bit value,
+// so the first reply to each peer does not start at a fixed sequence.
+func randReplyCtr() uint16 {
+	var b [2]byte
+	rand.Read(b[:])
+	return binary.BigEndian.Uint16(b[:])
+}
+
 // bufPool holds packet-build scratch so concurrent writers (the carrier's
 // pacer and its control sender) never serialise on one buffer.
 var bufPool = sync.Pool{New: func() any { b := make([]byte, 0, 2048); return &b }}
@@ -344,6 +352,12 @@ func (c *rawPacketConn) notePeer(src, dst net.IP, id uint16) *Addr {
 			}
 		}
 		p = &rawPeer{addr: &Addr{IP: append(net.IP(nil), src...), ID: id, Kind: c.f.kind}}
+		if c.f.obf {
+			// icmp: start the reply counter at a random offset so a flow's first
+			// reply sequence is not a constant (0) across flows, exactly as the
+			// dial side seeds its request sequence randomly.
+			p.replyCtr = randReplyCtr()
+		}
 		c.peers[k] = p
 	}
 	p.seen = now
