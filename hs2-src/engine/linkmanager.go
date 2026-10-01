@@ -147,6 +147,7 @@ type LinkManager struct {
 	reArrivals   []time.Time // surplus arrivals shortly after a retire-close
 	noCloseUntil time.Time   // churn guard: no retire-closes before this
 	growable     bool        // last sample: the peer can add links
+	shortLived   shortLivedLinks
 	noPoolLogged bool
 }
 
@@ -859,10 +860,42 @@ func (m *LinkManager) reap() {
 	}
 	m.links = alive
 	m.mu.Unlock()
+	now := m.now()
 	for _, ml := range dead {
 		ml.link.Close()
 		m.log("mtcp: link %d down: %s", ml.id, linkDownReason(ml.link))
+		if hint := m.shortLived.note(now.Sub(ml.born)); hint != "" {
+			m.log("mtcp: %s", hint)
+		}
 	}
+}
+
+// shortLivedLinks notices a path that lets a TCP link come up and then kills
+// it (the Iran border does this to TCP after ~10 KB): several links in a row
+// dead within shortLinkLife. It says so once, with the way out, instead of an
+// endless column of "link down: timed out".
+type shortLivedLinks struct {
+	run    int
+	hinted bool
+}
+
+const (
+	shortLinkLife = 20 * time.Second
+	shortLinkRun  = 3
+)
+
+// note takes one dead link's lifetime and returns the hint when it is due.
+func (s *shortLivedLinks) note(life time.Duration) string {
+	if life >= shortLinkLife {
+		s.run, s.hinted = 0, false
+		return ""
+	}
+	s.run++
+	if s.run < shortLinkRun || s.hinted {
+		return ""
+	}
+	s.hinted = true
+	return fmt.Sprintf("%d links in a row died within %s of coming up — this path lets TCP start and then kills it (common on the Iran border after ~10 KB); the tun over icmp transport (tun → icmp) does not use TCP on the wire", s.run, shortLinkLife)
 }
 
 // pickKey orders candidate links for a new user connection; smaller is better.
@@ -1376,6 +1409,14 @@ type PoolStats struct {
 	PacerDropped  uint64  // datagrams the carriers' pacers dropped (live carriers)
 	RxDropped     uint64  // received datagrams dropped for a full carrier queue (live carriers)
 	TunDrops      uint64  // tunnel packets dropped for a full carrier queue (since start)
+	TunRead       uint64  // packets read from the tun (to send)
+	SentPkts      uint64  // ... handed to a carrier and sent
+	RecvPkts      uint64  // packets received from carriers
+	TunWritten    uint64  // ... written to the tun
+	DropNoCarrier uint64  // tun packets dropped: no live carrier
+	DropQueueFull uint64  // tun packets dropped: the carrier's queue was full
+	DropAged      uint64  // tun packets dropped: waited > 50 ms in a carrier's queue
+	Carriers      string  // per carrier: id:state:sent/loss%
 	Policed       bool    // the pool is held under a policer cap (being tested or confirmed)
 	PoliceConfirm bool    // the cap stretched the loss episodes: a confirmed policer
 	PoliceCapMbit float64 // that cap, Mbit/s (wire: data + parity)

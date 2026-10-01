@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -102,6 +103,7 @@ type dgLink struct {
 	// the sampler)
 	bytesUp   atomic.Uint64
 	bytesDown atomic.Uint64
+	sentPkts  atomic.Uint64
 	droppedAt atomic.Int64 // unixnano of the last queue-full drop (pressure)
 
 	// sampler state (pool goroutine only)
@@ -186,7 +188,7 @@ func (l *dgLink) noteFlowRecv(flow uint32, n int, now time.Time) {
 // writeLoop is the only goroutine that sends on the carrier. Each queued IP
 // packet is one datagram; the carrier does its own pacing and framing, so
 // there is nothing to coalesce (unlike the TLS l3 path).
-func (l *dgLink) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
+func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 	for {
 		select {
 		case <-l.done:
@@ -194,6 +196,7 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 		case p := <-l.q:
 			if time.Since(p.t) > dgSojourn {
 				drops.Add(1)
+				aged.Add(1)
 				pool.Put(p.b)
 				continue
 			}
@@ -203,6 +206,8 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 				l.markDead()
 				return
 			}
+			l.sentPkts.Add(1)
+			sent.Add(1)
 		}
 	}
 }
@@ -249,9 +254,29 @@ type dgPool struct {
 	// (all carriers share its IP) and caps the pool's total send rate.
 	gov *udpcarrier.Governor
 
+	// sticky maps a live flow to the carrier it is on. Rendezvous hashing
+	// alone moves ~1/n of the flows whenever the serving set changes (a carrier
+	// added, retired or un-retired), and every move reorders that flow's
+	// packets — which its inner TCP reads as loss. So a flow stays on its
+	// carrier until the carrier dies or the flow pauses; only then is it
+	// hashed again. Written by pumpTun only; pruned by drainTick.
+	stickyMu sync.Mutex
+	sticky   map[uint32]*stickyFlow
+
+	// packet accounting for the status file (what a field test needs to see
+	// where loss happens): read from the tun, handed to carriers, received from
+	// carriers, written to the tun, and dropped by reason.
+	tunRead, tunWritten, sentPkts, recvPkts atomic.Uint64
+	dropNoCarrier, dropQueueFull, dropAged  atomic.Uint64
+
 	fecCeilLogged bool   // "FEC at its ceiling" was logged and not yet cleared
 	fecCeilRun    int    // consecutive samples at (+) / below (-) the ceiling
 	phaseLabel    string // fixed phase for the snapshot (the direct exit: "listening")
+}
+
+type stickyFlow struct {
+	l    *dgLink
+	last time.Time
 }
 
 func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) *dgPool {
@@ -268,7 +293,8 @@ func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) 
 		logf = func(string, ...any) {}
 	}
 	p := &dgPool{dev: dev, min: min, max: max, perLink: perLink, log: logf,
-		ap: newAutopilot(min, max, perLink), growable: true, gov: udpcarrier.NewGovernor(logf)}
+		ap: newAutopilot(min, max, perLink), growable: true, gov: udpcarrier.NewGovernor(logf),
+		sticky: map[uint32]*stickyFlow{}}
 	p.pool.New = func() any { b := make([]byte, 0, 2048); return &b }
 	p.target.Store(int32(warmSize(min, max)))
 	return p
@@ -333,7 +359,7 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	p.set = append(p.set, l)
 	n := len(p.set)
 	p.mu.Unlock()
-	go l.writeLoop(&p.pool, &p.drops)
+	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	go p.readLoop(ctx, l)
 	if l.bornSpare {
 		p.log("dg: carrier %s up (now %d) — spare: pattern needs %d serving", from, n, p.Target())
@@ -354,8 +380,11 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 		switch ft {
 		case core.TypeData:
 			now := p.now()
+			p.recvPkts.Add(1)
 			l.noteFlowRecv(flowHash(payload), len(payload), now)
-			p.dev.Write(payload)
+			if _, err := p.dev.Write(payload); err == nil {
+				p.tunWritten.Add(1)
+			}
 		case core.TypePing:
 			p.sendVia(l, core.TypePong, nil)
 		case core.TypePoolCtl:
@@ -394,19 +423,60 @@ func (p *dgPool) pumpTun(ctx context.Context) {
 			continue
 		}
 		*bp = b[:n]
+		p.tunRead.Add(1)
 		flow := flowHash(*bp)
-		if l := p.pick(flow); l == nil || !l.enqueue(bp, flow, p.now()) {
+		now := p.now()
+		l := p.pick(flow, now)
+		switch {
+		case l == nil:
 			p.pool.Put(bp)
+			p.dropNoCarrier.Add(1)
+			p.drops.Add(1)
+		case !l.enqueue(bp, flow, now):
+			p.pool.Put(bp)
+			p.dropQueueFull.Add(1)
 			p.drops.Add(1)
 		}
 	}
 }
 
-// pick maps a flow to a live serving carrier by rendezvous hashing, so a flow
-// keeps its carrier for as long as it lives. A retiring carrier still carries
-// the flows already hashed to it (they move only when it dies or they pause),
-// so retiring never reorders a live flow.
-func (p *dgPool) pick(flow uint32) *dgLink {
+// pick returns the carrier for a flow: the one it is already on, while that
+// carrier lives (serving or retiring) and the flow has not paused — so neither
+// a pool resize nor retiring ever reorders a live flow; otherwise a live serving
+// carrier by rendezvous hashing, which is then remembered.
+func (p *dgPool) pick(flow uint32, now time.Time) *dgLink {
+	p.stickyMu.Lock()
+	if sf := p.sticky[flow]; sf != nil {
+		if sf.l.alive() && now.Sub(sf.last) <= flowletGap {
+			sf.last = now
+			p.stickyMu.Unlock()
+			return sf.l
+		}
+		delete(p.sticky, flow)
+	}
+	p.stickyMu.Unlock()
+	l := p.pickHash(flow)
+	if l != nil {
+		p.stickyMu.Lock()
+		p.sticky[flow] = &stickyFlow{l: l, last: now}
+		p.stickyMu.Unlock()
+	}
+	return l
+}
+
+// pruneSticky forgets flows that paused or whose carrier died (drainTick).
+func (p *dgPool) pruneSticky(now time.Time) {
+	p.stickyMu.Lock()
+	for f, sf := range p.sticky {
+		if !sf.l.alive() || now.Sub(sf.last) > flowletGap {
+			delete(p.sticky, f)
+		}
+	}
+	p.stickyMu.Unlock()
+}
+
+// pickHash maps a flow to a live serving carrier by rendezvous hashing.
+func (p *dgPool) pickHash(flow uint32) *dgLink {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	var best *dgLink
@@ -612,6 +682,7 @@ func (p *dgPool) dialOne(ctx context.Context) {
 // have moved off (empty), so shrinking never cuts a live flow.
 func (p *dgPool) drainTick() {
 	now := p.now()
+	p.pruneSticky(now)
 	p.mu.Lock()
 	var closing []*dgLink
 	kept := p.set[:0]
@@ -776,6 +847,10 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 		ps.LossPct = round1f(loss * 100)
 	}
 	ps.TunDrops = p.drops.Load()
+	ps.TunRead, ps.TunWritten = p.tunRead.Load(), p.tunWritten.Load()
+	ps.SentPkts, ps.RecvPkts = p.sentPkts.Load(), p.recvPkts.Load()
+	ps.DropNoCarrier, ps.DropQueueFull, ps.DropAged = p.dropNoCarrier.Load(), p.dropQueueFull.Load(), p.dropAged.Load()
+	ps.Carriers = p.carrierLine()
 	ps.Policed, ps.PoliceConfirm = p.gov.Capped(), p.gov.Confirmed()
 	ps.PoliceCapMbit = round1f(mbitps(p.gov.CapBytes()))
 	// Hysteresis: at the ceiling for 2 samples in a row to say so, clear of it
@@ -796,6 +871,33 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 }
 
 func round1f(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
+
+// carrierLine is one compact line per live carrier for the status file:
+// id:state:sent-packets/loss% — enough to see which carrier loses.
+func (p *dgPool) carrierLine() string {
+	type statser interface{ Stats() udpcarrier.Stats }
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	var b []byte
+	for _, l := range p.set {
+		if !l.alive() {
+			continue
+		}
+		st := "serving"
+		if l.retiring {
+			st = "retiring"
+		}
+		loss := 0.0
+		if c, ok := l.car.(statser); ok {
+			loss = float64(c.Stats().LossPPM) / 1e4
+		}
+		if len(b) > 0 {
+			b = append(b, ' ')
+		}
+		b = append(b, []byte(fmt.Sprintf("%d:%s:%d/%.1f%%", l.id, st, l.sentPkts.Load(), loss))...)
+	}
+	return string(b)
+}
 
 // Stats returns the last published snapshot.
 func (p *dgPool) Stats() PoolStats {

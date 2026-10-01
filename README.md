@@ -138,7 +138,9 @@ rebuilt / lost, the policer cap when one is active, drops (pacer, receive
 queue, tunnel queue) and the daemon's CPU use. The same fields are in the live
 status file under `/run/hs2/` (`loss_pct`, `max_loss_pct`, `parity_pct`,
 `fec_at_ceiling`, `fec_recovered`, `fec_lost`, `pacer_dropped`, `rx_dropped`,
-`tun_drops`, `policed`, `police_confirmed`, `police_cap_mbit`, `cpu_pct`, `cpu_cores`).
+`tun_drops`, `policed`, `police_confirmed`, `police_cap_mbit`, `cpu_pct`, `cpu_cores`), plus packet counts by stage — `tun_read`, `sent_pkts`, `recv_pkts`, `tun_written` — drops by reason (`drop_no_carrier`, `drop_queue_full`, `drop_aged`) and one `carriers` line (`id:state:sent/loss%` per carrier), so a field test can see exactly where packets are lost.
+
+Each inner flow is pinned to one carrier for as long as it lives (a pool resize never moves a live flow), so inner TCP never sees reordering from the pool.
 
 ## What the installer checks for you
 

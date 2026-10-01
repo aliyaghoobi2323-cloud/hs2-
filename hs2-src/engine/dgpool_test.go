@@ -140,24 +140,25 @@ func TestDgPoolRoundTrip(t *testing.T) {
 func TestDgPoolFlowPinning(t *testing.T) {
 	dev := newFakeTUN(1400)
 	p := newDgPool(dev, 4, 4, 8, t.Logf)
+	now := time.Now()
 	// four carriers, no real peer needed for placement
 	for i := 0; i < 4; i++ {
 		a, _ := newDgFakePair()
-		l := newDgLink(a, time.Now())
+		l := newDgLink(a, now)
 		p.set = append(p.set, l)
 	}
 	// one flow always lands on one carrier
 	f1 := flowHash(ipPacket(5000, 443, nil))
-	first := p.pick(f1)
+	first := p.pick(f1, now)
 	for i := 0; i < 100; i++ {
-		if p.pick(f1) != first {
+		if p.pick(f1, now) != first {
 			t.Fatal("a flow moved carriers while all carriers were alive")
 		}
 	}
 	// many flows spread over more than one carrier
 	seen := map[*dgLink]bool{}
 	for port := 0; port < 200; port++ {
-		seen[p.pick(flowHash(ipPacket(uint16(port), 443, nil)))] = true
+		seen[p.pick(flowHash(ipPacket(uint16(port), 443, nil)), now)] = true
 	}
 	if len(seen) < 3 {
 		t.Fatalf("200 flows landed on only %d/4 carriers", len(seen))
@@ -165,9 +166,88 @@ func TestDgPoolFlowPinning(t *testing.T) {
 	// a dead carrier is never picked
 	first.markDead()
 	for i := 0; i < 50; i++ {
-		if p.pick(f1) == first {
+		if p.pick(f1, now) == first {
 			t.Fatal("a dead carrier was picked")
 		}
+	}
+}
+
+// A live flow stays on its carrier through every pool change that is not the
+// carrier's death: a carrier added (rendezvous hashing alone would move ~1/n of
+// the flows to it), the carrier retiring, a carrier un-retired. Each move
+// reorders the flow's packets, which its TCP counts as loss (field: 40% of
+// bytes retransmitted on a lossless path). Only a pause lets it be re-hashed.
+func TestDgPoolStickyFlows(t *testing.T) {
+	p := newDgPool(newFakeTUN(1400), 2, 8, 8, t.Logf)
+	now := time.Now()
+	add := func() *dgLink {
+		a, _ := newDgFakePair()
+		l := newDgLink(a, now)
+		p.mu.Lock()
+		p.set = append(p.set, l)
+		p.mu.Unlock()
+		return l
+	}
+	add()
+	add()
+	flows := make([]uint32, 300)
+	home := map[uint32]*dgLink{}
+	for i := range flows {
+		flows[i] = flowHash(ipPacket(uint16(10000+i), 443, nil))
+		home[flows[i]] = p.pick(flows[i], now)
+	}
+	check := func(what string) {
+		moved := 0
+		for _, f := range flows {
+			if p.pick(f, now) != home[f] {
+				moved++
+			}
+		}
+		if moved != 0 {
+			t.Fatalf("%s: %d of %d live flows changed carrier", what, moved, len(flows))
+		}
+	}
+	// six more carriers: with plain rendezvous ~75% of the flows would move
+	for i := 0; i < 6; i++ {
+		add()
+	}
+	check("after adding carriers")
+	// retire the carrier most flows are on
+	p.mu.Lock()
+	for _, l := range p.set {
+		l.retiring = true
+	}
+	p.mu.Unlock()
+	check("after retiring")
+	p.mu.Lock()
+	for _, l := range p.set {
+		l.retiring = false
+	}
+	p.mu.Unlock()
+	check("after un-retiring")
+	// a new flow still lands on some serving carrier
+	if p.pick(flowHash(ipPacket(1, 2, nil)), now) == nil {
+		t.Fatal("a new flow got no carrier")
+	}
+	// the flow's carrier dies: the flow moves, once, and then sticks again
+	victim := home[flows[0]]
+	victim.markDead()
+	l2 := p.pick(flows[0], now)
+	if l2 == nil || l2 == victim || !l2.alive() {
+		t.Fatal("a flow whose carrier died was not re-placed on a live carrier")
+	}
+	add()
+	if p.pick(flows[0], now) != l2 {
+		t.Fatal("the re-placed flow moved again when a carrier was added")
+	}
+	// a paused flow (idle past flowletGap) may be re-hashed; sticky forgets it
+	later := now.Add(flowletGap + time.Second)
+	p.pruneSticky(later)
+	p.stickyMu.Lock()
+	n := len(p.sticky)
+	p.stickyMu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d paused flows still pinned", n)
 	}
 }
 

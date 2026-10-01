@@ -75,6 +75,14 @@ type liveStatus struct {
 	PacerDropped  uint64  `json:"pacer_dropped,omitempty"`
 	RxDropped     uint64  `json:"rx_dropped,omitempty"`
 	TunDrops      uint64  `json:"tun_drops,omitempty"`
+	TunRead       uint64  `json:"tun_read,omitempty"`
+	SentPkts      uint64  `json:"sent_pkts,omitempty"`
+	RecvPkts      uint64  `json:"recv_pkts,omitempty"`
+	TunWritten    uint64  `json:"tun_written,omitempty"`
+	DropNoCarrier uint64  `json:"drop_no_carrier,omitempty"`
+	DropQueueFull uint64  `json:"drop_queue_full,omitempty"`
+	DropAged      uint64  `json:"drop_aged,omitempty"`
+	Carriers      string  `json:"carriers,omitempty"` // id:state:sent/loss% per carrier
 	Policed       bool    `json:"policed,omitempty"`
 	PoliceConfirm bool    `json:"police_confirmed,omitempty"`
 	PoliceCapMbit float64 `json:"police_cap_mbit,omitempty"`
@@ -131,6 +139,8 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.FECAtCeiling, ls.FECRecovered, ls.FECLost = s.FECAtCeiling, s.FECRecovered, s.FECLost
 			ls.PacerDropped, ls.RxDropped, ls.TunDrops = s.PacerDropped, s.RxDropped, s.TunDrops
 			ls.Policed, ls.PoliceConfirm, ls.PoliceCapMbit = s.Policed, s.PoliceConfirm, s.PoliceCapMbit
+			ls.TunRead, ls.SentPkts, ls.RecvPkts, ls.TunWritten = s.TunRead, s.SentPkts, s.RecvPkts, s.TunWritten
+			ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.Carriers = s.DropNoCarrier, s.DropQueueFull, s.DropAged, s.Carriers
 		}
 		ls.CPUPct, ls.CPUCores = cpu.sample(), runtime.NumCPU()
 		ls.CertDays = firstCertExpiryDays()
@@ -285,8 +295,13 @@ func printStatus(path string) {
 		} else if ls.Policed {
 			fmt.Printf("  policer:    suspected — testing with the whole pool capped at %.1f Mbit/s\n", ls.PoliceCapMbit)
 		}
+		fmt.Printf("  packets:    tun→carriers %d read, %d sent · carriers→tun %d received, %d written\n", ls.TunRead, ls.SentPkts, ls.RecvPkts, ls.TunWritten)
 		if ls.PacerDropped+ls.RxDropped+ls.TunDrops > 0 {
-			fmt.Printf("  drops:      pacer %d · receive queue %d · tunnel queue %d\n", ls.PacerDropped, ls.RxDropped, ls.TunDrops)
+			fmt.Printf("  drops:      no carrier %d · carrier queue full %d · waited >50 ms %d · pacer %d · receive queue %d\n",
+				ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.PacerDropped, ls.RxDropped)
+		}
+		if ls.Carriers != "" {
+			fmt.Printf("  carriers:   %s  (id:state:sent/loss)\n", ls.Carriers)
 		}
 	}
 	if ls.CPUCores > 0 {
