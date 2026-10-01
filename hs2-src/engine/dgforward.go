@@ -62,6 +62,16 @@ const DgTunPort = "28443"
 // committed only as data actually queues, and 4 MB is below the 16 MB the
 // autotuner may grow to anyway.
 //
+// Why 4 MB and not more: the field swept 4, 8 and 16 MB (2 flows, download
+// then upload, the in-tunnel stall fixed in every case). Throughput did not
+// move beyond run-to-run noise: download 114 / 112 / 117 Mbit/s, upload
+// 171 / 153 / 165 (16 MB alone gave 193 and 136 on two identical runs). The
+// larger buffers only cut the time the sender sat at the window limit (20-26%
+// at 4 MB, 0.1-3.5% at 16 MB) without speeding it up, so the limit there is the
+// carriers, the path and the CPU, not the window. Meanwhile every user
+// connection is its own in-tunnel TCP connection, and the servers run hundreds
+// of them on 2 GB of RAM: a larger ceiling only raises the worst case.
+//
 // HS2_TUN_RCVBUF overrides it in bytes; 0 restores the kernel's autotuning.
 var dgTunRcvBuf = func() int {
 	if v := strings.TrimSpace(os.Getenv("HS2_TUN_RCVBUF")); v != "" {
