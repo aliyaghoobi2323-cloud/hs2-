@@ -13,6 +13,12 @@
 #      hs2-menu                   (this menu, installed locally by setup/upgrade)
 # ============================================================================
 set -euo pipefail
+# Create every file and directory root-only by default (configs hold the tunnel
+# key). World-readable artifacts (the binary, the menu) set their mode
+# explicitly with `install -m755`, so this never makes them unreadable; it only
+# closes the brief window where a config or /etc/hs2 existed at 0644/0755 before
+# its explicit chmod.
+umask 077
 
 BIN=/usr/local/bin/hs2
 REPO_RAW="${HS2_REPO_RAW:-https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main}"
@@ -236,6 +242,16 @@ tune_kernel(){
 # GitHub account (2FA), and pin a reviewed commit with
 # HS2_REPO_RAW=https://raw.githubusercontent.com/<owner>/<repo>/<commit> when that
 # matters. A repository without the .sha256 file (older) only warns.
+# verify_download FILE [url-suffix] — check a download against its published
+# sha256. Exit status:
+#   0  the hash was fetched and the file matches it;
+#   1  the hash was fetched but the file does NOT match (tampered/corrupt);
+#   2  no usable hash could be fetched (the .sha256 is missing — an older repo —
+#      OR the request was blocked/dropped on the path).
+# The caller decides what code 2 means in context: on a first download it is a
+# warning (older repos legitimately ship no hash), but on the retry after a
+# mismatch it is a failure, so a tampered binary whose hash is dropped on the
+# path is never installed.
 verify_download(){ # file [url-suffix]
   local want got
   want=$(curl -fsSL --connect-timeout 10 --retry 2 "$REPO_RAW/hs2-linux-amd64.sha256${2:-}" 2>/dev/null | awk 'NR==1{print $1}' || true)
@@ -244,8 +260,7 @@ verify_download(){ # file [url-suffix]
     *) want="" ;;
   esac
   if [ -z "$want" ]; then
-    warn "No published sha256 to check the download against (hs2-linux-amd64.sha256 missing) — relying on the version check only."
-    return 0
+    return 2
   fi
   got=$(sha256sum "$1" | cut -d' ' -f1)
   if [ "$got" = "$want" ]; then ok "sha256 matches the published hash."; return 0; fi
@@ -263,16 +278,26 @@ install_binary(){
   info "Downloading hs2 binary from GitHub…"
   if curl -fL --connect-timeout 10 --retry 2 -o "$tmp" "$REPO_RAW/hs2-linux-amd64" 2>/dev/null; then
     ok "Downloaded."
-    if ! verify_download "$tmp"; then
-      # Right after a release the CDN can serve the new binary with the old hash
-      # (or the reverse) for a few minutes: fetch both once more past the cache
-      # before calling the download bad.
+    local rc=0
+    verify_download "$tmp" || rc=$?
+    if [ "$rc" = 2 ]; then
+      warn "No published sha256 to check the download against (hs2-linux-amd64.sha256 missing or unreachable) — relying on the version check only."
+    elif [ "$rc" != 0 ]; then
+      # A mismatch. Right after a release the CDN can briefly serve the new
+      # binary with the old hash (or the reverse): fetch both once more past the
+      # cache before calling the download bad. This time fail CLOSED — if the
+      # hash still does not match, OR cannot be fetched at all (code 2), the
+      # binary is NOT installed. A middlebox that alters the binary and then
+      # drops the .sha256 request can no longer pass it off as "no hash".
       local q="?v=$(date +%s)"
       warn "Fetching the binary and its hash once more (bypassing the CDN cache)…"
-      if ! curl -fL --connect-timeout 10 --retry 2 -o "$tmp" "$REPO_RAW/hs2-linux-amd64$q" 2>/dev/null \
-         || ! verify_download "$tmp" "$q"; then
+      rc=1
+      if curl -fL --connect-timeout 10 --retry 2 -o "$tmp" "$REPO_RAW/hs2-linux-amd64$q" 2>/dev/null; then
+        rc=0; verify_download "$tmp" "$q" || rc=$?
+      fi
+      if [ "$rc" != 0 ]; then
         rm -f "$tmp"
-        die "the downloaded binary does not match its published sha256 — NOT installed. Run again in a few minutes; if it keeps failing, something on the path is altering the download."
+        die "the downloaded binary does not match its published sha256, or the hash could not be fetched to verify it — NOT installed. Run again in a few minutes; if it keeps failing, something on the path is altering the download."
       fi
     fi
   elif [ -f "$d/hs2-linux-amd64" ] || [ -f "./hs2-linux-amd64" ]; then
@@ -502,9 +527,14 @@ pick_subnet(){
 # check_link_subnet (the side that pastes): the subnet from the link must be
 # free here too — two tunnels on one subnet would break each other.
 check_link_subnet(){
-  local b="${LSUBNET:-10.77.0.0}" u c lc by=""
+  local b="${LSUBNET:-10.77.0.0}" u c lc by="" used
   valid_block "$b" || die "the link carries an invalid tunnel subnet ($b) — make a new link on the other server."
-  if used_blocks | grep -qx "$b"; then
+  # Capture used_blocks before matching: piping it straight into `grep -q` lets
+  # grep exit on the first match and SIGPIPE the (multi-fork) producer, which
+  # under `set -o pipefail` makes the pipeline report failure — i.e. "not used" —
+  # so a real collision is missed about half the time. Same idiom as pick_subnet.
+  used=$(used_blocks)
+  if printf '%s\n' "$used" | grep -qx "$b"; then
     for u in $(tm_units); do
       [ "$u" = "$UNIT" ] && [ "${REPLACING:-0}" = 1 ] && continue
       c=$(tm_cfg "$u"); lc=$(jget "$c" local_cidr)
@@ -539,18 +569,22 @@ used_ifaces(){
 # iface_taken NAME: another tunnel uses it, or it is an interface that is not
 # the replaced tunnel's own.
 iface_taken(){ # name
-  local own=""
+  local own="" used
   [ "${REPLACING:-0}" = 1 ] && own=$(cfg_tun_iface "$CFG")
-  used_ifaces | grep -qx "$1" && return 0
+  used=$(used_ifaces) # capture first: `used_ifaces | grep -q` can SIGPIPE the producer under pipefail and miss a match
+  printf '%s\n' "$used" | grep -qx "$1" && return 0
   [ "$1" != "$own" ] && ip link show "$1" >/dev/null 2>&1
 }
 
 # free_iface -> the interface this tunnel should use: the replaced tunnel's
 # own, else the first free of hs0, hs1, …
 free_iface(){
-  local i=0 own=""
+  local i=0 own="" used
   [ "${REPLACING:-0}" = 1 ] && own=$(cfg_tun_iface "$CFG")
-  if [ -n "$own" ] && ! used_ifaces | grep -qx "$own"; then echo "$own"; return 0; fi
+  if [ -n "$own" ]; then
+    used=$(used_ifaces) # capture first (see iface_taken): avoids the pipefail/SIGPIPE false negative
+    if ! printf '%s\n' "$used" | grep -qx "$own"; then echo "$own"; return 0; fi
+  fi
   while iface_taken "hs$i"; do i=$((i + 1)); done
   echo "hs$i"
 }
