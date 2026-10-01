@@ -115,14 +115,20 @@ transport_to_carrier(){
 # interfaces of hs2's own tunnels: with one tunnel up, its 10.77.x.y must not be
 # offered as this server's public / listen / dial-out IP for the next one.
 local_ips(){
-  local tunifs; tunifs=" $(for u in $(tm_units); do cfg_tun_iface "$(tm_cfg "$u")"; done | tr '\n' ' ') "
-  ip -4 -o addr show 2>/dev/null | awk '$2!="lo"{print $2, $4}' | while read -r ifc a; do
+  local tunifs ifc a out=""
+  tunifs=" $(for u in $(tm_units); do cfg_tun_iface "$(tm_cfg "$u")"; done | tr '\n' ' ') "
+  # Build the whole list, then print it once. A per-line `echo` inside the loop
+  # died of SIGPIPE the moment any consumer closed the pipe early (`head -1` on
+  # a 6-IP server), and under set -euo pipefail that aborted the installer
+  # ("stopped unexpectedly at: defip=$(first_public_ip)").
+  while read -r ifc a; do
     case "$tunifs" in *" $ifc "*) continue ;; esac
-    echo "${a%%/*}"
-  done
+    out="$out${a%%/*}"$'\n'
+  done < <(ip -4 -o addr show 2>/dev/null | awk '$2!="lo"{print $2, $4}')
+  printf '%s' "$out"
 }
 show_ips(){ local_ips | sed 's/^/   /' >&2; }
-first_public_ip(){ local_ips | head -1; }
+first_public_ip(){ local_ips | sed -n 1p; }
 
 # ip_is_local reports whether an IPv4 address is assigned to a local interface.
 ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##' | grep -x "$1" >/dev/null; }
