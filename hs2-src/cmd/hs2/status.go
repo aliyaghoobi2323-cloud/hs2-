@@ -301,7 +301,7 @@ func printStatus(path string) {
 				ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.PacerDropped, ls.RxDropped)
 		}
 		if ls.Carriers != "" {
-			fmt.Printf("  carriers:   %s  (id:state:sent/loss)\n", ls.Carriers)
+			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup)\n", ls.Carriers)
 		}
 	}
 	if ls.CPUCores > 0 {

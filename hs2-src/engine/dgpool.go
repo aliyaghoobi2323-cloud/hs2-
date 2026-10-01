@@ -953,7 +953,11 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 func round1f(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
 
 // carrierLine is one compact line per live carrier for the status file:
-// id:state:sent-packets/loss% — enough to see which carrier loses.
+// id:state:sent/loss% rate/btlBw(Mbit) flags — enough to see which carrier
+// loses AND whether one is pinned at a low rate while the path is healthy (the
+// after-idle ramp-stall signature). Flags: P=pushing (offered its allowance),
+// S=startup (still ramping). A carrier stuck at a low rate with P set and loss
+// ~0 is the sender throttling itself, not the path.
 func (p *dgPool) carrierLine() string {
 	type statser interface{ Stats() udpcarrier.Stats }
 	p.mu.RLock()
@@ -967,14 +971,27 @@ func (p *dgPool) carrierLine() string {
 		if l.retiring {
 			st = "retiring"
 		}
-		loss := 0.0
-		if c, ok := l.car.(statser); ok {
-			loss = float64(c.Stats().LossPPM) / 1e4
-		}
 		if len(b) > 0 {
 			b = append(b, ' ')
 		}
-		b = append(b, []byte(fmt.Sprintf("%d:%s:%d/%.1f%%", l.id, st, l.sentPkts.Load(), loss))...)
+		if c, ok := l.car.(statser); ok {
+			s := c.Stats()
+			flags := ""
+			if s.Pushing {
+				flags += "P"
+			}
+			if s.Startup {
+				flags += "S"
+			}
+			if flags == "" {
+				flags = "-"
+			}
+			b = append(b, []byte(fmt.Sprintf("%d:%s:%d/%.1f%% r%.1f/bw%.1f %s",
+				l.id, st, l.sentPkts.Load(), float64(s.LossPPM)/1e4,
+				mbitps(s.RateBytes), mbitps(s.BtlBwBytes), flags))...)
+		} else {
+			b = append(b, []byte(fmt.Sprintf("%d:%s:%d", l.id, st, l.sentPkts.Load()))...)
+		}
 	}
 	return string(b)
 }
