@@ -20,7 +20,8 @@ panel; and on a server where hs2.service had been masked, the installer printed
      configs from part 1 and moves real traffic from iran's user ports to a
      panel on kharej, direct and reverse, on two user ports each, per TLS mode
      and datagram encap (udp, ipx, gre — the raw ones with no tunnel port) —
-     and runs the installer's own verify_tunnel on the dialing side.
+     and runs the installer's own verify_tunnel on the dialing side (proof =
+     a ping over the tun; a link count alone is refused).
   4. blocked path: gre with GRE dropped toward the kharej. Both services run,
      so the old installer said "ready"; verify_tunnel must fail and name the
      cause, and connect by itself once the path passes GRE again.
@@ -443,9 +444,13 @@ def part3(sb, lib, kh_ip, ir_ip, bins, carrier):
         rc, out = verify(vns, lib, vcfg, 20)
         res("tunnel %s: installer verify_tunnel on the dialing side says UP" % label,
             rc == 0 and "Tunnel is UP" in out, out.strip()[-300:])
-        rc, out = verify(vns, lib, vcfg, 20, noping=True)
-        res("tunnel %s: the status file's live links alone prove it (no ping)" % label,
-            rc == 0, out.strip()[-300:])
+        # ... and a link count alone is NOT proof for a tunnel with a tun: a
+        # path that passes the handshake and then kills the flow leaves
+        # carriers counted "up" with nothing crossing (field: 8 links, ping
+        # 100% lost, installer said UP). With ping stubbed out, verify fails.
+        rc, out = verify(vns, lib, vcfg, 6, noping=True)
+        res("tunnel %s: a link count alone is not accepted as proof (ping is)" % label,
+            rc == 1, out.strip()[-300:])
 
         for port in ("8443", "9443"):
             p = sh("ip netns exec %s %s -addr 127.0.0.1:%s -bulk 2 -t 4s -warm 1s" % (IR, probe, port), timeout=60)
