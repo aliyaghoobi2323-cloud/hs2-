@@ -32,11 +32,6 @@ func init() {
 	listenRawFn = listenRawLinux
 }
 
-// sockBuf is the send/receive buffer asked for on every raw socket. A raw
-// socket gets the same default as UDP (~200 KiB), which a burst at tens of
-// Mbit/s overruns; as root we force it past net.core.[rw]mem_max.
-const sockBuf = 4 << 20
-
 // rawPeerTTL / rawPeerMax bound the listener's per-peer state (the echo
 // sequence to answer with, the local address the peer targeted).
 const (
@@ -67,12 +62,7 @@ func tuneRawSocket(c *net.IPConn, prog []bpfInsn) error {
 	var serr error
 	cerr := rc.Control(func(fd uintptr) {
 		s := int(fd)
-		if unix.SetsockoptInt(s, unix.SOL_SOCKET, unix.SO_RCVBUFFORCE, sockBuf) != nil {
-			unix.SetsockoptInt(s, unix.SOL_SOCKET, unix.SO_RCVBUF, sockBuf)
-		}
-		if unix.SetsockoptInt(s, unix.SOL_SOCKET, unix.SO_SNDBUFFORCE, sockBuf) != nil {
-			unix.SetsockoptInt(s, unix.SOL_SOCKET, unix.SO_SNDBUF, sockBuf)
-		}
+		forceSockBufs(s, sockBuf)
 		filter := make([]unix.SockFilter, len(prog))
 		for i, in := range prog {
 			filter[i] = unix.SockFilter{Code: in.Code, Jt: in.Jt, Jf: in.Jf, K: in.K}
