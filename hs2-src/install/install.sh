@@ -667,6 +667,20 @@ tunnel_up(){ # cfg
     && ping -c1 -W1 -I "$ifc" "$peer" >/dev/null 2>&1
 }
 
+# tunnel_conn_label CFG: whether the tunnel really reaches the other server
+# right now (tunnel_up: live authenticated links, or the peer's tun IP answers)
+# — "the service runs" and "its interface is up" say nothing about that.
+tunnel_conn_label(){ # cfg
+  local sf links
+  if tunnel_up "$1"; then
+    sf=$(status_path "$1"); links=""
+    status_fresh "$sf" && links=$(jraw "$sf" links)
+    printf '%s✓ connected%s%s' "$C_G" "$C_0" "$([ -n "$links" ] && [ "$links" != 0 ] && echo " ($links links)")"
+  else
+    printf '%s✗ NOT connected%s — nothing comes back from the other server' "$C_R" "$C_0"
+  fi
+}
+
 # verify_tunnel CFG SECS: wait up to SECS for tunnel_up.
 verify_tunnel(){ # cfg secs
   local end=$(( $(date +%s) + ${2:-40} ))
@@ -703,9 +717,11 @@ tunnel_down_help(){ # cfg
     warn "TLS: the TCP tunnel port must be reachable from the dialing side, and the listening side's"
     warn "certificate must be valid for the domain in the link (see its log for TLS errors)."
   fi
-  warn "Also check: the other server finished its setup and runs; the link you pasted is its CURRENT one"
-  warn "(running setup there again makes a NEW key); its tunnel port is open in its firewall / provider panel;"
-  warn "and the dial-out IP chosen here is not a filtered one."
+  warn "Also check:"
+  warn " · the shared key: the link you pasted must be the other server's CURRENT one — running its setup"
+  warn "   again makes a NEW key, and with a different key the other side stays silent (or shows a website);"
+  warn " · the other server finished its setup and its tunnel runs (hs2-menu → Tunnel manager there);"
+  warn " · its tunnel port is open in its firewall / provider panel, and the dial-out IP here is not filtered."
   info "hs2 stays installed and keeps retrying — if the path opens later it connects by itself."
   info "Last log:"
   journalctl -u "$UNIT" -n 15 --no-pager -o cat 2>/dev/null | sed 's/^/     /' >&2 || true
@@ -954,6 +970,8 @@ ask_tun_tls_mode(){
   echo "  TLS mode for the tun:" >&2
   echo "    1) mtcp + tun — the mtcp multi-link pool (2–32 TLS links) + a tun interface (recommended, fastest)" >&2
   echo "    2) tls  + tun — one TLS link + a tun interface (fewer connections, but far slower where each connection is throttled)" >&2
+  echo "    (Users' traffic rides the user ports. The tun here is a side channel for ping and light" >&2
+  echo "     traffic, not for bulk — for bulk over a routed tun choose tun → udp or icmp.)" >&2
   read -rp "Choose [1]: " M </dev/tty
   case "${M:-1}" in 1) CARRIER=l3mtcp ;; 2) CARRIER=tls ;; *) die "invalid mode" ;; esac
 }
@@ -1639,6 +1657,20 @@ remove_tunnel(){ # unit
   rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$(status_path "$cfg")"
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed "$u" >/dev/null 2>&1 || true
+  kernel_cleanup
+}
+
+# kernel_cleanup: remove what stopped tunnels left in the kernel — an icmp
+# tunnel's reply rule (nft/iptables) whose daemon is gone, or ping replies a
+# dead daemon turned off. Rules of running tunnels are never touched. (An older
+# binary has no `cleanup` command; then there is nothing to do.)
+kernel_cleanup(){
+  local out ln
+  out=$("$BIN" cleanup 2>/dev/null) || return 0
+  while IFS= read -r ln; do
+    case "$ln" in removed:*) info "Cleaned up ${ln#removed: }" ;; esac
+  done <<<"$out"
+  return 0
 }
 
 # uninstall: remove EVERY hs2 tunnel from this server (the tunnel manager
@@ -1686,6 +1718,8 @@ status(){
   for u in $units; do
     cfg=$(tm_cfg "$u")
     hr; say " ${C_B}$u${C_0} — $(unit_desc "$u")"; hr
+    say " Service:     $(tm_state_label "$(tm_state "$u")")"
+    if [ "$(tm_state "$u")" = running ]; then say " Connection:  $(tunnel_conn_label "$cfg")"; fi
     systemctl status "$u" --no-pager 2>/dev/null | head -8 >&2 || true
     ifc=$(jget "$cfg" iface)
     if [ "$(jget "$cfg" carrier)" != mtcp ] && [ -n "$ifc" ]; then
@@ -1789,11 +1823,11 @@ tm_dials(){
 tm_links(){
   local cfg="$1" car addr host port sf
   car=$(jget "$cfg" carrier)
-  case "$car" in mtcp|l3mtcp|l3|tls) ;; *) return 0 ;; esac
   sf=$(status_path "$cfg")
   if status_fresh "$sf"; then
     jraw "$sf" links; return 0
   fi
+  case "$car" in mtcp|l3mtcp|l3|tls) ;; *) return 0 ;; esac
   addr=$(jget "$cfg" addr); host=${addr%:*}; port=${addr##*:}
   if tm_dials "$cfg"; then
     ss -Htn state established "( dport = :$port and dst $host )" 2>/dev/null | wc -l
@@ -1896,6 +1930,28 @@ tm_list(){
   done
   TM_UNITS=("${units[@]}")
 }
+# tm_health_lines SF: loss / FEC / policer / drops / CPU from a fresh status
+# file (datagram tunnels report loss of what THIS side sends, as its peer sees it).
+tm_health_lines(){ # status file
+  local sf="$1" car loss mloss par ceil rec lost pol pconf pcap pd rd td cpu cores
+  status_fresh "$sf" || return 0
+  car=$(jget "$sf" carrier); pol=$(jraw "$sf" policed); pconf=$(jraw "$sf" police_confirmed)
+  loss=$(jraw "$sf" loss_pct); mloss=$(jraw "$sf" max_loss_pct); par=$(jraw "$sf" parity_pct)
+  ceil=$(jraw "$sf" fec_at_ceiling); rec=$(jraw "$sf" fec_recovered); lost=$(jraw "$sf" fec_lost)
+  pcap=$(jraw "$sf" police_cap_mbit); pd=$(jraw "$sf" pacer_dropped); rd=$(jraw "$sf" rx_dropped); td=$(jraw "$sf" tun_drops)
+  cpu=$(jraw "$sf" cpu_pct); cores=$(jraw "$sf" cpu_cores)
+  case "$car" in dgtun*)
+    say " Loss:        ${loss:-0}% of what this side sends (worst carrier ${mloss:-0}%)"
+    say " FEC:         parity ${par:-0}% of data$([ -n "$ceil" ] && echo " · ${C_Y}at its ceiling on $ceil carrier(s)${C_0}") · received ${rec:-0} rebuilt, ${lost:-0} lost"
+    if [ "$pol" = true ] && [ "$pconf" = true ]; then say " Policer:     ${C_Y}confirmed on the path${C_0} — whole pool held at ${pcap} Mbit/s (re-probes slowly)"
+    elif [ "$pol" = true ]; then say " Policer:     suspected — testing with the whole pool capped at ${pcap} Mbit/s"; fi
+    [ -n "$pd$rd$td" ] && say " Drops:       pacer ${pd:-0} · receive queue ${rd:-0} · tunnel queue ${td:-0}"
+    ;;
+  esac
+  [ -n "$cores" ] && say " CPU:         ${cpu:-0}% of one core ($cores core(s))"
+  return 0
+}
+
 tm_endpoint(){
   local addr; addr=$(jget "$1" addr)
   if tm_dials "$1"; then echo "connects to $addr"; else echo "listens on $addr"; fi
@@ -1907,6 +1963,7 @@ tm_details(){
   echo >&2; hr
   say " Tunnel:      ${C_B}$u${C_0}   ${C_D}config: $cfg${C_0}"
   say " Status:      $(tm_state_label "$st")$([ "$st" = running ] && echo " · $(tm_uptime "$u")")$([ "$st" = running ] && [ -n "$links" ] && echo " · $links links")"
+  if [ "$st" = running ] && [ -f "$cfg" ]; then say " Connection:  $(tunnel_conn_label "$cfg")"; fi
   if [ -f "$cfg" ]; then
     say " Side:        $(tm_role "$cfg") · $(tm_dir "$cfg") · $(tm_transport "$cfg")"
     if tm_dials "$cfg"; then
@@ -1926,6 +1983,7 @@ tm_details(){
     pat=$(tm_pattern "$cfg")
     [ -n "$pat" ] && say " Pattern:     $pat"
     sf=$(status_path "$cfg")
+    tm_health_lines "$sf"
     if status_fresh "$sf"; then
       cd=$(jraw "$sf" cert_days)
       if [ -n "$cd" ] && [ "$cd" != -1 ]; then
@@ -2001,6 +2059,7 @@ tm_monitor(){
       [ -n "$mbit" ] && [ "$mbit" != 0 ] && say " Speed:   ${mbit} Mbit/s (tunnel goodput)"
       local peers; peers=$(tm_peers "$cfg")
       [ -n "$peers" ] && say " Peer:    $peers"
+      tm_health_lines "$sf"
     else
       say " Waiting for live status… (needs the new binary; older tunnels show links only)"
       local links; links=$(tm_links "$cfg")
@@ -2544,6 +2603,9 @@ upgrade(){
     fi
   done
   echo >&2
+  # Every tunnel now runs the new binary: rules older binaries left behind
+  # (they could not always clean up on stop) can go.
+  kernel_cleanup
   [ "$fails" = 0 ] || { err "$fails tunnel(s) did not start — see above."; bail; }
   ok "hs2 upgraded. Upgrade the OTHER server(s) too (both sides of a tunnel must match)."
   info "Tunnel manager: run  hs2-menu  → 3"

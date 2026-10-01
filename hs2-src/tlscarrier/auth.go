@@ -69,9 +69,15 @@ var (
 	// ErrServerProof means the peer did not prove knowledge of the shared key
 	// for this TLS session: wrong key, an interceptor, or not an hs2 server.
 	ErrServerProof = errors.New("tlscarrier: server did not prove the shared key (wrong shared_key, man-in-the-middle, or not hs2)")
-	// ErrOldServer means the peer answered like the pre-v2 server, which treats
-	// v2 auth as a browser and serves its website.
-	ErrOldServer = errors.New("tlscarrier: kharej runs an older hs2 that does not support authenticated links; upgrade the kharej server")
+	// ErrOldServer means the peer answered with its cover website — what an hs2
+	// server does for anyone who cannot prove the shared key. That is a
+	// DIFFERENT shared_key (most often: the link was pasted from an earlier
+	// setup of the other server), or a pre-v2 hs2 that treats v2 auth as a
+	// browser. Which side is the TLS server depends on the direction, so the
+	// message names neither.
+	ErrOldServer = errors.New("tlscarrier: the other server answered as a plain website, not as the tunnel: " +
+		"its shared_key differs from this one (paste the CURRENT link from it — running its setup again makes a new key), " +
+		"or it runs an hs2 older than v2 (upgrade it)")
 )
 
 type ekmSource interface {

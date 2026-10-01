@@ -12,6 +12,8 @@
 # Env [defaults]: ENCAP [udp] PROTO [0] REVERSE [0] RATE [50mbit] DELAY [20ms]
 #   QUEUE [300ms] LOSS [0] BURSTLOSS [0] BADMS [0] FLOWRATE [0] ALLOW [""]
 #   BULK [4] UP [0] T [12s] MIN [2] MAX [8] KEEP [0] LAB_ID [""]
+#   NETEM_EXTRA [""]: more netem flags, e.g. the per-destination policer:
+#     NETEM_EXTRA="-dstpolice 60mbit -dstproto 1"
 set -u
 D=$(cd "$(dirname "$0")" && pwd)
 ID=${LAB_ID:-}
@@ -50,7 +52,7 @@ for x in "$IR $VI" "$KH $VK" "$MID $MA" "$MID $MB"; do
 done
 AL=""; [ -n "$ALLOW" ] && AL="-allow $ALLOW"
 ip netns exec $MID "$W/netem" -a $MA -b $MB -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
-  -loss "$LOSS" -burstloss "$BURSTLOSS" -badms "$BADMS" -flowrate "$FLOWRATE" $AL \
+  -loss "$LOSS" -burstloss "$BURSTLOSS" -badms "$BADMS" -flowrate "$FLOWRATE" $AL ${NETEM_EXTRA:-} \
   2>"$W/netem.log" & echo $! >> "$W/pids"
 
 KEY=$(printf 'ef%.0s' {1..32})

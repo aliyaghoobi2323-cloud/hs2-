@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/hmac"
 	"hash"
+	"strings"
 
 	"context"
 	"crypto/rand"
@@ -254,8 +255,17 @@ func TestWrongServerKey(t *testing.T) {
 	defer stopB()
 	addr, stop := startServer(t, bytes.Repeat([]byte{0x55}, 32), cert, be, func(c *Carrier) { c.Close() })
 	defer stop()
-	if _, err := Dial(addr, "vpn.example.com", bytes.Repeat([]byte{0x66}, 32)); err == nil {
+	_, err := Dial(addr, "vpn.example.com", bytes.Repeat([]byte{0x66}, 32))
+	if err == nil {
 		t.Fatal("dial with the wrong key succeeded")
+	}
+	// The server answers a wrong key with its cover website. The error must
+	// name the key as the likely cause and not blame one side by role (in
+	// reverse the TLS server is the iran edge, not "the kharej"): it used to
+	// say "kharej runs an older hs2 … upgrade the kharej server".
+	msg := err.Error()
+	if !strings.Contains(msg, "shared_key") || strings.Contains(msg, "kharej") || strings.Contains(msg, "iran") {
+		t.Fatalf("wrong-key error is misleading: %q", msg)
 	}
 }
 

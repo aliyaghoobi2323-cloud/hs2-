@@ -174,7 +174,9 @@ func dialHandshake(ctx context.Context, conn net.Conn, local core.StaticKey, rem
 		}
 		return sess, ini.Binding(), nil
 	}
-	return nil, nil, fmt.Errorf("udpcarrier: no handshake reply from %s", conn.RemoteAddr())
+	// A server with another shared_key stays silent on purpose (probe
+	// resistance), so a key mismatch looks exactly like a blocked path.
+	return nil, nil, fmt.Errorf("udpcarrier: no handshake reply from %s (the path drops it, the other server is not running, or its shared_key differs)", conn.RemoteAddr())
 }
 
 // confirmResend is how often each side retransmits its confirmation tag while

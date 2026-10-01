@@ -488,14 +488,35 @@ def scenarios(w):
     res("9b the icmp tunnel still carries traffic after that", ok, info)
 
     # ---- 10. status, uninstall ------------------------------------------------
-    rc, out = w.run(ir, "status", [])
+    # Status judges a tunnel by whether it reaches the other server, not by
+    # its interface being up: hs2-k4 never had a partner, and hs2-x3 lost its
+    # kharej side in 9b — both still have their tun interface up. The restore
+    # in 9 restarted every iran tunnel; a reverse kharej side notices only after
+    # its liveness timeout (15 s) and redials, so the live ones get up to 60 s
+    # to show connected (the dead ones never can).
+    want = {"hs2": True, "hs2-de1": True, "hs2-k4-2": True, "hs2-k4": False, "hs2-x3": False}
+    deadline = time.time() + 60
+    while True:
+        rc, out = w.run(ir, "status", [])
+        blocks = {}
+        for u in w.units(ir):
+            m = re.search(r"^ %s — [\s\S]*?(?=^ hs2[\w-]* — |\Z)" % re.escape(u), out, re.M)
+            blocks[u] = m.group(0) if m else ""
+        got = {u: ("✓ connected" in b) and "NOT connected" not in b for u, b in blocks.items()}
+        if got == want or time.time() > deadline:
+            break
+        time.sleep(3)
     res("10 status shows every tunnel", all(u in out for u in w.units(ir)), out[-300:])
+    res("10 status says which tunnels really reach the other server (dead ones NOT connected)", got == want,
+        "got %s" % got)
     for s in (ir, kh):
         units = w.units(s)
         cfgs = [w.cfg(s, u) for u in units]
         rc, out = w.run(s, "uninstall", [(r"Remove all of them\?", "y")], timeout=200)
         left = sh("pgrep -af '%s'" % os.path.join(w.root(s), "usr/local/bin/hs2")).stdout.strip()
         ifs = [c["iface"] for c in cfgs if c and c.get("carrier") != "mtcp"]
+        guards = sh("ip netns exec %s nft list tables 2>/dev/null | grep hs2_icmp" % NS[s]).stdout.strip()
+        res("10 uninstall (%s): no icmp reply rule left in the kernel" % s, guards == "", guards)
         res("10 uninstall (%s): every tunnel removed, no process, no tun interface" % s,
             rc == 0 and w.units(s) == [] and not left and not any(w.iface_up(s, i) for i in ifs)
             and not os.listdir(os.path.join(w.root(s), "etc/hs2")), (out[-300:] + " left=" + left))

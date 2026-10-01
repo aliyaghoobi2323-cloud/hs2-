@@ -300,7 +300,7 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 			return
 		case <-t.C:
 			if n := s.drops.Swap(0); n > 0 {
-				logf("l3: dropped %d packets in 30s (congestion or no link)", n)
+				logf("l3: dropped %d packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected", n)
 			}
 		}
 	}

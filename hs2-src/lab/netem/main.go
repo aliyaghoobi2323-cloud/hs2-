@@ -41,6 +41,18 @@ type dirCfg struct {
 	loss      float64
 	flowRate  float64 // per-flow policer, bits/s, 0 = off
 	flowBurst int     // bytes
+
+	// Per-destination-IP policer, episodic like the one measured on the real
+	// Iran path (ICMP to one server IP): below dstRate nothing happens; above
+	// it a dstBurst-second allowance drains, and when it is empty EVERY packet
+	// to that IP is dropped with dstPenLoss for dstPenalty (other flows to the
+	// same IP too), then the allowance is back. So loss comes in episodes
+	// every few seconds, on all flows at once, with no queue building.
+	dstRate    float64 // bits/s, 0 = off
+	dstBurst   time.Duration
+	dstPenalty time.Duration
+	dstPenLoss float64
+	dstProto   int // IP protocol it applies to; 0 = all
 	// Bursty (Gilbert-Elliott) loss: when burstBadMs>0 the path alternates
 	// between a good state (loss `loss`) and a bad state (loss `burstLoss`),
 	// each lasting an exponentially distributed time. This makes genuine loss
@@ -160,6 +172,20 @@ type policer struct {
 	last   time.Time
 }
 
+type dstPolicer struct {
+	tokens  float64
+	last    time.Time
+	penalty time.Time // dropping until then
+}
+
+// dstIP returns the IPv4 destination of a frame (0 = not IPv4).
+func dstIP(f []byte) uint32 {
+	if len(f) < 14+20 || binary.BigEndian.Uint16(f[12:14]) != 0x0800 {
+		return 0
+	}
+	return binary.BigEndian.Uint32(f[14+16 : 14+20])
+}
+
 func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 	q := make(chan pkt, 1<<16)
 	// writer: deliver frames at their due time
@@ -174,6 +200,7 @@ func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 	}()
 	var nextFree time.Time // when the bottleneck finishes the last frame
 	flows := map[uint64]*policer{}
+	dsts := map[uint32]*dstPolicer{}
 	ge := &geState{}
 	buf := make([]byte, 65536)
 	for {
@@ -202,6 +229,36 @@ func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 		if c.drop(ge, now) {
 			stats.add(name, "loss", n)
 			continue
+		}
+		if c.dstRate > 0 && (c.dstProto == 0 || ipProto(buf[:n]) == c.dstProto) {
+			if ip := dstIP(buf[:n]); ip != 0 {
+				full := c.dstRate / 8 * c.dstBurst.Seconds()
+				d := dsts[ip]
+				if d == nil {
+					d = &dstPolicer{tokens: full, last: now}
+					dsts[ip] = d
+				}
+				if now.Before(d.penalty) {
+					if rand.Float64() < c.dstPenLoss {
+						stats.add(name, "dstpolice", n)
+						continue
+					}
+				} else {
+					if !d.penalty.IsZero() && d.tokens <= 0 {
+						d.tokens = full // the penalty is served: allowance back
+					}
+					d.tokens += now.Sub(d.last).Seconds() * c.dstRate / 8
+					if d.tokens > full {
+						d.tokens = full
+					}
+					d.tokens -= float64(n)
+					if d.tokens <= 0 {
+						d.penalty = now.Add(c.dstPenalty)
+						stats.add(name, "dstepisode", 1)
+					}
+				}
+				d.last = now
+			}
 		}
 		if c.flowRate > 0 {
 			if k := flowKey(buf[:n]); k != 0 {
@@ -283,6 +340,11 @@ func main() {
 	flowBurst := flag.Int("flowburst", 64<<10, "per-flow policer burst, bytes")
 	dropUDP := flag.Bool("dropudp", false, "drop all UDP frames (block the UDP carrier)")
 	allowP := flag.String("allow", "", "comma-separated IP protocol numbers the path passes (others dropped), e.g. 1 = ICMP only")
+	dstRate := flag.String("dstpolice", "0", "per-destination-IP policer rate (episodic, see dirCfg), e.g. 60mbit")
+	dstBurst := flag.Duration("dstburst", 5*time.Second, "per-destination policer allowance, seconds at its rate")
+	dstPenalty := flag.Duration("dstpenalty", time.Second, "per-destination policer drop episode length")
+	dstPenLoss := flag.Float64("dstpenloss", 0.8, "drop probability during an episode")
+	dstProto := flag.Int("dstproto", 0, "IP protocol the per-destination policer applies to (0 = all, 1 = ICMP)")
 	flag.Parse()
 	var allow map[int]bool
 	if *allowP != "" {
@@ -299,7 +361,8 @@ func main() {
 	fb, ib := openPacket(*b)
 	ab := dirCfg{rate: parseRate(*rate), delay: *delay, queue: *queue, loss: *loss,
 		flowRate: parseRate(*flowRate), flowBurst: *flowBurst,
-		burstLoss: *burstLoss, burstGoodMs: *goodMs, burstBadMs: *badMs, dropUDP: *dropUDP, allow: allow}
+		burstLoss: *burstLoss, burstGoodMs: *goodMs, burstBadMs: *badMs, dropUDP: *dropUDP, allow: allow,
+		dstRate: parseRate(*dstRate), dstBurst: *dstBurst, dstPenalty: *dstPenalty, dstPenLoss: *dstPenLoss, dstProto: *dstProto}
 	ba := ab
 	if *rateBA != "" {
 		ba.rate = parseRate(*rateBA)

@@ -459,6 +459,17 @@ def part3(sb, lib, kh_ip, ir_ip, bins, carrier):
                 "mbps=%.1f echo=%s/%s lost conn_fail=%s bulk_errors=%s" % (r.get("mbps", 0), r.get("echo_n"),
                                                                           r.get("echo_lost"), r.get("conn_fail"), r.get("bulk_errors"))
                 if r else "probe failed: %s" % (p.stdout + p.stderr).strip()[-200:])
+        # the live status files: right label, CPU and (datagram) loss/FEC fields
+        for role in (kh_role, ir_role):
+            sp = "/run/hs2/" + os.path.abspath(os.path.join(sb, role + ".json")).lstrip("/").replace("/", "-").replace(" ", "_") + ".status.json"
+            try:
+                st = json.load(open(sp))
+            except (OSError, ValueError):
+                st = {}
+            ok = st.get("cpu_cores", 0) > 0
+            if carrier.startswith("dgtun"):
+                ok = ok and "datagram pool" in st.get("transport", "")
+            res("tunnel %s: %s status file has its label and health fields" % (label, role), ok, json.dumps(st)[:300])
         if FAILS:
             for log in ("kh_%s.log" % label, "ir_%s.log" % label):
                 print("---- " + log + " (tail)")

@@ -39,7 +39,8 @@ type pacer struct {
 	sent     uint64
 	wireSeq  uint32 // pacer goroutine only
 	writeErr atomic.Pointer[error]
-	stamps   *atomic.Bool // the peer takes stamped datagrams (tagDataTS)
+	stamps   *atomic.Bool              // the peer takes stamped datagrams (tagDataTS)
+	gov      *atomic.Pointer[Governor] // the pool's shared cap (nil / empty outside a capped pool)
 
 	// Time bound on the data queue: queued counts the bytes waiting (data
 	// and parity), and enqueue of DATA waits while it exceeds what the
@@ -193,6 +194,25 @@ func (p *pacer) loop() {
 			last = now
 		}
 		tokens -= need
+		// Under a policer cap the whole pool shares one budget: every datagram,
+		// data or parity, waits for its share of it.
+		if p.gov != nil {
+			if g := p.gov.Load(); g != nil {
+				if d := g.reserve(len(b)); d > 0 {
+					t := time.NewTimer(d)
+					select {
+					case <-p.done:
+						t.Stop()
+						p.dequeued(len(b))
+						p.recycle(b)
+						return
+					case <-t.C:
+					}
+					// the bucket above refills while we wait for the pool's
+					last = time.Now()
+				}
+			}
+		}
 		// Fill the reserved header in wire (send) order, so the receiver
 		// measures loss on the actual wire order and the stamp is the moment
 		// the datagram leaves.

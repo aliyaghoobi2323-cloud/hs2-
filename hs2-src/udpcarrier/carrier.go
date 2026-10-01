@@ -3,6 +3,7 @@ package udpcarrier
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -74,6 +75,12 @@ type Conn struct {
 	// full (tryFeed)
 	rxDropped atomic.Uint64
 
+	// the pool's governor (nil outside a pool): shared cap, pool-wide loss
+	gov atomic.Pointer[Governor]
+
+	// the FEC adapter's current loss estimate (float bits), for status
+	lossEst atomic.Uint64
+
 	// feedback we send (describes what WE receive)
 	rxDataBytes atomic.Uint64
 	echoMu      sync.Mutex
@@ -135,6 +142,7 @@ func newConn(sess *core.Session, write func([]byte) error, shared, binding []byt
 	// Shallow pacer queue: it holds ~one BDP so backpressure reaches the sender
 	// fast and per-packet queueing latency stays small.
 	c.pacer = newPacer(rc, write, 64, &c.peerStamps)
+	c.pacer.gov = &c.gov
 	c.lastRxNanos.Store(time.Now().UnixNano())
 	c.wg.Add(3)
 	go c.processLoop()
@@ -237,6 +245,9 @@ func (c *Conn) Close() error {
 	c.closeOne.Do(func() {
 		close(c.done)
 		c.pacer.close()
+		if g := c.gov.Load(); g != nil {
+			g.detach(c)
+		}
 		if c.onClose != nil {
 			c.onClose()
 		}
@@ -381,10 +392,22 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 		c.peerStamps.Store(true)
 	}
 	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM, fb.echoNanos, fb.owdTicks, fb.flags&fbOWD != 0)
+	loss := float64(fb.lossPPM) / 1e6
+	g := c.gov.Load()
+	if g != nil {
+		g.report(c, loss, c.rc.queueSec())
+	}
 
-	// Loss sizes parity, never rate.
-	est := c.adapter.Observe(float64(fb.lossPPM)/1e6, now)
+	// Loss sizes parity, never rate. But once the pool's governor has
+	// confirmed a policer, its drops are ours to avoid by rate, not to repair:
+	// parity sizes for the path's own loss (seen between episodes). More
+	// parity would only put more bytes into the policer.
+	if g.Confirmed() {
+		loss = math.Min(loss, g.CleanLoss()+0.01)
+	}
+	est := c.adapter.Observe(loss, now)
 	c.enc.SetLoss(est)
+	c.lossEst.Store(math.Float64bits(est))
 
 	// Remember this report so our next feedback can echo it for the peer's RTT.
 	c.echoMu.Lock()
@@ -517,8 +540,18 @@ type Stats struct {
 	BtlBwBytes   float64
 	RTProp       time.Duration
 	LossPPM      uint32
-	ParityRatio  float64
-	Startup      bool // the rate model is still ramping (no capacity estimate yet)
+	ParityRatio  float64 // parity shards per data shard now (0.5 = +50% bytes)
+	FECAtCeiling bool    // parity is at its maximum: loss beyond what FEC is sized for
+	Startup      bool    // the rate model is still ramping (no capacity estimate yet)
+}
+
+// AttachGovernor puts the carrier under its pool's governor (engine/dgpool).
+func (c *Conn) AttachGovernor(g *Governor) {
+	if g == nil {
+		return
+	}
+	c.gov.Store(g)
+	g.attach(c)
 }
 
 // Warm reports whether the carrier's rate model has a capacity estimate (it
@@ -545,6 +578,7 @@ func (c *Conn) Stats() Stats {
 		RTProp:       time.Duration(rtt * float64(time.Second)),
 		LossPPM:      loss,
 		ParityRatio:  c.enc.ParityRatio(),
+		FECAtCeiling: math.Float64frombits(c.lossEst.Load()) >= fec.DefaultAdapterConfig().Max-1e-9,
 		Startup:      startup,
 	}
 }

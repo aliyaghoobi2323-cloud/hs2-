@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier"
 )
 
 // Datagram tun pool: a routed TUN carried over a POOL of datagram carriers
@@ -243,6 +244,14 @@ type dgPool struct {
 	// clamps learned from it.
 	poolCtlMu sync.Mutex
 	poolCtl   *dgLink
+
+	// gov watches the pool as a whole for a policer on the path to the peer
+	// (all carriers share its IP) and caps the pool's total send rate.
+	gov *udpcarrier.Governor
+
+	fecCeilLogged bool   // "FEC at its ceiling" was logged and not yet cleared
+	fecCeilRun    int    // consecutive samples at (+) / below (-) the ceiling
+	phaseLabel    string // fixed phase for the snapshot (the direct exit: "listening")
 }
 
 func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) *dgPool {
@@ -259,7 +268,7 @@ func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) 
 		logf = func(string, ...any) {}
 	}
 	p := &dgPool{dev: dev, min: min, max: max, perLink: perLink, log: logf,
-		ap: newAutopilot(min, max, perLink), growable: true}
+		ap: newAutopilot(min, max, perLink), growable: true, gov: udpcarrier.NewGovernor(logf)}
 	p.pool.New = func() any { b := make([]byte, 0, 2048); return &b }
 	p.target.Store(int32(warmSize(min, max)))
 	return p
@@ -314,6 +323,9 @@ func (p *dgPool) countsLocked() (serving, retiring int) {
 func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	now := p.now()
 	l := newDgLink(car, now)
+	if a, ok := car.(interface{ AttachGovernor(*udpcarrier.Governor) }); ok {
+		a.AttachGovernor(p.gov)
+	}
 	p.mu.Lock()
 	if s, _ := p.countsLocked(); p.accept && s >= int(p.target.Load()) {
 		l.retiring, l.retireSince, l.bornSpare = true, now, true
@@ -437,6 +449,7 @@ func (p *dgPool) sampleHealth() apSample {
 	p.lastSampleAt = now
 	secs := dt.Seconds()
 
+	capped := p.gov.Capped()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := apSample{now: now, growable: p.growable}
@@ -466,7 +479,9 @@ func (p *dgPool) sampleHealth() apSample {
 		// startup), so a still-ramping carrier is not mistaken for a full path.
 		warm := warmOf(l.car) || now.Sub(l.servingSince) >= dgWarmGrace
 		dropped := l.droppedAt.Load()
-		l.pressed = !l.retiring && warm && dropped != 0 && now.Sub(time.Unix(0, dropped)) <= dt
+		// Under a policer cap a full queue is the cap, not the path: another
+		// carrier would share the same budget, so it never counts as pressure.
+		l.pressed = !capped && !l.retiring && warm && dropped != 0 && now.Sub(time.Unix(0, dropped)) <= dt
 		s.links = append(s.links, apLink{
 			id: int(l.id), serving: l.alive() && !l.retiring, retiring: l.retiring,
 			servingSince: l.servingSince, pressed: l.pressed,
@@ -712,8 +727,75 @@ func (p *dgPool) publishStats(s apSample) {
 		Users: s.open, Flowing: s.flowing, Phase: p.dec.phase.String(),
 		Reason: p.dec.reason, MbitPerS: mbitps(s.G),
 	}
+	if p.phaseLabel != "" {
+		ps.Phase = p.phaseLabel
+	}
+	p.carrierStats(&ps)
 	p.stats.Store(&ps)
 }
+
+// carrierStats fills the datagram fields of the snapshot from the live
+// carriers and the governor, and logs FEC reaching / leaving its ceiling.
+func (p *dgPool) carrierStats(ps *PoolStats) {
+	type statser interface{ Stats() udpcarrier.Stats }
+	ps.Datagram = true
+	var parSum float64
+	active := 0
+	p.mu.RLock()
+	for _, l := range p.set {
+		if !l.alive() {
+			continue
+		}
+		c, ok := l.car.(statser)
+		if !ok {
+			continue
+		}
+		st := c.Stats()
+		ps.FECRecovered += st.Dec.Recovered
+		ps.FECLost += st.Dec.Lost
+		ps.PacerDropped += st.PacerDropped
+		ps.RxDropped += st.RxDropped
+		if l.rate < 1000 { // idle carriers say nothing about the path
+			continue
+		}
+		active++
+		parSum += st.ParityRatio
+		if st.FECAtCeiling {
+			ps.FECAtCeiling++
+		}
+		if lp := float64(st.LossPPM) / 1e4; lp > ps.MaxLossPct {
+			ps.MaxLossPct = lp
+		}
+	}
+	p.mu.RUnlock()
+	if active > 0 {
+		ps.ParityPct = round1f(parSum / float64(active) * 100)
+	}
+	ps.MaxLossPct = round1f(ps.MaxLossPct)
+	if _, loss := p.gov.Last(); loss > 0 {
+		ps.LossPct = round1f(loss * 100)
+	}
+	ps.TunDrops = p.drops.Load()
+	ps.Policed, ps.PoliceConfirm = p.gov.Capped(), p.gov.Confirmed()
+	ps.PoliceCapMbit = round1f(mbitps(p.gov.CapBytes()))
+	// Hysteresis: at the ceiling for 2 samples in a row to say so, clear of it
+	// for 5 to take it back — a bursty path would otherwise flap the log.
+	if ps.FECAtCeiling > 0 {
+		p.fecCeilRun = max(p.fecCeilRun, 0) + 1
+	} else {
+		p.fecCeilRun = min(p.fecCeilRun, 0) - 1
+	}
+	switch {
+	case p.fecCeilRun >= 2 && !p.fecCeilLogged:
+		p.fecCeilLogged = true
+		p.log("dg: FEC at its ceiling on %d of %d carriers (parity %.0f%% of data) — loss %.1f%% (worst carrier %.1f%%) is more than it is sized to repair", ps.FECAtCeiling, active, ps.ParityPct, ps.LossPct, ps.MaxLossPct)
+	case p.fecCeilRun <= -5 && p.fecCeilLogged:
+		p.fecCeilLogged = false
+		p.log("dg: FEC below its ceiling again (parity %.0f%% of data)", ps.ParityPct)
+	}
+}
+
+func round1f(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
 
 // Stats returns the last published snapshot.
 func (p *dgPool) Stats() PoolStats {
@@ -835,11 +917,18 @@ func RunDgEdge(ctx context.Context, cfg DgConfig) error {
 	}
 	pp := p
 	poolProbe.Store(&pp)
+	if cfg.Listener != nil {
+		// Closed HERE, before this returns: closing releases what the listener
+		// holds in the kernel (the icmp reply rule), and once Run returns the
+		// process may exit at once — a close left to a goroutine never ran.
+		defer cfg.Listener.Close()
+	}
 	if cfg.OnStart != nil {
 		cfg.OnStart(p.Stats)
 	}
 	go p.pumpTun(ctx)
 	go p.reapLoop(ctx)
+	go p.gov.Run(ctx)
 	if cfg.Reverse {
 		go p.acceptLoop(ctx, cfg.Listener)
 		go p.publishTarget(ctx)
@@ -867,20 +956,36 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 		logf = func(string, ...any) {}
 	}
 	p := newDgPool(cfg.Dev, cfg.Min, cfg.Max, cfg.PerLink, logf)
+	if cfg.Listener != nil {
+		defer cfg.Listener.Close() // before returning: see RunDgEdge
+	}
 	if cfg.OnStart != nil {
 		cfg.OnStart(p.Stats)
 	}
 	go p.pumpTun(ctx)
 	go p.reapLoop(ctx)
+	go p.gov.Run(ctx)
 	if !cfg.Reverse {
 		// Direct exit: accept carriers, no autopilot (the edge decides).
 		if err := ctx.Err(); err != nil {
 			return nil
 		}
 		go p.acceptLoop(ctx, cfg.Listener)
-		<-ctx.Done()
-		p.closeAll()
-		return nil
+		// no sizing here, but the live snapshot (links, loss, parity, policer)
+		// is this side's: it sends the downloads
+		p.phaseLabel = "listening"
+		t := time.NewTicker(healthTick)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				p.closeAll()
+				return nil
+			case <-t.C:
+				s := p.sampleHealth()
+				p.publishStats(s)
+			}
+		}
 	}
 	// Reverse exit: dial to match the edge's target (learned via pool control).
 	p.dialer = cfg.Dialer

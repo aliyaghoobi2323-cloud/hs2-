@@ -1363,6 +1363,22 @@ type PoolStats struct {
 	Reason     string  // why the pattern is this size, with the numbers
 	NextProbeS int     // seconds until growth is tried again (holding), else 0
 	ExitStats  string  // "ok" | "partial" | "older exit: ..." | "" (unknown yet)
+
+	// Datagram pools (dgtun): what this side's carriers see on what they SEND
+	// (the peer reports its loss) and what they receive.
+	Datagram      bool
+	LossPct       float64 // wire loss of what this side sends, pool-wide (rate-weighted)
+	MaxLossPct    float64 // the worst active carrier's
+	ParityPct     float64 // FEC parity per data byte, mean over active carriers
+	FECAtCeiling  int     // active carriers whose parity is at its maximum
+	FECRecovered  uint64  // received data rebuilt from parity (live carriers)
+	FECLost       uint64  // received data lost for good (live carriers)
+	PacerDropped  uint64  // datagrams the carriers' pacers dropped (live carriers)
+	RxDropped     uint64  // received datagrams dropped for a full carrier queue (live carriers)
+	TunDrops      uint64  // tunnel packets dropped for a full carrier queue (since start)
+	Policed       bool    // the pool is held under a policer cap (being tested or confirmed)
+	PoliceConfirm bool    // the cap stretched the loss episodes: a confirmed policer
+	PoliceCapMbit float64 // that cap, Mbit/s (wire: data + parity)
 }
 
 // publishStats stores the monitor snapshot at the end of a pool tick.
