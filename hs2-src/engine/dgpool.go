@@ -53,6 +53,10 @@ const (
 	// dgPoolCtlEvery: how often the reverse edge (re)publishes its target.
 	dgPoolCtlEvery = 3 * time.Second
 	dgDialBudget   = 4 // most carriers dialed per health tick (edge, direct)
+	// dgDownStatsStale: a download-stats report older than this is ignored, so
+	// an exit that stops reporting (or an older one that never does) falls back
+	// to upload-only sizing rather than holding a stale pressure reading.
+	dgDownStatsStale = 3 * healthTick
 )
 
 // dgCarrier is a datagram Carrier that can also report whether its rate model
@@ -250,6 +254,19 @@ type dgPool struct {
 	poolCtlMu sync.Mutex
 	poolCtl   *dgLink
 
+	// Download-stats backchannel. The pool is sized by the EDGE (direct: it
+	// dials; reverse: it publishes the target), which is the download RECEIVER
+	// and so never sees the download sender's send-queue pressure — a download-
+	// bound pool would shrink to min and throttle the download to a few
+	// carriers. The EXIT (the download sender) measures that pressure and
+	// reports it to the edge as a TypeLinkStats frame; the edge folds it into
+	// sampleHealth so the autopilot sizes for the busier of the two directions.
+	// A peer that predates the frame drops it unread, so it is safe to send.
+	downSender bool         // EXIT: measure and report; EDGE: consume and fold in
+	dnPressed  atomic.Uint32 // EDGE: exit's serving carriers pressed on download
+	dnServing  atomic.Uint32 // EDGE: exit's serving carriers (for clamping)
+	dnStatsAt  atomic.Int64  // EDGE: unixnano the last report arrived (0 = none)
+
 	// gov watches the pool as a whole for a policer on the path to the peer
 	// (all carriers share its IP) and caps the pool's total send rate.
 	gov *udpcarrier.Governor
@@ -389,6 +406,8 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 			p.sendVia(l, core.TypePong, nil)
 		case core.TypePoolCtl:
 			p.onPoolCtl(l, payload)
+		case core.TypeLinkStats:
+			p.onLinkStats(payload)
 		case core.TypePong, core.TypeClose:
 		}
 	}
@@ -523,6 +542,7 @@ func (p *dgPool) sampleHealth() apSample {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	s := apSample{now: now, growable: p.growable}
+	var dnRate []float64 // this tick's RECEIVE (download) rate per s.links entry
 	for _, l := range p.set {
 		if !l.alive() {
 			continue
@@ -558,11 +578,65 @@ func (p *dgPool) sampleHealth() apSample {
 			rate: l.rate, rate10: l.rate10, sustained: l.sustained,
 			flowing: flowing, open: open,
 		})
+		dnRate = append(dnRate, float64(dDown)/secs)
 		s.G += l.rate
 		s.flowing += flowing
 		s.open += open
 	}
+	p.foldDownPressure(s.links, dnRate, now)
 	return s
+}
+
+// foldDownPressure folds the download sender's reported pressure into this
+// (edge) sample. The edge is the download RECEIVER, so its own send-queue
+// pressure only reflects the UPLOAD direction; without this a download-bound
+// pool would shrink to min and throttle the download to a few carriers. The
+// exit reports how many of its serving carriers are pressed on the download
+// path (TypeLinkStats); we mark that many of OUR busiest-by-download serving
+// carriers pressed, so the autopilot sizes for the busier of the two
+// directions (a carrier added for download also serves upload). We never lower
+// the edge's own pressed count — the effective pressure is max(up, down). An
+// absent or stale report (an older exit, or no download pressure) is a no-op,
+// so mixed-version pairs keep today's behaviour.
+func (p *dgPool) foldDownPressure(links []apLink, dnRate []float64, now time.Time) {
+	if p.downSender { // only the sizer (edge) folds in; the exit produces it
+		return
+	}
+	at := p.dnStatsAt.Load()
+	if at == 0 || now.Sub(time.Unix(0, at)) > dgDownStatsStale {
+		return
+	}
+	want := int(p.dnPressed.Load())
+	if want <= 0 {
+		return
+	}
+	have := 0
+	for _, l := range links {
+		if l.serving && l.pressed {
+			have++
+		}
+	}
+	extra := want - have
+	if extra <= 0 {
+		return
+	}
+	// Candidates: serving, not already pressed, actually carrying download this
+	// tick — never fabricate pressure on an idle carrier. Busiest first, so the
+	// per-carrier capacity the autopilot learns is the real download rate.
+	cand := make([]int, 0, len(links))
+	for i := range links {
+		if links[i].serving && !links[i].pressed && dnRate[i] > 0 {
+			cand = append(cand, i)
+		}
+	}
+	for a := 1; a < len(cand); a++ { // insertion sort by download rate, desc
+		for b := a; b > 0 && dnRate[cand[b]] > dnRate[cand[b-1]]; b-- {
+			cand[b], cand[b-1] = cand[b-1], cand[b]
+		}
+	}
+	for k := 0; k < extra && k < len(cand); k++ {
+		links[cand[k]].pressed = true
+	}
 }
 
 // flowStats counts a carrier's flows and how many are actively moving data,
@@ -929,6 +1003,48 @@ func (p *dgPool) onPoolCtl(l *dgLink, payload []byte) {
 	}
 }
 
+// onLinkStats handles a TypeLinkStats frame: the download sender (exit) reports
+// how many of its serving carriers are pressed on the download path, and how
+// many are serving. The edge (the sizer) stores it to fold into sampleHealth.
+// (The exit never acts on one; it only produces them.)
+func (p *dgPool) onLinkStats(payload []byte) {
+	if p.downSender || len(payload) < 4 {
+		return
+	}
+	p.dnPressed.Store(uint32(binary.BigEndian.Uint16(payload[0:])))
+	p.dnServing.Store(uint32(binary.BigEndian.Uint16(payload[2:])))
+	p.dnStatsAt.Store(p.now().UnixNano())
+}
+
+// publishDownStats (the EXIT, direct or reverse) reports the download
+// direction's send-side pressure to the edge over one carrier, so the edge —
+// which only sees its own upload pressure — can size the shared pool for the
+// download too. It is a no-op on the edge. A pre-TypeLinkStats peer drops the
+// frame unread, so this is always safe to send.
+func (p *dgPool) publishDownStats(s apSample) {
+	if !p.downSender {
+		return
+	}
+	serving, pressed := 0, 0
+	for _, l := range s.links {
+		if !l.serving {
+			continue
+		}
+		serving++
+		if l.pressed {
+			pressed++
+		}
+	}
+	l := p.poolCtlCarrier()
+	if l == nil {
+		return
+	}
+	var b [4]byte
+	binary.BigEndian.PutUint16(b[0:], uint16(pressed))
+	binary.BigEndian.PutUint16(b[2:], uint16(serving))
+	p.sendVia(l, core.TypeLinkStats, b[:])
+}
+
 // publishTarget (reverse EDGE) periodically sends the autopilot's serving
 // target to the exit over one carrier, and on every change, until ctx ends.
 func (p *dgPool) publishTarget(ctx context.Context) {
@@ -1058,6 +1174,7 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 		logf = func(string, ...any) {}
 	}
 	p := newDgPool(cfg.Dev, cfg.Min, cfg.Max, cfg.PerLink, logf)
+	p.downSender = true // the exit sends the downloads; it reports that pressure
 	if cfg.Listener != nil {
 		defer cfg.Listener.Close() // before returning: see RunDgEdge
 	}
@@ -1085,6 +1202,7 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 				return nil
 			case <-t.C:
 				s := p.sampleHealth()
+				p.publishDownStats(s)
 				p.publishStats(s)
 			}
 		}
@@ -1133,7 +1251,9 @@ func (p *dgPool) runReverseExit(ctx context.Context) {
 		case <-tick.C:
 			p.reconcile(ctx, p.Target()) // dials up to target; retires surplus
 			p.drainTick()
-			p.publishStats(p.sampleHealth())
+			s := p.sampleHealth()
+			p.publishDownStats(s) // tell the edge our download send pressure
+			p.publishStats(s)
 		}
 	}
 }
