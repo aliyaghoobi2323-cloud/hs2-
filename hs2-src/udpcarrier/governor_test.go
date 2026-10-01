@@ -32,6 +32,13 @@ func newGovSim(n int) *govSim {
 // bytes/s (split evenly); loss(i, sent) gives carrier i's reported loss for
 // the pool's actual total sent; queue is every carrier's standing queue.
 func (s *govSim) step(want float64, loss func(i int, total float64) float64, queue float64) float64 {
+	return s.stepPush(want, loss, queue, true)
+}
+
+// stepPush is step with control over whether the carriers are using their
+// allowance (pushing). A saturating sender pushes; a lightly loaded pool does
+// not, and its loss must not be read as a rate cap.
+func (s *govSim) stepPush(want float64, loss func(i int, total float64) float64, queue float64, pushing bool) float64 {
 	s.clock = s.clock.Add(govTickEvery)
 	total := want
 	if c := s.g.CapBytes(); c > 0 && total > c {
@@ -40,6 +47,7 @@ func (s *govSim) step(want float64, loss func(i int, total float64) float64, que
 	per := total / float64(len(s.cs))
 	for i, c := range s.cs {
 		c.rc.sent.Add(uint64(per * govTickEvery.Seconds()))
+		c.rc.pushing.Store(pushing)
 		for r := 0; r < 5; r++ { // five 100 ms reports per tick
 			s.g.report(c, loss(i, total), queue)
 		}
@@ -117,6 +125,23 @@ func TestGovernorIgnoresSteadyRandomLossOnAllCarriers(t *testing.T) {
 	}
 	if s.g.Capped() || len(s.logs) > 0 {
 		t.Fatalf("steady 2-14%% random loss on every carrier capped the pool: %v", s.logs)
+	}
+}
+
+// A lightly loaded pool (a reconnect: carriers sending well under their
+// allowance) that sees loss must never be read as a policer. The field hit
+// exactly this — the governor capped at 90% of ~27 Mbit/s of reconnect
+// traffic, not of a real limit.
+func TestGovernorIgnoresLossWhenNotPushing(t *testing.T) {
+	s := newGovSim(8)
+	tick := 0
+	for tick = 1; tick <= 400; tick++ {
+		// the same episodic loss as the policer test, but the carriers are NOT
+		// using their allowance
+		s.stepPush(150*mb, policerLoss(60*mb, &tick), 0.001, false)
+	}
+	if s.g.Capped() {
+		t.Fatalf("a lightly loaded pool was capped on loss it did not cause by its rate: %v", s.logs)
 	}
 }
 
