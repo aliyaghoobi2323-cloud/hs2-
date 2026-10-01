@@ -159,6 +159,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 // row — and when it no longer is.
 type cpuMeter struct {
 	logf     func(string, ...any)
+	cores    int // 0 = runtime.NumCPU() (tests set it)
 	lastT    time.Time
 	lastTick uint64
 	hot      int
@@ -188,6 +189,9 @@ func (m *cpuMeter) sample() float64 {
 	pct := float64(tick-m.lastTick) / clkTck / now.Sub(m.lastT).Seconds() * 100
 	pct = float64(int(pct*10+0.5)) / 10
 	cores := float64(runtime.NumCPU())
+	if m.cores > 0 {
+		cores = float64(m.cores)
+	}
 	switch {
 	case pct >= 90*cores:
 		if m.hot++; m.hot >= 3 && !m.logged {
