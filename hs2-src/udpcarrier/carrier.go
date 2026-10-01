@@ -419,7 +419,7 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 	if fb.flags&fbStamps != 0 && !c.peerStamps.Load() {
 		c.peerStamps.Store(true)
 	}
-	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM, fb.echoNanos, fb.owdTicks, fb.flags&fbOWD != 0)
+	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM, fb.echoNanos, fb.owdTicks, fb.flags&fbOWD != 0, c.pacer.tookDemand())
 	loss := float64(fb.lossPPM) / 1e6
 	g := c.gov.Load()
 	if g != nil {
