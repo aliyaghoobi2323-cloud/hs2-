@@ -656,15 +656,21 @@ start_service(){
 # handshake, so a live link in the daemon's status file is proof; the carriers
 # without one (udp/auto) are proven by the peer's tun IP answering ping.
 tunnel_up(){ # cfg
-  local cfg="$1" sf links ifc peer
-  sf=$(status_path "$cfg")
-  if status_fresh "$sf"; then
-    links=$(jraw "$sf" links)
-    [ "${links:-0}" -gt 0 ] 2>/dev/null && return 0
+  local cfg="$1" sf links ifc peer car
+  car=$(jget "$cfg" carrier); ifc=$(jget "$cfg" iface); peer=$(jget "$cfg" peer_ip)
+  # A tunnel with a tun interface is proven by a packet crossing it and coming
+  # back: ping the peer's tun IP. A link count is NOT proof for it — a path
+  # that lets a handshake through and then kills the flow (the Iran border
+  # does this to UDP) leaves carriers counted "up" with nothing crossing.
+  if [ "$car" != mtcp ] && [ -n "$ifc" ] && [ -n "$peer" ]; then
+    ip link show "$ifc" >/dev/null 2>&1 && ping -c1 -W1 -I "$ifc" "$peer" >/dev/null 2>&1
+    return $?
   fi
-  ifc=$(jget "$cfg" iface); peer=$(jget "$cfg" peer_ip)
-  [ -n "$ifc" ] && [ -n "$peer" ] && ip link show "$ifc" >/dev/null 2>&1 \
-    && ping -c1 -W1 -I "$ifc" "$peer" >/dev/null 2>&1
+  # mtcp has no tun: a link counts only after the peer proved the key over it.
+  sf=$(status_path "$cfg")
+  status_fresh "$sf" || return 1
+  links=$(jraw "$sf" links)
+  [ "${links:-0}" -gt 0 ] 2>/dev/null
 }
 
 # tunnel_conn_label CFG: whether the tunnel really reaches the other server
@@ -1933,19 +1939,22 @@ tm_list(){
 # tm_health_lines SF: loss / FEC / policer / drops / CPU from a fresh status
 # file (datagram tunnels report loss of what THIS side sends, as its peer sees it).
 tm_health_lines(){ # status file
-  local sf="$1" car loss mloss par ceil rec lost pol pconf pcap pd rd td cpu cores
+  local sf="$1" car loss mloss par ceil rec lost pol pconf pcap pd rd td cpu cores tr sp rp tw dn dq da
   status_fresh "$sf" || return 0
   car=$(jget "$sf" carrier); pol=$(jraw "$sf" policed); pconf=$(jraw "$sf" police_confirmed)
   loss=$(jraw "$sf" loss_pct); mloss=$(jraw "$sf" max_loss_pct); par=$(jraw "$sf" parity_pct)
   ceil=$(jraw "$sf" fec_at_ceiling); rec=$(jraw "$sf" fec_recovered); lost=$(jraw "$sf" fec_lost)
   pcap=$(jraw "$sf" police_cap_mbit); pd=$(jraw "$sf" pacer_dropped); rd=$(jraw "$sf" rx_dropped); td=$(jraw "$sf" tun_drops)
   cpu=$(jraw "$sf" cpu_pct); cores=$(jraw "$sf" cpu_cores)
+  tr=$(jraw "$sf" tun_read); sp=$(jraw "$sf" sent_pkts); rp=$(jraw "$sf" recv_pkts); tw=$(jraw "$sf" tun_written)
+  dn=$(jraw "$sf" drop_no_carrier); dq=$(jraw "$sf" drop_queue_full); da=$(jraw "$sf" drop_aged)
   case "$car" in dgtun*)
     say " Loss:        ${loss:-0}% of what this side sends (worst carrier ${mloss:-0}%)"
     say " FEC:         parity ${par:-0}% of data$([ -n "$ceil" ] && echo " · ${C_Y}at its ceiling on $ceil carrier(s)${C_0}") · received ${rec:-0} rebuilt, ${lost:-0} lost"
     if [ "$pol" = true ] && [ "$pconf" = true ]; then say " Policer:     ${C_Y}confirmed on the path${C_0} — whole pool held at ${pcap} Mbit/s (re-probes slowly)"
     elif [ "$pol" = true ]; then say " Policer:     suspected — testing with the whole pool capped at ${pcap} Mbit/s"; fi
-    [ -n "$pd$rd$td" ] && say " Drops:       pacer ${pd:-0} · receive queue ${rd:-0} · tunnel queue ${td:-0}"
+    say " Packets:     tun→carriers ${tr:-0} read, ${sp:-0} sent · carriers→tun ${rp:-0} received, ${tw:-0} written"
+    [ -n "$pd$rd$td" ] && say " Drops:       no carrier ${dn:-0} · carrier queue full ${dq:-0} · waited >50 ms ${da:-0} · pacer ${pd:-0} · receive queue ${rd:-0}"
     ;;
   esac
   [ -n "$cores" ] && say " CPU:         ${cpu:-0}% of one core ($cores core(s))"

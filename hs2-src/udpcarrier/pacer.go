@@ -55,7 +55,7 @@ type pacer struct {
 // pacerQueueTime / pacerQueueMin bound the send queue in time (see pacer).
 const (
 	pacerQueueTime = 20 * time.Millisecond
-	pacerQueueMin  = 8 * 1500
+	pacerQueueMin  = 3 * 1500 // at the 0.26 Mbit/s floor still 140 ms; 8 datagrams were 375 ms
 )
 
 // pacerQuantum is the pacing burst the bucket may hold: two timer wake-ups'
