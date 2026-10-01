@@ -204,7 +204,12 @@ func (r *rateControl) onSent(n int) { r.sent.Add(uint64(n)) }
 // repeat is stale). owdTicks is the minimum stamped one-way delay the peer saw
 // over its interval, in stampTick units with the clocks' offset folded in and
 // wrapping at 32 bits; haveOWD is false when the peer saw no stamped data.
-func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec float64, lossPPM uint32, echoNanos int64, owdTicks uint32, haveOWD bool) {
+// demand is true when the pacer had to hold a data enqueue back since the last
+// report (its queue stood above budget): the carrier was offering as much as the
+// rate allowed even if the averaged send rate dipped below the share — a bursty
+// inner flow draining the shallow queue between wake-ups, which is PACING-limited,
+// not application-limited.
+func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec float64, lossPPM uint32, echoNanos int64, owdTicks uint32, haveOWD, demand bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -266,7 +271,16 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 	// application-limited interval (an idle tunnel) would otherwise drag the
 	// estimate — and with it the delivery cap below — down to the idle rate,
 	// and the next burst would have to climb back from there (BBR's rule).
-	limited := sendRate >= limitedShare*r.rate
+	//
+	// "Sending all we were allowed to" is the realized send rate OR the pacer
+	// holding data back (demand): a single inner TCP flow drains the shallow
+	// pacer queue between the writer's wake-ups and sends in sub-BDP bursts, so
+	// its averaged send rate dips below the share for whole reports even while a
+	// full backlog waits — pacing-limited, not application-limited. Reading that
+	// as idle froze the rate at the floor it was left at after an ACK-only
+	// download, and because the rate never grew the flow could never deliver
+	// more to lift it (the after-idle stall on a clean, high-capacity path).
+	limited := sendRate >= limitedShare*r.rate || demand
 	r.pushing.Store(limited)
 	if limited || dRate > r.btlBw {
 		r.round++
