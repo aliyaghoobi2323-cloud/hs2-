@@ -488,17 +488,25 @@ def scenarios(w):
     res("9b the icmp tunnel still carries traffic after that", ok, info)
 
     # ---- 10. status, uninstall ------------------------------------------------
-    rc, out = w.run(ir, "status", [])
-    res("10 status shows every tunnel", all(u in out for u in w.units(ir)), out[-300:])
     # Status judges a tunnel by whether it reaches the other server, not by
     # its interface being up: hs2-k4 never had a partner, and hs2-x3 lost its
-    # kharej side in 9b — both still have their tun interface up.
-    blocks = {}
-    for u in w.units(ir):
-        m = re.search(r"^ %s — [\s\S]*?(?=^ hs2[\w-]* — |\Z)" % re.escape(u), out, re.M)
-        blocks[u] = m.group(0) if m else ""
+    # kharej side in 9b — both still have their tun interface up. The restore
+    # in 9 restarted every iran tunnel; a reverse kharej side notices only after
+    # its liveness timeout (15 s) and redials, so the live ones get up to 60 s
+    # to show connected (the dead ones never can).
     want = {"hs2": True, "hs2-de1": True, "hs2-k4-2": True, "hs2-k4": False, "hs2-x3": False}
-    got = {u: ("✓ connected" in b) and "NOT connected" not in b for u, b in blocks.items()}
+    deadline = time.time() + 60
+    while True:
+        rc, out = w.run(ir, "status", [])
+        blocks = {}
+        for u in w.units(ir):
+            m = re.search(r"^ %s — [\s\S]*?(?=^ hs2[\w-]* — |\Z)" % re.escape(u), out, re.M)
+            blocks[u] = m.group(0) if m else ""
+        got = {u: ("✓ connected" in b) and "NOT connected" not in b for u, b in blocks.items()}
+        if got == want or time.time() > deadline:
+            break
+        time.sleep(3)
+    res("10 status shows every tunnel", all(u in out for u in w.units(ir)), out[-300:])
     res("10 status says which tunnels really reach the other server (dead ones NOT connected)", got == want,
         "got %s" % got)
     for s in (ir, kh):
