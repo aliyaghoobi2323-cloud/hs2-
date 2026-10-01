@@ -530,3 +530,12 @@ func (r *rateControl) srttSec() float64 {
 	defer r.mu.Unlock()
 	return r.srtt
 }
+
+// rateSnapshot exposes the current pacing rate in bytes/s (for status/diagnosis:
+// seeing a carrier pinned at a low rate while the path is healthy is the signal
+// for an after-idle ramp stall).
+func (r *rateControl) rateSnapshot() float64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rate
+}

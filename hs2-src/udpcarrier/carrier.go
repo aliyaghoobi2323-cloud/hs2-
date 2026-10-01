@@ -601,11 +601,13 @@ type Stats struct {
 	PacerDropped uint64
 	RxDropped    uint64 // listener only: inbound datagrams dropped, this carrier's queue full
 	BtlBwBytes   float64
+	RateBytes    float64 // current pacing rate, bytes/s (what the pacer is allowed to send)
 	RTProp       time.Duration
 	LossPPM      uint32
 	ParityRatio  float64 // parity shards per data shard now (0.5 = +50% bytes)
 	FECAtCeiling bool    // parity is at its maximum: loss beyond what FEC is sized for
 	Startup      bool    // the rate model is still ramping (no capacity estimate yet)
+	Pushing      bool    // offered most of its allowance at the last feedback
 }
 
 // Pushing reports whether the carrier was offering at least most of its
@@ -643,10 +645,12 @@ func (c *Conn) Stats() Stats {
 		PacerDropped: dropped,
 		RxDropped:    c.rxDropped.Load(),
 		BtlBwBytes:   bw,
+		RateBytes:    c.rc.rateSnapshot(),
 		RTProp:       time.Duration(rtt * float64(time.Second)),
 		LossPPM:      loss,
 		ParityRatio:  c.enc.ParityRatio(),
 		FECAtCeiling: math.Float64frombits(c.lossEst.Load()) >= fec.DefaultAdapterConfig().Max-1e-9,
 		Startup:      startup,
+		Pushing:      c.rc.pushing.Load(),
 	}
 }
