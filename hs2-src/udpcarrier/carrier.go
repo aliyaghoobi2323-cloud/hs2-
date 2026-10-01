@@ -545,6 +545,11 @@ type Stats struct {
 	Startup      bool    // the rate model is still ramping (no capacity estimate yet)
 }
 
+// Pushing reports whether the carrier was offering at least most of its
+// allowance at the last feedback — so a loss it saw then could be the path
+// capping the rate, rather than the carrier simply being lightly loaded.
+func (c *Conn) Pushing() bool { return c.rc.pushing.Load() }
+
 // AttachGovernor puts the carrier under its pool's governor (engine/dgpool).
 func (c *Conn) AttachGovernor(g *Governor) {
 	if g == nil {

@@ -93,6 +93,12 @@ type rateControl struct {
 	// sent counts the data bytes the pacer put on the wire; written by the
 	// pacer goroutine without the lock.
 	sent atomic.Uint64
+
+	// pushing: the last feedback showed the carrier sending at least
+	// limitedShare of its allowance — it was offering as much as it was
+	// allowed, so a loss then could be rate-caused. When it is false the
+	// carrier is simply lightly loaded and its loss says nothing about a cap.
+	pushing atomic.Bool
 }
 
 type bwSample struct {
@@ -261,6 +267,7 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 	// estimate — and with it the delivery cap below — down to the idle rate,
 	// and the next burst would have to climb back from there (BBR's rule).
 	limited := sendRate >= limitedShare*r.rate
+	r.pushing.Store(limited)
 	if limited || dRate > r.btlBw {
 		r.round++
 		r.bwWindow = append(r.bwWindow, bwSample{rate: dRate, round: r.round, limited: limited})

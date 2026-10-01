@@ -84,17 +84,19 @@ type govMember struct {
 	lossN    int
 	qSum     float64
 	qN       int
+	pushing  bool // the carrier used its allowance during this interval
 }
 
 // govTick is one governor interval, pool-wide.
 type govTick struct {
-	at     time.Time
-	rate   float64 // bytes/s the pool put on the wire
-	loss   float64 // wire loss of what it sent, rate-weighted
-	lossy  int     // active carriers with loss >= govCarrierLossy
-	active int
-	queue  float64 // median standing queue of active carriers, seconds
-	burst  bool
+	at      time.Time
+	rate    float64 // bytes/s the pool put on the wire
+	loss    float64 // wire loss of what it sent, rate-weighted
+	lossy   int     // pushing carriers with loss >= govCarrierLossy
+	active  int     // carriers sending more than govActiveRate
+	pushing int     // ... of which were using their allowance (see Conn.Pushing)
+	queue   float64 // median standing queue of active carriers, seconds
+	burst   bool
 }
 
 const (
@@ -113,10 +115,10 @@ const (
 	govTestLowerFrac = 0.7  // still testing: faster, to get under an unknown limit
 	govLiftBelow     = 0.45 // lift only once the test cap is at most this share of where it began
 	govRestMax       = time.Hour
-	govRaiseEvery    = 10 * time.Second
-	govRaiseGain     = 1.05
-	govBindingFrac   = 0.85 // the cap is "the limit" when the pool sends at least this share of it
-	govFloorFrac     = 0.3  // of the first cap: lowest cap tried (a policer far below its own average pass rate is unlikely)
+	govRaiseEvery    = 4 * time.Second // re-probe upward this often while clean
+	govRaiseGain     = 1.15            // and by this much — recover in seconds, not minutes
+	govBindingFrac   = 0.85            // the cap is "the limit" when the pool sends at least this share of it
+	govFloorFrac     = 0.3             // of the first cap: lowest cap tried (a policer far below its own average pass rate is unlikely)
 	govFloorEpisodes = 2
 	govRest          = 5 * time.Minute
 	govMinCap        = 125_000 // 1 Mbit/s
@@ -189,12 +191,14 @@ func (g *Governor) detach(c *Conn) {
 // report takes one carrier's feedback: the wire loss of what it sent over
 // the peer's last interval and its standing-queue estimate.
 func (g *Governor) report(c *Conn, loss, queue float64) {
+	pushing := c.Pushing()
 	g.mu.Lock()
 	if m := g.members[c]; m != nil {
 		m.lossSum += loss
 		m.lossN++
 		m.qSum += queue
 		m.qN++
+		m.pushing = m.pushing || pushing
 	}
 	g.mu.Unlock()
 }
@@ -261,16 +265,26 @@ func (g *Governor) tick() {
 		loss := m.lossSum / float64(m.lossN)
 		q := m.qSum / float64(m.qN)
 		m.lossSum, m.lossN, m.qSum, m.qN = 0, 0, 0, 0
+		pushing := m.pushing
+		m.pushing = false
 		if rate < govActiveRate {
 			continue
 		}
 		tk.active++
 		wLoss += loss * rate
 		wSum += rate
-		if loss >= govCarrierLossy {
-			tk.lossy++
-		}
 		qs = append(qs, q)
+		// Only a carrier that was offering most of its allowance tells us
+		// anything about a rate cap: a lightly loaded carrier (the pool during
+		// a reconnect, the field's ~27 Mbit/s) that happens to see loss must
+		// not be read as a policer. This is the rate controller's own
+		// allowance rule (c7edbb2), applied to the governor.
+		if pushing {
+			tk.pushing++
+			if loss >= govCarrierLossy {
+				tk.lossy++
+			}
+		}
 	}
 	if wSum > 0 {
 		tk.loss = wLoss / wSum
@@ -279,9 +293,12 @@ func (g *Governor) tick() {
 		sort.Float64s(qs)
 		tk.queue = qs[len(qs)/2]
 	}
-	simultaneous := tk.active < 2 || float64(tk.lossy) >= govSimultaneous*float64(tk.active)
+	// An episode means loss on most of the carriers that were pushing — and at
+	// least two were, so a single busy carrier or a near-idle pool never
+	// trips it.
+	simultaneous := tk.pushing >= 2 && float64(tk.lossy) >= govSimultaneous*float64(tk.pushing)
 	med, n := g.medianLoss()
-	tk.burst = tk.active > 0 && n >= govMinHist && tk.loss >= govBurstLoss &&
+	tk.burst = tk.pushing >= 2 && n >= govMinHist && tk.loss >= govBurstLoss &&
 		tk.loss >= govBurstOverMed*med+govBurstOverAdd && tk.queue < lowQueue.Seconds() && simultaneous
 	if tk.active > 0 && !tk.burst {
 		g.cleanLoss += 0.1 * (tk.loss - g.cleanLoss)
