@@ -97,6 +97,7 @@ func DialCfg(ctx context.Context, addr string, ec EncapConfig, shared []byte, in
 
 	write := func(b []byte) error { _, e := conn.Write(b); return e }
 	c := newConn(sess, write, shared, binding, innerMTU, conn, nil)
+	c.kind = ec.Kind // echo-shaping in the pool keys off this (the dial side sends requests)
 
 	// Read pump: everything after the handshake goes through the FEC path.
 	c.wg.Add(1)

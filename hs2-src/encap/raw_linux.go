@@ -32,8 +32,8 @@ func init() {
 	listenRawFn = listenRawLinux
 }
 
-// rawPeerTTL / rawPeerMax bound the listener's per-peer state (the echo
-// sequence to answer with, the local address the peer targeted).
+// rawPeerTTL / rawPeerMax bound the listener's per-peer state (the reply
+// counter, the local address the peer targeted).
 const (
 	rawPeerTTL   = 5 * time.Minute
 	rawPeerMax   = 16384
@@ -226,10 +226,15 @@ type rawKey struct {
 }
 
 type rawPeer struct {
-	addr  *Addr
-	seq   uint16 // icmp: the peer's latest echo sequence, answered in replies
-	local net.IP // the local address the peer targeted (wildcard bind)
-	seen  time.Time
+	addr *Addr
+	// replyCtr is this listener's OWN echo-sequence counter for the peer,
+	// independent of the request sequence. Each reply takes the next value, so
+	// consecutive replies to a peer carry distinct, ascending sequences — a real
+	// ping never repeats one, and the old "answer with the request's sequence"
+	// made several replies between two requests share one (id,seq).
+	replyCtr uint16
+	local    net.IP // the local address the peer targeted (wildcard bind)
+	seen     time.Time
 }
 
 type rawPacketConn struct {
@@ -309,18 +314,21 @@ func (c *rawPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 		if !ok {
 			continue
 		}
-		id, seq, ok := c.f.parse(tp)
+		id, _, ok := c.f.parse(tp)
 		if !ok {
 			continue
 		}
-		a := c.notePeer(src, dst, id, seq)
+		a := c.notePeer(src, dst, id)
 		return copy(b, tp[c.f.hdr:]), a, nil
 	}
 }
 
-// notePeer records what replying to a peer needs and returns its (shared,
-// immutable) address.
-func (c *rawPacketConn) notePeer(src, dst net.IP, id, seq uint16) *Addr {
+// notePeer records a peer so a reply can be addressed to it (its local target
+// for a wildcard bind, and the last-seen time for the sweep) and returns its
+// (shared, immutable) address. It does NOT store the request's echo sequence:
+// replies carry this listener's own counter (rawPeer.replyCtr), not the
+// request's, so the request sequence is not needed after demux.
+func (c *rawPacketConn) notePeer(src, dst net.IP, id uint16) *Addr {
 	var k rawKey
 	copy(k.ip[:], src)
 	k.id = id
@@ -338,7 +346,7 @@ func (c *rawPacketConn) notePeer(src, dst net.IP, id, seq uint16) *Addr {
 		p = &rawPeer{addr: &Addr{IP: append(net.IP(nil), src...), ID: id, Kind: c.f.kind}}
 		c.peers[k] = p
 	}
-	p.seq, p.seen = seq, now
+	p.seen = now
 	if c.wildcard && !p.local.Equal(dst) {
 		p.local = append(net.IP(nil), dst...)
 	}
@@ -369,7 +377,14 @@ func (c *rawPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	var local net.IP
 	c.mu.Lock()
 	if pr := c.peers[k]; pr != nil {
-		seq, local = pr.seq, pr.local
+		// Each reply takes this listener's next counter for the peer, not the
+		// request's sequence, so consecutive replies get distinct, ascending
+		// (id,seq) pairs. build() stamps the s2c directional prefix over the
+		// counter's high byte, so the reply still carries the reply direction's
+		// prefix — the echo guard drops only the kernel's bounce of our own
+		// requests (c2s prefix), never these genuine replies.
+		seq, local = pr.replyCtr, pr.local
+		pr.replyCtr++
 	}
 	c.mu.Unlock()
 

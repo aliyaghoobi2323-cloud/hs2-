@@ -23,6 +23,7 @@ type Listener struct {
 	conn      *packetSocket
 	shared    []byte
 	innerMTU  int
+	kind      string // encap kind, stamped onto every accepted Conn for pool shaping
 	cliStatic core.StaticKey
 	resp      *core.Responder
 
@@ -72,6 +73,7 @@ func ListenCfg(addr string, ec EncapConfig, shared []byte, innerMTU int) (*Liste
 		conn:      newPacketSocket(pc), // wildcard UDP: reply from the IP each peer targeted
 		shared:    shared,
 		innerMTU:  innerMTU,
+		kind:      ec.Kind,
 		cliStatic: client,
 		resp:      core.NewResponder(server, shared),
 		probe:     probeResponder{shared: shared},
@@ -171,6 +173,7 @@ func (l *Listener) tryHandshake(m1 []byte, addr net.Addr, dst net.IP) {
 		}
 		l.mu.Unlock()
 	})
+	c.kind = l.kind // echo-shaping in the pool keys off this (the listen side sends replies)
 	l.mu.Lock()
 	if old := l.conns[key]; old != nil {
 		old.c.Close()

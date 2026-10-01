@@ -324,42 +324,93 @@ func TestRawSocketICMPKernelSilent(t *testing.T) {
 	}
 }
 
-// The icmp reply echoes the request's counter in the sequence LOW byte, so the
-// exchange still looks like an ascending ping, but carries the LISTENER's own
-// directional prefix in the high byte — not the request's. That is deliberate:
-// it is how the echo guard tells hs2's genuine replies from the kernel's bounce
-// of our own requests. (Phase 2 gives each reply its own counter for strict
-// 1:1 uniqueness; Phase 1 echoes the request counter.)
+// readReplySeq reads one icmp reply off the dialer's raw socket and returns its
+// echo sequence, failing the test on any trouble.
+func readReplySeq(t *testing.T, rc *rawConn) uint16 {
+	t.Helper()
+	rc.ipc.SetReadDeadline(time.Now().Add(2 * time.Second))
+	buf := make([]byte, 2048)
+	n, _, _, _, err := rc.ipc.ReadMsgIP(buf, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, tp, ok := rc.f.ipv4Payload(buf[:n])
+	if !ok {
+		t.Fatal("bad reply packet")
+	}
+	_, seq, ok := rc.f.parse(tp)
+	if !ok {
+		t.Fatal("dialer rejected the listener's reply")
+	}
+	return seq
+}
+
+// Each reply carries the LISTENER's own echo-sequence counter, not the
+// request's: consecutive replies to one peer get distinct, strictly ascending
+// (mod 256) sequence low bytes, while the high byte stays the listener's s2c
+// directional prefix. The ascending-per-reply counter is what keeps the stream
+// looking like an ordinary ping and removes the repeated-(id,seq) tell (B4);
+// the s2c prefix is how the echo guard tells hs2's genuine replies from the
+// kernel's bounce of our own requests.
 func TestRawSocketICMPReplySequence(t *testing.T) {
 	needRawNetns(t)
 	srv := listenT(t, KindICMP, "127.0.0.1", Options{})
 	cli := dialT(t, KindICMP, "127.0.0.1", Options{})
 	rc := cli.(*rawConn)
 	sf := srv.(*rawPacketConn).f
+	var prev uint16
 	for i := 0; i < 5; i++ {
 		cli.Write([]byte("q"))
 		_, from := readFromT(t, srv, 2*time.Second)
-		wantCtr := uint16(rc.seq.Load()) & obfSeqCounterMask
 		srv.WriteTo([]byte("a"), from)
-		rc.ipc.SetReadDeadline(time.Now().Add(2 * time.Second))
-		buf := make([]byte, 2048)
-		n, _, _, _, err := rc.ipc.ReadMsgIP(buf, nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _, tp, ok := rc.f.ipv4Payload(buf[:n])
-		if !ok {
-			t.Fatal("bad reply packet")
-		}
-		_, seq, ok := rc.f.parse(tp)
-		if !ok {
-			t.Fatal("dialer rejected the listener's reply")
-		}
-		if seq&obfSeqCounterMask != wantCtr {
-			t.Fatalf("reply counter %d, request counter %d", seq&obfSeqCounterMask, wantCtr)
-		}
+		seq := readReplySeq(t, rc)
 		if !obfSeqHasPrefix(seq, sf.txPrefix) {
-			t.Fatalf("reply seq %#04x does not carry the listener's s2c prefix %#04x", seq, sf.txPrefix)
+			t.Fatalf("reply %d seq %#04x does not carry the listener's s2c prefix %#04x", i, seq, sf.txPrefix)
 		}
+		if ctr := seq & obfSeqCounterMask; i > 0 && (ctr-prev)&obfSeqCounterMask != 1 {
+			t.Fatalf("reply %d counter %d is not +1 (mod 256) from the previous %d", i, ctr, prev)
+		} else {
+			prev = ctr
+		}
+	}
+}
+
+// N replies to one peer produce N distinct (id,seq) pairs: the reply counter is
+// independent of the request sequence, so several replies between two requests —
+// the exact case the old "answer with the request's sequence" collapsed onto one
+// (id,seq) — now each get their own. Drive 300 replies (past one 256-wrap) from a
+// single request and confirm every consecutive pair differs by one and the first
+// full 256-run visits every low byte exactly once (B4).
+func TestRawSocketICMPReplyCounterUnique(t *testing.T) {
+	needRawNetns(t)
+	srv := listenT(t, KindICMP, "127.0.0.1", Options{})
+	cli := dialT(t, KindICMP, "127.0.0.1", Options{})
+	rc := cli.(*rawConn)
+	cli.Write([]byte("q")) // one request so the listener learns the peer
+	_, from := readFromT(t, srv, 2*time.Second)
+	const n = 300
+	seqs := make([]uint16, 0, n)
+	for i := 0; i < n; i++ {
+		srv.WriteTo([]byte("a"), from)
+		seqs = append(seqs, readReplySeq(t, rc))
+	}
+	for i := 1; i < n; i++ {
+		if seqs[i] == seqs[i-1] {
+			t.Fatalf("reply %d repeated the previous (id,seq): seq %#04x", i, seqs[i])
+		}
+		if d := (seqs[i] - seqs[i-1]) & obfSeqCounterMask; d != 1 {
+			t.Fatalf("reply %d seq %#04x not +1 from %#04x (delta %d)", i, seqs[i], seqs[i-1], d)
+		}
+	}
+	seen := map[uint16]bool{}
+	for i := 0; i < 256; i++ {
+		if c := seqs[i] & obfSeqCounterMask; seen[c] {
+			t.Fatalf("counter %d repeated within one 256-run (at reply %d)", c, i)
+		} else {
+			seen[c] = true
+		}
+	}
+	if len(seen) != 256 {
+		t.Fatalf("expected 256 distinct counters in a full run, got %d", len(seen))
 	}
 }

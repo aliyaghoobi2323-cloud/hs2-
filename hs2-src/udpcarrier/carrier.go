@@ -42,6 +42,7 @@ type Conn struct {
 	sess    *core.Session
 	shared  []byte
 	binding []byte
+	kind    string // encap kind ("" / "udp" / "icmp" / ...); lets a pool shape ICMP
 
 	enc     *fec.Encoder
 	dec     *fec.Decoder
@@ -623,6 +624,13 @@ func (c *Conn) AttachGovernor(g *Governor) {
 	c.gov.Store(g)
 	g.attach(c)
 }
+
+// Encap returns the carrier's encapsulation kind ("" or "udp" for plain UDP,
+// "icmp", "gre", "ipip", "ipx"). A pool reads it to decide whether a carrier
+// needs ICMP echo-shaping (its wire packets are echo requests/replies that a
+// stateful classifier expects to be ~1:1). Fixed at construction, so safe to
+// read without locking.
+func (c *Conn) Encap() string { return c.kind }
 
 // Warm reports whether the carrier's rate model has a capacity estimate (it
 // has left startup), so a pool can tell path backpressure from a carrier that

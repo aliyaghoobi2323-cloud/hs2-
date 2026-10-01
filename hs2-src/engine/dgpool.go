@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -97,6 +98,15 @@ type dgLink struct {
 	once sync.Once
 	dead atomic.Bool
 
+	// icmp echo-shaping (B5): set once in add(), before the pumps start. When a
+	// carrier runs over the icmp encapsulation its wire packets are echo
+	// requests/replies that a stateful classifier expects to be ~1:1, so the
+	// pool keeps this carrier's frames sent close to frames received with cheap
+	// fillers (echoBalance). echoDial is this side's role: true = it sends echo
+	// REQUESTS (the dial side), false = it sends echo REPLIES (the listen side).
+	echoShaped bool
+	echoDial   bool
+
 	born         time.Time
 	servingSince time.Time
 	retiring     bool // set under pool.mu
@@ -109,6 +119,12 @@ type dgLink struct {
 	bytesDown atomic.Uint64
 	sentPkts  atomic.Uint64
 	droppedAt atomic.Int64 // unixnano of the last queue-full drop (pressure)
+
+	// echo-shaping frame counts (icmp only): every frame this side sent
+	// (writeLoop data, sendVia control, fillers) and received (readLoop), so
+	// echoBalance can tell which direction is light and top it up toward 1:1.
+	rxFrames atomic.Uint64
+	txFrames atomic.Uint64
 
 	// sampler state (pool goroutine only)
 	prevUp, prevDown uint64
@@ -222,6 +238,9 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 			}
 			l.sentPkts.Add(1)
 			sent.Add(1)
+			if l.echoShaped {
+				l.txFrames.Add(1)
+			}
 		}
 	}
 }
@@ -376,9 +395,19 @@ func (p *dgPool) countsLocked() (serving, retiring int) {
 func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	now := p.now()
 	l := newDgLink(car, now)
+	l.echoShaped = carrierEchoShaped(car)
+	l.echoDial = p.dialer != nil // this side dials => it sends echo requests
 	if a, ok := car.(interface{ AttachGovernor(*udpcarrier.Governor) }); ok {
 		a.AttachGovernor(p.gov)
 	}
+	// Set ro BEFORE publishing the link to p.set: carrierStats reads l.ro under
+	// p.mu, so assigning it after the append below raced with that read (a
+	// pre-existing data race the -race detector flags on TestDgPoolReverse).
+	l.ro = newReorderer(dgReorderHold, func(b []byte) {
+		if _, err := p.dev.Write(b); err == nil {
+			p.tunWritten.Add(1)
+		}
+	})
 	p.mu.Lock()
 	if s, _ := p.countsLocked(); p.accept && s >= int(p.target.Load()) {
 		l.retiring, l.retireSince, l.bornSpare = true, now, true
@@ -386,11 +415,6 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	p.set = append(p.set, l)
 	n := len(p.set)
 	p.mu.Unlock()
-	l.ro = newReorderer(dgReorderHold, func(b []byte) {
-		if _, err := p.dev.Write(b); err == nil {
-			p.tunWritten.Add(1)
-		}
-	})
 	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	go p.readLoop(ctx, l)
 	if l.bornSpare {
@@ -410,6 +434,9 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 		if err != nil {
 			return
 		}
+		if l.echoShaped {
+			l.rxFrames.Add(1)
+		}
 		switch ft {
 		case core.TypeData:
 			now := p.now()
@@ -420,23 +447,86 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 			} else if _, err := p.dev.Write(payload); err == nil {
 				p.tunWritten.Add(1)
 			}
-		case core.TypePing:
-			p.sendVia(l, core.TypePong, nil)
+		case core.TypePing, core.TypePong, core.TypeClose:
+			// Inert in the datagram pool — the carrier handles its own liveness.
+			// A TypePing here is the peer's echo-shaping filler (one echo
+			// request); echoBalance below already counted it as a received frame
+			// and answers it like any other, so we must NOT pong it, or that one
+			// request would draw two replies and push the ratio past 1:1.
 		case core.TypePoolCtl:
 			p.onPoolCtl(l, payload)
 		case core.TypeLinkStats:
 			p.onLinkStats(payload)
-		case core.TypePong, core.TypeClose:
+		}
+		if l.echoShaped {
+			p.echoBalance(l)
 		}
 	}
 }
 
-// sendVia sends a control frame on a carrier (pong, pool control), off the
-// data queue so it is timely.
+// sendVia sends a control frame on a carrier (pong, pool control, echo filler),
+// off the data queue so it is timely.
 func (p *dgPool) sendVia(l *dgLink, ft byte, payload []byte) {
 	if err := l.car.SendFrame(ft, payload); err != nil {
 		l.markDead()
+		return
 	}
+	if l.echoShaped {
+		l.txFrames.Add(1)
+	}
+}
+
+// encapICMP is the ICMP encapsulation kind (encap.KindICMP), named here so the
+// engine need not import encap for one comparison.
+const encapICMP = "icmp"
+
+// echoFillerPad is a shared, read-only zero buffer the balancer slices for
+// filler payloads, so a line-rate carrier allocates nothing per filler. Sealing
+// only reads the payload, so one backing array is safe across concurrent sends.
+var echoFillerPad [96]byte
+
+// carrierEchoShaped reports whether a carrier runs over the icmp encapsulation,
+// so its echo requests/replies should be kept ~1:1 (B5). It mirrors the
+// optional-interface style of warmOf/AttachGovernor; a carrier that cannot say
+// (a test fake, a non-udpcarrier transport) is treated as not echo-shaped, so
+// udp/gre/ipip/ipx carriers and the rest of the pool are completely unaffected.
+func carrierEchoShaped(c Carrier) bool {
+	e, ok := c.(interface{ Encap() string })
+	// Match encap's own kind normalization (lower-cased, trimmed): a config of
+	// "ICMP" or " icmp " opens a fully working ICMP socket, so it must be shaped
+	// too — an exact compare here would silently leave the balancer off and put
+	// the one-directional fingerprint back, with no error.
+	return ok && strings.EqualFold(strings.TrimSpace(e.Encap()), encapICMP)
+}
+
+// echoBalance keeps an icmp carrier's frames sent close to frames received, so
+// its echo requests/replies stay ~1:1 like a real ping (B5). Called once per
+// received frame: when this side has sent fewer frames than it has received, it
+// emits one cheap filler to catch up — a TypePong (a reply) on the side that
+// answers echo requests, a TypePing (a request) on the side that sends them.
+//
+// Data (writeLoop) and control frames also count toward txFrames, so a side
+// already sending enough on its own emits no filler; the filler only fills the
+// gap the LIGHT direction leaves (upload replies on a download-heavy reverse
+// edge; upload requests on a download-heavy direct edge). The HEAVY direction
+// has txFrames > rxFrames and never fills, so a filler never begets a filler —
+// no feedback loop. It is purely additive: it never gates, delays or drops a
+// data frame, so the carrier's throughput is unchanged. The ratio is only
+// approximate (FEC fans one data frame into several wire shards, feedback rides
+// below the engine), which is all a real-ping ratio check needs.
+func (p *dgPool) echoBalance(l *dgLink) {
+	if l.txFrames.Load() >= l.rxFrames.Load() {
+		return
+	}
+	ft := byte(core.TypePong) // listen side: answer a request with a reply
+	if l.echoDial {
+		ft = core.TypePing // dial side: add a request to pull the peer's replies
+	}
+	// A small, varied pad (like a keepalive) so fillers are not all one size.
+	// math/rand, not crypto/rand: the size is cosmetic (the payload is masked
+	// and AEAD-sealed) and this runs at roughly the heavy direction's packet
+	// rate, so a per-packet CSPRNG draw would be wasted work.
+	p.sendVia(l, ft, echoFillerPad[:rand.IntN(len(echoFillerPad))])
 }
 
 // pumpTun reads IP packets from the TUN and places each on its flow's carrier
