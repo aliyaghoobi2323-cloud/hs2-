@@ -53,8 +53,13 @@ func parseBindIP(s string) (net.IP, error) {
 	return ip, nil
 }
 
-// tuneRawSocket enlarges the buffers and installs the receive filter.
-func tuneRawSocket(c *net.IPConn, prog []bpfInsn) error {
+// tuneRawSocket enlarges the buffers, installs the receive filter and, when
+// pmtudisc >= 0, sets the IP Don't-Fragment policy (IP_MTU_DISCOVER). The icmp
+// encapsulation uses it so the DF bit of its packets matches real ping: the
+// dial socket (echo requests) sets IP_PMTUDISC_DO (DF=1, like iputils ping) and
+// the listen socket (echo replies) IP_PMTUDISC_DONT (DF=0, like the kernel's own
+// echo replies) — otherwise a DF mismatch separates the tunnel from real ping.
+func tuneRawSocket(c *net.IPConn, prog []bpfInsn, pmtudisc int) error {
 	rc, err := c.SyscallConn()
 	if err != nil {
 		return err
@@ -63,6 +68,10 @@ func tuneRawSocket(c *net.IPConn, prog []bpfInsn) error {
 	cerr := rc.Control(func(fd uintptr) {
 		s := int(fd)
 		forceSockBufs(s, sockBuf)
+		if pmtudisc >= 0 {
+			// Best-effort: a failure here only loses the DF-match cosmetic.
+			_ = unix.SetsockoptInt(s, unix.IPPROTO_IP, unix.IP_MTU_DISCOVER, pmtudisc)
+		}
 		filter := make([]unix.SockFilter, len(prog))
 		for i, in := range prog {
 			filter[i] = unix.SockFilter{Code: in.Code, Jt: in.Jt, Jf: in.Jf, K: in.K}
@@ -77,6 +86,18 @@ func tuneRawSocket(c *net.IPConn, prog []bpfInsn) error {
 		return fmt.Errorf("attach receive filter: %w", serr)
 	}
 	return nil
+}
+
+// pmtudiscFor returns the IP_MTU_DISCOVER value for a kind and socket role, or
+// -1 to leave the kernel default. Only icmp sets it (to match real ping's DF).
+func pmtudiscFor(kind string, dial bool) int {
+	if kind != KindICMP {
+		return -1
+	}
+	if dial {
+		return unix.IP_PMTUDISC_DO // echo requests: DF=1
+	}
+	return unix.IP_PMTUDISC_DONT // echo replies: DF=0, like the kernel's own
 }
 
 // randLinkID picks a non-zero 16-bit link id.
@@ -138,7 +159,7 @@ func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
 	}
 	id := randLinkID()
 	srcIP := binary.BigEndian.Uint32(ra.IP.To4())
-	if err := tuneRawSocket(ipc, f.recvFilter(id, srcIP)); err != nil {
+	if err := tuneRawSocket(ipc, f.recvFilter(id, srcIP), pmtudiscFor(f.kind, true)); err != nil {
 		ipc.Close()
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
@@ -215,6 +236,7 @@ type rawPacketConn struct {
 	ipc       *net.IPConn
 	f         *framer
 	wildcard  bool
+	guardKey  uint16    // icmp: the echo-guard key (c2s prefix byte) this listener holds
 	laddr     *Addr
 	closeEcho sync.Once // releases this listener's echo-reply suppression, once
 
@@ -243,31 +265,32 @@ func listenRawLinux(kind, addr string, opt Options) (net.PacketConn, error) {
 	if ip == nil {
 		ip = net.IPv4zero.To4()
 	}
+	guardKey := f.rxPrefix >> 8 // c2s prefix byte: the kernel's bounce of a request carries it
 	if f.kind == KindICMP {
 		// The server side receives echo REQUESTS; if the kernel also answered
 		// them it would echo every sealed datagram straight back to the peer.
 		// Suppress just those replies (echoguard_linux.go), so the server still
 		// answers ordinary ping; Close() removes the suppression.
-		if err := acquireEchoGuard(f.rxMagic); err != nil {
+		if err := acquireEchoGuard(guardKey); err != nil {
 			return nil, err
 		}
 	}
 	ipc, err := net.ListenIP(rawNetwork(f.proto), &net.IPAddr{IP: ip})
 	if err != nil {
 		if f.kind == KindICMP {
-			releaseEchoGuard(f.rxMagic)
+			releaseEchoGuard(guardKey)
 		}
 		return nil, rawErr(f.kind, err)
 	}
-	if err := tuneRawSocket(ipc, f.recvFilter(0, 0)); err != nil {
+	if err := tuneRawSocket(ipc, f.recvFilter(0, 0), pmtudiscFor(f.kind, false)); err != nil {
 		ipc.Close()
 		if f.kind == KindICMP {
-			releaseEchoGuard(f.rxMagic)
+			releaseEchoGuard(guardKey)
 		}
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
 	return &rawPacketConn{
-		ipc: ipc, f: f, wildcard: ip.IsUnspecified(),
+		ipc: ipc, f: f, wildcard: ip.IsUnspecified(), guardKey: guardKey,
 		laddr: &Addr{IP: ip, Kind: f.kind},
 		peers: make(map[rawKey]*rawPeer),
 	}, nil
@@ -374,7 +397,7 @@ func (c *rawPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 func (c *rawPacketConn) Close() error {
 	err := c.ipc.Close()
 	if c.f.kind == KindICMP {
-		c.closeEcho.Do(func() { releaseEchoGuard(c.f.rxMagic) })
+		c.closeEcho.Do(func() { releaseEchoGuard(c.guardKey) })
 	}
 	return err
 }

@@ -63,6 +63,16 @@ type framer struct {
 	rxMagic uint16
 	txType  byte // icmp: echo type sent
 	rxType  byte // icmp: echo type accepted
+
+	// icmp header obfuscation (obfs.go). The 2-byte framing magic is gone; the
+	// keyed directional discriminator lives in the echo-sequence HIGH byte
+	// (txPrefix/rxPrefix) and the structured header after an 8-byte per-packet
+	// nonce is masked with a keystream from obfKey.
+	obf      bool
+	obfKey   []byte
+	txPrefix uint16
+	rxPrefix uint16
+	noncer   *obfNoncer
 }
 
 func newFramer(kind string, opt Options, dial bool) (*framer, error) {
@@ -75,6 +85,16 @@ func newFramer(kind string, opt Options, dial bool) (*framer, error) {
 		if dial {
 			f.txType, f.rxType = icmpEchoRequest, icmpEchoReply
 		}
+		// icmp is always obfuscated: no fixed magic on the wire, counters masked.
+		f.obf = true
+		f.obfKey = obfKeyFromSecret(opt.Key)
+		f.noncer = newObfNoncer()
+		c2s, s2c := obfSeqPrefixes(opt.Key)
+		f.txPrefix, f.rxPrefix = s2c, c2s
+		if dial {
+			f.txPrefix, f.rxPrefix = c2s, s2c
+		}
+		return f, nil
 	case KindGRE:
 		f.proto = protoGRE
 	case KindIPIP:
@@ -96,6 +116,15 @@ func newFramer(kind string, opt Options, dial bool) (*framer, error) {
 		f.txMagic, f.rxMagic = c2s, s2c
 	}
 	return f, nil
+}
+
+// maskSpan returns how many payload bytes the icmp mask covers for a payload of
+// n bytes: the structured-header window, or the whole payload if it is shorter.
+func maskSpan(n int) int {
+	if n > obfMaskLen {
+		return obfMaskLen
+	}
+	return n
 }
 
 // framingMagics derives the two 16-bit framing magics for a kind (and, for
@@ -126,11 +155,17 @@ func (f *framer) build(dst []byte, id, seq uint16, payload []byte) []byte {
 	copy(b[f.hdr:], payload)
 	switch f.kind {
 	case KindICMP:
+		// [type][code][csum:2][id:2][seq:2][nonce:8] then the masked payload.
+		// No fixed magic: the keyed prefix sits in the sequence high byte, and
+		// the per-packet nonce keys the mask over the structured header.
 		b[0], b[1] = f.txType, 0
 		b[2], b[3] = 0, 0
 		binary.BigEndian.PutUint16(b[4:], id)
-		binary.BigEndian.PutUint16(b[6:], seq)
-		binary.BigEndian.PutUint16(b[8:], f.txMagic)
+		binary.BigEndian.PutUint16(b[6:], obfSeq(f.txPrefix, seq))
+		f.noncer.next(b[8:16])
+		if m := maskSpan(len(payload)); m > 0 {
+			obfMask(f.obfKey, b[8:16], b[f.hdr:f.hdr+m])
+		}
 		binary.BigEndian.PutUint16(b[2:], inetChecksum(b))
 	case KindGRE:
 		binary.BigEndian.PutUint16(b[0:], greFlagsKey)
@@ -153,10 +188,16 @@ func (f *framer) parse(b []byte) (id, seq uint16, ok bool) {
 	}
 	switch f.kind {
 	case KindICMP:
-		if b[0] != f.rxType || b[1] != 0 || binary.BigEndian.Uint16(b[8:]) != f.rxMagic {
+		seq := binary.BigEndian.Uint16(b[6:])
+		if b[0] != f.rxType || b[1] != 0 || !obfSeqHasPrefix(seq, f.rxPrefix) {
 			return 0, 0, false
 		}
-		return binary.BigEndian.Uint16(b[4:]), binary.BigEndian.Uint16(b[6:]), true
+		// Unmask the structured header in place, using the packet's own nonce,
+		// before the carrier reads it. The buffer is the caller's receive scratch.
+		if m := maskSpan(len(b) - f.hdr); m > 0 {
+			obfMask(f.obfKey, b[8:16], b[f.hdr:f.hdr+m])
+		}
+		return binary.BigEndian.Uint16(b[4:]), seq, true
 	case KindGRE:
 		if binary.BigEndian.Uint16(b[0:]) != greFlagsKey || binary.BigEndian.Uint16(b[4:]) != f.rxMagic {
 			return 0, 0, false
@@ -248,7 +289,9 @@ func (f *framer) recvFilter(id uint16, srcIP uint32) []bpfInsn {
 	}
 	switch f.kind {
 	case KindICMP:
-		cs = append(cs, check{bpfLdbInd, 0, uint32(f.rxType)}, check{bpfLdhInd, 8, uint32(f.rxMagic)})
+		// Match the echo type (byte 0) and the keyed prefix in the sequence high
+		// byte (byte 6). A single-byte compare: no AND opcode needed.
+		cs = append(cs, check{bpfLdbInd, 0, uint32(f.rxType)}, check{bpfLdbInd, 6, uint32(f.rxPrefix >> 8)})
 		if f.dial {
 			cs = append(cs, check{bpfLdhInd, 4, uint32(id)})
 		}

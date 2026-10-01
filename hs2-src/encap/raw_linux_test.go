@@ -302,7 +302,7 @@ func TestRawSocketICMPKernelSilent(t *testing.T) {
 	needRawNetns(t)
 	os.WriteFile(echoIgnorePath, []byte("0\n"), 0o644)
 	srv := listenT(t, KindICMP, "127.0.0.1", Options{})
-	if m := echoGuardMethod(srv.(*rawPacketConn).f.rxMagic); m == "" {
+	if m := echoGuardMethod(srv.(*rawPacketConn).guardKey); m == "" {
 		t.Fatal("icmp listener holds no echo-reply suppression")
 	}
 	sn := newICMPReplySniffer(t)
@@ -324,17 +324,22 @@ func TestRawSocketICMPKernelSilent(t *testing.T) {
 	}
 }
 
-// The icmp reply carries the sequence of the request it answers, the way a
-// stateful middlebox expects an echo exchange to look.
+// The icmp reply echoes the request's counter in the sequence LOW byte, so the
+// exchange still looks like an ascending ping, but carries the LISTENER's own
+// directional prefix in the high byte — not the request's. That is deliberate:
+// it is how the echo guard tells hs2's genuine replies from the kernel's bounce
+// of our own requests. (Phase 2 gives each reply its own counter for strict
+// 1:1 uniqueness; Phase 1 echoes the request counter.)
 func TestRawSocketICMPReplySequence(t *testing.T) {
 	needRawNetns(t)
 	srv := listenT(t, KindICMP, "127.0.0.1", Options{})
 	cli := dialT(t, KindICMP, "127.0.0.1", Options{})
 	rc := cli.(*rawConn)
+	sf := srv.(*rawPacketConn).f
 	for i := 0; i < 5; i++ {
 		cli.Write([]byte("q"))
 		_, from := readFromT(t, srv, 2*time.Second)
-		want := uint16(rc.seq.Load())
+		wantCtr := uint16(rc.seq.Load()) & obfSeqCounterMask
 		srv.WriteTo([]byte("a"), from)
 		rc.ipc.SetReadDeadline(time.Now().Add(2 * time.Second))
 		buf := make([]byte, 2048)
@@ -346,8 +351,15 @@ func TestRawSocketICMPReplySequence(t *testing.T) {
 		if !ok {
 			t.Fatal("bad reply packet")
 		}
-		if _, seq, ok := rc.f.parse(tp); !ok || seq != want {
-			t.Fatalf("reply seq %d, request seq %d", seq, want)
+		_, seq, ok := rc.f.parse(tp)
+		if !ok {
+			t.Fatal("dialer rejected the listener's reply")
+		}
+		if seq&obfSeqCounterMask != wantCtr {
+			t.Fatalf("reply counter %d, request counter %d", seq&obfSeqCounterMask, wantCtr)
+		}
+		if !obfSeqHasPrefix(seq, sf.txPrefix) {
+			t.Fatalf("reply seq %#04x does not carry the listener's s2c prefix %#04x", seq, sf.txPrefix)
 		}
 	}
 }

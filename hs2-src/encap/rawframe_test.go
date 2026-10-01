@@ -42,8 +42,15 @@ func TestRawFrameRoundTrip(t *testing.T) {
 			if id != 0xbeef {
 				t.Fatalf("%s %s: id %#x", k, dir.name, id)
 			}
-			if k == KindICMP && seq != 0x1234 {
-				t.Fatalf("%s %s: seq %#x", k, dir.name, seq)
+			if k == KindICMP {
+				// The wire sequence is the sender's keyed directional prefix in
+				// the high byte and the counter (here 0x1234's low byte) in the low.
+				if seq&obfSeqCounterMask != 0x1234&obfSeqCounterMask {
+					t.Fatalf("%s %s: counter byte not preserved, seq %#04x", k, dir.name, seq)
+				}
+				if !obfSeqHasPrefix(seq, dir.from.txPrefix) {
+					t.Fatalf("%s %s: wrong directional prefix, seq %#04x", k, dir.name, seq)
+				}
 			}
 			if !bytes.Equal(pkt[dir.to.hdr:], payload) {
 				t.Fatalf("%s %s: payload corrupted", k, dir.name)
@@ -99,28 +106,44 @@ func protoOf(t *testing.T, kind string) int {
 	return f.proto
 }
 
-// A different shared secret means different magics: a second hs2 (or anything
-// else) using the same protocol on the host is discarded at the framing.
+// rawMagicKinds are the raw encapsulations that still carry a keyed framing
+// magic (icmp moved its discriminator into the keyed echo-sequence prefix).
+var rawMagicKinds = []string{KindGRE, KindIPIP, KindIPX}
+
+// A different shared secret means a different keyed discriminator: a second hs2
+// (or anything else) using the same protocol on the host is discarded at the
+// framing. For the magic kinds this is a full 16-bit magic; for icmp it is the
+// 8-bit sequence prefix (a cheap first cut — the AEAD is the real boundary), so
+// a foreign packet is rejected unless its prefix byte collides (1/256).
 func TestRawFrameKeySeparation(t *testing.T) {
-	for _, k := range rawKinds {
+	for _, k := range rawMagicKinds {
 		a, _ := testFramers(t, k, []byte("key-A"))
 		_, b := testFramers(t, k, []byte("key-B"))
 		if _, _, ok := b.parse(a.build(nil, 1, 1, []byte("hi"))); ok {
 			t.Fatalf("%s: a packet keyed with another secret was accepted", k)
 		}
 	}
-	// For each kind, at the REAL protocol its socket uses, assert (not just log)
-	// the properties the framing relies on. The inputs are fixed constants, so
-	// these are deterministic, not probabilistic:
+	// icmp: different keys give different directional prefixes, and a foreign
+	// packet whose prefix byte differs is rejected at the framing. Deterministic
+	// for these fixed keys (asserted), with the 1/256-collision case skipped.
+	aC2s, _ := obfSeqPrefixes([]byte("key-A"))
+	bC2s, _ := obfSeqPrefixes([]byte("key-B"))
+	if aC2s == bC2s {
+		t.Skip("icmp prefix collision for the chosen keys (1/256); separation is best-effort at the framing")
+	}
+	a, _ := testFramers(t, KindICMP, []byte("key-A"))
+	_, b := testFramers(t, KindICMP, []byte("key-B"))
+	if _, _, ok := b.parse(a.build(nil, 1, 1, []byte("hi"))); ok {
+		t.Fatal("icmp: a packet keyed with another secret was accepted despite a different prefix")
+	}
+
+	// For each MAGIC kind, at the REAL protocol its socket uses, assert the
+	// properties the framing relies on (deterministic for these fixed inputs):
 	//   - the two direction magics differ, so a side never mistakes its own
 	//     packet (or an echo of it) for the peer's;
 	//   - the magic is stable for a given (key, kind, proto);
-	//   - changing ONLY the key changes the magic — the framing is keyed by the
-	//     shared secret, not a per-deployment constant. This is what makes the
-	//     magic separate two tunnels with different secrets (the end-to-end path
-	//     is TestRawFramingMagicKeyedBySecret at the socket and udpcarrier's
-	//     TestEncapFramingKeyedBySecret through the carrier's option mapping).
-	for _, k := range rawKinds {
+	//   - changing ONLY the key changes the magic.
+	for _, k := range rawMagicKinds {
 		proto := protoOf(t, k)
 		c2sA, s2cA := framingMagics([]byte("key-A"), k, proto)
 		if c2sA == s2cA {
@@ -134,6 +157,17 @@ func TestRawFrameKeySeparation(t *testing.T) {
 			t.Fatalf("%s: magics did not change with the key — framing is not keyed by the secret", k)
 		}
 	}
+	// icmp's equivalent: the two directional prefixes differ, are stable, and
+	// change with the key.
+	if c2s, s2c := obfSeqPrefixes([]byte("key-A")); c2s == s2c {
+		t.Fatal("icmp: c2s == s2c prefix (a side would accept its own packets)")
+	}
+	if c2s2, _ := obfSeqPrefixes([]byte("key-A")); c2s2 != aC2s {
+		t.Fatal("icmp: obfSeqPrefixes is not deterministic for a fixed key")
+	}
+	if aC2s == bC2s {
+		t.Fatal("icmp: prefixes did not change with the key")
+	}
 }
 
 func TestRawFrameRejectsGarbage(t *testing.T) {
@@ -141,8 +175,11 @@ func TestRawFrameRejectsGarbage(t *testing.T) {
 		cli, srv := testFramers(t, k, nil)
 		good := cli.build(nil, 1, 1, []byte("payload"))
 		for i := 0; i < srv.hdr; i++ {
-			if k == KindICMP && (i == 2 || i == 3 || (i >= 4 && i < 8)) {
-				continue // checksum/id/seq are not validated by the framing
+			if k == KindICMP && i != 0 && i != 1 && i != 6 {
+				// icmp validates only the echo type (0), code (1) and the keyed
+				// prefix in the sequence high byte (6); checksum (2,3), id (4,5),
+				// the counter low byte (7) and the per-packet nonce (8..15) are not.
+				continue
 			}
 			if k == KindGRE && (i == 2 || i == 3 || i == 6 || i == 7) {
 				continue // protocol type and link id are free fields
@@ -303,7 +340,13 @@ func TestRecvFilter(t *testing.T) {
 			t.Fatalf("%s: listener filter passed its own direction", k)
 		}
 		if runBPF(t, lf, ipv4(proto, src, dst, other.build(nil, 5, 1, []byte("d")), 0)) != 0 {
-			t.Fatalf("%s: listener filter passed a foreign key", k)
+			// icmp's cheap reject is the 8-bit prefix byte; a collision (1/256)
+			// between the two keys is acceptable — the AEAD is the real boundary.
+			if k == KindICMP && srv.rxPrefix>>8 == other.txPrefix>>8 {
+				// prefix collision for these keys; nothing to assert here
+			} else {
+				t.Fatalf("%s: listener filter passed a foreign key", k)
+			}
 		}
 		// dial filter: only its own id
 		df := cli.recvFilter(5, binary.BigEndian.Uint32(net.IPv4(2, 2, 2, 2).To4()))

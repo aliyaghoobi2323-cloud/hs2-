@@ -32,7 +32,7 @@ func TestICMPEchoGuardKeepsHostPing(t *testing.T) {
 			if err != nil {
 				t.Fatalf("listen: %v", err)
 			}
-			magic := srv.(*rawPacketConn).f.rxMagic
+			magic := srv.(*rawPacketConn).guardKey
 			if got := echoGuardMethod(magic); got != method {
 				srv.Close()
 				t.Fatalf("suppression method %q, want %q", got, method)
@@ -104,7 +104,7 @@ func TestICMPEchoGuardRefcount(t *testing.T) {
 		l1.Close()
 		t.Fatal(err)
 	}
-	magic := l1.(*rawPacketConn).f.rxMagic
+	magic := l1.(*rawPacketConn).guardKey
 	l1.Close()
 	l1.Close()
 	if guardRuleLeft("nft", magic) == "" {

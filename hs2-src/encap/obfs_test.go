@@ -29,9 +29,14 @@ func TestObfSeqPrefixes(t *testing.T) {
 	if c2s == s2c {
 		t.Fatal("the two directional prefixes are equal")
 	}
-	// Prefixes occupy only the top 12 bits; the low 4 are free for the counter.
+	// Prefixes occupy only the top 8 bits; the low 8 are free for the counter.
 	if c2s&obfSeqCounterMask != 0 || s2c&obfSeqCounterMask != 0 {
 		t.Fatalf("prefix bleeds into the counter bits: c2s=%#04x s2c=%#04x", c2s, s2c)
+	}
+	// The prefix byte is non-zero, so a short ping (sequences 1..255, high byte
+	// 0) is never mistaken for the tunnel by the echo guard / cheap reject.
+	if c2s>>8 == 0 || s2c>>8 == 0 {
+		t.Fatalf("a prefix has a zero high byte: c2s=%#04x s2c=%#04x", c2s, s2c)
 	}
 	// Stable for one secret, different across secrets.
 	c2s2, _ := obfSeqPrefixes([]byte("k"))

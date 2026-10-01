@@ -21,7 +21,7 @@ const ipv4Header = 20
 //
 //	pathMTU - 20 (IPv4) - encap header - CarrierOverhead
 //
-// With a 1500-byte path that is 1416 for udp and gre, 1414 for icmp and 1420
+// With a 1500-byte path that is 1416 for udp and gre, 1408 for icmp and 1420
 // for ipip/ipx. The default tunnel MTU (DefaultInnerMTU, 1280) leaves room
 // for paths below 1500 (PPPoE, an upstream tunnel) on every encapsulation.
 func InnerMTUFor(kind string, pathMTU int) int {

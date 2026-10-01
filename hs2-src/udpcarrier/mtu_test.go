@@ -120,7 +120,7 @@ func TestCarrierOverhead(t *testing.T) {
 }
 
 func TestInnerMTUFor(t *testing.T) {
-	want := map[string]int{"udp": 1416, "icmp": 1414, "gre": 1416, "ipip": 1420, "ipx": 1420}
+	want := map[string]int{"udp": 1416, "icmp": 1408, "gre": 1416, "ipip": 1420, "ipx": 1420}
 	for k, w := range want {
 		if got := InnerMTUFor(k, 1500); got != w {
 			t.Errorf("%s: %d, want %d", k, got, w)

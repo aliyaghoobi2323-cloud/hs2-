@@ -23,17 +23,20 @@ import (
 // ordinary ping — its public IP and its tun IP go silent while the tunnel runs.
 //
 // Instead an OUTPUT rule drops only the echo replies that carry this tunnel's
-// c2s magic: the kernel's copy of one of our requests starts its ICMP payload
-// with that magic (ICMP offset 8), while hs2's own replies carry the s2c magic
-// and ordinary pings carry neither. So normal ping keeps working. nft is tried
-// first (a private table, removed as a whole on close), then iptables with the
-// u32 match; only when neither works does it fall back to the global sysctl,
-// with a log line saying so. HS2_ICMP_SUPPRESS=nft|iptables|global forces one.
+// c2s prefix in the echo-sequence high byte (ICMP offset 6): the kernel's copy
+// of one of our requests echoes the request's sequence, so it carries the c2s
+// prefix, while hs2's own replies carry the s2c prefix and ordinary pings carry
+// neither (the prefix byte is keyed and non-zero, so a short `ping -c N` — whose
+// sequences stay in 1..255 with a zero high byte — is never caught). So normal
+// ping keeps working. nft is tried first (a private table, removed as a whole on
+// close), then iptables with the u32 match; only when neither works does it fall
+// back to the global sysctl, with a log line. HS2_ICMP_SUPPRESS=nft|iptables|global forces one.
 //
-// Every rule is named after its magic AND the owning process's PID
-// (hs2_icmp_<magic>_<pid>), so a later daemon — or `hs2 cleanup` — can remove
-// the rules of a daemon that died without cleaning up (SIGKILL, OOM, a power
-// cut) without ever touching those of another tunnel that is still running.
+// The guard value is the c2s prefix BYTE (0..255). Every rule is named after it
+// AND the owning process's PID (hs2_icmp_<byte>_<pid>, zero-padded to 4 hex), so
+// a later daemon — or `hs2 cleanup` — can remove the rules of a daemon that died
+// without cleaning up (SIGKILL, OOM, a power cut) without ever touching those of
+// another tunnel that is still running.
 
 type echoGuard struct {
 	refs    int
@@ -151,9 +154,9 @@ func installEchoGuard(magic uint16) (method string, release func(), err error) {
 func nftGuardTable(magic uint16) string { return fmt.Sprintf("hs2_icmp_%04x_%d", magic, os.Getpid()) }
 
 // nftGuardInstall (re)creates a private table whose output chain drops echo
-// replies with magic at ICMP offset 8 (@th,64,16). Declaring then deleting the
-// table first makes a leftover from a crashed run disappear in the same
-// transaction instead of stacking a second rule.
+// replies with the c2s prefix byte at ICMP offset 6, the echo-sequence high byte
+// (@th,48,8). Declaring then deleting the table first makes a leftover from a
+// crashed run disappear in the same transaction instead of stacking a second rule.
 func nftGuardInstall(magic uint16) error {
 	if _, err := exec.LookPath("nft"); err != nil {
 		return err
@@ -161,7 +164,7 @@ func nftGuardInstall(magic uint16) error {
 	t := nftGuardTable(magic)
 	rules := fmt.Sprintf("table inet %s\ndelete table inet %s\n"+
 		"table inet %s {\n  chain out {\n    type filter hook output priority 0; policy accept;\n"+
-		"    icmp type echo-reply @th,64,16 0x%04x drop\n  }\n}\n", t, t, t, magic)
+		"    icmp type echo-reply @th,48,8 0x%02x drop\n  }\n}\n", t, t, t, magic&0xff)
 	cmd := exec.Command("nft", "-f", "-")
 	cmd.Stdin = strings.NewReader(rules)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -179,15 +182,15 @@ func nftGuardRemove(magic uint16) {
 func iptGuardTag(magic uint16) string { return fmt.Sprintf("hs2-icmp-%04x-%d", magic, os.Getpid()) }
 
 // iptGuardArgs is the rule spec (after the -I/-D verb): an echo reply whose ICMP
-// bytes 8..9 are magic. u32: 0>>22&0x3C = IP header length, @8 moves to ICMP
-// offset 8, >>16 keeps its first two bytes.
+// byte 6 (the echo-sequence high byte) is the c2s prefix. u32: 0>>22&0x3C = IP
+// header length, @4 moves to ICMP offset 4 (id:2, seq:2), >>8&0xff keeps byte 6.
 func iptGuardArgs(verb string, magic uint16) []string {
 	return iptGuardArgsTag(verb, magic, iptGuardTag(magic))
 }
 
 func iptGuardArgsTag(verb string, magic uint16, tag string) []string {
 	return []string{"-w", verb, "OUTPUT", "-p", "icmp", "--icmp-type", "echo-reply",
-		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@8>>16=0x%04x", magic),
+		"-m", "u32", "--u32", fmt.Sprintf("0>>22&0x3C@4>>8&0xff=0x%02x", magic&0xff),
 		"-m", "comment", "--comment", tag, "-j", "DROP"}
 }
 
