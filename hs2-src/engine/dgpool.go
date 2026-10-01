@@ -776,7 +776,7 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 		ps.LossPct = round1f(loss * 100)
 	}
 	ps.TunDrops = p.drops.Load()
-	ps.Policed = p.gov.Capped()
+	ps.Policed, ps.PoliceConfirm = p.gov.Capped(), p.gov.Confirmed()
 	ps.PoliceCapMbit = round1f(mbitps(p.gov.CapBytes()))
 	// Hysteresis: at the ceiling for 2 samples in a row to say so, clear of it
 	// for 5 to take it back — a bursty path would otherwise flap the log.

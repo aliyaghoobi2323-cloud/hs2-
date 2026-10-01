@@ -76,6 +76,7 @@ type liveStatus struct {
 	RxDropped     uint64  `json:"rx_dropped,omitempty"`
 	TunDrops      uint64  `json:"tun_drops,omitempty"`
 	Policed       bool    `json:"policed,omitempty"`
+	PoliceConfirm bool    `json:"police_confirmed,omitempty"`
 	PoliceCapMbit float64 `json:"police_cap_mbit,omitempty"`
 
 	// Process CPU over the last interval, % of ONE core (a 2-core box can
@@ -129,7 +130,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.LossPct, ls.MaxLossPct, ls.ParityPct = s.LossPct, s.MaxLossPct, s.ParityPct
 			ls.FECAtCeiling, ls.FECRecovered, ls.FECLost = s.FECAtCeiling, s.FECRecovered, s.FECLost
 			ls.PacerDropped, ls.RxDropped, ls.TunDrops = s.PacerDropped, s.RxDropped, s.TunDrops
-			ls.Policed, ls.PoliceCapMbit = s.Policed, s.PoliceCapMbit
+			ls.Policed, ls.PoliceConfirm, ls.PoliceCapMbit = s.Policed, s.PoliceConfirm, s.PoliceCapMbit
 		}
 		ls.CPUPct, ls.CPUCores = cpu.sample(), runtime.NumCPU()
 		ls.CertDays = firstCertExpiryDays()
@@ -275,8 +276,10 @@ func printStatus(path string) {
 			fec += fmt.Sprintf(" — at its ceiling on %d carrier(s)", ls.FECAtCeiling)
 		}
 		fmt.Printf("  fec:        %s · received: %d rebuilt, %d lost\n", fec, ls.FECRecovered, ls.FECLost)
-		if ls.Policed {
-			fmt.Printf("  policer:    detected on the path — whole pool capped at %.1f Mbit/s\n", ls.PoliceCapMbit)
+		if ls.Policed && ls.PoliceConfirm {
+			fmt.Printf("  policer:    confirmed on the path — whole pool held at %.1f Mbit/s (re-probes slowly)\n", ls.PoliceCapMbit)
+		} else if ls.Policed {
+			fmt.Printf("  policer:    suspected — testing with the whole pool capped at %.1f Mbit/s\n", ls.PoliceCapMbit)
 		}
 		if ls.PacerDropped+ls.RxDropped+ls.TunDrops > 0 {
 			fmt.Printf("  drops:      pacer %d · receive queue %d · tunnel queue %d\n", ls.PacerDropped, ls.RxDropped, ls.TunDrops)

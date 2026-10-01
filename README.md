@@ -113,17 +113,24 @@ started, stopped, edited and deleted on its own.
 
 All carriers of a datagram tunnel go to the same server IP, and a policer on
 the way (an ICMP rate limit, a per-IP throttle) sees their **sum**. hs2 watches
-the pool as a whole: loss episodes that hit most carriers at once with no queue
-building are a policer's signature (random loss is spread out; congestion shows
-a queue first). Two such episodes within 30 s cap the whole pool at 90% of what
-got through on average; more episodes under the cap lower it, a clean spell
-raises it 5% every 10 s, and if episodes continue even at a low cap the loss is
-not rate-dependent and the cap is lifted. While capped, FEC parity is sized for
-the path's own loss (not the policer's drops, which more parity would only
-feed), parity counts inside the cap, and the autopilot adds no links for it.
-The log says what happens (`dg: policer on the path: … capped at N Mbit/s`,
-`lowered to …`, `cap lifted`, `FEC at its ceiling …`, `cpu: … the CPU is the
-bottleneck`).
+the pool as a whole: loss episodes far above the pool's usual loss that hit
+most carriers at once with no queue building are a policer's signature (steady
+random loss is the usual loss itself; congestion shows a queue first).
+
+- Two such episodes within 30 s start a **test**: the whole pool is capped at
+  90% of what got through on average, and stepped down on further episodes.
+- If the episodes stop under the cap (a clean spell twice the old gap), the
+  policer is **confirmed**: the pool is held there, re-probed 5% every 10 s,
+  FEC parity is sized for the path's own loss (not the policer's drops, which
+  more parity would only feed), parity counts inside the cap, and the
+  autopilot adds no links for it.
+- If the episodes keep their old rhythm even with the cap well down, the loss
+  does not depend on our rate (a flapping path): the cap is lifted and the
+  next test waits 5 min, then 10, 20 … up to an hour.
+
+The log says what happens (`dg: policer suspected … testing`, `policer
+confirmed`, `lowered to …`, `cap lifted`, `FEC at its ceiling …`, `cpu: … the
+CPU is the bottleneck`).
 
 `hs2 status -c <config>` and the tunnel manager show, per tunnel: loss of what
 this side sends (pool-wide and the worst carrier), FEC parity and what it
@@ -131,7 +138,7 @@ rebuilt / lost, the policer cap when one is active, drops (pacer, receive
 queue, tunnel queue) and the daemon's CPU use. The same fields are in the live
 status file under `/run/hs2/` (`loss_pct`, `max_loss_pct`, `parity_pct`,
 `fec_at_ceiling`, `fec_recovered`, `fec_lost`, `pacer_dropped`, `rx_dropped`,
-`tun_drops`, `policed`, `police_cap_mbit`, `cpu_pct`, `cpu_cores`).
+`tun_drops`, `policed`, `police_confirmed`, `police_cap_mbit`, `cpu_pct`, `cpu_cores`).
 
 ## What the installer checks for you
 

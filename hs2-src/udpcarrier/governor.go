@@ -2,6 +2,7 @@ package udpcarrier
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"sort"
 	"sync"
@@ -47,12 +48,19 @@ type Governor struct {
 	inEpisode bool
 	lastRaise time.Time
 	cappedAt  time.Time
+	gapBefore time.Duration // mean gap between the episodes that triggered the cap
+	capEps    []time.Time   // episodes while capped (and the pool was at its cap)
+	confirmed bool          // the cap stretched the gaps: rate-dependent, a policer
+	lastEpAt  time.Time     // last episode start, capped or not
+	firstCap  float64       // the cap the test started at
+	lifts     int           // caps lifted in a row (the rest doubles each time)
 	restUntil time.Time
 	floorEps  int
 	cleanLoss float64 // EWMA of pool loss over clean ticks (the path's own)
 	last      govTick
 
 	capped   atomic.Bool
+	holdPar  atomic.Bool   // confirmed policer: parity sized for the path's own loss
 	capBits  atomic.Uint64 // math.Float64bits(capB)
 	cleanBit atomic.Uint64 // math.Float64bits(cleanLoss)
 
@@ -101,11 +109,14 @@ const (
 	govActiveRate    = 20_000 // bytes/s: a carrier below this is idle for detection
 	govDetectWindow  = 30 * time.Second
 	govCapFrac       = 0.9
-	govLowerFrac     = 0.8
+	govLowerFrac     = 0.8  // confirmed policer: an episode under the cap lowers it this much
+	govTestLowerFrac = 0.7  // still testing: faster, to get under an unknown limit
+	govLiftBelow     = 0.45 // lift only once the test cap is at most this share of where it began
+	govRestMax       = time.Hour
 	govRaiseEvery    = 10 * time.Second
 	govRaiseGain     = 1.05
 	govBindingFrac   = 0.85 // the cap is "the limit" when the pool sends at least this share of it
-	govFloorFrac     = 0.4  // of the first cap: lowest cap tried (a policer far below its own average pass rate is unlikely)
+	govFloorFrac     = 0.3  // of the first cap: lowest cap tried (a policer far below its own average pass rate is unlikely)
 	govFloorEpisodes = 2
 	govRest          = 5 * time.Minute
 	govMinCap        = 125_000 // 1 Mbit/s
@@ -134,8 +145,15 @@ func (g *Governor) Run(ctx context.Context) {
 	}
 }
 
-// Capped reports whether the pool is held under a policer cap now.
+// Capped reports whether the pool is held under a policer cap now (being
+// tested, or confirmed).
 func (g *Governor) Capped() bool { return g != nil && g.capped.Load() }
+
+// Confirmed reports a confirmed policer: the cap stretched the gaps between
+// loss episodes, so the loss depends on our rate. Only then is parity held to
+// the path's own loss — while the cap is still a test, a flapping path's
+// bursts are real loss that FEC must keep repairing.
+func (g *Governor) Confirmed() bool { return g != nil && g.holdPar.Load() }
 
 // CapBytes is the current cap in bytes/s (0 when not capped).
 func (g *Governor) CapBytes() float64 {
@@ -281,6 +299,10 @@ func (g *Governor) tick() {
 	if newEpisode {
 		g.episodes = append(g.episodes, now)
 	}
+	sinceEp := now.Sub(g.lastEpAt)
+	if newEpisode {
+		g.lastEpAt = now
+	}
 	for len(g.episodes) > 0 && now.Sub(g.episodes[0]) > govDetectWindow {
 		g.episodes = g.episodes[1:]
 	}
@@ -296,21 +318,45 @@ func (g *Governor) tick() {
 		}
 		g.state = govCapped
 		g.cappedAt, g.lastRaise, g.floorEps = now, now, 0
+		g.gapBefore = g.episodes[len(g.episodes)-1].Sub(g.episodes[0]) / time.Duration(len(g.episodes)-1)
+		g.capEps, g.confirmed = nil, false
 		g.setCap(govCapFrac * passed)
+		g.firstCap = g.capB
 		g.floorB = math.Max(govFloorFrac*g.capB, govMinCap)
-		g.log("dg: policer on the path: %d loss episodes in %s (%.0f%% loss on %d of %d carriers at once, no queue) — whole pool capped at %.1f Mbit/s (%.0f%% of the %.1f Mbit/s that got through on average); parity held to the path's own loss",
-			len(g.episodes), govDetectWindow, tk.loss*100, tk.lossy, tk.active, mbit(g.capB), govCapFrac*100, mbit(passed))
+		g.log("dg: policer suspected: %d loss episodes in %s, ~%s apart (%.0f%% loss on %d of %d carriers at once, no queue) — testing: whole pool capped at %.1f Mbit/s (%.0f%% of the %.1f Mbit/s that got through on average)",
+			len(g.episodes), govDetectWindow, g.gapBefore.Round(100*time.Millisecond), tk.loss*100, tk.lossy, tk.active, mbit(g.capB), govCapFrac*100, mbit(passed))
 	case govCapped:
 		binding := tk.rate >= govBindingFrac*g.capB
+		// Confirmed: under the cap a clean spell twice the old gap — the
+		// episodes came every gapBefore while we sent more, and now they do not.
+		if !g.confirmed && !newEpisode && g.gapBefore > 0 &&
+			now.Sub(maxTime(g.cappedAt, g.lastEpAt)) >= 2*g.gapBefore && g.bindingShare(maxTime(g.cappedAt, g.lastEpAt)) >= 0.5 {
+			g.confirmed = true
+			g.holdPar.Store(true)
+			g.log("dg: policer confirmed: no loss episode for %s under the cap (they came every %s at the higher rate) — pool held at %.1f Mbit/s, parity sized for the path's own loss",
+				now.Sub(maxTime(g.cappedAt, g.lastEpAt)).Round(time.Second), g.gapBefore.Round(100*time.Millisecond), mbit(g.capB))
+		}
+		// Not rate-dependent: episodes under the cap keep the old rhythm, even
+		// with the cap pushed well down (a policer that samples every few
+		// seconds keeps its rhythm for as long as we are above its rate, so
+		// the rhythm alone proves nothing until the cap is far below where
+		// the test began).
+		if newEpisode && binding && !g.confirmed {
+			g.capEps = append(g.capEps, now)
+			if n := len(g.capEps); n >= 3 && g.gapBefore > 0 && g.capB <= govLiftBelow*g.firstCap {
+				gap := g.capEps[n-1].Sub(g.cappedAt) / time.Duration(n)
+				if float64(gap) <= 1.4*float64(g.gapBefore) {
+					g.lift(now, fmt.Sprintf("loss episodes keep coming every ~%s under the cap (every ~%s before)", gap.Round(100*time.Millisecond), g.gapBefore.Round(100*time.Millisecond)))
+					return
+				}
+			}
+		}
+		_ = sinceEp
 		switch {
 		case newEpisode && binding:
 			if g.capB <= g.floorB*1.01 {
 				if g.floorEps++; g.floorEps >= govFloorEpisodes {
-					g.state = govNormal
-					g.capped.Store(false)
-					g.episodes = nil
-					g.restUntil = now.Add(govRest)
-					g.log("dg: loss episodes continue even at %.1f Mbit/s — the loss is not rate-dependent, so it is not a policer: cap lifted (detection rests %s)", mbit(g.capB), govRest)
+					g.lift(now, fmt.Sprintf("loss episodes continue even at %.1f Mbit/s", mbit(g.capB)))
 				}
 				return
 			}
@@ -318,6 +364,9 @@ func (g *Governor) tick() {
 			// than one step: far above it, a single step would take many
 			// episodes to get there.
 			next := govLowerFrac * g.capB
+			if !g.confirmed {
+				next = govTestLowerFrac * g.capB // still testing: find the limit fast
+			}
 			if p := govCapFrac * g.passedRate(govDetectWindow/2); p > 0 && p < next {
 				next = p
 			}
@@ -333,6 +382,29 @@ func (g *Governor) tick() {
 			g.lastRaise = now // a burst tick not counted as an episode start: wait another spell
 		}
 	}
+}
+
+// lift ends the cap: the loss turned out not to depend on our rate.
+func (g *Governor) lift(now time.Time, why string) {
+	g.state = govNormal
+	g.capped.Store(false)
+	g.holdPar.Store(false)
+	g.confirmed = false
+	g.episodes, g.capEps = nil, nil
+	rest := govRest << min(g.lifts, 4) // 5, 10, 20, 40, 80 min…
+	if rest > govRestMax {
+		rest = govRestMax
+	}
+	g.lifts++
+	g.restUntil = now.Add(rest)
+	g.log("dg: %s — the loss is not rate-dependent, so it is not a policer: cap lifted (detection rests %s)", why, rest)
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
 }
 
 // medianLoss is the pool's usual loss: the median over the active ticks of the

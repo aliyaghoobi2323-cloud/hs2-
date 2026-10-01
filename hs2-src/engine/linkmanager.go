@@ -1376,7 +1376,8 @@ type PoolStats struct {
 	PacerDropped  uint64  // datagrams the carriers' pacers dropped (live carriers)
 	RxDropped     uint64  // received datagrams dropped for a full carrier queue (live carriers)
 	TunDrops      uint64  // tunnel packets dropped for a full carrier queue (since start)
-	Policed       bool    // the pool is held under a policer cap
+	Policed       bool    // the pool is held under a policer cap (being tested or confirmed)
+	PoliceConfirm bool    // the cap stretched the loss episodes: a confirmed policer
 	PoliceCapMbit float64 // that cap, Mbit/s (wire: data + parity)
 }
 

@@ -69,8 +69,8 @@ func TestGovernorCapsAPolicer(t *testing.T) {
 	for tick = 1; tick <= 400; tick++ { // 200 s
 		sent = append(sent, s.step(150*mb, policerLoss(60*mb, &tick), 0.001))
 	}
-	if !s.g.Capped() {
-		t.Fatalf("a per-IP policer was never detected; logs: %v", s.logs)
+	if !s.g.Capped() || !s.g.Confirmed() {
+		t.Fatalf("a per-IP policer was not detected and confirmed (capped=%v confirmed=%v); logs: %v", s.g.Capped(), s.g.Confirmed(), s.logs)
 	}
 	// settled: mostly under the policer, and not far below it
 	var sum float64
@@ -134,26 +134,47 @@ func TestGovernorIgnoresCongestionLoss(t *testing.T) {
 }
 
 // Simultaneous loss episodes that do NOT depend on the rate (a flapping path)
-// continue even at the lowest cap: the governor must give up and lift it.
+// keep their rhythm under the cap: the test must end quickly with the cap
+// lifted, parity must never be held meanwhile (those bursts are real loss FEC
+// has to repair), and each further lift rests twice as long before re-testing.
 func TestGovernorLiftsCapWhenLossIsNotRateDependent(t *testing.T) {
 	s := newGovSim(8)
-	tick := 0
-	lifted := false
-	for tick = 1; tick <= 600; tick++ {
+	var cappedAt, liftedAt int
+	var rests []time.Duration
+	held := false
+	for tick := 1; tick <= 3000; tick++ { // 25 min
 		s.step(150*mb, func(int, float64) float64 {
-			if tick%12 == 0 {
-				return 0.4 // every 6 s whatever we send
+			if tick%8 == 0 {
+				return 0.4 // every 4 s whatever we send
 			}
 			return 0.001
 		}, 0.001)
-		if tick > 40 && !s.g.Capped() && s.g.restUntil.After(s.clock) {
-			lifted = true
-			break
+		if s.g.Confirmed() {
+			held = true
+		}
+		if s.g.Capped() && cappedAt == 0 {
+			cappedAt = tick
+		}
+		if cappedAt != 0 && liftedAt == 0 && !s.g.Capped() {
+			liftedAt = tick
+		}
+		if s.g.restUntil.After(s.clock) && (len(rests) == 0 || s.g.lifts > len(rests)) {
+			rests = append(rests, s.g.restUntil.Sub(s.clock))
 		}
 	}
-	if !lifted {
-		t.Fatalf("rate-independent episodes kept the pool capped (cap %.1f Mbit/s): %v", s.g.CapBytes()/mb, s.logs)
+	if held {
+		t.Fatal("parity was held for a flapping path (it treated rate-independent bursts as a policer's)")
 	}
+	if cappedAt == 0 || liftedAt == 0 {
+		t.Fatalf("not tested and lifted (capped at tick %d, lifted at %d): %v", cappedAt, liftedAt, s.logs)
+	}
+	if d := time.Duration(liftedAt-cappedAt) * govTickEvery; d > 40*time.Second {
+		t.Fatalf("the test of a flapping path took %s (want <= 40 s)", d)
+	}
+	if len(rests) < 2 || rests[1] < rests[0]*3/2 {
+		t.Fatalf("the rest after a repeated lift did not grow: %v", rests)
+	}
+	t.Logf("tested for %s; rests %v", time.Duration(liftedAt-cappedAt)*govTickEvery, rests)
 }
 
 // The shared bucket holds the pool to its cap whatever the number of

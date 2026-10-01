@@ -1933,9 +1933,9 @@ tm_list(){
 # tm_health_lines SF: loss / FEC / policer / drops / CPU from a fresh status
 # file (datagram tunnels report loss of what THIS side sends, as its peer sees it).
 tm_health_lines(){ # status file
-  local sf="$1" car loss mloss par ceil rec lost pol pcap pd rd td cpu cores
+  local sf="$1" car loss mloss par ceil rec lost pol pconf pcap pd rd td cpu cores
   status_fresh "$sf" || return 0
-  car=$(jget "$sf" carrier); pol=$(jraw "$sf" policed)
+  car=$(jget "$sf" carrier); pol=$(jraw "$sf" policed); pconf=$(jraw "$sf" police_confirmed)
   loss=$(jraw "$sf" loss_pct); mloss=$(jraw "$sf" max_loss_pct); par=$(jraw "$sf" parity_pct)
   ceil=$(jraw "$sf" fec_at_ceiling); rec=$(jraw "$sf" fec_recovered); lost=$(jraw "$sf" fec_lost)
   pcap=$(jraw "$sf" police_cap_mbit); pd=$(jraw "$sf" pacer_dropped); rd=$(jraw "$sf" rx_dropped); td=$(jraw "$sf" tun_drops)
@@ -1943,7 +1943,8 @@ tm_health_lines(){ # status file
   case "$car" in dgtun*)
     say " Loss:        ${loss:-0}% of what this side sends (worst carrier ${mloss:-0}%)"
     say " FEC:         parity ${par:-0}% of data$([ -n "$ceil" ] && echo " · ${C_Y}at its ceiling on $ceil carrier(s)${C_0}") · received ${rec:-0} rebuilt, ${lost:-0} lost"
-    [ "$pol" = true ] && say " Policer:     ${C_Y}detected on the path${C_0} — whole pool capped at ${pcap} Mbit/s (re-probes slowly)"
+    if [ "$pol" = true ] && [ "$pconf" = true ]; then say " Policer:     ${C_Y}confirmed on the path${C_0} — whole pool held at ${pcap} Mbit/s (re-probes slowly)"
+    elif [ "$pol" = true ]; then say " Policer:     suspected — testing with the whole pool capped at ${pcap} Mbit/s"; fi
     [ -n "$pd$rd$td" ] && say " Drops:       pacer ${pd:-0} · receive queue ${rd:-0} · tunnel queue ${td:-0}"
     ;;
   esac

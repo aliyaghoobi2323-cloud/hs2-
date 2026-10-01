@@ -398,11 +398,11 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 		g.report(c, loss, c.rc.queueSec())
 	}
 
-	// Loss sizes parity, never rate. But while the pool is held under a
-	// policer, the policer's drops are ours to avoid by rate, not to repair:
+	// Loss sizes parity, never rate. But once the pool's governor has
+	// confirmed a policer, its drops are ours to avoid by rate, not to repair:
 	// parity sizes for the path's own loss (seen between episodes). More
 	// parity would only put more bytes into the policer.
-	if g.Capped() {
+	if g.Confirmed() {
 		loss = math.Min(loss, g.CleanLoss()+0.01)
 	}
 	est := c.adapter.Observe(loss, now)
