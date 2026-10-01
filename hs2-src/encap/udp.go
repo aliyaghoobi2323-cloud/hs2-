@@ -11,6 +11,18 @@ import (
 // type-asserting *net.UDPConn, so udp behaves exactly as it did before encap
 // existed.
 
+// sockBuf is the send/receive buffer asked for on every carrier socket, UDP and
+// raw. Without it a socket gets net.core.rmem_default (~208 KiB, the kernel
+// counts ~2 KiB per datagram, so ~100 datagrams): at tens to hundreds of
+// Mbit/s that is a few milliseconds, and any pause of the reading goroutine
+// longer than that (GC, a busy CPU) overflows it. The kernel drops the excess
+// silently (Udp RcvbufErrors) and the carrier reads it as path loss — rate
+// backs off and FEC spends parity on a loss the path never had. Netns lab,
+// 300 Mbit/s: ~1600 such drops per 20 s on the receiver. It is a ceiling, not
+// an allocation: memory is used only while datagrams wait. As root it is
+// forced past net.core.[rw]mem_max, so no system sysctl is needed.
+const sockBuf = 4 << 20
+
 func dialUDP(addr string, opt Options) (net.Conn, error) {
 	ua, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
@@ -24,7 +36,12 @@ func dialUDP(addr string, opt Options) (net.Conn, error) {
 		}
 		laddr = &net.UDPAddr{IP: ip}
 	}
-	return net.DialUDP("udp", laddr, ua)
+	c, err := net.DialUDP("udp", laddr, ua)
+	if err != nil {
+		return nil, err
+	}
+	setSockBufs(c, sockBuf)
+	return c, nil
 }
 
 func listenUDP(addr string) (net.PacketConn, error) {
@@ -32,7 +49,12 @@ func listenUDP(addr string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return net.ListenUDP(listenNetwork(ua), ua)
+	c, err := net.ListenUDP(listenNetwork(ua), ua)
+	if err != nil {
+		return nil, err
+	}
+	setSockBufs(c, sockBuf)
+	return c, nil
 }
 
 // listenNetwork picks the socket family for a UDP listen address. An IPv4 or
