@@ -17,6 +17,7 @@
 package main
 
 import (
+	"container/heap"
 	"encoding/binary"
 	"flag"
 	"fmt"
@@ -37,6 +38,7 @@ import (
 type dirCfg struct {
 	rate      float64 // bits/s, 0 = unlimited
 	delay     time.Duration
+	jitter    time.Duration // max random extra delay per packet (reorders)
 	queue     time.Duration // max queueing delay before tail drop
 	loss      float64
 	flowRate  float64 // per-flow policer, bits/s, 0 = off
@@ -108,6 +110,22 @@ func (c *dirCfg) drop(g *geState, now time.Time) bool {
 type pkt struct {
 	b  []byte
 	at time.Time // delivery time
+}
+
+// pktHeap orders packets by due time so the writer can release them earliest
+// first even when jitter made a later-enqueued packet due sooner (reordering).
+type pktHeap []pkt
+
+func (h pktHeap) Len() int            { return len(h) }
+func (h pktHeap) Less(i, j int) bool  { return h[i].at.Before(h[j].at) }
+func (h pktHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
+func (h *pktHeap) Push(x any)         { *h = append(*h, x.(pkt)) }
+func (h *pktHeap) Pop() any {
+	old := *h
+	n := len(old)
+	p := old[n-1]
+	*h = old[:n-1]
+	return p
 }
 
 func htons(v uint16) uint16 { return v<<8 | v>>8 }
@@ -188,14 +206,44 @@ func dstIP(f []byte) uint32 {
 
 func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 	q := make(chan pkt, 1<<16)
-	// writer: deliver frames at their due time
+	// writer: deliver frames at their due time, earliest-due first (a heap), so
+	// a packet with less jitter can leave ahead of one enqueued before it —
+	// genuine reordering. With no jitter the due times are monotonic and this is
+	// just FIFO.
 	go func() {
 		sa := &unix.SockaddrLinklayer{Ifindex: outIdx}
-		for p := range q {
-			if d := time.Until(p.at); d > 0 {
-				time.Sleep(d)
+		h := &pktHeap{}
+		var timer *time.Timer
+		for {
+			var fire <-chan time.Time
+			if h.Len() > 0 {
+				d := time.Until((*h)[0].at)
+				if d < 0 {
+					d = 0
+				}
+				if timer == nil {
+					timer = time.NewTimer(d)
+				} else {
+					timer.Reset(d)
+				}
+				fire = timer.C
 			}
-			unix.Sendto(outFd, p.b, 0, sa)
+			select {
+			case p, ok := <-q:
+				if !ok {
+					return
+				}
+				heap.Push(h, p)
+				if timer != nil && !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			case <-fire:
+				p := heap.Pop(h).(pkt)
+				unix.Sendto(outFd, p.b, 0, sa)
+			}
 		}
 	}()
 	var nextFree time.Time // when the bottleneck finishes the last frame
@@ -292,7 +340,14 @@ func run(name string, inFd, outFd, outIdx int, c dirCfg, stats *counters) {
 		}
 		b := make([]byte, n)
 		copy(b, buf[:n])
-		q <- pkt{b: b, at: depart.Add(c.delay)}
+		at := depart.Add(c.delay)
+		if c.jitter > 0 {
+			// A random extra delay per packet: packets with less jitter overtake
+			// those with more, so the path REORDERS (what a real jittery path
+			// does). The writer releases in due-time order, not arrival order.
+			at = at.Add(time.Duration(rand.Int64N(int64(c.jitter))))
+		}
+		q <- pkt{b: b, at: at}
 	}
 }
 
@@ -331,6 +386,8 @@ func main() {
 	rate := flag.String("rate", "0", "bottleneck rate each way, e.g. 20mbit")
 	rateBA := flag.String("rate-ba", "", "rate B->A if different")
 	delay := flag.Duration("delay", 0, "one-way delay")
+	jitter := flag.Duration("jitter", 0, "max random extra delay per packet each way (reorders)")
+	jitterBA := flag.Duration("jitter-ba", -1, "jitter B->A if different (default: same as -jitter)")
 	queue := flag.Duration("queue", 200*time.Millisecond, "max queueing delay")
 	loss := flag.Float64("loss", 0, "random (good-state) loss probability each way")
 	burstLoss := flag.Float64("burstloss", 0, "loss probability in the bad state (enables bursty GE loss)")
@@ -359,13 +416,16 @@ func main() {
 	}
 	fa, ia := openPacket(*a)
 	fb, ib := openPacket(*b)
-	ab := dirCfg{rate: parseRate(*rate), delay: *delay, queue: *queue, loss: *loss,
+	ab := dirCfg{rate: parseRate(*rate), delay: *delay, jitter: *jitter, queue: *queue, loss: *loss,
 		flowRate: parseRate(*flowRate), flowBurst: *flowBurst,
 		burstLoss: *burstLoss, burstGoodMs: *goodMs, burstBadMs: *badMs, dropUDP: *dropUDP, allow: allow,
 		dstRate: parseRate(*dstRate), dstBurst: *dstBurst, dstPenalty: *dstPenalty, dstPenLoss: *dstPenLoss, dstProto: *dstProto}
 	ba := ab
 	if *rateBA != "" {
 		ba.rate = parseRate(*rateBA)
+	}
+	if *jitterBA >= 0 {
+		ba.jitter = *jitterBA
 	}
 	st := &counters{m: map[string]int{}}
 	go run("ab", fa, fb, ib, ab, st)

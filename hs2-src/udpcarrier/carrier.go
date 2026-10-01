@@ -102,13 +102,24 @@ type Conn struct {
 	peerStamps atomic.Bool
 	owdMin     atomic.Uint64
 
-	// wire-loss measurement: wireHigh/wireRecv are written by the decode loop
-	// (trackWire) and read by the feedback loop (wireLossPPM).
-	wireHigh                   atomic.Uint32
-	wireRecv                   atomic.Uint32
+	// wire-loss measurement, reorder-tolerant. The decode loop (trackWire)
+	// slides a window [wireBase, wireBase+wireConfirmWin) over the per-datagram
+	// wire sequence and resolves each seq exactly once: RECEIVED when it arrives
+	// while inside the window, or LOST when the window slides past it still
+	// missing. A datagram that is merely REORDERED — late but within the window
+	// — is counted received, never lost; only a genuine gap counts as loss. The
+	// feedback loop reads the two cumulative counters and takes their delta.
+	// (The old estimator read the high-water mark minus the receive count per
+	// window, which booked a reordered early arrival as up to 100% phantom loss
+	// and never credited the catch-up back.)
+	wireRecv                   atomic.Uint64 // distinct datagrams received (resolved)
+	wireLost                   atomic.Uint64 // datagrams the window passed, never seen
 	wireBytes                  atomic.Uint64 // bytes of data datagrams received
 	wirePrimed                 bool          // decode loop only
-	lastWireHigh, lastWireRecv uint32        // feedback loop only
+	wireBase                   uint32        // decode loop only: oldest unresolved seq
+	wireMax                    uint32        // decode loop only: highest seq seen
+	wireSeen                   [wireReorderWin / 64]uint64 // decode loop only: arrivals
+	lastWireRecv, lastWireLost uint64                      // feedback loop only
 
 	wg sync.WaitGroup
 }
@@ -160,6 +171,23 @@ const (
 	tagData   = 0x00 // [tag][wireSeq:4] then one FEC shard packet
 	tagCtrl   = 0x01 // followed by one sealed control frame (seq||ciphertext)
 	tagDataTS = 0x02 // [tag][wireSeq:4][sendStamp:4] then one FEC shard packet
+)
+
+// The reorder-tolerant loss estimator holds a sliding window over the wire
+// sequence. wireConfirmWin is how far the highest seq must advance beyond a
+// still-missing seq before that seq is counted lost — i.e. how much reordering
+// is tolerated (a datagram that arrives within this many seqs is credited as
+// received, not lost) and, equally, the loss-confirmation lag. It is a balance:
+// large enough to absorb real path reorder (so jitter/reorder is never booked
+// as the phantom loss the old high-water estimator produced), small enough that
+// a genuine loss burst is confirmed well inside a loss episode so the adaptive
+// FEC still sizes parity for it in time. A real path's reorder is a handful of
+// packets; 48 covers that with margin while confirming loss within ~20 ms at
+// the rates where parity sizing matters. wireReorderWin sizes the arrival
+// bitmap and must be >= wireConfirmWin (a power of two keeps the index cheap).
+const (
+	wireConfirmWin = 64
+	wireReorderWin = 256
 )
 
 // SendFrame is the engine's send path. TypeData rides FEC and the pacer;
@@ -459,45 +487,80 @@ func (c *Conn) sendFeedback(now time.Time) {
 }
 
 // wireLossPPM estimates the wire loss on the path INTO us since the last
-// report, measured directly from the per-datagram wire sequence: the highest
-// sequence advances by roughly the number of datagrams the sender put on the
-// wire, and the received count by how many arrived, so their difference is the
-// wire loss — immediate and accurate, which is what the encoder needs to size
-// parity for a burst as it happens (decoder stats lag a group's expiry).
+// report, as the share of resolved datagrams the window passed without ever
+// seeing them. Because trackWire resolves a reordered datagram as received (it
+// arrives within the window), only a genuine gap counts, so reordering and
+// jitter no longer read as loss. A loss is confirmed within ~wireReorderWin
+// datagrams of the gap — still prompt enough for the encoder to size parity for
+// a real burst, and far more accurate than the old high-water estimator.
 func (c *Conn) wireLossPPM() uint32 {
-	high := c.wireHigh.Load()
 	recv := c.wireRecv.Load()
-	spanDelta := high - c.lastWireHigh
-	recvDelta := recv - c.lastWireRecv
-	c.lastWireHigh, c.lastWireRecv = high, recv
-	if spanDelta == 0 {
+	lost := c.wireLost.Load()
+	dRecv := recv - c.lastWireRecv
+	dLost := lost - c.lastWireLost
+	c.lastWireRecv, c.lastWireLost = recv, lost
+	denom := dRecv + dLost
+	if denom == 0 {
 		return 0
 	}
-	var lost uint32
-	if spanDelta > recvDelta {
-		lost = spanDelta - recvDelta
-	}
-	frac := float64(lost) / float64(spanDelta)
+	frac := float64(dLost) / float64(denom)
 	if frac > 1 {
 		frac = 1
 	}
 	return uint32(frac * 1e6)
 }
 
-// trackWire records one data datagram's wire sequence for loss measurement.
-// Called only from the decode loop.
+// trackWire records one data datagram's wire sequence for loss measurement,
+// reorder-tolerant. Called only from the decode loop (single goroutine per
+// Conn), so wireBase/wireMax/wireSeen need no locking; only the two counters
+// the feedback loop reads are atomic.
 func (c *Conn) trackWire(seq uint32) {
 	if !c.wirePrimed {
 		c.wirePrimed = true
-		c.wireHigh.Store(seq)
-		c.wireRecv.Store(0)
-		c.lastWireHigh, c.lastWireRecv = seq, 0
+		c.wireBase, c.wireMax = seq, seq
+		c.wireSetSeen(seq)
+		c.wireRecv.Add(1)
+		return
 	}
-	cur := c.wireHigh.Load()
-	if int32(seq-cur) > 0 {
-		c.wireHigh.Store(seq)
+	if int32(seq-c.wireMax) > 0 {
+		c.wireMax = seq
 	}
-	c.wireRecv.Add(1)
+	// Slide the window forward: every seq it now passes is resolved — received
+	// if its bit is set (it arrived earlier, reordered), otherwise lost.
+	for int32(c.wireMax-c.wireBase) >= wireConfirmWin {
+		if !c.wireTestSeen(c.wireBase) {
+			c.wireLost.Add(1)
+		}
+		c.wireClearSeen(c.wireBase)
+		c.wireBase++
+	}
+	switch {
+	case int32(seq-c.wireBase) < 0:
+		// Older than the window: already resolved (a very late reorder, or a
+		// duplicate). Ignore, so no seq is ever counted twice.
+	case !c.wireTestSeen(seq):
+		c.wireSetSeen(seq)
+		c.wireRecv.Add(1)
+	default:
+		// A duplicate within the window. Ignore.
+	}
+}
+
+// wireSeen is a ring bitmap over wireReorderWin consecutive seqs; within any
+// such window seq%wireReorderWin is unique, so there is no aliasing.
+func (c *Conn) wireSetSeen(seq uint32) {
+	i := seq % wireReorderWin
+	c.wireSeen[i/64] |= 1 << (i % 64)
+}
+
+func (c *Conn) wireClearSeen(seq uint32) {
+	i := seq % wireReorderWin
+	c.wireSeen[i/64] &^= 1 << (i % 64)
+}
+
+func (c *Conn) wireTestSeen(seq uint32) bool {
+	i := seq % wireReorderWin
+	return c.wireSeen[i/64]&(1<<(i%64)) != 0
 }
 
 // noteOWD folds one stamped datagram's one-way delay (receive stamp minus
