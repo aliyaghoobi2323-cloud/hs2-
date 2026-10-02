@@ -6,6 +6,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/hex"
@@ -673,49 +674,139 @@ func startBuiltinBackend() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// The nginx default welcome page: the single most common page on the public
-	// internet, so a probe that reaches the backend sees the most unremarkable
-	// site possible. Served with an nginx Server header and ordinary caching
-	// headers to match a real default install.
-	page := []byte(`<!DOCTYPE html>
-<html>
+	// A plain, unremarkable static site (a small generic studio landing) that a
+	// probe reaching the backend sees. It replaces the old nginx default welcome
+	// page, which is itself a honeypot signature — the lazy cover of countless
+	// proxies. The brand is fictional and generic (it impersonates no real
+	// organisation). The page is fully self-contained: no external fonts,
+	// scripts or images — each of those would be its own request, fingerprint or
+	// dependency — with an inline data-URI favicon, system fonts, light/dark and
+	// no JavaScript.
+	page := []byte(`<!doctype html>
+<html lang="en">
 <head>
-<title>Welcome to nginx!</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northlane</title>
+<meta name="description" content="Northlane is a small studio building dependable web and cloud software for growing teams.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f6bed'/%3E%3Cpath d='M9 22V10l14 12V10' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
-html { color-scheme: light dark; }
-body { width: 35em; margin: 0 auto;
-font-family: Tahoma, Verdana, Arial, sans-serif; }
+  :root{
+    --bg:#ffffff; --fg:#1b2130; --muted:#5b647a; --line:#e7e9f0;
+    --card:#f7f8fb; --accent:#4f6bed; --accent-fg:#ffffff; --shadow:0 1px 2px rgba(20,30,60,.06),0 8px 24px rgba(20,30,60,.05);
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0f131c; --fg:#e8ebf4; --muted:#9aa3bb; --line:#222838;
+      --card:#151a26; --accent:#7e93f4; --accent-fg:#0f131c; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--fg);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6; -webkit-font-smoothing:antialiased;
+  }
+  a{color:inherit;text-decoration:none}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
+  header{border-bottom:1px solid var(--line)}
+  .bar{display:flex;align-items:center;justify-content:space-between;height:68px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:-.01em}
+  .brand svg{display:block;border-radius:7px}
+  nav{display:flex;gap:28px}
+  nav a{color:var(--muted);font-size:15px}
+  nav a:hover{color:var(--fg)}
+  @media (max-width:640px){nav{display:none}}
+  .hero{padding:84px 0 64px}
+  .hero h1{font-size:44px;line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;max-width:18ch}
+  .hero p{font-size:19px;color:var(--muted);max-width:52ch;margin:0 0 30px}
+  @media (max-width:640px){.hero{padding:56px 0 44px}.hero h1{font-size:33px}.hero p{font-size:17px}}
+  .btn{display:inline-block;background:var(--accent);color:var(--accent-fg);font-weight:600;font-size:15px;
+    padding:12px 22px;border-radius:9px;transition:opacity .15s}
+  .btn:hover{opacity:.9}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding:8px 0 80px}
+  @media (max-width:820px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px;box-shadow:var(--shadow)}
+  .card h3{margin:0 0 8px;font-size:18px;letter-spacing:-.01em}
+  .card p{margin:0;color:var(--muted);font-size:15px}
+  .ic{width:38px;height:38px;border-radius:10px;background:color-mix(in srgb,var(--accent) 16%,transparent);
+    display:flex;align-items:center;justify-content:center;margin-bottom:16px;color:var(--accent)}
+  footer{border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+  .foot{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;padding:28px 0}
+  .foot nav{display:flex;gap:20px}
+  .foot nav a{font-size:14px}
 </style>
 </head>
 <body>
-<h1>Welcome to nginx!</h1>
-<p>If you see this page, the nginx web server is successfully installed and
-working. Further configuration is required.</p>
+<header>
+  <div class="wrap bar">
+    <a class="brand" href="/">
+      <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#4f6bed"/><path d="M9 22V10l14 12V10" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Northlane
+    </a>
+    <nav>
+      <a href="/#services">Services</a>
+      <a href="/#work">Work</a>
+      <a href="/#about">About</a>
+      <a href="/#contact">Contact</a>
+    </nav>
+  </div>
+</header>
 
-<p>For online documentation and support please refer to
-<a href="http://nginx.org/">nginx.org</a>.<br/>
-Commercial support is available at
-<a href="http://nginx.com/">nginx.com</a>.</p>
+<main>
+  <section class="wrap hero">
+    <h1>Dependable software for growing teams.</h1>
+    <p>Northlane is a small studio that designs, builds, and maintains web and cloud applications — the quiet infrastructure your product runs on.</p>
+    <a class="btn" href="/#contact">Get in touch</a>
+  </section>
 
-<p><em>Thank you for using nginx.</em></p>
+  <section class="wrap grid" id="services">
+    <div class="card">
+      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 21h8"/></svg></div>
+      <h3>Web</h3>
+      <p>Fast, accessible sites and dashboards, built to last and easy to hand over.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 18a4 4 0 0 0 0-8 6 6 0 0 0-11.6-1.8A4.5 4.5 0 0 0 6 18z"/></svg></div>
+      <h3>Cloud</h3>
+      <p>Right-sized deployments, sensible monitoring, and backups that actually restore.</p>
+    </div>
+    <div class="card">
+      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v4l3 2"/></svg></div>
+      <h3>Support</h3>
+      <p>Steady maintenance and on-call help, so small problems stay small.</p>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div>&copy; 2026 Northlane Studio. All rights reserved.</div>
+    <nav>
+      <a href="/#privacy">Privacy</a>
+      <a href="/#terms">Terms</a>
+      <a href="/#contact">Contact</a>
+    </nav>
+  </div>
+</footer>
 </body>
 </html>
 `)
+	modtime := time.Date(2026, 1, 15, 9, 3, 12, 0, time.UTC)
 	handler := func(w http.ResponseWriter, r *http.Request) {
-		h := w.Header()
-		h.Set("Server", "nginx")
-		if r.URL.Path == "/favicon.ico" {
-			http.Error(w, "404 Not Found", http.StatusNotFound)
-			return
-		}
+		// Everything but "/" is a plain Go 404, like any static file server. No
+		// Server header is sent: our TLS terminator is Go's, so a stray "nginx"
+		// claim only contradicted that at the TLS layer (Caddy omits it too).
 		if r.URL.Path != "/" {
-			http.Error(w, "404 Not Found", http.StatusNotFound)
+			http.NotFound(w, r)
 			return
 		}
-		h.Set("Content-Type", "text/html; charset=utf-8")
-		h.Set("Last-Modified", "Tue, 15 Oct 2024 09:03:12 GMT")
-		h.Set("Cache-Control", "max-age=3600")
-		w.Write(page)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "max-age=3600")
+		// ServeContent gives genuine static-server behaviour for free:
+		// Last-Modified, If-Modified-Since/304, Content-Length and range requests.
+		http.ServeContent(w, r, "", modtime, bytes.NewReader(page))
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(handler), ReadHeaderTimeout: 10 * time.Second}
 	go srv.Serve(ln)

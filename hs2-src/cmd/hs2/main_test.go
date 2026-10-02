@@ -8,10 +8,11 @@ import (
 	"time"
 )
 
-// A probe forwarded to the builtin backend must get the ubiquitous nginx default
-// page with an nginx Server header, so it looks like the most common site on the
-// internet rather than a bespoke placeholder.
-func TestBuiltinBackendLooksLikeNginx(t *testing.T) {
+// A probe forwarded to the builtin backend gets a plain, unremarkable static
+// site — NOT the nginx default welcome page (a honeypot signature), and NOT a
+// "Server: nginx" header (our TLS terminator is Go's, so claiming nginx only
+// contradicts it; a Go server like Caddy omits the header).
+func TestBuiltinBackendServesCover(t *testing.T) {
 	addr, err := startBuiltinBackend()
 	if err != nil {
 		t.Fatal(err)
@@ -22,19 +23,46 @@ func TestBuiltinBackendLooksLikeNginx(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if got := resp.Header.Get("Server"); got != "nginx" {
-		t.Fatalf("Server header = %q, want nginx", got)
+	if got := resp.Header.Get("Server"); got != "" {
+		t.Fatalf("Server header = %q, want none", got)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+		t.Fatalf("unexpected content-type %q", ct)
+	}
+	// http.ServeContent should give real static-server headers.
+	if resp.Header.Get("Last-Modified") == "" {
+		t.Fatal("no Last-Modified header (expected from http.ServeContent)")
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "Welcome to nginx!") {
-		t.Fatalf("body is not the nginx default page: %q", body)
+	s := string(body)
+	if strings.Contains(s, "nginx") {
+		t.Fatalf("cover page still mentions nginx: %q", s)
 	}
-	if resp.Header.Get("Content-Type") != "text/html; charset=utf-8" {
-		t.Fatalf("unexpected content-type %q", resp.Header.Get("Content-Type"))
+	if !strings.Contains(s, "Northlane") || !strings.Contains(s, "<!doctype html>") {
+		t.Fatalf("cover page is not the expected static site: %q", s)
 	}
 }
 
-// A non-root path returns a plain 404, like a default static server.
+// If-Modified-Since on an unchanged page gets a 304, like any static server
+// (confirms we serve via http.ServeContent rather than a bare Write).
+func TestBuiltinBackendConditional304(t *testing.T) {
+	addr, err := startBuiltinBackend()
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest("GET", "http://"+addr+"/", nil)
+	req.Header.Set("If-Modified-Since", "Fri, 01 Jan 2100 00:00:00 GMT")
+	resp, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("status = %d, want 304", resp.StatusCode)
+	}
+}
+
+// A non-root path returns a plain Go 404, like a default static server.
 func TestBuiltinBackend404(t *testing.T) {
 	addr, err := startBuiltinBackend()
 	if err != nil {
@@ -49,7 +77,7 @@ func TestBuiltinBackend404(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", resp.StatusCode)
 	}
-	if got := resp.Header.Get("Server"); got != "nginx" {
-		t.Fatalf("Server header = %q, want nginx", got)
+	if got := resp.Header.Get("Server"); got != "" {
+		t.Fatalf("Server header = %q, want none", got)
 	}
 }
