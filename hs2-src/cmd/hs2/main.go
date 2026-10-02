@@ -127,7 +127,19 @@ func buildStamp() string {
 			}
 		}
 	}
-	if rev == "" && buildTag == "" {
+	// Sanitize the optional, maintainer-supplied tag so it can never break the
+	// installer's single-line / single-bracket stamp contract: drop '[' and ']'
+	// (they would confuse the installer's `sed … [^]]*` extraction) and any
+	// control byte (a newline would split the line; the Go linker already rejects
+	// a newline in an -X value, so this is belt-and-suspenders), and trim the
+	// edges. An interior space is fine — the installer captures it.
+	tag := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == '[' || r == ']' {
+			return -1
+		}
+		return r
+	}, strings.TrimSpace(buildTag))
+	if rev == "" && tag == "" {
 		return ""
 	}
 	if len(rev) > 12 {
@@ -139,8 +151,8 @@ func buildStamp() string {
 	}
 	var b strings.Builder
 	b.WriteString("build ")
-	if buildTag != "" {
-		b.WriteString(buildTag)
+	if tag != "" {
+		b.WriteString(tag)
 		if rev != "" {
 			b.WriteByte(' ')
 		}

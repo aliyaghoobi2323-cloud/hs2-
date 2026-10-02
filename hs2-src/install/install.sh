@@ -305,7 +305,9 @@ hs2_is_v3(){ "$1" version 2>/dev/null | grep -qE 'hs2 v3([^0-9]|$)'; }
 # `[ -x ]` guard and the trailing `|| true` keep it safe in every case.
 bin_build(){
   [ -x "$1" ] || return 0
-  "$1" version 2>/dev/null | sed -n 's/.*\[\(build [^]]*\)\].*/\1/p' || true
+  # head -n1: even if a binary ever emitted the stamp on more than one line, the
+  # banner stays a single line (the documented format is already one line).
+  "$1" version 2>/dev/null | sed -n 's/.*\[\(build [^]]*\)\].*/\1/p' | head -n1 || true
 }
 
 verify_download(){ # file [url-suffix]
