@@ -496,24 +496,33 @@ stop_for_replace(){
 }
 
 # ---------- per-tunnel tun subnet and interface -------------------------------
-# set_tun_subnet BASE: the tunnel's /30 — iran = BASE+1, kharej = BASE+2.
+# set_tun_subnet BASE: the tunnel's /30 — iran = BASE+1, kharej = BASE+2. The
+# last octet is forced base-10 (10#) so a non-canonical octet never makes the
+# arithmetic read it as octal and abort under set -e.
 set_tun_subnet(){ # base (a.b.c.d, d a multiple of 4)
   local p=${1%.*} l=${1##*.}
   TUN_BASE="$1"
-  TUN_IP_IRAN="$p.$((l + 1))"; TUN_IP_KHAREJ="$p.$((l + 2))"
+  TUN_IP_IRAN="$p.$((10#$l + 1))"; TUN_IP_KHAREJ="$p.$((10#$l + 2))"
   TUN_SUBNET_IRAN="$TUN_IP_IRAN/30"; TUN_SUBNET_KHAREJ="$TUN_IP_KHAREJ/30"
   TUN_PEER_IRAN="$TUN_IP_KHAREJ"; TUN_PEER_KHAREJ="$TUN_IP_IRAN"
 }
 
-# block_of IP -> the /30 it belongs to.
-block_of(){ local l=${1##*.}; echo "${1%.*}.$(( l / 4 * 4 ))"; }
+# block_of IP -> the /30 it belongs to. 10# forces base-10 so a leading-zero
+# octet in a hand-edited config (reached via used_blocks) can't abort the math.
+block_of(){ local l=${1##*.}; echo "${1%.*}.$(( 10#$l / 4 * 4 ))"; }
 
 # valid_block BASE: a /30 base inside 10.77.0.0/16.
 valid_block(){ # base
-  local a b c d
+  local a b c d o
   IFS=. read -r a b c d <<<"$1"
   [ "$a" = 10 ] && [ "$b" = 77 ] || return 1
-  case "$c$d" in *[!0-9]*|'') return 1 ;; esac
+  # Each of the last two octets must be all-digit, non-empty and carry NO
+  # superfluous leading zero: a value like "08" is read as octal by the $(())
+  # below and aborts the installer under set -e (and "10.77.0.08" is not a
+  # canonical base anyway). "0" alone is allowed.
+  for o in "$c" "$d"; do
+    case "$o" in ''|*[!0-9]*) return 1 ;; 0) ;; 0*) return 1 ;; esac
+  done
   [ "$c" -le 255 ] && [ "$d" -le 252 ] && [ $((d % 4)) = 0 ]
 }
 
@@ -556,6 +565,27 @@ pick_subnet(){
     set_tun_subnet "$b"; return 0
   done
   die "could not find a free tunnel subnet in 10.77.0.0/16"
+}
+
+# ask_subnet (link-making side): establish the default subnet with pick_subnet
+# (a fresh random /30, or the reused one when REPLACING), then let the operator
+# override it with a specific /30 base. Random stays the DEFAULT — an empty
+# answer keeps pick_subnet's choice. A chosen base is useful when routes or
+# monitoring on the other server are pinned to a known tunnel IP (the U5 case:
+# a silently-changed subnet breaks them). The base travels in the link, so the
+# pasting side re-validates it independently via check_link_subnet.
+ask_subnet(){
+  local ans b used
+  pick_subnet                       # sets TUN_BASE to the default (random / reused)
+  while :; do
+    read -rp "Tunnel subnet /30 base in 10.77.0.0/16 [$TUN_BASE; Enter = keep]: " ans </dev/tty || return 0
+    [ -n "$ans" ] || return 0       # empty keeps the default -> random stays default
+    b=${ans%/*}                     # accept "10.77.42.0" or "10.77.42.0/30"
+    if ! valid_block "$b"; then warn "Enter a /30 base inside 10.77.0.0/16 (last octet a multiple of 4), e.g. 10.77.42.0."; continue; fi
+    used=$(used_blocks)             # capture first (pipefail/SIGPIPE), same idiom as check_link_subnet
+    if printf '%s\n' "$used" | grep -qx "$b"; then warn "$b/30 is already in use on this server — pick another, or press Enter for the default."; continue; fi
+    set_tun_subnet "$b"; ok "Tunnel subnet set to $b/30."; return 0
+  done
 }
 
 # check_link_subnet (the side that pastes): the subnet from the link must be
@@ -699,6 +729,32 @@ LimitNOFILE=1048576
 WantedBy=multi-user.target
 EOF
   systemctl daemon-reload
+}
+
+# write_cfg_checked: read a tunnel config JSON on stdin, VALIDATE it with
+# `hs2 check`, then install it to $CFG atomically. The setup-time counterpart of
+# the atomic binary install (phase A1): a malformed interpolation — an unescaped
+# character, a bad number — can no longer produce a crash-looping tunnel started
+# from a half-written, invalid config, because the unit is never enabled on a
+# config that does not parse. On an OLD binary without `check` it falls back to a
+# python3 JSON-syntax check, and if that is unavailable too, to a plain write
+# (exactly today's behavior). The file is created mode 600 (umask 177) so the
+# tunnel key is never briefly world-readable.
+write_cfg_checked(){
+  local new="$CFG.new.$$" out rc=0
+  mkdir -p "$(dirname "$CFG")"
+  ( umask 177; cat > "$new" ) || { rm -f "$new"; die "could not write $new (disk full, or $(dirname "$CFG") not writable)."; }
+  out=$("$BIN" check -c "$new" 2>&1) || rc=$?
+  if printf '%s' "$out" | grep -q "unknown command"; then
+    if command -v python3 >/dev/null 2>&1; then
+      python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$new" >/dev/null 2>&1 \
+        || { rm -f "$new"; die "the generated config is not valid JSON — not installed. This is an installer bug; please report the inputs you used."; }
+    fi
+  elif [ "$rc" != 0 ]; then
+    err "$out"; rm -f "$new"
+    die "the generated config did not pass 'hs2 check' — not installed. This is an installer bug; please report the inputs you used."
+  fi
+  mv -f "$new" "$CFG" || { rm -f "$new"; die "could not install the config to $CFG."; }
 }
 
 start_service(){
@@ -1063,13 +1119,78 @@ tun_tls_carrier(){ case "${CARRIER:-}" in tls) CARRIER=tls ;; *) CARRIER=l3mtcp 
 # tun_tls_label names the carrier for messages.
 tun_tls_label(){ [ "$CARRIER" = tls ] && echo "one TLS link" || echo "mtcp multi-link pool"; }
 
+# ---------- input validators -------------------------------------------------
+# These guard the values that land in the tunnel config JSON and in the hs2://
+# link, so one bad entry can never write invalid JSON (which breaks the service)
+# or — because many of these travel in the link — break BOTH servers.
+
+# valid_uint V MIN MAX — true if V is a base-10 integer in [MIN,MAX] with NO
+# superfluous leading zero. Leading zeros must be rejected BEFORE any arithmetic
+# test: under set -euo pipefail, `[ 08 -le N ]` is fine but a value like "08"
+# emitted as a BARE JSON number ("mtu": 08) is invalid JSON. "0" alone is legal.
+valid_uint(){ # value min max
+  case "${1:-}" in
+    ''|*[!0-9]*) return 1 ;;   # empty or non-digit
+    0) ;;                      # a single zero is fine
+    0*) return 1 ;;            # any other leading zero -> invalid/octal JSON
+  esac
+  [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+# valid_domain NAME — true for a plausible hostname or IPv4 literal carrying no
+# character that would break a JSON string or the '|'-delimited link ('"', '\',
+# '|', spaces are all outside the allowed set).
+valid_domain(){ # name
+  case "${1:-}" in
+    ''|-) return 1 ;;
+    *[!a-zA-Z0-9.-]*) return 1 ;;   # letters, digits, dot, hyphen only
+    .*|-*|*.|*-) return 1 ;;        # no leading/trailing dot or hyphen
+    *..*) return 1 ;;               # no empty label
+  esac
+  [ "${#1}" -le 253 ]
+}
+
+# valid_hostport HP — true for host:port where host passes valid_domain (a
+# hostname or IPv4) and port is 1-65535. Used for the panel address, which is
+# written into a JSON string. IPv6 (bracketed) is not accepted here.
+valid_hostport(){ # host:port
+  local hp="${1:-}" host port
+  case "$hp" in *:*) ;; *) return 1 ;; esac
+  host=${hp%:*}; port=${hp##*:}
+  valid_domain "$host" || return 1
+  valid_uint "$port" 1 65535
+}
+
+# ask_domain PROMPT — read DOMAIN from the tty, require a valid hostname, re-ask
+# on a bad entry (it is TLS-critical and travels in the link).
+ask_domain(){ # prompt
+  while :; do
+    read -rp "$1" DOMAIN </dev/tty || die "a domain is required"
+    valid_domain "$DOMAIN" && return 0
+    warn "Enter a domain name (letters, digits, '.', '-' only), e.g. tunnel.example.com."
+  done
+}
+
+# ask_panel PROMPT — read PANEL from the tty (default 127.0.0.1:8443), require a
+# valid host:port, re-ask on a bad entry.
+ask_panel(){ # prompt
+  while :; do
+    read -rp "$1" PANEL </dev/tty || die "a panel address is required"
+    PANEL=${PANEL:-127.0.0.1:8443}
+    valid_hostport "$PANEL" && return 0
+    warn "Enter the panel address as host:port, e.g. 127.0.0.1:8443."
+  done
+}
+
 # ask_ipx_proto sets TUN_PROTO: the raw IP protocol number the ipx encapsulation
 # rides on. It must be the SAME number on both servers. 253 is the default
-# (experimental range); 1/4/6/17/47 are taken by ICMP/IPIP/TCP/UDP/GRE.
+# (experimental range); 1/4/6/17/47 are taken by ICMP/IPIP/TCP/UDP/GRE. The
+# installer only enforces the structural rule (0-255, no leading zero); the
+# engine's `hs2 check` rejects numbers already assigned to a real protocol.
 ask_ipx_proto(){
   read -rp "IPX raw IP protocol number (same on both servers) [253]: " IPXP </dev/tty
   IPXP=${IPXP:-253}
-  case "$IPXP" in ''|*[!0-9]*) die "protocol number must be a number" ;; esac
+  valid_uint "$IPXP" 0 255 || die "protocol number must be an integer 0-255 with no leading zero (253 is the default)"
   TUN_PROTO="$IPXP"
 }
 
@@ -1126,7 +1247,10 @@ ask_tun_params(){
 ask_tun_mtu(){
   read -rp "TUN MTU (1320 matches Backhaul; kept in sync with the other side) [1320]: " TUNMTU </dev/tty
   TUNMTU=${TUNMTU:-1320}
-  case "$TUNMTU" in ''|*[!0-9]*) die "MTU must be a number" ;; esac
+  # Bare JSON number + travels in the link: a leading zero ("01320") is invalid
+  # JSON on BOTH ends, and an absurd value blackholes traffic. 576-1500 is the
+  # usable window (the binary additionally WARNs outside 1200-1500).
+  valid_uint "$TUNMTU" 576 1500 || die "MTU must be an integer 576-1500 with no leading zero (1320 is the default)"
 }
 
 # ask_direction sets DIRECTION=direct|reverse. Direction is WHO STARTS the
@@ -1179,7 +1303,16 @@ parse_link(){
   # so default a tun link's ENCAP to "tcp" to keep those links working.
   [ -z "${ENCAP:-}" ] && [ "$TRANSPORT" = "tun" ] && ENCAP=tcp
   ENCAP=${ENCAP:-}
-  case "${PROTO:-}" in ''|*[!0-9]*) PROTO="" ;; esac
+  # Sanitize the two numbers the link carries, so a hand-edited or third-party
+  # link can never write invalid JSON on THIS side. PROTO blanks on a bad value
+  # (ipx_proto_from_link then re-asks it, as for an older link that omits it);
+  # MTU cannot be re-asked on the pasting side, so a present-but-invalid MTU is
+  # a hard error (a bad MTU cannot yield a working tunnel either way).
+  valid_uint "${PROTO:-}" 0 255 || PROTO=""
+  case "${MTU:-}" in
+    ''|-) MTU="" ;;
+    *) valid_uint "$MTU" 576 1500 || die "the link carries an invalid MTU ($MTU) — regenerate it on the OTHER server." ;;
+  esac
   LNAME=${LNAME:-hs2}; LSUBNET=${LSUBNET:-10.77.0.0}
 }
 
@@ -1219,7 +1352,7 @@ setup_kharej(){
 # kharej_listener: direct exit. Kharej listens for the iran edge and generates
 # the link. (This is the classic flow.)
 kharej_listener(){
-  pick_subnet; TUNIF=$(free_iface)
+  ask_subnet; TUNIF=$(free_iface)
   ask_tunnel_port "Tunnel port (clients never see this)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
@@ -1227,11 +1360,9 @@ kharej_listener(){
   mkdir -p "$(dirname "$CFG")"
 
   if [ "$TRANSPORT" = "tcp" ]; then
-    read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
-    PANEL=${PANEL:-127.0.0.1:8443}
+    ask_panel "Panel inbound address on this server [127.0.0.1:8443]: "
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
-    read -rp "Domain (its A record must point to $PUBIP): " DOMAIN </dev/tty
-    [ -n "$DOMAIN" ] || die "domain required"
+    ask_domain "Domain (its A record must point to $PUBIP): "
     echo >&2
     echo "  TLS mode:  1) mtcp (recommended)  2) l3mtcp  3) tls" >&2
     read -rp "Choose [1]: " M </dev/tty
@@ -1240,7 +1371,7 @@ kharej_listener(){
     case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
   "addr": "$BINDADDR:$TPORT",
@@ -1258,16 +1389,14 @@ EOF
     # the iran edge opens the user ports and every connection rides a stream to
     # the panel set here (expose).
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
-    read -rp "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: " PANEL </dev/tty
-    PANEL=${PANEL:-127.0.0.1:8443}
-    read -rp "Domain (its A record must point to $PUBIP): " DOMAIN </dev/tty
-    [ -n "$DOMAIN" ] || die "domain required"
+    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
+    ask_domain "Domain (its A record must point to $PUBIP): "
     ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; tun_tls_carrier
     read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
     case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
   "addr": "$BINDADDR:$TPORT",
@@ -1286,11 +1415,10 @@ EOF
     # themselves are asked once, on iran; the ipx number travels in the link.
     [ "$TUN_ENCAP" != "udp" ] || udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     ask_tun_params
-    read -rp "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: " PANEL </dev/tty
-    PANEL=${PANEL:-127.0.0.1:8443}
+    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
     LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$TUN_ENCAP")
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "dgtun", "encap": "$TUN_ENCAP", "reverse": false,
   "addr": "$BINDADDR$PSUF",
@@ -1304,7 +1432,7 @@ EOF
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
     CARRIER=$(transport_to_carrier "$TRANSPORT"); DOMAIN="-"; UDP=false
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
   "addr": "$BINDADDR:$TPORT",
@@ -1342,9 +1470,8 @@ kharej_dialer(){
   ok "Link OK — will dial the iran edge at $ENDPOINT (transport $TRANSPORT)."
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
-    read -rp "Panel inbound address on this server [127.0.0.1:8443]: " PANEL </dev/tty
-    PANEL=${PANEL:-127.0.0.1:8443}
-    cat > "$CFG" <<EOF
+    ask_panel "Panel inbound address on this server [127.0.0.1:8443]: "
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
@@ -1365,9 +1492,8 @@ EOF
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the iran edge with the new installer."
     tun_tls_carrier   # the link says mtcp pool (l3mtcp) or one TLS link (tls)
     ask_tun_params
-    read -rp "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: " PANEL </dev/tty
-    PANEL=${PANEL:-127.0.0.1:8443}
-    cat > "$CFG" <<EOF
+    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
@@ -1390,10 +1516,9 @@ EOF
     # ipx number comes with the link — neither is asked again here.
     [ "$ENCAP" = ipx ] && ipx_proto_from_link
     ask_tun_params
-    read -rp "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: " PANEL </dev/tty
-    PANEL=${PANEL:-127.0.0.1:8443}
+    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$ENCAP")
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "dgtun", "encap": "$ENCAP", "reverse": true,
   "addr": "$ENDPOINT",
@@ -1410,7 +1535,7 @@ EOF
     info "Datagram L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (encap $ENCAP)."
   else
     # udp/auto: TUN IP tunnel on $TUNIF, no panel forwarding here.
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT",
@@ -1463,9 +1588,10 @@ iran_dialer(){
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
     [ -n "$PORTS" ] || die "at least one port is required"
     for p in ${PORTS//,/ }; do
+      valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
     done
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
@@ -1490,9 +1616,10 @@ EOF
     ask_user_ip
     read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
+      valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
     done
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
@@ -1519,10 +1646,11 @@ EOF
     ask_user_ip
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
+      valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
     done
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$ENCAP")
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "dgtun", "encap": "$ENCAP", "reverse": false,
   "addr": "$ENDPOINT",
@@ -1540,7 +1668,7 @@ EOF
     else info "Pure routed L3 tunnel on $TUNIF: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ. Route traffic toward $TUN_IP_KHAREJ."; fi
   else
     # udp/auto is a TUN IP tunnel on $TUNIF (not a port forwarder); no user ports.
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false,
   "addr": "$ENDPOINT",
@@ -1563,7 +1691,7 @@ EOF
 # generates the link. For tcp it also opens the user ports; for udp/auto it is a
 # TUN IP tunnel on hs0.
 iran_listener(){
-  pick_subnet; TUNIF=$(free_iface)
+  ask_subnet; TUNIF=$(free_iface)
   ask_tunnel_port "Tunnel port to LISTEN on (kharej dials it)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
@@ -1576,11 +1704,11 @@ iran_listener(){
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
     [ -n "$PORTS" ] || die "at least one port is required"
     for p in ${PORTS//,/ }; do
+      valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
       port_free "$p" || die "user port $p is already in use on Iran. Pick another."
     done
-    read -rp "Domain for THIS iran server (its A record must point to $PUBIP): " DOMAIN </dev/tty
-    [ -n "$DOMAIN" ] || die "domain required (the kharej validates it as the TLS name)"
+    ask_domain "Domain for THIS iran server (its A record must point to $PUBIP): "
     echo >&2
     echo "  TLS mode:  1) mtcp (recommended)  2) l3mtcp  3) tls" >&2
     read -rp "Choose [1]: " M </dev/tty
@@ -1592,7 +1720,7 @@ iran_listener(){
     # this domain as the TLS name, so it must match the cert.
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true, "udp": $UDP,
   "addr": "$BINDADDR:$TPORT",
@@ -1614,11 +1742,11 @@ EOF
     ask_user_ip
     read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
+      valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
       port_free "$p" || die "user port $p is already in use on Iran. Pick another."
     done
-    read -rp "Domain for THIS iran server (its A record must point to $PUBIP): " DOMAIN </dev/tty
-    [ -n "$DOMAIN" ] || die "domain required (the kharej validates it as the TLS name)"
+    ask_domain "Domain for THIS iran server (its A record must point to $PUBIP): "
     ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; tun_tls_carrier
     UDP=false
     if [ -n "$PORTS" ]; then
@@ -1627,7 +1755,7 @@ EOF
     fi
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true, "udp": $UDP,
   "addr": "$BINDADDR:$TPORT",
@@ -1653,12 +1781,13 @@ EOF
     ask_user_ip
     read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
+      valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
       port_free "$p" || die "user port $p is already in use on Iran. Pick another."
     done
     LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$TUN_ENCAP")
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "dgtun", "encap": "$TUN_ENCAP", "reverse": true,
   "addr": "$BINDADDR$PSUF",
@@ -1676,7 +1805,7 @@ EOF
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     [ "$TRANSPORT" = "auto" ] && { port_free "$TPORT" || die "auto also needs TCP port $TPORT free — pick another."; }
     CARRIER=$(transport_to_carrier "$TRANSPORT"); DOMAIN="-"; UDP=false
-    cat > "$CFG" <<EOF
+    write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": true,
   "addr": "$BINDADDR:$TPORT",
@@ -1828,6 +1957,17 @@ pause(){ read -rp "Press Enter to continue… " _ </dev/tty || true; }
 jget(){ { grep -o "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$1" 2>/dev/null || true; } | head -1 | sed 's/.*"\([^"]*\)"$/\1/'; }
 jraw(){ { grep -o "\"$2\"[[:space:]]*:[[:space:]]*[a-z0-9.]*" "$1" 2>/dev/null || true; } | head -1 | sed 's/.*:[[:space:]]*//'; }
 
+# Role reads, hardened. jget/jraw grab the FIRST "<key>": match anywhere in the
+# file, so on a HAND-EDITED config `jget mode` can return the nested
+# tuning.mode value (auto/manual/off) instead of the top-level dial/listen, and
+# `jraw reverse` misses an upper-case True. The role decides which physical
+# server a tunnel is, so a misread is serious. These test the VALUE directly and
+# are immune to key order and to tuning.mode (which is never "dial"); it is the
+# same value-anchored idiom upgrade()/write_service already use. (A real JSON
+# read would need the binary, but `hs2 config get` exposes none of these keys.)
+cfg_is_dial(){ grep -Eq '"mode"[[:space:]]*:[[:space:]]*"dial"' "$1" 2>/dev/null; }
+cfg_is_reverse(){ grep -Eiq '"reverse"[[:space:]]*:[[:space:]]*true' "$1" 2>/dev/null; }
+
 # The daemon publishes a live status file (see cmd/hs2/status.go). status_path
 # derives it from a config path exactly as the binary does: /run/hs2/ + the
 # absolute config path with '/'->'-' and ' '->'_', + .status.json.
@@ -1894,8 +2034,7 @@ tm_autostart(){ [ "$(systemctl is-enabled "$1" 2>/dev/null || true)" = enabled ]
 # Does this side open the tunnel connections? mode=dial is the Iran side,
 # reverse flips who connects (same rule as the engine).
 tm_dials(){
-  local mode rev; mode=$(jget "$1" mode); rev=$(jraw "$1" reverse)
-  if [ "$mode" = dial ]; then [ "$rev" != true ]; else [ "$rev" = true ]; fi
+  if cfg_is_dial "$1"; then ! cfg_is_reverse "$1"; else cfg_is_reverse "$1"; fi
 }
 # Live TLS links of a TCP tunnel. Prefer the daemon's own live count (it knows
 # exactly how many links are up, and its dynamic target); fall back to counting
@@ -1972,8 +2111,8 @@ tm_transport(){
     udp) echo "udp" ;; auto) echo "auto (udp, tcp fallback)" ;; reality) echo "reality" ;; *) echo "tcp (noise)" ;;
   esac
 }
-tm_role(){ [ "$(jget "$1" mode)" = dial ] && echo "Iran side" || echo "Kharej side"; }
-tm_dir(){ [ "$(jraw "$1" reverse)" = true ] && echo reverse || echo direct; }
+tm_role(){ if cfg_is_dial "$1"; then echo "Iran side"; else echo "Kharej side"; fi; }
+tm_dir(){ if cfg_is_reverse "$1"; then echo reverse; else echo direct; fi; }
 
 # tm_healthy UNIT: running and not crash-restarting (same PID over ~5 s).
 tm_healthy(){
@@ -2227,8 +2366,38 @@ tm_validate(){
   done <<<"$out"
   return $rc
 }
+# tm_bilateral_changed OLDCFG NEWCFG — prints the names of any config fields
+# that MUST be identical on the OTHER server (they travel in the hs2:// link or
+# decide authentication) and that the edit changed. tm_validate only checks the
+# LOCAL file, so a one-sided change to one of these passes validation and
+# restarts cleanly here yet silently breaks the tunnel — this surfaces it.
+tm_bilateral_changed(){ # oldcfg newcfg
+  local spec key getter old new
+  for spec in shared_key:jget carrier:jget encap:jget sni:jget local_cidr:jget addr:jget mtu:jraw proto:jraw reverse:jraw; do
+    key=${spec%:*}; getter=${spec#*:}
+    old=$("$getter" "$1" "$key"); new=$("$getter" "$2" "$key")
+    [ "$old" = "$new" ] || echo "$key"
+  done
+}
+
+# tm_bilateral_warn CHANGED — warn about bilateral fields the edit changed and
+# give the operator the safe remediation. CHANGED is the newline list from
+# tm_bilateral_changed; empty => nothing to say.
+tm_bilateral_warn(){ # changed-list
+  [ -n "$1" ] || return 0
+  local k
+  echo >&2; hr
+  warn "You changed setting(s) that MUST be the SAME on the OTHER server:"
+  for k in $1; do say "     • $k"; done
+  warn "Until the other side matches, this tunnel will not come up or will not authenticate —"
+  warn "the check above only validates THIS server's file, not the pair."
+  info "Fix the other server: edit its config to the same value(s), or re-run 'bash install.sh'"
+  info "on the LINK-MAKING side to generate a fresh link and paste it there."
+  hr
+}
+
 tm_edit(){
-  local u="$1" cfg="$2" ed tmp c a since
+  local u="$1" cfg="$2" ed tmp c a since changed
   [ -f "$cfg" ] || { err "Config file not found: $cfg"; return 0; }
   ed=$(tm_editor); [ -n "$ed" ] || { err "No text editor available (apt install nano)."; return 0; }
   tmp=$(mktemp /tmp/hs2-edit.XXXXXX); chmod 600 "$tmp"; cp "$cfg" "$tmp"
@@ -2254,6 +2423,9 @@ tm_edit(){
     case "${c:-1}" in 2) rm -f "$tmp"; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
   done
   cp -p "$cfg" "$cfg.prev"
+  # Capture which bilateral (must-match-the-peer) fields the edit changed, while
+  # $cfg is still the OLD file and $tmp holds the NEW one (before the swap).
+  changed=$(tm_bilateral_changed "$cfg" "$tmp")
   cat "$tmp" > "$cfg"; rm -f "$tmp"
   ok "Saved. The previous version is kept as $cfg.prev"
   since=$(date '+%Y-%m-%d %H:%M:%S')
@@ -2262,13 +2434,15 @@ tm_edit(){
   if tm_healthy "$u"; then
     ok "Applied — $u is running with the new config."
     tm_log_since "$u" "$since"
+    tm_bilateral_warn "$changed"
     return 0
   fi
   err "$u did not come up with the new config. Log:"
   tm_log_since "$u" "$since"
   read -rp "Put the previous config back and restart? [Y/n]: " a </dev/tty || a=y
   case "${a:-y}" in
-    n|N|no) warn "Left the new config in place. Fix it with Edit, or restore $cfg.prev." ;;
+    n|N|no) warn "Left the new config in place. Fix it with Edit, or restore $cfg.prev."
+            tm_bilateral_warn "$changed" ;;
     *)
       cat "$cfg.prev" > "$cfg"
       since=$(date '+%Y-%m-%d %H:%M:%S')
@@ -2359,7 +2533,7 @@ tm_tune_manual(){ # unit cfg
     3) r=33554432; w=33554432; b=16384; s=8192 ;;
     4) read -rp "Buffer size in MB (e.g. 24): " m </dev/tty
        case "$m" in ''|*[!0-9]*) warn "Not a number."; return 0 ;; esac
-       r=$((m*1024*1024)); w=$r; b=8192; s=4096 ;;
+       r=$((10#$m*1024*1024)); w=$r; b=8192; s=4096 ;;
     0|b|B|"") return 0 ;;
     *) warn "Invalid choice."; return 0 ;;
   esac
@@ -2439,7 +2613,7 @@ tunnel_manager(){
       0|b|B|q) return 0 ;;
       r|R|"") continue ;;
       *[!0-9]*) warn "Invalid choice." ;;
-      *) if [ "$c" -ge 1 ] && [ "$c" -le ${#TM_UNITS[@]} ]; then tm_tunnel_menu "${TM_UNITS[$((c-1))]}"
+      *) if [ "$c" -ge 1 ] && [ "$c" -le ${#TM_UNITS[@]} ]; then tm_tunnel_menu "${TM_UNITS[$((10#$c-1))]}"
          else warn "There is no tunnel $c."; fi ;;
     esac
   done
