@@ -197,10 +197,55 @@ these real issues were found and fixed:
   (standalone authenticator); the link-pool screen (U7) does not note that the
   other side has its own cap; the config editor is always nano.
 
+## Phase E — fixes from the second real-server review
+
+The same independent reviewer re-tested the post-review build on a live server
+(and ran a full direct-mode tunnel: TLS 1.3, matching keys, no plaintext on the
+wire, hot cert reload, recovery after a killed link — all sound). It confirmed
+the TCP_INFO fix with strace on both sides, and found two real problems with the
+post-review fixes themselves:
+
+- **🔴 The tunnel-manager menu died after every config edit** (`tmp: unbound
+  variable` on Back). The edit temp's cleanup used `trap … RETURN`; a RETURN
+  trap set in a function stays installed after the function returns and fires
+  again when the *caller* returns — where `$tmp` no longer exists — and
+  `set -u` killed the installer. (Our earlier claim, and the reviewer's, that it
+  did not leak was wrong: the test that "proved" it never returned from the
+  menu.) Fix: no RETURN trap at all. Every return path already removed the temp
+  explicitly; an abnormal exit (Ctrl+C, SIGTERM, a `set -e` abort) is now
+  covered by the existing `on_exit` EXIT handler via `HS2_EDIT_TMP`, and a hard
+  kill by the startup sweep. The tunnel itself was never affected.
+- **🟡 Probes other than the five plain-HTTP starts still closed with an RST**
+  (DELETE, an HTTP/2 preface, random bytes) where a real Go HTTPS server sends a
+  FIN. Cause: the 5-byte pre-TLS peek read *less* of the socket than crypto/tls
+  does in its first read, leaving the rest of a small probe unread at close.
+  Fix: the peek and its `prefixConn` wrapper are gone. `tls.Server` reads the
+  socket itself, and a plain-HTTP request is recognised exactly the way
+  net/http recognises it — from `tls.RecordHeaderError` — and answered with the
+  same bytes and the same close. Read sizes, and therefore FIN vs RST, are now
+  Go's own by construction rather than an imitation. (This supersedes the
+  post-review "drain before close" patch, which only covered the 400 path.)
+  Listener-side only, no wire change.
+
+Not changed in this phase: the default cover page is still the same on every
+install (see Known limitations above — set `backend_addr` to your own site).
+
+New tests: `hs2-src/install/tests/tm_edit_test.sh` drives the real
+`tm_tunnel_menu` through a pty under the installer's real `set -euo pipefail`
+(Edit → Back, a saved edit, two edits, SIGTERM while the editor is open, a
+`set -e` abort mid-apply) and forbids `trap … RETURN` in install.sh; it fails on
+the previous install.sh. `TestProbeCloseMatchesStdlib` sends ten probes to both
+our listener and a real net/http HTTPS server and requires the same bytes and
+the same FIN-vs-RST for each; it failed on the previous server.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.
-- Bash: sourced-core unit tests + pty tests for the interactive prompts.
+- Bash: sourced-core unit tests + pty tests for the interactive prompts
+  (including `tm_edit_test.sh`, which drives the menu under the real shell
+  options).
+- Probe behaviour is checked differentially against a real net/http HTTPS
+  server, not against our own expectation of it.
 - `hs2-src/install/tests/release_files_test.sh`: the two `install.sh` copies are
   byte-identical and the published sha256 files match their targets.
 - `shellcheck -S warning` clean on `install.sh`.

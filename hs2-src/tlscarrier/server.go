@@ -3,6 +3,7 @@ package tlscarrier
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"sync"
@@ -38,14 +39,11 @@ func (s *Server) init() { s.once.Do(func() { s.replay = newReplayMem() }) }
 // timing-coherence gain, and the per-connection probe shield is not built yet.
 const firstReadTimeout = 30 * time.Second
 
-// handshakeTimeout is ONE wall-clock budget shared by the 5-byte record-header
-// peek AND the TLS handshake together (see Handle) — they do not stack. So the
-// most a flood of half-open connections can hold a goroutine/fd is this value,
-// matching the pre-peek behaviour (the old code bounded the handshake alone at
-// authTimeout = 10s). A genuine client sends its ClientHello header+body in one
+// handshakeTimeout bounds the TLS handshake (from accept to a finished
+// handshake), so the most a flood of half-open connections can hold a
+// goroutine/fd is this value. A genuine client sends its ClientHello in one
 // flight and completes 1-RTT TLS in well under this even on a lossy
-// Iran↔foreign path, so 10s is ample for real clients while giving mass probing
-// no cheaper a hold than before. (A per-connection probe shield is deferred.)
+// Iran↔foreign path. (A per-connection probe shield is deferred.)
 const handshakeTimeout = 10 * time.Second
 
 // httpToHTTPS400 is the exact response Go's own HTTPS server sends when it gets
@@ -58,8 +56,8 @@ const httpToHTTPS400 = "HTTP/1.0 400 Bad Request\r\n\r\nClient sent an HTTP requ
 // tlsRecordHeaderLooksLikeHTTP mirrors net/http's own detection verbatim: ONLY
 // these exact 5-byte request starts are answered as plain HTTP. Every other
 // start — including other HTTP methods like DELETE — is not; a real Go HTTPS
-// server lets those fail at the TLS layer, and so do we (by handing the bytes to
-// tls.Server unchanged). Matching Go's exact set is what keeps us coherent.
+// server lets those fail at the TLS layer, and so do we. Matching Go's exact
+// set is what keeps us coherent.
 func tlsRecordHeaderLooksLikeHTTP(h [5]byte) bool {
 	switch string(h[:]) {
 	case "GET /", "HEAD ", "POST ", "PUT /", "OPTIO":
@@ -68,78 +66,12 @@ func tlsRecordHeaderLooksLikeHTTP(h [5]byte) bool {
 	return false
 }
 
-// prefixConn re-serves bytes already read from the underlying conn (the peeked
-// record header) before delegating to it. It stays wrapped around the conn for
-// the connection's whole life, so the authenticated data path keeps reading
-// through it; once the prefix is drained each Read is just one len-check and a
-// pass-through call — no allocation and no copy, negligible beside the per-record
-// AEAD — not literally removed from the path.
-type prefixConn struct {
-	net.Conn
-	prefix []byte
-}
-
-func (p *prefixConn) Read(b []byte) (int, error) {
-	if len(p.prefix) > 0 {
-		n := copy(b, p.prefix)
-		p.prefix = p.prefix[n:]
-		return n, nil
-	}
-	return p.Conn.Read(b)
-}
-
-// NetConn exposes the wrapped connection so a caller unwrapping to the kernel
-// socket (Carrier.TCPConn, for TCP_INFO stats) can see past this peek wrapper.
-// Mirrors *tls.Conn.NetConn(), which is how the TLS layer above us is unwrapped.
-func (p *prefixConn) NetConn() net.Conn { return p.Conn }
-
 // Handle takes a raw accepted TCP conn, completes TLS, and routes it. On an
 // authorised client it returns a ready carrier via onTunnel; otherwise it
 // proxies the decrypted stream to the backend so the peer gets real content.
 func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrier)) {
 	s.init()
 	tuneTCP(raw)
-
-	// Classify the connection by its first 5 bytes (a TLS record header is 5
-	// bytes, and so is the shortest HTTP request start we recognise) BEFORE
-	// handing it to TLS. A plain-HTTP probe is then answered exactly as a Go
-	// HTTPS server answers it, instead of the old silent close that was a
-	// fingerprint. Everything that is not one of net/http's recognised HTTP
-	// starts — a real TLS client, or genuine garbage — flows into tls.Server
-	// unchanged via prefixConn, so its behaviour stays byte-identical to a real
-	// Go TLS server. The authenticated data path is untouched.
-	// ONE wall-clock budget covers the peek AND the handshake below, so the two
-	// do not stack: a stalling probe cannot spend handshakeTimeout on the peek
-	// and then another handshakeTimeout on the handshake. Total half-open hold is
-	// bounded by this single deadline — the same bound the handshake had before
-	// the peek existed.
-	deadline := time.Now().Add(handshakeTimeout)
-	raw.SetReadDeadline(deadline)
-	var hdr [5]byte
-	nh, herr := io.ReadFull(raw, hdr[:])
-	if nh == 0 || (herr != nil && herr != io.ErrUnexpectedEOF) {
-		// Nothing arrived, or a read error/timeout before a usable header: close
-		// like a server that never received a request.
-		raw.Close()
-		return
-	}
-	if nh == 5 && tlsRecordHeaderLooksLikeHTTP(hdr) {
-		raw.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		io.WriteString(raw, httpToHTTPS400)
-		// Consume the rest of the (already-buffered) request line/headers before
-		// closing, so the close is a clean FIN like a real Go HTTPS server rather
-		// than an RST triggered by unread data in the socket buffer — the
-		// RST-vs-FIN difference is observable. One bounded read, ≤1s, is enough:
-		// a plain-HTTP request arrives in one flight and is tiny.
-		raw.SetReadDeadline(time.Now().Add(1 * time.Second))
-		var discard [2048]byte
-		raw.Read(discard[:])
-		raw.Close()
-		return
-	}
-	// Replay the peeked bytes to TLS. A short read (nh < 5) is a malformed start;
-	// tls.Server rejects it exactly as it would without the peek.
-	raw = &prefixConn{Conn: raw, prefix: append([]byte(nil), hdr[:nh]...)}
 
 	tcfg := &tls.Config{
 		MinVersion: tls.VersionTLS12,
@@ -151,8 +83,20 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		tcfg.Certificates = []tls.Certificate{s.Cert}
 	}
 	tconn := tls.Server(raw, tcfg)
-	tconn.SetDeadline(deadline) // SAME budget as the peek — the two do not stack
+	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := tconn.Handshake(); err != nil {
+		// Probe handling is Go's OWN, not an imitation of it: TLS reads the
+		// socket itself (so how much of a probe is consumed — and therefore
+		// whether the close is a FIN or an RST — is exactly crypto/tls's), and a
+		// first record that is not TLS surfaces as tls.RecordHeaderError, which
+		// is precisely what net/http's HTTPS server inspects to answer a
+		// plain-HTTP request. Same check, same bytes, same close as net/http.
+		var re tls.RecordHeaderError
+		if errors.As(err, &re) && re.Conn != nil && tlsRecordHeaderLooksLikeHTTP(re.RecordHeader) {
+			io.WriteString(re.Conn, httpToHTTPS400)
+			re.Conn.Close()
+			return
+		}
 		raw.Close()
 		return
 	}

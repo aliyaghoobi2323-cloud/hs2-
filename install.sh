@@ -88,8 +88,10 @@ HS2_STOPPED_UNITS=""
 # some other operation (e.g. restore) has since put in place.
 HS2_STASHED_UNITS=""
 HS2_DIED=0
+HS2_EDIT_TMP=""   # the live config-edit temp (a key-bearing copy), while tm_edit runs
 on_exit(){
   local rc=$? cmd=$BASH_COMMAND u uc
+  [ -z "${HS2_EDIT_TMP:-}" ] || rm -f "$HS2_EDIT_TMP" 2>/dev/null || true
   if [ "$rc" != 0 ] && [ "$HS2_DIED" != 1 ]; then
     err "The installer stopped unexpectedly (status $rc) at: $cmd"
     err "Please send this line to the developer."
@@ -2606,12 +2608,14 @@ tm_edit(){
   local u="$1" cfg="$2" ed tmp c a since changed
   [ -f "$cfg" ] || { err "Config file not found: $cfg"; return 0; }
   ed=$(tm_editor); [ -n "$ed" ] || { err "No text editor available (apt install nano)."; return 0; }
-  tmp=$(mktemp "$CFG_DIR/.hs2-edit.XXXXXX"); chmod 600 "$tmp"
+  tmp=$(mktemp "$CFG_DIR/.hs2-edit.XXXXXX"); HS2_EDIT_TMP="$tmp"; chmod 600 "$tmp"
   # The temp is a full copy of the config, which holds the tunnel key — keep it
   # OUT of world-namespace /tmp (beside the config, same root-only 600 domain).
-  # Remove it on any return from this function; a startup sweep clears one left
-  # behind by an interrupt (Ctrl+C at a prompt).
-  trap 'rm -f "$tmp" 2>/dev/null' RETURN
+  # Every return path below removes it explicitly. An abnormal exit (Ctrl+C,
+  # SIGTERM, a set -e abort) is covered by on_exit via HS2_EDIT_TMP, and a hard
+  # kill by the startup sweep. Deliberately NOT a `trap … RETURN`: a RETURN trap
+  # set in a function stays installed after it returns and fires again when the
+  # CALLER returns — where $tmp is unbound, so set -u killed the menu on Back.
   cp "$cfg" "$tmp"
   echo >&2
   info "The config opens in $ed."
@@ -2622,7 +2626,7 @@ tm_edit(){
   while :; do
     "$ed" "$tmp" </dev/tty >/dev/tty 2>&1 || true
     if cmp -s "$tmp" "$cfg"; then
-      rm -f "$tmp"; info "No changes — $u was not restarted."; return 0
+      rm -f "$tmp"; HS2_EDIT_TMP=""; info "No changes — $u was not restarted."; return 0
     fi
     say ""; say " Your changes:"
     diff -u "$cfg" "$tmp" 2>/dev/null | tail -n +3 | grep '^[-+]' | sed -e "s/^-/  ${C_R}- /" -e "s/^+/  ${C_G}+ /" -e "s/\$/${C_0}/" >&2 || true
@@ -2632,13 +2636,13 @@ tm_edit(){
     say "    1) Open the editor again to fix it"
     say "    2) Throw away my changes"
     read -rp "  Choose [1]: " c </dev/tty || c=2
-    case "${c:-1}" in 2) rm -f "$tmp"; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
+    case "${c:-1}" in 2) rm -f "$tmp"; HS2_EDIT_TMP=""; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
   done
   cp -p "$cfg" "$cfg.prev"
   # Capture which bilateral (must-match-the-peer) fields the edit changed, while
   # $cfg is still the OLD file and $tmp holds the NEW one (before the swap).
   changed=$(tm_bilateral_changed "$cfg" "$tmp")
-  cat "$tmp" > "$cfg"; rm -f "$tmp"
+  cat "$tmp" > "$cfg"; rm -f "$tmp"; HS2_EDIT_TMP=""
   ok "Saved. The previous version is kept as $cfg.prev"
   since=$(date '+%Y-%m-%d %H:%M:%S')
   info "Restarting $u to apply the change…"
