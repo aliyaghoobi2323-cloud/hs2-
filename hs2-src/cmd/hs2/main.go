@@ -687,8 +687,8 @@ func startBuiltinBackend() (string, error) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Northlane</title>
-<meta name="description" content="Northlane is a small studio building dependable web and cloud software for growing teams.">
+<title>Oakline</title>
+<meta name="description" content="Oakline is a small studio building dependable web and cloud software for growing teams.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f6bed'/%3E%3Cpath d='M9 22V10l14 12V10' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <style>
   :root{
@@ -725,11 +725,14 @@ func startBuiltinBackend() (string, error) {
   .btn{display:inline-block;background:var(--accent);color:var(--accent-fg);font-weight:600;font-size:15px;
     padding:12px 22px;border-radius:9px;transition:opacity .15s}
   .btn:hover{opacity:.9}
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding:8px 0 80px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding:8px 0 40px}
   @media (max-width:820px){.grid{grid-template-columns:1fr}}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px;box-shadow:var(--shadow)}
   .card h3{margin:0 0 8px;font-size:18px;letter-spacing:-.01em}
   .card p{margin:0;color:var(--muted);font-size:15px}
+  .sect{padding:4px 0 60px}
+  .sect h2{font-size:26px;letter-spacing:-.02em;margin:0 0 12px}
+  .sect p{color:var(--muted);max-width:60ch;margin:0;font-size:16px}
   .ic{width:38px;height:38px;border-radius:10px;background:color-mix(in srgb,var(--accent) 16%,transparent);
     display:flex;align-items:center;justify-content:center;margin-bottom:16px;color:var(--accent)}
   footer{border-top:1px solid var(--line);color:var(--muted);font-size:14px}
@@ -743,11 +746,10 @@ func startBuiltinBackend() (string, error) {
   <div class="wrap bar">
     <a class="brand" href="/">
       <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#4f6bed"/><path d="M9 22V10l14 12V10" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Northlane
+      Oakline
     </a>
     <nav>
       <a href="/#services">Services</a>
-      <a href="/#work">Work</a>
       <a href="/#about">About</a>
       <a href="/#contact">Contact</a>
     </nav>
@@ -757,7 +759,7 @@ func startBuiltinBackend() (string, error) {
 <main>
   <section class="wrap hero">
     <h1>Dependable software for growing teams.</h1>
-    <p>Northlane is a small studio that designs, builds, and maintains web and cloud applications — the quiet infrastructure your product runs on.</p>
+    <p>Oakline is a small studio that designs, builds, and maintains web and cloud applications — the quiet infrastructure your product runs on.</p>
     <a class="btn" href="/#contact">Get in touch</a>
   </section>
 
@@ -778,14 +780,24 @@ func startBuiltinBackend() (string, error) {
       <p>Steady maintenance and on-call help, so small problems stay small.</p>
     </div>
   </section>
+
+  <section class="wrap sect" id="about">
+    <h2>About</h2>
+    <p>We are a small, senior team that has shipped and maintained production systems for over a decade. We take on a handful of engagements at a time, so each one gets real attention from the people actually doing the work.</p>
+  </section>
+
+  <section class="wrap sect" id="contact">
+    <h2>Contact</h2>
+    <p>Have a project in mind, or an existing system that needs a steady hand? Tell us a little about what you are building and we will get back to you within a couple of working days.</p>
+  </section>
 </main>
 
 <footer>
   <div class="wrap foot">
-    <div>&copy; 2026 Northlane Studio. All rights reserved.</div>
+    <div>&copy; 2026 Oakline Studio. All rights reserved.</div>
     <nav>
-      <a href="/#privacy">Privacy</a>
-      <a href="/#terms">Terms</a>
+      <a href="/#services">Services</a>
+      <a href="/#about">About</a>
       <a href="/#contact">Contact</a>
     </nav>
   </div>
@@ -793,7 +805,13 @@ func startBuiltinBackend() (string, error) {
 </body>
 </html>
 `)
-	modtime := time.Date(2026, 1, 15, 9, 3, 12, 0, time.UTC)
+	// Last-Modified a fixed span in the past, computed at startup from THIS
+	// host's clock and truncated to the hour. Relative (not a frozen absolute
+	// date) so it is always earlier than the auto Date header — no "modified in
+	// the future" anomaly even on a host whose clock lags — and never drifts
+	// visibly stale across years; the hour truncation keeps it stable and
+	// unremarkably coarse rather than a suspiciously exact instant.
+	modtime := time.Now().Add(-37 * 24 * time.Hour).Truncate(time.Hour)
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		// Everything but "/" is a plain Go 404, like any static file server. No
 		// Server header is sent: our TLS terminator is Go's, so a stray "nginx"

@@ -38,13 +38,15 @@ func (s *Server) init() { s.once.Do(func() { s.replay = newReplayMem() }) }
 // timing-coherence gain, and the per-connection probe shield is not built yet.
 const firstReadTimeout = 30 * time.Second
 
-// handshakeTimeout bounds the TLS handshake and the 5-byte record-header peek
-// before it. A real tunnel client completes the handshake in a few round trips
-// even on a lossy Iran↔foreign path, so 15s is comfortably enough for a genuine
-// client while keeping the hold a flood of half-open handshakes can impose close
-// to the old 10s — again favouring the probe-load constraint over chasing
-// nginx's longer default.
-const handshakeTimeout = 15 * time.Second
+// handshakeTimeout is ONE wall-clock budget shared by the 5-byte record-header
+// peek AND the TLS handshake together (see Handle) — they do not stack. So the
+// most a flood of half-open connections can hold a goroutine/fd is this value,
+// matching the pre-peek behaviour (the old code bounded the handshake alone at
+// authTimeout = 10s). A genuine client sends its ClientHello header+body in one
+// flight and completes 1-RTT TLS in well under this even on a lossy
+// Iran↔foreign path, so 10s is ample for real clients while giving mass probing
+// no cheaper a hold than before. (A per-connection probe shield is deferred.)
+const handshakeTimeout = 10 * time.Second
 
 // httpToHTTPS400 is the exact response Go's own HTTPS server sends when it gets
 // a plain-HTTP request on a TLS port. We reproduce it byte-for-byte (pinned by a
@@ -67,9 +69,11 @@ func tlsRecordHeaderLooksLikeHTTP(h [5]byte) bool {
 }
 
 // prefixConn re-serves bytes already read from the underlying conn (the peeked
-// record header) and then becomes a transparent passthrough: once the prefix is
-// drained, Read delegates straight to the underlying conn with no copy, so the
-// authenticated data path carries zero steady-state overhead from the peek.
+// record header) before delegating to it. It stays wrapped around the conn for
+// the connection's whole life, so the authenticated data path keeps reading
+// through it; once the prefix is drained each Read is just one len-check and a
+// pass-through call — no allocation and no copy, negligible beside the per-record
+// AEAD — not literally removed from the path.
 type prefixConn struct {
 	net.Conn
 	prefix []byte
@@ -99,10 +103,15 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	// starts — a real TLS client, or genuine garbage — flows into tls.Server
 	// unchanged via prefixConn, so its behaviour stays byte-identical to a real
 	// Go TLS server. The authenticated data path is untouched.
-	raw.SetReadDeadline(time.Now().Add(handshakeTimeout))
+	// ONE wall-clock budget covers the peek AND the handshake below, so the two
+	// do not stack: a stalling probe cannot spend handshakeTimeout on the peek
+	// and then another handshakeTimeout on the handshake. Total half-open hold is
+	// bounded by this single deadline — the same bound the handshake had before
+	// the peek existed.
+	deadline := time.Now().Add(handshakeTimeout)
+	raw.SetReadDeadline(deadline)
 	var hdr [5]byte
 	nh, herr := io.ReadFull(raw, hdr[:])
-	raw.SetReadDeadline(time.Time{})
 	if nh == 0 || (herr != nil && herr != io.ErrUnexpectedEOF) {
 		// Nothing arrived, or a read error/timeout before a usable header: close
 		// like a server that never received a request.
@@ -110,7 +119,7 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		return
 	}
 	if nh == 5 && tlsRecordHeaderLooksLikeHTTP(hdr) {
-		raw.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		raw.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		io.WriteString(raw, httpToHTTPS400)
 		raw.Close()
 		return
@@ -129,7 +138,7 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		tcfg.Certificates = []tls.Certificate{s.Cert}
 	}
 	tconn := tls.Server(raw, tcfg)
-	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
+	tconn.SetDeadline(deadline) // SAME budget as the peek — the two do not stack
 	if err := tconn.Handshake(); err != nil {
 		raw.Close()
 		return

@@ -38,7 +38,7 @@ func TestBuiltinBackendServesCover(t *testing.T) {
 	if strings.Contains(s, "nginx") {
 		t.Fatalf("cover page still mentions nginx: %q", s)
 	}
-	if !strings.Contains(s, "Northlane") || !strings.Contains(s, "<!doctype html>") {
+	if !strings.Contains(s, "Oakline") || !strings.Contains(s, "<!doctype html>") {
 		t.Fatalf("cover page is not the expected static site: %q", s)
 	}
 }
