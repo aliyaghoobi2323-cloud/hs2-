@@ -10,6 +10,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 )
 
 // doctorCmd implements `hs2 doctor -c config.json`: a read-only, on-box health
@@ -135,7 +137,12 @@ func checkEndpoint(d *doctorReport, fc fileConfig) {
 	if fc.Addr == "" || !tcpCarrier[fc.Carrier] || !dialing(fc) {
 		return
 	}
-	c, err := net.DialTimeout("tcp", fc.Addr, 4*time.Second)
+	// 8 s (not a tight 4 s): an Iran↔foreign path is high-latency and often
+	// lossy, and a dropped SYN is retransmitted at ~1 s then ~3 s, so a healthy
+	// endpoint still completes within 8 s even through a couple of SYN losses —
+	// while a filtered or down exit (the failure that matters most here) still
+	// fails loudly. The timeout also covers DNS resolution.
+	c, err := net.DialTimeout("tcp", fc.Addr, 8*time.Second)
 	if err != nil {
 		d.fail("endpoint", fmt.Sprintf("cannot TCP-connect to %s: %v (filtered? wrong address? exit down?)", fc.Addr, err))
 		return
@@ -144,11 +151,20 @@ func checkEndpoint(d *doctorReport, fc fileConfig) {
 	d.ok("endpoint", fmt.Sprintf("TCP connect to %s succeeded", fc.Addr))
 }
 
-// checkCert validates the server certificate (only the side that terminates TLS
-// configures one). Expired is fatal; within a week is a warning (certbot renews
-// and the daemon hot-reloads, so no restart).
+// certCarrier is the set of carriers that terminate TLS with a real
+// certificate. Datagram carriers (udp/auto/dgtun) and noise use their own
+// crypto and no cert_file.
+var certCarrier = map[string]bool{"mtcp": true, "l3mtcp": true, "l3": true, "tls": true, "reality": true}
+
+// checkCert validates the server certificate. The cert is used ONLY by the side
+// that terminates TLS — the side that LISTENS for a TLS carrier (direct: the
+// exit; reverse: the edge). On the dialing side, or a non-TLS carrier, a stray
+// cert_file is never used by the tunnel, so doctor does not fail on it (that
+// would be stricter than the daemon, which only loads the cert on the server
+// side). Expired is fatal; within a week is a warning (certbot renews and the
+// daemon hot-reloads, so no restart).
 func checkCert(d *doctorReport, fc fileConfig) {
-	if fc.CertFile == "" {
+	if fc.CertFile == "" || dialing(fc) || !certCarrier[fc.Carrier] {
 		return
 	}
 	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
@@ -238,7 +254,7 @@ func addrsContainCIDR(got []string, cidr string) bool {
 // settings a container forbids (skipped silently). A mismatch is a warning, not
 // a failure.
 func checkTuning(d *doctorReport, fc fileConfig) {
-	plan := buildTunePlan(fc)
+	plan := doctorTunePlan(fc)
 	if plan.Profile == "off" {
 		d.info("kernel tuning", "mode=off — system sysctls intentionally left untouched")
 		return
@@ -278,3 +294,47 @@ func checkTuning(d *doctorReport, fc fileConfig) {
 // ends, so a multi-field sysctl like net.ipv4.tcp_rmem ("4096\t131072\t...")
 // compares equal to the plan's space-separated value.
 func normalizeWS(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// doctorTunePlan builds the kernel-tuning plan WITHOUT the production
+// availability probes' side effects. tune.AvailableCC / tune.AvailableQdisc run
+// `modprobe` to try loading a missing module — which a read-only diagnostic
+// must not do, and which would need root. Here availability is decided by
+// reading /proc only (and the always-built-in qdiscs), so doctor never loads a
+// module and never needs root. When the tunnel is running, the modules it needs
+// are already loaded, so this read-only view agrees with the plan the daemon
+// actually applied; when it is not running, a would-be-loadable congestion
+// control simply reads as unavailable, which only softens a WARN.
+func doctorTunePlan(fc fileConfig) *tune.Plan {
+	var cfg tune.Config
+	if fc.Tuning != nil {
+		cfg = *fc.Tuning
+	}
+	ram, cpus := tune.Detect()
+	availCC := func(name string) bool {
+		return name != "" && procListHas("/proc/sys/net/ipv4/tcp_available_congestion_control", name)
+	}
+	availQ := func(name string) bool {
+		switch name {
+		case "fq", "fq_codel", "pfifo_fast", "sfq":
+			return true // built in on essentially every kernel — no load needed
+		}
+		return false // do not modprobe to find out; a custom qdisc may only soften a WARN
+	}
+	return tune.Build(cfg, ram, cpus, availCC, availQ)
+}
+
+// procListHas reports whether name appears as a whitespace-separated field in
+// the file at path (a read-only mirror of tune's internal inProcList, kept here
+// so doctor never triggers a module load).
+func procListHas(path, name string) bool {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	for _, f := range strings.Fields(string(b)) {
+		if f == name {
+			return true
+		}
+	}
+	return false
+}

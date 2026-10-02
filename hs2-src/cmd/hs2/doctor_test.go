@@ -73,7 +73,8 @@ func TestCheckCert(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			cert, key := writeCert(t, c.notAfter)
 			d := &doctorReport{}
-			checkCert(d, fileConfig{CertFile: cert, KeyFile: key})
+			// TLS-server side (listener of a TLS carrier) — the cert check runs.
+			checkCert(d, fileConfig{Mode: "listen", Carrier: "tls", CertFile: cert, KeyFile: key})
 			if d.fails != c.wantFail || d.warns != c.wantWarn {
 				t.Errorf("%s: fails=%d warns=%d, want fails=%d warns=%d (line: %q)",
 					c.name, d.fails, d.warns, c.wantFail, c.wantWarn, strings.Join(d.lines, " | "))
@@ -82,15 +83,36 @@ func TestCheckCert(t *testing.T) {
 	}
 	// no cert configured -> no check emitted at all
 	d := &doctorReport{}
-	checkCert(d, fileConfig{})
+	checkCert(d, fileConfig{Mode: "listen", Carrier: "tls"})
 	if len(d.lines) != 0 {
 		t.Errorf("no cert_file should emit nothing, got %v", d.lines)
 	}
-	// a cert_file that does not exist -> FAIL (not a silent skip)
+	// a cert_file that does not exist, on the server side -> FAIL (not a silent skip)
 	d = &doctorReport{}
-	checkCert(d, fileConfig{CertFile: "/no/such/cert.pem", KeyFile: "/no/such/key.pem"})
+	checkCert(d, fileConfig{Mode: "listen", Carrier: "tls", CertFile: "/no/such/cert.pem", KeyFile: "/no/such/key.pem"})
 	if d.fails != 1 {
 		t.Errorf("missing cert file should FAIL, got %v", d.lines)
+	}
+	// gating: an EXPIRED cert on the DIALER side must be SKIPPED, not FAIL — the
+	// tunnel never uses it there (Finding 2).
+	cert, key := writeCert(t, time.Now().Add(-time.Hour))
+	d = &doctorReport{}
+	checkCert(d, fileConfig{Mode: "dial", Carrier: "tls", CertFile: cert, KeyFile: key})
+	if len(d.lines) != 0 {
+		t.Errorf("expired cert on the dialer side should be skipped, got %v", d.lines)
+	}
+	// gating: a cert on a non-TLS carrier (even on the listen side) is skipped.
+	d = &doctorReport{}
+	checkCert(d, fileConfig{Mode: "listen", Carrier: "dgtun", CertFile: cert, KeyFile: key})
+	if len(d.lines) != 0 {
+		t.Errorf("cert on a non-TLS carrier should be skipped, got %v", d.lines)
+	}
+	// reverse edge (mode=dial + reverse) LISTENS, so it legitimately bears the
+	// cert and the check must run (expired -> FAIL).
+	d = &doctorReport{}
+	checkCert(d, fileConfig{Mode: "dial", Reverse: true, Carrier: "tls", CertFile: cert, KeyFile: key})
+	if d.fails != 1 {
+		t.Errorf("reverse edge is the TLS server; expired cert should FAIL, got %v", d.lines)
 	}
 }
 

@@ -2814,6 +2814,7 @@ tm_delete(){ # unit
 # keeps the capture safe under set -e even on that exit-1.
 tm_doctor(){ # unit cfg
   local u="$1" cfg="$2" out
+  if [ -z "$cfg" ]; then warn "Cannot find $u's config path (its service file may be hand-edited)."; pause; return 0; fi
   out=$("$BIN" doctor -c "$cfg" 2>&1) || true
   if printf '%s' "$out" | grep -q "unknown command"; then
     warn "This hs2 binary is too old for 'doctor'. Upgrade first (menu → 5, or 'u' here)."; pause; return 0
