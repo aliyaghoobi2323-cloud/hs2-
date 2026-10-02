@@ -785,9 +785,15 @@ start_service(){
   # waiting, so the tunnel must connect NOW. A running service is not proof —
   # a raw encapsulation the path filters (gre/ipip often are) runs happily and
   # carries nothing — so nothing says "ready" until packets really cross.
-  if [ "${VERIFY_PEER:-0}" = 1 ] && ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-40}"; then
+  if [ "${VERIFY_PEER:-0}" = 1 ] && ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-60}"; then
     tunnel_down_help "$CFG"
-    bail
+    # The service is installed and RUNNING (it was health-checked just above) and
+    # retries on its own, so this is NOT a failed install — do not bail. On a
+    # high-latency Iran path the peer can still be coming up; if it connects later
+    # (the other side finishes, or the path opens) the tunnel comes up with no
+    # re-install. Report it and point at the live status instead of exiting hard.
+    warn "$UNIT is installed and running, and keeps trying on its own. Re-check once the OTHER server is up:"
+    warn "   hs2-menu → 3) Tunnel manager → $UNIT   (it shows ✓ connected when the peer answers)"
   fi
 }
 
@@ -803,7 +809,10 @@ tunnel_up(){ # cfg
   # that lets a handshake through and then kills the flow (the Iran border
   # does this to UDP) leaves carriers counted "up" with nothing crossing.
   if [ "$car" != mtcp ] && [ -n "$ifc" ] && [ -n "$peer" ]; then
-    ip link show "$ifc" >/dev/null 2>&1 && ping -c1 -W1 -I "$ifc" "$peer" >/dev/null 2>&1
+    # -W2 (not 1): tolerate a high-latency Iran↔foreign path so a working tunnel
+    # that answers a little slowly is not read as down. ping returns 0 on the
+    # first reply, so an UP tunnel stays fast; only a down one waits the 2 s.
+    ip link show "$ifc" >/dev/null 2>&1 && ping -c1 -W2 -I "$ifc" "$peer" >/dev/null 2>&1
     return $?
   fi
   # mtcp has no tun: a link counts only after the peer proved the key over it.
@@ -827,10 +836,14 @@ tunnel_conn_label(){ # cfg
   fi
 }
 
-# verify_tunnel CFG SECS: wait up to SECS for tunnel_up.
+# verify_tunnel CFG SECS: wait up to SECS for tunnel_up, probing every 2 s (so a
+# default 60 s window is ~30 probes — robust to a lossy path, since one reply is
+# enough). The default is generous because the peer may still be coming up,
+# especially on a slow Iran↔foreign path or before the other side is upgraded.
 verify_tunnel(){ # cfg secs
-  local end=$(( $(date +%s) + ${2:-40} ))
-  info "Checking that the tunnel really reaches the other server (up to ${2:-40} s)…"
+  local secs=${2:-60} end
+  end=$(( $(date +%s) + secs ))
+  info "Checking that the tunnel really reaches the other server (up to ${secs} s)…"
   while :; do
     if tunnel_up "$1"; then ok "Tunnel is UP — the other server answered through it."; return 0; fi
     [ "$(date +%s)" -lt "$end" ] || return 1
@@ -1481,6 +1494,7 @@ EOF
   fi
   info "On the Iran server: bash install.sh → 2 (Iran) → direction 'direct' → paste the link."
   info "It runs there as service $UNIT too (the name is in the link)."
+  info "Then check this side any time:  hs2-menu → 3) Tunnel manager → $UNIT  — it shows ✓ connected once the other server is up."
   tunnel_summary
 }
 
@@ -1851,6 +1865,7 @@ EOF
   info "On the Kharej server: bash install.sh → 1 (Kharej) → direction 'reverse' → paste the link."
   info "The tunnel is tested end-to-end there: that side only says ready once packets really cross."
   info "It runs there as service $UNIT too (the name is in the link)."
+  info "Then check this side any time:  hs2-menu → 3) Tunnel manager → $UNIT  — it shows ✓ connected once the other server is up."
   tunnel_summary
 }
 
@@ -2164,6 +2179,13 @@ tm_list(){
     extra=""
     [ "$st" = running ] && extra=" · $(tm_uptime "$u")"
     links=$(tm_links "$cfg"); [ "$st" = running ] && [ -n "$links" ] && extra="$extra · $links links"
+    # Real peer reachability, not just "the process is alive": a running service
+    # whose peer is gone (the other side deleted, down, or the path closed) would
+    # otherwise show green here while carrying nothing. tunnel_up actually proves
+    # the far end answers, so flag it plainly on the first screen the operator sees.
+    if [ "$st" = running ] && [ -f "$cfg" ] && ! tunnel_up "$cfg"; then
+      extra="$extra · ${C_R}✗ no peer${C_0}"
+    fi
     if tm_autostart "$u"; then extra="$extra · autostart ON"; else extra="$extra · ${C_Y}autostart OFF${C_0}"; fi
     say "  $i) ${C_B}$u${C_0}  $(tm_state_label "$st")$extra"
     if [ -f "$cfg" ]; then
@@ -2932,7 +2954,7 @@ upgrade(){ # [tunnel]
     systemctl enable "$u" >/dev/null 2>&1 || true
     if restart_unit "$u"; then
       ok "$u upgraded and running (autostart: $(systemctl is-enabled "$u" 2>/dev/null || true))."
-      if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-30}"; then
+      if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-60}"; then
         warn "$u has not reconnected yet. If the OTHER server still runs the old version, upgrade it"
         warn "too — it reconnects then. If both are upgraded and it stays down: journalctl -u $u -n 40 --no-pager"
       fi
@@ -2954,10 +2976,19 @@ upgrade(){ # [tunnel]
 
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
 case "${1:-}" in
-  manage)  tunnel_manager; exit 0 ;;
-  upgrade) upgrade "${2:-}"; exit 0 ;;
-  backup)  backup >/dev/null; exit 0 ;;
-  restore) restore "${2:-}"; exit 0 ;;
+  ''|menu)   ;;                                   # no argument → the interactive menu below
+  manage)    tunnel_manager; exit 0 ;;
+  upgrade)   upgrade "${2:-}"; exit 0 ;;
+  backup)    backup >/dev/null; exit 0 ;;
+  restore)   restore "${2:-}"; exit 0 ;;
+  status)    status; exit 0 ;;
+  uninstall) uninstall; exit 0 ;;
+  cleanup)   kernel_cleanup; exit 0 ;;
+  version)   "$BIN" version 2>/dev/null || die "hs2 is not installed on this server."; exit 0 ;;
+  *) err "unknown command: $1"
+     say "Usage: bash install.sh [manage | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
+     say "       (no argument opens the menu)"
+     exit 2 ;;
 esac
 
 # ---------- menu -------------------------------------------------------------
