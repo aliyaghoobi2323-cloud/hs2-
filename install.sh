@@ -2806,6 +2806,24 @@ tm_delete(){ # unit
   return 0
 }
 
+# tm_doctor runs `hs2 doctor` for one tunnel: a read-only health check (config,
+# endpoint reachability, certificate, TUN device, kernel tuning, clock). Like
+# tm_tune it captures first, THEN greps for the old-binary marker — piping
+# straight into grep -q would let pipefail surface the binary's own non-zero
+# (doctor exits 1 when it finds a problem) and mis-fire the guard. `|| true`
+# keeps the capture safe under set -e even on that exit-1.
+tm_doctor(){ # unit cfg
+  local u="$1" cfg="$2" out
+  out=$("$BIN" doctor -c "$cfg" 2>&1) || true
+  if printf '%s' "$out" | grep -q "unknown command"; then
+    warn "This hs2 binary is too old for 'doctor'. Upgrade first (menu → 5, or 'u' here)."; pause; return 0
+  fi
+  echo >&2; hr; say " ${C_B}Diagnose${C_0} — $u"; hr
+  printf '%s\n' "$out" | sed 's/^/  /' >&2
+  hr
+  pause
+}
+
 tm_tunnel_menu(){
   local u="$1" cfg c
   cfg=$(tm_cfg "$u")
@@ -2819,6 +2837,7 @@ tm_tunnel_menu(){
     say "  6) Live pattern monitor (parallel links, updating)"
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
+    say "  d) Diagnose (health check — config, endpoint, certificate, tuning)"
     say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
     say "  9) Delete this tunnel (service, config and tun interface)"
     say "  0) Back"
@@ -2832,6 +2851,7 @@ tm_tunnel_menu(){
       6) tm_monitor "$u" "$cfg" ;;
       7) tm_toggle_autostart "$u" ;;
       8) tm_tune "$u" "$cfg" ;;
+      d|D) tm_doctor "$u" "$cfg" ;;
       u|U) upgrade "$u"; pause ;;
       9) if tm_delete "$u"; then pause; return 0; fi ;;
       0|b|B|"") return 0 ;;

@@ -199,6 +199,8 @@ func main() {
 		runCmd(os.Args[2:])
 	case "check":
 		checkCmd(os.Args[2:])
+	case "doctor":
+		doctorCmd(os.Args[2:])
 	case "status":
 		statusCmd(os.Args[2:])
 	case "tune":
