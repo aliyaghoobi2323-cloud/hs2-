@@ -82,6 +82,11 @@ hr(){   _c '0;36' "────────────────────�
 # replaces the file under a running one, which keeps running until its own
 # restart — so an aborted setup leaves every tunnel as it was.)
 HS2_STOPPED_UNITS=""
+# Units whose config THIS run stashed to <cfg>.pre-replace (set only by
+# stop_for_replace). on_exit restores a stash ONLY for a unit in this list, so a
+# stale stash orphaned by an earlier hard-crash is never applied over a config
+# some other operation (e.g. restore) has since put in place.
+HS2_STASHED_UNITS=""
 HS2_DIED=0
 on_exit(){
   local rc=$? cmd=$BASH_COMMAND u uc
@@ -94,14 +99,19 @@ on_exit(){
     [ "$(systemctl is-active "$u" 2>/dev/null || true)" != active ] || continue
     # An interrupted re-setup overwrote this tunnel's config in place; put the
     # stashed previous config back so it restarts on what actually worked, not a
-    # half-written new one. (start_service removes the stash once the new config
-    # is live, so reaching here means the setup did not get that far.)
-    uc=$(tm_cfg "$u" 2>/dev/null || true); [ -n "$uc" ] || uc=$(unit_cfg "$u")
-    if [ -n "$uc" ] && [ -f "$uc.pre-replace" ]; then
-      warn "$u: an interrupted re-setup — restoring its previous config before starting it."
-      cp -p "$uc.pre-replace" "$uc" 2>/dev/null || true
-      rm -f "$uc.pre-replace"
-    fi
+    # half-written new one. Restore ONLY a stash THIS run created (in
+    # HS2_STASHED_UNITS) — never a stale one left by an earlier hard-crash, which
+    # could otherwise clobber a config another operation (e.g. restore) just
+    # wrote. start_service removes the stash once the new config is live.
+    case " $HS2_STASHED_UNITS " in
+      *" $u "*)
+        uc=$(tm_cfg "$u" 2>/dev/null || true); [ -n "$uc" ] || uc=$(unit_cfg "$u")
+        if [ -n "$uc" ] && [ -f "$uc.pre-replace" ]; then
+          warn "$u: an interrupted re-setup — restoring its previous config before starting it."
+          cp -p "$uc.pre-replace" "$uc" 2>/dev/null || true
+          rm -f "$uc.pre-replace"
+        fi ;;
+    esac
     warn "$u was stopped and is not running — starting it again with its current config…"
     systemctl start "$u" 2>/dev/null || true
     sleep 2
@@ -111,6 +121,13 @@ on_exit(){
   return 0
 }
 trap on_exit EXIT
+
+# Sweep any .pre-replace config stash left behind by an earlier run that was
+# hard-killed (power loss, OOM, SIGKILL) mid re-setup — the EXIT trap never ran,
+# so the stash survived. It is dead now (on_exit only restores a stash THIS run
+# created) and holds a copy of the tunnel key, so clear it on every start. A
+# stash this run creates is made later, by stop_for_replace, so it is untouched.
+for _st in "$CFG_DIR"/*.pre-replace; do [ -e "$_st" ] && rm -f "$_st"; done 2>/dev/null || true
 
 # ---------- helpers ----------------------------------------------------------
 port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
@@ -504,8 +521,11 @@ stop_for_replace(){
   # Stash the CURRENT (old) config: the setup overwrites $CFG in place, so if it
   # aborts after that, the safety net must restart the tunnel on the OLD config,
   # not the half-written new one. start_service removes the stash once the new
-  # config is live; on_exit restores it if the setup never got that far.
-  [ -f "$CFG" ] && cp -p "$CFG" "$CFG.pre-replace" 2>/dev/null || true
+  # config is live; on_exit restores it if the setup never got that far — but
+  # only because we record the unit here, so on_exit knows THIS run owns it.
+  if [ -f "$CFG" ] && cp -p "$CFG" "$CFG.pre-replace" 2>/dev/null; then
+    HS2_STASHED_UNITS="$HS2_STASHED_UNITS $UNIT"
+  fi
   info "Stopping $UNIT for the new setup (it is started again if the setup is cancelled)…"
   systemctl stop "$UNIT" 2>/dev/null || true
 }
@@ -1939,7 +1959,7 @@ remove_tunnel(){ # unit
     done
     if [ -z "$other" ]; then ip link del "$ifc" 2>/dev/null || true; fi
   fi
-  rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$(status_path "$cfg")"
+  rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$(status_path "$cfg")"
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed "$u" >/dev/null 2>&1 || true
   kernel_cleanup
@@ -2897,14 +2917,16 @@ restore(){
   local binex="" tmpbin other=0
   for u in $(tm_units); do printf '%s\n' "$units" | grep -qx "$u" || other=1; done
   if [ "$other" = 1 ] && printf '%s\n' "$list" | grep -qx "${BIN#/}"; then
-    tmpbin=$(mktemp)
-    if tar -xzOf "$f" "${BIN#/}" >"$tmpbin" 2>/dev/null && [ -s "$tmpbin" ] \
+    # mktemp must not be a bare command under set -e (a failure would abort the
+    # whole restore); on failure skip the check and extract normally.
+    tmpbin=$(mktemp 2>/dev/null) || tmpbin=""
+    if [ -n "$tmpbin" ] && tar -xzOf "$f" "${BIN#/}" >"$tmpbin" 2>/dev/null && [ -s "$tmpbin" ] \
        && [ -x "$BIN" ] && ! cmp -s "$tmpbin" "$BIN"; then
       warn "This backup's hs2 binary differs from the installed one, and other tunnels here are not"
       warn "in this backup — keeping the installed binary so they are not downgraded (clean break)."
       binex="--exclude=${BIN#/}"
     fi
-    rm -f "$tmpbin"
+    [ -n "$tmpbin" ] && rm -f "$tmpbin"
   fi
   if [ -n "$binex" ]; then
     tar -xzf "$f" -C / --exclude=hs2-backup-info.txt "$binex" || die "extract failed"
