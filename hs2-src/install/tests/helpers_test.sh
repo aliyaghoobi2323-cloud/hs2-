@@ -23,15 +23,18 @@ RUN
 
 # ---- verify_download --------------------------------------------------------
 mkdir -p "$T/repo"; head -c 100000 /dev/urandom > "$T/repo/hs2-linux-amd64"; cp "$T/repo/hs2-linux-amd64" "$T/dl"
-vd(){ bash -c "source '$T/run.sh'; REPO_RAW='file://$T/repo'; verify_download '$T/dl' && echo RC=0 || echo RC=1" 2>&1; }
+# Prints the EXACT status: 0 match · 1 mismatch · 2 no usable published hash.
+vd(){ bash -c "source '$T/run.sh'; REPO_RAW='file://$T/repo'; if verify_download '$T/dl'; then echo RC=0; else echo RC=\$?; fi" 2>&1; }
 sha256sum "$T/repo/hs2-linux-amd64" | sed "s#  .*#  hs2-linux-amd64#" > "$T/repo/hs2-linux-amd64.sha256"
 out=$(vd); check "verify_download: a download matching the published sha256 passes" 'echo "$out" | grep -q RC=0 && echo "$out" | grep -q "matches"'
 printf 'x' >> "$T/dl"
-out=$(vd); check "verify_download: an altered download is rejected" 'echo "$out" | grep -q RC=1 && echo "$out" | grep -q "mismatch"'
+out=$(vd); check "verify_download: an altered download is rejected (status 1)" 'echo "$out" | grep -qx RC=1 && echo "$out" | grep -q "mismatch"'
 rm "$T/repo/hs2-linux-amd64.sha256"
-out=$(vd); check "verify_download: no published hash (older repo) only warns" 'echo "$out" | grep -q RC=0 && echo "$out" | grep -q "No published sha256"'
+# Fail-closed (since A1): no published hash is status 2, never a pass —
+# install_binary then refuses unless HS2_ALLOW_UNVERIFIED=1.
+out=$(vd); check "verify_download: no published hash is status 2 (not a pass)" 'echo "$out" | grep -qx RC=2'
 echo "not-a-hash" > "$T/repo/hs2-linux-amd64.sha256"
-out=$(vd); check "verify_download: a garbage hash file counts as missing, not as a pass-by-accident" 'echo "$out" | grep -q "No published sha256"'
+out=$(vd); check "verify_download: a garbage hash file counts as missing (status 2), not as a pass-by-accident" 'echo "$out" | grep -qx RC=2'
 
 # ---- kill_this_tunnel ---------------------------------------------------------
 if command -v go >/dev/null 2>&1; then

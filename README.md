@@ -77,6 +77,22 @@ so a few days with port 80 or Let's Encrypt unreachable never matter) and are
 fresh certificate while existing ones keep running, so a renewal never drops
 the tunnel.
 
+**Whether it renews by itself depends on how the certificate was issued:**
+
+| issued with | renews | what it needs |
+|---|---|---|
+| Let's Encrypt **HTTP-01** (standalone) | automatically | port 80 free and reachable from the internet at renewal time (or a certbot `pre_hook` that frees it) |
+| Let's Encrypt **DNS-01** (TXT record) | **by hand** — certbot cannot publish a new TXT record by itself | renew before it expires: tunnel manager → the tunnel → **c) Certificate → Renew now** |
+| your own certificate | by you | replace the two files; hs2 switches to them within a minute, no restart |
+
+Why this matters: the tunnel keeps working on an **expired** certificate (the
+client authenticates with the shared key, not the certificate), so users never
+notice — but every probe and browser then sees an expired certificate. To keep
+that from happening silently, the tunnel screen shows each certificate's expiry
+**and** how it renews (DNS-01, a busy port 80 or an overdue renewal are flagged
+in yellow), **c) Certificate** can test the automatic renewal (a dry run that
+changes nothing) or renew now, and `hs2 doctor` checks it too.
+
 ## Several tunnels on one server (service names)
 
 Every tunnel is its own systemd service, so one server can run several side by
@@ -101,7 +117,14 @@ started, stopped, edited and deleted on its own.
   its subnet and interface, and stops only that tunnel; if the setup is
   cancelled halfway, it is started again on its old config.
 - **Tunnel manager** (`hs2-menu` → 3) lists every tunnel by service name, with
-  start / stop / restart / edit / logs / live pattern / tuning / **delete**.
+  start / stop / restart / edit / logs / live pattern / tuning / diagnose /
+  **certificate** / **delete**. Edit opens your own editor when `SUDO_EDITOR`,
+  `VISUAL` or `EDITOR` names a terminal editor (vim, nano, …), else nano; the
+  copy being edited — it holds the tunnel key — lives in a private directory
+  that is removed afterwards together with any swap/backup files the editor
+  made. The link-pool screen (Tuning → 6) says which server's values actually
+  count: the Iran server decides the link count; in reverse the Kharej server
+  also caps it at its own max; on a direct Kharej server the values do nothing.
   Delete asks you to type the name, saves a backup first, and removes only
   that tunnel's service, config and interface — the others keep running.
 - **Upgrade** restarts every tunnel on the new binary and checks each one
@@ -360,10 +383,11 @@ journalctl -u hs2 -f
 
 - **`hs2 doctor -c /etc/hs2/config.json`** — an on-box health check: config
   validity, whether the tunnel is running, endpoint reachability (the common
-  "edge can't reach exit" failure), certificate expiry, the tun device, kernel
-  tuning vs. what is actually applied, and a clock reminder (link auth is
-  minute-bound). Also in the tunnel manager as **Diagnose**. It only reads —
-  safe to run any time, no root needed.
+  "edge can't reach exit" failure), certificate expiry **and whether it will
+  actually renew** (renewal method, the HTTP-01 port, an overdue renewal, the
+  certbot timer), the tun device, kernel tuning vs. what is actually applied,
+  and a clock reminder (link auth is minute-bound). Also in the tunnel manager
+  as **Diagnose**. It only reads — safe to run any time (it never runs certbot).
 - **`hs2 version`** prints a build stamp (`… [build <rev> <date>]`); compare it
   on both servers to confirm they run the same build (the `hs2-menu` banner
   shows it too).

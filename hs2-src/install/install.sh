@@ -88,10 +88,12 @@ HS2_STOPPED_UNITS=""
 # some other operation (e.g. restore) has since put in place.
 HS2_STASHED_UNITS=""
 HS2_DIED=0
-HS2_EDIT_TMP=""   # the live config-edit temp (a key-bearing copy), while tm_edit runs
+HS2_EDIT_TMP=""   # the live config-edit directory (holds a key-bearing copy), while tm_edit runs
 on_exit(){
   local rc=$? cmd=$BASH_COMMAND u uc
-  [ -z "${HS2_EDIT_TMP:-}" ] || rm -f "$HS2_EDIT_TMP" 2>/dev/null || true
+  # The live config-edit directory (key-bearing copy + editor side files); only
+  # a path of the exact shape tm_edit's mktemp produced is ever removed.
+  case "${HS2_EDIT_TMP:-}" in "$CFG_DIR"/.hs2-edit.?*) rm -rf -- "$HS2_EDIT_TMP" 2>/dev/null || true ;; esac
   if [ "$rc" != 0 ] && [ "$HS2_DIED" != 1 ]; then
     err "The installer stopped unexpectedly (status $rc) at: $cmd"
     err "Please send this line to the developer."
@@ -130,9 +132,10 @@ trap on_exit EXIT
 # created) and holds a copy of the tunnel key, so clear it on every start. A
 # stash this run creates is made later, by stop_for_replace, so it is untouched.
 for _st in "$CFG_DIR"/*.pre-replace; do [ -e "$_st" ] && rm -f "$_st"; done 2>/dev/null || true
-# Sweep any config-edit temp (a key-bearing copy) left behind by an edit that
-# was interrupted (Ctrl+C at a prompt) before it could clean up.
-for _st in "$CFG_DIR"/.hs2-edit.*; do [ -e "$_st" ] && rm -f "$_st"; done 2>/dev/null || true
+# Sweep any config-edit directory (a key-bearing copy, plus editor swap/backup
+# files) left behind by an edit that a hard kill interrupted before it could
+# clean up. (Older versions left a plain .hs2-edit.* file; rm -rf covers both.)
+for _st in "$CFG_DIR"/.hs2-edit.*; do [ -e "$_st" ] && rm -rf -- "$_st"; done 2>/dev/null || true
 
 # ---------- helpers ----------------------------------------------------------
 port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
@@ -1098,6 +1101,7 @@ cert_dns01(){ # domain
 # renewal pointing at a service that is gone (it used to be `systemctl reload
 # hs2`, which only reached the default tunnel).
 CERT_HOOK="pkill -HUP -x hs2"
+LE_DIR=/etc/letsencrypt   # certbot's tree (lineages in live/, renewal configs in renewal/)
 
 # configure_renewal makes an existing certbot renewal do two things the tunnel
 # wants: renew 30 days before expiry (certbot's own default — a week left too
@@ -1105,8 +1109,8 @@ CERT_HOOK="pkill -HUP -x hs2"
 # reload hs2 (hot
 # cert swap, no dropped connections) instead of restarting it. It edits the
 # renewal conf in place and makes sure the twice-daily certbot timer is on.
-configure_renewal(){ # domain
-  local conf="/etc/letsencrypt/renewal/$1.conf"
+configure_renewal(){ # lineage (the domain, as get_cert lays it out)
+  local conf="$LE_DIR/renewal/$1.conf"
   [ -f "$conf" ] || return 0
   # deploy hook -> reload
   if grep -q '^renew_hook' "$conf"; then
@@ -1126,7 +1130,133 @@ configure_renewal(){ # domain
     printf 'renew_before_expiry = 30 days\n' >> "$conf"
   fi
   systemctl enable --now certbot.timer >/dev/null 2>&1 || true
-  ok "Renewal set: 30 days before expiry, hot-reload (no downtime). Timer: certbot.timer."
+  if [ "$(cert_renew_method "$LE_DIR/live/$1/fullchain.pem")" = manual ]; then
+    # A --manual (DNS-01) certificate cannot be renewed unattended: certbot
+    # needs a fresh TXT record each time. Say so plainly — the tunnel keeps
+    # working on an expired certificate, so nothing else would ever tell you.
+    warn "This certificate does NOT renew by itself: DNS-01 needs a new TXT record each time."
+    warn "It is valid until $(cert_until "$LE_DIR/live/$1/fullchain.pem"). Renew it before then:"
+    warn "  tunnel manager → this tunnel → c) Certificate → Renew now."
+  else
+    ok "Renewal set: 30 days before expiry, hot-reload (no downtime). Timer: certbot.timer."
+  fi
+}
+
+# ---------- certificate status (read-only helpers) ---------------------------
+# Why these exist: the client never verifies the server certificate (link auth
+# is the shared key bound to the TLS session), so an EXPIRED certificate does not
+# break the tunnel — users notice nothing — but every probe and browser then sees
+# an expired certificate on a live :443 service. Renewal failures are silent, so
+# the tunnel screen shows expiry AND how the certificate renews.
+
+# cert_lineage CERTFILE: the certbot lineage name when CERTFILE is
+# $LE_DIR/live/<name>/<file> (how certbot and get_cert lay it out), else empty.
+cert_lineage(){
+  local rest
+  case "$1" in "$LE_DIR"/live/?*/?*) ;; *) return 0 ;; esac
+  rest=${1#"$LE_DIR"/live/}
+  case "$rest" in */*/*|./*|../*) return 0 ;; esac
+  printf '%s' "${rest%%/*}"
+}
+
+# cert_conf_get CONF KEY: the first "KEY = value" in a certbot renewal config.
+# (One sed that quits on the first match: no `| head`, which under pipefail can
+# turn a SIGPIPE into a failure.) KEY is always a literal from this script.
+cert_conf_get(){
+  sed -n "/^[[:space:]]*$2[[:space:]]*=/{s/^[^=]*=[[:space:]]*//;s/[[:space:]]*\$//;p;q;}" "$1" 2>/dev/null || true
+}
+
+# cert_renew_method CERTFILE: how the certificate gets renewed —
+#   unmanaged  not a certbot lineage (the operator's own certificate)
+#   noconf     a certbot lineage with no renewal config (never renewed)
+#   off        certbot's autorenew = False for it
+#   manual       DNS-01 --manual without an auth hook: certbot can NOT renew it
+#   manual-hook  --manual WITH an auth hook (renews automatically through it)
+#   <name>       certbot renews it automatically with that authenticator
+# (The two manual cases get their own tokens: echoing certbot's authenticator
+# name for a hooked manual cert would print "manual" — the never-renews token.)
+cert_renew_method(){
+  local ln conf auth
+  ln=$(cert_lineage "$1"); [ -n "$ln" ] || { echo unmanaged; return 0; }
+  conf="$LE_DIR/renewal/$ln.conf"
+  [ -f "$conf" ] || { echo noconf; return 0; }
+  case "$(cert_conf_get "$conf" autorenew)" in [Ff]alse) echo off; return 0 ;; esac
+  auth=$(cert_conf_get "$conf" authenticator)
+  if [ "$auth" = manual ]; then
+    if [ -n "$(cert_conf_get "$conf" manual_auth_hook)" ]; then echo manual-hook; else echo manual; fi
+    return 0
+  fi
+  echo "${auth:-unknown}"
+}
+
+# cert_renew_before_days CERTFILE: certbot's renewal threshold in days (30 when
+# unset or in a form we do not parse — certbot's own default).
+cert_renew_before_days(){
+  local ln v n u
+  ln=$(cert_lineage "$1")
+  [ -n "$ln" ] && v=$(cert_conf_get "$LE_DIR/renewal/$ln.conf" renew_before_expiry) || v=""
+  read -r n u _ <<< "${v:-}" || true
+  if valid_uint "${n:-}" 1 3650; then
+    case "${u:-}" in day|days) echo "$n"; return 0 ;; week|weeks) echo $(( n * 7 )); return 0 ;; esac
+  fi
+  echo 30
+}
+
+# cert_http01_port CERTFILE: the port certbot's standalone server listens on at
+# renewal (http01_port in the renewal config; 80 when unset).
+# cert_port_ok CERTFILE: true unless that port is taken by another program AND
+# no pre_hook is configured to free it (the usual "stop nginx, renew, start
+# nginx" setup frees the port itself, so a busy port is expected there).
+cert_http01_port(){
+  local ln v
+  ln=$(cert_lineage "$1")
+  [ -n "$ln" ] && v=$(cert_conf_get "$LE_DIR/renewal/$ln.conf" http01_port) || v=""
+  if valid_uint "${v:-}" 1 65535; then echo "$v"; else echo 80; fi
+}
+cert_port_ok(){
+  local ln
+  port_free "$(cert_http01_port "$1")" && return 0
+  ln=$(cert_lineage "$1")
+  [ -n "$ln" ] && [ -n "$(cert_conf_get "$LE_DIR/renewal/$ln.conf" pre_hook)" ]
+}
+
+# cert_secs_left CERTFILE: seconds until expiry (negative once expired); empty
+# when the file cannot be read. cert_until: the expiry date (UTC, YYYY-MM-DD).
+cert_secs_left(){
+  local end e
+  end=$(openssl x509 -enddate -noout -in "$1" 2>/dev/null) || return 0
+  e=$(date -d "${end#notAfter=}" +%s 2>/dev/null) || return 0
+  echo $(( e - $(date +%s) ))
+}
+cert_until(){
+  local end
+  end=$(openssl x509 -enddate -noout -in "$1" 2>/dev/null) || return 0
+  date -u -d "${end#notAfter=}" +%Y-%m-%d 2>/dev/null || true
+}
+
+# cert_domains CERTFILE: the DNS names the certificate covers, space-separated,
+# keeping only plain hostname characters (they are passed to certbot as -d).
+cert_domains(){
+  # Read line by line, never `for n in $(…)`: a wildcard name (*.example.com)
+  # would be glob-expanded against the current directory.
+  local n out=""
+  while IFS= read -r n; do
+    case "$n" in *[!A-Za-z0-9.*-]*|'') continue ;; esac
+    out="$out${out:+ }$n"
+  done < <(openssl x509 -in "$1" -noout -text 2>/dev/null | grep -o 'DNS:[^,[:space:]]*' | sed 's/^DNS://' || true)
+  printf '%s' "$out"
+}
+
+cert_method_label(){
+  case "$1" in
+    manual)     echo "${C_Y}DNS-01 by hand — certbot can NOT renew it by itself${C_0}" ;;
+    standalone) echo "automatic — Let's Encrypt HTTP-01 (port 80 must be free and reachable at renewal)" ;;
+    manual-hook) echo "automatic — certbot DNS-01 through your auth hook" ;;
+    unmanaged)  echo "your own certificate — you renew it (replace the files)" ;;
+    noconf)     echo "${C_Y}none — certbot has no renewal config for this certificate${C_0}" ;;
+    off)        echo "${C_Y}off — automatic renewal is disabled for it (autorenew = False)${C_0}" ;;
+    *)          echo "automatic — certbot ($1)" ;;
+  esac
 }
 
 # cert_existing: the user already has a cert/key pair (bought, wildcard, or from
@@ -1170,7 +1300,8 @@ get_cert(){ # domain expected_ip
   echo >&2
   echo "  Certificate for $domain (this server terminates TLS):" >&2
   echo "    1) Let's Encrypt — HTTP-01, standalone on port 80 (needs port 80 open + A record here)" >&2
-  echo "    2) Let's Encrypt — DNS-01, add a TXT record (no port 80 — best when inbound 80 is filtered)" >&2
+  echo "    2) Let's Encrypt — DNS-01, add a TXT record (no port 80 — best when inbound 80 is filtered;" >&2
+  echo "       it does NOT renew by itself: you renew it by hand from the tunnel manager)" >&2
   echo "    3) I already have a certificate (give the file paths)" >&2
   read -rp "Choose [1]: " CM </dev/tty
   case "${CM:-1}" in
@@ -2384,19 +2515,13 @@ tm_details(){
     [ -n "$(jget "$cfg" expose)" ] && say " Panel:       $(jget "$cfg" expose)"
   fi
   if [ "$st" = running ]; then
-    local pat sf cd
+    local pat sf
     pat=$(tm_pattern "$cfg")
     [ -n "$pat" ] && say " Pattern:     $pat"
     sf=$(status_path "$cfg")
     tm_health_lines "$sf"
-    if status_fresh "$sf"; then
-      cd=$(jraw "$sf" cert_days)
-      if [ -n "$cd" ] && [ "$cd" != -1 ]; then
-        if [ "$cd" -le 7 ] 2>/dev/null; then say " Certificate: ${C_Y}$cd day(s) left${C_0} — auto-renews (hot reload, no downtime)"
-        else say " Certificate: valid for $cd more day(s)"; fi
-      fi
-    fi
   fi
+  [ -f "$cfg" ] && tm_cert_line "$cfg"
   if tm_autostart "$u"; then say " Autostart:   ${C_G}ON${C_0} — comes back by itself after a reboot"
   else say " Autostart:   ${C_Y}OFF${C_0} — will NOT start after a reboot"; fi
   hr
@@ -2529,11 +2654,62 @@ tm_follow(){
   echo >&2
 }
 
+# Desktop editors: on a server over SSH they cannot open (no display) and would
+# return at once, which tm_edit would read as "no changes".
+TM_GUI_EDITORS=" code codium code-insiders subl sublime_text gedit gnome-text-editor kate kwrite mousepad pluma xed gvim mvim atom geany leafpad featherpad zed xdg-open open notepadqq "
+
+# tm_user_editor [verbose]: the operator's own editor — SUDO_EDITOR, VISUAL,
+# EDITOR, in the order sudoedit uses — as a command line, when it is a terminal
+# editor present on this server; nothing otherwise. A desktop or missing editor
+# is skipped (so VISUAL=code + EDITOR=vim gives vim); with "verbose" each skip is
+# explained on stderr. A simple command line only ("vim -u NONE"): it is split
+# on spaces, never glob-expanded or eval'd. Installs nothing (safe for labels).
+tm_user_editor(){
+  local v w0
+  local -a words
+  for v in "${SUDO_EDITOR:-}" "${VISUAL:-}" "${EDITOR:-}"; do
+    [ -n "$v" ] || continue
+    read -ra words <<< "$v"
+    [ "${#words[@]}" -gt 0 ] || continue
+    w0=${words[0]##*/}
+    case "$TM_GUI_EDITORS" in
+      *" $w0 "*) [ "${1:-}" != verbose ] || info "Your editor setting '$v' is a desktop editor — not usable over SSH; skipping it."
+                 continue ;;
+    esac
+    if ! command -v "${words[0]}" >/dev/null 2>&1; then
+      [ "${1:-}" != verbose ] || info "Your editor setting '$v' is not installed here — skipping it."
+      continue
+    fi
+    printf '%s' "$v"; return 0
+  done
+  return 0
+}
+
+# tm_editor: the editor command line for tm_edit — the operator's own (see
+# tm_user_editor), else nano (installed on first use), else vi.
 tm_editor(){
+  local own
+  own=$(tm_user_editor verbose)
+  if [ -n "$own" ]; then printf '%s' "$own"; return 0; fi
   if command -v nano >/dev/null 2>&1; then echo nano; return 0; fi
   info "Installing nano…"
   DEBIAN_FRONTEND=noninteractive apt-get install -y -q nano </dev/null >/dev/null 2>&1 || true
   if command -v nano >/dev/null 2>&1; then echo nano; elif command -v vi >/dev/null 2>&1; then echo vi; fi
+}
+
+# tm_editor_label: the editor's name for the menu (no side effects).
+tm_editor_label(){
+  local own; own=$(tm_user_editor); own=${own%% *}
+  if [ -n "$own" ]; then printf '%s' "${own##*/}"; else printf 'nano'; fi
+}
+
+# tm_edit_cleanup: remove the private edit directory — the key-bearing copy AND
+# whatever the editor left beside it (vim's .swp, emacs's ~ backup / #autosave#),
+# which a plain `rm "$tmp"` would leave behind holding the tunnel key. Only ever
+# removes a path of the exact shape mktemp gave us.
+tm_edit_cleanup(){
+  case "${HS2_EDIT_TMP:-}" in "$CFG_DIR"/.hs2-edit.?*) rm -rf -- "$HS2_EDIT_TMP" ;; esac
+  HS2_EDIT_TMP=""
 }
 # tm_validate FILE: full check with `hs2 check` (old binaries: JSON syntax only).
 tm_validate(){
@@ -2605,28 +2781,45 @@ tm_bilateral_warn(){ # changed-list
 }
 
 tm_edit(){
-  local u="$1" cfg="$2" ed tmp c a since changed
+  local u="$1" cfg="$2" ed edname d tmp c a since changed erc
+  local -a edcmd
   [ -f "$cfg" ] || { err "Config file not found: $cfg"; return 0; }
   ed=$(tm_editor); [ -n "$ed" ] || { err "No text editor available (apt install nano)."; return 0; }
-  tmp=$(mktemp "$CFG_DIR/.hs2-edit.XXXXXX"); HS2_EDIT_TMP="$tmp"; chmod 600 "$tmp"
-  # The temp is a full copy of the config, which holds the tunnel key — keep it
-  # OUT of world-namespace /tmp (beside the config, same root-only 600 domain).
-  # Every return path below removes it explicitly. An abnormal exit (Ctrl+C,
-  # SIGTERM, a set -e abort) is covered by on_exit via HS2_EDIT_TMP, and a hard
-  # kill by the startup sweep. Deliberately NOT a `trap … RETURN`: a RETURN trap
-  # set in a function stays installed after it returns and fires again when the
-  # CALLER returns — where $tmp is unbound, so set -u killed the menu on Back.
-  cp "$cfg" "$tmp"
+  read -ra edcmd <<< "$ed"; edname=${edcmd[0]##*/}
+  # The copy being edited holds the tunnel key, so it lives in a PRIVATE
+  # directory (700) beside the config — never in world-namespace /tmp — and the
+  # editor's own side files (swap, backup, autosave) land in that same directory
+  # and go with it. Every return path below calls tm_edit_cleanup; an abnormal
+  # exit (Ctrl+C, SIGTERM, a set -e abort) is covered by on_exit via
+  # HS2_EDIT_TMP, and a hard kill by the startup sweep. Deliberately NOT a
+  # `trap … RETURN`: a RETURN trap set in a function stays installed after it
+  # returns and fires again when the CALLER returns (it killed the menu on Back).
+  d=$(mktemp -d "$CFG_DIR/.hs2-edit.XXXXXX"); HS2_EDIT_TMP="$d"; chmod 700 "$d"
+  tmp="$d/$(basename "$cfg")"        # the real file name: editors show it and highlight JSON
+  cp "$cfg" "$tmp"; chmod 600 "$tmp"
   echo >&2
-  info "The config opens in $ed."
-  [ "$ed" = nano ] && info "Save: Ctrl+O then Enter  ·  Close: Ctrl+X"
+  info "The config opens in $edname."
+  case "$edname" in
+    nano)          info "Save: Ctrl+O then Enter  ·  Close: Ctrl+X" ;;
+    vi|vim|nvim)   info "Save and close: Esc, then :wq  ·  Close without changes: Esc, then :q!" ;;
+  esac
   info "After you close it, the change is checked and $u restarts automatically."
   info "If the new config fails, you can put the old one back with one key."
   read -rp "Press Enter to open the editor… " _ </dev/tty || true
   while :; do
-    "$ed" "$tmp" </dev/tty >/dev/tty 2>&1 || true
+    erc=0; "${edcmd[@]}" "$tmp" </dev/tty >/dev/tty 2>&1 || erc=$?
     if cmp -s "$tmp" "$cfg"; then
-      rm -f "$tmp"; HS2_EDIT_TMP=""; info "No changes — $u was not restarted."; return 0
+      tm_edit_cleanup; info "No changes — $u was not restarted."; return 0
+    fi
+    if [ "$erc" != 0 ]; then
+      # A non-zero exit is how an editor says "abort" (vim's :cq) — or it hit an
+      # error. Either way, do not apply a change the operator may not mean.
+      warn "The editor exited with an error (status $erc)."
+      read -rp "  Apply your changes anyway? [y/N]: " a </dev/tty || a=n
+      case "$a" in
+        y|Y|yes) ;;
+        *) tm_edit_cleanup; info "Changes discarded — nothing was applied."; return 0 ;;
+      esac
     fi
     say ""; say " Your changes:"
     diff -u "$cfg" "$tmp" 2>/dev/null | tail -n +3 | grep '^[-+]' | sed -e "s/^-/  ${C_R}- /" -e "s/^+/  ${C_G}+ /" -e "s/\$/${C_0}/" >&2 || true
@@ -2636,13 +2829,13 @@ tm_edit(){
     say "    1) Open the editor again to fix it"
     say "    2) Throw away my changes"
     read -rp "  Choose [1]: " c </dev/tty || c=2
-    case "${c:-1}" in 2) rm -f "$tmp"; HS2_EDIT_TMP=""; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
+    case "${c:-1}" in 2) tm_edit_cleanup; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
   done
   cp -p "$cfg" "$cfg.prev"
   # Capture which bilateral (must-match-the-peer) fields the edit changed, while
   # $cfg is still the OLD file and $tmp holds the NEW one (before the swap).
   changed=$(tm_bilateral_changed "$cfg" "$tmp")
-  cat "$tmp" > "$cfg"; rm -f "$tmp"; HS2_EDIT_TMP=""
+  cat "$tmp" > "$cfg"; tm_edit_cleanup
   ok "Saved. The previous version is kept as $cfg.prev"
   since=$(date '+%Y-%m-%d %H:%M:%S')
   info "Restarting $u to apply the change…"
@@ -2749,6 +2942,34 @@ tm_tune_links(){ # unit cfg
   cur_min=$(jraw "$cfg" min_links); cur_max=$(jraw "$cfg" max_links); cur_per=$(jraw "$cfg" per_link)
   echo >&2
   say "  Adaptive link pool — hs2 grows and shrinks links live between min and max."
+  # Which side's values actually count (as the engine sizes the pool — the
+  # stream link pool and the datagram tun pool alike): the Iran side (edge)
+  # always decides the count. Direct: Iran dials, Kharej only accepts — Kharej's
+  # values do nothing. Reverse: Kharej dials and clamps Iran's target to ITS OWN
+  # min/max, so the effective ceiling is the lower of the two maxes.
+  case "$(jget "$cfg" carrier)" in
+    mtcp|l3mtcp|l3|dgtun) ;;
+    tls) say "  ${C_Y}This tunnel's 'tls' mode always uses exactly ONE link — these values have no effect on it.${C_0}"
+         pause; return 0 ;;
+    *)   say "  ${C_Y}This tunnel's transport is a single session, not a link pool — these values have no effect on it.${C_0}"
+         pause; return 0 ;;
+  esac
+  if cfg_is_dial "$cfg"; then
+    if cfg_is_reverse "$cfg"; then
+      say "  This Iran server decides how many links to use. In reverse mode the Kharej server"
+      say "  opens them and caps the count at ITS OWN min/max — to go above that, raise max on"
+      say "  the Kharej server too."
+    else
+      say "  This Iran server decides the link count (direct mode) — these are the values that count."
+    fi
+  elif cfg_is_reverse "$cfg"; then
+    say "  The Iran server decides how many links to use; this Kharej server opens them and only"
+    say "  enforces its min/max as limits (the users-per-link value has no effect on this side)."
+  else
+    say "  ${C_Y}In direct mode the Iran server alone decides the link count — these values have NO${C_0}"
+    say "  ${C_Y}effect on this Kharej server. Change them on the Iran server instead.${C_0}"
+    pause; return 0
+  fi
   say "  Current: min=${cur_min:-2} · max=${cur_max:-32} · ~${cur_per:-8} users per link"
   read -rp "  Min links [${cur_min:-2}]: " mn </dev/tty;         mn=${mn:-${cur_min:-2}}
   read -rp "  Max links [${cur_max:-32}]: " mx </dev/tty;        mx=${mx:-${cur_max:-32}}
@@ -2855,6 +3076,129 @@ tm_doctor(){ # unit cfg
   pause
 }
 
+# tm_cert_side CFG: true on the side that holds and serves the certificate
+# (the side that ACCEPTS the TLS connection: direct exit, reverse edge).
+tm_cert_side(){ [ -n "$(jget "$1" cert_file)" ] && ! tm_dials "$1"; }
+
+# tm_cert_line CFG: the " Certificate:" line of tm_details — expiry AND how it
+# renews, so a certificate that is going to expire silently is visible every
+# time the tunnel is opened (see the note above cert_lineage for why it is
+# silent). Prints nothing on a side without a certificate.
+tm_cert_line(){
+  local cfg="$1" cf secs days until m rb
+  tm_cert_side "$cfg" || return 0
+  cf=$(jget "$cfg" cert_file); [ -f "$cf" ] || return 0
+  secs=$(cert_secs_left "$cf"); [ -n "$secs" ] || return 0
+  days=$(( secs / 86400 )); until=$(cert_until "$cf"); m=$(cert_renew_method "$cf")
+  if [ "$secs" -le 0 ]; then
+    say " Certificate: ${C_R}EXPIRED on $until${C_0} — the tunnel still works, but visitors see an expired certificate · c) to renew"
+    return 0
+  fi
+  case "$m" in
+    manual)
+      if [ "$days" -le 30 ]; then say " Certificate: ${C_Y}$days day(s) left — DNS-01 does NOT renew by itself: renew it now with c)${C_0}"
+      else say " Certificate: valid until $until ($days days) · DNS-01: renew it by hand before then (c)"; fi ;;
+    unmanaged)
+      if [ "$days" -le 30 ]; then say " Certificate: ${C_Y}$days day(s) left — your own certificate: replace its files before $until${C_0}"
+      else say " Certificate: valid until $until ($days days) · your own certificate (you renew it)"; fi ;;
+    noconf|off)
+      say " Certificate: ${C_Y}valid until $until ($days days) — automatic renewal is NOT set up (c)${C_0}" ;;
+    *)
+      rb=$(cert_renew_before_days "$cf")
+      # certbot renews once fewer than rb days remain, twice a day; two days
+      # past that without a renewal means renewal is failing.
+      if [ "$days" -lt $(( rb - 2 )) ]; then
+        say " Certificate: ${C_Y}$days day(s) left — automatic renewal is overdue (failing?) · check it with c)${C_0}"
+      elif [ "$m" = standalone ] && ! cert_port_ok "$cf"; then
+        say " Certificate: ${C_Y}valid until $until ($days days) — port $(cert_http01_port "$cf") is in use: the next automatic renewal will fail (c)${C_0}"
+      else
+        say " Certificate: valid until $until ($days days) · renews automatically"
+      fi ;;
+  esac
+}
+
+# tm_cert UNIT CFG: the tunnel's certificate — expiry, how it renews, and the
+# action that fits it: test the automatic renewal (dry run, changes nothing),
+# renew now, or — for DNS-01, which certbot cannot renew unattended — renew by
+# hand with a fresh TXT record. A renewed certificate reaches the running tunnel
+# with no restart (the deploy hook signals hs2, which also re-reads changed
+# files within a minute).
+tm_cert(){ # unit cfg
+  local u="$1" cfg="$2" cf ln m doms c d rc
+  if ! tm_cert_side "$cfg"; then
+    info "This side of $u uses no certificate — only the side that accepts the TLS connection does."
+    pause; return 0
+  fi
+  cf=$(jget "$cfg" cert_file)
+  [ -f "$cf" ] || { err "Certificate file not found: $cf"; pause; return 0; }
+  ln=$(cert_lineage "$cf"); m=$(cert_renew_method "$cf"); doms=$(cert_domains "$cf")
+  echo >&2; hr; say " ${C_B}Certificate${C_0} — $u"; hr
+  say " File:        $cf"
+  say " Domain:      ${doms:-?}"
+  tm_cert_line "$cfg"
+  say " Renewal:     $(cert_method_label "$m")"
+  hr
+  case "$m" in
+    unmanaged)
+      info "To renew your own certificate, replace these two files with the new ones:"
+      info "  $cf"
+      info "  $(jget "$cfg" key_file)"
+      info "hs2 notices the change within a minute and switches to it — no restart."
+      pause; return 0 ;;
+    noconf|off)
+      warn "certbot will not renew this certificate automatically."
+      info "Re-run the setup for this tunnel to issue a certificate with renewal configured."
+      pause; return 0 ;;
+  esac
+  if ! command -v certbot >/dev/null 2>&1; then
+    err "certbot is not installed, so this certificate cannot be renewed from here."; pause; return 0
+  fi
+  if [ "$m" = manual ]; then
+    say "  1) Renew now — certbot shows a TXT record: add it at your DNS provider, wait ~1 min, continue"
+  else
+    say "  1) Test the automatic renewal (dry run against Let's Encrypt's test server — changes nothing)"
+    say "  2) Renew now (a fresh certificate immediately)"
+  fi
+  say "  0) Back"
+  read -rp "Choose: " c </dev/tty || return 0
+  case "$c" in
+    1|2) ;;
+    *) return 0 ;;
+  esac
+  if [ "$m" = manual ] && [ "$c" = 2 ]; then return 0; fi
+  if [ "$m" = standalone ] && ! cert_port_ok "$cf"; then
+    d=$(cert_http01_port "$cf")
+    warn "Port $d is in use right now, and certbot needs it for a moment to renew:"
+    ss -Hltnp "sport = :$d" 2>/dev/null | sed 's/^/    /' >&2 || true
+    warn "Free port $d first (or re-issue the certificate with DNS-01) — certbot would fail now."
+    pause; return 0
+  fi
+  rc=0
+  if [ "$m" = manual ]; then
+    [ -n "$doms" ] || { err "Could not read the certificate's domain names."; pause; return 0; }
+    local -a dlist=() dargs=()
+    read -ra dlist <<< "$doms"            # no glob expansion of *.example.com
+    for d in "${dlist[@]}"; do dargs+=(-d "$d"); done
+    certbot certonly --manual --preferred-challenges dns --cert-name "$ln" "${dargs[@]}" \
+      --force-renewal --agree-tos --register-unsafely-without-email --deploy-hook "$CERT_HOOK" </dev/tty >&2 || rc=$?
+  elif [ "$c" = 1 ]; then
+    info "Testing the renewal (dry run)…"
+    certbot renew --cert-name "$ln" --dry-run </dev/null >&2 2>&1 || rc=$?
+    if [ "$rc" = 0 ]; then ok "The automatic renewal works — certbot will renew this certificate on time."
+    else err "The renewal test FAILED — the certificate will not renew automatically until this is fixed (see the output above)."; fi
+    pause; return 0
+  else
+    certbot renew --cert-name "$ln" --force-renewal </dev/null >&2 2>&1 || rc=$?
+  fi
+  if [ "$rc" = 0 ]; then
+    configure_renewal "$ln"
+    ok "Renewed — now valid until $(cert_until "$cf"). hs2 switches to it without a restart."
+  else
+    err "Renewal failed (certbot exit $rc) — the current certificate stays in use. See the output above."
+  fi
+  pause
+}
+
 tm_tunnel_menu(){
   local u="$1" cfg c
   cfg=$(tm_cfg "$u")
@@ -2863,12 +3207,13 @@ tm_tunnel_menu(){
     say "  1) Start"
     say "  2) Stop"
     say "  3) Restart"
-    say "  4) Edit config (nano) — applied automatically when you close it"
+    say "  4) Edit config ($(tm_editor_label)) — applied automatically when you close it"
     say "  5) Live log"
     say "  6) Live pattern monitor (parallel links, updating)"
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
     say "  d) Diagnose (health check — config, endpoint, certificate, tuning)"
+    if tm_cert_side "$cfg"; then say "  c) Certificate — expiry, renewal check, renew now"; fi
     say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
     say "  9) Delete this tunnel (service, config and tun interface)"
     say "  0) Back"
@@ -2883,6 +3228,7 @@ tm_tunnel_menu(){
       7) tm_toggle_autostart "$u" ;;
       8) tm_tune "$u" "$cfg" ;;
       d|D) tm_doctor "$u" "$cfg" ;;
+      c|C) tm_cert "$u" "$cfg" ;;
       u|U) upgrade "$u"; pause ;;
       9) if tm_delete "$u"; then pause; return 0; fi ;;
       0|b|B|"") return 0 ;;

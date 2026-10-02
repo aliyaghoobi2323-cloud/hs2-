@@ -52,7 +52,9 @@ func doctorCmd(args []string) {
 		if json.Unmarshal(raw, &fc) == nil {
 			checkRunning(d, *cfgPath)
 			checkEndpoint(d, fc)
-			checkCert(d, fc)
+			if leaf := checkCert(d, fc); leaf != nil {
+				checkCertRenewal(d, fc, leaf, hostRenewEnv())
+			}
 			checkTun(d, fc)
 			checkTuning(d, fc)
 		} else {
@@ -161,25 +163,27 @@ var certCarrier = map[string]bool{"mtcp": true, "l3mtcp": true, "l3": true, "tls
 // exit; reverse: the edge). On the dialing side, or a non-TLS carrier, a stray
 // cert_file is never used by the tunnel, so doctor does not fail on it (that
 // would be stricter than the daemon, which only loads the cert on the server
-// side). Expired is fatal; within a week is a warning (certbot renews and the
-// daemon hot-reloads, so no restart).
-func checkCert(d *doctorReport, fc fileConfig) {
+// side). Expired is fatal; within a week is a warning (a renewed cert
+// hot-reloads, so no restart). It returns the parsed leaf — even an expired one
+// — so checkCertRenewal can say WHY it is not being renewed; nil when there is
+// no usable certificate or the check does not apply to this side.
+func checkCert(d *doctorReport, fc fileConfig) *x509.Certificate {
 	if fc.CertFile == "" || dialing(fc) || !certCarrier[fc.Carrier] {
-		return
+		return nil
 	}
 	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
 	if err != nil {
 		d.fail("certificate", fmt.Sprintf("cannot load cert/key (%s): %v", fc.CertFile, err))
-		return
+		return nil
 	}
 	if len(cert.Certificate) == 0 {
 		d.fail("certificate", "no certificate found in "+fc.CertFile)
-		return
+		return nil
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
 		d.fail("certificate", "cannot parse the leaf certificate: "+err.Error())
-		return
+		return nil
 	}
 	until := leaf.NotAfter.UTC().Format("2006-01-02")
 	days := int(time.Until(leaf.NotAfter).Hours() / 24)
@@ -187,10 +191,11 @@ func checkCert(d *doctorReport, fc fileConfig) {
 	case time.Now().After(leaf.NotAfter):
 		d.fail("certificate", "EXPIRED on "+until)
 	case days <= 7:
-		d.warn("certificate", fmt.Sprintf("valid for %d more day(s) (until %s) — certbot should renew it; it hot-reloads, no restart", days, until))
+		d.warn("certificate", fmt.Sprintf("valid for %d more day(s) (until %s) — renew it now (see 'cert renewal'); a renewed cert hot-reloads, no restart", days, until))
 	default:
 		d.ok("certificate", fmt.Sprintf("valid for %d more day(s) (until %s)", days, until))
 	}
+	return leaf
 }
 
 // checkTun reports the real state of the tunnel's TUN device (tun carriers

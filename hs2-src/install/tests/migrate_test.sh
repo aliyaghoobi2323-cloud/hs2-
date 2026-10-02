@@ -16,11 +16,18 @@ printf 'version = 2.9.0\n[renewalparams]\nauthenticator = standalone\n' > "$T/re
 cp "$T/renewal/z-panel.example.conf" "$T/panel.orig"
 : > "$T/sysctl.conf"   # an old static sysctl file that must be removed
 
-# migrate_config also calls the installer helpers cfg_field and say; extract
-# them too (say is a one-liner, so it is matched as a single line — a range
-# would run on into the functions after it).
-sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p' "$INST" \
- | sed "s#/etc/letsencrypt/renewal#$T/renewal#g; s#/etc/modules-load.d/hs2.conf#/dev/null#; s#/etc/sysctl.d/99-hs2.conf#$T/sysctl.conf#g" > "$T/fns.sh"
+# migrate_config also calls the installer helpers cfg_field and say, and
+# configure_renewal reads certbot's tree through LE_DIR and the cert_* status
+# helpers (to tell a DNS-01 certificate, which never renews by itself, from an
+# automatic one); extract them too (say and LE_DIR are one-liners, so they are
+# matched as single lines — a range would run on into the functions after
+# them). LE_DIR is pointed at the sandbox, whose renewal/ holds the lineages.
+sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p;/^LE_DIR=/p;/^cert_lineage(){/,/^}/p;/^cert_conf_get(){/,/^}/p;/^cert_renew_method(){/,/^}/p;/^cert_until(){/,/^}/p' "$INST" \
+ | sed "s#^LE_DIR=.*#LE_DIR=$T#; s#/etc/letsencrypt/renewal#$T/renewal#g; s#/etc/modules-load.d/hs2.conf#/dev/null#; s#/etc/sysctl.d/99-hs2.conf#$T/sysctl.conf#g" > "$T/fns.sh"
+for f in configure_renewal migrate_config cert_lineage cert_conf_get cert_renew_method cert_until; do
+  grep -q "^$f(){" "$T/fns.sh" || { echo "FAIL $f not found in install.sh"; exit 1; }
+done
+grep -q "^LE_DIR=$T\$" "$T/fns.sh" || { echo "FAIL LE_DIR not found in install.sh"; exit 1; }
 cat > "$T/run.sh" <<RUN
 set -euo pipefail
 CFG=$T/cfg.json; LINK_MIN=2; LINK_MAX=32; LINK_PER=8

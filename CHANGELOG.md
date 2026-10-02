@@ -238,6 +238,76 @@ the previous install.sh. `TestProbeCloseMatchesStdlib` sends ten probes to both
 our listener and a real net/http HTTPS server and requires the same bytes and
 the same FIN-vs-RST for each; it failed on the previous server.
 
+## Phase F — certificate renewal, editor choice, link-pool clarity
+
+The follow-ups left open after phase E (all but U4 rekey, which was dropped at
+the maintainer's request as too complex for the people who use this).
+
+### F1 — certificate renewal that cannot fail silently
+- **Found while preparing this phase:** a certificate issued with the installer's
+  **DNS-01** option never renewed. certbot ran `--manual` with no auth hook, and
+  certbot cannot renew such a certificate unattended (someone must publish a new
+  TXT record each time), yet the installer said "Renewal set: 30 days before
+  expiry". Such certificates expired after 90 days. Because the client never
+  verifies the server certificate (auth is the shared key), **the tunnel kept
+  working** — so nobody noticed, while every probe saw an expired certificate.
+- The DNS-01 option now says up front that it is renewed by hand, and setup ends
+  with an honest warning and the expiry date instead of "Renewal set".
+- The tunnel screen's **Certificate** line (shown whenever the tunnel is opened,
+  running or not) states expiry **and** how it renews; it flags DNS-01, an
+  overdue renewal, a busy HTTP-01 port, a missing renewal config or
+  `autorenew = False`, and an expired certificate. It replaces a line that
+  claimed "auto-renews" for every certificate.
+- New per-tunnel action **c) Certificate**: test the automatic renewal (a dry
+  run against Let's Encrypt's test server — changes nothing), renew now, or for
+  DNS-01 renew by hand on the same lineage with every name on the certificate
+  (wildcards included). It refuses, and says why, when the HTTP-01 port is taken
+  and no `pre_hook` frees it.
+- `hs2 doctor` gains a read-only **cert renewal** check: it reads certbot's
+  renewal config for the lineage, the kernel's listening sockets and the certbot
+  timer, and reports DNS-01-by-hand, a busy HTTP-01 port (respecting
+  `http01_port` and `pre_hook`), an overdue renewal, a disabled or missing
+  renewal, no active timer, or an own certificate. It never runs certbot. An
+  expired certificate still gets this diagnosis (why it was not renewed).
+
+### F2 — the link-pool screen says which server's values count (U7)
+- Verified against the engine: the Iran side always decides the link count. In
+  direct mode the Kharej side only accepts links, so its values do nothing and
+  the screen now says so and writes nothing. In reverse the Kharej side dials
+  and caps Iran's target at its own min/max, so the effective ceiling is the
+  lower max — the screen says to raise it on the Kharej server too. The `tls`
+  mode is always one link and single-session transports have no pool; for those
+  the screen explains and writes nothing.
+
+### F3 — your own editor, without leaking the key
+- Edit config uses `SUDO_EDITOR`, `VISUAL` or `EDITOR` (that order, as sudoedit)
+  when it names a terminal editor installed here — a simple command line such as
+  `vim -u NONE` is fine; desktop editors and missing ones are skipped with a
+  note — else nano as before. Editor-specific hints (nano / vi keys).
+- The copy being edited holds the tunnel key, and editors write more copies
+  beside it (vim's `.swp`, emacs's `~` backup and `#autosave#`). Measured: with
+  such an editor the previous version left **3 key-bearing files** next to the
+  config; now the edit happens in a private directory (700) that is removed
+  with everything in it on every exit path (normal return, Ctrl+C, SIGTERM,
+  a dropped SSH session, a `set -e` abort; the startup sweep covers a hard kill).
+- An editor that exits with an error (vim's `:cq`) after a change no longer
+  applies it silently: the operator is asked first.
+
+### F4 — stale tests brought in line with the code
+- `helpers_test.sh` still expected the pre-A1 "warn and install anyway" when no
+  hash is published; it now asserts the fail-closed contract (exact status 0 /
+  1 / 2). `migrate_test.sh` extracts the new certificate helpers it now needs.
+
+New tests: `cert_test.sh` (real certificates in a fake certbot tree; the menu
+action driven on a pty with a recording certbot stub), `tm_tune_links_test.sh`
+(every carrier × role × direction), the editor cases in `tm_edit_test.sh`
+(including a **real vim** driven through the pty: `:wq`, `:cq`, and kill -9
+mid-edit with the session dropped), and `doctor_cert_test.go`.
+
+Known, not changed here: `tun_ports_test.py` fails the same 11 checks on `main`
+and on this branch — it still expects the wizard's pre-U5 question order; it
+needs its expectations updated, separately.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.
