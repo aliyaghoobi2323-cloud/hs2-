@@ -769,6 +769,7 @@ write_cfg_checked(){
 
 start_service(){
   local role="$1"
+  PEER_UNVERIFIED=0   # set to 1 below if the post-setup peer check fails
   mkdir -p "$(dirname "$CFG")"; chmod 700 "$(dirname "$CFG")" 2>/dev/null || true
   unit_unmask "$UNIT"
   systemctl enable "$UNIT" >/dev/null 2>&1 || true
@@ -786,6 +787,7 @@ start_service(){
   # a raw encapsulation the path filters (gre/ipip often are) runs happily and
   # carries nothing — so nothing says "ready" until packets really cross.
   if [ "${VERIFY_PEER:-0}" = 1 ] && ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-60}"; then
+    PEER_UNVERIFIED=1
     tunnel_down_help "$CFG"
     # The service is installed and RUNNING (it was health-checked just above) and
     # retries on its own, so this is NOT a failed install — do not bail. On a
@@ -797,12 +799,24 @@ start_service(){
   fi
 }
 
+# dialer_done MSG: the dialer's final line, right after start_service. The dialer
+# verifies the peer (VERIFY_PEER=1); if that FAILED, start_service already printed
+# the red "did NOT connect" diagnosis, so a green "… ready" here would contradict
+# it — say it is installed-but-not-yet-connected instead, matching what was shown.
+dialer_done(){ # message
+  if [ "${PEER_UNVERIFIED:-0}" = 1 ]; then
+    info "$UNIT is installed and running but is NOT connected yet (see above) — it keeps trying on its own."
+  else
+    ok "$1"
+  fi
+}
+
 # tunnel_up CFG: 0 when the tunnel really carries packets to the other server.
 # Every carrier counts a link only after the peer answered its authenticated
 # handshake, so a live link in the daemon's status file is proof; the carriers
 # without one (udp/auto) are proven by the peer's tun IP answering ping.
-tunnel_up(){ # cfg
-  local cfg="$1" sf links ifc peer car
+tunnel_up(){ # cfg [list]
+  local cfg="$1" mode="${2:-}" sf links ifc peer car c=1
   car=$(jget "$cfg" carrier); ifc=$(jget "$cfg" iface); peer=$(jget "$cfg" peer_ip)
   # A tunnel with a tun interface is proven by a packet crossing it and coming
   # back: ping the peer's tun IP. A link count is NOT proof for it — a path
@@ -811,8 +825,12 @@ tunnel_up(){ # cfg
   if [ "$car" != mtcp ] && [ -n "$ifc" ] && [ -n "$peer" ]; then
     # -W2 (not 1): tolerate a high-latency Iran↔foreign path so a working tunnel
     # that answers a little slowly is not read as down. ping returns 0 on the
-    # first reply, so an UP tunnel stays fast; only a down one waits the 2 s.
-    ip link show "$ifc" >/dev/null 2>&1 && ping -c1 -W2 -I "$ifc" "$peer" >/dev/null 2>&1
+    # first reply, so an UP tunnel stays fast; only a down one waits.
+    # In "list" mode send TWO probes so a single dropped echo on a lossy path
+    # (exactly the environment the datagram carriers target) does not paint a
+    # healthy tunnel red; verify_tunnel's own loop already provides retries.
+    [ "$mode" = list ] && c=2
+    ip link show "$ifc" >/dev/null 2>&1 && ping -c"$c" -W2 -I "$ifc" "$peer" >/dev/null 2>&1
     return $?
   fi
   # mtcp has no tun: a link counts only after the peer proved the key over it.
@@ -1523,7 +1541,7 @@ kharej_dialer(){
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
-    ok "KHAREJ ready (reverse, tcp). It dials in to the Iran edge and forwards to $PANEL."
+    dialer_done "KHAREJ ready (reverse, tcp). It dials in to the Iran edge and forwards to $PANEL."
   elif [ "$TRANSPORT" = "tun" ] && [ "$ENCAP" = "tcp" ]; then
     # Reverse tun: kharej DIALS the iran edge (TLS client) and runs the L3 pipe.
     # MTU comes from the link so both sides match. The user ports iran opens
@@ -1545,7 +1563,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
-    ok "KHAREJ ready (reverse, tun over TLS: $(tun_tls_label)). It dials in to the Iran edge and forwards to $PANEL."
+    dialer_done "KHAREJ ready (reverse, tun over TLS: $(tun_tls_label)). It dials in to the Iran edge and forwards to $PANEL."
     info "L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (MTU $MTU)."
   elif [ "$TRANSPORT" = "tun" ]; then
     # Reverse datagram tun (carrier "dgtun", encap $ENCAP from the link): kharej
@@ -1570,7 +1588,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
-    ok "KHAREJ ready (reverse, tun / datagram pool over $ENCAP). It dials in to the Iran edge and forwards to $PANEL."
+    dialer_done "KHAREJ ready (reverse, tun / datagram pool over $ENCAP). It dials in to the Iran edge and forwards to $PANEL."
     info "Datagram L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (encap $ENCAP)."
   else
     # udp/auto: TUN IP tunnel on $TUNIF, no panel forwarding here.
@@ -1584,7 +1602,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
     echo >&2; hr
-    ok "KHAREJ ready (reverse, $TRANSPORT / UDP+FEC). It dials in to the Iran edge."
+    dialer_done "KHAREJ ready (reverse, $TRANSPORT / UDP+FEC). It dials in to the Iran edge."
     info "An IP tunnel is up on $TUNIF (kharej $TUN_IP_KHAREJ, iran $TUN_IP_IRAN). Route panel traffic over $TUNIF."
   fi
   info "Backhaul is untouched. Status/logs any time:  bash install.sh → 4"
@@ -1643,7 +1661,7 @@ iran_dialer(){
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
-    ok "IRAN ready (direct, tcp). Users connect on port(s): $PORTS"
+    dialer_done "IRAN ready (direct, tcp). Users connect on port(s): $PORTS"
   elif [ "$TRANSPORT" = "tun" ] && [ "$ENCAP" = "tcp" ]; then
     # L3 tunnel over TLS (l3mtcp = mtcp pool, or tls = one link). Iran is the
     # TLS client here (validates the kharej's domain as SNI). MTU comes from the link so both
@@ -1671,7 +1689,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
-    ok "IRAN ready (direct, tun over TLS: $(tun_tls_label))."
+    dialer_done "IRAN ready (direct, tun over TLS: $(tun_tls_label))."
     info "L3 tunnel on $TUNIF once up: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ (MTU $MTU)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
     else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward $TUN_IP_KHAREJ yourself."; fi
@@ -1702,7 +1720,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
-    ok "IRAN ready (direct, tun / datagram pool over $ENCAP)."
+    dialer_done "IRAN ready (direct, tun / datagram pool over $ENCAP)."
     if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
     else info "Pure routed L3 tunnel on $TUNIF: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ. Route traffic toward $TUN_IP_KHAREJ."; fi
   else
@@ -1717,7 +1735,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
-    ok "IRAN ready (direct, $TRANSPORT / UDP+FEC)."
+    dialer_done "IRAN ready (direct, $TRANSPORT / UDP+FEC)."
     info "An IP tunnel is up on $TUNIF (iran $TUN_IP_IRAN, kharej $TUN_IP_KHAREJ)."
     warn "$TRANSPORT is an IP tunnel only: no user port listens here, so users can NOT reach the panel through this server unless you route traffic over $TUNIF yourself. For a panel inbound choose tcp, or tun (udp or tcp)."
     [ "$TRANSPORT" = "auto" ] && info "auto: if UDP is blocked or too lossy, it falls back to TCP silently."
@@ -2165,6 +2183,23 @@ tm_log_since(){ # UNIT SINCE
   journalctl -u "$1" --since "$2" --no-pager -o cat 2>/dev/null | tail -n 12 | sed 's/^/     /' >&2 || true
 }
 
+# tm_peer_ok UNIT CFG: 0 if the peer is reachable, 1 if not — cached ~15 s per
+# unit so the manager list does not re-run a (2-4 s when down) probe on every
+# redraw. The probe (tunnel_up … list) is loss- and latency-tolerant; the cache
+# is cleared on an explicit Refresh and after any tunnel action.
+declare -A TM_PEER_CACHE=()
+tm_peer_ok(){ # unit cfg
+  local u="$1" cfg="$2" now ts res
+  now=$(date +%s)
+  if [ -n "${TM_PEER_CACHE[$u]:-}" ]; then
+    ts=${TM_PEER_CACHE[$u]%%:*}; res=${TM_PEER_CACHE[$u]##*:}
+    [ $((now - ts)) -lt 15 ] && return "$res"
+  fi
+  if tunnel_up "$cfg" list; then res=0; else res=1; fi
+  TM_PEER_CACHE[$u]="$now:$res"
+  return "$res"
+}
+
 tm_list(){
   local units=() u cfg st i=0 links extra
   mapfile -t units < <(tm_units)
@@ -2183,7 +2218,7 @@ tm_list(){
     # whose peer is gone (the other side deleted, down, or the path closed) would
     # otherwise show green here while carrying nothing. tunnel_up actually proves
     # the far end answers, so flag it plainly on the first screen the operator sees.
-    if [ "$st" = running ] && [ -f "$cfg" ] && ! tunnel_up "$cfg"; then
+    if [ "$st" = running ] && [ -f "$cfg" ] && ! tm_peer_ok "$u" "$cfg"; then
       extra="$extra · ${C_R}✗ no peer${C_0}"
     fi
     if tm_autostart "$u"; then extra="$extra · autostart ON"; else extra="$extra · ${C_Y}autostart OFF${C_0}"; fi
@@ -2664,6 +2699,7 @@ tm_tunnel_menu(){
 
 tunnel_manager(){
   local c
+  TM_PEER_CACHE=()          # fresh peer probe on entry
   while :; do
     tm_list
     [ ${#TM_UNITS[@]} -gt 0 ] || { pause; return 0; }
@@ -2671,9 +2707,10 @@ tunnel_manager(){
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in
       0|b|B|q) return 0 ;;
-      r|R|"") continue ;;
+      r|R|"") TM_PEER_CACHE=(); continue ;;          # Refresh: re-probe peers
       *[!0-9]*) warn "Invalid choice." ;;
-      *) if [ "$c" -ge 1 ] && [ "$c" -le ${#TM_UNITS[@]} ]; then tm_tunnel_menu "${TM_UNITS[$((10#$c-1))]}"
+      *) if [ "$c" -ge 1 ] && [ "$c" -le ${#TM_UNITS[@]} ]; then
+           tm_tunnel_menu "${TM_UNITS[$((10#$c-1))]}"; TM_PEER_CACHE=()   # a tunnel action may change peer state
          else warn "There is no tunnel $c."; fi ;;
     esac
   done
@@ -2988,7 +3025,9 @@ case "${1:-}" in
   *) err "unknown command: $1"
      say "Usage: bash install.sh [manage | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
      say "       (no argument opens the menu)"
-     exit 2 ;;
+     # HS2_DIED=1 like die/bail: this is a deliberate usage error, so the EXIT
+     # trap must NOT add its "stopped unexpectedly / report to the developer" note.
+     HS2_DIED=1; exit 2 ;;
 esac
 
 # ---------- menu -------------------------------------------------------------
