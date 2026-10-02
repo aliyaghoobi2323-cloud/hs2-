@@ -88,6 +88,11 @@ func (p *prefixConn) Read(b []byte) (int, error) {
 	return p.Conn.Read(b)
 }
 
+// NetConn exposes the wrapped connection so a caller unwrapping to the kernel
+// socket (Carrier.TCPConn, for TCP_INFO stats) can see past this peek wrapper.
+// Mirrors *tls.Conn.NetConn(), which is how the TLS layer above us is unwrapped.
+func (p *prefixConn) NetConn() net.Conn { return p.Conn }
+
 // Handle takes a raw accepted TCP conn, completes TLS, and routes it. On an
 // authorised client it returns a ready carrier via onTunnel; otherwise it
 // proxies the decrypted stream to the backend so the peer gets real content.
@@ -121,6 +126,14 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	if nh == 5 && tlsRecordHeaderLooksLikeHTTP(hdr) {
 		raw.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		io.WriteString(raw, httpToHTTPS400)
+		// Consume the rest of the (already-buffered) request line/headers before
+		// closing, so the close is a clean FIN like a real Go HTTPS server rather
+		// than an RST triggered by unread data in the socket buffer — the
+		// RST-vs-FIN difference is observable. One bounded read, ≤1s, is enough:
+		// a plain-HTTP request arrives in one flight and is tiny.
+		raw.SetReadDeadline(time.Now().Add(1 * time.Second))
+		var discard [2048]byte
+		raw.Read(discard[:])
 		raw.Close()
 		return
 	}

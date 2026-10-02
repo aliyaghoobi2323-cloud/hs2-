@@ -345,6 +345,10 @@ links only when they raise throughput — but you can also cap it by lowering
   to an HTTPS server"* reply a real HTTPS server gives (not a silent close); and
   anything that is neither TLS nor HTTP is closed just as a TLS server closes on
   garbage. No response reveals the tunnel.
+- The built-in cover page is the **same on every hs2 install**, so the page
+  itself is a shared fingerprint. For the strongest cover, set `backend_addr` in
+  the kharej config to a real local web server of your own — probes are then
+  served your unique site instead of the default page.
 
 ## Managing
 

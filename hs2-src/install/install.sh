@@ -128,6 +128,9 @@ trap on_exit EXIT
 # created) and holds a copy of the tunnel key, so clear it on every start. A
 # stash this run creates is made later, by stop_for_replace, so it is untouched.
 for _st in "$CFG_DIR"/*.pre-replace; do [ -e "$_st" ] && rm -f "$_st"; done 2>/dev/null || true
+# Sweep any config-edit temp (a key-bearing copy) left behind by an edit that
+# was interrupted (Ctrl+C at a prompt) before it could clean up.
+for _st in "$CFG_DIR"/.hs2-edit.*; do [ -e "$_st" ] && rm -f "$_st"; done 2>/dev/null || true
 
 # ---------- helpers ----------------------------------------------------------
 port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
@@ -345,7 +348,15 @@ install_binary(){ # [force]
     # the prompt silently; the empty default then KEEPS the binary (the safe
     # choice). HS2_YES=1 answers "update" for unattended runs.
     if [ "${HS2_YES:-}" = 1 ]; then ans=y
-    else read -rp "Update the shared binary from GitHub now? [y/N]: " ans 2>/dev/null </dev/tty || true; fi
+    else
+      # Print the prompt to stderr OURSELVES (not via read -rp): read -rp writes
+      # the prompt to stderr too, but the 2>/dev/null that makes a no-tty host
+      # skip the read silently would ALSO hide the prompt text, leaving the user
+      # at a blank cursor. Printing it separately keeps it visible with a tty and
+      # harmless without one.
+      printf '%s' "Update the shared binary from GitHub now? [y/N]: " >&2
+      read -r ans </dev/tty 2>/dev/null || true
+    fi
     case "$ans" in
       [yY]|[yY][eE][sS]) info "Updating the shared binary from GitHub…" ;;
       *) ok "Keeping the installed hs2."; install_self; return 0 ;;
@@ -1373,13 +1384,18 @@ ask_tun_params(){
   done
 }
 ask_tun_mtu(){
-  read -rp "TUN MTU (1320 matches Backhaul; kept in sync with the other side) [1320]: " TUNMTU </dev/tty
-  TUNMTU=${TUNMTU:-1320}
   # Bare JSON number + travels in the link: a leading zero ("01320") is invalid
   # JSON on BOTH ends. The range only rules out values that are not an MTU at all
   # (the engine itself just WARNs outside 1200-1500 and runs, so the installer
   # must not be stricter than it): 68 is the IPv4 minimum, 65535 the IP maximum.
-  valid_uint "$TUNMTU" 68 65535 || die "MTU must be an integer 68-65535 with no leading zero (1320 is the default)"
+  # Re-ask on a bad value instead of aborting the whole wizard (a single typo
+  # used to `die` after a dozen earlier answers).
+  while :; do
+    read -rp "TUN MTU (1320 matches Backhaul; kept in sync with the other side) [1320]: " TUNMTU </dev/tty
+    TUNMTU=${TUNMTU:-1320}
+    if valid_uint "$TUNMTU" 68 65535; then break; fi
+    warn "MTU must be an integer 68-65535 with no leading zero (1320 is the default)."
+  done
 }
 
 # ask_direction sets DIRECTION=direct|reverse. Direction is WHO STARTS the
@@ -2574,7 +2590,11 @@ tm_bilateral_warn(){ # changed-list
   local k
   echo >&2; hr
   warn "You changed setting(s) that MUST be the SAME on the OTHER server:"
-  for k in $1; do say "     • $k"; done
+  # Iterate line-by-line: a field name can contain a space ("tunnel subnet"), so
+  # an unquoted `for k in $1` word-split it into two bogus bullets.
+  while IFS= read -r k || [ -n "$k" ]; do
+    [ -n "$k" ] && say "     • $k"
+  done <<< "$1"
   warn "Until the other side matches, this tunnel will not come up or will not authenticate —"
   warn "the check above only validates THIS server's file, not the pair."
   info "Fix the other server: edit its config to the same value(s), or re-run 'bash install.sh'"
@@ -2586,7 +2606,13 @@ tm_edit(){
   local u="$1" cfg="$2" ed tmp c a since changed
   [ -f "$cfg" ] || { err "Config file not found: $cfg"; return 0; }
   ed=$(tm_editor); [ -n "$ed" ] || { err "No text editor available (apt install nano)."; return 0; }
-  tmp=$(mktemp /tmp/hs2-edit.XXXXXX); chmod 600 "$tmp"; cp "$cfg" "$tmp"
+  tmp=$(mktemp "$CFG_DIR/.hs2-edit.XXXXXX"); chmod 600 "$tmp"
+  # The temp is a full copy of the config, which holds the tunnel key — keep it
+  # OUT of world-namespace /tmp (beside the config, same root-only 600 domain).
+  # Remove it on any return from this function; a startup sweep clears one left
+  # behind by an interrupt (Ctrl+C at a prompt).
+  trap 'rm -f "$tmp" 2>/dev/null' RETURN
+  cp "$cfg" "$tmp"
   echo >&2
   info "The config opens in $ed."
   [ "$ed" = nano ] && info "Save: Ctrl+O then Enter  ·  Close: Ctrl+X"
@@ -3169,7 +3195,13 @@ upgrade(){ # [tunnel]
   # otherwise a missing tty skips the read and the empty default CANCELS — a
   # restart is never kicked off without a yes.
   if [ "${HS2_YES:-}" = 1 ]; then a=y
-  else read -rp "Proceed? [y/N]: " a 2>/dev/null </dev/tty || a=n; fi
+  else
+    # Print the prompt ourselves so the 2>/dev/null (no-tty skip) cannot hide it
+    # and leave the operator at a blank cursor — see the matching note in
+    # install_binary.
+    printf '%s' "Proceed? [y/N]: " >&2
+    read -r a </dev/tty 2>/dev/null || a=n
+  fi
   case "$a" in [yY]|[yY][eE][sS]) ;; *) warn "Upgrade cancelled — nothing changed."; return 0 ;; esac
   hr
   auto_backup

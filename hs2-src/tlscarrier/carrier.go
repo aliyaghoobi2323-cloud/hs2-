@@ -126,10 +126,21 @@ func (c *Carrier) RawConn() net.Conn { return c.conn }
 // health without a second measurement path.
 func (c *Carrier) TCPConn() *net.TCPConn {
 	type netConner interface{ NetConn() net.Conn }
-	if nc, ok := c.conn.(netConner); ok {
-		if tc, ok := nc.NetConn().(*net.TCPConn); ok {
+	// Unwrap net.Conn wrappers until the kernel socket is reached. There can be
+	// MORE than one: the server side is tls.Conn over a prefixConn (the probe
+	// classifier's 5-byte peek), so a single unwrap would stop at prefixConn and
+	// miss the *net.TCPConn — which silently zeroed TCP_INFO (retransmits/rwnd)
+	// for the autopilot. Bounded so a self-referential wrapper cannot loop.
+	cur := c.conn
+	for i := 0; i < 8 && cur != nil; i++ {
+		if tc, ok := cur.(*net.TCPConn); ok {
 			return tc
 		}
+		nc, ok := cur.(netConner)
+		if !ok {
+			break
+		}
+		cur = nc.NetConn()
 	}
 	return nil
 }

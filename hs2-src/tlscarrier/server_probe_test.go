@@ -89,6 +89,41 @@ func TestUnrecognizedMethodClosed(t *testing.T) {
 	}
 }
 
+// Regression: the server side is tls.Conn over a prefixConn (the probe peek),
+// so Carrier.TCPConn() must still unwrap all the way to the *net.TCPConn — a
+// single-level unwrap returned nil and silently zeroed TCP_INFO (retransmits/
+// rwnd) for the autopilot on the TLS-server side.
+func TestServerCarrierTCPConnAfterPeek(t *testing.T) {
+	key := bytes.Repeat([]byte{0x77}, 32)
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	got := make(chan bool, 1)
+	addr, stop := startServer(t, key, cert, be, func(c *Carrier) {
+		got <- (c.TCPConn() != nil) // server-side carrier: tls over prefixConn over TCP
+		c.Close()
+	})
+	defer stop()
+
+	car, err := Dial(addr, "vpn.example.com", key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer car.Close()
+	if car.TCPConn() == nil {
+		t.Fatal("client carrier TCPConn() is nil")
+	}
+	car.SendFrame(1, []byte("x"))
+	select {
+	case ok := <-got:
+		if !ok {
+			t.Fatal("server carrier TCPConn() is nil after the peek — TCP_INFO would be dead")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("client never reached the tunnel")
+	}
+}
+
 // Non-TLS, non-HTTP garbage must be closed like a TLS server fed a bad
 // ClientHello: no 400, no bytes — exactly the old behaviour, preserved.
 func TestGarbageClosed(t *testing.T) {

@@ -59,7 +59,11 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   mis-fire the guard). **#18:** manual tuning rolls back if the tunnel does not
   come up.
 - **U14:** "uninstall all" needs a typed strong confirmation.
-- **U4:** rekey + rebuild the `hs2://` link from the config (round-trip tested).
+- **U4 (rekey + rebuild the link): NOT implemented — deferred.** An earlier note
+  wrongly recorded this as done; a real-server review confirmed there is no rekey
+  code. It is blocked on the config not persisting the listener's public endpoint
+  + domain, without which a regenerated link could be wrong and break a live
+  tunnel. Left for a dedicated change.
 
 ### A5 — robustness polish
 - **#12:** literal (`grep -Fx`) matching for IPs/subnets (dots are not
@@ -152,6 +156,46 @@ deferred (the half-open hold is unchanged from before, so nothing got cheaper
 to flood).
 
 ---
+
+## Post-review fixes (independent real-server review)
+
+An independent review ran the new binary on a live server. Most claims held;
+these real issues were found and fixed:
+
+- **🔴 Regression fixed — TCP_INFO went dark on the TLS-server side.** Phase C's
+  `prefixConn` stays wrapped around the connection for its whole life, and
+  `Carrier.TCPConn()` unwrapped only one level (`tls.Conn` → expected
+  `*net.TCPConn`), so it hit the `prefixConn` and returned nil — silently zeroing
+  kernel loss/rwnd that the autopilot uses (loss-based soft-degrade never fired;
+  slow-receiver vs capped-path could not be told apart) on the server side
+  (Iran in reverse, Kharej in direct). Fix: `prefixConn` now exposes `NetConn()`
+  and `TCPConn()` unwraps the whole chain; a regression test covers it.
+- **🟡 Phase C close is now a clean FIN.** The plain-HTTP 400 path left the rest
+  of the request unread, so the socket closed with an RST; a real Go server FINs.
+  It now drains the (buffered, tiny) request before closing.
+- **🟠 Invisible prompts fixed.** Two prompts (`install_binary` keep/update and
+  `upgrade` "Proceed?") were written with `read -rp "…" 2>/dev/null`, and the
+  `2>/dev/null` (there to skip silently with no tty) also hid the prompt text,
+  leaving the operator at a blank cursor. The prompt is now printed separately so
+  it is visible with a tty and still skipped without one.
+- **🟡 Installer polish.** A bad MTU now re-asks instead of aborting the whole
+  wizard; a multi-word bilateral field ("tunnel subnet") renders as one bullet,
+  not two; the config-edit temp (a key-bearing copy) is kept out of `/tmp` —
+  beside the config in `/etc/hs2` (root-only 600), removed on return, and swept
+  at startup if an interrupt left one.
+
+### Known limitations / follow-ups
+
+- **The default cover page is identical on every install** ("Oakline", one fixed
+  sha), so the page itself is a shared signature a censor could hash. For the
+  best cover, set `backend_addr` in the config to your own real site; a
+  per-install default page is a possible future change.
+- **Backups contain the certificate private key** (`privkey.pem`); they are
+  root-only (600) and the newest 10 are kept (`HS2_KEEP_BACKUPS`). Treat a backup
+  as secret.
+- Smaller: `hs2 doctor` does not detect a cert-renewal method that needs port 80
+  (standalone authenticator); the link-pool screen (U7) does not note that the
+  other side has its own cap; the config editor is always nano.
 
 ## Verification, every phase
 
