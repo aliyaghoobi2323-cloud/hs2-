@@ -241,34 +241,63 @@ tune_kernel(){
 # whoever can change the repository can change both files, so protect the
 # GitHub account (2FA), and pin a reviewed commit with
 # HS2_REPO_RAW=https://raw.githubusercontent.com/<owner>/<repo>/<commit> when that
-# matters. A repository without the .sha256 file (older) only warns.
+# matters.
 # verify_download FILE [url-suffix] — check a download against its published
 # sha256. Exit status:
 #   0  the hash was fetched and the file matches it;
 #   1  the hash was fetched but the file does NOT match (tampered/corrupt);
 #   2  no usable hash could be fetched (the .sha256 is missing — an older repo —
 #      OR the request was blocked/dropped on the path).
-# The caller decides what code 2 means in context: on a first download it is a
-# warning (older repos legitimately ship no hash), but on the retry after a
-# mismatch it is a failure, so a tampered binary whose hash is dropped on the
-# path is never installed.
+# install_binary treats BOTH 1 and 2 as a failure and retries once past the CDN
+# cache; if it still does not verify, the binary is NOT installed. A middlebox
+# that alters the binary and then drops the .sha256 to pass it off as "no hash"
+# is therefore caught, not waved through. The only way to install on a 2 is to
+# set HS2_ALLOW_UNVERIFIED=1 (an older repo that genuinely ships no hash).
+# hs2_is_v3 FILE — true if FILE is an hs2 v3 binary. Anchored so a future
+# "hs2 v30" can never be accepted as "hs2 v3".
+hs2_is_v3(){ "$1" version 2>/dev/null | grep -qE 'hs2 v3([^0-9]|$)'; }
+
 verify_download(){ # file [url-suffix]
-  local want got
-  want=$(curl -fsSL --connect-timeout 10 --retry 2 "$REPO_RAW/hs2-linux-amd64.sha256${2:-}" 2>/dev/null | awk 'NR==1{print $1}' || true)
-  case "$want" in
-    [0-9a-f]*) [ ${#want} = 64 ] || want="" ;;
-    *) want="" ;;
-  esac
-  if [ -z "$want" ]; then
-    return 2
-  fi
+  local raw want got
+  raw=$(curl -fsSL --connect-timeout 10 --retry 2 "$REPO_RAW/hs2-linux-amd64.sha256${2:-}" 2>/dev/null || true)
+  # Accept coreutils ("<hash>  file") or BSD ("SHA256 (file) = <hash>"), any
+  # case, CRLF or LF: pull the 64-hex token and lower-case it to match sha256sum.
+  want=$(printf '%s' "$raw" | grep -oE '[0-9a-fA-F]{64}' | head -1 | tr 'A-F' 'a-f' || true)
+  [ -n "$want" ] || return 2
   got=$(sha256sum "$1" | cut -d' ' -f1)
   if [ "$got" = "$want" ]; then ok "sha256 matches the published hash."; return 0; fi
   err "sha256 mismatch: published $want, downloaded $got"
   return 1
 }
 
-install_binary(){
+install_binary(){ # [force]
+  # A working v3 binary on this server is SHARED by every tunnel's service. A
+  # new tunnel's setup must NOT silently swap it for a freshly downloaded build
+  # the running tunnels were never tested against — the next restart or crash of
+  # a busy production tunnel would then bring it up on an untested binary. So
+  # when setup finds a good binary already installed, default to KEEPING it;
+  # only 'upgrade' (which passes "force" and then restarts every tunnel, each
+  # verified) replaces it deliberately.
+  local force="${1:-}"
+  if [ "$force" != force ] && [ -x "$BIN" ] && hs2_is_v3 "$BIN"; then
+    local cur ans=""
+    cur=$("$BIN" version 2>/dev/null)
+    hr
+    info "hs2 is already installed on this server (one binary, shared by every tunnel):"
+    say "    $cur"
+    say "    Keep it, and this new tunnel runs the SAME binary the others already"
+    say "    run — recommended. Updating replaces it for ALL tunnels at once; the"
+    say "    Upgrade menu is the safe way to do that (it restarts and checks each)."
+    # 2>/dev/null before </dev/tty so a host with no controlling terminal skips
+    # the prompt silently; the empty default then KEEPS the binary (the safe
+    # choice). HS2_YES=1 answers "update" for unattended runs.
+    if [ "${HS2_YES:-}" = 1 ]; then ans=y
+    else read -rp "Update the shared binary from GitHub now? [y/N]: " ans 2>/dev/null </dev/tty || true; fi
+    case "$ans" in
+      [yY]|[yY][eE][sS]) info "Updating the shared binary from GitHub…" ;;
+      *) ok "Keeping the installed hs2."; install_self; return 0 ;;
+    esac
+  fi
   local d tmp; tmp=$(mktemp)
   d=$(cd "$(dirname "$0")" 2>/dev/null && pwd || pwd)
   # Download the latest from GitHub first, so a stale binary lying around can
@@ -280,31 +309,31 @@ install_binary(){
     ok "Downloaded."
     local rc=0
     verify_download "$tmp" || rc=$?
-    if [ "$rc" = 2 ]; then
-      warn "No published sha256 to check the download against (hs2-linux-amd64.sha256 missing or unreachable) — relying on the version check only."
-    elif [ "$rc" != 0 ]; then
-      # A mismatch. Right after a release the CDN can briefly serve the new
-      # binary with the old hash (or the reverse): fetch both once more past the
-      # cache before calling the download bad. This time fail CLOSED — if the
-      # hash still does not match, OR cannot be fetched at all (code 2), the
-      # binary is NOT installed. A middlebox that alters the binary and then
-      # drops the .sha256 request can no longer pass it off as "no hash".
-      local q="?v=$(date +%s)"
-      warn "Fetching the binary and its hash once more (bypassing the CDN cache)…"
+    if [ "$rc" != 0 ]; then
+      # rc=1 (mismatch) or rc=2 (no hash fetched). Right after a release the CDN
+      # can briefly serve the new binary with the old hash; and a middlebox can
+      # alter the binary and then DROP the .sha256 request to pass it off as
+      # "no hash". So fetch both once more past the CDN cache and fail CLOSED:
+      # if it still does not verify — a mismatch OR the hash cannot be fetched —
+      # the binary is NOT installed.
+      local q; q="?v=$(date +%s)"
+      warn "Verifying once more past the CDN cache…"
       rc=1
       if curl -fL --connect-timeout 10 --retry 2 -o "$tmp" "$REPO_RAW/hs2-linux-amd64$q" 2>/dev/null; then
         rc=0; verify_download "$tmp" "$q" || rc=$?
       fi
-      if [ "$rc" != 0 ]; then
+      if [ "$rc" = 2 ] && [ "${HS2_ALLOW_UNVERIFIED:-}" = 1 ]; then
+        warn "No published sha256 to verify against; installing UNVERIFIED (HS2_ALLOW_UNVERIFIED=1)."
+      elif [ "$rc" != 0 ]; then
         rm -f "$tmp"
-        die "the downloaded binary does not match its published sha256, or the hash could not be fetched to verify it — NOT installed. Run again in a few minutes; if it keeps failing, something on the path is altering the download."
+        die "the downloaded binary could not be verified against its published sha256 (a mismatch, or the hash could not be fetched) — NOT installed. Try again in a few minutes; if it persists, something on the path is altering the download. An older repo that genuinely ships no hash: re-run with HS2_ALLOW_UNVERIFIED=1."
       fi
     fi
   elif [ -f "$d/hs2-linux-amd64" ] || [ -f "./hs2-linux-amd64" ]; then
     local f="$d/hs2-linux-amd64"; [ -f "$f" ] || f="./hs2-linux-amd64"
     warn "GitHub unreachable — using local $f (make sure it is the NEW one)."
     cp "$f" "$tmp"
-  elif [ -x "$BIN" ] && "$BIN" version 2>/dev/null | grep -q "hs2 v3"; then
+  elif [ -x "$BIN" ] && hs2_is_v3 "$BIN"; then
     # Re-running setup (e.g. from hs2-menu) on a server that cannot reach
     # GitHub: the binary already installed is good enough to build a tunnel.
     warn "GitHub unreachable — keeping the hs2 already installed on this server."
@@ -315,16 +344,21 @@ install_binary(){
     die "download failed. On the Iran server, copy hs2-linux-amd64 from the kharej server into $(pwd) and run again."
   fi
   chmod 755 "$tmp"
-  "$tmp" version 2>/dev/null | grep -q "hs2 v3" \
+  hs2_is_v3 "$tmp" \
     || { rm -f "$tmp"; die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."; }
-  # No tunnel is stopped here: install replaces the file (unlink + new file), so
-  # running tunnels keep the old binary until their own restart. The tunnel
-  # being set up restarts at the end; the others move with Upgrade.
-  install -m755 "$tmp" "$BIN"; rm -f "$tmp"
+  # No tunnel is stopped here: the rename below swaps the file (the old inode
+  # lives on), so running tunnels keep the old binary until their own restart.
+  # The tunnel being set up restarts at the end; the others move with Upgrade.
+  # Stage beside $BIN then rename, so a failed or partial copy never leaves a
+  # half-written $BIN that the exit trap would then try to start.
+  local new="$BIN.new.$$"
+  if ! install -m755 "$tmp" "$new"; then rm -f "$tmp" "$new"; die "could not stage the new binary (disk full, or $BIN not writable)."; fi
+  rm -f "$tmp"
+  if ! mv -f "$new" "$BIN"; then rm -f "$new"; die "could not install the new binary to $BIN."; fi
   # The full hash: compare it between the two servers (the Iran side may have
   # been given a copy by hand).
   info "sha256: $(sha256sum "$BIN" | cut -d' ' -f1)"
-  "$BIN" version 2>/dev/null | grep -q "hs2 v3"     || die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."
+  hs2_is_v3 "$BIN" || die "binary is outdated or corrupt (need hs2 v3). Re-download hs2-linux-amd64."
   ok "Installed $("$BIN" version 2>/dev/null)"
   install_self
 }
@@ -2373,6 +2407,7 @@ tm_tunnel_menu(){
     say "  6) Live pattern monitor (parallel links, updating)"
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
+    say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
     say "  9) Delete this tunnel (service, config and tun interface)"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
@@ -2385,6 +2420,7 @@ tm_tunnel_menu(){
       6) tm_monitor "$u" "$cfg" ;;
       7) tm_toggle_autostart "$u" ;;
       8) tm_tune "$u" "$cfg" ;;
+      u|U) upgrade "$u"; pause ;;
       9) if tm_delete "$u"; then pause; return 0; fi ;;
       0|b|B|"") return 0 ;;
       *) warn "Invalid choice." ;;
@@ -2413,9 +2449,26 @@ tunnel_manager(){
 # when GitHub is unreachable (Iran side).
 install_self(){
   local tmp; tmp=$(mktemp)
-  if curl -fsSL --connect-timeout 10 -o "$tmp" "$REPO_RAW/install.sh" 2>/dev/null && grep -q 'hs2 v3' "$tmp"; then :
-  elif [ -f "$0" ] && grep -q 'hs2 v3' "$0" 2>/dev/null; then cp "$0" "$tmp"
-  else rm -f "$tmp"; return 0; fi
+  # Prefer the script that is actually running (a local file we already trust),
+  # so there is no network fetch and no window to swap the root-run hs2-menu.
+  if [ -f "$0" ] && grep -q 'hs2 v3' "$0" 2>/dev/null; then
+    cp "$0" "$tmp"
+  elif curl -fsSL --connect-timeout 10 -o "$tmp" "$REPO_RAW/install.sh" 2>/dev/null && grep -q 'hs2 v3' "$tmp"; then
+    # Fetched over the network (curl|bash: no local file). hs2-menu runs as
+    # root, so verify it against the published install.sh.sha256 and fail CLOSED
+    # — the same discipline the binary gets.
+    local sraw swant sgot
+    sraw=$(curl -fsSL --connect-timeout 10 "$REPO_RAW/install.sh.sha256" 2>/dev/null || true)
+    swant=$(printf '%s' "$sraw" | grep -oE '[0-9a-fA-F]{64}' | head -1 | tr 'A-F' 'a-f' || true)
+    sgot=$(sha256sum "$tmp" | cut -d' ' -f1)
+    if [ -z "$swant" ] || [ "$sgot" != "$swant" ]; then
+      rm -f "$tmp"
+      warn "install.sh could not be verified against install.sh.sha256 — hs2-menu not installed. Re-run 'bash install.sh' from a trusted copy to add the menu shortcut."
+      return 0
+    fi
+  else
+    rm -f "$tmp"; return 0
+  fi
   install -m755 "$tmp" "$MENU_BIN"; rm -f "$tmp"
   return 0
 }
@@ -2619,16 +2672,42 @@ auto_backup(){
   backup >/dev/null
 }
 
-# Upgrade in place: new binary, and EVERY tunnel restarted on it with its own
-# config and hs2:// link unchanged (each is checked, and reconnects checked).
-upgrade(){
-  local units u role fails=0
-  units=$(tm_units)
-  [ -n "$units" ] || die "hs2 is not installed on this server (no tunnel). Run without 'upgrade' to install."
-  hr; info "Upgrading hs2 — configs and links stay the same. Tunnels: $(echo $units)"; hr
+# Upgrade in place: new binary, and the chosen tunnel(s) restarted on it with
+# their own config and hs2:// link unchanged (each is checked, and reconnects
+# checked). With a tunnel name it upgrades only that one; with none, all of
+# them. Either way the user sees the exact restart list and confirms first — a
+# restart briefly drops that tunnel's traffic, which matters on a busy tunnel.
+upgrade(){ # [tunnel]
+  local all units u role fails=0 a
+  all=$(tm_units)
+  [ -n "$all" ] || die "hs2 is not installed on this server (no tunnel). Run without 'upgrade' to install."
+  if [ -n "${1:-}" ]; then
+    u=$(norm_unit "$1") || die "bad tunnel name: $1"
+    unit_exists "$u" || die "no such tunnel on this server: $u (open the Tunnel manager to list them)."
+    units="$u"
+  else
+    units="$all"
+  fi
+  hr; info "Upgrade hs2 — the latest binary, then RESTART these tunnel(s):"
+  for u in $units; do say "     • $u — $(unit_desc "$u")"; done
+  say "   A restart briefly drops that tunnel's traffic (a few seconds)."
+  if [ "$units" != "$all" ]; then
+    # The binary is one shared file; replacing it moves every tunnel to the new
+    # build on ITS next restart. We only restart the chosen one now, but the
+    # others are no longer pinned to the old build — say so plainly.
+    warn "This replaces the shared binary. Other tunnels keep running the current"
+    warn "build until they are restarted (a crash, a reboot, or their own upgrade)."
+  fi
+  # Unattended runs (CI, cron, curl|bash with no tty) set HS2_YES=1 to proceed;
+  # otherwise a missing tty skips the read and the empty default CANCELS — a
+  # restart is never kicked off without a yes.
+  if [ "${HS2_YES:-}" = 1 ]; then a=y
+  else read -rp "Proceed? [y/N]: " a 2>/dev/null </dev/tty || a=n; fi
+  case "$a" in [yY]|[yY][eE][sS]) ;; *) warn "Upgrade cancelled — nothing changed."; return 0 ;; esac
+  hr
   auto_backup
   install_prereqs
-  install_binary
+  install_binary force
   for u in $units; do
     use_unit "$u"
     echo >&2; info "Tunnel $u"
@@ -2652,8 +2731,9 @@ upgrade(){
     fi
   done
   echo >&2
-  # Every tunnel now runs the new binary: rules older binaries left behind
-  # (they could not always clean up on stop) can go.
+  # Sweep echo-guard rules left by daemons that are no longer running (keyed on
+  # a dead PID). Safe in a partial upgrade too: a tunnel still on the old build
+  # has a live PID, so its rule is kept.
   kernel_cleanup
   [ "$fails" = 0 ] || { err "$fails tunnel(s) did not start — see above."; bail; }
   ok "hs2 upgraded. Upgrade the OTHER server(s) too (both sides of a tunnel must match)."
@@ -2663,7 +2743,7 @@ upgrade(){
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
 case "${1:-}" in
   manage)  tunnel_manager; exit 0 ;;
-  upgrade) upgrade; exit 0 ;;
+  upgrade) upgrade "${2:-}"; exit 0 ;;
   backup)  backup >/dev/null; exit 0 ;;
   restore) restore "${2:-}"; exit 0 ;;
 esac
