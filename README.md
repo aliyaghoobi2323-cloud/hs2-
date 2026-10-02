@@ -147,25 +147,32 @@ Each inner flow is pinned to one carrier for as long as it lives (a pool resize 
 The icmp encapsulation is shaped so a passive or stateful classifier cannot pick
 it out of ordinary ping by its *form*:
 
-- **No fixed constant.** There is no framing magic. The only thing that tells the
-  two directions apart is a keyed byte in the echo **sequence** (not the echo id,
-  which NAT may rewrite), and the structured header after it is XOR-masked with a
-  ChaCha20 keystream from an 8-byte per-packet nonce — so nothing above the ICMP
-  type/code is a stable value or a readable counter.
+- **No fixed constant in the carrier header.** There is no framing magic. The
+  carrier's own structured header — its tag, wire sequence and FEC fields — sits
+  after an 8-byte per-packet nonce and is XOR-masked with a ChaCha20 keystream, so
+  on the wire it is never a stable value or a readable counter. Above it, the ICMP
+  **id** and **echo sequence** stay in the clear *on purpose*, shaped to look
+  exactly like an ordinary ping: a per-link id (like a ping's pid), and a sequence
+  whose high byte is a keyed per-direction tag and whose low byte is a small
+  ascending counter. Direction is told apart by that keyed sequence byte — not the
+  id, which NAT may rewrite.
 - **Ping-like exchange.** Requests carry DF=1 and replies DF=0, exactly as the
   kernel's own ping does. Each reply takes its own ascending echo sequence (never
-  a repeat), and the tunnel keeps roughly **one reply per request** like a real
-  ping — in reverse mode at near-zero cost, in direct mode by padding the gap with
-  cheap filler echoes.
+  a repeat), and the pool keeps roughly **one reply per request** like a real
+  ping: whichever direction is light is topped up with cheap filler echoes — a
+  request on the side that sends requests, a reply on the side that sends replies
+  — so the heavy, data-carrying direction pays nothing (this holds in both direct
+  and reverse).
 - **Size.** Small packets, keepalives and fillers are padded to a handful of size
   buckets, so a frame's size no longer tracks its payload. Bulk packets (already
   near the MTU) are left as they are, so the bulk direction carries no padding
-  overhead; set `HS2_DG_PAD=0` to turn padding off entirely for the last few
-  percent of goodput.
+  overhead. This applies to every datagram encap (udp/icmp/gre/ipip/ipx); set
+  `HS2_DG_PAD=0` to turn padding off entirely for the last few percent of goodput.
 
 The data itself is always end-to-end AEAD-encrypted (ChaCha20-Poly1305); the
 obfuscation is cosmetic and keyed separately — it only removes patterns, it is
-not the security boundary.
+not the security boundary. This release changed the icmp wire format: it is **not
+compatible with older hs2 icmp tunnels**, so upgrade both ends together.
 
 **What it cannot hide — volume.** You cannot move real throughput and still look
 like an ordinary ping. A normal ping is a slow trickle of tiny, low-entropy
@@ -174,10 +181,10 @@ packets; encrypted bulk is a stream of large, high-entropy ones. Framing erases
 at hundreds or thousands of packets per second is itself the tell — no amount of
 header shaping changes that. The real mitigation is **deployment, not framing**:
 spread the load across several server IPs so no single IP pair carries a
-ping-unlike rate (the pool already spreads across several carriers; `bind_local_ip`
-and multiple exit IPs let you split it further), and reserve icmp for paths that
-pass *only* ICMP — where a path also passes udp or tls, those carry far more per
-IP without pretending to be ping.
+ping-unlike rate — `bind_local_ip` and multiple exit IPs let you split it across
+IPs (several carriers to one IP do not help here, since they share the pair). And
+reserve icmp for paths that pass *only* ICMP — where a path also passes udp or
+tls, those carry far more per IP without pretending to be ping.
 
 ## What the installer checks for you
 
@@ -191,8 +198,11 @@ IP without pretending to be ping.
 - **No tunnel port for raw encapsulations.** tun over icmp / gre / ipip / ipx
   rides a bare IP protocol, so no port is asked or put in the link.
 - **The icmp tunnel keeps normal ping working.** Only the kernel's replies to
-  the tunnel's own packets are dropped (an nftables rule, iptables as a
-  fallback) — the server still answers ordinary ping on every IP. The rule is
+  the tunnel's own packets are dropped — by an nftables rule, or iptables — so
+  the server keeps answering ordinary ping. If neither nftables nor iptables is
+  usable it falls back to `net.ipv4.icmp_echo_ignore_all=1`, which *does* silence
+  all ping replies while the tunnel runs (it logs a warning asking you to install
+  nftables; `HS2_ICMP_SUPPRESS=nft|iptables|global` forces a method). The rule is
   removed when the tunnel stops; one left by a killed daemon is removed by the
   next start or by `hs2 cleanup` (never another running tunnel's).
 - **The download is checked** against `hs2-linux-amd64.sha256` (catches a
@@ -242,10 +252,13 @@ the per-connection cap; use `mtcp` there.
 ## Requirements
 
 - Two Linux servers (tested on Ubuntu 22.04+), root access.
-- A domain whose A record points to the **kharej** server.
-- Port 80 free on the kharej server during first install (for the certificate),
-  or an existing Let's Encrypt certificate for the domain.
-- A free tunnel port on the kharej server (default 2096).
+- **TLS modes only** (`mtcp` / `l3mtcp` / `tls`, and tun-over-tcp): a domain whose
+  A record points to the **kharej** server, and port 80 free on kharej during the
+  first install (for the certificate) — or an existing Let's Encrypt certificate.
+  The `udp` / `auto` transports and the datagram tun encaps (udp/icmp/gre/ipip/ipx)
+  need **no domain and no certificate** — they authenticate with the shared key.
+- A free tunnel port on the kharej server (default 2096) for the port-based modes;
+  the raw encaps (icmp/gre/ipip/ipx) ride a bare IP protocol and use no port.
 
 ## Install
 
@@ -255,8 +268,10 @@ the per-connection cap; use `mtcp` there.
 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main/install.sh)
 ```
 
-Choose **1**, answer the prompts (domain, tunnel port, panel inbound, mode,
-UDP). At the end it prints a **`hs2://…` setup link** — copy it.
+Choose **1**, pick a transport, then answer its prompts — for a TLS transport:
+domain, tunnel port, panel inbound, mode, UDP; for a datagram transport
+(`auto`/`udp` or a raw tun encap): the encapsulation and tunnel settings (no
+domain or certificate). At the end it prints a **`hs2://…` setup link** — copy it.
 
 ### 2. Iran server
 
@@ -278,9 +293,10 @@ SNI, security — stays the same.
 
 ## Upgrade an existing install (one command)
 
-v3 is **not** wire-compatible with v2. Upgrade the **kharej server first, then
-Iran**; the tunnel is down only between the two. Config and the `hs2://` link
-stay the same:
+v3 is **not** wire-compatible with v2, and this release also changed the **icmp**
+wire format — so both ends of a tunnel must run the same build. Upgrade the
+**kharej server first, then Iran**; the tunnel is down only between the two.
+Config and the `hs2://` link stay the same:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main/install.sh | bash -s upgrade
@@ -293,13 +309,20 @@ run `cd /root/hs2 && bash install.sh upgrade`.
 Existing configs keep their mode. To switch, edit `"carrier"` in
 `/etc/hs2/config.json` on both servers and `systemctl restart hs2`.
 
-## Modes
+## Stream modes (TLS)
+
+These ride TLS and need a domain + certificate (see Requirements). The installer's
+recommended transport is **`auto`** (it probes udp first, then falls back to
+tcp/TLS); these are the TLS carriers it can land on:
 
 | mode     | links | hs0 tunnel IPs | use it when                                  |
 |----------|-------|----------------|----------------------------------------------|
-| `mtcp`   | 2–32  | no             | default — fastest, beats per-connection caps |
+| `mtcp`   | 2–32  | no             | fastest TLS mode, beats per-connection caps  |
 | `l3mtcp` | 2–32  | yes            | you also need 10.77.0.x (ping, non-TCP)      |
 | `tls`    | 1     | yes            | you want a single connection on the wire     |
+
+For the **datagram** transports — `auto` / `udp`, and tun over udp/icmp/gre/ipip/ipx
+(no domain, no certificate) — see *Datagram tunnels on throttled paths* above.
 
 On a slow path that is **not** throttled per connection, fewer links give
 lower latency under full load, because several parallel flows keep a standing
