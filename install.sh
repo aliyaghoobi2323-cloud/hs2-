@@ -508,8 +508,14 @@ set_tun_subnet(){ # base (a.b.c.d, d a multiple of 4)
 }
 
 # block_of IP -> the /30 it belongs to. 10# forces base-10 so a leading-zero
-# octet in a hand-edited config (reached via used_blocks) can't abort the math.
-block_of(){ local l=${1##*.}; echo "${1%.*}.$(( 10#$l / 4 * 4 ))"; }
+# octet can't abort the math; a non-numeric/empty last octet (a hand-edited
+# config reaching this via used_blocks) yields a harmless .0 rather than aborting
+# the whole installer under set -e with a raw arithmetic error.
+block_of(){
+  local l=${1##*.}
+  case "$l" in ''|*[!0-9]*) echo "${1%.*}.0"; return 0 ;; esac
+  echo "${1%.*}.$(( 10#$l / 4 * 4 ))"
+}
 
 # valid_block BASE: a /30 base inside 10.77.0.0/16.
 valid_block(){ # base
@@ -748,11 +754,15 @@ write_cfg_checked(){
   if printf '%s' "$out" | grep -q "unknown command"; then
     if command -v python3 >/dev/null 2>&1; then
       python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$new" >/dev/null 2>&1 \
-        || { rm -f "$new"; die "the generated config is not valid JSON — not installed. This is an installer bug; please report the inputs you used."; }
+        || { rm -f "$new"; die "the config did not come out as valid JSON — not installed. Re-run setup and check the values you entered (a domain/panel/port)."; }
     fi
   elif [ "$rc" != 0 ]; then
+    # The engine (hs2 check) rejected it. The reason is already printed via err;
+    # it is almost always an entered value it does not accept (e.g. an ipx proto
+    # number reserved for a real protocol, or a panel/port it cannot parse), not
+    # an installer fault — so tell the operator to re-run and pick another value.
     err "$out"; rm -f "$new"
-    die "the generated config did not pass 'hs2 check' — not installed. This is an installer bug; please report the inputs you used."
+    die "the config was rejected by 'hs2 check' (see the error above) — not installed. Re-run setup and enter a different value."
   fi
   mv -f "$new" "$CFG" || { rm -f "$new"; die "could not install the config to $CFG."; }
 }
@@ -1134,7 +1144,9 @@ valid_uint(){ # value min max
     0) ;;                      # a single zero is fine
     0*) return 1 ;;            # any other leading zero -> invalid/octal JSON
   esac
-  [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+  # 2>/dev/null: a value longer than bash's integer width would otherwise leak
+  # a raw "[: integer expression expected" — it is simply out of range, reject it.
+  [ "$1" -ge "$2" ] 2>/dev/null && [ "$1" -le "$3" ] 2>/dev/null
 }
 
 # valid_domain NAME — true for a plausible hostname or IPv4 literal carrying no
@@ -1150,14 +1162,21 @@ valid_domain(){ # name
   [ "${#1}" -le 253 ]
 }
 
-# valid_hostport HP — true for host:port where host passes valid_domain (a
-# hostname or IPv4) and port is 1-65535. Used for the panel address, which is
-# written into a JSON string. IPv6 (bracketed) is not accepted here.
+# valid_hostport HP — true for a panel address host:port that is safe to put in
+# a JSON string and in the '|'-delimited link, and that ends in a real port. The
+# host grammar is deliberately permissive (hostname, IPv4, bracketed IPv6,
+# underscore names a panel may use): the engine's `hs2 check` validates the
+# address semantics, so the installer only has to keep out the characters that
+# would break the JSON or the link ('"', '\', '|', whitespace) and require a
+# numeric port, rather than being stricter than the engine it configures.
 valid_hostport(){ # host:port
-  local hp="${1:-}" host port
-  case "$hp" in *:*) ;; *) return 1 ;; esac
-  host=${hp%:*}; port=${hp##*:}
-  valid_domain "$host" || return 1
+  local hp="${1:-}" port
+  case "$hp" in
+    '') return 1 ;;
+    *'"'*|*'\'*|*'|'*|*[[:space:]]*) return 1 ;;   # JSON/link-breaking chars
+    *:*) ;; *) return 1 ;;                          # must carry a :port
+  esac
+  port=${hp##*:}
   valid_uint "$port" 1 65535
 }
 
@@ -1248,9 +1267,10 @@ ask_tun_mtu(){
   read -rp "TUN MTU (1320 matches Backhaul; kept in sync with the other side) [1320]: " TUNMTU </dev/tty
   TUNMTU=${TUNMTU:-1320}
   # Bare JSON number + travels in the link: a leading zero ("01320") is invalid
-  # JSON on BOTH ends, and an absurd value blackholes traffic. 576-1500 is the
-  # usable window (the binary additionally WARNs outside 1200-1500).
-  valid_uint "$TUNMTU" 576 1500 || die "MTU must be an integer 576-1500 with no leading zero (1320 is the default)"
+  # JSON on BOTH ends. The range only rules out values that are not an MTU at all
+  # (the engine itself just WARNs outside 1200-1500 and runs, so the installer
+  # must not be stricter than it): 68 is the IPv4 minimum, 65535 the IP maximum.
+  valid_uint "$TUNMTU" 68 65535 || die "MTU must be an integer 68-65535 with no leading zero (1320 is the default)"
 }
 
 # ask_direction sets DIRECTION=direct|reverse. Direction is WHO STARTS the
@@ -1305,13 +1325,18 @@ parse_link(){
   ENCAP=${ENCAP:-}
   # Sanitize the two numbers the link carries, so a hand-edited or third-party
   # link can never write invalid JSON on THIS side. PROTO blanks on a bad value
-  # (ipx_proto_from_link then re-asks it, as for an older link that omits it);
-  # MTU cannot be re-asked on the pasting side, so a present-but-invalid MTU is
-  # a hard error (a bad MTU cannot yield a working tunnel either way).
+  # (ipx_proto_from_link then re-asks it, as for an older link that omits it).
+  # MTU cannot be re-asked on the pasting side, so we only reject a value that
+  # would be invalid JSON (non-numeric, or a leading zero); any valid-JSON
+  # integer is kept verbatim — the engine accepts any MTU and only WARNs on an
+  # unusual one, so the installer must not reject a value an already-issued link
+  # legitimately carries (and `hs2 check` at write time catches a truly bad one).
   valid_uint "${PROTO:-}" 0 255 || PROTO=""
   case "${MTU:-}" in
     ''|-) MTU="" ;;
-    *) valid_uint "$MTU" 576 1500 || die "the link carries an invalid MTU ($MTU) — regenerate it on the OTHER server." ;;
+    *[!0-9]*) die "the link carries a non-numeric MTU ($MTU) — regenerate it on the OTHER server." ;;
+    0|[1-9]*) : ;;   # valid JSON integer (0, or no leading zero) — keep as the peer set it
+    *) die "the link carries a malformed MTU ($MTU, leading zero) — regenerate it on the OTHER server." ;;
   esac
   LNAME=${LNAME:-hs2}; LSUBNET=${LSUBNET:-10.77.0.0}
 }
@@ -2372,12 +2397,25 @@ tm_validate(){
 # LOCAL file, so a one-sided change to one of these passes validation and
 # restarts cleanly here yet silently breaks the tunnel — this surfaces it.
 tm_bilateral_changed(){ # oldcfg newcfg
-  local spec key getter old new
-  for spec in shared_key:jget carrier:jget encap:jget sni:jget local_cidr:jget addr:jget mtu:jraw proto:jraw reverse:jraw; do
+  local spec key getter old new ob nb
+  # Fields that must be BYTE-IDENTICAL on both ends (they travel in the link or
+  # decide authentication). local_cidr and addr are deliberately NOT here: each
+  # side's tun host differs by design (iran base+1, kharej base+2), and addr is
+  # a per-side bind/endpoint — telling the operator to copy them to the peer
+  # would create a duplicate tun IP or a wrong endpoint.
+  for spec in shared_key:jget carrier:jget encap:jget sni:jget mtu:jraw proto:jraw reverse:jraw; do
     key=${spec%:*}; getter=${spec#*:}
     old=$("$getter" "$1" "$key"); new=$("$getter" "$2" "$key")
     [ "$old" = "$new" ] || echo "$key"
   done
+  # The /30 BASE is bilateral (it is what travels in the link); the per-side host
+  # inside it is not, so compare the base rather than the local_cidr string. Both
+  # configs already passed `hs2 check`, so local_cidr is a valid CIDR here.
+  old=$(jget "$1" local_cidr); new=$(jget "$2" local_cidr)
+  if [ -n "$old" ] && [ -n "$new" ]; then
+    ob=$(block_of "${old%/*}"); nb=$(block_of "${new%/*}")
+    [ "$ob" = "$nb" ] || echo "tunnel subnet"
+  fi
 }
 
 # tm_bilateral_warn CHANGED — warn about bilateral fields the edit changed and
