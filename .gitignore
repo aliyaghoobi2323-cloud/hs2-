@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Stray Go build artifact from `go build ./cmd/hs2` (no -o) run inside hs2-src.
+# The published binary is hs2-linux-amd64 at the repo root; this is never it.
+hs2-src/hs2
