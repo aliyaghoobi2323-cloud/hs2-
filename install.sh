@@ -164,7 +164,7 @@ show_ips(){ local_ips | sed 's/^/   /' >&2; }
 first_public_ip(){ local_ips | sed -n 1p; }
 
 # ip_is_local reports whether an IPv4 address is assigned to a local interface.
-ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##' | grep -x "$1" >/dev/null; }
+ip_is_local(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | sed 's#/.*##' | grep -Fx "$1" >/dev/null; }
 
 # ask_bind_ip sets BINDADDR: the local IP this server LISTENS on. A specific IP
 # lets a multi-IP server dedicate one address to the tunnel; it is validated to
@@ -212,22 +212,30 @@ ask_egress_ip(){
 }
 
 # ask_user_ip sets USERIP (user_listen_ip): the local IP the USER ports open on.
-# Enter keeps every address — all IPv4 AND IPv6 — which on a multi-IP server
-# is easy to do by accident, so there the IPs are listed and the choice spelled
-# out. A typed IP is validated like ask_bind_ip (a typo would otherwise only
-# show up as a failed start). 'all' or 0.0.0.0 also mean every address.
+# Default: the public IP chosen for this server (so a multi-IP box does not open
+# the user ports on EVERY address — all IPv4 AND IPv6 — by accident, which was
+# the old Enter behaviour). Typing 'all' (or 0.0.0.0) is the deliberate way to
+# bind every address. When there is no local public IP to default to (a NAT'd
+# server whose PUBIP is not on an interface), Enter still means all, since
+# binding a non-local IP would just fail. A typed IP is validated like ask_bind_ip.
 ask_user_ip(){
-  local n; n=$(local_ips | wc -l)
-  if [ "$n" -gt 1 ]; then echo >&2; info "IPs on this server (the user ports can open on one of them, or on all):"; show_ips; fi
+  local n def=""; n=$(local_ips | wc -l)
+  [ -n "${PUBIP:-}" ] && ip_is_local "$PUBIP" && def="$PUBIP"
+  if [ "$n" -gt 1 ]; then echo >&2; info "IPs on this server (the user ports can open on one of them, or 'all'):"; show_ips; fi
   while :; do
-    read -rp "IP that USERS connect to on this server (Enter = ALL IPs, IPv4 and IPv6): " USERIP </dev/tty
+    if [ -n "$def" ]; then
+      read -rp "IP that USERS connect to on this server [$def; type 'all' for every IP incl. IPv6]: " USERIP </dev/tty
+      USERIP=${USERIP:-$def}
+    else
+      read -rp "IP that USERS connect to on this server (Enter = ALL IPs, IPv4 and IPv6): " USERIP </dev/tty
+    fi
     case "$USERIP" in
       ''|all|ALL|0.0.0.0|'*') USERIP=""
         [ "$n" -gt 1 ] && info "User ports open on all $n IPv4 addresses (and IPv6)."
         return 0 ;;
     esac
     if ip_is_local "$USERIP"; then ok "User ports open on $USERIP only."; return 0; fi
-    warn "$USERIP is not on this server. Pick one from the list, or Enter for all."
+    warn "$USERIP is not on this server. Pick one from the list, type 'all', or Enter for ${def:-all}."
   done
 }
 
@@ -602,7 +610,7 @@ pick_subnet(){
     b="10.77.$(( RANDOM % 256 )).$(( (RANDOM % 64) * 4 ))"
     [ "$b" = 10.77.0.0 ] && continue
     printf '%s
-' "$used" | grep -qx "$b" && continue
+' "$used" | grep -Fqx "$b" && continue
     set_tun_subnet "$b"; return 0
   done
   die "could not find a free tunnel subnet in 10.77.0.0/16"
@@ -624,7 +632,7 @@ ask_subnet(){
     b=${ans%/*}                     # accept "10.77.42.0" or "10.77.42.0/30"
     if ! valid_block "$b"; then warn "Enter a /30 base inside 10.77.0.0/16 (last octet a multiple of 4), e.g. 10.77.42.0."; continue; fi
     used=$(used_blocks)             # capture first (pipefail/SIGPIPE), same idiom as check_link_subnet
-    if printf '%s\n' "$used" | grep -qx "$b"; then warn "$b/30 is already in use on this server — pick another, or press Enter for the default."; continue; fi
+    if printf '%s\n' "$used" | grep -Fqx "$b"; then warn "$b/30 is already in use on this server — pick another, or press Enter for the default."; continue; fi
     set_tun_subnet "$b"; ok "Tunnel subnet set to $b/30."; return 0
   done
 }
@@ -639,7 +647,7 @@ check_link_subnet(){
   # under `set -o pipefail` makes the pipeline report failure — i.e. "not used" —
   # so a real collision is missed about half the time. Same idiom as pick_subnet.
   used=$(used_blocks)
-  if printf '%s\n' "$used" | grep -qx "$b"; then
+  if printf '%s\n' "$used" | grep -Fqx "$b"; then
     for u in $(tm_units); do
       [ "$u" = "$UNIT" ] && [ "${REPLACING:-0}" = 1 ] && continue
       c=$(tm_cfg "$u"); lc=$(jget "$c" local_cidr)
@@ -677,7 +685,7 @@ iface_taken(){ # name
   local own="" used
   [ "${REPLACING:-0}" = 1 ] && own=$(cfg_tun_iface "$CFG")
   used=$(used_ifaces) # capture first: `used_ifaces | grep -q` can SIGPIPE the producer under pipefail and miss a match
-  printf '%s\n' "$used" | grep -qx "$1" && return 0
+  printf '%s\n' "$used" | grep -Fqx "$1" && return 0
   [ "$1" != "$own" ] && ip link show "$1" >/dev/null 2>&1
 }
 
@@ -688,7 +696,7 @@ free_iface(){
   [ "${REPLACING:-0}" = 1 ] && own=$(cfg_tun_iface "$CFG")
   if [ -n "$own" ]; then
     used=$(used_ifaces) # capture first (see iface_taken): avoids the pipefail/SIGPIPE false negative
-    if ! printf '%s\n' "$used" | grep -qx "$own"; then echo "$own"; return 0; fi
+    if ! printf '%s\n' "$used" | grep -Fqx "$own"; then echo "$own"; return 0; fi
   fi
   while iface_taken "hs$i"; do i=$((i + 1)); done
   echo "hs$i"
@@ -730,6 +738,16 @@ restart_unit(){ # unit
 write_service(){
   local role="$1"
   unit_unmask "$UNIT"   # before writing: a masked unit file is a /dev/null symlink
+  # StartLimit* moved from [Service] to [Unit] in systemd 230. On older systemd
+  # the [Unit] form is silently ignored, so the tunnel would stop being restarted
+  # after the default burst (5 in 10 s) — breaking "never give up". Emit the form
+  # that matches THIS systemd (default to the modern [Unit] form when unknown).
+  local sdver sd_unit="StartLimitIntervalSec=0" sd_service=""
+  sdver=$(systemctl --version 2>/dev/null | awk 'NR==1{print $2}')
+  case "$sdver" in
+    ''|*[!0-9]*) ;;                                              # unknown → modern form
+    *) [ "$sdver" -lt 230 ] && { sd_unit=""; sd_service="StartLimitInterval=0"; } ;;
+  esac
   # Built to come back on its own after a reboot or a crash:
   #  - enabled for multi-user.target (start_service/upgrade run `enable`)
   #  - waits for network-online, but never depends on it: if the IP is not up
@@ -750,10 +768,11 @@ Description=hs2 tunnel $UNIT ($role)
 Documentation=https://github.com/aliyaghoobi2323-cloud/hs2-
 After=network-online.target
 Wants=network-online.target
-StartLimitIntervalSec=0
+$sd_unit
 
 [Service]
 Type=simple
+$sd_service
 ExecStartPre=-/sbin/modprobe tun
 ExecStart=$BIN run -c $CFG
 # reload = hot-swap the TLS certificate (SIGHUP) without dropping the tunnel;
@@ -964,7 +983,10 @@ resolve_a(){
   elif command -v host >/dev/null 2>&1; then
     host -t A "$d" 2>/dev/null | awk '/has address/{print $NF}'
   elif command -v nslookup >/dev/null 2>&1; then
-    nslookup -type=A "$d" 2>/dev/null | awk '/^Address: /{print $2}'
+    # Only the Address lines in the ANSWER section (after "Name:"); the earlier
+    # Address line is the RESOLVER's own IP (often with a #53 suffix), not an A
+    # record. Strip any #port.
+    nslookup -type=A "$d" 2>/dev/null | awk 'tolower($1)=="name:"{a=1;next} a&&tolower($1)=="address:"{ip=$2;sub(/#.*/,"",ip);print ip}'
   fi
 }
 
@@ -981,7 +1003,7 @@ check_domain_ip(){ # domain expected_ip
     warn "For HTTP-01 (port 80) validation its A record must point to THIS server ($ip)."
     return 0
   fi
-  if printf '%s\n' "$got" | grep -qx "$ip"; then
+  if printf '%s\n' "$got" | grep -Fqx "$ip"; then
     ok "$d resolves to $ip (this server) — good."
   else
     warn "$d resolves to: $(printf '%s ' $got)"
@@ -1511,6 +1533,7 @@ EOF
     ask_tun_params
     ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
     LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
+    info "Tunnel MTU is fixed at 1280 here — it leaves room for the datagram path's obfuscation and FEC overhead and is the same on both ends automatically (tun-over-TCP asks for an MTU; the datagram carriers do not)."
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$TUN_ENCAP")
     write_cfg_checked <<EOF
 {
@@ -1881,6 +1904,7 @@ EOF
       port_free "$p" || die "user port $p is already in use on Iran. Pick another."
     done
     LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
+    info "Tunnel MTU is fixed at 1280 here — it leaves room for the datagram path's obfuscation and FEC overhead and is the same on both ends automatically (tun-over-TCP asks for an MTU; the datagram carriers do not)."
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$TUN_ENCAP")
     write_cfg_checked <<EOF
 {
@@ -2412,7 +2436,14 @@ tm_monitor(){
     fi
     hr
     say " ${C_D}refreshing every 2s · press Enter to go back${C_0}"
-    read -rp "" -t 2 _ </dev/tty && break || true
+    # The -t 2 read is the refresh clock. If /dev/tty is not readable the redirect
+    # fails INSTANTLY (no 2 s wait), which would busy-loop and peg a core — so
+    # pace with sleep instead when there is no readable terminal.
+    if [ -r /dev/tty ]; then
+      read -rp "" -t 2 _ </dev/tty && break || true
+    else
+      sleep 2
+    fi
   done
   echo >&2
 }
@@ -2636,6 +2667,7 @@ tm_tune(){
     say "  3) Off                 — do not touch system sysctls (you tune it yourself)"
     say "  4) Congestion control  — bbr (default) / cubic / …"
     say "  5) Queue discipline    — fq_codel (default) / fq / cake"
+    say "  6) Link pool (advanced) — min / max links and users-per-link step"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in
@@ -2650,10 +2682,39 @@ tm_tune(){
       5) read -rp "Queue discipline [fq_codel]: " v </dev/tty; v=${v:-fq_codel}
          cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
          tm_cfgset "$cfg" tuning.qdisc "$v" && tm_apply_restart "$u" "$cfg" ;;
+      6) tm_tune_links "$u" "$cfg" ;;
       0|b|B|"") return 0 ;;
       *) warn "Invalid choice." ;;
     esac
   done
+}
+
+# tm_tune_links: adjust the adaptive parallel-link pool — the min/max link count
+# and the users-per-link growth step. The pool still sizes itself live between
+# min and max; this only moves the envelope (previously only editable by hand in
+# the JSON — U7). These are config keys the binary itself validates; an empty
+# answer keeps the current value, and all three are applied as a unit with a
+# rollback to .prev if any fails, like manual tuning.
+tm_tune_links(){ # unit cfg
+  local u="$1" cfg="$2" cur_min cur_max cur_per mn mx pl v
+  cur_min=$(jraw "$cfg" min_links); cur_max=$(jraw "$cfg" max_links); cur_per=$(jraw "$cfg" per_link)
+  echo >&2
+  say "  Adaptive link pool — hs2 grows and shrinks links live between min and max."
+  say "  Current: min=${cur_min:-2} · max=${cur_max:-32} · ~${cur_per:-8} users per link"
+  read -rp "  Min links [${cur_min:-2}]: " mn </dev/tty;         mn=${mn:-${cur_min:-2}}
+  read -rp "  Max links [${cur_max:-32}]: " mx </dev/tty;        mx=${mx:-${cur_max:-32}}
+  read -rp "  Users per link [${cur_per:-8}]: " pl </dev/tty;    pl=${pl:-${cur_per:-8}}
+  for v in "$mn" "$mx" "$pl"; do
+    valid_uint "$v" 1 1024 || { warn "Each value must be a whole number 1-1024."; return 0; }
+  done
+  [ "$mn" -le "$mx" ] || { warn "Min links ($mn) cannot be more than max links ($mx)."; return 0; }
+  cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
+  if ! { tm_cfgset "$cfg" min_links "$mn" && tm_cfgset "$cfg" max_links "$mx" && tm_cfgset "$cfg" per_link "$pl"; }; then
+    warn "Could not apply all values — restoring the previous config."
+    [ -f "$cfg.prev" ] && cat "$cfg.prev" > "$cfg"
+    return 0
+  fi
+  tm_apply_restart "$u" "$cfg"
 }
 
 # tm_tune_manual offers RAM/CPU-tier presets (examples the operator asked for),
@@ -2860,10 +2921,13 @@ backup(){
 # key, so without a limit they pile up (dozens after a few weeks of testing).
 BACKUP_KEEP=${HS2_KEEP_BACKUPS:-10}
 prune_backups(){
-  local old n=0 f
+  local n=0 f old=()
   case "$BACKUP_KEEP" in ''|*[!0-9]*|0) return 0 ;; esac
-  old=$(ls -1t "$BACKUP_DIR"/hs2-*.tar.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)) || true)
-  for f in $old; do rm -f "$f" && n=$((n + 1)); done
+  # mapfile (not `for f in $old`): read whole lines into an array so a backup
+  # path with a space or glob char in it (an odd hostname) is never word-split
+  # or glob-expanded.
+  mapfile -t old < <(ls -1t "$BACKUP_DIR"/hs2-*.tar.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)))
+  for f in "${old[@]}"; do [ -n "$f" ] && rm -f "$f" && n=$((n + 1)); done
   [ "$n" = 0 ] || info "Removed $n old backup(s); the newest $BACKUP_KEEP are kept in $BACKUP_DIR."
   return 0
 }
@@ -2889,14 +2953,14 @@ restore(){
   # an early exit would kill tar with SIGPIPE and pipefail would call a good
   # backup bad.)
   units=$(printf '%s\n' "$list" | sed -n 's#^.*systemd/system/\(hs2[a-z0-9-]*\)\.service$#\1#p' | sort -u)
-  if [ -z "$units" ] && printf '%s\n' "$list" | grep -x "${CFG_DIR#/}/config.json" >/dev/null; then units=hs2; fi
+  if [ -z "$units" ] && printf '%s\n' "$list" | grep -Fx "${CFG_DIR#/}/config.json" >/dev/null; then units=hs2; fi
   [ -n "$units" ] || die "$f is not an hs2 backup (no tunnel inside)."
   # `|| true`: an older backup has no hs2-backup-info.txt, so tar exits non-zero
   # and under pipefail+set -e that would abort the whole restore before it began.
   hr; info "Restoring $f"; { tar -xzOf "$f" hs2-backup-info.txt 2>/dev/null | sed 's/^/   /' >&2; } || true; hr
   info "Tunnels in this backup: $(echo $units)"
   for u in $(tm_units); do
-    printf '%s\n' "$units" | grep -qx "$u" || info "$u is not in this backup — left as it is."
+    printf '%s\n' "$units" | grep -Fqx "$u" || info "$u is not in this backup — left as it is."
   done
   # Take the backed-up tunnels down (and their interfaces: the restored config
   # may use another name) before files are replaced; the safety net starts them
@@ -2915,8 +2979,8 @@ restore(){
   # binary under them and break their link (both ends must match) on the next
   # restart — so keep the installed binary in that case.
   local binex="" tmpbin other=0
-  for u in $(tm_units); do printf '%s\n' "$units" | grep -qx "$u" || other=1; done
-  if [ "$other" = 1 ] && printf '%s\n' "$list" | grep -qx "${BIN#/}"; then
+  for u in $(tm_units); do printf '%s\n' "$units" | grep -Fqx "$u" || other=1; done
+  if [ "$other" = 1 ] && printf '%s\n' "$list" | grep -Fqx "${BIN#/}"; then
     # mktemp must not be a bare command under set -e (a failure would abort the
     # whole restore); on failure skip the check and extract normally.
     tmpbin=$(mktemp 2>/dev/null) || tmpbin=""
