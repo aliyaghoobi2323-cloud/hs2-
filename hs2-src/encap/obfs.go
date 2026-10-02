@@ -23,7 +23,7 @@ import (
 //   - The 2-byte framing magic is removed. Its two jobs — rejecting a host's
 //     other ICMP cheaply, and telling the two directions apart so a side never
 //     mistakes its own packets (or a host echoing them back) for the peer's —
-//     move into a keyed prefix in the ECHO SEQUENCE field (obfSeqPrefix), 8
+//     move into a keyed prefix in the ECHO SEQUENCE field (obfSeqPrefixes), 8
 //     keyed bits per direction — the sequence HIGH byte. The low 8 bits (the
 //     LOW byte) are a small counter, so the sequence still increments a little
 //     like an ordinary ping. The echo IDENTIFIER keeps naming the link, exactly
