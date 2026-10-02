@@ -220,7 +220,10 @@ ask_egress_ip(){
 # binding a non-local IP would just fail. A typed IP is validated like ask_bind_ip.
 ask_user_ip(){
   local n def=""; n=$(local_ips | wc -l)
-  [ -n "${PUBIP:-}" ] && ip_is_local "$PUBIP" && def="$PUBIP"
+  # Default to the chosen public IP ONLY on a multi-IP server — that is where
+  # Enter=ALL was an accident waiting to happen. On a single-IP box, keep the
+  # old Enter=ALL so IPv6 inbound (which binding one IPv4 would drop) still works.
+  [ "$n" -gt 1 ] && [ -n "${PUBIP:-}" ] && ip_is_local "$PUBIP" && def="$PUBIP"
   if [ "$n" -gt 1 ]; then echo >&2; info "IPs on this server (the user ports can open on one of them, or 'all'):"; show_ips; fi
   while :; do
     if [ -n "$def" ]; then
@@ -2436,10 +2439,11 @@ tm_monitor(){
     fi
     hr
     say " ${C_D}refreshing every 2s · press Enter to go back${C_0}"
-    # The -t 2 read is the refresh clock. If /dev/tty is not readable the redirect
-    # fails INSTANTLY (no 2 s wait), which would busy-loop and peg a core — so
-    # pace with sleep instead when there is no readable terminal.
-    if [ -r /dev/tty ]; then
+    # The -t 2 read is the refresh clock. With no controlling terminal the
+    # </dev/tty redirect fails INSTANTLY (no 2 s wait), busy-looping and pegging a
+    # core — so pace with sleep instead. Test by actually OPENING /dev/tty, not
+    # with [ -r ]: the device node is mode-readable even when it cannot be opened.
+    if { : </dev/tty; } 2>/dev/null; then
       read -rp "" -t 2 _ </dev/tty && break || true
     else
       sleep 2
@@ -2709,7 +2713,18 @@ tm_tune_links(){ # unit cfg
   done
   [ "$mn" -le "$mx" ] || { warn "Min links ($mn) cannot be more than max links ($mx)."; return 0; }
   cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
-  if ! { tm_cfgset "$cfg" min_links "$mn" && tm_cfgset "$cfg" max_links "$mx" && tm_cfgset "$cfg" per_link "$pl"; }; then
+  # The binary re-validates min<=max after EACH set, so the order matters: when
+  # the new floor is above the current ceiling, raise max FIRST (else `set
+  # min_links` is rejected against the old smaller max); otherwise set min first
+  # (so lowering max below the old min is not rejected either). The guard above
+  # guarantees mn<=mx, so one of the two orders is always valid end-to-end.
+  local ok=1
+  if [ "$mn" -gt "${cur_max:-32}" ]; then
+    tm_cfgset "$cfg" max_links "$mx" && tm_cfgset "$cfg" min_links "$mn" && tm_cfgset "$cfg" per_link "$pl" || ok=0
+  else
+    tm_cfgset "$cfg" min_links "$mn" && tm_cfgset "$cfg" max_links "$mx" && tm_cfgset "$cfg" per_link "$pl" || ok=0
+  fi
+  if [ "$ok" != 1 ]; then
     warn "Could not apply all values — restoring the previous config."
     [ -f "$cfg.prev" ] && cat "$cfg.prev" > "$cfg"
     return 0
@@ -2927,6 +2942,10 @@ prune_backups(){
   # path with a space or glob char in it (an odd hostname) is never word-split
   # or glob-expanded.
   mapfile -t old < <(ls -1t "$BACKUP_DIR"/hs2-*.tar.gz 2>/dev/null | tail -n +$((BACKUP_KEEP + 1)))
+  # Guard the empty case (the normal one: fewer than KEEP backups): expanding an
+  # empty array as "${old[@]}" under set -u aborts on bash < 4.4 (CentOS 7 etc.),
+  # and backup()/auto_backup run this before every setup. Same guard as tm_list.
+  [ ${#old[@]} -gt 0 ] || return 0
   for f in "${old[@]}"; do [ -n "$f" ] && rm -f "$f" && n=$((n + 1)); done
   [ "$n" = 0 ] || info "Removed $n old backup(s); the newest $BACKUP_KEEP are kept in $BACKUP_DIR."
   return 0
