@@ -337,16 +337,32 @@ links only when they raise throughput — but you can also cap it by lowering
   key and the TLS session's exporter secret. The client sends no traffic until
   the server has proven the key, so certificate forgery or interception gets
   nothing. Auth records are padded to normal HTTP sizes.
-- Anything that is not an authenticated hs2 client is served the cover
-  website, including short or malformed requests.
+- The port shows **one consistent identity** to every unauthenticated probe —
+  an ordinary HTTPS web server — so no single probe stands out. A completed TLS
+  handshake that is not an authenticated hs2 client (a browser, a probe, a short
+  or malformed request) is served a plain, self-contained cover website; a
+  plain-HTTP request on the TLS port gets the exact *"Client sent an HTTP request
+  to an HTTPS server"* reply a real HTTPS server gives (not a silent close); and
+  anything that is neither TLS nor HTTP is closed just as a TLS server closes on
+  garbage. No response reveals the tunnel.
 
 ## Managing
 
 ```bash
-bash install.sh    # 3 = uninstall, 4 = status/logs, 5 = upgrade
+hs2-menu           # 3 = tunnel manager, 4 = status/logs, 5 = upgrade, 8 = uninstall
 systemctl status hs2
 journalctl -u hs2 -f
 ```
+
+- **`hs2 doctor -c /etc/hs2/config.json`** — an on-box health check: config
+  validity, whether the tunnel is running, endpoint reachability (the common
+  "edge can't reach exit" failure), certificate expiry, the tun device, kernel
+  tuning vs. what is actually applied, and a clock reminder (link auth is
+  minute-bound). Also in the tunnel manager as **Diagnose**. It only reads —
+  safe to run any time, no root needed.
+- **`hs2 version`** prints a build stamp (`… [build <rev> <date>]`); compare it
+  on both servers to confirm they run the same build (the `hs2-menu` banner
+  shows it too).
 
 ## The three ports (they are different things)
 
