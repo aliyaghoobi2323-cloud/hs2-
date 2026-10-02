@@ -84,7 +84,7 @@ hr(){   _c '0;36' "────────────────────�
 HS2_STOPPED_UNITS=""
 HS2_DIED=0
 on_exit(){
-  local rc=$? cmd=$BASH_COMMAND u
+  local rc=$? cmd=$BASH_COMMAND u uc
   if [ "$rc" != 0 ] && [ "$HS2_DIED" != 1 ]; then
     err "The installer stopped unexpectedly (status $rc) at: $cmd"
     err "Please send this line to the developer."
@@ -92,6 +92,16 @@ on_exit(){
   for u in $HS2_STOPPED_UNITS; do
     [ -f "$UNIT_DIR/$u.service" ] || continue
     [ "$(systemctl is-active "$u" 2>/dev/null || true)" != active ] || continue
+    # An interrupted re-setup overwrote this tunnel's config in place; put the
+    # stashed previous config back so it restarts on what actually worked, not a
+    # half-written new one. (start_service removes the stash once the new config
+    # is live, so reaching here means the setup did not get that far.)
+    uc=$(tm_cfg "$u" 2>/dev/null || true); [ -n "$uc" ] || uc=$(unit_cfg "$u")
+    if [ -n "$uc" ] && [ -f "$uc.pre-replace" ]; then
+      warn "$u: an interrupted re-setup — restoring its previous config before starting it."
+      cp -p "$uc.pre-replace" "$uc" 2>/dev/null || true
+      rm -f "$uc.pre-replace"
+    fi
     warn "$u was stopped and is not running — starting it again with its current config…"
     systemctl start "$u" 2>/dev/null || true
     sleep 2
@@ -491,6 +501,11 @@ stop_for_replace(){
   [ "${REPLACING:-0}" = 1 ] || return 0
   [ "$(systemctl is-active "$UNIT" 2>/dev/null || true)" = active ] || return 0
   HS2_STOPPED_UNITS="$HS2_STOPPED_UNITS $UNIT"
+  # Stash the CURRENT (old) config: the setup overwrites $CFG in place, so if it
+  # aborts after that, the safety net must restart the tunnel on the OLD config,
+  # not the half-written new one. start_service removes the stash once the new
+  # config is live; on_exit restores it if the setup never got that far.
+  [ -f "$CFG" ] && cp -p "$CFG" "$CFG.pre-replace" 2>/dev/null || true
   info "Stopping $UNIT for the new setup (it is started again if the setup is cancelled)…"
   systemctl stop "$UNIT" 2>/dev/null || true
 }
@@ -797,6 +812,9 @@ start_service(){
     warn "$UNIT is installed and running, and keeps trying on its own. Re-check once the OTHER server is up:"
     warn "   hs2-menu → 3) Tunnel manager → $UNIT   (it shows ✓ connected when the peer answers)"
   fi
+  # The new config is live now, so a REPLACING setup's stash of the OLD config is
+  # no longer a fallback — drop it (the exit trap must not roll back on success).
+  rm -f "$CFG.pre-replace"
 }
 
 # dialer_done MSG: the dialer's final line, right after start_service. The dialer
@@ -1947,11 +1965,14 @@ uninstall(){
   local a u units
   units=$(tm_units)
   if [ -z "$units" ]; then info "No hs2 tunnel on this server — nothing to remove."; return 0; fi
-  echo >&2; info "This removes ALL hs2 tunnels on this server:"
+  echo >&2; warn "This removes ALL hs2 tunnels on this server:"
   for u in $units; do say "     $u — $(unit_desc "$u")"; done
   info "(To remove just one, use the Tunnel manager → the tunnel → Delete.)"
-  read -rp "Remove all of them? (a backup is saved first) [y/N]: " a </dev/tty || a=n
-  case "$a" in y|Y|yes) ;; *) info "Nothing removed."; return 0 ;; esac
+  # A whole-server wipe deserves a deliberate confirmation, not a single 'y' —
+  # the same discipline deleting ONE tunnel already requires (typing its name).
+  # A backup is saved first either way.
+  read -rp "Type REMOVE ALL to wipe every tunnel (a backup is saved first), or Enter to cancel: " a </dev/tty || a=""
+  case "$a" in "REMOVE ALL") ;; *) info "Nothing removed."; return 0 ;; esac
   auto_backup
   for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
   rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
@@ -2575,8 +2596,13 @@ tm_cfgset(){ # cfg key value
 # off and the congestion control and qdisc. Changes are written to the config
 # and applied with the rollback safety net.
 tm_tune(){
-  local u="$1" cfg="$2" c v
-  if "$BIN" tune -c "$cfg" 2>&1 | grep -q "unknown command"; then
+  local u="$1" cfg="$2" c v out
+  # Capture first, THEN grep: piping `"$BIN" tune` straight into `grep -q` lets
+  # pipefail return the binary's own non-zero (an old binary exits non-zero on
+  # the unknown subcommand) even though grep matched, so the old-binary guard was
+  # skipped and the menu fell through to a tune loop that cannot work.
+  out=$("$BIN" tune -c "$cfg" 2>&1) || true
+  if printf '%s' "$out" | grep -q "unknown command"; then
     warn "This hs2 binary is too old for tuning control. Upgrade first (menu → 5)."; pause; return 0
   fi
   while :; do
@@ -2633,11 +2659,17 @@ tm_tune_manual(){ # unit cfg
     *) warn "Invalid choice."; return 0 ;;
   esac
   cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
-  tm_cfgset "$cfg" tuning.mode manual || return 0
-  tm_cfgset "$cfg" tuning.rmem_max "$r" || return 0
-  tm_cfgset "$cfg" tuning.wmem_max "$w" || return 0
-  tm_cfgset "$cfg" tuning.netdev_backlog "$b" || return 0
-  tm_cfgset "$cfg" tuning.somaxconn "$s" || return 0
+  # Apply all five as one unit: if any set fails partway, roll the config back to
+  # .prev instead of leaving it half-tuned (a mix of old and new values).
+  if ! { tm_cfgset "$cfg" tuning.mode manual \
+      && tm_cfgset "$cfg" tuning.rmem_max "$r" \
+      && tm_cfgset "$cfg" tuning.wmem_max "$w" \
+      && tm_cfgset "$cfg" tuning.netdev_backlog "$b" \
+      && tm_cfgset "$cfg" tuning.somaxconn "$s"; }; then
+    warn "Could not apply all tuning values — restoring the previous config."
+    [ -f "$cfg.prev" ] && cat "$cfg.prev" > "$cfg"
+    return 0
+  fi
   tm_apply_restart "$u" "$cfg"
 }
 
@@ -2839,7 +2871,9 @@ restore(){
   units=$(printf '%s\n' "$list" | sed -n 's#^.*systemd/system/\(hs2[a-z0-9-]*\)\.service$#\1#p' | sort -u)
   if [ -z "$units" ] && printf '%s\n' "$list" | grep -x "${CFG_DIR#/}/config.json" >/dev/null; then units=hs2; fi
   [ -n "$units" ] || die "$f is not an hs2 backup (no tunnel inside)."
-  hr; info "Restoring $f"; tar -xzOf "$f" hs2-backup-info.txt 2>/dev/null | sed 's/^/   /' >&2; hr
+  # `|| true`: an older backup has no hs2-backup-info.txt, so tar exits non-zero
+  # and under pipefail+set -e that would abort the whole restore before it began.
+  hr; info "Restoring $f"; { tar -xzOf "$f" hs2-backup-info.txt 2>/dev/null | sed 's/^/   /' >&2; } || true; hr
   info "Tunnels in this backup: $(echo $units)"
   for u in $(tm_units); do
     printf '%s\n' "$units" | grep -qx "$u" || info "$u is not in this backup — left as it is."
@@ -2855,7 +2889,28 @@ restore(){
     [ -n "$ifc" ] && ip link del "$ifc" 2>/dev/null || true
   done
   for u in $units; do unit_unmask "$u"; done   # else a restored unit file lands on a /dev/null symlink
-  tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
+  # Clean-break guard: this backup carries the hs2 binary from when it was made.
+  # If OTHER tunnels (not in this backup) are on this server and that binary
+  # differs from the one installed now, extracting it would DOWNGRADE the shared
+  # binary under them and break their link (both ends must match) on the next
+  # restart — so keep the installed binary in that case.
+  local binex="" tmpbin other=0
+  for u in $(tm_units); do printf '%s\n' "$units" | grep -qx "$u" || other=1; done
+  if [ "$other" = 1 ] && printf '%s\n' "$list" | grep -qx "${BIN#/}"; then
+    tmpbin=$(mktemp)
+    if tar -xzOf "$f" "${BIN#/}" >"$tmpbin" 2>/dev/null && [ -s "$tmpbin" ] \
+       && [ -x "$BIN" ] && ! cmp -s "$tmpbin" "$BIN"; then
+      warn "This backup's hs2 binary differs from the installed one, and other tunnels here are not"
+      warn "in this backup — keeping the installed binary so they are not downgraded (clean break)."
+      binex="--exclude=${BIN#/}"
+    fi
+    rm -f "$tmpbin"
+  fi
+  if [ -n "$binex" ]; then
+    tar -xzf "$f" -C / --exclude=hs2-backup-info.txt "$binex" || die "extract failed"
+  else
+    tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
+  fi
   systemctl daemon-reload
   [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
   for u in $units; do
