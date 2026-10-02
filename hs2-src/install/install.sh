@@ -295,6 +295,19 @@ tune_kernel(){
 # "hs2 v30" can never be accepted as "hs2 v3".
 hs2_is_v3(){ "$1" version 2>/dev/null | grep -qE 'hs2 v3([^0-9]|$)'; }
 
+# bin_build FILE — print the compact build stamp ("build <rev>[+] <date>") that a
+# stamped hs2 binary appends to its version line in [square brackets], or nothing
+# for an older/unstamped binary or a missing file. Metadata only: it lets an
+# operator eyeball that both ends of a tunnel run the same build. Must ALWAYS
+# return 0 (empty output on any failure): it is used in a `bld=$(bin_build …)`
+# assignment, and under `set -euo pipefail` a non-executable path or a failing
+# `version` would otherwise propagate through the pipe and abort the caller. The
+# `[ -x ]` guard and the trailing `|| true` keep it safe in every case.
+bin_build(){
+  [ -x "$1" ] || return 0
+  "$1" version 2>/dev/null | sed -n 's/.*\[\(build [^]]*\)\].*/\1/p' || true
+}
+
 verify_download(){ # file [url-suffix]
   local raw want got
   raw=$(curl -fsSL --connect-timeout 10 --retry 2 "$REPO_RAW/hs2-linux-amd64.sha256${2:-}" 2>/dev/null || true)
@@ -3192,13 +3205,18 @@ esac
 
 # ---------- menu -------------------------------------------------------------
 main_menu(){
-  local CH
+  local CH bld
   while :; do
     echo >&2
     _c '1;36' "╔══════════════════════════════════════════╗"
     _c '1;36' "║   hs2 v3 — DPI-resistant tunnel           ║"
     _c '1;36' "║   runs alongside Backhaul                 ║"
     _c '1;36' "╚══════════════════════════════════════════╝"
+    # Show the build of the shared binary installed here, so an operator can
+    # confirm Iran and kharej run the same one. Blank for an older/unstamped
+    # binary, or before any binary is installed.
+    bld=$(bin_build "$BIN")
+    if [ -n "$bld" ]; then _c '0;36' "   $bld"; fi
     echo >&2
     echo "  Set up a tunnel" >&2
     echo "    1) Kharej  (foreign server — panel side)" >&2

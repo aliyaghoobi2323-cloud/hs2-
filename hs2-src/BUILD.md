@@ -4,10 +4,41 @@ Requires Go 1.27+.
 
 ```bash
 go mod tidy      # fetches deps from the Go proxy
-go build -trimpath -ldflags="-s -w" -o hs2-linux-amd64 ./cmd/hs2
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+  go build -trimpath -ldflags="-s -w" -o hs2-linux-amd64 ./cmd/hs2
 ```
 
-Run tests (the race detector is worth the extra time):
+**`CGO_ENABLED=0` is required, not optional.** The published `hs2-linux-amd64`
+is one static binary that must run on every target server — old-glibc CentOS 7,
+musl Alpine, whatever a user has. With cgo enabled (the Go default when a C
+compiler is present) the binary is dynamically linked against the build host's
+libc and fails on those servers with `GLIBC_2.xx not found`. Building without
+the flag also silently produces a ~45 KB-larger, non-reproducible binary. Always
+pin `CGO_ENABLED=0`.
+
+After building, regenerate the published hash so the installer's fail-closed
+verification keeps working, and keep the two copies of the installer identical:
+```bash
+sha256sum hs2-linux-amd64 | cut -d' ' -f1 > hs2-linux-amd64.sha256
+cmp install.sh install/install.sh   # must be byte-identical (release test checks this)
+```
+
+### Version stamp
+
+`hs2 version` prints the capability line followed by a build stamp, e.g.
+`… mutual)  [build 3ca1c2d19894 2026-10-01]`. The stamp is read at runtime from
+the binary's embedded Git metadata (`vcs.revision` / `vcs.time` / `vcs.modified`
+— Go records these automatically when building inside the checkout, and
+`-trimpath` keeps them), so **no extra build flag is needed** to carry it. Build
+from a clean, committed tree for a clean stamp; a dirty tree is marked with a
+trailing `+`. An optional human label can be added with
+`-ldflags "-X main.buildTag=v3.1"`. The stamp is metadata only: two binaries
+with different stamps are fully wire-compatible, so it never gates a connection —
+it only lets an operator confirm both ends of a tunnel (and the server vs. the
+published build) run the same code.
+
+Run tests (the race detector is worth the extra time; it needs cgo, so run it
+with the default `CGO_ENABLED=1` rather than the release flag above):
 ```bash
 go test -race ./...
 ```

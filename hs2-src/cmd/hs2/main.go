@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"syscall"
@@ -90,6 +91,85 @@ type fileConfig struct {
 	Tuning *tune.Config `json:"tuning"`
 }
 
+// baseVersion is the canonical capability line. It MUST keep the literal
+// "hs2 v3" prefix followed by a non-digit: the installer's hs2_is_v3 gate and
+// the cross-end compatibility checks grep for exactly that to accept a binary.
+// Never renumber or reword the "hs2 v3 (" opening without updating install.sh.
+const baseVersion = "hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)"
+
+// buildTag is an OPTIONAL human-readable release label, injected at build time
+// with -ldflags "-X main.buildTag=...". It is purely cosmetic; the build is
+// identified from the embedded VCS stamp even when this is empty, so no build
+// command is required to carry it (see BUILD.md).
+var buildTag = ""
+
+// buildStamp returns a compact build identifier — "build <rev12>[+] <date>" —
+// derived from the binary's embedded VCS metadata. Go records vcs.revision /
+// vcs.time / vcs.modified automatically when the binary is built inside the git
+// checkout (the default; -trimpath does NOT strip them). This is metadata only:
+// two hs2 binaries with different stamps are fully wire-compatible, so the
+// stamp never gates a connection — it only lets an operator confirm that both
+// ends of a tunnel, and the server vs. the published build, run the same code.
+// Returns "" when neither a tag nor VCS metadata is present (e.g. built from a
+// source tarball outside git), so callers fall back to the bare version line.
+func buildStamp() string {
+	var rev, ts string
+	var dirty bool
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.time":
+				ts = s.Value
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			}
+		}
+	}
+	if rev == "" && buildTag == "" {
+		return ""
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	date := ts
+	if len(date) >= 10 {
+		date = date[:10] // YYYY-MM-DD from the RFC3339 vcs.time
+	}
+	var b strings.Builder
+	b.WriteString("build ")
+	if buildTag != "" {
+		b.WriteString(buildTag)
+		if rev != "" {
+			b.WriteByte(' ')
+		}
+	}
+	if rev != "" {
+		b.WriteString(rev)
+		if dirty {
+			b.WriteByte('+') // '+' marks uncommitted changes at build time
+		}
+	}
+	if date != "" {
+		b.WriteByte(' ')
+		b.WriteString(date)
+	}
+	return b.String()
+}
+
+// versionLine is the single line printed by `hs2 version`. The build stamp is
+// appended to baseVersion on ONE line, in square brackets, so the installer's
+// inline captures ($(hs2 version)) stay single-line and hs2_is_v3 still matches
+// the unchanged "hs2 v3 (" opening. An older binary with no stamp prints just
+// baseVersion, which remains valid.
+func versionLine() string {
+	if s := buildStamp(); s != "" {
+		return baseVersion + "  [" + s + "]"
+	}
+	return baseVersion
+}
+
 func main() {
 	log.SetFlags(log.Ltime | log.Lmicroseconds)
 	if len(os.Args) < 2 {
@@ -98,7 +178,7 @@ func main() {
 	}
 	switch os.Args[1] {
 	case "version", "-v", "--version":
-		fmt.Println("hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)")
+		fmt.Println(versionLine())
 	case "keygen":
 		k, err := core.GenerateStatic()
 		must(err)
