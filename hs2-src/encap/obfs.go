@@ -23,11 +23,11 @@ import (
 //   - The 2-byte framing magic is removed. Its two jobs — rejecting a host's
 //     other ICMP cheaply, and telling the two directions apart so a side never
 //     mistakes its own packets (or a host echoing them back) for the peer's —
-//     move into a keyed prefix in the ECHO SEQUENCE field (obfSeqPrefix), 12
-//     keyed bits per direction. The low 4 bits are a small counter, so the
-//     sequence still increments a little like an ordinary ping. The echo
-//     IDENTIFIER keeps naming the link, exactly as before, so routing and
-//     demux are unchanged.
+//     move into a keyed prefix in the ECHO SEQUENCE field (obfSeqPrefix), 8
+//     keyed bits per direction — the sequence HIGH byte. The low 8 bits (the
+//     LOW byte) are a small counter, so the sequence still increments a little
+//     like an ordinary ping. The echo IDENTIFIER keeps naming the link, exactly
+//     as before, so routing and demux are unchanged.
 //   - Every byte above the ICMP header — the carrier tag, wire sequence, FEC
 //     header and the sealed frame — is XORed with a keystream derived from an
 //     8-byte per-packet nonce carried in the clear at the front of the ICMP
@@ -38,8 +38,8 @@ import (
 // The obfuscation key is derived from the tunnel's shared secret, so it is in
 // place from the very first handshake packet. It is NOT a security boundary:
 // the payload's AEAD is still the only thing that authenticates data. Its sole
-// job is to leave no cheap pattern on the wire. A directional prefix is 12 bits
-// rather than the old magic's 16, so 1 in 4096 of a host's unrelated ICMP slips
+// job is to leave no cheap pattern on the wire. A directional prefix is 8 bits
+// rather than the old magic's 16, so 1 in 256 of a host's unrelated ICMP slips
 // the cheap filter and costs one keystream-and-AEAD attempt that then fails —
 // negligible against the ICMP a server actually receives.
 
@@ -78,7 +78,7 @@ func obfKeyFromSecret(secret []byte) []byte {
 }
 
 // obfSeqPrefixes derives the two directional prefixes (already shifted into the
-// top 12 bits of a 16-bit sequence) from the secret: one a side puts in the
+// top 8 bits of a 16-bit sequence) from the secret: one a side puts in the
 // requests it sends, the other in the replies. They are never equal, so echo
 // suppression can drop the kernel's copies of our requests without touching our
 // own replies, and a side never accepts its own direction back.
