@@ -440,6 +440,74 @@ independent of the key, migration adds one / leaves a custom backend alone /
 never duplicates, valid JSON). Verified live over real TLS: two seeds serve two
 different pages, a seedless config serves the exact legacy page.
 
+## Phase H — a link-pool ceiling sized to the server, shown exactly on both servers
+
+The pool's ceiling (`max_links`) was a flat 32. At 300–400 *active*
+connections the autopilot wants ~50 links (one per 8 active), so 32 was the
+binding limit; a flat 64 everywhere, though, would let a 1 GB VPS buffer up to
+~512 MiB (8 MiB per link under a stalled reader). The ceiling now follows the
+hardware, and both servers show the number that actually applies.
+
+### H1 — auto ceiling (`max_links: 0`), re-derived at every start
+- `max_links` is three-state: **`0` = auto** — from the server's RAM/cores at
+  every start, using the same low/medium/high profile that sizes the kernel
+  buffers (**32 / 48 / 64**, `tune.RecommendedMaxLinks`); a **number** = fixed,
+  never changed automatically; **absent** = the historical fixed **32**, so a
+  config written before this behaves exactly as before after the upgrade.
+- A server resized up or down gets the matching ceiling on its next start (a
+  VPS resize needs a reboot anyway), with nobody editing the config. An older
+  binary reads `0` as its fixed 32, so a rollback still runs.
+- New installs write `0`. Existing installs are never changed (the migration
+  still writes a literal 32 for the two pre-adaptive lines only).
+- Startup log line: `link pool: ceiling N links — auto …` / `fixed …` /
+  `the default …`. `hs2 recommend-links [--why]` prints what this server's
+  hardware gives; `hs2 config set max_links auto` sets auto.
+
+### H2 — both servers learn the other's ceiling (display only)
+- **Stream (TLS) tunnels:** a one-shot `kindInfo` stream per link, opened by the
+  Iran (edge) side in both directions: `[ver][n][max u16]` each way, 5 s
+  deadline, a few bounded retries on a congested link. An older exit closes the
+  unknown kind and the edge stops at once; an older edge never opens it.
+- **Datagram (dgtun) tunnels:** two trailing bytes on the control frames that
+  already flow — the exit's ceiling on `TypeLinkStats`, the edge's on
+  `TypePoolCtl` (now also sent by a direct edge, every ~15 s ± 20 %; a direct
+  exit has always ignored its target). **No new frame type**, so the datagram
+  carrier, FEC, pacing and drop paths are untouched; older parsers read exactly
+  the bytes they always read. A report older than 45 s reads as unknown.
+- None of it feeds the autopilot or the pool.
+
+### H3 — the exact effective ceiling, on both servers, in both directions
+- Direct: the Iran server's ceiling alone (the Kharej exit accepts every link
+  it dials — its `max_links` is not applied). Reverse: the lower of the two
+  (the exit clamps the edge's target to its own max).
+- `hs2 status` prints a `ceiling:` line on **either** server: the effective
+  number, which side sets it, and both servers' own ceilings (auto/fixed/
+  default, with the profile and hardware); unknown is said plainly (no link up,
+  or an older hs2 on the other side).
+- `hs2 doctor`: WARN when a fixed (or default) ceiling is above what the RAM
+  comfortably holds, INFO when the box could use more; for auto, WARN/INFO
+  when the hardware changed under a running daemon (restart applies it); a
+  direct Kharej gets only the fact that its value does not apply.
+- Installer → tunnel → Tuning → **Link pool**: shows `auto, now N`, accepts
+  `auto`, shows the hardware's number, and prints the daemon's exact ceiling
+  line (on every role, including a direct Kharej whose own values do nothing).
+  Min/max are written in an order the binary's per-step validation accepts.
+
+### Measured (real binary, real TLS on loopback, 400 connections each moving data)
+| scenario | Iran `max_links` | Kharej `max_links` | links reached | both servers show |
+|---|---|---|---|---|
+| direct | auto (64) | 48 | **50** | 64, set by Iran (Kharej's 48 not applied) |
+| direct | 32 | auto (64) | **32** | 32, set by Iran |
+| reverse | auto (64) | 48 | **48** (target 50) | 48, limited by Kharej |
+| reverse | 40 | auto (64) | **40** | 40, limited by Iran |
+| reverse | absent | absent | **32** | 32, both — the default |
+| reverse, older Kharej | auto (64) | 48 (old binary) | 48 | Iran: "does not report — older hs2" |
+| reverse, older Iran | 32 (old binary) | auto (64) | 32 | Kharej: "does not report — older hs2" |
+
+Peak RSS per process in these runs was 55–67 MiB at 32–50 links with 400
+connections (no stalled reader, so the per-link 8 MiB buffer cap was never
+approached). Mixed versions carried traffic normally in both directions.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

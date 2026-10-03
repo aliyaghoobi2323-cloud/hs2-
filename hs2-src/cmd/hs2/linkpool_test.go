@@ -146,6 +146,8 @@ func TestEffectiveCeiling(t *testing.T) {
 	}
 }
 
+func withLinks(ls liveStatus, n int) liveStatus { ls.Links = n; return ls }
+
 // status renders the same exact fact on both servers.
 func TestCeilingLineBothServers(t *testing.T) {
 	mk := func(role, dir string, own, peer int, auto bool) liveStatus {
@@ -167,12 +169,13 @@ func TestCeilingLineBothServers(t *testing.T) {
 		{"reverse Kharej, same tunnel", mk("Kharej side", "reverse", 48, 64, false),
 			[]string{"48 links", "limited by this server", "this server: 48 (fixed by max_links", "the Iran server: 64"}},
 		{"reverse equal", mk("Iran side", "reverse", 48, 48, true), []string{"48 links", "both servers allow the same"}},
-		{"reverse unknown", mk("Kharej side", "reverse", 64, 0, true), []string{"at most 64 links", "the Iran server has not reported", "the lower of the two applies"}},
+		{"reverse unknown, no link", mk("Kharej side", "reverse", 64, 0, true), []string{"at most 64 links", "the Iran server's ceiling is not known yet (no link is up)", "the lower of the two applies"}},
+		{"reverse unknown, links up", withLinks(mk("Iran side", "reverse", 64, 0, true), 8), []string{"at most 64 links", "the Kharej server does not report its ceiling", "older hs2"}},
 		{"direct Iran", mk("Iran side", "direct", 32, 64, false),
 			[]string{"32 links", "this (Iran) server alone sets it", "Kharej server's max_links (64) does not apply"}},
 		{"direct Kharej", mk("Kharej side", "direct", 64, 32, true),
 			[]string{"32 links", "set by the Iran server", "this server's own ceiling, 64 (auto", "does not apply here"}},
-		{"direct Kharej unknown", mk("Kharej side", "direct", 64, 0, true), []string{"set by the Iran server", "not reported yet"}},
+		{"direct Kharej unknown", mk("Kharej side", "direct", 64, 0, true), []string{"set by the Iran server", "not known yet (no link is up)"}},
 	}
 	for _, c := range cases {
 		got := ceilingLine(c.ls)

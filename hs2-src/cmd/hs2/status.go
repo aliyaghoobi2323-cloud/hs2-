@@ -465,9 +465,9 @@ func ceilingLine(ls liveStatus) string {
 		if ls.EffMax > 0 {
 			return fmt.Sprintf("%d links — set by the Iran server (direct mode); this server's own ceiling, %s, does not apply here", ls.EffMax, own)
 		}
-		return fmt.Sprintf("set by the Iran server (direct mode) — not reported yet (no link up, or an older hs2 there); this server's own ceiling, %s, does not apply here", own)
+		return fmt.Sprintf("set by the Iran server (direct mode) — %s; this server's own ceiling, %s, does not apply here", unreported(ls, "the Iran server"), own)
 	case ls.EffMax == 0:
-		return fmt.Sprintf("at most %d links — this server: %s; %s has not reported its ceiling yet (no link up, or an older hs2 there) — the lower of the two applies", ls.CfgMax, own, otherName)
+		return fmt.Sprintf("at most %d links — this server: %s; %s — the lower of the two applies", ls.CfgMax, own, unreported(ls, otherName))
 	}
 	who := "both servers allow the same"
 	switch {
@@ -479,6 +479,16 @@ func ceilingLine(ls liveStatus) string {
 	}
 	return fmt.Sprintf("%d links — %s (reverse: the lower of the two applies); this server: %s, %s: %d",
 		ls.EffMax, who, own, otherName, ls.PeerMax)
+}
+
+// unreported says why the other server's ceiling is not known: no link is up
+// yet, or — with links up, since the two exchange it the moment a link comes
+// up — the other server runs an older hs2 that does not report it.
+func unreported(ls liveStatus, who string) string {
+	if ls.Links == 0 {
+		return who + "'s ceiling is not known yet (no link is up)"
+	}
+	return who + " does not report its ceiling — it runs an older hs2 if this persists with links up (upgrade it to see the exact number)"
 }
 
 // driftLine flags a fixed (or default) ceiling that no longer matches what
