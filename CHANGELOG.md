@@ -529,7 +529,17 @@ does not report it.
   tunnel-subnet prompt (U5) and the `hs2 check` validation of every written
   config (A2f), so 10 installer branches stalled (on `main` too). It now
   answers the subnet prompt on the link-making side and gives the installer a
-  real `hs2` binary to validate with; all installer branches pass again.
+  real `hs2` binary to validate with; all installer branches pass again, and
+  with root + iproute2 + ping its namespace part passes too (137 PASS: real
+  traffic, direct and reverse, l3mtcp / tls / dgtun over udp, ipx and gre,
+  plus the blocked-GRE case).
+- `install/tests/multi_tunnel_test.py` had gone stale the same way: it never
+  answered the subnet prompt (U5), the upgrade restart confirmation (U2) or
+  the typed `REMOVE ALL` that now guards a whole-server uninstall (U14). Its
+  pty now answers the optional subnet prompt wherever it appears, and the
+  upgrade/uninstall steps answer their confirmations; 54 PASS, 0 failures
+  (several tunnels side by side on two namespace "servers", upgrade,
+  backup/restore, delete, uninstall).
 
 ## Verification, every phase
 

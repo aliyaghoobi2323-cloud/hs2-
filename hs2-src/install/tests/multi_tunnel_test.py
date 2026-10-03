@@ -473,7 +473,8 @@ def scenarios(w):
 
     # ---- 8. upgrade restarts every tunnel -----------------------------------
     p = w.pids(ir)
-    rc, out = w.run(ir, "upgrade", [], timeout=400, extra={"HS2_VERIFY_SECS": "15"})
+    # upgrade lists the tunnels it will restart and asks before doing it (U2)
+    rc, out = w.run(ir, "upgrade", [(r"Proceed\? \[y/N\]: ", "y")], timeout=400, extra={"HS2_VERIFY_SECS": "15"})
     q = w.pids(ir)
     res("8 upgrade restarts every tunnel on its own config", rc == 0 and set(q) == set(p)
         and all(q[u] not in (0, p[u]) for u in p), out[-400:])
@@ -528,7 +529,8 @@ def scenarios(w):
     for s in (ir, kh):
         units = w.units(s)
         cfgs = [w.cfg(s, u) for u in units]
-        rc, out = w.run(s, "uninstall", [(r"Remove all of them\?", "y")], timeout=200)
+        # wiping every tunnel needs the phrase typed, not a single 'y' (U14)
+        rc, out = w.run(s, "uninstall", [(r"Type REMOVE ALL to wipe every tunnel", "REMOVE ALL")], timeout=200)
         left = sh("pgrep -af '%s'" % os.path.join(w.root(s), "usr/local/bin/hs2")).stdout.strip()
         ifs = [c["iface"] for c in cfgs if c and c.get("carrier") != "mtcp"]
         guards = sh("ip netns exec %s nft list tables 2>/dev/null | grep hs2_icmp" % NS[s]).stdout.strip()
