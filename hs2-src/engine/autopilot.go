@@ -898,6 +898,8 @@ func meanVar(ts []apTick, f func(apTick) float64) (float64, float64) {
 // fmtDur prints a duration the way an operator reads it: 45s, 4m, 1h10m.
 func fmtDur(d time.Duration) string {
 	switch {
+	case d > 0 && d < 950*time.Millisecond: // "retry in 0s" said nothing
+		return fmt.Sprintf("%dms", d.Milliseconds())
 	case d < time.Minute:
 		return fmt.Sprintf("%ds", int(d.Seconds()+0.5))
 	case d < time.Hour:

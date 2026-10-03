@@ -261,11 +261,16 @@ func (x *dgExit) listenTagged(ctx context.Context) error {
 		}
 	}()
 	go func() {
+		var bo acceptBackoff // a transient EMFILE/ENOBUFS must not close the port for good
 		for {
 			c, err := ln.Accept()
 			if err != nil {
-				return
+				if !bo.wait(ctx, err, x.cfg.Log, "dgtun tagged port") {
+					return
+				}
+				continue
 			}
+			bo.ok()
 			go x.serveTCP(ctx, c)
 		}
 	}()
@@ -661,11 +666,16 @@ func (e *dgEdge) listen(ctx context.Context, p string, port int) error {
 		}
 	}()
 	go func() {
+		var bo acceptBackoff // a transient EMFILE/ENOBUFS must not close the port for good
 		for {
 			c, err := ln.Accept()
 			if err != nil {
-				return
+				if !bo.wait(ctx, err, e.cfg.Log, "user port "+p) {
+					return
+				}
+				continue
 			}
+			bo.ok()
 			go e.serveTCP(ctx, c, port)
 		}
 	}()

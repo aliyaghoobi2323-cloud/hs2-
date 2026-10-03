@@ -346,6 +346,10 @@ type dgPool struct {
 	tunRead, tunWritten, sentPkts, recvPkts atomic.Uint64
 	dropNoCarrier, dropQueueFull, dropAged  atomic.Uint64
 
+	// upLog / retireLog fold per-carrier lines into one summary once a burst
+	// passes a few lines (a 300-carrier rebuild was ~300 lines per side).
+	upLog, retireLog *burstLog
+
 	fecCeilLogged bool      // "FEC at its ceiling" was logged and not yet cleared
 	fecCeilRun    int       // consecutive samples at (+) / below (-) the ceiling
 	phaseLabel    string    // fixed phase for the snapshot (the direct exit: "listening")
@@ -375,6 +379,9 @@ func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) 
 		sticky: map[uint32]*stickyFlow{}}
 	p.pool.New = func() any { b := make([]byte, 0, 2048); return &b }
 	p.target.Store(int32(warmSize(min, max)))
+	logp := func(f string, a ...any) { p.log(f, a...) } // p.log may be swapped (tests)
+	p.upLog = newBurstLog("dg: ", "carriers up", logp)
+	p.retireLog = newBurstLog("dg: ", "carriers retired", logp)
 	return p
 }
 
@@ -450,9 +457,9 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	go p.readLoop(ctx, l)
 	if l.bornSpare {
-		p.log("dg: carrier %s up (now %d) — spare: pattern needs %d serving", from, n, p.Target())
+		p.upLog.log("dg: carrier %d %s up (now %d) — spare: pattern needs %d serving", l.id, from, n, p.Target())
 	} else {
-		p.log("dg: carrier %s up (now %d)", from, n)
+		p.upLog.log("dg: carrier %d %s up (now %d)", l.id, from, n)
 	}
 	return l
 }
@@ -990,7 +997,7 @@ func (p *dgPool) drainTick() {
 	p.set = kept
 	p.mu.Unlock()
 	for _, l := range closing {
-		p.log("dg: carrier %d retired: its flows ended", l.id)
+		p.retireLog.log("dg: carrier %d retired: its flows ended", l.id)
 		go func(l *dgLink) { time.Sleep(closeJitter()); l.markDead() }(l)
 	}
 }
@@ -1028,13 +1035,21 @@ func minF(a, b float64) float64 {
 
 // sortByBusiest orders carriers most-active first (un-retire the busy ones).
 func sortByBusiest(ls []*dgLink) {
-	sortLinks(ls, func(a, b *dgLink) bool { return a.rate10 > b.rate10 })
+	sort.SliceStable(ls, func(i, j int) bool { return ls[i].rate10 > ls[j].rate10 })
 }
 
 // sortByEmptiest orders carriers that will empty soonest first (fewest recent
 // flows, then lowest recent rate), so a shrink retires the least disruptive.
+// Each carrier's flow count is taken once (its flow map is scanned under its
+// own lock), not once per comparison: at 300 carriers the per-comparison scan
+// held the pool lock for ~12 ms, stalling every packet's carrier pick.
 func sortByEmptiest(ls []*dgLink, now time.Time) {
-	rec := func(l *dgLink) int {
+	type key struct {
+		l    *dgLink
+		recs int
+	}
+	ks := make([]key, len(ls))
+	for i, l := range ls {
 		l.flowMu.Lock()
 		n := 0
 		for _, f := range l.flows {
@@ -1043,22 +1058,16 @@ func sortByEmptiest(ls []*dgLink, now time.Time) {
 			}
 		}
 		l.flowMu.Unlock()
-		return n
+		ks[i] = key{l, n}
 	}
-	sortLinks(ls, func(a, b *dgLink) bool {
-		ra, rb := rec(a), rec(b)
-		if ra != rb {
-			return ra < rb
+	sort.SliceStable(ks, func(i, j int) bool {
+		if ks[i].recs != ks[j].recs {
+			return ks[i].recs < ks[j].recs
 		}
-		return a.rate10 < b.rate10
+		return ks[i].l.rate10 < ks[j].l.rate10
 	})
-}
-
-func sortLinks(ls []*dgLink, less func(a, b *dgLink) bool) {
-	for i := 1; i < len(ls); i++ {
-		for j := i; j > 0 && less(ls[j], ls[j-1]); j-- {
-			ls[j], ls[j-1] = ls[j-1], ls[j]
-		}
+	for i := range ks {
+		ls[i] = ks[i].l
 	}
 }
 
@@ -1183,25 +1192,40 @@ func (p *dgPool) carrierLine() string {
 			set = append(set, l)
 		}
 	}
+	// One Stats() per carrier (it takes the carrier's locks), not one per
+	// comparison while sorting.
+	type snap struct {
+		l  *dgLink
+		s  udpcarrier.Stats
+		ok bool
+	}
+	snaps := make([]snap, len(set))
+	for i, l := range set {
+		snaps[i].l = l
+		if c, ok := l.car.(statser); ok {
+			snaps[i].s, snaps[i].ok = c.Stats(), true
+		}
+	}
 	var b []byte
-	if len(set) > carrierLineMax {
-		serving := 0
-		for _, l := range set {
-			if !l.retiring {
+	if len(snaps) > carrierLineMax {
+		serving, pushing, startup := 0, 0, 0
+		for _, x := range snaps {
+			if !x.l.retiring {
 				serving++
 			}
-		}
-		loss := func(l *dgLink) uint32 {
-			if c, ok := l.car.(statser); ok {
-				return c.Stats().LossPPM
+			if x.s.Pushing {
+				pushing++
 			}
-			return 0
+			if x.s.Startup {
+				startup++
+			}
 		}
-		sort.SliceStable(set, func(i, j int) bool { return loss(set[i]) > loss(set[j]) })
-		b = fmt.Appendf(b, "%d carriers (%d serving, %d retiring); most loss:", len(set), serving, len(set)-serving)
-		set = set[:carrierLineWorst]
+		sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].s.LossPPM > snaps[j].s.LossPPM })
+		b = fmt.Appendf(b, "%d carriers (%d serving, %d retiring; P=%d S=%d); most loss:", len(snaps), serving, len(snaps)-serving, pushing, startup)
+		snaps = snaps[:carrierLineWorst]
 	}
-	for _, l := range set {
+	for _, x := range snaps {
+		l := x.l
 		st := "serving"
 		if l.retiring {
 			st = "retiring"
@@ -1209,8 +1233,8 @@ func (p *dgPool) carrierLine() string {
 		if len(b) > 0 {
 			b = append(b, ' ')
 		}
-		if c, ok := l.car.(statser); ok {
-			s := c.Stats()
+		if x.ok {
+			s := x.s
 			flags := ""
 			if s.Pushing {
 				flags += "P"

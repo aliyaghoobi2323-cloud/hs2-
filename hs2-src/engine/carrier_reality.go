@@ -134,11 +134,16 @@ func newRealityListener(addr, coverAddr string, sharedKey []byte, cert tls.Certi
 }
 
 func (l *realityListener) serve() {
+	var bo acceptBackoff // a transient EMFILE/ENOBUFS must not close the listener for good
 	for {
 		conn, err := l.ln.Accept()
 		if err != nil {
-			return
+			if !bo.wait(l.ctx, err, nil, "reality") {
+				return
+			}
+			continue
 		}
+		bo.ok()
 		go l.disp.Handle(l.ctx, conn)
 	}
 }

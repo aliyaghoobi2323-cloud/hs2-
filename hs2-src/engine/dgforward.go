@@ -104,11 +104,16 @@ func runForwarder(ctx context.Context, listenAddr, dialAddr string, udp bool, tu
 	}
 	go func() { <-ctx.Done(); ln.Close() }()
 	go func() {
+		var bo acceptBackoff // a transient EMFILE/ENOBUFS must not close the port for good
 		for {
 			c, err := ln.Accept()
 			if err != nil {
-				return
+				if !bo.wait(ctx, err, logf, "forward "+listenAddr) {
+					return
+				}
+				continue
 			}
+			bo.ok()
 			go proxyTCP(ctx, c, dialAddr, drb)
 		}
 	}()
