@@ -31,10 +31,15 @@ type KharejConfig struct {
 	// fresh authenticated TLS carrier to the edge. The link count is dynamic: the
 	// edge drives it over the pool-control channel between RevMin and RevMax, and
 	// RevLinks is only the count to hold until the edge first speaks.
-	RevDial  func() (*tlscarrier.Carrier, error)
-	RevLinks int
-	RevMin   int
-	RevMax   int
+	RevDial func() (*tlscarrier.Carrier, error)
+	// RevDialScout, if set, is RevDial with a short TCP connect timeout, for
+	// the one slot that keeps trying while no link is up: on a black-holed
+	// path a long connect spaces its SYNs out to 4 s, and the first link
+	// after the path returns waits for the next one.
+	RevDialScout func() (*tlscarrier.Carrier, error)
+	RevLinks     int
+	RevMin       int
+	RevMax       int
 
 	// OnStart, if set, is called once with a function that returns a live
 	// snapshot of the link pattern, for monitoring.

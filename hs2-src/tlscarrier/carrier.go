@@ -159,7 +159,14 @@ func Dial(addr, sni string, sharedKey []byte) (*Carrier, error) {
 // the OS default source. This lets the tunnel egress from a chosen IP on a
 // multi-IP server instead of the main IP.
 func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, error) {
-	d := net.Dialer{Timeout: 8 * time.Second}
+	return DialFromTimeout(addr, sni, sharedKey, bindIP, 8*time.Second)
+}
+
+// DialFromTimeout is DialFrom with its own TCP connect timeout. A short one
+// keeps a dial's SYNs close together (the kernel spaces a hanging connect's
+// retransmits 1, 2, 4 s apart), for a caller that retries anyway.
+func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration) (*Carrier, error) {
+	d := net.Dialer{Timeout: connect}
 	if bindIP != "" {
 		ip := net.ParseIP(bindIP)
 		if ip == nil {

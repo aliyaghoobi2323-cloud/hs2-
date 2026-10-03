@@ -45,8 +45,8 @@ type dialedLink interface{ Close() error }
 // the handshake must not become a dial loop). Every dial also takes a turn
 // from the process's dial gate (dialgate.go).
 const (
-	slotBackoffMin  = 500 * time.Millisecond
-	slotBackoffMax  = 8 * time.Second
+	slotBackoffMin = 500 * time.Millisecond
+	slotBackoffMax = 8 * time.Second
 	// scoutBackoffMax: while no link is up only the outage scout dials, so it
 	// may try often — one attempt every 1-2 s from one slot is nothing next to
 	// the hundreds a second the old pool made — and the first link is back
@@ -67,6 +67,9 @@ func jitterDur(d time.Duration) time.Duration {
 // exitPool keeps a dynamic set of reverse dial slots.
 type exitPool struct {
 	dial func() (dialedLink, error)
+	// scoutDial, if set, is dial with a short connect timeout, for the outage
+	// scout (see KharejConfig.RevDialScout).
+	scoutDial func() (dialedLink, error)
 	// serve runs the smux-server loop for one link and returns, in operator
 	// words, why the link ended (see sessionEndReason).
 	serve func(ctx context.Context, car dialedLink) string
@@ -314,7 +317,11 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 			release()
 			return
 		}
-		car, err := p.dial()
+		dial := p.dial
+		if p.scoutDial != nil && p.isScout(s) {
+			dial = p.scoutDial // keeps its SYNs ~1-2 s apart while the path is dead
+		}
+		car, err := dial()
 		release()
 		if err != nil {
 			if p.isScout(s) {

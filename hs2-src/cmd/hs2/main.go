@@ -530,6 +530,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
 			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
 		}
+		cfg.RevDialScout = func() (*tlscarrier.Carrier, error) {
+			return tlscarrier.DialFromTimeout(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second)
+		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
 		must(engine.RunKharej(ctx, cfg))
 		return

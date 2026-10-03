@@ -116,3 +116,26 @@ func TestRegressAcceptCapCountsLiveLinks(t *testing.T) {
 		t.Fatalf("%d live links, cap %d: the cap should be reached", n, c)
 	}
 }
+
+// The outage scout dials with its own (short-connect) dialer; every other
+// slot keeps the normal one.
+func TestOutageScoutUsesItsOwnDial(t *testing.T) {
+	sp := newScaleTestPool(t, 1, 300, time.Millisecond)
+	var scouted atomic.Int32
+	sp.scoutDial = func() (dialedLink, error) {
+		scouted.Add(1)
+		return nil, fmt.Errorf("i/o timeout")
+	}
+	sp.setTarget(8)
+	sp.setTarget(20)
+	eventually(t, "20 live links", func() bool { return sp.liveCount() == 20 })
+	if n := scouted.Load(); n != 0 {
+		t.Fatalf("the scout dial was used %d times with links up", n)
+	}
+	sp.down.Store(true)
+	sp.endAll()
+	time.Sleep(4 * time.Second)
+	if n := scouted.Load(); n < 2 {
+		t.Fatalf("the scout dialed %d times in a 4 s outage with its own dialer, want >= 2", n)
+	}
+}

@@ -119,6 +119,9 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	}
 	dial := func() (dialedLink, error) { return cfg.RevDial() }
 	pool := newExitPool(ctx, min, max, dial, logf)
+	if cfg.RevDialScout != nil {
+		pool.scoutDial = func() (dialedLink, error) { return cfg.RevDialScout() }
+	}
 	pool.peers = cfg.peers     // the live links; each carries the edge's ceiling (kindInfo)
 	pool.traffic = cfg.traffic // this exit's own user connections and throughput
 	// serve captures the pool so a link's pool-control stream can resize it; set
