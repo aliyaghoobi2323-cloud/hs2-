@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"io"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,22 +26,27 @@ import (
 // The guard ends it where it starts. The session's one reader (smux recvLoop)
 // is watched without a syscall: watchConn counts its Read calls, so "not in a
 // Read, and no Read since the last look" means recvLoop is parked on the empty
-// bucket. Each user relay marks its writes to the local app, so "the same write
-// still in progress since the last looks" means that app is not reading. When
-// a link has been parked for wedgeLooks looks (>= 4 s) the relays stuck for
-// stuckLooks looks (>= 4 s) are ended: closing their local socket ends the
-// relay, closing its stream returns the stream's tokens to the bucket, and the
-// link's other users keep flowing — well before the other side's 20 s. Only
-// connections whose app took nothing for seconds while holding the buffer are
-// closed; a slow app still reading is never one (its writes complete).
+// bucket — or parked with only a trickle of reads since the last look (a slow
+// reader returning a few tokens at a time must not hide the stall). Each user
+// relay marks its writes to the local app, so "a write in progress and none
+// completed for stuckFor" means that app has stopped reading. When a link has
+// been starved for wedgeLooks looks (>= 4 s) the stuck relays are ended:
+// their local socket is reset (which ends the relay and frees the kernel's
+// queue at once), closing the stream returns its tokens to the bucket, and
+// the link's other users keep flowing — well before the other side's 20 s.
+// A slow app that is still reading is never one: its writes complete.
 
 const (
 	// wedgeLooks: consecutive looks a session's reader must be parked before
 	// the link counts as wedged (the first look proves ~0 s, each next +tick).
 	wedgeLooks = 3
-	// stuckLooks: consecutive looks at which one relay write is still the
-	// same in-progress write (each proves another tick of blocking).
-	stuckLooks = 2
+	// starveCalls: a reader that is out of Read now and made fewer Read calls
+	// than this since the last look counts as parked (a link moving real data
+	// makes thousands; a trickle of returned tokens a few hundred at most).
+	starveCalls = 2048
+	// stuckFor: a relay is stuck once it is in a local write and no local
+	// write has completed for this long (a reader taking >= ~6 KiB/s never is).
+	stuckFor = 6 * time.Second
 	// wedgeLogEvery throttles the guard's summary lines.
 	wedgeLogEvery = 30 * time.Second
 )
@@ -52,13 +58,16 @@ var guardTick = 2 * time.Second
 // relayDieGrace: after a stream's session dies, its relay gets this long to
 // hand the bytes it still holds to the local app before both ends are closed
 // (a local app that is not reading would otherwise pin the stream's buffers,
-// and the relay's goroutines, for good). A variable only for tests.
-var relayDieGrace = 5 * time.Second
+// and the relay's goroutines, for good). Atomic only so tests can shorten it.
+var relayDieGrace atomic.Int64
+
+func init() { relayDieGrace.Store(int64(5 * time.Second)) }
 
 // sessGuard watches one smux session.
 type sessGuard struct {
-	w    *watchConn
-	sess atomic.Pointer[smux.Session]
+	w      *watchConn
+	manual atomic.Bool // tests drive this guard's looks themselves
+	sess   atomic.Pointer[smux.Session]
 
 	mu        sync.Mutex
 	relays    map[*relayWatch]struct{}
@@ -73,8 +82,8 @@ type relayWatch struct {
 	kill func()        // closes the local side, which ends the relay
 
 	// guard-only (under sessGuard.mu)
-	lastSeq uint64
-	looks   int
+	lastSeq  uint64
+	progress time.Time // the last look at which a local write had completed
 }
 
 // watchedWriter marks writes to the local app for the guard.
@@ -108,9 +117,13 @@ func (g *sessGuard) remove(rw *relayWatch) {
 // look is one guard observation. It returns how many stuck relays it ended,
 // and whether the reader is wedged with nothing stuck to release.
 func (g *sessGuard) look() (killed int, wedgedEmpty bool) {
+	return g.lookAt(time.Now())
+}
+
+func (g *sessGuard) lookAt(now time.Time) (killed int, wedgedEmpty bool) {
 	g.mu.Lock()
 	calls := g.w.rdCalls.Load()
-	if !g.w.inRead.Load() && calls == g.lastCalls {
+	if !g.w.inRead.Load() && calls-g.lastCalls < starveCalls {
 		g.parked++
 	} else {
 		g.parked = 0
@@ -119,13 +132,11 @@ func (g *sessGuard) look() (killed int, wedgedEmpty bool) {
 	var stuck []*relayWatch
 	for rw := range g.relays {
 		s := rw.wseq.Load()
-		if s&1 == 1 && s == rw.lastSeq {
-			rw.looks++
-		} else {
-			rw.looks = 0
+		if s != rw.lastSeq || rw.progress.IsZero() {
+			rw.progress = now // a write completed (or started) since the last look
 		}
 		rw.lastSeq = s
-		if rw.looks >= stuckLooks {
+		if s&1 == 1 && now.Sub(rw.progress) >= stuckFor {
 			stuck = append(stuck, rw)
 		}
 	}
@@ -155,7 +166,7 @@ type guardSet struct {
 
 	// summary state (run goroutine only)
 	killed   int
-	links    int
+	links    map[*sessGuard]bool // distinct links with a release since the last line
 	logAt    time.Time
 	emptyLog time.Time
 }
@@ -197,6 +208,9 @@ func (gs *guardSet) lookAll(now time.Time) {
 			delete(gs.all, g)
 			continue
 		}
+		if g.manual.Load() {
+			continue
+		}
 		list = append(list, g)
 	}
 	gs.mu.Unlock()
@@ -205,7 +219,10 @@ func (gs *guardSet) lookAll(now time.Time) {
 		k, e := g.look()
 		if k > 0 {
 			gs.killed += k
-			gs.links++
+			if gs.links == nil {
+				gs.links = map[*sessGuard]bool{}
+			}
+			gs.links[g] = true
 		}
 		if e {
 			empty++
@@ -216,13 +233,13 @@ func (gs *guardSet) lookAll(now time.Time) {
 		return
 	}
 	if gs.killed > 0 && now.Sub(gs.logAt) >= wedgeLogEvery {
-		(*lp)("mtcp: closed %d connection(s) on %d link(s) whose app had stopped reading for 4s+ while holding the link's receive buffer — the links' other connections keep flowing",
-			gs.killed, gs.links)
-		gs.killed, gs.links, gs.logAt = 0, 0, now
+		(*lp)("mtcp: reset %d connection(s) on %d link(s) whose app had taken nothing for %s while the link's receive buffer was full — the links' other connections keep flowing",
+			gs.killed, len(gs.links), fmtDur(stuckFor))
+		gs.killed, gs.links, gs.logAt = 0, nil, now
 	}
 	if empty > 0 && now.Sub(gs.emptyLog) >= 10*time.Minute {
 		gs.emptyLog = now
-		(*lp)("mtcp: %s", fmt.Sprintf("%d link(s) stopped reading for 4s+ with no stuck connection to release (UDP/TUN backlog or a slow panel dial)", empty))
+		(*lp)("mtcp: %s", fmt.Sprintf("%d link(s) stopped reading for several seconds with no stuck connection to release (UDP/TUN backlog or a slow panel dial)", empty))
 	}
 }
 
@@ -242,7 +259,15 @@ func guardOf(st io.ReadWriteCloser) *sessGuard {
 func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
 	var dst io.Writer = local
 	if g != nil {
-		rw := &relayWatch{kill: func() { local.Close() }}
+		rw := &relayWatch{kill: func() {
+			// A reset, not a FIN: the app took nothing for seconds, and a
+			// FIN would leave its unread data queued in the kernel for
+			// minutes; a reset frees it at once.
+			if tc, ok := local.(*net.TCPConn); ok {
+				tc.SetLinger(0)
+			}
+			local.Close()
+		}}
 		g.add(rw)
 		defer g.remove(rw)
 		dst = watchedWriter{w: local, rw: rw}
@@ -268,7 +293,7 @@ func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
 		// The stream ended under us (its link died, or it was closed). The
 		// stream→local copier still drains what the stream holds; give it a
 		// moment, then close whatever is left.
-		t := time.NewTimer(relayDieGrace)
+		t := time.NewTimer(time.Duration(relayDieGrace.Load()))
 		select {
 		case <-done:
 			got = 1

@@ -286,11 +286,19 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		if !p.waitTurn(ctx, s) {
 			return
 		}
-		release, ok := p.gate.acquire(ctx)
-		if !ok {
+		// A slot that is over the target retires instead of taking a turn:
+		// checked when a place is free and before the start spacing is
+		// reserved, so after an outage the slots that must retire never hold
+		// up the ones that must dial.
+		retired := false
+		release, ok := p.gate.acquireIf(ctx, func() bool {
+			retired = p.retireIfOver(s)
+			return !retired
+		})
+		if retired || !ok {
 			return
 		}
-		if p.retireIfOver(s) { // the target fell while this slot waited its turn
+		if p.retireIfOver(s) { // the target fell during the spacing wait
 			release()
 			return
 		}

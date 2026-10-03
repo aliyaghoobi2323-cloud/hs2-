@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -22,9 +23,22 @@ import (
 //	direct : iran = TLS client (dials) + smux client ; kharej = TLS server + smux server
 //	reverse: iran = TLS server (listens) + smux client ; kharej = TLS client (dials) + smux server
 
-// reverseAcceptSlack: links the reverse edge accepts beyond its max (an exit
-// replacing links it has not yet seen die, a heal) before it refuses more.
-const reverseAcceptSlack = 8
+// The reverse edge's accept cap: this server's ceiling holds in reverse too,
+// so an exit dialing far more (its min_links above our max, an old exit that
+// redials whatever is closed) cannot make a small edge hold hundreds of
+// sessions. The cap is twice max plus a little: after the Kharej server
+// restarts or its path changes, this side still counts the old links until
+// it notices they are dead (TCP_USER_TIMEOUT 20 s), and the new links must
+// fit next to them. A refused link is held reverseRefuseHold before it is
+// closed, so an exit that redials at once (an older hs2) loops at most once
+// per hold per slot rather than as fast as handshakes go.
+const (
+	reverseAcceptSlack = 8
+	reverseRefuseHold  = 5 * time.Second
+)
+
+// reverseAcceptCap is the most links the reverse edge holds.
+func reverseAcceptCap(max int) int { return 2*max + reverseAcceptSlack }
 
 // acceptReverseLinks runs on the iran edge in reverse: it accepts the TLS
 // carriers the kharej dials in, wraps each as an edge (smux-client) link, and
@@ -51,10 +65,14 @@ func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Se
 			// This server's ceiling holds in reverse too: an exit that dials
 			// far more (an older one, or its min_links above our max) would
 			// otherwise make a small edge hold hundreds of sessions.
-			if n := lm.count(); n >= lm.max+reverseAcceptSlack {
-				if lm.noteOverCap() {
-					logf("mtcp: refusing reverse links from %s beyond %d (this server's max_links %d + %d) — check the Kharej server's min_links/max_links",
-						from, n, lm.max, reverseAcceptSlack)
+			if n := lm.count(); n >= reverseAcceptCap(lm.max) {
+				if k := lm.noteOverCap(); k > 0 {
+					logf("mtcp: refused %d reverse link(s) from %s in the last minute: this server holds at most %d (twice its max_links %d + %d) — check the Kharej server's min_links/max_links",
+						k, from, reverseAcceptCap(lm.max), lm.max, reverseAcceptSlack)
+				}
+				select { // see reverseRefuseHold
+				case <-ctx.Done():
+				case <-time.After(reverseRefuseHold):
 				}
 				car.Close()
 				return

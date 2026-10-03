@@ -39,9 +39,22 @@ var linkGate = newDialGate(gateInflight, jitterGap)
 // acquire waits for this dial's turn. It returns false if ctx ended first;
 // otherwise the caller dials and then calls release.
 func (g *dialGate) acquire(ctx context.Context) (release func(), ok bool) {
+	return g.acquireIf(ctx, nil)
+}
+
+// acquireIf is acquire for a dial that may have become pointless while it
+// waited for a place (the pool reached its target, the target fell, a dial
+// failed): valid (nil = always) is checked once a place is free and BEFORE
+// the start spacing is reserved, so an abandoned turn costs the gate nothing
+// and the dials that are still wanted are not held behind it.
+func (g *dialGate) acquireIf(ctx context.Context, valid func() bool) (release func(), ok bool) {
 	select {
 	case g.sem <- struct{}{}:
 	case <-ctx.Done():
+		return nil, false
+	}
+	if valid != nil && !valid() {
+		<-g.sem
 		return nil, false
 	}
 	g.mu.Lock()

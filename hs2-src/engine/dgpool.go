@@ -270,20 +270,22 @@ type dgPool struct {
 	// closes them; the exit only stops redialing above the target, never
 	// retires on its own (two ends retiring different carriers would cut
 	// serving far below the target and churn redials).
-	revExit bool
+	revExit    bool
+	hadCarrier bool // reverse exit: a carrier was up since the target last fell back
 	// Dials take turns from the process's dial gate; dialing counts those
 	// queued or in progress (they count toward the target), and a failed dial
 	// bumps dialEpoch so dials queued before it are dropped unattempted.
-	gate      *dialGate
-	dialing   atomic.Int32
-	dialEpoch atomic.Uint64
-	failN     atomic.Int32
-	failLog   atomic.Int64 // unix ns of the last failure line
-	min       int
-	max       int
-	perLink   int
-	log       func(string, ...any)
-	clock     func() time.Time
+	gate       *dialGate
+	dialing    atomic.Int32
+	dialEpoch  atomic.Uint64
+	failN      atomic.Int32
+	failStreak atomic.Int32
+	failLog    atomic.Int64 // unix ns of the last failure line
+	min        int
+	max        int
+	perLink    int
+	log        func(string, ...any)
+	clock      func() time.Time
 
 	ap    *autopilot
 	mu    sync.RWMutex
@@ -895,6 +897,19 @@ func (p *dgPool) reconcile(ctx context.Context, T int) {
 	}
 }
 
+// dgDialFailRun: carrier dials failed in a row before the queued ones are
+// dropped (one lost handshake is not a dead peer).
+const dgDialFailRun = 3
+
+// wantsDial reports whether a carrier dial still has a place: below max and
+// serving below the target (the reverse exit's target is the edge's).
+func (p *dgPool) wantsDial() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	serving, retiring := p.countsLocked()
+	return serving+retiring < p.max && serving < p.Target()
+}
+
 // queueDial starts one carrier dial through the dial gate (direct edge /
 // reverse exit).
 func (p *dgPool) queueDial(ctx context.Context) {
@@ -913,17 +928,20 @@ func (p *dgPool) dialOne(ctx context.Context, epoch uint64) {
 	if g == nil {
 		g = linkGate
 	}
-	release, ok := g.acquire(ctx)
+	valid := func() bool { return p.dialEpoch.Load() == epoch && p.wantsDial() }
+	release, ok := g.acquireIf(ctx, valid)
 	if !ok {
 		return
 	}
 	defer release()
-	if p.dialEpoch.Load() != epoch || p.count() >= p.max {
+	if !valid() { // re-checked after the start spacing
 		return
 	}
 	car, err := p.dialer.Dial(ctx)
 	if err != nil {
-		p.dialEpoch.Add(1)
+		if p.failStreak.Add(1) >= dgDialFailRun || p.count() == 0 {
+			p.dialEpoch.Add(1)
+		}
 		n := p.failN.Add(1)
 		now := time.Now().UnixNano()
 		if last := p.failLog.Load(); now-last >= int64(dialFailLogEvery) && p.failLog.CompareAndSwap(last, now) {
@@ -932,6 +950,7 @@ func (p *dgPool) dialOne(ctx context.Context, epoch uint64) {
 		}
 		return
 	}
+	p.failStreak.Store(0)
 	p.add(ctx, car, "dialed")
 }
 
@@ -1576,7 +1595,17 @@ func (p *dgPool) runReverseExit(ctx context.Context) {
 			p.closeAll()
 			return
 		case <-tick.C:
-			p.reconcile(ctx, p.Target()) // dials up to target; retires surplus
+			// Every carrier gone (the edge restarted, or the path dropped):
+			// hold the warm size until the edge speaks again on the first
+			// carrier back — a restarted edge must not be handed the old
+			// target as spares.
+			if w := warmSize(p.min, p.max); p.count() == 0 && p.Target() > w && p.hadCarrier {
+				p.target.Store(int32(w))
+			}
+			if p.count() > 0 {
+				p.hadCarrier = true
+			}
+			p.reconcile(ctx, p.Target()) // dials up to target
 			p.drainTick()
 			s := p.sampleHealth()
 			p.publishDownStats(s) // tell the edge our download send pressure

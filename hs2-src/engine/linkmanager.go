@@ -147,7 +147,8 @@ type LinkManager struct {
 	// retiring link only once the exit has had time to learn the lower target,
 	// so it retires that slot instead of redialing it.
 	targetDropAt time.Time
-	overCapLog   atomic.Int64 // unix ns of the last "refusing reverse links" line
+	overCapLog   atomic.Int64 // unix ns of the last "refused reverse links" line
+	overCapN     atomic.Int32 // refusals since that line
 	targetMu     sync.Mutex
 	targetCh     chan struct{} // closed on the next target change (pool-control)
 	stats        atomic.Pointer[PoolStats]
@@ -183,6 +184,11 @@ type LinkManager struct {
 	dialFails atomic.Int32
 	dialErr   atomic.Pointer[string]
 	dialWG    sync.WaitGroup
+	// failStreak counts dials failed in a row: a single reset handshake (a
+	// few % are normal on Iranian paths) must not throw away the queue —
+	// only a run of them, or a failure with no link up, means the peer or
+	// the path is down.
+	failStreak atomic.Int32
 	// warm, when > 0, replaces warmStartLinks as the size the pool comes up
 	// at (the last target before a restart; see SetWarm).
 	warm int
@@ -526,7 +532,9 @@ func (m *LinkManager) Run(ctx context.Context) {
 	// connections arriving right after start spreads across enough links to
 	// beat per-connection throttling at once; the autopilot then shrinks toward
 	// what the traffic needs.
-	for i := m.warmCount(); i > 0; i-- {
+	// At most a quarter of the target at once; reconcile queues the rest tick
+	// by tick (the gate paces all of them either way).
+	for i := min(m.warmCount(), (m.warmCount()+3)/4+gateInflight); i > 0; i-- {
 		m.queueDial(ctx, false)
 	}
 	tick := time.NewTicker(healthTick)
@@ -617,12 +625,17 @@ func (m *LinkManager) setTarget(n int) {
 	}
 }
 
-// noteOverCap reports whether a refused-over-cap reverse link should be
-// logged (at most once a minute).
-func (m *LinkManager) noteOverCap() bool {
+// noteOverCap counts a refused-over-cap reverse link and, at most once a
+// minute, returns how many were refused since the last line (0: no line).
+func (m *LinkManager) noteOverCap() int {
+	n := m.overCapN.Add(1)
 	now := time.Now().UnixNano()
 	last := m.overCapLog.Load()
-	return now-last >= int64(time.Minute) && m.overCapLog.CompareAndSwap(last, now)
+	if now-last < int64(time.Minute) || !m.overCapLog.CompareAndSwap(last, now) {
+		return 0
+	}
+	m.overCapN.Add(-n)
+	return int(n)
 }
 
 // targetChanged returns a channel closed at the next change of the target.
@@ -776,9 +789,39 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 	if room := m.max - m.count() - inflight; n > room {
 		n = room
 	}
+	if q := step + gateInflight - inflight; n > q { // a bounded queue: the gate is the pace anyway
+		n = q
+	}
 	for i := 0; i < n; i++ {
 		m.queueDial(ctx, false)
 	}
+}
+
+// dialFailRun: dials failed in a row before the queued ones are dropped.
+const dialFailRun = 3
+
+// wantsDial reports whether a (non-replacement) dial still has a place: the
+// pool is below max and serving below the target.
+func (m *LinkManager) wantsDial() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if len(m.links) >= m.max {
+		return false
+	}
+	serving := 0
+	for _, ml := range m.links {
+		if ml.serving() {
+			serving++
+		}
+	}
+	return serving < int(m.target.Load())
+}
+
+// alive counts live links.
+func (m *LinkManager) alive() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.aliveLocked()
 }
 
 // queueDial starts one dial off the pool's tick: it waits for a turn from the
@@ -789,25 +832,37 @@ func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
 	m.dialing.Add(1)
 	m.dialWG.Add(1)
 	epoch := m.dialEpoch.Load()
+	// Still wanted? Not after a run of failures, not past max, and not once
+	// enough links serve (retiring links came back, or the target fell). A
+	// replacement is wanted while its epoch holds.
+	valid := func() bool {
+		if m.dialEpoch.Load() != epoch {
+			return false
+		}
+		return replacement || m.wantsDial()
+	}
 	go func() {
 		defer m.dialWG.Done()
 		defer m.dialing.Add(-1) // after the link is in the pool: never a gap
-		release, ok := m.gate.acquire(ctx)
+		release, ok := m.gate.acquireIf(ctx, valid)
 		if !ok {
 			return
 		}
 		defer release()
-		if m.dialEpoch.Load() != epoch || (!replacement && m.count() >= m.max) {
+		if !valid() { // re-checked after the start spacing
 			return
 		}
 		l, err := m.dialer.DialLink(ctx)
 		if err != nil {
-			m.dialEpoch.Add(1)
+			if m.failStreak.Add(1) >= dialFailRun || m.alive() == 0 {
+				m.dialEpoch.Add(1)
+			}
 			why := err.Error()
 			m.dialErr.Store(&why)
 			m.dialFails.Add(1)
 			return
 		}
+		m.failStreak.Store(0)
 		m.mu.Lock()
 		if ctx.Err() != nil || m.closing.Load() {
 			m.mu.Unlock()

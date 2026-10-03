@@ -3,11 +3,13 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"math/rand/v2"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
+	"github.com/xtaci/smux"
 )
 
 // Per-link control channel (phase 3). Each edge link carries one extra smux
@@ -56,28 +58,35 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	ping := make([]byte, ctrlPingLen)
 	pong := make([]byte, ctrlPongLen)
 	moved := mtr.rdBytes.Load() + mtr.wrBytes.Load()
-	every := controlInterval
+	// The cadence is the fixed controlInterval tick it always was while the
+	// link carries traffic: the exit's download retransmits arrive with each
+	// pong, and the health logic's loss rule was tuned against exactly this
+	// beat (a jittered one would make it judge one pong interval's
+	// retransmits against one 2 s tick's bytes). An idle link only answers
+	// every 3rd–5th tick (~9–15 s): at hundreds of mostly idle links a ping on
+	// every tick of every link is a few hundred messages a second, and an
+	// idle link still hears the exit's smux keepalive every 4–8 s.
+	t := time.NewTicker(controlInterval)
+	defer t.Stop()
+	skip := 0
 	for {
-		// Every controlInterval (±25%) while the link carries traffic — the
-		// health logic judges only active links — and every controlIdleEvery
-		// while it is idle: at hundreds of mostly idle links a fixed 3 s beat
-		// on each is a few hundred messages a second, and an exact period
-		// across many parallel connections is a pattern of its own. An idle
-		// link still hears the exit's smux keepalive every 4–8 s.
-		t := time.NewTimer(every*3/4 + time.Duration(rand.Int64N(int64(every/2)+1)))
 		select {
 		case <-ctx.Done():
-			t.Stop()
 			return
 		case <-t.C:
 		}
 		now := mtr.rdBytes.Load() + mtr.wrBytes.Load()
-		if now-moved >= activeBytes {
-			every = controlInterval
-		} else {
-			every = controlIdleEvery
-		}
+		active := now-moved >= activeBytes
 		moved = now
+		if !active && skip > 0 {
+			skip--
+			continue
+		}
+		if active {
+			skip = 0
+		} else {
+			skip = 2 + rand.IntN(3) // the next 2–4 ticks stay quiet
+		}
 		seq++
 		binary.BigEndian.PutUint64(ping[0:], seq)
 		binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
@@ -85,12 +94,27 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		if _, err := st.Write(ping); err != nil {
 			return // link/stream gone; the pool reaps the link on its own
 		}
+		// Read until this ping's pong. A pong that missed its deadline (the
+		// link was congested or briefly wedged) arrives later and is skipped
+		// here, so one slow answer no longer ends the control channel for the
+		// rest of the link's life.
 		st.SetReadDeadline(time.Now().Add(2 * controlInterval))
-		if _, err := io.ReadFull(st, pong); err != nil {
-			return
+		got := false
+		for {
+			n, err := io.ReadFull(st, pong)
+			if err != nil {
+				if n > 0 || !isTimeout(err) {
+					return // gone, or out of step mid-record
+				}
+				break // no answer in time: try again next tick
+			}
+			if binary.BigEndian.Uint64(pong[0:]) == seq {
+				got = true
+				break
+			}
 		}
-		if binary.BigEndian.Uint64(pong[0:]) != seq {
-			continue // stale/out-of-order; ignore
+		if !got {
+			continue
 		}
 		sent := int64(binary.BigEndian.Uint64(pong[8:]))
 		exitRetrans := binary.BigEndian.Uint64(pong[16:])
@@ -101,6 +125,15 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		mtr.peerRetrans.Store(exitRetrans)
 		mtr.peerSeen.Store(true)
 	}
+}
+
+// isTimeout reports a deadline error (smux's own, or a net.Error's).
+func isTimeout(err error) bool {
+	if errors.Is(err, smux.ErrTimeout) {
+		return true
+	}
+	var ne interface{ Timeout() bool }
+	return errors.As(err, &ne) && ne.Timeout()
 }
 
 // serveControl runs the exit side: it answers each ping with a pong carrying the

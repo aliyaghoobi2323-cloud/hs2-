@@ -73,8 +73,6 @@ const (
 	// exchanges a tiny ping/pong with the exit every controlInterval to learn the
 	// download-direction retransmits and the round-trip time.
 	controlInterval = 3 * time.Second
-	// controlIdleEvery: the control ping's period on a link without traffic.
-	controlIdleEvery = 12 * time.Second
 )
 
 // linkMeter holds the raw counters for one link. It is deliberately dumb: it
