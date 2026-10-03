@@ -58,17 +58,46 @@ func TestPeerInfoWire(t *testing.T) {
 // side ends up with the other's ceiling.
 func TestPeerInfoExchange(t *testing.T) {
 	ctx := context.Background()
-	var edgeSeenByExit atomic.Int32
 	exit := func(ctx context.Context, _ *smux.Session, st *smux.Stream, mtr *linkMeter) {
-		serveStream(ctx, st, KharejConfig{MaxLinks: 48, peerMax: &edgeSeenByExit}, nil, nil, nil, mtr)
+		serveStream(ctx, st, KharejConfig{MaxLinks: 48}, nil, nil, nil, mtr)
 	}
 	p := newStatsPair(t, ctx, nil, exit)
 	openInfo(ctx, p.edge, 64)
 	if got := p.edge.m.peerMax.Load(); got != 48 {
 		t.Fatalf("edge learned exit max %d, want 48", got)
 	}
-	if got := edgeSeenByExit.Load(); got != 64 {
-		t.Fatalf("exit learned edge max %d, want 64", got)
+	if got := p.exitMtr.peerMax.Load(); got != 64 {
+		t.Fatalf("exit link learned edge max %d, want 64", got)
+	}
+}
+
+// The exit reads the edge's ceiling only from links that are up NOW: when the
+// links that reported a value are gone (e.g. the Iran server was rolled back
+// to a release that does not report it), the old number goes with them.
+func TestPeerInfoExitForgetsGoneLinks(t *testing.T) {
+	var ps linkPeers
+	a, b := &linkMeter{}, &linkMeter{}
+	a.peerMax.Store(64)
+	ps.add(a)
+	ps.add(b)
+	if got := ps.max(); got != 64 {
+		t.Fatalf("max %d, want 64", got)
+	}
+	ps.remove(a) // the reporting link went away; b (an older edge's link) reports nothing
+	if got := ps.max(); got != 0 {
+		t.Fatalf("after the reporting link went: %d, want 0 (never a gone link's value)", got)
+	}
+	var nilPeers *linkPeers // nil-safe (tests call serveStream without one)
+	nilPeers.add(a)
+	nilPeers.remove(a)
+	if nilPeers.max() != 0 {
+		t.Fatal("nil linkPeers must report 0")
+	}
+	// The reverse exit pool reads the same set.
+	pool := &exitPool{peers: &ps, min: 2, max: 8}
+	ps.add(a)
+	if got := pool.stats().PeerMax; got != 64 {
+		t.Fatalf("exit pool PeerMax %d, want 64", got)
 	}
 }
 

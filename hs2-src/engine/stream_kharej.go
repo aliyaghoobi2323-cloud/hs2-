@@ -42,9 +42,9 @@ type KharejConfig struct {
 	// value although it does not apply it (the edge alone decides in direct).
 	MaxLinks int
 
-	// peerMax holds the edge's ceiling as the edge reported it (set up by
-	// RunKharej; nil in tests that call serveStream directly).
-	peerMax *atomic.Int32
+	// peers is the set of live links; each stores the ceiling its edge reported
+	// (set up by RunKharej; nil in tests that call serveStream directly).
+	peers *linkPeers
 }
 
 // RunKharej accepts links and serves their streams until ctx ends.
@@ -59,8 +59,8 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}
-	if cfg.peerMax == nil {
-		cfg.peerMax = new(atomic.Int32)
+	if cfg.peers == nil {
+		cfg.peers = &linkPeers{}
 	}
 	if cfg.RevDial != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
@@ -68,11 +68,8 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	var links atomic.Int32
 	if cfg.OnStart != nil {
 		cfg.OnStart(func() PoolStats {
-			st := PoolStats{Links: int(links.Load()), Phase: "listening"}
-			if st.Links > 0 { // only while a link is up: never a stale edge value
-				st.PeerMax = int(cfg.peerMax.Load())
-			}
-			return st
+			// the edge's ceiling as reported by the links up NOW
+			return PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max()}
 		})
 	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
@@ -98,6 +95,8 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 				case <-sess.CloseChan():
 				}
 			}()
+			cfg.peers.add(mtr)
+			defer cfg.peers.remove(mtr)
 			logf("link up from %s (now %d)", conn.RemoteAddr(), links.Add(1))
 			var downErr error
 			for {
@@ -150,8 +149,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			myMax = pool.max // what the reverse exit actually clamps to
 		}
 		serveInfo(st, myMax, func(n int) {
-			if cfg.peerMax != nil {
-				cfg.peerMax.Store(int32(n))
+			if mtr != nil { // per link: read back only while this link is up
+				mtr.peerMax.Store(uint32(n))
 			}
 		})
 	case kindTCP:

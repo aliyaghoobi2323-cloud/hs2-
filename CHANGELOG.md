@@ -459,6 +459,15 @@ hardware, and both servers show the number that actually applies.
   binary reads `0` as its fixed 32, so a rollback still runs.
 - New installs write `0`. Existing installs are never changed (the migration
   still writes a literal 32 for the two pre-adaptive lines only).
+- **One behaviour change to know:** an explicit `"max_links": 0` used to mean
+  "the default, 32"; it now means auto. No installer ever wrote 0 (it wrote 16
+  or 32, and the menu accepted 1–1024), so only a hand-edited config, or an
+  older `hs2 config set max_links 0`, is affected — on a medium/high box it now
+  gets 48/64. Set a number to keep it fixed, or remove the key for the old 32.
+- When a tunnel is added on a server that keeps an older hs2 binary, the new
+  config still says auto, and the installer says plainly that the old binary
+  runs it as a fixed 32 until hs2 is upgraded (it never shows the old binary's
+  "unknown command" as hardware information).
 - Startup log line: `link pool: ceiling N links — auto …` / `fixed …` /
   `the default …`. `hs2 recommend-links [--why]` prints what this server's
   hardware gives; `hs2 config set max_links auto` sets auto.
@@ -474,7 +483,10 @@ hardware, and both servers show the number that actually applies.
   exit has always ignored its target). **No new frame type**, so the datagram
   carrier, FEC, pacing and drop paths are untouched; older parsers read exactly
   the bytes they always read. A report older than 45 s reads as unknown.
-- None of it feeds the autopilot or the pool.
+- None of it feeds the autopilot or the pool. Each server reads the other's
+  number only from links that are up now, so a value from links that are gone
+  (e.g. after the other server was rolled back to an older release) is never
+  shown; a ceiling lifted by a higher `min_links` is shown as exactly that.
 
 ### H3 — the exact effective ceiling, on both servers, in both directions
 - Direct: the Iran server's ceiling alone (the Kharej exit accepts every link
@@ -506,7 +518,18 @@ hardware, and both servers show the number that actually applies.
 
 Peak RSS per process in these runs was 55–67 MiB at 32–50 links with 400
 connections (no stalled reader, so the per-link 8 MiB buffer cap was never
-approached). Mixed versions carried traffic normally in both directions.
+approached). Mixed versions carried traffic normally in both directions. The
+datagram path was run the same way over real UDP and TUN devices (direct,
+reverse, `max_links` absent, and an older binary on either side): every case
+showed the exact number on both servers, or said plainly that the older side
+does not report it.
+
+### Test maintenance
+- `install/tests/tun_ports_test.py` had gone stale: it predated the optional
+  tunnel-subnet prompt (U5) and the `hs2 check` validation of every written
+  config (A2f), so 10 installer branches stalled (on `main` too). It now
+  answers the subnet prompt on the link-making side and gives the installer a
+  real `hs2` binary to validate with; all installer branches pass again.
 
 ## Verification, every phase
 

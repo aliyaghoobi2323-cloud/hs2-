@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"io"
+	"sync"
 	"time"
 )
 
@@ -40,6 +41,54 @@ var (
 )
 
 var errInfoVersion = errors.New("peer info: bad version")
+
+// linkPeers is the set of an exit's live links, by meter. Each link stores the
+// ceiling its edge reported (meter.peerMax), and the exit shows the max over
+// the links that are up NOW — so a value from a link that has gone is never
+// shown (e.g. after the Iran server was rolled back to a release that does not
+// report, every new link carries 0 and the old number disappears with its
+// links). The edge side reads its own LinkManager's live links the same way.
+type linkPeers struct {
+	mu sync.Mutex
+	m  map[*linkMeter]struct{}
+}
+
+func (p *linkPeers) add(m *linkMeter) {
+	if p == nil || m == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.m == nil {
+		p.m = map[*linkMeter]struct{}{}
+	}
+	p.m[m] = struct{}{}
+	p.mu.Unlock()
+}
+
+func (p *linkPeers) remove(m *linkMeter) {
+	if p == nil || m == nil {
+		return
+	}
+	p.mu.Lock()
+	delete(p.m, m)
+	p.mu.Unlock()
+}
+
+// max is the edge's ceiling as the live links report it (0 = none reported).
+func (p *linkPeers) max() int {
+	if p == nil {
+		return 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	best := 0
+	for m := range p.m {
+		if v := int(m.peerMax.Load()); v > best {
+			best = v
+		}
+	}
+	return best
+}
 
 // encodeInfo is one side's message: [ver][n=2][maxLinks u16].
 func encodeInfo(maxLinks int) []byte {

@@ -34,6 +34,17 @@ check "new setup: says auto and what it is now" 'echo "$out" | grep -q "auto (ma
 out=$(ualc "$T/nonexistent-hs2")
 check "missing binary: still auto, no abort under set -e" 'echo "$out" | grep -qx "LINK_MAX=0"'
 check "missing binary: no 'right now' claim" '! echo "$out" | grep -q "right now"'
+# An older hs2 (kept when a tunnel is added) prints "unknown command" on
+# STDOUT and exits 2 — exactly like the real pre-auto binary.
+cat > "$T/hs2old" <<'OLD'
+#!/bin/bash
+echo "unknown command"; exit 2
+OLD
+chmod +x "$T/hs2old"
+out=$(ualc "$T/hs2old")
+check "older binary: config still auto (0)" 'echo "$out" | grep -qx "LINK_MAX=0"'
+check "older binary: never shows 'unknown command' as hardware" '! echo "$out" | grep -q "unknown command"'
+check "older binary: says it runs auto as 32 until upgraded" 'echo "$out" | grep -q "predates it and runs it as a fixed 32 until hs2 is upgraded"'
 out=$(grep -n "install_binary\|use_auto_link_ceiling" "$INST" | awk -F: '/install_binary$/ {b=$1} /use_auto_link_ceiling$/ && b && $1==b+1 {n++} END{print n+0}')
 check "both setups call it right after install_binary" '[ "$out" = 2 ]'
 
@@ -56,7 +67,7 @@ INNER
 run(){ # mode reverse maxfield keys [status-json]
   printf '{"mode":"%s","reverse":%s,"carrier":"mtcp","min_links":2,%s"per_link":8}\n' "$1" "$2" "$3" > "$T/c.json"
   rm -f "$T/st.json"; [ -n "${5:-}" ] && printf '%s\n' "$5" > "$T/st.json"
-  printf "$4" | script -qec "T='$T' CFGF='$T/c.json' FAKEBIN='$T/hs2' SPF='$T/st.json' bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'
+  printf "$4" | script -qec "T='$T' CFGF='$T/c.json' FAKEBIN='${FAKEBIN_OVERRIDE:-$T/hs2}' SPF='$T/st.json' bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'
 }
 now=$(date +%s)
 live='{"updated":'"$now"',"cfg_max":64,"ceiling_text":"48 links — limited by the Kharej server (reverse: the lower of the two applies)"}'
@@ -68,6 +79,9 @@ out=$(run dial true '' '\n\n\n')
 check "absent max_links: shown as the default 32" 'echo "$out" | grep -q "max=32 (default — not set)"'
 check "absent max_links: Enter keeps 32 (never silently auto)" 'echo "$out" | grep -q "CFGSET max_links=32" && ! echo "$out" | grep -q "CFGSET max_links=0"'
 check "absent max_links on a 64 box: offered auto" 'echo "$out" | grep -q "fixed at 32; this server.s hardware gives 64"'
+
+out=$(FAKEBIN_OVERRIDE="$T/hs2old" run dial true '"max_links":0,' '\n\n\n')
+check "older binary in the menu: no 'unknown command', honest auto line" '! echo "$out" | grep -q "unknown command" && echo "$out" | grep -q "runs it as 32 until upgraded"'
 
 out=$(run dial false '"max_links":32,' '\nauto\n\n')
 check "fixed 32 on a 64 box: told, offered auto" 'echo "$out" | grep -q "The ceiling is fixed at 32; this server.s hardware gives 64"'

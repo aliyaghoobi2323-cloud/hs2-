@@ -26,8 +26,9 @@ panel; and on a server where hs2.service had been masked, the installer printed
      so the old installer said "ready"; verify_tunnel must fail and name the
      cause, and connect by itself once the path passes GRE again.
 
-Parts 1-2 need only bash/python/openssl. Part 3 needs root and `ip netns`; it
-builds hs2 and the lab probe with `go` (or takes HS2_BIN / PROBE_BIN).
+Parts 1-2 need bash/python/openssl and the hs2 binary (the installer validates
+every config with `hs2 check`). Part 3 needs root and `ip netns`. hs2 and the
+lab probe are built with `go` (or taken from HS2_BIN / PROBE_BIN).
 Usage:  python3 install/tests/tun_ports_test.py      (exit 0 = all PASS)
 """
 import json
@@ -42,6 +43,10 @@ import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+# The side that MAKES the link is asked the tunnel subnet (ask_subnet, U5) right
+# after the transport; Enter keeps the default. The side that pastes the link
+# takes the subnet from the link and is never asked.
+SUBNET = [(r"Tunnel subnet /30 base in 10\.77\.0\.0/16", "")]
 SRC = os.path.abspath(os.path.join(HERE, "..", ".."))
 # HS2_INSTALL_SH points the test at another installer (e.g. an old release, to
 # show the test catches the bug); HS2_SKIP_TUNNEL=1 skips the namespace part.
@@ -133,6 +138,8 @@ def make_lib(sb):
 STUBS = r'''
 source "$LIB"
 trap - EXIT
+# the installer validates every config with the real binary (`hs2 check`)
+BIN="$HS2_TEST_BIN"
 # every role is its own "server": its own tunnel directories, never /etc
 CFG_DIR="$SB/cfg-$ROLE"; UNIT_DIR="$SB/units-$ROLE"; mkdir -p "$CFG_DIR" "$UNIT_DIR"
 use_unit hs2
@@ -183,7 +190,7 @@ def part1(sb, lib, kh_ip, ir_ip, mode):
     # direct: kharej listens and generates the link, iran pastes it.
     ok, why = run_branch(lib, sb, "kh_direct" + sfx, kh_ip, "DIRECTION=direct; PUBIP=%s" % kh_ip,
                          "ask_transport; kharej_listener",
-                         menu + [(r"Tunnel port \(clients never see this\)", "2096"),
+                         menu + SUBNET + [(r"Tunnel port \(clients never see this\)", "2096"),
                                  (r"Panel inbound address on this server", panel),
                                  (r"Domain \(its A record", "test.local"),
                                  (r"TUN interface name", ""), (r"TUN MTU", ""),
@@ -208,7 +215,7 @@ def part1(sb, lib, kh_ip, ir_ip, mode):
     # reverse: iran listens and generates the link, kharej pastes it.
     ok, why = run_branch(lib, sb, "ir_reverse" + sfx, ir_ip, "DIRECTION=reverse; PUBIP=%s" % ir_ip,
                          "ask_transport; iran_listener",
-                         menu + [(r"Tunnel port to LISTEN on", "2082"),
+                         menu + SUBNET + [(r"Tunnel port to LISTEN on", "2082"),
                                  (r"IP that USERS connect to", ""),
                                  (r"User port\(s\) to open here", ports),
                                  (r"Domain for THIS iran server", "test.local"),
@@ -263,7 +270,7 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
     # direct: kharej listens and makes the link (asks the panel, never the ports).
     ok, why = run_branch(lib, sb, "kh_direct" + sfx, kh_ip, "DIRECTION=direct; PUBIP=%s" % kh_ip,
                          "ask_transport; kharej_listener",
-                         menu + kport + [(r"TUN interface name", ""),
+                         menu + SUBNET + kport + [(r"TUN interface name", ""),
                                          (r"Panel inbound address on this server", panel)])
     res(t + "installer: kharej direct asks only the panel (no port list%s)" % (", no tunnel port" if raw else ""), ok, why)
     if ok:
@@ -286,7 +293,7 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
     # reverse: iran listens and makes the link (asks the ports), kharej pastes it.
     ok, why = run_branch(lib, sb, "ir_reverse" + sfx, ir_ip, "DIRECTION=reverse; PUBIP=%s" % ir_ip,
                          "ask_transport; iran_listener",
-                         menu + iport + [(r"TUN interface name", ""),
+                         menu + SUBNET + iport + [(r"TUN interface name", ""),
                                          (r"IP that USERS connect to", ""),
                                          (r"User port\(s\) to open here", ports)])
     res(t + "installer: iran reverse asks the ports", ok, why)
@@ -531,11 +538,19 @@ def part_blocked(sb, lib, kh_ip, ir_ip, bins):
         cleanup()
 
 
-def build_bins(sb):
-    hs2, probe = os.environ.get("HS2_BIN"), os.environ.get("PROBE_BIN")
+def build_hs2(sb):
+    """The hs2 binary under test (HS2_BIN, or built from this tree). The
+    installer part needs it too: every config is validated with `hs2 check`."""
+    hs2 = os.environ.get("HS2_BIN")
     if not hs2:
         hs2 = os.path.join(sb, "hs2")
-        subprocess.run(["go", "build", "-o", hs2, "./cmd/hs2"], cwd=SRC, check=True, env=dict(os.environ, CGO_ENABLED="0"))
+        if not os.path.exists(hs2):
+            subprocess.run(["go", "build", "-o", hs2, "./cmd/hs2"], cwd=SRC, check=True, env=dict(os.environ, CGO_ENABLED="0"))
+    return hs2
+
+
+def build_bins(sb):
+    hs2, probe = build_hs2(sb), os.environ.get("PROBE_BIN")
     if not probe:
         probe = os.path.join(sb, "probe")
         subprocess.run(["go", "build", "-o", probe, "./lab/probe"], cwd=SRC, check=True)
@@ -552,6 +567,7 @@ def main():
                         "-nodes", "-subj", "/CN=test.local", "-addext", "subjectAltName=DNS:test.local"],
                        check=True, capture_output=True)
         lib = make_lib(sb)
+        os.environ["HS2_TEST_BIN"] = build_hs2(sb)
         kh_ip, ir_ip = "192.168.61.2", "192.168.61.1"
         carriers = [part1(sb, lib, kh_ip, ir_ip, mode) for mode in ("1", "2")]
         carriers += [part1_dgtun(sb, lib, kh_ip, ir_ip, encap) for encap in ("udp", "ipx", "gre")]

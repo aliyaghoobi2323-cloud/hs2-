@@ -69,6 +69,9 @@ traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4 
 | a number | fixed by you; never changed automatically |
 | absent | the historical fixed **32** — a config written before auto existed behaves exactly as before after upgrading |
 
+(An explicit `0` used to mean "the default, 32" and now means auto — only a
+hand-edited config can contain it; set a number to keep it fixed.)
+
 Why the ceiling depends on RAM: under a stalled reader each link's session may
 buffer up to 8 MiB, so 64 links is up to ~512 MiB in the worst case — fine on a
 big box, a risk on a 1 GB VPS. The ceiling is only headroom: the autopilot uses

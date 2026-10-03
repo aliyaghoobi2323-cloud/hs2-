@@ -1678,10 +1678,16 @@ ipx_proto_from_link(){
 
 # ---------- KHAREJ (foreign server, the panel side) --------------------------
 # recommend_links runs the binary's resource-aware link-ceiling advisor
-# (hs2 recommend-links), never failing the caller under `set -euo pipefail`: a
-# missing or older binary, or a non-zero exit, yields no output, which every
-# caller treats as "unknown" and falls back from.
-recommend_links(){ "$BIN" recommend-links "$@" 2>/dev/null || true; }
+# (hs2 recommend-links), never failing the caller under `set -euo pipefail`.
+# Its output is used ONLY when the command succeeds: an older binary prints
+# "unknown command" on stdout and exits 2, and that must never be shown as if
+# it were this server's hardware. A missing or older binary yields no output,
+# which every caller treats as "unknown".
+recommend_links(){
+  local out
+  out=$("$BIN" recommend-links "$@" 2>/dev/null) && printf '%s\n' "$out"
+  return 0
+}
 
 # use_auto_link_ceiling makes a NEW config's link-pool ceiling AUTO: it writes
 # "max_links": 0, which the binary resolves from THIS server's RAM/cores at
@@ -1697,7 +1703,13 @@ use_auto_link_ceiling(){
   local why
   LINK_MAX=0
   why=$(recommend_links --why)
-  info "Link-pool ceiling: auto (max_links 0) — follows this server's hardware at every start${why:+; right now: $why}."
+  if [ -n "$why" ]; then
+    info "Link-pool ceiling: auto (max_links 0) — follows this server's hardware at every start; right now: $why."
+  else
+    # The kept binary predates the auto ceiling: it reads 0 as its fixed 32.
+    # The config still says auto, so it takes effect once hs2 is upgraded.
+    info "Link-pool ceiling: auto (max_links 0). The installed hs2 binary predates it and runs it as a fixed 32 until hs2 is upgraded (menu → Upgrade)."
+  fi
   info "The pool self-sizes between $LINK_MIN and that ceiling. In reverse mode the effective ceiling is the lower of the two servers'."
 }
 
@@ -3100,7 +3112,8 @@ tm_tune_links(){ # unit cfg
   rec=$(recommend_links | awk 'NR==1{print $1}')
   recwhy=$(recommend_links --why)
   case "$rec" in ''|*[!0-9]*) rec="" ;; esac
-  auto_now="auto"; [ -n "$rec" ] && auto_now="auto, now $rec"
+  auto_now="auto — the installed hs2 predates it and runs it as 32 until upgraded"
+  [ -n "$rec" ] && auto_now="auto, now $rec"
   case "${cur_max:-}" in
     '') curmx="32 (default — not set)"; keepmx=32 ;;
     0)  curmx="$auto_now"; keepmx=0 ;;

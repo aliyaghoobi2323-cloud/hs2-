@@ -6,7 +6,6 @@ import (
 	"errors"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -54,9 +53,9 @@ type exitPool struct {
 	live   int // slots whose link is currently up (for the log)
 	parent context.Context
 
-	// peerMax is the edge's ceiling as the edge reported it over kindInfo
-	// (shared with the serving links; nil when the pool runs without one).
-	peerMax *atomic.Int32
+	// peers is the exit's live links; each carries the ceiling its edge
+	// reported over kindInfo (nil when the pool runs without one).
+	peers *linkPeers
 }
 
 type exitSlot struct {
@@ -203,9 +202,7 @@ func (p *exitPool) stats() PoolStats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	st := PoolStats{Links: p.live, Target: p.want, Min: p.min, Max: p.max, Phase: "following"}
-	if p.peerMax != nil && p.live > 0 { // only while a link is up: never a stale edge value
-		st.PeerMax = int(p.peerMax.Load())
-	}
+	st.PeerMax = p.peers.max() // reported by the links up NOW (never a gone link's value)
 	return st
 }
 

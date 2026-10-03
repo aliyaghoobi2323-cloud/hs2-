@@ -190,6 +190,25 @@ func TestCeilingLineBothServers(t *testing.T) {
 	}
 }
 
+// A ceiling lifted by a higher min_links is shown as exactly that, never as if
+// the hardware (or max_links) gave it; drift is judged on the ceiling itself.
+func TestCeilingLiftedByMinLinks(t *testing.T) {
+	ls := liveStatus{Role: "Iran side", Dir: "direct", CfgMax: 40, CeilRaw: 32, CeilMode: ceilAuto, Profile: "low", RAMMB: lowRAM, CPUCores: 1, RecMax: 32}
+	ls.EffMax, ls.LimitBy = effectiveCeiling(true, false, 40, 0)
+	if got := ceilingLine(ls); !strings.Contains(got, "40 (raised to min_links; the ceiling itself is 32: auto — low profile") {
+		t.Fatalf("lifted auto: %q", got)
+	}
+	fixed := liveStatus{Role: "Iran side", Dir: "direct", CfgMax: 20, CeilRaw: 16, CeilMode: ceilFixed, Profile: "high", RecMax: 64}
+	if d := driftLine(fixed); !strings.Contains(d, "max_links is fixed at 16") {
+		t.Fatalf("drift must name the configured 16, not the lifted 20: %q", d)
+	}
+	pinHW(t, lowRAM, lowCPU)
+	d := doctorLinkPool(autoFC(fileConfig{Mode: "dial", Carrier: "mtcp", MinLinks: 40}), filepath.Join(t.TempDir(), "x.json"))
+	if line := strings.Join(d.lines, ""); !strings.Contains(line, "auto: 32 links from this low box") || !strings.Contains(line, "raised to min_links 40") {
+		t.Fatalf("doctor, lifted auto: %v", d.lines)
+	}
+}
+
 func TestDriftLine(t *testing.T) {
 	base := liveStatus{Role: "Iran side", Dir: "reverse", Profile: "low", RecMax: 32}
 	high := base

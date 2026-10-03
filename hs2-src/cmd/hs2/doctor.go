@@ -316,8 +316,8 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 		d.info(name, fmt.Sprintf("no adaptive link pool on carrier %q (tls is one link; other carriers run one session)", carrierName(fc)))
 		return
 	}
-	_, cfgMax, _ := linkEnvelope(fc)
-	_, mode, profile := linkCeiling(fc)
+	_, cfgMax, _ := linkEnvelope(fc)      // what a start now runs with (lifted to min_links)
+	rawMax, mode, profile := linkCeiling(fc) // the ceiling itself
 	ram, cpus := detectHW()
 	recMax := tune.RecommendedMaxLinks(ram, cpus)
 	hw := fmt.Sprintf("%s box: %s RAM, %d core(s)", profile, ramStr(ram), cpus)
@@ -344,13 +344,17 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 		// cfgMax is what a start NOW would run with (the hardware's ceiling,
 		// lifted to min_links if that is higher); compare it, not the raw
 		// recommendation, with what the daemon started with.
+		lift := ""
+		if cfgMax != rawMax {
+			lift = fmt.Sprintf(" (raised to min_links %d)", cfgMax)
+		}
 		switch {
 		case running > 0 && cfgMax < running:
-			d.warn(name, fmt.Sprintf("auto: running with %d, but this %s now gives %d (hardware changed since the daemon started) — restart the tunnel to apply the lower ceiling%s", running, hw, cfgMax, eff))
+			d.warn(name, fmt.Sprintf("auto: running with %d, but a start now would give %d (this %s; the hardware or the config changed since the daemon started) — restart the tunnel to apply the lower ceiling%s", running, cfgMax, hw, eff))
 		case running > 0 && cfgMax > running:
-			d.info(name, fmt.Sprintf("auto: running with %d; this %s now gives %d (hardware changed since the daemon started) — restart the tunnel to use it%s", running, hw, cfgMax, eff))
+			d.info(name, fmt.Sprintf("auto: running with %d; a start now would give %d (this %s; the hardware or the config changed since the daemon started) — restart the tunnel to use it%s", running, cfgMax, hw, eff))
 		default:
-			d.ok(name, fmt.Sprintf("auto: %d links, from this %s — re-derived at every start%s", cfgMax, hw, eff))
+			d.ok(name, fmt.Sprintf("auto: %d links from this %s%s — re-derived at every start%s", rawMax, hw, lift, eff))
 		}
 		return
 	}
@@ -358,13 +362,16 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 	if mode == ceilDefault {
 		how = "the default — max_links is not set"
 	}
+	if cfgMax != rawMax {
+		how += fmt.Sprintf(", raised to min_links %d", cfgMax)
+	}
 	switch {
-	case cfgMax == recMax:
-		d.ok(name, fmt.Sprintf("%d links (%s) — matches this %s%s", cfgMax, how, hw, eff))
-	case cfgMax > recMax:
-		d.warn(name, fmt.Sprintf("max_links %d is above what this %s suggests (%d) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)%s", cfgMax, hw, recMax, recMax, eff))
+	case rawMax == recMax:
+		d.ok(name, fmt.Sprintf("%d links (%s) — matches this %s%s", rawMax, how, hw, eff))
+	case rawMax > recMax:
+		d.warn(name, fmt.Sprintf("max_links %d is above what this %s suggests (%d) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)%s", rawMax, hw, recMax, recMax, eff))
 	default:
-		d.info(name, fmt.Sprintf("%d links (%s); this %s could use up to %d — set max_links to 0 (auto) to follow the hardware (menu → Link pool)%s", cfgMax, how, hw, recMax, eff))
+		d.info(name, fmt.Sprintf("%d links (%s); this %s could use up to %d — set max_links to 0 (auto) to follow the hardware (menu → Link pool)%s", rawMax, how, hw, recMax, eff))
 	}
 }
 

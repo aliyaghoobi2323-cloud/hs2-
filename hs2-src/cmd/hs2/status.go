@@ -73,6 +73,7 @@ type liveStatus struct {
 	// CeilingText is the rendered line, so the installer menu shows exactly what
 	// `hs2 status` shows.
 	CfgMax      int    `json:"cfg_max,omitempty"`
+	CeilRaw     int    `json:"ceiling_raw,omitempty"` // the ceiling before a higher min_links lifts it
 	CeilMode    string `json:"ceiling_mode,omitempty"` // auto | fixed | default (see linkCeiling)
 	Profile     string `json:"profile,omitempty"` // low | medium | high
 	RecMax      int    `json:"rec_max,omitempty"` // ceiling this hardware suggests (drift check)
@@ -145,7 +146,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 	if hasLinkPool(fc) {
 		ramMB, cpus := detectHW()
 		_, base.CfgMax, _ = linkEnvelope(fc)
-		_, base.CeilMode, base.Profile = linkCeiling(fc)
+		base.CeilRaw, base.CeilMode, base.Profile = linkCeiling(fc)
 		base.RecMax, base.RAMMB = tune.RecommendedMaxLinks(ramMB, cpus), ramMB
 	}
 	write := func() {
@@ -431,13 +432,20 @@ func ceilingWhy(ls liveStatus) string {
 	if ls.RAMMB > 0 {
 		hw += fmt.Sprintf(": %s RAM, %d core(s)", ramStr(ls.RAMMB), ls.CPUCores)
 	}
+	var how string
 	switch ls.CeilMode {
 	case ceilAuto:
-		return fmt.Sprintf("%d (auto — %s)", ls.CfgMax, hw)
+		how = "auto — " + hw
 	case ceilDefault:
-		return fmt.Sprintf("%d (the default — max_links not set; %s)", ls.CfgMax, hw)
+		how = "the default — max_links not set; " + hw
+	default:
+		how = "fixed by max_links; " + hw
 	}
-	return fmt.Sprintf("%d (fixed by max_links; %s)", ls.CfgMax, hw)
+	if raw := ls.CeilRaw; raw > 0 && raw != ls.CfgMax {
+		// min_links is above the ceiling: the envelope lifts it to min_links.
+		return fmt.Sprintf("%d (raised to min_links; the ceiling itself is %d: %s)", ls.CfgMax, raw, how)
+	}
+	return fmt.Sprintf("%d (%s)", ls.CfgMax, how)
 }
 
 // ceilingLine renders the tunnel's link-pool ceiling exactly, from THIS
@@ -496,19 +504,23 @@ func unreported(ls liveStatus, who string) string {
 // An auto ceiling follows the hardware by itself, and a direct Kharej's ceiling
 // is not applied, so neither gets one.
 func driftLine(ls liveStatus) string {
-	if ls.CfgMax == 0 || ls.CeilMode == ceilAuto || ls.RecMax == 0 || ls.RecMax == ls.CfgMax {
+	set := ls.CeilRaw // the configured ceiling, before a min_links lift
+	if set == 0 {
+		set = ls.CfgMax // an older status file
+	}
+	if ls.CfgMax == 0 || ls.CeilMode == ceilAuto || ls.RecMax == 0 || ls.RecMax == set {
 		return ""
 	}
 	if ls.Dir != "reverse" && ls.Role != "Iran side" {
 		return ""
 	}
 	if ls.CeilMode == ceilDefault {
-		return fmt.Sprintf("max_links is not set, so the historical default %d applies; this %s box could use up to %d — set max_links to 0 (auto) to follow the hardware (menu → Link pool)", ls.CfgMax, ls.Profile, ls.RecMax)
+		return fmt.Sprintf("max_links is not set, so the historical default %d applies; this %s box could use up to %d — set max_links to 0 (auto) to follow the hardware (menu → Link pool)", set, ls.Profile, ls.RecMax)
 	}
-	if ls.CfgMax > ls.RecMax {
-		return fmt.Sprintf("max_links %d is above what this %s box suggests (%d) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)", ls.CfgMax, ls.Profile, ls.RecMax, ls.RecMax)
+	if set > ls.RecMax {
+		return fmt.Sprintf("max_links %d is above what this %s box suggests (%d) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)", set, ls.Profile, ls.RecMax, ls.RecMax)
 	}
-	return fmt.Sprintf("this %s box could use up to %d; max_links is fixed at %d — set it to 0 (auto) to follow the hardware (menu → Link pool)", ls.Profile, ls.RecMax, ls.CfgMax)
+	return fmt.Sprintf("this %s box could use up to %d; max_links is fixed at %d — set it to 0 (auto) to follow the hardware (menu → Link pool)", ls.Profile, ls.RecMax, set)
 }
 
 // whyLine explains the size: the controller's reason, plus what keeps any
