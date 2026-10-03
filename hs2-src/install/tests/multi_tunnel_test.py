@@ -102,11 +102,23 @@ class Pty:
         self.out += ANSI.sub("", d.decode("utf-8", "replace")).replace("\r", "")
         return True
 
-    def expect(self, rx, timeout):
+    def expect(self, rx, timeout, auto=()):
+        """Wait for rx. auto is [(regex, answer)] for optional prompts the steps
+        do not list: one that shows up BEFORE rx is answered on the way."""
         deadline = time.time() + timeout
         pat = re.compile(rx)
+        autos = [(re.compile(a), ans) for a, ans in auto]
         while True:
             m = pat.search(self.out, self.pos)
+            first = None
+            for apat, ans in autos:
+                am = apat.search(self.out, self.pos)
+                if am and (m is None or am.start() < m.start()) and (first is None or am.start() < first[0].start()):
+                    first = (am, ans)
+            if first:
+                self.pos = first[0].end()
+                self.send(first[1])
+                continue
             if m:
                 self.pos = m.end()
                 return True
@@ -189,7 +201,7 @@ get_cert(){ printf "%s|%s" "$TEST_CERT" "$TEST_KEY"; }
         script = self.PRELUDE + call + "\n"
         p = Pty(["ip", "netns", "exec", NS[s], "bash", "-c", script], self.env(s, extra))
         for rx, ans in steps:
-            if not p.expect(rx, 60):
+            if not p.expect(rx, 60, auto=OPTIONAL):
                 p.finish(3)
                 return -99, p.out + "\n<<no prompt /%s/>>" % rx
             if callable(ans):
@@ -287,6 +299,10 @@ DOM_I = r"Domain for THIS iran server"
 MTU = r"TUN MTU"
 UDPQ = r"Also forward UDP"
 LIST = r"Pick a tunnel number[\s\S]*?Choose: "
+# Optional prompts the scenarios do not list, answered with Enter (keep the
+# default) wherever they appear: the link-making side is asked the tunnel
+# subnet (ask_subnet, U5) right after the transport.
+OPTIONAL = [(r"Tunnel subnet /30 base in 10\.77\.0\.0/16 \[[^\]]*\]: ", "")]
 TMENU = r"9\) Delete this tunnel[\s\S]*?Choose: "
 
 
