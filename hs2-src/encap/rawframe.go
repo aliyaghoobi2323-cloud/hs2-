@@ -271,8 +271,9 @@ const (
 
 // recvFilter compiles the kernel-side receive filter for this framer: the
 // socket only wakes up for packets of our kind, in the peer's direction, with
-// the peer's magic — and, on the dial side, for our own link id AND from the
-// peer's source IP (srcIP, big-endian; 0 skips it). The source check matters
+// the peer's magic — and, on the dial side, from the peer's source IP (srcIP,
+// big-endian; 0 skips it) and for link id id (0: any link — the shared dial
+// socket, which tells its links apart in userspace). The source check matters
 // because the dial socket is UNCONNECTED (a connected raw socket takes ICMP
 // errors as fatal read errors, so one spoofed packet could kill the carrier),
 // so the kernel would otherwise deliver every packet of the protocol from any
@@ -292,17 +293,17 @@ func (f *framer) recvFilter(id uint16, srcIP uint32) []bpfInsn {
 		// Match the echo type (byte 0) and the keyed prefix in the sequence high
 		// byte (byte 6). A single-byte compare: no AND opcode needed.
 		cs = append(cs, check{bpfLdbInd, 0, uint32(f.rxType)}, check{bpfLdbInd, 6, uint32(f.rxPrefix >> 8)})
-		if f.dial {
+		if f.dial && id != 0 {
 			cs = append(cs, check{bpfLdhInd, 4, uint32(id)})
 		}
 	case KindGRE:
 		cs = append(cs, check{bpfLdhInd, 0, greFlagsKey}, check{bpfLdhInd, 4, uint32(f.rxMagic)})
-		if f.dial {
+		if f.dial && id != 0 {
 			cs = append(cs, check{bpfLdhInd, 6, uint32(id)})
 		}
 	default:
 		cs = append(cs, check{bpfLdhInd, 0, uint32(f.rxMagic)})
-		if f.dial {
+		if f.dial && id != 0 {
 			cs = append(cs, check{bpfLdhInd, 2, uint32(id)})
 		}
 	}

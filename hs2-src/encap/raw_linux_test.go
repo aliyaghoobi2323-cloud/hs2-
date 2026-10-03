@@ -108,25 +108,14 @@ func TestRawSocketLinksDemux(t *testing.T) {
 			srv := listenT(t, k, "127.0.0.1", opt)
 			var clis []net.Conn
 			addrs := map[string]net.Addr{}
-			// Link ids are random 16-bit values with no uniqueness check
-			// (randLinkID), so two links from this one IP can collide. That is a
-			// known production limitation — a colliding pair fails its handshake
-			// and the pool redials — not something this demux test should trip
-			// over, so retry each dial until its link id is distinct.
+			// Link ids are unique per (kind, peer IP) in this process.
 			seenIDs := map[uint16]bool{}
 			for i := 0; i < 4; i++ {
-				var c net.Conn
-				for tries := 0; ; tries++ {
-					c = dialT(t, k, "127.0.0.1", opt)
-					id := c.LocalAddr().(*Addr).ID
-					if !seenIDs[id] {
-						seenIDs[id] = true
-						break
-					}
-					c.Close() // collision: discard and redial for a unique id
-					if tries >= 20 {
-						t.Fatalf("%s: could not get a unique link id in 20 tries", k)
-					}
+				c := dialT(t, k, "127.0.0.1", opt)
+				if id := c.LocalAddr().(*Addr).ID; seenIDs[id] {
+					t.Fatalf("%s: link id %d handed out twice", k, id)
+				} else {
+					seenIDs[id] = true
 				}
 				clis = append(clis, c)
 				c.Write([]byte(fmt.Sprintf("link-%d", i)))
@@ -149,11 +138,10 @@ func TestRawSocketLinksDemux(t *testing.T) {
 				t.Fatalf("link 2 got %q", got)
 			}
 			for _, i := range []int{0, 1, 3} {
-				rc := clis[i].(*rawConn)
-				rc.ipc.SetReadDeadline(time.Now().Add(150 * time.Millisecond))
+				clis[i].SetReadDeadline(time.Now().Add(150 * time.Millisecond))
 				buf := make([]byte, 2048)
-				if n, _, _, _, err := rc.ipc.ReadMsgIP(buf, nil); !isTimeout(err) {
-					t.Fatalf("link %d socket woke for another link's packet (n=%d err=%v)", i, n, err)
+				if n, err := clis[i].Read(buf); !isTimeout(err) {
+					t.Fatalf("link %d got another link's packet (n=%d err=%v)", i, n, err)
 				}
 			}
 		})
@@ -328,15 +316,12 @@ func TestRawSocketICMPKernelSilent(t *testing.T) {
 // echo sequence, failing the test on any trouble.
 func readReplySeq(t *testing.T, rc *rawConn) uint16 {
 	t.Helper()
-	rc.ipc.SetReadDeadline(time.Now().Add(2 * time.Second))
-	buf := make([]byte, 2048)
-	n, _, _, _, err := rc.ipc.ReadMsgIP(buf, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, tp, ok := rc.f.ipv4Payload(buf[:n])
-	if !ok {
-		t.Fatal("bad reply packet")
+	var tp []byte
+	select {
+	case bp := <-rc.q: // the link's queue holds the transport packet, header included
+		tp = append([]byte(nil), *bp...)
+	case <-time.After(2 * time.Second):
+		t.Fatal("no reply")
 	}
 	_, seq, ok := rc.f.parse(tp)
 	if !ok {

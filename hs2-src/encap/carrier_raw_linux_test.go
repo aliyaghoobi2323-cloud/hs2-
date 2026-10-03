@@ -185,29 +185,19 @@ func TestCarrierOverRawEncap(t *testing.T) {
 }
 
 // Many links (the pool) from one host to one listener, each its own carrier,
-// all live at once and demultiplexed by link id — what the autopilot relies on
-// to run several links over a raw encapsulation.
-//
-// Link ids are random 16-bit values with no uniqueness check (raw_linux.go's
-// randLinkID), so two of the several links from this one IP can collide. That
-// is a known production limitation, not a bug this test should hit: a colliding
-// pair's second handshake is fed to the first link and fails, and the pool
-// redials. The udpcarrier Conn does not expose its link id, so the test cannot
-// pre-dedup; it retries the whole bring-up a bounded number of times. A genuine
-// demux bug (a crossed reply) fails every attempt and so still fails the test.
+// all live at once on ONE shared dial socket and demultiplexed by link id —
+// what the autopilot relies on to run a pool over a raw encapsulation. Link
+// ids are unique per peer, so every link must come up on the first try.
 func TestCarrierRawManyLinks(t *testing.T) {
 	needNetns(t)
-	const links = 8
+	const links = 48
 	for _, k := range rawKinds {
 		t.Run(k, func(t *testing.T) {
-			for attempt := 0; ; attempt++ {
-				if runRawManyLinks(t, k, links) {
-					return
-				}
-				if attempt >= 4 {
-					t.Fatalf("%s: could not bring up %d distinct links in 5 attempts", k, links)
-				}
-				t.Logf("%s: not all links came up (likely a link-id collision); retrying", k)
+			if !runRawManyLinks(t, k, links) {
+				t.Fatalf("%s: not all %d links came up", k, links)
+			}
+			if s, _ := encap.RawMuxStats(); s != 0 {
+				t.Fatalf("%s: %d dial sockets left after the links closed", k, s)
 			}
 		})
 	}

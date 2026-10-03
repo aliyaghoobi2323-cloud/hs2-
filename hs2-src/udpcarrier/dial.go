@@ -99,30 +99,18 @@ func DialCfg(ctx context.Context, addr string, ec EncapConfig, shared []byte, in
 	c := newConn(sess, write, shared, binding, innerMTU, conn, nil)
 	c.kind = ec.Kind // echo-shaping in the pool keys off this (the dial side sends requests)
 
-	// Read pump: everything after the handshake goes through the FEC path.
-	c.wg.Add(1)
-	go func() {
-		defer c.wg.Done()
-		buf := make([]byte, 2048)
-		for {
-			select {
-			case <-c.done:
-				return
-			default:
-			}
-			conn.SetReadDeadline(time.Now().Add(deadAfter))
-			n, err := conn.Read(buf)
-			if err != nil {
-				select {
-				case <-c.done:
-				default:
-					c.Close()
-				}
-				return
-			}
-			c.feed(append([]byte(nil), buf[:n]...))
-		}
-	}()
+	// Read pump: everything after the handshake goes through the FEC path. A
+	// raw encapsulation's shared dial socket hands packets over directly (one
+	// reader for every carrier to the peer, so it must never block: a carrier
+	// whose decode queue is full loses the packet, as on the listener side).
+	if r, ok := conn.(interface {
+		SetReceiver(func([]byte), func(error))
+	}); ok {
+		r.SetReceiver(func(b []byte) { c.tryFeed(append([]byte(nil), b...)) }, func(error) { c.Close() })
+	} else {
+		c.wg.Add(1)
+		go c.readPump(conn)
+	}
 
 	// Confirmation: prove ourselves and require the server's proof. Both tags
 	// are retransmitted because a single one can be lost on a bursty path.
@@ -131,6 +119,30 @@ func DialCfg(ctx context.Context, addr string, ec EncapConfig, shared []byte, in
 		return nil, err
 	}
 	return c, nil
+}
+
+// readPump reads the dial socket until the carrier closes or the socket fails.
+func (c *Conn) readPump(conn net.Conn) {
+	defer c.wg.Done()
+	buf := make([]byte, 2048)
+	for {
+		select {
+		case <-c.done:
+			return
+		default:
+		}
+		conn.SetReadDeadline(time.Now().Add(deadAfter))
+		n, err := conn.Read(buf)
+		if err != nil {
+			select {
+			case <-c.done:
+			default:
+				c.Close()
+			}
+			return
+		}
+		c.feed(append([]byte(nil), buf[:n]...))
+	}
 }
 
 // dialHandshake runs Noise message 1/2 with retransmission (message 1 may be

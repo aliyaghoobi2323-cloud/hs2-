@@ -100,17 +100,6 @@ func pmtudiscFor(kind string, dial bool) int {
 	return unix.IP_PMTUDISC_DONT // echo replies: DF=0, like the kernel's own
 }
 
-// randLinkID picks a non-zero 16-bit link id.
-func randLinkID() uint16 {
-	var b [2]byte
-	for {
-		rand.Read(b[:])
-		if id := binary.BigEndian.Uint16(b[:]); id != 0 {
-			return id
-		}
-	}
-}
-
 // randReplyCtr seeds a peer's reply counter (icmp) with a random 16-bit value,
 // so the first reply to each peer does not start at a fixed sequence.
 func randReplyCtr() uint16 {
@@ -124,16 +113,82 @@ func randReplyCtr() uint16 {
 var bufPool = sync.Pool{New: func() any { b := make([]byte, 0, 2048); return &b }}
 
 // ---------------------------------------------------------------------------
-// Dial side: a connected raw socket to one peer IP, one link id.
+// Dial side: one shared raw socket per (kind, key, bind IP, peer IP), with the
+// links on it told apart by their link id in userspace.
+//
+// The kernel hands every received packet of a raw socket's IP protocol to
+// EVERY raw socket of that protocol (raw_v4_input clones it to each and runs
+// each one's filter), so one socket per link made each received packet cost
+// O(links): measured over GRE, 5.6–7.1 µs a packet with one socket and 77–81 µs
+// with 300 — one core then received only ~12k packets a second. One socket per
+// peer makes it O(1): a single reader takes each packet once and hands it to
+// its link by id. Link ids are unique per (kind, peer IP) in this process, so
+// two links never share one (they used to be drawn at random, and at 300
+// links two collided about half the time — that dial then failed).
 
-type rawConn struct {
+// rawMuxQueue is how many received packets wait for one link's reader before
+// further ones are dropped (plain loss, which FEC and the inner transport
+// handle): a link whose reader stalls must not hold up the others on the
+// shared socket.
+const rawMuxQueue = 512
+
+type rawMuxKey struct {
+	kind  string
+	proto int
+	key   string // the framing key (it keys the magic and icmp's masking)
+	bind  [4]byte
+	peer  [4]byte
+}
+
+// rawIDKey scopes link-id uniqueness: the listener tells links apart by
+// (source IP, id), and two muxes to one peer (a wildcard and an explicit bind
+// that routes the same way) can share a source IP.
+type rawIDKey struct {
+	kind string
+	peer [4]byte
+}
+
+var (
+	rawMuxMu sync.Mutex
+	rawMuxes = map[rawMuxKey]*rawMux{}
+	rawIDs   = map[rawIDKey]map[uint16]bool{}
+)
+
+// rawMux is one shared dial socket and the links on it.
+type rawMux struct {
+	key     rawMuxKey
 	ipc     *net.IPConn
 	f       *framer
-	id      uint16
-	seq     atomic.Uint32 // icmp echo sequence, like ping's
-	laddr   *Addr
-	raddr   *Addr
-	raddrIP *net.IPAddr // the peer, for WriteToIP (the socket is unconnected)
+	raddrIP *net.IPAddr
+	dead    chan struct{} // closed when the socket fails or closes
+	err     error         // why, set before dead closes
+
+	mu    sync.RWMutex
+	links map[uint16]*rawConn
+	refs  int // under rawMuxMu
+
+	dropped atomic.Uint64 // packets dropped for a full link queue
+}
+
+// rawConn is one link (one link id) on a shared dial socket.
+type rawConn struct {
+	mx    *rawMux
+	ipc   *net.IPConn // the shared socket (tests)
+	f     *framer
+	id    uint16
+	seq   atomic.Uint32 // icmp echo sequence, like ping's
+	laddr *Addr
+	raddr *Addr
+
+	q chan *[]byte // received transport payloads, header included
+	// recv, once set (SetReceiver), takes every packet straight from the
+	// shared reader instead of q — one hand-off less per packet.
+	recv   atomic.Pointer[func([]byte)]
+	onErr  atomic.Pointer[func(error)]
+	done   chan struct{}
+	once   sync.Once
+	rdl    atomic.Int64  // read deadline, unix ns (0 = none)
+	rdlSet chan struct{} // a new read deadline (wakes a blocked Read)
 }
 
 func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
@@ -145,34 +200,43 @@ func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
+	peer := ra.IP.To4()
+	if peer == nil {
+		return nil, fmt.Errorf("encap %s: %s is not an IPv4 address", f.kind, ra.IP)
+	}
 	bip, err := parseBindIP(opt.BindIP)
 	if err != nil {
 		return nil, err
 	}
-	// The dial socket is UNCONNECTED (net.ListenIP, not DialIP). A connected
-	// raw socket reports ICMP errors for the flow as fatal read/write errors,
-	// so one ICMP packet — a router's frag-needed, a stray port/protocol
-	// unreachable from an ip_gre/ipip module on the server, or a spoofed one
-	// from an off-path attacker who knows only the two IPs and the protocol —
-	// would tear the carrier (and every pooled carrier to that server) down.
-	// An unconnected socket ignores those errors; we restrict delivery to the
-	// peer ourselves, with a source-IP match in the BPF filter and in Read.
-	la := &net.IPAddr{IP: net.IPv4zero}
+	k := rawMuxKey{kind: f.kind, proto: f.proto, key: string(opt.Key)}
+	copy(k.peer[:], peer)
 	if bip != nil {
-		la = &net.IPAddr{IP: bip}
+		copy(k.bind[:], bip)
 	}
-	ipc, err := net.ListenIP(rawNetwork(f.proto), la)
-	if err != nil {
-		return nil, rawErr(f.kind, err)
+	ik := rawIDKey{kind: f.kind, peer: k.peer}
+
+	rawMuxMu.Lock()
+	defer rawMuxMu.Unlock()
+	ids := rawIDs[ik]
+	if len(ids) >= 65535 {
+		return nil, fmt.Errorf("encap %s: every link id to %s is in use", f.kind, ra.IP)
 	}
-	id := randLinkID()
-	srcIP := binary.BigEndian.Uint32(ra.IP.To4())
-	if err := tuneRawSocket(ipc, f.recvFilter(id, srcIP), pmtudiscFor(f.kind, true)); err != nil {
-		ipc.Close()
-		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
+	mx := rawMuxes[k]
+	if mx == nil || mx.failed() {
+		if mx, err = openRawMux(k, f, bip, peer); err != nil {
+			return nil, err
+		}
+		rawMuxes[k] = mx // a failed one closes with its last link
 	}
-	c := &rawConn{ipc: ipc, f: f, id: id, raddrIP: &net.IPAddr{IP: ra.IP.To4()},
-		raddr: &Addr{IP: ra.IP.To4(), ID: id, Kind: f.kind}}
+	if ids == nil {
+		ids = map[uint16]bool{}
+		rawIDs[ik] = ids
+	}
+	id := uniqueLinkID(ids)
+	ids[id] = true
+	c := &rawConn{mx: mx, ipc: mx.ipc, f: mx.f, id: id,
+		raddr: &Addr{IP: peer, ID: id, Kind: f.kind},
+		q:     make(chan *[]byte, rawMuxQueue), done: make(chan struct{}), rdlSet: make(chan struct{}, 1)}
 	local := net.IPv4zero
 	if bip != nil {
 		local = bip
@@ -181,34 +245,176 @@ func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
 	var s [2]byte
 	rand.Read(s[:])
 	c.seq.Store(uint32(binary.BigEndian.Uint16(s[:])))
+	mx.refs++
+	mx.mu.Lock()
+	mx.links[id] = c
+	mx.mu.Unlock()
 	return c, nil
 }
 
-func (c *rawConn) Read(b []byte) (int, error) {
+// uniqueLinkID draws a random non-zero link id not in use. Caller holds
+// rawMuxMu and has checked that one is free.
+func uniqueLinkID(inUse map[uint16]bool) uint16 {
+	var b [2]byte
 	for {
-		n, _, _, _, err := c.ipc.ReadMsgIP(b, nil)
+		rand.Read(b[:])
+		if id := binary.BigEndian.Uint16(b[:]); id != 0 && !inUse[id] {
+			return id
+		}
+	}
+}
+
+// openRawMux opens the shared socket for k and starts its reader. Caller
+// holds rawMuxMu.
+func openRawMux(k rawMuxKey, f *framer, bip, peer net.IP) (*rawMux, error) {
+	// The socket is UNCONNECTED (net.ListenIP, not DialIP). A connected raw
+	// socket reports ICMP errors for the flow as fatal read/write errors, so
+	// one ICMP packet — a router's frag-needed, a stray port/protocol
+	// unreachable from an ip_gre/ipip module on the server, or a spoofed one
+	// from an off-path attacker who knows only the two IPs and the protocol —
+	// would tear every link to that server down. An unconnected socket
+	// ignores those errors; we restrict delivery to the peer ourselves, with a
+	// source-IP match in the BPF filter and in the reader.
+	la := &net.IPAddr{IP: net.IPv4zero}
+	if bip != nil {
+		la = &net.IPAddr{IP: bip}
+	}
+	ipc, err := net.ListenIP(rawNetwork(f.proto), la)
+	if err != nil {
+		return nil, rawErr(f.kind, err)
+	}
+	if err := tuneRawSocket(ipc, f.recvFilter(0, binary.BigEndian.Uint32(peer)), pmtudiscFor(f.kind, true)); err != nil {
+		ipc.Close()
+		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
+	}
+	mx := &rawMux{key: k, ipc: ipc, f: f, raddrIP: &net.IPAddr{IP: append(net.IP(nil), peer...)},
+		dead: make(chan struct{}), links: map[uint16]*rawConn{}}
+	go mx.readLoop()
+	return mx, nil
+}
+
+// readLoop takes every packet off the shared socket once and hands it to its
+// link; a packet for no link, or not from the peer, is dropped.
+func (mx *rawMux) readLoop() {
+	buf := make([]byte, 65536)
+	for {
+		n, _, _, _, err := mx.ipc.ReadMsgIP(buf, nil)
 		if err != nil {
 			if softErr(err) {
 				continue // an ICMP error for this socket; not the link dying
 			}
-			return 0, err
+			mx.err = err
+			close(mx.dead)
+			mx.mu.RLock()
+			for _, c := range mx.links {
+				if fn := c.onErr.Load(); fn != nil {
+					go (*fn)(err)
+				}
+			}
+			mx.mu.RUnlock()
+			return
 		}
-		src, _, tp, ok := c.f.ipv4Payload(b[:n])
-		if !ok || !src.Equal(c.raddrIP.IP) {
+		src, _, tp, ok := mx.f.ipv4Payload(buf[:n])
+		if !ok || !src.Equal(mx.raddrIP.IP) {
 			continue // not from the peer (the socket is unconnected)
 		}
-		id, _, ok := c.f.parse(tp)
-		if !ok || id != c.id {
+		id, _, ok := mx.f.parse(tp)
+		if !ok {
 			continue
 		}
-		return copy(b, tp[c.f.hdr:]), nil
+		mx.mu.RLock()
+		c := mx.links[id]
+		mx.mu.RUnlock()
+		if c == nil {
+			continue
+		}
+		if fn := c.recv.Load(); fn != nil {
+			(*fn)(tp[mx.f.hdr:]) // must not block or keep the slice
+			continue
+		}
+		bp := bufPool.Get().(*[]byte)
+		*bp = append((*bp)[:0], tp...)
+		select {
+		case c.q <- bp:
+		default:
+			bufPool.Put(bp)
+			mx.dropped.Add(1)
+		}
+	}
+}
+
+// failed reports whether the socket has failed (its links are ending).
+func (mx *rawMux) failed() bool {
+	select {
+	case <-mx.dead:
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseLocked drops one link's hold; the last one closes the socket.
+// Caller holds rawMuxMu.
+func (mx *rawMux) releaseLocked() {
+	if mx.refs--; mx.refs <= 0 {
+		if rawMuxes[mx.key] == mx {
+			delete(rawMuxes, mx.key)
+		}
+		mx.ipc.Close() // ends readLoop
+	}
+}
+
+func (c *rawConn) Read(b []byte) (int, error) {
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
+	for {
+		var expire <-chan time.Time
+		if d := c.rdl.Load(); d != 0 {
+			wait := time.Until(time.Unix(0, d))
+			if wait <= 0 {
+				return 0, os.ErrDeadlineExceeded
+			}
+			if timer == nil {
+				timer = time.NewTimer(wait)
+			} else {
+				timer.Reset(wait)
+			}
+			expire = timer.C
+		}
+		select {
+		case bp := <-c.q:
+			n := copy(b, (*bp)[c.f.hdr:])
+			bufPool.Put(bp)
+			return n, nil
+		case <-c.done:
+			return 0, net.ErrClosed
+		case <-c.mx.dead:
+			return 0, fmt.Errorf("encap %s: %w", c.f.kind, c.mx.err)
+		case <-expire:
+		case <-c.rdlSet:
+		}
+		if timer != nil && !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
 	}
 }
 
 func (c *rawConn) Write(p []byte) (int, error) {
+	select {
+	case <-c.done:
+		return 0, net.ErrClosed
+	default:
+	}
 	bp := bufPool.Get().(*[]byte)
 	pkt := c.f.build(*bp, c.id, uint16(c.seq.Add(1)), p)
-	_, err := c.ipc.WriteToIP(pkt, c.raddrIP)
+	_, err := c.mx.ipc.WriteToIP(pkt, c.mx.raddrIP)
 	*bp = pkt[:0]
 	bufPool.Put(bp)
 	if err != nil && !softErr(err) {
@@ -217,12 +423,100 @@ func (c *rawConn) Write(p []byte) (int, error) {
 	return len(p), nil // a soft error (ENOBUFS, an ICMP error) drops this datagram
 }
 
-func (c *rawConn) Close() error                       { return c.ipc.Close() }
-func (c *rawConn) LocalAddr() net.Addr                { return c.laddr }
-func (c *rawConn) RemoteAddr() net.Addr               { return c.raddr }
-func (c *rawConn) SetDeadline(t time.Time) error      { return c.ipc.SetDeadline(t) }
-func (c *rawConn) SetReadDeadline(t time.Time) error  { return c.ipc.SetReadDeadline(t) }
-func (c *rawConn) SetWriteDeadline(t time.Time) error { return c.ipc.SetWriteDeadline(t) }
+// Close takes the link off the shared socket (closing the socket with the
+// last link) and frees its id.
+func (c *rawConn) Close() error {
+	c.once.Do(func() {
+		close(c.done)
+		c.mx.mu.Lock()
+		delete(c.mx.links, c.id)
+		c.mx.mu.Unlock()
+		rawMuxMu.Lock()
+		ik := rawIDKey{kind: c.mx.key.kind, peer: c.mx.key.peer}
+		if ids := rawIDs[ik]; ids != nil {
+			delete(ids, c.id)
+			if len(ids) == 0 {
+				delete(rawIDs, ik)
+			}
+		}
+		c.mx.releaseLocked()
+		rawMuxMu.Unlock()
+		for {
+			select {
+			case bp := <-c.q:
+				bufPool.Put(bp)
+				continue
+			default:
+			}
+			break
+		}
+	})
+	return nil
+}
+
+// SetReceiver hands every packet received from now on to fn, on the shared
+// socket's reader goroutine — fn must neither block nor keep the slice (copy
+// it); packets already queued go first. onErr is called (once, on its own
+// goroutine) if the shared socket fails. Read is not used after this.
+func (c *rawConn) SetReceiver(fn func([]byte), onErr func(error)) {
+	c.onErr.Store(&onErr)
+	for {
+		select {
+		case bp := <-c.q:
+			fn((*bp)[c.f.hdr:])
+			bufPool.Put(bp)
+			continue
+		default:
+		}
+		break
+	}
+	c.recv.Store(&fn)
+	for { // a packet queued between the drain and the switch
+		select {
+		case bp := <-c.q:
+			fn((*bp)[c.f.hdr:])
+			bufPool.Put(bp)
+			continue
+		default:
+		}
+		break
+	}
+	if c.mx.failed() {
+		go onErr(c.mx.err)
+	}
+}
+
+func (c *rawConn) LocalAddr() net.Addr  { return c.laddr }
+func (c *rawConn) RemoteAddr() net.Addr { return c.raddr }
+
+// SetDeadline sets the read deadline; writes on a raw socket do not wait for
+// the peer, and the shared socket's write deadline belongs to every link.
+func (c *rawConn) SetDeadline(t time.Time) error { return c.SetReadDeadline(t) }
+func (c *rawConn) SetReadDeadline(t time.Time) error {
+	var v int64
+	if !t.IsZero() {
+		v = t.UnixNano()
+	}
+	c.rdl.Store(v)
+	select {
+	case c.rdlSet <- struct{}{}:
+	default:
+	}
+	return nil
+}
+func (c *rawConn) SetWriteDeadline(time.Time) error { return nil }
+
+// rawMuxStats is the number of shared dial sockets open and the packets they
+// dropped for a full link queue (tests, diagnostics).
+func rawMuxStats() (sockets int, dropped uint64) {
+	rawMuxMu.Lock()
+	defer rawMuxMu.Unlock()
+	for _, mx := range rawMuxes {
+		sockets++
+		dropped += mx.dropped.Load()
+	}
+	return
+}
 
 // ---------------------------------------------------------------------------
 // Listen side: one raw socket bound to a local IP (or the wildcard), serving
@@ -249,7 +543,7 @@ type rawPacketConn struct {
 	ipc       *net.IPConn
 	f         *framer
 	wildcard  bool
-	guardKey  uint16    // icmp: the echo-guard key (c2s prefix byte) this listener holds
+	guardKey  uint16 // icmp: the echo-guard key (c2s prefix byte) this listener holds
 	laddr     *Addr
 	closeEcho sync.Once // releases this listener's echo-reply suppression, once
 
