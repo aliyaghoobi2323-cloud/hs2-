@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"hash/fnv"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
+	"github.com/xtaci/smux"
 )
 
 // tcpPacket builds a minimal IPv4/TCP header for the given ports.
@@ -192,7 +194,7 @@ func TestWriteLoopDropsStalePackets(t *testing.T) {
 // reader always allows 30 s.
 func TestStreamL3QuietKeepaliveNeedsPeerCap(t *testing.T) {
 	m := &linkMeter{}
-	l := newStreamL3Link(nil, peerL3Quiet(m))
+	l := newStreamL3Link(nil, peerL3Quiet(m), nil)
 	if l.deadAfter != l3StreamDeadAfter {
 		t.Fatalf("deadAfter=%s, want %s", l.deadAfter, l3StreamDeadAfter)
 	}
@@ -214,4 +216,63 @@ func TestStreamL3QuietKeepaliveNeedsPeerCap(t *testing.T) {
 	if p.keepalive() != l3KeepaliveEvery || p.deadAfter != 0 {
 		t.Fatal("pool L3 link changed")
 	}
+}
+
+// The stream side channel is dropped once its whole session has received
+// nothing for l3SessionSilent (a black-holed link), not after the 30 s
+// stream grace — but never while the session still hears the other server.
+func TestStreamL3DroppedWhenSessionSilent(t *testing.T) {
+	old := l3SessionSilent
+	l3SessionSilent = 600 * time.Millisecond
+	defer func() { l3SessionSilent = old }()
+	edge, exit, mtr := guardedPair(t)
+	mtr.guard.manual.Store(true)
+	st, err := edge.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := newStreamL3Link(st, func() bool { return false }, sessReadsOf(mtr))
+	defer l.markDead()
+	// The other server talks on another stream: the session hears it.
+	talk, err := exit.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go io.Copy(io.Discard, mustAccept(t, edge))
+	stop := make(chan struct{})
+	go func() {
+		tk := time.NewTicker(100 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				talk.Write([]byte("x"))
+			}
+		}
+	}()
+	time.Sleep(1500 * time.Millisecond)
+	if !l.Alive() {
+		close(stop)
+		t.Fatal("dropped while the session was hearing the other server")
+	}
+	close(stop) // the other server goes silent (smux keepalives come every 4-8 s)
+	start := time.Now()
+	for l.Alive() {
+		if time.Since(start) > 3*time.Second {
+			t.Fatal("still alive 3 s into a silent session")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Logf("dropped %s after the session went silent", time.Since(start).Round(100*time.Millisecond))
+}
+
+func mustAccept(t *testing.T, s *smux.Session) *smux.Stream {
+	t.Helper()
+	st, err := s.AcceptStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st
 }

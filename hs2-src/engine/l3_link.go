@@ -79,6 +79,13 @@ const (
 	l3QuietKeepalive  = 10 * time.Second
 )
 
+// l3SessionSilent: the stream side channel's 30 s grace is for a link whose
+// session still talks (a wedge, a long idle); a session that has received
+// nothing at all for this long — the other server's smux keepalive arrives
+// every 4–8 s on a live link — is black-holed, and its TUN flows move to
+// another link now instead of after 24–30 s. A variable for tests.
+var l3SessionSilent = 12 * time.Second
+
 // l3Link is one link in L3 mode: a TLS carrier used as a framed packet pipe.
 type l3Link struct {
 	car pktConn
@@ -112,8 +119,14 @@ func newL3Link(car pktConn) *l3Link {
 
 // newStreamL3Link is the TUN side channel of a stream-mode link (one smux
 // stream); quiet reports whether the other server allows quiet keepalives.
-func newStreamL3Link(st *smux.Stream, quiet func() bool) *l3Link {
+// sessReads (nil: unknown) counts the session's completed socket reads: while
+// it does not move for l3SessionSilent the whole link is silent and the side
+// channel is dropped (watchSession).
+func newStreamL3Link(st *smux.Stream, quiet func() bool, sessReads func() uint64) *l3Link {
 	l := newL3Link(newStreamPkt(st))
+	if sessReads != nil {
+		go l.watchSession(sessReads)
+	}
 	l.deadAfter = l3StreamDeadAfter
 	l.kaFn = func() time.Duration {
 		if quiet() {
@@ -122,6 +135,37 @@ func newStreamL3Link(st *smux.Stream, quiet func() bool) *l3Link {
 		return l3KeepaliveEvery
 	}
 	return l
+}
+
+// watchSession drops the link once its session has received nothing for
+// l3SessionSilent (it runs beside the reader, so a frame is never cut by a
+// read deadline).
+func (l *l3Link) watchSession(reads func() uint64) {
+	every := min(2*time.Second, l3SessionSilent/4)
+	t := time.NewTicker(every)
+	defer t.Stop()
+	last, since := reads(), time.Now()
+	for {
+		select {
+		case <-l.done:
+			return
+		case now := <-t.C:
+			if n := reads(); n != last {
+				last, since = n, now
+			} else if now.Sub(since) >= l3SessionSilent {
+				l.markDead()
+				return
+			}
+		}
+	}
+}
+
+// sessReadsOf is the session read counter of a metered link (nil: unknown).
+func sessReadsOf(m *linkMeter) func() uint64 {
+	if m == nil || m.guard == nil || m.guard.w == nil {
+		return nil
+	}
+	return m.guard.w.rdCalls.Load // moves with every read the session completes
 }
 
 // keepalive is the idle time before the next keepalive.

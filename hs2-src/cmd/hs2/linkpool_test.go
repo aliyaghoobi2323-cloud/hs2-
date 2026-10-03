@@ -320,6 +320,9 @@ func TestDoctorLinkPool(t *testing.T) {
 // rendered line the installer menu prints.
 func TestStatusFileCarriesCeiling(t *testing.T) {
 	useTempStatusDir(t)
+	saved := warmAfter
+	warmAfter = 0 // the writer takes it when made: write the warm file at once
+	defer func() { warmAfter = saved }()
 	pinHW(t, highRAM, highCPU)
 	cfg := filepath.Join(t.TempDir(), "c.json")
 	fc := autoFC(fileConfig{Mode: "dial", Reverse: true, Carrier: "mtcp"})
@@ -404,10 +407,30 @@ func TestWarmFile(t *testing.T) {
 	if n := readWarm(cfg); n != 0 {
 		t.Fatalf("no file: %d", n)
 	}
-	w := &warmWriter{path: warmPath(cfg)}
+	// Nothing is written in the first minute of a process (a crash loop would
+	// keep renewing the value it started with).
+	w := &warmWriter{path: warmPath(cfg), start: time.Now(), after: warmAfter}
+	w.note(120)
+	if n := readWarm(cfg); n != 0 {
+		t.Fatalf("written %d before the process ran a minute", n)
+	}
+	w.start = time.Now().Add(-warmAfter)
 	w.note(120)
 	if n := readWarm(cfg); n != 120 {
 		t.Fatalf("fresh: %d, want 120", n)
+	}
+	// It only ever raises the start size: 2 from a quiet night comes up at
+	// the default instead.
+	saved := configPath
+	configPath = cfg
+	defer func() { configPath = saved }()
+	if n := warmLinks(func(string, ...any) {}, 2, 300); n != 120 {
+		t.Fatalf("warm start %d, want 120", n)
+	}
+	w.last = 0
+	w.note(2)
+	if n := warmLinks(func(string, ...any) {}, 2, 300); n != 0 {
+		t.Fatalf("a warm value below the default start size gave %d, want 0 (the default)", n)
 	}
 	old := time.Now().Add(-warmMaxAge - time.Minute)
 	os.Chtimes(warmPath(cfg), old, old)

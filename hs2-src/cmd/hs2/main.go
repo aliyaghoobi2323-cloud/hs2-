@@ -281,7 +281,12 @@ func warmLinks(logf func(string, ...any), min, max int) int {
 	if n <= 0 {
 		return 0
 	}
+	// It only ever raises the start size: a pool that was down to 2 links at
+	// night must not come up at 2 when everyone reconnects at once.
 	n = clampInt(n, min, max)
+	if n <= engine.WarmSize(min, max) {
+		return 0
+	}
 	logf("link pool: coming up at %d links, the size it had before this restart (the autopilot resizes it from there)", n)
 	return n
 }

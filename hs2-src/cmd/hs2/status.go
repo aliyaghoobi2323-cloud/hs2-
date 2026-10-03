@@ -185,13 +185,21 @@ func readWarm(cfgPath string) int {
 // warmWriter keeps the warm file current: on every change of the target, and
 // at least once a minute so its age says the tunnel was up.
 type warmWriter struct {
-	path string
-	last int
-	at   time.Time
+	path  string
+	last  int
+	at    time.Time
+	start time.Time     // the process start: nothing is written before after
+	after time.Duration // warmAfter, taken when the writer is made
 }
 
+// warmAfter: the warm file is written only once this process has run this
+// long — until then the target is the one it started with (the file's own
+// value), and a crash loop would renew a high value forever instead of
+// letting it age out.
+var warmAfter = time.Minute
+
 func (w *warmWriter) note(target int) {
-	if target < 1 || (target == w.last && time.Since(w.at) < time.Minute) {
+	if target < 1 || time.Since(w.start) < w.after || (target == w.last && time.Since(w.at) < time.Minute) {
 		return
 	}
 	tmp := w.path + ".tmp"
@@ -222,7 +230,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		base.CeilNote = dgCapNote(fc)
 		base.RecMax, base.RAMMB = tune.RecommendedMaxLinks(ramMB, cpus), ramMB
 	}
-	warm := &warmWriter{path: warmPath(cfgPath)}
+	warm := &warmWriter{path: warmPath(cfgPath), start: time.Now(), after: warmAfter}
 	write := func() {
 		s := stats()
 		ls := base

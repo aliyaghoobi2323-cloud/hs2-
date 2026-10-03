@@ -268,6 +268,7 @@ type managedLink struct {
 	haveRec      bool
 	lastRecAt    time.Time
 	poolRefused  atomic.Bool // the exit refused kindPool on this link (older exit)
+	ctlLive      atomic.Bool // its pool-control loop runs and its last write went out
 	bornSpare    bool        // reverse: arrived while the pool already had its target
 	lastRx       time.Time   // when the link last received anything (keepalives included)
 	rxSeen       bool        // it has received something at all
@@ -657,13 +658,33 @@ func (m *LinkManager) targetChanged() <-chan struct{} {
 
 // poolCtlFast reports whether l is one of the two oldest live links, which
 // refresh the reverse exit's target every poolCtlInterval (openPoolCtl).
+func (m *LinkManager) poolCtlLive(l Link, ok bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, ml := range m.links {
+		if ml.link == l {
+			ml.ctlLive.Store(ok)
+			return
+		}
+	}
+}
+
 func (m *LinkManager) poolCtlFast(l Link) bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	// Among links whose pool-control loop delivers (any live link while none
+	// has reported yet): a link whose loop ended must not be one of the two.
+	anyLive := false
+	for _, ml := range m.links {
+		if ml.link.Alive() && ml.ctlLive.Load() {
+			anyLive = true
+			break
+		}
+	}
 	first, second := -1, -1 // the two lowest live ids
 	mine := -1
 	for _, ml := range m.links {
-		if !ml.link.Alive() {
+		if !ml.link.Alive() || anyLive && !ml.ctlLive.Load() {
 			continue
 		}
 		if ml.link == l {

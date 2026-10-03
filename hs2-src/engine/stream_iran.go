@@ -358,7 +358,7 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 		st.Close()
 		return
 	}
-	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)))
+	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)))
 	set.add(pl)
 	go func() {
 		set.serveLink(ctx, pl, dev)

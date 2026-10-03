@@ -242,7 +242,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			st.Close() // this side runs without a TUN
 			return
 		}
-		pl := newStreamL3Link(st, peerL3Quiet(mtr))
+		pl := newStreamL3Link(st, peerL3Quiet(mtr), sessReadsOf(mtr))
 		l3.add(pl)
 		l3.serveLink(ctx, pl, cfg.TUN)
 		l3.remove(pl)

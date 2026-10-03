@@ -403,7 +403,16 @@ type poolCtlSource interface {
 	Target() int
 	targetChanged() <-chan struct{}
 	poolCtlFast(l Link) bool
+	// poolCtlLive records whether l's pool-control loop runs and its last
+	// write went out, so the fast refreshers are links that can deliver.
+	poolCtlLive(l Link, ok bool)
 }
+
+// poolCtlSpread: a changed target goes out on the two fast links at once and
+// on every other link after a random delay up to this, so a change is not a
+// burst of one small TLS record on every one of up to 300 links in the same
+// instant (the periodic refresh used to spread it over ~1 s).
+const poolCtlSpread = 1500 * time.Millisecond
 
 // openPoolCtl runs the EDGE side of pool-control for one link: it opens a
 // kindPool stream and sends the autopilot's desired serving-link count at
@@ -430,6 +439,7 @@ func openPoolCtl(ctx context.Context, l Link, src poolCtlSource, logf func(strin
 	if _, err := st.Write([]byte{kindPool}); err != nil {
 		return
 	}
+	defer src.poolCtlLive(l, false)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -464,9 +474,11 @@ func openPoolCtl(ctx context.Context, l Link, src poolCtlSource, logf func(strin
 			}
 			last = n
 		}
+		src.poolCtlLive(l, true)
 		force = false
+		fast := src.poolCtlFast(l)
 		every := poolCtlSlow
-		if src.poolCtlFast(l) {
+		if fast {
 			every = poolCtlInterval
 		}
 		t := time.NewTimer(jitterAround(every))
@@ -478,6 +490,18 @@ func openPoolCtl(ctx context.Context, l Link, src poolCtlSource, logf func(strin
 			t.Stop()
 			return
 		case <-changed:
+			if !fast { // the fast links carry it at once; the rest follow spread out
+				t.Reset(time.Duration(rand.Int64N(int64(poolCtlSpread))))
+				select {
+				case <-ctx.Done():
+					t.Stop()
+					return
+				case <-done:
+					t.Stop()
+					return
+				case <-t.C:
+				}
+			}
 		case <-t.C:
 			force = true
 		}

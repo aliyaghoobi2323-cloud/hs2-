@@ -502,7 +502,8 @@ func (f *fakeCtlSource) targetChanged() <-chan struct{} {
 	}
 	return f.ch
 }
-func (f *fakeCtlSource) poolCtlFast(Link) bool { return f.fast }
+func (f *fakeCtlSource) poolCtlFast(Link) bool  { return f.fast }
+func (f *fakeCtlSource) poolCtlLive(Link, bool) {}
 func (f *fakeCtlSource) set(n int) {
 	f.mu.Lock()
 	f.t = n
@@ -583,5 +584,100 @@ func TestPoolCtlFastIsTwoOldestLinks(t *testing.T) {
 	ls[0].link.(*meteredFakeLink).alive.Store(false) // the oldest dies
 	if !m.poolCtlFast(ls[2].link) {
 		t.Fatal("the next oldest did not take over the fast refresh")
+	}
+}
+
+// A link whose pool-control loop ended (write failed, stream gone) is not
+// chosen as a fast refresher: the next live loop is.
+func TestPoolCtlFastSkipsEndedLoops(t *testing.T) {
+	m, _, _ := newV2Manager(nil, 1, 8, true)
+	var ls []*managedLink
+	for i := 0; i < 4; i++ {
+		ls = append(ls, addManaged(m, newMeteredFake()))
+	}
+	for _, i := range []int{0, 2, 3} {
+		m.poolCtlLive(ls[i].link, true)
+	}
+	want := []bool{true, false, true, false} // link 1's loop ended
+	for i, ml := range ls {
+		if got := m.poolCtlFast(ml.link); got != want[i] {
+			t.Fatalf("link %d fast=%v, want %v", i, got, want[i])
+		}
+	}
+}
+
+// ctlPeer is the exit end of one pool-control stream: every value it reads,
+// with when it arrived.
+func ctlPeer(t *testing.T, ctx context.Context, src poolCtlSource) <-chan time.Time {
+	t.Helper()
+	a, b := net.Pipe()
+	cli, _, err := newSession(a, false, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _, err := newSession(b, true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cli.Close(); srv.Close() })
+	at := make(chan time.Time, 16)
+	go func() {
+		st, err := srv.AcceptStream()
+		if err != nil {
+			return
+		}
+		var kind [1]byte
+		io.ReadFull(st, kind[:])
+		buf := make([]byte, poolCtlLen)
+		for {
+			if _, err := io.ReadFull(st, buf); err != nil {
+				return
+			}
+			if binary.BigEndian.Uint16(buf) == 9 {
+				at <- time.Now()
+			}
+		}
+	}()
+	go openPoolCtl(ctx, &mtcpLink{sess: cli}, src, nil, nil)
+	return at
+}
+
+// A changed target goes out at once on the fast links and spread over
+// poolCtlSpread on the others — not as one burst on every link.
+func TestPoolCtlChangeIsSpread(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	slow := &fakeCtlSource{t: 7}
+	fast := &fakeCtlSource{t: 7, fast: true}
+	var slowAt []<-chan time.Time
+	for i := 0; i < 12; i++ {
+		slowAt = append(slowAt, ctlPeer(t, ctx, slow))
+	}
+	fastAt := ctlPeer(t, ctx, fast)
+	time.Sleep(300 * time.Millisecond) // every loop has sent its first value
+	start := time.Now()
+	slow.set(9)
+	fast.set(9)
+	select {
+	case at := <-fastAt:
+		if d := at.Sub(start); d > 200*time.Millisecond {
+			t.Fatalf("a fast link sent the change after %s", d)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the fast link never sent the change")
+	}
+	var first, last time.Duration = time.Hour, 0
+	for i, ch := range slowAt {
+		select {
+		case at := <-ch:
+			d := at.Sub(start)
+			first, last = min(first, d), max(last, d)
+		case <-time.After(3 * time.Second):
+			t.Fatalf("slow link %d never sent the change", i)
+		}
+	}
+	t.Logf("12 slow links sent the change between %s and %s", first.Round(time.Millisecond), last.Round(time.Millisecond))
+	if last > poolCtlSpread+300*time.Millisecond || last-first < 300*time.Millisecond {
+		t.Fatalf("change sent between %s and %s: not spread over ~%s", first, last, poolCtlSpread)
 	}
 }
