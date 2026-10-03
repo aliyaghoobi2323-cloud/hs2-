@@ -54,6 +54,14 @@ const (
 	dgWarmGrace = 4 * time.Second
 	// dgPoolCtlEvery: how often the reverse edge (re)publishes its target.
 	dgPoolCtlEvery = 3 * time.Second
+	// dgSilentDead: a carrier that has received nothing for this long is dead
+	// — its peer sends feedback every 100 ms while it lives — once a fresh
+	// carrier proves the path works (a restarted peer forgets its carriers
+	// and drops their packets silently; they used to linger 15 s).
+	dgSilentDead = 3 * time.Second
+	// dgScoutEvery: while every carrier is silent, the dialing side tries one
+	// new carrier this often to find out whether the peer is back.
+	dgScoutEvery = 5 * time.Second
 	// dgInfoEvery: how often a DIRECT edge tells the exit its ceiling (display
 	// only, so slow; jittered so it is not a fixed beat). A report older than
 	// dgPeerMaxStale reads as unknown (the peer stopped, or was downgraded).
@@ -115,7 +123,14 @@ type dgLink struct {
 
 	born         time.Time
 	servingSince time.Time
-	retiring     bool // set under pool.mu
+	// peerRetiring: the OTHER side is retiring this carrier (TypeClose
+	// closeRetire), so new flowlets avoid it here too and it can empty.
+	peerRetiring atomic.Bool
+	// retiringAt: unix ns since when either side retires this carrier (0 =
+	// serving). After dgRetireForce its sticky flows are moved off it too.
+	retiringAt   atomic.Int64
+	retireSentAt time.Time // when this side last told the peer it retires it (under pool.mu)
+	retiring     bool      // set under pool.mu
 	retireSince  time.Time
 	bornSpare    bool // reverse: arrived while the pool already had its target
 
@@ -175,6 +190,55 @@ func (l *dgLink) markDead() {
 		l.car.Close()
 	})
 }
+
+// lastRx is when the carrier last received anything (zero when it cannot
+// say — such a carrier is never taken for silent).
+func (l *dgLink) lastRx() time.Time {
+	if r, ok := l.car.(interface{ LastRx() time.Time }); ok {
+		return r.LastRx()
+	}
+	return time.Time{}
+}
+
+// silent reports whether the carrier has received nothing for dgSilentDead.
+func (l *dgLink) silent(now time.Time) bool {
+	t := l.lastRx()
+	return !t.IsZero() && now.Sub(t) >= dgSilentDead
+}
+
+// setRetiring records when this carrier started retiring (either side) or
+// that it serves again.
+func (l *dgLink) setRetiring(now time.Time, on bool) {
+	switch {
+	case !on:
+		l.retiringAt.Store(0)
+	case l.retiringAt.Load() == 0:
+		l.retiringAt.Store(now.UnixNano())
+	}
+}
+
+// retireForced reports whether the carrier has been retiring for
+// dgRetireForce: its flows then move off it even mid-burst.
+func (l *dgLink) retireForced(now time.Time) bool {
+	at := l.retiringAt.Load()
+	return at != 0 && now.UnixNano()-at >= int64(dgRetireForce)
+}
+
+// dgRetireForce: a retiring carrier keeps its sticky flows (moving a flow
+// mid-burst reorders it) — but a flow that never pauses would hold it, and
+// the shrink, forever (download on a busy pool: the review saw carriers stay
+// retiring as long as the download ran). After this long the flows move,
+// each with one reorder, and the carrier drains. A variable for tests.
+var dgRetireForce = 30 * time.Second
+
+// TypeClose payload (one byte; old peers ignore the frame entirely, so it
+// needs no negotiation): the carrier is closing now, the sender is retiring
+// it (no new flowlets), or it serves again.
+const (
+	closeBye    = 0
+	closeRetire = 1
+	closeServe  = 2
+)
 
 // enqueue hands a packet to the carrier's writer without ever blocking. A full
 // queue drops the packet and records pressure.
@@ -348,7 +412,13 @@ type dgPool struct {
 
 	// upLog / retireLog fold per-carrier lines into one summary once a burst
 	// passes a few lines (a 300-carrier rebuild was ~300 lines per side).
-	upLog, retireLog *burstLog
+	upLog, retireLog, byeLog *burstLog
+
+	// scout (dialing side, pool goroutine only): the next time a scout dial
+	// may go while every carrier is silent, and whether this silence was
+	// logged.
+	nextScout   time.Time
+	scoutLogged bool
 
 	fecCeilLogged bool      // "FEC at its ceiling" was logged and not yet cleared
 	fecCeilRun    int       // consecutive samples at (+) / below (-) the ceiling
@@ -382,6 +452,7 @@ func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) 
 	logp := func(f string, a ...any) { p.log(f, a...) } // p.log may be swapped (tests)
 	p.upLog = newBurstLog("dg: ", "carriers up", logp)
 	p.retireLog = newBurstLog("dg: ", "carriers retired", logp)
+	p.byeLog = newBurstLog("dg: ", "carriers closed by the other server", logp)
 	return p
 }
 
@@ -450,12 +521,34 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	p.mu.Lock()
 	if s, _ := p.countsLocked(); p.accept && s >= int(p.target.Load()) {
 		l.retiring, l.retireSince, l.bornSpare = true, now, true
+		l.retireSentAt = now
+		l.setRetiring(now, true)
+	}
+	// A carrier just came up, so the path works: any carrier that has heard
+	// nothing for dgSilentDead is dead — its peer restarted (and drops its
+	// packets) or its path is gone — and would black-hole the flows on it
+	// until its 15 s timeout.
+	var zombies []*dgLink
+	rxNow := time.Now()
+	for _, o := range p.set {
+		if o.alive() && o.silent(rxNow) {
+			zombies = append(zombies, o)
+		}
 	}
 	p.set = append(p.set, l)
 	n := len(p.set)
 	p.mu.Unlock()
 	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	go p.readLoop(ctx, l)
+	if l.bornSpare {
+		p.sendOp(l, closeRetire)
+	}
+	if len(zombies) > 0 {
+		for _, z := range zombies {
+			z.markDead()
+		}
+		p.log("dg: dropped %d carrier(s) silent for %s+ when carrier %d came up — the other server restarted, or their path died; their flows move to live carriers", len(zombies), fmtDur(dgSilentDead), l.id)
+	}
 	if l.bornSpare {
 		p.upLog.log("dg: carrier %d %s up (now %d) — spare: pattern needs %d serving", l.id, from, n, p.Target())
 	} else {
@@ -492,7 +585,11 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 			} else if _, err := p.dev.Write(payload); err == nil {
 				p.tunWritten.Add(1)
 			}
-		case core.TypePing, core.TypePong, core.TypeClose:
+		case core.TypeClose:
+			if p.onCloseFrame(l, payload) {
+				return // the peer closed it
+			}
+		case core.TypePing, core.TypePong:
 			// Inert in the datagram pool — the carrier handles its own liveness.
 			// A Ping/Pong here is the peer's echo-shaping filler; it is neither
 			// counted (above) nor answered, so fillers can never chain.
@@ -517,6 +614,46 @@ func (p *dgPool) sendVia(l *dgLink, ft byte, payload []byte) {
 	if l.echoShaped {
 		l.txFrames.Add(1)
 	}
+}
+
+// sendOp tells the peer what this side does with carrier l (TypeClose).
+func (p *dgPool) sendOp(l *dgLink, op byte) {
+	if l.alive() {
+		p.sendVia(l, core.TypeClose, []byte{op})
+	}
+}
+
+// closeLink closes a carrier on purpose: the peer is told first (twice — a
+// control datagram can be lost), so it stops placing flows on it at once
+// instead of black-holing them until its 15 s timeout.
+func (p *dgPool) closeLink(l *dgLink) {
+	if l.alive() {
+		l.car.SendFrame(core.TypeClose, []byte{closeBye})
+		l.car.SendFrame(core.TypeClose, []byte{closeBye})
+	}
+	l.markDead()
+}
+
+// onCloseFrame handles the peer's TypeClose on carrier l; true when the peer
+// closed it (the read loop ends).
+func (p *dgPool) onCloseFrame(l *dgLink, payload []byte) bool {
+	op := byte(closeBye)
+	if len(payload) > 0 {
+		op = payload[0]
+	}
+	switch op {
+	case closeBye:
+		p.byeLog.log("dg: carrier %d closed by the other server", l.id)
+		l.markDead()
+		return true
+	case closeRetire:
+		l.peerRetiring.Store(true)
+		l.setRetiring(p.now(), true)
+	case closeServe:
+		l.peerRetiring.Store(false)
+		l.setRetiring(p.now(), false)
+	}
+	return false
 }
 
 // encapICMP is the ICMP encapsulation kind (encap.KindICMP), named here so the
@@ -618,7 +755,7 @@ func (p *dgPool) pumpTun(ctx context.Context) {
 func (p *dgPool) pick(flow uint32, now time.Time) *dgLink {
 	p.stickyMu.Lock()
 	if sf := p.sticky[flow]; sf != nil {
-		if sf.l.alive() && now.Sub(sf.last) <= flowletGap {
+		if sf.l.alive() && now.Sub(sf.last) <= flowletGap && !sf.l.retireForced(now) {
 			sf.last = now
 			p.stickyMu.Unlock()
 			return sf.l
@@ -659,7 +796,7 @@ func (p *dgPool) pickHash(flow uint32) *dgLink {
 			continue
 		}
 		w := mix32(flow ^ l.id)
-		if l.retiring {
+		if l.retiring || l.peerRetiring.Load() {
 			if bestRetiring == nil || w > bestRW {
 				bestRetiring, bestRW = l, w
 			}
@@ -823,7 +960,60 @@ func (p *dgPool) autoscale(ctx context.Context) {
 	s := p.sampleHealth()
 	T := p.decide(s)
 	p.reconcile(ctx, T)
+	p.scoutIfSilent(ctx)
 	p.publishStats(s)
+}
+
+// scoutIfSilent (dialing side, pool goroutine): when every carrier has heard
+// nothing for dgSilentDead — the other server restarted and forgot them, or
+// the path is down — one new carrier is dialed, every dgScoutEvery at most.
+// If it comes up, add() drops the silent ones and the pool refills at once
+// (they used to hold the pool, black-holing every flow, until their 15 s
+// timeout); if it does not, nothing else is spent.
+func (p *dgPool) scoutIfSilent(ctx context.Context) {
+	if p.dialer == nil || p.dialing.Load() > 0 {
+		return
+	}
+	now := time.Now()
+	p.mu.RLock()
+	n, silent := 0, 0
+	for _, l := range p.set {
+		if l.alive() {
+			n++
+			if l.silent(now) {
+				silent++
+			}
+		}
+	}
+	p.mu.RUnlock()
+	if n == 0 || silent < n {
+		p.scoutLogged = false
+		return
+	}
+	if now.Before(p.nextScout) {
+		return
+	}
+	p.nextScout = now.Add(dgScoutEvery)
+	if !p.scoutLogged {
+		p.scoutLogged = true
+		p.log("dg: all %d carrier(s) silent for %s+ — dialing a scout carrier to see whether the other server is back", n, fmtDur(dgSilentDead))
+	}
+	g := p.gate
+	if g == nil {
+		g = linkGate
+	}
+	p.dialing.Add(1)
+	go func() {
+		defer p.dialing.Add(-1)
+		release, ok := g.acquire(ctx)
+		if !ok {
+			return
+		}
+		defer release()
+		if car, err := p.dialer.Dial(ctx); err == nil {
+			p.add(ctx, car, "dialed (scout)")
+		}
+	}()
 }
 
 // decide runs the controller and publishes the target.
@@ -872,6 +1062,7 @@ func (p *dgPool) reconcile(ctx context.Context, T int) {
 	}
 	need := T - len(serving)
 	var toDial int
+	var told []*dgLink // retired or back in service: the peer is told
 	if need > 0 {
 		// un-retire the busiest first
 		sortByBusiest(retiring)
@@ -881,6 +1072,8 @@ func (p *dgPool) reconcile(ctx context.Context, T int) {
 			}
 			l.retiring = false
 			l.servingSince = now
+			l.setRetiring(now, false)
+			told = append(told, l)
 			need--
 		}
 		toDial = need
@@ -890,9 +1083,19 @@ func (p *dgPool) reconcile(ctx context.Context, T int) {
 		for i := 0; i < -need && i < len(serving); i++ {
 			serving[i].retiring = true
 			serving[i].retireSince = now
+			serving[i].retireSentAt = now
+			serving[i].setRetiring(now, true)
+			told = append(told, serving[i])
 		}
 	}
 	p.mu.Unlock()
+	for _, l := range told {
+		if l.retiring {
+			p.sendOp(l, closeRetire)
+		} else {
+			p.sendOp(l, closeServe)
+		}
+	}
 
 	if p.dialer != nil && toDial > 0 {
 		toDial -= int(p.dialing.Load()) // already on their way
@@ -995,10 +1198,22 @@ func (p *dgPool) drainTick() {
 		kept = append(kept, l)
 	}
 	p.set = kept
+	// Remind the peer of every carrier this side is still retiring (a lost
+	// notice would leave it placing new flows there).
+	var remind []*dgLink
+	for _, l := range kept {
+		if l.retiring && now.Sub(l.retireSentAt) >= dgPoolCtlEvery {
+			l.retireSentAt = now
+			remind = append(remind, l)
+		}
+	}
 	p.mu.Unlock()
+	for _, l := range remind {
+		p.sendOp(l, closeRetire)
+	}
 	for _, l := range closing {
 		p.retireLog.log("dg: carrier %d retired: its flows ended", l.id)
-		go func(l *dgLink) { time.Sleep(closeJitter()); l.markDead() }(l)
+		go func(l *dgLink) { time.Sleep(closeJitter()); p.closeLink(l) }(l)
 	}
 }
 
@@ -1435,22 +1650,34 @@ func (p *dgPool) publishTarget(ctx context.Context) {
 }
 
 // poolCtlCarrier returns a live carrier to carry pool-control, preferring the
-// current one so the target rides a stable path.
+// current one so the target rides a stable path — unless it has gone silent
+// (a dead carrier the peer forgot), when one that hears the peer is used.
 func (p *dgPool) poolCtlCarrier() *dgLink {
 	p.poolCtlMu.Lock()
 	defer p.poolCtlMu.Unlock()
-	if p.poolCtl != nil && p.poolCtl.alive() {
+	now := time.Now()
+	if p.poolCtl != nil && p.poolCtl.alive() && !p.poolCtl.silent(now) {
 		return p.poolCtl
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	var any *dgLink
 	for _, l := range p.set {
-		if l.alive() {
+		if !l.alive() {
+			continue
+		}
+		if !l.silent(now) {
 			p.poolCtl = l
 			return l
 		}
+		if any == nil {
+			any = l
+		}
 	}
-	return nil
+	if any != nil {
+		p.poolCtl = any
+	}
+	return any
 }
 
 // --- run entry points -------------------------------------------------------
@@ -1630,6 +1857,7 @@ func (p *dgPool) runReverseExit(ctx context.Context) {
 				p.hadCarrier = true
 			}
 			p.reconcile(ctx, p.Target()) // dials up to target
+			p.scoutIfSilent(ctx)
 			p.drainTick()
 			s := p.sampleHealth()
 			p.publishDownStats(s) // tell the edge our download send pressure
@@ -1638,25 +1866,54 @@ func (p *dgPool) runReverseExit(ctx context.Context) {
 	}
 }
 
-// reconcileReverseEdge retires carriers the exit dialed beyond the target
-// (it cannot un-retire — only the exit dials), so the edge's target really
-// shrinks the pool.
+// reconcileReverseEdge moves the reverse edge's serving set to the target:
+// carriers the exit dialed beyond it retire (the emptiest first), and when
+// the target rises again, retiring and born-spare carriers serve again (the
+// busiest first) before the exit has to dial anything — the exit only dials
+// below the target, and never while those carriers are alive, so without
+// this the edge stayed below its target after any shrink. The exit is told
+// either way, so its new flowlets follow.
 func (p *dgPool) reconcileReverseEdge() {
 	now := p.now()
 	T := p.Target()
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	var serving []*dgLink
+	var serving, retiring, told []*dgLink
 	for _, l := range p.set {
-		if l.alive() && !l.retiring {
+		if !l.alive() {
+			continue
+		}
+		if l.retiring {
+			retiring = append(retiring, l)
+		} else {
 			serving = append(serving, l)
 		}
 	}
-	if len(serving) > T {
+	switch {
+	case len(serving) > T:
 		sortByEmptiest(serving, now)
 		for i := 0; i < len(serving)-T; i++ {
 			serving[i].retiring = true
 			serving[i].retireSince = now
+			serving[i].retireSentAt = now
+			serving[i].setRetiring(now, true)
+			told = append(told, serving[i])
+		}
+	case len(serving) < T && len(retiring) > 0:
+		sortByBusiest(retiring)
+		for i := 0; i < T-len(serving) && i < len(retiring); i++ {
+			l := retiring[i]
+			l.retiring, l.bornSpare = false, false
+			l.servingSince = now
+			l.setRetiring(now, false)
+			told = append(told, l)
+		}
+	}
+	p.mu.Unlock()
+	for _, l := range told {
+		if l.retiring {
+			p.sendOp(l, closeRetire)
+		} else {
+			p.sendOp(l, closeServe)
 		}
 	}
 }
@@ -1705,6 +1962,6 @@ func (p *dgPool) closeAll() {
 	p.set = nil
 	p.mu.Unlock()
 	for _, l := range set {
-		l.markDead()
+		p.closeLink(l) // a stopping server tells the other one at once
 	}
 }

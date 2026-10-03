@@ -276,6 +276,12 @@ func (c *Conn) ReadFrame() (byte, []byte, error) {
 	}
 }
 
+// LastRx is when the carrier last received anything from its peer. The peer
+// sends feedback every feedbackEvery (100 ms) on a live carrier, so a few
+// seconds of silence means the carrier is dead (its peer restarted, or the
+// path is gone) long before deadAfter says so.
+func (c *Conn) LastRx() time.Time { return time.Unix(0, c.lastRxNanos.Load()) }
+
 // Close tears the carrier down. On the dialer side it closes the socket; on the
 // listener side it only deregisters from the shared socket's demux.
 func (c *Conn) Close() error {

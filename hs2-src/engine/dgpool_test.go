@@ -18,6 +18,15 @@ type dgFakeCarrier struct {
 	once   sync.Once
 	warm   atomic.Bool
 	sent   atomic.Uint64
+	rx     atomic.Int64 // LastRx, unix ns (0: cannot say)
+}
+
+// LastRx is what a test set (zero: the carrier cannot say, never silent).
+func (c *dgFakeCarrier) LastRx() time.Time {
+	if v := c.rx.Load(); v != 0 {
+		return time.Unix(0, v)
+	}
+	return time.Time{}
 }
 
 type frame struct {
