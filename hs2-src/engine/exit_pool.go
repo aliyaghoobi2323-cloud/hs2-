@@ -47,6 +47,11 @@ type dialedLink interface{ Close() error }
 const (
 	slotBackoffMin  = 500 * time.Millisecond
 	slotBackoffMax  = 8 * time.Second
+	// scoutBackoffMax: while no link is up only the outage scout dials, so it
+	// may try often — one attempt every 1-2 s from one slot is nothing next to
+	// the hundreds a second the old pool made — and the first link is back
+	// within ~2 s of the path returning (8 s of backoff put it up to 8 s late).
+	scoutBackoffMax = 2 * time.Second
 	slotStableAfter = 30 * time.Second
 	slotFailLogGap  = 30 * time.Second
 )
@@ -232,6 +237,13 @@ func (p *exitPool) waitTurn(ctx context.Context, s *exitSlot) bool {
 // dialFailed records a failed dial: with no link up the pool is in an outage
 // and s becomes its scout if there is none. Failure lines are folded into one
 // every slotFailLogGap.
+// isScout reports whether slot s is the one dialing through an outage.
+func (p *exitPool) isScout(s *exitSlot) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.outage && p.scout == s
+}
+
 func (p *exitPool) dialFailed(s *exitSlot, err error, next time.Duration) {
 	p.mu.Lock()
 	if p.live == 0 {
@@ -251,7 +263,7 @@ func (p *exitPool) dialFailed(s *exitSlot, err error, next time.Duration) {
 			line = fmt.Sprintf("mtcp: %d dials to the edge failed in the last %s, latest: %v", p.failN, fmtDur(now.Sub(p.failLog)), err)
 		}
 		if p.outage {
-			line += fmt.Sprintf(" — no link up: one slot keeps trying (every ≤%s), the other %d wait for it", fmtDur(slotBackoffMax), len(p.slots)-1)
+			line += fmt.Sprintf(" — no link up: one slot keeps trying (every ≤%s), the other %d wait for it", fmtDur(scoutBackoffMax), len(p.slots)-1)
 		}
 		p.failN, p.failLog = 0, now
 	}
@@ -305,6 +317,9 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		car, err := p.dial()
 		release()
 		if err != nil {
+			if p.isScout(s) {
+				backoff = min(backoff, scoutBackoffMax)
+			}
 			wait := jitterDur(backoff)
 			p.dialFailed(s, err, wait)
 			if !sleepCtx(ctx, wait) {
