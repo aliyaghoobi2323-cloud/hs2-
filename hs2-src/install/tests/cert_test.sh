@@ -70,6 +70,21 @@ for kind in dirhook cliini; do
   out=$(bash -c 'source "$1/core.sh" >/dev/null 2>&1; LE_DIR="$2"; C_Y=""; C_R=""; C_0=""; port_free(){ return 1; }; tm_cert_line "$3"' _ "$T" "$L2" "$(cfgfor a "$L2/live/sa/fullchain.pem" listen false)" 2>&1)
   check "port 80 taken, $kind pre-hook frees it: no false alarm" 'echo "$out" | grep -q "renews automatically"'
 done
+# Hooks are listed the way certbot lists them: a dotfile counts, a "~" backup
+# does not, and no-directory-hooks in cli.ini switches the directory off.
+hookcase(){ # name file cli.ini-content want-text
+  local L3="$T/le-$1"; mkdir -p "$L3/live" "$L3/renewal" "$L3/renewal-hooks/pre"; mkcert "$L3/live/sa" 80
+  printf '[renewalparams]\nauthenticator = standalone\n' > "$L3/renewal/sa.conf"
+  printf '#!/bin/sh\n' > "$L3/renewal-hooks/pre/$2"; chmod +x "$L3/renewal-hooks/pre/$2"
+  [ -z "$3" ] || printf '%s\n' "$3" > "$L3/cli.ini"
+  bash -c 'source "$1/core.sh" >/dev/null 2>&1; LE_DIR="$2"; C_Y=""; C_R=""; C_0=""; port_free(){ return 1; }; tm_cert_line "$3"' _ "$T" "$L3" "$(cfgfor a "$L3/live/sa/fullchain.pem" listen false)" 2>&1
+}
+out=$(hookcase dot .10-stop-nginx "")
+check "a dotfile hook counts (certbot runs it)" 'echo "$out" | grep -q "renews automatically"'
+out=$(hookcase tilde stop-nginx~ "")
+check "a ~ backup hook does not count (certbot skips it)" 'echo "$out" | grep -q "port 80 is in use"'
+out=$(hookcase nodir stop-nginx "no-directory-hooks")
+check "no-directory-hooks in cli.ini switches the hook directory off" 'echo "$out" | grep -q "port 80 is in use"'
 mkdir -p "$T/le-noexec/live" "$T/le-noexec/renewal" "$T/le-noexec/renewal-hooks/pre"; mkcert "$T/le-noexec/live/sa" 80
 printf '[renewalparams]\nauthenticator = standalone\n' > "$T/le-noexec/renewal/sa.conf"; echo notes > "$T/le-noexec/renewal-hooks/pre/README"
 out=$(bash -c 'source "$1/core.sh" >/dev/null 2>&1; LE_DIR="$2"; C_Y=""; C_R=""; C_0=""; port_free(){ return 1; }; tm_cert_line "$3"' _ "$T" "$T/le-noexec" "$(cfgfor a "$T/le-noexec/live/sa/fullchain.pem" listen false)" 2>&1)

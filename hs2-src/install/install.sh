@@ -136,14 +136,22 @@ for _st in "$CFG_DIR"/*.pre-replace; do [ -e "$_st" ] && rm -f "$_st"; done 2>/d
 # files) left behind by an edit that a hard kill interrupted before it could
 # clean up. tm_edit names it .hs2-edit.<pid>.<random>: one whose installer is
 # still running belongs to an edit in progress in ANOTHER session (a second SSH
-# window) and is left alone — deleting it would lose that operator's edit.
-# (Older versions left a plain .hs2-edit.<random> file; it is swept too.)
+# window) and is left alone — deleting it would lose that operator's edit. A
+# live PID that STARTED after the directory was last touched cannot be its
+# owner (the PID was reused — e.g. after a power loss and reboot), so that
+# leftover is swept. (Older versions left a plain .hs2-edit.<random> file; it
+# is swept too.) Without ps/stat to tell, a live PID is given the benefit.
 for _st in "$CFG_DIR"/.hs2-edit.*; do
   [ -e "$_st" ] || continue
   _sp=${_st##*/.hs2-edit.}; _sp=${_sp%%.*}
   case "$_sp" in
     ''|*[!0-9]*) ;;
-    *) if [ "$_sp" != "$$" ] && [ -d "/proc/$_sp" ]; then continue; fi ;;
+    *) if [ "$_sp" != "$$" ] && [ -d "/proc/$_sp" ]; then
+         _age=$(ps -o etimes= -p "$_sp" 2>/dev/null) || _age=""; _age=${_age//[[:space:]]/}
+         _mt=$(stat -c %Y "$_st" 2>/dev/null) || _mt=""
+         case "$_age$_mt" in ''|*[!0-9]*) continue ;; esac
+         [ $(( $(date +%s) - _age )) -gt "$_mt" ] || continue
+       fi ;;
   esac
   rm -rf -- "$_st"
 done 2>/dev/null || true
@@ -1167,6 +1175,7 @@ configure_renewal(){ # lineage (the domain, as get_cert lays it out)
 cert_lineage(){
   local p="$1" rest
   case "/$p/" in */../*) return 0 ;; esac
+  case "$p" in */|*/.) return 0 ;; esac
   while [[ $p == *//* ]]; do p=${p//\/\//\/}; done
   while [[ $p == */./* ]]; do p=${p//\/.\//\/}; done
   case "$p" in "$LE_DIR"/live/?*/?*) ;; *) return 0 ;; esac
@@ -1252,13 +1261,27 @@ cert_port_ok(){
 # them from three places: the lineage's pre_hook, an executable in
 # renewal-hooks/pre/ (run by default, dry runs included), and cli.ini.
 cert_has_pre_hook(){
-  local ln f
+  local ln f conf=""
   ln=$(cert_lineage "$1")
-  [ -n "$ln" ] && [ -n "$(cert_conf_get "$LE_DIR/renewal/$ln.conf" pre_hook)" ] && return 0
-  for f in "$LE_DIR"/renewal-hooks/pre/*; do
-    [ -f "$f" ] && [ -x "$f" ] && return 0
-  done
+  [ -n "$ln" ] && conf="$LE_DIR/renewal/$ln.conf"
+  [ -n "$conf" ] && [ -n "$(cert_conf_get "$conf" pre_hook)" ] && return 0
+  if ! cert_dir_hooks_off "$conf"; then
+    # Listed the way certbot lists them: dotfiles count, "~" backups do not.
+    for f in "$LE_DIR"/renewal-hooks/pre/* "$LE_DIR"/renewal-hooks/pre/.[!.]* "$LE_DIR"/renewal-hooks/pre/..?*; do
+      case "$f" in *~) continue ;; esac
+      [ -f "$f" ] && [ -x "$f" ] && return 0
+    done
+  fi
   [ -n "$(cert_conf_get "$LE_DIR/cli.ini" pre-hook)$(cert_conf_get "$LE_DIR/cli.ini" pre_hook)" ]
+}
+
+# cert_dir_hooks_off [CONF]: certbot's renewal-hooks/ directories are switched
+# off — directory_hooks = False for the lineage, or no-directory-hooks in cli.ini.
+cert_dir_hooks_off(){
+  if [ -n "${1:-}" ]; then
+    case "$(cert_conf_get "$1" directory_hooks)" in [Ff]alse) return 0 ;; esac
+  fi
+  grep -Eqi '^[[:space:]]*no[-_]directory[-_]hooks[[:space:]]*(=[[:space:]]*(true|yes|1|on)?[[:space:]]*)?$' "$LE_DIR/cli.ini" 2>/dev/null
 }
 
 # cert_secs_left CERTFILE: seconds until expiry (negative once expired); empty

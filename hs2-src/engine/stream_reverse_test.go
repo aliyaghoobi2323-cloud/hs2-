@@ -313,7 +313,7 @@ func TestReverseShrinkKeepsHeldConnection(t *testing.T) {
 	if n := sc.probeSurvivors(t); n == 0 {
 		t.Fatal("no idle connection was left on the serving links to check")
 	}
-	if n := r.exit.count("retired — the edge shrank the pattern", exitMark); n != 8 {
+	if n := r.exit.count("retired — closed by the edge while above its target (pattern shrinking)", exitMark); n != 8 {
 		t.Fatalf("the exit retired %d slots; want 8 (4 per shrink)", n)
 	}
 	r.checkNoRedial()

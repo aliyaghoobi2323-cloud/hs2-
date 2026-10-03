@@ -154,14 +154,17 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		}
 		// Above the edge's target, a slot whose link ended retires instead of
 		// redialing. Two different events end up here, and the log must not
-		// conflate them: the edge closing an idle link to shrink the pattern (a
-		// clean close — normal autopilot), and a link LOST to the network or a
-		// reset while the pool happened to be above target (a fault worth
-		// seeing). Only the behaviour is the same: either way it is not redialed.
+		// conflate them: the edge closing the link cleanly — normally the
+		// autopilot retiring an idle link to shrink the pattern — and a link LOST
+		// to a reset, a stalled path or a timeout while the pool happened to be
+		// above target (a fault worth seeing). Only the behaviour is the same:
+		// either way it is not redialed. (A clean close is reported as exactly
+		// that: crypto/tls cannot tell the edge's close_notify from a bare FIN,
+		// e.g. a crashed edge process, so the words do not claim more.)
 		if p.retireIfOver(s) {
 			switch {
 			case edgeClosed(why):
-				p.log("mtcp: exit slot %d retired — the edge shrank the pattern (now %d)", s.id, n)
+				p.log("mtcp: exit slot %d retired — closed by the edge while above its target (pattern shrinking) (now %d)", s.id, n)
 			case why == "": // reason unknown: claim neither
 				p.log("mtcp: exit slot %d retired — pool above target (now %d)", s.id, n)
 			default:
@@ -176,9 +179,9 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 	}
 }
 
-// edgeClosed reports whether a link ended by the edge closing it cleanly (the
-// first socket error was EOF on read, after the edge's TLS close_notify) — as
-// opposed to a reset, a timeout or a keepalive loss.
+// edgeClosed reports whether a link ended by the edge closing it cleanly — the
+// first socket error was EOF on read (after its TLS close_notify, or a bare FIN)
+// — as opposed to a reset, a stalled path or a keepalive loss.
 func edgeClosed(why string) bool { return why == "read: "+reasonPeerClosed }
 
 func (p *exitPool) incLive(d int) int {

@@ -341,15 +341,31 @@ retired — pattern shrinking`. The behaviour was right (above the target, a slo
 whose link ends is not redialed); the words conflated two different events and
 dropped the cause. The link's end reason (the first socket error, in the same
 words the Iran side uses) now reaches the pool, and the log says which it was:
-- `exit slot 6 retired — the edge shrank the pattern (now 7)` — the edge closed
-  an idle link cleanly (TLS close).
+- `exit slot 6 retired — closed by the edge while above its target (pattern
+  shrinking) (now 7)` — the edge closed the link cleanly: normally the autopilot
+  retiring an idle link. (Worded no more strongly than that on purpose: Go's TLS
+  cannot tell the edge's close_notify from a bare FIN — e.g. a crashed edge
+  process — so the log does not claim a decision it cannot see.)
 - `exit slot 6 lost (read: reset by the network or the other server) — not
-  redialed, pool above target (now 7)` — a loss.
+  redialed, pool above target (now 7)` — a loss (an RST such as `ss -K`).
+- `… lost (no data from the edge for 24s (keepalive timeout — path stalled)) …`
+  — a stalled path, instead of the misleading "closed locally".
 - `exit link down (slot 6: <reason>; now 7); redial` — at target, with the cause.
 Log text only — no change to when links are retired or redialed. Proven over the
-real TLS + smux stack: a clean close and a genuine RST each produce their own
-reason, and the two reverse-shrink integration tests now count retirements
-under the "edge shrank the pattern" wording.
+real TLS + smux stack: a clean close, a bare FIN, a genuine RST and a silent
+(stalled) edge each produce their own reason, and the two reverse-shrink
+integration tests now count retirements under the new wording.
+
+A second, focused review of these changes (pool behaviour confirmed unchanged,
+race-clean) found only wording/diagnostic gaps, all fixed: the clean-close
+wording above and the keepalive-stall reason; hooks listed exactly as certbot
+lists them (dotfiles count, `~` backups do not, `directory_hooks = False` /
+`no-directory-hooks` honoured); a cron line counts only if it really runs
+`certbot … renew` (not a `MAILTO=`, a check script, `certbot certificates` or a
+`--dry-run`), only from cron.d names cron reads, and only with a cron daemon
+running; the startup sweep also clears a leftover whose PID was reused by a
+newer process (e.g. after a reboot); and the installer and `hs2 doctor` parse
+cert paths identically (26-path differential test).
 
 Not done: a per-install cover page (requested again from the field test). The
 default cover page is still the same on every install — see Known limitations.

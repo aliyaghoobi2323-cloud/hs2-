@@ -112,9 +112,16 @@ sed "s#^CFG_DIR=/etc/hs2#CFG_DIR=$T/sw#" "$T/core.sh" > "$T/core_sw.sh"
 bash -c 'source "$1" >/dev/null 2>&1' _ "$T/core_sw.sh"
 check "startup sweep removes a dead session's edit dir and an old-style file" '[ ! -e "$T/sw/.hs2-edit.$DEAD.AAA111" ] && [ ! -e "$T/sw/.hs2-edit.BBB222" ] && [ -f "$T/sw/hs2-x.json" ]'
 check "startup sweep leaves a LIVE session's edit dir alone" '[ -f "$T/sw/.hs2-edit.$LIVE.CCC333/hs2-x.json" ]'
+# A REUSED PID: the process is alive, but it started after the leftover was last
+# touched (a reboot after a power loss gave the dead installer's PID to some
+# daemon) — it cannot be the owner, so the leftover is swept.
+mkdir -p "$T/sw/.hs2-edit.$LIVE.DDD444"; echo key > "$T/sw/.hs2-edit.$LIVE.DDD444/hs2-x.json"
+touch -d '2 hours ago' "$T/sw/.hs2-edit.$LIVE.DDD444"
+bash -c 'source "$1" >/dev/null 2>&1' _ "$T/core_sw.sh"
+check "startup sweep removes a leftover whose PID was reused by a newer process" '[ ! -e "$T/sw/.hs2-edit.$LIVE.DDD444" ] && [ -f "$T/sw/.hs2-edit.$LIVE.CCC333/hs2-x.json" ]'
 kill "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null
 bash -c 'source "$1" >/dev/null 2>&1' _ "$T/core_sw.sh"
-check "…and sweeps it once that session is gone" '[ -z "$(find "$T/sw" -name ".hs2-edit.*")" ]'
+check "…and sweeps the live one once that session is gone" '[ -z "$(find "$T/sw" -name ".hs2-edit.*")" ]'
 
 # ---- a REAL vim, driven through the pty ---------------------------------------
 if command -v vim >/dev/null 2>&1; then

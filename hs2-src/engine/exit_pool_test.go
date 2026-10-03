@@ -180,12 +180,12 @@ func TestExitPoolLogTellsShrinkFromLoss(t *testing.T) {
 	tp.setTarget(2) // the pool is now above target
 
 	tp.endOne() // the edge closes an idle link
-	eventually(t, "shrink logged as the edge's decision", has("retired — the edge shrank the pattern (now 3)"))
+	eventually(t, "shrink logged as the edge's decision", has("retired — closed by the edge while above its target (pattern shrinking) (now 3)"))
 
 	const reset = "read: reset by the network or the other server"
 	tp.endOneWith(reset) // the network kills a link
 	eventually(t, "loss logged as a loss, with its reason", has("lost ("+reset+") — not redialed, pool above target (now 2)"))
-	if has("retired — the edge shrank the pattern (now 2)")() {
+	if has("retired — closed by the edge while above its target (pattern shrinking) (now 2)")() {
 		t.Fatal("a network loss was logged as the edge shrinking the pattern")
 	}
 

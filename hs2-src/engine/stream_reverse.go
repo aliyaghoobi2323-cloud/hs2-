@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
@@ -126,5 +128,19 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 	}
 	close(closed)
 	sess.Close()
+	if ctx.Err() == nil {
+		// Nothing here closed this link on purpose, yet it ended without a
+		// socket error from the edge: smux's keepalive gave up after
+		// KeepAliveTimeout with no byte from the edge and closed the session.
+		// Which trace that leaves is a race — the next read hits our own closed
+		// socket ("closed locally"), or AcceptStream returns ErrClosedPipe before
+		// any read error is recorded (watchConn always records its reason BEFORE
+		// it closes anything, so an empty reason rules it out). Both mean a
+		// stalled path; say so instead of "closed locally".
+		w := why()
+		if w == "read: "+reasonLocalClosed || (w == "" && errors.Is(downErr, io.ErrClosedPipe)) {
+			return "no data from the edge for " + newSmuxConfig().KeepAliveTimeout.String() + " (keepalive timeout — path stalled)"
+		}
+	}
 	return sessionEndReason(why, downErr)
 }

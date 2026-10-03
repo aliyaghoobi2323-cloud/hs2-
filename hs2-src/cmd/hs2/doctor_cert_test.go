@@ -19,6 +19,8 @@ func TestCertbotLineage(t *testing.T) {
 		"/etc/letsencrypt/live//x/fullchain.pem":                   "x",
 		"/etc/letsencrypt/live/x/./fullchain.pem":                  "x",
 		"//etc/letsencrypt/live/x/fullchain.pem":                   "x",
+		"/etc/letsencrypt/live/x/fullchain.pem/":                   "", // a trailing "/" is never a file
+		"/etc/letsencrypt/live/x/.":                                "",
 		"/etc/letsencrypt/live/fullchain.pem":                      "",
 		"/etc/letsencrypt/live/a/b/fullchain.pem":                  "",
 		"/etc/letsencrypt/archive/a/fullchain1.pem":                "",
@@ -207,6 +209,22 @@ func TestCheckCertRenewalHooksAndLifetime(t *testing.T) {
 			os.MkdirAll(d, 0o700)
 			os.WriteFile(filepath.Join(d, "README"), []byte("notes"), 0o644)
 		}, 90, 80, true, 1, "no certbot pre-hook frees it"},
+		{"a DOTFILE hook counts (certbot runs it)", func(le string) {
+			d := filepath.Join(le, "renewal-hooks", "pre")
+			os.MkdirAll(d, 0o700)
+			os.WriteFile(filepath.Join(d, ".10-stop-nginx"), []byte("#!/bin/sh\n"), 0o755)
+		}, 90, 80, true, 0, ".10-stop-nginx is expected to free it"},
+		{"a ~ backup hook does not count (certbot skips it)", func(le string) {
+			d := filepath.Join(le, "renewal-hooks", "pre")
+			os.MkdirAll(d, 0o700)
+			os.WriteFile(filepath.Join(d, "stop-nginx~"), []byte("#!/bin/sh\n"), 0o755)
+		}, 90, 80, true, 1, "no certbot pre-hook frees it"},
+		{"no-directory-hooks in cli.ini switches hook dirs off", func(le string) {
+			d := filepath.Join(le, "renewal-hooks", "pre")
+			os.MkdirAll(d, 0o700)
+			os.WriteFile(filepath.Join(d, "stop-nginx"), []byte("#!/bin/sh\n"), 0o755)
+			os.WriteFile(filepath.Join(le, "cli.ini"), []byte("no-directory-hooks\n"), 0o644)
+		}, 90, 80, true, 1, "no certbot pre-hook frees it"},
 		{"cli.ini pre-hook frees the port", func(le string) {
 			os.WriteFile(filepath.Join(le, "cli.ini"), []byte("# defaults\npre-hook = systemctl stop nginx\n"), 0o644)
 		}, 90, 80, true, 0, "cli.ini pre-hook"},
@@ -276,5 +294,24 @@ func TestCronRunsCertbot(t *testing.T) {
 	}
 	if got := cronRunsCertbot(deb, pip); got != pip {
 		t.Fatalf("pip-style crontab not found: %q", got)
+	}
+	for line, want := range map[string]bool{
+		"0 3 * * * root certbot renew -q":                                      true,
+		"0 3 * * * root /usr/local/bin/certbot -q renew --quiet":               true,
+		"0 3 * * * root sleep 30 && sudo certbot renew":                        true,
+		"MAILTO=certbot-renew@example.com":                                     false,
+		"0 3 * * * root /usr/local/bin/check-certbot-renewal-age.sh":           false,
+		"0 3 * * * root certbot certificates > /tmp/c # renewals by the timer": false,
+		"0 3 * * * root certbot renew --dry-run":                               false,
+		"# 0 3 * * * root certbot renew":                                       false,
+	} {
+		if got := cronLineRunsCertbotRenew(line); got != want {
+			t.Errorf("cron line %q: runs renewal = %v, want %v", line, got, want)
+		}
+	}
+	for name, want := range map[string]bool{"certbot": true, "my_renew-1": true, "certbot.dpkg-old": false, "x~": false, "": false} {
+		if got := cronDName(name); got != want {
+			t.Errorf("cron.d name %q valid = %v, want %v", name, got, want)
+		}
 	}
 }

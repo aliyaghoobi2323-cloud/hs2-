@@ -105,9 +105,14 @@ func (w *watchConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// reasonPeerClosed is describeNetErr's words for a clean close by the peer
-// (EOF after its TLS close_notify) — how the edge ends a link it retires.
-const reasonPeerClosed = "closed by the other server"
+// reasonPeerClosed is describeNetErr's words for a clean close by the peer: EOF
+// at a TLS record boundary — after its close_notify (how the edge ends a link it
+// retires), or after a bare TCP FIN (crypto/tls reports both as io.EOF, so they
+// cannot be told apart). reasonLocalClosed: our side closed the connection.
+const (
+	reasonPeerClosed  = "closed by the other server"
+	reasonLocalClosed = "closed locally"
+)
 
 // describeNetErr turns the usual socket errors into words an operator can act
 // on; anything else is passed through.
@@ -117,7 +122,7 @@ func describeNetErr(err error) string {
 	case errors.Is(err, io.EOF):
 		return reasonPeerClosed
 	case errors.Is(err, net.ErrClosed):
-		return "closed locally"
+		return reasonLocalClosed
 	case errors.As(err, &ne) && ne.Timeout():
 		return "timed out (path stalled)"
 	}

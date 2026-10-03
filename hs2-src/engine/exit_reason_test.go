@@ -21,9 +21,10 @@ func TestServeReverseLinkReportsWhyItEnded(t *testing.T) {
 		end      func(edge *tlscarrier.Carrier)
 		want     string
 		edgeShut bool
+		slow     bool
 	}{
 		{"edge closes the link (clean TLS close)", func(edge *tlscarrier.Carrier) { edge.Close() },
-			"read: " + reasonPeerClosed, true},
+			"read: " + reasonPeerClosed, true, false},
 		{"network resets the link (RST)", func(edge *tlscarrier.Carrier) {
 			tc := edge.TCPConn()
 			if tc == nil {
@@ -31,10 +32,23 @@ func TestServeReverseLinkReportsWhyItEnded(t *testing.T) {
 			}
 			tc.SetLinger(0) // close with RST instead of FIN, and without a TLS close_notify
 			tc.Close()
-		}, "read: reset by the network or the other server", false},
+		}, "read: reset by the network or the other server", false, false},
+		// A bare FIN (e.g. the edge process crashed) is indistinguishable from
+		// close_notify to crypto/tls — both are a clean close, and the log
+		// says only that ("closed by the edge"), no more.
+		{"edge sends a bare FIN (no close_notify)", func(edge *tlscarrier.Carrier) { edge.TCPConn().CloseWrite() },
+			"read: " + reasonPeerClosed, true, false},
+		// The edge stays connected but sends nothing (a stalled path): smux's
+		// keepalive gives up and closes the link locally. That must read as a
+		// stall, not as "closed locally".
+		{"path stalls (edge silent): keepalive timeout", func(*tlscarrier.Carrier) {},
+			"no data from the edge for 24s (keepalive timeout — path stalled)", false, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.slow && testing.Short() {
+				t.Skip("waits for the 24s keepalive timeout")
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			key := bytes.Repeat([]byte{0x5a}, 32)
@@ -78,7 +92,7 @@ func TestServeReverseLinkReportsWhyItEnded(t *testing.T) {
 				if edgeClosed(got) != c.edgeShut {
 					t.Fatalf("edgeClosed(%q) = %v, want %v", got, edgeClosed(got), c.edgeShut)
 				}
-			case <-time.After(5 * time.Second):
+			case <-time.After(40 * time.Second):
 				t.Fatal("serveReverseLink did not return after the link ended")
 			}
 		})

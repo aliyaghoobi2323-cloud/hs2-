@@ -808,7 +808,7 @@ func TestMixedOldExitShrinksViaRetireIfOver(t *testing.T) {
 	if n := r.dials.Load(); n != 7 {
 		t.Fatalf("the old exit dialled %d links; want the initial 7 only", n)
 	}
-	if n := r.exit.count("retired — the edge shrank the pattern", exitMark); n != 5 {
+	if n := r.exit.count("retired — closed by the edge while above its target (pattern shrinking)", exitMark); n != 5 {
 		t.Fatalf("the old exit retired %d slots via retireIfOver; want 5", n)
 	}
 	r.checkNoRedial()

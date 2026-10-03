@@ -53,6 +53,7 @@ type renewalConf struct {
 	authenticator   string
 	manualAuthHook  string
 	preHook         string // e.g. "systemctl stop nginx": may free port 80 itself
+	directoryHooks  string // "False" turns off renewal-hooks/ for this lineage
 	autorenew       string
 	http01Port      int // standalone's listen port; 80 when absent
 	renewBeforeDays int // explicit renew_before_expiry in days; 0 when absent
@@ -83,6 +84,9 @@ func renewThresholdDays(rc renewalConf, leaf *x509.Certificate) int {
 // "//" and "/./" are tolerated, but a ".." element never is — it is not
 // resolved into some other lineage (the installer's cert_lineage agrees).
 func certbotLineage(leDir, certFile string) string {
+	if strings.HasSuffix(certFile, string(filepath.Separator)) {
+		return ""
+	}
 	for _, el := range strings.Split(certFile, string(filepath.Separator)) {
 		if el == ".." {
 			return ""
@@ -127,6 +131,8 @@ func readRenewalConf(path string) (renewalConf, error) {
 			rc.manualAuthHook = v
 		case "pre_hook":
 			rc.preHook = v
+		case "directory_hooks":
+			rc.directoryHooks = v
 		case "http01_port":
 			if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
 				rc.http01Port = n
@@ -164,34 +170,69 @@ func parseRenewBefore(v string) int {
 // knownPreHook describes a certbot pre-hook that runs before every renewal —
 // the usual way to free port 80 for standalone ("systemctl stop nginx") — or
 // returns "". certbot takes them from three places: the lineage's pre_hook, an
-// executable in renewal-hooks/pre/ (run by default, dry runs included), and a
-// pre-hook line in cli.ini.
+// executable in renewal-hooks/pre/ (run by default, dry runs included; listed
+// the way certbot lists them: dotfiles count, "~" backups do not, and the
+// whole directory is off with directory_hooks = False / no-directory-hooks),
+// and a pre-hook line in cli.ini.
 func knownPreHook(leDir string, rc renewalConf) string {
 	if rc.preHook != "" {
 		return fmt.Sprintf("pre_hook %q", rc.preHook)
 	}
-	dir := filepath.Join(leDir, "renewal-hooks", "pre")
-	if ents, err := os.ReadDir(dir); err == nil {
-		for _, e := range ents {
-			if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
-				return "the hook " + filepath.Join(dir, e.Name())
+	ini := readCliIni(filepath.Join(leDir, "cli.ini"))
+	dirHooks := !strings.EqualFold(rc.directoryHooks, "false") && !iniTrue(ini, "no-directory-hooks", "no_directory_hooks")
+	if dirHooks {
+		dir := filepath.Join(leDir, "renewal-hooks", "pre")
+		if ents, err := os.ReadDir(dir); err == nil {
+			for _, e := range ents {
+				if strings.HasSuffix(e.Name(), "~") {
+					continue
+				}
+				if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+					return "the hook " + filepath.Join(dir, e.Name())
+				}
 			}
 		}
 	}
-	if f, err := os.Open(filepath.Join(leDir, "cli.ini")); err == nil {
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), "=")
-			if !ok || strings.HasPrefix(k, "#") {
-				continue
-			}
-			if k = strings.TrimSpace(k); (k == "pre-hook" || k == "pre_hook") && strings.TrimSpace(v) != "" {
-				return fmt.Sprintf("the cli.ini pre-hook %q", strings.TrimSpace(v))
-			}
+	for _, k := range []string{"pre-hook", "pre_hook"} {
+		if v, ok := ini[k]; ok && v != "" {
+			return fmt.Sprintf("the cli.ini pre-hook %q", v)
 		}
 	}
 	return ""
+}
+
+// readCliIni reads certbot's cli.ini: "key = value" lines and bare flags
+// ("no-directory-hooks", value ""). Comments and sections are skipped.
+func readCliIni(path string) map[string]string {
+	m := map[string]string{}
+	f, err := os.Open(path)
+	if err != nil {
+		return m
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		l := strings.TrimSpace(sc.Text())
+		if l == "" || l[0] == '#' || l[0] == ';' || l[0] == '[' {
+			continue
+		}
+		k, v, _ := strings.Cut(l, "=")
+		m[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return m
+}
+
+// iniTrue: one of the flags is set (bare, or = true/yes/1).
+func iniTrue(ini map[string]string, keys ...string) bool {
+	for _, k := range keys {
+		if v, ok := ini[k]; ok {
+			switch strings.ToLower(v) {
+			case "", "true", "yes", "1", "on":
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // checkCertRenewal reports how leaf (the cert checkCert just loaded, for a side
@@ -310,9 +351,23 @@ func certbotScheduler() (string, bool) {
 			return t, true
 		}
 	}
+	cronUp := false
+	for _, d := range []string{"cron", "crond", "cronie"} {
+		if exec.Command(sc, "is-active", "--quiet", d).Run() == nil {
+			cronUp = true
+			break
+		}
+	}
+	if !cronUp {
+		return "", true // a crontab entry with no cron daemon runs nothing
+	}
 	crons := []string{"/etc/crontab", "/var/spool/cron/crontabs/root", "/var/spool/cron/root"}
-	if more, err := filepath.Glob("/etc/cron.d/*"); err == nil {
-		crons = append(crons, more...)
+	if ents, err := os.ReadDir("/etc/cron.d"); err == nil {
+		for _, e := range ents {
+			if cronDName(e.Name()) {
+				crons = append(crons, filepath.Join("/etc/cron.d", e.Name()))
+			}
+		}
 	}
 	if f := cronRunsCertbot(crons...); f != "" {
 		return "cron (" + f + ")", true
@@ -320,10 +375,27 @@ func certbotScheduler() (string, bool) {
 	return "", true
 }
 
+// cronDName: the file names Debian's cron reads from /etc/cron.d (letters,
+// digits, '_' and '-' only — "x.dpkg-old" or "x~" are ignored by cron).
+func cronDName(n string) bool {
+	if n == "" {
+		return false
+	}
+	for _, r := range n {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // cronRunsCertbot returns the first crontab file with an active line that runs
-// certbot's renewal, or "". Debian's packaged /etc/cron.d/certbot entry does
-// not count: it tests for /run/systemd/system and skips itself under systemd
-// (the timer is its replacement there).
+// certbot's renewal, or "". A line counts only when a command word is certbot
+// (any path) and a later word is exactly "renew", not as a --dry-run; so a
+// MAILTO=certbot-renew@… variable, a check-certbot-renewal script or
+// "certbot certificates" do not. Debian's packaged /etc/cron.d/certbot entry
+// does not count either: it tests for /run/systemd/system and skips itself
+// under systemd (the timer is its replacement there).
 func cronRunsCertbot(files ...string) string {
 	for _, p := range files {
 		f, err := os.Open(p)
@@ -332,11 +404,7 @@ func cronRunsCertbot(files ...string) string {
 		}
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
-			l := strings.TrimSpace(sc.Text())
-			if l == "" || l[0] == '#' {
-				continue
-			}
-			if strings.Contains(l, "certbot") && strings.Contains(l, "renew") && !strings.Contains(l, "/run/systemd/system") {
+			if cronLineRunsCertbotRenew(sc.Text()) {
 				f.Close()
 				return p
 			}
@@ -344,4 +412,35 @@ func cronRunsCertbot(files ...string) string {
 		f.Close()
 	}
 	return ""
+}
+
+func cronLineRunsCertbotRenew(line string) bool {
+	l := strings.TrimSpace(line)
+	if l == "" || l[0] == '#' || strings.Contains(l, "/run/systemd/system") {
+		return false
+	}
+	if i := strings.Index(l, " #"); i >= 0 { // a shell comment ends the command
+		l = l[:i]
+	}
+	words := strings.FieldsFunc(l, func(r rune) bool {
+		return r == ' ' || r == '\t' || strings.ContainsRune(";&|()`'\"", r)
+	})
+	certbotAt := -1
+	for i, w := range words {
+		if w == "--dry-run" {
+			return false
+		}
+		if certbotAt < 0 && (w == "certbot" || strings.HasSuffix(w, "/certbot")) {
+			certbotAt = i
+		}
+	}
+	if certbotAt < 0 {
+		return false
+	}
+	for _, w := range words[certbotAt+1:] {
+		if w == "renew" {
+			return true
+		}
+	}
+	return false
 }
