@@ -50,4 +50,11 @@ check "monitor, Kharej (older hs2): counted on the Iran server" 'echo "$out" | g
 check "monitor, Kharej (older hs2): no 0 users / 0 speed" '! echo "$out" | grep -q "Users:   0" && ! echo "$out" | grep -q "Speed:   0"'
 out=$(monitor "$T/ir.json" "$iran")
 check "monitor, Iran: users line" 'echo "$out" | grep -q "Users:   5880 open connections, 512 active"'
+# The Iran side's refill hold (new connections waiting for a link with room
+# after a start or a total loss) is shown as its own line.
+refill='{"links":41,"target":300,"min":2,"max":300,"users":328,"mbit":1.0,"flowing":300,"serving":41,"counted":true,"phase":"scaling","refill":"refilling after a start or a total loss: 41 of 300 links up; 1240 new connection(s) waiting for a link with room (at most 8 open per link for now); the hold ends within 3.2s"}'
+out=$(monitor "$T/ir.json" "$refill")
+check "monitor, Iran: refill line" 'echo "$out" | grep -q "Refill:  refilling after a start or a total loss: 41 of 300 links up; 1240 new connection(s) waiting"'
+out=$(monitor "$T/ir.json" "$iran")
+check "monitor, Iran: no refill line when there is none" '! echo "$out" | grep -q "Refill:"'
 [ "$fail" = 0 ] && echo "OK: kharej stats views" || exit 1

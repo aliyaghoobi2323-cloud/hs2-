@@ -2750,7 +2750,7 @@ tm_monitor(){
     if [ "$st" != running ]; then
       say " (not running)"
     elif status_fresh "$sf"; then
-      local links target min max users mbit peak counted phase sat serving retiring held heldact flowing pressed capm reason xstats
+      local links target min max users mbit peak counted phase sat serving retiring held heldact flowing pressed capm reason xstats refill
       links=$(jraw "$sf" links); target=$(jraw "$sf" target)
       min=$(jraw "$sf" min); max=$(jraw "$sf" max)
       users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
@@ -2760,6 +2760,7 @@ tm_monitor(){
       held=$(jraw "$sf" held_by); heldact=$(jraw "$sf" held_active)
       flowing=$(jraw "$sf" flowing); pressed=$(jraw "$sf" pressed); capm=$(jraw "$sf" cap_mbit)
       reason=$(jget "$sf" reason); xstats=$(jget "$sf" exit_stats)
+      refill=$(jget "$sf" refill)
       [ -n "$serving" ] && flowing=${flowing:-0}  # newer daemon: absent count = 0
       local bar="" i=0
       # A little gauge inside the min–max envelope: serving links (█),
@@ -2785,6 +2786,7 @@ tm_monitor(){
           say " Mode:    ${phase:-steady}$([ -z "$serving" ] && [ "$sat" = true ] && echo " · saturated (a bigger pattern may help)")"
         fi
         [ -n "$reason" ] && say " Why:     ${reason}"
+        [ -n "$refill" ] && say " Refill:  ${refill}"
         [ "${retiring:-0}" != 0 ] && say " Retiring: ${retiring} link(s) take no new connections and close when theirs end$([ -n "$held" ] && echo " (held by ${held} open$([ -n "$heldact" ] && echo ", ${heldact} active"))")"
         [ -n "$xstats" ] && [ "$xstats" != ok ] && say " Exit:    link stats: ${xstats}"
       else

@@ -60,3 +60,35 @@ func TestKharejStatusCarriesItsOwnCounts(t *testing.T) {
 		t.Fatalf("older Iran: %q", l)
 	}
 }
+
+// The edge's refill hold reaches the status file and hs2 doctor.
+func TestRefillNoteInStatusAndDoctor(t *testing.T) {
+	useTempStatusDir(t)
+	cfg := filepath.Join(t.TempDir(), "ir.json")
+	fc := fileConfig{Mode: "dial", Carrier: "mtcp"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const note = "refilling after a start or a total loss: 41 of 300 links up; 1240 new connection(s) waiting for a link with room (at most 8 open per link for now); the hold ends within 3.2s"
+	startStatusWriter(ctx, fc, cfg, func() engine.PoolStats {
+		return engine.PoolStats{Links: 41, Target: 300, Min: 2, Max: 300, Phase: "scaling", Serving: 41, Users: 328, Counted: true, Refill: note}
+	})
+	var ls liveStatus
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if b, err := os.ReadFile(statusPath(cfg)); err == nil && json.Unmarshal(b, &ls) == nil && ls.Links > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no status file")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ls.Refill != note {
+		t.Fatalf("status refill: %q", ls.Refill)
+	}
+	d := &doctorReport{}
+	checkRunning(d, cfg)
+	if s := strings.Join(d.lines, "\n"); !strings.Contains(s, note) {
+		t.Fatalf("doctor: %v", d.lines)
+	}
+}

@@ -128,6 +128,9 @@ func checkRunning(d *doctorReport, cfgPath string) {
 		return
 	}
 	d.ok("running", summary)
+	if ls.Refill != "" {
+		d.info("refill", ls.Refill)
+	}
 }
 
 // tcpCarrier is the set of carriers whose carrier link is TCP, so a plain TCP

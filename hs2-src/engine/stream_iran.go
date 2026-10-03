@@ -175,10 +175,29 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 }
 
 // pickWait returns a link, waiting up to a few seconds for one to come up.
-func pickWait(ctx context.Context, lm *LinkManager) (Link, func(), bool) {
+// hold: the connection may also wait in the refill hold (refill.go) for a link
+// with room while the pool refills after a start or a total loss — at most
+// refillHoldMax, and the hold never refuses it. UDP flows pass false (their
+// port's read loop is shared).
+func pickWait(ctx context.Context, lm *LinkManager, hold bool) (Link, func(), bool) {
 	for i := 0; i < 40; i++ {
-		if l, rel, ok := lm.Pick(); ok {
+		if !hold {
+			if l, rel, ok := lm.Pick(); ok {
+				return l, rel, true
+			}
+		} else if l, rel, ok, w := lm.pickHeld(); ok {
 			return l, rel, true
+		} else if w != nil {
+			select {
+			case ml := <-w.ch:
+				if ml != nil {
+					return ml.link, lm.releaseFor(ml), true
+				}
+				continue // the hold ended with no link up: the ordinary wait
+			case <-ctx.Done():
+				lm.cancelHeld(w)
+				return nil, nil, false
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -221,7 +240,7 @@ func userStreamHeader(l Link, udp bool, port int, pool *peerInfo) []byte {
 func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), bool) {
 	// A link can die between Pick and OpenStream; try another one.
 	for try := 0; try < 3; try++ {
-		link, release, ok := pickWait(ctx, lm)
+		link, release, ok := pickWait(ctx, lm, !udp)
 		if !ok {
 			return nil, nil, false
 		}

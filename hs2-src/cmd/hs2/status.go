@@ -67,8 +67,12 @@ type liveStatus struct {
 	CapMbit    float64 `json:"cap_mbit,omitempty"`    // measured per-link limit (absent: none seen)
 	PeakMbit   float64 `json:"peak_mbit,omitempty"`   // last minute's peak throughput
 	Reason     string  `json:"reason,omitempty"`      // why the pattern is this size
-	NextProbeS int     `json:"next_probe_s,omitempty"`
-	ExitStats  string  `json:"exit_stats,omitempty"` // ok / partial / older exit: ...
+	// Refill: new connections held for a link with room while the pool
+	// refills after a start or a total loss, or the last such episode's
+	// summary for a few minutes (engine refill hold). Absent: nothing to say.
+	Refill     string `json:"refill,omitempty"`
+	NextProbeS int    `json:"next_probe_s,omitempty"`
+	ExitStats  string `json:"exit_stats,omitempty"` // ok / partial / older exit: ...
 
 	// Link-pool ceiling (pool carriers only; absent otherwise). CfgMax is THIS
 	// server's ceiling as it runs (auto: derived from the hardware at start;
@@ -244,6 +248,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.Pressed = s.Pressed
 			ls.CapMbit = round1(s.CapMbit)
 			ls.Reason, ls.NextProbeS, ls.ExitStats = s.Reason, s.NextProbeS, s.ExitStats
+			ls.Refill = s.Refill
 		}
 		if s.Datagram {
 			ls.LossPct, ls.MaxLossPct, ls.ParityPct = s.LossPct, s.MaxLossPct, s.ParityPct
@@ -394,6 +399,9 @@ func printStatus(path string) {
 	}
 	if w := whyLine(ls); w != "" {
 		fmt.Printf("  why:        %s\n", w)
+	}
+	if ls.Refill != "" {
+		fmt.Printf("  refill:     %s\n", ls.Refill)
 	}
 	for i, l := range ls.PortsLines {
 		if i == 0 {

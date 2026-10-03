@@ -193,6 +193,10 @@ type LinkManager struct {
 	// at (the last target before a restart; see SetWarm).
 	warm int
 
+	// hold: placement of new connections while the pool refills after a start
+	// or a total loss (refill.go). Under mu.
+	hold refillHold
+
 	upLog, downLog, closeLog, replLog *burstLog
 }
 
@@ -388,6 +392,7 @@ func (m *LinkManager) AddLink(l Link, from string) int {
 	id := m.linkSeq
 	m.linkSeq++
 	ml := m.newManaged(l, id, now)
+	m.noteArrivalLocked(now)
 	if S, _ := m.countsLocked(); S >= int(m.target.Load()) {
 		ml.retiring, ml.retireSince, ml.bornSpare = true, now, true
 	}
@@ -519,7 +524,9 @@ func linkDownReason(l Link) string {
 // soft-bad ones and sizes the pool, until ctx ends. In accept mode (reverse
 // edge) it never dials: it sizes the pool through the exit (runAccept).
 func (m *LinkManager) Run(ctx context.Context) {
+	m.mu.Lock() // AddLink (reverse) reads it under the lock: links may arrive at once
 	m.scaleCtx = ctx
+	m.mu.Unlock()
 	if m.accept {
 		m.runAccept(ctx)
 		return
@@ -871,6 +878,7 @@ func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
 		}
 		id := m.linkSeq
 		m.linkSeq++
+		m.noteArrivalLocked(m.now())
 		m.links = append(m.links, m.newManaged(l, id, m.now()))
 		m.mu.Unlock()
 		if replacement {
@@ -1215,36 +1223,53 @@ func (ml *managedLink) recentPicks() int {
 // call when that user disconnects. Choosing and counting happen under one
 // lock, so N connections arriving together land on N different links. Ties
 // are broken at random so load does not pile onto the oldest link.
+//
+// Pick never waits: a new user connection made while the pool refills after a
+// start or a total loss goes through pickHeld instead (refill.go).
 func (m *LinkManager) Pick() (Link, func(), bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	chosen := m.pickLocked()
+	chosen := m.pickLocked(0)
 	if chosen == nil {
 		return nil, func() {}, false
 	}
-	chosen.users.Add(1)
-	chosen.picks++
+	m.placeLocked(chosen)
+	return chosen.link, m.releaseFor(chosen), true
+}
+
+// placeLocked counts a new user connection on ml. Caller holds m.mu.
+func (m *LinkManager) placeLocked(ml *managedLink) {
+	ml.users.Add(1)
+	ml.picks++
 	m.users.Add(1)
+}
+
+// releaseFor is the release func of a connection placed on ml.
+func (m *LinkManager) releaseFor(ml *managedLink) func() {
 	var once sync.Once
-	release := func() {
+	return func() {
 		once.Do(func() {
-			chosen.users.Add(-1)
+			ml.users.Add(-1)
 			m.users.Add(-1)
 		})
 	}
-	return chosen.link, release, true
 }
 
 // pickLocked chooses among serving links first; if there are none, a healthy
 // retiring link (better than refusing the user); and only if every link is
-// degraded or draining, one of those. Caller holds m.mu.
-func (m *LinkManager) pickLocked() *managedLink {
+// degraded or draining, one of those. limit > 0 skips links that already have
+// that many open user connections (the refill hold's cap); 0 = no limit.
+// Caller holds m.mu.
+func (m *LinkManager) pickLocked(limit int) *managedLink {
 	for tier := 0; tier < 3; tier++ {
 		var chosen *managedLink
 		var best pickKey
 		ties := 0
 		for _, ml := range m.links {
 			if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
+				continue
+			}
+			if limit > 0 && int(ml.users.Load()) >= limit {
 				continue
 			}
 			switch tier {
@@ -1678,9 +1703,13 @@ type PoolStats struct {
 	CapMbit    float64 // measured per-link limit, Mbit/s (0 = none seen)
 	PeakMbit   float64 // last minute's peak throughput, Mbit/s
 	Reason     string  // why the pattern is this size, with the numbers
-	NextProbeS int     // seconds until growth is tried again (holding), else 0
-	ExitStats  string  // "ok" | "partial" | "older exit: ..." | "" (unknown yet)
-	PeerMax    int     // the OTHER server's link-pool ceiling as it reported it
+	// Refill: new connections are held for a link with room while the pool
+	// refills after a start or a total loss (or the last such episode's
+	// summary, for a few minutes). "" = nothing to say.
+	Refill     string
+	NextProbeS int    // seconds until growth is tried again (holding), else 0
+	ExitStats  string // "ok" | "partial" | "older exit: ..." | "" (unknown yet)
+	PeerMax    int    // the OTHER server's link-pool ceiling as it reported it
 	// (stream: kindInfo; datagram: pool-control frames). 0 = not known (an older
 	// hs2 on the other server, no link up, or not exchanged yet). Display only.
 	// Routes is what the other server reported about per-port routing (nil =
@@ -1783,6 +1812,9 @@ func (m *LinkManager) Stats() PoolStats {
 		routes.Older = !routes.Known && older
 		st.Routes = routes
 	}
+	m.mu.RLock()
+	st.Refill = m.refillNoteLocked(m.now())
+	m.mu.RUnlock()
 	st.Target = int(m.target.Load())
 	st.Users = int(m.users.Load())
 	st.Saturated = st.Pressed > 0
