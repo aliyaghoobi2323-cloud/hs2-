@@ -691,8 +691,18 @@ func startBuiltinBackend(seed string) (string, error) {
 	// offset means the "last modified N days ago" distance is not a constant.
 	page, offDays := buildCover(seed, time.Now())
 	modtime := time.Now().Add(-time.Duration(offDays) * 24 * time.Hour).Truncate(time.Hour)
-	sum := sha256.Sum256(page)
-	etag := fmt.Sprintf("%q", hex.EncodeToString(sum[:16]))
+	// ETag, when set, is SALTED with the seed — NOT a plain hash of the body. A
+	// bare sha256(body) ETag is a single-probe fingerprint: anyone can fetch the
+	// page, hash it, and confirm the server uses hs2's exact rule. Salting keeps
+	// the cache semantics (stable per seed+content, changes when content does)
+	// while making it unpredictable from the body alone, like a real server's
+	// mtime/inode ETag. The seedless legacy page sets NO ETag at all, exactly as
+	// the pre-per-install binary did (un-migrated installs stay byte-for-byte).
+	var etag string
+	if seed != "" {
+		h := sha256.Sum256(append([]byte("hs2-cover-etag\x00"+seed+"\x00"), page...))
+		etag = fmt.Sprintf("%q", hex.EncodeToString(h[:16]))
+	}
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		// Everything but "/" is a plain Go 404, like any static file server. No
 		// Server header is sent: our TLS terminator is Go's, so a stray "nginx"
@@ -703,7 +713,9 @@ func startBuiltinBackend(seed string) (string, error) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "max-age=3600")
-		w.Header().Set("ETag", etag)
+		if etag != "" {
+			w.Header().Set("ETag", etag)
+		}
 		// ServeContent gives genuine static-server behaviour for free:
 		// Last-Modified, If-Modified-Since / If-None-Match (304), Content-Length
 		// and range requests.

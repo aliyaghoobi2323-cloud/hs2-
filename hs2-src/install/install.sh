@@ -3579,7 +3579,19 @@ migrate_config(){
   # success once the seed is actually in the file — the guard and the edit must
   # agree, or the message lies and the block re-fires on every upgrade.
   if ! grep -q '"cover_seed"' "$CFG" 2>/dev/null; then
-    local _cs; _cs=$(openssl rand -hex 16)
+    local _cs _snap _preok=0 _canval=0; _cs=$(openssl rand -hex 16)
+    # Edit on a snapshot and keep it only if it still validates — the in-place
+    # sed should never corrupt a well-formed config, but a config that checked
+    # OK before must still check OK after (if it was already failing, for an
+    # unrelated reason, we neither guard nor blame this edit). $BIN is the
+    # just-installed new binary here (install_binary runs before this loop);
+    # when it is not runnable (e.g. a sourced-core unit test), fall back to
+    # trusting the regex, which cannot corrupt a well-formed config.
+    if [ -x "${BIN:-}" ] || command -v "${BIN:-}" >/dev/null 2>&1; then
+      _canval=1
+      "$BIN" check -c "$CFG" >/dev/null 2>&1 && _preok=1
+    fi
+    _snap=$(mktemp "$CFG_DIR/.hs2-cover.XXXXXX") && cp "$CFG" "$_snap"
     if grep -qE '"backend_addr":[[:space:]]*"builtin",' "$CFG" 2>/dev/null; then
       sed -i "s|\(\"backend_addr\":[[:space:]]*\"builtin\",\)|\1 \"cover_seed\": \"$_cs\",|" "$CFG"
     elif grep -qE '"backend_addr":[[:space:]]*"builtin\"[[:space:]]*$' "$CFG" 2>/dev/null; then
@@ -3587,7 +3599,15 @@ migrate_config(){
       # new seed can follow, and the seed itself ends the object (no comma).
       sed -i "s|\(\"backend_addr\":[[:space:]]*\"builtin\"\)[[:space:]]*\$|\1, \"cover_seed\": \"$_cs\"|" "$CFG"
     fi
-    grep -q '"cover_seed"' "$CFG" 2>/dev/null && ok "Cover page is now unique to this install (per-install seed added)."
+    if grep -q '"cover_seed"' "$CFG" 2>/dev/null; then
+      if [ "$_canval" = 1 ] && [ "$_preok" = 1 ] && ! "$BIN" check -c "$CFG" >/dev/null 2>&1; then
+        cp "$_snap" "$CFG"   # the edit broke validation — undo it, leave the tunnel's config as it was
+        warn "Skipped the cover-page seed migration (it would not validate) — config left unchanged."
+      else
+        ok "Cover page is now unique to this install (per-install seed added)."
+      fi
+    fi
+    rm -f "$_snap"
   fi
 
   # hs2 now owns tuning at runtime — drop the old static file, keep BBR for boot.

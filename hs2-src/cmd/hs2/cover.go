@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -274,6 +275,21 @@ func buildCover(seed string, now time.Time) (page []byte, modOffsetDays int) {
 	lum := r.between(52, 60)
 	accentL := fmt.Sprintf("hsl(%d %d%% %d%%)", hue, sat, lum)
 	accentD := fmt.Sprintf("hsl(%d %d%% %d%%)", hue, min(sat+14, 92), lum+18)
+	// The neutral palette varies per install too (a review found the greys,
+	// text and dark background were the fixed Oakline hexes on every page — a
+	// constant set). Each is nudged a few points per channel, small enough to
+	// stay neutral and keep well above AA contrast, large enough that the exact
+	// hex is not a shared constant.
+	bg := jitterHex("#ffffff", r, 2)
+	fg := jitterHex("#1b2130", r, 8)
+	muted := jitterHex("#5b647a", r, 8)
+	line := jitterHex("#e7e9f0", r, 5)
+	card := jitterHex("#f7f8fb", r, 4)
+	dbg := jitterHex("#0f131c", r, 5)
+	dfg := jitterHex("#e8ebf4", r, 6)
+	dmuted := jitterHex("#9aa3bb", r, 8)
+	dline := jitterHex("#222838", r, 6)
+	dcard := jitterHex("#151a26", r, 6)
 
 	// --- layout tokens (vary CSS bytes + geometry, safely) -----------------
 	// These also break the fixed CSS skeleton: a review found that the box-
@@ -363,8 +379,8 @@ func buildCover(seed string, now time.Time) (page []byte, modOffsetDays int) {
 		htmlEsc(brand), size, field, strings.ToLower(org))
 	p("<link rel=\"icon\" type=\"image/svg+xml\" href=\"%s\">\n", favData)
 	p("<style>\n")
-	p("  :root{--bg:#fff;--fg:#1b2130;--muted:#5b647a;--line:#e7e9f0;--card:#f7f8fb;--accent:%s;--accent-fg:#fff;--shadow:%s}\n", accentL, shLight)
-	p("  @media (prefers-color-scheme:dark){:root{--bg:#0f131c;--fg:#e8ebf4;--muted:#9aa3bb;--line:#222838;--card:#151a26;--accent:%s;--accent-fg:#0f131c;--shadow:%s}}\n", accentD, shDark)
+	p("  :root{--bg:%s;--fg:%s;--muted:%s;--line:%s;--card:%s;--accent:%s;--accent-fg:#fff;--shadow:%s}\n", bg, fg, muted, line, card, accentL, shLight)
+	p("  @media (prefers-color-scheme:dark){:root{--bg:%s;--fg:%s;--muted:%s;--line:%s;--card:%s;--accent:%s;--accent-fg:%s;--shadow:%s}}\n", dbg, dfg, dmuted, dline, dcard, accentD, dbg, shDark)
 	p("  *{box-sizing:border-box}html{-webkit-text-size-adjust:100%%}\n")
 	p("  body{margin:0;background:var(--bg);color:var(--fg);font-family:%s;line-height:%s;-webkit-font-smoothing:antialiased}\n", fontStack, lineH)
 	p("  a{color:inherit;text-decoration:none}\n")
@@ -462,6 +478,27 @@ func navLabel(id, title string) string {
 		return "Team"
 	}
 	return title
+}
+
+// jitterHex nudges each channel of a #rrggbb colour by up to ±amp, clamped to
+// 0–255, deterministically from the seed — so a base neutral becomes a
+// per-install value without drifting far enough to lose contrast or neutrality.
+func jitterHex(base string, r *coverRNG, amp int) string {
+	v, err := strconv.ParseUint(strings.TrimPrefix(base, "#"), 16, 32)
+	if err != nil {
+		return base
+	}
+	ch := []int{int(v>>16) & 0xff, int(v>>8) & 0xff, int(v) & 0xff}
+	for i := range ch {
+		ch[i] += r.between(-amp, amp)
+		if ch[i] < 0 {
+			ch[i] = 0
+		}
+		if ch[i] > 255 {
+			ch[i] = 255
+		}
+	}
+	return fmt.Sprintf("#%02x%02x%02x", ch[0], ch[1], ch[2])
 }
 
 func htmlEsc(s string) string {

@@ -411,6 +411,26 @@ fleet shows.
   is still Go's, and a classifier trained on several generated pages could still
   recognise the family. A real `backend_addr` is still the strongest cover.
 
+### Field-review fixes (real-server test of the cover page)
+A real-server test confirmed the whole checklist, and found two over-claims and
+a quality note, all fixed:
+- **ETag was a bare `sha256(body)[:16]`** — a *single-probe* fingerprint: anyone
+  could fetch the page, hash it, and confirm the server used hs2's exact rule.
+  It is now SALTED with the seed (stable per seed+content, so caching still
+  works, but unpredictable from the body, like a real server's mtime/inode
+  ETag). The seedless legacy page sets **no** ETag at all, exactly as the
+  pre-per-install binary did.
+- **The neutral palette was constant** — only the accent varied; the text, grey
+  and dark-background hexes were the fixed Oakline values on every page. They
+  are now jittered per seed within a contrast-safe band, so no base colour is a
+  shared constant either. (The earlier "nothing constant remains" was too
+  strong; the honest claim is: no byte-exact token is shared, a trained
+  classifier still could recognise the genre.)
+- **migrate_config** now edits the config on a snapshot and keeps the result
+  only if the binary still validates it (rolling back otherwise), instead of an
+  unchecked in-place `sed` — matching the "check, then replace" path used
+  elsewhere.
+
 New tests: `cmd/hs2/cover_test.go` (determinism + golden, 500-seed uniqueness,
 seedless==legacy with the `86dfcf86…` check, structural invariants: no external
 requests, no JS, inline favicon, light+dark, balanced tags, size varies; served

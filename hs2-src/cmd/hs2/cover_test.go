@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -34,7 +35,7 @@ func TestCoverDeterministic(t *testing.T) {
 	// server's page would otherwise change on upgrade day — a correlated fleet
 	// event). To change the generator on purpose, add a versioned path rather
 	// than editing in place, then update this.
-	const golden = "d717b0a237b63d10ef5e3874fd76b7a11cb08db8ef6731451b11795cc657c81d"
+	const golden = "e7cc8932b750f241310d56be0e073cee41ed8627c0a0b63b3a5ffbfc101e74e2"
 	if h1 != golden {
 		t.Fatalf("generator output drifted: got %s, want %s", h1, golden)
 	}
@@ -151,6 +152,62 @@ func TestCoverServedHeaders(t *testing.T) {
 	r3.Body.Close()
 	if r3.StatusCode != http.StatusNotFound {
 		t.Fatalf("non-root path: status %d, want 404", r3.StatusCode)
+	}
+}
+
+// The ETag must not be a plain hash of the body (that is a single-probe
+// fingerprint: anyone can fetch, hash, and confirm the rule). For a seeded page
+// it is salted with the seed — present, but not equal to sha256(body)[:16]. The
+// seedless legacy page sets NO ETag, exactly as the pre-per-install binary did.
+func TestCoverETagSaltedAndLegacyNone(t *testing.T) {
+	get := func(seed string) *http.Response {
+		addr, err := startBuiltinBackend(seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := (&http.Client{Timeout: 3 * time.Second}).Get("http://" + addr + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	// seeded: ETag present, but NOT the bare body hash.
+	seed := "feed0001feed0002feed0003feed0004"
+	r := get(seed)
+	body, _ := io.ReadAll(r.Body)
+	r.Body.Close()
+	etag := r.Header.Get("ETag")
+	if etag == "" {
+		t.Fatal("seeded page must have an ETag")
+	}
+	bare := sha256.Sum256(body)
+	if etag == `"`+hex.EncodeToString(bare[:16])+`"` {
+		t.Fatal("ETag is the bare sha256(body) — a single-probe fingerprint")
+	}
+	// seedless: no ETag at all (legacy behaviour).
+	r2 := get("")
+	r2.Body.Close()
+	if e := r2.Header.Get("ETag"); e != "" {
+		t.Fatalf("seedless legacy page must set no ETag, got %q", e)
+	}
+}
+
+// The neutral palette must vary per seed too (not only the accent): the fixed
+// Oakline text/grey/dark-background hexes must not appear on every seeded page.
+func TestCoverNeutralsVary(t *testing.T) {
+	fixed := []string{"#1b2130", "#5b647a", "#e7e9f0", "#f7f8fb", "#0f131c", "#e8ebf4", "#9aa3bb"}
+	for _, f := range fixed {
+		hits := 0
+		for i := 0; i < 200; i++ {
+			seed := hex.EncodeToString([]byte{byte(i), 0x7e, byte(i * 3), 0x11, byte(i * 5), byte(i), 0x22, byte(i >> 1)})
+			p, _ := buildCover(seed, fixedClock)
+			if strings.Contains(string(p), f) {
+				hits++
+			}
+		}
+		if hits > 20 {
+			t.Errorf("fixed neutral %s still appears in %d/200 seeded pages — neutrals not varied enough", f, hits)
+		}
 	}
 }
 
