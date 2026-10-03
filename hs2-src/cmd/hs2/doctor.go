@@ -122,7 +122,7 @@ func checkRunning(d *doctorReport, cfgPath string) {
 		d.warn("running", "the live status file is unreadable")
 		return
 	}
-	summary := fmt.Sprintf("%s · %s · %d link(s) up · %.1f Mbit/s", ls.Role, ls.Carrier, ls.Links, ls.Mbit)
+	summary := fmt.Sprintf("%s · %s · %d link(s) up · %s", ls.Role, ls.Carrier, ls.Links, trafficLine(ls))
 	if age := time.Now().Unix() - ls.Updated; age > 6 {
 		d.warn("running", fmt.Sprintf("status is stale (%ds old) — the tunnel may be down. last seen: %s", age, summary))
 		return
@@ -320,7 +320,7 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 		d.info(name, fmt.Sprintf("no adaptive link pool on carrier %q (tls is one link; other carriers run one session)", carrierName(fc)))
 		return
 	}
-	_, cfgMax, _ := linkEnvelope(fc)         // what a start now runs with (lifted to min_links)
+	_, cfgMax, _ := linkEnvelope(fc)   // what a start now runs with (lifted to min_links)
 	rawMax, mode, _ := linkCeiling(fc) // the ceiling itself
 	ram, cpus := detectHW()
 	recMax := tune.RecommendedMaxLinks(ram, cpus)

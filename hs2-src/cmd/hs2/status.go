@@ -42,13 +42,18 @@ type liveStatus struct {
 	Target    int     `json:"target"`    // links the autopilot wants
 	Min       int     `json:"min"`
 	Max       int     `json:"max"`
-	Users     int     `json:"users"`     // active user connections
-	Mbit      float64 `json:"mbit"`      // aggregate goodput, Mbit/s
-	Phase     string  `json:"phase"`     // steady/scaling/probing/holding/shrinking; exit: following/listening
-	Sat       bool    `json:"sat"`       // some serving link is at its limit
-	CertDays  int     `json:"cert_days"` // days until the TLS cert expires (-1 if none/unknown)
-	PID       int     `json:"pid"`       // the daemon's PID (staleness check)
-	Updated   int64   `json:"updated"`   // unix seconds of this write
+	Users     int     `json:"users"` // open user connections
+	Mbit      float64 `json:"mbit"`  // aggregate goodput, Mbit/s
+	// Counted: users / flowing / mbit / peak_mbit are this server's own count
+	// (every side of this hs2). Absent in a file from an older hs2, whose
+	// Kharej side did not count them: displays then say they are counted on
+	// the Iran server instead of showing 0.
+	Counted  bool   `json:"counted,omitempty"`
+	Phase    string `json:"phase"`     // steady/scaling/probing/holding/shrinking; exit: following/listening
+	Sat      bool   `json:"sat"`       // some serving link is at its limit
+	CertDays int    `json:"cert_days"` // days until the TLS cert expires (-1 if none/unknown)
+	PID      int    `json:"pid"`       // the daemon's PID (staleness check)
+	Updated  int64  `json:"updated"`   // unix seconds of this write
 
 	// The edge's pool detail (absent on the exit side). "target" counts
 	// SERVING links; "links" also includes retiring ones, which take no new
@@ -227,6 +232,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.PortsLines = portLines(fc, viewOf(ls, true))
 		}
 		ls.Users, ls.Mbit, ls.Sat = s.Users, round1(s.MbitPerS), s.Saturated
+		ls.Counted, ls.Flowing, ls.PeakMbit = s.Counted, s.Flowing, round1(s.PeakMbit)
 		if s.Phase != "" {
 			ls.Phase = s.Phase
 		}
@@ -235,8 +241,8 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			serving := s.Serving
 			ls.Serving = &serving
 			ls.Retiring, ls.HeldBy, ls.HeldActive = s.Retiring, s.HeldBy, s.HeldActive
-			ls.Flowing, ls.Pressed = s.Flowing, s.Pressed
-			ls.CapMbit, ls.PeakMbit = round1(s.CapMbit), round1(s.PeakMbit)
+			ls.Pressed = s.Pressed
+			ls.CapMbit = round1(s.CapMbit)
 			ls.Reason, ls.NextProbeS, ls.ExitStats = s.Reason, s.NextProbeS, s.ExitStats
 		}
 		if s.Datagram {
@@ -396,7 +402,7 @@ func printStatus(path string) {
 			fmt.Printf("              %s\n", l)
 		}
 	}
-	if ls.Users > 0 || ls.Mbit > 0 {
+	if ls.Users > 0 || ls.Mbit > 0 || ls.Role == "Kharej side" {
 		fmt.Printf("  traffic:    %s\n", trafficLine(ls))
 	}
 	if ls.ExitStats != "" && ls.ExitStats != "ok" {
@@ -633,13 +639,21 @@ func whyLine(ls liveStatus) string {
 	return w
 }
 
-// trafficLine renders "251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit".
+// trafficLine renders "251 connections (18 active) · 6.1 Mbit/s (peak 9.4 in
+// the last minute) · 1 link at its limit". A Kharej status from an older hs2
+// that did not count its users says where they are counted instead of 0.
 func trafficLine(ls liveStatus) string {
+	if !ls.Counted && ls.Role == "Kharej side" {
+		return "connections and throughput: counted on the Iran server (this hs2 does not count them here — upgrade it to see this server's own numbers)"
+	}
 	s := fmt.Sprintf("%d connections", ls.Users)
-	if ls.Flowing > 0 {
+	if ls.Flowing > 0 || ls.Counted {
 		s += fmt.Sprintf(" (%d active)", ls.Flowing)
 	}
 	s += fmt.Sprintf(" · %.1f Mbit/s", ls.Mbit)
+	if ls.PeakMbit > 0 {
+		s += fmt.Sprintf(" (peak %.1f in the last minute)", ls.PeakMbit)
+	}
 	switch {
 	case ls.Pressed == 1:
 		s += " · 1 link at its limit"

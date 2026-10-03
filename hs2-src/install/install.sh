@@ -2552,8 +2552,8 @@ tm_links(){
 tm_pattern(){
   local sf; sf=$(status_path "$1")
   status_fresh "$sf" || return 0
-  local links target min max users mbit phase sat serving flowing pressed out
-  links=$(jraw "$sf" links); target=$(jraw "$sf" target)
+  local links target min max users mbit phase sat serving flowing pressed out counted
+  links=$(jraw "$sf" links); target=$(jraw "$sf" target); counted=$(jraw "$sf" counted)
   min=$(jraw "$sf" min); max=$(jraw "$sf" max)
   users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
   phase=$(jget "$sf" phase); sat=$(jraw "$sf" sat)
@@ -2576,8 +2576,10 @@ tm_pattern(){
   elif [ -n "$phase" ]; then
     out="$out (${phase})"
   fi
-  if [ -n "$users" ] && [ "$users" != 0 ]; then
-    if [ -n "$flowing" ]; then out="$out · ${users} connections, ${flowing} active"
+  if ! cfg_is_dial "$1" && [ "$counted" != true ]; then
+    out="$out · users counted on the Iran server"
+  elif [ -n "$users" ] && [ "$users" != 0 ]; then
+    if [ -n "$flowing" ] || [ "$counted" = true ]; then out="$out · ${users} connections, ${flowing:-0} active"
     else out="$out · ${users} users"; fi
   fi
   [ -n "$mbit" ] && [ "$mbit" != 0 ] && out="$out · ${mbit} Mbit/s"
@@ -2748,10 +2750,11 @@ tm_monitor(){
     if [ "$st" != running ]; then
       say " (not running)"
     elif status_fresh "$sf"; then
-      local links target min max users mbit phase sat serving retiring held heldact flowing pressed capm reason xstats
+      local links target min max users mbit peak counted phase sat serving retiring held heldact flowing pressed capm reason xstats
       links=$(jraw "$sf" links); target=$(jraw "$sf" target)
       min=$(jraw "$sf" min); max=$(jraw "$sf" max)
       users=$(jraw "$sf" users); mbit=$(jraw "$sf" mbit)
+      peak=$(jraw "$sf" peak_mbit); counted=$(jraw "$sf" counted)
       phase=$(jget "$sf" phase); sat=$(jraw "$sf" sat)
       serving=$(jraw "$sf" serving); retiring=$(jraw "$sf" retiring)
       held=$(jraw "$sf" held_by); heldact=$(jraw "$sf" held_active)
@@ -2787,11 +2790,20 @@ tm_monitor(){
       else
         say " Links:   ${C_B}${links}${C_0} up (${phase:-running})"
       fi
-      if [ -n "$users" ]; then
-        if [ -n "$flowing" ]; then say " Users:   ${users} open connections, ${flowing} active"
-        else say " Users:   ${users} active connections"; fi
+      if ! cfg_is_dial "$cfg" && [ "$counted" != true ]; then
+        # An older hs2 on this Kharej server does not count its users: say
+        # where they are counted instead of showing 0.
+        say " Users:   counted on the Iran server (this hs2 does not count them here — upgrade it to see this server's own)"
+      elif [ "$counted" = true ]; then
+        say " Users:   ${users:-0} open connections, ${flowing:-0} active"
+        say " Speed:   ${mbit:-0} Mbit/s$([ -n "$peak" ] && [ "$peak" != 0 ] && echo " · peak ${peak} Mbit/s in the last minute") (tunnel goodput)"
+      else
+        if [ -n "$users" ]; then
+          if [ -n "$flowing" ]; then say " Users:   ${users} open connections, ${flowing} active"
+          else say " Users:   ${users} active connections"; fi
+        fi
+        [ -n "$mbit" ] && [ "$mbit" != 0 ] && say " Speed:   ${mbit} Mbit/s (tunnel goodput)"
       fi
-      [ -n "$mbit" ] && [ "$mbit" != 0 ] && say " Speed:   ${mbit} Mbit/s (tunnel goodput)"
       local peers; peers=$(tm_peers "$cfg")
       [ -n "$peers" ] && say " Peer:    $peers"
       tm_health_lines "$sf"

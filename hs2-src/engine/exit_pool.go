@@ -95,6 +95,8 @@ type exitPool struct {
 	// peers is the exit's live links; each carries the ceiling its edge
 	// reported over kindInfo (nil when the pool runs without one).
 	peers *linkPeers
+	// traffic: this exit's own count of user connections and throughput.
+	traffic *exitTraffic
 }
 
 type exitSlot struct {
@@ -371,14 +373,16 @@ func (p *exitPool) incLive(d int) int {
 }
 
 // stats reports the reverse exit pool for the live monitor. The exit follows the
-// edge's target, so phase is always "following"; throughput and users are only
-// visible on the edge, not here.
+// edge's target, so phase is always "following" (the edge decides the size);
+// the user connections and throughput are this exit's own count of what it
+// relays (exitstats.go).
 func (p *exitPool) stats() PoolStats {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 	st := PoolStats{Links: p.live, Target: p.want, Min: p.min, Max: p.max, Phase: "following"}
+	p.mu.Unlock()
 	st.PeerMax = p.peers.max() // reported by the links up NOW (never a gone link's value)
 	st.Routes = p.peers.edgeRoutes()
+	p.traffic.fill(&st)
 	return st
 }
 

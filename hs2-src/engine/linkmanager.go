@@ -1602,11 +1602,16 @@ func (m *LinkManager) Target() int { return int(m.target.Load()) }
 // PoolStats is a snapshot of the pattern for the live monitor. Fields are only
 // ever added, so older readers keep working.
 type PoolStats struct {
-	Links      int     // live links now (serving + retiring + draining)
-	Target     int     // serving links the autopilot wants
-	Min, Max   int     // envelope
-	Users      int     // open user connections
-	MbitPerS   float64 // aggregate throughput, Mbit/s
+	Links    int     // live links now (serving + retiring + draining)
+	Target   int     // serving links the autopilot wants
+	Min, Max int     // envelope
+	Users    int     // open user connections
+	MbitPerS float64 // aggregate throughput, Mbit/s
+	// Counted: Users, Flowing, MbitPerS and PeakMbit are this side's own
+	// measurement (every side of this hs2 counts them; false only from code
+	// that does not, so a display can say where the numbers live instead of
+	// showing zero).
+	Counted    bool
 	Phase      string  // steady | scaling | probing | holding | shrinking (exit: following | listening)
 	Saturated  bool    // some serving link is at its limit (= Pressed > 0)
 	Serving    int     // links taking new connections
@@ -1661,7 +1666,7 @@ func (m *LinkManager) publishStats() {
 	st := PoolStats{
 		Min: m.min, Max: m.max,
 		MbitPerS: mbitps(m.sample.G), Phase: m.dec.phase.String(), Reason: m.dec.reason,
-		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(m.ap.gPeak),
+		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(max(m.ap.gPeak, m.sample.G)),
 		ExitStats: m.exitStats,
 	}
 	if m.pin.Load() == 0 && m.ap.next.After(now) && m.dec.phase == apHolding {
@@ -1726,6 +1731,7 @@ func (m *LinkManager) Stats() PoolStats {
 	st.Target = int(m.target.Load())
 	st.Users = int(m.users.Load())
 	st.Saturated = st.Pressed > 0
+	st.Counted = true
 	return st
 }
 

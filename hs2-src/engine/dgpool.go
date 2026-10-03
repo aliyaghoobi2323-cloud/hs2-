@@ -344,9 +344,10 @@ type dgPool struct {
 	tunRead, tunWritten, sentPkts, recvPkts atomic.Uint64
 	dropNoCarrier, dropQueueFull, dropAged  atomic.Uint64
 
-	fecCeilLogged bool   // "FEC at its ceiling" was logged and not yet cleared
-	fecCeilRun    int    // consecutive samples at (+) / below (-) the ceiling
-	phaseLabel    string // fixed phase for the snapshot (the direct exit: "listening")
+	fecCeilLogged bool      // "FEC at its ceiling" was logged and not yet cleared
+	fecCeilRun    int       // consecutive samples at (+) / below (-) the ceiling
+	phaseLabel    string    // fixed phase for the snapshot (the direct exit: "listening")
+	gHist         []float64 // throughput per published tick, for the last minute's peak
 }
 
 type stickyFlow struct {
@@ -1053,7 +1054,13 @@ func (p *dgPool) publishStats(s apSample) {
 		Target: p.Target(), Min: p.min, Max: p.max,
 		Users: s.open, Flowing: s.flowing, Phase: p.dec.phase.String(),
 		Reason: p.dec.reason, MbitPerS: mbitps(s.G), PeerMax: p.peerMaxNow(),
+		Counted: true, // flows and throughput this side's carriers see
 	}
+	p.gHist = append(p.gHist, s.G)
+	if len(p.gHist) > peakTicks {
+		p.gHist = p.gHist[len(p.gHist)-peakTicks:]
+	}
+	ps.PeakMbit = mbitps(max(peakOf(p.gHist), s.G))
 	if p.phaseLabel != "" {
 		ps.Phase = p.phaseLabel
 	}
@@ -1528,6 +1535,7 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 	// Reverse exit: dial to match the edge's target (learned via pool control).
 	p.dialer = cfg.Dialer
 	p.revExit = true
+	p.phaseLabel = "following" // the edge decides the size; this side dials to match
 	p.target.Store(int32(warmSize(cfg.Min, cfg.Max)))
 	p.runReverseExit(ctx)
 	return nil

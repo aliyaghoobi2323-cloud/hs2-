@@ -51,6 +51,8 @@ type KharejConfig struct {
 	peers *linkPeers
 	// noRoute rate-limits the "no target for user port P" log line.
 	noRoute *noRouteLog
+	// traffic counts this exit's own user connections and throughput.
+	traffic *exitTraffic
 }
 
 // routeTable is the exit's routing table: Routes, then Panel.
@@ -89,6 +91,10 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	if cfg.noRoute == nil {
 		cfg.noRoute = &noRouteLog{}
 	}
+	if cfg.traffic == nil {
+		cfg.traffic = newExitTraffic(cfg.peers)
+		go cfg.traffic.run(ctx.Done())
+	}
 	if cfg.RevDial != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
@@ -96,7 +102,9 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	if cfg.OnStart != nil {
 		cfg.OnStart(func() PoolStats {
 			// the edge's ceiling and user ports as reported by the links up NOW
-			return PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max(), Routes: cfg.peers.edgeRoutes()}
+			st := PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max(), Routes: cfg.peers.edgeRoutes()}
+			cfg.traffic.fill(&st) // this exit's own user connections and throughput
+			return st
 		})
 	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
@@ -212,7 +220,9 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 				st.Close()
 				return
 			}
-			relayUDPConn(st, up)
+			c := cfg.traffic.open()
+			defer cfg.traffic.done(c)
+			relayUDPConn(exitCountedStream{st, c}, up)
 			return
 		}
 		up, err := net.DialTimeout("tcp", target, 5*time.Second)
@@ -224,7 +234,9 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		if mtr != nil {
 			g = mtr.guard
 		}
-		relayStream(up, st, g)
+		c := cfg.traffic.open()
+		defer cfg.traffic.done(c)
+		relayStream(up, exitCountedStream{st, c}, g)
 	case kindL3:
 		if l3 == nil {
 			st.Close() // this side runs without a TUN
