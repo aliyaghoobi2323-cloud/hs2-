@@ -19,9 +19,13 @@ import (
 type KharejConfig struct {
 	Listener net.Listener
 	Server   *tlscarrier.Server
-	Panel    string    // where TCP and UDP streams are delivered
+	Panel    string    // the default panel (expose): where a stream with no own target goes
 	TUN      tunWriter // non-nil: accept hs0 side-channel streams
-	Log      func(string, ...any)
+
+	// Routes (port_map) gives some Iran user ports their own target; a port
+	// not in it goes to Panel, and with no Panel it is refused (routes.go).
+	Routes map[int]string
+	Log    func(string, ...any)
 
 	// Reverse exit: dial the iran edge instead of listening. RevDial returns a
 	// fresh authenticated TLS carrier to the edge. The link count is dynamic: the
@@ -45,6 +49,25 @@ type KharejConfig struct {
 	// peers is the set of live links; each stores the ceiling its edge reported
 	// (set up by RunKharej; nil in tests that call serveStream directly).
 	peers *linkPeers
+	// noRoute rate-limits the "no target for user port P" log line.
+	noRoute *noRouteLog
+}
+
+// routeTable is the exit's routing table: Routes, then Panel.
+func (cfg KharejConfig) routeTable() RouteTable {
+	return RouteTable{Default: cfg.Panel, Ports: cfg.Routes}
+}
+
+// info is what this exit tells the edge over kindInfo: its ceiling (myMax),
+// that it routes port-tagged connections, whether it has a default panel, and
+// the ports with their own target.
+func (cfg KharejConfig) info(myMax int) peerInfo {
+	t := cfg.routeTable()
+	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags, Ports: t.MappedPorts()}
+	if t.Default != "" {
+		pi.Flags |= flagDefault
+	}
+	return pi
 }
 
 // RunKharej accepts links and serves their streams until ctx ends.
@@ -62,14 +85,17 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	if cfg.peers == nil {
 		cfg.peers = &linkPeers{}
 	}
+	if cfg.noRoute == nil {
+		cfg.noRoute = &noRouteLog{}
+	}
 	if cfg.RevDial != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
 	var links atomic.Int32
 	if cfg.OnStart != nil {
 		cfg.OnStart(func() PoolStats {
-			// the edge's ceiling as reported by the links up NOW
-			return PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max()}
+			// the edge's ceiling and user ports as reported by the links up NOW
+			return PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max(), Routes: cfg.peers.edgeRoutes()}
 		})
 	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
@@ -148,25 +174,50 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		if pool != nil {
 			myMax = pool.max // what the reverse exit actually clamps to
 		}
-		serveInfo(st, myMax, func(n int) {
+		serveInfo(st, cfg.info(myMax), func(pi peerInfo) {
 			if mtr != nil { // per link: read back only while this link is up
-				mtr.peerMax.Store(uint32(n))
+				mtr.peerMax.Store(uint32(pi.MaxLinks))
+				mtr.peerInfo.Store(&pi)
 			}
 		})
-	case kindTCP:
-		up, err := net.DialTimeout("tcp", cfg.Panel, 5*time.Second)
+	case kindTCP, kindTCPPort, kindUDP, kindUDPPort:
+		udp := kind[0] == kindUDP || kind[0] == kindUDPPort
+		port := 0
+		if kind[0] == kindTCPPort || kind[0] == kindUDPPort {
+			var b [2]byte
+			st.SetReadDeadline(time.Now().Add(kindTimeout))
+			if _, err := io.ReadFull(st, b[:]); err != nil {
+				st.Close()
+				return
+			}
+			st.SetReadDeadline(time.Time{})
+			port = int(b[0])<<8 | int(b[1])
+		}
+		target, ok := cfg.routeTable().Target(port)
+		if !ok {
+			proto := "tcp"
+			if udp {
+				proto = "udp"
+			}
+			cfg.noRoute.note(port, proto, cfg.Log)
+			st.Close()
+			return
+		}
+		if udp {
+			up, err := net.Dial("udp", target)
+			if err != nil {
+				st.Close()
+				return
+			}
+			relayUDPConn(st, up)
+			return
+		}
+		up, err := net.DialTimeout("tcp", target, 5*time.Second)
 		if err != nil {
 			st.Close()
 			return
 		}
 		relay(st, up)
-	case kindUDP:
-		up, err := net.Dial("udp", cfg.Panel)
-		if err != nil {
-			st.Close()
-			return
-		}
-		relayUDPConn(st, up)
 	case kindL3:
 		if l3 == nil {
 			st.Close() // this side runs without a TUN

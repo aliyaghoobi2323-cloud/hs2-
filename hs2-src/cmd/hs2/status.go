@@ -83,6 +83,20 @@ type liveStatus struct {
 	LimitBy     string `json:"limit_by,omitempty"` // iran | kharej | both
 	CeilingText string `json:"ceiling_text,omitempty"`
 
+	// Per-port routing (carriers with user ports; see ports.go): the OTHER
+	// server's half of the table as it reported it over a live link.
+	// PeerRoutes: "" not reported (yet), "known", "older" (the Kharej server
+	// runs an hs2 that does not route by port) or "filtered" (dgtun: its tun
+	// does not answer on the tagged port). PortsLines is the rendered
+	// table, so the installer shows exactly what `hs2 status` shows.
+	PeerRoutes  string   `json:"peer_routes,omitempty"`
+	PeerTags    bool     `json:"peer_tags,omitempty"`
+	PeerPorts   []int    `json:"peer_ports,omitempty"`
+	PeerDefault bool     `json:"peer_default,omitempty"`
+	PeerUDP     bool     `json:"peer_udp,omitempty"`
+	PeerCut     bool     `json:"peer_cut,omitempty"`
+	PortsLines  []string `json:"ports_lines,omitempty"`
+
 	// Datagram tunnels (dgtun): loss of what this side SENDS (the peer
 	// reports it), FEC, drops and the policer cap. Absent = 0 / false.
 	LossPct         float64 `json:"loss_pct,omitempty"`     // pool-wide, rate-weighted
@@ -158,6 +172,10 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.EffMax, ls.LimitBy = effectiveCeiling(fc.Mode == "dial", fc.Reverse, ls.CfgMax, ls.PeerMax)
 			ls.CPUCores = runtime.NumCPU() // the "why" below names the cores
 			ls.CeilingText = ceilingLine(ls)
+		}
+		if hasUserPorts(fc) {
+			fillPeerRoutes(&ls, s.Routes)
+			ls.PortsLines = portLines(fc, viewOf(ls, true))
 		}
 		ls.Users, ls.Mbit, ls.Sat = s.Users, round1(s.MbitPerS), s.Saturated
 		if s.Phase != "" {
@@ -320,6 +338,13 @@ func printStatus(path string) {
 	}
 	if w := whyLine(ls); w != "" {
 		fmt.Printf("  why:        %s\n", w)
+	}
+	for i, l := range ls.PortsLines {
+		if i == 0 {
+			fmt.Printf("  ports:      %s\n", l)
+		} else {
+			fmt.Printf("              %s\n", l)
+		}
 	}
 	if ls.Users > 0 || ls.Mbit > 0 {
 		fmt.Printf("  traffic:    %s\n", trafficLine(ls))

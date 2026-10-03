@@ -104,6 +104,14 @@ type linkMeter struct {
 	// peerMax is the exit's link-pool ceiling as it told us over kindInfo
 	// (peerinfo.go); 0 = not known (older exit, or not exchanged yet).
 	peerMax atomic.Uint32
+	// peerInfo is the other server's whole kindInfo message (nil = none yet,
+	// or an older hs2). Edge only: infoDone — the first exchange attempt is
+	// over, so the link may carry user connections (until then it carries
+	// none: it must know whether to tag them, routes.go); infoRefused — the
+	// exit closed the exchange (an older hs2: definitive, never tag).
+	peerInfo    atomic.Pointer[peerInfo]
+	infoDone    atomic.Bool
+	infoRefused atomic.Bool
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	rttMicros   atomic.Uint64 // last control round-trip time, microseconds

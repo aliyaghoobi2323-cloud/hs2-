@@ -117,6 +117,14 @@ type LinkManager struct {
 
 	// OnLink, if set, is called (in its own goroutine) for every new link.
 	OnLink func(Link)
+	// gateInfo (the stream edge): a link takes user connections only once its
+	// kindInfo exchange is over (linkMeter.infoDone), so the first connection
+	// on it already knows whether the exit routes port tags (routes.go). Links
+	// without a meter are never held back.
+	gateInfo bool
+	// exitInfo is the exit's latest kindInfo answer on any link; a link whose
+	// own answer is late goes by it (userStreamHeader).
+	exitInfo atomic.Pointer[peerInfo]
 
 	// The sizing brain and what feeds it. ap, sample, dec, lastSampleAt,
 	// targetDropAt and the log-throttle times are touched only by the pool's
@@ -380,6 +388,9 @@ func (m *LinkManager) DropLink(l Link, from string) {
 	}
 	m.links = kept
 	n := m.aliveLocked()
+	if n == 0 {
+		m.exitInfo.Store(nil) // no link left: the next exit may be another process
+	}
 	m.mu.Unlock()
 	l.Close()
 	if id < 0 || m.closing.Load() {
@@ -889,6 +900,11 @@ func (m *LinkManager) reap() {
 		}
 	}
 	m.links = alive
+	if len(alive) == 0 {
+		// No link left: the exit that answered may have restarted with
+		// another table, so links whose own answer is late must not go by it.
+		m.exitInfo.Store(nil)
+	}
 	m.mu.Unlock()
 	now := m.now()
 	for _, ml := range dead {
@@ -1004,7 +1020,7 @@ func (m *LinkManager) pickLocked() *managedLink {
 		var best pickKey
 		ties := 0
 		for _, ml := range m.links {
-			if !ml.link.Alive() {
+			if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
 				continue
 			}
 			switch tier {
@@ -1429,6 +1445,9 @@ type PoolStats struct {
 	PeerMax    int     // the OTHER server's link-pool ceiling as it reported it
 	// (stream: kindInfo; datagram: pool-control frames). 0 = not known (an older
 	// hs2 on the other server, no link up, or not exchanged yet). Display only.
+	// Routes is what the other server reported about per-port routing (nil =
+	// this pool does not carry it). Display only.
+	Routes *PeerRoutes
 
 	// Datagram pools (dgtun): what this side's carriers see on what they SEND
 	// (the peer reports its loss) and what they receive.
@@ -1481,6 +1500,8 @@ func (m *LinkManager) Stats() PoolStats {
 	if p := m.stats.Load(); p != nil {
 		st = *p
 	}
+	var routes *PeerRoutes
+	older := false
 	m.mu.RLock()
 	for _, ml := range m.links {
 		if !ml.link.Alive() {
@@ -1493,6 +1514,14 @@ func (m *LinkManager) Stats() PoolStats {
 		if ml.mtr != nil {
 			if v := int(ml.mtr.peerMax.Load()); v > st.PeerMax {
 				st.PeerMax = v
+			}
+			// The exit's routing report: every link carries the same one.
+			if pi := ml.mtr.peerInfo.Load(); pi != nil && pi.V2 {
+				if routes == nil || !routes.Known {
+					routes = exitRoutes(pi)
+				}
+			} else if ml.mtr.infoRefused.Load() || pi != nil {
+				older = true // closed the exchange, or answered v1: an older exit
 			}
 		}
 		switch {
@@ -1509,6 +1538,13 @@ func (m *LinkManager) Stats() PoolStats {
 		}
 	}
 	m.mu.RUnlock()
+	if m.gateInfo {
+		if routes == nil {
+			routes = &PeerRoutes{}
+		}
+		routes.Older = !routes.Known && older
+		st.Routes = routes
+	}
 	st.Target = int(m.target.Load())
 	st.Users = int(m.users.Load())
 	st.Saturated = st.Pressed > 0

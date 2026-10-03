@@ -254,19 +254,25 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 					warn(`"drain_idle_sec" %d is below xray's default connIdle (300 s): connections the panel would still keep may be closed when the pool shrinks`, *d)
 				}
 			}
-		} else if carrier == "mtcp" || carrier == "tls" {
-			if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
-				bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)
-			}
-		} else if fc.Expose == "" {
-			// l3mtcp exit without a panel: a pure routed tunnel works, but any
-			// user port the edge opens would reach nothing on this server.
-			warn(`"expose" is empty: connections from the edge's user ports have no panel to go to on this server (set it to the panel inbound, e.g. "127.0.0.1:8443")`)
-		} else if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
-			bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)
+		} else {
+			// The exit's routing table: port_map, then expose (engine/routes.go).
+			// mtcp/tls carry nothing else, so they need somewhere to send users;
+			// l3mtcp without either is a valid pure routed tunnel.
+			checkExitTable(fc, carrier == "mtcp" || carrier == "tls", "", bad, warn)
 		}
 		if dials && fc.SNI == "" {
 			warn(`"sni" is empty: the TLS handshake goes out without a domain name, which stands out to DPI`)
+		}
+	}
+
+	// port_map lives on the kharej server, and only carriers with user ports
+	// use it: anywhere else it would be silently ignored.
+	if strings.TrimSpace(fc.PortMap) != "" {
+		switch {
+		case !stream && !dgtun:
+			warn(`"port_map" has no effect: carrier %q is an IP tunnel with no user ports`, carrier)
+		case edge:
+			warn(`"port_map" has no effect on the Iran server: where each user port goes is set on the kharej server (its port_map / expose)`)
 		}
 	}
 
@@ -325,13 +331,7 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		// panel; the user ports live only on the edge (forward_ports is ignored
 		// here). No panel is a valid pure routed tunnel, but never silently.
 		if !edge {
-			if fc.Expose == "" {
-				warn(`"expose" is empty: connections from the edge's user ports have no panel to go to on this server (set it to the panel inbound, e.g. "127.0.0.1:8443")`)
-			} else if _, pport, err := net.SplitHostPort(fc.Expose); err != nil {
-				bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)
-			} else if pport == engine.DgTunPort {
-				warn(`"expose" uses port %s, which the tunnel's own forwarder listens on (on the tun IP): a panel bound on 0.0.0.0:%s stops the forwarder from starting — move the panel to another port`, pport, pport)
-			}
+			checkExitTable(fc, false, "dgtun", bad, warn)
 		}
 	}
 
@@ -370,6 +370,48 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		}
 	}
 	return
+}
+
+// checkExitTable validates the kharej server's routing table: port_map entries
+// and expose (the default panel). needTarget: the carrier carries nothing but
+// user ports, so having neither is an error rather than a pure routed tunnel.
+// dg: the datagram tun, whose forwarder owns two on-tun ports a panel must not
+// take.
+func checkExitTable(fc fileConfig, needTarget bool, dg string, bad, warn func(string, ...any)) {
+	pm, err := engine.ParsePortMap(fc.PortMap)
+	if err != nil {
+		bad(`"port_map": %v — entries are "2053" (= 127.0.0.1:2053) or "2053=host:port", comma-separated`, err)
+	}
+	if fc.Expose != "" {
+		if _, _, err := net.SplitHostPort(fc.Expose); err != nil {
+			bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q`, fc.Expose)
+		}
+	}
+	switch {
+	case fc.Expose == "" && len(pm) == 0 && needTarget:
+		bad(`"expose" must be the panel address IP:PORT (e.g. "127.0.0.1:8443"), got %q — or give the Iran user ports their own targets in "port_map"`, fc.Expose)
+	case fc.Expose == "" && len(pm) == 0:
+		// A pure routed tunnel works, but any user port the edge opens would
+		// reach nothing on this server.
+		warn(`"expose" is empty: connections from the edge's user ports have no panel to go to on this server (set it to the panel inbound, e.g. "127.0.0.1:8443")`)
+	case fc.Expose == "":
+		warn(`"expose" is empty: an Iran user port without a "port_map" entry is refused, and so is every connection from an older Iran server (it does not say its user port)`)
+	}
+	if dg == "" {
+		return
+	}
+	targets := map[string]string{}
+	if fc.Expose != "" {
+		targets[fc.Expose] = `"expose"`
+	}
+	for p, t := range pm {
+		targets[t] = fmt.Sprintf(`"port_map" %d`, p)
+	}
+	for t, what := range targets {
+		if _, pport, err := net.SplitHostPort(t); err == nil && (pport == engine.DgTunPort || pport == engine.DgTagPort) {
+			warn(`%s uses port %s, which the tunnel's own forwarder listens on (on the tun IP): a panel bound on 0.0.0.0:%s stops the forwarder from starting — move the panel to another port`, what, pport, pport)
+		}
+	}
 }
 
 // jsonKeys lists the JSON field names of a struct type.

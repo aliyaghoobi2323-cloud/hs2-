@@ -101,13 +101,22 @@ type v2Opts struct {
 	oldExit   bool              // exit of the previous release: no kindStats case, no meter
 	oldEdge   bool              // edge speaks only kindPool: no kindCtrl, no kindStats
 	tune      func(*apTunables) // shorten the controller's clocks
+
+	// Per-port routing: the edge opens one user listener per port (TCP, and
+	// UDP when udp) and tags its connections; the exit routes by routes, then
+	// panel (noPanel: no default — an unmapped port is refused).
+	userPorts []int
+	udp       bool
+	routes    map[int]string
+	noPanel   bool
 }
 
 type v2Rig struct {
 	t        *testing.T
 	lm       *LinkManager
 	userAddr string
-	dials    atomic.Int64 // links dialled: by the exit (reverse) or the edge (direct)
+	portAddr map[int]string // user port -> its listener (TCP and UDP)
+	dials    atomic.Int64   // links dialled: by the exit (reverse) or the edge (direct)
 	edge     *logSink
 	exit     *logSink
 	exitFn   atomic.Pointer[StatsFn]
@@ -142,7 +151,7 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 		}
 	})
 	panel := o.panel
-	if panel == "" {
+	if panel == "" && !o.noPanel {
 		panel = echoPanel(t)
 	}
 	srv := &tlscarrier.Server{SharedKey: key, Cert: testCert(t), BackendAddr: "127.0.0.1:1"}
@@ -160,7 +169,7 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 			setExit(func() PoolStats { return PoolStats{Links: int(live.Load()), Phase: "listening"} })
 			go runOldExitListener(ctx, ln, srv, panel, &live, r.exit.logf)
 		} else {
-			go RunKharej(ctx, KharejConfig{Listener: ln, Server: srv, Panel: panel, Log: r.exit.logf, OnStart: setExit, MaxLinks: o.exitCfg})
+			go RunKharej(ctx, KharejConfig{Listener: ln, Server: srv, Panel: panel, Routes: o.routes, Log: r.exit.logf, OnStart: setExit, MaxLinks: o.exitCfg})
 		}
 		d := &countingDialer{d: NewMTCPDialer(carrierAddr, "lab.example.com", key, ""), n: &r.dials}
 		lm = NewLinkManager(d, o.min, o.max, o.perLink, r.edge.logf)
@@ -181,11 +190,18 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 	if o.tune != nil {
 		o.tune(&lm.ap.tun)
 	}
+	// As RunIran: a link takes user connections once its kindInfo exchange is
+	// over (an older edge has no exchange to wait for).
+	lm.gateInfo = !o.oldEdge
+	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags, Ports: o.userPorts}
+	if o.udp {
+		mine.Flags |= flagUDP
+	}
 	lm.OnLink = func(l Link) {
 		if !o.oldEdge {
 			go openControl(ctx, l, r.edge.logf)
 			go openStats(ctx, l, r.edge.logf)
-			go openInfo(ctx, l, lm.max)
+			go openInfo(ctx, l, mine)
 		}
 		if !o.direct {
 			go openPoolCtl(ctx, l, lm.Target, r.edge.logf, func() { lm.markPoolRefused(l) })
@@ -204,7 +220,7 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 			setExit(pool.stats)
 		} else {
 			go RunKharej(ctx, KharejConfig{
-				Panel: panel, RevLinks: o.exitLinks, RevMin: o.exitMin, RevMax: o.exitMax,
+				Panel: panel, Routes: o.routes, RevLinks: o.exitLinks, RevMin: o.exitMin, RevMax: o.exitMax,
 				RevDial: dial, Log: r.exit.logf, OnStart: setExit,
 			})
 		}
@@ -222,9 +238,35 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 			if err != nil {
 				return
 			}
-			go serveUserTCP(ctx, c, lm)
+			go serveUserTCP(ctx, c, lm, 0)
 		}
 	}()
+	r.portAddr = map[int]string{}
+	for _, port := range o.userPorts {
+		pl, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.portAddr[port] = pl.Addr().String()
+		go func() { <-ctx.Done(); pl.Close() }()
+		go func() {
+			for {
+				c, err := pl.Accept()
+				if err != nil {
+					return
+				}
+				go serveUserTCP(ctx, c, lm, port)
+			}
+		}()
+		if o.udp {
+			pc, err := net.ListenPacket("udp", pl.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			go func() { <-ctx.Done(); pc.Close() }()
+			go serveUserUDP(ctx, pc, lm, port, r.edge.logf)
+		}
+	}
 	return r
 }
 

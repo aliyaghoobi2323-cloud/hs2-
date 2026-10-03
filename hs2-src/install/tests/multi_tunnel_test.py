@@ -130,10 +130,18 @@ class Pty:
     def send(self, line):
         os.write(self.fd, (line + "\n").encode())
 
-    def finish(self, timeout):
+    def finish(self, timeout, auto=()):
+        """Wait for the child to end; optional prompts (auto) that still show
+        up after the last listed step are answered on the way."""
         deadline = time.time() + timeout
+        autos = [(re.compile(a), ans) for a, ans in auto]
         while not self.eof and time.time() < deadline:
             self._pull(0.5)
+            for apat, ans in autos:
+                am = apat.search(self.out, self.pos)
+                if am:
+                    self.pos = am.end()
+                    self.send(ans)
         if not self.eof:
             try:
                 os.kill(self.pid, signal.SIGKILL)
@@ -207,7 +215,7 @@ get_cert(){ printf "%s|%s" "$TEST_CERT" "$TEST_KEY"; }
             if callable(ans):
                 ans = ans(p.out)
             p.send(ans)
-        rc = p.finish(timeout)
+        rc = p.finish(timeout, auto=OPTIONAL)
         return rc, p.out
 
     # -------------------------------------------------------------- state --
@@ -290,7 +298,7 @@ TLS_TCP = r"TLS mode:  1\) mtcp[\s\S]*?Choose \[1\]: "
 TPORT_K = r"Tunnel port \(clients never see this\)"
 TPORT_I = r"Tunnel port to LISTEN on"
 IFACE = r"TUN interface name on THIS server \[\w+\]"
-PANEL_Q = r"Panel inbound address on this server"
+PANEL_Q = r"Default panel inbound on this server"
 PASTE = r"Paste the hs2:// setup link"
 USERIP = r"IP that USERS connect to"
 PORTS = r"User port\(s\) to open here"
@@ -302,7 +310,9 @@ LIST = r"Pick a tunnel number[\s\S]*?Choose: "
 # Optional prompts the scenarios do not list, answered with Enter (keep the
 # default) wherever they appear: the link-making side is asked the tunnel
 # subnet (ask_subnet, U5) right after the transport.
-OPTIONAL = [(r"Tunnel subnet /30 base in 10\.77\.0\.0/16 \[[^\]]*\]: ", "")]
+OPTIONAL = [(r"Tunnel subnet /30 base in 10\.77\.0\.0/16 \[[^\]]*\]: ", ""),
+            # the kharej's per-port targets (Enter = every port to the default panel)
+            (r"Iran user ports with their OWN inbound here[\s\S]*?Enter = none\): ", "")]
 TMENU = r"9\) Delete this tunnel[\s\S]*?Choose: "
 
 

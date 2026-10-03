@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"net"
+	"strconv"
 	"sync"
 	"time"
 
@@ -65,6 +66,18 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	if cfg.DrainIdle != 0 {
 		lm.SetDrainIdle(cfg.DrainIdle)
 	}
+	// A link carries user connections only once its kindInfo exchange is over,
+	// so each one knows whether the exit routes port tags (routes.go).
+	lm.gateInfo = true
+	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags}
+	for _, p := range cfg.Ports {
+		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
+			mine.Ports = append(mine.Ports, n)
+		}
+	}
+	if cfg.UDP {
+		mine.Flags |= flagUDP
+	}
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = &l3Set{}
@@ -79,7 +92,25 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, logf)
 		go openStats(ctx, l, logf)
-		go openInfo(ctx, l, lm.max) // tell the exit our ceiling, learn its own
+		go func() { // tell the exit our ceiling and user ports, learn its own
+			mtr := linkMeterOf(l)
+			for i := 0; ; i++ {
+				if i > 0 && !sleepCtx(ctx, infoSlowRetry) {
+					return
+				}
+				openInfo(ctx, l, mine)
+				if mtr == nil || mtr.infoRefused.Load() || !l.Alive() || ctx.Err() != nil {
+					return
+				}
+				if v := mtr.peerInfo.Load(); v != nil {
+					lm.exitInfo.Store(v) // what links whose own answer is late go by
+					return
+				}
+				// No answer in all of openInfo's tries (a congested link): the
+				// link goes by the pool's answer meanwhile; keep asking, slowly,
+				// so it never stays without one for its whole life.
+			}
+		}()
 		if reverse {
 			go openPoolCtl(ctx, l, lm.Target, logf, func() { lm.markPoolRefused(l) })
 		}
@@ -97,6 +128,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 
 	for _, p := range cfg.Ports {
 		bind := net.JoinHostPort(cfg.ListenIP, p)
+		port, _ := strconv.Atoi(p) // the tag the exit routes by (0: none)
 		ln, err := ListenReuse(bind)
 		if err != nil {
 			return err
@@ -108,7 +140,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 				if err != nil {
 					return
 				}
-				go serveUserTCP(ctx, c, lm)
+				go serveUserTCP(ctx, c, lm, port)
 			}
 		}()
 		msg := "tcp"
@@ -118,7 +150,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 				return err
 			}
 			go func() { <-ctx.Done(); pc.Close() }()
-			go serveUserUDP(ctx, pc, lm, logf)
+			go serveUserUDP(ctx, pc, lm, port, logf)
 			msg = "tcp+udp"
 		}
 		logf("user port %s open (%s), carried over the link pool", p, msg)
@@ -142,7 +174,36 @@ func pickWait(ctx context.Context, lm *LinkManager) (Link, func(), bool) {
 	return nil, nil, false
 }
 
-func openStream(ctx context.Context, lm *LinkManager, kind byte) (stream, func(), bool) {
+// userStreamHeader is what opens a user stream on link l: the kind tagged with
+// the user port whenever the exit routes tags — it then decides with the table
+// it has now (2 bytes once per stream, inside TLS) — else the untagged kind
+// every exit understands. What the exit said on THIS link decides; a link
+// whose exchange has not been answered yet (slow, still retrying) goes by what
+// the pool's other links learned from the exit (pool, may be nil). An exit
+// that refused the exchange is never tagged.
+func userStreamHeader(l Link, udp bool, port int, pool *peerInfo) []byte {
+	if mtr := linkMeterOf(l); mtr != nil && port > 0 && port <= 65535 {
+		pi := mtr.peerInfo.Load()
+		if pi == nil && !mtr.infoRefused.Load() {
+			pi = pool
+		}
+		if pi.tags() {
+			k := kindTCPPort
+			if udp {
+				k = kindUDPPort
+			}
+			return []byte{k, byte(port >> 8), byte(port)}
+		}
+	}
+	if udp {
+		return []byte{kindUDP}
+	}
+	return []byte{kindTCP}
+}
+
+// openStream opens a user stream for a connection that came in on the user
+// port `port` (0: unknown — never tagged).
+func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), bool) {
 	// A link can die between Pick and OpenStream; try another one.
 	for try := 0; try < 3; try++ {
 		link, release, ok := pickWait(ctx, lm)
@@ -151,7 +212,7 @@ func openStream(ctx context.Context, lm *LinkManager, kind byte) (stream, func()
 		}
 		st, err := link.OpenStream()
 		if err == nil {
-			if _, err = st.Write([]byte{kind}); err == nil {
+			if _, err = st.Write(userStreamHeader(link, udp, port, lm.exitInfo.Load())); err == nil {
 				return st, release, true
 			}
 			st.Close()
@@ -161,8 +222,8 @@ func openStream(ctx context.Context, lm *LinkManager, kind byte) (stream, func()
 	return nil, nil, false
 }
 
-func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager) {
-	st, release, ok := openStream(ctx, lm, kindTCP)
+func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {
+	st, release, ok := openStream(ctx, lm, false, port)
 	if !ok {
 		user.Close()
 		return
@@ -178,7 +239,7 @@ type udpFlow struct {
 
 // serveUserUDP gives each client address its own stream (so one flow's loss
 // or backlog never stalls another) and closes flows after udpIdle.
-func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, logf func(string, ...any)) {
+func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port int, logf func(string, ...any)) {
 	var mu sync.Mutex
 	flows := map[string]*udpFlow{}
 	go func() {
@@ -214,7 +275,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, logf 
 		}
 		mu.Unlock()
 		if f == nil {
-			st, release, ok := openStream(ctx, lm, kindUDP)
+			st, release, ok := openStream(ctx, lm, true, port)
 			if !ok {
 				continue
 			}

@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -19,31 +20,60 @@ import (
 
 func TestPeerInfoWire(t *testing.T) {
 	for _, n := range []int{0, 2, 32, 48, 64, 1024, 65535} {
-		got, err := readInfo(bytes.NewReader(encodeInfo(n)))
-		if err != nil || got != n {
-			t.Fatalf("round trip %d: got %d, %v", n, got, err)
+		got, err := readInfo(bytes.NewReader(encodeInfo(peerInfo{MaxLinks: n})))
+		if err != nil || got.MaxLinks != n || !got.V2 {
+			t.Fatalf("round trip %d: got %+v, %v", n, got, err)
 		}
 	}
 	// Out-of-range values are clamped, never wrapped.
-	if got, _ := readInfo(bytes.NewReader(encodeInfo(70000))); got != 65535 {
-		t.Fatalf("70000 encoded as %d, want 65535 (clamped)", got)
+	if got, _ := readInfo(bytes.NewReader(encodeInfo(peerInfo{MaxLinks: 70000}))); got.MaxLinks != 65535 {
+		t.Fatalf("70000 encoded as %d, want 65535 (clamped)", got.MaxLinks)
 	}
-	if got, _ := readInfo(bytes.NewReader(encodeInfo(-5))); got != 0 {
-		t.Fatalf("-5 encoded as %d, want 0", got)
+	if got, _ := readInfo(bytes.NewReader(encodeInfo(peerInfo{MaxLinks: -5}))); got.MaxLinks != 0 {
+		t.Fatalf("-5 encoded as %d, want 0", got.MaxLinks)
 	}
-	// A later version appends fields: the ceiling is still read, the rest is
+	// v2: caps, flags and the port list survive the round trip.
+	in := peerInfo{MaxLinks: 48, Caps: capPortTags, Flags: flagUDP, Ports: []int{443, 2053, 8443}}
+	got, err := readInfo(bytes.NewReader(encodeInfo(in)))
+	if err != nil || got.MaxLinks != 48 || !got.tags() || got.Flags != flagUDP || fmt.Sprint(got.Ports) != "[443 2053 8443]" {
+		t.Fatalf("v2 round trip: got %+v, %v", got, err)
+	}
+	// A list longer than the message can hold is cut, and says so.
+	many := make([]int, 300)
+	for i := range many {
+		many[i] = 1000 + i
+	}
+	got, err = readInfo(bytes.NewReader(encodeInfo(peerInfo{Ports: many})))
+	if err != nil || len(got.Ports) != infoMaxPorts || got.Flags&flagCut == 0 {
+		t.Fatalf("long list: %d ports, flags %b, %v; want %d and the cut flag", len(got.Ports), got.Flags, err, infoMaxPorts)
+	}
+	// A v1 message (the previous release) carries only the ceiling: read, not v2.
+	if got, err := readInfo(bytes.NewReader([]byte{1, 2, 0, 48})); err != nil || got.MaxLinks != 48 || got.V2 || got.tags() {
+		t.Fatalf("v1 message: got %+v, %v; want 48, not v2", got, err)
+	}
+	// A v1 reader (the previous release) reads a v2 message's ceiling and skips
+	// the rest, leaving the stream exactly after the message.
+	v2msg := encodeInfo(in)
+	if v2msg[0] < 1 || int(v2msg[1]) != len(v2msg)-2 || int(v2msg[2])<<8|int(v2msg[3]) != 48 {
+		t.Fatalf("v2 message %v does not keep the v1 layout ([ver>=1][n][maxLinks u16]…)", v2msg)
+	}
+	// A later version appends fields: what this one knows is read, the rest is
 	// skipped, and the stream is left exactly after the message.
-	future := []byte{2, 5, 0, 48, 0xaa, 0xbb, 0xcc, 0x99}
+	future := []byte{3, 9, 0, 48, capPortTags, 0, 1, 0x01, 0xbb, 0xcc, 0xdd, 0x99}
 	r := bytes.NewReader(future)
-	if got, err := readInfo(r); err != nil || got != 48 {
-		t.Fatalf("future message: got %d, %v; want 48", got, err)
+	if got, err := readInfo(r); err != nil || got.MaxLinks != 48 || !got.tags() || fmt.Sprint(got.Ports) != "[443]" {
+		t.Fatalf("future message: got %+v, %v", got, err)
 	}
 	if r.Len() != 1 {
 		t.Fatalf("future message: %d byte(s) left, want 1 (exactly the message consumed)", r.Len())
 	}
+	// A count larger than the bytes present is cut to what is there.
+	if got, err := readInfo(bytes.NewReader([]byte{2, 7, 0, 1, 0, 0, 5, 0x20, 0xfb})); err != nil || fmt.Sprint(got.Ports) != "[8443]" || got.Flags&flagCut == 0 {
+		t.Fatalf("short list: got %+v, %v", got, err)
+	}
 	// A payload too short to hold the field means "not reported", not an error.
-	if got, err := readInfo(bytes.NewReader([]byte{1, 0})); err != nil || got != 0 {
-		t.Fatalf("empty payload: got %d, %v; want 0, nil", got, err)
+	if got, err := readInfo(bytes.NewReader([]byte{1, 0})); err != nil || got.MaxLinks != 0 || got.V2 {
+		t.Fatalf("empty payload: got %+v, %v; want zero, nil", got, err)
 	}
 	// Version 0 is not a peer-info message.
 	if _, err := readInfo(bytes.NewReader([]byte{0, 2, 0, 1})); err != errInfoVersion {
@@ -63,7 +93,7 @@ func TestPeerInfoExchange(t *testing.T) {
 		serveStream(ctx, st, KharejConfig{MaxLinks: 48}, nil, nil, nil, mtr)
 	}
 	p := newStatsPair(t, ctx, nil, exit)
-	openInfo(ctx, p.edge, 64)
+	openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags})
 	if got := p.edge.m.peerMax.Load(); got != 48 {
 		t.Fatalf("edge learned exit max %d, want 48", got)
 	}
@@ -112,7 +142,7 @@ func TestPeerInfoReverseExitReportsPoolMax(t *testing.T) {
 		serveStream(ctx, st, KharejConfig{MaxLinks: 99}, nil, nil, pool, mtr)
 	}
 	p := newStatsPair(t, ctx, nil, exit)
-	openInfo(ctx, p.edge, 64)
+	openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags})
 	if got := p.edge.m.peerMax.Load(); got != 40 {
 		t.Fatalf("edge learned %d, want the pool's applied max 40", got)
 	}
@@ -129,7 +159,7 @@ func TestPeerInfoOlderExit(t *testing.T) {
 	}
 	p := newStatsPair(t, ctx, nil, older)
 	t0 := time.Now()
-	openInfo(ctx, p.edge, 64)
+	openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags})
 	if d := time.Since(t0); d > 2*time.Second {
 		t.Fatalf("openInfo took %s against an older exit; it must give up at once", d)
 	}
@@ -155,7 +185,7 @@ func TestPeerInfoNoReplyIsBounded(t *testing.T) {
 	}
 	p := newStatsPair(t, ctx, nil, silent)
 	t0 := time.Now()
-	openInfo(ctx, p.edge, 64)
+	openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags})
 	el := time.Since(t0)
 	if el > time.Duration(infoTries)*infoTimeout+2*time.Second {
 		t.Fatalf("openInfo ran %s; must be bounded by tries × timeout", el)

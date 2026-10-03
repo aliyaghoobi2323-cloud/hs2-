@@ -58,6 +58,7 @@ func doctorCmd(args []string) {
 			checkTun(d, fc)
 			checkTuning(d, fc)
 			checkLinkPool(d, fc, *cfgPath)
+			checkPorts(d, fc, *cfgPath)
 		} else {
 			d.info("live checks", "skipped — the config does not parse as JSON (see the config error above)")
 		}

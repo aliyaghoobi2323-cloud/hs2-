@@ -122,6 +122,10 @@ class Pty:
             os.close(self.fd)
 
 
+# the kharej's per-port question (Enter = every user port to the default panel)
+PORTMAP_Q = r"Iran user ports with their OWN inbound here"
+
+
 def make_lib(sb):
     """install.sh as a library: without the trailing `main_menu` call and the
     top-level root check (the functions under test need neither)."""
@@ -191,7 +195,7 @@ def part1(sb, lib, kh_ip, ir_ip, mode):
     ok, why = run_branch(lib, sb, "kh_direct" + sfx, kh_ip, "DIRECTION=direct; PUBIP=%s" % kh_ip,
                          "ask_transport; kharej_listener",
                          menu + SUBNET + [(r"Tunnel port \(clients never see this\)", "2096"),
-                                 (r"Panel inbound address on this server", panel),
+                                 (r"Default panel inbound on this server", panel), (PORTMAP_Q, ""),
                                  (r"Domain \(its A record", "test.local"),
                                  (r"TUN interface name", ""), (r"TUN MTU", ""),
                                  (r"Also forward UDP", "n")])
@@ -230,7 +234,7 @@ def part1(sb, lib, kh_ip, ir_ip, mode):
         ok, why = run_branch(lib, sb, "kh_reverse" + sfx, kh_ip, "", "kharej_dialer",
                              [(r"Paste the hs2:// setup link", "LINK"),
                               (r"TUN interface name", ""),
-                              (r"Panel inbound address on this server", panel)])
+                              (r"Default panel inbound on this server", panel), (PORTMAP_Q, "")])
         res(tag + "installer: kharej reverse tun/tcp asks for the panel inbound", ok, why)
         if ok:
             c = cfg(sb, "kh_reverse" + sfx)
@@ -271,7 +275,7 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
     ok, why = run_branch(lib, sb, "kh_direct" + sfx, kh_ip, "DIRECTION=direct; PUBIP=%s" % kh_ip,
                          "ask_transport; kharej_listener",
                          menu + SUBNET + kport + [(r"TUN interface name", ""),
-                                         (r"Panel inbound address on this server", panel)])
+                                         (r"Default panel inbound on this server", panel), (PORTMAP_Q, "")])
     res(t + "installer: kharej direct asks only the panel (no port list%s)" % (", no tunnel port" if raw else ""), ok, why)
     if ok:
         c = cfg(sb, "kh_direct" + sfx)
@@ -304,7 +308,7 @@ def part1_dgtun(sb, lib, kh_ip, ir_ip, encap):
         ok, why = run_branch(lib, sb, "kh_reverse" + sfx, kh_ip, "", "kharej_dialer",
                              [(r"Paste the hs2:// setup link", "LINK"),
                               (r"TUN interface name", ""),
-                              (r"Panel inbound address on this server", panel)])
+                              (r"Default panel inbound on this server", panel), (PORTMAP_Q, "")])
         res(t + "installer: kharej reverse asks only the panel (no port list, no ipx number)", ok, why)
         if ok:
             c = cfg(sb, "kh_reverse" + sfx)

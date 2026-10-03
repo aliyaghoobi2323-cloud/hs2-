@@ -76,9 +76,14 @@ type fileConfig struct {
 	DrainIdleSec *int `json:"drain_idle_sec,omitempty"`
 
 	// port forwarding (Backhaul-style reverse path)
-	Expose       string `json:"expose"`        // kharej: real panel addr, e.g. 127.0.0.1:443
+	Expose       string `json:"expose"`        // kharej: the default panel addr, e.g. 127.0.0.1:443
 	ForwardPorts string `json:"forward_ports"` // iran: comma-sep user ports to open
 	PeerPanel    string `json:"peer_panel"`    // iran: panel addr as known to kharej (informational)
+	// PortMap (kharej): Iran user ports with their own target, comma-separated
+	// "P" (= 127.0.0.1:P) or "P=host:port"; a port not listed goes to expose
+	// (engine/routes.go). The Iran server only says the port number; the
+	// targets live here, so it can never make this server dial anything else.
+	PortMap string `json:"port_map,omitempty"`
 
 	// tls / reality carrier
 	SNI         string `json:"sni"`          // domain (dial)
@@ -233,6 +238,8 @@ func main() {
 		recommendLinksCmd(os.Args[2:])
 	case "config":
 		configCmd(os.Args[2:])
+	case "ports":
+		portsCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])
 	default:
@@ -453,7 +460,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	if links > 0 {
 		exitMax = links
 	}
-	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf, MaxLinks: exitMax,
+	routes, err := engine.ParsePortMap(fc.PortMap)
+	must(err)
+	cfg := engine.KharejConfig{Panel: fc.Expose, Routes: routes, Log: logf, MaxLinks: exitMax,
 		OnStart: func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) }}
 	if dev != nil {
 		cfg.TUN = dev
@@ -745,8 +754,30 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 	min, max, per := linkEnvelope(fc)
 	edge := fc.Mode == "dial" // iran = edge (users), kharej = exit (panel)
 
+	// User-port forwarder (Backhaul-style [ports]): the edge opens forward_ports
+	// and carries each one over the tun to the exit, saying which port it is
+	// when the exit routes by port; the exit hands each to its target (port_map,
+	// else expose). Started before the pool so the status writer has its
+	// report of the other server's routing table from the first tick.
+	pc := engine.DgPortsConfig{Edge: edge, UDP: fc.UDP, Log: logf}
+	if edge {
+		pc.Ports, pc.UserListenIP, pc.PeerTunIP = splitComma(fc.ForwardPorts), fc.UserListenIP, fc.PeerIP
+	} else {
+		routes, err := engine.ParsePortMap(fc.PortMap)
+		must(err)
+		pc.LocalTunIP, pc.Default, pc.Routes = ipOfCIDR(fc.LocalCIDR), fc.Expose, routes
+	}
+	peerRoutes, err := engine.StartDgPorts(ctx, pc)
+	must(err)
+
 	cfg := engine.DgConfig{Dev: dev, Min: min, Max: max, PerLink: per, Reverse: fc.Reverse, Log: logf,
-		OnStart: func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) }}
+		OnStart: func(s engine.StatsFn) {
+			startStatusWriter(ctx, fc, configPath, func() engine.PoolStats {
+				st := s()
+				st.Routes = peerRoutes()
+				return st
+			})
+		}}
 
 	// Who dials the carriers: direct = edge dials; reverse = exit dials.
 	if engineDialsTransport(fc) {
@@ -755,17 +786,6 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 		ln, err := engine.NewDgListener(fc.Addr, ec, shared, mtu)
 		must(err)
 		cfg.Listener = ln
-	}
-
-	// User-port forwarder (Backhaul-style [ports]): the edge opens forward_ports
-	// and sends them over the tun to the exit's single on-tun port; the exit hands
-	// what arrives there to the panel (expose). The ports live only on the edge.
-	if edge {
-		if ports := splitComma(fc.ForwardPorts); len(ports) > 0 {
-			must(engine.StartDgForwarders(ctx, true, ports, fc.UserListenIP, fc.PeerIP, "", "", fc.UDP, logf))
-		}
-	} else if fc.Expose != "" {
-		must(engine.StartDgForwarders(ctx, false, nil, "", "", ipOfCIDR(fc.LocalCIDR), fc.Expose, fc.UDP, logf))
 	}
 
 	if edge {

@@ -203,6 +203,7 @@ func (p *exitPool) stats() PoolStats {
 	defer p.mu.Unlock()
 	st := PoolStats{Links: p.live, Target: p.want, Min: p.min, Max: p.max, Phase: "following"}
 	st.PeerMax = p.peers.max() // reported by the links up NOW (never a gone link's value)
+	st.Routes = p.peers.edgeRoutes()
 	return st
 }
 

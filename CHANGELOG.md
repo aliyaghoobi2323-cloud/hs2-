@@ -559,6 +559,163 @@ mixed versions working). One display point was fixed:
   (several tunnels side by side on two namespace "servers", upgrade,
   backup/restore, delete, uninstall).
 
+## Phase I — each Iran user port to its own panel inbound (per-port targets)
+
+The Iran server could open several user ports (`forward_ports: "8443,2053"`),
+but the Kharej server delivered every connection to its ONE panel address
+(`expose`): a panel with one inbound per port could only be served by one
+tunnel per port. There was also no menu to add or remove a user port after
+setup, and neither setup question said how several ports are handled.
+
+### I1 — the routing table lives on the Kharej server
+- New Kharej key **`port_map`**: comma-separated `P` (= `127.0.0.1:P`, the same
+  port on the Kharej server — the default) or `P=host:port`. A user port with
+  an entry goes there; every other port goes to **`expose`** (the default
+  panel); with no `expose`, a port without an entry is **refused**, and the
+  Kharej server logs which port (once a minute per port) and shows it in
+  `hs2 status` / `hs2 doctor`.
+- On every user connection the Iran server says only **which of its user
+  ports** the user came in on — a number, never an address — so a compromised
+  Iran server can reach only what the Kharej operator listed (never
+  `127.0.0.1:22`, a database or the panel's admin port).
+- A config without `port_map` behaves exactly as before.
+
+### I2 — on the wire, with every older/newer combination working
+- **Who decides:** once the Iran server knows the Kharej server routes by
+  port, it says the port on every TCP connection and stream (the Kharej server
+  then decides with the table it has *now* — a port mapped there a moment ago
+  included); the cost is 2–3 bytes once per connection. Only the datagram tun's
+  UDP, where the bytes would ride on every datagram, is tagged just when the
+  Kharej server has a table at all (a `port_map`, or no default): a Kharej
+  server without one gets those datagrams byte for byte as before.
+- **Stream tunnels (mtcp, l3mtcp, tls):** two new stream kinds,
+  `kindTCPPort`/`kindUDPPort` = `[kind][port u16]`. The per-link `kindInfo`
+  exchange (Phase H) is now **v2** — `maxLinks, caps, flags, count, ports…` —
+  so each side learns whether the other routes by port, which ports the Iran
+  server opens (and whether it forwards UDP) and which ports the Kharej server
+  has its own target for (and whether it has a default). A v1 reader takes the
+  first two bytes as always. A new link takes user connections once its first
+  exchange attempt is over (one round trip): answered → that answer decides;
+  closed by an older exit → never tagged; no answer in time (5 s) → the link
+  goes by what the pool's other links learned from the exit while it keeps
+  asking (after its three quick tries, once a minute) — a slow answer never
+  leaves a link without one for its whole life. What the pool learned is
+  forgotten when no link is left (the exit may have restarted).
+- **Datagram tun (dgtun, every encap):** untagged traffic stays on tun port
+  28443 → the default panel, exactly as before. Tagged traffic goes to the new
+  tun port **28444**: such a TCP connection and each such UDP datagram start
+  with `[1][port u16]`. The edge **probes** 28444 (port 0 = probe; the same v2
+  info message both ways) at start, every 15 s, faster while unsure — also with
+  no user port, so the Kharej server learns that too. Refused (an older exit)
+  or answered by something that is not an hs2 exit → untagged; silent while
+  28443 answers, asked twice, and again on the next probe → *filtered* (a
+  firewall on the Kharej server's tun) → untagged, and both servers say so (a
+  single silence after a good answer is taken for a tun flap); an answer that
+  is only late changes nothing. Until the first probe answers nothing is
+  tagged: a connection waits for it while the tun is not up yet (an untagged
+  dial would wait just the same; at most 10 s), but goes untagged at once when
+  the tun answers without a verdict. A refused tagged TCP connection falls back
+  to 28443 *before any user byte is sent*; a UDP flow is redone the right way
+  when what is known changes, and a refused UDP flow only asks the probe (it
+  never turns per-port routing off for the whole edge). The exit now always offers UDP on
+  both tun ports, so turning UDP on needs only the Iran server (an older Kharej
+  build still needs `"udp": true`). Tagged UDP flows are keyed by the edge's
+  source address and replaced, not dropped, when that address is reused for
+  another port; targets are resolved once, not per flow.
+- **Compatibility, all verified live:** newer Iran + older Kharej → every port
+  reaches its one panel (the Iran side's `hs2 status` says the Kharej server
+  runs an older hs2); older Iran + newer Kharej → it does not say the port, so
+  every connection reaches the default panel (the Kharej side says so if it
+  persists with links up). Direct and reverse alike.
+- The throughput / FEC / drop path (udpcarrier, FEC, the datagram pool) is
+  **untouched**: dgtun per-port routing lives entirely in the userspace
+  forwarder on top of the tun.
+
+### I3 — where each port goes, shown and edited on both servers
+- **`hs2 status`** prints a `ports:` table on either server. Iran: each user
+  port → its own target on the Kharej server / the Kharej server's default
+  panel / **NO target (refused)** with the fix; Kharej: each port the Iran
+  server opens → its target, ports with a target that Iran does not open, and
+  the default. Unknown is said plainly (tunnel not running, no link yet, or an
+  older hs2 on the other side).
+- **`hs2 doctor`**: WARN for an Iran user port the Kharej server has no target
+  for, for a filtered dgtun tag port, and (on the Kharej server) for a local
+  target nothing listens on — TCP listeners and bound UDP sockets (a UDP-only
+  inbound counts), read from `/proc/net/{tcp,tcp6,udp,udp6}`; no connection is
+  made.
+- **`hs2 ports -c cfg [add P[=host:port] | remove P | default host:port|none |
+  udp on|off]`**: the table, and this server's half to edit (Iran: user ports
+  and UDP; Kharej: own targets and the default; one port per change, and a
+  hand-broken `port_map` is never rewritten). Every change is validated like
+  `hs2 check` and written atomically. `hs2 config set` also accepts
+  `forward_ports`, `port_map`, `expose` and `udp` (normalized).
+- **`hs2 check`** validates `port_map` (port, target, duplicates), accepts a
+  Kharej server with `port_map` and no `expose` (mtcp/tls still need one of
+  the two), warns that `port_map` does nothing on the Iran server or on an IP
+  tunnel, and (dgtun) that a target on 28443/28444 would fight the forwarder.
+
+### I4 — installer
+- **Kharej setup** says the Iran server opens the ports and this server decides
+  where each goes, asks the **default panel**, then *"Iran user ports with
+  their OWN inbound here"* (`2053,2083` = the same port on 127.0.0.1;
+  `2053=127.0.0.1:2096` for another; Enter = none). A bad entry — including a
+  target the binary would refuse, such as `:80` or an unbracketed IPv6 — is
+  re-asked at the prompt, never at the end of setup; skipped with a note when
+  the installed binary predates it.
+- **Iran setup** says, before the user-port question, that each port reaches
+  the Kharej server's target for it (its default panel unless it has its own).
+- **Tunnel manager → `p) Ports`** on both servers: the live table, then
+  Iran — add / remove user ports (checked free on TCP — and UDP when it is on —
+  and never the tunnel's own listen port), UDP on/off; Kharej — own targets
+  (Enter = the same port on 127.0.0.1, several at once), remove, default panel
+  (or none; Enter keeps it without a restart). Each change is applied with the
+  usual restart and automatic rollback, and followed by **what — if anything —
+  has to change on the other server**. Several ports at once are all-or-nothing:
+  one refused entry undoes the others, and says so; a change is not made when
+  the backup it would roll back to cannot be written. An older binary or an IP-tunnel
+  transport is refused with the reason. The tunnel's details show its own
+  targets, and the setup summary points at the screen.
+
+### Review fixes (independent adversarial review, all confirmed and fixed)
+- dgtun: one refused UDP flow (Iran UDP on, Kharej UDP off — exactly what the
+  Ports screen allowed) flipped per-port routing off for the whole edge, over
+  and over: TCP on mapped ports went to the default panel and the log flooded.
+  A UDP error now only asks the probe, and the exit always offers UDP.
+- stream: a link whose info exchange timed out was used untagged for its
+  whole life (in `tls` mode, every connection). It now goes by what the pool's
+  other links learned, and keeps asking.
+- dgtun: a late probe answer was taken for an older exit; now it changes
+  nothing. A tag port that is filtered no longer leaves connections waiting:
+  nothing is tagged until a probe answers, and filtered is detected and named.
+- dgtun UDP datagrams carry the tag only when the Kharej server has a table,
+  so an existing config sends them identically (no 3-byte header on datagrams
+  near the tun MTU). A second review pass then found that the Iran side could
+  keep an old copy of the Kharej server's table after a Kharej-side Ports
+  change; now TCP connections and streams always say their port and the Kharej
+  server decides with its current table. Also from that pass: a connection
+  made before the tun is up waits for it instead of going to the default
+  panel; a tun flap is not taken for a filter; "filtered" never outlives a
+  later refusal; a silent tagged port pokes the probe at once; the UDP
+  forwarder on 28443 checks its target resolves before it binds; the installer
+  loops are safe under `set -u` on bash older than 4.4.
+- dgtun exit: a reused source address no longer drops a new flow; targets are
+  resolved once. Status: an Iran server with no user ports, a filtered tag
+  port and a slow answer are each said as what they are (not "older hs2");
+  the refusal log is per port AND protocol. Doctor counts UDP inbounds and
+  `localhost` on `::1`. `hs2 ports` refuses a list in one change and never
+  rewrites a broken `port_map`. Installer: all-or-nothing multi-port changes
+  with a message, no glob expansion of entries, targets validated like the
+  binary.
+
+### Test maintenance
+- `tm_edit_test.sh` was intermittently red (about 1 run in 5): the edit-dir
+  sweep compared two whole-second clocks, so a directory made within a second
+  of its owner's start could look older than it and be swept. The sweep now
+  allows 2 s before calling a PID reused (a real reuse is hours apart).
+- The pty tests (`tun_ports_test.py`, `multi_tunnel_test.py`) answer the new
+  Kharej questions; the multi-tunnel pty also answers optional prompts that
+  come after the last listed step.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

@@ -37,8 +37,7 @@ func freePort(t *testing.T) string {
 
 // echoPanel echoes TCP and UDP on the same address.
 func echoPanel(t *testing.T) string {
-	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	pc, _ := net.ListenPacket("udp", ln.Addr().String())
+	ln, pc := tcpUDPPair(t)
 	t.Cleanup(func() { ln.Close(); pc.Close() })
 	go func() {
 		for {
@@ -60,6 +59,26 @@ func echoPanel(t *testing.T) string {
 		}
 	}()
 	return ln.Addr().String()
+}
+
+// tcpUDPPair listens on TCP and UDP on the same free loopback port. The TCP
+// port is picked by the kernel; the UDP port with that number can be taken by
+// another test's socket, so it retries on another port instead of failing.
+func tcpUDPPair(t *testing.T) (net.Listener, net.PacketConn) {
+	t.Helper()
+	for i := 0; i < 50; i++ {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pc, err := net.ListenPacket("udp", ln.Addr().String())
+		if err == nil {
+			return ln, pc
+		}
+		ln.Close()
+	}
+	t.Fatal("no loopback port free for both TCP and UDP")
+	return nil, nil
 }
 
 type tunnel struct {

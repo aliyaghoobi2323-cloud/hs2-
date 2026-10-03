@@ -35,7 +35,7 @@ func TestLiveStatusRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatal(err)
 	}
-	if got != ls {
+	if !reflect.DeepEqual(got, ls) {
 		t.Fatalf("round-trip mismatch: %+v vs %+v", got, ls)
 	}
 	line := patternLine(ls)

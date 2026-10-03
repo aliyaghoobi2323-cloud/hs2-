@@ -152,7 +152,10 @@ for _st in "$CFG_DIR"/.hs2-edit.*; do
          _age=$(ps -o etimes= -p "$_sp" 2>/dev/null) || _age=""; _age=${_age//[[:space:]]/}
          _mt=$(stat -c %Y "$_st" 2>/dev/null) || _mt=""
          case "$_age$_mt" in ''|*[!0-9]*) continue ;; esac
-         [ $(( $(date +%s) - _age )) -gt "$_mt" ] || continue
+         # Both clocks are whole seconds (etimes rounds down, mtime too), so
+         # a directory made within a second or so of its owner's start could
+         # look older than it: allow 2 s before calling the PID reused.
+         [ $(( $(date +%s) - _age )) -gt $(( _mt + 2 )) ] || continue
        fi ;;
   esac
   rm -rf -- "$_st"
@@ -1520,6 +1523,77 @@ ask_panel(){ # prompt
   done
 }
 
+# bin_has_ports: the installed hs2 binary routes Iran user ports per port
+# (`hs2 ports`, port_map). An older one prints "unknown command" for it.
+bin_has_ports(){
+  local out
+  out=$("$BIN" ports 2>&1) || true
+  case "$out" in *"unknown command"*|"") return 1 ;; esac
+  return 0
+}
+
+# valid_target HP — a port_map target exactly as the binary accepts it: a
+# non-empty host (a bare name/IPv4, or a [bracketed] IPv6) and a numeric port,
+# plus valid_hostport's JSON/link-safe characters — so setup never dies at the
+# very end on a target `hs2 check` would refuse.
+valid_target(){ # host:port
+  local hp="${1:-}" host
+  valid_hostport "$hp" || return 1
+  host=${hp%:*}
+  case "$host" in
+    '') return 1 ;;
+    \[*\]) [ -n "${host:1:${#host}-2}" ] ;;
+    *:*|*\[*|*\]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+# ask_kharej_targets: where the Iran server's user ports go on this kharej
+# server. Sets PANEL (the default panel, expose: every port without its own
+# target goes there) and PMJ (the port_map JSON fragment, "" for none).
+ask_kharej_targets(){
+  echo >&2
+  info "The Iran server opens the user ports; THIS server decides where each one goes:"
+  info "a port with its own target goes there, every other port goes to the default panel."
+  ask_panel "Default panel inbound on this server (every Iran user port without its own target) [127.0.0.1:8443]: "
+  ask_port_map
+}
+
+# ask_port_map sets PMJ: the JSON fragment ', "port_map": "…"' for the Iran
+# user ports that get their OWN target here, or "" when every port goes to the
+# default panel. Entries: "2053" (= 127.0.0.1:2053, the same port here) or
+# "2053=host:port". Skipped, with a note, when the installed hs2 predates it.
+ask_port_map(){
+  local pm e p tgt out bad ents
+  PMJ=""
+  if ! bin_has_ports; then
+    info "Per-port targets need a newer hs2 binary (menu → Upgrade): every Iran user port goes to $PANEL for now."
+    return 0
+  fi
+  while :; do
+    read -rp "Iran user ports with their OWN inbound here (e.g. 2053,2083 — each to the same port on 127.0.0.1; 2053=127.0.0.1:2096 for another; Enter = none): " pm </dev/tty || pm=""
+    pm=${pm// /}
+    out=""; bad=""
+    IFS=, read -ra ents <<< "$pm"
+    for e in ${ents[@]+"${ents[@]}"}; do   # (an empty array is "unbound" to bash < 4.4 under set -u)
+      [ -n "$e" ] || continue
+      p=${e%%=*}
+      valid_uint "$p" 1 65535 || { bad="'$p' is not a port (1-65535)"; break; }
+      if [ "$e" != "$p" ]; then
+        tgt=${e#*=}
+        valid_target "$tgt" || { bad="'$tgt' is not host:port (e.g. 127.0.0.1:2096)"; break; }
+      fi
+      case ",$out," in *",$p,"*|*",$p="*) bad="port $p is listed twice"; break ;; esac
+      out="${out:+$out,}$e"
+    done
+    [ -n "$out$bad" ] || { info "Every Iran user port goes to $PANEL (add per-port targets any time: Tunnel manager → Ports)."; return 0; }
+    [ -z "$bad" ] && break
+    warn "$bad — try again."
+  done
+  PMJ=", \"port_map\": \"$out\""
+  info "Own targets: $out (a bare port = the same port on 127.0.0.1). Every other Iran user port → $PANEL."
+}
+
 # ask_ipx_proto sets TUN_PROTO: the raw IP protocol number the ipx encapsulation
 # rides on. It must be the SAME number on both servers. 253 is the default
 # (experimental range); 1/4/6/17/47 are taken by ICMP/IPIP/TCP/UDP/GRE. The
@@ -1746,11 +1820,11 @@ kharej_listener(){
   # public cover page can never leak anything about the secret. Only the builtin
   # cover uses it; a custom backend_addr ignores it. See hs2-src/cmd/hs2/cover.go.
   local COVER_SEED; COVER_SEED=$(openssl rand -hex 16)
-  local PANEL="-" LMTU=""
+  local PANEL="-" LMTU="" PMJ=""
   mkdir -p "$(dirname "$CFG")"
 
   if [ "$TRANSPORT" = "tcp" ]; then
-    ask_panel "Panel inbound address on this server [127.0.0.1:8443]: "
+    ask_kharej_targets
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
     ask_domain "Domain (its A record must point to $PUBIP): "
     echo >&2
@@ -1770,7 +1844,7 @@ kharej_listener(){
   "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
-  "expose": "$PANEL"
+  "expose": "$PANEL"${PMJ}
 }
 EOF
   elif [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
@@ -1780,7 +1854,7 @@ EOF
     # the iran edge opens the user ports and every connection rides a stream to
     # the panel set here (expose).
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
-    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
+    ask_kharej_targets
     ask_domain "Domain (its A record must point to $PUBIP): "
     ask_tun_params; ask_tun_mtu; LMTU="$TUNMTU"; tun_tls_carrier
     read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
@@ -1796,7 +1870,7 @@ EOF
   "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
-  "expose": "$PANEL"
+  "expose": "$PANEL"${PMJ}
 }
 EOF
   elif [ "$TRANSPORT" = "tun" ]; then
@@ -1807,7 +1881,7 @@ EOF
     # themselves are asked once, on iran; the ipx number travels in the link.
     [ "$TUN_ENCAP" != "udp" ] || udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     ask_tun_params
-    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
+    ask_kharej_targets
     LMTU=1280; CARRIER=dgtun; DOMAIN="-"; UDP=false
     info "Tunnel MTU is fixed at 1280 here — it leaves room for the datagram path's obfuscation and FEC overhead and is the same on both ends automatically (tun-over-TCP asks for an MTU; the datagram carriers do not)."
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$TUN_ENCAP")
@@ -1817,7 +1891,7 @@ EOF
   "addr": "$BINDADDR$PSUF",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED",${PROTOLINE}
-  "expose": "$PANEL",
+  "expose": "$PANEL"${PMJ},
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
 }
 EOF
@@ -1842,10 +1916,10 @@ EOF
   show_link "$PUBIP$PSUF" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "direct" "$LMTU" "$ENCAP_ARG" "$PROTO_ARG"
   if [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
     info "L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (MTU $LMTU)."
-    info "Panel $PANEL receives the user ports you open on the iran side (asked there)."
+    info "The user ports are opened on the iran side (asked there); here they reach $PANEL$([ -n "$PMJ" ] && echo ", or their own target")."
   elif [ "$TRANSPORT" = "tun" ]; then
     info "Datagram L3 tunnel on $TUNIF once up: this kharej = $TUN_IP_KHAREJ, iran = $TUN_IP_IRAN (encap $TUN_ENCAP)."
-    info "Panel $PANEL receives the user ports you open on the iran side (asked there)."
+    info "The user ports are opened on the iran side (asked there); here they reach $PANEL$([ -n "$PMJ" ] && echo ", or their own target")."
   fi
   info "On the Iran server: bash install.sh → 2 (Iran) → direction 'direct' → paste the link."
   info "It runs there as service $UNIT too (the name is in the link)."
@@ -1856,6 +1930,7 @@ EOF
 # kharej_dialer: reverse exit. Kharej DIALS the iran edge; it pastes the link
 # iran generated (which carries iran's endpoint) and forwards to the panel.
 kharej_dialer(){
+  local PMJ=""
   VERIFY_PEER=1   # the iran edge is already waiting: start_service proves the tunnel
   parse_link
   [ "$DIRECTION" = "reverse" ] || die "this link is a DIRECT link; for reverse, generate the link on the IRAN side first."
@@ -1864,14 +1939,14 @@ kharej_dialer(){
   ok "Link OK — will dial the iran edge at $ENDPOINT (transport $TRANSPORT)."
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
-    ask_panel "Panel inbound address on this server [127.0.0.1:8443]: "
+    ask_kharej_targets
     write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "shared_key": "$SHARED",
-  "expose": "$PANEL",
+  "expose": "$PANEL"${PMJ},
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
   "bind_local_ip": "$EGRESSIP"
 }
@@ -1886,14 +1961,14 @@ EOF
     [ -n "$MTU" ] || die "this link has no MTU field — regenerate it on the iran edge with the new installer."
     tun_tls_carrier   # the link says mtcp pool (l3mtcp) or one TLS link (tls)
     ask_tun_params
-    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
+    ask_kharej_targets
     write_cfg_checked <<EOF
 {
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT", "sni": "$DOMAIN",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $MTU,
   "shared_key": "$SHARED",
-  "expose": "$PANEL",
+  "expose": "$PANEL"${PMJ},
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
   "bind_local_ip": "$EGRESSIP"
 }
@@ -1910,7 +1985,7 @@ EOF
     # ipx number comes with the link — neither is asked again here.
     [ "$ENCAP" = ipx ] && ipx_proto_from_link
     ask_tun_params
-    ask_panel "Panel inbound address on this server (iran's user ports are forwarded here) [127.0.0.1:8443]: "
+    ask_kharej_targets
     local PROTOLINE; PROTOLINE=$(dgtun_proto_line "$ENCAP")
     write_cfg_checked <<EOF
 {
@@ -1918,7 +1993,7 @@ EOF
   "addr": "$ENDPOINT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED",${PROTOLINE}
-  "expose": "$PANEL",
+  "expose": "$PANEL"${PMJ},
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
   "bind_local_ip": "$EGRESSIP"
 }
@@ -1980,7 +2055,8 @@ iran_dialer(){
   mkdir -p "$(dirname "$CFG")"
   if [ "$TRANSPORT" = "tcp" ]; then
     ask_user_ip
-    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
+    info "Users connect to these ports on this server. Each one is carried to the Kharej server, which sends it to its own target for that port if it has one (Tunnel manager → Ports there), else to its default panel."
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,2053): " PORTS </dev/tty
     [ -n "$PORTS" ] || die "at least one port is required"
     for p in ${PORTS//,/ }; do
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
@@ -2009,7 +2085,8 @@ EOF
     tun_tls_carrier   # the link says mtcp pool (l3mtcp) or one TLS link (tls)
     ask_tun_params
     ask_user_ip
-    read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    info "Users connect to these ports on this server. Each one is carried to the Kharej server, which sends it to its own target for that port if it has one (Tunnel manager → Ports there), else to its default panel."
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,2053; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
@@ -2029,7 +2106,7 @@ EOF
     echo >&2; hr
     dialer_done "IRAN ready (direct, tun over TLS: $(tun_tls_label))."
     info "L3 tunnel on $TUNIF once up: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ (MTU $MTU)."
-    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — each reaches the Kharej server's target for it (its default panel unless it has its own; Tunnel manager → Ports)."
     else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward $TUN_IP_KHAREJ yourself."; fi
   elif [ "$TRANSPORT" = "tun" ]; then
     # Datagram tun (carrier "dgtun", encap $ENCAP from the link): iran is the
@@ -2039,7 +2116,8 @@ EOF
     [ "$ENCAP" = ipx ] && ipx_proto_from_link
     ask_tun_params
     ask_user_ip
-    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    info "Users connect to these ports on this server. Each one is carried to the Kharej server, which sends it to its own target for that port if it has one (Tunnel manager → Ports there), else to its default panel."
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,2053; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
@@ -2059,7 +2137,7 @@ EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     echo >&2; hr
     dialer_done "IRAN ready (direct, tun / datagram pool over $ENCAP)."
-    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — each reaches the Kharej server's target for it (its default panel unless it has its own; Tunnel manager → Ports)."
     else info "Pure routed L3 tunnel on $TUNIF: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ. Route traffic toward $TUN_IP_KHAREJ."; fi
   else
     # udp/auto is a TUN IP tunnel on $TUNIF (not a port forwarder); no user ports.
@@ -2100,7 +2178,8 @@ iran_listener(){
   if [ "$TRANSPORT" = "tcp" ]; then
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
     ask_user_ip
-    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443): " PORTS </dev/tty
+    info "Users connect to these ports on this server. Each one is carried to the Kharej server, which sends it to its own target for that port if it has one (Tunnel manager → Ports there), else to its default panel."
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,2053): " PORTS </dev/tty
     [ -n "$PORTS" ] || die "at least one port is required"
     for p in ${PORTS//,/ }; do
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
@@ -2140,7 +2219,8 @@ EOF
     # opened here ride streams to the kharej panel, exactly like reverse tcp.
     port_free "$TPORT" || die "TCP port $TPORT is already in use — pick another."
     ask_user_ip
-    read -rp "User port(s) to open here, forwarded to the kharej panel, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    info "Users connect to these ports on this server. Each one is carried to the Kharej server, which sends it to its own target for that port if it has one (Tunnel manager → Ports there), else to its default panel."
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,2053; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
@@ -2171,7 +2251,7 @@ EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN side is running (reverse, tun over TLS: $(tun_tls_label)) and waits for the Kharej server to dial in."
     info "L3 tunnel on $TUNIF once up: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ (MTU $LMTU)."
-    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — the Kharej server decides where each goes (its default panel unless a port has its own target; asked there)."
     else warn "No user ports: pure routed tun. Users can NOT reach the panel through this server unless you route traffic toward $TUN_IP_KHAREJ yourself."; fi
   elif [ "$TRANSPORT" = "tun" ]; then
     # Reverse datagram tun (carrier "dgtun", encap $TUN_ENCAP): iran LISTENS
@@ -2180,7 +2260,8 @@ EOF
     [ "$TUN_ENCAP" != "udp" ] || udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
     ask_tun_params
     ask_user_ip
-    read -rp "User port(s) to open here, comma-separated (e.g. 8443,443; Enter = none, pure routed tun): " PORTS </dev/tty
+    info "Users connect to these ports on this server. Each one is carried to the Kharej server, which sends it to its own target for that port if it has one (Tunnel manager → Ports there), else to its default panel."
+    read -rp "User port(s) to open here, comma-separated (e.g. 8443,2053; Enter = none, pure routed tun): " PORTS </dev/tty
     for p in ${PORTS//,/ }; do
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       [ "$p" != "$TPORT" ] || die "user port $p is the tunnel port — pick another."
@@ -2201,7 +2282,7 @@ EOF
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
     ok "IRAN side is running (reverse, tun / datagram pool over $TUN_ENCAP) and waits for the Kharej server to dial in."
-    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — forwarded to the kharej panel (asked on the kharej)."
+    if [ -n "$PORTS" ]; then info "Users connect on port(s): $PORTS — the Kharej server decides where each goes (its default panel unless a port has its own target; asked there)."
     else info "Pure routed L3 tunnel on $TUNIF: this iran = $TUN_IP_IRAN, kharej = $TUN_IP_KHAREJ."; fi
   else
     udp_port_free "$TPORT" || die "UDP port $TPORT is already in use — pick another."
@@ -2241,6 +2322,7 @@ tunnel_summary(){
   say " Config:   $CFG"
   if [ "$car" != mtcp ] && [ -n "$ifc" ]; then say " Tun:      $ifc  ${lc%/*} ↔ $peer"; fi
   say " Manage:   hs2-menu → 3) Tunnel manager → $UNIT"
+  case "$car" in mtcp|l3mtcp|l3|tls|dgtun) say " Ports:    hs2-menu → 3) Tunnel manager → $UNIT → p) Ports  (user ports and where each one goes)" ;; esac
   hr
 }
 
@@ -2627,8 +2709,13 @@ tm_details(){
     if [ "$(jget "$cfg" carrier)" != mtcp ] && [ -n "$(jget "$cfg" iface)" ]; then
       say " Tun:         $(jget "$cfg" iface)  $(jget "$cfg" local_cidr | sed 's#/.*##') ↔ $(jget "$cfg" peer_ip)"
     fi
-    [ -n "$(jget "$cfg" forward_ports)" ] && say " User ports:  $(jget "$cfg" forward_ports)  (users connect here)"
-    [ -n "$(jget "$cfg" expose)" ] && say " Panel:       $(jget "$cfg" expose)"
+    [ -n "$(jget "$cfg" forward_ports)" ] && say " User ports:  $(jget "$cfg" forward_ports)  (users connect here · p) Ports shows where each goes)"
+    if [ -n "$(jget "$cfg" port_map)" ]; then
+      say " Panel:       $(jget "$cfg" expose)$([ -n "$(jget "$cfg" expose)" ] && echo "  (default)" || echo "none (no default: a port without its own target is refused)")"
+      say " Own targets: $(jget "$cfg" port_map)  (port=target · a bare port = 127.0.0.1:port)"
+    elif [ -n "$(jget "$cfg" expose)" ]; then
+      say " Panel:       $(jget "$cfg" expose)"
+    fi
   fi
   if [ "$st" = running ]; then
     local pat sf
@@ -3159,6 +3246,195 @@ tm_tune_links(){ # unit cfg
   tm_apply_restart "$u" "$cfg"
 }
 
+# tm_has_ports CFG: the tunnel's transport forwards user ports to a panel (tcp,
+# and tun over TLS or datagrams); udp/auto/noise/reality are IP tunnels only.
+tm_has_ports(){ case "$(jget "$1" carrier)" in mtcp|l3mtcp|l3|tls|dgtun) return 0 ;; esac; return 1; }
+
+# tm_ports_set CFG ARGS…: one `hs2 ports` change (validated by the binary,
+# written atomically). On a refusal it says why and returns 1.
+tm_ports_set(){ # cfg args...
+  local cfg="$1" out; shift
+  out=$("$BIN" ports -c "$cfg" "$@" 2>&1) || { err "${out#ERROR: }"; return 1; }
+  ok "${out% — restart the tunnel to apply it}"
+  return 0
+}
+
+# tm_ports is the Ports screen: the user ports and where each one goes, as the
+# running tunnel knows it (both servers' halves — the binary renders it, the
+# same lines `hs2 status` prints), and this server's half to edit. The Iran
+# server OPENS the user ports (and switches UDP on them); the kharej server
+# DECIDES where each one goes: a port with its own target (port_map) goes
+# there, every other one to the default panel (expose). Every change is
+# validated by the binary, then applied with the usual restart + rollback, and
+# followed by what — if anything — has to change on the OTHER server.
+# tm_ports_backup CFG: keep the config as .prev before a Ports change (what
+# the rollback restores). If it cannot be written, the change is not made — an
+# older .prev must never be restored over a newer config.
+tm_ports_backup(){ # cfg
+  # (a .prev that is not a plain file would take the copy INSIDE it)
+  if { [ ! -e "$1.prev" ] || [ -f "$1.prev" ]; } && cp -p "$1" "$1.prev" 2>/dev/null; then return 0; fi
+  err "Cannot save a backup of $1 (as $1.prev) — nothing changed."
+  return 1
+}
+
+# tm_ports_undo CFG DONE: one entry of a multi-port change was refused: put the
+# config back as it was, and say so (DONE are the entries already applied).
+tm_ports_undo(){ # cfg done
+  if [ -n "$2" ]; then
+    if [ -f "$1.prev" ] && cat "$1.prev" > "$1"; then
+      warn "Nothing was changed: $2 was undone too (restored the previous config) — fix the refused entry and try again."
+    else
+      err "Could not restore $1 from $1.prev: $2 stays saved (not applied until the tunnel restarts)."
+    fi
+  else
+    warn "Nothing was changed."
+  fi
+}
+
+tm_ports(){ # unit cfg
+  local u="$1" cfg="$2" c v p e ps tport added changed udp list
+  if ! tm_has_ports "$cfg"; then
+    say "  ${C_Y}This tunnel's transport ($(tm_transport "$cfg")) is an IP tunnel: it has no user ports.${C_0}"
+    pause; return 0
+  fi
+  if ! bin_has_ports; then
+    warn "This hs2 binary predates per-port routing. Upgrade it first (u) in this tunnel's menu) — on BOTH servers to give ports their own targets."
+    pause; return 0
+  fi
+  while :; do
+    echo >&2; hr; say " ${C_B}Ports${C_0} — $u  ($(tm_role "$cfg") · $(tm_dir "$cfg"))"; hr
+    "$BIN" ports -c "$cfg" 2>&1 | sed 's/^/  /' >&2 || true
+    hr
+    if cfg_is_dial "$cfg"; then
+      udp=$(jraw "$cfg" udp)
+      say "  This Iran server OPENS the user ports; the Kharej server decides where each one goes."
+      say "  1) Add user port(s)"
+      say "  2) Remove user port(s)"
+      if [ "$udp" = true ]; then say "  3) UDP on the user ports: ON → turn it off"; else say "  3) UDP on the user ports: OFF → turn it on"; fi
+      say "  0) Back"
+      read -rp "Choose: " c </dev/tty || return 0
+      case "$c" in
+        1) read -rp "  Port(s) to open, comma-separated (e.g. 2053,2083): " ps </dev/tty || ps=""
+           ps=${ps// /}; IFS=, read -ra list <<< "$ps"; [ ${#list[@]} -gt 0 ] || continue
+           tport=""; cfg_is_reverse "$cfg" && tport=$(jget "$cfg" addr) && tport=${tport##*:}
+           for p in ${list[@]+"${list[@]}"}; do
+             [ -n "$p" ] || continue
+             valid_uint "$p" 1 65535 || { warn "'$p' is not a port (1-65535)."; continue 2; }
+             [ "$p" != "$tport" ] || { warn "$p is this tunnel's own port (the Kharej server dials it) — pick another."; continue 2; }
+             port_free "$p" || { warn "TCP port $p is already in use on this server (Backhaul, a panel, another tunnel?) — pick another."; continue 2; }
+             if [ "$udp" = true ]; then udp_port_free "$p" || { warn "UDP port $p is already in use on this server — pick another."; continue 2; }; fi
+           done
+           tm_ports_backup "$cfg" || continue
+           added=""
+           for p in ${list[@]+"${list[@]}"}; do
+             [ -n "$p" ] || continue
+             if tm_ports_set "$cfg" add "$p"; then added="${added:+$added,}$p"
+             else tm_ports_undo "$cfg" "$added"; added=""; break; fi
+           done
+           [ -n "$added" ] || continue
+           tm_apply_restart "$u" "$cfg"
+           say ""
+           say "  ${C_B}On the Kharej server:${C_0} nothing to do if $added should reach its default panel."
+           say "  To give a port its OWN inbound there: Kharej → hs2-menu → 3) Tunnel manager → $u"
+           say "  → p) Ports → 1) and enter the port (Enter = the same port on 127.0.0.1)."
+           pause ;;
+        2) read -rp "  Port(s) to close, comma-separated: " ps </dev/tty || ps=""
+           ps=${ps// /}; IFS=, read -ra list <<< "$ps"; [ ${#list[@]} -gt 0 ] || continue
+           tm_ports_backup "$cfg" || continue
+           changed=""
+           for p in ${list[@]+"${list[@]}"}; do
+             [ -n "$p" ] || continue
+             if tm_ports_set "$cfg" remove "$p"; then changed="${changed:+$changed,}$p"
+             else tm_ports_undo "$cfg" "$changed"; changed=""; break; fi
+           done
+           [ -n "$changed" ] || continue
+           tm_apply_restart "$u" "$cfg"
+           say ""
+           say "  ${C_B}On the Kharej server:${C_0} nothing has to change. If it has its own target for $changed,"
+           say "  that target is simply unused now (remove it there if you like: Ports → 2)."
+           pause ;;
+        3) if [ "$udp" != true ]; then
+             for p in $(jget "$cfg" forward_ports | tr ',' ' '); do
+               udp_port_free "$p" || { warn "UDP port $p is already in use on this server — free it first."; continue 2; }
+             done
+             v=on
+           else v=off; fi
+           tm_ports_backup "$cfg" || continue
+           tm_ports_set "$cfg" udp "$v" || continue
+           tm_apply_restart "$u" "$cfg"
+           say ""
+           say "  ${C_B}On the Kharej server:${C_0} nothing to change — it delivers each port's UDP to the same"
+           say "  target as its TCP; the panel inbound there must accept UDP on that port."
+           if [ "$(jget "$cfg" carrier)" = dgtun ]; then
+             say "  (tun/datagram: a Kharej server on an hs2 build older than this one forwards UDP only"
+             say "  with \"udp\": true in its config — upgrade it, or set that there.)"
+           fi
+           pause ;;
+        0|b|B|"") return 0 ;;
+        *) warn "Invalid choice." ;;
+      esac
+    else
+      v=$(jget "$cfg" expose)
+      say "  This Kharej server decides where each Iran user port goes: a port with its own target"
+      say "  goes there, every other port to the default panel."
+      say "  1) Give user port(s) their own target (default: the same port on 127.0.0.1)"
+      say "  2) Remove a port's own target (it goes to the default panel again)"
+      say "  3) Default panel: ${v:-none} → change"
+      say "  0) Back"
+      read -rp "Choose: " c </dev/tty || return 0
+      case "$c" in
+        1) read -rp "  Port(s), comma-separated (2053 = 127.0.0.1:2053 · 2053=host:port for another target): " ps </dev/tty || ps=""
+           ps=${ps// /}; IFS=, read -ra list <<< "$ps"; [ ${#list[@]} -gt 0 ] || continue
+           if [ ${#list[@]} -eq 1 ] && [ "${ps//[,=]/}" = "$ps" ] && valid_uint "$ps" 1 65535; then
+             read -rp "  Target for $ps [127.0.0.1:$ps]: " e </dev/tty || e=""
+             e=${e// /}; [ -z "$e" ] || list=("$ps=$e")
+           fi
+           tm_ports_backup "$cfg" || continue
+           changed=""
+           for e in ${list[@]+"${list[@]}"}; do
+             [ -n "$e" ] || continue
+             if tm_ports_set "$cfg" add "$e"; then changed="${changed:+$changed,}${e%%=*}"
+             else tm_ports_undo "$cfg" "$changed"; changed=""; break; fi
+           done
+           [ -n "$changed" ] || continue
+           tm_apply_restart "$u" "$cfg"
+           say ""
+           say "  ${C_B}On the Iran server:${C_0} $changed must be OPEN there for users to reach it (the table above"
+           say "  shows the ports it opens once a link is up). If not: Iran → hs2-menu → 3) Tunnel manager"
+           say "  → $u → p) Ports → 1) Add."
+           pause ;;
+        2) read -rp "  Port(s) to remove the own target of, comma-separated: " ps </dev/tty || ps=""
+           ps=${ps// /}; IFS=, read -ra list <<< "$ps"; [ ${#list[@]} -gt 0 ] || continue
+           tm_ports_backup "$cfg" || continue
+           changed=""
+           for p in ${list[@]+"${list[@]}"}; do
+             [ -n "$p" ] || continue
+             if tm_ports_set "$cfg" remove "$p"; then changed="${changed:+$changed,}$p"
+             else tm_ports_undo "$cfg" "$changed"; changed=""; break; fi
+           done
+           [ -n "$changed" ] || continue
+           tm_apply_restart "$u" "$cfg"
+           say ""
+           say "  ${C_B}On the Iran server:${C_0} nothing to change — $changed now reach the default panel here"
+           say "  (or are refused, if there is no default panel)."
+           pause ;;
+        3) read -rp "  Default panel host:port, or 'none' [${v:-none}]: " e </dev/tty || e=""
+           e=${e// /}; e=${e:-${v:-none}}
+           [ "$e" != "${v:-none}" ] || { info "Unchanged."; continue; }
+           [ "$e" = none ] || valid_hostport "$e" || { warn "Enter host:port (e.g. 127.0.0.1:8443) or 'none'."; continue; }
+           tm_ports_backup "$cfg" || continue
+           tm_ports_set "$cfg" default "$e" || continue
+           tm_apply_restart "$u" "$cfg"
+           say ""
+           say "  ${C_B}On the Iran server:${C_0} nothing to change."
+           pause ;;
+        0|b|B|"") return 0 ;;
+        *) warn "Invalid choice." ;;
+      esac
+    fi
+  done
+}
+
 # tm_tune_manual offers RAM/CPU-tier presets (examples the operator asked for),
 # switches the config to manual mode and applies them.
 tm_tune_manual(){ # unit cfg
@@ -3383,6 +3659,7 @@ tm_tunnel_menu(){
     say "  6) Live pattern monitor (parallel links, updating)"
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
+    if tm_has_ports "$cfg"; then say "  p) Ports — user ports and where each one goes"; fi
     say "  d) Diagnose (health check — config, endpoint, certificate, tuning)"
     if tm_cert_side "$cfg"; then say "  c) Certificate — expiry, renewal check, renew now"; fi
     say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
@@ -3398,6 +3675,7 @@ tm_tunnel_menu(){
       6) tm_monitor "$u" "$cfg" ;;
       7) tm_toggle_autostart "$u" ;;
       8) tm_tune "$u" "$cfg" ;;
+      p|P) tm_ports "$u" "$cfg" ;;
       d|D) tm_doctor "$u" "$cfg" ;;
       c|C) tm_cert "$u" "$cfg" ;;
       u|U) upgrade "$u"; pause ;;

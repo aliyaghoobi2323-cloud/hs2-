@@ -38,6 +38,13 @@ const (
 	kindPool  byte = 5 // reverse pool-control: edge tells the exit its desired link count
 	kindStats byte = 6 // exit -> edge per-link send-side stats (download pressure)
 	kindInfo  byte = 7 // one exchange per link: each side's link-pool ceiling (display only)
+
+	// A user connection tagged with the Iran user port it came in on, so the
+	// exit can route it by its own table (routes.go): [kind][port u16]. The edge
+	// sends these only on a link whose exit said, over kindInfo, that it routes
+	// them; an older exit gets the untagged kindTCP / kindUDP.
+	kindTCPPort byte = 8
+	kindUDPPort byte = 9
 )
 
 // kindTimeout bounds how long the kharej side waits for a new stream's kind.

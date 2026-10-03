@@ -171,6 +171,56 @@ started, stopped, edited and deleted on its own.
   of them (delete one in the manager). The certificate-renewal hook reloads
   every hs2 tunnel, so no renewal ever points at a deleted service.
 
+## Several user ports, each to its own panel inbound (per-port targets)
+
+The Iran server can open several user ports (`8443,2053,2083`). Each one can
+reach its **own** panel inbound on the Kharej server — or all of them the one
+default panel, exactly as before.
+
+- **Who decides what.** The **Iran** server *opens* the user ports
+  (`forward_ports`, and UDP on them). The **Kharej** server *decides where each
+  one goes*: a port with its own target (`port_map`) goes there, every other
+  port goes to the default panel (`expose`); with no default, a port without
+  its own target is refused (and the Kharej server says which, in its log and
+  in `hs2 status`).
+- **The default is the same port.** A `port_map` entry `2053` means
+  `127.0.0.1:2053` — the same port on the Kharej server; `2053=10.0.0.5:443`
+  sends it anywhere else. Example Kharej config:
+  `"expose": "127.0.0.1:8443", "port_map": "2053,2083=127.0.0.1:2096"`.
+- **Why the table lives on the Kharej server.** On every user connection the
+  Iran server says only *which of its user ports* the user came in on — a
+  number. It never names an address, so a compromised Iran server can reach
+  only what the Kharej operator listed, never `127.0.0.1:22` or a database.
+- **Setup** asks it on the Kharej server: the default panel, then *"Iran user
+  ports with their OWN inbound here"* (Enter = none, all to the default).
+- **Tunnel manager → `p) Ports`**, on either server, shows the whole table as
+  that server knows it — its own half from its config, the other half as the
+  other server reported it over the live link — and edits this server's half:
+  on the Iran server add / remove user ports and turn UDP on or off; on the
+  Kharej server give ports their own target (Enter = the same port on
+  127.0.0.1), remove one, or change the default panel. After every change it
+  says what — if anything — has to change on the other server, and applies it
+  with the usual restart and automatic rollback. `hs2 status` shows the same
+  table, `hs2 doctor` warns about a user port the Kharej server has no target
+  for and about a target nothing listens on, and `hs2 ports -c <config>
+  [add|remove|default|udp …]` is the command-line form.
+- **Every transport with user ports, both directions, TCP and UDP:** mtcp,
+  l3mtcp, tls and the datagram tun (udp/icmp/gre/ipip/ipx), direct and
+  reverse; UDP (when forwarding UDP is on) reaches the same target as TCP.
+  The port number costs 2–3 bytes once per connection (inside TLS on the TCP
+  transports); on a datagram tun it rides on each UDP datagram only when the
+  Kharej server has a `port_map` (or no default), so a tunnel without one sends
+  its datagrams exactly as before. On a datagram tun the per-port traffic uses
+  the tunnel-internal port 28444 on the Kharej server's tun address (28443 for
+  the rest) — if a firewall there filters it, both servers say so and every
+  port keeps reaching the default panel.
+- **Mixed versions keep working exactly as before.** A newer Iran server in
+  front of an older Kharej server: every port reaches its one panel (the
+  Kharej side needs the new build for per-port targets — `hs2 status` on the
+  Iran server says so). An older Iran server in front of a newer Kharej server:
+  it does not say the port, so every connection reaches the default panel. An
+  existing config without `port_map` behaves exactly as it always did.
+
 ## Datagram tunnels on throttled paths (tun over udp / icmp)
 
 All carriers of a datagram tunnel go to the same server IP, and a policer on
@@ -332,7 +382,8 @@ bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/m
 ```
 
 Choose **1**, pick a transport, then answer its prompts — for a TLS transport:
-domain, tunnel port, panel inbound, mode, UDP; for a datagram transport
+domain, tunnel port, panel inbound (the default for every user port, plus
+optional per-port targets), mode, UDP; for a datagram transport
 (`auto`/`udp` or a raw tun encap): the encapsulation and tunnel settings (no
 domain or certificate). At the end it prints a **`hs2://…` setup link** — copy it.
 
@@ -435,6 +486,10 @@ journalctl -u hs2 -f
   that frees it, an overdue renewal, the certbot timer or cron job), the tun device, kernel tuning vs. what is actually applied,
   and a clock reminder (link auth is minute-bound). Also in the tunnel manager
   as **Diagnose**. It only reads — safe to run any time (it never runs certbot).
+- **`hs2 ports -c /etc/hs2/config.json`** — the user ports and where each one
+  goes, as this server knows it (see *per-port targets* above); with `add`,
+  `remove`, `default` or `udp` it changes this server's half (also in the
+  tunnel manager as **Ports**).
 - **`hs2 version`** prints a build stamp (`… [build <rev> <date>]`); compare it
   on both servers to confirm they run the same build (the `hs2-menu` banner
   shows it too).
@@ -443,8 +498,9 @@ journalctl -u hs2 -f
 
 | where | what | example |
 |-------|------|---------|
-| Iran | user port clients connect to | 8443 |
-| Kharej | panel inbound the tunnel delivers to | 127.0.0.1:8443 |
+| Iran | user port(s) clients connect to (`forward_ports`) | 8443, 2053 |
+| Kharej | panel inbound the tunnel delivers to (`expose`, the default) | 127.0.0.1:8443 |
+| Kharej | a user port's own panel inbound (`port_map`, optional) | 2053 → 127.0.0.1:2053 |
 | Kharej | tunnel port Iran dials (clients never see it) | 2096 |
 
 The Iran user port and the kharej panel port may share a number (different

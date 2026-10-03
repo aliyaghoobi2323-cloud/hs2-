@@ -232,26 +232,17 @@ func proxyUDP(ctx context.Context, pc net.PacketConn, dialAddr string, logf func
 }
 
 // StartDgForwarders wires the userspace forwarders for the datagram tun on one
-// side. On the edge (iran) it opens each user port in ports (forward_ports) and
-// proxies it to the peer's tun address at DgTunPort. On the exit (kharej) it
-// opens DgTunPort on the local tun address and proxies to panel (expose); the
-// exit ignores ports and does nothing without a panel.
+// side (StartDgPorts, without a port_map). On the edge (iran) it opens each
+// user port in ports (forward_ports) and carries it over the tun to the exit.
+// On the exit (kharej) it delivers what arrives on the tun to panel (expose);
+// the exit ignores ports and does nothing without a panel.
 func StartDgForwarders(ctx context.Context, edge bool, ports []string, userListenIP, peerTunIP, localTunIP, panel string, udp bool, logf func(string, ...any)) error {
-	if !edge {
-		if panel == "" {
-			return nil
-		}
-		if err := runForwarder(ctx, forwardTarget(localTunIP, DgTunPort), panel, udp, tunLeg{listen: true}, logf); err != nil {
-			return err
-		}
-		logf("dg: tun port %s -> panel %s (all user ports)", DgTunPort, panel)
-		return nil
+	cfg := DgPortsConfig{Edge: edge, UDP: udp, Log: logf}
+	if edge {
+		cfg.Ports, cfg.UserListenIP, cfg.PeerTunIP = ports, userListenIP, peerTunIP
+	} else {
+		cfg.LocalTunIP, cfg.Default = localTunIP, panel
 	}
-	for _, p := range ports {
-		if err := runForwarder(ctx, forwardTarget(userListenIP, p), forwardTarget(peerTunIP, DgTunPort), udp, tunLeg{dial: true}, logf); err != nil {
-			return err
-		}
-		logf("dg: user port %s open, forwarded over the tun to the panel", p)
-	}
-	return nil
+	_, err := StartDgPorts(ctx, cfg)
+	return err
 }

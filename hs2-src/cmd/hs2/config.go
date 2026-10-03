@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 )
 
 // `hs2 config` edits a config file safely and JSON-aware, so the installer (and
@@ -31,22 +33,29 @@ type configKey struct {
 	parent string // "" for top-level, "tuning" for the tuning object
 	name   string
 	isInt  bool
+	isBool bool
 }
 
 var configKeys = map[string]configKey{
-	"min_links": {"", "min_links", true},
-	"max_links": {"", "max_links", true},
-	"per_link":  {"", "per_link", true},
+	"min_links": {"", "min_links", true, false},
+	"max_links": {"", "max_links", true, false},
+	"per_link":  {"", "per_link", true, false},
 
-	"drain_idle_sec": {"", "drain_idle_sec", true},
+	"drain_idle_sec": {"", "drain_idle_sec", true, false},
 
-	"tuning.mode":           {"tuning", "mode", false},
-	"tuning.congestion":     {"tuning", "congestion", false},
-	"tuning.qdisc":          {"tuning", "qdisc", false},
-	"tuning.rmem_max":       {"tuning", "rmem_max", true},
-	"tuning.wmem_max":       {"tuning", "wmem_max", true},
-	"tuning.netdev_backlog": {"tuning", "netdev_backlog", true},
-	"tuning.somaxconn":      {"tuning", "somaxconn", true},
+	// Per-port routing (ports.go has the friendlier `hs2 ports`).
+	"forward_ports": {"", "forward_ports", false, false},
+	"port_map":      {"", "port_map", false, false},
+	"expose":        {"", "expose", false, false},
+	"udp":           {"", "udp", false, true},
+
+	"tuning.mode":           {"tuning", "mode", false, false},
+	"tuning.congestion":     {"tuning", "congestion", false, false},
+	"tuning.qdisc":          {"tuning", "qdisc", false, false},
+	"tuning.rmem_max":       {"tuning", "rmem_max", true, false},
+	"tuning.wmem_max":       {"tuning", "wmem_max", true, false},
+	"tuning.netdev_backlog": {"tuning", "netdev_backlog", true, false},
+	"tuning.somaxconn":      {"tuning", "somaxconn", true, false},
 }
 
 func configCmd(args []string) {
@@ -170,14 +179,29 @@ func setKey(m map[string]any, ck configKey, val string) error {
 	if ck.parent == "" && ck.name == "max_links" && strings.EqualFold(strings.TrimSpace(val), "auto") {
 		val = "0" // auto: the ceiling follows this server's hardware (see linkCeiling)
 	}
-	if ck.isInt {
+	switch {
+	case ck.isInt:
 		n, err := strconv.Atoi(strings.TrimSpace(val))
 		if err != nil {
 			return fmt.Errorf("%s needs a whole number, got %q", ck.name, val)
 		}
 		obj[ck.name] = json.Number(strconv.Itoa(n))
-	} else {
-		obj[ck.name] = val
+	case ck.isBool:
+		b, err := strconv.ParseBool(strings.TrimSpace(val))
+		if err != nil {
+			return fmt.Errorf("%s needs true or false, got %q", ck.name, val)
+		}
+		obj[ck.name] = b
+	case ck.parent == "" && ck.name == "forward_ports":
+		obj[ck.name] = strings.Join(splitComma(val), ",") // "8443, 2053" -> "8443,2053"
+	case ck.parent == "" && ck.name == "port_map":
+		if m, err := engine.ParsePortMap(val); err == nil {
+			obj[ck.name] = engine.FormatPortMap(m) // canonical: sorted, short form
+		} else {
+			obj[ck.name] = val // the check below names the bad entry
+		}
+	default:
+		obj[ck.name] = strings.TrimSpace(val)
 	}
 	return nil
 }
