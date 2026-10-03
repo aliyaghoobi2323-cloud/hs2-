@@ -350,6 +350,9 @@ words the Iran side uses) now reaches the pool, and the log says which it was:
   redialed, pool above target (now 7)` — a loss (an RST such as `ss -K`).
 - `… lost (no data from the edge for 24s (keepalive timeout — path stalled)) …`
   — a stalled path, instead of the misleading "closed locally".
+- `… (read: aborted on this server (socket killed, e.g. ss -K or a local
+  firewall)) …` — when the socket is killed on the exit itself (Go's raw
+  "software caused connection abort", in the same plain words as the rest).
 - `exit link down (slot 6: <reason>; now 7); redial` — at target, with the cause.
 Log text only — no change to when links are retired or redialed. Proven over the
 real TLS + smux stack: a clean close, a bare FIN, a genuine RST and a silent

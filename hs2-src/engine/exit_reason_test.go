@@ -3,7 +3,10 @@ package engine
 import (
 	"bytes"
 	"context"
+	"io"
 	"net"
+	"os"
+	"syscall"
 	"testing"
 	"time"
 
@@ -96,5 +99,26 @@ func TestServeReverseLinkReportsWhyItEnded(t *testing.T) {
 				t.Fatal("serveReverseLink did not return after the link ended")
 			}
 		})
+	}
+}
+
+// describeNetErr turns each way a link can end into words an operator can act
+// on — including a socket killed on THIS server (ss -K run on the exit itself),
+// which Go reports as ECONNABORTED wrapped in a net.OpError.
+func TestDescribeNetErrReasons(t *testing.T) {
+	op := func(e error) error { return &net.OpError{Op: "read", Net: "tcp", Err: os.NewSyscallError("read", e)} }
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{io.EOF, reasonPeerClosed},
+		{net.ErrClosed, reasonLocalClosed},
+		{op(syscall.ECONNRESET), "reset by the network or the other server"},
+		{op(syscall.ECONNABORTED), "aborted on this server (socket killed, e.g. ss -K or a local firewall)"},
+		{op(syscall.EPIPE), "broken pipe (the other side went away)"},
+	} {
+		if got := describeNetErr(c.err); got != c.want {
+			t.Errorf("describeNetErr(%v) = %q, want %q", c.err, got, c.want)
+		}
 	}
 }

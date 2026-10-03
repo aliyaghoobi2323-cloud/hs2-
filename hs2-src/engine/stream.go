@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
@@ -125,6 +126,11 @@ func describeNetErr(err error) string {
 		return reasonLocalClosed
 	case errors.As(err, &ne) && ne.Timeout():
 		return "timed out (path stalled)"
+	case errors.Is(err, syscall.ECONNABORTED):
+		// The kernel tore the socket down on THIS server — `ss -K`, a
+		// conntrack flush or a local firewall rule — rather than the peer or
+		// the path. Reads then fail with "software caused connection abort".
+		return "aborted on this server (socket killed, e.g. ss -K or a local firewall)"
 	}
 	s := err.Error()
 	switch {
