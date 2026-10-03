@@ -1703,6 +1703,10 @@ kharej_listener(){
   ask_tunnel_port "Tunnel port (clients never see this)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
+  # Per-install cover-page seed (128-bit), INDEPENDENT of the shared key so the
+  # public cover page can never leak anything about the secret. Only the builtin
+  # cover uses it; a custom backend_addr ignores it. See hs2-src/cmd/hs2/cover.go.
+  local COVER_SEED; COVER_SEED=$(openssl rand -hex 16)
   local PANEL="-" LMTU=""
   mkdir -p "$(dirname "$CFG")"
 
@@ -1724,6 +1728,7 @@ kharej_listener(){
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1380,
   "backend_addr": "builtin",
+  "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
   "expose": "$PANEL"
@@ -1749,6 +1754,7 @@ EOF
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": $TUNMTU,
   "backend_addr": "builtin",
+  "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
   "expose": "$PANEL"
@@ -2044,6 +2050,10 @@ iran_listener(){
   ask_tunnel_port "Tunnel port to LISTEN on (kharej dials it)"
   ask_bind_ip
   local SHARED; SHARED=$(openssl rand -hex 32)
+  # Per-install cover-page seed (128-bit), INDEPENDENT of the shared key so the
+  # public cover page can never leak anything about the secret. Only the builtin
+  # cover uses it; a custom backend_addr ignores it. See hs2-src/cmd/hs2/cover.go.
+  local COVER_SEED; COVER_SEED=$(openssl rand -hex 16)
   local LMTU=""
   mkdir -p "$(dirname "$CFG")"
 
@@ -2075,6 +2085,7 @@ iran_listener(){
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1380,
   "backend_addr": "builtin",
+  "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
@@ -2110,6 +2121,7 @@ EOF
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": $TUNMTU,
   "backend_addr": "builtin",
+  "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
@@ -3556,6 +3568,16 @@ migrate_config(){
   elif { [ "$car" = udp ] || [ "$car" = auto ]; } && [ -n "$ifc" ] && grep -q '"local_cidr"' "$CFG" 2>/dev/null; then
     info "This is a single-carrier $car TUN — still supported and unchanged."
     info "New: the datagram tun (carrier dgtun) runs a self-sizing POOL of $car carriers with the autopilot and optional user-port forwarding. To switch, reconfigure BOTH servers (menu → tun → $car)."
+  fi
+
+  # Give an existing builtin-cover tunnel a per-install cover_seed so its cover
+  # page stops being byte-identical to every other install (one known sha256
+  # used to find them all). Only when it uses the builtin cover and has no seed
+  # yet; a custom backend_addr is left alone. Independent of the shared key.
+  if grep -q '"backend_addr": "builtin"' "$CFG" 2>/dev/null && ! grep -q '"cover_seed"' "$CFG" 2>/dev/null; then
+    local _cs; _cs=$(openssl rand -hex 16)
+    sed -i "s|\"backend_addr\": \"builtin\",|\"backend_addr\": \"builtin\", \"cover_seed\": \"$_cs\",|" "$CFG"
+    ok "Cover page is now unique to this install (per-install seed added)."
   fi
 
   # hs2 now owns tuning at runtime — drop the old static file, keep BBR for boot.

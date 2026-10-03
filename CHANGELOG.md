@@ -377,6 +377,49 @@ Known, not changed here: `tun_ports_test.py` fails the same 11 checks on `main`
 and on this branch — it still expects the wizard's pre-U5 question order; it
 needs its expectations updated, separately.
 
+## Phase G — a per-install cover page (no user action)
+
+**From the field test:** the built-in cover ("Oakline") was byte-for-byte
+identical on every install and its text is in the public source, so one known
+sha256 found every hs2 server in a bulk active scan. Pointing `backend_addr` at
+a real site fixes it, but most users never do, so the default is what the whole
+fleet shows.
+
+- The installer now writes a per-install `cover_seed` (128-bit, from
+  `openssl rand`, **independent of the shared key** so the public page can leak
+  nothing about the secret) into every builtin-cover tunnel it sets up, and
+  `migrate_config` adds one to existing builtin tunnels on the next upgrade — no
+  user action. A custom `backend_addr` keeps priority and ignores the seed.
+- `hs2-src/cmd/hs2/cover.go` turns the seed into a page whose brand, hero copy,
+  accent colour (hue + saturation + lightness), favicon glyph, layout tokens
+  (radius, widths, gap, class names), service cards, long-section set and order,
+  size, `Last-Modified` offset and `ETag` all vary. No two installs share a
+  hash, and no single surface value clusters (measured over 2000 pages: 2000
+  unique hashes, ~1000 distinct brands, 359 hues, top hue 0.6%), so the ensemble
+  is not obviously generated either.
+- **Stability contract:** the bytes are a pure function of (seed, year) via a
+  SHA-256 counter stream (byte-stable across Go versions, unlike math/rand), so
+  a server shows the same page across restarts and binary rebuilds; only the
+  copyright year ticks, for everyone at once. A golden test pins the exact bytes
+  for a known seed, so the generator can never change silently (which would move
+  every server's page on upgrade day — a correlated fleet event).
+- **No seed → the exact legacy page**, byte-for-byte (an old or hand-written
+  config is undisturbed; verified it still hashes to the field-observed
+  `86dfcf86…`).
+- **Honest scope (and the README says so):** this defeats cheap hash/structural
+  enumeration; it is NOT a disguise against a determined prober — the TLS stack
+  is still Go's, and a classifier trained on several generated pages could still
+  recognise the family. A real `backend_addr` is still the strongest cover.
+
+New tests: `cmd/hs2/cover_test.go` (determinism + golden, 500-seed uniqueness,
+seedless==legacy with the `86dfcf86…` check, structural invariants: no external
+requests, no JS, inline favicon, light+dark, balanced tags, size varies; served
+headers: Content-Type, ETag, 304, root-only 404) and
+`install/tests/cover_seed_test.sh` (every builtin heredoc seeded, seed
+independent of the key, migration adds one / leaves a custom backend alone /
+never duplicates, valid JSON). Verified live over real TLS: two seeds serve two
+different pages, a seedless config serves the exact legacy page.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

@@ -13,7 +13,7 @@ import (
 // "Server: nginx" header (our TLS terminator is Go's, so claiming nginx only
 // contradicts it; a Go server like Caddy omits the header).
 func TestBuiltinBackendServesCover(t *testing.T) {
-	addr, err := startBuiltinBackend()
+	addr, err := startBuiltinBackend("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestBuiltinBackendServesCover(t *testing.T) {
 // If-Modified-Since on an unchanged page gets a 304, like any static server
 // (confirms we serve via http.ServeContent rather than a bare Write).
 func TestBuiltinBackendConditional304(t *testing.T) {
-	addr, err := startBuiltinBackend()
+	addr, err := startBuiltinBackend("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestBuiltinBackendConditional304(t *testing.T) {
 
 // A non-root path returns a plain Go 404, like a default static server.
 func TestBuiltinBackend404(t *testing.T) {
-	addr, err := startBuiltinBackend()
+	addr, err := startBuiltinBackend("")
 	if err != nil {
 		t.Fatal(err)
 	}

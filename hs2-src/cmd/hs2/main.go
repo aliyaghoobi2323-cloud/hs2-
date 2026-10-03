@@ -8,6 +8,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -78,6 +79,7 @@ type fileConfig struct {
 	SNI         string `json:"sni"`          // domain (dial)
 	CoverAddr   string `json:"cover_addr"`   // reality: real site to forward probes to
 	BackendAddr string `json:"backend_addr"` // tls: local backend probes are proxied to
+	CoverSeed   string `json:"cover_seed"`   // tls builtin cover: per-install page seed (hex; NOT from shared_key)
 	SharedKey   string `json:"shared_key"`   // hex, both sides
 	CertFile    string `json:"cert_file"`    // listen: real cert PEM (Let's Encrypt)
 	KeyFile     string `json:"key_file"`     // listen: real key PEM
@@ -543,7 +545,7 @@ func drainIdle(fc fileConfig) time.Duration {
 func streamBackend(fc fileConfig) string {
 	backend := fc.BackendAddr
 	if backend == "" || backend == "builtin" {
-		addr, err := startBuiltinBackend()
+		addr, err := startBuiltinBackend(fc.CoverSeed)
 		must(err)
 		backend = addr
 	}
@@ -669,149 +671,28 @@ func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 // startBuiltinBackend serves an ordinary-looking static site on loopback. Probes
 // that fail tunnel auth are proxied here (already TLS-decrypted), so they get a
 // plain, boring web page from a real HTTP server instead of a tunnel error.
-func startBuiltinBackend() (string, error) {
+//
+// The page is per-install: buildCover turns the config's cover_seed into a page
+// whose brand, copy, colours, layout and size vary, so a bulk scanner cannot
+// find every hs2 server by one known sha256 (see cover.go). An empty seed (an
+// old or hand-written config) yields the fixed legacy page, unchanged.
+func startBuiltinBackend(seed string) (string, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", err
 	}
-	// A plain, unremarkable static site (a small generic studio landing) that a
-	// probe reaching the backend sees. It replaces the old nginx default welcome
-	// page, which is itself a honeypot signature — the lazy cover of countless
-	// proxies. The brand is fictional and generic (it impersonates no real
-	// organisation). The page is fully self-contained: no external fonts,
-	// scripts or images — each of those would be its own request, fingerprint or
-	// dependency — with an inline data-URI favicon, system fonts, light/dark and
-	// no JavaScript.
-	page := []byte(`<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Oakline</title>
-<meta name="description" content="Oakline is a small studio building dependable web and cloud software for growing teams.">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f6bed'/%3E%3Cpath d='M9 22V10l14 12V10' fill='none' stroke='white' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
-<style>
-  :root{
-    --bg:#ffffff; --fg:#1b2130; --muted:#5b647a; --line:#e7e9f0;
-    --card:#f7f8fb; --accent:#4f6bed; --accent-fg:#ffffff; --shadow:0 1px 2px rgba(20,30,60,.06),0 8px 24px rgba(20,30,60,.05);
-  }
-  @media (prefers-color-scheme:dark){
-    :root{
-      --bg:#0f131c; --fg:#e8ebf4; --muted:#9aa3bb; --line:#222838;
-      --card:#151a26; --accent:#7e93f4; --accent-fg:#0f131c; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
-    }
-  }
-  *{box-sizing:border-box}
-  html{-webkit-text-size-adjust:100%}
-  body{
-    margin:0; background:var(--bg); color:var(--fg);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    line-height:1.6; -webkit-font-smoothing:antialiased;
-  }
-  a{color:inherit;text-decoration:none}
-  .wrap{max-width:1040px;margin:0 auto;padding:0 24px}
-  header{border-bottom:1px solid var(--line)}
-  .bar{display:flex;align-items:center;justify-content:space-between;height:68px}
-  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:-.01em}
-  .brand svg{display:block;border-radius:7px}
-  nav{display:flex;gap:28px}
-  nav a{color:var(--muted);font-size:15px}
-  nav a:hover{color:var(--fg)}
-  @media (max-width:640px){nav{display:none}}
-  .hero{padding:84px 0 64px}
-  .hero h1{font-size:44px;line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;max-width:18ch}
-  .hero p{font-size:19px;color:var(--muted);max-width:52ch;margin:0 0 30px}
-  @media (max-width:640px){.hero{padding:56px 0 44px}.hero h1{font-size:33px}.hero p{font-size:17px}}
-  .btn{display:inline-block;background:var(--accent);color:var(--accent-fg);font-weight:600;font-size:15px;
-    padding:12px 22px;border-radius:9px;transition:opacity .15s}
-  .btn:hover{opacity:.9}
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;padding:8px 0 40px}
-  @media (max-width:820px){.grid{grid-template-columns:1fr}}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:26px;box-shadow:var(--shadow)}
-  .card h3{margin:0 0 8px;font-size:18px;letter-spacing:-.01em}
-  .card p{margin:0;color:var(--muted);font-size:15px}
-  .sect{padding:4px 0 60px}
-  .sect h2{font-size:26px;letter-spacing:-.02em;margin:0 0 12px}
-  .sect p{color:var(--muted);max-width:60ch;margin:0;font-size:16px}
-  .ic{width:38px;height:38px;border-radius:10px;background:color-mix(in srgb,var(--accent) 16%,transparent);
-    display:flex;align-items:center;justify-content:center;margin-bottom:16px;color:var(--accent)}
-  footer{border-top:1px solid var(--line);color:var(--muted);font-size:14px}
-  .foot{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;padding:28px 0}
-  .foot nav{display:flex;gap:20px}
-  .foot nav a{font-size:14px}
-</style>
-</head>
-<body>
-<header>
-  <div class="wrap bar">
-    <a class="brand" href="/">
-      <svg width="28" height="28" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#4f6bed"/><path d="M9 22V10l14 12V10" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      Oakline
-    </a>
-    <nav>
-      <a href="/#services">Services</a>
-      <a href="/#about">About</a>
-      <a href="/#contact">Contact</a>
-    </nav>
-  </div>
-</header>
-
-<main>
-  <section class="wrap hero">
-    <h1>Dependable software for growing teams.</h1>
-    <p>Oakline is a small studio that designs, builds, and maintains web and cloud applications — the quiet infrastructure your product runs on.</p>
-    <a class="btn" href="/#contact">Get in touch</a>
-  </section>
-
-  <section class="wrap grid" id="services">
-    <div class="card">
-      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 9h18M8 21h8"/></svg></div>
-      <h3>Web</h3>
-      <p>Fast, accessible sites and dashboards, built to last and easy to hand over.</p>
-    </div>
-    <div class="card">
-      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 18a4 4 0 0 0 0-8 6 6 0 0 0-11.6-1.8A4.5 4.5 0 0 0 6 18z"/></svg></div>
-      <h3>Cloud</h3>
-      <p>Right-sized deployments, sensible monitoring, and backups that actually restore.</p>
-    </div>
-    <div class="card">
-      <div class="ic"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z"/><path d="M12 8v4l3 2"/></svg></div>
-      <h3>Support</h3>
-      <p>Steady maintenance and on-call help, so small problems stay small.</p>
-    </div>
-  </section>
-
-  <section class="wrap sect" id="about">
-    <h2>About</h2>
-    <p>We are a small, senior team that has shipped and maintained production systems for over a decade. We take on a handful of engagements at a time, so each one gets real attention from the people actually doing the work.</p>
-  </section>
-
-  <section class="wrap sect" id="contact">
-    <h2>Contact</h2>
-    <p>Have a project in mind, or an existing system that needs a steady hand? Tell us a little about what you are building and we will get back to you within a couple of working days.</p>
-  </section>
-</main>
-
-<footer>
-  <div class="wrap foot">
-    <div>&copy; 2026 Oakline Studio. All rights reserved.</div>
-    <nav>
-      <a href="/#services">Services</a>
-      <a href="/#about">About</a>
-      <a href="/#contact">Contact</a>
-    </nav>
-  </div>
-</footer>
-</body>
-</html>
-`)
-	// Last-Modified a fixed span in the past, computed at startup from THIS
-	// host's clock and truncated to the hour. Relative (not a frozen absolute
-	// date) so it is always earlier than the auto Date header — no "modified in
-	// the future" anomaly even on a host whose clock lags — and never drifts
-	// visibly stale across years; the hour truncation keeps it stable and
-	// unremarkably coarse rather than a suspiciously exact instant.
-	modtime := time.Now().Add(-37 * 24 * time.Hour).Truncate(time.Hour)
+	// The page is fully self-contained: no external fonts, scripts or images —
+	// each of those would be its own request, fingerprint or dependency — with
+	// an inline data-URI favicon, system fonts, light/dark and no JavaScript.
+	// Last-Modified is a seed-derived span in the past, computed at startup from
+	// THIS host's clock and truncated to the hour: relative (not a frozen
+	// absolute date) so it is always earlier than the auto Date header — no
+	// "modified in the future" even on a lagging clock — and the per-install
+	// offset means the "last modified N days ago" distance is not a constant.
+	page, offDays := buildCover(seed, time.Now())
+	modtime := time.Now().Add(-time.Duration(offDays) * 24 * time.Hour).Truncate(time.Hour)
+	sum := sha256.Sum256(page)
+	etag := fmt.Sprintf("%q", hex.EncodeToString(sum[:16]))
 	handler := func(w http.ResponseWriter, r *http.Request) {
 		// Everything but "/" is a plain Go 404, like any static file server. No
 		// Server header is sent: our TLS terminator is Go's, so a stray "nginx"
@@ -822,8 +703,10 @@ func startBuiltinBackend() (string, error) {
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "max-age=3600")
+		w.Header().Set("ETag", etag)
 		// ServeContent gives genuine static-server behaviour for free:
-		// Last-Modified, If-Modified-Since/304, Content-Length and range requests.
+		// Last-Modified, If-Modified-Since / If-None-Match (304), Content-Length
+		// and range requests.
 		http.ServeContent(w, r, "", modtime, bytes.NewReader(page))
 	}
 	srv := &http.Server{Handler: http.HandlerFunc(handler), ReadHeaderTimeout: 10 * time.Second}

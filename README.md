@@ -368,10 +368,16 @@ links only when they raise throughput — but you can also cap it by lowering
   to an HTTPS server"* reply a real HTTPS server gives (not a silent close); and
   anything that is neither TLS nor HTTP is closed just as a TLS server closes on
   garbage. No response reveals the tunnel.
-- The built-in cover page is the **same on every hs2 install**, so the page
-  itself is a shared fingerprint. For the strongest cover, set `backend_addr` in
-  the kharej config to a real local web server of your own — probes are then
-  served your unique site instead of the default page.
+- The built-in cover page is **different on every install**: a per-install
+  random seed (`cover_seed`, written by the installer and never derived from the
+  key) varies its brand, text, colours, layout and size, so no two servers share
+  a page hash and a bulk scan cannot find every hs2 server by one known hash.
+  The seed is stable, so a server shows the same page across restarts. This
+  defeats cheap hash/structural enumeration; it is **not** a disguise against a
+  determined prober (the TLS stack is still Go's, and a classifier trained on
+  several pages could still recognise the family). For the strongest cover, set
+  `backend_addr` in the config to a real local web server of your own — probes
+  are then served your own site and `cover_seed` is ignored.
 
 ## Managing
 
