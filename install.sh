@@ -3574,10 +3574,20 @@ migrate_config(){
   # page stops being byte-identical to every other install (one known sha256
   # used to find them all). Only when it uses the builtin cover and has no seed
   # yet; a custom backend_addr is left alone. Independent of the shared key.
-  if grep -q '"backend_addr": "builtin"' "$CFG" 2>/dev/null && ! grep -q '"cover_seed"' "$CFG" 2>/dev/null; then
+  # Handle both the "builtin", (installer form, trailing comma) and the
+  # "builtin" (hand-written, last field, no comma) shapes, and ONLY report
+  # success once the seed is actually in the file — the guard and the edit must
+  # agree, or the message lies and the block re-fires on every upgrade.
+  if ! grep -q '"cover_seed"' "$CFG" 2>/dev/null; then
     local _cs; _cs=$(openssl rand -hex 16)
-    sed -i "s|\"backend_addr\": \"builtin\",|\"backend_addr\": \"builtin\", \"cover_seed\": \"$_cs\",|" "$CFG"
-    ok "Cover page is now unique to this install (per-install seed added)."
+    if grep -qE '"backend_addr":[[:space:]]*"builtin",' "$CFG" 2>/dev/null; then
+      sed -i "s|\(\"backend_addr\":[[:space:]]*\"builtin\",\)|\1 \"cover_seed\": \"$_cs\",|" "$CFG"
+    elif grep -qE '"backend_addr":[[:space:]]*"builtin\"[[:space:]]*$' "$CFG" 2>/dev/null; then
+      # builtin is the last field (no trailing comma): add one after it so the
+      # new seed can follow, and the seed itself ends the object (no comma).
+      sed -i "s|\(\"backend_addr\":[[:space:]]*\"builtin\"\)[[:space:]]*\$|\1, \"cover_seed\": \"$_cs\"|" "$CFG"
+    fi
+    grep -q '"cover_seed"' "$CFG" 2>/dev/null && ok "Cover page is now unique to this install (per-install seed added)."
   fi
 
   # hs2 now owns tuning at runtime — drop the old static file, keep BBR for boot.

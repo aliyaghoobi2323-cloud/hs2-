@@ -16,8 +16,13 @@ import (
 // every hs2 server in a bulk active scan. buildCover turns a per-install random
 // seed (cover_seed in the config, written by the installer, NOT derived from
 // the shared key) into a page whose brand, copy, colours, layout tokens,
-// section set and size all vary, so no two installs share a hash and a naive
-// structural match does not catch the family either.
+// section set and size all vary, so no two installs share a hash. Every CSS
+// token that was once constant (the shadow, the breakpoints, the colour-mix,
+// the font stack, the line-height) is seed-varied too, so no single byte-exact
+// structural substring matches the whole family; a classifier trained on
+// several pages still could (the overall CSS shape and the services-first/
+// contact-last order are recognisable), which is why this is enumeration
+// defence, not a disguise.
 //
 // What this does NOT do (on purpose, so the UI never overclaims): it is not a
 // disguise against a determined prober. The TLS stack is still Go's, and a
@@ -271,11 +276,35 @@ func buildCover(seed string, now time.Time) (page []byte, modOffsetDays int) {
 	accentD := fmt.Sprintf("hsl(%d %d%% %d%%)", hue, min(sat+14, 92), lum+18)
 
 	// --- layout tokens (vary CSS bytes + geometry, safely) -----------------
+	// These also break the fixed CSS skeleton: a review found that the box-
+	// shadow, the two breakpoints, the color-mix percentage, the font stack and
+	// the line-height were byte-identical on every page, so one structural
+	// signature matched the whole family. All are now seed-derived, within
+	// ranges that stay readable, so no CSS token is a constant across installs.
 	radius := r.between(8, 16)
 	radiusSm := r.between(6, 10)
 	maxw := []int{980, 1040, 1100, 1180, 1240}[r.intn(5)]
 	heroSize := r.between(40, 52)
 	gap := r.between(16, 24)
+	lineH := []string{"1.5", "1.55", "1.6", "1.62", "1.65", "1.68", "1.7"}[r.intn(7)]
+	bpNav := r.between(600, 680)
+	bpGrid := r.between(760, 900)
+	mix := r.between(12, 20)
+	// a soft neutral drop shadow, tint and strength varied
+	st1, st2, st3 := r.between(16, 24), r.between(26, 34), r.between(56, 66)
+	shLight := fmt.Sprintf("0 1px 2px rgba(%d,%d,%d,.0%d),0 %dpx %dpx rgba(%d,%d,%d,.0%d)",
+		st1, st2, st3, r.between(5, 8), r.between(6, 10), r.between(20, 28), st1, st2, st3, r.between(4, 6))
+	shDark := fmt.Sprintf("0 1px 2px rgba(0,0,0,.%d),0 %dpx %dpx rgba(0,0,0,.%d)",
+		r.between(28, 36), r.between(8, 12), r.between(26, 34), r.between(30, 40))
+	fontStack := []string{
+		`-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif`,
+		`system-ui,-apple-system,"Segoe UI",Roboto,Ubuntu,Cantarell,"Helvetica Neue",sans-serif`,
+		`ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif`,
+		`-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif,"Apple Color Emoji"`,
+		`system-ui,-apple-system,Segoe UI,Roboto,Helvetica Neue,Arial,sans-serif`,
+		`Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif`,
+		`-apple-system,"Segoe UI",Roboto,"Noto Sans",Ubuntu,Arial,sans-serif`,
+	}[r.intn(7)]
 	cls := func() string { return r.token(r.between(4, 7)) }
 	cWrap, cBar, cBrand, cNav := cls(), cls(), cls(), cls()
 	cHero, cBtn, cGrid, cCard := cls(), cls(), cls(), cls()
@@ -293,8 +322,9 @@ func buildCover(seed string, now time.Time) (page []byte, modOffsetDays int) {
 		`<path d="M16 9l2 5 5 .4-3.8 3.3 1.2 5-4.4-2.7-4.4 2.7 1.2-5L9 14.4l5-.4z" fill="#fff"/>`,
 	}
 	favFill := fmt.Sprintf("hsl(%d %d%% %d%%)", hue, sat, lum-4)
+	favRx := r.between(5, 11)
 	fav := fmt.Sprintf(`<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='%d' fill='%s'/>%s</svg>`,
-		r.between(6, 9), favFill, strings.ReplaceAll(favPaths[r.intn(len(favPaths))], `"`, `'`))
+		favRx, favFill, strings.ReplaceAll(favPaths[r.intn(len(favPaths))], `"`, `'`))
 	favData := "data:image/svg+xml," + urlishEscape(fav)
 
 	// brand mark in the header: the same glyph family (white on the accent).
@@ -333,10 +363,10 @@ func buildCover(seed string, now time.Time) (page []byte, modOffsetDays int) {
 		htmlEsc(brand), size, field, strings.ToLower(org))
 	p("<link rel=\"icon\" type=\"image/svg+xml\" href=\"%s\">\n", favData)
 	p("<style>\n")
-	p("  :root{--bg:#fff;--fg:#1b2130;--muted:#5b647a;--line:#e7e9f0;--card:#f7f8fb;--accent:%s;--accent-fg:#fff;--shadow:0 1px 2px rgba(20,30,60,.06),0 8px 24px rgba(20,30,60,.05)}\n", accentL)
-	p("  @media (prefers-color-scheme:dark){:root{--bg:#0f131c;--fg:#e8ebf4;--muted:#9aa3bb;--line:#222838;--card:#151a26;--accent:%s;--accent-fg:#0f131c;--shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35)}}\n", accentD)
+	p("  :root{--bg:#fff;--fg:#1b2130;--muted:#5b647a;--line:#e7e9f0;--card:#f7f8fb;--accent:%s;--accent-fg:#fff;--shadow:%s}\n", accentL, shLight)
+	p("  @media (prefers-color-scheme:dark){:root{--bg:#0f131c;--fg:#e8ebf4;--muted:#9aa3bb;--line:#222838;--card:#151a26;--accent:%s;--accent-fg:#0f131c;--shadow:%s}}\n", accentD, shDark)
 	p("  *{box-sizing:border-box}html{-webkit-text-size-adjust:100%%}\n")
-	p("  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,Helvetica,Arial,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased}\n")
+	p("  body{margin:0;background:var(--bg);color:var(--fg);font-family:%s;line-height:%s;-webkit-font-smoothing:antialiased}\n", fontStack, lineH)
 	p("  a{color:inherit;text-decoration:none}\n")
 	p("  .%s{max-width:%dpx;margin:0 auto;padding:0 24px}\n", cWrap, maxw)
 	p("  header{border-bottom:1px solid var(--line)}\n")
@@ -344,17 +374,17 @@ func buildCover(seed string, now time.Time) (page []byte, modOffsetDays int) {
 	p("  .%s{display:flex;align-items:center;gap:10px;font-weight:700;font-size:18px;letter-spacing:-.01em}\n", cBrand)
 	p("  .%s svg{display:block;border-radius:%dpx}\n", cBrand, radiusSm)
 	p("  .%s{display:flex;gap:28px}.%s a{color:var(--muted);font-size:15px}.%s a:hover{color:var(--fg)}\n", cNav, cNav, cNav)
-	p("  @media (max-width:640px){.%s{display:none}}\n", cNav)
+	p("  @media (max-width:%dpx){.%s{display:none}}\n", bpNav, cNav)
 	p("  .%s{padding:84px 0 64px}.%s h1{font-size:%dpx;line-height:1.12;letter-spacing:-.025em;margin:0 0 18px;max-width:18ch}\n", cHero, cHero, heroSize)
 	p("  .%s p{font-size:19px;color:var(--muted);max-width:52ch;margin:0 0 30px}\n", cHero)
-	p("  @media (max-width:640px){.%s{padding:56px 0 44px}.%s h1{font-size:%dpx}.%s p{font-size:17px}}\n", cHero, cHero, heroSize-11, cHero)
+	p("  @media (max-width:%dpx){.%s{padding:56px 0 44px}.%s h1{font-size:%dpx}.%s p{font-size:17px}}\n", bpNav, cHero, cHero, heroSize-11, cHero)
 	p("  .%s{display:inline-block;background:var(--accent);color:var(--accent-fg);font-weight:600;font-size:15px;padding:12px 22px;border-radius:%dpx;transition:opacity .15s}.%s:hover{opacity:.9}\n", cBtn, radiusSm+2, cBtn)
 	p("  .%s{display:grid;grid-template-columns:repeat(%d,1fr);gap:%dpx;padding:8px 0 40px}\n", cGrid, nCards, gap)
-	p("  @media (max-width:820px){.%s{grid-template-columns:1fr}}\n", cGrid)
+	p("  @media (max-width:%dpx){.%s{grid-template-columns:1fr}}\n", bpGrid, cGrid)
 	p("  .%s{background:var(--card);border:1px solid var(--line);border-radius:%dpx;padding:26px;box-shadow:var(--shadow)}\n", cCard, radius)
 	p("  .%s h3{margin:0 0 8px;font-size:18px;letter-spacing:-.01em}.%s p{margin:0;color:var(--muted);font-size:15px}\n", cCard, cCard)
 	p("  .%s{padding:4px 0 60px}.%s h2{font-size:26px;letter-spacing:-.02em;margin:0 0 12px}.%s p{color:var(--muted);max-width:60ch;margin:0;font-size:16px}\n", cSect, cSect, cSect)
-	p("  .%s{width:38px;height:38px;border-radius:%dpx;background:color-mix(in srgb,var(--accent) 16%%,transparent);display:flex;align-items:center;justify-content:center;margin-bottom:16px;color:var(--accent)}\n", cIc, radiusSm+1)
+	p("  .%s{width:38px;height:38px;border-radius:%dpx;background:color-mix(in srgb,var(--accent) %d%%,transparent);display:flex;align-items:center;justify-content:center;margin-bottom:16px;color:var(--accent)}\n", cIc, radiusSm+1, mix)
 	p("  footer{border-top:1px solid var(--line);color:var(--muted);font-size:14px}\n")
 	p("  .%s{display:flex;flex-wrap:wrap;gap:14px;align-items:center;justify-content:space-between;padding:28px 0}.%s nav{display:flex;gap:20px}.%s nav a{font-size:14px}\n", cFoot, cFoot, cFoot)
 	p("</style>\n</head>\n<body>\n")
@@ -362,7 +392,7 @@ func buildCover(seed string, now time.Time) (page []byte, modOffsetDays int) {
 	// header
 	p("<header>\n  <div class=\"%s %s\">\n", cWrap, cBar)
 	p("    <a class=\"%s\" href=\"/\">\n", cBrand)
-	p("      <svg width=\"28\" height=\"28\" viewBox=\"0 0 32 32\" aria-hidden=\"true\"><rect width=\"32\" height=\"32\" rx=\"7\" fill=\"%s\"/>%s</svg>\n", favFill, headMark)
+	p("      <svg width=\"28\" height=\"28\" viewBox=\"0 0 32 32\" aria-hidden=\"true\"><rect width=\"32\" height=\"32\" rx=\"%d\" fill=\"%s\"/>%s</svg>\n", favRx, favFill, headMark)
 	p("      %s\n    </a>\n    <nav class=\"%s\">\n", htmlEsc(brand), cNav)
 	for _, id := range navIDs {
 		p("      <a href=\"/#%s\">%s</a>\n", id, navLabel(id, secTitle(id)))

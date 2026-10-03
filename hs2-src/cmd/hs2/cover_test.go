@@ -34,7 +34,7 @@ func TestCoverDeterministic(t *testing.T) {
 	// server's page would otherwise change on upgrade day — a correlated fleet
 	// event). To change the generator on purpose, add a versioned path rather
 	// than editing in place, then update this.
-	const golden = "d655972ed474346ac5367e6e7278b91e2ad2f65d5ccadfca6f2f5daa4de6984f"
+	const golden = "d717b0a237b63d10ef5e3874fd76b7a11cb08db8ef6731451b11795cc657c81d"
 	if h1 != golden {
 		t.Fatalf("generator output drifted: got %s, want %s", h1, golden)
 	}

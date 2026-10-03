@@ -27,7 +27,7 @@ mkdir -p "$T/le/renewal"
 run_migrate(){ # cfg-path
   bash -c "set -euo pipefail
     CFG='$1'; LINK_MIN=2; LINK_MAX=32; LINK_PER=8
-    ok(){ :; }; info(){ :; }; warn(){ :; }; systemctl(){ :; }; modprobe(){ :; }
+    ok(){ echo \"OK: \$*\"; }; info(){ :; }; warn(){ :; }; systemctl(){ :; }; modprobe(){ :; }
     source '$T/fns.sh'
     migrate_config" 2>&1
 }
@@ -48,10 +48,25 @@ out=$(run_migrate "$T/a.json")
 check "migrate: second run adds no second seed (idempotent)" '[ "$(grep -c "cover_seed" "$T/a.json")" = 1 ]'
 check "migrate: second run leaves the seed unchanged" 'grep -qF "$(grep -o "\"cover_seed\": \"[0-9a-f]*\"" "$T/a.before")" "$T/a.json"'
 
+# a builtin config whose backend_addr is the LAST field (no trailing comma) —
+# a hand-written config: the guard and the edit must agree, add exactly one
+# seed (valid JSON), print success only because it worked, and be idempotent.
+printf '{\n  "shared_key": "abc123",\n  "backend_addr": "builtin"\n}\n' > "$T/nc.json"
+out=$(run_migrate "$T/nc.json"); rc=$?
+check "migrate(no-comma): a hand-written builtin (last field) gets a seed" '[ $rc = 0 ] && [ "$(grep -c "cover_seed" "$T/nc.json")" = 1 ]'
+check "migrate(no-comma): result is valid JSON" 'valid_json "$T/nc.json"'
+check "migrate(no-comma): success message printed only because it worked" 'echo "$out" | grep -q "unique to this install"'
+out=$(run_migrate "$T/nc.json")
+check "migrate(no-comma): idempotent (no second seed, no re-print)" '[ "$(grep -c "cover_seed" "$T/nc.json")" = 1 ] && ! echo "$out" | grep -q "unique to this install"'
+
 # a custom backend_addr (the user's own site) must be left alone — no seed
 printf '{\n  "mode": "listen", "carrier": "mtcp", "reverse": false,\n  "backend_addr": "127.0.0.1:8080",\n  "shared_key": "abc123"\n}\n' > "$T/b.json"
 out=$(run_migrate "$T/b.json")
 check "migrate: a custom backend_addr gets NO cover_seed" '! grep -q "cover_seed" "$T/b.json"'
+# a custom host that merely CONTAINS the word builtin must not be mistaken for it
+printf '{\n  "backend_addr": "builtin.example.com:80",\n  "shared_key": "abc123"\n}\n' > "$T/d.json"
+out=$(run_migrate "$T/d.json")
+check "migrate: a 'builtin.example.com' host is NOT treated as the builtin cover" '! grep -q "cover_seed" "$T/d.json"'
 
 # a config that already has a seed is untouched
 printf '{\n  "backend_addr": "builtin", "cover_seed": "00112233445566778899aabbccddeeff",\n  "shared_key": "abc123"\n}\n' > "$T/c.json"
