@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -262,14 +263,27 @@ func randSeed() uint32 {
 // dgPool is a set of datagram carriers under one TUN, sized by the autopilot.
 // The zero value is not usable; use newDgPool.
 type dgPool struct {
-	dev     tunWriter
-	dialer  DgDialer // direct edge / reverse exit: dials carriers; nil on the accepting side
-	accept  bool     // reverse edge: carriers arrive via Add, never dialed here
-	min     int
-	max     int
-	perLink int
-	log     func(string, ...any)
-	clock   func() time.Time
+	dev    tunWriter
+	dialer DgDialer // direct edge / reverse exit: dials carriers; nil on the accepting side
+	accept bool     // reverse edge: carriers arrive via Add, never dialed here
+	// revExit (reverse exit): the edge chooses which carriers retire and
+	// closes them; the exit only stops redialing above the target, never
+	// retires on its own (two ends retiring different carriers would cut
+	// serving far below the target and churn redials).
+	revExit bool
+	// Dials take turns from the process's dial gate; dialing counts those
+	// queued or in progress (they count toward the target), and a failed dial
+	// bumps dialEpoch so dials queued before it are dropped unattempted.
+	gate      *dialGate
+	dialing   atomic.Int32
+	dialEpoch atomic.Uint64
+	failN     atomic.Int32
+	failLog   atomic.Int64 // unix ns of the last failure line
+	min       int
+	max       int
+	perLink   int
+	log       func(string, ...any)
+	clock     func() time.Time
 
 	ap    *autopilot
 	mu    sync.RWMutex
@@ -860,7 +874,7 @@ func (p *dgPool) reconcile(ctx context.Context, T int) {
 			need--
 		}
 		toDial = need
-	} else if need < 0 {
+	} else if need < 0 && !p.revExit {
 		// retire the ones that will empty soonest (fewest flows, then idlest)
 		sortByEmptiest(serving, now)
 		for i := 0; i < -need && i < len(serving); i++ {
@@ -871,23 +885,50 @@ func (p *dgPool) reconcile(ctx context.Context, T int) {
 	p.mu.Unlock()
 
 	if p.dialer != nil && toDial > 0 {
-		if toDial > dgDialBudget {
-			toDial = dgDialBudget
-		}
+		toDial -= int(p.dialing.Load()) // already on their way
+		budget := min(max(dgDialBudget, ceilDiv(T, 16)), 20)
+		toDial = min(toDial, budget, p.max-p.count()-int(p.dialing.Load()))
 		for i := 0; i < toDial; i++ {
-			go p.dialOne(ctx)
+			p.queueDial(ctx)
 		}
 	}
 }
 
-// dialOne dials a carrier and adds it (direct edge / reverse exit).
-func (p *dgPool) dialOne(ctx context.Context) {
-	if p.count() >= p.max {
+// queueDial starts one carrier dial through the dial gate (direct edge /
+// reverse exit).
+func (p *dgPool) queueDial(ctx context.Context) {
+	p.dialing.Add(1)
+	epoch := p.dialEpoch.Load()
+	go func() {
+		defer p.dialing.Add(-1) // after add(): the count never dips
+		p.dialOne(ctx, epoch)
+	}()
+}
+
+// dialOne dials a carrier and adds it, after its turn at the gate; a dial
+// queued before another one failed is dropped (the next tick asks again).
+func (p *dgPool) dialOne(ctx context.Context, epoch uint64) {
+	g := p.gate
+	if g == nil {
+		g = linkGate
+	}
+	release, ok := g.acquire(ctx)
+	if !ok {
+		return
+	}
+	defer release()
+	if p.dialEpoch.Load() != epoch || p.count() >= p.max {
 		return
 	}
 	car, err := p.dialer.Dial(ctx)
 	if err != nil {
-		p.log("dg: carrier dial failed: %v", err)
+		p.dialEpoch.Add(1)
+		n := p.failN.Add(1)
+		now := time.Now().UnixNano()
+		if last := p.failLog.Load(); now-last >= int64(dialFailLogEvery) && p.failLog.CompareAndSwap(last, now) {
+			p.failN.Add(-n)
+			p.log("dg: carrier dial failed: %v (%d failed dial(s) since the last line)", err, n)
+		}
 		return
 	}
 	p.add(ctx, car, "dialed")
@@ -1107,11 +1148,34 @@ func (p *dgPool) carrierLine() string {
 	type statser interface{ Stats() udpcarrier.Stats }
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	var b []byte
+	// Above carrierLineMax carriers the line lists the counts and only the
+	// carriers with the most loss (a 300-carrier line would be ~15 KB every
+	// 2 s and unreadable).
+	set := make([]*dgLink, 0, len(p.set))
 	for _, l := range p.set {
-		if !l.alive() {
-			continue
+		if l.alive() {
+			set = append(set, l)
 		}
+	}
+	var b []byte
+	if len(set) > carrierLineMax {
+		serving := 0
+		for _, l := range set {
+			if !l.retiring {
+				serving++
+			}
+		}
+		loss := func(l *dgLink) uint32 {
+			if c, ok := l.car.(statser); ok {
+				return c.Stats().LossPPM
+			}
+			return 0
+		}
+		sort.SliceStable(set, func(i, j int) bool { return loss(set[i]) > loss(set[j]) })
+		b = fmt.Appendf(b, "%d carriers (%d serving, %d retiring); most loss:", len(set), serving, len(set)-serving)
+		set = set[:carrierLineWorst]
+	}
+	for _, l := range set {
 		st := "serving"
 		if l.retiring {
 			st = "retiring"
@@ -1140,6 +1204,12 @@ func (p *dgPool) carrierLine() string {
 	}
 	return string(b)
 }
+
+// carrierLineMax / carrierLineWorst: see carrierLine.
+const (
+	carrierLineMax   = 32
+	carrierLineWorst = 10
+)
 
 // Stats returns the last published snapshot.
 func (p *dgPool) Stats() PoolStats {
@@ -1243,8 +1313,8 @@ func (p *dgPool) publishDownStats(s apSample) {
 		return
 	}
 	var b [6]byte
-	binary.BigEndian.PutUint16(b[0:], uint16(pressed))
-	binary.BigEndian.PutUint16(b[2:], uint16(serving))
+	binary.BigEndian.PutUint16(b[0:], uint16(min(pressed, 0xffff)))
+	binary.BigEndian.PutUint16(b[2:], uint16(min(serving, 0xffff)))
 	binary.BigEndian.PutUint16(b[4:], p.ceilingU16()) // display only; older edges read [0:4]
 	p.sendVia(l, core.TypeLinkStats, b[:])
 }
@@ -1253,7 +1323,7 @@ func (p *dgPool) publishDownStats(s apSample) {
 // An older exit reads only the first two bytes.
 func (p *dgPool) poolCtlPayload(target int) []byte {
 	var b [4]byte
-	binary.BigEndian.PutUint16(b[0:], uint16(target))
+	binary.BigEndian.PutUint16(b[0:], uint16(min(target, 0xffff)))
 	binary.BigEndian.PutUint16(b[2:], p.ceilingU16())
 	return b[:]
 }
@@ -1348,6 +1418,19 @@ type DgConfig struct {
 	Dialer DgDialer
 	// Reverse edge / direct exit: accepts carriers the peer dials in.
 	Listener DgListener
+
+	// WarmLinks (edge, > 0): come up at this many carriers instead of
+	// warmStartLinks — the target before a restart (see IranConfig.WarmLinks).
+	WarmLinks int
+}
+
+// warmCount is how many carriers the edge comes up at (and the autopilot's
+// starting target).
+func (p *dgPool) warmCount(cfg DgConfig) int {
+	if cfg.WarmLinks > 0 {
+		return min(max(cfg.WarmLinks, p.min), p.max)
+	}
+	return warmSize(p.min, p.max)
 }
 
 // RunDgEdge runs the EDGE (iran) side of the datagram tun pool: the side that
@@ -1364,6 +1447,10 @@ func RunDgEdge(ctx context.Context, cfg DgConfig) error {
 		p.dialer = cfg.Dialer
 	} else {
 		p.accept = true
+	}
+	if w := p.warmCount(cfg); w != warmSize(p.min, p.max) {
+		p.ap.T = w
+		p.target.Store(int32(w))
 	}
 	pp := p
 	poolProbe.Store(&pp)
@@ -1385,14 +1472,11 @@ func RunDgEdge(ctx context.Context, cfg DgConfig) error {
 	} else {
 		go p.publishInfo(ctx) // direct: the exit learns our ceiling (display only)
 	}
-	// Initial fill (direct): bring the pool up warm, staggered.
+	// Initial fill (direct): bring the pool up warm; the dial gate spaces the
+	// handshakes.
 	if !cfg.Reverse {
-		warm := warmSize(cfg.Min, cfg.Max)
-		for i := 0; i < warm && ctx.Err() == nil; i++ {
-			if i > 0 {
-				sleepCtx(ctx, jitterGap())
-			}
-			go p.dialOne(ctx)
+		for i := p.warmCount(cfg); i > 0; i-- {
+			p.queueDial(ctx)
 		}
 	}
 	p.runLoop(ctx, !cfg.Reverse)
@@ -1443,6 +1527,7 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 	}
 	// Reverse exit: dial to match the edge's target (learned via pool control).
 	p.dialer = cfg.Dialer
+	p.revExit = true
 	p.target.Store(int32(warmSize(cfg.Min, cfg.Max)))
 	p.runReverseExit(ctx)
 	return nil

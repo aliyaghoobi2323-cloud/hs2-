@@ -266,12 +266,21 @@ func newAutopilot(min, max, perLink int) *autopilot {
 	if perLink < 1 {
 		perLink = 8
 	}
-	return &autopilot{min: min, max: max, perLink: perLink, tun: defaultTunables(),
+	tun := defaultTunables()
+	// One capacity sample per pressed link per tick: at hundreds of links a
+	// fixed 256 would hold less than one tick of the 30-minute window.
+	if tun.capMax < 4*max {
+		tun.capMax = 4 * max
+	}
+	return &autopilot{min: min, max: max, perLink: perLink, tun: tun,
 		rnd: rand.Float64, T: warmSize(min, max)}
 }
 
 // spare is how many unpressed links should be left for new flows when p links
-// are pressed: one pinned capped flow never triggers growth, several do.
+// are pressed: one pinned capped flow never triggers growth, several do. The
+// cap is 4 up to 64 pressed links and a sixteenth above that: in a pool of
+// hundreds, flows ending and fresh links mean more than 4 links are always
+// momentarily unpressed, and a fixed 4 would stop growth far below demand.
 func spare(p int) int {
 	if p == 0 {
 		return 0
@@ -280,10 +289,26 @@ func spare(p int) int {
 	if s < 1 {
 		s = 1
 	}
-	if s > 4 {
-		s = 4
+	if c := max(4, ceilDiv(p, 16)); s > c {
+		s = c
 	}
 	return s
+}
+
+// Probe steps are a share of the pattern but bounded in links, so a probe at
+// hundreds of links costs at most a few seconds of the dial gate's handshakes
+// (the floor from active flows takes big jumps without probing).
+const (
+	probeStepMax      = 32
+	probeChainStepMax = 64
+	// armPerLink: a probe's links come up through the dial gate (~10/s), so
+	// the time allowed for them grows with the step.
+	armPerLink = 150 * time.Millisecond
+)
+
+// armTimeoutFor is how long a probe from..to may take to come up.
+func (t *apTunables) armTimeoutFor(from, to int) time.Duration {
+	return t.armTimeout + time.Duration(max(to-from, 0))*armPerLink
 }
 
 func ceilDiv(a, b int) int {
@@ -527,9 +552,9 @@ func (a *autopilot) decide(s apSample) apDecision {
 		// Grow by a quarter; while probes keep succeeding back to back (demand
 		// is climbing), by half — each step is still verified before it is
 		// kept, so a full path costs one failed probe either way.
-		step := (a.T + 3) / 4
+		step := min((a.T+3)/4, probeStepMax)
 		if a.chain > 0 && now.Sub(a.lastGrowAt) <= t.chainWindow {
-			step = (a.T + 1) / 2
+			step = min((a.T+1)/2, probeChainStepMax)
 		}
 		to := a.T + step
 		if to > U {
@@ -601,7 +626,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 		if S >= pr.to {
 			pr.armed, pr.armedAt = true, now
 			a.aborts = 0
-		} else if now.Sub(pr.start) > t.armTimeout {
+		} else if arm := t.armTimeoutFor(pr.from, pr.to); now.Sub(pr.start) > arm {
 			a.T = pr.from
 			a.pr = nil
 			a.chain = 0
@@ -617,7 +642,7 @@ func (a *autopilot) judge(s apSample, S, R, fl60 int, why string) apDecision {
 			a.waitWhy = fmt.Sprintf("the last try wanted %d links but only %d came up", pr.to, S)
 			return a.out(s, S, R, apHolding, fmt.Sprintf("wanted %d links, only %d came up; next try in %s", pr.to, S, fmtDur(back)),
 				fmt.Sprintf("pattern back to %d links: wanted %d but only %d came up in %s (peer not dialing or dials failing); retry in %s",
-					pr.from, pr.to, S, fmtDur(t.armTimeout), fmtDur(back)))
+					pr.from, pr.to, S, fmtDur(arm), fmtDur(back)))
 		}
 		return a.out(s, S, R, apProbing, fmt.Sprintf("trying %d links — waiting for them to come up (%d up)", pr.to, S), "")
 	}

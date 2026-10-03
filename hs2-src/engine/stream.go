@@ -53,7 +53,8 @@ const kindTimeout = 10 * time.Second
 var copyBufs = sync.Pool{New: func() any { b := make([]byte, 32<<10); return &b }}
 
 // relay copies both ways between a and b and returns when either direction
-// ends, closing both so the other direction unblocks.
+// ends, closing both so the other direction unblocks. (A user connection over
+// a smux stream uses relayStream, wedge.go, which also guards the link.)
 func relay(a, b io.ReadWriteCloser) {
 	done := make(chan struct{}, 2)
 	cp := func(dst io.Writer, src io.Reader) {
@@ -80,6 +81,10 @@ type watchConn struct {
 	// why records the first read/write error, so the log can say why a link
 	// went down instead of only that it did.
 	why atomic.Pointer[string]
+	// rdCalls / inRead let the wedge guard (wedge.go) see, without a syscall,
+	// that smux's reader has stopped asking for data (its bucket is empty).
+	rdCalls atomic.Uint64
+	inRead  atomic.Bool
 }
 
 func (w *watchConn) fail(op string, err error) {
@@ -99,7 +104,10 @@ func (w *watchConn) reason() string {
 }
 
 func (w *watchConn) Read(p []byte) (int, error) {
+	w.rdCalls.Add(1)
+	w.inRead.Store(true)
 	n, err := w.Conn.Read(p)
+	w.inRead.Store(false)
 	if err != nil {
 		w.fail("read", err)
 	}
@@ -159,6 +167,8 @@ func describeNetErr(err error) string {
 // a default HTTPS sampler. When meter is non-nil (edge links), a meteredConn
 // above the shaper counts real payload/stalls for health-aware routing. The
 // returned func reports why the connection failed ("" while it is healthy).
+// Every session is watched by the wedge guard (wedge.go); its guard is left in
+// meter.guard for the relays on the link.
 func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
 	var c net.Conn = newShapedConn(conn, sampler)
@@ -183,6 +193,12 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 		return nil, nil, err
 	}
 	sp.Store(sess)
+	g := &sessGuard{w: w}
+	g.sess.Store(sess)
+	if meter != nil {
+		meter.guard = g
+	}
+	guards.add(g)
 	return sess, w.reason, nil
 }
 

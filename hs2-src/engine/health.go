@@ -73,6 +73,8 @@ const (
 	// exchanges a tiny ping/pong with the exit every controlInterval to learn the
 	// download-direction retransmits and the round-trip time.
 	controlInterval = 3 * time.Second
+	// controlIdleEvery: the control ping's period on a link without traffic.
+	controlIdleEvery = 12 * time.Second
 )
 
 // linkMeter holds the raw counters for one link. It is deliberately dumb: it
@@ -112,6 +114,10 @@ type linkMeter struct {
 	peerInfo    atomic.Pointer[peerInfo]
 	infoDone    atomic.Bool
 	infoRefused atomic.Bool
+
+	// guard watches the link's smux session for a reader stuck on a full
+	// receive buffer (wedge.go); set once by newSession, before any stream.
+	guard *sessGuard
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
@@ -182,3 +188,7 @@ func linkTCPStatsOf(l Link) (tcpStat, bool) {
 	}
 	return tcpStat{}, false
 }
+
+// WarmSize is the link count a pool comes up at with no history: the exit's
+// first dial count in reverse matches the edge's first target (no churn).
+func WarmSize(min, max int) int { return warmSize(min, max) }

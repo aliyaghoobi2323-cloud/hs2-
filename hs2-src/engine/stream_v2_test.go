@@ -204,7 +204,7 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 			go openInfo(ctx, l, mine)
 		}
 		if !o.direct {
-			go openPoolCtl(ctx, l, lm.Target, r.edge.logf, func() { lm.markPoolRefused(l) })
+			go openPoolCtl(ctx, l, lm, r.edge.logf, func() { lm.markPoolRefused(l) })
 		}
 	}
 	go lm.Run(ctx)
@@ -871,18 +871,17 @@ func TestMixedOldEdgeResizesNewExit(t *testing.T) {
 	}
 	r := startV2(t, v2Opts{min: 2, max: 8, perLink: 8, pin: 3, target: 3,
 		exitLinks: 6, exitMin: 2, exitMax: 8, oldEdge: true})
-	// The exit comes up with its own 6; the edge wants 3, so the last 3 arrive
-	// retiring and are closed once old enough, and the exit retires their slots.
-	r.waitFor("the exit's 6 links up: 3 serving, 3 born retiring", 4*time.Second, func() bool {
-		s := r.lm.Stats()
-		return s.Links == 6 && s.Serving == 3 && s.Retiring == 3
-	})
+	// The exit comes up with its own 6 slots, dialing through the gate; the
+	// edge wants 3. Slots still waiting for their turn when the target arrives
+	// retire without dialing; any that were already dialed arrive retiring and
+	// are closed once old enough, and the exit retires their slots.
 	r.waitFor("the exit follows the edge down to 3", 16*time.Second, func() bool {
 		e, s := r.exitView(), r.lm.Stats()
 		return e.Target == 3 && e.Links == 3 && s.Links == 3 && s.Serving == 3
 	})
-	if n := r.dials.Load(); n != 6 {
-		t.Fatalf("exit dialled %d links; want its initial 6 only", n)
+	d0 := r.dials.Load()
+	if d0 < 3 || d0 > 6 {
+		t.Fatalf("exit dialled %d links; want 3 to its initial 6", d0)
 	}
 	if !echoOnce(r.userAddr, 4096) {
 		t.Fatal("no echo through the tunnel")
@@ -892,16 +891,16 @@ func TestMixedOldEdgeResizesNewExit(t *testing.T) {
 		e, s := r.exitView(), r.lm.Stats()
 		return e.Target == 6 && e.Links == 6 && s.Serving == 6 && s.Links == 6
 	})
-	if n := r.dials.Load(); n != 9 {
-		t.Fatalf("exit dialled %d links in all; want 6 + 3", n)
+	if n := r.dials.Load(); n != d0+3 {
+		t.Fatalf("exit dialled %d links in all; want %d + 3", n, d0)
 	}
 	r.lm.pin.Store(2)
 	r.waitFor("the exit shrinks to 2", 16*time.Second, func() bool {
 		e, s := r.exitView(), r.lm.Stats()
 		return e.Target == 2 && e.Links == 2 && s.Links == 2
 	})
-	if n := r.dials.Load(); n != 9 {
-		t.Fatalf("exit redialled while shrinking: %d dials in all, want 9", n)
+	if n := r.dials.Load(); n != d0+3 {
+		t.Fatalf("exit redialled while shrinking: %d dials in all, want %d", n, d0+3)
 	}
 	if !echoOnce(r.userAddr, 4096) {
 		t.Fatal("no echo through the tunnel after resizing")

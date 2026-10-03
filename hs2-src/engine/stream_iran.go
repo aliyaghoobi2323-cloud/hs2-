@@ -35,6 +35,12 @@ type IranConfig struct {
 	// xray's 300 s connIdle); negative = never.
 	DrainIdle time.Duration
 
+	// WarmLinks (> 0): come up at this many links instead of warmStartLinks —
+	// the target the pool had before a restart (the caller keeps it across
+	// restarts), so users reconnecting after a restart under load spread over
+	// as many links as they had.
+	WarmLinks int
+
 	// OnStart, if set, is called once with a function that returns a live
 	// snapshot of the link pattern, so the caller can publish it for monitoring.
 	OnStart func(StatsFn)
@@ -51,6 +57,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	setGuardLog(cfg.Log)
 	reverse := cfg.RevServer != nil
 	var lm *LinkManager
 	if reverse {
@@ -66,10 +73,11 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	if cfg.DrainIdle != 0 {
 		lm.SetDrainIdle(cfg.DrainIdle)
 	}
+	lm.SetWarm(cfg.WarmLinks)
 	// A link carries user connections only once its kindInfo exchange is over,
 	// so each one knows whether the exit routes port tags (routes.go).
 	lm.gateInfo = true
-	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags}
+	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
 			mine.Ports = append(mine.Ports, n)
@@ -112,7 +120,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 			}
 		}()
 		if reverse {
-			go openPoolCtl(ctx, l, lm.Target, logf, func() { lm.markPoolRefused(l) })
+			go openPoolCtl(ctx, l, lm, logf, func() { lm.markPoolRefused(l) })
 		}
 		if l3 != nil {
 			openL3(ctx, l, l3, cfg.TUN, logf)
@@ -135,11 +143,18 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		}
 		go func() { <-ctx.Done(); ln.Close() }()
 		go func() {
+			// A user port must not die on a transient accept error (out of
+			// file descriptors under a connection flood): back off and retry.
+			var bo acceptBackoff
 			for {
 				c, err := ln.Accept()
 				if err != nil {
-					return
+					if !bo.wait(ctx, err, logf, "user port "+p) {
+						return
+					}
+					continue
 				}
+				bo.ok()
 				go serveUserTCP(ctx, c, lm, port)
 			}
 		}()
@@ -229,7 +244,7 @@ func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int)
 		return
 	}
 	defer release()
-	relay(user, st)
+	relayStream(user, st, guardOf(st))
 }
 
 type udpFlow struct {
@@ -324,7 +339,7 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 		st.Close()
 		return
 	}
-	pl := newL3Link(newStreamPkt(st))
+	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)))
 	set.add(pl)
 	go func() {
 		set.serveLink(ctx, pl, dev)

@@ -186,3 +186,32 @@ func TestWriteLoopDropsStalePackets(t *testing.T) {
 		t.Fatalf("drops = %d, want 1", drops.Load())
 	}
 }
+
+// In stream mode the TUN side channel sends quiet keepalives only once the
+// other server said (kindInfo capL3Quiet) that its reader allows them; its own
+// reader always allows 30 s.
+func TestStreamL3QuietKeepaliveNeedsPeerCap(t *testing.T) {
+	m := &linkMeter{}
+	l := newStreamL3Link(nil, peerL3Quiet(m))
+	if l.deadAfter != l3StreamDeadAfter {
+		t.Fatalf("deadAfter=%s, want %s", l.deadAfter, l3StreamDeadAfter)
+	}
+	if ka := l.keepalive(); ka != l3KeepaliveEvery {
+		t.Fatalf("keepalive before the peer's info = %s, want %s", ka, l3KeepaliveEvery)
+	}
+	m.peerInfo.Store(&peerInfo{V2: true, Caps: capPortTags}) // an older new-format peer
+	if ka := l.keepalive(); ka != l3KeepaliveEvery {
+		t.Fatalf("keepalive to a peer without capL3Quiet = %s", ka)
+	}
+	m.peerInfo.Store(&peerInfo{V2: true, Caps: capPortTags | capL3Quiet})
+	for i := 0; i < 50; i++ {
+		if ka := l.keepalive(); ka < 8*time.Second || ka > 12*time.Second {
+			t.Fatalf("quiet keepalive %s outside 10s ±20%%", ka)
+		}
+	}
+	// The non-stream (pool L3) link keeps its fixed values.
+	p := newL3Link(nil)
+	if p.keepalive() != l3KeepaliveEvery || p.deadAfter != 0 {
+		t.Fatal("pool L3 link changed")
+	}
+}

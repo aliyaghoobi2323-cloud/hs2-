@@ -108,34 +108,46 @@ func profileFor(ramMB, cpus int) string {
 // decision that sizes the kernel buffers).
 func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
 
-// Link-pool ceilings per profile. The adaptive pool is allowed to grow up to
-// this many parallel links. The number is keyed to the SAME profile that sizes
-// the kernel socket buffers (profileFor), so a box that gets bigger buffers also
-// gets room for more parallel links, and a small box gets neither — one
-// resource story, one signal.
+// Link-pool ceiling. The adaptive pool is allowed to grow up to this many
+// parallel links; the autopilot only *wants* ceil(active flows / per_link)
+// (per_link 8), so the ceiling is headroom, not a target, and a quiet tunnel
+// runs at its min_links whatever the ceiling.
 //
-// Why these numbers, from the code:
-//   - Each link's smux session may hold up to engine.SmuxSessionBuffer (8 MiB)
-//     of receive buffer under a sustained backlog (a cap, reached only when a
-//     reader stalls — not pre-allocated). 64 links is therefore up to ~512 MiB
-//     worst case, plus the per-socket kernel buffers this profile sets
-//     (rmem/wmem). Affordable on a high box, an OOM risk on a 1 GB VPS.
-//   - 32 is the historical default and stays the floor for low boxes, so no
-//     existing small server is pushed past what it already handles.
+// What a link costs at worst is memory: each link's smux session may hold up
+// to engine.SmuxSessionBuffer (8 MiB) of data its readers have not taken yet,
+// and smux keeps each buffered frame in a power-of-two block, so MSS-sized
+// frames take ~1.5x that: LinkWorstCaseMiB = 12 MiB per link, reached only
+// when readers stall (never pre-allocated). The rule keeps that worst case at
+// or below a quarter of RAM:
 //
-// per_link default is 8, so the autopilot only *wants* this many links under
-// real load (ceil(active_flows/8)); the ceiling is headroom, not a target.
+//   - one link per LinkRAMPerLinkMB (48 MB) of RAM, at most MaxLinksCap (300);
+//   - fewer than 4 cores: at most 128 (handshakes and per-link upkeep are CPU);
+//   - a single core: no more than its profile value (below);
+//   - never below the profile value a server got before (32 / 48 / 64), so no
+//     existing server is pushed below what it already runs.
+//
+// The profile values are keyed to the SAME profile that sizes the kernel
+// socket buffers (profileFor). Examples: 1 GB/1 core 32, 2 GB/4 cores 64,
+// 4 GB/2 cores 85, 8 GB/4 cores 170, 16 GB/4+ cores 300.
 const (
 	maxLinksLow    = 32
 	maxLinksMedium = 48
 	maxLinksHigh   = 64
+
+	// LinkWorstCaseMiB is one link's worst-case receive backlog (8 MiB smux
+	// session buffer x 1.5 allocator rounding); cmd/hs2 tests keep it in step
+	// with engine.SmuxSessionBuffer.
+	LinkWorstCaseMiB = 12
+	// LinkRAMPerLinkMB: RAM per link so the worst case stays <= 25% of RAM.
+	LinkRAMPerLinkMB = 4 * LinkWorstCaseMiB
+	// MaxLinksCap is the largest auto ceiling.
+	MaxLinksCap = 300
+	// maxLinksFewCores caps a server with 2-3 cores.
+	maxLinksFewCores = 128
 )
 
-// RecommendedMaxLinks is the adaptive link-pool ceiling hs2 picks for a server
-// with this much RAM and these many cores. The installer writes it explicitly
-// into the config at setup (so it is visible with `cat` and fixed), and
-// `hs2 doctor` flags it if the hardware later changes.
-func RecommendedMaxLinks(ramMB, cpus int) int {
+// profileMaxLinks is the ceiling a server's profile gave before the RAM rule.
+func profileMaxLinks(ramMB, cpus int) int {
 	switch profileFor(ramMB, cpus) {
 	case "high":
 		return maxLinksHigh
@@ -144,6 +156,58 @@ func RecommendedMaxLinks(ramMB, cpus int) int {
 	default:
 		return maxLinksLow
 	}
+}
+
+// RecommendedMaxLinks is the adaptive link-pool ceiling hs2 picks for a server
+// with this much RAM and these many cores (max_links 0 = auto follows it).
+func RecommendedMaxLinks(ramMB, cpus int) int {
+	n, _ := maxLinksRule(ramMB, cpus)
+	return n
+}
+
+// maxLinksRule is RecommendedMaxLinks plus which part of the rule decided it.
+func maxLinksRule(ramMB, cpus int) (int, string) {
+	base := profileMaxLinks(ramMB, cpus)
+	if cpus < 2 {
+		return base, "single core"
+	}
+	byRAM, why := ramMB/LinkRAMPerLinkMB, "ram"
+	if byRAM > MaxLinksCap {
+		byRAM, why = MaxLinksCap, "cap"
+	}
+	if cpus < 4 && byRAM > maxLinksFewCores {
+		byRAM, why = maxLinksFewCores, "few cores"
+	}
+	if byRAM <= base {
+		return base, "profile"
+	}
+	return byRAM, why
+}
+
+// MaxLinksReason says in words why RecommendedMaxLinks picked its number for
+// this hardware, e.g. "17.0 GB RAM, 20 cores: one link per 48 MB of RAM, at
+// most 300" — for the startup log, status, doctor and the installer.
+func MaxLinksReason(ramMB, cpus int) string {
+	n, why := maxLinksRule(ramMB, cpus)
+	hw := fmt.Sprintf("%.1f GB RAM, %d core%s", float64(ramMB)/1024, cpus, plural(cpus))
+	switch why {
+	case "single core":
+		return fmt.Sprintf("%s: a single core keeps its %s-profile %d", hw, profileFor(ramMB, cpus), n)
+	case "profile":
+		return fmt.Sprintf("%s: the %s-profile %d (RAM allows no more)", hw, profileFor(ramMB, cpus), n)
+	case "few cores":
+		return fmt.Sprintf("%s: one link per %d MB of RAM, at most %d below 4 cores", hw, LinkRAMPerLinkMB, maxLinksFewCores)
+	case "cap":
+		return fmt.Sprintf("%s: one link per %d MB of RAM, at most %d", hw, LinkRAMPerLinkMB, MaxLinksCap)
+	}
+	return fmt.Sprintf("%s: one link per %d MB of RAM, worst-case link buffers <= 25%% of RAM", hw, LinkRAMPerLinkMB)
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 // profileValues returns the buffer/backlog/somaxconn values for a profile.
@@ -226,7 +290,7 @@ func Build(cfg Config, ramMB, cpus int, availCC, availQ func(string) bool) *Plan
 	// ip_local_port_range is deliberately NOT touched: widening it down into
 	// 10240+ makes ports that panels commonly bind for inbounds (x-ui, 10000–32767)
 	// ephemeral, so a new inbound could fail with "address in use". The kernel
-	// default already leaves ~28k outgoing ports — far more than 32 links need.
+	// default already leaves ~28k outgoing ports — far more than the at most 300 links need.
 	// rp_filter=2 (loose): a multi-IP server dialing/listening on a non-default
 	// local IP gets return packets strict rp_filter would drop.
 	add("net.ipv4.conf.all.rp_filter", "2")

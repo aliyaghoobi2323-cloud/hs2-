@@ -63,7 +63,7 @@ func (cfg KharejConfig) routeTable() RouteTable {
 // the ports with their own target.
 func (cfg KharejConfig) info(myMax int) peerInfo {
 	t := cfg.routeTable()
-	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags, Ports: t.MappedPorts()}
+	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet, Ports: t.MappedPorts()}
 	if t.Default != "" {
 		pi.Flags |= flagDefault
 	}
@@ -76,6 +76,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	setGuardLog(cfg.Log)
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = &l3Set{}
@@ -99,14 +100,16 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		})
 	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
+	var bo acceptBackoff
 	for {
 		conn, err := cfg.Listener.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if !bo.wait(ctx, err, logf, "link listener") {
 				return nil
 			}
 			continue
 		}
+		bo.ok()
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
 			mtr := &linkMeter{} // download-side counters, reported over kindStats
 			sess, why, err := newSession(car.RawConn(), true, nil, mtr)
@@ -217,13 +220,17 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			st.Close()
 			return
 		}
-		relay(st, up)
+		var g *sessGuard
+		if mtr != nil {
+			g = mtr.guard
+		}
+		relayStream(up, st, g)
 	case kindL3:
 		if l3 == nil {
 			st.Close() // this side runs without a TUN
 			return
 		}
-		pl := newL3Link(newStreamPkt(st))
+		pl := newStreamL3Link(st, peerL3Quiet(mtr))
 		l3.add(pl)
 		l3.serveLink(ctx, pl, cfg.TUN)
 		l3.remove(pl)

@@ -339,3 +339,21 @@ func TestCheckDgTun(t *testing.T) {
 		}
 	}
 }
+
+// Pool bounds are checked for every pool role (the reverse exit runs its pool
+// with them): negative or past the wire's u16 is an error; a very large count
+// is a warning, never a block (an existing explicit number keeps working).
+func TestCheckPoolBounds(t *testing.T) {
+	base := `{"mode": "listen", "carrier": "mtcp", "reverse": true, "addr": "5.57.38.168:2082",
+		"sni": "t.example", "shared_key": "` + testKey + `", "expose": "127.0.0.1:8443", "max_links": MAX}`
+	local := localIs("5.57.38.168")
+	for _, c := range []struct {
+		max         string
+		errs, warns bool
+	}{{"300", false, false}, {"0", false, false}, {"2000", false, true}, {"70000", true, false}, {"-1", true, false}} {
+		errs, warns := checkConfig([]byte(strings.Replace(base, "MAX", c.max, 1)), local, time.Now())
+		if (len(errs) > 0) != c.errs || (len(warns) > 0) != c.warns {
+			t.Errorf("max_links %s on a reverse exit: errs=%v warns=%v", c.max, errs, warns)
+		}
+	}
+}

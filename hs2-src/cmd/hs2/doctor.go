@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,7 +59,9 @@ func doctorCmd(args []string) {
 			checkTun(d, fc)
 			checkTuning(d, fc)
 			checkLinkPool(d, fc, *cfgPath)
+			checkManyLinks(d, fc, *cfgPath)
 			checkPorts(d, fc, *cfgPath)
+			checkTCPMem(d, "/proc")
 		} else {
 			d.info("live checks", "skipped — the config does not parse as JSON (see the config error above)")
 		}
@@ -318,10 +321,10 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 		return
 	}
 	_, cfgMax, _ := linkEnvelope(fc)         // what a start now runs with (lifted to min_links)
-	rawMax, mode, profile := linkCeiling(fc) // the ceiling itself
+	rawMax, mode, _ := linkCeiling(fc) // the ceiling itself
 	ram, cpus := detectHW()
 	recMax := tune.RecommendedMaxLinks(ram, cpus)
-	hw := fmt.Sprintf("%s box: %s RAM, %d core(s)", profile, ramStr(ram), cpus)
+	hw := "server (" + tune.MaxLinksReason(ram, cpus) + ")"
 	iran := fc.Mode == "dial"
 
 	// The live status (if the daemon runs) knows what it started with and the
@@ -423,4 +426,87 @@ func procListHas(path, name string) bool {
 		}
 	}
 	return false
+}
+
+// manyLinksAt: above this many links the doctor states the visibility
+// trade-off of a large pool (the ceiling was 64 before the 300-link rule).
+const manyLinksAt = 64
+
+// checkManyLinks states, for a pool allowed more than manyLinksAt links, what
+// that looks like from outside — an owner's decision, not a fault — and, in
+// reverse, when the other server holds the pool below this one's ceiling.
+func checkManyLinks(d *doctorReport, fc fileConfig, cfgPath string) {
+	if !hasLinkPool(fc) || (!fc.Reverse && fc.Mode != "dial") {
+		return // a direct Kharej does not size the pool
+	}
+	_, ceil, _ := linkEnvelope(fc)
+	eff := ceil
+	var ls liveStatus
+	if b, err := os.ReadFile(statusPath(cfgPath)); err == nil && json.Unmarshal(b, &ls) == nil && time.Now().Unix()-ls.Updated <= 6 {
+		if ls.EffMax > 0 {
+			eff = ls.EffMax
+		}
+		if fc.Reverse && ls.PeerMax > 0 && ls.PeerMax < ls.CfgMax {
+			other := "Kharej"
+			if fc.Mode != "dial" {
+				other = "Iran"
+			}
+			d.info("link pool (other server)", fmt.Sprintf("the %s server allows at most %d links, this one %d — in reverse the lower applies; to use more, upgrade it and set max_links to 0 (auto) there", other, ls.PeerMax, ls.CfgMax))
+		}
+	}
+	if eff <= manyLinksAt {
+		return
+	}
+	d.info("link count visibility", fmt.Sprintf("this tunnel may open up to %d parallel TLS connections between this server and the other one. "+
+		"That many between one fixed pair of IPs is more unusual to an outside observer than a handful: the pool opens them only under load "+
+		"(about one per %d active connections), at most ~10 new ones a second, and closes them again in quiet hours — but at peak they are all visible at once. "+
+		"Lowering max_links trades peak capacity for a smaller pattern; it is the owner's decision", eff, perLinkOf(fc)))
+}
+
+func perLinkOf(fc fileConfig) int {
+	_, _, per := linkEnvelope(fc)
+	return per
+}
+
+// checkTCPMem compares the kernel's TCP buffer memory with its tcp_mem
+// thresholds: above the pressure mark every socket's buffers are squeezed,
+// above the hard mark the kernel drops packets on all of them. At hundreds of
+// links plus thousands of user connections, stalled readers fill buffers here
+// first.
+func checkTCPMem(d *doctorReport, proc string) {
+	sock, err := os.ReadFile(proc + "/net/sockstat")
+	if err != nil {
+		return
+	}
+	lim, err := os.ReadFile(proc + "/sys/net/ipv4/tcp_mem")
+	if err != nil {
+		return
+	}
+	mem := -1
+	for _, line := range strings.Split(string(sock), "\n") {
+		f := strings.Fields(line)
+		if len(f) > 0 && f[0] == "TCP:" {
+			for i := 1; i+1 < len(f); i += 2 {
+				if f[i] == "mem" {
+					mem, _ = strconv.Atoi(f[i+1])
+				}
+			}
+		}
+	}
+	th := strings.Fields(string(lim))
+	if mem < 0 || len(th) != 3 {
+		return
+	}
+	press, _ := strconv.Atoi(th[1])
+	hard, _ := strconv.Atoi(th[2])
+	page := os.Getpagesize()
+	mb := func(pages int) int { return pages * page >> 20 }
+	switch {
+	case hard > 0 && mem >= hard:
+		d.warn("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers, at the kernel's hard limit (%d MB, tcp_mem) — packets are being dropped on every TCP socket; look for stalled readers (hs2 logs \"stopped reading\")", mb(mem), mb(hard)))
+	case press > 0 && mem >= press:
+		d.warn("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers, above the kernel's pressure mark (%d MB of %d MB, tcp_mem) — socket buffers are being squeezed", mb(mem), mb(press), mb(hard)))
+	default:
+		d.ok("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers (pressure at %d MB, limit %d MB)", mb(mem), mb(press), mb(hard)))
+	}
 }

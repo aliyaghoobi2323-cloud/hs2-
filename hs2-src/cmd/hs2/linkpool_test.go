@@ -36,7 +36,8 @@ func TestLinkCeilingAutoFollowsHardware(t *testing.T) {
 		ram, cpu int
 		want     int
 		profile  string
-	}{{lowRAM, lowCPU, 32, "low"}, {medRAM, medCPU, 48, "medium"}, {highRAM, highCPU, 64, "high"}} {
+	}{{lowRAM, lowCPU, 32, "low"}, {medRAM, medCPU, 48, "medium"}, {highRAM, highCPU, 170, "high"},
+		{17408, 20, 300, "high"}, {22528, 12, 300, "high"}} { // the production pair
 		pinHW(t, c.ram, c.cpu)
 		for _, cfg := range []string{`{"max_links": 0}`, `{"mode":"dial","max_links":0,"min_links":2}`} {
 			var fc fileConfig
@@ -109,7 +110,7 @@ func TestLinkEnvelopeMinAboveAuto(t *testing.T) {
 func TestCeilingLogLine(t *testing.T) {
 	pinHW(t, highRAM, highCPU)
 	auto := ceilingLogLine(autoFC(fileConfig{Carrier: "mtcp"}))
-	if !strings.Contains(auto, "ceiling 64 links") || !strings.Contains(auto, "auto from this server's hardware: high profile") {
+	if !strings.Contains(auto, "ceiling 170 links") || !strings.Contains(auto, "auto from this server's hardware (8.0 GB RAM, 4 cores: one link per 48 MB of RAM") {
 		t.Fatalf("auto startup line: %q", auto)
 	}
 	fixed := ceilingLogLine(fileConfig{Carrier: "mtcp", MaxLinks: 40})
@@ -195,7 +196,7 @@ func TestCeilingLineBothServers(t *testing.T) {
 func TestCeilingLiftedByMinLinks(t *testing.T) {
 	ls := liveStatus{Role: "Iran side", Dir: "direct", CfgMax: 40, CeilRaw: 32, CeilMode: ceilAuto, Profile: "low", RAMMB: lowRAM, CPUCores: 1, RecMax: 32}
 	ls.EffMax, ls.LimitBy = effectiveCeiling(true, false, 40, 0)
-	if got := ceilingLine(ls); !strings.Contains(got, "40 (raised to min_links; the ceiling itself is 32: auto — low profile") {
+	if got := ceilingLine(ls); !strings.Contains(got, "40 (raised to min_links; the ceiling itself is 32: auto — 1.0 GB RAM, 1 core: a single core keeps its low-profile 32") {
 		t.Fatalf("lifted auto: %q", got)
 	}
 	fixed := liveStatus{Role: "Iran side", Dir: "direct", CfgMax: 20, CeilRaw: 16, CeilMode: ceilFixed, Profile: "high", RecMax: 64}
@@ -204,7 +205,7 @@ func TestCeilingLiftedByMinLinks(t *testing.T) {
 	}
 	pinHW(t, lowRAM, lowCPU)
 	d := doctorLinkPool(autoFC(fileConfig{Mode: "dial", Carrier: "mtcp", MinLinks: 40}), filepath.Join(t.TempDir(), "x.json"))
-	if line := strings.Join(d.lines, ""); !strings.Contains(line, "auto: 32 links from this low box") || !strings.Contains(line, "raised to min_links 40") {
+	if line := strings.Join(d.lines, ""); !strings.Contains(line, "auto: 32 links from this server (1.0 GB RAM, 1 core") || !strings.Contains(line, "raised to min_links 40") {
 		t.Fatalf("doctor, lifted auto: %v", d.lines)
 	}
 }
@@ -213,7 +214,7 @@ func TestDriftLine(t *testing.T) {
 	base := liveStatus{Role: "Iran side", Dir: "reverse", Profile: "low", RecMax: 32}
 	high := base
 	high.CfgMax = 64
-	if d := driftLine(high); !strings.Contains(d, "above what this low box suggests (32)") {
+	if d := driftLine(high); !strings.Contains(d, "above what this server suggests (32: low profile)") {
 		t.Errorf("fixed 64 on a low box: %q", d)
 	}
 	lowFixed := liveStatus{Role: "Iran side", Dir: "direct", Profile: "high", RecMax: 64, CfgMax: 32}
@@ -266,11 +267,11 @@ func TestDoctorLinkPool(t *testing.T) {
 
 	// auto, daemon not running: ok.
 	pinHW(t, highRAM, highCPU)
-	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "auto: 64 links") {
+	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "auto: 170 links") {
 		t.Fatalf("auto ok: %v", d.lines)
 	}
 	// auto, the daemon started on a high box but RAM is now low: restart WARN.
-	writeLive(t, cfg, liveStatus{CfgMax: 64})
+	writeLive(t, cfg, liveStatus{CfgMax: 170})
 	pinHW(t, lowRAM, lowCPU)
 	if d := doctorLinkPool(iranRev, cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "restart the tunnel to apply the lower ceiling") {
 		t.Fatalf("auto shrunk under a running daemon: %v", d.lines)
@@ -287,13 +288,13 @@ func TestDoctorLinkPool(t *testing.T) {
 	pinHW(t, lowRAM, lowCPU)
 	fixed64 := iranRev
 	fixed64.MaxLinks, fixed64.maxLinksSet = 64, true
-	if d := doctorLinkPool(fixed64, cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "above what this low box") {
+	if d := doctorLinkPool(fixed64, cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "above what this server (1.0 GB RAM, 1 core") {
 		t.Fatalf("fixed 64 on a low box: %v", d.lines)
 	}
 	pinHW(t, highRAM, highCPU)
 	fixed32 := iranRev
 	fixed32.MaxLinks, fixed32.maxLinksSet = 32, true
-	if d := doctorLinkPool(fixed32, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "could use up to 64") {
+	if d := doctorLinkPool(fixed32, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "could use up to 170") {
 		t.Fatalf("fixed 32 on a high box: %v", d.lines)
 	}
 
@@ -339,11 +340,16 @@ func TestStatusFileCarriesCeiling(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if ls.CfgMax != 64 || ls.CeilMode != ceilAuto || ls.PeerMax != 48 || ls.EffMax != 48 || ls.LimitBy != "kharej" {
+	if ls.CfgMax != 170 || ls.CeilMode != ceilAuto || ls.PeerMax != 48 || ls.EffMax != 48 || ls.LimitBy != "kharej" {
 		t.Fatalf("status ceiling fields: %+v", ls)
 	}
 	if !strings.Contains(ls.CeilingText, "limited by the Kharej server") {
 		t.Fatalf("ceiling_text %q", ls.CeilingText)
+	}
+	// The edge's pool keeps its target in the warm file, which a restart
+	// within warmMaxAge comes back at.
+	if n := readWarm(cfg); n != 3 {
+		t.Fatalf("warm file: %d, want the target 3", n)
 	}
 	// A carrier without a pool writes none of it.
 	cfg2 := filepath.Join(t.TempDir(), "d.json")
@@ -388,5 +394,76 @@ func TestPatternLineCappedByKharej(t *testing.T) {
 	u.PeerMax, u.EffMax, u.LimitBy = 0, 0, "" // older Kharej: cap unknown
 	if got := patternLine(u); strings.Contains(got, "capped") {
 		t.Fatalf("unknown cap must not be claimed: %q", got)
+	}
+}
+
+// The warm file: read back while fresh, ignored when stale or garbled.
+func TestWarmFile(t *testing.T) {
+	useTempStatusDir(t)
+	cfg := filepath.Join(t.TempDir(), "w.json")
+	if n := readWarm(cfg); n != 0 {
+		t.Fatalf("no file: %d", n)
+	}
+	w := &warmWriter{path: warmPath(cfg)}
+	w.note(120)
+	if n := readWarm(cfg); n != 120 {
+		t.Fatalf("fresh: %d, want 120", n)
+	}
+	old := time.Now().Add(-warmMaxAge - time.Minute)
+	os.Chtimes(warmPath(cfg), old, old)
+	if n := readWarm(cfg); n != 0 {
+		t.Fatalf("stale: %d, want 0", n)
+	}
+	os.WriteFile(warmPath(cfg), []byte("x"), 0o644)
+	if n := readWarm(cfg); n != 0 {
+		t.Fatalf("garbled: %d, want 0", n)
+	}
+}
+
+// A pool allowed more than 64 links states the visibility trade-off (the
+// owner's call); a small one says nothing. In reverse a lower peer ceiling is
+// named.
+func TestDoctorManyLinks(t *testing.T) {
+	useTempStatusDir(t)
+	cfg := filepath.Join(t.TempDir(), "m.json")
+	edge := autoFC(fileConfig{Mode: "dial", Reverse: true, Carrier: "mtcp"})
+	pinHW(t, 17408, 20)
+	d := &doctorReport{}
+	checkManyLinks(d, edge, cfg)
+	if l := strings.Join(d.lines, ""); !strings.Contains(l, "up to 300 parallel TLS connections") || !strings.Contains(l, "owner's decision") {
+		t.Fatalf("300-link edge: %v", d.lines)
+	}
+	writeLive(t, cfg, liveStatus{CfgMax: 300, PeerMax: 64, EffMax: 64})
+	d = &doctorReport{}
+	checkManyLinks(d, edge, cfg)
+	l := strings.Join(d.lines, "")
+	if !strings.Contains(l, "the Kharej server allows at most 64 links, this one 300") || strings.Contains(l, "parallel TLS") {
+		t.Fatalf("reverse, Kharej at 64: %v", d.lines)
+	}
+	pinHW(t, lowRAM, lowCPU)
+	os.Remove(statusPath(cfg))
+	d = &doctorReport{}
+	checkManyLinks(d, edge, cfg)
+	if len(d.lines) != 0 {
+		t.Fatalf("a 32-link pool: %v", d.lines)
+	}
+}
+
+func TestDoctorTCPMem(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "net"), 0o755)
+	os.MkdirAll(filepath.Join(dir, "sys/net/ipv4"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sys/net/ipv4/tcp_mem"), []byte("1000\t2000\t3000\n"), 0o644)
+	for _, c := range []struct {
+		mem   int
+		warns int
+		want  string
+	}{{500, 0, "in TCP buffers (pressure at"}, {2500, 1, "pressure mark"}, {3100, 1, "hard limit"}} {
+		os.WriteFile(filepath.Join(dir, "net/sockstat"), []byte(fmt.Sprintf("sockets: used 1\nTCP: inuse 5 orphan 0 tw 0 alloc 6 mem %d\nUDP: inuse 1 mem 0\n", c.mem)), 0o644)
+		d := &doctorReport{}
+		checkTCPMem(d, dir)
+		if d.warns != c.warns || !strings.Contains(strings.Join(d.lines, ""), c.want) {
+			t.Fatalf("mem %d: %v", c.mem, d.lines)
+		}
 	}
 }

@@ -80,6 +80,7 @@ func newV2Manager(dialer LinkDialer, min, max int, accept bool) (*LinkManager, *
 	lg := &v2Log{}
 	m := NewLinkManager(dialer, min, max, 8, lg.logf)
 	m.accept = accept
+	m.gate = instantGate()
 	clk := newV2Clock()
 	m.clock = clk.Now
 	return m, clk, lg
@@ -668,6 +669,7 @@ func TestReconcileUnretiresBeforeDialing(t *testing.T) {
 	now := clk.Advance(time.Second)
 
 	m.reconcile(ctx, 3)
+	settle(m)
 	if isRetiring(m, newer) || !isRetiring(m, older) || !isRetiring(m, few) {
 		t.Fatalf("T=3: wrong link back in service (want the most open, most recently active one)")
 	}
@@ -675,6 +677,7 @@ func TestReconcileUnretiresBeforeDialing(t *testing.T) {
 		t.Fatalf("un-retired link: servingSince=%v heldLogAt=%v, want now and reset", newer.servingSince, newer.heldLogAt)
 	}
 	m.reconcile(ctx, 4)
+	settle(m)
 	if isRetiring(m, older) || !isRetiring(m, few) {
 		t.Fatal("T=4: the second most-open retiring link was not brought back first")
 	}
@@ -682,6 +685,7 @@ func TestReconcileUnretiresBeforeDialing(t *testing.T) {
 		t.Fatalf("dialed %d link(s) while retiring links could be brought back", n)
 	}
 	m.reconcile(ctx, 6)
+	settle(m)
 	if isRetiring(m, few) {
 		t.Fatal("T=6: the last retiring link was not brought back")
 	}
@@ -746,6 +750,7 @@ func TestReconcileNeverExceedsMax(t *testing.T) {
 		}
 		for i := 0; i < 5; i++ {
 			m.reconcile(ctx, 6)
+			settle(m)
 		}
 		if n := d.dials.Load(); n != 1 {
 			t.Fatalf("dialed %d, want 1 (5 physical, max 6)", n)
@@ -767,6 +772,7 @@ func TestReconcileNeverExceedsMax(t *testing.T) {
 			}
 		}
 		m.reconcile(ctx, 6)
+		settle(m)
 		if n := d.dials.Load(); n != 0 {
 			t.Fatalf("dialed %d with the pool at max", n)
 		}
@@ -797,7 +803,9 @@ func TestReapRedialsOnlyToTarget(t *testing.T) {
 		m.reap()
 		m.sampleHealth()
 		m.heal(ctx)
+		settle(m)
 		m.autoscale(ctx)
+		settle(m)
 		m.drainTick()
 	}
 	if n := d.dials.Load(); n != 1 {
@@ -832,6 +840,7 @@ func TestHealUnretiresInsteadOfDialing(t *testing.T) {
 
 	bad.degraded = true
 	m.heal(ctx)
+	settle(m)
 	if !bad.draining || bad.retiring {
 		t.Fatalf("degraded link: draining=%v retiring=%v, want draining", bad.draining, bad.retiring)
 	}
@@ -848,6 +857,7 @@ func TestHealUnretiresInsteadOfDialing(t *testing.T) {
 	// A degraded RETIRING link takes no replacement.
 	r2.degraded = true
 	m.heal(ctx)
+	settle(m)
 	if !r2.draining || r2.retiring || d.dials.Load() != 0 {
 		t.Fatalf("degraded retiring link: draining=%v retiring=%v dials=%d; want draining, no dial", r2.draining, r2.retiring, d.dials.Load())
 	}
@@ -856,6 +866,7 @@ func TestHealUnretiresInsteadOfDialing(t *testing.T) {
 	r1.degraded = true
 	r1.users.Store(1)
 	m.heal(ctx)
+	settle(m)
 	if n := d.dials.Load(); n != 1 {
 		t.Fatalf("with nothing to un-retire, heal dialed %d, want 1", n)
 	}
@@ -1064,7 +1075,7 @@ func TestReclaimSparesStreamThatWakes(t *testing.T) {
 	ml := addManaged(m, wl)
 	ml.retiring = true
 	ml.reclaiming.Store(true) // as drainTick's CAS leaves it
-	m.reclaimIdle(ml, time.Now().Add(time.Hour), drainIdleDefault)
+	m.reclaimIdle(ml, time.Now().Add(time.Hour), drainIdleDefault, false)
 	if ml.reclaiming.Load() {
 		t.Fatal("reclaimIdle did not release the per-link reclaim flag")
 	}
@@ -1365,7 +1376,7 @@ func TestOpenPoolCtlDetectsOldExit(t *testing.T) {
 		m, _, _ := newV2Manager(nil, 2, 8, true)
 		l := &ctrlFakeLink{sess: cli, m: &linkMeter{}}
 		m.AddLink(l, "exit")
-		go openPoolCtl(ctx, l, m.Target, nil, func() { m.markPoolRefused(l) })
+		go openPoolCtl(ctx, l, m, nil, func() { m.markPoolRefused(l) })
 		return m, entryOf(m, l), cancel
 	}
 

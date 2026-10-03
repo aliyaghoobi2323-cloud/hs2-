@@ -241,11 +241,7 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 					bad(`"forward_ports": %s is also the tunnel port in "addr" — pick a different user port`, p)
 				}
 			}
-			if fc.MinLinks < 0 || fc.MaxLinks < 0 || fc.PerLink < 0 {
-				bad(`"min_links", "max_links" and "per_link" cannot be negative`)
-			} else if fc.MinLinks > 0 && fc.MaxLinks > 0 && fc.MinLinks > fc.MaxLinks {
-				bad(`"min_links" (%d) is larger than "max_links" (%d)`, fc.MinLinks, fc.MaxLinks)
-			}
+			checkPoolBounds(fc, bad, warn)
 			if d := fc.DrainIdleSec; d != nil {
 				switch {
 				case *d < 0:
@@ -259,6 +255,9 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			// mtcp/tls carry nothing else, so they need somewhere to send users;
 			// l3mtcp without either is a valid pure routed tunnel.
 			checkExitTable(fc, carrier == "mtcp" || carrier == "tls", "", bad, warn)
+			// A reverse exit runs the pool with these bounds (the edge's
+			// target is clamped to them); a direct exit reports max_links.
+			checkPoolBounds(fc, bad, warn)
 		}
 		if dials && fc.SNI == "" {
 			warn(`"sni" is empty: the TLS handshake goes out without a domain name, which stands out to DPI`)
@@ -309,11 +308,7 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		if fc.Encap == "icmp" && !dials && !haveEchoGuardTool() {
 			warn(`encap icmp: neither nft nor iptables is installed, so to keep the kernel from answering the tunnel's echo requests hs2 must turn off ALL ping replies on this server while it runs (public IP and tun IP) — install nftables to keep normal ping working`)
 		}
-		if fc.MinLinks < 0 || fc.MaxLinks < 0 || fc.PerLink < 0 {
-			bad(`"min_links", "max_links" and "per_link" cannot be negative`)
-		} else if fc.MinLinks > 0 && fc.MaxLinks > 0 && fc.MinLinks > fc.MaxLinks {
-			bad(`"min_links" (%d) is larger than "max_links" (%d)`, fc.MinLinks, fc.MaxLinks)
-		}
+		checkPoolBounds(fc, bad, warn)
 		ports := splitComma(fc.ForwardPorts)
 		seen := map[string]bool{}
 		for _, pt := range ports {
@@ -450,4 +445,27 @@ var haveEchoGuardTool = func() bool {
 		}
 	}
 	return false
+}
+
+// maxWireLinks is the largest link count the servers can tell each other (a
+// u16 on the wire); maxSaneLinks is where a count is very likely a typo.
+const (
+	maxWireLinks = 65535
+	maxSaneLinks = 1024
+)
+
+// checkPoolBounds validates min_links / max_links / per_link for any pool.
+// A large existing number never blocks: above 1024 is a warning (the operator
+// may mean it), only past what the wire can carry is an error.
+func checkPoolBounds(fc fileConfig, bad, warn func(string, ...any)) {
+	switch {
+	case fc.MinLinks < 0 || fc.MaxLinks < 0 || fc.PerLink < 0:
+		bad(`"min_links", "max_links" and "per_link" cannot be negative`)
+	case fc.MinLinks > maxWireLinks || fc.MaxLinks > maxWireLinks:
+		bad(`"min_links"/"max_links" above %d cannot be told to the other server`, maxWireLinks)
+	case fc.MinLinks > 0 && fc.MaxLinks > 0 && fc.MinLinks > fc.MaxLinks:
+		bad(`"min_links" (%d) is larger than "max_links" (%d)`, fc.MinLinks, fc.MaxLinks)
+	case fc.MaxLinks > maxSaneLinks || fc.MinLinks > maxSaneLinks:
+		warn(`"max_links"/"min_links" above %d: every link is a TLS connection with up to ~12 MiB of buffers under load — 0 (auto) sizes it from this server's RAM`, maxSaneLinks)
+	}
 }

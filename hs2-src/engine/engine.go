@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"errors"
+	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -205,3 +207,33 @@ func sleepCtx(ctx context.Context, d time.Duration) bool {
 		return true
 	}
 }
+
+// acceptBackoff paces an accept loop through errors that persist — out of
+// file descriptors (EMFILE, ENFILE), out of buffers — instead of spinning a
+// core on them (or giving up on the listener): 5 ms doubling to 1 s, reset by
+// the next accepted connection, and one log line a minute.
+type acceptBackoff struct {
+	d     time.Duration
+	logAt time.Time
+}
+
+// wait sleeps after a failed Accept; false if ctx ended (or the listener was
+// closed for good) and the loop should stop.
+func (b *acceptBackoff) wait(ctx context.Context, err error, logf func(string, ...any), what string) bool {
+	if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
+		return false
+	}
+	if b.d == 0 {
+		b.d = 5 * time.Millisecond
+	} else if b.d *= 2; b.d > time.Second {
+		b.d = time.Second
+	}
+	if logf != nil && time.Since(b.logAt) >= time.Minute {
+		b.logAt = time.Now()
+		logf("%s: accept failed: %v (retrying; check the open-files limit if this repeats)", what, err)
+	}
+	return sleepCtx(ctx, b.d)
+}
+
+// ok resets the backoff after a successful Accept.
+func (b *acceptBackoff) ok() { b.d = 0 }

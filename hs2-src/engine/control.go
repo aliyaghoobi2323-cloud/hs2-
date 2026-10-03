@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"io"
+	"math/rand/v2"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -54,14 +55,29 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	var seq uint64
 	ping := make([]byte, ctrlPingLen)
 	pong := make([]byte, ctrlPongLen)
-	t := time.NewTicker(controlInterval)
-	defer t.Stop()
+	moved := mtr.rdBytes.Load() + mtr.wrBytes.Load()
+	every := controlInterval
 	for {
+		// Every controlInterval (±25%) while the link carries traffic — the
+		// health logic judges only active links — and every controlIdleEvery
+		// while it is idle: at hundreds of mostly idle links a fixed 3 s beat
+		// on each is a few hundred messages a second, and an exact period
+		// across many parallel connections is a pattern of its own. An idle
+		// link still hears the exit's smux keepalive every 4–8 s.
+		t := time.NewTimer(every*3/4 + time.Duration(rand.Int64N(int64(every/2)+1)))
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
 		case <-t.C:
 		}
+		now := mtr.rdBytes.Load() + mtr.wrBytes.Load()
+		if now-moved >= activeBytes {
+			every = controlInterval
+		} else {
+			every = controlIdleEvery
+		}
+		moved = now
 		seq++
 		binary.BigEndian.PutUint64(ping[0:], seq)
 		binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))

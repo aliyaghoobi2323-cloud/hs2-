@@ -22,6 +22,10 @@ import (
 //	direct : iran = TLS client (dials) + smux client ; kharej = TLS server + smux server
 //	reverse: iran = TLS server (listens) + smux client ; kharej = TLS client (dials) + smux server
 
+// reverseAcceptSlack: links the reverse edge accepts beyond its max (an exit
+// replacing links it has not yet seen die, a heal) before it refuses more.
+const reverseAcceptSlack = 8
+
 // acceptReverseLinks runs on the iran edge in reverse: it accepts the TLS
 // carriers the kharej dials in, wraps each as an edge (smux-client) link, and
 // feeds it to the pool. Each accepted link is held open for its lifetime so the
@@ -29,19 +33,32 @@ import (
 func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Server, lm *LinkManager, logf func(string, ...any)) {
 	sampler := obfs.NewHTTPSLengthSampler()
 	go func() { <-ctx.Done(); ln.Close() }()
+	var bo acceptBackoff
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			if ctx.Err() != nil {
+			if !bo.wait(ctx, err, logf, "reverse link listener") {
 				return
 			}
 			continue
 		}
+		bo.ok()
 		from := conn.RemoteAddr().String()
 		if h, _, err := net.SplitHostPort(from); err == nil {
 			from = h
 		}
 		go srv.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
+			// This server's ceiling holds in reverse too: an exit that dials
+			// far more (an older one, or its min_links above our max) would
+			// otherwise make a small edge hold hundreds of sessions.
+			if n := lm.count(); n >= lm.max+reverseAcceptSlack {
+				if lm.noteOverCap() {
+					logf("mtcp: refusing reverse links from %s beyond %d (this server's max_links %d + %d) — check the Kharej server's min_links/max_links",
+						from, n, lm.max, reverseAcceptSlack)
+				}
+				car.Close()
+				return
+			}
 			l, err := newEdgeLink(car, sampler)
 			if err != nil {
 				car.Close()

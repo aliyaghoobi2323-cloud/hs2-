@@ -142,6 +142,54 @@ func statusPath(cfgPath string) string {
 	return filepath.Join(statusRunDir, name+".status.json")
 }
 
+// warmPath is where the edge keeps its last link target across restarts (next
+// to the status file; unlike it, kept when the daemon stops). The run dir is a
+// tmpfs, so a reboot starts cold.
+func warmPath(cfgPath string) string {
+	return strings.TrimSuffix(statusPath(cfgPath), ".status.json") + ".warm"
+}
+
+// warmMaxAge: a warm file older than this is ignored — the tunnel was down
+// long enough that the old load says nothing about the next one.
+const warmMaxAge = 15 * time.Minute
+
+// readWarm returns the link target the edge had before a restart (0: none,
+// or too old).
+func readWarm(cfgPath string) int {
+	p := warmPath(cfgPath)
+	st, err := os.Stat(p)
+	if err != nil || time.Since(st.ModTime()) > warmMaxAge {
+		return 0
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || n < 1 {
+		return 0
+	}
+	return n
+}
+
+// warmWriter keeps the warm file current: on every change of the target, and
+// at least once a minute so its age says the tunnel was up.
+type warmWriter struct {
+	path string
+	last int
+	at   time.Time
+}
+
+func (w *warmWriter) note(target int) {
+	if target < 1 || (target == w.last && time.Since(w.at) < time.Minute) {
+		return
+	}
+	tmp := w.path + ".tmp"
+	if os.WriteFile(tmp, []byte(strconv.Itoa(target)+"\n"), 0o644) == nil && os.Rename(tmp, w.path) == nil {
+		w.last, w.at = target, time.Now()
+	}
+}
+
 // startStatusWriter publishes the live pattern to the status file every tick
 // until ctx ends, then removes the file. stats returns the current snapshot.
 func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats engine.StatsFn) {
@@ -163,6 +211,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		base.CeilRaw, base.CeilMode, base.Profile = linkCeiling(fc)
 		base.RecMax, base.RAMMB = tune.RecommendedMaxLinks(ramMB, cpus), ramMB
 	}
+	warm := &warmWriter{path: warmPath(cfgPath)}
 	write := func() {
 		s := stats()
 		ls := base
@@ -182,6 +231,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.Phase = s.Phase
 		}
 		if s.Max > 0 && s.Phase != "following" && s.Phase != "listening" { // the edge's pool
+			warm.note(s.Target)
 			serving := s.Serving
 			ls.Serving = &serving
 			ls.Retiring, ls.HeldBy, ls.HeldActive = s.Retiring, s.HeldBy, s.HeldActive
@@ -459,8 +509,8 @@ func effectiveCeiling(iran, reverse bool, own, peer int) (int, string) {
 // fixed by max_links, or the historical default when max_links is not set.
 func ceilingWhy(ls liveStatus) string {
 	hw := ls.Profile + " profile"
-	if ls.RAMMB > 0 {
-		hw += fmt.Sprintf(": %s RAM, %d core(s)", ramStr(ls.RAMMB), ls.CPUCores)
+	if ls.RAMMB > 0 && ls.CPUCores > 0 {
+		hw = tune.MaxLinksReason(ls.RAMMB, ls.CPUCores)
 	}
 	var how string
 	switch ls.CeilMode {
@@ -545,12 +595,21 @@ func driftLine(ls liveStatus) string {
 		return ""
 	}
 	if ls.CeilMode == ceilDefault {
-		return fmt.Sprintf("max_links is not set, so the historical default %d applies; this %s box could use up to %d — set max_links to 0 (auto) to follow the hardware (menu → Link pool)", set, ls.Profile, ls.RecMax)
+		return fmt.Sprintf("max_links is not set, so the historical default %d applies; this server could use up to %d (%s) — set max_links to 0 (auto) to follow the hardware (menu → Link pool)", set, ls.RecMax, hwWhy(ls))
 	}
 	if set > ls.RecMax {
-		return fmt.Sprintf("max_links %d is above what this %s box suggests (%d) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)", set, ls.Profile, ls.RecMax, ls.RecMax)
+		return fmt.Sprintf("max_links %d is above what this server suggests (%d: %s) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)", set, ls.RecMax, hwWhy(ls), ls.RecMax)
 	}
-	return fmt.Sprintf("this %s box could use up to %d; max_links is fixed at %d — set it to 0 (auto) to follow the hardware (menu → Link pool)", ls.Profile, ls.RecMax, set)
+	return fmt.Sprintf("this server could use up to %d (%s); max_links is fixed at %d — set it to 0 (auto) to follow the hardware (menu → Link pool)", ls.RecMax, hwWhy(ls), set)
+}
+
+// hwWhy is the hardware rule behind the recommended ceiling, as recorded in
+// the status (the profile name for an older status file).
+func hwWhy(ls liveStatus) string {
+	if ls.RAMMB > 0 && ls.CPUCores > 0 {
+		return tune.MaxLinksReason(ls.RAMMB, ls.CPUCores)
+	}
+	return ls.Profile + " profile"
 }
 
 // whyLine explains the size: the controller's reason, plus what keeps any

@@ -80,7 +80,14 @@ const (
 	// connIdle (300 s), so normally the panel has already closed them.
 	drainIdleDefault = 310 * time.Second
 	idleReclaimMax   = 16 // idle connections closed per retiring link per tick
-	maxClosesPerTick = 2  // empty retiring links closed per tick
+	maxClosesPerTick = 2  // empty retiring links closed per tick (at most 64 retiring; see closesPerTick)
+	// retireForce: a link still retiring after this long is held only by
+	// connections that move a trickle (app keepalives every few minutes, under
+	// drainIdle): those that are not flowing are closed (FIN; the app
+	// reconnects onto a serving link), so a pool that grew to hundreds of
+	// links for a peak really comes back down in quiet hours. Flowing
+	// connections are never closed.
+	retireForce = 20 * time.Minute
 
 	heldLogFirst = 15 * time.Minute // "retiring link held by N" first log
 	heldLogEvery = time.Hour        // ... and then
@@ -140,12 +147,16 @@ type LinkManager struct {
 	// retiring link only once the exit has had time to learn the lower target,
 	// so it retires that slot instead of redialing it.
 	targetDropAt time.Time
+	overCapLog   atomic.Int64 // unix ns of the last "refusing reverse links" line
+	targetMu     sync.Mutex
+	targetCh     chan struct{} // closed on the next target change (pool-control)
 	stats        atomic.Pointer[PoolStats]
 	exitStats    string
 	dialFailAt   time.Time
 	rwndHintAt   time.Time
 	reclaimLogAt time.Time
 	reclaimed    atomic.Int64 // idle connections closed on retiring links, not yet logged
+	forced       atomic.Int64 // ... of which trickling ones on links retiring retireForce+
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
 	drainIdle atomic.Int64
@@ -157,12 +168,38 @@ type LinkManager struct {
 	growable     bool        // last sample: the peer can add links
 	shortLived   shortLivedLinks
 	noPoolLogged bool
+
+	// Direct dialing runs off the pool's tick (queueDial): every dial takes a
+	// turn from gate and runs in its own goroutine. dialing counts the dials
+	// queued or in progress (they count toward the target, so a tick never
+	// queues a link twice); a failed dial bumps dialEpoch, and every dial
+	// queued before it is dropped unattempted (a dead peer costs one attempt
+	// per tick, not a queue of them). dialedN / dialFails / dialErr feed the
+	// tick's log lines. dialWG lets tests wait for queued dials.
+	gate      *dialGate
+	dialing   atomic.Int32
+	dialEpoch atomic.Uint64
+	dialedN   atomic.Int32
+	dialFails atomic.Int32
+	dialErr   atomic.Pointer[string]
+	dialWG    sync.WaitGroup
+	// warm, when > 0, replaces warmStartLinks as the size the pool comes up
+	// at (the last target before a restart; see SetWarm).
+	warm int
+
+	upLog, downLog, closeLog, replLog *burstLog
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
 // not count as user load (e.g. the TUN side channel).
 type rawStreamOpener interface {
 	OpenRawStream() (*smux.Stream, error)
+}
+
+// slowReclaimer is implemented by links that can name their user streams
+// that are not flowing (retireForce).
+type slowReclaimer interface {
+	slowStreams(max int) []idleCand
 }
 
 // idleReclaimer is implemented by links whose idle user streams can be closed.
@@ -268,10 +305,38 @@ func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, 
 		logf = func(string, ...any) {}
 	}
 	m := &LinkManager{dialer: dialer, min: min, max: max, perLink: perLink, log: logf,
-		ap: newAutopilot(min, max, perLink), growable: true}
+		ap: newAutopilot(min, max, perLink), growable: true, gate: linkGate}
 	m.drainIdle.Store(int64(drainIdleDefault))
 	m.target.Store(int32(warmSize(min, max)))
+	logp := func(f string, a ...any) { m.log(f, a...) }
+	m.upLog = newBurstLog("mtcp: ", "links up", logp)
+	m.downLog = newBurstLog("mtcp: ", "links down", logp)
+	m.closeLog = newBurstLog("mtcp: ", "retired links closed", logp)
+	m.replLog = newBurstLog("mtcp: ", "replacement links", logp)
 	return m
+}
+
+// SetWarm makes the pool come up at n links instead of warmStartLinks
+// (clamped to [min,max]): the target it had before a restart, so a tunnel
+// restarted under load does not put every reconnecting user on 8 links. The
+// autopilot starts from the same number and shrinks as usual if the load is
+// gone. Call before Run.
+func (m *LinkManager) SetWarm(n int) {
+	if n <= 0 {
+		return
+	}
+	n = min(max(n, m.min), m.max)
+	m.warm = n
+	m.ap.T = n
+	m.target.Store(int32(n))
+}
+
+// warmCount is the size the pool comes up at.
+func (m *LinkManager) warmCount() int {
+	if m.warm > 0 {
+		return m.warm
+	}
+	return warmSize(m.min, m.max)
 }
 
 // SetDrainIdle sets how long a connection on a retiring link may sit idle
@@ -327,10 +392,10 @@ func (m *LinkManager) AddLink(l Link, from string) int {
 	S, _ := m.countsLocked()
 	m.mu.Unlock()
 	if spare {
-		m.log("mtcp: reverse link %d up from %s (now %d) — spare: the pattern needs %d serving; it takes no connections and closes unless needed",
+		m.upLog.log("mtcp: reverse link %d up from %s (now %d) — spare: the pattern needs %d serving; it takes no connections and closes unless needed",
 			id, from, n, S)
 	} else {
-		m.log("mtcp: reverse link %d up from %s (now %d)", id, from, n)
+		m.upLog.log("mtcp: reverse link %d up from %s (now %d)", id, from, n)
 	}
 	if tripped {
 		m.log("mtcp: the exit redials links this server retires (check the exit's min_links) — keeping %d up for %s", n, fmtDur(churnHold))
@@ -396,7 +461,7 @@ func (m *LinkManager) DropLink(l Link, from string) {
 	if id < 0 || m.closing.Load() {
 		return // already retired or reaped, or the whole pool is shutting down
 	}
-	m.log("mtcp: reverse link %d from %s down: %s (now %d)", id, from, linkDownReason(l), n)
+	m.downLog.log("mtcp: reverse link %d from %s down: %s (now %d)", id, from, linkDownReason(l), n)
 }
 
 // markPoolRefused records that the exit refused the pool-control stream on
@@ -453,20 +518,16 @@ func (m *LinkManager) Run(ctx context.Context) {
 		m.runAccept(ctx)
 		return
 	}
-	// Initial fill, staggered with jitter. Opening the whole pool as one
+	// Initial fill, through the dial gate: opening the whole pool as one
 	// simultaneous burst of identical TLS connections is a behavioral tell, so
-	// establishment is spread over a short randomized window. The pool comes up
-	// warm (warmStartLinks, clamped to the envelope) rather than at min, so a
-	// burst of user connections arriving right after start spreads across enough
-	// links to beat per-connection throttling at once; the autopilot then shrinks
-	// toward what the traffic needs. This costs only a one-time startup ramp.
-	warm := warmSize(m.min, m.max)
-	for i := 0; i < warm; i++ {
-		if i > 0 && !sleepCtx(ctx, jitterGap()) {
-			m.closeAll()
-			return
-		}
-		m.addLink(ctx)
+	// the gate spaces the handshakes (dialgate.go) while the pool's tick runs
+	// from the start. The pool comes up warm (warmStartLinks, or the target it
+	// had before a restart — SetWarm) rather than at min, so a burst of user
+	// connections arriving right after start spreads across enough links to
+	// beat per-connection throttling at once; the autopilot then shrinks toward
+	// what the traffic needs.
+	for i := m.warmCount(); i > 0; i-- {
+		m.queueDial(ctx, false)
 	}
 	tick := time.NewTicker(healthTick)
 	defer tick.Stop()
@@ -542,9 +603,60 @@ func (m *LinkManager) peerMax() int {
 
 // setTarget publishes a new desired link count and remembers when it went down.
 func (m *LinkManager) setTarget(n int) {
-	if old := int(m.target.Swap(int32(n))); n < old {
+	old := int(m.target.Swap(int32(n)))
+	if n < old {
 		m.targetDropAt = m.now()
 	}
+	if n != old {
+		m.targetMu.Lock()
+		if m.targetCh != nil {
+			close(m.targetCh)
+			m.targetCh = nil
+		}
+		m.targetMu.Unlock()
+	}
+}
+
+// noteOverCap reports whether a refused-over-cap reverse link should be
+// logged (at most once a minute).
+func (m *LinkManager) noteOverCap() bool {
+	now := time.Now().UnixNano()
+	last := m.overCapLog.Load()
+	return now-last >= int64(time.Minute) && m.overCapLog.CompareAndSwap(last, now)
+}
+
+// targetChanged returns a channel closed at the next change of the target.
+func (m *LinkManager) targetChanged() <-chan struct{} {
+	m.targetMu.Lock()
+	defer m.targetMu.Unlock()
+	if m.targetCh == nil {
+		m.targetCh = make(chan struct{})
+	}
+	return m.targetCh
+}
+
+// poolCtlFast reports whether l is one of the two oldest live links, which
+// refresh the reverse exit's target every poolCtlInterval (openPoolCtl).
+func (m *LinkManager) poolCtlFast(l Link) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	first, second := -1, -1 // the two lowest live ids
+	mine := -1
+	for _, ml := range m.links {
+		if !ml.link.Alive() {
+			continue
+		}
+		if ml.link == l {
+			mine = ml.id
+		}
+		switch {
+		case first < 0 || ml.id < first:
+			first, second = ml.id, first
+		case second < 0 || ml.id < second:
+			second = ml.id
+		}
+	}
+	return mine >= 0 && (mine == first || mine == second)
 }
 
 // warmSize is the pool size a tunnel comes up at: warmStartLinks, clamped to the
@@ -634,36 +746,87 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 		m.log("mtcp: link(s) %s retiring — no new connections; each closes once its connections end (%d up: %d serving, %d retiring)",
 			strings.Join(gone, ","), up, S, R)
 	}
-	if m.accept || S >= T || m.dialer == nil {
+	if m.accept || m.dialer == nil {
 		return
 	}
+	// What the dials queued since the last tick did.
+	if k := m.dialedN.Swap(0); k > 0 {
+		m.log("mtcp: dialed %d link(s) — %d up, %d of %d serving", k, up, S, T)
+	}
+	if m.dialFails.Load() > 0 && now.Sub(m.dialFailAt) >= dialFailLogEvery {
+		m.dialFails.Store(0)
+		m.dialFailAt = now
+		why := "?"
+		if e := m.dialErr.Load(); e != nil {
+			why = *e
+		}
+		m.log("mtcp: want %d serving links, only %d up — dials failing (peer down or path blocked): %s", T, S, why)
+	}
+	// Queue the shortfall, at most a quarter of T per tick; the gate paces the
+	// handshakes, and the tick never waits for them.
+	inflight := int(m.dialing.Load())
+	n := T - S - inflight
 	step := (T + 3) / 4
 	if step < 1 {
 		step = 1
 	}
-	n := T - S
 	if n > step {
 		n = step
 	}
-	dialed := 0
-	var lastErr error
-	for i := 0; i < n && m.count() < m.max; i++ {
-		if i > 0 && !sleepCtx(ctx, jitterGap()) {
+	if room := m.max - m.count() - inflight; n > room {
+		n = room
+	}
+	for i := 0; i < n; i++ {
+		m.queueDial(ctx, false)
+	}
+}
+
+// queueDial starts one dial off the pool's tick: it waits for a turn from the
+// gate, dials, and adds the link. A replacement (heal) may take the pool past
+// max (make-before-break); any other dial is dropped if the pool reached max
+// meanwhile. A dial queued before another one failed is dropped unattempted.
+func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
+	m.dialing.Add(1)
+	m.dialWG.Add(1)
+	epoch := m.dialEpoch.Load()
+	go func() {
+		defer m.dialWG.Done()
+		defer m.dialing.Add(-1) // after the link is in the pool: never a gap
+		release, ok := m.gate.acquire(ctx)
+		if !ok {
 			return
 		}
-		if err := m.dialLink(ctx); err != nil {
-			lastErr = err
-			break
+		defer release()
+		if m.dialEpoch.Load() != epoch || (!replacement && m.count() >= m.max) {
+			return
 		}
-		dialed++
-	}
-	if dialed > 0 {
-		m.log("mtcp: dialed %d link(s) — %d up, %d of %d serving", dialed, up+dialed, S+dialed, T)
-	}
-	if lastErr != nil && now.Sub(m.dialFailAt) >= dialFailLogEvery {
-		m.dialFailAt = now
-		m.log("mtcp: want %d serving links, only %d up — dials failing (peer down or path blocked): %v", T, S+dialed, lastErr)
-	}
+		l, err := m.dialer.DialLink(ctx)
+		if err != nil {
+			m.dialEpoch.Add(1)
+			why := err.Error()
+			m.dialErr.Store(&why)
+			m.dialFails.Add(1)
+			return
+		}
+		m.mu.Lock()
+		if ctx.Err() != nil || m.closing.Load() {
+			m.mu.Unlock()
+			l.Close()
+			return
+		}
+		id := m.linkSeq
+		m.linkSeq++
+		m.links = append(m.links, m.newManaged(l, id, m.now()))
+		m.mu.Unlock()
+		if replacement {
+			m.replLog.log("mtcp: dialed replacement link %d (make-before-break)", id)
+		} else {
+			m.dialedN.Add(1)
+		}
+		if m.OnLink != nil {
+			go m.OnLink(l)
+		}
+	}()
 }
 
 // drainTick closes retiring links that have emptied and reclaims long-idle
@@ -689,13 +852,15 @@ func (m *LinkManager) drainTick() {
 	}
 	var closing, reclaim []*managedLink
 	var held []string
+	heldN := 0
+	maxCloses := closesPerTick(m.retiringLocked())
 	kept := m.links[:0]
 	for _, ml := range m.links {
 		if !ml.retiring || !ml.link.Alive() {
 			kept = append(kept, ml)
 			continue
 		}
-		if guard && len(closing) < maxClosesPerTick && ml.users.Load() == 0 && ml.link.Active() == 0 &&
+		if guard && len(closing) < maxCloses && ml.users.Load() == 0 && ml.link.Active() == 0 &&
 			(!m.accept || now.Sub(ml.born) >= retireAfterDrop) &&
 			(!ml.bornSpare || now.Sub(ml.born) >= bornSpareGrace) {
 			closing = append(closing, ml)
@@ -707,6 +872,10 @@ func (m *LinkManager) drainTick() {
 		}
 		if age := now.Sub(ml.retireSince); age >= heldLogFirst && (ml.heldLogAt.IsZero() || now.Sub(ml.heldLogAt) >= heldLogEvery) {
 			ml.heldLogAt = now
+			heldN++
+			if len(held) >= 4 { // at hundreds of links: a few examples and a count
+				continue
+			}
 			if n := max(ml.open, int(ml.users.Load())); n > 0 {
 				held = append(held, fmt.Sprintf("link %d retiring %s: held by %d open connection(s), %d active", ml.id, fmtDur(age), n, ml.flowing))
 			} else {
@@ -737,7 +906,7 @@ func (m *LinkManager) drainTick() {
 	}
 	for i, ml := range closing {
 		left := len(closing) - i - 1 // closed in this batch after this one
-		m.log("mtcp: %s %d retired: its connections ended (%s after retiring) — now %d up (%d serving, %d retiring)",
+		m.closeLog.log("mtcp: %s %d retired: its connections ended (%s after retiring) — now %d up (%d serving, %d retiring)",
 			what, ml.id, fmtDur(now.Sub(ml.retireSince)), up+left, S, R+left)
 		go func(l Link) {
 			time.Sleep(closeJitter())
@@ -745,29 +914,74 @@ func (m *LinkManager) drainTick() {
 		}(ml.link)
 	}
 	for _, ml := range reclaim {
-		go m.reclaimIdle(ml, now, drainIdle)
+		go m.reclaimIdle(ml, now, drainIdle, now.Sub(ml.retireSince) >= retireForce)
 	}
 	for _, h := range held {
 		m.log("mtcp: %s", h)
 	}
+	if heldN > len(held) {
+		m.log("mtcp: %d more retiring links held %s+ (same reasons)", heldN-len(held), fmtDur(heldLogFirst))
+	}
 	if n := m.reclaimed.Load(); n > 0 && now.Sub(m.reclaimLogAt) >= time.Minute {
 		m.reclaimed.Add(-n)
+		f := m.forced.Swap(0)
 		m.reclaimLogAt = now
-		m.log("mtcp: closed %d connection(s) idle for over %s on retiring links", n, fmtDur(drainIdle))
+		if f > 0 {
+			m.log("mtcp: closed %d connection(s) on retiring links: %d idle for over %s, %d trickling (not flowing) on links retiring %s+ — they reconnect onto serving links",
+				n, n-f, fmtDur(drainIdle), f, fmtDur(retireForce))
+		} else {
+			m.log("mtcp: closed %d connection(s) idle for over %s on retiring links", n, fmtDur(drainIdle))
+		}
 	}
 }
 
+// closesPerTick is how many empty retiring links drainTick closes per tick:
+// 2 for up to 64 retiring links, a 32nd of them above that (at most 8), so a
+// pool shrinking from hundreds is back down in about a minute of closes
+// rather than five.
+func closesPerTick(retiring int) int {
+	return min(max(maxClosesPerTick, (retiring+31)/32), 8)
+}
+
+// retiringLocked counts live retiring links. Caller holds m.mu.
+func (m *LinkManager) retiringLocked() int {
+	n := 0
+	for _, ml := range m.links {
+		if ml.retiring && ml.link.Alive() {
+			n++
+		}
+	}
+	return n
+}
+
 // reclaimIdle closes, with FIN, the connections on a retiring link that have
-// not moved a byte for drainIdle. A connection that moves anything between
-// being chosen and being closed is spared. Closing a stream can block, so this
-// runs in its own goroutine, one per link at a time.
-func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Duration) {
+// not moved a byte for drainIdle — and, once the link has been retiring for
+// retireForce (force), those that are not flowing either. A connection that
+// moves anything between being chosen and being closed is spared. Closing a
+// stream can block, so this runs in its own goroutine, one per link at a time.
+func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Duration, force bool) {
 	defer ml.reclaiming.Store(false)
 	ir, ok := ml.link.(idleReclaimer)
 	if !ok {
 		return
 	}
-	for i, c := range ir.idleStreams(now, idle, idleReclaimMax) {
+	cands := ir.idleStreams(now, idle, idleReclaimMax)
+	idleN := len(cands)
+	if sr, ok := ml.link.(slowReclaimer); ok && force && len(cands) < idleReclaimMax {
+		seen := map[*countedStream]bool{}
+		for _, c := range cands {
+			seen[c.cs] = true
+		}
+		for _, c := range sr.slowStreams(idleReclaimMax) {
+			if len(cands) >= idleReclaimMax {
+				break
+			}
+			if !seen[c.cs] {
+				cands = append(cands, c)
+			}
+		}
+	}
+	for i, c := range cands {
 		if i > 0 {
 			time.Sleep(closeJitter())
 		}
@@ -776,6 +990,9 @@ func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Dura
 		}
 		c.cs.Close()
 		m.reclaimed.Add(1)
+		if i >= idleN {
+			m.forced.Add(1)
+		}
 	}
 }
 
@@ -832,56 +1049,8 @@ func (m *LinkManager) sweepReverse() {
 		l.Close()
 	}
 	for _, s := range logs {
-		m.log("mtcp: %s", s)
+		m.downLog.log("mtcp: %s", s)
 	}
-}
-
-// addLink dials one link for the initial fill.
-func (m *LinkManager) addLink(ctx context.Context) {
-	if m.count() >= m.max {
-		return
-	}
-	if err := m.dialLink(ctx); err != nil {
-		m.log("mtcp: link dial failed: %v", err)
-	}
-}
-
-// dialLink dials one serving link and adds it to the pool.
-func (m *LinkManager) dialLink(ctx context.Context) error {
-	l, err := m.dialer.DialLink(ctx)
-	if err != nil {
-		return err
-	}
-	m.mu.Lock()
-	id := m.linkSeq
-	m.linkSeq++
-	m.links = append(m.links, m.newManaged(l, id, m.now()))
-	m.mu.Unlock()
-	if m.OnLink != nil {
-		go m.OnLink(l)
-	}
-	return nil
-}
-
-// addReplacement dials a fresh link for make-before-break healing. Unlike
-// reconcile it bypasses the max cap: it is a temporary over-provision so a
-// degraded link's users keep full capacity until they drain onto the new link,
-// after which heal drops the degraded one and the pool returns to size.
-func (m *LinkManager) addReplacement(ctx context.Context) {
-	l, err := m.dialer.DialLink(ctx)
-	if err != nil {
-		m.log("mtcp: replacement dial failed: %v", err)
-		return
-	}
-	m.mu.Lock()
-	id := m.linkSeq
-	m.linkSeq++
-	m.links = append(m.links, m.newManaged(l, id, m.now()))
-	m.mu.Unlock()
-	if m.OnLink != nil {
-		go m.OnLink(l)
-	}
-	m.log("mtcp: dialed replacement link %d (make-before-break)", id)
 }
 
 // reap takes links that died out of the pool and logs each with its reason.
@@ -909,7 +1078,7 @@ func (m *LinkManager) reap() {
 	now := m.now()
 	for _, ml := range dead {
 		ml.link.Close()
-		m.log("mtcp: link %d down: %s", ml.id, linkDownReason(ml.link))
+		m.downLog.log("mtcp: link %d down: %s", ml.id, linkDownReason(ml.link))
 		if hint := m.shortLived.note(now.Sub(ml.born)); hint != "" {
 			m.log("mtcp: %s", hint)
 		}
@@ -1381,13 +1550,22 @@ func (m *LinkManager) heal(ctx context.Context) {
 		back = append(back, fmt.Sprint(best.id))
 		need--
 	}
+	// Dial replacements before dropping anything (make-before-break) — but
+	// at a pool of hundreds a lossy path degrades many links in the same tick,
+	// and the replacements cross the same path: at most a quota per tick, and
+	// never more than an eighth over max in total. The rest is refilled by
+	// reconcile as the draining links leave, at the gate's pace.
+	if m.dialer != nil && need > 0 {
+		quota := max(2, (m.max+7)/8)
+		room := m.max + quota - len(m.links) - int(m.dialing.Load())
+		need = min(need, quota, max(room, 0))
+	}
 	m.mu.Unlock()
 	if len(back) > 0 {
 		m.log("mtcp: link(s) %s back in service to replace a degraded link", strings.Join(back, ","))
 	}
-	// Dial replacements before dropping anything (make-before-break).
 	for i := 0; i < need && m.dialer != nil; i++ {
-		m.addReplacement(ctx)
+		m.queueDial(ctx, true)
 	}
 
 	m.mu.Lock()

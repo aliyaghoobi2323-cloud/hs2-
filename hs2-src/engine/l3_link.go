@@ -9,6 +9,7 @@ import (
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
+	"github.com/xtaci/smux"
 )
 
 // tunWriter is the TUN device as the L3 path uses it.
@@ -65,17 +66,32 @@ const (
 	// spare links: a black-holed link should hand its flows over in seconds.
 	l3KeepaliveEvery = 2 * time.Second
 	l3DeadAfter      = 8 * time.Second
+
+	// In the stream modes (l3mtcp) the TUN side channel rides a smux stream on
+	// a link that already has its own liveness (smux keepalive, the edge's
+	// suspect check, the wedge guard), so its reader allows l3StreamDeadAfter
+	// and — once the other server says over kindInfo that it does the same
+	// (capL3Quiet) — an idle stream sends a keepalive only every
+	// l3QuietKeepalive (±20%) instead of every 2 s: at hundreds of mostly idle
+	// links that is most of the idle traffic. An older peer keeps its 8 s
+	// deadline, so towards it the keepalive stays at 2 s.
+	l3StreamDeadAfter = 30 * time.Second
+	l3QuietKeepalive  = 10 * time.Second
 )
 
 // l3Link is one link in L3 mode: a TLS carrier used as a framed packet pipe.
 type l3Link struct {
-	car  pktConn
-	id   uint32        // rendezvous hash seed
-	q    chan qpkt     // packets waiting for the writer
-	ka   time.Duration // idle time before a keepalive is sent
-	dead atomic.Bool
-	once sync.Once
-	done chan struct{}
+	car pktConn
+	id  uint32        // rendezvous hash seed
+	q   chan qpkt     // packets waiting for the writer
+	ka  time.Duration // idle time before a keepalive is sent
+	// kaFn, when set, decides ka per keepalive (stream mode: by what the peer
+	// supports); deadAfter, when set, replaces l3DeadAfter for the reader.
+	kaFn      func() time.Duration
+	deadAfter time.Duration
+	dead      atomic.Bool
+	once      sync.Once
+	done      chan struct{}
 }
 
 // qpkt is a queued packet and when it was queued.
@@ -92,6 +108,28 @@ func newL3Link(car pktConn) *l3Link {
 		ka:   l3KeepaliveEvery,
 		done: make(chan struct{}),
 	}
+}
+
+// newStreamL3Link is the TUN side channel of a stream-mode link (one smux
+// stream); quiet reports whether the other server allows quiet keepalives.
+func newStreamL3Link(st *smux.Stream, quiet func() bool) *l3Link {
+	l := newL3Link(newStreamPkt(st))
+	l.deadAfter = l3StreamDeadAfter
+	l.kaFn = func() time.Duration {
+		if quiet() {
+			return jitterAround(l3QuietKeepalive)
+		}
+		return l3KeepaliveEvery
+	}
+	return l
+}
+
+// keepalive is the idle time before the next keepalive.
+func (l *l3Link) keepalive() time.Duration {
+	if l.kaFn != nil {
+		return l.kaFn()
+	}
+	return l.ka
 }
 
 func (l *l3Link) Alive() bool { return !l.dead.Load() }
@@ -119,7 +157,7 @@ func (l *l3Link) enqueue(b *[]byte) bool {
 // writeLoop is the only goroutine that writes to the link's carrier.
 func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 	batch := make([]byte, 0, l3BatchBytes+4096)
-	idle := time.NewTimer(l.ka)
+	idle := time.NewTimer(l.keepalive())
 	defer idle.Stop()
 	add := func(p qpkt, now time.Time) {
 		if now.Sub(p.t) > l3MaxSojourn {
@@ -156,7 +194,7 @@ func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 			l.markDead()
 			return
 		}
-		idle.Reset(l.ka)
+		idle.Reset(l.keepalive())
 	}
 }
 
@@ -279,7 +317,11 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 	defer l.markDead()
 	for ctx.Err() == nil {
-		l.car.SetReadDeadline(time.Now().Add(l3DeadAfter))
+		dead := l3DeadAfter
+		if l.deadAfter > 0 {
+			dead = l.deadAfter
+		}
+		l.car.SetReadDeadline(time.Now().Add(dead))
 		ft, payload, err := l.car.ReadFrameReuse()
 		if err != nil {
 			return

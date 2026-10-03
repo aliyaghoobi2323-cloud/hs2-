@@ -42,7 +42,7 @@ func (l *mtcpLink) downReason() string {
 		}
 	}
 	if l.dead.Load() {
-		return "health probe found the session closed"
+		return "marked dead"
 	}
 	return "session ended (keepalive timeout or closed by the other server)"
 }
@@ -50,26 +50,6 @@ func (l *mtcpLink) downReason() string {
 // tcpStats reads the link socket's TCP_INFO (retransmits for loss-based health,
 // chrono counters for upload pressure). Linux only; (zero,false) elsewhere.
 func (l *mtcpLink) tcpStats() (tcpStat, bool) { return tcpStats(l.tls.TCPConn()) }
-
-// healthProbe actively verifies the link. Every few seconds it opens a throwaway
-// smux stream and immediately closes it; if that fails, the underlying TLS/TCP
-// is gone and the link is marked dead so the manager rebuilds it. This catches
-// the idle-session case where smux's own keepalive does not close the session.
-func (l *mtcpLink) healthProbe(ctx context.Context) {
-	t := time.NewTicker(4 * time.Second)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			if l.sess == nil || l.sess.IsClosed() {
-				l.dead.Store(true)
-				return
-			}
-		}
-	}
-}
 
 func (l *mtcpLink) OpenStream() (stream, error) {
 	s, err := l.sess.OpenStream()
@@ -167,6 +147,25 @@ func (l *mtcpLink) idleStreams(now time.Time, idle time.Duration, max int) []idl
 	return out
 }
 
+// slowStreams returns up to max user streams that are not flowing (rate EWMA
+// below flowingRate and not steady), with their byte counters — what holds a
+// link long after its real traffic left: app keepalives and idle sessions
+// that still trickle.
+func (l *mtcpLink) slowStreams(max int) []idleCand {
+	l.flowMu.Lock()
+	defer l.flowMu.Unlock()
+	var out []idleCand
+	for cs := range l.flows {
+		if len(out) >= max {
+			break
+		}
+		if float64(cs.ewma) < flowingRate && cs.steady != 7 {
+			out = append(out, idleCand{cs: cs, snap: cs.bytes.Load()})
+		}
+	}
+	return out
+}
+
 // flowAlpha is the EWMA weight for a sample dt apart with time constant flowTau.
 func flowAlpha(dt time.Duration) float64 {
 	if dt <= 0 {
@@ -180,10 +179,9 @@ func (l *mtcpLink) OpenRawStream() (*smux.Stream, error) { return l.sess.OpenStr
 
 func (l *mtcpLink) Active() int32 { return l.active.Load() }
 
-// Alive reports usability. We treat a link as dead if smux closed it OR if it
-// has gone stale: an idle smux session with no streams may not trip its own
-// keepalive-timeout close (it guards on a non-empty bucket), so we back it with
-// an explicit probe. markDead is set by the health probe below.
+// Alive reports usability: the smux session is open and the link was not
+// marked dead. (A link that stops receiving is caught by the pool's suspect
+// check and the session's keepalive; there is no separate per-link probe.)
 func (l *mtcpLink) Alive() bool {
 	if l.sess == nil || l.sess.IsClosed() || l.dead.Load() {
 		return false
@@ -267,10 +265,11 @@ func newSmuxConfig() *smux.Config {
 	// Randomize the keepalive cadence per session so idle links across the pool
 	// (and across servers) do not all emit the same fixed ~5s beat — a
 	// cross-session timing fingerprint. The NOP frame itself is already
-	// size-disguised by the length shaper (shape.go). Keepalive only fires when a
-	// link is otherwise idle, so links carrying user traffic are unaffected and
-	// throughput is untouched. Timeout stays well above the largest interval so a
-	// couple of missed beats never falsely kill a link.
+	// size-disguised by the length shaper (shape.go). smux sends the NOP on
+	// every beat, busy or idle (one small frame per 4–8 s per side); the
+	// edge's suspect check relies on it reaching an idle link. Timeout stays
+	// well above the largest interval so a couple of missed beats never
+	// falsely kill a link.
 	c.KeepAliveInterval = time.Duration(4000+rand.IntN(4000)) * time.Millisecond // 4–8s
 	c.KeepAliveTimeout = 24 * time.Second
 	c.MaxFrameSize = SmuxFrameSize
@@ -299,9 +298,7 @@ func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLin
 		car.Close()
 		return nil, err
 	}
-	l := &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}
-	go l.healthProbe(context.Background())
-	return l, nil
+	return &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}, nil
 }
 
 // closed reports when the link's smux session ends, so a reverse-edge accept

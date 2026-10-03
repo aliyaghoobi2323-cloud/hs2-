@@ -122,6 +122,7 @@ func TestPickSkipsDegraded(t *testing.T) {
 func TestDegradeAndHeal(t *testing.T) {
 	d := &fakeDialer{}
 	m := NewLinkManager(d, 4, 8, 50, nil)
+	m.gate = instantGate()
 	good := []*meteredFakeLink{newMeteredFake(), newMeteredFake(), newMeteredFake()}
 	bad := newMeteredFake()
 	for _, g := range good {
@@ -156,6 +157,7 @@ func TestDegradeAndHeal(t *testing.T) {
 
 	before := len(m.links)
 	m.heal(context.Background())
+	settle(m)
 	if d.dials.Load() != 1 {
 		t.Fatalf("expected 1 replacement dial (make-before-break), got %d", d.dials.Load())
 	}
@@ -171,6 +173,7 @@ func TestDegradeAndHeal(t *testing.T) {
 
 	badML.users.Store(0)
 	m.heal(context.Background())
+	settle(m)
 	for _, ml := range m.links {
 		if ml == badML {
 			t.Fatal("drained link was not retired")

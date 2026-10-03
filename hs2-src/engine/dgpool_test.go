@@ -367,3 +367,74 @@ func TestDgPoolReverse(t *testing.T) {
 		t.Fatal("reverse: edge->exit packet lost")
 	}
 }
+
+// slowDgDialer counts dials and takes a while for each, like a real handshake.
+type slowDgDialer struct {
+	inner *dgFakeDialer
+	n     atomic.Int32
+	d     time.Duration
+}
+
+func (s *slowDgDialer) Dial(ctx context.Context) (Carrier, error) {
+	s.n.Add(1)
+	time.Sleep(s.d)
+	return s.inner.Dial(ctx)
+}
+
+// Dials still in progress count toward the target: ticks that come while
+// they are on their way do not dial the same carriers again.
+func TestDgDialsInFlightCount(t *testing.T) {
+	dev := newFakeTUN(1400)
+	inner, acc := newDgFakeLink()
+	go func() { // drain the fake exit side
+		for {
+			if _, err := acc.Accept(context.Background()); err != nil {
+				return
+			}
+		}
+	}()
+	d := &slowDgDialer{inner: inner, d: 300 * time.Millisecond}
+	p := newDgPool(dev, 1, 64, 8, func(string, ...any) {})
+	p.dialer = d
+	p.gate = instantGate()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for i := 0; i < 5; i++ { // five ticks while the first dials are on their way
+		p.reconcile(ctx, 10)
+	}
+	if !waitFor(t, 5*time.Second, func() bool { s, _ := p.countsLive(); return s == 10 }) {
+		s, _ := p.countsLive()
+		t.Fatalf("serving=%d, want 10", s)
+	}
+	time.Sleep(400 * time.Millisecond)
+	if n := d.n.Load(); n != 10 {
+		t.Fatalf("%d dials for a target of 10", n)
+	}
+}
+
+// In reverse the exit never retires carriers on its own: the edge picks
+// which ones retire and closes them; the exit only stops redialing.
+func TestDgReverseExitLeavesRetiringToEdge(t *testing.T) {
+	dev := newFakeTUN(1400)
+	dialer, acc := newDgFakeLink()
+	go func() {
+		for {
+			if _, err := acc.Accept(context.Background()); err != nil {
+				return
+			}
+		}
+	}()
+	p := newDgPool(dev, 1, 16, 8, func(string, ...any) {})
+	p.dialer = dialer
+	p.revExit = true
+	p.gate = instantGate()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if !waitFor(t, 5*time.Second, func() bool { p.reconcile(ctx, 6); s, _ := p.countsLive(); return s == 6 }) {
+		t.Fatal("did not reach 6")
+	}
+	p.reconcile(ctx, 2)
+	if s, r := p.countsLive(); s != 6 || r != 0 {
+		t.Fatalf("reverse exit retired on its own: serving=%d retiring=%d", s, r)
+	}
+}

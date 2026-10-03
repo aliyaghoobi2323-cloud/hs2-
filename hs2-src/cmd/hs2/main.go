@@ -273,11 +273,52 @@ func applyTuning() {
 	}
 }
 
+// warmLinks is the link target the edge had before a restart (the warm
+// file), clamped to this run's envelope, logged when used; 0 when there is
+// none or it is too old.
+func warmLinks(logf func(string, ...any), min, max int) int {
+	n := readWarm(configPath)
+	if n <= 0 {
+		return 0
+	}
+	n = clampInt(n, min, max)
+	logf("link pool: coming up at %d links, the size it had before this restart (the autopilot resizes it from there)", n)
+	return n
+}
+
+func clampInt(n, lo, hi int) int {
+	if n < lo {
+		return lo
+	}
+	if n > hi {
+		return hi
+	}
+	return n
+}
+
+// setMemoryLimit gives the Go runtime a soft memory limit of half the RAM
+// (unless GOMEMLIMIT is set): the heap's garbage then never grows to twice
+// a large live backlog (hundreds of links' receive buffers when readers
+// stall) — the collector runs more often near the limit instead.
+func setMemoryLimit() {
+	if _, ok := os.LookupEnv("GOMEMLIMIT"); ok {
+		return
+	}
+	ramMB, _ := detectHW()
+	if ramMB <= 0 {
+		return
+	}
+	lim := int64(ramMB) << 20 / 2
+	debug.SetMemoryLimit(lim)
+	log.Printf("memory: Go soft limit %d MB (half of %d MB RAM; set GOMEMLIMIT to override)", lim>>20, ramMB)
+}
+
 func runCmd(args []string) {
 	// Whatever path runCmd leaves by, no icmp reply rule outlives the daemon
 	// (the listeners release theirs on close; this catches the rest).
 	defer encap.ReleaseAllEchoGuards()
 	applyTuning()
+	setMemoryLimit()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	fs.Parse(args)
@@ -433,6 +474,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			Log:      logf,
 			OnStart:  func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) },
 		}
+		if links == 0 {
+			cfg.WarmLinks = warmLinks(logf, min, max)
+		}
 		if dev != nil {
 			cfg.TUN = dev
 		}
@@ -477,14 +521,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			min, max = links, links
 		}
 		cfg.RevMin, cfg.RevMax = min, max
-		initial := 8
-		if initial < min {
-			initial = min
-		}
-		if initial > max {
-			initial = max
-		}
-		cfg.RevLinks = initial
+		cfg.RevLinks = engine.WarmSize(min, max)
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
 			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
 		}
@@ -549,11 +586,11 @@ func tuneCmd(args []string) {
 // link-pool ceiling this server's RAM and cores justify. The installer calls the
 // bare form and writes the number straight into the config, so the ceiling is
 // chosen once, from the hardware, and is then visible and fixed in the file (not
-// a hidden default). --why adds the profile and the detected hardware for the
-// human-facing menu. It is read-only and needs no config or root.
+// a hidden default). --why adds the detected hardware and the rule that gave
+// the number, for the human-facing menu (the number stays the first field). It is read-only and needs no config or root.
 func recommendLinksCmd(args []string) {
 	fs := flag.NewFlagSet("recommend-links", flag.ExitOnError)
-	why := fs.Bool("why", false, "also print the profile and detected hardware")
+	why := fs.Bool("why", false, "also print the detected hardware and the rule")
 	fs.Parse(args)
 	ramMB, cpus := detectHW()
 	maxLinks := tune.RecommendedMaxLinks(ramMB, cpus)
@@ -561,7 +598,7 @@ func recommendLinksCmd(args []string) {
 		fmt.Println(maxLinks)
 		return
 	}
-	fmt.Printf("%d  (%s profile: %s RAM, %d core(s))\n", maxLinks, tune.ProfileFor(ramMB, cpus), ramStr(ramMB), cpus)
+	fmt.Printf("%d  (%s)\n", maxLinks, tune.MaxLinksReason(ramMB, cpus))
 }
 
 // ramStr prints a RAM size in MB the way the tune report does (GB past 1024).
@@ -646,16 +683,17 @@ func linkCeiling(fc fileConfig) (max int, mode, profile string) {
 // operator's fixed max_links, or the historical default when it is not set.
 func ceilingLogLine(fc fileConfig) string {
 	_, max, _ := linkEnvelope(fc)
-	ceil, mode, profile := linkCeiling(fc)
+	ceil, mode, _ := linkCeiling(fc)
 	ram, cpus := detectHW()
+	why := tune.MaxLinksReason(ram, cpus)
 	var how string
 	switch mode {
 	case ceilAuto:
-		how = fmt.Sprintf("auto from this server's hardware: %s profile, %s RAM, %d core(s); re-derived at every start", profile, ramStr(ram), cpus)
+		how = fmt.Sprintf("auto from this server's hardware (%s); re-derived at every start", why)
 	case ceilFixed:
-		how = fmt.Sprintf("fixed by max_links in the config (this server is a %s box: %s RAM, %d core(s))", profile, ramStr(ram), cpus)
+		how = fmt.Sprintf("fixed by max_links in the config (auto would give %d here: %s)", tune.RecommendedMaxLinks(ram, cpus), why)
 	default:
-		how = fmt.Sprintf("the default (max_links is not set in the config; 0 = auto would give %d on this %s box)", tune.RecommendedMaxLinks(ram, cpus), profile)
+		how = fmt.Sprintf("the default (max_links is not set in the config; 0 = auto would give %d here: %s)", tune.RecommendedMaxLinks(ram, cpus), why)
 	}
 	s := fmt.Sprintf("link pool: ceiling %d links — %s", max, how)
 	if max != ceil { // min_links above the ceiling lifts it
@@ -778,6 +816,9 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 				return st
 			})
 		}}
+	if fc.Mode == "dial" { // the edge sizes the pool
+		cfg.WarmLinks = warmLinks(logf, min, max)
+	}
 
 	// Who dials the carriers: direct = edge dials; reverse = exit dials.
 	if engineDialsTransport(fc) {

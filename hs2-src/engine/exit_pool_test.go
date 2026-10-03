@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -347,4 +348,240 @@ func TestExitPoolServingDeathWithoutRetiringRedials(t *testing.T) {
 	serving, _ := p.entries()
 	serving[0].link.(*carrierLink).c.end()
 	eventually(t, "redialed back to 3 serving", func() bool { return p.state(3, 0, 3)() && p.tp.dials.Load() == 4 })
+}
+
+// scaleTestPool is a test pool whose dials can be made to fail (down) and
+// whose dial start times are recorded.
+type scaleTestPool struct {
+	*testPool
+	down   atomic.Bool
+	tmu    sync.Mutex
+	starts []time.Time
+	tries  atomic.Int32
+}
+
+func newScaleTestPool(t *testing.T, min, max int, gap time.Duration) *scaleTestPool {
+	sp := &scaleTestPool{testPool: newTestPool(t, min, max)}
+	sp.gate = newDialGate(gateInflight, func() time.Duration { return gap })
+	ok := sp.dial
+	sp.dial = func() (dialedLink, error) {
+		sp.tries.Add(1)
+		sp.tmu.Lock()
+		sp.starts = append(sp.starts, time.Now())
+		sp.tmu.Unlock()
+		if sp.down.Load() {
+			return nil, fmt.Errorf("connection refused")
+		}
+		return ok()
+	}
+	return sp
+}
+
+func (sp *scaleTestPool) endAll() {
+	sp.mu.Lock()
+	live := append([]*fakeCarrier(nil), sp.live...)
+	sp.mu.Unlock()
+	for _, c := range live {
+		c.endWith("read: reset by the network or the other server")
+	}
+}
+
+// Growing by hundreds of links never dials them in one burst: every dial
+// takes a turn from the gate, so starts are spaced by its gap.
+func TestExitPoolGrowthIsPaced(t *testing.T) {
+	const gap = 15 * time.Millisecond
+	sp := newScaleTestPool(t, 1, 300, gap)
+	sp.setTarget(60)
+	eventually(t, "60 live links", func() bool { return sp.liveCount() == 60 })
+	sp.tmu.Lock()
+	defer sp.tmu.Unlock()
+	if n := len(sp.starts); n != 60 {
+		t.Fatalf("%d dials for 60 links", n)
+	}
+	first, last := sp.starts[0], sp.starts[0]
+	for _, s := range sp.starts {
+		first, last = minTime(first, s), maxTime(last, s)
+	}
+	if span := last.Sub(first); span < 59*gap-20*time.Millisecond {
+		t.Fatalf("60 dials within %s: a burst (want spaced by %s)", span, gap)
+	}
+}
+
+func minTime(a, b time.Time) time.Time {
+	if b.Before(a) {
+		return b
+	}
+	return a
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
+}
+
+// When every link is lost and the edge refuses, the pool does not hammer it
+// with every slot: one slot keeps trying and the others wait. When the edge
+// is back, the pool holds its initial count until the edge sends a target.
+func TestExitPoolOutageScoutsAndHoldsInitial(t *testing.T) {
+	sp := newScaleTestPool(t, 1, 300, time.Millisecond)
+	sp.setTarget(8) // the count held until the edge speaks
+	sp.setTarget(40)
+	eventually(t, "40 live links", func() bool { return sp.liveCount() == 40 })
+	sp.down.Store(true)
+	before := sp.tries.Load()
+	sp.endAll()
+	time.Sleep(3 * time.Second)
+	tries := sp.tries.Load() - before
+	// Slots already past their wait when the outage began may try once; then
+	// only the scout dials (0.5, 1, 2 s backoff with jitter).
+	if tries > 40+8 {
+		t.Fatalf("%d dial attempts in a 3s outage of a 40-slot pool", tries)
+	}
+	mid := sp.tries.Load()
+	time.Sleep(2 * time.Second)
+	if late := sp.tries.Load() - mid; late > 3 {
+		t.Fatalf("%d dial attempts in 2s once the outage settled; want only the scout's", late)
+	}
+	sp.down.Store(false)
+	eventually(t, "back to the initial 8 links", func() bool { return sp.liveCount() == 8 })
+	time.Sleep(300 * time.Millisecond)
+	if n := sp.liveCount(); n != 8 {
+		t.Fatalf("%d links after the outage before the edge spoke; want the initial 8", n)
+	}
+	sp.setTarget(40) // the edge's target arrives on the first link back
+	eventually(t, "40 live links again", func() bool { return sp.liveCount() == 40 })
+}
+
+// A slot whose target fell while it waited for its turn retires instead of
+// dialing.
+func TestExitPoolSlotRetiresBeforeDialingAboveTarget(t *testing.T) {
+	sp := newScaleTestPool(t, 1, 300, 50*time.Millisecond)
+	sp.setTarget(30) // 30 slots queue on a slow gate
+	time.Sleep(120 * time.Millisecond)
+	sp.setTarget(4)
+	eventually(t, "4 slots", func() bool { return sp.slots() == 4 })
+	time.Sleep(300 * time.Millisecond)
+	if d := sp.dials.Load(); d > 8 {
+		t.Fatalf("%d links dialed although the target fell to 4 within the first few turns", d)
+	}
+}
+
+// The exit never dials past the edge's own ceiling (kindInfo): the edge could
+// only hold the surplus as spares.
+func TestExitPoolClampsToEdgeCeiling(t *testing.T) {
+	sp := newScaleTestPool(t, 1, 300, time.Millisecond)
+	var ps linkPeers
+	m := &linkMeter{}
+	m.peerMax.Store(24)
+	ps.add(m)
+	sp.peers = &ps
+	sp.setTarget(100)
+	eventually(t, "24 live links", func() bool { return sp.liveCount() == 24 })
+	time.Sleep(100 * time.Millisecond)
+	if n := sp.slots(); n != 24 {
+		t.Fatalf("%d slots with the edge's ceiling at 24", n)
+	}
+}
+
+// fakeCtlSource is a pool-control source the test drives by hand.
+type fakeCtlSource struct {
+	mu   sync.Mutex
+	t    int
+	ch   chan struct{}
+	fast bool
+}
+
+func (f *fakeCtlSource) Target() int { f.mu.Lock(); defer f.mu.Unlock(); return f.t }
+func (f *fakeCtlSource) targetChanged() <-chan struct{} {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ch == nil {
+		f.ch = make(chan struct{})
+	}
+	return f.ch
+}
+func (f *fakeCtlSource) poolCtlFast(Link) bool { return f.fast }
+func (f *fakeCtlSource) set(n int) {
+	f.mu.Lock()
+	f.t = n
+	if f.ch != nil {
+		close(f.ch)
+		f.ch = nil
+	}
+	f.mu.Unlock()
+}
+
+// A link that is not one of the two refreshing links sends the target once
+// when its stream opens and then only on a change — at hundreds of links the
+// periodic refresh comes from two links, not all of them.
+func TestPoolCtlSendsOnChangeNotEveryInterval(t *testing.T) {
+	a, b := net.Pipe()
+	cli, _, err := newSession(a, false, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _, err := newSession(b, true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	defer srv.Close()
+	got := make(chan int, 16)
+	go func() {
+		st, err := srv.AcceptStream()
+		if err != nil {
+			return
+		}
+		var kind [1]byte
+		io.ReadFull(st, kind[:])
+		buf := make([]byte, poolCtlLen)
+		for {
+			if _, err := io.ReadFull(st, buf); err != nil {
+				return
+			}
+			got <- int(binary.BigEndian.Uint16(buf))
+		}
+	}()
+	src := &fakeCtlSource{t: 7}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go openPoolCtl(ctx, &mtcpLink{sess: cli}, src, nil, nil)
+	if v := <-got; v != 7 {
+		t.Fatalf("first message %d, want 7", v)
+	}
+	select {
+	case v := <-got:
+		t.Fatalf("a slow link re-sent %d within a second", v)
+	case <-time.After(time.Second):
+	}
+	src.set(9)
+	select {
+	case v := <-got:
+		if v != 9 {
+			t.Fatalf("change sent %d, want 9", v)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("a change was not sent")
+	}
+}
+
+// The two lowest-id live links refresh fast; the rest slowly.
+func TestPoolCtlFastIsTwoOldestLinks(t *testing.T) {
+	m, _, _ := newV2Manager(nil, 1, 8, true)
+	var ls []*managedLink
+	for i := 0; i < 4; i++ {
+		ls = append(ls, addManaged(m, newMeteredFake()))
+	}
+	want := []bool{true, true, false, false}
+	for i, ml := range ls {
+		if got := m.poolCtlFast(ml.link); got != want[i] {
+			t.Fatalf("link %d fast=%v, want %v", i, got, want[i])
+		}
+	}
+	ls[0].link.(*meteredFakeLink).alive.Store(false) // the oldest dies
+	if !m.poolCtlFast(ls[2].link) {
+		t.Fatal("the next oldest did not take over the fast refresh")
+	}
 }

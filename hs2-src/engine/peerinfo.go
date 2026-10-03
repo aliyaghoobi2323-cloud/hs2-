@@ -28,6 +28,8 @@ import (
 //	v2 payload: maxLinks u16, caps u8, flags u8, count u8, count × port u16
 //	  caps  bit0: port tags — the edge tags its user connections / the exit
 //	        routes tagged ones (kindTCPPort / kindUDPPort)
+//	        bit1: quiet L3 — its TUN side-channel reader allows 30 s without
+//	        a frame, so the other side may send idle keepalives every ~10 s
 //	  flags bit0: edge: it forwards UDP too · exit: it has a default panel
 //	        (expose)
 //	        bit1: the port list was cut to fit
@@ -50,6 +52,7 @@ const (
 	infoTimeout = 5 * time.Second
 
 	capPortTags  = 1 << 0
+	capL3Quiet   = 1 << 1
 	flagUDP      = 1 << 0 // edge
 	flagDefault  = 1 << 0 // exit
 	flagCut      = 1 << 1
@@ -67,6 +70,14 @@ type peerInfo struct {
 }
 
 func (pi *peerInfo) tags() bool { return pi != nil && pi.V2 && pi.Caps&capPortTags != 0 }
+
+// l3Quiet reports whether the other server allows quiet L3 keepalives.
+func (pi *peerInfo) l3Quiet() bool { return pi != nil && pi.V2 && pi.Caps&capL3Quiet != 0 }
+
+// peerL3Quiet reads it from a link's meter (false until the info arrives).
+func peerL3Quiet(m *linkMeter) func() bool {
+	return func() bool { return m != nil && m.peerInfo.Load().l3Quiet() }
+}
 
 // infoRetry / infoTries: a reply that did not come in time (a congested link)
 // is retried a few times while the link is up. Variables so tests can shorten.

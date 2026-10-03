@@ -50,7 +50,8 @@ TUN_IP_KHAREJ=10.77.0.2
 # ceiling from the live user count and measured throughput (see
 # engine/autopilot.go), and grows a link roughly per LINK_PER users. New setups
 # set LINK_MAX=0 (use_auto_link_ceiling): an AUTO ceiling the binary derives
-# from the server's RAM/cores at every start (32/48/64). See BUILD.md.
+# from the server's RAM/cores at every start (one link per 48 MB of RAM, up to
+# 300; small servers keep their old 32/48/64). See BUILD.md.
 LINK_MIN=2
 LINK_MAX=32
 LINK_PER=8
@@ -1765,8 +1766,9 @@ recommend_links(){
 
 # use_auto_link_ceiling makes a NEW config's link-pool ceiling AUTO: it writes
 # "max_links": 0, which the binary resolves from THIS server's RAM/cores at
-# every start (low 32 · medium 48 · high 64 — tune.RecommendedMaxLinks, the
-# same profile that sizes the kernel buffers). A server resized up or down then
+# every start (tune.RecommendedMaxLinks: one link per 48 MB of RAM, at most 300,
+# at most 128 below 4 cores, never below the old 32/48/64 profile value; a
+# 16 GB / 4-core server gets 300). A server resized up or down then
 # gets the matching ceiling on its next start without anyone editing the
 # config, and an older binary reads 0 as its fixed 32, so a rollback still
 # runs. The ceiling actually in use is printed at every start and shown by
@@ -3176,7 +3178,7 @@ tm_tune_links(){ # unit cfg
     if cfg_is_reverse "$cfg"; then
       say "  This Iran server decides how many links to use. In reverse mode the Kharej server"
       say "  opens them and caps the count at ITS OWN min/max — to go above that, raise max on"
-      say "  the Kharej server too."
+      say "  the Kharej server too (upgrade hs2 there and set its max to 'auto')."
     else
       say "  This Iran server decides the link count (direct mode) — these are the values that count."
     fi
@@ -3189,8 +3191,8 @@ tm_tune_links(){ # unit cfg
     tm_live_ceiling "$cfg"
     pause; return 0
   fi
-  # max_links 0 = AUTO: the ceiling follows this server's RAM/cores (low 32 ·
-  # medium 48 · high 64), re-derived at every start — a resized server gets the
+  # max_links 0 = AUTO: the ceiling follows this server's RAM/cores (one link
+  # per 48 MB of RAM, up to 300), re-derived at every start — a resized server gets the
   # matching ceiling on its next start by itself. A number is a fixed ceiling
   # that never moves on its own. No max_links at all = the historical fixed 32
   # (Enter keeps exactly that). The binary is the single source of truth for
@@ -3207,6 +3209,11 @@ tm_tune_links(){ # unit cfg
     *)  curmx="$cur_max"; keepmx="$cur_max" ;;
   esac
   [ -n "$recwhy" ] && say "  This server's hardware: max $recwhy."
+  if [ -n "$rec" ] && [ "$rec" -gt 64 ]; then
+    say "  ${C_D}Note: at peak this means up to $rec parallel TLS connections between the two servers —"
+    say "  more unusual to an outside observer than a handful. Opened only under load, closed in"
+    say "  quiet hours; a lower max trades peak capacity for a smaller pattern (your call).${C_0}"
+  fi
   if [ -n "$rec" ] && [ "$keepmx" != 0 ] && [ "$keepmx" != "$rec" ]; then
     say "  ${C_Y}The ceiling is fixed at $keepmx; this server's hardware gives $rec. Enter 'auto' to follow the hardware from now on (or $rec to fix it there).${C_0}"
   fi
@@ -3443,7 +3450,7 @@ tm_tune_manual(){ # unit cfg
   say "  Manual presets (a good starting point for the server's size):"
   say "   1) Low    — ~1 GB RAM / 1 core     · buffers 8 MB,  backlog 2048, somaxconn 1024"
   say "   2) Medium — 2–4 GB RAM             · buffers 16 MB, backlog 8192, somaxconn 4096"
-  say "   3) High   — ≥4 GB RAM, ≥4 cores    · buffers 32 MB, backlog 16384, somaxconn 8192"
+  say "   3) High   — ≥4 GB RAM (or ≥2 GB, ≥4 cores) · buffers 32 MB, backlog 16384, somaxconn 8192"
   say "   4) Custom — enter the send/receive buffer size in MB"
   say "   0) Back"
   read -rp "Choose: " c </dev/tty || return 0

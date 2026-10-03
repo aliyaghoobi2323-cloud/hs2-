@@ -48,10 +48,11 @@ func TestProfilesScaleWithHardware(t *testing.T) {
 	}
 }
 
-// The link-pool ceiling tracks the SAME profile that sizes the kernel buffers:
-// a small box keeps 32, a big box gets room for more parallel links. This is the
-// single source of truth the installer and doctor both call.
-func TestRecommendedMaxLinksByProfile(t *testing.T) {
+// The link-pool ceiling: one link per 48 MB of RAM (worst-case link buffers
+// <= 25% of RAM), at most 300, at most 128 below 4 cores, a single core keeps
+// its profile value, and never below the profile value a server had before.
+// This is the single source of truth the engine, installer and doctor use.
+func TestRecommendedMaxLinks(t *testing.T) {
 	cases := []struct {
 		ram, cpu    int
 		wantProfile string
@@ -61,9 +62,16 @@ func TestRecommendedMaxLinksByProfile(t *testing.T) {
 		{1024, 1, "low", 32},    // common 1 GB Iran VPS — stays 32 (no OOM risk)
 		{1536, 2, "medium", 48}, // medium threshold
 		{2048, 2, "medium", 48},
-		{2048, 4, "high", 64}, // cores lift a borderline box
-		{4096, 2, "high", 64},
-		{8192, 8, "high", 64},
+		{2048, 4, "high", 64}, // cores lift a borderline box; RAM allows 42
+		{4096, 1, "high", 64}, // single core keeps its profile value
+		{4096, 2, "high", 85}, // 4096/48
+		{8192, 8, "high", 170},
+		{8192, 2, "high", 128}, // below 4 cores
+		{14400, 4, "high", 300},
+		{16384, 4, "high", 300},
+		{17408, 20, "high", 300}, // the Iran production server
+		{22528, 12, "high", 300}, // the Kharej production server
+		{65536, 64, "high", 300},
 	}
 	for _, c := range cases {
 		if p := ProfileFor(c.ram, c.cpu); p != c.wantProfile {
@@ -73,14 +81,47 @@ func TestRecommendedMaxLinksByProfile(t *testing.T) {
 			t.Errorf("RecommendedMaxLinks(%d,%d)=%d, want %d", c.ram, c.cpu, m, c.wantMax)
 		}
 	}
-	// The ceiling must never drop below the historical 32 (no existing small
-	// server is pushed below what it already runs) and never exceed 64.
+	old := func(ram, cpu int) int { // the ceiling before the RAM rule
+		switch ProfileFor(ram, cpu) {
+		case "high":
+			return 64
+		case "medium":
+			return 48
+		}
+		return 32
+	}
 	for ram := 128; ram <= 65536; ram += 137 {
 		for cpu := 1; cpu <= 32; cpu++ {
 			m := RecommendedMaxLinks(ram, cpu)
-			if m < 32 || m > 64 {
-				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d out of [32,64]", ram, cpu, m)
+			switch {
+			case m < old(ram, cpu):
+				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d below the %d it was", ram, cpu, m, old(ram, cpu))
+			case m > MaxLinksCap:
+				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d above %d", ram, cpu, m, MaxLinksCap)
+			case cpu == 1 && m > 64:
+				t.Fatalf("single core RecommendedMaxLinks(%d,1)=%d above 64", ram, m)
+			case cpu < 4 && m > 128:
+				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d above 128 below 4 cores", ram, cpu, m)
+			case m > old(ram, cpu) && m*LinkWorstCaseMiB > ram/4+LinkWorstCaseMiB:
+				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d: worst case %d MiB above a quarter of RAM", ram, cpu, m, m*LinkWorstCaseMiB)
 			}
+		}
+	}
+}
+
+func TestMaxLinksReason(t *testing.T) {
+	for _, c := range []struct {
+		ram, cpu int
+		want     string
+	}{
+		{17408, 20, "17.0 GB RAM, 20 cores: one link per 48 MB of RAM, at most 300"},
+		{1024, 1, "1.0 GB RAM, 1 core: a single core keeps its low-profile 32"},
+		{2048, 4, "2.0 GB RAM, 4 cores: the high-profile 64 (RAM allows no more)"},
+		{8192, 2, "8.0 GB RAM, 2 cores: one link per 48 MB of RAM, at most 128 below 4 cores"},
+		{8192, 8, "8.0 GB RAM, 8 cores: one link per 48 MB of RAM, worst-case link buffers <= 25% of RAM"},
+	} {
+		if got := MaxLinksReason(c.ram, c.cpu); got != c.want {
+			t.Errorf("MaxLinksReason(%d,%d)=%q, want %q", c.ram, c.cpu, got, c.want)
 		}
 	}
 }
