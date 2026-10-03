@@ -3212,8 +3212,12 @@ tm_tune_links(){ # unit cfg
   # (Enter keeps exactly that). The binary is the single source of truth for
   # the RAM/core -> ceiling mapping.
   local rec recwhy auto_now curmx keepmx
-  rec=$(recommend_links | awk 'NR==1{print $1}')
-  recwhy=$(recommend_links --why)
+  # With -c the number includes what the carrier adds (dgtun's cap on its
+  # auto ceiling); an older binary rejects -c, so fall back to the bare form.
+  rec=$(recommend_links -c "$cfg" | awk 'NR==1{print $1}')
+  [ -n "$rec" ] || rec=$(recommend_links | awk 'NR==1{print $1}')
+  recwhy=$(recommend_links --why -c "$cfg")
+  [ -n "$recwhy" ] || recwhy=$(recommend_links --why)
   case "$rec" in ''|*[!0-9]*) rec="" ;; esac
   auto_now="auto — the installed hs2 predates it and runs it as 32 until upgraded"
   [ -n "$rec" ] && auto_now="auto, now $rec"
@@ -3232,11 +3236,11 @@ tm_tune_links(){ # unit cfg
     say "  ${C_Y}The ceiling is fixed at $keepmx; this server's hardware gives $rec. Enter 'auto' to follow the hardware from now on (or $rec to fix it there).${C_0}"
   fi
   tm_live_ceiling "$cfg"
-  say "  Current: min=${cur_min:-2} · max=$curmx · ~${cur_per:-8} users per link"
+  say "  Current: min=${cur_min:-2} · max=$curmx · ~${cur_per:-8} active users per link (per_link: the autopilot adds a link for every this many connections moving data)"
   say "  (Max links: a number fixes the ceiling; 'auto' follows this server's hardware at every start.)"
   read -rp "  Min links [${cur_min:-2}]: " mn </dev/tty;         mn=${mn:-${cur_min:-2}}
   read -rp "  Max links [$curmx]: " mx </dev/tty;                mx=${mx:-$keepmx}
-  read -rp "  Users per link [${cur_per:-8}]: " pl </dev/tty;    pl=${pl:-${cur_per:-8}}
+  read -rp "  Active users per link [${cur_per:-8}]: " pl </dev/tty;    pl=${pl:-${cur_per:-8}}
   case "$mx" in auto|AUTO|Auto|a|A) mx=0 ;; esac
   for v in "$mn" "$pl"; do
     valid_uint "$v" 1 1024 || { warn "Each value must be a whole number 1-1024."; return 0; }

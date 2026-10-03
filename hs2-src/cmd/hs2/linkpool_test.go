@@ -467,3 +467,51 @@ func TestDoctorTCPMem(t *testing.T) {
 		}
 	}
 }
+
+// dgtun's auto ceiling is held at 64 over a raw encapsulation and 128 over
+// udp for now; explicit numbers and an absent max_links are untouched, and
+// the start line, the status and recommend-links say why it is lower.
+func TestDgtunAutoCap(t *testing.T) {
+	pinHW(t, 17408, 20) // the production Iran server: auto 300
+	for _, c := range []struct {
+		cfg  string
+		want int
+		note string
+	}{
+		{`{"carrier":"dgtun","encap":"gre","max_links":0}`, 64, "dgtun over gre"},
+		{`{"carrier":"dgtun","encap":"icmp","max_links":0}`, 64, "dgtun over icmp"},
+		{`{"carrier":"dgtun","max_links":0}`, 128, "dgtun over udp"},
+		{`{"carrier":"dgtun","encap":"udp","max_links":0}`, 128, "dgtun over udp"},
+		{`{"carrier":"dgtun","encap":"gre","max_links":200}`, 200, ""}, // explicit: as written
+		{`{"carrier":"dgtun","encap":"gre"}`, 32, ""},                  // absent: the historical 32
+		{`{"carrier":"mtcp","max_links":0}`, 300, ""},
+	} {
+		var fc fileConfig
+		if err := json.Unmarshal([]byte(c.cfg), &fc); err != nil {
+			t.Fatal(err)
+		}
+		if got, _, _ := linkCeiling(fc); got != c.want {
+			t.Errorf("%s: ceiling %d, want %d", c.cfg, got, c.want)
+		}
+		note := dgCapNote(fc)
+		if (c.note == "") != (note == "") || !strings.Contains(note, c.note) {
+			t.Errorf("%s: note %q, want one naming %q", c.cfg, note, c.note)
+		}
+		if line := ceilingLogLine(fc); c.note != "" && !strings.Contains(line, "lowered — "+c.note) {
+			t.Errorf("%s: start line does not say why: %q", c.cfg, line)
+		}
+	}
+	// A small server's auto is below the cap: nothing to say.
+	pinHW(t, lowRAM, lowCPU)
+	var fc fileConfig
+	json.Unmarshal([]byte(`{"carrier":"dgtun","encap":"gre","max_links":0}`), &fc)
+	if got, _, _ := linkCeiling(fc); got != 32 || dgCapNote(fc) != "" {
+		t.Errorf("1 GB box: ceiling %d, note %q", got, dgCapNote(fc))
+	}
+	// The status line carries it.
+	ls := liveStatus{Role: "Iran side", Dir: "direct", CfgMax: 64, CeilMode: ceilAuto, RAMMB: 17408, CPUCores: 20,
+		CeilNote: "dgtun over gre: auto holds at most 64 carriers until its 300-carrier load test", EffMax: 64}
+	if s := ceilingLine(ls); !strings.Contains(s, "lowered — dgtun over gre") {
+		t.Errorf("status ceiling line: %q", s)
+	}
+}
