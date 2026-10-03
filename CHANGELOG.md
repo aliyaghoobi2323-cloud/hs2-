@@ -716,6 +716,89 @@ setup, and neither setup question said how several ports are handled.
   Kharej questions; the multi-tunnel pty also answers optional prompts that
   come after the last listed step.
 
+## Phase Q — up to 300 links on a strong server, and what keeps that safe
+
+Production was pinned at the old 64-link ceiling (Iran 20 cores / 17 GB,
+Kharej 12 cores / 22 GB, ~500 active of ~6,000 open connections). The auto
+ceiling now follows the RAM up to 300; most of this phase is what makes
+hundreds of links safe on restart, on outage, under stalled readers and on
+small servers. Every change went through an independent adversarial review
+(33 findings, measured where possible); the confirmed ones are fixed here.
+Both servers should run this build; mixed versions keep working.
+
+### Q1 — the ceiling
+- Auto (`max_links: 0`): one link per 48 MB of RAM, at most 300, never below
+  the old 32/48/64 profile; one core keeps its profile value, 2–3 cores at
+  most 128. Explicit numbers are never rewritten; absent stays 32.
+- dgtun's auto ceiling stays at 64 over a raw encapsulation and 128 over udp
+  until its own load test (said in the start line, status, doctor and menu).
+- Sizing reads the cgroup's limits when lower than the host's (containers,
+  units with MemoryMax/CPUQuota). Go's soft memory limit is half the RAM.
+- `hs2 check` warns about `min_links` above 64. A hand-edited **Kharej**
+  config with `min_links` above `max_links` is now an error for `hs2 check` /
+  `hs2 config set` (it was silently accepted).
+
+### Q2 — getting to 300 and back without storms
+- One dial gate per process: ≤ 8 handshakes in flight, starts 40–160 ms
+  apart (~10 links/s; 300 links in ~31 s measured). A dial checks it is still
+  wanted before taking a start slot, so retiring slots never hold up the ones
+  that must dial (the exit's first link after an outage was ~17 s late; now
+  0.2–1.3 s, test-measured). One failed handshake no longer drops the queued
+  dials — only 3 in a row, or a failure with no link up.
+- Outage: the Kharej side lets one slot retry every 1–2 s; the others wait.
+- Warm start: a restart within 15 min comes back at the previous size (only
+  ever raising the start size; written after a minute of uptime).
+- Refill hold: after a start or a total loss a new TCP connection waits up to
+  10 s for a link with fewer **open** connections than the fair share, then
+  goes onto the existing links — never refused, and said in the log when that
+  is above the cap. Simulated with the real pool: an outage with 2,400
+  connections and 300 links put 2,400 on one link before, 24 now; a
+  production-shaped restart (6,000 open, 63 links) 781 before, 96 now.
+- Reverse accept cap: live links only, 2×max+8; a refused link is held 5 s
+  and refusals are logged once a minute with their count.
+- Per-link cost: pool-control refreshes fast on 2 links, every 30 s on the
+  rest, and a change goes out spread over 1.5 s; control pings stay on a fixed
+  3 s cadence (a jittered version had re-enabled a download-loss false alarm);
+  l3mtcp's side channel keeps quiet when both servers support it.
+
+### Q3 — stalled readers
+- A few users whose apps stop reading used to fill a link's 8 MiB receive
+  buffer, stop every other connection on it and get the link killed by the
+  other server's TCP after 20 s (Kharej RSS 5.5 GB in the stall test). Now the
+  connections whose app took nothing for 6 s while the buffer is full are
+  reset (`mtcp: reset N connection(s) on K link(s) …`); slow readers that
+  still read are kept (test: released in 7.7 s, slow and fast readers kept).
+- Doctor: kernel TCP memory against tcp_mem, the conntrack table, and several
+  tunnels' combined worst case; the status writer logs once when kernel TCP
+  memory passes its pressure mark. `tcp_tw_reuse=1` is now set.
+
+### Q4 — the Kharej side counts its own users and traffic
+- Open connections, active ones, Mbit/s and the last minute's peak on the
+  Kharej server too (direct and reverse, mtcp and dgtun), in the live monitor,
+  `hs2 status` and `hs2 doctor`; an older hs2 there says "counted on the Iran
+  server" instead of 0.
+
+### Q5 — dgtun at scale
+- Raw encapsulations (icmp/gre/ipip/ipx): one shared dial socket per peer
+  instead of one per carrier — the kernel copied every received packet to
+  every carrier's socket. Measured per packet (send+receive): 300 carriers
+  86–90 µs before, 11.4–11.6 µs now; one carrier unchanged. Link ids are
+  unique (at 300 carriers two used to collide about half the time).
+- A carrier closed on purpose is closed on the other side at once (it stayed
+  "alive" 15–17 s); a restarted peer's dead carriers go as soon as a fresh one
+  comes up; a scout dial runs while every carrier is silent.
+- Retiring is mirrored to the other side, and flows stuck to a retiring
+  carrier move after 30 s, so a shrink finishes under nonstop download; the
+  reverse edge serves retired/spare carriers again when its target rises.
+- Accept loops survive transient errors; the shrink sort is O(N log N); per-
+  carrier log lines are folded.
+
+### Measured, and still to measure
+The numbers above come from the review's real-binary runs and from tests.
+The full load test (more than 200 links, 2,000–2,400 active users, direct and
+reverse, restart under load, stalled readers, mixed versions, dgtun at 15–30k
+pps before lifting its cap) is the next step and is reported separately.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

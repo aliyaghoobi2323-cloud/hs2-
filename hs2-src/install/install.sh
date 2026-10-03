@@ -1787,6 +1787,12 @@ use_auto_link_ceiling(){
     info "Link-pool ceiling: auto (max_links 0). The installed hs2 binary predates it and runs it as a fixed 32 until hs2 is upgraded (menu → Upgrade)."
   fi
   info "The pool self-sizes between $LINK_MIN and that ceiling. In reverse mode the effective ceiling is the lower of the two servers'."
+  local rec
+  rec=$(printf '%s\n' "$why" | awk 'NR==1{print $1}')
+  case "$rec" in ''|*[!0-9]*) rec=0 ;; esac
+  if [ "$rec" -gt 64 ]; then
+    info "At peak that is up to $rec parallel links between the two servers — more noticeable to an outside observer than a handful (opened only under load, at most ~10 new ones a second, closed in quiet hours). A lower fixed max (Tuning → Link pool) trades peak capacity for a smaller pattern — your call."
+  fi
 }
 
 setup_kharej(){

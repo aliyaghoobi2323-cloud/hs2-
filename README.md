@@ -22,8 +22,9 @@ connection to the panel. There is never TCP inside TCP.
 
 The number of parallel TLS links is not fixed. A dedicated controller (the
 *autopilot*) sizes the pool continuously between **2 links and a ceiling sized
-to the server** (32 / 48 / 64 — see *The ceiling* below) — up when traffic
-needs more, and **back down when it does not**:
+to the server** (32 on a small box, up to 300 on a big one — see *The
+ceiling* below) — up when traffic needs more, and **back down when it does
+not**:
 
 - **active flows** — at least one link per `per_link` (default 8) connections
   that are actually moving data. Idle connections (an xray panel keeps
@@ -44,9 +45,10 @@ needs more, and **back down when it does not**:
   300 s idle timeout; `0` = never) is closed so the link can finish.
 
 It comes up "warm" (8 links) so a burst of connections at start spreads
-immediately. In **reverse** mode the edge (which alone sees the users) drives
-the exit's link count over a control channel, so the dial pool on the foreign
-side follows it in both directions.
+immediately — or, after a restart within 15 minutes, at the size it had
+before (see *Restarts and outages* below). In **reverse** mode the edge
+(which alone sees the users) drives the exit's link count over a control
+channel, so the dial pool on the foreign side follows it in both directions.
 
 Watch it live: `hs2 status -c /etc/hs2/config.json` (or the **Live pattern
 monitor** in `hs2-menu` → tunnel manager) shows the links up (serving +
@@ -65,44 +67,130 @@ traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4 
 
 | `max_links` | meaning |
 |-------------|---------|
-| `0` — **auto** (new installs) | follows **this server's hardware**, re-derived at every start: **32** on a small box (under ~1.5 GB RAM), **48** medium, **64** high (≥ 4 GB, or ≥ 2 GB with ≥ 4 cores) — the same profile that sizes the kernel buffers. A server resized up or down gets the matching ceiling on its next start, with nobody editing the config. |
+| `0` — **auto** (new installs) | follows **this server's hardware**, re-derived at every start: one link per 48 MB of RAM, at most **300**, never below the old profile value (**32** under ~1.5 GB RAM, **48** medium, **64** high). A single-core server keeps its profile value; 2–3 cores allow at most 128. A 16 GB / 4-core server gets 300, a 2 GB / 2-core one 48. A server resized up or down gets the matching ceiling on its next start, with nobody editing the config. |
 | a number | fixed by you; never changed automatically |
 | absent | the historical fixed **32** — a config written before auto existed behaves exactly as before after upgrading |
 
 (An explicit `0` used to mean "the default, 32" and now means auto — only a
 hand-edited config can contain it; set a number to keep it fixed.)
 
-Why the ceiling depends on RAM: under a stalled reader each link's session may
-buffer up to 8 MiB, so 64 links is up to ~512 MiB in the worst case — fine on a
-big box, a risk on a 1 GB VPS. The ceiling is only headroom: the autopilot uses
-about one link per 8 *active* connections, so 400 active connections want ~50
-links and a 32 ceiling caps them.
+**dgtun, for now:** its auto ceiling stays at **64** over a raw encapsulation
+(icmp / gre / ipip / ipx) until its 300-carrier load test is done, and at
+**128** over udp (FEC sizes its parity from each carrier's own rate, which is
+low when the load is spread over very many). The start line, `hs2 status`,
+`hs2 doctor` and the Link pool screen say so ("lowered — dgtun over gre …").
+An explicit `max_links` is used as written.
+
+**Why the ceiling depends on RAM.** Under a stalled reader each link's session
+may hold up to 8 MiB it could not deliver yet — about **12 MiB** with smux's
+frame rounding. The rule keeps that worst case at **≤ 25 % of RAM** (≤ ~33 %
+if every frame rounds badly): 300 links ≈ 3.5 GB worst case on a 17 GB server.
+Each relayed user connection costs another ~80 KB (≈ 0.45 GB per side at
+6,000 open connections), a UDP user flow 64 KB on the Iran side and 128 KB
+on the Kharej side. hs2 sets Go's soft memory limit to half the RAM
+(`GOMEMLIMIT` overrides it). A stalled reader no longer grows memory without
+bound: see the stalled-reader guard below.
+
+The ceiling is only headroom: the autopilot uses about one link per 8
+*active* connections, so 400 active connections want ~50 links. Both the
+ceiling and the memory limit are **per tunnel** and computed from the whole
+server; with several pooled tunnels on one server `hs2 doctor` adds them up
+and warns above 40 % of RAM (give each a fixed `max_links` of about its auto
+value divided by the number of tunnels). In a container, or a unit with
+`MemoryMax`/`CPUQuota`, the cgroup's limits are used instead of the host's.
 
 **Which server's ceiling counts.** In **direct** mode the Iran server's ceiling
 alone applies (the Kharej server accepts every link it dials). In **reverse**
-the lower of the two applies (the Kharej server dials, clamped to its own max).
-The two servers tell each other their ceilings over the tunnel itself, so
-`hs2 status` on **either** server shows the exact effective number and which
-side sets it, e.g.:
+the lower of the two applies (the Kharej server dials, clamped to its own max)
+— so for more than 64 links in reverse, **upgrade both servers and set
+`max_links` to `0` (auto) on both**. The two servers tell each other their
+ceilings over the tunnel itself, so `hs2 status` on **either** server shows the
+exact effective number and which side sets it, e.g.:
 
 ```
-ceiling: 48 links — limited by the Kharej server (reverse: the lower of the two applies); this server: 64 (auto — high profile: 15.7 GB RAM, 4 core(s)), the Kharej server: 48
+ceiling: 64 links — limited by the Kharej server (reverse: the lower of the two applies); this server: 300 (auto — 16.6 GB RAM, 20 cores: one link per 48 MB of RAM, at most 300), the Kharej server: 64
 ```
 
 If the other server still runs an older hs2, the line says its ceiling is not
 reported (the tunnel works as before). `hs2 doctor` warns when a fixed
 `max_links` is above what the RAM comfortably holds, notes when the box could
 use more, and — for auto — when the hardware changed under a running tunnel
-and a restart would apply it. Change it in `hs2-menu` → tunnel → **Tuning** →
-**Link pool** (type `auto` or a number) or with `hs2 config set max_links auto`;
-`hs2 recommend-links --why` shows what this server's hardware gives.
+and a restart would apply it; `hs2 check` warns about a `min_links` above 64
+(that many links stay open at all times, idle or not). Change it in
+`hs2-menu` → tunnel → **Tuning** → **Link pool** (type `auto` or a number) or
+with `hs2 config set max_links auto`; `hs2 recommend-links --why` shows what
+this server's hardware gives (`-c <config>` adds what the carrier changes).
+
+**What hundreds of links look like from outside — the owner's decision.**
+Hundreds of simultaneous TLS connections between one fixed pair of IPs are
+more unusual to an observer than a handful. The pool opens them only under
+load, at most ~10 new handshakes a second (a 300-link ramp takes ~30 s), and
+closes them again in quiet hours — but at peak they are all visible at once,
+each with its own small periodic traffic: an smux keepalive every 4–8 s, a
+control ping every 3 s on active links (less on idle ones), and a target change
+from the Iran server spread over 1.5 s across the links. For dgtun the same
+holds for its carriers: UDP flows, ping sessions (one echo identifier each —
+at 300 carriers ~3,000 echo requests a second even when idle) or GRE/IPIP flows
+on one IP pair. Lowering `max_links` trades peak capacity for a smaller
+pattern; `hs2 doctor` and the Link pool screen say this whenever the
+ceiling is above 64.
+
+### Restarts and outages
+
+- **Warm start.** The Iran side keeps its last target in
+  `/run/hs2/<config>.warm`. A restart within 15 minutes comes back at that
+  size (`link pool: coming up at N links, the size it had before this
+  restart`); it only ever raises the start size, and it is written only after
+  a minute of uptime, so a crash loop does not keep a high value alive.
+- **Paced handshakes.** Every new link takes a turn from one gate per
+  process: at most 8 handshakes in flight, starts spaced 40–160 ms — a
+  restart under load is ~10 new links a second, never a storm. A few failed
+  handshakes do not stop a ramp; only 3 in a row, or a failure with no link up,
+  drop the queued dials until the next tick.
+- **Outages.** While no link is up, the Kharej side (reverse) lets one slot
+  retry every 1–2 s while the others wait; the first link is back within ~2 s
+  of the path returning and the rest follow at the gate's pace.
+- **Refill hold.** After a start or a total loss, users reconnect within
+  seconds while links come back at ~10 a second, and a connection stays on the
+  link it was opened on. So for up to 10 s a new TCP connection waits for a
+  link with room — fewer **open** connections than the fair share (open
+  connections ÷ the links the pool wants, never below `per_link`). This cap
+  counts every open connection and exists only during the hold; `per_link`
+  stays the number of **active** users a link is sized for. When the pool has
+  its links, or after 10 s, everyone still waiting goes onto the existing
+  links — **no connection is refused** — and the log says so plainly if that
+  is more per link than the cap. Lines: `refill: …`; `hs2 status` /
+  the live monitor / `hs2 doctor` show a `refill` line during the hold and
+  for 5 minutes after. UDP flows are not held.
+- **Stalled readers.** When users' apps stop reading and fill a link's whole
+  receive buffer, every other connection on that link would stop too (and the
+  other server's TCP would kill the link). hs2 resets only the connections
+  whose app took nothing for 6 s while the buffer was full: `mtcp: reset N
+  connection(s) on K link(s) whose app had taken nothing for 6s …`. Slow
+  readers that still read are left alone. This is per server — **upgrade both
+  servers** for both directions.
+- **l3mtcp** side channel: a link whose session hears nothing for 12 s hands
+  its TUN flows to the other links (it used to take 24–30 s).
+- **dgtun** carriers closed on purpose are closed on the other side at once;
+  a restarted peer's dead carriers are dropped as soon as a fresh one comes
+  up; when every carrier is silent the dialing side sends one scout dial
+  every 5 s; a retiring carrier's flows move off it after 30 s at the latest,
+  so a shrink finishes even under a download that never pauses.
+
+**What the guard cannot see** (documented, not changed): one UDP user flow
+whose stream write blocks stalls the other UDP flows on the same Iran port;
+up to four streams waiting on slow panel dials can hold a link for up to 5 s;
+an older hs2 on the other server keeps its own unguarded buffers.
 
 ## Automatic kernel tuning
 
 hs2 sizes kernel network tuning from the server's **RAM and CPU cores** and
 re-applies it every time the service starts (so a resized VPS is picked up on
 restart). It picks BBR + fq_codel by default, scales socket buffers and
-backlogs to a low/medium/high profile, and sets the multi-IP-friendly knobs.
+backlogs to a low/medium/high profile, and sets the multi-IP-friendly knobs
+and `tcp_tw_reuse=1` (outgoing connections — the dgtun forwarders, a panel not
+on 127.x — may reuse TIME_WAIT ports instead of running out at a few hundred
+new connections a second).
 See exactly what it chose with `hs2 tune -c /etc/hs2/config.json`. It is fully
 adjustable from `hs2-menu` → tunnel → **Tuning** (auto / manual with size
 presets / off, and the congestion control and queue discipline), or in the

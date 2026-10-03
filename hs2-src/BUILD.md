@@ -73,8 +73,11 @@ The daemon also reacts to signals: SIGHUP hot-reloads the TLS certificate
 `engine/autopilot.go` is a pure controller (no locks, sockets or clock) that
 decides how many links should be **serving** — taking new connections —
 between `min_links` and the ceiling — `max_links`, or with `max_links: 0`
-(new installs) an auto ceiling from the server's RAM/cores: 32 / 48 / 64, see
-`tune.RecommendedMaxLinks`; absent = the historical 32. Links beyond that
+(new installs) an auto ceiling from the server's RAM/cores: one link per 48 MB
+of RAM up to 300, never below the 32 / 48 / 64 profile value (1 core: the
+profile value; 2–3 cores: at most 128; dgtun for now at most 64 over a raw
+encapsulation and 128 over udp), see `tune.RecommendedMaxLinks` and
+`cmd/hs2 dgAutoCap`; absent = the historical 32. Links beyond that
 are **retiring**: no new connections, closed once empty. Each 2 s health tick
 `LinkManager.sampleHealth` feeds it per-link throughput, active flows (a
 per-stream rate EWMA; idle connections never count) and pressure (the link's

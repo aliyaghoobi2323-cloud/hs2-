@@ -31,6 +31,15 @@ ualc(){ # bin
 out=$(ualc "$T/hs2")
 check "new setup: LINK_MAX=0 (auto)" 'echo "$out" | grep -qx "LINK_MAX=0"'
 check "new setup: says auto and what it is now" 'echo "$out" | grep -q "auto (max_links 0)" && echo "$out" | grep -q "right now: 64  (high profile"'
+check "new setup on a 64 box: no visibility note" '! echo "$out" | grep -q "parallel links between the two servers"'
+cat > "$T/hs2big" <<'FAKE'
+#!/bin/bash
+[ "${1:-}" = recommend-links ] || exit 2
+if [ "${2:-}" = --why ]; then echo "300  (16.6 GB RAM, 20 cores: one link per 48 MB of RAM, at most 300)"; else echo 300; fi
+FAKE
+chmod +x "$T/hs2big"
+out=$(ualc "$T/hs2big")
+check "new setup on a 300 box: the visibility note, once" '[ "$(echo "$out" | grep -c "up to 300 parallel links between the two servers")" = 1 ] && echo "$out" | grep -q "your call"'
 out=$(ualc "$T/nonexistent-hs2")
 check "missing binary: still auto, no abort under set -e" 'echo "$out" | grep -qx "LINK_MAX=0"'
 check "missing binary: no 'right now' claim" '! echo "$out" | grep -q "right now"'
