@@ -384,8 +384,8 @@ journalctl -u hs2 -f
 - **`hs2 doctor -c /etc/hs2/config.json`** — an on-box health check: config
   validity, whether the tunnel is running, endpoint reachability (the common
   "edge can't reach exit" failure), certificate expiry **and whether it will
-  actually renew** (renewal method, the HTTP-01 port, an overdue renewal, the
-  certbot timer), the tun device, kernel tuning vs. what is actually applied,
+  actually renew** (renewal method, the HTTP-01 port and any certbot pre-hook
+  that frees it, an overdue renewal, the certbot timer or cron job), the tun device, kernel tuning vs. what is actually applied,
   and a clock reminder (link auth is minute-bound). Also in the tunnel manager
   as **Diagnose**. It only reads — safe to run any time (it never runs certbot).
 - **`hs2 version`** prints a build stamp (`… [build <rev> <date>]`); compare it

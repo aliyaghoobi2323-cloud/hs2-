@@ -134,8 +134,19 @@ trap on_exit EXIT
 for _st in "$CFG_DIR"/*.pre-replace; do [ -e "$_st" ] && rm -f "$_st"; done 2>/dev/null || true
 # Sweep any config-edit directory (a key-bearing copy, plus editor swap/backup
 # files) left behind by an edit that a hard kill interrupted before it could
-# clean up. (Older versions left a plain .hs2-edit.* file; rm -rf covers both.)
-for _st in "$CFG_DIR"/.hs2-edit.*; do [ -e "$_st" ] && rm -rf -- "$_st"; done 2>/dev/null || true
+# clean up. tm_edit names it .hs2-edit.<pid>.<random>: one whose installer is
+# still running belongs to an edit in progress in ANOTHER session (a second SSH
+# window) and is left alone — deleting it would lose that operator's edit.
+# (Older versions left a plain .hs2-edit.<random> file; it is swept too.)
+for _st in "$CFG_DIR"/.hs2-edit.*; do
+  [ -e "$_st" ] || continue
+  _sp=${_st##*/.hs2-edit.}; _sp=${_sp%%.*}
+  case "$_sp" in
+    ''|*[!0-9]*) ;;
+    *) if [ "$_sp" != "$$" ] && [ -d "/proc/$_sp" ]; then continue; fi ;;
+  esac
+  rm -rf -- "$_st"
+done 2>/dev/null || true
 
 # ---------- helpers ----------------------------------------------------------
 port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
@@ -1151,11 +1162,16 @@ configure_renewal(){ # lineage (the domain, as get_cert lays it out)
 
 # cert_lineage CERTFILE: the certbot lineage name when CERTFILE is
 # $LE_DIR/live/<name>/<file> (how certbot and get_cert lay it out), else empty.
+# "//" and "/./" are tolerated; a ".." element never is — it is not resolved
+# into another lineage (hs2 doctor's certbotLineage agrees, path for path).
 cert_lineage(){
-  local rest
-  case "$1" in "$LE_DIR"/live/?*/?*) ;; *) return 0 ;; esac
-  rest=${1#"$LE_DIR"/live/}
-  case "$rest" in */*/*|./*|../*) return 0 ;; esac
+  local p="$1" rest
+  case "/$p/" in */../*) return 0 ;; esac
+  while [[ $p == *//* ]]; do p=${p//\/\//\/}; done
+  while [[ $p == */./* ]]; do p=${p//\/.\//\/}; done
+  case "$p" in "$LE_DIR"/live/?*/?*) ;; *) return 0 ;; esac
+  rest=${p#"$LE_DIR"/live/}
+  case "$rest" in */*/*|./*) return 0 ;; esac
   printf '%s' "${rest%%/*}"
 }
 
@@ -1189,15 +1205,28 @@ cert_renew_method(){
   echo "${auth:-unknown}"
 }
 
-# cert_renew_before_days CERTFILE: certbot's renewal threshold in days (30 when
-# unset or in a form we do not parse — certbot's own default).
+# cert_renew_before_days CERTFILE: when certbot renews it, in days left — the
+# explicit renew_before_expiry, else certbot's own default: a third of the
+# certificate's lifetime (half, under 10 days). That is 30 for a 90-day Let's
+# Encrypt certificate, but a shorter-lived one renews later, and a fixed 30
+# would call it "overdue" while certbot correctly waits.
 cert_renew_before_days(){
-  local ln v n u
+  local ln v n u s e life part
   ln=$(cert_lineage "$1")
   [ -n "$ln" ] && v=$(cert_conf_get "$LE_DIR/renewal/$ln.conf" renew_before_expiry) || v=""
   read -r n u _ <<< "${v:-}" || true
   if valid_uint "${n:-}" 1 3650; then
     case "${u:-}" in day|days) echo "$n"; return 0 ;; week|weeks) echo $(( n * 7 )); return 0 ;; esac
+  fi
+  s=$(openssl x509 -startdate -noout -in "$1" 2>/dev/null) || s=""
+  e=$(openssl x509 -enddate -noout -in "$1" 2>/dev/null) || e=""
+  s=$(date -d "${s#notBefore=}" +%s 2>/dev/null) || s=""
+  e=$(date -d "${e#notAfter=}" +%s 2>/dev/null) || e=""
+  if [ -n "$s" ] && [ -n "$e" ] && [ "$e" -gt "$s" ]; then
+    life=$(( e - s ))
+    if [ "$life" -lt 864000 ]; then part=$(( life / 2 )); else part=$(( life / 3 )); fi
+    n=$(( (part + 43200) / 86400 ))          # rounded to whole days
+    if [ "$n" -gt 0 ]; then echo "$n"; return 0; fi
   fi
   echo 30
 }
@@ -1214,10 +1243,22 @@ cert_http01_port(){
   if valid_uint "${v:-}" 1 65535; then echo "$v"; else echo 80; fi
 }
 cert_port_ok(){
-  local ln
   port_free "$(cert_http01_port "$1")" && return 0
+  cert_has_pre_hook "$1"
+}
+
+# cert_has_pre_hook CERTFILE: true when certbot runs a pre-hook before renewing
+# it — the usual way to free port 80 ("systemctl stop nginx"). certbot takes
+# them from three places: the lineage's pre_hook, an executable in
+# renewal-hooks/pre/ (run by default, dry runs included), and cli.ini.
+cert_has_pre_hook(){
+  local ln f
   ln=$(cert_lineage "$1")
-  [ -n "$ln" ] && [ -n "$(cert_conf_get "$LE_DIR/renewal/$ln.conf" pre_hook)" ]
+  [ -n "$ln" ] && [ -n "$(cert_conf_get "$LE_DIR/renewal/$ln.conf" pre_hook)" ] && return 0
+  for f in "$LE_DIR"/renewal-hooks/pre/*; do
+    [ -f "$f" ] && [ -x "$f" ] && return 0
+  done
+  [ -n "$(cert_conf_get "$LE_DIR/cli.ini" pre-hook)$(cert_conf_get "$LE_DIR/cli.ini" pre_hook)" ]
 }
 
 # cert_secs_left CERTFILE: seconds until expiry (negative once expired); empty
@@ -2699,8 +2740,9 @@ tm_editor(){
 
 # tm_editor_label: the editor's name for the menu (no side effects).
 tm_editor_label(){
-  local own; own=$(tm_user_editor); own=${own%% *}
-  if [ -n "$own" ]; then printf '%s' "${own##*/}"; else printf 'nano'; fi
+  local own; local -a w
+  own=$(tm_user_editor); read -ra w <<< "$own"      # split exactly as tm_edit does
+  if [ "${#w[@]}" -gt 0 ]; then printf '%s' "${w[0]##*/}"; else printf 'nano'; fi
 }
 
 # tm_edit_cleanup: remove the private edit directory — the key-bearing copy AND
@@ -2794,7 +2836,7 @@ tm_edit(){
   # HS2_EDIT_TMP, and a hard kill by the startup sweep. Deliberately NOT a
   # `trap … RETURN`: a RETURN trap set in a function stays installed after it
   # returns and fires again when the CALLER returns (it killed the menu on Back).
-  d=$(mktemp -d "$CFG_DIR/.hs2-edit.XXXXXX"); HS2_EDIT_TMP="$d"; chmod 700 "$d"
+  d=$(mktemp -d "$CFG_DIR/.hs2-edit.$$.XXXXXX"); HS2_EDIT_TMP="$d"; chmod 700 "$d"
   tmp="$d/$(basename "$cfg")"        # the real file name: editors show it and highlight JSON
   cp "$cfg" "$tmp"; chmod 600 "$tmp"
   echo >&2
@@ -3110,7 +3152,7 @@ tm_cert_line(){
       if [ "$days" -lt $(( rb - 2 )) ]; then
         say " Certificate: ${C_Y}$days day(s) left — automatic renewal is overdue (failing?) · check it with c)${C_0}"
       elif [ "$m" = standalone ] && ! cert_port_ok "$cf"; then
-        say " Certificate: ${C_Y}valid until $until ($days days) — port $(cert_http01_port "$cf") is in use: the next automatic renewal will fail (c)${C_0}"
+        say " Certificate: ${C_Y}valid until $until ($days days) — port $(cert_http01_port "$cf") is in use: the next automatic renewal will likely fail · test it with c)${C_0}"
       else
         say " Certificate: valid until $until ($days days) · renews automatically"
       fi ;;
@@ -3118,13 +3160,14 @@ tm_cert_line(){
 }
 
 # tm_cert UNIT CFG: the tunnel's certificate — expiry, how it renews, and the
-# action that fits it: test the automatic renewal (dry run, changes nothing),
-# renew now, or — for DNS-01, which certbot cannot renew unattended — renew by
+# action that fits it: test the automatic renewal (a dry run: the certificate is
+# not replaced, but certbot's pre/post hooks do run), renew now, or — for
+# DNS-01, which certbot cannot renew unattended — renew by
 # hand with a fresh TXT record. A renewed certificate reaches the running tunnel
 # with no restart (the deploy hook signals hs2, which also re-reads changed
 # files within a minute).
 tm_cert(){ # unit cfg
-  local u="$1" cfg="$2" cf ln m doms c d rc
+  local u="$1" cfg="$2" cf ln m doms c d a rc
   if ! tm_cert_side "$cfg"; then
     info "This side of $u uses no certificate — only the side that accepts the TLS connection does."
     pause; return 0
@@ -3156,7 +3199,8 @@ tm_cert(){ # unit cfg
   if [ "$m" = manual ]; then
     say "  1) Renew now — certbot shows a TXT record: add it at your DNS provider, wait ~1 min, continue"
   else
-    say "  1) Test the automatic renewal (dry run against Let's Encrypt's test server — changes nothing)"
+    say "  1) Test the automatic renewal (dry run against Let's Encrypt's test server — the"
+    say "     certificate is not replaced; certbot's pre/post hooks, if any, do run)"
     say "  2) Renew now (a fresh certificate immediately)"
   fi
   say "  0) Back"
@@ -3167,11 +3211,19 @@ tm_cert(){ # unit cfg
   esac
   if [ "$m" = manual ] && [ "$c" = 2 ]; then return 0; fi
   if [ "$m" = standalone ] && ! cert_port_ok "$cf"; then
+    # Busy port, and no pre-hook we can see to free it. The dry run is the real
+    # test (a hook we cannot see may still free the port), so it runs; a real
+    # renewal is offered only with a warning and a default of No.
     d=$(cert_http01_port "$cf")
     warn "Port $d is in use right now, and certbot needs it for a moment to renew:"
     ss -Hltnp "sport = :$d" 2>/dev/null | sed 's/^/    /' >&2 || true
-    warn "Free port $d first (or re-issue the certificate with DNS-01) — certbot would fail now."
-    pause; return 0
+    if [ "$c" = 2 ]; then
+      warn "A renewal now will most likely fail. Run the test (1) first, or free port $d."
+      read -rp "  Renew anyway? [y/N]: " a </dev/tty || a=n
+      case "$a" in y|Y|yes) ;; *) return 0 ;; esac
+    else
+      warn "The test below will most likely fail unless something frees port $d."
+    fi
   fi
   rc=0
   if [ "$m" = manual ]; then

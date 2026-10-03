@@ -38,8 +38,10 @@ type dialedLink interface{ Close() error }
 
 // exitPool keeps a dynamic set of reverse dial slots.
 type exitPool struct {
-	dial  func() (dialedLink, error)
-	serve func(ctx context.Context, car dialedLink) // smux-server loop for one link
+	dial func() (dialedLink, error)
+	// serve runs the smux-server loop for one link and returns, in operator
+	// words, why the link ended (see sessionEndReason).
+	serve func(ctx context.Context, car dialedLink) string
 	min   int
 	max   int
 	log   func(string, ...any)
@@ -144,21 +146,40 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		backoff = 500 * time.Millisecond
 		n := p.incLive(1)
 		p.log("mtcp: exit link up to edge (slot %d; now %d)", s.id, n)
-		p.serve(ctx, car) // returns when the link dies or ctx ends
+		why := p.serve(ctx, car) // returns when the link dies or ctx ends
 		car.Close()
 		n = p.incLive(-1)
 		if ctx.Err() != nil {
 			return
 		}
-		// The edge closed an idle link to shrink the pattern (or a link dropped
-		// while the pool is above target): retire this slot instead of redialing.
+		// Above the edge's target, a slot whose link ended retires instead of
+		// redialing. Two different events end up here, and the log must not
+		// conflate them: the edge closing an idle link to shrink the pattern (a
+		// clean close — normal autopilot), and a link LOST to the network or a
+		// reset while the pool happened to be above target (a fault worth
+		// seeing). Only the behaviour is the same: either way it is not redialed.
 		if p.retireIfOver(s) {
-			p.log("mtcp: exit slot %d retired — pattern shrinking (now %d)", s.id, n)
+			switch {
+			case edgeClosed(why):
+				p.log("mtcp: exit slot %d retired — the edge shrank the pattern (now %d)", s.id, n)
+			case why == "": // reason unknown: claim neither
+				p.log("mtcp: exit slot %d retired — pool above target (now %d)", s.id, n)
+			default:
+				p.log("mtcp: exit slot %d lost (%s) — not redialed, pool above target (now %d)", s.id, why, n)
+			}
 			return
 		}
-		p.log("mtcp: exit link down (slot %d; now %d); redial", s.id, n)
+		if why == "" {
+			why = "reason unknown"
+		}
+		p.log("mtcp: exit link down (slot %d: %s; now %d); redial", s.id, why, n)
 	}
 }
+
+// edgeClosed reports whether a link ended by the edge closing it cleanly (the
+// first socket error was EOF on read, after the edge's TLS close_notify) — as
+// opposed to a reset, a timeout or a keepalive loss.
+func edgeClosed(why string) bool { return why == "read: "+reasonPeerClosed }
 
 func (p *exitPool) incLive(d int) int {
 	p.mu.Lock()

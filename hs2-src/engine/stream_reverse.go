@@ -84,8 +84,8 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	pool := newExitPool(ctx, min, max, dial, logf)
 	// serve captures the pool so a link's pool-control stream can resize it; set
 	// before any slot starts, then start the pool at its initial size.
-	pool.serve = func(ctx context.Context, car dialedLink) {
-		serveReverseLink(ctx, car.(*tlscarrier.Carrier), cfg, l3, pool)
+	pool.serve = func(ctx context.Context, car dialedLink) string {
+		return serveReverseLink(ctx, car.(*tlscarrier.Carrier), cfg, l3, pool)
 	}
 	if cfg.OnStart != nil {
 		cfg.OnStart(pool.stats)
@@ -96,13 +96,14 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 }
 
 // serveReverseLink runs the smux server over one reverse carrier and delivers
-// its streams to the panel, returning when the link dies or ctx ends. pool (may
-// be nil) lets the link's pool-control stream resize the exit pool.
-func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejConfig, l3 *l3Set, pool *exitPool) {
-	mtr := &linkMeter{}                                       // download-side counters, reported over kindStats
-	sess, _, err := newSession(car.RawConn(), true, nil, mtr) // smux server
+// its streams to the panel, returning when the link dies or ctx ends — with
+// why it ended, in operator words (the first socket error if there was one).
+// pool (may be nil) lets the link's pool-control stream resize the exit pool.
+func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejConfig, l3 *l3Set, pool *exitPool) string {
+	mtr := &linkMeter{}                                         // download-side counters, reported over kindStats
+	sess, why, err := newSession(car.RawConn(), true, nil, mtr) // smux server
 	if err != nil {
-		return
+		return "session setup failed: " + describeNetErr(err)
 	}
 	// Close the session when ctx ends, so AcceptStream unblocks and this returns
 	// instead of hanging on a link the edge keeps alive with keepalives.
@@ -114,13 +115,16 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		case <-closed:
 		}
 	}()
+	var downErr error
 	for {
 		st, err := sess.AcceptStream()
 		if err != nil {
+			downErr = err
 			break
 		}
 		go serveStream(ctx, st, cfg, l3, car, pool, mtr)
 	}
 	close(closed)
 	sess.Close()
+	return sessionEndReason(why, downErr)
 }

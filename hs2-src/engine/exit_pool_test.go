@@ -3,25 +3,36 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
-// fakeCarrier is a stand-in for a dialed reverse link. end() simulates the
-// link going away (the edge closing it, or the network dropping it).
+// fakeCarrier is a stand-in for a dialed reverse link. end() simulates the edge
+// closing it cleanly; endWith(reason) the link going away for another reason
+// (the network dropping it).
 type fakeCarrier struct {
 	closed atomic.Bool
 	done   chan struct{}
 	once   sync.Once
+	why    string // why the link ended, as serve reports it
 }
 
 func newFakeCarrier() *fakeCarrier            { return &fakeCarrier{done: make(chan struct{})} }
 func (c *fakeCarrier) Close() error           { c.closed.Store(true); c.end(); return nil }
-func (c *fakeCarrier) end()                   { c.once.Do(func() { close(c.done) }) }
 func (c *fakeCarrier) ended() <-chan struct{} { return c.done }
+
+// end: the link ends the way the edge closes one (clean TLS close -> EOF).
+func (c *fakeCarrier) end() { c.endWith("read: " + reasonPeerClosed) }
+
+// endWith: the link ends for the given reason (e.g. a network reset).
+func (c *fakeCarrier) endWith(why string) {
+	c.once.Do(func() { c.why = why; close(c.done) })
+}
 
 // testPool is an exit pool over fake carriers, tracking which are live.
 type testPool struct {
@@ -43,7 +54,7 @@ func newTestPool(t *testing.T, min, max int) *testPool {
 		tp.mu.Unlock()
 		return c, nil
 	}, func(string, ...any) {})
-	tp.serve = func(ctx context.Context, c dialedLink) {
+	tp.serve = func(ctx context.Context, c dialedLink) string {
 		fc := c.(*fakeCarrier)
 		select { // hold the link until it ends or the slot is cancelled
 		case <-ctx.Done():
@@ -57,6 +68,7 @@ func newTestPool(t *testing.T, min, max int) *testPool {
 			}
 		}
 		tp.mu.Unlock()
+		return fc.why
 	}
 	return tp
 }
@@ -73,7 +85,10 @@ func (tp *testPool) liveCount() int {
 }
 
 // endOne simulates the edge closing one link.
-func (tp *testPool) endOne() {
+func (tp *testPool) endOne() { tp.endOneWith("read: " + reasonPeerClosed) }
+
+// endOneWith ends one live link for the given reason.
+func (tp *testPool) endOneWith(why string) {
 	tp.mu.Lock()
 	var c *fakeCarrier
 	if len(tp.live) > 0 {
@@ -81,7 +96,7 @@ func (tp *testPool) endOne() {
 	}
 	tp.mu.Unlock()
 	if c != nil {
-		c.end()
+		c.endWith(why)
 	}
 }
 
@@ -136,6 +151,52 @@ func TestExitPoolShrinksOnlyByRetiringEndedLinks(t *testing.T) {
 	// At the target, a link that drops is redialed (it is not a shrink).
 	tp.endOne()
 	eventually(t, "redial back to 2", func() bool { return tp.liveCount() == 2 && tp.dials.Load() == dialsBefore+1 })
+}
+
+// The reverse exit's log must tell the edge shrinking the pattern (a clean
+// close of an idle link — normal) from a link lost to the network while the
+// pool is above target (a fault). Both retire the slot; only the words differ,
+// and the loss carries its reason. (Field report: a link killed with `ss -K`
+// was logged as "retired — pattern shrinking".)
+func TestExitPoolLogTellsShrinkFromLoss(t *testing.T) {
+	tp := newTestPool(t, 2, 8)
+	var mu sync.Mutex
+	var logs []string
+	tp.log = func(f string, a ...any) { mu.Lock(); logs = append(logs, fmt.Sprintf(f, a...)); mu.Unlock() }
+	has := func(sub string) func() bool {
+		return func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			for _, l := range logs {
+				if strings.Contains(l, sub) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	tp.setTarget(4)
+	eventually(t, "4 live links", func() bool { return tp.liveCount() == 4 })
+	tp.setTarget(2) // the pool is now above target
+
+	tp.endOne() // the edge closes an idle link
+	eventually(t, "shrink logged as the edge's decision", has("retired — the edge shrank the pattern (now 3)"))
+
+	const reset = "read: reset by the network or the other server"
+	tp.endOneWith(reset) // the network kills a link
+	eventually(t, "loss logged as a loss, with its reason", has("lost ("+reset+") — not redialed, pool above target (now 2)"))
+	if has("retired — the edge shrank the pattern (now 2)")() {
+		t.Fatal("a network loss was logged as the edge shrinking the pattern")
+	}
+
+	// At target: a lost link is redialed, and the log says why it went down.
+	tp.endOneWith(reset)
+	eventually(t, "redial logged with its reason", has("exit link down (slot"))
+	eventually(t, "redial back to 2", func() bool { return tp.liveCount() == 2 })
+	if !has(reset + "; now 1); redial")() {
+		mu.Lock()
+		t.Fatalf("redial line lacks the reason:\n%s", strings.Join(logs, "\n"))
+	}
 }
 
 // servePoolCtl decodes the edge's 2-byte targets and applies each to the pool.
@@ -194,11 +255,12 @@ func newEdgeExitPair(t *testing.T, edgeT, exitWarm int) *edgeExitPair {
 	lm, clk, _ := newV2Manager(nil, 2, 8, true)
 	lm.setTarget(edgeT)
 	hold := tp.serve
-	tp.serve = func(ctx context.Context, c dialedLink) {
+	tp.serve = func(ctx context.Context, c dialedLink) string {
 		l := &carrierLink{c: c.(*fakeCarrier)}
 		lm.AddLink(l, "exit")
-		hold(ctx, c) // until the carrier ends or its slot is cancelled
+		why := hold(ctx, c) // until the carrier ends or its slot is cancelled
 		lm.DropLink(l, "exit")
+		return why
 	}
 	tp.setTarget(exitWarm)
 	return &edgeExitPair{tp: tp, lm: lm, clk: clk}

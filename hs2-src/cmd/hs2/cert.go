@@ -134,7 +134,7 @@ func watchCerts(ctx context.Context) {
 				warned = false
 			}
 			if d := r.daysLeft(); d >= 0 && d <= 7 && !warned {
-				log.Printf("cert: %s expires in %d day(s) — certbot should renew it automatically (renewal runs daily)", r.certFile, d)
+				log.Printf("cert: %s expires in %d day(s) — renew it now; 'hs2 doctor' (cert renewal) shows whether and how it renews", r.certFile, d)
 				warned = true
 			}
 		}

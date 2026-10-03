@@ -55,12 +55,39 @@ type renewalConf struct {
 	preHook         string // e.g. "systemctl stop nginx": may free port 80 itself
 	autorenew       string
 	http01Port      int // standalone's listen port; 80 when absent
-	renewBeforeDays int // 30 when absent or unparseable (certbot's default)
+	renewBeforeDays int // explicit renew_before_expiry in days; 0 when absent
+}
+
+// renewThresholdDays is when certbot renews this certificate: the explicit
+// renew_before_expiry, else certbot's own default — a third of the
+// certificate's lifetime (half, under 10 days). For a 90-day Let's Encrypt
+// certificate that is 30 days, but a shorter-lived one renews later, and a
+// fixed 30 would call it "overdue" while certbot correctly waits.
+func renewThresholdDays(rc renewalConf, leaf *x509.Certificate) int {
+	if rc.renewBeforeDays > 0 {
+		return rc.renewBeforeDays
+	}
+	life := leaf.NotAfter.Sub(leaf.NotBefore)
+	part := life / 3
+	if life < 10*24*time.Hour {
+		part = life / 2
+	}
+	if d := int(part.Hours()/24 + 0.5); d > 0 {
+		return d
+	}
+	return 30 // no usable validity period: certbot's historical default
 }
 
 // certbotLineage returns the lineage name when certFile lives in
 // <leDir>/live/<name>/ (how certbot and the installer lay it out), else "".
+// "//" and "/./" are tolerated, but a ".." element never is — it is not
+// resolved into some other lineage (the installer's cert_lineage agrees).
 func certbotLineage(leDir, certFile string) string {
+	for _, el := range strings.Split(certFile, string(filepath.Separator)) {
+		if el == ".." {
+			return ""
+		}
+	}
 	live := filepath.Clean(filepath.Join(leDir, "live")) + string(filepath.Separator)
 	p := filepath.Clean(certFile)
 	if !strings.HasPrefix(p, live) {
@@ -76,7 +103,7 @@ func certbotLineage(leDir, certFile string) string {
 // readRenewalConf parses certbot's INI-style renewal config ("key = value"
 // lines; sections and comments ignored — the keys read here are unique).
 func readRenewalConf(path string) (renewalConf, error) {
-	rc := renewalConf{renewBeforeDays: 30, http01Port: 80}
+	rc := renewalConf{http01Port: 80}
 	f, err := os.Open(path)
 	if err != nil {
 		return rc, err
@@ -134,6 +161,39 @@ func parseRenewBefore(v string) int {
 	return 0
 }
 
+// knownPreHook describes a certbot pre-hook that runs before every renewal —
+// the usual way to free port 80 for standalone ("systemctl stop nginx") — or
+// returns "". certbot takes them from three places: the lineage's pre_hook, an
+// executable in renewal-hooks/pre/ (run by default, dry runs included), and a
+// pre-hook line in cli.ini.
+func knownPreHook(leDir string, rc renewalConf) string {
+	if rc.preHook != "" {
+		return fmt.Sprintf("pre_hook %q", rc.preHook)
+	}
+	dir := filepath.Join(leDir, "renewal-hooks", "pre")
+	if ents, err := os.ReadDir(dir); err == nil {
+		for _, e := range ents {
+			if fi, err := os.Stat(filepath.Join(dir, e.Name())); err == nil && fi.Mode().IsRegular() && fi.Mode()&0o111 != 0 {
+				return "the hook " + filepath.Join(dir, e.Name())
+			}
+		}
+	}
+	if f, err := os.Open(filepath.Join(leDir, "cli.ini")); err == nil {
+		defer f.Close()
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			k, v, ok := strings.Cut(strings.TrimSpace(sc.Text()), "=")
+			if !ok || strings.HasPrefix(k, "#") {
+				continue
+			}
+			if k = strings.TrimSpace(k); (k == "pre-hook" || k == "pre_hook") && strings.TrimSpace(v) != "" {
+				return fmt.Sprintf("the cli.ini pre-hook %q", strings.TrimSpace(v))
+			}
+		}
+	}
+	return ""
+}
+
 // checkCertRenewal reports how leaf (the cert checkCert just loaded, for a side
 // that terminates TLS) gets renewed, and whether that is going to work.
 func checkCertRenewal(d *doctorReport, fc fileConfig, leaf *x509.Certificate, env renewEnv) {
@@ -169,23 +229,24 @@ func checkCertRenewal(d *doctorReport, fc fileConfig, leaf *x509.Certificate, en
 	}
 
 	problems := 0
-	if daysLeft < rc.renewBeforeDays-2 {
-		// certbot renews once fewer than renewBeforeDays remain and its timer
+	threshold := renewThresholdDays(rc, leaf)
+	if daysLeft < threshold-2 {
+		// certbot renews once fewer than threshold days remain and its timer
 		// runs twice a day; two days past that without a renewal is a failure.
 		d.warn(name, fmt.Sprintf("overdue — certbot (%s) should have renewed this at %d days left but has not; see: journalctl -u certbot.service · certbot renew --dry-run",
-			rc.authenticator, rc.renewBeforeDays))
+			rc.authenticator, threshold))
 		problems++
 	}
 	portNote := ""
 	if rc.authenticator == "standalone" {
 		port := rc.http01Port
 		if busy, known := env.portBusy(port); known && busy {
-			if rc.preHook != "" {
+			if hook := knownPreHook(env.leDir, rc); hook != "" {
 				// The usual "stop nginx, renew, start nginx" setup: certbot
 				// frees the port itself, so a busy port now is expected.
-				portNote = fmt.Sprintf(" (port %d is in use now; your pre_hook %q is expected to free it at renewal — confirm with: certbot renew --dry-run)", port, rc.preHook)
+				portNote = fmt.Sprintf(" (port %d is in use now; %s is expected to free it at renewal — confirm with: certbot renew --dry-run)", port, hook)
 			} else {
-				d.warn(name, fmt.Sprintf("standalone HTTP-01 needs port %d at each renewal, but another program is listening on it now — the next renewal will fail (who: ss -ltnp 'sport = :%d'); free it, or re-issue the certificate with DNS-01", port, port))
+				d.warn(name, fmt.Sprintf("standalone HTTP-01 needs port %d at each renewal, but another program is listening on it now and no certbot pre-hook frees it — the next renewal will likely fail (who: ss -ltnp 'sport = :%d'; test: certbot renew --dry-run); free it, or re-issue the certificate with DNS-01", port, port))
 				problems++
 			}
 		} else if known {
@@ -193,11 +254,11 @@ func checkCertRenewal(d *doctorReport, fc fileConfig, leaf *x509.Certificate, en
 		}
 	}
 	if sched, known := env.scheduler(); known && sched == "" {
-		d.warn(name, "no certbot renewal timer is active (certbot.timer / snap.certbot.renew.timer) — nothing will run the renewal; enable it: systemctl enable --now certbot.timer")
+		d.warn(name, "no certbot renewal timer or cron job found (certbot.timer / snap.certbot.renew.timer / a crontab entry) — nothing will run the renewal; enable it: systemctl enable --now certbot.timer")
 		problems++
 	}
 	if problems == 0 {
-		d.ok(name, fmt.Sprintf("automatic — certbot %s, renews when %d days are left%s", rc.authenticator, rc.renewBeforeDays, portNote))
+		d.ok(name, fmt.Sprintf("automatic — certbot %s, renews when %d days are left%s", rc.authenticator, threshold, portNote))
 	}
 }
 
@@ -232,10 +293,10 @@ func listeningOnPort(port int, tables ...string) (busy, known bool) {
 	return false, known
 }
 
-// certbotScheduler names the active certbot renewal timer. Only meaningful
-// under systemd (the installer requires it); elsewhere it reports unknown so the
-// check stays quiet rather than guessing. Debian's /etc/cron.d/certbot entry is
-// deliberately NOT counted: it skips itself whenever systemd is running.
+// certbotScheduler names what runs certbot's renewal: an active systemd timer,
+// or a cron job (a pip/venv certbot is usually scheduled from a crontab). Only
+// meaningful under systemd (the installer requires it); elsewhere it reports
+// unknown so the check stays quiet rather than guessing.
 func certbotScheduler() (string, bool) {
 	if _, err := os.Stat("/run/systemd/system"); err != nil {
 		return "", false
@@ -249,5 +310,38 @@ func certbotScheduler() (string, bool) {
 			return t, true
 		}
 	}
+	crons := []string{"/etc/crontab", "/var/spool/cron/crontabs/root", "/var/spool/cron/root"}
+	if more, err := filepath.Glob("/etc/cron.d/*"); err == nil {
+		crons = append(crons, more...)
+	}
+	if f := cronRunsCertbot(crons...); f != "" {
+		return "cron (" + f + ")", true
+	}
 	return "", true
+}
+
+// cronRunsCertbot returns the first crontab file with an active line that runs
+// certbot's renewal, or "". Debian's packaged /etc/cron.d/certbot entry does
+// not count: it tests for /run/systemd/system and skips itself under systemd
+// (the timer is its replacement there).
+func cronRunsCertbot(files ...string) string {
+	for _, p := range files {
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		for sc.Scan() {
+			l := strings.TrimSpace(sc.Text())
+			if l == "" || l[0] == '#' {
+				continue
+			}
+			if strings.Contains(l, "certbot") && strings.Contains(l, "renew") && !strings.Contains(l, "/run/systemd/system") {
+				f.Close()
+				return p
+			}
+		}
+		f.Close()
+	}
+	return ""
 }

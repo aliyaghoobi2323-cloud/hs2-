@@ -322,7 +322,9 @@ func printStatus(path string) {
 
 func certWarn(days int) string {
 	if days <= 7 {
-		return "  (renewal due — certbot renews automatically; hot-reloaded, no restart)"
+		// Not "certbot renews automatically": a DNS-01 (--manual) certificate
+		// never does. hs2 doctor's "cert renewal" check says which this is.
+		return "  (renew it now — see 'hs2 doctor' (cert renewal); a renewed cert hot-reloads, no restart)"
 	}
 	return ""
 }

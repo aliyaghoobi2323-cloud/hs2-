@@ -667,8 +667,8 @@ func runOldExitReverse(ctx context.Context, panel string, links, min, max int,
 		links = min
 	}
 	pool := newExitPool(ctx, min, max, func() (dialedLink, error) { return dial() }, logf)
-	pool.serve = func(ctx context.Context, car dialedLink) {
-		serveOldExitLink(ctx, car.(*tlscarrier.Carrier), panel, pool)
+	pool.serve = func(ctx context.Context, car dialedLink) string {
+		return serveOldExitLink(ctx, car.(*tlscarrier.Carrier), panel, pool)
 	}
 	pool.setTarget(links)
 	return pool
@@ -697,10 +697,10 @@ func runOldExitListener(ctx context.Context, ln net.Listener, srv *tlscarrier.Se
 
 // serveOldExitLink is the previous release's serveReverseLink / direct link
 // loop: smux server without a meter.
-func serveOldExitLink(ctx context.Context, car *tlscarrier.Carrier, panel string, pool *exitPool) {
-	sess, _, err := newSession(car.RawConn(), true, nil, nil)
+func serveOldExitLink(ctx context.Context, car *tlscarrier.Carrier, panel string, pool *exitPool) string {
+	sess, why, err := newSession(car.RawConn(), true, nil, nil)
 	if err != nil {
-		return
+		return "session setup failed: " + describeNetErr(err)
 	}
 	closed := make(chan struct{})
 	go func() {
@@ -710,15 +710,18 @@ func serveOldExitLink(ctx context.Context, car *tlscarrier.Carrier, panel string
 		case <-closed:
 		}
 	}()
+	var downErr error
 	for {
 		st, err := sess.AcceptStream()
 		if err != nil {
+			downErr = err
 			break
 		}
 		go serveOldStream(ctx, st, panel, car, pool)
 	}
 	close(closed)
 	sess.Close()
+	return sessionEndReason(why, downErr)
 }
 
 // serveOldStream is the previous release's serveStream: kindCtrl, kindPool and
@@ -805,7 +808,7 @@ func TestMixedOldExitShrinksViaRetireIfOver(t *testing.T) {
 	if n := r.dials.Load(); n != 7 {
 		t.Fatalf("the old exit dialled %d links; want the initial 7 only", n)
 	}
-	if n := r.exit.count("retired — pattern shrinking", exitMark); n != 5 {
+	if n := r.exit.count("retired — the edge shrank the pattern", exitMark); n != 5 {
 		t.Fatalf("the old exit retired %d slots via retireIfOver; want 5", n)
 	}
 	r.checkNoRedial()

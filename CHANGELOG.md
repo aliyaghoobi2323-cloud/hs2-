@@ -304,6 +304,56 @@ action driven on a pty with a recording certbot stub), `tm_tune_links_test.sh`
 (including a **real vim** driven through the pty: `:wq`, `:cq`, and kill -9
 mid-edit with the session dropped), and `doctor_cert_test.go`.
 
+### Review fixes (independent adversarial review of phase F)
+The review reproduced every finding through the real menu on a pty (and checked
+certbot's behaviour against a real certbot 5.8). Fixed:
+- **Pre-hooks certbot runs from anywhere count.** A port-80 holder freed by an
+  executable in `renewal-hooks/pre/` or a `pre-hook` in `cli.ini` (not only the
+  lineage's `pre_hook`) is no longer reported as "renewal will fail" — by the
+  tunnel screen or by `hs2 doctor`. And when the port is busy with no visible
+  hook, **c) Certificate** still runs the dry run (the real test — a hook we
+  cannot see may free the port); a real "Renew now" asks first, default No.
+- **The startup sweep no longer deletes another session's live edit.** The edit
+  directory is named `.hs2-edit.<pid>.<random>`; one whose installer is still
+  running (a second SSH window) is left alone, and swept once it is gone.
+- `hs2 status` and the daemon log no longer say "certbot renews automatically"
+  for an expiring certificate (a DNS-01 one never does); they point at
+  `hs2 doctor`.
+- The dry run is described honestly: it does not replace the certificate, but
+  certbot's pre/post hooks do run.
+- With no explicit `renew_before_expiry`, the renewal threshold follows
+  certbot's own rule — a third of the certificate's lifetime (half under 10
+  days) — instead of a fixed 30 days that called short-lived certificates
+  "overdue" while certbot was correctly waiting.
+- The installer and `hs2 doctor` read odd `cert_file` paths (`//`, `/./`)
+  identically, and neither resolves `..` into another lineage.
+- The editor shown in the menu is the one that opens (a leading space in
+  `EDITOR` no longer shows "nano" while vim opens).
+- `hs2 doctor` recognises a certbot scheduled from a crontab (a pip/venv
+  install) instead of reporting "nothing will run the renewal".
+- The `EDITOR='*'` test now really catches glob expansion (it runs where `*`
+  would match an installed editor).
+
+### Field request — the reverse exit's log says why a link went away
+On the Kharej side in reverse, a link killed by the network (`ss -K`, a reset)
+was logged exactly like the autopilot shrinking the pattern: `exit slot N
+retired — pattern shrinking`. The behaviour was right (above the target, a slot
+whose link ends is not redialed); the words conflated two different events and
+dropped the cause. The link's end reason (the first socket error, in the same
+words the Iran side uses) now reaches the pool, and the log says which it was:
+- `exit slot 6 retired — the edge shrank the pattern (now 7)` — the edge closed
+  an idle link cleanly (TLS close).
+- `exit slot 6 lost (read: reset by the network or the other server) — not
+  redialed, pool above target (now 7)` — a loss.
+- `exit link down (slot 6: <reason>; now 7); redial` — at target, with the cause.
+Log text only — no change to when links are retired or redialed. Proven over the
+real TLS + smux stack: a clean close and a genuine RST each produce their own
+reason, and the two reverse-shrink integration tests now count retirements
+under the "edge shrank the pattern" wording.
+
+Not done: a per-install cover page (requested again from the field test). The
+default cover page is still the same on every install — see Known limitations.
+
 Known, not changed here: `tun_ports_test.py` fails the same 11 checks on `main`
 and on this branch — it still expects the wizard's pre-U5 question order; it
 needs its expectations updated, separately.

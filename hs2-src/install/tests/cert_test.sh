@@ -42,7 +42,7 @@ lineage dns80   80 '[renewalparams]\nauthenticator = manual\n'
 lineage dns20   20 '[renewalparams]\nauthenticator = manual\n'
 lineage hook80  80 '[renewalparams]\nauthenticator = manual\nmanual_auth_hook = /x.sh\n'
 lineage sa80    80 '[renewalparams]\nauthenticator = standalone\n'
-lineage sa20    20 '[renewalparams]\nauthenticator = standalone\n'
+lineage sa20    20 'renew_before_expiry = 30 days\n[renewalparams]\nauthenticator = standalone\n'
 lineage sa20rb  20 'renew_before_expiry = 10 days\n[renewalparams]\nauthenticator = standalone\n'
 lineage off80   80 '[renewalparams]\nauthenticator = standalone\nautorenew = False\n'
 lineage noconf  80 -
@@ -62,6 +62,18 @@ out=$(line "$(cfgfor a "$LE/live/sa80/fullchain.pem" listen false)" busy)
 check "standalone, port 80 taken: warns the next renewal will fail" 'echo "$out" | grep -q "port 80 is in use"'
 out=$(line "$(cfgfor a "$LE/live/saph/fullchain.pem" listen false)" busy)
 check "standalone, port 80 taken but a pre_hook frees it: no false alarm" 'echo "$out" | grep -q "renews automatically"'
+for kind in dirhook cliini; do
+  L2="$T/le-$kind"; mkdir -p "$L2/live" "$L2/renewal"; mkcert "$L2/live/sa" 80
+  printf '[renewalparams]\nauthenticator = standalone\n' > "$L2/renewal/sa.conf"
+  if [ "$kind" = dirhook ]; then mkdir -p "$L2/renewal-hooks/pre"; printf '#!/bin/sh\nsystemctl stop nginx\n' > "$L2/renewal-hooks/pre/stop-nginx"; chmod +x "$L2/renewal-hooks/pre/stop-nginx"
+  else printf '# certbot defaults\npre-hook = systemctl stop nginx\n' > "$L2/cli.ini"; fi
+  out=$(bash -c 'source "$1/core.sh" >/dev/null 2>&1; LE_DIR="$2"; C_Y=""; C_R=""; C_0=""; port_free(){ return 1; }; tm_cert_line "$3"' _ "$T" "$L2" "$(cfgfor a "$L2/live/sa/fullchain.pem" listen false)" 2>&1)
+  check "port 80 taken, $kind pre-hook frees it: no false alarm" 'echo "$out" | grep -q "renews automatically"'
+done
+mkdir -p "$T/le-noexec/live" "$T/le-noexec/renewal" "$T/le-noexec/renewal-hooks/pre"; mkcert "$T/le-noexec/live/sa" 80
+printf '[renewalparams]\nauthenticator = standalone\n' > "$T/le-noexec/renewal/sa.conf"; echo notes > "$T/le-noexec/renewal-hooks/pre/README"
+out=$(bash -c 'source "$1/core.sh" >/dev/null 2>&1; LE_DIR="$2"; C_Y=""; C_R=""; C_0=""; port_free(){ return 1; }; tm_cert_line "$3"' _ "$T" "$T/le-noexec" "$(cfgfor a "$T/le-noexec/live/sa/fullchain.pem" listen false)" 2>&1)
+check "a non-executable file in renewal-hooks/pre is not a hook" 'echo "$out" | grep -q "port 80 is in use"'
 out=$(line "$(cfgfor a "$LE/live/sa8888/fullchain.pem" listen false)" busy)
 check "standalone on http01_port 8888, taken: names port 8888" 'echo "$out" | grep -q "port 8888 is in use"'
 out=$(line "$(cfgfor a "$LE/live/sa20/fullchain.pem" listen false)")
@@ -95,22 +107,39 @@ import (
 	"encoding/pem"
 	"math/big"
 	"os"
+	"strconv"
 	"time"
 )
 
+// main FROM TO: a cert valid from FROM to TO days relative to now.
 func main() {
+	from, _ := strconv.Atoi(os.Args[1])
+	to, _ := strconv.Atoi(os.Args[2])
+	day := 24 * time.Hour
 	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "vpn.example.com"},
-		DNSNames: []string{"vpn.example.com"}, NotBefore: time.Now().Add(-100 * 24 * time.Hour), NotAfter: time.Now().Add(-48 * time.Hour)}
+		DNSNames: []string{"vpn.example.com"}, NotBefore: time.Now().Add(time.Duration(from) * day), NotAfter: time.Now().Add(time.Duration(to)*day + time.Hour)}
 	der, _ := x509.CreateCertificate(rand.Reader, tpl, tpl, &k.PublicKey, k)
 	pem.Encode(os.Stdout, &pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 GO
-  if (cd "$T/gen" && GOFLAGS= GO111MODULE=off go run main.go) > "$LE/live/expired/fullchain.pem" 2>/dev/null; then
+  gen(){ (cd "$T/gen" && GOFLAGS= GO111MODULE=off go run main.go "$1" "$2"); }
+  if gen -100 -3 > "$LE/live/expired/fullchain.pem" 2>/dev/null; then
     printf '[renewalparams]\nauthenticator = manual\n' > "$LE/renewal/expired.conf"
     out=$(line "$(cfgfor a "$LE/live/expired/fullchain.pem" listen false)")
     check "expired: says EXPIRED and that the tunnel still works" 'echo "$out" | grep -q "EXPIRED on" && echo "$out" | grep -q "tunnel still works"'
-  else echo "SKIP expired-cert case (go run failed)"; fi
+    # certbot's default threshold is a third of the lifetime: a 45-day cert
+    # issued 20 days ago (25 left) is NOT overdue; with 10 left it is.
+    mkdir -p "$LE/live/short25" "$LE/live/short10"
+    gen -20 25 > "$LE/live/short25/fullchain.pem" 2>/dev/null
+    gen -35 10 > "$LE/live/short10/fullchain.pem" 2>/dev/null
+    printf '[renewalparams]\nauthenticator = standalone\n' > "$LE/renewal/short25.conf"
+    cp "$LE/renewal/short25.conf" "$LE/renewal/short10.conf"
+    out=$(line "$(cfgfor a "$LE/live/short25/fullchain.pem" listen false)")
+    check "45-day cert, 25 days left, no explicit threshold: not overdue" 'echo "$out" | grep -q "renews automatically"'
+    out=$(line "$(cfgfor a "$LE/live/short10/fullchain.pem" listen false)")
+    check "45-day cert, 10 days left: overdue" 'echo "$out" | grep -q "overdue"'
+  else echo "SKIP generated-cert cases (go run failed)"; fi
 else echo "SKIP expired-cert case (no go)"; fi
 
 # cert_domains: the wildcard name must stay literal even where it could glob.
@@ -160,7 +189,11 @@ check "standalone, test: certbot renew --dry-run on the lineage" 'calls | grep -
 out=$(act "$(cfgfor m "$LE/live/sa80/fullchain.pem" listen false)" free 'c\n2\n\n0\n')
 check "standalone, renew now: certbot renew --force-renewal" 'calls | grep -qx -- "renew --cert-name sa80 --force-renewal" && echo "$out" | grep -q "Renewed"'
 out=$(act "$(cfgfor m "$LE/live/sa80/fullchain.pem" listen false)" busy 'c\n1\n\n0\n')
-check "standalone, port 80 taken: certbot is NOT run, operator told why" '[ ! -s "$T/certbot.log" ] && echo "$out" | grep -q "Port 80 is in use"'
+check "standalone, port 80 taken: warned, and the dry run (the real test) still runs" 'echo "$out" | grep -q "Port 80 is in use" && calls | grep -qx -- "renew --cert-name sa80 --dry-run"'
+out=$(act "$(cfgfor m "$LE/live/sa80/fullchain.pem" listen false)" busy 'c\n2\nn\n0\n')
+check "standalone, port 80 taken, Renew now, answer N: certbot NOT run" '[ ! -s "$T/certbot.log" ] && echo "$out" | grep -q "most likely fail"'
+out=$(act "$(cfgfor m "$LE/live/sa80/fullchain.pem" listen false)" busy 'c\n2\ny\n\n0\n')
+check "standalone, port 80 taken, Renew now, answer y: certbot runs" 'calls | grep -qx -- "renew --cert-name sa80 --force-renewal"'
 out=$(act "$(cfgfor m "$LE/live/saph/fullchain.pem" listen false)" busy 'c\n1\n\n0\n')
 check "port 80 taken but a pre_hook frees it: the dry run DOES run" 'calls | grep -qx -- "renew --cert-name saph --dry-run"'
 out=$(act "$(cfgfor m "$LE/live/hook80/fullchain.pem" listen false)" free 'c\n1\n\n0\n')

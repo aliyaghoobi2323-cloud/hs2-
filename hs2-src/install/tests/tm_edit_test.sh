@@ -95,19 +95,34 @@ out=$(pick EDITOR=vi VISUAL=vi SUDO_EDITOR=nano); check "SUDO_EDITOR wins over b
 out=$(pick VISUAL="code --wait" EDITOR=vi); check "desktop VISUAL skipped (explained), falls to EDITOR" 'echo "$out" | grep -qF "PICK=[vi]" && echo "$out" | grep -q "desktop editor"'
 out=$(pick EDITOR=no-such-editor-xyz); check "missing editor skipped (explained), label nano" 'echo "$out" | grep -qF "PICK=[] LABEL=[nano]" && echo "$out" | grep -q "not installed"'
 out=$(pick EDITOR="$(command -v vi) -n"); check "absolute path + arguments kept, label is the basename" 'echo "$out" | grep -qF "PICK=[$(command -v vi) -n] LABEL=[vi]"'
-out=$(cd "$T" && pick EDITOR='*'); check "EDITOR='*' is never glob-expanded into a command" 'echo "$out" | grep -qF "PICK=[]"'
+# Run where '*' would expand to exactly one name: an installed editor. A glob-
+# expanding implementation would then pick it; the real one must not.
+mkdir -p "$T/globonly" && : > "$T/globonly/vi"
+out=$(cd "$T/globonly" && pick EDITOR='*'); check "EDITOR='*' is never glob-expanded into a command (even where it would match 'vi')" 'echo "$out" | grep -qF "PICK=[]"'
+out=$(pick EDITOR=" vi"); check "leading space: label is the editor that actually opens" 'echo "$out" | grep -qF "LABEL=[vi]"'
 
-# ---- the startup sweep removes an old leftover file AND a leftover directory --
-mkdir -p "$T/sw/.hs2-edit.AAA111" && echo key > "$T/sw/.hs2-edit.AAA111/hs2-x.json" && echo key > "$T/sw/.hs2-edit.BBB222"
+# ---- the startup sweep: leftovers go, another session's live edit stays -----
+sleep 300 & LIVE=$!                       # stands in for a second installer session
+DEAD=999999; while [ -d "/proc/$DEAD" ]; do DEAD=$((DEAD - 1)); done
+mkdir -p "$T/sw/.hs2-edit.$DEAD.AAA111" "$T/sw/.hs2-edit.$LIVE.CCC333"
+echo key > "$T/sw/.hs2-edit.$DEAD.AAA111/hs2-x.json"; echo key > "$T/sw/.hs2-edit.$LIVE.CCC333/hs2-x.json"
+echo key > "$T/sw/.hs2-edit.BBB222"     # an older version's plain temp file
 echo '{}' > "$T/sw/hs2-x.json"
 sed "s#^CFG_DIR=/etc/hs2#CFG_DIR=$T/sw#" "$T/core.sh" > "$T/core_sw.sh"
 bash -c 'source "$1" >/dev/null 2>&1' _ "$T/core_sw.sh"
-check "startup sweep removes a leftover edit dir and an old-style leftover file, keeps the config" '[ -z "$(find "$T/sw" -name ".hs2-edit.*")" ] && [ -f "$T/sw/hs2-x.json" ]'
+check "startup sweep removes a dead session's edit dir and an old-style file" '[ ! -e "$T/sw/.hs2-edit.$DEAD.AAA111" ] && [ ! -e "$T/sw/.hs2-edit.BBB222" ] && [ -f "$T/sw/hs2-x.json" ]'
+check "startup sweep leaves a LIVE session's edit dir alone" '[ -f "$T/sw/.hs2-edit.$LIVE.CCC333/hs2-x.json" ]'
+kill "$LIVE" 2>/dev/null; wait "$LIVE" 2>/dev/null
+bash -c 'source "$1" >/dev/null 2>&1' _ "$T/core_sw.sh"
+check "…and sweeps it once that session is gone" '[ -z "$(find "$T/sw" -name ".hs2-edit.*")" ]'
 
 # ---- a REAL vim, driven through the pty ---------------------------------------
 if command -v vim >/dev/null 2>&1; then
   VIMCMD="vim -N -u NONE -i NONE"
-  runv(){ rm -rf "$T/cfg"; printf "$1" | TERM=xterm script -qec "T='$T' SCEN=own EDITOR='$VIMCMD' bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'; }
+  # Every real-vim run is bounded: a vim that never got its keys must not hang
+  # the suite (a cold first start can be slow), and none may outlive the test.
+  runv(){ rm -rf "$T/cfg"; printf "$1" | TERM=xterm timeout 40 script -qec "T='$T' SCEN=own EDITOR='$VIMCMD' bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'
+          pkill -9 -f "^vim -N -u NONE -i NONE $T/" 2>/dev/null || true; }
   out=$(runv '4\n\nGA\n\033:wq\n')
   check "real vim (:wq): change applied, no swap/backup left" '[ "$(wc -l < "$T/cfg/hs2-x.json")" = 2 ] && [ "$(strays)" = 0 ] && echo "$out" | grep -q BACK_IN_CALLER'
   out=$(runv '4\n\nGA\n\033:cq\n')
@@ -115,7 +130,7 @@ if command -v vim >/dev/null 2>&1; then
   # A dropped SSH session mid-edit: vim dies (kill -9, so it cannot tidy its
   # .swp) and the installer gets SIGHUP. Neither the swap file nor the copy may
   # survive beside the config.
-  ( for _ in $(seq 1 50); do sleep 0.1; pkill -9 -f "^vim -N -u NONE -i NONE $T/cfg/" && break; done
+  ( for _ in $(seq 1 200); do sleep 0.1; pkill -9 -f "^vim -N -u NONE -i NONE $T/cfg/" && break; done
     sleep 1; pkill -HUP -f "bash $T/inner.sh" ) &
   out=$(runv '4\n\nihello')
   wait
