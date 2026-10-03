@@ -296,47 +296,75 @@ func checkTuning(d *doctorReport, fc fileConfig) {
 	}
 }
 
-// checkLinkPool compares the config's adaptive link-pool ceiling (max_links)
-// against what THIS server's RAM and cores would choose now. They are set once
-// at install, so a server that was later resized drifts: a box that SHRANK may
-// carry a ceiling too high for its RAM (a WARN — too many links can exhaust
-// memory under load), and a box that GREW could use more links than it was
-// given (an INFO — free headroom). It also restates that in reverse the
-// effective ceiling is the lower of the two servers', and surfaces the peer's
-// number when the live status file has learned it.
+// checkLinkPool checks this server's link-pool ceiling against its hardware
+// NOW, and shows the tunnel's effective ceiling when the daemon has learned the
+// other server's:
+//
+//   - auto (max_links 0): the ceiling follows the hardware at every start. If
+//     the hardware changed under a RUNNING daemon (RAM resized live), the
+//     running ceiling is out of date until a restart — WARN when it is now too
+//     high for the RAM, INFO when more is available;
+//   - fixed (max_links > 0), or the historical default 32 (max_links not
+//     set): WARN when above what the RAM comfortably holds (it was set for
+//     bigger hardware, or by hand), INFO when below what the box could use —
+//     both suggest auto;
+//   - a direct Kharej's own ceiling is not applied (the Iran server's is), so
+//     it gets no drift check, only the fact.
 func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
+	const name = "link pool ceiling"
+	if !hasLinkPool(fc) {
+		d.info(name, fmt.Sprintf("no adaptive link pool on carrier %q (tls is one link; other carriers run one session)", carrierName(fc)))
+		return
+	}
 	_, cfgMax, _ := linkEnvelope(fc)
-	ram, cpus := tune.Detect()
+	_, mode, profile := linkCeiling(fc)
+	ram, cpus := detectHW()
 	recMax := tune.RecommendedMaxLinks(ram, cpus)
-	profile := tune.ProfileFor(ram, cpus)
+	hw := fmt.Sprintf("%s box: %s RAM, %d core(s)", profile, ramStr(ram), cpus)
+	iran := fc.Mode == "dial"
 
-	// The effective ceiling in reverse is min(this side, the other side). If the
-	// daemon is running and has learned the peer's max, say so.
-	effNote := ""
-	if fc.Reverse {
-		effNote = " · reverse: the effective ceiling is the lower of the two servers' — set both"
-		if b, err := os.ReadFile(statusPath(cfgPath)); err == nil {
-			var ls liveStatus
-			if json.Unmarshal(b, &ls) == nil && ls.PeerMax > 0 {
-				eff := cfgMax
-				who := "this server"
-				if ls.PeerMax < eff {
-					eff, who = ls.PeerMax, "the other server"
-				}
-				effNote = fmt.Sprintf(" · reverse: effective %d (this server %d, other server %d — limited by %s)", eff, cfgMax, ls.PeerMax, who)
+	// The live status (if the daemon runs) knows what it started with and the
+	// other server's ceiling; it gives the effective ceiling exactly.
+	eff, running := "", 0
+	if b, err := os.ReadFile(statusPath(cfgPath)); err == nil {
+		var ls liveStatus
+		if json.Unmarshal(b, &ls) == nil && time.Now().Unix()-ls.Updated <= 6 {
+			running = ls.CfgMax
+			if t := ceilingLine(ls); t != "" {
+				eff = " · now: " + t
 			}
 		}
 	}
 
+	if !fc.Reverse && !iran {
+		d.info(name, "in direct mode the Iran server's ceiling applies; this server's max_links is not applied here"+eff)
+		return
+	}
+	if mode == ceilAuto {
+		// cfgMax is what a start NOW would run with (the hardware's ceiling,
+		// lifted to min_links if that is higher); compare it, not the raw
+		// recommendation, with what the daemon started with.
+		switch {
+		case running > 0 && cfgMax < running:
+			d.warn(name, fmt.Sprintf("auto: running with %d, but this %s now gives %d (hardware changed since the daemon started) — restart the tunnel to apply the lower ceiling%s", running, hw, cfgMax, eff))
+		case running > 0 && cfgMax > running:
+			d.info(name, fmt.Sprintf("auto: running with %d; this %s now gives %d (hardware changed since the daemon started) — restart the tunnel to use it%s", running, hw, cfgMax, eff))
+		default:
+			d.ok(name, fmt.Sprintf("auto: %d links, from this %s — re-derived at every start%s", cfgMax, hw, eff))
+		}
+		return
+	}
+	how := "fixed by max_links"
+	if mode == ceilDefault {
+		how = "the default — max_links is not set"
+	}
 	switch {
 	case cfgMax == recMax:
-		d.ok("link pool ceiling", fmt.Sprintf("%d links — matches this %s box (%s RAM, %d core(s))%s", cfgMax, profile, ramStr(ram), cpus, effNote))
+		d.ok(name, fmt.Sprintf("%d links (%s) — matches this %s%s", cfgMax, how, hw, eff))
 	case cfgMax > recMax:
-		d.warn("link pool ceiling", fmt.Sprintf("configured %d, but this %s box (%s RAM, %d core(s)) would choose %d — more links than this RAM comfortably supports under load; lower max_links (menu → Link pool), or it was set for bigger hardware%s",
-			cfgMax, profile, ramStr(ram), cpus, recMax, effNote))
-	default: // cfgMax < recMax
-		d.info("link pool ceiling", fmt.Sprintf("configured %d; this %s box (%s RAM, %d core(s)) could use up to %d — raise max_links for more headroom if you want it (menu → Link pool)%s",
-			cfgMax, profile, ramStr(ram), cpus, recMax, effNote))
+		d.warn(name, fmt.Sprintf("max_links %d is above what this %s suggests (%d) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)%s", cfgMax, hw, recMax, recMax, eff))
+	default:
+		d.info(name, fmt.Sprintf("%d links (%s); this %s could use up to %d — set max_links to 0 (auto) to follow the hardware (menu → Link pool)%s", cfgMax, how, hw, recMax, eff))
 	}
 }
 

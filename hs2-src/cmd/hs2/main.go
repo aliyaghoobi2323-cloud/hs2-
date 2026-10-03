@@ -63,8 +63,13 @@ type fileConfig struct {
 
 	// mtcp (multi-link) settings
 	MinLinks int `json:"min_links"`
-	MaxLinks int `json:"max_links"`
-	PerLink  int `json:"per_link"` // concurrently active flows per link the pool sizes for
+	// MaxLinks: a number fixes the ceiling; 0 = AUTO (from the hardware, see
+	// linkCeiling); ABSENT = the historical fixed 32. maxLinksSet tells 0 and
+	// absent apart (set by UnmarshalJSON), so a config written before the auto
+	// ceiling existed behaves exactly as it always did.
+	MaxLinks    int `json:"max_links"`
+	maxLinksSet bool
+	PerLink     int `json:"per_link"` // concurrently active flows per link the pool sizes for
 	// DrainIdleSec: when the pool shrinks, a connection on a retiring link
 	// that has moved nothing for this many seconds is closed so the link can
 	// finish. Unset = 310 (just above xray's 300 s connIdle); 0 = never.
@@ -92,6 +97,22 @@ type fileConfig struct {
 
 	// kernel tuning (RAM/CPU-aware; applied at every start). Omitted = auto.
 	Tuning *tune.Config `json:"tuning"`
+}
+
+// UnmarshalJSON decodes the config as usual and records whether max_links was
+// present at all (null counts as absent), so linkCeiling can tell an explicit
+// 0 (auto) from a config that never set it (the historical fixed 32).
+func (fc *fileConfig) UnmarshalJSON(b []byte) error {
+	type plain fileConfig // same fields, no UnmarshalJSON: no recursion
+	if err := json.Unmarshal(b, (*plain)(fc)); err != nil {
+		return err
+	}
+	var probe struct {
+		MaxLinks *int `json:"max_links"`
+	}
+	_ = json.Unmarshal(b, &probe) // the full decode above already validated b
+	fc.maxLinksSet = probe.MaxLinks != nil
+	return nil
 }
 
 // baseVersion is the canonical capability line. It MUST keep the literal
@@ -282,6 +303,9 @@ func runCmd(args []string) {
 	if _, envCC := os.LookupEnv("HS2_TUNE_CC"); !envCC && plan.Congestion != "" {
 		tlscarrier.CongestionControl = plan.Congestion
 	}
+	if hasLinkPool(fc) {
+		log.Print(ceilingLogLine(fc))
+	}
 
 	// The UDP/auto transports carry datagrams: keep the tunnel MTU small enough
 	// that a sealed, FEC-wrapped IP packet still fits a 1500-byte path without
@@ -422,8 +446,14 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		return
 	}
 
-	// exit (kharej): has the panel.
-	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf,
+	// exit (kharej): has the panel. MaxLinks is this server's resolved ceiling,
+	// told to the edge so both servers can show the effective ceiling exactly
+	// (in direct mode the exit reports it but does not apply it).
+	_, exitMax, _ := linkEnvelope(fc)
+	if links > 0 {
+		exitMax = links
+	}
+	cfg := engine.KharejConfig{Panel: fc.Expose, Log: logf, MaxLinks: exitMax,
 		OnStart: func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) }}
 	if dev != nil {
 		cfg.TUN = dev
@@ -516,7 +546,7 @@ func recommendLinksCmd(args []string) {
 	fs := flag.NewFlagSet("recommend-links", flag.ExitOnError)
 	why := fs.Bool("why", false, "also print the profile and detected hardware")
 	fs.Parse(args)
-	ramMB, cpus := tune.Detect()
+	ramMB, cpus := detectHW()
 	maxLinks := tune.RecommendedMaxLinks(ramMB, cpus)
 	if !*why {
 		fmt.Println(maxLinks)
@@ -537,19 +567,18 @@ func ramStr(mb int) string {
 }
 
 // linkEnvelope resolves the adaptive link-pool bounds from the config, applying
-// the defaults: the pattern lives anywhere in 2–32 links, with at least one link
-// for every per_link (default 8) connections that are actively moving data. The
-// pool is never fixed at these numbers — the autopilot moves it continuously
-// inside the envelope from the measured traffic, up and back down (see
-// engine/autopilot.go).
+// the defaults: the pattern lives anywhere between min_links (default 2) and the
+// ceiling (max_links, or the hardware-derived auto ceiling — see linkCeiling),
+// with at least one link for every per_link (default 8) connections that are
+// actively moving data. The pool is never fixed at these numbers — the autopilot
+// moves it continuously inside the envelope from the measured traffic, up and
+// back down (see engine/autopilot.go).
 func linkEnvelope(fc fileConfig) (min, max, per int) {
-	min, max, per = fc.MinLinks, fc.MaxLinks, fc.PerLink
+	min, per = fc.MinLinks, fc.PerLink
 	if min <= 0 {
 		min = 2
 	}
-	if max <= 0 {
-		max = 32
-	}
+	max, _, _ = linkCeiling(fc)
 	if max < min {
 		max = min
 	}
@@ -557,6 +586,84 @@ func linkEnvelope(fc fileConfig) (min, max, per int) {
 		per = 8
 	}
 	return min, max, per
+}
+
+// detectHW is tune.Detect (RAM MB, cores); a variable so tests can pin the
+// hardware and get deterministic ceilings.
+var detectHW = tune.Detect
+
+// The three ways a config sets the link-pool ceiling (see linkCeiling).
+const (
+	ceilAuto    = "auto"    // max_links 0: follows this server's hardware
+	ceilFixed   = "fixed"   // max_links > 0: the operator's number
+	ceilDefault = "default" // max_links absent: the historical fixed 32
+)
+
+// legacyMaxLinks is the ceiling a config without max_links has always had.
+const legacyMaxLinks = 32
+
+// linkCeiling resolves the adaptive pool's ceiling (max_links) and says how:
+//
+//   - max_links 0 is AUTO: the ceiling follows THIS server's hardware
+//     (tune.RecommendedMaxLinks — the same RAM/core profile that sizes the
+//     kernel buffers: low 32, medium 48, high 64), resolved at every start. A
+//     server resized up or down therefore gets the matching ceiling on its next
+//     start (a VPS resize needs a reboot anyway) without anyone editing the
+//     config — the same "0 = leave it to the profile" rule the tuning section
+//     already follows. New installs write 0.
+//   - a POSITIVE max_links is the operator's fixed choice, used as is and
+//     never changed automatically;
+//   - ABSENT keeps the historical fixed 32, so every config written before
+//     the auto ceiling existed (installer-made or by hand) behaves exactly as
+//     it always did after the binary is upgraded.
+//
+// An older binary reads 0 as its fixed default 32, so rolling the binary back
+// still runs the tunnel. The returned profile is for display.
+func linkCeiling(fc fileConfig) (max int, mode, profile string) {
+	ram, cpus := detectHW()
+	profile = tune.ProfileFor(ram, cpus)
+	switch {
+	case fc.MaxLinks > 0:
+		return fc.MaxLinks, ceilFixed, profile
+	case fc.maxLinksSet:
+		return tune.RecommendedMaxLinks(ram, cpus), ceilAuto, profile
+	default:
+		return legacyMaxLinks, ceilDefault, profile
+	}
+}
+
+// ceilingLogLine is the one startup line saying which link-pool ceiling this
+// run uses and why — auto (from the hardware, re-derived at every start), the
+// operator's fixed max_links, or the historical default when it is not set.
+func ceilingLogLine(fc fileConfig) string {
+	_, max, _ := linkEnvelope(fc)
+	ceil, mode, profile := linkCeiling(fc)
+	ram, cpus := detectHW()
+	var how string
+	switch mode {
+	case ceilAuto:
+		how = fmt.Sprintf("auto from this server's hardware: %s profile, %s RAM, %d core(s); re-derived at every start", profile, ramStr(ram), cpus)
+	case ceilFixed:
+		how = fmt.Sprintf("fixed by max_links in the config (this server is a %s box: %s RAM, %d core(s))", profile, ramStr(ram), cpus)
+	default:
+		how = fmt.Sprintf("the default (max_links is not set in the config; 0 = auto would give %d on this %s box)", tune.RecommendedMaxLinks(ram, cpus), profile)
+	}
+	s := fmt.Sprintf("link pool: ceiling %d links — %s", max, how)
+	if max != ceil { // min_links above the ceiling lifts it
+		s += fmt.Sprintf(" (raised from %d to min_links)", ceil)
+	}
+	return s
+}
+
+// hasLinkPool reports whether the config's carrier runs an adaptive link pool
+// (the only carriers max_links applies to). tls is pinned to one link; the
+// single-session carriers have no pool.
+func hasLinkPool(fc fileConfig) bool {
+	switch carrierName(fc) {
+	case "mtcp", "l3mtcp", "l3", "dgtun":
+		return true
+	}
+	return false
 }
 
 // drainIdle maps drain_idle_sec to the engine's setting: unset → 0 (the

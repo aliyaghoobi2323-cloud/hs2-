@@ -46,9 +46,11 @@ TUN_PEER_KHAREJ="10.77.0.1"
 TUN_IP_IRAN=10.77.0.1
 TUN_IP_KHAREJ=10.77.0.2
 # Adaptive parallel-link envelope written into new configs. The pool is NOT
-# fixed at these numbers: hs2 sizes it continuously between LINK_MIN and LINK_MAX
-# from the live user count and measured throughput (see engine/autopilot.go), and
-# grows a link roughly per LINK_PER users. See BUILD.md.
+# fixed at these numbers: hs2 sizes it continuously between LINK_MIN and the
+# ceiling from the live user count and measured throughput (see
+# engine/autopilot.go), and grows a link roughly per LINK_PER users. New setups
+# set LINK_MAX=0 (use_auto_link_ceiling): an AUTO ceiling the binary derives
+# from the server's RAM/cores at every start (32/48/64). See BUILD.md.
 LINK_MIN=2
 LINK_MAX=32
 LINK_PER=8
@@ -1681,30 +1683,22 @@ ipx_proto_from_link(){
 # caller treats as "unknown" and falls back from.
 recommend_links(){ "$BIN" recommend-links "$@" 2>/dev/null || true; }
 
-# resolve_link_max sets LINK_MAX for a NEW config from THIS server's hardware,
-# asking the freshly-installed binary (the single source of truth for the
-# RAM/core -> ceiling mapping; see tune.RecommendedMaxLinks). The number is then
-# written explicitly into the config, so it is visible with `cat` and fixed at
-# install time — a later RAM change does not silently move it (hs2 doctor flags
-# the drift instead). Falls back to the conservative 32 if the binary cannot
-# answer or returns something unexpected, so a fresh install never gets an
-# invalid or surprising ceiling. Called once per setup, after install_binary.
-# It never touches an EXISTING install (that path runs migrate_config, which
-# keeps max_links as it is).
-resolve_link_max(){
-  local rec why
-  rec=$(recommend_links | awk 'NR==1{print $1}')
-  case "$rec" in
-    ''|*[!0-9]*) LINK_MAX=32; return 0 ;;
-  esac
-  if [ "$rec" -ge "$LINK_MIN" ] && [ "$rec" -le 1024 ]; then
-    LINK_MAX="$rec"
-    why=$(recommend_links --why | sed 's/^[0-9]*  *(//; s/)$//')
-    info "Link-pool ceiling for this server: max $LINK_MAX${why:+ ($why)}."
-    info "The pool still self-sizes between $LINK_MIN and $LINK_MAX; this is only the ceiling. In reverse mode the effective ceiling is the lower of the two servers'."
-  else
-    LINK_MAX=32
-  fi
+# use_auto_link_ceiling makes a NEW config's link-pool ceiling AUTO: it writes
+# "max_links": 0, which the binary resolves from THIS server's RAM/cores at
+# every start (low 32 · medium 48 · high 64 — tune.RecommendedMaxLinks, the
+# same profile that sizes the kernel buffers). A server resized up or down then
+# gets the matching ceiling on its next start without anyone editing the
+# config, and an older binary reads 0 as its fixed 32, so a rollback still
+# runs. The ceiling actually in use is printed at every start and shown by
+# `hs2 status`, `hs2 doctor` and the Link pool menu. Called once per setup,
+# after install_binary. It never touches an EXISTING install (that path runs
+# migrate_config, which keeps max_links as it is).
+use_auto_link_ceiling(){
+  local why
+  LINK_MAX=0
+  why=$(recommend_links --why)
+  info "Link-pool ceiling: auto (max_links 0) — follows this server's hardware at every start${why:+; right now: $why}."
+  info "The pool self-sizes between $LINK_MIN and that ceiling. In reverse mode the effective ceiling is the lower of the two servers'."
 }
 
 setup_kharej(){
@@ -1712,7 +1706,7 @@ setup_kharej(){
   auto_backup
   install_prereqs
   install_binary
-  resolve_link_max
+  use_auto_link_ceiling
   ask_direction
   if [ "$DIRECTION" = "direct" ]; then
     ask_service_name     # this side makes the link, so it names the tunnel
@@ -1946,7 +1940,7 @@ setup_iran(){
   auto_backup
   install_prereqs
   install_binary
-  resolve_link_max
+  use_auto_link_ceiling
   ask_direction
   if [ "$DIRECTION" = "direct" ]; then
     iran_dialer          # direct: iran dials out to kharej (pastes the link)
@@ -3042,6 +3036,20 @@ tm_tune(){
   done
 }
 
+# tm_live_ceiling CFG prints the tunnel's effective link-pool ceiling exactly as
+# the running daemon renders it (`hs2 status` shows the same line): the number,
+# the side that sets it, and both servers' own ceilings where they matter. The
+# daemon learns the other server's ceiling over the link itself, so this works
+# on either server, direct or reverse. Silent when the tunnel is not running.
+tm_live_ceiling(){ # cfg
+  local sp txt
+  sp=$(status_path "$1")
+  status_fresh "$sp" || return 0
+  txt=$(jget "$sp" ceiling_text 2>/dev/null || true)
+  [ -n "$txt" ] && say "  ${C_Y}Now:${C_0} $txt"
+  return 0
+}
+
 # tm_tune_links: adjust the adaptive parallel-link pool — the min/max link count
 # and the users-per-link growth step. The pool still sizes itself live between
 # min and max; this only moves the envelope (previously only editable by hand in
@@ -3079,49 +3087,53 @@ tm_tune_links(){ # unit cfg
   else
     say "  ${C_Y}In direct mode the Iran server alone decides the link count — these values have NO${C_0}"
     say "  ${C_Y}effect on this Kharej server. Change them on the Iran server instead.${C_0}"
+    tm_live_ceiling "$cfg"
     pause; return 0
   fi
-  # Resource-aware recommendation + drift for THIS server (the binary is the
-  # single source of truth for the RAM/core -> ceiling mapping). max_links was
-  # chosen at install; if this box was resized since, the recommendation differs.
-  local rec recwhy
+  # max_links 0 = AUTO: the ceiling follows this server's RAM/cores (low 32 ·
+  # medium 48 · high 64), re-derived at every start — a resized server gets the
+  # matching ceiling on its next start by itself. A number is a fixed ceiling
+  # that never moves on its own. No max_links at all = the historical fixed 32
+  # (Enter keeps exactly that). The binary is the single source of truth for
+  # the RAM/core -> ceiling mapping.
+  local rec recwhy auto_now curmx keepmx
   rec=$(recommend_links | awk 'NR==1{print $1}')
   recwhy=$(recommend_links --why)
-  if [ -n "$recwhy" ]; then
-    say "  This server's hardware suggests a ceiling of $recwhy."
-    case "$rec" in
-      ''|*[!0-9]*) ;;
-      *) [ "$rec" != "${cur_max:-32}" ] && say "  ${C_Y}The configured max is ${cur_max:-32}; enter $rec below to match this server's hardware.${C_0}" ;;
-    esac
+  case "$rec" in ''|*[!0-9]*) rec="" ;; esac
+  auto_now="auto"; [ -n "$rec" ] && auto_now="auto, now $rec"
+  case "${cur_max:-}" in
+    '') curmx="32 (default — not set)"; keepmx=32 ;;
+    0)  curmx="$auto_now"; keepmx=0 ;;
+    *)  curmx="$cur_max"; keepmx="$cur_max" ;;
+  esac
+  [ -n "$recwhy" ] && say "  This server's hardware: max $recwhy."
+  if [ -n "$rec" ] && [ "$keepmx" != 0 ] && [ "$keepmx" != "$rec" ]; then
+    say "  ${C_Y}The ceiling is fixed at $keepmx; this server's hardware gives $rec. Enter 'auto' to follow the hardware from now on (or $rec to fix it there).${C_0}"
   fi
-  # Effective ceiling in reverse = the lower of the two servers'. When the tunnel
-  # is running, the live status has learned the other server's max — show it.
-  if cfg_is_reverse "$cfg"; then
-    local sp pmax eff who
-    sp=$(status_path "$cfg"); pmax=$(jraw "$sp" peer_max 2>/dev/null)
-    case "$pmax" in
-      ''|0|*[!0-9]*) ;;
-      *) eff="${cur_max:-32}"; who="this server"
-         [ "$pmax" -lt "$eff" ] && { eff="$pmax"; who="the other server"; }
-         say "  ${C_Y}Effective now: $eff links${C_0} (this server ${cur_max:-32}, the other server $pmax — limited by $who)." ;;
-    esac
-  fi
-  say "  Current: min=${cur_min:-2} · max=${cur_max:-32} · ~${cur_per:-8} users per link"
+  tm_live_ceiling "$cfg"
+  say "  Current: min=${cur_min:-2} · max=$curmx · ~${cur_per:-8} users per link"
+  say "  (Max links: a number fixes the ceiling; 'auto' follows this server's hardware at every start.)"
   read -rp "  Min links [${cur_min:-2}]: " mn </dev/tty;         mn=${mn:-${cur_min:-2}}
-  read -rp "  Max links [${cur_max:-32}]: " mx </dev/tty;        mx=${mx:-${cur_max:-32}}
+  read -rp "  Max links [$curmx]: " mx </dev/tty;                mx=${mx:-$keepmx}
   read -rp "  Users per link [${cur_per:-8}]: " pl </dev/tty;    pl=${pl:-${cur_per:-8}}
-  for v in "$mn" "$mx" "$pl"; do
+  case "$mx" in auto|AUTO|Auto|a|A) mx=0 ;; esac
+  for v in "$mn" "$pl"; do
     valid_uint "$v" 1 1024 || { warn "Each value must be a whole number 1-1024."; return 0; }
   done
-  [ "$mn" -le "$mx" ] || { warn "Min links ($mn) cannot be more than max links ($mx)."; return 0; }
+  if [ "$mx" != 0 ]; then
+    valid_uint "$mx" 1 1024 || { warn "Max links must be a whole number 1-1024, or 'auto'."; return 0; }
+    [ "$mn" -le "$mx" ] || { warn "Min links ($mn) cannot be more than max links ($mx)."; return 0; }
+  fi
   cp -p "$cfg" "$cfg.prev" 2>/dev/null || true
-  # The binary re-validates min<=max after EACH set, so the order matters: when
-  # the new floor is above the current ceiling, raise max FIRST (else `set
+  # The binary re-validates min<=max after EACH set (an auto max of 0 never
+  # constrains min), so the order matters: when the new max is auto, or the new
+  # floor is above the current fixed ceiling, set max FIRST (else `set
   # min_links` is rejected against the old smaller max); otherwise set min first
-  # (so lowering max below the old min is not rejected either). The guard above
-  # guarantees mn<=mx, so one of the two orders is always valid end-to-end.
-  local ok=1
-  if [ "$mn" -gt "${cur_max:-32}" ]; then
+  # (so lowering max below the old min is not rejected either). The guards
+  # above make one of the two orders valid end-to-end.
+  local ok=1 curlim="${cur_max:-0}"
+  [ "$curlim" = 0 ] && curlim=1024
+  if [ "$mx" = 0 ] || [ "$mn" -gt "$curlim" ]; then
     tm_cfgset "$cfg" max_links "$mx" && tm_cfgset "$cfg" min_links "$mn" && tm_cfgset "$cfg" per_link "$pl" || ok=0
   else
     tm_cfgset "$cfg" min_links "$mn" && tm_cfgset "$cfg" max_links "$mx" && tm_cfgset "$cfg" per_link "$pl" || ok=0
@@ -3603,7 +3615,10 @@ migrate_config(){
     '"min_links": 4, "max_links": 16, "per_link": 50,'
     '"min_links": 8, "max_links": 16, "per_link": 8,'
   )
-  local new="\"min_links\": $LINK_MIN, \"max_links\": $LINK_MAX, \"per_link\": $LINK_PER,"
+  # A fixed 32 here on purpose: this upgrades only the two pre-adaptive lines
+  # above, exactly as it always did; it never moves an existing tunnel onto the
+  # auto ceiling (the operator opts in from the Link pool menu).
+  local new="\"min_links\": $LINK_MIN, \"max_links\": 32, \"per_link\": $LINK_PER,"
   local o
   for o in "${olds[@]}"; do
     if grep -qF "$o" "$CFG"; then
@@ -3612,7 +3627,7 @@ migrate_config(){
       changed=1
     fi
   done
-  [ -n "$changed" ] && ok "Adaptive link pool updated to $LINK_MIN–$LINK_MAX (auto-sized; was a fixed default)."
+  [ -n "$changed" ] && ok "Adaptive link pool updated to $LINK_MIN–32 (auto-sized; was a fixed default). For a ceiling that follows this server's hardware, choose 'auto' in the Link pool menu."
 
   # Old tun configs keep working as they are: the classic L3-over-multi-link-TLS
   # (carrier l3mtcp) and the single-carrier udp/auto TUN are unchanged in the new

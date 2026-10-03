@@ -95,6 +95,7 @@ type v2Opts struct {
 	exitLinks int // reverse exit: initial count (RevLinks), min and max
 	exitMin   int
 	exitMax   int
+	exitCfg   int               // direct exit: its MaxLinks (reported over kindInfo, not applied)
 	drainIdle time.Duration     // > 0: idle reclaim on retiring links
 	panel     string            // "" = an echo panel
 	oldExit   bool              // exit of the previous release: no kindStats case, no meter
@@ -159,7 +160,7 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 			setExit(func() PoolStats { return PoolStats{Links: int(live.Load()), Phase: "listening"} })
 			go runOldExitListener(ctx, ln, srv, panel, &live, r.exit.logf)
 		} else {
-			go RunKharej(ctx, KharejConfig{Listener: ln, Server: srv, Panel: panel, Log: r.exit.logf, OnStart: setExit})
+			go RunKharej(ctx, KharejConfig{Listener: ln, Server: srv, Panel: panel, Log: r.exit.logf, OnStart: setExit, MaxLinks: o.exitCfg})
 		}
 		d := &countingDialer{d: NewMTCPDialer(carrierAddr, "lab.example.com", key, ""), n: &r.dials}
 		lm = NewLinkManager(d, o.min, o.max, o.perLink, r.edge.logf)
@@ -184,6 +185,7 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 		if !o.oldEdge {
 			go openControl(ctx, l, r.edge.logf)
 			go openStats(ctx, l, r.edge.logf)
+			go openInfo(ctx, l, lm.max)
 		}
 		if !o.direct {
 			go openPoolCtl(ctx, l, lm.Target, r.edge.logf, func() { lm.markPoolRefused(l) })

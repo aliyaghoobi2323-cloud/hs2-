@@ -385,7 +385,7 @@ func TestStatsIdleLinkSendsNoPolls(t *testing.T) {
 			st.Close()
 			return
 		}
-		serveStats(ctx, pollCounter{st, &read}, nil, mtr, 0)
+		serveStats(ctx, pollCounter{st, &read}, nil, mtr)
 	}
 	polls := func() int64 { return (read.Load() - 1) / 4 } // after the version byte, 4 bytes a poll
 	ctx := context.Background()
@@ -483,7 +483,7 @@ func TestStatsStreamReopensAfterStall(t *testing.T) {
 			st.Close()
 			return
 		}
-		serveStats(ctx, st, nil, mtr, 0)
+		serveStats(ctx, st, nil, mtr)
 	})
 	p.startStats(t, ctx, nil)
 	waitStatsState(t, p.edge.m, statsOK, 5*time.Second)
@@ -519,7 +519,7 @@ func TestStatsHandshakeTimeoutIsNotOldExit(t *testing.T) {
 			<-ctx.Done() // never answer the first handshake
 			return
 		}
-		serveStats(ctx, st, nil, mtr, 0)
+		serveStats(ctx, st, nil, mtr)
 	})
 	p.startStats(t, ctx, nil)
 	v2Wait(t, 15*time.Second, "a second handshake after the timeout", func() bool { return opened.Load() >= 2 })

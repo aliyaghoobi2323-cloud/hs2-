@@ -167,6 +167,9 @@ func getKey(m map[string]any, ck configKey) string {
 
 func setKey(m map[string]any, ck configKey, val string) error {
 	obj := objFor(m, ck)
+	if ck.parent == "" && ck.name == "max_links" && strings.EqualFold(strings.TrimSpace(val), "auto") {
+		val = "0" // auto: the ceiling follows this server's hardware (see linkCeiling)
+	}
 	if ck.isInt {
 		n, err := strconv.Atoi(strings.TrimSpace(val))
 		if err != nil {

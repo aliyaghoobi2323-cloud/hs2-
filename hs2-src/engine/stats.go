@@ -30,16 +30,8 @@ import (
 //	              64 bytes are skipped, so the record can grow compatibly)
 //
 //	record: 0 seq u32 | 4 flags u16 (bit0 chrono valid, bit1 tcp_info ok) |
-//	        6 peerMax u16 (the exit's own configured link-pool ceiling; 0 = not
-//	        reported, e.g. an older exit or a direct exit with no pool of its own)
-//	        | 8 monoNs u64 | 16 txBytes u64 | 24 txBlockedNs u64 |
+//	        6 reserved u16 | 8 monoNs u64 | 16 txBytes u64 | 24 txBlockedNs u64 |
 //	        32 busyUs u64 | 40 rwndLimUs u64 | 48 sndbufLimUs u64 | 56 deliveryRate u64
-//
-// peerMax is display-only: it lets the edge show the EFFECTIVE pool ceiling
-// (min of the two servers' maxes) and name the limiting side. It never feeds the
-// autopilot. It reuses the previously-reserved u16, so an older edge (which only
-// read flags at [4:6] and skipped [6:8]) ignores it, and an older exit writes 0
-// there — both stay compatible.
 //
 // An older exit closes the unknown stream kind; the edge notices (the link is
 // still alive) and marks stats unsupported for that link — the pool then sizes
@@ -64,7 +56,6 @@ var procStart = time.Now()
 type statsRec struct {
 	seq                                               uint32
 	flags                                             uint16
-	peerMax                                           uint16 // the exit's configured link-pool ceiling (0 = not reported)
 	mono, tx, txBlocked, busy, rwnd, sndbuf, delivery uint64
 	at                                                time.Time
 }
@@ -74,7 +65,7 @@ func (r *statsRec) chrono() bool { return r.flags&statsFlagChrono != 0 }
 func putStatsRec(b []byte, r statsRec) {
 	binary.BigEndian.PutUint32(b[0:], r.seq)
 	binary.BigEndian.PutUint16(b[4:], r.flags)
-	binary.BigEndian.PutUint16(b[6:], r.peerMax)
+	binary.BigEndian.PutUint16(b[6:], 0)
 	binary.BigEndian.PutUint64(b[8:], r.mono)
 	binary.BigEndian.PutUint64(b[16:], r.tx)
 	binary.BigEndian.PutUint64(b[24:], r.txBlocked)
@@ -88,7 +79,6 @@ func parseStatsRec(b []byte) statsRec {
 	return statsRec{
 		seq:       binary.BigEndian.Uint32(b[0:]),
 		flags:     binary.BigEndian.Uint16(b[4:]),
-		peerMax:   binary.BigEndian.Uint16(b[6:]),
 		mono:      binary.BigEndian.Uint64(b[8:]),
 		tx:        binary.BigEndian.Uint64(b[16:]),
 		txBlocked: binary.BigEndian.Uint64(b[24:]),
@@ -201,11 +191,7 @@ func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, l
 // serveStats runs the EXIT side: answer the handshake, then one record per
 // poll with this link's cumulative download-side counters (its meter: payload
 // sent and time its writer waited for the socket) and its socket's TCP_INFO.
-// exitMax is the exit's own configured link-pool ceiling (0 when it has no pool
-// of its own, e.g. a direct exit); it is echoed in every record so the edge can
-// show the effective ceiling (the lower of the two servers') and name the
-// limiting side.
-func serveStats(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carrier, mtr *linkMeter, exitMax int) {
+func serveStats(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carrier, mtr *linkMeter) {
 	defer st.Close()
 	var ver [1]byte
 	if _, err := io.ReadFull(st, ver[:]); err != nil {
@@ -224,18 +210,11 @@ func serveStats(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carr
 	type deadliner interface{ SetWriteDeadline(time.Time) error }
 	var p [4]byte
 	rec := make([]byte, statsRecLen)
-	// The exit's configured ceiling is constant for the life of the process, and
-	// fits a u16 (link counts are tiny); clamp defensively so an out-of-range
-	// value can never corrupt the record.
-	var peerMax uint16
-	if exitMax > 0 && exitMax <= 0xffff {
-		peerMax = uint16(exitMax)
-	}
 	for ctx.Err() == nil {
 		if _, err := io.ReadFull(st, p[:]); err != nil {
 			return
 		}
-		r := statsRec{seq: binary.BigEndian.Uint32(p[:]), mono: uint64(time.Since(procStart)), peerMax: peerMax}
+		r := statsRec{seq: binary.BigEndian.Uint32(p[:]), mono: uint64(time.Since(procStart))}
 		if mtr != nil {
 			r.tx = mtr.wrBytes.Load()
 			r.txBlocked = uint64(mtr.wrBlocked.Load())

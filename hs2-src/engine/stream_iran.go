@@ -79,6 +79,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, logf)
 		go openStats(ctx, l, logf)
+		go openInfo(ctx, l, lm.max) // tell the exit our ceiling, learn its own
 		if reverse {
 			go openPoolCtl(ctx, l, lm.Target, logf, func() { lm.markPoolRefused(l) })
 		}

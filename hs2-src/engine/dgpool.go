@@ -53,6 +53,11 @@ const (
 	dgWarmGrace = 4 * time.Second
 	// dgPoolCtlEvery: how often the reverse edge (re)publishes its target.
 	dgPoolCtlEvery = 3 * time.Second
+	// dgInfoEvery: how often a DIRECT edge tells the exit its ceiling (display
+	// only, so slow; jittered so it is not a fixed beat). A report older than
+	// dgPeerMaxStale reads as unknown (the peer stopped, or was downgraded).
+	dgInfoEvery    = 15 * time.Second
+	dgPeerMaxStale = 3 * dgInfoEvery
 	dgDialBudget   = 4 // most carriers dialed per health tick (edge, direct)
 	// dgDownStatsStale: a download-stats report older than this is ignored, so
 	// an exit that stops reporting (or an older one that never does) falls back
@@ -295,6 +300,16 @@ type dgPool struct {
 	dnPressed  atomic.Uint32 // EDGE: exit's serving carriers pressed on download
 	dnServing  atomic.Uint32 // EDGE: exit's serving carriers (for clamping)
 	dnStatsAt  atomic.Int64  // EDGE: unixnano the last report arrived (0 = none)
+
+	// The other server's link-pool ceiling, for display only (both servers
+	// show the effective ceiling and which side limits it). It rides the two
+	// control frames that already flow, as two trailing bytes their older
+	// parsers never read: the exit's on TypeLinkStats, the edge's on
+	// TypePoolCtl (sent in direct mode too, slowly, where the exit ignores the
+	// target). No new frame type, so the carrier is untouched; nothing here
+	// feeds sizing. peerMaxAt is unixnano of the last report (0 = none).
+	peerMax   atomic.Uint32
+	peerMaxAt atomic.Int64
 
 	// gov watches the pool as a whole for a policer on the path to the peer
 	// (all carriers share its IP) and caps the pool's total send rate.
@@ -983,7 +998,7 @@ func (p *dgPool) publishStats(s apSample) {
 		Links: serving + retiring, Serving: serving, Retiring: retiring,
 		Target: p.Target(), Min: p.min, Max: p.max,
 		Users: s.open, Flowing: s.flowing, Phase: p.dec.phase.String(),
-		Reason: p.dec.reason, MbitPerS: mbitps(s.G),
+		Reason: p.dec.reason, MbitPerS: mbitps(s.G), PeerMax: p.peerMaxNow(),
 	}
 	if p.phaseLabel != "" {
 		ps.Phase = p.phaseLabel
@@ -1118,7 +1133,7 @@ func (p *dgPool) Stats() PoolStats {
 	if ps := p.stats.Load(); ps != nil {
 		return *ps
 	}
-	return PoolStats{Min: p.min, Max: p.max, Target: p.Target(), Phase: "starting"}
+	return PoolStats{Min: p.min, Max: p.max, Target: p.Target(), Phase: "starting", PeerMax: p.peerMaxNow()}
 }
 
 // --- pool control (reverse) -------------------------------------------------
@@ -1127,6 +1142,12 @@ func (p *dgPool) Stats() PoolStats {
 // EXIT it is the edge's desired serving count; the exit clamps it to its own
 // [min,max] and reconciles. (The edge never receives it.)
 func (p *dgPool) onPoolCtl(l *dgLink, payload []byte) {
+	// [target u16][edge's ceiling u16]: the ceiling (display only) is taken on
+	// any exit, direct or reverse, before the target guard below — a direct
+	// exit has no dialer and ignores the target, as it always did.
+	if p.downSender && len(payload) >= 4 {
+		p.storePeerMax(binary.BigEndian.Uint16(payload[2:]))
+	}
 	if len(payload) < 2 || p.accept || p.dialer == nil {
 		return
 	}
@@ -1154,6 +1175,35 @@ func (p *dgPool) onLinkStats(payload []byte) {
 	p.dnPressed.Store(uint32(binary.BigEndian.Uint16(payload[0:])))
 	p.dnServing.Store(uint32(binary.BigEndian.Uint16(payload[2:])))
 	p.dnStatsAt.Store(p.now().UnixNano())
+	if len(payload) >= 6 { // [pressed][serving][exit's ceiling]: display only
+		p.storePeerMax(binary.BigEndian.Uint16(payload[4:]))
+	}
+}
+
+// storePeerMax records the other server's ceiling and when it arrived.
+func (p *dgPool) storePeerMax(v uint16) {
+	p.peerMax.Store(uint32(v))
+	p.peerMaxAt.Store(p.now().UnixNano())
+}
+
+// peerMaxNow is the other server's ceiling, or 0 when no report is fresh.
+func (p *dgPool) peerMaxNow() int {
+	at := p.peerMaxAt.Load()
+	if at == 0 || p.now().Sub(time.Unix(0, at)) > dgPeerMaxStale {
+		return 0
+	}
+	return int(p.peerMax.Load())
+}
+
+// ceilingU16 is this pool's max as a u16 for the control frames.
+func (p *dgPool) ceilingU16() uint16 {
+	if p.max > 0xffff {
+		return 0xffff
+	}
+	if p.max < 0 {
+		return 0
+	}
+	return uint16(p.max)
 }
 
 // publishDownStats (the EXIT, direct or reverse) reports the download
@@ -1179,10 +1229,41 @@ func (p *dgPool) publishDownStats(s apSample) {
 	if l == nil {
 		return
 	}
-	var b [4]byte
+	var b [6]byte
 	binary.BigEndian.PutUint16(b[0:], uint16(pressed))
 	binary.BigEndian.PutUint16(b[2:], uint16(serving))
+	binary.BigEndian.PutUint16(b[4:], p.ceilingU16()) // display only; older edges read [0:4]
 	p.sendVia(l, core.TypeLinkStats, b[:])
+}
+
+// poolCtlPayload is a TypePoolCtl frame: [target u16][this edge's ceiling u16].
+// An older exit reads only the first two bytes.
+func (p *dgPool) poolCtlPayload(target int) []byte {
+	var b [4]byte
+	binary.BigEndian.PutUint16(b[0:], uint16(target))
+	binary.BigEndian.PutUint16(b[2:], p.ceilingU16())
+	return b[:]
+}
+
+// publishInfo (DIRECT edge) tells the exit this edge's ceiling, for display:
+// soon after the first carrier is up, then every ~dgInfoEvery (jittered). It
+// reuses TypePoolCtl, which a direct exit has always ignored as a target (it
+// has no dialer), so an older exit drops it harmlessly and the carrier needs
+// no new frame type.
+func (p *dgPool) publishInfo(ctx context.Context) {
+	wait := time.Second
+	for {
+		if !sleepCtx(ctx, wait) {
+			return
+		}
+		l := p.poolCtlCarrier()
+		if l == nil {
+			wait = time.Second // no carrier yet: look again soon
+			continue
+		}
+		p.sendVia(l, core.TypePoolCtl, p.poolCtlPayload(p.Target()))
+		wait = time.Duration(float64(dgInfoEvery) * (0.8 + 0.4*rand.Float64()))
+	}
 }
 
 // publishTarget (reverse EDGE) periodically sends the autopilot's serving
@@ -1198,9 +1279,7 @@ func (p *dgPool) publishTarget(ctx context.Context) {
 			last = -1
 			return
 		}
-		var b [2]byte
-		binary.BigEndian.PutUint16(b[:], uint16(T))
-		p.sendVia(l, core.TypePoolCtl, b[:])
+		p.sendVia(l, core.TypePoolCtl, p.poolCtlPayload(T))
 		last = T
 	}
 	for {
@@ -1290,6 +1369,8 @@ func RunDgEdge(ctx context.Context, cfg DgConfig) error {
 	if cfg.Reverse {
 		go p.acceptLoop(ctx, cfg.Listener)
 		go p.publishTarget(ctx)
+	} else {
+		go p.publishInfo(ctx) // direct: the exit learns our ceiling (display only)
 	}
 	// Initial fill (direct): bring the pool up warm, staggered.
 	if !cfg.Reverse {

@@ -1,0 +1,349 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+)
+
+// Tests for the resource-aware link-pool ceiling: auto (max_links 0) vs fixed,
+// the effective ceiling both servers show in direct and reverse, the drift
+// notes, the doctor check, and the status file the installer menu reads.
+
+// pinHW makes detectHW report this hardware for the rest of the test.
+func pinHW(t *testing.T, ramMB, cpus int) {
+	t.Helper()
+	old := detectHW
+	detectHW = func() (int, int) { return ramMB, cpus }
+	t.Cleanup(func() { detectHW = old })
+}
+
+const (
+	lowRAM, lowCPU   = 1024, 1 // a 1 GB Iran VPS
+	medRAM, medCPU   = 2048, 2
+	highRAM, highCPU = 8192, 4
+)
+
+func TestLinkCeilingAutoFollowsHardware(t *testing.T) {
+	for _, c := range []struct {
+		ram, cpu int
+		want     int
+		profile  string
+	}{{lowRAM, lowCPU, 32, "low"}, {medRAM, medCPU, 48, "medium"}, {highRAM, highCPU, 64, "high"}} {
+		pinHW(t, c.ram, c.cpu)
+		for _, cfg := range []string{`{"max_links": 0}`, `{"mode":"dial","max_links":0,"min_links":2}`} {
+			var fc fileConfig
+			if err := json.Unmarshal([]byte(cfg), &fc); err != nil {
+				t.Fatal(err)
+			}
+			got, mode, prof := linkCeiling(fc)
+			if got != c.want || mode != ceilAuto || prof != c.profile {
+				t.Errorf("%s on %dMB/%dcpu: got %d %s %s, want %d auto %s", cfg, c.ram, c.cpu, got, mode, prof, c.want, c.profile)
+			}
+			if _, max, _ := linkEnvelope(fc); max != c.want {
+				t.Errorf("%s on %dMB/%dcpu: envelope max %d, want %d", cfg, c.ram, c.cpu, max, c.want)
+			}
+		}
+	}
+}
+
+// A positive max_links is the operator's choice: used as is on any hardware,
+// never moved by the auto rule.
+func TestLinkCeilingFixedIsNeverMoved(t *testing.T) {
+	for _, hw := range [][2]int{{lowRAM, lowCPU}, {highRAM, highCPU}} {
+		pinHW(t, hw[0], hw[1])
+		got, mode, _ := linkCeiling(fileConfig{MaxLinks: 32})
+		if got != 32 || mode != ceilFixed {
+			t.Fatalf("fixed 32 on %v: got %d %s", hw, got, mode)
+		}
+	}
+}
+
+// A config WITHOUT max_links (written before the auto ceiling, by an older
+// installer or by hand) keeps exactly the 32 it always had, on any hardware —
+// upgrading the binary changes nothing for it. null counts as absent.
+func TestLinkCeilingAbsentKeepsHistorical32(t *testing.T) {
+	for _, hw := range [][2]int{{lowRAM, lowCPU}, {medRAM, medCPU}, {highRAM, highCPU}} {
+		pinHW(t, hw[0], hw[1])
+		for _, cfg := range []string{`{"mode":"dial","carrier":"mtcp","min_links":2,"per_link":8}`, `{"max_links": null}`} {
+			var fc fileConfig
+			if err := json.Unmarshal([]byte(cfg), &fc); err != nil {
+				t.Fatal(err)
+			}
+			got, mode, _ := linkCeiling(fc)
+			if got != 32 || mode != ceilDefault {
+				t.Fatalf("%s on %v: got %d %s, want 32 default", cfg, hw, got, mode)
+			}
+			if _, max, _ := linkEnvelope(fc); max != 32 {
+				t.Fatalf("%s on %v: envelope max %d, want 32", cfg, hw, max)
+			}
+		}
+	}
+	if !strings.Contains(ceilingLogLine(fileConfig{Carrier: "mtcp"}), "the default (max_links is not set") {
+		t.Fatal("the startup line must say the default applies")
+	}
+}
+
+// autoFC marks fc as carrying an explicit max_links 0 (auto), as a decoded
+// config would.
+func autoFC(fc fileConfig) fileConfig { fc.MaxLinks, fc.maxLinksSet = 0, true; return fc }
+
+// min_links above the auto ceiling lifts the ceiling (the envelope must hold).
+func TestLinkEnvelopeMinAboveAuto(t *testing.T) {
+	pinHW(t, lowRAM, lowCPU)
+	if _, max, _ := linkEnvelope(autoFC(fileConfig{MinLinks: 40})); max != 40 {
+		t.Fatalf("min 40 over auto 32: max %d, want 40", max)
+	}
+	if !strings.Contains(ceilingLogLine(autoFC(fileConfig{MinLinks: 40, Carrier: "mtcp"})), "raised from 32 to min_links") {
+		t.Fatal("the startup line must say the ceiling was lifted to min_links")
+	}
+}
+
+func TestCeilingLogLine(t *testing.T) {
+	pinHW(t, highRAM, highCPU)
+	auto := ceilingLogLine(autoFC(fileConfig{Carrier: "mtcp"}))
+	if !strings.Contains(auto, "ceiling 64 links") || !strings.Contains(auto, "auto from this server's hardware: high profile") {
+		t.Fatalf("auto startup line: %q", auto)
+	}
+	fixed := ceilingLogLine(fileConfig{Carrier: "mtcp", MaxLinks: 40})
+	if !strings.Contains(fixed, "ceiling 40 links") || !strings.Contains(fixed, "fixed by max_links") {
+		t.Fatalf("fixed startup line: %q", fixed)
+	}
+}
+
+// The effective ceiling, exactly as the engine applies it.
+func TestEffectiveCeiling(t *testing.T) {
+	cases := []struct {
+		name            string
+		iran, reverse   bool
+		own, peer, want int
+		by              string
+	}{
+		{"direct Iran, peer higher (not applied)", true, false, 32, 64, 32, "iran"},
+		{"direct Iran, peer lower (not applied)", true, false, 64, 32, 64, "iran"},
+		{"direct Iran, peer unknown", true, false, 48, 0, 48, "iran"},
+		{"direct Kharej: the Iran server's", false, false, 32, 64, 64, "iran"},
+		{"direct Kharej, Iran unknown", false, false, 32, 0, 0, ""},
+		{"reverse Iran, Kharej lower", true, true, 64, 48, 48, "kharej"},
+		{"reverse Iran, Iran lower", true, true, 32, 64, 32, "iran"},
+		{"reverse Kharej, Iran lower", false, true, 64, 48, 48, "iran"},
+		{"reverse Kharej, Kharej lower", false, true, 32, 64, 32, "kharej"},
+		{"reverse equal", true, true, 48, 48, 48, "both"},
+		{"reverse peer unknown", false, true, 64, 0, 0, ""},
+	}
+	for _, c := range cases {
+		got, by := effectiveCeiling(c.iran, c.reverse, c.own, c.peer)
+		if got != c.want || by != c.by {
+			t.Errorf("%s: got %d %q, want %d %q", c.name, got, by, c.want, c.by)
+		}
+	}
+}
+
+// status renders the same exact fact on both servers.
+func TestCeilingLineBothServers(t *testing.T) {
+	mk := func(role, dir string, own, peer int, auto bool) liveStatus {
+		mode := ceilFixed
+		if auto {
+			mode = ceilAuto
+		}
+		ls := liveStatus{Role: role, Dir: dir, CfgMax: own, PeerMax: peer, CeilMode: mode, Profile: "high", RAMMB: highRAM, CPUCores: highCPU}
+		ls.EffMax, ls.LimitBy = effectiveCeiling(role == "Iran side", dir == "reverse", own, peer)
+		return ls
+	}
+	cases := []struct {
+		name string
+		ls   liveStatus
+		want []string
+	}{
+		{"reverse Iran, Kharej 48 limits", mk("Iran side", "reverse", 64, 48, true),
+			[]string{"48 links", "limited by the Kharej server", "this server: 64 (auto", "the Kharej server: 48"}},
+		{"reverse Kharej, same tunnel", mk("Kharej side", "reverse", 48, 64, false),
+			[]string{"48 links", "limited by this server", "this server: 48 (fixed by max_links", "the Iran server: 64"}},
+		{"reverse equal", mk("Iran side", "reverse", 48, 48, true), []string{"48 links", "both servers allow the same"}},
+		{"reverse unknown", mk("Kharej side", "reverse", 64, 0, true), []string{"at most 64 links", "the Iran server has not reported", "the lower of the two applies"}},
+		{"direct Iran", mk("Iran side", "direct", 32, 64, false),
+			[]string{"32 links", "this (Iran) server alone sets it", "Kharej server's max_links (64) does not apply"}},
+		{"direct Kharej", mk("Kharej side", "direct", 64, 32, true),
+			[]string{"32 links", "set by the Iran server", "this server's own ceiling, 64 (auto", "does not apply here"}},
+		{"direct Kharej unknown", mk("Kharej side", "direct", 64, 0, true), []string{"set by the Iran server", "not reported yet"}},
+	}
+	for _, c := range cases {
+		got := ceilingLine(c.ls)
+		for _, w := range c.want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: %q missing %q", c.name, got, w)
+			}
+		}
+	}
+	if ceilingLine(liveStatus{Role: "Iran side"}) != "" {
+		t.Error("no pool (or an older status file): no ceiling line")
+	}
+}
+
+func TestDriftLine(t *testing.T) {
+	base := liveStatus{Role: "Iran side", Dir: "reverse", Profile: "low", RecMax: 32}
+	high := base
+	high.CfgMax = 64
+	if d := driftLine(high); !strings.Contains(d, "above what this low box suggests (32)") {
+		t.Errorf("fixed 64 on a low box: %q", d)
+	}
+	lowFixed := liveStatus{Role: "Iran side", Dir: "direct", Profile: "high", RecMax: 64, CfgMax: 32}
+	if d := driftLine(lowFixed); !strings.Contains(d, "could use up to 64") || !strings.Contains(d, "0 (auto)") {
+		t.Errorf("fixed 32 on a high box: %q", d)
+	}
+	auto := high
+	auto.CeilMode = ceilAuto
+	if d := driftLine(auto); d != "" {
+		t.Errorf("auto never drifts: %q", d)
+	}
+	def := liveStatus{Role: "Iran side", Dir: "reverse", Profile: "high", RecMax: 64, CfgMax: 32, CeilMode: ceilDefault}
+	if d := driftLine(def); !strings.Contains(d, "max_links is not set") || !strings.Contains(d, "could use up to 64") {
+		t.Errorf("default 32 on a high box: %q", d)
+	}
+	dk := lowFixed
+	dk.Role = "Kharej side"
+	if d := driftLine(dk); d != "" {
+		t.Errorf("direct Kharej's ceiling is not applied, no drift note: %q", d)
+	}
+}
+
+// writeLive writes a fresh live status for cfgPath into a temp status dir.
+func writeLive(t *testing.T, cfgPath string, ls liveStatus) {
+	t.Helper()
+	ls.Updated = time.Now().Unix()
+	b, _ := json.Marshal(ls)
+	if err := os.WriteFile(statusPath(cfgPath), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func useTempStatusDir(t *testing.T) {
+	t.Helper()
+	old := statusRunDir
+	statusRunDir = t.TempDir()
+	t.Cleanup(func() { statusRunDir = old })
+}
+
+func doctorLinkPool(fc fileConfig, cfgPath string) *doctorReport {
+	d := &doctorReport{}
+	checkLinkPool(d, fc, cfgPath)
+	return d
+}
+
+func TestDoctorLinkPool(t *testing.T) {
+	useTempStatusDir(t)
+	cfg := filepath.Join(t.TempDir(), "c.json")
+	iranRev := autoFC(fileConfig{Mode: "dial", Reverse: true, Carrier: "mtcp"})
+
+	// auto, daemon not running: ok.
+	pinHW(t, highRAM, highCPU)
+	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "auto: 64 links") {
+		t.Fatalf("auto ok: %v", d.lines)
+	}
+	// auto, the daemon started on a high box but RAM is now low: restart WARN.
+	writeLive(t, cfg, liveStatus{CfgMax: 64})
+	pinHW(t, lowRAM, lowCPU)
+	if d := doctorLinkPool(iranRev, cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "restart the tunnel to apply the lower ceiling") {
+		t.Fatalf("auto shrunk under a running daemon: %v", d.lines)
+	}
+	// auto, RAM grew: restart INFO, not a warning.
+	writeLive(t, cfg, liveStatus{CfgMax: 32})
+	pinHW(t, highRAM, highCPU)
+	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "restart the tunnel to use it") {
+		t.Fatalf("auto grew under a running daemon: %v", d.lines)
+	}
+	os.Remove(statusPath(cfg))
+
+	// fixed above what the RAM holds: WARN; below what the box allows: INFO.
+	pinHW(t, lowRAM, lowCPU)
+	fixed64 := iranRev
+	fixed64.MaxLinks, fixed64.maxLinksSet = 64, true
+	if d := doctorLinkPool(fixed64, cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "above what this low box") {
+		t.Fatalf("fixed 64 on a low box: %v", d.lines)
+	}
+	pinHW(t, highRAM, highCPU)
+	fixed32 := iranRev
+	fixed32.MaxLinks, fixed32.maxLinksSet = 32, true
+	if d := doctorLinkPool(fixed32, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "could use up to 64") {
+		t.Fatalf("fixed 32 on a high box: %v", d.lines)
+	}
+
+	// direct Kharej: not applied, no drift check even when fixed far off.
+	dk := fileConfig{Mode: "listen", Carrier: "dgtun", MaxLinks: 200}
+	if d := doctorLinkPool(dk, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "not applied here") {
+		t.Fatalf("direct Kharej: %v", d.lines)
+	}
+	// effective ceiling from a running daemon's status file is quoted.
+	ls := liveStatus{Role: "Iran side", Dir: "reverse", CfgMax: 64, PeerMax: 48, CeilMode: ceilAuto, Profile: "high"}
+	ls.EffMax, ls.LimitBy = effectiveCeiling(true, true, 64, 48)
+	writeLive(t, cfg, ls)
+	if d := doctorLinkPool(iranRev, cfg); !strings.Contains(strings.Join(d.lines, ""), "limited by the Kharej server") {
+		t.Fatalf("effective ceiling not shown: %v", d.lines)
+	}
+	// no pool on this carrier: one info line.
+	if d := doctorLinkPool(fileConfig{Carrier: "tls"}, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "no adaptive link pool") {
+		t.Fatalf("tls: %v", d.lines)
+	}
+}
+
+// The status file the daemon writes carries the exact ceiling fields and the
+// rendered line the installer menu prints.
+func TestStatusFileCarriesCeiling(t *testing.T) {
+	useTempStatusDir(t)
+	pinHW(t, highRAM, highCPU)
+	cfg := filepath.Join(t.TempDir(), "c.json")
+	fc := autoFC(fileConfig{Mode: "dial", Reverse: true, Carrier: "mtcp"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startStatusWriter(ctx, fc, cfg, func() engine.PoolStats {
+		return engine.PoolStats{Links: 3, Target: 3, Min: 2, Max: 64, PeerMax: 48, Phase: "steady"}
+	})
+	var ls liveStatus
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		b, err := os.ReadFile(statusPath(cfg))
+		if err == nil && json.Unmarshal(b, &ls) == nil && ls.CfgMax > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no status file with the ceiling")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ls.CfgMax != 64 || ls.CeilMode != ceilAuto || ls.PeerMax != 48 || ls.EffMax != 48 || ls.LimitBy != "kharej" {
+		t.Fatalf("status ceiling fields: %+v", ls)
+	}
+	if !strings.Contains(ls.CeilingText, "limited by the Kharej server") {
+		t.Fatalf("ceiling_text %q", ls.CeilingText)
+	}
+	// A carrier without a pool writes none of it.
+	cfg2 := filepath.Join(t.TempDir(), "d.json")
+	startStatusWriter(ctx, fileConfig{Mode: "dial", Carrier: "udp"}, cfg2, func() engine.PoolStats { return engine.PoolStats{Links: 1} })
+	time.Sleep(200 * time.Millisecond)
+	b, _ := os.ReadFile(statusPath(cfg2))
+	if strings.Contains(string(b), "cfg_max") || strings.Contains(string(b), "ceiling_text") {
+		t.Fatalf("single-session carrier got ceiling fields: %s", b)
+	}
+}
+
+// `hs2 config set max_links auto` writes 0 (auto); other int keys still take
+// only numbers.
+func TestConfigSetMaxLinksAuto(t *testing.T) {
+	m := map[string]any{}
+	if err := setKey(m, configKeys["max_links"], "auto"); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(m["max_links"]); got != "0" {
+		t.Fatalf("max_links auto stored as %q, want 0", got)
+	}
+	if err := setKey(m, configKeys["min_links"], "auto"); err == nil {
+		t.Fatal("min_links must not accept 'auto'")
+	}
+}

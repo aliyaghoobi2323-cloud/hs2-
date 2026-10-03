@@ -65,13 +65,22 @@ type liveStatus struct {
 	NextProbeS int     `json:"next_probe_s,omitempty"`
 	ExitStats  string  `json:"exit_stats,omitempty"` // ok / partial / older exit: ...
 
-	// Link-pool ceiling context (resource-aware default). Profile/RecMax are
-	// derived from THIS server's hardware; PeerMax is the other server's
-	// configured ceiling as learned over the stats channel (0 = not reported).
-	Profile string `json:"profile,omitempty"`  // low | medium | high
-	RecMax  int    `json:"rec_max,omitempty"`  // ceiling this hardware would choose now (drift check)
-	RAMMB   int    `json:"ram_mb,omitempty"`   // detected RAM, MB (for the "why")
-	PeerMax int    `json:"peer_max,omitempty"` // the other server's configured max_links
+	// Link-pool ceiling (pool carriers only; absent otherwise). CfgMax is THIS
+	// server's ceiling as it runs (auto: derived from the hardware at start;
+	// else max_links). PeerMax is the OTHER server's, as it reported it (0 =
+	// not reported). EffMax/LimitBy are the tunnel's effective ceiling and the
+	// side that sets it (see effectiveCeiling); 0/"" = not known yet.
+	// CeilingText is the rendered line, so the installer menu shows exactly what
+	// `hs2 status` shows.
+	CfgMax      int    `json:"cfg_max,omitempty"`
+	CeilMode    string `json:"ceiling_mode,omitempty"` // auto | fixed | default (see linkCeiling)
+	Profile     string `json:"profile,omitempty"` // low | medium | high
+	RecMax      int    `json:"rec_max,omitempty"` // ceiling this hardware suggests (drift check)
+	RAMMB       int    `json:"ram_mb,omitempty"`  // detected RAM, MB (for the "why")
+	PeerMax     int    `json:"peer_max,omitempty"`
+	EffMax      int    `json:"eff_max,omitempty"`
+	LimitBy     string `json:"limit_by,omitempty"` // iran | kharej | both
+	CeilingText string `json:"ceiling_text,omitempty"`
 
 	// Datagram tunnels (dgtun): loss of what this side SENDS (the peer
 	// reports it), FEC, drops and the policer cap. Absent = 0 / false.
@@ -126,20 +135,29 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		return // /run not writable (unusual); the manager falls back to `ss`
 	}
 	cpu := &cpuMeter{logf: func(f string, a ...any) { log.Printf(f, a...) }}
-	// RAM and cores do not change within a process, so the profile and the
-	// hardware-recommended ceiling are computed once here. A mismatch between the
-	// config's max and RecMax means the hardware changed since install (drift),
-	// which the status screen and doctor surface.
-	ramMB, cpus := tune.Detect()
 	base := liveStatus{
 		Role: role(fc), Dir: direction(fc), Carrier: carrierName(fc),
 		Transport: transportLabel(fc), Endpoint: endpointLabel(fc), PID: os.Getpid(),
-		Profile: tune.ProfileFor(ramMB, cpus), RecMax: tune.RecommendedMaxLinks(ramMB, cpus), RAMMB: ramMB,
+	}
+	// The ceiling this server runs with is fixed for the life of the process
+	// (auto is derived from the hardware once, at start), so it is computed
+	// once here; only the other server's number and the effective ceiling move.
+	if hasLinkPool(fc) {
+		ramMB, cpus := detectHW()
+		_, base.CfgMax, _ = linkEnvelope(fc)
+		_, base.CeilMode, base.Profile = linkCeiling(fc)
+		base.RecMax, base.RAMMB = tune.RecommendedMaxLinks(ramMB, cpus), ramMB
 	}
 	write := func() {
 		s := stats()
 		ls := base
 		ls.Links, ls.Target, ls.Min, ls.Max = s.Links, s.Target, s.Min, s.Max
+		if ls.CfgMax > 0 {
+			ls.PeerMax = s.PeerMax
+			ls.EffMax, ls.LimitBy = effectiveCeiling(fc.Mode == "dial", fc.Reverse, ls.CfgMax, ls.PeerMax)
+			ls.CPUCores = runtime.NumCPU() // the "why" below names the cores
+			ls.CeilingText = ceilingLine(ls)
+		}
 		ls.Users, ls.Mbit, ls.Sat = s.Users, round1(s.MbitPerS), s.Saturated
 		if s.Phase != "" {
 			ls.Phase = s.Phase
@@ -151,7 +169,6 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.Flowing, ls.Pressed = s.Flowing, s.Pressed
 			ls.CapMbit, ls.PeakMbit = round1(s.CapMbit), round1(s.PeakMbit)
 			ls.Reason, ls.NextProbeS, ls.ExitStats = s.Reason, s.NextProbeS, s.ExitStats
-			ls.PeerMax = s.PeerMax
 		}
 		if s.Datagram {
 			ls.LossPct, ls.MaxLossPct, ls.ParityPct = s.LossPct, s.MaxLossPct, s.ParityPct
@@ -297,6 +314,9 @@ func printStatus(path string) {
 	if c := ceilingLine(ls); c != "" {
 		fmt.Printf("  ceiling:    %s\n", c)
 	}
+	if d := driftLine(ls); d != "" {
+		fmt.Printf("  ceiling:    note — %s\n", d)
+	}
 	if w := whyLine(ls); w != "" {
 		fmt.Printf("  why:        %s\n", w)
 	}
@@ -369,41 +389,116 @@ func patternLine(ls liveStatus) string {
 	return s
 }
 
-// ceilingLine renders the resource-aware link-pool ceiling: how many parallel
-// links this tunnel may grow to, which side's number binds (in reverse the
-// effective ceiling is the lower of the two servers'), the profile it was chosen
-// from, and a drift note if the hardware changed since install.
-func ceilingLine(ls liveStatus) string {
-	own := ls.Max
-	if own == 0 {
-		return "" // a side with no envelope of its own (e.g. a direct exit)
+// effectiveCeiling is the link-pool ceiling the tunnel actually runs under,
+// from this server's ceiling (own) and the other server's (peer, 0 = not
+// reported), and the side that sets it ("iran", "kharej" or "both"). It follows
+// the engine exactly:
+//
+//   - direct: the Iran server's ceiling alone — it dials, and the Kharej exit
+//     accepts every link it dials (the exit's max_links is not applied);
+//   - reverse: the lower of the two — the Iran edge clamps its target to its
+//     own max, and the Kharej exit clamps that target to ITS own max.
+//
+// When the answer depends on a number not reported yet it returns 0, "".
+func effectiveCeiling(iran, reverse bool, own, peer int) (int, string) {
+	me, other := "kharej", "iran"
+	if iran {
+		me, other = "iran", "kharej"
 	}
-	var s string
 	switch {
-	case ls.Dir == "reverse" && ls.PeerMax > 0 && ls.PeerMax < own:
-		s = fmt.Sprintf("effective %d links — this server allows %d, the other server %d; the lower binds (limited by the other server)", ls.PeerMax, own, ls.PeerMax)
-	case ls.Dir == "reverse" && ls.PeerMax > own:
-		s = fmt.Sprintf("effective %d links — this server allows %d, the other server %d; the lower binds (limited by this server)", own, own, ls.PeerMax)
-	case ls.Dir == "reverse" && ls.PeerMax == own:
-		s = fmt.Sprintf("%d links — both servers agree", own)
-	case ls.Dir == "reverse": // PeerMax == 0: not reported yet / older peer
-		s = fmt.Sprintf("%d links on this server — the other server's ceiling is not reported (older hs2, or still connecting); the effective ceiling is the lower of the two", own)
-	default: // direct: this (iran/edge) side's ceiling is the one that binds
-		s = fmt.Sprintf("%d links", own)
-	}
-	if ls.Profile != "" {
-		why := ls.Profile + " profile"
-		if ls.RAMMB > 0 {
-			why += fmt.Sprintf(", %s RAM, %d core(s)", ramStr(ls.RAMMB), ls.CPUCores)
+	case !reverse && iran:
+		return own, "iran"
+	case !reverse:
+		if peer > 0 {
+			return peer, "iran"
 		}
-		s += " (" + why + ")"
+		return 0, ""
+	case peer <= 0:
+		return 0, ""
+	case own < peer:
+		return own, me
+	case peer < own:
+		return peer, other
+	default:
+		return own, "both"
 	}
-	// Drift: the config ceiling was chosen at install; if this box's hardware
-	// changed, say what it would choose now.
-	if ls.RecMax > 0 && ls.RecMax != own {
-		s += fmt.Sprintf("\n              this server is now %s and would choose %d — the ceiling was set at install; run 'hs2 doctor' to re-tune it", ls.Profile, ls.RecMax)
+}
+
+// ceilingWhy describes this server's own ceiling: auto from the hardware,
+// fixed by max_links, or the historical default when max_links is not set.
+func ceilingWhy(ls liveStatus) string {
+	hw := ls.Profile + " profile"
+	if ls.RAMMB > 0 {
+		hw += fmt.Sprintf(": %s RAM, %d core(s)", ramStr(ls.RAMMB), ls.CPUCores)
 	}
-	return s
+	switch ls.CeilMode {
+	case ceilAuto:
+		return fmt.Sprintf("%d (auto — %s)", ls.CfgMax, hw)
+	case ceilDefault:
+		return fmt.Sprintf("%d (the default — max_links not set; %s)", ls.CfgMax, hw)
+	}
+	return fmt.Sprintf("%d (fixed by max_links; %s)", ls.CfgMax, hw)
+}
+
+// ceilingLine renders the tunnel's link-pool ceiling exactly, from THIS
+// server's point of view: the effective number, the side that sets it, and
+// both servers' own ceilings where they matter. "" when the carrier has no
+// pool (or the status file predates this field).
+func ceilingLine(ls liveStatus) string {
+	if ls.CfgMax == 0 {
+		return ""
+	}
+	iran := ls.Role == "Iran side"
+	otherName := "the Iran server"
+	if iran {
+		otherName = "the Kharej server"
+	}
+	own := ceilingWhy(ls)
+	switch {
+	case ls.Dir != "reverse" && iran:
+		s := fmt.Sprintf("%d links — in direct mode this (Iran) server alone sets it; this server: %s", ls.EffMax, own)
+		if ls.PeerMax > 0 {
+			s += fmt.Sprintf("; the Kharej server's max_links (%d) does not apply in direct mode", ls.PeerMax)
+		}
+		return s
+	case ls.Dir != "reverse":
+		if ls.EffMax > 0 {
+			return fmt.Sprintf("%d links — set by the Iran server (direct mode); this server's own ceiling, %s, does not apply here", ls.EffMax, own)
+		}
+		return fmt.Sprintf("set by the Iran server (direct mode) — not reported yet (no link up, or an older hs2 there); this server's own ceiling, %s, does not apply here", own)
+	case ls.EffMax == 0:
+		return fmt.Sprintf("at most %d links — this server: %s; %s has not reported its ceiling yet (no link up, or an older hs2 there) — the lower of the two applies", ls.CfgMax, own, otherName)
+	}
+	who := "both servers allow the same"
+	switch {
+	case ls.LimitBy == "both":
+	case (ls.LimitBy == "iran") == iran:
+		who = "limited by this server"
+	default:
+		who = "limited by " + otherName
+	}
+	return fmt.Sprintf("%d links — %s (reverse: the lower of the two applies); this server: %s, %s: %d",
+		ls.EffMax, who, own, otherName, ls.PeerMax)
+}
+
+// driftLine flags a fixed (or default) ceiling that no longer matches what
+// this server's hardware suggests (it was set for other hardware, or by hand).
+// An auto ceiling follows the hardware by itself, and a direct Kharej's ceiling
+// is not applied, so neither gets one.
+func driftLine(ls liveStatus) string {
+	if ls.CfgMax == 0 || ls.CeilMode == ceilAuto || ls.RecMax == 0 || ls.RecMax == ls.CfgMax {
+		return ""
+	}
+	if ls.Dir != "reverse" && ls.Role != "Iran side" {
+		return ""
+	}
+	if ls.CeilMode == ceilDefault {
+		return fmt.Sprintf("max_links is not set, so the historical default %d applies; this %s box could use up to %d — set max_links to 0 (auto) to follow the hardware (menu → Link pool)", ls.CfgMax, ls.Profile, ls.RecMax)
+	}
+	if ls.CfgMax > ls.RecMax {
+		return fmt.Sprintf("max_links %d is above what this %s box suggests (%d) — more links than its RAM comfortably holds under load; set max_links to 0 (auto) or %d (menu → Link pool)", ls.CfgMax, ls.Profile, ls.RecMax, ls.RecMax)
+	}
+	return fmt.Sprintf("this %s box could use up to %d; max_links is fixed at %d — set it to 0 (auto) to follow the hardware (menu → Link pool)", ls.Profile, ls.RecMax, ls.CfgMax)
 }
 
 // whyLine explains the size: the controller's reason, plus what keeps any

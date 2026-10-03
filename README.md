@@ -21,8 +21,9 @@ connection to the panel. There is never TCP inside TCP.
 ## The adaptive connection pattern (v3.2)
 
 The number of parallel TLS links is not fixed. A dedicated controller (the
-*autopilot*) sizes the pool continuously between **2 and 32 links** — up when
-traffic needs more, and **back down when it does not**:
+*autopilot*) sizes the pool continuously between **2 links and a ceiling sized
+to the server** (32 / 48 / 64 — see *The ceiling* below) — up when traffic
+needs more, and **back down when it does not**:
 
 - **active flows** — at least one link per `per_link` (default 8) connections
   that are actually moving data. Idle connections (an xray panel keeps
@@ -57,6 +58,41 @@ links:   7 up = 5 serving + 2 retiring / target 5 (shrinking, range 2–32)
 why:     18 active of 251 open connections, 1 of 5 serving links at their limit, peak 6.8 Mbit/s; 2 retiring link(s) close as their connections end (held by 38 open, 1 active)
 traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4 Mbit/s each)
 ```
+
+### The ceiling — how many links at most (auto, per server)
+
+`max_links` caps the pool. It has three forms:
+
+| `max_links` | meaning |
+|-------------|---------|
+| `0` — **auto** (new installs) | follows **this server's hardware**, re-derived at every start: **32** on a small box (under ~1.5 GB RAM), **48** medium, **64** high (≥ 4 GB, or ≥ 2 GB with ≥ 4 cores) — the same profile that sizes the kernel buffers. A server resized up or down gets the matching ceiling on its next start, with nobody editing the config. |
+| a number | fixed by you; never changed automatically |
+| absent | the historical fixed **32** — a config written before auto existed behaves exactly as before after upgrading |
+
+Why the ceiling depends on RAM: under a stalled reader each link's session may
+buffer up to 8 MiB, so 64 links is up to ~512 MiB in the worst case — fine on a
+big box, a risk on a 1 GB VPS. The ceiling is only headroom: the autopilot uses
+about one link per 8 *active* connections, so 400 active connections want ~50
+links and a 32 ceiling caps them.
+
+**Which server's ceiling counts.** In **direct** mode the Iran server's ceiling
+alone applies (the Kharej server accepts every link it dials). In **reverse**
+the lower of the two applies (the Kharej server dials, clamped to its own max).
+The two servers tell each other their ceilings over the tunnel itself, so
+`hs2 status` on **either** server shows the exact effective number and which
+side sets it, e.g.:
+
+```
+ceiling: 48 links — limited by the Kharej server (reverse: the lower of the two applies); this server: 64 (auto — high profile: 15.7 GB RAM, 4 core(s)), the Kharej server: 48
+```
+
+If the other server still runs an older hs2, the line says its ceiling is not
+reported (the tunnel works as before). `hs2 doctor` warns when a fixed
+`max_links` is above what the RAM comfortably holds, notes when the box could
+use more, and — for auto — when the hardware changed under a running tunnel
+and a restart would apply it. Change it in `hs2-menu` → tunnel → **Tuning** →
+**Link pool** (type `auto` or a number) or with `hs2 config set max_links auto`;
+`hs2 recommend-links --why` shows what this server's hardware gives.
 
 ## Automatic kernel tuning
 
@@ -252,7 +288,8 @@ tls, those carry far more per IP without pretending to be ping.
   burst. They are now spread evenly.
 - **Latency tuning measured in a lab** (lossy, throttled, long-haul paths):
   BBR on every link socket, a 32 KiB unsent-data limit, 16 KiB stream frames,
-  and an adaptive 2–32 link pool sized live by the autopilot (see above).
+  and an adaptive link pool (2 up to a hardware-sized ceiling) sized live by
+  the autopilot (see above).
 - **Authenticated links.** Both ends prove the shared key bound to the exact
   TLS session (TLS exporter), so an interceptor with a forged certificate can
   neither read nor hijack the tunnel. v2 had no protection against that.
@@ -338,11 +375,11 @@ These ride TLS and need a domain + certificate (see Requirements). The installer
 recommended transport is **`auto`** (it probes udp first, then falls back to
 tcp/TLS); these are the TLS carriers it can land on:
 
-| mode     | links | hs0 tunnel IPs | use it when                                  |
-|----------|-------|----------------|----------------------------------------------|
-| `mtcp`   | 2–32  | no             | fastest TLS mode, beats per-connection caps  |
-| `l3mtcp` | 2–32  | yes            | you also need 10.77.0.x (ping, non-TCP)      |
-| `tls`    | 1     | yes            | you want a single connection on the wire     |
+| mode     | links     | hs0 tunnel IPs | use it when                              |
+|----------|-----------|----------------|------------------------------------------|
+| `mtcp`   | 2–ceiling | no         | fastest TLS mode, beats per-connection caps  |
+| `l3mtcp` | 2–ceiling | yes        | you also need 10.77.0.x (ping, non-TCP)      |
+| `tls`    | 1         | yes        | you want a single connection on the wire     |
 
 For the **datagram** transports — `auto` / `udp`, and tun over udp/icmp/gre/ipip/ipx
 (no domain, no certificate) — see *Datagram tunnels on throttled paths* above.
@@ -351,7 +388,8 @@ On a slow path that is **not** throttled per connection, fewer links give
 lower latency under full load, because several parallel flows keep a standing
 queue in the path. The autopilot handles this automatically — it keeps added
 links only when they raise throughput — but you can also cap it by lowering
-`max_links` in the Iran config.
+`max_links` (on the Iran server; in reverse mode the lower of the two servers'
+applies, so either one caps it).
 
 ## Security
 

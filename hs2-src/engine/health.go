@@ -101,6 +101,10 @@ type linkMeter struct {
 	statsSeq   atomic.Uint32
 	peer       atomic.Pointer[statsRec]
 
+	// peerMax is the exit's link-pool ceiling as it told us over kindInfo
+	// (peerinfo.go); 0 = not known (older exit, or not exchanged yet).
+	peerMax atomic.Uint32
+
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
 	peerSeen    atomic.Bool   // a control response has been received at least once

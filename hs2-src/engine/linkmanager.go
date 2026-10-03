@@ -1396,9 +1396,9 @@ type PoolStats struct {
 	Reason     string  // why the pattern is this size, with the numbers
 	NextProbeS int     // seconds until growth is tried again (holding), else 0
 	ExitStats  string  // "ok" | "partial" | "older exit: ..." | "" (unknown yet)
-	PeerMax    int     // the OTHER server's configured ceiling, learned over the
-	// stats channel (0 = not reported: an older exit, a direct exit with no pool,
-	// or not yet received). Display-only: the effective ceiling is min(Max,PeerMax).
+	PeerMax    int     // the OTHER server's link-pool ceiling as it reported it
+	// (stream: kindInfo; datagram: pool-control frames). 0 = not known (an older
+	// hs2 on the other server, no link up, or not exchanged yet). Display only.
 
 	// Datagram pools (dgtun): what this side's carriers see on what they SEND
 	// (the peer reports its loss) and what they receive.
@@ -1457,12 +1457,12 @@ func (m *LinkManager) Stats() PoolStats {
 			continue
 		}
 		st.Links++
-		// The exit echoes its own configured ceiling on every stats record; all
-		// links carry the same value, so the max over them is that number (0 means
-		// no link has reported yet, or the exit is older / has no pool).
+		// Every link told us the exit's ceiling over kindInfo; they all carry
+		// the same value, so the max over the live links is that number (0: no
+		// link has exchanged yet, or the exit is an older hs2).
 		if ml.mtr != nil {
-			if r := ml.mtr.peer.Load(); r != nil && int(r.peerMax) > st.PeerMax {
-				st.PeerMax = int(r.peerMax)
+			if v := int(ml.mtr.peerMax.Load()); v > st.PeerMax {
+				st.PeerMax = v
 			}
 		}
 		switch {

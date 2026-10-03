@@ -35,6 +35,16 @@ type KharejConfig struct {
 	// OnStart, if set, is called once with a function that returns a live
 	// snapshot of the link pattern, for monitoring.
 	OnStart func(StatsFn)
+
+	// MaxLinks is this server's link-pool ceiling, told to the edge over
+	// kindInfo so both servers can show the effective ceiling. A reverse exit
+	// reports the max it applies (RevMax); a direct exit reports its configured
+	// value although it does not apply it (the edge alone decides in direct).
+	MaxLinks int
+
+	// peerMax holds the edge's ceiling as the edge reported it (set up by
+	// RunKharej; nil in tests that call serveStream directly).
+	peerMax *atomic.Int32
 }
 
 // RunKharej accepts links and serves their streams until ctx ends.
@@ -49,12 +59,21 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}
+	if cfg.peerMax == nil {
+		cfg.peerMax = new(atomic.Int32)
+	}
 	if cfg.RevDial != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
 	var links atomic.Int32
 	if cfg.OnStart != nil {
-		cfg.OnStart(func() PoolStats { return PoolStats{Links: int(links.Load()), Phase: "listening"} })
+		cfg.OnStart(func() PoolStats {
+			st := PoolStats{Links: int(links.Load()), Phase: "listening"}
+			if st.Links > 0 { // only while a link is up: never a stale edge value
+				st.PeerMax = int(cfg.peerMax.Load())
+			}
+			return st
+		})
 	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
 	for {
@@ -124,14 +143,17 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
 	case kindStats:
-		// The reverse exit has its own [min,max] pool; a direct exit does not
-		// (it just accepts links the edge dials, so its max never binds). Report
-		// the pool's max when there is one, 0 otherwise.
-		exitMax := 0
+		serveStats(ctx, st, car, mtr)
+	case kindInfo:
+		myMax := cfg.MaxLinks
 		if pool != nil {
-			exitMax = pool.max
+			myMax = pool.max // what the reverse exit actually clamps to
 		}
-		serveStats(ctx, st, car, mtr, exitMax)
+		serveInfo(st, myMax, func(n int) {
+			if cfg.peerMax != nil {
+				cfg.peerMax.Store(int32(n))
+			}
+		})
 	case kindTCP:
 		up, err := net.DialTimeout("tcp", cfg.Panel, 5*time.Second)
 		if err != nil {
