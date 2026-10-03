@@ -48,6 +48,43 @@ func TestProfilesScaleWithHardware(t *testing.T) {
 	}
 }
 
+// The link-pool ceiling tracks the SAME profile that sizes the kernel buffers:
+// a small box keeps 32, a big box gets room for more parallel links. This is the
+// single source of truth the installer and doctor both call.
+func TestRecommendedMaxLinksByProfile(t *testing.T) {
+	cases := []struct {
+		ram, cpu    int
+		wantProfile string
+		wantMax     int
+	}{
+		{512, 1, "low", 32},     // typical tiny VPS
+		{1024, 1, "low", 32},    // common 1 GB Iran VPS — stays 32 (no OOM risk)
+		{1536, 2, "medium", 48}, // medium threshold
+		{2048, 2, "medium", 48},
+		{2048, 4, "high", 64}, // cores lift a borderline box
+		{4096, 2, "high", 64},
+		{8192, 8, "high", 64},
+	}
+	for _, c := range cases {
+		if p := ProfileFor(c.ram, c.cpu); p != c.wantProfile {
+			t.Errorf("ProfileFor(%d,%d)=%q, want %q", c.ram, c.cpu, p, c.wantProfile)
+		}
+		if m := RecommendedMaxLinks(c.ram, c.cpu); m != c.wantMax {
+			t.Errorf("RecommendedMaxLinks(%d,%d)=%d, want %d", c.ram, c.cpu, m, c.wantMax)
+		}
+	}
+	// The ceiling must never drop below the historical 32 (no existing small
+	// server is pushed below what it already runs) and never exceed 64.
+	for ram := 128; ram <= 65536; ram += 137 {
+		for cpu := 1; cpu <= 32; cpu++ {
+			m := RecommendedMaxLinks(ram, cpu)
+			if m < 32 || m > 64 {
+				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d out of [32,64]", ram, cpu, m)
+			}
+		}
+	}
+}
+
 // Defaults are bbr + fq_codel.
 func TestDefaultsAreBBRFqCodel(t *testing.T) {
 	p := Build(Config{}, 2048, 2, allAvail, allAvail)

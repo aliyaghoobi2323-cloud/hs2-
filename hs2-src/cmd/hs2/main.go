@@ -208,6 +208,8 @@ func main() {
 		statusCmd(os.Args[2:])
 	case "tune":
 		tuneCmd(os.Args[2:])
+	case "recommend-links":
+		recommendLinksCmd(os.Args[2:])
 	case "config":
 		configCmd(os.Args[2:])
 	case "cleanup":
@@ -502,6 +504,36 @@ func tuneCmd(args []string) {
 		}
 		plan.Apply(func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
 	}
+}
+
+// recommendLinksCmd implements `hs2 recommend-links [--why]`: print the adaptive
+// link-pool ceiling this server's RAM and cores justify. The installer calls the
+// bare form and writes the number straight into the config, so the ceiling is
+// chosen once, from the hardware, and is then visible and fixed in the file (not
+// a hidden default). --why adds the profile and the detected hardware for the
+// human-facing menu. It is read-only and needs no config or root.
+func recommendLinksCmd(args []string) {
+	fs := flag.NewFlagSet("recommend-links", flag.ExitOnError)
+	why := fs.Bool("why", false, "also print the profile and detected hardware")
+	fs.Parse(args)
+	ramMB, cpus := tune.Detect()
+	maxLinks := tune.RecommendedMaxLinks(ramMB, cpus)
+	if !*why {
+		fmt.Println(maxLinks)
+		return
+	}
+	fmt.Printf("%d  (%s profile: %s RAM, %d core(s))\n", maxLinks, tune.ProfileFor(ramMB, cpus), ramStr(ramMB), cpus)
+}
+
+// ramStr prints a RAM size in MB the way the tune report does (GB past 1024).
+func ramStr(mb int) string {
+	if mb <= 0 {
+		return "unknown"
+	}
+	if mb >= 1024 {
+		return fmt.Sprintf("%.1f GB", float64(mb)/1024)
+	}
+	return fmt.Sprintf("%d MB", mb)
 }
 
 // linkEnvelope resolves the adaptive link-pool bounds from the config, applying

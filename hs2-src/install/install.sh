@@ -1425,13 +1425,13 @@ ask_tun_encap(){
 # ask_tun_tls_mode sets CARRIER for a tun carried over TLS (tun -> tcp). Both
 # choices run the stream engine with hs0 as a side channel and forward the user
 # ports exactly like the tcp transport; they differ only in the link pool:
-#   l3mtcp = the mtcp multi-link pool (2..32 TLS links sized by the autopilot)
+#   l3mtcp = the mtcp multi-link pool (self-sizing TLS links, 2 up to the configured ceiling)
 #   tls    = a single TLS link
 # Plain mtcp (no TUN) is transport tcp -> mtcp; under "tun" there is always hs0.
 ask_tun_tls_mode(){
   echo >&2
   echo "  TLS mode for the tun:" >&2
-  echo "    1) mtcp + tun — the mtcp multi-link pool (2–32 TLS links) + a tun interface (recommended, fastest)" >&2
+  echo "    1) mtcp + tun — the mtcp multi-link pool (self-sizing TLS links) + a tun interface (recommended, fastest)" >&2
   echo "    2) tls  + tun — one TLS link + a tun interface (fewer connections, but far slower where each connection is throttled)" >&2
   echo "    (Users' traffic rides the user ports. The tun here is a side channel for ping and light" >&2
   echo "     traffic, not for bulk — for bulk over a routed tun choose tun → udp or icmp.)" >&2
@@ -1675,11 +1675,44 @@ ipx_proto_from_link(){
 }
 
 # ---------- KHAREJ (foreign server, the panel side) --------------------------
+# recommend_links runs the binary's resource-aware link-ceiling advisor
+# (hs2 recommend-links), never failing the caller under `set -euo pipefail`: a
+# missing or older binary, or a non-zero exit, yields no output, which every
+# caller treats as "unknown" and falls back from.
+recommend_links(){ "$BIN" recommend-links "$@" 2>/dev/null || true; }
+
+# resolve_link_max sets LINK_MAX for a NEW config from THIS server's hardware,
+# asking the freshly-installed binary (the single source of truth for the
+# RAM/core -> ceiling mapping; see tune.RecommendedMaxLinks). The number is then
+# written explicitly into the config, so it is visible with `cat` and fixed at
+# install time — a later RAM change does not silently move it (hs2 doctor flags
+# the drift instead). Falls back to the conservative 32 if the binary cannot
+# answer or returns something unexpected, so a fresh install never gets an
+# invalid or surprising ceiling. Called once per setup, after install_binary.
+# It never touches an EXISTING install (that path runs migrate_config, which
+# keeps max_links as it is).
+resolve_link_max(){
+  local rec why
+  rec=$(recommend_links | awk 'NR==1{print $1}')
+  case "$rec" in
+    ''|*[!0-9]*) LINK_MAX=32; return 0 ;;
+  esac
+  if [ "$rec" -ge "$LINK_MIN" ] && [ "$rec" -le 1024 ]; then
+    LINK_MAX="$rec"
+    why=$(recommend_links --why | sed 's/^[0-9]*  *(//; s/)$//')
+    info "Link-pool ceiling for this server: max $LINK_MAX${why:+ ($why)}."
+    info "The pool still self-sizes between $LINK_MIN and $LINK_MAX; this is only the ceiling. In reverse mode the effective ceiling is the lower of the two servers'."
+  else
+    LINK_MAX=32
+  fi
+}
+
 setup_kharej(){
   hr; info "KHAREJ setup (foreign server — the panel side)"; hr
   auto_backup
   install_prereqs
   install_binary
+  resolve_link_max
   ask_direction
   if [ "$DIRECTION" = "direct" ]; then
     ask_service_name     # this side makes the link, so it names the tunnel
@@ -1913,6 +1946,7 @@ setup_iran(){
   auto_backup
   install_prereqs
   install_binary
+  resolve_link_max
   ask_direction
   if [ "$DIRECTION" = "direct" ]; then
     iran_dialer          # direct: iran dials out to kharej (pastes the link)
@@ -3046,6 +3080,31 @@ tm_tune_links(){ # unit cfg
     say "  ${C_Y}In direct mode the Iran server alone decides the link count — these values have NO${C_0}"
     say "  ${C_Y}effect on this Kharej server. Change them on the Iran server instead.${C_0}"
     pause; return 0
+  fi
+  # Resource-aware recommendation + drift for THIS server (the binary is the
+  # single source of truth for the RAM/core -> ceiling mapping). max_links was
+  # chosen at install; if this box was resized since, the recommendation differs.
+  local rec recwhy
+  rec=$(recommend_links | awk 'NR==1{print $1}')
+  recwhy=$(recommend_links --why)
+  if [ -n "$recwhy" ]; then
+    say "  This server's hardware suggests a ceiling of $recwhy."
+    case "$rec" in
+      ''|*[!0-9]*) ;;
+      *) [ "$rec" != "${cur_max:-32}" ] && say "  ${C_Y}The configured max is ${cur_max:-32}; enter $rec below to match this server's hardware.${C_0}" ;;
+    esac
+  fi
+  # Effective ceiling in reverse = the lower of the two servers'. When the tunnel
+  # is running, the live status has learned the other server's max — show it.
+  if cfg_is_reverse "$cfg"; then
+    local sp pmax eff who
+    sp=$(status_path "$cfg"); pmax=$(jraw "$sp" peer_max 2>/dev/null)
+    case "$pmax" in
+      ''|0|*[!0-9]*) ;;
+      *) eff="${cur_max:-32}"; who="this server"
+         [ "$pmax" -lt "$eff" ] && { eff="$pmax"; who="the other server"; }
+         say "  ${C_Y}Effective now: $eff links${C_0} (this server ${cur_max:-32}, the other server $pmax — limited by $who)." ;;
+    esac
   fi
   say "  Current: min=${cur_min:-2} · max=${cur_max:-32} · ~${cur_per:-8} users per link"
   read -rp "  Min links [${cur_min:-2}]: " mn </dev/tty;         mn=${mn:-${cur_min:-2}}

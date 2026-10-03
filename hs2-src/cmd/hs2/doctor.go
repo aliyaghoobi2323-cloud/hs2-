@@ -57,6 +57,7 @@ func doctorCmd(args []string) {
 			}
 			checkTun(d, fc)
 			checkTuning(d, fc)
+			checkLinkPool(d, fc, *cfgPath)
 		} else {
 			d.info("live checks", "skipped — the config does not parse as JSON (see the config error above)")
 		}
@@ -292,6 +293,50 @@ func checkTuning(d *doctorReport, fc fileConfig) {
 		}
 		d.warn("kernel tuning", fmt.Sprintf("%d of %d setting(s) differ — applied at each 'hs2 run' as root: %s%s",
 			len(mism), checked, strings.Join(shown, " · "), extra))
+	}
+}
+
+// checkLinkPool compares the config's adaptive link-pool ceiling (max_links)
+// against what THIS server's RAM and cores would choose now. They are set once
+// at install, so a server that was later resized drifts: a box that SHRANK may
+// carry a ceiling too high for its RAM (a WARN — too many links can exhaust
+// memory under load), and a box that GREW could use more links than it was
+// given (an INFO — free headroom). It also restates that in reverse the
+// effective ceiling is the lower of the two servers', and surfaces the peer's
+// number when the live status file has learned it.
+func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
+	_, cfgMax, _ := linkEnvelope(fc)
+	ram, cpus := tune.Detect()
+	recMax := tune.RecommendedMaxLinks(ram, cpus)
+	profile := tune.ProfileFor(ram, cpus)
+
+	// The effective ceiling in reverse is min(this side, the other side). If the
+	// daemon is running and has learned the peer's max, say so.
+	effNote := ""
+	if fc.Reverse {
+		effNote = " · reverse: the effective ceiling is the lower of the two servers' — set both"
+		if b, err := os.ReadFile(statusPath(cfgPath)); err == nil {
+			var ls liveStatus
+			if json.Unmarshal(b, &ls) == nil && ls.PeerMax > 0 {
+				eff := cfgMax
+				who := "this server"
+				if ls.PeerMax < eff {
+					eff, who = ls.PeerMax, "the other server"
+				}
+				effNote = fmt.Sprintf(" · reverse: effective %d (this server %d, other server %d — limited by %s)", eff, cfgMax, ls.PeerMax, who)
+			}
+		}
+	}
+
+	switch {
+	case cfgMax == recMax:
+		d.ok("link pool ceiling", fmt.Sprintf("%d links — matches this %s box (%s RAM, %d core(s))%s", cfgMax, profile, ramStr(ram), cpus, effNote))
+	case cfgMax > recMax:
+		d.warn("link pool ceiling", fmt.Sprintf("configured %d, but this %s box (%s RAM, %d core(s)) would choose %d — more links than this RAM comfortably supports under load; lower max_links (menu → Link pool), or it was set for bigger hardware%s",
+			cfgMax, profile, ramStr(ram), cpus, recMax, effNote))
+	default: // cfgMax < recMax
+		d.info("link pool ceiling", fmt.Sprintf("configured %d; this %s box (%s RAM, %d core(s)) could use up to %d — raise max_links for more headroom if you want it (menu → Link pool)%s",
+			cfgMax, profile, ramStr(ram), cpus, recMax, effNote))
 	}
 }
 

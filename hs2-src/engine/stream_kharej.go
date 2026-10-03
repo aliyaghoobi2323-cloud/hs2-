@@ -124,7 +124,14 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
 	case kindStats:
-		serveStats(ctx, st, car, mtr)
+		// The reverse exit has its own [min,max] pool; a direct exit does not
+		// (it just accepts links the edge dials, so its max never binds). Report
+		// the pool's max when there is one, 0 otherwise.
+		exitMax := 0
+		if pool != nil {
+			exitMax = pool.max
+		}
+		serveStats(ctx, st, car, mtr, exitMax)
 	case kindTCP:
 		up, err := net.DialTimeout("tcp", cfg.Panel, 5*time.Second)
 		if err != nil {

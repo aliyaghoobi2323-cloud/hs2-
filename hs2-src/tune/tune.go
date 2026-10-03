@@ -103,6 +103,49 @@ func profileFor(ramMB, cpus int) string {
 	}
 }
 
+// ProfileFor is the exported low/medium/high classification of a server, for
+// callers that want to show which profile a box falls in (it is the same
+// decision that sizes the kernel buffers).
+func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
+
+// Link-pool ceilings per profile. The adaptive pool is allowed to grow up to
+// this many parallel links. The number is keyed to the SAME profile that sizes
+// the kernel socket buffers (profileFor), so a box that gets bigger buffers also
+// gets room for more parallel links, and a small box gets neither — one
+// resource story, one signal.
+//
+// Why these numbers, from the code:
+//   - Each link's smux session may hold up to engine.SmuxSessionBuffer (8 MiB)
+//     of receive buffer under a sustained backlog (a cap, reached only when a
+//     reader stalls — not pre-allocated). 64 links is therefore up to ~512 MiB
+//     worst case, plus the per-socket kernel buffers this profile sets
+//     (rmem/wmem). Affordable on a high box, an OOM risk on a 1 GB VPS.
+//   - 32 is the historical default and stays the floor for low boxes, so no
+//     existing small server is pushed past what it already handles.
+//
+// per_link default is 8, so the autopilot only *wants* this many links under
+// real load (ceil(active_flows/8)); the ceiling is headroom, not a target.
+const (
+	maxLinksLow    = 32
+	maxLinksMedium = 48
+	maxLinksHigh   = 64
+)
+
+// RecommendedMaxLinks is the adaptive link-pool ceiling hs2 picks for a server
+// with this much RAM and these many cores. The installer writes it explicitly
+// into the config at setup (so it is visible with `cat` and fixed), and
+// `hs2 doctor` flags it if the hardware later changes.
+func RecommendedMaxLinks(ramMB, cpus int) int {
+	switch profileFor(ramMB, cpus) {
+	case "high":
+		return maxLinksHigh
+	case "medium":
+		return maxLinksMedium
+	default:
+		return maxLinksLow
+	}
+}
+
 // profileValues returns the buffer/backlog/somaxconn values for a profile.
 func profileValues(profile string) (rmemMax, wmemMax, backlog, somaxconn int) {
 	switch profile {
