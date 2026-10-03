@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -221,4 +222,36 @@ func TestPeerInfoMixedVersions(t *testing.T) {
 			t.Fatal("the tunnel does not carry traffic")
 		}
 	})
+}
+
+// On the REVERSE edge a pattern log line whose target is above the ceiling the
+// Kharej exit reported says it is capped there (the exit clamps it); a direct
+// edge never says so (a direct exit does not clamp). Display only.
+func TestCapNoteReverseOnly(t *testing.T) {
+	rev, _, _ := newV2Manager(nil, 2, 64, true) // accept = reverse edge
+	f := newMeteredFake()
+	f.m.peerMax.Store(40)
+	addManaged(rev, f)
+	if n := rev.capNote(48); !strings.Contains(n, "capped at 40 by the Kharej server") {
+		t.Fatalf("reverse, target 48 over the exit's 40: note %q", n)
+	}
+	if n := rev.capNote(40); n != "" {
+		t.Fatalf("target at the exit's max: no note expected, got %q", n)
+	}
+	dir, _, _ := newV2Manager(nil, 2, 64, false) // direct edge
+	addManaged(dir, f)
+	if n := dir.capNote(48); n != "" {
+		t.Fatalf("direct edge must never claim a Kharej cap: %q", n)
+	}
+	// datagram pool, same rule
+	p := newDgPool(newFakeTUN(1400), 2, 64, 8, func(string, ...any) {})
+	p.accept = true
+	p.storePeerMax(40)
+	if n := p.capNote(48); !strings.Contains(n, "capped at 40 by the Kharej server") {
+		t.Fatalf("dgtun reverse edge: note %q", n)
+	}
+	p.accept = false
+	if n := p.capNote(48); n != "" {
+		t.Fatalf("dgtun direct edge: note %q", n)
+	}
 }

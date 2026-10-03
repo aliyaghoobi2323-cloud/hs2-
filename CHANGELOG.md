@@ -524,6 +524,24 @@ reverse, `max_links` absent, and an older binary on either side): every case
 showed the exact number on both servers, or said plainly that the older side
 does not report it.
 
+### Field-test fixes (real servers, 400 active connections)
+A real-server test confirmed every claim in both directions (auto 48 on the
+field servers' 1.9 GB "medium" boxes, a fixed 40 on Kharej limiting reverse to
+exactly 40 TCP links, direct ignoring Kharej's cap, old configs staying at 32,
+mixed versions working). One display point was fixed:
+- **Reverse: the Iran side's target did not say it was capped.** With the
+  Kharej exit at 40, Iran still printed `target 48` and logged
+  `pattern 28 → 48 links`, while 40 links ran. The links line now reads
+  `40 up / target 48, capped at 40 by the Kharej server`, and the log line adds
+  `— capped at 40 by the Kharej server (its max_links), so at most 40 links
+  run` (stream and dgtun). Display only — the target itself is unchanged; a
+  direct edge never claims a cap (a direct exit does not clamp), and an older
+  Kharej that does not report its ceiling is never assumed to cap.
+- `gofmt` alignment in two files touched by this phase.
+- Not field-tested (no 1 GB server at hand): a 1 GB box getting 32. It follows
+  from the profile thresholds and is unit-tested (512 MB and 1 GB → low → 32);
+  on any 1 GB VPS `hs2 recommend-links --why` must print `32 (low profile …)`.
+
 ### Test maintenance
 - `install/tests/tun_ports_test.py` had gone stale: it predated the optional
   tunnel-subnet prompt (U5) and the `hs2 check` validation of every written

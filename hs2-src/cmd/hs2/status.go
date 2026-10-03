@@ -73,11 +73,11 @@ type liveStatus struct {
 	// CeilingText is the rendered line, so the installer menu shows exactly what
 	// `hs2 status` shows.
 	CfgMax      int    `json:"cfg_max,omitempty"`
-	CeilRaw     int    `json:"ceiling_raw,omitempty"` // the ceiling before a higher min_links lifts it
+	CeilRaw     int    `json:"ceiling_raw,omitempty"`  // the ceiling before a higher min_links lifts it
 	CeilMode    string `json:"ceiling_mode,omitempty"` // auto | fixed | default (see linkCeiling)
-	Profile     string `json:"profile,omitempty"` // low | medium | high
-	RecMax      int    `json:"rec_max,omitempty"` // ceiling this hardware suggests (drift check)
-	RAMMB       int    `json:"ram_mb,omitempty"`  // detected RAM, MB (for the "why")
+	Profile     string `json:"profile,omitempty"`      // low | medium | high
+	RecMax      int    `json:"rec_max,omitempty"`      // ceiling this hardware suggests (drift check)
+	RAMMB       int    `json:"ram_mb,omitempty"`       // detected RAM, MB (for the "why")
 	PeerMax     int    `json:"peer_max,omitempty"`
 	EffMax      int    `json:"eff_max,omitempty"`
 	LimitBy     string `json:"limit_by,omitempty"` // iran | kharej | both
@@ -385,6 +385,11 @@ func patternLine(ls liveStatus) string {
 	}
 	if ls.Target != serving {
 		s += fmt.Sprintf(" / target %d", ls.Target)
+		// Reverse: the Kharej exit clamps the target to its own max, so a
+		// target above it is not what will run — say so (display only).
+		if ls.Dir == "reverse" && ls.Role == "Iran side" && ls.LimitBy == "kharej" && ls.EffMax > 0 && ls.Target > ls.EffMax {
+			s += fmt.Sprintf(", capped at %d by the Kharej server", ls.EffMax)
+		}
 	}
 	s += fmt.Sprintf(" (%s, range %d–%d)", ls.Phase, ls.Min, ls.Max)
 	return s

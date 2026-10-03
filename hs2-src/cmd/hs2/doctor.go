@@ -316,7 +316,7 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 		d.info(name, fmt.Sprintf("no adaptive link pool on carrier %q (tls is one link; other carriers run one session)", carrierName(fc)))
 		return
 	}
-	_, cfgMax, _ := linkEnvelope(fc)      // what a start now runs with (lifted to min_links)
+	_, cfgMax, _ := linkEnvelope(fc)         // what a start now runs with (lifted to min_links)
 	rawMax, mode, profile := linkCeiling(fc) // the ceiling itself
 	ram, cpus := detectHW()
 	recMax := tune.RecommendedMaxLinks(ram, cpus)

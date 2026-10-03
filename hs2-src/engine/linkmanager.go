@@ -494,9 +494,39 @@ func (m *LinkManager) decideTarget() int {
 	m.setTarget(d.target)
 	m.dec = d
 	if d.note != "" {
-		m.log("mtcp: %s", d.note)
+		m.log("mtcp: %s%s", d.note, m.capNote(d.target))
 	}
 	return d.target
+}
+
+// capNote (display only) completes a pattern log line on the REVERSE edge: the
+// Kharej exit clamps the edge's target to its own max, so a target above the
+// max it reported is not the number of links that will run. Direct exits do
+// not clamp, so a direct edge never adds it. Nothing here changes the target.
+func (m *LinkManager) capNote(target int) string {
+	if !m.accept {
+		return ""
+	}
+	if pm := m.peerMax(); pm > 0 && target > pm {
+		return fmt.Sprintf(" — capped at %d by the Kharej server (its max_links), so at most %d links run", pm, pm)
+	}
+	return ""
+}
+
+// peerMax is the other server's ceiling as the live links report it over
+// kindInfo (0 = not reported). Display only.
+func (m *LinkManager) peerMax() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	best := 0
+	for _, ml := range m.links {
+		if ml.link.Alive() && ml.mtr != nil {
+			if v := int(ml.mtr.peerMax.Load()); v > best {
+				best = v
+			}
+		}
+	}
+	return best
 }
 
 // setTarget publishes a new desired link count and remembers when it went down.

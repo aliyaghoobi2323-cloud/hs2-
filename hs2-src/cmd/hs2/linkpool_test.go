@@ -369,3 +369,24 @@ func TestConfigSetMaxLinksAuto(t *testing.T) {
 		t.Fatal("min_links must not accept 'auto'")
 	}
 }
+
+// The Iran side's links line says when the Kharej server caps its target
+// (reverse only); without a cap, or in direct, it is unchanged.
+func TestPatternLineCappedByKharej(t *testing.T) {
+	ls := liveStatus{Role: "Iran side", Dir: "reverse", Links: 40, Target: 48, Min: 2, Max: 64, Phase: "steady", CfgMax: 64, PeerMax: 40}
+	ls.EffMax, ls.LimitBy = effectiveCeiling(true, true, 64, 40)
+	if got := patternLine(ls); !strings.Contains(got, "40 up / target 48, capped at 40 by the Kharej server (steady, range 2–64)") {
+		t.Fatalf("capped reverse: %q", got)
+	}
+	d := ls
+	d.Dir = "direct"
+	d.EffMax, d.LimitBy = effectiveCeiling(true, false, 64, 40)
+	if got := patternLine(d); strings.Contains(got, "capped") {
+		t.Fatalf("direct must not claim a Kharej cap: %q", got)
+	}
+	u := ls
+	u.PeerMax, u.EffMax, u.LimitBy = 0, 0, "" // older Kharej: cap unknown
+	if got := patternLine(u); strings.Contains(got, "capped") {
+		t.Fatalf("unknown cap must not be claimed: %q", got)
+	}
+}

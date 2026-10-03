@@ -808,9 +808,22 @@ func (p *dgPool) decide(s apSample) int {
 	p.dec = d
 	p.target.Store(int32(d.target))
 	if d.note != "" {
-		p.log("dg: %s", d.note)
+		p.log("dg: %s%s", d.note, p.capNote(d.target))
 	}
 	return d.target
+}
+
+// capNote (display only): on the REVERSE edge a target above the ceiling the
+// Kharej exit reported is clamped there by the exit — say so in the log line.
+// Direct exits do not clamp. Nothing here changes the target.
+func (p *dgPool) capNote(target int) string {
+	if !p.accept {
+		return ""
+	}
+	if pm := p.peerMaxNow(); pm > 0 && target > pm {
+		return fmt.Sprintf(" — capped at %d by the Kharej server (its max_links), so at most %d carriers run", pm, pm)
+	}
+	return ""
 }
 
 // reconcile moves the pool to T serving carriers. Growing un-retires the
