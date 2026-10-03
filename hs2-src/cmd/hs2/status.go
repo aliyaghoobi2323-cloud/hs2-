@@ -231,7 +231,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		base.RecMax, base.RAMMB = tune.RecommendedMaxLinks(ramMB, cpus), ramMB
 	}
 	warm := &warmWriter{path: warmPath(cfgPath), start: time.Now(), after: warmAfter}
+	tcpMem := &tcpMemWatch{proc: "/proc", logf: log.Printf}
 	write := func() {
+		tcpMem.check()
 		s := stats()
 		ls := base
 		ls.Links, ls.Target, ls.Min, ls.Max = s.Links, s.Target, s.Min, s.Max
@@ -742,4 +744,29 @@ func endpointLabel(fc fileConfig) string {
 		return "connects to " + fc.Addr
 	}
 	return "listens on " + fc.Addr
+}
+
+// tcpMemWatch logs once when the kernel's TCP buffer memory passes its
+// pressure mark (tcp_mem[1]) — every TCP socket's buffers are then squeezed,
+// and a one-shot hs2 doctor rarely catches it — and once when it is back.
+type tcpMemWatch struct {
+	proc  string
+	logf  func(string, ...any)
+	above bool
+}
+
+func (w *tcpMemWatch) check() {
+	mem, press, hard, ok := readTCPMem(w.proc)
+	if !ok || press <= 0 {
+		return
+	}
+	mb := func(pages int) int { return pages * os.Getpagesize() >> 20 }
+	switch {
+	case !w.above && mem >= press:
+		w.above = true
+		w.logf("kernel TCP memory: %d MB in TCP buffers, above the kernel's pressure mark (%d MB of %d MB, tcp_mem) — every TCP socket's buffers are being squeezed; look for stalled readers (hs2 logs \"whose app had taken nothing\")", mb(mem), mb(press), mb(hard))
+	case w.above && mem < press*9/10:
+		w.above = false
+		w.logf("kernel TCP memory: back below the pressure mark (%d MB of %d MB)", mb(mem), mb(press))
+	}
 }

@@ -466,6 +466,12 @@ func checkPoolBounds(fc fileConfig, bad, warn func(string, ...any)) {
 	case fc.MinLinks > 0 && fc.MaxLinks > 0 && fc.MinLinks > fc.MaxLinks:
 		bad(`"min_links" (%d) is larger than "max_links" (%d)`, fc.MinLinks, fc.MaxLinks)
 	case fc.MaxLinks > maxSaneLinks || fc.MinLinks > maxSaneLinks:
-		warn(`"max_links"/"min_links" above %d: every link is a TLS connection with up to ~12 MiB of buffers under load — 0 (auto) sizes it from this server's RAM`, maxSaneLinks)
+		warn(`"max_links"/"min_links" above %d: every link is a connection with up to ~12 MiB of buffers under load — 0 (auto) sizes it from this server's RAM`, maxSaneLinks)
+	case fc.MinLinks > minLinksHigh:
+		warn(`"min_links" %d keeps that many links open at all times, idle or not — always visible between the two servers, and up to ~12 MiB of buffers each under load; the pool grows on its own when the load needs it (a min_links of 2–8 is typical)`, fc.MinLinks)
 	}
 }
+
+// minLinksHigh: a min_links above this is a permanent pattern of links, so
+// check warns about it.
+const minLinksHigh = 64

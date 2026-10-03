@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
@@ -65,9 +66,74 @@ type Plan struct {
 // KV is one sysctl key/value.
 type KV struct{ Key, Val string }
 
-// Detect returns total RAM in MB and the CPU core count.
+// Detect returns the RAM in MB and the CPU cores this process may use: the
+// machine's, or its cgroup's limits where lower (a container, or a systemd
+// unit with MemoryMax/CPUQuota) — sizing from the whole host there would give
+// a 2 GB container the ceiling and memory limit of a 64 GB one. The Go
+// runtime already bounds GOMAXPROCS by the cgroup's CPU limit.
 func Detect() (ramMB, cpus int) {
-	return detectRAMMB(), runtime.NumCPU()
+	ramMB = detectRAMMB()
+	if lim := cgroupMemLimitMB("/proc/self/cgroup", "/sys/fs/cgroup"); lim > 0 && (ramMB == 0 || lim < ramMB) {
+		ramMB = lim
+	}
+	return ramMB, min(runtime.NumCPU(), runtime.GOMAXPROCS(0))
+}
+
+// cgroupMemLimitMB is the memory limit of this process's cgroup in MB, the
+// lowest along its path (0 = none found). selfCgroup is /proc/self/cgroup,
+// root the cgroup mount.
+func cgroupMemLimitMB(selfCgroup, root string) int {
+	b, err := os.ReadFile(selfCgroup)
+	if err != nil {
+		return 0
+	}
+	best := int64(0)
+	take := func(v int64) {
+		// "no limit" reads as "max" (v2) or a huge number (v1).
+		if v > 0 && v < 1<<50 && (best == 0 || v < best) {
+			best = v
+		}
+	}
+	readInt := func(path string) (int64, bool) {
+		c, err := os.ReadFile(path)
+		if err != nil {
+			return 0, false
+		}
+		v, err := strconv.ParseInt(strings.TrimSpace(string(c)), 10, 64)
+		return v, err == nil
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		f := strings.SplitN(line, ":", 3)
+		if len(f) != 3 {
+			continue
+		}
+		switch {
+		case f[0] == "0" && f[1] == "": // cgroup v2: memory.max, every level up to the root
+			for p := filepath.Join(root, f[2]); ; p = filepath.Dir(p) {
+				if v, ok := readInt(filepath.Join(p, "memory.max")); ok {
+					take(v)
+				}
+				if p == root || len(p) <= len(root) {
+					break
+				}
+			}
+		case strings.Contains(","+f[1]+",", ",memory,"): // cgroup v1: the hierarchical limit
+			dir := filepath.Join(root, "memory", f[2])
+			if st, err := os.ReadFile(filepath.Join(dir, "memory.stat")); err == nil {
+				for _, l := range strings.Split(string(st), "\n") {
+					if g := strings.Fields(l); len(g) == 2 && g[0] == "hierarchical_memory_limit" {
+						if v, err := strconv.ParseInt(g[1], 10, 64); err == nil {
+							take(v)
+						}
+					}
+				}
+			}
+			if v, ok := readInt(filepath.Join(dir, "memory.limit_in_bytes")); ok {
+				take(v)
+			}
+		}
+	}
+	return int(best >> 20)
 }
 
 func detectRAMMB() int {
@@ -287,6 +353,13 @@ func Build(cfg Config, ramMB, cpus int, availCC, availQ func(string) bool) *Plan
 	add("net.ipv4.tcp_slow_start_after_idle", "0")
 	add("net.ipv4.tcp_mtu_probing", "1")
 	add("net.ipv4.tcp_fin_timeout", "20")
+	// tcp_tw_reuse=1: an OUTGOING connection may reuse a port still in
+	// TIME_WAIT (timestamps keep it safe). The dgtun forwarders and a stream
+	// exit whose panel is not on 127.x open one outgoing connection per user,
+	// and ~60 s of TIME_WAIT per closed one capped new connections at about
+	// (28k ports - open ones) / 60 s — ~370/s with 6000 open — after which
+	// connect() fails. The kernel default (2) reuses only on loopback.
+	add("net.ipv4.tcp_tw_reuse", "1")
 	// ip_local_port_range is deliberately NOT touched: widening it down into
 	// 10240+ makes ports that panels commonly bind for inbounds (x-ui, 10000–32767)
 	// ephemeral, so a new inbound could fail with "address in use". The kernel

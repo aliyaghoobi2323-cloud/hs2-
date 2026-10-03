@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 )
 
@@ -62,6 +64,8 @@ func doctorCmd(args []string) {
 			checkManyLinks(d, fc, *cfgPath)
 			checkPorts(d, fc, *cfgPath)
 			checkTCPMem(d, "/proc")
+			checkConntrack(d, "/proc")
+			checkTunnelsTogether(d)
 		} else {
 			d.info("live checks", "skipped — the config does not parse as JSON (see the config error above)")
 		}
@@ -463,10 +467,36 @@ func checkManyLinks(d *doctorReport, fc fileConfig, cfgPath string) {
 	if eff <= manyLinksAt {
 		return
 	}
-	d.info("link count visibility", fmt.Sprintf("this tunnel may open up to %d parallel TLS connections between this server and the other one. "+
+	sizing := fmt.Sprintf("about one per %d active connections", perLinkOf(fc))
+	if fc.Mode != "dial" { // a reverse Kharej opens what the Iran server's autopilot asks for
+		sizing = "as many as the Iran server's autopilot asks for"
+	}
+	d.info("link count visibility", fmt.Sprintf("this tunnel may open up to %d %s between this server and the other one. "+
 		"That many between one fixed pair of IPs is more unusual to an outside observer than a handful: the pool opens them only under load "+
-		"(about one per %d active connections), at most ~10 new ones a second, and closes them again in quiet hours — but at peak they are all visible at once. "+
-		"Lowering max_links trades peak capacity for a smaller pattern; it is the owner's decision", eff, perLinkOf(fc)))
+		"(%s), at most ~10 new ones a second, and closes them again in quiet hours — but at peak they are all visible at once. "+
+		"Lowering max_links trades peak capacity for a smaller pattern; it is the owner's decision", eff, linkUnit(fc), sizing))
+}
+
+// linkUnit names what one pool link looks like on the wire, for the
+// visibility note: a TLS connection, or for dgtun the encapsulation's flow.
+func linkUnit(fc fileConfig) string {
+	if fc.Carrier != "dgtun" {
+		return "parallel TLS connections"
+	}
+	switch e := encapName(fc); e {
+	case "udp":
+		return "parallel UDP flows (one source port each)"
+	case "icmp":
+		return "parallel ping sessions (one echo identifier each)"
+	case "ipx":
+		p := fc.Proto
+		if p == 0 {
+			p = encap.DefaultIPXProto
+		}
+		return fmt.Sprintf("parallel IP-protocol-%d flows (one link id each, all on one IP pair)", p)
+	default:
+		return fmt.Sprintf("parallel %s flows (one link id each, all on one IP pair)", strings.ToUpper(e))
+	}
 }
 
 func perLinkOf(fc fileConfig) int {
@@ -480,15 +510,35 @@ func perLinkOf(fc fileConfig) int {
 // links plus thousands of user connections, stalled readers fill buffers here
 // first.
 func checkTCPMem(d *doctorReport, proc string) {
+	mem, press, hard, ok := readTCPMem(proc)
+	if !ok {
+		d.info("kernel TCP memory", "skipped — /proc/net/sockstat or tcp_mem is not visible here (a container or a network namespace)")
+		return
+	}
+	page := os.Getpagesize()
+	mb := func(pages int) int { return pages * page >> 20 }
+	switch {
+	case hard > 0 && mem >= hard:
+		d.warn("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers, at the kernel's hard limit (%d MB, tcp_mem) — packets are being dropped on every TCP socket; look for stalled readers (hs2 logs \"whose app had taken nothing\")", mb(mem), mb(hard)))
+	case press > 0 && mem >= press:
+		d.warn("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers, above the kernel's pressure mark (%d MB of %d MB, tcp_mem) — socket buffers are being squeezed", mb(mem), mb(press), mb(hard)))
+	default:
+		d.ok("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers (pressure at %d MB, limit %d MB)", mb(mem), mb(press), mb(hard)))
+	}
+}
+
+// readTCPMem reads the kernel's TCP buffer memory and its tcp_mem pressure
+// and hard marks, in pages.
+func readTCPMem(proc string) (mem, press, hard int, ok bool) {
 	sock, err := os.ReadFile(proc + "/net/sockstat")
 	if err != nil {
-		return
+		return 0, 0, 0, false
 	}
 	lim, err := os.ReadFile(proc + "/sys/net/ipv4/tcp_mem")
 	if err != nil {
-		return
+		return 0, 0, 0, false
 	}
-	mem := -1
+	mem = -1
 	for _, line := range strings.Split(string(sock), "\n") {
 		f := strings.Fields(line)
 		if len(f) > 0 && f[0] == "TCP:" {
@@ -501,18 +551,69 @@ func checkTCPMem(d *doctorReport, proc string) {
 	}
 	th := strings.Fields(string(lim))
 	if mem < 0 || len(th) != 3 {
+		return 0, 0, 0, false
+	}
+	press, _ = strconv.Atoi(th[1])
+	hard, _ = strconv.Atoi(th[2])
+	return mem, press, hard, true
+}
+
+// checkConntrack warns when the connection-tracking table is filling: when it
+// is full the kernel drops every NEW connection ("nf_conntrack: table full"
+// in dmesg) — each user connection is one or two entries here, and a small
+// server's default table is a few thousand. Nothing is said where conntrack
+// is not in use.
+func checkConntrack(d *doctorReport, proc string) {
+	cb, err1 := os.ReadFile(proc + "/sys/net/netfilter/nf_conntrack_count")
+	mb, err2 := os.ReadFile(proc + "/sys/net/netfilter/nf_conntrack_max")
+	if err1 != nil || err2 != nil {
 		return
 	}
-	press, _ := strconv.Atoi(th[1])
-	hard, _ := strconv.Atoi(th[2])
-	page := os.Getpagesize()
-	mb := func(pages int) int { return pages * page >> 20 }
-	switch {
-	case hard > 0 && mem >= hard:
-		d.warn("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers, at the kernel's hard limit (%d MB, tcp_mem) — packets are being dropped on every TCP socket; look for stalled readers (hs2 logs \"stopped reading\")", mb(mem), mb(hard)))
-	case press > 0 && mem >= press:
-		d.warn("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers, above the kernel's pressure mark (%d MB of %d MB, tcp_mem) — socket buffers are being squeezed", mb(mem), mb(press), mb(hard)))
-	default:
-		d.ok("kernel TCP memory", fmt.Sprintf("%d MB in TCP buffers (pressure at %d MB, limit %d MB)", mb(mem), mb(press), mb(hard)))
+	n, _ := strconv.Atoi(strings.TrimSpace(string(cb)))
+	max, _ := strconv.Atoi(strings.TrimSpace(string(mb)))
+	if max <= 0 {
+		return
 	}
+	switch pct := n * 100 / max; {
+	case pct >= 70:
+		d.warn("conntrack table", fmt.Sprintf("%d of %d entries (%d%%) — when it is full the kernel drops every new connection (\"nf_conntrack: table full\" in dmesg); raise net.netfilter.nf_conntrack_max", n, max, pct))
+	default:
+		d.ok("conntrack table", fmt.Sprintf("%d of %d entries (%d%%)", n, max, pct))
+	}
+}
+
+// checkTunnelsTogether: each tunnel sizes its auto link ceiling and its Go
+// memory limit (half the RAM) from the WHOLE server, so several pooled
+// tunnels on one server can together allow more link buffers than it holds.
+// With more than one running, doctor adds them up.
+func checkTunnelsTogether(d *doctorReport) {
+	files, _ := filepath.Glob(filepath.Join(statusRunDir, "*.status.json"))
+	n, links := 0, 0
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var ls liveStatus
+		if json.Unmarshal(b, &ls) != nil || ls.CfgMax <= 0 || time.Now().Unix()-ls.Updated > 6 {
+			continue
+		}
+		n++
+		links += ls.CfgMax
+	}
+	if n < 2 {
+		return
+	}
+	ram, _ := detectHW()
+	worst := links * tune.LinkWorstCaseMiB
+	msg := fmt.Sprintf("%d pooled tunnels run on this server, up to %d links in all: worst-case link buffers %.1f GB", n, links, float64(worst)/1024)
+	if ram > 0 {
+		pct := worst * 100 / ram
+		msg += fmt.Sprintf(" (%d%% of %.1f GB RAM)", pct, float64(ram)/1024)
+		if pct > 40 {
+			d.warn("tunnels together", msg+" — each one sizes its auto ceiling and Go memory limit from the whole server; give each a fixed max_links of about its auto value / "+strconv.Itoa(n))
+			return
+		}
+	}
+	d.info("tunnels together", msg+" — each one sizes its auto ceiling from the whole server")
 }

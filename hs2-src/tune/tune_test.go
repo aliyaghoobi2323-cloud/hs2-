@@ -1,6 +1,8 @@
 package tune
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -225,5 +227,54 @@ func TestUndoLegacyPortRange(t *testing.T) {
 		if got != c.undone || wrote != c.written {
 			t.Errorf("cur=%q: undone=%v wrote=%q, want %v %q", c.cur, got, wrote, c.undone, c.written)
 		}
+	}
+}
+
+// Outgoing connections may reuse TIME_WAIT ports (the dgtun forwarders and a
+// non-loopback panel open one per user).
+func TestBuildSetsTimeWaitReuse(t *testing.T) {
+	p := Build(Config{}, 8192, 4, nil, nil)
+	for _, kv := range p.Sysctls {
+		if kv.Key == "net.ipv4.tcp_tw_reuse" {
+			if kv.Val != "1" {
+				t.Fatalf("tcp_tw_reuse=%s, want 1", kv.Val)
+			}
+			return
+		}
+	}
+	t.Fatal("tcp_tw_reuse not in the plan")
+}
+
+// A cgroup's memory limit lowers the RAM the sizing sees (v2: the lowest
+// memory.max on the way up; v1: the hierarchical limit); "max" is no limit.
+func TestCgroupMemLimit(t *testing.T) {
+	root := t.TempDir()
+	self := filepath.Join(t.TempDir(), "cgroup")
+	write := func(p, v string) {
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		os.WriteFile(p, []byte(v), 0o644)
+	}
+	// v2, a systemd unit under a slice that has the lower limit
+	write(self, "0::/system.slice/hs2.service\n")
+	write(filepath.Join(root, "system.slice/hs2.service/memory.max"), "max\n")
+	write(filepath.Join(root, "system.slice/memory.max"), "2147483648\n")
+	if got := cgroupMemLimitMB(self, root); got != 2048 {
+		t.Fatalf("v2 slice limit: %d MB, want 2048", got)
+	}
+	// v2, no limit anywhere
+	os.WriteFile(filepath.Join(root, "system.slice/memory.max"), []byte("max\n"), 0o644)
+	if got := cgroupMemLimitMB(self, root); got != 0 {
+		t.Fatalf("v2 no limit: %d", got)
+	}
+	// v1: the hierarchical limit from memory.stat
+	root1 := t.TempDir()
+	write(self, "4:memory:/docker/abc\n0::/\n")
+	write(filepath.Join(root1, "memory/docker/abc/memory.stat"), "cache 0\nhierarchical_memory_limit 1073741824\n")
+	write(filepath.Join(root1, "memory/docker/abc/memory.limit_in_bytes"), "9223372036854771712\n")
+	if got := cgroupMemLimitMB(self, root1); got != 1024 {
+		t.Fatalf("v1: %d MB, want 1024", got)
+	}
+	if got := cgroupMemLimitMB(filepath.Join(t.TempDir(), "none"), root1); got != 0 {
+		t.Fatalf("unreadable: %d", got)
 	}
 }

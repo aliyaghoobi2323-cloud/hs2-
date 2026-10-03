@@ -3227,8 +3227,14 @@ tm_tune_links(){ # unit cfg
     *)  curmx="$cur_max"; keepmx="$cur_max" ;;
   esac
   [ -n "$recwhy" ] && say "  This server's hardware: max $recwhy."
-  if [ -n "$rec" ] && [ "$rec" -gt 64 ]; then
-    say "  ${C_D}Note: at peak this means up to $rec parallel TLS connections between the two servers —"
+  # The note follows the ceiling that applies: a fixed number as written,
+  # auto as this server's hardware gives it.
+  local effmx="$rec"
+  case "$keepmx" in 0|'') ;; *) effmx="$keepmx" ;; esac
+  if [ -n "$effmx" ] && [ "$effmx" -gt 64 ]; then
+    local unit="parallel TLS connections"
+    [ "$(jget "$cfg" carrier)" = dgtun ] && unit="parallel carriers (flows of the dgtun encapsulation)"
+    say "  ${C_D}Note: at peak this means up to $effmx $unit between the two servers —"
     say "  more unusual to an outside observer than a handful. Opened only under load, closed in"
     say "  quiet hours; a lower max trades peak capacity for a smaller pattern (your call).${C_0}"
   fi

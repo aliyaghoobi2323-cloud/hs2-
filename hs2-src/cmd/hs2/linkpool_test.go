@@ -538,3 +538,95 @@ func TestDgtunAutoCap(t *testing.T) {
 		t.Errorf("status ceiling line: %q", s)
 	}
 }
+
+// The visibility note names what one link looks like on the wire, and on a
+// reverse Kharej it does not quote a per_link that has no effect there.
+func TestVisibilityNotePerCarrier(t *testing.T) {
+	useTempStatusDir(t)
+	pinHW(t, 17408, 20)
+	cfg := filepath.Join(t.TempDir(), "v.json")
+	for _, c := range []struct {
+		fc   fileConfig
+		want string
+	}{
+		{fileConfig{Mode: "dial", Carrier: "mtcp", MaxLinks: 200}, "200 parallel TLS connections"},
+		{fileConfig{Mode: "dial", Carrier: "dgtun", MaxLinks: 100}, "100 parallel UDP flows"},
+		{fileConfig{Mode: "dial", Carrier: "dgtun", Encap: "icmp", MaxLinks: 100}, "100 parallel ping sessions"},
+		{fileConfig{Mode: "dial", Carrier: "dgtun", Encap: "gre", MaxLinks: 100}, "100 parallel GRE flows"},
+		{fileConfig{Mode: "dial", Carrier: "dgtun", Encap: "ipx", Proto: 99, MaxLinks: 100}, "100 parallel IP-protocol-99 flows"},
+	} {
+		d := &doctorReport{}
+		checkManyLinks(d, c.fc, cfg)
+		if l := strings.Join(d.lines, ""); !strings.Contains(l, c.want) || !strings.Contains(l, "one per 8 active connections") {
+			t.Errorf("%+v: %v", c.fc, d.lines)
+		}
+	}
+	d := &doctorReport{}
+	checkManyLinks(d, fileConfig{Mode: "listen", Reverse: true, Carrier: "mtcp", MaxLinks: 200}, cfg)
+	if l := strings.Join(d.lines, ""); strings.Contains(l, "one per 8") || !strings.Contains(l, "Iran server's autopilot") {
+		t.Errorf("reverse Kharej: %v", d.lines)
+	}
+}
+
+// A min_links floor above 64 is a permanent, always-visible pattern: warned.
+func TestCheckWarnsHighMinLinks(t *testing.T) {
+	var warns []string
+	checkPoolBounds(fileConfig{MinLinks: 100, MaxLinks: 0}, func(string, ...any) { t.Fatal("refused") },
+		func(f string, a ...any) { warns = append(warns, fmt.Sprintf(f, a...)) })
+	if len(warns) != 1 || !strings.Contains(warns[0], "keeps that many links open at all times") {
+		t.Fatalf("warnings: %v", warns)
+	}
+	warns = nil
+	checkPoolBounds(fileConfig{MinLinks: 8}, func(string, ...any) {}, func(f string, a ...any) { warns = append(warns, f) })
+	if len(warns) != 0 {
+		t.Fatalf("min_links 8 warned: %v", warns)
+	}
+}
+
+// Where the TCP memory files are not visible doctor says it skipped the check
+// instead of saying nothing; the conntrack table warns at 70%; the status
+// writer logs once when TCP memory passes its pressure mark, and once back.
+func TestDoctorConntrackAndTCPMemWatch(t *testing.T) {
+	d := &doctorReport{}
+	checkTCPMem(d, t.TempDir())
+	if l := strings.Join(d.lines, ""); !strings.Contains(l, "skipped") {
+		t.Fatalf("missing files: %v", d.lines)
+	}
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "sys/net/netfilter"), 0o755)
+	set := func(n, max int) {
+		os.WriteFile(filepath.Join(dir, "sys/net/netfilter/nf_conntrack_count"), []byte(fmt.Sprintf("%d\n", n)), 0o644)
+		os.WriteFile(filepath.Join(dir, "sys/net/netfilter/nf_conntrack_max"), []byte(fmt.Sprintf("%d\n", max)), 0o644)
+	}
+	set(3000, 8192)
+	d = &doctorReport{}
+	checkConntrack(d, dir)
+	if d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "3000 of 8192") {
+		t.Fatalf("36%%: %v", d.lines)
+	}
+	set(6000, 8192)
+	d = &doctorReport{}
+	checkConntrack(d, dir)
+	if d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "table full") {
+		t.Fatalf("73%%: %v", d.lines)
+	}
+	d = &doctorReport{}
+	checkConntrack(d, t.TempDir()) // no conntrack here: nothing to say
+	if len(d.lines) != 0 {
+		t.Fatalf("no conntrack: %v", d.lines)
+	}
+
+	proc := t.TempDir()
+	os.MkdirAll(filepath.Join(proc, "net"), 0o755)
+	os.MkdirAll(filepath.Join(proc, "sys/net/ipv4"), 0o755)
+	os.WriteFile(filepath.Join(proc, "sys/net/ipv4/tcp_mem"), []byte("1000\t2000\t3000\n"), 0o644)
+	var logs []string
+	w := &tcpMemWatch{proc: proc, logf: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }}
+	for _, mem := range []int{500, 2100, 2500, 2200, 1700} {
+		os.WriteFile(filepath.Join(proc, "net/sockstat"), []byte(fmt.Sprintf("TCP: inuse 5 orphan 0 tw 0 alloc 6 mem %d\n", mem)), 0o644)
+		w.check()
+	}
+	if len(logs) != 2 || !strings.Contains(logs[0], "above the kernel's pressure mark") || !strings.Contains(logs[1], "back below") {
+		t.Fatalf("pressure log: %q", logs)
+	}
+}
