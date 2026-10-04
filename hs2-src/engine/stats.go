@@ -146,6 +146,13 @@ func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, l
 		if !l.Alive() || ctx.Err() != nil {
 			return true
 		}
+		// An exit that answered kindInfo is newer than kindStats: its stream
+		// ended for another reason — a link failing slowly, which a stuck
+		// path showed in the load test ("older hs2" logged with both
+		// servers current) — so try again later.
+		if mtr.peerInfo.Load() != nil {
+			return true
+		}
 		mtr.statsState.Store(statsUnsupported)
 		if statsOldLogged.CompareAndSwap(false, true) && logf != nil {
 			logf("mtcp: the other server does not report link stats (older hs2) — download pressure unknown; sizing by activity and upload pressure until it is upgraded")

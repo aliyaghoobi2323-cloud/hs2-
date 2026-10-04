@@ -848,6 +848,11 @@ downloads: 5,416 open connections. Old = the main build before this phase.
   connection(s) on degraded links that moved no data for 15s`, and at the
   ceiling `N degraded link(s) (…) closed with their M remaining
   connection(s): the pool is at its ceiling and needs their slots`.
+- A link failing slowly during the stats handshake was taken for an older
+  exit: `the other server does not report link stats (older hs2)` with both
+  servers current (seen on stuck links in the load test, old build too). An
+  exit that answered the info exchange is newer than stats, so the edge now
+  just tries again.
 - MPTCP off: every listener is plain TCP (see the finding above). The
   carrier, user-port and dgtun listeners set it explicitly; go.mod's `godebug
   multipathtcp=0` covers the rest and the tests.

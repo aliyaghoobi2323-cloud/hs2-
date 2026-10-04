@@ -525,3 +525,34 @@ func TestStatsHandshakeTimeoutIsNotOldExit(t *testing.T) {
 	v2Wait(t, 15*time.Second, "a second handshake after the timeout", func() bool { return opened.Load() >= 2 })
 	waitStatsState(t, p.edge.m, statsOK, 5*time.Second)
 }
+
+// An exit that answered kindInfo is newer than kindStats, so a stats stream
+// it ends (here at once, as an older exit would) is not taken for an older
+// exit: no "older hs2" line, the link is not marked unsupported, and the edge
+// keeps trying.
+func TestStatsNotOlderWhenExitAnsweredInfo(t *testing.T) {
+	statsOldLogged.Store(false)
+	lg := &v2Log{}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := newStatsPair(t, ctx, nil, previousExit)
+	p.edge.m.peerInfo.Store(&peerInfo{MaxLinks: 32})
+	done := p.startStats(t, ctx, lg.logf)
+	time.Sleep(statsHandshakeTimeout / 2)
+	if s := p.edge.m.statsState.Load(); s == statsUnsupported {
+		t.Fatal("a current exit was marked as not reporting stats")
+	}
+	select {
+	case <-done:
+		t.Fatal("openStats gave up on a current exit")
+	default:
+	}
+	if n := lg.count("does not report link stats"); n != 0 {
+		t.Fatalf("logged the older-exit fallback for a current exit:\n%s", lg)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(statsReopenAfter + 2*time.Second):
+		t.Fatal("openStats did not stop with its context")
+	}
+}
