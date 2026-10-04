@@ -597,24 +597,17 @@ func tuneCmd(args []string) {
 // a hidden default). --why adds the detected hardware and the rule that gave
 // the number, for the human-facing menu (the number stays the first field). It is read-only and needs no config or root.
 //
-// -c cfg applies what the config's carrier adds to the hardware rule (dgtun's
-// cap on its auto ceiling, see dgAutoCap).
+// -c cfg is accepted for the installer, which passes it: it named a config
+// whose carrier lowered the rule (dgtun's interim cap, lifted after its
+// 300-carrier load test); every carrier now uses the same rule.
 func recommendLinksCmd(args []string) {
 	fs := flag.NewFlagSet("recommend-links", flag.ExitOnError)
 	why := fs.Bool("why", false, "also print the detected hardware and the rule")
-	cfgPath := fs.String("c", "", "config whose carrier to take into account")
+	fs.String("c", "", "config (accepted; every carrier uses the same rule)")
 	fs.Parse(args)
 	ramMB, cpus := detectHW()
 	maxLinks := tune.RecommendedMaxLinks(ramMB, cpus)
 	reason := tune.MaxLinksReason(ramMB, cpus)
-	if *cfgPath != "" {
-		var fc fileConfig
-		if raw, err := os.ReadFile(*cfgPath); err == nil && json.Unmarshal(raw, &fc) == nil {
-			if c, w := dgAutoCap(fc); c > 0 && maxLinks > c {
-				maxLinks, reason = c, reason+"; lowered — "+w
-			}
-		}
-	}
 	if !*why {
 		fmt.Println(maxLinks)
 		return
@@ -693,51 +686,10 @@ func linkCeiling(fc fileConfig) (max int, mode, profile string) {
 	case fc.MaxLinks > 0:
 		return fc.MaxLinks, ceilFixed, profile
 	case fc.maxLinksSet:
-		auto := tune.RecommendedMaxLinks(ram, cpus)
-		if c, _ := dgAutoCap(fc); c > 0 && auto > c {
-			auto = c
-		}
-		return auto, ceilAuto, profile
+		return tune.RecommendedMaxLinks(ram, cpus), ceilAuto, profile
 	default:
 		return legacyMaxLinks, ceilDefault, profile
 	}
-}
-
-// dgtun's AUTO ceiling is held below the stream pools' for now: over a raw
-// encapsulation (icmp/gre/ipip/ipx) at dgRawAutoMax until the shared dial
-// socket (one per peer instead of one per carrier) has been load-tested at
-// 300 carriers, and over udp at dgUDPAutoMax (FEC sizes its parity from each
-// carrier's own rate, which is low when the load is spread over very many).
-// An explicit max_links is used as written; absent stays the historical 32.
-const (
-	dgRawAutoMax = 64
-	dgUDPAutoMax = 128
-)
-
-// dgAutoCap is dgtun's cap on the auto ceiling and why (0, "" for other
-// carriers).
-func dgAutoCap(fc fileConfig) (int, string) {
-	if fc.Carrier != "dgtun" {
-		return 0, ""
-	}
-	if e := encapName(fc); e != "udp" {
-		return dgRawAutoMax, fmt.Sprintf("dgtun over %s: auto holds at most %d carriers until its 300-carrier load test", e, dgRawAutoMax)
-	}
-	return dgUDPAutoMax, fmt.Sprintf("dgtun over udp: auto holds at most %d carriers (FEC at a low per-carrier rate)", dgUDPAutoMax)
-}
-
-// dgCapNote is the line that says the dgtun cap lowered the auto ceiling
-// here ("" when it did not).
-func dgCapNote(fc fileConfig) string {
-	c, why := dgAutoCap(fc)
-	if c == 0 || !fc.maxLinksSet || fc.MaxLinks > 0 {
-		return ""
-	}
-	ram, cpus := detectHW()
-	if tune.RecommendedMaxLinks(ram, cpus) <= c {
-		return ""
-	}
-	return why
 }
 
 // ceilingLogLine is the one startup line saying which link-pool ceiling this
@@ -752,9 +704,6 @@ func ceilingLogLine(fc fileConfig) string {
 	switch mode {
 	case ceilAuto:
 		how = fmt.Sprintf("auto from this server's hardware (%s); re-derived at every start", why)
-		if n := dgCapNote(fc); n != "" {
-			how = fmt.Sprintf("auto from this server's hardware (%s), lowered — %s; re-derived at every start", why, n)
-		}
 	case ceilFixed:
 		how = fmt.Sprintf("fixed by max_links in the config (auto would give %d here: %s)", tune.RecommendedMaxLinks(ram, cpus), why)
 	default:

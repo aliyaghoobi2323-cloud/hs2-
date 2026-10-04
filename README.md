@@ -74,12 +74,12 @@ traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4 
 (An explicit `0` used to mean "the default, 32" and now means auto — only a
 hand-edited config can contain it; set a number to keep it fixed.)
 
-**dgtun, for now:** its auto ceiling stays at **64** over a raw encapsulation
-(icmp / gre / ipip / ipx) until its 300-carrier load test is done, and at
-**128** over udp (FEC sizes its parity from each carrier's own rate, which is
-low when the load is spread over very many). The start line, `hs2 status`,
-`hs2 doctor` and the Link pool screen say so ("lowered — dgtun over gre …").
-An explicit `max_links` is used as written.
+**dgtun** uses the same auto ceiling. Its interim cap (64 carriers over a raw
+encapsulation, 128 over udp) was lifted after the 300-carrier load test: over
+gre, 300 carriers sharing one raw socket per peer carried 176 Mbit/s where one
+socket per carrier (older builds) carried 28; over udp, 300 carriers ran with
+echo p50 90 ms / p99 121 ms and no dropped connection, at ~5% more CPU than
+128. An explicit `max_links` is used as written.
 
 **Why the ceiling depends on RAM.** Under a stalled reader each link's session
 may hold up to 8 MiB it could not deliver yet — about **12 MiB** with smux's

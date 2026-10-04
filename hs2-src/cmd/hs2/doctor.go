@@ -365,9 +365,6 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 		case running > 0 && cfgMax > running:
 			d.info(name, fmt.Sprintf("auto: running with %d; a start now would give %d (this %s; the hardware or the config changed since the daemon started) — restart the tunnel to use it%s", running, cfgMax, hw, eff))
 		default:
-			if n := dgCapNote(fc); n != "" {
-				hw += ", lowered — " + n
-			}
 			d.ok(name, fmt.Sprintf("auto: %d links from this %s%s — re-derived at every start%s", rawMax, hw, lift, eff))
 		}
 		return

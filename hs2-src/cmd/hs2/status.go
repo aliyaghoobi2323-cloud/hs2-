@@ -84,7 +84,6 @@ type liveStatus struct {
 	CfgMax      int    `json:"cfg_max,omitempty"`
 	CeilRaw     int    `json:"ceiling_raw,omitempty"`  // the ceiling before a higher min_links lifts it
 	CeilMode    string `json:"ceiling_mode,omitempty"` // auto | fixed | default (see linkCeiling)
-	CeilNote    string `json:"ceiling_note,omitempty"` // what lowered the auto ceiling (dgtun's cap), if anything
 	Profile     string `json:"profile,omitempty"`      // low | medium | high
 	RecMax      int    `json:"rec_max,omitempty"`      // ceiling this hardware suggests (drift check)
 	RAMMB       int    `json:"ram_mb,omitempty"`       // detected RAM, MB (for the "why")
@@ -227,7 +226,6 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		ramMB, cpus := detectHW()
 		_, base.CfgMax, _ = linkEnvelope(fc)
 		base.CeilRaw, base.CeilMode, base.Profile = linkCeiling(fc)
-		base.CeilNote = dgCapNote(fc)
 		base.RecMax, base.RAMMB = tune.RecommendedMaxLinks(ramMB, cpus), ramMB
 	}
 	warm := &warmWriter{path: warmPath(cfgPath), start: time.Now(), after: warmAfter}
@@ -542,9 +540,6 @@ func ceilingWhy(ls liveStatus) string {
 	switch ls.CeilMode {
 	case ceilAuto:
 		how = "auto — " + hw
-		if ls.CeilNote != "" {
-			how += ", lowered — " + ls.CeilNote
-		}
 	case ceilDefault:
 		how = "the default — max_links not set; " + hw
 	default:

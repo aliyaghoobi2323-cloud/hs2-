@@ -730,8 +730,11 @@ Both servers should run this build; mixed versions keep working.
 - Auto (`max_links: 0`): one link per 48 MB of RAM, at most 300, never below
   the old 32/48/64 profile; one core keeps its profile value, 2–3 cores at
   most 128. Explicit numbers are never rewritten; absent stays 32.
-- dgtun's auto ceiling stays at 64 over a raw encapsulation and 128 over udp
-  until its own load test (said in the start line, status, doctor and menu).
+- dgtun uses the same auto ceiling. Its interim cap (64 over a raw
+  encapsulation, 128 over udp) was lifted after its load test: 300 gre
+  carriers on the shared raw socket carried 176 Mbit/s (28 with one socket per
+  carrier, the older build); 300 udp carriers ran with p99 121 ms, no dropped
+  connection, ~5% more CPU than 128.
 - Sizing reads the cgroup's limits when lower than the host's (containers,
   units with MemoryMax/CPUQuota). Go's soft memory limit is half the RAM.
 - `hs2 check` warns about `min_links` above 64. A hand-edited **Kharej**
