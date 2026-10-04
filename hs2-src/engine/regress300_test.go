@@ -185,3 +185,26 @@ func TestExitOutageLoggedAtStartAndEnd(t *testing.T) {
 		t.Log(l)
 	}
 }
+
+// The failure that starts an outage makes its slot the scout, and that very
+// wait is capped at scoutBackoffMax: it used to be the slot's old backoff (up
+// to 8 s after a few young link deaths) while the line just logged said "every
+// ≤2s" (review: a 6.96 s gap before the scout's first retry).
+func TestOutageScoutFirstRetryIsCapped(t *testing.T) {
+	sp := newScaleTestPool(t, 1, 8, time.Millisecond)
+	s := &exitSlot{id: 7}
+	sp.mu.Lock()
+	sp.exitPool.slots = append(sp.exitPool.slots, s)
+	sp.mu.Unlock()
+	backoff := slotBackoffMax
+	for i := 0; i < 20; i++ {
+		b := backoff
+		next := sp.dialFailed(s, fmt.Errorf("connection refused"), &b)
+		if next >= scoutBackoffMax {
+			t.Fatalf("the scout's retry waits %s, want < %s", next, scoutBackoffMax)
+		}
+	}
+	if !sp.isScout(s) {
+		t.Fatal("the slot whose failure began the outage is not the scout")
+	}
+}

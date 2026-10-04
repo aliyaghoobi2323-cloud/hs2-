@@ -251,7 +251,12 @@ func (p *exitPool) isScout(s *exitSlot) bool {
 // dialFailed records a failed dial: with no link up the pool is in an outage
 // and s becomes its scout if there is none. Failure lines are folded into one
 // every slotFailLogGap; the outage's start is logged at once.
-func (p *exitPool) dialFailed(s *exitSlot, err error, next time.Duration) {
+//
+// It returns how long s waits before it dials again: its backoff, capped at
+// scoutBackoffMax when s is the outage scout — decided here, after this
+// failure may have made it the scout, so the scout's first retry is not the
+// slot's old backoff (up to 8 s) while the line just logged says ≤2 s.
+func (p *exitPool) dialFailed(s *exitSlot, err error, backoff *time.Duration) (next time.Duration) {
 	p.mu.Lock()
 	now := time.Now()
 	var line string
@@ -269,6 +274,10 @@ func (p *exitPool) dialFailed(s *exitSlot, err error, next time.Duration) {
 		}
 		p.outageFails++
 	}
+	if p.outage && p.scout == s {
+		*backoff = min(*backoff, scoutBackoffMax)
+	}
+	next = jitterDur(*backoff)
 	if line == "" {
 		p.failN++
 		p.failErr = err
@@ -289,6 +298,7 @@ func (p *exitPool) dialFailed(s *exitSlot, err error, next time.Duration) {
 	if line != "" {
 		p.log("%s", line)
 	}
+	return next
 }
 
 // dialed records a successful dial: an outage is over, and every waiting slot
@@ -347,11 +357,7 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		car, err := dial()
 		release()
 		if err != nil {
-			if p.isScout(s) {
-				backoff = min(backoff, scoutBackoffMax)
-			}
-			wait := jitterDur(backoff)
-			p.dialFailed(s, err, wait)
+			wait := p.dialFailed(s, err, &backoff)
 			if !sleepCtx(ctx, wait) {
 				return
 			}

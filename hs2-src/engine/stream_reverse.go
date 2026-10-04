@@ -66,9 +66,13 @@ func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Se
 			// far more (an older one, or its min_links above our max) would
 			// otherwise make a small edge hold hundreds of sessions.
 			if n := lm.alive(); n >= reverseAcceptCap(lm.max) { // live links: dead ones are on their way out
-				if k := lm.noteOverCap(); k > 0 {
-					logf("mtcp: refused %d reverse link(s) from %s in the last minute: this server holds at most %d (twice its max_links %d + %d) — check the Kharej server's min_links/max_links",
-						k, from, reverseAcceptCap(lm.max), lm.max, reverseAcceptSlack)
+				if k, since := lm.noteOverCap(); k > 0 {
+					when := ""
+					if since > 0 {
+						when = " in the last " + fmtDur(since)
+					}
+					logf("mtcp: refused %d reverse link(s)%s (latest from %s): this server holds at most %d (twice its max_links %d + %d) — check the Kharej server's min_links/max_links",
+						k, when, from, reverseAcceptCap(lm.max), lm.max, reverseAcceptSlack)
 				}
 				select { // see reverseRefuseHold
 				case <-ctx.Done():

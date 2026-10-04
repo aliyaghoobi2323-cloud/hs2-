@@ -640,16 +640,21 @@ func (m *LinkManager) setTarget(n int) {
 }
 
 // noteOverCap counts a refused-over-cap reverse link and, at most once a
-// minute, returns how many were refused since the last line (0: no line).
-func (m *LinkManager) noteOverCap() int {
-	n := m.overCapN.Add(1)
+// minute, returns how many were refused since the last line (0: no line) and
+// how long ago that line was (0: this is the first one) — the count can cover
+// far more than a minute when refusals come in bursts.
+func (m *LinkManager) noteOverCap() (n int, since time.Duration) {
+	k := m.overCapN.Add(1)
 	now := time.Now().UnixNano()
 	last := m.overCapLog.Load()
 	if now-last < int64(time.Minute) || !m.overCapLog.CompareAndSwap(last, now) {
-		return 0
+		return 0, 0
 	}
-	m.overCapN.Add(-n)
-	return int(n)
+	m.overCapN.Add(-k)
+	if last != 0 {
+		since = time.Duration(now - last)
+	}
+	return int(k), since
 }
 
 // targetChanged returns a channel closed at the next change of the target.
