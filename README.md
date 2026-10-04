@@ -53,7 +53,18 @@ not**:
   — users kept on a lossy link wait seconds per reply, so they are better off
   reconnecting.
   When the pool is at its ceiling and needs the slot, the bad link closes at
-  45 s with what is left, as before. Log: `link N degraded …`, `… degraded
+  45 s with what is left, as before.
+- **a stuck link** — throttled to a few packets a second, the way DPI slows a
+  flow without cutting it — moves too little for the loss rule and still
+  gets a keepalive through, so it used to keep serving while its users got
+  no answer. Each link's control ping travels behind its own traffic, so
+  how long it waits is how long the users wait: a link whose ping has
+  waited 6 s while it moves almost nothing, while other busy links answer
+  at once, is *stuck* — degraded like a bad link, and its connections that
+  moved no data for 15 s close right away. When every busy link waits (or
+  more than a third at once) it is the path or the other server, and no
+  link is drained. Log: `link N stuck: its traffic has waited 8s for an
+  answer …`. Log: `link N degraded …`, `… degraded
   for 45s — its connections that moved no data for 15s (idle or stuck) are
   closed now …`.
 
