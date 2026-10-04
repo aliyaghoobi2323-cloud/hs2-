@@ -161,8 +161,9 @@ ceiling is above 64.
   connections ÷ the links the pool wants, never below `per_link`). This cap
   counts every open connection and exists only during the hold; `per_link`
   stays the number of **active** users a link is sized for. When the pool has
-  its links, or after 10 s, everyone still waiting goes onto the existing
-  links — **no connection is refused** — and the log says so plainly if that
+  its links (on the reverse edge: as many as the Kharej server's max_links
+  lets it dial), when no new link has come for 3 s, or after 10 s, everyone
+  still waiting goes onto the existing links — **no connection is refused** — and the log says so plainly if that
   is more per link than the cap. With a pool of hundreds the hold normally
   ends at its limit (300 links take ~30 s at the gate's pace) and the line
   says so (`links open at the dial pace … — expected, not a fault`); only a

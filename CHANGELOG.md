@@ -802,11 +802,35 @@ Both servers should run this build; mixed versions keep working.
 - Accept loops survive transient errors; the shrink sort is O(N log N); per-
   carrier log lines are folded.
 
-### Measured, and still to measure
-The numbers above come from the review's real-binary runs and from tests.
-The full load test (more than 200 links, 2,000–2,400 active users, direct and
-reverse, restart under load, stalled readers, mixed versions, dgtun at 15–30k
-pps before lifting its cap) is the next step and is reported separately.
+### Q6 — load test, and what it found
+Three network namespaces (Iran, a userspace netem middle: 400 Mbit/s, 40±5 ms,
+0.05% loss with bursts, a 3 Mbit/s per-flow policer; Kharej), production
+tuning, 2,400 active users (256 B echo every 500 ms), 3,000 idle, 16 bulk
+downloads: 5,416 open connections. Old = the main build before this phase.
+- 300 links reached in ~57 s; CPU ~48% of a core per side, RSS 400–480 MB;
+  four minutes after the load the pool is at ~90 links (old: 200).
+- Iran restart under load (3 runs): users served normally again after
+  16.3 / 16.4 / 16.3 s (old: 71 s); 40 s outage (3 runs): 16–20 s (old: 61 s).
+- Mixed versions and l3mtcp reverse run at 300 links.
+- dgtun counted interactive users (~1 KB/s) as idle, and each connection
+  twice (once per direction): the pool sat at 8 carriers for 100 s with echo
+  p99 up to 87 s. Both fixed: 2,416 active counted, p99 121 ms at 300 udp
+  carriers, no dropped connection.
+- Review fixes: the reverse edge's refill hold waits only for the links the
+  exit allows and ends when links stop coming; dgtun's serve notice can no
+  longer be lost for good, a restarted exit's first carrier is not taken for
+  spare, receive stamps are monotonic, the direct exit's flow map is pruned;
+  the outage begins/ends in the Kharej log and the scout's first retry is
+  capped; doctor totals several tunnels at their effective ceilings; status
+  names the usable cores; the installer's visibility note comes once the
+  direction and carrier are known.
+- Found, not changed (owner's decision): Go 1.24+ opens listeners as MPTCP by
+  default, and an accepted MPTCP socket ignores tcp_notsent_lowat, so a user
+  whose app stops reading holds up to its whole send buffer (4–7 MB) of
+  kernel memory and keeps its link busy (echo p99 8 s for the others). With
+  MPTCP off the stall guard resets exactly those users and p99 is 0.5 s; under
+  normal load no difference. And a degraded link is still closed after 45 s
+  with its users (60–90 active ones each in the test), as before.
 
 ## Verification, every phase
 
