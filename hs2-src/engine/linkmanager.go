@@ -1590,6 +1590,7 @@ type linkObs struct {
 	fs         flowSnap
 	ctrlWait   time.Duration // how long its oldest control ping has waited (stuck.go)
 	ctrlAns    int64         // ctrlNow when the last ping that got its own answer was sent (0: none)
+	wedged     bool          // its reader was parked on a full receive buffer lately (stuck.go)
 }
 
 // sampleHealth measures every link once per tick and builds the autopilot's
@@ -1645,6 +1646,11 @@ func (m *LinkManager) sampleHealth() {
 			o.statsState = ml.mtr.statsState.Load()
 			o.ctrlWait = ctrlWaitOf(ml.mtr)
 			o.ctrlAns = ml.mtr.ctrlAnsweredSent.Load()
+			if g := ml.mtr.guard; g != nil {
+				if p := g.parkedAt.Load(); p != 0 && ctrlNow()-p < int64(stuckWait) {
+					o.wedged = true
+				}
+			}
 		}
 	}
 
@@ -1791,7 +1797,7 @@ func (m *LinkManager) sampleHealth() {
 		// Stuck (stuck.go): its traffic has waited stuckWait or more for an
 		// answer while too little moves for the loss rule to judge it.
 		busy := perTick(dRd+dWr) >= ctrlBusyBytes
-		if !ml.degraded && !ml.draining && o.ctrlWait >= stuckWait && perTick(dRd+dWr) < activeBytes {
+		if !ml.degraded && !ml.draining && !o.wedged && o.ctrlWait >= stuckWait && perTick(dRd+dWr) < activeBytes {
 			ml.stuckStreak++
 			busyN++ // its traffic waits: it would be busy
 			if ml.stuckStreak >= stuckStreak {

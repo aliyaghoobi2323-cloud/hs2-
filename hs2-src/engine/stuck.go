@@ -26,7 +26,11 @@ import (
 // waits, or more than a third of them at once, it is the path or the other
 // server, down or slow for all: moving users between links would not help,
 // so none is drained (said once a minute). At most drainHeadroom are drained
-// per tick, the longest waits first. A stuck link is degraded at once (no new
+// per tick, the longest waits first. And a link whose own reader was parked on
+// a full receive buffer lately (sessGuard.parkedAt) waits on its own users, not
+// its path: the wedge guard ends those users, and the link keeps the rest (in
+// the load test a link wedged by apps that stopped reading was taken for
+// stuck 1.7 s after the guard had freed it). A stuck link is degraded at once (no new
 // users, its replacement comes), and its connections that moved no data for
 // drainStall close without the maxDrain wait.
 const (

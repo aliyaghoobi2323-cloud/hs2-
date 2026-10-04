@@ -73,7 +73,11 @@ type sessGuard struct {
 	relays    map[*relayWatch]struct{}
 	lastCalls uint64
 	parked    int // consecutive looks the reader was parked
-	quietLog  time.Time
+	// parkedAt is when (ctrlNow) a look last found the reader parked: the
+	// link's own users, not its path, were holding it up (the stuck check
+	// leaves such a link to the guard; stuck.go).
+	parkedAt atomic.Int64
+	quietLog time.Time
 }
 
 // relayWatch is one relay's local-write state as the guard sees it.
@@ -125,6 +129,7 @@ func (g *sessGuard) lookAt(now time.Time) (killed int, wedgedEmpty bool) {
 	calls := g.w.rdCalls.Load()
 	if !g.w.inRead.Load() && calls-g.lastCalls < starveCalls {
 		g.parked++
+		g.parkedAt.Store(ctrlNow())
 	} else {
 		g.parked = 0
 	}

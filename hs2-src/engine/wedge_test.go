@@ -166,6 +166,10 @@ func TestWedgeGuardReleasesStuckReaders(t *testing.T) {
 	if killed != len(stuck) {
 		t.Fatalf("guard closed %d stuck relays, want %d", killed, len(stuck))
 	}
+	// the stuck check reads this: the link was held up by its own users
+	if p := r.g.parkedAt.Load(); p == 0 || ctrlNow()-p > int64(5*time.Second) {
+		t.Fatalf("a parked reader left no recent parkedAt (%d)", p)
+	}
 	for i, u := range stuck {
 		select {
 		case <-u.ended:

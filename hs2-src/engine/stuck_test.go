@@ -223,6 +223,33 @@ func TestStuckNotFlagged(t *testing.T) {
 			t.Fatal("a link moving activeBytes a sample was taken for stuck")
 		}
 	})
+	// Its own users wedged it (a full receive buffer, apps not reading): the
+	// guard's business, not a stuck path — in the load test such a link was
+	// taken for stuck 1.7 s after the guard had freed it.
+	t.Run("wedged by its own users", func(t *testing.T) {
+		r := newStuckRig(t, 3)
+		f, ml := r.add()
+		f.m.guard = &sessGuard{}
+		r.step(f, 0)
+		for i := 0; i < 5; i++ {
+			waiting(f, stuckWait+2*time.Second)
+			f.m.guard.parkedAt.Store(ctrlNow() - int64(time.Second)) // parked a moment ago
+			r.step(f, 1<<10)
+		}
+		if ml.degraded {
+			t.Fatalf("a link wedged by its own users was taken for stuck:\n%s", r.lg)
+		}
+		// once the guard has freed it and stuckWait has passed, the link is
+		// judged again
+		f.m.guard.parkedAt.Store(ctrlNow() - int64(stuckWait+time.Second))
+		for i := 0; i < stuckStreak; i++ {
+			waiting(f, stuckWait+2*time.Second)
+			r.step(f, 1<<10)
+		}
+		if !ml.degraded {
+			t.Fatal("still not judged long after the wedge")
+		}
+	})
 	t.Run("short wait", func(t *testing.T) {
 		r := newStuckRig(t, 3)
 		f, ml := r.add()
