@@ -128,7 +128,7 @@ func TestDgRetireMirroredToTheOtherSide(t *testing.T) {
 		t.Fatalf("%d retired, want 2", len(retired))
 	}
 	within(t, time.Second, "the exit learns which carriers retire", func() bool {
-		return retired[0].peerRetiring.Load() && retired[1].peerRetiring.Load()
+		return retired[0].peerRetiring() && retired[1].peerRetiring()
 	})
 	for f := uint32(0); f < 2000; f++ {
 		if l := r.exit.pickHash(f); l == retired[0] || l == retired[1] {
@@ -137,7 +137,7 @@ func TestDgRetireMirroredToTheOtherSide(t *testing.T) {
 	}
 	r.edge.reconcile(r.ctx, 4) // grows back: un-retires them
 	within(t, time.Second, "the exit learns they serve again", func() bool {
-		return !retired[0].peerRetiring.Load() && !retired[1].peerRetiring.Load()
+		return !retired[0].peerRetiring() && !retired[1].peerRetiring()
 	})
 }
 
@@ -165,13 +165,13 @@ func TestDgReverseEdgeUnretires(t *testing.T) {
 	if !el.retiring || !el.bornSpare {
 		t.Fatal("a carrier above the target did not arrive spare")
 	}
-	within(t, time.Second, "the exit learns the spare retires", func() bool { return xl.peerRetiring.Load() })
+	within(t, time.Second, "the exit learns the spare retires", func() bool { return xl.peerRetiring() })
 	r.edge.target.Store(7)
 	r.edge.reconcileReverseEdge()
 	if el.retiring || el.bornSpare {
 		t.Fatal("the spare did not serve when the target rose")
 	}
-	within(t, time.Second, "the exit learns it serves", func() bool { return !xl.peerRetiring.Load() })
+	within(t, time.Second, "the exit learns it serves", func() bool { return !xl.peerRetiring() })
 }
 
 // A fresh carrier proves the path works, so carriers that have heard nothing
@@ -291,4 +291,136 @@ func TestDgShrinkFinishesUnderNonstopDownload(t *testing.T) {
 		r.edge.drainTick()
 		return r.edge.count() == 2
 	})
+}
+
+// The serve notice goes out once, as one control datagram: when it was lost
+// the exit used to treat the carrier as retiring for good (no new flows, its
+// sticky ones forced off after dgRetireForce) while both sides counted it
+// serving. A retire notice the other side stops renewing now expires after
+// dgPeerRetireStale; a renewed one (the retiring side repeats it) holds.
+func TestDgPeerRetireNoticeExpiresUnlessRenewed(t *testing.T) {
+	r := newDgRig(t, false)
+	for i := 0; i < 4; i++ {
+		r.carrier()
+	}
+	r.edge.reconcile(r.ctx, 3)
+	var xl *dgLink
+	r.edge.mu.RLock()
+	for _, l := range r.edge.set {
+		if l.retiring {
+			xl = r.peer[l]
+		}
+	}
+	r.edge.mu.RUnlock()
+	within(t, time.Second, "the exit learns the carrier retires", func() bool { return xl.peerRetiring() })
+	base := time.Now()
+	r.exit.clock = func() time.Time { return base.Add(dgPeerRetireStale / 2) }
+	r.exit.sampleHealth()
+	if !xl.peerRetiring() {
+		t.Fatal("a fresh retire notice expired")
+	}
+	// The edge serves it again but its serve notice is lost: nothing renews
+	// the retire notice any more.
+	r.exit.clock = func() time.Time { return base.Add(dgPeerRetireStale + time.Second) }
+	r.exit.sampleHealth()
+	if xl.peerRetiring() || xl.retiringAt.Load() != 0 {
+		t.Fatal("a retire notice nobody renewed did not expire")
+	}
+	on := 0
+	for f := uint32(0); f < 4000; f++ {
+		if r.exit.pickHash(f) == xl {
+			on++
+		}
+	}
+	if on < 600 {
+		t.Fatalf("%d of 4000 new flows on the carrier after the notice expired, want about a quarter", on)
+	}
+	if !strings.Contains(r.log(), "serves again here") {
+		t.Fatalf("the expiry is not logged:\n%s", r.log())
+	}
+	// A retiring side keeps renewing: the reminder sets it again.
+	r.exit.onCloseFrame(xl, []byte{closeRetire})
+	if !xl.peerRetiring() {
+		t.Fatal("a renewed notice did not take")
+	}
+}
+
+// A restarted exit (no bye: crash, kill, an upgrade from an older build)
+// leaves the reverse edge with silent carriers. They are dropped when its
+// first new carrier arrives — and are not counted when deciding whether that
+// carrier is spare: counted as serving, the only live carrier was told to
+// retire and the log said "(now 3) — spare".
+func TestDgReverseFreshCarrierNotSpareBehindZombies(t *testing.T) {
+	r := newDgRig(t, true)
+	r.edge.target.Store(2)
+	var old []*dgLink // the old exit's carriers; then it dies (no bye)
+	for i := 0; i < 2; i++ {
+		el, _, _, _ := r.carrier()
+		old = append(old, el)
+	}
+	for _, l := range old {
+		l.car.(*dgFakeCarrier).rx.Store(time.Now().Add(-5 * time.Second).UnixNano())
+	}
+	el, xl, _, _ := r.carrier()
+	if el.retiring || el.bornSpare {
+		t.Fatalf("the only live carrier arrived spare:\n%s", r.log())
+	}
+	if xl.peerRetiring() {
+		t.Fatal("the exit was told to retire its only live carrier")
+	}
+	lg := r.log()
+	if !strings.Contains(lg, "dropped 2 carrier(s) silent") || !strings.Contains(lg, "up (now 1)\n") && !strings.HasSuffix(lg, "up (now 1)") {
+		t.Fatalf("log:\n%s", lg)
+	}
+}
+
+// add() decides "spare" under the lock and keeps that answer: it used to read
+// bornSpare again after unlocking while reconcileReverseEdge (pool goroutine)
+// could serve the carrier and clear it — a data race, and a late closeRetire
+// could follow the closeServe. (Run under -race.)
+func TestDgAddSpareRacesReconcile(t *testing.T) {
+	r := newDgRig(t, true)
+	r.edge.target.Store(1)
+	r.carrier()
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for n := int32(2); ; n++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			r.edge.target.Store(n)
+			r.edge.reconcileReverseEdge()
+		}
+	}()
+	for i := 0; i < 30; i++ {
+		r.carrier()
+	}
+	close(stop)
+	<-done
+}
+
+// The direct exit forgets ended flows on its health tick: every download
+// 5-tuple used to stay in the sticky map for the life of the process
+// (review: 1,000,000 entries, ~70 MB, after the flows ended).
+func TestDgDirectExitPrunesEndedFlows(t *testing.T) {
+	r := newDgRig(t, false)
+	for i := 0; i < 4; i++ {
+		r.carrier()
+	}
+	now := time.Now()
+	for f := uint32(0); f < 5000; f++ {
+		r.exit.pick(f, now)
+	}
+	r.exit.clock = func() time.Time { return now.Add(flowletGap + time.Second) }
+	r.exit.directExitTick()
+	r.exit.stickyMu.Lock()
+	n := len(r.exit.sticky)
+	r.exit.stickyMu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d ended flows still remembered after a tick", n)
+	}
 }

@@ -77,7 +77,7 @@ type Conn struct {
 	closeOne sync.Once
 
 	// liveness
-	lastRxNanos atomic.Int64
+	lastRxMono atomic.Int64 // when anything was last received: ns since monoBase
 
 	// inbound datagrams the listener dropped because this carrier's queue was
 	// full (tryFeed)
@@ -120,12 +120,12 @@ type Conn struct {
 	// (The old estimator read the high-water mark minus the receive count per
 	// window, which booked a reordered early arrival as up to 100% phantom loss
 	// and never credited the catch-up back.)
-	wireRecv                   atomic.Uint64 // distinct datagrams received (resolved)
-	wireLost                   atomic.Uint64 // datagrams the window passed, never seen
-	wireBytes                  atomic.Uint64 // bytes of data datagrams received
-	wirePrimed                 bool          // decode loop only
-	wireBase                   uint32        // decode loop only: oldest unresolved seq
-	wireMax                    uint32        // decode loop only: highest seq seen
+	wireRecv                   atomic.Uint64               // distinct datagrams received (resolved)
+	wireLost                   atomic.Uint64               // datagrams the window passed, never seen
+	wireBytes                  atomic.Uint64               // bytes of data datagrams received
+	wirePrimed                 bool                        // decode loop only
+	wireBase                   uint32                      // decode loop only: oldest unresolved seq
+	wireMax                    uint32                      // decode loop only: highest seq seen
 	wireSeen                   [wireReorderWin / 64]uint64 // decode loop only: arrivals
 	lastWireRecv, lastWireLost uint64                      // feedback loop only
 
@@ -163,7 +163,7 @@ func newConn(sess *core.Session, write func([]byte) error, shared, binding []byt
 	// fast and per-packet queueing latency stays small.
 	c.pacer = newPacer(rc, write, 64, &c.peerStamps)
 	c.pacer.gov = &c.gov
-	c.lastRxNanos.Store(time.Now().UnixNano())
+	c.lastRxMono.Store(int64(time.Since(monoBase)))
 	c.wg.Add(3)
 	go c.processLoop()
 	go c.feedbackLoop()
@@ -267,7 +267,7 @@ func (c *Conn) ReadFrame() (byte, []byte, error) {
 		case f := <-c.frames:
 			return f.ftype, f.payload, nil
 		case <-timer.C:
-			idle := time.Since(time.Unix(0, c.lastRxNanos.Load()))
+			idle := time.Since(monoBase) - time.Duration(c.lastRxMono.Load())
 			if idle >= deadAfter {
 				return 0, nil, errDeadLink
 			}
@@ -280,7 +280,17 @@ func (c *Conn) ReadFrame() (byte, []byte, error) {
 // sends feedback every feedbackEvery (100 ms) on a live carrier, so a few
 // seconds of silence means the carrier is dead (its peer restarted, or the
 // path is gone) long before deadAfter says so.
-func (c *Conn) LastRx() time.Time { return time.Unix(0, c.lastRxNanos.Load()) }
+//
+// It carries a monotonic reading (monoBase plus an offset), so now.Sub(LastRx())
+// with now from time.Now() is immune to wall-clock steps: a stored unix time
+// made an NTP step of a few seconds look like every carrier going silent at
+// once.
+func (c *Conn) LastRx() time.Time {
+	return monoBase.Add(time.Duration(c.lastRxMono.Load()))
+}
+
+// monoBase anchors the receive stamps on the monotonic clock.
+var monoBase = time.Now()
 
 // Close tears the carrier down. On the dialer side it closes the socket; on the
 // listener side it only deregisters from the shared socket's demux.
@@ -344,7 +354,7 @@ func (c *Conn) processLoop() {
 			return
 		case rp := <-c.rx:
 			pkt, now := rp.b, rp.at
-			c.lastRxNanos.Store(now.UnixNano())
+			c.lastRxMono.Store(int64(now.Sub(monoBase)))
 			if len(pkt) < 1 {
 				continue
 			}

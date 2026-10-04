@@ -123,9 +123,12 @@ type dgLink struct {
 
 	born         time.Time
 	servingSince time.Time
-	// peerRetiring: the OTHER side is retiring this carrier (TypeClose
-	// closeRetire), so new flowlets avoid it here too and it can empty.
-	peerRetiring atomic.Bool
+	// peerRetireAt: unix ns of the OTHER side's latest closeRetire for this
+	// carrier (0 = it serves there): new flowlets avoid it here too so it can
+	// empty. The notice is renewed every ~dgPoolCtlEvery while the other side
+	// retires it (drainTick); one not renewed for dgPeerRetireStale is
+	// dropped (expirePeerRetire) — the closeServe that ended it was lost.
+	peerRetireAt atomic.Int64
 	// retiringAt: unix ns since when either side retires this carrier (0 =
 	// serving). After dgRetireForce its sticky flows are moved off it too.
 	retiringAt   atomic.Int64
@@ -206,6 +209,30 @@ func (l *dgLink) lastRx() time.Time {
 		return r.LastRx()
 	}
 	return time.Time{}
+}
+
+// peerRetiring reports whether the other side retires this carrier.
+func (l *dgLink) peerRetiring() bool { return l.peerRetireAt.Load() != 0 }
+
+// dgPeerRetireStale: a peer's retire notice not renewed for this long is
+// stale. The retiring side repeats it every ~dgPoolCtlEvery (plus up to a
+// health tick); its closeServe goes out once, as one control datagram with
+// no retransmit, so losing it used to leave the carrier "retiring" here for
+// good — no new flows, its sticky ones forced off after dgRetireForce, while
+// both sides counted it serving and dialed no replacement.
+const dgPeerRetireStale = 4 * dgPoolCtlEvery
+
+// expirePeerRetire drops a stale peer retire notice; true if it did. Under
+// p.mu (l.retiring). A fresh notice arriving meanwhile wins (the CAS fails).
+func (l *dgLink) expirePeerRetire(now time.Time) bool {
+	at := l.peerRetireAt.Load()
+	if at == 0 || now.UnixNano()-at < int64(dgPeerRetireStale) || !l.peerRetireAt.CompareAndSwap(at, 0) {
+		return false
+	}
+	if !l.retiring {
+		l.setRetiring(now, false)
+	}
+	return true
 }
 
 // silent reports whether the carrier has received nothing for dgSilentDead.
@@ -527,28 +554,40 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 		}
 	})
 	p.mu.Lock()
-	if s, _ := p.countsLocked(); p.accept && s >= int(p.target.Load()) {
+	// A carrier just came up, so the path works: any carrier that has heard
+	// nothing for dgSilentDead is dead — its peer restarted (and drops its
+	// packets) or its path is gone — and would black-hole the flows on it
+	// until its 15 s timeout. They are left out of the count below: counted
+	// as serving, the first carrier of a restarted exit arrived "spare" and
+	// was told to retire while it was the only live one.
+	var zombies []*dgLink
+	rxNow := time.Now()
+	serving, n := 0, 1 // n: live carriers with this one
+	for _, o := range p.set {
+		switch {
+		case !o.alive():
+		case o.silent(rxNow):
+			zombies = append(zombies, o)
+		default:
+			n++
+			if !o.retiring {
+				serving++
+			}
+		}
+	}
+	// spare is read below after the unlock (reconcileReverseEdge may serve the
+	// carrier meanwhile and clear bornSpare under p.mu).
+	spare := p.accept && serving >= int(p.target.Load())
+	if spare {
 		l.retiring, l.retireSince, l.bornSpare = true, now, true
 		l.retireSentAt = now
 		l.setRetiring(now, true)
 	}
-	// A carrier just came up, so the path works: any carrier that has heard
-	// nothing for dgSilentDead is dead — its peer restarted (and drops its
-	// packets) or its path is gone — and would black-hole the flows on it
-	// until its 15 s timeout.
-	var zombies []*dgLink
-	rxNow := time.Now()
-	for _, o := range p.set {
-		if o.alive() && o.silent(rxNow) {
-			zombies = append(zombies, o)
-		}
-	}
 	p.set = append(p.set, l)
-	n := len(p.set)
 	p.mu.Unlock()
 	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	go p.readLoop(ctx, l)
-	if l.bornSpare {
+	if spare {
 		p.sendOp(l, closeRetire)
 	}
 	if len(zombies) > 0 {
@@ -557,7 +596,7 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 		}
 		p.log("dg: dropped %d carrier(s) silent for %s+ when carrier %d came up — the other server restarted, or their path died; their flows move to live carriers", len(zombies), fmtDur(dgSilentDead), l.id)
 	}
-	if l.bornSpare {
+	if spare {
 		p.upLog.log("dg: carrier %d %s up (now %d) — spare: pattern needs %d serving", l.id, from, n, p.Target())
 	} else {
 		p.upLog.log("dg: carrier %d %s up (now %d)", l.id, from, n)
@@ -655,10 +694,11 @@ func (p *dgPool) onCloseFrame(l *dgLink, payload []byte) bool {
 		l.markDead()
 		return true
 	case closeRetire:
-		l.peerRetiring.Store(true)
-		l.setRetiring(p.now(), true)
+		now := p.now()
+		l.peerRetireAt.Store(max(now.UnixNano(), 1))
+		l.setRetiring(now, true)
 	case closeServe:
-		l.peerRetiring.Store(false)
+		l.peerRetireAt.Store(0)
 		l.setRetiring(p.now(), false)
 	}
 	return false
@@ -804,7 +844,7 @@ func (p *dgPool) pickHash(flow uint32) *dgLink {
 			continue
 		}
 		w := mix32(flow ^ l.id)
-		if l.retiring || l.peerRetiring.Load() {
+		if l.retiring || l.peerRetiring() {
 			if bestRetiring == nil || w > bestRW {
 				bestRetiring, bestRW = l, w
 			}
@@ -844,6 +884,9 @@ func (p *dgPool) sampleHealth() apSample {
 	for _, l := range p.set {
 		if !l.alive() {
 			continue
+		}
+		if l.expirePeerRetire(now) {
+			p.log("dg: carrier %d serves again here — the other server stopped renewing its retire notice (its serve notice was lost)", l.id)
 		}
 		up, down := l.bytesUp.Load(), l.bytesDown.Load()
 		dUp, dDown := up-l.prevUp, down-l.prevDown
@@ -1207,6 +1250,19 @@ func (p *dgPool) dialOne(ctx context.Context, epoch uint64) {
 	}
 	p.failStreak.Store(0)
 	p.add(ctx, car, "dialed")
+}
+
+// directExitTick is the direct exit's health tick: the live snapshot and the
+// download stats for the edge, and forgetting the flows that ended. Every
+// download 5-tuple (a new ephemeral port, a DNS query) leaves a sticky entry
+// that pick() removes only if the same flow comes back, so without the prune
+// the map — and the dead carriers its entries hold — grew for the life of
+// the process (the other roles prune in drainTick).
+func (p *dgPool) directExitTick() {
+	p.pruneSticky(p.now())
+	s := p.sampleHealth()
+	p.publishDownStats(s)
+	p.publishStats(s)
 }
 
 // drainTick reaps dead carriers and closes retiring carriers once their flows
@@ -1841,9 +1897,7 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 				p.closeAll()
 				return nil
 			case <-t.C:
-				s := p.sampleHealth()
-				p.publishDownStats(s)
-				p.publishStats(s)
+				p.directExitTick()
 			}
 		}
 	}
