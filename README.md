@@ -63,7 +63,8 @@ not**:
   at once, is *stuck* — degraded like a bad link, and its connections that
   moved no data for 15 s close right away. When every busy link waits (or
   more than a third at once) it is the path or the other server, and no
-  link is drained. Log: `link N stuck: its traffic has waited 8s for an
+  link is drained — nor for 30 s after, while the links catch up on their
+  own. Log: `link N stuck: its traffic has waited 8s for an
   answer …`. Log: `link N degraded …`, `… degraded
   for 45s — its connections that moved no data for 15s (idle or stuck) are
   closed now …`.
