@@ -1663,9 +1663,11 @@ func (m *LinkManager) sampleHealth() {
 	nOK, nOld, poolOK, aged := 0, 0, 0, 0
 	var stuckCand []stuckObs
 	var answering []time.Duration   // control RTT of the busy links that answer promptly
+	var answeringMoved []float64    // ... what each moved this tick
 	lastAns := int64(math.MinInt64) // ... and when the latest ping they got answered went out
 	busyN := 0                      // links carrying traffic (or waiting to)
 	waitingN := 0                   // ... of which waiting stuckWait+ now
+	stuckNow := 0                   // links found stuck before, still up (draining)
 
 	m.mu.Lock()
 	for _, ml := range m.links {
@@ -1798,26 +1800,33 @@ func (m *LinkManager) sampleHealth() {
 		}
 		// Stuck (stuck.go): its traffic has waited stuckWait or more for an
 		// answer while too little moves for the loss rule to judge it.
-		busy := perTick(dRd+dWr) >= ctrlBusyBytes
-		if !ml.degraded && !ml.draining && !o.wedged && o.ctrlWait >= stuckWait && perTick(dRd+dWr) < activeBytes {
-			ml.stuckStreak++
+		moved := perTick(dRd + dWr)
+		busy := moved >= ctrlBusyBytes
+		if ml.stuck && ml.link.Alive() {
+			stuckNow++
+		}
+		waits := !ml.degraded && !ml.draining && !o.wedged && o.ctrlWait >= stuckWait
+		if waits {
 			busyN++    // its traffic waits: it would be busy
-			waitingN++ // ... and waits now, streak or not (the mass rule)
+			waitingN++ // ... and waits now, streak or not, however much it moves
+		} else if busy && !ml.degraded && !ml.draining {
+			busyN++
+		}
+		if waits && !ml.suspect && moved < activeBytes {
+			ml.stuckStreak++
 			if ml.stuckStreak >= stuckStreak {
-				stuckCand = append(stuckCand, stuckObs{ml: ml, wait: o.ctrlWait, moved: dRd + dWr, sent: ctrlNow() - int64(o.ctrlWait)})
+				stuckCand = append(stuckCand, stuckObs{ml: ml, wait: o.ctrlWait, moved: dRd + dWr, perTick: moved, sent: ctrlNow() - int64(o.ctrlWait)})
 			}
 		} else {
 			ml.stuckStreak = 0
-			if busy && !ml.degraded && !ml.draining {
-				busyN++
-			}
 			// Evidence that the path works (stuck.go): a link carrying traffic
 			// that answers promptly now — an idle one answers quickly through
-			// any squeeze, having nothing queued — and when its last answered
-			// ping went out.
+			// any squeeze, having nothing queued — what it moves, and when its
+			// last answered ping went out.
 			if rtt := time.Duration(ml.mtr.rttMicros.Load()) * time.Microsecond; busy && !ml.degraded && !ml.draining && !ml.suspect && o.peerSeen &&
 				o.ctrlWait < stuckPrompt && rtt < stuckPrompt && o.ctrlAns != 0 {
 				answering = append(answering, rtt)
+				answeringMoved = append(answeringMoved, moved)
 				lastAns = max(lastAns, o.ctrlAns)
 			}
 		}
@@ -1828,13 +1837,16 @@ func (m *LinkManager) sampleHealth() {
 	// A stuck link is degraded only if another link carrying traffic answers
 	// promptly now and got an answer to a ping sent after this link's oldest
 	// one went out — a whole round trip that started later (a pong merely
-	// arriving later proves nothing: it may have left before an outage). When
-	// every busy link waits, or more than a third of them at once, it is the
-	// path or the other server, slow or down for all: moving users between
-	// links would not help, so none is drained (logged once a minute). At
-	// most drainHeadroom are drained per tick, the longest waits first.
-	mass := waitingN > 2 && 3*waitingN > busyN
-	if mass {
+	// arriving later proves nothing: it may have left before an outage) — and
+	// it moves less than half of what those links move: a link whose users
+	// wait while it moves its share is waiting on its own load (the path is
+	// full), not on a throttle. When fewer than half the busy links answer
+	// promptly it is the path or the other server, slow or down for most:
+	// moving users between links would not help, so none is drained (logged
+	// once a minute) — nor for stuckRecover after. At most drainHeadroom
+	// stuck links drain at a time, the longest waits first.
+	slow := 2*len(answering) < busyN
+	if slow {
 		m.stuckMassAt = now
 	}
 	// After a path-wide wait, links get stuckRecover to come back on their
@@ -1843,21 +1855,23 @@ func (m *LinkManager) sampleHealth() {
 	// recovering — in the load test, 27 links drained just after a squeeze,
 	// 400 more users cut, none helped.
 	recovering := !m.stuckMassAt.IsZero() && now.Sub(m.stuckMassAt) < stuckRecover
-	if mass && now.Sub(m.stuckMassLogAt) >= time.Minute {
+	if slow && waitingN > 0 && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
-		logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer at once — the path or the other server is slow, not those links: none is drained",
-			waitingN, busyN, fmtDur(stuckWait)))
+		logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer and only %d answer promptly — the path or the other server is slow, not those links: none is drained",
+			waitingN, busyN, fmtDur(stuckWait), len(answering)))
 	}
-	if len(answering) > 0 && !mass && !recovering {
+	if len(answering) > 0 && !slow && !recovering {
 		sort.Slice(answering, func(i, j int) bool { return answering[i] < answering[j] })
 		med := answering[len(answering)/2]
+		sort.Float64s(answeringMoved)
+		share := max(ctrlBusyBytes, answeringMoved[len(answeringMoved)/2]/2)
 		sort.Slice(stuckCand, func(i, j int) bool { return stuckCand[i].wait > stuckCand[j].wait })
-		flagged := 0
+		room := drainHeadroom(m.max) - stuckNow
 		for _, c := range stuckCand {
-			if lastAns <= c.sent || flagged >= drainHeadroom(m.max) {
+			if lastAns <= c.sent || c.perTick >= share || room <= 0 {
 				continue
 			}
-			flagged++
+			room--
 			c.ml.degraded, c.ml.stuck, c.ml.pressed = true, true, false
 			logs = append(logs, fmt.Sprintf("link %d stuck: its traffic has waited %s for an answer while it moved %s in %s (the other links answer in ~%dms) — draining",
 				c.ml.id, fmtDur(c.wait), fmtBytes(c.moved), fmtDur(dt), med.Milliseconds()))

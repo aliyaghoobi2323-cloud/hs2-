@@ -161,6 +161,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			if at, ok := pending.answer(binary.BigEndian.Uint64(pong[0:])); ok {
 				mtr.ctrlAnsweredSent.Store(at) // a whole round trip, and when it started (stuck.go)
 			}
+			publish() // at once: a later ping may still be on its way (one 7 s wait is not three samples)
 			sent := int64(binary.BigEndian.Uint64(pong[8:]))
 			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
 				mtr.rttMicros.Store(uint64(rtt / 1000))
