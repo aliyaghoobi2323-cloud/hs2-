@@ -2,6 +2,10 @@ module github.com/hosseintaghipoursori-alt/hs2-tunnel
 
 go 1.27
 
+// Plain TCP listeners, not MPTCP (the Go 1.24+ default): see listenReuseRcvBuf
+// in engine/listen.go for why.
+godebug multipathtcp=0
+
 require (
 	github.com/flynn/noise v1.1.0
 	github.com/klauspost/reedsolomon v1.14.2
