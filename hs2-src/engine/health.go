@@ -140,6 +140,11 @@ type linkMeter struct {
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
 	peerSeen    atomic.Bool   // a control response has been received at least once
+	// ctrlWait is when (ctrlNow) the oldest control ping still unanswered was
+	// sent, 0 if none waits (see ctrlWaitOf); ctrlAnswered is when the last
+	// pong arrived.
+	ctrlWait     atomic.Int64
+	ctrlAnswered atomic.Int64
 }
 
 // meteredConn counts the bytes a link carries, by direction. It sits above the

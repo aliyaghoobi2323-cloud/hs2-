@@ -243,6 +243,8 @@ type managedLink struct {
 	prevRwnd        uint64     // TCP_INFO rwnd-limited time at the last sample
 	goodput         float64    // EWMA bytes/sec, both directions (diagnostic)
 	lowStreak       int        // consecutive high-loss samples (either direction)
+	stuckStreak     int        // consecutive samples its traffic waited stuckWait+ (stuck.go)
+	stuck           bool       // degraded because it is stuck: drained without the maxDrain wait
 	sampled         bool       // prev* are valid (skips the first delta)
 	degraded        bool       // soft-bad: excluded from new-user routing
 	draining        bool       // being retired after its replacement is up
@@ -1210,7 +1212,12 @@ func (m *LinkManager) drainStepLocked(ml *managedLink, now time.Time, what strin
 	case age > maxDrainActive:
 		return true, fmt.Sprintf("%s %d degraded for %s — closed with its %d remaining connection(s) (they reconnect onto healthy links)",
 			what, ml.id, fmtDrain(maxDrainActive), users), false
-	case age > maxDrain:
+	case age > maxDrain || ml.stuck:
+		if !ml.drainNoted && ml.stuck {
+			ml.drainNoted = true
+			note = fmt.Sprintf("%s %d stuck — its connections that moved no data for %s are closed now (they reconnect onto healthy links); those still moving data stay %s at most",
+				what, ml.id, fmtDrain(drainStall), fmtDrain(maxDrainActive))
+		}
 		if !ml.drainNoted {
 			ml.drainNoted = true
 			note = fmt.Sprintf("%s %d degraded for %s — its connections that moved no data for %s (idle or stuck) are closed now (they reconnect onto healthy links); those still moving data (%d active) stay until they end, %s at most",
@@ -1250,7 +1257,7 @@ func (m *LinkManager) slotsBackLocked(now time.Time, room, inflight int) []*mana
 	}
 	var cand []*managedLink
 	for _, ml := range m.links {
-		if ml.draining && ml.link.Alive() && now.Sub(ml.drainSince) > maxDrain {
+		if ml.draining && ml.link.Alive() && (now.Sub(ml.drainSince) > maxDrain || ml.stuck) {
 			cand = append(cand, ml)
 		}
 	}
@@ -1580,6 +1587,8 @@ type linkObs struct {
 	rec        *statsRec
 	statsState int32
 	fs         flowSnap
+	ctrlWait   time.Duration // how long its oldest control ping has waited (stuck.go)
+	ctrlAns    int64         // ctrlNow of its last control answer (0: none)
 }
 
 // sampleHealth measures every link once per tick and builds the autopilot's
@@ -1633,6 +1642,8 @@ func (m *LinkManager) sampleHealth() {
 			o.peerRT, o.peerSeen = ml.mtr.peerRetrans.Load(), ml.mtr.peerSeen.Load()
 			o.rec = ml.mtr.peer.Load()
 			o.statsState = ml.mtr.statsState.Load()
+			o.ctrlWait = ctrlWaitOf(ml.mtr)
+			o.ctrlAns = ml.mtr.ctrlAnswered.Load()
 		}
 	}
 
@@ -1642,6 +1653,9 @@ func (m *LinkManager) sampleHealth() {
 	perTick := func(b uint64) float64 { return float64(b) * healthTick.Seconds() / secs }
 	s := apSample{now: now, open: int(m.users.Load())}
 	nOK, nOld, poolOK, aged := 0, 0, 0, 0
+	var stuckCand []stuckObs
+	var answering []time.Duration   // control RTT of the links that answer promptly
+	lastAns := int64(math.MinInt64) // ... and the latest answer any of them got
 
 	m.mu.Lock()
 	for _, ml := range m.links {
@@ -1772,9 +1786,41 @@ func (m *LinkManager) sampleHealth() {
 					ml.id, dUp, dWr>>10, dDown, dRd>>10, ml.mtr.rttMicros.Load()/1000))
 			}
 		}
+		// Stuck (stuck.go): its traffic has waited stuckWait or more for an
+		// answer while too little moves for the loss rule to judge it.
+		if !ml.degraded && !ml.draining && o.ctrlWait >= stuckWait && perTick(dRd+dWr) < activeBytes {
+			ml.stuckStreak++
+			if ml.stuckStreak >= stuckStreak {
+				stuckCand = append(stuckCand, stuckObs{ml: ml, wait: o.ctrlWait, moved: dRd + dWr, sent: ctrlNow() - int64(o.ctrlWait)})
+			}
+		} else {
+			ml.stuckStreak = 0
+			// A link that answers promptly now, and when (stuck.go).
+			if !ml.degraded && !ml.draining && !ml.suspect && o.peerSeen && o.ctrlWait < stuckWait/2 && o.ctrlAns != 0 {
+				answering = append(answering, time.Duration(ml.mtr.rttMicros.Load())*time.Microsecond)
+				lastAns = max(lastAns, o.ctrlAns)
+			}
+		}
 		s.G += ml.rate
 		s.flowing += ml.flowing
 		s.links = append(s.links, ml.apLink())
+	}
+	// A stuck link is degraded only if another link, answering promptly now,
+	// got an answer after this link's oldest ping went out: when every link
+	// waits — the path or the other server is down, or slow for all — moving
+	// users between links would not help. (An idle link with no ping out is
+	// no evidence: in an outage it has nothing pending either.)
+	if len(answering) > 0 {
+		sort.Slice(answering, func(i, j int) bool { return answering[i] < answering[j] })
+		med := answering[len(answering)/2]
+		for _, c := range stuckCand {
+			if lastAns <= c.sent {
+				continue
+			}
+			c.ml.degraded, c.ml.stuck, c.ml.pressed = true, true, false
+			logs = append(logs, fmt.Sprintf("link %d stuck: its traffic has waited %s for an answer while it moved %s in %s (the other links answer in ~%dms) — draining",
+				c.ml.id, fmtDur(c.wait), fmtBytes(c.moved), fmtDur(dt), med.Milliseconds()))
+		}
 	}
 	// Growable unless every link old enough to have been refused pool control
 	// was refused (a pre-pool-control exit); while all links are fresh, as at

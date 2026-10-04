@@ -23,7 +23,10 @@ import (
 //
 // Both feed the health logic, so a link that is bad only in the download
 // direction — invisible to phase 1's local (upload) retransmit signal — is now
-// caught too. The channel is edge-driven and additive: against an un-upgraded
+// caught too. And since the ping and its pong travel behind the link's own
+// traffic both ways, how long the oldest unanswered ping has waited
+// (linkMeter.ctrlWait) is how long the link's users wait for a reply: the
+// stuck check (stuck.go) reads it. The channel is edge-driven and additive: against an un-upgraded
 // exit the control stream is simply closed (its serveStream has no kindCtrl
 // case), the edge notices and stops, and the link keeps working on local signals.
 //
@@ -35,7 +38,33 @@ import (
 const (
 	ctrlPingLen = 16
 	ctrlPongLen = 24
+	// ctrlPending: pings sent and not answered at most; on a stuck link no
+	// more are queued behind them.
+	ctrlPending = 4
+	// ctrlBusyBytes: a link that moved this much since the last tick pings on
+	// every tick (an idle one every 3rd–5th): users on it — interactive ones
+	// too, a few KB a tick — are waiting on its answers.
+	ctrlBusyBytes = 4 << 10
 )
+
+// ctrlBase is the monotonic origin of linkMeter.ctrlWait (a wall-clock step
+// must not make a link look stuck).
+var ctrlBase = time.Now()
+
+// ctrlNow is the monotonic time since ctrlBase, never 0 (0 = nothing waits).
+func ctrlNow() int64 { return int64(time.Since(ctrlBase)) + 1 }
+
+// ctrlWaitOf is how long the oldest unanswered control ping of the link has
+// waited (0: none waits, or no control channel).
+func ctrlWaitOf(mtr *linkMeter) time.Duration {
+	if mtr == nil {
+		return 0
+	}
+	if w := mtr.ctrlWait.Load(); w != 0 {
+		return time.Duration(ctrlNow() - w)
+	}
+	return 0
+}
 
 // openControl runs the edge side of the control channel for one link until the
 // link dies or ctx ends. It is wired via LinkManager.OnLink, so it covers every
@@ -57,6 +86,24 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	var seq uint64
 	ping := make([]byte, ctrlPingLen)
 	pong := make([]byte, ctrlPongLen)
+	// pending: the pings not answered yet, oldest first. Pongs come back in
+	// order on the one stream, so a pong answers its ping and every earlier
+	// one (a ping whose write timed out before it was queued is answered by
+	// the next pong that does come back). The oldest one's send time is
+	// published as mtr.ctrlWait.
+	type sentPing struct {
+		seq uint64
+		at  int64 // ctrlNow when sent
+	}
+	var pending []sentPing
+	publish := func() {
+		if len(pending) == 0 {
+			mtr.ctrlWait.Store(0)
+		} else {
+			mtr.ctrlWait.Store(pending[0].at)
+		}
+	}
+	defer mtr.ctrlWait.Store(0) // gone: nothing waits on this channel any more
 	moved := mtr.rdBytes.Load() + mtr.wrBytes.Load()
 	// The cadence is the fixed controlInterval tick it always was while the
 	// link carries traffic: the exit's download retransmits arrive with each
@@ -76,9 +123,9 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		case <-t.C:
 		}
 		now := mtr.rdBytes.Load() + mtr.wrBytes.Load()
-		active := now-moved >= activeBytes
+		active := now-moved >= ctrlBusyBytes
 		moved = now
-		if !active && skip > 0 {
+		if !active && skip > 0 && len(pending) == 0 {
 			skip--
 			continue
 		}
@@ -87,20 +134,25 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		} else {
 			skip = 2 + rand.IntN(3) // the next 2–4 ticks stay quiet
 		}
-		seq++
-		binary.BigEndian.PutUint64(ping[0:], seq)
-		binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
-		st.SetWriteDeadline(time.Now().Add(controlInterval))
-		if _, err := st.Write(ping); err != nil {
-			return // link/stream gone; the pool reaps the link on its own
+		if len(pending) < ctrlPending {
+			seq++
+			pending = append(pending, sentPing{seq: seq, at: ctrlNow()})
+			publish()
+			binary.BigEndian.PutUint64(ping[0:], seq)
+			binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
+			st.SetWriteDeadline(time.Now().Add(controlInterval))
+			if _, err := st.Write(ping); err != nil && !isTimeout(err) {
+				return // link/stream gone; the pool reaps the link on its own
+			}
+			// A write that timed out waiting for the link's writer stays
+			// queued in smux and goes out once the writer moves: its wait is
+			// what the stuck check measures, so carry on.
 		}
-		// Read until this ping's pong. A pong that missed its deadline (the
-		// link was congested or briefly wedged) arrives later and is skipped
-		// here, so one slow answer no longer ends the control channel for the
-		// rest of the link's life.
+		// Read the pongs that are back. One that comes late (the link was
+		// congested or stuck) still answers its ping and the ones before it,
+		// so one slow answer no longer ends the control channel.
 		st.SetReadDeadline(time.Now().Add(2 * controlInterval))
-		got := false
-		for {
+		for len(pending) > 0 {
 			n, err := io.ReadFull(st, pong)
 			if err != nil {
 				if n > 0 || !isTimeout(err) {
@@ -108,22 +160,19 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				}
 				break // no answer in time: try again next tick
 			}
-			if binary.BigEndian.Uint64(pong[0:]) == seq {
-				got = true
-				break
+			got := binary.BigEndian.Uint64(pong[0:])
+			for len(pending) > 0 && pending[0].seq <= got {
+				pending = pending[1:]
 			}
+			sent := int64(binary.BigEndian.Uint64(pong[8:]))
+			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
+				mtr.rttMicros.Store(uint64(rtt / 1000))
+			}
+			mtr.peerRetrans.Store(binary.BigEndian.Uint64(pong[16:]))
+			mtr.peerSeen.Store(true)
+			mtr.ctrlAnswered.Store(ctrlNow())
 		}
-		if !got {
-			continue
-		}
-		sent := int64(binary.BigEndian.Uint64(pong[8:]))
-		exitRetrans := binary.BigEndian.Uint64(pong[16:])
-		rtt := time.Now().UnixNano() - sent
-		if rtt > 0 {
-			mtr.rttMicros.Store(uint64(rtt / 1000))
-		}
-		mtr.peerRetrans.Store(exitRetrans)
-		mtr.peerSeen.Store(true)
+		publish()
 	}
 }
 
