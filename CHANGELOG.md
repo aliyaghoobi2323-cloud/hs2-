@@ -875,21 +875,26 @@ echoes were answered for good.
   is published on every answer.
 - **The rule.** A link is *stuck* when all of these hold:
   - its ping has waited 6 s, in two samples in a row;
-  - it moves less than 96 KB per 2 s, and less than half of what the
-    links that answer promptly move (or under 4 KB);
+  - it moves less than 12 KB per 2 s, or less than half of what the links
+    that answer promptly move (and under 96 KB);
   - another busy link answers in under 2 s now, to a ping sent *after*
     this link's oldest;
-  - at least half the busy links answer promptly.
+  - the path is not slow (below).
 
   A stuck link is degraded at once: no new users, and its replacement is
   asked for. Its connections that moved no data for 15 s close right away,
   and the rest get 90 s at most.
 - **What it leaves alone.**
-  - **A slow path.** When fewer than half the busy links answer promptly,
-    the path or the other server is slow for most, and moving users would
-    not help. Nothing is drained, and no link is judged afterwards for as
-    long as the slow spell lasted (30 s to 2 min): TCP backed off through
-    it, and resumes up to that long after.
+  - **A slow path.** The path or the other server is slow when two or more
+    links wait 6 s while moving little, and they outnumber the busy links
+    answering promptly. Moving users would not help, so nothing is drained
+    and nothing is judged for loss. That holds afterwards too, for as long
+    as the spell was slow all told (30 s to 2 min), because TCP backed off
+    through it and resumes up to that long after.
+    - Links answering in 2–6 s, heavy links waiting behind their own
+      backlog, and links that never answer (an older exit) count neither
+      way. A review showed that counting them as "slow" let two lossy links
+      at night switch both rules off, silently.
   - **A link moving its share.** On a full path, a link whose users wait
     behind their own load while it moves its share is not stuck.
   - **A link wedged by its own users.** If its reader was parked on a full
