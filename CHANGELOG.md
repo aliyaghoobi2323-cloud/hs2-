@@ -936,7 +936,10 @@ echoes were answered for good.
     (VALIDATION.md, V5).
   - **Outage, 40 s.** No stuck verdict, and normal service 18 s after it
     ended.
-  - **Iran restart and stalled readers:** see the next lines.
+  - **Iran restart under load.** No stuck verdict, and normal service
+    again after 14.3 s, as before.
+  - **600 users whose apps stop reading.** No stuck verdict; the wedge
+    guard reset those 600 connections, as before.
   - **20% loss on 10 links.** The loss rule drained 7 of them in this run.
     In an earlier run of this phase it drained 11, where main drained 6.
 - **The loss rule waits out a slow spell too.** Before this was fixed, the
