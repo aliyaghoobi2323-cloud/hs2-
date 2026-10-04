@@ -1664,6 +1664,7 @@ func (m *LinkManager) sampleHealth() {
 	var answering []time.Duration   // control RTT of the busy links that answer promptly
 	lastAns := int64(math.MinInt64) // ... and when the latest ping they got answered went out
 	busyN := 0                      // links carrying traffic (or waiting to)
+	waitingN := 0                   // ... of which waiting stuckWait+ now
 
 	m.mu.Lock()
 	for _, ml := range m.links {
@@ -1799,7 +1800,8 @@ func (m *LinkManager) sampleHealth() {
 		busy := perTick(dRd+dWr) >= ctrlBusyBytes
 		if !ml.degraded && !ml.draining && !o.wedged && o.ctrlWait >= stuckWait && perTick(dRd+dWr) < activeBytes {
 			ml.stuckStreak++
-			busyN++ // its traffic waits: it would be busy
+			busyN++    // its traffic waits: it would be busy
+			waitingN++ // ... and waits now, streak or not (the mass rule)
 			if ml.stuckStreak >= stuckStreak {
 				stuckCand = append(stuckCand, stuckObs{ml: ml, wait: o.ctrlWait, moved: dRd + dWr, sent: ctrlNow() - int64(o.ctrlWait)})
 			}
@@ -1812,8 +1814,9 @@ func (m *LinkManager) sampleHealth() {
 			// that answers promptly now — an idle one answers quickly through
 			// any squeeze, having nothing queued — and when its last answered
 			// ping went out.
-			if busy && !ml.degraded && !ml.draining && !ml.suspect && o.peerSeen && o.ctrlWait < stuckWait/2 && o.ctrlAns != 0 {
-				answering = append(answering, time.Duration(ml.mtr.rttMicros.Load())*time.Microsecond)
+			if rtt := time.Duration(ml.mtr.rttMicros.Load()) * time.Microsecond; busy && !ml.degraded && !ml.draining && !ml.suspect && o.peerSeen &&
+				o.ctrlWait < stuckPrompt && rtt < stuckPrompt && o.ctrlAns != 0 {
+				answering = append(answering, rtt)
 				lastAns = max(lastAns, o.ctrlAns)
 			}
 		}
@@ -1829,11 +1832,11 @@ func (m *LinkManager) sampleHealth() {
 	// path or the other server, slow or down for all: moving users between
 	// links would not help, so none is drained (logged once a minute). At
 	// most drainHeadroom are drained per tick, the longest waits first.
-	mass := len(stuckCand) > 2 && 3*len(stuckCand) > busyN
+	mass := waitingN > 2 && 3*waitingN > busyN
 	if mass && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
 		logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer at once — the path or the other server is slow, not those links: none is drained",
-			len(stuckCand), busyN, fmtDur(stuckWait)))
+			waitingN, busyN, fmtDur(stuckWait)))
 	}
 	if len(answering) > 0 && !mass {
 		sort.Slice(answering, func(i, j int) bool { return answering[i] < answering[j] })

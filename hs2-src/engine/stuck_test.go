@@ -336,6 +336,52 @@ func TestStuckNotFlagged(t *testing.T) {
 			}
 		}
 	})
+	// The load test's squeeze (8 Mbit/s for every link): the other busy links
+	// were just answered, but after a round trip of seconds — no evidence.
+	t.Run("squeeze: the others answer, in seconds", func(t *testing.T) {
+		r := newStuckRig(t, 3)
+		for _, g := range r.good {
+			g.m.rttMicros.Store(4_900_000)
+		}
+		f, ml := r.add()
+		r.step(f, 0)
+		for i := 0; i < 5; i++ {
+			waiting(f, stuckWait+2*time.Second)
+			r.step(f, 1<<10)
+		}
+		if ml.degraded {
+			t.Fatalf("drained on answers that took 4.9 s:\n%s", r.lg)
+		}
+	})
+	// Waits rise link by link in a squeeze: the mass rule counts every link
+	// waiting now, not only those whose streak is complete.
+	t.Run("mass: links still building their streak count", func(t *testing.T) {
+		r := newStuckRig(t, 4)
+		var early, late []*meteredFakeLink
+		var mls []*managedLink
+		for i := 0; i < 2; i++ {
+			f, ml := r.add()
+			early, mls = append(early, f), append(mls, ml)
+		}
+		for i := 0; i < 2; i++ {
+			f, ml := r.add()
+			late, mls = append(late, f), append(mls, ml)
+		}
+		r.step(nil, 0)
+		for _, f := range early {
+			waiting(f, stuckWait+2*time.Second)
+		}
+		r.step(nil, 0) // early: streak 1
+		for _, f := range append(early, late...) {
+			waiting(f, stuckWait+2*time.Second)
+		}
+		r.step(nil, 0) // early: streak 2; late: streak 1 — 4 of 8 busy links wait
+		for i, ml := range mls {
+			if ml.degraded {
+				t.Fatalf("link %d drained while half the busy links wait:\n%s", i, r.lg)
+			}
+		}
+	})
 	// More than a third of the busy links wait at once: the path or the other
 	// server, not those links — none is drained, and it is said once.
 	t.Run("mass: a third of the busy links at once", func(t *testing.T) {

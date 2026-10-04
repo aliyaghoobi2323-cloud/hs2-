@@ -19,11 +19,12 @@ import (
 // link's users wait. A link is stuck when that wait is stuckWait or more
 // while it moves less than activeBytes, for stuckStreak samples in a row —
 // and the path is shown to work: another link carrying traffic answers
-// promptly now, and got an answer to a ping sent after this link's oldest
+// promptly now (its last round trip and its current wait both under
+// stuckPrompt), and got an answer to a ping sent after this link's oldest
 // one went out (a whole round trip that started later; a pong that merely
 // arrives later may have left before an outage, and an idle link answers
 // quickly through any squeeze, having nothing queued). When every busy link
-// waits, or more than a third of them at once, it is the path or the other
+// waits, or more than a third of them wait at once (streak or not), it is the path or the other
 // server, down or slow for all: moving users between links would not help,
 // so none is drained (said once a minute). At most drainHeadroom are drained
 // per tick, the longest waits first. And a link whose own reader was parked on
@@ -36,6 +37,12 @@ import (
 const (
 	stuckWait   = 6 * time.Second
 	stuckStreak = 2
+	// stuckPrompt: a link counts as evidence that the path works only if its
+	// last control round trip took less than this and none of its pings waits
+	// longer — under load a healthy link answers in 0.1-0.6 s; in a path-wide
+	// squeeze (the load test's 8 Mbit/s for everyone) every link answers in
+	// seconds, and one that has just been answered is no proof.
+	stuckPrompt = stuckWait / 3
 )
 
 // stuckObs is a link found stuck in this sample, for the log line.
