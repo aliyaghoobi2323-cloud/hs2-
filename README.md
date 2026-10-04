@@ -221,7 +221,16 @@ ceiling is above 64.
   whose app took nothing for 6 s while the buffer was full: `mtcp: reset N
   connection(s) on K link(s) whose app had taken nothing for 6s …`. Slow
   readers that still read are left alone. This is per server — **upgrade both
-  servers** for both directions.
+  servers** for both directions. A few stalled downloads spread over many
+  links fill no link's buffer, but each holds megabytes of kernel socket
+  buffers: twenty of them took a 2 GB server past the kernel's TCP memory
+  pressure mark, where every socket is squeezed. So while either server is
+  past that mark (each tells the other in its link stats) the stalled
+  connections are reset without waiting for a full link (`reset N
+  connection(s) whose app had taken nothing for 6s while kernel TCP memory
+  was above its pressure mark …`), and no link is judged lossy or stuck
+  (`kernel TCP memory on … is above its pressure mark — … none is judged`):
+  every link resends and waits then, none of it theirs.
 - **l3mtcp** side channel: a link whose session hears nothing for 12 s hands
   its TUN flows to the other links (it used to take 24–30 s).
 - **dgtun** carriers closed on purpose are closed on the other side at once;
@@ -311,7 +320,9 @@ started, stopped, edited and deleted on its own.
   that tunnel's service, config and interface — the others keep running.
 - **Upgrade** restarts every tunnel on the new binary and checks each one
   reconnects. **Backup / restore** cover all tunnels. **Uninstall** removes all
-  of them (delete one in the manager). The certificate-renewal hook reloads
+  of them (delete one in the manager) and what they left in `/run/hs2`, then
+  asks whether to remove the `hs2` program and `hs2-menu` too — by default
+  they stay, so setting up again needs no download. The certificate-renewal hook reloads
   every hs2 tunnel, so no renewal ever points at a deleted service.
 
 ## Several user ports, each to its own panel inbound (per-port targets)

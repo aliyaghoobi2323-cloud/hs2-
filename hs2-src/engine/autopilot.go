@@ -47,12 +47,12 @@ type autopilot struct {
 	tun               apTunables
 	rnd               func() float64
 
-	T     int      // committed SERVING target
-	hist  []apTick // ring of the last tun.histTicks ticks
-	caps  []apCap  // sustained rates of pressed serving links
-	pr    *apProbe // an in-flight growth probe
-	k     int      // failed-probe backoff exponent
-	chain int      // consecutive successful probes: bigger steps while demand climbs
+	T     int           // committed SERVING target
+	hist  []apTick      // ring of the last tun.histTicks ticks
+	caps  map[int]apCap // per link: the best sustained rate it showed while pressed
+	pr    *apProbe      // an in-flight growth probe
+	k     int           // failed-probe backoff exponent
+	chain int           // consecutive successful probes: bigger steps while demand climbs
 	// aborts counts consecutive probes whose links never came up (backoff);
 	// waitWhy says why the next probe is being waited for (for the monitor).
 	aborts  int
@@ -104,8 +104,8 @@ type apTunables struct {
 	inconclusiveNext  time.Duration
 	abortNext         time.Duration
 	capWindow         time.Duration
-	capMinSamples     int
-	capMax            int
+	capMinSamples     int     // links pressed in the window before the estimate counts
+	capMax            int     // links remembered for it (the stalest go first)
 	util              float64 // links run at <= this share of capacity at the recent peak
 	minBWForNeed      float64 // below this peak, bandwidth does not justify extra links
 	shrinkDwell       time.Duration
@@ -231,8 +231,8 @@ type apTick struct {
 }
 
 type apCap struct {
-	t time.Time
-	v float64
+	t time.Time // the link's latest pressed sample
+	v float64   // the best sustained rate it showed while pressed
 }
 
 type apProbe struct {
@@ -267,8 +267,8 @@ func newAutopilot(min, max, perLink int) *autopilot {
 		perLink = 8
 	}
 	tun := defaultTunables()
-	// One capacity sample per pressed link per tick: at hundreds of links a
-	// fixed 256 would hold less than one tick of the 30-minute window.
+	// One capacity entry per link pressed in the window: links come and go
+	// (a reconnect is a new link), so room for a few pools' worth.
 	if tun.capMax < 4*max {
 		tun.capMax = 4 * max
 	}
@@ -358,15 +358,12 @@ func (a *autopilot) decide(s apSample) apDecision {
 			if l.pressed {
 				P++
 				if l.sustained > 0 {
-					a.caps = append(a.caps, apCap{now, l.sustained})
+					a.noteCap(now, l.id, l.sustained)
 				}
 			}
 		case l.retiring:
 			R++
 		}
-	}
-	if len(a.caps) > t.capMax {
-		a.caps = a.caps[len(a.caps)-t.capMax:]
 	}
 	shortTick := P >= 1 && S-P < spare(P)
 	a.hist = append(a.hist, apTick{g: s.G, flowing: s.flowing, p: P, s: S, short: shortTick})
@@ -843,20 +840,48 @@ func (a *autopilot) out(s apSample, S, R int, ph apPhase, reason, note string) a
 	return apDecision{target: a.T, phase: ph, reason: reason, note: note}
 }
 
-// capEstimate is the median sustained rate of pressed serving links over the
-// capacity window — the per-link limit where one has actually been observed,
-// 0 (unknown) otherwise, so an unconstrained path never holds links for
-// bandwidth it does not need.
+// noteCap records a pressed link's sustained rate: per link, the best it
+// showed while pressed in the capacity window. Per link, not per sample: at
+// low load the only pressed links are slow ones (throttled, lossy, a user
+// whose app stalled), each adding a sample every tick, and sample by sample
+// they took the median down within minutes — on a real 48-link server to
+// ~0.9 Mbit/s, so 79 Mbit/s of peak "needed" all 48 links with 137 active
+// users, and the pool never shrank.
+func (a *autopilot) noteCap(now time.Time, id int, v float64) {
+	if a.caps == nil {
+		a.caps = map[int]apCap{}
+	}
+	c, ok := a.caps[id]
+	if !ok || now.Sub(c.t) > a.tun.capWindow || v > c.v {
+		c.v = v
+	}
+	c.t = now
+	a.caps[id] = c
+	if len(a.caps) > a.tun.capMax { // links come and go: drop the stalest
+		var oldID int
+		var oldT time.Time
+		for k, x := range a.caps {
+			if oldT.IsZero() || x.t.Before(oldT) {
+				oldID, oldT = k, x.t
+			}
+		}
+		delete(a.caps, oldID)
+	}
+}
+
+// capEstimate is the median, over the links pressed in the capacity window,
+// of the best sustained rate each showed — the per-link limit where one has
+// actually been observed, 0 (unknown) otherwise, so an unconstrained path
+// never holds links for bandwidth it does not need.
 func (a *autopilot) capEstimate(now time.Time) float64 {
 	var vs []float64
-	kept := a.caps[:0]
-	for _, c := range a.caps {
-		if now.Sub(c.t) <= a.tun.capWindow {
-			kept = append(kept, c)
-			vs = append(vs, c.v)
+	for id, c := range a.caps {
+		if now.Sub(c.t) > a.tun.capWindow {
+			delete(a.caps, id)
+			continue
 		}
+		vs = append(vs, c.v)
 	}
-	a.caps = kept
 	if len(vs) < a.tun.capMinSamples {
 		return 0
 	}

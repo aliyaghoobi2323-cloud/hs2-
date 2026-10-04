@@ -78,4 +78,15 @@ out=$(bash -c "source '$T/run.sh'; BACKUP_DIR='$T/bk'; BACKUP_KEEP=0; prune_back
 check "prune_backups: HS2_KEEP_BACKUPS=0 disables pruning" 'echo "$out" | grep -q RC=0 && [ "$(ls "$T/bk"/hs2-*.tar.gz | wc -l)" = 10 ]'
 out=$(bash -c "source '$T/run.sh'; BACKUP_DIR='$T/empty'; BACKUP_KEEP=10; prune_backups; echo RC=\$?" 2>&1)
 check "prune_backups: no backup folder is fine under set -e" 'echo "$out" | grep -q RC=0'
+# ---- remove_tunnel / uninstall: no leftovers in /run/hs2 ----------------------
+# (a real-server report: /run/hs2/etc-hs2-config.json.warm stayed after a full
+# uninstall). The warm-start record is named like cmd/hs2's warmPath: the status
+# file's name with .warm for .status.json.
+sed -n '/^status_path(){/,/^}/p' "$INST" > "$T/sp.sh"
+warm=$(bash -c "source '$T/sp.sh'; sp=\$(status_path /etc/hs2/config.json); echo \"\${sp%.status.json}.warm\"")
+check "the warm record of /etc/hs2/config.json is /run/hs2/etc-hs2-config.json.warm" '[ "$warm" = /run/hs2/etc-hs2-config.json.warm ]'
+check "remove_tunnel deletes the tunnel's warm record with its status file" 'sed -n "/^remove_tunnel(){/,/^}/p" "$INST" | grep -q "\"\${sp%.status.json}.warm\""'
+check "uninstall clears /run/hs2 (warm records, status files, the ping-guard folder)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rm -f /run/hs2/\*.warm" && sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rmdir /run/hs2/icmp-echo-ignore"'
+check "uninstall asks before removing the program and hs2-menu (default: keep)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rm -f \"\$BIN\" \"\$MENU_BIN\""'
+
 exit $fail

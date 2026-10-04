@@ -29,7 +29,8 @@ import (
 //	exit -> edge  record, exactly recLen bytes  per poll (fields past the known
 //	              64 bytes are skipped, so the record can grow compatibly)
 //
-//	record: 0 seq u32 | 4 flags u16 (bit0 chrono valid, bit1 tcp_info ok) |
+//	record: 0 seq u32 | 4 flags u16 (bit0 chrono valid, bit1 tcp_info ok,
+//	        bit2 the exit's kernel TCP memory is above its pressure mark) |
 //	        6 reserved u16 | 8 monoNs u64 | 16 txBytes u64 | 24 txBlockedNs u64 |
 //	        32 busyUs u64 | 40 rwndLimUs u64 | 48 sndbufLimUs u64 | 56 deliveryRate u64
 //
@@ -45,8 +46,9 @@ const (
 	statsOK          int32 = 1
 	statsUnsupported int32 = 2
 
-	statsFlagChrono  = 1 << 0
-	statsFlagTCPInfo = 1 << 1
+	statsFlagChrono      = 1 << 0
+	statsFlagTCPInfo     = 1 << 1
+	statsFlagMemPressure = 1 << 2 // older edges ignore it (mempressure.go)
 )
 
 // procStart anchors the exit's monotonic clock in records.
@@ -232,6 +234,9 @@ func serveStats(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carr
 				r.flags |= statsFlagChrono
 			}
 			r.busy, r.rwnd, r.sndbuf, r.delivery = ts.busyUs, ts.rwndUs, ts.sndbufUs, ts.deliveryRate
+		}
+		if tcpMemPressure.Load() {
+			r.flags |= statsFlagMemPressure
 		}
 		putStatsRec(rec, r)
 		if d, ok := st.(deadliner); ok {

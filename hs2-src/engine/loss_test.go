@@ -323,3 +323,42 @@ func TestLossKeepsALinkAtThePathsRate(t *testing.T) {
 		t.Fatalf("a link resending 25%% at a sixth of the path's rate was kept (streak %d):\n%s", slowML.upStreak, r.lg)
 	}
 }
+
+// A lossy link whose traffic dips under activeBytes now and then is still
+// judged: a quiet sample keeps the streak when the last bad one is recent
+// (a real server: one of two links at 20% loss not drained in 150 s); after
+// a long quiet spell the streak starts over.
+func TestLossStreakSurvivesShortQuietSamples(t *testing.T) {
+	r := newStuckRig(t, 0)
+	f, ml := r.add()
+	bad := func() { downLossy(f, 200<<10, 0.25); f.pong(int64(healthTick), 0); r.tick() }
+	quiet := func() { downLossy(f, 20<<10, 0.25); f.pong(int64(healthTick), 0); r.tick() }
+	bad()
+	bad() // the first window opens with the first pong
+	quiet()
+	bad()
+	quiet()
+	if ml.degraded {
+		t.Fatalf("drained after two bad windows (streak %d)", ml.dnStreak)
+	}
+	bad()
+	if !ml.degraded {
+		t.Fatalf("a link resending 25%% with quiet dips between was not drained (streak %d):\n%s", ml.dnStreak, r.lg)
+	}
+
+	r2 := newStuckRig(t, 0)
+	g, gml := r2.add()
+	bad2 := func() { downLossy(g, 200<<10, 0.25); g.pong(int64(healthTick), 0); r2.tick() }
+	bad2()
+	bad2()
+	bad2() // two bad windows
+	for el := time.Duration(0); el <= lossQuietKeep; el += healthTick {
+		downLossy(g, 4<<10, 0)
+		g.pong(int64(healthTick), 0)
+		r2.tick()
+	}
+	bad2()
+	if gml.degraded {
+		t.Fatalf("a streak survived %s of quiet (streak %d)", lossQuietKeep, gml.dnStreak)
+	}
+}

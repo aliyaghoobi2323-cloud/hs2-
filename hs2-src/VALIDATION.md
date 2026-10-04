@@ -124,6 +124,19 @@ one's `moving X Mbit/s where the busy links get Y`: X should be well under
 Y. A `stuck:` burst together with a `path is congested` line in the same
 minute is a failure: report both.
 
+**V7 — stalled readers on a small server (Q8).** Repeat the report's test:
+20 downloads through the tunnel (`iperf3 -R -P 20`) and stop the receiver
+(`kill -STOP`) for 60 s, under normal users. Pass: within ~10 s of the
+kernel TCP memory line, `reset N connection(s) whose app had taken nothing
+for 6s while kernel TCP memory was above its pressure mark`; no `degraded`
+or `stuck:` line while it lasts (`kernel TCP memory on … — none is judged`
+instead); the other users' p50 back to normal within ~20 s.
+
+**V8 — the pool comes down (Q8).** After a busy hour, with traffic back to
+normal: within ~5 min the link count steps down toward what the active users
+need, and `hs2 status`'s `one link carries ~X Mbit/s` is near what a busy
+link really moves, not the speed of the slowest links.
+
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with

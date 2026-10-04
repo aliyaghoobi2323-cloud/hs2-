@@ -35,6 +35,12 @@ import (
 // queue at once), closing the stream returns its tokens to the bucket, and
 // the link's other users keep flowing — well before the other side's 20 s.
 // A slow app that is still reading is never one: its writes complete.
+//
+// While either server's kernel TCP memory is above its pressure mark
+// (mempressure.go) the stuck relays are ended without waiting for their link
+// to starve: one stalled download per link never empties a bucket, but
+// twenty of them hold enough kernel buffers to squeeze every socket on a
+// 2 GB server.
 
 const (
 	// wedgeLooks: consecutive looks a session's reader must be parked before
@@ -78,6 +84,9 @@ type sessGuard struct {
 	// leaves such a link to the guard; stuck.go).
 	parkedAt atomic.Int64
 	quietLog time.Time
+	// squeezed counts the relays ended for memory pressure, not a full
+	// bucket (for the log line).
+	squeezed atomic.Int64
 }
 
 // relayWatch is one relay's local-write state as the guard sees it.
@@ -146,13 +155,23 @@ func (g *sessGuard) lookAt(now time.Time) (killed int, wedgedEmpty bool) {
 		}
 	}
 	wedged := g.parked >= wedgeLooks
-	if wedged && len(stuck) > 0 {
+	squeezed := !wedged && memPressure() && len(stuck) > 0
+	if (wedged || squeezed) && len(stuck) > 0 {
 		for _, rw := range stuck {
 			delete(g.relays, rw)
 		}
-		g.parked = 0 // give the freed bucket a fresh window
+		if wedged {
+			g.parked = 0 // give the freed bucket a fresh window
+		}
 	}
 	g.mu.Unlock()
+	if squeezed {
+		g.squeezed.Add(int64(len(stuck)))
+		for _, rw := range stuck {
+			go rw.kill()
+		}
+		return len(stuck), false
+	}
 	if !wedged {
 		return 0, false
 	}
@@ -174,6 +193,9 @@ type guardSet struct {
 	links    map[*sessGuard]bool // distinct links with a release since the last line
 	logAt    time.Time
 	emptyLog time.Time
+
+	squeezedN    int // relays ended for memory pressure since the last line
+	squeezeLogAt time.Time
 }
 
 var guards guardSet
@@ -222,6 +244,10 @@ func (gs *guardSet) lookAll(now time.Time) {
 	empty := 0
 	for _, g := range list {
 		k, e := g.look()
+		if n := g.squeezed.Swap(0); n > 0 {
+			gs.squeezedN += int(n)
+			k -= int(n)
+		}
 		if k > 0 {
 			gs.killed += k
 			if gs.links == nil {
@@ -236,6 +262,11 @@ func (gs *guardSet) lookAll(now time.Time) {
 	lp := gs.logf.Load()
 	if lp == nil {
 		return
+	}
+	if gs.squeezedN > 0 && now.Sub(gs.squeezeLogAt) >= wedgeLogEvery {
+		(*lp)("mtcp: reset %d connection(s) whose app had taken nothing for %s while kernel TCP memory was above its pressure mark (here or on the other server) — their buffers squeezed every socket",
+			gs.squeezedN, fmtDur(stuckFor))
+		gs.squeezedN, gs.squeezeLogAt = 0, now
 	}
 	if gs.killed > 0 && now.Sub(gs.logAt) >= wedgeLogEvery {
 		(*lp)("mtcp: reset %d connection(s) on %d link(s) whose app had taken nothing for %s while the link's receive buffer was full — the links' other connections keep flowing",

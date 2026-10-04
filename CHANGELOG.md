@@ -1054,6 +1054,34 @@ an independent review found why.
   | 8 Mbit/s squeeze, 20 ms queue: active cut / loss verdicts | 1,730-1,750 / 4 | 1,706 / 0 (one link still backed off 63 s after the squeeze drained as stuck) |
   | 20% random loss on 10 random links: drained / cut / p99 | 4 closed by 120 s / 657 / 3.0-4.3 s | none (light, or moving what the busy links get) / 0 / 2.5-5.8 s |
 
+- **From the first real-server report** (two test servers, 1-3 cores and
+  2 GB each, auto ceiling 48, 550-950 real users, reverse, the release build):
+  - **Stalled readers under kernel memory pressure (🔴).** Twenty downloads
+    whose app was stopped for 60 s (`iperf3 -R -P 20`, `kill -STOP`), under
+    250 users: the guard reset nothing (one stalled download per link never
+    fills a link's buffer), the kernel's TCP memory went past its pressure
+    mark (113 of 169 MB), every socket was squeezed, and the health rules
+    drained 11 healthy links for loss and as stuck — 44 users cut, p50 84 →
+    170 ms. Now, while either server is past the mark (the exit says so in a
+    new flag of its link stats; an older edge ignores it), the guard resets
+    the connections whose app took nothing for 6 s without waiting for a
+    full link, and no link is judged lossy or stuck, nor for the recovery
+    window after.
+  - **The pool did not shrink (🟠).** Five minutes after the load, 48 links
+    stayed for 137 active users: the per-link capacity estimate (~0.9
+    Mbit/s) came from the few slow links still pressed at low load, sample
+    after sample. It is now one entry per link — the best sustained rate
+    each showed while pressed in the 30-minute window — and their median.
+  - **A lossy link missed (🟠).** One of two links at 20% loss was never
+    drained in 150 s: the pong-timing estimate (above), and its traffic
+    dipping under the activity threshold, which reset the streak. A quiet
+    sample now keeps a streak whose last bad sample is under 20 s old.
+  - **Uninstall left files.** The tunnels' warm-start records and the ping
+    guard's folder in `/run/hs2` are removed; the option says it keeps the
+    program, and asks whether to remove `hs2` and `hs2-menu` too.
+  - Also confirmed there, with real users: growth, restarts of either
+    server, a 30 s outage, one and four stuck links, a path-wide 2 Mbit/s
+    slowdown (no verdict) — as on the rig.
 - **What the rig also showed, not changed here.**
   - A sudden crowd onto a small pool (5,500 connections in 30 s onto 8 warm
     links) leaves the first links crowded (~235 connections each) until

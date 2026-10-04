@@ -2373,7 +2373,9 @@ remove_tunnel(){ # unit
     done
     if [ -z "$other" ]; then ip link del "$ifc" 2>/dev/null || true; fi
   fi
-  rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$(status_path "$cfg")"
+  local sp; sp=$(status_path "$cfg")
+  # the live status file, and the warm-start record next to it (same name, .warm)
+  rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$sp" "${sp%.status.json}.warm"
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed "$u" >/dev/null 2>&1 || true
   kernel_cleanup
@@ -2393,8 +2395,9 @@ kernel_cleanup(){
 }
 
 # uninstall: remove EVERY hs2 tunnel from this server (the tunnel manager
-# deletes one at a time). The binary and hs2-menu stay, so setting up again
-# needs no download.
+# deletes one at a time), then — only if asked — the hs2 program and the
+# hs2-menu command too. By default they stay, so setting up again needs no
+# download (from Iran that download may not even work).
 uninstall(){
   local a u units
   units=$(tm_units)
@@ -2410,7 +2413,19 @@ uninstall(){
   auto_backup
   for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
   rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
+  # What the daemons left in /run/hs2: warm-start records and status files of
+  # tunnels that are gone, and the (now empty) ping-guard marker folder.
+  rm -f /run/hs2/*.warm /run/hs2/*.status.json 2>/dev/null || true
+  rmdir /run/hs2/icmp-echo-ignore 2>/dev/null || true
+  rmdir /run/hs2 2>/dev/null || true
   ok "All hs2 tunnels removed (services stopped, tun interfaces deleted). Backhaul untouched."
+  read -rp "Also remove the hs2 program and the hs2-menu command? Keep them (Enter) to set up again without a download [y/N]: " a </dev/tty || a=""
+  case "$a" in
+    y|Y|yes)
+      rm -f "$BIN" "$MENU_BIN"
+      ok "Removed $BIN and $MENU_BIN — hs2 is gone from this server (backups aside)." ;;
+    *) info "Kept $BIN and $MENU_BIN (run hs2-menu to set up again)." ;;
+  esac
   if ls "$BACKUP_DIR"/hs2-*.tar.gz >/dev/null 2>&1; then
     warn "Backups are kept in $BACKUP_DIR (readable by root only). They contain the tunnel keys —"
     warn "delete that folder if this server is being handed over or the tunnels are gone for good."
@@ -4178,7 +4193,7 @@ main_menu(){
     echo "    5) Upgrade (new binary, keep config)" >&2
     echo "    6) Backup current config" >&2
     echo "    7) Restore a backup" >&2
-    echo "    8) Uninstall hs2 (removes ALL tunnels)" >&2
+    echo "    8) Uninstall hs2 (removes ALL tunnels; asks before removing the program)" >&2
     echo "    0) Exit" >&2
     echo >&2
     read -rp "Choose [0-8]: " CH </dev/tty || exit 0

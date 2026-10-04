@@ -58,6 +58,10 @@ const (
 	// together after a wait) stays open for the next pong — a few hundred
 	// milliseconds of segments make a noisy fraction.
 	lossWinMin = time.Second
+	// lossQuietKeep: a sample too quiet to judge keeps a loss streak whose
+	// last bad sample is at most this old (a few dips of a lossy link's
+	// traffic under activeBytes), and ends an older one.
+	lossQuietKeep = 20 * time.Second
 	// lossKeepShare: a lossy link moving at least this share of the median
 	// pressed link's rate is kept (when lossPathMin or more are pressed).
 	lossKeepShare = 0.5

@@ -238,29 +238,30 @@ type managedLink struct {
 
 	// Sampler state, written by the pool goroutine under LinkManager.mu (Pick
 	// reads the routing fields under the same lock).
-	mtr          *linkMeter  // nil for links without metering (never soft-degrades)
-	prevRd       uint64      // download byte counter at the last sample
-	prevWr       uint64      // upload byte counter at the last sample
-	prevRetrans  uint64      // local (upload) TCP retransmit counter at last sample
-	prevBlocked  int64       // upload writer-blocked ns at the last sample
-	prevBusy     uint64      // TCP_INFO busy time at the last sample
-	prevRwnd     uint64      // TCP_INFO rwnd-limited time at the last sample
-	goodput      float64     // EWMA bytes/sec, both directions (diagnostic)
-	lowStreak    int         // the longer of upStreak and dnStreak
-	upStreak     int         // consecutive ticks resending > lossFrac on upload
-	dnStreak     int         // consecutive pong windows resending > lossFrac on download
-	prevSegsOut  uint32      // TCP_INFO data segments sent at the last sample
-	prevPeer     peerLossRec // the pong that opened the current download-loss window
-	lossFrac     float64     // the last judged loss fraction (the worse direction)
-	stuckStreak  int         // consecutive samples its traffic waited stuckWait+ (stuck.go)
-	stuck        bool        // degraded because it is stuck: drained without the maxDrain wait
-	sampled      bool        // prev* are valid (skips the first delta)
-	degraded     bool        // soft-bad: excluded from new-user routing
-	draining     bool        // being retired after its replacement is up
-	drainSince   time.Time
-	drainNoted   bool        // the maxDrain step was logged
-	drainReplace bool        // it was serving when it degraded: its slot is replaced
-	drainReclaim atomic.Bool // a stalled-connection reclaim runs for it (drain)
+	mtr              *linkMeter  // nil for links without metering (never soft-degrades)
+	prevRd           uint64      // download byte counter at the last sample
+	prevWr           uint64      // upload byte counter at the last sample
+	prevRetrans      uint64      // local (upload) TCP retransmit counter at last sample
+	prevBlocked      int64       // upload writer-blocked ns at the last sample
+	prevBusy         uint64      // TCP_INFO busy time at the last sample
+	prevRwnd         uint64      // TCP_INFO rwnd-limited time at the last sample
+	goodput          float64     // EWMA bytes/sec, both directions (diagnostic)
+	lowStreak        int         // the longer of upStreak and dnStreak
+	upStreak         int         // consecutive ticks resending > lossFrac on upload
+	dnStreak         int         // consecutive pong windows resending > lossFrac on download
+	upBadAt, dnBadAt time.Time   // the last bad sample of each direction
+	prevSegsOut      uint32      // TCP_INFO data segments sent at the last sample
+	prevPeer         peerLossRec // the pong that opened the current download-loss window
+	lossFrac         float64     // the last judged loss fraction (the worse direction)
+	stuckStreak      int         // consecutive samples its traffic waited stuckWait+ (stuck.go)
+	stuck            bool        // degraded because it is stuck: drained without the maxDrain wait
+	sampled          bool        // prev* are valid (skips the first delta)
+	degraded         bool        // soft-bad: excluded from new-user routing
+	draining         bool        // being retired after its replacement is up
+	drainSince       time.Time
+	drainNoted       bool        // the maxDrain step was logged
+	drainReplace     bool        // it was serving when it degraded: its slot is replaced
+	drainReclaim     atomic.Bool // a stalled-connection reclaim runs for it (drain)
 
 	// Sizing.
 	retiring     bool      // takes no new users; closed once empty
@@ -1663,6 +1664,18 @@ func (m *LinkManager) sampleHealth() {
 		}
 	}
 
+	// The other server's kernel TCP memory, from its links' latest records
+	// (mempressure.go): the guard reads it too.
+	peerPress := false
+	for _, o := range obs {
+		if r := o.rec; r != nil && r.flags&statsFlagMemPressure != 0 && now.Sub(r.at) <= statsStale {
+			peerPress = true
+			break
+		}
+	}
+	peerMemPressure.Store(peerPress)
+	press := memPressure()
+
 	var logs []string
 	rwndHint := false
 	secs := dt.Seconds()
@@ -1687,7 +1700,7 @@ func (m *LinkManager) sampleHealth() {
 	// says anything about one link then — TCP resends what the slow spell
 	// held back as it recovers. As of the last tick; this one's is applied
 	// to the verdicts after the loop.
-	calm := m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor()
+	calm := (m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor()) && !press
 	for _, ml := range m.links {
 		o := obs[ml]
 		if o == nil { // arrived after the snapshot: counted, measured next tick
@@ -1810,27 +1823,28 @@ func (m *LinkManager) sampleHealth() {
 		// (main: 1-2); it takes degradeStreak fresh samples after.
 		if !ml.degraded && !ml.draining {
 			up := judgeUpLoss(o.tsOK, dWr, dUp, dSegsOut, secs)
-			dn, fresh := ml.judgeDownLoss(o.peerLoss)
+			dn, _ := ml.judgeDownLoss(o.peerLoss)
+			// A quiet sample (too little moved to judge, or a pong window
+			// still open) keeps a streak whose last bad sample is recent: a
+			// lossy link whose traffic dips under activeBytes now and then
+			// was never judged three times running (a real server: one of
+			// two links at 20% loss not drained in 150 s).
 			switch {
-			case !calm || !up.judged:
+			case !calm:
 				ml.upStreak = 0
 			case up.bad():
 				ml.upStreak++
-			default:
+				ml.upBadAt = now
+			case up.judged || now.Sub(ml.upBadAt) > lossQuietKeep:
 				ml.upStreak = 0
 			}
 			switch {
 			case !calm:
 				ml.dnStreak = 0
-			case dn.judged:
-				if dn.bad() {
-					ml.dnStreak++
-				} else {
-					ml.dnStreak = 0
-				}
-			case !fresh && o.peerSeen && dRd >= activeBytes:
-				// downloading, its pong window still open: as it was
-			default:
+			case dn.bad():
+				ml.dnStreak++
+				ml.dnBadAt = now
+			case dn.judged || now.Sub(ml.dnBadAt) > lossQuietKeep:
 				ml.dnStreak = 0
 			}
 			ml.lowStreak = max(ml.upStreak, ml.dnStreak)
@@ -1916,7 +1930,9 @@ func (m *LinkManager) sampleHealth() {
 		m.promptFloor.note(now, promptMed)
 	}
 	inflated := usual > 0 && len(answering) >= stuckBaseMinN && promptMed > max(stuckInflateFloor, stuckInflate*usual)
-	slow := waitingN >= 2 && (waitingN > len(answering) || inflated)
+	// Kernel TCP memory pressure on either server (mempressure.go) squeezes
+	// every socket there: what the links do then is not theirs either.
+	slow := press || waitingN >= 2 && (waitingN > len(answering) || inflated)
 	if slow {
 		if m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor() {
 			m.stuckSlowFor = 0 // a new spell
@@ -1932,7 +1948,14 @@ func (m *LinkManager) sampleHealth() {
 	if !recovering {
 		logs = append(logs, m.lossVerdicts(now, lossCand, judgedLoss, pressedRates, degradedNow)...)
 	} // else: from the next tick on their streaks restart (calm)
-	if slow && now.Sub(m.stuckMassLogAt) >= time.Minute {
+	if press && now.Sub(m.stuckMassLogAt) >= time.Minute {
+		m.stuckMassLogAt = now
+		where := "this server"
+		if !tcpMemPressure.Load() {
+			where = "the other server"
+		}
+		logs = append(logs, fmt.Sprintf("kernel TCP memory on %s is above its pressure mark — every socket there is squeezed, not the links: none is judged (look for stalled readers)", where))
+	} else if slow && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
 		if waitingN > len(answering) {
 			logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer and only %d answer promptly — the path or the other server is slow, not those links: none is drained",

@@ -606,9 +606,14 @@ func TestDoctorConntrackAndTCPMemWatch(t *testing.T) {
 	os.WriteFile(filepath.Join(proc, "sys/net/ipv4/tcp_mem"), []byte("1000\t2000\t3000\n"), 0o644)
 	var logs []string
 	w := &tcpMemWatch{proc: proc, logf: func(f string, a ...any) { logs = append(logs, fmt.Sprintf(f, a...)) }}
-	for _, mem := range []int{500, 2100, 2500, 2200, 1700} {
+	t.Cleanup(func() { engine.SetTCPMemPressure(false) })
+	for i, mem := range []int{500, 2100, 2500, 2200, 1700} {
 		os.WriteFile(filepath.Join(proc, "net/sockstat"), []byte(fmt.Sprintf("TCP: inuse 5 orphan 0 tw 0 alloc 6 mem %d\n", mem)), 0o644)
 		w.check()
+		// the engine (guard, health rules) sees it too, with the same hysteresis
+		if want := i >= 1 && i <= 3; engine.TCPMemPressure() != want {
+			t.Fatalf("mem %d: engine pressure %v, want %v", mem, engine.TCPMemPressure(), want)
+		}
 	}
 	if len(logs) != 2 || !strings.Contains(logs[0], "above the kernel's pressure mark") || !strings.Contains(logs[1], "back below") {
 		t.Fatalf("pressure log: %q", logs)

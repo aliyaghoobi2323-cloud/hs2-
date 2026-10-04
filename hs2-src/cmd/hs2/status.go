@@ -768,4 +768,5 @@ func (w *tcpMemWatch) check() {
 		w.above = false
 		w.logf("kernel TCP memory: back below the pressure mark (%d MB of %d MB)", mb(mem), mb(press))
 	}
+	engine.SetTCPMemPressure(w.above) // the guard and the health rules (engine/mempressure.go)
 }

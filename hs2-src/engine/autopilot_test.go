@@ -878,3 +878,37 @@ func TestSimNoisyFullPathNoDrift(t *testing.T) {
 		}
 	}
 }
+
+// The capacity estimate counts each pressed link once, at the best sustained
+// rate it showed: at low load the only pressed links are slow ones (a
+// throttled link, a lossy one, a stalled user's), and sample by sample they
+// took the median down within minutes (a real 48-link server: ~0.9 Mbit/s,
+// so 79 Mbit/s of peak "needed" all 48 links for 137 active users).
+func TestCapEstimateNotDraggedBySlowLinks(t *testing.T) {
+	a := newAutopilot(2, 48, 8)
+	t0 := time.Unix(1000, 0)
+	fast := 5e6 / 8 // 5 Mbit/s
+	for id := 0; id < 10; id++ { // the busy hour: ten links pressed at 5 Mbit/s
+		a.noteCap(t0, id, fast)
+	}
+	now := t0
+	for tick := 0; tick < 300; tick++ { // then 10 min of two slow links pressed every tick
+		now = now.Add(2 * time.Second)
+		a.noteCap(now, 100, 0.1e6/8)
+		a.noteCap(now, 101, 0.2e6/8)
+	}
+	if c := a.capEstimate(now); c < fast*0.99 {
+		t.Fatalf("estimate %.2f Mbit/s after two slow links pressed for 10 min, want the busy links' 5", mbitps(c))
+	}
+	// A link that was fast and is slow now keeps its best within the window.
+	a.noteCap(now, 3, 0.1e6/8)
+	if c := a.capEstimate(now); c < fast*0.99 {
+		t.Fatalf("estimate %.2f Mbit/s, a link's best forgotten", mbitps(c))
+	}
+	// After the window the busy hour is forgotten: too few links remain.
+	later := t0.Add(a.tun.capWindow + time.Minute)
+	a.noteCap(later, 100, 0.1e6/8)
+	if c := a.capEstimate(later); c != 0 {
+		t.Fatalf("estimate %.2f Mbit/s from one link after the window, want unknown (0)", mbitps(c))
+	}
+}
