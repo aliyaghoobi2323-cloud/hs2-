@@ -43,7 +43,8 @@ not**:
   connection that is still in use.** A connection on a retiring link that has
   been completely idle for `drain_idle_sec` (default 310 s, just above xray's
   300 s idle timeout; `0` = never) is closed so the link can finish.
-- **a bad link** (retransmitting more than 12% of what it sends while busy) is
+- **a bad link** (resending more than 12% of the segments it sends while
+  busy, and moving less than half of what the busy links get) is
   *degraded*: it takes no new connections and its replacement is brought up
   at once (on the reverse edge the exit is asked for it). After 45 s its
   connections that moved no data for 15 s are closed — idle ones, and on a
@@ -56,7 +57,15 @@ not**:
   45 s with what is left, as before. While the path is slow and right
   after (see a stuck link, below), no link is judged for loss until the
   links have had time to recover: TCP resends what the slowdown held back,
-  and that says nothing about one link.
+  and that says nothing about one link. A link that resends a lot but still
+  moves what the other busy links get is running into a per-connection
+  throttle that drops what goes over its rate, and is left alone: its users
+  would get no more elsewhere. When most busy links resend that much below
+  that rate, the path is lossy: none is drained. At most an eighth of the
+  pool drains at a time. Log: `link N degraded (up-loss —, down-loss 25% of
+  840 segments, moving 0.4 Mbit/s where the busy links get 2.8, rtt 120ms)
+  — draining`; a lossy path: `N of M busy links resend more than 12% — the
+  path is lossy, not those links: none is drained`.
 - **a stuck link** — throttled to a few packets a second, the way DPI slows a
   flow without cutting it — moves too little for the loss rule and still
   gets a keepalive through, so it used to keep serving while its users got
@@ -66,16 +75,19 @@ not**:
   half of what the links that answer promptly move), and other busy links
   answer at once. It is degraded like a bad link, and its connections that
   moved no data for 15 s close right away. When two or more links wait like
-  that and they outnumber the links answering promptly, the path or the
-  other server is slow: no link is drained, nor judged for loss, nor for as
-  long again after (30 s to 2 min) while the links catch up on their own.
+  that and they outnumber the links answering promptly — or the links that
+  answer promptly take 4× their usual time (and over 0.5 s): a congested
+  path — the path or the other server is slow: no link is drained, nor
+  judged for loss, nor for as long again after (30 s to 2 min) while the
+  links catch up on their own.
   A link that waits while it moves its share is waiting on its own users'
   load, not on a throttle, so it is left alone. At most an eighth of the
   pool drains as stuck at a time. Log: `link N stuck: its traffic has
   waited 8s for an answer …`, then `link N stuck — its connections that
   moved no data for 15s are closed now …`; a slow path: `N of M busy links
   have waited 6s+ for an answer and only K answer promptly — … none is
-  drained`.
+  drained`, or `… and the K that answer promptly take ~1300ms, 15× their
+  usual ~88ms — the path is congested, not those links: none is drained`.
 
 It comes up "warm" (8 links) so a burst of connections at start spreads
 immediately — or, after a restart within 15 minutes, at the size it had
@@ -218,10 +230,12 @@ ceiling is above 64.
   every 5 s; a retiring carrier's flows move off it after 30 s at the latest,
   so a shrink finishes even under a download that never pauses.
 
-**What the guard cannot see** (documented, not changed): one UDP user flow
-whose stream write blocks stalls the other UDP flows on the same Iran port;
-up to four streams waiting on slow panel dials can hold a link for up to 5 s;
-an older hs2 on the other server keeps its own unguarded buffers.
+**What the guard cannot see** (documented, not changed): up to four streams
+waiting on slow panel dials can hold a link for up to 5 s; an older hs2 on
+the other server keeps its own unguarded buffers. (A UDP user flow whose
+link is slow no longer stalls the other UDP flows on the same Iran port:
+each flow has its own queue — 256 datagrams, 512 KB — and writer, and a
+full queue drops, as a full UDP socket would.)
 
 ## Automatic kernel tuning
 

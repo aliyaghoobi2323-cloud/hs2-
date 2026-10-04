@@ -176,37 +176,51 @@ func TestLossPathWideDrainsNone(t *testing.T) {
 	}
 }
 
-// A link is drained only if it resends well above the busy links around it:
-// with most busy links at 8% (a per-connection throttle), one at 14% stays
-// and one at 25% goes.
-func TestLossRelativeToTheBusyLinks(t *testing.T) {
+// Lossy links among busy ones that run into a per-connection throttle: the
+// throttled ones resend as much but move what a link gets, so they are
+// neither drained nor counted as a lossy path; the lossy ones, moving a
+// sixth of it, are drained. (Compared with the median busy link, the lossy
+// ones hid among the throttled: 20% random loss on 10 links, none drained.)
+func TestLossFindsTheLossyAmongThrottledLinks(t *testing.T) {
 	r := newStuckRig(t, 0)
-	var fs []*meteredFakeLink
-	for i := 0; i < 10; i++ {
-		f, _ := r.add()
-		fs = append(fs, f)
+	var thr, lossy []*meteredFakeLink
+	var tml, lml []*managedLink
+	segs := make([]uint32, 10)
+	for i := range segs {
+		segs[i] = 1000
 	}
-	mid, mid2 := r.add()
-	hi, hi2 := r.add()
-	for i := 0; i < 10; i++ {
-		for _, f := range fs {
-			downLossy(f, 200<<10, 0.08)
-			f.pong(int64(healthTick), 0)
+	for i := 0; i < 8; i++ {
+		f, ml := r.add()
+		thr, tml = append(thr, f), append(tml, ml)
+	}
+	for i := 0; i < 2; i++ {
+		f, ml := r.add()
+		lossy, lml = append(lossy, f), append(lml, ml)
+	}
+	for i := 0; i < 8; i++ {
+		for j, f := range thr {
+			upPressed(f, 700<<10, 100, &segs[j], 512) // 20% at the throttle's rate
 		}
-		downLossy(mid, 200<<10, 0.14)
-		mid.pong(int64(healthTick), 0)
-		downLossy(hi, 200<<10, 0.25)
-		hi.pong(int64(healthTick), 0)
+		for j, f := range lossy {
+			upPressed(f, 120<<10, 30, &segs[8+j], 120) // 25% at a sixth of it
+		}
 		r.tick()
 	}
-	if mid2.degraded {
-		t.Fatalf("a link at 14%% was drained while the busy links resend 8%%:\n%s", r.lg)
+	for _, ml := range tml {
+		if ml.degraded {
+			t.Fatalf("link %d, at the throttle's rate, drained:\n%s", ml.id, r.lg)
+		}
 	}
-	if !hi2.degraded {
-		t.Fatalf("a link at 25%% was not drained (streak %d):\n%s", hi2.dnStreak, r.lg)
+	for _, ml := range lml {
+		if !ml.degraded {
+			t.Fatalf("lossy link %d, at a sixth of the rate, kept (streak %d):\n%s", ml.id, ml.upStreak, r.lg)
+		}
 	}
-	if !strings.Contains(r.lg.String(), "busy links resend 8% at the median") {
-		t.Fatalf("the line does not give the median:\n%s", r.lg)
+	if r.lg.count("the path is lossy") != 0 {
+		t.Fatalf("throttled links counted as a lossy path:\n%s", r.lg)
+	}
+	if !strings.Contains(r.lg.String(), "where the busy links get 2.9") {
+		t.Fatalf("the line does not give the path's rate:\n%s", r.lg)
 	}
 }
 

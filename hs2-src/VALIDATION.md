@@ -1,7 +1,8 @@
-# Real-server validation — stuck links and the loss rule (Q7)
+# Real-server validation — stuck links and the loss rule (Q7, Q8)
 
-This is the checklist for validating the Q7 release (see CHANGELOG, "Q7 — stuck
-links") on a real Iran/Kharej server pair with real users. The load rig showed
+This is the checklist for validating the Q7 and Q8 releases (see CHANGELOG,
+"Q7 — stuck links" and "Q8 — the health rules at high bandwidth") on a real
+Iran/Kharej server pair with real users. The load rig showed
 the rules work and do not cut users needlessly in the scenarios it can make;
 what it cannot make is Iran's real DPI, real evening congestion and real user
 traffic. Both servers must run the release build (`hs2 version` shows the
@@ -34,7 +35,7 @@ Find the service units with `systemctl list-units 'hs2*'`, then follow the
 Iran (edge) side, where all of this is decided:
 
 ```
-journalctl -u <unit> -f -o cat | grep -E 'stuck|answer promptly|degraded|closed with its'
+journalctl -u <unit> -f -o cat | grep -E 'stuck|answer promptly|degraded|closed with its|path is lossy'
 ```
 
 | Log line | Meaning | Expected |
@@ -42,7 +43,9 @@ journalctl -u <unit> -f -o cat | grep -E 'stuck|answer promptly|degraded|closed 
 | `link N stuck: its traffic has waited 10s for an answer while it moved 1.8 KB in 2s (the other links answer in ~85ms) — draining` | a link throttled to a few packets a second; its users are moved | rare; each should match a real throttle (DPI) |
 | `link N stuck — its connections that moved no data for 15s are closed now …` | the drain step of that link | right after the line above |
 | `N of M busy links have waited 6s+ for an answer and only K answer promptly — the path or the other server is slow, not those links: none is drained` | path-wide slowness (congestion, outage, the other server slow); no verdicts for as long as it lasts and as long again after (30 s–2 min) | at most once a minute during real congestion; never on a quiet path |
-| `link N degraded (up-loss +a/bKB, down-loss +c/dKB, rtt …) — draining` | the loss rule: >12% resent while busy, 3 samples | as before; not in a wave right after a slow line |
+| `N of M busy links have waited 6s+ for an answer and the K that answer promptly take ~1300ms, 15× their usual ~88ms — the path is congested, not those links: none is drained` (Q8) | the same, recognised by the prompt links' delay against their usual (lowest median of 10 min) | during real congestion (evening peak) only |
+| `link N degraded (up-loss —, down-loss 25% of 840 segments, moving 0.4 Mbit/s where the busy links get 2.8, rtt …) — draining` | the loss rule: >12% resent while busy, 3 samples (download: 3 pong windows), and moving under half of what the busy links get | rare; a link at the others' rate is never drained for loss (Q7's format was `up-loss +a/bKB, …`) |
+| `N of M busy links resend more than 12% — the path is lossy, not those links: none is drained` (Q8) | most busy links resend that much below the path's rate | at most once a minute, only while the path itself loses |
 
 Count per hour (Iran side):
 
@@ -50,6 +53,8 @@ Count per hour (Iran side):
 journalctl -u <unit> --since "-1h" -o cat | grep -c 'stuck: its traffic'
 journalctl -u <unit> --since "-1h" -o cat | grep -c 'answer promptly'
 journalctl -u <unit> --since "-1h" -o cat | grep -c 'degraded (up-loss'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'path is congested'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'path is lossy'
 ```
 
 ## Scenarios
@@ -96,27 +101,32 @@ iptables -D INPUT -p tcp --dport PORT -j DROP; iptables -D OUTPUT -p tcp --sport
 
 Pass: no `stuck:` line; at most one `answer promptly` line; users served
 normally again within ~20 s after the block ends. Also count
-`degraded (up-loss` lines in the 60 s after the block ends: on the rig this
-build had 4-5 there (main 1), all at one tick ~18 s after — new links
-flushing the users' backlog, judged once the outage's quiet time ran out
-(the links died mid-outage, which ended the slow spell early). If that comes
-in dozens on a real pool, report it: the fix would be to keep the quiet time
-running while the pool has no links answering at all.
+`degraded (up-loss` lines in the 60 s after the block ends: on the rig the
+Q7 build had 4-6 there (main 1), all at one tick ~18 s after — new links
+flushing the users' backlog at the throttle's rate; the Q8 build had none
+(they move what the other links get). If that comes in dozens on a real
+pool, report it.
 
 **V5 — the open question: drops after congestion.** On the rig, a squeeze
-through a shallow queue (20 ms) gave this build more drops than main: 1730
+through a shallow queue (20 ms) gave the Q7 build more drops than main: 1730
 and 1750 active connections in two runs against 1537 in main's one run (main
 was not repeated), with 4 loss verdicts 1-2 min after the squeeze where main
-had 1 — the downloads re-ramping into the rig's per-flow policer. Main was
-blind there by accident (its control channel died in the squeeze). Watch V1's
-evening peak: after each slow spell, count `degraded (up-loss` lines in the
-following 3 minutes. If they come by the dozen and users complain, report the
-lines (with the slow line before them) — the fix would be a longer quiet time
-for the loss rule after a spell, not a change to the stuck rule.
+had 1 — the downloads re-ramping into the rig's per-flow policer. The Q8
+build had 1706 and no loss verdict there. Watch V1's evening peak: after each
+slow or congested line, count `degraded (up-loss` and `stuck:` lines in the
+following 3 minutes. If they come by the dozen and users complain, report
+the lines with the slow line before them.
+
+**V6 — high bandwidth (Q8).** At the evening peak, with downloads running:
+count `degraded (up-loss` per hour (on the rig the Q7 build drained ~12 links
+a minute for loss at 150-200 Mbit/s, the Q8 build none), and look at each
+one's `moving X Mbit/s where the busy links get Y`: X should be well under
+Y. A `stuck:` burst together with a `path is congested` line in the same
+minute is a failure: report both.
 
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with
 timestamps), the time of the action (V2–V4), and whether users noticed.
 
-Release: see CHANGELOG (Q7) and `git log` on main.
+Release: see CHANGELOG (Q7, Q8) and `git log` on main.

@@ -1671,7 +1671,7 @@ func (m *LinkManager) sampleHealth() {
 	nOK, nOld, poolOK, aged := 0, 0, 0, 0
 	var stuckCand []stuckObs
 	var lossCand []lossObs
-	var judgedLoss []float64        // the loss fraction of every link judged this tick
+	var judgedLoss []lossJudged     // what every link judged this tick resends and moves
 	var pressedRates []float64      // what each pressed link moves, bytes/s (its path\'s rate)
 	degradedNow := 0                // links degraded (lossy or stuck), still up
 	var answering []time.Duration   // control RTT of the busy links that answer promptly
@@ -1836,7 +1836,8 @@ func (m *LinkManager) sampleHealth() {
 			ml.lowStreak = max(ml.upStreak, ml.dnStreak)
 			if up.judged || dn.judged {
 				ml.lossFrac = max(up.frac(), dn.frac())
-				judgedLoss = append(judgedLoss, ml.lossFrac)
+				w := worse(up, dn)
+				judgedLoss = append(judgedLoss, lossJudged{frac: w.frac(), rate: w.rate})
 			}
 			// judged after the loop, if this tick is calm too
 			if (ml.upStreak >= degradeStreak && up.bad()) || (ml.dnStreak >= degradeStreak && dn.bad()) {

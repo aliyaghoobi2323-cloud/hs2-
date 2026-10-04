@@ -32,29 +32,27 @@ import (
 // connection meets, or a lossy path, drained every busy link it touched,
 // and their users came back onto links resending just as much. Now:
 //
-//   - when most busy links (lossPathMin or more judged in the tick) resend
-//     more than lossFrac, it is the path or a throttle every connection
-//     meets, not those links: none is drained (said once a minute);
-//   - otherwise a link is drained only if it resends more than lossFrac and
-//     more than lossRelative times what the busy links resend at the median
-//     — a link worse than the ones its users would move to;
 //   - a link that still moves at least lossKeepShare of what the pressed
 //     links move (those whose sender waits for the path: what a link gets)
-//     is kept — its resends are what the path's rate costs (a throttle
-//     dropping what goes over it), not a fault, and its users would get no
-//     more elsewhere. A link losing so much that it moves less is drained.
+//     is not lossy in any sense that matters — its resends are what the
+//     path's rate costs (a throttle dropping what goes over it), and its
+//     users would get no more elsewhere. It is kept, and not counted below.
 //     In the load test the exact fractions alone still drained 25 links in
-//     2.5 min (resending 14-28% at the throttle's rate while the median
-//     busy link resent 3-10%);
+//     2.5 min (resending 14-28% at the throttle's rate);
+//   - when most busy links (lossPathMin or more judged in the tick) resend
+//     more than lossFrac below that rate, it is the path, not those links:
+//     none is drained (said once a minute);
 //   - at most drainHeadroom degraded links (lossy or stuck) drain at a time,
 //     the lossiest first.
+//
+// (A link compared with the median busy link instead hid the lossy links
+// among busy ones that run into the throttle: 20% random loss on 10 links,
+// with most busy links resending 15-25% at the throttle's rate, drained
+// none.)
 const (
-	// lossRelative: how many times the busy links' median a link must
-	// resend to be drained (when lossPathMin or more were judged).
-	lossRelative = 2.0
-	// lossPathMin: below this many links judged in a tick, neither the
-	// path-wide nor the relative test applies — two or three busy links at
-	// night say nothing about the path.
+	// lossPathMin: below this many links judged in a tick (or pressed, for
+	// the path's rate), the path-wide test does not apply — two or three
+	// busy links at night say nothing about the path.
 	lossPathMin = 4
 	// lossWinMin: a download window shorter than this (two pongs read
 	// together after a wait) stays open for the next pong — a few hundred
@@ -135,6 +133,19 @@ func (ml *managedLink) judgeDownLoss(r *peerLossRec) (d lossDir, fresh bool) {
 	return lossDir{judged: true, resent: dR, segs: segs + float64(dR), rate: float64(dRd) / win.Seconds()}, true
 }
 
+// lossJudged is one link's reading in this tick: its worse direction.
+type lossJudged struct {
+	frac, rate float64
+}
+
+// worse is the direction that resends more (of those judged).
+func worse(up, dn lossDir) lossDir {
+	if up.judged && (!dn.judged || up.frac() >= dn.frac()) {
+		return up
+	}
+	return dn
+}
+
 // lossObs is a link the loss rule found bad degradeStreak samples running,
 // judged after the loop: not if this very tick turns out slow.
 type lossObs struct {
@@ -155,55 +166,56 @@ func (c lossObs) rate() float64 {
 	return c.dn.rate
 }
 
-// lossVerdicts degrades the loss candidates of this tick that resend well
-// above the busy links judged with them (judged: every judged link's loss
-// fraction) and move less than lossKeepShare of what the pressed links move
-// (pressed: their rates), at most drainHeadroom degraded links at a time
-// (degradedNow: those already draining), and says why when it drains none
-// because most busy links resend that much. Caller holds m.mu; it returns
-// the log lines.
-func (m *LinkManager) lossVerdicts(now time.Time, cand []lossObs, judged, pressed []float64, degradedNow int) []string {
+// lossVerdicts degrades the loss candidates of this tick that move less
+// than lossKeepShare of what the pressed links move (pressed: their rates),
+// lossiest first, at most drainHeadroom degraded links at a time
+// (degradedNow: those already draining) — unless most judged links (judged:
+// this tick's readings) resend more than lossFrac below that rate: then it
+// says once a minute that it is the path and drains none. Caller holds m.mu;
+// it returns the log lines.
+func (m *LinkManager) lossVerdicts(now time.Time, cand []lossObs, judged []lossJudged, pressed []float64, degradedNow int) []string {
 	if len(cand) == 0 {
 		return nil
 	}
-	bar, med := lossFrac, 0.0
+	keep, pathRate := 0.0, 0.0 // a link moving keep or more is at its path's rate (bytes/s)
+	if len(pressed) >= lossPathMin {
+		s := append([]float64(nil), pressed...)
+		sort.Float64s(s)
+		pathRate = s[len(s)/2]
+		keep = lossKeepShare * pathRate
+	}
+	atRate := func(rate float64) bool { return keep > 0 && rate >= keep }
 	if len(judged) >= lossPathMin {
 		lossy := 0
-		for _, f := range judged {
-			if f > lossFrac {
+		for _, j := range judged {
+			if j.frac > lossFrac && !atRate(j.rate) {
 				lossy++
 			}
 		}
 		if lossy*2 > len(judged) {
 			if now.Sub(m.lossPathLogAt) >= time.Minute {
 				m.lossPathLogAt = now
-				return []string{fmt.Sprintf("%d of %d busy links resend more than %.0f%% — the path (or a throttle every connection meets) is lossy, not those links: none is drained",
+				return []string{fmt.Sprintf("%d of %d busy links resend more than %.0f%% — the path is lossy, not those links: none is drained",
 					lossy, len(judged), lossFrac*100)}
 			}
 			return nil
 		}
-		s := append([]float64(nil), judged...)
-		sort.Float64s(s)
-		med = s[len(s)/2]
-		bar = max(bar, lossRelative*med)
-	}
-	keep := 0.0 // a link moving this much is at its path's rate (bytes/s)
-	if len(pressed) >= lossPathMin {
-		s := append([]float64(nil), pressed...)
-		sort.Float64s(s)
-		keep = lossKeepShare * s[len(s)/2]
 	}
 	sort.Slice(cand, func(i, j int) bool { return cand[i].frac() > cand[j].frac() })
 	room := drainHeadroom(m.max) - degradedNow
 	var logs []string
 	for _, c := range cand {
-		if c.frac() <= bar || keep > 0 && c.rate() >= keep || room <= 0 {
+		if atRate(c.rate()) || room <= 0 {
 			continue
 		}
 		room--
 		c.ml.degraded, c.ml.pressed = true, false
-		logs = append(logs, fmt.Sprintf("link %d degraded (up-loss %v, down-loss %v, rtt %dms; busy links resend %.0f%% at the median) — draining",
-			c.ml.id, c.up, c.dn, c.ml.mtr.rttMicros.Load()/1000, med*100))
+		path := ""
+		if pathRate > 0 {
+			path = fmt.Sprintf(", moving %.1f Mbit/s where the busy links get %.1f", mbitps(c.rate()), mbitps(pathRate))
+		}
+		logs = append(logs, fmt.Sprintf("link %d degraded (up-loss %v, down-loss %v%s, rtt %dms) — draining",
+			c.ml.id, c.up, c.dn, path, c.ml.mtr.rttMicros.Load()/1000))
 	}
 	return logs
 }

@@ -980,6 +980,94 @@ echoes were answered for good.
   seconds, before a verdict; one that trickles is judged like a throttled
   path.
 
+### Q8 — the health rules at high bandwidth (and UDP flows)
+Q7 was load-tested at 16 downloads. A new rig mode (`run3.py --bulkmb
+--bulkspread`: downloads of a few MB that end and come back, started over the
+ramp) put 150 downloads and 2,400 active + 3,000 idle users through 300
+links at 150-200 Mbit/s, each link behind the rig's per-connection throttle
+(3 Mbit/s, dropping what goes over it). On the release build (and on the
+build before it alike) the health rules misjudged the busy links there, and
+an independent review found why.
+
+- **The loss rule read pong timing, not loss.** The download loss was the
+  exit's retransmits from the last control pong over the bytes of the 2 s
+  health tick. Pongs come every 3 s, so one tick in three read no loss (the
+  streak reset) and the others held 3 s — or 6 s — of resends over 2 s of
+  bytes. A link resending 30-90% with steady pongs was never drained; one
+  resending 9% with pongs jittering behind its own queue, as on every busy
+  link at peak, was (16 of 20 in 5 min). It is now judged over the window
+  between two pongs, against what came in over that same window, and each
+  direction keeps its own streak.
+- **The loss fraction was inflated.** Its denominator was payload bytes /
+  1400 while retransmits count TCP segments, so a link of small or padded
+  frames read 1.1-10× lossier than it was. It is now the socket's own count
+  of data segments (TCP_INFO, Linux ≥ 4.6; bytes / mss on older kernels).
+- **No limit, no comparison.** Every candidate was drained in the same tick:
+  a lossy path drained all 300 links at once in the review's test, and the
+  pool at its ceiling then closed them with their users. Now:
+  - a link that resends a lot but still moves at least half of what the
+    pressed links move (those whose sender waits for the path: what a link
+    gets) is left alone — its resends are what the path's rate costs, a
+    throttle dropping what goes over it, and its users would get no more
+    elsewhere;
+  - when most busy links resend more than 12% below that rate, the path is
+    lossy: none is drained (`N of M busy links resend more than 12% — the
+    path is lossy, not those links: none is drained`, once a minute);
+  - at most an eighth of the pool drains at a time, the lossiest first.
+  - The line now says what the link moves against the others: `link N
+    degraded (up-loss —, down-loss 25% of 840 segments, moving 0.4 Mbit/s
+    where the busy links get 2.8, rtt 120ms) — draining`.
+- **A congested path passed for stuck links.** Through a squeeze, light links
+  still answer within 2 s and outnumber the heavy ones backing off, so the
+  slow-path count read a minority of stuck links: a 30 s squeeze from 190
+  to 60 Mbit/s drained 33 links as stuck. The path is now also slow when
+  links wait and the ones that answer promptly take 4× their usual time
+  (the lowest median of the last 10 minutes) and over 0.5 s: `N of M busy
+  links have waited 6s+ for an answer and the K that answer promptly take
+  ~1298ms, 15× their usual ~88ms — the path is congested, not those links:
+  none is drained`.
+- **UDP: one slow flow held up the whole port.** The Iran side's one read
+  loop per UDP user port wrote each datagram to its flow's link itself, and
+  opened the stream of a new flow itself: a user whose link was throttled
+  or busy stalled every UDP user of that port (in a test the other user, on
+  a healthy link, got 0 of 200 datagrams). Each flow now has its own queue
+  (256 datagrams, 512 KB) and writer; a full queue drops, as a full UDP
+  socket would. UDP forwarding is off unless it was turned on at setup.
+- **Load test, release build → this build** (reverse, 300 links, 5,500
+  users, 150 downloads; "loss10" = 10% random loss on a link, "stuck" = 3
+  packets/s each way):
+
+  | Scenario | Release | This build |
+  |---|---|---|
+  | Steady, 2.5 min: loss verdicts / connections cut | 28 / 131 (the build before it: 40 / 693) | 1 / 2 |
+  | Squeeze 190 → 60 Mbit/s for 30 s: stuck / loss verdicts / cut | 33 / 39 / 1,738 | 1 / 1 / 99 (the stuck one: a link TCP had backed off, still waiting 49 s, ~30 s after the squeeze) |
+  | 3 links at 10% loss: caught in 90 s / loss verdicts / cut | 1 of 3 / 41 / 722 | 3 of 3 / 6 / 322 |
+  | 4 busy links stuck: caught | 2 (2 more already draining for loss) / 31 loss verdicts | 4 of 4 in 9-11 s / 1 |
+
+  And at Q7's load (1,600 active + 2,000 idle users, 16 downloads, ~200
+  links):
+
+  | Scenario | Release | This build |
+  |---|---|---|
+  | 10 busy links stuck | 9 of 10 at 10.6 s | 10 of 10 at 10.6 s |
+  | 40 s outage: stuck / loss verdicts after it | 0 / 6 | 0 / 0 |
+  | 8 Mbit/s squeeze, 20 ms queue: active cut / loss verdicts | 1,730-1,750 / 4 | 1,706 / 0 (one link still backed off 63 s after the squeeze drained as stuck) |
+  | 20% random loss on 10 random links: drained / cut / p99 | 4 closed by 120 s / 657 / 3.0-4.3 s | none (light, or moving what the busy links get) / 0 / 2.5-5.8 s |
+
+- **What the rig also showed, not changed here.**
+  - A sudden crowd onto a small pool (5,500 connections in 30 s onto 8 warm
+    links) leaves the first links crowded (~235 connections each) until
+    their users reconnect: the refill hold covers a start or a total loss,
+    not a crowd onto a pool that is already up. Their downloads are pinned
+    to those links.
+  - 10,000 open connections: ~0.9 GB RSS on each server (copy buffers of
+    32 KB each way per connection), 74% of a core on the Iran side at ~190
+    Mbit/s in the rig.
+  - The review also found (not changed yet): a burst of new connections
+    (over ~40 a minute per link) can hide a link's real pressure from
+    placement, so 6-10% of new connections land on throttled links; the
+    autopilot's probe on the reverse edge does not know the exit's ceiling.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.
