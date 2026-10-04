@@ -26,16 +26,21 @@ import (
 //     that started later (a pong that merely arrives later may have left
 //     before an outage; an idle link answers quickly through any squeeze,
 //     having nothing queued);
-//   - it moves less than half of what those links move (median), or under
-//     ctrlBusyBytes: a link whose users wait while it moves its share is
-//     waiting on its own load — the path is full — not on a throttle;
-//   - at least half the busy links answer promptly. Fewer, and it is the path
-//     or the other server, slow or down for most: moving users between links
-//     would not help, so none is drained (said once a minute), nor for as
-//     long again after (stuckRecoverFor) — links that waited through it
-//     recover on their own.
-//     Counting the links that answer, not those that wait, keeps a minority
-//     of stuck links (4 of 10 at night, say) from passing for a slow path.
+//   - it moves under stuckMoveFloor, or under half of what those links move
+//     (median): a link whose users wait while it moves its share is waiting
+//     on its own load — the path is full — not on a throttle;
+//   - the path is not slow: it is when two or more links wait like that
+//     (stuckWait+, moving under activeBytes) and they outnumber the links
+//     that answer promptly — the path or the other server, slow or down for
+//     most, and moving users between links would not help. Then none is
+//     drained (said once a minute), no link is judged for loss either, nor
+//     for as long again after, as long as the spell was slow all told
+//     (stuckRecoverFor): links that waited through it recover on their own.
+//     Links answering in 2-6 s, heavy ones waiting behind their own load and
+//     ones that never answer (an older exit) do not count either way:
+//     counted as slow, a few lossy or heavy links held off both rules for
+//     good; and counting who answers keeps a minority of stuck links (4 of
+//     10 at night, say) from passing for a slow path.
 //
 // At most drainHeadroom stuck links drain at a time, the longest waits first.
 // A link whose own reader was parked on a full receive buffer lately
@@ -49,7 +54,10 @@ import (
 //
 // Not seen from here: a wedge on the exit's side (its reader parked by a slow
 // target). The exit's guard frees readers that stopped within seconds, before
-// a verdict; one that trickles is judged like a throttled path.
+// a verdict; one that trickles is judged like a throttled path. And in a
+// squeeze that drops rather than queues, light links that keep answering
+// can outnumber heavy ones backing off: those are then judged one by one
+// (at most drainHeadroom at a time).
 const (
 	stuckWait   = 6 * time.Second
 	stuckStreak = 2
@@ -66,12 +74,26 @@ const (
 	// never more than TCP_RTO_MAX, 2 min, apart).
 	stuckRecover    = 30 * time.Second
 	stuckRecoverMax = 2 * time.Minute
+	// stuckMoveFloor: a link moving less than this per healthTick (6 KB/s,
+	// about four full packets a second) while its users wait stuckWait is
+	// throttled whatever the others move — the load test's "stuck" is 3
+	// packets/s each way; above it, it must move less than half of what the
+	// links that answer promptly move.
+	stuckMoveFloor = 12 << 10
 )
 
-// stuckRecoverFor is how long after the last slow tick no link is judged.
-// Caller holds m.mu.
+// stuckRecoverFor is how long after the last slow tick no link is judged:
+// as long as the spell was slow, all told (one-tick blips add a tick each,
+// not the time between them). Caller holds m.mu.
 func (m *LinkManager) stuckRecoverFor() time.Duration {
-	return min(max(stuckRecover, m.stuckSlowAt.Sub(m.stuckSlowSince)), stuckRecoverMax)
+	return min(max(stuckRecover, m.stuckSlowFor), stuckRecoverMax)
+}
+
+// lossObs is a link the loss rule found bad degradeStreak samples running,
+// judged after the loop: not if this very tick turns out slow.
+type lossObs struct {
+	ml                   *managedLink
+	dUp, dWr, dDown, dRd uint64
 }
 
 // stuckObs is a link found stuck in this sample, for the log line.

@@ -160,11 +160,11 @@ type LinkManager struct {
 	reclaimed      atomic.Int64 // idle connections closed on retiring links, not yet logged
 	stalledLogAt   time.Time
 	stuckMassLogAt time.Time
-	stuckSlowAt    time.Time    // the last tick the path was slow for most links (stuck.go)
-	stuckSlowSince time.Time    // ... and when that slow spell began
-	stalled        atomic.Int64 // stalled connections closed on degraded links, not yet logged
-	ctlDrain       int          // reverse: draining links whose slot the exit is asked to replace
-	forced         atomic.Int64 // ... of which trickling ones on links retiring retireForce+
+	stuckSlowAt    time.Time     // the last tick the path was slow for most links (stuck.go)
+	stuckSlowFor   time.Duration // ... how long that slow spell has been slow, all told
+	stalled        atomic.Int64  // stalled connections closed on degraded links, not yet logged
+	ctlDrain       int           // reverse: draining links whose slot the exit is asked to replace
+	forced         atomic.Int64  // ... of which trickling ones on links retiring retireForce+
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
 	drainIdle atomic.Int64
@@ -1663,19 +1663,21 @@ func (m *LinkManager) sampleHealth() {
 	s := apSample{now: now, open: int(m.users.Load())}
 	nOK, nOld, poolOK, aged := 0, 0, 0, 0
 	var stuckCand []stuckObs
+	var lossCand []lossObs
 	var answering []time.Duration   // control RTT of the busy links that answer promptly
 	var answeringMoved []float64    // ... what each moved this tick
 	lastAns := int64(math.MinInt64) // ... and when the latest ping they got answered went out
-	busyN := 0                      // links carrying traffic (or waiting to)
-	waitingN := 0                   // ... of which waiting stuckWait+ now
+	busyN := 0                      // links carrying traffic (or waiting to), for the log
+	waitingN := 0                   // links waiting stuckWait+ while moving under activeBytes
 	stuckNow := 0                   // links found stuck before, still up (draining)
+
+	m.mu.Lock()
 	// The path was slow for most links lately, or they are still getting
 	// over it (stuck.go): neither a stuck wait nor a burst of retransmits
 	// says anything about one link then — TCP resends what the slow spell
-	// held back as it recovers. As of the last tick.
+	// held back as it recovers. As of the last tick; this one's is applied
+	// to the verdicts after the loop.
 	calm := m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor()
-
-	m.mu.Lock()
 	for _, ml := range m.links {
 		o := obs[ml]
 		if o == nil { // arrived after the snapshot: counted, measured next tick
@@ -1802,10 +1804,8 @@ func (m *LinkManager) sampleHealth() {
 			} else {
 				ml.lowStreak = 0
 			}
-			if ml.lowStreak >= degradeStreak {
-				ml.degraded, ml.pressed = true, false
-				logs = append(logs, fmt.Sprintf("link %d degraded (up-loss +%d/%dKB, down-loss +%d/%dKB, rtt %dms) — draining",
-					ml.id, dUp, dWr>>10, dDown, dRd>>10, ml.mtr.rttMicros.Load()/1000))
+			if ml.lowStreak >= degradeStreak { // judged after the loop, if this tick is calm too
+				lossCand = append(lossCand, lossObs{ml: ml, dUp: dUp, dWr: dWr, dDown: dDown, dRd: dRd})
 			}
 		}
 		// Stuck (stuck.go): its traffic has waited stuckWait or more for an
@@ -1815,17 +1815,20 @@ func (m *LinkManager) sampleHealth() {
 		if ml.stuck && ml.link.Alive() {
 			stuckNow++
 		}
-		waits := !ml.degraded && !ml.draining && !o.wedged && o.ctrlWait >= stuckWait
+		// Waiting: its traffic has waited stuckWait+ while it moves under
+		// activeBytes, streak or not. Only such links count against the path
+		// (the slow test after the loop) — not one answering in 2-6 s, nor a
+		// heavy one waiting behind its own load, nor one that never answers
+		// (an older exit): those say nothing about the path, and counting
+		// them let a few lossy or heavy links hold off both rules for good.
+		waits := !ml.degraded && !ml.draining && !o.wedged && o.ctrlWait >= stuckWait && moved < activeBytes
 		if waits {
-			busyN++    // its traffic waits: it would be busy
-			waitingN++ // ... and waits now, streak or not, however much it moves
-		} else if busy && !ml.degraded && !ml.draining && o.ctrlAns != 0 {
-			// busy, with a control channel that has answered: one that never
-			// can (an older exit) would pass for slow for good, and hold off
-			// the loss rule with it
+			waitingN++
+		}
+		if waits || busy && !ml.degraded && !ml.draining && o.ctrlAns != 0 {
 			busyN++
 		}
-		if waits && !ml.suspect && moved < activeBytes {
+		if waits && !ml.suspect {
 			ml.stuckStreak++
 			if ml.stuckStreak >= stuckStreak {
 				stuckCand = append(stuckCand, stuckObs{ml: ml, wait: o.ctrlWait, moved: dRd + dWr, perTick: moved, sent: ctrlNow() - int64(o.ctrlWait)})
@@ -1847,41 +1850,52 @@ func (m *LinkManager) sampleHealth() {
 		s.flowing += ml.flowing
 		s.links = append(s.links, ml.apLink())
 	}
-	// A stuck link is degraded only if another link carrying traffic answers
-	// promptly now and got an answer to a ping sent after this link's oldest
-	// one went out — a whole round trip that started later (a pong merely
-	// arriving later proves nothing: it may have left before an outage) — and
-	// it moves less than half of what those links move: a link whose users
-	// wait while it moves its share is waiting on its own load (the path is
-	// full), not on a throttle. When fewer than half the busy links answer
-	// promptly it is the path or the other server, slow or down for most:
-	// moving users between links would not help, so none is drained (logged
-	// once a minute) — nor for as long again after. At most drainHeadroom
-	// stuck links drain at a time, the longest waits first.
-	slow := 2*len(answering) < busyN
+	// The path is slow when two or more links wait (stuckWait+, moving
+	// little) and they outnumber the busy links that answer promptly: the
+	// path or the other server, slow or down for most — moving users between
+	// links would not help, so none is drained (logged once a minute), nor
+	// judged for loss, nor for as long again after (stuckRecoverFor: TCP
+	// backed off through it and resumes up to that long after; judged
+	// earlier, links still waiting look stuck while they are only
+	// recovering — in the load test 27 links drained just after a 60 s
+	// squeeze, 400 more users cut, none helped, and after a 120 s one a link
+	// resumed 65 s later by itself). Counting who answers keeps a minority of
+	// stuck links (4 of 10 at night, say) from passing for a slow path.
+	slow := waitingN >= 2 && waitingN > len(answering)
 	if slow {
 		if m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor() {
-			m.stuckSlowSince = now
+			m.stuckSlowFor = 0 // a new spell
 		}
+		m.stuckSlowFor += dt
 		m.stuckSlowAt = now
 	}
-	// After a slow spell, links get as long again (stuckRecover to
-	// stuckRecoverMax) to come back on their own: TCP backed off through it
-	// and resumes up to that long after; judged earlier, those still waiting
-	// look stuck while they are only recovering — in the load test, 27 links
-	// drained just after a 60 s squeeze (400 more users cut, none helped),
-	// and after a 120 s one a link resumed 65 s later by itself.
 	recovering := !m.stuckSlowAt.IsZero() && now.Sub(m.stuckSlowAt) < m.stuckRecoverFor()
-	if slow && waitingN > 0 && now.Sub(m.stuckMassLogAt) >= time.Minute {
+	for _, c := range lossCand {
+		if recovering {
+			continue // and from the next tick on its streak restarts (calm)
+		}
+		c.ml.degraded, c.ml.pressed = true, false
+		logs = append(logs, fmt.Sprintf("link %d degraded (up-loss +%d/%dKB, down-loss +%d/%dKB, rtt %dms) — draining",
+			c.ml.id, c.dUp, c.dWr>>10, c.dDown, c.dRd>>10, c.ml.mtr.rttMicros.Load()/1000))
+	}
+	if slow && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
 		logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer and only %d answer promptly — the path or the other server is slow, not those links: none is drained",
 			waitingN, busyN, fmtDur(stuckWait), len(answering)))
 	}
-	if len(answering) > 0 && !slow && !recovering {
+	// A stuck link is degraded only if another link carrying traffic answers
+	// promptly now and got an answer to a ping sent after this link's oldest
+	// one went out — a whole round trip that started later (a pong merely
+	// arriving later proves nothing: it may have left before an outage) — and
+	// it moves under stuckMoveFloor or half of what those links move: a link
+	// whose users wait while it moves its share is waiting on its own load
+	// (the path is full), not on a throttle. At most drainHeadroom stuck
+	// links drain at a time, the longest waits first.
+	if len(answering) > 0 && !recovering {
 		sort.Slice(answering, func(i, j int) bool { return answering[i] < answering[j] })
 		med := answering[len(answering)/2]
 		sort.Float64s(answeringMoved)
-		share := max(ctrlBusyBytes, answeringMoved[len(answeringMoved)/2]/2)
+		share := max(stuckMoveFloor, answeringMoved[len(answeringMoved)/2]/2)
 		sort.Slice(stuckCand, func(i, j int) bool { return stuckCand[i].wait > stuckCand[j].wait })
 		room := drainHeadroom(m.max) - stuckNow
 		for _, c := range stuckCand {

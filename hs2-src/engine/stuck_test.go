@@ -394,17 +394,21 @@ func TestStuckNotFlagged(t *testing.T) {
 		for _, g := range r.good[1:] {
 			g.m.rttMicros.Store(4_900_000)
 		}
+		old := newMeteredFake() // busy, to an older exit: no control channel
+		addManaged(r.m, old)
 		var mls []*managedLink
 		var fs []*meteredFakeLink
 		for i := 0; i < 3; i++ {
 			f, ml := r.add()
 			fs, mls = append(fs, f), append(mls, ml)
 		}
+		old.download(200<<10, 0)
 		r.step(nil, 0)
 		for i := 0; i < 4; i++ {
 			for _, f := range fs {
 				waiting(f, stuckWait+2*time.Second)
 			}
+			old.download(200<<10, 0)
 			r.step(nil, 0)
 		}
 		for i, ml := range mls {
@@ -859,9 +863,9 @@ func TestControlWaitFollowsEachAnswer(t *testing.T) {
 }
 
 // The longer the path was slow, the longer the links get to come back (TCP's
-// retries spread out with it): as long as the slow spell, stuckRecover at
-// least and stuckRecoverMax at most; a spell that pauses for less than its
-// window is still one spell.
+// retries spread out with it): as long as the spell was slow all told,
+// stuckRecover at least and stuckRecoverMax at most; a pause shorter than
+// the window does not end the spell, nor count in it.
 func TestStuckRecoveryGrowsWithTheSlowSpell(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -869,25 +873,25 @@ func TestStuckRecoveryGrowsWithTheSlowSpell(t *testing.T) {
 		pause       bool
 	}{
 		{"90 s", 90 * time.Second, 90 * time.Second, false},
-		{"90 s with a pause", 90 * time.Second, 90 * time.Second, true},
+		{"90 s with a 16 s pause", 90 * time.Second, 74 * time.Second, true},
 		{"5 min", 5 * time.Minute, stuckRecoverMax, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newStuckRig(t, 4)
 			f, ml := r.add()
+			w, _ := r.add() // waits through the spell too, then recovers
 			r.step(nil, 0)
-			for _, g := range r.good { // slow for all: answers take seconds
-				g.m.rttMicros.Store(4_900_000)
-			}
+			slowFor := time.Duration(0)
 			for el := time.Duration(0); el < tc.spell; el += healthTick {
-				if tc.pause && el >= tc.spell/3 && el < tc.spell/2 {
-					for _, g := range r.good {
-						g.m.rttMicros.Store(120_000)
-					}
+				paused := tc.pause && el >= 30*time.Second && el < 46*time.Second
+				for _, g := range r.good { // slow for all: answers take seconds
+					g.m.rttMicros.Store(map[bool]uint64{true: 120_000, false: 4_900_000}[paused])
+				}
+				if paused {
+					w.m.ctrlWait.Store(0)
 				} else {
-					for _, g := range r.good {
-						g.m.rttMicros.Store(4_900_000)
-					}
+					waiting(w, stuckWait+time.Second)
+					slowFor += healthTick
 				}
 				waiting(f, stuckWait+el)
 				r.step(nil, 0)
@@ -895,16 +899,19 @@ func TestStuckRecoveryGrowsWithTheSlowSpell(t *testing.T) {
 			if ml.degraded {
 				t.Fatalf("drained during the slow spell:\n%s", r.lg)
 			}
-			for _, g := range r.good { // it ends; f still waits
+			if want := min(slowFor, stuckRecoverMax); want != tc.want {
+				t.Fatalf("test setup: slow for %s, want %s", slowFor, tc.want)
+			}
+			for _, g := range r.good { // it ends; w comes back, f still waits
 				g.m.rttMicros.Store(120_000)
 			}
-			// the spell runs from its first slow tick to its last: one tick
-			// short of tc.spell here
-			for el := healthTick; el < min(tc.want, tc.spell-healthTick); el += healthTick {
+			w.m.ctrlWait.Store(0)
+			r.good = append(r.good, w)
+			for el := healthTick; el < tc.want; el += healthTick {
 				waiting(f, stuckWait+tc.spell+el)
 				r.step(nil, 0)
 				if ml.degraded {
-					t.Fatalf("drained %s after a %s slow spell, want %s of recovery:\n%s", el, tc.spell, tc.want, r.lg)
+					t.Fatalf("drained %s after a spell slow for %s, want %s of recovery:\n%s", el, slowFor, tc.want, r.lg)
 				}
 			}
 			for i := 0; i < 2; i++ {
@@ -912,30 +919,132 @@ func TestStuckRecoveryGrowsWithTheSlowSpell(t *testing.T) {
 				r.step(nil, 0)
 			}
 			if !ml.degraded {
-				t.Fatalf("not drained %s after a %s slow spell:\n%s", tc.want+2*healthTick, tc.spell, r.lg)
+				t.Fatalf("not drained %s after a spell slow for %s:\n%s", tc.want+2*healthTick, slowFor, r.lg)
 			}
 		})
 	}
 }
 
+// One-tick blips do not stretch the window: each adds a tick, not the time
+// between them — 13 blips in 20 min (the review's case) leave the loss rule
+// judging most of the time.
+func TestStuckBlipsDoNotStretchTheWindow(t *testing.T) {
+	r := newStuckRig(t, 4)
+	var ws []*meteredFakeLink
+	for i := 0; i < 5; i++ {
+		f, _ := r.add()
+		ws = append(ws, f)
+	}
+	lossy, lml := r.add()
+	blip := func(k int) bool {
+		switch k {
+		case 0, 14, 28, 55, 109:
+			return true
+		}
+		return k > 109 && (k-109)%59 == 0
+	}
+	calmTicks := 0
+	for k := 0; k < 600; k++ { // 20 min
+		for _, f := range ws {
+			if blip(k) { // one tick: 5 links wait, 4 answer
+				waiting(f, stuckWait+time.Second)
+			} else {
+				f.m.ctrlWait.Store(0)
+			}
+		}
+		lossy.download(200<<10, 0)
+		if k >= 120 { // lossy from 4 min on
+			lossy.m.peerRetrans.Add(60)
+		}
+		r.m.mu.Lock()
+		if r.m.stuckSlowAt.IsZero() || r.clk.Now().Add(healthTick).Sub(r.m.stuckSlowAt) >= r.m.stuckRecoverFor() {
+			if k >= 120 {
+				calmTicks++
+			}
+		}
+		r.m.mu.Unlock()
+		r.step(nil, 0)
+	}
+	if calmTicks < 300 || !lml.degraded {
+		t.Fatalf("calm %d of 480 ticks after 4 min, lossy link degraded %v:\n%s", calmTicks, lml.degraded, r.lg)
+	}
+}
+
+// A separate spell, after the last one's window has passed, starts afresh:
+// one slow tick after a long spell gives stuckRecover, not that spell's.
+func TestStuckSeparateSpellStartsAfresh(t *testing.T) {
+	r := newStuckRig(t, 4)
+	w1, _ := r.add()
+	w2, _ := r.add()
+	f, ml := r.add()
+	slowTick := func(n int) {
+		for i := 0; i < n; i++ {
+			waiting(w1, stuckWait+time.Second)
+			waiting(w2, stuckWait+time.Second)
+			for _, g := range r.good {
+				g.m.rttMicros.Store(4_900_000)
+			}
+			r.step(nil, 0)
+		}
+		w1.m.ctrlWait.Store(0)
+		w2.m.ctrlWait.Store(0)
+		for _, g := range r.good {
+			g.m.rttMicros.Store(120_000)
+		}
+	}
+	slowTick(45) // 90 s
+	r.clk.Advance(3 * time.Minute)
+	r.step(nil, 0)
+	slowTick(1) // a new spell of one tick
+	for el := healthTick; el < stuckRecover-healthTick; el += healthTick {
+		waiting(f, stuckWait+el)
+		r.step(nil, 0)
+		if ml.degraded {
+			t.Fatalf("drained %s after a one-tick spell:\n%s", el, r.lg)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		waiting(f, stuckWait+stuckRecover)
+		r.step(nil, 0)
+	}
+	if !ml.degraded {
+		t.Fatalf("a one-tick spell after a long one held verdicts past stuckRecover:\n%s", r.lg)
+	}
+}
+
 // The loss rule waits out a slow spell too: the retransmits of links getting
-// over a squeeze say nothing about one link. A link still lossy after the
-// recovery window is degraded on degradeStreak fresh samples.
+// over a squeeze say nothing about one link. Not even on the spell's first
+// tick, with two bad samples already counted; after the recovery window it
+// takes degradeStreak fresh samples.
 func TestLossWaitsOutASlowSpell(t *testing.T) {
 	r := newStuckRig(t, 4)
 	f, ml := r.add()
+	w1, _ := r.add()
+	w2, _ := r.add()
 	lossy := func() { f.download(200<<10, 60) } // ~140 packets, 60 resent
+	lossy()
+	r.step(nil, 0) // the baseline
+	lossy()
 	r.step(nil, 0)
-	for _, g := range r.good { // slow for all: answers take seconds
-		g.m.rttMicros.Store(4_900_000)
-	}
-	for i := 0; i < 10; i++ { // a 20 s spell
+	lossy()
+	r.step(nil, 0)            // two bad samples before the spell
+	for i := 0; i < 10; i++ { // a 20 s spell: the others answer in seconds, two wait
+		for _, g := range r.good {
+			g.m.rttMicros.Store(4_900_000)
+		}
+		waiting(w1, stuckWait+time.Second)
+		waiting(w2, stuckWait+time.Second)
 		lossy()
 		r.step(nil, 0)
+		if ml.degraded {
+			t.Fatalf("degraded for loss on slow tick %d:\n%s", i+1, r.lg)
+		}
 	}
 	for _, g := range r.good {
 		g.m.rttMicros.Store(120_000)
 	}
+	w1.m.ctrlWait.Store(0)
+	w2.m.ctrlWait.Store(0)
 	for el := healthTick; el < stuckRecover; el += healthTick {
 		lossy()
 		r.step(nil, 0)
@@ -943,7 +1052,14 @@ func TestLossWaitsOutASlowSpell(t *testing.T) {
 			t.Fatalf("degraded for loss %s after a slow spell:\n%s", el, r.lg)
 		}
 	}
-	for i := 0; i < degradeStreak+1; i++ {
+	for i := 0; i < degradeStreak-1; i++ { // the streak starts afresh
+		lossy()
+		r.step(nil, 0)
+	}
+	if ml.degraded {
+		t.Fatalf("degraded on %d fresh samples after the window, want %d:\n%s", degradeStreak-1, degradeStreak, r.lg)
+	}
+	for i := 0; i < 2; i++ {
 		lossy()
 		r.step(nil, 0)
 	}
@@ -953,4 +1069,219 @@ func TestLossWaitsOutASlowSpell(t *testing.T) {
 	if r.lg.count("link 4 degraded (up-loss") != 1 {
 		t.Fatalf("no loss line:\n%s", r.lg)
 	}
+}
+
+// prompt makes f a busy link answered at once; backlogged makes it a heavy
+// one with 2.5 s of its own backlog (pongs take 2.5 s, no ping waits 6 s).
+func prompt(f *meteredFakeLink, bytes uint64) {
+	f.download(bytes, 0)
+	f.m.rttMicros.Store(120_000)
+	f.m.ctrlWait.Store(0)
+	f.m.ctrlAnsweredSent.Store(ctrlNow() - int64(100*time.Millisecond))
+}
+
+func backlogged(f *meteredFakeLink, bytes, rt uint64) {
+	f.download(bytes, rt)
+	f.m.rttMicros.Store(2_500_000)
+	waiting(f, time.Second)
+	f.m.ctrlAnsweredSent.Store(ctrlNow() - int64(2600*time.Millisecond))
+}
+
+// Links slow to answer are not a slow path: neither lossy links whose own
+// pongs take seconds (at night, two of three busy links) nor heavy links
+// waiting behind their own backlog hold off the loss rule or the stuck rule —
+// only links waiting stuckWait while moving little count against the path.
+func TestSlowAnswersAreNotASlowPath(t *testing.T) {
+	t.Run("lossy links at night", func(t *testing.T) {
+		r := newStuckRig(t, 0)
+		light, _ := r.add()
+		var lossy []*meteredFakeLink
+		var lml []*managedLink
+		for i := 0; i < 2; i++ {
+			f, ml := r.add()
+			lossy, lml = append(lossy, f), append(lml, ml)
+		}
+		for i := 0; i < 10; i++ {
+			prompt(light, 16<<10)
+			for _, f := range lossy {
+				backlogged(f, 200<<10, 60) // 43% resent, pongs in 2.5 s
+			}
+			r.step(nil, 0)
+		}
+		if !lml[0].degraded || !lml[1].degraded {
+			t.Fatalf("lossy links not degraded:\n%s", r.lg)
+		}
+	})
+	t.Run("slow answers do not tip the balance", func(t *testing.T) {
+		r := newStuckRig(t, 0)
+		var light, slowly, thr []*meteredFakeLink
+		var tml []*managedLink
+		for i := 0; i < 3; i++ {
+			f, _ := r.add()
+			light = append(light, f)
+		}
+		for i := 0; i < 4; i++ {
+			f, _ := r.add()
+			slowly = append(slowly, f)
+		}
+		for i := 0; i < 2; i++ {
+			f, ml := r.add()
+			thr, tml = append(thr, f), append(tml, ml)
+		}
+		for i := 0; i < 4; i++ {
+			for _, f := range light {
+				prompt(f, 50<<10)
+			}
+			for _, f := range slowly { // busy, answering in 2.5 s
+				backlogged(f, 50<<10, 0)
+			}
+			for _, f := range thr {
+				waiting(f, 8*time.Second)
+				f.download(1<<10, 0)
+			}
+			r.step(nil, 0)
+		}
+		if !tml[0].degraded || !tml[1].degraded {
+			t.Fatalf("two throttled links, three prompt, four slow to answer: taken for a slow path:\n%s", r.lg)
+		}
+	})
+	t.Run("heavy links outnumber light ones", func(t *testing.T) {
+		r := newStuckRig(t, 0)
+		var light, heavy []*meteredFakeLink
+		for i := 0; i < 10; i++ {
+			f, _ := r.add()
+			light = append(light, f)
+		}
+		for i := 0; i < 12; i++ {
+			f, _ := r.add()
+			heavy = append(heavy, f)
+		}
+		thr, tml := r.add()
+		lossy, lml := r.add()
+		for i := 0; i < 10; i++ {
+			for _, f := range light {
+				prompt(f, 50<<10)
+			}
+			for _, f := range heavy {
+				backlogged(f, 200<<10, 0)
+			}
+			waiting(thr, 8*time.Second)
+			thr.download(1<<10, 0)
+			prompt(lossy, 200<<10)
+			lossy.m.peerRetrans.Add(60)
+			r.step(nil, 0)
+		}
+		if !tml.degraded || !tml.stuck || !lml.degraded || lml.stuck {
+			t.Fatalf("throttled degraded=%v stuck=%v, lossy degraded=%v:\n%s", tml.degraded, tml.stuck, lml.degraded, r.lg)
+		}
+		if r.lg.count("answer promptly") != 0 {
+			t.Fatalf("taken for a slow path:\n%s", r.lg)
+		}
+	})
+}
+
+// The share is half the median of what the links answering promptly move: a
+// waiting link moving between half the median and half the largest is its
+// share's worth (not drained), one between half the smallest and half the
+// median is throttled (drained).
+func TestStuckShareIsHalfTheMedian(t *testing.T) {
+	r := newStuckRig(t, 0)
+	var good []*meteredFakeLink
+	for i := 0; i < 3; i++ {
+		f, _ := r.add()
+		good = append(good, f)
+	}
+	a, aml := r.add()
+	b, bml := r.add()
+	for i := 0; i < 4; i++ {
+		for k, f := range good {
+			prompt(f, uint64(100+20*k)<<10) // 100, 120, 140 KB: median 120
+		}
+		waiting(a, 8*time.Second)
+		a.download(65<<10, 0) // over half the median, under half the largest
+		waiting(b, 8*time.Second)
+		b.download(55<<10, 0) // under half the median, over half the smallest
+		r.step(nil, 0)
+	}
+	if aml.degraded || !bml.degraded {
+		t.Fatalf("65 KB drained %v (want no), 55 KB drained %v (want yes):\n%s", aml.degraded, bml.degraded, r.lg)
+	}
+}
+
+// Under stuckMoveFloor a waiting link is throttled whatever the others move:
+// light links at night (12 KB a tick each) do not let one moving 7 KB with
+// its users waiting 8 s pass for one moving its share.
+func TestStuckFloorCatchesAThrottleAtNight(t *testing.T) {
+	r := newStuckRig(t, 0)
+	var good []*meteredFakeLink
+	for i := 0; i < 6; i++ {
+		f, _ := r.add()
+		good = append(good, f)
+	}
+	thr, tml := r.add()
+	for i := 0; i < 4; i++ {
+		for _, f := range good {
+			prompt(f, 12<<10)
+		}
+		waiting(thr, 8*time.Second)
+		thr.download(7<<10, 0)
+		r.step(nil, 0)
+	}
+	if !tml.degraded || !tml.stuck {
+		t.Fatalf("a link moving 7 KB a tick while its users wait 8 s is not drained:\n%s", r.lg)
+	}
+}
+
+// What counts against the path is links waiting stuckWait while moving
+// little, two at least: heavy links waiting behind their own backlog do not,
+// nor does a single waiting link.
+func TestSlowPathNeedsWaitingLightLinks(t *testing.T) {
+	t.Run("heavy links waiting on their own load", func(t *testing.T) {
+		r := newStuckRig(t, 0)
+		var light, heavy []*meteredFakeLink
+		for i := 0; i < 4; i++ {
+			f, _ := r.add()
+			light = append(light, f)
+		}
+		for i := 0; i < 6; i++ {
+			f, _ := r.add()
+			heavy = append(heavy, f)
+		}
+		thr, tml := r.add()
+		for i := 0; i < 4; i++ {
+			for _, f := range light {
+				prompt(f, 50<<10)
+			}
+			for _, f := range heavy {
+				waiting(f, 8*time.Second)
+				f.download(200<<10, 0)
+			}
+			waiting(thr, 8*time.Second)
+			thr.download(1<<10, 0)
+			r.step(nil, 0)
+		}
+		if !tml.degraded {
+			t.Fatalf("heavy links waiting on their own load passed for a slow path:\n%s", r.lg)
+		}
+	})
+	t.Run("one waiting link", func(t *testing.T) {
+		r := newStuckRig(t, 0)
+		var lossy []*meteredFakeLink
+		var lml []*managedLink
+		for i := 0; i < 2; i++ {
+			f, ml := r.add()
+			lossy, lml = append(lossy, f), append(lml, ml)
+		}
+		thr, _ := r.add()
+		for i := 0; i < 5; i++ {
+			for _, f := range lossy {
+				backlogged(f, 200<<10, 60)
+			}
+			waiting(thr, 8*time.Second)
+			r.step(nil, 0)
+		}
+		if !lml[0].degraded || !lml[1].degraded {
+			t.Fatalf("one waiting link passed for a slow path and held off the loss rule:\n%s", r.lg)
+		}
+	})
 }
