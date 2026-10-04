@@ -857,3 +857,63 @@ func TestControlWaitFollowsEachAnswer(t *testing.T) {
 	cancel()
 	<-done
 }
+
+// The longer the path was slow, the longer the links get to come back (TCP's
+// retries spread out with it): as long as the slow spell, stuckRecover at
+// least and stuckRecoverMax at most; a spell that pauses for less than its
+// window is still one spell.
+func TestStuckRecoveryGrowsWithTheSlowSpell(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		spell, want time.Duration
+		pause       bool
+	}{
+		{"90 s", 90 * time.Second, 90 * time.Second, false},
+		{"90 s with a pause", 90 * time.Second, 90 * time.Second, true},
+		{"5 min", 5 * time.Minute, stuckRecoverMax, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStuckRig(t, 4)
+			f, ml := r.add()
+			r.step(nil, 0)
+			for _, g := range r.good { // slow for all: answers take seconds
+				g.m.rttMicros.Store(4_900_000)
+			}
+			for el := time.Duration(0); el < tc.spell; el += healthTick {
+				if tc.pause && el >= tc.spell/3 && el < tc.spell/2 {
+					for _, g := range r.good {
+						g.m.rttMicros.Store(120_000)
+					}
+				} else {
+					for _, g := range r.good {
+						g.m.rttMicros.Store(4_900_000)
+					}
+				}
+				waiting(f, stuckWait+el)
+				r.step(nil, 0)
+			}
+			if ml.degraded {
+				t.Fatalf("drained during the slow spell:\n%s", r.lg)
+			}
+			for _, g := range r.good { // it ends; f still waits
+				g.m.rttMicros.Store(120_000)
+			}
+			// the spell runs from its first slow tick to its last: one tick
+			// short of tc.spell here
+			for el := healthTick; el < min(tc.want, tc.spell-healthTick); el += healthTick {
+				waiting(f, stuckWait+tc.spell+el)
+				r.step(nil, 0)
+				if ml.degraded {
+					t.Fatalf("drained %s after a %s slow spell, want %s of recovery:\n%s", el, tc.spell, tc.want, r.lg)
+				}
+			}
+			for i := 0; i < 2; i++ {
+				waiting(f, stuckWait+tc.spell+tc.want)
+				r.step(nil, 0)
+			}
+			if !ml.degraded {
+				t.Fatalf("not drained %s after a %s slow spell:\n%s", tc.want+2*healthTick, tc.spell, r.lg)
+			}
+		})
+	}
+}

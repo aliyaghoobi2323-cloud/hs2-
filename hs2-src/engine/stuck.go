@@ -31,8 +31,9 @@ import (
 //     waiting on its own load — the path is full — not on a throttle;
 //   - at least half the busy links answer promptly. Fewer, and it is the path
 //     or the other server, slow or down for most: moving users between links
-//     would not help, so none is drained (said once a minute), nor for
-//     stuckRecover after — links that waited through it recover on their own.
+//     would not help, so none is drained (said once a minute), nor for as
+//     long again after (stuckRecoverFor) — links that waited through it
+//     recover on their own.
 //     Counting the links that answer, not those that wait, keeps a minority
 //     of stuck links (4 of 10 at night, say) from passing for a slow path.
 //
@@ -59,11 +60,19 @@ const (
 	// seconds, and one that has just been answered is no proof.
 	stuckPrompt = stuckWait / 3
 	// stuckRecover: after the path was slow for most links, no link is
-	// judged for this long — TCP backed off through it and resumes a little
-	// after (in the load test, 27 links were drained just after a squeeze
-	// without it).
-	stuckRecover = 30 * time.Second
+	// judged for as long as that lasted, this long at least and
+	// stuckRecoverMax at most — TCP backed off through it, each retry twice
+	// as late as the one before, so it resumes up to that long after (and
+	// never more than TCP_RTO_MAX, 2 min, apart).
+	stuckRecover    = 30 * time.Second
+	stuckRecoverMax = 2 * time.Minute
 )
+
+// stuckRecoverFor is how long after the last slow tick no link is judged.
+// Caller holds m.mu.
+func (m *LinkManager) stuckRecoverFor() time.Duration {
+	return min(max(stuckRecover, m.stuckSlowAt.Sub(m.stuckSlowSince)), stuckRecoverMax)
+}
 
 // stuckObs is a link found stuck in this sample, for the log line.
 type stuckObs struct {

@@ -160,7 +160,8 @@ type LinkManager struct {
 	reclaimed      atomic.Int64 // idle connections closed on retiring links, not yet logged
 	stalledLogAt   time.Time
 	stuckMassLogAt time.Time
-	stuckMassAt    time.Time    // the last tick the busy links waited en masse (stuck.go)
+	stuckSlowAt    time.Time    // the last tick the path was slow for most links (stuck.go)
+	stuckSlowSince time.Time    // ... and when that slow spell began
 	stalled        atomic.Int64 // stalled connections closed on degraded links, not yet logged
 	ctlDrain       int          // reverse: draining links whose slot the exit is asked to replace
 	forced         atomic.Int64 // ... of which trickling ones on links retiring retireForce+
@@ -1843,18 +1844,22 @@ func (m *LinkManager) sampleHealth() {
 	// full), not on a throttle. When fewer than half the busy links answer
 	// promptly it is the path or the other server, slow or down for most:
 	// moving users between links would not help, so none is drained (logged
-	// once a minute) — nor for stuckRecover after. At most drainHeadroom
+	// once a minute) — nor for as long again after. At most drainHeadroom
 	// stuck links drain at a time, the longest waits first.
 	slow := 2*len(answering) < busyN
 	if slow {
-		m.stuckMassAt = now
+		if m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor() {
+			m.stuckSlowSince = now
+		}
+		m.stuckSlowAt = now
 	}
-	// After a path-wide wait, links get stuckRecover to come back on their
-	// own (TCP backs off through a long squeeze and resumes a little after
-	// it): judged earlier, those still waiting look stuck while they are only
-	// recovering — in the load test, 27 links drained just after a squeeze,
-	// 400 more users cut, none helped.
-	recovering := !m.stuckMassAt.IsZero() && now.Sub(m.stuckMassAt) < stuckRecover
+	// After a slow spell, links get as long again (stuckRecover to
+	// stuckRecoverMax) to come back on their own: TCP backed off through it
+	// and resumes up to that long after; judged earlier, those still waiting
+	// look stuck while they are only recovering — in the load test, 27 links
+	// drained just after a 60 s squeeze (400 more users cut, none helped),
+	// and after a 120 s one a link resumed 65 s later by itself.
+	recovering := !m.stuckSlowAt.IsZero() && now.Sub(m.stuckSlowAt) < m.stuckRecoverFor()
 	if slow && waitingN > 0 && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
 		logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer and only %d answer promptly — the path or the other server is slow, not those links: none is drained",
