@@ -614,3 +614,73 @@ func TestDoctorConntrackAndTCPMemWatch(t *testing.T) {
 		t.Fatalf("pressure log: %q", logs)
 	}
 }
+
+// Several tunnels on one server are counted at the ceiling each really runs
+// under (review: it added each one's own max_links — on a direct Kharej a
+// number that is not applied, so two direct tunnels from 300-link Iran servers
+// read as 170 links on a 4 GB Kharej instead of 600).
+func TestTunnelsTogetherCountsEffectiveCeilings(t *testing.T) {
+	old := statusRunDir
+	statusRunDir = t.TempDir()
+	t.Cleanup(func() { statusRunDir = old })
+	write := func(name string, ls liveStatus) {
+		ls.Updated = time.Now().Unix()
+		b, _ := json.Marshal(ls)
+		os.WriteFile(filepath.Join(statusRunDir, name+".status.json"), b, 0o644)
+	}
+	run := func() string {
+		var d doctorReport
+		checkTunnelsTogether(&d)
+		return strings.Join(d.lines, "\n")
+	}
+	// A 4 GB Kharej hub, two direct tunnels from 300-link Iran servers.
+	pinHW(t, 4096, 4)
+	write("a", liveStatus{Role: "Kharej side", Dir: "direct", CfgMax: 85, PeerMax: 300, EffMax: 300})
+	write("b", liveStatus{Role: "Kharej side", Dir: "direct", CfgMax: 85, PeerMax: 300, EffMax: 300})
+	if out := run(); !strings.Contains(out, "up to 600 links") || !strings.Contains(out, "[warn]") || !strings.Contains(out, "the Iran server for a direct tunnel") {
+		t.Fatalf("direct Kharej hub:\n%s", out)
+	}
+	// One of them has not heard the Iran server's ceiling yet: not counted
+	// (its own max_links is not applied), and said so.
+	write("b", liveStatus{Role: "Kharej side", Dir: "direct", CfgMax: 85})
+	if out := run(); !strings.Contains(out, "1 of them direct, whose ceiling the Iran server has not reported yet") || !strings.Contains(out, "up to 300 links") {
+		t.Fatalf("an unreported direct tunnel:\n%s", out)
+	}
+	// A 16 GB Iran server, two reverse tunnels capped at 64 by their Kharej.
+	pinHW(t, 16384, 8)
+	write("a", liveStatus{Role: "Iran side", Dir: "reverse", CfgMax: 300, PeerMax: 64, EffMax: 64})
+	write("b", liveStatus{Role: "Iran side", Dir: "reverse", CfgMax: 300, PeerMax: 64, EffMax: 64})
+	if out := run(); !strings.Contains(out, "up to 128 links") || strings.Contains(out, "[warn]") {
+		t.Fatalf("reverse Iran capped by Kharej:\n%s", out)
+	}
+}
+
+// The status names the cores the ceiling was computed from (the cgroup quota
+// as GOMAXPROCS sees it), not the host's: under a 2-CPU quota on a 16-core
+// host it said "16 cores" next to the 2-core ceiling (review).
+func TestStatusNamesTheCoresTheCeilingUses(t *testing.T) {
+	useTempStatusDir(t)
+	pinHW(t, 8192, 2)
+	cfg := filepath.Join(t.TempDir(), "c.json")
+	fc := autoFC(fileConfig{Mode: "dial", Carrier: "mtcp"})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	startStatusWriter(ctx, fc, cfg, func() engine.PoolStats {
+		return engine.PoolStats{Links: 3, Target: 3, Min: 2, Max: 128, Phase: "steady"}
+	})
+	var ls liveStatus
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		b, err := os.ReadFile(statusPath(cfg))
+		if err == nil && json.Unmarshal(b, &ls) == nil && ls.CfgMax > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no status file")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if ls.CPUCores != 2 || !strings.Contains(ls.CeilingText, "2 cores") {
+		t.Fatalf("cores %d, ceiling text %q; want the 2 the ceiling uses", ls.CPUCores, ls.CeilingText)
+	}
+}

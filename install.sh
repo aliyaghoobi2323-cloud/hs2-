@@ -1787,12 +1787,27 @@ use_auto_link_ceiling(){
     info "Link-pool ceiling: auto (max_links 0). The installed hs2 binary predates it and runs it as a fixed 32 until hs2 is upgraded (menu → Upgrade)."
   fi
   info "The pool self-sizes between $LINK_MIN and that ceiling. In reverse mode the effective ceiling is the lower of the two servers'."
-  local rec
-  rec=$(printf '%s\n' "$why" | awk 'NR==1{print $1}')
-  case "$rec" in ''|*[!0-9]*) rec=0 ;; esac
-  if [ "$rec" -gt 64 ]; then
-    info "At peak that is up to $rec parallel links between the two servers — more noticeable to an outside observer than a handful (opened only under load, at most ~10 new ones a second, closed in quiet hours). A lower fixed max (Tuning → Link pool) trades peak capacity for a smaller pattern — your call."
+}
+
+# link_pool_note says, once the direction and the carrier are known (end of
+# setup), how many parallel links this tunnel can run at peak — the
+# visibility trade-off — where this server's ceiling is the one that counts:
+# an Iran server (either direction) or a reverse Kharej. A direct Kharej's
+# own max_links is not applied (the Iran server's ceiling sets the count), and
+# a carrier without a link pool runs one connection. role: iran|kharej.
+link_pool_note(){
+  case "${CARRIER:-}" in mtcp|l3mtcp|dgtun) ;; *) return 0 ;; esac
+  if [ "$1" = kharej ] && [ "${DIRECTION:-}" = direct ]; then
+    info "Link pool: in direct mode the Iran server's ceiling sets how many parallel links this tunnel runs at peak (this server's max_links is not applied here)."
+    return 0
   fi
+  local rec
+  rec=$(recommend_links | awk 'NR==1{print $1}')
+  case "$rec" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$rec" -gt 64 ] || return 0
+  local whose="this server's ceiling"
+  [ "${DIRECTION:-}" = reverse ] && whose="the lower of the two servers' ceilings; this one's is $rec"
+  info "At peak this tunnel can run up to $rec parallel links between the two servers ($whose) — more noticeable to an outside observer than a handful (opened only under load, at most ~10 new ones a second, closed in quiet hours). A lower fixed max (Tuning → Link pool) trades peak capacity for a smaller pattern — your call."
 }
 
 setup_kharej(){
@@ -1815,6 +1830,7 @@ setup_kharej(){
   else
     kharej_dialer        # reverse: kharej dials the iran edge (pastes the link)
   fi
+  link_pool_note kharej
 }
 
 # kharej_listener: direct exit. Kharej listens for the iran edge and generates
@@ -2050,6 +2066,7 @@ setup_iran(){
     ask_transport
     iran_listener        # reverse: iran listens for kharej and generates the link
   fi
+  link_pool_note iran
 }
 
 # iran_dialer: direct edge. Iran dials out to kharej; it pastes kharej's link.

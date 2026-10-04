@@ -214,7 +214,11 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 	if err := os.MkdirAll(statusRunDir, 0o755); err != nil {
 		return // /run not writable (unusual); the manager falls back to `ss`
 	}
-	cpu := &cpuMeter{logf: func(f string, a ...any) { log.Printf(f, a...) }}
+	// The cores this process can use (the cgroup quota, GOMAXPROCS): the same
+	// number the ceiling is computed from, so the status's "why" text and the
+	// CPU meter agree with it (runtime.NumCPU() is the host's under a quota).
+	_, hwCores := detectHW()
+	cpu := &cpuMeter{logf: func(f string, a ...any) { log.Printf(f, a...) }, cores: hwCores}
 	base := liveStatus{
 		Role: role(fc), Dir: direction(fc), Carrier: carrierName(fc),
 		Transport: transportLabel(fc), Endpoint: endpointLabel(fc), PID: os.Getpid(),
@@ -238,7 +242,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		if ls.CfgMax > 0 {
 			ls.PeerMax = s.PeerMax
 			ls.EffMax, ls.LimitBy = effectiveCeiling(fc.Mode == "dial", fc.Reverse, ls.CfgMax, ls.PeerMax)
-			ls.CPUCores = runtime.NumCPU() // the "why" below names the cores
+			ls.CPUCores = hwCores // the "why" below names the cores
 			ls.CeilingText = ceilingLine(ls)
 		}
 		if hasUserPorts(fc) {
@@ -269,7 +273,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.Carriers = s.DropNoCarrier, s.DropQueueFull, s.DropAged, s.Carriers
 			ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut = s.ReorderHeld, s.ReorderFilled, s.ReorderTimedOut
 		}
-		ls.CPUPct, ls.CPUCores = cpu.sample(), runtime.NumCPU()
+		ls.CPUPct, ls.CPUCores = cpu.sample(), hwCores
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)

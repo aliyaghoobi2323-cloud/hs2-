@@ -585,7 +585,7 @@ func checkConntrack(d *doctorReport, proc string) {
 // With more than one running, doctor adds them up.
 func checkTunnelsTogether(d *doctorReport) {
 	files, _ := filepath.Glob(filepath.Join(statusRunDir, "*.status.json"))
-	n, links := 0, 0
+	n, links, unknown := 0, 0, 0
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
@@ -596,7 +596,18 @@ func checkTunnelsTogether(d *doctorReport) {
 			continue
 		}
 		n++
-		links += ls.CfgMax
+		// The ceiling the tunnel really runs under: its effective one (in
+		// direct mode the Iran server's, in reverse the lower of the two).
+		// A direct Kharej's own max_links is not applied, so until the Iran
+		// server has reported its ceiling the tunnel cannot be counted.
+		switch {
+		case ls.EffMax > 0:
+			links += ls.EffMax
+		case ls.Role == "Kharej side" && ls.Dir != "reverse":
+			unknown++
+		default:
+			links += ls.CfgMax
+		}
 	}
 	if n < 2 {
 		return
@@ -604,13 +615,16 @@ func checkTunnelsTogether(d *doctorReport) {
 	ram, _ := detectHW()
 	worst := links * tune.LinkWorstCaseMiB
 	msg := fmt.Sprintf("%d pooled tunnels run on this server, up to %d links in all: worst-case link buffers %.1f GB", n, links, float64(worst)/1024)
+	if unknown > 0 {
+		msg = fmt.Sprintf("%d pooled tunnels run on this server; %d of them direct, whose ceiling the Iran server has not reported yet (not counted); the others up to %d links: worst-case link buffers %.1f GB", n, unknown, links, float64(worst)/1024)
+	}
 	if ram > 0 {
 		pct := worst * 100 / ram
 		msg += fmt.Sprintf(" (%d%% of %.1f GB RAM)", pct, float64(ram)/1024)
 		if pct > 40 {
-			d.warn("tunnels together", msg+" — each one sizes its auto ceiling and Go memory limit from the whole server; give each a fixed max_links of about its auto value / "+strconv.Itoa(n))
+			d.warn("tunnels together", msg+" — each pool is sized by its own ceiling as if it had the server to itself; lower them with a fixed max_links on the server that sets each one (the Iran server for a direct tunnel, the lower of the two for a reverse one), about "+strconv.Itoa(100/n)+"% of what it is now")
 			return
 		}
 	}
-	d.info("tunnels together", msg+" — each one sizes its auto ceiling from the whole server")
+	d.info("tunnels together", msg+" — each pool is sized by its own ceiling as if it had the server to itself")
 }

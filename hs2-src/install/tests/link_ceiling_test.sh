@@ -39,7 +39,21 @@ if [ "${2:-}" = --why ]; then echo "300  (16.6 GB RAM, 20 cores: one link per 48
 FAKE
 chmod +x "$T/hs2big"
 out=$(ualc "$T/hs2big")
-check "new setup on a 300 box: the visibility note, once" '[ "$(echo "$out" | grep -c "up to 300 parallel links between the two servers")" = 1 ] && echo "$out" | grep -q "your call"'
+check "new setup on a 300 box: no note yet (direction and carrier unknown)" '! echo "$out" | grep -q "parallel links"'
+# --- link_pool_note: once direction and carrier are known -------------------
+lpn(){ # bin role dir carrier
+  bash -c "source '$T/core.sh' >/dev/null 2>&1; info(){ echo \"INFO \$*\"; }; BIN='$1'; DIRECTION='$3'; CARRIER='$4'; link_pool_note '$2'" 2>&1
+}
+out=$(lpn "$T/hs2big" iran direct mtcp)
+check "Iran direct on a 300 box: the note, once, this server's ceiling" '[ "$(echo "$out" | grep -c "up to 300 parallel links between the two servers (this server.s ceiling)")" = 1 ] && echo "$out" | grep -q "your call"'
+out=$(lpn "$T/hs2big" kharej reverse dgtun)
+check "reverse Kharej: the lower of the two" 'echo "$out" | grep -q "the lower of the two servers. ceilings; this one.s is 300"'
+out=$(lpn "$T/hs2big" kharej direct mtcp)
+check "direct Kharej: the Iran server sets it, no number of its own" 'echo "$out" | grep -q "the Iran server.s ceiling sets" && ! echo "$out" | grep -q "up to 300"'
+out=$(lpn "$T/hs2big" iran direct udp)
+check "a carrier without a pool: nothing" '[ -z "$out" ]'
+out=$(lpn "$T/hs2" iran reverse mtcp)
+check "a 64 box: nothing" '[ -z "$out" ]'
 out=$(ualc "$T/nonexistent-hs2")
 check "missing binary: still auto, no abort under set -e" 'echo "$out" | grep -qx "LINK_MAX=0"'
 check "missing binary: no 'right now' claim" '! echo "$out" | grep -q "right now"'
