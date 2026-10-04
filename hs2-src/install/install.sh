@@ -2376,6 +2376,15 @@ remove_tunnel(){ # unit
   local sp; sp=$(status_path "$cfg")
   # the live status file, and the warm-start record next to it (same name, .warm)
   rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$sp" "${sp%.status.json}.warm"
+  # Its systemd drop-ins (systemctl edit / set-property make them): useless
+  # without the unit, and they would silently apply to a new tunnel of the
+  # same name.
+  if [ -n "$u" ] && [ -d "$UNIT_DIR/$u.service.d" ]; then
+    if [ -n "$(ls -A "$UNIT_DIR/$u.service.d" 2>/dev/null)" ]; then
+      info "Removed its systemd drop-ins ($UNIT_DIR/$u.service.d)."
+    fi
+    rm -rf "${UNIT_DIR:?}/$u.service.d"
+  fi
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed "$u" >/dev/null 2>&1 || true
   kernel_cleanup

@@ -87,6 +87,7 @@ warm=$(bash -c "source '$T/sp.sh'; sp=\$(status_path /etc/hs2/config.json); echo
 check "the warm record of /etc/hs2/config.json is /run/hs2/etc-hs2-config.json.warm" '[ "$warm" = /run/hs2/etc-hs2-config.json.warm ]'
 check "remove_tunnel deletes the tunnel's warm record with its status file" 'sed -n "/^remove_tunnel(){/,/^}/p" "$INST" | grep -q "\"\${sp%.status.json}.warm\""'
 check "uninstall clears /run/hs2 (warm records, status files, the ping-guard folder)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rm -f /run/hs2/\*.warm" && sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rmdir /run/hs2/icmp-echo-ignore"'
+check "remove_tunnel deletes the unit's systemd drop-in folder (a real-server report: an empty hs2.service.d stayed)" 'sed -n "/^remove_tunnel(){/,/^}/p" "$INST" | grep -q "rm -rf \"\${UNIT_DIR:?}/\$u.service.d\""'
 check "uninstall asks before removing the program and hs2-menu (default: keep)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rm -f \"\$BIN\" \"\$MENU_BIN\""'
 
 exit $fail
