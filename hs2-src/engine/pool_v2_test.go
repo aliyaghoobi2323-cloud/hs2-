@@ -1471,7 +1471,7 @@ func TestStatsCountsServingRetiring(t *testing.T) {
 // whose data still passes stays, however little: a slow trickle (an SSH
 // session being typed in, a game's beat), a pause shorter than drainStall, a
 // transfer that just woke up, one opened a moment ago; after maxDrainActive
-// the link closes with what is left. The streams' state comes from the real
+// (90 s) the link closes with what is left. The streams' state comes from the real
 // sampler (flowStats), as in production.
 func TestDegradedLinkDrainsStalledKeepsActive(t *testing.T) {
 	m, clk, lg := newV2Manager(nil, 1, 8, false)
@@ -1547,7 +1547,7 @@ func TestDegradedLinkDrainsStalledKeepsActive(t *testing.T) {
 	m.mu.RLock()
 	gone := len(m.links) == 0
 	m.mu.RUnlock()
-	if !gone || lg.count("degraded for 5m — closed with its 5 remaining connection(s)") != 1 {
+	if !gone || lg.count("degraded for 1m30s — closed with its 5 remaining connection(s)") != 1 {
 		t.Fatalf("the cap did not close the link (gone=%v):\n%s", gone, lg)
 	}
 }

@@ -64,12 +64,16 @@ const (
 	//     max + drainHeadroom), the reverse exit is asked for its replacement
 	//     at once, and when the pool is at its ceiling and short of serving
 	//     links the oldest draining links close as before (slotsBackLocked);
-	//   - after maxDrainActive the link is closed with whatever is left.
+	//   - after maxDrainActive the link is closed with whatever is left: in the
+	//     load test, users kept on a link losing 20% had p90 1.6-2.7 s for as
+	//     long as they stayed (5 min then), against 0.2-0.4 s a minute after a
+	//     reconnect — 45 s more lets a page, a video segment or a short
+	//     download finish, and no longer;
 	// (Closing every user after maxDrain cut 60-90 active connections per
 	// degraded link in the load test.)
 	maxDrain       = 45 * time.Second
 	drainStall     = 15 * time.Second
-	maxDrainActive = 5 * time.Minute
+	maxDrainActive = 90 * time.Second
 
 	// warmStartLinks: the pool comes up at this size (clamped to the envelope)
 	// rather than at min, so a burst of connections arriving right after start

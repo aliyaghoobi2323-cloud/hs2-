@@ -838,7 +838,10 @@ downloads: 5,416 open connections. Old = the main build before this phase.
   once: each close waits for the link's writer, and one after another would
   have kept most users waiting minutes. A connection whose data still passes
   stays, however little moves (an SSH session being typed in, a game's beat),
-  until it ends, 5 min at most. The draining link keeps them only while the
+  45 s more — 90 s after the link degraded the link closes with what is
+  left. (A first cut kept them up to 5 min: in the test they had p90 1.6–2.7
+  s all that time, against 0.2–0.4 s a minute after a reconnect.) The
+  draining link keeps them only while the
   pool can refill without its slot: it does not count against max (all links
   stay within max + an eighth), the reverse exit is now asked for the
   replacement at once (before: only after the bad link closed), and when the

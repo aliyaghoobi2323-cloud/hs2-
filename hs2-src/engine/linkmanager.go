@@ -1209,16 +1209,25 @@ func (m *LinkManager) drainStepLocked(ml *managedLink, now time.Time, what strin
 		return true, "", false
 	case age > maxDrainActive:
 		return true, fmt.Sprintf("%s %d degraded for %s — closed with its %d remaining connection(s) (they reconnect onto healthy links)",
-			what, ml.id, fmtDur(maxDrainActive), users), false
+			what, ml.id, fmtDrain(maxDrainActive), users), false
 	case age > maxDrain:
 		if !ml.drainNoted {
 			ml.drainNoted = true
 			note = fmt.Sprintf("%s %d degraded for %s — its connections that moved no data for %s (idle or stuck) are closed now (they reconnect onto healthy links); those still moving data (%d active) stay until they end, %s at most",
-				what, ml.id, fmtDur(maxDrain), fmtDur(drainStall), ml.flowing, fmtDur(maxDrainActive))
+				what, ml.id, fmtDrain(maxDrain), fmtDrain(drainStall), ml.flowing, fmtDrain(maxDrainActive))
 		}
 		return false, note, ml.drainReclaim.CompareAndSwap(false, true)
 	}
 	return false, "", false
+}
+
+// fmtDrain is fmtDur that keeps the seconds of a drain step past a minute
+// (fmtDur rounds 90 s to "2m").
+func fmtDrain(d time.Duration) string {
+	if d >= time.Minute && d%time.Minute != 0 {
+		return d.Truncate(time.Second).String()
+	}
+	return fmtDur(d)
 }
 
 // drainHeadroom is how far over max the pool may go while degraded links

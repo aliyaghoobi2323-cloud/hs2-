@@ -48,7 +48,10 @@ not**:
   at once (on the reverse edge the exit is asked for it). After 45 s its
   connections that moved no data for 15 s are closed — idle ones, and on a
   link that got stuck every one — and the app reconnects onto a healthy link;
-  a connection whose data still passes stays until it ends, 5 min at most.
+  a connection whose data still passes gets 45 s more to finish (a page, a
+  video segment, a short download), then the link closes with what is left
+  — users kept on a lossy link wait seconds per reply, so they are better off
+  reconnecting.
   When the pool is at its ceiling and needs the slot, the bad link closes at
   45 s with what is left, as before. Log: `link N degraded …`, `… degraded
   for 45s — its connections that moved no data for 15s (idle or stuck) are
