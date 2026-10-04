@@ -860,6 +860,85 @@ downloads: 5,416 open connections. Old = the main build before this phase.
   carrier, user-port and dgtun listeners set it explicitly; go.mod's `godebug
   multipathtcp=0` covers the rest and the tests.
 
+### Q7 — stuck links (throttled, not cut)
+DPI can throttle a link to a few packets a second without cutting it. Such
+a link still gets a keepalive through, so it is never *suspect*, and it
+moves too little for the loss rule, so it is never *degraded*. It kept
+serving, and it took new users because it looked the least loaded. In the
+load test, main kept 7 of 10 such links until the end, and only 79% of
+echoes were answered for good.
+
+- **The signal.** Each link's control ping travels behind its own traffic
+  both ways, so the age of its oldest unanswered ping is how long its users
+  wait. The control loop keeps up to 4 pings outstanding. A write that
+  timed out stays queued in smux, so it no longer ends the loop. The wait
+  is published on every answer.
+- **The rule.** A link is *stuck* when all of these hold:
+  - its ping has waited 6 s, in two samples in a row;
+  - it moves less than 96 KB per 2 s, and less than half of what the
+    links that answer promptly move (or under 4 KB);
+  - another busy link answers in under 2 s now, to a ping sent *after*
+    this link's oldest;
+  - at least half the busy links answer promptly.
+
+  A stuck link is degraded at once: no new users, and its replacement is
+  asked for. Its connections that moved no data for 15 s close right away,
+  and the rest get 90 s at most.
+- **What it leaves alone.**
+  - **A slow path.** When fewer than half the busy links answer promptly,
+    the path or the other server is slow for most, and moving users would
+    not help. Nothing is drained, and no link is judged afterwards for as
+    long as the slow spell lasted (30 s to 2 min): TCP backed off through
+    it, and resumes up to that long after.
+  - **A link moving its share.** On a full path, a link whose users wait
+    behind their own load while it moves its share is not stuck.
+  - **A link wedged by its own users.** If its reader was parked on a full
+    receive buffer, the wedge guard handles it.
+  - **A suspect link.**
+  - **Drain limit.** At most an eighth of the pool drains as stuck at a time.
+- **Log.**
+  - `link N stuck: its traffic has waited 10s for an answer while it moved
+    1.8 KB in 2s (the other links answer in ~85ms) — draining`
+  - then `link N stuck — its connections that moved no data for 15s are
+    closed now …`
+  - on a slow path, once a minute: `N of M busy links have waited 6s+ for
+    an answer and only K answer promptly — the path or the other server is
+    slow, not those links: none is drained`
+- **Load test (reverse, ~200 links, 1,600 active + 2,000 idle users, 16
+  downloads; "stuck" = 3 packets/s each way via iptables).**
+  - 10 busy links stuck: all 10 caught at 10.7–12.7 s. Answered echoes went
+    from 74% to 100% within 60 s, and p99 settled at ~350 ms (main: 79%
+    for good).
+  - 10 random links stuck: all 10 caught. p99 stayed at 550–640 ms; main's
+    went to 44–69 s.
+  - Small pool (max 10) with 4 links stuck: all 4 caught at 11–13 s, and
+    answered echoes were 100% after 30 s. The build before the review fix
+    took the 4 for a slow path ("4 of 8 busy links … none is drained") and
+    answered 51–56% for a minute.
+  - No stuck verdict in any of these: a squeeze to 8 Mbit/s for 60 s; to
+    12 Mbit/s for 120 s; a 40 s outage.
+  - Drops across the squeezes stayed within main's own run-to-run spread:
+    at 12 Mbit/s main dropped 1,108 and 1,410 active connections in two
+    runs, this build 1,258.
+  - Earlier cuts of the rule drained 210, 55, then 27 links in the
+    squeeze, cutting hundreds of users who would have recovered. Each was
+    fixed before this one.
+- **Reviews.** Two independent adversarial reviews; every confirmed finding
+  is fixed and has a test that fails without its fix (11 mutations, all
+  caught).
+  - A minority of stuck links (more than a third of the busy ones) passed
+    for a slow path for good.
+  - A link waiting on its own load was taken for stuck.
+  - The per-tick cap did not bound how many links drained at once.
+  - The wait stayed stale until every outstanding pong was back.
+  - A reused ping buffer rewrote queued pings.
+  - An answer arriving just after an outage began counted as proof that
+    the path worked.
+- **Not seen from the edge.** A wedge on the exit's side (its reader parked
+  by a slow target). The exit's guard frees readers that stop within
+  seconds, before a verdict; one that trickles is judged like a throttled
+  path.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.
