@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -266,9 +267,36 @@ func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int)
 	relayStream(user, st, guardOf(st))
 }
 
+// udpFlow is one client address on a UDP user port: its datagrams wait in q
+// for the flow's own writer, so the port's one read loop never waits on a
+// link — before, it wrote each datagram itself, and a user whose link was
+// throttled or busy (a DPI-slowed link, or an upload faster than the link)
+// held up every other user of the port: in a test one user uploading 4.8
+// Mbit/s over a 2 Mbit/s link left the others 34% of their datagrams, 430 ms
+// late. A full queue drops the datagram, as a full UDP socket would.
 type udpFlow struct {
-	st   stream
-	last time.Time
+	q     chan []byte
+	qb    atomic.Int64 // bytes waiting in q
+	last  time.Time    // under the port's mu
+	st    stream       // nil until the flow's stream is open (under mu)
+	stop  chan struct{}
+	ended bool // stop is closed (under mu)
+}
+
+const (
+	udpFlowQueue = 256       // datagrams waiting for a flow's link
+	udpFlowBytes = 512 << 10 // ... and their bytes at most
+)
+
+// end stops the flow (idle, or its stream failed). Caller holds the port's mu.
+func (f *udpFlow) end() {
+	if !f.ended {
+		f.ended = true
+		close(f.stop)
+		if f.st != nil {
+			f.st.Close()
+		}
+	}
 }
 
 // serveUserUDP gives each client address its own stream (so one flow's loss
@@ -288,58 +316,101 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			mu.Lock()
 			for k, f := range flows {
 				if time.Since(f.last) > udpIdle {
-					f.st.Close()
+					f.end()
 					delete(flows, k)
 				}
 			}
 			mu.Unlock()
 		}
 	}()
+	// run is one flow: it opens the flow's stream (the read loop does not
+	// wait for a link), then writes what the client sends while a reader
+	// returns what comes back.
+	run := func(key string, addr net.Addr, f *udpFlow) {
+		gone := func() {
+			mu.Lock()
+			f.end()
+			if flows[key] == f {
+				delete(flows, key)
+			}
+			mu.Unlock()
+		}
+		st, release, ok := openStream(ctx, lm, true, port)
+		if !ok {
+			gone()
+			return
+		}
+		defer release()
+		mu.Lock()
+		if f.ended {
+			mu.Unlock()
+			st.Close()
+			return
+		}
+		f.st = st
+		mu.Unlock()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			rb := make([]byte, maxDatagram)
+			for {
+				p, err := readDatagram(st, rb)
+				if err != nil {
+					break
+				}
+				pc.WriteTo(p, addr)
+				mu.Lock()
+				f.last = time.Now()
+				mu.Unlock()
+			}
+			gone()
+		}()
+		for {
+			select {
+			case p := <-f.q:
+				f.qb.Add(-int64(len(p)))
+				if writeDatagram(st, p) != nil {
+					gone()
+				}
+				continue
+			case <-f.stop:
+			case <-ctx.Done():
+				gone()
+			}
+			break
+		}
+		<-done // the stream is closed: the reader ends, then the slot is released
+	}
 	buf := make([]byte, maxDatagram)
 	for {
 		n, addr, err := pc.ReadFrom(buf)
 		if err != nil {
+			mu.Lock()
+			for k, f := range flows {
+				f.end()
+				delete(flows, k)
+			}
+			mu.Unlock()
 			return
 		}
 		key := addr.String()
 		mu.Lock()
 		f := flows[key]
-		if f != nil {
-			f.last = time.Now()
-		}
-		mu.Unlock()
 		if f == nil {
-			st, release, ok := openStream(ctx, lm, true, port)
-			if !ok {
-				continue
-			}
-			f = &udpFlow{st: st, last: time.Now()}
-			mu.Lock()
+			f = &udpFlow{q: make(chan []byte, udpFlowQueue), stop: make(chan struct{})}
 			flows[key] = f
-			mu.Unlock()
-			go func() {
-				defer release()
-				rb := make([]byte, maxDatagram)
-				for {
-					p, err := readDatagram(st, rb)
-					if err != nil {
-						break
-					}
-					pc.WriteTo(p, addr)
-					mu.Lock()
-					f.last = time.Now()
-					mu.Unlock()
-				}
-				st.Close()
-				mu.Lock()
-				if flows[key] == f {
-					delete(flows, key)
-				}
-				mu.Unlock()
-			}()
+			go run(key, addr, f)
 		}
-		if writeDatagram(f.st, buf[:n]) != nil {
-			f.st.Close()
+		f.last = time.Now()
+		mu.Unlock()
+		if f.qb.Load()+int64(n) > udpFlowBytes {
+			continue // the flow's link is behind: drop
+		}
+		p := append([]byte(nil), buf[:n]...)
+		select {
+		case f.q <- p:
+			f.qb.Add(int64(n))
+		default: // drop
 		}
 	}
 }
