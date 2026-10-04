@@ -1454,60 +1454,74 @@ func TestStatsCountsServingRetiring(t *testing.T) {
 	}
 }
 
-// A degraded link is drained in steps (the owner's rule after the load test,
-// where closing everyone after 45 s cut 60-90 active connections per degraded
-// link): after maxDrain the connections that moved nothing for drainStall
-// are closed and those moving data stay; after maxDrainActive the link closes
-// with whatever is left; and a link that is really stuck (nothing moves)
-// loses every connection, then itself.
+// A degraded link's users are moved off it in steps (it no longer takes them
+// all down at maxDrain): after maxDrain the connections that moved no real
+// data for drainStall are closed — idle ones and ones that only trickle
+// keepalives — while those moving data stay, a pause shorter than drainStall
+// included; after maxDrainActive the link closes with what is left. The
+// streams' state comes from the real sampler (flowStats), as in production.
 func TestDegradedLinkDrainsStalledKeepsActive(t *testing.T) {
 	m, clk, lg := newV2Manager(nil, 1, 8, false)
 	pl := newV2PipeLink(t)
-	stalled, active := pl.open(t), pl.open(t)
+	idle, trickle, paused, active := pl.open(t), pl.open(t), pl.open(t), pl.open(t)
 	now := clk.Now()
-	pl.flowMu.Lock()
-	stalled.lastActive = now.Add(-20 * time.Second) // nothing for 20 s
-	active.ewma, active.lastActive = 50<<10, now    // moving data
-	pl.flowMu.Unlock()
+	// 40 s of 2 s samples: active moves 8 KB a sample throughout, paused the
+	// same but stops 8 s before now, trickle 100 B a sample (a keepalive),
+	// idle nothing.
+	for at := -40 * time.Second; at <= 0; at += healthTick {
+		active.bytes.Add(8 << 10)
+		if at <= -8*time.Second {
+			paused.bytes.Add(8 << 10)
+		}
+		trickle.bytes.Add(100)
+		pl.flowStats(now.Add(at), healthTick, time.Minute)
+	}
 	ml := addManaged(m, pl)
 	m.mu.Lock()
 	ml.degraded, ml.draining, ml.drainSince = true, true, now.Add(-maxDrain/2)
-	ml.users.Store(2)
-	ml.flowing = 1
+	ml.users.Store(4)
+	ml.flowing = 2
 	m.mu.Unlock()
 
 	m.heal(context.Background()) // 22 s: nothing yet
 	time.Sleep(100 * time.Millisecond)
-	if stalled.done.Load() || active.done.Load() || lg.count("degraded for") != 0 {
-		t.Fatal("acted before maxDrain")
+	for _, c := range []*countedStream{idle, trickle, paused, active} {
+		if c.done.Load() {
+			t.Fatal("acted before maxDrain")
+		}
+	}
+	if lg.count("degraded for") != 0 {
+		t.Fatal("logged a step before maxDrain")
 	}
 	m.mu.Lock()
 	ml.drainSince = now.Add(-maxDrain - time.Second)
 	m.mu.Unlock()
-	m.heal(context.Background()) // 46 s: the stalled one goes, the active one stays
-	within(t, time.Second, "the stalled connection is closed", func() bool { return stalled.done.Load() })
+	m.heal(context.Background()) // 46 s: idle and trickle go, paused and active stay
+	within(t, time.Second, "the idle and the trickling connection are closed", func() bool {
+		return idle.done.Load() && trickle.done.Load()
+	})
 	time.Sleep(100 * time.Millisecond)
-	if active.done.Load() {
-		t.Fatal("closed a connection that moves data")
+	if active.done.Load() || paused.done.Load() {
+		t.Fatalf("closed a connection that moves data (active %v, paused 8 s %v)", active.done.Load(), paused.done.Load())
 	}
-	if lg.count("degraded for 45s — its connections that moved nothing for 15s are closed now") != 1 {
+	if lg.count("degraded for 45s — its connections that moved no real data for 15s (idle or stuck) are closed now") != 1 {
 		t.Fatalf("the step is not logged once:\n%s", strings.Join(lg.lines, "\n"))
 	}
 	m.mu.RLock()
 	stillIn := len(m.links) == 1
 	m.mu.RUnlock()
 	if !stillIn {
-		t.Fatal("the link was dropped while a user still moves data on it")
+		t.Fatal("the link was dropped while users still move data on it")
 	}
 	m.mu.Lock()
-	ml.users.Store(1)
+	ml.users.Store(2)
 	ml.drainSince = now.Add(-maxDrainActive - time.Second)
 	m.mu.Unlock()
 	m.heal(context.Background()) // 5 min: the link goes with what is left
 	m.mu.RLock()
 	gone := len(m.links) == 0
 	m.mu.RUnlock()
-	if !gone || lg.count("degraded for 5m — closed with its 1 remaining connection(s)") != 1 {
+	if !gone || lg.count("degraded for 5m — closed with its 2 remaining connection(s)") != 1 {
 		t.Fatalf("the cap did not close the link (gone=%v):\n%s", gone, strings.Join(lg.lines, "\n"))
 	}
 }
@@ -1525,8 +1539,9 @@ func TestStuckDegradedLinkLosesEveryConnection(t *testing.T) {
 		cs = append(cs, c)
 	}
 	pl.flowMu.Lock()
-	for _, c := range cs {
+	for _, c := range cs { // moving data until drainStall+1s ago
 		c.lastActive = now.Add(-drainStall - time.Second)
+		c.lastFlowing = c.lastActive
 	}
 	pl.flowMu.Unlock()
 	ml := addManaged(m, pl)
@@ -1587,8 +1602,9 @@ func TestStuckDegradedLinkClosesDoNotQueue(t *testing.T) {
 		}()
 	}
 	pl.flowMu.Lock()
-	for _, c := range cs {
+	for _, c := range cs { // moving data until drainStall+1s ago
 		c.lastActive = now.Add(-drainStall - time.Second)
+		c.lastFlowing = c.lastActive
 	}
 	pl.flowMu.Unlock()
 	sc.stuck.Store(true)

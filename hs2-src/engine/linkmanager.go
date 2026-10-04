@@ -215,6 +215,12 @@ type slowReclaimer interface {
 	slowStreams(max int) []idleCand
 }
 
+// quietReclaimer is implemented by links that can name the user streams that
+// have not moved real data for a while (a degraded link's drain).
+type quietReclaimer interface {
+	quietStreams(now time.Time, quiet time.Duration, max int) []idleCand
+}
+
 // idleReclaimer is implemented by links whose idle user streams can be closed.
 type idleReclaimer interface {
 	idleStreams(now time.Time, idle time.Duration, max int) []idleCand
@@ -1179,7 +1185,7 @@ func (m *LinkManager) drainStepLocked(ml *managedLink, now time.Time, what strin
 	case age > maxDrain:
 		if !ml.drainNoted {
 			ml.drainNoted = true
-			note = fmt.Sprintf("%s %d degraded for %s — its connections that moved nothing for %s are closed now (they reconnect onto healthy links); the %d moving data stay until they end, %s at most",
+			note = fmt.Sprintf("%s %d degraded for %s — its connections that moved no real data for %s (idle or stuck) are closed now (they reconnect onto healthy links); the %d moving data stay until they end, %s at most",
 				what, ml.id, fmtDur(maxDrain), fmtDur(drainStall), ml.flowing, fmtDur(maxDrainActive))
 		}
 		return false, note, ml.reclaiming.CompareAndSwap(false, true)
@@ -1188,9 +1194,10 @@ func (m *LinkManager) drainStepLocked(ml *managedLink, now time.Time, what strin
 }
 
 // reclaimStalled closes, with FIN, the connections on the given draining links
-// that have moved nothing for drainStall (a connection that moves anything
-// between being chosen and being closed is spared), and logs the count once a
-// minute. Each close runs on its own: the app sees its connection end at once,
+// that have not moved real data for drainStall — idle ones, ones that only
+// trickle keepalives, and ones whose data stopped (a connection that moves
+// anything between being chosen and being closed is spared) — and logs the
+// count once a minute. "Real data" is what status counts as active. Each close runs on its own: the app sees its connection end at once,
 // but the FIN frame waits for the link's writer, and on a stuck link that is
 // smux's 30 s open/close timeout — one close after another would keep most
 // users waiting minutes. The link is not picked again until all have returned.
@@ -1198,12 +1205,12 @@ func (m *LinkManager) reclaimStalled(links []*managedLink, now time.Time) {
 	for _, ml := range links {
 		go func(ml *managedLink) {
 			defer ml.reclaiming.Store(false)
-			ir, ok := ml.link.(idleReclaimer)
+			qr, ok := ml.link.(quietReclaimer)
 			if !ok {
 				return
 			}
 			var wg sync.WaitGroup
-			for i, c := range ir.idleStreams(now, drainStall, math.MaxInt) {
+			for i, c := range qr.quietStreams(now, drainStall, math.MaxInt) {
 				if i > 0 {
 					time.Sleep(drainCloseGap)
 				}
@@ -1229,7 +1236,7 @@ func (m *LinkManager) reclaimStalled(links []*managedLink, now time.Time) {
 	}
 	m.mu.Unlock()
 	if logNow {
-		m.log("mtcp: closed %d connection(s) on degraded links that moved nothing for %s — they reconnect onto healthy links", n, fmtDur(drainStall))
+		m.log("mtcp: closed %d connection(s) on degraded links that moved no real data for %s — they reconnect onto healthy links", n, fmtDur(drainStall))
 	}
 }
 
@@ -1723,8 +1730,8 @@ func b2u(b bool) uint8 {
 // serving link it first brings a retiring link back into service, and only if
 // there is none dials a replacement — so capacity never dips — then drops any
 // draining link that has emptied or overstayed maxDrainActive. Its users are
-// moved off it in steps (drainStepLocked): after maxDrain those that moved nothing
-// for drainStall are closed; those moving data stay until they end.
+// moved off it in steps (drainStepLocked): after maxDrain those that moved no
+// real data for drainStall are closed; those moving data stay until they end.
 func (m *LinkManager) heal(ctx context.Context) {
 	now := m.now()
 	m.mu.Lock()

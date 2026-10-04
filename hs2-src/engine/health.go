@@ -53,11 +53,14 @@ const (
 	blockedMin = time.Millisecond
 	// A degraded link takes no new users and is replaced at once
 	// (make-before-break); its own users are moved off it in steps:
-	//   - after maxDrain, its connections that moved nothing for drainStall
-	//     are closed (FIN; the app reconnects onto a healthy link). On a link
-	//     that is really stuck no byte gets through, so within drainStall
-	//     every connection goes and the link with them; on a link that is only
-	//     lossy, the users still moving data keep their connection;
+	//   - after maxDrain, its connections that moved no real data (were not
+	//     "flowing", what status counts as active) for drainStall are closed
+	//     (FIN; the app reconnects onto a healthy link): idle ones, ones that
+	//     only trickle keepalives, and ones whose data stopped. On a link that
+	//     is really stuck no data gets through, so within drainStall every
+	//     connection goes and the link with them; on a link that is only
+	//     lossy, the users still moving data keep their connection (a pause
+	//     shorter than drainStall, between video segments say, is kept);
 	//   - after maxDrainActive the link is closed with whatever is left.
 	// (Closing every user after maxDrain cut 60-90 active connections per
 	// degraded link in the load test.)

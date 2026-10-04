@@ -111,6 +111,7 @@ func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 		fs.open++
 		if float64(cs.ewma) >= flowingRate && now.Sub(cs.lastActive) <= flowRecent || cs.steady == 7 {
 			fs.flowing++
+			cs.lastFlowing = now
 		}
 		if now.Sub(cs.lastActive) <= recent {
 			fs.recent++
@@ -142,6 +143,25 @@ func (l *mtcpLink) idleStreams(now time.Time, idle time.Duration, max int) []idl
 		}
 		if b := cs.bytes.Load(); b == cs.prevBytes && now.Sub(cs.lastActive) >= idle {
 			out = append(out, idleCand{cs: cs, snap: b})
+		}
+	}
+	return out
+}
+
+// quietStreams returns up to max user streams that have not been flowing
+// (moving real data, as flowStats counts it) for at least quiet: idle ones,
+// ones that only trickle keepalives, and ones whose data stopped — on a stuck
+// link, every one of them once quiet has passed.
+func (l *mtcpLink) quietStreams(now time.Time, quiet time.Duration, max int) []idleCand {
+	l.flowMu.Lock()
+	defer l.flowMu.Unlock()
+	var out []idleCand
+	for cs := range l.flows {
+		if len(out) >= max {
+			break
+		}
+		if now.Sub(cs.lastFlowing) >= quiet {
+			out = append(out, idleCand{cs: cs, snap: cs.bytes.Load()})
 		}
 	}
 	return out
@@ -204,10 +224,11 @@ type countedStream struct {
 	bytes atomic.Uint64 // payload bytes moved either way (data path: atomic add only)
 
 	// sampler-only bookkeeping (see mtcpLink.flowStats)
-	prevBytes  uint64
-	lastActive time.Time
-	ewma       float32 // bytes/s, time constant flowTau
-	steady     uint8   // last 3 samples: moved at least flowSteadyRate
+	prevBytes   uint64
+	lastActive  time.Time
+	lastFlowing time.Time // last sample at which it counted as flowing
+	ewma        float32   // bytes/s, time constant flowTau
+	steady      uint8     // last 3 samples: moved at least flowSteadyRate
 }
 
 func (c *countedStream) Read(p []byte) (int, error) {
