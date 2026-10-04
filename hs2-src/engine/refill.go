@@ -34,27 +34,35 @@ import (
 //     the fixed fair share).
 //   - Waiting connections are placed first come, first served as links come
 //     up or connections end.
-//   - The episode ends when the pool has all the links it wants, or at
-//     refillHoldMax at the latest. Then every connection still waiting goes
+//   - The episode ends when the pool has all the links it can get — the
+//     links it wants, but on the reverse edge never more than the Kharej
+//     server's own max_links, which is all it dials — or when no new link has
+//     come for refillStall, or at refillHoldMax at the latest. Then every connection still waiting goes
 //     onto the least-loaded existing links — none is refused because of the
 //     hold — and the log says so when that puts more on a link than the cap
 //     allowed (a slow refill: the new links then take the new connections).
 //   - UDP flows are not held (their port's read loop is shared: holding one
 //     new flow would stall every other flow on that port).
-//   - After an episode that ran into its time limit, no new one starts for
-//     refillRearm, so a path whose links keep dying does not hold users again
+//   - After an episode that ran into its time limit or stalled, no new one
+//     starts for refillRearm, so a path whose links keep dying does not hold users again
 //     and again.
 var (
 	refillHoldMax = 10 * time.Second
-	refillTick    = 100 * time.Millisecond
-	refillRearm   = time.Minute
-	refillKeep    = 5 * time.Minute // the last episode's summary stays in the status this long
+	// refillStall: links stopped coming. No new link for this long while some
+	// are up means the other server keeps no more (an older hs2 with a fixed
+	// count) or the path stopped them; holding users longer only delays them.
+	// Above the 2 s tick a failure run waits out (dial gate, linkmanager.go).
+	refillStall = 3 * time.Second
+	refillTick  = 100 * time.Millisecond
+	refillRearm = time.Minute
+	refillKeep  = 5 * time.Minute // the last episode's summary stays in the status this long
 )
 
 // refillHold is the episode state, under LinkManager.mu.
 type refillHold struct {
 	on        bool
 	start     time.Time
+	lastLink  time.Time // the latest link arrival in this episode
 	quietTill time.Time // no new episode before this (after a time-limited one)
 	queue     []*holdWaiter
 
@@ -85,10 +93,14 @@ type holdWaiter struct {
 // holds m.mu.
 func (m *LinkManager) noteArrivalLocked(now time.Time) {
 	h := &m.hold
-	if h.on || m.aliveLocked() > 0 || now.Before(h.quietTill) || m.target.Load() < 2 {
+	if h.on {
+		h.lastLink = now
 		return
 	}
-	h.on, h.start = true, now
+	if m.aliveLocked() > 0 || now.Before(h.quietTill) || m.target.Load() < 2 {
+		return
+	}
+	h.on, h.start, h.lastLink = true, now, now
 	h.held, h.longest, h.topCap, h.announce = 0, 0, 0, false
 	ctx := m.scaleCtx
 	if ctx == nil {
@@ -108,11 +120,26 @@ func (m *LinkManager) noteArrivalLocked(now time.Time) {
 	}()
 }
 
+// refillTargetLocked is the number of links an episode waits for: the pool's
+// target, but on the reverse edge never more than the Kharej server's own
+// ceiling once its links report it (kindInfo) — the exit dials no more than
+// that, so waiting for the rest would hold users to the time limit for links
+// that never come. Caller holds m.mu.
+func (m *LinkManager) refillTargetLocked() (T int, capped bool) {
+	T = max(1, int(m.target.Load()))
+	if m.accept {
+		if pm := m.peerMaxLocked(); pm > 0 && pm < T {
+			return pm, true
+		}
+	}
+	return T, false
+}
+
 // refillCapLocked is the hold's cap on open user connections per link: the
 // fair share of the open connections (placed + waiting) over the links the
-// pool wants, never below per_link. Caller holds m.mu.
+// pool can get, never below per_link. Caller holds m.mu.
 func (m *LinkManager) refillCapLocked() int {
-	T := max(1, int(m.target.Load()))
+	T, _ := m.refillTargetLocked()
 	D := int(m.users.Load()) + len(m.hold.queue)
 	return max(m.perLink, (D+T-1)/T)
 }
@@ -152,8 +179,9 @@ func (m *LinkManager) pickHeld() (l Link, release func(), ok bool, w *holdWaiter
 		S, _ := m.countsLocked()
 		c := m.refillCapLocked()
 		m.hold.topCap = max(m.hold.topCap, c)
+		T, _ := m.refillTargetLocked()
 		m.log("refill: %d of %d links up — new connections wait (%s at most) for a link with room, so they spread over the links still opening instead of piling onto the first ones: at most %d open connections per link (the fair share) until the pool is up",
-			S, m.target.Load(), fmtDur(refillHoldMax), c)
+			S, T, fmtDur(refillHoldMax), c)
 	}
 	return nil, nil, false, w
 }
@@ -220,7 +248,7 @@ func (m *LinkManager) runRefill(ctx context.Context, tick time.Duration) {
 func (m *LinkManager) refillStep(now time.Time) bool {
 	m.mu.Lock()
 	S, _ := m.countsLocked()
-	T := int(m.target.Load())
+	T, _ := m.refillTargetLocked()
 	e := now.Sub(m.hold.start)
 	var why string
 	switch {
@@ -231,6 +259,8 @@ func (m *LinkManager) refillStep(now time.Time) bool {
 		why = "complete"
 	case e >= refillHoldMax:
 		why = "limit"
+	case S > 0 && now.Sub(m.hold.lastLink) >= refillStall:
+		why = "stalled"
 	default:
 		m.admitLocked(now)
 		m.mu.Unlock()
@@ -267,7 +297,7 @@ func (m *LinkManager) endRefill(now time.Time, why string) {
 	}
 	h.on = false
 	S, _ := m.countsLocked()
-	T := int(m.target.Load())
+	T, capped := m.refillTargetLocked()
 	if len(h.queue) > 0 {
 		h.topCap = max(h.topCap, m.refillCapLocked())
 	}
@@ -288,15 +318,22 @@ func (m *LinkManager) endRefill(now time.Time, why string) {
 		}
 	}
 	took := now.Sub(h.start)
-	if why == "limit" {
+	if why == "limit" || why == "stalled" {
 		h.quietTill = now.Add(refillRearm)
 	}
 	var line string
 	switch {
 	case h.held == 0 || why == "":
 	case why == "complete":
-		line = fmt.Sprintf("refill: all %d links up after %s — %d connection(s) waited for a link with room (longest %s); at most %d open connections on one link (the hold allowed %d)",
-			S, secs(took), h.held, secs(h.longest), most, h.topCap)
+		all := fmt.Sprintf("all %d links", S)
+		if capped {
+			all = fmt.Sprintf("all %d links the Kharej server allows (its max_links)", T)
+		}
+		line = fmt.Sprintf("refill: %s up after %s — %d connection(s) waited for a link with room (longest %s); at most %d open connections on one link (the hold allowed %d)",
+			all, secs(took), h.held, secs(h.longest), most, h.topCap)
+	case why == "stalled":
+		line = fmt.Sprintf("refill: no new link for %s with %d of %d links up — the other server keeps no more (an older hs2 with a fixed count, or its max_links) or the path stopped them; the hold ended after %s and the %d connection(s) still waiting went onto the existing links, none refused: at most %d open connections on one link (the hold allowed %d)",
+			fmtDur(refillStall), S, T, secs(took), late, most, h.topCap)
 	case late > 0 && most > h.topCap:
 		line = fmt.Sprintf("refill: hold ended at its %s limit with only %d of %d links up (%s) — the %d connection(s) still waiting went onto the existing links, none refused: up to %d open connections on one link, above the hold's %d, until more links come (new links take the new connections)",
 			fmtDur(refillHoldMax), S, T, refillWhySlow(S, T, took), late, most, h.topCap)

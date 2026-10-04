@@ -602,10 +602,16 @@ func (m *LinkManager) capNote(target int) string {
 }
 
 // peerMax is the other server's ceiling as the live links report it over
-// kindInfo (0 = not reported). Display only.
+// kindInfo (0 = not reported). Display, and the refill hold's count of links
+// that can come on the reverse edge (refillTargetLocked).
 func (m *LinkManager) peerMax() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.peerMaxLocked()
+}
+
+// peerMaxLocked is peerMax for a caller holding m.mu.
+func (m *LinkManager) peerMaxLocked() int {
 	best := 0
 	for _, ml := range m.links {
 		if ml.link.Alive() && ml.mtr != nil {

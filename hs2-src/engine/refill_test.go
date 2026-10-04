@@ -18,6 +18,9 @@ type refillRig struct {
 	m     *LinkManager
 	clock atomic.Int64
 	links []*fakeLink
+	// peerMax > 0: every link reports this Kharej ceiling (kindInfo), as on
+	// the reverse edge
+	peerMax int
 
 	mu   sync.Mutex
 	logs []string
@@ -44,6 +47,14 @@ func (r *refillRig) addLink() *fakeLink {
 	l := &fakeLink{alive: true}
 	r.links = append(r.links, l)
 	r.m.AddLink(l, "test")
+	if r.peerMax > 0 {
+		mtr := &linkMeter{}
+		mtr.peerMax.Store(uint32(r.peerMax))
+		ml := r.m.mlOf(l)
+		r.m.mu.Lock()
+		ml.mtr = mtr
+		r.m.mu.Unlock()
+	}
 	return l
 }
 func (r *refillRig) step() bool              { return r.m.refillStep(r.now()) }
@@ -78,7 +89,11 @@ type refillResult struct {
 // connection that finds no link at all waits up to 6 s for one, as pickWait
 // does, and is then refused.
 func simRefill(t *testing.T, T, D int, arriveOver, linksFrom, linkEvery time.Duration, maxLinks int, hold bool) (refillResult, *refillRig) {
-	r := newRefillRig(t, T, 8)
+	return simRefillOn(t, newRefillRig(t, T, 8), D, arriveOver, linksFrom, linkEvery, maxLinks, hold)
+}
+
+// simRefillOn is simRefill on a rig the caller set up (reverse edge, peer max).
+func simRefillOn(t *testing.T, r *refillRig, D int, arriveOver, linksFrom, linkEvery time.Duration, maxLinks int, hold bool) (refillResult, *refillRig) {
 	const tick = 10 * time.Millisecond
 	type conn struct {
 		at time.Duration
@@ -418,5 +433,44 @@ func TestRefillWhySlowTellsPaceFromPath(t *testing.T) {
 	}
 	if w := refillWhySlow(3, 8, 200*time.Millisecond); !strings.Contains(w, "dial pace") || strings.Contains(w, "slower") {
 		t.Fatalf("3 links 0.2 s in is on pace; got %q", w)
+	}
+}
+
+// On the reverse edge the Kharej server dials no more than its own max_links:
+// a target above it is links that never come. The hold waits for (and shares
+// connections over) the links the exit allows, so it ends when they are up
+// instead of holding users to the time limit (review: target 60, exit max 8,
+// 428 of 500 connections waited 10 s).
+func TestRefillHoldReverseStopsAtKharejCeiling(t *testing.T) {
+	r := newRefillRig(t, 60, 8)
+	r.m.accept = true
+	r.peerMax = 8
+	got, r := simRefillOn(t, r, 500, time.Second, 0, 100*time.Millisecond, 8, true)
+	t.Logf("exit max 8, target 60: longest wait %s, all placed at %s, busiest %d", got.longest, got.allAt, got.most)
+	if got.placed != 500 || got.refused != 0 {
+		t.Fatalf("placed %d refused %d of 500", got.placed, got.refused)
+	}
+	if got.allAt > 2*time.Second {
+		t.Fatalf("all placed only at %s: the hold waited for links the exit never dials", got.allAt)
+	}
+	if lg := r.log(); !strings.Contains(lg, "all 8 links the Kharej server allows (its max_links) up") {
+		t.Fatalf("the end line should name the exit's ceiling:\n%s", lg)
+	}
+}
+
+// When links stop coming (an older exit with a fixed count, a path that lets
+// no more through), the hold ends refillStall after the last one instead of
+// at its time limit, and says why.
+func TestRefillHoldEndsWhenLinksStopComing(t *testing.T) {
+	got, r := simRefill(t, 20, 400, time.Second, 0, 100*time.Millisecond, 5, true)
+	t.Logf("5 of 20 links come: longest wait %s, all placed at %s, busiest %d", got.longest, got.allAt, got.most)
+	if got.placed != 400 || got.refused != 0 {
+		t.Fatalf("placed %d refused %d of 400", got.placed, got.refused)
+	}
+	if lim := 400*time.Millisecond + refillStall + 200*time.Millisecond; got.allAt > lim {
+		t.Fatalf("all placed only at %s (the last link came at 0.4 s; want by %s)", got.allAt, lim)
+	}
+	if lg := r.log(); !strings.Contains(lg, "no new link for 3s with 5 of 20 links up") || !strings.Contains(lg, "none refused") {
+		t.Fatalf("the stall line is missing:\n%s", lg)
 	}
 }
