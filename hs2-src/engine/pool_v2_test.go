@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -159,7 +160,16 @@ type v2StreamEnd struct {
 
 func newV2PipeLink(t *testing.T) *v2PipeLink {
 	t.Helper()
+	return newV2PipeLinkOn(t, nil)
+}
+
+// newV2PipeLinkOn is newV2PipeLink with the exit side reading through wrap.
+func newV2PipeLinkOn(t *testing.T, wrap func(net.Conn) net.Conn) *v2PipeLink {
+	t.Helper()
 	a, b := net.Pipe()
+	if wrap != nil {
+		b = wrap(b)
+	}
 	cli, _, err := newSession(a, false, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1441,5 +1451,164 @@ func TestStatsCountsServingRetiring(t *testing.T) {
 		st.HeldActive != want.HeldActive || st.Pressed != want.Pressed || st.Saturated != want.Saturated ||
 		st.Target != want.Target || st.Users != want.Users || st.Min != want.Min || st.Max != want.Max {
 		t.Fatalf("Stats() = %+v\nwant (subset) %+v", st, want)
+	}
+}
+
+// A degraded link is drained in steps (the owner's rule after the load test,
+// where closing everyone after 45 s cut 60-90 active connections per degraded
+// link): after maxDrain the connections that moved nothing for drainStall
+// are closed and those moving data stay; after maxDrainActive the link closes
+// with whatever is left; and a link that is really stuck (nothing moves)
+// loses every connection, then itself.
+func TestDegradedLinkDrainsStalledKeepsActive(t *testing.T) {
+	m, clk, lg := newV2Manager(nil, 1, 8, false)
+	pl := newV2PipeLink(t)
+	stalled, active := pl.open(t), pl.open(t)
+	now := clk.Now()
+	pl.flowMu.Lock()
+	stalled.lastActive = now.Add(-20 * time.Second) // nothing for 20 s
+	active.ewma, active.lastActive = 50<<10, now    // moving data
+	pl.flowMu.Unlock()
+	ml := addManaged(m, pl)
+	m.mu.Lock()
+	ml.degraded, ml.draining, ml.drainSince = true, true, now.Add(-maxDrain/2)
+	ml.users.Store(2)
+	ml.flowing = 1
+	m.mu.Unlock()
+
+	m.heal(context.Background()) // 22 s: nothing yet
+	time.Sleep(100 * time.Millisecond)
+	if stalled.done.Load() || active.done.Load() || lg.count("degraded for") != 0 {
+		t.Fatal("acted before maxDrain")
+	}
+	m.mu.Lock()
+	ml.drainSince = now.Add(-maxDrain - time.Second)
+	m.mu.Unlock()
+	m.heal(context.Background()) // 46 s: the stalled one goes, the active one stays
+	within(t, time.Second, "the stalled connection is closed", func() bool { return stalled.done.Load() })
+	time.Sleep(100 * time.Millisecond)
+	if active.done.Load() {
+		t.Fatal("closed a connection that moves data")
+	}
+	if lg.count("degraded for 45s — its connections that moved nothing for 15s are closed now") != 1 {
+		t.Fatalf("the step is not logged once:\n%s", strings.Join(lg.lines, "\n"))
+	}
+	m.mu.RLock()
+	stillIn := len(m.links) == 1
+	m.mu.RUnlock()
+	if !stillIn {
+		t.Fatal("the link was dropped while a user still moves data on it")
+	}
+	m.mu.Lock()
+	ml.users.Store(1)
+	ml.drainSince = now.Add(-maxDrainActive - time.Second)
+	m.mu.Unlock()
+	m.heal(context.Background()) // 5 min: the link goes with what is left
+	m.mu.RLock()
+	gone := len(m.links) == 0
+	m.mu.RUnlock()
+	if !gone || lg.count("degraded for 5m — closed with its 1 remaining connection(s)") != 1 {
+		t.Fatalf("the cap did not close the link (gone=%v):\n%s", gone, strings.Join(lg.lines, "\n"))
+	}
+}
+
+// On a link that is really stuck no byte moves, so after maxDrain every
+// connection is stalled and closed: the users reconnect onto healthy links
+// within drainStall instead of waiting out the cap.
+func TestStuckDegradedLinkLosesEveryConnection(t *testing.T) {
+	m, clk, _ := newV2Manager(nil, 1, 8, false)
+	pl := newV2PipeLink(t)
+	var cs []*countedStream
+	now := clk.Now()
+	for i := 0; i < 5; i++ {
+		c := pl.open(t)
+		cs = append(cs, c)
+	}
+	pl.flowMu.Lock()
+	for _, c := range cs {
+		c.lastActive = now.Add(-drainStall - time.Second)
+	}
+	pl.flowMu.Unlock()
+	ml := addManaged(m, pl)
+	m.mu.Lock()
+	ml.degraded, ml.draining, ml.drainSince = true, true, now.Add(-maxDrain-time.Second)
+	ml.users.Store(5)
+	m.mu.Unlock()
+	m.heal(context.Background())
+	within(t, 2*time.Second, "every connection on the stuck link is closed", func() bool {
+		for _, c := range cs {
+			if !c.done.Load() {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// stuckConn stops reading once stuck is set, so the other end's writes block —
+// a path on which nothing gets through any more.
+type stuckConn struct {
+	net.Conn
+	stuck   atomic.Bool
+	release chan struct{}
+}
+
+func (c *stuckConn) Read(p []byte) (int, error) {
+	if c.stuck.Load() {
+		<-c.release
+	}
+	return c.Conn.Read(p)
+}
+
+// On a stuck link every FIN write waits for smux's 30 s close timeout. The
+// stalled connections must still all end at once — closed one after another,
+// the second would wait 30 s and the rest minutes, kept until the link's cap.
+func TestStuckDegradedLinkClosesDoNotQueue(t *testing.T) {
+	m, clk, _ := newV2Manager(nil, 1, 8, false)
+	sc := &stuckConn{release: make(chan struct{})}
+	pl := newV2PipeLinkOn(t, func(c net.Conn) net.Conn { sc.Conn = c; return sc })
+	t.Cleanup(func() { close(sc.release) })
+	now := clk.Now()
+	const n = 5
+	var ended sync.WaitGroup
+	var cs []*countedStream
+	for i := 0; i < n; i++ {
+		c := pl.open(t)
+		cs = append(cs, c)
+		ended.Add(1)
+		go func() { // the user's relay, waiting on the link
+			defer ended.Done()
+			buf := make([]byte, 1024)
+			for {
+				if _, err := c.Read(buf); err != nil {
+					return
+				}
+			}
+		}()
+	}
+	pl.flowMu.Lock()
+	for _, c := range cs {
+		c.lastActive = now.Add(-drainStall - time.Second)
+	}
+	pl.flowMu.Unlock()
+	sc.stuck.Store(true)
+	ml := addManaged(m, pl)
+	m.mu.Lock()
+	ml.degraded, ml.draining, ml.drainSince = true, true, now.Add(-maxDrain-time.Second)
+	ml.users.Store(n)
+	m.mu.Unlock()
+	m.heal(context.Background())
+	all := make(chan struct{})
+	go func() { ended.Wait(); close(all) }()
+	select {
+	case <-all:
+	case <-time.After(2 * time.Second):
+		k := 0
+		for _, c := range cs {
+			if c.done.Load() {
+				k++
+			}
+		}
+		t.Fatalf("after 2 s only %d of %d connections on the stuck link were closed", k, n)
 	}
 }

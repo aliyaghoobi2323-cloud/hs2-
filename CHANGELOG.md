@@ -829,8 +829,17 @@ downloads: 5,416 open connections. Old = the main build before this phase.
   whose app stops reading holds up to its whole send buffer (4–7 MB) of
   kernel memory and keeps its link busy (echo p99 8 s for the others). With
   MPTCP off the stall guard resets exactly those users and p99 is 0.5 s; under
-  normal load no difference. And a degraded link is still closed after 45 s
-  with its users (60–90 active ones each in the test), as before.
+  normal load no difference.
+- A degraded link no longer takes all its users down with it after 45 s (it
+  cut 60–90 active connections per link in the test). It still takes no new
+  user and is replaced at once; after 45 s its connections that moved nothing
+  for 15 s are closed (they reconnect onto healthy links), and those moving
+  data stay until they end, 5 min at most. On a link that is really stuck no
+  byte moves, so every connection goes within those 15 s — all at once: each
+  close waits for the link's writer, and one after another would have kept
+  most users waiting minutes. Log: `link N degraded for 45s — its connections
+  that moved nothing for 15s are closed now …`, then once a minute `closed N
+  connection(s) on degraded links that moved nothing for 15s`.
 
 ## Verification, every phase
 

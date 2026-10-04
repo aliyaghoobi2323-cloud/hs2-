@@ -51,9 +51,19 @@ const (
 	// waits count as the link being path-limited. Without this filter a writer
 	// that always has data reads as ~90% "blocked" even on an unlimited path.
 	blockedMin = time.Millisecond
-	// maxDrain bounds how long a degraded link is kept for its existing users
-	// before it is force-closed (they reconnect onto a healthy link).
-	maxDrain = 45 * time.Second
+	// A degraded link takes no new users and is replaced at once
+	// (make-before-break); its own users are moved off it in steps:
+	//   - after maxDrain, its connections that moved nothing for drainStall
+	//     are closed (FIN; the app reconnects onto a healthy link). On a link
+	//     that is really stuck no byte gets through, so within drainStall
+	//     every connection goes and the link with them; on a link that is only
+	//     lossy, the users still moving data keep their connection;
+	//   - after maxDrainActive the link is closed with whatever is left.
+	// (Closing every user after maxDrain cut 60-90 active connections per
+	// degraded link in the load test.)
+	maxDrain       = 45 * time.Second
+	drainStall     = 15 * time.Second
+	maxDrainActive = 5 * time.Minute
 
 	// warmStartLinks: the pool comes up at this size (clamped to the envelope)
 	// rather than at min, so a burst of connections arriving right after start

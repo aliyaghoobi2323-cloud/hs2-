@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/bits"
 	"math/rand/v2"
 	"sort"
@@ -157,6 +158,8 @@ type LinkManager struct {
 	rwndHintAt   time.Time
 	reclaimLogAt time.Time
 	reclaimed    atomic.Int64 // idle connections closed on retiring links, not yet logged
+	stalledLogAt time.Time
+	stalled      atomic.Int64 // stalled connections closed on degraded links, not yet logged
 	forced       atomic.Int64 // ... of which trickling ones on links retiring retireForce+
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
@@ -243,6 +246,7 @@ type managedLink struct {
 	degraded        bool       // soft-bad: excluded from new-user routing
 	draining        bool       // being retired after its replacement is up
 	drainSince      time.Time
+	drainNoted      bool // the maxDrain step was logged
 
 	// Sizing.
 	retiring     bool      // takes no new users; closed once empty
@@ -1120,6 +1124,7 @@ func (m *LinkManager) sweepReverse() {
 	m.mu.Lock()
 	var logs []string
 	var closing []Link
+	var reclaim []*managedLink
 	alive := m.links[:0]
 	for _, ml := range m.links {
 		if !ml.link.Alive() {
@@ -1132,9 +1137,18 @@ func (m *LinkManager) sweepReverse() {
 			ml.drainSince = now
 			logs = append(logs, fmt.Sprintf("reverse link %d degraded — draining (peer will redial)", ml.id))
 		}
-		if ml.draining && (ml.users.Load() == 0 || now.Sub(ml.drainSince) > maxDrain) {
-			closing = append(closing, ml.link) // the exit redials to restore its count
-			continue
+		if ml.draining {
+			d, note, r := m.drainStepLocked(ml, now, "reverse link")
+			if note != "" {
+				logs = append(logs, note)
+			}
+			if d {
+				closing = append(closing, ml.link) // the exit redials to restore its count
+				continue
+			}
+			if r {
+				reclaim = append(reclaim, ml)
+			}
 		}
 		alive = append(alive, ml)
 	}
@@ -1146,7 +1160,82 @@ func (m *LinkManager) sweepReverse() {
 	for _, s := range logs {
 		m.downLog.log("mtcp: %s", s)
 	}
+	m.reclaimStalled(reclaim, now)
 }
+
+// drainStepLocked is what a draining (degraded) link calls for now: drop it
+// (no user left, or degraded for maxDrainActive), or close its stalled
+// connections (degraded for maxDrain), with the line to log when a step is
+// first taken. Caller holds m.mu.
+func (m *LinkManager) drainStepLocked(ml *managedLink, now time.Time, what string) (drop bool, note string, reclaim bool) {
+	age := now.Sub(ml.drainSince)
+	users := ml.users.Load()
+	switch {
+	case users == 0:
+		return true, "", false
+	case age > maxDrainActive:
+		return true, fmt.Sprintf("%s %d degraded for %s — closed with its %d remaining connection(s) (they reconnect onto healthy links)",
+			what, ml.id, fmtDur(maxDrainActive), users), false
+	case age > maxDrain:
+		if !ml.drainNoted {
+			ml.drainNoted = true
+			note = fmt.Sprintf("%s %d degraded for %s — its connections that moved nothing for %s are closed now (they reconnect onto healthy links); the %d moving data stay until they end, %s at most",
+				what, ml.id, fmtDur(maxDrain), fmtDur(drainStall), ml.flowing, fmtDur(maxDrainActive))
+		}
+		return false, note, ml.reclaiming.CompareAndSwap(false, true)
+	}
+	return false, "", false
+}
+
+// reclaimStalled closes, with FIN, the connections on the given draining links
+// that have moved nothing for drainStall (a connection that moves anything
+// between being chosen and being closed is spared), and logs the count once a
+// minute. Each close runs on its own: the app sees its connection end at once,
+// but the FIN frame waits for the link's writer, and on a stuck link that is
+// smux's 30 s open/close timeout — one close after another would keep most
+// users waiting minutes. The link is not picked again until all have returned.
+func (m *LinkManager) reclaimStalled(links []*managedLink, now time.Time) {
+	for _, ml := range links {
+		go func(ml *managedLink) {
+			defer ml.reclaiming.Store(false)
+			ir, ok := ml.link.(idleReclaimer)
+			if !ok {
+				return
+			}
+			var wg sync.WaitGroup
+			for i, c := range ir.idleStreams(now, drainStall, math.MaxInt) {
+				if i > 0 {
+					time.Sleep(drainCloseGap)
+				}
+				if c.cs.bytes.Load() != c.snap {
+					continue
+				}
+				m.stalled.Add(1)
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					c.cs.Close()
+				}()
+			}
+			wg.Wait()
+		}(ml)
+	}
+	m.mu.Lock()
+	n := m.stalled.Load()
+	logNow := n > 0 && now.Sub(m.stalledLogAt) >= time.Minute
+	if logNow {
+		m.stalled.Add(-n)
+		m.stalledLogAt = now
+	}
+	m.mu.Unlock()
+	if logNow {
+		m.log("mtcp: closed %d connection(s) on degraded links that moved nothing for %s — they reconnect onto healthy links", n, fmtDur(drainStall))
+	}
+}
+
+// drainCloseGap spaces the closes of a degraded link's stalled connections:
+// short, since its users should reach a healthy link soon, but not one burst.
+const drainCloseGap = 20 * time.Millisecond
 
 // reap takes links that died out of the pool and logs each with its reason.
 // The pool is refilled to its serving target by reconcile in the same tick
@@ -1633,8 +1722,9 @@ func b2u(b bool) uint8 {
 // heal performs make-before-break on degraded links: for each newly-degraded
 // serving link it first brings a retiring link back into service, and only if
 // there is none dials a replacement — so capacity never dips — then drops any
-// draining link that has emptied or overstayed maxDrain. Existing users on a
-// draining link are never yanked — they finish or reconnect onto a fresh link.
+// draining link that has emptied or overstayed maxDrainActive. Its users are
+// moved off it in steps (drainStepLocked): after maxDrain those that moved nothing
+// for drainStall are closed; those moving data stay until they end.
 func (m *LinkManager) heal(ctx context.Context) {
 	now := m.now()
 	m.mu.Lock()
@@ -1683,10 +1773,21 @@ func (m *LinkManager) heal(ctx context.Context) {
 	m.mu.Lock()
 	kept := m.links[:0]
 	var drop []Link
+	var notes []string
+	var reclaim []*managedLink
 	for _, ml := range m.links {
-		if ml.draining && (ml.users.Load() == 0 || now.Sub(ml.drainSince) > maxDrain) {
-			drop = append(drop, ml.link)
-			continue
+		if ml.draining {
+			d, note, r := m.drainStepLocked(ml, now, "link")
+			if note != "" {
+				notes = append(notes, note)
+			}
+			if d {
+				drop = append(drop, ml.link)
+				continue
+			}
+			if r {
+				reclaim = append(reclaim, ml)
+			}
 		}
 		kept = append(kept, ml)
 	}
@@ -1696,6 +1797,10 @@ func (m *LinkManager) heal(ctx context.Context) {
 	for _, l := range drop {
 		l.Close()
 	}
+	for _, s := range notes {
+		m.log("mtcp: %s", s)
+	}
+	m.reclaimStalled(reclaim, now)
 	if len(drop) > 0 {
 		m.log("mtcp: retired %d drained link(s), now %d", len(drop), n)
 	}
