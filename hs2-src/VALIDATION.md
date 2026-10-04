@@ -95,7 +95,13 @@ iptables -D INPUT -p tcp --dport PORT -j DROP; iptables -D OUTPUT -p tcp --sport
 ```
 
 Pass: no `stuck:` line; at most one `answer promptly` line; users served
-normally again within ~20 s after the block ends.
+normally again within ~20 s after the block ends. Also count
+`degraded (up-loss` lines in the 60 s after the block ends: on the rig this
+build had 4-5 there (main 1), all at one tick ~18 s after — new links
+flushing the users' backlog, judged once the outage's quiet time ran out
+(the links died mid-outage, which ended the slow spell early). If that comes
+in dozens on a real pool, report it: the fix would be to keep the quiet time
+running while the pool has no links answering at all.
 
 **V5 — the open question: drops after congestion.** On the rig, a squeeze
 through a shallow queue (20 ms) gave this build more drops than main: 1730

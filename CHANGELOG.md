@@ -910,24 +910,35 @@ echoes were answered for good.
     an answer and only K answer promptly — the path or the other server is
     slow, not those links: none is drained`
 - **Load test (reverse, ~200 links, 1,600 active + 2,000 idle users, 16
-  downloads; "stuck" = 3 packets/s each way via iptables).**
-  - 10 busy links stuck: all 10 caught at 10.7–12.7 s. Answered echoes went
-    from 74% to 100% within 60 s, and p99 settled at ~350 ms (main: 79%
-    for good).
-  - 10 random links stuck: all 10 caught. p99 stayed at 550–640 ms; main's
-    went to 44–69 s.
-  - Small pool (max 10) with 4 links stuck: all 4 caught at 11–13 s, and
-    answered echoes were 100% after 30 s. The build before the review fix
-    took the 4 for a slow path ("4 of 8 busy links … none is drained") and
-    answered 51–56% for a minute.
-  - No stuck verdict in any of these: a squeeze to 8 Mbit/s for 60 s (four
-    runs); to 12 Mbit/s for 120 s (two runs); a 40 s outage; an Iran
-    restart (normal service again after 14.3 s, as before); 600 users whose
-    apps stop reading (the wedge guard reset them, as before).
-  - Drops in the squeezes match main:
-    - at 8 Mbit/s, main dropped 1,519 and 1,527 active connections in two
-      runs, this build 1,532 and 1,478;
-    - at 12 Mbit/s, main dropped 1,108 and 1,410, this build 1,363.
+  downloads; "stuck" = 3 packets/s each way via iptables). Release build
+  unless noted.**
+  - **10 busy links stuck.** 9 were caught at 10.6 s; the 10th was already
+    draining for loss. Answered echoes went from 76% to 100% within 60 s,
+    and p99 settled at ~335 ms. Main stayed at 79% for good.
+  - **10 random links stuck.** All 10 were caught, 8 of them within 13 s.
+    p99 stayed at 580–650 ms; main's went to 44–69 s.
+  - **Small pool (max 10), 4 links stuck.** All 4 were caught at 9–15 s,
+    and answered echoes were 100% after 30 s. The build before the review
+    fix took the 4 for a slow path ("4 of 8 busy links … none is drained")
+    and answered 51–56% for a minute.
+  - **Squeezes: no stuck verdict, drops in main's range.**
+
+    | Squeeze | This build (active drops) | Main (active drops) |
+    |---|---|---|
+    | 8 Mbit/s for 60 s, two runs | 1,485 and 1,178 | 1,519 and 1,527 |
+    | 12 Mbit/s for 120 s | 1,219 | 1,108 and 1,410 |
+
+  - **Shallow queue.** The same 8 Mbit/s squeeze through a shallow 20 ms
+    queue, where packets are dropped rather than queued, also gave no stuck
+    verdict. But this build dropped 1,730 and 1,750 active connections, and
+    main 1,537 in one run, with 4 loss verdicts 1–2 min after the squeeze
+    where main had 1. This is still open and is followed on the real server
+    (VALIDATION.md, V5).
+  - **Outage, 40 s.** No stuck verdict, and normal service 18 s after it
+    ended.
+  - **Iran restart and stalled readers:** see the next lines.
+  - **20% loss on 10 links.** The loss rule drained 7 of them in this run.
+    In an earlier run of this phase it drained 11, where main drained 6.
 - **The loss rule waits out a slow spell too.** Before this was fixed, the
   stuck builds dropped about 8% more in the 8 Mbit/s squeeze (1,651 and
   1,662), with no stuck verdict at all. The extra drops came from the loss
@@ -951,8 +962,8 @@ echoes were answered for good.
     squeeze, cutting hundreds of users who would have recovered. Each was
     fixed before this one.
 - **Reviews.** Two independent adversarial reviews; every confirmed finding
-  is fixed and has a test that fails without its fix (17 mutations, all
-  caught).
+  is fixed and has a test that fails without its fix (more than 30
+  mutations, all caught).
   - A minority of stuck links (more than a third of the busy ones) passed
     for a slow path for good.
   - A link waiting on its own load was taken for stuck.
