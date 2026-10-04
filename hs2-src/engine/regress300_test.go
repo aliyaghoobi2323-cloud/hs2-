@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -137,5 +139,49 @@ func TestOutageScoutUsesItsOwnDial(t *testing.T) {
 	time.Sleep(4 * time.Second)
 	if n := scouted.Load(); n < 2 {
 		t.Fatalf("the scout dialed %d times in a 4 s outage with its own dialer, want >= 2", n)
+	}
+}
+
+// An outage is logged when it begins and when a link is back, not only in
+// the folded failure summary (30 s apart, so a shorter outage never showed
+// "no link up" at all — seen in the 40 s outage load test).
+func TestExitOutageLoggedAtStartAndEnd(t *testing.T) {
+	sp := newScaleTestPool(t, 1, 300, time.Millisecond)
+	var mu sync.Mutex
+	var lines []string
+	sp.log = func(f string, a ...any) {
+		mu.Lock()
+		lines = append(lines, fmt.Sprintf(f, a...))
+		mu.Unlock()
+	}
+	count := func(sub string) (n int) {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, l := range lines {
+			if strings.Contains(l, sub) {
+				n++
+			}
+		}
+		return n
+	}
+	sp.setTarget(8)
+	eventually(t, "8 live links", func() bool { return sp.liveCount() == 8 })
+	sp.down.Store(true)
+	sp.endAll()
+	eventually(t, "the outage line", func() bool { return count("no link up to the edge — dials fail (connection refused)") == 1 })
+	time.Sleep(1500 * time.Millisecond)
+	sp.down.Store(false)
+	eventually(t, "the recovery line", func() bool { return count("is back after") == 1 })
+	eventually(t, "8 live links again", func() bool { return sp.liveCount() == 8 })
+	if n := count("no link up to the edge"); n != 1 {
+		t.Fatalf("outage start logged %d times, want once", n)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, l := range lines {
+		if strings.Contains(l, "is back after") && !strings.Contains(l, "dial(s) failed meanwhile") {
+			t.Fatalf("recovery line without the failed-dial count: %q", l)
+		}
+		t.Log(l)
 	}
 }

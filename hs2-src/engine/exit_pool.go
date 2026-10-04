@@ -92,6 +92,10 @@ type exitPool struct {
 	outage bool
 	scout  *exitSlot
 	upCh   chan struct{}
+	// when the outage began and how many dials failed in it, for the two
+	// lines that bracket it (one when it begins, one when a link is back)
+	outageAt    time.Time
+	outageFails int
 
 	// failures since the last failure log line, and when that was
 	failN   int
@@ -237,9 +241,6 @@ func (p *exitPool) waitTurn(ctx context.Context, s *exitSlot) bool {
 	}
 }
 
-// dialFailed records a failed dial: with no link up the pool is in an outage
-// and s becomes its scout if there is none. Failure lines are folded into one
-// every slotFailLogGap.
 // isScout reports whether slot s is the one dialing through an outage.
 func (p *exitPool) isScout(s *exitSlot) bool {
 	p.mu.Lock()
@@ -247,28 +248,42 @@ func (p *exitPool) isScout(s *exitSlot) bool {
 	return p.outage && p.scout == s
 }
 
+// dialFailed records a failed dial: with no link up the pool is in an outage
+// and s becomes its scout if there is none. Failure lines are folded into one
+// every slotFailLogGap; the outage's start is logged at once.
 func (p *exitPool) dialFailed(s *exitSlot, err error, next time.Duration) {
 	p.mu.Lock()
-	if p.live == 0 {
-		p.outage = true
+	now := time.Now()
+	var line string
+	if p.live == 0 && !p.outage {
+		// The outage begins: said at once, not folded into the next summary
+		// (30 s on, the path is often back and the summary never comes).
+		p.outage, p.outageAt, p.outageFails = true, now, 0
+		line = fmt.Sprintf("mtcp: no link up to the edge — dials fail (%v); one slot keeps trying (every ≤%s), the other %d wait for it",
+			err, fmtDur(scoutBackoffMax), len(p.slots)-1)
+		p.failN, p.failLog = 0, now
+	}
+	if p.outage {
 		if p.scout == nil {
 			p.scout = s
 		}
+		p.outageFails++
 	}
-	p.failN++
-	p.failErr = err
-	now := time.Now()
-	var line string
-	if now.Sub(p.failLog) >= slotFailLogGap {
-		if p.failN == 1 {
-			line = fmt.Sprintf("mtcp: exit slot %d dial to edge failed: %v (retry in %s)", s.id, err, fmtDur(next))
-		} else {
-			line = fmt.Sprintf("mtcp: %d dials to the edge failed in the last %s, latest: %v", p.failN, fmtDur(now.Sub(p.failLog)), err)
+	if line == "" {
+		p.failN++
+		p.failErr = err
+		if now.Sub(p.failLog) >= slotFailLogGap {
+			if p.failN == 1 {
+				line = fmt.Sprintf("mtcp: exit slot %d dial to edge failed: %v (retry in %s)", s.id, err, fmtDur(next))
+			} else {
+				line = fmt.Sprintf("mtcp: %d dials to the edge failed in the last %s, latest: %v", p.failN, fmtDur(now.Sub(p.failLog)), err)
+			}
+			if p.outage {
+				line += fmt.Sprintf(" — no link up for %s: one slot keeps trying (every ≤%s), the other %d wait for it",
+					fmtDur(now.Sub(p.outageAt)), fmtDur(scoutBackoffMax), len(p.slots)-1)
+			}
+			p.failN, p.failLog = 0, now
 		}
-		if p.outage {
-			line += fmt.Sprintf(" — no link up: one slot keeps trying (every ≤%s), the other %d wait for it", fmtDur(scoutBackoffMax), len(p.slots)-1)
-		}
-		p.failN, p.failLog = 0, now
 	}
 	p.mu.Unlock()
 	if line != "" {
@@ -280,13 +295,21 @@ func (p *exitPool) dialFailed(s *exitSlot, err error, next time.Duration) {
 // comes back (through the gate).
 func (p *exitPool) dialed() int {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	var line string
 	if p.outage {
 		p.outage, p.scout = false, nil
 		p.wakeLocked()
+		line = fmt.Sprintf("mtcp: a link to the edge is back after %s with none up (%d dial(s) failed meanwhile); the other slots redial now",
+			fmtDur(time.Since(p.outageAt)), p.outageFails)
+		p.failN, p.failLog = 0, time.Time{} // the next failure is news again
 	}
 	p.live++
-	return p.live
+	n := p.live
+	p.mu.Unlock()
+	if line != "" {
+		p.log("%s", line)
+	}
+	return n
 }
 
 // runSlot keeps one link dialed until its slot is cancelled.
