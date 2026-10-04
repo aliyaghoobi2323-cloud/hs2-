@@ -49,7 +49,12 @@ func (l *mtcpLink) downReason() string {
 
 // tcpStats reads the link socket's TCP_INFO (retransmits for loss-based health,
 // chrono counters for upload pressure). Linux only; (zero,false) elsewhere.
-func (l *mtcpLink) tcpStats() (tcpStat, bool) { return tcpStats(l.tls.TCPConn()) }
+func (l *mtcpLink) tcpStats() (tcpStat, bool) {
+	if l.tls == nil { // a bare session (tests)
+		return tcpStat{}, false
+	}
+	return tcpStats(l.tls.TCPConn())
+}
 
 func (l *mtcpLink) OpenStream() (stream, error) {
 	s, err := l.sess.OpenStream()

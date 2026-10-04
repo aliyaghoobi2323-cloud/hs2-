@@ -80,20 +80,61 @@ const (
 	// packets/s each way; above it, it must move less than half of what the
 	// links that answer promptly move.
 	stuckMoveFloor = 12 << 10
+	// stuckInflate, stuckInflateFloor: links waiting while the ones that
+	// answer promptly take this many times their usual time, and over the
+	// floor, make a slow path whatever the count — a congested path, not a
+	// throttle on a few links (in the load test 1.1-1.4 s against 0.11 s).
+	// The usual time is the lowest median of stuckBaseMins minutes, taken
+	// from ticks with stuckBaseMinN or more of them; the floor keeps a fast
+	// path (10-20 ms between nearby servers) from calling every queue
+	// congestion.
+	stuckInflate      = 4
+	stuckInflateFloor = 500 * time.Millisecond
+	stuckBaseMins     = 10
+	stuckBaseMinN     = 3
 )
+
+// rttFloor is the lowest per-minute value of a delay over the last
+// stuckBaseMins minutes (each minute's lowest), under LinkManager.mu.
+type rttFloor struct {
+	mins [stuckBaseMins]time.Duration // 0: no value that minute
+	i    int
+	at   time.Time // when minute i began
+}
+
+func (f *rttFloor) note(now time.Time, d time.Duration) {
+	if f.at.IsZero() {
+		f.at = now
+	}
+	for k := 0; k < stuckBaseMins && now.Sub(f.at) >= time.Minute; k++ {
+		f.i = (f.i + 1) % stuckBaseMins
+		f.mins[f.i] = 0
+		f.at = f.at.Add(time.Minute)
+	}
+	if now.Sub(f.at) >= time.Minute { // idle for longer than the window
+		f.at = now
+	}
+	if f.mins[f.i] == 0 || d < f.mins[f.i] {
+		f.mins[f.i] = d
+	}
+}
+
+// base is the lowest delay noted in the window, 0 if none.
+func (f *rttFloor) base() time.Duration {
+	var b time.Duration
+	for _, d := range f.mins {
+		if d > 0 && (b == 0 || d < b) {
+			b = d
+		}
+	}
+	return b
+}
 
 // stuckRecoverFor is how long after the last slow tick no link is judged:
 // as long as the spell was slow, all told (one-tick blips add a tick each,
 // not the time between them). Caller holds m.mu.
 func (m *LinkManager) stuckRecoverFor() time.Duration {
 	return min(max(stuckRecover, m.stuckSlowFor), stuckRecoverMax)
-}
-
-// lossObs is a link the loss rule found bad degradeStreak samples running,
-// judged after the loop: not if this very tick turns out slow.
-type lossObs struct {
-	ml                   *managedLink
-	dUp, dWr, dDown, dRd uint64
 }
 
 // stuckObs is a link found stuck in this sample, for the log line.

@@ -160,6 +160,8 @@ type LinkManager struct {
 	reclaimed      atomic.Int64 // idle connections closed on retiring links, not yet logged
 	stalledLogAt   time.Time
 	stuckMassLogAt time.Time
+	lossPathLogAt  time.Time     // the last "most busy links resend" line (loss.go)
+	promptFloor    rttFloor      // the usual time links that answer promptly take (stuck.go)
 	stuckSlowAt    time.Time     // the last tick the path was slow for most links (stuck.go)
 	stuckSlowFor   time.Duration // ... how long that slow spell has been slow, all told
 	stalled        atomic.Int64  // stalled connections closed on degraded links, not yet logged
@@ -236,25 +238,29 @@ type managedLink struct {
 
 	// Sampler state, written by the pool goroutine under LinkManager.mu (Pick
 	// reads the routing fields under the same lock).
-	mtr             *linkMeter // nil for links without metering (never soft-degrades)
-	prevRd          uint64     // download byte counter at the last sample
-	prevWr          uint64     // upload byte counter at the last sample
-	prevRetrans     uint64     // local (upload) TCP retransmit counter at last sample
-	prevPeerRetrans uint64     // peer (download) TCP retransmit counter at last sample
-	prevBlocked     int64      // upload writer-blocked ns at the last sample
-	prevBusy        uint64     // TCP_INFO busy time at the last sample
-	prevRwnd        uint64     // TCP_INFO rwnd-limited time at the last sample
-	goodput         float64    // EWMA bytes/sec, both directions (diagnostic)
-	lowStreak       int        // consecutive high-loss samples (either direction)
-	stuckStreak     int        // consecutive samples its traffic waited stuckWait+ (stuck.go)
-	stuck           bool       // degraded because it is stuck: drained without the maxDrain wait
-	sampled         bool       // prev* are valid (skips the first delta)
-	degraded        bool       // soft-bad: excluded from new-user routing
-	draining        bool       // being retired after its replacement is up
-	drainSince      time.Time
-	drainNoted      bool        // the maxDrain step was logged
-	drainReplace    bool        // it was serving when it degraded: its slot is replaced
-	drainReclaim    atomic.Bool // a stalled-connection reclaim runs for it (drain)
+	mtr          *linkMeter  // nil for links without metering (never soft-degrades)
+	prevRd       uint64      // download byte counter at the last sample
+	prevWr       uint64      // upload byte counter at the last sample
+	prevRetrans  uint64      // local (upload) TCP retransmit counter at last sample
+	prevBlocked  int64       // upload writer-blocked ns at the last sample
+	prevBusy     uint64      // TCP_INFO busy time at the last sample
+	prevRwnd     uint64      // TCP_INFO rwnd-limited time at the last sample
+	goodput      float64     // EWMA bytes/sec, both directions (diagnostic)
+	lowStreak    int         // the longer of upStreak and dnStreak
+	upStreak     int         // consecutive ticks resending > lossFrac on upload
+	dnStreak     int         // consecutive pong windows resending > lossFrac on download
+	prevSegsOut  uint32      // TCP_INFO data segments sent at the last sample
+	prevPeer     peerLossRec // the pong that opened the current download-loss window
+	lossFrac     float64     // the last judged loss fraction (the worse direction)
+	stuckStreak  int         // consecutive samples its traffic waited stuckWait+ (stuck.go)
+	stuck        bool        // degraded because it is stuck: drained without the maxDrain wait
+	sampled      bool        // prev* are valid (skips the first delta)
+	degraded     bool        // soft-bad: excluded from new-user routing
+	draining     bool        // being retired after its replacement is up
+	drainSince   time.Time
+	drainNoted   bool        // the maxDrain step was logged
+	drainReplace bool        // it was serving when it degraded: its slot is replaced
+	drainReclaim atomic.Bool // a stalled-connection reclaim runs for it (drain)
 
 	// Sizing.
 	retiring     bool      // takes no new users; closed once empty
@@ -1585,8 +1591,8 @@ type linkObs struct {
 	blocked    int64
 	ts         tcpStat
 	tsOK       bool
-	peerRT     uint64
 	peerSeen   bool
+	peerLoss   *peerLossRec
 	rec        *statsRec
 	statsState int32
 	fs         flowSnap
@@ -1643,7 +1649,8 @@ func (m *LinkManager) sampleHealth() {
 		if ml.mtr != nil {
 			o.rd, o.wr, o.blocked = ml.mtr.rdBytes.Load(), ml.mtr.wrBytes.Load(), ml.mtr.wrBlocked.Load()
 			o.ts, o.tsOK = linkTCPStatsOf(ml.link)
-			o.peerRT, o.peerSeen = ml.mtr.peerRetrans.Load(), ml.mtr.peerSeen.Load()
+			o.peerSeen = ml.mtr.peerSeen.Load()
+			o.peerLoss = ml.mtr.peerLoss.Load()
 			o.rec = ml.mtr.peer.Load()
 			o.statsState = ml.mtr.statsState.Load()
 			o.ctrlWait = ctrlWaitOf(ml.mtr)
@@ -1664,6 +1671,9 @@ func (m *LinkManager) sampleHealth() {
 	nOK, nOld, poolOK, aged := 0, 0, 0, 0
 	var stuckCand []stuckObs
 	var lossCand []lossObs
+	var judgedLoss []float64        // the loss fraction of every link judged this tick
+	var pressedRates []float64      // what each pressed link moves, bytes/s (its path\'s rate)
+	degradedNow := 0                // links degraded (lossy or stuck), still up
 	var answering []time.Duration   // control RTT of the busy links that answer promptly
 	var answeringMoved []float64    // ... what each moved this tick
 	lastAns := int64(math.MinInt64) // ... and when the latest ping they got answered went out
@@ -1723,7 +1733,11 @@ func (m *LinkManager) sampleHealth() {
 			if ml.mtr != nil {
 				ml.prevRd, ml.prevWr, ml.prevBlocked = o.rd, o.wr, o.blocked
 				ml.prevRetrans, ml.prevBusy, ml.prevRwnd = o.ts.retrans, o.ts.busyUs, o.ts.rwndUs
-				ml.prevPeerRetrans, ml.sampled = o.peerRT, true
+				ml.sampled = true
+				ml.prevSegsOut = o.ts.segsOut
+				if o.peerLoss != nil {
+					ml.prevPeer = *o.peerLoss
+				}
 			}
 			ml.pressed = false
 			s.links = append(s.links, ml.apLink())
@@ -1733,15 +1747,19 @@ func (m *LinkManager) sampleHealth() {
 		dRd := o.rd - ml.prevRd
 		dWr := o.wr - ml.prevWr
 		dUp := o.ts.retrans - ml.prevRetrans
-		dDown := o.peerRT - ml.prevPeerRetrans
 		dBlocked := o.blocked - ml.prevBlocked
 		upRwnd := 0.0
 		if o.tsOK && o.ts.chronoValid && o.ts.busyUs > ml.prevBusy && o.ts.rwndUs >= ml.prevRwnd {
 			upRwnd = float64(o.ts.rwndUs-ml.prevRwnd) / float64(o.ts.busyUs-ml.prevBusy)
 		}
+		dSegsOut := o.ts.segsOut - ml.prevSegsOut // uint32: wraps safely
+		if o.ts.segsOut == 0 || ml.prevSegsOut == 0 {
+			dSegsOut = 0 // the kernel does not count them: bytes / mss instead
+		}
 		ml.prevRd, ml.prevWr, ml.prevBlocked = o.rd, o.wr, o.blocked
-		ml.prevRetrans, ml.prevPeerRetrans = o.ts.retrans, o.peerRT
+		ml.prevRetrans = o.ts.retrans
 		ml.prevBusy, ml.prevRwnd = o.ts.busyUs, o.ts.rwndUs
+		ml.prevSegsOut = o.ts.segsOut
 
 		// Throughput.
 		ml.rate = float64(dRd+dWr) / secs
@@ -1773,6 +1791,9 @@ func (m *LinkManager) sampleHealth() {
 		up := bits.OnesCount8(ml.upHist) >= 2
 		dn := o.statsState == statsOK && bits.OnesCount8(ml.dnHist) >= 2 && now.Sub(ml.lastRecAt) <= statsStale
 		ml.pressed = ml.serving() && (up || dn)
+		if ml.pressed && !ml.degraded && !ml.draining {
+			pressedRates = append(pressedRates, dom)
+		}
 		// Ask the exit for a fresh record only while the link moves data, so
 		// an idle link carries no extra periodic beat.
 		if perTick(dRd+dWr) >= pressMinBytes {
@@ -1780,33 +1801,50 @@ func (m *LinkManager) sampleHealth() {
 		}
 
 		// Loss. A direction is "bad" when it is actively moving data and
-		// retransmitting more than lossFrac of its packets. Upload uses local
-		// TCP_INFO; download uses the exit's retransmits from the control channel,
-		// so a link bad only on the download path is caught too. Not judged
-		// while the path is slow for most links or getting over it (calm): in
-		// the load test 4-8 links resending what a squeeze held back were
-		// drained just after each (main: 1-2); it takes degradeStreak fresh
-		// samples after.
+		// resending more than lossFrac of its segments (lossOf, stuck.go):
+		// upload per tick from local TCP_INFO, download per pong window from
+		// the exit's retransmits against what came in over the same window,
+		// each with its own streak. Not judged while the path is slow for
+		// most links or getting over it (calm): in the load test 4-8 links
+		// resending what a squeeze held back were drained just after each
+		// (main: 1-2); it takes degradeStreak fresh samples after.
 		if !ml.degraded && !ml.draining {
-			bad := false
-			if o.tsOK && dWr >= activeBytes {
-				if pkts := float64(dWr) / mss; pkts > 0 && float64(dUp)/pkts > lossFrac {
-					bad = true
+			up := judgeUpLoss(o.tsOK, dWr, dUp, dSegsOut, secs)
+			dn, fresh := ml.judgeDownLoss(o.peerLoss)
+			switch {
+			case !calm || !up.judged:
+				ml.upStreak = 0
+			case up.bad():
+				ml.upStreak++
+			default:
+				ml.upStreak = 0
+			}
+			switch {
+			case !calm:
+				ml.dnStreak = 0
+			case dn.judged:
+				if dn.bad() {
+					ml.dnStreak++
+				} else {
+					ml.dnStreak = 0
 				}
+			case !fresh && o.peerSeen && dRd >= activeBytes:
+				// downloading, its pong window still open: as it was
+			default:
+				ml.dnStreak = 0
 			}
-			if o.peerSeen && dRd >= activeBytes {
-				if pkts := float64(dRd) / mss; pkts > 0 && float64(dDown)/pkts > lossFrac {
-					bad = true
-				}
+			ml.lowStreak = max(ml.upStreak, ml.dnStreak)
+			if up.judged || dn.judged {
+				ml.lossFrac = max(up.frac(), dn.frac())
+				judgedLoss = append(judgedLoss, ml.lossFrac)
 			}
-			if bad && calm {
-				ml.lowStreak++
-			} else {
-				ml.lowStreak = 0
+			// judged after the loop, if this tick is calm too
+			if (ml.upStreak >= degradeStreak && up.bad()) || (ml.dnStreak >= degradeStreak && dn.bad()) {
+				lossCand = append(lossCand, lossObs{ml: ml, up: up, dn: dn})
 			}
-			if ml.lowStreak >= degradeStreak { // judged after the loop, if this tick is calm too
-				lossCand = append(lossCand, lossObs{ml: ml, dUp: dUp, dWr: dWr, dDown: dDown, dRd: dRd})
-			}
+		}
+		if ml.degraded && ml.link.Alive() {
+			degradedNow++
 		}
 		// Stuck (stuck.go): its traffic has waited stuckWait or more for an
 		// answer while too little moves for the loss rule to judge it.
@@ -1860,8 +1898,24 @@ func (m *LinkManager) sampleHealth() {
 	// recovering — in the load test 27 links drained just after a 60 s
 	// squeeze, 400 more users cut, none helped, and after a 120 s one a link
 	// resumed 65 s later by itself). Counting who answers keeps a minority of
-	// stuck links (4 of 10 at night, say) from passing for a slow path.
-	slow := waitingN >= 2 && waitingN > len(answering)
+	// stuck links (4 of 10 at night, say) from passing for a slow path. It is
+	// slow too when links wait and the ones that answer promptly take
+	// stuckInflate times their usual time (stuck.go, rttFloor): a congested
+	// path, where light links still answer within stuckPrompt and outnumber
+	// the heavy ones backing off — in the load test a 30 s squeeze from 190
+	// to 60 Mbit/s over 300 links drained 33 of those as stuck, the others
+	// answering in 1.1-1.4 s against their usual 0.11 s.
+	var promptMed time.Duration
+	if len(answering) > 0 {
+		sort.Slice(answering, func(i, j int) bool { return answering[i] < answering[j] })
+		promptMed = answering[len(answering)/2]
+	}
+	usual := m.promptFloor.base()
+	if len(answering) >= stuckBaseMinN {
+		m.promptFloor.note(now, promptMed)
+	}
+	inflated := usual > 0 && len(answering) >= stuckBaseMinN && promptMed > max(stuckInflateFloor, stuckInflate*usual)
+	slow := waitingN >= 2 && (waitingN > len(answering) || inflated)
 	if slow {
 		if m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor() {
 			m.stuckSlowFor = 0 // a new spell
@@ -1870,18 +1924,22 @@ func (m *LinkManager) sampleHealth() {
 		m.stuckSlowAt = now
 	}
 	recovering := !m.stuckSlowAt.IsZero() && now.Sub(m.stuckSlowAt) < m.stuckRecoverFor()
-	for _, c := range lossCand {
-		if recovering {
-			continue // and from the next tick on its streak restarts (calm)
-		}
-		c.ml.degraded, c.ml.pressed = true, false
-		logs = append(logs, fmt.Sprintf("link %d degraded (up-loss +%d/%dKB, down-loss +%d/%dKB, rtt %dms) — draining",
-			c.ml.id, c.dUp, c.dWr>>10, c.dDown, c.dRd>>10, c.ml.mtr.rttMicros.Load()/1000))
-	}
+	// Loss verdicts (loss.go, lossVerdicts): only a link resending well
+	// above the busy links around it, and at most drainHeadroom draining at
+	// a time — when most busy links resend this much it is the path (or a
+	// per-connection throttle every link meets), not those links.
+	if !recovering {
+		logs = append(logs, m.lossVerdicts(now, lossCand, judgedLoss, pressedRates, degradedNow)...)
+	} // else: from the next tick on their streaks restart (calm)
 	if slow && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
-		logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer and only %d answer promptly — the path or the other server is slow, not those links: none is drained",
-			waitingN, busyN, fmtDur(stuckWait), len(answering)))
+		if waitingN > len(answering) {
+			logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer and only %d answer promptly — the path or the other server is slow, not those links: none is drained",
+				waitingN, busyN, fmtDur(stuckWait), len(answering)))
+		} else {
+			logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer and the %d that answer promptly take ~%dms, %.0f× their usual ~%dms — the path is congested, not those links: none is drained",
+				waitingN, busyN, fmtDur(stuckWait), len(answering), promptMed.Milliseconds(), float64(promptMed)/float64(usual), usual.Milliseconds()))
+		}
 	}
 	// A stuck link is degraded only if another link carrying traffic answers
 	// promptly now and got an answer to a ping sent after this link's oldest
@@ -1892,8 +1950,7 @@ func (m *LinkManager) sampleHealth() {
 	// (the path is full), not on a throttle. At most drainHeadroom stuck
 	// links drain at a time, the longest waits first.
 	if len(answering) > 0 && !recovering {
-		sort.Slice(answering, func(i, j int) bool { return answering[i] < answering[j] })
-		med := answering[len(answering)/2]
+		med := promptMed
 		sort.Float64s(answeringMoved)
 		share := max(stuckMoveFloor, answeringMoved[len(answeringMoved)/2]/2)
 		sort.Slice(stuckCand, func(i, j int) bool { return stuckCand[i].wait > stuckCand[j].wait })

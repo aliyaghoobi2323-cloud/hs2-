@@ -83,7 +83,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	if _, err := st.Write([]byte{kindCtrl}); err != nil {
 		return
 	}
-	var seq uint64
+	var seq, npong uint64
 	pong := make([]byte, ctrlPongLen)
 	var pending ctrlPendingList
 	publish := func() { mtr.ctrlWait.Store(pending.oldest()) }
@@ -91,9 +91,9 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	moved := mtr.rdBytes.Load() + mtr.wrBytes.Load()
 	// The cadence is the fixed controlInterval tick it always was while the
 	// link moves activeBytes: the exit's download retransmits arrive with
-	// each pong, and the health logic's loss rule was tuned against exactly
-	// this beat (a jittered one would make it judge one pong interval's
-	// retransmits against one 2 s tick's bytes). A link moving less but not
+	// each pong, and the loss rule judges them over the window between two
+	// pongs (peerLoss) against what came in over that same window, so their
+	// timing no longer weighs on it. A link moving less but not
 	// idle pings every 2–4 s (the loss rule does not judge it, and an exact
 	// 3 s beat on hundreds of light flows to one server is a pattern); an idle
 	// link every 3rd–5th tick (~9–15 s): at hundreds of mostly idle links a
@@ -166,8 +166,15 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
 				mtr.rttMicros.Store(uint64(rtt / 1000))
 			}
-			mtr.peerRetrans.Store(binary.BigEndian.Uint64(pong[16:]))
+			rt := binary.BigEndian.Uint64(pong[16:])
+			mtr.peerRetrans.Store(rt)
 			mtr.peerSeen.Store(true)
+			npong++
+			rec := &peerLossRec{n: npong, rt: rt, rd: mtr.rdBytes.Load(), at: ctrlNow()}
+			if ts, ok := linkTCPStatsOf(l); ok {
+				rec.segsIn = ts.segsIn
+			}
+			mtr.peerLoss.Store(rec)
 		}
 		publish()
 	}

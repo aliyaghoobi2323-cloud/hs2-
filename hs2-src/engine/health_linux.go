@@ -37,6 +37,8 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			deliveryRate: info.Delivery_rate,
 			notsent:      info.Notsent_bytes,
 			chronoValid:  info.Busy_time > 0,
+			segsOut:      info.Data_segs_out,
+			segsIn:       info.Data_segs_in,
 		}
 		ok = true
 	})

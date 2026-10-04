@@ -1285,3 +1285,87 @@ func TestSlowPathNeedsWaitingLightLinks(t *testing.T) {
 		}
 	})
 }
+
+// A congested path: links wait while the ones that answer promptly take
+// several times their usual time. Light links answer within stuckPrompt
+// through a squeeze and outnumber the heavy ones backing off, so the count
+// alone called it a minority of stuck links — 33 drained in the load test
+// (300 links, 190 → 60 Mbit/s). Their time against the usual says it is the
+// path: none is drained and the line says so. With the others at their
+// usual time the same waiting links are caught.
+func TestStuckCongestedPathIsSlow(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		usual, rtt uint64 // µs, the links that answer promptly: before, then
+		drained    bool
+	}{
+		{"answers at 9x the usual", 120_000, 1_100_000, false},
+		{"answers at the usual", 120_000, 120_000, true},
+		{"a fast path at 7x, under the floor", 20_000, 150_000, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := newStuckRig(t, 12)
+			for _, g := range r.good {
+				g.m.rttMicros.Store(c.usual)
+			}
+			for i := 0; i < 40; i++ { // 80 s at the usual time
+				r.step(nil, 0)
+			}
+			var wml []*managedLink
+			var ws []*meteredFakeLink
+			for i := 0; i < 4; i++ {
+				f, ml := r.add()
+				ws, wml = append(ws, f), append(wml, ml)
+			}
+			for i := 0; i < 6; i++ {
+				for _, g := range r.good {
+					g.m.rttMicros.Store(c.rtt)
+				}
+				for _, f := range ws {
+					waiting(f, stuckWait+2*time.Second)
+					f.m.rdBytes.Add(4 << 10)
+				}
+				r.step(nil, 0)
+			}
+			n := 0
+			for _, ml := range wml {
+				if ml.degraded {
+					n++
+				}
+			}
+			if c.drained && n != len(wml) || !c.drained && n != 0 {
+				t.Fatalf("%d of %d waiting links drained, want all: %v\n%s", n, len(wml), c.drained, r.lg)
+			}
+			if got := r.lg.count("the path is congested"); c.drained && got != 0 || !c.drained && got != 1 {
+				t.Fatalf("%d congestion lines:\n%s", got, r.lg)
+			}
+		})
+	}
+}
+
+// The usual time is the lowest per-minute value of the last stuckBaseMins
+// minutes: a congested spell does not raise it while the calm minutes before
+// it are in the window, and it forgets them after.
+func TestRTTFloorWindow(t *testing.T) {
+	var f rttFloor
+	t0 := time.Unix(1000, 0)
+	f.note(t0, 120*time.Millisecond)
+	f.note(t0.Add(30*time.Second), 150*time.Millisecond)
+	if b := f.base(); b != 120*time.Millisecond {
+		t.Fatalf("base %v, want 120ms", b)
+	}
+	for k := 1; k < stuckBaseMins; k++ { // congested minutes
+		f.note(t0.Add(time.Duration(k)*time.Minute), 1100*time.Millisecond)
+	}
+	if b := f.base(); b != 120*time.Millisecond {
+		t.Fatalf("base %v during the spell, want the calm 120ms", b)
+	}
+	f.note(t0.Add(time.Duration(stuckBaseMins)*time.Minute), 1100*time.Millisecond)
+	if b := f.base(); b != 1100*time.Millisecond {
+		t.Fatalf("base %v once the calm minute left the window, want 1.1s", b)
+	}
+	f.note(t0.Add(time.Hour), 90*time.Millisecond) // after a long gap
+	if b := f.base(); b != 90*time.Millisecond {
+		t.Fatalf("base %v after an hour without samples, want 90ms", b)
+	}
+}

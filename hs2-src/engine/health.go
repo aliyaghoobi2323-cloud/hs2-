@@ -138,13 +138,31 @@ type linkMeter struct {
 	guard *sessGuard
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
-	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
-	peerSeen    atomic.Bool   // a control response has been received at least once
+	// peerLoss is what the last pong said and what this side had received
+	// when it came: the download loss rule judges the window between two
+	// pongs, its retransmits against the segments (or bytes) that came in
+	// over that same window. Pongs come every controlInterval (3 s), not on
+	// the 2 s health tick: judged per tick, a tick with no pong read as no
+	// loss and one with a pong as 3 s (or 6 s) of resends over 2 s of bytes
+	// — the verdict followed pong jitter, not loss (30% resent with steady
+	// pongs: never; 9% with jittery ones, as on busy links at peak: drained).
+	peerLoss  atomic.Pointer[peerLossRec]
+	rttMicros atomic.Uint64 // last control round-trip time, microseconds
+	peerSeen  atomic.Bool   // a control response has been received at least once
 	// ctrlWait is when (ctrlNow) the oldest control ping still unanswered was
 	// sent, 0 if none waits (see ctrlWaitOf); ctrlAnsweredSent is when the
 	// last ping that got its own answer was sent.
 	ctrlWait         atomic.Int64
 	ctrlAnsweredSent atomic.Int64
+}
+
+// peerLossRec is one pong's download-loss reading (see linkMeter.peerLoss).
+type peerLossRec struct {
+	n      uint64 // pongs read so far on this link (1 = the first)
+	rt     uint64 // the exit's cumulative retransmits, as the pong said
+	segsIn uint32 // data segments this side had received (0: kernel lacks it)
+	rd     uint64 // payload bytes this side had read (fallback denominator)
+	at     int64  // ctrlNow when the pong was read
 }
 
 // meteredConn counts the bytes a link carries, by direction. It sits above the
@@ -186,6 +204,11 @@ type tcpStat struct {
 	deliveryRate uint64 // kernel delivery-rate estimate, bytes/s
 	notsent      uint32 // bytes queued but not yet sent
 	chronoValid  bool   // the kernel reports chrono counters (busy > 0)
+	// Data segments sent (retransmits included) and received (Linux ≥ 4.6;
+	// 0 on older kernels): the loss fraction's denominator, counted the way
+	// retrans is — per segment on the wire, whatever the frame sizes and
+	// padding (payload bytes / mss misread a link of small frames, up to 10×).
+	segsOut, segsIn uint32
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

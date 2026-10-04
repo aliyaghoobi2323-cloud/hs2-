@@ -18,6 +18,8 @@ type meteredFakeLink struct {
 	retrans atomic.Uint64
 	act     atomic.Int32 // Active(): user streams open
 	closes  atomic.Int32 // Close calls
+	pongN   atomic.Uint64
+	pongAt  atomic.Int64 // the fake pong clock (one healthTick per download)
 
 	mu sync.Mutex
 	ts tcpStat   // TCP_INFO besides retrans (setTCP)
@@ -77,11 +79,21 @@ func (f *meteredFakeLink) active(bytes, rt uint64) {
 }
 
 // download simulates one interval of DOWNLOAD traffic with `rt` peer-reported
-// (download-path) retransmits, as the control channel would deliver them.
+// (download-path) retransmits, delivered by a pong at its end (one pong per
+// health tick; TestDownLossFollowsThePongWindow has the real 3 s beat).
 func (f *meteredFakeLink) download(bytes, rt uint64) {
 	f.m.rdBytes.Add(bytes)
 	f.m.peerRetrans.Add(rt)
+	f.pong(int64(healthTick), 0)
+}
+
+// pong delivers what the exit's counter says now, `after` (ns) on the fake
+// pong clock since the last one, with segsIn data segments received so far
+// (0: the kernel does not count them).
+func (f *meteredFakeLink) pong(after int64, segsIn uint32) {
 	f.m.peerSeen.Store(true)
+	f.m.peerLoss.Store(&peerLossRec{n: f.pongN.Add(1), rt: f.m.peerRetrans.Load(), rd: f.m.rdBytes.Load(),
+		segsIn: segsIn, at: f.pongAt.Add(after)})
 }
 
 type fakeDialer struct{ dials atomic.Int32 }
