@@ -1669,6 +1669,11 @@ func (m *LinkManager) sampleHealth() {
 	busyN := 0                      // links carrying traffic (or waiting to)
 	waitingN := 0                   // ... of which waiting stuckWait+ now
 	stuckNow := 0                   // links found stuck before, still up (draining)
+	// The path was slow for most links lately, or they are still getting
+	// over it (stuck.go): neither a stuck wait nor a burst of retransmits
+	// says anything about one link then — TCP resends what the slow spell
+	// held back as it recovers. As of the last tick.
+	calm := m.stuckSlowAt.IsZero() || now.Sub(m.stuckSlowAt) >= m.stuckRecoverFor()
 
 	m.mu.Lock()
 	for _, ml := range m.links {
@@ -1775,7 +1780,11 @@ func (m *LinkManager) sampleHealth() {
 		// Loss. A direction is "bad" when it is actively moving data and
 		// retransmitting more than lossFrac of its packets. Upload uses local
 		// TCP_INFO; download uses the exit's retransmits from the control channel,
-		// so a link bad only on the download path is caught too.
+		// so a link bad only on the download path is caught too. Not judged
+		// while the path is slow for most links or getting over it (calm): in
+		// the load test 4-8 links resending what a squeeze held back were
+		// drained just after each (main: 1-2); it takes degradeStreak fresh
+		// samples after.
 		if !ml.degraded && !ml.draining {
 			bad := false
 			if o.tsOK && dWr >= activeBytes {
@@ -1788,7 +1797,7 @@ func (m *LinkManager) sampleHealth() {
 					bad = true
 				}
 			}
-			if bad {
+			if bad && calm {
 				ml.lowStreak++
 			} else {
 				ml.lowStreak = 0
@@ -1810,7 +1819,10 @@ func (m *LinkManager) sampleHealth() {
 		if waits {
 			busyN++    // its traffic waits: it would be busy
 			waitingN++ // ... and waits now, streak or not, however much it moves
-		} else if busy && !ml.degraded && !ml.draining {
+		} else if busy && !ml.degraded && !ml.draining && o.ctrlAns != 0 {
+			// busy, with a control channel that has answered: one that never
+			// can (an older exit) would pass for slow for good, and hold off
+			// the loss rule with it
 			busyN++
 		}
 		if waits && !ml.suspect && moved < activeBytes {

@@ -917,3 +917,40 @@ func TestStuckRecoveryGrowsWithTheSlowSpell(t *testing.T) {
 		})
 	}
 }
+
+// The loss rule waits out a slow spell too: the retransmits of links getting
+// over a squeeze say nothing about one link. A link still lossy after the
+// recovery window is degraded on degradeStreak fresh samples.
+func TestLossWaitsOutASlowSpell(t *testing.T) {
+	r := newStuckRig(t, 4)
+	f, ml := r.add()
+	lossy := func() { f.download(200<<10, 60) } // ~140 packets, 60 resent
+	r.step(nil, 0)
+	for _, g := range r.good { // slow for all: answers take seconds
+		g.m.rttMicros.Store(4_900_000)
+	}
+	for i := 0; i < 10; i++ { // a 20 s spell
+		lossy()
+		r.step(nil, 0)
+	}
+	for _, g := range r.good {
+		g.m.rttMicros.Store(120_000)
+	}
+	for el := healthTick; el < stuckRecover; el += healthTick {
+		lossy()
+		r.step(nil, 0)
+		if ml.degraded {
+			t.Fatalf("degraded for loss %s after a slow spell:\n%s", el, r.lg)
+		}
+	}
+	for i := 0; i < degradeStreak+1; i++ {
+		lossy()
+		r.step(nil, 0)
+	}
+	if !ml.degraded || ml.stuck {
+		t.Fatalf("a link still lossy after the recovery window: degraded %v stuck %v\n%s", ml.degraded, ml.stuck, r.lg)
+	}
+	if r.lg.count("link 4 degraded (up-loss") != 1 {
+		t.Fatalf("no loss line:\n%s", r.lg)
+	}
+}
