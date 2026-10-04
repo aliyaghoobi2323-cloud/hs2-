@@ -53,14 +53,17 @@ const (
 	blockedMin = time.Millisecond
 	// A degraded link takes no new users and is replaced at once
 	// (make-before-break); its own users are moved off it in steps:
-	//   - after maxDrain, its connections that moved no real data (were not
-	//     "flowing", what status counts as active) for drainStall are closed
-	//     (FIN; the app reconnects onto a healthy link): idle ones, ones that
-	//     only trickle keepalives, and ones whose data stopped. On a link that
-	//     is really stuck no data gets through, so within drainStall every
-	//     connection goes and the link with them; on a link that is only
-	//     lossy, the users still moving data keep their connection (a pause
-	//     shorter than drainStall, between video segments say, is kept);
+	//   - after maxDrain, its connections that moved no data for drainStall
+	//     are closed (FIN; the app reconnects onto a healthy link): idle ones,
+	//     and on a link that is really stuck every one, 15 s after its data
+	//     stopped — the link goes with them. A connection whose data still
+	//     passes stays, however little moves (an SSH session being typed in,
+	//     a game's beat, a pause shorter than drainStall);
+	//   - it keeps them only while the pool can refill without its slot: a
+	//     draining link does not count against max (all links stay within
+	//     max + drainHeadroom), the reverse exit is asked for its replacement
+	//     at once, and when the pool is at its ceiling and short of serving
+	//     links the oldest draining links close as before (slotsBackLocked);
 	//   - after maxDrainActive the link is closed with whatever is left.
 	// (Closing every user after maxDrain cut 60-90 active connections per
 	// degraded link in the load test.)

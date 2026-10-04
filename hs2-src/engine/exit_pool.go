@@ -451,7 +451,7 @@ const poolCtlSlow = 30 * time.Second
 
 // poolCtlSource is what openPoolCtl needs from the edge's pool.
 type poolCtlSource interface {
-	Target() int
+	ctlTarget() int // the link count the exit is asked to hold
 	targetChanged() <-chan struct{}
 	poolCtlFast(l Link) bool
 	// poolCtlLive records whether l's pool-control loop runs and its last
@@ -517,7 +517,7 @@ func openPoolCtl(ctx context.Context, l Link, src poolCtlSource, logf func(strin
 		// made right after the read still wakes this loop.
 		changed := src.targetChanged()
 		// Nothing is sent until the edge has a real target (> 0).
-		if n := src.Target(); n > 0 && (force || n != last) {
+		if n := src.ctlTarget(); n > 0 && (force || n != last) {
 			binary.BigEndian.PutUint16(buf, uint16(min(n, 0xffff)))
 			st.SetWriteDeadline(time.Now().Add(poolCtlInterval))
 			if _, err := st.Write(buf); err != nil {

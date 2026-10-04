@@ -824,7 +824,7 @@ downloads: 5,416 open connections. Old = the main build before this phase.
   capped; doctor totals several tunnels at their effective ceilings; status
   names the usable cores; the installer's visibility note comes once the
   direction and carrier are known.
-- Found, not changed (owner's decision): Go 1.24+ opens listeners as MPTCP by
+- Found: Go 1.24+ opens listeners as MPTCP by
   default, and an accepted MPTCP socket ignores tcp_notsent_lowat, so a user
   whose app stops reading holds up to its whole send buffer (4–7 MB) of
   kernel memory and keeps its link busy (echo p99 8 s for the others). With
@@ -832,18 +832,25 @@ downloads: 5,416 open connections. Old = the main build before this phase.
   normal load no difference.
 - A degraded link no longer takes all its users down with it after 45 s (it
   cut 60–90 active connections per link in the test). It still takes no new
-  user and is replaced at once; after 45 s its connections that moved no real
-  data for 15 s are closed (they reconnect onto healthy links): idle ones,
-  ones that only trickle keepalives, and ones whose data stopped. "Real data"
-  is what status counts as active (≥ 2 KB/s, or ≥ 256 B/s held for 6 s).
-  Those moving data stay until they end, 5 min at most; a pause shorter than
-  15 s (between video segments, say) is kept. On a link that is really stuck
-  no data moves, so every connection goes 15 s after its data stopped — all
-  at once: each close waits for the link's writer, and one after another
-  would have kept most users waiting minutes. Log: `link N degraded for 45s —
-  its connections that moved no real data for 15s (idle or stuck) are closed
-  now …`, then once a minute `closed N connection(s) on degraded links that
-  moved no real data for 15s`.
+  user and is replaced at once; after 45 s its connections that moved no data
+  for 15 s are closed (they reconnect onto healthy links): idle ones, and on a
+  link that is really stuck every one, 15 s after its data stopped — all at
+  once: each close waits for the link's writer, and one after another would
+  have kept most users waiting minutes. A connection whose data still passes
+  stays, however little moves (an SSH session being typed in, a game's beat),
+  until it ends, 5 min at most. The draining link keeps them only while the
+  pool can refill without its slot: it does not count against max (all links
+  stay within max + an eighth), the reverse exit is now asked for the
+  replacement at once (before: only after the bad link closed), and when the
+  pool is at its ceiling and short of serving links the oldest draining links
+  close as before. Log: `link N degraded for 45s — its connections that moved
+  no data for 15s (idle or stuck) are closed now …`, once a minute `closed N
+  connection(s) on degraded links that moved no data for 15s`, and at the
+  ceiling `N degraded link(s) (…) closed with their M remaining
+  connection(s): the pool is at its ceiling and needs their slots`.
+- MPTCP off: every listener is plain TCP (see the finding above). The
+  carrier, user-port and dgtun listeners set it explicitly; go.mod's `godebug
+  multipathtcp=0` covers the rest and the tests.
 
 ## Verification, every phase
 

@@ -160,6 +160,7 @@ type LinkManager struct {
 	reclaimed    atomic.Int64 // idle connections closed on retiring links, not yet logged
 	stalledLogAt time.Time
 	stalled      atomic.Int64 // stalled connections closed on degraded links, not yet logged
+	ctlDrain     int          // reverse: draining links whose slot the exit is asked to replace
 	forced       atomic.Int64 // ... of which trickling ones on links retiring retireForce+
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
@@ -215,12 +216,6 @@ type slowReclaimer interface {
 	slowStreams(max int) []idleCand
 }
 
-// quietReclaimer is implemented by links that can name the user streams that
-// have not moved real data for a while (a degraded link's drain).
-type quietReclaimer interface {
-	quietStreams(now time.Time, quiet time.Duration, max int) []idleCand
-}
-
 // idleReclaimer is implemented by links whose idle user streams can be closed.
 type idleReclaimer interface {
 	idleStreams(now time.Time, idle time.Duration, max int) []idleCand
@@ -252,7 +247,9 @@ type managedLink struct {
 	degraded        bool       // soft-bad: excluded from new-user routing
 	draining        bool       // being retired after its replacement is up
 	drainSince      time.Time
-	drainNoted      bool // the maxDrain step was logged
+	drainNoted      bool        // the maxDrain step was logged
+	drainReplace    bool        // it was serving when it degraded: its slot is replaced
+	drainReclaim    atomic.Bool // a stalled-connection reclaim runs for it (drain)
 
 	// Sizing.
 	retiring     bool      // takes no new users; closed once empty
@@ -640,13 +637,19 @@ func (m *LinkManager) setTarget(n int) {
 		m.targetDropAt = m.now()
 	}
 	if n != old {
-		m.targetMu.Lock()
-		if m.targetCh != nil {
-			close(m.targetCh)
-			m.targetCh = nil
-		}
-		m.targetMu.Unlock()
+		m.notifyCtl()
 	}
+}
+
+// notifyCtl wakes the pool-control loops: the count the exit is asked to hold
+// (ctlTarget) changed.
+func (m *LinkManager) notifyCtl() {
+	m.targetMu.Lock()
+	if m.targetCh != nil {
+		close(m.targetCh)
+		m.targetCh = nil
+	}
+	m.targetMu.Unlock()
 }
 
 // noteOverCap counts a refused-over-cap reverse link and, at most once a
@@ -835,7 +838,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 	if n > step {
 		n = step
 	}
-	if room := m.max - m.count() - inflight; n > room {
+	if room := m.dialRoom() - inflight; n > room {
 		n = room
 	}
 	if q := step + gateInflight - inflight; n > q { // a bounded queue: the gate is the pace anyway
@@ -854,7 +857,7 @@ const dialFailRun = 3
 func (m *LinkManager) wantsDial() bool {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	if len(m.links) >= m.max {
+	if m.dialRoomLocked() <= 0 {
 		return false
 	}
 	serving := 0
@@ -961,7 +964,7 @@ func (m *LinkManager) drainTick() {
 	maxCloses := closesPerTick(m.retiringLocked())
 	kept := m.links[:0]
 	for _, ml := range m.links {
-		if !ml.retiring || !ml.link.Alive() {
+		if !ml.retiring || ml.draining || !ml.link.Alive() {
 			kept = append(kept, ml)
 			continue
 		}
@@ -1125,6 +1128,8 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 }
 
 // sweepReverse drops dead links and drains degraded ones on the reverse edge.
+// A degraded serving link's replacement is asked of the exit at once: the count
+// it is sent (ctlTarget) includes the draining links whose slot is replaced.
 func (m *LinkManager) sweepReverse() {
 	now := m.now()
 	m.mu.Lock()
@@ -1139,9 +1144,12 @@ func (m *LinkManager) sweepReverse() {
 			continue
 		}
 		if ml.degraded && !ml.draining {
-			ml.draining = true
-			ml.drainSince = now
-			logs = append(logs, fmt.Sprintf("reverse link %d degraded — draining (peer will redial)", ml.id))
+			ml.draining, ml.drainReplace, ml.retiring, ml.drainSince = true, !ml.retiring, false, now
+			if ml.drainReplace {
+				logs = append(logs, fmt.Sprintf("reverse link %d degraded — draining; the exit is asked for a replacement", ml.id))
+			} else {
+				logs = append(logs, fmt.Sprintf("reverse link %d degraded — draining (it was retiring: not replaced)", ml.id))
+			}
 		}
 		if ml.draining {
 			d, note, r := m.drainStepLocked(ml, now, "reverse link")
@@ -1149,7 +1157,7 @@ func (m *LinkManager) sweepReverse() {
 				logs = append(logs, note)
 			}
 			if d {
-				closing = append(closing, ml.link) // the exit redials to restore its count
+				closing = append(closing, ml.link)
 				continue
 			}
 			if r {
@@ -1159,7 +1167,27 @@ func (m *LinkManager) sweepReverse() {
 		alive = append(alive, ml)
 	}
 	m.links = alive
+	// The exit holds as many links as it is told, up to its ceiling; an older
+	// exit (no pool control) holds a fixed count. A link it cannot add is a
+	// slot a draining link must give back.
+	room := 0
+	if m.growable {
+		room = m.exitCeilingLocked() - len(m.links)
+	}
+	back := m.slotsBackLocked(now, room, 0)
+	for _, ml := range back {
+		closing = append(closing, ml.link)
+	}
+	if note := slotBackNote("reverse link", back); note != "" {
+		logs = append(logs, note)
+	}
+	d := m.replacingLocked()
+	changed := d != m.ctlDrain
+	m.ctlDrain = d
 	m.mu.Unlock()
+	if changed {
+		m.notifyCtl() // before the closes: the exit should not redial a slot it is told to drop
+	}
 	for _, l := range closing {
 		l.Close()
 	}
@@ -1185,32 +1213,135 @@ func (m *LinkManager) drainStepLocked(ml *managedLink, now time.Time, what strin
 	case age > maxDrain:
 		if !ml.drainNoted {
 			ml.drainNoted = true
-			note = fmt.Sprintf("%s %d degraded for %s — its connections that moved no real data for %s (idle or stuck) are closed now (they reconnect onto healthy links); the %d moving data stay until they end, %s at most",
+			note = fmt.Sprintf("%s %d degraded for %s — its connections that moved no data for %s (idle or stuck) are closed now (they reconnect onto healthy links); those still moving data (%d active) stay until they end, %s at most",
 				what, ml.id, fmtDur(maxDrain), fmtDur(drainStall), ml.flowing, fmtDur(maxDrainActive))
 		}
-		return false, note, ml.reclaiming.CompareAndSwap(false, true)
+		return false, note, ml.drainReclaim.CompareAndSwap(false, true)
 	}
 	return false, "", false
 }
 
+// drainHeadroom is how far over max the pool may go while degraded links
+// drain: heal's replacements, and the draining links that keep users still
+// moving data, together never more than an eighth over max (at least 2).
+func drainHeadroom(n int) int { return max(2, (n+7)/8) }
+
+// slotsBackLocked picks the draining links that must give their slot back and
+// removes them from the pool. Past maxDrain a draining link keeps only users
+// still moving data, and only while the pool can be refilled without its slot:
+// when it is short of serving links (retiring ones count: they come back first)
+// by more than the room it has left (room: links it can still add beyond the
+// inflight ones being dialed), the oldest close as before — their users
+// reconnect onto the links that take their place. Caller holds m.mu.
+func (m *LinkManager) slotsBackLocked(now time.Time, room, inflight int) []*managedLink {
+	serving, retiring := m.countsLocked()
+	need := int(m.target.Load()) - serving - retiring - inflight - max(room, 0)
+	if need <= 0 {
+		return nil
+	}
+	var cand []*managedLink
+	for _, ml := range m.links {
+		if ml.draining && ml.link.Alive() && now.Sub(ml.drainSince) > maxDrain {
+			cand = append(cand, ml)
+		}
+	}
+	if len(cand) == 0 {
+		return nil
+	}
+	sort.Slice(cand, func(i, j int) bool { return cand[i].drainSince.Before(cand[j].drainSince) })
+	cand = cand[:min(need, len(cand))]
+	gone := make(map[*managedLink]bool, len(cand))
+	for _, ml := range cand {
+		gone[ml] = true
+	}
+	kept := m.links[:0]
+	for _, ml := range m.links {
+		if !gone[ml] {
+			kept = append(kept, ml)
+		}
+	}
+	m.links = kept
+	return cand
+}
+
+// slotBackNote is the one log line for the draining links closed to free
+// their slots ("" for none).
+func slotBackNote(what string, back []*managedLink) string {
+	if len(back) == 0 {
+		return ""
+	}
+	ids, users := make([]string, 0, 4), 0
+	for i, ml := range back {
+		users += int(ml.users.Load())
+		if i < 4 {
+			ids = append(ids, fmt.Sprint(ml.id))
+		}
+	}
+	if len(back) > 4 {
+		ids = append(ids, fmt.Sprintf("+%d more", len(back)-4))
+	}
+	return fmt.Sprintf("%d degraded %s(s) (%s) closed with their %d remaining connection(s): the pool is at its ceiling and needs their slots (they reconnect onto healthy links)",
+		len(back), what, strings.Join(ids, ", "), users)
+}
+
+// exitCeilingLocked is the most links the reverse exit will hold: the lower
+// of the two servers' ceilings. Caller holds m.mu.
+func (m *LinkManager) exitCeilingLocked() int {
+	hi := m.max
+	if pm := m.peerMaxLocked(); pm > 0 && pm < hi {
+		hi = pm
+	}
+	return hi
+}
+
+// replacingLocked counts the live draining links whose slot is being
+// replaced (they were serving when they degraded). Caller holds m.mu.
+func (m *LinkManager) replacingLocked() int {
+	n := 0
+	for _, ml := range m.links {
+		if ml.draining && ml.drainReplace && ml.link.Alive() {
+			n++
+		}
+	}
+	return n
+}
+
+// ctlTarget is the link count the reverse exit is asked to hold: the serving
+// target plus the draining links whose slot is being replaced, so a degraded
+// link's replacement is dialed at once (make-before-break, as heal does on the
+// direct edge) and the draining link can keep its users still moving data. The
+// exit clamps it to its ceiling; slotsBackLocked handles that case.
+func (m *LinkManager) ctlTarget() int {
+	t := m.Target()
+	if t <= 0 {
+		return t
+	}
+	m.mu.RLock()
+	d := m.ctlDrain
+	m.mu.RUnlock()
+	return t + d
+}
+
 // reclaimStalled closes, with FIN, the connections on the given draining links
-// that have not moved real data for drainStall — idle ones, ones that only
-// trickle keepalives, and ones whose data stopped (a connection that moves
-// anything between being chosen and being closed is spared) — and logs the
-// count once a minute. "Real data" is what status counts as active. Each close runs on its own: the app sees its connection end at once,
+// that have moved no data for drainStall — idle ones, and on a stuck link
+// every one (a connection that moves anything between being chosen and being
+// closed is spared) — and logs the count once a minute. A connection whose
+// data still passes, however little, stays: closing an SSH session being typed
+// in or a game's slow beat would cut an active user. Each close runs on its
+// own: the app sees its connection end at once,
 // but the FIN frame waits for the link's writer, and on a stuck link that is
 // smux's 30 s open/close timeout — one close after another would keep most
 // users waiting minutes. The link is not picked again until all have returned.
 func (m *LinkManager) reclaimStalled(links []*managedLink, now time.Time) {
 	for _, ml := range links {
 		go func(ml *managedLink) {
-			defer ml.reclaiming.Store(false)
-			qr, ok := ml.link.(quietReclaimer)
+			defer ml.drainReclaim.Store(false)
+			ir, ok := ml.link.(idleReclaimer)
 			if !ok {
 				return
 			}
 			var wg sync.WaitGroup
-			for i, c := range qr.quietStreams(now, drainStall, math.MaxInt) {
+			for i, c := range ir.idleStreams(now, drainStall, math.MaxInt) {
 				if i > 0 {
 					time.Sleep(drainCloseGap)
 				}
@@ -1236,7 +1367,7 @@ func (m *LinkManager) reclaimStalled(links []*managedLink, now time.Time) {
 	}
 	m.mu.Unlock()
 	if logNow {
-		m.log("mtcp: closed %d connection(s) on degraded links that moved no real data for %s — they reconnect onto healthy links", n, fmtDur(drainStall))
+		m.log("mtcp: closed %d connection(s) on degraded links that moved no data for %s — they reconnect onto healthy links", n, fmtDur(drainStall))
 	}
 }
 
@@ -1731,7 +1862,8 @@ func b2u(b bool) uint8 {
 // there is none dials a replacement — so capacity never dips — then drops any
 // draining link that has emptied or overstayed maxDrainActive. Its users are
 // moved off it in steps (drainStepLocked): after maxDrain those that moved no
-// real data for drainStall are closed; those moving data stay until they end.
+// data for drainStall are closed; those moving data stay until they end, while
+// the pool can refill without the link's slot (slotsBackLocked).
 func (m *LinkManager) heal(ctx context.Context) {
 	now := m.now()
 	m.mu.Lock()
@@ -1741,7 +1873,7 @@ func (m *LinkManager) heal(ctx context.Context) {
 			if !ml.retiring {
 				need++
 			}
-			ml.draining, ml.retiring, ml.drainSince = true, false, now
+			ml.draining, ml.drainReplace, ml.retiring, ml.drainSince = true, !ml.retiring, false, now
 		}
 	}
 	var back []string
@@ -1765,7 +1897,7 @@ func (m *LinkManager) heal(ctx context.Context) {
 	// never more than an eighth over max in total. The rest is refilled by
 	// reconcile as the draining links leave, at the gate's pace.
 	if m.dialer != nil && need > 0 {
-		quota := max(2, (m.max+7)/8)
+		quota := drainHeadroom(m.max)
 		room := m.max + quota - len(m.links) - int(m.dialing.Load())
 		need = min(need, quota, max(room, 0))
 	}
@@ -1799,13 +1931,27 @@ func (m *LinkManager) heal(ctx context.Context) {
 		kept = append(kept, ml)
 	}
 	m.links = kept
+	inflight := int(m.dialing.Load())
+	freed := m.slotsBackLocked(now, m.max+drainHeadroom(m.max)-len(m.links)-inflight, inflight)
+	for _, ml := range freed {
+		drop = append(drop, ml.link)
+	}
 	n := len(m.links)
 	m.mu.Unlock()
 	for _, l := range drop {
 		l.Close()
 	}
-	for _, s := range notes {
+	// At hundreds of links a lossy path degrades many at once: a few lines
+	// and a count.
+	for i, s := range notes {
+		if i == 3 && len(notes) > 4 {
+			m.log("mtcp: … and %d more degraded link(s) at the same step", len(notes)-3)
+			break
+		}
 		m.log("mtcp: %s", s)
+	}
+	if note := slotBackNote("link", freed); note != "" {
+		m.log("mtcp: %s", note)
 	}
 	m.reclaimStalled(reclaim, now)
 	if len(drop) > 0 {
@@ -1817,6 +1963,26 @@ func (m *LinkManager) count() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.links)
+}
+
+// dialRoom is how many links the pool may add: a draining link does not count
+// against max (it leaves as its users end, and its slot is replaced), but all
+// links together stay within max + drainHeadroom.
+func (m *LinkManager) dialRoom() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.dialRoomLocked()
+}
+
+// dialRoomLocked is dialRoom for a caller holding m.mu.
+func (m *LinkManager) dialRoomLocked() int {
+	slotted := 0
+	for _, ml := range m.links {
+		if !ml.draining {
+			slotted++
+		}
+	}
+	return min(m.max-slotted, m.max+drainHeadroom(m.max)-len(m.links))
 }
 
 // Target is the number of serving links the autopilot currently wants; the

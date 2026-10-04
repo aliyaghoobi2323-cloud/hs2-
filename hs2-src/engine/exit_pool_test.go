@@ -493,7 +493,8 @@ type fakeCtlSource struct {
 	fast bool
 }
 
-func (f *fakeCtlSource) Target() int { f.mu.Lock(); defer f.mu.Unlock(); return f.t }
+func (f *fakeCtlSource) Target() int    { f.mu.Lock(); defer f.mu.Unlock(); return f.t }
+func (f *fakeCtlSource) ctlTarget() int { return f.Target() }
 func (f *fakeCtlSource) targetChanged() <-chan struct{} {
 	f.mu.Lock()
 	defer f.mu.Unlock()

@@ -745,33 +745,41 @@ func TestReconcileVictimOrder(t *testing.T) {
 	}
 }
 
-// Dialing never takes the physical count past max: retiring, degraded and
-// draining links all count.
-func TestReconcileNeverExceedsMax(t *testing.T) {
+// Dialing never takes the physical count past max + drainHeadroom, and never
+// takes serving + retiring past max: a draining (degraded) link does not hold
+// a slot against max — it leaves as its users end and is replaced — but it
+// stays within the headroom (slotsBackLocked gives the slot back when the
+// pool is short and at that ceiling).
+func TestReconcileStaysWithinCeiling(t *testing.T) {
 	ctx := context.Background()
-	t.Run("draining links fill the envelope", func(t *testing.T) {
+	const max = 6
+	ceil := max + drainHeadroom(max)
+	for _, drn := range []int{3, 4} {
+		t.Run(fmt.Sprintf("%d draining links", drn), func(t *testing.T) {
+			d := &fakeDialer{}
+			m, _, _ := newV2Manager(d, 1, max, false)
+			addManaged(m, newMeteredFake())
+			addManaged(m, newMeteredFake())
+			for i := 0; i < drn; i++ {
+				ml := addManaged(m, newMeteredFake())
+				ml.degraded, ml.draining = true, true
+			}
+			for i := 0; i < 5; i++ {
+				m.reconcile(ctx, max)
+				settle(m)
+			}
+			want := min(max-2, ceil-2-drn)
+			if n := int(d.dials.Load()); n != want {
+				t.Fatalf("dialed %d, want %d (2 serving + %d draining, max %d, ceiling %d)", n, want, drn, max, ceil)
+			}
+			if n := m.count(); n > ceil {
+				t.Fatalf("physical=%d, past the ceiling %d", n, ceil)
+			}
+		})
+	}
+	t.Run("un-retired links come back first", func(t *testing.T) {
 		d := &fakeDialer{}
-		m, _, _ := newV2Manager(d, 1, 6, false)
-		addManaged(m, newMeteredFake())
-		addManaged(m, newMeteredFake())
-		for i := 0; i < 3; i++ {
-			ml := addManaged(m, newMeteredFake())
-			ml.degraded, ml.draining = true, true
-		}
-		for i := 0; i < 5; i++ {
-			m.reconcile(ctx, 6)
-			settle(m)
-		}
-		if n := d.dials.Load(); n != 1 {
-			t.Fatalf("dialed %d, want 1 (5 physical, max 6)", n)
-		}
-		if n := m.count(); n != 6 {
-			t.Fatalf("physical=%d, want 6 (= max)", n)
-		}
-	})
-	t.Run("un-retired links fill the envelope", func(t *testing.T) {
-		d := &fakeDialer{}
-		m, _, _ := newV2Manager(d, 1, 6, false)
+		m, _, _ := newV2Manager(d, 1, max, false)
 		for i := 0; i < 6; i++ {
 			ml := addManaged(m, newMeteredFake())
 			switch {
@@ -781,13 +789,16 @@ func TestReconcileNeverExceedsMax(t *testing.T) {
 				ml.retiring = true
 			}
 		}
-		m.reconcile(ctx, 6)
+		m.reconcile(ctx, max)
 		settle(m)
-		if n := d.dials.Load(); n != 0 {
-			t.Fatalf("dialed %d with the pool at max", n)
+		if n := d.dials.Load(); n != 2 {
+			t.Fatalf("dialed %d, want 2 (the draining links' slots)", n)
 		}
-		if S, R := poolCounts(m); S != 4 || R != 0 {
-			t.Fatalf("%d serving, %d retiring; want 4, 0 (both retiring links back)", S, R)
+		if S, R := poolCounts(m); S != 6 || R != 0 {
+			t.Fatalf("%d serving, %d retiring; want 6, 0 (both retiring links back, 2 dialed)", S, R)
+		}
+		if n := m.count(); n != ceil {
+			t.Fatalf("physical=%d, want %d (the ceiling)", n, ceil)
 		}
 	})
 }
@@ -1455,37 +1466,50 @@ func TestStatsCountsServingRetiring(t *testing.T) {
 }
 
 // A degraded link's users are moved off it in steps (it no longer takes them
-// all down at maxDrain): after maxDrain the connections that moved no real
-// data for drainStall are closed — idle ones and ones that only trickle
-// keepalives — while those moving data stay, a pause shorter than drainStall
-// included; after maxDrainActive the link closes with what is left. The
-// streams' state comes from the real sampler (flowStats), as in production.
+// all down at maxDrain): after maxDrain its connections that moved no data for
+// drainStall are closed — idle ones, a keepalive every 30 s — while every one
+// whose data still passes stays, however little: a slow trickle (an SSH
+// session being typed in, a game's beat), a pause shorter than drainStall, a
+// transfer that just woke up, one opened a moment ago; after maxDrainActive
+// the link closes with what is left. The streams' state comes from the real
+// sampler (flowStats), as in production.
 func TestDegradedLinkDrainsStalledKeepsActive(t *testing.T) {
 	m, clk, lg := newV2Manager(nil, 1, 8, false)
 	pl := newV2PipeLink(t)
-	idle, trickle, paused, active := pl.open(t), pl.open(t), pl.open(t), pl.open(t)
 	now := clk.Now()
-	// 40 s of 2 s samples: active moves 8 KB a sample throughout, paused the
-	// same but stops 8 s before now, trickle 100 B a sample (a keepalive),
-	// idle nothing.
+	idle, keep30, trickle, paused, active, woken := pl.open(t), pl.open(t), pl.open(t), pl.open(t), pl.open(t), pl.open(t)
+	pl.flowMu.Lock()
+	for _, c := range []*countedStream{idle, keep30, trickle, paused, active, woken} {
+		c.lastActive = now.Add(-41 * time.Second) // opened 41 s ago
+	}
+	pl.flowMu.Unlock()
+	// 40 s of 2 s samples: active moves 8 KB a sample, paused the same but
+	// stops 8 s before now, trickle 100 B a sample (50 B/s, never "flowing"),
+	// keep30 16 B once, 24 s before now; idle and woken nothing.
 	for at := -40 * time.Second; at <= 0; at += healthTick {
 		active.bytes.Add(8 << 10)
 		if at <= -8*time.Second {
 			paused.bytes.Add(8 << 10)
 		}
+		if at == -24*time.Second {
+			keep30.bytes.Add(16)
+		}
 		trickle.bytes.Add(100)
 		pl.flowStats(now.Add(at), healthTick, time.Minute)
 	}
+	woken.bytes.Add(15 << 10) // an scp starts in the second before the tick
+	fresh := pl.open(t)       // a connection opened a moment ago
+	all := []*countedStream{idle, keep30, trickle, paused, active, woken, fresh}
 	ml := addManaged(m, pl)
 	m.mu.Lock()
 	ml.degraded, ml.draining, ml.drainSince = true, true, now.Add(-maxDrain/2)
-	ml.users.Store(4)
+	ml.users.Store(int32(len(all)))
 	ml.flowing = 2
 	m.mu.Unlock()
 
 	m.heal(context.Background()) // 22 s: nothing yet
 	time.Sleep(100 * time.Millisecond)
-	for _, c := range []*countedStream{idle, trickle, paused, active} {
+	for _, c := range all {
 		if c.done.Load() {
 			t.Fatal("acted before maxDrain")
 		}
@@ -1496,16 +1520,18 @@ func TestDegradedLinkDrainsStalledKeepsActive(t *testing.T) {
 	m.mu.Lock()
 	ml.drainSince = now.Add(-maxDrain - time.Second)
 	m.mu.Unlock()
-	m.heal(context.Background()) // 46 s: idle and trickle go, paused and active stay
-	within(t, time.Second, "the idle and the trickling connection are closed", func() bool {
-		return idle.done.Load() && trickle.done.Load()
+	m.heal(context.Background()) // 46 s: idle and keep30 go, the rest stay
+	within(t, time.Second, "the idle connections are closed", func() bool {
+		return idle.done.Load() && keep30.done.Load()
 	})
 	time.Sleep(100 * time.Millisecond)
-	if active.done.Load() || paused.done.Load() {
-		t.Fatalf("closed a connection that moves data (active %v, paused 8 s %v)", active.done.Load(), paused.done.Load())
+	for name, c := range map[string]*countedStream{"trickle": trickle, "paused 8 s": paused, "active": active, "woken": woken, "fresh": fresh} {
+		if c.done.Load() {
+			t.Errorf("closed a connection whose data still passes: %s", name)
+		}
 	}
-	if lg.count("degraded for 45s — its connections that moved no real data for 15s (idle or stuck) are closed now") != 1 {
-		t.Fatalf("the step is not logged once:\n%s", strings.Join(lg.lines, "\n"))
+	if lg.count("degraded for 45s — its connections that moved no data for 15s (idle or stuck) are closed now") != 1 {
+		t.Fatalf("the step is not logged once:\n%s", lg)
 	}
 	m.mu.RLock()
 	stillIn := len(m.links) == 1
@@ -1514,15 +1540,15 @@ func TestDegradedLinkDrainsStalledKeepsActive(t *testing.T) {
 		t.Fatal("the link was dropped while users still move data on it")
 	}
 	m.mu.Lock()
-	ml.users.Store(2)
+	ml.users.Store(5)
 	ml.drainSince = now.Add(-maxDrainActive - time.Second)
 	m.mu.Unlock()
 	m.heal(context.Background()) // 5 min: the link goes with what is left
 	m.mu.RLock()
 	gone := len(m.links) == 0
 	m.mu.RUnlock()
-	if !gone || lg.count("degraded for 5m — closed with its 2 remaining connection(s)") != 1 {
-		t.Fatalf("the cap did not close the link (gone=%v):\n%s", gone, strings.Join(lg.lines, "\n"))
+	if !gone || lg.count("degraded for 5m — closed with its 5 remaining connection(s)") != 1 {
+		t.Fatalf("the cap did not close the link (gone=%v):\n%s", gone, lg)
 	}
 }
 
@@ -1541,7 +1567,6 @@ func TestStuckDegradedLinkLosesEveryConnection(t *testing.T) {
 	pl.flowMu.Lock()
 	for _, c := range cs { // moving data until drainStall+1s ago
 		c.lastActive = now.Add(-drainStall - time.Second)
-		c.lastFlowing = c.lastActive
 	}
 	pl.flowMu.Unlock()
 	ml := addManaged(m, pl)
@@ -1604,7 +1629,6 @@ func TestStuckDegradedLinkClosesDoNotQueue(t *testing.T) {
 	pl.flowMu.Lock()
 	for _, c := range cs { // moving data until drainStall+1s ago
 		c.lastActive = now.Add(-drainStall - time.Second)
-		c.lastFlowing = c.lastActive
 	}
 	pl.flowMu.Unlock()
 	sc.stuck.Store(true)
@@ -1626,5 +1650,179 @@ func TestStuckDegradedLinkClosesDoNotQueue(t *testing.T) {
 			}
 		}
 		t.Fatalf("after 2 s only %d of %d connections on the stuck link were closed", k, n)
+	}
+}
+
+// A reverse link that was retiring when it degraded starts draining like any
+// other: retiring is cleared, so drainTick no longer works on it, and the
+// drain's reclaim has its own flag — its stalled connection is closed on the
+// first tick past maxDrain, every time.
+func TestReverseRetiringDegradedLinkDrains(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		m, clk, _ := newV2Manager(nil, 1, 8, true)
+		pl := newV2PipeLink(t)
+		now := clk.Now()
+		c := pl.open(t)
+		pl.flowMu.Lock()
+		c.lastActive = now.Add(-20 * time.Second)
+		pl.flowMu.Unlock()
+		ml := addManaged(m, pl)
+		m.mu.Lock()
+		ml.retiring, ml.retireSince, ml.open = true, now.Add(-time.Minute), 1
+		ml.degraded = true
+		ml.users.Store(1)
+		m.mu.Unlock()
+		m.sweepReverse() // starts draining
+		m.mu.Lock()
+		retiring, replace := ml.retiring, ml.drainReplace
+		ml.drainSince = now.Add(-maxDrain - time.Second)
+		m.mu.Unlock()
+		if retiring || replace {
+			t.Fatalf("draining reverse link still retiring=%v, or its slot replaced=%v though it was surplus", retiring, replace)
+		}
+		m.drainTick()
+		m.sweepReverse()
+		within(t, time.Second, "the stalled connection is closed", func() bool { return c.done.Load() })
+		pl.Close()
+	}
+}
+
+// A retiring link's idle reclaim can block for minutes on a link that went
+// stuck (each FIN waits for smux's close timeout); when the link then
+// degrades, the drain must not wait for it.
+func TestDrainReclaimNotBlockedByRetiringReclaim(t *testing.T) {
+	m, clk, _ := newV2Manager(nil, 1, 8, false)
+	sc := &stuckConn{release: make(chan struct{})}
+	pl := newV2PipeLinkOn(t, func(c net.Conn) net.Conn { sc.Conn = c; return sc })
+	t.Cleanup(func() { close(sc.release) })
+	now := clk.Now()
+	var idle, stalled []*countedStream
+	for i := 0; i < 2; i++ {
+		idle = append(idle, pl.open(t))
+	}
+	for i := 0; i < 3; i++ {
+		stalled = append(stalled, pl.open(t))
+	}
+	pl.flowMu.Lock()
+	for _, c := range idle {
+		c.lastActive = now.Add(-400 * time.Second)
+	}
+	for _, c := range stalled { // moved data until 20 s ago, then the link stuck
+		c.lastActive = now.Add(-20 * time.Second)
+	}
+	pl.flowMu.Unlock()
+	sc.stuck.Store(true)
+	ml := addManaged(m, pl)
+	m.mu.Lock()
+	ml.retiring, ml.retireSince, ml.open = true, now.Add(-10*time.Minute), 5
+	ml.users.Store(5)
+	m.mu.Unlock()
+	m.drainTick() // the idle reclaim starts; its first FIN blocks
+	within(t, time.Second, "the retiring link's idle reclaim runs", func() bool { return ml.reclaiming.Load() })
+	m.mu.Lock()
+	ml.degraded = true
+	m.mu.Unlock()
+	m.heal(context.Background()) // draining now
+	m.mu.Lock()
+	ml.drainSince = now.Add(-maxDrain - time.Second)
+	m.mu.Unlock()
+	m.heal(context.Background())
+	within(t, 2*time.Second, "every stalled connection is closed past maxDrain", func() bool {
+		for _, c := range stalled {
+			if !c.done.Load() {
+				return false
+			}
+		}
+		return true
+	})
+}
+
+// Every link of a direct pool at max degrades (path-wide loss), each keeping
+// one user that still moves data. A draining link no longer counts against
+// max, but all links together stay within max + drainHeadroom: heal dials its
+// quota, and past maxDrain the oldest draining links give their slot back, so
+// the pool refills to its target at the gate's pace while the headroom's
+// worth of them keep their users.
+func TestDrainingLinksDoNotBlockRefill(t *testing.T) {
+	d := &fakeDialer{}
+	const N = 16
+	m, clk, lg := newV2Manager(d, 1, N, false)
+	var mls []*managedLink
+	for i := 0; i < N; i++ {
+		mls = append(mls, addManaged(m, newMeteredFake()))
+	}
+	m.target.Store(N)
+	m.mu.Lock()
+	for _, ml := range mls {
+		ml.degraded = true
+		ml.users.Store(1)
+	}
+	m.mu.Unlock()
+	ctx := context.Background()
+	m.heal(ctx)
+	m.dialWG.Wait()
+	clk.Advance(maxDrain + time.Second)
+	for i := 0; i < 5; i++ {
+		m.heal(ctx)
+		m.reconcile(ctx, N)
+		m.dialWG.Wait()
+		clk.Advance(healthTick)
+	}
+	m.mu.RLock()
+	S, _ := m.countsLocked()
+	total, draining := len(m.links), 0
+	for _, ml := range m.links {
+		if ml.draining {
+			draining++
+		}
+	}
+	m.mu.RUnlock()
+	if S != N || draining != drainHeadroom(N) || total > N+drainHeadroom(N) {
+		t.Fatalf("after %s: %d serving of %d, %d draining kept (want %d), %d links (cap %d)\n%s",
+			maxDrain+10*time.Second, S, N, draining, drainHeadroom(N), total, N+drainHeadroom(N), lg)
+	}
+	if lg.count("the pool is at its ceiling and needs their slots") == 0 {
+		t.Fatalf("no slot given back:\n%s", lg)
+	}
+}
+
+// Reverse: a degraded serving link's replacement is asked of the exit at once
+// (the pool-control count includes it); below the exit's ceiling the draining
+// link keeps its users still moving data past maxDrain; at the ceiling it
+// gives its slot back.
+func TestReverseDegradedLinkReplacedAtOnce(t *testing.T) {
+	for _, max := range []int{16, 8} {
+		m, clk, lg := newV2Manager(nil, 1, max, true)
+		var mls []*managedLink
+		for i := 0; i < 8; i++ {
+			mls = append(mls, addManaged(m, newMeteredFake()))
+		}
+		m.target.Store(8)
+		now := clk.Now()
+		ch := m.targetChanged()
+		m.mu.Lock()
+		mls[0].degraded = true
+		mls[0].users.Store(2)
+		m.mu.Unlock()
+		m.sweepReverse()
+		select {
+		case <-ch:
+		default:
+			t.Fatal("pool control not woken")
+		}
+		if got := m.ctlTarget(); got != 9 {
+			t.Fatalf("max %d: the exit is asked for %d links, want 9 (8 + the replacement)", max, got)
+		}
+		m.mu.Lock()
+		mls[0].drainSince = now.Add(-maxDrain - time.Second)
+		m.mu.Unlock()
+		m.sweepReverse() // the replacement has not come (at max 8 it cannot)
+		alive := mls[0].link.Alive()
+		if max == 16 && !alive {
+			t.Fatalf("below the ceiling the draining link was closed with its users:\n%s", lg)
+		}
+		if max == 8 && (alive || lg.count("the pool is at its ceiling and needs their slots") != 1 || m.ctlTarget() != 8) {
+			t.Fatalf("at the ceiling the draining link kept its slot (alive=%v, ctl %d):\n%s", alive, m.ctlTarget(), lg)
+		}
 	}
 }
