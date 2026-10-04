@@ -174,6 +174,11 @@ type dgFlow struct {
 	// steady: the last 3 samples, a bit set for each that moved at least
 	// flowSteadyRate (the same rule as an mtcp stream's)
 	steady uint8
+	// recv: the key was first seen on a received packet. flowHash orders the
+	// addresses as the packet has them, so the two directions of one
+	// connection are two keys (and usually two carriers: each side steers by
+	// its own hash); counting is per direction, then deduplicated (flowStats).
+	recv bool
 }
 
 func newDgLink(car Carrier, now time.Time) *dgLink {
@@ -274,7 +279,7 @@ func (l *dgLink) noteFlowRecv(flow uint32, n int, now time.Time) {
 	l.flowMu.Lock()
 	f := l.flows[flow]
 	if f == nil {
-		f = &dgFlow{}
+		f = &dgFlow{recv: true}
 		l.flows[flow] = f
 	}
 	f.bytes += uint64(n)
@@ -835,6 +840,7 @@ func (p *dgPool) sampleHealth() apSample {
 	defer p.mu.Unlock()
 	s := apSample{now: now, growable: p.growable}
 	var dnRate []float64 // this tick's RECEIVE (download) rate per s.links entry
+	var total dgFlowCount
 	for _, l := range p.set {
 		if !l.alive() {
 			continue
@@ -855,7 +861,9 @@ func (p *dgPool) sampleHealth() apSample {
 				l.sustained = minF(l.sustained, d)
 			}
 		}
-		flowing, open := l.flowStats(now, dt)
+		fc := l.flowStats(now, dt)
+		total.add(fc)
+		flowing, open := fc.conns()
 		// Pressure: the carrier dropped a packet for a full queue within the
 		// last tick (offered faster than the path drains) AND it is warm (past
 		// startup), so a still-ramping carrier is not mistaken for a full path.
@@ -872,9 +880,8 @@ func (p *dgPool) sampleHealth() apSample {
 		})
 		dnRate = append(dnRate, float64(dDown)/secs)
 		s.G += l.rate
-		s.flowing += flowing
-		s.open += open
 	}
+	s.flowing, s.open = total.conns()
 	p.foldDownPressure(s.links, dnRate, now)
 	return s
 }
@@ -932,7 +939,8 @@ func (p *dgPool) foldDownPressure(links []apLink, dnRate []float64, now time.Tim
 }
 
 // flowStats counts a carrier's flows and how many are actively moving data,
-// ageing out idle ones. Pool goroutine only.
+// ageing out idle ones, per direction (the sent and the received keys of a
+// connection are separate: see dgFlow.recv). Pool goroutine only.
 //
 // "Flowing" is the same rule as an mtcp stream's (mtcpLink.flowStats): a rate
 // EWMA of at least flowingRate, or data moved in each of the last 3 samples
@@ -941,7 +949,7 @@ func (p *dgPool) foldDownPressure(links []apLink, dnRate []float64, now time.Tim
 // dgtun sized its pool for the heavy flows only: in the load test 2,400 such
 // users counted as 73–887 and the pool stayed at 8 carriers for 100 s, where
 // mtcp counted all 2,416 for the same load.
-func (l *dgLink) flowStats(now time.Time, dt time.Duration) (flowing, open int) {
+func (l *dgLink) flowStats(now time.Time, dt time.Duration) (c dgFlowCount) {
 	alpha := flowAlpha(dt)
 	l.flowMu.Lock()
 	defer l.flowMu.Unlock()
@@ -950,7 +958,11 @@ func (l *dgLink) flowStats(now time.Time, dt time.Duration) (flowing, open int) 
 			delete(l.flows, k)
 			continue
 		}
-		open++
+		d := 0
+		if f.recv {
+			d = 1
+		}
+		c.open[d]++
 		steady := false
 		if f.bytes != f.prev && dt > 0 {
 			rate := float64(f.bytes-f.prev) / dt.Seconds()
@@ -962,10 +974,29 @@ func (l *dgLink) flowStats(now time.Time, dt time.Duration) (flowing, open int) 
 		}
 		f.steady = (f.steady<<1 | b2u(steady)) & 7
 		if f.ewma >= flowingRate || f.steady == 7 {
-			flowing++
+			c.flowing[d]++
 		}
 	}
-	return flowing, open
+	return c
+}
+
+// dgFlowCount is a carrier's (or the pool's) flow count by direction: [0] the
+// keys this side sent on, [1] the keys it received on.
+type dgFlowCount struct{ flowing, open [2]int }
+
+func (c *dgFlowCount) add(o dgFlowCount) {
+	for d := 0; d < 2; d++ {
+		c.flowing[d] += o.flowing[d]
+		c.open[d] += o.open[d]
+	}
+}
+
+// conns is the count of connections: each one is a sent key and a received
+// key — usually on different carriers — so the sum would count it twice (the
+// load test showed exactly 2x: 4,832 for 2,416 connections). The larger
+// direction counts each connection once and still counts a one-way flow.
+func (c dgFlowCount) conns() (flowing, open int) {
+	return max(c.flowing[0], c.flowing[1]), max(c.open[0], c.open[1])
 }
 
 // autoscale runs one autopilot tick and moves the pool toward its decision.

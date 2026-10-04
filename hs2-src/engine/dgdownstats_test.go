@@ -224,3 +224,38 @@ func TestDgFlowSteadyCountsInteractiveUsers(t *testing.T) {
 		*clk2 = clk2.Add(healthTick)
 	}
 }
+
+// A connection is one sent key and one received key (flowHash keeps the
+// packet's address order), usually on two carriers since each side steers
+// by its own hash. Counted per direction and deduplicated, it counts once:
+// the load test showed exactly 2x (4,832 active for 2,416 connections).
+func TestDgFlowCountsEachConnectionOnce(t *testing.T) {
+	p, ls, clk := edgeWithLinks(t, 2)
+	const conns = 40
+	var s apSample
+	for k := 0; k < 4; k++ {
+		*clk = clk.Add(healthTick)
+		now := *clk
+		for i := 0; i < conns; i++ {
+			ls[0].noteFlowSend(uint32(i+1), 1024, now)    // the user's upload, steered here
+			ls[1].noteFlowRecv(uint32(5000+i), 2048, now) // its download, steered there by the peer
+		}
+		s = p.sampleHealth()
+	}
+	if s.flowing != conns || s.open != conns {
+		t.Fatalf("%d connections counted as %d active, %d open; want %d each", conns, s.flowing, s.open, conns)
+	}
+	// One-way flows (a download with nothing sent back on this side's keys)
+	// still count.
+	p2, ls2, clk2 := edgeWithLinks(t, 1)
+	for k := 0; k < 4; k++ {
+		*clk2 = clk2.Add(healthTick)
+		for i := 0; i < conns; i++ {
+			ls2[0].noteFlowRecv(uint32(i+1), 4096, *clk2)
+		}
+		s = p2.sampleHealth()
+	}
+	if s.flowing != conns {
+		t.Fatalf("%d one-way downloads counted as %d active", conns, s.flowing)
+	}
+}
