@@ -17,11 +17,17 @@ import (
 // The control ping travels behind the link's own traffic both ways, so how
 // long the oldest unanswered one has waited (ctrlWaitOf) is how long the
 // link's users wait. A link is stuck when that wait is stuckWait or more
-// while it moves less than activeBytes, for stuckStreak samples in a row,
-// and another link, answering promptly now, got an answer after this link's
-// ping went out — when every link waits (the path or the other server is
-// down, or slow for all), moving users between links would not help. A stuck link is degraded at once (no new users, its
-// replacement comes), and its connections that moved no data for
+// while it moves less than activeBytes, for stuckStreak samples in a row —
+// and the path is shown to work: another link carrying traffic answers
+// promptly now, and got an answer to a ping sent after this link's oldest
+// one went out (a whole round trip that started later; a pong that merely
+// arrives later may have left before an outage, and an idle link answers
+// quickly through any squeeze, having nothing queued). When every busy link
+// waits, or more than a third of them at once, it is the path or the other
+// server, down or slow for all: moving users between links would not help,
+// so none is drained (said once a minute). At most drainHeadroom are drained
+// per tick, the longest waits first. A stuck link is degraded at once (no new
+// users, its replacement comes), and its connections that moved no data for
 // drainStall close without the maxDrain wait.
 const (
 	stuckWait   = 6 * time.Second

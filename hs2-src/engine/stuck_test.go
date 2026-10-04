@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
 	"io"
 	"net"
 	"sync"
@@ -168,7 +169,7 @@ func waiting(f *meteredFakeLink, d time.Duration) { f.m.ctrlWait.Store(ctrlNow()
 func (r *stuckRig) step(f *meteredFakeLink, moved uint64) {
 	for _, g := range r.good {
 		g.download(200<<10, 0)
-		g.m.ctrlAnswered.Store(ctrlNow())
+		g.m.ctrlAnsweredSent.Store(ctrlNow() - int64(100*time.Millisecond)) // a ping sent 100 ms ago, answered
 	}
 	if f != nil {
 		f.m.rdBytes.Add(moved)
@@ -234,25 +235,104 @@ func TestStuckNotFlagged(t *testing.T) {
 			t.Fatal("a wait under stuckWait was taken for stuck")
 		}
 	})
-	t.Run("outage: the others have no ping out, and no answer since", func(t *testing.T) {
+	// The path goes dark at O while this link has a ping out; another link's
+	// pong lands just after that ping left, but its own ping went out before
+	// it — so it proves nothing about the path after O.
+	t.Run("outage: an answer that arrived later, to a ping sent before", func(t *testing.T) {
 		r := newStuckRig(t, 3)
-		for _, g := range r.good {
-			g.m.ctrlAnswered.Store(ctrlNow() - int64(20*time.Second)) // last answer before the outage
-		}
 		f, ml := r.add()
-		f.m.rdBytes.Add(1)
-		r.clk.Advance(healthTick)
-		r.m.sampleHealth()
-		waiting(f, stuckWait+2*time.Second) // sent after their last answer
+		r.step(f, 0)
+		sent := ctrlNow() - int64(stuckWait+2*time.Second)
+		f.m.ctrlWait.Store(sent)
 		for i := 0; i < 5; i++ {
 			for _, g := range r.good {
-				g.m.rdBytes.Add(64) // a keepalive: not suspect yet
+				g.download(200<<10, 0)                                        // still busy (data in flight before O)
+				g.m.ctrlAnsweredSent.Store(sent - int64(50*time.Millisecond)) // its ping left 50 ms before ours
 			}
 			r.clk.Advance(healthTick)
 			r.m.sampleHealth()
 		}
 		if ml.degraded {
-			t.Fatalf("a busy link was taken for stuck in an outage (idle links with nothing pending are no evidence):\n%s", r.lg)
+			t.Fatalf("taken for stuck on an answer to a ping sent before its own:\n%s", r.lg)
+		}
+	})
+	// A path-wide squeeze: every busy link's ping waits behind its own
+	// backlog; an idle link, with nothing queued, still answers at once —
+	// it is no evidence that the path works.
+	t.Run("squeeze: only an idle link answers", func(t *testing.T) {
+		r := newStuckRig(t, 0)
+		idle, _ := r.add()
+		var fs []*meteredFakeLink
+		var mls []*managedLink
+		for i := 0; i < 5; i++ {
+			f, ml := r.add()
+			fs, mls = append(fs, f), append(mls, ml)
+		}
+		for i := 0; i < 5; i++ {
+			idle.m.ctrlAnsweredSent.Store(ctrlNow())
+			for _, f := range fs {
+				waiting(f, stuckWait+2*time.Second)
+				f.m.rdBytes.Add(20 << 10) // busy, under activeBytes
+			}
+			r.clk.Advance(healthTick)
+			r.m.sampleHealth()
+		}
+		for i, ml := range mls {
+			if ml.degraded {
+				t.Fatalf("link %d drained in a squeeze, on an idle link's answer:\n%s", i, r.lg)
+			}
+		}
+	})
+	// The same in a small pool: two busy links wait (too few for the mass
+	// rule), only an idle one answers — still no evidence.
+	t.Run("squeeze in a small pool: only an idle link answers", func(t *testing.T) {
+		r := newStuckRig(t, 0)
+		idle, _ := r.add()
+		var fs []*meteredFakeLink
+		var mls []*managedLink
+		for i := 0; i < 2; i++ {
+			f, ml := r.add()
+			fs, mls = append(fs, f), append(mls, ml)
+		}
+		for i := 0; i < 5; i++ {
+			idle.m.ctrlAnsweredSent.Store(ctrlNow())
+			for _, f := range fs {
+				waiting(f, stuckWait+2*time.Second)
+				f.m.rdBytes.Add(20 << 10)
+			}
+			r.clk.Advance(healthTick)
+			r.m.sampleHealth()
+		}
+		for i, ml := range mls {
+			if ml.degraded {
+				t.Fatalf("link %d drained on an idle link's answer:\n%s", i, r.lg)
+			}
+		}
+	})
+	// More than a third of the busy links wait at once: the path or the other
+	// server, not those links — none is drained, and it is said once.
+	t.Run("mass: a third of the busy links at once", func(t *testing.T) {
+		r := newStuckRig(t, 4)
+		var mls []*managedLink
+		var fs []*meteredFakeLink
+		for i := 0; i < 3; i++ {
+			f, ml := r.add()
+			fs, mls = append(fs, f), append(mls, ml)
+		}
+		r.step(nil, 0)
+		for i := 0; i < 4; i++ {
+			for _, f := range fs {
+				waiting(f, stuckWait+2*time.Second)
+			}
+			r.step(nil, 0)
+		}
+		for i, ml := range mls {
+			if ml.degraded {
+				t.Fatalf("link %d drained in a mass wait:\n%s", i, r.lg)
+			}
+		}
+		if r.lg.count("3 of 7 busy links have waited 6s+ for an answer at once") != 1 {
+			t.Fatalf("the mass wait is not said once:\n%s", r.lg)
 		}
 	})
 	t.Run("every link waits", func(t *testing.T) {
@@ -310,5 +390,153 @@ func TestStuckLinkDrainsAtOnce(t *testing.T) {
 	m.mu.RUnlock()
 	if !in {
 		t.Fatal("the stuck link was dropped while a user still moves data on it")
+	}
+}
+
+// At most drainHeadroom stuck links are drained per tick (the longest waits
+// first); the rest follow on the next ticks.
+func TestStuckDrainsAtMostHeadroomPerTick(t *testing.T) {
+	r := newStuckRig(t, 30) // max 32: headroom 4
+	var fs []*meteredFakeLink
+	var mls []*managedLink
+	for i := 0; i < 6; i++ {
+		f, ml := r.add()
+		fs, mls = append(fs, f), append(mls, ml)
+	}
+	r.step(nil, 0)
+	count := func() int {
+		n := 0
+		for _, ml := range mls {
+			if ml.degraded {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i < stuckStreak; i++ {
+		for k, f := range fs {
+			waiting(f, stuckWait+time.Duration(k)*time.Second)
+		}
+		r.step(nil, 0)
+	}
+	if n, cap := count(), drainHeadroom(32); n != cap {
+		t.Fatalf("%d stuck links drained in one tick, want %d (drainHeadroom)", n, cap)
+	}
+	if !mls[5].degraded || mls[0].degraded {
+		t.Fatal("the longest waits are not drained first")
+	}
+	for k, f := range fs {
+		waiting(f, stuckWait+time.Duration(k)*time.Second)
+	}
+	r.step(nil, 0)
+	if n := count(); n != 6 {
+		t.Fatalf("%d of 6 drained after the next tick", n)
+	}
+}
+
+// The link's writer is stuck: pings time out writing, yet the control loop
+// carries on and its wait grows (it does not end and forget it), at most
+// ctrlPending pings are queued meanwhile, and each queued ping keeps its own
+// sequence number (a timed-out write stays queued in smux, pointing at the
+// buffer it was given).
+func TestControlKeepsWaitingOnAStuckWriter(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-time cadence")
+	}
+	a, b := net.Pipe()
+	sc := &stuckConn{Conn: b, release: make(chan struct{})}
+	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}
+	cli, _, err := newSession(a, false, nil, mtr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _, err := newSession(sc, true, nil, &linkMeter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	defer srv.Close()
+	var mu sync.Mutex
+	var seqs []uint64
+	go func() { // the exit: answers every ping it gets
+		st, err := srv.AcceptStream()
+		if err != nil {
+			return
+		}
+		var k [1]byte
+		io.ReadFull(st, k[:])
+		ping, pong := make([]byte, ctrlPingLen), make([]byte, ctrlPongLen)
+		for {
+			if _, err := io.ReadFull(st, ping); err != nil {
+				return
+			}
+			mu.Lock()
+			seqs = append(seqs, binary.BigEndian.Uint64(ping))
+			mu.Unlock()
+			copy(pong, ping)
+			st.Write(pong)
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { // heavy: the fixed beat
+		for ctx.Err() == nil {
+			mtr.rdBytes.Add(activeBytes)
+			time.Sleep(100 * time.Millisecond)
+		}
+	}()
+	done := make(chan struct{})
+	go func() { openControl(ctx, &mtcpLink{sess: cli, mtr: mtr}, nil); close(done) }()
+	within(t, controlInterval+2*time.Second, "the first ping is answered", func() bool { return mtr.peerSeen.Load() })
+	sc.stuck.Store(true) // the exit stops reading: the link's writer blocks
+	mu.Lock()
+	before := len(seqs)
+	mu.Unlock()
+	time.Sleep(10 * controlInterval)
+	if w := ctrlWaitOf(mtr); w < stuckWait {
+		t.Fatalf("after %s of a stuck writer the wait is %s (the loop ended, or forgot it)", 10*controlInterval, w)
+	}
+	select {
+	case <-done:
+		t.Fatal("the control loop ended on a write timeout")
+	default:
+	}
+	close(sc.release) // the writer moves again: the queued pings go out
+	time.Sleep(time.Second)
+	mu.Lock()
+	queued := append([]uint64(nil), seqs[before:]...)
+	mu.Unlock()
+	if len(queued) < 2 || len(queued) > ctrlPending+1 {
+		t.Fatalf("%d pings were queued behind the stuck writer, want 2 to %d: %v", len(queued), ctrlPending+1, queued)
+	}
+	for i := 1; i < len(queued); i++ {
+		if queued[i] <= queued[i-1] {
+			t.Fatalf("queued pings lost their own sequence numbers: %v", queued)
+		}
+	}
+	within(t, 2*controlInterval+time.Second, "the late answers clear the wait", func() bool { return ctrlWaitOf(mtr) < 2*time.Second })
+}
+
+// The pending list: a pong answers its ping and every earlier one, says when
+// the ping it answers was sent, and the list holds at most ctrlPending.
+func TestCtrlPendingList(t *testing.T) {
+	var p ctrlPendingList
+	for i := uint64(1); !p.full(); i++ {
+		p.add(i, int64(i*100))
+		if i > ctrlPending {
+			t.Fatalf("the list took %d pings, want at most %d", i, ctrlPending)
+		}
+	}
+	if len(p.items) != ctrlPending || p.oldest() != 100 {
+		t.Fatalf("%d pending, oldest %d", len(p.items), p.oldest())
+	}
+	if at, ok := p.answer(2); !ok || at != 200 || p.oldest() != 300 {
+		t.Fatalf("answer(2): at %d ok %v, oldest now %d; want 200 true 300", at, ok, p.oldest())
+	}
+	if _, ok := p.answer(2); ok {
+		t.Fatal("a duplicate answer counted")
+	}
+	if at, ok := p.answer(99); ok || at != 0 || !p.empty() || p.oldest() != 0 {
+		t.Fatalf("an answer past the list: at %d ok %v, empty %v", at, ok, p.empty())
 	}
 }

@@ -84,35 +84,21 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		return
 	}
 	var seq uint64
-	ping := make([]byte, ctrlPingLen)
 	pong := make([]byte, ctrlPongLen)
-	// pending: the pings not answered yet, oldest first. Pongs come back in
-	// order on the one stream, so a pong answers its ping and every earlier
-	// one (a ping whose write timed out before it was queued is answered by
-	// the next pong that does come back). The oldest one's send time is
-	// published as mtr.ctrlWait.
-	type sentPing struct {
-		seq uint64
-		at  int64 // ctrlNow when sent
-	}
-	var pending []sentPing
-	publish := func() {
-		if len(pending) == 0 {
-			mtr.ctrlWait.Store(0)
-		} else {
-			mtr.ctrlWait.Store(pending[0].at)
-		}
-	}
+	var pending ctrlPendingList
+	publish := func() { mtr.ctrlWait.Store(pending.oldest()) }
 	defer mtr.ctrlWait.Store(0) // gone: nothing waits on this channel any more
 	moved := mtr.rdBytes.Load() + mtr.wrBytes.Load()
 	// The cadence is the fixed controlInterval tick it always was while the
-	// link carries traffic: the exit's download retransmits arrive with each
-	// pong, and the health logic's loss rule was tuned against exactly this
-	// beat (a jittered one would make it judge one pong interval's
-	// retransmits against one 2 s tick's bytes). An idle link only answers
-	// every 3rd–5th tick (~9–15 s): at hundreds of mostly idle links a ping on
-	// every tick of every link is a few hundred messages a second, and an
-	// idle link still hears the exit's smux keepalive every 4–8 s.
+	// link moves activeBytes: the exit's download retransmits arrive with
+	// each pong, and the health logic's loss rule was tuned against exactly
+	// this beat (a jittered one would make it judge one pong interval's
+	// retransmits against one 2 s tick's bytes). A link moving less but not
+	// idle pings every 2–4 s (the loss rule does not judge it, and an exact
+	// 3 s beat on hundreds of light flows to one server is a pattern); an idle
+	// link every 3rd–5th tick (~9–15 s): at hundreds of mostly idle links a
+	// ping on every tick of every link is a few hundred messages a second,
+	// and an idle link still hears the exit's smux keepalive every 4–8 s.
 	t := time.NewTicker(controlInterval)
 	defer t.Stop()
 	skip := 0
@@ -124,8 +110,9 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		}
 		now := mtr.rdBytes.Load() + mtr.wrBytes.Load()
 		active := now-moved >= ctrlBusyBytes
+		heavy := now-moved >= activeBytes
 		moved = now
-		if !active && skip > 0 && len(pending) == 0 {
+		if !active && skip > 0 && pending.empty() {
 			skip--
 			continue
 		}
@@ -134,10 +121,21 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		} else {
 			skip = 2 + rand.IntN(3) // the next 2–4 ticks stay quiet
 		}
-		if len(pending) < ctrlPending {
+		if active && !heavy {
+			select { // off the fixed beat: 2–4 s apart
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(rand.Int64N(int64(time.Second)))):
+			}
+		}
+		if !pending.full() {
 			seq++
-			pending = append(pending, sentPing{seq: seq, at: ctrlNow()})
+			pending.add(seq, ctrlNow())
 			publish()
+			// A ping of its own: smux keeps a timed-out write queued, still
+			// pointing at the caller's buffer, so one buffer reused for the
+			// next ping would rewrite the queued one.
+			ping := make([]byte, ctrlPingLen)
 			binary.BigEndian.PutUint64(ping[0:], seq)
 			binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
 			st.SetWriteDeadline(time.Now().Add(controlInterval))
@@ -152,7 +150,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		// congested or stuck) still answers its ping and the ones before it,
 		// so one slow answer no longer ends the control channel.
 		st.SetReadDeadline(time.Now().Add(2 * controlInterval))
-		for len(pending) > 0 {
+		for !pending.empty() {
 			n, err := io.ReadFull(st, pong)
 			if err != nil {
 				if n > 0 || !isTimeout(err) {
@@ -160,9 +158,8 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				}
 				break // no answer in time: try again next tick
 			}
-			got := binary.BigEndian.Uint64(pong[0:])
-			for len(pending) > 0 && pending[0].seq <= got {
-				pending = pending[1:]
+			if at, ok := pending.answer(binary.BigEndian.Uint64(pong[0:])); ok {
+				mtr.ctrlAnsweredSent.Store(at) // a whole round trip, and when it started (stuck.go)
 			}
 			sent := int64(binary.BigEndian.Uint64(pong[8:]))
 			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
@@ -170,10 +167,49 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			}
 			mtr.peerRetrans.Store(binary.BigEndian.Uint64(pong[16:]))
 			mtr.peerSeen.Store(true)
-			mtr.ctrlAnswered.Store(ctrlNow())
 		}
 		publish()
 	}
+}
+
+// ctrlPendingList holds the control pings not answered yet, oldest first, at
+// most ctrlPending: on a stuck link no more are queued behind them. Pongs
+// come back in order on the one stream, so a pong answers its ping and every
+// earlier one (a ping whose write timed out before it was queued is answered
+// by the next pong that does come back).
+type ctrlPendingList struct{ items []ctrlSentPing }
+
+type ctrlSentPing struct {
+	seq uint64
+	at  int64 // ctrlNow when sent
+}
+
+func (p *ctrlPendingList) empty() bool { return len(p.items) == 0 }
+func (p *ctrlPendingList) full() bool  { return len(p.items) >= ctrlPending }
+
+func (p *ctrlPendingList) add(seq uint64, at int64) {
+	p.items = append(p.items, ctrlSentPing{seq: seq, at: at})
+}
+
+// oldest is when the oldest unanswered ping was sent, 0 if none waits.
+func (p *ctrlPendingList) oldest() int64 {
+	if len(p.items) == 0 {
+		return 0
+	}
+	return p.items[0].at
+}
+
+// answer drops the pings a pong for seq answers, and says when the ping that
+// got this very answer was sent (ok false: it was not pending — a duplicate,
+// or an answer to a ping before this list).
+func (p *ctrlPendingList) answer(seq uint64) (at int64, ok bool) {
+	for len(p.items) > 0 && p.items[0].seq <= seq {
+		if p.items[0].seq == seq {
+			at, ok = p.items[0].at, true
+		}
+		p.items = p.items[1:]
+	}
+	return at, ok
 }
 
 // isTimeout reports a deadline error (smux's own, or a net.Error's).

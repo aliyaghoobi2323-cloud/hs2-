@@ -141,10 +141,10 @@ type linkMeter struct {
 	rttMicros   atomic.Uint64 // last control round-trip time, microseconds
 	peerSeen    atomic.Bool   // a control response has been received at least once
 	// ctrlWait is when (ctrlNow) the oldest control ping still unanswered was
-	// sent, 0 if none waits (see ctrlWaitOf); ctrlAnswered is when the last
-	// pong arrived.
-	ctrlWait     atomic.Int64
-	ctrlAnswered atomic.Int64
+	// sent, 0 if none waits (see ctrlWaitOf); ctrlAnsweredSent is when the
+	// last ping that got its own answer was sent.
+	ctrlWait         atomic.Int64
+	ctrlAnsweredSent atomic.Int64
 }
 
 // meteredConn counts the bytes a link carries, by direction. It sits above the
