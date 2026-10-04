@@ -43,6 +43,16 @@ not**:
   connection that is still in use.** A connection on a retiring link that has
   been completely idle for `drain_idle_sec` (default 310 s, just above xray's
   300 s idle timeout; `0` = never) is closed so the link can finish.
+- **a bad link** (retransmitting more than 12% of what it sends while busy) is
+  *degraded*: it takes no new connections and its replacement is brought up
+  at once (on the reverse edge the exit is asked for it). After 45 s its
+  connections that moved no data for 15 s are closed — idle ones, and on a
+  link that got stuck every one — and the app reconnects onto a healthy link;
+  a connection whose data still passes stays until it ends, 5 min at most.
+  When the pool is at its ceiling and needs the slot, the bad link closes at
+  45 s with what is left, as before. Log: `link N degraded …`, `… degraded
+  for 45s — its connections that moved no data for 15s (idle or stuck) are
+  closed now …`.
 
 It comes up "warm" (8 links) so a burst of connections at start spreads
 immediately — or, after a restart within 15 minutes, at the size it had
