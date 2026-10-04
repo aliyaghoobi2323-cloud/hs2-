@@ -915,16 +915,38 @@ echoes were answered for good.
     answered echoes were 100% after 30 s. The build before the review fix
     took the 4 for a slow path ("4 of 8 busy links … none is drained") and
     answered 51–56% for a minute.
-  - No stuck verdict in any of these: a squeeze to 8 Mbit/s for 60 s; to
-    12 Mbit/s for 120 s; a 40 s outage.
-  - Drops across the squeezes stayed within main's own run-to-run spread:
-    at 12 Mbit/s main dropped 1,108 and 1,410 active connections in two
-    runs, this build 1,258.
+  - No stuck verdict in any of these: a squeeze to 8 Mbit/s for 60 s (four
+    runs); to 12 Mbit/s for 120 s (two runs); a 40 s outage; an Iran
+    restart (normal service again after 14.3 s, as before); 600 users whose
+    apps stop reading (the wedge guard reset them, as before).
+  - Drops in the squeezes match main:
+    - at 8 Mbit/s, main dropped 1,519 and 1,527 active connections in two
+      runs, this build 1,532 and 1,478;
+    - at 12 Mbit/s, main dropped 1,108 and 1,410, this build 1,363.
+- **The loss rule waits out a slow spell too.** Before this was fixed, the
+  stuck builds dropped about 8% more in the 8 Mbit/s squeeze (1,651 and
+  1,662), with no stuck verdict at all. The extra drops came from the loss
+  rule: it drained 4–8 links for download loss just after each squeeze,
+  where main drained 1–2.
+  - Why main drained fewer: a single ping write timeout ended a link's
+    control channel for good. That left the loss rule without the exit's
+    retransmit count for the rest of the link's life. The control channel
+    now survives, and right after a squeeze it reported TCP's recovery
+    retransmits.
+  - The fix: no link is judged for loss during a slow spell or its recovery
+    window, and the rule then needs three fresh samples.
+  - The same survival makes the loss rule see lossy links it used to miss.
+    In the 20%-loss test the new build drained 11 lossy links where main
+    drained 6, cutting 365 active connections against 178. Those users
+    reconnect onto healthy links, and p99 matched main.
+  - Only links whose control channel has answered count toward the slow
+    test. A pool on an older exit, whose links never answer, would
+    otherwise pass for slow for good and silence the loss rule.
   - Earlier cuts of the rule drained 210, 55, then 27 links in the
     squeeze, cutting hundreds of users who would have recovered. Each was
     fixed before this one.
 - **Reviews.** Two independent adversarial reviews; every confirmed finding
-  is fixed and has a test that fails without its fix (11 mutations, all
+  is fixed and has a test that fails without its fix (17 mutations, all
   caught).
   - A minority of stuck links (more than a third of the busy ones) passed
     for a slow path for good.

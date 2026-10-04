@@ -53,7 +53,10 @@ not**:
   — users kept on a lossy link wait seconds per reply, so they are better off
   reconnecting.
   When the pool is at its ceiling and needs the slot, the bad link closes at
-  45 s with what is left, as before.
+  45 s with what is left, as before. Right after the path was slow for most
+  links (see a stuck link, below), no link is judged for loss until they
+  have had time to recover: TCP resends what the slowdown held back, and
+  that says nothing about one link.
 - **a stuck link** — throttled to a few packets a second, the way DPI slows a
   flow without cutting it — moves too little for the loss rule and still
   gets a keepalive through, so it used to keep serving while its users got
