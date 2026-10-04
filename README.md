@@ -58,16 +58,19 @@ not**:
   flow without cutting it — moves too little for the loss rule and still
   gets a keepalive through, so it used to keep serving while its users got
   no answer. Each link's control ping travels behind its own traffic, so
-  how long it waits is how long the users wait: a link whose ping has
-  waited 6 s while it moves almost nothing, while other busy links answer
-  at once, is *stuck* — degraded like a bad link, and its connections that
-  moved no data for 15 s close right away. When every busy link waits (or
-  more than a third at once) it is the path or the other server, and no
-  link is drained — nor for 30 s after, while the links catch up on their
-  own. Log: `link N stuck: its traffic has waited 8s for an
-  answer …`. Log: `link N degraded …`, `… degraded
-  for 45s — its connections that moved no data for 15s (idle or stuck) are
-  closed now …`.
+  how long it waits is how long the users wait. A link is *stuck* when its
+  ping has waited 6 s while it moves almost nothing — less than half of what
+  the links that answer promptly move — and at least half the busy links
+  answer at once. A stuck link is degraded like a bad link, and its
+  connections that moved no data for 15 s close right away. When fewer than
+  half the busy links answer promptly, the path or the other server is
+  slow, and no link is drained — nor for 30 s after, while the links catch
+  up on their own. A link that waits while it moves its share is waiting
+  on its own users' load, not on a throttle, so it is left alone. At most
+  an eighth of the pool drains as stuck at a time. Log: `link N stuck: its
+  traffic has waited 8s for an answer …`, then `link N stuck — its
+  connections that moved no data for 15s are closed now …`; a slow path: `N of M busy links have waited 6s+ for an answer and only K
+  answer promptly — … none is drained`.
 
 It comes up "warm" (8 links) so a burst of connections at start spreads
 immediately — or, after a restart within 15 minutes, at the size it had
