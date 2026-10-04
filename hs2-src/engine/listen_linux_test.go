@@ -30,37 +30,39 @@ func sockProto(t *testing.T, sc syscall.Conn) int {
 	return v
 }
 
-// Every hs2 listener (carrier, user ports, dgtun) is plain TCP, also where the
-// build's default is MPTCP (GODEBUG=multipathtcp=1, as Go 1.24+ has it): an
+// Every hs2 listener (carrier, user ports, dgtun) is plain TCP even where the
+// default is MPTCP: the test sets GODEBUG=multipathtcp=1 (Go 1.24+'s default
+// for listeners), so it guards the explicit SetMultipathTCP(false). An
 // accepted MPTCP socket ignores tcp_notsent_lowat, so a user whose app stops
-// reading holds its whole send buffer and the stall guard never sees it.
-// (Run with GODEBUG=multipathtcp=1 to check the helper on its own; go.mod
-// turns the default off for the rest.)
+// reading would hold its whole send buffer and the stall guard never see it.
+// Only the listener's protocol tells: a plain-TCP client accepted on an MPTCP
+// listener still reports IPPROTO_TCP (and still ignores the lowat).
 func TestListenersArePlainTCP(t *testing.T) {
+	t.Setenv("GODEBUG", "multipathtcp=1")
 	for _, rcvbuf := range []int{0, 1 << 20} {
 		ln, err := listenReuseRcvBuf("127.0.0.1:0", rcvbuf)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if p := sockProto(t, ln.(*net.TCPListener)); p != unix.IPPROTO_TCP {
-			ln.Close()
-			t.Fatalf("listener (rcvbuf %d) is protocol %d, want plain TCP (%d)", rcvbuf, p, unix.IPPROTO_TCP)
-		}
-		c, err := net.Dial("tcp", ln.Addr().String())
-		if err != nil {
-			ln.Close()
-			t.Fatal(err)
-		}
-		a, err := ln.Accept()
-		if err != nil {
-			t.Fatal(err)
-		}
-		p := sockProto(t, a.(*net.TCPConn))
-		a.Close()
-		c.Close()
+		p := sockProto(t, ln.(*net.TCPListener))
 		ln.Close()
 		if p != unix.IPPROTO_TCP {
-			t.Fatalf("accepted connection (rcvbuf %d) is protocol %d, want plain TCP (%d)", rcvbuf, p, unix.IPPROTO_TCP)
+			t.Fatalf("listener (rcvbuf %d) is protocol %d, want plain TCP (%d)", rcvbuf, p, unix.IPPROTO_TCP)
 		}
+	}
+}
+
+// go.mod turns the default off for every other listener (noise, reality, the
+// cover backend): a plain net.Listen is TCP too.
+func TestModuleDefaultIsPlainTCP(t *testing.T) {
+	t.Setenv("GODEBUG", "")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := sockProto(t, ln.(*net.TCPListener))
+	ln.Close()
+	if p != unix.IPPROTO_TCP {
+		t.Fatalf("net.Listen is protocol %d, want plain TCP (%d): go.mod's godebug multipathtcp=0 is missing", p, unix.IPPROTO_TCP)
 	}
 }
