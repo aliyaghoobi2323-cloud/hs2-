@@ -404,3 +404,19 @@ func TestPickWaitRefillHoldLive(t *testing.T) {
 		t.Fatal("the episode is still on with the pool full")
 	}
 }
+
+// A hold that ends at its limit says why: at the dial gate's pace a pool of
+// hundreds cannot be back within it however good the path (seen in the
+// restart load tests: 100 of 300 up after 10 s on a clean path, and the log
+// blamed the path); only a pool well behind that pace points at the path.
+func TestRefillWhySlowTellsPaceFromPath(t *testing.T) {
+	if w := refillWhySlow(100, 300, 10*time.Second); !strings.Contains(w, "dial pace, about 10 a second, so 300 take about 30s — expected") {
+		t.Fatalf("100 of 300 in 10 s is the gate's pace; got %q", w)
+	}
+	if w := refillWhySlow(21, 300, 10*time.Second); !strings.Contains(w, "slower than the dial pace") || !strings.Contains(w, "lossy path") {
+		t.Fatalf("21 of 300 in 10 s is well behind the pace; got %q", w)
+	}
+	if w := refillWhySlow(3, 8, 200*time.Millisecond); !strings.Contains(w, "dial pace") || strings.Contains(w, "slower") {
+		t.Fatalf("3 links 0.2 s in is on pace; got %q", w)
+	}
+}

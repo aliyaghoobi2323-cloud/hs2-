@@ -241,6 +241,19 @@ func (m *LinkManager) refillStep(now time.Time) bool {
 	return true
 }
 
+// refillWhySlow says why a hold ended before the pool had its links. Links
+// open at the dial gate's pace (~10 a second, dialgate.go), so a large pool
+// cannot be back within the hold however good the path: blaming the path for
+// that would send the operator after a fault that is not there. Only a pool
+// well behind that pace points at the path or the other server.
+func refillWhySlow(up, target int, took time.Duration) string {
+	paced := 1 + int(took.Seconds()*gatePerSec)
+	if up*10 >= paced*6 {
+		return fmt.Sprintf("links open at the dial pace, about %d a second, so %d take about %ds — expected, not a fault", gatePerSec, target, (target+gatePerSec-1)/gatePerSec)
+	}
+	return fmt.Sprintf("links are coming slower than the dial pace of about %d a second: a slow or lossy path, or the other server still starting", gatePerSec)
+}
+
 // endRefill ends the episode: every connection still waiting goes onto the
 // least-loaded link there is (none is refused because of the hold), and the
 // log says how it went when anyone waited. why: "complete" (the pool has its
@@ -285,8 +298,8 @@ func (m *LinkManager) endRefill(now time.Time, why string) {
 		line = fmt.Sprintf("refill: all %d links up after %s — %d connection(s) waited for a link with room (longest %s); at most %d open connections on one link (the hold allowed %d)",
 			S, secs(took), h.held, secs(h.longest), most, h.topCap)
 	case late > 0 && most > h.topCap:
-		line = fmt.Sprintf("refill: hold ended at its %s limit with only %d of %d links up (links are coming slowly: a slow or lossy path, or the other server still starting) — the %d connection(s) still waiting went onto the existing links, none refused: up to %d open connections on one link, above the hold's %d, until more links come (new links take the new connections)",
-			fmtDur(refillHoldMax), S, T, late, most, h.topCap)
+		line = fmt.Sprintf("refill: hold ended at its %s limit with only %d of %d links up (%s) — the %d connection(s) still waiting went onto the existing links, none refused: up to %d open connections on one link, above the hold's %d, until more links come (new links take the new connections)",
+			fmtDur(refillHoldMax), S, T, refillWhySlow(S, T, took), late, most, h.topCap)
 	default:
 		line = fmt.Sprintf("refill: hold ended at its %s limit with %d of %d links up — %d connection(s) waited (longest %s); at most %d open connections on one link (the hold allowed %d)",
 			fmtDur(refillHoldMax), S, T, h.held, secs(h.longest), most, h.topCap)

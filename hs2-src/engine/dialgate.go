@@ -21,6 +21,10 @@ import (
 // burst, and a dead peer costs a handful of attempts rather than hundreds.
 const gateInflight = 8
 
+// gatePerSec is the gate's nominal pace (jitterGap averages 100 ms), for the
+// words the logs use about it.
+const gatePerSec = 10
+
 type dialGate struct {
 	sem  chan struct{}
 	mu   sync.Mutex

@@ -148,8 +148,12 @@ ceiling is above 64.
   handshakes do not stop a ramp; only 3 in a row, or a failure with no link up,
   drop the queued dials until the next tick.
 - **Outages.** While no link is up, the Kharej side (reverse) lets one slot
-  retry every 1–2 s while the others wait; the first link is back within ~2 s
-  of the path returning and the rest follow at the gate's pace.
+  retry (2 s connect, every ≤2 s) while the others wait; the first link is
+  back ~3 s after the path returns (measured 2.8–3.2 s after a 40 s
+  black-hole) and the rest follow at the gate's pace. Kharej log:
+  `mtcp: no link up to the edge — dials fail (…)` when it begins, and
+  `mtcp: a link to the edge is back after Xs with none up (K dial(s) failed
+  meanwhile)` when it ends.
 - **Refill hold.** After a start or a total loss, users reconnect within
   seconds while links come back at ~10 a second, and a connection stays on the
   link it was opened on. So for up to 10 s a new TCP connection waits for a
@@ -159,7 +163,10 @@ ceiling is above 64.
   stays the number of **active** users a link is sized for. When the pool has
   its links, or after 10 s, everyone still waiting goes onto the existing
   links — **no connection is refused** — and the log says so plainly if that
-  is more per link than the cap. Lines: `refill: …`; `hs2 status` /
+  is more per link than the cap. With a pool of hundreds the hold normally
+  ends at its limit (300 links take ~30 s at the gate's pace) and the line
+  says so (`links open at the dial pace … — expected, not a fault`); only a
+  pool well behind that pace is blamed on the path. Lines: `refill: …`; `hs2 status` /
   the live monitor / `hs2 doctor` show a `refill` line during the hold and
   for 5 minutes after. UDP flows are not held.
 - **Stalled readers.** When users' apps stop reading and fill a link's whole

@@ -745,13 +745,19 @@ Both servers should run this build; mixed versions keep working.
   that must dial (the exit's first link after an outage was ~17 s late; now
   0.2–1.3 s, test-measured). One failed handshake no longer drops the queued
   dials — only 3 in a row, or a failure with no link up.
-- Outage: the Kharej side lets one slot retry every 1–2 s; the others wait.
+- Outage: the Kharej side lets one slot retry (2 s connect, every ≤2 s); the
+  others wait. Its log says when the outage begins (`no link up to the edge —
+  dials fail`) and when a link is back (`… back after Xs with none up`); a
+  shorter outage used to show neither (failures are folded every 30 s).
 - Warm start: a restart within 15 min comes back at the previous size (only
   ever raising the start size; written after a minute of uptime).
 - Refill hold: after a start or a total loss a new TCP connection waits up to
   10 s for a link with fewer **open** connections than the fair share, then
   goes onto the existing links — never refused, and said in the log when that
-  is above the cap. Simulated with the real pool: an outage with 2,400
+  is above the cap, with the reason: a pool of hundreds cannot be back within
+  10 s at the gate's pace (`links open at the dial pace … — expected, not a
+  fault`), and only a pool well behind that pace is blamed on the path.
+  Simulated with the real pool: an outage with 2,400
   connections and 300 links put 2,400 on one link before, 24 now; a
   production-shaped restart (6,000 open, 63 links) 781 before, 96 now.
 - Reverse accept cap: live links only, 2×max+8; a refused link is held 5 s
