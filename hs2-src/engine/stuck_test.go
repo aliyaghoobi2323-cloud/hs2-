@@ -613,3 +613,40 @@ func TestCtrlPendingList(t *testing.T) {
 		t.Fatalf("an answer past the list: at %d ok %v, empty %v", at, ok, p.empty())
 	}
 }
+
+// After a path-wide wait the links get stuckRecover to come back on their own
+// (TCP backed off through it); one still waiting after that is judged.
+func TestStuckWaitsOutRecoveryAfterMassWait(t *testing.T) {
+	r := newStuckRig(t, 4)
+	var fs []*meteredFakeLink
+	var mls []*managedLink
+	for i := 0; i < 3; i++ {
+		f, ml := r.add()
+		fs, mls = append(fs, f), append(mls, ml)
+	}
+	r.step(nil, 0)
+	for i := 0; i < 2; i++ { // three of seven busy links wait: path-wide
+		for _, f := range fs {
+			waiting(f, stuckWait+2*time.Second)
+		}
+		r.step(nil, 0)
+	}
+	// the squeeze ends: two come back, one still waits (from before)
+	for _, f := range fs[:2] {
+		f.m.ctrlWait.Store(0)
+		r.good = append(r.good, f)
+	}
+	for i := 0; i < 3; i++ {
+		waiting(fs[2], stuckWait+20*time.Second)
+		r.step(nil, 0)
+	}
+	if mls[2].degraded {
+		t.Fatalf("drained %s after a path-wide wait, before it could recover:\n%s", 3*healthTick, r.lg)
+	}
+	r.clk.Advance(stuckRecover)
+	waiting(fs[2], stuckWait+50*time.Second)
+	r.step(nil, 0)
+	if !mls[2].degraded || mls[0].degraded || mls[1].degraded {
+		t.Fatalf("after the recovery window: still-stuck drained=%v, recovered drained=%v/%v\n%s", mls[2].degraded, mls[0].degraded, mls[1].degraded, r.lg)
+	}
+}

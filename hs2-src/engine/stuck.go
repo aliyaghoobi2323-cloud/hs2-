@@ -26,7 +26,8 @@ import (
 // quickly through any squeeze, having nothing queued). When every busy link
 // waits, or more than a third of them wait at once (streak or not), it is the path or the other
 // server, down or slow for all: moving users between links would not help,
-// so none is drained (said once a minute). At most drainHeadroom are drained
+// so none is drained (said once a minute), nor for stuckRecover after: links
+// that waited through it recover on their own. At most drainHeadroom are drained
 // per tick, the longest waits first. And a link whose own reader was parked on
 // a full receive buffer lately (sessGuard.parkedAt) waits on its own users, not
 // its path: the wedge guard ends those users, and the link keeps the rest (in
@@ -43,6 +44,9 @@ const (
 	// squeeze (the load test's 8 Mbit/s for everyone) every link answers in
 	// seconds, and one that has just been answered is no proof.
 	stuckPrompt = stuckWait / 3
+	// stuckRecover: after a path-wide wait (the mass rule), no link is judged
+	// for this long — TCP backed off through it and resumes a little after.
+	stuckRecover = 30 * time.Second
 )
 
 // stuckObs is a link found stuck in this sample, for the log line.

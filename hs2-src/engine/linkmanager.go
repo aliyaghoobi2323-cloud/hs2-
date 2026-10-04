@@ -160,6 +160,7 @@ type LinkManager struct {
 	reclaimed      atomic.Int64 // idle connections closed on retiring links, not yet logged
 	stalledLogAt   time.Time
 	stuckMassLogAt time.Time
+	stuckMassAt    time.Time    // the last tick the busy links waited en masse (stuck.go)
 	stalled        atomic.Int64 // stalled connections closed on degraded links, not yet logged
 	ctlDrain       int          // reverse: draining links whose slot the exit is asked to replace
 	forced         atomic.Int64 // ... of which trickling ones on links retiring retireForce+
@@ -1833,12 +1834,21 @@ func (m *LinkManager) sampleHealth() {
 	// links would not help, so none is drained (logged once a minute). At
 	// most drainHeadroom are drained per tick, the longest waits first.
 	mass := waitingN > 2 && 3*waitingN > busyN
+	if mass {
+		m.stuckMassAt = now
+	}
+	// After a path-wide wait, links get stuckRecover to come back on their
+	// own (TCP backs off through a long squeeze and resumes a little after
+	// it): judged earlier, those still waiting look stuck while they are only
+	// recovering — in the load test, 27 links drained just after a squeeze,
+	// 400 more users cut, none helped.
+	recovering := !m.stuckMassAt.IsZero() && now.Sub(m.stuckMassAt) < stuckRecover
 	if mass && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
 		logs = append(logs, fmt.Sprintf("%d of %d busy links have waited %s+ for an answer at once — the path or the other server is slow, not those links: none is drained",
 			waitingN, busyN, fmtDur(stuckWait)))
 	}
-	if len(answering) > 0 && !mass {
+	if len(answering) > 0 && !mass && !recovering {
 		sort.Slice(answering, func(i, j int) bool { return answering[i] < answering[j] })
 		med := answering[len(answering)/2]
 		sort.Slice(stuckCand, func(i, j int) bool { return stuckCand[i].wait > stuckCand[j].wait })
