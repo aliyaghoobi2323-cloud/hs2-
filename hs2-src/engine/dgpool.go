@@ -171,6 +171,9 @@ type dgFlow struct {
 	bytes uint64
 	prev  uint64
 	ewma  float64
+	// steady: the last 3 samples, a bit set for each that moved at least
+	// flowSteadyRate (the same rule as an mtcp stream's)
+	steady uint8
 }
 
 func newDgLink(car Carrier, now time.Time) *dgLink {
@@ -930,6 +933,14 @@ func (p *dgPool) foldDownPressure(links []apLink, dnRate []float64, now time.Tim
 
 // flowStats counts a carrier's flows and how many are actively moving data,
 // ageing out idle ones. Pool goroutine only.
+//
+// "Flowing" is the same rule as an mtcp stream's (mtcpLink.flowStats): a rate
+// EWMA of at least flowingRate, or data moved in each of the last 3 samples
+// (flowSteadyRate). Without the steady half, an interactive user — a chat or a
+// game at ~1 KB/s, below flowingRate but never pausing — was not counted, so
+// dgtun sized its pool for the heavy flows only: in the load test 2,400 such
+// users counted as 73–887 and the pool stayed at 8 carriers for 100 s, where
+// mtcp counted all 2,416 for the same load.
 func (l *dgLink) flowStats(now time.Time, dt time.Duration) (flowing, open int) {
 	alpha := flowAlpha(dt)
 	l.flowMu.Lock()
@@ -940,14 +951,17 @@ func (l *dgLink) flowStats(now time.Time, dt time.Duration) (flowing, open int) 
 			continue
 		}
 		open++
+		steady := false
 		if f.bytes != f.prev && dt > 0 {
 			rate := float64(f.bytes-f.prev) / dt.Seconds()
 			f.ewma += alpha * (rate - f.ewma)
+			steady = rate >= flowSteadyRate
 			f.prev = f.bytes
 		} else if dt > 0 {
 			f.ewma -= alpha * f.ewma
 		}
-		if f.ewma >= flowingRate {
+		f.steady = (f.steady<<1 | b2u(steady)) & 7
+		if f.ewma >= flowingRate || f.steady == 7 {
 			flowing++
 		}
 	}

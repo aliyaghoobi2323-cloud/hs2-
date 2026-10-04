@@ -182,3 +182,45 @@ func statsFrame(pressed, serving uint16) []byte {
 	binary.BigEndian.PutUint16(b[2:], serving)
 	return b[:]
 }
+
+// A dgtun flow is "flowing" by the same rule as an mtcp stream: an
+// interactive user at ~1 KB/s (below flowingRate, but never pausing) counts
+// after three samples; a one-off handshake burst and a keepalive do not keep
+// counting. Before, dgtun counted only flows averaging 2 KB/s, so 2,400 such
+// users sized its pool for none of them (load test D1: 8 carriers for 100 s).
+func TestDgFlowSteadyCountsInteractiveUsers(t *testing.T) {
+	p, ls, clk := edgeWithLinks(t, 1)
+	l := ls[0]
+	const users = 50
+	tick := func(send func(i int) int) int {
+		*clk = clk.Add(healthTick)
+		now := *clk
+		for i := 0; i < users; i++ {
+			if n := send(i); n > 0 {
+				l.noteFlowSend(uint32(i+1), n, now)
+			}
+		}
+		s := p.sampleHealth()
+		return s.links[0].flowing
+	}
+	interactive := func(int) int { return 1024 * int(healthTick/time.Second) } // ~1 KB/s, below flowingRate
+	got := []int{}
+	for k := 0; k < 4; k++ {
+		got = append(got, tick(interactive))
+	}
+	if got[3] != users {
+		t.Fatalf("interactive users counted flowing per tick: %v, want all %d by the third sample", got, users)
+	}
+	// A handshake burst once, then silence: never steady.
+	p2, ls2, clk2 := edgeWithLinks(t, 1)
+	*clk2 = clk2.Add(healthTick)
+	for i := 0; i < users; i++ {
+		ls2[0].noteFlowSend(uint32(i+1), 600, *clk2)
+	}
+	for k := 0; k < 3; k++ {
+		if f := p2.sampleHealth().links[0].flowing; f != 0 {
+			t.Fatalf("a one-off 600-byte burst counted %d flowing on sample %d", f, k)
+		}
+		*clk2 = clk2.Add(healthTick)
+	}
+}
