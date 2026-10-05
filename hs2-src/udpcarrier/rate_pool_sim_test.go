@@ -48,6 +48,13 @@ func (r poolResult) String() string {
 	return fmt.Sprintf("util=%.0f%% queue mean=%.1fms p95=%.1fms drops=%d jain=%.2f |%s", r.util*100, r.qMean, r.qP95, r.drops, r.jain, s)
 }
 
+// poolTrace, when set, sees each carrier's controller after every report.
+var poolTrace func(i int, nowMs float64, rc *rateControl)
+
+// poolProbePhase shifts the pool's shared probe clock against the run's
+// start (tests that sweep it run serially).
+var poolProbePhase time.Duration
+
 // poolWin, when set, is a window (ms) over which runPoolSim also measures
 // each carrier's delivery (poolResult.win).
 type poolWin [2]float64
@@ -102,6 +109,7 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 	for i, s := range senders {
 		ss[i] = &st{rc: newRateControl(), nextFb: float64(s.start/time.Millisecond) + 50 + s.fbPhase}
 		ss[i].rc.fair = rules
+		ss[i].rc.epoch = base.Add(poolProbePhase)
 	}
 	busyUntil := 0.0
 	var toPeer []pkt_
@@ -215,6 +223,9 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 				c.toUs = c.toUs[1:]
 				c.rc.setShare(shareB, meanB)
 				c.rc.onFeedback(at(now), r.rx, 2*ow/1000, 0, 0, r.owd, r.haveOWD)
+				if poolTrace != nil {
+					poolTrace(i, now, c.rc)
+				}
 			}
 		}
 	}
@@ -411,18 +422,32 @@ func TestPoolSimSlowPathBigShare(t *testing.T) {
 
 // A light carrier (a call, the other direction's ACKs) next to busy ones
 // keeps startup, so when its own bulk comes on an emptied path it ramps as
-// fast as before the pool rules.
+// fast as before the pool rules — over eight phases of the shared probe
+// clock; one slow phase per case is allowed: a light carrier that happens to
+// use its whole allowance when the others' startup queue appears leaves
+// startup by the old rule, and then ramps at the ordinary probe's pace, with
+// the rules off as well.
 func TestPoolSimLightCarrierLaterRamp(t *testing.T) {
 	sec, ms := time.Second, time.Millisecond
+	defer func() { poolProbePhase = 0 }()
 	for _, ow := range []time.Duration{15 * ms, 60 * ms} {
 		for _, app := range []float64{1.2e6, 2e6, 4e6} {
 			s := []poolSender{{fbPhase: 0, stopAt: 20 * sec}, {start: sec, fbPhase: 37, stopAt: 20 * sec}, {start: sec, appBps: app, fbPhase: 71, bulkFrom: 22 * sec}}
 			w := poolWin{22000, 27000}
 			off := runPoolSimWin(false, 30e6, ow, 200*ms, s, 35*sec, 10*sec, w)
-			on := runPoolSimWin(true, 30e6, ow, 200*ms, s, 35*sec, 10*sec, w)
-			t.Logf("one way %v, light %.1f Mbit/s: its bulk got %.1f Mbit/s in its first 5 s (rules off %.1f)", ow, app/1e6, on.win[2], off.win[2])
-			if on.win[2] < 0.9*off.win[2] {
-				t.Errorf("one way %v, light %.1f Mbit/s: ramp %.1f against %.1f with the rules off", ow, app/1e6, on.win[2], off.win[2])
+			slow := 0
+			got := ""
+			for ph := 0; ph < 4000; ph += 500 {
+				poolProbePhase = time.Duration(ph) * ms
+				on := runPoolSimWin(true, 30e6, ow, 200*ms, s, 35*sec, 10*sec, w)
+				got += fmt.Sprintf(" %.1f", on.win[2])
+				if on.win[2] < 0.9*off.win[2] {
+					slow++
+				}
+			}
+			t.Logf("one way %v, light %.1f Mbit/s: its bulk's first 5 s, Mbit/s by probe phase:%s (rules off %.1f)", ow, app/1e6, got, off.win[2])
+			if slow > 1 {
+				t.Errorf("one way %v, light %.1f Mbit/s: %d of 8 phases ramp slower than with the rules off (%.1f):%s", ow, app/1e6, slow, off.win[2], got)
 			}
 		}
 	}
@@ -462,17 +487,17 @@ func TestPoolSimConvergence(t *testing.T) {
 }
 
 // A carrier that ran fast (no bottleneck) and then meets a narrow one while
-// its users' TCP fills it: its capacity follows what gets through, not a
-// share of the old peak — before, it kept 0.4x of 900 Mbit/s as its
+// its users' TCP fills it — measured from 2 s after the change: its
+// capacity follows what gets through, not a share of the old peak — before, it kept 0.4x of 900 Mbit/s as its
 // capacity and paced nothing (seen with mixed versions behind a 30 Mbit/s
 // tbf: ping 122/475 ms, 5% lost).
 func TestRateSimBottleneckAppearsAfterFastPeriod(t *testing.T) {
 	for _, ow := range []time.Duration{5 * time.Millisecond, 40 * time.Millisecond} {
 		p := simPath{capBps: 900e6, capAfter: 30e6, changeAt: 15 * time.Second, appRateBps: 500e6, appAfterBps: 1.05 * 30e6, oneWay: ow, buffer: 120 * time.Millisecond}
 		p.rulesOff = true
-		off := runRateSim(p, 45*time.Second, 25*time.Second, 7)
+		off := runRateSim(p, 45*time.Second, 17*time.Second, 7)
 		p.rulesOff = false
-		on := runRateSim(p, 45*time.Second, 25*time.Second, 7)
+		on := runRateSim(p, 45*time.Second, 17*time.Second, 7)
 		t.Logf("one way %v\n  rule off: %s\n  rule on:  %s", ow, off, on)
 		if on.qMean > 20 || on.tailDrops > 0 {
 			t.Errorf("one way %v: %s", ow, on)
@@ -481,8 +506,8 @@ func TestRateSimBottleneckAppearsAfterFastPeriod(t *testing.T) {
 }
 
 // The shared probe clock keeps the monotonic reading, so a wall-clock step
-// cannot hold the probes back; the next probe is always ahead, at most one
-// period away.
+// cannot hold the probes back; the next probe is always 3/4 to 7/4 of a
+// period ahead, on the shared ticks.
 func TestNextProbeMonotonic(t *testing.T) {
 	r := newRateControl()
 	r.fair = true
@@ -492,14 +517,34 @@ func TestNextProbeMonotonic(t *testing.T) {
 		t.Errorf("next probe %v carries no monotonic reading", n)
 	}
 	for _, at := range []time.Time{now, now.Add(3 * time.Second), now.Add(-17 * time.Hour), time.Unix(1_700_000_000, 0), time.Unix(1_700_000_000, 0).Add(baseProbeEvery)} {
-		d := r.nextProbe(at).Sub(at)
-		if d <= 0 || d > baseProbeEvery {
-			t.Errorf("at %v: next probe in %v", at, d)
+		n := r.nextProbe(at)
+		d := n.Sub(at)
+		if d < baseProbeEvery*3/4 || d > baseProbeEvery*7/4 || n.Sub(r.epoch)%baseProbeEvery != 0 {
+			t.Errorf("at %v: next probe in %v (%v past a tick)", at, d, n.Sub(r.epoch)%baseProbeEvery)
 		}
 	}
 	a, b := newRateControl(), newRateControl()
 	a.fair, b.fair = true, true
-	if !a.nextProbe(now).Equal(b.nextProbe(now.Add(time.Second))) && !a.nextProbe(now).Add(baseProbeEvery).Equal(b.nextProbe(now.Add(time.Second))) {
+	if a.nextProbe(now).Sub(b.nextProbe(now.Add(time.Second)))%baseProbeEvery != 0 {
 		t.Error("two carriers do not share the probe clock")
+	}
+}
+
+// A carrier on its own slower path (a pool over several IPs) whose users
+// offer more than that path carries, but less than its startup allowance:
+// it is light next to the pool, yet the queue is its own — it must leave
+// startup on it (a light carrier keeps startup only on a queue the size the
+// others' pacing holds), not sit unpaced on a full buffer.
+func TestPoolSimLightCarrierOwnPathLeavesStartup(t *testing.T) {
+	sec, ms := time.Second, time.Millisecond
+	for _, own := range []float64{3e6, 8e6} {
+		for _, over := range []float64{1.1, 1.5} {
+			s := []poolSender{{fbPhase: 0}, {start: sec, fbPhase: 37}, {start: 2 * sec, fbPhase: 71, ownBps: own, appBps: over * own}}
+			r := runPoolSimRules(true, 100e6, 15*ms, 200*ms, s, 60*sec, 30*sec)
+			t.Logf("own %.0f Mbit/s, offered %.1fx: in startup %v, its queue p95 %.0f ms, %d drops", own/1e6, over, r.startup[2], r.ownQ95[0], r.drops)
+			if r.startup[2] || r.ownQ95[0] > 60 || r.drops > 0 {
+				t.Errorf("own %.0f Mbit/s, offered %.1fx: in startup %v, its queue p95 %.0f ms, %d drops", own/1e6, over, r.startup[2], r.ownQ95[0], r.drops)
+			}
+		}
 	}
 }

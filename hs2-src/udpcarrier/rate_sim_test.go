@@ -41,6 +41,8 @@ type simPath struct {
 	noStamps bool
 	// rulesOff runs the controller without the pool rules (HS2_FAIR_SHARE=0).
 	rulesOff bool
+	// probePhase shifts the shared probe clock against the run's start.
+	probePhase time.Duration
 	// noDelaySignal models a path with NO usable delay signal at all: no OWD, and
 	// the reported RTT is pinned to the bare propagation RTT however much we
 	// overdrive, so a standing queue is invisible. Startup can then end only via
@@ -77,6 +79,7 @@ func runRateSim(p simPath, dur, warm time.Duration, seed uint64) simResult {
 	rc := newRateControl()
 	rc.fair = !p.rulesOff
 	base := time.Unix(1_700_000_000, 0)
+	rc.epoch = base.Add(p.probePhase)
 	at := func(ms float64) time.Time { return base.Add(time.Duration(ms * float64(time.Millisecond))) }
 	const pkt = 1200.0
 	const step = 0.25        // ms

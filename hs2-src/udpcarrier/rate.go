@@ -58,11 +58,14 @@ import (
 //     traffic" is over ~1 Mbit/s and at least half what the pool's active
 //     carriers carry on average (Governor.Mean): a light carrier (a call,
 //     the other direction's ACKs) keeps startup's fast ramp for when its
-//     own bulk comes. For the same reason, once out of startup a carrier
-//     that is not using its allowance while a queue stands follows its
-//     delivery down, with no floor from an old peak (a carrier that had run
-//     at 900 Mbit/s kept 0.4x that as its capacity when a 30 Mbit/s
-//     bottleneck appeared: unpaced again).
+//     own bulk comes — unless the queue is far deeper than the others'
+//     pacing holds it, for a second: then it is its own, on a path of its
+//     own (a pool over several IPs). For the same reason, once out of
+//     startup a carrier that is not using its allowance while a queue
+//     stands follows its delivery down, with no floor from an old peak, and
+//     while a queue stands a peak older than bwStaleAge leaves the window
+//     (a carrier that had run at 900 Mbit/s kept 0.4x that as its capacity
+//     when a 30 Mbit/s bottleneck appeared: unpaced again).
 //   - while a queue stands and the carrier uses its allowance, it grows
 //     toward the pool's fair share (Governor.Share): the same small step
 //     for every carrier, and a pull toward the share for one below it,
@@ -79,6 +82,8 @@ import (
 //   - base probes fall on a clock all carriers share, so the pool slows
 //     together and the queue really empties; one carrier probing alone
 //     while the others kept the queue full saw a base with the queue in it.
+//     The clock runs on the monotonic time, and probes stay at least 3/4 of
+//     a period apart.
 type rateControl struct {
 	mu sync.Mutex
 
@@ -116,6 +121,7 @@ type rateControl struct {
 	plateauAt   time.Time // next startup delivery-growth check (once per RTT)
 	startRounds int       // reports seen in startup (hard exit backstop)
 	startQRuns  int       // consecutive startup reports with a standing queue
+	deepQRuns   int       // ... with a queue past overflowQueue
 	lastDRate   float64
 	capEst      float64   // bytes/sec: what the path gives us, learned while a queue stands
 	emptyRuns   int       // consecutive reports with no queue while rate-limited
@@ -133,11 +139,16 @@ type rateControl struct {
 
 	// fair: the pool rules are on (fairShareOn when made; fixed after).
 	fair bool
+	// epoch anchors the shared probe clock (probeEpoch; a simulation sets
+	// its own).
+	epoch time.Time
 
 	// share: the pool's fair share per carrier, bytes/s (math.Float64bits;
 	// 0: none — fewer than two carriers using their allowance). Set by the
 	// carrier from its Governor before each report.
 	share atomic.Uint64
+	// lastSendRate: bytes/s the pacer sent over the last report's interval.
+	lastSendRate float64
 	// poolMean: the mean rate of the pool's active carriers, bytes/s
 	// (Governor.Mean): below half of it a carrier is a light one.
 	poolMean atomic.Uint64
@@ -153,6 +164,7 @@ type bwSample struct {
 	rate    float64
 	round   int
 	limited bool // taken while the sender used its allowance (a real capacity sample)
+	at      time.Time
 }
 
 const (
@@ -201,11 +213,13 @@ const (
 	rttSaneMax     = 30 * time.Second // an RTT sample above this is a clock glitch
 
 	// Sharing the bottleneck with the pool's other carriers (see rateControl).
-	startupQueueRuns = 3       // startup reports with a standing queue that end it
-	startupQueueMin  = 128_000 // bytes/s (~1 Mbit/s): a carrier carrying less is not filling anything
-	fairStep         = 0.005   // per report: this share of the fair share is added
-	fairPull         = 0.10    // per report: this share of the gap below the fair share
-	fairOwnMax       = 0.03    // per report: never more than this share of its own capacity
+	startupQueueRuns = 3                       // startup reports with a standing queue that end it
+	startupQueueMin  = 128_000                 // bytes/s (~1 Mbit/s): a carrier carrying less is not filling anything
+	startupDeepRuns  = 10                      // reports past overflowQueue that end a light carrier's startup
+	fairStep         = 0.005                   // per report: this share of the fair share is added
+	fairPull         = 0.10                    // per report: this share of the gap below the fair share
+	fairOwnMax       = 0.03                    // per report: never more than this share of its own capacity
+	bwStaleAge       = 1500 * time.Millisecond // while a queue stands, older peaks go (see onFeedback)
 	// No fair-share growth while the queue stands above this: a carrier whose
 	// own path is slower than the share (a pool over several IPs) stops there
 	// instead of being pushed into its buffer.
@@ -223,11 +237,11 @@ func (r *rateControl) setShare(share, mean float64) {
 	r.poolMean.Store(math.Float64bits(mean))
 }
 
-// light: this carrier carries under half what the pool's active carriers
-// carry on average — a call, the other direction's ACKs — so a queue that
-// stands is the others' doing, not its own.
-func (r *rateControl) light(dRate float64) bool {
-	return dRate < math.Float64frombits(r.poolMean.Load())/2
+// light: this carrier sends under half what the pool's active carriers send
+// on average (both wire rates) — a call, the other direction's ACKs — so a
+// queue that stands is likely the others' doing, not its own.
+func (r *rateControl) light() bool {
+	return r.lastSendRate < math.Float64frombits(r.poolMean.Load())/2
 }
 
 // probeEpoch anchors the shared probe clock. It carries the monotonic
@@ -237,16 +251,20 @@ var probeEpoch = time.Now()
 
 // nextProbe is when the base probe after now starts: on a clock every
 // carrier shares (multiples of baseProbeEvery from probeEpoch), so a pool
-// probes together.
+// probes together — the first tick at least 3/4 of a period away, so a
+// probe that started late (the carrier was not using its allowance at the
+// tick) is not followed by another a moment later (back-to-back probes cost
+// a lossy long path up to a quarter of its throughput).
 func (r *rateControl) nextProbe(now time.Time) time.Time {
 	if !r.fair {
 		return now.Add(baseProbeEvery)
 	}
-	k := now.Sub(probeEpoch) / baseProbeEvery
-	if now.Before(probeEpoch) {
-		k-- // division truncates toward zero
+	d := now.Add(baseProbeEvery * 3 / 4).Sub(r.epoch)
+	k := d / baseProbeEvery
+	if d < 0 && d%baseProbeEvery != 0 {
+		k-- // division truncates toward zero: floor it
 	}
-	return probeEpoch.Add((k + 1) * baseProbeEvery)
+	return r.epoch.Add((k + 1) * baseProbeEvery)
 }
 
 // fairGrow moves capEst toward the pool's fair share while a queue stands
@@ -300,6 +318,7 @@ func newRateControl() *rateControl {
 		rate:    125_000, // ~1 Mbit/s to get going
 		startup: true,
 		fair:    fairShareOn,
+		epoch:   probeEpoch,
 		rttMin:  minFilter{window: owdWindow / 2},
 		owdMin:  minFilter{window: owdWindow / 2}, // > baseProbeEvery: always holds a probe
 		minRate: 32_000,
@@ -379,21 +398,43 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 	// and the next burst would have to climb back from there (BBR's rule).
 	limited := sendRate >= limitedShare*r.rate
 	r.pushing.Store(limited)
+	r.lastSendRate = sendRate
 	if limited || dRate > r.btlBw {
 		r.round++
-		r.bwWindow = append(r.bwWindow, bwSample{rate: dRate, round: r.round, limited: limited})
+		r.bwWindow = append(r.bwWindow, bwSample{rate: dRate, round: r.round, limited: limited, at: now})
 		i := 0
 		for i < len(r.bwWindow) && r.bwWindow[i].round <= r.round-bwWindowRounds {
 			i++
 		}
 		r.bwWindow = r.bwWindow[i:]
-		r.btlBw = 0
-		for _, s := range r.bwWindow {
-			r.btlBw = math.Max(r.btlBw, s.rate)
+		r.recomputeBtlBw()
+	}
+	// While a queue stands, what got through lately is what the path gives:
+	// a peak older than bwStaleAge (from before a bottleneck appeared) goes,
+	// however few rounds have passed — the window only advances on rounds
+	// that use the allowance, so a 900 Mbit/s peak lingered for seconds
+	// behind a new 30 Mbit/s bottleneck and floored the capacity at 0.4x it.
+	if r.fair && haveQ && q >= lowQueue.Seconds() && len(r.bwWindow) > 0 && now.Sub(r.bwWindow[0].at) > bwStaleAge {
+		i := 0
+		for i < len(r.bwWindow) && now.Sub(r.bwWindow[i].at) > bwStaleAge {
+			i++
 		}
+		r.bwWindow = r.bwWindow[i:]
+		if len(r.bwWindow) == 0 {
+			r.round++
+			r.bwWindow = append(r.bwWindow, bwSample{rate: dRate, round: r.round, limited: limited, at: now})
+		}
+		r.recomputeBtlBw()
 	}
 
 	r.adjustLocked(now, dt, dRate, limited, q, haveQ)
+}
+
+func (r *rateControl) recomputeBtlBw() {
+	r.btlBw = 0
+	for _, s := range r.bwWindow {
+		r.btlBw = math.Max(r.btlBw, s.rate)
+	}
 }
 
 func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited bool, q float64, haveQ bool) {
@@ -456,9 +497,19 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		} else if haveQ {
 			r.startQRuns = 0
 		}
+		if haveQ && q > overflowQueue.Seconds() {
+			r.deepQRuns++
+		} else if haveQ {
+			r.deepQRuns = 0
+		}
 		// The path is full and we are part of what fills it, allowance used
 		// or not (see rateControl).
-		queueFull := r.fair && r.startQRuns >= startupQueueRuns && dRate >= startupQueueMin && !r.light(dRate)
+		// A light carrier keeps startup on the pool's queue (held near
+		// targetQueue by the others' pacing; the others' own startup only
+		// spikes it), but not on one far deeper for a second: that is its
+		// own, unpaced, on a path of its own (a pool over several IPs).
+		queueFull := r.fair && r.startQRuns >= startupQueueRuns && dRate >= startupQueueMin &&
+			(!r.light() || r.deepQRuns >= startupDeepRuns)
 		if !now.Before(r.plateauAt) {
 			if r.btlBw > r.lastDRate*1.25 {
 				r.plateauRuns = 0
