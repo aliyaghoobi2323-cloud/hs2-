@@ -1281,31 +1281,65 @@ each read the queue they all built as its own.
   waited and were dropped there. In the simulator a source offering 1.02-2x
   the path kept it so for good: queue at the buffer limit (120 ms), thousands
   of drops. Now startup also ends once a queue has stood for 3 reports
-  (~300 ms) while the carrier carries more than ~1 Mbit/s, and the capacity
-  it starts from is what got through, not the allowance: 9.5 ms, no drops.
+  (~300 ms) while the carrier carries more than ~1 Mbit/s and at least half
+  what the pool's active carriers carry on average (a light carrier — a
+  call, the other direction's ACKs — keeps startup's fast ramp for its own
+  bulk later), and the capacity it starts from is what got through, not the
+  allowance: 9.5 ms, no drops.
+- **A stale peak.** Out of startup, a carrier's capacity was floored at 0.4x
+  its windowed peak delivery — a window that only advances while it uses its
+  allowance. A carrier that had run at 900 Mbit/s and then met a 30 Mbit/s
+  bottleneck kept ~360 Mbit/s and paced nothing (seen with mixed versions:
+  ping 122/475 ms, 5% lost). The floor now holds only while the carrier uses
+  its allowance (it guards against a queue someone else built); otherwise
+  its capacity follows what it delivers: 120 ms and thousands of drops → 10
+  ms, none (simulator).
 - **Late carriers starved.** After startup a carrier's capacity tracked its
   own delivery, so whoever held the queue first kept it: the others read it
   as theirs and sat at ~0.3 Mbit/s, with the flows on them. Now the pool's
   governor computes the fair share (the mean rate of the carriers using
-  their allowance) and each such carrier adds 0.5% of it per report while
-  the queue is under 20 ms; with the queue term's proportional cut that
-  settles every busy carrier on the same rate. A faster catch-up ramp was
-  tried and dropped: a carrier on its own slower path (a pool over several
-  IPs) cannot tell its queue from the pool's, and the ramp drove it into its
-  buffer.
+  their allowance), and while a queue stands under 20 ms each such carrier
+  grows toward it: 0.5% of the share, or 10% of its gap below it, per
+  report — never more than 3% of its own capacity (less on a long path).
+  With the queue term's proportional cut that settles every busy carrier on
+  the same rate. Not while no queue stands: a carrier on its own slower path
+  (a pool over several IPs) cannot tell its queue from the pool's, and
+  growth there drove it into its buffer (100-200 ms in an earlier version
+  of this rule; now 28-73 ms p95 against 12-62 ms without the rules, no
+  drops).
 - **Base probes together.** The carriers' base-delay probes now fall on one
-  shared 4 s clock, so the whole pool slows at once and the queue really
-  empties; one carrier probing alone while the others kept the queue full
-  measured a base with the queue in it.
+  shared 4 s clock (anchored on the monotonic clock, so a wall-clock step
+  cannot hold them back), so the whole pool slows at once and the queue
+  really empties; one carrier probing alone while the others kept the queue
+  full measured a base with the queue in it.
 - `HS2_FAIR_SHARE=0` turns the three off.
 - **Measured.** Pool simulator (new tests, `udpcarrier/rate_pool_sim_test.go`):
-  Jain's fairness index 0.49-0.70 → 0.93-0.98, queue p95 27-41 → 17-22 ms,
-  utilization 99% both; a carrier on its own 2 Mbit/s path keeps a ~31 ms
-  p95 queue with no drops. Lab (30 Mbit/s each way, 8 downloads, 4 icmp
-  carriers): ping under load p50 16-19 ms and p99 18-37 ms in 6 runs of 6,
-  no ping lost (release: p50 11-61 ms, p99 up to 135 ms, a run losing pings).
+  Jain's fairness index 0.3-0.7 → 0.95-1.00 (0.97 already 10-25 s after
+  start on an 8 Mbit/s path), queue p95 27-55 → 16-26 ms, utilization 99%
+  both. Lab (icmp, 4 carriers, 8 downloads behind a 30 Mbit/s tbf each
+  way): ping under load p50 17-19 ms, p99 21-34 ms, no ping lost in any run
+  (release: p50 11-114 ms, p99 47-410 ms, runs losing 13-24% of pings);
+  behind 8 Mbit/s with 4 downloads p50 18-28 ms, p99 27-48 ms, none lost.
 - The pacer's token bucket is now capped after a timer wait as well: a timer
   that fired late on a busy server let one batch exceed its budget.
+
+### Verification by agents (three rounds, each agent under 20 minutes)
+- **Round 1** (7 agents on W1/W2): bandwidth, mixed versions, every encap
+  and stress passed; the code review found the three bugs below; the
+  latency agent's regression traced to the rate control (W3), present in
+  the release too.
+- **Round 2** (8 agents, W1-W3): high bandwidth (NEW 486-748 vs release
+  334-459 Mbit/s, CPU per GB 33-38% lower, 81 copies intact), every encap
+  and switch (26 runs intact), stress (5% loss: 297 vs 181 Mbit/s), many
+  connections (p99 21-38 vs 38-70 ms), 30 Mbit/s latency (p99 20-30 vs
+  47-410 ms, no ping lost) passed. Found and fixed since: slow convergence
+  on an 8 Mbit/s path, the stale peak after a fast period, the probe clock
+  on the wall clock, a slow separate path pushed into its buffer, a light
+  carrier ramping slowly later (W3 above).
+- Pre-existing, unchanged (release the same): under a steady policer with
+  no loss episodes the pool sends ~2.5x what passes and parity rises to its
+  ceiling; many tiny flows behind a shared bottleneck all count as sparse,
+  so the fair queue cannot single out a UDP echo among them.
 
 ### Review fixes (agent round 1)
 - A udp listener on an IPv6 address read in batches dropped every datagram

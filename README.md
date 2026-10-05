@@ -421,16 +421,16 @@ off (one FIFO per carrier, as before).
 two servers, so they meet at the same bottleneck and each one's delay signal
 is the queue they all build. Three rules keep them from fighting over it: a
 carrier leaves its fast start once a queue has stood for ~300 ms while it
-carries traffic (before, a carrier whose users' TCP filled the path first
-could stay unpaced, and the queue then sat in the bottleneck instead of in
-the fair queue above); every busy carrier grows by the same small step of the
-pool's fair share, so a carrier that came late is not left with a sliver;
-and the carriers' base-delay probes fall on one shared clock, so the queue
-really empties when they measure. Behind a 30 Mbit/s bottleneck with 8
-downloads over 4 carriers, ping through the tun under load was 16-19 ms
-(p50) and at most 37 ms (p99) in every run, where it had ranged from 11 to
-70 ms with some runs losing pings. `HS2_FAIR_SHARE=0` turns the three rules
-off.
+carries a real part of the traffic (before, a carrier whose users' TCP
+filled the path first could stay unpaced, and the queue then sat in the
+bottleneck instead of in the fair queue above); while a queue stands every
+busy carrier grows toward the pool's fair share, so a carrier that came late
+is not left with a sliver; and the carriers' base-delay probes fall on one
+shared clock, so the queue really empties when they measure. Behind a 30
+Mbit/s bottleneck with 8 downloads over 4 carriers, ping through the tun
+under load was 17-19 ms (p50) and at most 34 ms (p99) in every run, where it
+had ranged from 11 to 114 ms with some runs losing up to a quarter of the
+pings. `HS2_FAIR_SHARE=0` turns the three rules off.
 
 **Less CPU per gigabyte.** On a small server the datagram tun's limit is
 usually the CPU, and most of it went on system calls: one per datagram on the
