@@ -1284,16 +1284,22 @@ each read the queue they all built as its own.
   (~300 ms) while the carrier carries more than ~1 Mbit/s and at least half
   what the pool's active carriers carry on average (a light carrier — a
   call, the other direction's ACKs — keeps startup's fast ramp for its own
-  bulk later), and the capacity it starts from is what got through, not the
-  allowance: 9.5 ms, no drops.
+  bulk later, unless its queue stays past 30 ms for a second: far deeper
+  than the others' pacing holds, so its own, on a path of its own), and the
+  capacity it starts from is what got through, not the allowance: 9.5 ms,
+  no drops.
 - **A stale peak.** Out of startup, a carrier's capacity was floored at 0.4x
   its windowed peak delivery — a window that only advances while it uses its
   allowance. A carrier that had run at 900 Mbit/s and then met a 30 Mbit/s
   bottleneck kept ~360 Mbit/s and paced nothing (seen with mixed versions:
   ping 122/475 ms, 5% lost). The floor now holds only while the carrier uses
   its allowance (it guards against a queue someone else built); otherwise
-  its capacity follows what it delivers: 120 ms and thousands of drops → 10
-  ms, none (simulator).
+  its capacity follows what it delivers; and while a queue stands a peak
+  older than 1.5 s leaves the window, so the floor cannot come back from it
+  either: 120 ms and thousands of drops → 9.5 ms, none (simulator, measured
+  from 2 s after the bottleneck appears); lab, 30 Mbit/s tbf added after a
+  ~510 Mbit/s download: ping p99 28-59 ms, none lost (release: up to 1960
+  ms and 19% lost).
 - **Late carriers starved.** After startup a carrier's capacity tracked its
   own delivery, so whoever held the queue first kept it: the others read it
   as theirs and sat at ~0.3 Mbit/s, with the flows on them. Now the pool's
@@ -1309,9 +1315,10 @@ each read the queue they all built as its own.
   drops).
 - **Base probes together.** The carriers' base-delay probes now fall on one
   shared 4 s clock (anchored on the monotonic clock, so a wall-clock step
-  cannot hold them back), so the whole pool slows at once and the queue
-  really empties; one carrier probing alone while the others kept the queue
-  full measured a base with the queue in it.
+  cannot hold them back; at least 3/4 of a period apart, so a probe that
+  started late is not followed by another), so the whole pool slows at once
+  and the queue really empties; one carrier probing alone while the others
+  kept the queue full measured a base with the queue in it.
 - `HS2_FAIR_SHARE=0` turns the three off.
 - **Measured.** Pool simulator (new tests, `udpcarrier/rate_pool_sim_test.go`):
   Jain's fairness index 0.3-0.7 → 0.95-1.00 (0.97 already 10-25 s after
@@ -1336,10 +1343,22 @@ each read the queue they all built as its own.
   on an 8 Mbit/s path, the stale peak after a fast period, the probe clock
   on the wall clock, a slow separate path pushed into its buffer, a light
   carrier ramping slowly later (W3 above).
+- **Round 3** (4 agents on those fixes): 30 Mbit/s ping p99 23-26 ms with
+  no ping lost in 12 runs (release 22-52), 8 Mbit/s delivery 5.65 vs 5.32
+  Mbit/s and carriers within 2x from 18 s (release 5-24x), high bandwidth
+  696 vs 488 Mbit/s and 5% loss 240-252 vs 142 Mbit/s, all intact. Found and
+  fixed since: the stale peak floor returning on reports that use the
+  allowance, and a light carrier on its own filled path kept in startup
+  (W3 above); the simulators' probe clock made deterministic.
 - Pre-existing, unchanged (release the same): under a steady policer with
   no loss episodes the pool sends ~2.5x what passes and parity rises to its
   ceiling; many tiny flows behind a shared bottleneck all count as sparse,
-  so the fair queue cannot single out a UDP echo among them.
+  so the fair queue cannot single out a UDP echo among them; 16 carriers on
+  an 8 Mbit/s bottleneck collapse to the floor rate (8 or 16 on 16 Mbit/s
+  are fine); a carrier out of startup that later gets bulk on an empty path
+  re-ramps at the probe's 6% per round trip; 300 ms RTT with 26% bursty
+  loss sometimes collapses utilization (4 of 30 seeds in the simulator,
+  rules on or off).
 
 ### Review fixes (agent round 1)
 - A udp listener on an IPv6 address read in batches dropped every datagram
