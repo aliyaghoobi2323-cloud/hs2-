@@ -1797,6 +1797,15 @@ use_auto_link_ceiling(){
 # a carrier without a link pool runs one connection. role: iran|kharej.
 link_pool_note(){
   case "${CARRIER:-}" in mtcp|l3mtcp|dgtun) ;; *) return 0 ;; esac
+  # TUN_ENCAP is the link-making side's choice (default udp), ENCAP what a
+  # pasted link carries — either one saying icmp is this tunnel's.
+  if [ "${CARRIER:-}" = dgtun ] && { [ "${TUN_ENCAP:-}" = icmp ] || [ "${ENCAP:-}" = icmp ]; }; then
+    # tun over icmp has its own ceiling (8): every carrier is one echo id
+    # between the same two IPs, so more add no bandwidth (one path, one
+    # policer) — only a ping-unlike pattern. A fixed max_links overrides it.
+    info "Link pool: tun over icmp runs at most 8 carriers — each is one echo id between the same two IPs, so more would add no bandwidth, only a ping-unlike pattern (a fixed max in Tuning → Link pool overrides it)."
+    return 0
+  fi
   if [ "$1" = kharej ] && [ "${DIRECTION:-}" = direct ]; then
     info "Link pool: in direct mode the Iran server's ceiling sets how many parallel links this tunnel runs at peak (this server's max_links is not applied here)."
     return 0
@@ -3273,7 +3282,13 @@ tm_tune_links(){ # unit cfg
     0)  curmx="$auto_now"; keepmx=0 ;;
     *)  curmx="$cur_max"; keepmx="$cur_max" ;;
   esac
-  [ -n "$recwhy" ] && say "  This server's hardware: max $recwhy."
+  local icmp=0
+  [ "$(jget "$cfg" carrier)" = dgtun ] && [ "$(jget "$cfg" encap | tr 'A-Z' 'a-z' | tr -d ' ')" = icmp ] && icmp=1
+  if [ "$icmp" = 1 ]; then
+    [ -n "$recwhy" ] && say "  Auto ceiling for this tunnel: max $recwhy."
+  else
+    [ -n "$recwhy" ] && say "  This server's hardware: max $recwhy."
+  fi
   # The note follows the ceiling that applies: a fixed number as written,
   # auto as this server's hardware gives it.
   local effmx="$rec"
@@ -3286,7 +3301,11 @@ tm_tune_links(){ # unit cfg
     say "  quiet hours; a lower max trades peak capacity for a smaller pattern (your call).${C_0}"
   fi
   if [ -n "$rec" ] && [ "$keepmx" != 0 ] && [ "$keepmx" != "$rec" ]; then
-    say "  ${C_Y}The ceiling is fixed at $keepmx; this server's hardware gives $rec. Enter 'auto' to follow the hardware from now on (or $rec to fix it there).${C_0}"
+    if [ "$icmp" = 1 ]; then
+      say "  ${C_Y}The ceiling is fixed at $keepmx; auto gives $rec over icmp (more carriers add no bandwidth there). Enter 'auto' for $rec.${C_0}"
+    else
+      say "  ${C_Y}The ceiling is fixed at $keepmx; this server's hardware gives $rec. Enter 'auto' to follow the hardware from now on (or $rec to fix it there).${C_0}"
+    fi
   fi
   tm_live_ceiling "$cfg"
   say "  Current: min=${cur_min:-2} · max=$curmx · ~${cur_per:-8} active users per link (per_link: the autopilot adds a link for every this many connections moving data)"

@@ -1,4 +1,4 @@
-# Real-server validation — stuck links and the loss rule (Q7, Q8)
+# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V)
 
 This is the checklist for validating the Q7 and Q8 releases (see CHANGELOG,
 "Q7 — stuck links" and "Q8 — the health rules at high bandwidth") on a real
@@ -136,6 +136,28 @@ instead); the other users' p50 back to normal within ~20 s.
 normal: within ~5 min the link count steps down toward what the active users
 need, and `hs2 status`'s `one link carries ~X Mbit/s` is near what a busy
 link really moves, not the speed of the slowest links.
+
+**V9 — tun over icmp: one carrier cut (Phase V).** On a test pair running a
+tun over icmp under load (e.g. `iperf3 -R -P 16` through the tun), find a busy
+echo id on the Kharej server (`tcpdump -n -i any -c 400 icmp | grep -o 'id
+[0-9]*' | sort | uniq -c | sort -rn | head`) and drop it **on the way in** on
+both servers (a drop in OUTPUT makes hs2's own send fail, which is not what a
+cut path looks like):
+
+```
+nft add table inet hs2t
+nft add chain inet hs2t i '{ type filter hook input priority -5; }'
+nft add rule inet hs2t i icmp id X drop
+```
+
+Pass: within ~1.5 s on each server `dg: carrier N has heard nothing from the
+other server for 1.2s while … still do — its own way through is cut`, the
+downloads back within ~2 s, `… heard nothing for 3.2s — closed; a new carrier
+replaces it` and a new carrier up within ~6 s. Then the same rule on the Iran
+server only (a one-way cut): the Iran side logs the mute line and the Kharej
+side `the other server hears nothing on it — … its flows move to live
+carriers`. Remove with `nft delete table inet hs2t`. Also `hs2 status`:
+`ceiling 8` with `tun over icmp` as the reason.
 
 ## What to send back
 

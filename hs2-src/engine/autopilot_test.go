@@ -887,7 +887,7 @@ func TestSimNoisyFullPathNoDrift(t *testing.T) {
 func TestCapEstimateNotDraggedBySlowLinks(t *testing.T) {
 	a := newAutopilot(2, 48, 8)
 	t0 := time.Unix(1000, 0)
-	fast := 5e6 / 8 // 5 Mbit/s
+	fast := 5e6 / 8              // 5 Mbit/s
 	for id := 0; id < 10; id++ { // the busy hour: ten links pressed at 5 Mbit/s
 		a.noteCap(t0, id, fast)
 	}

@@ -54,6 +54,15 @@ out=$(lpn "$T/hs2big" iran direct udp)
 check "a carrier without a pool: nothing" '[ -z "$out" ]'
 out=$(lpn "$T/hs2" iran reverse mtcp)
 check "a 64 box: nothing" '[ -z "$out" ]'
+lpni(){ # bin role dir encap-var value
+  bash -c "source '$T/core.sh' >/dev/null 2>&1; info(){ echo \"INFO \$*\"; }; BIN='$1'; DIRECTION='$3'; CARRIER=dgtun; $4='$5'; link_pool_note '$2'" 2>&1
+}
+out=$(lpni "$T/hs2big" iran reverse TUN_ENCAP icmp)
+check "tun over icmp (link side): at most 8, no 300 note" 'echo "$out" | grep -q "tun over icmp runs at most 8 carriers" && ! echo "$out" | grep -q "up to 300"'
+out=$(lpni "$T/hs2big" kharej reverse ENCAP icmp)
+check "tun over icmp (pasted link side): at most 8" 'echo "$out" | grep -q "tun over icmp runs at most 8 carriers"'
+out=$(lpni "$T/hs2big" iran reverse TUN_ENCAP udp)
+check "tun over udp: the hardware note as before" 'echo "$out" | grep -q "up to 300 parallel links" && ! echo "$out" | grep -q "icmp"'
 out=$(ualc "$T/nonexistent-hs2")
 check "missing binary: still auto, no abort under set -e" 'echo "$out" | grep -qx "LINK_MAX=0"'
 check "missing binary: no 'right now' claim" '! echo "$out" | grep -q "right now"'

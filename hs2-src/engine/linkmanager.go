@@ -2267,6 +2267,7 @@ type PoolStats struct {
 	DropNoCarrier uint64  // tun packets dropped: no live carrier
 	DropQueueFull uint64  // tun packets dropped: the carrier's queue was full
 	DropAged      uint64  // tun packets dropped: waited > 50 ms in a carrier's queue
+	MuteClosed    uint64  // carriers closed for hearing nothing while others did (since start)
 	Carriers      string  // per carrier: id:state:sent/loss%
 	// TCP reorder buffer before the TUN (live carriers): segments held behind a
 	// gap, gaps that filled while held, and gaps given up after the hold.

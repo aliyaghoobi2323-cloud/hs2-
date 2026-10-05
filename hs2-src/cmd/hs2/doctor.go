@@ -351,6 +351,17 @@ func checkLinkPool(d *doctorReport, fc fileConfig, cfgPath string) {
 		d.info(name, "in direct mode the Iran server's ceiling applies; this server's max_links is not applied here"+eff)
 		return
 	}
+	switch {
+	case mode == ceilICMP:
+		d.ok(name, fmt.Sprintf("tun over icmp: %d carriers at most — each is one echo id between the same two IPs, so more add no bandwidth (one path, one policer), only a ping-unlike pattern; a positive max_links overrides it%s", cfgMax, eff))
+		return
+	case isICMPTun(fc) && rawMax > icmpMaxLinks:
+		d.warn(name, fmt.Sprintf("max_links %d over icmp: every carrier is one echo id between the same two IPs — more than %d add no bandwidth (one path, one policer), only a ping-unlike pattern and feedback traffic; set max_links to 0 for %d (menu → Link pool)%s", rawMax, icmpMaxLinks, icmpMaxLinks, eff))
+		return
+	case isICMPTun(fc):
+		d.ok(name, fmt.Sprintf("%d links (fixed by max_links) — within the icmp ceiling of %d%s", rawMax, icmpMaxLinks, eff))
+		return
+	}
 	if mode == ceilAuto {
 		// cfgMax is what a start NOW would run with (the hardware's ceiling,
 		// lifted to min_links if that is higher); compare it, not the raw

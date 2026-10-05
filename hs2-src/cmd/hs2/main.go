@@ -597,17 +597,24 @@ func tuneCmd(args []string) {
 // a hidden default). --why adds the detected hardware and the rule that gave
 // the number, for the human-facing menu (the number stays the first field). It is read-only and needs no config or root.
 //
-// -c cfg is accepted for the installer, which passes it: it named a config
-// whose carrier lowered the rule (dgtun's interim cap, lifted after its
-// 300-carrier load test); every carrier now uses the same rule.
+// -c cfg names the tunnel the menu asks about: its auto ceiling is the
+// hardware's for every carrier but the tun over icmp, whose is icmpMaxLinks
+// (see linkCeiling). An unreadable config gives the hardware's.
 func recommendLinksCmd(args []string) {
 	fs := flag.NewFlagSet("recommend-links", flag.ExitOnError)
 	why := fs.Bool("why", false, "also print the detected hardware and the rule")
-	fs.String("c", "", "config (accepted; every carrier uses the same rule)")
+	cfgPath := fs.String("c", "", "config: its carrier's auto ceiling (the tun over icmp has its own)")
 	fs.Parse(args)
 	ramMB, cpus := detectHW()
 	maxLinks := tune.RecommendedMaxLinks(ramMB, cpus)
 	reason := tune.MaxLinksReason(ramMB, cpus)
+	if *cfgPath != "" {
+		var fc fileConfig
+		if raw, err := os.ReadFile(*cfgPath); err == nil && json.Unmarshal(raw, &fc) == nil && isICMPTun(fc) {
+			reason = fmt.Sprintf("tun over icmp: one echo id per carrier between the same two IPs, so more add no bandwidth; the hardware alone would allow %d: %s", maxLinks, reason)
+			maxLinks = icmpMaxLinks
+		}
+	}
 	if !*why {
 		fmt.Println(maxLinks)
 		return
@@ -657,7 +664,22 @@ const (
 	ceilAuto    = "auto"    // max_links 0: follows this server's hardware
 	ceilFixed   = "fixed"   // max_links > 0: the operator's number
 	ceilDefault = "default" // max_links absent: the historical fixed 32
+	ceilICMP    = "icmp"    // tun over icmp, max_links 0 or absent: icmpMaxLinks
 )
+
+// icmpMaxLinks is the ceiling of a tun over icmp unless max_links fixes one.
+// Every carrier there is one echo identifier between the same two IPs: they
+// share one path and one policer (an ICMP rate limit sees their sum — the
+// pool's governor caps them together), so carriers past a handful add no
+// bandwidth — only a ping-unlike pattern (hundreds of echo ids to one host)
+// and feedback traffic (each carrier reports 10 times a second each way).
+// Eight still spread the work over the cores and the flows over carriers.
+const icmpMaxLinks = 8
+
+// isICMPTun reports whether the config runs the datagram tun over icmp.
+func isICMPTun(fc fileConfig) bool {
+	return carrierName(fc) == "dgtun" && strings.EqualFold(strings.TrimSpace(fc.Encap), "icmp")
+}
 
 // legacyMaxLinks is the ceiling a config without max_links has always had.
 const legacyMaxLinks = 32
@@ -671,11 +693,17 @@ const legacyMaxLinks = 32
 //     start (a VPS resize needs a reboot anyway) without anyone editing the
 //     config — the same "0 = leave it to the profile" rule the tuning section
 //     already follows. New installs write 0.
+//
 //   - a POSITIVE max_links is the operator's fixed choice, used as is and
 //     never changed automatically;
+//
 //   - ABSENT keeps the historical fixed 32, so every config written before
 //     the auto ceiling existed (installer-made or by hand) behaves exactly as
 //     it always did after the binary is upgraded.
+//
+//   - a tun over icmp with max_links 0 or absent gets icmpMaxLinks (mode
+//     "icmp"): past a handful, carriers there add no bandwidth (see
+//     icmpMaxLinks). A positive max_links still fixes the number.
 //
 // An older binary reads 0 as its fixed default 32, so rolling the binary back
 // still runs the tunnel. The returned profile is for display.
@@ -685,6 +713,8 @@ func linkCeiling(fc fileConfig) (max int, mode, profile string) {
 	switch {
 	case fc.MaxLinks > 0:
 		return fc.MaxLinks, ceilFixed, profile
+	case isICMPTun(fc):
+		return icmpMaxLinks, ceilICMP, profile
 	case fc.maxLinksSet:
 		return tune.RecommendedMaxLinks(ram, cpus), ceilAuto, profile
 	default:
@@ -706,6 +736,11 @@ func ceilingLogLine(fc fileConfig) string {
 		how = fmt.Sprintf("auto from this server's hardware (%s); re-derived at every start", why)
 	case ceilFixed:
 		how = fmt.Sprintf("fixed by max_links in the config (auto would give %d here: %s)", tune.RecommendedMaxLinks(ram, cpus), why)
+		if isICMPTun(fc) && ceil > icmpMaxLinks {
+			how += fmt.Sprintf("; over icmp more than %d add no bandwidth — every carrier is one echo id between the same two IPs (one path, one policer) — only a ping-unlike pattern", icmpMaxLinks)
+		}
+	case ceilICMP:
+		how = fmt.Sprintf("tun over icmp: every carrier is one echo id between the same two IPs, so more than %d add no bandwidth (one path, one policer), only a ping-unlike pattern and feedback traffic; a positive max_links overrides it (this hardware alone would allow %d)", icmpMaxLinks, tune.RecommendedMaxLinks(ram, cpus))
 	default:
 		how = fmt.Sprintf("the default (max_links is not set in the config; 0 = auto would give %d here: %s)", tune.RecommendedMaxLinks(ram, cpus), why)
 	}

@@ -62,6 +62,27 @@ const (
 	// dgScoutEvery: while every carrier is silent, the dialing side tries one
 	// new carrier this often to find out whether the peer is back.
 	dgScoutEvery = 5 * time.Second
+	// dgMuteAfter: a carrier that has heard nothing for this long while
+	// another carrier still hears the other server is mute — its own way
+	// through is cut (its icmp echo id or its port dropped by a middlebox,
+	// its state lost on the other server), not the path. New flows avoid it,
+	// the flows on it move at their next packet, and once it has been silent
+	// for dgSilentDead it is closed and a new carrier replaces it. Its peer
+	// sends feedback every 100 ms, so this is ten reports in a row lost. (A
+	// mute carrier used to keep its flows, and take 1/n of the new ones, until
+	// its 15 s read timeout: 15 s of outage for every user on it.)
+	dgMuteAfter = time.Second
+	// dgMuteEvery: how often the mute watch looks; dgMuteHold: how long it
+	// judges nothing after one of its ticks came late (this process, or its
+	// VM, was stopped: what arrived meanwhile is still being read, and every
+	// carrier looks silent for a moment).
+	dgMuteEvery = 250 * time.Millisecond
+	dgMuteHold  = 500 * time.Millisecond
+	// dgPeerMuteFor: how long the other server's word that it hears nothing
+	// on a carrier (closeMute) holds unless it says it hears again — past
+	// the moment it closes the carrier (dgSilentDead), so a lost closeHear
+	// never keeps a carrier that came back empty for long.
+	dgPeerMuteFor = dgSilentDead + time.Second
 	// dgInfoEvery: how often a DIRECT edge tells the exit its ceiling (display
 	// only, so slow; jittered so it is not a fixed beat). A report older than
 	// dgPeerMaxStale reads as unknown (the peer stopped, or was downgraded).
@@ -143,6 +164,18 @@ type dgLink struct {
 	bytesDown atomic.Uint64
 	sentPkts  atomic.Uint64
 	droppedAt atomic.Int64 // unixnano of the last queue-full drop (pressure)
+	// muted: the carrier hears nothing while others hear the other server
+	// (dgMuteAfter); pick and pickHash place flows elsewhere. Set and cleared
+	// by muteTick. peerMuteAt: unix ns (pool clock) of the other server's
+	// closeMute for it (0: none) — it hears nothing on it, so what this side
+	// sends there is lost (a one-way cut: only its replies dropped, say).
+	muted      atomic.Bool
+	peerMuteAt atomic.Int64
+	muteClosed atomic.Bool // muteTick closes it once, even if the close is slow
+	// lostErr: why the carrier failed (a send or read error), set once by
+	// lose; nil when it was closed on purpose (by either side). readLoop says
+	// it in the log — a carrier that failed used to vanish without a line.
+	lostErr atomic.Pointer[error]
 
 	// echo-shaping frame counts (icmp only): every frame this side sent
 	// (writeLoop data, sendVia control, fillers) and received (readLoop), so
@@ -202,6 +235,14 @@ func (l *dgLink) markDead() {
 	})
 }
 
+// lose marks the carrier dead because it failed, keeping the first reason.
+func (l *dgLink) lose(err error) {
+	if !l.dead.Load() {
+		l.lostErr.CompareAndSwap(nil, &err)
+	}
+	l.markDead()
+}
+
 // lastRx is when the carrier last received anything (zero when it cannot
 // say — such a carrier is never taken for silent).
 func (l *dgLink) lastRx() time.Time {
@@ -241,6 +282,29 @@ func (l *dgLink) silent(now time.Time) bool {
 	return !t.IsZero() && now.Sub(t) >= dgSilentDead
 }
 
+// avoid reports whether flows should go elsewhere: the carrier is mute here,
+// or the other server said it hears nothing on it (within dgPeerMuteFor).
+func (l *dgLink) avoid(now time.Time) bool {
+	if l.muted.Load() {
+		return true
+	}
+	at := l.peerMuteAt.Load()
+	return at != 0 && now.UnixNano()-at < int64(dgPeerMuteFor)
+}
+
+// recentFlows counts the flows that moved on the carrier within flowRecent.
+func (l *dgLink) recentFlows(now time.Time) int {
+	l.flowMu.Lock()
+	defer l.flowMu.Unlock()
+	n := 0
+	for _, f := range l.flows {
+		if now.Sub(f.last) <= flowRecent {
+			n++
+		}
+	}
+	return n
+}
+
 // setRetiring records when this carrier started retiring (either side) or
 // that it serves again.
 func (l *dgLink) setRetiring(now time.Time, on bool) {
@@ -266,13 +330,17 @@ func (l *dgLink) retireForced(now time.Time) bool {
 // each with one reorder, and the carrier drains. A variable for tests.
 var dgRetireForce = 30 * time.Second
 
-// TypeClose payload (one byte; old peers ignore the frame entirely, so it
-// needs no negotiation): the carrier is closing now, the sender is retiring
-// it (no new flowlets), or it serves again.
+// TypeClose payload (one byte; old peers ignore the frame entirely, and a
+// peer ignores an op it does not know, so it needs no negotiation): the
+// carrier is closing now, the sender is retiring it (no new flowlets), it
+// serves again, the sender hears nothing on it (mute: move your flows off
+// it), or hears on it again.
 const (
 	closeBye    = 0
 	closeRetire = 1
 	closeServe  = 2
+	closeMute   = 3
+	closeHear   = 4
 )
 
 // enqueue hands a packet to the carrier's writer without ever blocking. A full
@@ -338,7 +406,7 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 			err := l.car.SendFrame(core.TypeData, *p.b)
 			pool.Put(p.b)
 			if err != nil {
-				l.markDead()
+				l.lose(err)
 				return
 			}
 			l.sentPkts.Add(1)
@@ -447,7 +515,8 @@ type dgPool struct {
 
 	// upLog / retireLog fold per-carrier lines into one summary once a burst
 	// passes a few lines (a 300-carrier rebuild was ~300 lines per side).
-	upLog, retireLog, byeLog *burstLog
+	upLog, retireLog, byeLog, muteLog, lostLog *burstLog
+	muteClosed                                 atomic.Uint64 // carriers closed for being mute (since start)
 
 	// scout (dialing side, pool goroutine only): the next time a scout dial
 	// may go while every carrier is silent, and whether this silence was
@@ -488,6 +557,8 @@ func newDgPool(dev tunWriter, min, max, perLink int, logf func(string, ...any)) 
 	p.upLog = newBurstLog("dg: ", "carriers up", logp)
 	p.retireLog = newBurstLog("dg: ", "carriers retired", logp)
 	p.byeLog = newBurstLog("dg: ", "carriers closed by the other server", logp)
+	p.muteLog = newBurstLog("dg: ", "mute carrier events", logp)
+	p.lostLog = newBurstLog("dg: ", "carriers failed", logp)
 	return p
 }
 
@@ -608,9 +679,15 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 	defer l.markDead()
 	defer l.ro.Close() // release anything still held behind a gap
+	defer func() {
+		if e := l.lostErr.Load(); e != nil && ctx.Err() == nil {
+			p.lostLog.log("dg: carrier %d failed (%v) — its flows move to live carriers", l.id, *e)
+		}
+	}()
 	for ctx.Err() == nil {
 		ft, payload, err := l.car.ReadFrame()
 		if err != nil {
+			l.lose(err) // a no-op when it was closed on purpose (dead already)
 			return
 		}
 		// Count only REAL frames (data, pool control) toward the echo balance —
@@ -655,7 +732,7 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 // off the data queue so it is timely.
 func (p *dgPool) sendVia(l *dgLink, ft byte, payload []byte) {
 	if err := l.car.SendFrame(ft, payload); err != nil {
-		l.markDead()
+		l.lose(err)
 		return
 	}
 	if l.echoShaped {
@@ -700,6 +777,14 @@ func (p *dgPool) onCloseFrame(l *dgLink, payload []byte) bool {
 	case closeServe:
 		l.peerRetireAt.Store(0)
 		l.setRetiring(p.now(), false)
+	case closeMute:
+		if l.peerMuteAt.Swap(max(p.now().UnixNano(), 1)) == 0 {
+			p.muteLog.log("dg: carrier %d: the other server hears nothing on it — what goes there is lost: its flows move to live carriers", l.id)
+		}
+	case closeHear:
+		if l.peerMuteAt.Swap(0) != 0 {
+			p.muteLog.log("dg: carrier %d: the other server hears it again — it takes flows again", l.id)
+		}
 	}
 	return false
 }
@@ -797,13 +882,14 @@ func (p *dgPool) pumpTun(ctx context.Context) {
 }
 
 // pick returns the carrier for a flow: the one it is already on, while that
-// carrier lives (serving or retiring) and the flow has not paused — so neither
-// a pool resize nor retiring ever reorders a live flow; otherwise a live serving
-// carrier by rendezvous hashing, which is then remembered.
+// carrier lives (serving or retiring), is not mute (avoid) and
+// the flow has not paused — so neither a pool resize nor retiring ever
+// reorders a live flow; otherwise a live serving carrier by rendezvous
+// hashing, which is then remembered.
 func (p *dgPool) pick(flow uint32, now time.Time) *dgLink {
 	p.stickyMu.Lock()
 	if sf := p.sticky[flow]; sf != nil {
-		if sf.l.alive() && now.Sub(sf.last) <= flowletGap && !sf.l.retireForced(now) {
+		if sf.l.alive() && now.Sub(sf.last) <= flowletGap && !sf.l.retireForced(now) && !sf.l.avoid(now) {
 			sf.last = now
 			p.stickyMu.Unlock()
 			return sf.l
@@ -831,33 +917,139 @@ func (p *dgPool) pruneSticky(now time.Time) {
 	p.stickyMu.Unlock()
 }
 
-// pickHash maps a flow to a live serving carrier by rendezvous hashing.
+// pickHash maps a flow to a live carrier by rendezvous hashing, preferring,
+// in order: serving, retiring (better than dropping), then the same two among
+// mute carriers — a carrier that hears nothing while others do is the last
+// resort (so is one the other server hears nothing on), and when every
+// carrier is mute (the path is down) the choice is the plain hash, as if none
+// were.
 func (p *dgPool) pickHash(flow uint32) *dgLink {
+	now := p.now()
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	var best *dgLink
-	var bestW uint32
-	var bestRetiring *dgLink
-	var bestRW uint32
+	var best [4]*dgLink
+	var bestW [4]uint32
 	for _, l := range p.set {
 		if !l.alive() {
 			continue
 		}
 		w := mix32(flow ^ l.id)
+		tier := 0
 		if l.retiring || l.peerRetiring() {
-			if bestRetiring == nil || w > bestRW {
-				bestRetiring, bestRW = l, w
+			tier = 1
+		}
+		if l.avoid(now) {
+			tier += 2
+		}
+		if best[tier] == nil || w > bestW[tier] {
+			best[tier], bestW[tier] = l, w
+		}
+	}
+	for _, l := range best {
+		if l != nil {
+			return l
+		}
+	}
+	return nil
+}
+
+// muteLoop watches the carriers for one that stops hearing the other server
+// while others still do (see dgMuteAfter). Every role runs it.
+func (p *dgPool) muteLoop(ctx context.Context) {
+	t := time.NewTicker(dgMuteEvery)
+	defer t.Stop()
+	var g stallGate
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if now := time.Now(); g.ok(now, dgMuteEvery, dgMuteHold) {
+				p.muteTick(now)
 			}
+		}
+	}
+}
+
+// stallGate tells a ticker loop whether to judge this tick: not when the tick
+// came more than twice its period late (this process, or its VM, was
+// stopped), nor for hold after that — what arrived meanwhile is still being
+// read, and every carrier looks silent for a moment.
+type stallGate struct{ last, hold time.Time }
+
+func (g *stallGate) ok(now time.Time, every, hold time.Duration) bool {
+	if !g.last.IsZero() && now.Sub(g.last) > 2*every {
+		g.hold = now.Add(hold)
+	}
+	g.last = now
+	return !now.Before(g.hold)
+}
+
+// muteTick marks the carriers that have heard nothing for dgMuteAfter while
+// another one hears the other server, lifts the mark from those that hear
+// again, and closes those still mute at dgSilentDead (the pool then dials or,
+// in reverse, the exit redials a replacement). While no carrier hears the
+// other server nothing is judged and every mark is lifted: then the path or
+// the other server is down, not one carrier, and scoutIfSilent takes over.
+func (p *dgPool) muteTick(now time.Time) {
+	type obs struct {
+		l   *dgLink
+		age time.Duration
+	}
+	var quiet, back []obs
+	heard := 0
+	p.mu.RLock()
+	for _, l := range p.set {
+		if !l.alive() {
 			continue
 		}
-		if best == nil || w > bestW {
-			best, bestW = l, w
+		t := l.lastRx()
+		if t.IsZero() {
+			continue // cannot say
+		}
+		switch age := now.Sub(t); {
+		case age < dgMuteAfter:
+			heard++
+			if l.muted.Load() {
+				back = append(back, obs{l, age})
+			}
+		default:
+			quiet = append(quiet, obs{l, age})
 		}
 	}
-	if best != nil {
-		return best
+	p.mu.RUnlock()
+	for _, o := range back {
+		if o.l.muted.CompareAndSwap(true, false) {
+			p.muteLog.log("dg: carrier %d hears the other server again — it takes flows again", o.l.id)
+			go p.sendOp(o.l, closeHear) // off the watch: a send must never hold it up
+		}
 	}
-	return bestRetiring // only retiring carriers left: better than dropping
+	if heard == 0 {
+		for _, o := range quiet {
+			o.l.muted.Store(false)
+		}
+		return
+	}
+	for _, o := range quiet {
+		l := o.l
+		switch {
+		case !l.muted.Load():
+			l.muted.Store(true)
+			moves := "it carries no flows"
+			if n := l.recentFlows(now); n > 0 {
+				moves = fmt.Sprintf("its %d flow(s) move to live carriers", n)
+			}
+			p.muteLog.log("dg: carrier %d has heard nothing from the other server for %.1fs while %d other carrier(s) still do — its own way through is cut: new flows avoid it and %s",
+				l.id, o.age.Seconds(), heard, moves)
+			// Tell the other server (twice: one control datagram can be
+			// lost), so its flows leave too if only this direction is cut.
+			go func() { p.sendOp(l, closeMute); p.sendOp(l, closeMute) }()
+		case o.age >= dgSilentDead && l.muteClosed.CompareAndSwap(false, true):
+			p.muteClosed.Add(1)
+			p.muteLog.log("dg: carrier %d heard nothing for %.1fs — closed; a new carrier replaces it", l.id, o.age.Seconds())
+			go p.closeLink(l)
+		}
+	}
 }
 
 // sampleHealth measures every carrier once per tick and builds the autopilot's
@@ -1457,6 +1649,7 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 	ps.TunRead, ps.TunWritten = p.tunRead.Load(), p.tunWritten.Load()
 	ps.SentPkts, ps.RecvPkts = p.sentPkts.Load(), p.recvPkts.Load()
 	ps.DropNoCarrier, ps.DropQueueFull, ps.DropAged = p.dropNoCarrier.Load(), p.dropQueueFull.Load(), p.dropAged.Load()
+	ps.MuteClosed = p.muteClosed.Load()
 	ps.Carriers = p.carrierLine()
 	p.mu.RLock()
 	for _, l := range p.set {
@@ -1493,7 +1686,8 @@ func round1f(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
 // id:state:sent/loss% rate/btlBw(Mbit) flags — enough to see which carrier
 // loses AND whether one is pinned at a low rate while the path is healthy (the
 // after-idle ramp-stall signature). Flags: P=pushing (offered its allowance),
-// S=startup (still ramping). A carrier stuck at a low rate with P set and loss
+// S=startup (still ramping), M=mute (it, or the other server, hears nothing on
+// it while others do). A carrier stuck at a low rate with P set and loss
 // ~0 is the sender throttling itself, not the path.
 func (p *dgPool) carrierLine() string {
 	type statser interface{ Stats() udpcarrier.Stats }
@@ -1558,6 +1752,9 @@ func (p *dgPool) carrierLine() string {
 			if s.Startup {
 				flags += "S"
 			}
+			if l.avoid(p.now()) {
+				flags += "M"
+			}
 			if flags == "" {
 				flags = "-"
 			}
@@ -1566,6 +1763,9 @@ func (p *dgPool) carrierLine() string {
 				mbitps(s.RateBytes), mbitps(s.BtlBwBytes), flags))...)
 		} else {
 			b = append(b, []byte(fmt.Sprintf("%d:%s:%d", l.id, st, l.sentPkts.Load()))...)
+			if l.avoid(p.now()) {
+				b = append(b, " M"...)
+			}
 		}
 	}
 	return string(b)
@@ -1843,6 +2043,7 @@ func RunDgEdge(ctx context.Context, cfg DgConfig) error {
 	}
 	go p.pumpTun(ctx)
 	go p.reapLoop(ctx)
+	go p.muteLoop(ctx)
 	go p.gov.Run(ctx)
 	if cfg.Reverse {
 		go p.acceptLoop(ctx, cfg.Listener)
@@ -1879,6 +2080,7 @@ func RunDgExit(ctx context.Context, cfg DgConfig) error {
 	}
 	go p.pumpTun(ctx)
 	go p.reapLoop(ctx)
+	go p.muteLoop(ctx)
 	go p.gov.Run(ctx)
 	if !cfg.Reverse {
 		// Direct exit: accept carriers, no autopilot (the edge decides).

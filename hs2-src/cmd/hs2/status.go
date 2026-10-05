@@ -33,13 +33,14 @@ var statusRunDir = "/run/hs2"
 // liveStatus is the flat JSON written to the status file. Flat on purpose: the
 // installer reads it with the same grep/sed helpers it uses for the config.
 type liveStatus struct {
-	Role      string  `json:"role"`      // "Iran side" / "Kharej side"
-	Dir       string  `json:"dir"`       // direct / reverse
-	Carrier   string  `json:"carrier"`   // mtcp / l3mtcp / tls / udp / auto
-	Transport string  `json:"transport"` // human transport label
-	Endpoint  string  `json:"endpoint"`  // "listens on ..." / "connects to ..."
-	Links     int     `json:"links"`     // live links now
-	Target    int     `json:"target"`    // links the autopilot wants
+	Role      string  `json:"role"`            // "Iran side" / "Kharej side"
+	Dir       string  `json:"dir"`             // direct / reverse
+	Carrier   string  `json:"carrier"`         // mtcp / l3mtcp / tls / udp / auto
+	Transport string  `json:"transport"`       // human transport label
+	Encap     string  `json:"encap,omitempty"` // tun over a datagram pool: its encapsulation (udp, icmp, …)
+	Endpoint  string  `json:"endpoint"`        // "listens on ..." / "connects to ..."
+	Links     int     `json:"links"`           // live links now
+	Target    int     `json:"target"`          // links the autopilot wants
 	Min       int     `json:"min"`
 	Max       int     `json:"max"`
 	Users     int     `json:"users"` // open user connections
@@ -124,6 +125,7 @@ type liveStatus struct {
 	DropNoCarrier   uint64  `json:"drop_no_carrier,omitempty"`
 	DropQueueFull   uint64  `json:"drop_queue_full,omitempty"`
 	DropAged        uint64  `json:"drop_aged,omitempty"`
+	MuteClosed      uint64  `json:"mute_closed,omitempty"`
 	Carriers        string  `json:"carriers,omitempty"` // id:state:sent/loss% per carrier
 	ReorderHeld     uint64  `json:"reorder_held,omitempty"`
 	ReorderFilled   uint64  `json:"reorder_filled,omitempty"`
@@ -223,6 +225,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		Role: role(fc), Dir: direction(fc), Carrier: carrierName(fc),
 		Transport: transportLabel(fc), Endpoint: endpointLabel(fc), PID: os.Getpid(),
 	}
+	if carrierName(fc) == "dgtun" {
+		base.Encap = strings.ToLower(strings.TrimSpace(encapName(fc)))
+	}
 	// The ceiling this server runs with is fixed for the life of the process
 	// (auto is derived from the hardware once, at start), so it is computed
 	// once here; only the other server's number and the effective ceiling move.
@@ -271,6 +276,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.Policed, ls.PoliceConfirm, ls.PoliceCapMbit = s.Policed, s.PoliceConfirm, s.PoliceCapMbit
 			ls.TunRead, ls.SentPkts, ls.RecvPkts, ls.TunWritten = s.TunRead, s.SentPkts, s.RecvPkts, s.TunWritten
 			ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.Carriers = s.DropNoCarrier, s.DropQueueFull, s.DropAged, s.Carriers
+			ls.MuteClosed = s.MuteClosed
 			ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut = s.ReorderHeld, s.ReorderFilled, s.ReorderTimedOut
 		}
 		ls.CPUPct, ls.CPUCores = cpu.sample(), hwCores
@@ -447,8 +453,11 @@ func printStatus(path string) {
 			fmt.Printf("  drops:      no carrier %d · carrier queue full %d · waited >50 ms %d · pacer %d · receive queue %d\n",
 				ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.PacerDropped, ls.RxDropped)
 		}
+		if ls.MuteClosed > 0 {
+			fmt.Printf("  mute:       %d carrier(s) closed and replaced after hearing nothing while the others did (their own way through was cut)\n", ls.MuteClosed)
+		}
 		if ls.Carriers != "" {
-			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup)\n", ls.Carriers)
+			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup M=mute)\n", ls.Carriers)
 		}
 		if ls.ReorderHeld > 0 {
 			fmt.Printf("  reorder:    %d segments held behind a gap; %d gaps filled in order, %d released after the hold\n",
@@ -544,6 +553,8 @@ func ceilingWhy(ls liveStatus) string {
 	switch ls.CeilMode {
 	case ceilAuto:
 		how = "auto — " + hw
+	case ceilICMP:
+		how = fmt.Sprintf("tun over icmp: one echo id per carrier between the same two IPs — more than %d add no bandwidth", icmpMaxLinks)
 	case ceilDefault:
 		how = "the default — max_links not set; " + hw
 	default:
@@ -616,10 +627,19 @@ func driftLine(ls liveStatus) string {
 	if set == 0 {
 		set = ls.CfgMax // an older status file
 	}
-	if ls.CfgMax == 0 || ls.CeilMode == ceilAuto || ls.RecMax == 0 || ls.RecMax == set {
+	if ls.CfgMax == 0 || ls.CeilMode == ceilAuto || ls.CeilMode == ceilICMP {
 		return ""
 	}
 	if ls.Dir != "reverse" && ls.Role != "Iran side" {
+		return ""
+	}
+	if ls.Encap == "icmp" {
+		if set > icmpMaxLinks {
+			return fmt.Sprintf("max_links %d over icmp: every carrier is one echo id between the same two IPs — more than %d add no bandwidth (one path, one policer), only a ping-unlike pattern; set max_links to 0 for %d (menu → Link pool)", set, icmpMaxLinks, icmpMaxLinks)
+		}
+		return ""
+	}
+	if ls.RecMax == 0 || ls.RecMax == set {
 		return ""
 	}
 	if ls.CeilMode == ceilDefault {

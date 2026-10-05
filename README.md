@@ -408,6 +408,20 @@ status file under `/run/hs2/` (`loss_pct`, `max_loss_pct`, `parity_pct`,
 
 Each inner flow is pinned to one carrier for as long as it lives (a pool resize never moves a live flow), so inner TCP never sees reordering from the pool.
 
+**A carrier cut on its own heals in about a second.** The other server sends
+feedback on every carrier ten times a second, so a carrier that has heard
+nothing for 1 s while another carrier still hears the other server has lost
+its own way through (its icmp echo id or its port dropped on the path, its
+state lost on the other server). New flows avoid it, its flows move at their
+next packet, and the other server is told so its flows leave it too (a cut in
+one direction only heals on both sides); at 3 s it is closed and replaced.
+The log says `dg: carrier N has heard nothing from the other server for 1.2s
+while 5 other carrier(s) still do — …` and `dg: carrier N heard nothing for
+3.2s — closed; a new carrier replaces it`; the `carriers` line flags it `M`
+and `hs2 status` counts the closed ones (`mute_closed`). When no carrier hears
+the other server it is the path or the other server, not one carrier: then
+the pool dials a scout every 5 s instead.
+
 ## How the icmp tunnel looks on the wire (and what it cannot hide)
 
 The icmp encapsulation is shaped so a passive or stateful classifier cannot pick
@@ -448,7 +462,10 @@ at hundreds or thousands of packets per second is itself the tell — no amount 
 header shaping changes that. The real mitigation is **deployment, not framing**:
 spread the load across several server IPs so no single IP pair carries a
 ping-unlike rate — `bind_local_ip` and multiple exit IPs let you split it across
-IPs (several carriers to one IP do not help here, since they share the pair). And
+IPs (several carriers to one IP do not help here, since they share the pair —
+which is why a tun over icmp runs at most **8** carriers unless `max_links`
+fixes a number: past that, more echo ids to one host add no bandwidth, only a
+pattern ping never makes). And
 reserve icmp for paths that pass *only* ICMP — where a path also passes udp or
 tls, those carry far more per IP without pretending to be ping.
 
@@ -470,7 +487,12 @@ tls, those carry far more per IP without pretending to be ping.
   all ping replies while the tunnel runs (it logs a warning asking you to install
   nftables; `HS2_ICMP_SUPPRESS=nft|iptables|global` forces a method). The rule is
   removed when the tunnel stops; one left by a killed daemon is removed by the
-  next start or by `hs2 cleanup` (never another running tunnel's).
+  next start or by `hs2 cleanup` (never another running tunnel's). The kernel
+  still builds each reply before the rule drops it (a copy of every tunnel
+  packet received as an echo request — in reverse, the download on the Iran
+  server); on a server that runs only the tunnel, `systemctl edit <service>`
+  with `Environment=HS2_ICMP_SUPPRESS=global` stops it answering ping at all
+  and saves that work.
 - **The download is checked** against `hs2-linux-amd64.sha256` (catches a
   broken or altered download; it is not a signature — protect the GitHub
   account with 2FA, and pin a reviewed commit with

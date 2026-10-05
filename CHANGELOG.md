@@ -1096,6 +1096,79 @@ an independent review found why.
     placement, so 6-10% of new connections land on throttled links; the
     autopilot's probe on the reverse edge does not know the exit's ceiling.
 
+## Phase V — tun over icmp: a cut carrier heals in a second, and a ceiling that fits icmp
+
+A review of the datagram tun (`dgtun`) over icmp found that the autopilot sizes
+it like the stream pool and the pool already heals a restart, a path outage, a
+policer and random loss — but not one carrier cut while the others work, and
+that its ceiling ignored what icmp is.
+
+### V1 — a carrier whose own way through is cut moves its flows in ~1 s
+- **What was wrong.** A carrier was only taken for dead when it failed a send,
+  when the other server said goodbye, after 15 s of silence, or when a new
+  carrier arrived (and only those silent 3 s+), or when *every* carrier was
+  silent (the scout). One carrier cut alone — its icmp echo id (or its port)
+  dropped by a middlebox, its state lost on the other server — kept its flows,
+  and took 1/n of the new ones, until its 15 s timeout. The inner TCP backs
+  off meanwhile, so its users came back after 26-38 s; with only the replies
+  cut, some never did within the test. Nothing was logged.
+- **Now.** Each side looks every 250 ms. The other server sends feedback on
+  every carrier every 100 ms, so a carrier that has heard nothing for 1 s
+  while another carrier still hears the other server is **mute**: new flows
+  avoid it and its flows move at their next packet; it tells the other
+  server (`closeMute`, sent twice; an older peer ignores it), whose flows
+  leave it too — so a one-way cut heals on both sides. At 3 s it is closed
+  and replaced. A mute carrier that hears again takes flows again
+  (`closeHear`; the other server's word also expires after 4 s). Nothing is
+  judged while no carrier hears the other server — then the path or the
+  other server is down, and the scout (unchanged) takes over — nor right
+  after the process (or its VM) was stopped for a moment.
+- **Visible.** `dg: carrier N has heard nothing from the other server for
+  1.2s while 5 other carrier(s) still do — its own way through is cut: new
+  flows avoid it and its 10 flow(s) move to live carriers`, then `dg:
+  carrier N heard nothing for 3.2s — closed; a new carrier replaces it`; on
+  the other server `dg: carrier N: the other server hears nothing on it —
+  what goes there is lost: its flows move to live carriers`. `hs2 status`
+  flags such a carrier `M` on its `carriers` line and counts the closed ones
+  (`mute:` line; `mute_closed` in the status file). A carrier that fails
+  outright (a send or read error) now says so too: `dg: carrier N failed
+  (…) — its flows move to live carriers`.
+- **Measured** (two network namespaces, dgtun over icmp, 6 carriers, 24 TCP
+  downloads; one carrier's echo id dropped silently on the way in):
+
+  | Cut | Release: connections stalled / longest | This build |
+  |---|---|---|
+  | Both directions | 9 / 26-38 s, no log line | 7 / 1.5 s |
+  | Kharej → Iran only | 9 / 38 s (not back by the end) | 6 / 2.0 s |
+  | Iran → Kharej only | — | 3 / 1.4 s |
+
+### V2 — tun over icmp runs at most 8 carriers
+- Every carrier of a tun over icmp is one echo identifier between the same two
+  IPs: they share one path and one policer (an ICMP rate limit sees their sum,
+  which is why the governor caps them together), so past a handful more
+  carriers add no bandwidth — only a pattern ping never makes (up to 300 echo
+  ids to one host on a strong server with the auto ceiling) and feedback
+  traffic (10 reports a second each way per carrier). With `max_links` 0
+  (auto) or absent, a tun over icmp now runs at most **8**; a positive
+  `max_links` still fixes the number (doctor and status warn above 8).
+- Said everywhere the ceiling is: the start line (`link pool: ceiling 8 links
+  — tun over icmp: every carrier is one echo id between the same two IPs, so
+  more than 8 add no bandwidth …`), `hs2 status`, `hs2 doctor`, `hs2
+  recommend-links -c <config>`, and the installer (end of setup, and Tuning →
+  Link pool).
+- An existing icmp tunnel without `max_links` ran the historical 32; it now
+  runs 8.
+
+### V3 — guidance: the kernel's own ping replies on a dedicated server
+The icmp listener keeps the server answering ordinary ping by dropping only
+the kernel's replies to tunnel packets (nft/iptables). The kernel still
+builds each of those replies before the rule drops it — a copy per received
+tunnel packet, on the side that receives the echo requests (in reverse the
+Iran server, for the download). On a server that runs only the tunnel,
+`HS2_ICMP_SUPPRESS=global` (in the service's environment) stops the kernel
+answering ping at all instead, which saves that work; the server then does not
+answer ordinary ping.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

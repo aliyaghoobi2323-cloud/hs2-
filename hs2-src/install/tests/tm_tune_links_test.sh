@@ -15,6 +15,7 @@ command -v script >/dev/null 2>&1 || { echo "SKIP tm_tune_links_test (no script(
 awk '/^case "\$\{1:-\}" in$/{exit} {print}' "$INST" > "$T/core.sh"
 cat > "$T/inner.sh" <<'INNER'
 source "$T/core.sh" >/dev/null 2>&1
+[ -n "${FAKEBIN:-}" ] && BIN="$FAKEBIN"
 say(){ printf '%s\n' "$*"; }; warn(){ say "$*"; }; info(){ say "$*"; }; ok(){ say "$*"; }; hr(){ :; }
 tm_cfgset(){ echo "CFGSET $2=$3"; }
 tm_apply_restart(){ echo "APPLIED"; }
@@ -41,4 +42,23 @@ for car in udp auto noise reality; do
   out=$(run "$car" dial false '\n')
   check "$car: single session, nothing written" 'echo "$out" | grep -q "single session" && ! echo "$out" | grep -q CFGSET'
 done
+# tun over icmp: the screen names the icmp ceiling (8), not the hardware's.
+cat > "$T/hs2" <<'FAKE'
+#!/bin/bash
+[ "${1:-}" = recommend-links ] || exit 2
+icmp=0; for a in "$@"; do [ -f "$a" ] && grep -q '"encap":"icmp"' "$a" && icmp=1; done
+case "$*" in
+  *--why*) [ $icmp = 1 ] && echo "8  (tun over icmp: one echo id per carrier between the same two IPs, so more add no bandwidth; the hardware alone would allow 300: 16 GB)" || echo "300  (16 GB RAM, 20 cores)" ;;
+  *) [ $icmp = 1 ] && echo 8 || echo 300 ;;
+esac
+FAKE
+chmod +x "$T/hs2"
+runi(){ # max keys
+  printf '{"mode":"dial","reverse":true,"carrier":"dgtun","encap":"icmp","min_links":2,"max_links":%s,"per_link":8}\n' "$1" > "$T/c.json"
+  printf "$2" | script -qec "T='$T' FAKEBIN='$T/hs2' CFGF='$T/c.json' bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'
+}
+out=$(runi 0 '\n\n\n')
+check "icmp auto: names the icmp ceiling, no 300-carrier note" 'echo "$out" | grep -q "Auto ceiling for this tunnel: max 8  (tun over icmp" && echo "$out" | grep -q "auto, now 8" && ! echo "$out" | grep -q "up to 300"'
+out=$(runi 40 '\n\n\n')
+check "icmp fixed 40: told auto gives 8 over icmp" 'echo "$out" | grep -q "fixed at 40; auto gives 8 over icmp"'
 exit "$fail"

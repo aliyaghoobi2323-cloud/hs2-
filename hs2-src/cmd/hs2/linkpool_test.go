@@ -503,7 +503,7 @@ func TestDgtunAutoCeilingIsTheStreamPools(t *testing.T) {
 		want int
 	}{
 		{`{"carrier":"dgtun","encap":"gre","max_links":0}`, 300},
-		{`{"carrier":"dgtun","encap":"icmp","max_links":0}`, 300},
+		{`{"carrier":"dgtun","encap":"icmp","max_links":0}`, icmpMaxLinks}, // icmp: see TestICMPTunCeiling
 		{`{"carrier":"dgtun","max_links":0}`, 300},
 		{`{"carrier":"dgtun","encap":"udp","max_links":0}`, 300},
 		{`{"carrier":"dgtun","encap":"gre","max_links":200}`, 200}, // explicit: as written
@@ -687,5 +687,97 @@ func TestStatusNamesTheCoresTheCeilingUses(t *testing.T) {
 	}
 	if ls.CPUCores != 2 || !strings.Contains(ls.CeilingText, "2 cores") {
 		t.Fatalf("cores %d, ceiling text %q; want the 2 the ceiling uses", ls.CPUCores, ls.CeilingText)
+	}
+}
+
+// A tun over icmp runs at most icmpMaxLinks carriers unless max_links fixes a
+// number: every carrier there is one echo id between the same two IPs (one
+// path, one policer), so more add no bandwidth — only a ping-unlike pattern.
+// The start line, doctor and status say why; a fixed number above it is
+// kept, with a warning.
+func TestICMPTunCeiling(t *testing.T) {
+	useTempStatusDir(t)
+	pinHW(t, 17408, 20) // auto would give 300 here
+	for _, c := range []struct {
+		cfg  string
+		want int
+		mode string
+	}{
+		{`{"carrier":"dgtun","encap":"icmp","max_links":0}`, icmpMaxLinks, ceilICMP},
+		{`{"carrier":"dgtun","encap":"icmp"}`, icmpMaxLinks, ceilICMP},
+		{`{"carrier":"dgtun","encap":" ICMP "}`, icmpMaxLinks, ceilICMP},
+		{`{"carrier":"dgtun","encap":"icmp","max_links":40}`, 40, ceilFixed},
+		{`{"carrier":"dgtun","encap":"icmp","max_links":4}`, 4, ceilFixed},
+		{`{"carrier":"dgtun","encap":"udp","max_links":0}`, 300, ceilAuto},
+		{`{"carrier":"mtcp","encap":"icmp","max_links":0}`, 300, ceilAuto}, // encap means nothing to mtcp
+	} {
+		var fc fileConfig
+		if err := json.Unmarshal([]byte(c.cfg), &fc); err != nil {
+			t.Fatal(err)
+		}
+		got, mode, _ := linkCeiling(fc)
+		if got != c.want || mode != c.mode {
+			t.Errorf("%s: ceiling %d (%s), want %d (%s)", c.cfg, got, mode, c.want, c.mode)
+		}
+		line := ceilingLogLine(fc)
+		switch {
+		case mode == ceilICMP && !strings.Contains(line, "tun over icmp: every carrier is one echo id between the same two IPs, so more than 8 add no bandwidth"):
+			t.Errorf("%s: start line %q", c.cfg, line)
+		case c.want == 40 && !strings.Contains(line, "over icmp more than 8 add no bandwidth"):
+			t.Errorf("%s: start line %q", c.cfg, line)
+		case c.want == 4 && strings.Contains(line, "icmp"):
+			t.Errorf("%s: start line warns about a ceiling within 8: %q", c.cfg, line)
+		}
+	}
+	// min_links above it still lifts the ceiling, as everywhere.
+	var fc fileConfig
+	json.Unmarshal([]byte(`{"carrier":"dgtun","encap":"icmp","max_links":0,"min_links":10}`), &fc)
+	if _, max, _ := linkEnvelope(fc); max != 10 {
+		t.Errorf("min_links 10 over icmp: max %d, want 10", max)
+	}
+	// status: no drift advice for the icmp ceiling; a fixed 40 over icmp is flagged.
+	ls := liveStatus{Dir: "reverse", Role: "Iran side", CfgMax: 8, CeilRaw: 8, CeilMode: ceilICMP, RecMax: 300, Encap: "icmp"}
+	if d := driftLine(ls); d != "" {
+		t.Errorf("drift line for the icmp ceiling: %q", d)
+	}
+	if w := ceilingWhy(ls); !strings.Contains(w, "tun over icmp") {
+		t.Errorf("ceilingWhy: %q", w)
+	}
+	ls = liveStatus{Dir: "reverse", Role: "Iran side", CfgMax: 40, CeilRaw: 40, CeilMode: ceilFixed, RecMax: 300, Encap: "icmp"}
+	if d := driftLine(ls); !strings.Contains(d, "max_links 40 over icmp") || !strings.Contains(d, "set max_links to 0 for 8") {
+		t.Errorf("drift line for a fixed 40 over icmp: %q", d)
+	}
+	ls.CfgMax, ls.CeilRaw = 6, 6
+	if d := driftLine(ls); d != "" {
+		t.Errorf("drift line for a fixed 6 over icmp: %q", d)
+	}
+}
+
+// doctor: the icmp ceiling is ok and says why; a fixed number above it warns;
+// a direct Kharej still only gets the "Iran's ceiling applies" fact.
+func TestDoctorICMPCeiling(t *testing.T) {
+	useTempStatusDir(t)
+	cfg := filepath.Join(t.TempDir(), "c.json")
+	pinHW(t, 17408, 20)
+	icmp := func(extra string) fileConfig {
+		var fc fileConfig
+		if err := json.Unmarshal([]byte(`{"mode":"dial","reverse":true,"carrier":"dgtun","encap":"icmp"`+extra+`}`), &fc); err != nil {
+			t.Fatal(err)
+		}
+		return fc
+	}
+	if d := doctorLinkPool(icmp(`,"max_links":0`), cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "tun over icmp: 8 carriers at most") {
+		t.Fatalf("icmp auto: %v", d.lines)
+	}
+	if d := doctorLinkPool(icmp(`,"max_links":40`), cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "max_links 40 over icmp") {
+		t.Fatalf("icmp fixed 40: %v", d.lines)
+	}
+	if d := doctorLinkPool(icmp(`,"max_links":6`), cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "within the icmp ceiling of 8") {
+		t.Fatalf("icmp fixed 6: %v", d.lines)
+	}
+	fc := icmp(`,"max_links":40`)
+	fc.Mode, fc.Reverse = "listen", false
+	if d := doctorLinkPool(fc, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "Iran server's ceiling applies") {
+		t.Fatalf("direct Kharej: %v", d.lines)
 	}
 }
