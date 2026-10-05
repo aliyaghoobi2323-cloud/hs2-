@@ -119,6 +119,43 @@ func TestCompleteCsum(t *testing.T) {
 	}
 }
 
+// udpPkt builds an IPv4 UDP packet with a full checksum.
+func udpPkt(src, dst [4]byte, sport, dport uint16, payload []byte) []byte {
+	p := make([]byte, 28+len(payload))
+	p[0], p[8], p[9] = 0x45, 64, 17
+	binary.BigEndian.PutUint16(p[2:], uint16(len(p)))
+	copy(p[12:], src[:])
+	copy(p[16:], dst[:])
+	ipv4Csum(p[:20])
+	u := p[20:]
+	binary.BigEndian.PutUint16(u[0:], sport)
+	binary.BigEndian.PutUint16(u[2:], dport)
+	binary.BigEndian.PutUint16(u[4:], uint16(len(u)))
+	copy(u[8:], payload)
+	binary.BigEndian.PutUint16(u[6:], ^csumFold(csumAdd(pseudo4(p[12:16], p[16:20], 17, len(u)), u)))
+	return p
+}
+
+// A transport checksum that comes out 0 is written 0xffff (UDP reads 0 as
+// "no checksum"), as the kernel itself does.
+func TestCompleteCsumZeroIsFFFF(t *testing.T) {
+	p := udpPkt(ipA, ipB, 1, 2, []byte{0, 0})
+	u := p[20:]
+	binary.BigEndian.PutUint16(u[6:], 0)
+	s0 := csumFold(csumAdd(pseudo4(p[12:16], p[16:20], 17, len(u)), u))
+	binary.BigEndian.PutUint16(u[8:], 0xffff-s0) // the sum folds to 0xffff: checksum 0
+	binary.BigEndian.PutUint16(u[6:], csumFold(pseudo4(p[12:16], p[16:20], 17, len(u))))
+	if err := completeCsum(p, 20, 6); err != nil {
+		t.Fatal(err)
+	}
+	if got := binary.BigEndian.Uint16(u[6:]); got != 0xffff {
+		t.Fatalf("checksum %#x, want 0xffff", got)
+	}
+	if csumFold(csumAdd(pseudo4(p[12:16], p[16:20], 17, len(u)), u)) != 0xffff {
+		t.Fatal("the packet does not verify")
+	}
+}
+
 // Segments cut from one packet coalesce back into one, whose header the
 // kernel takes (gso TCPV4, partial checksum) and whose payload is the whole.
 func TestCoalesceRoundTrip(t *testing.T) {

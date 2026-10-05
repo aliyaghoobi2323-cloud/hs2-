@@ -41,8 +41,17 @@ type Device struct {
 	dropped atomic.Uint64
 
 	// what the offloads saved, for the status line: kernel packets read and
-	// the segments they gave; writes made and the packets they carried.
-	reads, segsOut, writes, pktsIn atomic.Uint64
+	// the segments they gave; writes made and the packets they carried;
+	// merged packets the kernel refused (their segments went in one by one).
+	reads, segsOut, writes, pktsIn, refused atomic.Uint64
+}
+
+// OffloadCounts is what OffloadStats reports.
+type OffloadCounts struct {
+	Reads, Segs   uint64 // kernel packets read, and the IP packets they gave
+	Writes, Pkts  uint64 // writes made, and the IP packets they carried
+	Dropped       uint64 // offload packets from the kernel dropped as malformed
+	RefusedMerges uint64 // merged packets the kernel refused (sent one by one instead)
 }
 
 // Options for OpenWith.
@@ -134,10 +143,10 @@ func (d *Device) MTU() int     { return d.mtu }
 // Offloaded reports whether the kernel took the TCP offloads.
 func (d *Device) Offloaded() bool { return d.offload }
 
-// OffloadStats: kernel packets read and the IP packets they gave; writes
-// made and the IP packets they carried; offload packets dropped as malformed.
-func (d *Device) OffloadStats() (reads, segs, writes, pkts, dropped uint64) {
-	return d.reads.Load(), d.segsOut.Load(), d.writes.Load(), d.pktsIn.Load(), d.dropped.Load()
+// OffloadStats is what the offloads did since the device opened.
+func (d *Device) OffloadStats() OffloadCounts {
+	return OffloadCounts{Reads: d.reads.Load(), Segs: d.segsOut.Load(), Writes: d.writes.Load(), Pkts: d.pktsIn.Load(),
+		Dropped: d.dropped.Load(), RefusedMerges: d.refused.Load()}
 }
 
 // Read returns one IP packet. With offloads one kernel read may give several
@@ -225,25 +234,34 @@ func (d *Device) Write(p []byte) (int, error) {
 	_, err := d.f.Write(b)
 	*bp = b[:0]
 	wbufPool.Put(bp)
-	d.writes.Add(1)
-	d.pktsIn.Add(1)
 	if err != nil {
 		return 0, err
 	}
+	d.writes.Add(1)
+	d.pktsIn.Add(1)
 	return len(p), nil
 }
 
 // WriteBatch injects several IP packets: with offloads, consecutive segments
 // of one TCP connection go in as one (see coalesce); each other packet as it
-// is. Without offloads it writes them one by one.
-func (d *Device) WriteBatch(pkts [][]byte) error {
+// is. Without offloads it writes them one by one. A packet the kernel refuses
+// is skipped, not the rest of the batch: n counts the packets that went in,
+// err is the first refusal.
+func (d *Device) WriteBatch(pkts [][]byte) (n int, err error) {
+	keep := func(e error) {
+		if err == nil {
+			err = e
+		}
+	}
 	if !d.offload || len(pkts) == 1 {
 		for _, p := range pkts {
-			if _, err := d.Write(p); err != nil {
-				return err
+			if _, e := d.Write(p); e != nil {
+				keep(e)
+				continue
 			}
+			n++
 		}
-		return nil
+		return n, err
 	}
 	gs := groPool.Get().(*groScratch)
 	defer groPool.Put(gs)
@@ -251,19 +269,32 @@ func (d *Device) WriteBatch(pkts [][]byte) error {
 	for i := range gs.items {
 		it := &gs.items[i]
 		if len(it.segs) == 1 {
-			if _, err := d.Write(pkts[it.segs[0]]); err != nil {
-				return err
+			if _, e := d.Write(pkts[it.segs[0]]); e != nil {
+				keep(e)
+				continue
 			}
+			n++
 			continue
 		}
 		gs.buf = buildMerged(gs.buf, pkts, it)
-		if _, err := d.f.Write(gs.buf); err != nil {
-			return err
+		if _, e := d.f.Write(gs.buf); e != nil {
+			// The kernel refused the merged packet: offer its segments one
+			// by one, so one bad merge cannot lose a whole run.
+			d.refused.Add(1)
+			for _, si := range it.segs {
+				if _, e2 := d.Write(pkts[si]); e2 != nil {
+					keep(e)
+					continue
+				}
+				n++
+			}
+			continue
 		}
 		d.writes.Add(1)
 		d.pktsIn.Add(uint64(len(it.segs)))
+		n += len(it.segs)
 	}
-	return nil
+	return n, err
 }
 
 // groScratch is one WriteBatch's working space (carriers write concurrently).

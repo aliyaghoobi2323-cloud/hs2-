@@ -12,13 +12,13 @@ type tunBatch struct {
 	mu      sync.Mutex
 	pkts    [][]byte
 	dev     tunWriter
-	bw      interface{ WriteBatch([][]byte) error }
+	bw      interface{ WriteBatch([][]byte) (int, error) }
 	written func(n int)
 }
 
 func newTunBatch(dev tunWriter, written func(int)) *tunBatch {
 	b := &tunBatch{dev: dev, written: written}
-	b.bw, _ = dev.(interface{ WriteBatch([][]byte) error })
+	b.bw, _ = dev.(interface{ WriteBatch([][]byte) (int, error) })
 	return b
 }
 
@@ -46,9 +46,8 @@ func (b *tunBatch) flush() {
 	if len(b.pkts) == 0 {
 		return
 	}
-	if err := b.bw.WriteBatch(b.pkts); err == nil {
-		b.written(len(b.pkts))
-	}
+	n, _ := b.bw.WriteBatch(b.pkts) // a refused packet is a lost one, as with Write
+	b.written(n)
 	clear(b.pkts)
 	b.pkts = b.pkts[:0]
 }

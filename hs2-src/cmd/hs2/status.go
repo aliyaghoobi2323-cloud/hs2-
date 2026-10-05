@@ -131,6 +131,9 @@ type liveStatus struct {
 	TunSegs         uint64  `json:"tun_segs,omitempty"`
 	TunWrites       uint64  `json:"tun_writes,omitempty"`
 	TunPkts         uint64  `json:"tun_pkts,omitempty"`
+	TunMode         string  `json:"tun_mode,omitempty"`
+	TunBad          uint64  `json:"tun_bad,omitempty"`
+	TunRefused      uint64  `json:"tun_refused,omitempty"`
 	Carriers        string  `json:"carriers,omitempty"` // id:state:sent/loss% per carrier
 	ReorderHeld     uint64  `json:"reorder_held,omitempty"`
 	ReorderFilled   uint64  `json:"reorder_filled,omitempty"`
@@ -283,6 +286,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.Carriers = s.DropNoCarrier, s.DropQueueFull, s.DropAged, s.Carriers
 			ls.MuteClosed = s.MuteClosed
 			ls.TunOffload, ls.TunReads, ls.TunSegs, ls.TunWrites, ls.TunPkts = s.TunOffload, s.TunReads, s.TunSegs, s.TunWrites, s.TunPkts
+			ls.TunMode, ls.TunBad, ls.TunRefused = s.TunMode, s.TunBad, s.TunRefused
 			ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut = s.ReorderHeld, s.ReorderFilled, s.ReorderTimedOut
 		}
 		ls.CPUPct, ls.CPUCores = cpu.sample(), hwCores
@@ -459,8 +463,11 @@ func printStatus(path string) {
 			fmt.Printf("  drops:      no carrier %d · carrier queue full %d · waited >50 ms %d · pacer %d · receive queue %d\n",
 				ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.PacerDropped, ls.RxDropped)
 		}
-		if ls.TunOffload {
+		switch {
+		case ls.TunOffload:
 			fmt.Printf("  tun:        TCP offload on · %s\n", offloadLine(ls))
+		case ls.TunMode != "":
+			fmt.Printf("  tun:        %s\n", ls.TunMode)
 		}
 		if ls.MuteClosed > 0 {
 			fmt.Printf("  mute:       %d carrier(s) closed and replaced after hearing nothing while the others did (their own way through was cut)\n", ls.MuteClosed)
@@ -809,6 +816,13 @@ func offloadLine(ls liveStatus) string {
 		}
 		return fmt.Sprintf("%.1f", float64(pkts)/float64(calls))
 	}
-	return fmt.Sprintf("%d reads gave %d packets (%s each) · %d writes carried %d packets (%s each)",
+	s := fmt.Sprintf("%d reads gave %d packets (%s each) · %d writes carried %d packets (%s each)",
 		ls.TunReads, ls.TunSegs, per(ls.TunSegs, ls.TunReads), ls.TunWrites, ls.TunPkts, per(ls.TunPkts, ls.TunWrites))
+	if ls.TunBad > 0 {
+		s += fmt.Sprintf(" · %d malformed kernel packets dropped", ls.TunBad)
+	}
+	if ls.TunRefused > 0 {
+		s += fmt.Sprintf(" · %d merged packets refused by the kernel (sent one by one)", ls.TunRefused)
+	}
+	return s
 }

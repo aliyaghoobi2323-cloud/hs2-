@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +16,7 @@ type batchTUN struct {
 	batches [][]string
 }
 
-func (d *batchTUN) WriteBatch(ps [][]byte) error {
+func (d *batchTUN) WriteBatch(ps [][]byte) (int, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	var b []string
@@ -23,7 +24,7 @@ func (d *batchTUN) WriteBatch(ps [][]byte) error {
 		b = append(b, string(p))
 	}
 	d.batches = append(d.batches, b)
-	return nil
+	return len(ps), nil
 }
 
 func (d *batchTUN) all() (n int, batches int, biggest int) {
@@ -84,4 +85,41 @@ func TestDgReadLoopBatchesTunWrites(t *testing.T) {
 	}
 	within(t, time.Second, "released by the reorderer's timer", func() bool { n, _, _ := dev.all(); return n == 42 })
 	_ = l
+}
+
+// refusingTUN takes every packet but the ones starting 0x00 (as a kernel
+// refuses a non-IP packet), reporting how many went in.
+type refusingTUN struct{ batchTUN }
+
+func (d *refusingTUN) WriteBatch(ps [][]byte) (int, error) {
+	var ok [][]byte
+	for _, p := range ps {
+		if p[0] != 0 {
+			ok = append(ok, p)
+		}
+	}
+	d.batchTUN.WriteBatch(ok)
+	if len(ok) < len(ps) {
+		return len(ok), errors.New("refused")
+	}
+	return len(ok), nil
+}
+
+// A refused packet costs only itself: the rest of its batch is written and
+// counted.
+func TestTunBatchCountsWhatWentIn(t *testing.T) {
+	dev := &refusingTUN{batchTUN{fakeTUN: newFakeTUN(1400)}}
+	var written int
+	b := newTunBatch(dev, func(n int) { written += n })
+	for i := 0; i < 10; i++ {
+		v := byte(0x45)
+		if i == 3 || i == 7 {
+			v = 0
+		}
+		b.add([]byte{v, byte(i)})
+	}
+	b.flush()
+	if n, _, _ := dev.all(); n != 8 || written != 8 {
+		t.Fatalf("wrote %d, counted %d; want 8 and 8", n, written)
+	}
 }

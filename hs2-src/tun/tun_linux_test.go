@@ -50,23 +50,6 @@ func needNetns(t *testing.T) {
 	}
 }
 
-// udpPkt builds an IPv4 UDP packet with a full checksum.
-func udpPkt(src, dst [4]byte, sport, dport uint16, payload []byte) []byte {
-	p := make([]byte, 28+len(payload))
-	p[0], p[8], p[9] = 0x45, 64, 17
-	binary.BigEndian.PutUint16(p[2:], uint16(len(p)))
-	copy(p[12:], src[:])
-	copy(p[16:], dst[:])
-	ipv4Csum(p[:20])
-	u := p[20:]
-	binary.BigEndian.PutUint16(u[0:], sport)
-	binary.BigEndian.PutUint16(u[2:], dport)
-	binary.BigEndian.PutUint16(u[4:], uint16(len(u)))
-	copy(u[8:], payload)
-	binary.BigEndian.PutUint16(u[6:], ^csumFold(csumAdd(pseudo4(p[12:16], p[16:20], 17, len(u)), u)))
-	return p
-}
-
 // With offloads the kernel's packets come out complete (a partial UDP
 // checksum finished), and packets written in (one by one and in a batch)
 // reach a local socket — the kernel verifies their checksums.
@@ -119,11 +102,13 @@ func TestOffloadDeviceUDP(t *testing.T) {
 	if _, err := d.Write(udpPkt([4]byte{10, 9, 0, 2}, [4]byte{10, 9, 0, 1}, 9, 7003, []byte("one"))); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.WriteBatch([][]byte{
+	// A packet the kernel refuses (not IP) costs only itself.
+	if n, err := d.WriteBatch([][]byte{
 		udpPkt([4]byte{10, 9, 0, 2}, [4]byte{10, 9, 0, 1}, 9, 7003, []byte("two")),
+		make([]byte, 40),
 		udpPkt([4]byte{10, 9, 0, 2}, [4]byte{10, 9, 0, 1}, 9, 7003, []byte("three")),
-	}); err != nil {
-		t.Fatal(err)
+	}); n != 2 || err == nil {
+		t.Fatalf("WriteBatch = %d, %v; want 2 and the refusal", n, err)
 	}
 	ln.SetReadDeadline(time.Now().Add(3 * time.Second))
 	for _, want := range []string{"one", "two", "three"} {

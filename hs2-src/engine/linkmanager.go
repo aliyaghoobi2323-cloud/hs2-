@@ -2268,11 +2268,14 @@ type PoolStats struct {
 	DropQueueFull uint64  // tun packets dropped: the carrier's queue was full
 	DropAged      uint64  // tun packets dropped: waited > 50 ms in a carrier's queue
 	MuteClosed    uint64  // carriers closed for hearing nothing while others did (since start)
-	// The TUN's TCP offloads (set by the caller): on, and since start the
-	// kernel reads and the packets they gave, the writes and the packets
-	// they carried.
+	// The TUN's TCP offloads (set by the caller): on, what the start log said
+	// about them, and since start the kernel reads and the packets they gave,
+	// the writes and the packets they carried, malformed kernel packets
+	// dropped, and merged packets the kernel refused.
 	TunOffload                            bool
+	TunMode                               string
 	TunReads, TunSegs, TunWrites, TunPkts uint64
+	TunBad, TunRefused                    uint64
 	Carriers                              string // per carrier: id:state:sent/loss%
 	// TCP reorder buffer before the TUN (live carriers): segments held behind a
 	// gap, gaps that filled while held, and gaps given up after the hold.

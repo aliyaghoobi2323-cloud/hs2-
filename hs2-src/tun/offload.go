@@ -110,11 +110,17 @@ func ipv4Csum(h []byte) {
 
 // completeCsum finishes a partial transport checksum (NEEDS_CSUM): the field
 // at start+off holds the pseudo-header sum; the checksum covers pkt[start:].
+// A result of 0 goes out as 0xffff, as the kernel's own skb_checksum_help
+// writes it: the same value in ones' complement, and for UDP 0 would mean
+// "no checksum".
 func completeCsum(pkt []byte, start, off int) error {
 	if start < 0 || off < 0 || start+off+2 > len(pkt) {
 		return errBadGSO
 	}
 	c := ^csumFold(csumAdd(0, pkt[start:]))
+	if c == 0 {
+		c = 0xffff
+	}
 	binary.BigEndian.PutUint16(pkt[start+off:], c)
 	return nil
 }

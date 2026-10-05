@@ -875,8 +875,10 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 			startStatusWriter(ctx, fc, configPath, func() engine.PoolStats {
 				st := s()
 				st.Routes = peerRoutes()
-				st.TunOffload = dev.Offloaded()
-				st.TunReads, st.TunSegs, st.TunWrites, st.TunPkts, _ = dev.OffloadStats()
+				st.TunOffload, st.TunMode = dev.Offloaded(), off
+				c := dev.OffloadStats()
+				st.TunReads, st.TunSegs, st.TunWrites, st.TunPkts = c.Reads, c.Segs, c.Writes, c.Pkts
+				st.TunBad, st.TunRefused = c.Dropped, c.RefusedMerges
 				return st
 			})
 		}}

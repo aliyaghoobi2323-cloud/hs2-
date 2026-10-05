@@ -95,8 +95,8 @@ func newUDPListenBatch(uc *net.UDPConn, pktinfo bool) *udpListenBatch {
 	if noBatch {
 		return nil
 	}
-	if _, err := uc.SyscallConn(); err != nil {
-		return nil
+	if !ipv4Socket(uc) {
+		return nil // names and replies below are IPv4 sockaddrs
 	}
 	l := &udpListenBatch{uc: uc, pktinfo: pktinfo, rb: mmsg.NewBatch(udpBatch),
 		bufs: make([][]byte, udpBatch), sizes: make([]int, udpBatch), trunc: make([]bool, udpBatch)}
@@ -110,6 +110,24 @@ func newUDPListenBatch(uc *net.UDPConn, pktinfo bool) *udpListenBatch {
 		}
 	}
 	return l
+}
+
+// ipv4Socket reports whether uc is an AF_INET socket (an IPv6 one, dual-stack
+// or not, names its peers with sockaddr_in6, which the batch does not hold).
+func ipv4Socket(uc *net.UDPConn) bool {
+	rc, err := uc.SyscallConn()
+	if err != nil {
+		return false
+	}
+	v4 := false
+	if err := rc.Control(func(fd uintptr) {
+		sa, err := unix.Getsockname(int(fd))
+		_, v4 = sa.(*unix.SockaddrInet4)
+		v4 = v4 && err == nil
+	}); err != nil {
+		return false
+	}
+	return v4
 }
 
 // read takes the waiting datagrams in one call; fn gets each (its buffer is
