@@ -28,7 +28,7 @@ func TestDgAgedDropCountsAsPressure(t *testing.T) {
 	// out rather than send it.
 	b := make([]byte, 100)
 	stale := time.Now().Add(-(dgSojourn + 60*time.Millisecond))
-	if !l.enqueue(&b, 1, stale) {
+	if ok, _ := l.enqueue(&b, 1, stale); !ok {
 		t.Fatal("enqueue of a single packet failed (queue should be empty)")
 	}
 	if !waitFor(t, 2*time.Second, func() bool { return p.dropAged.Load() == 1 }) {

@@ -159,6 +159,13 @@ side `the other server hears nothing on it — … its flows move to live
 carriers`. Remove with `nft delete table inet hs2t`. Also `hs2 status`:
 `ceiling 8` with `tun over icmp` as the reason.
 
+**V10 — ping under load (Phase V).** Through the tun (any datagram encap),
+with downloads that fill the path (`iperf3 -R -P 8` through the tun), run
+`ping -c 150 -i 0.1 <the other side's tun IP>` and note p50/p99 and mdev.
+Then set `Environment=HS2_DG_FQ=0` on both servers (`systemctl edit
+<service>`, restart) and repeat; remove it afterwards. Pass: with the fair
+queue p50/p99 clearly lower and no fewer Mbit/s than without it.
+
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with

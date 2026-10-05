@@ -408,6 +408,15 @@ status file under `/run/hs2/` (`loss_pct`, `max_loss_pct`, `parity_pct`,
 
 Each inner flow is pinned to one carrier for as long as it lives (a pool resize never moves a live flow), so inner TCP never sees reordering from the pool.
 
+**Ping under load.** Each carrier's send queue is fair across its flows and
+serves interactive ones first: a flow with nothing queued and under 256
+kbit/s lately (a game, a call's audio, DNS, ping, a remote shell) goes ahead
+of the downloads, and through a fast lane in the carrier's pacer; downloads
+share the carrier by bytes, and a full queue drops from the flow with the
+most queued. On a 20 Mbit/s bottleneck with 8 downloads, ping through the tun
+went from 66 ms (p50) to 12 ms at the same throughput. `HS2_DG_FQ=0` turns it
+off (one FIFO per carrier, as before).
+
 **A carrier cut on its own heals in about a second.** The other server sends
 feedback on every carrier ten times a second, so a carrier that has heard
 nothing for 1 s while another carrier still hears the other server has lost

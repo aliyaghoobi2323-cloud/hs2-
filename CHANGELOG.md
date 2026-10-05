@@ -1159,6 +1159,38 @@ that its ceiling ignored what icmp is.
 - An existing icmp tunnel without `max_links` ran the historical 32; it now
   runs 8.
 
+### V4 — ping under load: a fair queue per carrier, interactive flows first
+- **What was wrong.** Each carrier had one FIFO send queue (up to 256 packets,
+  50 ms) in front of its pacer, which holds up to 20 ms more. On a busy pool
+  every carrier carries some download, so a game's, a call's, a DNS or a ping
+  packet waited behind up to ~70 ms of it: that was ping and jitter under
+  load. A full queue also dropped the newcomer — often the interactive packet.
+- **Now** (`engine/dgfq.go`): each carrier's queue is a deficit round robin
+  over its flows. A *sparse* flow — nothing queued, under 256 kbit/s lately
+  (a game, a call's audio, DNS, ping, a remote shell, the first packets of
+  any connection) — is served before the backlog, and its packet takes a
+  fast lane in the carrier's pacer (after FEC parity, ahead of the data
+  queue). Downloads take turns by bytes. A full queue drops the head of the
+  flow with the most queued. A flow that went the ordinary way in the last
+  100 ms never takes the fast lane, so a flow's packets keep their order;
+  a heavy flow paced just under the carrier's rate does not keep the head
+  start (it spends its rate budget), so it cannot starve the downloads.
+  Bandwidth, pacing, FEC and the 50 ms sojourn bound are unchanged.
+  `HS2_DG_FQ=0` restores the single FIFO.
+- **Measured** (two network namespaces, tun over icmp, 4 carriers, a
+  20 Mbit/s bottleneck each way, 8 downloads, ping through the tun):
+
+  | | FIFO (`HS2_DG_FQ=0`) | fair queue |
+  |---|---|---|
+  | ping idle | 0.7 ms | 0.6 ms |
+  | ping under load: p50 / p99 | 66 / 94 ms | 12 / 20 ms |
+  | jitter (std dev) | 17 ms | 5 ms |
+  | pings lost | 5 of 120 | 0 of 120 |
+  | throughput | 16.4 Mbit/s | 16.4 Mbit/s |
+
+  What is left (~12 ms) is the bottleneck's own queue, which the carriers'
+  delay-based pacing keeps short.
+
 ### V3 — guidance: the kernel's own ping replies on a dedicated server
 The icmp listener keeps the server answering ordinary ping by dropping only
 the kernel's replies to tunnel packets (nft/iptables). The kernel still

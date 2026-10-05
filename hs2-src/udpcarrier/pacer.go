@@ -26,8 +26,15 @@ type pacer struct {
 	rc    *rateControl
 	write func([]byte) error
 
-	in   chan []byte // data shards
-	pri  chan []byte // parity shards, drained first so they arrive in time
+	in  chan []byte // data shards
+	pri chan []byte // parity shards, drained first so they arrive in time
+	// fast: data shards of an interactive flow's packet (SendUrgent), sent
+	// after parity and before the data queue, and never held back by the
+	// queue's time bound: a ping or a game packet does not wait behind up to
+	// pacerQueueTime of a download. The pool marks only flows that had
+	// nothing queued, and never one whose earlier packets may still be in
+	// the data queue (so a flow's packets keep their order).
+	fast chan []byte
 	pool sync.Pool
 
 	done      chan struct{}
@@ -72,6 +79,7 @@ func newPacer(rc *rateControl, write func([]byte) error, queueDepth int, stamps 
 		write: write,
 		in:    make(chan []byte, queueDepth),
 		pri:   make(chan []byte, queueDepth),
+		fast:  make(chan []byte, queueDepth),
 		done:  make(chan struct{}),
 		room:  make(chan struct{}, 1),
 	}
@@ -88,7 +96,10 @@ func newPacer(rc *rateControl, write func([]byte) error, queueDepth int, stamps 
 // enqueue copies pkt (the encoder reuses its buffer after emit returns) and
 // queues it, blocking while the queue is full so backpressure reaches the
 // sender. It returns once queued, or when the carrier closes.
-func (p *pacer) enqueue(pkt []byte) {
+func (p *pacer) enqueue(pkt []byte) { p.enqueueLane(pkt, false) }
+
+// enqueueLane is enqueue; urgent puts a data shard in the fast lane.
+func (p *pacer) enqueueLane(pkt []byte, urgent bool) {
 	bp := p.pool.Get().(*[]byte)
 	// Reserve a datagram header the pacer fills at write time — tag, wire
 	// sequence and (stamped form) send time: 9 bytes, of which the unstamped
@@ -96,9 +107,12 @@ func (p *pacer) enqueue(pkt []byte) {
 	b := append((*bp)[:0], 0, 0, 0, 0, 0, 0, 0, 0, 0)
 	b = append(b, pkt...)
 	dst := p.in
-	if fec.IsParity(pkt) {
+	switch {
+	case fec.IsParity(pkt):
 		dst = p.pri // parity jumps the queue so it beats the group's ttl
-	} else {
+	case urgent:
+		dst = p.fast // an interactive packet: not behind the data queue
+	default:
 		for p.queued.Load() > p.budget() {
 			select {
 			case <-p.done:
@@ -146,7 +160,8 @@ func (p *pacer) loop() {
 	for {
 		var b []byte
 		// Drain parity ahead of data so a group's parity is not stuck behind a
-		// backlog of data and miss the decoder's recovery window.
+		// backlog of data and miss the decoder's recovery window; then the
+		// fast lane (interactive packets), then the data queue.
 		select {
 		case <-p.done:
 			return
@@ -156,7 +171,15 @@ func (p *pacer) loop() {
 			case <-p.done:
 				return
 			case b = <-p.pri:
-			case b = <-p.in:
+			case b = <-p.fast:
+			default:
+				select {
+				case <-p.done:
+					return
+				case b = <-p.pri:
+				case b = <-p.fast:
+				case b = <-p.in:
+				}
 			}
 		}
 		now := time.Now()

@@ -127,8 +127,8 @@ type DgListener interface {
 // autopilot reads.
 type dgLink struct {
 	car  Carrier
-	id   uint32 // rendezvous seed
-	q    chan qpkt
+	id   uint32   // rendezvous seed
+	fq   *fqSched // send queue: fair across flows, interactive ones first (dgfq.go)
 	done chan struct{}
 	once sync.Once
 	dead atomic.Bool
@@ -219,7 +219,7 @@ type dgFlow struct {
 
 func newDgLink(car Carrier, now time.Time) *dgLink {
 	l := &dgLink{
-		car: car, id: randSeed(), q: make(chan qpkt, dgQueueLen), done: make(chan struct{}),
+		car: car, id: randSeed(), fq: newFQSched(dgQueueLen), done: make(chan struct{}),
 		born: now, servingSince: now, flows: map[uint32]*dgFlow{},
 	}
 	return l
@@ -344,16 +344,19 @@ const (
 )
 
 // enqueue hands a packet to the carrier's writer without ever blocking. A full
-// queue drops the packet and records pressure.
-func (l *dgLink) enqueue(b *[]byte, flow uint32, now time.Time) bool {
-	select {
-	case l.q <- qpkt{b, now}:
-		l.noteFlowSend(flow, len(*b), now)
-		return true
-	default:
+// queue drops a packet — the head of the flow with the most queued, which may
+// be this one (ok false) or another flow's (displaced, for the caller to
+// recycle and count) — and records pressure.
+func (l *dgLink) enqueue(b *[]byte, flow uint32, now time.Time) (ok bool, displaced *[]byte) {
+	if d := l.fq.push(qpkt{b, now}, flow); d != nil {
 		l.droppedAt.Store(now.UnixNano())
-		return false
+		if d.b == b {
+			return false, nil
+		}
+		displaced = d.b
 	}
+	l.noteFlowSend(flow, len(*b), now)
+	return true, displaced
 }
 
 func (l *dgLink) noteFlowSend(flow uint32, n int, now time.Time) {
@@ -384,36 +387,49 @@ func (l *dgLink) noteFlowRecv(flow uint32, n int, now time.Time) {
 
 // writeLoop is the only goroutine that sends on the carrier. Each queued IP
 // packet is one datagram; the carrier does its own pacing and framing, so
-// there is nothing to coalesce (unlike the TLS l3 path).
+// there is nothing to coalesce (unlike the TLS l3 path). A packet the fair
+// queue marks urgent (an interactive flow's: see dgfq.go) takes the carrier's
+// fast lane past its pacer's data queue, where the carrier has one.
 func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
+	fast, _ := l.car.(interface{ SendUrgent([]byte) error })
 	for {
-		select {
-		case <-l.done:
-			return
-		case p := <-l.q:
-			if time.Since(p.t) > dgSojourn {
-				// The packet aged out behind a writer blocked in the pacer: the
-				// carrier could not drain its queue within the sojourn, so it is
-				// at its limit just as surely as on a queue-full drop. Record it
-				// as pressure, or a starved carrier reads as "not at its limit"
-				// and the pool shrinks under exactly the load that needs it.
-				l.droppedAt.Store(time.Now().UnixNano())
-				drops.Add(1)
-				aged.Add(1)
-				pool.Put(p.b)
+		p, urgent, ok := l.fq.pop(time.Now())
+		if !ok {
+			select {
+			case <-l.done:
+				l.fq.drain(func(p qpkt) { pool.Put(p.b) })
+				return
+			case <-l.fq.wake:
 				continue
 			}
-			err := l.car.SendFrame(core.TypeData, *p.b)
+		}
+		if time.Since(p.t) > dgSojourn {
+			// The packet aged out behind a writer blocked in the pacer: the
+			// carrier could not drain its queue within the sojourn, so it is
+			// at its limit just as surely as on a queue-full drop. Record it
+			// as pressure, or a starved carrier reads as "not at its limit"
+			// and the pool shrinks under exactly the load that needs it.
+			l.droppedAt.Store(time.Now().UnixNano())
+			drops.Add(1)
+			aged.Add(1)
 			pool.Put(p.b)
-			if err != nil {
-				l.lose(err)
-				return
-			}
-			l.sentPkts.Add(1)
-			sent.Add(1)
-			if l.echoShaped {
-				l.txFrames.Add(1)
-			}
+			continue
+		}
+		var err error
+		if urgent && fast != nil {
+			err = fast.SendUrgent(*p.b)
+		} else {
+			err = l.car.SendFrame(core.TypeData, *p.b)
+		}
+		pool.Put(p.b)
+		if err != nil {
+			l.lose(err)
+			return
+		}
+		l.sentPkts.Add(1)
+		sent.Add(1)
+		if l.echoShaped {
+			l.txFrames.Add(1)
 		}
 	}
 }
@@ -873,10 +889,18 @@ func (p *dgPool) pumpTun(ctx context.Context) {
 			p.pool.Put(bp)
 			p.dropNoCarrier.Add(1)
 			p.drops.Add(1)
-		case !l.enqueue(bp, flow, now):
-			p.pool.Put(bp)
-			p.dropQueueFull.Add(1)
-			p.drops.Add(1)
+		default:
+			ok, displaced := l.enqueue(bp, flow, now)
+			if displaced != nil { // another flow's packet made room for this one
+				p.pool.Put(displaced)
+				p.dropQueueFull.Add(1)
+				p.drops.Add(1)
+			}
+			if !ok {
+				p.pool.Put(bp)
+				p.dropQueueFull.Add(1)
+				p.drops.Add(1)
+			}
 		}
 	}
 }

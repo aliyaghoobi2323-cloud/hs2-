@@ -209,9 +209,17 @@ func (c *Conn) SendFrame(ftype byte, payload []byte) error {
 	return c.sendControl(ftype, payload)
 }
 
+// SendUrgent sends a data frame whose shards take the pacer's fast lane:
+// after FEC parity, ahead of the data queue (see pacer.fast). The pool uses
+// it for a packet of an interactive flow (engine/dgfq.go).
+func (c *Conn) SendUrgent(payload []byte) error { return c.sendDataLane(payload, true) }
+
 // sendData seals a data payload and feeds it to the FEC encoder; the pacer puts
 // the resulting shards on the wire with a tagData prefix.
-func (c *Conn) sendData(payload []byte) error {
+func (c *Conn) sendData(payload []byte) error { return c.sendDataLane(payload, false) }
+
+// sendDataLane is sendData; urgent puts the frame's data shard in the fast lane.
+func (c *Conn) sendDataLane(payload []byte, urgent bool) error {
 	select {
 	case <-c.done:
 		return errClosed
@@ -229,7 +237,7 @@ func (c *Conn) sendData(payload []byte) error {
 	c.sendScr = packDatagram(c.sendScr, seq, sealed)
 	wire := c.sendScr
 	now := time.Now()
-	err = c.enc.Encode(wire, now, func(pkt []byte) { c.pacer.enqueue(pkt) })
+	err = c.enc.Encode(wire, now, func(pkt []byte) { c.pacer.enqueueLane(pkt, urgent) })
 	c.sendMu.Unlock()
 	return err
 }
