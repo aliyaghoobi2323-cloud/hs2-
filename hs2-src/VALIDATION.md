@@ -167,6 +167,20 @@ Then set `Environment=HS2_DG_FQ=0` on both servers (`systemctl edit
 <service>`, restart) and repeat; remove it afterwards. Pass: with the fair
 queue p50/p99 clearly lower and no fewer Mbit/s than without it.
 
+**V11 — CPU per gigabyte (Phase V, offload and batching).** On the test
+pair (tun over icmp, reverse), the start line must say `TCP offload on`.
+Under a download that fills the path (`iperf3 -R -P 8` through the tun for
+30 s), record Mbit/s and each server's hs2 CPU (`top -b -n 1 -p $(pgrep -x
+hs2 | head -1)` or `pidstat 1 30`), and `hs2 status`'s `tun:` line on both
+servers (packets per read on the sending side, per write on the receiving
+side, well above 1.0). Then set `Environment=HS2_TUN_OFFLOAD=0` and
+`Environment=HS2_RAW_BATCH=0` on both servers (`systemctl edit <service>`,
+restart), repeat, and remove them. Pass: with both on, more Mbit/s or less CPU
+for the same Mbit/s, files transferred intact (compare sha256), and no
+`failed`, `panic` or `TUNSETOFFLOAD` errors in the log. For a profile of the
+busy side: `HS2_PPROF=127.0.0.1:6060` in the same way, then `curl -o
+cpu.prof 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'` under load.
+
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with

@@ -417,6 +417,25 @@ most queued. On a 20 Mbit/s bottleneck with 8 downloads, ping through the tun
 went from 66 ms (p50) to 12 ms at the same throughput. `HS2_DG_FQ=0` turns it
 off (one FIFO per carrier, as before).
 
+**Less CPU per gigabyte.** On a small server the datagram tun's limit is
+usually the CPU, and most of it went on system calls: one per datagram on the
+socket and one per packet on the tun. Now:
+- datagrams go and come several per system call (`sendmmsg`/`recvmmsg`) on
+  the raw and udp sockets;
+- the tun is opened with TCP offload: the kernel hands hs2 one TCP packet of
+  up to 64 KB, which hs2 cuts into the usual MTU-sized packets itself, and on
+  the other server consecutive packets of one connection are written to the
+  tun as one. Nothing changes on the wire, and an older hs2 on the other
+  server works with it.
+
+`hs2 status` shows it: `tun: TCP offload on · N reads gave M packets (41.3
+each) · … writes carried … packets (21.6 each)`. In the lab (icmp, reverse,
+2 cores a side) a download went from ~450 to ~650 Mbit/s with 27-39% less CPU
+per GB on each server. `HS2_TUN_OFFLOAD=0` and `HS2_RAW_BATCH=0` turn each
+part off; a kernel that refuses the offload gets plain packets (the start
+line says so). `HS2_PPROF=127.0.0.1:6060` serves CPU profiles on the loopback
+address for measuring a busy server.
+
 **A carrier cut on its own heals in about a second.** The other server sends
 feedback on every carrier ten times a second, so a carrier that has heard
 nothing for 1 s while another carrier still hears the other server has lost
