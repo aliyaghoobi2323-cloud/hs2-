@@ -2,6 +2,7 @@ package udpcarrier
 
 import (
 	"math"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -43,6 +44,27 @@ import (
 //     the capacity estimate, 6% per RTT past it to probe for more.
 //   - no queue but idle (application-limited): hold, so an idle carrier's
 //     allowance never inflates past what the path was last shown to take.
+//
+// The carriers of one pool share the path's bottleneck, and each one's queue
+// signal is the queue they ALL build. Three rules keep them from fighting
+// over it (rateControl.fair; HS2_FAIR_SHARE=0 turns them off):
+//
+//   - startup also ends once a queue has stood for startupQueueRuns reports
+//     while the carrier carries real traffic, used allowance or not: a
+//     carrier whose users' TCP fills the bottleneck before the pacer does is
+//     never "limited", and stayed in startup at 2.9x its delivery — unpaced,
+//     the queue sitting in the bottleneck instead of in the fair queue (lab:
+//     75 Mbit/s allowed on a 30 Mbit/s path, ping 60–170 ms).
+//   - a carrier using its allowance adds the same step, a share of the
+//     pool's fair share (Governor.Share), each report while the queue is
+//     below fairQueueMax. Before, capacity tracked each carrier's own
+//     delivery, so whoever held the queue first kept it: the others read it
+//     as theirs and sat at ~0.3 Mbit/s. Additive increase with the queue
+//     term's proportional decrease settles every carrier on the same rate
+//     (pool simulator: Jain's index 0.55–0.62 before, 0.92–0.97 after).
+//   - base probes fall on a clock all carriers share, so the pool slows
+//     together and the queue really empties; one carrier probing alone
+//     while the others kept the queue full saw a base with the queue in it.
 type rateControl struct {
 	mu sync.Mutex
 
@@ -79,6 +101,7 @@ type rateControl struct {
 	plateauRuns int
 	plateauAt   time.Time // next startup delivery-growth check (once per RTT)
 	startRounds int       // reports seen in startup (hard exit backstop)
+	startQRuns  int       // consecutive startup reports with a standing queue
 	lastDRate   float64
 	capEst      float64   // bytes/sec: what the path gives us, learned while a queue stands
 	emptyRuns   int       // consecutive reports with no queue while rate-limited
@@ -93,6 +116,14 @@ type rateControl struct {
 	// sent counts the data bytes the pacer put on the wire; written by the
 	// pacer goroutine without the lock.
 	sent atomic.Uint64
+
+	// fair: the pool rules are on (fairShareOn when made; fixed after).
+	fair bool
+
+	// share: the pool's fair share per carrier, bytes/s (math.Float64bits;
+	// 0: none — fewer than two carriers using their allowance). Set by the
+	// carrier from its Governor before each report.
+	share atomic.Uint64
 
 	// pushing: the last feedback showed the carrier sending at least
 	// limitedShare of its allowance — it was offering as much as it was
@@ -151,7 +182,47 @@ const (
 	overflowQueue  = 3 * targetQueue
 	minRTTScale    = 0.03             // floor for the per-RTT growth scale, seconds
 	rttSaneMax     = 30 * time.Second // an RTT sample above this is a clock glitch
+
+	// Sharing the bottleneck with the pool's other carriers (see rateControl).
+	startupQueueRuns = 3       // startup reports with a standing queue that end it
+	startupQueueMin  = 128_000 // bytes/s (~1 Mbit/s): a carrier carrying less is not filling anything
+	fairStep         = 0.005   // per report: this share of the fair share is added
+	// No fair-share growth while the queue stands above this: a carrier whose
+	// own path is slower than the share (a pool over several IPs) stops there
+	// instead of being pushed into its buffer.
+	fairQueueMax = 2 * targetQueue
 )
+
+// fairShareOn: the pool rules (see rateControl) are on for new carriers;
+// HS2_FAIR_SHARE=0 turns them off (the controller as it was before them).
+var fairShareOn = os.Getenv("HS2_FAIR_SHARE") != "0"
+
+// setShare records the pool's fair share per carrier (bytes/s, 0: none).
+func (r *rateControl) setShare(b float64) { r.share.Store(math.Float64bits(b)) }
+
+// nextProbe is when the base probe after now starts: on a clock every
+// carrier shares (multiples of baseProbeEvery), so a pool probes together.
+func (r *rateControl) nextProbe(now time.Time) time.Time {
+	if !r.fair {
+		return now.Add(baseProbeEvery)
+	}
+	return now.Truncate(baseProbeEvery).Add(baseProbeEvery)
+}
+
+// fairGrow adds the pool's fair-share step to capEst while the carrier uses
+// its allowance: the same step for every carrier of the pool, so the queue
+// term's proportional cut, deeper for a bigger carrier, levels them. A
+// faster ramp for a carrier far below the share was tried and dropped: a
+// carrier on its own slower path (a pool over several IPs) cannot tell its
+// own queue from the pool's, and the ramp pushed it into its buffer (p95
+// 90–160 ms in the pool simulator, against ~30 ms without it).
+func (r *rateControl) fairGrow(scale float64) {
+	share := math.Float64frombits(r.share.Load())
+	if !r.fair || share <= 0 {
+		return
+	}
+	r.capEst += fairStep * share * math.Min(scale, 1)
+}
 
 // minFilter is a windowed minimum over roughly [window, 2×window): two buckets
 // that rotate every window, so the minimum ages out without ever being
@@ -189,6 +260,7 @@ func newRateControl() *rateControl {
 		srtt:    0.05,
 		rate:    125_000, // ~1 Mbit/s to get going
 		startup: true,
+		fair:    fairShareOn,
 		rttMin:  minFilter{window: owdWindow / 2},
 		owdMin:  minFilter{window: owdWindow / 2}, // > baseProbeEvery: always holds a probe
 		minRate: 32_000,
@@ -340,6 +412,14 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		if limited {
 			r.startRounds++
 		}
+		if haveQ && q > lowQueue.Seconds() {
+			r.startQRuns++
+		} else if haveQ {
+			r.startQRuns = 0
+		}
+		// The path is full and we are part of what fills it, allowance used
+		// or not (see rateControl).
+		queueFull := r.fair && r.startQRuns >= startupQueueRuns && dRate >= startupQueueMin
 		if !now.Before(r.plateauAt) {
 			if r.btlBw > r.lastDRate*1.25 {
 				r.plateauRuns = 0
@@ -353,7 +433,7 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		// using the allowance — an app-limited queue is someone else's), when
 		// delivery has plateaued, or, as a backstop, after startCap reports so
 		// a slow path with no clean queue signal can never ramp to maxRate.
-		if (limited && haveQ && q > lowQueue.Seconds()) ||
+		if (limited && haveQ && q > lowQueue.Seconds()) || queueFull ||
 			(r.plateauRuns >= startupPlateau && dRate > 4*r.minRate) ||
 			r.startRounds >= startCap {
 			r.startup = false
@@ -361,11 +441,17 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 			// on an app-limited exit (delivery understates capacity then) nor
 			// below the floor, so the controller never starts out stuck.
 			r.capEst = math.Max(math.Max(dComp, r.btlBw*comp), 2*r.minRate)
-			if !limited {
+			switch {
+			case limited:
+			case queueFull:
+				// The standing queue says the path gives us what we got —
+				// not the allowance, which ran ahead of it unused.
+				r.capEst = math.Max(math.Max(dComp, capFloorFrac*r.btlBw*comp), 2*r.minRate)
+			default:
 				r.capEst = math.Max(r.capEst, r.rate)
 			}
 			r.rate = math.Min(r.rate, r.capEst)
-			r.probeAt = now.Add(baseProbeEvery)
+			r.probeAt = r.nextProbe(now)
 		} else if limited {
 			r.rate = math.Max(startupGain*r.btlBw*comp, r.rate*math.Pow(1.25, math.Min(scale, 1)))
 		}
@@ -393,6 +479,9 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 			// than that fraction still track down through btlBw.
 			r.capEst += capAlpha * (dComp - r.capEst)
 			r.capEst = math.Max(r.capEst, capFloorFrac*r.btlBw*comp)
+			if limited && q < fairQueueMax.Seconds() {
+				r.fairGrow(scale)
+			}
 			r.emptyRuns = 0
 		case probing:
 			r.emptyRuns = 0
@@ -403,6 +492,7 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 			if r.emptyRuns++; r.emptyRuns >= 2 {
 				r.capEst *= math.Pow(probeGrow, math.Min(scale, 1))
 			}
+			r.fairGrow(scale)
 		}
 		// Proportional control of the queue around targetQueue: above it,
 		// pace below capacity to drain it in about tau; below it, a little
@@ -414,7 +504,7 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		r.rate = r.capEst * math.Max(minDrainGain, math.Min(f, maxQueueGain))
 	}
 	if r.probeAt.IsZero() {
-		r.probeAt = now.Add(baseProbeEvery)
+		r.probeAt = r.nextProbe(now)
 	}
 	if !now.Before(r.probeAt) && limited {
 		// Bounded: a single inflated RTT (e.g. a wall-clock step while a
@@ -424,7 +514,7 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		d = math.Min(d, maxProbeDur.Seconds())
 		r.probeStart = now
 		r.probeEnd = now.Add(time.Duration(d * float64(time.Second)))
-		r.probeAt = now.Add(baseProbeEvery)
+		r.probeAt = r.nextProbe(now)
 	}
 	// Delivery caps. When the loss at full rate clearly exceeds the path's
 	// own (a per-flow policer, which drops without ever queueing so the delay

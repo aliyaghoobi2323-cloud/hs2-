@@ -221,7 +221,8 @@ func (p *pacer) loop() {
 		// the rate earns in one timer wake-up: Go's timers sleep at least
 		// ~1 ms, so a 2-datagram cap would limit ANY carrier to ~2 datagrams
 		// per millisecond (~20 Mbit/s) whatever the path could take.
-		if maxBurst := math.Max(2*float64(len(b)+64), rate*pacerQuantum.Seconds()); tokens > maxBurst {
+		maxBurst := math.Max(2*float64(len(b)+64), rate*pacerQuantum.Seconds())
+		if tokens > maxBurst {
 			tokens = maxBurst
 		}
 		last = now
@@ -244,7 +245,9 @@ func (p *pacer) loop() {
 				}
 			}
 			now = time.Now()
-			tokens += now.Sub(last).Seconds() * rate
+			// A timer that fires late (a busy server) must not hand the
+			// batch below more than the cap either.
+			tokens = math.Min(tokens+now.Sub(last).Seconds()*rate, maxBurst)
 			last = now
 		}
 		tokens -= need

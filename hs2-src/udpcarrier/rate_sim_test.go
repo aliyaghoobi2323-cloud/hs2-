@@ -38,6 +38,8 @@ type simPath struct {
 	// noStamps models a peer too old to stamp one-way delay: reports never carry
 	// OWD, so the controller must fall back to the RTT-minus-base queue (rttQ).
 	noStamps bool
+	// rulesOff runs the controller without the pool rules (HS2_FAIR_SHARE=0).
+	rulesOff bool
 	// noDelaySignal models a path with NO usable delay signal at all: no OWD, and
 	// the reported RTT is pinned to the bare propagation RTT however much we
 	// overdrive, so a standing queue is invisible. Startup can then end only via
@@ -72,6 +74,7 @@ type ge struct {
 func runRateSim(p simPath, dur, warm time.Duration, seed uint64) simResult {
 	rng := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
 	rc := newRateControl()
+	rc.fair = !p.rulesOff
 	base := time.Unix(1_700_000_000, 0)
 	at := func(ms float64) time.Time { return base.Add(time.Duration(ms * float64(time.Millisecond))) }
 	const pkt = 1200.0

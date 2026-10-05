@@ -60,6 +60,8 @@ type Governor struct {
 	last      govTick
 
 	capped   atomic.Bool
+	shareB   float64       // fair share per carrier, bytes/s (smoothed; see Share)
+	share    atomic.Uint64 // math.Float64bits(shareB)
 	holdPar  atomic.Bool   // confirmed policer: parity sized for the path's own loss
 	capBits  atomic.Uint64 // math.Float64bits(capB)
 	cleanBit atomic.Uint64 // math.Float64bits(cleanLoss)
@@ -169,6 +171,18 @@ func (g *Governor) CapBytes() float64 {
 // own, which parity is for.
 func (g *Governor) CleanLoss() float64 { return math.Float64frombits(g.cleanBit.Load()) }
 
+// Share is the pool's fair share per carrier in bytes/s: what the carriers
+// using their whole allowance send on average — the bottleneck split evenly
+// among those that want more, after the lightly loaded ones take what they
+// need. 0 when fewer than two carriers use their allowance (nothing to share).
+// Each carrier's rate control grows toward it (rateControl.fairGrow).
+func (g *Governor) Share() float64 {
+	if g == nil {
+		return 0
+	}
+	return math.Float64frombits(g.share.Load())
+}
+
 // Last is the most recent pool-wide tick (for status).
 func (g *Governor) Last() (rateBytes, loss float64) {
 	g.mu.Lock()
@@ -254,6 +268,7 @@ func (g *Governor) tick() {
 	tk.at = now
 	var wLoss, wSum float64
 	var qs []float64
+	var pushRate float64
 	for c, m := range g.members {
 		sent := c.rc.sent.Load()
 		rate := float64(sent-m.sentPrev) / dt
@@ -281,11 +296,22 @@ func (g *Governor) tick() {
 		// allowance rule (c7edbb2), applied to the governor.
 		if pushing {
 			tk.pushing++
+			pushRate += rate
 			if loss >= govCarrierLossy {
 				tk.lossy++
 			}
 		}
 	}
+	if tk.pushing >= 2 {
+		sh := pushRate / float64(tk.pushing)
+		if g.shareB == 0 {
+			g.shareB = sh
+		}
+		g.shareB += 0.5 * (sh - g.shareB)
+	} else {
+		g.shareB = 0
+	}
+	g.share.Store(math.Float64bits(g.shareB))
 	if wSum > 0 {
 		tk.loss = wLoss / wSum
 	}
