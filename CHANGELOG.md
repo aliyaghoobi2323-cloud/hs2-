@@ -1171,10 +1171,12 @@ that its ceiling ignored what icmp is.
   any connection) — is served before the backlog, and its packet takes a
   fast lane in the carrier's pacer (after FEC parity, ahead of the data
   queue). Downloads take turns by bytes. A full queue drops the head of the
-  flow with the most queued. A flow that went the ordinary way in the last
-  100 ms never takes the fast lane, so a flow's packets keep their order;
-  a heavy flow paced just under the carrier's rate does not keep the head
-  start (it spends its rate budget), so it cannot starve the downloads.
+  flow with the most queued. A flow's packet takes the fast lane only once
+  everything it sent the ordinary way has left the pacer's data queue (the
+  carrier counts the shards in and out of it), so a flow's packets keep their
+  order however slowly that queue drains; a heavy flow paced just under the
+  carrier's rate does not keep the head start (all it sends spends its rate
+  budget), so it cannot starve the downloads.
   Bandwidth, pacing, FEC and the 50 ms sojourn bound are unchanged.
   `HS2_DG_FQ=0` restores the single FIFO.
 - **Measured** (two network namespaces, tun over icmp, 4 carriers, a
@@ -1189,7 +1191,19 @@ that its ceiling ignored what icmp is.
   | throughput | 16.4 Mbit/s | 16.4 Mbit/s |
 
   What is left (~12 ms) is the bottleneck's own queue, which the carriers'
-  delay-based pacing keeps short.
+  delay-based pacing keeps short. Over three runs the fair queue gave p50
+  11-15 ms with no ping lost; the FIFO 66-144 ms, losing up to 43 of 120.
+
+### Review fixes (independent review of V1-V4, all confirmed and fixed)
+- A flow whose queue never empties (a VPN over UDP inside the tunnel, faster
+  than its carrier) grew its queue's array by every packet it had sent (64 MB
+  after 2M packets in the review's test): the popped part is now reclaimed.
+- The fast lane's ordering guard was a fixed 100 ms; at a carrier's floor
+  rate, or under a policer cap, its ordinary packets could wait longer, and a
+  later packet overtook them (reproduced). It is now the queue's own count.
+- Pool control no longer rides a carrier the other server hears nothing on.
+- A full queue looks for the fattest flow among the queued ones only, not
+  every flow seen in the last 2 s.
 
 ### V3 — guidance: the kernel's own ping replies on a dedicated server
 The icmp listener keeps the server answering ordinary ping by dropping only

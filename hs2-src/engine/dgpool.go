@@ -222,6 +222,12 @@ func newDgLink(car Carrier, now time.Time) *dgLink {
 		car: car, id: randSeed(), fq: newFQSched(dgQueueLen), done: make(chan struct{}),
 		born: now, servingSince: now, flows: map[uint32]*dgFlow{},
 	}
+	if lc, ok := car.(interface {
+		LaneMark() uint64
+		LaneDrained(uint64) bool
+	}); ok {
+		l.fq.mark, l.fq.drained = lc.LaneMark, lc.LaneDrained
+	}
 	return l
 }
 
@@ -393,7 +399,7 @@ func (l *dgLink) noteFlowRecv(flow uint32, n int, now time.Time) {
 func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 	fast, _ := l.car.(interface{ SendUrgent([]byte) error })
 	for {
-		p, urgent, ok := l.fq.pop(time.Now())
+		p, flow, urgent, ok := l.fq.pop(time.Now())
 		if !ok {
 			select {
 			case <-l.done:
@@ -425,6 +431,9 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 		if err != nil {
 			l.lose(err)
 			return
+		}
+		if !urgent && l.fq.mark != nil {
+			l.fq.noteSlow(flow, l.fq.mark())
 		}
 		l.sentPkts.Add(1)
 		sent.Add(1)
@@ -1981,7 +1990,10 @@ func (p *dgPool) poolCtlCarrier() *dgLink {
 	p.poolCtlMu.Lock()
 	defer p.poolCtlMu.Unlock()
 	now := time.Now()
-	if p.poolCtl != nil && p.poolCtl.alive() && !p.poolCtl.silent(now) {
+	pnow := p.now()
+	// Not a carrier the other server hears nothing on (avoid): what is sent
+	// there is lost until it is closed.
+	if p.poolCtl != nil && p.poolCtl.alive() && !p.poolCtl.silent(now) && !p.poolCtl.avoid(pnow) {
 		return p.poolCtl
 	}
 	p.mu.RLock()
@@ -1991,7 +2003,7 @@ func (p *dgPool) poolCtlCarrier() *dgLink {
 		if !l.alive() {
 			continue
 		}
-		if !l.silent(now) {
+		if !l.silent(now) && !l.avoid(pnow) {
 			p.poolCtl = l
 			return l
 		}

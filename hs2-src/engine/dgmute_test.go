@@ -283,3 +283,21 @@ func TestDgMuteClosedOnce(t *testing.T) {
 		t.Fatalf("%d close lines:\n%s", c, r.log())
 	}
 }
+
+// Pool control does not ride a carrier the other server hears nothing on
+// (the review's case: a one-way cut on the control carrier lost the target
+// and the link stats for ~3 s, until the carrier closed).
+func TestDgPoolCtlAvoidsMuteCarrier(t *testing.T) {
+	r := newDgRig(t, false)
+	now := time.Now()
+	a, _, _, _ := r.carrier(now)
+	b, _, _, _ := r.carrier(now)
+	r.edge.poolCtl = a
+	if r.edge.poolCtlCarrier() != a {
+		t.Fatal("setup: control carrier not kept")
+	}
+	r.edge.onCloseFrame(a, []byte{closeMute})
+	if got := r.edge.poolCtlCarrier(); got != b {
+		t.Fatalf("control stayed on the carrier the other server hears nothing on (%v)", got == a)
+	}
+}

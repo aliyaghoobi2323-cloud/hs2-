@@ -209,6 +209,15 @@ func (c *Conn) SendFrame(ftype byte, payload []byte) error {
 	return c.sendControl(ftype, payload)
 }
 
+// LaneMark is how many data shards the pacer's data queue has taken so far;
+// LaneDrained reports whether all of the first mark have left it. The pool
+// takes a mark after each ordinary packet of a flow and sends the flow's
+// next packet urgent only once it is drained (engine/dgfq.go).
+func (c *Conn) LaneMark() uint64 { return c.pacer.inQueued.Load() }
+
+// LaneDrained: see LaneMark.
+func (c *Conn) LaneDrained(mark uint64) bool { return c.pacer.inLeft.Load() >= mark }
+
 // SendUrgent sends a data frame whose shards take the pacer's fast lane:
 // after FEC parity, ahead of the data queue (see pacer.fast). The pool uses
 // it for a packet of an interactive flow (engine/dgfq.go).

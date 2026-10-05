@@ -1,8 +1,11 @@
 package engine
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/core"
 )
 
 func fqPkt(n int, t time.Time) qpkt {
@@ -15,7 +18,7 @@ func fqPkt(n int, t time.Time) qpkt {
 func fqPopN(t *testing.T, s *fqSched, now time.Time, n int) (sizes []int, urgent []bool) {
 	t.Helper()
 	for i := 0; n < 0 || i < n; i++ {
-		p, u, ok := s.pop(now)
+		p, _, u, ok := s.pop(now)
 		if !ok {
 			break
 		}
@@ -58,7 +61,7 @@ func TestFQFairByBytes(t *testing.T) {
 	}
 	by := map[int]int{}
 	for i := 0; i < 300; i++ {
-		p, _, ok := s.pop(now)
+		p, _, _, ok := s.pop(now)
 		if !ok {
 			t.Fatal("ran dry")
 		}
@@ -122,13 +125,13 @@ func TestFQNoOvertake(t *testing.T) {
 	}
 	t1 := t0.Add(fqUrgentGap / 2)
 	s.push(fqPkt(80, t1), 7)
-	if _, u, _ := s.pop(t1); u {
+	if _, _, u, _ := s.pop(t1); u {
 		t.Fatal("urgent within fqUrgentGap of an ordinary packet")
 	}
 	fqPopN(t, s, t1, -1)
 	t2 := t1.Add(fqUrgentGap + time.Millisecond)
 	s.push(fqPkt(80, t2), 7)
-	if _, u, _ := s.pop(t2); !u {
+	if _, _, u, _ := s.pop(t2); !u {
 		t.Fatal("not urgent after fqUrgentGap")
 	}
 }
@@ -188,7 +191,7 @@ func TestFQSparseFlowStaysAhead(t *testing.T) {
 	for k := 0; k < 20; k++ { // a game: 80 bytes every 16 ms
 		now = now.Add(16 * time.Millisecond)
 		s.push(fqPkt(80, now), 99)
-		p, u, ok := s.pop(now)
+		p, _, u, ok := s.pop(now)
 		if !ok || len(*p.b) != 80 || !u {
 			t.Fatalf("game packet %d: popped %d bytes urgent=%v — want it first, urgent", k, len(*p.b), u)
 		}
@@ -210,7 +213,7 @@ func TestFQHeavySmoothFlowDoesNotStarve(t *testing.T) {
 	for k := 0; k < 300; k++ { // a smooth 1200-byte flow arriving each 1 ms: ~9.6 Mbit/s
 		now = now.Add(time.Millisecond)
 		s.push(fqPkt(1201, now), 2)
-		p, _, ok := s.pop(now)
+		p, _, _, ok := s.pop(now)
 		if !ok {
 			t.Fatal("ran dry")
 		}
@@ -256,7 +259,7 @@ func TestFQHeavyFlowBackFromPauseHasNoHeadStart(t *testing.T) {
 	}
 	got := map[int]int{}
 	for k := 0; k < 20; k++ {
-		p, u, _ := s.pop(now)
+		p, _, u, _ := s.pop(now)
 		got[len(*p.b)]++
 		if u {
 			t.Fatal("a heavy flow back after a pause was sent urgent")
@@ -264,5 +267,133 @@ func TestFQHeavyFlowBackFromPauseHasNoHeadStart(t *testing.T) {
 	}
 	if got[1200] < 8 {
 		t.Fatalf("the download got %d of 20 turns after the heavy flow came back (%v) — want about half", got[1200], got)
+	}
+}
+
+// On a carrier that counts its data queue (LaneMark / LaneDrained), a flow's
+// packet goes urgent only once everything it sent the ordinary way has left
+// that queue — however long that takes (the floor rate, a policer cap): the
+// review's case, a lone packet 100 ms after an ordinary one still queued.
+func TestFQUrgentWaitsForTheDataQueue(t *testing.T) {
+	s := newFQSched(256)
+	s.off = false
+	var queued, left uint64
+	s.mark = func() uint64 { return queued }
+	s.drained = func(m uint64) bool { return left >= m }
+	now := time.Now()
+	s.push(fqPkt(1500, now), 5)
+	s.push(fqPkt(100, now), 5)
+	_, f, u, _ := s.pop(now) // the quantum: urgent
+	if !u {
+		t.Fatal("first packet not urgent")
+	}
+	_, f, u, _ = s.pop(now) // credit spent: ordinary
+	if u {
+		t.Fatal("second packet urgent past the quantum")
+	}
+	queued = 7 // the carrier took it: its data queue has had 7 shards
+	s.noteSlow(f, s.mark())
+	fqPopN(t, s, now, -1)
+	later := now.Add(300 * time.Millisecond) // long past fqUrgentGap
+	s.push(fqPkt(100, later), 5)
+	if _, _, u, _ := s.pop(later); u {
+		t.Fatal("urgent while the flow's ordinary packet was still in the data queue")
+	}
+	left = 7 // it left (the next ordinary send moved the mark to 7 again)
+	s.noteSlow(5, 7)
+	fqPopN(t, s, later, -1)
+	s.push(fqPkt(100, later), 5)
+	if _, _, u, _ := s.pop(later); !u {
+		t.Fatal("not urgent once the data queue had passed the flow's mark")
+	}
+}
+
+// A flow whose queue never empties does not grow its array: what was popped
+// is reclaimed (the review measured 64 MB after 2M packets).
+func TestFQFlowQueueStaysBounded(t *testing.T) {
+	s := newFQSched(256)
+	s.off = false
+	now := time.Now()
+	for i := 0; i < 50; i++ {
+		s.push(fqPkt(100, now), 1)
+	}
+	for i := 0; i < 200000; i++ {
+		s.push(fqPkt(100, now), 1)
+		s.pop(now)
+	}
+	s.mu.Lock()
+	f := s.flows[1]
+	n, c := f.len(), cap(f.q)
+	s.mu.Unlock()
+	if n != 50 || c > 1024 {
+		t.Fatalf("queue %d packets in an array of %d after 200k push/pop — want 50 in a small array", n, c)
+	}
+}
+
+// laneCar is a fake carrier with the pacer's two lanes and its data-queue
+// counters: what the writer sends where, and when the test says the data
+// queue has drained.
+type laneCar struct {
+	*dgFakeCarrier
+	queued, left atomic.Uint64
+	lanes        chan bool // true: fast lane
+}
+
+func (c *laneCar) SendFrame(ft byte, p []byte) error {
+	if ft == core.TypeData {
+		c.queued.Add(1)
+		c.lanes <- false
+	}
+	return c.dgFakeCarrier.SendFrame(ft, p)
+}
+func (c *laneCar) SendUrgent(p []byte) error {
+	c.lanes <- true
+	return c.dgFakeCarrier.SendFrame(core.TypeData, p)
+}
+func (c *laneCar) LaneMark() uint64          { return c.queued.Load() }
+func (c *laneCar) LaneDrained(m uint64) bool { return c.left.Load() >= m }
+
+// The writer records the carrier's mark after each ordinary packet, so a
+// flow's next packet takes the fast lane only once the data queue has passed
+// it — end to end through dgLink.writeLoop.
+func TestDgWriterKeepsAFlowsOrderAcrossLanes(t *testing.T) {
+	inner, _ := newDgFakePair()
+	car := &laneCar{dgFakeCarrier: inner, lanes: make(chan bool, 16)}
+	l := newDgLink(car, time.Now())
+	l.fq.off = false
+	p := newDgPool(newFakeTUN(1400), 2, 8, 8, func(string, ...any) {})
+	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
+	defer l.markDead()
+	next := func() bool {
+		t.Helper()
+		select {
+		case u := <-car.lanes:
+			return u
+		case <-time.After(2 * time.Second):
+			t.Fatal("nothing sent")
+			return false
+		}
+	}
+	send := func(n int) {
+		b := make([]byte, n)
+		if ok, _ := l.enqueue(&b, 5, time.Now()); !ok {
+			t.Fatal("enqueue refused")
+		}
+	}
+	send(1500)
+	send(100)
+	if !next() || next() {
+		t.Fatal("want the quantum urgent, then the rest ordinary")
+	}
+	time.Sleep(10 * time.Millisecond)
+	send(100) // its ordinary packet has not left the data queue (left 0 < mark 1)
+	if next() {
+		t.Fatal("urgent ahead of the flow's ordinary packet still in the data queue")
+	}
+	car.left.Store(car.queued.Load())
+	time.Sleep(10 * time.Millisecond)
+	send(100)
+	if !next() {
+		t.Fatal("not urgent once the data queue had passed the flow's packets")
 	}
 }

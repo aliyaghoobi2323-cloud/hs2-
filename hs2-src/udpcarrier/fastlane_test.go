@@ -59,3 +59,39 @@ func TestPacerFastLane(t *testing.T) {
 	}
 	t.Fatal("urgent shard never sent")
 }
+
+// The data lane's counters: LaneDrained(mark) turns true only once every
+// shard queued up to the mark has been sent (the pool's ordering guard).
+func TestPacerLaneCounters(t *testing.T) {
+	var mu sync.Mutex
+	n := 0
+	write := func(b []byte) error { mu.Lock(); n++; mu.Unlock(); return nil }
+	rc := newRateControl()
+	p := newPacer(rc, write, 64, nil)
+	defer p.close()
+	c := &Conn{pacer: p}
+	for i := 0; i < 5; i++ {
+		p.enqueue(make([]byte, 1200))
+	}
+	mark := c.LaneMark()
+	if mark != 5 {
+		t.Fatalf("mark %d after 5 data shards, want 5", mark)
+	}
+	p.enqueueLane(make([]byte, 100), true) // the fast lane is not counted
+	if c.LaneMark() != 5 {
+		t.Fatal("a fast-lane shard moved the mark")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for !c.LaneDrained(mark) {
+		mu.Lock()
+		sent := n
+		mu.Unlock()
+		if sent >= 6 && !c.LaneDrained(mark) {
+			t.Fatalf("all %d sent but not drained", sent)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("never drained")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

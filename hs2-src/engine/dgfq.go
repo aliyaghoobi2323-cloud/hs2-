@@ -29,10 +29,12 @@ import (
 //     carrier's rate cannot keep it and starve the downloads.)
 //   - in the carrier's pacer, a packet from a flow served that way goes in
 //     the pacer's fast lane (after FEC parity, before the data queue: see
-//     udpcarrier's SendUrgent) — but only if none of the flow's packets went
-//     the ordinary way for fqUrgentGap, so a flow's packets never overtake
-//     each other (a TCP flow that bursts takes the ordinary lane, and its
-//     next lone packets wait until its ordinary ones have left);
+//     udpcarrier's SendUrgent) — but only once every packet the flow sent the
+//     ordinary way has left the pacer's data queue (the carrier counts them:
+//     LaneMark / LaneDrained), so a flow's packets never overtake each other,
+//     however slowly that queue drains (a TCP flow that bursts takes the
+//     ordinary lane, and its next lone packets wait until its ordinary ones
+//     have left). A carrier that cannot count falls back to fqUrgentGap;
 //   - when the queue is full, the packet dropped is the head of the flow with
 //     the most queued (fq_codel's choice), not the newcomer: the download that
 //     filled the queue loses, not the ping that arrived last.
@@ -45,10 +47,10 @@ const (
 	// fqQuantum: bytes a flow sends per turn (and the head start a flow with
 	// nothing queued gets) — one full packet at the tunnel's MTU.
 	fqQuantum = 1500
-	// fqUrgentGap: a flow that sent a packet the ordinary way this recently
-	// sends none through the pacer's fast lane — longer than its ordinary
-	// packets can wait there (the pacer holds ~20 ms at its rate), so the fast
-	// one can never overtake them.
+	// fqUrgentGap: on a carrier that cannot say when its data queue has
+	// drained (no LaneMark), a flow that sent a packet the ordinary way this
+	// recently sends none through the fast lane (the pacer usually holds
+	// ~20 ms at its rate).
 	fqUrgentGap = 100 * time.Millisecond
 	// fqForget: a flow with nothing queued keeps its record (when it last
 	// went the ordinary way) this long, then the record is dropped.
@@ -80,6 +82,7 @@ type fqFlow struct {
 	list       int8 // fqNone, fqNew, fqOld
 	next, prev *fqFlow
 	slowAt     time.Time // last packet sent the ordinary way (not urgent)
+	slowMark   uint64    // the carrier's LaneMark after that packet
 	idleAt     time.Time // when its queue last emptied
 	// sparse: a token bucket at fqSparseRate (bytes), spent by everything the
 	// flow sends; tokAt is when it was last filled.
@@ -114,8 +117,16 @@ func (f *fqFlow) pop() qpkt {
 	f.q[f.head] = qpkt{}
 	f.head++
 	f.bytes -= len(*p.b)
-	if f.head == len(f.q) {
+	switch {
+	case f.head == len(f.q):
 		f.q, f.head = f.q[:0], 0
+	case f.head >= 64 && 2*f.head >= len(f.q):
+		// A flow whose queue never empties (a VPN over UDP inside the
+		// tunnel, faster than its carrier) would otherwise grow the array by
+		// what it popped, forever: move the rest down.
+		n := copy(f.q, f.q[f.head:])
+		clear(f.q[n:])
+		f.q, f.head = f.q[:n], 0
 	}
 	return p
 }
@@ -158,6 +169,10 @@ type fqSched struct {
 	off        bool          // HS2_DG_FQ=0: every packet in flow 0, never urgent
 	wake       chan struct{} // 1-buffered: something was queued
 	sweptAt    time.Time
+	// mark / drained: the carrier's LaneMark and LaneDrained (nil when it
+	// has none: fqUrgentGap instead). Set before the carrier's pumps start.
+	mark    func() uint64
+	drained func(uint64) bool
 }
 
 func newFQSched(limit int) *fqSched {
@@ -182,10 +197,12 @@ func (s *fqSched) push(p qpkt, flow uint32) (dropped *qpkt) {
 		return &p // the FIFO of before: the newcomer is dropped
 	}
 	if s.n >= s.limit {
-		fat := f
-		for _, g := range s.flows {
-			if g.len() > fat.len() {
-				fat = g
+		fat := f // every flow with packets queued is on one of the two lists
+		for _, l := range [2]*fqList{&s.newL, &s.oldL} {
+			for g := l.head; g != nil; g = g.next {
+				if g.len() > fat.len() {
+					fat = g
+				}
 			}
 		}
 		if fat == f && f.len() == 0 {
@@ -228,11 +245,13 @@ func (s *fqSched) push(p qpkt, flow uint32) (dropped *qpkt) {
 	return dropped
 }
 
-// pop takes the next packet to send: the flows with nothing queued first,
-// then the others in turn by bytes. urgent says the packet may take the
-// pacer's fast lane (it came off the new-flow list, and its flow sent nothing
-// the ordinary way for fqUrgentGap). ok is false when nothing is queued.
-func (s *fqSched) pop(now time.Time) (p qpkt, urgent, ok bool) {
+// pop takes the next packet to send: the sparse flows first, then the others
+// in turn by bytes. urgent says the packet may take the pacer's fast lane (it
+// came off the new-flow list, and what its flow sent the ordinary way has
+// left the pacer's data queue); after sending a packet that is not, the
+// writer reports the carrier's mark with noteSlow. ok is false when nothing
+// is queued.
+func (s *fqSched) pop(now time.Time) (p qpkt, flow uint32, urgent, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sweep(now)
@@ -243,7 +262,7 @@ func (s *fqSched) pop(now time.Time) (p qpkt, urgent, ok bool) {
 		}
 		f := l.head
 		if f == nil {
-			return qpkt{}, false, false
+			return qpkt{}, 0, false, false
 		}
 		if f.credit <= 0 {
 			f.credit += fqQuantum
@@ -272,12 +291,31 @@ func (s *fqSched) pop(now time.Time) (p qpkt, urgent, ok bool) {
 		if f.len() == 0 {
 			f.idleAt = now
 		}
-		urgent = fromNew && !s.off && now.Sub(f.slowAt) >= fqUrgentGap
+		urgent = fromNew && !s.off && s.clearOf(f, now)
 		if !urgent {
 			f.slowAt = now
 		}
-		return p, urgent, true
+		return p, f.id, urgent, true
 	}
+}
+
+// clearOf reports whether nothing the flow sent the ordinary way is still in
+// the carrier's data queue (under s.mu).
+func (s *fqSched) clearOf(f *fqFlow, now time.Time) bool {
+	if s.drained != nil {
+		return s.drained(f.slowMark)
+	}
+	return now.Sub(f.slowAt) >= fqUrgentGap
+}
+
+// noteSlow records the carrier's mark after the flow's packet went the
+// ordinary way (the writer calls it after the send, before its next pop).
+func (s *fqSched) noteSlow(flow uint32, mark uint64) {
+	s.mu.Lock()
+	if f := s.flows[flow]; f != nil {
+		f.slowMark = mark
+	}
+	s.mu.Unlock()
 }
 
 // sweep drops the records of flows idle for fqForget (under s.mu, at most
@@ -288,7 +326,7 @@ func (s *fqSched) sweep(now time.Time) {
 	}
 	s.sweptAt = now
 	for id, f := range s.flows {
-		if f.list == fqNone && f.len() == 0 && now.Sub(f.idleAt) >= fqForget && now.Sub(f.slowAt) >= fqForget {
+		if f.list == fqNone && f.len() == 0 && now.Sub(f.idleAt) >= fqForget && now.Sub(f.slowAt) >= fqForget && s.clearOf(f, now) {
 			delete(s.flows, id)
 		}
 	}

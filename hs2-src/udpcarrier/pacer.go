@@ -35,7 +35,14 @@ type pacer struct {
 	// nothing queued, and never one whose earlier packets may still be in
 	// the data queue (so a flow's packets keep their order).
 	fast chan []byte
-	pool sync.Pool
+	// inQueued / inLeft count the data shards put in `in` and taken out of it
+	// (sent, or dropped on close): the pool lets a flow use the fast lane only
+	// once inLeft has reached what inQueued was after the flow's last
+	// ordinary packet — so its fast packet can never overtake it, however
+	// slowly the data queue drains (the carrier's floor rate, a policer cap).
+	inQueued atomic.Uint64
+	inLeft   atomic.Uint64
+	pool     sync.Pool
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -131,6 +138,9 @@ func (p *pacer) enqueueLane(pkt []byte, urgent bool) {
 		return
 	case dst <- b:
 		atomic.AddUint64(&p.enqueued, 1)
+		if dst == p.in {
+			p.inQueued.Add(1)
+		}
 	}
 }
 
@@ -159,6 +169,7 @@ func (p *pacer) loop() {
 	last := time.Now()
 	for {
 		var b []byte
+		fromIn := false
 		// Drain parity ahead of data so a group's parity is not stuck behind a
 		// backlog of data and miss the decoder's recovery window; then the
 		// fast lane (interactive packets), then the data queue.
@@ -179,6 +190,7 @@ func (p *pacer) loop() {
 				case b = <-p.pri:
 				case b = <-p.fast:
 				case b = <-p.in:
+					fromIn = true
 				}
 			}
 		}
@@ -258,6 +270,9 @@ func (p *pacer) loop() {
 			return
 		}
 		atomic.AddUint64(&p.sent, 1)
+		if fromIn {
+			p.inLeft.Add(1)
+		}
 		p.rc.onSent(len(out))
 		p.dequeued(len(b))
 		p.recycle(b)
