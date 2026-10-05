@@ -126,6 +126,11 @@ type liveStatus struct {
 	DropQueueFull   uint64  `json:"drop_queue_full,omitempty"`
 	DropAged        uint64  `json:"drop_aged,omitempty"`
 	MuteClosed      uint64  `json:"mute_closed,omitempty"`
+	TunOffload      bool    `json:"tun_offload,omitempty"`
+	TunReads        uint64  `json:"tun_reads,omitempty"`
+	TunSegs         uint64  `json:"tun_segs,omitempty"`
+	TunWrites       uint64  `json:"tun_writes,omitempty"`
+	TunPkts         uint64  `json:"tun_pkts,omitempty"`
 	Carriers        string  `json:"carriers,omitempty"` // id:state:sent/loss% per carrier
 	ReorderHeld     uint64  `json:"reorder_held,omitempty"`
 	ReorderFilled   uint64  `json:"reorder_filled,omitempty"`
@@ -277,6 +282,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.TunRead, ls.SentPkts, ls.RecvPkts, ls.TunWritten = s.TunRead, s.SentPkts, s.RecvPkts, s.TunWritten
 			ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.Carriers = s.DropNoCarrier, s.DropQueueFull, s.DropAged, s.Carriers
 			ls.MuteClosed = s.MuteClosed
+			ls.TunOffload, ls.TunReads, ls.TunSegs, ls.TunWrites, ls.TunPkts = s.TunOffload, s.TunReads, s.TunSegs, s.TunWrites, s.TunPkts
 			ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut = s.ReorderHeld, s.ReorderFilled, s.ReorderTimedOut
 		}
 		ls.CPUPct, ls.CPUCores = cpu.sample(), hwCores
@@ -452,6 +458,9 @@ func printStatus(path string) {
 		if ls.PacerDropped+ls.RxDropped+ls.TunDrops > 0 {
 			fmt.Printf("  drops:      no carrier %d · carrier queue full %d · waited >50 ms %d · pacer %d · receive queue %d\n",
 				ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.PacerDropped, ls.RxDropped)
+		}
+		if ls.TunOffload {
+			fmt.Printf("  tun:        TCP offload on · %s\n", offloadLine(ls))
 		}
 		if ls.MuteClosed > 0 {
 			fmt.Printf("  mute:       %d carrier(s) closed and replaced after hearing nothing while the others did (their own way through was cut)\n", ls.MuteClosed)
@@ -789,4 +798,17 @@ func (w *tcpMemWatch) check() {
 		w.logf("kernel TCP memory: back below the pressure mark (%d MB of %d MB)", mb(mem), mb(press))
 	}
 	engine.SetTCPMemPressure(w.above) // the guard and the health rules (engine/mempressure.go)
+}
+
+// offloadLine says what the TUN's TCP offloads saved: packets per kernel read
+// and per write (1.0 each without them).
+func offloadLine(ls liveStatus) string {
+	per := func(pkts, calls uint64) string {
+		if calls == 0 {
+			return "—"
+		}
+		return fmt.Sprintf("%.1f", float64(pkts)/float64(calls))
+	}
+	return fmt.Sprintf("%d reads gave %d packets (%s each) · %d writes carried %d packets (%s each)",
+		ls.TunReads, ls.TunSegs, per(ls.TunSegs, ls.TunReads), ls.TunWrites, ls.TunPkts, per(ls.TunPkts, ls.TunWrites))
 }

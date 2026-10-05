@@ -13,8 +13,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/mmsg"
 	"golang.org/x/sys/unix"
 )
 
@@ -189,6 +191,13 @@ type rawConn struct {
 	once   sync.Once
 	rdl    atomic.Int64  // read deadline, unix ns (0 = none)
 	rdlSet chan struct{} // a new read deadline (wakes a blocked Read)
+
+	// WriteBatch's reusable arrays (its one writer is the carrier's pacer).
+	wmu   sync.Mutex
+	wb    *mmsg.Batch
+	wsa   *unix.RawSockaddrInet4
+	wpkts [][]byte
+	wbps  []*[]byte
 }
 
 func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
@@ -293,53 +302,97 @@ func openRawMux(k rawMuxKey, f *framer, bip, peer net.IP) (*rawMux, error) {
 	return mx, nil
 }
 
+// rawBatch / rawBufSize: datagrams one receive call takes off a raw socket,
+// and the room for each (the largest tunnel MTU, 9000, plus headers).
+const (
+	rawBatch   = 32
+	rawBufSize = 9216
+)
+
 // readLoop takes every packet off the shared socket once and hands it to its
-// link; a packet for no link, or not from the peer, is dropped.
+// link; a packet for no link, or not from the peer, is dropped. It takes
+// what is waiting in one call (recvmmsg) — at 60 Mbit/s one receive syscall
+// per datagram was a large share of a small server's CPU.
 func (mx *rawMux) readLoop() {
+	fail := func(err error) {
+		mx.err = err
+		close(mx.dead)
+		mx.mu.RLock()
+		for _, c := range mx.links {
+			if fn := c.onErr.Load(); fn != nil {
+				go (*fn)(err)
+			}
+		}
+		mx.mu.RUnlock()
+	}
+	if rc, err := mx.ipc.SyscallConn(); err == nil && mmsg.Supported && !rawNoBatch {
+		b := mmsg.NewBatch(rawBatch)
+		bufs := make([][]byte, rawBatch)
+		for i := range bufs {
+			bufs[i] = make([]byte, rawBufSize)
+		}
+		sizes, trunc := make([]int, rawBatch), make([]bool, rawBatch)
+		for {
+			n, err := b.Recv(rc, bufs, sizes, trunc, false, nil, nil)
+			if err != nil {
+				if softErr(err) {
+					continue // an ICMP error for this socket; not the link dying
+				}
+				fail(err)
+				return
+			}
+			for i := 0; i < n; i++ {
+				if !trunc[i] {
+					mx.deliver(bufs[i][:sizes[i]])
+				}
+			}
+		}
+	}
 	buf := make([]byte, 65536)
 	for {
 		n, _, _, _, err := mx.ipc.ReadMsgIP(buf, nil)
 		if err != nil {
 			if softErr(err) {
-				continue // an ICMP error for this socket; not the link dying
+				continue
 			}
-			mx.err = err
-			close(mx.dead)
-			mx.mu.RLock()
-			for _, c := range mx.links {
-				if fn := c.onErr.Load(); fn != nil {
-					go (*fn)(err)
-				}
-			}
-			mx.mu.RUnlock()
+			fail(err)
 			return
 		}
-		src, _, tp, ok := mx.f.ipv4Payload(buf[:n])
-		if !ok || !src.Equal(mx.raddrIP.IP) {
-			continue // not from the peer (the socket is unconnected)
-		}
-		id, _, ok := mx.f.parse(tp)
-		if !ok {
-			continue
-		}
-		mx.mu.RLock()
-		c := mx.links[id]
-		mx.mu.RUnlock()
-		if c == nil {
-			continue
-		}
-		if fn := c.recv.Load(); fn != nil {
-			(*fn)(tp[mx.f.hdr:]) // must not block or keep the slice
-			continue
-		}
-		bp := bufPool.Get().(*[]byte)
-		*bp = append((*bp)[:0], tp...)
-		select {
-		case c.q <- bp:
-		default:
-			bufPool.Put(bp)
-			mx.dropped.Add(1)
-		}
+		mx.deliver(buf[:n])
+	}
+}
+
+// rawNoBatch (HS2_RAW_BATCH=0) sends and receives one datagram per syscall,
+// as before batching.
+var rawNoBatch = os.Getenv("HS2_RAW_BATCH") == "0"
+
+// deliver hands one received IP datagram to its link (or drops it).
+func (mx *rawMux) deliver(pkt []byte) {
+	src, _, tp, ok := mx.f.ipv4Payload(pkt)
+	if !ok || !src.Equal(mx.raddrIP.IP) {
+		return // not from the peer (the socket is unconnected)
+	}
+	id, _, ok := mx.f.parse(tp)
+	if !ok {
+		return
+	}
+	mx.mu.RLock()
+	c := mx.links[id]
+	mx.mu.RUnlock()
+	if c == nil {
+		return
+	}
+	if fn := c.recv.Load(); fn != nil {
+		(*fn)(tp[mx.f.hdr:]) // must not block or keep the slice
+		return
+	}
+	bp := bufPool.Get().(*[]byte)
+	*bp = append((*bp)[:0], tp...)
+	select {
+	case c.q <- bp:
+	default:
+		bufPool.Put(bp)
+		mx.dropped.Add(1)
 	}
 }
 
@@ -421,6 +474,73 @@ func (c *rawConn) Write(p []byte) (int, error) {
 		return 0, err
 	}
 	return len(p), nil // a soft error (ENOBUFS, an ICMP error) drops this datagram
+}
+
+// WriteBatch sends several datagrams to the link's peer in one syscall
+// (sendmmsg); a soft error (ENOBUFS, an ICMP error) drops that datagram, as
+// in Write.
+func (c *rawConn) WriteBatch(ps [][]byte) error {
+	select {
+	case <-c.done:
+		return net.ErrClosed
+	default:
+	}
+	if rawNoBatch || !mmsg.Supported {
+		for _, p := range ps {
+			if _, err := c.Write(p); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	rc, err := c.mx.ipc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if c.wb == nil {
+		c.wb = mmsg.NewBatch(rawBatch)
+		c.wsa = mmsg.Inet4(c.mx.raddrIP.IP.To4(), 0)
+	}
+	for len(ps) > 0 {
+		chunk := ps[:min(len(ps), rawBatch)]
+		ps = ps[len(chunk):]
+		pkts := c.wpkts[:0]
+		bps := c.wbps[:0]
+		for _, p := range chunk {
+			bp := bufPool.Get().(*[]byte)
+			pkt := c.f.build(*bp, c.id, uint16(c.seq.Add(1)), p)
+			*bp = pkt[:0]
+			bps = append(bps, bp)
+			pkts = append(pkts, pkt)
+		}
+		err := sendAll(c.wb, rc, pkts, c.wsa, nil)
+		for _, bp := range bps {
+			bufPool.Put(bp)
+		}
+		c.wpkts, c.wbps = pkts[:0], bps[:0]
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// sendAll sends every datagram, dropping one that meets a soft error.
+func sendAll(b *mmsg.Batch, rc syscall.RawConn, pkts [][]byte, to *unix.RawSockaddrInet4, oob []byte) error {
+	for len(pkts) > 0 {
+		n, err := b.Send(rc, pkts, to, oob)
+		if err == nil {
+			pkts = pkts[n:]
+			continue
+		}
+		if !softErr(err) {
+			return err
+		}
+		pkts = pkts[min(n+1, len(pkts)):] // that one is lost, as with Write
+	}
+	return nil
 }
 
 // Close takes the link off the shared socket (closing the socket with the
@@ -550,7 +670,24 @@ type rawPacketConn struct {
 	mu        sync.Mutex
 	peers     map[rawKey]*rawPeer
 	lastSweep time.Time
+
+	// ReadBatch's arrays (its one reader is the listener's serve loop).
+	rb     *mmsg.Batch
+	rbufs  [][]byte
+	rsizes []int
+	rtrunc []bool
+	rbuf1  []byte
 }
+
+// writeScratch is one batch send's arrays; the listener's carriers send
+// concurrently, each with its own from the pool.
+type writeScratch struct {
+	b    *mmsg.Batch
+	pkts [][]byte
+	bps  []*[]byte
+}
+
+var writeScratchPool = sync.Pool{New: func() any { return &writeScratch{b: mmsg.NewBatch(rawBatch)} }}
 
 func listenRawLinux(kind, addr string, opt Options) (net.PacketConn, error) {
 	f, err := newFramer(kind, opt, false)
@@ -623,6 +760,127 @@ func (c *rawPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 		a := c.notePeer(src, dst, id)
 		return copy(b, tp[c.f.hdr:]), a, nil
 	}
+}
+
+// ReadBatch takes the datagrams waiting on the socket in one call (at least
+// one: it waits for the first) and hands each transport payload and its peer
+// to fn, which must not keep the slice. It returns after one batch, so the
+// caller can stop between batches.
+func (c *rawPacketConn) ReadBatch(fn func(payload []byte, peer net.Addr)) error {
+	if rawNoBatch || !mmsg.Supported {
+		buf := c.rbufs1()
+		n, a, err := c.ReadFrom(buf)
+		if err != nil {
+			return err
+		}
+		fn(buf[:n], a)
+		return nil
+	}
+	rc, err := c.ipc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	if c.rb == nil {
+		c.rb = mmsg.NewBatch(rawBatch)
+		c.rbufs = make([][]byte, rawBatch)
+		for i := range c.rbufs {
+			c.rbufs[i] = make([]byte, rawBufSize)
+		}
+		c.rsizes, c.rtrunc = make([]int, rawBatch), make([]bool, rawBatch)
+	}
+	for {
+		n, err := c.rb.Recv(rc, c.rbufs, c.rsizes, c.rtrunc, false, nil, nil)
+		if err != nil {
+			if softErr(err) {
+				continue
+			}
+			return err
+		}
+		for i := 0; i < n; i++ {
+			if c.rtrunc[i] {
+				continue
+			}
+			src, dst, tp, ok := c.f.ipv4Payload(c.rbufs[i][:c.rsizes[i]])
+			if !ok {
+				continue
+			}
+			id, _, ok := c.f.parse(tp)
+			if !ok {
+				continue
+			}
+			fn(tp[c.f.hdr:], c.notePeer(src, dst, id))
+		}
+		return nil
+	}
+}
+
+// rbufs1 is the one-at-a-time read buffer (no batches).
+func (c *rawPacketConn) rbufs1() []byte {
+	if c.rbuf1 == nil {
+		c.rbuf1 = make([]byte, 65536)
+	}
+	return c.rbuf1
+}
+
+// WriteBatchTo sends several datagrams to one peer in one syscall, each with
+// the next reply sequence, from the address the peer targeted.
+func (c *rawPacketConn) WriteBatchTo(ps [][]byte, addr net.Addr) error {
+	if rawNoBatch || !mmsg.Supported {
+		for _, p := range ps {
+			if _, err := c.WriteTo(p, addr); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	a, ok := addr.(*Addr)
+	if !ok || a.IP.To4() == nil {
+		return fmt.Errorf("encap %s: bad peer address %v", c.f.kind, addr)
+	}
+	rc, err := c.ipc.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var k rawKey
+	copy(k.ip[:], a.IP.To4())
+	k.id = a.ID
+	ws := writeScratchPool.Get().(*writeScratch)
+	defer writeScratchPool.Put(ws)
+	for len(ps) > 0 {
+		chunk := ps[:min(len(ps), rawBatch)]
+		ps = ps[len(chunk):]
+		var seq0 uint16
+		var local net.IP
+		c.mu.Lock()
+		if pr := c.peers[k]; pr != nil {
+			seq0, local = pr.replyCtr, pr.local
+			pr.replyCtr += uint16(len(chunk))
+		}
+		c.mu.Unlock()
+		pkts, bps := ws.pkts[:0], ws.bps[:0]
+		for i, p := range chunk {
+			bp := bufPool.Get().(*[]byte)
+			pkt := c.f.build(*bp, a.ID, seq0+uint16(i), p)
+			*bp = pkt[:0]
+			bps = append(bps, bp)
+			pkts = append(pkts, pkt)
+		}
+		var oob []byte
+		if local != nil {
+			info := &unix.Inet4Pktinfo{}
+			copy(info.Spec_dst[:], local.To4())
+			oob = unix.PktInfo4(info)
+		}
+		err := sendAll(ws.b, rc, pkts, mmsg.Inet4(a.IP.To4(), 0), oob)
+		for _, bp := range bps {
+			bufPool.Put(bp)
+		}
+		ws.pkts, ws.bps = pkts[:0], bps[:0]
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // notePeer records a peer so a reply can be addressed to it (its local target

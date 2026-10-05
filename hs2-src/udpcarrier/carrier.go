@@ -209,6 +209,9 @@ func (c *Conn) SendFrame(ftype byte, payload []byte) error {
 	return c.sendControl(ftype, payload)
 }
 
+// setWriteBatch gives the pacer a several-datagrams-per-syscall sender.
+func (c *Conn) setWriteBatch(fn func([][]byte) error) { c.pacer.writeBatch.Store(&fn) }
+
 // LaneMark is how many data shards the pacer's data queue has taken so far;
 // LaneDrained reports whether all of the first mark have left it. The pool
 // takes a mark after each ordinary packet of a flow and sends the flow's
@@ -290,6 +293,18 @@ func (c *Conn) ReadFrame() (byte, []byte, error) {
 			}
 			timer.Reset(deadAfter - idle)
 		}
+	}
+}
+
+// TryReadFrame returns the next decoded frame if one is already waiting (ok
+// false otherwise): the pool takes what arrived together in one go and writes
+// it to the TUN as a batch.
+func (c *Conn) TryReadFrame() (byte, []byte, bool) {
+	select {
+	case f := <-c.frames:
+		return f.ftype, f.payload, true
+	default:
+		return 0, nil, false
 	}
 }
 

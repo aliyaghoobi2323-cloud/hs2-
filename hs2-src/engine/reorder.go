@@ -89,9 +89,12 @@ type reorderStats struct {
 }
 
 type reorderer struct {
-	mu     sync.Mutex
-	hold   time.Duration
-	write  func([]byte) // delivers to the TUN; called with mu held, in order
+	mu    sync.Mutex
+	hold  time.Duration
+	write func([]byte) // delivers to the TUN; called with mu held, in order
+	// flush, when set, is called after the timer or Close released packets
+	// (write may only queue them for a batched TUN write: tunBatch).
+	flush  func()
 	clock  func() time.Time
 	flows  map[rflowKey]*rflow
 	nheld  int
@@ -316,6 +319,9 @@ func (r *reorderer) arm() {
 // expire releases every flow whose gap has waited dgReorderHold, and re-arms for
 // the next one still waiting.
 func (r *reorderer) expire() {
+	if r.flush != nil {
+		defer r.flush() // runs after the unlock below
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.armed = false
@@ -361,6 +367,9 @@ func (r *reorderer) sweepIdle(now time.Time) {
 func (r *reorderer) Close() {
 	if r == nil {
 		return
+	}
+	if r.flush != nil {
+		defer r.flush()
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

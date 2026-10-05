@@ -225,6 +225,7 @@ func main() {
 		must(err)
 		fmt.Printf("private: %s\npublic:  %s\n", hex.EncodeToString(k.Private), hex.EncodeToString(k.Public))
 	case "run":
+		startPprof()
 		runCmd(os.Args[2:])
 	case "check":
 		checkCmd(os.Args[2:])
@@ -832,10 +833,22 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 		mtu = 1280
 	}
 	logf := func(f string, a ...any) { log.Printf(f, a...) }
-	dev, err := tun.Open(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu)
+	// TCP offloads both ways (tun/offload.go): the kernel hands over and takes
+	// 64 KB TCP packets, so a download costs a few reads and writes instead of
+	// one per segment. HS2_TUN_OFFLOAD=0 turns them off; a kernel that refuses
+	// them gets plain packets.
+	wantOffload := os.Getenv("HS2_TUN_OFFLOAD") != "0"
+	dev, err := tun.OpenWith(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu, tun.Options{Offload: wantOffload})
 	must(err)
 	defer dev.Close()
-	logf("tun %s up: %s peer %s mtu %d (datagram pool, encap %s)", dev.Name(), fc.LocalCIDR, fc.PeerIP, mtu, encapName(fc))
+	off := "TCP offload on"
+	switch {
+	case !wantOffload:
+		off = "TCP offload off (HS2_TUN_OFFLOAD=0)"
+	case !dev.Offloaded():
+		off = "TCP offload off — the kernel refused it; plain packets"
+	}
+	logf("tun %s up: %s peer %s mtu %d (datagram pool, encap %s, %s)", dev.Name(), fc.LocalCIDR, fc.PeerIP, mtu, encapName(fc), off)
 
 	ec := engine.EncapConfig{Kind: fc.Encap, BindIP: fc.BindLocalIP, Proto: fc.Proto}
 	min, max, per := linkEnvelope(fc)
@@ -862,6 +875,8 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 			startStatusWriter(ctx, fc, configPath, func() engine.PoolStats {
 				st := s()
 				st.Routes = peerRoutes()
+				st.TunOffload = dev.Offloaded()
+				st.TunReads, st.TunSegs, st.TunWrites, st.TunPkts, _ = dev.OffloadStats()
 				return st
 			})
 		}}

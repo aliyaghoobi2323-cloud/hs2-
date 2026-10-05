@@ -95,3 +95,73 @@ func TestPacerLaneCounters(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// With a batch sender the pacer hands several waiting datagrams to one call:
+// every datagram exactly once, in wire order (the sequence it stamps), parity
+// still ahead of queued data, and no faster than the paced rate.
+func TestPacerBatches(t *testing.T) {
+	var mu sync.Mutex
+	var seqs []uint32
+	batches, multi, biggest := 0, 0, 0
+	record := func(b []byte) {
+		seqs = append(seqs, binary.BigEndian.Uint32(b[1:5]))
+	}
+	rc := newRateControl()
+	rc.rate = 2e6 // 16 Mbit/s
+	p := newPacer(rc, func(b []byte) error { mu.Lock(); record(b); batches++; mu.Unlock(); return nil }, 256, nil)
+	defer p.close()
+	wb := func(bs [][]byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		batches++
+		if len(bs) > 1 {
+			multi++
+		}
+		biggest = max(biggest, len(bs))
+		for _, b := range bs {
+			record(b)
+		}
+		return nil
+	}
+	p.writeBatch.Store(&wb)
+	const n = 300
+	start := time.Now()
+	go func() {
+		for i := 0; i < n; i++ {
+			p.enqueue(make([]byte, 1200))
+		}
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mu.Lock()
+		got := len(seqs)
+		mu.Unlock()
+		if got == n {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of %d sent", got, n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	el := time.Since(start)
+	mu.Lock()
+	defer mu.Unlock()
+	for i := range seqs {
+		if seqs[i] != uint32(i) {
+			t.Fatalf("datagram %d carries wire sequence %d", i, seqs[i])
+		}
+	}
+	if multi == 0 {
+		t.Fatalf("no batch of more than one in %d sends", batches)
+	}
+	// A batch carries no more than the bucket holds (2 ms of the rate: ~4 KB,
+	// three datagrams and the one being paid for) — not a burst of 16.
+	if biggest > 5 {
+		t.Fatalf("a batch of %d datagrams: more than the bucket can pay for", biggest)
+	}
+	// 300 × ~1209 bytes at 2 MB/s is ~180 ms; allow the bucket's burst.
+	if el < 120*time.Millisecond {
+		t.Fatalf("sent in %v: faster than the paced rate", el)
+	}
+}

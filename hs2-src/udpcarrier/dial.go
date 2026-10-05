@@ -98,6 +98,15 @@ func DialCfg(ctx context.Context, addr string, ec EncapConfig, shared []byte, in
 	write := func(b []byte) error { _, e := conn.Write(b); return e }
 	c := newConn(sess, write, shared, binding, innerMTU, conn, nil)
 	c.kind = ec.Kind // echo-shaping in the pool keys off this (the dial side sends requests)
+	// Several datagrams per syscall where the socket can (sendmmsg).
+	switch bc := conn.(type) {
+	case interface{ WriteBatch([][]byte) error }: // a raw encapsulation's shared socket
+		c.setWriteBatch(bc.WriteBatch)
+	case *net.UDPConn:
+		if wb := udpConnWriteBatch(bc); wb != nil {
+			c.setWriteBatch(wb)
+		}
+	}
 
 	// Read pump: everything after the handshake goes through the FEC path. A
 	// raw encapsulation's shared dial socket hands packets over directly (one
@@ -121,9 +130,30 @@ func DialCfg(ctx context.Context, addr string, ec EncapConfig, shared []byte, in
 	return c, nil
 }
 
-// readPump reads the dial socket until the carrier closes or the socket fails.
+// readPump reads the dial socket until the carrier closes or the socket fails
+// — what is waiting in one call (recvmmsg) on a UDP socket.
 func (c *Conn) readPump(conn net.Conn) {
 	defer c.wg.Done()
+	if uc, ok := conn.(*net.UDPConn); ok {
+		if rb := udpConnReadBatch(uc); rb != nil {
+			for {
+				select {
+				case <-c.done:
+					return
+				default:
+				}
+				conn.SetReadDeadline(time.Now().Add(deadAfter))
+				if err := rb(c.feed); err != nil {
+					select {
+					case <-c.done:
+					default:
+						c.Close()
+					}
+					return
+				}
+			}
+		}
+	}
 	buf := make([]byte, 2048)
 	for {
 		select {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net"
 	"sync"
 	"time"
@@ -91,6 +92,22 @@ func (l *Listener) LocalAddr() net.Addr { return l.conn.localAddr() }
 
 func (l *Listener) serve() {
 	defer l.wg.Done()
+	if l.conn.batched() {
+		// What is waiting in one syscall (recvmmsg).
+		for {
+			if err := l.conn.readBatch(l.handle); err != nil {
+				select {
+				case <-l.done:
+					return
+				default:
+				}
+				if errors.Is(err, net.ErrClosed) {
+					return
+				}
+				continue // transient read error: keep serving
+			}
+		}
+	}
 	buf := make([]byte, 2048)
 	for {
 		n, addr, dst, err := l.conn.readFrom(buf)
@@ -103,32 +120,39 @@ func (l *Listener) serve() {
 			// transient read error: keep serving
 			continue
 		}
-		if addr == nil {
-			continue
-		}
-		key := addr.String()
-		l.mu.Lock()
-		pl := l.conns[key]
-		l.mu.Unlock()
-		pkt := append([]byte(nil), buf[:n]...)
-		if pl != nil {
-			// A retransmitted first message (message 2 was lost) is answered
-			// from cache; everything else is carrier traffic.
-			if bytes.Equal(pkt, pl.m1) {
-				l.send(pl.m2, addr, pl.local)
-			} else {
-				pl.c.tryFeed(pkt)
-			}
-			continue
-		}
-		// A datagram from a new address is a probe or a handshake. Probes are
-		// answered on this same port so the selector can measure the real data
-		// path; anything else is a candidate first message.
-		if l.probe.handle(pkt, func(b []byte) { l.send(b, addr, dst) }) {
-			continue
-		}
-		l.tryHandshake(pkt, addr, dst)
+		l.handle(buf[:n], addr, dst)
 	}
+}
+
+// handle takes one received datagram (b is reused after it returns): a known
+// peer's carrier traffic, a retransmitted first message, a probe, or a
+// handshake.
+func (l *Listener) handle(b []byte, addr net.Addr, dst net.IP) {
+	if addr == nil {
+		return
+	}
+	key := addr.String()
+	l.mu.Lock()
+	pl := l.conns[key]
+	l.mu.Unlock()
+	pkt := append([]byte(nil), b...)
+	if pl != nil {
+		// A retransmitted first message (message 2 was lost) is answered
+		// from cache; everything else is carrier traffic.
+		if bytes.Equal(pkt, pl.m1) {
+			l.send(pl.m2, addr, pl.local)
+		} else {
+			pl.c.tryFeed(pkt)
+		}
+		return
+	}
+	// A datagram from a new address is a probe or a handshake. Probes are
+	// answered on this same port so the selector can measure the real data
+	// path; anything else is a candidate first message.
+	if l.probe.handle(pkt, func(b []byte) { l.send(b, addr, dst) }) {
+		return
+	}
+	l.tryHandshake(pkt, addr, dst)
 }
 
 // send writes one datagram to addr from source src (nil: kernel's choice).
@@ -174,6 +198,9 @@ func (l *Listener) tryHandshake(m1 []byte, addr net.Addr, dst net.IP) {
 		l.mu.Unlock()
 	})
 	c.kind = l.kind // echo-shaping in the pool keys off this (the listen side sends replies)
+	if l.conn.batched() {
+		c.setWriteBatch(func(bs [][]byte) error { return l.conn.writeBatchTo(bs, addr, dst) })
+	}
 	l.mu.Lock()
 	if old := l.conns[key]; old != nil {
 		old.c.Close()

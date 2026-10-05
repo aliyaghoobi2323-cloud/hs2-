@@ -197,8 +197,10 @@ type dgLink struct {
 	flows  map[uint32]*dgFlow
 
 	// ro puts each TCP flow's segments from this carrier back in order before
-	// the TUN (see reorder.go). Set by the pool when the carrier joins.
+	// the TUN (see reorder.go); tb batches what it releases into the TUN.
+	// Set by the pool when the carrier joins.
 	ro *reorderer
+	tb *tunBatch
 }
 
 // dgFlow is one L3 flow's activity on a carrier.
@@ -644,11 +646,9 @@ func (p *dgPool) add(ctx context.Context, car Carrier, from string) *dgLink {
 	// Set ro BEFORE publishing the link to p.set: carrierStats reads l.ro under
 	// p.mu, so assigning it after the append below raced with that read (a
 	// pre-existing data race the -race detector flags on TestDgPoolReverse).
-	l.ro = newReorderer(dgReorderHold, func(b []byte) {
-		if _, err := p.dev.Write(b); err == nil {
-			p.tunWritten.Add(1)
-		}
-	})
+	l.tb = newTunBatch(p.dev, func(n int) { p.tunWritten.Add(uint64(n)) })
+	l.ro = newReorderer(dgReorderHold, l.tb.add)
+	l.ro.flush = l.tb.flush
 	p.mu.Lock()
 	// A carrier just came up, so the path works: any carrier that has heard
 	// nothing for dgSilentDead is dead — its peer restarted (and drops its
@@ -709,48 +709,83 @@ func (p *dgPool) readLoop(ctx context.Context, l *dgLink) {
 			p.lostLog.log("dg: carrier %d failed (%v) — its flows move to live carriers", l.id, *e)
 		}
 	}()
+	try, _ := l.car.(interface{ TryReadFrame() (byte, []byte, bool) })
 	for ctx.Err() == nil {
 		ft, payload, err := l.car.ReadFrame()
 		if err != nil {
 			l.lose(err) // a no-op when it was closed on purpose (dead already)
 			return
 		}
-		// Count only REAL frames (data, pool control) toward the echo balance —
-		// never a received filler (Ping/Pong). If a received filler were counted,
-		// this side would owe a reply to it and the peer would owe one back, so
-		// two balancers could trade fillers without end. Anchoring on real traffic
-		// keeps the data-heavy direction ahead (it never fills) and only the light
-		// one catching up, so fillers stay bounded by the real data they match.
-		if l.echoShaped && ft != core.TypePing && ft != core.TypePong {
-			l.rxFrames.Add(1)
-		}
-		switch ft {
-		case core.TypeData:
-			now := p.now()
-			p.recvPkts.Add(1)
-			l.noteFlowRecv(flowHash(payload), len(payload), now)
-			if l.ro != nil {
-				l.ro.Push(payload) // in TCP order, or held briefly behind a gap
-			} else if _, err := p.dev.Write(payload); err == nil {
-				p.tunWritten.Add(1)
+		// Whatever else already arrived goes with it, and the TUN gets the
+		// lot in one batched write (consecutive segments of a connection
+		// as one packet, with the TUN's offloads).
+		for n := 0; ; n++ {
+			if done := p.onFrame(l, ft, payload); done {
+				if l.tb != nil {
+					l.tb.flush()
+				}
+				return
 			}
-		case core.TypeClose:
-			if p.onCloseFrame(l, payload) {
-				return // the peer closed it
+			if try == nil || n >= dgReadBatch {
+				break
 			}
-		case core.TypePing, core.TypePong:
-			// Inert in the datagram pool — the carrier handles its own liveness.
-			// A Ping/Pong here is the peer's echo-shaping filler; it is neither
-			// counted (above) nor answered, so fillers can never chain.
-		case core.TypePoolCtl:
-			p.onPoolCtl(l, payload)
-		case core.TypeLinkStats:
-			p.onLinkStats(payload)
+			var ok bool
+			if ft, payload, ok = try.TryReadFrame(); !ok {
+				break
+			}
 		}
-		if l.echoShaped {
-			p.echoBalance(l)
+		if l.tb != nil {
+			l.tb.flush()
 		}
 	}
+}
+
+// dgReadBatch: frames one read-loop pass takes before writing them out.
+const dgReadBatch = 64
+
+// onFrame handles one frame from carrier l; true when the peer closed it.
+func (p *dgPool) onFrame(l *dgLink, ft byte, payload []byte) bool {
+	// Count only REAL frames (data, pool control) toward the echo balance —
+	// never a received filler (Ping/Pong). If a received filler were counted,
+	// this side would owe a reply to it and the peer would owe one back, so
+	// two balancers could trade fillers without end. Anchoring on real traffic
+	// keeps the data-heavy direction ahead (it never fills) and only the light
+	// one catching up, so fillers stay bounded by the real data they match.
+	if l.echoShaped && ft != core.TypePing && ft != core.TypePong {
+		l.rxFrames.Add(1)
+	}
+	switch ft {
+	case core.TypeData:
+		now := p.now()
+		p.recvPkts.Add(1)
+		l.noteFlowRecv(flowHash(payload), len(payload), now)
+		switch {
+		case l.ro != nil:
+			l.ro.Push(payload) // in TCP order, or held briefly behind a gap
+		case l.tb != nil:
+			l.tb.add(payload)
+		default:
+			if _, err := p.dev.Write(payload); err == nil {
+				p.tunWritten.Add(1)
+			}
+		}
+	case core.TypeClose:
+		if p.onCloseFrame(l, payload) {
+			return true // the peer closed it
+		}
+	case core.TypePing, core.TypePong:
+		// Inert in the datagram pool — the carrier handles its own liveness.
+		// A Ping/Pong here is the peer's echo-shaping filler; it is neither
+		// counted (above) nor answered, so fillers can never chain.
+	case core.TypePoolCtl:
+		p.onPoolCtl(l, payload)
+	case core.TypeLinkStats:
+		p.onLinkStats(payload)
+	}
+	if l.echoShaped {
+		p.echoBalance(l)
+	}
+	return false
 }
 
 // sendVia sends a control frame on a carrier (pong, pool control, echo filler),

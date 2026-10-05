@@ -42,7 +42,11 @@ type pacer struct {
 	// slowly the data queue drains (the carrier's floor rate, a policer cap).
 	inQueued atomic.Uint64
 	inLeft   atomic.Uint64
-	pool     sync.Pool
+	// writeBatch, when the socket can (sendmmsg), sends several datagrams in
+	// one syscall: the pacer gathers the ones already waiting that the bucket
+	// can pay for (pacerBatch at most).
+	writeBatch atomic.Pointer[func([][]byte) error]
+	pool       sync.Pool
 
 	done      chan struct{}
 	closeOnce sync.Once
@@ -71,6 +75,9 @@ const (
 	pacerQueueTime = 20 * time.Millisecond
 	pacerQueueMin  = 3 * 1500 // at the 0.26 Mbit/s floor still 140 ms; 8 datagrams were 375 ms
 )
+
+// pacerBatch is the most datagrams one batched send carries.
+const pacerBatch = 16
 
 // pacerQuantum is the pacing burst the bucket may hold: two timer wake-ups'
 // worth of the current rate (Go sleeps in ~1 ms steps). At 100 Mbit/s that is
@@ -167,30 +174,42 @@ func (p *pacer) loop() {
 	defer p.wg.Done()
 	var tokens float64
 	last := time.Now()
+	type item struct {
+		b      []byte
+		fromIn bool
+	}
+	var carry *item // taken from a lane but not sendable yet: first next time
+	var batch []item
+	var outs [][]byte
 	for {
 		var b []byte
 		fromIn := false
-		// Drain parity ahead of data so a group's parity is not stuck behind a
-		// backlog of data and miss the decoder's recovery window; then the
-		// fast lane (interactive packets), then the data queue.
-		select {
-		case <-p.done:
-			return
-		case b = <-p.pri:
-		default:
+		if carry != nil {
+			b, fromIn, carry = carry.b, carry.fromIn, nil
+		} else {
+			// Drain parity ahead of data so a group's parity is not stuck
+			// behind a backlog of data and miss the decoder's recovery
+			// window; then the fast lane (interactive packets), then the
+			// data queue.
 			select {
 			case <-p.done:
 				return
 			case b = <-p.pri:
-			case b = <-p.fast:
 			default:
 				select {
 				case <-p.done:
 					return
 				case b = <-p.pri:
 				case b = <-p.fast:
-				case b = <-p.in:
-					fromIn = true
+				default:
+					select {
+					case <-p.done:
+						return
+					case b = <-p.pri:
+					case b = <-p.fast:
+					case b = <-p.in:
+						fromIn = true
+					}
 				}
 			}
 		}
@@ -231,51 +250,102 @@ func (p *pacer) loop() {
 		tokens -= need
 		// Under a policer cap the whole pool shares one budget: every datagram,
 		// data or parity, waits for its share of it.
+		var g *Governor
 		if p.gov != nil {
-			if g := p.gov.Load(); g != nil {
-				if d := g.reserve(len(b)); d > 0 {
-					t := time.NewTimer(d)
-					select {
-					case <-p.done:
-						t.Stop()
-						p.dequeued(len(b))
-						p.recycle(b)
-						return
-					case <-t.C:
-					}
-					// the bucket above refills while we wait for the pool's
-					last = time.Now()
+			g = p.gov.Load()
+		}
+		if g != nil {
+			if d := g.reserve(len(b)); d > 0 {
+				t := time.NewTimer(d)
+				select {
+				case <-p.done:
+					t.Stop()
+					p.dequeued(len(b))
+					p.recycle(b)
+					return
+				case <-t.C:
 				}
+				// the bucket above refills while we wait for the pool's
+				last = time.Now()
+			}
+		}
+		batch = append(batch[:0], item{b, fromIn})
+		// More datagrams already waiting that the bucket can pay for now go
+		// in the same syscall (sendmmsg), in the same lane order. Not under a
+		// policer cap: each of those waits for the pool's budget alone.
+		wb := p.writeBatch.Load()
+		if wb != nil && (g == nil || !g.Capped()) {
+			for len(batch) < pacerBatch {
+				var nb []byte
+				nIn := false
+				select {
+				case nb = <-p.pri:
+				default:
+					select {
+					case nb = <-p.fast:
+					default:
+						select {
+						case nb = <-p.in:
+							nIn = true
+						default:
+						}
+					}
+				}
+				if nb == nil {
+					break
+				}
+				if tokens < float64(len(nb)) {
+					carry = &item{nb, nIn}
+					break
+				}
+				tokens -= float64(len(nb))
+				batch = append(batch, item{nb, nIn})
 			}
 		}
 		// Fill the reserved header in wire (send) order, so the receiver
 		// measures loss on the actual wire order and the stamp is the moment
 		// the datagram leaves.
-		out := b
-		if p.stamps.Load() {
-			b[0] = tagDataTS
-			binary.BigEndian.PutUint32(b[1:5], p.wireSeq)
-			binary.BigEndian.PutUint32(b[5:9], stampOf(time.Now()))
-		} else {
-			out = b[4:]
-			out[0] = tagData
-			binary.BigEndian.PutUint32(out[1:5], p.wireSeq)
+		outs = outs[:0]
+		stamp := p.stamps.Load()
+		for i := range batch {
+			b := batch[i].b
+			out := b
+			if stamp {
+				b[0] = tagDataTS
+				binary.BigEndian.PutUint32(b[1:5], p.wireSeq)
+				binary.BigEndian.PutUint32(b[5:9], stampOf(time.Now()))
+			} else {
+				out = b[4:]
+				out[0] = tagData
+				binary.BigEndian.PutUint32(out[1:5], p.wireSeq)
+			}
+			p.wireSeq++
+			outs = append(outs, out)
 		}
-		p.wireSeq++
-		if err := p.write(out); err != nil {
+		var err error
+		if len(outs) == 1 {
+			err = p.write(outs[0])
+		} else {
+			err = (*wb)(outs)
+		}
+		if err != nil {
 			e := err
 			p.writeErr.Store(&e)
-			p.dequeued(len(b))
-			p.recycle(b)
+			for _, it := range batch {
+				p.dequeued(len(it.b))
+				p.recycle(it.b)
+			}
 			return
 		}
-		atomic.AddUint64(&p.sent, 1)
-		if fromIn {
-			p.inLeft.Add(1)
+		for i, it := range batch {
+			atomic.AddUint64(&p.sent, 1)
+			if it.fromIn {
+				p.inLeft.Add(1)
+			}
+			p.rc.onSent(len(outs[i]))
+			p.dequeued(len(it.b))
+			p.recycle(it.b)
 		}
-		p.rc.onSent(len(out))
-		p.dequeued(len(b))
-		p.recycle(b)
 	}
 }
 
