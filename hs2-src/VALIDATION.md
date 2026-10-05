@@ -9,7 +9,8 @@ traffic. Both servers must run the release build (`hs2 version` shows the
 build id below).
 
 - Release commit: see the "Release" line at the end of this file.
-- Previous main (rollback target): `d310f79` (binary build `bad9d4be1f43`).
+- Previous main (rollback target): `6ae3492` (binary build `f9b668c4e1e4`);
+  before it `d310f79` (binary build `bad9d4be1f43`).
 
 ## Rollback
 
@@ -17,7 +18,7 @@ On each server, reinstall the previous binary pinned to its commit (no change
 to the repository needed):
 
 ```
-HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/d310f79 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/d310f79/install.sh)
+HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/6ae3492 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/6ae3492/install.sh)
 ```
 
 then Upgrade the tunnel(s) in the menu. To roll `main` itself back, revert the
