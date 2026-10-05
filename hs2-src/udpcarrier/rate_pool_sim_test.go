@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,10 +16,12 @@ import (
 // carrier's simulator cannot: carriers reading each other's queue.
 
 type poolSender struct {
-	start   time.Duration // joins the pool then (a late carrier)
-	appBps  float64       // 0: always has data; else offers this much
-	fbPhase float64       // ms: feedback phase within the 100 ms interval
-	ownBps  float64       // > 0: its own path of this capacity, not the shared one (a pool over several IPs)
+	start    time.Duration // joins the pool then (a late carrier)
+	appBps   float64       // 0: always has data; else offers this much
+	fbPhase  float64       // ms: feedback phase within the 100 ms interval
+	ownBps   float64       // > 0: its own path of this capacity, not the shared one (a pool over several IPs)
+	stopAt   time.Duration // > 0: stops sending then
+	bulkFrom time.Duration // > 0: offers appBps until then, then always has data
 }
 
 type poolResult struct {
@@ -30,6 +33,7 @@ type poolResult struct {
 	jain     float64   // Jain's fairness index over the saturating carriers on the shared path
 	ownQ95   []float64 // p95 queue of each carrier on its own path (ownBps), ms
 	startup  []bool    // each carrier still in startup at the end
+	win      []float64 // each carrier's delivery in the window (poolWin), Mbit/s
 	rateMbit []float64 // each carrier's final pacing rate
 }
 
@@ -44,12 +48,20 @@ func (r poolResult) String() string {
 	return fmt.Sprintf("util=%.0f%% queue mean=%.1fms p95=%.1fms drops=%d jain=%.2f |%s", r.util*100, r.qMean, r.qP95, r.drops, r.jain, s)
 }
 
+// poolWin, when set, is a window (ms) over which runPoolSim also measures
+// each carrier's delivery (poolResult.win).
+type poolWin [2]float64
+
 func runPoolSim(capBps float64, oneWay, buffer time.Duration, senders []poolSender, dur, warm time.Duration) poolResult {
 	return runPoolSimRules(true, capBps, oneWay, buffer, senders, dur, warm)
 }
 
 // runPoolSimRules is runPoolSim with the pool rules on or off.
 func runPoolSimRules(rules bool, capBps float64, oneWay, buffer time.Duration, senders []poolSender, dur, warm time.Duration) poolResult {
+	return runPoolSimWin(rules, capBps, oneWay, buffer, senders, dur, warm, poolWin{})
+}
+
+func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, senders []poolSender, dur, warm time.Duration, win poolWin) poolResult {
 	const pkt = 1200.0
 	const step = 0.25 // ms
 	peerOffset := 123456.789
@@ -83,6 +95,7 @@ func runPoolSimRules(rules bool, capBps float64, oneWay, buffer time.Duration, s
 		nextFb    float64
 		toUs      []report
 		delivered float64
+		inWin     float64
 		sentPrev  uint64
 	}
 	ss := make([]*st, len(senders))
@@ -94,19 +107,20 @@ func runPoolSimRules(rules bool, capBps float64, oneWay, buffer time.Duration, s
 	var toPeer []pkt_
 	var qs []float64
 	drops := 0
-	shareB, nextShare := 0.0, 500.0
+	shareB, meanB, nextShare := 0.0, 0.0, 500.0
 	for now := 0.0; now < endMs; now += step {
 		for i, s := range senders {
 			c := ss[i]
-			if now < float64(s.start/time.Millisecond) {
+			if now < float64(s.start/time.Millisecond) || (s.stopAt > 0 && now >= float64(s.stopAt/time.Millisecond)) {
 				continue
 			}
 			rate := c.rc.pacingRate(at(now)) / 1000
 			c.tokens = math.Min(c.tokens+rate*step, math.Max(2*pkt, rate*2))
-			if s.appBps > 0 {
+			limitedApp := s.appBps > 0 && (s.bulkFrom == 0 || now < float64(s.bulkFrom/time.Millisecond))
+			if limitedApp {
 				c.app = math.Min(c.app+s.appBps/8/1000*step, 64*pkt)
 			}
-			for c.tokens >= pkt && (s.appBps == 0 || c.app >= pkt) {
+			for c.tokens >= pkt && (!limitedApp || c.app >= pkt) {
 				c.tokens -= pkt
 				c.app -= pkt
 				c.rc.onSent(int(pkt))
@@ -144,19 +158,34 @@ func runPoolSimRules(rules bool, capBps float64, oneWay, buffer time.Duration, s
 			if now >= warmMs {
 				c.delivered += d.bytes
 			}
+			if win[1] > 0 && now >= win[0] && now < win[1] {
+				c.inWin += d.bytes
+			}
 		}
 		// The pool's governor: the fair share every 500 ms (Governor.tick).
 		if now >= nextShare {
 			nextShare += 500
-			n, sum := 0, 0.0
+			n, sum, na, asum := 0, 0.0, 0, 0.0
 			for _, c := range ss {
 				sent := c.rc.sent.Load()
 				r := float64(sent-c.sentPrev) / 0.5
 				c.sentPrev = sent
+				if r >= govActiveRate {
+					na++
+					asum += r
+				}
 				if r >= govActiveRate && c.rc.pushing.Load() {
 					n++
 					sum += r
 				}
+			}
+			if na > 0 {
+				if meanB == 0 {
+					meanB = asum / float64(na)
+				}
+				meanB += 0.5 * (asum/float64(na) - meanB)
+			} else {
+				meanB = 0
 			}
 			if n >= 2 {
 				if shareB == 0 {
@@ -184,7 +213,7 @@ func runPoolSimRules(rules bool, capBps float64, oneWay, buffer time.Duration, s
 			for len(c.toUs) > 0 && c.toUs[0].arrive <= now {
 				r := c.toUs[0]
 				c.toUs = c.toUs[1:]
-				c.rc.setShare(shareB)
+				c.rc.setShare(shareB, meanB)
 				c.rc.onFeedback(at(now), r.rx, 2*ow/1000, 0, 0, r.owd, r.haveOWD)
 			}
 		}
@@ -197,6 +226,9 @@ func runPoolSimRules(rules bool, capBps float64, oneWay, buffer time.Duration, s
 		res.mbit = append(res.mbit, m)
 		res.rateMbit = append(res.rateMbit, c.rc.pacingRate(at(endMs))*8/1e6)
 		res.startup = append(res.startup, c.rc.startup)
+		if win[1] > 0 {
+			res.win = append(res.win, c.inWin*8/(win[1]-win[0])/1000)
+		}
 		tot += c.delivered
 		if senders[i].ownBps > 0 {
 			sort.Float64s(c.qs)
@@ -207,7 +239,7 @@ func runPoolSimRules(rules bool, capBps float64, oneWay, buffer time.Duration, s
 			res.ownQ95 = append(res.ownQ95, q)
 			continue
 		}
-		if senders[i].appBps == 0 {
+		if senders[i].appBps == 0 && senders[i].stopAt == 0 {
 			sat = append(sat, m)
 		}
 	}
@@ -332,7 +364,7 @@ func TestPoolSimSlowSeparatePath(t *testing.T) {
 	if r.mbit[2] < 1.7 {
 		t.Errorf("the slow path carries %.1f of its 2 Mbit/s", r.mbit[2])
 	}
-	if r.ownQ95[0] > 34 || r.drops > 0 {
+	if r.ownQ95[0] > 40 || r.drops > 0 {
 		t.Errorf("the slow path's queue p95 %.1f ms, %d drops", r.ownQ95[0], r.drops)
 	}
 	if r.jain < 0.9 {
@@ -353,5 +385,121 @@ func TestPoolSimLightCarrierStaysInStartup(t *testing.T) {
 	}
 	if r.startup[0] || r.startup[1] {
 		t.Error("a busy carrier is still in startup")
+	}
+}
+
+// A carrier on its own much slower path, in a pool whose fair share is far
+// above it (a pool over several IPs): the share must not drive it into its
+// buffer. It cannot tell its queue from the pool's, so its fair-share growth
+// costs it some queue — ~20 ms more at 30 ms RTT, up to ~50 ms at 160 ms —
+// but never drops or lost throughput (before the step was capped at its own
+// capacity and kept out of queue-free reports, 100-200 ms).
+func TestPoolSimSlowPathBigShare(t *testing.T) {
+	sec, ms := time.Second, time.Millisecond
+	for _, own := range []float64{0.5e6, 1e6, 3e6} {
+		for _, ow := range []time.Duration{15 * ms, 80 * ms} {
+			s := []poolSender{{fbPhase: 0}, {start: sec, fbPhase: 13}, {start: 2 * sec, fbPhase: 29}, {start: 3 * sec, fbPhase: 47}, {start: 4 * sec, fbPhase: 71, ownBps: own}}
+			off := runPoolSimRules(false, 100e6, ow, 200*ms, s, 60*sec, 30*sec)
+			on := runPoolSimRules(true, 100e6, ow, 200*ms, s, 60*sec, 30*sec)
+			t.Logf("own %.1f Mbit/s, one way %v: queue p95 %.0f ms (rules off %.0f), got %.2f", own/1e6, ow, on.ownQ95[0], off.ownQ95[0], on.mbit[4])
+			if on.ownQ95[0] > off.ownQ95[0]+55 || on.ownQ95[0] > 80 || on.drops > 0 || on.mbit[4] < 0.9*own/1e6 {
+				t.Errorf("own %.1f Mbit/s, one way %v: queue p95 %.0f ms against %.0f with the rules off, %d drops, %.2f Mbit/s", own/1e6, ow, on.ownQ95[0], off.ownQ95[0], on.drops, on.mbit[4])
+			}
+		}
+	}
+}
+
+// A light carrier (a call, the other direction's ACKs) next to busy ones
+// keeps startup, so when its own bulk comes on an emptied path it ramps as
+// fast as before the pool rules.
+func TestPoolSimLightCarrierLaterRamp(t *testing.T) {
+	sec, ms := time.Second, time.Millisecond
+	for _, ow := range []time.Duration{15 * ms, 60 * ms} {
+		for _, app := range []float64{1.2e6, 2e6, 4e6} {
+			s := []poolSender{{fbPhase: 0, stopAt: 20 * sec}, {start: sec, fbPhase: 37, stopAt: 20 * sec}, {start: sec, appBps: app, fbPhase: 71, bulkFrom: 22 * sec}}
+			w := poolWin{22000, 27000}
+			off := runPoolSimWin(false, 30e6, ow, 200*ms, s, 35*sec, 10*sec, w)
+			on := runPoolSimWin(true, 30e6, ow, 200*ms, s, 35*sec, 10*sec, w)
+			t.Logf("one way %v, light %.1f Mbit/s: its bulk got %.1f Mbit/s in its first 5 s (rules off %.1f)", ow, app/1e6, on.win[2], off.win[2])
+			if on.win[2] < 0.9*off.win[2] {
+				t.Errorf("one way %v, light %.1f Mbit/s: ramp %.1f against %.1f with the rules off", ow, app/1e6, on.win[2], off.win[2])
+			}
+		}
+	}
+}
+
+// Pool carriers converge on the bottleneck quickly, also on a narrow path
+// and on a long one: fairness over seconds 10-25 after the first carrier.
+func TestPoolSimConvergence(t *testing.T) {
+	sec, ms := time.Second, time.Millisecond
+	for _, c := range []struct {
+		cap      float64
+		ow, buf  time.Duration
+		early    float64 // Jain over seconds 10-25
+		late     float64 // Jain over 30-60
+		wantNote string
+	}{
+		{8e6, 10 * ms, 100 * ms, 0.9, 0.95, "8 Mbit/s"},
+		{30e6, 10 * ms, 100 * ms, 0.9, 0.95, "30 Mbit/s"},
+		{100e6, 80 * ms, 200 * ms, 0.45, 0.85, "100 Mbit/s, 80 ms one way"},
+	} {
+		var s []poolSender
+		for i := 0; i < 4; i++ {
+			s = append(s, poolSender{start: time.Duration(i) * sec, fbPhase: float64(i * 23 % 100)})
+		}
+		r := runPoolSimWin(true, c.cap, c.ow, c.buf, s, 60*sec, 30*sec, poolWin{10000, 25000})
+		sum, s2 := 0.0, 0.0
+		for _, v := range r.win {
+			sum += v
+			s2 += v * v
+		}
+		early := sum * sum / (float64(len(r.win)) * s2)
+		t.Logf("%s: Jain %.2f (10-25 s), %.2f (30-60 s): %s", c.wantNote, early, r.jain, r)
+		if early < c.early || r.jain < c.late || r.drops > 0 {
+			t.Errorf("%s: Jain %.2f early, %.2f late, %d drops", c.wantNote, early, r.jain, r.drops)
+		}
+	}
+}
+
+// A carrier that ran fast (no bottleneck) and then meets a narrow one while
+// its users' TCP fills it: its capacity follows what gets through, not a
+// share of the old peak — before, it kept 0.4x of 900 Mbit/s as its
+// capacity and paced nothing (seen with mixed versions behind a 30 Mbit/s
+// tbf: ping 122/475 ms, 5% lost).
+func TestRateSimBottleneckAppearsAfterFastPeriod(t *testing.T) {
+	for _, ow := range []time.Duration{5 * time.Millisecond, 40 * time.Millisecond} {
+		p := simPath{capBps: 900e6, capAfter: 30e6, changeAt: 15 * time.Second, appRateBps: 500e6, appAfterBps: 1.05 * 30e6, oneWay: ow, buffer: 120 * time.Millisecond}
+		p.rulesOff = true
+		off := runRateSim(p, 45*time.Second, 25*time.Second, 7)
+		p.rulesOff = false
+		on := runRateSim(p, 45*time.Second, 25*time.Second, 7)
+		t.Logf("one way %v\n  rule off: %s\n  rule on:  %s", ow, off, on)
+		if on.qMean > 20 || on.tailDrops > 0 {
+			t.Errorf("one way %v: %s", ow, on)
+		}
+	}
+}
+
+// The shared probe clock keeps the monotonic reading, so a wall-clock step
+// cannot hold the probes back; the next probe is always ahead, at most one
+// period away.
+func TestNextProbeMonotonic(t *testing.T) {
+	r := newRateControl()
+	r.fair = true
+	now := time.Now()
+	n := r.nextProbe(now)
+	if !strings.Contains(n.String(), "m=") {
+		t.Errorf("next probe %v carries no monotonic reading", n)
+	}
+	for _, at := range []time.Time{now, now.Add(3 * time.Second), now.Add(-17 * time.Hour), time.Unix(1_700_000_000, 0), time.Unix(1_700_000_000, 0).Add(baseProbeEvery)} {
+		d := r.nextProbe(at).Sub(at)
+		if d <= 0 || d > baseProbeEvery {
+			t.Errorf("at %v: next probe in %v", at, d)
+		}
+	}
+	a, b := newRateControl(), newRateControl()
+	a.fair, b.fair = true, true
+	if !a.nextProbe(now).Equal(b.nextProbe(now.Add(time.Second))) && !a.nextProbe(now).Add(baseProbeEvery).Equal(b.nextProbe(now.Add(time.Second))) {
+		t.Error("two carriers do not share the probe clock")
 	}
 }

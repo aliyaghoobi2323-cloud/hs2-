@@ -30,6 +30,7 @@ type simPath struct {
 	appRateBps  float64 // 0 = saturating sender; else the app offers this much
 	appUntilMs  float64 // if > 0, appRateBps applies only before this time; saturating after
 	capAfter    float64 // if > 0, capacity changes to this at changeAt
+	appAfterBps float64 // if > 0, the app offers this much from changeAt (with appRateBps before it)
 	policeBps   float64 // if > 0, a per-flow token-bucket policer (DPI throttling) before the bottleneck
 	policeBurst float64 // bytes
 	crossFrac   float64 // if > 0, cross-traffic takes this fraction of the bottleneck while active
@@ -197,8 +198,12 @@ func runRateSim(p simPath, dur, warm time.Duration, seed uint64) simResult {
 		rate := rc.pacingRate(at(now)) / 1000 // bytes per ms
 		tokens = math.Min(tokens+rate*step, math.Max(2*pkt, rate*2))
 		appLimited := p.appRateBps > 0 && (p.appUntilMs == 0 || now < p.appUntilMs)
+		appRate := p.appRateBps
+		if p.appAfterBps > 0 && now >= float64(p.changeAt/time.Millisecond) {
+			appRate = p.appAfterBps
+		}
 		if appLimited {
-			appTokens = math.Min(appTokens+p.appRateBps/8/1000*step, 64*pkt)
+			appTokens = math.Min(appTokens+appRate/8/1000*step, 64*pkt)
 		}
 		for tokens >= pkt && (!appLimited || appTokens >= pkt) {
 			tokens -= pkt

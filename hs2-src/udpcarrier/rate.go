@@ -54,14 +54,28 @@ import (
 //     carrier whose users' TCP fills the bottleneck before the pacer does is
 //     never "limited", and stayed in startup at 2.9x its delivery — unpaced,
 //     the queue sitting in the bottleneck instead of in the fair queue (lab:
-//     75 Mbit/s allowed on a 30 Mbit/s path, ping 60–170 ms).
-//   - a carrier using its allowance adds the same step, a share of the
-//     pool's fair share (Governor.Share), each report while the queue is
-//     below fairQueueMax. Before, capacity tracked each carrier's own
-//     delivery, so whoever held the queue first kept it: the others read it
-//     as theirs and sat at ~0.3 Mbit/s. Additive increase with the queue
-//     term's proportional decrease settles every carrier on the same rate
-//     (pool simulator: Jain's index 0.55–0.62 before, 0.92–0.97 after).
+//     75 Mbit/s allowed on a 30 Mbit/s path, ping 60–170 ms). "Real
+//     traffic" is over ~1 Mbit/s and at least half what the pool's active
+//     carriers carry on average (Governor.Mean): a light carrier (a call,
+//     the other direction's ACKs) keeps startup's fast ramp for when its
+//     own bulk comes. For the same reason, once out of startup a carrier
+//     that is not using its allowance while a queue stands follows its
+//     delivery down, with no floor from an old peak (a carrier that had run
+//     at 900 Mbit/s kept 0.4x that as its capacity when a 30 Mbit/s
+//     bottleneck appeared: unpaced again).
+//   - while a queue stands and the carrier uses its allowance, it grows
+//     toward the pool's fair share (Governor.Share): the same small step
+//     for every carrier, and a pull toward the share for one below it,
+//     never more than fairOwnMax of its own capacity per report (less on a
+//     long path, where the queue term reacts more slowly). Before,
+//     capacity tracked each carrier's own delivery, so whoever held the
+//     queue first kept it: the others read it as theirs and sat at ~0.3
+//     Mbit/s. The queue term's proportional cut, deeper for a bigger
+//     carrier, levels them (pool simulator: Jain's index 0.3–0.7 before,
+//     0.93–0.99 after). Not while no queue stands: there the path has room
+//     (the ordinary probe grows), and a carrier on its own slower path (a
+//     pool over several IPs), which cannot tell its queue from the pool's,
+//     was pushed into its buffer by it.
 //   - base probes fall on a clock all carriers share, so the pool slows
 //     together and the queue really empties; one carrier probing alone
 //     while the others kept the queue full saw a base with the queue in it.
@@ -124,6 +138,9 @@ type rateControl struct {
 	// 0: none — fewer than two carriers using their allowance). Set by the
 	// carrier from its Governor before each report.
 	share atomic.Uint64
+	// poolMean: the mean rate of the pool's active carriers, bytes/s
+	// (Governor.Mean): below half of it a carrier is a light one.
+	poolMean atomic.Uint64
 
 	// pushing: the last feedback showed the carrier sending at least
 	// limitedShare of its allowance — it was offering as much as it was
@@ -187,6 +204,8 @@ const (
 	startupQueueRuns = 3       // startup reports with a standing queue that end it
 	startupQueueMin  = 128_000 // bytes/s (~1 Mbit/s): a carrier carrying less is not filling anything
 	fairStep         = 0.005   // per report: this share of the fair share is added
+	fairPull         = 0.10    // per report: this share of the gap below the fair share
+	fairOwnMax       = 0.03    // per report: never more than this share of its own capacity
 	// No fair-share growth while the queue stands above this: a carrier whose
 	// own path is slower than the share (a pool over several IPs) stops there
 	// instead of being pushed into its buffer.
@@ -197,31 +216,51 @@ const (
 // HS2_FAIR_SHARE=0 turns them off (the controller as it was before them).
 var fairShareOn = os.Getenv("HS2_FAIR_SHARE") != "0"
 
-// setShare records the pool's fair share per carrier (bytes/s, 0: none).
-func (r *rateControl) setShare(b float64) { r.share.Store(math.Float64bits(b)) }
+// setShare records the pool's fair share per carrier and its active
+// carriers' mean rate (bytes/s, 0: none).
+func (r *rateControl) setShare(share, mean float64) {
+	r.share.Store(math.Float64bits(share))
+	r.poolMean.Store(math.Float64bits(mean))
+}
+
+// light: this carrier carries under half what the pool's active carriers
+// carry on average — a call, the other direction's ACKs — so a queue that
+// stands is the others' doing, not its own.
+func (r *rateControl) light(dRate float64) bool {
+	return dRate < math.Float64frombits(r.poolMean.Load())/2
+}
+
+// probeEpoch anchors the shared probe clock. It carries the monotonic
+// reading, so a wall-clock step (NTP after boot, an RTC on local time) moves
+// no probe.
+var probeEpoch = time.Now()
 
 // nextProbe is when the base probe after now starts: on a clock every
-// carrier shares (multiples of baseProbeEvery), so a pool probes together.
+// carrier shares (multiples of baseProbeEvery from probeEpoch), so a pool
+// probes together.
 func (r *rateControl) nextProbe(now time.Time) time.Time {
 	if !r.fair {
 		return now.Add(baseProbeEvery)
 	}
-	return now.Truncate(baseProbeEvery).Add(baseProbeEvery)
+	k := now.Sub(probeEpoch) / baseProbeEvery
+	if now.Before(probeEpoch) {
+		k-- // division truncates toward zero
+	}
+	return probeEpoch.Add((k + 1) * baseProbeEvery)
 }
 
-// fairGrow adds the pool's fair-share step to capEst while the carrier uses
-// its allowance: the same step for every carrier of the pool, so the queue
-// term's proportional cut, deeper for a bigger carrier, levels them. A
-// faster ramp for a carrier far below the share was tried and dropped: a
-// carrier on its own slower path (a pool over several IPs) cannot tell its
-// own queue from the pool's, and the ramp pushed it into its buffer (p95
-// 90–160 ms in the pool simulator, against ~30 ms without it).
-func (r *rateControl) fairGrow(scale float64) {
+// fairGrow moves capEst toward the pool's fair share while a queue stands
+// and the carrier uses its allowance (see rateControl): fairStep of the
+// share, or fairPull of the gap below it, at most fairOwnMax of its own
+// capacity, per report.
+func (r *rateControl) fairGrow(scale, tau float64) {
 	share := math.Float64frombits(r.share.Load())
 	if !r.fair || share <= 0 {
 		return
 	}
-	r.capEst += fairStep * share * math.Min(scale, 1)
+	step := math.Max(fairStep*share, fairPull*(share-r.capEst))
+	step = math.Min(step, fairOwnMax*queueTau.Seconds()/tau*r.capEst)
+	r.capEst += step * math.Min(scale, 1)
 }
 
 // minFilter is a windowed minimum over roughly [window, 2×window): two buckets
@@ -419,7 +458,7 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		}
 		// The path is full and we are part of what fills it, allowance used
 		// or not (see rateControl).
-		queueFull := r.fair && r.startQRuns >= startupQueueRuns && dRate >= startupQueueMin
+		queueFull := r.fair && r.startQRuns >= startupQueueRuns && dRate >= startupQueueMin && !r.light(dRate)
 		if !now.Before(r.plateauAt) {
 			if r.btlBw > r.lastDRate*1.25 {
 				r.plateauRuns = 0
@@ -478,9 +517,14 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 			// costs throughput but never collapses; real capacity drops of more
 			// than that fraction still track down through btlBw.
 			r.capEst += capAlpha * (dComp - r.capEst)
-			r.capEst = math.Max(r.capEst, capFloorFrac*r.btlBw*comp)
+			if limited || !r.fair {
+				// Not below a share of the peak while we push: our delivery
+				// may have dropped for a queue someone else built. Not
+				// pushing, it is what we offer — follow it (see rateControl).
+				r.capEst = math.Max(r.capEst, capFloorFrac*r.btlBw*comp)
+			}
 			if limited && q < fairQueueMax.Seconds() {
-				r.fairGrow(scale)
+				r.fairGrow(scale, math.Max(queueTau.Seconds(), 2.5*r.srtt))
 			}
 			r.emptyRuns = 0
 		case probing:
@@ -492,7 +536,6 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 			if r.emptyRuns++; r.emptyRuns >= 2 {
 				r.capEst *= math.Pow(probeGrow, math.Min(scale, 1))
 			}
-			r.fairGrow(scale)
 		}
 		// Proportional control of the queue around targetQueue: above it,
 		// pace below capacity to drain it in about tau; below it, a little

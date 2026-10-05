@@ -62,6 +62,8 @@ type Governor struct {
 	capped   atomic.Bool
 	shareB   float64       // fair share per carrier, bytes/s (smoothed; see Share)
 	share    atomic.Uint64 // math.Float64bits(shareB)
+	meanB    float64       // active carriers' mean rate, bytes/s (smoothed; see Mean)
+	mean     atomic.Uint64 // math.Float64bits(meanB)
 	holdPar  atomic.Bool   // confirmed policer: parity sized for the path's own loss
 	capBits  atomic.Uint64 // math.Float64bits(capB)
 	cleanBit atomic.Uint64 // math.Float64bits(cleanLoss)
@@ -183,6 +185,16 @@ func (g *Governor) Share() float64 {
 	return math.Float64frombits(g.share.Load())
 }
 
+// Mean is the mean rate of the pool's active carriers in bytes/s (0 when
+// none is active): a carrier under half of it is a light one, whose queue is
+// the others' doing (rateControl.light).
+func (g *Governor) Mean() float64 {
+	if g == nil {
+		return 0
+	}
+	return math.Float64frombits(g.mean.Load())
+}
+
 // Last is the most recent pool-wide tick (for status).
 func (g *Governor) Last() (rateBytes, loss float64) {
 	g.mu.Lock()
@@ -302,6 +314,16 @@ func (g *Governor) tick() {
 			}
 		}
 	}
+	if tk.active > 0 {
+		m := wSum / float64(tk.active)
+		if g.meanB == 0 {
+			g.meanB = m
+		}
+		g.meanB += 0.5 * (m - g.meanB)
+	} else {
+		g.meanB = 0
+	}
+	g.mean.Store(math.Float64bits(g.meanB))
 	if tk.pushing >= 2 {
 		sh := pushRate / float64(tk.pushing)
 		if g.shareB == 0 {

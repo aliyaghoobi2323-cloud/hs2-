@@ -477,7 +477,7 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 		c.peerStamps.Store(true)
 	}
 	g := c.gov.Load()
-	c.rc.setShare(g.Share())
+	c.rc.setShare(g.Share(), g.Mean())
 	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM, fb.echoNanos, fb.owdTicks, fb.flags&fbOWD != 0)
 	loss := float64(fb.lossPPM) / 1e6
 	if g != nil {
