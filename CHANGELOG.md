@@ -1205,6 +1205,22 @@ that its ceiling ignored what icmp is.
 - A full queue looks for the fattest flow among the queued ones only, not
   every flow seen in the last 2 s.
 
+### From the real-server report (two test servers, Iran 3 cores / Turkey 2 cores, reverse, build 1b5591f91bee)
+- The icmp ceiling: 8 on both servers, with its reason (the hardware alone
+  would have allowed 79-81).
+- On that path only icmp carries data: udp carriers came up and went silent
+  (100% loss), so a mixed icmp+udp pool would gain nothing there.
+- Fair queue vs FIFO under an 8-stream download: download 66-72 vs 47-53
+  Mbit/s, ping loss 0.7% vs 4.7%, p99 140 vs 198 ms.
+- One carrier cut (both ways, and Iran-only): mute in 1.0 s, flows moved at
+  once, closed at 3.0 s, a new carrier ~7 s; the download never stopped.
+- The cap (~60-72 Mbit/s down, ~80-86 up) was the Turkey server's CPU (2
+  cores at ~97%, shared with the production tunnel), not the path: one
+  carrier 47-51, eight ~60 (CPU parallelism, no policer detected). A lab CPU
+  profile of the sending side puts ~30% in syscalls (one per datagram on the
+  raw socket and one per packet on the tun) and ~25% in goroutine hand-offs;
+  crypto is ~4%.
+
 ### V3 — guidance: the kernel's own ping replies on a dedicated server
 The icmp listener keeps the server answering ordinary ping by dropping only
 the kernel's replies to tunnel packets (nft/iptables). The kernel still
