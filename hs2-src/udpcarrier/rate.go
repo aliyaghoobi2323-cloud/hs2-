@@ -55,16 +55,17 @@ import (
 //     never "limited", and stayed in startup at 2.9x its delivery — unpaced,
 //     the queue sitting in the bottleneck instead of in the fair queue (lab:
 //     75 Mbit/s allowed on a 30 Mbit/s path, ping 60–170 ms). "Real
-//     traffic" is over ~1 Mbit/s and at least half what the pool's active
-//     carriers carry on average (Governor.Mean): a light carrier (a call,
-//     the other direction's ACKs) keeps startup's fast ramp for when its
-//     own bulk comes — unless the queue is far deeper than the others'
-//     pacing holds it for eight round trips (a second at least) while the
-//     carrier delivers less than it sends: then the queue is its own, on a
-//     path of its own (a pool over several IPs). For the same reason, once out of
-//     startup a carrier that is not using its allowance while a queue
-//     stands follows its delivery down, with no floor from an old peak, and
-//     while a queue stands a peak older than bwStaleAge leaves the window
+//     traffic" is over ~1 Mbit/s and at least half what the pool's busy
+//     carriers carry (Governor.Share, else Governor.Mean): a light carrier
+//     (a call, the other direction's ACKs) keeps startup's fast ramp for
+//     when its own bulk comes — unless the queue stays far deeper than the
+//     others' pacing holds it for eight base round trips (one to three
+//     seconds) while the carrier delivers less than it sends: then the
+//     queue is its own, on a path of its own (a pool over several IPs).
+//     For the same reason, once out of startup a carrier that is not using
+//     its allowance while a queue stands follows its delivery down, with no
+//     floor from an old peak, and while a queue stands a peak older than
+//     bwStaleAge leaves the window
 //     (a carrier that had run at 900 Mbit/s kept 0.4x that as its capacity
 //     when a 30 Mbit/s bottleneck appeared: unpaced again).
 //   - while a queue stands and the carrier uses its allowance, it grows
@@ -75,9 +76,9 @@ import (
 //     queue first kept it: the others read it as theirs and sat at ~0.3
 //     Mbit/s. The queue term's proportional cut, deeper for a bigger
 //     carrier, levels them (pool simulator, carriers joining late: Jain's
-//     index 0.4–0.7 before, 0.99–1.0 after on 20–60 ms paths and 0.8–0.9
-//     on 80–120 ms ones). Not while no queue stands: there the path has room
-//     (the ordinary probe grows), and a carrier on its own slower path (a
+//     index 0.45–0.9 before, 0.99–1.0 after on paths up to 120 ms round
+//     trip and 0.8–0.9 on 160–240 ms ones). Not while no queue stands:
+//     there the path has room (the ordinary probe grows), and a carrier on its own slower path (a
 //     pool over several IPs), which cannot tell its queue from the pool's,
 //     was pushed into its buffer by it.
 //   - base probes fall on a clock all carriers share, so the pool slows
@@ -219,6 +220,7 @@ const (
 	startupQueueRuns = 3                       // startup reports with a standing queue that end it
 	startupQueueMin  = 128_000                 // bytes/s (~1 Mbit/s): a carrier carrying less is not filling anything
 	startupDeepRuns  = 10                      // reports past overflowQueue that end a light carrier's startup
+	startupDeepMax   = 30                      // ... at most, however long the path: well inside owdWindow
 	deepShortfall    = 0.95                    // ... and it delivered under this share of what it sent
 	fairStep         = 0.005                   // per report: this share of the fair share is added
 	fairPull         = 0.10                    // per report: this share of the gap below the fair share
@@ -523,7 +525,10 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		// less than it sends, for good. A shared queue the others' startup
 		// builds also holds back what it sends while it grows, but only for
 		// a few round trips: the spell must last a second and 8 RTTs.
-		deepNeed := math.Max(startupDeepRuns, 8*r.srtt/feedbackEvery.Seconds())
+		// Eight base round trips: the smoothed RTT holds the queue being
+		// measured, and on a deep buffer the wait grew with it until the
+		// queue became the base delay (owdWindow) and was never seen again.
+		deepNeed := math.Min(startupDeepMax, math.Max(startupDeepRuns, 8*r.rtProp/feedbackEvery.Seconds()))
 		ownDeep := float64(r.deepQRuns) >= deepNeed && r.deepDeliv < deepShortfall*r.deepSent
 		queueFull := r.fair && r.startQRuns >= startupQueueRuns && dRate >= startupQueueMin &&
 			(!r.light() || ownDeep)

@@ -1285,9 +1285,9 @@ each read the queue they all built as its own.
   what the pool's busy carriers carry (their fair share; with none, the
   active carriers' mean). A light carrier — a call, the other direction's
   ACKs — keeps startup's fast ramp for its own bulk later, unless the queue
-  stays past 30 ms for eight round trips (a second at least) while it
-  delivers less than it sends: far deeper than the others' pacing holds and
-  growing under it, so its own, on a path of its own. The capacity it starts
+  stays past 30 ms for eight base round trips (one to three seconds) while
+  it delivers less than it sends: far deeper than the others' pacing holds
+  and growing under it, so its own, on a path of its own. The capacity it starts
   from is what got through, not the allowance: 9.5 ms, no drops.
 - **A stale peak.** Out of startup, a carrier's capacity was floored at 0.4x
   its windowed peak delivery — a window that only advances while it uses its
@@ -1312,7 +1312,7 @@ each read the queue they all built as its own.
   the same rate. Not while no queue stands: a carrier on its own slower path
   (a pool over several IPs) cannot tell its queue from the pool's, and
   growth there drove it into its buffer (100-200 ms in an earlier version
-  of this rule; now 33-37 ms p95 against 12-17 ms without the rules, no
+  of this rule; now 33-40 ms p95 against 12-17 ms without the rules, no
   drops, its whole path's rate).
 - **Base probes together.** The carriers' base-delay probes now fall on one
   shared 4 s clock (anchored on the monotonic clock, so a wall-clock step
@@ -1322,18 +1322,19 @@ each read the queue they all built as its own.
   kept the queue full measured a base with the queue in it.
 - `HS2_FAIR_SHARE=0` turns the three off.
 - **Measured.** Pool simulator (new tests, `udpcarrier/rate_pool_sim_test.go`;
-  each carrier sees the round trip its reports really measured), carriers
-  joining a second apart: Jain's fairness index 0.43-0.72 → 0.99-1.00 over
-  30-60 s on paths of 20-120 ms round trip (0.92-0.98 already 10-25 s after
-  start), 0.43-0.56 → 0.81-0.88 on 160-240 ms; queue p95 27-38 → 17-21 ms,
-  utilization 99% both. Lab (icmp, 4 carriers, 8 downloads behind a 30 Mbit/s tbf each
+  each carrier sees the round trip its reports really measured and the loss
+  a full buffer caused), carriers joining a second apart: Jain's fairness
+  index 0.45-0.91 → 0.99-1.00 over 30-60 s on paths of 20-120 ms round trip
+  (0.93-0.98 already 10-25 s after start), 0.43-0.56 → 0.81-0.88 on 160-240
+  ms; queue p95 27-38 → 17-21 ms, utilization 99% both; eight carriers (the
+  icmp ceiling) on 16-100 Mbit/s: 0.97-0.99, queue p95 20-21 ms, no drops. Lab (icmp, 4 carriers, 8 downloads behind a 30 Mbit/s tbf each
   way): ping under load p50 17-19 ms, p99 21-34 ms, no ping lost in any run
   (release: p50 11-114 ms, p99 47-410 ms, runs losing 13-24% of pings);
   behind 8 Mbit/s with 4 downloads p50 18-28 ms, p99 27-48 ms, none lost.
 - The pacer's token bucket is now capped after a timer wait as well: a timer
   that fired late on a busy server let one batch exceed its budget.
 
-### Verification by agents (four rounds, each agent under 20 minutes)
+### Verification by agents (five rounds, each agent under 20 minutes)
 - **Round 1** (7 agents on W1/W2): bandwidth, mixed versions, every encap
   and stress passed; the code review found the three bugs below; the
   latency agent's regression traced to the rate control (W3), present in
@@ -1367,18 +1368,47 @@ each read the queue they all built as its own.
   delivery shortfall (now 24-27 Mbit/s, as with the rules off, also behind
   a 600 ms buffer); the simulator feeds real round trips; the fair-share
   step no longer shrinks on a long path (fairness there 0.63 → 0.81-0.88).
+- **Round 5** (2 agents on those fixes): lab, 5 stale-after-fast runs (no
+  ping lost, p99 18.9-28.8 ms, every copy intact), 30 Mbit/s with 8
+  downloads (p99 21.7-24.7 ms against 36.2 before) and 8 Mbit/s with 4
+  downloads, 12 runs (no ping lost, p99 median 34.2 ms against 33.0 before):
+  no regression. The review found that the wait for a light carrier's own
+  deep queue counted smoothed round trips, which hold that very queue: on
+  its own path behind a 0.5-2 s buffer the wait grew with the queue until
+  the queue became the base delay, and the carrier stayed in startup on a
+  full buffer for good (thousands of drops). Fixed since: base round trips,
+  at most 3 s (left startup 3.3-3.7 s after joining, behind a 1 s buffer at
+  300 ms). Its second finding — fairness among 10-16 carriers on a narrow
+  short path worse than before the unshrunk fair-share step — did not hold
+  in a wider sweep: 4-10 carriers on 8-24 Mbit/s at 20-80 ms round trip,
+  Jain 0.825 on average against 0.813 before (better or worse case by case,
+  by a wide margin either way where per-carrier shares are under ~2
+  Mbit/s); 12-16 carriers with 4 light ones on 12-16 Mbit/s: 0.38 against
+  0.41, both collapsing, 0.22 with the rules off. The pool simulator now
+  also reports a full buffer's drops as loss, as the peer does.
 - Pre-existing, unchanged (release the same): under a steady policer with
   no loss episodes the pool sends ~2.5x what passes and parity rises to its
   ceiling; many tiny flows behind a shared bottleneck all count as sparse,
   so the fair queue cannot single out a UDP echo among them; 16 carriers on
-  an 8 Mbit/s bottleneck collapse to the floor rate (8 or 16 on 16 Mbit/s
-  are fine); a carrier out of startup that later gets bulk on an empty path
-  re-ramps at the probe's 6% per round trip; 300 ms RTT with 26% bursty
+  an 8 Mbit/s bottleneck collapse to the floor rate (see the next item for
+  the wider picture); a carrier out of startup that later gets bulk on an
+  empty path re-ramps at the probe's 6% per round trip; 300 ms RTT with 26% bursty
   loss sometimes collapses utilization (4 of 30 seeds in the simulator,
   rules on or off); a carrier still in startup from a fast period sends
   its first 1-2 s unpaced when a slow bottleneck appears (a few hundred
   drops at the bottleneck, before pacing takes over); after that the
   formerly fast carrier keeps a multiple of the others' rate for 10-20 s.
+- Pre-existing, found in round 5 (release the same, rules off alike): with
+  8 carriers on a 16-24 Mbit/s path at 80 ms round trip, the carriers that
+  join while a queue already stands take it for the base delay, the tail
+  drops of the full buffer for the path's random loss, and loss
+  compensation then keeps the pool on a full buffer (simulator: Jain
+  0.13-0.26, queue at the 200 ms buffer, tens of thousands of drops; with
+  the drops not reported as loss, 0.81-0.92 and no drops). At 16 Mbit/s and
+  40 ms, 30 Mbit/s and 120 ms, or 100 Mbit/s and 80 ms the same pool is
+  fine (0.97-0.99, no drops). A fix belongs in the loss compensation and is
+  left for a separate change. 10-16 carriers sharing 8-16 Mbit/s collapse
+  the same way.
 - Known, with the rules: a flow outside the pool that holds the
   bottleneck's queue past ~100 ms squeezes every carrier (a delay-based
   controller next to a loss-based flow; the release too), and with the
