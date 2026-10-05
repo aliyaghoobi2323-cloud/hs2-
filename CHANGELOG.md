@@ -1231,6 +1231,92 @@ Iran server, for the download). On a server that runs only the tunnel,
 answering ping at all instead, which saves that work; the server then does not
 answer ordinary ping.
 
+## Phase W — less CPU per gigabyte, and carriers that share the bottleneck
+
+The real-server report of Phase V put the datagram tun's limit on a small
+server at the CPU (Turkey, 2 cores at ~97%), and a lab profile of the sending
+side spent ~30% of it in system calls: one per datagram on the socket, one per
+packet on the tun.
+
+### W1 — several datagrams per system call
+- `sendmmsg`/`recvmmsg` (new package `mmsg`) on the raw sockets of every
+  encapsulation (dial and listen side) and on udp sockets. The pacer gathers
+  the datagrams already waiting that its token bucket can pay for (at most
+  16, in lane order) into one call; nothing leaves earlier than its pacing
+  allows. A datagram the kernel refuses (a soft error such as EMSGSIZE) costs
+  only itself. `HS2_RAW_BATCH=0` sends and receives one at a time.
+- The carriers' read loop takes the frames already waiting in one pass and
+  writes what they carry to the tun together.
+- `HS2_PPROF=127.0.0.1:<port>` serves Go profiles, on a loopback address only.
+
+### W2 — TCP offload on the tun
+- The tun is opened with a virtio-net header and TCP segmentation offload:
+  the kernel hands hs2 one TCP packet of up to 64 KB, which hs2 cuts into the
+  usual MTU-sized segments with full checksums (exactly what the kernel would
+  have sent one by one; the IP ID, sequence numbers and flags per segment as
+  Linux does it), and finishes any checksum the kernel left partial. On the
+  receiving server consecutive in-order segments of one TCP connection are
+  written to the tun as one packet (the kernel's GRO rules). Nothing changes
+  on the wire; an older hs2 on the other server works with it.
+- `HS2_TUN_OFFLOAD=0` turns it off; a kernel that refuses it gets plain
+  packets. The start line and `hs2 status` (`tun:` line) say which, with the
+  packets per read and per write, malformed kernel packets dropped and merged
+  packets the kernel refused (those go in one by one).
+- **Measured** (two network namespaces, icmp, reverse, 2 cores a side): a
+  download ~450 → ~650 Mbit/s; CPU per GB on each server 27-39% lower (agent
+  round 1: 16.3 and 14.3 CPU-s/GB against 23.3 and 21.8 for the release);
+  every copy intact in every mode.
+
+### W3 — carriers share the bottleneck (rate control)
+A ping-under-load check of W1/W2 behind a 30 Mbit/s bottleneck found ping
+p50 from 11 to 70 ms run to run and some runs losing 10-18% of pings — with
+the release as well (61 ms in one release run). A trace of the rate
+controller showed why: the carriers of a pool meet at one bottleneck, and
+each read the queue they all built as its own.
+- **A carrier stuck in startup.** Startup ended only on a queue seen while
+  the carrier used its allowance. When the users' TCP filled the bottleneck
+  before the pacer did, the carrier was never "limited" and stayed in startup
+  at 2.9x its delivery (75 Mbit/s allowed on a 30 Mbit/s path): unpaced, the
+  queue sat in the bottleneck instead of in hs2's fair queue, and pings
+  waited and were dropped there. In the simulator a source offering 1.02-2x
+  the path kept it so for good: queue at the buffer limit (120 ms), thousands
+  of drops. Now startup also ends once a queue has stood for 3 reports
+  (~300 ms) while the carrier carries more than ~1 Mbit/s, and the capacity
+  it starts from is what got through, not the allowance: 9.5 ms, no drops.
+- **Late carriers starved.** After startup a carrier's capacity tracked its
+  own delivery, so whoever held the queue first kept it: the others read it
+  as theirs and sat at ~0.3 Mbit/s, with the flows on them. Now the pool's
+  governor computes the fair share (the mean rate of the carriers using
+  their allowance) and each such carrier adds 0.5% of it per report while
+  the queue is under 20 ms; with the queue term's proportional cut that
+  settles every busy carrier on the same rate. A faster catch-up ramp was
+  tried and dropped: a carrier on its own slower path (a pool over several
+  IPs) cannot tell its queue from the pool's, and the ramp drove it into its
+  buffer.
+- **Base probes together.** The carriers' base-delay probes now fall on one
+  shared 4 s clock, so the whole pool slows at once and the queue really
+  empties; one carrier probing alone while the others kept the queue full
+  measured a base with the queue in it.
+- `HS2_FAIR_SHARE=0` turns the three off.
+- **Measured.** Pool simulator (new tests, `udpcarrier/rate_pool_sim_test.go`):
+  Jain's fairness index 0.49-0.70 → 0.93-0.98, queue p95 27-41 → 17-22 ms,
+  utilization 99% both; a carrier on its own 2 Mbit/s path keeps a ~31 ms
+  p95 queue with no drops. Lab (30 Mbit/s each way, 8 downloads, 4 icmp
+  carriers): ping under load p50 16-19 ms and p99 18-37 ms in 6 runs of 6,
+  no ping lost (release: p50 11-61 ms, p99 up to 135 ms, a run losing pings).
+- The pacer's token bucket is now capped after a timer wait as well: a timer
+  that fired late on a busy server let one batch exceed its budget.
+
+### Review fixes (agent round 1)
+- A udp listener on an IPv6 address read in batches dropped every datagram
+  (the batch held IPv4 addresses only): batches are now used on IPv4
+  sockets only.
+- A packet the kernel refused in a tun batch write lost the rest of the batch
+  and none of it was counted: now only that packet is lost (a refused merged
+  packet goes in segment by segment) and the count is exact.
+- A transport checksum that computes to 0 is written as 0xffff, as the kernel
+  does (for udp, 0 means "no checksum").
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

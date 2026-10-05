@@ -181,6 +181,19 @@ for the same Mbit/s, files transferred intact (compare sha256), and no
 busy side: `HS2_PPROF=127.0.0.1:6060` in the same way, then `curl -o
 cpu.prof 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'` under load.
 
+**V12 — carriers share the bottleneck (Phase W, rate control).** On the
+test pair (tun over icmp, reverse), the path filled by downloads (`iperf3 -c
+<T> -R -P 8 -t 40` through the tun) and `ping -c 200 -i 0.1 <T>` started 10 s
+in: note ping p50/p99/loss and Mbit/s, and take `hs2 status` on the Kharej
+server (the sending side) at about 20 s and 35 s — its `carriers:` line lists
+each carrier's `rRATE/bwBTLBW`. Repeat three times. Then set
+`Environment=HS2_FAIR_SHARE=0` on both servers (`systemctl edit <service>`,
+restart), repeat three times, and remove it. Pass: with the rules on, every
+busy carrier near the same rate (none stuck below ~1 Mbit/s while another
+carries several times more, none left flagged `S` once the path is full),
+ping p99 lower or no worse, and no fewer Mbit/s than with
+`HS2_FAIR_SHARE=0`.
+
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with

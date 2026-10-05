@@ -417,6 +417,21 @@ most queued. On a 20 Mbit/s bottleneck with 8 downloads, ping through the tun
 went from 66 ms (p50) to 12 ms at the same throughput. `HS2_DG_FQ=0` turns it
 off (one FIFO per carrier, as before).
 
+**Carriers share the bottleneck.** All carriers of a pool go between the same
+two servers, so they meet at the same bottleneck and each one's delay signal
+is the queue they all build. Three rules keep them from fighting over it: a
+carrier leaves its fast start once a queue has stood for ~300 ms while it
+carries traffic (before, a carrier whose users' TCP filled the path first
+could stay unpaced, and the queue then sat in the bottleneck instead of in
+the fair queue above); every busy carrier grows by the same small step of the
+pool's fair share, so a carrier that came late is not left with a sliver;
+and the carriers' base-delay probes fall on one shared clock, so the queue
+really empties when they measure. Behind a 30 Mbit/s bottleneck with 8
+downloads over 4 carriers, ping through the tun under load was 16-19 ms
+(p50) and at most 37 ms (p99) in every run, where it had ranged from 11 to
+70 ms with some runs losing pings. `HS2_FAIR_SHARE=0` turns the three rules
+off.
+
 **Less CPU per gigabyte.** On a small server the datagram tun's limit is
 usually the CPU, and most of it went on system calls: one per datagram on the
 socket and one per packet on the tun. Now:
@@ -429,7 +444,9 @@ socket and one per packet on the tun. Now:
   server works with it.
 
 `hs2 status` shows it: `tun: TCP offload on · N reads gave M packets (41.3
-each) · … writes carried … packets (21.6 each)`. In the lab (icmp, reverse,
+each) · … writes carried … packets (21.6 each)` (or why it is off), plus any
+malformed packets the kernel handed over and merged packets it refused (those
+go in one by one). In the lab (icmp, reverse,
 2 cores a side) a download went from ~450 to ~650 Mbit/s with 27-39% less CPU
 per GB on each server. `HS2_TUN_OFFLOAD=0` and `HS2_RAW_BATCH=0` turn each
 part off; a kernel that refuses the offload gets plain packets (the start
