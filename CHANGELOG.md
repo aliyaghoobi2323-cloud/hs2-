@@ -1278,9 +1278,10 @@ each read the queue they all built as its own.
   before the pacer did, the carrier was never "limited" and stayed in startup
   at 2.9x its delivery (75 Mbit/s allowed on a 30 Mbit/s path): unpaced, the
   queue sat in the bottleneck instead of in hs2's fair queue, and pings
-  waited and were dropped there. In the simulator a source offering 1.02-2x
-  the path kept it so for good: queue at the buffer limit (120 ms), thousands
-  of drops. Now startup also ends once a queue has stood for 3 reports
+  waited and were dropped there. In the simulator a source offering 1.02-1.5x
+  the path (2x as well on a short path; at 80 ms round trip the 2x offer
+  used its allowance and left) kept it so for good: queue at the buffer
+  limit (120 ms), thousands of drops. Now startup also ends once a queue has stood for 3 reports
   (~300 ms) while the carrier carries more than ~1 Mbit/s and at least half
   what the pool's busy carriers carry (their fair share; with none, the
   active carriers' mean). A light carrier — a call, the other direction's
@@ -1310,9 +1311,11 @@ each read the queue they all built as its own.
   own delivery, so whoever held the queue first kept it: the others read it
   as theirs and sat at ~0.3 Mbit/s, with the flows on them. Now the pool's
   governor computes the fair share (the mean rate of the carriers using
-  their allowance), and while a queue stands under 20 ms each such carrier
+  their allowance), and while a queue of 5-20 ms stands each such carrier
   grows toward it: 0.5% of the share, or 10% of its gap below it, per
-  report — never more than 3% of its own capacity.
+  report — never more than 3% of its own capacity; like every per-report
+  step, scaled to the part of a round trip the report covers (per round
+  trip on paths over 100 ms).
   With the queue term's proportional cut that settles every busy carrier on
   the same rate. Not while no queue stands: a carrier on its own slower path
   (a pool over several IPs) cannot tell its queue from the pool's, and
@@ -1340,7 +1343,8 @@ each read the queue they all built as its own.
   index 0.45-0.91 → 0.99-1.00 over 30-60 s on paths of 20-120 ms round trip
   (0.93-0.98 already 10-25 s after start), 0.43-0.55 → 0.77-0.87 on 160-240
   ms; queue p95 27-38 → 17-21 ms, utilization 99% both; eight carriers (the
-  icmp ceiling) on 16-100 Mbit/s: 0.97-0.99, queue p95 20-21 ms, no drops. Lab (icmp, 4 carriers, 8 downloads behind a 30 Mbit/s tbf each
+  icmp ceiling) on 16-100 Mbit/s: 0.97-0.99, queue p95 19-21 ms, no drops.
+  Lab (icmp, 4 carriers, 8 downloads behind a 30 Mbit/s tbf each
   way): ping under load p50 17-19 ms, p99 21-34 ms, no ping lost in any run
   (release: p50 11-114 ms, p99 47-410 ms, runs losing 13-24% of pings);
   behind 8 Mbit/s with 4 downloads p50 18-28 ms, p99 27-48 ms, none lost.
@@ -1379,8 +1383,10 @@ each read the queue they all built as its own.
   20-26 — hidden in the pool simulator, which fed the controllers no round
   trip. Fixed since: the deep-queue exit needs eight round trips and a
   delivery shortfall (now 24-27 Mbit/s, as with the rules off, also behind
-  a 600 ms buffer); the simulator feeds real round trips; the fair-share
-  step no longer shrinks on a long path (fairness there 0.63 → 0.81-0.88).
+  a 600 ms buffer); the simulator feeds real round trips; the cap on the
+  fair-share step no longer shrinks with the round trip (it was 3% of
+  capacity × 250 ms/τ; now 3% per report on any path, per round trip past
+  100 ms) (fairness there 0.63 → 0.81-0.88).
 - **Round 5** (2 agents on those fixes): lab, 5 stale-after-fast runs (no
   ping lost, p99 18.9-28.8 ms, every copy intact), 30 Mbit/s with 8
   downloads (p99 21.7-24.7 ms against 36.2 before) and 8 Mbit/s with 4
@@ -1391,7 +1397,8 @@ each read the queue they all built as its own.
   the queue became the base delay, and the carrier stayed in startup on a
   full buffer for good (thousands of drops). Fixed since: base round trips,
   at most 3 s (left startup 3.3-3.7 s after joining, behind a 1 s buffer at
-  300 ms). Its second finding — fairness among 10-16 carriers on a narrow
+  300 ms; after round 6's busy-queue rule the simulator gives 1.0 s at 2
+  Mbit/s and 3.7 s with 11 drops at 4 Mbit/s). Its second finding — fairness among 10-16 carriers on a narrow
   short path worse than before the unshrunk fair-share step — did not hold
   in a wider sweep: 4-10 carriers on 8-24 Mbit/s at 20-80 ms round trip,
   Jain 0.825 on average against 0.813 before (better or worse case by case,
@@ -1409,8 +1416,9 @@ each read the queue they all built as its own.
   sends in a shared FIFO as well, so it left startup again (its bulk later
   1.6 Mbit/s instead of 24). A carrier alone cannot tell a shared queue
   from its own, so the pool tells it: the busy carriers' queue (above).
-  Now 22-26 Mbit/s at 300-600 ms round trip in every probe phase, as with
-  the rules off; a light carrier on its own path still leaves (72 cases,
+  Now 24-27 Mbit/s for a 1.2-2 Mbit/s light carrier at 300-400 ms round
+  trip in every probe phase, as with the rules off (a 4 Mbit/s one at 300
+  ms: 3.2-4.0, rules off 2.5); a light carrier on its own path still leaves (72 cases,
   0.2-2 s buffers, 30-600 ms: at most 5.5 s, queue p95 at most 62 ms, no
   drops). It also found the 400 ms RTT lockout (above).
 - Pre-existing, unchanged (release the same): under a steady policer with
@@ -1419,7 +1427,8 @@ each read the queue they all built as its own.
   so the fair queue cannot single out a UDP echo among them; 16 carriers on
   an 8 Mbit/s bottleneck collapse to the floor rate (see the next item for
   the wider picture); a carrier out of startup that later gets bulk on an
-  empty path re-ramps at the probe's 6% per round trip; 300 ms RTT with 26% bursty
+  empty path re-ramps at the capacity probe's 4% per report (every 100 ms:
+  ~1.5x a second; 4% per round trip on paths over 100 ms); 300 ms RTT with 26% bursty
   loss sometimes collapses utilization (4 of 30 seeds in the simulator,
   rules on or off); a carrier still in startup from a fast period sends
   its first 1-2 s unpaced when a slow bottleneck appears (a few hundred
@@ -1455,6 +1464,60 @@ each read the queue they all built as its own.
   packet goes in segment by segment) and the count is exact.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
+
+## Phase X — a sender short of CPU: seen, and sending more with the same CPU
+
+### From the real-server report (build 2b2e2c8c3f86; reverse, tun over icmp)
+- The Kharej server (2 cores, shared with another hs2 tunnel) was 96% busy
+  and tasks waited for a core 76-87% of the time (the kernel's CPU pressure,
+  PSI), while hs2 itself used 52-70% of one core. Its only CPU warning
+  compares hs2's own use with 90% of every core, so it never fired, and
+  nothing — status, installer, doctor — said the server was saturated.
+- In that state no carrier sent 80% of its allowance: all stayed in startup
+  (`S`, never `P`), the allowance stayed where startup had left it (18x what
+  was delivered), and the W3 rules never engaged. The release before Phase W
+  does the same; the lab reproduces it with the sender's cores taken.
+- The status showed a `pacer` drop counter that nothing ever incremented.
+
+### X1 — the server's CPU and the send stage, visible (no data-path change)
+- `hs2 status`'s `cpu:` line shows the whole server next to hs2: busy across
+  all cores (softirq and steal when above 1%) and the share of the time
+  tasks waited for a core (PSI avg10), with `SATURATED` once it stays at
+  90% busy or 40% waiting for three samples; the log says once when that
+  starts and once when it ends. `net:` shows the IP packets the kernel
+  discarded on output since hs2 started (Ip OutDiscards): on raw carriers
+  those are tunnel packets lost before the wire that the sender is told were
+  sent; the log folds them to one line a minute.
+- `hs2 doctor` gains `server cpu`: the server measured over one second, PSI
+  over 10 s and a minute, and what the running hs2 tunnels use in all; a
+  warning when it is short of CPU.
+- The send stage, over the last couple of seconds: what the pacers sent,
+  the share of the time the carriers' writers waited for pacer room, the
+  mean wait in the fair queue, and the mean socket write with the datagrams
+  per write (`sending:`); the pool's fair share and the queue its busy
+  carriers see (`pool:`). Each `carriers:` entry adds what it really sent
+  (`s`) and the queue and smoothed round trip its rate control sees
+  (`qQUEUE/SRTT`). Lab, the sender's two cores shared with two busy loops:
+  `writers waited for pacer room 55% of the time`, every carrier `S` with
+  `s` under half of `r`.
+- The dead `pacer_dropped` is gone; `send_refused` counts the datagrams the
+  kernel refused on a raw socket (a soft error), which the peer counts as
+  path loss.
+- The installer's tunnel screen shows the same CPU line and `Net:` line.
+- The status file gains `host_cpu_pct`, `host_softirq_pct`,
+  `host_steal_pct`, `host_cores`, `psi_cpu10`, `psi_cpu60`,
+  `host_saturated`, `host_out_discards`, `send_refused`, `share_mbit`,
+  `busy_queue_ms`, `send_mbit`, `send_held_pct`, `fq_wait_ms`, `write_us`
+  and `per_write`.
+
+### X2 — documentation brought in line with the code
+- The rate controller's description (`udpcarrier/rate.go`) named a
+  `highQueue` hold band and 25%/6% growth that no longer exist: it now says
+  what the code does (a proportional queue term around 10 ms; a capacity
+  probe of 4% per report, per round trip past 100 ms; startup frozen on
+  reports that do not use the allowance). Phase W's numbers above corrected
+  to the current simulator; README's status fields and the `carriers` line
+  format; VALIDATION's rollback target, V11 and V12.
 
 ## Verification, every phase
 

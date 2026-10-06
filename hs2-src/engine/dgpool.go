@@ -1816,13 +1816,15 @@ func (d *sendDiag) fill(ps *PoolStats) {
 }
 
 // carrierLine is one compact line per live carrier for the status file:
-// id:state:sent/loss% rate/btlBw(Mbit) flags send(Mbit) queue/srtt(ms) —
-// enough to see which carrier
-// loses AND whether one is pinned at a low rate while the path is healthy (the
-// after-idle ramp-stall signature). Flags: P=pushing (offered its allowance),
-// S=startup (still ramping), M=mute (it, or the other server, hears nothing on
-// it while others do). A carrier stuck at a low rate with P set and loss
-// ~0 is the sender throttling itself, not the path.
+// id:state:sent/loss% rRATE/bwBTLBW FLAGS sSENT qQUEUE/SRTT — the pacing
+// allowance, the most it was seen to deliver and what it really sent (Mbit/s),
+// and the queue its rate control sees on the path and its smoothed round trip
+// (ms) — enough to see which carrier loses AND whether one is pinned at a low
+// rate while the path is healthy (the after-idle ramp-stall signature). Flags:
+// P=pushing (offered its allowance), S=startup (still ramping), M=mute (it, or
+// the other server, hears nothing on it while others do). A carrier stuck at a
+// low rate with P set and loss ~0 is the sender throttling itself, not the
+// path; S without P and s far below r is a sender short of data or of CPU.
 func (p *dgPool) carrierLine() string {
 	type statser interface{ Stats() udpcarrier.Stats }
 	p.mu.RLock()

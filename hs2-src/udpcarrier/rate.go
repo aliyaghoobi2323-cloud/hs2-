@@ -30,20 +30,32 @@ import (
 // Control, per report, scaled per smoothed RTT so it behaves alike at 20 ms and
 // 300 ms:
 //
-//   - startup: pace at startupGain × the delivered rate (BBR), so the rate
-//     about doubles per round trip but never runs away from what the path
-//     carries; a queue above lowQueue, or delivery that stops growing, ends it.
-//   - queue above highQueue: cut below the delivered rate — deeper the deeper
-//     the queue, so even a full buffer drains in about half a second — at most
-//     once per measurement lag, and remember the delivered rate as the path's
-//     capacity. Delivery is scaled up by the loss seen while no queue stood
-//     (the path's own random loss), so random loss is not mistaken for a lack
-//     of capacity.
-//   - queue between lowQueue and highQueue: hold.
-//   - no queue and the sender using its allowance: grow — 25% per RTT up to
-//     the capacity estimate, 6% per RTT past it to probe for more.
+//   - startup: on each report where the carrier used its allowance (sent at
+//     least limitedShare of it), pace at the larger of startupGain × the
+//     delivered rate (BBR) and 1.25x the last rate, scaled to the part of a
+//     round trip the report covers — about doubling per round trip. A report
+//     where it did not use its allowance changes nothing: a sender short of
+//     data, or of CPU, keeps startup and the last rate it reached, and in
+//     startup no delivery cap applies (only maxRate). A queue above lowQueue
+//     while it uses its allowance, delivery that stops growing, or startCap
+//     such reports end it (see also the pool rules below).
+//   - a queue stands (lowQueue or more): capEst moves capAlpha of the way to
+//     the delivered rate each report, and the rate is capEst × (1 +
+//     (targetQueue − q)/tau), tau = max(queueTau, 2.5 × srtt), kept between
+//     minDrainGain and maxQueueGain: below capacity above targetQueue —
+//     deeper the deeper the queue, so a full buffer drains in about tau — and
+//     a little above it below. Delivery is scaled up by the path's own random
+//     loss, so random loss is not mistaken for a lack of capacity.
+//   - no queue and the sender using its allowance: the same term paces up to
+//     1.04x capEst at once, and from the second such report capEst grows by
+//     probeGrow (4%) per report, scaled to the part of a round trip the
+//     report covers: 4% per round trip on paths over 100 ms, ~1.5x a second
+//     on shorter ones.
 //   - no queue but idle (application-limited): hold, so an idle carrier's
 //     allowance never inflates past what the path was last shown to take.
+//
+// Out of startup the rate is also capped at looseCap × the windowed delivery
+// (deliveryCap × the mean delivery under a policer).
 //
 // The carriers of one pool share the path's bottleneck, and each one's queue
 // signal is the queue they ALL build. Three rules keep them from fighting
@@ -69,19 +81,21 @@ import (
 //     bwStaleAge leaves the window
 //     (a carrier that had run at 900 Mbit/s kept 0.4x that as its capacity
 //     when a 30 Mbit/s bottleneck appeared: unpaced again).
-//   - while a queue stands and the carrier uses its allowance, it grows
-//     toward the pool's fair share (Governor.Share): the same small step
-//     for every carrier, and a pull toward the share for one below it,
-//     never more than fairOwnMax of its own capacity per report. Before,
+//   - while a queue of lowQueue to fairQueueMax stands and the carrier uses
+//     its allowance, it grows toward the pool's fair share (Governor.Share):
+//     the same small step for every carrier, and a pull toward the share for
+//     one below it, never more than fairOwnMax of its own capacity per report
+//     — scaled like every per-report step to the part of a round trip the
+//     report covers (per round trip on paths over 100 ms). Before,
 //     capacity tracked each carrier's own delivery, so whoever held the
 //     queue first kept it: the others read it as theirs and sat at ~0.3
 //     Mbit/s. The queue term's proportional cut, deeper for a bigger
 //     carrier, levels them (pool simulator, carriers joining late: Jain's
-//     index 0.45–0.9 before, 0.99–1.0 after on paths up to 120 ms round
-//     trip and 0.8–0.9 on 160–240 ms ones). Not while no queue stands:
-//     there the path has room (the ordinary probe grows), and a carrier on its own slower path (a
-//     pool over several IPs), which cannot tell its queue from the pool's,
-//     was pushed into its buffer by it.
+//     index 0.45–0.91 before, 0.99–1.0 after on paths up to 120 ms round
+//     trip and 0.77–0.87 on 160–240 ms ones). Not while no queue stands:
+//     there the path has room (the ordinary probe grows), and a carrier on
+//     its own slower path (a pool over several IPs), which cannot tell its
+//     queue from the pool's, was pushed into its buffer by it.
 //   - base probes fall on a clock all carriers share, so the pool slows
 //     together and the queue really empties; one carrier probing alone
 //     while the others kept the queue full saw a base with the queue in it.
@@ -201,7 +215,7 @@ const (
 	capFloorFrac   = 0.4  // capEst never below this x windowed-max delivery (anti-collapse)
 	minDrainGain   = 0.5  // deepest drain: half the capacity
 	maxQueueGain   = 1.1  // most the queue term paces above capacity
-	probeGrow      = 1.04 // capacity probe per RTT while no queue stands
+	probeGrow      = 1.04 // capacity probe per report (per RTT past 100 ms) while no queue stands
 
 	// Base probe (BBR's ProbeRTT, one way): the base delay is a windowed
 	// minimum, so a queue that never empties would, one window later, become

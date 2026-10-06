@@ -400,11 +400,54 @@ CPU is the bottleneck`).
 
 `hs2 status -c <config>` and the tunnel manager show, per tunnel: loss of what
 this side sends (pool-wide and the worst carrier), FEC parity and what it
-rebuilt / lost, the policer cap when one is active, drops (pacer, receive
-queue, tunnel queue) and the daemon's CPU use. The same fields are in the live
+rebuilt / lost, the policer cap when one is active, drops (no carrier, carrier
+queue full, waited >50 ms, refused by the kernel, receive queue), and the
+daemon's CPU use next to the whole server's. The same fields are in the live
 status file under `/run/hs2/` (`loss_pct`, `max_loss_pct`, `parity_pct`,
-`fec_at_ceiling`, `fec_recovered`, `fec_lost`, `pacer_dropped`, `rx_dropped`,
-`tun_drops`, `policed`, `police_confirmed`, `police_cap_mbit`, `cpu_pct`, `cpu_cores`), plus packet counts by stage — `tun_read`, `sent_pkts`, `recv_pkts`, `tun_written` — drops by reason (`drop_no_carrier`, `drop_queue_full`, `drop_aged`) and one `carriers` line (`id:state:sent/loss%` per carrier), so a field test can see exactly where packets are lost.
+`fec_at_ceiling`, `fec_recovered`, `fec_lost`, `send_refused`, `rx_dropped`,
+`tun_drops`, `policed`, `police_confirmed`, `police_cap_mbit`, `cpu_pct`,
+`cpu_cores`), plus packet counts by stage — `tun_read`, `sent_pkts`,
+`recv_pkts`, `tun_written` — drops by reason (`drop_no_carrier`,
+`drop_queue_full`, `drop_aged`) and one `carriers` line with an entry per
+carrier: `id:state:sent/loss% rRATE/bwBTLBW FLAGS sSENT qQUEUE/SRTT` —
+packets this side handed the carrier, the loss of what it sends as the other
+server reports it, its pacing allowance `r`, the most it was seen to deliver
+`bw` and what it really sent `s` (Mbit/s), the flags `P` (it sent at least
+80% of its allowance at the last report), `S` (still in its fast start), `M`
+(mute: it, or the other server, hears nothing on it) or `-`, and the queue
+its rate control sees on the path and its smoothed round trip (ms). Above 32
+carriers the line gives the counts and the 10 with the most loss. In the fast
+start `r` is an allowance, not a measurement: a carrier flagged `S` without
+`P` keeps the last value it reached, so `r` far above `s` there means the
+sender sent less than it was allowed (short of data or of CPU), not that the
+path takes it. So a field test can see exactly where packets are lost.
+
+**Where the send stage waits.** `hs2 status`'s `sending:` line (status
+file: `send_mbit`, `send_held_pct`, `fq_wait_ms`, `write_us`, `per_write`)
+covers the last couple of seconds: what the carriers' pacers sent, the share
+of the time a carrier's writer waited for room in its pacer, the mean wait in
+the fair queue in front of it, and the mean socket write (the shared socket's
+lock plus the system call) with the datagrams each carried. `pool:`
+(`share_mbit`, `busy_queue_ms`) is the fair share per busy carrier and the
+queue those carriers see. A path-bound pool shows `P`, a `q` of 5-20 ms and
+little waiting; a sender short of CPU shows `S` without `P`, `q` near 0, a
+high `send_held_pct` and the server saturated on the `cpu:` line.
+
+**The server's CPU.** hs2's own CPU (`cpu_pct`, % of one core) does not say
+whether the server has any left: a 2-core server shared with another tunnel
+can be saturated while hs2 shows 60%, and then every carrier sends late
+however good the path is. So the `cpu:` line also shows the whole server —
+busy across all cores, softirq and steal (`host_cpu_pct`,
+`host_softirq_pct`, `host_steal_pct`, `host_cores`) and the share of the
+time tasks waited for a core (`psi_cpu10`, `psi_cpu60`: the kernel's CPU
+pressure, absent on kernels without it) — and says `SATURATED` when the
+server stays at 90% busy or 40% waiting (`host_saturated`; the log says when
+it starts and ends). `net:` (`host_out_discards`) counts IP packets the
+kernel discarded on output since hs2 started: a full interface queue. On raw
+carriers (icmp, gre, …) those are tunnel packets lost before the wire that
+the sender is told were sent, and nothing else reports them. `hs2 doctor`
+measures the server for a second (`server cpu`) and warns when it is short
+of CPU.
 
 Each inner flow is pinned to one carrier for as long as it lives (a pool resize never moves a live flow), so inner TCP never sees reordering from the pool.
 

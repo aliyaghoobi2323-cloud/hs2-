@@ -1,16 +1,16 @@
-# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V)
+# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X)
 
-This is the checklist for validating the Q7 and Q8 releases (see CHANGELOG,
-"Q7 — stuck links" and "Q8 — the health rules at high bandwidth") on a real
-Iran/Kharej server pair with real users. The load rig showed
+This is the checklist for validating the releases from Q7 on (see CHANGELOG:
+"Q7 — stuck links", "Q8 — the health rules at high bandwidth", Phases V, W
+and X) on a real Iran/Kharej server pair with real users. The load rig showed
 the rules work and do not cut users needlessly in the scenarios it can make;
 what it cannot make is Iran's real DPI, real evening congestion and real user
 traffic. Both servers must run the release build (`hs2 version` shows the
 build id below).
 
 - Release commit: see the "Release" line at the end of this file.
-- Previous main (rollback target): `6ae3492` (binary build `f9b668c4e1e4`);
-  before it `d310f79` (binary build `bad9d4be1f43`).
+- Previous main (rollback target): `9b74b3c` (binary build `2b2e2c8c3f86`,
+  Phase W); before it `75c8fc5` (binary build `1b5591f91bee`, Phase V).
 
 ## Rollback
 
@@ -18,7 +18,7 @@ On each server, reinstall the previous binary pinned to its commit (no change
 to the repository needed):
 
 ```
-HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/6ae3492 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/6ae3492/install.sh)
+HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/9b74b3c bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/9b74b3c/install.sh)
 ```
 
 then Upgrade the tunnel(s) in the menu. To roll `main` itself back, revert the
@@ -167,36 +167,71 @@ Then set `Environment=HS2_DG_FQ=0` on both servers (`systemctl edit
 <service>`, restart) and repeat; remove it afterwards. Pass: with the fair
 queue p50/p99 clearly lower and no fewer Mbit/s than without it.
 
-**V11 — CPU per gigabyte (Phase V, offload and batching).** On the test
-pair (tun over icmp, reverse), the start line must say `TCP offload on`.
-Under a download that fills the path (`iperf3 -R -P 8` through the tun for
-30 s), record Mbit/s and each server's hs2 CPU (`top -b -n 1 -p $(pgrep -x
-hs2 | head -1)` or `pidstat 1 30`), and `hs2 status`'s `tun:` line on both
+**Before V11 and V12: is the sender short of CPU?** Both judge hs2 only where
+the PATH is the limit. On the sending server (the Kharej server for a
+download), `hs2 status`'s `cpu:` line shows the whole server next to hs2:
+under the test's load it must stay at most ~80% busy, with tasks waiting for
+a core under ~20% (`hs2 doctor`'s `server cpu` says the same). If it says
+`SATURATED`, or another tunnel's traffic shares the server, the run is
+sender-bound: carriers that cannot send what they are allowed never push
+(`P`) and never leave the fast start (`S`), and the `sending:` line shows
+the writers waiting for pacer room. Record such a run as CPU-bound (with the
+`cpu:`, `sending:`, `pool:` and `carriers:` lines), do not count it for or
+against what is being tested, and stop the other tunnel's traffic if you can.
+
+Keep the pool the same size in every run: on the Iran server `hs2 config -c
+<cfg> set min_links 4` and `hs2 config -c <cfg> set max_links 4`, restart,
+and check that `links:` shows 4 up in each run — the carrier count alone
+changes the CPU per Mbit/s (lab, 2-core sender: 1, 3 and 8 carriers gave
+903, 1393 and 1453 Mbit/s).
+
+**V11 — CPU per gigabyte (Phase W: W1 batching, W2 TCP offload).** On the
+test pair (tun over icmp, reverse), the start line must say `TCP offload
+on`. Under a download that fills the path (`iperf3 -R -P 8` through the tun
+for 30 s), record Mbit/s, each server's hs2 CPU (`pidstat -p $(pgrep -x hs2
+| head -1) 1 30`), the `cpu:` line, and `hs2 status`'s `tun:` line on both
 servers (packets per read on the sending side, per write on the receiving
 side, well above 1.0). Then set `Environment=HS2_TUN_OFFLOAD=0` and
 `Environment=HS2_RAW_BATCH=0` on both servers (`systemctl edit <service>`,
-restart), repeat, and remove them. Pass: with both on, more Mbit/s or less CPU
-for the same Mbit/s, files transferred intact (compare sha256), and no
-`failed`, `panic` or `TUNSETOFFLOAD` errors in the log. For a profile of the
-busy side: `HS2_PPROF=127.0.0.1:6060` in the same way, then `curl -o
-cpu.prof 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'` under load.
+restart), repeat with the same carrier count, and remove them. Pass: with
+both on, more Mbit/s or less hs2 CPU-seconds per GB; if the sending server
+was saturated in either run, compare CPU-seconds per GB only and say so;
+files transferred intact (compare sha256); no `failed`, `panic` or
+`TUNSETOFFLOAD` errors in the log. For a profile of the busy side:
+`HS2_PPROF=127.0.0.1:6060` in the same way, then `curl -o cpu.prof
+'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'` under load.
 
 **V12 — carriers share the bottleneck (Phase W, rate control).** On the
-test pair (tun over icmp, reverse), the path filled by downloads (`iperf3 -c
-<T> -R -P 8 -t 40` through the tun) and `ping -c 200 -i 0.1 <T>` started 10 s
-in: note ping p50/p99/loss and Mbit/s, and take `hs2 status` on the Kharej
-server (the sending side) at about 20 s and 35 s — its `carriers:` line lists
-each carrier's `rRATE/bwBTLBW`. Repeat three times. Then set
-`Environment=HS2_FAIR_SHARE=0` on both servers (`systemctl edit <service>`,
-restart), repeat three times, and remove it. Pass: with the rules on, every
-busy carrier near the same rate (none stuck below ~1 Mbit/s while another
-carries several times more, none left flagged `S` once the path is full),
-ping p99 lower or no worse, and no fewer Mbit/s than with
-`HS2_FAIR_SHARE=0`.
+test pair (tun over icmp, reverse), with the pool size fixed as above, the
+path filled by downloads (`iperf3 -c <T> -R -P 8 -t 40` through the tun)
+and `ping -c 200 -i 0.1 <T>` started 10 s in: note ping p50/p99/loss and
+Mbit/s, and take `hs2 status` on both servers at about 20 s and 35 s. Only
+path-bound runs count (see above); repeat until three are. Then set
+`Environment=HS2_FAIR_SHARE=0` on both servers (`systemctl edit
+<service>`, restart), repeat three path-bound runs, and remove it. Pass, on
+path-bound runs: with the rules on, every busy carrier's `s` within ~1.5x
+of the `pool:` fair share (none below ~1 Mbit/s while another carries
+several times more), none still flagged `S` once its `q` has stood at 5 ms
+or more for a second, ping p99 lower or no worse, and no fewer Mbit/s than
+with `HS2_FAIR_SHARE=0`.
+
+**Reading the send-stage fields.** In each `carriers:` entry `r` is the
+pacing allowance and `s` what the carrier really sent (Mbit/s); `P` means
+`s` reached 80% of `r`. `qQUEUE/SRTT` is the queue the rate control sees
+on the path and its smoothed round trip (ms), measured from the moment a
+datagram is written: it does NOT include hs2's own queues in front of the
+socket — the `sending:` line's fair-queue wait, and the writers' wait for
+pacer room — whose time adds to every packet's latency. `socket write` is
+the time per write (the shared socket's lock plus the system call) with the
+datagrams each carried. Path-bound: `P` set, `q` 5-20 ms, little waiting.
+Sender-bound: `S` without `P`, `q` under 5 ms, a high share of time waiting
+for pacer room, and the `cpu:` line saturated. `net:` (the kernel's output
+discards) growing during a run means the interface queue overflowed: on
+icmp those are tunnel packets the peer counts as path loss.
 
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with
 timestamps), the time of the action (V2–V4), and whether users noticed.
 
-Release: see CHANGELOG (Q7, Q8) and `git log` on main.
+Release: see CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X) and `git log` on main.

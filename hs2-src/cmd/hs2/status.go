@@ -135,7 +135,7 @@ type liveStatus struct {
 	TunMode         string  `json:"tun_mode,omitempty"`
 	TunBad          uint64  `json:"tun_bad,omitempty"`
 	TunRefused      uint64  `json:"tun_refused,omitempty"`
-	Carriers        string  `json:"carriers,omitempty"` // id:state:sent/loss% per carrier
+	Carriers        string  `json:"carriers,omitempty"` // per carrier: see engine dgPool.carrierLine
 	ReorderHeld     uint64  `json:"reorder_held,omitempty"`
 	ReorderFilled   uint64  `json:"reorder_filled,omitempty"`
 	ReorderTimedOut uint64  `json:"reorder_timed_out,omitempty"`
