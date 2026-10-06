@@ -123,6 +123,12 @@ func TestHostMeterSaturation(t *testing.T) {
 	if s := m.sample(100); !s.Saturated || len(logs) != 1 {
 		t.Fatalf("between the marks: %+v %v", s, logs)
 	}
+	for i := 0; i < hostClearRuns-1; i++ { // a load dipping now and then does not clear it
+		f.advance(30)
+		if s := m.sample(50); !s.Saturated || len(logs) != 1 {
+			t.Fatalf("cleared after %d cool samples: %+v %v", i+1, s, logs)
+		}
+	}
 	f.advance(30)
 	if s := m.sample(50); s.Saturated || len(logs) != 2 || !strings.Contains(logs[1], "room again") {
 		t.Fatalf("recovery: %+v %v", s, logs)
@@ -144,43 +150,52 @@ func TestHostMeterSaturation(t *testing.T) {
 		t.Fatalf("PSI between the marks cleared it: %+v", s)
 	}
 	f.psi(5, 30)
-	f.advance(50)
-	if s = m.sample(90); s.Saturated || len(logs) != 4 {
+	for i := 0; i < hostClearRuns; i++ {
+		f.advance(50)
+		s = m.sample(90)
+	}
+	if s.Saturated || len(logs) != 4 {
 		t.Fatalf("PSI recovery: %+v %v", s, logs)
+	}
+
+	// A sample that measures nothing (no PSI, the counters went back) leaves
+	// the state as it is: it neither clears a saturation nor logs.
+	os.Remove(filepath.Join(f.dir, "pressure", "cpu"))
+	for i := 0; i < hostSatRuns; i++ {
+		f.advance(97)
+		s = m.sample(150)
+	}
+	if !s.Saturated || len(logs) != 5 {
+		t.Fatalf("saturation again: %+v %v", s, logs)
+	}
+	f.steal = 0
+	f.busy, f.idle = 1, 1 // the counters went back
+	f.write()
+	if s = m.sample(150); !s.Saturated || len(logs) != 5 {
+		t.Fatalf("an unmeasured sample changed the state: %+v %v", s, logs)
 	}
 }
 
-// Output discards are counted from the first sample and logged folded: the
-// first at once, then at most one line a minute with the count since the
-// last one; a counter that goes back is a new base, not a huge number.
+// Output discards are counted from the first sample (what came before hs2
+// is not its to report), a counter that goes back is a new base, and nothing
+// is logged: the count is the whole server's, and on an icmp listener it
+// includes the kernel's own replies the echo guard drops on purpose.
 func TestHostMeterDiscards(t *testing.T) {
 	f := newFakeProc(t, 1)
 	var logs []string
 	m := &hostMeter{proc: f.dir, logf: func(s string, a ...any) { logs = append(logs, fmt.Sprintf(s, a...)) }}
-	f.discards(1000) // before hs2 started: not ours to report
-	if s := m.sample(0); s.OutDiscards != 0 || len(logs) != 0 {
-		t.Fatalf("start: %+v %v", s, logs)
+	f.discards(1000)
+	if s := m.sample(0); s.OutDiscards != 0 {
+		t.Fatalf("start: %+v", s)
 	}
-	f.discards(1040)
-	if s := m.sample(0); s.OutDiscards != 40 || len(logs) != 1 || !strings.Contains(logs[0], "discarded 40 outgoing") {
-		t.Fatalf("first discards: %+v %v", s, logs)
+	for _, c := range []struct{ raw, want uint64 }{{1040, 40}, {1100, 100}, {1105, 105}, {3, 105}, {5, 107}} {
+		f.discards(c.raw)
+		if s := m.sample(0); s.OutDiscards != c.want {
+			t.Fatalf("raw %d: %+v, want %d", c.raw, s, c.want)
+		}
 	}
-	f.discards(1100)
-	if s := m.sample(0); s.OutDiscards != 100 || len(logs) != 1 {
-		t.Fatalf("within the minute: %+v %v", s, logs)
-	}
-	m.discLogged = m.discLogged.Add(-hostDiscEvery)
-	f.discards(1105)
-	if s := m.sample(0); s.OutDiscards != 105 || len(logs) != 2 || !strings.Contains(logs[1], "discarded 65 outgoing") {
-		t.Fatalf("folded line: %+v %v", s, logs)
-	}
-	f.discards(3) // went back
-	if s := m.sample(0); s.OutDiscards != 105 {
-		t.Fatalf("a counter that went back: %+v", s)
-	}
-	f.discards(5)
-	if s := m.sample(0); s.OutDiscards != 107 {
-		t.Fatalf("after the new base: %+v", s)
+	if len(logs) != 0 {
+		t.Fatalf("output discards were logged: %v", logs)
 	}
 }
 
@@ -251,7 +266,7 @@ func TestStatusSendStageAndHostLines(t *testing.T) {
 	writeStatusFile(path, ls)
 	out := captureStdout(t, func() { printStatus(path) })
 	for _, want := range []string{"refused by the kernel 4", "  sending:    pacers sent 61.2", "  pool:       fair share 12.5",
-		"  net:        the kernel discarded 3210 outgoing", "SATURATED", "sSENT Mbit, qQUEUE/SRTT ms"} {
+		"  net:        3210 outgoing IP packet(s) discarded", "an icmp listener", "SATURATED", "sSENT Mbit, qQUEUE/SRTT ms"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("status lacks %q:\n%s", want, out)
 		}

@@ -2754,7 +2754,7 @@ tm_health_lines(){ # status file
     [ "$hsat" = true ] && line="$line · ${C_Y}SATURATED: carriers send late however good the path is${C_0}"
     say "$line"
   fi
-  [ -n "$hod" ] && say " Net:         ${C_Y}the kernel discarded $hod outgoing IP packet(s) on this server since hs2 started${C_0} (Ip OutDiscards: a full interface queue)"
+  [ -n "$hod" ] && say " Net:         $hod outgoing IP packet(s) discarded on this server since hs2 started ${C_D}(Ip OutDiscards, every program; on an icmp listener it includes the kernel's own replies the tunnel suppresses)${C_0}"
   return 0
 }
 

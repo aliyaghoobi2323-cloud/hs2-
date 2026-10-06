@@ -57,13 +57,15 @@ type pacer struct {
 	wireSeq  uint32 // pacer goroutine only
 	// Send-stage diagnostics (status only): the time enqueue spent waiting
 	// for room (the writer held back by this pacer), and the socket writes —
-	// how many calls, and the time inside them (the fd lock and the syscall).
-	heldNs   atomic.Int64
-	writeNs  atomic.Int64
-	writes   atomic.Uint64
-	writeErr atomic.Pointer[error]
-	stamps   *atomic.Bool              // the peer takes stamped datagrams (tagDataTS)
-	gov      *atomic.Pointer[Governor] // the pool's shared cap (nil / empty outside a capped pool)
+	// how many calls, and the time inside them (the syscall, and the shared
+	// socket's lock where there is one).
+	heldNs    atomic.Int64
+	writeNs   atomic.Int64
+	writes    atomic.Uint64
+	sentBytes atomic.Uint64 // wire bytes written (the status's send rate)
+	writeErr  atomic.Pointer[error]
+	stamps    *atomic.Bool              // the peer takes stamped datagrams (tagDataTS)
+	gov       *atomic.Pointer[Governor] // the pool's shared cap (nil / empty outside a capped pool)
 
 	// Time bound on the data queue: queued counts the bytes waiting (data
 	// and parity), and enqueue of DATA waits while it exceeds what the
@@ -90,13 +92,15 @@ const pacerBatch = 16
 const pacerQuantum = 2 * time.Millisecond
 
 // pacerLateCredit: a pacer whose carrier its send stage holds back (the
-// rate model's stageLimited: a sender short of CPU), with data waiting, keeps
-// the credit of up to this much of a late wake-up — a timer that fired late,
-// the goroutine put aside on a busy server — instead of pacerQuantum's. The
-// 2 ms cap threw the rest away and held such a pacer to ~0.5x its rate
-// whatever the rate said. Any other pacer, and an idle one, keeps the cap:
-// its burst stays two timer wake-ups (an allowance cut to twice what got out
-// bounds this one's).
+// rate model's stageLimited: a sender short of CPU), with data waiting, may
+// hold this much of its rate in its bucket instead of pacerQuantum's — the
+// credit of a late wake-up (a timer that fired late, the goroutine or a write
+// put aside on a busy server), kept until it is spent, one datagram or one
+// batch at a time. The 2 ms cap threw the rest away and held such a pacer to
+// ~0.3-0.5x its rate whatever the rate said. An on-time pacer never fills
+// the bucket, so this adds no burst of its own. Any other pacer, and an idle
+// one, keeps the cap: its burst stays two timer wake-ups (an allowance cut to
+// twice what got out bounds this one's).
 const pacerLateCredit = 10 * time.Millisecond
 
 func newPacer(rc *rateControl, write func([]byte) error, queueDepth int, stamps *atomic.Bool) *pacer {
@@ -234,7 +238,9 @@ func (p *pacer) loop() {
 				case b = <-p.pri:
 				case b = <-p.fast:
 				default:
-					waiting = false
+					// Nothing for the fast lanes: data waiting in the data
+					// lane is still a backlog (only an empty one is idle).
+					waiting = len(p.in) > 0
 					select {
 					case <-p.done:
 						return
@@ -255,9 +261,8 @@ func (p *pacer) loop() {
 		// ~1 ms, so a 2-datagram cap would limit ANY carrier to ~2 datagrams
 		// per millisecond (~20 Mbit/s) whatever the path could take.
 		maxBurst := math.Max(2*float64(len(b)+64), rate*pacerQuantum.Seconds())
-		late := waiting && p.rc.stageLimited()
-		if late {
-			maxBurst = math.Max(maxBurst, rate*math.Min(now.Sub(last).Seconds(), pacerLateCredit.Seconds()))
+		if waiting && p.rc.stageLimited() {
+			maxBurst = math.Max(maxBurst, rate*pacerLateCredit.Seconds())
 		}
 		if tokens > maxBurst {
 			tokens = maxBurst
@@ -283,13 +288,9 @@ func (p *pacer) loop() {
 			}
 			now = time.Now()
 			// A timer that fires late (a busy server) must not hand the
-			// batch below more than the cap either — the late credit's for
-			// a carrier its send stage holds back (pacerLateCredit).
-			lim := maxBurst
-			if late {
-				lim = math.Max(lim, rate*math.Min(now.Sub(last).Seconds(), pacerLateCredit.Seconds()))
-			}
-			tokens = math.Min(tokens+now.Sub(last).Seconds()*rate, lim)
+			// batch below more than the cap either (the late credit's, for
+			// a carrier its send stage holds back: pacerLateCredit).
+			tokens = math.Min(tokens+now.Sub(last).Seconds()*rate, maxBurst)
 			last = now
 		}
 		tokens -= need
@@ -387,6 +388,7 @@ func (p *pacer) loop() {
 		}
 		for i, it := range batch {
 			atomic.AddUint64(&p.sent, 1)
+			p.sentBytes.Add(uint64(len(outs[i])))
 			if it.fromIn {
 				p.inLeft.Add(1)
 			}
@@ -418,11 +420,12 @@ type pacerDiag struct {
 	Queued       int64
 	Held, Write  time.Duration
 	Writes, Sent uint64
+	SentBytes    uint64
 }
 
 func (p *pacer) diag() pacerDiag {
 	return pacerDiag{Queued: p.queued.Load(), Held: time.Duration(p.heldNs.Load()), Write: time.Duration(p.writeNs.Load()),
-		Writes: p.writes.Load(), Sent: atomic.LoadUint64(&p.sent)}
+		Writes: p.writes.Load(), Sent: atomic.LoadUint64(&p.sent), SentBytes: p.sentBytes.Load()}
 }
 
 func (p *pacer) close() {

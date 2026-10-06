@@ -1475,7 +1475,7 @@ each read the queue they all built as its own.
   nothing — status, installer, doctor — said the server was saturated.
 - In that state no carrier sent 80% of its allowance: all stayed in startup
   (`S`, never `P`), the allowance stayed where startup had left it (18x what
-  was delivered), and the W3 rules never engaged. The release before Phase W
+  was sent), and the W3 rules never engaged. The release before Phase W
   does the same; the lab reproduces it with the sender's cores taken.
 - The status showed a `pacer` drop counter that nothing ever incremented.
 
@@ -1484,10 +1484,12 @@ each read the queue they all built as its own.
   all cores (softirq and steal when above 1%) and the share of the time
   tasks waited for a core (PSI avg10), with `SATURATED` once it stays at
   90% busy or 40% waiting for three samples; the log says once when that
-  starts and once when it ends. `net:` shows the IP packets the kernel
-  discarded on output since hs2 started (Ip OutDiscards): on raw carriers
-  those are tunnel packets lost before the wire that the sender is told were
-  sent; the log folds them to one line a minute.
+  starts and once when it ends (once clear for 10 s). `net:` shows the IP
+  packets the kernel discarded on output since hs2 started (Ip OutDiscards)
+  — for the whole server, and on an icmp listener including the kernel's own
+  echo reply to every tunnel packet, which the echo guard drops on purpose:
+  shown, not alarmed on. This tunnel's own queue drops over icmp are counted
+  exactly instead (X5: `send_refused`).
 - `hs2 doctor` gains `server cpu`: the server measured over one second, PSI
   over 10 s and a minute, and what the running hs2 tunnels use in all; a
   warning when it is short of CPU.
@@ -1568,12 +1570,20 @@ each read the queue they all built as its own.
   socket lock either). An `IPPROTO_RAW` socket receives nothing, so the
   per-socket receive cost the shared socket removed does not come back.
   A reply too big for the device without DF still goes out fragmented
-  through the shared socket; a datagram the kernel refuses is dropped and
-  counted (`send_refused`), as before; any other failure turns the
-  send-only socket off for good, logged once, and its carriers carry on on
-  the shared one. gre, ipip and ipx keep the old path: the kernel's default
-  DF policy for them gives each packet a hashed IP id a built header cannot
-  reproduce.
+  through the shared socket; a datagram the kernel refuses with a soft
+  error is dropped and counted (`send_refused`), as before — and so is one
+  the device's queue drops, which on a raw socket the kernel reports as
+  sent: the send-only socket has `IP_RECVERR`, so `send_refused` counts
+  this tunnel's own queue drops exactly. A datagram refused for a reason of
+  its own (a firewall's `EPERM`, ...) goes through the shared socket, which
+  sends it or reports it as before; only a failure of the socket itself
+  turns it off for good, logged once, and its carriers carry on on the
+  shared one. A kernel before 6.4 does not know the `IP_PROTOCOL` control
+  message (policy routing by protocol): the packets go without it. TTL and
+  TOS are read when the socket opens: a later change of
+  `net.ipv4.ip_default_ttl`, or a route's hoplimit, is not followed. gre,
+  ipip and ipx keep the old path: the kernel's default DF policy for them
+  gives each packet a hashed IP id a built header cannot reproduce.
 - A udp listener's batch sends drop Go's lock the same way (the kernel's
   udp send path takes no socket lock unless corked).
 - `HS2_RAW_TX=0` turns both off; `HS2_RAW_BATCH=0` (one datagram per call)
@@ -1631,12 +1641,56 @@ each read the queue they all built as its own.
   against 79-140 Mbit/s, where the rule-less carriers release their stale
   allowance into the path's buffer: up to 477 drops).
 
+### X7 — fixes from the verification (five agents, each under 20 minutes)
+- **The send-only socket (X5).** On a kernel before 6.4 (Ubuntu 22.04's
+  5.15, Debian 12's 6.1) the `IP_PROTOCOL` control message is refused; when
+  several carriers sent their first datagram at once, all but the first to
+  notice read that refusal as a broken socket and turned it off for good
+  (30 of 200 rounds in a test that makes the kernel refuse it). Each send now
+  knows whether its own control data carried the message. A firewall's
+  `EPERM` on one datagram turned the socket off for good too; now only a
+  failure of the socket itself does. A full device queue's drops, silent on
+  a raw socket, are reported (`IP_RECVERR`) and counted.
+- **`net:` and the log (X1).** On an icmp listener, the kernel answers every
+  tunnel packet with its own echo reply, which the echo guard drops on
+  purpose — and counts each in Ip OutDiscards: the status said "tunnel
+  packets lost before the wire" and the log said so every minute, for
+  nothing (500 tunnel packets in, exactly +500). The count stays in the
+  status as the whole server's, explained, and is no longer logged; this
+  tunnel's own queue drops are in `send_refused`. The saturation line now
+  clears only after 10 s below its marks (one dip used to flap it), and a
+  sample that measures nothing changes nothing.
+- **The send-stage rule (X6).** A base probe of a carrier that had been
+  short of CPU refreshed its `C` flag and late credit every 4 s, long after
+  the CPU had freed (on a path that never queues, 189 of 359 reports); the
+  probe is now left out before the flag is set, a stage rate unused for 10 s
+  is forgotten, and the flag goes off by itself when feedback stops. The
+  pacer's late credit reached the data lane only when a batch was cut short:
+  the data lane counted as idle, and the credit was cut back to 2 ms on the
+  next round — 0.77 of the allowance with batches at 48 Mbit/s, none without
+  batches. A pacer held back by its send stage now keeps up to 10 ms of its
+  rate in its bucket while data waits (0.97 with batches, 0.95 without;
+  on-time pacers never fill it, other carriers keep 2 ms).
+- **The status.** `sending:`'s rate is now what the pacers wrote over the
+  whole status interval (it was the last report's tenth of a second); the
+  `carriers` summary above 32 carriers counts `C`.
+- Docs: "30% less CPU per Mbit/s" was 30% more Mbit/s per CPU-second (23%
+  less CPU per Mbit/s); the CPU-bound sign is `C`, not `S`; the socket write
+  holds no shared lock on icmp any more; VALIDATION's thresholds now match
+  `hs2 doctor`, the pool is fixed max first, and V13 measures Phase X.
+- Checked and sound: the in-place seal byte for byte (mixed versions both
+  ways in the lab), parity sizing under a concurrent `SetLoss`, every
+  encapsulation direct and reverse, a two-address icmp listener, the header
+  equivalence and the fragmenting fallback, `HS2_FAIR_SHARE=0` and
+  `HS2_RAW_TX=0`; the installer's lines (shellcheck, both copies identical).
+
 ### X2 — documentation brought in line with the code
 - The rate controller's description (`udpcarrier/rate.go`) named a
   `highQueue` hold band and 25%/6% growth that no longer exist: it now says
   what the code does (a proportional queue term around 10 ms; a capacity
   probe of 4% per report, per round trip past 100 ms; startup frozen on
-  reports that do not use the allowance). Phase W's numbers above corrected
+  reports that do not use the allowance — until X6's rule, for a sender
+  short of CPU). Phase W's numbers above corrected
   to the current simulator; README's status fields and the `carriers` line
   format; VALIDATION's rollback target, V11 and V12.
 

@@ -170,17 +170,20 @@ queue p50/p99 clearly lower and no fewer Mbit/s than without it.
 **Before V11 and V12: is the sender short of CPU?** Both judge hs2 only where
 the PATH is the limit. On the sending server (the Kharej server for a
 download), `hs2 status`'s `cpu:` line shows the whole server next to hs2:
-under the test's load it must stay at most ~80% busy, with tasks waiting for
-a core under ~20% (`hs2 doctor`'s `server cpu` says the same). If it says
+under the test's load it must stay under 75% busy, with tasks waiting for a
+core under 20% (`hs2 doctor`'s `server cpu`: `ok`, not `busy`). If it says
 `SATURATED`, or another tunnel's traffic shares the server, the run is
 sender-bound: carriers that cannot send what they are allowed never push
-(`P`); they show `C` (held back by their send stage; before Phase X they
-stayed in the fast start, `S`), and `s` stays well under `r`. Record such a run as CPU-bound (with the
+(`P`); they show `C` (held back by their send stage), and `s` stays well
+under `r`. A build before Phase X shows only `S` without `P` there: its
+status has no `s`, `q`, `sending:`, `pool:` or server CPU — read the server
+with `top` and `cat /proc/pressure/cpu`. Record such a run as CPU-bound (with the
 `cpu:`, `sending:`, `pool:` and `carriers:` lines), do not count it for or
 against what is being tested, and stop the other tunnel's traffic if you can.
 
 Keep the pool the same size in every run: on the Iran server `hs2 config -c
-<cfg> set min_links 4` and `hs2 config -c <cfg> set max_links 4`, restart,
+<cfg> set max_links 4` and then `hs2 config -c <cfg> set min_links 4` (in
+that order: a min above the current max is refused), restart,
 and check that `links:` shows 4 up in each run — the carrier count alone
 changes the CPU per Mbit/s (lab, 2-core sender: 1, 3 and 8 carriers gave
 903, 1393 and 1453 Mbit/s).
@@ -193,13 +196,28 @@ for 30 s), record Mbit/s, each server's hs2 CPU (`pidstat -p $(pgrep -x hs2
 servers (packets per read on the sending side, per write on the receiving
 side, well above 1.0). Then set `Environment=HS2_TUN_OFFLOAD=0` and
 `Environment=HS2_RAW_BATCH=0` on both servers (`systemctl edit <service>`,
-restart), repeat with the same carrier count, and remove them. Pass: with
+restart), repeat with the same carrier count, and remove them
+(`HS2_RAW_BATCH=0` also turns off Phase X's send-only icmp socket; V13
+measures that one alone). Pass: with
 both on, more Mbit/s or less hs2 CPU-seconds per GB; if the sending server
 was saturated in either run, compare CPU-seconds per GB only and say so;
 files transferred intact (compare sha256); no `failed`, `panic` or
 `TUNSETOFFLOAD` errors in the log. For a profile of the busy side:
 `HS2_PPROF=127.0.0.1:6060` in the same way, then `curl -o cpu.prof
 'http://127.0.0.1:6060/debug/pprof/profile?seconds=30'` under load.
+
+**V13 — a sender short of CPU (Phase X).** On the test pair (tun over icmp,
+reverse, the pool fixed as above), with the Kharej server busy with its
+other work as it normally is: under `iperf3 -c <T> -R -P 8 -t 30`, record
+Mbit/s, the Kharej hs2's CPU (`pidstat`) and its `cpu:`, `sending:` and
+`carriers:` lines at 20 s, in three settings taken in turn (X, R, F, X, R,
+F, X), each set on both servers with `systemctl edit` and a restart: X the
+default, R `Environment=HS2_RAW_TX=0` (the shared icmp socket), F
+`Environment=HS2_FAIR_SHARE=0` (the send-stage rule and the Phase W rules
+off). Pass: X at least as many Mbit/s per CPU-second as R and F, its
+carriers `C` (not `S`) with `r` within about twice `s`; and under a fixed
+load below what F carries (`iperf3 ... -b`), ping through the tun no worse
+in X than in F.
 
 **V12 — carriers share the bottleneck (Phase W, rate control).** On the
 test pair (tun over icmp, reverse), with the pool size fixed as above, the
@@ -222,14 +240,17 @@ on the path and its smoothed round trip (ms), measured from the moment a
 datagram is written: it does NOT include hs2's own queues in front of the
 socket — the `sending:` line's fair-queue wait, and the writers' wait for
 pacer room — whose time adds to every packet's latency. `socket write` is
-the time per write (the shared socket's lock plus the system call) with the
-datagrams each carried. Writers wait for pacer room whenever the carriers
+the time per write (the system call, plus the shared socket's lock on gre,
+ipip and ipx or with `HS2_RAW_TX=0`) with the datagrams each carried. Writers wait for pacer room whenever the carriers
 are the limit, on a full path as on a starved sender, so that share alone
 tells nothing. Path-bound: `P` set (`s` close to `r`), `q` 5-20 ms.
-Sender-bound: `C` (or, on a build before Phase X, `S`) without `P` (`s`
-well under `r`), `q` under 5 ms, and the `cpu:` line saturated. `net:` (the kernel's output
-discards) growing during a run means the interface queue overflowed: on
-icmp those are tunnel packets the peer counts as path loss.
+Sender-bound: `C` without `P` (`s` well under `r`), `q` under 5 ms, and the
+`cpu:` line saturated. `drops:`'s "refused by the kernel" growing during a
+run over icmp means the interface queue overflowed: tunnel packets lost
+before the wire, which the peer counts as path loss. `net:` is the whole
+server's output discards — on an icmp listener mostly the kernel's own
+replies the tunnel suppresses — so it is context, not a count of this
+tunnel's losses.
 
 ## What to send back
 

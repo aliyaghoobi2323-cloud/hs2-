@@ -38,9 +38,18 @@ import (
 // header cannot reproduce, so they keep the old path.
 //
 // A datagram the kernel refuses with a soft error is dropped and counted, as
-// on the old path; one too big for the device without DF goes through the old
-// socket, which fragments it as before. Any other failure turns the socket off
-// for good (logged once): its senders go back to the old path.
+// on the old path — and, unlike the old path, so is one the device's queue
+// drops: the socket has IP_RECVERR, so the kernel reports that ENOBUFS instead
+// of passing it off as sent (send_refused counts this process's queue drops
+// exactly). One too big for the device without DF, or refused for a reason of
+// its own (a firewall's EPERM, ...), goes through the old socket, which sends
+// it or reports it as before. Only a failure of the socket itself turns it off
+// for good (logged once): its senders go back to the old path. A kernel before
+// 6.4, which does not know IP_PROTOCOL, gets the packets without it.
+//
+// TTL and TOS are read once, when the socket opens: a later change of
+// net.ipv4.ip_default_ttl, or a route's hoplimit, is not followed (the
+// kernel's path applies both per packet).
 type rawTx struct {
 	ipc  *net.IPConn
 	rc   syscall.RawConn
@@ -115,6 +124,9 @@ func openRawTx(f *framer, from *net.IPConn, bind net.IP) *rawTx {
 	if err := rc.Control(func(fd uintptr) {
 		s := int(fd)
 		forceSockBufs(s, sockBuf)
+		// ENOBUFS from a full device queue comes back instead of a silent
+		// "sent" (raw_send_hdrinc masks it without IP_RECVERR).
+		unix.SetsockoptInt(s, unix.IPPROTO_IP, unix.IP_RECVERR, 1)
 		unix.SetsockoptSockFprog(s, unix.SOL_SOCKET, unix.SO_ATTACH_FILTER, &unix.SockFprog{Len: 1, Filter: &drop[0]})
 	}); err != nil {
 		ipc.Close()
@@ -141,6 +153,21 @@ func openRawTx(f *framer, from *net.IPConn, bind net.IP) *rawTx {
 		log.Printf("encap icmp: carriers send through a send-only raw socket, without the shared socket's lock (HS2_RAW_TX=0 turns it off)")
 	})
 	return t
+}
+
+// txSocketErr: a failure of the send-only socket itself, not of one datagram
+// (an error from outside the kernel's send path counts too).
+func txSocketErr(err error) bool {
+	var en syscall.Errno
+	if !errors.As(err, &en) {
+		return true
+	}
+	switch en {
+	case unix.EBADF, unix.ENOTSOCK, unix.EFAULT, unix.EOPNOTSUPP, unix.EAFNOSUPPORT,
+		unix.EPROTONOSUPPORT, unix.EDESTADDRREQ, unix.ENOTCONN:
+		return true
+	}
+	return false
 }
 
 // ok reports whether sends go through t (nil, or failed: the old path).
@@ -175,10 +202,10 @@ func (t *rawTx) frame(bp *[]byte, f *framer, id, seq uint16, payload []byte, dst
 var txBatchPool = sync.Pool{New: func() any { return mmsg.NewBatch(rawBatch) }}
 
 // oob is the control data for a send: IP_PKTINFO (the source a wildcard
-// listener answers from) and IP_PROTOCOL.
-func (t *rawTx) oob(local net.IP) []byte {
+// listener answers from) and, withProto, IP_PROTOCOL.
+func (t *rawTx) oob(local net.IP, withProto bool) []byte {
 	proto := t.protoCmsg
-	if t.noProto.Load() {
+	if !withProto {
 		proto = nil
 	}
 	l4 := local.To4()
@@ -196,7 +223,10 @@ func (t *rawTx) sendAll(pkts [][]byte, dst, local net.IP, legacy func(transport 
 	b := txBatchPool.Get().(*mmsg.Batch)
 	defer txBatchPool.Put(b)
 	sa := mmsg.Inet4(dst.To4(), 0)
-	oob := t.oob(local)
+	// Whether THIS call's control data carries IP_PROTOCOL: carriers sending
+	// at once each learn on their own that the kernel refuses it.
+	withProto := !t.noProto.Load()
+	oob := t.oob(local, withProto)
 	for len(pkts) > 0 {
 		if t.broken.Load() {
 			for _, p := range pkts {
@@ -215,10 +245,12 @@ func (t *rawTx) sendAll(pkts [][]byte, dst, local net.IP, legacy func(transport 
 		switch {
 		case errors.Is(err, net.ErrClosed):
 			return err // the mux or listener is closing
-		case errors.Is(err, unix.EINVAL) && !t.noProto.Load():
+		case errors.Is(err, unix.EINVAL) && withProto:
+			// A kernel before 6.4 does not know IP_PROTOCOL.
 			t.noProto.Store(true)
-			oob = t.oob(local)
-			continue // the same datagram again, without IP_PROTOCOL
+			withProto = false
+			oob = t.oob(local, false)
+			continue // the same datagram again, without it
 		case errors.Is(err, unix.EMSGSIZE) && !t.df:
 			txFellBack.Add(1)
 			if lerr := legacy(pkts[0][ipv4HdrLen:]); lerr != nil {
@@ -226,11 +258,18 @@ func (t *rawTx) sendAll(pkts [][]byte, dst, local net.IP, legacy func(transport 
 			}
 		case softErr(err):
 			sendRefused.Add(1) // lost, as on the old path
-		default:
+		case txSocketErr(err):
 			if t.broken.CompareAndSwap(false, true) {
 				log.Printf("encap icmp: the send-only raw socket failed (%v) — its carriers send on the shared socket from now on", err)
 			}
 			continue // this datagram and the rest: the old path
+		default:
+			// This datagram's own trouble (a firewall's EPERM, ...): the old
+			// socket sends it, or reports it exactly as before.
+			txFellBack.Add(1)
+			if lerr := legacy(pkts[0][ipv4HdrLen:]); lerr != nil {
+				return lerr
+			}
 		}
 		pkts = pkts[1:]
 	}

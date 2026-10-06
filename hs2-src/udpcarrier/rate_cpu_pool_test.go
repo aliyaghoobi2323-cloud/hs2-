@@ -107,5 +107,12 @@ func TestPoolSimCPUBoundStalePeak(t *testing.T) {
 		if on.b.pathDrops > off.b.pathDrops {
 			t.Errorf("path %.0f: %d path drops once the CPU freed, rules off %d", path/1e6, on.b.pathDrops, off.b.pathDrops)
 		}
+		// The cost of the rule, pinned: a queue another tunnel's burst puts on
+		// the path ends the fast regrowth, so it recovers more slowly than a
+		// carrier that releases its stale allowance into the buffer (66-89
+		// against 79-140 Mbit/s here) — not slower than this.
+		if on.b.tot < 0.55*off.b.tot {
+			t.Errorf("path %.0f: %.1f Mbit/s once the CPU freed, rules off %.1f", path/1e6, on.b.tot, off.b.tot)
+		}
 	}
 }

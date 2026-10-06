@@ -209,9 +209,11 @@ func runCPUPool(cfg cpuPoolCfg, cs []cpuPoolCarrier) cpuPoolRes {
 	}
 	ps := make([]*car, len(cs))
 	var flows []*flow
+	simNow := 0.0 // the loop's clock, for stageLimited
 	for i, c := range cs {
 		ps[i] = &car{rc: newRateControl(), fq: map[int]*fqFlow{}, nextFb: float64(c.start/time.Millisecond) + 50 + c.fbPhase, exitMs: -1, wasStartup: true, nextPing: float64(c.start/time.Millisecond) + 7}
 		ps[i].rc.fair = cfg.rules
+		ps[i].rc.clock = func() time.Time { return at(simNow) }
 		ps[i].rc.epoch = base
 		for k := 0; k < c.flows; k++ {
 			flows = append(flows, &flow{car: i, cwnd: 10, ssthresh: 1e9, out: map[int]bool{}, sendT: map[int]float64{}, srtt: 2 * ow})
@@ -362,6 +364,7 @@ func runCPUPool(cfg cpuPoolCfg, cs []cpuPoolCarrier) cpuPoolRes {
 		}
 	}
 	for now := 0.0; now < endMs; now += step {
+		simNow = now
 		if cfg.winA[1] > 0 && now >= cfg.winA[1]-step {
 			takeSnap(&snA, now)
 		}
@@ -564,7 +567,7 @@ func runCPUPool(cfg cpuPoolCfg, cs []cpuPoolCarrier) cpuPoolRes {
 			rate := c.rc.pacingRate(at(now)) / 1000
 			cp := math.Max(2*(pkt+64), rate*pacerQuantum.Seconds()*1000)
 			backlog := len(c.in)+len(c.pri)+len(c.fast) > 0
-			if cfg.opt.lw > 0 && backlog {
+			if cfg.opt.lw > 0 && backlog && c.rc.stageLimited() { // as the pacer: only a carrier its send stage holds back
 				cp = math.Max(cp, rate*math.Min(now-c.lastSend, cfg.opt.lw))
 			}
 			c.tokens = math.Min(c.tokens+rate*step, cp)

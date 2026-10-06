@@ -21,7 +21,9 @@ type stageDrive struct {
 func newStageDrive(fair bool) *stageDrive {
 	r := newRateControl()
 	r.fair = fair
-	return &stageDrive{r: r, now: time.Unix(1_700_000_000, 0)}
+	d := &stageDrive{r: r, now: time.Unix(1_700_000_000, 0)}
+	r.clock = func() time.Time { return d.now }
+	return d
 }
 
 // report runs one interval; it returns what was sent (bytes/s).
@@ -223,5 +225,54 @@ func TestRateControlStageNotInBaseProbe(t *testing.T) {
 		if base[i] != got[i] {
 			t.Fatalf("report %d: rate %.0f with the writer waiting, %.0f without", i, got[i], base[i])
 		}
+	}
+}
+
+// After a spell short of CPU, a carrier on a path that never queues (a
+// policer, a shallow buffer) still has a stageRate. Its base probes — where
+// it sends under its allowance on purpose while its writer waits — must not
+// refresh the stage flag (no false C, no late credit); and after stageForget
+// without the stage holding it back, the stageRate is forgotten.
+func TestRateControlStageNotRefreshedByProbes(t *testing.T) {
+	const cpu = 30e6 / 8
+	d := newStageDrive(true)
+	for i := 0; i < 60; i++ {
+		d.report(cpu, true, 0)
+	}
+	if !d.r.stageLimited() || d.r.stageRate == 0 {
+		t.Fatal("not held back by its send stage after the CPU-bound spell")
+	}
+	flagged, n := 0, 0
+	for i := 0; i < 400; i++ { // the CPU frees; no queue ever; the writer waits
+		d.r.noteStageHeld(feedbackEvery * 9 / 10)
+		d.report(0, false, 0)
+		if i > 30 {
+			n++
+			if d.r.stageLimited() {
+				flagged++
+			}
+		}
+	}
+	if flagged > 0 {
+		t.Fatalf("flagged C on %d of %d reports after the CPU freed (base probes refreshed it)", flagged, n)
+	}
+	if d.r.stageRate != 0 {
+		t.Fatalf("stageRate %.0f kept %v after the last send stage limit", d.r.stageRate, 40*time.Second)
+	}
+}
+
+// The flag is about the last couple of seconds: with no feedback at all (a
+// carrier whose path died) it goes off by itself.
+func TestRateControlStageFlagExpiresWithoutFeedback(t *testing.T) {
+	d := newStageDrive(true)
+	for i := 0; i < 60; i++ {
+		d.report(30e6/8, true, 0)
+	}
+	if !d.r.stageLimited() {
+		t.Fatal("not flagged while held back")
+	}
+	d.now = d.now.Add(stageHold + time.Second) // no report since
+	if d.r.stageLimited() {
+		t.Fatal("still flagged with no feedback for longer than stageHold")
 	}
 }

@@ -215,6 +215,7 @@ func TestPacerLateCreditOnlyWhenStageLimited(t *testing.T) {
 		rc := newRateControl()
 		rc.rate = 2e6 // 16 Mbit/s: ~1670 datagrams of 1200 bytes a second
 		rc.stageOn.Store(stage)
+		rc.stageAtNs.Store(time.Now().Add(time.Hour).UnixNano()) // fresh for the whole run
 		var mu sync.Mutex
 		sent := 0
 		p := newPacer(rc, func(b []byte) error { time.Sleep(6 * time.Millisecond); mu.Lock(); sent++; mu.Unlock(); return nil }, 512, nil)
@@ -257,5 +258,70 @@ func TestPacerLateCreditOnlyWhenStageLimited(t *testing.T) {
 	}
 	if on < 0.75 || on > 1.15 {
 		t.Fatalf("with the stage flag the pacer sent %.2f of its allowance, want about all of it and no more", on)
+	}
+}
+
+// The late credit reaches the data lane at a rate where one late wake-up's
+// credit is more than one batch (48 Mbit/s, 3 ms late: ~15 datagrams), and
+// a carrier without batches (one datagram per write) gets it too.
+func TestPacerLateCreditDataLane(t *testing.T) {
+	run := func(stage, batch bool) float64 {
+		rc := newRateControl()
+		rc.rate = 6e6 // 48 Mbit/s
+		rc.stageOn.Store(stage)
+		rc.stageAtNs.Store(time.Now().Add(time.Hour).UnixNano())
+		var mu sync.Mutex
+		sent, calls := 0, 0
+		p := newPacer(rc, func(b []byte) error {
+			mu.Lock()
+			sent++
+			calls++
+			late := calls%40 == 0
+			mu.Unlock()
+			if late {
+				time.Sleep(8 * time.Millisecond) // now and then a write comes back late
+			}
+			return nil
+		}, 512, nil)
+		defer p.close()
+		if batch {
+			wb := func(bs [][]byte) error {
+				time.Sleep(3 * time.Millisecond)
+				mu.Lock()
+				sent += len(bs)
+				mu.Unlock()
+				return nil
+			}
+			p.writeBatch.Store(&wb)
+		}
+		stop := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				p.enqueue(make([]byte, 1200))
+			}
+		}()
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		s0 := sent
+		mu.Unlock()
+		const window = 600 * time.Millisecond
+		time.Sleep(window)
+		mu.Lock()
+		s1 := sent
+		mu.Unlock()
+		close(stop)
+		return float64(s1-s0) * 1200 / window.Seconds() / rc.rate
+	}
+	for _, batch := range []bool{true, false} {
+		off, on := run(false, batch), run(true, batch)
+		t.Logf("batch=%v: share of the allowance sent %.2f with the 2 ms cap, %.2f with the late credit", batch, off, on)
+		if on < off+0.15 || on > 1.15 {
+			t.Errorf("batch=%v: the late credit sent %.2f against %.2f without it", batch, on, off)
+		}
 	}
 }

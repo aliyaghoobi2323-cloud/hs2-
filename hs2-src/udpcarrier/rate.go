@@ -35,10 +35,12 @@ import (
 //     delivered rate (BBR) and 1.25x the last rate, scaled to the part of a
 //     round trip the report covers — about doubling per round trip. A report
 //     where it did not use its allowance changes nothing: a sender short of
-//     data, or of CPU, keeps startup and the last rate it reached, and in
-//     startup no delivery cap applies (only maxRate). A queue above lowQueue
-//     while it uses its allowance, delivery that stops growing, or startCap
-//     such reports end it (see also the pool rules below).
+//     data keeps startup and the last rate it reached, and in startup no
+//     delivery cap applies (only maxRate). A queue above lowQueue while it
+//     uses its allowance, delivery that stops growing, or startCap such
+//     reports end it — and, with the pool rules on, a report its send stage
+//     held back counts as one (a sender short of CPU: the fourth pool rule
+//     below).
 //   - a queue stands (lowQueue or more): capEst moves capAlpha of the way to
 //     the delivered rate each report, and the rate is capEst × (1 +
 //     (targetQueue − q)/tau), tau = max(queueTau, 2.5 × srtt), kept between
@@ -208,6 +210,8 @@ type rateControl struct {
 	stageRate  float64
 	stageAt    time.Time
 	stageOn    atomic.Bool
+	stageAtNs  atomic.Int64     // stageAt for stageLimited, which runs off r.mu
+	clock      func() time.Time // stageLimited's clock (nil: time.Now; tests set it)
 }
 
 type bwSample struct {
@@ -286,6 +290,10 @@ const (
 	stageRegrow   = 1.25
 	sendAvgAlpha  = 0.25
 	stageHold     = 2 * time.Second
+	// stageForget: a stageRate this long without the send stage holding the
+	// carrier back is forgotten (no fast regrowth on a path that never
+	// queues, from a CPU shortage long gone).
+	stageForget = 10 * time.Second
 	// stageHeldMin: the writer waited for pacer room at least this share of
 	// a report while the carrier did not use its allowance — the pacer could
 	// not keep up with its own rate (a sender short of CPU), not the path.
@@ -526,9 +534,6 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 		r.recomputeBtlBw()
 	}
 
-	if stage {
-		r.stageAt = now
-	}
 	r.adjustLocked(now, dt, dRate, limited, stage, q, haveQ)
 	r.stageOn.Store(r.stageRate > 0 && now.Sub(r.stageAt) < stageHold)
 }
@@ -548,6 +553,13 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited, st
 	// the send stage's doing.
 	probing := now.Before(r.probeEnd.Add(time.Duration((r.srtt + 2*feedbackEvery.Seconds()) * float64(time.Second))))
 	stage = stage && !probing
+	switch {
+	case stage:
+		r.stageAt = now
+		r.stageAtNs.Store(now.UnixNano())
+	case r.stageRate > 0 && now.Sub(r.stageAt) > stageForget:
+		r.stageRate = 0
+	}
 	loss := math.Min(float64(r.lastLossPPM)/1e6, 1)
 	// The path's own random loss, which the pacing rate compensates for so
 	// random loss is not mistaken for a lack of capacity: the long-run
@@ -870,9 +882,6 @@ func (r *rateControl) srttSec() float64 {
 	return r.srtt
 }
 
-// rateSnapshot exposes the current pacing rate in bytes/s (for status/diagnosis:
-// seeing a carrier pinned at a low rate while the path is healthy is the signal
-// for an after-idle ramp stall).
 // noteStageDrop records a packet the pool's send queue for this carrier
 // dropped (the engine; any goroutine).
 func (r *rateControl) noteStageDrop() { r.stageDrops.Add(1) }
@@ -882,9 +891,22 @@ func (r *rateControl) noteStageDrop() { r.stageDrops.Add(1) }
 func (r *rateControl) noteStageHeld(d time.Duration) { r.stageHeld.Add(int64(d)) }
 
 // stageLimited: the send stage, not the path, held the carrier back within
-// stageHold (see stageHeadroom).
-func (r *rateControl) stageLimited() bool { return r.stageOn.Load() }
+// stageHold (see stageHeadroom) — checked against the clock here too, so a
+// carrier whose feedback stopped does not keep the flag.
+func (r *rateControl) stageLimited() bool {
+	if !r.stageOn.Load() {
+		return false
+	}
+	now := time.Now()
+	if r.clock != nil {
+		now = r.clock()
+	}
+	return now.Sub(time.Unix(0, r.stageAtNs.Load())) < stageHold
+}
 
+// rateSnapshot exposes the current pacing rate in bytes/s (for status/diagnosis:
+// seeing a carrier pinned at a low rate while the path is healthy is the signal
+// for an after-idle ramp stall).
 func (r *rateControl) rateSnapshot() float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -428,14 +428,15 @@ twice its `s`. So a field test can see exactly where packets are lost.
 file: `send_mbit`, `send_held_pct`, `fq_wait_ms`, `write_us`, `per_write`)
 covers the last couple of seconds: what the carriers' pacers sent, the share
 of the time a carrier's writer waited for room in its pacer, the mean wait in
-the fair queue in front of it, and the mean socket write (the shared socket's
-lock plus the system call) with the datagrams each carried. `pool:`
+the fair queue in front of it, and the mean socket write (the system call —
+and the shared socket's lock on gre, ipip and ipx, or with `HS2_RAW_TX=0`)
+with the datagrams each carried. `pool:`
 (`share_mbit`, `busy_queue_ms`) is the fair share per busy carrier and the
 queue those carriers see. Writers wait for pacer room whenever the carriers
 are the limit — on a full path as much as on a sender short of CPU (lab:
-54-74% of the time either way); what tells the two apart is the carriers:
+55-74% of the time either way); what tells the two apart is the carriers:
 a path-bound pool shows `P` (`s` close to `r`) and a `q` of 5-20 ms, a sender
-short of CPU `S` without `P` (`s` well under `r`), `q` near 0 and the server
+short of CPU `C` without `P` (`s` well under `r`), `q` near 0 and the server
 saturated on the `cpu:` line.
 
 **The server's CPU.** hs2's own CPU (`cpu_pct`, % of one core) does not say
@@ -447,10 +448,15 @@ busy across all cores, softirq and steal (`host_cpu_pct`,
 time tasks waited for a core (`psi_cpu10`, `psi_cpu60`: the kernel's CPU
 pressure, absent on kernels without it) — and says `SATURATED` when the
 server stays at 90% busy or 40% waiting (`host_saturated`; the log says when
-it starts and ends). `net:` (`host_out_discards`) counts IP packets the
-kernel discarded on output since hs2 started: a full interface queue. On raw
-carriers (icmp, gre, …) those are tunnel packets lost before the wire that
-the sender is told were sent, and nothing else reports them. `hs2 doctor`
+it starts and ends). `net:` (`host_out_discards`) counts the IP packets the
+kernel discarded on output since hs2 started, for the whole server and every
+program on it: a full interface queue, a firewall's drop — and, on an icmp
+listener, the kernel's own echo reply to every tunnel packet received, which
+the tunnel suppresses on purpose. So it is shown, never alarmed on. A raw
+socket's queue drops are silent (the kernel tells the sender they were
+sent); over icmp the carriers' send-only socket asks the kernel to report
+them, and `drops:`'s "refused by the kernel" (`send_refused`) counts this
+tunnel's own exactly. `hs2 doctor`
 measures the server for a second (`server cpu`) and warns when it is short
 of CPU.
 
@@ -491,7 +497,7 @@ allowance stays within twice what it really sends, its pacer keeps the
 credit of a late wake-up (up to 10 ms) instead of losing everything past
 2 ms, and once the CPU lets go it regrows 25% per report until a queue
 appears. In the lab, with the sender held to 0.6 of a core, that carried 27%
-more (212 → 270 Mbit/s) with 30% less CPU per Mbit/s; a path-bound pool is
+more (212 → 270 Mbit/s) with about 23% less CPU per Mbit/s; a path-bound pool is
 unchanged. `HS2_FAIR_SHARE=0` turns all four rules off.
 
 **Less CPU per gigabyte.** On a small server the datagram tun's limit is

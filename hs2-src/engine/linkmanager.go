@@ -2288,7 +2288,8 @@ type PoolStats struct {
 	// The send stage since the last sample (live carriers): what the pacers
 	// sent (Mbit/s), the share of the time the writers waited for pacer
 	// room (mean per carrier), the mean fair-queue wait (ms), and the mean
-	// socket write (µs, the fd lock and the syscall) with datagrams per write.
+	// socket write (µs: the syscall, and the shared socket's lock where there
+	// is one) with datagrams per write.
 	SendMbit, SendHeldPct, FQWaitMs, WriteUs, PerWrite float64
 }
 

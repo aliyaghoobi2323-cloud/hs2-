@@ -1778,10 +1778,10 @@ func round1f(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
 // dgDiag holds a carrier's cumulative send-stage counters at the last status
 // sample (see dgLink.diag).
 type dgDiag struct {
-	at                 time.Time
-	held, write        time.Duration
-	writes, sent, pops uint64
-	soj                int64
+	at                        time.Time
+	held, write               time.Duration
+	writes, sent, pops, bytes uint64
+	soj                       int64
 }
 
 // sendDiag sums the send stage over the live carriers between two status
@@ -1791,18 +1791,21 @@ type sendDiag struct {
 	held, span, write  time.Duration
 	writes, sent, pops uint64
 	soj                int64
-	sendBytes          float64
+	sendBytes          float64 // bytes/s: the sum of each carrier's bytes over its span
 }
 
 func (d *sendDiag) add(l *dgLink, st udpcarrier.Stats, now time.Time) {
 	soj, pops := l.fqSojNs.Load(), l.fqPops.Load()
 	prev := l.diag
-	l.diag = dgDiag{at: now, held: st.PacerHeld, write: st.PacerWrite, writes: st.PacerWrites, sent: st.PacerSent, pops: pops, soj: soj}
-	d.sendBytes += st.SendBytes
+	l.diag = dgDiag{at: now, held: st.PacerHeld, write: st.PacerWrite, writes: st.PacerWrites, sent: st.PacerSent, pops: pops, soj: soj, bytes: st.PacerSentBytes}
 	if prev.at.IsZero() {
 		return
 	}
-	d.span += now.Sub(prev.at)
+	span := now.Sub(prev.at)
+	if span > 0 {
+		d.sendBytes += float64(st.PacerSentBytes-prev.bytes) / span.Seconds()
+	}
+	d.span += span
 	d.held += st.PacerHeld - prev.held
 	d.write += st.PacerWrite - prev.write
 	d.writes += st.PacerWrites - prev.writes
@@ -1865,7 +1868,7 @@ func (p *dgPool) carrierLine() string {
 	}
 	var b []byte
 	if len(snaps) > carrierLineMax {
-		serving, pushing, startup := 0, 0, 0
+		serving, pushing, startup, stage := 0, 0, 0, 0
 		for _, x := range snaps {
 			if !x.l.retiring {
 				serving++
@@ -1876,9 +1879,12 @@ func (p *dgPool) carrierLine() string {
 			if x.s.Startup {
 				startup++
 			}
+			if x.s.StageLimited {
+				stage++
+			}
 		}
 		sort.SliceStable(snaps, func(i, j int) bool { return snaps[i].s.LossPPM > snaps[j].s.LossPPM })
-		b = fmt.Appendf(b, "%d carriers (%d serving, %d retiring; P=%d S=%d); most loss:", len(snaps), serving, len(snaps)-serving, pushing, startup)
+		b = fmt.Appendf(b, "%d carriers (%d serving, %d retiring; P=%d S=%d C=%d); most loss:", len(snaps), serving, len(snaps)-serving, pushing, startup, stage)
 		snaps = snaps[:carrierLineWorst]
 	}
 	for _, x := range snaps {

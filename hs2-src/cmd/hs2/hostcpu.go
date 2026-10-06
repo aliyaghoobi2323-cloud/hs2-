@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
 )
 
 // hostMeter samples the whole server between status writes. cpuMeter says how
@@ -19,25 +18,25 @@ import (
 //   - CPU pressure (/proc/pressure/cpu "some"): the share of the time some task
 //     waited for a core — the queueing a busy % cannot show;
 //   - IP packets the kernel discarded on output (/proc/net/snmp OutDiscards),
-//     since hs2 started: a full interface queue or a refused send. On raw
-//     carriers (icmp, gre, …) nothing else reports them — the kernel tells the
-//     sender the drop was a success.
+//     since hs2 started, for the whole server: a full interface queue, or a
+//     packet a firewall refused. On an icmp listener that includes the
+//     kernel's own echo reply to every tunnel packet received, which the echo
+//     guard drops on purpose — so it is shown, never alarmed on. The
+//     tunnel's own queue drops over icmp are counted exactly elsewhere
+//     (send_refused: the send-only socket has IP_RECVERR).
 //
-// It logs once when the server stays saturated (and once when it is back), and
-// output discards folded to at most one line a minute.
+// It logs once when the server stays saturated, and once when it is back.
 type hostMeter struct {
 	proc string // "/proc" (tests: a fake tree)
 	logf func(string, ...any)
 
 	last, first cpuTimes
 	haveLast    bool
-	hot         int
+	hot, cool   int // samples in a row past the saturation / the clear marks
 	saturated   bool
 
 	discLast, discTotal uint64
 	haveDisc            bool
-	discPend            uint64    // discards not yet logged
-	discLogged          time.Time // the last discard line
 }
 
 // hostSample is one hostMeter reading. Shares are % of ALL cores (100 = every
@@ -54,16 +53,15 @@ type hostSample struct {
 // hostSatBusy / hostSatPSI: the server counts as saturated when its cores are
 // this busy, or tasks waited for a core this share of the last 10 s, for
 // hostSatRuns samples in a row (statusInterval apart). It is clear again below
-// hostClearBusy and hostClearPSI.
+// hostClearBusy and hostClearPSI for hostClearRuns samples in a row, so a load
+// around the marks does not flap the log.
 const (
 	hostSatBusy   = 90.0
 	hostSatPSI    = 40.0
 	hostSatRuns   = 3
 	hostClearBusy = 75.0
 	hostClearPSI  = 20.0
-	// hostDiscEvery: output discards are logged at most this often (the first
-	// at once), the count since the last line in each.
-	hostDiscEvery = time.Minute
+	hostClearRuns = 5
 )
 
 // cpuTimes is the aggregate "cpu" line of /proc/stat (USER_HZ ticks), and the
@@ -204,12 +202,10 @@ func (m *hostMeter) sample(hsPct float64) hostSample {
 		case !m.haveDisc:
 			m.haveDisc = true
 		case d >= m.discLast:
-			m.discPend += d - m.discLast
 			m.discTotal += d - m.discLast
 		} // d < discLast: the counter went back (it never should); count from there
 		m.discLast = d
 		s.OutDiscards = m.discTotal
-		m.logDiscards()
 	}
 	m.judge(&s, hsPct)
 	return s
@@ -220,40 +216,29 @@ func (m *hostMeter) judge(s *hostSample, hsPct float64) {
 	if s.PSI10 != nil {
 		psi10 = *s.PSI10
 	}
+	if !s.ok && s.PSI10 == nil {
+		s.Saturated = m.saturated // nothing measured: no change either way
+		return
+	}
 	hot := (s.ok && s.BusyPct >= hostSatBusy) || psi10 >= hostSatPSI
 	cool := (!s.ok || s.BusyPct < hostClearBusy) && psi10 < hostClearPSI
 	switch {
 	case hot:
+		m.cool = 0
 		if m.hot++; m.hot >= hostSatRuns && !m.saturated {
 			m.saturated = true
 			m.logf("cpu: the server is saturated — %s; hs2 itself uses %.0f%% of one core. Every carrier now sends late however good the path is: other programs on this server (another tunnel?) or a bigger VPS are the fix, not the tunnel's settings", hostCPUText(*s), hsPct)
 		}
 	case cool:
 		m.hot = 0
-		if m.saturated {
+		if m.cool++; m.cool >= hostClearRuns && m.saturated {
 			m.saturated = false
 			m.logf("cpu: the server has room again — %s", hostCPUText(*s))
 		}
 	default:
-		m.hot = 0 // between the marks: neither builds up nor clears
+		m.hot, m.cool = 0, 0 // between the marks: neither builds up nor clears
 	}
 	s.Saturated = m.saturated
-}
-
-func (m *hostMeter) logDiscards() {
-	if m.discPend == 0 {
-		return
-	}
-	now := time.Now()
-	if !m.discLogged.IsZero() && now.Sub(m.discLogged) < hostDiscEvery {
-		return
-	}
-	since := "since hs2 started"
-	if !m.discLogged.IsZero() {
-		since = fmt.Sprintf("in the last %s", now.Sub(m.discLogged).Round(time.Second))
-	}
-	m.logf("net: the kernel discarded %d outgoing IP packet(s) on this server %s (Ip OutDiscards: an interface queue was full, or a send was refused) — on raw carriers these are tunnel packets lost before the wire, which the sender is told were sent", m.discPend, since)
-	m.discPend, m.discLogged = 0, now
 }
 
 // hostCPUText renders a host sample, e.g. "92% busy across 2 core(s)

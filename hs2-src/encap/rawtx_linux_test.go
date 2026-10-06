@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
@@ -337,3 +339,130 @@ func TestRawTxConcurrentFullBuffer(t *testing.T) {
 }
 
 var _ net.Conn = (*rawConn)(nil)
+
+// A kernel before 6.4 refuses the IP_PROTOCOL control message (EINVAL). When
+// several carriers send their first datagram at once, each must learn that on
+// its own and drop the message — never turn the send-only socket off — and
+// every datagram arrives.
+func TestRawTxProtoRefusedConcurrently(t *testing.T) {
+	needRawNetns(t)
+	withRawTx(true, func() {
+		opt := Options{Key: []byte("proto-refused")}
+		pc := listenT(t, KindICMP, "127.0.0.1", opt)
+		const links = 8
+		var cs []*rawConn
+		for i := 0; i < links; i++ {
+			cs = append(cs, dialT(t, KindICMP, "127.0.0.1", opt).(*rawConn))
+		}
+		tx := cs[0].mx.tx
+		bad := append([]byte(nil), tx.protoCmsg...)
+		*(*int32)(unsafe.Pointer(&bad[unix.CmsgLen(0)])) = 0 // protocol 0: EINVAL, as an old kernel answers
+		fb := txFellBack.Load()
+		for round := 0; round < 200; round++ {
+			tx.protoCmsg = append([]byte(nil), bad...)
+			tx.noProto.Store(false)
+			var wg sync.WaitGroup
+			start := make(chan struct{})
+			for _, c := range cs {
+				wg.Add(1)
+				go func(c *rawConn) {
+					defer wg.Done()
+					<-start
+					if _, err := c.Write([]byte("x")); err != nil {
+						t.Error(err)
+					}
+				}(c)
+			}
+			close(start)
+			wg.Wait()
+			if !tx.ok() {
+				t.Fatalf("round %d: a refused IP_PROTOCOL turned the send-only socket off", round)
+			}
+			if !tx.noProto.Load() {
+				t.Fatalf("round %d: IP_PROTOCOL not dropped after the kernel refused it", round)
+			}
+			for i := 0; i < links; i++ {
+				readFromT(t, pc, 2*time.Second)
+			}
+		}
+		// Each sender retried without IP_PROTOCOL on the send-only socket;
+		// none was pushed to the shared socket by another's discovery.
+		if n := txFellBack.Load() - fb; n != 0 {
+			t.Fatalf("%d datagrams went to the shared socket because another carrier had dropped IP_PROTOCOL first", n)
+		}
+	})
+}
+
+// A firewall rule that refuses one datagram (EPERM) is that datagram's
+// trouble: it is reported as on the old path, and the send-only socket stays
+// in use once the rule is gone.
+func TestRawTxFirewallRefusalIsPerDatagram(t *testing.T) {
+	needRawNetns(t)
+	if _, err := exec.LookPath("nft"); err != nil {
+		t.Skip(err)
+	}
+	withRawTx(true, func() {
+		opt := Options{Key: []byte("eperm")}
+		pc := listenT(t, KindICMP, "127.0.0.1", opt)
+		c := dialT(t, KindICMP, "127.0.0.1", opt).(*rawConn)
+		c.Write([]byte("hello"))
+		readFromT(t, pc, 2*time.Second)
+		rules := "table ip hs2eperm {\n chain o {\n type filter hook output priority 0;\n icmp type echo-request drop\n }\n}\n"
+		cmd := exec.Command("nft", "-f", "-")
+		cmd.Stdin = strings.NewReader(rules)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Skipf("nft: %v %s", err, out)
+		}
+		_, werr := c.Write([]byte("dropped"))
+		exec.Command("nft", "delete", "table", "ip", "hs2eperm").Run()
+		if werr == nil || !errors.Is(werr, unix.EPERM) {
+			t.Logf("write under the drop rule: %v", werr)
+		}
+		if !c.mx.tx.ok() {
+			t.Fatal("one refused datagram turned the send-only socket off")
+		}
+		fb := txFellBack.Load()
+		c.Write([]byte("after"))
+		if got, _ := readFromT(t, pc, 2*time.Second); string(got) != "after" {
+			t.Fatalf("after the rule: %q", got)
+		}
+		if txFellBack.Load() != fb {
+			t.Fatal("after the rule the datagram did not go through the send-only socket")
+		}
+	})
+}
+
+// A full device queue drops a datagram silently on a raw socket (the kernel
+// reports success). The send-only socket has IP_RECVERR, so each such drop is
+// reported and counted (send_refused) — and the carrier carries on.
+func TestRawTxQueueDropsCounted(t *testing.T) {
+	needRawNetns(t)
+	if _, err := exec.LookPath("tc"); err != nil {
+		t.Skip(err)
+	}
+	withRawTx(true, func() {
+		opt := Options{Key: []byte("qdrop")}
+		listenT(t, KindICMP, "127.0.0.1", opt)
+		c := dialT(t, KindICMP, "127.0.0.1", opt).(*rawConn)
+		if out, err := exec.Command("tc", "qdisc", "add", "dev", "lo", "root", "tbf", "rate", "1mbit", "burst", "1600", "limit", "3000").CombinedOutput(); err != nil {
+			t.Skipf("tc: %v %s", err, out)
+		}
+		defer exec.Command("tc", "qdisc", "del", "dev", "lo", "root").Run()
+		ref := sendRefused.Load()
+		var batch [][]byte
+		for i := 0; i < 16; i++ {
+			batch = append(batch, bytes.Repeat([]byte{byte(i)}, 1200))
+		}
+		for i := 0; i < 20; i++ { // 320 datagrams at once into a 3000-byte queue
+			if err := c.WriteBatch(batch); err != nil {
+				t.Fatalf("a full device queue failed the link: %v", err)
+			}
+		}
+		if got := sendRefused.Load() - ref; got < 200 {
+			t.Fatalf("%d of 320 datagrams counted as refused behind a 3000-byte queue, want most", got)
+		}
+		if !c.mx.tx.ok() {
+			t.Fatal("queue drops turned the send-only socket off")
+		}
+	})
+}

@@ -674,11 +674,13 @@ type Stats struct {
 	// could use), the standing queue its controller sees and its smoothed
 	// RTT (seconds), the bytes waiting in the pacer now, and since start the
 	// time enqueue waited for pacer room, the time inside socket writes (the
-	// fd lock and the syscall), the write calls and the datagrams written.
+	// syscall, and the shared socket's lock where there is one), the write
+	// calls, and the datagrams and bytes written.
 	SendBytes, QueueSec, SRTT float64
 	PacerQueued               int64
 	PacerHeld, PacerWrite     time.Duration
 	PacerWrites, PacerSent    uint64
+	PacerSentBytes            uint64
 }
 
 // Pushing reports whether the carrier was offering at least most of its
@@ -745,6 +747,6 @@ func (c *Conn) Stats() Stats {
 		StageLimited: c.rc.stageLimited(),
 		SendBytes:    send, QueueSec: q, SRTT: srtt,
 		PacerQueued: pd.Queued, PacerHeld: pd.Held, PacerWrite: pd.Write,
-		PacerWrites: pd.Writes, PacerSent: pd.Sent,
+		PacerWrites: pd.Writes, PacerSent: pd.Sent, PacerSentBytes: pd.SentBytes,
 	}
 }

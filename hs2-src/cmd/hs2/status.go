@@ -523,7 +523,7 @@ func printStatus(path string) {
 		fmt.Printf("  cpu:        %s\n", cpuLine(ls))
 	}
 	if ls.HostOutDiscards > 0 {
-		fmt.Printf("  net:        the kernel discarded %d outgoing IP packet(s) on this server since hs2 started (Ip OutDiscards: a full interface queue; on raw carriers these are tunnel packets lost before the wire)\n", ls.HostOutDiscards)
+		fmt.Printf("  net:        %d outgoing IP packet(s) discarded on this server since hs2 started (Ip OutDiscards, every program: a full interface queue, a firewall's drop — and on an icmp listener the kernel's own reply to each tunnel packet, which the tunnel suppresses; this tunnel's own queue drops over icmp are in drops: \"refused by the kernel\")\n", ls.HostOutDiscards)
 	}
 	if ls.CertDays >= 0 {
 		fmt.Printf("  certificate: valid for %d more day(s)%s\n", ls.CertDays, certWarn(ls.CertDays))
