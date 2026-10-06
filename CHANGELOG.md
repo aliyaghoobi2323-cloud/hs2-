@@ -1338,7 +1338,7 @@ each read the queue they all built as its own.
   each carrier sees the round trip its reports really measured and the loss
   a full buffer caused), carriers joining a second apart: Jain's fairness
   index 0.45-0.91 → 0.99-1.00 over 30-60 s on paths of 20-120 ms round trip
-  (0.93-0.98 already 10-25 s after start), 0.43-0.56 → 0.81-0.88 on 160-240
+  (0.93-0.98 already 10-25 s after start), 0.43-0.55 → 0.78-0.87 on 160-240
   ms; queue p95 27-38 → 17-21 ms, utilization 99% both; eight carriers (the
   icmp ceiling) on 16-100 Mbit/s: 0.97-0.99, queue p95 20-21 ms, no drops. Lab (icmp, 4 carriers, 8 downloads behind a 30 Mbit/s tbf each
   way): ping under load p50 17-19 ms, p99 21-34 ms, no ping lost in any run

@@ -125,6 +125,7 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 	}
 	busyUntil := 0.0
 	var toPeer []pkt_
+	unsorted := false // toPeer got an arrival earlier than its last one (an own path)
 	var qs []float64
 	drops := 0
 	shareB, meanB, busyQ, nextShare := 0.0, 0.0, 0.0, 500.0
@@ -179,10 +180,16 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 						qs = append(qs, start-now)
 					}
 				}
+				if n := len(toPeer); n > 0 && *busy+ow < toPeer[n-1].arrive {
+					unsorted = true
+				}
 				toPeer = append(toPeer, pkt_{from: i, arrive: *busy + ow, bytes: pkt, sendMs: now})
 			}
 		}
-		sort.SliceStable(toPeer, func(a, b int) bool { return toPeer[a].arrive < toPeer[b].arrive })
+		if unsorted {
+			sort.SliceStable(toPeer, func(a, b int) bool { return toPeer[a].arrive < toPeer[b].arrive })
+			unsorted = false
+		}
 		for len(toPeer) > 0 && toPeer[0].arrive <= now {
 			d := toPeer[0]
 			toPeer = toPeer[1:]
