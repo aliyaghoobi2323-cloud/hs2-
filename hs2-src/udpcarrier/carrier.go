@@ -219,6 +219,11 @@ func (c *Conn) LaneMark() uint64 { return c.pacer.inQueued.Load() }
 // LaneDrained: see LaneMark.
 func (c *Conn) LaneDrained(mark uint64) bool { return c.pacer.inLeft.Load() >= mark }
 
+// NoteQueueDrop tells the rate model that the pool's send queue for this
+// carrier dropped a packet (full, or aged past its sojourn): a backlog the
+// pacer did not drain (see rateControl's stageHeadroom). Any goroutine.
+func (c *Conn) NoteQueueDrop() { c.rc.noteStageDrop() }
+
 // SendUrgent sends a data frame whose shards take the pacer's fast lane:
 // after FEC parity, ahead of the data queue (see pacer.fast). The pool uses
 // it for a packet of an interactive flow (engine/dgfq.go).
@@ -474,6 +479,7 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 	}
 	g := c.gov.Load()
 	c.rc.setShare(g.Share(), g.Mean(), g.BusyQueue())
+	c.rc.govCapped.Store(g.Capped())
 	c.rc.onFeedback(now, fb.rxDataBytes, rttSec, fb.lossPPM, fb.echoNanos, fb.owdTicks, fb.flags&fbOWD != 0)
 	loss := float64(fb.lossPPM) / 1e6
 	if g != nil {
@@ -661,6 +667,7 @@ type Stats struct {
 	FECAtCeiling bool    // parity is at its maximum: loss beyond what FEC is sized for
 	Startup      bool    // the rate model is still ramping (no capacity estimate yet)
 	Pushing      bool    // offered most of its allowance at the last feedback
+	StageLimited bool    // its send stage (CPU, socket), not the path, held it back lately
 
 	// The send stage (status): what the pacer sent over the last report
 	// (bytes/s, next to RateBytes: the share of its allowance the carrier
@@ -735,6 +742,7 @@ func (c *Conn) Stats() Stats {
 		FECAtCeiling: math.Float64frombits(c.lossEst.Load()) >= fec.DefaultAdapterConfig().Max-1e-9,
 		Startup:      startup,
 		Pushing:      c.rc.pushing.Load(),
+		StageLimited: c.rc.stageLimited(),
 		SendBytes:    send, QueueSec: q, SRTT: srtt,
 		PacerQueued: pd.Queued, PacerHeld: pd.Held, PacerWrite: pd.Write,
 		PacerWrites: pd.Writes, PacerSent: pd.Sent,

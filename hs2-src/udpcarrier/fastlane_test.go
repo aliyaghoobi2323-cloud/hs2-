@@ -203,3 +203,59 @@ func TestPacerDiag(t *testing.T) {
 		t.Fatalf("%d bytes still queued after everything was sent", d.Queued)
 	}
 }
+
+// A pacer whose writes come back late (a busy server: the pacer goroutine put
+// aside) loses everything past the 2 ms bucket cap each round, so it sends a
+// fraction of its allowance. When the rate model says the send stage holds
+// the carrier back (stageLimited), it keeps the credit of up to 10 ms of
+// lateness and sends about its allowance; any other carrier keeps the 2 ms
+// cap (TestPacerBatches).
+func TestPacerLateCreditOnlyWhenStageLimited(t *testing.T) {
+	run := func(stage bool) float64 {
+		rc := newRateControl()
+		rc.rate = 2e6 // 16 Mbit/s: ~1670 datagrams of 1200 bytes a second
+		rc.stageOn.Store(stage)
+		var mu sync.Mutex
+		sent := 0
+		p := newPacer(rc, func(b []byte) error { time.Sleep(6 * time.Millisecond); mu.Lock(); sent++; mu.Unlock(); return nil }, 512, nil)
+		defer p.close()
+		wb := func(bs [][]byte) error {
+			time.Sleep(6 * time.Millisecond) // every call returns late
+			mu.Lock()
+			sent += len(bs)
+			mu.Unlock()
+			return nil
+		}
+		p.writeBatch.Store(&wb)
+		stop := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				p.enqueue(make([]byte, 1200)) // always a backlog
+			}
+		}()
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		s0 := sent
+		mu.Unlock()
+		const window = 600 * time.Millisecond
+		time.Sleep(window)
+		mu.Lock()
+		s1 := sent
+		mu.Unlock()
+		close(stop)
+		return float64(s1-s0) * 1200 / window.Seconds() / rc.rate
+	}
+	off, on := run(false), run(true)
+	t.Logf("share of the allowance sent: %.2f with the 2 ms cap, %.2f with the late credit", off, on)
+	if off > 0.6 {
+		t.Fatalf("without the stage flag the pacer sent %.2f of its allowance: the 2 ms cap did not hold", off)
+	}
+	if on < 0.75 || on > 1.15 {
+		t.Fatalf("with the stage flag the pacer sent %.2f of its allowance, want about all of it and no more", on)
+	}
+}

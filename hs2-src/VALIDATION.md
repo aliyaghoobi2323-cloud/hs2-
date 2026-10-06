@@ -174,8 +174,8 @@ under the test's load it must stay at most ~80% busy, with tasks waiting for
 a core under ~20% (`hs2 doctor`'s `server cpu` says the same). If it says
 `SATURATED`, or another tunnel's traffic shares the server, the run is
 sender-bound: carriers that cannot send what they are allowed never push
-(`P`) and never leave the fast start (`S`), and the `sending:` line shows
-the writers waiting for pacer room. Record such a run as CPU-bound (with the
+(`P`); they show `C` (held back by their send stage; before Phase X they
+stayed in the fast start, `S`), and `s` stays well under `r`. Record such a run as CPU-bound (with the
 `cpu:`, `sending:`, `pool:` and `carriers:` lines), do not count it for or
 against what is being tested, and stop the other tunnel's traffic if you can.
 
@@ -226,8 +226,8 @@ the time per write (the shared socket's lock plus the system call) with the
 datagrams each carried. Writers wait for pacer room whenever the carriers
 are the limit, on a full path as on a starved sender, so that share alone
 tells nothing. Path-bound: `P` set (`s` close to `r`), `q` 5-20 ms.
-Sender-bound: `S` without `P` (`s` well under `r`), `q` under 5 ms, and the
-`cpu:` line saturated. `net:` (the kernel's output
+Sender-bound: `C` (or, on a build before Phase X, `S`) without `P` (`s`
+well under `r`), `q` under 5 ms, and the `cpu:` line saturated. `net:` (the kernel's output
 discards) growing during a run means the interface queue overflowed: on
 icmp those are tunnel packets the peer counts as path loss.
 

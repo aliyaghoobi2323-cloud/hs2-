@@ -413,14 +413,16 @@ carrier: `id:state:sent/loss% rRATE/bwBTLBW FLAGS sSENT qQUEUE/SRTT` —
 packets this side handed the carrier, the loss of what it sends as the other
 server reports it, its pacing allowance `r`, the most it was seen to deliver
 `bw` and what it really sent `s` (Mbit/s), the flags `P` (it sent at least
-80% of its allowance at the last report), `S` (still in its fast start), `M`
-(mute: it, or the other server, hears nothing on it) or `-`, and the queue
+80% of its allowance at the last report), `S` (still in its fast start), `C`
+(its send stage — the CPU — not the path held it back lately), `M` (mute:
+it, or the other server, hears nothing on it) or `-`, and the queue
 its rate control sees on the path and its smoothed round trip (ms). Above 32
 carriers the line gives the counts and the 10 with the most loss. In the fast
 start `r` is an allowance, not a measurement: a carrier flagged `S` without
 `P` keeps the last value it reached, so `r` far above `s` there means the
-sender sent less than it was allowed (short of data or of CPU), not that the
-path takes it. So a field test can see exactly where packets are lost.
+sender sent less than it was allowed (short of data), not that the path
+takes it; a carrier short of CPU shows `C` instead, its `r` within about
+twice its `s`. So a field test can see exactly where packets are lost.
 
 **Where the send stage waits.** `hs2 status`'s `sending:` line (status
 file: `send_mbit`, `send_held_pct`, `fq_wait_ms`, `write_us`, `per_write`)
@@ -476,7 +478,21 @@ shared clock, so the queue really empties when they measure. Behind a 30
 Mbit/s bottleneck with 8 downloads over 4 carriers, ping through the tun
 under load was 17-19 ms (p50) and at most 34 ms (p99) in every run, where it
 had ranged from 11 to 114 ms with some runs losing up to a quarter of the
-pings. `HS2_FAIR_SHARE=0` turns the three rules off.
+pings.
+
+A fourth rule is for a sending server short of CPU, where the path is not
+the limit at all. Its carriers' pacers cannot keep up with their own rate, so
+no carrier ever used its allowance: all stayed in their fast start, with an
+allowance up to 18 times what they sent. Now a carrier that does not use its
+allowance while its send queue drops packets, or its writer waits for room
+in its pacer for a quarter of the time or more, is held back by its send
+stage (flag `C` in the `carriers` line): it leaves its fast start, its
+allowance stays within twice what it really sends, its pacer keeps the
+credit of a late wake-up (up to 10 ms) instead of losing everything past
+2 ms, and once the CPU lets go it regrows 25% per report until a queue
+appears. In the lab, with the sender held to 0.6 of a core, that carried 27%
+more (212 → 270 Mbit/s) with 30% less CPU per Mbit/s; a path-bound pool is
+unchanged. `HS2_FAIR_SHARE=0` turns all four rules off.
 
 **Less CPU per gigabyte.** On a small server the datagram tun's limit is
 usually the CPU, and most of it went on system calls: one per datagram on the

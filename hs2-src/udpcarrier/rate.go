@@ -58,7 +58,7 @@ import (
 // (deliveryCap × the mean delivery under a policer).
 //
 // The carriers of one pool share the path's bottleneck, and each one's queue
-// signal is the queue they ALL build. Three rules keep them from fighting
+// signal is the queue they ALL build. Four rules keep them from fighting
 // over it (rateControl.fair; HS2_FAIR_SHARE=0 turns them off):
 //
 //   - startup also ends once a queue has stood for startupQueueRuns reports
@@ -101,6 +101,12 @@ import (
 //     while the others kept the queue full saw a base with the queue in it.
 //     The clock runs on the monotonic time, and probes stay at least 3/4 of
 //     a period apart.
+//   - a carrier its send stage holds back — a sender short of CPU, whose
+//     pacer cannot keep up with its own rate — is not left in startup with
+//     an allowance that means nothing (see stageHeadroom): it leaves
+//     startup, its allowance stays within twice what got out, its pacer
+//     keeps a late wake-up's credit (pacerLateCredit), and once the stage
+//     lets go it regrows fast until a queue stands.
 type rateControl struct {
 	mu sync.Mutex
 
@@ -183,6 +189,25 @@ type rateControl struct {
 	// allowed, so a loss then could be rate-caused. When it is false the
 	// carrier is simply lightly loaded and its loss says nothing about a cap.
 	pushing atomic.Bool
+
+	// The send stage (see stageHeadroom). stageDrops counts the packets the
+	// pool's send queue for this carrier dropped (full, or aged past its
+	// sojourn) since the last report — added by the engine
+	// (Conn.NoteQueueDrop), taken here; stageHeld the time its writer waited
+	// for room in the pacer (nanoseconds, added by the pacer). govCapped: the pool's policer cap
+	// is on (its budget, not this carrier's send stage, holds it back).
+	// sendAvg: what the pacer sent, EWMA per report (bytes/s). stageRate:
+	// what got out at the last report the send stage held the carrier back
+	// (bytes/s; 0: none since a queue last stood); stageAt: that report;
+	// stageOn: the send stage held it back within stageHold (the pacer's
+	// late credit and the status's C flag).
+	stageDrops atomic.Uint64
+	stageHeld  atomic.Int64
+	govCapped  atomic.Bool
+	sendAvg    float64
+	stageRate  float64
+	stageAt    time.Time
+	stageOn    atomic.Bool
 }
 
 type bwSample struct {
@@ -247,6 +272,24 @@ const (
 	fairPull         = 0.10                    // per report: this share of the gap below the fair share
 	fairOwnMax       = 0.03                    // per report: never more than this share of its own capacity
 	bwStaleAge       = 1500 * time.Millisecond // while a queue stands, older peaks go (see onFeedback)
+	// The send stage — the CPU, the socket — as the bottleneck: the carrier
+	// has a backlog its pacer does not drain (its send queue drops) while it
+	// does not use its allowance. Startup counts such a report like a
+	// limited one (plateau, backstop) and leaves with capEst at
+	// stageHeadroom x what got out; after startup capEst stays within that
+	// while the stage holds the carrier back, and once it lets go (limited,
+	// no queue) capEst regrows by stageRegrow per report — per round trip on
+	// paths over 100 ms — instead of probeGrow, until a queue stands. Before,
+	// every carrier of a sender short of CPU stayed in startup with an
+	// allowance 2.9-18x what it sent (field report, Phase X).
+	stageHeadroom = 2.0
+	stageRegrow   = 1.25
+	sendAvgAlpha  = 0.25
+	stageHold     = 2 * time.Second
+	// stageHeldMin: the writer waited for pacer room at least this share of
+	// a report while the carrier did not use its allowance — the pacer could
+	// not keep up with its own rate (a sender short of CPU), not the path.
+	stageHeldMin = 0.25
 	// No fair-share growth while the queue stands above this: a carrier whose
 	// own path is slower than the share (a pool over several IPs) stops there
 	// instead of being pushed into its buffer.
@@ -444,6 +487,17 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 	limited := sendRate >= limitedShare*r.rate
 	r.pushing.Store(limited)
 	r.lastSendRate = sendRate
+	if r.sendAvg == 0 {
+		r.sendAvg = sendRate
+	}
+	r.sendAvg += sendAvgAlpha * (sendRate - r.sendAvg)
+	// Held back by the send stage: a backlog the pacer did not take — the
+	// pool's send queue dropped, or the writer waited for pacer room for
+	// much of the report — while the allowance went unused; and not under
+	// the pool's policer budget, which holds it back on purpose (nor in a
+	// base probe: see adjustLocked).
+	held := float64(r.stageHeld.Swap(0)) / 1e9 / dt
+	stage := (r.stageDrops.Swap(0) > 0 || held >= stageHeldMin) && r.fair && !limited && !r.govCapped.Load()
 	if limited || dRate > r.btlBw {
 		r.round++
 		r.bwWindow = append(r.bwWindow, bwSample{rate: dRate, round: r.round, limited: limited, at: now})
@@ -472,7 +526,11 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 		r.recomputeBtlBw()
 	}
 
-	r.adjustLocked(now, dt, dRate, limited, q, haveQ)
+	if stage {
+		r.stageAt = now
+	}
+	r.adjustLocked(now, dt, dRate, limited, stage, q, haveQ)
+	r.stageOn.Store(r.stageRate > 0 && now.Sub(r.stageAt) < stageHold)
 }
 
 func (r *rateControl) recomputeBtlBw() {
@@ -482,10 +540,14 @@ func (r *rateControl) recomputeBtlBw() {
 	}
 }
 
-func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited bool, q float64, haveQ bool) {
+func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited, stage bool, q float64, haveQ bool) {
 	if haveQ {
 		r.queue = q
 	}
+	// A base probe turns the rate down on purpose: what it holds back is not
+	// the send stage's doing.
+	probing := now.Before(r.probeEnd.Add(time.Duration((r.srtt + 2*feedbackEvery.Seconds()) * float64(time.Second))))
+	stage = stage && !probing
 	loss := math.Min(float64(r.lastLossPPM)/1e6, 1)
 	// The path's own random loss, which the pacing rate compensates for so
 	// random loss is not mistaken for a lack of capacity: the long-run
@@ -533,8 +595,9 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		// that simply had little to send. Counting idle reports too ended
 		// startup after ~10 s of light load (a pool carrier with only ACKs or
 		// keepalives on it), and the next flow hashed onto it then crawled up
-		// from the floor instead of ramping.
-		if limited {
+		// from the floor instead of ramping. A report the send stage held
+		// back counts too (see stageHeadroom).
+		if limited || stage {
 			r.startRounds++
 		}
 		if haveQ && q > lowQueue.Seconds() {
@@ -574,7 +637,7 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		if !now.Before(r.plateauAt) {
 			if r.btlBw > r.lastDRate*1.25 {
 				r.plateauRuns = 0
-			} else if limited {
+			} else if limited || stage {
 				r.plateauRuns++
 			}
 			r.lastDRate = math.Max(r.lastDRate, r.btlBw)
@@ -594,10 +657,15 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 			r.capEst = math.Max(math.Max(dComp, r.btlBw*comp), 2*r.minRate)
 			switch {
 			case limited:
-			case queueFull:
+			case queueFull || (stage && haveQ && q >= lowQueue.Seconds()):
 				// The standing queue says the path gives us what we got —
 				// not the allowance, which ran ahead of it unused.
 				r.capEst = math.Max(math.Max(dComp, capFloorFrac*r.btlBw*comp), 2*r.minRate)
+			case stage:
+				// The send stage, not the path, held it back: the allowance
+				// it did not use is no capacity estimate.
+				r.stageRate = math.Max(dComp, r.sendAvg)
+				r.capEst = math.Max(stageHeadroom*r.stageRate, 2*r.minRate)
 			default:
 				r.capEst = math.Max(r.capEst, r.rate)
 			}
@@ -610,10 +678,21 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		return
 	}
 
+	// The send stage: a queue standing while the carrier uses its allowance
+	// makes the path the limit again (ordinary probing) — not one it does
+	// not fill itself (another tunnel's burst says nothing of its own send
+	// stage); a report the stage held back keeps capEst within
+	// stageHeadroom of what got out.
+	switch {
+	case limited && haveQ && q >= lowQueue.Seconds():
+		r.stageRate = 0
+	case stage:
+		r.stageRate = math.Max(dComp, r.sendAvg)
+		r.capEst = math.Min(r.capEst, math.Max(stageHeadroom*r.stageRate, 2*r.minRate))
+	}
 	// Samples taken during a base probe (and until its effect has come back)
 	// show an emptied queue on purpose: they refresh the base but say nothing
 	// about spare capacity.
-	probing := now.Before(r.probeEnd.Add(time.Duration((r.srtt + 2*feedbackEvery.Seconds()) * float64(time.Second))))
 	if haveQ && q >= lowQueue.Seconds() {
 		r.lastQueueAt = now
 	}
@@ -645,7 +724,12 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 			// No queue for a while although we use the allowance: there may
 			// be more capacity (cross traffic left, a faster path) — probe
 			// gently, at most probeGrow per report however short the RTT.
-			if r.emptyRuns++; r.emptyRuns >= 2 {
+			if r.emptyRuns++; r.stageRate > 0 {
+				// The send stage let go: regrow fast while no queue stands —
+				// an allowance cut to what a busy CPU let out is no estimate
+				// of the path (see stageHeadroom).
+				r.capEst *= math.Pow(stageRegrow, math.Min(scale, 1))
+			} else if r.emptyRuns >= 2 {
 				r.capEst *= math.Pow(probeGrow, math.Min(scale, 1))
 			}
 		}
@@ -789,6 +873,18 @@ func (r *rateControl) srttSec() float64 {
 // rateSnapshot exposes the current pacing rate in bytes/s (for status/diagnosis:
 // seeing a carrier pinned at a low rate while the path is healthy is the signal
 // for an after-idle ramp stall).
+// noteStageDrop records a packet the pool's send queue for this carrier
+// dropped (the engine; any goroutine).
+func (r *rateControl) noteStageDrop() { r.stageDrops.Add(1) }
+
+// noteStageHeld records time the carrier's writer waited for pacer room (the
+// pacer; any goroutine).
+func (r *rateControl) noteStageHeld(d time.Duration) { r.stageHeld.Add(int64(d)) }
+
+// stageLimited: the send stage, not the path, held the carrier back within
+// stageHold (see stageHeadroom).
+func (r *rateControl) stageLimited() bool { return r.stageOn.Load() }
+
 func (r *rateControl) rateSnapshot() float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()

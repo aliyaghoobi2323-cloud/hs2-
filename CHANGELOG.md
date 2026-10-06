@@ -1587,6 +1587,50 @@ each read the queue they all built as its own.
   so no thread is put aside holding the lock there. The field measurement
   compares it on and off.
 
+### X6 — a carrier its send stage holds back (the rate control)
+- **The signal.** A carrier that does not use its allowance (under 80% of
+  it) while the pool's send queue for it drops packets, or its writer waits
+  for room in its pacer for a quarter of the report or more, is held back
+  by its send stage — the CPU, the socket — not by the path. Not under the
+  pool's policer cap (its budget holds carriers back on purpose), not in a
+  base probe (the rate is turned down on purpose there: a path-bound
+  carrier's writer waits all the time), and only with the pool rules on.
+- **What it changes.** Startup counts such a report like one that used the
+  allowance, and leaves with the capacity estimate at twice what got out
+  (not the allowance startup had reached: 2.9-18x what was sent); after
+  startup the estimate stays within twice what gets out while the stage
+  holds the carrier back; once it lets go (the allowance used, no queue),
+  the estimate regrows 25% per report — per round trip on paths over 100
+  ms — until a queue stands while the carrier uses its allowance (a queue
+  another tunnel's burst puts on the path while this carrier is held back
+  says nothing of its send stage, and no longer ends the regrowth). The
+  pacer of such a carrier, with data waiting, keeps the credit of up to 10
+  ms of a late wake-up instead of losing everything past 2 ms — on a busy
+  server the 2 ms cap alone held a pacer to ~0.3-0.5x its rate; every other
+  pacer keeps the 2 ms cap. `hs2 status` flags such a carrier `C`.
+- **Measured.** Unit tests (startup exit within 7 reports and an allowance
+  within 2.1x, the regrowth, nothing changed while the allowance is used,
+  under the policer cap, or in a base probe; mutations of the probe rule and
+  of the wait signal caught); the pacer at a 6 ms late wake-up sends 0.28 of
+  its allowance with the cap and 0.95 with the credit. Simulator (a sender
+  of limited CPU, Reno flows, the fair queue and the single writer): no
+  carrier left in startup (all, before), the allowance at most 2.3x what
+  got out (up to 6.4x), throughput the same while CPU-bound, after the CPU
+  frees 0-86 path drops (0-477) and 166-168 against 174-177 Mbit/s on the
+  plain scenario. Lab (`lab/cpuquota.sh`, 0.6 core, 5 interleaved pairs
+  against the build before): 212 → 270 Mbit/s (ahead in every pair), 371 →
+  484 Mbit/s per CPU-second, carriers `C` with an allowance 1.4-1.6x what
+  they send; ping p99 under that load 21 → 29 ms — the same CPU now moves
+  27% more, and the receive path waits longer for it: at the same
+  throughput (157 Mbit/s) ping is no worse (p50 1.5-1.7 against 2.0-3.0
+  ms). Behind a 30 Mbit/s path nothing changes (carriers `P`, `q` 15-18 ms,
+  the same throughput and ping), and with `HS2_FAIR_SHARE=0` the build
+  behaves as the one before.
+- Cost: after the CPU frees, a carrier on a path that other traffic fills
+  now and then regrows more slowly than with no rule (simulator: 66-89
+  against 79-140 Mbit/s, where the rule-less carriers release their stale
+  allowance into the path's buffer: up to 477 drops).
+
 ### X2 — documentation brought in line with the code
 - The rate controller's description (`udpcarrier/rate.go`) named a
   `highQueue` hold band and 25%/6% growth that no longer exist: it now says

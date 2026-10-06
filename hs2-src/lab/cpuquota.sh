@@ -30,6 +30,8 @@
 #   SHARE [unset: a fraction of the Kharej CPUs, instead of QUOTA]
 #   CPUS_K [0,1] CPUS_I [2,3] LINKS [4: min_links = max_links]
 #   CONNS [8 downloads] DUR [30 s] RATE [none: a tbf on the Kharej egress]
+#   CONNRATE [100000000: bytes/s each download offers; lower it to compare
+#   builds at the same throughput]
 #   TRACE [0: 1 = a 5 s Go execution trace of the Kharej hs2 under load]
 #   KENV / IENV ["": extra VAR=value for the Kharej / Iran hs2, space-separated]
 #   W [/tmp/hs2cpuq] LAB_ID [""]
@@ -43,7 +45,7 @@ A=cqi$ID B=cqk$ID VA=cqA$ID VB=cqB$ID
 ENCAP=${ENCAP:-icmp} QUOTA=${QUOTA:-0.6} PERIOD_US=${PERIOD_US:-10000} SHARE=${SHARE:-}
 [ -n "$SHARE" ] && QUOTA=0
 CPUS_K=${CPUS_K:-0,1} CPUS_I=${CPUS_I:-2,3} LINKS=${LINKS:-4}
-CONNS=${CONNS:-8} DUR=${DUR:-30} RATE=${RATE:-} TRACE=${TRACE:-0}
+CONNS=${CONNS:-8} DUR=${DUR:-30} CONNRATE=${CONNRATE:-100000000} RATE=${RATE:-} TRACE=${TRACE:-0}
 CG="" CGH=""
 
 cleanup(){
@@ -146,7 +148,7 @@ odisc(){ ip netns exec $B awk '/^Ip:/{if(h){print $(i)}else{for(i=1;i<=NF;i++)if
 thr(){ if [ -z "$CG" ]; then echo 0; elif [ -f "$CG/cpu.stat" ]; then awk '/^nr_throttled/{print $2}' "$CG/cpu.stat"; fi; }
 ip netns exec $A taskset -c "$CPUS_I" ping -c 40 -i 0.05 -W 2 10.142.0.2 > "$W/ping_idle.txt" 2>&1
 
-ip netns exec $B taskset -c "$CPUS_I" python3 "$D/tcpload.py" server 10.142.0.2 30425 100000000 & echo $! >> "$W/pids"
+ip netns exec $B taskset -c "$CPUS_I" python3 "$D/tcpload.py" server 10.142.0.2 30425 "$CONNRATE" & echo $! >> "$W/pids"
 sleep 0.5
 k0=$(ticks "$KPID"); s0=$(sticks "$KPID"); o0=$(odisc); h0=$(thr); t0=$(date +%s.%N)
 ip netns exec $A taskset -c "$CPUS_I" python3 "$D/tcpload.py" client 10.142.0.2 30425 "$CONNS" "$DUR" "$W/load.json" & LP=$!

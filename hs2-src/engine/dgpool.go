@@ -366,6 +366,7 @@ const (
 func (l *dgLink) enqueue(b *[]byte, flow uint32, now time.Time) (ok bool, displaced *[]byte) {
 	if d := l.fq.push(qpkt{b, now}, flow); d != nil {
 		l.droppedAt.Store(now.UnixNano())
+		l.noteQueueDrop()
 		if d.b == b {
 			return false, nil
 		}
@@ -373,6 +374,14 @@ func (l *dgLink) enqueue(b *[]byte, flow uint32, now time.Time) (ok bool, displa
 	}
 	l.noteFlowSend(flow, len(*b), now)
 	return true, displaced
+}
+
+// noteQueueDrop tells the carrier's rate model its send queue dropped a
+// packet: a backlog its pacer did not drain (udpcarrier.Conn.NoteQueueDrop).
+func (l *dgLink) noteQueueDrop() {
+	if n, ok := l.car.(interface{ NoteQueueDrop() }); ok {
+		n.NoteQueueDrop()
+	}
 }
 
 func (l *dgLink) noteFlowSend(flow uint32, n int, now time.Time) {
@@ -429,6 +438,7 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 			// as pressure, or a starved carrier reads as "not at its limit"
 			// and the pool shrinks under exactly the load that needs it.
 			l.droppedAt.Store(time.Now().UnixNano())
+			l.noteQueueDrop()
 			drops.Add(1)
 			aged.Add(1)
 			pool.Put(p.b)
@@ -1821,10 +1831,11 @@ func (d *sendDiag) fill(ps *PoolStats) {
 // and the queue its rate control sees on the path and its smoothed round trip
 // (ms) — enough to see which carrier loses AND whether one is pinned at a low
 // rate while the path is healthy (the after-idle ramp-stall signature). Flags:
-// P=pushing (offered its allowance), S=startup (still ramping), M=mute (it, or
-// the other server, hears nothing on it while others do). A carrier stuck at a
-// low rate with P set and loss ~0 is the sender throttling itself, not the
-// path; S without P and s far below r is a sender short of data or of CPU.
+// P=pushing (offered its allowance), S=startup (still ramping), C=its send
+// stage (the CPU, the socket), not the path, held it back lately, M=mute (it,
+// or the other server, hears nothing on it while others do). A carrier stuck
+// at a low rate with P set and loss ~0 is the sender throttling itself, not
+// the path.
 func (p *dgPool) carrierLine() string {
 	type statser interface{ Stats() udpcarrier.Stats }
 	p.mu.RLock()
@@ -1887,6 +1898,9 @@ func (p *dgPool) carrierLine() string {
 			}
 			if s.Startup {
 				flags += "S"
+			}
+			if s.StageLimited {
+				flags += "C"
 			}
 			if l.avoid(p.now()) {
 				flags += "M"

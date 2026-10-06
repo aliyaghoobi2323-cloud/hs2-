@@ -89,6 +89,16 @@ const pacerBatch = 16
 // 25 KB — 2 ms of line rate, far below any buffer that would add latency.
 const pacerQuantum = 2 * time.Millisecond
 
+// pacerLateCredit: a pacer whose carrier its send stage holds back (the
+// rate model's stageLimited: a sender short of CPU), with data waiting, keeps
+// the credit of up to this much of a late wake-up — a timer that fired late,
+// the goroutine put aside on a busy server — instead of pacerQuantum's. The
+// 2 ms cap threw the rest away and held such a pacer to ~0.5x its rate
+// whatever the rate said. Any other pacer, and an idle one, keeps the cap:
+// its burst stays two timer wake-ups (an allowance cut to twice what got out
+// bounds this one's).
+const pacerLateCredit = 10 * time.Millisecond
+
 func newPacer(rc *rateControl, write func([]byte) error, queueDepth int, stamps *atomic.Bool) *pacer {
 	if queueDepth < 64 {
 		queueDepth = 64
@@ -143,7 +153,9 @@ func (p *pacer) enqueueLane(pkt []byte, urgent bool) {
 				case <-p.room:
 				}
 			}
-			p.heldNs.Add(int64(time.Since(t0)))
+			d := time.Since(t0)
+			p.heldNs.Add(int64(d))
+			p.rc.noteStageHeld(d)
 		}
 	}
 	p.queued.Add(int64(len(b)))
@@ -158,7 +170,11 @@ func (p *pacer) enqueueLane(pkt []byte, urgent bool) {
 			return
 		case dst <- b:
 		}
-		p.heldNs.Add(int64(time.Since(t0)))
+		d := time.Since(t0)
+		p.heldNs.Add(int64(d))
+		if dst == p.in {
+			p.rc.noteStageHeld(d)
+		}
 	}
 	atomic.AddUint64(&p.enqueued, 1)
 	if dst == p.in {
@@ -199,6 +215,7 @@ func (p *pacer) loop() {
 	for {
 		var b []byte
 		fromIn := false
+		waiting := true // data was waiting when this round began (not idle)
 		if carry != nil {
 			b, fromIn, carry = carry.b, carry.fromIn, nil
 		} else {
@@ -217,6 +234,7 @@ func (p *pacer) loop() {
 				case b = <-p.pri:
 				case b = <-p.fast:
 				default:
+					waiting = false
 					select {
 					case <-p.done:
 						return
@@ -237,6 +255,10 @@ func (p *pacer) loop() {
 		// ~1 ms, so a 2-datagram cap would limit ANY carrier to ~2 datagrams
 		// per millisecond (~20 Mbit/s) whatever the path could take.
 		maxBurst := math.Max(2*float64(len(b)+64), rate*pacerQuantum.Seconds())
+		late := waiting && p.rc.stageLimited()
+		if late {
+			maxBurst = math.Max(maxBurst, rate*math.Min(now.Sub(last).Seconds(), pacerLateCredit.Seconds()))
+		}
 		if tokens > maxBurst {
 			tokens = maxBurst
 		}
@@ -261,8 +283,13 @@ func (p *pacer) loop() {
 			}
 			now = time.Now()
 			// A timer that fires late (a busy server) must not hand the
-			// batch below more than the cap either.
-			tokens = math.Min(tokens+now.Sub(last).Seconds()*rate, maxBurst)
+			// batch below more than the cap either — the late credit's for
+			// a carrier its send stage holds back (pacerLateCredit).
+			lim := maxBurst
+			if late {
+				lim = math.Max(lim, rate*math.Min(now.Sub(last).Seconds(), pacerLateCredit.Seconds()))
+			}
+			tokens = math.Min(tokens+now.Sub(last).Seconds()*rate, lim)
 			last = now
 		}
 		tokens -= need
