@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"encoding/binary"
 	"testing"
 )
 
@@ -128,4 +129,74 @@ func BenchmarkReplayWindowSequential(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		w.check(uint64(i))
 	}
+}
+
+// AppendDatagram is SealDatagram's frame without the masked length, behind
+// the sequence: byte for byte, for every padding, and appended after what
+// dst already holds — so the wire is the same as before it existed.
+func TestAppendDatagramMatchesSealDatagram(t *testing.T) {
+	secret := bytes.Repeat([]byte{7}, 32)
+	a, err := NewSession(secret, true, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := NewSession(secret, true, 1)
+	srv, _ := NewSession(secret, false, 1)
+	for i, c := range []struct{ n, pad int }{{0, 0}, {1, 0}, {100, 0}, {100, 400}, {1300, 1200}, {1400, 1400}} {
+		payload := bytes.Repeat([]byte{byte(i + 1)}, c.n)
+		seq, frame, err := a.SealDatagram(TypeData, 3, payload, c.pad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := binary.BigEndian.AppendUint64(nil, seq)
+		want = append(want, frame[lenPrefix:]...)
+		prefix := []byte{0xaa, 0xbb}
+		dst := append(make([]byte, 0, 4), prefix...) // too small: must grow and keep the prefix
+		got, err := b.AppendDatagram(dst, TypeData, 3, payload, c.pad)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got[:2], prefix) || !bytes.Equal(got[2:], want) {
+			t.Fatalf("case %d: AppendDatagram differs from SealDatagram's frame", i)
+		}
+		if len(got)-2 != DatagramLen(c.n, c.pad) {
+			t.Fatalf("case %d: DatagramLen %d, appended %d", i, DatagramLen(c.n, c.pad), len(got)-2)
+		}
+		big := make([]byte, 0, 2048) // room enough: written in place, no new buffer
+		got2, _ := a.AppendDatagram(big, TypeData, 3, payload, c.pad)
+		if &got2[0] != &big[:1][0] {
+			t.Fatalf("case %d: a buffer with room was not used in place", i)
+		}
+		seq2 := binary.BigEndian.Uint64(got2[:8])
+		ft, fl, p, err := srv.OpenDatagram(seq2, got2[8:])
+		if err != nil || ft != TypeData || fl != 3 || !bytes.Equal(p, payload) {
+			t.Fatalf("case %d: the peer cannot open it: %v", i, err)
+		}
+		b.AppendDatagram(nil, TypeData, 0, nil, 0) // keep b's sequence with a's
+	}
+	if _, err := a.AppendDatagram(nil, TypeData, 0, make([]byte, maxPayload+1), 0); err == nil {
+		t.Fatal("an oversized payload was sealed")
+	}
+}
+
+func BenchmarkSealDatagram(b *testing.B) {
+	s, _ := NewSession(bytes.Repeat([]byte{7}, 32), true, 1)
+	payload := make([]byte, 1300)
+	var scr []byte
+	b.Run("SealDatagram+pack", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		for i := 0; i < b.N; i++ {
+			seq, frame, _ := s.SealDatagram(TypeData, 0, payload, 0)
+			scr = binary.BigEndian.AppendUint64(scr[:0], seq)
+			scr = append(scr, frame[lenPrefix:]...)
+		}
+	})
+	b.Run("AppendDatagram", func(b *testing.B) {
+		b.ReportAllocs()
+		b.SetBytes(int64(len(payload)))
+		for i := 0; i < b.N; i++ {
+			scr, _ = s.AppendDatagram(scr[:0], TypeData, 0, payload, 0)
+		}
+	})
 }

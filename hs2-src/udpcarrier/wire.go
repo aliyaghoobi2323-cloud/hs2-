@@ -10,33 +10,15 @@ import (
 //
 //	[seq:8][ciphertext]
 //
-// core.SealDatagram returns the sealed frame as [maskedLen:2][ciphertext]; the
-// masked length is only needed by the stream reader to find a frame boundary in
-// a byte stream. Datagrams keep their own boundaries, so we drop it and instead
-// prepend the explicit 8-byte sequence the receiver needs to unmask and decrypt
-// (datagrams arrive out of order, so it cannot be inferred). The whole thing is
-// one FEC payload; FEC adds its 9-byte shard header on top.
+// core.Session.AppendDatagram writes exactly this: the stream frame's masked
+// length is only needed by a stream reader to find a frame boundary in a byte
+// stream, so a datagram leaves it out and instead carries the explicit 8-byte
+// sequence the receiver needs to unmask and decrypt (datagrams arrive out of
+// order, so it cannot be inferred). The whole thing is one FEC payload; FEC
+// adds its 9-byte shard header on top.
 const seqLen = 8
 
 var errShortDatagram = errors.New("udpcarrier: datagram shorter than its sequence")
-
-// packDatagram builds seq(8) || ct from the sealed frame core returns. It
-// writes into dst (reused across sends under the carrier's send mutex) and
-// returns the filled slice.
-func packDatagram(dst []byte, seq uint64, sealed []byte) []byte {
-	// sealed is [maskedLen:2][ct]; keep only ct.
-	ct := sealed
-	if len(sealed) >= 2 {
-		ct = sealed[2:]
-	}
-	if cap(dst) < seqLen+len(ct) {
-		dst = make([]byte, seqLen+len(ct))
-	}
-	dst = dst[:seqLen+len(ct)]
-	binary.BigEndian.PutUint64(dst[:seqLen], seq)
-	copy(dst[seqLen:], ct)
-	return dst
-}
 
 // unpackDatagram splits seq(8) || ct back apart.
 func unpackDatagram(b []byte) (seq uint64, ct []byte, err error) {

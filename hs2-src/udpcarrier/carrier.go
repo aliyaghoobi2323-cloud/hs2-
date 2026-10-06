@@ -72,8 +72,6 @@ type Conn struct {
 	// peer's delay measurement reads. Sealing itself is concurrency-safe.
 	sendMu   sync.Mutex
 	sendScr  []byte // reused data seq||ct scratch, guarded by sendMu
-	ctrlMu   sync.Mutex
-	ctrlScr  []byte // reused control seq||ct scratch, guarded by ctrlMu
 	closeOne sync.Once
 
 	// liveness
@@ -241,13 +239,12 @@ func (c *Conn) sendDataLane(payload []byte, urgent bool) error {
 		return err
 	}
 	c.sendMu.Lock()
-	seq, sealed, err := c.sess.SealDatagram(core.TypeData, 0, payload, c.dgPadTo(len(payload)))
+	wire, err := c.sess.AppendDatagram(c.sendScr[:0], core.TypeData, 0, payload, c.dgPadTo(len(payload)))
 	if err != nil {
 		c.sendMu.Unlock()
 		return err
 	}
-	c.sendScr = packDatagram(c.sendScr, seq, sealed)
-	wire := c.sendScr
+	c.sendScr = wire
 	now := time.Now()
 	err = c.enc.Encode(wire, now, func(pkt []byte) { c.pacer.enqueueLane(pkt, urgent) })
 	c.sendMu.Unlock()
@@ -262,15 +259,14 @@ func (c *Conn) sendControl(ftype byte, payload []byte) error {
 		return errClosed
 	default:
 	}
-	c.ctrlMu.Lock()
-	seq, sealed, err := c.sess.SealDatagram(ftype, 0, payload, c.dgPadTo(len(payload)))
+	// A fresh buffer: the frame is written after the lock is released.
+	pad := c.dgPadTo(len(payload))
+	dg := make([]byte, 1, 1+core.DatagramLen(len(payload), pad))
+	dg[0] = tagCtrl
+	dg, err := c.sess.AppendDatagram(dg, ftype, 0, payload, pad)
 	if err != nil {
-		c.ctrlMu.Unlock()
 		return err
 	}
-	c.ctrlScr = packDatagram(c.ctrlScr[:0:cap(c.ctrlScr)], seq, sealed)
-	dg := append([]byte{tagCtrl}, c.ctrlScr...)
-	c.ctrlMu.Unlock()
 	return c.write(dg)
 }
 

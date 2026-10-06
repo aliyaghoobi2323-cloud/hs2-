@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -80,6 +81,12 @@ func (c *Config) fill() {
 }
 
 // Encoder produces shard packets. It is safe for concurrent use.
+//
+// Encode and Flush hold mu while emit runs, and emit may block (a carrier's
+// pacer applies backpressure there). So what other goroutines need while a
+// writer waits — the loss estimate the feedback sets, the counters and the
+// parity ratio the status reads — is kept outside mu: a report or a status
+// sample never waits behind a writer held back by its pacer.
 type Encoder struct {
 	cfg    Config
 	codecs codecs
@@ -88,8 +95,11 @@ type Encoder struct {
 	lanes []*txGroup // open groups; len is the current depth
 	cur   int
 	next  uint32
-	loss  float64
-	stats EncoderStats
+	loss  atomic.Uint64 // float64 bits: the loss estimate parity is sized for
+	stats encCounters
+
+	rmu    sync.Mutex     // guards rcache (taken under mu, or alone)
+	rcache map[[2]int]int // (k, loss step) -> parity count
 
 	// Buffer reuse. A shard buffer has HeaderLen bytes of headroom in front
 	// of the shard content, so the data packet is emitted from the same
@@ -98,13 +108,17 @@ type Encoder struct {
 	bufs   bufFree
 	parity [][]byte
 	all    [][]byte
-	spare  []*txGroup     // closed groups, reused with their shard table
-	rcache map[[2]int]int // (k, loss step) -> parity count
+	spare  []*txGroup // closed groups, reused with their shard table
 
 	// input rate, for the derived depth
 	rateAt time.Time
 	rateN  int
 	pps    float64
+}
+
+// encCounters are EncoderStats, read without mu (see Encoder).
+type encCounters struct {
+	data, parity, dataBytes, parityBytes, groups atomic.Uint64
 }
 
 // EncoderStats counts what the encoder has produced.
@@ -129,53 +143,53 @@ func NewEncoder(cfg Config) *Encoder {
 	if depth <= 0 {
 		depth = 1
 	}
-	return &Encoder{
+	e := &Encoder{
 		cfg:   cfg,
 		lanes: make([]*txGroup, depth),
-		loss:  DefaultAdapterConfig().Floor,
 		bufs: bufFree{
 			size: HeaderLen + lenPrefix + cfg.MaxPayload,
 			max:  cfg.K * cfg.MaxDepth,
 		},
 	}
+	e.SetLoss(DefaultAdapterConfig().Floor)
+	return e
 }
 
 // Config returns the effective configuration.
 func (e *Encoder) Config() Config { return e.cfg }
 
-// SetLoss sets the loss estimate parity is sized for (from an Adapter).
-func (e *Encoder) SetLoss(p float64) {
-	e.mu.Lock()
-	e.loss = p
-	e.mu.Unlock()
-}
+// SetLoss sets the loss estimate parity is sized for (from an Adapter). It
+// never waits for an Encode in progress (see Encoder); a group closing at the
+// same moment is sized for one estimate or the other.
+func (e *Encoder) SetLoss(p float64) { e.loss.Store(math.Float64bits(p)) }
 
 // Loss returns the loss estimate parity is currently sized for.
-func (e *Encoder) Loss() float64 {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.loss
-}
+func (e *Encoder) Loss() float64 { return math.Float64frombits(e.loss.Load()) }
 
-// Stats returns a snapshot of the counters.
+// Stats returns a snapshot of the counters (each read on its own: a group
+// closing meanwhile may show in one and not yet in another).
 func (e *Encoder) Stats() EncoderStats {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.stats
+	return EncoderStats{
+		Data: e.stats.data.Load(), Parity: e.stats.parity.Load(),
+		DataBytes: e.stats.dataBytes.Load(), ParityBytes: e.stats.parityBytes.Load(),
+		Groups: e.stats.groups.Load(),
+	}
 }
 
 // ParityRatio returns r/k for a full group at the current estimate.
 func (e *Encoder) ParityRatio() float64 {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return float64(e.parityLocked(e.cfg.K)) / float64(e.cfg.K)
+	return float64(e.parityFor(e.cfg.K)) / float64(e.cfg.K)
 }
 
-func (e *Encoder) parityLocked(k int) int {
+// parityFor is the parity count for a group of k data shards at the current
+// estimate.
+func (e *Encoder) parityFor(k int) int {
 	if k < 1 {
 		return 0
 	}
-	key := [2]int{k, lossStep(e.loss)}
+	key := [2]int{k, lossStep(e.Loss())}
+	e.rmu.Lock()
+	defer e.rmu.Unlock()
 	if r, ok := e.rcache[key]; ok {
 		return r
 	}
@@ -220,8 +234,8 @@ func (e *Encoder) Encode(payload []byte, now time.Time, emit func(pkt []byte)) e
 	if n := len(pkt) - HeaderLen; n > g.max {
 		g.max = n
 	}
-	e.stats.Data++
-	e.stats.DataBytes += uint64(len(payload))
+	e.stats.data.Add(1)
+	e.stats.dataBytes.Add(uint64(len(payload)))
 	emit(pkt)
 
 	if len(g.bufs) >= e.cfg.K {
@@ -316,8 +330,8 @@ func (e *Encoder) NextDeadline() time.Time {
 func (e *Encoder) closeLocked(g *txGroup, emit func(pkt []byte)) error {
 	defer e.release(g)
 	k := len(g.bufs)
-	r := e.parityLocked(k)
-	e.stats.Groups++
+	r := e.parityFor(k)
+	e.stats.groups.Add(1)
 	if r == 0 {
 		return nil
 	}
@@ -351,8 +365,8 @@ func (e *Encoder) closeLocked(g *txGroup, emit func(pkt []byte)) error {
 	for j := 0; j < r; j++ {
 		pkt := e.parity[j][:HeaderLen+size]
 		putHeader(pkt, header{group: g.id, idx: k + j, k: k, r: r, size: size})
-		e.stats.Parity++
-		e.stats.ParityBytes += uint64(size)
+		e.stats.parity.Add(1)
+		e.stats.parityBytes.Add(uint64(size))
 		emit(pkt)
 	}
 	return nil

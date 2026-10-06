@@ -17,7 +17,7 @@
 //
 // # The send and receive paths
 //
-//	send:  payload --core.SealDatagram--> [seq|ciphertext]
+//	send:  payload --core.AppendDatagram--> [seq|ciphertext]
 //	                --fec.Encoder.Encode--> shard packets --pacer--> PacketConn
 //	recv:  PacketConn --fec.Decoder.Decode--> [seq|ciphertext]
 //	                --core.OpenDatagram--> payload (replay-checked)

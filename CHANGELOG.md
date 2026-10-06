@@ -1532,6 +1532,26 @@ each read the queue they all built as its own.
   the throughput. Behind a 30 Mbit/s path the three busy carriers are `P`
   at 9.3-10.1 Mbit/s against a 9.6 fair share, `q` 15 ms, ping p99 23 ms.
 
+### X4 — less CPU per datagram, and no report waits on a writer
+- **Sealing in place.** A data datagram was sealed into a new frame (three
+  buffers, four copies of the payload: the plaintext frame, the ciphertext,
+  the length-prefixed frame, then the carrier's `[seq][ciphertext]`), and
+  the length prefix was cut off again. It is now built and encrypted in one
+  buffer, in the carrier's wire layout (`core.Session.AppendDatagram`):
+  the same bytes on the wire (a test checks them against the old path byte
+  for byte, for every padding), 2552 → 948 ns and 4240 → 16 bytes
+  allocated per 1300-byte datagram.
+- **The FEC encoder's lock.** A carrier's writer holds the encoder's lock
+  while its pacer applies backpressure, so the feedback that sets the loss
+  estimate — on the carrier's receive loop — and the status that reads the
+  encoder's counters — on the pool's loop — waited for the pacer too: under
+  a starved sender, for most of the time. The loss estimate, the counters
+  and the parity ratio are now read and set without that lock.
+- Lab, sender at 0.6 core (`lab/cpuquota.sh`, 8 interleaved pairs against
+  the build before): 167 → 195 Mbit/s on average (ahead in 6 of 8 pairs),
+  297 → 340 Mbit/s per CPU-second, ping p99 under load 24.5 → 19.6 ms. Every
+  carrier still `S`, never `P`: the controller's side of it is X6.
+
 ### X2 — documentation brought in line with the code
 - The rate controller's description (`udpcarrier/rate.go`) named a
   `highQueue` hold band and 25%/6% growth that no longer exist: it now says

@@ -160,6 +160,60 @@ func (s *Session) SealDatagram(ftype, flags byte, payload []byte, padTo int) (se
 	return seq, frame, err
 }
 
+// AppendDatagram seals a frame and appends it to dst in a datagram carrier's
+// wire layout, [seq:8][ciphertext] — the bytes SealDatagram's frame carries
+// after its masked length, behind the sequence the receiver needs. The frame
+// is built in dst and encrypted over itself: one buffer and one copy of the
+// payload, where SealDatagram makes three and copies four times. dst grows
+// only when its capacity is short (see DatagramLen).
+func (s *Session) AppendDatagram(dst []byte, ftype, flags byte, payload []byte, padTo int) ([]byte, error) {
+	if len(payload) > maxPayload {
+		return dst, errLongFrame
+	}
+	s.mu.Lock()
+	seq := s.sendSeq
+	s.sendSeq++
+	s.mu.Unlock()
+	return appendSealed(dst, s.sendAEAD, ftype, flags, seq, payload, padTo), nil
+}
+
+// DatagramLen is the length AppendDatagram adds for a payload of n bytes
+// padded to padTo.
+func DatagramLen(n, padTo int) int { return datagramSeqLen + frameHeaderLen + max(n, padTo) + tagLen }
+
+// datagramSeqLen is the explicit sequence in front of a datagram's ciphertext.
+const datagramSeqLen = 8
+
+// appendSealed is sealFrame without the length prefix, in place (see
+// AppendDatagram): the same inner frame — header, payload, zero padding —
+// and the same nonce, so the ciphertext is byte for byte the one sealFrame
+// returns.
+func appendSealed(dst []byte, aead cipher.AEAD, ftype, flags byte, seq uint64, payload []byte, padTo int) []byte {
+	plen := len(payload)
+	body := max(plen, padTo)
+	n := len(dst)
+	inLen := frameHeaderLen + body
+	end := n + datagramSeqLen + inLen + aead.Overhead()
+	if cap(dst) < end {
+		nd := make([]byte, n, end)
+		copy(nd, dst)
+		dst = nd
+	}
+	dst = dst[:n+datagramSeqLen+inLen]
+	binary.BigEndian.PutUint64(dst[n:], seq)
+	inner := dst[n+datagramSeqLen:]
+	inner[0] = ftype
+	inner[1] = flags
+	binary.BigEndian.PutUint16(inner[2:4], uint16(plen))
+	binary.BigEndian.PutUint64(inner[4:frameHeaderLen], seq)
+	copy(inner[frameHeaderLen:], payload)
+	clear(inner[frameHeaderLen+plen:])
+	var nonce [12]byte
+	binary.BigEndian.PutUint64(nonce[4:], seq)
+	aead.Seal(inner[:0], nonce[:], inner, nil)
+	return dst[:end]
+}
+
 // SendSeq exposes the current send counter for tests.
 func (s *Session) SendSeq() uint64 {
 	s.mu.Lock()
