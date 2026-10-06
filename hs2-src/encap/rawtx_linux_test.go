@@ -218,7 +218,7 @@ func TestRawTxReceivesNothing(t *testing.T) {
 // failRC is a RawConn whose calls fail as a broken socket would.
 type failRC struct{}
 
-func (failRC) Control(func(uintptr)) error   { return errors.New("injected failure") }
+func (failRC) Control(func(uintptr)) error    { return errors.New("injected failure") }
 func (failRC) Read(func(uintptr) bool) error  { return errors.New("injected failure") }
 func (failRC) Write(func(uintptr) bool) error { return errors.New("injected failure") }
 
