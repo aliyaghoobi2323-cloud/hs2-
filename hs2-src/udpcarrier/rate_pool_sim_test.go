@@ -116,6 +116,7 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 		lost, got float64 // bytes dropped at a full buffer / delivered, since the last report
 		qSum      float64 // queue estimates since the governor's last tick (Governor.report)
 		qN        int
+		pushedT   bool // used its allowance in some report since the last tick
 	}
 	ss := make([]*st, len(senders))
 	for i, s := range senders {
@@ -218,25 +219,20 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 				sent := c.rc.sent.Load()
 				r := float64(sent-c.sentPrev) / 0.5
 				c.sentPrev = sent
-				q, qn := c.qSum, c.qN
-				c.qSum, c.qN = 0, 0
+				q, qn, pushed := c.qSum, c.qN, c.pushedT
+				c.qSum, c.qN, c.pushedT = 0, 0, false
+				if qn == 0 { // no report this interval: not counted (Governor.tick)
+					continue
+				}
 				if r >= govActiveRate {
 					na++
 					asum += r
 				}
-				if r >= govActiveRate && c.rc.pushing.Load() {
+				if r >= govActiveRate && pushed {
 					n++
 					sum += r
-					if qn > 0 {
-						bq = append(bq, q/float64(qn))
-					}
+					bq = append(bq, q/float64(qn))
 				}
-			}
-			if len(bq) > 0 {
-				sort.Float64s(bq)
-				busyQ = bq[len(bq)/2]
-			} else if idleBusy > govShareHold {
-				busyQ = 0
 			}
 			if na > 0 {
 				if meanB == 0 {
@@ -254,6 +250,12 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 				idleBusy = 0
 			} else if idleBusy++; idleBusy > govShareHold {
 				shareB = 0
+			}
+			if len(bq) > 0 {
+				sort.Float64s(bq)
+				busyQ = bq[len(bq)/2]
+			} else if idleBusy > govShareHold {
+				busyQ = 0
 			}
 		}
 		for i, s := range senders {
@@ -290,6 +292,7 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 				c.rc.onFeedback(at(now), r.rx, r.rtt, r.loss, r.echo, r.owd, r.haveOWD)
 				c.qSum += c.rc.queueSec()
 				c.qN++
+				c.pushedT = c.pushedT || c.rc.pushing.Load()
 				if poolTrace != nil {
 					poolTrace(i, now, c.rc)
 				}
