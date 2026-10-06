@@ -1286,8 +1286,13 @@ each read the queue they all built as its own.
   active carriers' mean). A light carrier — a call, the other direction's
   ACKs — keeps startup's fast ramp for its own bulk later, unless the queue
   stays past 30 ms for eight base round trips (one to three seconds) while
-  it delivers less than it sends: far deeper than the others' pacing holds
-  and growing under it, so its own, on a path of its own. The capacity it starts
+  it delivers less than it sends and the busy carriers do not see that queue
+  (theirs short, or under half its own: the governor publishes the queue
+  they see): far deeper than the others' pacing holds and growing under it,
+  so its own, on a path of its own. The governor holds its fair share and
+  that queue through a second without busy carriers (a base probe slows
+  them all at once), so a light carrier does not read itself as busy, or a
+  shared queue as its own, for a moment. The capacity it starts
   from is what got through, not the allowance: 9.5 ms, no drops.
 - **A stale peak.** Out of startup, a carrier's capacity was floored at 0.4x
   its windowed peak delivery — a window that only advances while it uses its
@@ -1320,6 +1325,14 @@ each read the queue they all built as its own.
   started late is not followed by another), so the whole pool slows at once
   and the queue really empties; one carrier probing alone while the others
   kept the queue full measured a base with the queue in it.
+- **Paths over 400 ms round trip measured at all.** An RTT sample over 8x
+  the smoothed RTT is dropped as a clock step; the smoothed RTT starts at 50
+  ms, so on a path over 400 ms every sample was dropped and the controller
+  ran on 50 ms for good (since the controller was written; the release
+  too). The first sample now counts, and so does the third outlier in a row
+  (a step is one sample in flight). Simulator, a carrier on its own path at
+  600 ms round trip behind a 200 ms buffer: queue p95 168-251 → 39-60 ms,
+  up to 1112 drops → none.
 - `HS2_FAIR_SHARE=0` turns the three off.
 - **Measured.** Pool simulator (new tests, `udpcarrier/rate_pool_sim_test.go`;
   each carrier sees the round trip its reports really measured and the loss
@@ -1334,7 +1347,7 @@ each read the queue they all built as its own.
 - The pacer's token bucket is now capped after a timer wait as well: a timer
   that fired late on a busy server let one batch exceed its budget.
 
-### Verification by agents (five rounds, each agent under 20 minutes)
+### Verification by agents (six rounds, each agent under 20 minutes)
 - **Round 1** (7 agents on W1/W2): bandwidth, mixed versions, every encap
   and stress passed; the code review found the three bugs below; the
   latency agent's regression traced to the rate control (W3), present in
@@ -1386,6 +1399,20 @@ each read the queue they all built as its own.
   Mbit/s); 12-16 carriers with 4 light ones on 12-16 Mbit/s: 0.38 against
   0.41, both collapsing, 0.22 with the rules off. The pool simulator now
   also reports a full buffer's drops as loss, as the peer does.
+- **Round 6** (2 agents on those fixes): lab behind deep tbf buffers (30
+  Mbit/s with 1 s, 8 Mbit/s with 1.5 s): no ping lost, the queue held at
+  15-75 KB after startup, no busy carrier left in startup — the release
+  kept every busy carrier in startup there (ping p50 84-117 ms); the
+  standard runs unchanged. The review found the base-round-trip wait too
+  short at 360-600 ms round trip on a shared path: the busy carriers' own
+  startup queue outlasted it, and a light carrier delivers short of what it
+  sends in a shared FIFO as well, so it left startup again (its bulk later
+  1.6 Mbit/s instead of 24). A carrier alone cannot tell a shared queue
+  from its own, so the pool tells it: the busy carriers' queue (above).
+  Now 22-26 Mbit/s at 300-600 ms round trip in every probe phase, as with
+  the rules off; a light carrier on its own path still leaves (72 cases,
+  0.2-2 s buffers, 30-600 ms: at most 5.5 s, queue p95 at most 62 ms, no
+  drops). It also found the 400 ms RTT lockout (above).
 - Pre-existing, unchanged (release the same): under a steady policer with
   no loss episodes the pool sends ~2.5x what passes and parity rises to its
   ceiling; many tiny flows behind a shared bottleneck all count as sparse,
@@ -1414,7 +1441,10 @@ each read the queue they all built as its own.
   controller next to a loss-based flow; the release too), and with the
   rules a light carrier as well — a 1.2 Mbit/s call got ~0.5 Mbit/s in the
   simulator, where with the rules off it stays in startup and keeps its
-  rate. Behind a queue held at 60 ms the call keeps its 1.2 Mbit/s.
+  rate. Behind a queue held at 60 ms a call next to busy carriers keeps its
+  1.2 Mbit/s; a call alone in its pool is no light carrier (nothing busier
+  to compare with) and got 0.76 Mbit/s behind 60 ms, 0.5 behind 120 ms.
+  `HS2_FAIR_SHARE=0` gives the release behaviour back if this shows.
 
 ### Review fixes (agent round 1)
 - A udp listener on an IPv6 address read in batches dropped every datagram

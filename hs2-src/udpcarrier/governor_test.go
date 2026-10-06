@@ -236,3 +236,30 @@ func TestGovernorBucketHoldsThePoolToItsCap(t *testing.T) {
 		t.Fatalf("8 carriers under a 10 Mbit/s cap sent %.1f Mbit/s", got)
 	}
 }
+
+// BusyQueue is the median queue of the carriers using their allowance; it
+// and Share hold through govShareHold intervals without busy carriers (a
+// base probe slows them all at once), then clear.
+func TestGovernorBusyQueueAndShareHold(t *testing.T) {
+	s := newGovSim(3)
+	none := func(int, float64) float64 { return 0 }
+	s.step(30*mb, none, 0.2)
+	if q := s.g.BusyQueue(); q != 0.2 {
+		t.Fatalf("busy queue %.3f s, want 0.2", q)
+	}
+	share := s.g.Share()
+	for i := 0; i < govShareHold; i++ {
+		s.stepPush(30*mb, none, 0.2, false)
+		if q, sh := s.g.BusyQueue(), s.g.Share(); q != 0.2 || sh != share {
+			t.Fatalf("%d intervals without busy carriers: busy queue %.3f s, share %.0f (want 0.2, %.0f)", i+1, q, sh, share)
+		}
+	}
+	s.stepPush(30*mb, none, 0.2, false)
+	if q, sh := s.g.BusyQueue(), s.g.Share(); q != 0 || sh != 0 {
+		t.Fatalf("past the hold: busy queue %.3f s, share %.0f, want both 0", q, sh)
+	}
+	s.step(30*mb, none, 0.01)
+	if q := s.g.BusyQueue(); q != 0.01 {
+		t.Fatalf("busy queue %.3f s, want 0.01", q)
+	}
+}

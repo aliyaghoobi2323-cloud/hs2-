@@ -12,8 +12,9 @@ import (
 // A pool simulator: several carriers' real rateControls share one FIFO
 // bottleneck, each with its own stamped feedback (every 100 ms, phases
 // apart: the round trip it measured, and the share a full buffer dropped),
-// and the pool's fair share (Governor.Share) recomputed every 500 ms from
-// what the carriers using their allowance sent. It shows what one
+// and the pool's fair share (Governor.Share) and its busy carriers' queue
+// (Governor.BusyQueue) recomputed every 500 ms from what the carriers using
+// their allowance sent and saw. It shows what one
 // carrier's simulator cannot: carriers reading each other's queue.
 
 type poolSender struct {
@@ -113,6 +114,8 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 		inWin     float64
 		sentPrev  uint64
 		lost, got float64 // bytes dropped at a full buffer / delivered, since the last report
+		qSum      float64 // queue estimates since the governor's last tick (Governor.report)
+		qN        int
 	}
 	ss := make([]*st, len(senders))
 	for i, s := range senders {
@@ -124,7 +127,8 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 	var toPeer []pkt_
 	var qs []float64
 	drops := 0
-	shareB, meanB, nextShare := 0.0, 0.0, 500.0
+	shareB, meanB, busyQ, nextShare := 0.0, 0.0, 0.0, 500.0
+	idleBusy := 0
 	for now := 0.0; now < endMs; now += step {
 		for i, s := range senders {
 			c := ss[i]
@@ -199,6 +203,7 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 		if now >= nextShare {
 			nextShare += 500
 			n, sum, na, asum := 0, 0.0, 0, 0.0
+			var bq []float64
 			for j, c := range ss {
 				if senders[j].cross() {
 					continue
@@ -206,6 +211,8 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 				sent := c.rc.sent.Load()
 				r := float64(sent-c.sentPrev) / 0.5
 				c.sentPrev = sent
+				q, qn := c.qSum, c.qN
+				c.qSum, c.qN = 0, 0
 				if r >= govActiveRate {
 					na++
 					asum += r
@@ -213,7 +220,16 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 				if r >= govActiveRate && c.rc.pushing.Load() {
 					n++
 					sum += r
+					if qn > 0 {
+						bq = append(bq, q/float64(qn))
+					}
 				}
+			}
+			if len(bq) > 0 {
+				sort.Float64s(bq)
+				busyQ = bq[len(bq)/2]
+			} else if idleBusy > govShareHold {
+				busyQ = 0
 			}
 			if na > 0 {
 				if meanB == 0 {
@@ -228,7 +244,8 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 					shareB = sum / float64(n)
 				}
 				shareB += 0.5 * (sum/float64(n) - shareB)
-			} else {
+				idleBusy = 0
+			} else if idleBusy++; idleBusy > govShareHold {
 				shareB = 0
 			}
 		}
@@ -262,8 +279,10 @@ func runPoolSimWin(rules bool, capBps float64, oneWay, buffer time.Duration, sen
 			for len(c.toUs) > 0 && c.toUs[0].arrive <= now {
 				r := c.toUs[0]
 				c.toUs = c.toUs[1:]
-				c.rc.setShare(shareB, meanB)
+				c.rc.setShare(shareB, meanB, busyQ)
 				c.rc.onFeedback(at(now), r.rx, r.rtt, r.loss, r.echo, r.owd, r.haveOWD)
+				c.qSum += c.rc.queueSec()
+				c.qN++
 				if poolTrace != nil {
 					poolTrace(i, now, c.rc)
 				}
@@ -473,11 +492,14 @@ func TestPoolSimSlowPathBigShare(t *testing.T) {
 // and then ramps at the ordinary probe's pace, with the rules off as well. The long path with a deep buffer is the case where
 // the busy carriers' own startup queue stands past overflowQueue for
 // seconds: a carrier that delivers what it sends there is not on a path of
-// its own (deepShortfall; without it the bulk ramped at ~2 Mbit/s).
+// its own (deepShortfall; without it the bulk ramped at ~2 Mbit/s), and at
+// 400 ms round trip, where that queue outlasts any wait and the light
+// carrier falls short as well, the busy carriers see the same queue
+// (Governor.BusyQueue; without it ~1.6 Mbit/s).
 func TestPoolSimLightCarrierLaterRamp(t *testing.T) {
 	sec, ms := time.Second, time.Millisecond
 	defer func() { poolProbePhase = 0 }()
-	for _, p := range []struct{ ow, buf time.Duration }{{15 * ms, 300 * ms}, {60 * ms, 300 * ms}, {120 * ms, 300 * ms}, {150 * ms, 600 * ms}} {
+	for _, p := range []struct{ ow, buf time.Duration }{{15 * ms, 300 * ms}, {60 * ms, 300 * ms}, {120 * ms, 300 * ms}, {150 * ms, 600 * ms}, {200 * ms, 1000 * ms}} {
 		ow := p.ow
 		for _, app := range []float64{1.2e6, 2e6, 4e6} {
 			s := []poolSender{{fbPhase: 0, stopAt: 20 * sec}, {start: sec, fbPhase: 37, stopAt: 20 * sec}, {start: sec, appBps: app, fbPhase: 71, bulkFrom: 22 * sec}}
@@ -614,7 +636,9 @@ func TestPoolSimLightCarrierOwnPathLeavesStartup(t *testing.T) {
 // deep queue counts base round trips, not the smoothed RTT — which holds the
 // queue it is building, so the wait grew with it until the queue became the
 // base delay and the carrier sat in startup on a full buffer for good
-// (startupDeepMax alone would also have ended it).
+// (startupDeepMax alone would also have ended it). Its queue is far deeper
+// than what the busy carriers see on the shared path, though theirs is past
+// overflowQueue in their own startup: it waited 4.6 s for theirs to drain.
 func TestPoolSimLightCarrierDeepOwnBufferLeavesStartup(t *testing.T) {
 	sec, ms := time.Second, time.Millisecond
 	defer func() { poolTrace = nil }()
@@ -628,7 +652,7 @@ func TestPoolSimLightCarrierDeepOwnBufferLeavesStartup(t *testing.T) {
 		s := []poolSender{{fbPhase: 0}, {start: sec, fbPhase: 37}, {start: 2 * sec, fbPhase: 71, ownBps: own, appBps: 1.3 * own}}
 		r := runPoolSimRules(true, 30e6, 150*ms, 1000*ms, s, 40*sec, 2*sec)
 		t.Logf("own %.0f Mbit/s: left startup %.1f s after joining (-1: never), %d drops", own/1e6, exit/1000, r.drops)
-		if exit < 0 || exit > 5000 {
+		if exit < 0 || exit > 4000 {
 			t.Errorf("own %.0f Mbit/s behind a 1 s buffer: left startup at %.1f s (-1: never)", own/1e6, exit/1000)
 		}
 	}
@@ -667,11 +691,11 @@ func TestPoolSimLightCarrierUnderCrossQueue(t *testing.T) {
 func TestRateControlLightAgainstShare(t *testing.T) {
 	r := newRateControl()
 	r.lastSendRate = 4e6 / 8
-	r.setShare(14e6/8, (2*14e6+6*0.3e6)/8/8)
+	r.setShare(14e6/8, (2*14e6+6*0.3e6)/8/8, 0)
 	if !r.light() {
 		t.Errorf("4 Mbit/s against a share of 14 is not light")
 	}
-	r.setShare(0, (2*14e6+6*0.3e6)/8/8)
+	r.setShare(0, (2*14e6+6*0.3e6)/8/8, 0)
 	if r.light() {
 		t.Errorf("4 Mbit/s against a mean of 3.7 with no share is light")
 	}
@@ -704,6 +728,70 @@ func TestPoolSimEightCarriers(t *testing.T) {
 		t.Logf("%.0f Mbit/s, one way %v: Jain %.2f over 30-60 s, queue p95 %.0f ms, %d drops", c.cap/1e6, c.ow, j, r.qP95, r.drops)
 		if j < 0.9 || r.qP95 > 30 || r.drops > 0 {
 			t.Errorf("%.0f Mbit/s, one way %v: Jain %.2f, queue p95 %.0f ms, %d drops", c.cap/1e6, c.ow, j, r.qP95, r.drops)
+		}
+	}
+}
+
+// RTT samples: a path longer than 8x the starting srtt (any over 400 ms)
+// is measured from its first sample, a jump that lasts is taken on its third
+// sample, and a lone outlier (a clock step while a report was in flight) is
+// dropped. Before, every sample over 400 ms was dropped, for good.
+func TestRateControlRTTSamples(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	echo := int64(0)
+	feed := func(r *rateControl, rtt float64) {
+		now = now.Add(100 * time.Millisecond)
+		echo++
+		r.onFeedback(now, 0, rtt, 0, echo, 0, false)
+	}
+	r := newRateControl()
+	feed(r, 0.6)
+	if r.srtt != 0.6 || r.rtProp != 0.6 {
+		t.Fatalf("a 600 ms path: srtt %.3f, rtProp %.3f", r.srtt, r.rtProp)
+	}
+	r = newRateControl()
+	for i := 0; i < 20; i++ {
+		feed(r, 0.1)
+	}
+	feed(r, 20)
+	if r.srtt > 0.11 {
+		t.Fatalf("one 20 s outlier moved srtt to %.3f", r.srtt)
+	}
+	for i := 0; i < 3; i++ {
+		feed(r, 1.2)
+	}
+	if r.srtt < 0.3 {
+		t.Fatalf("a lasting jump to 1.2 s left srtt at %.3f", r.srtt)
+	}
+}
+
+// A light carrier whose deep queue the busy carriers do not see (so not the
+// pool's) still keeps startup while it delivers what it sends: a flow on its
+// own path holds that queue, not its own excess. Delivering short of it, the
+// queue grows under it — its own — and it leaves.
+func TestRateControlDeepQueueNeedsShortfall(t *testing.T) {
+	for _, c := range []struct {
+		deliver float64 // share of what it sends that arrives
+		leaves  bool
+	}{{1.0, false}, {0.8, true}} {
+		r := newRateControl()
+		r.fair = true
+		r.setShare(20e6/8, 15e6/8, 0)
+		now := time.Unix(1_700_000_000, 0)
+		const sent = 25_000 // bytes per 100 ms report: 2 Mbit/s, under half the share
+		rx := 0.0
+		for i := 1; i <= 40; i++ {
+			now = now.Add(feedbackEvery)
+			r.onSent(sent)
+			rx += c.deliver * sent
+			owd := uint32(0) // ticks of stampTick: the queue in this report
+			if i > 3 {
+				owd = uint32(100 * time.Millisecond / stampTick)
+			}
+			r.onFeedback(now, uint64(rx), 0.05, 0, int64(i), owd, true)
+		}
+		if r.startup == c.leaves {
+			t.Errorf("delivering %.0f%% of what it sends behind a 100 ms queue the busy carriers do not see: in startup %v, want %v", c.deliver*100, r.startup, !c.leaves)
 		}
 	}
 }

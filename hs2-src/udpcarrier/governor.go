@@ -64,6 +64,8 @@ type Governor struct {
 	share    atomic.Uint64 // math.Float64bits(shareB)
 	meanB    float64       // active carriers' mean rate, bytes/s (smoothed; see Mean)
 	mean     atomic.Uint64 // math.Float64bits(meanB)
+	busyQ    atomic.Uint64 // math.Float64bits: median queue of the busy carriers, seconds (see BusyQueue)
+	idleBusy int           // ticks in a row with fewer than two busy carriers (see govShareHold)
 	holdPar  atomic.Bool   // confirmed policer: parity sized for the path's own loss
 	capBits  atomic.Uint64 // math.Float64bits(capB)
 	cleanBit atomic.Uint64 // math.Float64bits(cleanLoss)
@@ -105,6 +107,7 @@ type govTick struct {
 
 const (
 	govTickEvery     = 500 * time.Millisecond
+	govShareHold     = 2    // ticks Share and BusyQueue hold without busy carriers (a base probe slows them all at once)
 	govHist          = 60   // ticks kept (30 s)
 	govBurstLoss     = 0.05 // an episode tick loses at least this much…
 	govBurstOverMed  = 3.0  // …and at least this many times the usual (median) loss…
@@ -195,6 +198,18 @@ func (g *Governor) Mean() float64 {
 	return math.Float64frombits(g.mean.Load())
 }
 
+// BusyQueue is the median standing queue, in seconds, that the carriers
+// using their allowance saw over the last interval (0 when none did). A light
+// carrier whose own queue is deep while theirs is not has that queue to
+// itself — a path of its own; when theirs is as deep, it is the pool's
+// (rateControl, startup).
+func (g *Governor) BusyQueue() float64 {
+	if g == nil {
+		return 0
+	}
+	return math.Float64frombits(g.busyQ.Load())
+}
+
 // Last is the most recent pool-wide tick (for status).
 func (g *Governor) Last() (rateBytes, loss float64) {
 	g.mu.Lock()
@@ -279,7 +294,7 @@ func (g *Governor) tick() {
 	var tk govTick
 	tk.at = now
 	var wLoss, wSum float64
-	var qs []float64
+	var qs, busyQs []float64
 	var pushRate float64
 	for c, m := range g.members {
 		sent := c.rc.sent.Load()
@@ -309,6 +324,7 @@ func (g *Governor) tick() {
 		if pushing {
 			tk.pushing++
 			pushRate += rate
+			busyQs = append(busyQs, q)
 			if loss >= govCarrierLossy {
 				tk.lossy++
 			}
@@ -324,16 +340,27 @@ func (g *Governor) tick() {
 		g.meanB = 0
 	}
 	g.mean.Store(math.Float64bits(g.meanB))
+	// Fewer than two busy carriers for an interval or two (a base probe
+	// slows them all, a reconnect): Share and BusyQueue hold, so a light
+	// carrier does not read itself as busy, or a shared queue as its own,
+	// for a moment; then they clear.
 	if tk.pushing >= 2 {
 		sh := pushRate / float64(tk.pushing)
 		if g.shareB == 0 {
 			g.shareB = sh
 		}
 		g.shareB += 0.5 * (sh - g.shareB)
-	} else {
+		g.idleBusy = 0
+	} else if g.idleBusy++; g.idleBusy > govShareHold {
 		g.shareB = 0
 	}
 	g.share.Store(math.Float64bits(g.shareB))
+	if len(busyQs) > 0 {
+		sort.Float64s(busyQs)
+		g.busyQ.Store(math.Float64bits(busyQs[len(busyQs)/2]))
+	} else if g.idleBusy > govShareHold {
+		g.busyQ.Store(0)
+	}
 	if wSum > 0 {
 		tk.loss = wLoss / wSum
 	}

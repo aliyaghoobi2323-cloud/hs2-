@@ -60,8 +60,9 @@ import (
 //     (a call, the other direction's ACKs) keeps startup's fast ramp for
 //     when its own bulk comes — unless the queue stays far deeper than the
 //     others' pacing holds it for eight base round trips (one to three
-//     seconds) while the carrier delivers less than it sends: then the
-//     queue is its own, on a path of its own (a pool over several IPs).
+//     seconds) while the carrier delivers less than it sends and the busy
+//     carriers do not see that queue (Governor.BusyQueue): then the queue
+//     is its own, on a path of its own (a pool over several IPs).
 //     For the same reason, once out of startup a carrier that is not using
 //     its allowance while a queue stands follows its delivery down, with no
 //     floor from an old peak, and while a queue stands a peak older than
@@ -108,6 +109,8 @@ type rateControl struct {
 	owdSet      bool
 	haveOWD     bool       // the peer stamps: one-way samples replace RTT
 	lastEcho    int64      // RTT fallback: echo of the last sample used
+	haveRTT     bool       // an RTT sample was taken (srtt is measured, not the default)
+	rttOut      int        // RTT samples in a row rejected as over 8x srtt
 	rttQ        [2]float64 // RTT fallback: the last two fresh queue samples
 	rttQN       int
 	queue       float64   // last queue estimate, seconds (diagnostic)
@@ -156,6 +159,10 @@ type rateControl struct {
 	// poolMean: the mean rate of the pool's active carriers, bytes/s
 	// (Governor.Mean): below half of it a carrier is a light one.
 	poolMean atomic.Uint64
+	// busyQueue: the queue the pool's busy carriers see, seconds
+	// (Governor.BusyQueue): a light carrier's deep queue is its own only
+	// when theirs is not as deep.
+	busyQueue atomic.Uint64
 
 	// pushing: the last feedback showed the carrier sending at least
 	// limitedShare of its allowance — it was offering as much as it was
@@ -237,10 +244,12 @@ const (
 var fairShareOn = os.Getenv("HS2_FAIR_SHARE") != "0"
 
 // setShare records the pool's fair share per carrier and its active
-// carriers' mean rate (bytes/s, 0: none).
-func (r *rateControl) setShare(share, mean float64) {
+// carriers' mean rate (bytes/s, 0: none), and the queue its busy carriers
+// see (seconds; Governor.BusyQueue).
+func (r *rateControl) setShare(share, mean, busyQueue float64) {
 	r.share.Store(math.Float64bits(share))
 	r.poolMean.Store(math.Float64bits(mean))
+	r.busyQueue.Store(math.Float64bits(busyQueue))
 }
 
 // light: this carrier sends under half what the pool's busy carriers send
@@ -361,11 +370,20 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 		// flight can make (now - echo) huge or negative): it would poison srtt,
 		// the base delay and the queue estimate. Anything over rttSaneMax or
 		// more than 8x the smoothed RTT is dropped for pacing.
-		if rttSampleSec <= rttSaneMax.Seconds() && (r.srtt == 0 || rttSampleSec <= 8*r.srtt) {
+		// A step is one sample in flight; a path longer than 8x the
+		// starting srtt (0.05 s: any over 400 ms) or a jump that lasts is
+		// not — the first sample, and the third outlier in a row, count.
+		if rttSampleSec <= rttSaneMax.Seconds() && (!r.haveRTT || rttSampleSec <= 8*r.srtt || r.rttOut >= 2) {
 			r.rttMin.add(rttSampleSec, now)
 			r.rtProp = r.rttMin.min()
-			r.srtt += 0.25 * (rttSampleSec - r.srtt)
+			if !r.haveRTT {
+				r.srtt = rttSampleSec
+			} else {
+				r.srtt += 0.25 * (rttSampleSec - r.srtt)
+			}
+			r.haveRTT, r.rttOut = true, 0
 		} else {
+			r.rttOut++
 			rttSampleSec, fresh = 0, false // do not use it for the queue either
 		}
 	}
@@ -529,7 +547,14 @@ func (r *rateControl) adjustLocked(now time.Time, dt, dRate float64, limited boo
 		// measured, and on a deep buffer the wait grew with it until the
 		// queue became the base delay (owdWindow) and was never seen again.
 		deepNeed := math.Min(startupDeepMax, math.Max(startupDeepRuns, 8*r.rtProp/feedbackEvery.Seconds()))
-		ownDeep := float64(r.deepQRuns) >= deepNeed && r.deepDeliv < deepShortfall*r.deepSent
+		// ... and only a queue the pool's busy carriers do not see as well
+		// (theirs short, or under half this one): on a long shared path
+		// their own startup queue outlasts any wait, and a light carrier
+		// delivers short of what it sends there too (a FIFO delays
+		// everyone alike).
+		busyQ := math.Float64frombits(r.busyQueue.Load())
+		ownDeep := float64(r.deepQRuns) >= deepNeed && r.deepDeliv < deepShortfall*r.deepSent &&
+			(busyQ < overflowQueue.Seconds() || busyQ < q/2)
 		queueFull := r.fair && r.startQRuns >= startupQueueRuns && dRate >= startupQueueMin &&
 			(!r.light() || ownDeep)
 		if !now.Before(r.plateauAt) {
