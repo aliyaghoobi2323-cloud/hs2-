@@ -58,27 +58,7 @@ func Inet4(ip []byte, port int) *unix.RawSockaddrInet4 {
 // were sent before the first error (which it returns); the caller may drop
 // the failing datagram and send the rest.
 func (b *Batch) Send(rc syscall.RawConn, bufs [][]byte, to *unix.RawSockaddrInet4, oob []byte) (int, error) {
-	n := min(len(bufs), len(b.hdrs))
-	for i := 0; i < n; i++ {
-		h := &b.hdrs[i]
-		*h = mmsghdr{}
-		if len(bufs[i]) > 0 {
-			b.iovs[i].Base = &bufs[i][0]
-		} else {
-			b.iovs[i].Base = nil
-		}
-		b.iovs[i].SetLen(len(bufs[i]))
-		h.hdr.Iov = &b.iovs[i]
-		h.hdr.SetIovlen(1)
-		if to != nil {
-			h.hdr.Name = (*byte)(unsafe.Pointer(to))
-			h.hdr.Namelen = unix.SizeofSockaddrInet4
-		}
-		if len(oob) > 0 {
-			h.hdr.Control = &oob[0]
-			h.hdr.SetControllen(len(oob))
-		}
-	}
+	n := b.fill(bufs, to, oob)
 	sent := 0
 	var serr error
 	for sent < n && serr == nil {
@@ -104,6 +84,70 @@ func (b *Batch) Send(rc syscall.RawConn, bufs [][]byte, to *unix.RawSockaddrInet
 		}
 	}
 	return sent, serr
+}
+
+// SendNoLock is Send without Go's per-socket write lock: each call runs inside
+// rc.Control, which only holds a reference on the descriptor, so several
+// goroutines reach the kernel on one socket at once. Only for a socket whose
+// kernel send path does not serialise on the socket itself (UDP that is not
+// corked, a raw IP_HDRINCL socket); on a plain raw socket the kernel's
+// lock_sock would take the place of Go's lock, and sleeping on it costs more.
+// EAGAIN (the send buffer is full) falls back to rc.Write, which waits.
+func (b *Batch) SendNoLock(rc syscall.RawConn, bufs [][]byte, to *unix.RawSockaddrInet4, oob []byte) (int, error) {
+	n := b.fill(bufs, to, oob)
+	sent := 0
+	for sent < n {
+		var k int
+		var e syscall.Errno
+		call := func(fd uintptr) bool {
+			r, _, en := unix.Syscall6(unix.SYS_SENDMMSG, fd, uintptr(unsafe.Pointer(&b.hdrs[sent])), uintptr(n-sent), 0, 0, 0)
+			e, k = en, int(r)
+			return en != unix.EAGAIN
+		}
+		if err := rc.Control(func(fd uintptr) { call(fd) }); err != nil {
+			return sent, err
+		}
+		if e == unix.EAGAIN {
+			if err := rc.Write(call); err != nil {
+				return sent, err
+			}
+		}
+		if e != 0 {
+			return sent, e
+		}
+		if k == 0 {
+			return sent, errors.New("mmsg: sendmmsg sent nothing")
+		}
+		sent += k
+	}
+	return sent, nil
+}
+
+// fill prepares the message headers for bufs (at most Size) and returns how
+// many it took.
+func (b *Batch) fill(bufs [][]byte, to *unix.RawSockaddrInet4, oob []byte) int {
+	n := min(len(bufs), len(b.hdrs))
+	for i := 0; i < n; i++ {
+		h := &b.hdrs[i]
+		*h = mmsghdr{}
+		if len(bufs[i]) > 0 {
+			b.iovs[i].Base = &bufs[i][0]
+		} else {
+			b.iovs[i].Base = nil
+		}
+		b.iovs[i].SetLen(len(bufs[i]))
+		h.hdr.Iov = &b.iovs[i]
+		h.hdr.SetIovlen(1)
+		if to != nil {
+			h.hdr.Name = (*byte)(unsafe.Pointer(to))
+			h.hdr.Namelen = unix.SizeofSockaddrInet4
+		}
+		if len(oob) > 0 {
+			h.hdr.Control = &oob[0]
+			h.hdr.SetControllen(len(oob))
+		}
+	}
+	return n
 }
 
 // Recv reads up to len(bufs) datagrams already waiting (at least one: it

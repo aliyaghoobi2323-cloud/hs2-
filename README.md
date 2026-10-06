@@ -499,6 +499,17 @@ part off; a kernel that refuses the offload gets plain packets (the start
 line says so). `HS2_PPROF=127.0.0.1:6060` serves CPU profiles on the loopback
 address for measuring a busy server.
 
+Over icmp, the carriers to one server send through a send-only raw socket of
+their own beside the shared receive socket, without the shared socket's lock:
+on it every carrier waited for the others (Go's lock, then the kernel's), and
+on a busy server one carrier's writer, put aside by the scheduler while
+holding them, held all the others back. The packets on the wire are the same
+bytes as before (the outer IP header is built from the receive socket's own
+settings). A datagram too big for the device without DF still goes out
+fragmented through the shared socket; if the send-only socket ever fails, its
+carriers go back to the shared one (logged once). Over a udp listener, the
+batch sends drop Go's lock the same way. `HS2_RAW_TX=0` turns both off.
+
 **A carrier cut on its own heals in about a second.** The other server sends
 feedback on every carrier ten times a second, so a carrier that has heard
 nothing for 1 s while another carrier still hears the other server has lost

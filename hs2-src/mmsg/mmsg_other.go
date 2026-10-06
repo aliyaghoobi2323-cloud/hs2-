@@ -30,3 +30,6 @@ func (b *Batch) Send(syscall.RawConn, [][]byte, *RawSockaddrInet4, []byte) (int,
 func (b *Batch) Recv(syscall.RawConn, [][]byte, []int, []bool, bool, [][]byte, []int) (int, error) {
 	return 0, errUnsupported
 }
+func (b *Batch) SendNoLock(syscall.RawConn, [][]byte, *RawSockaddrInet4, []byte) (int, error) {
+	return 0, errUnsupported
+}

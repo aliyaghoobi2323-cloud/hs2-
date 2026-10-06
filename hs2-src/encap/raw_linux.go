@@ -162,6 +162,7 @@ type rawMux struct {
 	ipc     *net.IPConn
 	f       *framer
 	raddrIP *net.IPAddr
+	tx      *rawTx        // send-only socket (nil: send on ipc; see rawTx)
 	dead    chan struct{} // closed when the socket fails or closes
 	err     error         // why, set before dead closes
 
@@ -297,6 +298,7 @@ func openRawMux(k rawMuxKey, f *framer, bip, peer net.IP) (*rawMux, error) {
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
 	mx := &rawMux{key: k, ipc: ipc, f: f, raddrIP: &net.IPAddr{IP: append(net.IP(nil), peer...)},
+		tx:   openRawTx(f, ipc, bip),
 		dead: make(chan struct{}), links: map[uint16]*rawConn{}}
 	go mx.readLoop()
 	return mx, nil
@@ -414,6 +416,7 @@ func (mx *rawMux) releaseLocked() {
 			delete(rawMuxes, mx.key)
 		}
 		mx.ipc.Close() // ends readLoop
+		mx.tx.close()
 	}
 }
 
@@ -466,17 +469,38 @@ func (c *rawConn) Write(p []byte) (int, error) {
 	default:
 	}
 	bp := bufPool.Get().(*[]byte)
+	if tx := c.mx.tx; tx.ok() {
+		pkt := tx.frame(bp, c.f, c.id, uint16(c.seq.Add(1)), p, c.mx.raddrIP.IP, nil)
+		err := tx.sendAll([][]byte{pkt}, c.mx.raddrIP.IP, nil, c.legacyWrite)
+		*bp = pkt[:0]
+		bufPool.Put(bp)
+		if err != nil {
+			return 0, err
+		}
+		return len(p), nil
+	}
 	pkt := c.f.build(*bp, c.id, uint16(c.seq.Add(1)), p)
-	_, err := c.mx.ipc.WriteToIP(pkt, c.mx.raddrIP)
+	err := c.legacyWrite(pkt)
 	*bp = pkt[:0]
 	bufPool.Put(bp)
 	if err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// legacyWrite sends one framed transport packet on the shared receive socket
+// (the kernel builds the IP header). A soft error (ENOBUFS, an ICMP error)
+// drops it and counts it. Also rawTx's fallback.
+func (c *rawConn) legacyWrite(tp []byte) error {
+	_, err := c.mx.ipc.WriteToIP(tp, c.mx.raddrIP)
+	if err != nil {
 		if !softErr(err) {
-			return 0, err
+			return err
 		}
 		sendRefused.Add(1)
 	}
-	return len(p), nil // a soft error (ENOBUFS, an ICMP error) drops this datagram
+	return nil
 }
 
 // WriteBatch sends several datagrams to the link's peer in one syscall
@@ -495,6 +519,9 @@ func (c *rawConn) WriteBatch(ps [][]byte) error {
 			}
 		}
 		return nil
+	}
+	if tx := c.mx.tx; tx.ok() {
+		return c.writeBatchTx(tx, ps)
 	}
 	rc, err := c.mx.ipc.SyscallConn()
 	if err != nil {
@@ -519,6 +546,35 @@ func (c *rawConn) WriteBatch(ps [][]byte) error {
 			pkts = append(pkts, pkt)
 		}
 		err := sendAll(c.wb, rc, pkts, c.wsa, nil)
+		for _, bp := range bps {
+			bufPool.Put(bp)
+		}
+		c.wpkts, c.wbps = pkts[:0], bps[:0]
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeBatchTx is WriteBatch through the send-only socket: whole IP packets,
+// no lock shared with the other links to this peer.
+func (c *rawConn) writeBatchTx(tx *rawTx, ps [][]byte) error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	for len(ps) > 0 {
+		chunk := ps[:min(len(ps), rawBatch)]
+		ps = ps[len(chunk):]
+		pkts := c.wpkts[:0]
+		bps := c.wbps[:0]
+		for _, p := range chunk {
+			bp := bufPool.Get().(*[]byte)
+			pkt := tx.frame(bp, c.f, c.id, uint16(c.seq.Add(1)), p, c.mx.raddrIP.IP, nil)
+			*bp = pkt[:0]
+			bps = append(bps, bp)
+			pkts = append(pkts, pkt)
+		}
+		err := tx.sendAll(pkts, c.mx.raddrIP.IP, nil, c.legacyWrite)
 		for _, bp := range bps {
 			bufPool.Put(bp)
 		}
@@ -665,6 +721,7 @@ type rawPeer struct {
 
 type rawPacketConn struct {
 	ipc       *net.IPConn
+	tx        *rawTx // send-only socket (nil: send on ipc; see rawTx)
 	f         *framer
 	wildcard  bool
 	guardKey  uint16 // icmp: the echo-guard key (c2s prefix byte) this listener holds
@@ -737,8 +794,13 @@ func listenRawLinux(kind, addr string, opt Options) (net.PacketConn, error) {
 		}
 		return nil, fmt.Errorf("encap %s: %w", f.kind, err)
 	}
+	var bind net.IP
+	if !ip.IsUnspecified() {
+		bind = ip
+	}
 	return &rawPacketConn{
 		ipc: ipc, f: f, wildcard: ip.IsUnspecified(), guardKey: guardKey,
+		tx:    openRawTx(f, ipc, bind),
 		laddr: &Addr{IP: ip, Kind: f.kind},
 		peers: make(map[rawKey]*rawPeer),
 	}, nil
@@ -862,12 +924,32 @@ func (c *rawPacketConn) WriteBatchTo(ps [][]byte, addr net.Addr) error {
 		}
 		c.mu.Unlock()
 		pkts, bps := ws.pkts[:0], ws.bps[:0]
+		tx := c.tx
+		if !tx.ok() {
+			tx = nil
+		}
 		for i, p := range chunk {
 			bp := bufPool.Get().(*[]byte)
-			pkt := c.f.build(*bp, a.ID, seq0+uint16(i), p)
+			var pkt []byte
+			if tx != nil {
+				pkt = tx.frame(bp, c.f, a.ID, seq0+uint16(i), p, a.IP, local)
+			} else {
+				pkt = c.f.build(*bp, a.ID, seq0+uint16(i), p)
+			}
 			*bp = pkt[:0]
 			bps = append(bps, bp)
 			pkts = append(pkts, pkt)
+		}
+		if tx != nil {
+			err := tx.sendAll(pkts, a.IP, local, func(tp []byte) error { return c.legacyWriteTo(tp, a.IP, local) })
+			for _, bp := range bps {
+				bufPool.Put(bp)
+			}
+			ws.pkts, ws.bps = pkts[:0], bps[:0]
+			if err != nil {
+				return err
+			}
+			continue
 		}
 		var oob []byte
 		if local != nil {
@@ -959,31 +1041,50 @@ func (c *rawPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	c.mu.Unlock()
 
 	bp := bufPool.Get().(*[]byte)
-	pkt := c.f.build(*bp, a.ID, seq, p)
-	dst := &net.IPAddr{IP: a.IP}
+	var pkt []byte
 	var err error
-	if local != nil {
-		// Answer from the address the peer targeted: its connected socket
-		// accepts nothing else, and neither would a stateful middlebox.
-		info := &unix.Inet4Pktinfo{}
-		copy(info.Spec_dst[:], local.To4())
-		_, _, err = c.ipc.WriteMsgIP(pkt, unix.PktInfo4(info), dst)
+	if tx := c.tx; tx.ok() {
+		pkt = tx.frame(bp, c.f, a.ID, seq, p, a.IP, local)
+		err = tx.sendAll([][]byte{pkt}, a.IP, local, func(tp []byte) error { return c.legacyWriteTo(tp, a.IP, local) })
 	} else {
-		_, err = c.ipc.WriteToIP(pkt, dst)
+		pkt = c.f.build(*bp, a.ID, seq, p)
+		err = c.legacyWriteTo(pkt, a.IP, local)
 	}
 	*bp = pkt[:0]
 	bufPool.Put(bp)
 	if err != nil {
-		if !softErr(err) {
-			return 0, err
-		}
-		sendRefused.Add(1)
+		return 0, err
 	}
 	return len(p), nil
 }
 
+// legacyWriteTo sends one framed transport packet on the receive socket (the
+// kernel builds the IP header), from local when set: answer from the address
+// the peer targeted — its connected socket accepts nothing else, and neither
+// would a stateful middlebox. A soft error drops it and counts it. Also
+// rawTx's fallback.
+func (c *rawPacketConn) legacyWriteTo(tp []byte, ip, local net.IP) error {
+	dst := &net.IPAddr{IP: ip}
+	var err error
+	if local != nil {
+		info := &unix.Inet4Pktinfo{}
+		copy(info.Spec_dst[:], local.To4())
+		_, _, err = c.ipc.WriteMsgIP(tp, unix.PktInfo4(info), dst)
+	} else {
+		_, err = c.ipc.WriteToIP(tp, dst)
+	}
+	if err != nil {
+		if !softErr(err) {
+			return err
+		}
+		sendRefused.Add(1)
+	}
+	return nil
+}
+
 func (c *rawPacketConn) Close() error {
 	err := c.ipc.Close()
+	c.tx.close()
 	if c.f.kind == KindICMP {
 		c.closeEcho.Do(func() { releaseEchoGuard(c.guardKey) })
 	}

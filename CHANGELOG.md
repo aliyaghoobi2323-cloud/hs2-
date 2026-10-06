@@ -1552,6 +1552,41 @@ each read the queue they all built as its own.
   297 → 340 Mbit/s per CPU-second, ping p99 under load 24.5 → 19.6 ms. Every
   carrier still `S`, never `P`: the controller's side of it is X6.
 
+### X5 — icmp carriers no longer queue on one socket lock
+- All carriers to one server sent on one shared raw socket, so their writes
+  queued twice: on Go's per-socket write lock, then on the kernel's
+  `lock_sock` (a raw socket that builds the IP header takes it for each
+  send). On a sender short of CPU, a writer the scheduler put aside while
+  holding them held every other carrier back (the field's profile: 16% in
+  the scheduler, pacers waiting on the descriptor's lock).
+- Now each icmp receive socket has a send-only `IPPROTO_RAW` socket beside
+  it (dial side and listener). The carriers build the outer IPv4 header —
+  from the receive socket's own TTL, TOS and DF policy, so the packet on
+  the wire is the one the kernel built before (a test compares the
+  kernel's header with the new one, both directions) — and send with
+  `sendmmsg` without Go's lock (the kernel's raw `IP_HDRINCL` path takes no
+  socket lock either). An `IPPROTO_RAW` socket receives nothing, so the
+  per-socket receive cost the shared socket removed does not come back.
+  A reply too big for the device without DF still goes out fragmented
+  through the shared socket; a datagram the kernel refuses is dropped and
+  counted (`send_refused`), as before; any other failure turns the
+  send-only socket off for good, logged once, and its carriers carry on on
+  the shared one. gre, ipip and ipx keep the old path: the kernel's default
+  DF policy for them gives each packet a hashed IP id a built header cannot
+  reproduce.
+- A udp listener's batch sends drop Go's lock the same way (the kernel's
+  udp send path takes no socket lock unless corked).
+- `HS2_RAW_TX=0` turns both off; `HS2_RAW_BATCH=0` (one datagram per call)
+  does too.
+- Measured: the design's lab (busy loops beside the sender) 103 → 141
+  Mbit/s median at saturation, 24% less CPU per Mbit/s; the send path alone
+  on 4 idle cores 4.8 → 7.0 Gbit/s; no difference under a steady 64 Mbit/s.
+  Under a hard CPU quota (`lab/cpuquota.sh`, 0.6 core, 7 interleaved
+  pairs) it is neutral — 202 vs 190 Mbit/s, within the noise — with ping
+  p99 under load 21.1 → 17.8 ms: a quota stops all of hs2's threads at once,
+  so no thread is put aside holding the lock there. The field measurement
+  compares it on and off.
+
 ### X2 — documentation brought in line with the code
 - The rate controller's description (`udpcarrier/rate.go`) named a
   `highQueue` hold band and 25%/6% growth that no longer exist: it now says

@@ -12,10 +12,22 @@
 # CPU every run, so two builds compare on Mbit/s per CPU-second.
 #
 #   QUOTA=0.6 lab/cpuquota.sh            # 0.6 of a core for the Kharej hs2
+#   SHARE=0.3 lab/cpuquota.sh            # 30% of its CPUs, the rest busy
 #   QUOTA=0 RATE=30mbit lab/cpuquota.sh  # no quota, a 30 Mbit/s path instead
+#
+# SHARE is how a systemd server splits its CPU between services (each in its
+# own cgroup, weighted alike): the Kharej hs2 and busy loops beside it (one
+# per CPU) in two cgroups whose weights give hs2 that share of its CPUs while
+# the loops want them. Unlike QUOTA — which stops all of hs2's threads at once
+# when it is spent — the scheduler then takes CPUs from hs2's threads one at a
+# time, as on a server shared with another tunnel: a thread can be put aside
+# while holding a lock its siblings wait for. Unlike busy loops in the same
+# cgroup (the scheduler's share per thread, which moved with hs2's thread
+# count), the group weights give hs2 the same share every run.
 #
 # Env [defaults]: BIN [built from this tree] IBIN [BIN: the Iran side's]
 #   ENCAP [icmp] QUOTA [0.6 cores; 0 = none] PERIOD_US [10000]
+#   SHARE [unset: a fraction of the Kharej CPUs, instead of QUOTA]
 #   CPUS_K [0,1] CPUS_I [2,3] LINKS [4: min_links = max_links]
 #   CONNS [8 downloads] DUR [30 s] RATE [none: a tbf on the Kharej egress]
 #   TRACE [0: 1 = a 5 s Go execution trace of the Kharej hs2 under load]
@@ -28,10 +40,11 @@ D=$(cd "$(dirname "$0")" && pwd)
 ID=${LAB_ID:-}
 W=${W:-/tmp/hs2cpuq}$ID
 A=cqi$ID B=cqk$ID VA=cqA$ID VB=cqB$ID
-ENCAP=${ENCAP:-icmp} QUOTA=${QUOTA:-0.6} PERIOD_US=${PERIOD_US:-10000}
+ENCAP=${ENCAP:-icmp} QUOTA=${QUOTA:-0.6} PERIOD_US=${PERIOD_US:-10000} SHARE=${SHARE:-}
+[ -n "$SHARE" ] && QUOTA=0
 CPUS_K=${CPUS_K:-0,1} CPUS_I=${CPUS_I:-2,3} LINKS=${LINKS:-4}
 CONNS=${CONNS:-8} DUR=${DUR:-30} RATE=${RATE:-} TRACE=${TRACE:-0}
-CG=""
+CG="" CGH=""
 
 cleanup(){
   for p in $(cat "$W"/pids 2>/dev/null); do kill "$p" 2>/dev/null; done
@@ -39,7 +52,10 @@ cleanup(){
   for p in $(cat "$W"/pids 2>/dev/null); do kill -9 "$p" 2>/dev/null; done
   for n in $A $B; do ip netns pids $n 2>/dev/null | xargs -r kill -9 2>/dev/null; done
   ip netns del $A 2>/dev/null; ip netns del $B 2>/dev/null
+  for p in $(cat "$CGH/cgroup.procs" 2>/dev/null); do kill -9 "$p" 2>/dev/null; done
+  sleep 0.1
   [ -n "$CG" ] && rmdir "$CG" 2>/dev/null
+  [ -n "$CGH" ] && rmdir "$CGH" 2>/dev/null
   return 0
 }
 mkdir -p "$W"; cleanup; rm -f "$W"/pids "$W"/*.log "$W"/*.txt
@@ -51,7 +67,26 @@ fi
 IBIN=${IBIN:-$BIN}
 
 # The quota's cgroup: v1 cpu controller, else a v2 group with cpu enabled.
-if [ "$QUOTA" != 0 ]; then
+if [ -n "$SHARE" ]; then
+  # weights: hs2 : loops = SHARE : 1-SHARE (v1 shares, or v2 weights)
+  WH=$(python3 -c "print(max(2,int(1024*float('$SHARE')/(1-float('$SHARE')))))")
+  if [ -f /sys/fs/cgroup/cpu/cpu.shares ]; then
+    CG=/sys/fs/cgroup/cpu/hs2cpuq$ID; CGH=/sys/fs/cgroup/cpu/hs2hog$ID
+    mkdir -p "$CG" "$CGH" || exit 1
+    echo "$WH" > "$CG/cpu.shares"; echo 1024 > "$CGH/cpu.shares"
+  elif [ -f /sys/fs/cgroup/cgroup.controllers ]; then
+    CG=/sys/fs/cgroup/hs2cpuq$ID; CGH=/sys/fs/cgroup/hs2hog$ID
+    echo +cpu > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null
+    mkdir -p "$CG" "$CGH" || exit 1
+    echo $((WH * 100 / 1024 + 1)) > "$CG/cpu.weight"; echo 100 > "$CGH/cpu.weight"
+  else
+    echo "no cpu cgroup for the shares" >&2; exit 1
+  fi
+  for c in $(echo "$CPUS_K" | tr ',' ' '); do
+    sh -c 'echo $$ > "$1/cgroup.procs"; exec taskset -c "$2" sh -c "while :; do :; done"' _ "$CGH" "$c" &
+    echo $! >> "$W/pids"
+  done
+elif [ "$QUOTA" != 0 ]; then
   Q=$(python3 -c "print(int(float('$QUOTA')*$PERIOD_US))")
   if [ -d /sys/fs/cgroup/cpu ] && [ -f /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then
     CG=/sys/fs/cgroup/cpu/hs2cpuq$ID; mkdir -p "$CG" || exit 1
@@ -106,13 +141,14 @@ done
 sleep 3
 
 ticks(){ awk '{print $14+$15}' /proc/"$1"/stat; }
+sticks(){ awk '{print $15}' /proc/"$1"/stat; }
 odisc(){ ip netns exec $B awk '/^Ip:/{if(h){print $(i)}else{for(i=1;i<=NF;i++)if($i=="OutDiscards")break;h=1}}' /proc/net/snmp; }
 thr(){ if [ -z "$CG" ]; then echo 0; elif [ -f "$CG/cpu.stat" ]; then awk '/^nr_throttled/{print $2}' "$CG/cpu.stat"; fi; }
 ip netns exec $A taskset -c "$CPUS_I" ping -c 40 -i 0.05 -W 2 10.142.0.2 > "$W/ping_idle.txt" 2>&1
 
 ip netns exec $B taskset -c "$CPUS_I" python3 "$D/tcpload.py" server 10.142.0.2 30425 100000000 & echo $! >> "$W/pids"
 sleep 0.5
-k0=$(ticks "$KPID"); o0=$(odisc); h0=$(thr); t0=$(date +%s.%N)
+k0=$(ticks "$KPID"); s0=$(sticks "$KPID"); o0=$(odisc); h0=$(thr); t0=$(date +%s.%N)
 ip netns exec $A taskset -c "$CPUS_I" python3 "$D/tcpload.py" client 10.142.0.2 30425 "$CONNS" "$DUR" "$W/load.json" & LP=$!
 ( sleep 5; ip netns exec $A taskset -c "$CPUS_I" ping -c $(( (DUR-8)*10 )) -i 0.1 -W 2 10.142.0.2 > "$W/ping.txt" 2>&1 ) & PGP=$!
 ( for s in $(seq 6 6 "$DUR"); do
@@ -122,12 +158,12 @@ if [ "$TRACE" = 1 ]; then
   ( sleep 12; ip netns exec $B timeout 15 curl -s -o "$W/trace.out" "http://127.0.0.1:30421/debug/pprof/trace?seconds=5" ) & TRP=$!
 fi
 wait $LP
-k1=$(ticks "$KPID"); o1=$(odisc); h1=$(thr); t1=$(date +%s.%N)
+k1=$(ticks "$KPID"); s1=$(sticks "$KPID"); o1=$(odisc); h1=$(thr); t1=$(date +%s.%N)
 wait $PGP $STP; [ "$TRACE" = 1 ] && wait $TRP
 
-python3 - "$W" "$((k1-k0))" "$(python3 -c "print($t1-$t0)")" "$((o1-o0))" "$((h1-h0))" "$QUOTA" "$ENCAP" "$LINKS" "$CONNS" "${RATE:-none}" <<'P'
+python3 - "$W" "$((k1-k0))" "$(python3 -c "print($t1-$t0)")" "$((o1-o0))" "$((h1-h0))" "$QUOTA" "$ENCAP" "$LINKS" "$CONNS" "${RATE:-none}" "${SHARE:-0}" "$((s1-s0))" <<'P'
 import json, re, sys, glob, os
-w, ticks, el, odisc, thr, quota, encap, links, conns, rate = sys.argv[1:]
+w, ticks, el, odisc, thr, quota, encap, links, conns, rate, share, sticks = sys.argv[1:]
 el = float(el); cpu_s = int(ticks) / 100.0
 d = json.load(open(os.path.join(w, "load.json")))
 tot = [x for x in d["tot"]]
@@ -154,9 +190,9 @@ for f in st:
         for e in re.findall(r'\d+:\w+:\d+/[\d.]+% r[\d.]+/bw[\d.]+ (\S+)', m.group(1)):
             n += 1; flags_s += "S" in e; flags_p += "P" in e
 held = [float(x) for x in re.findall(r'pacer room (\d+)%', " ".join(lines.get("sending:", [])))]
-res = {"encap": encap, "quota_cores": float(quota), "links": int(links), "conns": int(conns), "rate": rate,
+res = {"encap": encap, "quota_cores": float(quota), "share": float(share), "links": int(links), "conns": int(conns), "rate": rate,
        "mbit": round(mbit, 1), "mbit_late": round(late, 1), "cpu_s": round(cpu_s, 1),
-       "cpu_cores": round(cpu_s / el, 2), "mbit_per_cpu_s": round(mbit * d["secs"] / max(cpu_s, 0.01), 1),
+       "cpu_cores": round(cpu_s / el, 2), "sys_share": round(int(sticks) / max(int(ticks), 1), 2), "mbit_per_cpu_s": round(mbit * d["secs"] / max(cpu_s, 0.01), 1),
        "failed_conns": sum(1 for x in tot if x < 0), "max_gap_s": round(max(d["maxgap"]), 2),
        "throttled_periods": int(thr), "out_discards": int(odisc),
        "carrier_samples": n, "share_S": round(flags_s / max(n, 1), 2), "share_P": round(flags_p / max(n, 1), 2),

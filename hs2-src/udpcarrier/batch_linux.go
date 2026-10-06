@@ -18,6 +18,13 @@ import (
 
 var noBatch = os.Getenv("HS2_RAW_BATCH") == "0"
 
+// lockedSend (HS2_RAW_TX=0, or no batches) keeps the listener's batch sends
+// under Go's per-socket write lock, as before. Otherwise they run without it
+// (mmsg SendNoLock): the kernel's UDP send path takes no socket lock unless
+// corked, so the listener's carriers reach it in parallel instead of queueing
+// on one lock behind a writer the scheduler has put aside.
+var lockedSend = noBatch || os.Getenv("HS2_RAW_TX") == "0"
+
 const udpBatch = 32
 
 // udpConnWriteBatch is a batch sender for a connected UDP socket (the dial
@@ -203,7 +210,13 @@ func udpWriteBatchTo(uc *net.UDPConn, ps [][]byte, to *net.UDPAddr, src net.IP) 
 	sa := mmsg.Inet4(ip4, to.Port)
 	for len(ps) > 0 {
 		chunk := ps[:min(len(ps), udpBatch)]
-		n, err := b.Send(rc, chunk, sa, oob)
+		var n int
+		var err error
+		if lockedSend {
+			n, err = b.Send(rc, chunk, sa, oob)
+		} else {
+			n, err = b.SendNoLock(rc, chunk, sa, oob)
+		}
 		if err != nil {
 			return err
 		}
