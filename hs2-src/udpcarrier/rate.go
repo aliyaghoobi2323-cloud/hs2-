@@ -748,6 +748,16 @@ func (r *rateControl) snapshot() (btlBwBytes, rtPropSec float64, lossPPM uint32,
 	return r.btlBw, r.rtProp, r.lastLossPPM, r.startup
 }
 
+// diag is the controller's view for the status: the last standing-queue
+// estimate and the smoothed RTT (seconds), and what the pacer sent over the
+// last report (bytes/s) — next to the allowance (rateSnapshot), the share of
+// it the carrier could use.
+func (r *rateControl) diag() (queueSec, srttSec, sendBytes float64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.queue, r.srtt, r.lastSendRate
+}
+
 // queueSec is the last standing-queue estimate (for logging/tests).
 func (r *rateControl) queueSec() float64 {
 	r.mu.Lock()

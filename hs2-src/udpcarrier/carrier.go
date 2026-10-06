@@ -656,7 +656,6 @@ func (c *Conn) flushLoop() {
 type Stats struct {
 	Enc          fec.EncoderStats
 	Dec          fec.DecoderStats
-	PacerDropped uint64
 	RxDropped    uint64 // listener only: inbound datagrams dropped, this carrier's queue full
 	BtlBwBytes   float64
 	RateBytes    float64 // current pacing rate, bytes/s (what the pacer is allowed to send)
@@ -666,6 +665,17 @@ type Stats struct {
 	FECAtCeiling bool    // parity is at its maximum: loss beyond what FEC is sized for
 	Startup      bool    // the rate model is still ramping (no capacity estimate yet)
 	Pushing      bool    // offered most of its allowance at the last feedback
+
+	// The send stage (status): what the pacer sent over the last report
+	// (bytes/s, next to RateBytes: the share of its allowance the carrier
+	// could use), the standing queue its controller sees and its smoothed
+	// RTT (seconds), the bytes waiting in the pacer now, and since start the
+	// time enqueue waited for pacer room, the time inside socket writes (the
+	// fd lock and the syscall), the write calls and the datagrams written.
+	SendBytes, QueueSec, SRTT float64
+	PacerQueued               int64
+	PacerHeld, PacerWrite     time.Duration
+	PacerWrites, PacerSent    uint64
 }
 
 // Pushing reports whether the carrier was offering at least most of its
@@ -710,8 +720,9 @@ func (c *Conn) Warm() bool {
 }
 
 func (c *Conn) Stats() Stats {
-	_, dropped, _ := c.pacer.stats()
 	bw, rtt, loss, startup := c.rc.snapshot()
+	q, srtt, send := c.rc.diag()
+	pd := c.pacer.diag()
 	var dec fec.DecoderStats
 	if sp := c.decStats.Load(); sp != nil {
 		dec = *sp
@@ -719,7 +730,6 @@ func (c *Conn) Stats() Stats {
 	return Stats{
 		Enc:          c.enc.Stats(),
 		Dec:          dec,
-		PacerDropped: dropped,
 		RxDropped:    c.rxDropped.Load(),
 		BtlBwBytes:   bw,
 		RateBytes:    c.rc.rateSnapshot(),
@@ -729,5 +739,8 @@ func (c *Conn) Stats() Stats {
 		FECAtCeiling: math.Float64frombits(c.lossEst.Load()) >= fec.DefaultAdapterConfig().Max-1e-9,
 		Startup:      startup,
 		Pushing:      c.rc.pushing.Load(),
+		SendBytes:    send, QueueSec: q, SRTT: srtt,
+		PacerQueued: pd.Queued, PacerHeld: pd.Held, PacerWrite: pd.Write,
+		PacerWrites: pd.Writes, PacerSent: pd.Sent,
 	}
 }

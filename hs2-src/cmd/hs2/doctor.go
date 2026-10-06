@@ -65,6 +65,7 @@ func doctorCmd(args []string) {
 			checkPorts(d, fc, *cfgPath)
 			checkTCPMem(d, "/proc")
 			checkConntrack(d, "/proc")
+			checkCPU(d, "/proc", func() { time.Sleep(time.Second) })
 			checkTunnelsTogether(d)
 		} else {
 			d.info("live checks", "skipped — the config does not parse as JSON (see the config error above)")
@@ -587,6 +588,61 @@ func checkConntrack(d *doctorReport, proc string) {
 		d.warn("conntrack table", fmt.Sprintf("%d of %d entries (%d%%) — when it is full the kernel drops every new connection (\"nf_conntrack: table full\" in dmesg); raise net.netfilter.nf_conntrack_max", n, max, pct))
 	default:
 		d.ok("conntrack table", fmt.Sprintf("%d of %d entries (%d%%)", n, max, pct))
+	}
+}
+
+// checkCPU measures the whole server over one second (/proc/stat, between two
+// reads with wait in between) and its CPU pressure (PSI), next to what the
+// running hs2 tunnels use in all (their status files). A server short of CPU
+// sends every carrier's packets late however good the path is — and hs2's own
+// meter cannot show it when another program (another tunnel) takes the cores.
+func checkCPU(d *doctorReport, proc string, wait func()) {
+	a, ok := readProcStat(proc)
+	if !ok {
+		return
+	}
+	wait()
+	b, ok := readProcStat(proc)
+	if !ok {
+		return
+	}
+	busy, softirq, steal, ok := hostShares(a, b)
+	if !ok {
+		return
+	}
+	hs := hostSample{BusyPct: round1(busy), SoftirqPct: round1(softirq), StealPct: round1(steal), Cores: b.cores, ok: true}
+	psi60 := -1.0
+	if a10, a60, ok := readPSI(proc); ok {
+		hs.PSI10, psi60 = &a10, a60
+	}
+	msg := "server " + hostCPUText(hs)
+	if psi60 >= 0 {
+		msg += fmt.Sprintf(" (%.0f%% over the last minute)", psi60)
+	}
+	files, _ := filepath.Glob(filepath.Join(statusRunDir, "*.status.json"))
+	n, sum := 0, 0.0
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		var ls liveStatus
+		if json.Unmarshal(raw, &ls) != nil || time.Now().Unix()-ls.Updated > 6 {
+			continue
+		}
+		n++
+		sum += ls.CPUPct
+	}
+	if n > 0 {
+		msg += fmt.Sprintf("; %d running hs2 tunnel(s) use %.0f%% of one core in all", n, sum)
+	}
+	switch {
+	case hs.BusyPct >= hostSatBusy || psi60 >= hostSatPSI:
+		d.warn("server cpu", msg+" — the server is short of CPU: every carrier sends late however good the path is; stop what else runs here (another tunnel?) or move to a bigger VPS (hs2 status shows it live, the log says when it starts and ends)")
+	case hs.BusyPct >= hostClearBusy || psi60 >= hostClearPSI:
+		d.info("server cpu", msg+" — busy, with little room for a burst")
+	default:
+		d.ok("server cpu", msg)
 	}
 }
 

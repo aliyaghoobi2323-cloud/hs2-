@@ -470,8 +470,11 @@ func (c *rawConn) Write(p []byte) (int, error) {
 	_, err := c.mx.ipc.WriteToIP(pkt, c.mx.raddrIP)
 	*bp = pkt[:0]
 	bufPool.Put(bp)
-	if err != nil && !softErr(err) {
-		return 0, err
+	if err != nil {
+		if !softErr(err) {
+			return 0, err
+		}
+		sendRefused.Add(1)
 	}
 	return len(p), nil // a soft error (ENOBUFS, an ICMP error) drops this datagram
 }
@@ -538,6 +541,7 @@ func sendAll(b *mmsg.Batch, rc syscall.RawConn, pkts [][]byte, to *unix.RawSocka
 		if !softErr(err) {
 			return err
 		}
+		sendRefused.Add(1)
 		pkts = pkts[min(n+1, len(pkts)):] // that one is lost, as with Write
 	}
 	return nil
@@ -969,8 +973,11 @@ func (c *rawPacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	}
 	*bp = pkt[:0]
 	bufPool.Put(bp)
-	if err != nil && !softErr(err) {
-		return 0, err
+	if err != nil {
+		if !softErr(err) {
+			return 0, err
+		}
+		sendRefused.Add(1)
 	}
 	return len(p), nil
 }
@@ -1048,6 +1055,17 @@ func EchoIgnored() bool {
 	b, err := os.ReadFile(echoIgnorePath)
 	return err == nil && strings.TrimSpace(string(b)) == "1"
 }
+
+// sendRefused counts the datagrams this process's raw sockets dropped because
+// the kernel refused them with a soft error (see softErr) — a too-big
+// datagram, an ICMP error reported on the socket. The peer counts each as path
+// loss (its wire sequence was taken). A full device queue usually does NOT
+// show here: without IP_RECVERR the kernel reports that drop as a success
+// (it is in the host's Ip OutDiscards instead).
+var sendRefused atomic.Uint64
+
+// SendRefused is sendRefused (see there), for the status.
+func SendRefused() uint64 { return sendRefused.Load() }
 
 // softErr reports whether a raw-socket read/write error is a transient ICMP
 // error the kernel reports on a CONNECTED raw socket (dest/host/net

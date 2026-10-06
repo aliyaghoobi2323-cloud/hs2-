@@ -383,7 +383,9 @@ func runClient(addr string, ec udpcarrier.EncapConfig, key []byte, mtu, links in
 	for _, c := range cs {
 		s := c.Stats()
 		carrier = append(carrier, map[string]any{"loss_ppm": s.LossPPM, "parity": math.Round(s.ParityRatio*100) / 100,
-			"btlbw_mbps": math.Round(s.BtlBwBytes*8/1e5) / 10, "rtt_ms": s.RTProp.Milliseconds(), "pacer_drop": s.PacerDropped})
+			"btlbw_mbps": math.Round(s.BtlBwBytes*8/1e5) / 10, "rtt_ms": s.RTProp.Milliseconds(),
+			"send_mbps": math.Round(s.SendBytes*8/1e5) / 10, "queue_ms": math.Round(s.QueueSec * 1000),
+			"pacer_held_ms": s.PacerHeld.Milliseconds(), "pacer_write_ms": s.PacerWrite.Milliseconds(), "pacer_writes": s.PacerWrites})
 		c.Close()
 	}
 	out["carrier"] = carrier

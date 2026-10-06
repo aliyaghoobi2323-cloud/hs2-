@@ -165,3 +165,41 @@ func TestPacerBatches(t *testing.T) {
 		t.Fatalf("sent in %v: faster than the paced rate", el)
 	}
 }
+
+// The pacer's send-stage counters: a writer held back by the data queue's
+// time bound shows as held time, every socket write is counted and timed,
+// and the datagrams it carried add up to what was sent.
+func TestPacerDiag(t *testing.T) {
+	var mu sync.Mutex
+	n := 0
+	write := func(b []byte) error {
+		time.Sleep(200 * time.Microsecond) // a slow socket: the fd lock, the syscall
+		mu.Lock()
+		n++
+		mu.Unlock()
+		return nil
+	}
+	rc := newRateControl() // ~1 Mbit/s: 30 shards of 1200 bytes take ~300 ms
+	p := newPacer(rc, write, 64, nil)
+	defer p.close()
+	for i := 0; i < 30; i++ {
+		p.enqueue(make([]byte, 1200))
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for p.diag().Sent < 30 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	d := p.diag()
+	if d.Sent != 30 || d.Writes == 0 || d.Writes > d.Sent {
+		t.Fatalf("sent %d in %d writes", d.Sent, d.Writes)
+	}
+	if d.Write < time.Duration(d.Writes)*150*time.Microsecond {
+		t.Fatalf("%d writes of ≥200 µs timed as %v", d.Writes, d.Write)
+	}
+	if d.Held < 100*time.Millisecond {
+		t.Fatalf("30 shards at ~1 Mbit/s past a ~20 ms queue bound held the writer only %v", d.Held)
+	}
+	if d.Queued != 0 {
+		t.Fatalf("%d bytes still queued after everything was sent", d.Queued)
+	}
+}

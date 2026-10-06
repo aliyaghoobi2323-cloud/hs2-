@@ -2723,14 +2723,19 @@ tm_list(){
 }
 # tm_health_lines SF: loss / FEC / policer / drops / CPU from a fresh status
 # file (datagram tunnels report loss of what THIS side sends, as its peer sees it).
+# CPU is hs2's own (% of one core) next to the whole server's: busy across all
+# cores and the share of time tasks waited for a core (PSI) — a server another
+# program saturates delays every carrier while hs2's own number looks modest.
 tm_health_lines(){ # status file
-  local sf="$1" car loss mloss par ceil rec lost pol pconf pcap pd rd td cpu cores tr sp rp tw dn dq da
+  local sf="$1" car loss mloss par ceil rec lost pol pconf pcap sr rd td cpu cores tr sp rp tw dn dq da hcpu hcores psi hsat hod line
   status_fresh "$sf" || return 0
   car=$(jget "$sf" carrier); pol=$(jraw "$sf" policed); pconf=$(jraw "$sf" police_confirmed)
   loss=$(jraw "$sf" loss_pct); mloss=$(jraw "$sf" max_loss_pct); par=$(jraw "$sf" parity_pct)
   ceil=$(jraw "$sf" fec_at_ceiling); rec=$(jraw "$sf" fec_recovered); lost=$(jraw "$sf" fec_lost)
-  pcap=$(jraw "$sf" police_cap_mbit); pd=$(jraw "$sf" pacer_dropped); rd=$(jraw "$sf" rx_dropped); td=$(jraw "$sf" tun_drops)
+  pcap=$(jraw "$sf" police_cap_mbit); sr=$(jraw "$sf" send_refused); rd=$(jraw "$sf" rx_dropped); td=$(jraw "$sf" tun_drops)
   cpu=$(jraw "$sf" cpu_pct); cores=$(jraw "$sf" cpu_cores)
+  hcpu=$(jraw "$sf" host_cpu_pct); hcores=$(jraw "$sf" host_cores); psi=$(jraw "$sf" psi_cpu10)
+  hsat=$(jraw "$sf" host_saturated); hod=$(jraw "$sf" host_out_discards)
   tr=$(jraw "$sf" tun_read); sp=$(jraw "$sf" sent_pkts); rp=$(jraw "$sf" recv_pkts); tw=$(jraw "$sf" tun_written)
   dn=$(jraw "$sf" drop_no_carrier); dq=$(jraw "$sf" drop_queue_full); da=$(jraw "$sf" drop_aged)
   case "$car" in dgtun*)
@@ -2739,10 +2744,17 @@ tm_health_lines(){ # status file
     if [ "$pol" = true ] && [ "$pconf" = true ]; then say " Policer:     ${C_Y}confirmed on the path${C_0} — whole pool held at ${pcap} Mbit/s (re-probes slowly)"
     elif [ "$pol" = true ]; then say " Policer:     suspected — testing with the whole pool capped at ${pcap} Mbit/s"; fi
     say " Packets:     tun→carriers ${tr:-0} read, ${sp:-0} sent · carriers→tun ${rp:-0} received, ${tw:-0} written"
-    [ -n "$pd$rd$td" ] && say " Drops:       no carrier ${dn:-0} · carrier queue full ${dq:-0} · waited >50 ms ${da:-0} · pacer ${pd:-0} · receive queue ${rd:-0}"
+    [ -n "$sr$rd$td" ] && say " Drops:       no carrier ${dn:-0} · carrier queue full ${dq:-0} · waited >50 ms ${da:-0} · refused by the kernel ${sr:-0} · receive queue ${rd:-0}"
     ;;
   esac
-  [ -n "$cores" ] && say " CPU:         ${cpu:-0}% of one core ($cores core(s))"
+  if [ -n "$cores" ]; then
+    line=" CPU:         hs2 ${cpu:-0}% of one core ($cores core(s))"
+    [ -n "$hcpu" ] && line="$line · server ${hcpu}% busy across ${hcores:-?} core(s)"
+    [ -n "$psi" ] && line="$line · tasks waited for a core ${psi}% of the last 10 s"
+    [ "$hsat" = true ] && line="$line · ${C_Y}SATURATED: carriers send late however good the path is${C_0}"
+    say "$line"
+  fi
+  [ -n "$hod" ] && say " Net:         ${C_Y}the kernel discarded $hod outgoing IP packet(s) on this server since hs2 started${C_0} (Ip OutDiscards: a full interface queue)"
   return 0
 }
 

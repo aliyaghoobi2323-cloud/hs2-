@@ -183,6 +183,14 @@ type dgLink struct {
 	rxFrames atomic.Uint64
 	txFrames atomic.Uint64
 
+	// fair-queue sojourn (writeLoop): the time packets waited in fq, and how
+	// many were taken — the status shows the mean between two samples.
+	fqSojNs atomic.Int64
+	fqPops  atomic.Uint64
+	// diag: the send-stage counters at the last status sample (carrierStats,
+	// pool goroutine only), so the next one shows what happened in between.
+	diag dgDiag
+
 	// sampler state (pool goroutine only)
 	prevUp, prevDown uint64
 	rate             float64
@@ -411,7 +419,10 @@ func (l *dgLink) writeLoop(pool *sync.Pool, drops, aged, sent *atomic.Uint64) {
 				continue
 			}
 		}
-		if time.Since(p.t) > dgSojourn {
+		soj := time.Since(p.t)
+		l.fqSojNs.Add(int64(soj))
+		l.fqPops.Add(1)
+		if soj > dgSojourn {
 			// The packet aged out behind a writer blocked in the pacer: the
 			// carrier could not drain its queue within the sojourn, so it is
 			// at its limit just as surely as on a queue-full drop. Record it
@@ -1679,6 +1690,8 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 	ps.Datagram = true
 	var parSum float64
 	active := 0
+	var sd sendDiag
+	now := time.Now()
 	p.mu.RLock()
 	for _, l := range p.set {
 		if !l.alive() {
@@ -1691,8 +1704,8 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 		st := c.Stats()
 		ps.FECRecovered += st.Dec.Recovered
 		ps.FECLost += st.Dec.Lost
-		ps.PacerDropped += st.PacerDropped
 		ps.RxDropped += st.RxDropped
+		sd.add(l, st, now)
 		if l.rate < 1000 { // idle carriers say nothing about the path
 			continue
 		}
@@ -1706,6 +1719,7 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 		}
 	}
 	p.mu.RUnlock()
+	sd.fill(ps)
 	if active > 0 {
 		ps.ParityPct = round1f(parSum / float64(active) * 100)
 	}
@@ -1731,6 +1745,7 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 	p.mu.RUnlock()
 	ps.Policed, ps.PoliceConfirm = p.gov.Capped(), p.gov.Confirmed()
 	ps.PoliceCapMbit = round1f(mbitps(p.gov.CapBytes()))
+	ps.ShareMbit, ps.BusyQueueMs = round1f(mbitps(p.gov.Share())), round1f(p.gov.BusyQueue()*1000)
 	// Hysteresis: at the ceiling for 2 samples in a row to say so, clear of it
 	// for 5 to take it back — a bursty path would otherwise flap the log.
 	if ps.FECAtCeiling > 0 {
@@ -1750,8 +1765,59 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 
 func round1f(v float64) float64 { return float64(int64(v*10+0.5)) / 10 }
 
+// dgDiag holds a carrier's cumulative send-stage counters at the last status
+// sample (see dgLink.diag).
+type dgDiag struct {
+	at                 time.Time
+	held, write        time.Duration
+	writes, sent, pops uint64
+	soj                int64
+}
+
+// sendDiag sums the send stage over the live carriers between two status
+// samples: the time their writers waited for pacer room, the fair-queue
+// sojourn, and the socket writes (calls, time, datagrams).
+type sendDiag struct {
+	held, span, write  time.Duration
+	writes, sent, pops uint64
+	soj                int64
+	sendBytes          float64
+}
+
+func (d *sendDiag) add(l *dgLink, st udpcarrier.Stats, now time.Time) {
+	soj, pops := l.fqSojNs.Load(), l.fqPops.Load()
+	prev := l.diag
+	l.diag = dgDiag{at: now, held: st.PacerHeld, write: st.PacerWrite, writes: st.PacerWrites, sent: st.PacerSent, pops: pops, soj: soj}
+	d.sendBytes += st.SendBytes
+	if prev.at.IsZero() {
+		return
+	}
+	d.span += now.Sub(prev.at)
+	d.held += st.PacerHeld - prev.held
+	d.write += st.PacerWrite - prev.write
+	d.writes += st.PacerWrites - prev.writes
+	d.sent += st.PacerSent - prev.sent
+	d.pops += pops - prev.pops
+	d.soj += soj - prev.soj
+}
+
+func (d *sendDiag) fill(ps *PoolStats) {
+	ps.SendMbit = round1f(mbitps(d.sendBytes))
+	if d.span > 0 {
+		ps.SendHeldPct = round1f(float64(d.held) / float64(d.span) * 100)
+	}
+	if d.pops > 0 {
+		ps.FQWaitMs = round1f(float64(d.soj) / float64(d.pops) / 1e6)
+	}
+	if d.writes > 0 {
+		ps.WriteUs = round1f(float64(d.write) / float64(d.writes) / 1e3)
+		ps.PerWrite = round1f(float64(d.sent) / float64(d.writes))
+	}
+}
+
 // carrierLine is one compact line per live carrier for the status file:
-// id:state:sent/loss% rate/btlBw(Mbit) flags — enough to see which carrier
+// id:state:sent/loss% rate/btlBw(Mbit) flags send(Mbit) queue/srtt(ms) —
+// enough to see which carrier
 // loses AND whether one is pinned at a low rate while the path is healthy (the
 // after-idle ramp-stall signature). Flags: P=pushing (offered its allowance),
 // S=startup (still ramping), M=mute (it, or the other server, hears nothing on
@@ -1826,9 +1892,10 @@ func (p *dgPool) carrierLine() string {
 			if flags == "" {
 				flags = "-"
 			}
-			b = append(b, []byte(fmt.Sprintf("%d:%s:%d/%.1f%% r%.1f/bw%.1f %s",
+			b = append(b, []byte(fmt.Sprintf("%d:%s:%d/%.1f%% r%.1f/bw%.1f %s s%.1f q%.0f/%.0f",
 				l.id, st, l.sentPkts.Load(), float64(s.LossPPM)/1e4,
-				mbitps(s.RateBytes), mbitps(s.BtlBwBytes), flags))...)
+				mbitps(s.RateBytes), mbitps(s.BtlBwBytes), flags,
+				mbitps(s.SendBytes), s.QueueSec*1000, s.SRTT*1000))...)
 		} else {
 			b = append(b, []byte(fmt.Sprintf("%d:%s:%d", l.id, st, l.sentPkts.Load()))...)
 			if l.avoid(p.now()) {

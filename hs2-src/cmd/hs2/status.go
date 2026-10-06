@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 )
@@ -115,7 +116,7 @@ type liveStatus struct {
 	FECAtCeiling    int     `json:"fec_at_ceiling,omitempty"`
 	FECRecovered    uint64  `json:"fec_recovered,omitempty"` // received data rebuilt (live carriers)
 	FECLost         uint64  `json:"fec_lost,omitempty"`      // received data lost for good
-	PacerDropped    uint64  `json:"pacer_dropped,omitempty"`
+	SendRefused     uint64  `json:"send_refused,omitempty"`  // raw-socket sends the kernel refused (encap.SendRefused)
 	RxDropped       uint64  `json:"rx_dropped,omitempty"`
 	TunDrops        uint64  `json:"tun_drops,omitempty"`
 	TunRead         uint64  `json:"tun_read,omitempty"`
@@ -141,11 +142,37 @@ type liveStatus struct {
 	Policed         bool    `json:"policed,omitempty"`
 	PoliceConfirm   bool    `json:"police_confirmed,omitempty"`
 	PoliceCapMbit   float64 `json:"police_cap_mbit,omitempty"`
+	// The pool's fair share per busy carrier (Mbit/s) and the standing queue
+	// its busy carriers see (ms), and the send stage since the last write
+	// (engine.PoolStats): what the pacers sent (Mbit/s), the share of the
+	// time the writers waited for pacer room, the mean fair-queue wait (ms),
+	// the mean socket write (µs) and datagrams per write.
+	ShareMbit   float64 `json:"share_mbit,omitempty"`
+	BusyQueueMs float64 `json:"busy_queue_ms,omitempty"`
+	SendMbit    float64 `json:"send_mbit,omitempty"`
+	SendHeldPct float64 `json:"send_held_pct,omitempty"`
+	FQWaitMs    float64 `json:"fq_wait_ms,omitempty"`
+	WriteUs     float64 `json:"write_us,omitempty"`
+	PerWrite    float64 `json:"per_write,omitempty"`
 
 	// Process CPU over the last interval, % of ONE core (a 2-core box can
 	// show up to 200), and the core count.
 	CPUPct   float64 `json:"cpu_pct"`
 	CPUCores int     `json:"cpu_cores"`
+	// The whole server over the last interval (hostMeter): CPU busy across
+	// all its cores and the softirq / steal shares (% of all cores), its
+	// core count, the share of time tasks waited for a core (PSI "some"
+	// avg10 / avg60; absent: no PSI in this kernel), whether it is held
+	// saturated, and the IP packets the kernel discarded on output since hs2
+	// started.
+	HostCPUPct      float64  `json:"host_cpu_pct,omitempty"`
+	HostSoftirqPct  float64  `json:"host_softirq_pct,omitempty"`
+	HostStealPct    float64  `json:"host_steal_pct,omitempty"`
+	HostCores       int      `json:"host_cores,omitempty"`
+	PSICPU10        *float64 `json:"psi_cpu10,omitempty"`
+	PSICPU60        *float64 `json:"psi_cpu60,omitempty"`
+	HostSaturated   bool     `json:"host_saturated,omitempty"`
+	HostOutDiscards uint64   `json:"host_out_discards,omitempty"`
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -229,6 +256,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 	// CPU meter agree with it (runtime.NumCPU() is the host's under a quota).
 	_, hwCores := detectHW()
 	cpu := &cpuMeter{logf: func(f string, a ...any) { log.Printf(f, a...) }, cores: hwCores}
+	host := &hostMeter{proc: "/proc", logf: log.Printf}
 	base := liveStatus{
 		Role: role(fc), Dir: direction(fc), Carrier: carrierName(fc),
 		Transport: transportLabel(fc), Endpoint: endpointLabel(fc), PID: os.Getpid(),
@@ -280,7 +308,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		if s.Datagram {
 			ls.LossPct, ls.MaxLossPct, ls.ParityPct = s.LossPct, s.MaxLossPct, s.ParityPct
 			ls.FECAtCeiling, ls.FECRecovered, ls.FECLost = s.FECAtCeiling, s.FECRecovered, s.FECLost
-			ls.PacerDropped, ls.RxDropped, ls.TunDrops = s.PacerDropped, s.RxDropped, s.TunDrops
+			ls.SendRefused, ls.RxDropped, ls.TunDrops = encap.SendRefused(), s.RxDropped, s.TunDrops
 			ls.Policed, ls.PoliceConfirm, ls.PoliceCapMbit = s.Policed, s.PoliceConfirm, s.PoliceCapMbit
 			ls.TunRead, ls.SentPkts, ls.RecvPkts, ls.TunWritten = s.TunRead, s.SentPkts, s.RecvPkts, s.TunWritten
 			ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.Carriers = s.DropNoCarrier, s.DropQueueFull, s.DropAged, s.Carriers
@@ -288,8 +316,13 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.TunOffload, ls.TunReads, ls.TunSegs, ls.TunWrites, ls.TunPkts = s.TunOffload, s.TunReads, s.TunSegs, s.TunWrites, s.TunPkts
 			ls.TunMode, ls.TunBad, ls.TunRefused = s.TunMode, s.TunBad, s.TunRefused
 			ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut = s.ReorderHeld, s.ReorderFilled, s.ReorderTimedOut
+			ls.ShareMbit, ls.BusyQueueMs = s.ShareMbit, s.BusyQueueMs
+			ls.SendMbit, ls.SendHeldPct, ls.FQWaitMs, ls.WriteUs, ls.PerWrite = s.SendMbit, s.SendHeldPct, s.FQWaitMs, s.WriteUs, s.PerWrite
 		}
 		ls.CPUPct, ls.CPUCores = cpu.sample(), hwCores
+		hs := host.sample(ls.CPUPct)
+		ls.HostCPUPct, ls.HostSoftirqPct, ls.HostStealPct, ls.HostCores = hs.BusyPct, hs.SoftirqPct, hs.StealPct, hs.Cores
+		ls.PSICPU10, ls.PSICPU60, ls.HostSaturated, ls.HostOutDiscards = hs.PSI10, hs.PSI60, hs.Saturated, hs.OutDiscards
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
@@ -459,9 +492,15 @@ func printStatus(path string) {
 			fmt.Printf("  policer:    suspected — testing with the whole pool capped at %.1f Mbit/s\n", ls.PoliceCapMbit)
 		}
 		fmt.Printf("  packets:    tun→carriers %d read, %d sent · carriers→tun %d received, %d written\n", ls.TunRead, ls.SentPkts, ls.RecvPkts, ls.TunWritten)
-		if ls.PacerDropped+ls.RxDropped+ls.TunDrops > 0 {
-			fmt.Printf("  drops:      no carrier %d · carrier queue full %d · waited >50 ms %d · pacer %d · receive queue %d\n",
-				ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.PacerDropped, ls.RxDropped)
+		if ls.SendRefused+ls.RxDropped+ls.TunDrops > 0 {
+			fmt.Printf("  drops:      no carrier %d · carrier queue full %d · waited >50 ms %d · refused by the kernel %d · receive queue %d\n",
+				ls.DropNoCarrier, ls.DropQueueFull, ls.DropAged, ls.SendRefused, ls.RxDropped)
+		}
+		if l := poolLine(ls); l != "" {
+			fmt.Printf("  pool:       %s\n", l)
+		}
+		if l := sendingLine(ls); l != "" {
+			fmt.Printf("  sending:    %s\n", l)
 		}
 		switch {
 		case ls.TunOffload:
@@ -473,7 +512,7 @@ func printStatus(path string) {
 			fmt.Printf("  mute:       %d carrier(s) closed and replaced after hearing nothing while the others did (their own way through was cut)\n", ls.MuteClosed)
 		}
 		if ls.Carriers != "" {
-			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup M=mute)\n", ls.Carriers)
+			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup M=mute, sSENT Mbit, qQUEUE/SRTT ms)\n", ls.Carriers)
 		}
 		if ls.ReorderHeld > 0 {
 			fmt.Printf("  reorder:    %d segments held behind a gap; %d gaps filled in order, %d released after the hold\n",
@@ -481,7 +520,10 @@ func printStatus(path string) {
 		}
 	}
 	if ls.CPUCores > 0 {
-		fmt.Printf("  cpu:        %.0f%% of one core (%d core(s))\n", ls.CPUPct, ls.CPUCores)
+		fmt.Printf("  cpu:        %s\n", cpuLine(ls))
+	}
+	if ls.HostOutDiscards > 0 {
+		fmt.Printf("  net:        the kernel discarded %d outgoing IP packet(s) on this server since hs2 started (Ip OutDiscards: a full interface queue; on raw carriers these are tunnel packets lost before the wire)\n", ls.HostOutDiscards)
 	}
 	if ls.CertDays >= 0 {
 		fmt.Printf("  certificate: valid for %d more day(s)%s\n", ls.CertDays, certWarn(ls.CertDays))
@@ -805,6 +847,42 @@ func (w *tcpMemWatch) check() {
 		w.logf("kernel TCP memory: back below the pressure mark (%d MB of %d MB)", mb(mem), mb(press))
 	}
 	engine.SetTCPMemPressure(w.above) // the guard and the health rules (engine/mempressure.go)
+}
+
+// cpuLine is hs2's own CPU next to the whole server's, e.g. "hs2 140% of
+// one core (2 core(s)) · server 97% busy across 2 core(s), tasks waited for a
+// core 81% of the last 10 s — SATURATED".
+func cpuLine(ls liveStatus) string {
+	s := fmt.Sprintf("hs2 %.0f%% of one core (%d core(s))", ls.CPUPct, ls.CPUCores)
+	h := hostCPUText(hostSample{BusyPct: ls.HostCPUPct, SoftirqPct: ls.HostSoftirqPct, StealPct: ls.HostStealPct,
+		Cores: ls.HostCores, PSI10: ls.PSICPU10, ok: ls.HostCPUPct > 0})
+	if h != "" {
+		s += " · server " + h
+	}
+	if ls.HostSaturated {
+		s += " — SATURATED: carriers send late however good the path is (see the log)"
+	}
+	return s
+}
+
+// poolLine is the datagram pool's fair share and the queue its busy carriers
+// see ("" when the pool has neither).
+func poolLine(ls liveStatus) string {
+	if ls.ShareMbit <= 0 && ls.BusyQueueMs <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("fair share %.1f Mbit/s per busy carrier · queue the busy carriers see %.0f ms", ls.ShareMbit, ls.BusyQueueMs)
+}
+
+// sendingLine is the send stage since the last status write: whether the
+// carriers' pacers, the fair queue in front of them or the socket writes hold
+// the traffic back ("" before anything was sent).
+func sendingLine(ls liveStatus) string {
+	if ls.SendMbit <= 0 && ls.WriteUs <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("pacers sent %.1f Mbit/s · writers waited for pacer room %.0f%% of the time · fair-queue wait %.1f ms · socket write %.0f µs (%.1f datagram(s) each)",
+		ls.SendMbit, ls.SendHeldPct, ls.FQWaitMs, ls.WriteUs, ls.PerWrite)
 }
 
 // offloadLine says what the TUN's TCP offloads saved: packets per kernel read

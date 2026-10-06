@@ -53,9 +53,14 @@ type pacer struct {
 	wg        sync.WaitGroup
 
 	enqueued uint64
-	dropped  uint64
 	sent     uint64
 	wireSeq  uint32 // pacer goroutine only
+	// Send-stage diagnostics (status only): the time enqueue spent waiting
+	// for room (the writer held back by this pacer), and the socket writes —
+	// how many calls, and the time inside them (the fd lock and the syscall).
+	heldNs   atomic.Int64
+	writeNs  atomic.Int64
+	writes   atomic.Uint64
 	writeErr atomic.Pointer[error]
 	stamps   *atomic.Bool              // the peer takes stamped datagrams (tagDataTS)
 	gov      *atomic.Pointer[Governor] // the pool's shared cap (nil / empty outside a capped pool)
@@ -127,27 +132,37 @@ func (p *pacer) enqueueLane(pkt []byte, urgent bool) {
 	case urgent:
 		dst = p.fast // an interactive packet: not behind the data queue
 	default:
-		for p.queued.Load() > p.budget() {
-			select {
-			case <-p.done:
-				*bp = b
-				p.pool.Put(bp)
-				return
-			case <-p.room:
+		if p.queued.Load() > p.budget() {
+			t0 := time.Now()
+			for p.queued.Load() > p.budget() {
+				select {
+				case <-p.done:
+					*bp = b
+					p.pool.Put(bp)
+					return
+				case <-p.room:
+				}
 			}
+			p.heldNs.Add(int64(time.Since(t0)))
 		}
 	}
 	p.queued.Add(int64(len(b)))
 	select {
-	case <-p.done:
-		*bp = b
-		p.pool.Put(bp)
-		return
 	case dst <- b:
-		atomic.AddUint64(&p.enqueued, 1)
-		if dst == p.in {
-			p.inQueued.Add(1)
+	default: // the lane is full: the writer waits for the pacer
+		t0 := time.Now()
+		select {
+		case <-p.done:
+			*bp = b
+			p.pool.Put(bp)
+			return
+		case dst <- b:
 		}
+		p.heldNs.Add(int64(time.Since(t0)))
+	}
+	atomic.AddUint64(&p.enqueued, 1)
+	if dst == p.in {
+		p.inQueued.Add(1)
 	}
 }
 
@@ -326,11 +341,14 @@ func (p *pacer) loop() {
 			outs = append(outs, out)
 		}
 		var err error
+		t0 := time.Now()
 		if len(outs) == 1 {
 			err = p.write(outs[0])
 		} else {
 			err = (*wb)(outs)
 		}
+		p.writeNs.Add(int64(time.Since(t0)))
+		p.writes.Add(1)
 		if err != nil {
 			e := err
 			p.writeErr.Store(&e)
@@ -363,8 +381,21 @@ func (p *pacer) err() error {
 	return nil
 }
 
-func (p *pacer) stats() (enqueued, dropped, sent uint64) {
-	return atomic.LoadUint64(&p.enqueued), atomic.LoadUint64(&p.dropped), atomic.LoadUint64(&p.sent)
+func (p *pacer) stats() (enqueued, sent uint64) {
+	return atomic.LoadUint64(&p.enqueued), atomic.LoadUint64(&p.sent)
+}
+
+// pacerDiag is the pacer's send-stage view (see pacer.heldNs): cumulative
+// since the carrier started, except Queued (bytes waiting now).
+type pacerDiag struct {
+	Queued       int64
+	Held, Write  time.Duration
+	Writes, Sent uint64
+}
+
+func (p *pacer) diag() pacerDiag {
+	return pacerDiag{Queued: p.queued.Load(), Held: time.Duration(p.heldNs.Load()), Write: time.Duration(p.writeNs.Load()),
+		Writes: p.writes.Load(), Sent: atomic.LoadUint64(&p.sent)}
 }
 
 func (p *pacer) close() {

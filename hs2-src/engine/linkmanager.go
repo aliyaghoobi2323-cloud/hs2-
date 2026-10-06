@@ -2257,7 +2257,6 @@ type PoolStats struct {
 	FECAtCeiling  int     // active carriers whose parity is at its maximum
 	FECRecovered  uint64  // received data rebuilt from parity (live carriers)
 	FECLost       uint64  // received data lost for good (live carriers)
-	PacerDropped  uint64  // datagrams the carriers' pacers dropped (live carriers)
 	RxDropped     uint64  // received datagrams dropped for a full carrier queue (live carriers)
 	TunDrops      uint64  // tunnel packets dropped for a full carrier queue (since start)
 	TunRead       uint64  // packets read from the tun (to send)
@@ -2276,13 +2275,21 @@ type PoolStats struct {
 	TunMode                               string
 	TunReads, TunSegs, TunWrites, TunPkts uint64
 	TunBad, TunRefused                    uint64
-	Carriers                              string // per carrier: id:state:sent/loss%
+	Carriers                              string // per carrier: see dgPool.carrierLine
 	// TCP reorder buffer before the TUN (live carriers): segments held behind a
 	// gap, gaps that filled while held, and gaps given up after the hold.
 	ReorderHeld, ReorderFilled, ReorderTimedOut uint64
 	Policed                                     bool    // the pool is held under a policer cap (being tested or confirmed)
 	PoliceConfirm                               bool    // the cap stretched the loss episodes: a confirmed policer
 	PoliceCapMbit                               float64 // that cap, Mbit/s (wire: data + parity)
+	// The pool's fair share per busy carrier (Mbit/s) and the standing
+	// queue its busy carriers see (ms): see udpcarrier.Governor.
+	ShareMbit, BusyQueueMs float64
+	// The send stage since the last sample (live carriers): what the pacers
+	// sent (Mbit/s), the share of the time the writers waited for pacer
+	// room (mean per carrier), the mean fair-queue wait (ms), and the mean
+	// socket write (µs, the fd lock and the syscall) with datagrams per write.
+	SendMbit, SendHeldPct, FQWaitMs, WriteUs, PerWrite float64
 }
 
 // publishStats stores the monitor snapshot at the end of a pool tick.
