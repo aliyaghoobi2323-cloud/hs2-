@@ -80,11 +80,15 @@ ip netns exec $KH env HS2_NO_TUNE=1 "$BIN" run -c "$W/kh.json" >"$W/kh.log" 2>&1
 sleep 1
 ip netns exec $IR env HS2_NO_TUNE=1 "$BIN" run -c "$W/ir.json" >"$W/ir.log" 2>&1 & echo $! >> "$W/pids"
 
-# Wait for the tun to come up and carry traffic. The up-check is a TCP connect
-# through the forwarded port (which rides the tun), so it is encap-agnostic.
+# Wait for the tun to come up and carry traffic: a carrier up in iran's log
+# (the user port's TCP connect alone succeeds on iran's own listener before
+# any carrier is up — in reverse, where kharej dials and retries, ~2 s of
+# pings went out with no carrier and read as 10-22% loss), then a TCP connect
+# through the forwarded port, so it is encap-agnostic.
 TUNUP=0
 for i in $(seq 1 80); do
-  if ip -n $IR link show hs0 >/dev/null 2>&1 && ip -n $KH link show hs0 >/dev/null 2>&1; then
+  if ip -n $IR link show hs0 >/dev/null 2>&1 && ip -n $KH link show hs0 >/dev/null 2>&1 &&
+     grep -q ' up (now ' "$W/ir.log" 2>/dev/null; then
     if ip netns exec $IR bash -c 'exec 3<>/dev/tcp/127.0.0.1/8443' 2>/dev/null; then TUNUP=1; break; fi
   fi
   sleep 0.25
