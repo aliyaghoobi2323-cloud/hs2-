@@ -429,9 +429,12 @@ of the time a carrier's writer waited for room in its pacer, the mean wait in
 the fair queue in front of it, and the mean socket write (the shared socket's
 lock plus the system call) with the datagrams each carried. `pool:`
 (`share_mbit`, `busy_queue_ms`) is the fair share per busy carrier and the
-queue those carriers see. A path-bound pool shows `P`, a `q` of 5-20 ms and
-little waiting; a sender short of CPU shows `S` without `P`, `q` near 0, a
-high `send_held_pct` and the server saturated on the `cpu:` line.
+queue those carriers see. Writers wait for pacer room whenever the carriers
+are the limit — on a full path as much as on a sender short of CPU (lab:
+54-74% of the time either way); what tells the two apart is the carriers:
+a path-bound pool shows `P` (`s` close to `r`) and a `q` of 5-20 ms, a sender
+short of CPU `S` without `P` (`s` well under `r`), `q` near 0 and the server
+saturated on the `cpu:` line.
 
 **The server's CPU.** hs2's own CPU (`cpu_pct`, % of one core) does not say
 whether the server has any left: a 2-core server shared with another tunnel

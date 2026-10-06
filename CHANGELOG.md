@@ -1499,7 +1499,9 @@ each read the queue they all built as its own.
   (`s`) and the queue and smoothed round trip its rate control sees
   (`qQUEUE/SRTT`). Lab, the sender's two cores shared with two busy loops:
   `writers waited for pacer room 55% of the time`, every carrier `S` with
-  `s` under half of `r`.
+  `s` under half of `r`. (Writers wait as long on a full path — 74% behind
+  a 30 Mbit/s bottleneck — but there the carriers are `P`, `s` close to
+  `r`, with a 15 ms `q`.)
 - The dead `pacer_dropped` is gone; `send_refused` counts the datagrams the
   kernel refused on a raw socket (a soft error), which the peer counts as
   path loss.
@@ -1509,6 +1511,26 @@ each read the queue they all built as its own.
   `host_saturated`, `host_out_discards`, `send_refused`, `share_mbit`,
   `busy_queue_ms`, `send_mbit`, `send_held_pct`, `fq_wait_ms`, `write_us`
   and `per_write`.
+
+### X3 — a lab sender short of CPU, the same every run
+- `lab/cpuquota.sh`: two namespaces, reverse tun over icmp, 4 carriers,
+  8 downloads; the Kharej hs2 (the sender) runs under a hard CPU quota
+  (`QUOTA` cores, enforced every 10 ms) on its own two CPUs, everything else
+  on two others (the receiving veth's work too). Busy loops beside it, as
+  before, measured the scheduler's share, which moved with nice and the load
+  (the same build gave 92 to 416 Mbit/s); a quota gives the sender the same
+  CPU every run, so builds compare on Mbit/s per CPU-second. Prints the
+  carriers' flags, the `sending:` line, ping under load and the kernel's
+  output discards; `TRACE=1` adds a Go execution trace, `RATE=30mbit` makes
+  the path the limit instead.
+- Baseline (this phase's monitoring, no data-path change): 0.6 core 134-158
+  Mbit/s, 234-281 Mbit/s per CPU-second, every carrier `S` and none `P` in
+  every sample — the field regime; 1.2 cores 632 Mbit/s, 557 per
+  CPU-second; no quota (2 cores) 696 Mbit/s, still all `S` (nothing else
+  limits it), and 923 tunnel packets the kernel discarded on output. A
+  starved sender is also a less efficient one: half the CPU, a quarter of
+  the throughput. Behind a 30 Mbit/s path the three busy carriers are `P`
+  at 9.3-10.1 Mbit/s against a 9.6 fair share, `q` 15 ms, ping p99 23 ms.
 
 ### X2 — documentation brought in line with the code
 - The rate controller's description (`udpcarrier/rate.go`) named a

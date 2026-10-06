@@ -223,9 +223,11 @@ datagram is written: it does NOT include hs2's own queues in front of the
 socket — the `sending:` line's fair-queue wait, and the writers' wait for
 pacer room — whose time adds to every packet's latency. `socket write` is
 the time per write (the shared socket's lock plus the system call) with the
-datagrams each carried. Path-bound: `P` set, `q` 5-20 ms, little waiting.
-Sender-bound: `S` without `P`, `q` under 5 ms, a high share of time waiting
-for pacer room, and the `cpu:` line saturated. `net:` (the kernel's output
+datagrams each carried. Writers wait for pacer room whenever the carriers
+are the limit, on a full path as on a starved sender, so that share alone
+tells nothing. Path-bound: `P` set (`s` close to `r`), `q` 5-20 ms.
+Sender-bound: `S` without `P` (`s` well under `r`), `q` under 5 ms, and the
+`cpu:` line saturated. `net:` (the kernel's output
 discards) growing during a run means the interface queue overflowed: on
 icmp those are tunnel packets the peer counts as path loss.
 
