@@ -276,8 +276,12 @@ but set it on both ends to shape both directions.
 For each scenario: the counts, the relevant log lines (Iran side, with
 timestamps), the time of the action (V2–V4), and whether users noticed.
 
-Release: binary build `e3d321cb9d74` (Phase CA — opt-in ICMP timing/id
-camouflage, `HS2_ICMP_CAMO`; and Phase Y — the Phase X stage-rule regression
-fixed for a saturated, asymmetrically loaded sender; `hs2 version` shows it).
-See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y, Phase CA) and
-`git log` on main.
+Release: binary build `da621f5db2bb` (Phase CA + CA1b — opt-in ICMP timing/id
+camouflage, `HS2_ICMP_CAMO`, with the idle-mute flap fixed; and Phase Y — the
+Phase X stage-rule regression fixed for a saturated, asymmetrically loaded
+sender; `hs2 version` shows it). Note: Phase CA's field behaviour (camouflage
+effect, and the CA1b flap fix) is confirmed on an off-border test pair only —
+lab unit tests and build are green and the flap fix's logic is verified, but
+the on-wire V14/flap re-check still wants a run on your own test pair before
+production. See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y, Phase
+CA) and `git log` on main.
