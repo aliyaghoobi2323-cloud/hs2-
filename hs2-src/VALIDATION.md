@@ -262,4 +262,7 @@ tunnel's losses.
 For each scenario: the counts, the relevant log lines (Iran side, with
 timestamps), the time of the action (V2–V4), and whether users noticed.
 
-Release: binary build `37e9f2f9c2e0` (Phase X; `hs2 version` shows it). See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X) and `git log` on main.
+Release: binary build `bb59a0117176` (Phase Y — the Phase X stage-rule
+regression fixed for a saturated, asymmetrically loaded sender; `hs2 version`
+shows it). See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y) and
+`git log` on main.
