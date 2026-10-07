@@ -257,12 +257,27 @@ server's output discards — on an icmp listener mostly the kernel's own
 replies the tunnel suppresses — so it is context, not a count of this
 tunnel's losses.
 
+**V14 — ICMP timing/id camouflage (Phase CA), opt-in.** On a SEPARATE,
+user-free test IP pair (never a user IP), tun over icmp. Set
+`Environment=HS2_ICMP_CAMO=1` on BOTH ends (`systemctl edit <service>`,
+restart, wait 60 s). Compare a packet capture of the carrier traffic with the
+flag off vs on. Pass: (a) with the tunnel up but idle, the per-second packet
+rate drops sharply and the ~10 Hz feedback line and the ~0.25 Hz 4-second
+probe dip disappear from the inter-packet-time spectrum; (b) link ids form a
+small ascending cluster, not values spread across the whole 16-bit range;
+(c) under a saturating `iperf3 -R` the throughput and ping are no worse than
+with the flag off (timing camouflage must not cost goodput); (d) no link
+churn or `idle past deadline` in the logs (keepalive still holds the link).
+The flag changes only timing and the id draw, so an old peer interoperates,
+but set it on both ends to shape both directions.
+
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with
 timestamps), the time of the action (V2–V4), and whether users noticed.
 
-Release: binary build `bb59a0117176` (Phase Y — the Phase X stage-rule
-regression fixed for a saturated, asymmetrically loaded sender; `hs2 version`
-shows it). See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y) and
+Release: binary build `e3d321cb9d74` (Phase CA — opt-in ICMP timing/id
+camouflage, `HS2_ICMP_CAMO`; and Phase Y — the Phase X stage-rule regression
+fixed for a saturated, asymmetrically loaded sender; `hs2 version` shows it).
+See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y, Phase CA) and
 `git log` on main.
