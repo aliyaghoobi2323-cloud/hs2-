@@ -24,20 +24,20 @@ var dgPadDisabled = os.Getenv("HS2_DG_PAD") == "0"
 // old peer is unaffected:
 //   - the feedback cadence is jittered instead of a fixed 100 ms tick, so the
 //     flow carries no sharp ~10 Hz spectral line for a filter to key on;
-//   - an idle carrier (nothing received to report) falls quiet instead of
-//     beating 10 times a second with nothing to carry — keepalive (jittered,
-//     ~5 s, well inside deadAfter) keeps the link alive. This is the case a
-//     near-idle tunnel is most exposed in: at idle the only packets WERE the
-//     feedback beat.
+//   - an idle carrier drops to a slow ~0.7 s jittered cadence (near a real
+//     ping's ~1 s interval) instead of beating 10 times a second. It does NOT
+//     fall fully silent: the peer's ~1 s mute detector (built on the old fixed
+//     beat) would otherwise flap flows on and off an idle carrier.
 //
 // It does not remove the receiver->sender feedback cadence during an active
 // download (that direction is mostly feedback, needed by the rate control); it
 // only jitters it. Set HS2_ICMP_CAMO=1 on both ends of an icmp tunnel.
 var icmpCamo = os.Getenv("HS2_ICMP_CAMO") == "1"
 
-// camoIdlePoll is how often a quiet carrier wakes to notice traffic resumed
-// (it sends nothing while idle). Short enough that feedback resumes promptly
-// for the rate control, far below deadAfter.
+// camoIdlePoll is the base idle feedback interval under camouflage: a slow,
+// jittered cadence (~0.7 s, near a real ping's 1 s) kept up so an idle carrier
+// still emits — below the peer's ~1 s mute detector (dgMuteAfter) so idle
+// carriers are not muted, and far below deadAfter.
 const camoIdlePoll = 700 * time.Millisecond
 
 // camoJitter returns d scaled by a uniform random factor in [1-frac, 1+frac].
@@ -564,11 +564,19 @@ func (c *Conn) feedbackLoop() {
 			rx := c.wireBytes.Load()
 			active := rx != lastRx
 			lastRx = rx
+			// Always send. An idle carrier that fell fully silent tripped the
+			// peer's ~1 s mute detector (dgMuteAfter — built assuming the old
+			// fixed 100 ms feedback beat), which moved flows off it and a
+			// keepalive moved them back, flapping. Instead keep a slow, jittered
+			// idle cadence that stays below that threshold and sits near a real
+			// ping's ~1 s interval — itself better cover than erratic silence.
+			// The sharp ~10 Hz line is still gone (this is ~1.4 Hz, jittered).
+			c.sendFeedback(now)
 			if active {
-				c.sendFeedback(now)
-				timer.Reset(camoJitter(feedbackEvery, 0.4))
+				timer.Reset(camoJitter(feedbackEvery, 0.4)) // ~100 ms under load
 			} else {
-				timer.Reset(camoJitter(camoIdlePoll, 0.5))
+				// idle: ~0.7 s, and the jitter keeps the gap under dgMuteAfter.
+				timer.Reset(camoJitter(camoIdlePoll, 0.2))
 			}
 		}
 	}
