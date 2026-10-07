@@ -581,6 +581,26 @@ it out of ordinary ping by its *form*:
   overhead. This applies to every datagram encap (udp/icmp/gre/ipip/ipx); set
   `HS2_DG_PAD=0` to turn padding off entirely for the last few percent of goodput.
 
+- **Stronger timing/id camouflage, opt-in (`HS2_ICMP_CAMO=1`, set on BOTH
+  ends).** The default shaping above leaves two timing tells a stateful
+  classifier could key on: a fixed ~10 Hz feedback beat (at idle, the only
+  packets on the wire) and a fixed ~0.25 Hz dip as the whole pool base-probes
+  together every 4 s. With this flag the feedback cadence is jittered and an
+  idle carrier falls quiet (keepalive, ~5 s jittered, keeps the link alive), so
+  a near-idle tunnel stops beaconing; the shared probe schedule is jittered off
+  its fixed grid without desynchronising the pool (so the min-RTT measurement
+  stays clean); and link ids are drawn as a pid-like ascending cluster rather
+  than uniform-random 16-bit values. It changes only SEND TIMING and the id
+  draw — not the wire format — so it needs no agreement with the peer and an
+  old peer is unaffected (but set it on both ends to shape both directions).
+  Honest limits: during an active download the receiver→sender feedback
+  direction is mostly feedback, so its cadence is only jittered, not removed;
+  and the per-flow sequence tag and the request/reply correlation are NOT
+  changed — making the reply echo the request (full ping correlation) was
+  evaluated and deferred because every variant trades one tell for another
+  (a new id mismatch, or silencing the host's own ping) while the filtering
+  seen in the field keys on size and volume, not sequence correlation.
+
 The data itself is always end-to-end AEAD-encrypted (ChaCha20-Poly1305); the
 obfuscation is cosmetic and keyed separately — it only removes patterns, it is
 not the security boundary. This release changed the icmp wire format: it is **not

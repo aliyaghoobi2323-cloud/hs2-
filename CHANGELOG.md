@@ -1465,6 +1465,52 @@ each read the queue they all built as its own.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
 
+## Phase CA — optional ICMP traffic-shape camouflage (`HS2_ICMP_CAMO`)
+
+A field report had an IP carrying the icmp tunnel filtered at the border, the
+pattern — not the content — recognised. This phase hardens the icmp flow's
+*timing and id* against a stateful classifier, behind an opt-in flag so the
+default (and every existing user) is untouched. Set `HS2_ICMP_CAMO=1` on both
+ends of an icmp tunnel. It changes only send timing and the id draw, not the
+wire format, so it needs no peer agreement and is compatible with an old peer.
+
+- **CA1 — the timing (the biggest cheap tell).** The feedback loop sent a
+  control packet every 100 ms unconditionally — a sharp ~10 Hz spectral line,
+  and at idle the only thing on the wire. And all carriers base-probe off one
+  shared epoch every 4 s — a ~0.25 Hz dip correlated across the pool. With the
+  flag: the feedback interval is jittered and an idle carrier (nothing received
+  to report) falls quiet, relying on the jittered ~5 s keepalive (well inside
+  the 15 s dead-link timeout) — so a near-idle tunnel stops beaconing, the case
+  a low-traffic tunnel is most exposed in. The shared probe schedule is jittered
+  off its fixed grid by a deterministic per-period offset — every carrier shifts
+  the k-th probe alike, so the pool still backs off together (a clean min-RTT
+  measurement) but not on a fixed period. Lab: no throughput/ping regression
+  (icmp reverse, camo on vs off); idle packet rate roughly halved (the residual
+  was a lingering test connection keeping the tunnel active). Honest limit:
+  during an active download the receiver→sender direction is mostly feedback,
+  so its cadence is jittered, not removed.
+- **CA2 — the link id.** `uniqueLinkID` drew uniform-random 16-bit ids, so a
+  tunnel showed N unrelated, stable ids to one host — which no real host sends
+  to one peer. With the flag, icmp link ids come from one random pid-like base
+  with small ascending steps, so they look like a host's own related ping
+  processes. The id is only a demux label the peer reads back, so this is
+  compatible with an old peer. Honest limit: on a host with a large `pid_max`
+  the id *value* is already ~uniform, so the real id tell is count and
+  persistence; this clusters them but a tunnel still holds its ids far longer
+  than a ping.
+- **Evaluated and deferred.** CA3 (hold packets under the field's size
+  threshold) is the one discriminator the field proved, but it costs ~6-7x
+  throughput and a flood of small packets is itself a new tell under heavy
+  traffic, so it is left as a possible emergency low-rate mode, not built.
+  CA4 (make the echo sequence a plain counter / couple the two directions so
+  a reply echoes a request like a real ping) was investigated in full and not
+  built: every variant trades the sequence tell for a worse one — a two-id
+  scheme makes request and reply ids mismatch (real ping echoes the id);
+  coupling the directions forces silencing the host's own ping and caps the
+  upload direction — while the field filter keys on size and volume, not
+  sequence correlation (the tunnel ran for a long time with the existing
+  sequence mismatch). The honest high-value, low-risk wins were CA1 and CA2.
+
 ## Phase Y — the stage rule, re-measured against the field, and fixed where it lost
 
 The Phase X field test (build 37e9f2f9c2e0, on the live reverse icmp tunnel)
