@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	mrand "math/rand/v2"
 	"net"
 	"os"
 	"strconv"
@@ -19,6 +20,33 @@ import (
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/mmsg"
 	"golang.org/x/sys/unix"
 )
+
+// icmpCamoID turns on ICMP camouflage for link-id allocation (phase CA2). Read
+// from the same HS2_ICMP_CAMO env as the timing camouflage in udpcarrier; the
+// two are independent so either package can read it. The echo identifier is
+// only a demux label the peer reads back, so changing how it is drawn is
+// compatible with an old peer.
+var icmpCamoID = os.Getenv("HS2_ICMP_CAMO") == "1"
+
+// camoIDBase/camoIDNext mimic the ICMP echo ids a host's OWN ping processes
+// use: one random base (a plausible pid & 0xffff), then each new link a small
+// increasing step away — a loose cluster of related-looking ids, not N
+// uniform-random 16-bit values that no real host would send to one peer. Both
+// are guarded by rawMuxMu (the caller of camoLinkID holds it).
+var (
+	camoIDBase = uint16(1 + mrand.IntN(0xfffe))
+	camoIDNext uint16
+)
+
+// camoLinkID draws the next pid-like link id not in use (see camoIDBase).
+func camoLinkID(inUse map[uint16]bool) uint16 {
+	for {
+		camoIDNext += uint16(1 + mrand.IntN(40))
+		if id := camoIDBase + camoIDNext; id != 0 && !inUse[id] {
+			return id
+		}
+	}
+}
 
 // Raw-socket encapsulations on Linux. Each transport is one AF_INET SOCK_RAW
 // socket of the kind's IP protocol, driven through Go's *net.IPConn so reads
@@ -243,6 +271,9 @@ func dialRawLinux(kind, addr string, opt Options) (net.Conn, error) {
 		rawIDs[ik] = ids
 	}
 	id := uniqueLinkID(ids)
+	if icmpCamoID && f.kind == KindICMP {
+		id = camoLinkID(ids)
+	}
 	ids[id] = true
 	c := &rawConn{mx: mx, ipc: mx.ipc, f: mx.f, id: id,
 		raddr: &Addr{IP: peer, ID: id, Kind: f.kind},
