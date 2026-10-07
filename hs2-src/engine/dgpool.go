@@ -1766,10 +1766,19 @@ func (p *dgPool) carrierStats(ps *PoolStats) {
 	switch {
 	case p.fecCeilRun >= 2 && !p.fecCeilLogged:
 		p.fecCeilLogged = true
-		p.log("dg: FEC at its ceiling on %d of %d carriers (parity %.0f%% of data) — loss %.1f%% (worst carrier %.1f%%) is more than it is sized to repair", ps.FECAtCeiling, active, ps.ParityPct, ps.LossPct, ps.MaxLossPct)
+		// Two different lenses, not a bound on each other: LossPct is the
+		// governor's pool-wide, rate-weighted loss estimate (what sizes the
+		// parity); MaxLossPct is the worst single active carrier's measured
+		// wire loss. On a collapsing path the pool estimate can sit above any
+		// one carrier's current reading, so do not word them as if the worst
+		// carrier caps the pool.
+		p.log("dg: FEC maxed out on %d of %d carriers (mean parity %.0f%% of data) — the pool's loss estimate %.1f%% is past what it can repair (worst active carrier measured %.1f%%)", ps.FECAtCeiling, active, ps.ParityPct, ps.LossPct, ps.MaxLossPct)
 	case p.fecCeilRun <= -5 && p.fecCeilLogged:
 		p.fecCeilLogged = false
-		p.log("dg: FEC below its ceiling again (parity %.0f%% of data)", ps.ParityPct)
+		// "below its ceiling" read as if parity had dropped; it only means no
+		// carrier is capped any more — the mean parity shown is independent of
+		// that and may be higher than when it maxed out.
+		p.log("dg: FEC no longer maxed out on any carrier (mean parity %.0f%% of data)", ps.ParityPct)
 	}
 }
 

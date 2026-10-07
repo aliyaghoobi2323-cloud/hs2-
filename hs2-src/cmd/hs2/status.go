@@ -512,7 +512,7 @@ func printStatus(path string) {
 			fmt.Printf("  mute:       %d carrier(s) closed and replaced after hearing nothing while the others did (their own way through was cut)\n", ls.MuteClosed)
 		}
 		if ls.Carriers != "" {
-			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup C=CPU-bound M=mute, sSENT Mbit, qQUEUE/SRTT ms)\n", ls.Carriers)
+			fmt.Printf("  carriers:   %s\n              (id:state:sent/loss rRATE/bwBTLBW Mbit, flags P=pushing S=startup C=held by its send stage (CPU/socket) M=mute, sSENT Mbit, qQUEUE/SRTT ms)\n", ls.Carriers)
 		}
 		if ls.ReorderHeld > 0 {
 			fmt.Printf("  reorder:    %d segments held behind a gap; %d gaps filled in order, %d released after the hold\n",
