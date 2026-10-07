@@ -81,6 +81,10 @@ type pacer struct {
 const (
 	pacerQueueTime = 20 * time.Millisecond
 	pacerQueueMin  = 3 * 1500 // at the 0.26 Mbit/s floor still 140 ms; 8 datagrams were 375 ms
+	// pacerSatQueueTime: the deeper data-queue window for a stage-limited
+	// carrier on a saturated host (see budget). Bulk waits longer here, but
+	// the fast lane keeps interactive packets out of it.
+	pacerSatQueueTime = 80 * time.Millisecond
 )
 
 // pacerBatch is the most datagrams one batched send carries.
@@ -102,6 +106,50 @@ const pacerQuantum = 2 * time.Millisecond
 // one, keeps the cap: its burst stays two timer wake-ups (an allowance cut to
 // twice what got out bounds this one's).
 const pacerLateCredit = 10 * time.Millisecond
+
+// pacerSatCredit: when the host CPU meter says the whole server is saturated
+// (SetHostSaturated, from cmd/hs2's hostMeter), a stage-limited pacer with data
+// waiting may hold this much of its rate instead of pacerLateCredit's 10 ms.
+// On an asymmetrically starved server — a co-tenant (a busy panel, another
+// tunnel) holding one core while the scheduler takes CPUs from hs2's threads
+// one at a time — the send goroutine is put aside for tens of ms at a time.
+// The 10 ms credit then could not drain the backlog in the slice it finally
+// got, so the carrier sent well under its rate: the field's 12-27% throughput
+// loss against the rules off (HS2_FAIR_SHARE=0), where the rate is not clamped
+// and the bucket is large enough to catch up. This larger catch-up lets a
+// clamped carrier fill that slice too. It is bounded, and gated on the host
+// being saturated — where the CPU, not the path, is the limit, so the burst is
+// absorbed without a standing queue — so on a server with room pacing is
+// unchanged.
+const pacerSatCredit = 50 * time.Millisecond
+
+// hostSaturated mirrors the host CPU meter's verdict (cmd/hs2's hostMeter):
+// true when the whole server has no spare core. The run-time status loop sets
+// it each sample; it defaults false (meter not running, or a host with room),
+// leaving pacing exactly as before.
+var hostSaturated atomic.Bool
+
+// SetHostSaturated records whether the server is CPU-saturated (see
+// hostSaturated and pacerSatCredit). Safe for concurrent use.
+func SetHostSaturated(b bool) { hostSaturated.Store(b) }
+
+// pacerBurstCap is the most the token bucket may hold for a datagram of lenB
+// bytes at the given rate: two timer wake-ups' worth (pacerQuantum), never
+// below two datagrams; raised to a late-wake-up credit for a stage-limited
+// carrier with data waiting, and further when the host is saturated
+// (pacerSatCredit). Pulled out as a pure function so the cap is testable
+// without timing.
+func pacerBurstCap(rate float64, lenB int, waiting, stageLimited, hostSat bool) float64 {
+	maxBurst := math.Max(2*float64(lenB+64), rate*pacerQuantum.Seconds())
+	if waiting && stageLimited {
+		credit := pacerLateCredit
+		if hostSat {
+			credit = pacerSatCredit
+		}
+		maxBurst = math.Max(maxBurst, rate*credit.Seconds())
+	}
+	return maxBurst
+}
 
 func newPacer(rc *rateControl, write func([]byte) error, queueDepth int, stamps *atomic.Bool) *pacer {
 	if queueDepth < 64 {
@@ -187,9 +235,22 @@ func (p *pacer) enqueueLane(pkt []byte, urgent bool) {
 }
 
 // budget is the most data bytes the queue may hold before enqueue waits:
-// pacerQueueTime at the current rate, never below a few datagrams.
+// pacerQueueTime at the current rate, never below a few datagrams. When the
+// host is saturated and this carrier is held back by its send stage, the
+// window widens to pacerSatQueueTime: the clamped rate makes a shallow queue
+// that blocks the writer (backpressure to the TUN read loop) as soon as the
+// send goroutine is put aside, so data stops entering while the carrier is off
+// CPU. A deeper queue lets the writer keep filling it during the gap and the
+// pacer drain it when it runs — the other half of the field's throughput loss
+// (the bucket, pacerSatCredit, is the first). Bulk data waits longer in that
+// queue, but an interactive packet does not: it takes the fast lane, which the
+// queue bound never holds. Gated on saturation, so a host with room is unchanged.
 func (p *pacer) budget() int64 {
-	b := int64(p.rc.pacingRate(time.Now()) * pacerQueueTime.Seconds())
+	qt := pacerQueueTime
+	if hostSaturated.Load() && p.rc.stageLimited() {
+		qt = pacerSatQueueTime
+	}
+	b := int64(p.rc.pacingRate(time.Now()) * qt.Seconds())
 	if b < pacerQueueMin {
 		b = pacerQueueMin
 	}
@@ -260,10 +321,7 @@ func (p *pacer) loop() {
 		// the rate earns in one timer wake-up: Go's timers sleep at least
 		// ~1 ms, so a 2-datagram cap would limit ANY carrier to ~2 datagrams
 		// per millisecond (~20 Mbit/s) whatever the path could take.
-		maxBurst := math.Max(2*float64(len(b)+64), rate*pacerQuantum.Seconds())
-		if waiting && p.rc.stageLimited() {
-			maxBurst = math.Max(maxBurst, rate*pacerLateCredit.Seconds())
-		}
+		maxBurst := pacerBurstCap(rate, len(b), waiting, p.rc.stageLimited(), hostSaturated.Load())
 		if tokens > maxBurst {
 			tokens = maxBurst
 		}

@@ -16,6 +16,7 @@ import (
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier"
 )
 
 // The daemon publishes a small live status file so the installer's tunnel
@@ -323,6 +324,10 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		hs := host.sample(ls.CPUPct)
 		ls.HostCPUPct, ls.HostSoftirqPct, ls.HostStealPct, ls.HostCores = hs.BusyPct, hs.SoftirqPct, hs.StealPct, hs.Cores
 		ls.PSICPU10, ls.PSICPU60, ls.HostSaturated, ls.HostOutDiscards = hs.PSI10, hs.PSI60, hs.Saturated, hs.OutDiscards
+		// Let the data path know the whole server is CPU-starved: a stage-limited
+		// pacer then catches up after the scheduler puts it aside (pacerSatCredit),
+		// instead of sending under its rate on an asymmetrically loaded box.
+		udpcarrier.SetHostSaturated(hs.Saturated)
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
