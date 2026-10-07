@@ -414,7 +414,7 @@ packets this side handed the carrier, the loss of what it sends as the other
 server reports it, its pacing allowance `r`, the most it was seen to deliver
 `bw` and what it really sent `s` (Mbit/s), the flags `P` (it sent at least
 80% of its allowance at the last report), `S` (still in its fast start), `C`
-(its send stage — the CPU — not the path held it back lately), `M` (mute:
+(its send stage — the CPU or socket — not the path held it back lately), `M` (mute:
 it, or the other server, hears nothing on it) or `-`, and the queue
 its rate control sees on the path and its smoothed round trip (ms). Above 32
 carriers the line gives the counts and the 10 with the most loss. In the fast
@@ -437,7 +437,15 @@ are the limit — on a full path as much as on a sender short of CPU (lab:
 55-74% of the time either way); what tells the two apart is the carriers:
 a path-bound pool shows `P` (`s` close to `r`) and a `q` of 5-20 ms, a sender
 short of CPU `C` without `P` (`s` well under `r`), `q` near 0 and the server
-saturated on the `cpu:` line.
+saturated on the `cpu:` line. On a saturated server a carrier flagged `C` is
+paced less tightly: the scheduler puts its send goroutine aside for tens of ms
+at a time when another program (a busy panel, another tunnel) holds a core, and
+the ordinary pacing then let it drain only a couple of ms of backlog in the
+slice it got, so it sent well under its rate (a 12-27% throughput loss against
+the pool rules off). It now keeps a larger catch-up while saturated, so it fills
+that slice; interactive packets still take the fast lane, so their latency is
+not the cost. A residual gap to the rules-off path remains — the price of not
+over-committing the rate, which would flood a shared path when the CPU frees.
 
 **The server's CPU.** hs2's own CPU (`cpu_pct`, % of one core) does not say
 whether the server has any left: a 2-core server shared with another tunnel

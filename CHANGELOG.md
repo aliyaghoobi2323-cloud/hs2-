@@ -1465,6 +1465,60 @@ each read the queue they all built as its own.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
 
+## Phase Y — the stage rule, re-measured against the field, and fixed where it lost
+
+The Phase X field test (build 37e9f2f9c2e0, on the live reverse icmp tunnel)
+found the opposite of the lab: under saturation the pool rules off
+(`HS2_FAIR_SHARE=0`) carried 12% more per CPU-second than the default. The lab
+reproduced it once the regime matched the field — asymmetric **and** starved.
+
+- **Three lab regimes (same build, sender starved, interleaved pairs).** Under
+  a hard CPU quota (symmetric: all the sender's threads stop together) the
+  default wins big — 598 vs 375 Mbit/s per CPU-second, and in a profile 291 vs
+  103 Mbit/s: the rules-off path wastes CPU sealing datagrams it then drops.
+  Under `cpu.shares` with busy loops but hs2 given ~1.1 cores (asymmetric, not
+  really starved) the two tie (~530 each). Under shares starving hs2 to ~0.4
+  core (asymmetric **and** starved — the field: a co-tenant like an x-ui panel
+  holds one core while the scheduler takes CPUs from hs2's threads one at a
+  time) the rules off win by ~27% (615 vs 485), reproducing the field.
+- **Why.** The machinery is cheap (a profile puts the fair queue, the stage
+  bookkeeping and the pacer in the low single digits; the rules-off path even
+  spends more on futex/select). The gap is the effect of the rate clamp on
+  scheduling, not its cost: a stage-limited carrier's rate is clamped to ~2x
+  what it sends, which shrinks the pacer's token bucket. When the scheduler
+  puts the send goroutine aside for tens of ms, the 10 ms late credit let it
+  drain only a little of the backlog in the slice it got, so it sent under its
+  rate. The rules-off path leaves the rate unclamped (startup, `r` up to 23x),
+  so its bucket is large and it drains the slice.
+- **The fix (Z).** When the host CPU meter says the server is saturated
+  (`host_saturated`, plumbed from the status loop to the data path via
+  `udpcarrier.SetHostSaturated`), a stage-limited pacer with data waiting holds
+  a larger catch-up — 50 ms of its rate instead of 10 ms (`pacerSatCredit`) —
+  so it fills the slice the scheduler gives it. Gated on saturation and on the
+  carrier being stage-limited (there the CPU, not the path, is the limit, so
+  the burst is absorbed without a standing queue); on a host with room, or
+  under a symmetric quota (where the meter does not read saturated), pacing is
+  unchanged. Interactive packets take the fast lane, so their latency is not
+  the cost.
+- **Measured (lab, shares starving hs2 to ~0.4 core, 4-5 interleaved pairs
+  against the rules off).** The default rose from 485 to ~555 Mbit/s per
+  CPU-second median: the ~27% gap narrowed to ~14%, with ping under load
+  better than the rules off (p50 31 vs 33 ms, p99 95 vs 116 ms, equal loss).
+  A deeper send queue under saturation was tried too and dropped: it moved the
+  number by nothing. The residual ~14% is deliberate — closing it fully means
+  leaving the rate unclamped like the rules off, which floods a shared path's
+  buffer when the CPU frees (Phase W8 / the simulator: hundreds of path drops),
+  the behaviour the stage rule exists to prevent for a pool of real users on
+  shared paths. Under the hard quota the default still wins (616 vs 378): no
+  regression there.
+- Two field-report log/wording fixes, source only: the FEC-at-ceiling log
+  juxtaposed the governor's pool-wide loss estimate and the worst carrier's
+  measured loss as if one bounded the other (it read "loss 39.2% (worst carrier
+  27.5%)"), and "below its ceiling" read as if parity had dropped when it only
+  meant no carrier was capped — both reworded. The `carriers` legend said
+  `C=CPU-bound`; it now says `C=held by its send stage (CPU/socket)`, the
+  code's actual meaning.
+
 ## Phase X — a sender short of CPU: seen, and sending more with the same CPU
 
 ### From the real-server report (build 2b2e2c8c3f86; reverse, tun over icmp)

@@ -81,10 +81,6 @@ type pacer struct {
 const (
 	pacerQueueTime = 20 * time.Millisecond
 	pacerQueueMin  = 3 * 1500 // at the 0.26 Mbit/s floor still 140 ms; 8 datagrams were 375 ms
-	// pacerSatQueueTime: the deeper data-queue window for a stage-limited
-	// carrier on a saturated host (see budget). Bulk waits longer here, but
-	// the fast lane keeps interactive packets out of it.
-	pacerSatQueueTime = 80 * time.Millisecond
 )
 
 // pacerBatch is the most datagrams one batched send carries.
@@ -235,22 +231,9 @@ func (p *pacer) enqueueLane(pkt []byte, urgent bool) {
 }
 
 // budget is the most data bytes the queue may hold before enqueue waits:
-// pacerQueueTime at the current rate, never below a few datagrams. When the
-// host is saturated and this carrier is held back by its send stage, the
-// window widens to pacerSatQueueTime: the clamped rate makes a shallow queue
-// that blocks the writer (backpressure to the TUN read loop) as soon as the
-// send goroutine is put aside, so data stops entering while the carrier is off
-// CPU. A deeper queue lets the writer keep filling it during the gap and the
-// pacer drain it when it runs — the other half of the field's throughput loss
-// (the bucket, pacerSatCredit, is the first). Bulk data waits longer in that
-// queue, but an interactive packet does not: it takes the fast lane, which the
-// queue bound never holds. Gated on saturation, so a host with room is unchanged.
+// pacerQueueTime at the current rate, never below a few datagrams.
 func (p *pacer) budget() int64 {
-	qt := pacerQueueTime
-	if hostSaturated.Load() && p.rc.stageLimited() {
-		qt = pacerSatQueueTime
-	}
-	b := int64(p.rc.pacingRate(time.Now()) * qt.Seconds())
+	b := int64(p.rc.pacingRate(time.Now()) * pacerQueueTime.Seconds())
 	if b < pacerQueueMin {
 		b = pacerQueueMin
 	}
