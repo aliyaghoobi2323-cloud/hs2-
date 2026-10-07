@@ -351,7 +351,34 @@ func (r *rateControl) nextProbe(now time.Time) time.Time {
 	if d < 0 && d%baseProbeEvery != 0 {
 		k-- // division truncates toward zero: floor it
 	}
-	return r.epoch.Add((k + 1) * baseProbeEvery)
+	t := r.epoch.Add((k + 1) * baseProbeEvery)
+	if icmpCamo {
+		// Break the fixed baseProbeEvery grid (a ~0.25 Hz spectral line as the
+		// whole pool dips together) without desynchronising the pool: the
+		// offset depends only on the period index, so every carrier shifts the
+		// k-th probe by the SAME amount and they still back off together — what
+		// makes the min-RTT measurement clean. The grid just stops being
+		// exactly periodic.
+		t = t.Add(camoProbeOffset(int64(k + 1)))
+	}
+	return t
+}
+
+// camoProbeJit bounds the shared probe jitter: well under baseProbeEvery so
+// probes never land back-to-back or overrun the next period.
+const camoProbeJit = 1500 * time.Millisecond
+
+// camoProbeOffset maps a probe period index to a deterministic jitter in
+// [-camoProbeJit, +camoProbeJit]. Deterministic (a hash of k, not a PRNG) so
+// every carrier sharing the epoch computes the same shifted time and the pool
+// stays synchronised.
+func camoProbeOffset(k int64) time.Duration {
+	x := uint64(k) * 0x9E3779B97F4A7C15 // splitmix64 mix
+	x ^= x >> 30
+	x *= 0xBF58476D1CE4E5B9
+	x ^= x >> 27
+	frac := float64(x>>11) / float64(uint64(1)<<53) // [0,1)
+	return time.Duration((frac*2 - 1) * float64(camoProbeJit))
 }
 
 // fairGrow moves capEst toward the pool's fair share while a queue stands

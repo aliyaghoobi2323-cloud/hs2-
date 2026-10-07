@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"math/rand/v2"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,33 @@ import (
 // for a user who wants the last few percent of goodput over size shaping. On by
 // default; it only pads small/medium frames, never bulk, so the cost is bounded.
 var dgPadDisabled = os.Getenv("HS2_DG_PAD") == "0"
+
+// icmpCamo turns on the ICMP traffic-shape camouflage (phase CA1). It changes
+// only SEND TIMING, not the wire format, so the two ends need not agree and an
+// old peer is unaffected:
+//   - the feedback cadence is jittered instead of a fixed 100 ms tick, so the
+//     flow carries no sharp ~10 Hz spectral line for a filter to key on;
+//   - an idle carrier (nothing received to report) falls quiet instead of
+//     beating 10 times a second with nothing to carry — keepalive (jittered,
+//     ~5 s, well inside deadAfter) keeps the link alive. This is the case a
+//     near-idle tunnel is most exposed in: at idle the only packets WERE the
+//     feedback beat.
+//
+// It does not remove the receiver->sender feedback cadence during an active
+// download (that direction is mostly feedback, needed by the rate control); it
+// only jitters it. Set HS2_ICMP_CAMO=1 on both ends of an icmp tunnel.
+var icmpCamo = os.Getenv("HS2_ICMP_CAMO") == "1"
+
+// camoIdlePoll is how often a quiet carrier wakes to notice traffic resumed
+// (it sends nothing while idle). Short enough that feedback resumes promptly
+// for the rate control, far below deadAfter.
+const camoIdlePoll = 700 * time.Millisecond
+
+// camoJitter returns d scaled by a uniform random factor in [1-frac, 1+frac].
+// Used for send timing only (per carrier, local), so a plain PRNG is fine.
+func camoJitter(d time.Duration, frac float64) time.Duration {
+	return time.Duration(float64(d) * (1 - frac + 2*frac*rand.Float64()))
+}
 
 // deadAfter mirrors the engine's own liveness timeout: if no frame arrives for
 // this long the link is considered dead and ReadFrame returns an error so the
@@ -508,14 +536,40 @@ func (c *Conn) onFeedback(b []byte, now time.Time) {
 // model and parity sizing stay current.
 func (c *Conn) feedbackLoop() {
 	defer c.wg.Done()
-	t := time.NewTicker(feedbackEvery)
-	defer t.Stop()
+	if !icmpCamo {
+		t := time.NewTicker(feedbackEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-c.done:
+				return
+			case now := <-t.C:
+				c.sendFeedback(now)
+			}
+		}
+	}
+	// Camouflage: jitter the interval (no fixed spectral line) and stay quiet
+	// while nothing has been received to report (keepalive keeps the link
+	// alive). When data flows the peer still gets ~feedbackEvery reports for
+	// the rate control, only jittered; when it stops, the carrier goes silent
+	// like an idle host instead of beating at 10 Hz.
+	var lastRx uint64
+	timer := time.NewTimer(camoJitter(feedbackEvery, 0.4))
+	defer timer.Stop()
 	for {
 		select {
 		case <-c.done:
 			return
-		case now := <-t.C:
-			c.sendFeedback(now)
+		case now := <-timer.C:
+			rx := c.wireBytes.Load()
+			active := rx != lastRx
+			lastRx = rx
+			if active {
+				c.sendFeedback(now)
+				timer.Reset(camoJitter(feedbackEvery, 0.4))
+			} else {
+				timer.Reset(camoJitter(camoIdlePoll, 0.5))
+			}
 		}
 	}
 }
