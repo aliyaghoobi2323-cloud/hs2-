@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,16 @@ func TestLaggingSignals(t *testing.T) {
 			mtr.openWait.Store(ago(lagOpenWait + time.Second))
 			mtr.rxAt.Store(ago(lagOpenWait))
 		}, false},
+		{"far path, open within twice its round trip", func(ml *managedLink, mtr *linkMeter) {
+			mtr.rttMicros.Store(uint64(1200 * time.Millisecond / time.Microsecond))
+			mtr.rxAt.Store(ago(3 * time.Second))
+			mtr.openWait.Store(ago(1500 * time.Millisecond))
+		}, false},
+		{"far path, open past lagWait", func(ml *managedLink, mtr *linkMeter) {
+			mtr.rttMicros.Store(uint64(1200 * time.Millisecond / time.Microsecond))
+			mtr.rxAt.Store(ago(3 * time.Second))
+			mtr.openWait.Store(ago(lagWait + 100*time.Millisecond))
+		}, true},
 		{"slow open noted", func(ml *managedLink, mtr *linkMeter) { ml.openSlowTill = now + int64(time.Second) }, true},
 		{"slow open over", func(ml *managedLink, mtr *linkMeter) { ml.openSlowTill = now - 1 }, false},
 	}
@@ -236,5 +247,113 @@ func TestOpenStreamWaitsForHeaderWithoutDoubling(t *testing.T) {
 	}
 	if !ok || st != slowHdr.stream {
 		t.Fatalf("got %v (ok %v), want the stream that was waiting", st, ok)
+	}
+}
+
+// A lone serving link that lags is no sign the path is slow: a healthy
+// retiring link takes the new user instead.
+func TestPickLoneLaggingServingYieldsToRetiring(t *testing.T) {
+	m, ls := pickPool(
+		func(ml *managedLink) { ml.openSlowTill = ctrlNow() + int64(time.Minute) },
+		func(ml *managedLink) { ml.retiring = true },
+	)
+	l, rel, ok := m.Pick()
+	if !ok || l != ls[1].link {
+		t.Fatalf("got %v (ok %v), want the healthy retiring link", l, ok)
+	}
+	rel()
+}
+
+// During the refill hold the links that do not lag may all be full (the hold's
+// cap); the lagging one must not take the connection then — the hold queues it.
+func TestPickHoldSkipsLaggingLinkWhenOthersFull(t *testing.T) {
+	slow := func(ml *managedLink) { ml.openSlowTill = ctrlNow() + int64(time.Minute) }
+	full := func(ml *managedLink) { ml.users.Store(2) }
+	m, ls := pickPool(full, full, slow)
+	m.users.Store(4)
+	m.perLink = 2
+	m.target.Store(3)
+	m.hold.on = true
+	if l, rel, ok, _ := m.pickHeld(); ok {
+		rel()
+		if l == ls[2].link {
+			t.Fatal("the refill hold placed the connection on the lagging link")
+		}
+	}
+	if l, rel, ok := m.pickExcept(nil, true); ok {
+		rel()
+		if l == ls[2].link {
+			t.Fatal("a held try picked the lagging link")
+		}
+	}
+}
+
+// failOpenLink fails every open at once (a link that died).
+type failOpenLink struct{ opens atomic.Int32 }
+
+func (l *failOpenLink) OpenStream() (stream, error) {
+	l.opens.Add(1)
+	return nil, errors.New("link died")
+}
+func (l *failOpenLink) Active() int32 { return 0 }
+func (l *failOpenLink) Alive() bool   { return true }
+func (l *failOpenLink) Close() error  { return nil }
+
+// When the try on a second link fails while the first still waits for its SYN,
+// the third link is tried at once, not a whole openTimeout later.
+func TestOpenStreamNextLinkRightAfterFailure(t *testing.T) {
+	withOpenTimeout(t, 200*time.Millisecond)
+	stuck := &openStubLink{gate: make(chan struct{}), stream: &openStubStream{}}
+	defer close(stuck.gate)
+	dead := &failOpenLink{}
+	good := &openStubLink{stream: &openStubStream{}}
+	m := NewLinkManager(nil, 1, 32, 8, nil)
+	m.links = []*managedLink{
+		{link: stuck, id: 0},
+		{link: dead, id: 1, flowing: 5},
+		{link: good, id: 2, flowing: 10},
+	}
+	start := time.Now()
+	st, release, ok := openStream(context.Background(), m, false, 0)
+	took := time.Since(start)
+	if !ok || st != good.stream {
+		t.Fatalf("got %v (ok %v), want the good link's stream", st, ok)
+	}
+	release()
+	if took > 300*time.Millisecond {
+		t.Fatalf("open took %s with openTimeout 200ms: the third link waited a timeout after the second failed", took)
+	}
+}
+
+// Once any try's stream is open its header is on the way: no further link is
+// tried, even when the newest try is the one still waiting for its SYN.
+func TestOpenStreamNoMoreTriesOnceOneOpened(t *testing.T) {
+	withOpenTimeout(t, 100*time.Millisecond)
+	a := &openStubLink{gate: make(chan struct{}), stream: &openStubStream{writeGo: make(chan struct{})}}
+	b := &openStubLink{gate: make(chan struct{}), stream: &openStubStream{}}
+	c := &openStubLink{stream: &openStubStream{}}
+	m := NewLinkManager(nil, 1, 32, 8, nil)
+	m.links = []*managedLink{{link: a, id: 0}, {link: b, id: 1, flowing: 5}, {link: c, id: 2, flowing: 10}}
+	go func() {
+		time.Sleep(140 * time.Millisecond) // A's SYN goes out after B was tried
+		close(a.gate)
+		time.Sleep(260 * time.Millisecond) // past B's own timeout
+		close(a.stream.writeGo)
+	}()
+	st, release, ok := openStream(context.Background(), m, false, 0)
+	if !ok || st != a.stream {
+		t.Fatalf("got %v (ok %v), want the stream whose header was on its way", st, ok)
+	}
+	release()
+	if n := c.opens.Load(); n != 0 {
+		t.Fatalf("a third link was tried although a stream was open (%d opens)", n)
+	}
+	close(b.gate) // B's late stream is closed, never used
+	deadline := time.Now().Add(2 * time.Second)
+	for !b.stream.closed.Load() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !b.stream.closed.Load() || len(b.stream.hdr) != 0 {
+		t.Fatalf("B's late stream: closed %v, header %d bytes", b.stream.closed.Load(), len(b.stream.hdr))
 	}
 }

@@ -47,12 +47,18 @@ type Config struct {
 	// assumes before any update; clamped to [MinStreamBuffer,
 	// MaxStreamBuffer]) and resizes it at each window update from the least
 	// backlog its reader left unread since the previous one: over
-	// StreamLagTarget it shrinks by twice the excess, down to
-	// MinStreamBuffer; under a quarter of the target it doubles, up to
-	// MaxStreamBuffer, unless the session ran out of MaxReceiveBuffer
-	// meanwhile. A reader slower than its share of the link then holds about
-	// StreamLagTarget of the session's MaxReceiveBuffer instead of up to
-	// MaxStreamBuffer, while one that keeps up still gets the full window.
+	// StreamLagTarget it shrinks by the excess, down to MinStreamBuffer;
+	// under a quarter of the target it doubles, up to MaxStreamBuffer,
+	// unless the session ran out of MaxReceiveBuffer meanwhile. A reader
+	// slower than its share of the link then holds about StreamLagTarget of
+	// the session's MaxReceiveBuffer instead of up to MaxStreamBuffer, while
+	// one that keeps up still gets the full window.
+	//
+	// The costs: a stream reaches the full window one doubling per update,
+	// so a large transfer starts a round trip or two later than with the
+	// fixed window; and what a reader was already granted (up to
+	// MaxStreamBuffer, if it kept up until then) still sits in the session's
+	// buffer while it drains at the reader's new, slower pace.
 	// Zero (the default) keeps the fixed window of MaxStreamBuffer.
 	MinStreamBuffer int
 

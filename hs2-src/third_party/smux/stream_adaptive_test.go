@@ -329,19 +329,21 @@ func TestAdaptiveWindowShrinksForSlowReader(t *testing.T) {
 	if upds[0][1] != initialPeerWindow {
 		t.Fatalf("first update window %d, want %d", upds[0][1], initialPeerWindow)
 	}
-	if len(upds) < 4 || upds[3][1] != uint32(config.MinStreamBuffer) {
-		t.Fatalf("window not at %d by the fourth update: %v", config.MinStreamBuffer, upds)
+	settled := uint32(2*config.StreamLagTarget + 2*config.MaxFrameSize)
+	if len(upds) < 6 || upds[5][1] > settled {
+		t.Fatalf("window not at %d or less by the sixth update: %v", settled, upds)
 	}
 	for i, u := range upds {
 		if u[1] < uint32(config.MinStreamBuffer) || u[1] > uint32(config.MaxStreamBuffer) {
 			t.Fatalf("update %d window %d out of [%d, %d]", i, u[1], config.MinStreamBuffer, config.MaxStreamBuffer)
 		}
 	}
-	if w := p.lastWindow(); w != uint32(config.MinStreamBuffer) {
-		t.Fatalf("slow reader: window %d, want %d (updates %v)", w, config.MinStreamBuffer, upds)
+	w := p.lastWindow()
+	if w > settled {
+		t.Fatalf("slow reader: window %d, want %d or less (updates %v)", w, settled, upds)
 	}
-	if maxUnread > config.MinStreamBuffer {
-		t.Fatalf("held %d unread with a %d window", maxUnread, config.MinStreamBuffer)
+	if maxUnread > int(w) {
+		t.Fatalf("held %d unread with a %d window", maxUnread, w)
 	}
 }
 
@@ -720,7 +722,7 @@ wait:
 	for err := range errs {
 		t.Fatal(err)
 	}
-	if lo != uint32(config.MinStreamBuffer) || ups == 0 || downs == 0 {
+	if lo > uint32(config.MinStreamBuffer+config.MaxFrameSize) || ups == 0 || downs == 0 {
 		t.Fatalf("windows went down to %d (want %d), moved up %d and down %d times", lo, config.MinStreamBuffer, ups, downs)
 	}
 	t.Logf("windows went down to %d, moved up %d and down %d times", lo, ups, downs)

@@ -307,6 +307,13 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 				return t.st, t.release, true
 			}
 			t.release() // failed (the link died): the next try goes elsewhere
+			if len(live) > 0 && len(tried) < openTries && !anyOpened(live) {
+				// an older try still waits for its SYN: the next link now,
+				// not a whole openTimeout later
+				if link, release, ok := lm.pickExcept(tried, !udp); ok {
+					start(link, release)
+				}
+			}
 		case <-slow.C:
 			for _, t := range live {
 				if d := time.Since(t.at); !t.slow && d >= openTimeout {
@@ -314,7 +321,7 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 					lm.noteOpenSlow(t.link, d)
 				}
 			}
-			if newest := live[len(live)-1]; len(tried) < openTries && !newest.opened.Load() {
+			if len(tried) < openTries && !anyOpened(live) {
 				if link, release, ok := lm.pickExcept(tried, !udp); ok {
 					start(link, release)
 				}
@@ -328,6 +335,13 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 		}
 		slow.Stop()
 	}
+}
+
+// anyOpened reports whether one of the tries has its stream open (its SYN went
+// out): its header is on the way, and a try on one more link would have the
+// exit dial the panel twice.
+func anyOpened(live []*openTry) bool {
+	return slices.ContainsFunc(live, func(t *openTry) bool { return t.opened.Load() })
 }
 
 // openTry is one try at opening a user stream on one link (openStream).
@@ -364,14 +378,18 @@ func startOpen(link Link, release func(), hdr []byte, done chan<- *openTry) *ope
 			if wd != nil {
 				wd.SetWriteDeadline(limit)
 			}
+			sent := ctrlNow() // before the write: an answer can beat the stamp after it
 			if _, err = st.Write(hdr); err == nil && wd != nil {
 				wd.SetWriteDeadline(time.Time{})
 			}
 			if mtr := linkMeterOf(link); err == nil && mtr != nil {
 				// Its answer is due (lagging): unless an older open still
 				// waits for one, this one is the oldest.
-				if w := mtr.openWait.Load(); w == 0 || mtr.rxAt.Load() >= w {
-					mtr.openWait.CompareAndSwap(w, ctrlNow())
+				for {
+					w := mtr.openWait.Load()
+					if w != 0 && mtr.rxAt.Load() < w || mtr.openWait.CompareAndSwap(w, sent) {
+						break
+					}
 				}
 			}
 		}

@@ -43,6 +43,7 @@ type Stream struct {
 	unread     int    // bytes in buffers not yet read (under bufferLock)
 	minUnread  int    // adaptive: least unread left by a read since our last UPD
 	lastParks  uint32 // adaptive: sess.parks at our last UPD
+	updLost    bool   // our last UPD did not go out: resend at the next read (under bufferLock)
 
 	// UPD command
 	peerConsumed uint32        // num of bytes the peer has consumed
@@ -274,13 +275,15 @@ func (s *Stream) consumed(n uint32) (notify bool, consumed, window uint32) {
 		s.minUnread = s.unread
 	}
 	first := s.numRead == n
-	if s.incr < s.rcvWin/2 && !first {
+	if s.incr < s.rcvWin/2 && !first && !s.updLost {
 		return false, 0, 0
 	}
+	resend := s.updLost
+	s.updLost = false
 	s.incr = 0
 	if cfg := s.sess.config; cfg.MinStreamBuffer > 0 {
 		parks := atomic.LoadUint32(&s.sess.parks)
-		if !first {
+		if !first && !resend {
 			s.adaptWindow(cfg, parks != s.lastParks)
 		}
 		s.lastParks = parks
@@ -294,9 +297,10 @@ func (s *Stream) consumed(n uint32) (notify bool, consumed, window uint32) {
 // after any of its reads since the previous update: what it held on to the
 // whole time, however the peer's bursts arrived.
 //
-// A backlog over StreamLagTarget is surplus: the window shrinks by twice the
-// excess (an update releases half the window, so that takes the excess off the
-// next backlog), down to MinStreamBuffer. A backlog under a quarter of the
+// A backlog over StreamLagTarget is surplus: the window shrinks by the excess,
+// down to MinStreamBuffer (by twice the excess it overshot: the least backlog
+// reads high while data arrives in bursts, and a reader at a steady pace
+// swung between starving and a full window). A backlog under a quarter of the
 // target means the reader ran dry: the window doubles, up to MaxStreamBuffer
 // -- unless the session's reader waited for buffer space since the previous
 // update (parked): then the stream starved behind the other streams, not
@@ -306,12 +310,12 @@ func (s *Stream) adaptWindow(cfg *Config, parked bool) {
 	switch {
 	case standing > cfg.StreamLagTarget:
 		excess := uint64(standing - cfg.StreamLagTarget)
-		if 2*excess >= uint64(s.rcvWin)-uint64(cfg.MinStreamBuffer) {
+		if excess >= uint64(s.rcvWin)-uint64(cfg.MinStreamBuffer) {
 			s.rcvWin = uint32(cfg.MinStreamBuffer)
 		} else {
-			s.rcvWin -= uint32(2 * excess)
+			s.rcvWin -= uint32(excess)
 		}
-	case standing < cfg.StreamLagTarget/4 && !parked:
+	case 4*standing < cfg.StreamLagTarget && !parked:
 		s.rcvWin *= 2
 		if s.rcvWin > uint32(cfg.MaxStreamBuffer) {
 			s.rcvWin = uint32(cfg.MaxStreamBuffer)
@@ -334,6 +338,13 @@ func (s *Stream) sendWindowUpdate(consumed, window uint32) error {
 	binary.LittleEndian.PutUint32(hdr[4:], window)
 	frame.data = hdr[:]
 	_, err := s.sess.writeFrameInternal(frame, deadline, CLSDATA)
+	if err != nil {
+		// the peer may be waiting for exactly this update: announce
+		// again at the next read rather than after another rcvWin/2
+		s.bufferLock.Lock()
+		s.updLost = true
+		s.bufferLock.Unlock()
+	}
 	return err
 }
 

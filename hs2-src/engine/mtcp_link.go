@@ -270,10 +270,27 @@ var (
 	// KiB of SmuxSessionBuffer instead of up to SmuxStreamBuffer, so a handful
 	// of them can no longer empty the bucket and stall every other stream on
 	// the link (which the wedge guard cannot see: their writes complete).
-	// 0 keeps the fixed window.
+	// 0 keeps the fixed window. The costs (third_party/smux, Config): a new
+	// stream reaches SmuxStreamBuffer one doubling per update, a round trip
+	// or two later than with the fixed window; and a reader that slows down
+	// after keeping up still holds what it was granted until it has read it
+	// (measured: a link stalled ~7 s, not for the whole download).
 	SmuxMinStreamBuffer = 64 << 10
 	SmuxStreamLagTarget = 128 << 10
 )
+
+// SmuxAdaptiveWindow is the adaptive stream window newSmuxConfig sets up from
+// the variables above: its smallest window, or 0 when it is off — turned off,
+// or left no room by a lab override (it needs two frames within
+// SmuxStreamBuffer, smux.VerifyConfig), in which case the fixed window stays
+// rather than every link failing.
+func SmuxAdaptiveWindow() (min int) {
+	min = max(SmuxMinStreamBuffer, 2*SmuxFrameSize)
+	if SmuxMinStreamBuffer <= 0 || SmuxStreamLagTarget <= 0 || min > SmuxStreamBuffer {
+		return 0
+	}
+	return min
+}
 
 func newSmuxConfig() *smux.Config {
 	c := smux.DefaultConfig()
@@ -291,11 +308,8 @@ func newSmuxConfig() *smux.Config {
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer
-	// The adaptive window needs room for two frames; a lab override that
-	// leaves it none falls back to the fixed window rather than failing every
-	// link (smux.VerifyConfig).
-	if minBuf := max(SmuxMinStreamBuffer, 2*c.MaxFrameSize); SmuxMinStreamBuffer > 0 && SmuxStreamLagTarget > 0 && minBuf <= c.MaxStreamBuffer {
-		c.MinStreamBuffer = minBuf
+	if min := SmuxAdaptiveWindow(); min > 0 {
+		c.MinStreamBuffer = min
 		c.StreamLagTarget = SmuxStreamLagTarget
 	}
 	return c

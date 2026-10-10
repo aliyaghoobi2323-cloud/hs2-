@@ -331,11 +331,23 @@ func (ml *managedLink) lagging(now int64) bool {
 	if w := mtr.openWait.Load(); w != 0 {
 		if r >= w {
 			mtr.openWait.CompareAndSwap(w, 0) // answered
-		} else if now-w >= int64(lagOpenWait) {
+		} else if now-w >= openAnswerWait(mtr) {
 			return true // a new stream got no answer
 		}
 	}
 	return false
+}
+
+// openAnswerWait is how long a new stream may wait for the link's first read
+// after it before the link counts as lagging: lagOpenWait, or twice the link's
+// last control round trip if that is longer — a far but working path answers
+// only after a round trip — but never more than lagWait.
+func openAnswerWait(mtr *linkMeter) int64 {
+	d := int64(lagOpenWait)
+	if rtt := 2 * int64(mtr.rttMicros.Load()) * int64(time.Microsecond); rtt > d {
+		d = min(rtt, int64(lagWait))
+	}
+	return d
 }
 
 // bornSpareGrace: a reverse link that arrives while the pool already has its
@@ -1583,7 +1595,8 @@ func (m *LinkManager) pickExcept(tried []Link, hold bool) (Link, func(), bool) {
 const openSlowLogEvery = 30 * time.Second
 
 // noteOpenSlow is openStream's word that a new connection waited (waited) to
-// open on l and was tried on another link: l is lagging (pickLocked) for
+// open on l (and, unless its stream was open already, was tried on another
+// link too): l is lagging (pickLocked) for
 // openSlowHold, so the connections after it go elsewhere at once — on a
 // black-holed path the next new stream would wait just the same.
 func (m *LinkManager) noteOpenSlow(l Link, waited time.Duration) {
@@ -1613,7 +1626,7 @@ func (m *LinkManager) noteOpenSlow(l Link, waited time.Duration) {
 	if n > 1 {
 		more = fmt.Sprintf(" (%d such waits since the last line)", n)
 	}
-	m.log("mtcp: link %d: a new connection waited %s to open on it and was tried on another link — it takes new connections only when no other link can, for %s%s",
+	m.log("mtcp: link %d: a new connection waited %s to open on it — it takes new connections only when no other link can, for %s%s",
 		ml.id, fmtDur(waited), fmtDur(openSlowHold), more)
 }
 
@@ -1636,19 +1649,22 @@ func (m *LinkManager) releaseFor(ml *managedLink) func() {
 }
 
 // pickLocked chooses among serving links first; if there are none, a healthy
-// retiring link (better than refusing the user); then a healthy retiring link
-// that is lagging; and only if every link is degraded, draining or suspect,
-// one of those. Among serving links one that is lagging (its traffic waits on
-// the path right now: managedLink.lagging) is passed over while most are not;
-// when most serving links lag it is the path — a throttle or squeeze every
-// link meets, as in stuck.go — and passing them over would pour every new
-// user onto the few that happen not to lag this instant (in a throttled pool
-// one link took 5 of the 10 new users of a 2 s window, 3 at most before).
-// limit > 0 skips links that already have that many open user connections
-// (the refill hold's cap); 0 = no limit. Links in avoid are never chosen
-// (openStream's earlier tries). Caller holds m.mu.
+// retiring link (better than refusing the user); then a healthy link that is
+// lagging; and only if every link is degraded, draining or suspect, one of
+// those. Among serving links one that is lagging (its traffic waits on the
+// path right now: managedLink.lagging) is passed over while at most half of
+// them lag; when more than half lag it is the path — a throttle or squeeze
+// every link meets, as in stuck.go — and passing them over would pour every
+// new user onto the few that happen not to lag this instant (in a throttled
+// pool one link took 5 of the 10 new users of a 2 s window, 3 at most before).
+// A lone serving link that lags is no such majority: a healthy retiring link
+// goes first. limit > 0 skips links that already have that many open user
+// connections (the refill hold's cap), after they are counted for the
+// majority; 0 = no limit. Links in avoid are never chosen (openStream's
+// earlier tries). Caller holds m.mu.
 func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 	now := ctrlNow()
+	skipLag := false // most serving links do not lag, but none of those has room
 	for tier := 0; tier < 4; tier++ {
 		var chosen, prompt *managedLink // prompt: the best serving link not lagging
 		var best, bestPrompt pickKey
@@ -1656,9 +1672,6 @@ func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 		serving, lagging := 0, 0
 		for _, ml := range m.links {
 			if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
-				continue
-			}
-			if limit > 0 && int(ml.users.Load()) >= limit {
 				continue
 			}
 			if len(avoid) > 0 && slices.Contains(avoid, ml.link) {
@@ -1678,10 +1691,13 @@ func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 				if ml.degraded || ml.draining || ml.suspect || ml.lagging(now) {
 					continue
 				}
-			case 2:
-				if ml.degraded || ml.draining || ml.suspect {
+			case 2, 3:
+				if tier == 2 && (ml.degraded || ml.draining || ml.suspect) || skipLag && ml.lagging(now) {
 					continue
 				}
+			}
+			if limit > 0 && int(ml.users.Load()) >= limit {
+				continue // full (the hold's cap): counted for the majority, not chosen
 			}
 			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
 			chosen, best, ties = pickBetter(chosen, best, ties, ml, k)
@@ -1690,7 +1706,14 @@ func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 			}
 		}
 		if tier == 0 && serving > 0 && lagging*2 <= serving {
-			return prompt // most serving links do not lag: one that does not
+			if prompt != nil {
+				return prompt // most serving links do not lag: one that does not
+			}
+			skipLag = true // those are full (limit): not a lagging one instead
+			continue
+		}
+		if tier == 0 && serving == 1 {
+			continue // a lone serving link that lags: a healthy retiring one first
 		}
 		if chosen != nil {
 			return chosen

@@ -57,14 +57,16 @@ const (
 	// all received for lagQuiet (the other side's smux keepalive comes every
 	// 4–8 s), nothing received for lagOpenWait after a new user stream was
 	// opened on it (the exit answers a stream's first read with a window
-	// update, smux v2: a round trip), or a new connection could not open on
-	// it within openTimeout less than openSlowHold ago (noteOpenSlow). A
-	// lagging link takes new users only when no other link can: the
-	// sampler's verdicts come seconds later (stuck 8–13 s, suspect 12–14 s),
-	// and in between a link black-holed under load looked the lightest of
-	// all — its flows stop moving — and drew new users that then waited for
-	// it to die. lagWait is stuckPrompt: a link answering slower than that is
-	// no evidence the path works either.
+	// update, smux v2: a round trip; twice the link's round trip if that is
+	// longer, openAnswerWait), or a new connection could not open on it
+	// within openTimeout less than openSlowHold ago (noteOpenSlow). A
+	// lagging link takes new users only when no link that does not lag can
+	// (or when more than half the serving links lag: then it is the path,
+	// pickLocked): the sampler's verdicts come seconds later (stuck 8–13 s,
+	// suspect 12–14 s), and in between a link black-holed under load looked
+	// the lightest of all — its flows stop moving — and drew new users that
+	// then waited for it to die. lagWait is stuckPrompt: a link answering
+	// slower than that is no evidence the path works either.
 	lagWait      = stuckPrompt
 	lagQuiet     = 10 * time.Second
 	lagOpenWait  = time.Second

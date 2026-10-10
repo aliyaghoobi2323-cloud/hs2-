@@ -1794,6 +1794,75 @@ reproduced it once the regime matched the field — asymmetric **and** starved.
   to the current simulator; README's status fields and the `carriers` line
   format; VALIDATION's rollback target, V11 and V12.
 
+## Phase Z — the user-port path: slow readers, and a dying link
+
+Both changes are on the stream path (`mtcp`, `l3mtcp`, `tls`) that carries
+the users of `forward_ports`. The map of the code they start from is
+`docs/architecture/`.
+
+- **Z1 — an adaptive per-stream receive window (smux).** A user whose own line
+  is slower than its share of the link (a phone on a weak connection pulling a
+  large download) kept reading, so the wedge guard never saw it, yet with the
+  fixed 2 MiB stream window each such stream held 1–2 MiB of the link's 8 MiB
+  session buffer: five to eight of them on one link emptied it and every other
+  user of that link crawled at their pace. smux v1.5.24 is now carried in
+  `hs2-src/third_party/smux` (a `replace` in `go.mod`) with an adaptive window:
+  a stream starts at 256 KiB (what a peer assumes before any update) and, at
+  each window update, shrinks by the backlog its reader left unread over
+  `StreamLagTarget` (128 KiB), down to 64 KiB, or doubles up to 2 MiB when the
+  reader ran dry — unless the session's reader waited for buffer space
+  meanwhile. The wire format is unchanged; either end works with an old peer.
+  Lab (200 Mbit, RTT 100 ms, one fast user next to the rest, 2 MiB / 8 MiB):
+  16 readers at 2 Mbit/s: the fast user 2.0 → 102–113 Mbit/s, interactive p99
+  1.08 s → 0.13–0.14 s; 8 readers at 8 Mbit/s: 19.7 → 102–106 Mbit/s; four apps
+  that never read: the link stopped (0) → 117 Mbit/s; three frozen after 8 MB
+  plus 8 slow readers: 13 → 105 Mbit/s (the prototype; after the review fixes
+  below the same matrix never emptied the bucket). On the real stack
+  (`TestSlowReadersDoNotStallLink`, 12 slow readers): the fast user moved
+  0.7–0.9 MiB in 3 s with the fixed window, 520–600 MiB with the adaptive one.
+  Single-stream steady throughput within 3% of the fixed window at RTT
+  50–300 ms. Honest costs: a new stream reaches the full window a round trip or
+  two later (time to 1 MiB ×1.4, to 8 MiB ×1.2–1.4); and a reader that slows
+  down *after* keeping up still holds what it was granted until it has read it
+  — a link stalled ~7 s in that case, where with the fixed window it stayed
+  stalled for the whole download. Lab knobs: `HS2_TUNE_SMUX_MINSTREAMBUF`,
+  `HS2_TUNE_SMUX_LAGTARGET` (0 = the fixed window).
+- **Z2 — new users keep off a link that is dying.** A link black-holed under
+  load stopped moving its flows, so for the 8–14 s before the stuck or suspect
+  verdict it looked the lightest of all and drew new users, who then waited
+  ~20 s for it to die; and `openStream` waited for a stream's SYN without a
+  limit of its own (smux's 30 s, three tries). Now a link is *lagging* while
+  its traffic is seen waiting on the path right now — its oldest control ping
+  unanswered for 2 s, its writer inside one socket write for 2 s, nothing heard
+  for 10 s, no answer to a newly opened stream within 1 s (twice the link's
+  round trip if longer), or a slow open on it within the last 10 s — and a
+  lagging link takes new users only when no link that does not lag can, unless
+  more than half the serving links lag (then it is the path, and the usual
+  order spreads the users). Each try at opening a user stream waits 3 s: if its
+  SYN has not gone out, the connection is tried on another link too and the
+  first to open takes it (a stream whose SYN did go out is not doubled — the
+  exit would dial the panel twice). Lab (four real links, 5 runs, 100 new
+  users each): a busy link black-holed — users placed on the dead link
+  10.4% (until 9–11 s) → 2.0% (all within the first 1.4 s); an idle link
+  black-holed 10.6% → 2.0%; a link whose writer is stuck — longest open
+  19.5 s → 3.1 s; all links healthy and busy, or all throttled — no regression
+  (throttled: time to first byte p99 14.9 → 13.7 s).
+- **Review fixes (independent review and re-measurement, all applied):** the
+  window shrinks by the excess, not twice it (a reader at a steady 50 Mbit/s
+  lost 6.7% to a starve/overshoot cycle; slow readers under a heavy upload got
+  85% of their rate — both back to 100%, the stall protection unchanged); a
+  window update that fails to go out is sent again at the next read (the peer
+  could wait for it for good); a lag target under 4 bytes no longer pins the
+  window; a lab override that leaves no room for the adaptive window says so in
+  the log; during the refill hold a lagging link no longer takes a user when
+  the links that do not lag are full; a try that fails starts the next link at
+  once; no further link is tried once any try's stream is open; the open-answer
+  stamp is taken before the header goes out; a lone serving link that lags
+  yields to a healthy retiring one.
+- **Still open:** users placed on a link in the first second or so after it is
+  black-holed (before any signal) still wait for it to die (~20 s); a
+  reader that slows down after keeping up (above).
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.
