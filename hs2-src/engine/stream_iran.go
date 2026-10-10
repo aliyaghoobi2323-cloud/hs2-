@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"net"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -179,14 +180,15 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 // hold: the connection may also wait in the refill hold (refill.go) for a link
 // with room while the pool refills after a start or a total loss — at most
 // refillHoldMax, and the hold never refuses it. UDP flows pass false (their
-// port's read loop is shared).
-func pickWait(ctx context.Context, lm *LinkManager, hold bool) (Link, func(), bool) {
+// port's read loop is shared). tried: links the connection was tried on
+// already (openStream), not picked again.
+func pickWait(ctx context.Context, lm *LinkManager, hold bool, tried ...Link) (Link, func(), bool) {
 	for i := 0; i < 40; i++ {
 		if !hold {
-			if l, rel, ok := lm.Pick(); ok {
+			if l, rel, ok := lm.pickExcept(tried, false); ok {
 				return l, rel, true
 			}
-		} else if l, rel, ok, w := lm.pickHeld(); ok {
+		} else if l, rel, ok, w := lm.pickHeld(tried...); ok {
 			return l, rel, true
 		} else if w != nil {
 			select {
@@ -236,25 +238,168 @@ func userStreamHeader(l Link, udp bool, port int, pool *peerInfo) []byte {
 	return []byte{kindTCP}
 }
 
+// openTimeout: how long one try at opening a user stream waits for its link —
+// the stream's SYN, then its header, each queued behind the link's writer —
+// before the link counts as slow (noteOpenSlow) and, if the SYN itself has not
+// gone out, the connection is tried on another link as well. openGiveUp bounds
+// the whole open, as smux's own open timeout (30 s) bounded each try before.
+// (Variables only so the tests can shorten them.)
+var (
+	openTimeout = 3 * time.Second
+	openGiveUp  = 30 * time.Second
+)
+
+// openTries: the links one connection is tried on at most.
+const openTries = 3
+
 // openStream opens a user stream for a connection that came in on the user
 // port `port` (0: unknown — never tagged).
+//
+// A link can die between Pick and OpenStream, or be dying already: one
+// black-holed under load holds a new stream's SYN behind a writer that never
+// moves (smux gives up after 30 s), and the sampler takes it out of use only
+// seconds later. So a try that fails is retried on another link, and one whose
+// SYN has not gone out within openTimeout is left running while the
+// connection is tried on another link too: the first to open takes it, the
+// others are closed as they open — a slow but working path keeps its user (on
+// a throttled pool every link may take that long). A try whose SYN went out
+// but whose header still waits (a long upload queue on a link that moves) is
+// not doubled: the exit would dial the panel for each copy whose header goes
+// out (in a throttled-pool test, 9 per 100 new users). Either way the link
+// that kept it waiting is lagging for a while (noteOpenSlow), so the
+// connections after it go elsewhere at once.
 func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), bool) {
-	// A link can die between Pick and OpenStream; try another one.
-	for try := 0; try < 3; try++ {
-		link, release, ok := pickWait(ctx, lm, !udp)
-		if !ok {
+	giveUp := time.NewTimer(openGiveUp)
+	defer giveUp.Stop()
+	done := make(chan *openTry, openTries) // never blocks a try
+	var tried []Link
+	var live []*openTry
+	defer func() {
+		for _, t := range live {
+			t.abandon()
+		}
+	}()
+	start := func(link Link, release func()) {
+		tried = append(tried, link)
+		live = append(live, startOpen(link, release, userStreamHeader(link, udp, port, lm.exitInfo.Load()), done))
+	}
+	for {
+		if len(live) == 0 {
+			if len(tried) >= openTries {
+				return nil, nil, false
+			}
+			link, release, ok := pickWait(ctx, lm, !udp, tried...)
+			if !ok {
+				return nil, nil, false
+			}
+			start(link, release)
+		}
+		wait := openTimeout // the newest try was found slow: look for a link again
+		if newest := live[len(live)-1]; !newest.slow {
+			wait -= time.Since(newest.at)
+		}
+		slow := time.NewTimer(wait)
+		select {
+		case t := <-done:
+			live = slices.DeleteFunc(live, func(x *openTry) bool { return x == t })
+			if t.err == nil {
+				slow.Stop()
+				return t.st, t.release, true
+			}
+			t.release() // failed (the link died): the next try goes elsewhere
+		case <-slow.C:
+			for _, t := range live {
+				if d := time.Since(t.at); !t.slow && d >= openTimeout {
+					t.slow = true
+					lm.noteOpenSlow(t.link, d)
+				}
+			}
+			if newest := live[len(live)-1]; len(tried) < openTries && !newest.opened.Load() {
+				if link, release, ok := lm.pickExcept(tried, !udp); ok {
+					start(link, release)
+				}
+			}
+		case <-giveUp.C:
+			slow.Stop()
+			return nil, nil, false
+		case <-ctx.Done():
+			slow.Stop()
 			return nil, nil, false
 		}
+		slow.Stop()
+	}
+}
+
+// openTry is one try at opening a user stream on one link (openStream).
+type openTry struct {
+	link    Link
+	release func() // the link's slot for this connection
+	at      time.Time
+	slow    bool        // it passed openTimeout (openStream's own)
+	opened  atomic.Bool // its stream is open (the SYN went out); the header may wait
+	st      stream
+	err     error
+	// claim: 0 running; 1 done, its result sent to openStream; 2 abandoned —
+	// the connection opened elsewhere or gave up, and the try closes what it
+	// opens.
+	claim atomic.Int32
+}
+
+// startOpen opens a stream on link and writes its header in a goroutine of
+// its own; the result comes on done unless the try is abandoned first.
+func startOpen(link Link, release func(), hdr []byte, done chan<- *openTry) *openTry {
+	t := &openTry{link: link, release: release, at: time.Now()}
+	limit := t.at.Add(openGiveUp)
+	go func() {
 		st, err := link.OpenStream()
 		if err == nil {
-			if _, err = st.Write(userStreamHeader(link, udp, port, lm.exitInfo.Load())); err == nil {
-				return st, release, true
+			t.opened.Store(true)
+			if t.claim.Load() == 2 {
+				st.Close() // abandoned before it opened: no header, no panel dial
+				return
 			}
-			st.Close()
+			// The header waits for the link's writer like any frame, and
+			// without a deadline smux waits for as long as the session lives.
+			wd, _ := st.(interface{ SetWriteDeadline(time.Time) error })
+			if wd != nil {
+				wd.SetWriteDeadline(limit)
+			}
+			if _, err = st.Write(hdr); err == nil && wd != nil {
+				wd.SetWriteDeadline(time.Time{})
+			}
+			if mtr := linkMeterOf(link); err == nil && mtr != nil {
+				// Its answer is due (lagging): unless an older open still
+				// waits for one, this one is the oldest.
+				if w := mtr.openWait.Load(); w == 0 || mtr.rxAt.Load() >= w {
+					mtr.openWait.CompareAndSwap(w, ctrlNow())
+				}
+			}
 		}
-		release()
+		var failed stream
+		if err != nil && st != nil {
+			st, failed = nil, st
+		}
+		t.st, t.err = st, err
+		if t.claim.CompareAndSwap(0, 1) {
+			done <- t
+		} else if st != nil {
+			st.Close() // abandoned: the connection is on another link
+		}
+		if failed != nil {
+			failed.Close()
+		}
+	}()
+	return t
+}
+
+// abandon gives up on a try openStream no longer waits for: its link's slot is
+// released now, and the stream it opens — or opened, its result unread — is
+// closed (in the background: a FIN waits for the link's writer too).
+func (t *openTry) abandon() {
+	if !t.claim.CompareAndSwap(0, 2) && t.st != nil {
+		go t.st.Close()
 	}
-	return nil, nil, false
+	t.release()
 }
 
 func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {

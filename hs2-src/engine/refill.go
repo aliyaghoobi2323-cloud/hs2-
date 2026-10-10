@@ -148,12 +148,14 @@ func (m *LinkManager) refillCapLocked() int {
 // Pick. During one, it places the connection on a link with room, or queues it
 // (w != nil: wait on w.ch, or cancelHeld). It returns neither a link nor a
 // waiter when no link takes connections at all (the caller's ordinary wait for
-// a link).
-func (m *LinkManager) pickHeld() (l Link, release func(), ok bool, w *holdWaiter) {
+// a link). A connection tried on other links already (tried, openStream) is
+// placed on none of them; once queued it goes where the hold puts it (a link
+// it waited on is lagging by then, pickLocked).
+func (m *LinkManager) pickHeld(tried ...Link) (l Link, release func(), ok bool, w *holdWaiter) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !m.hold.on {
-		ml := m.pickLocked(0)
+		ml := m.pickLocked(0, tried...)
 		if ml == nil {
 			return nil, nil, false, nil
 		}
@@ -163,12 +165,12 @@ func (m *LinkManager) pickHeld() (l Link, release func(), ok bool, w *holdWaiter
 	now := m.now()
 	m.admitLocked(now) // first come, first served: those already waiting go first
 	if len(m.hold.queue) == 0 {
-		if ml := m.pickLocked(m.refillCapLocked()); ml != nil {
+		if ml := m.pickLocked(m.refillCapLocked(), tried...); ml != nil {
 			m.placeLocked(ml)
 			return ml.link, m.releaseFor(ml), true, nil
 		}
 	}
-	if m.pickLocked(0) == nil {
+	if m.pickLocked(0, tried...) == nil {
 		return nil, nil, false, nil // no link at all: not the hold's to wait for
 	}
 	w = &holdWaiter{at: now, ch: make(chan *managedLink, 1)}

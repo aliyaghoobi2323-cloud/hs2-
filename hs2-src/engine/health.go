@@ -51,6 +51,24 @@ const (
 	// waits count as the link being path-limited. Without this filter a writer
 	// that always has data reads as ~90% "blocked" even on an unlimited path.
 	blockedMin = time.Millisecond
+	// A link is lagging (managedLink.lagging) while its traffic is seen
+	// waiting on the path right now: its oldest control ping unanswered for
+	// lagWait, its writer inside one socket write for lagWait, nothing at
+	// all received for lagQuiet (the other side's smux keepalive comes every
+	// 4–8 s), nothing received for lagOpenWait after a new user stream was
+	// opened on it (the exit answers a stream's first read with a window
+	// update, smux v2: a round trip), or a new connection could not open on
+	// it within openTimeout less than openSlowHold ago (noteOpenSlow). A
+	// lagging link takes new users only when no other link can: the
+	// sampler's verdicts come seconds later (stuck 8–13 s, suspect 12–14 s),
+	// and in between a link black-holed under load looked the lightest of
+	// all — its flows stop moving — and drew new users that then waited for
+	// it to die. lagWait is stuckPrompt: a link answering slower than that is
+	// no evidence the path works either.
+	lagWait      = stuckPrompt
+	lagQuiet     = 10 * time.Second
+	lagOpenWait  = time.Second
+	openSlowHold = 10 * time.Second
 	// A degraded link takes no new users and is replaced at once
 	// (make-before-break); its own users are moved off it in steps:
 	//   - after maxDrain, its connections that moved no data for drainStall
@@ -112,6 +130,17 @@ type linkMeter struct {
 	// shows ~100%, and one with spare capacity ~0% however busy it is. Measured
 	// on the loopback: unlimited path 0%, a 2 MB/s bottleneck 99.8%.
 	wrBlocked atomic.Int64 // nanoseconds
+	// wrStart is when (ctrlNow) the socket write in progress began, 0 while
+	// none is; rxAt is when the link last read anything (ctrlNow, 0: never).
+	// meteredConn keeps both, one atomic store per call, so a new user's
+	// pick sees a writer stuck on a dead path, or a silence, as it happens
+	// rather than at the next sample (managedLink.lagging).
+	wrStart atomic.Int64
+	rxAt    atomic.Int64
+	// openWait is when (ctrlNow) the oldest user stream opened since the
+	// link last read anything was opened, 0 if none (openStream sets it;
+	// managedLink.lagging clears it once something is read).
+	openWait atomic.Int64
 
 	// Exit-side download stats (edge only; see stats.go). statsPoll carries the
 	// sampler's "poll now" (cap 1); statsState is statsPending/OK/Unsupported;
@@ -176,14 +205,17 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
 		c.m.rdBytes.Add(uint64(n))
+		c.m.rxAt.Store(ctrlNow())
 	}
 	return n, err
 }
 
 func (c *meteredConn) Write(p []byte) (int, error) {
-	t0 := time.Now()
+	t0 := ctrlNow()
+	c.m.wrStart.Store(t0)
 	n, err := c.Conn.Write(p)
-	if d := time.Since(t0); d > blockedMin {
+	c.m.wrStart.Store(0)
+	if d := time.Duration(ctrlNow() - t0); d > blockedMin {
 		c.m.wrBlocked.Add(int64(d))
 	}
 	if n > 0 {
