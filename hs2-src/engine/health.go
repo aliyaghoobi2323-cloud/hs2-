@@ -67,10 +67,17 @@ const (
 	// the lightest of all — its flows stop moving — and drew new users that
 	// then waited for it to die. lagWait is stuckPrompt: a link answering
 	// slower than that is no evidence the path works either.
-	lagWait      = stuckPrompt
-	lagQuiet     = 10 * time.Second
-	lagOpenWait  = time.Second
-	openSlowHold = 10 * time.Second
+	lagWait     = stuckPrompt
+	lagQuiet    = 10 * time.Second
+	lagOpenWait = time.Second
+	// Once the link's round trip is known, a new stream's answer gets
+	// lagAnswerRTTs of its shortest round trip lately (rttMin), at least
+	// lagAnswerFloor, never more than above: anything read answers it, so
+	// a link busy with downloads answers at once whatever its queue, and an
+	// idle one within its bare round trip (openAnswerWait).
+	lagAnswerRTTs  = 2
+	lagAnswerFloor = 300 * time.Millisecond
+	openSlowHold   = 10 * time.Second
 	// A degraded link takes no new users and is replaced at once
 	// (make-before-break); its own users are moved off it in steps:
 	//   - after maxDrain, its connections that moved no data for drainStall
@@ -139,6 +146,12 @@ type linkMeter struct {
 	// rather than at the next sample (managedLink.lagging).
 	wrStart atomic.Int64
 	rxAt    atomic.Int64
+	// sentAt is when (ctrlNow) a socket write that had to wait for the
+	// network last completed, 0: never. It can only complete once the
+	// other end acknowledged what was in flight, so the path is up both
+	// ways then, however little comes back (linkQuiet): a link busy with
+	// an upload of its own reads next to nothing.
+	sentAt atomic.Int64
 	// openWait is when (ctrlNow) the oldest user stream opened since the
 	// link last read anything was opened, 0 if none (openStream sets it;
 	// managedLink.lagging clears it once something is read).
@@ -179,7 +192,11 @@ type linkMeter struct {
 	// pongs: never; 9% with jittery ones, as on busy links at peak: drained).
 	peerLoss  atomic.Pointer[peerLossRec]
 	rttMicros atomic.Uint64 // last control round-trip time, microseconds
-	peerSeen  atomic.Bool   // a control response has been received at least once
+	// rttMin is the shortest of the last ctrlRTTKeep control round trips
+	// (microseconds, 0: none yet): the link's round trip without its own
+	// queue, near enough (openAnswerWait).
+	rttMin   atomic.Uint64
+	peerSeen atomic.Bool // a control response has been received at least once
 	// ctrlWait is when (ctrlNow) the oldest control ping still unanswered was
 	// sent, 0 if none waits (see ctrlWaitOf); ctrlAnsweredSent is when the
 	// last ping that got its own answer was sent.
@@ -219,6 +236,9 @@ func (c *meteredConn) Write(p []byte) (int, error) {
 	c.m.wrStart.Store(0)
 	if d := time.Duration(ctrlNow() - t0); d > blockedMin {
 		c.m.wrBlocked.Add(int64(d))
+		if n > 0 {
+			c.m.sentAt.Store(t0 + int64(d))
+		}
 	}
 	if n > 0 {
 		c.m.wrBytes.Add(uint64(n))

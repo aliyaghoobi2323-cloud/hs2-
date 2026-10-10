@@ -45,6 +45,8 @@ const (
 	// every tick (an idle one every 3rd–5th): users on it — interactive ones
 	// too, a few KB a tick — are waiting on its answers.
 	ctrlBusyBytes = 4 << 10
+	// ctrlRTTKeep: the round trips rttMin is the shortest of.
+	ctrlRTTKeep = 8
 )
 
 // ctrlBase is the monotonic origin of linkMeter.ctrlWait (a wall-clock step
@@ -84,6 +86,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		return
 	}
 	var seq, npong uint64
+	var rtts [ctrlRTTKeep]uint64 // the last round trips (rttMin)
 	pong := make([]byte, ctrlPongLen)
 	var pending ctrlPendingList
 	publish := func() { mtr.ctrlWait.Store(pending.oldest()) }
@@ -165,6 +168,8 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			sent := int64(binary.BigEndian.Uint64(pong[8:]))
 			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
 				mtr.rttMicros.Store(uint64(rtt / 1000))
+				rtts[npong%ctrlRTTKeep] = uint64(rtt / 1000)
+				mtr.rttMin.Store(minNonZero(rtts[:]))
 			}
 			rt := binary.BigEndian.Uint64(pong[16:])
 			mtr.peerRetrans.Store(rt)
@@ -178,6 +183,17 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		}
 		publish()
 	}
+}
+
+// minNonZero is the smallest non-zero value of v, 0 if none.
+func minNonZero(v []uint64) uint64 {
+	var m uint64
+	for _, x := range v {
+		if x != 0 && (m == 0 || x < m) {
+			m = x
+		}
+	}
+	return m
 }
 
 // ctrlPendingList holds the control pings not answered yet, oldest first, at

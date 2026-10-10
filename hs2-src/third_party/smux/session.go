@@ -56,6 +56,7 @@ type Session struct {
 	bucket       int32         // token bucket
 	bucketNotify chan struct{} // used for waiting for tokens
 	parks        uint32        // times recvLoop waited for tokens
+	brakes       uint32        // adaptive: braking window updates sent (Stream.checkLag)
 
 	streams    map[uint32]*Stream // all streams in this session
 	streamLock sync.Mutex         // locks streams
@@ -216,6 +217,15 @@ func (s *Session) Close() error {
 	}
 }
 
+// Parks returns how many times the session's reader has waited for
+// MaxReceiveBuffer space: each time, every stream of the session stalled
+// until a reader made room.
+func (s *Session) Parks() uint32 { return atomic.LoadUint32(&s.parks) }
+
+// Brakes returns how many braking window updates the session's adaptive
+// streams have sent (Config.MinStreamBuffer).
+func (s *Session) Brakes() uint32 { return atomic.LoadUint32(&s.brakes) }
+
 // CloseChan can be used by someone who wants to be notified immediately when this
 // session is closed
 func (s *Session) CloseChan() <-chan struct{} {
@@ -367,8 +377,11 @@ func (s *Session) recvLoop() {
 						s.streamLock.Lock()
 						if stream, ok := s.streams[sid]; ok {
 							stream.pushBytes(newbuf)
-							atomic.AddInt32(&s.bucket, -int32(written))
+							free := atomic.AddInt32(&s.bucket, -int32(written))
 							stream.notifyReadEvent()
+							if s.config.MinStreamBuffer > 0 {
+								stream.checkLag(int(free))
+							}
 						}
 						s.streamLock.Unlock()
 					} else {
@@ -530,6 +543,16 @@ func (s *Session) writeFrame(f Frame) (n int, err error) {
 
 // internal writeFrame version to support deadline used in keepalive
 func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class CLASSID) (int, error) {
+	req, err := s.queueFrame(f, deadline, class)
+	if err != nil {
+		return 0, err
+	}
+	return s.frameWritten(req, deadline)
+}
+
+// queueFrame hands f to the shaper. Frames of one class leave in the order
+// they were queued.
+func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) (writeRequest, error) {
 	req := writeRequest{
 		class:  class,
 		frame:  f,
@@ -538,14 +561,19 @@ func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class C
 	}
 	select {
 	case s.shaper <- req:
+		return req, nil
 	case <-s.die:
-		return 0, io.ErrClosedPipe
+		return req, io.ErrClosedPipe
 	case <-s.chSocketWriteError:
-		return 0, s.socketWriteError.Load().(error)
+		return req, s.socketWriteError.Load().(error)
 	case <-deadline:
-		return 0, ErrTimeout
+		return req, ErrTimeout
 	}
+}
 
+// frameWritten waits until the frame of req, queued by queueFrame, is
+// written.
+func (s *Session) frameWritten(req writeRequest, deadline <-chan time.Time) (int, error) {
 	select {
 	case result := <-req.result:
 		return result.n, result.err

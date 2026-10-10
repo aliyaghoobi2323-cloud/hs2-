@@ -311,3 +311,49 @@ func TestSlowReadersDoNotStallLink(t *testing.T) {
 		t.Fatalf("fast user moved %d KiB in 3 s next to 12 slow readers, want 32 MiB or more", got>>10)
 	}
 }
+
+// readFastThenAt reads as fast as it can until ramp has passed since it was
+// made, then about rate bytes/s.
+func readFastThenAt(ramp time.Duration, rate int) func(u *wUser) {
+	until := time.Now().Add(ramp)
+	return func(u *wUser) {
+		buf := make([]byte, 4<<10)
+		for {
+			n, err := u.app.Read(buf)
+			u.got.Add(int64(n))
+			if err != nil {
+				return
+			}
+			if time.Now().After(until) {
+				time.Sleep(time.Duration(n) * time.Second / time.Duration(rate))
+			}
+		}
+	}
+}
+
+// Readers that keep up and then slow down (a player whose buffer filled, a
+// phone moving to a weak connection) were granted the full window while they
+// kept up; the adaptive window used to shrink it only at their next update,
+// after they had read half of it at their new pace, so a dozen of them held
+// the whole session buffer and the link's other users stalled until they had
+// read it (measured: 10-17 s and more at 0 B/s). smux now takes the windows
+// back as soon as the backlogs pile up. What the exit had already sent still
+// arrives, and on this loopback rig (no TCP_NOTSENT_LOWAT, socket buffers of
+// several MiB) that can still stall the link for a few seconds now and then;
+// the test asks only that it recovers.
+func TestReadersSlowingDownDoNotStallLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-time readers")
+	}
+	r := newWedgeRig(t, true)
+	for i := 0; i < 12; i++ {
+		r.open(readFastThenAt(3*time.Second, 32<<10))
+	}
+	fast := r.open(readAt(0))
+	time.Sleep(4 * time.Second) // the readers have slowed down
+	before := fast.got.Load()
+	time.Sleep(10 * time.Second)
+	if got := fast.got.Load() - before; got < 64<<20 {
+		t.Fatalf("fast user moved %d KiB in the 10 s after 12 readers slowed down, want 64 MiB or more", got>>10)
+	}
+}

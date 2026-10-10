@@ -43,22 +43,35 @@ type Config struct {
 	// (protocol version 2) when positive; the wire format does not change,
 	// a peer of any version simply honours the window it is told.
 	//
-	// An adaptive stream starts at a 256 KiB window (the window a peer
-	// assumes before any update; clamped to [MinStreamBuffer,
-	// MaxStreamBuffer]) and resizes it at each window update from the least
-	// backlog its reader left unread since the previous one: over
-	// StreamLagTarget it shrinks by the excess, down to MinStreamBuffer;
-	// under a quarter of the target it doubles, up to MaxStreamBuffer,
-	// unless the session ran out of MaxReceiveBuffer meanwhile. A reader
-	// slower than its share of the link then holds about StreamLagTarget of
-	// the session's MaxReceiveBuffer instead of up to MaxStreamBuffer, while
-	// one that keeps up still gets the full window.
+	// An adaptive stream starts at the 256 KiB window a peer assumes before
+	// any update (clamped to [MinStreamBuffer, MaxStreamBuffer]) and
+	// resizes it at each window update from the least backlog its reader
+	// left unread since the previous one: over StreamLagTarget it shrinks
+	// by the excess, down to MinStreamBuffer; under a quarter of the target
+	// it doubles, up to MaxStreamBuffer, unless the session ran out of
+	// MaxReceiveBuffer meanwhile. At the first resize a reader that kept up
+	// gets at once what it reads in a second at its pace so far (from the
+	// transfer's own start, past a handshake's wait), if that is more
+	// (MaxStreamBuffer for a transfer that starts fast), so a large transfer
+	// starts as fast as with the fixed window. A reader slower than
+	// its share of the link then holds about StreamLagTarget of the
+	// session's MaxReceiveBuffer instead of up to MaxStreamBuffer, while one
+	// that keeps up still gets the full window.
 	//
-	// The costs: a stream reaches the full window one doubling per update,
-	// so a large transfer starts a round trip or two later than with the
-	// fixed window; and what a reader was already granted (up to
-	// MaxStreamBuffer, if it kept up until then) still sits in the session's
-	// buffer while it drains at the reader's new, slower pace.
+	// What a window already granted can only be taken back early: while a
+	// stream's backlog stays over StreamLagTarget (for 2 ms or more), the
+	// other streams hold a third of MaxReceiveBuffer, its reader at its
+	// pace since then would take a second or more to read it, and the peer
+	// may still send over twice StreamLagTarget more, the stream is braked:
+	// an update leaves at once, without waiting for the reader, that halves
+	// the window (to no less than what the stream holds), and while it
+	// still lags, each frame after that update went out halves it again. A
+	// reader that kept up and then slowed down is cut back within a few
+	// frames; one that only paused, and reads all it holds within a second
+	// of the first brake, gets its window back at once. The cost that
+	// remains: what the peer had already sent before those updates arrive
+	// still lands in the session's buffer, so this keeps the buffer from
+	// emptying only while about a round trip of the link's data fits in it.
 	// Zero (the default) keeps the fixed window of MaxStreamBuffer.
 	MinStreamBuffer int
 

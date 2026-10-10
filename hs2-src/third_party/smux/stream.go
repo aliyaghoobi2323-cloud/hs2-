@@ -36,14 +36,30 @@ type Stream struct {
 	writeDeadline atomic.Value
 
 	// per stream sliding window control
-	numRead    uint32 // number of consumed bytes
-	numWritten uint32 // count num of bytes written
-	incr       uint32 // counting for sending
-	rcvWin     uint32 // window announced in our last UPD (adaptive: under bufferLock)
-	unread     int    // bytes in buffers not yet read (under bufferLock)
-	minUnread  int    // adaptive: least unread left by a read since our last UPD
-	lastParks  uint32 // adaptive: sess.parks at our last UPD
-	updLost    bool   // our last UPD did not go out: resend at the next read (under bufferLock)
+	numRead    uint32     // number of consumed bytes
+	numWritten uint32     // count num of bytes written
+	incr       uint32     // counting for sending
+	rcvWin     uint32     // window announced in our last UPD (adaptive: under bufferLock)
+	unread     int        // bytes in buffers not yet read (under bufferLock)
+	minUnread  int        // adaptive: least unread left by a read since our last UPD
+	lastParks  uint32     // adaptive: sess.parks at our last UPD
+	updLost    bool       // our last UPD did not go out: resend at the next read (under bufferLock)
+	lagSince   time.Time  // adaptive: since when unread has stayed over StreamLagTarget (zero: it has not; under bufferLock)
+	lagRead    uint32     // adaptive: numRead at lagSince (under bufferLock)
+	braking    bool       // adaptive: a braking UPD is on its way (under bufferLock)
+	adapted    bool       // adaptive: adaptWindow has run (under bufferLock)
+	firstAt    int64      // adaptive: UnixNano of the first read (under bufferLock)
+	firstRead  uint32     // adaptive: numRead after the first read (under bufferLock)
+	idleAt     int64      // adaptive, before the first resize: UnixNano of the read that left nothing unread (0: it did not; under bufferLock)
+	restarted  bool       // adaptive: the pace of the first resize restarted after a wait (under bufferLock)
+	settling   bool       // adaptive: after a brake, the backlog in flight before it is not yet down (under bufferLock)
+	preBrake   uint32     // adaptive: rcvWin before the first brake of the latest run (0: none; under bufferLock)
+	brakeAt    int64      // adaptive: UnixNano of that first brake (under bufferLock)
+	updLock    sync.Mutex // one UPD at a time, so a later one never carries older values
+
+	// answered is set (atomic) once the peer has sent anything for this
+	// stream: data, a window update or its FIN (see Answered)
+	answered uint32
 
 	// UPD command
 	peerConsumed uint32        // num of bytes the peer has consumed
@@ -63,19 +79,27 @@ func newStream(id uint32, frameSize int, sess *Session) *Stream {
 	s.chFinEvent = make(chan struct{})
 	s.peerWindow = initialPeerWindow // set to initial window size
 	s.rcvWin = uint32(sess.config.MaxStreamBuffer)
-	if min := sess.config.MinStreamBuffer; min > 0 {
-		// An adaptive stream starts at the window the peer assumes before
-		// any update and earns the rest by keeping up, so a reader that is
-		// slow from the start never holds a full MaxStreamBuffer.
-		if s.rcvWin > initialPeerWindow {
-			s.rcvWin = initialPeerWindow
-		}
-		if s.rcvWin < uint32(min) {
-			s.rcvWin = uint32(min)
-		}
+	if sess.config.MinStreamBuffer > 0 {
+		s.rcvWin = startWindow(sess.config)
 		s.lastParks = atomic.LoadUint32(&sess.parks)
 	}
 	return s
+}
+
+// startWindow is where an adaptive stream starts: the window the peer
+// assumes before any update, within [MinStreamBuffer, MaxStreamBuffer]. It
+// earns the rest by keeping up (at its first resize, at once, as far as its
+// pace so far calls for: see adaptWindow), so a reader that is slow from the
+// start never holds a full MaxStreamBuffer.
+func startWindow(cfg *Config) uint32 {
+	w := uint32(initialPeerWindow)
+	if w > uint32(cfg.MaxStreamBuffer) {
+		w = uint32(cfg.MaxStreamBuffer)
+	}
+	if w < uint32(cfg.MinStreamBuffer) {
+		w = uint32(cfg.MinStreamBuffer)
+	}
+	return w
 }
 
 // ID returns the unique stream ID.
@@ -141,7 +165,6 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 	}
 
 	var notify bool
-	var notifyConsumed, notifyWindow uint32
 	s.bufferLock.Lock()
 	if len(s.buffers) > 0 {
 		n = copy(b, s.buffers[0])
@@ -163,14 +186,14 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 	// consumer keeps on reading data
 	// s.numRead == n also notify window at the first read
 	if n > 0 {
-		notify, notifyConsumed, notifyWindow = s.consumed(uint32(n))
+		notify = s.consumed(uint32(n))
 	}
 	s.bufferLock.Unlock()
 
 	if n > 0 {
 		s.sess.returnTokens(n)
 		if notify {
-			err := s.sendWindowUpdate(notifyConsumed, notifyWindow)
+			err := s.sendWindowUpdate()
 			return n, err
 		} else {
 			return n, nil
@@ -222,7 +245,6 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 	for {
 		var notify bool
-		var notifyConsumed, notifyWindow uint32
 		var buf []byte
 		s.bufferLock.Lock()
 		if len(s.buffers) > 0 {
@@ -232,7 +254,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 		}
 		s.unread -= len(buf)
 		if len(buf) > 0 {
-			notify, notifyConsumed, notifyWindow = s.consumed(uint32(len(buf)))
+			notify = s.consumed(uint32(len(buf)))
 		}
 		s.bufferLock.Unlock()
 
@@ -249,7 +271,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 			}
 
 			if notify {
-				if err := s.sendWindowUpdate(notifyConsumed, notifyWindow); err != nil {
+				if err := s.sendWindowUpdate(); err != nil {
 					return n, err
 				}
 			}
@@ -260,36 +282,72 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 }
 
 // consumed accounts n bytes just read (n > 0) and reports whether a window
-// update is due, with the consumed count and window it must carry. The caller
-// holds bufferLock and has already taken the n bytes off unread.
+// update is due. The caller holds bufferLock and has already taken the n
+// bytes off unread.
 //
 // An update is due at the first read and each time half of the window
 // announced in the last update has been read since. The peer may run at most
 // rcvWin bytes past the consumed count of our last update; we always read
 // rcvWin/2 of that and announce again, so the peer never waits for an update
-// that is not coming, whatever the window does in between.
-func (s *Stream) consumed(n uint32) (notify bool, consumed, window uint32) {
+// that is not coming, whatever the window does in between (a brake, see
+// checkLag, announces a smaller window early and restarts that count).
+//
+// The first update of an adaptive stream announces the window the peer
+// assumes anyway; the next one (adaptWindow) is the stream's first resize,
+// judged on the reads after the first.
+func (s *Stream) consumed(n uint32) (notify bool) {
+	cfg := s.sess.config
 	s.numRead += n
 	s.incr += n
 	if s.unread < s.minUnread {
 		s.minUnread = s.unread
 	}
+	if s.unread <= cfg.StreamLagTarget {
+		s.lagSince = time.Time{}
+	}
 	first := s.numRead == n
-	if s.incr < s.rcvWin/2 && !first && !s.updLost {
-		return false, 0, 0
+	if cfg.MinStreamBuffer > 0 && !s.adapted {
+		// a transfer that follows a small exchange and a wait (a TLS
+		// handshake, a request) is paced from its own start: from the
+		// first read it would count the wait as the reader's
+		now := time.Now().UnixNano()
+		if !first && !s.restarted && s.idleAt != 0 && now-s.idleAt >= int64(jumpFloor) &&
+			s.numRead-n-s.firstRead < jumpRestartMax {
+			s.firstAt, s.firstRead, s.restarted = now, s.numRead-n, true
+		}
+		s.idleAt = 0
+		if s.unread == 0 {
+			s.idleAt = now
+		}
+	}
+	// a braked reader that has read all it held within brakeDrain of the
+	// first brake only paused: it gets back the window it had, at once
+	restore := s.preBrake > s.rcvWin && s.unread == 0 &&
+		time.Now().UnixNano()-s.brakeAt < int64(brakeDrain)
+	if restore {
+		s.rcvWin, s.settling, s.preBrake = s.preBrake, false, 0
+	}
+	if s.incr < s.rcvWin/2 && !first && !s.updLost && !restore {
+		return false
 	}
 	resend := s.updLost
 	s.updLost = false
 	s.incr = 0
-	if cfg := s.sess.config; cfg.MinStreamBuffer > 0 {
+	if cfg.MinStreamBuffer > 0 {
 		parks := atomic.LoadUint32(&s.sess.parks)
-		if !first && !resend {
+		if !first && !resend && !restore {
 			s.adaptWindow(cfg, parks != s.lastParks)
 		}
 		s.lastParks = parks
 		s.minUnread = s.unread
+		if first {
+			// judge the first resize on the reads after this one: the
+			// first read takes what came before the peer's first burst
+			s.minUnread = int(^uint(0) >> 1)
+			s.firstAt, s.firstRead = time.Now().UnixNano(), s.numRead
+		}
 	}
-	return true, s.numRead, s.rcvWin
+	return true
 }
 
 // adaptWindow resizes the adaptive receive window (Config.MinStreamBuffer >
@@ -305,8 +363,26 @@ func (s *Stream) consumed(n uint32) (notify bool, consumed, window uint32) {
 // -- unless the session's reader waited for buffer space since the previous
 // update (parked): then the stream starved behind the other streams, not
 // behind its own window, and growing it would only deepen the jam.
+//
+// The first resize of a reader that ran dry grows the window at once to what
+// the reader took in jumpSpan at its pace since its first read, if that is
+// more than twice the window: a transfer that starts fast gets the full
+// window a round trip or two earlier than by doubling, while a reader that
+// only kept up with a trickle (a slow link, or a connection still opening its
+// congestion window) gets no more than its pace calls for.
 func (s *Stream) adaptWindow(cfg *Config, parked bool) {
 	standing := s.minUnread
+	firstResize := !s.adapted
+	s.adapted = true
+	if s.settling {
+		// judged only on backlogs of its own window: wait until what
+		// was in flight before a brake has come down to it, then one
+		// more update
+		if standing < int(s.rcvWin) {
+			s.settling = false
+		}
+		return
+	}
 	switch {
 	case standing > cfg.StreamLagTarget:
 		excess := uint64(standing - cfg.StreamLagTarget)
@@ -317,13 +393,33 @@ func (s *Stream) adaptWindow(cfg *Config, parked bool) {
 		}
 	case 4*standing < cfg.StreamLagTarget && !parked:
 		s.rcvWin *= 2
+		if firstResize {
+			// the first resize: a reader that kept up with the
+			// window the peer started with gets at once what it
+			// reads in jumpSpan at its pace so far (the full window
+			// for a transfer that starts fast, as with the fixed
+			// window), not just twice the window
+			dt := time.Now().UnixNano() - s.firstAt
+			if dt < int64(jumpFloor) {
+				dt = int64(jumpFloor)
+			}
+			w := uint64(s.numRead-s.firstRead) * uint64(jumpSpan) / uint64(dt)
+			if w > uint64(cfg.MaxStreamBuffer) {
+				w = uint64(cfg.MaxStreamBuffer)
+			}
+			if w > uint64(s.rcvWin) {
+				s.rcvWin = uint32(w)
+			}
+		}
 		if s.rcvWin > uint32(cfg.MaxStreamBuffer) {
 			s.rcvWin = uint32(cfg.MaxStreamBuffer)
 		}
 	}
 }
 
-func (s *Stream) sendWindowUpdate(consumed, window uint32) error {
+// sendWindowUpdate announces the consumed count and window, by the read
+// deadline (writeWindowUpdate).
+func (s *Stream) sendWindowUpdate() error {
 	var timer *time.Timer
 	var deadline <-chan time.Time
 	if d, ok := s.readDeadline.Load().(time.Time); ok && !d.IsZero() {
@@ -331,13 +427,30 @@ func (s *Stream) sendWindowUpdate(consumed, window uint32) error {
 		defer timer.Stop()
 		deadline = timer.C
 	}
+	return s.writeWindowUpdate(deadline)
+}
+
+// writeWindowUpdate announces the consumed count and window as they are when
+// the update is queued, one update at a time: the reader and a brake
+// (checkLag) may both send one, and the peer must never act on an older pair
+// after a newer one. Only the queueing is serialized; the wait for the write
+// is not.
+func (s *Stream) writeWindowUpdate(deadline <-chan time.Time) error {
+	s.updLock.Lock()
+	s.bufferLock.Lock()
+	consumed, window := s.numRead, s.rcvWin
+	s.bufferLock.Unlock()
 
 	frame := newFrame(byte(s.sess.config.Version), cmdUPD, s.id)
 	var hdr updHeader
 	binary.LittleEndian.PutUint32(hdr[:], consumed)
 	binary.LittleEndian.PutUint32(hdr[4:], window)
 	frame.data = hdr[:]
-	_, err := s.sess.writeFrameInternal(frame, deadline, CLSDATA)
+	req, err := s.sess.queueFrame(frame, deadline, CLSDATA)
+	s.updLock.Unlock()
+	if err == nil {
+		_, err = s.sess.frameWritten(req, deadline)
+	}
 	if err != nil {
 		// the peer may be waiting for exactly this update: announce
 		// again at the next read rather than after another rcvWin/2
@@ -346,6 +459,118 @@ func (s *Stream) sendWindowUpdate(consumed, window uint32) error {
 		s.bufferLock.Unlock()
 	}
 	return err
+}
+
+const (
+	// jumpSpan, jumpFloor: the first resize of a reader that kept up
+	// grows its window to what it reads in jumpSpan at its pace since its
+	// first read, measured over jumpFloor at least (adaptWindow).
+	jumpSpan  = time.Second
+	jumpFloor = 50 * time.Millisecond
+	// jumpRestartMax: a reader that has read less than this since its
+	// first read and then waited jumpFloor or more with nothing unread
+	// is paced from the read after the wait (consumed), once
+	jumpRestartMax = 64 << 10
+	// brakeLag is how long a stream's unread must stay over
+	// StreamLagTarget before checkLag brakes it: a burst the reader takes
+	// at once is not braked. It is short because a fast link delivers a
+	// whole grant within milliseconds of the reader slowing down.
+	brakeLag = 2 * time.Millisecond
+	// brakeShare: checkLag brakes only while the other streams of the
+	// session hold at least 1/brakeShare of MaxReceiveBuffer unread.
+	brakeShare = 3
+	// brakeDrain: checkLag brakes only a reader that, at its pace since
+	// it fell behind, would take this long or more to read its backlog.
+	brakeDrain = time.Second
+	// brakeWait bounds how long a braking update waits to be queued and
+	// written; one that cannot is resent at the next read (updLost)
+	brakeWait = 100 * time.Millisecond
+)
+
+// checkLag runs in the session's reader after each frame pushed to an
+// adaptive stream, free being what is left of the session's buffer.
+//
+// What the reader has granted the peer cannot be taken back by waiting: a
+// window shrinks only at the next update, after another rcvWin/2 is read,
+// and a reader that kept up until now (granted up to MaxStreamBuffer) and
+// then slows down is seconds from it, while the peer fills the grant into
+// the session's buffer. A handful of them can empty the buffer and stall
+// every stream of the session at their pace.
+//
+// So when the unread backlog has stayed over StreamLagTarget for brakeLag
+// while the other streams hold at least 1/brakeShare of the buffer, the
+// peer may still send more than twice StreamLagTarget, and the reader, at
+// its pace since it fell behind, would take brakeDrain or more to read what
+// it holds, the window is halved at once (to no less than what the stream
+// holds and MinStreamBuffer), with an update that leaves now; while the
+// stream still lags so, the next frame halves it again, until the peer may
+// send little more than the stream holds. The usual updates then take
+// over. A reader that is slower than the link but keeps a pace its window
+// is sized for (the usual updates did that) is left alone, and one that
+// only paused loses at most half its window per frame it lets pile up.
+// What was in flight still arrives, so this protects the buffer only as far
+// as a round trip of data fits in it.
+func (s *Stream) checkLag(free int) {
+	cfg := s.sess.config
+	s.bufferLock.Lock()
+	defer s.bufferLock.Unlock()
+	if s.unread <= cfg.StreamLagTarget {
+		s.lagSince = time.Time{}
+		return
+	}
+	now := time.Now()
+	if s.lagSince.IsZero() {
+		s.lagSince, s.lagRead = now, s.numRead
+		return
+	}
+	others := cfg.MaxReceiveBuffer - free - s.unread
+	lag := now.Sub(s.lagSince)
+	if s.braking || int64(others)*brakeShare < int64(cfg.MaxReceiveBuffer) || lag < brakeLag {
+		return
+	}
+	// what the peer may still send: the window of our last update past
+	// its consumed count (numRead-incr), less what has arrived since
+	if int64(s.rcvWin)-int64(s.incr)-int64(s.unread) <= int64(2*cfg.StreamLagTarget) {
+		return // little to take back: the usual updates will do
+	}
+	// at the pace it has read since it fell behind, would the reader
+	// take brakeDrain or longer to read what it holds?
+	if float64(s.unread)*float64(lag) < float64(s.numRead-s.lagRead)*float64(brakeDrain) {
+		return // a reader that keeps its pace: its window is sized for it
+	}
+	win := uint32(cfg.MinStreamBuffer)
+	if uint32(s.unread) > win {
+		win = uint32(s.unread)
+	}
+	if s.rcvWin/2 > win {
+		win = s.rcvWin / 2 // more brakes follow while it still lags
+	}
+	if s.preBrake == 0 || now.UnixNano()-s.brakeAt >= int64(brakeDrain) {
+		s.preBrake, s.brakeAt = s.rcvWin, now.UnixNano() // the first brake of a run
+	}
+	s.rcvWin = win
+	s.incr = 0
+	s.minUnread = s.unread
+	s.lastParks = atomic.LoadUint32(&s.sess.parks)
+	// what was in flight still arrives: that backlog is not the
+	// reader's doing (adaptWindow)
+	s.settling = true
+	s.braking = true
+	atomic.AddUint32(&s.sess.brakes, 1)
+	go func() {
+		select {
+		case <-s.die:
+		default:
+			// not bound by the reader's deadline, but not for long
+			// either: the reader's own update waits for this one
+			t := time.NewTimer(brakeWait)
+			s.writeWindowUpdate(t.C)
+			t.Stop()
+		}
+		s.bufferLock.Lock()
+		s.braking = false
+		s.bufferLock.Unlock()
+	}()
 }
 
 func (s *Stream) waitRead() error {
@@ -531,6 +756,23 @@ func (s *Stream) Close() error {
 	}
 }
 
+// Answered reports whether the peer has sent anything for this stream yet:
+// data, a window update or its FIN. A version 2 peer announces its window at
+// its first read of the stream, so on a working path a stream the peer
+// accepted and read from is answered about a round trip after its first
+// frames went out -- whatever the peer then does with the data.
+func (s *Stream) Answered() bool {
+	return atomic.LoadUint32(&s.answered) != 0
+}
+
+// markAnswered records that the peer sent something for this stream (one
+// atomic load per frame once it has).
+func (s *Stream) markAnswered() {
+	if atomic.LoadUint32(&s.answered) == 0 {
+		atomic.StoreUint32(&s.answered, 1)
+	}
+}
+
 // GetDieCh returns a readonly chan which can be readable
 // when the stream is to be closed.
 func (s *Stream) GetDieCh() <-chan struct{} {
@@ -592,6 +834,7 @@ func (s *Stream) RemoteAddr() net.Addr {
 
 // pushBytes append buf to buffers
 func (s *Stream) pushBytes(buf []byte) (written int, err error) {
+	s.markAnswered()
 	s.bufferLock.Lock()
 	s.buffers = append(s.buffers, buf)
 	s.heads = append(s.heads, buf)
@@ -624,6 +867,7 @@ func (s *Stream) notifyReadEvent() {
 
 // update command
 func (s *Stream) update(consumed uint32, window uint32) {
+	s.markAnswered()
 	atomic.StoreUint32(&s.peerConsumed, consumed)
 	atomic.StoreUint32(&s.peerWindow, window)
 	select {
@@ -634,6 +878,7 @@ func (s *Stream) update(consumed uint32, window uint32) {
 
 // mark this stream has been closed in protocol
 func (s *Stream) fin() {
+	s.markAnswered()
 	s.finEventOnce.Do(func() {
 		close(s.chFinEvent)
 	})

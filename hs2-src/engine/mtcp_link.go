@@ -270,11 +270,16 @@ var (
 	// KiB of SmuxSessionBuffer instead of up to SmuxStreamBuffer, so a handful
 	// of them can no longer empty the bucket and stall every other stream on
 	// the link (which the wedge guard cannot see: their writes complete).
-	// 0 keeps the fixed window. The costs (third_party/smux, Config): a new
-	// stream reaches SmuxStreamBuffer one doubling per update, a round trip
-	// or two later than with the fixed window; and a reader that slows down
-	// after keeping up still holds what it was granted until it has read it
-	// (measured: a link stalled ~7 s, not for the whole download).
+	// 0 keeps the fixed window. A new stream whose reader keeps up with
+	// the first 256 KiB gets at once what it reads in a second at its pace
+	// (SmuxStreamBuffer for a fast transfer, which so starts as with the
+	// fixed window), and a stream whose reader falls behind while the other
+	// streams hold a third of SmuxSessionBuffer has its window halved frame
+	// by frame at once rather than at its next update (third_party/smux,
+	// Config). What remains (measured, 12 readers slowing down at once):
+	// what the exit had already sent still lands in the buffer, so a link
+	// carrying more than about 5 MB in flight (500 Mbit/s at 100 ms) still
+	// stalls for seconds, one at 1 Gbit/s at 100 ms nearly as long as before.
 	SmuxMinStreamBuffer = 64 << 10
 	SmuxStreamLagTarget = 128 << 10
 )

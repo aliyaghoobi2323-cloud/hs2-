@@ -213,6 +213,10 @@ type LinkManager struct {
 	// with the count of the ones folded into it. Under mu.
 	openSlowLogAt time.Time
 	openSlowN     int
+
+	// rescue: connections moved off a link that went quiet
+	// before the exit answered them (rescue.go) — its rate limit and log.
+	rescue rescueState
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
@@ -339,10 +343,22 @@ func (ml *managedLink) lagging(now int64) bool {
 }
 
 // openAnswerWait is how long a new stream may wait for the link's first read
-// after it before the link counts as lagging: lagOpenWait, or twice the link's
-// last control round trip if that is longer — a far but working path answers
-// only after a round trip — but never more than lagWait.
+// after it before the link counts as lagging: quietWait, and once the link's
+// round trip is known no more than lagAnswerRTTs of its shortest round trip
+// lately (rttMin), at least lagAnswerFloor — anything read answers it, so a
+// near path is not given a second before the users after it go elsewhere.
 func openAnswerWait(mtr *linkMeter) int64 {
+	d := quietWait(mtr)
+	if us := mtr.rttMin.Load(); us != 0 {
+		d = min(d, max(lagAnswerRTTs*int64(us)*int64(time.Microsecond), int64(lagAnswerFloor)))
+	}
+	return d
+}
+
+// quietWait is how long a working link may stay silent after something was
+// sent on it: lagOpenWait, or twice the link's last control round trip if
+// that is longer, but never more than lagWait (linkQuiet).
+func quietWait(mtr *linkMeter) int64 {
 	d := int64(lagOpenWait)
 	if rtt := 2 * int64(mtr.rttMicros.Load()) * int64(time.Microsecond); rtt > d {
 		d = min(rtt, int64(lagWait))
@@ -588,6 +604,22 @@ func linkDownReason(l Link) string {
 		return r.downReason()
 	}
 	return "closed"
+}
+
+// linkStallNote says, for the log of a link's end, how often its receive
+// buffer ran full while it was up (every user on it stalled until a reader
+// made room) and how often a reader that fell behind was braked to keep it
+// from filling (smux Config.MinStreamBuffer); "" when neither happened.
+func linkStallNote(l Link) string {
+	ml, ok := l.(*mtcpLink)
+	if !ok || ml.sess == nil {
+		return ""
+	}
+	parks, brakes := ml.sess.Parks(), ml.sess.Brakes()
+	if parks == 0 && brakes == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (while up: its receive buffer ran full %d time(s); readers that fell behind braked %d time(s))", parks, brakes)
 }
 
 // Run brings the pool up and then maintains it: rebuilds dead links, heals
@@ -1476,7 +1508,7 @@ func (m *LinkManager) reap() {
 	now := m.now()
 	for _, ml := range dead {
 		ml.link.Close()
-		m.downLog.log("mtcp: link %d down: %s", ml.id, linkDownReason(ml.link))
+		m.downLog.log("mtcp: link %d down: %s%s", ml.id, linkDownReason(ml.link), linkStallNote(ml.link))
 		if hint := m.shortLived.note(now.Sub(ml.born)); hint != "" {
 			m.log("mtcp: %s", hint)
 		}
@@ -1720,6 +1752,45 @@ func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 		}
 	}
 	return nil
+}
+
+// stranded reports whether a connection on l whose stream the exit has not
+// answered should leave l (rescue.go): l is down, or a new connection would
+// now be steered off it — it is degraded, draining or suspect, or it lags
+// while most serving links do not (pickLocked) — and another serving link
+// that does not lag would take it. When most serving links lag it is the
+// path, not l, and moving gains nothing; a retiring link is healthy, only
+// leaving service.
+func (m *LinkManager) stranded(l Link) bool {
+	now := ctrlNow()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var own *managedLink
+	serving, lagging, other := 0, 0, 0
+	for _, ml := range m.links {
+		if ml.link == l {
+			own = ml
+		}
+		if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
+			continue
+		}
+		if ml.retiring || ml.degraded || ml.draining || ml.suspect {
+			continue
+		}
+		serving++
+		if ml.lagging(now) {
+			lagging++
+		} else if ml.link != l {
+			other++
+		}
+	}
+	if other == 0 || lagging*2 > serving {
+		return false
+	}
+	if own == nil || !l.Alive() || own.degraded || own.draining || own.suspect {
+		return true
+	}
+	return own.lagging(now)
 }
 
 // pickBetter keeps the better of the best candidate so far (chosen, its key

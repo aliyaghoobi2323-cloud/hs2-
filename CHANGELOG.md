@@ -1861,7 +1861,105 @@ the users of `forward_ports`. The map of the code they start from is
   yields to a healthy retiring one.
 - **Still open:** users placed on a link in the first second or so after it is
   black-holed (before any signal) still wait for it to die (~20 s); a
-  reader that slows down after keeping up (above).
+  reader that slows down after keeping up (above). Both taken up in Phase Z2.
+
+## Phase Z2 — a fast start, readers that slow down, and the first second of a dead link
+
+The three costs Phase Z left open, each prototyped two ways, judged on one
+rig and attacked by an independent red team before anything was kept.
+
+- **Z2a — a large transfer starts as with the fixed window (smux).** At its
+  first resize a stream whose reader kept up with the first 256 KiB gets at
+  once what it reads in a second at its pace so far, up to 2 MiB, instead of
+  doubling update by update; a reader that only kept up with a trickle (a slow
+  line, a connection still opening its congestion window) gets no more than its
+  pace calls for, and one that fell behind does not jump at all. The pace of a
+  transfer that follows a small exchange and a wait (a TLS handshake, a
+  request) is measured from its own start, not from the hello. Time to 1 MiB /
+  8 MiB, raw transfer: 1 Gbit/s at 300 ms 611/1550 ms fixed, 911/2146 Phase Z,
+  612/1552 now; 100 Mbit/s at 200 ms 471/1411, 661/1762, 480/1425; four
+  parallel 4 MiB downloads at 1 Gbit/s, 100 ms (p50) 396, 565, 393. After a
+  handshake and a think time (100 Mbit/s, 200 ms): 317/1257 fixed, 690/1792
+  Phase Z, 509/1452 now — the first update still announces 256 KiB, so a round
+  trip of the fixed window's head start remains there.
+- **Z2b — a reader that slows down after keeping up gives its window back at
+  once (smux).** What a window granted could only shrink at the stream's next
+  update, after half of it was read at the new, slow pace: a dozen readers that
+  filled their player buffers and dropped to 32 KiB/s held the whole session
+  buffer for 10–21 s, and every other user of the link stalled. Now the session
+  reader checks the stream after each frame: when its backlog has stayed over
+  `StreamLagTarget` for 2 ms, the other streams hold a third of the session
+  buffer, the reader at its pace since would take a second or more to read what
+  it holds, and the exit may still send more than twice the target, an update
+  leaves at once that halves the window (to no less than the stream holds),
+  then again each frame while it still lags. A reader that only paused and
+  reads all it holds within a second of the first brake gets its window back at
+  once. Window updates are queued one at a time, so the exit never acts on an
+  older one after a newer one; a braking update waits at most 100 ms for its
+  turn (it never holds a reader's own update past the reader's deadline).
+  Twelve readers fast for 3 s, then 32 KiB/s, next to one fast user (seconds
+  the fast user was under 10% of its rate, 2 runs): 200 Mbit/s at 100 ms
+  21 → 0; 50 or 100 Mbit/s at 200–300 ms 21 → 0; 500 Mbit/s at 100 ms 21 → 3;
+  50 Mbit/s at 300 ms behind a 4 MB queue 21 → 2–3; 1 Gbit/s at 100 ms
+  21 → 16. What the exit had already sent before the brake still lands in the
+  buffer, so a link with more than about 5 MB in flight still stalls for
+  seconds. Real stack (`TestReadersSlowingDownDoNotStallLink`): the fast user
+  moved 0.3 MiB in 10 s in Phase Z, 64 MiB or more now (8 of 8 runs, and under
+  `-race`). A fast reader pausing 10 ms every 200 ms next to twelve frozen
+  streams: 116.9 → 113.3 Mbit/s (−3%). Steady throughput of 4–8 fast streams,
+  60 light streams, uploads and slow readers with nothing to brake: within
+  noise of Phase Z; receive path CPU per frame within noise. A link's end in
+  the log now says how often its receive buffer ran full while it was up and
+  how often readers were braked (`... (while up: its receive buffer ran full N
+  time(s); readers that fell behind braked M time(s))`), so a stall left on
+  real links shows up.
+  Rejected after measuring: a session-wide budget of granted windows (it closed
+  every stall, but took 0.48–0.93× of the throughput of several fast streams at
+  a high bandwidth-delay product, 0.58× of their rate from slow readers next to
+  an upload on a 50/5 Mbit link, and left a stall of 13.5 s when the fast phase
+  was 0.6 s), and a fast start that trusted one new stream a second while the
+  bucket was half empty (four parallel downloads started as slowly as Phase Z).
+- **Z2c — the first second of a dead link.** A connection opened on a link in
+  the second before any sign that it went black waited for the link's TCP to
+  give up (~20 s), then failed. Two parts:
+  - A new stream's answer now waits twice the link's shortest recent round trip
+    (the least of its last 8 control round trips), at least 300 ms and never
+    more than before, rather than twice its last one: a near link lags 0.5 s
+    after it goes black instead of 1.2 s. Users placed on the dead link, a new
+    user every 100 ms at 50 ms RTT: 36 → 12 in 2400.
+  - Those that still land on it are moved: a user stream on mtcp is
+    unanswered until the exit sends anything for it, and the exit announces a
+    stream's window at its first read (smux v2, also upstream v1.5.24, so an old
+    exit works), so a working path answers within about a round trip. When the
+    app has sent nothing yet, or one TLS ClientHello (VLESS/Trojan over TLS or
+    REALITY), and its stream is still unanswered 1.5 s after its open (three
+    round trips if longer) on a link a new user would now be steered off, with
+    a link that does not lag to go to, and the link has heard nothing — nor had
+    a waiting write go through — for as long as a working link stays silent,
+    the connection opens again on another link and the hello is sent again
+    there; the app notices nothing (first byte 20 s → 1.56 s at 50 ms RTT,
+    1.81 s at 300 ms). Anything else stays where it is: resetting it so the app
+    reconnects at once was tried, and on a live idle link that lost a segment
+    twice (10% loss, 300 ms) the request reached the panel late and then again
+    from the reconnect (5 in 540 users); such a user still waits as before. A
+    slow link busy with an upload of its own reads next to nothing, but its
+    writes go through; that is checked, so its new users stay (on a 400
+    kbit/s link carrying a steady or bursty upload: 1 move in 12 runs, at the
+    very start of an upload, against 2 moves and 7 resets without the check). A
+    connection moves at most once, moves are limited to 32 at once and 8 a
+    second per pool, and the log says `mtcp: N new connection(s) got no answer
+    from the exit on a link that went quiet: moved to another link ...`.
+  Rejected after measuring: an idle-link ping 200 ms after each download burst
+  and lag thresholds of four round trips (no user gained; a new upstream timing
+  pattern and false lag on bufferbloated mobile links).
+- **Still open:** a link with more than about 5 MB in flight (Z2b); a user that
+  sends a plain request first on a link in its first dead second (Z2c); a user
+  whose stream was answered just before the link went black but got no data
+  (2 in 120 of those opened in the second before); on an idle link that loses
+  segments often at a high RTT a ClientHello is now and then sent twice (about
+  0.5–1% of new connections at 10% loss, 300 ms) — harmless for a TLS server,
+  not yet tried against a real REALITY panel; and all of it measured on
+  loopback rigs and simulators, not yet across the real Iran–abroad path.
 
 ## Verification, every phase
 

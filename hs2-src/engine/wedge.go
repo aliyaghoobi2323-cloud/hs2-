@@ -279,10 +279,22 @@ func (gs *guardSet) lookAll(now time.Time) {
 	}
 }
 
-// guardOf returns the guard of a stream's link (nil when it has none).
+// guardOf returns the guard of a stream's link (nil when it has none); for a
+// user connection that can move (rescue.go), of the link it is on now.
 func guardOf(st io.ReadWriteCloser) *sessGuard {
+	if rs, ok := st.(*rescuable); ok {
+		st = rs.on()
+	}
 	if cs, ok := st.(*countedStream); ok && cs.link != nil && cs.link.mtr != nil {
 		return cs.link.mtr.guard
+	}
+	return nil
+}
+
+// dieChOf returns the channel that closes when st ends (nil: never).
+func dieChOf(st io.ReadWriteCloser) <-chan struct{} {
+	if d, ok := st.(interface{ GetDieCh() <-chan struct{} }); ok {
+		return d.GetDieCh()
 	}
 	return nil
 }
@@ -291,11 +303,14 @@ func guardOf(st io.ReadWriteCloser) *sessGuard {
 // returns when either direction ends, closing both. In addition the stream→
 // local direction is watched by the link's guard g (nil: unguarded), and when
 // the stream's session dies the relay ends after relayDieGrace even if the
-// local app neither reads nor writes.
+// local app neither reads nor writes. A user connection that moves to another
+// link (rescue.go) is watched there from then on: its old stream ending is
+// not its end.
 func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
 	var dst io.Writer = local
+	var rw *relayWatch
 	if g != nil {
-		rw := &relayWatch{kill: func() {
+		rw = &relayWatch{kill: func() {
 			// A reset, not a FIN: the app took nothing for seconds, and a
 			// FIN would leave its unread data queued in the kernel for
 			// minutes; a reset frees it at once.
@@ -305,13 +320,10 @@ func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
 			local.Close()
 		}}
 		g.add(rw)
-		defer g.remove(rw)
+		defer func() { g.remove(rw) }()
 		dst = watchedWriter{w: local, rw: rw}
 	}
-	var die <-chan struct{}
-	if d, ok := st.(interface{ GetDieCh() <-chan struct{} }); ok {
-		die = d.GetDieCh()
-	}
+	die := dieChOf(st)
 	done := make(chan struct{}, 2)
 	cp := func(dst io.Writer, src io.Reader) {
 		bp := copyBufs.Get().(*[]byte)
@@ -322,20 +334,34 @@ func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
 	go cp(dst, st)
 	go cp(st, local)
 	got := 0
-	select {
-	case <-done:
-		got = 1
-	case <-die:
-		// The stream ended under us (its link died, or it was closed). The
-		// stream→local copier still drains what the stream holds; give it a
-		// moment, then close whatever is left.
-		t := time.NewTimer(time.Duration(relayDieGrace.Load()))
+	for {
 		select {
 		case <-done:
 			got = 1
-		case <-t.C:
+		case <-die:
+			if d := dieChOf(st); d != die {
+				// It moved to another link (rescue.go): watch the new
+				// stream, under its own link's guard.
+				die = d
+				if ng := guardOf(st); rw != nil && ng != g && ng != nil {
+					g.remove(rw)
+					g = ng
+					g.add(rw)
+				}
+				continue
+			}
+			// The stream ended under us (its link died, or it was closed).
+			// The stream→local copier still drains what the stream holds;
+			// give it a moment, then close whatever is left.
+			t := time.NewTimer(time.Duration(relayDieGrace.Load()))
+			select {
+			case <-done:
+				got = 1
+			case <-t.C:
+			}
+			t.Stop()
 		}
-		t.Stop()
+		break
 	}
 	local.Close()
 	st.Close()

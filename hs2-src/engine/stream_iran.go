@@ -269,10 +269,19 @@ const openTries = 3
 // that kept it waiting is lagging for a while (noteOpenSlow), so the
 // connections after it go elsewhere at once.
 func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), bool) {
+	st, _, release, ok := openStreamOn(ctx, lm, udp, port)
+	return st, release, ok
+}
+
+// openStreamOn is openStream that also returns the link the stream opened on,
+// and never tries the links in avoid (a connection moving off its link,
+// rescue.go).
+func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoid ...Link) (stream, Link, func(), bool) {
 	giveUp := time.NewTimer(openGiveUp)
 	defer giveUp.Stop()
 	done := make(chan *openTry, openTries) // never blocks a try
-	var tried []Link
+	tried := slices.Clone(avoid)
+	maxTried := len(avoid) + openTries
 	var live []*openTry
 	defer func() {
 		for _, t := range live {
@@ -285,12 +294,12 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 	}
 	for {
 		if len(live) == 0 {
-			if len(tried) >= openTries {
-				return nil, nil, false
+			if len(tried) >= maxTried {
+				return nil, nil, nil, false
 			}
 			link, release, ok := pickWait(ctx, lm, !udp, tried...)
 			if !ok {
-				return nil, nil, false
+				return nil, nil, nil, false
 			}
 			start(link, release)
 		}
@@ -304,10 +313,10 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 			live = slices.DeleteFunc(live, func(x *openTry) bool { return x == t })
 			if t.err == nil {
 				slow.Stop()
-				return t.st, t.release, true
+				return t.st, t.link, t.release, true
 			}
 			t.release() // failed (the link died): the next try goes elsewhere
-			if len(live) > 0 && len(tried) < openTries && !anyOpened(live) {
+			if len(live) > 0 && len(tried) < maxTried && !anyOpened(live) {
 				// an older try still waits for its SYN: the next link now,
 				// not a whole openTimeout later
 				if link, release, ok := lm.pickExcept(tried, !udp); ok {
@@ -321,17 +330,17 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 					lm.noteOpenSlow(t.link, d)
 				}
 			}
-			if len(tried) < openTries && !anyOpened(live) {
+			if len(tried) < maxTried && !anyOpened(live) {
 				if link, release, ok := lm.pickExcept(tried, !udp); ok {
 					start(link, release)
 				}
 			}
 		case <-giveUp.C:
 			slow.Stop()
-			return nil, nil, false
+			return nil, nil, nil, false
 		case <-ctx.Done():
 			slow.Stop()
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		slow.Stop()
 	}
@@ -421,13 +430,22 @@ func (t *openTry) abandon() {
 }
 
 func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {
-	st, release, ok := openStream(ctx, lm, false, port)
+	st, link, release, ok := openStreamOn(ctx, lm, false, port)
 	if !ok {
 		user.Close()
 		return
 	}
-	defer release()
-	relayStream(user, st, guardOf(st))
+	relayUser(ctx, user, lm, port, st, link, release)
+}
+
+// relayUser relays a user connection over the stream st just opened for it
+// on link (release: the connection's slot there), moving it to another link
+// if its link dies before the exit answers and what its app sent can be sent
+// again (rescue.go).
+func relayUser(ctx context.Context, user net.Conn, lm *LinkManager, port int, st stream, link Link, release func()) {
+	rs := newRescuable(ctx, lm, port, st, link, release)
+	defer rs.release()
+	relayStream(user, rs, guardOf(rs))
 }
 
 // udpFlow is one client address on a UDP user port: its datagrams wait in q
