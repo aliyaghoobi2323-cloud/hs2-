@@ -48,13 +48,13 @@ type Stream struct {
 	lagRead    uint32     // adaptive: numRead at lagSince (under bufferLock)
 	braking    bool       // adaptive: a braking UPD is on its way (under bufferLock)
 	adapted    bool       // adaptive: adaptWindow has run (under bufferLock)
-	firstAt    int64      // adaptive: UnixNano of the first read (under bufferLock)
+	firstAt    int64      // adaptive: monoNow of the first read (under bufferLock)
 	firstRead  uint32     // adaptive: numRead after the first read (under bufferLock)
-	idleAt     int64      // adaptive, before the first resize: UnixNano of the read that left nothing unread (0: it did not; under bufferLock)
+	idleAt     int64      // adaptive, before the first resize: monoNow of the read that left nothing unread (0: it did not; under bufferLock)
 	restarted  bool       // adaptive: the pace of the first resize restarted after a wait (under bufferLock)
 	settling   bool       // adaptive: after a brake, the backlog in flight before it is not yet down (under bufferLock)
 	preBrake   uint32     // adaptive: rcvWin before the first brake of the latest run (0: none; under bufferLock)
-	brakeAt    int64      // adaptive: UnixNano of that first brake (under bufferLock)
+	brakeAt    int64      // adaptive: monoNow of that first brake (under bufferLock)
 	updLock    sync.Mutex // one UPD at a time, so a later one never carries older values
 
 	// answered is set (atomic) once the peer has sent anything for this
@@ -310,7 +310,7 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 		// a transfer that follows a small exchange and a wait (a TLS
 		// handshake, a request) is paced from its own start: from the
 		// first read it would count the wait as the reader's
-		now := time.Now().UnixNano()
+		now := monoNow()
 		if !first && !s.restarted && s.idleAt != 0 && now-s.idleAt >= int64(jumpFloor) &&
 			s.numRead-n-s.firstRead < jumpRestartMax {
 			s.firstAt, s.firstRead, s.restarted = now, s.numRead-n, true
@@ -323,7 +323,7 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 	// a braked reader that has read all it held within brakeDrain of the
 	// first brake only paused: it gets back the window it had, at once
 	restore := s.preBrake > s.rcvWin && s.unread == 0 &&
-		time.Now().UnixNano()-s.brakeAt < int64(brakeDrain)
+		monoNow()-s.brakeAt < int64(brakeDrain)
 	if restore {
 		s.rcvWin, s.settling, s.preBrake = s.preBrake, false, 0
 	}
@@ -344,7 +344,7 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 			// judge the first resize on the reads after this one: the
 			// first read takes what came before the peer's first burst
 			s.minUnread = int(^uint(0) >> 1)
-			s.firstAt, s.firstRead = time.Now().UnixNano(), s.numRead
+			s.firstAt, s.firstRead = monoNow(), s.numRead
 		}
 	}
 	return true
@@ -399,7 +399,7 @@ func (s *Stream) adaptWindow(cfg *Config, parked bool) {
 			// reads in jumpSpan at its pace so far (the full window
 			// for a transfer that starts fast, as with the fixed
 			// window), not just twice the window
-			dt := time.Now().UnixNano() - s.firstAt
+			dt := monoNow() - s.firstAt
 			if dt < int64(jumpFloor) {
 				dt = int64(jumpFloor)
 			}
@@ -460,6 +460,12 @@ func (s *Stream) writeWindowUpdate(deadline <-chan time.Time) error {
 	}
 	return err
 }
+
+// monoBase, monoNow: a monotonic clock in nanoseconds (never 0) for the
+// adaptive window's stamps, which a step of the wall clock must not move.
+var monoBase = time.Now()
+
+func monoNow() int64 { return int64(time.Since(monoBase)) + 1 }
 
 const (
 	// jumpSpan, jumpFloor: the first resize of a reader that kept up
@@ -545,8 +551,13 @@ func (s *Stream) checkLag(free int) {
 	if s.rcvWin/2 > win {
 		win = s.rcvWin / 2 // more brakes follow while it still lags
 	}
-	if s.preBrake == 0 || now.UnixNano()-s.brakeAt >= int64(brakeDrain) {
-		s.preBrake, s.brakeAt = s.rcvWin, now.UnixNano() // the first brake of a run
+	if uint64(win)+uint64(s.incr) >= uint64(s.rcvWin) {
+		// at the floor: an update now would only move the peer's limit
+		// (numRead-incr+rcvWin) up, not down
+		return
+	}
+	if s.preBrake == 0 || monoNow()-s.brakeAt >= int64(brakeDrain) {
+		s.preBrake, s.brakeAt = s.rcvWin, monoNow() // the first brake of a run
 	}
 	s.rcvWin = win
 	s.incr = 0

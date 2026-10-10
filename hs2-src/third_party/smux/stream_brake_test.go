@@ -322,8 +322,9 @@ func TestAdaptivePausedReaderGetsWindowBack(t *testing.T) {
 
 // Read honours its deadline when its window update cannot be queued (the
 // session's writer is stuck and its shaper full), braking update or not: a
-// braking update waits no longer than brakeWait for its turn, so it never
-// holds the reader's own update past the reader's deadline.
+// braking update gives up after brakeWait in the queue, so the reader's own
+// update waits behind it no longer than that (without that bound it waited
+// until the session ended).
 func TestAdaptiveReadDeadlineBehindBrakeUpdate(t *testing.T) {
 	for _, brake := range []bool{false, true} {
 		config := adaptiveConfig()
@@ -403,5 +404,64 @@ func TestAdaptiveFirstResizeJumpsAfterHandshake(t *testing.T) {
 	upds := p.updates()
 	if len(upds) < 2 || upds[1][1] != uint32(config.MaxStreamBuffer) {
 		t.Errorf("reader that keeps up after a handshake: updates %v, want the full %d second", upds, config.MaxStreamBuffer)
+	}
+}
+
+// A stream whose window is at or near MinStreamBuffer (here more than three
+// lag targets) and lags while another stream holds a third of the buffer is
+// braked once, down to the floor, and then no more: at the floor an update
+// could not lower the peer's limit (numRead-incr+rcvWin), only resend it or
+// raise it, once per frame.
+func TestAdaptiveBrakeStopsAtFloor(t *testing.T) {
+	config := adaptiveConfig()
+	config.MinStreamBuffer = 64 << 10
+	config.StreamLagTarget = 16 << 10 // Min > 3T
+	session, stream, p := newRawPeer(t, config)
+	for i := 0; i < 60; i++ {
+		p.step(stream, config.MaxFrameSize, 4096)
+	}
+	// let the reader drain everything it holds and sync
+	readN(t, stream, unreadOf(stream), 4096)
+	p.sync(stream)
+	if w := rcvWinOf(stream); w > 2*uint32(config.MinStreamBuffer) {
+		t.Fatalf("window %d after a slow reader, want %d at most", w, 2*config.MinStreamBuffer)
+	}
+	// read a bit past the last update (incr > 0, < rcvWin/2)
+	for i := 0; i < 20; i++ {
+		stream.bufferLock.Lock()
+		inc := stream.incr
+		stream.bufferLock.Unlock()
+		if inc == 0 {
+			break
+		}
+		p.send(4<<10, 4096)
+		p.settle(stream)
+		readN(t, stream, 4<<10, 4096)
+	}
+	p.sync(stream)
+	_, c0, w0 := p.state()
+	p.send(4<<10, 4096)
+	p.settle(stream)
+	readN(t, stream, 4<<10, 4096)
+	stream.bufferLock.Lock()
+	t.Logf("incr %d numRead %d", stream.incr, stream.numRead)
+	stream.bufferLock.Unlock()
+	other, sid := p.open(session)
+	held := config.MaxReceiveBuffer/brakeShare + 4096
+	p.sendOn(sid, held, config.MaxFrameSize)
+	waitUnread(t, other, held)
+	n0 := len(p.updates())
+	b0 := atomic.LoadUint32(&session.brakes)
+	p.send(config.StreamLagTarget+2048, 2048)
+	time.Sleep(10 * time.Millisecond)
+	for i := 0; i < 4; i++ {
+		p.send(1024, 1024)
+		time.Sleep(5 * time.Millisecond)
+	}
+	upds := p.updates()
+	_, c1, w1 := p.state()
+	t.Logf("before: limit %d (c %d w %d); after: %d brakes, updates %v, limit %d", c0+w0, c0, w0, atomic.LoadUint32(&session.brakes)-b0, upds[n0:], c1+w1)
+	if brakes := atomic.LoadUint32(&session.brakes) - b0; c1+w1 > c0+w0 || brakes > 1 {
+		t.Errorf("%d brakes near the floor took the peer's limit from %d to %d", brakes, c0+w0, c1+w1)
 	}
 }

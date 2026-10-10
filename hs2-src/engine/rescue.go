@@ -140,6 +140,7 @@ type rescuable struct {
 	opened time.Time // when the current stream opened
 	timer  *time.Timer
 	closed bool
+	moved  chan struct{} // closed when the connection moves (move)
 }
 
 // newRescuable wraps the stream st just opened on link for a user connection
@@ -153,6 +154,7 @@ func newRescuable(ctx context.Context, lm *LinkManager, port int, st stream, lin
 	}
 	r.mu.Lock()
 	r.keep = true
+	r.moved = make(chan struct{})
 	r.timer = time.AfterFunc(rescueWait(link), r.check)
 	r.mu.Unlock()
 	return r
@@ -187,22 +189,54 @@ func (r *rescuable) Write(p []byte) (int, error) {
 	}
 	r.mu.Lock()
 	on := r.cur.Load()
+	kept := false
 	switch {
 	case !r.keep:
 	case answered(on.st), len(r.kept)+len(p) > rescueKeep:
 		r.settleLocked()
 	default:
 		r.kept = append(r.kept, p...)
-		if !replayable(r.kept) {
+		if kept = replayable(r.kept); !kept {
 			r.settleLocked() // it could do something at the panel twice: it stays
 		}
 	}
 	r.mu.Unlock()
+	if kept {
+		return r.writeKept(on, p)
+	}
 	n, err := on.st.Write(p)
 	if err != nil && r.cur.Load() != on {
 		return len(p), nil // it moved: p went out on the new stream with the rest
 	}
 	return n, err
+}
+
+// writeKept writes p, which kept holds too, to the stream on, but stops
+// waiting once the connection moves: p then went out on the new stream with
+// the rest, while a write on a link that went black waits for its session's
+// writer until the session ends (closing the old stream does not end it), and
+// the app's next bytes would wait behind it. The old stream gets a copy of p:
+// its queued frame may still point at it after this returns.
+func (r *rescuable) writeKept(on *streamOn, p []byte) (int, error) {
+	type result struct {
+		n   int
+		err error
+	}
+	b := append([]byte(nil), p...)
+	done := make(chan result, 1)
+	go func() {
+		n, err := on.st.Write(b)
+		done <- result{n, err}
+	}()
+	select {
+	case res := <-done:
+		if res.err != nil && r.cur.Load() != on {
+			return len(p), nil
+		}
+		return res.n, res.err
+	case <-r.moved:
+		return len(p), nil
+	}
 }
 
 // Close closes the stream the connection is on and ends the watch.
@@ -225,8 +259,14 @@ func (r *rescuable) release() {
 	on.release()
 }
 
-// GetDieCh is the current stream's: relayStream asks again when it closes.
-func (r *rescuable) GetDieCh() <-chan struct{} { return dieChOf(r.cur.Load().st) }
+// GetDieCh is the current stream's: relayStream asks again when it closes. A
+// move under way decides first which stream that is (the old one may end
+// while the move is sending the app's bytes on the new one).
+func (r *rescuable) GetDieCh() <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return dieChOf(r.cur.Load().st)
+}
 
 // settleLocked keeps the connection where it is for good. Caller holds r.mu.
 func (r *rescuable) settleLocked() {
@@ -331,8 +371,9 @@ func (r *rescuable) move(old, nw *streamOn) bool {
 	}
 	r.cur.Store(nw)
 	r.settleLocked() // a connection moves once
+	close(r.moved)   // a write still waiting on the old stream returns (writeKept)
 	old.release()
-	go old.st.Close() // ends its reads and writes at once; its FIN waits for the dead link's writer
+	go old.st.Close() // ends its reads at once; its FIN waits for the dead link's writer
 	return true
 }
 

@@ -271,7 +271,8 @@ var (
 	// of them can no longer empty the bucket and stall every other stream on
 	// the link (which the wedge guard cannot see: their writes complete).
 	// 0 keeps the fixed window. A new stream whose reader keeps up with
-	// the first 256 KiB gets at once what it reads in a second at its pace
+	// the 256 KiB the exit starts with gets at its first resize the larger
+	// of twice that and what it reads in a second at its pace
 	// (SmuxStreamBuffer for a fast transfer, which so starts as with the
 	// fixed window), and a stream whose reader falls behind while the other
 	// streams hold a third of SmuxSessionBuffer has its window halved frame

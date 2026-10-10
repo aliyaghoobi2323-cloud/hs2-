@@ -558,7 +558,7 @@ func (m *LinkManager) DropLink(l Link, from string) {
 	if id < 0 || m.closing.Load() {
 		return // already retired or reaped, or the whole pool is shutting down
 	}
-	m.downLog.log("mtcp: reverse link %d from %s down: %s (now %d)", id, from, linkDownReason(l), n)
+	m.downLog.log("mtcp: reverse link %d from %s down: %s (now %d)%s", id, from, linkDownReason(l), n, linkStallNote(l))
 }
 
 // markPoolRefused records that the exit refused the pool-control stream on
@@ -606,10 +606,12 @@ func linkDownReason(l Link) string {
 	return "closed"
 }
 
-// linkStallNote says, for the log of a link's end, how often its receive
-// buffer ran full while it was up (every user on it stalled until a reader
-// made room) and how often a reader that fell behind was braked to keep it
-// from filling (smux Config.MinStreamBuffer); "" when neither happened.
+// linkStallNote says, for the log line of a link's end (down, retired, or
+// closed while degraded), how often its receive buffer ran full while it was
+// up (every user on it stalled until a reader made room) and how often a
+// reader that fell behind was braked to keep it from filling (smux
+// Config.MinStreamBuffer); "" when neither happened, or for a link without a
+// smux session of its own.
 func linkStallNote(l Link) string {
 	ml, ok := l.(*mtcpLink)
 	if !ok || ml.sess == nil {
@@ -1108,8 +1110,8 @@ func (m *LinkManager) drainTick() {
 	}
 	for i, ml := range closing {
 		left := len(closing) - i - 1 // closed in this batch after this one
-		m.closeLog.log("mtcp: %s %d retired: its connections ended (%s after retiring) — now %d up (%d serving, %d retiring)",
-			what, ml.id, fmtDur(now.Sub(ml.retireSince)), up+left, S, R+left)
+		m.closeLog.log("mtcp: %s %d retired: its connections ended (%s after retiring) — now %d up (%d serving, %d retiring)%s",
+			what, ml.id, fmtDur(now.Sub(ml.retireSince)), up+left, S, R+left, linkStallNote(ml.link))
 		go func(l Link) {
 			time.Sleep(closeJitter())
 			l.Close() // DropLink then finds nothing and stays quiet
@@ -1234,7 +1236,7 @@ func (m *LinkManager) sweepReverse() {
 	for _, ml := range m.links {
 		if !ml.link.Alive() {
 			closing = append(closing, ml.link)
-			logs = append(logs, fmt.Sprintf("reverse link %d down: %s", ml.id, linkDownReason(ml.link)))
+			logs = append(logs, fmt.Sprintf("reverse link %d down: %s%s", ml.id, linkDownReason(ml.link), linkStallNote(ml.link)))
 			continue
 		}
 		if ml.degraded && !ml.draining {
@@ -1302,8 +1304,8 @@ func (m *LinkManager) drainStepLocked(ml *managedLink, now time.Time, what strin
 	case users == 0:
 		return true, "", false
 	case age > maxDrainActive:
-		return true, fmt.Sprintf("%s %d degraded for %s — closed with its %d remaining connection(s) (they reconnect onto healthy links)",
-			what, ml.id, fmtDrain(maxDrainActive), users), false
+		return true, fmt.Sprintf("%s %d degraded for %s — closed with its %d remaining connection(s) (they reconnect onto healthy links)%s",
+			what, ml.id, fmtDrain(maxDrainActive), users, linkStallNote(ml.link)), false
 	case age > maxDrain || ml.stuck:
 		if !ml.drainNoted && ml.stuck {
 			ml.drainNoted = true
