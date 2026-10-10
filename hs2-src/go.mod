@@ -20,3 +20,8 @@ require (
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 )
+
+// smux v1.5.24 with the adaptive per-stream receive window
+// (Config.MinStreamBuffer, Config.StreamLagTarget; third_party/smux). The wire
+// format is unchanged, so either end works with an unpatched peer.
+replace github.com/xtaci/smux => ./third_party/smux

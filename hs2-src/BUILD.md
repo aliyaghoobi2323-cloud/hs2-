@@ -200,5 +200,7 @@ BIN=/tmp/hs2 MODE=mtcp RATE=50mbit DELAY=40ms LOSS=0.005 FLOWRATE=10mbit lab/run
 ```
 
 Data-path tuning can be overridden for experiments with `HS2_TUNE_NOTSENT`,
-`HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_STREAMBUF`, `HS2_TUNE_SMUX_SESSBUF` and
-`HS2_TUNE_CC`; the defaults in the code are the ones the sweeps chose.
+`HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_STREAMBUF`, `HS2_TUNE_SMUX_SESSBUF`,
+`HS2_TUNE_SMUX_MINSTREAMBUF`, `HS2_TUNE_SMUX_LAGTARGET` (0 = fixed stream
+window) and `HS2_TUNE_CC`; the defaults in the code are the ones the sweeps
+chose.

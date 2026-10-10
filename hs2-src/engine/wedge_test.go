@@ -148,11 +148,23 @@ func ended(u *wUser) bool {
 	}
 }
 
+// smallSessionBuffer shrinks the link's smux buffers for one test so that a
+// handful of apps that never read fill the session buffer: with the adaptive
+// stream window (mtcp_link.go) such an app holds only the 256 KiB it is first
+// offered, so it takes some 32 of them to fill the production 8 MiB — the
+// guard's job when it is full is the same.
+func smallSessionBuffer(t *testing.T) {
+	stream, sess := SmuxStreamBuffer, SmuxSessionBuffer
+	SmuxStreamBuffer, SmuxSessionBuffer = 512<<10, 1<<20
+	t.Cleanup(func() { SmuxStreamBuffer, SmuxSessionBuffer = stream, sess })
+}
+
 // Five users whose apps stop reading fill the link's whole receive buffer:
 // without the guard every other stream on the link would stop for good (and
 // the other side's TCP would kill the link). The guard must close exactly the
 // stuck ones, and the healthy user must keep receiving on the same link.
 func TestWedgeGuardReleasesStuckReaders(t *testing.T) {
+	smallSessionBuffer(t)
 	r := newWedgeRig(t, true)
 	var stuck []*wUser
 	for i := 0; i < 5; i++ {
@@ -193,8 +205,8 @@ func TestWedgeGuardReleasesStuckReaders(t *testing.T) {
 }
 
 // A single app that stops reading does not fill the link's buffer (its stream
-// window is a quarter of it): the link keeps flowing and the guard leaves that
-// connection alone — a paused reader is not a reason to cut it.
+// window is at most a quarter of it): the link keeps flowing and the guard
+// leaves that connection alone — a paused reader is not a reason to cut it.
 func TestWedgeGuardSparesLonePausedReader(t *testing.T) {
 	r := newWedgeRig(t, true)
 	paused := r.open(nil)
@@ -218,6 +230,7 @@ func TestWedgeGuardTricklingReaderDoesNotHideStall(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-time guard ticks")
 	}
+	smallSessionBuffer(t)
 	r := newWedgeRig(t, false)
 	var stuck []*wUser
 	for i := 0; i < 6; i++ {
@@ -273,5 +286,28 @@ func TestRelayEndsWhenStreamDies(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("relay still running 5s after its stream's session died")
+	}
+}
+
+// Readers that keep reading but more slowly than the link delivers (a phone on
+// a weak connection pulling a large download) must not stall the other users
+// of their link. With a fixed 2 MiB stream window each held 1–2 MiB of the
+// 8 MiB session buffer, so a handful emptied it and the fast user crawled at
+// their pace (the guard cannot help: their writes complete). The adaptive
+// window keeps each to a few hundred KiB.
+func TestSlowReadersDoNotStallLink(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-time readers")
+	}
+	r := newWedgeRig(t, true)
+	for i := 0; i < 12; i++ {
+		r.open(readAt(256 << 10))
+	}
+	fast := r.open(readAt(0))
+	time.Sleep(3 * time.Second) // the slow readers' windows settle
+	before := fast.got.Load()
+	time.Sleep(3 * time.Second)
+	if got := fast.got.Load() - before; got < 32<<20 {
+		t.Fatalf("fast user moved %d KiB in 3 s next to 12 slow readers, want 32 MiB or more", got>>10)
 	}
 }

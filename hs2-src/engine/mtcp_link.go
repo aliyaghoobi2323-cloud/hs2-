@@ -262,6 +262,17 @@ var (
 	SmuxStreamBuffer = 2 << 20
 	// SmuxSessionBuffer bounds all streams of one link together.
 	SmuxSessionBuffer = 8 << 20
+	// SmuxMinStreamBuffer and SmuxStreamLagTarget turn on smux's adaptive
+	// stream window: a stream whose reader leaves more than
+	// SmuxStreamLagTarget unread is offered a smaller window, down to
+	// SmuxMinStreamBuffer, and one whose reader keeps up gets
+	// SmuxStreamBuffer back. A slow-but-alive reader then holds a few hundred
+	// KiB of SmuxSessionBuffer instead of up to SmuxStreamBuffer, so a handful
+	// of them can no longer empty the bucket and stall every other stream on
+	// the link (which the wedge guard cannot see: their writes complete).
+	// 0 keeps the fixed window.
+	SmuxMinStreamBuffer = 64 << 10
+	SmuxStreamLagTarget = 128 << 10
 )
 
 func newSmuxConfig() *smux.Config {
@@ -280,6 +291,13 @@ func newSmuxConfig() *smux.Config {
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer
+	// The adaptive window needs room for two frames; a lab override that
+	// leaves it none falls back to the fixed window rather than failing every
+	// link (smux.VerifyConfig).
+	if minBuf := max(SmuxMinStreamBuffer, 2*c.MaxFrameSize); SmuxMinStreamBuffer > 0 && SmuxStreamLagTarget > 0 && minBuf <= c.MaxStreamBuffer {
+		c.MinStreamBuffer = minBuf
+		c.StreamLagTarget = SmuxStreamLagTarget
+	}
 	return c
 }
 

@@ -268,6 +268,8 @@ func applyTuning() {
 	num("HS2_TUNE_SMUX_FRAME", &engine.SmuxFrameSize)
 	num("HS2_TUNE_SMUX_STREAMBUF", &engine.SmuxStreamBuffer)
 	num("HS2_TUNE_SMUX_SESSBUF", &engine.SmuxSessionBuffer)
+	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
+	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
 	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
 		tlscarrier.CongestionControl = v
 		log.Printf("tuning: HS2_TUNE_CC=%q", v)
