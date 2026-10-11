@@ -171,13 +171,14 @@ func describeNetErr(err error) string {
 // meter.guard for the relays on the link.
 func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
-	var c net.Conn = newShapedConn(conn, sampler)
+	gate := newSendGate(conn)
+	var c net.Conn = newShapedConn(gate, sampler)
 	if meter != nil {
-		c = &meteredConn{Conn: c, m: meter}
+		c = &meteredConn{Conn: c, m: meter, gate: gate}
 	}
 	w := &watchConn{Conn: c}
 	w.onErr = func() {
-		conn.Close()
+		gate.Close() // conn's Close, ending a write waiting at the gate
 		if s := sp.Load(); s != nil {
 			s.Close()
 		}

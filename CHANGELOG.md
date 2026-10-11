@@ -1977,10 +1977,10 @@ rig and attacked by an independent red team before anything was kept.
   not yet tried against a real REALITY panel; and all of it measured on
   loopback rigs and simulators, not yet across the real Iran–abroad path.
 
-## Phase Z3 — the user-port path: links clearly worse than their siblings
+## Phase Z3 — the user-port path: links clearly worse than their siblings, and streams waiting on each other inside one link
 
-Prototyped two ways (transport signals against user outcomes), judged on one
-rig and attacked by an independent red team before anything was kept.
+Each gap prototyped two ways, judged on one rig and attacked by an
+independent red team before anything was kept.
 
 - **Z3a — new users pass over a link that is clearly worse than its siblings
   (edge, passive).** A link that works but is far worse than the others — a
@@ -2040,6 +2040,60 @@ rig and attacked by an independent red team before anything was kept.
   while busy (new users fare better elsewhere then: p99 399 → 75 ms) and keep
   that verdict up to ~3 minutes after its load ends; a link that stays poor is
   not redialled on a new 5-tuple.
+- **Z3b — one link's streams stop waiting on each other (both ends).** All
+  streams of a link share its session writer, and everything waited in arrival
+  order: a download's window updates behind other users' upload frames (so a
+  download crawled on a link busy with uploads, and an upload on one busy with
+  downloads, on the exit), a request or reply behind a round of 16 KiB frames
+  of every bulk stream, and the control ping behind both (its round trip and
+  wait, which feed the lag and stuck rules, held the link's own queue).
+  Three parts:
+  - smux: window updates are control frames, ahead of all data; data frames
+    share the writer by bytes (start-time fair queuing in the shaper): a stream
+    that sends little goes next, behind only the frame being written; streams
+    with data queued take turns by bytes; one stream's frames keep their order.
+  - engine sendGate: the kernel checks TCP_NOTSENT_LOWAT only when it starts a
+    new segmentation buffer, so a busy socket held ~40 KB unsent (64 KB at
+    most) — 100 ms at 5 Mbit/s, half a second at 1 Mbit/s — and whatever went
+    next waited behind it. On links taking under 3 MiB/s (about 25 Mbit/s)
+    while written to, the writer now polls the socket before each 8 KiB and
+    the socket holds ~20 KB. Lab knob `HS2_TUNE_SENDGATE` (bytes/s, 0 = off).
+  - a link whose last control ping took 2 s or more stays lagging until one
+    is answered sooner, while it is busy (a link slow under its own load left
+    gaps between pings in which it took new users).
+  Nothing changes on the wire or in the TLS record shaping; an old peer works,
+  each upgraded end gains in the direction it sends. Lab: one real uTLS link
+  through a kernel-TCP path emulator, 3 interleaved runs, medians, HEAD → now:
+  - 2↑/50↓ Mbit/s, 4 uploads + 1 download: download 13.0 → 18.8–21.7 Mbit/s,
+    interactive p50 873 → 435–481 ms.
+  - 20↑/5↓, 4 downloads + 1 upload (the exit's view): upload 15.95 → 16.6–16.8,
+    interactive 452 → 302–305 ms, a new 64 KiB upload 632 → 392 ms.
+  - 2/2 Mbit/s, 4+4: interactive 1295 → 559–770 ms, a new connection's first
+    byte 2217 → 936–1009 ms, control round trip 1356 → 685–730 ms.
+  - 10/10 with 16 downloads: interactive 370 → 151 ms.
+  - 30 Mbit/s and faster, and lone bulk transfers: unchanged.
+  - pool of 4 links, all throttled to 200 kbit/s: first byte p50 11.3 → 8.6 s;
+    a 200 kbit/s link busy with its own bulk took 8 of 300 new users, now 0.
+  - CPU: the shaper path +0.2% (one writer) to +5–9% (16–256 writers) per
+    frame; whole-link CPU per MB within noise.
+  Rejected after measuring: smaller frames under contention and carrying the
+  shaped record's tail into the next frame (no latency gain on top of the
+  merge, ~400 lines, a rewritten writer loop and a change to the TLS record
+  shaping; the tail carrying alone gains 5–9% throughput on slow saturated
+  links and is left for a separate change with its own DPI review); an
+  adaptive TCP_NOTSENT_LOWAT (the socket held as much); and a gate timed
+  against the link's rate (BBR stayed in startup).
+  Red team fixes (each with a test that fails without it): closing a link
+  whose writer waited at the gate sent TLS close_notify behind the full socket
+  and took its 5 s deadline — a health tick dropping three black-holed links
+  stood still 15 s (now under 1 ms: the gate closes the socket under a waiting
+  write, as the TLS conn does under one in flight); one slow ping kept an idle
+  link lagging until its next ping, ~10 s (now it ends on the next control
+  tick that finds the link idle).
+  Known limits: on a 2 Mbit/s uplink the bulk upload next to a much faster
+  download got 10% less (its fair share, and each window update leaves as one
+  shaped record of about 1 KB); a stream sending many small frames back to
+  back (datagrams) still gets one frame per turn; measured with BBR only.
 
 ## Verification, every phase
 

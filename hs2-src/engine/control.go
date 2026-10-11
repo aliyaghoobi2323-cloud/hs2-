@@ -24,9 +24,13 @@ import (
 // Both feed the health logic, so a link that is bad only in the download
 // direction — invisible to phase 1's local (upload) retransmit signal — is now
 // caught too. And since the ping and its pong travel behind the link's own
-// traffic both ways, how long the oldest unanswered ping has waited
-// (linkMeter.ctrlWait) is how long the link's users wait for a reply: the
-// stuck check (stuck.go) reads it. The channel is edge-driven and additive: against an un-upgraded
+// traffic both ways, as an interactive user's request and reply do — smux
+// sends the frame of a stream that sends little next, so they wait for the
+// frame being written, what the socket holds unsent (on a slow link no more
+// than about half its TCP_NOTSENT_LOWAT: sendGate) and the path's queue —
+// how long the oldest unanswered ping has waited (linkMeter.ctrlWait) is how
+// long the link's users wait for a reply: the stuck check (stuck.go) reads
+// it. The channel is edge-driven and additive: against an un-upgraded
 // exit the control stream is simply closed (its serveStream has no kindCtrl
 // case), the edge notices and stops, and the link keeps working on local signals.
 //
@@ -91,6 +95,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	var pending ctrlPendingList
 	publish := func() { mtr.ctrlWait.Store(pending.oldest()) }
 	defer mtr.ctrlWait.Store(0) // gone: nothing waits on this channel any more
+	defer mtr.ctrlSlow.Store(false)
 	moved := mtr.rdBytes.Load() + mtr.wrBytes.Load()
 	// The cadence is the fixed controlInterval tick it always was while the
 	// link moves activeBytes: the exit's download retransmits arrive with
@@ -115,6 +120,12 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		active := now-moved >= ctrlBusyBytes
 		heavy := now-moved >= activeBytes
 		moved = now
+		if !active {
+			// a link that moved next to nothing has no queue of its own
+			// to be slow behind: a slow answer was the path's moment, and
+			// its next ping is 9-15 s away (linkMeter.ctrlSlow)
+			mtr.ctrlSlow.Store(false)
+		}
 		if !active && skip > 0 && pending.empty() {
 			skip--
 			continue
@@ -163,6 +174,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			}
 			if at, ok := pending.answer(binary.BigEndian.Uint64(pong[0:])); ok {
 				mtr.ctrlAnsweredSent.Store(at) // a whole round trip, and when it started (stuck.go)
+				mtr.ctrlSlow.Store(ctrlNow()-at >= int64(lagWait))
 			}
 			publish() // at once: a later ping may still be on its way (one 7 s wait is not three samples)
 			sent := int64(binary.BigEndian.Uint64(pong[8:]))

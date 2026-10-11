@@ -435,6 +435,15 @@ func (s *Stream) sendWindowUpdate() error {
 // (checkLag) may both send one, and the peer must never act on an older pair
 // after a newer one. Only the queueing is serialized; the wait for the write
 // is not.
+//
+// The update is queued as a control frame, ahead of every data frame waiting
+// for the session's writer: the peer's writer of this stream may be waiting
+// for exactly this window, and behind the data of the other streams it took
+// a round of their frames to leave (a download crawled on a link busy with
+// uploads, an upload on one busy with downloads, and a brake came late).
+// There are no more of them than before: one per half a window read, or per
+// frame received while a brake runs -- 16 bytes, though on an hs2 link each
+// leaves as one length-shaped TLS record, about 1 KB.
 func (s *Stream) writeWindowUpdate(deadline <-chan time.Time) error {
 	s.updLock.Lock()
 	s.bufferLock.Lock()
@@ -446,7 +455,7 @@ func (s *Stream) writeWindowUpdate(deadline <-chan time.Time) error {
 	binary.LittleEndian.PutUint32(hdr[:], consumed)
 	binary.LittleEndian.PutUint32(hdr[4:], window)
 	frame.data = hdr[:]
-	req, err := s.sess.queueFrame(frame, deadline, CLSDATA)
+	req, err := s.sess.queueFrame(frame, deadline, CLSCTRL)
 	s.updLock.Unlock()
 	if err == nil {
 		_, err = s.sess.frameWritten(req, deadline)

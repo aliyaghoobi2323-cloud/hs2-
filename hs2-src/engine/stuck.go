@@ -14,9 +14,10 @@ import (
 // tens of seconds per reply, until the users gave up or TCP reset it. In the
 // load test 2–6 of 10 such links served until the end.
 //
-// The control ping travels behind the link's own traffic both ways, so how
-// long the oldest unanswered one has waited (ctrlWaitOf) is how long the
-// link's users wait. A link is stuck when that wait is stuckWait or more
+// The control ping travels behind the link's own traffic both ways, as an
+// interactive user's request does (control.go), so how long the oldest
+// unanswered one has waited (ctrlWaitOf) is how long the link's users wait.
+// A link is stuck when that wait is stuckWait or more
 // while it moves less than activeBytes, for stuckStreak samples in a row,
 // and the path is shown to work for the others:
 //

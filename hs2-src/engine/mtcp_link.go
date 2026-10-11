@@ -252,9 +252,11 @@ type mtcpDialer struct {
 
 // smux tuning, shared by both ends of a link.
 var (
-	// SmuxFrameSize is the largest data frame. Streams take turns frame by
-	// frame, so this bounds how long a small reply waits behind a bulk
-	// transfer sharing the link.
+	// SmuxFrameSize is the largest data frame. Streams share the link's
+	// writer by bytes, and a stream that sends little (a reply, a ping) goes
+	// next (smux's fair queue, third_party/smux shaper.go), so this bounds
+	// how long a small reply waits behind a bulk transfer sharing the link:
+	// the one frame being written (then the socket's unsent bytes).
 	SmuxFrameSize = 16 << 10
 	// SmuxStreamBuffer is the per-stream receive window: how far one stream
 	// may run ahead of its reader. Flow control keeps a slow reader from

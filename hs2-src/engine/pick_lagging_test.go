@@ -21,6 +21,10 @@ func TestLaggingSignals(t *testing.T) {
 		{"quiet link that answers", func(ml *managedLink, mtr *linkMeter) { mtr.rxAt.Store(ago(time.Second)) }, false},
 		{"ping unanswered", func(ml *managedLink, mtr *linkMeter) { mtr.ctrlWait.Store(ago(lagWait + time.Second)) }, true},
 		{"ping just sent", func(ml *managedLink, mtr *linkMeter) { mtr.ctrlWait.Store(ago(lagWait / 2)) }, false},
+		{"last ping answered late, next just sent", func(ml *managedLink, mtr *linkMeter) {
+			mtr.ctrlSlow.Store(true)
+			mtr.ctrlWait.Store(ago(lagWait / 2))
+		}, true},
 		{"writer stuck", func(ml *managedLink, mtr *linkMeter) { mtr.wrStart.Store(ago(lagWait + time.Second)) }, true},
 		{"writer busy", func(ml *managedLink, mtr *linkMeter) { mtr.wrStart.Store(ago(lagWait / 2)) }, false},
 		{"nothing heard", func(ml *managedLink, mtr *linkMeter) { mtr.rxAt.Store(ago(lagQuiet + time.Second)) }, true},

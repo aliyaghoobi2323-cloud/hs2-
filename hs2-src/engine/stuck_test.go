@@ -858,8 +858,91 @@ func TestControlWaitFollowsEachAnswer(t *testing.T) {
 	if w := ctrlWaitOf(mtr); w >= 4*time.Second || w == 0 {
 		t.Fatalf("1.5 s after the first answer the wait shows %s; want the second ping's, a few seconds", w)
 	}
+	// the answer took lagWait and more: the link lags until one comes sooner
+	if !mtr.ctrlSlow.Load() {
+		t.Fatal("a ping answered 7 s late is not marked slow")
+	}
+	for deadline := time.Now().Add(10 * time.Second); mtr.ctrlSlow.Load(); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("still marked slow after pings answered at once")
+		}
+	}
 	cancel()
 	<-done
+	if mtr.ctrlSlow.Load() || mtr.ctrlWait.Load() != 0 {
+		t.Fatal("the control channel ended and left its marks")
+	}
+}
+
+// On an idle link (a ping every 9-15 s) one ping caught in a stall of the
+// path and answered late marks the link slow only until the next tick finds
+// it idle, not until its next ping: it is under no load of its own, and a
+// link left lagging that long is passed over by every new user.
+func TestControlSlowEndsWhenIdle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-time cadence")
+	}
+	a, b := net.Pipe()
+	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}
+	cli, _, err := newSession(a, false, nil, mtr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _, err := newSession(b, true, nil, &linkMeter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cli.Close()
+	defer srv.Close()
+	answered := make(chan time.Time, 1)
+	go func() { // the exit: the first ping answered lagWait and a bit late, then at once
+		st, err := srv.AcceptStream()
+		if err != nil {
+			return
+		}
+		var k [1]byte
+		io.ReadFull(st, k[:])
+		var mu sync.Mutex
+		answer := func(p []byte) {
+			pong := make([]byte, ctrlPongLen)
+			copy(pong, p)
+			mu.Lock()
+			st.Write(pong)
+			mu.Unlock()
+		}
+		for n := 0; ; n++ {
+			p := make([]byte, ctrlPingLen)
+			if _, err := io.ReadFull(st, p); err != nil {
+				return
+			}
+			if n == 0 {
+				time.AfterFunc(lagWait+200*time.Millisecond, func() { answer(p); answered <- time.Now() })
+				continue
+			}
+			answer(p)
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go openControl(ctx, &mtcpLink{sess: cli, mtr: mtr}, nil)
+	var at time.Time
+	select {
+	case at = <-answered:
+	case <-time.After(20 * time.Second):
+		t.Fatal("the first ping never came")
+	}
+	ml := &managedLink{mtr: mtr}
+	slow := false
+	for time.Since(at) < controlInterval+500*time.Millisecond {
+		slow = slow || mtr.ctrlSlow.Load()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !slow {
+		t.Fatal("a ping answered lagWait late did not mark the link slow")
+	}
+	if mtr.ctrlSlow.Load() || ml.lagging(ctrlNow()) {
+		t.Fatalf("idle link still lagging %s after its one slow answer", time.Since(at))
+	}
 }
 
 // The longer the path was slow, the longer the links get to come back (TCP's

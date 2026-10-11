@@ -38,6 +38,8 @@ type writeRequest struct {
 	frame  Frame
 	seq    uint32
 	result chan writeResult
+	// fair-queue start tag of a data frame (fairQueue), set by the shaper
+	start uint64
 }
 
 type writeResult struct {
@@ -436,9 +438,11 @@ func (s *Session) keepalive() {
 	}
 }
 
-// shaper shapes the sending sequence among streams
+// shaper shapes the sending sequence among streams: control frames first,
+// then the streams' data by bytes (fairQueue)
 func (s *Session) shaperLoop() {
 	var reqs shaperHeap
+	var fq fairQueue
 	var next writeRequest
 	var chWrite chan writeRequest
 	var chShaper chan writeRequest
@@ -471,8 +475,12 @@ func (s *Session) shaperLoop() {
 			if chWrite != nil { // next is valid, reshape
 				heap.Push(&reqs, next)
 			}
+			if r.class == CLSDATA {
+				fq.tag(&r)
+			}
 			heap.Push(&reqs, r)
 		case chWrite <- next:
+			fq.sent(&next)
 		}
 	}
 }
@@ -550,8 +558,8 @@ func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class C
 	return s.frameWritten(req, deadline)
 }
 
-// queueFrame hands f to the shaper. Frames of one class leave in the order
-// they were queued.
+// queueFrame hands f to the shaper. Control frames leave in the order they
+// were queued, and so do the data frames of one stream.
 func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) (writeRequest, error) {
 	req := writeRequest{
 		class:  class,

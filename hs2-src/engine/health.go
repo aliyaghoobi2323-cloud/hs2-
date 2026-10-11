@@ -53,7 +53,8 @@ const (
 	blockedMin = time.Millisecond
 	// A link is lagging (managedLink.lagging) while its traffic is seen
 	// waiting on the path right now: its oldest control ping unanswered for
-	// lagWait, its writer inside one socket write for lagWait, nothing at
+	// lagWait (or the last one answered took that long, ctrlSlow), its
+	// writer inside one socket write for lagWait, nothing at
 	// all received for lagQuiet (the other side's smux keepalive comes every
 	// 4–8 s), nothing received for lagOpenWait after a new user stream was
 	// opened on it (the exit answers a stream's first read with a window
@@ -135,9 +136,10 @@ type linkMeter struct {
 	// waiting for the socket to accept data (only waits > blockedMin count).
 	// Divided by elapsed time it is the fraction of time the PATH, not the
 	// application, was the limit: with TCP_NOTSENT_LOWAT set, sendmsg waits once
-	// ~32 KiB is queued unsent, so a link whose network is not taking data
-	// shows ~100%, and one with spare capacity ~0% however busy it is. Measured
-	// on the loopback: unlimited path 0%, a 2 MB/s bottleneck 99.8%.
+	// some 32-64 KiB is queued unsent (on a slow link, sendGate waits from
+	// 16 KiB), so a link whose network is not taking data shows ~100%, and one
+	// with spare capacity ~0% however busy it is. Measured on the loopback:
+	// unlimited path 0%, a 2 MB/s bottleneck 99.8%.
 	wrBlocked atomic.Int64 // nanoseconds
 	// wrStart is when (ctrlNow) the socket write in progress began, 0 while
 	// none is; rxAt is when the link last read anything (ctrlNow, 0: never).
@@ -202,6 +204,14 @@ type linkMeter struct {
 	// last ping that got its own answer was sent.
 	ctrlWait         atomic.Int64
 	ctrlAnsweredSent atomic.Int64
+	// ctrlSlow: the last control ping that got its own answer took lagWait
+	// or more (managedLink.lagging). A link slow under its own load answers
+	// each ping in a few seconds, its frames going next in smux's queue: the
+	// next ping, sent a controlInterval later, has waited less than lagWait
+	// when the one before is answered, so the wait alone left gaps of a
+	// second or two in which the link took new users. It lasts while the
+	// link is busy (openControl): an idle link pings only every 9-15 s.
+	ctrlSlow atomic.Bool
 }
 
 // peerLossRec is one pong's download-loss reading (see linkMeter.peerLoss).
@@ -217,7 +227,8 @@ type peerLossRec struct {
 // length shaper so it measures real payload, not padding.
 type meteredConn struct {
 	net.Conn
-	m *linkMeter
+	m    *linkMeter
+	gate *sendGate // the link's send gate, told what each write took (nil: none)
 }
 
 func (c *meteredConn) Read(p []byte) (int, error) {
@@ -234,7 +245,11 @@ func (c *meteredConn) Write(p []byte) (int, error) {
 	c.m.wrStart.Store(t0)
 	n, err := c.Conn.Write(p)
 	c.m.wrStart.Store(0)
-	if d := time.Duration(ctrlNow() - t0); d > blockedMin {
+	d := time.Duration(ctrlNow() - t0)
+	if c.gate != nil {
+		c.gate.took(n, d)
+	}
+	if d > blockedMin {
 		c.m.wrBlocked.Add(int64(d))
 		if n > 0 {
 			c.m.sentAt.Store(t0 + int64(d))

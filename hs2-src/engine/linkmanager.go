@@ -333,6 +333,9 @@ func (ml *managedLink) lagging(now int64) bool {
 	if w := mtr.ctrlWait.Load(); w != 0 && now-w >= int64(lagWait) {
 		return true // its oldest control ping waits
 	}
+	if mtr.ctrlSlow.Load() {
+		return true // the last control ping answered took as long
+	}
 	if w := mtr.wrStart.Load(); w != 0 && now-w >= int64(lagWait) {
 		return true // its writer is stuck in one socket write
 	}

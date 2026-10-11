@@ -15,7 +15,10 @@ var (
 	// behind it. With it, the writer blocks early and smux's per-stream
 	// scheduling holds the backlog instead, where one stream cannot bury the
 	// others. In the lab 16-32 KiB were best; 64 KiB and up added latency on
-	// slow links and turning it off cost 3-7x.
+	// slow links and turning it off cost 3-7x. The kernel checks the cap only
+	// when a write starts a new segmentation-offload buffer, so a busy socket
+	// still fills to about 64 KiB unsent; on a slow link engine's sendGate
+	// holds it to half the cap.
 	NotSentLowat = 32 << 10
 	// userTimeoutMs fails a link whose sent data stays unacknowledged this
 	// long (a black-holed path), instead of letting it hang.

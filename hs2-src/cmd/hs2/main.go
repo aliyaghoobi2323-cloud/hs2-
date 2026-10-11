@@ -270,6 +270,7 @@ func applyTuning() {
 	num("HS2_TUNE_SMUX_SESSBUF", &engine.SmuxSessionBuffer)
 	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
+	num("HS2_TUNE_SENDGATE", &engine.SendGateRate)
 	if engine.SmuxMinStreamBuffer > 0 && engine.SmuxStreamLagTarget > 0 && engine.SmuxAdaptiveWindow() == 0 {
 		log.Printf("tuning: smux adaptive stream window off — no room for it (two %d B frames) in a %d B stream window", engine.SmuxFrameSize, engine.SmuxStreamBuffer)
 	}
