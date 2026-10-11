@@ -1977,6 +1977,70 @@ rig and attacked by an independent red team before anything was kept.
   not yet tried against a real REALITY panel; and all of it measured on
   loopback rigs and simulators, not yet across the real Iran–abroad path.
 
+## Phase Z3 — the user-port path: links clearly worse than their siblings
+
+Prototyped two ways (transport signals against user outcomes), judged on one
+rig and attacked by an independent red team before anything was kept.
+
+- **Z3a — new users pass over a link that is clearly worse than its siblings
+  (edge, passive).** A link that works but is far worse than the others — a
+  steady extra delay under the lag thresholds (a DPI box holding one 5-tuple, a
+  bad route), a deep queue on its path, delay spikes, or a few percent loss on
+  a link too quiet for the loss rule — took its share of new users, each paying
+  for it on every round trip. Every health tick the sampler now notes per link
+  what its socket and control channel already say: the least round trip
+  (TCP_INFO srtt, the control round trip) over 20 s, the second largest
+  srtt+4·rttvar, and the resent share both ways (own TCP_INFO, the exit's count
+  in each pong) decayed over 60 s. Against the lower median of the serving
+  links a link is poor when its floor is max(150 ms, 1.5× the pool's) over the
+  pool's, its high mark max(400 ms, 3× the pool's floor) over the pool's, or it
+  resent 4+ segments and over max(1%, 3× the pool's share); after 2 ticks, back
+  after 20 s and 3 ticks clear of half those margins (resends judged then on
+  the last 10 s when there are enough of them); ticks in which a link moves
+  activeBytes and over twice the median link are its own load and not held
+  against it. New users skip a poor link (it goes last among the serving links
+  that do not lag) while at most half the serving links are poor or lagging;
+  it keeps its users and stays in service. Each verdict and its end is logged
+  (`mtcp: link N: round trip 862ms at best where the other links take 61ms —
+  new connections go to the other links while they have room`). Nothing new on
+  the wire; an old exit works (its pongs already carry its resends). Rig: 4
+  real mtcp links through a TUN path emulator (20 Mbit/s, 60 ms RTT each,
+  BBR), a new user every 200 ms (12 B request, 64 KiB reply), median of 3+
+  runs, HEAD → now:
+  - one link +300/+800/+1500 ms, idle pool: share on it 22.7/20.0/22.7% → 0;
+    first byte p99 411/1551/3922 → 76/74/77 ms.
+  - +800/+1500 ms, each link carrying a download: p99 2569/3788 → 411/427 ms
+    (mean 474/591 → 152/154).
+  - 1/3/10% loss on a quiet link: p99 252/230/589 → 76/76/75 ms; 10% loss in a
+    loaded pool: mean 194 → 154, p99 541 → 445.
+  - 1.5 s delay spikes every ~4 s: p99 1536 → 75; a deep queue filled by cross
+    traffic: 1343 → 116.
+  - a link turning bad mid-run: poor 5.9–6.9 s later (6 new users on it
+    meanwhile); a link whose delay ends takes new users again 6–10 s later, one
+    whose loss ends ~36 s later.
+  - an idle bad link next to loaded ones: mean first byte 321 → 243 (+300 ms)
+    and 543 → 241 (+800 ms), background downloads −0.9%/−1.6%; in a pool of two
+    links 349 → 238, background −6% (every new user goes to the other link).
+  - no verdict with links alike, path-wide delay or loss, or one link busy with
+    its own users (eq, eqL, all800, allloss3, busy, mix).
+  - Pick CPU within noise; sampleHealth about +25% (≈60 µs per 2 s at 300
+    links).
+  Rejected after measuring: judging links by their users' outcomes (how long
+  new streams wait for an answer, first byte, stalls) — more sensitive to small
+  delays, but it let new users back onto a much slower link in a loaded pool,
+  missed light loss, and held some wrong verdicts; and lower thresholds (a busy
+  link's own queue doubles its floor under BBR).
+  Red team fixes (each with a test that fails without it): resends counted over
+  a minute kept a link that had stopped losing poor for 2–4 minutes (now ~36 s);
+  a poor link next to two lagging ones sent every new user to the one link
+  left (the majority now counts lagging links too).
+  Known limits: +100 ms on a 60 ms path or +300 ms on a 300 ms path are not
+  caught; when half or more of the serving links are busy, a busy link
+  resending its own downloads' share into a shallow queue can be judged poor
+  while busy (new users fare better elsewhere then: p99 399 → 75 ms) and keep
+  that verdict up to ~3 minutes after its load ends; a link that stays poor is
+  not redialled on a new 5-tuple.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

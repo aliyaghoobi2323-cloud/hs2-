@@ -217,6 +217,12 @@ type LinkManager struct {
 	// rescue: connections moved off a link that went quiet
 	// before the exit answered them (rescue.go) — its rate limit and log.
 	rescue rescueState
+
+	// quality.go, as of the last sample: what the median serving link
+	// moved, and how many serving links there were, how many poor, and how
+	// many lagging that were not poor. Under mu.
+	qualMoved                      float64
+	qualServing, qualPoor, qualLag int
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
@@ -281,6 +287,7 @@ type managedLink struct {
 	dnHist       uint8     // last 3 raw download-pressure samples (exit records)
 	pressed      bool      // serving and its sender is blocked by the path
 	suspect      bool      // nothing received for suspectAfter (see serving)
+	poor         bool      // clearly worse than the pool's other links (quality.go)
 	rates        [5]float64
 	doms         [3]float64
 	nSamples     int
@@ -304,6 +311,7 @@ type managedLink struct {
 	openSlowTill int64       // ctrlNow until which a slow open keeps it lagging (noteOpenSlow)
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
+	q            *linkQual // what poor is judged on (quality.go; nil until sampled)
 }
 
 // serving reports whether the link takes new users. Caller holds m.mu.
@@ -1577,6 +1585,12 @@ func newPickKey(pressed bool, flowing, picks, recentPicks, users, perLink int) p
 	return pickKey{pressed: pressed || recentPicks >= max(1, perLink/2), load: flowing + picks, users: users}
 }
 
+// last is k ranked after every key that is not: a poor link (quality.go)
+// takes a new user only when no link that is not poor has room.
+func (k pickKey) last() pickKey {
+	return pickKey{pressed: true, load: k.load + 1<<30, users: k.users}
+}
+
 // pickWindow is how many samples of placements count toward the burst cap.
 const pickWindow = 3
 
@@ -1692,13 +1706,20 @@ func (m *LinkManager) releaseFor(ml *managedLink) func() {
 // new user onto the few that happen not to lag this instant (in a throttled
 // pool one link took 5 of the 10 new users of a 2 s window, 3 at most before).
 // A lone serving link that lags is no such majority: a healthy retiring link
-// goes first. limit > 0 skips links that already have that many open user
-// connections (the refill hold's cap), after they are counted for the
-// majority; 0 = no limit. Links in avoid are never chosen (openStream's
-// earlier tries). Caller holds m.mu.
+// goes first. Among the serving links that do not lag, a poor one (clearly
+// worse than the others: quality.go) goes last, after every one that is not
+// poor however loaded, unless more than half the serving links were poor or
+// lagging at the last sample: then that is the path too, and passing over
+// the poor ones as well would herd every new user onto the few links left
+// (two lagging and one poor of four: all of them onto the fourth). limit >
+// 0 skips links that already have that many open user connections (the
+// refill hold's cap), after they are counted for the majority; 0 = no
+// limit. Links in avoid are never chosen (openStream's earlier tries).
+// Caller holds m.mu.
 func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 	now := ctrlNow()
 	skipLag := false // most serving links do not lag, but none of those has room
+	avoidPoor := m.qualPoor > 0 && (m.qualPoor+m.qualLag)*2 <= m.qualServing
 	for tier := 0; tier < 4; tier++ {
 		var chosen, prompt *managedLink // prompt: the best serving link not lagging
 		var best, bestPrompt pickKey
@@ -1736,6 +1757,9 @@ func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
 			chosen, best, ties = pickBetter(chosen, best, ties, ml, k)
 			if tier == 0 && !lags {
+				if avoidPoor && ml.poor {
+					k = k.last()
+				}
 				prompt, bestPrompt, tiesPrompt = pickBetter(prompt, bestPrompt, tiesPrompt, ml, k)
 			}
 		}
@@ -2038,6 +2062,9 @@ func (m *LinkManager) sampleHealth() {
 		if perTick(dRd+dWr) >= pressMinBytes {
 			pollStats(ml.mtr)
 		}
+		// Its round trips and resends, for the quality verdict after the
+		// loop (quality.go).
+		ml.noteQual(o, dt, dWr, dUp, dSegsOut, perTick(dRd+dWr), qualHeavy*m.qualMoved)
 
 		// Loss. A direction is "bad" when it is actively moving data and
 		// resending more than lossFrac of its segments (lossOf, stuck.go):
@@ -2174,6 +2201,10 @@ func (m *LinkManager) sampleHealth() {
 	if !recovering {
 		logs = append(logs, m.lossVerdicts(now, lossCand, judgedLoss, pressedRates, degradedNow)...)
 	} // else: from the next tick on their streaks restart (calm)
+	// Links clearly worse than the others (quality.go), after the verdicts:
+	// a link degraded in this tick is not judged. None turns poor while the
+	// path is slow for most links or getting over it.
+	logs = append(logs, m.judgeQuality(now, recovering)...)
 	if press && now.Sub(m.stuckMassLogAt) >= time.Minute {
 		m.stuckMassLogAt = now
 		where := "this server"

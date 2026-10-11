@@ -257,6 +257,7 @@ type tcpStat struct {
 	sndbufUs     uint64 // part of busy limited by our send buffer
 	deliveryRate uint64 // kernel delivery-rate estimate, bytes/s
 	notsent      uint32 // bytes queued but not yet sent
+	rtt, rttVar  uint32 // smoothed round trip and its mean deviation, µs (0: none yet)
 	chronoValid  bool   // the kernel reports chrono counters (busy > 0)
 	// Data segments sent (retransmits included) and received (Linux ≥ 4.6;
 	// 0 on older kernels): the loss fraction's denominator, counted the way
