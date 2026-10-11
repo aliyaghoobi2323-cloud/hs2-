@@ -18,8 +18,11 @@ import (
 // fills it to about 64 KiB again: 100 ms at 5 Mbit/s, half a second at
 // 1 Mbit/s. So on a link that takes less than SendGateRate while written to
 // (meteredConn measures it), records go out gateBurst at a time, each burst
-// only once the socket polls writable, that is holds less than half the cap:
-// the socket holds no more than that and a burst, and the rest waits in smux,
+// only once the socket polls writable, that is holds less than half the cap
+// (Linux 5.10 and later; older kernels poll writable below the whole cap):
+// the socket holds no more than that and a burst — about 20 KB on average
+// and 24-26 KB at most on the lab's 6.x kernel, about 40 KB at most on an
+// older one, against 64 KB without the gate — and the rest waits in smux,
 // where a stream with little to send goes next. The socket is still topped
 // up from the same low mark as without the gate, so the link is no more
 // often left with nothing to send. The wait is part of the write, as a full

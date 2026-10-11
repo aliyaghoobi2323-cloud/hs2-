@@ -18,7 +18,8 @@ var (
 	// slow links and turning it off cost 3-7x. The kernel checks the cap only
 	// when a write starts a new segmentation-offload buffer, so a busy socket
 	// still fills to about 64 KiB unsent; on a slow link engine's sendGate
-	// holds it to half the cap.
+	// holds it to half the cap and a burst (Linux 5.10+; the cap and a
+	// burst before).
 	NotSentLowat = 32 << 10
 	// userTimeoutMs fails a link whose sent data stays unacknowledged this
 	// long (a black-holed path), instead of letting it hang.

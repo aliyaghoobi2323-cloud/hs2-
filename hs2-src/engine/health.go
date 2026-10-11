@@ -137,7 +137,7 @@ type linkMeter struct {
 	// Divided by elapsed time it is the fraction of time the PATH, not the
 	// application, was the limit: with TCP_NOTSENT_LOWAT set, sendmsg waits once
 	// some 32-64 KiB is queued unsent (on a slow link, sendGate waits from
-	// 16 KiB), so a link whose network is not taking data shows ~100%, and one
+	// 16 KiB on Linux 5.10+, 32 KiB before), so a link whose network is not taking data shows ~100%, and one
 	// with spare capacity ~0% however busy it is. Measured on the loopback:
 	// unlimited path 0%, a 2 MB/s bottleneck 99.8%.
 	wrBlocked atomic.Int64 // nanoseconds

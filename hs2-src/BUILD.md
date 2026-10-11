@@ -203,5 +203,5 @@ Data-path tuning can be overridden for experiments with `HS2_TUNE_NOTSENT`,
 `HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_STREAMBUF`, `HS2_TUNE_SMUX_SESSBUF`,
 `HS2_TUNE_SMUX_MINSTREAMBUF`, `HS2_TUNE_SMUX_LAGTARGET` (0 = fixed stream
 window), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
-half its unsent cap; 0 = off) and `HS2_TUNE_CC`; the defaults in the code are
+about half its unsent cap and a burst, on Linux 5.10+; 0 = off) and `HS2_TUNE_CC`; the defaults in the code are
 the ones the sweeps chose.

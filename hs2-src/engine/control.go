@@ -26,8 +26,9 @@ import (
 // caught too. And since the ping and its pong travel behind the link's own
 // traffic both ways, as an interactive user's request and reply do — smux
 // sends the frame of a stream that sends little next, so they wait for the
-// frame being written, what the socket holds unsent (on a slow link no more
-// than about half its TCP_NOTSENT_LOWAT: sendGate) and the path's queue —
+// frame being written, what the socket holds unsent (on a slow link about
+// half its TCP_NOTSENT_LOWAT and a burst at most: sendGate) and the path's
+// queue —
 // how long the oldest unanswered ping has waited (linkMeter.ctrlWait) is how
 // long the link's users wait for a reply: the stuck check (stuck.go) reads
 // it. The channel is edge-driven and additive: against an un-upgraded

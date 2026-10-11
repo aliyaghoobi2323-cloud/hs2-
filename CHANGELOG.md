@@ -2057,7 +2057,11 @@ independent red team before anything was kept.
     most) — 100 ms at 5 Mbit/s, half a second at 1 Mbit/s — and whatever went
     next waited behind it. On links taking under 3 MiB/s (about 25 Mbit/s)
     while written to, the writer now polls the socket before each 8 KiB and
-    the socket holds ~20 KB. Lab knob `HS2_TUNE_SENDGATE` (bytes/s, 0 = off).
+    the socket holds ~20 KB on average, 24–26 KB at most (Linux 5.10 and
+    later, where a socket polls writable below half the cap; on an older
+    kernel, e.g. Ubuntu 20.04 or Debian 10, below the whole cap: about 40 KB
+    at most, against 64 KB without the gate). Lab knob `HS2_TUNE_SENDGATE`
+    (bytes/s, 0 = off).
   - a link whose last control ping took 2 s or more stays lagging until one
     is answered sooner, while it is busy (a link slow under its own load left
     gaps between pings in which it took new users).
@@ -2093,7 +2097,8 @@ independent red team before anything was kept.
   Known limits: on a 2 Mbit/s uplink the bulk upload next to a much faster
   download got 10% less (its fair share, and each window update leaves as one
   shaped record of about 1 KB); a stream sending many small frames back to
-  back (datagrams) still gets one frame per turn; measured with BBR only.
+  back (datagrams) still gets one frame per turn; measured with BBR only, on
+  a 6.x kernel (the gate does less before Linux 5.10, above).
 
 ## Verification, every phase
 
