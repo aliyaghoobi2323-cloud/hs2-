@@ -1,4 +1,4 @@
-# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X)
+# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X), the user-port path (Z, Z2, Z3)
 
 This is the checklist for validating the releases from Q7 on (see CHANGELOG:
 "Q7 — stuck links", "Q8 — the health rules at high bandwidth", Phases V, W
@@ -9,8 +9,9 @@ traffic. Both servers must run the release build (`hs2 version` shows the
 build id below).
 
 - Release commit: see the "Release" line at the end of this file.
-- Previous main (rollback target): `9b74b3c` (binary build `2b2e2c8c3f86`,
-  Phase W); before it `75c8fc5` (binary build `1b5591f91bee`, Phase V).
+- Previous main (rollback target): `0812bc9` (binary build `da621f5db2bb`,
+  Phases Y and CA); before it `9b74b3c` (binary build `2b2e2c8c3f86`, Phase
+  W).
 
 ## Rollback
 
@@ -18,7 +19,7 @@ On each server, reinstall the previous binary pinned to its commit (no change
 to the repository needed):
 
 ```
-HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/9b74b3c bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/9b74b3c/install.sh)
+HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/0812bc9 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/0812bc9/install.sh)
 ```
 
 then Upgrade the tunnel(s) in the menu. To roll `main` itself back, revert the
@@ -270,6 +271,36 @@ with the flag off (timing camouflage must not cost goodput); (d) no link
 churn or `idle past deadline` in the logs (keepalive still holds the link).
 The flag changes only timing and the id draw, so an old peer interoperates,
 but set it on both ends to shape both directions.
+
+**V15 — the user-port path (Phases Z, Z2, Z3).** Both servers on this
+release (the Iran side decides links; each side's smux changes help the
+direction it receives, its send gate the direction it sends). Run it
+alongside V1 for 24 h including the evening peak, with real users through
+`forward_ports`. Watch the Iran side:
+
+```
+journalctl -u <unit> -f -o cat | grep -E 'waited .* to open on it|got no answer from the exit|round trip .* where the other links|resends .* where the other links|on par with the other links|while up: its receive buffer'
+```
+
+| Log line | Meaning | Expected |
+|---|---|---|
+| `link N: a new connection waited 3.1s to open on it — it takes new connections only when no other link can, for 10s` (Z) | a slow open: the link lags for 10 s and new users go elsewhere | rare; during a throttle or an outage of that link |
+| `N new connection(s) got no answer from the exit on a link that went quiet: moved to another link (…)` (Z2) | users that opened on a link in the second before it went black were moved, their TLS hello sent again on another link | only around real link deaths; never in waves on a healthy pool |
+| `link N: round trip 862ms at best where the other links take 61ms — new connections go to the other links while they have room` (Z3) | a link clearly worse than its siblings (delay, deep queue, spikes) takes no new users while others have room | only for a link that really is slower (compare its ping); never for most links at once |
+| `link N: resends 4.2% of what it sends where the other links resend 0.3% — …` (Z3) | the same for loss | as above |
+| `link N: on par with the other links again after 36s (round trip 61ms at best)` (Z3) | the verdict ends | some time after each verdict line |
+| `link N down: … (while up: its receive buffer ran full N time(s); readers that fell behind braked M time(s))` (Z2) | how often the link's whole receive buffer ran full (every user on it stalled) and how often slow readers were braked | mostly absent; report links where the first count is large |
+
+Pass: users report no slower start of large downloads and no stalls when a
+heavy downloader slows down; new connections do not hang for ~20 s when a
+link dies; the verdict lines name links that really are slower or lossier
+(check with `ping`/`mtr` to the peer over that link's 5-tuple if possible) and
+never most of the pool at once; uploads next to heavy downloads (and the
+reverse) and interactive use next to bulk transfers feel no worse than on the
+previous release. Report the counts of each line per hour and any user
+complaint with its time. Roll back (above, to `0812bc9`, binary build
+`da621f5db2bb`) if verdict or move lines come in waves across the pool, or if
+users are cut or stalled more than before.
 
 ## What to send back
 
