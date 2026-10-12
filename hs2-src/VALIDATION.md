@@ -307,12 +307,15 @@ users are cut or stalled more than before.
 For each scenario: the counts, the relevant log lines (Iran side, with
 timestamps), the time of the action (V2–V4), and whether users noticed.
 
-Release: binary build `da621f5db2bb` (Phase CA + CA1b — opt-in ICMP timing/id
-camouflage, `HS2_ICMP_CAMO`, with the idle-mute flap fixed; and Phase Y — the
-Phase X stage-rule regression fixed for a saturated, asymmetrically loaded
-sender; `hs2 version` shows it). Note: Phase CA's field behaviour (camouflage
-effect, and the CA1b flap fix) is confirmed on an off-border test pair only —
-lab unit tests and build are green and the flap fix's logic is verified, but
-the on-wire V14/flap re-check still wants a run on your own test pair before
-production. See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y, Phase
-CA) and `git log` on main.
+Release: binary build `ef2dffdbbb87` (Phases Z, Z2 and Z3 — the user-port
+path: adaptive stream windows and brakes, new users kept off dying and
+clearly worse links, unanswered new connections moved off a link that went
+black, window updates and small streams ahead of bulk data inside a link, and
+a send gate on slow links; V15 above; `hs2 version` shows it). Built on the
+work branch `claude/smux-buffer-constants-fv9bu8`, not yet on main: install it
+on a test pair with `HS2_REPO_RAW` pinned to the commit that carries this
+binary. Everything in these phases was measured on loopback rigs and
+simulators (BBR, Linux 6.x), not yet across the real Iran–abroad path. The
+previous release, binary build `da621f5db2bb` (Phase CA + CA1b and Phase Y),
+is the rollback target. See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X,
+Phase Y, Phase CA, Phase Z, Phase Z2, Phase Z3) and `git log`.
