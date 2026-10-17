@@ -323,10 +323,23 @@ func TestCoreTurnaround(t *testing.T) {
 	}
 }
 
+// behind is how much more the peer's second-latest update lets it send: a
+// peer one update behind, as over a path whose round trip is longer than a
+// step of reads.
+func (p *rawPeer) behind() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	lim := uint32(initialPeerWindow)
+	if n := len(p.upds); n >= 2 {
+		lim = p.upds[n-2][0] + p.upds[n-2][1]
+	}
+	return int(int32(lim - p.sent))
+}
+
 // coreBare is a stream outside any session's goroutines, for the sampler.
 func coreBare(frameSize int) *Stream {
 	s := &Stream{frameSize: frameSize, sess: &Session{config: adaptiveConfig()}}
-	s.core.limHigh, s.core.limNow = initialPeerWindow, initialPeerWindow
+	s.core.limHigh = initialPeerWindow
 	return s
 }
 
@@ -345,6 +358,39 @@ func (s *Stream) readAndAnnounce(n int, window uint32) {
 	s.core.readTot.Add(uint64(n))
 	s.announced(window)
 	s.bufferLock.Unlock()
+}
+
+// A cycle is a hit when its data paused at the limit the peer had before
+// the update that ends it (the peer used all of its window and waited for
+// the update), not when the receiver's own backlog reached the latest
+// limit: a stream whose data flows on past the limit is no hit.
+func TestCoreHitIsAPauseAtTheLimit(t *testing.T) {
+	const w = 1 << 20
+	s := coreBare(4096)
+	s.arrive(64 << 10)
+	s.readAndAnnounce(64<<10, w) // the first mark, at the limit the peer started with
+	recv := s.core.readTot.Load() + uint64(s.unread)
+	s.arrive(int(s.core.ring[s.core.head].lim - recv)) // up to it ...
+	time.Sleep(hitGap + time.Millisecond)              // ... a pause ...
+	s.arrive(4096)                                     // ... past it
+	s.readAndAnnounce(64<<10, w)
+	if h, u := s.core.hitN.Load(), s.core.updN.Load(); h != 1 || u != 2 {
+		t.Fatalf("a pause at the limit: %d hit(s) in %d update(s), want 1 in 2", h, u)
+	}
+	// on past the next mark's limit with no pause
+	recv = s.core.readTot.Load() + uint64(s.unread)
+	s.arrive(int(s.core.ring[s.core.head].lim-recv) + 4096)
+	s.readAndAnnounce(64<<10, w)
+	// a backlog up to the latest limit, with no pause at the earlier one
+	recv = s.core.readTot.Load() + uint64(s.unread)
+	s.arrive(int(s.core.limHigh - recv))
+	s.readAndAnnounce(64<<10, w)
+	if h, u := s.core.hitN.Load(), s.core.updN.Load(); h != 1 || u != 4 {
+		t.Fatalf("no pause: %d hit(s) in %d update(s), want still 1 in 4", h, u)
+	}
+	if s.core.turnLast.Load() == 0 {
+		t.Fatal("no turnaround taken")
+	}
 }
 
 // The sampler keeps turnRing updates in flight: past that the newest go
@@ -444,31 +490,41 @@ func TestCoreClosedStreamLeavesSnapshot(t *testing.T) {
 }
 
 // hitN counts the cycles in which the peer sent up to the window it was
-// told of (held by the window); lagN those in which the reader left more
-// than StreamLagTarget/4 unread throughout.
+// told of and waited there (held by the window: its data paused at the
+// limit for hitGap or more); lagN those in which the reader left more than
+// StreamLagTarget/4 unread throughout.
 func TestCoreHitsAndLags(t *testing.T) {
 	cfg := adaptiveConfig()
 	cfg.MaxStreamBuffer = 256 << 10 // stays at the start window
 	session, stream, p := newRawPeer(t, cfg)
-	for i := 0; i < 16; i++ { // the peer fills the window, the reader takes half of it
-		p.step(stream, cfg.MaxFrameSize, int(rcvWinOf(stream))/2)
+	// a reader that keeps up, a peer an update behind (the round trip of a
+	// long path) that sends all its window allows and waits there
+	for i := 0; i < 20; i++ {
+		p.sync(stream)
+		for n := p.behind(); n > 0; n -= 4096 {
+			p.send(4096, 4096)
+			p.settle(stream)
+			readN(t, stream, 4096, 4096)
+		}
+		time.Sleep(hitGap + time.Millisecond) // waiting for the update in flight
 	}
 	p.sync(stream)
 	s, _ := session.CoreSnapshot(nil)
-	if len(s) != 1 || s[0].Upds < 16 || s[0].Hits < s[0].Upds-2 {
-		t.Fatalf("window-held peer: %+v, want nearly every update a hit", s)
+	if len(s) != 1 || s[0].Upds < 16 || s[0].Hits < s[0].Upds-3 || s[0].Lags != 0 {
+		t.Fatalf("window-held peer: %+v, want nearly every update a hit, and no lag", s)
 	}
-	// a reader that keeps a backlog over StreamLagTarget/4 throughout
-	session3, stream3, p3 := newRawPeer(t, cfg)
+	// a reader that keeps a backlog over StreamLagTarget/4 throughout (its
+	// window shrinks under need/4 and no hit brings it into a snapshot: the
+	// counts are read off the stream)
+	_, stream3, p3 := newRawPeer(t, cfg)
 	p3.send(128<<10, 4096)
 	for i := 0; i < 64; i++ {
 		p3.send(16<<10, 4096)
 		p3.settle(stream3)
 		readN(t, stream3, 16<<10, 4096)
 	}
-	s3, _ := session3.CoreSnapshot(nil)
-	if len(s3) != 1 || s3[0].Upds < 8 || s3[0].Lags < s3[0].Upds-2 {
-		t.Fatalf("reader holding a backlog: %+v, want nearly every update lagging", s3)
+	if u, l := stream3.core.updN.Load(), stream3.core.lagN.Load(); u < 8 || l < u-2 {
+		t.Fatalf("reader holding a backlog: %d lagging of %d updates, want nearly every one", l, u)
 	}
 	// a peer that never reaches the window, a reader that keeps up
 	session2, stream2, p2 := newRawPeer(t, cfg)

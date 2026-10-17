@@ -83,7 +83,6 @@ func newStream(id uint32, frameSize int, sess *Session) *Stream {
 	s.chFinEvent = make(chan struct{})
 	s.peerWindow = initialPeerWindow   // set to initial window size
 	s.core.limHigh = initialPeerWindow // what the peer may send before our first update
-	s.core.limNow = initialPeerWindow
 	s.rcvWin = uint32(sess.config.MaxStreamBuffer)
 	if sess.config.MinStreamBuffer > 0 {
 		s.rcvWin = startWindow(sess.config)

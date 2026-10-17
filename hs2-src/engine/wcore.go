@@ -4,6 +4,8 @@ import (
 	"math"
 	"sort"
 	"time"
+
+	"github.com/xtaci/smux"
 )
 
 // wcore is the pure decision core of the window core (Phase Z5,
@@ -12,8 +14,8 @@ import (
 // interval in, the link's window budget and each fast stream's ceiling out.
 // It holds no locks, opens no sockets and never reads the clock (time and
 // randomness come in through wcIn and c.rnd), so its whole behaviour is
-// exercised by the link model in wcore_model_test.go; the actuator (the
-// runner, one per link, with wcBuilder) comes at integration.
+// exercised by the link model in wcore_model_test.go; the actuator is the
+// runner (wcore_run.go), which feeds it each link through wcBuilder.
 //
 // What it is for. A stream moves at most about its window per round trip,
 // so the 2 MiB window caps one connection on a long path. A larger window is
@@ -452,24 +454,10 @@ func newWcore(cfg wcConfig, rnd func() float64) *wcore {
 	return &wcore{cfg: cfg, rnd: rnd, inF: map[uint32]bool{}, prevWin: map[uint32]uint32{}, ceils: map[uint32]uint32{}}
 }
 
-// wcStep is the window update step of a window w: half of it, or, past
-// need, need/2 or an eighth of it if that is more, never more than half.
-// It is smux's StepOf (third_party/smux), which the fast arm uses; at
-// integration this calls it.
-func wcStep(need, w uint32) uint32 {
-	half := w / 2
-	if need == 0 || w <= need {
-		return half
-	}
-	s := need / 2
-	if f := w / 8; f > s {
-		s = f
-	}
-	if s > half {
-		s = half
-	}
-	return s
-}
+// wcStep is the window update step of a window w (smux.StepOf, which the
+// fast arm uses): half of it, or, past need, need/2 or an eighth of it if
+// that is more, never more than half.
+func wcStep(need, w uint32) uint32 { return smux.StepOf(need, w) }
 
 // wcSplit shares budget among streams max-min fairly by window (the streams
 // of one link see one round trip, so equal windows are equal rates): each

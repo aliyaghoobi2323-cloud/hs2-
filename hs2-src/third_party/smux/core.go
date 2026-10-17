@@ -42,6 +42,14 @@ import (
 // window read, if that is more than half of NeedStreamBuffer (StepOf).
 const updShare = 8
 
+// hitGap: a cycle ran up to the window (hit) when the data paused at least
+// this long at the limit the peer had before the update that ended it: the
+// peer sent all it was allowed and waited for the update (the window held
+// it). A peer that had credit to spare sends on without a pause, and a
+// receiver's own backlog, which reaching the latest limit would show, says
+// nothing about the sender.
+const hitGap = 2 * time.Millisecond
+
 // turnRing: updates whose turnaround is not in yet that a stream keeps
 // track of. Past it the newest go unsampled until the oldest are in (a 16
 // MiB window steps 8 times a turnaround; dropping the oldest instead would
@@ -129,8 +137,7 @@ type streamCore struct {
 	ring     [turnRing]turnMark // updates whose turnaround is not in yet, oldest at head
 	head, n  int
 	limHigh  uint64 // the highest limit announced so far (readTot plus window)
-	limNow   uint64 // the limit of our latest update
-	hit      bool   // the peer has sent up to limNow (within a frame) since our latest update
+	hit      bool   // a turnaround since our latest update came after a pause at its limit
 	lagged   bool   // the cycle that just ended left more than StreamLagTarget/4 unread throughout
 	turnSeen int64  // the latest turnaround, ns (0: none yet)
 
@@ -151,8 +158,9 @@ type streamCore struct {
 
 // turnMark is one update whose turnaround is not in yet.
 type turnMark struct {
-	at  int64  // monoNow when it was queued
-	lim uint64 // the highest limit announced before it
+	at    int64  // monoNow when it was queued
+	lim   uint64 // the highest limit announced before it
+	reach int64  // monoNow when what was received came within a frame of lim (0: not yet)
 }
 
 // SetCoreCeil sets the window core's ceiling for the stream's window, in
@@ -186,12 +194,13 @@ func (s *Session) SetCoreRef(turnRef, qBrake time.Duration, growOK bool) {
 // are cumulative (the core takes differences); the turnarounds are since
 // the previous snapshot.
 type CoreSample struct {
+	Stream    *Stream // for SetCoreCeil
 	ID        uint32
 	Ceil      uint32        // the ceiling in force (SetCoreCeil)
 	Win       uint32        // the window of the stream's latest update
 	Read      uint64        // bytes its reader has taken
 	Upds      uint32        // window updates sent
-	Hits      uint32        // of those, ones ending a cycle in which the peer sent up to the window
+	Hits      uint32        // of those, ones ending a cycle in which the peer waited at the window (hitGap)
 	Lags      uint32        // of those, ones ending a cycle whose reader left over StreamLagTarget/4 unread throughout
 	TurnMin   time.Duration // least turnaround since the previous snapshot (0: none)
 	TurnLast  time.Duration // latest turnaround since the previous snapshot (0: none)
@@ -240,6 +249,7 @@ func (s *Session) CoreSnapshot(dst []CoreSample) ([]CoreSample, CoreCounters) {
 		}
 		at := c.brakeAt.Load()
 		dst = append(dst, CoreSample{
+			Stream:    st,
 			ID:        st.id,
 			Ceil:      c.ceil.Load(),
 			Win:       win,
@@ -340,7 +350,6 @@ func (s *Stream) announced(window uint32) {
 		c.lagged = false
 	}
 	lim := c.readTot.Load() + uint64(window)
-	c.limNow = lim
 	if lim <= c.limHigh {
 		return // nothing the peer could not send before
 	}
@@ -353,21 +362,33 @@ func (s *Stream) announced(window uint32) {
 
 // turned takes the turnarounds of the updates whose earlier limit what the
 // stream has received now passes -- the peer could not send it before the
-// update reached it -- and notes a cycle that ran up to the window (within
-// a frame: the peer sends whole frames). The caller holds bufferLock, just
-// after unread grew.
+// update reached it -- and notes a cycle that ran up to the window: one
+// whose data paused at that limit (from within a frame of it, the peer
+// sends whole frames) for hitGap or more before it went on. The caller
+// holds bufferLock, just after unread grew.
 func (s *Stream) turned() {
 	c := &s.core
-	recv := c.readTot.Load() + uint64(s.unread)
-	if recv+uint64(s.frameSize) >= c.limNow {
-		c.hit = true
-	}
-	if c.n == 0 || recv <= c.ring[c.head].lim {
+	if c.n == 0 {
 		return
 	}
+	near := c.readTot.Load() + uint64(s.unread) + uint64(s.frameSize)
+	if near < c.ring[c.head].lim {
+		return
+	}
+	recv := near - uint64(s.frameSize)
 	now := monoNow()
-	for c.n > 0 && recv > c.ring[c.head].lim {
-		d := now - c.ring[c.head].at
+	for c.n > 0 {
+		k := &c.ring[c.head]
+		if k.reach == 0 && near >= k.lim {
+			k.reach = now
+		}
+		if recv <= k.lim {
+			return
+		}
+		if now-k.reach >= int64(hitGap) {
+			c.hit = true
+		}
+		d := now - k.at
 		c.head = (c.head + 1) % turnRing
 		c.n--
 		c.turnSeen = d

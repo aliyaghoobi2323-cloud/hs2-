@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xtaci/smux"
 )
 
 // A packet-level model of one hs2 link for the window core (§9.1 of
@@ -33,7 +35,7 @@ import (
 //     for its resend; Rcv_ooopack counts what arrived behind one), the
 //     session's frame demux with its buffer (parks), per-stream readers at
 //     a set pace, the smux update logic (adaptive window, step, pool,
-//     modelFitCore), the window turnaround samples, and the receiver
+//     smux.FitCore), the window turnaround samples, and the receiver
 //     socket's own srtt/min_rtt, sampled only on what it sends (updates,
 //     pings) so the bias of §3.3 appears: its ACK enters the download queue
 //     when the update reaches the sender;
@@ -44,69 +46,6 @@ import (
 // The core under test is the real one. N4 (3·pace·min_rtt), fin
 // ((1+m)·pace·min_rtt + step) and base (fixed 2 MiB) run in the same model
 // to show that it reproduces what the rig measured before it is trusted.
-
-// ---- the smux arm's pure functions (local copies) ---------------------------
-
-// modelStepOf is smux.StepOf: the update step of window w. Up to need it is
-// w/2; past need max(need/2, w/8), never more than w/2. Integration switches
-// the model to smux.StepOf.
-func modelStepOf(need, w uint32) uint32 {
-	half := w / 2
-	if w <= need {
-		return half
-	}
-	s := need / 2
-	if f := w / 8; f > s {
-		s = f
-	}
-	return min(s, half)
-}
-
-// modelFitCore is smux.FitCore (third_party/smux/core.go, branch z5-arm),
-// line for line: the window of this update. ceil == 0 is the behaviour
-// without the core, min(want, need). Growth up to need is free, as without
-// the core; past need only if growOK && turnOK, at most to 2×old per update.
-// want > ceil > 0 takes the window to ceil at once (DRAIN), floored at
-// max(minWin, unread) but never above want. Integration switches the model
-// to smux.FitCore.
-func modelFitCore(old, want, ceil, need, minWin, unread uint32, growOK, turnOK bool) uint32 {
-	if ceil == 0 {
-		if want > need {
-			return need
-		}
-		return want
-	}
-	w := want
-	if w > old && w > need {
-		lim := old
-		if lim < need {
-			lim = need
-		}
-		if g := 2 * uint64(old); growOK && turnOK && g > uint64(lim) {
-			lim = ^uint32(0)
-			if g < uint64(lim) {
-				lim = uint32(g)
-			}
-		}
-		if w > lim {
-			w = lim
-		}
-	}
-	if w > ceil {
-		floor := minWin
-		if unread > floor {
-			floor = unread
-		}
-		if floor > w {
-			floor = w
-		}
-		w = ceil
-		if w < floor {
-			w = floor
-		}
-	}
-	return w
-}
 
 // ---- configuration and results -----------------------------------------------
 
@@ -1120,7 +1059,7 @@ func (m *wmModel) consumed(i int, st *wmRcvStream, n int64) {
 	first := st.numRead == uint64(n)
 	step := uint64(st.rcvWin / 2)
 	if m.cfg.mode == wmFin || m.cfg.mode == wmCore {
-		step = uint64(modelStepOf(wmNeed, st.rcvWin))
+		step = uint64(smux.StepOf(wmNeed, st.rcvWin))
 	}
 	if !first && st.incr < step {
 		return
@@ -1147,7 +1086,7 @@ func (m *wmModel) update(i int, st *wmRcvStream, first bool) {
 				}
 				keep := old / 2
 				if m.cfg.mode == wmFin {
-					keep = old - modelStepOf(wmNeed, old)
+					keep = old - smux.StepOf(wmNeed, old)
 				}
 				lim = max(lim, keep)
 				w = min(w, lim)
@@ -1155,7 +1094,7 @@ func (m *wmModel) update(i int, st *wmRcvStream, first bool) {
 		case wmCore:
 			w = m.adapt(st, parked, max(wmNeed, st.ceil))
 			turnOK := m.turnRef == 0 || st.lastTurn <= m.turnRef+m.qBrake
-			w = modelFitCore(old, w, st.ceil, wmNeed, wmMinWin, uint32(min(st.unread, math.MaxUint32)), m.growOK, turnOK)
+			w = smux.FitCore(old, w, st.ceil, wmNeed, wmMinWin, uint32(min(st.unread, math.MaxUint32)), m.growOK, turnOK)
 		}
 		m.setWindow(st, w)
 	}
@@ -1242,7 +1181,7 @@ func (m *wmModel) paceNeed(st *wmRcvStream, old uint32) uint64 {
 	case q > lo:
 		mg = 0.1 * (hi - q) / (hi - lo)
 	}
-	return uint64((1+mg)*read*rtt/dt) + uint64(modelStepOf(wmNeed, old))
+	return uint64((1+mg)*read*rtt/dt) + uint64(smux.StepOf(wmNeed, old))
 }
 
 // setWindow is N4's: past need only as far as the pool covers it.
@@ -1522,7 +1461,7 @@ func (m *wmModel) reach(rate float64) float64 {
 	if cfg.policer > 0 {
 		r = math.Min(r, cfg.policer)
 	}
-	w := float64(wmMaxWin - modelStepOf(wmNeed, wmMaxWin)/2)
+	w := float64(wmMaxWin - smux.StepOf(wmNeed, wmMaxWin)/2)
 	if cfg.mode == wmBase {
 		w = float64(wmNeed - wmNeed/4)
 	}

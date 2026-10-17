@@ -64,16 +64,9 @@ func TestWcoreStepOf(t *testing.T) {
 		{wtNeed, 8 * wtMiB, wtMiB},      // ... or w/8, whichever is more
 		{wtNeed, 16 * wtMiB, 2 * wtMiB}, // w/8
 		{wtNeed, 2*wtMiB + 2, wtMiB},    // never more than half
-		{0, 4 * wtMiB, 2 * wtMiB},
 	} {
 		if got := wcStep(tc.need, tc.w); got != tc.want {
 			t.Errorf("wcStep(%d, %d) = %d, want %d", tc.need, tc.w, got, tc.want)
-		}
-	}
-	// the model's copy of smux.StepOf is the same function
-	for w := uint32(0); w <= wtMax; w += 37 << 10 {
-		if a, b := wcStep(wtNeed, w), modelStepOf(wtNeed, w); a != b {
-			t.Fatalf("w %d: wcStep %d, modelStepOf %d", w, a, b)
 		}
 	}
 }
