@@ -1,0 +1,2568 @@
+diff --git a/README.md b/README.md
+index 4bb5f62..2ced18f 100644
+--- a/README.md
++++ b/README.md
+@@ -112,7 +112,7 @@ traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4
+ 
+ | `max_links` | meaning |
+ |-------------|---------|
+-| `0` — **auto** (new installs) | follows **this server's hardware**, re-derived at every start: one link per 48 MB of RAM, at most **300**, never below the old profile value (**32** under ~1.5 GB RAM, **48** medium, **64** high). A single-core server keeps its profile value; 2–3 cores allow at most 128. A 16 GB / 4-core server gets 300, a 2 GB / 2-core one 48. A server resized up or down gets the matching ceiling on its next start, with nobody editing the config. |
++| `0` — **auto** (new installs) | follows **this server's hardware**, re-derived at every start: one link per 48 MB of the RAM left after the window pool's share (below), at most **300**, never below the old profile value (**32** under ~1.5 GB RAM, **48** medium, **64** high). A single-core server keeps its profile value; 2–3 cores allow at most 128. A 16 GB / 4-core server gets 300, a 2 GB / 2-core one 48. A server resized up or down gets the matching ceiling on its next start, with nobody editing the config. |
+ | a number | fixed by you; never changed automatically |
+ | absent | the historical fixed **32** — a config written before auto existed behaves exactly as before after upgrading |
+ 
+@@ -128,8 +128,13 @@ echo p50 90 ms / p99 121 ms and no dropped connection, at ~5% more CPU than
+ 
+ **Why the ceiling depends on RAM.** Under a stalled reader each link's session
+ may hold up to 8 MiB it could not deliver yet — about **12 MiB** with smux's
+-frame rounding. The rule keeps that worst case at **≤ 25 % of RAM** (≤ ~33 %
+-if every frame rounds badly): 300 links ≈ 3.5 GB worst case on a 17 GB server.
++frame rounding. A fast connection whose window grows past 2 MiB (only as far
++as its own pace times the link's round trip calls for), and a link whose
++buffer ran full, take their extra buffer from one **window pool** per process
++(1/128 of RAM, 16–128 MB; ~1.5× that with rounding), counted once, not per
++link. The rule keeps the links' worst case and the pool's together at
++**≤ 25 % of RAM** (≤ ~33 % if every frame rounds badly): 300 links and the
++pool ≈ 3.7 GB worst case on a 17 GB server.
+ Each relayed user connection costs another ~80 KB (≈ 0.45 GB per side at
+ 6,000 open connections), a UDP user flow 64 KB on the Iran side and 128 KB
+ on the Kharej side. hs2 sets Go's soft memory limit to half the RAM
+@@ -153,7 +158,7 @@ ceilings over the tunnel itself, so `hs2 status` on **either** server shows the
+ exact effective number and which side sets it, e.g.:
+ 
+ ```
+-ceiling: 64 links — limited by the Kharej server (reverse: the lower of the two applies); this server: 300 (auto — 16.6 GB RAM, 20 cores: one link per 48 MB of RAM, at most 300), the Kharej server: 64
++ceiling: 64 links — limited by the Kharej server (reverse: the lower of the two applies); this server: 300 (auto — 16.6 GB RAM, 20 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 64
+ ```
+ 
+ If the other server still runs an older hs2, the line says its ceiling is not
+diff --git a/hs2-src/BUILD.md b/hs2-src/BUILD.md
+index af47805..1799156 100644
+--- a/hs2-src/BUILD.md
++++ b/hs2-src/BUILD.md
+@@ -74,7 +74,8 @@ The daemon also reacts to signals: SIGHUP hot-reloads the TLS certificate
+ decides how many links should be **serving** — taking new connections —
+ between `min_links` and the ceiling — `max_links`, or with `max_links: 0`
+ (new installs) an auto ceiling from the server's RAM/cores: one link per 48 MB
+-of RAM up to 300, never below the 32 / 48 / 64 profile value (1 core: the
++of RAM (after six times the smux window pool, 1/128 of RAM, 16–128 MB) up to
++300, never below the 32 / 48 / 64 profile value (1 core: the
+ profile value; 2–3 cores: at most 128; every carrier alike), see
+ `tune.RecommendedMaxLinks`; absent = the historical 32. Links beyond that
+ are **retiring**: no new connections, closed once empty. Each 2 s health tick
+@@ -202,6 +203,9 @@ BIN=/tmp/hs2 MODE=mtcp RATE=50mbit DELAY=40ms LOSS=0.005 FLOWRATE=10mbit lab/run
+ Data-path tuning can be overridden for experiments with `HS2_TUNE_NOTSENT`,
+ `HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_STREAMBUF`, `HS2_TUNE_SMUX_SESSBUF`,
+ `HS2_TUNE_SMUX_MINSTREAMBUF`, `HS2_TUNE_SMUX_LAGTARGET` (0 = fixed stream
+-window), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
++window), `HS2_TUNE_SMUX_NEEDBUF` (how far a stream's window grows on its
++reader keeping up alone; past it only as far as its pace times the link's
++round trip calls for), `HS2_TUNE_SMUX_POOL` (the process's window pool, bytes;
++0 = no window past `HS2_TUNE_SMUX_NEEDBUF`), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
+ about half its unsent cap and a burst, on Linux 5.10+; 0 = off) and `HS2_TUNE_CC`; the defaults in the code are
+ the ones the sweeps chose.
+diff --git a/hs2-src/cmd/hs2/doctor.go b/hs2-src/cmd/hs2/doctor.go
+index fe2bece..0f0d9b7 100644
+--- a/hs2-src/cmd/hs2/doctor.go
++++ b/hs2-src/cmd/hs2/doctor.go
+@@ -680,7 +680,8 @@ func checkTunnelsTogether(d *doctorReport) {
+ 		return
+ 	}
+ 	ram, _ := detectHW()
+-	worst := links * tune.LinkWorstCaseMiB
++	// each tunnel's links, and each tunnel's own window pool
++	worst := links*tune.LinkWorstCaseMiB + n*tune.PoolWorstCaseMiB(ram)
+ 	msg := fmt.Sprintf("%d pooled tunnels run on this server, up to %d links in all: worst-case link buffers %.1f GB", n, links, float64(worst)/1024)
+ 	if unknown > 0 {
+ 		msg = fmt.Sprintf("%d pooled tunnels run on this server; %d of them direct, whose ceiling the Iran server has not reported yet (not counted); the others up to %d links: worst-case link buffers %.1f GB", n, unknown, links, float64(worst)/1024)
+diff --git a/hs2-src/cmd/hs2/linkpool_test.go b/hs2-src/cmd/hs2/linkpool_test.go
+index d22aa3e..7a8b246 100644
+--- a/hs2-src/cmd/hs2/linkpool_test.go
++++ b/hs2-src/cmd/hs2/linkpool_test.go
+@@ -36,7 +36,7 @@ func TestLinkCeilingAutoFollowsHardware(t *testing.T) {
+ 		ram, cpu int
+ 		want     int
+ 		profile  string
+-	}{{lowRAM, lowCPU, 32, "low"}, {medRAM, medCPU, 48, "medium"}, {highRAM, highCPU, 170, "high"},
++	}{{lowRAM, lowCPU, 32, "low"}, {medRAM, medCPU, 48, "medium"}, {highRAM, highCPU, 162, "high"},
+ 		{17408, 20, 300, "high"}, {22528, 12, 300, "high"}} { // the production pair
+ 		pinHW(t, c.ram, c.cpu)
+ 		for _, cfg := range []string{`{"max_links": 0}`, `{"mode":"dial","max_links":0,"min_links":2}`} {
+@@ -110,7 +110,7 @@ func TestLinkEnvelopeMinAboveAuto(t *testing.T) {
+ func TestCeilingLogLine(t *testing.T) {
+ 	pinHW(t, highRAM, highCPU)
+ 	auto := ceilingLogLine(autoFC(fileConfig{Carrier: "mtcp"}))
+-	if !strings.Contains(auto, "ceiling 170 links") || !strings.Contains(auto, "auto from this server's hardware (8.0 GB RAM, 4 cores: one link per 48 MB of RAM") {
++	if !strings.Contains(auto, "ceiling 162 links") || !strings.Contains(auto, "auto from this server's hardware (8.0 GB RAM, 4 cores: one link per 48 MB of RAM after 384 MB for the window pool") {
+ 		t.Fatalf("auto startup line: %q", auto)
+ 	}
+ 	fixed := ceilingLogLine(fileConfig{Carrier: "mtcp", MaxLinks: 40})
+@@ -267,11 +267,11 @@ func TestDoctorLinkPool(t *testing.T) {
+ 
+ 	// auto, daemon not running: ok.
+ 	pinHW(t, highRAM, highCPU)
+-	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "auto: 170 links") {
++	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "auto: 162 links") {
+ 		t.Fatalf("auto ok: %v", d.lines)
+ 	}
+ 	// auto, the daemon started on a high box but RAM is now low: restart WARN.
+-	writeLive(t, cfg, liveStatus{CfgMax: 170})
++	writeLive(t, cfg, liveStatus{CfgMax: 162})
+ 	pinHW(t, lowRAM, lowCPU)
+ 	if d := doctorLinkPool(iranRev, cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "restart the tunnel to apply the lower ceiling") {
+ 		t.Fatalf("auto shrunk under a running daemon: %v", d.lines)
+@@ -294,7 +294,7 @@ func TestDoctorLinkPool(t *testing.T) {
+ 	pinHW(t, highRAM, highCPU)
+ 	fixed32 := iranRev
+ 	fixed32.MaxLinks, fixed32.maxLinksSet = 32, true
+-	if d := doctorLinkPool(fixed32, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "could use up to 170") {
++	if d := doctorLinkPool(fixed32, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "could use up to 162") {
+ 		t.Fatalf("fixed 32 on a high box: %v", d.lines)
+ 	}
+ 
+@@ -343,7 +343,7 @@ func TestStatusFileCarriesCeiling(t *testing.T) {
+ 		}
+ 		time.Sleep(20 * time.Millisecond)
+ 	}
+-	if ls.CfgMax != 170 || ls.CeilMode != ceilAuto || ls.PeerMax != 48 || ls.EffMax != 48 || ls.LimitBy != "kharej" {
++	if ls.CfgMax != 162 || ls.CeilMode != ceilAuto || ls.PeerMax != 48 || ls.EffMax != 48 || ls.LimitBy != "kharej" {
+ 		t.Fatalf("status ceiling fields: %+v", ls)
+ 	}
+ 	if !strings.Contains(ls.CeilingText, "limited by the Kharej server") {
+diff --git a/hs2-src/cmd/hs2/main.go b/hs2-src/cmd/hs2/main.go
+index a473a3e..2362783 100644
+--- a/hs2-src/cmd/hs2/main.go
++++ b/hs2-src/cmd/hs2/main.go
+@@ -267,6 +267,8 @@ func applyTuning() {
+ 	num("HS2_TUNE_NOTSENT", &tlscarrier.NotSentLowat)
+ 	num("HS2_TUNE_SMUX_FRAME", &engine.SmuxFrameSize)
+ 	num("HS2_TUNE_SMUX_STREAMBUF", &engine.SmuxStreamBuffer)
++	num("HS2_TUNE_SMUX_NEEDBUF", &engine.SmuxNeedStreamBuffer)
++	num("HS2_TUNE_SMUX_POOL", &engine.SmuxWindowPool)
+ 	num("HS2_TUNE_SMUX_SESSBUF", &engine.SmuxSessionBuffer)
+ 	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
+ 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
+@@ -329,6 +331,9 @@ func runCmd(args []string) {
+ 	// Whatever path runCmd leaves by, no icmp reply rule outlives the daemon
+ 	// (the listeners release theirs on close; this catches the rest).
+ 	defer encap.ReleaseAllEchoGuards()
++	if ramMB, _ := detectHW(); ramMB > 0 {
++		engine.SmuxWindowPool = tune.WindowPoolMiB(ramMB) << 20 // what the auto ceiling counted on
++	}
+ 	applyTuning()
+ 	setMemoryLimit()
+ 	fs := flag.NewFlagSet("run", flag.ExitOnError)
+diff --git a/hs2-src/engine/health.go b/hs2-src/engine/health.go
+index 50de55c..409474e 100644
+--- a/hs2-src/engine/health.go
++++ b/hs2-src/engine/health.go
+@@ -273,6 +273,7 @@ type tcpStat struct {
+ 	deliveryRate uint64 // kernel delivery-rate estimate, bytes/s
+ 	notsent      uint32 // bytes queued but not yet sent
+ 	rtt, rttVar  uint32 // smoothed round trip and its mean deviation, µs (0: none yet)
++	minRTT       uint32 // the least round trip the socket has seen, µs (Linux >= 4.9; 0: none)
+ 	chronoValid  bool   // the kernel reports chrono counters (busy > 0)
+ 	// Data segments sent (retransmits included) and received (Linux ≥ 4.6;
+ 	// 0 on older kernels): the loss fraction's denominator, counted the way
+diff --git a/hs2-src/engine/health_linux.go b/hs2-src/engine/health_linux.go
+index 1effb72..81ca4aa 100644
+--- a/hs2-src/engine/health_linux.go
++++ b/hs2-src/engine/health_linux.go
+@@ -38,6 +38,7 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
+ 			notsent:      info.Notsent_bytes,
+ 			rtt:          info.Rtt,
+ 			rttVar:       info.Rttvar,
++			minRTT:       info.Min_rtt,
+ 			chronoValid:  info.Busy_time > 0,
+ 			segsOut:      info.Data_segs_out,
+ 			segsIn:       info.Data_segs_in,
+diff --git a/hs2-src/engine/linkmanager.go b/hs2-src/engine/linkmanager.go
+index 368fbc3..9ed6b12 100644
+--- a/hs2-src/engine/linkmanager.go
++++ b/hs2-src/engine/linkmanager.go
+@@ -619,8 +619,9 @@ func linkDownReason(l Link) string {
+ 
+ // linkStallNote says, for the log line of a link's end (down, retired, or
+ // closed while degraded), how often its receive buffer ran full while it was
+-// up (every user on it stalled until a reader made room) and how often a
+-// reader that fell behind was braked to keep it from filling (smux
++// up (every user on it stalled until a reader made room, unless the buffer
++// grew from the window pool instead: SmuxWindowPool) and how often a reader
++// that fell behind was braked to keep it from filling (smux
+ // Config.MinStreamBuffer); "" when neither happened, or for a link without a
+ // smux session of its own.
+ func linkStallNote(l Link) string {
+@@ -632,7 +633,11 @@ func linkStallNote(l Link) string {
+ 	if parks == 0 && brakes == 0 {
+ 		return ""
+ 	}
+-	return fmt.Sprintf(" (while up: its receive buffer ran full %d time(s); readers that fell behind braked %d time(s))", parks, brakes)
++	grew := ""
++	if b := ml.sess.Borrows(); b > 0 {
++		grew = fmt.Sprintf(", %d of them grown from the window pool instead", b)
++	}
++	return fmt.Sprintf(" (while up: its receive buffer ran full %d time(s)%s; readers that fell behind braked %d time(s))", parks, grew, brakes)
+ }
+ 
+ // Run brings the pool up and then maintains it: rebuilds dead links, heals
+@@ -1853,6 +1858,8 @@ type linkObs struct {
+ 	ctrlWait   time.Duration // how long its oldest control ping has waited (stuck.go)
+ 	ctrlAns    int64         // ctrlNow when the last ping that got its own answer was sent (0: none)
+ 	wedged     bool          // its reader was parked on a full receive buffer lately (stuck.go)
++	grownRecv  bool          // a stream's window past SmuxNeedStreamBuffer: ours (download on the edge; loss.go)
++	grownSend  bool          // ... the other side's (upload)
+ }
+ 
+ // sampleHealth measures every link once per tick and builds the autopilot's
+@@ -1900,6 +1907,9 @@ func (m *LinkManager) sampleHealth() {
+ 		} else {
+ 			o.fs.open = int(ml.link.Active())
+ 		}
++		if gs, ok := ml.link.(grownSource); ok {
++			o.grownRecv, o.grownSend = gs.grownWindows()
++		}
+ 		if ml.mtr != nil {
+ 			o.rd, o.wr, o.blocked = ml.mtr.rdBytes.Load(), ml.mtr.wrBytes.Load(), ml.mtr.wrBlocked.Load()
+ 			o.ts, o.tsOK = linkTCPStatsOf(ml.link)
+@@ -2104,14 +2114,15 @@ func (m *LinkManager) sampleHealth() {
+ 				ml.dnStreak = 0
+ 			}
+ 			ml.lowStreak = max(ml.upStreak, ml.dnStreak)
++			own := ownPace(up, dn, o.grownSend, o.grownRecv)
+ 			if up.judged || dn.judged {
+ 				ml.lossFrac = max(up.frac(), dn.frac())
+ 				w := worse(up, dn)
+-				judgedLoss = append(judgedLoss, lossJudged{frac: w.frac(), rate: w.rate})
++				judgedLoss = append(judgedLoss, lossJudged{frac: w.frac(), rate: w.rate, own: own})
+ 			}
+ 			// judged after the loop, if this tick is calm too
+ 			if (ml.upStreak >= degradeStreak && up.bad()) || (ml.dnStreak >= degradeStreak && dn.bad()) {
+-				lossCand = append(lossCand, lossObs{ml: ml, up: up, dn: dn})
++				lossCand = append(lossCand, lossObs{ml: ml, up: up, dn: dn, own: own})
+ 			}
+ 		}
+ 		if ml.degraded && ml.link.Alive() {
+diff --git a/hs2-src/engine/loss.go b/hs2-src/engine/loss.go
+index c21f51b..ff448d5 100644
+--- a/hs2-src/engine/loss.go
++++ b/hs2-src/engine/loss.go
+@@ -39,6 +39,17 @@ import (
+ //     users would get no more elsewhere. It is kept, and not counted below.
+ //     In the load test the exact fractions alone still drained 25 links in
+ //     2.5 min (resending 14-28% at the throttle's rate);
++//   - a link whose lossy direction carries a stream with a window past
++//     SmuxNeedStreamBuffer (grownSource: one held back by its path, not by
++//     its window) is kept too, and not counted below. Behind a shallow
++//     queue BBR resends a large share of what one such stream sends, on
++//     whatever link it moves to: on the rig (a 50 ms queue; 300 Mbit/s at
++//     150 ms, 200 at 150, 100 at 100) one download resent 17-29% for as
++//     long as it ran, one upload 15-36%; its link, with no other pressed
++//     link to compare it with, was drained 10-22 s in and the transfer cut
++//     98-113 s in, every time (two downloads on two links: one cut). With
++//     every window within SmuxNeedStreamBuffer the same download resent
++//     under lossFrac;
+ //   - when most busy links (lossPathMin or more judged in the tick) resend
+ //     more than lossFrac below that rate, it is the path, not those links:
+ //     none is drained (said once a minute);
+@@ -65,6 +76,13 @@ const (
+ 	// lossKeepShare: a lossy link moving at least this share of the median
+ 	// pressed link's rate is kept (when lossPathMin or more are pressed).
+ 	lossKeepShare = 0.5
++	// lossOwnWithin: a window past SmuxNeedStreamBuffer announced on a link
++	// this recently (two pong windows) marks its resends as its own
++	// streams' pace (grownSource). Such a window dips to
++	// SmuxNeedStreamBuffer now and then as resends stall its reader: on the
++	// rig (100 Mbit/s, 100 ms, a 50 ms queue) a link judged on the window
++	// at the tick alone was still drained.
++	lossOwnWithin = 6 * time.Second
+ )
+ 
+ // lossDir is one direction's loss reading for a tick.
+@@ -137,9 +155,26 @@ func (ml *managedLink) judgeDownLoss(r *peerLossRec) (d lossDir, fresh bool) {
+ 	return lossDir{judged: true, resent: dR, segs: segs + float64(dR), rate: float64(dRd) / win.Seconds()}, true
+ }
+ 
+-// lossJudged is one link's reading in this tick: its worse direction.
++// lossJudged is one link's reading in this tick: its worse direction, and
++// whether its resends are its own streams' pace (ownPace).
+ type lossJudged struct {
+ 	frac, rate float64
++	own        bool
++}
++
++// grownSource is a link that tells whether a window past
++// SmuxNeedStreamBuffer was announced on it lately (lossOwnWithin), by this
++// side (recv: download on the edge) or by the other (send: upload) --
++// mtcpLink.
++type grownSource interface {
++	grownWindows() (recv, send bool)
++}
++
++// ownPace: every direction of the link that resends more than lossFrac
++// carries a stream whose window grew past SmuxNeedStreamBuffer (upGrown:
++// the other side's windows for what this side sends; dnGrown: this side's).
++func ownPace(up, dn lossDir, upGrown, dnGrown bool) bool {
++	return (up.bad() || dn.bad()) && (!up.bad() || upGrown) && (!dn.bad() || dnGrown)
+ }
+ 
+ // worse is the direction that resends more (of those judged).
+@@ -155,6 +190,7 @@ func worse(up, dn lossDir) lossDir {
+ type lossObs struct {
+ 	ml     *managedLink
+ 	up, dn lossDir
++	own    bool // its resends are its own streams' pace (ownPace)
+ }
+ 
+ func (c lossObs) frac() float64 { return max(c.up.frac(), c.dn.frac()) }
+@@ -171,7 +207,8 @@ func (c lossObs) rate() float64 {
+ }
+ 
+ // lossVerdicts degrades the loss candidates of this tick that move less
+-// than lossKeepShare of what the pressed links move (pressed: their rates),
++// than lossKeepShare of what the pressed links move (pressed: their rates)
++// and whose resends are not their own streams' pace (lossObs.own),
+ // lossiest first, at most drainHeadroom degraded links at a time
+ // (degradedNow: those already draining) — unless most judged links (judged:
+ // this tick's readings) resend more than lossFrac below that rate: then it
+@@ -192,7 +229,7 @@ func (m *LinkManager) lossVerdicts(now time.Time, cand []lossObs, judged []lossJ
+ 	if len(judged) >= lossPathMin {
+ 		lossy := 0
+ 		for _, j := range judged {
+-			if j.frac > lossFrac && !atRate(j.rate) {
++			if j.frac > lossFrac && !atRate(j.rate) && !j.own {
+ 				lossy++
+ 			}
+ 		}
+@@ -209,7 +246,7 @@ func (m *LinkManager) lossVerdicts(now time.Time, cand []lossObs, judged []lossJ
+ 	room := drainHeadroom(m.max) - degradedNow
+ 	var logs []string
+ 	for _, c := range cand {
+-		if atRate(c.rate()) || room <= 0 {
++		if atRate(c.rate()) || c.own || room <= 0 {
+ 			continue
+ 		}
+ 		room--
+diff --git a/hs2-src/engine/loss_grown_test.go b/hs2-src/engine/loss_grown_test.go
+new file mode 100644
+index 0000000..e580192
+--- /dev/null
++++ b/hs2-src/engine/loss_grown_test.go
+@@ -0,0 +1,78 @@
++package engine
++
++import (
++	"sync/atomic"
++	"testing"
++)
++
++// grownFake is a fake link that says whether a stream of it has a window
++// past SmuxNeedStreamBuffer (grownSource).
++type grownFake struct {
++	*meteredFakeLink
++	recv, send atomic.Bool
++}
++
++func (g *grownFake) grownWindows() (recv, send bool) { return g.recv.Load(), g.send.Load() }
++
++func (r *stuckRig) addGrown() (*grownFake, *managedLink) {
++	g := &grownFake{meteredFakeLink: newMeteredFake()}
++	g.m.peerSeen.Store(true)
++	ml := addManaged(r.m, g)
++	ml.users.Store(5)
++	return g, ml
++}
++
++// One download whose window grew past SmuxNeedStreamBuffer fills its path:
++// behind a shallow queue BBR resends 17-29% of it for as long as it runs
++// (rig: a 50 ms queue; 300 Mbit/s at 150 ms, 200 at 150, 100 at 100), on
++// whatever link carries it. Its lone link judged alone was drained after
++// three pong windows and the download cut maxDrainActive later; it is kept
++// now. The same resends on a link whose windows did not grow (a link's
++// path, not its stream's pace) still drain it, as do the other direction's
++// resends of a link whose download window grew.
++func TestLossKeepsALinkPacedByItsOwnStream(t *testing.T) {
++	r := newStuckRig(t, 0)
++	fast, fastML := r.addGrown() // the download's window grew
++	fast.recv.Store(true)
++	plain, plainML := r.addGrown() // no grown window: its path loses
++	upLossy, upML := r.addGrown()  // download window grew, but its upload loses
++	upLossy.recv.Store(true)
++	var segs uint32 = 1000
++	for i := 0; i < 8; i++ {
++		downLossy(fast.meteredFakeLink, 4<<20, 0.25)
++		fast.pong(int64(healthTick), 0)
++		downLossy(plain.meteredFakeLink, 4<<20, 0.25)
++		plain.pong(int64(healthTick), 0)
++		upLossy.active(400<<10, 150)
++		segs += 600
++		upLossy.setTCP(tcpStat{segsOut: segs})
++		r.tick()
++	}
++	if fastML.degraded {
++		t.Fatalf("a link resending what its own grown-window download costs was drained:\n%s", r.lg)
++	}
++	if !plainML.degraded {
++		t.Fatalf("a link resending 25%% with no grown window was kept (streak %d):\n%s", plainML.dnStreak, r.lg)
++	}
++	if !upML.degraded {
++		t.Fatalf("a link resending 25%% on upload was kept for its grown download window (streak %d):\n%s", upML.upStreak, r.lg)
++	}
++}
++
++// The same for an upload: the exit grew the window of what the edge sends
++// (send), and the edge's own resends are that stream's pace.
++func TestLossKeepsALinkPacedByItsOwnUpload(t *testing.T) {
++	r := newStuckRig(t, 0)
++	f, ml := r.addGrown()
++	f.send.Store(true)
++	var segs uint32 = 1000
++	for i := 0; i < 8; i++ {
++		f.active(4<<20, 150)
++		segs += 600
++		f.setTCP(tcpStat{segsOut: segs})
++		r.tick()
++	}
++	if ml.degraded {
++		t.Fatalf("a link resending what its own grown-window upload costs was drained:\n%s", r.lg)
++	}
++}
+diff --git a/hs2-src/engine/mtcp_link.go b/hs2-src/engine/mtcp_link.go
+index 2b59d1a..63af909 100644
+--- a/hs2-src/engine/mtcp_link.go
++++ b/hs2-src/engine/mtcp_link.go
+@@ -182,6 +182,11 @@ func flowAlpha(dt time.Duration) float64 {
+ // OpenRawStream opens a stream that is not counted as a user.
+ func (l *mtcpLink) OpenRawStream() (*smux.Stream, error) { return l.sess.OpenStream() }
+ 
++// grownWindows: whether a window past SmuxNeedStreamBuffer was announced
++// lately (lossOwnWithin), by this side (recv) or by the other (send): a
++// stream held back by its path, not its window (loss.go).
++func (l *mtcpLink) grownWindows() (recv, send bool) { return l.sess.GrownWindows(lossOwnWithin) }
++
+ func (l *mtcpLink) Active() int32 { return l.active.Load() }
+ 
+ // Alive reports usability: the smux session is open and the link was not
+@@ -258,12 +263,39 @@ var (
+ 	// how long a small reply waits behind a bulk transfer sharing the link:
+ 	// the one frame being written (then the socket's unsent bytes).
+ 	SmuxFrameSize = 16 << 10
+-	// SmuxStreamBuffer is the per-stream receive window: how far one stream
+-	// may run ahead of its reader. Flow control keeps a slow reader from
+-	// piling data into the link.
+-	SmuxStreamBuffer = 2 << 20
+-	// SmuxSessionBuffer bounds all streams of one link together.
++	// SmuxStreamBuffer is the largest per-stream receive window: how far one
++	// stream may run ahead of its reader. Flow control keeps a slow reader
++	// from piling data into the link. A stream that runs at the pace of its
++	// path moves about half its window per round trip (an update leaves each
++	// time half of it is read), so past SmuxNeedStreamBuffer a window is
++	// sized to need (below): 16 MiB carries one connection at ~650 Mbit/s at
++	// 100 ms, ~430 at 150 ms, ~220 at 300 ms.
++	SmuxStreamBuffer = 16 << 20
++	// SmuxNeedStreamBuffer is as far as a stream's window grows on its
++	// reader keeping up (2 MiB: ~90 Mbit/s at 150 ms). Past it, up to
++	// SmuxStreamBuffer, it grows only as far as three round trips of its
++	// reader's pace call for (the round trip the kernel has seen on the
++	// link's socket: linkRTT), and only by what the process's
++	// SmuxWindowPool has left; the link's SmuxSessionBuffer grows by just as
++	// much while the stream holds it (third_party/smux, need.go). So a user
++	// that cannot use a larger window -- a slow line, a slow source, a reader
++	// slower than its window -- never gets one, a fast one gets what its
++	// path calls for, and the other users of its link keep the room they
++	// would have if it had stayed at SmuxNeedStreamBuffer.
++	SmuxNeedStreamBuffer = 2 << 20
++	// SmuxSessionBuffer bounds all streams of one link together (past it
++	// only by what windows past SmuxNeedStreamBuffer hold from the pool).
+ 	SmuxSessionBuffer = 8 << 20
++	// SmuxWindowPool is what the windows past SmuxNeedStreamBuffer of all
++	// of this process's links may hold at once, in bytes, with what links
++	// whose buffer ran full borrowed (up to twice SmuxSessionBuffer more each,
++	// until it is free again: what was in flight when a dozen readers
++	// slowed down at once stalled such a link for seconds): what the links'
++	// buffers may hold past SmuxSessionBuffer in all. The server's RAM sizes
++	// it (tune.WindowPoolMiB, set at start; each server's own, for the
++	// direction it receives); 0 keeps every window within
++	// SmuxNeedStreamBuffer and every buffer within SmuxSessionBuffer.
++	SmuxWindowPool = 32 << 20
+ 	// SmuxMinStreamBuffer and SmuxStreamLagTarget turn on smux's adaptive
+ 	// stream window: a stream whose reader leaves more than
+ 	// SmuxStreamLagTarget unread is offered a smaller window, down to
+@@ -300,6 +332,11 @@ func SmuxAdaptiveWindow() (min int) {
+ 	return min
+ }
+ 
++// windowPool is the process's smux.WindowPool, of SmuxWindowPool bytes as
++// it is when the first link comes up (at most 1 GiB: a session's buffer is
++// counted in an int32).
++var windowPool = sync.OnceValue(func() *smux.WindowPool { return smux.NewWindowPool(min(max(SmuxWindowPool, 0), 1<<30)) })
++
+ func newSmuxConfig() *smux.Config {
+ 	c := smux.DefaultConfig()
+ 	c.Version = 2
+@@ -316,9 +353,16 @@ func newSmuxConfig() *smux.Config {
+ 	c.MaxFrameSize = SmuxFrameSize
+ 	c.MaxReceiveBuffer = SmuxSessionBuffer
+ 	c.MaxStreamBuffer = SmuxStreamBuffer
++	need := SmuxNeedStreamBuffer
+ 	if min := SmuxAdaptiveWindow(); min > 0 {
+ 		c.MinStreamBuffer = min
+ 		c.StreamLagTarget = SmuxStreamLagTarget
++		if need >= min && need < SmuxStreamBuffer {
++			c.NeedStreamBuffer = need
++			c.WindowPool = windowPool()
++		}
++	} else if need > 0 && need < SmuxStreamBuffer {
++		c.MaxStreamBuffer = need // the fixed window, as it was
+ 	}
+ 	return c
+ }
+diff --git a/hs2-src/engine/needwin_test.go b/hs2-src/engine/needwin_test.go
+new file mode 100644
+index 0000000..525a0e1
+--- /dev/null
++++ b/hs2-src/engine/needwin_test.go
+@@ -0,0 +1,174 @@
++package engine
++
++import (
++	"io"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/xtaci/smux"
++)
++
++// The smux config turns on the window sized to need from the engine's sizes,
++// takes the process's pool, and keeps a valid config under the lab
++// overrides: a fixed window stays the 2 MiB it was, and a stream buffer too
++// small for a need step leaves it off (the wedge tests shrink the buffers).
++func TestSmuxConfigNeedWindow(t *testing.T) {
++	c := newSmuxConfig()
++	if c.NeedStreamBuffer != SmuxNeedStreamBuffer || c.MaxStreamBuffer != SmuxStreamBuffer || c.WindowPool == nil || c.WindowPool != windowPool() {
++		t.Fatalf("need %d max %d pool %p, want %d, %d and the process's pool", c.NeedStreamBuffer, c.MaxStreamBuffer, c.WindowPool, SmuxNeedStreamBuffer, SmuxStreamBuffer)
++	}
++	if err := smux.VerifyConfig(c); err != nil {
++		t.Fatal(err)
++	}
++	for _, tc := range []struct {
++		name              string
++		min, stream, sess int
++		wantNeed, wantMax int
++	}{
++		{"fixed window (lab)", 0, SmuxStreamBuffer, SmuxSessionBuffer, 0, SmuxNeedStreamBuffer},
++		{"small buffers (wedge tests)", SmuxMinStreamBuffer, 512 << 10, 1 << 20, 0, 512 << 10},
++		{"stream buffer at the need", SmuxMinStreamBuffer, SmuxNeedStreamBuffer, SmuxSessionBuffer, 0, SmuxNeedStreamBuffer},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			min, stream, sess := SmuxMinStreamBuffer, SmuxStreamBuffer, SmuxSessionBuffer
++			SmuxMinStreamBuffer, SmuxStreamBuffer, SmuxSessionBuffer = tc.min, tc.stream, tc.sess
++			defer func() { SmuxMinStreamBuffer, SmuxStreamBuffer, SmuxSessionBuffer = min, stream, sess }()
++			c := newSmuxConfig()
++			if c.NeedStreamBuffer != tc.wantNeed || c.MaxStreamBuffer != tc.wantMax {
++				t.Fatalf("need %d max %d, want %d %d", c.NeedStreamBuffer, c.MaxStreamBuffer, tc.wantNeed, tc.wantMax)
++			}
++			if err := smux.VerifyConfig(c); err != nil {
++				t.Fatal(err)
++			}
++		})
++	}
++}
++
++// A link's round trip comes from its own socket (no traffic for it): the
++// least the kernel has seen, from the first read on, and 0 without a socket.
++func TestLinkRTTFromSocket(t *testing.T) {
++	if d := (&linkRTT{}).get(); d != 0 {
++		t.Fatalf("no socket: %v, want 0", d)
++	}
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	go func() {
++		c, err := ln.Accept()
++		if err == nil {
++			io.Copy(c, c)
++			c.Close()
++		}
++	}()
++	c, err := net.Dial("tcp", ln.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer c.Close()
++	c.Write([]byte("ping"))
++	io.ReadFull(c, make([]byte, 4))
++	r := &linkRTT{tcp: c.(*net.TCPConn)}
++	d := r.get()
++	if _, ok := tcpStats(r.tcp); ok && (d <= 0 || d > 100*time.Millisecond) {
++		t.Fatalf("loopback round trip %v", d)
++	}
++	c.Close()
++	if d2 := r.get(); d2 != d {
++		t.Fatalf("read again within %v: %v, then %v", linkRTTRefresh, d, d2)
++	}
++}
++
++// On a short round trip (a LAN, the loopback) a fast download needs no
++// window past SmuxNeedStreamBuffer: the real link stack takes nothing from
++// the pool and its buffer stays SmuxSessionBuffer.
++func TestFastLinkShortRoundTripTakesNoPool(t *testing.T) {
++	edge, exit, _ := guardedPair(t)
++	free := windowPool().Free()
++	go func() {
++		st, err := exit.AcceptStream()
++		if err != nil {
++			return
++		}
++		buf := make([]byte, 32<<10)
++		for n := 0; n < 96<<20; n += len(buf) {
++			if _, err := st.Write(buf); err != nil {
++				return
++			}
++		}
++		st.Close()
++	}()
++	st, err := edge.OpenStream()
++	if err != nil {
++		t.Fatal(err)
++	}
++	st.Write([]byte{0})
++	st.SetReadDeadline(time.Now().Add(60 * time.Second))
++	if n, err := io.Copy(io.Discard, st); (err != nil && err != io.EOF) || n != 96<<20 { // (smux's WriteTo ends with io.EOF)
++		t.Fatalf("read %d, %v", n, err)
++	}
++	if edge.Extra() != 0 || windowPool().Free() != free {
++		t.Fatalf("a loopback download held %d past SmuxSessionBuffer, pool %d of %d", edge.Extra(), windowPool().Free(), free)
++	}
++}
++
++// With the production buffers, apps that never read and fill the link's 8
++// MiB make its buffer borrow up to twice as much again from the window pool,
++// and the link's other users keep moving; once they fill that too, the
++// session waits as before and the wedge guard closes exactly the stuck
++// relays. All the pool comes back once they are gone.
++func TestFrozenAppsFillTheGrownBufferThenTheGuard(t *testing.T) {
++	if testing.Short() {
++		t.Skip("real-time readers")
++	}
++	free := windowPool().Free()
++	r := newWedgeRig(t, true)
++	healthy := r.open(readAt(0))
++	var stuck []*wUser
++	// each holds the 256 KiB a stream starts with: 40 of them, 10 MiB
++	for i := 0; i < 40; i++ {
++		stuck = append(stuck, r.open(nil))
++	}
++	time.Sleep(time.Second)
++	before := healthy.got.Load()
++	time.Sleep(time.Second)
++	if healthy.got.Load()-before < 4<<20 {
++		t.Fatalf("healthy user moved %d KiB in 1 s next to 10 MiB of frozen apps", (healthy.got.Load()-before)>>10)
++	}
++	if e := r.edge.Extra(); e <= 0 || e > 2*SmuxSessionBuffer {
++		t.Fatalf("buffer past SmuxSessionBuffer: %d, want some, at most %d", e, 2*SmuxSessionBuffer)
++	}
++	for i := 0; i < 4; i++ { // a link that flows gets nothing closed
++		if k := r.lookFast(); k != 0 {
++			t.Fatalf("guard closed %d relays while the grown buffer had room", k)
++		}
++	}
++	// 100 more: 35 MiB, past three times SmuxSessionBuffer
++	for i := 0; i < 100; i++ {
++		stuck = append(stuck, r.open(nil))
++	}
++	killed := 0
++	for i := 0; i < 20 && killed < len(stuck); i++ {
++		killed += r.lookFast()
++	}
++	if killed != len(stuck) {
++		t.Fatalf("guard closed %d stuck relays, want %d", killed, len(stuck))
++	}
++	if ended(healthy) {
++		t.Fatal("the healthy relay was closed")
++	}
++	before = healthy.got.Load()
++	time.Sleep(time.Second)
++	if healthy.got.Load()-before < 4<<20 {
++		t.Fatalf("healthy user moved only %d KiB in 1 s after the release", (healthy.got.Load()-before)>>10)
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	for r.edge.Extra() != 0 || windowPool().Free() != free {
++		if time.Now().After(deadline) {
++			t.Fatalf("after the release: buffer %d past SmuxSessionBuffer, pool %d of %d", r.edge.Extra(), windowPool().Free(), free)
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++}
+diff --git a/hs2-src/engine/stream.go b/hs2-src/engine/stream.go
+index d71fd19..e7d2da9 100644
+--- a/hs2-src/engine/stream.go
++++ b/hs2-src/engine/stream.go
+@@ -183,12 +183,14 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
+ 			s.Close()
+ 		}
+ 	}
++	cfg := newSmuxConfig()
++	cfg.RoundTrip = (&linkRTT{tcp: gate.tcp}).get
+ 	var sess *smux.Session
+ 	var err error
+ 	if server {
+-		sess, err = smux.Server(w, newSmuxConfig())
++		sess, err = smux.Server(w, cfg)
+ 	} else {
+-		sess, err = smux.Client(w, newSmuxConfig())
++		sess, err = smux.Client(w, cfg)
+ 	}
+ 	if err != nil {
+ 		return nil, nil, err
+@@ -203,6 +205,40 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
+ 	return sess, w.reason, nil
+ }
+ 
++// linkRTT hands smux a link's round trip, for the windows past
++// SmuxNeedStreamBuffer (smux.Config.RoundTrip): the least round trip the
++// kernel has seen on the link's TCP socket (TCP_INFO min_rtt, Linux 4.9 and
++// later; its smoothed round trip before that, or before a first sample),
++// read again at most every linkRTTRefresh. Nothing is sent for it, and both
++// ends have it from the handshake on (the exit has no control channel of its
++// own). 0 when there is no TCP socket (tests): no window past
++// SmuxNeedStreamBuffer.
++type linkRTT struct {
++	tcp *net.TCPConn
++	at  atomic.Int64 // ctrlNow of the last read, 0: none yet
++	rtt atomic.Int64 // what it read, ns
++}
++
++const linkRTTRefresh = 500 * time.Millisecond
++
++func (r *linkRTT) get() time.Duration {
++	now := ctrlNow()
++	if at := r.at.Load(); at != 0 && now-at < int64(linkRTTRefresh) {
++		return time.Duration(r.rtt.Load())
++	}
++	var d time.Duration
++	if st, ok := tcpStats(r.tcp); ok {
++		us := st.minRTT
++		if us == 0 {
++			us = st.rtt
++		}
++		d = time.Duration(us) * time.Microsecond
++	}
++	r.rtt.Store(int64(d))
++	r.at.Store(now)
++	return d
++}
++
+ // streamPkt carries L3 frames over one smux stream (see pktConn).
+ type streamPkt struct {
+ 	st   *smux.Stream
+diff --git a/hs2-src/engine/wedge.go b/hs2-src/engine/wedge.go
+index c3f8ede..9ab1331 100644
+--- a/hs2-src/engine/wedge.go
++++ b/hs2-src/engine/wedge.go
+@@ -14,10 +14,12 @@ import (
+ // A stuck reader must not stall — or kill — a whole link.
+ //
+ // Each link's smux session holds at most SmuxSessionBuffer (8 MiB) of data its
+-// streams' readers have not taken yet; when that bucket is empty smux stops
+-// reading the link's socket until a reader catches up. Four users whose apps
+-// stop reading (a frozen client, a panel that hangs) each fill their 2 MiB
+-// stream window and so empty the bucket: then EVERY stream on the link stops —
++// streams' readers have not taken yet (and what windows past
++// SmuxNeedStreamBuffer bring from the window pool); when that bucket is empty
++// smux stops reading the link's socket until a reader catches up. Four users
++// whose apps stop reading (a frozen client, a panel that hangs) each fill
++// their 2 MiB stream window and so empty the bucket: then EVERY stream on the
++// link stops —
+ // the other users' traffic, the control and info streams, the TUN — and after
+ // 20 s of zero window the other server's TCP gives up on the link
+ // (TCP_USER_TIMEOUT) and every user on it is reset. They reconnect, land on
+diff --git a/hs2-src/third_party/smux/mux.go b/hs2-src/third_party/smux/mux.go
+index aed336f..9d786eb 100644
+--- a/hs2-src/third_party/smux/mux.go
++++ b/hs2-src/third_party/smux/mux.go
+@@ -48,8 +48,9 @@ type Config struct {
+ 	// resizes it at each window update from the least backlog its reader
+ 	// left unread since the previous one: over StreamLagTarget it shrinks
+ 	// by the excess, down to MinStreamBuffer; under a quarter of the target
+-	// it doubles, up to MaxStreamBuffer, unless the session ran out of
+-	// MaxReceiveBuffer meanwhile. At the first resize a reader that kept up
++	// it doubles, up to MaxStreamBuffer (past NeedStreamBuffer only as far
++	// as the stream needs), unless the session ran out of MaxReceiveBuffer
++	// meanwhile. At the first resize a reader that kept up
+ 	// gets at once what it reads in a second at its pace so far (from the
+ 	// transfer's own start, past a handshake's wait), if that is more
+ 	// (MaxStreamBuffer for a transfer that starts fast), so a large transfer
+@@ -79,6 +80,37 @@ type Config struct {
+ 	// aims for (see MinStreamBuffer). Must be positive when MinStreamBuffer
+ 	// is, zero otherwise.
+ 	StreamLagTarget int
++
++	// NeedStreamBuffer, when positive, is as far as an adaptive stream's
++	// window grows on its reader keeping up alone. Past it, up to
++	// MaxStreamBuffer, the window grows only as far as the stream needs:
++	// what its reader takes in three round trips of the connection
++	// (RoundTrip) at its pace since the previous update. A reader slower than
++	// its window, or kept to a slow pace by its path or its source, so stays
++	// within NeedStreamBuffer; one whose pace falls gives the rest back,
++	// at most half its window per update. Without RoundTrip, or while it
++	// reports 0, no window grows past NeedStreamBuffer. Zero (the default):
++	// adaptive windows grow to MaxStreamBuffer. Requires MinStreamBuffer.
++	NeedStreamBuffer int
++
++	// RoundTrip reports the round trip of the session's connection, 0 while
++	// it is not known (see NeedStreamBuffer). It is called from a stream's
++	// reader at the window updates of a stream past NeedStreamBuffer.
++	RoundTrip func() time.Duration
++
++	// WindowPool, with NeedStreamBuffer, is what windows past
++	// NeedStreamBuffer take their excess from: a window grows only as far
++	// as the pool has left, and the session's MaxReceiveBuffer grows by
++	// what its streams hold from the pool, until their windows are down
++	// again and what came in above them has been read (a stream idle for
++	// a few seconds takes its window down with an update). A session whose
++	// buffer runs full borrows from it too, up to twice MaxReceiveBuffer
++	// more than its windows hold, until that is free again. The sessions sharing one
++	// pool so hold at most its size past their MaxReceiveBuffer in all, and
++	// the other streams of a session keep at least the room they would have
++	// with every window within NeedStreamBuffer. Nil: the excess is bounded
++	// by MaxStreamBuffer alone, in a session buffer of MaxReceiveBuffer.
++	WindowPool *WindowPool
+ }
+ 
+ // DefaultConfig is used to return a default configuration
+@@ -118,7 +150,8 @@ func VerifyConfig(config *Config) error {
+ 	if config.MaxStreamBuffer <= 0 {
+ 		return errors.New("max stream buffer must be positive")
+ 	}
+-	if config.MaxStreamBuffer > config.MaxReceiveBuffer {
++	if config.MaxStreamBuffer > config.MaxReceiveBuffer && (config.WindowPool == nil ||
++		config.NeedStreamBuffer > config.MaxReceiveBuffer) { // past NeedStreamBuffer a window brings its buffer from the pool
+ 		return errors.New("max stream buffer must not be larger than max receive buffer")
+ 	}
+ 	if config.MaxStreamBuffer > math.MaxInt32 {
+@@ -143,6 +176,19 @@ func VerifyConfig(config *Config) error {
+ 	} else if config.StreamLagTarget != 0 {
+ 		return errors.New("stream lag target requires min stream buffer")
+ 	}
++	if config.NeedStreamBuffer < 0 {
++		return errors.New("need stream buffer must not be negative")
++	}
++	if config.NeedStreamBuffer > 0 {
++		if config.MinStreamBuffer == 0 {
++			return errors.New("need stream buffer requires the adaptive stream window")
++		}
++		if config.NeedStreamBuffer < config.MinStreamBuffer || config.NeedStreamBuffer > config.MaxStreamBuffer {
++			return errors.New("need stream buffer must be within [min stream buffer, max stream buffer]")
++		}
++	} else if config.WindowPool != nil {
++		return errors.New("window pool requires need stream buffer")
++	}
+ 	return nil
+ }
+ 
+diff --git a/hs2-src/third_party/smux/need.go b/hs2-src/third_party/smux/need.go
+new file mode 100644
+index 0000000..d2dd9a6
+--- /dev/null
++++ b/hs2-src/third_party/smux/need.go
+@@ -0,0 +1,374 @@
++package smux
++
++import (
++	"sync/atomic"
++	"time"
++)
++
++// A window sized to need (Config.NeedStreamBuffer).
++//
++// A stream moves at most about its window per round trip, so a fixed ceiling
++// caps one fast connection on a long path: 2 MiB is ~90 Mbit/s at 150 ms. A
++// larger ceiling for every stream is what a stream's reader can stop reading
++// under: what its window granted still arrives, and enough of it empties the
++// session's buffer for every other stream. So past NeedStreamBuffer a window
++// grows only as far as its stream needs (needWindow), and, with a WindowPool,
++// only by what the pool has left: the session's buffer grows by just as much
++// (the stream's claim) while the stream may still be sent that much or holds
++// that much unread past NeedStreamBuffer, and gives it back only as far as it
++// is free. A stream slower than its window, or kept to a slow pace by its
++// path or its source, never holds more than NeedStreamBuffer; the sessions
++// sharing a pool hold at most its size past their MaxReceiveBuffer; and the
++// other streams keep at least the room they would have had with every window
++// within NeedStreamBuffer, while a large window's data comes in and after its
++// reader stopped. A stream that idles gives its larger window back with an
++// update (sweepClaims), so the next transfer cannot land more than
++// NeedStreamBuffer uncovered. A session whose buffer runs full anyway (what
++// was in flight when its readers slowed down) borrows from the same pool
++// (borrow).
++
++// needGain: a window past NeedStreamBuffer grows to needGain round trips of
++// its reader's pace. Two because an update leaves each time half the window
++// has been read, so a stream that runs at the pace its path allows moves
++// about half its window per round trip; one more for the queue on the path
++// and the swings of the round trip (RoundTrip is the least one seen).
++const needGain = 3
++
++// claimHold: a claim on the pool outlives the window it covered by this many
++// round trips: what the peer sent under the larger window before our update
++// reached it is still on its way.
++const claimHold = 2
++
++// borrowShare: a session that runs full borrows 1/borrowShare of
++// MaxReceiveBuffer from the pool at a time (borrow).
++const borrowShare = 8
++
++// borrowMax: a session borrows up to borrowMax times MaxReceiveBuffer
++// (borrow). What a link has in flight when a dozen of its readers slow down
++// at once can be more than its buffer: a 200 Mbit/s path at 300 ms carries
++// ~10 MB, and a brake takes another round trip to reach the sender. With
++// one MaxReceiveBuffer such a link still ran full and stalled up to 3 s in
++// half the runs, with two never.
++const borrowMax = 2
++
++// spareRoom: the session gives its spare back only as far as 1/spareRoom
++// of MaxReceiveBuffer stays free (returnSpare).
++const spareRoom = 4
++
++// WindowPool is the excess past Config.NeedStreamBuffer that the windows of
++// the sessions sharing it may hold at once (Config.WindowPool), in bytes.
++type WindowPool struct{ free int64 }
++
++// NewWindowPool returns a pool of size bytes.
++func NewWindowPool(size int) *WindowPool {
++	return &WindowPool{free: int64(size)}
++}
++
++// Free is what the pool has left.
++func (p *WindowPool) Free() int { return int(atomic.LoadInt64(&p.free)) }
++
++// take takes up to n bytes from the pool and returns how many it took.
++func (p *WindowPool) take(n int) int {
++	for {
++		f := atomic.LoadInt64(&p.free)
++		if f <= 0 || n <= 0 {
++			return 0
++		}
++		k := int64(n)
++		if k > f {
++			k = f
++		}
++		if atomic.CompareAndSwapInt64(&p.free, f, f-k) {
++			return int(k)
++		}
++	}
++}
++
++func (p *WindowPool) give(n int) { atomic.AddInt64(&p.free, int64(n)) }
++
++// roundTrip is cfg.RoundTrip(), 0 without one.
++func roundTrip(cfg *Config) time.Duration {
++	if cfg.RoundTrip == nil {
++		return 0
++	}
++	return cfg.RoundTrip()
++}
++
++// needWindow is the window the stream needs past NeedStreamBuffer: needGain
++// round trips of what its reader took at its pace since the previous update
++// (paced over half a round trip at least: a burst read of what had piled up
++// is no pace). 0 while the round trip is not known. The caller holds
++// bufferLock.
++func (s *Stream) needWindow(cfg *Config, now int64) uint64 {
++	rtt := roundTrip(cfg)
++	if rtt <= 0 || s.updAt == 0 {
++		return 0
++	}
++	dt := time.Duration(now - s.updAt)
++	if dt < rtt/2 {
++		dt = rtt / 2
++	}
++	need := needGain * float64(s.numRead-s.updRead) * float64(rtt) / float64(dt)
++	if need > float64(cfg.MaxStreamBuffer) {
++		return uint64(cfg.MaxStreamBuffer)
++	}
++	return uint64(need)
++}
++
++// fitNeed holds a window that adaptWindow took past NeedStreamBuffer to
++// what the stream needs (needWindow), giving back at most half of the
++// window old it had per update, and sets it (setWindow). The caller holds
++// bufferLock.
++func (s *Stream) fitNeed(cfg *Config, old uint32) {
++	base := uint32(cfg.NeedStreamBuffer)
++	w := s.rcvWin
++	if w > base {
++		lim := base
++		if need := s.needWindow(cfg, monoNow()); need > uint64(lim) {
++			lim = uint32(need)
++		}
++		if old/2 > lim {
++			lim = old / 2
++		}
++		if w > lim {
++			w = lim
++		}
++	}
++	s.setWindow(cfg, w)
++	if s.rcvWin > base {
++		s.sess.grownAt.Store(monoNow()) // (GrownWindows)
++	}
++}
++
++// setWindow sets the window to w; with a WindowPool, past NeedStreamBuffer
++// only as far as the stream's claim on the pool covers it, the claim taking
++// what more the pool has left. The caller holds bufferLock.
++func (s *Stream) setWindow(cfg *Config, w uint32) {
++	if pool := cfg.WindowPool; pool != nil && w > uint32(cfg.NeedStreamBuffer) {
++		if want := int(w) - cfg.NeedStreamBuffer - s.claim; want > 0 {
++			got := 0
++			select {
++			case <-s.die: // closed: its claim is given back for good
++			default:
++				got = pool.take(want)
++			}
++			if got > 0 {
++				if s.claim == 0 {
++					s.readAt = monoNow()
++				}
++				s.claim += got
++				s.sess.grow(got)
++			}
++			w -= uint32(want - got)
++		}
++	}
++	if w < s.rcvWin && s.claim > 0 {
++		s.claimDown = 0 // the hold runs from the latest step down
++	}
++	s.rcvWin = w
++	s.reclaim(cfg)
++}
++
++// reclaim lets go of the part of the stream's claim that neither its window
++// nor what it holds unread needs past NeedStreamBuffer, claimHold round trips
++// after the window last came down (what was sent under a larger one may
++// still arrive), into the session's spare. What a stream holds unread past
++// NeedStreamBuffer stays its own (a reader that stopped after a fast
++// transfer holds what its larger window let in): were it spare, the session
++// would give it back while the data is still there, and the other streams
++// would have that much less room than with every window within
++// NeedStreamBuffer. The caller holds bufferLock.
++func (s *Stream) reclaim(cfg *Config) {
++	if s.claim == 0 {
++		return
++	}
++	keep := int(s.rcvWin)
++	if s.unread > keep {
++		keep = s.unread
++	}
++	keep -= cfg.NeedStreamBuffer
++	if keep < 0 {
++		keep = 0
++	}
++	if s.claim <= keep {
++		s.claimDown = 0
++		return
++	}
++	now := monoNow()
++	if s.claimDown == 0 {
++		s.claimDown = now + claimHold*int64(roundTrip(cfg))
++	}
++	if now < s.claimDown {
++		return
++	}
++	s.claimDown = 0
++	s.sess.spareUp(s.claim - keep)
++	s.claim = keep
++}
++
++// claimIdle: a stream that has read nothing for this long gives its window
++// past NeedStreamBuffer back, then the claim it covered (sweepClaims).
++const claimIdle = 5 * time.Second
++
++// sweepClaims takes the windows of the streams that have read nothing for
++// claimIdle down: a connection kept open after a fast transfer must not keep
++// the pool from the others. The peer may still send such a stream all its
++// window granted, and the next transfer may find its reader slow or gone,
++// so the window comes down to NeedStreamBuffer with an update first (as a
++// brake's, Stream.checkLag), its claim covering what is on its way for
++// claimHold round trips; a later sweep lets go of the claim, into the spare,
++// all but what the stream holds unread past NeedStreamBuffer (reclaim). Its
++// next updates take from the pool again what it then needs. It runs at the
++// keepalive tick.
++func (s *Session) sweepClaims() {
++	if atomic.LoadInt32(&s.extra) == 0 {
++		return // no claims
++	}
++	now := monoNow()
++	var down []*Stream
++	s.streamLock.Lock()
++	for _, st := range s.streams {
++		st.bufferLock.Lock()
++		if st.claim > 0 && now-st.readAt >= int64(claimIdle) {
++			if st.rcvWin > uint32(s.config.NeedStreamBuffer) {
++				st.setWindow(s.config, uint32(s.config.NeedStreamBuffer))
++				st.incr = 0
++				down = append(down, st)
++			} else {
++				st.reclaim(s.config)
++			}
++		}
++		st.bufferLock.Unlock()
++	}
++	s.streamLock.Unlock()
++	for _, st := range down {
++		go st.windowDown()
++	}
++	s.returnSpare()
++}
++
++// windowDown announces a window sweepClaims took down, as a brake does:
++// not bound by the reader's deadline, but not for long either.
++func (s *Stream) windowDown() {
++	select {
++	case <-s.die:
++	default:
++		t := time.NewTimer(brakeWait)
++		s.writeWindowUpdate(t.C)
++		t.Stop()
++	}
++}
++
++// dropClaim lets go of the whole claim, as the stream closes (with die
++// closed: it takes no more). The caller holds bufferLock.
++func (s *Stream) dropClaim() {
++	if s.claim > 0 {
++		s.sess.spareUp(s.claim)
++		s.claim = 0
++	}
++}
++
++// grow grows the session's buffer by n bytes a stream took from the pool.
++func (s *Session) grow(n int) {
++	atomic.AddInt32(&s.extra, int32(n))
++	if atomic.AddInt32(&s.bucket, int32(n)) > 0 {
++		s.notifyBucket()
++	}
++}
++
++// spareUp adds n bytes a stream let go of to the session's spare: buffer
++// past MaxReceiveBuffer that no window covers any more, given back to the
++// pool as far as it is free (returnSpare).
++func (s *Session) spareUp(n int) { atomic.AddInt32(&s.spare, int32(n)) }
++
++// returnSpare gives the session's spare back to the pool as far as the
++// buffer keeps 1/spareRoom of MaxReceiveBuffer free without it: what came in
++// under a larger window stays in the buffer it came into until it is read,
++// and the other streams keep room to move meanwhile -- more than they would
++// have had if those windows had stayed within NeedStreamBuffer, as that
++// data would then have emptied a buffer of MaxReceiveBuffer.
++func (s *Session) returnSpare() {
++	if atomic.LoadInt32(&s.spare) <= 0 {
++		return
++	}
++	s.spareLock.Lock()
++	defer s.spareLock.Unlock()
++	room := int32(s.config.MaxReceiveBuffer / spareRoom)
++	for {
++		sp := atomic.LoadInt32(&s.spare)
++		free := atomic.LoadInt32(&s.bucket)
++		k := sp
++		if free-room < k {
++			k = free - room
++		}
++		if k <= 0 {
++			return
++		}
++		if atomic.CompareAndSwapInt32(&s.bucket, free, free-k) {
++			atomic.AddInt32(&s.spare, -k)
++			atomic.AddInt32(&s.extra, -k)
++			s.config.WindowPool.give(int(k))
++			return
++		}
++	}
++}
++
++// borrow grows the session's buffer, as it runs full, by 1/borrowShare of
++// MaxReceiveBuffer from the pool, while its spare (what it holds past
++// MaxReceiveBuffer that no window covers) is less than borrowMax times
++// MaxReceiveBuffer, and reports whether it did. What it takes is spare: given back as it is free
++// again (returnSpare). It is for what was already in flight when readers
++// slowed down (Stream.checkLag can only stop more): a dozen of them on a
++// link carrying several MB in flight emptied the buffer and stalled every
++// stream for seconds. The claims of its streams' larger windows do not
++// count: they cover what those windows let in, and a link carrying a fast
++// stream is the one with the most in flight for the others too (counted
++// with them, a fast stream's claim kept the session from borrowing at all,
++// and such a link stalled 10 s). Readers that do not read at all (frozen
++// apps) fill it all the same, a buffer later: then the session waits as it
++// did, and the wedge guard (hs2's) sees it. A closed session borrows
++// nothing: its spare has gone back (dropSpare, under the same lock), and
++// what it took now would never be.
++func (s *Session) borrow() bool {
++	s.spareLock.Lock()
++	defer s.spareLock.Unlock()
++	if s.IsClosed() || int(atomic.LoadInt32(&s.spare)) >= borrowMax*s.config.MaxReceiveBuffer {
++		return false
++	}
++	got := s.config.WindowPool.take(s.config.MaxReceiveBuffer / borrowShare)
++	if got == 0 {
++		return false
++	}
++	s.spareUp(got)
++	s.grow(got)
++	atomic.AddUint32(&s.borrows, 1)
++	return true
++}
++
++// dropSpare gives everything the session holds from the pool back, as it
++// closes. Its streams have let go of their claims (sessionClose).
++func (s *Session) dropSpare() {
++	s.spareLock.Lock()
++	defer s.spareLock.Unlock()
++	if sp := atomic.SwapInt32(&s.spare, 0); sp > 0 {
++		atomic.AddInt32(&s.extra, -sp)
++		s.config.WindowPool.give(int(sp))
++	}
++}
++
++// GrownWindows reports whether a window past NeedStreamBuffer was
++// announced within the last d: recv, by this session at a window update (its
++// reader's pace called for it: fitNeed); send, by the peer for what this
++// session sends (a peer of this version sizes its windows by the same rule).
++// Either says that a stream moved that much per round trip lately, held back
++// by its path rather than by its window (for hs2's loss rule).
++func (s *Session) GrownWindows(d time.Duration) (recv, send bool) {
++	now := monoNow()
++	within := func(at int64) bool { return at != 0 && now-at < int64(d) }
++	return within(s.grownAt.Load()), within(s.peerGrownAt.Load())
++}
++
++// Extra is how far the session's buffer is past MaxReceiveBuffer now: what
++// its streams' windows hold from the WindowPool, and what came in under
++// larger ones and has not been read yet.
++func (s *Session) Extra() int { return int(atomic.LoadInt32(&s.extra)) }
+diff --git a/hs2-src/third_party/smux/need_chaos_test.go b/hs2-src/third_party/smux/need_chaos_test.go
+new file mode 100644
+index 0000000..9ef0e27
+--- /dev/null
++++ b/hs2-src/third_party/smux/need_chaos_test.go
+@@ -0,0 +1,155 @@
++package smux
++
++import (
++	"math/rand"
++	"net"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++// Windows past NeedStreamBuffer grow and shrink in many streams of two
++// sessions sharing one pool while their readers run fast, slow down, pause
++// and stop, the streams close at either end at random, and the sessions
++// close in the middle of it (sweeping every 50 ms). Whatever the order, the
++// pool is whole once both sessions and every stream have closed.
++func TestNeedPoolWholeAfterChaos(t *testing.T) {
++	for round := 0; round < 4; round++ {
++		needChaosRound(t, int64(round))
++	}
++}
++
++func needChaosRound(t *testing.T, seed int64) {
++	const poolSize = 3 << 20
++	pool := NewWindowPool(poolSize)
++	var rtt atomic.Int64
++	rtt.Store(int64(40 * time.Millisecond))
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	srvCh := make(chan *Session, 1)
++	var wg sync.WaitGroup
++	// both ends: a stream's peer writes as fast as it can until either end
++	// closes it
++	push := func(st *Stream) {
++		defer wg.Done()
++		buf := make([]byte, 16<<10)
++		for {
++			st.SetWriteDeadline(time.Now().Add(5 * time.Second))
++			if _, err := st.Write(buf); err != nil {
++				return
++			}
++		}
++	}
++	// read in one of four ways, then close (or not) at a random moment
++	read := func(st *Stream, r *rand.Rand) {
++		defer wg.Done()
++		mode := r.Intn(4)
++		end := time.Now().Add(time.Duration(50+r.Intn(400)) * time.Millisecond)
++		buf := make([]byte, 1+r.Intn(32<<10))
++		for time.Now().Before(end) {
++			st.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
++			switch mode {
++			case 0: // fast
++			case 1: // slow
++				time.Sleep(2 * time.Millisecond)
++			case 2: // fast, then stopped
++				if time.Until(end) < 200*time.Millisecond {
++					time.Sleep(time.Until(end))
++					continue
++				}
++			case 3: // pauses
++				if r.Intn(20) == 0 {
++					time.Sleep(30 * time.Millisecond)
++				}
++			}
++			if _, err := st.Read(buf); err != nil && err != ErrTimeout {
++				return
++			}
++		}
++		if r.Intn(3) > 0 {
++			st.Close()
++		}
++	}
++	cfgOf := func() *Config {
++		c := needConfig(pool, &rtt)
++		c.KeepAliveInterval = 50 * time.Millisecond // sweeps, often
++		c.KeepAliveTimeout = 10 * time.Second
++		return c
++	}
++	go func() {
++		c, err := ln.Accept()
++		if err != nil {
++			return
++		}
++		s, _ := Server(c, cfgOf())
++		srvCh <- s
++		r := rand.New(rand.NewSource(seed + 100))
++		for i := 0; ; i++ {
++			st, err := s.AcceptStream()
++			if err != nil {
++				return
++			}
++			wg.Add(1)
++			if i%2 == 0 {
++				go push(st)
++			} else {
++				go read(st, rand.New(rand.NewSource(r.Int63())))
++			}
++		}
++	}()
++	c, err := net.Dial("tcp", ln.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	cli, err := Client(c, cfgOf())
++	if err != nil {
++		t.Fatal(err)
++	}
++	srv := <-srvCh
++	r := rand.New(rand.NewSource(seed))
++	var streams []*Stream
++	for i := 0; i < 24; i++ {
++		st, err := cli.OpenStream()
++		if err != nil {
++			t.Fatal(err)
++		}
++		streams = append(streams, st)
++		wg.Add(1)
++		if i%2 == 0 {
++			go read(st, rand.New(rand.NewSource(r.Int63())))
++		} else {
++			go push(st)
++		}
++		time.Sleep(time.Duration(r.Intn(15)) * time.Millisecond)
++	}
++	time.Sleep(time.Duration(100+r.Intn(300)) * time.Millisecond)
++	if r.Intn(2) == 0 {
++		cli.Close()
++		srv.Close()
++	} else {
++		srv.Close()
++		cli.Close()
++	}
++	for _, st := range streams {
++		st.Close()
++	}
++	done := make(chan struct{})
++	go func() { wg.Wait(); close(done) }()
++	select {
++	case <-done:
++	case <-time.After(30 * time.Second):
++		t.Fatal("streams did not end after their sessions closed")
++	}
++	if f := pool.Free(); f != poolSize {
++		t.Fatalf("seed %d: pool free %d after both sessions closed, want %d (lost %d)", seed, f, poolSize, poolSize-f)
++	}
++	for _, s := range []*Session{cli, srv} {
++		if e, sp := extraOf(s); e != 0 || sp != 0 {
++			t.Fatalf("seed %d: a closed session holds extra %d spare %d", seed, e, sp)
++		}
++	}
++}
+diff --git a/hs2-src/third_party/smux/need_test.go b/hs2-src/third_party/smux/need_test.go
+new file mode 100644
+index 0000000..d44df88
+--- /dev/null
++++ b/hs2-src/third_party/smux/need_test.go
+@@ -0,0 +1,726 @@
++package smux
++
++import (
++	"bytes"
++	"io"
++	"math/rand"
++	"net"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++// needConfig: the adaptive test config with a window sized to need past
++// 256 KiB, up to 1 MiB, in a 512 KiB session buffer that grows from pool
++// (nil: no pool), and the round trip *rtt.
++func needConfig(pool *WindowPool, rtt *atomic.Int64) *Config {
++	config := adaptiveConfig()
++	config.MaxReceiveBuffer = 512 << 10
++	config.MaxStreamBuffer = 1 << 20
++	config.NeedStreamBuffer = 256 << 10
++	config.WindowPool = pool
++	if rtt != nil {
++		config.RoundTrip = func() time.Duration { return time.Duration(rtt.Load()) }
++	}
++	return config
++}
++
++func extraOf(s *Session) (extra, spare int32) {
++	return atomic.LoadInt32(&s.extra), atomic.LoadInt32(&s.spare)
++}
++
++func claimOf(st *Stream) int {
++	st.bufferLock.Lock()
++	defer st.bufferLock.Unlock()
++	return st.claim
++}
++
++func maxWindow(upds [][2]uint32) uint32 {
++	var w uint32
++	for _, u := range upds {
++		if u[1] > w {
++			w = u[1]
++		}
++	}
++	return w
++}
++
++func TestNeedVerifyConfig(t *testing.T) {
++	pool := NewWindowPool(1 << 20)
++	cases := []struct {
++		name string
++		edit func(c *Config)
++		ok   bool
++	}{
++		{"on", func(c *Config) {}, true},
++		{"no pool", func(c *Config) { c.WindowPool = nil; c.MaxStreamBuffer = 512 << 10 }, true},
++		{"no pool, stream over session", func(c *Config) { c.WindowPool = nil }, false},
++		{"need over session", func(c *Config) { c.NeedStreamBuffer = 768 << 10 }, false},
++		{"need over max", func(c *Config) { c.NeedStreamBuffer = 2 << 20 }, false},
++		{"need under min", func(c *Config) { c.NeedStreamBuffer = 8 << 10 }, false},
++		{"need negative", func(c *Config) { c.NeedStreamBuffer = -1 }, false},
++		{"need without adaptive", func(c *Config) { c.MinStreamBuffer, c.StreamLagTarget = 0, 0 }, false},
++		{"pool without need", func(c *Config) { c.NeedStreamBuffer = 0; c.MaxStreamBuffer = 512 << 10 }, false},
++		{"need equals max", func(c *Config) { c.WindowPool, c.MaxStreamBuffer, c.NeedStreamBuffer = nil, 512<<10, 512<<10 }, true},
++	}
++	for _, tc := range cases {
++		c := needConfig(pool, nil)
++		tc.edit(c)
++		if err := VerifyConfig(c); (err == nil) != tc.ok {
++			t.Errorf("%s: VerifyConfig = %v, want ok=%v", tc.name, err, tc.ok)
++		}
++	}
++}
++
++// A reader that keeps up grows its window only to NeedStreamBuffer when it
++// has no use for more: without a round trip, or with one so short that its
++// pace times the round trip is small (a fast LAN), it never holds more, and
++// takes nothing from the pool.
++func TestNeedWindowStaysWithoutNeed(t *testing.T) {
++	for _, tc := range []struct {
++		name string
++		rtt  time.Duration
++		set  bool
++	}{{"no RoundTrip", 0, false}, {"round trip not known yet", 0, true}, {"1µs round trip", time.Microsecond, true}} {
++		t.Run(tc.name, func(t *testing.T) {
++			pool := NewWindowPool(4 << 20)
++			var rtt atomic.Int64
++			rtt.Store(int64(tc.rtt))
++			cfg := needConfig(pool, &rtt)
++			if !tc.set {
++				cfg.RoundTrip = nil
++			}
++			session, stream, p := newRawPeer(t, cfg)
++			keepUp(t, p, stream, 6<<20)
++			p.sync(stream)
++			if w := maxWindow(p.updates()); w != uint32(cfg.NeedStreamBuffer) {
++				t.Fatalf("max window %d, want NeedStreamBuffer %d (updates %v)", w, cfg.NeedStreamBuffer, p.updates())
++			}
++			if e, _ := extraOf(session); e != 0 || pool.Free() != 4<<20 {
++				t.Fatalf("extra %d, pool free %d: a window within NeedStreamBuffer took from the pool", e, pool.Free())
++			}
++		})
++	}
++}
++
++// A reader that keeps up on a long round trip grows past NeedStreamBuffer
++// (at its first resize as far as its need, then at most doubling per update)
++// to MaxStreamBuffer; the excess comes from the pool and the session's
++// buffer grows by just as much.
++func TestNeedWindowGrowsWithNeed(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 8<<20)
++	p.sync(stream)
++	upds := p.updates()
++	if w := p.lastWindow(); w != uint32(cfg.MaxStreamBuffer) {
++		t.Fatalf("window %d, want MaxStreamBuffer %d (updates %v)", w, cfg.MaxStreamBuffer, upds)
++	}
++	for i := 2; i < len(upds); i++ {
++		if upds[i][1] > uint32(cfg.NeedStreamBuffer) && upds[i][1] > 2*upds[i-1][1] {
++			t.Fatalf("window more than doubled past NeedStreamBuffer: %v", upds)
++		}
++	}
++	excess := cfg.MaxStreamBuffer - cfg.NeedStreamBuffer
++	if e, sp := extraOf(session); int(e) != excess || sp != 0 || claimOf(stream) != excess {
++		t.Fatalf("extra %d spare %d claim %d, want %d, 0, %d", e, sp, claimOf(stream), excess, excess)
++	}
++	if pool.Free() != 4<<20-excess {
++		t.Fatalf("pool free %d, want %d", pool.Free(), 4<<20-excess)
++	}
++	if b := atomic.LoadInt32(&session.bucket); int(b) != cfg.MaxReceiveBuffer+excess-unreadOf(stream) {
++		t.Fatalf("bucket %d, want MaxReceiveBuffer %d + excess %d - unread %d", b, cfg.MaxReceiveBuffer, excess, unreadOf(stream))
++	}
++}
++
++// keepUpAt is keepUp with a source that sends at most rate bytes/s: the
++// reader keeps up, and its pace is the source's.
++func keepUpAt(t *testing.T, p *rawPeer, st *Stream, n, rate int) {
++	t.Helper()
++	start := time.Now()
++	for sent := 0; sent < n; sent += 16 << 10 {
++		if d := time.Until(start.Add(time.Duration(sent) * time.Second / time.Duration(rate))); d > 0 {
++			time.Sleep(d)
++		}
++		p.sendInWindow(16<<10, 4096)
++		p.settle(st)
++		readN(t, st, 16<<10, 16<<10)
++	}
++}
++
++// A reader kept to a pace by its source gets the window that pace needs on
++// the round trip: within NeedStreamBuffer when the pace times the round trip
++// is small (a slow user on a long path never holds more), past it as far as
++// three round trips of the pace (between the two), and MaxStreamBuffer when
++// the pace needs even more.
++func TestNeedWindowFollowsPace(t *testing.T) {
++	const rate = 2 << 20 // bytes/s
++	for _, tc := range []struct {
++		name     string
++		rtt      time.Duration
++		min, max uint32 // the last window announced, inclusive
++	}{
++		{"pace x round trip under the need", 20 * time.Millisecond, 0, 256 << 10},
++		{"in between", 100 * time.Millisecond, 256<<10 + 1, 1<<20 - 1},
++		{"past the ceiling", time.Second, 1 << 20, 1 << 20},
++	} {
++		tc := tc // go 1.13 module: one variable for the whole loop, and the subtests run after it
++		t.Run(tc.name, func(t *testing.T) {
++			t.Parallel()
++			pool := NewWindowPool(4 << 20)
++			var rtt atomic.Int64
++			rtt.Store(int64(tc.rtt))
++			cfg := needConfig(pool, &rtt)
++			session, stream, p := newRawPeer(t, cfg)
++			keepUpAt(t, p, stream, 3<<20, rate)
++			p.sync(stream)
++			w := p.lastWindow()
++			if w < tc.min || w > tc.max {
++				t.Fatalf("window %d at %d B/s on a %v round trip, want %d..%d (updates %v)", w, rate, tc.rtt, tc.min, tc.max, p.updates())
++			}
++			excess := 0
++			if w > uint32(cfg.NeedStreamBuffer) {
++				excess = int(w) - cfg.NeedStreamBuffer
++			}
++			// (a claim outlives a window that came down by claimHold round trips)
++			e, sp := extraOf(session)
++			if c := claimOf(stream); c < excess || int(e) != c+int(sp) || pool.Free()+int(e) != 4<<20 {
++				t.Fatalf("claim %d, buffer grown by %d (spare %d), pool free %d: want at least the window's excess %d, all of it from the pool", c, e, sp, pool.Free(), excess)
++			}
++		})
++	}
++}
++
++// A window grows past NeedStreamBuffer only as far as the pool has left.
++func TestNeedWindowBoundedByPool(t *testing.T) {
++	pool := NewWindowPool(100 << 10)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 6<<20)
++	p.sync(stream)
++	if w := maxWindow(p.updates()); w != uint32(cfg.NeedStreamBuffer+100<<10) {
++		t.Fatalf("max window %d, want NeedStreamBuffer + the pool's 100 KiB = %d (updates %v)", w, cfg.NeedStreamBuffer+100<<10, p.updates())
++	}
++	if e, _ := extraOf(session); e != 100<<10 || pool.Free() != 0 {
++		t.Fatalf("extra %d pool free %d, want the whole pool taken", e, pool.Free())
++	}
++	// a second stream of the session finds the pool empty
++	st2, sid2 := p.open(session)
++	for i := 0; i < 400; i++ {
++		p.sendOn(sid2, 4096, 4096)
++		waitUnread(t, st2, 4096)
++		readN(t, st2, 4096, 4096)
++	}
++	if w := rcvWinOf(st2); w > uint32(cfg.NeedStreamBuffer) {
++		t.Fatalf("second stream window %d past NeedStreamBuffer with the pool empty", w)
++	}
++}
++
++// A reader whose pace falls (its path or its source slowed down) gives its
++// window back, at most half per update, down to NeedStreamBuffer; the claim
++// goes back to the pool once the session's buffer has it free.
++func TestNeedWindowGivesBack(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 8<<20)
++	p.sync(stream)
++	if w := p.lastWindow(); w != uint32(cfg.MaxStreamBuffer) {
++		t.Fatalf("window %d, want %d before the pace falls", w, cfg.MaxStreamBuffer)
++	}
++	n0 := len(p.updates())
++	rtt.Store(int64(time.Microsecond)) // the same pace now needs next to nothing
++	keepUp(t, p, stream, 4<<20)
++	p.sync(stream)
++	upds := p.updates()[n0:]
++	if w := p.lastWindow(); w != uint32(cfg.NeedStreamBuffer) {
++		t.Fatalf("window %d, want NeedStreamBuffer %d once the need is gone (updates %v)", w, cfg.NeedStreamBuffer, upds)
++	}
++	prev := uint32(cfg.MaxStreamBuffer)
++	for _, u := range upds {
++		if u[1] < prev/2 {
++			t.Fatalf("window more than halved in one update: %v", upds)
++		}
++		prev = u[1]
++	}
++	keepUp(t, p, stream, 64<<10) // a read after the claim's hold
++	if e, sp := extraOf(session); e != 0 || sp != 0 || claimOf(stream) != 0 || pool.Free() != 4<<20 {
++		t.Fatalf("extra %d spare %d claim %d pool free %d: the claim did not go back", e, sp, claimOf(stream), pool.Free())
++	}
++}
++
++// What came in under a larger window stays covered until it is read: when a
++// brake brings the window down while that data is unread, the session keeps
++// the buffer it grew by (its spare) as long as giving it back would leave
++// less than a quarter of MaxReceiveBuffer free, and gives it back as it is
++// read.
++func TestNeedSpareHeldWhileBuffered(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 8<<20)
++	p.sync(stream)
++	if claimOf(stream) == 0 {
++		t.Fatal("no claim to begin with")
++	}
++	rtt.Store(int64(time.Microsecond)) // the claim's hold is over at once
++	other, sid := p.open(session)
++	p.sendOn(sid, 200<<10, 4096) // the other stream holds over a third of MaxReceiveBuffer
++	waitUnread(t, other, 200<<10)
++	p.send(100<<10, 4096) // the reader falls behind ...
++	time.Sleep(5 * time.Millisecond)
++	for i := 0; i < 150; i++ { // ... and stays behind: braked
++		p.send(4096, 4096)
++		time.Sleep(100 * time.Microsecond)
++	}
++	p.settle(stream)
++	if session.Brakes() == 0 {
++		t.Fatal("no brake: the test did not test")
++	}
++	room := int32(cfg.MaxReceiveBuffer / spareRoom)
++	var maxSpare int32
++	for u := unreadOf(stream); u > 0; u = unreadOf(stream) {
++		if u > 16<<10 {
++			u = 16 << 10
++		}
++		readN(t, stream, u, u)
++		b := atomic.LoadInt32(&session.bucket)
++		e, sp := extraOf(session)
++		if sp > maxSpare {
++			maxSpare = sp
++		}
++		if b <= 0 {
++			t.Fatalf("bucket %d with %d unread: the buffer shrank under data it took in (extra %d spare %d)", b, unreadOf(stream), e, sp)
++		}
++		if sp > 0 && b > room+16<<10 {
++			t.Fatalf("spare %d kept with %d free (room %d)", sp, b, room)
++		}
++	}
++	if maxSpare == 0 {
++		t.Fatal("no spare kept while the data that came in under the larger window was unread")
++	}
++	readN(t, other, 200<<10, 16<<10)
++	if e, sp := extraOf(session); e != int32(claimOf(stream)) || sp != 0 || pool.Free() != 4<<20-claimOf(stream) {
++		t.Fatalf("after the backlog: extra %d spare %d claim %d pool free %d", e, sp, claimOf(stream), pool.Free())
++	}
++}
++
++// A reader that stops after a fast transfer holds what its larger window let
++// in. That stays its own claim past NeedStreamBuffer, however its window
++// comes down (here: idle, swept), so the other streams of the session keep
++// the room they would have with every window within NeedStreamBuffer; it
++// goes back to the pool as the reader takes it.
++func TestNeedClaimCoversWhatAStoppedReaderHolds(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 8<<20)
++	p.sync(stream)
++	p.fill(cfg.MaxFrameSize) // all its window, then the reader stops
++	p.settle(stream)
++	held := unreadOf(stream)
++	if held <= cfg.NeedStreamBuffer {
++		t.Fatalf("holds %d: no larger window to begin with", held)
++	}
++	stream.bufferLock.Lock()
++	stream.readAt = monoNow() - int64(claimIdle)
++	stream.bufferLock.Unlock()
++	session.sweepClaims() // the window comes down ...
++	stream.bufferLock.Lock()
++	stream.claimDown = monoNow() - 1 // ... and its hold is over
++	stream.bufferLock.Unlock()
++	session.sweepClaims()
++	if c := claimOf(stream); c < held-cfg.NeedStreamBuffer {
++		t.Fatalf("claim %d under the %d it holds past NeedStreamBuffer", c, held-cfg.NeedStreamBuffer)
++	}
++	// the other streams have all of MaxReceiveBuffer but NeedStreamBuffer
++	other, sid := p.open(session)
++	p.sendOn(sid, cfg.MaxReceiveBuffer-cfg.NeedStreamBuffer-cfg.MaxFrameSize, 4096)
++	waitUnread(t, other, cfg.MaxReceiveBuffer-cfg.NeedStreamBuffer-cfg.MaxFrameSize)
++	if b := atomic.LoadInt32(&session.bucket); b <= 0 {
++		t.Fatalf("bucket %d: the stopped reader took the others' room", b)
++	}
++	readN(t, other, cfg.MaxReceiveBuffer-cfg.NeedStreamBuffer-cfg.MaxFrameSize, 16<<10)
++	readN(t, stream, held, 16<<10) // it reads again: the claim keeps only what its window needs
++	stream.bufferLock.Lock()
++	stream.claimDown = monoNow() - 1
++	stream.reclaim(cfg)
++	win := int(stream.rcvWin)
++	stream.bufferLock.Unlock()
++	session.returnSpare()
++	want := win - cfg.NeedStreamBuffer
++	if want < 0 {
++		want = 0
++	}
++	if e, sp := extraOf(session); claimOf(stream) != want || e != int32(want) || sp != 0 || pool.Free() != 4<<20-want {
++		t.Fatalf("after the reads: claim %d (window %d) extra %d spare %d pool free %d", claimOf(stream), win, e, sp, pool.Free())
++	}
++}
++
++// Closing a stream, or its session, gives everything back to the pool.
++func TestNeedPoolBackOnClose(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 8<<20)
++	p.fill(cfg.MaxFrameSize)
++	p.settle(stream)
++	if pool.Free() == 4<<20 {
++		t.Fatal("nothing taken from the pool")
++	}
++	stream.Close()
++	if e, sp := extraOf(session); pool.Free() != 4<<20 || e != 0 || sp != 0 {
++		t.Fatalf("stream closed: pool free %d extra %d spare %d", pool.Free(), e, sp)
++	}
++
++	session2, stream2, p2 := newRawPeer(t, cfg)
++	keepUp(t, p2, stream2, 8<<20)
++	p2.fill(cfg.MaxFrameSize)
++	p2.settle(stream2)
++	if pool.Free() == 4<<20 {
++		t.Fatal("nothing taken from the pool")
++	}
++	session2.Close()
++	if pool.Free() != 4<<20 {
++		t.Fatalf("session closed: pool free %d, want all of it back", pool.Free())
++	}
++	if n, _ := stream2.Read(make([]byte, 4096)); n == 0 { // what it holds is still read after the close
++		t.Fatal("nothing read after the close")
++	}
++	if pool.Free() != 4<<20 {
++		t.Fatalf("a read after the close took %d from the pool", 4<<20-pool.Free())
++	}
++}
++
++// Streams of two sessions sharing one pool move data both ways (each
++// session receives on half of them) with windows growing and shrinking as
++// the round trip swings and readers pause: every byte arrives in order, and
++// once the sessions close the pool is whole.
++func TestNeedSessionsShareOnePool(t *testing.T) {
++	pool := NewWindowPool(1 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(50 * time.Millisecond))
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	stop := make(chan struct{})
++	defer close(stop)
++	go func() {
++		for i := 0; ; i++ {
++			select {
++			case <-stop:
++				return
++			case <-time.After(3 * time.Millisecond):
++			}
++			if i%2 == 0 {
++				rtt.Store(int64(time.Duration(rand.Intn(400)) * time.Millisecond))
++			} else {
++				rtt.Store(0)
++			}
++		}
++	}()
++	const streams, size = 8, 3 << 20
++	data := func(i int) []byte {
++		b := make([]byte, size)
++		rand.New(rand.NewSource(int64(i))).Read(b)
++		return b
++	}
++	// recv reads size bytes, pausing now and then, and checks them
++	recv := func(st *Stream, i int) error {
++		got := make([]byte, 0, size)
++		buf := make([]byte, 1+rand.Intn(64<<10))
++		for len(got) < size {
++			st.SetReadDeadline(time.Now().Add(20 * time.Second))
++			n, err := st.Read(buf)
++			got = append(got, buf[:n]...)
++			if err != nil && len(got) < size {
++				return err
++			}
++			if rand.Intn(50) == 0 {
++				time.Sleep(time.Duration(rand.Intn(20)) * time.Millisecond)
++			}
++		}
++		if !bytes.Equal(got, data(i)) {
++			return io.ErrUnexpectedEOF
++		}
++		return nil
++	}
++	errs := make(chan error, streams)
++	srvDone := make(chan *Session, 1)
++	go func() {
++		c, err := ln.Accept()
++		if err != nil {
++			return
++		}
++		s, _ := Server(c, needConfig(pool, &rtt))
++		srvDone <- s
++		for {
++			st, err := s.AcceptStream()
++			if err != nil {
++				return
++			}
++			go func() {
++				var k [1]byte
++				if _, err := io.ReadFull(st, k[:]); err != nil {
++					errs <- err
++					return
++				}
++				if i := int(k[0]); i%2 == 0 {
++					errs <- recv(st, i) // the client uploads
++				} else {
++					st.Write(data(i)) // the client downloads
++				}
++			}()
++		}
++	}()
++	c, err := net.Dial("tcp", ln.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	cli, err := Client(c, needConfig(pool, &rtt))
++	if err != nil {
++		t.Fatal(err)
++	}
++	srv := <-srvDone
++	for i := 0; i < streams; i++ {
++		st, err := cli.OpenStream()
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer st.Close()
++		st.Write([]byte{byte(i)})
++		if i%2 == 0 {
++			go st.Write(data(i))
++		} else {
++			go func(i int) { errs <- recv(st, i) }(i)
++		}
++	}
++	for i := 0; i < streams; i++ {
++		if err := <-errs; err != nil {
++			t.Fatal(err)
++		}
++	}
++	cli.Close()
++	srv.Close()
++	if pool.Free() != 1<<20 {
++		t.Fatalf("pool free %d after both sessions closed, want all of it", pool.Free())
++	}
++}
++
++// A stream that has read nothing for claimIdle (a connection kept open after
++// a fast transfer) gives its window past NeedStreamBuffer back at the
++// keepalive tick, with an update: the peer may then send it no more than
++// NeedStreamBuffer, whatever its reader does when the next transfer comes.
++// Its claim covers what was on its way for claimHold round trips, then goes
++// back to the pool, and the stream takes from it again what it needs once it
++// reads again.
++func TestNeedIdleClaimSwept(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 8<<20)
++	p.sync(stream)
++	claim := claimOf(stream)
++	if claim == 0 || p.room() <= cfg.NeedStreamBuffer {
++		t.Fatalf("claim %d, room %d: no grown window to begin with", claim, p.room())
++	}
++	session.sweepClaims()
++	if claimOf(stream) != claim {
++		t.Fatalf("a stream that just read lost its claim (%d of %d)", claimOf(stream), claim)
++	}
++	stream.bufferLock.Lock()
++	stream.readAt = monoNow() - int64(claimIdle)
++	stream.bufferLock.Unlock()
++	session.sweepClaims()
++	deadline := time.Now().Add(5 * time.Second)
++	for p.lastWindow() != uint32(cfg.NeedStreamBuffer) {
++		if time.Now().After(deadline) {
++			t.Fatalf("idle: window %d at the peer, want NeedStreamBuffer %d (updates %v)", p.lastWindow(), cfg.NeedStreamBuffer, p.updates())
++		}
++		time.Sleep(time.Millisecond)
++	}
++	if r := p.room(); r > cfg.NeedStreamBuffer {
++		t.Fatalf("idle: the peer may still send %d, more than NeedStreamBuffer %d", r, cfg.NeedStreamBuffer)
++	}
++	if claimOf(stream) != claim {
++		t.Fatalf("idle: claim %d of %d gone before its hold: what is on its way would land uncovered", claimOf(stream), claim)
++	}
++	session.sweepClaims() // within the hold: nothing
++	if claimOf(stream) != claim {
++		t.Fatalf("claim %d of %d gone within its hold", claimOf(stream), claim)
++	}
++	stream.bufferLock.Lock()
++	stream.claimDown = monoNow() - 1 // the hold is over
++	stream.bufferLock.Unlock()
++	session.sweepClaims()
++	if e, sp := extraOf(session); claimOf(stream) != 0 || e != 0 || sp != 0 || pool.Free() != 4<<20 {
++		t.Fatalf("idle: claim %d extra %d spare %d pool free %d, want all back in the pool", claimOf(stream), e, sp, pool.Free())
++	}
++	keepUp(t, p, stream, 4<<20) // reads again at the same pace
++	p.sync(stream)
++	if claimOf(stream) == 0 || p.lastWindow() <= uint32(cfg.NeedStreamBuffer) {
++		t.Fatalf("reading again: claim %d window %d, want the need back", claimOf(stream), p.lastWindow())
++	}
++}
++
++// A session whose buffer runs full (what was in flight when its readers
++// slowed down) borrows from the pool, up to borrowMax times MaxReceiveBuffer
++// more, so its other streams keep moving; past that it waits as before; what
++// it borrowed goes back once it is free again.
++func TestNeedBorrowWhenFull(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	cfg := needConfig(pool, nil)
++	session, stream, p := newRawPeer(t, cfg)
++	p.send(cfg.MaxReceiveBuffer+200<<10, cfg.MaxFrameSize) // more than the buffer, not read
++	p.settle(stream)
++	e, sp := extraOf(session)
++	if e < 200<<10 || e > int32(borrowMax*cfg.MaxReceiveBuffer) || sp != e {
++		t.Fatalf("buffer past MaxReceiveBuffer %d (spare %d), want what it took in past it, as spare", e, sp)
++	}
++	if b, n := session.Borrows(), session.Parks(); b == 0 || b > n {
++		t.Fatalf("borrows %d of %d parks, want some, at most all", b, n)
++	}
++	other, sid := p.open(session)
++	p.sendOn(sid, 64<<10, cfg.MaxFrameSize)
++	waitUnread(t, other, 64<<10)
++	readN(t, other, 64<<10, 16<<10)
++
++	// past borrowMax+1 times MaxReceiveBuffer it waits: nothing more is taken in
++	sent := make(chan struct{})
++	go func() { p.send(borrowMax*cfg.MaxReceiveBuffer, cfg.MaxFrameSize); close(sent) }()
++	time.Sleep(50 * time.Millisecond)
++	if e, _ := extraOf(session); e > int32(borrowMax*cfg.MaxReceiveBuffer) {
++		t.Fatalf("borrowed %d, more than %d times MaxReceiveBuffer %d", e, borrowMax, cfg.MaxReceiveBuffer)
++	}
++	if u := unreadOf(stream); u > (borrowMax+1)*cfg.MaxReceiveBuffer+cfg.MaxFrameSize {
++		t.Fatalf("took in %d, past %d times MaxReceiveBuffer and a frame", u, borrowMax+1)
++	}
++	go func() { // read it all: the rest comes in, and the buffer goes back
++		buf := make([]byte, 64<<10)
++		for {
++			if _, err := stream.Read(buf); err != nil {
++				return
++			}
++		}
++	}()
++	select {
++	case <-sent:
++	case <-time.After(5 * time.Second):
++		t.Fatal("the rest never came in once read")
++	}
++	deadline := time.Now().Add(5 * time.Second)
++	for {
++		e, sp := extraOf(session)
++		if e == 0 && sp == 0 && pool.Free() == 4<<20 {
++			break
++		}
++		if time.Now().After(deadline) {
++			t.Fatalf("after the reads: extra %d spare %d pool free %d", e, sp, pool.Free())
++		}
++		time.Sleep(time.Millisecond)
++	}
++}
++
++// A stream holding a grown window does not keep its session from borrowing:
++// its claim covers what that window lets in, not what was in flight for the
++// other streams when their readers slowed down. (Counted against the limit,
++// a fast user's claim on a real link -- 1 Gbit/s, 100 ms -- left its
++// session one borrow in 247 times out of buffer, next to a dozen readers
++// that slowed down at once, and every stream stalled 10 s.)
++func TestNeedBorrowNextToAGrownWindow(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 8<<20)
++	p.sync(stream)
++	claim := claimOf(stream)
++	if claim < cfg.MaxReceiveBuffer {
++		t.Fatalf("claim %d: the grown window holds less than MaxReceiveBuffer from the pool", claim)
++	}
++	// another stream whose reader stopped gets the session's whole buffer,
++	// the room the claim adds to it, and more
++	other, sid := p.open(session)
++	n := cfg.MaxReceiveBuffer + claim + 200<<10
++	sent := make(chan struct{})
++	go func() { p.sendOn(sid, n, cfg.MaxFrameSize); close(sent) }()
++	select {
++	case <-sent:
++	case <-time.After(5 * time.Second):
++		t.Fatalf("took in %d of %d next to a grown window: no borrow (%d of %d parks)", unreadOf(other), n, session.Borrows(), session.Parks())
++	}
++	waitUnread(t, other, n)
++	if session.Borrows() == 0 {
++		t.Fatal("no borrow")
++	}
++	if c := claimOf(stream); c != claim {
++		t.Fatalf("claim %d, was %d", c, claim)
++	}
++	if _, sp := extraOf(session); sp > int32(borrowMax*cfg.MaxReceiveBuffer) {
++		t.Fatalf("spare %d past %d times MaxReceiveBuffer %d", sp, borrowMax, cfg.MaxReceiveBuffer)
++	}
++}
++
++// A session that closes while its reader is out of buffer borrows nothing
++// after it has given the pool back: what it took then would never return.
++func TestNeedNoBorrowOnceClosed(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	cfg := needConfig(pool, nil)
++	session, _, _ := newRawPeer(t, cfg)
++	session.Close()
++	if session.borrow() {
++		t.Fatal("a closed session borrowed")
++	}
++	if e, sp := extraOf(session); e != 0 || sp != 0 || pool.Free() != 4<<20 {
++		t.Fatalf("after close: extra %d spare %d pool free %d", e, sp, pool.Free())
++	}
++}
++
++// GrownWindows says whether a window past NeedStreamBuffer was announced
++// lately: recv, by this session (its reader's pace grew it); send, by the
++// peer for what this session sends.
++func TestNeedGrownWindows(t *testing.T) {
++	pool := NewWindowPool(4 << 20)
++	var rtt atomic.Int64
++	rtt.Store(int64(10 * time.Second))
++	cfg := needConfig(pool, &rtt)
++	session, stream, p := newRawPeer(t, cfg)
++	if recv, send := session.GrownWindows(time.Minute); recv || send {
++		t.Fatalf("GrownWindows %v %v before any transfer", recv, send)
++	}
++	keepUp(t, p, stream, 8<<20)
++	p.sync(stream)
++	if recv, send := session.GrownWindows(time.Minute); !recv || send {
++		t.Fatalf("GrownWindows %v %v after a transfer that grew the window (last %d)", recv, send, p.lastWindow())
++	}
++	time.Sleep(20 * time.Millisecond)
++	if recv, _ := session.GrownWindows(10 * time.Millisecond); recv {
++		t.Fatal("GrownWindows: a window grown longer ago than asked still seen")
++	}
++	stream.update(0, uint32(cfg.NeedStreamBuffer)) // the peer's window for what we send
++	if _, send := session.GrownWindows(time.Minute); send {
++		t.Fatal("GrownWindows: a peer window of NeedStreamBuffer seen as grown")
++	}
++	stream.update(0, uint32(cfg.NeedStreamBuffer)+1)
++	if _, send := session.GrownWindows(time.Minute); !send {
++		t.Fatal("GrownWindows: a peer window past NeedStreamBuffer not seen")
++	}
++}
+diff --git a/hs2-src/third_party/smux/session.go b/hs2-src/third_party/smux/session.go
+index c7a08dc..5d6a14a 100644
+--- a/hs2-src/third_party/smux/session.go
++++ b/hs2-src/third_party/smux/session.go
+@@ -57,8 +57,14 @@ type Session struct {
+ 
+ 	bucket       int32         // token bucket
+ 	bucketNotify chan struct{} // used for waiting for tokens
+-	parks        uint32        // times recvLoop waited for tokens
++	parks        uint32        // times recvLoop ran out of tokens (and waited, unless it borrowed)
++	borrows      uint32        // need: of those, times the bucket grew from the WindowPool instead (borrow)
+ 	brakes       uint32        // adaptive: braking window updates sent (Stream.checkLag)
++	extra        int32         // need: the bucket's size past MaxReceiveBuffer: the streams' claims on the WindowPool and spare
++	spare        int32         // need: of extra, what no window covers any more (returnSpare)
++	spareLock    sync.Mutex    // need: one returnSpare at a time
++	grownAt      atomic.Int64  // need: monoNow when a window update last set a window past NeedStreamBuffer (fitNeed)
++	peerGrownAt  atomic.Int64  // need: monoNow when the peer last announced a window past it (Stream.update)
+ 
+ 	streams    map[uint32]*Stream // all streams in this session
+ 	streamLock sync.Mutex         // locks streams
+@@ -213,17 +219,25 @@ func (s *Session) Close() error {
+ 			s.streams[k].sessionClose()
+ 		}
+ 		s.streamLock.Unlock()
++		if s.config.WindowPool != nil {
++			s.dropSpare()
++		}
+ 		return s.conn.Close()
+ 	} else {
+ 		return io.ErrClosedPipe
+ 	}
+ }
+ 
+-// Parks returns how many times the session's reader has waited for
++// Parks returns how many times the session's reader has run out of
+ // MaxReceiveBuffer space: each time, every stream of the session stalled
+-// until a reader made room.
++// until a reader made room, unless the buffer grew from the WindowPool
++// instead (Borrows).
+ func (s *Session) Parks() uint32 { return atomic.LoadUint32(&s.parks) }
+ 
++// Borrows returns how many of Parks the session's buffer grew from the
++// WindowPool instead of waiting (Config.WindowPool).
++func (s *Session) Borrows() uint32 { return atomic.LoadUint32(&s.borrows) }
++
+ // Brakes returns how many braking window updates the session's adaptive
+ // streams have sent (Config.MinStreamBuffer).
+ func (s *Session) Brakes() uint32 { return atomic.LoadUint32(&s.brakes) }
+@@ -318,6 +332,7 @@ func (s *Session) streamClosed(sid uint32) {
+ 			s.notifyBucket()
+ 		}
+ 	}
++	s.returnSpare()
+ 	delete(s.streams, sid)
+ 	s.streamLock.Unlock()
+ }
+@@ -337,6 +352,9 @@ func (s *Session) recvLoop() {
+ 	for {
+ 		for atomic.LoadInt32(&s.bucket) <= 0 && !s.IsClosed() {
+ 			atomic.AddUint32(&s.parks, 1)
++			if s.config.WindowPool != nil && s.borrow() {
++				continue // the buffer grew instead (WindowPool)
++			}
+ 			select {
+ 			case <-s.bucketNotify:
+ 			case <-s.die:
+@@ -423,6 +441,9 @@ func (s *Session) keepalive() {
+ 		case <-tickerPing.C:
+ 			s.writeFrameInternal(newFrame(byte(s.config.Version), cmdNOP, 0), tickerPing.C, CLSCTRL)
+ 			s.notifyBucket() // force a signal to the recvLoop
++			if s.config.WindowPool != nil {
++				s.sweepClaims()
++			}
+ 		case <-tickerTimeout.C:
+ 			if !atomic.CompareAndSwapInt32(&s.dataReady, 1, 0) {
+ 				// recvLoop may block while bucket is 0, in this case,
+diff --git a/hs2-src/third_party/smux/stream.go b/hs2-src/third_party/smux/stream.go
+index ffc5e0f..22c58c2 100644
+--- a/hs2-src/third_party/smux/stream.go
++++ b/hs2-src/third_party/smux/stream.go
+@@ -55,6 +55,11 @@ type Stream struct {
+ 	settling   bool       // adaptive: after a brake, the backlog in flight before it is not yet down (under bufferLock)
+ 	preBrake   uint32     // adaptive: rcvWin before the first brake of the latest run (0: none; under bufferLock)
+ 	brakeAt    int64      // adaptive: monoNow of that first brake (under bufferLock)
++	updAt      int64      // adaptive: monoNow of our last UPD from a read (under bufferLock)
++	updRead    uint32     // adaptive: numRead then (under bufferLock)
++	claim      int        // need: what the window holds from the WindowPool (under bufferLock)
++	claimDown  int64      // need: monoNow from which the claim may come down to the window (0: not due; under bufferLock)
++	readAt     int64      // need: monoNow of the last read (under bufferLock)
+ 	updLock    sync.Mutex // one UPD at a time, so a later one never carries older values
+ 
+ 	// answered is set (atomic) once the peer has sent anything for this
+@@ -192,6 +197,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
+ 
+ 	if n > 0 {
+ 		s.sess.returnTokens(n)
++		s.sess.returnSpare()
+ 		if notify {
+ 			err := s.sendWindowUpdate()
+ 			return n, err
+@@ -261,6 +267,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
+ 		if buf != nil {
+ 			nw, ew := w.Write(buf)
+ 			s.sess.returnTokens(len(buf))
++			s.sess.returnSpare()
+ 			defaultAllocator.Put(buf)
+ 			if nw > 0 {
+ 				n += int64(nw)
+@@ -314,6 +321,7 @@ func (s *Stream) consumed(n uint32) (notify bool) {
+ 		if !first && !s.restarted && s.idleAt != 0 && now-s.idleAt >= int64(jumpFloor) &&
+ 			s.numRead-n-s.firstRead < jumpRestartMax {
+ 			s.firstAt, s.firstRead, s.restarted = now, s.numRead-n, true
++			s.updAt, s.updRead = now, s.numRead-n // and so is its need
+ 		}
+ 		s.idleAt = 0
+ 		if s.unread == 0 {
+@@ -325,7 +333,12 @@ func (s *Stream) consumed(n uint32) (notify bool) {
+ 	restore := s.preBrake > s.rcvWin && s.unread == 0 &&
+ 		monoNow()-s.brakeAt < int64(brakeDrain)
+ 	if restore {
+-		s.rcvWin, s.settling, s.preBrake = s.preBrake, false, 0
++		s.setWindow(cfg, s.preBrake)
++		s.settling, s.preBrake = false, 0
++	}
++	if s.claim > 0 {
++		s.readAt = monoNow()
++		s.reclaim(cfg) // the claim of a window that came down, once its hold is over
+ 	}
+ 	if s.incr < s.rcvWin/2 && !first && !s.updLost && !restore {
+ 		return false
+@@ -340,11 +353,12 @@ func (s *Stream) consumed(n uint32) (notify bool) {
+ 		}
+ 		s.lastParks = parks
+ 		s.minUnread = s.unread
++		s.updAt, s.updRead = monoNow(), s.numRead // the pace of the next one (needWindow)
+ 		if first {
+ 			// judge the first resize on the reads after this one: the
+ 			// first read takes what came before the peer's first burst
+ 			s.minUnread = int(^uint(0) >> 1)
+-			s.firstAt, s.firstRead = monoNow(), s.numRead
++			s.firstAt, s.firstRead = s.updAt, s.numRead
+ 		}
+ 	}
+ 	return true
+@@ -370,10 +384,16 @@ func (s *Stream) consumed(n uint32) (notify bool) {
+ // window a round trip or two earlier than by doubling, while a reader that
+ // only kept up with a trickle (a slow link, or a connection still opening its
+ // congestion window) gets no more than its pace calls for.
++//
++// Past NeedStreamBuffer, whatever the above decided is held to what the
++// stream needs and the pool has (fitNeed).
+ func (s *Stream) adaptWindow(cfg *Config, parked bool) {
+ 	standing := s.minUnread
+ 	firstResize := !s.adapted
+ 	s.adapted = true
++	if cfg.NeedStreamBuffer > 0 {
++		defer s.fitNeed(cfg, s.rcvWin)
++	}
+ 	if s.settling {
+ 		// judged only on backlogs of its own window: wait until what
+ 		// was in flight before a brake has come down to it, then one
+@@ -538,7 +558,7 @@ func (s *Stream) checkLag(free int) {
+ 		s.lagSince, s.lagRead = now, s.numRead
+ 		return
+ 	}
+-	others := cfg.MaxReceiveBuffer - free - s.unread
++	others := cfg.MaxReceiveBuffer + int(atomic.LoadInt32(&s.sess.extra)) - free - s.unread
+ 	lag := now.Sub(s.lagSince)
+ 	if s.braking || int64(others)*brakeShare < int64(cfg.MaxReceiveBuffer) || lag < brakeLag {
+ 		return
+@@ -568,7 +588,7 @@ func (s *Stream) checkLag(free int) {
+ 	if s.preBrake == 0 || monoNow()-s.brakeAt >= int64(brakeDrain) {
+ 		s.preBrake, s.brakeAt = s.rcvWin, monoNow() // the first brake of a run
+ 	}
+-	s.rcvWin = win
++	s.setWindow(cfg, win)
+ 	s.incr = 0
+ 	s.minUnread = s.unread
+ 	s.lastParks = atomic.LoadUint32(&s.sess.parks)
+@@ -830,7 +850,12 @@ func (s *Stream) SetDeadline(t time.Time) error {
+ }
+ 
+ // session closes
+-func (s *Stream) sessionClose() { s.dieOnce.Do(func() { close(s.die) }) }
++func (s *Stream) sessionClose() {
++	s.dieOnce.Do(func() { close(s.die) })
++	s.bufferLock.Lock()
++	s.dropClaim() // the session gives it back to the pool as it closes
++	s.bufferLock.Unlock()
++}
+ 
+ // LocalAddr satisfies net.Conn interface
+ func (s *Stream) LocalAddr() net.Addr {
+@@ -863,7 +888,8 @@ func (s *Stream) pushBytes(buf []byte) (written int, err error) {
+ 	return
+ }
+ 
+-// recycleTokens transform remaining bytes to tokens(will truncate buffer)
++// recycleTokens transform remaining bytes to tokens(will truncate buffer),
++// and lets go of the stream's claim on the WindowPool
+ func (s *Stream) recycleTokens() (n int) {
+ 	s.bufferLock.Lock()
+ 	for k := range s.buffers {
+@@ -873,6 +899,7 @@ func (s *Stream) recycleTokens() (n int) {
+ 	s.buffers = nil
+ 	s.heads = nil
+ 	s.unread = 0
++	s.dropClaim()
+ 	s.bufferLock.Unlock()
+ 	return
+ }
+@@ -890,6 +917,9 @@ func (s *Stream) update(consumed uint32, window uint32) {
+ 	s.markAnswered()
+ 	atomic.StoreUint32(&s.peerConsumed, consumed)
+ 	atomic.StoreUint32(&s.peerWindow, window)
++	if need := s.sess.config.NeedStreamBuffer; need > 0 && window > uint32(need) {
++		s.sess.peerGrownAt.Store(monoNow()) // the peer's window sized to need (Session.GrownWindows)
++	}
+ 	select {
+ 	case s.chUpdate <- struct{}{}:
+ 	default:
+diff --git a/hs2-src/tune/tune.go b/hs2-src/tune/tune.go
+index 70962b7..5e974e8 100644
+--- a/hs2-src/tune/tune.go
++++ b/hs2-src/tune/tune.go
+@@ -27,6 +27,8 @@ import (
+ 	"sort"
+ 	"strconv"
+ 	"strings"
++
++	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+ )
+ 
+ // Mode is how tuning behaves.
+@@ -183,10 +185,15 @@ func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
+ // to engine.SmuxSessionBuffer (8 MiB) of data its readers have not taken yet,
+ // and smux keeps each buffered frame in a power-of-two block, so MSS-sized
+ // frames take ~1.5x that: LinkWorstCaseMiB = 12 MiB per link, reached only
+-// when readers stall (never pre-allocated). The rule keeps that worst case at
+-// or below a quarter of RAM:
++// when readers stall (never pre-allocated). A stream's window past
++// engine.SmuxNeedStreamBuffer brings its own buffer from the process's window
++// pool (engine.SmuxWindowPool, WindowPoolMiB of RAM), and a link whose buffer
++// runs full borrows from it too: the links of one process share it, so it
++// counts once per process, not per link (PoolWorstCaseMiB). The rule keeps
++// the links' worst case and the pool's together at or below a quarter of RAM:
+ //
+-//   - one link per LinkRAMPerLinkMB (48 MB) of RAM, at most MaxLinksCap (300);
++//   - one link per LinkRAMPerLinkMB (48 MB) of the RAM left past four times
++//     the pool's worst case, at most MaxLinksCap (300);
+ //   - fewer than 4 cores: at most 128 (handshakes and per-link upkeep are CPU);
+ //   - a single core: no more than its profile value (below);
+ //   - never below the profile value a server got before (32 / 48 / 64), so no
+@@ -194,24 +201,41 @@ func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
+ //
+ // The profile values are keyed to the SAME profile that sizes the kernel
+ // socket buffers (profileFor). Examples: 1 GB/1 core 32, 2 GB/4 cores 64,
+-// 4 GB/2 cores 85, 8 GB/4 cores 170, 16 GB/4+ cores 300.
++// 4 GB/2 cores 81, 8 GB/4 cores 162, 16 GB/4+ cores 300.
+ const (
+ 	maxLinksLow    = 32
+ 	maxLinksMedium = 48
+ 	maxLinksHigh   = 64
+ 
+-	// LinkWorstCaseMiB is one link's worst-case receive backlog (8 MiB smux
+-	// session buffer x 1.5 allocator rounding); cmd/hs2 tests keep it in step
+-	// with engine.SmuxSessionBuffer.
+-	LinkWorstCaseMiB = 12
+-	// LinkRAMPerLinkMB: RAM per link so the worst case stays <= 25% of RAM.
+-	LinkRAMPerLinkMB = 4 * LinkWorstCaseMiB
+ 	// MaxLinksCap is the largest auto ceiling.
+ 	MaxLinksCap = 300
+ 	// maxLinksFewCores caps a server with 2-3 cores.
+ 	maxLinksFewCores = 128
+ )
+ 
++var (
++	// LinkWorstCaseMiB is one link's worst-case receive backlog: the
++	// engine's smux session buffer x1.5 allocator rounding.
++	LinkWorstCaseMiB = (engine.SmuxSessionBuffer*3/2 + 1<<20 - 1) >> 20
++	// LinkRAMPerLinkMB: RAM per link so the links' worst case stays <= 25% of
++	// the RAM left past the window pool's.
++	LinkRAMPerLinkMB = 4 * LinkWorstCaseMiB
++)
++
++// WindowPoolMiB is the window pool a process gets on a server with this much
++// RAM (engine.SmuxWindowPool, set at start): 1/128 of RAM, 16 to 128 MiB.
++// A window past engine.SmuxNeedStreamBuffer takes from it what it needs (16
++// MiB at most: one connection at ~670 Mbit/s at 100 ms, 220 at 300 ms takes
++// 14), so a server carries several such connections at once each way, and
++// the others get the window they would have got without it.
++func WindowPoolMiB(ramMB int) int {
++	return min(max(ramMB/128, 16), 128)
++}
++
++// PoolWorstCaseMiB is the window pool's part of the worst case, once per
++// process: x1.5 allocator rounding, as for a link.
++func PoolWorstCaseMiB(ramMB int) int { return (3*WindowPoolMiB(ramMB) + 1) / 2 }
++
+ // profileMaxLinks is the ceiling a server's profile gave before the RAM rule.
+ func profileMaxLinks(ramMB, cpus int) int {
+ 	switch profileFor(ramMB, cpus) {
+@@ -237,7 +261,7 @@ func maxLinksRule(ramMB, cpus int) (int, string) {
+ 	if cpus < 2 {
+ 		return base, "single core"
+ 	}
+-	byRAM, why := ramMB/LinkRAMPerLinkMB, "ram"
++	byRAM, why := (ramMB-4*PoolWorstCaseMiB(ramMB))/LinkRAMPerLinkMB, "ram"
+ 	if byRAM > MaxLinksCap {
+ 		byRAM, why = MaxLinksCap, "cap"
+ 	}
+@@ -251,22 +275,24 @@ func maxLinksRule(ramMB, cpus int) (int, string) {
+ }
+ 
+ // MaxLinksReason says in words why RecommendedMaxLinks picked its number for
+-// this hardware, e.g. "17.0 GB RAM, 20 cores: one link per 48 MB of RAM, at
+-// most 300" — for the startup log, status, doctor and the installer.
++// this hardware, e.g. "17.0 GB RAM, 20 cores: one link per 48 MB of RAM
++// after 768 MB for the window pool, at most 300" — for the startup log,
++// status, doctor and the installer.
+ func MaxLinksReason(ramMB, cpus int) string {
+ 	n, why := maxLinksRule(ramMB, cpus)
+ 	hw := fmt.Sprintf("%.1f GB RAM, %d core%s", float64(ramMB)/1024, cpus, plural(cpus))
++	per := fmt.Sprintf("one link per %d MB of RAM after %d MB for the window pool", LinkRAMPerLinkMB, 4*PoolWorstCaseMiB(ramMB))
+ 	switch why {
+ 	case "single core":
+ 		return fmt.Sprintf("%s: a single core keeps its %s-profile %d", hw, profileFor(ramMB, cpus), n)
+ 	case "profile":
+ 		return fmt.Sprintf("%s: the %s-profile %d (RAM allows no more)", hw, profileFor(ramMB, cpus), n)
+ 	case "few cores":
+-		return fmt.Sprintf("%s: one link per %d MB of RAM, at most %d below 4 cores", hw, LinkRAMPerLinkMB, maxLinksFewCores)
++		return fmt.Sprintf("%s: %s, at most %d below 4 cores", hw, per, maxLinksFewCores)
+ 	case "cap":
+-		return fmt.Sprintf("%s: one link per %d MB of RAM, at most %d", hw, LinkRAMPerLinkMB, MaxLinksCap)
++		return fmt.Sprintf("%s: %s, at most %d", hw, per, MaxLinksCap)
+ 	}
+-	return fmt.Sprintf("%s: one link per %d MB of RAM, worst-case link buffers <= 25%% of RAM", hw, LinkRAMPerLinkMB)
++	return fmt.Sprintf("%s: %s, worst-case link buffers <= 25%% of RAM", hw, per)
+ }
+ 
+ func plural(n int) string {
+diff --git a/hs2-src/tune/tune_test.go b/hs2-src/tune/tune_test.go
+index ca29f0b..3ef70fb 100644
+--- a/hs2-src/tune/tune_test.go
++++ b/hs2-src/tune/tune_test.go
+@@ -5,6 +5,8 @@ import (
+ 	"path/filepath"
+ 	"strings"
+ 	"testing"
++
++	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+ )
+ 
+ // allAvail treats every congestion control / qdisc as present.
+@@ -50,8 +52,9 @@ func TestProfilesScaleWithHardware(t *testing.T) {
+ 	}
+ }
+ 
+-// The link-pool ceiling: one link per 48 MB of RAM (worst-case link buffers
+-// <= 25% of RAM), at most 300, at most 128 below 4 cores, a single core keeps
++// The link-pool ceiling: one link per 48 MB of RAM after the window pool's
++// share (worst-case link buffers <= 25% of RAM), at most 300, at most 128
++// below 4 cores, a single core keeps
+ // its profile value, and never below the profile value a server had before.
+ // This is the single source of truth the engine, installer and doctor use.
+ func TestRecommendedMaxLinks(t *testing.T) {
+@@ -66,10 +69,10 @@ func TestRecommendedMaxLinks(t *testing.T) {
+ 		{2048, 2, "medium", 48},
+ 		{2048, 4, "high", 64}, // cores lift a borderline box; RAM allows 42
+ 		{4096, 1, "high", 64}, // single core keeps its profile value
+-		{4096, 2, "high", 85}, // 4096/48
+-		{8192, 8, "high", 170},
++		{4096, 2, "high", 81}, // (4096-4*48)/48
++		{8192, 8, "high", 162},
+ 		{8192, 2, "high", 128}, // below 4 cores
+-		{14400, 4, "high", 300},
++		{14400, 4, "high", 286},
+ 		{16384, 4, "high", 300},
+ 		{17408, 20, "high", 300}, // the Iran production server
+ 		{22528, 12, "high", 300}, // the Kharej production server
+@@ -104,8 +107,8 @@ func TestRecommendedMaxLinks(t *testing.T) {
+ 				t.Fatalf("single core RecommendedMaxLinks(%d,1)=%d above 64", ram, m)
+ 			case cpu < 4 && m > 128:
+ 				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d above 128 below 4 cores", ram, cpu, m)
+-			case m > old(ram, cpu) && m*LinkWorstCaseMiB > ram/4+LinkWorstCaseMiB:
+-				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d: worst case %d MiB above a quarter of RAM", ram, cpu, m, m*LinkWorstCaseMiB)
++			case m > old(ram, cpu) && m*LinkWorstCaseMiB+PoolWorstCaseMiB(ram) > ram/4+LinkWorstCaseMiB:
++				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d: worst case %d MiB above a quarter of RAM", ram, cpu, m, m*LinkWorstCaseMiB+PoolWorstCaseMiB(ram))
+ 			}
+ 		}
+ 	}
+@@ -116,11 +119,11 @@ func TestMaxLinksReason(t *testing.T) {
+ 		ram, cpu int
+ 		want     string
+ 	}{
+-		{17408, 20, "17.0 GB RAM, 20 cores: one link per 48 MB of RAM, at most 300"},
++		{17408, 20, "17.0 GB RAM, 20 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300"},
+ 		{1024, 1, "1.0 GB RAM, 1 core: a single core keeps its low-profile 32"},
+ 		{2048, 4, "2.0 GB RAM, 4 cores: the high-profile 64 (RAM allows no more)"},
+-		{8192, 2, "8.0 GB RAM, 2 cores: one link per 48 MB of RAM, at most 128 below 4 cores"},
+-		{8192, 8, "8.0 GB RAM, 8 cores: one link per 48 MB of RAM, worst-case link buffers <= 25% of RAM"},
++		{8192, 2, "8.0 GB RAM, 2 cores: one link per 48 MB of RAM after 384 MB for the window pool, at most 128 below 4 cores"},
++		{8192, 8, "8.0 GB RAM, 8 cores: one link per 48 MB of RAM after 384 MB for the window pool, worst-case link buffers <= 25% of RAM"},
+ 	} {
+ 		if got := MaxLinksReason(c.ram, c.cpu); got != c.want {
+ 			t.Errorf("MaxLinksReason(%d,%d)=%q, want %q", c.ram, c.cpu, got, c.want)
+@@ -278,3 +281,23 @@ func TestCgroupMemLimit(t *testing.T) {
+ 		t.Fatalf("unreadable: %d", got)
+ 	}
+ }
++
++// The worst case of a link and of the window pool follow the engine's own
++// buffer sizes, so a change there moves the auto ceiling with it.
++func TestWorstCaseFollowsEngine(t *testing.T) {
++	if want := (engine.SmuxSessionBuffer*3/2 + 1<<20 - 1) >> 20; LinkWorstCaseMiB != want || want < 12 {
++		t.Fatalf("LinkWorstCaseMiB = %d, want %d from the engine's session buffer", LinkWorstCaseMiB, want)
++	}
++	if LinkRAMPerLinkMB < 4*LinkWorstCaseMiB {
++		t.Fatalf("LinkRAMPerLinkMB = %d: under four times a link's worst case (%d MiB)", LinkRAMPerLinkMB, LinkWorstCaseMiB)
++	}
++	for _, ram := range []int{512, 2048, 8192, 16384, 65536} {
++		pool := WindowPoolMiB(ram)
++		if pool < engine.SmuxStreamBuffer>>20-engine.SmuxNeedStreamBuffer>>20 {
++			t.Errorf("WindowPoolMiB(%d) = %d: not even one full window past SmuxNeedStreamBuffer", ram, pool)
++		}
++		if PoolWorstCaseMiB(ram) < pool*3/2 {
++			t.Errorf("PoolWorstCaseMiB(%d) = %d under 1.5x the pool's %d", ram, PoolWorstCaseMiB(ram), pool)
++		}
++	}
++}
