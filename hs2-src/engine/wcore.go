@@ -52,10 +52,20 @@ type wcore struct {
 	rnd func() float64
 
 	state    wcState
-	B        uint64    // budget in force (0 in OFF)
-	settling bool      // the interval that ends at the next step lets a change of B reach the sender
-	lastAt   time.Time // the previous step
-	nextAt   time.Time
+	B        uint64    // budget decided (0 in OFF)
+	bPub     uint64    // budget published: up to B by the ramp, down to it at once
+	settling bool      // the interval that ends at the next evaluation lets a change of B reach the sender
+	lastAt   time.Time // the previous evaluation
+	evalAt   time.Time // the next one
+	acc      wcIn      // what came since the previous evaluation
+	accOK    bool
+	bHist    []wcRate // B over the last wcSndSpan (a sender record covers it)
+	bCap     uint64   // a budget past which losses of our own came (0: none known)
+	bCapAt   time.Time
+	bGood    uint64   // the largest budget shown to pay: a STARTUP step the rate grew with, a probe that paid
+	stopQ    bool     // a ramp stopped for the queue since the previous evaluation
+	offN     int      // OFF: intervals in a row with steady fast streams
+	sndSeen  bool     // the exit sends its record (an edge with a new exit)
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -88,25 +98,32 @@ type wcore struct {
 	qSnd       time.Duration
 	qSndAt     time.Time
 
-	// loss
-	sndBase, oooBase     float64
-	sndBaseOK, oooBaseOK bool
-	riseAt               time.Time // B last went up
-	lossyN               int
-	lossy                bool
-	qcap                 time.Duration
-	qcapAt               time.Time
-	qcapOK               bool
-	parkHold             int
-	pathFull             bool
-	capped               bool
+	// loss: each level with the budget it was measured at
+	sndRef, oooRef wcLossRef
+	lossTest       wcLossSrc // a drain is testing whether a jump of loss was ours (0: none)
+	lossTestAt     time.Time
+	lossTestB      uint64
+	lossyN         int
+	lossy          bool
+	qcap           time.Duration
+	qcapAt         time.Time
+	qcapOK         bool
+	parkHold       int
+	pathFull       bool
+	capped         bool
 
 	// STARTUP
 	fullR, prevR float64
 	prevB        uint64
 	flat         int
+	gear         int // index into wcGears: the next step's growth
 	kPrev        uint64
 	kPrevAt      time.Time
+
+	// a refresh: B a queue target under HOLD for an interval, so the queue
+	// empties and the sender's BBR sees its round trip without it
+	refreshAt  time.Time
+	refreshing bool
 
 	// PROBE
 	probeAt   time.Time
@@ -117,6 +134,46 @@ type wcore struct {
 	ceils map[uint32]uint32
 	cnt   wcCounters
 	last  wcMeas // the latest interval's measurements (lab trace)
+}
+
+// wcLossRef is a loss level and the budget it was measured at: loss past
+// it at a larger budget came with B (congestive); at the same budget it is
+// either the path turning lossy or losses that keep themselves going (a
+// burst overflows the queue, the data held behind the hole is released at
+// once, its window updates leave together and the sender sends their credit
+// as one more burst), and a drain tells which.
+type wcLossRef struct {
+	v  float64
+	b  uint64
+	ok bool
+}
+
+type wcLossSrc uint8
+
+const (
+	wcSrcNone wcLossSrc = iota
+	wcSrcSnd            // the exit's resend share (edge, a record each ~2 s)
+	wcSrcOoo            // Rcv_ooopack of the link's own socket
+)
+
+// note keeps the level of an interval that was not judged congestive.
+func (r *wcLossRef) note(v float64, b uint64, alpha float64) {
+	switch {
+	case !r.ok:
+		r.v, r.b, r.ok = v, b, true
+	case float64(b) <= 1.05*float64(r.b):
+		r.v += alpha * (v - r.v)
+		r.b = b
+	default:
+		// as clean at a larger budget: the level holds there too
+		r.v += alpha / 3 * (v - r.v)
+		r.b = b
+	}
+}
+
+// past says whether v is past the level by max(+abs, ×rel).
+func (r *wcLossRef) past(v, abs float64) bool {
+	return r.ok && v >= math.Max(r.v+abs, wcLossCongRel*r.v)
 }
 
 type wcState uint8
@@ -216,7 +273,32 @@ var (
 	wcPeerShare      = 0.25 // a stream joins F on use alone only at this share of the fastest
 	wcDemandGain     = 1.25
 	wcResettle       = 0.05 // a change of B by more than this share settles first
+	// wcRampQ, wcRampShare: a ceiling rises by at most the larger of this
+	// much queue at R̂ and this share of the budget per runner wake
+	// (wcRampTick). A window-limited BBR sender stays in its STARTUP (its
+	// rounds are app-limited) and sends new credit at 2.89 times its rate:
+	// a ceiling that rose in one step was a burst into the queue as large as
+	// the rise, and on a shallow queue it was the loss that started a run
+	// of them (wcLossRef).
+	wcRampQ     = 15 * time.Millisecond
+	wcRampShare = 1.0 / 8
+	wcRampTick  = 100 * time.Millisecond
+	wcCapBack   = 0.9 // past a budget that brought losses of our own, HOLD stays at this share of it
+	wcOffWait   = 8   // OFF waits this many intervals at most for the exit's first loss level
+	// wcRefreshMin, wcRefreshMax: how often HOLD lets its standing queue
+	// empty for an interval. BBRv1 keeps the least round trip of 10 s and,
+	// when no sample reached it in that time, sends nothing past 4 packets
+	// for 200 ms (PROBE_RTT); a sender held by its window a standing queue
+	// past the knee never sees the bare round trip, and after its PROBE_RTT
+	// it sent all the credit it had gathered at 2.89 times its rate.
+	wcRefreshMin = 7 * time.Second
+	wcRefreshMax = 9 * time.Second
 )
+
+// wcGears are STARTUP's steps of B: from OFF it starts at ×1.5, after a
+// probe that paid at ×1.25; each interval in which the rate grew with B
+// moves one gear up (to ×2), any other one down.
+var wcGears = [...]float64{1.25, 1.5, 2}
 
 // wcStream is one stream of the link over the interval (wcBuilder).
 type wcStream struct {
@@ -494,8 +576,26 @@ func (c *wcore) cmin() uint32 {
 	return c.cfg.need
 }
 
+// step takes what the runner saw since its previous call. The runner calls
+// it at out.next (on its 100 ms wake): between evaluations only to move the
+// published budget up the ramp; at an evaluation with all that came since
+// the previous one.
 func (c *wcore) step(in wcIn) wcOut {
 	now := in.now
+	if c.accOK {
+		wcMerge(&c.acc, in)
+	} else {
+		c.acc = wcCopy(in)
+		c.accOK = true
+	}
+	if !c.evalAt.IsZero() && now.Before(c.evalAt) {
+		c.fastStop(in)
+		c.ramp()
+		return c.out(c.acc, now, nil)
+	}
+	in, c.accOK = c.acc, false
+	stopQ := c.stopQ
+	c.stopQ = false
 	var ev []wcEvent
 	dt := 0.0
 	if !c.lastAt.IsZero() {
@@ -503,9 +603,14 @@ func (c *wcore) step(in wcIn) wcOut {
 	}
 	c.lastAt = now
 	c.notePaths(in, &ev)
+	if in.snd.fresh {
+		c.sndSeen = true
+	}
 	m := c.measure(in, dt)
 	c.last = m
-	c.notePool(in, &ev)
+	if in.poolShort > 0 {
+		c.cnt.poolShort += int(in.poolShort)
+	}
 	if c.parkHold > 0 {
 		c.parkHold--
 	}
@@ -513,7 +618,8 @@ func (c *wcore) step(in wcIn) wcOut {
 		c.parkHold = wcParkHold
 	}
 	if c.tBase <= 0 || dt <= 0 {
-		return c.out(in, now, now.Add(wcTickMin), ev)
+		c.evalAt = now.Add(wcTickMin)
+		return c.out(in, now, ev)
 	}
 	if len(m.f) == 0 {
 		c.fEmpty++
@@ -527,33 +633,166 @@ func (c *wcore) step(in wcIn) wcOut {
 	case c.fEmpty >= wcOffAfter:
 		c.toOff()
 	case len(m.f) == 0:
-		// a fast stream paused: keep the state, judge nothing
+		// the fast streams paused: keep the state, judge nothing
 		c.settling = false
 	case c.settling:
 		c.settled(in, m, &ev)
 	default:
 		switch c.state {
 		case wcStartup:
+			if stopQ {
+				m.qOK, m.qTurn = true, max(m.qTurn, c.qRef+c.dq()+1)
+			}
 			c.startup(in, m, &ev)
 		case wcHold:
 			c.hold(in, m, &ev)
 		case wcProbe:
+			if stopQ {
+				m.qOK, m.qTurn = true, max(m.qTurn, c.qRef+c.dq()+1)
+			}
 			c.probe(in, m, &ev)
 		case wcDrain:
 			c.toHold(in, m)
 		}
 	}
 	settle, measure := c.interval()
-	next := now.Add(measure)
+	c.ramp()
+	c.evalAt = now.Add(measure + c.rampLeft())
 	if c.state == wcOff {
-		next = now.Add(wcTickMin)
+		c.evalAt = now.Add(wcTickMin)
 	} else if c.settling {
-		next = now.Add(settle)
+		c.evalAt = now.Add(settle + c.rampLeft())
 	}
 	if c.B > c.cnt.peakB {
 		c.cnt.peakB = c.B
 	}
-	return c.out(in, now, next, ev)
+	c.bHist = append(c.bHist, wcRate{now, float64(c.B)})
+	cut := 0
+	for cut < len(c.bHist)-1 && now.Sub(c.bHist[cut+1].at) >= wcSndSpan {
+		cut++
+	}
+	c.bHist = c.bHist[cut:]
+	return c.out(in, now, ev)
+}
+
+// fastStop ends a ramp between evaluations as soon as the queue shows: the
+// latest window turnarounds of the fast streams past turnRef+qBrake (the
+// fast arm's own brake), or packets arriving behind holes on a path that is
+// otherwise clean. B stays where the ramp got to; the evaluation judges.
+func (c *wcore) fastStop(in wcIn) {
+	if c.bPub >= c.B {
+		return
+	}
+	stop := false
+	if in.oooOK && in.segsIn > 0 && c.oooRef.ok && c.oooRef.v < wcOooClean &&
+		c.oooRef.past(float64(in.ooo)/float64(in.segsIn), wcOooCongAbs) {
+		stop = true
+	}
+	if tb := c.turnMins.min(in.now, wcTurnWin); tb > 0 {
+		var lasts []time.Duration
+		for _, s := range in.streams {
+			if c.inF[s.id] && s.turnLast > 0 {
+				lasts = append(lasts, s.turnLast)
+			}
+		}
+		if len(lasts) > 0 && pct50(lasts) > tb+c.qRef+max(c.probeQ(in.now), c.dq())+2*c.spread {
+			stop = true
+		}
+	}
+	if stop {
+		c.B, c.stopQ = c.bPub, true
+	}
+}
+
+// rampStep is how far the published budget may rise per runner wake.
+func (c *wcore) rampStep() float64 {
+	r := c.last.rF
+	if len(c.rhat) > 0 {
+		r = math.Max(r, c.rhatF(c.lastAt, c.last))
+	}
+	return math.Max(wcRampQ.Seconds()*r, wcRampShare*float64(c.bPub))
+}
+
+// ramp moves the published budget toward B: down at once, up by rampStep.
+func (c *wcore) ramp() {
+	if c.bPub >= c.B || c.bPub == 0 {
+		c.bPub = c.B
+		return
+	}
+	c.bPub = min(c.B, c.bPub+uint64(math.Max(c.rampStep(), 1)))
+}
+
+// rampLeft is how long the ramp still takes.
+func (c *wcore) rampLeft() time.Duration {
+	if c.bPub >= c.B {
+		return 0
+	}
+	n := math.Ceil(float64(c.B-c.bPub) / math.Max(c.rampStep(), 1))
+	return time.Duration(n) * wcRampTick
+}
+
+// wcCopy copies an input (its slices too).
+func wcCopy(in wcIn) wcIn {
+	in.streams = append([]wcStream(nil), in.streams...)
+	in.pongs = append([]time.Duration(nil), in.pongs...)
+	return in
+}
+
+// wcMerge adds what came in b (later) to a.
+func wcMerge(a *wcIn, b wcIn) {
+	a.now, a.minRTT, a.srtt, a.oooOK = b.now, b.minRTT, b.srtt, b.oooOK
+	a.segsIn += b.segsIn
+	a.ooo += b.ooo
+	a.linkBytes += b.linkBytes
+	a.parks += b.parks
+	a.brakes += b.brakes
+	a.poolFree, a.ctrlMin, a.apProbing = b.poolFree, b.ctrlMin, a.apProbing || b.apProbing
+	a.poolShort += b.poolShort
+	a.pongs = append(a.pongs, b.pongs...)
+	if b.snd.fresh {
+		if a.snd.fresh {
+			b.snd.retrans += a.snd.retrans
+			b.snd.segsOut += a.snd.segsOut
+		}
+		a.snd = b.snd
+	}
+	for _, s := range b.streams {
+		found := false
+		for i := range a.streams {
+			o := &a.streams[i]
+			if o.id != s.id {
+				continue
+			}
+			found = true
+			o.read += s.read
+			o.upd += s.upd
+			o.hit += s.hit
+			o.lag += s.lag
+			if s.turnMin > 0 && (o.turnMin == 0 || s.turnMin < o.turnMin) {
+				o.turnMin = s.turnMin
+			}
+			if s.turnLast > 0 {
+				o.turnLast = s.turnLast
+			}
+			o.win, o.braked = s.win, s.braked
+			break
+		}
+		if !found {
+			a.streams = append(a.streams, s)
+		}
+	}
+	// a stream that is gone is not part of the link any more
+	n := 0
+	for _, o := range a.streams {
+		for _, s := range b.streams {
+			if s.id == o.id {
+				a.streams[n] = o
+				n++
+				break
+			}
+		}
+	}
+	a.streams = a.streams[:n]
 }
 
 // notePaths keeps T_base, turnBase and the exit's queue.
@@ -594,13 +833,16 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 	}
 }
 
-func (c *wcore) notePool(in wcIn, ev *[]wcEvent) {
-	if in.poolShort > 0 {
-		c.cnt.poolShort += int(in.poolShort)
-	}
-}
-
 // measure classifies the streams and takes the interval's estimators.
+//
+// A stream joins F (the fast streams) when its window is at least need/2,
+// its reader keeps up, and the sender used all of its window in half its
+// update cycles or more (or its window is in use, R·turnaround ≥ win/2, and
+// it is about as fast as the fastest stream of the link: a slow source also
+// "uses" its window, filling it as slowly as it is written). It stays in F
+// while it reads and its reader keeps up: right after B grows the sender has
+// a window it has not filled yet, which is no reason to take the stream's
+// ceiling away.
 func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	m := wcMeas{dt: dt}
 	if dt <= 0 {
@@ -616,19 +858,23 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	hits, upds := 0.0, 0.0
 	for i, s := range in.streams {
 		r := float64(s.read) / dt
-		if s.win < need/2 || s.upd == 0 || r <= 0 || s.braked || float64(s.lag) > wcLagShare*float64(s.upd) {
+		if s.upd == 0 || r <= 0 || s.braked || float64(s.lag) > wcLagShare*float64(s.upd) {
 			continue
 		}
-		hit := float64(s.hit) >= wcHitShare*float64(s.upd)
-		turn := s.turnLast
-		if turn <= 0 {
-			turn = s.turnMin
-		}
-		used := turn > 0 && r*turn.Seconds() >= wcUseShare*float64(s.win)
-		// on use alone only a stream as fast as its peers: a slow source
-		// "uses" its window too (it fills in as slowly as it is written)
-		if !hit && !(used && (c.inF[s.id] || r >= wcPeerShare*maxR)) {
-			continue
+		if !c.inF[s.id] {
+			hit := float64(s.hit) >= wcHitShare*float64(s.upd)
+			turn := s.turnLast
+			if turn <= 0 {
+				turn = s.turnMin
+			}
+			used := turn > 0 && r*turn.Seconds() >= wcUseShare*float64(s.win)
+			// by use only with no standing queue in its turnaround: a
+			// window the path is too full for is in use too
+			tb := c.turnMins.min(in.now, wcTurnWin)
+			bare := tb > 0 && s.turnMin > 0 && s.turnMin <= tb+c.dq()
+			if s.win < need/2 || !(hit || used && bare && r >= wcPeerShare*maxR) {
+				continue
+			}
 		}
 		newF[s.id] = true
 		m.f = append(m.f, i)
@@ -729,7 +975,6 @@ func (c *wcore) rhatF(now time.Time, m wcMeas) float64 {
 
 func (c *wcore) noteRate(now time.Time, r float64) {
 	c.rhat = append(c.rhat, wcRate{now, r})
-	// keep the window (and at least wcRhatMinN samples)
 	cut := 0
 	for cut < len(c.rhat)-wcRhatMinN && now.Sub(c.rhat[cut].at) > wcRhatWin {
 		cut++
@@ -742,7 +987,7 @@ func (c *wcore) noteRate(now time.Time, r float64) {
 	}
 }
 
-// knee is K = R̂_F·(T_base+τ_hold) + H_step for a rate r.
+// knee is K = R·(T_base+τ_hold) + H_step for a rate r.
 func (c *wcore) knee(r float64, m wcMeas) float64 {
 	return r*(c.tBase+c.tau).Seconds() + m.hStep
 }
@@ -751,9 +996,29 @@ func (c *wcore) bHold(now time.Time, m wcMeas) uint64 {
 	r := c.rhatF(now, m)
 	t := c.tBase.Seconds()
 	h := math.Min(math.Max(c.qTarget(now).Seconds()/t, wcHMin), wcHMax)
-	return uint64(c.knee(r, m) + h*r*t)
+	b := uint64(c.knee(r, m) + h*r*t)
+	if c.bCap > 0 && now.Sub(c.bCapAt) < wcQcapTTL {
+		b = min(b, c.bCap)
+	}
+	// past what was shown to pay only by the margin: τ_hold and R̂ alone
+	// (the delay behind holes the window itself may cause) never take B
+	// into budgets nothing has tried
+	lim := uint64(float64(c.bGood) * (1 + h))
+	return min(b, max(lim, uint64(max(len(m.f), 1))*uint64(c.cmin())))
 }
 
+// noteCap remembers that losses of our own came at budget b.
+func (c *wcore) noteCap(now time.Time, b uint64) {
+	cp := uint64(wcCapBack * float64(b))
+	if c.bCap == 0 || now.Sub(c.bCapAt) >= wcQcapTTL || cp < c.bCap {
+		c.bCap = cp
+	}
+	c.bCapAt = now
+}
+
+// bProbe adds probeQ of queue at R̂ to hold: sized in queue time on the path,
+// not as a share of B (under random loss half of B can be data held behind
+// holes in the receiver, which a share of it would put on the path too).
 func (c *wcore) bProbe(now time.Time, m wcMeas, hold uint64) uint64 {
 	t := c.tBase.Seconds()
 	g := math.Min(math.Max(c.probeQ(now).Seconds()/t, wcGpMin-1), wcGpMax-1)
@@ -780,52 +1045,58 @@ func (c *wcore) setB(in wcIn, m wcMeas, b uint64) {
 	hi = max(hi, lo)
 	b = min(max(b, lo), hi)
 	c.capped = b >= hi && hi > lo
-	if b > c.B {
-		c.riseAt = in.now
-	}
 	if c.B == 0 || math.Abs(float64(b)-float64(c.B)) > wcResettle*float64(c.B) {
 		c.settling = true
 	}
 	c.B = b
 }
 
-// cong says whether the interval's loss is congestive: it rose with B or
-// with the queue (rise) past max(+0.3 points, ×2) of the HOLD level.
-// Loss that does not move with B is random and backs nothing off.
-func (c *wcore) cong(m wcMeas, rise, sndRise bool) bool {
-	if m.sndOK && c.sndBaseOK && (rise || sndRise) {
-		if m.snd >= math.Max(c.sndBase+wcLossCongAbs, wcLossCongRel*c.sndBase) {
-			return true
-		}
+// bSpan is the least and the largest budget over the last wcSndSpan (what a
+// record of the exit covers), with the one in force now.
+func (c *wcore) bSpan() (lo, hi uint64) {
+	lo, hi = c.B, c.B
+	for _, h := range c.bHist {
+		lo, hi = min(lo, uint64(h.r)), max(hi, uint64(h.r))
 	}
-	if m.oooOK && c.oooBaseOK && rise && c.oooBase < wcOooClean {
-		if m.ooo >= math.Max(c.oooBase+wcOooCongAbs, wcLossCongRel*c.oooBase) {
-			return true
-		}
-	}
-	return false
+	return lo, hi
 }
 
-// noteLoss keeps the loss levels of intervals with B steady and no queue
-// growth, and the random-loss flag.
-func (c *wcore) noteLoss(now time.Time, m wcMeas, steady bool) {
-	if !steady {
-		c.lossyN = 0
-		return
+// lossVerdict judges the interval's loss against the levels kept at known
+// budgets (wcLossRef): cong when it is past the level of a smaller budget
+// (it came with B) or came with queue growth; jump when it is past the level
+// of the same budget (it came with nothing of ours: a drain tells whether it
+// keeps itself going or the path turned lossy). Rcv_ooopack, a share of the
+// packets that waited behind a hole, saturates once holes come every round
+// trip: it is judged only on a path that is otherwise clean.
+func (c *wcore) lossVerdict(m wcMeas, growth bool) (cong, jump bool, src wcLossSrc) {
+	if m.sndOK && c.sndRef.past(m.snd, wcLossCongAbs) {
+		_, hi := c.bSpan()
+		if growth || float64(hi) > 1.05*float64(c.sndRef.b) {
+			return true, false, wcSrcSnd
+		}
+		jump, src = true, wcSrcSnd
 	}
-	if m.sndOK && now.Sub(c.riseAt) > wcSndSpan {
-		if c.sndBaseOK {
-			c.sndBase += 0.3 * (m.snd - c.sndBase)
-		} else {
-			c.sndBase, c.sndBaseOK = m.snd, true
+	if m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) {
+		// c.B is still the budget the interval was measured under
+		if growth || float64(c.B) > 1.05*float64(c.oooRef.b) {
+			return true, false, wcSrcOoo
+		}
+		jump, src = true, wcSrcOoo
+	}
+	return false, jump, src
+}
+
+// noteLoss keeps the loss levels of an interval that was not judged
+// congestive, with the budget they were measured at, and the random-loss
+// flag.
+func (c *wcore) noteLoss(m wcMeas) {
+	if m.sndOK {
+		if lo, hi := c.bSpan(); float64(hi) <= 1.05*float64(lo) {
+			c.sndRef.note(m.snd, hi, 0.3)
 		}
 	}
 	if m.oooOK {
-		if c.oooBaseOK {
-			c.oooBase += 0.3 * (m.ooo - c.oooBase)
-		} else {
-			c.oooBase, c.oooBaseOK = m.ooo, true
-		}
+		c.oooRef.note(m.ooo, c.B, 0.3)
 	}
 	l, ok := m.snd, m.sndOK
 	if !ok && c.cfg.side == wcExit && m.oooOK {
@@ -857,6 +1128,22 @@ func (c *wcore) noteTau(m wcMeas) {
 	}
 }
 
+func (c *wcore) schedRefresh(now time.Time) {
+	c.refreshAt = now.Add(wcRefreshMin + time.Duration(c.rnd()*float64(wcRefreshMax-wcRefreshMin)))
+}
+
+// refresh takes B under the knee by the standing queue and Δq for one
+// interval (a drain that is no verdict: nothing is learned from it).
+func (c *wcore) refresh(in wcIn, m wcMeas) {
+	c.state = wcDrain
+	c.refreshing = true
+	c.schedRefresh(in.now)
+	r := c.rhatF(in.now, m)
+	b := float64(c.B) - (c.qTarget(in.now)+c.dq()).Seconds()*r
+	c.B = 0
+	c.setB(in, m, uint64(math.Max(b, 0)))
+}
+
 func (c *wcore) schedProbe(now time.Time) {
 	iv := wcProbeMin + time.Duration(c.rnd()*float64(wcProbeMax-wcProbeMin))
 	iv <<= min(c.backoff, 4)
@@ -867,14 +1154,32 @@ func (c *wcore) schedProbe(now time.Time) {
 
 // off: no ceilings. A fast stream with T_base known starts STARTUP.
 func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
-	c.noteLoss(in.now, m, true)
-	if len(m.f) == 0 || in.apProbing {
+	if len(m.f) > 0 {
+		// the loss of the path with the windows without the core
+		if m.sndOK {
+			c.sndRef.note(m.snd, uint64(m.wF), 0.3)
+		}
+		if m.oooOK {
+			c.oooRef.note(m.ooo, uint64(m.wF), 0.3)
+		}
+	}
+	if len(m.f) == 0 || in.apProbing || math.Abs(m.wF-m.wPrev) > 0.1*m.wF {
+		c.offN = 0
 		return
 	}
+	// the windows without the core are what STARTUP's first step is judged
+	// against: wait until they stopped growing, and (on the edge) for the
+	// exit's first resend share with them
+	if c.offN++; c.offN < 2 || c.sndSeen && !c.sndRef.ok && c.offN < wcOffWait {
+		return
+	}
+	c.offN = 0
+	c.bGood = 0
 	c.state = wcStartup
 	c.backoff = 0
 	c.pathFull = false
 	c.flat = 0
+	c.gear = 1
 	c.fullR, c.prevR = m.rF, m.rF
 	c.qRef = m.qTurn
 	c.rhat = c.rhat[:0]
@@ -885,7 +1190,8 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	}
 	c.prevB = max(b, uint64(len(m.f))*uint64(c.cmin()))
 	c.B = 0
-	c.setB(in, m, uint64(float64(c.prevB)*wcStartGain))
+	c.setB(in, m, uint64(float64(c.prevB)*wcGears[c.gear]))
+	c.bPub = min(uint64(m.wF), c.B) // up from the windows in force
 }
 
 func (c *wcore) toOff() {
@@ -897,6 +1203,7 @@ func (c *wcore) toOff() {
 	c.settling = false
 	c.refPending = false
 	c.capped = false
+	c.lossTest = wcSrcNone
 	clear(c.inF)
 }
 
@@ -905,20 +1212,18 @@ func (c *wcore) toOff() {
 func (c *wcore) settled(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.settling = false
 	switch c.state {
-	case wcProbe:
-		if c.cong(m, true, true) {
-			c.probeFailed(in, m, ev, true)
-		} else if in.apProbing {
-			c.toHold(in, m)
-		}
-	case wcStartup:
-		if c.cong(m, true, true) {
-			c.endStartup(in, m, ev, true)
+	case wcProbe, wcStartup:
+		if cong, _, _ := c.lossVerdict(m, false); cong {
+			if c.state == wcProbe {
+				c.probeFailed(in, m, ev, true)
+			} else {
+				c.endStartup(in, m, ev, true, true)
+			}
 		} else if in.apProbing {
 			c.toHold(in, m)
 		}
 	case wcDrain:
-		if m.qOK && m.qTurn < c.qRef+c.dq()/2 {
+		if c.lossTest == wcSrcNone && m.qOK && m.qTurn < c.qRef+c.dq()/2 {
 			c.toHold(in, m)
 		}
 	}
@@ -931,42 +1236,56 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.setB(in, m, max(c.B, uint64(len(m.f))*uint64(c.cmin())))
 		return
 	}
-	c.noteRate(in.now, m.rLink)
 	gB := float64(c.B)/math.Max(float64(c.prevB), 1) - 1
 	gR := m.rF/math.Max(c.prevR, 1) - 1
 	qUp := m.qOK && m.qTurn > c.qRef+c.dq()
-	cong := c.cong(m, true, true)
+	cong, jump, _ := c.lossVerdict(m, qUp)
+	if !cong && !jump {
+		// what the data held behind a hole adds when it is released at
+		// once is no rate of the path
+		c.noteRate(in.now, m.rLink)
+	}
 	tracked := gB > 0 && gR >= wcStartFast*gB
 	if m.rF >= c.fullR*(1+wcFullGrowth) {
 		c.fullR, c.flat = m.rF, 0
 	} else {
 		c.flat++
 	}
-	if (tracked || m.hit >= wcHitShare) && !qUp {
+	if (tracked || m.hit >= wcHitShare) && !qUp && !cong {
 		c.noteTau(m)
+	}
+	if tracked && !qUp && !cong {
+		c.bGood = max(c.bGood, c.B)
 	}
 	if m.qOK && !qUp && m.qTurn < c.qRef {
 		c.qRef = m.qTurn
 	}
 	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || in.apProbing || (c.capped && c.flat >= 1) {
-		c.endStartup(in, m, ev, cong || qUp)
+		c.endStartup(in, m, ev, cong || qUp, cong)
 		return
 	}
+	switch {
+	case qUp:
+		c.gear = -1 // the sender or the queue holds what B has: wait
+	case tracked:
+		c.gear = min(c.gear+1, len(wcGears)-1)
+	default:
+		c.gear = max(c.gear-1, 0)
+	}
+	g := 1.0
+	if c.gear >= 0 {
+		g = wcGears[c.gear]
+	} else {
+		c.gear = 0
+	}
 	k := c.knee(m.rF, m)
-	g := wcStartGain
-	if tracked && !qUp {
-		g = wcStartGainFast
-	}
-	if qUp {
-		g = 1 // the sender or the queue holds what B has: wait
-	}
 	c.prevR, c.prevB = m.rF, c.B
 	c.setB(in, m, max(c.B, uint64(g*math.Min(float64(c.B), k))))
 }
 
-// endStartup: the knee is found. To DRAIN if the queue grew (or loss came
-// with B), else to HOLD.
-func (c *wcore) endStartup(in wcIn, m wcMeas, ev *[]wcEvent, drain bool) {
+// endStartup: the knee is found. To DRAIN if the queue grew or loss came
+// with B, else to HOLD.
+func (c *wcore) endStartup(in wcIn, m wcMeas, ev *[]wcEvent, drain, cong bool) {
 	from := c.B
 	c.cnt.grow++
 	if !c.capped {
@@ -978,10 +1297,13 @@ func (c *wcore) endStartup(in wcIn, m wcMeas, ev *[]wcEvent, drain bool) {
 		*ev = append(*ev, wcEvent{kind: wcEvCapped, B: from, n: len(m.f), T: c.tBase})
 	}
 	if drain {
-		if c.cong(m, true, true) && m.qOK {
+		why := wcWhyQueue
+		if cong {
+			why = wcWhyLoss
 			c.learnQcap(in.now, m)
+			c.noteCap(in.now, from)
 		}
-		c.toDrain(in, m, ev, wcWhyQueue, false)
+		c.toDrain(in, m, ev, why, false)
 		return
 	}
 	c.toHold(in, m)
@@ -992,35 +1314,46 @@ func (c *wcore) learnQcap(now time.Time, m wcMeas) {
 	if !c.qcapKnown(now) || q < c.qcap {
 		c.qcap = q
 	}
-	c.qcap, c.qcapAt, c.qcapOK = max(c.qcap, 0), now, true
+	c.qcapAt, c.qcapOK = now, true
 }
 
 func (c *wcore) toHold(in wcIn, m wcMeas) {
 	c.state = wcHold
 	c.refPending = true
+	c.refreshing = false
 	c.growthN, c.wlN = 0, 0
 	c.holdN = 0
 	if c.probeAt.IsZero() || c.probeAt.Before(in.now) {
 		c.schedProbe(in.now)
 	}
+	if c.refreshAt.IsZero() || c.refreshAt.Before(in.now) {
+		c.schedRefresh(in.now)
+	}
 	c.setB(in, m, c.bHold(in.now, m))
 	c.settling = true
 }
 
+// toDrain takes B below the knee for an interval: by 10% of a round trip of
+// what the path carries now for a queue; to at most half of B for loss
+// (losses that keep themselves going stop only once what is held behind a
+// hole, released at once, no longer overflows the queue).
 func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, rate bool) {
 	from := c.B
 	c.state = wcDrain
+	c.refreshing = false
+	c.schedRefresh(in.now)
 	t := c.tBase.Seconds()
 	b := 0.9*m.rF*t + m.rF*c.tau.Seconds() + m.hStep
 	if rate {
 		c.rhat = append(c.rhat[:0], wcRate{in.now, m.rLink})
 		c.backoff = 0
-	} else if c.tau > c.dq() {
+	} else if c.tau > c.dq() && why == wcWhyQueue {
 		c.tau /= 2 // a queue HOLD itself built: τ_hold may hold a queue
 	}
 	switch why {
 	case wcWhyLoss:
 		c.cnt.drainLoss++
+		b = math.Min(b, float64(from)/2)
 	case wcWhyRate:
 		c.cnt.drainRate++
 	default:
@@ -1046,10 +1379,12 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.rLinkHold = m.rLink
 		c.holdR = [2]float64{m.rF, m.rF}
 		c.holdN = 1
-		if m.sameF {
+		if cong, jump, _ := c.lossVerdict(m, false); m.sameF && !cong && !jump {
 			c.noteRate(now, m.rLink)
 		}
-		c.noteLoss(now, m, true)
+		// no loss level from right after a drain: what it drained may
+		// still be on its way
+		c.lossTestDone(in, m, ev)
 		c.setB(in, m, c.bHold(now, m))
 		return
 	}
@@ -1058,17 +1393,29 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	}
 	qUp := m.qOK && m.qTurn > c.qRef+dq
 	sndUp := m.qSndOK && c.qSndRefOK && m.qSnd > c.qSndRef+dq
+	// the exit sees the download queue itself (its srtt has no wait behind
+	// holes in it): where its latest record shows none, a longer turnaround
+	// is data held behind holes, not a queue
+	bare := m.qSndOK && m.qSnd <= max(c.qSndRef, 0)+dq/2
+	if bare {
+		qUp = false
+	}
 	growth := qUp || sndUp || m.ctrlUp
-	strong := m.qOK && m.qTurn >= c.qRef+3*dq
+	strong := m.qOK && m.qTurn >= c.qRef+3*dq && !bare
 	if growth {
 		c.growthN++
 	} else {
 		c.growthN = 0
 	}
 	drop := c.rLinkHold > 0 && m.rLink < (1-wcRateDrop)*c.rLinkHold
-	cong := c.cong(m, growth, false)
+	testing := !c.lossTestDone(in, m, ev)
+	cong, jump, src := false, false, wcSrcNone
+	if !testing {
+		cong, jump, src = c.lossVerdict(m, growth)
+	}
 	own := m.qOwnOK && m.qOwn > c.qOwnRef+dq/2
-	if strong || c.growthN >= 2 || (growth && (cong || own)) {
+	switch {
+	case strong || c.growthN >= 2 || (growth && (cong || own)):
 		why := wcWhyQueue
 		switch {
 		case drop:
@@ -1082,12 +1429,33 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		}
 		c.toDrain(in, m, ev, why, drop)
 		return
+	case cong:
+		// loss that came with B (a probe or STARTUP whose loss the exit
+		// reported late): back off, and probe less
+		c.learnQcap(now, m)
+		_, hi := c.bSpan()
+		c.noteCap(now, hi)
+		c.backoff++
+		c.schedProbe(now)
+		c.toDrain(in, m, ev, wcWhyLoss, false)
+		return
+	case jump:
+		// loss past its level at this very budget: ours if it stops at
+		// the floor (bursts that keep overflowing the queue; in stage 1 the
+		// floor is the behaviour without the core), the path's if not
+		c.lossTest, c.lossTestAt, c.lossTestB = src, now, c.B
+		c.toDrain(in, m, ev, wcWhyLoss, false)
+		c.B = 0
+		c.setB(in, m, 0)
+		return
 	}
 	c.holdN++
 	if m.sameF {
 		c.noteRate(now, m.rLink)
 	}
-	c.noteLoss(now, m, !growth)
+	if !growth && !testing {
+		c.noteLoss(m)
+	}
 	if c.lossyN >= wcLossRandN && !c.lossy {
 		c.lossy = true
 		*ev = append(*ev, wcEvent{kind: wcEvLossy, loss: m.snd, T: c.tBase, q: c.tau})
@@ -1107,23 +1475,31 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	}
 	// window-limited in HOLD: the knee is past B (τ_hold too small, or the
 	// path got faster): re-estimate, and probe without waiting
-	wl := m.hit >= wcHitShare && !growth && m.sameF
+	// (on the edge, also: the exit's record shows no queue on the path,
+	// which holds under random loss where holes hide the sender's pauses)
+	empty := m.sndOK && m.qSndOK && m.qSnd <= dq // a record came in this interval
+	wl := (m.hit >= wcHitShare || empty) && !growth && m.sameF
 	if wl {
 		c.wlN++
-		if m.rF < wcHoldSlack*c.rhatF(now, m) || c.wlN >= 2 {
+		if m.rF < wcHoldSlack*c.rhatF(now, m) || c.wlN >= 2 || empty {
 			c.noteTau(m)
+		}
+		if empty && !cong && !jump {
+			c.bGood = max(c.bGood, c.B) // as far as it went, no queue came
 		}
 	} else {
 		c.wlN = 0
 	}
-	if c.wlN >= 2 || (m.qOK && c.qRef > dq && m.qTurn < c.qRef-dq) {
-		c.backoff = 0
-		if c.probeAt.After(now) {
-			c.probeAt = now
-		}
+	if c.backoff == 0 && (c.wlN >= 2 || (m.qOK && c.qRef > dq && m.qTurn < c.qRef-dq)) && c.probeAt.After(now) {
+		c.probeAt = now
 	}
 	hold := c.bHold(now, m)
-	if !now.Before(c.probeAt) && !in.apProbing && !c.capped && c.holdN >= 2 && m.sameF {
+	if !now.Before(c.refreshAt) && c.holdN >= 2 && !testing && now.Before(c.probeAt) {
+		c.B = hold
+		c.refresh(in, m)
+		return
+	}
+	if !now.Before(c.probeAt) && !in.apProbing && !c.capped && c.holdN >= 2 && m.sameF && !testing {
 		pr := c.bProbe(now, m, hold)
 		if in.poolFree < 0 || uint64(in.poolFree) >= pr-hold {
 			c.state = wcProbe
@@ -1139,6 +1515,39 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.setB(in, m, hold)
 }
 
+// lossTestDone resolves a drain that tested a jump of loss at a steady
+// budget, once its source has measured after it: still past its level, the
+// path turned lossy (the level moves there and it is random from now on);
+// back to it, the losses were ours and stopped. It reports false while the
+// test waits for its source.
+func (c *wcore) lossTestDone(in wcIn, m wcMeas, ev *[]wcEvent) bool {
+	switch c.lossTest {
+	case wcSrcNone:
+		return true
+	case wcSrcSnd:
+		if !m.sndOK || in.now.Sub(c.lossTestAt) < wcSndSpan {
+			return false
+		}
+		if c.sndRef.past(m.snd, wcLossCongAbs) {
+			c.sndRef = wcLossRef{v: m.snd, b: c.B, ok: true}
+			*ev = append(*ev, wcEvent{kind: wcEvLossy, loss: m.snd, T: c.tBase, q: c.tau})
+		} else {
+			c.noteCap(in.now, c.lossTestB)
+		}
+	case wcSrcOoo:
+		if !m.oooOK {
+			return false
+		}
+		if c.oooRef.past(m.ooo, wcOooCongAbs) {
+			c.oooRef = wcLossRef{v: m.ooo, b: c.B, ok: true}
+		} else {
+			c.noteCap(in.now, c.lossTestB)
+		}
+	}
+	c.lossTest = wcSrcNone
+	return true
+}
+
 func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	now := in.now
 	if !m.sameF || in.poolShort > 0 {
@@ -1149,51 +1558,63 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.toHold(in, m)
 		return
 	}
-	c.noteRate(now, m.rLink)
 	qUp := m.qOK && m.qTurn > c.qRef+c.dq()
-	cong := c.cong(m, true, true)
+	cong, jump, _ := c.lossVerdict(m, qUp)
+	if !cong && !jump {
+		c.noteRate(now, m.rLink)
+	}
 	exp := float64(c.B-min(c.probeFrom, c.B)) / math.Max(float64(c.probeFrom)-m.hStep, 1)
 	need := math.Max(wcPayMin, wcPayShare*exp)
 	gain := m.rF/math.Max(c.probeBase, 1) - 1
-	if cong || gain < need || (qUp && gain < 2*need) {
+	if cong || jump || gain < need || (qUp && gain < 2*need) {
 		c.probeFailed(in, m, ev, cong)
 		return
 	}
 	c.cnt.probeOK++
 	c.backoff = 0
 	c.pathFull = false
+	c.bGood = max(c.bGood, c.B)
+	if c.bCap > 0 && c.B > c.bCap {
+		c.bCap = c.B // as clean as far as the probe went
+	}
 	c.noteTau(m)
-	if gain >= wcSuccStartup*exp {
+	c.schedProbe(now)
+	if gain >= wcSuccStartup*exp && gain >= 2*need && !qUp {
+		// the path has room: grow on, from the smallest step
 		c.state = wcStartup
-		c.fullR, c.prevR, c.prevB, c.flat = m.rF, m.rF, c.B, 0
-		c.schedProbe(now)
-		c.setB(in, m, uint64(wcStartGain*math.Min(float64(c.B), c.knee(m.rF, m))))
+		c.fullR, c.prevR, c.prevB, c.flat, c.gear = m.rF, m.rF, c.B, 0, 0
+		c.setB(in, m, uint64(wcGears[0]*math.Min(float64(c.B), c.knee(m.rF, m))))
 		return
 	}
-	c.schedProbe(now)
 	c.toHold(in, m)
 }
 
 func (c *wcore) probeFailed(in wcIn, m wcMeas, ev *[]wcEvent, cong bool) {
 	c.cnt.probeFail++
 	c.pathFull = true
-	if cong && m.qOK {
-		c.learnQcap(in.now, m)
-	}
 	c.backoff++
 	c.schedProbe(in.now)
+	if cong {
+		c.learnQcap(in.now, m)
+		c.noteCap(in.now, c.B)
+		c.toDrain(in, m, ev, wcWhyLoss, false)
+		return
+	}
 	c.toHold(in, m)
 }
 
 // out builds the ceilings: B shared over F (wcSplit), nothing for the rest.
-func (c *wcore) out(in wcIn, now, next time.Time, ev []wcEvent) wcOut {
-	c.nextAt = next
-	o := wcOut{state: c.state, B: c.B, next: next, events: ev, growOK: true}
+func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
+	next := c.evalAt
+	if c.bPub < c.B && now.Add(wcRampTick).Before(next) {
+		next = now.Add(wcRampTick)
+	}
+	o := wcOut{state: c.state, B: c.bPub, next: next, events: ev, growOK: true}
 	o.ceils = make([]wcCeil, len(in.streams))
 	for i, s := range in.streams {
 		o.ceils[i].id = s.id
 	}
-	if c.state == wcOff || c.B == 0 {
+	if c.state == wcOff || c.bPub == 0 {
 		clear(c.ceils)
 		return o
 	}
@@ -1217,7 +1638,7 @@ func (c *wcore) out(in wcIn, now, next time.Time, ev []wcEvent) wcOut {
 		demand = append(demand, d)
 	}
 	lo := c.cmin()
-	share := wcSplit(c.B, demand, lo, c.cfg.maxWin)
+	share := wcSplit(max(c.bPub, uint64(len(idx))*uint64(lo)), demand, lo, c.cfg.maxWin)
 	clear(c.ceils)
 	any := false
 	for k, i := range idx {

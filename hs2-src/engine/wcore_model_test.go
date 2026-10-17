@@ -146,9 +146,9 @@ type wmCfg struct {
 	// then one wakes late and delivers what is overdue at once (each
 	// direction, a stall starts with probability stall per ms and lasts up
 	// to stallMax ms)
-	stall    float64
-	stallMax int
-	hitTruth  bool  // hit from the sender's truth instead of the receiver's pause
+	stall     float64
+	stallMax  int
+	hitTruth  bool // hit from the sender's truth instead of the receiver's pause
 	apProbing func(t time.Duration) bool
 	trace     bool
 }
@@ -1325,8 +1325,8 @@ func (m *wmModel) runCore() {
 			fmt.Fprintf(&ss, "[r%.0f u%d h%d l%d t%d/%d w%.1f]", float64(x.read)/lm.dt/wmMbit, x.upd, x.hit, x.lag, x.turnMin.Milliseconds(), x.turnLast.Milliseconds(), float64(x.win)/(1<<20))
 		}
 		f := m.main
-		m.res.trace = append(m.res.trace, fmt.Sprintf("%5.1fs %-7s B%5.2f nF%d RF%4.0f RL%4.0f hit%.2f qt%3d(ok%v) qo%3d qs%3d snd%.3f ooo%.3f | tau%3d qref%3d brake%3d grow%v | bbr%d pace%4.0f q%3.0f %s",
-			float64(m.t)/1000, o.state, float64(o.B)/(1<<20), len(lm.f), lm.rF/wmMbit, lm.rLink/wmMbit, lm.hit, lm.qTurn.Milliseconds(), lm.qOK, lm.qOwn.Milliseconds(), lm.qSnd.Milliseconds(), lm.snd, lm.ooo,
+		m.res.trace = append(m.res.trace, fmt.Sprintf("%5.1fs %-7s B%5.2f/%5.2f cap%5.2f nF%d RF%4.0f RL%4.0f hit%.2f qt%3d(ok%v) qo%3d qs%3d snd%.3f ooo%.3f | tau%3d qref%3d brake%3d grow%v | bbr%d pace%4.0f q%3.0f %s",
+			float64(m.t)/1000, o.state, float64(o.B)/(1<<20), float64(c.B)/(1<<20), float64(c.bCap)/(1<<20), len(lm.f), lm.rF/wmMbit, lm.rLink/wmMbit, lm.hit, lm.qTurn.Milliseconds(), lm.qOK, lm.qOwn.Milliseconds(), lm.qSnd.Milliseconds(), lm.snd, lm.ooo,
 			c.tau.Milliseconds(), c.qRef.Milliseconds(), o.qBrake.Milliseconds(), o.growOK, f.mode, f.pacing*1000/wmMbit, float64(m.qBytes)/m.rate, ss.String()))
 	}
 	m.lastSt = o.state
@@ -1532,25 +1532,242 @@ func wmPath(rateMbit float64, rtt, queue time.Duration) wmCfg {
 
 func (c wmCfg) with(mode wmMode) wmCfg { c.mode = mode; return c }
 
+// TestWcoreModelReproducesRig: the model must show the failures the rig
+// measured before it is trusted with the core (§9.1). N4 (3·pace·min_rtt)
+// on 300/150 behind a 50 ms queue: the window-limited sender stays in BBR's
+// STARTUP, sends each window update's credit at 2.89 times its rate, and the
+// queue overflows for as long as it runs (rig: 15.5% resent, interactive
+// p50/p99 293/889 ms against 152/167); fin ((1+m)·pace·min_rtt + step)
+// under 0.1% random loss on 1000/100 stays far below N4 (rig: 97.5 against
+// 293–308); the 2 MiB window lands near what the rig measured.
 func TestWcoreModelReproducesRig(t *testing.T) {
-	if testing.Short() {
-		t.Skip("model")
-	}
-	type cell struct {
-		cfg  wmCfg
-		name string
-	}
 	p300 := wmPath(300, 150*time.Millisecond, 50*time.Millisecond)
-	p1000 := wmPath(1000, 100*time.Millisecond, 50*time.Millisecond)
-	l1000 := p1000
-	l1000.loss, l1000.name = 0.001, "1000/100 q50 0.1%"
-	p100 := wmPath(100, 100*time.Millisecond, 50*time.Millisecond)
-	for _, c := range []wmCfg{p300, p1000, l1000, p100} {
-		for _, mode := range []wmMode{wmBase, wmN4, wmFin} {
-			r := wmRun(c.with(mode))
-			t.Log(r)
+	l1000 := wmPath(1000, 100*time.Millisecond, 50*time.Millisecond)
+	l1000.loss, l1000.name = 0.001, "1000/100 q50 l0.1"
+	base3, n43 := wmRun(p300.with(wmBase)), wmRun(p300.with(wmN4))
+	fin1, n41, base1 := wmRun(l1000.with(wmFin)), wmRun(l1000.with(wmN4)), wmRun(l1000.with(wmBase))
+	b1000 := wmRun(wmPath(1000, 100*time.Millisecond, 50*time.Millisecond).with(wmBase))
+	for _, r := range []wmResult{base3, n43, base1, n41, fin1, b1000} {
+		t.Log(r)
+	}
+	if n43.resend < 0.15 || n43.resend > 0.35 || n43.iP99 < 2*base3.iP99 || n43.iP50 < 1.5*base3.iP50 {
+		t.Errorf("N4 on 300/150 q50: resent %.1f%%, interactive %.0f/%.0f ms (base %.0f/%.0f): the model lost N4's overflow",
+			100*n43.resend, n43.iP50, n43.iP99, base3.iP50, base3.iP99)
+	}
+	if fin1.mbit > 0.6*n41.mbit || n41.mbit < 2*base1.mbit {
+		t.Errorf("0.1%% loss on 1000/100: fin %.0f, n4 %.0f, base %.0f Mbit/s: the model lost fin's collapse", fin1.mbit, n41.mbit, base1.mbit)
+	}
+	if base3.mbit < 60 || base3.mbit > 115 {
+		t.Errorf("base on 300/150: %.0f Mbit/s, want ~70–110", base3.mbit)
+	}
+	// the rig ran out of CPU near 500 Mbit/s on 1 Gbit/s (n4 496, fin 451);
+	// the model's 2 MiB window on 1000/100 is what the window allows
+	if b1000.mbit < 90 || b1000.mbit > 160 {
+		t.Errorf("base on 1000/100: %.0f Mbit/s, want ~100–150", b1000.mbit)
+	}
+}
+
+// ---- the scenario table (§9.1) and the acceptance targets (§9.4) ------------
+
+type wmKind uint8
+
+const (
+	wmGain    wmKind = iota // one download: the gain over base, its cost
+	wmLossy                 // random loss: ≥ 60% of N4's gain at base + 0.5 points resent
+	wmMulti                 // several downloads on one link: resent ≤ base
+	wmSlow                  // a slow reader next to the download
+	wmChangeK               // 300 → 50 → 300: 90% of the new rate in ≤ 10 s
+	wmPolice                // a per-connection policer
+	wmCompete               // an outside BBR flow on the same bottleneck
+)
+
+type wmCell struct {
+	cfg  wmCfg
+	kind wmKind
+}
+
+func wmMS(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+
+// wmCells is the table: the default run keeps a representative subset (each
+// cell three model runs of 30–60 s, well under a second of CPU each), all
+// of it with HS2_WCORE_MODEL_FULL=1.
+func wmCells(full bool) []wmCell {
+	var cs []wmCell
+	add := func(rate float64, rtt, q int, loss float64, k wmKind, mod func(*wmCfg)) {
+		c := wmPath(rate, wmMS(rtt), wmMS(q))
+		c.loss = loss / 100
+		if loss > 0 {
+			c.name += fmt.Sprintf(" l%g", loss)
+		}
+		if mod != nil {
+			mod(&c)
+		}
+		cs = append(cs, wmCell{c, k})
+	}
+	if full {
+		for _, rate := range []float64{100, 300, 1000} {
+			for _, rtt := range []int{50, 100, 150, 300, 500} {
+				for _, q := range []int{50, 200} {
+					add(rate, rtt, q, 0, wmGain, nil)
+				}
+				for _, loss := range []float64{0.1, 1, 3} {
+					add(rate, rtt, 50, loss, wmLossy, nil)
+				}
+			}
+		}
+	} else {
+		for _, p := range [][2]int{{300, 150}, {1000, 100}, {1000, 150}, {300, 100}, {100, 100}, {100, 50}, {1000, 500}} {
+			add(float64(p[0]), p[1], 50, 0, wmGain, nil)
+		}
+		add(300, 150, 200, 0, wmGain, nil)
+		add(1000, 100, 50, 0.1, wmLossy, nil)
+		add(300, 150, 50, 0.1, wmLossy, nil)
+		add(1000, 100, 50, 1, wmLossy, nil)
+	}
+	multi := func(n int) func(*wmCfg) {
+		return func(c *wmCfg) {
+			c.streams = make([]wmStreamCfg, n)
+			c.name += fmt.Sprintf(" x%d", n)
 		}
 	}
+	add(300, 150, 50, 0, wmMulti, multi(4))
+	add(1000, 100, 50, 0, wmMulti, multi(4))
+	add(300, 150, 50, 0, wmMulti, multi(16))
+	add(300, 150, 50, 0, wmSlow, func(c *wmCfg) {
+		c.streams = []wmStreamCfg{{}, {read: 2 * wmMbit}}
+		c.name += " +slow reader"
+	})
+	add(300, 150, 50, 0, wmChangeK, func(c *wmCfg) {
+		c.changes = []wmChange{{20 * time.Second, 50 * wmMbit}, {40 * time.Second, 300 * wmMbit}}
+		c.dur = 60 * time.Second
+		c.name += " 300>50>300"
+	})
+	add(1000, 100, 50, 0, wmPolice, func(c *wmCfg) {
+		c.policer = 300 * wmMbit
+		c.name += " policer 300"
+	})
+	add(300, 150, 200, 0, wmCompete, func(c *wmCfg) {
+		c.compete = 15 * time.Second
+		c.name += " +bbr at 15s"
+	})
+	if full {
+		add(1000, 150, 50, 0, wmMulti, multi(16))
+		add(100, 100, 50, 0, wmChangeK, func(c *wmCfg) {
+			c.changes = []wmChange{{20 * time.Second, 20 * wmMbit}, {40 * time.Second, 100 * wmMbit}}
+			c.dur = 60 * time.Second
+			c.name += " 100>20>100"
+		})
+		add(300, 150, 50, 0.1, wmMulti, multi(4))
+	}
+	return cs
+}
+
+// wmVerdict is a cell's three runs against the targets.
+type wmVerdict struct {
+	cell           wmCell
+	base, n4, core wmResult
+	fails          []string
+	cpu            time.Duration
+}
+
+func wmJudge(c wmCell) wmVerdict {
+	v := wmVerdict{cell: c}
+	t0 := time.Now()
+	v.base = wmRun(c.cfg.with(wmBase))
+	v.n4 = wmRun(c.cfg.with(wmN4))
+	t1 := time.Now()
+	v.core = wmRun(c.cfg.with(wmCore))
+	v.cpu = time.Since(t1)
+	_ = t0
+	b, n, k := v.base, v.n4, v.core
+	fail := func(f string, a ...any) { v.fails = append(v.fails, fmt.Sprintf(f, a...)) }
+	gainN4 := n.mbit - b.mbit
+	share := 0.8
+	if c.kind == wmLossy {
+		share = 0.6
+	}
+	switch {
+	case c.kind == wmChangeK || c.kind == wmCompete:
+	case gainN4 > 0.1*b.mbit && c.kind != wmMulti:
+		if k.mbit-b.mbit < share*gainN4 {
+			fail("gain %.0f%% of N4's", 100*(k.mbit-b.mbit)/gainN4)
+		}
+	default:
+		if k.mbit < 0.95*b.mbit {
+			fail("slower than base (%.0f < %.0f)", k.mbit, b.mbit)
+		}
+	}
+	// resent: + 0.5 point where base is clean (and under random loss), + 3
+	// points elsewhere; never more than base with several downloads
+	lim := b.resend + 0.03
+	if (b.resend-b.randDrop < 0.005 || c.kind == wmLossy) && c.kind != wmChangeK {
+		lim = b.resend + 0.005
+	}
+	if c.kind == wmMulti {
+		lim = b.resend + 0.002
+	}
+	if k.resend > lim {
+		fail("resent %.2f%% (base %.2f%%)", 100*k.resend, 100*b.resend)
+	}
+	// the interactive user next to it: p50 and p99 within 1.3× base; where
+	// base itself overflows, no worse than base
+	over := b.selfDrop > 0.01
+	if over {
+		if k.iP50 > 1.05*b.iP50+10 || k.iP99 > 1.05*b.iP99+10 {
+			fail("interactive %.0f/%.0f ms (base %.0f/%.0f)", k.iP50, k.iP99, b.iP50, b.iP99)
+		}
+	} else if c.kind != wmChangeK && c.kind != wmCompete && (k.iP50 > 1.3*b.iP50 || k.iP99 > 1.3*b.iP99) {
+		fail("interactive %.0f/%.0f ms (base %.0f/%.0f)", k.iP50, k.iP99, b.iP50, b.iP99)
+	}
+	// the queue the core keeps: a standing qTarget (15 ms) plus what probes
+	// and the sender's bursts add
+	if !over && c.kind != wmChangeK && c.kind != wmCompete && (k.qMean > 20 || k.q99 > math.Max(45, b.q99)) {
+		fail("queue %.0f/%.0f ms", k.qMean, k.q99)
+	}
+	// a static, clean path: no drain once HOLD was reached
+	if c.cfg.loss == 0 && len(c.cfg.changes) == 0 && c.cfg.compete == 0 && c.cfg.policer == 0 && !over && k.holdDrains > 0 {
+		fail("%d drain(s) from HOLD", k.holdDrains)
+	}
+	if c.kind == wmChangeK {
+		at := c.cfg.changes[len(c.cfg.changes)-1].at.Milliseconds()
+		m := newModel(c.cfg.with(wmCore))
+		r := m.run()
+		t90 := m.t90(at, 0.9*m.reach(c.cfg.changes[len(c.cfg.changes)-1].rate))
+		if t90 < 0 || t90 > 10*time.Second {
+			fail("back to 90%% of the new rate in %v", t90)
+		}
+		k.t90 = t90
+		_ = r
+	}
+	if v.cpu > time.Second {
+		fail("model run took %v", v.cpu)
+	}
+	v.core = k
+	return v
+}
+
+func (v wmVerdict) String() string {
+	ok := "ok"
+	if len(v.fails) > 0 {
+		ok = strings.Join(v.fails, "; ")
+	}
+	return fmt.Sprintf("%-28s base %6.1f %5.2f%% | n4 %6.1f %5.2f%% | core %6.1f %5.2f%% q%3.0f/%3.0f i%4.0f/%4.0f t90 %4.1fs d%v/%d p%v | %s",
+		v.cell.cfg.name, v.base.mbit, 100*v.base.resend, v.n4.mbit, 100*v.n4.resend, v.core.mbit, 100*v.core.resend,
+		v.core.qMean, v.core.q99, v.core.iP50, v.core.iP99, v.core.t90.Seconds(), v.core.drains, v.core.holdDrains, v.core.probes, ok)
+}
+
+func TestWcoreModelTable(t *testing.T) {
+	full := os.Getenv("HS2_WCORE_MODEL_FULL") == "1"
+	cells := wmCells(full)
+	bad := 0
+	for _, c := range cells {
+		v := wmJudge(c)
+		t.Log(v)
+		if len(v.fails) > 0 {
+			bad++
+		}
+	}
+	t.Logf("%d of %d cells meet every target", len(cells)-bad, len(cells))
 }
 
 func TestWcoreModelTrace(t *testing.T) {
