@@ -80,6 +80,7 @@ type autopilot struct {
 	reason string
 	cCap   float64 // last per-link capacity estimate, bytes/s (0 = unknown)
 	gPeak  float64 // last 60 s peak aggregate, bytes/s, less what grown windows carry (apSample.grown)
+	gShown float64 // ... with them (display)
 }
 
 // apTunables holds every clock and threshold, so tests can shorten them.
@@ -389,8 +390,8 @@ func (a *autopilot) decide(s apSample) apDecision {
 		}
 	}
 	fl60, p60 := 0, 0
-	gPeak := 0.0
-	prevG := -1.0
+	gPeak, gShown := 0.0, 0.0
+	prevG, prevShown := -1.0, -1.0
 	for _, h := range a.hist {
 		if h.flowing > fl60 {
 			fl60 = h.flowing
@@ -409,6 +410,11 @@ func (a *autopilot) decide(s apSample) apDecision {
 			gPeak = g
 		}
 		prevG = h.gn
+		g = h.g
+		if prevShown >= 0 {
+			g = (h.g + prevShown) / 2
+		}
+		gShown, prevShown = max(gShown, g), h.g
 	}
 	fGrow := ceilDiv(fl5, a.perLink)
 	fHold := ceilDiv(fl60, a.perLink)
@@ -443,7 +449,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 		need = fHold
 	}
 	H := a.clamp(need)
-	a.cCap, a.gPeak = cCap, gPeak
+	a.cCap, a.gPeak, a.gShown = cCap, gPeak, gShown
 
 	// Backoff resets when demand clearly and steadily outgrew the last ceiling
 	// (re-check soon) or long after the last failure. "Steadily": over the last

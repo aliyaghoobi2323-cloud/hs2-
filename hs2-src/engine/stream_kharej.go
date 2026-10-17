@@ -110,6 +110,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			// the edge's ceiling and user ports as reported by the links up NOW
 			st := PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max(), Routes: cfg.peers.edgeRoutes()}
 			cfg.traffic.fill(&st) // this exit's own user connections and throughput
+			wcores.fillStats(&st)
 			return st
 		})
 	}

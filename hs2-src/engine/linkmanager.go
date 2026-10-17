@@ -2505,6 +2505,11 @@ type PoolStats struct {
 	Min, Max int     // envelope
 	Users    int     // open user connections
 	MbitPerS float64 // aggregate throughput, Mbit/s
+	// The window core (wcore_run.go): this server's streams with a window
+	// past NeedStreamBuffer now, what those windows are, and the window pool.
+	FastConns  int
+	FastWinMiB float64
+	PoolMiB    int
 	// Counted: Users, Flowing, MbitPerS and PeakMbit are this side's own
 	// measurement (every side of this hs2 counts them; false only from code
 	// that does not, so a display can say where the numbers live instead of
@@ -2585,9 +2590,10 @@ func (m *LinkManager) publishStats() {
 	st := PoolStats{
 		Min: m.min, Max: m.max,
 		MbitPerS: mbitps(m.sample.G), Phase: m.dec.phase.String(), Reason: m.dec.reason,
-		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(max(m.ap.gPeak, m.sample.G)),
+		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(max(m.ap.gShown, m.sample.G)),
 		ExitStats: m.exitStats,
 	}
+	wcores.fillStats(&st)
 	if m.pin.Load() == 0 && m.ap.next.After(now) && m.dec.phase == apHolding {
 		st.NextProbeS = int(m.ap.next.Sub(now).Seconds() + 0.5)
 	}

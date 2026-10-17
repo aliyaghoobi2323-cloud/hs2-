@@ -76,6 +76,11 @@ type liveStatus struct {
 	Refill     string `json:"refill,omitempty"`
 	NextProbeS int    `json:"next_probe_s,omitempty"`
 	ExitStats  string `json:"exit_stats,omitempty"` // ok / partial / older exit: ...
+	// The window core: connections with a window past the base 2 MiB, what
+	// those windows are, and the window pool (both sides; absent: none).
+	FastConns  int     `json:"fast_conns,omitempty"`
+	FastWinMiB float64 `json:"fast_win_mib,omitempty"`
+	PoolMiB    int     `json:"pool_mib,omitempty"`
 
 	// Link-pool ceiling (pool carriers only; absent otherwise). CfgMax is THIS
 	// server's ceiling as it runs (auto: derived from the hardware at start;
@@ -293,6 +298,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		}
 		ls.Users, ls.Mbit, ls.Sat = s.Users, round1(s.MbitPerS), s.Saturated
 		ls.Counted, ls.Flowing, ls.PeakMbit = s.Counted, s.Flowing, round1(s.PeakMbit)
+		ls.FastConns, ls.FastWinMiB, ls.PoolMiB = s.FastConns, round1(s.FastWinMiB), s.PoolMiB
 		if s.Phase != "" {
 			ls.Phase = s.Phase
 		}
@@ -483,6 +489,9 @@ func printStatus(path string) {
 	}
 	if ls.ExitStats != "" && ls.ExitStats != "ok" {
 		fmt.Printf("  exit stats: %s\n", ls.ExitStats)
+	}
+	if l := windowsLine(ls); l != "" {
+		fmt.Printf("  windows:    %s\n", l)
 	}
 	if strings.HasPrefix(ls.Carrier, "dgtun") || ls.LossPct > 0 || ls.ParityPct > 0 || ls.Policed {
 		fmt.Printf("  loss:       %.1f%% of what this side sends (worst carrier %.1f%%)\n", ls.LossPct, ls.MaxLossPct)
@@ -868,6 +877,16 @@ func cpuLine(ls liveStatus) string {
 		s += " — SATURATED: carriers send late however good the path is (see the log)"
 	}
 	return s
+}
+
+// windowsLine is the window core's: the connections whose window grew past
+// the base 2 MiB and what their windows hold of the window pool ("" when
+// none has).
+func windowsLine(ls liveStatus) string {
+	if ls.FastConns <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("fast connections: %d (windows %.0f MiB of %d MiB pool)", ls.FastConns, ls.FastWinMiB, ls.PoolMiB)
 }
 
 // poolLine is the datagram pool's fair share and the queue its busy carriers

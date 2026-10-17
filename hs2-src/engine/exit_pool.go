@@ -444,6 +444,7 @@ func (p *exitPool) stats() PoolStats {
 	st.PeerMax = p.peers.max() // reported by the links up NOW (never a gone link's value)
 	st.Routes = p.peers.edgeRoutes()
 	p.traffic.fill(&st)
+	wcores.fillStats(&st)
 	return st
 }
 

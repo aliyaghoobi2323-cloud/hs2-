@@ -918,6 +918,27 @@ func TestAutopilotLeavesGrownOut(t *testing.T) {
 	if math.Abs(core.cCap-50*mbit) > 1 || math.Abs(core.gPeak-500*mbit) > 1 {
 		t.Fatalf("with grown windows: capacity %.0f, peak %.0f Mbit/s, want 50 and 500", core.cCap/mbit, core.gPeak/mbit)
 	}
+	if math.Abs(core.gShown-2000*mbit) > 1 {
+		t.Fatalf("the peak shown %.0f Mbit/s, want all of it (2000)", core.gShown/mbit)
+	}
+}
+
+// The status line's numbers: the streams past Need on every registered
+// link and what their windows are.
+func TestWcoreFillStats(t *testing.T) {
+	ws := &wcSet{}
+	for i := 0; i < 3; i++ {
+		l := wcLogLink("link", wcEdge)
+		l.sess = &smux.Session{} // never closed: only counted here
+		l.inStats.fastN.Store(int32(i))
+		l.inStats.fastWin.Store(int64(i) << 20)
+		ws.put(l)
+	}
+	var st PoolStats
+	ws.fillStats(&st)
+	if st.FastConns != 3 || st.FastWinMiB != 3 || st.PoolMiB != min(max(SmuxWindowPool, 0), 1<<30)>>20 {
+		t.Fatalf("stats %+v", st)
+	}
 }
 
 // What the runner takes from the edge's meter: the control ping's pongs

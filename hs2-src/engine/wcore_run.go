@@ -528,6 +528,20 @@ func wcoreNote(m *linkMeter) string {
 	return s + fmt.Sprintf(", held by the window pool %d time(s)", st.poolShort.Load())
 }
 
+// fillStats adds the process's window cores to a pool snapshot (the status
+// line, §7.3).
+func (ws *wcSet) fillStats(st *PoolStats) {
+	ws.mu.Lock()
+	n, w := 0, int64(0)
+	for l := range ws.all {
+		n += int(l.inStats.fastN.Load())
+		w += l.inStats.fastWin.Load()
+	}
+	ws.mu.Unlock()
+	st.FastConns, st.FastWinMiB = n, float64(w)/(1<<20)
+	st.PoolMiB = min(max(SmuxWindowPool, 0), 1<<30) >> 20
+}
+
 // ---- log lines (§7.1) ----
 
 // dir is what the link's core receives: "download" on the edge.
