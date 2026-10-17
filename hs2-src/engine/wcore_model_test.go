@@ -62,25 +62,48 @@ func modelStepOf(need, w uint32) uint32 {
 	return min(s, half)
 }
 
-// modelFitCore is smux.FitCore: the window of this update. ceil == 0 is the
-// behaviour without the core, min(want, need). Growth (want > old) only if
-// growOK && turnOK, at most 2×old and never past ceil; want > ceil > 0
-// takes the window to ceil at once (DRAIN), floored at max(minWin, unread).
-// Integration switches the model to smux.FitCore.
+// modelFitCore is smux.FitCore (third_party/smux/core.go, branch z5-arm),
+// line for line: the window of this update. ceil == 0 is the behaviour
+// without the core, min(want, need). Growth up to need is free, as without
+// the core; past need only if growOK && turnOK, at most to 2×old per update.
+// want > ceil > 0 takes the window to ceil at once (DRAIN), floored at
+// max(minWin, unread) but never above want. Integration switches the model
+// to smux.FitCore.
 func modelFitCore(old, want, ceil, need, minWin, unread uint32, growOK, turnOK bool) uint32 {
 	if ceil == 0 {
-		return min(want, need)
+		if want > need {
+			return need
+		}
+		return want
 	}
 	w := want
-	if w > old {
-		if !growOK || !turnOK {
-			w = old
-		} else if w > 2*old {
-			w = 2 * old
+	if w > old && w > need {
+		lim := old
+		if lim < need {
+			lim = need
+		}
+		if g := 2 * uint64(old); growOK && turnOK && g > uint64(lim) {
+			lim = ^uint32(0)
+			if g < uint64(lim) {
+				lim = uint32(g)
+			}
+		}
+		if w > lim {
+			w = lim
 		}
 	}
 	if w > ceil {
-		w = max(ceil, minWin, unread)
+		floor := minWin
+		if unread > floor {
+			floor = unread
+		}
+		if floor > w {
+			floor = w
+		}
+		w = ceil
+		if w < floor {
+			w = floor
+		}
 	}
 	return w
 }
@@ -640,6 +663,7 @@ type wmRcvStream struct {
 	hitN      uint32
 	lagN      uint32
 	poolShort uint32
+	snapHit   uint32 // hitN at the previous core snapshot
 	turnMin   time.Duration
 	turnLast  time.Duration
 	lastTurn  time.Duration
@@ -1311,18 +1335,29 @@ func (m *wmModel) runCore() {
 	if m.cfg.apProbing != nil {
 		s.apProbing = m.cfg.apProbing(time.Duration(m.t) * time.Millisecond)
 	}
+	// Session.CoreSnapshot: the streams at need/4 or more, or with a fresh
+	// hit; the turnaround samples are swapped out
 	for _, st := range m.rs {
-		s.streams = append(s.streams, wcStreamSnap{id: st.id, readTot: st.numRead, updN: st.updN, hitN: st.hitN,
-			lagN: st.lagN, poolShort: st.poolShort, turnMin: st.turnMin, turnLast: st.turnLast, win: st.rcvWin})
-		st.turnMin, st.turnLast = 0, 0
+		s.poolShort += st.poolShort
+		if st.rcvWin >= wmNeed/4 || st.hitN != st.snapHit {
+			s.streams = append(s.streams, wcStreamSnap{id: st.id, readTot: st.numRead, updN: st.updN, hitN: st.hitN,
+				lagN: st.lagN, turnMin: st.turnMin, turnLast: st.turnLast, win: st.rcvWin})
+		}
+		st.turnMin, st.turnLast, st.snapHit = 0, 0, st.hitN
 	}
 	in := m.bld.build(s)
 	o := m.core.step(in)
 	if m.cfg.check != nil {
 		m.cfg.check(time.Duration(m.t)*time.Millisecond, m.core, in, o)
 	}
-	for i, c := range o.ceils {
-		m.rs[i].ceil = c.ceil
+	// the runner clears the ceiling of a stream the snapshot left out
+	for _, st := range m.rs {
+		st.ceil = 0
+		for _, c := range o.ceils {
+			if c.id == st.id {
+				st.ceil = c.ceil
+			}
+		}
 	}
 	m.turnRef, m.qBrake, m.growOK = o.turnRef, o.qBrake, o.growOK
 	m.coreNext = o.next.Sub(m.epoch).Milliseconds()
@@ -1686,6 +1721,9 @@ type wmVerdict struct {
 	cpu            time.Duration
 }
 
+// wmRace: built with -race (wcore_race_test.go).
+var wmRace bool
+
 func wmJudge(c wmCell) wmVerdict {
 	v := wmVerdict{cell: c}
 	t0 := time.Now()
@@ -1758,7 +1796,7 @@ func wmJudge(c wmCell) wmVerdict {
 		k.t90 = t90
 		_ = r
 	}
-	if v.cpu > time.Second {
+	if v.cpu > time.Second && !wmRace {
 		fail("model run took %v", v.cpu)
 	}
 	v.core = k

@@ -12,8 +12,8 @@ import (
 // interval in, the link's window budget and each fast stream's ceiling out.
 // It holds no locks, opens no sockets and never reads the clock (time and
 // randomness come in through wcIn and c.rnd), so its whole behaviour is
-// exercised by the link model in wcore_model_test.go; wcore_run.go is the
-// actuator.
+// exercised by the link model in wcore_model_test.go; the actuator (the
+// runner, one per link, with wcBuilder) comes at integration.
 //
 // What it is for. A stream moves at most about its window per round trip,
 // so the 2 MiB window caps one connection on a long path. A larger window is
@@ -25,9 +25,12 @@ import (
 // does not compute the window the path needs from a formula; it finds it:
 //
 //   - The knee is the least window budget B (for all the link's fast
-//     streams together) that fills the path. STARTUP grows B by ×1.5–2 per
-//     interval while the link's delivery rate grows with it and stops when
-//     the rate stops growing, the queue grows or loss correlates with B.
+//     streams together) that fills the path. STARTUP grows B by ×1.25–2
+//     per interval (wcGears) while the link's delivery rate grows with it
+//     and stops when the rate stops growing, the queue grows or loss
+//     correlates with B. Between evaluations a ramp moves the published
+//     budget up in small steps (a window-limited BBR sender sends new credit
+//     at 2.89 times its rate), and loss on a clean path halves it at once.
 //   - HOLD keeps B a little past the knee: K = R̂·(T_base+τ_hold) + H_step,
 //     plus h·R̂·T_base, a standing queue of qTarget (15 ms). τ_hold is how
 //     long data waits in the receiver behind holes (0 on a clean path, up to
@@ -236,8 +239,6 @@ var (
 	wcProbeQExit     = 15 * time.Millisecond
 	wcHMin, wcHMax   = 0.03, 0.25
 	wcGpMin, wcGpMax = 1.04, 1.25
-	wcStartGain      = 1.5
-	wcStartGainFast  = 2.0
 	wcStartFast      = 0.6  // the rate grew by this share of B's growth: next step ×2
 	wcFullGrowth     = 0.25 // STARTUP: the rate must grow this much ...
 	wcFullRounds     = 3    // ... within this many intervals, or the pipe is full
@@ -608,8 +609,8 @@ func (c *wcore) step(in wcIn) wcOut {
 	}
 	c.lastAt = now
 	c.notePaths(in, &ev)
-	if in.snd.fresh {
-		c.sndSeen = true
+	if in.snd.fresh && (in.snd.srtt > 0 || in.snd.segsOut > 0) {
+		c.sndSeen = true // (an old exit's record has no TCP_INFO in it)
 	}
 	m := c.measure(in, dt)
 	c.last = m
@@ -921,7 +922,10 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 // "uses" its window, filling it as slowly as it is written). It stays in F
 // while it reads and its reader keeps up: right after B grows the sender has
 // a window it has not filled yet, which is no reason to take the stream's
-// ceiling away.
+// ceiling away. It leaves when its source got slow: no update of an interval
+// in a window-limited cycle, every turnaround past twice turnBase, a rate
+// under a quarter of what its window allows in a round trip, and (on the
+// edge) the exit's record showing no queue.
 func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	m := wcMeas{dt: dt}
 	if dt <= 0 {
@@ -934,10 +938,19 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	}
 	newF := map[uint32]bool{}
 	var turns, spreads []time.Duration
+	sndBare := c.cfg.side == wcExit || !c.qSndAt.IsZero() && in.now.Sub(c.qSndAt) <= wcSndSpan && c.qSnd <= c.dq()
 	hits, upds := 0.0, 0.0
 	for i, s := range in.streams {
 		r := float64(s.read) / dt
 		if s.upd == 0 || r <= 0 || s.braked || float64(s.lag) > wcLagShare*float64(s.upd) {
+			continue
+		}
+		if tb := c.turnMins.min(in.now, wcTurnWin); c.inF[s.id] && s.hit == 0 && s.upd >= 2 && tb > 0 && s.turnMin > 2*tb &&
+			r*tb.Seconds() < float64(s.win)/4 && sndBare {
+			// its source got slow: never all of the window in use, a
+			// turnaround that is how long the source takes to fill it, a
+			// rate far under what the window allows, and no queue at the
+			// exit to explain it (a path that slowed down queues there)
 			continue
 		}
 		if !c.inF[s.id] {
@@ -1795,35 +1808,40 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	return o
 }
 
-// wcStreamSnap is one stream's counters as the smux arm keeps them:
-// cumulative, except turnMin and turnLast, which the runner swaps out
-// (what came since the previous snapshot).
+// wcStreamSnap is one stream's counters as the smux arm keeps them
+// (smux.CoreSample: ID, Win, Read, Upds, Hits, Lags, TurnMin, TurnLast,
+// Braked): cumulative, except turnMin and turnLast, which the snapshot
+// swaps out (what came since the previous one). Session.CoreSnapshot leaves
+// out streams under need/4 with no fresh hit: one that comes back counts
+// from that snapshot on.
 type wcStreamSnap struct {
 	id                uint32
 	readTot           uint64
 	updN, hitN, lagN  uint32
-	poolShort         uint32
 	turnMin, turnLast time.Duration
 	win               uint32
 	braked            bool
 }
 
 // wcLinkSnap is one snapshot of a link: cumulative counters of its socket
-// (TCP_INFO), its session and its large streams, the edge's control ping
-// and the exit's latest stats record.
+// (TCP_INFO), its session (smux.CoreCounters: Parks, Borrows, Brakes,
+// PoolShort, Rcvd) and its large streams, the window pool's free bytes
+// (WindowPool.Free), the edge's control ping and the exit's latest stats
+// record.
 type wcLinkSnap struct {
 	now                    time.Time
 	minRTT, srtt           time.Duration
 	segsIn, ooo            uint64
 	oooOK                  bool
 	rcvd                   uint64
-	parks, brakes          uint32
+	parks, borrows, brakes uint32 // a borrow from the pool counts as a park too
+	poolShort              uint32
 	poolFree               int64
 	streams                []wcStreamSnap
 	ctrlMin                time.Duration
 	pongs                  []time.Duration // pongs since the previous snapshot
 	sndAt                  time.Time       // when the exit's latest record came (zero: none)
-	sndSrtt, sndMinRTT     time.Duration
+	sndSrtt, sndMinRTT     time.Duration   // srtt 0: an old exit, or no TCP_INFO there (no q_snd)
 	sndRetrans, sndSegsOut uint64
 	apProbing              bool
 }
@@ -1853,8 +1871,13 @@ func (b *wcBuilder) build(s wcLinkSnap) wcIn {
 		in.segsIn = wcDelta(s.segsIn, b.prev.segsIn)
 		in.ooo = wcDelta(s.ooo, b.prev.ooo)
 		in.linkBytes = wcDelta(s.rcvd, b.prev.rcvd)
-		in.parks = s.parks - b.prev.parks
+		// the reader waited for buffer space: a borrow from the pool
+		// counts as a park as well, and is none
+		if p, br := s.parks-b.prev.parks, s.borrows-b.prev.borrows; p > br {
+			in.parks = p - br
+		}
 		in.brakes = s.brakes - b.prev.brakes
+		in.poolShort = s.poolShort - b.prev.poolShort
 	}
 	next := make(map[uint32]wcStreamSnap, len(s.streams))
 	in.streams = make([]wcStream, 0, len(s.streams))
@@ -1865,7 +1888,6 @@ func (b *wcBuilder) build(s wcLinkSnap) wcIn {
 			w.upd = st.updN - p.updN
 			w.hit = st.hitN - p.hitN
 			w.lag = st.lagN - p.lagN
-			in.poolShort += st.poolShort - p.poolShort
 		}
 		in.streams = append(in.streams, w)
 		next[st.id] = st
