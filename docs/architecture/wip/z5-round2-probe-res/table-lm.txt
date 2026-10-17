@@ -1,0 +1,24 @@
+LMdl@100-100-q50
+  base  mean   76.1 [76.1 76.6 51.3]  cuts 0  verdict lines 0
+  n4    mean   61.2 [61.1 61.5 61.2]  cuts 0  verdict lines 0
+  ph    mean   75.7 [75.6 75.7 76.3]  cuts 0  verdict lines 0
+LMdl@1000-100-q50
+  base  mean  101.8 [101.8 104.4 97.3]  cuts 0  verdict lines 0
+  n4    mean  317.5 [315.4 326.4 317.5]  cuts 0  verdict lines 0
+  ph    mean  304.1 [294.8 309.7 304.1]  cuts 0  verdict lines 0
+LMdl@300-150-q50
+  base  mean   63.1 [61.4 67.8 63.1]  cuts 0  verdict lines 0
+  n4    mean  162.1 [160.2 200.6 162.1]  cuts 0  verdict lines 0
+  ph    mean  181.7 [183.7 178.2 181.7]  cuts 0  verdict lines 0
+LMul@100-100-q50
+  base  mean   76.8 [76.8 75.0 77.0]  cuts 0  verdict lines 0
+  n4    mean   62.1 [62.2 61.5 62.1]  cuts 0  verdict lines 0
+  ph    mean   76.7 [76.3 76.7 77.2]  cuts 0  verdict lines 0
+LMul@1000-100-q50
+  base  mean   96.7 [90.1 111.1 96.7]  cuts 0  verdict lines 0
+  n4    mean  338.3 [337.0 338.3 344.9]  cuts 0  verdict lines 0
+  ph    mean  312.7 [205.8 312.7 322.2]  cuts 0  verdict lines 0
+LMul@300-150-q50
+  base  mean   60.3 [60.3 56.6 72.2]  cuts 0  verdict lines 0
+  n4    mean  168.7 [168.6 180.0 168.7]  cuts 0  verdict lines 0
+  ph    mean  175.8 [170.0 182.4 175.8]  cuts 0  verdict lines 0

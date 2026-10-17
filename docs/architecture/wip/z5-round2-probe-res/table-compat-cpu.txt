@@ -1,0 +1,37 @@
+== probe 300 Mbit/s 150 ms
+need -> upstream v1.5.24       92.1 Mbit/s (2 MiB/RTT: 111.8)  intact  pool back true
+need -> hs2 c9825f2            92.4 Mbit/s (2 MiB/RTT: 111.8)  intact  pool back true
+upstream v1.5.24 -> need      169.5 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   8.1 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> need +pause  110.3 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   4.8 MiB  heldMax(pause)   4.4 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need           170.6 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   8.1 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need +pause    109.0 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   4.8 MiB  heldMax(pause)   4.4 MiB  borrows 0  pool back true
+need -> need                  170.8 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   8.1 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+need -> need +pause           110.3 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   4.8 MiB  heldMax(pause)   4.4 MiB  borrows 0  pool back true
+rc=0
+== probe 1000 Mbit/s 100 ms
+need -> upstream v1.5.24      152.5 Mbit/s (2 MiB/RTT: 167.8)  intact  pool back true
+need -> hs2 c9825f2           152.7 Mbit/s (2 MiB/RTT: 167.8)  intact  pool back true
+upstream v1.5.24 -> need      329.1 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   4.8 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> need +pause  162.4 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   4.8 MiB  heldMax(pause)   2.4 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need           326.3 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   4.8 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need +pause    169.2 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   4.8 MiB  heldMax(pause)   4.4 MiB  borrows 0  pool back true
+need -> need                  328.6 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   4.8 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+need -> need +pause           169.3 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   4.8 MiB  heldMax(pause)   4.4 MiB  borrows 0  pool back true
+rc=0
+== probe 100 Mbit/s 300 ms
+need -> upstream v1.5.24       43.2 Mbit/s (2 MiB/RTT:  55.9)  intact  pool back true
+need -> hs2 c9825f2            43.2 Mbit/s (2 MiB/RTT:  55.9)  intact  pool back true
+upstream v1.5.24 -> need       64.6 Mbit/s (2 MiB/RTT:  55.9)  intact  extraMax   4.8 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> need +pause   48.4 Mbit/s (2 MiB/RTT:  55.9)  intact  extraMax   2.5 MiB  heldMax(pause)   3.4 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need            64.5 Mbit/s (2 MiB/RTT:  55.9)  intact  extraMax   4.8 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need +pause     48.4 Mbit/s (2 MiB/RTT:  55.9)  intact  extraMax   2.5 MiB  heldMax(pause)   3.4 MiB  borrows 0  pool back true
+need -> need                   64.6 Mbit/s (2 MiB/RTT:  55.9)  intact  extraMax   4.8 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+need -> need +pause            48.0 Mbit/s (2 MiB/RTT:  55.9)  intact  extraMax   2.5 MiB  heldMax(pause)   3.4 MiB  borrows 0  pool back true
+rc=0
+
+(1, 'B') cpu/GiB 1.65 [1.58 1.65 1.65 1.55 1.72]  Gbit/s 10.17 ext_max_mib [0, 0, 0, 0, 0]
+(1, 'N') cpu/GiB 1.49 [1.49 1.54 1.37 1.48 1.54]  Gbit/s 11.86 ext_max_mib [14, 14, 14, 14, 14]
+(1, 'P') cpu/GiB 1.62 [1.62 1.69 1.63 1.60 1.58]  Gbit/s 10.43 ext_max_mib [0, 0, 0, 0, 0]
+(8, 'B') cpu/GiB 1.85 [2.00 1.85 1.84 1.88 1.84]  Gbit/s 9.77 ext_max_mib [0, 0, 0, 0, 0]
+(8, 'N') cpu/GiB 1.76 [1.95 1.76 1.64 1.75 1.77]  Gbit/s 10.97 ext_max_mib [112, 112, 112, 112, 112]
+(8, 'P') cpu/GiB 1.79 [1.90 1.77 1.79 1.79 1.98]  Gbit/s 10.30 ext_max_mib [0, 0, 0, 0, 0]
