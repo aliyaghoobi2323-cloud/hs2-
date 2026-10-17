@@ -1,6 +1,7 @@
 package smux
 
 import (
+	"encoding/binary"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -39,6 +40,49 @@ func maxWindow(upds [][2]uint32) uint32 {
 		}
 	}
 	return w
+}
+
+// trySendOn is rawPeer.sendOn returning its error rather than failing the
+// test: it may run on after the test gave up on it (sendWithin).
+func (p *rawPeer) trySendOn(sid uint32, n, frameSize int) error {
+	for n > 0 {
+		sz := n
+		if sz > frameSize {
+			sz = frameSize
+		}
+		frame := make([]byte, headerSize+sz)
+		frame[0] = p.ver
+		frame[1] = cmdPSH
+		binary.LittleEndian.PutUint16(frame[2:], uint16(sz))
+		binary.LittleEndian.PutUint32(frame[4:], sid)
+		if _, err := p.conn.Write(frame); err != nil {
+			return err
+		}
+		if sid == p.sid {
+			p.mu.Lock()
+			p.sent += uint32(sz)
+			p.mu.Unlock()
+		}
+		n -= sz
+	}
+	return nil
+}
+
+// sendWithin sends n bytes on stream sid and fails the test unless the
+// session takes them all in within 5 s: one that waits for room instead of
+// borrowing it never would.
+func sendWithin(t *testing.T, p *rawPeer, sid uint32, n, frameSize int, what string) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- p.trySendOn(sid, n, frameSize) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s: %d bytes not taken in within 5 s", what, n)
+	}
 }
 
 func TestPoolVerifyConfig(t *testing.T) {
@@ -109,7 +153,7 @@ func TestPoolBorrowWhenFull(t *testing.T) {
 	pool := NewWindowPool(4 << 20)
 	cfg := poolConfig(pool)
 	session, stream, p := newRawPeer(t, cfg)
-	p.send(cfg.MaxReceiveBuffer+200<<10, cfg.MaxFrameSize) // more than the buffer, not read
+	sendWithin(t, p, p.sid, cfg.MaxReceiveBuffer+200<<10, cfg.MaxFrameSize, "more than the buffer, not read")
 	p.settle(stream)
 	e, sp := extraOf(session)
 	if e < 200<<10 || e > int32(borrowMax*cfg.MaxReceiveBuffer) || sp != e {
@@ -198,7 +242,7 @@ func TestPoolBorrowBackOnClose(t *testing.T) {
 	pool := NewWindowPool(4 << 20)
 	cfg := poolConfig(pool)
 	session, stream, p := newRawPeer(t, cfg)
-	p.send(cfg.MaxReceiveBuffer+200<<10, cfg.MaxFrameSize)
+	sendWithin(t, p, p.sid, cfg.MaxReceiveBuffer+200<<10, cfg.MaxFrameSize, "more than the buffer, not read")
 	p.settle(stream)
 	if pool.Free() == 4<<20 {
 		t.Fatal("nothing borrowed")
@@ -206,5 +250,227 @@ func TestPoolBorrowBackOnClose(t *testing.T) {
 	session.Close()
 	if e, sp := extraOf(session); pool.Free() != 4<<20 || e != 0 || sp != 0 {
 		t.Fatalf("session closed: pool free %d extra %d spare %d", pool.Free(), e, sp)
+	}
+}
+
+// What came in under a larger window stays covered until it is read: when a
+// brake brings the window down while that data is unread, the session keeps
+// the buffer it grew by (its spare) as long as giving it back would leave
+// less than a quarter of MaxReceiveBuffer free, and gives it back as it is
+// read.
+func TestPoolSpareHeldWhileBuffered(t *testing.T) {
+	pool := NewWindowPool(4 << 20)
+	session, stream, p, cfg := grown(t, pool)
+	if claimOf(stream) == 0 {
+		t.Fatal("no claim to begin with")
+	}
+	other, sid := p.open(session)
+	p.sendOn(sid, 200<<10, 4096) // the other stream holds over a third of MaxReceiveBuffer
+	waitUnread(t, other, 200<<10)
+	p.send(100<<10, 4096) // the reader falls behind ...
+	time.Sleep(5 * time.Millisecond)
+	for i := 0; i < 150; i++ { // ... and stays behind: braked
+		p.send(4096, 4096)
+		time.Sleep(100 * time.Microsecond)
+	}
+	p.settle(stream)
+	if session.Brakes() == 0 {
+		t.Fatal("no brake: the test did not test")
+	}
+	stream.bufferLock.Lock()
+	stream.claimDown = monoNow() - 1 // the claim's hold is over
+	stream.bufferLock.Unlock()
+	room := int32(cfg.MaxReceiveBuffer / spareRoom)
+	var maxSpare int32
+	for u := unreadOf(stream); u > 0; u = unreadOf(stream) {
+		if u > 16<<10 {
+			u = 16 << 10
+		}
+		readN(t, stream, u, u)
+		b := atomic.LoadInt32(&session.bucket)
+		e, sp := extraOf(session)
+		if sp > maxSpare {
+			maxSpare = sp
+		}
+		if b <= 0 {
+			t.Fatalf("bucket %d with %d unread: the buffer shrank under data it took in (extra %d spare %d)", b, unreadOf(stream), e, sp)
+		}
+		if sp > 0 && b > room+16<<10 {
+			t.Fatalf("spare %d kept with %d free (room %d)", sp, b, room)
+		}
+	}
+	if maxSpare == 0 {
+		t.Fatal("no spare kept while the data that came in under the larger window was unread")
+	}
+	readN(t, other, 200<<10, 16<<10)
+	if e, sp := extraOf(session); e != int32(claimOf(stream)) || sp != 0 || pool.Free() != 4<<20-claimOf(stream) {
+		t.Fatalf("after the backlog: extra %d spare %d claim %d pool free %d", e, sp, claimOf(stream), pool.Free())
+	}
+}
+
+// A reader that stops after a fast transfer holds what its larger window let
+// in. That stays its own claim past NeedStreamBuffer, however its window
+// comes down (here: idle, swept), so the other streams of the session keep
+// the room they would have with every window within NeedStreamBuffer; it
+// goes back to the pool as the reader takes it.
+func TestPoolClaimCoversWhatAStoppedReaderHolds(t *testing.T) {
+	pool := NewWindowPool(4 << 20)
+	session, stream, p, cfg := grown(t, pool)
+	p.fill(cfg.MaxFrameSize) // all its window, then the reader stops
+	p.settle(stream)
+	held := unreadOf(stream)
+	if held <= cfg.NeedStreamBuffer {
+		t.Fatalf("holds %d: no larger window to begin with", held)
+	}
+	stream.bufferLock.Lock()
+	stream.readAt = monoNow() - int64(claimIdle)
+	stream.bufferLock.Unlock()
+	session.sweepClaims() // the window comes down ...
+	stream.bufferLock.Lock()
+	stream.claimDown = monoNow() - 1 // ... and its hold is over
+	stream.bufferLock.Unlock()
+	session.sweepClaims()
+	if c := claimOf(stream); c < held-cfg.NeedStreamBuffer {
+		t.Fatalf("claim %d under the %d it holds past NeedStreamBuffer", c, held-cfg.NeedStreamBuffer)
+	}
+	// the other streams have all of MaxReceiveBuffer but NeedStreamBuffer
+	other, sid := p.open(session)
+	p.sendOn(sid, cfg.MaxReceiveBuffer-cfg.NeedStreamBuffer-cfg.MaxFrameSize, 4096)
+	waitUnread(t, other, cfg.MaxReceiveBuffer-cfg.NeedStreamBuffer-cfg.MaxFrameSize)
+	if b := atomic.LoadInt32(&session.bucket); b <= 0 {
+		t.Fatalf("bucket %d: the stopped reader took the others' room", b)
+	}
+	readN(t, other, cfg.MaxReceiveBuffer-cfg.NeedStreamBuffer-cfg.MaxFrameSize, 16<<10)
+	readN(t, stream, held, 16<<10) // it reads again: the claim keeps only what its window needs
+	stream.bufferLock.Lock()
+	stream.claimDown = monoNow() - 1
+	stream.reclaim(cfg)
+	win := int(stream.rcvWin)
+	stream.bufferLock.Unlock()
+	session.returnSpare()
+	want := win - cfg.NeedStreamBuffer
+	if want < 0 {
+		want = 0
+	}
+	if e, sp := extraOf(session); claimOf(stream) != want || e != int32(want) || sp != 0 || pool.Free() != 4<<20-want {
+		t.Fatalf("after the reads: claim %d (window %d) extra %d spare %d pool free %d", claimOf(stream), win, e, sp, pool.Free())
+	}
+}
+
+// Closing a stream, or its session, gives everything back to the pool.
+func TestPoolBackOnClose(t *testing.T) {
+	pool := NewWindowPool(4 << 20)
+	session, stream, p, cfg := grown(t, pool)
+	p.fill(cfg.MaxFrameSize)
+	p.settle(stream)
+	if pool.Free() == 4<<20 {
+		t.Fatal("nothing taken from the pool")
+	}
+	stream.Close()
+	if e, sp := extraOf(session); pool.Free() != 4<<20 || e != 0 || sp != 0 {
+		t.Fatalf("stream closed: pool free %d extra %d spare %d", pool.Free(), e, sp)
+	}
+
+	session2, stream2, p2, _ := grown(t, pool)
+	p2.fill(cfg.MaxFrameSize)
+	p2.settle(stream2)
+	if pool.Free() == 4<<20 {
+		t.Fatal("nothing taken from the pool")
+	}
+	session2.Close()
+	if pool.Free() != 4<<20 {
+		t.Fatalf("session closed: pool free %d, want all of it back", pool.Free())
+	}
+	if n, _ := stream2.Read(make([]byte, 4096)); n == 0 { // what it holds is still read after the close
+		t.Fatal("nothing read after the close")
+	}
+	if pool.Free() != 4<<20 {
+		t.Fatalf("a read after the close took %d from the pool", 4<<20-pool.Free())
+	}
+}
+
+// A stream that has read nothing for claimIdle (a connection kept open after
+// a fast transfer) gives its window past NeedStreamBuffer back at the
+// keepalive tick, with an update: the peer may then send it no more than
+// NeedStreamBuffer, whatever its reader does when the next transfer comes.
+// Its claim covers what was on its way for claimHold turnarounds, then goes
+// back to the pool, and the stream takes from it again what its ceiling
+// lets it grow to once it reads again.
+func TestPoolIdleClaimSwept(t *testing.T) {
+	pool := NewWindowPool(4 << 20)
+	session, stream, p, cfg := grown(t, pool)
+	claim := claimOf(stream)
+	if claim == 0 || p.room() <= cfg.NeedStreamBuffer {
+		t.Fatalf("claim %d, room %d: no grown window to begin with", claim, p.room())
+	}
+	session.sweepClaims()
+	if claimOf(stream) != claim {
+		t.Fatalf("a stream that just read lost its claim (%d of %d)", claimOf(stream), claim)
+	}
+	stream.bufferLock.Lock()
+	stream.readAt = monoNow() - int64(claimIdle)
+	stream.bufferLock.Unlock()
+	session.sweepClaims()
+	deadline := time.Now().Add(5 * time.Second)
+	for p.lastWindow() != uint32(cfg.NeedStreamBuffer) {
+		if time.Now().After(deadline) {
+			t.Fatalf("idle: window %d at the peer, want NeedStreamBuffer %d (updates %v)", p.lastWindow(), cfg.NeedStreamBuffer, p.updates())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if r := p.room(); r > cfg.NeedStreamBuffer {
+		t.Fatalf("idle: the peer may still send %d, more than NeedStreamBuffer %d", r, cfg.NeedStreamBuffer)
+	}
+	if claimOf(stream) != claim {
+		t.Fatalf("idle: claim %d of %d gone before its hold: what is on its way would land uncovered", claimOf(stream), claim)
+	}
+	stream.bufferLock.Lock()
+	stream.claimDown = monoNow() + int64(time.Hour) // within the hold: nothing
+	stream.bufferLock.Unlock()
+	session.sweepClaims()
+	if claimOf(stream) != claim {
+		t.Fatalf("claim %d of %d gone within its hold", claimOf(stream), claim)
+	}
+	stream.bufferLock.Lock()
+	stream.claimDown = monoNow() - 1 // the hold is over
+	stream.bufferLock.Unlock()
+	session.sweepClaims()
+	if e, sp := extraOf(session); claimOf(stream) != 0 || e != 0 || sp != 0 || pool.Free() != 4<<20 {
+		t.Fatalf("idle: claim %d extra %d spare %d pool free %d, want all back in the pool", claimOf(stream), e, sp, pool.Free())
+	}
+	keepUp(t, p, stream, 4<<20) // reads again, under the same ceiling
+	p.sync(stream)
+	if claimOf(stream) == 0 || p.lastWindow() <= uint32(cfg.NeedStreamBuffer) {
+		t.Fatalf("reading again: claim %d window %d, want the larger window back", claimOf(stream), p.lastWindow())
+	}
+}
+
+// A stream holding a grown window does not keep its session from borrowing:
+// its claim covers what that window lets in, not what was in flight for the
+// other streams when their readers slowed down. (Counted against the limit,
+// a fast user's claim on a real link -- 1 Gbit/s, 100 ms -- left its
+// session one borrow in 247 times out of buffer, next to a dozen readers
+// that slowed down at once, and every stream stalled 10 s.)
+func TestPoolBorrowNextToAGrownWindow(t *testing.T) {
+	pool := NewWindowPool(4 << 20)
+	session, stream, p, cfg := grown(t, pool)
+	claim := claimOf(stream)
+	if claim < cfg.MaxReceiveBuffer {
+		t.Fatalf("claim %d: the grown window holds less than MaxReceiveBuffer from the pool", claim)
+	}
+	// another stream whose reader stopped gets the session's whole buffer,
+	// the room the claim adds to it, and more
+	other, sid := p.open(session)
+	n := cfg.MaxReceiveBuffer + claim + 200<<10
+	sendWithin(t, p, sid, n, cfg.MaxFrameSize, "next to a grown window")
+	waitUnread(t, other, n)
+	if session.Borrows() == 0 {
+		t.Fatal("no borrow")
+	}
+	if c := claimOf(stream); c != claim {
+		t.Fatalf("claim %d, was %d", c, claim)
+	}
+	if _, sp := extraOf(session); sp > int32(borrowMax*cfg.MaxReceiveBuffer) {
+		t.Fatalf("spare %d past %d times MaxReceiveBuffer %d", sp, borrowMax, cfg.MaxReceiveBuffer)
 	}
 }

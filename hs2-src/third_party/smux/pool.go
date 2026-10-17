@@ -319,10 +319,3 @@ func (s *Session) dropSpare() {
 // its streams' windows hold from the WindowPool, what it borrowed, and what
 // came in under larger windows and has not been read yet.
 func (s *Session) Extra() int { return int(atomic.LoadInt32(&s.extra)) }
-
-// claimTurn is the turnaround a claim is held for claimHold of after its
-// window came down.
-func (s *Stream) claimTurn() time.Duration { return claimTurnDefault }
-
-// poolShort counts a window the pool could not cover in full.
-func (s *Stream) poolShort() { atomic.AddUint32(&s.sess.poolShorts, 1) }

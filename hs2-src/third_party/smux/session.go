@@ -64,6 +64,12 @@ type Session struct {
 	spare        int32         // pool: of extra, what no window covers any more (returnSpare)
 	spareLock    sync.Mutex    // pool: one returnSpare or borrow at a time
 	poolShorts   uint32        // pool: windows the WindowPool could not cover in full (setWindow)
+	turnRef      atomic.Int64  // core: the window turnaround reference, ns (0: none; SetCoreRef)
+	qBrake       atomic.Int64  // core: how far past turnRef a turnaround holds growth back, ns
+	growOK       atomic.Bool   // core: windows may grow past NeedStreamBuffer
+	rcvd         atomic.Uint64 // core: data bytes received
+	snapLock     sync.Mutex    // core: one CoreSnapshot at a time
+	snapList     []*Stream     // core: CoreSnapshot's copy of the streams (under snapLock)
 
 	streams    map[uint32]*Stream // all streams in this session
 	streamLock sync.Mutex         // locks streams
@@ -105,6 +111,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 	s.streams = make(map[uint32]*Stream)
 	s.chAccepts = make(chan *Stream, defaultAcceptBacklog)
 	s.bucket = int32(config.MaxReceiveBuffer)
+	s.growOK.Store(true)
 	s.bucketNotify = make(chan struct{}, 1)
 	s.shaper = make(chan writeRequest)
 	s.writes = make(chan writeRequest)
@@ -393,6 +400,7 @@ func (s *Session) recvLoop() {
 				if hdr.Length() > 0 {
 					newbuf := defaultAllocator.Get(int(hdr.Length()))
 					if written, err := io.ReadFull(s.conn, newbuf); err == nil {
+						s.rcvd.Add(uint64(written))
 						s.streamLock.Lock()
 						if stream, ok := s.streams[sid]; ok {
 							stream.pushBytes(newbuf)
