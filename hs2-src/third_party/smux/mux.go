@@ -48,8 +48,9 @@ type Config struct {
 	// resizes it at each window update from the least backlog its reader
 	// left unread since the previous one: over StreamLagTarget it shrinks
 	// by the excess, down to MinStreamBuffer; under a quarter of the target
-	// it doubles, up to MaxStreamBuffer, unless the session ran out of
-	// MaxReceiveBuffer meanwhile. At the first resize a reader that kept up
+	// it doubles, up to MaxStreamBuffer (NeedStreamBuffer, when set),
+	// unless the session ran out of MaxReceiveBuffer meanwhile. At the first
+	// resize a reader that kept up
 	// gets at once what it reads in a second at its pace so far (from the
 	// transfer's own start, past a handshake's wait), if that is more
 	// (MaxStreamBuffer for a transfer that starts fast), so a large transfer
@@ -79,6 +80,30 @@ type Config struct {
 	// aims for (see MinStreamBuffer). Must be positive when MinStreamBuffer
 	// is, zero otherwise.
 	StreamLagTarget int
+
+	// NeedStreamBuffer, when positive, is as far as an adaptive stream's
+	// window grows on its reader keeping up alone. Past it, up to
+	// MaxStreamBuffer, a window grows only as far as the ceiling the
+	// session's owner set for the stream allows (Stream.SetCoreCeil, the
+	// window core: 0, the default, keeps it within NeedStreamBuffer), and,
+	// with a WindowPool, only by what the pool has left. Zero (the default):
+	// adaptive windows grow to MaxStreamBuffer. Requires MinStreamBuffer.
+	NeedStreamBuffer int
+
+	// WindowPool, with NeedStreamBuffer, is what windows past
+	// NeedStreamBuffer take their excess from: a window grows only as far
+	// as the pool has left, and the session's MaxReceiveBuffer grows by
+	// what its streams hold from the pool, until their windows are down
+	// again and what came in above them has been read (a stream idle for
+	// a few seconds takes its window down with an update). A session whose
+	// buffer runs full borrows from it too, whatever its windows, up to
+	// twice MaxReceiveBuffer more than its windows hold, until that is free
+	// again. The sessions sharing one pool so hold at most its size past
+	// their MaxReceiveBuffer in all, and the other streams of a session keep
+	// at least the room they would have with every window within
+	// NeedStreamBuffer. Nil: the excess is bounded by MaxStreamBuffer alone,
+	// in a session buffer of MaxReceiveBuffer.
+	WindowPool *WindowPool
 }
 
 // DefaultConfig is used to return a default configuration
@@ -118,7 +143,8 @@ func VerifyConfig(config *Config) error {
 	if config.MaxStreamBuffer <= 0 {
 		return errors.New("max stream buffer must be positive")
 	}
-	if config.MaxStreamBuffer > config.MaxReceiveBuffer {
+	if config.MaxStreamBuffer > config.MaxReceiveBuffer && (config.WindowPool == nil ||
+		config.NeedStreamBuffer > config.MaxReceiveBuffer) { // past NeedStreamBuffer a window brings its buffer from the pool
 		return errors.New("max stream buffer must not be larger than max receive buffer")
 	}
 	if config.MaxStreamBuffer > math.MaxInt32 {
@@ -142,6 +168,19 @@ func VerifyConfig(config *Config) error {
 		}
 	} else if config.StreamLagTarget != 0 {
 		return errors.New("stream lag target requires min stream buffer")
+	}
+	if config.NeedStreamBuffer < 0 {
+		return errors.New("need stream buffer must not be negative")
+	}
+	if config.NeedStreamBuffer > 0 {
+		if config.MinStreamBuffer == 0 {
+			return errors.New("need stream buffer requires the adaptive stream window")
+		}
+		if config.NeedStreamBuffer < config.MinStreamBuffer || config.NeedStreamBuffer > config.MaxStreamBuffer {
+			return errors.New("need stream buffer must be within [min stream buffer, max stream buffer]")
+		}
+	} else if config.WindowPool != nil {
+		return errors.New("window pool requires need stream buffer")
 	}
 	return nil
 }

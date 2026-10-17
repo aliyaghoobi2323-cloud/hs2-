@@ -273,6 +273,7 @@ type tcpStat struct {
 	deliveryRate uint64 // kernel delivery-rate estimate, bytes/s
 	notsent      uint32 // bytes queued but not yet sent
 	rtt, rttVar  uint32 // smoothed round trip and its mean deviation, µs (0: none yet)
+	minRTT       uint32 // the least round trip the socket has seen, µs (Linux >= 4.9; 0: none)
 	chronoValid  bool   // the kernel reports chrono counters (busy > 0)
 	// Data segments sent (retransmits included) and received (Linux ≥ 4.6;
 	// 0 on older kernels): the loss fraction's denominator, counted the way

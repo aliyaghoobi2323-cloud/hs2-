@@ -27,6 +27,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 )
 
 // Mode is how tuning behaves.
@@ -183,10 +185,15 @@ func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
 // to engine.SmuxSessionBuffer (8 MiB) of data its readers have not taken yet,
 // and smux keeps each buffered frame in a power-of-two block, so MSS-sized
 // frames take ~1.5x that: LinkWorstCaseMiB = 12 MiB per link, reached only
-// when readers stall (never pre-allocated). The rule keeps that worst case at
-// or below a quarter of RAM:
+// when readers stall (never pre-allocated). A stream's window past
+// engine.SmuxNeedStreamBuffer brings its own buffer from the process's window
+// pool (engine.SmuxWindowPool, WindowPoolMiB of RAM), and a link whose buffer
+// runs full borrows from it too: the links of one process share it, so it
+// counts once per process, not per link (PoolWorstCaseMiB). The rule keeps
+// the links' worst case and the pool's together at or below a quarter of RAM:
 //
-//   - one link per LinkRAMPerLinkMB (48 MB) of RAM, at most MaxLinksCap (300);
+//   - one link per LinkRAMPerLinkMB (48 MB) of the RAM left past four times
+//     the pool's worst case, at most MaxLinksCap (300);
 //   - fewer than 4 cores: at most 128 (handshakes and per-link upkeep are CPU);
 //   - a single core: no more than its profile value (below);
 //   - never below the profile value a server got before (32 / 48 / 64), so no
@@ -194,23 +201,41 @@ func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
 //
 // The profile values are keyed to the SAME profile that sizes the kernel
 // socket buffers (profileFor). Examples: 1 GB/1 core 32, 2 GB/4 cores 64,
-// 4 GB/2 cores 85, 8 GB/4 cores 170, 16 GB/4+ cores 300.
+// 4 GB/2 cores 81, 8 GB/4 cores 162, 16 GB/4+ cores 300.
 const (
 	maxLinksLow    = 32
 	maxLinksMedium = 48
 	maxLinksHigh   = 64
 
-	// LinkWorstCaseMiB is one link's worst-case receive backlog (8 MiB smux
-	// session buffer x 1.5 allocator rounding); cmd/hs2 tests keep it in step
-	// with engine.SmuxSessionBuffer.
-	LinkWorstCaseMiB = 12
-	// LinkRAMPerLinkMB: RAM per link so the worst case stays <= 25% of RAM.
-	LinkRAMPerLinkMB = 4 * LinkWorstCaseMiB
 	// MaxLinksCap is the largest auto ceiling.
 	MaxLinksCap = 300
 	// maxLinksFewCores caps a server with 2-3 cores.
 	maxLinksFewCores = 128
 )
+
+var (
+	// LinkWorstCaseMiB is one link's worst-case receive backlog: the
+	// engine's smux session buffer x1.5 allocator rounding.
+	LinkWorstCaseMiB = (engine.SmuxSessionBuffer*3/2 + 1<<20 - 1) >> 20
+	// LinkRAMPerLinkMB: RAM per link so the links' worst case stays <= 25% of
+	// the RAM left past the window pool's.
+	LinkRAMPerLinkMB = 4 * LinkWorstCaseMiB
+)
+
+// WindowPoolMiB is the window pool a process gets on a server with this much
+// RAM (engine.SmuxWindowPool, set at start): 1/128 of RAM, 16 to 128 MiB.
+// A window past engine.SmuxNeedStreamBuffer takes from it what the window
+// core lets it grow to (16 MiB at most: one connection at ~650 Mbit/s at
+// 100 ms), and links whose buffer ran full borrow from it, so a server
+// carries several such connections at once each way, and the others get the
+// window they would have got without it.
+func WindowPoolMiB(ramMB int) int {
+	return min(max(ramMB/128, 16), 128)
+}
+
+// PoolWorstCaseMiB is the window pool's part of the worst case, once per
+// process: x1.5 allocator rounding, as for a link.
+func PoolWorstCaseMiB(ramMB int) int { return (3*WindowPoolMiB(ramMB) + 1) / 2 }
 
 // profileMaxLinks is the ceiling a server's profile gave before the RAM rule.
 func profileMaxLinks(ramMB, cpus int) int {
@@ -237,7 +262,7 @@ func maxLinksRule(ramMB, cpus int) (int, string) {
 	if cpus < 2 {
 		return base, "single core"
 	}
-	byRAM, why := ramMB/LinkRAMPerLinkMB, "ram"
+	byRAM, why := (ramMB-4*PoolWorstCaseMiB(ramMB))/LinkRAMPerLinkMB, "ram"
 	if byRAM > MaxLinksCap {
 		byRAM, why = MaxLinksCap, "cap"
 	}
@@ -251,22 +276,24 @@ func maxLinksRule(ramMB, cpus int) (int, string) {
 }
 
 // MaxLinksReason says in words why RecommendedMaxLinks picked its number for
-// this hardware, e.g. "17.0 GB RAM, 20 cores: one link per 48 MB of RAM, at
-// most 300" — for the startup log, status, doctor and the installer.
+// this hardware, e.g. "17.0 GB RAM, 20 cores: one link per 48 MB of RAM
+// after 768 MB for the window pool, at most 300" — for the startup log,
+// status, doctor and the installer.
 func MaxLinksReason(ramMB, cpus int) string {
 	n, why := maxLinksRule(ramMB, cpus)
 	hw := fmt.Sprintf("%.1f GB RAM, %d core%s", float64(ramMB)/1024, cpus, plural(cpus))
+	per := fmt.Sprintf("one link per %d MB of RAM after %d MB for the window pool", LinkRAMPerLinkMB, 4*PoolWorstCaseMiB(ramMB))
 	switch why {
 	case "single core":
 		return fmt.Sprintf("%s: a single core keeps its %s-profile %d", hw, profileFor(ramMB, cpus), n)
 	case "profile":
 		return fmt.Sprintf("%s: the %s-profile %d (RAM allows no more)", hw, profileFor(ramMB, cpus), n)
 	case "few cores":
-		return fmt.Sprintf("%s: one link per %d MB of RAM, at most %d below 4 cores", hw, LinkRAMPerLinkMB, maxLinksFewCores)
+		return fmt.Sprintf("%s: %s, at most %d below 4 cores", hw, per, maxLinksFewCores)
 	case "cap":
-		return fmt.Sprintf("%s: one link per %d MB of RAM, at most %d", hw, LinkRAMPerLinkMB, MaxLinksCap)
+		return fmt.Sprintf("%s: %s, at most %d", hw, per, MaxLinksCap)
 	}
-	return fmt.Sprintf("%s: one link per %d MB of RAM, worst-case link buffers <= 25%% of RAM", hw, LinkRAMPerLinkMB)
+	return fmt.Sprintf("%s: %s, worst-case link buffers <= 25%% of RAM", hw, per)
 }
 
 func plural(n int) string {

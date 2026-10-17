@@ -57,8 +57,13 @@ type Session struct {
 
 	bucket       int32         // token bucket
 	bucketNotify chan struct{} // used for waiting for tokens
-	parks        uint32        // times recvLoop waited for tokens
+	parks        uint32        // times recvLoop ran out of tokens (and waited, unless it borrowed)
+	borrows      uint32        // pool: of those, times the bucket grew from the WindowPool instead (borrow)
 	brakes       uint32        // adaptive: braking window updates sent (Stream.checkLag)
+	extra        int32         // pool: the bucket's size past MaxReceiveBuffer: the streams' claims on the WindowPool and spare
+	spare        int32         // pool: of extra, what no window covers any more (returnSpare)
+	spareLock    sync.Mutex    // pool: one returnSpare or borrow at a time
+	poolShorts   uint32        // pool: windows the WindowPool could not cover in full (setWindow)
 
 	streams    map[uint32]*Stream // all streams in this session
 	streamLock sync.Mutex         // locks streams
@@ -213,16 +218,24 @@ func (s *Session) Close() error {
 			s.streams[k].sessionClose()
 		}
 		s.streamLock.Unlock()
+		if s.config.WindowPool != nil {
+			s.dropSpare()
+		}
 		return s.conn.Close()
 	} else {
 		return io.ErrClosedPipe
 	}
 }
 
-// Parks returns how many times the session's reader has waited for
+// Parks returns how many times the session's reader has run out of
 // MaxReceiveBuffer space: each time, every stream of the session stalled
-// until a reader made room.
+// until a reader made room, unless the buffer grew from the WindowPool
+// instead (Borrows).
 func (s *Session) Parks() uint32 { return atomic.LoadUint32(&s.parks) }
+
+// Borrows returns how many of Parks the session's buffer grew from the
+// WindowPool instead of waiting (Config.WindowPool).
+func (s *Session) Borrows() uint32 { return atomic.LoadUint32(&s.borrows) }
 
 // Brakes returns how many braking window updates the session's adaptive
 // streams have sent (Config.MinStreamBuffer).
@@ -318,6 +331,7 @@ func (s *Session) streamClosed(sid uint32) {
 			s.notifyBucket()
 		}
 	}
+	s.returnSpare()
 	delete(s.streams, sid)
 	s.streamLock.Unlock()
 }
@@ -337,6 +351,9 @@ func (s *Session) recvLoop() {
 	for {
 		for atomic.LoadInt32(&s.bucket) <= 0 && !s.IsClosed() {
 			atomic.AddUint32(&s.parks, 1)
+			if s.config.WindowPool != nil && s.borrow() {
+				continue // the buffer grew instead (WindowPool)
+			}
 			select {
 			case <-s.bucketNotify:
 			case <-s.die:
@@ -423,6 +440,9 @@ func (s *Session) keepalive() {
 		case <-tickerPing.C:
 			s.writeFrameInternal(newFrame(byte(s.config.Version), cmdNOP, 0), tickerPing.C, CLSCTRL)
 			s.notifyBucket() // force a signal to the recvLoop
+			if s.config.WindowPool != nil {
+				s.sweepClaims()
+			}
 		case <-tickerTimeout.C:
 			if !atomic.CompareAndSwapInt32(&s.dataReady, 1, 0) {
 				// recvLoop may block while bucket is 0, in this case,

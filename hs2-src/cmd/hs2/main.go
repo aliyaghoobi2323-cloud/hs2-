@@ -267,6 +267,8 @@ func applyTuning() {
 	num("HS2_TUNE_NOTSENT", &tlscarrier.NotSentLowat)
 	num("HS2_TUNE_SMUX_FRAME", &engine.SmuxFrameSize)
 	num("HS2_TUNE_SMUX_STREAMBUF", &engine.SmuxStreamBuffer)
+	num("HS2_TUNE_SMUX_NEEDBUF", &engine.SmuxNeedStreamBuffer)
+	num("HS2_TUNE_SMUX_POOL", &engine.SmuxWindowPool)
 	num("HS2_TUNE_SMUX_SESSBUF", &engine.SmuxSessionBuffer)
 	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
@@ -329,6 +331,9 @@ func runCmd(args []string) {
 	// Whatever path runCmd leaves by, no icmp reply rule outlives the daemon
 	// (the listeners release theirs on close; this catches the rest).
 	defer encap.ReleaseAllEchoGuards()
+	if ramMB, _ := detectHW(); ramMB > 0 {
+		engine.SmuxWindowPool = tune.WindowPoolMiB(ramMB) << 20 // what the auto ceiling counted on
+	}
 	applyTuning()
 	setMemoryLimit()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)

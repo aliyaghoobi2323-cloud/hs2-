@@ -55,6 +55,9 @@ type Stream struct {
 	settling   bool       // adaptive: after a brake, the backlog in flight before it is not yet down (under bufferLock)
 	preBrake   uint32     // adaptive: rcvWin before the first brake of the latest run (0: none; under bufferLock)
 	brakeAt    int64      // adaptive: monoNow of that first brake (under bufferLock)
+	claim      int        // pool: what the window holds from the WindowPool (under bufferLock)
+	claimDown  int64      // pool: monoNow from which the claim may come down to the window (0: not due; under bufferLock)
+	readAt     int64      // pool: monoNow of the last read while it holds a claim (under bufferLock)
 	updLock    sync.Mutex // one UPD at a time, so a later one never carries older values
 
 	// answered is set (atomic) once the peer has sent anything for this
@@ -192,6 +195,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 
 	if n > 0 {
 		s.sess.returnTokens(n)
+		s.sess.returnSpare()
 		if notify {
 			err := s.sendWindowUpdate()
 			return n, err
@@ -261,6 +265,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 		if buf != nil {
 			nw, ew := w.Write(buf)
 			s.sess.returnTokens(len(buf))
+			s.sess.returnSpare()
 			defaultAllocator.Put(buf)
 			if nw > 0 {
 				n += int64(nw)
@@ -325,7 +330,12 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 	restore := s.preBrake > s.rcvWin && s.unread == 0 &&
 		monoNow()-s.brakeAt < int64(brakeDrain)
 	if restore {
-		s.rcvWin, s.settling, s.preBrake = s.preBrake, false, 0
+		s.setWindow(cfg, s.preBrake)
+		s.settling, s.preBrake = false, 0
+	}
+	if s.claim > 0 {
+		s.readAt = monoNow()
+		s.reclaim(cfg) // the claim of a window that came down, once its hold is over
 	}
 	if s.incr < s.rcvWin/2 && !first && !s.updLost && !restore {
 		return false
@@ -336,7 +346,9 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 	if cfg.MinStreamBuffer > 0 {
 		parks := atomic.LoadUint32(&s.sess.parks)
 		if !first && !resend && !restore {
+			old := s.rcvWin
 			s.adaptWindow(cfg, parks != s.lastParks)
+			s.fitCore(cfg, old)
 		}
 		s.lastParks = parks
 		s.minUnread = s.unread
@@ -538,7 +550,7 @@ func (s *Stream) checkLag(free int) {
 		s.lagSince, s.lagRead = now, s.numRead
 		return
 	}
-	others := cfg.MaxReceiveBuffer - free - s.unread
+	others := cfg.MaxReceiveBuffer + int(atomic.LoadInt32(&s.sess.extra)) - free - s.unread
 	lag := now.Sub(s.lagSince)
 	if s.braking || int64(others)*brakeShare < int64(cfg.MaxReceiveBuffer) || lag < brakeLag {
 		return
@@ -568,7 +580,7 @@ func (s *Stream) checkLag(free int) {
 	if s.preBrake == 0 || monoNow()-s.brakeAt >= int64(brakeDrain) {
 		s.preBrake, s.brakeAt = s.rcvWin, monoNow() // the first brake of a run
 	}
-	s.rcvWin = win
+	s.setWindow(cfg, win)
 	s.incr = 0
 	s.minUnread = s.unread
 	s.lastParks = atomic.LoadUint32(&s.sess.parks)
@@ -830,7 +842,12 @@ func (s *Stream) SetDeadline(t time.Time) error {
 }
 
 // session closes
-func (s *Stream) sessionClose() { s.dieOnce.Do(func() { close(s.die) }) }
+func (s *Stream) sessionClose() {
+	s.dieOnce.Do(func() { close(s.die) })
+	s.bufferLock.Lock()
+	s.dropClaim() // the session gives it back to the pool as it closes
+	s.bufferLock.Unlock()
+}
 
 // LocalAddr satisfies net.Conn interface
 func (s *Stream) LocalAddr() net.Addr {
@@ -863,7 +880,8 @@ func (s *Stream) pushBytes(buf []byte) (written int, err error) {
 	return
 }
 
-// recycleTokens transform remaining bytes to tokens(will truncate buffer)
+// recycleTokens transform remaining bytes to tokens(will truncate buffer),
+// and lets go of the stream's claim on the WindowPool
 func (s *Stream) recycleTokens() (n int) {
 	s.bufferLock.Lock()
 	for k := range s.buffers {
@@ -873,6 +891,7 @@ func (s *Stream) recycleTokens() (n int) {
 	s.buffers = nil
 	s.heads = nil
 	s.unread = 0
+	s.dropClaim()
 	s.bufferLock.Unlock()
 	return
 }

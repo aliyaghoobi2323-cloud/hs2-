@@ -619,8 +619,9 @@ func linkDownReason(l Link) string {
 
 // linkStallNote says, for the log line of a link's end (down, retired, or
 // closed while degraded), how often its receive buffer ran full while it was
-// up (every user on it stalled until a reader made room) and how often a
-// reader that fell behind was braked to keep it from filling (smux
+// up (every user on it stalled until a reader made room, unless the buffer
+// grew from the window pool instead: SmuxWindowPool) and how often a reader
+// that fell behind was braked to keep it from filling (smux
 // Config.MinStreamBuffer); "" when neither happened, or for a link without a
 // smux session of its own.
 func linkStallNote(l Link) string {
@@ -632,7 +633,11 @@ func linkStallNote(l Link) string {
 	if parks == 0 && brakes == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (while up: its receive buffer ran full %d time(s); readers that fell behind braked %d time(s))", parks, brakes)
+	grew := ""
+	if b := ml.sess.Borrows(); b > 0 {
+		grew = fmt.Sprintf(", %d of them grown from the window pool instead", b)
+	}
+	return fmt.Sprintf(" (while up: its receive buffer ran full %d time(s)%s; readers that fell behind braked %d time(s))", parks, grew, brakes)
 }
 
 // Run brings the pool up and then maintains it: rebuilds dead links, heals

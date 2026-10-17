@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 )
 
 // allAvail treats every congestion control / qdisc as present.
@@ -50,8 +52,9 @@ func TestProfilesScaleWithHardware(t *testing.T) {
 	}
 }
 
-// The link-pool ceiling: one link per 48 MB of RAM (worst-case link buffers
-// <= 25% of RAM), at most 300, at most 128 below 4 cores, a single core keeps
+// The link-pool ceiling: one link per 48 MB of RAM after the window pool's
+// share (worst-case link buffers <= 25% of RAM), at most 300, at most 128
+// below 4 cores, a single core keeps
 // its profile value, and never below the profile value a server had before.
 // This is the single source of truth the engine, installer and doctor use.
 func TestRecommendedMaxLinks(t *testing.T) {
@@ -66,10 +69,10 @@ func TestRecommendedMaxLinks(t *testing.T) {
 		{2048, 2, "medium", 48},
 		{2048, 4, "high", 64}, // cores lift a borderline box; RAM allows 42
 		{4096, 1, "high", 64}, // single core keeps its profile value
-		{4096, 2, "high", 85}, // 4096/48
-		{8192, 8, "high", 170},
+		{4096, 2, "high", 81}, // (4096-4*48)/48
+		{8192, 8, "high", 162},
 		{8192, 2, "high", 128}, // below 4 cores
-		{14400, 4, "high", 300},
+		{14400, 4, "high", 286},
 		{16384, 4, "high", 300},
 		{17408, 20, "high", 300}, // the Iran production server
 		{22528, 12, "high", 300}, // the Kharej production server
@@ -104,8 +107,8 @@ func TestRecommendedMaxLinks(t *testing.T) {
 				t.Fatalf("single core RecommendedMaxLinks(%d,1)=%d above 64", ram, m)
 			case cpu < 4 && m > 128:
 				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d above 128 below 4 cores", ram, cpu, m)
-			case m > old(ram, cpu) && m*LinkWorstCaseMiB > ram/4+LinkWorstCaseMiB:
-				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d: worst case %d MiB above a quarter of RAM", ram, cpu, m, m*LinkWorstCaseMiB)
+			case m > old(ram, cpu) && m*LinkWorstCaseMiB+PoolWorstCaseMiB(ram) > ram/4+LinkWorstCaseMiB:
+				t.Fatalf("RecommendedMaxLinks(%d,%d)=%d: worst case %d MiB above a quarter of RAM", ram, cpu, m, m*LinkWorstCaseMiB+PoolWorstCaseMiB(ram))
 			}
 		}
 	}
@@ -116,11 +119,11 @@ func TestMaxLinksReason(t *testing.T) {
 		ram, cpu int
 		want     string
 	}{
-		{17408, 20, "17.0 GB RAM, 20 cores: one link per 48 MB of RAM, at most 300"},
+		{17408, 20, "17.0 GB RAM, 20 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300"},
 		{1024, 1, "1.0 GB RAM, 1 core: a single core keeps its low-profile 32"},
 		{2048, 4, "2.0 GB RAM, 4 cores: the high-profile 64 (RAM allows no more)"},
-		{8192, 2, "8.0 GB RAM, 2 cores: one link per 48 MB of RAM, at most 128 below 4 cores"},
-		{8192, 8, "8.0 GB RAM, 8 cores: one link per 48 MB of RAM, worst-case link buffers <= 25% of RAM"},
+		{8192, 2, "8.0 GB RAM, 2 cores: one link per 48 MB of RAM after 384 MB for the window pool, at most 128 below 4 cores"},
+		{8192, 8, "8.0 GB RAM, 8 cores: one link per 48 MB of RAM after 384 MB for the window pool, worst-case link buffers <= 25% of RAM"},
 	} {
 		if got := MaxLinksReason(c.ram, c.cpu); got != c.want {
 			t.Errorf("MaxLinksReason(%d,%d)=%q, want %q", c.ram, c.cpu, got, c.want)
@@ -276,5 +279,25 @@ func TestCgroupMemLimit(t *testing.T) {
 	}
 	if got := cgroupMemLimitMB(filepath.Join(t.TempDir(), "none"), root1); got != 0 {
 		t.Fatalf("unreadable: %d", got)
+	}
+}
+
+// The worst case of a link and of the window pool follow the engine's own
+// buffer sizes, so a change there moves the auto ceiling with it.
+func TestWorstCaseFollowsEngine(t *testing.T) {
+	if want := (engine.SmuxSessionBuffer*3/2 + 1<<20 - 1) >> 20; LinkWorstCaseMiB != want || want < 12 {
+		t.Fatalf("LinkWorstCaseMiB = %d, want %d from the engine's session buffer", LinkWorstCaseMiB, want)
+	}
+	if LinkRAMPerLinkMB < 4*LinkWorstCaseMiB {
+		t.Fatalf("LinkRAMPerLinkMB = %d: under four times a link's worst case (%d MiB)", LinkRAMPerLinkMB, LinkWorstCaseMiB)
+	}
+	for _, ram := range []int{512, 2048, 8192, 16384, 65536} {
+		pool := WindowPoolMiB(ram)
+		if pool < engine.SmuxStreamBuffer>>20-engine.SmuxNeedStreamBuffer>>20 {
+			t.Errorf("WindowPoolMiB(%d) = %d: not even one full window past SmuxNeedStreamBuffer", ram, pool)
+		}
+		if PoolWorstCaseMiB(ram) < pool*3/2 {
+			t.Errorf("PoolWorstCaseMiB(%d) = %d under 1.5x the pool's %d", ram, PoolWorstCaseMiB(ram), pool)
+		}
 	}
 }
