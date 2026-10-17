@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -151,6 +152,8 @@ type wmCfg struct {
 	hitTruth  bool // hit from the sender's truth instead of the receiver's pause
 	apProbing func(t time.Duration) bool
 	trace     bool
+	// check sees every step of the core (the invariant tests)
+	check func(t time.Duration, c *wcore, in wcIn, o wcOut)
 }
 
 type wmResult struct {
@@ -196,6 +199,11 @@ type wmPkt struct {
 	sacked  bool
 	lost    bool
 	inNet   bool // in the queue or on the line: not to be reused yet
+	// rnd: lost to the path's random loss. A packet of k MSS stands for k
+	// segments of which one was lost (it is dropped with 1-(1-p)^k, so loss
+	// events come as often as on the real path): its resend counts as one
+	// segment, else the resend share would read k× the path's loss
+	rnd bool
 }
 
 type wmQ[T any] struct {
@@ -330,7 +338,11 @@ func (f *wmFlow) send() {
 			old := f.rtxQ.pop()
 			p = m.newPkt()
 			p.seq, p.n, p.rtx = old.seq, old.n, true
-			f.retrans += f.segs(p.n)
+			if old.rnd {
+				f.retrans++
+			} else {
+				f.retrans += f.segs(p.n)
+			}
 			f.rtxBytes += uint64(p.n)
 		} else {
 			if f.main && f.writeSeq-f.sndNxt < uint64(f.unit) {
@@ -888,8 +900,9 @@ func (m *wmModel) serve() {
 		m.serveCred -= float64(p.n)
 		if m.cfg.loss > 0 && m.rnd.Float64() < m.lossUnit {
 			p.inNet = false
+			p.rnd = true
 			if p.f.main {
-				m.randDrops += p.f.segs(p.n)
+				m.randDrops++
 			}
 			continue
 		}
@@ -1305,6 +1318,9 @@ func (m *wmModel) runCore() {
 	}
 	in := m.bld.build(s)
 	o := m.core.step(in)
+	if m.cfg.check != nil {
+		m.cfg.check(time.Duration(m.t)*time.Millisecond, m.core, in, o)
+	}
 	for i, c := range o.ceils {
 		m.rs[i].ceil = c.ceil
 	}
@@ -1759,15 +1775,119 @@ func (v wmVerdict) String() string {
 		v.core.qMean, v.core.q99, v.core.iP50, v.core.iP99, v.core.t90.Seconds(), v.core.drains, v.core.holdDrains, v.core.probes, ok)
 }
 
+// wmKindOf names the target a failure message is about.
+func wmKindOf(msg string) string {
+	switch {
+	case strings.HasPrefix(msg, "gain"):
+		return "gain"
+	case strings.HasPrefix(msg, "slower"):
+		return "slower"
+	case strings.HasPrefix(msg, "resent"):
+		return "resent"
+	case strings.HasPrefix(msg, "interactive"):
+		return "interactive"
+	case strings.HasPrefix(msg, "queue"):
+		return "queue"
+	case strings.Contains(msg, "drain(s) from HOLD"):
+		return "drain"
+	case strings.HasPrefix(msg, "back to"):
+		return "t90"
+	}
+	return "other" // the run's CPU time: never expected
+}
+
+// wmKnown are the targets the core is known to miss in the model, per
+// cell of the default table, and why (core-NOTES.md has the traces). A
+// cell that misses a target not listed for it fails the test; a listed
+// cell that meets every target is reported, to be taken off the list.
+var wmKnown = map[string]struct {
+	kinds []string
+	why   string
+}{
+	"300/150 q50": {[]string{"interactive", "drain"},
+		"STARTUP's last step overflows the 50 ms queue just after the warm-up: one loss holds the user behind its hole for a round trip (p99)"},
+	"1000/100 q50": {[]string{"interactive", "drain"},
+		"as 300/150: the loss that ends STARTUP lands in the measured span"},
+	"300/100 q50": {[]string{"interactive"},
+		"p99 136 against 133: the standing queue (qTarget 15 ms) and a probe"},
+	"300/150 q200": {[]string{"interactive", "queue", "drain"},
+		"the 200 ms queue lets STARTUP and the probes build 26 ms of mean queue before the turnarounds show it"},
+	"1000/100 q50 l0.1": {[]string{"gain", "interactive"},
+		"every hole holds the window for a round trip: the knee estimate (τ_hold, R̂) runs low and probes rarely pay past the bar"},
+	"300/150 q50 l0.1": {[]string{"gain", "interactive"},
+		"as 1000/100 l0.1"},
+	"1000/100 q50 l1": {[]string{"gain", "interactive"},
+		"as 1000/100 l0.1 (N4's gain there comes with N4's own bursts)"},
+	"300/150 q50 x4": {[]string{"resent"},
+		"base windows already overflow (20.6% resent); the core starts once before the exit's first record shows it, +0.6 point"},
+	"1000/100 q50 x4": {[]string{"queue", "drain"},
+		"four streams' updates clump: the turnaround median moves with the clumps, HOLD drains twice"},
+	"300/150 q50 +slow reader": {[]string{"interactive"},
+		"p99 281: a probe's loss while the slow stream's window holds a hole"},
+	"1000/100 q50 policer 300": {[]string{"slower", "resent", "interactive"},
+		"STARTUP raises BBR's pacing for good (a window-limited sender never leaves STARTUP); past it the base window's half-window bursts trip the policer and the updates lock into one half window per round trip"},
+}
+
+// wmKnownRoadmap are the cells of the full table where the core misses the
+// roadmap's own limit (resent ≤ base + 3 points): 50 ms queues of at most
+// ~600 KB-2 MB on long round trips, where BBR's STARTUP pacing (raised by
+// the core's first growth, never lowered while the sender is window-limited)
+// sends each half-window update's credit faster than the path and the
+// queue overflows at the floor too. Stage 2's smaller steps or paced credit
+// at the exit are what helps there; stage 1 cannot.
+var wmKnownRoadmap = map[string]bool{
+	"100/100 q50 l1": true, "100/150 q50 l0.1": true, "100/300 q50 l0.1": true, "100/500 q50": true,
+	"100/500 q50 l0.1": true, "300/300 q50 l0.1": true, "300/500 q50": true,
+}
+
+// TestWcoreModelTable runs base, N4 and the core on each cell and judges the
+// core against the targets of §9.4 (wmJudge). The default table is a gate:
+// a miss not in wmKnown fails. HS2_WCORE_MODEL_FULL=1 adds the full matrix
+// (rates × round trips × queues × loss); its other cells are a report, held
+// only to the roadmap's resend limit (with wmKnownRoadmap).
 func TestWcoreModelTable(t *testing.T) {
 	full := os.Getenv("HS2_WCORE_MODEL_FULL") == "1"
+	gate := map[string]bool{}
+	for _, c := range wmCells(false) {
+		gate[c.cfg.name] = true
+	}
 	cells := wmCells(full)
-	bad := 0
+	bad, seen := 0, map[string]bool{}
 	for _, c := range cells {
 		v := wmJudge(c)
 		t.Log(v)
+		name := c.cfg.name
+		if seen[name] {
+			t.Fatalf("two cells named %q", name)
+		}
+		seen[name] = true
 		if len(v.fails) > 0 {
 			bad++
+		}
+		if lim := v.base.resend + 0.03; v.core.resend > lim && !wmKnownRoadmap[name] {
+			t.Errorf("%s: resent %.2f%% past the roadmap's base + 3 points (%.2f%%)", name, 100*v.core.resend, 100*lim)
+		}
+		if !gate[name] {
+			continue
+		}
+		known := wmKnown[name]
+		for _, f := range v.fails {
+			if !slices.Contains(known.kinds, wmKindOf(f)) {
+				t.Errorf("%s: %s", name, f)
+			}
+		}
+		if len(v.fails) == 0 && len(known.kinds) > 0 {
+			t.Logf("%s now meets every target: take it off wmKnown", name)
+		}
+	}
+	for name := range wmKnown {
+		if !seen[name] {
+			t.Errorf("wmKnown names %q, which is no cell", name)
+		}
+	}
+	for name := range wmKnownRoadmap {
+		if full && !seen[name] {
+			t.Errorf("wmKnownRoadmap names %q, which is no cell", name)
 		}
 	}
 	t.Logf("%d of %d cells meet every target", len(cells)-bad, len(cells))
@@ -1776,7 +1896,7 @@ func TestWcoreModelTable(t *testing.T) {
 func TestWcoreModelTrace(t *testing.T) {
 	spec := os.Getenv("HS2_WCORE_MODEL_TRACE")
 	if spec == "" {
-		t.Skip("HS2_WCORE_MODEL_TRACE=rate/rtt/queue[/loss[/mode]]")
+		t.Skip("HS2_WCORE_MODEL_TRACE=rate/rtt/queue[/loss[/mode[/streams]]]")
 	}
 	var rate, rtt, q, loss float64
 	mode := "core"
@@ -1790,9 +1910,16 @@ func TestWcoreModelTrace(t *testing.T) {
 	if len(parts) > 4 {
 		mode = parts[4]
 	}
+	streams := 1
+	if len(parts) > 5 {
+		fmt.Sscan(parts[5], &streams)
+	}
 	c := wmPath(rate, time.Duration(rtt)*time.Millisecond, time.Duration(q)*time.Millisecond)
 	c.loss = loss / 100
 	c.trace = true
+	if streams > 1 {
+		c.streams = make([]wmStreamCfg, streams)
+	}
 	for i, n := range []string{"base", "n4", "fin", "core"} {
 		if n == mode {
 			c.mode = wmMode(i)
@@ -1803,4 +1930,144 @@ func TestWcoreModelTrace(t *testing.T) {
 		t.Log(l)
 	}
 	t.Log(r)
+}
+
+// TestWcoreModelInvariants runs the core on random paths (fixed seeds) and
+// checks at every step:
+//   - B never above n·MaxStreamBuffer, nor above n·need plus the window pool
+//     (the pool covers what is past need); no ceiling above
+//     MaxStreamBuffer, and the published ceilings within B;
+//   - every probe is over within one evaluation period (its settle and
+//     measure parts, each after the ramp and ending on a runner wake), and
+//     a failed one leaves B at or below the budget it probed from;
+//   - on paths where the windows cannot make a queue (n·MaxStreamBuffer of
+//     window drains in under half the round trip, and the tail-drop queue
+//     holds all of it), random loss never takes the core to DRAIN.
+//
+// HS2_WCORE_MODEL_FULL=1 runs more seeds.
+func TestWcoreModelInvariants(t *testing.T) {
+	seeds := 12
+	if os.Getenv("HS2_WCORE_MODEL_FULL") == "1" {
+		seeds = 60
+	}
+	for seed := 1; seed <= seeds; seed++ {
+		r := rand.New(rand.NewPCG(uint64(seed), 0x5eed))
+		pick := func(v ...float64) float64 { return v[r.IntN(len(v))] }
+		quiet := seed%3 == 0 // a path the windows cannot queue on
+		var c wmCfg
+		n := 1 + r.IntN(4)
+		if quiet {
+			rtt := time.Duration(pick(100, 200, 300, 500)) * time.Millisecond
+			n = 1 + r.IntN(2)
+			rate := 2 * float64(n) * wmMaxWin / rtt.Seconds() / wmMbit
+			c = wmPath(rate, rtt, time.Duration(float64(n)*wmMaxWin/(rate*wmMbit)*2*float64(time.Second)))
+			c.loss = pick(0.001, 0.003, 0.01, 0.02)
+		} else {
+			c = wmPath(pick(20, 50, 100, 300, 1000), time.Duration(pick(20, 50, 100, 150, 300, 500))*time.Millisecond,
+				time.Duration(pick(10, 20, 50, 100, 300))*time.Millisecond)
+			c.loss = pick(0, 0, 0.001, 0.01)
+			if r.IntN(4) == 0 {
+				c.changes = []wmChange{{time.Duration(5+r.IntN(10)) * time.Second, c.rate * pick(0.1, 0.3, 3)}}
+			}
+			if r.IntN(6) == 0 {
+				c.policer = c.rate * pick(0.2, 0.5)
+			}
+			if r.IntN(3) == 0 {
+				c.pool = int64(pick(1, 4, 8)) << 20
+			}
+		}
+		c.streams = make([]wmStreamCfg, n)
+		for i := range c.streams {
+			if !quiet && r.IntN(3) == 0 {
+				c.streams[i].read = c.rate * pick(0.02, 0.1, 0.5)
+			}
+			if !quiet && r.IntN(4) == 0 {
+				c.streams[i].start = time.Duration(r.IntN(8)) * time.Second
+			}
+		}
+		c.mode, c.seed, c.dur = wmCore, uint64(seed), 20*time.Second
+		c.name = fmt.Sprintf("seed %d: %s x%d l%g", seed, c.name, n, 100*c.loss)
+		pool := c.pool
+		if pool == 0 {
+			pool = 64 << 20
+		}
+		var (
+			errs     []string
+			inProbe  bool
+			probeAt  time.Duration
+			probeLim time.Duration
+			probeB   uint64
+			fails    int
+			prev     = wcOff
+			holdB    uint64
+			drains   int
+		)
+		fail := func(f string, a ...any) {
+			if len(errs) < 5 {
+				errs = append(errs, fmt.Sprintf(f, a...))
+			}
+		}
+		c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+			ns := uint64(len(in.streams))
+			if o.B > ns*wmMaxWin || k.B > ns*wmMaxWin {
+				fail("%v: B %d/%d above %d streams × MaxStreamBuffer", at, o.B, k.B, ns)
+			}
+			if o.B > ns*wmNeed+uint64(pool) {
+				fail("%v: B %d above n·need + pool %d", at, o.B, ns*wmNeed+uint64(pool))
+			}
+			sum := uint64(0)
+			for _, x := range o.ceils {
+				if x.ceil > wmMaxWin {
+					fail("%v: ceiling %d above MaxStreamBuffer", at, x.ceil)
+				}
+				sum += uint64(x.ceil)
+			}
+			if sum > o.B {
+				fail("%v: ceilings %d above B %d", at, sum, o.B)
+			}
+			switch {
+			case o.state == wcProbe && prev != wcProbe:
+				s, mz := k.interval()
+				inProbe, probeAt, fails = true, at, k.cnt.probeFail
+				// the hold budget it probed from (HOLD's estimate at that
+				// step: within the margin of the one in force before)
+				probeB = max(k.probeFrom, uint64(len(k.last.f))*wmNeed)
+				if holdB > 0 && float64(k.probeFrom) > 1.3*float64(holdB) {
+					fail("%v: a probe from %d while HOLD held %d", at, k.probeFrom, holdB)
+				}
+				// its settle and measure parts, each after the ramp, each
+				// ending on a runner wake
+				probeLim = s + mz + 2*k.rampLeft() + 2*wcRampTick
+			case inProbe && o.state != wcProbe:
+				inProbe = false
+				if at-probeAt > probeLim {
+					fail("%v: a probe from %v ran %v (period %v)", at, probeAt, at-probeAt, probeLim)
+				}
+				if k.cnt.probeFail > fails && k.B > probeB {
+					fail("%v: a failed probe left B %d above %d", at, k.B, probeB)
+				}
+			case inProbe && at-probeAt > probeLim+100*time.Millisecond:
+				fail("%v: a probe from %v still runs (period %v)", at, probeAt, probeLim)
+				inProbe = false
+			}
+			if o.state == wcHold {
+				holdB = k.B
+			}
+			for _, e := range o.events {
+				if e.kind == wcEvDrain {
+					drains++ // (the refresh is no drain: it emits none)
+				}
+			}
+			prev = o.state
+		}
+		res := wmRun(c)
+		if quiet && drains > 0 {
+			fail("random loss without a queue: %d drain(s) %v", drains, res.drains)
+		}
+		if len(errs) > 0 {
+			t.Errorf("%s\n\t%s\n\t%s", c.name, res, strings.Join(errs, "\n\t"))
+		} else {
+			t.Logf("%s: %.0f Mbit, resent %.2f%%, drains %v", c.name, res.mbit, 100*res.resend, res.drains)
+		}
+	}
 }

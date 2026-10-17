@@ -638,8 +638,13 @@ func (c *wcore) step(in wcIn) wcOut {
 	case c.fEmpty >= wcOffAfter:
 		c.toOff()
 	case len(m.f) == 0:
-		// the fast streams paused: keep the state, judge nothing
+		// the fast streams paused: keep the state, judge nothing (a probe
+		// is over: it measured nothing, back to where it started)
 		c.settling = false
+		if c.state == wcProbe {
+			c.toHold(in, m)
+			c.setB(in, m, min(c.B, c.probeFrom))
+		}
 	case c.settling:
 		c.settled(in, m, &ev)
 	default:
@@ -769,17 +774,18 @@ func (c *wcore) cut(in wcIn) {
 	c.settling = false
 }
 
-// rampStep is how far the published budget may rise per runner wake.
-func (c *wcore) rampStep() float64 {
+// rampStep is how far the published budget may rise per runner wake from
+// pub.
+func (c *wcore) rampStep(pub uint64) float64 {
 	r := c.last.rF
 	if len(c.rhat) > 0 {
 		r = math.Max(r, c.rhatF(c.lastAt, c.last))
 	}
-	s := math.Max(wcRampQ.Seconds()*r, wcRampShare*float64(c.bPub))
-	if float64(c.B) < 1.25*float64(c.bPub) {
+	s := math.Max(wcRampQ.Seconds()*r, wcRampShare*float64(pub))
+	if float64(c.B) < 1.25*float64(pub) {
 		s /= 2 // the last stretch, near the knee: half as fast
 	}
-	return s
+	return math.Max(s, 1)
 }
 
 // ramp moves the published budget toward B: down at once, up by rampStep.
@@ -787,7 +793,7 @@ func (c *wcore) ramp() {
 	if c.bPub >= c.B || c.bPub == 0 {
 		c.bPub = c.B
 	} else {
-		c.bPub = min(c.B, c.bPub+uint64(math.Max(c.rampStep(), 1)))
+		c.bPub = min(c.B, c.bPub+uint64(c.rampStep(c.bPub)))
 	}
 	c.pubHist = append(c.pubHist, wcRate{c.acc.now, float64(c.bPub)})
 	if len(c.pubHist) > 20 {
@@ -797,10 +803,10 @@ func (c *wcore) ramp() {
 
 // rampLeft is how long the ramp still takes.
 func (c *wcore) rampLeft() time.Duration {
-	if c.bPub >= c.B {
-		return 0
+	n := 0
+	for p := c.bPub; p < c.B && p > 0 && n < 600; n++ {
+		p += uint64(c.rampStep(p))
 	}
-	n := math.Ceil(float64(c.B-c.bPub) / math.Max(c.rampStep(), 1))
 	return time.Duration(n) * wcRampTick
 }
 
@@ -1249,7 +1255,10 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// the windows without the core already make a queue at the exit: the
 	// knee is below them, there is nothing for STARTUP to find (in stage 1
 	// nothing under them is ours to change)
-	if m.qSndOK && m.qSnd > c.qTarget(in.now)+c.dq() && c.cfg.stage < 2 {
+	// (a standing queue, or loss with a queue behind it: random loss
+	// leaves no queue)
+	if c.cfg.stage < 2 && m.qSndOK && (m.qSnd > c.qTarget(in.now)+c.dq() ||
+		c.sndRef.ok && c.sndRef.v > wcLossCongAbs && m.qSnd >= c.dq()) {
 		c.offN = 0
 		return
 	}
@@ -1320,6 +1329,17 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	gB := float64(c.B)/math.Max(float64(c.prevB), 1) - 1
 	gR := m.rF/math.Max(c.prevR, 1) - 1
 	qUp := m.qOK && m.qTurn > c.qRef+c.dq()
+	if qUp && m.oooOK && m.ooo >= wcOooClean && m.qSndOK {
+		// data waits behind holes (a lossy path): a longer turnaround is
+		// no queue level; the exit's next record tells whether there is
+		// one (keep B until it comes)
+		if !m.sndOK {
+			return
+		}
+		if m.qSnd <= c.dq()/2 {
+			qUp = false
+		}
+	}
 	cong, jump, _ := c.lossVerdict(m, qUp)
 	if !cong && !jump {
 		// what the data held behind a hole adds when it is released at
@@ -1708,7 +1728,10 @@ func (c *wcore) probeFailed(in wcIn, m wcMeas, ev *[]wcEvent, cong bool) {
 		c.toDrain(in, m, ev, wcWhyLoss, false)
 		return
 	}
+	// back to where it started: what R̂ took from the probe does not keep
+	// part of a budget that did not pay
 	c.toHold(in, m)
+	c.setB(in, m, min(c.B, c.probeFrom))
 }
 
 // out builds the ceilings: B shared over F (wcSplit), nothing for the rest.
