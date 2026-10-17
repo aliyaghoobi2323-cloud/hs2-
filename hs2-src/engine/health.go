@@ -280,6 +280,12 @@ type tcpStat struct {
 	// retrans is — per segment on the wire, whatever the frame sizes and
 	// padding (payload bytes / mss misread a link of small frames, up to 10×).
 	segsOut, segsIn uint32
+	// Segments that arrived out of order, behind a hole (Linux ≥ 5.4; 0
+	// before): over segsIn, both a loss reading and the share of data held
+	// back behind a resend at this end (the window core, WINDOW_CORE §3.4).
+	rcvOOO uint32
+	// Payload bytes received and acknowledged (Linux ≥ 4.1).
+	bytesReceived uint64
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

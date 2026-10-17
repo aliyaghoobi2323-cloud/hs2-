@@ -30,18 +30,20 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			return
 		}
 		st = tcpStat{
-			retrans:      uint64(info.Total_retrans),
-			busyUs:       info.Busy_time,
-			rwndUs:       info.Rwnd_limited,
-			sndbufUs:     info.Sndbuf_limited,
-			deliveryRate: info.Delivery_rate,
-			notsent:      info.Notsent_bytes,
-			rtt:          info.Rtt,
-			rttVar:       info.Rttvar,
-			minRTT:       info.Min_rtt,
-			chronoValid:  info.Busy_time > 0,
-			segsOut:      info.Data_segs_out,
-			segsIn:       info.Data_segs_in,
+			retrans:       uint64(info.Total_retrans),
+			busyUs:        info.Busy_time,
+			rwndUs:        info.Rwnd_limited,
+			sndbufUs:      info.Sndbuf_limited,
+			deliveryRate:  info.Delivery_rate,
+			notsent:       info.Notsent_bytes,
+			rtt:           info.Rtt,
+			rttVar:        info.Rttvar,
+			minRTT:        info.Min_rtt,
+			chronoValid:   info.Busy_time > 0,
+			segsOut:       info.Data_segs_out,
+			segsIn:        info.Data_segs_in,
+			rcvOOO:        info.Rcv_ooopack,
+			bytesReceived: info.Bytes_received,
 		}
 		ok = true
 	})
