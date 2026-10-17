@@ -273,6 +273,18 @@ func applyTuning() {
 	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
 	num("HS2_TUNE_SENDGATE", &engine.SendGateRate)
+	// The window core (engine/wcore_run.go): 0 turns it off (the field safety
+	// switch); the queue targets in ms; stage 2; and, lab only, a trace file
+	// and fixed windows in place of the controller.
+	num("HS2_TUNE_WCORE", &engine.Wcore)
+	num("HS2_TUNE_WCORE_QTARGET", &engine.WcoreQTarget)
+	num("HS2_TUNE_WCORE_PROBEQ", &engine.WcoreProbeQ)
+	num("HS2_TUNE_WCORE_STAGE", &engine.WcoreStage)
+	num("HS2_TUNE_WCORE_FIXEDWIN", &engine.WcoreFixedWin)
+	if v := os.Getenv("HS2_TUNE_WCORE_TRACE"); v != "" {
+		engine.WcoreTrace = v
+		log.Printf("tuning: HS2_TUNE_WCORE_TRACE=%q", v)
+	}
 	if engine.SmuxMinStreamBuffer > 0 && engine.SmuxStreamLagTarget > 0 && engine.SmuxAdaptiveWindow() == 0 {
 		log.Printf("tuning: smux adaptive stream window off — no room for it (two %d B frames) in a %d B stream window", engine.SmuxFrameSize, engine.SmuxStreamBuffer)
 	}

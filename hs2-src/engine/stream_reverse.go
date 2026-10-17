@@ -143,7 +143,8 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 
 // serveReverseLink runs the smux server over one reverse carrier and delivers
 // its streams to the panel, returning when the link dies or ctx ends — with
-// why it ended, in operator words (the first socket error if there was one).
+// why it ended, in operator words (the first socket error if there was one),
+// and what its window core did after it (wcoreEndNote).
 // pool (may be nil) lets the link's pool-control stream resize the exit pool.
 func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejConfig, l3 *l3Set, pool *exitPool) string {
 	mtr := &linkMeter{}                                         // download-side counters, reported over kindStats
@@ -185,8 +186,8 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		// stalled path; say so instead of "closed locally".
 		w := why()
 		if w == "read: "+reasonLocalClosed || (w == "" && errors.Is(downErr, io.ErrClosedPipe)) {
-			return "no data from the edge for " + newSmuxConfig().KeepAliveTimeout.String() + " (keepalive timeout — path stalled)"
+			return "no data from the edge for " + newSmuxConfig().KeepAliveTimeout.String() + " (keepalive timeout — path stalled)" + wcoreEndNote(mtr)
 		}
 	}
-	return sessionEndReason(why, downErr)
+	return sessionEndReason(why, downErr) + wcoreEndNote(mtr)
 }

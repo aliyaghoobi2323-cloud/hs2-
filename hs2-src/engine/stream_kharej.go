@@ -84,6 +84,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		logf = func(string, ...any) {}
 	}
 	setGuardLog(cfg.Log)
+	setWcoreLog(cfg.Log)
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = &l3Set{}
@@ -151,7 +152,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			}
 			sess.Close()
 			car.Close()
-			logf("link down from %s: %s (now %d)", conn.RemoteAddr(), sessionEndReason(why, downErr), links.Add(-1))
+			logf("link down from %s: %s (now %d)%s", conn.RemoteAddr(), sessionEndReason(why, downErr), links.Add(-1), wcoreEndNote(mtr))
 		})
 	}
 }

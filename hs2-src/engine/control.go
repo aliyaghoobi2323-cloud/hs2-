@@ -179,11 +179,14 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			}
 			publish() // at once: a later ping may still be on its way (one 7 s wait is not three samples)
 			sent := int64(binary.BigEndian.Uint64(pong[8:]))
+			var us uint64
 			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
-				mtr.rttMicros.Store(uint64(rtt / 1000))
-				rtts[npong%ctrlRTTKeep] = uint64(rtt / 1000)
+				us = uint64(rtt / 1000)
+				mtr.rttMicros.Store(us)
+				rtts[npong%ctrlRTTKeep] = us
 				mtr.rttMin.Store(minNonZero(rtts[:]))
 			}
+			mtr.pongRTT[npong%uint64(len(mtr.pongRTT))].Store(us) // before peerLoss counts it
 			rt := binary.BigEndian.Uint64(pong[16:])
 			mtr.peerRetrans.Store(rt)
 			mtr.peerSeen.Store(true)

@@ -60,6 +60,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		logf = func(string, ...any) {}
 	}
 	setGuardLog(cfg.Log)
+	setWcoreLog(cfg.Log)
 	reverse := cfg.RevServer != nil
 	var lm *LinkManager
 	if reverse {

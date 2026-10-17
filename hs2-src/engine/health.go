@@ -182,6 +182,9 @@ type linkMeter struct {
 	// guard watches the link's smux session for a reader stuck on a full
 	// receive buffer (wedge.go); set once by newSession, before any stream.
 	guard *sessGuard
+	// wc is the link's window core (wcore_run.go), nil: none; set once by
+	// newSession, before any stream.
+	wc *wcLink
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	// peerLoss is what the last pong said and what this side had received
@@ -198,7 +201,8 @@ type linkMeter struct {
 	// (microseconds, 0: none yet): the link's round trip without its own
 	// queue, near enough (openAnswerWait).
 	rttMin   atomic.Uint64
-	peerSeen atomic.Bool // a control response has been received at least once
+	pongRTT  [4]atomic.Uint64 // the latest pongs' round trips (µs), the k-th (from 0) at k%4: peerLoss.n says how many came
+	peerSeen atomic.Bool      // a control response has been received at least once
 	// ctrlWait is when (ctrlNow) the oldest control ping still unanswered was
 	// sent, 0 if none waits (see ctrlWaitOf); ctrlAnsweredSent is when the
 	// last ping that got its own answer was sent.

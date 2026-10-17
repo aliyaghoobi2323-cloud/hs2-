@@ -168,7 +168,8 @@ func describeNetErr(err error) string {
 // above the shaper counts real payload/stalls for health-aware routing. The
 // returned func reports why the connection failed ("" while it is healthy).
 // Every session is watched by the wedge guard (wedge.go); its guard is left in
-// meter.guard for the relays on the link.
+// meter.guard for the relays on the link. A session that can grow windows
+// past NeedStreamBuffer gets a window core (wcore_run.go), left in meter.wc.
 func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
 	gate := newSendGate(conn)
@@ -185,10 +186,11 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 	}
 	var sess *smux.Session
 	var err error
+	cfg := newSmuxConfig()
 	if server {
-		sess, err = smux.Server(w, newSmuxConfig())
+		sess, err = smux.Server(w, cfg)
 	} else {
-		sess, err = smux.Client(w, newSmuxConfig())
+		sess, err = smux.Client(w, cfg)
 	}
 	if err != nil {
 		return nil, nil, err
@@ -200,6 +202,9 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 		meter.guard = g
 	}
 	guards.add(g)
+	if wc := wcores.add(sess, cfg, gate.tcp, meter, server, conn.RemoteAddr()); wc != nil && meter != nil {
+		meter.wc = wc
+	}
 	return sess, w.reason, nil
 }
 

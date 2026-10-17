@@ -79,7 +79,7 @@ type autopilot struct {
 	phase  apPhase
 	reason string
 	cCap   float64 // last per-link capacity estimate, bytes/s (0 = unknown)
-	gPeak  float64 // last 60 s peak aggregate, bytes/s
+	gPeak  float64 // last 60 s peak aggregate, bytes/s, less what grown windows carry (apSample.grown)
 }
 
 // apTunables holds every clock and threshold, so tests can shorten them.
@@ -201,6 +201,7 @@ type apLink struct {
 	rate         float64 // bytes/s both directions, this tick
 	rate10       float64 // mean rate over the last 5 ticks
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
+	grown        float64 // of rate, what its window core's windows past NeedStreamBuffer carry
 	flowing      int     // user streams really moving data
 	open         int     // user streams open
 }
@@ -210,6 +211,7 @@ type apSample struct {
 	now      time.Time
 	links    []apLink
 	G        float64 // aggregate bytes/s over every live link
+	grown    float64 // of G, what windows past NeedStreamBuffer carry (grownRate): no reason for more links
 	flowing  int     // flowing user streams over every link
 	open     int     // open user connections
 	growable bool    // false: the peer cannot add links (reverse exit without pool control)
@@ -225,6 +227,7 @@ type apDecision struct {
 
 type apTick struct {
 	g       float64
+	gn      float64 // g less grown: what the pool is sized by
 	flowing int
 	p, s    int
 	short   bool
@@ -357,8 +360,8 @@ func (a *autopilot) decide(s apSample) apDecision {
 			S++
 			if l.pressed {
 				P++
-				if l.sustained > 0 {
-					a.noteCap(now, l.id, l.sustained)
+				if v := l.sustained - l.grown; v > 0 {
+					a.noteCap(now, l.id, v)
 				}
 			}
 		case l.retiring:
@@ -366,7 +369,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 		}
 	}
 	shortTick := P >= 1 && S-P < spare(P)
-	a.hist = append(a.hist, apTick{g: s.G, flowing: s.flowing, p: P, s: S, short: shortTick})
+	a.hist = append(a.hist, apTick{g: s.G, gn: max(s.G-s.grown, 0), flowing: s.flowing, p: P, s: S, short: shortTick})
 	if len(a.hist) > t.histTicks {
 		a.hist = a.hist[len(a.hist)-t.histTicks:]
 	}
@@ -398,14 +401,14 @@ func (a *autopilot) decide(s apSample) apDecision {
 		if h.short {
 			shortIn60 = true
 		}
-		g := h.g
+		g := h.gn
 		if prevG >= 0 {
-			g = (h.g + prevG) / 2 // a single-tick spike is not a peak
+			g = (h.gn + prevG) / 2 // a single-tick spike is not a peak
 		}
 		if g > gPeak {
 			gPeak = g
 		}
-		prevG = h.g
+		prevG = h.gn
 	}
 	fGrow := ceilDiv(fl5, a.perLink)
 	fHold := ceilDiv(fl60, a.perLink)
