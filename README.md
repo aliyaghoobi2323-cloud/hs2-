@@ -112,7 +112,7 @@ traffic: 251 connections (18 active) · 6.1 Mbit/s · 1 link at its limit (~2.4 
 
 | `max_links` | meaning |
 |-------------|---------|
-| `0` — **auto** (new installs) | follows **this server's hardware**, re-derived at every start: one link per 48 MB of RAM, at most **300**, never below the old profile value (**32** under ~1.5 GB RAM, **48** medium, **64** high). A single-core server keeps its profile value; 2–3 cores allow at most 128. A 16 GB / 4-core server gets 300, a 2 GB / 2-core one 48. A server resized up or down gets the matching ceiling on its next start, with nobody editing the config. |
+| `0` — **auto** (new installs) | follows **this server's hardware**, re-derived at every start: one link per 48 MB of the RAM left after the window pool's share (below), at most **300**, never below the old profile value (**32** under ~1.5 GB RAM, **48** medium, **64** high). A single-core server keeps its profile value; 2–3 cores allow at most 128. A 16 GB / 4-core server gets 300, a 2 GB / 2-core one 48. A server resized up or down gets the matching ceiling on its next start, with nobody editing the config. |
 | a number | fixed by you; never changed automatically |
 | absent | the historical fixed **32** — a config written before auto existed behaves exactly as before after upgrading |
 
@@ -128,8 +128,12 @@ echo p50 90 ms / p99 121 ms and no dropped connection, at ~5% more CPU than
 
 **Why the ceiling depends on RAM.** Under a stalled reader each link's session
 may hold up to 8 MiB it could not deliver yet — about **12 MiB** with smux's
-frame rounding. The rule keeps that worst case at **≤ 25 % of RAM** (≤ ~33 %
-if every frame rounds badly): 300 links ≈ 3.5 GB worst case on a 17 GB server.
+frame rounding. A link whose buffer ran full, and a fast connection whose
+window the window core lets grow past 2 MiB, take their extra buffer from one
+**window pool** per process (1/128 of RAM, 16–128 MB; ~1.5× that with
+rounding), counted once, not per link. The rule keeps the links' worst case
+and the pool's together at **≤ 25 % of RAM** (≤ ~33 % if every frame rounds
+badly): 300 links and the pool ≈ 3.7 GB worst case on a 17 GB server.
 Each relayed user connection costs another ~80 KB (≈ 0.45 GB per side at
 6,000 open connections), a UDP user flow 64 KB on the Iran side and 128 KB
 on the Kharej side. hs2 sets Go's soft memory limit to half the RAM
@@ -153,7 +157,7 @@ ceilings over the tunnel itself, so `hs2 status` on **either** server shows the
 exact effective number and which side sets it, e.g.:
 
 ```
-ceiling: 64 links — limited by the Kharej server (reverse: the lower of the two applies); this server: 300 (auto — 16.6 GB RAM, 20 cores: one link per 48 MB of RAM, at most 300), the Kharej server: 64
+ceiling: 64 links — limited by the Kharej server (reverse: the lower of the two applies); this server: 300 (auto — 16.6 GB RAM, 20 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 64
 ```
 
 If the other server still runs an older hs2, the line says its ceiling is not

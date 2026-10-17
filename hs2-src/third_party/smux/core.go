@@ -158,7 +158,8 @@ type turnMark struct {
 // SetCoreCeil sets the window core's ceiling for the stream's window, in
 // bytes, at most MaxStreamBuffer; 0 (the default) leaves the window within
 // NeedStreamBuffer. It takes effect at the stream's next window update from
-// a read (FitCore). It takes no lock.
+// a read (FitCore), on an adaptive stream (Config.MinStreamBuffer) only. It
+// takes no lock.
 func (s *Stream) SetCoreCeil(ceil uint32) {
 	if m := uint32(s.sess.config.MaxStreamBuffer); ceil > m {
 		ceil = m

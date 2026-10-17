@@ -293,9 +293,10 @@ var (
 	// SmuxStreamLagTarget unread is offered a smaller window, down to
 	// SmuxMinStreamBuffer, and one whose reader keeps up gets
 	// SmuxNeedStreamBuffer back. A slow-but-alive reader then holds a few
-	// hundred KiB of SmuxSessionBuffer instead of up to SmuxNeedStreamBuffer, so a handful
-	// of them can no longer empty the bucket and stall every other stream on
-	// the link (which the wedge guard cannot see: their writes complete).
+	// hundred KiB of SmuxSessionBuffer instead of up to SmuxNeedStreamBuffer,
+	// so a handful of them can no longer empty the bucket and stall every
+	// other stream on the link (which the wedge guard cannot see: their
+	// writes complete).
 	// 0 keeps the fixed window. A new stream whose reader keeps up with
 	// the 256 KiB the exit starts with gets at its first resize the larger
 	// of twice that and what it reads in a second at its pace

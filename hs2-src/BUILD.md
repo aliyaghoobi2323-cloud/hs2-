@@ -74,7 +74,8 @@ The daemon also reacts to signals: SIGHUP hot-reloads the TLS certificate
 decides how many links should be **serving** — taking new connections —
 between `min_links` and the ceiling — `max_links`, or with `max_links: 0`
 (new installs) an auto ceiling from the server's RAM/cores: one link per 48 MB
-of RAM up to 300, never below the 32 / 48 / 64 profile value (1 core: the
+of RAM (after six times the smux window pool, 1/128 of RAM, 16–128 MB) up to
+300, never below the 32 / 48 / 64 profile value (1 core: the
 profile value; 2–3 cores: at most 128; every carrier alike), see
 `tune.RecommendedMaxLinks`; absent = the historical 32. Links beyond that
 are **retiring**: no new connections, closed once empty. Each 2 s health tick
@@ -202,6 +203,10 @@ BIN=/tmp/hs2 MODE=mtcp RATE=50mbit DELAY=40ms LOSS=0.005 FLOWRATE=10mbit lab/run
 Data-path tuning can be overridden for experiments with `HS2_TUNE_NOTSENT`,
 `HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_STREAMBUF`, `HS2_TUNE_SMUX_SESSBUF`,
 `HS2_TUNE_SMUX_MINSTREAMBUF`, `HS2_TUNE_SMUX_LAGTARGET` (0 = fixed stream
-window), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
+window), `HS2_TUNE_SMUX_NEEDBUF` (how far a stream's window grows on its
+reader keeping up alone; `HS2_TUNE_SMUX_STREAMBUF` is the largest window, past
+it only under the window core), `HS2_TUNE_SMUX_POOL` (the process's window
+pool, bytes; 0 = no window past `HS2_TUNE_SMUX_NEEDBUF` and no buffer
+borrowed), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
 about half its unsent cap and a burst, on Linux 5.10+; 0 = off) and `HS2_TUNE_CC`; the defaults in the code are
 the ones the sweeps chose.
