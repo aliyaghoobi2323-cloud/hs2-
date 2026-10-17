@@ -38,3 +38,23 @@ func TestStatusWindowsLine(t *testing.T) {
 		t.Fatalf("windows line with none: %q", l)
 	}
 }
+
+// The window core's lab knobs reach the engine.
+func TestApplyTuningWcoreKnobs(t *testing.T) {
+	on, q, p, stage, fixed, trace := engine.Wcore, engine.WcoreQTarget, engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace
+	t.Cleanup(func() {
+		engine.Wcore, engine.WcoreQTarget, engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace = on, q, p, stage, fixed, trace
+	})
+	t.Setenv("HS2_TUNE_WCORE", "0")
+	t.Setenv("HS2_TUNE_WCORE_QTARGET", "12")
+	t.Setenv("HS2_TUNE_WCORE_PROBEQ", "18")
+	t.Setenv("HS2_TUNE_WCORE_STAGE", "2")
+	t.Setenv("HS2_TUNE_WCORE_FIXEDWIN", "3145728")
+	t.Setenv("HS2_TUNE_WCORE_TRACE", "/tmp/wcore.jsonl")
+	applyTuning()
+	if engine.Wcore != 0 || engine.WcoreQTarget != 12 || engine.WcoreProbeQ != 18 || engine.WcoreStage != 2 ||
+		engine.WcoreFixedWin != 3<<20 || engine.WcoreTrace != "/tmp/wcore.jsonl" {
+		t.Fatalf("knobs: on %d, qTarget %d, probeQ %d, stage %d, fixed %d, trace %q", engine.Wcore, engine.WcoreQTarget,
+			engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace)
+	}
+}

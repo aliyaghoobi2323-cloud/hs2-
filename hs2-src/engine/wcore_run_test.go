@@ -1044,3 +1044,37 @@ func TestWcoreRunnerSetsRef(t *testing.T) {
 		t.Fatalf("window %d with growth allowed, want the ceiling", w)
 	}
 }
+
+// The lab knobs as a core is made: the queue targets for both ends, stage
+// 2, and the fixed window (at most MaxStreamBuffer).
+func TestWcoreKnobs(t *testing.T) {
+	q, p, qx, px := wcQTarget, wcProbeQ, wcQTargetExit, wcProbeQExit
+	kq, kp, ks, kf := WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin
+	t.Cleanup(func() {
+		wcQTarget, wcProbeQ, wcQTargetExit, wcProbeQExit = q, p, qx, px
+		WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin = kq, kp, ks, kf
+	})
+	WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin = 12, 18, 2, 64<<20
+	wcApplyKnobs()
+	if wcQTarget != 12*time.Millisecond || wcQTargetExit != 12*time.Millisecond || wcProbeQ != 18*time.Millisecond || wcProbeQExit != 18*time.Millisecond {
+		t.Fatalf("queue targets %v %v %v %v", wcQTarget, wcQTargetExit, wcProbeQ, wcProbeQExit)
+	}
+	cfg := wcTestConfig()
+	l := newWcLink(nil, cfg, nil, nil, true, nil)
+	if l.core.cfg.stage != 2 || l.fixed != uint32(cfg.MaxStreamBuffer) || l.side != wcExit || l.label() != "link" {
+		t.Fatalf("core %+v, fixed %d, side %v, name %q", l.core.cfg, l.fixed, l.side, l.label())
+	}
+	// no core where no window can grow past Need
+	for _, edit := range []func(c *smux.Config){
+		func(c *smux.Config) { c.WindowPool = nil },
+		func(c *smux.Config) { c.NeedStreamBuffer = 0 },
+		func(c *smux.Config) { c.MinStreamBuffer = 0 },
+		func(c *smux.Config) { c.NeedStreamBuffer = c.MaxStreamBuffer },
+	} {
+		c := wcTestConfig()
+		edit(c)
+		if newWcLink(nil, c, nil, nil, false, nil) != nil {
+			t.Fatalf("a core for %+v", c)
+		}
+	}
+}
