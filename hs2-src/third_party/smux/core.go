@@ -12,8 +12,8 @@ import (
 // reads what a session's streams did (CoreSnapshot), decides how much window
 // the link's fast streams may have together, and hands each a ceiling
 // (Stream.SetCoreCeil) and the session a turnaround reference
-// (Session.SetCoreRef). Nothing here takes a lock the core holds, and the
-// core takes none of a stream's: they meet in atomics.
+// (Session.SetCoreRef). They meet in atomics: the core takes no stream's
+// lock, and the session's only to copy its list of streams.
 //
 // At each window update from a read, after adaptWindow (unchanged), fitCore
 // holds the window to what the core allows (FitCore): within
@@ -21,7 +21,7 @@ import (
 // it at once, and past NeedStreamBuffer up only while the session may grow
 // and the stream's latest window turnaround is within the session's
 // reference and its brake margin (a slower turnaround is a queue building
-// up), at most twice per update. Past NeedStreamBuffer an update leaves
+// up), at most doubling per update. Past NeedStreamBuffer an update leaves
 // each step (StepOf) rather than each half window, and never more often per
 // byte than under a window of NeedStreamBuffer.
 //
