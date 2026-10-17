@@ -51,21 +51,25 @@ type wcore struct {
 	cfg wcConfig
 	rnd func() float64
 
-	state    wcState
-	B        uint64    // budget decided (0 in OFF)
-	bPub     uint64    // budget published: up to B by the ramp, down to it at once
-	settling bool      // the interval that ends at the next evaluation lets a change of B reach the sender
-	lastAt   time.Time // the previous evaluation
-	evalAt   time.Time // the next one
-	acc      wcIn      // what came since the previous evaluation
-	accOK    bool
-	bHist    []wcRate // B over the last wcSndSpan (a sender record covers it)
-	bCap     uint64   // a budget past which losses of our own came (0: none known)
-	bCapAt   time.Time
-	bGood    uint64   // the largest budget shown to pay: a STARTUP step the rate grew with, a probe that paid
-	stopQ    bool     // a ramp stopped for the queue since the previous evaluation
-	offN     int      // OFF: intervals in a row with steady fast streams
-	sndSeen  bool     // the exit sends its record (an edge with a new exit)
+	state      wcState
+	B          uint64    // budget decided (0 in OFF)
+	bPub       uint64    // budget published: up to B by the ramp, down to it at once
+	settling   bool      // the interval that ends at the next evaluation lets a change of B reach the sender
+	lastAt     time.Time // the previous evaluation
+	evalAt     time.Time // the next one
+	acc        wcIn      // what came since the previous evaluation
+	accOK      bool
+	bHist      []wcRate // B over the last wcSndSpan (a sender record covers it)
+	bCap       uint64   // a budget past which losses of our own came (0: none known)
+	bCapAt     time.Time
+	bGood      uint64   // the largest budget shown to pay: a STARTUP step the rate grew with, a probe that paid
+	stopQ      bool     // a ramp stopped for the queue since the previous evaluation
+	pubHist    []wcRate // the published budget at each wake of the last second
+	lossDrain  bool     // a drain for loss: HOLD stays at its budget until the loss is gone
+	lossDrainN int
+	cuts       int  // halvings for loss between evaluations
+	offN       int  // OFF: intervals in a row with steady fast streams
+	sndSeen    bool // the exit sends its record (an edge with a new exit)
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -283,8 +287,9 @@ var (
 	wcRampQ     = 15 * time.Millisecond
 	wcRampShare = 1.0 / 8
 	wcRampTick  = 100 * time.Millisecond
-	wcCapBack   = 0.9 // past a budget that brought losses of our own, HOLD stays at this share of it
-	wcOffWait   = 8   // OFF waits this many intervals at most for the exit's first loss level
+	wcCapBack   = 0.9              // past a budget that brought losses of our own, HOLD stays at this share of it
+	wcOffWait   = 8                // OFF waits this many intervals at most for the exit's first loss level
+	wcCapStale  = 15 * time.Second // a cap confirmed by losses this recently is no sign of a faster path
 	// wcRefreshMin, wcRefreshMax: how often HOLD lets its standing queue
 	// empty for an interval. BBRv1 keeps the least round trip of 10 s and,
 	// when no sample reached it in that time, sends nothing past 4 packets
@@ -675,19 +680,33 @@ func (c *wcore) step(in wcIn) wcOut {
 	return c.out(in, now, ev)
 }
 
-// fastStop ends a ramp between evaluations as soon as the queue shows: the
-// latest window turnarounds of the fast streams past turnRef+qBrake (the
-// fast arm's own brake), or packets arriving behind holes on a path that is
-// otherwise clean. B stays where the ramp got to; the evaluation judges.
+// fastStop acts between evaluations, on what came in the last wake.
+//
+// Loss on a path that is otherwise clean (packets arriving behind holes)
+// halves B at once. A window-limited sender sends what a window update
+// frees at once, and when the data held behind the first hole is released
+// a round trip later its updates leave together: with the window still as
+// large that credit was one more burst into the full queue, and the losses
+// went on by themselves (above about 1.5 queues of window, below the knee
+// too). Halved before the release, they stop at the first.
+//
+// A ramp stops as soon as the queue shows: the latest window turnarounds
+// of the fast streams past turnRef+qBrake (the fast arm's own brake). B
+// stays where the ramp got to (in STARTUP, where it was a turnaround ago:
+// what the queue shows came from that); the evaluation judges.
 func (c *wcore) fastStop(in wcIn) {
+	if c.state == wcOff || c.bPub == 0 {
+		return
+	}
+	if in.oooOK && in.segsIn > 0 && c.oooRef.ok && c.oooRef.v < wcOooClean &&
+		c.oooRef.past(float64(in.ooo)/float64(in.segsIn), wcOooCongAbs) && !c.lossDrain {
+		c.cut(in)
+		return
+	}
 	if c.bPub >= c.B {
 		return
 	}
 	stop := false
-	if in.oooOK && in.segsIn > 0 && c.oooRef.ok && c.oooRef.v < wcOooClean &&
-		c.oooRef.past(float64(in.ooo)/float64(in.segsIn), wcOooCongAbs) {
-		stop = true
-	}
 	if tb := c.turnMins.min(in.now, wcTurnWin); tb > 0 {
 		var lasts []time.Duration
 		for _, s := range in.streams {
@@ -700,8 +719,54 @@ func (c *wcore) fastStop(in wcIn) {
 		}
 	}
 	if stop {
-		c.B, c.stopQ = c.bPub, true
+		// in STARTUP what the queue shows now came from what was
+		// published a turnaround ago; what the ramp added since is past
+		// the knee
+		b := c.bPub
+		if c.state == wcStartup {
+			ago := in.now.Add(-(c.tBase + wcRampTick))
+			for _, h := range c.pubHist {
+				if !h.at.After(ago) {
+					b = min(c.bPub, uint64(h.r))
+				}
+			}
+		}
+		c.B, c.bPub, c.stopQ = b, b, true
 	}
+}
+
+// cut halves the budget for loss between evaluations: the knee is found if
+// STARTUP was looking for it, a probe failed, and HOLD stays at the cut
+// budget until the loss is gone (lossDrain), then rises to at most
+// wcCapBack of where the loss came.
+func (c *wcore) cut(in wcIn) {
+	now := in.now
+	from := c.bPub
+	switch c.state {
+	case wcStartup:
+		c.cnt.grow++
+	case wcProbe:
+		c.cnt.probeFail++
+		c.backoff++
+		c.schedProbe(now)
+	}
+	c.cnt.drainLoss++
+	c.noteCap(now, from)
+	// the queue held less than the standing queue and the bursts on it:
+	// keep half the standing queue from now on
+	q := c.qTarget(now)
+	c.qcap, c.qcapAt, c.qcapOK = q*3/2, now, true
+	c.pathFull = true
+	c.state = wcDrain
+	c.refreshing = false
+	c.lossDrain, c.lossDrainN = true, 0
+	n := uint64(max(len(c.inF), 1))
+	c.B = max(from/2, n*uint64(c.cmin()))
+	c.bPub = c.B
+	c.cuts++
+	// judge from a turnaround on
+	c.evalAt = now.Add(c.tBase + wcRampTick)
+	c.settling = false
 }
 
 // rampStep is how far the published budget may rise per runner wake.
@@ -710,16 +775,24 @@ func (c *wcore) rampStep() float64 {
 	if len(c.rhat) > 0 {
 		r = math.Max(r, c.rhatF(c.lastAt, c.last))
 	}
-	return math.Max(wcRampQ.Seconds()*r, wcRampShare*float64(c.bPub))
+	s := math.Max(wcRampQ.Seconds()*r, wcRampShare*float64(c.bPub))
+	if float64(c.B) < 1.25*float64(c.bPub) {
+		s /= 2 // the last stretch, near the knee: half as fast
+	}
+	return s
 }
 
 // ramp moves the published budget toward B: down at once, up by rampStep.
 func (c *wcore) ramp() {
 	if c.bPub >= c.B || c.bPub == 0 {
 		c.bPub = c.B
-		return
+	} else {
+		c.bPub = min(c.B, c.bPub+uint64(math.Max(c.rampStep(), 1)))
 	}
-	c.bPub = min(c.B, c.bPub+uint64(math.Max(c.rampStep(), 1)))
+	c.pubHist = append(c.pubHist, wcRate{c.acc.now, float64(c.bPub)})
+	if len(c.pubHist) > 20 {
+		c.pubHist = c.pubHist[len(c.pubHist)-20:]
+	}
 }
 
 // rampLeft is how long the ramp still takes.
@@ -1173,6 +1246,13 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if c.offN++; c.offN < 2 || c.sndSeen && !c.sndRef.ok && c.offN < wcOffWait {
 		return
 	}
+	// the windows without the core already make a queue at the exit: the
+	// knee is below them, there is nothing for STARTUP to find (in stage 1
+	// nothing under them is ours to change)
+	if m.qSndOK && m.qSnd > c.qTarget(in.now)+c.dq() && c.cfg.stage < 2 {
+		c.offN = 0
+		return
+	}
 	c.offN = 0
 	c.bGood = 0
 	c.state = wcStartup
@@ -1195,6 +1275,7 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 }
 
 func (c *wcore) toOff() {
+	c.lossDrain = false
 	if c.state == wcHold || c.state == wcProbe {
 		c.kPrev, c.kPrevAt = c.B, c.lastAt
 	}
@@ -1329,7 +1410,9 @@ func (c *wcore) toHold(in wcIn, m wcMeas) {
 	if c.refreshAt.IsZero() || c.refreshAt.Before(in.now) {
 		c.schedRefresh(in.now)
 	}
-	c.setB(in, m, c.bHold(in.now, m))
+	if !c.lossDrain {
+		c.setB(in, m, c.bHold(in.now, m))
+	}
 	c.settling = true
 }
 
@@ -1354,6 +1437,7 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, rate b
 	case wcWhyLoss:
 		c.cnt.drainLoss++
 		b = math.Min(b, float64(from)/2)
+		c.lossDrain, c.lossDrainN = true, 0
 	case wcWhyRate:
 		c.cnt.drainRate++
 	default:
@@ -1368,8 +1452,26 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, rate b
 func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	now := in.now
 	dq := c.dq()
+	if c.lossDrain {
+		// after a drain for loss, stay at its budget while the loss goes
+		// on: a run of losses that keeps itself going stops only once
+		// what was held behind its holes is through
+		lossy := m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) ||
+			m.sndOK && c.sndRef.past(m.snd, wcLossCongAbs)
+		if c.lossDrainN++; lossy && c.lossDrainN < 3 {
+			return
+		}
+		c.lossDrain = false
+		c.setB(in, m, c.bHold(now, m))
+		return
+	}
 	if c.refPending {
-		// the first measured interval of HOLD sets the references
+		// the first measured interval of HOLD sets the references, unless
+		// data still waited behind holes in it (that is no queue level)
+		if m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) && c.holdN < 2 {
+			c.holdN++
+			return
+		}
 		c.refPending = false
 		if m.qOK {
 			c.qRef = m.qTurn
@@ -1490,6 +1592,12 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	} else {
 		c.wlN = 0
 	}
+	if c.wlN >= 3 && !(m.qOK && m.qTurn > c.qRef+dq/2) && (!m.oooOK || m.ooo < wcOooCongAbs) && now.Sub(c.bCapAt) >= wcCapStale {
+		// held by its window with no queue, interval after interval: the
+		// path has room (it got faster, or a competitor left), and what
+		// was learned on it before (the cap, the backoff) is stale
+		c.bCap, c.backoff = 0, 0
+	}
 	if c.backoff == 0 && (c.wlN >= 2 || (m.qOK && c.qRef > dq && m.qTurn < c.qRef-dq)) && c.probeAt.After(now) {
 		c.probeAt = now
 	}
@@ -1605,8 +1713,10 @@ func (c *wcore) probeFailed(in wcIn, m wcMeas, ev *[]wcEvent, cong bool) {
 
 // out builds the ceilings: B shared over F (wcSplit), nothing for the rest.
 func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
+	// active, the core sees the link at every runner wake (one TCP_INFO):
+	// a ramp moves on, and loss is acted on within a turnaround
 	next := c.evalAt
-	if c.bPub < c.B && now.Add(wcRampTick).Before(next) {
+	if c.state != wcOff && now.Add(wcRampTick).Before(next) {
 		next = now.Add(wcRampTick)
 	}
 	o := wcOut{state: c.state, B: c.bPub, next: next, events: ev, growOK: true}

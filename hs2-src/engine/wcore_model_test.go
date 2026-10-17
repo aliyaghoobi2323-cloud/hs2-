@@ -1686,9 +1686,13 @@ func wmJudge(c wmCell) wmVerdict {
 	if c.kind == wmLossy {
 		share = 0.6
 	}
+	// where the 2 MiB window already overflows the path, N4's gain comes
+	// with its resends: there the target is "not slower than base" (§9.4,
+	// 100/100)
+	over := b.selfDrop > 0.01
 	switch {
 	case c.kind == wmChangeK || c.kind == wmCompete:
-	case gainN4 > 0.1*b.mbit && c.kind != wmMulti:
+	case gainN4 > 0.1*b.mbit && c.kind != wmMulti && !over:
 		if k.mbit-b.mbit < share*gainN4 {
 			fail("gain %.0f%% of N4's", 100*(k.mbit-b.mbit)/gainN4)
 		}
@@ -1711,7 +1715,6 @@ func wmJudge(c wmCell) wmVerdict {
 	}
 	// the interactive user next to it: p50 and p99 within 1.3× base; where
 	// base itself overflows, no worse than base
-	over := b.selfDrop > 0.01
 	if over {
 		if k.iP50 > 1.05*b.iP50+10 || k.iP99 > 1.05*b.iP99+10 {
 			fail("interactive %.0f/%.0f ms (base %.0f/%.0f)", k.iP50, k.iP99, b.iP50, b.iP99)
