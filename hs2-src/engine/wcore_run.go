@@ -385,8 +385,13 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 	}
 	s.ctrlMin = usDur(m.rttMin.Load())
 	if p := m.peerLoss.Load(); p != nil && p.n > l.pongN {
-		for k := max(l.pongN, p.n-uint64(len(m.pongRTT))); k < p.n; k++ {
-			if r := m.pongRTT[k%uint64(len(m.pongRTT))].Load(); r > 0 {
+		ring := uint64(len(m.pongRTT))
+		k := l.pongN
+		if p.n > ring {
+			k = max(k, p.n-ring) // the older ones are gone
+		}
+		for ; k < p.n; k++ {
+			if r := m.pongRTT[k%ring].Load(); r > 0 {
 				s.pongs = append(s.pongs, usDur(r))
 			}
 		}

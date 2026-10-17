@@ -3,6 +3,7 @@ package engine
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -916,5 +917,109 @@ func TestAutopilotLeavesGrownOut(t *testing.T) {
 	}
 	if math.Abs(core.cCap-50*mbit) > 1 || math.Abs(core.gPeak-500*mbit) > 1 {
 		t.Fatalf("with grown windows: capacity %.0f, peak %.0f Mbit/s, want 50 and 500", core.cCap/mbit, core.gPeak/mbit)
+	}
+}
+
+// What the runner takes from the edge's meter: the control ping's pongs
+// since its previous snapshot (openControl keeps their round trips), its
+// floor, the exit's latest record and the autopilot's flag; the exit's end
+// takes none of them.
+func TestWcoreRunnerEdgeInputs(t *testing.T) {
+	cconn, sconn := net.Pipe()
+	cfg := newSmuxConfig()
+	cli, err := smux.Client(cconn, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := smux.Server(sconn, newSmuxConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cli.Close(); srv.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		st, err := srv.AcceptStream()
+		if err != nil {
+			return
+		}
+		var kind [1]byte
+		io.ReadFull(st, kind[:])
+		serveControl(ctx, st, nil)
+	}()
+	mtr := &linkMeter{}
+	go openControl(ctx, &ctrlFakeLink{sess: cli, m: mtr}, nil)
+	wcWaitFor(t, controlInterval+3*time.Second, "no pong", func() bool { p := mtr.peerLoss.Load(); return p != nil && p.n >= 1 })
+	if r := mtr.pongRTT[0].Load(); r == 0 || r != mtr.rttMicros.Load() {
+		t.Fatalf("pong ring %d, rtt %d", r, mtr.rttMicros.Load())
+	}
+
+	l := newWcLink(cli, cfg, nil, mtr, false, nil)
+	var probing atomic.Bool
+	probing.Store(true)
+	l.ap.Store(&probing)
+	at := time.Now()
+	mtr.peer.Store(&statsRec{seq: 1, srtt: 120_000, minRTT: 100_000, retrans: 7, segsOut: 1000, at: at})
+	s := l.snap(time.Now())
+	rtt := usDur(mtr.pongRTT[0].Load())
+	if len(s.pongs) != 1 || s.pongs[0] != rtt || s.ctrlMin != usDur(mtr.rttMin.Load()) || !s.apProbing ||
+		!s.sndAt.Equal(at) || s.sndSrtt != 120*time.Millisecond || s.sndMinRTT != 100*time.Millisecond || s.sndRetrans != 7 || s.sndSegsOut != 1000 {
+		t.Fatalf("edge snapshot %+v", s)
+	}
+	if s := l.snap(time.Now()); len(s.pongs) != 0 {
+		t.Fatalf("pongs %v taken twice", s.pongs)
+	}
+	// six more, of which the ring keeps the last four
+	cur := mtr.peerLoss.Load().n
+	for k := cur; k < cur+6; k++ {
+		mtr.pongRTT[k%4].Store(uint64(1000 * (k + 1)))
+	}
+	mtr.peerLoss.Store(&peerLossRec{n: cur + 6})
+	s = l.snap(time.Now())
+	if len(s.pongs) != 4 || s.pongs[0] != usDur(1000*(cur+3)) || s.pongs[3] != usDur(1000*(cur+6)) {
+		t.Fatalf("pongs %v, want the last four", s.pongs)
+	}
+
+	x := newWcLink(cli, cfg, nil, mtr, true, nil) // the exit's end of a link
+	if s := x.snap(time.Now()); len(s.pongs) != 0 || s.ctrlMin != 0 || !s.sndAt.IsZero() || s.apProbing {
+		t.Fatalf("the exit took the edge's inputs: %+v", s)
+	}
+}
+
+// The session's reference goes to smux with the ceilings: past Need a
+// window grows only while growOK, and while its turnaround is within the
+// reference.
+func TestWcoreRunnerSetsRef(t *testing.T) {
+	cfg := wcTestConfig()
+	need := uint32(cfg.NeedStreamBuffer)
+	p := newWcPath(5<<20, time.Millisecond) // a reader that keeps up
+	edge, exit := wcSessions(t, p.edge(), p.exit(), cfg, nil)
+	st := wcDownload(t, edge, exit)
+	l := newWcLink(edge, cfg, nil, nil, false, nil)
+	win := func() uint32 {
+		t.Helper()
+		time.Sleep(600 * time.Millisecond) // 3 MB read: many updates
+		l.snap(time.Now())
+		for _, x := range l.samples {
+			if x.ID == st.ID() {
+				return x.Win
+			}
+		}
+		t.Fatal("the stream is not in the snapshot")
+		return 0
+	}
+	ceils := []wcCeil{{st.ID(), 1 << 20}}
+	l.snap(time.Now())
+	l.apply(wcOut{ceils: ceils, growOK: false})
+	if w := win(); w > need {
+		t.Fatalf("window %d past Need with growth held", w)
+	}
+	l.apply(wcOut{ceils: ceils, growOK: true, turnRef: time.Nanosecond})
+	if w := win(); w > need {
+		t.Fatalf("window %d past Need with every turnaround past the reference", w)
+	}
+	l.apply(wcOut{ceils: ceils, growOK: true})
+	if w := win(); w != 1<<20 {
+		t.Fatalf("window %d with growth allowed, want the ceiling", w)
 	}
 }
