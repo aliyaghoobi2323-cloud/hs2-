@@ -2172,7 +2172,17 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	good := float64(c.B) - math.Max(rise.Seconds(), 0)*r
 	c.bGood = max(c.bGood, uint64(math.Max(good, 0)))
 	if c.bCap > 0 && c.B > c.bCap {
-		c.bCap = c.B // as clean as far as the probe went
+		if floor := uint64(max(len(m.f), 1)) * uint64(c.cmin()); c.bCap <= floor*21/20 {
+			// a cap at the floor came from a slower spell of the path (no
+			// budget of ours above the windows without the core lost): a
+			// probe past it that paid says the spell is over (z12 P2, 300 →
+			// 50 → 300: raised to the probe's budget, the cap held STARTUP
+			// there and the rate stayed at 100 Mbit/s for the 12 s after the
+			// path was fast again)
+			c.bCap, c.backoff = 0, 0
+		} else {
+			c.bCap = c.B // as clean as far as the probe went
+		}
 	}
 	if rise <= c.dq()/2 && c.tauOK2(m) {
 		c.noteTau(m)

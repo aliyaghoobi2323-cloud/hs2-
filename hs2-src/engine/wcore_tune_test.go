@@ -162,6 +162,31 @@ func TestWcoreStartupCap(t *testing.T) {
 	}
 }
 
+// A probe that pays past a cap at the floor clears the cap (it came from a
+// slower spell of the path); past a cap above the floor it raises the cap
+// to its budget.
+func TestWcoreProbeFloorCap(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cap  uint64
+		want uint64
+	}{
+		{"a cap at the floor: cleared", wtNeed, 0},
+		{"a cap above it: raised to the probe's budget", 8 * wtMiB, 9 * wtMiB},
+	} {
+		c, in := wtProbe()
+		c.bCap, c.bCapAt, c.backoff = tc.cap, wtT0.Add(-time.Second), 2
+		m := wtMeas(1, 60.5e6, 9*wtMiB)
+		m.at = wtT0
+		m.qTurn, m.qOK = 5*time.Millisecond, true // nothing queued
+		var ev []wcEvent
+		c.probe(in, m, &ev)
+		if c.cnt.probeOK != 1 || c.bCap != tc.want || c.backoff != 0 {
+			t.Errorf("%s: probe ok %d, cap %d backoff %d, want cap %d", tc.name, c.cnt.probeOK, c.bCap, c.backoff, tc.want)
+		}
+	}
+}
+
 // setB takes the larger n_F of this interval and the previous one (a stream
 // of F sent nothing for an interval: B was cut to the other's ceiling), and
 // blames the pool only when it has less than a step of a window left.
