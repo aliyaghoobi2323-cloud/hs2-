@@ -189,23 +189,31 @@ func (s *Session) OpenStream() (*Stream, error) {
 
 	stream := newStream(sid, s.config.MaxFrameSize, s)
 
-	if _, err := s.writeFrame(newFrame(byte(s.config.Version), cmdSYN, sid)); err != nil {
+	// The stream is known before its SYN leaves: the peer may send on it as
+	// soon as it has the SYN, before writeFrame returns, and recvLoop drops
+	// the frames of a stream it does not know.
+	var err error
+	s.streamLock.Lock()
+	select {
+	case <-s.chSocketReadError:
+		err = s.socketReadError.Load().(error)
+	case <-s.chSocketWriteError:
+		err = s.socketWriteError.Load().(error)
+	case <-s.die:
+		err = io.ErrClosedPipe
+	default:
+		s.streams[sid] = stream
+	}
+	s.streamLock.Unlock()
+	if err != nil {
 		return nil, err
 	}
 
-	s.streamLock.Lock()
-	defer s.streamLock.Unlock()
-	select {
-	case <-s.chSocketReadError:
-		return nil, s.socketReadError.Load().(error)
-	case <-s.chSocketWriteError:
-		return nil, s.socketWriteError.Load().(error)
-	case <-s.die:
-		return nil, io.ErrClosedPipe
-	default:
-		s.streams[sid] = stream
-		return stream, nil
+	if _, err := s.writeFrame(newFrame(byte(s.config.Version), cmdSYN, sid)); err != nil {
+		s.streamClosed(sid)
+		return nil, err
 	}
+	return stream, nil
 }
 
 // Open returns a generic ReadWriteCloser
