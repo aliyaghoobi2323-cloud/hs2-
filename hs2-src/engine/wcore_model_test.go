@@ -2183,13 +2183,13 @@ var wmKnown = map[string]struct {
 	"1000/100 q50 l0.1": {[]string{"interactive"},
 		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere"},
 	"300/150 q50 l0.1": {[]string{"gain"},
-		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain). The exit's pacing net costs one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median)"},
+		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain without the exit's pacing net). The net takes N4 from 129 to 158 Mbit/s (its bursts held once they lose: 25% of that gain now) and costs the core one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median)"},
 	"300/150 q50 +slow reader": {[]string{"resent", "interactive", "gain", "drain"},
 		"a probe's loss while the slow stream's window holds a hole; with the exit's pacing net N4 no longer overflows the queue (180 → 250 Mbit/s, 3.3 → 0% resent), and the gain target is against that (the core 209 → 211 Mbit/s, 75% of it); one seed of three drains from HOLD at a PROBE_RTT burst"},
-	"300/150 q50 300>50>300": {[]string{"resent", "interactive", "t90"},
-		"with the exit's pacing net base resends 2.6% here (8.9% without it) and the core 7.4% (10.4% without): both less, base far less, past the roadmap's base + 3 points (wmKnownRoadmap); the net holds the pace at 1.25 times the 50 Mbit/s phase's rate and lifts it 10 s after the resends stop, and the core's way back runs under it: back to 90% in 10.7 s (6.5 s without)"},
+	"300/150 q50 300>50>300": {[]string{"interactive"},
+		"the loss of the drop to 50 Mbit/s holds the user behind its holes (p99 1.1 s against base's 0.7 s; the exit's pacing net takes the core's resends 10.4 → 2.9% and base's 8.9 → 1.9%)"},
 	"1000/100 q50 policer 300": {[]string{"gain"},
-		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 142 Mbit/s with 0.43% resent, a third of N4's gain (N4 resends 10%)"},
+		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 149 Mbit/s with 0.46% resent, 38% of N4's gain (N4 resends 10%)"},
 }
 
 // wmKnownRoadmap are the cells of the full table where the core misses the
@@ -2208,9 +2208,6 @@ var wmKnownRoadmap = map[string]bool{
 	"100/100 q50 l1": true, "100/150 q50 l0.1": true, "100/300 q50 l0.1": true, "100/500 q50": true,
 	"100/500 q50 l0.1": true, "300/300 q50 l0.1": true, "300/500 q50": true,
 	"100/500 q200": true, "300/300 q50": true,
-
-	// the exit's pacing net: base 8.9 → 2.6%, the core 10.4 → 7.4% (wmKnown)
-	"300/150 q50 300>50>300": true,
 }
 
 // TestWcoreModelTable runs base, N4 and the core on each cell and judges the

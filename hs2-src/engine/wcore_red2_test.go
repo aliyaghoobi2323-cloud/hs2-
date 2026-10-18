@@ -693,7 +693,7 @@ func TestWcoreRed2RecordWithoutTCPInfo(t *testing.T) {
 
 // wm2RatchetCells are one drained cell of each class the round-2 sweeps
 // found where a drain to the floor does not give back the behaviour without
-// the core: the exit's BBR, held by the windows, stays in its STARTUP and
+// the core (without the exit's pacing net): the exit's BBR, held by the windows, stays in its STARTUP and
 // its pacing (3.9 times the largest rate it delivered) only rises, so once
 // the core's windows took the rate up, each window update's credit at the
 // floor (1 MiB at need) goes out faster than a shallow queue or a policer's
@@ -708,33 +708,38 @@ var wm2RatchetCells = []string{
 	"1000/150 q50 pol90>pol40/s1",   // a policer gets stricter
 }
 
-// TestWcoreRed2OpenRatchet (open, HS2_WCORE_RED2=1): the loss rule must not
-// drain a link under the core that it leaves alone without it. Fails on the
-// cells of wm2RatchetCells; with the exit's pacing cap of the lab
-// (WcorePaceCap ×2, HS2_WCORE_RED2_PACE) logged beside them.
-func TestWcoreRed2OpenRatchet(t *testing.T) {
-	if os.Getenv("HS2_WCORE_RED2") != "1" {
-		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
-	}
+// TestWcoreRed2Ratchet (round 2, finding 1): the loss rule must not drain a
+// link under the core that it leaves alone without it. On the cells of
+// wm2RatchetCells it did, as long as nothing held the sender's pace: the
+// exit's pacing net (pacenet.go) holds it once its socket resends (each
+// cell is run with the net off too, to show the finding is still there).
+func TestWcoreRed2Ratchet(t *testing.T) {
 	f := t.TempDir() + "/cells"
 	if err := os.WriteFile(f, []byte(strings.Join(wm2RatchetCells, "\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HS2_WCORE_RED2_CELLS", f)
-	k := 2.0
-	if v := os.Getenv("HS2_WCORE_RED2_PACE"); v != "" {
-		fmt.Sscan(v, &k)
+	cells := wm2Named(t)
+	if len(cells) != len(wm2RatchetCells) {
+		t.Fatalf("%d cells of %d", len(cells), len(wm2RatchetCells))
 	}
-	for _, c := range wm2Named(t) {
+	off := 0
+	for _, c := range cells {
 		o := wm2Run(c)
-		c.c.paceCap = k
+		c.c.netOff = true
 		p := wm2Run(c)
-		msg := fmt.Sprintf("%s\n    with the exit's pacing cap ×%g: %s", o, k, p)
+		if p.drained {
+			off++
+		}
+		msg := fmt.Sprintf("%s\n    without the exit's pacing net: %s", o, p)
 		if o.drained {
 			t.Errorf("drained by the core: %s", msg)
 		} else {
 			t.Log(msg)
 		}
+	}
+	if off < len(cells)/2 {
+		t.Errorf("only %d of %d cells drain without the pacing net: the finding is gone, the test proves nothing", off, len(cells))
 	}
 }
 

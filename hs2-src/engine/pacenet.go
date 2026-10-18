@@ -175,7 +175,7 @@ type wcNetPt struct {
 // wcNet is the net of one link socket: pure, its readings in, the cap out.
 type wcNet struct {
 	pts    []wcNetPt // the readings of the last max(wcNetWin, wcNetIdle), and the one before
-	dlvs   []wcRate  // delivery rates of the last wcNetSpan
+	dlvs   []wcRate  // delivery rates of the readings of the last wcNetSpan
 	cap    uint64    // the cap in force (0: none)
 	rtxAt  time.Time // the latest reading that was not clean
 	relAt  time.Time // the latest lift
@@ -220,6 +220,22 @@ func (n *wcNet) since(now time.Time, d time.Duration) wcNetPt {
 // step takes one reading and says what to do with the socket's cap.
 func (n *wcNet) step(in wcNetIn) wcNetOut {
 	now := in.now
+	// the delivery rate of this reading: tcpi_delivery_rate, or what was
+	// acknowledged since the previous reading if that is less. Linux keeps
+	// the latest sample that was not app-limited (or a higher one that
+	// was): a sender held by its windows is app-limited, and after the path
+	// slowed it read the old rate for seconds (the model's 1000 → 300 Mbit/s
+	// under q20: the cap stayed at 1088 Mbit/s for 5 s, and the loss rule
+	// drained the link); ACKs that come in clumps make the acknowledged
+	// rate the higher one, and tcpi's stands
+	dlvNow := in.dlv
+	if k := len(n.pts); k > 0 {
+		if dt := now.Sub(n.pts[k-1].at).Seconds(); dt > 0 && in.acked >= n.pts[k-1].acked {
+			if a := float64(in.acked-n.pts[k-1].acked) / dt; dlvNow <= 0 || a < dlvNow {
+				dlvNow = a
+			}
+		}
+	}
 	n.pts = append(n.pts, wcNetPt{at: now, rtx: in.retrans, segs: in.segsOut, acked: in.acked})
 	keep := max(wcNetWin, wcNetIdle)
 	cut := 0
@@ -227,8 +243,8 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 		cut++
 	}
 	n.pts = n.pts[cut:]
-	if in.dlv > 0 {
-		n.dlvs = append(n.dlvs, wcRate{now, in.dlv})
+	if dlvNow > 0 {
+		n.dlvs = append(n.dlvs, wcRate{now, dlvNow})
 	}
 	cut = 0
 	for cut < len(n.dlvs) && now.Sub(n.dlvs[cut].at) > wcNetSpan {

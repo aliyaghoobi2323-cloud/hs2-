@@ -310,3 +310,30 @@ func TestPaceNetGrowingPastWarmLoss(t *testing.T) {
 		t.Fatalf("%.0f%% resent as the rate grows: %+v", 200*wcNetWarmLoss, o)
 	}
 }
+
+// Linux's delivery rate is the latest sample that was not app-limited: a
+// sender held by its windows can read the old, faster path's for seconds
+// after it slowed down. The net takes what was acknowledged meanwhile when
+// that is less, and the cap follows the path down.
+func TestPaceNetStaleDeliveryRate(t *testing.T) {
+	f := newWnFeed()
+	f.run(wcNetWarm, 20000, 0, 240*wnMB, 940*wnMB)
+	if o := f.run(time.Second, 20000, 0.1, 240*wnMB, 940*wnMB); len(o) == 0 || o[0].act != wcNetEngage {
+		t.Fatalf("not engaged: %+v", o)
+	}
+	// the path slows to 80 Mbit/s: 80 acknowledged a second, tcpi still
+	// reads 240, the queue stands and the resends go on (fewer: the cap
+	// pays)
+	f.q = 30 * time.Millisecond
+	for end := f.now.Add(wcNetSpan + time.Second); f.now.Before(end); {
+		f.now = f.now.Add(wcRampTick)
+		f.segs += 1000
+		f.rtx += 40
+		f.acked += 80 * wnMB / 10
+		f.n.step(wcNetIn{now: f.now, retrans: uint64(f.rtx), segsOut: uint64(f.segs), acked: uint64(f.acked), dlv: 240 * wnMB, pace: 300 * wnMB,
+			srtt: 130 * time.Millisecond, minRTT: 100 * time.Millisecond})
+	}
+	if want := uint64(wcNetK * 80 * wnMB); math.Abs(float64(f.n.cap)-float64(want)) > 0.06*float64(want) {
+		t.Fatalf("tcpi's stale 240 Mbit/s, 80 acknowledged: cap %.0f Mbit/s, want ~%.0f", float64(f.n.cap)/wnMB, float64(want)/wnMB)
+	}
+}
