@@ -677,7 +677,11 @@ func TestWcoreRedGarbage(t *testing.T) {
 		}
 		c := newWcore(wcConfig{side: side, stage: 1 + run%2, need: wtNeed, maxWin: wtMax, minWin: wtMin}, r.Float64)
 		now := wtT0
-		var nHist []int // stream counts of the latest steps (B follows them an evaluation late)
+		// stream counts of the steps (B follows them an evaluation late, and
+		// stays while F is empty: the bound is the most of the last 40 steps
+		// and of every step since the evaluation with F before the latest
+		// one, when a clock that stepped back held the evaluations off)
+		var nHist, evals []int
 		for i := 0; i < 400; i++ {
 			switch r.IntN(20) {
 			case 0:
@@ -717,10 +721,16 @@ func TestWcoreRedGarbage(t *testing.T) {
 					}
 				}
 				nHist = append(nHist, max(len(in.streams), len(c.inF), 1))
-				if len(nHist) > 40 {
-					nHist = nHist[1:]
+				if c.lastAt.Equal(now) && len(c.last.f) > 0 {
+					evals = append(evals, len(nHist)-1)
 				}
-				ns := uint64(slices.Max(nHist))
+				from := max(0, len(nHist)-40)
+				if k := len(evals); k < 2 {
+					from = 0
+				} else {
+					from = min(from, evals[k-2])
+				}
+				ns := uint64(slices.Max(nHist[from:]))
 				if o.B > ns*wtMax {
 					t.Fatalf("run %d step %d: B %d past %d streams × MaxStreamBuffer", run, i, o.B, ns)
 				}

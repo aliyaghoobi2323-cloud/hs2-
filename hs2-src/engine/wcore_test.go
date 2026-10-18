@@ -192,13 +192,16 @@ func TestWcoreLossVerdict(t *testing.T) {
 		{name: "... with the queue growing", snd: ref(0.001, 4*wtMiB), B: 4 * wtMiB, m: wcMeas{snd: 0.01, sndOK: true},
 			growth: true, cong: true, src: wcSrcSnd},
 		{name: "no record this interval", snd: ref(0.001, 4*wtMiB), B: 6 * wtMiB, m: wcMeas{snd: 0.5}},
-		{name: "ooo on a clean path", ooo: ref(0.001, 4*wtMiB), B: 6 * wtMiB, m: wcMeas{ooo: 0.05, oooOK: true},
+		{name: "ooo on a clean path", ooo: ref(0.001, 4*wtMiB), B: 6 * wtMiB, m: wcMeas{ooo: 0.05, oooOK: true, oooLoss: true},
 			cong: true, src: wcSrcOoo},
-		{name: "ooo on a lossy path says nothing", ooo: ref(0.2, 4*wtMiB), B: 6 * wtMiB, m: wcMeas{ooo: 0.6, oooOK: true}},
-		{name: "ooo at the same budget", ooo: ref(0.001, 4*wtMiB), B: 4 * wtMiB, m: wcMeas{ooo: 0.05, oooOK: true},
+		{name: "ooo on a lossy path says nothing", ooo: ref(0.2, 4*wtMiB), B: 6 * wtMiB, m: wcMeas{ooo: 0.6, oooOK: true, oooLoss: true}},
+		{name: "ooo at the same budget", ooo: ref(0.001, 4*wtMiB), B: 4 * wtMiB, m: wcMeas{ooo: 0.05, oooOK: true, oooLoss: true},
 			jump: true, src: wcSrcOoo},
-		{name: "... with the queue growing", ooo: ref(0.001, 4*wtMiB), B: 4 * wtMiB, m: wcMeas{ooo: 0.05, oooOK: true},
+		{name: "... with the queue growing", ooo: ref(0.001, 4*wtMiB), B: 4 * wtMiB, m: wcMeas{ooo: 0.05, oooOK: true, oooLoss: true},
 			growth: true, cong: true, src: wcSrcOoo},
+		// (red team round 1: packets a path reorders by a few ms arrive
+		// behind holes too; with no hole as long as a loss's, no verdict)
+		{name: "ooo past its level from short holes (reordering)", ooo: ref(0.001, 4*wtMiB), B: 6 * wtMiB, m: wcMeas{ooo: 0.05, oooOK: true}},
 	} {
 		c := wtCore(1)
 		c.sndRef, c.oooRef, c.B = tc.snd, tc.ooo, tc.B

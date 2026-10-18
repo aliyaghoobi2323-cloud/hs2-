@@ -2030,8 +2030,8 @@ var wmKnown = map[string]struct {
 		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere"},
 	"300/150 q50 l0.1": {[]string{"gain"},
 		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (54% of N4's gain)"},
-	"1000/100 q50 x4": {[]string{"resent"},
-		"four streams at the knee of a saturated path: the bursts after PROBE_RTT (0.21% against 0.01%)"},
+	"1000/100 q50 x4": {[]string{"resent", "drain"},
+		"four streams at the knee of a saturated path: the bursts after PROBE_RTT (0.21% against 0.01%); one of them in HOLD drains at an evaluation (red team round 1, item 3: a cut between evaluations now waits for a hole as long as a loss's, two wakes, and the evaluation judges it first; the model counts only the evaluation's drains)"},
 	"300/150 q50 +slow reader": {[]string{"resent", "interactive"},
 		"a probe's loss while the slow stream's window holds a hole"},
 }

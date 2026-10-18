@@ -92,6 +92,12 @@ type wcore struct {
 	// the next measured interval to judge; sndCarryAt: when it came
 	sndCarry   wcSnd
 	sndCarryAt time.Time
+	// the previous runner wake: when it was, how long its packets waited
+	// behind holes (ooo/segs_in of its length) and how many did (fastStop)
+	wakeAt   time.Time
+	wakeHole time.Duration
+	wakeOoo  uint64
+	holeSeen bool // a loss's hole since the previous evaluation (lossHole)
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -280,6 +286,17 @@ var (
 	wcLossCongRel  = 2.0  // ... or twice the HOLD level, whichever is more
 	wcOooCongAbs   = 0.01 // the same on Rcv_ooopack (a share of packets, not of losses)
 	wcOooClean     = 0.10 // ooo is a congestion signal only on a path that is otherwise clean
+	// wcOooHole, wcOooMinSegs: between evaluations, packets behind holes
+	// past their level cut B only where the holes of the wake and the one
+	// before kept packets waiting wcOooHole of T_base or more, with
+	// wcOooMinSegs segments or more behind them. A loss's hole stays open a
+	// round trip and more; a path that reorders packets by a few ms opens
+	// holes that short (Linux's RACK calls a packet lost only once it is
+	// reordered by more than min_rtt/4), and each was a cut: 0.05% of the
+	// packets held 2 ms took 1000/100 from 736 to 97 Mbit/s (red team,
+	// round 1).
+	wcOooHole    = 0.25
+	wcOooMinSegs = 16
 	wcLossRand     = 0.0005
 	wcLossRandN    = 3
 	wcSndSpan      = 2500 * time.Millisecond // a record covers the exit's last stats tick
@@ -628,6 +645,7 @@ type wcMeas struct {
 	sndAt    time.Time // when that record came (a record carried from a settle part came before at)
 	ooo      float64
 	oooOK    bool
+	oooLoss  bool // a loss's hole came in the interval (lossHole)
 	spread   time.Duration
 	spreadOK bool
 	ctrlUp   bool
@@ -698,6 +716,10 @@ func (c *wcore) cmin() uint32 {
 // the previous one.
 func (c *wcore) step(in wcIn) wcOut {
 	now := in.now
+	hole := c.wakeHoles(in)
+	lossHole := c.lossHole(in, hole)
+	c.holeSeen = c.holeSeen || lossHole
+	defer func() { c.wakeAt, c.wakeHole, c.wakeOoo = now, hole, in.ooo }()
 	if c.accOK {
 		wcMerge(&c.acc, in)
 	} else {
@@ -705,7 +727,7 @@ func (c *wcore) step(in wcIn) wcOut {
 		c.accOK = true
 	}
 	if !c.evalAt.IsZero() && now.Before(c.evalAt) {
-		c.fastStop(in)
+		c.fastStop(in, lossHole)
 		c.ramp()
 		return c.out(c.acc, now, nil)
 	}
@@ -739,6 +761,7 @@ func (c *wcore) step(in wcIn) wcOut {
 		}
 	}
 	m := c.measure(in, dt)
+	m.oooLoss, c.holeSeen = c.holeSeen, false
 	if !carryAt.IsZero() {
 		m.sndAt = carryAt
 	}
@@ -843,12 +866,12 @@ func (c *wcore) step(in wcIn) wcOut {
 // of the fast streams past turnRef+qBrake (the fast arm's own brake). B
 // stays where the ramp got to (in STARTUP, where it was a turnaround ago:
 // what the queue shows came from that); the evaluation judges.
-func (c *wcore) fastStop(in wcIn) {
+func (c *wcore) fastStop(in wcIn, lossHole bool) {
 	if c.state == wcOff || c.bPub == 0 {
 		return
 	}
 	if in.oooOK && in.segsIn > 0 && c.oooRef.ok && c.oooRef.v < wcOooClean &&
-		c.oooRef.past(float64(in.ooo)/float64(in.segsIn), wcOooCongAbs) && !c.lossDrain {
+		c.oooRef.past(float64(in.ooo)/float64(in.segsIn), wcOooCongAbs) && !c.lossDrain && lossHole {
 		c.cut(in)
 		return
 	}
@@ -882,6 +905,30 @@ func (c *wcore) fastStop(in wcIn) {
 		}
 		c.B, c.bPub, c.stopQ = b, b, true
 	}
+}
+
+// wakeHoles is how long the packets of a runner wake waited behind holes:
+// the wake's length (since the previous one; wcRampTick if that is not
+// known) times the share of its segments that arrived behind one.
+func (c *wcore) wakeHoles(in wcIn) time.Duration {
+	if !in.oooOK || in.segsIn == 0 {
+		return 0
+	}
+	dt := in.now.Sub(c.wakeAt)
+	if c.wakeAt.IsZero() || dt <= 0 || dt > wcTickMax {
+		dt = wcRampTick
+	}
+	return time.Duration(float64(dt) * math.Min(float64(in.ooo)/float64(in.segsIn), 1))
+}
+
+// lossHole says whether the holes of the wake (hole: how long its packets
+// waited behind them) and of the one before were a loss's: they kept packets
+// waiting wcOooHole of T_base or more, wcOooMinSegs segments or more of them.
+// A path that reorders packets by a few ms opens holes that short; summed
+// over a whole interval they come to more (1 Gbit/s, 0.05% held 2 ms: 40 to
+// 65 ms a second), so an interval is judged by its wakes (holeSeen).
+func (c *wcore) lossHole(in wcIn, hole time.Duration) bool {
+	return in.oooOK && hole+c.wakeHole >= time.Duration(wcOooHole*float64(c.tBase)) && in.ooo+c.wakeOoo >= uint64(wcOooMinSegs)
 }
 
 // cut halves the budget for loss between evaluations: the knee is found if
@@ -1463,7 +1510,7 @@ func (c *wcore) lossVerdict(m wcMeas, growth bool) (cong, jump bool, src wcLossS
 		}
 		jump, src = true, wcSrcSnd
 	}
-	if m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) {
+	if c.oooPast(m) {
 		// c.B is still the budget the interval was measured under
 		if growth || float64(c.B) > 1.05*float64(c.oooRef.b) {
 			return true, false, wcSrcOoo
@@ -1471,6 +1518,13 @@ func (c *wcore) lossVerdict(m wcMeas, growth bool) (cong, jump bool, src wcLossS
 		jump, src = true, wcSrcOoo
 	}
 	return false, jump, src
+}
+
+// oooPast: the interval's packets behind holes (Rcv_ooopack) are past their
+// level on a path that is otherwise clean, and a hole of a loss came in it
+// (lossHole): a path that reorders packets by a few ms opens holes too.
+func (c *wcore) oooPast(m wcMeas) bool {
+	return m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) && m.oooLoss
 }
 
 // sndAbs is how far past its level a record's resend share must be to be
@@ -1930,7 +1984,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// after a drain for loss, stay at its budget while the loss goes
 		// on: a run of losses that keeps itself going stops only once
 		// what was held behind its holes is through
-		lossy := m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) ||
+		lossy := c.oooPast(m) ||
 			m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m))
 		if c.lossDrainN++; lossy && c.lossDrainN < 3 {
 			return
@@ -1942,7 +1996,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if c.refPending {
 		// the first measured interval of HOLD sets the references, unless
 		// data still waited behind holes in it (that is no queue level)
-		if m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) && c.holdN < 2 {
+		if c.oooPast(m) && c.holdN < 2 {
 			c.holdN++
 			return
 		}
@@ -2089,7 +2143,11 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// signal with no bias shows the queue empty (the exit's record of this
 	// interval, or the link socket's own srtt): after a slower spell of the
 	// path the rig sat 12 s at the floor, 85 Mbit/s against 250 before
-	clean := !m.oooOK || m.ooo < wcOooCongAbs
+	// (a path whose packets arrive behind holes at a steady level under
+	// wcOooClean, reordering them, is clean while they stay at it: it never
+	// showed ooo under wcOooCongAbs, and a cap a cut left held B for good)
+	clean := !m.oooOK || m.ooo < wcOooCongAbs ||
+		c.oooRef.ok && c.oooRef.v < wcOooClean && !c.oooRef.past(m.ooo, wcOooCongAbs) && !(m.sndOK && m.snd >= wcLossRand)
 	unbiased := m.sndOK && m.qSndOK && m.qSnd <= dq/2 || m.qOwnOK && m.qOwn <= dq/2
 	floor := uint64(max(len(m.f), 1)) * uint64(c.cmin())
 	// (the backoff too where no cap is left: z12 P4, 300 → 50 → 300, the
