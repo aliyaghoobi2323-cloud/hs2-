@@ -1,0 +1,36 @@
+== -rtt 150ms -mbit 300
+upstream v1.5.24 -> need      205.6 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   4.8 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> need +pause  153.1 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   3.8 MiB  heldMax(pause)   4.3 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need           204.9 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   4.9 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need +pause    152.7 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   3.8 MiB  heldMax(pause)   4.3 MiB  borrows 0  pool back true
+need -> need                  205.7 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   4.9 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+need -> need +pause           152.8 Mbit/s (2 MiB/RTT: 111.8)  intact  extraMax   3.8 MiB  heldMax(pause)   4.3 MiB  borrows 0  pool back true
+need -> upstream v1.5.24       93.2 Mbit/s (2 MiB/RTT: 111.8)  intact  heldMax(pause)  0.00 MiB (window 2 MiB)  sender pool back true
+need -> upstream v1.5.24 +pause   91.9 Mbit/s (2 MiB/RTT: 111.8)  intact  heldMax(pause)  1.02 MiB (window 2 MiB)  sender pool back true
+need -> hs2 c9825f2            93.1 Mbit/s (2 MiB/RTT: 111.8)  intact  heldMax(pause)  0.00 MiB (window 2 MiB)  sender pool back true
+need -> hs2 c9825f2 +pause     92.4 Mbit/s (2 MiB/RTT: 111.8)  intact  heldMax(pause)  1.14 MiB (window 2 MiB)  sender pool back true
+rc=0
+== -rtt 100ms -mbit 1000
+upstream v1.5.24 -> need      355.4 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   8.7 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> need +pause  210.8 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   6.6 MiB  heldMax(pause)   6.1 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need           365.3 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   8.6 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need +pause    226.8 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   7.0 MiB  heldMax(pause)   5.8 MiB  borrows 0  pool back true
+need -> need                  229.8 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   7.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+need -> need +pause           223.9 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   6.2 MiB  heldMax(pause)   5.7 MiB  borrows 0  pool back true
+need -> upstream v1.5.24      147.2 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  0.00 MiB (window 2 MiB)  sender pool back true
+need -> upstream v1.5.24 +pause  142.5 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  1.02 MiB (window 2 MiB)  sender pool back true
+need -> hs2 c9825f2           151.0 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  0.00 MiB (window 2 MiB)  sender pool back true
+need -> hs2 c9825f2 +pause    124.1 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  1.02 MiB (window 2 MiB)  sender pool back true
+rc=0
+== -rtt 100ms -mbit 100
+upstream v1.5.24 -> need       98.0 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   0.3 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> need +pause   94.6 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   1.2 MiB  heldMax(pause)   2.0 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need            98.0 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   0.3 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 c9825f2 -> need +pause     94.7 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   1.2 MiB  heldMax(pause)   2.0 MiB  borrows 0  pool back true
+need -> need                   98.0 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   0.3 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+need -> need +pause            92.9 Mbit/s (2 MiB/RTT: 167.8)  intact  extraMax   1.2 MiB  heldMax(pause)   2.0 MiB  borrows 0  pool back true
+need -> upstream v1.5.24       89.5 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  0.00 MiB (window 2 MiB)  sender pool back true
+need -> upstream v1.5.24 +pause   88.0 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  1.02 MiB (window 2 MiB)  sender pool back true
+need -> hs2 c9825f2            89.4 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  0.00 MiB (window 2 MiB)  sender pool back true
+need -> hs2 c9825f2 +pause     87.7 Mbit/s (2 MiB/RTT: 167.8)  intact  heldMax(pause)  1.14 MiB (window 2 MiB)  sender pool back true
+rc=0
