@@ -83,6 +83,8 @@ func poolInvariants(pool *WindowPool, size int, sessions ...*Session) error {
 // slow, pause and stop, a fake core flipping ceilings and references every
 // few ms, sweeps every 20 ms: the pool's bookkeeping holds at every check.
 func TestRedPoolInvariantsUnderChaos(t *testing.T) {
+	defer func(g time.Duration) { closeGrace = g }(closeGrace)
+	closeGrace = 300 * time.Millisecond
 	for round := 0; round < 3; round++ {
 		redChaos(t, int64(round))
 	}
@@ -242,8 +244,13 @@ func redChaos(t *testing.T, seed int64) {
 		st.Close()
 	}
 	wg.Wait()
+	// (the server's streams are never closed here: what they hold goes
+	// back closeGrace after their session closed)
+	for deadline := time.Now().Add(closeGrace + 2*time.Second); pool.Free() != poolSize && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if f := pool.Free(); f != poolSize {
-		t.Fatalf("seed %d: pool free %d after both sessions closed, want %d", seed, f, poolSize)
+		t.Fatalf("seed %d: pool free %d closeGrace after both sessions closed, want %d", seed, f, poolSize)
 	}
 	t.Logf("seed %d: %d checks, at most %d KiB of the pool held, borrows %d/%d, pool short %d/%d", seed, checks, maxHeld>>10,
 		cli.Borrows(), srv.Borrows(), atomic.LoadUint32(&cli.poolShorts), atomic.LoadUint32(&srv.poolShorts))

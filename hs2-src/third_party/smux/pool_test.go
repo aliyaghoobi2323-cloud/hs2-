@@ -357,7 +357,9 @@ func TestPoolClaimCoversWhatAStoppedReaderHolds(t *testing.T) {
 	}
 }
 
-// Closing a stream, or its session, gives everything back to the pool.
+// Closing a stream gives everything back to the pool; closing its session
+// gives back what its streams do not hold, and the rest as they let it go
+// (or closeGrace later: TestFixPoolBackWhenBuffersFreed).
 func TestPoolBackOnClose(t *testing.T) {
 	pool := NewWindowPool(4 << 20)
 	session, stream, p, cfg := grown(t, pool)
@@ -378,14 +380,20 @@ func TestPoolBackOnClose(t *testing.T) {
 		t.Fatal("nothing taken from the pool")
 	}
 	session2.Close()
-	if pool.Free() != 4<<20 {
-		t.Fatalf("session closed: pool free %d, want all of it back", pool.Free())
+	if held := unreadOf(stream2) - cfg.NeedStreamBuffer; pool.Free() != 4<<20-held || claimOf(stream2) != held {
+		t.Fatalf("session closed: pool free %d (claim %d), want all of it back but what the stream holds past NeedStreamBuffer, %d",
+			pool.Free(), claimOf(stream2), held)
 	}
+	free := pool.Free()
 	if n, _ := stream2.Read(make([]byte, 4096)); n == 0 { // what it holds is still read after the close
 		t.Fatal("nothing read after the close")
 	}
-	if pool.Free() != 4<<20 {
-		t.Fatalf("a read after the close took %d from the pool", 4<<20-pool.Free())
+	if pool.Free() < free {
+		t.Fatalf("a read after the close took %d from the pool", free-pool.Free())
+	}
+	stream2.Close()
+	if e, sp := extraOf(session2); pool.Free() != 4<<20 || e != 0 || sp != 0 {
+		t.Fatalf("its stream closed after the session: pool free %d extra %d spare %d", pool.Free(), e, sp)
 	}
 }
 

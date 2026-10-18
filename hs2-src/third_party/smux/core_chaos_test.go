@@ -59,9 +59,12 @@ func fakeCore(seed int64, stop <-chan struct{}, sessions ...*Session) *sync.Wait
 // streams of two sessions sharing one pool while their readers run fast,
 // slow down, pause and stop, the streams close at either end at random,
 // and the sessions close in the middle of it (sweeping every 50 ms).
-// Whatever the order, the pool is whole once both sessions and every stream
-// have closed.
+// Whatever the order, the pool is whole once both sessions closed and their
+// streams let go of what they hold: closed, or closeGrace after (a third of
+// the readers never close theirs).
 func TestCorePoolWholeAfterChaos(t *testing.T) {
+	defer func(g time.Duration) { closeGrace = g }(closeGrace)
+	closeGrace = 300 * time.Millisecond
 	for round := 0; round < 4; round++ {
 		coreChaosRound(t, int64(round))
 	}
@@ -194,8 +197,11 @@ func coreChaosRound(t *testing.T, seed int64) {
 	}
 	close(stop)
 	core.Wait()
+	for deadline := time.Now().Add(closeGrace + 2*time.Second); pool.Free() != poolSize && time.Now().Before(deadline); {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if f := pool.Free(); f != poolSize {
-		t.Fatalf("seed %d: pool free %d after both sessions closed, want %d (lost %d)", seed, f, poolSize, poolSize-f)
+		t.Fatalf("seed %d: pool free %d closeGrace after both sessions closed, want %d (lost %d)", seed, f, poolSize, poolSize-f)
 	}
 	for _, s := range []*Session{cli, srv} {
 		if e, sp := extraOf(s); e != 0 || sp != 0 {

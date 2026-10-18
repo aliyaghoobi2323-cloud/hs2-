@@ -189,8 +189,14 @@ func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
 // engine.SmuxNeedStreamBuffer brings its own buffer from the process's window
 // pool (engine.SmuxWindowPool, WindowPoolMiB of RAM), and a link whose buffer
 // runs full borrows from it too: the links of one process share it, so it
-// counts once per process, not per link (PoolWorstCaseMiB). The rule keeps
-// the links' worst case and the pool's together at or below a quarter of RAM:
+// counts once per process, not per link (PoolWorstCaseMiB). A link that
+// dies keeps what its readers had not taken until its relays let go of its
+// streams (engine relayDieGrace, 5 s): the claims on the pool stay with that
+// data until then (smux closeGrace at the latest), so the pool's part is not
+// overshot; its session buffer's part is, for those seconds, as the link
+// count counts live links (a dead link's backlog next to its replacement's).
+// The rule keeps the links' worst case and the pool's together at or below a
+// quarter of RAM:
 //
 //   - one link per LinkRAMPerLinkMB (48 MB) of the RAM left past four times
 //     the pool's worst case, at most MaxLinksCap (300);

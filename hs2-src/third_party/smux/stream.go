@@ -791,6 +791,12 @@ func (s *Stream) Close() error {
 		s.sess.streamClosed(s.id)
 		return err
 	} else {
+		if s.sess.IsClosed() {
+			// its session closed it (sessionClose): its app lets go of it
+			// now, and of what it holds with it -- the buffers and, with
+			// a WindowPool, the claim that covered them (pool.go)
+			s.recycleTokens()
+		}
 		return io.ErrClosedPipe
 	}
 }
@@ -848,11 +854,13 @@ func (s *Stream) SetDeadline(t time.Time) error {
 	return nil
 }
 
-// session closes
+// session closes: the claim keeps what the stream holds unread past
+// NeedStreamBuffer (it is still in memory, and may still be read) and lets
+// go of the rest (reclaim)
 func (s *Stream) sessionClose() {
 	s.dieOnce.Do(func() { close(s.die) })
 	s.bufferLock.Lock()
-	s.dropClaim() // the session gives it back to the pool as it closes
+	s.reclaim(s.sess.config)
 	s.bufferLock.Unlock()
 }
 

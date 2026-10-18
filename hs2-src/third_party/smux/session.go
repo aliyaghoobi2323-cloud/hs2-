@@ -279,6 +279,11 @@ func (s *Session) Close() error {
 		s.streamLock.Unlock()
 		if s.config.WindowPool != nil {
 			s.dropSpare()
+			if atomic.LoadInt32(&s.extra) > 0 {
+				// what the streams still hold goes back as they let it go,
+				// and the rest closeGrace from now (pool.go)
+				time.AfterFunc(closeGrace, s.dropClaims)
+			}
 		}
 		return s.conn.Close()
 	} else {
