@@ -435,7 +435,9 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 	l.samples, cc = l.sess.CoreSnapshot(l.samples)
 	s.rcvd, s.parks, s.borrows, s.brakes, s.poolShort = cc.Rcvd, cc.Parks, cc.Borrows, cc.Brakes, cc.PoolShort
 	if l.pool != nil {
-		s.poolFree = int64(l.pool.Free())
+		// what the pool has left for this link's windows (it holds no more
+		// than the pool has left for the others)
+		s.poolFree = int64(l.pool.FreeFor(l.sess.Extra()))
 	}
 	l.snaps = l.snaps[:0]
 	for _, x := range l.samples {

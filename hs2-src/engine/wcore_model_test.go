@@ -1303,11 +1303,13 @@ func (m *wmModel) paceNeed(st *wmRcvStream, old uint32) uint64 {
 	return uint64((1+mg)*read*rtt/dt) + uint64(smux.StepOf(wmNeed, old))
 }
 
-// setWindow is N4's: past need only as far as the pool covers it.
+// setWindow is N4's: past need only as far as the pool covers it, within
+// what it has left for the link (smux WindowPool.FreeFor: the link holds no
+// more than the pool has left for the others).
 func (m *wmModel) setWindow(st *wmRcvStream, w uint32) {
 	if m.pool && w > wmNeed {
 		if want := int64(w) - wmNeed - st.claim; want > 0 {
-			got := min(want, max(m.poolFree, 0))
+			got := min(want, max((m.poolFree-m.claimSum)/2, 0))
 			m.poolFree -= got
 			st.claim += got
 			m.claimSum += got
@@ -1383,7 +1385,7 @@ func (m *wmModel) runCore() {
 		srtt: time.Duration(m.rSrtt * float64(time.Millisecond)), segsIn: m.segsIn, ooo: m.oooPkts, oooOK: true,
 		rcvd: m.rcvd, parks: m.parks, poolFree: -1, ctrlMin: m.ctrlMin, pongs: m.pongs}
 	if m.pool {
-		s.poolFree = m.poolFree
+		s.poolFree = max((m.poolFree-m.claimSum)/2, 0) // (smux WindowPool.FreeFor)
 	}
 	m.pongs = nil
 	if r := &m.sndRec; r.at > 0 {

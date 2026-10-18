@@ -134,8 +134,9 @@ func TestCoreCeilGrowsPastNeed(t *testing.T) {
 	}
 }
 
-// A window grows past NeedStreamBuffer only as far as the pool has left,
-// and each update the pool falls short is counted.
+// A window grows past NeedStreamBuffer only as far as the pool has left for
+// its session (half of it, the session alone: pool.go, FreeFor), and each
+// update the pool falls short is counted.
 func TestCoreCeilBoundedByPool(t *testing.T) {
 	pool := NewWindowPool(100 << 10)
 	cfg := poolConfig(pool)
@@ -143,17 +144,17 @@ func TestCoreCeilBoundedByPool(t *testing.T) {
 	stream.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
 	keepUp(t, p, stream, 6<<20)
 	p.sync(stream)
-	if w := maxWindow(p.updates()); w != uint32(cfg.NeedStreamBuffer+100<<10) {
-		t.Fatalf("max window %d, want NeedStreamBuffer + the pool's 100 KiB = %d (updates %v)", w, cfg.NeedStreamBuffer+100<<10, p.updates())
+	if w := maxWindow(p.updates()); w != uint32(cfg.NeedStreamBuffer+50<<10) {
+		t.Fatalf("max window %d, want NeedStreamBuffer + half the pool's 100 KiB = %d (updates %v)", w, cfg.NeedStreamBuffer+50<<10, p.updates())
 	}
-	if e, _ := extraOf(session); e != 100<<10 || pool.Free() != 0 {
-		t.Fatalf("extra %d pool free %d, want the whole pool taken", e, pool.Free())
+	if e, _ := extraOf(session); e != 50<<10 || pool.Free() != 50<<10 || pool.FreeFor(int(e)) != 0 {
+		t.Fatalf("extra %d pool free %d (%d for the session), want half the pool taken, none more for it", e, pool.Free(), pool.FreeFor(int(e)))
 	}
 	samples, counters := session.CoreSnapshot(nil)
 	if len(samples) != 1 || samples[0].PoolShort == 0 || counters.PoolShort != samples[0].PoolShort {
 		t.Fatalf("pool short: samples %+v, session %d: want the stream's shortfalls counted", samples, counters.PoolShort)
 	}
-	// a second stream of the session finds the pool empty
+	// a second stream of the session finds nothing left for it
 	st2, sid2 := p.open(session)
 	st2.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
 	for i := 0; i < 400; i++ {
@@ -162,7 +163,7 @@ func TestCoreCeilBoundedByPool(t *testing.T) {
 		readN(t, st2, 4096, 4096)
 	}
 	if w := rcvWinOf(st2); w > uint32(cfg.NeedStreamBuffer) {
-		t.Fatalf("second stream window %d past NeedStreamBuffer with the pool empty", w)
+		t.Fatalf("second stream window %d past NeedStreamBuffer with nothing left for its session", w)
 	}
 }
 

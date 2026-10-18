@@ -27,6 +27,15 @@ import (
 // transfer cannot land more than NeedStreamBuffer uncovered. A session whose
 // buffer runs full anyway (what was in flight when its readers slowed down)
 // borrows from the same pool (borrow), whatever its windows.
+//
+// A window grows past NeedStreamBuffer only as far as its session holds no
+// more of the pool than the pool has left for the others (FreeFor: half the
+// pool for a session alone). A reader that stops after a fast transfer keeps
+// what its larger window let in, and its claim with it, for as long as its
+// connection stays open; two such links once held the whole pool, and every
+// other link could neither grow a window nor borrow. (A fixed cap of half
+// the pool per session does not prevent that: two sessions at the cap leave
+// nothing.)
 
 // claimHold: a claim on the pool outlives the window it covered by this many
 // window turnarounds (claimTurn): what the peer sent under the larger window
@@ -71,6 +80,34 @@ func NewWindowPool(size int) *WindowPool {
 // Free is what the pool has left.
 func (p *WindowPool) Free() int { return int(p.free.Load()) }
 
+// FreeFor is what a session that holds held of the pool may still take for
+// its windows: as much as leaves it holding no more than the pool then has
+// left for the others (held+k ≤ free−k).
+func (p *WindowPool) FreeFor(held int) int {
+	if k := (p.free.Load() - int64(held)) / 2; k > 0 {
+		return int(k)
+	}
+	return 0
+}
+
+// takeFor takes up to n bytes for the windows of a session that holds held
+// of the pool, within FreeFor(held), and returns how many it took.
+func (p *WindowPool) takeFor(held, n int) int {
+	for {
+		f := p.free.Load()
+		k := (f - int64(held)) / 2
+		if int64(n) < k {
+			k = int64(n)
+		}
+		if k <= 0 {
+			return 0
+		}
+		if p.free.CompareAndSwap(f, f-k) {
+			return int(k)
+		}
+	}
+}
+
 // take takes up to n bytes from the pool and returns how many it took.
 func (p *WindowPool) take(n int) int {
 	for {
@@ -101,7 +138,8 @@ func needOf(cfg *Config) uint32 {
 
 // setWindow sets the window to w; with a WindowPool, past NeedStreamBuffer
 // only as far as the stream's claim on the pool covers it, the claim taking
-// what more the pool has left. The caller holds bufferLock.
+// what more the pool has left for its session (FreeFor). The caller holds
+// bufferLock.
 func (s *Stream) setWindow(cfg *Config, w uint32) {
 	if pool := cfg.WindowPool; pool != nil && w > uint32(cfg.NeedStreamBuffer) {
 		if want := int(w) - cfg.NeedStreamBuffer - s.claim; want > 0 {
@@ -109,7 +147,7 @@ func (s *Stream) setWindow(cfg *Config, w uint32) {
 			select {
 			case <-s.die: // closed: its claim is given back for good
 			default:
-				got = pool.take(want)
+				got = pool.takeFor(int(atomic.LoadInt32(&s.sess.extra)), want)
 			}
 			if got > 0 {
 				if s.claim == 0 {
