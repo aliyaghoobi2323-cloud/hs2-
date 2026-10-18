@@ -34,6 +34,16 @@ type z5LMUser struct {
 	Err     string    `json:"err,omitempty"`
 }
 
+// z12: an interactive user that arrived while the big download ran
+// (Z5_LM_INTS): which link it was given, and its replies' latency.
+type z5LMInt struct {
+	At      float64            `json:"atS"`      // when it connected, s from tU
+	SameDl  bool               `json:"sameDl"`   // on the download's link
+	Links   int                `json:"links"`    // links serving as it connected
+	DlPress bool               `json:"dlPressed"` // the download's link was pressed as it connected
+	Lat     map[string]float64 `json:"lat"`      // ms: n, p50, p90, p99, max
+}
+
 type z5LMRes struct {
 	Scen  string            `json:"scen"`
 	Ver   string            `json:"ver"`
@@ -43,6 +53,7 @@ type z5LMRes struct {
 	Lines []string          `json:"lines"`
 	Links int               `json:"linksAtEnd"`
 	T0    string            `json:"t0,omitempty"` // wall clock when the users started
+	Ints  []z5LMInt         `json:"ints,omitempty"`
 }
 
 func TestZ5LM(t *testing.T) {
@@ -91,6 +102,17 @@ func TestZ5LM(t *testing.T) {
 				if hd[0] == 'U' {
 					io.CopyBuffer(io.Discard, c, buf)
 					return
+				}
+				if hd[0] == 'I' { // z12: 200 B request, 2 KiB reply
+					req, rep := make([]byte, 200), make([]byte, 2048)
+					for {
+						if _, err := io.ReadFull(c, req); err != nil {
+							return
+						}
+						if _, err := c.Write(rep); err != nil {
+							return
+						}
+					}
 				}
 				for {
 					if _, err := c.Write(buf); err != nil {
@@ -141,15 +163,52 @@ func TestZ5LM(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer userLn.Close()
+	// z12: the link each user connection was given (in the order they came)
+	var pickMu sync.Mutex
+	var picked []Link
+	pickCh := make(chan Link, 64)
 	go func() {
 		for {
 			c, err := userLn.Accept()
 			if err != nil {
 				return
 			}
-			go serveUserTCP(ctx, c, lm, 0)
+			go func(c net.Conn) {
+				st, link, release, ok := openStreamOn(ctx, lm, false, 0)
+				if !ok {
+					c.Close()
+					pickCh <- nil
+					return
+				}
+				pickMu.Lock()
+				picked = append(picked, link)
+				pickMu.Unlock()
+				pickCh <- link
+				relayUser(ctx, c, lm, 0, st, link, release)
+			}(c)
 		}
 	}()
+	serving := func() int {
+		lm.mu.RLock()
+		defer lm.mu.RUnlock()
+		n := 0
+		for _, ml := range lm.links {
+			if ml.serving() {
+				n++
+			}
+		}
+		return n
+	}
+	pressedOf := func(l Link) bool {
+		lm.mu.RLock()
+		defer lm.mu.RUnlock()
+		for _, ml := range lm.links {
+			if ml.link == l {
+				return ml.pressed
+			}
+		}
+		return false
+	}
 	// wait for the pool to come up
 	for i := 0; i < 300 && lm.Stats().Links < 1; i++ {
 		time.Sleep(100 * time.Millisecond)
@@ -204,12 +263,69 @@ func TestZ5LM(t *testing.T) {
 			}
 		}(i)
 	}
+	// z12: Z5_LM_INTS interactive users, the first Z5_LM_INT_AT s after the
+	// download started, then one each Z5_LM_INT_EVERY s, to the end
+	var dlLink Link
+	if nU > 0 {
+		select {
+		case dlLink = <-pickCh:
+		case <-time.After(10 * time.Second):
+		}
+	}
+	nI := int(z5Env("Z5_LM_INTS", 0))
+	ints := make([]z5LMInt, nI)
+	var iwg sync.WaitGroup
+	for k := 0; k < nI; k++ {
+		at := tU.Add(time.Duration((z5Env("Z5_LM_INT_AT", 15) + float64(k)*z5Env("Z5_LM_INT_EVERY", 15)) * float64(time.Second)))
+		end := tU.Add(time.Duration(dur * float64(time.Second)))
+		if !at.Before(end) {
+			break
+		}
+		time.Sleep(time.Until(at))
+		ints[k].At = math.Round(time.Since(tU).Seconds()*10) / 10
+		ints[k].Links = serving()
+		ints[k].DlPress = dlLink != nil && pressedOf(dlLink)
+		c, err := net.Dial("tcp", userLn.Addr().String())
+		if err != nil {
+			continue
+		}
+		c.Write([]byte{'I'})
+		var l Link
+		select {
+		case l = <-pickCh:
+		case <-time.After(10 * time.Second):
+		}
+		ints[k].SameDl = l != nil && l == dlLink
+		iwg.Add(1)
+		go func(k int, c net.Conn) {
+			defer iwg.Done()
+			defer c.Close()
+			c.SetDeadline(end)
+			var lat z5Lat
+			req, rep := make([]byte, 200), make([]byte, 2048)
+			tk := time.NewTicker(100 * time.Millisecond)
+			defer tk.Stop()
+			for time.Now().Before(end.Add(-time.Second)) {
+				<-tk.C
+				s := time.Now()
+				if _, err := c.Write(req); err != nil {
+					break
+				}
+				if _, err := io.ReadFull(c, rep); err != nil {
+					break
+				}
+				lat.add(time.Since(s))
+			}
+			ints[k].Lat = z5Pct(lat.v)
+		}(k, c)
+	}
+	iwg.Wait()
 	wg.Wait()
 	for i := range users {
 		users[i].Mbit1s = bins[i].secs(int(dur))
 		users[i].EndedAt = math.Round(users[i].EndedAt*10) / 10
 	}
-	res := z5LMRes{Scen: scen, Ver: os.Getenv("Z5_VER"), Rep: os.Getenv("Z5_REP"), Users: users, Links: lm.Stats().Links, Env: map[string]string{}}
+	res := z5LMRes{Scen: scen, Ver: os.Getenv("Z5_VER"), Rep: os.Getenv("Z5_REP"), Users: users, Links: lm.Stats().Links, Env: map[string]string{}, Ints: ints}
 	res.T0 = tU.UTC().Format(time.RFC3339Nano)
 	logMu.Lock()
 	res.Lines = append(res.Lines, lines...)

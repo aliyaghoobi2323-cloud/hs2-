@@ -11,6 +11,8 @@ package engine
 //	Z5_WC_QTARGET  WcoreQTarget, ms
 //	Z5_WC_PROBEQ   WcoreProbeQ, ms
 //	Z5_WC_STAGE    WcoreStage
+//	Z5_WC_PACECAP  WcorePaceCap (z12: the sender's pacing cap, x delivery rate)
+//	Z5_WC_BURST    WcoreBurstShare (z12: B held where the burst after PROBE_RTT fits Q_cap)
 //	Z5_MAXBUF      SmuxStreamBuffer (MaxStreamBuffer), MiB: past 16 MiB for
 //	               the calibration's fixed windows of 3 BDP on 1000/100
 //
@@ -47,6 +49,12 @@ func init() {
 	}
 	if v := os.Getenv("Z5_WC_TRACE"); v != "" {
 		WcoreTrace = v
+	}
+	if v, ok := num("Z5_WC_PACECAP"); ok {
+		WcorePaceCap = v
+	}
+	if v, ok := num("Z5_WC_BURST"); ok {
+		WcoreBurstShare = v
 	}
 	if v, ok := num("Z5_MAXBUF"); ok {
 		SmuxStreamBuffer = int(v * (1 << 20))
