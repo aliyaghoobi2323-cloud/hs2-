@@ -147,9 +147,9 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			seq++
 			pending.add(seq, ctrlNow())
 			publish()
-			// A ping of its own: smux keeps a timed-out write queued, still
-			// pointing at the caller's buffer, so one buffer reused for the
-			// next ping would rewrite the queued one.
+			// A ping of its own: smux keeps a timed-out write queued (with a
+			// copy of its data: it no longer reads the caller's buffer once
+			// Write returns); a fresh buffer per ping does not lean on that.
 			ping := make([]byte, ctrlPingLen)
 			binary.BigEndian.PutUint64(ping[0:], seq)
 			binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
