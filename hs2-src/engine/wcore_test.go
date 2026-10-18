@@ -644,6 +644,7 @@ func wtProbe() (*wcore, wcIn) {
 func TestWcoreProbe(t *testing.T) {
 	q := func(m *wcMeas, d time.Duration) { m.qTurn, m.qOK = 5*time.Millisecond+d, true }
 	holes := func(c *wcore, m *wcMeas, own time.Duration) {
+		c.sndSeen = true                                     // the edge, with the exit's record (not blind)
 		c.oooRef = wcLossRef{v: 0.5, b: 8 * wtMiB, ok: true} // a lossy path's level
 		m.ooo, m.oooOK, m.holey = 0.5, true, true
 		m.qTurn, m.qOK = 120*time.Millisecond, true // the wait behind holes
@@ -680,6 +681,19 @@ func TestWcoreProbe(t *testing.T) {
 		{"holes: q_own grew", 64e6, func(c *wcore, in *wcIn, m *wcMeas) { holes(c, m, 12*time.Millisecond) }, wcHold, 0, 1, 0},
 		{"holes: nothing queued twice, the rate as it was: grow on", 58e6, func(c *wcore, in *wcIn, m *wcMeas) {
 			holes(c, m, 0)
+			c.probeWins = 1
+		}, wcStartup, 1, 0, 9 * wtMiB},
+		{"holes, no record of the sender (blind): no queue is no pay", 58e6, func(c *wcore, in *wcIn, m *wcMeas) {
+			holes(c, m, time.Millisecond)
+			c.sndSeen = false
+		}, wcHold, 0, 1, 0},
+		{"... the rate must grow", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) {
+			holes(c, m, time.Millisecond)
+			c.sndSeen = false
+		}, wcHold, 1, 0, 9*wtMiB - uint64(0.001*63.6e6)},
+		{"... and grow by most of what the probe could bring to grow on", 66.6e6, func(c *wcore, in *wcIn, m *wcMeas) {
+			holes(c, m, 0)
+			c.sndSeen = false
 			c.probeWins = 1
 		}, wcStartup, 1, 0, 9 * wtMiB},
 		{"loss came with it", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 0); m.snd, m.sndOK = 0.02, true }, wcDrain, 0, 1, 0},

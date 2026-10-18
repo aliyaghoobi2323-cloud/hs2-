@@ -86,6 +86,7 @@ type wcore struct {
 	capPool    bool              // capped by the window pool (not by MaxStreamBuffer)
 	holeyPrev  bool              // the previous evaluation's packets waited behind holes
 	burstHeld  bool              // B is held where a burst after the sender's PROBE_RTT fits Q_cap
+	blindN     int               // evaluations in a row that were blind (blind)
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -727,10 +728,15 @@ func (c *wcore) step(in wcIn) wcOut {
 		c.fEmpty = 0
 	}
 
+	if c.blind(m) {
+		c.blindN++
+	} else {
+		c.blindN = 0
+	}
 	switch {
 	case c.state == wcOff:
 		c.off(in, m, &ev)
-	case c.fEmpty >= wcOffAfter:
+	case c.fEmpty >= wcOffAfter || c.blindN >= wcOffAfter:
 		c.toOff()
 	case len(m.f) == 0 || m.idleF:
 		// the fast streams paused (or one of them was sent nothing: its
@@ -1592,6 +1598,8 @@ func (c *wcore) harm(m wcMeas) bool {
 		return true
 	case !m.qSnd3OK && m.rF > 0 && m.wF >= wcPastKnee*(m.rF*c.tBase.Seconds()+m.hStep):
 		return true
+	case c.blind(m):
+		return true
 	}
 	return false
 }
@@ -1690,7 +1698,7 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if (tracked || m.hit >= wcHitShare) && !qUp && !cong {
 		c.noteTau(m)
 	}
-	if (tracked || m.holey) && !qUp && !cong {
+	if (tracked || m.holey && !c.blind(m)) && !qUp && !cong {
 		// paid: the rate grew with B, or (where data waits behind holes
 		// and the rate of an interval says little) no queue came of it
 		c.bGood = max(c.bGood, min(c.B, c.bPub))
@@ -2092,6 +2100,18 @@ func (c *wcore) tauOK2(m wcMeas) bool {
 	return !m.holey || m.qOwnOK && m.qOwn <= c.qOwnRef+wcDqOwn/2
 }
 
+// blind: data waits behind holes and no record of the sender's socket
+// comes (the exit's core for uploads; the edge's with an old exit). There
+// Rcv_ooopack is no congestion signal (it reads the holes, ours or the
+// path's: a run of losses of our own keeps its level past wcOooClean), no
+// resend share tells them apart, and the only queue signal, the link
+// socket's own srtt, reads the queue's floor (§3.3). An absent queue there
+// is no sign that more window paid: only the rate is (red team, round 1:
+// probes "paid" on q_own alone and took the windows of 300/150 behind a
+// 20 ms queue to 13–31% resent, past the loss rule's lossFrac, with the
+// windows without the core at 0.05–2%).
+func (c *wcore) blind(m wcMeas) bool { return m.holey && !c.sndSeen }
+
 // lossTestDone resolves a drain that tested a jump of loss at a steady
 // budget, once its source has measured after it: still past its level, the
 // path turned lossy (the level moves there and it is random from now on);
@@ -2172,7 +2192,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// first byte past each limit leads its burst, so the turnaround shows no
 	// queue until the bursts already overflow (the model: every probe kept
 	// up to the next loss, 1.2–1.6% resent where rate verdicts left 0.4–0.9%)
-	paid := m.holey || !c.qcapKnown(now) || gain >= math.Max(wcPayMin, wcPayShare*exp)
+	paid := (m.holey || !c.qcapKnown(now)) && !c.blind(m) || gain >= math.Max(wcPayMin, wcPayShare*exp)
 	if cong || jump || !ok || qUp || !paid {
 		c.probeFailed(in, m, ev, cong, ok)
 		return
@@ -2200,7 +2220,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.noteTau(m)
 	}
 	c.schedProbe(now)
-	if rise >= pq/4 || !m.holey && gain < math.Max(2*wcPayMin, wcSuccStartup*exp) {
+	if rise >= pq/4 || (!m.holey || c.blind(m)) && gain < math.Max(2*wcPayMin, wcSuccStartup*exp) {
 		c.probeWins = 0
 		c.toHold(in, m)
 		return
