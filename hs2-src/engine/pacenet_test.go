@@ -275,6 +275,36 @@ func TestPaceNetMustPay(t *testing.T) {
 	}
 }
 
+// A cap that does not bind (the socket paces under it: its own sender's
+// estimate came down below it) cannot be what holds the delivery rate, so
+// it follows that rate down while the resends go on, queue or not: a
+// policer that comes mid-transfer builds no queue, and the cap set from the
+// rate before it (z17 rig, a 180 Mbit/s policer at 15 s on 300/150 under
+// the core: held at ~370 Mbit/s while the sender paced at 290 over 45
+// delivered, lifted at the judge, 4–5% resent). It is judged from then on.
+func TestPaceNetUnboundCapFollows(t *testing.T) {
+	f := newWnFeed()
+	f.run(wcNetWarm, 30000, 0, 300*wnMB, 1170*wnMB)
+	o := f.run(time.Second, 30000, 0.1, 300*wnMB, 1170*wnMB)
+	if len(o) == 0 || o[0].act != wcNetEngage {
+		t.Fatalf("not engaged: %+v", o)
+	}
+	// the policer: 45 Mbit/s delivered, the sender paces at 290 (under the
+	// cap of 375), 8% resent, no queue
+	f.run(wcNetSpan+time.Second, 4000, 0.08, 45*wnMB, 290*wnMB)
+	if want := uint64(wcNetK * 45 * wnMB); math.Abs(float64(f.n.cap)-float64(want)) > 0.06*float64(want) {
+		t.Fatalf("paced at 290 under a cap it does not reach, 45 delivered, 8%% resent: cap %.0f Mbit/s, want ~%.0f",
+			float64(f.n.cap)/wnMB, float64(want)/wnMB)
+	}
+	// now it binds and pays: the judge keeps it
+	held := f.n.cap
+	if o = f.run(2*wcNetJudge, 4000, 0.005, 45*wnMB, float64(held)); f.n.cap != held {
+		t.Fatalf("binding and paying: %+v cap %d, want it kept at %d", o, f.n.cap, held)
+	}
+	// a cap that binds (the socket paces at it) does not follow the rate
+	// down with no queue (the ratchet): TestPaceNetEngageRelease
+}
+
 // A socket whose delivery rate still grows past wcNetGrow a second (its
 // STARTUP, longer than the warm-up on a long round trip) is capped only
 // past wcNetWarmLoss: a cap at k times a rate that doubles each round trip

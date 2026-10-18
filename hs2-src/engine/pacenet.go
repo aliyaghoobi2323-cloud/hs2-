@@ -36,8 +36,10 @@ import (
 //   - the cap: SO_MAX_PACING_RATE at wcNetK times that delivery rate, never
 //     under wcPaceFloor. It follows the delivery rate down only while the
 //     socket still resends past wcNetLoss with a queue at it (the path
-//     slowed down); otherwise it only rises (a sender held by its cap and
-//     its windows delivers less, and following that down ratchets);
+//     slowed down) or paces under the cap (it does not bind: a policer
+//     that comes mid-transfer); otherwise it only rises (a sender held by
+//     its cap and its windows delivers less, and following that down
+//     ratchets);
 //   - it must pay: still resending as much after wcNetJudge, it is lifted
 //     (random loss, windows past what the path holds: not the bursts');
 //   - lift: once the socket was clean for wcNetClean (longer each time the
@@ -337,18 +339,29 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 		return wcNetOut{act: wcNetRelease, idle: idle}
 	}
 	c := max(n.cap, target)
-	if share >= loss && in.minRTT > 0 && in.srtt-in.minRTT > wcNetQueue {
+	// unbound: the socket paces under the cap (its sender's own estimate
+	// came down below it), still far past what it delivers
+	unbound := in.pace > 0 && in.pace < (1-wcNetMove)*float64(n.cap) && in.pace > wcNetRatio*dlv
+	if share >= loss && (unbound || in.minRTT > 0 && in.srtt-in.minRTT > wcNetQueue) {
 		// still in trouble with a queue at the socket: the path, not the
 		// cap, holds the delivery rate (a path that slowed down), and the
-		// cap follows it down. Otherwise it only rises: a sender held by
-		// its cap and its windows delivers less (its window takes longer
-		// to send), and following that down would ratchet it to a third
-		// of its rate at ×1.5 (under random loss past wcNetLoss: the model
-		// lost 20% at 3%)
+		// cap follows it down; so too a cap that does not bind (a policer
+		// that comes mid-transfer builds no queue: the rig's 180 Mbit/s
+		// one on 300/150 under the core left the cap at ~370 Mbit/s, set
+		// from the rate before it, the sender pacing at 290 over 45
+		// delivered). Otherwise it only rises: a sender held by its cap
+		// and its windows delivers less (its window takes longer to send),
+		// and following that down would ratchet it to a third of its rate
+		// at ×1.5 (under random loss past wcNetLoss: the model lost 20% at
+		// 3%)
 		c = target
 	}
 	if dlv <= 0 || math.Abs(float64(c)-float64(n.cap)) <= wcNetMove*float64(n.cap) {
 		return wcNetOut{}
+	}
+	if unbound && c < n.cap {
+		// it binds from now: judged from now (wcNetJudge)
+		n.onAt, n.share0, n.judged = now, share, false
 	}
 	n.cap = c
 	return wcNetOut{act: wcNetMoveCap, cap: c, k: k, dlv: dlv}
