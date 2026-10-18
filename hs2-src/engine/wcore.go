@@ -1642,6 +1642,7 @@ func (c *wcore) toOff() {
 	c.refPending = false
 	c.capped = false
 	c.lossTest = wcSrcNone
+	c.sndCarry = wcSnd{} // (a record of the core's own budgets is no level of the windows without it)
 	clear(c.inF)
 }
 

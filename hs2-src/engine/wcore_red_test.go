@@ -802,3 +802,55 @@ func TestWcoreRedGrownSus(t *testing.T) {
 		}
 	}
 }
+
+// TestWcoreRedReorder: a path that reorders a share of the link's packets
+// by a few ms (no loss at all): base against the core (HS2_WCORE_RED=1).
+func TestWcoreRedReorder(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED") != "1" {
+		t.Skip("HS2_WCORE_RED=1")
+	}
+	for _, p := range []struct {
+		rate   float64
+		rtt, q int
+	}{{300, 150, 50}, {1000, 100, 50}, {1000, 150, 50}} {
+		for _, ro := range []struct {
+			p  float64
+			ms int
+		}{{0, 0}, {0.0005, 2}, {0.002, 2}, {0.002, 5}, {0.01, 3}} {
+			for seed := uint64(1); seed <= 2; seed++ {
+				c := wmPath(p.rate, wmMS(p.rtt), wmMS(p.q))
+				c.reorder, c.reorderMs, c.seed, c.dur = ro.p, ro.ms, seed, 40*time.Second
+				b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
+				t.Logf("%s reorder %.2f%%/%dms s%d: base %.0f Mbit rs %.2f%% | core %.0f Mbit rs %.2f%% d%v p%v B%.1f",
+					c.name, 100*ro.p, ro.ms, seed, b.mbit, 100*b.resend, k.mbit, 100*k.resend, k.drains, k.probes, float64(k.peakB)/(1<<20))
+			}
+		}
+	}
+}
+
+// TestWcoreRedReorderTrace: HS2_WCORE_RED_RTRACE=rate/rtt/queue/reorder%/ms/seed[/base]
+func TestWcoreRedReorderTrace(t *testing.T) {
+	spec := os.Getenv("HS2_WCORE_RED_RTRACE")
+	if spec == "" {
+		t.Skip("HS2_WCORE_RED_RTRACE=rate/rtt/queue/reorder%/ms/seed[/base]")
+	}
+	var rate, rtt, q, ro float64
+	var ms, seed int
+	p := strings.Split(spec, "/")
+	fmt.Sscan(p[0], &rate)
+	fmt.Sscan(p[1], &rtt)
+	fmt.Sscan(p[2], &q)
+	fmt.Sscan(p[3], &ro)
+	fmt.Sscan(p[4], &ms)
+	fmt.Sscan(p[5], &seed)
+	c := wmPath(rate, time.Duration(rtt)*time.Millisecond, time.Duration(q)*time.Millisecond)
+	c.reorder, c.reorderMs, c.seed, c.trace, c.dur, c.mode = ro/100, ms, uint64(seed), true, 40*time.Second, wmCore
+	if len(p) > 6 {
+		c.mode = wmBase
+	}
+	r := wmRun(c)
+	for _, l := range r.trace {
+		t.Log(l)
+	}
+	t.Log(r)
+}

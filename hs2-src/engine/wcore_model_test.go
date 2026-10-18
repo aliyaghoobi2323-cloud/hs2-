@@ -148,6 +148,11 @@ type wmCfg struct {
 	// oldExit: the edge's core with an exit whose record has no TCP_INFO
 	// in it (a 64-byte record: no q_snd, no resend share)
 	oldExit bool
+	// reorder, reorderMs: a packet of the link's connection is held this
+	// many ms past its turn with this probability (multipath, link
+	// aggregation): what comes after it meanwhile arrives behind a hole
+	reorder   float64
+	reorderMs int
 	// check sees every step of the core (the invariant tests)
 	check func(t time.Duration, c *wcore, in wcIn, o wcOut)
 }
@@ -721,6 +726,8 @@ type wmModel struct {
 	qCap       int64
 	serveCred  float64
 	line       wmQ[*wmPkt]
+	late       []*wmPkt // reordered: held past their turn (cfg.reorder)
+	due        []*wmPkt // arrive's own
 	lossUnit   float64
 	tokens     float64
 	free       []*wmPkt
@@ -954,6 +961,11 @@ func (m *wmModel) serve() {
 			continue
 		}
 		p.arrive = m.t + m.d
+		if m.cfg.reorder > 0 && p.f.main && m.rnd.Float64() < m.cfg.reorder {
+			p.arrive += int64(m.cfg.reorderMs)
+			m.late = append(m.late, p)
+			continue
+		}
 		m.line.push(p)
 	}
 	if m.q.len() == 0 && m.serveCred > m.rate {
@@ -971,8 +983,24 @@ func (m *wmModel) arrive() {
 			return
 		}
 	}
+	due := m.due[:0]
+	defer func() { clear(due); m.due = due[:0] }()
 	for m.line.len() > 0 && m.line.peek().arrive <= m.t {
-		p := m.line.pop()
+		due = append(due, m.line.pop())
+	}
+	if len(m.late) > 0 {
+		k := 0
+		for _, p := range m.late {
+			if p.arrive <= m.t {
+				due = append(due, p)
+			} else {
+				m.late[k] = p
+				k++
+			}
+		}
+		m.late = m.late[:k]
+	}
+	for _, p := range due {
 		p.inNet = false
 		f := p.f
 		if !p.lost {
