@@ -618,3 +618,50 @@ func TestWcoreRed2RecordWithoutTCPInfo(t *testing.T) {
 			in.snd.retrans, in.snd.segsOut, 100*float64(in.snd.retrans)/float64(max(in.snd.segsOut, 1)))
 	}
 }
+
+// wm2RatchetCells are one drained cell of each class the round-2 sweeps
+// found where a drain to the floor does not give back the behaviour without
+// the core: the exit's BBR, held by the windows, stays in its STARTUP and
+// its pacing (3.9 times the largest rate it delivered) only rises, so once
+// the core's windows took the rate up, each window update's credit at the
+// floor (1 MiB at need) goes out faster than a shallow queue or a policer's
+// bucket takes it.
+var wm2RatchetCells = []string{
+	"300/450 q50 pol60/s1",          // a policer past wcLongRTT (×2 STARTUP gear under wcLongGear)
+	"300/800 q50 pol30/s1",          // ... and past wcLongGear (×1.25)
+	"1000/300 q10 clean x4/s1",      // four streams, shallow queue (the ramp's B/8 a wake)
+	"1000/100 q20 1000>300>1000/s2", // the path slows to 300 under a raised pacing
+	"300/300 q50 none>pol60/s2",     // a policer comes mid-transfer
+	"1000/20 q10 clean/s1",          // a short path whose base windows nearly fill it
+	"1000/150 q50 pol90>pol40/s1",   // a policer gets stricter
+}
+
+// TestWcoreRed2OpenRatchet (open, HS2_WCORE_RED2=1): the loss rule must not
+// drain a link under the core that it leaves alone without it. Fails on the
+// cells of wm2RatchetCells; with the exit's pacing cap of the lab
+// (WcorePaceCap ×2, HS2_WCORE_RED2_PACE) logged beside them.
+func TestWcoreRed2OpenRatchet(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED2") != "1" {
+		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
+	}
+	f := t.TempDir() + "/cells"
+	if err := os.WriteFile(f, []byte(strings.Join(wm2RatchetCells, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HS2_WCORE_RED2_CELLS", f)
+	k := 2.0
+	if v := os.Getenv("HS2_WCORE_RED2_PACE"); v != "" {
+		fmt.Sscan(v, &k)
+	}
+	for _, c := range wm2Named(t) {
+		o := wm2Run(c)
+		c.c.paceCap = k
+		p := wm2Run(c)
+		msg := fmt.Sprintf("%s\n    with the exit's pacing cap ×%g: %s", o, k, p)
+		if o.drained {
+			t.Errorf("drained by the core: %s", msg)
+		} else {
+			t.Log(msg)
+		}
+	}
+}
