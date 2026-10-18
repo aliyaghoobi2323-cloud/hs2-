@@ -337,3 +337,36 @@ func TestPaceNetStaleDeliveryRate(t *testing.T) {
 		t.Fatalf("tcpi's stale 240 Mbit/s, 80 acknowledged: cap %.0f Mbit/s, want ~%.0f", float64(f.n.cap)/wnMB, float64(want)/wnMB)
 	}
 }
+
+// On a 2 s path a flow's ACKs can pause for more than a second while it
+// still sends: idle is judged over max(wcNetIdle, 2·srtt), and its cap
+// stays.
+func TestPaceNetIdleLongRTT(t *testing.T) {
+	n := &wcNet{}
+	now := time.Unix(1e9, 0)
+	var rtx, segs, acked float64
+	read := func(d time.Duration, segsPS, share, ackPS float64) (outs []wcNetOut) {
+		for t := time.Duration(0); t < d; t += wcRampTick {
+			now = now.Add(wcRampTick)
+			segs += segsPS / 10
+			rtx += share * segsPS / 10
+			acked += ackPS / 10
+			if o := n.step(wcNetIn{now: now, retrans: uint64(rtx), segsOut: uint64(segs), acked: uint64(acked), dlv: 4 * wnMB, pace: 16 * wnMB,
+				srtt: 2 * time.Second, minRTT: 2 * time.Second}); o.act != wcNetNone {
+				outs = append(outs, o)
+			}
+		}
+		return
+	}
+	read(wcNetWarmMax, 3000, 0, 4*wnMB)
+	if o := read(time.Second, 3000, 0.1, 4*wnMB); len(o) == 0 || o[0].act != wcNetEngage {
+		t.Fatalf("not engaged: %+v", o)
+	}
+	read(time.Second, 3000, 0.01, 4*wnMB)
+	if o := read(1500*time.Millisecond, 3000, 0, 0); len(o) != 0 || n.cap == 0 {
+		t.Fatalf("1.5 s with no ACK on a 2 s path: %+v, want the cap kept", o)
+	}
+	if o := read(3*time.Second, 0, 0, 0); len(o) != 1 || !o[0].idle {
+		t.Fatalf("4.5 s with no ACK on a 2 s path: %+v, want it lifted for idleness", o)
+	}
+}

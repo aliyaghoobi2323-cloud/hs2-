@@ -92,8 +92,13 @@ var (
 	wcNetRecur   = 30 * time.Second
 	wcNetBackMax = 3
 	// wcNetIdle: lifted when the socket had less than wcPaceIdle
-	// acknowledged over this span (the next transfer starts free).
-	wcNetIdle = time.Second
+	// acknowledged over max(wcNetIdle, 2·srtt), at most wcNetIdleMax (the
+	// next transfer starts free). On a 2 s path a flow that waits for a
+	// round trip's ACKs is no idle one: lifted over 1 s, the cap came and
+	// went three times in 14 s and 4 downloads on 100/2000 q50 resent 11%
+	// for 2.5% without it.
+	wcNetIdle    = time.Second
+	wcNetIdleMax = 5 * time.Second
 	// wcNetMove: a cap moves (a setsockopt) only by more than this share.
 	wcNetMove = 0.05
 	// wcNetQueue: the socket's srtt past its min_rtt by more than this is a
@@ -174,7 +179,7 @@ type wcNetPt struct {
 
 // wcNet is the net of one link socket: pure, its readings in, the cap out.
 type wcNet struct {
-	pts    []wcNetPt // the readings of the last max(wcNetWin, wcNetIdle), and the one before
+	pts    []wcNetPt // the readings of the last max(wcNetWin, the idle span), and the one before
 	dlvs   []wcRate  // delivery rates of the readings of the last wcNetSpan
 	cap    uint64    // the cap in force (0: none)
 	rtxAt  time.Time // the latest reading that was not clean
@@ -237,7 +242,8 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 		}
 	}
 	n.pts = append(n.pts, wcNetPt{at: now, rtx: in.retrans, segs: in.segsOut, acked: in.acked})
-	keep := max(wcNetWin, wcNetIdle)
+	idleSpan := min(max(wcNetIdle, 2*in.srtt), wcNetIdleMax)
+	keep := max(wcNetWin, idleSpan)
 	cut := 0
 	for cut < len(n.pts)-1 && now.Sub(n.pts[cut+1].at) >= keep {
 		cut++
@@ -273,7 +279,7 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 	if rtx > 0 && share >= wcNetCleanShare {
 		n.rtxAt = now
 	}
-	idle := in.acked-n.since(now, wcNetIdle).acked < wcPaceIdle
+	idle := in.acked-n.since(now, idleSpan).acked < wcPaceIdle
 	switch {
 	case idle:
 		n.busyAt = time.Time{}
