@@ -854,3 +854,28 @@ func TestWcoreRedReorderTrace(t *testing.T) {
 	}
 	t.Log(r)
 }
+
+// TestWcoreRedLogFlood (low): the rarer lines (random loss, a window at its
+// ceiling, a route change) are capped per link only: when the path every
+// link shares turns lossy, each of 300 links writes its line in the same
+// minute. Report (HS2_WCORE_RED=1).
+func TestWcoreRedLogFlood(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED") != "1" {
+		t.Skip("HS2_WCORE_RED=1")
+	}
+	ws := &wcSet{}
+	var logs wcLogs
+	logs.set(ws)
+	now := time.Unix(1e9, 0)
+	for i := 0; i < 300; i++ {
+		l := wcLogLink(fmt.Sprintf("link %d", i), wcEdge)
+		ws.logEvents(l, now.Add(time.Duration(i)*100*time.Millisecond), wcOut{events: []wcEvent{
+			{kind: wcEvLossy, loss: 0.004, q: 18 * time.Millisecond, T: 100 * time.Millisecond},
+			{kind: wcEvDrain, why: wcWhyLoss, from: 6 << 20, B: 3 << 20, n: 1, q: 30 * time.Millisecond},
+			{kind: wcEvRoute, T: 400 * time.Millisecond},
+		}})
+	}
+	ws.flush(now.Add(2 * time.Minute))
+	t.Logf("300 links in 30 s: %d lines (loss %d, route %d, drain %d, summaries %d)", len(logs.all()),
+		logs.count("loss with no queue"), logs.count("route change"), logs.count("path queue grew")+logs.count("packets were lost"), logs.count("more link(s)"))
+}
