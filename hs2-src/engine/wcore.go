@@ -2578,7 +2578,10 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	}
 	if any {
 		o.turnRef = c.turnMins.min(now, wcTurnWin) + c.qRef
-		o.qBrake = max(c.probeQ(now), c.dq()) + 2*c.spread
+		// (a brake is a queue over the least turnaround of the last
+		// wcTurnWin: never past that window, whatever round trips and
+		// turnarounds the core was handed; TestRedWcoreHostileInputs)
+		o.qBrake = min(max(c.probeQ(now), c.dq())+2*c.spread, wcTurnWin)
 		// (not held while the autopilot probes the pool size: its freeze is
 		// no PROBE and no STARTUP, so B stays within what was shown to pay,
 		// bGood; a growth brake for the spell kept each drain, cut or

@@ -483,3 +483,28 @@ func TestWcoreFixLongRTTLeavesOffOnCleanRecords(t *testing.T) {
 		}
 	}
 }
+
+// TestRedWcoreHostileInputs (seed 9, after the changes of round 1 moved its
+// trajectory): a T_base from a min_rtt of ~0U µs (71 minutes: what Linux
+// reports before the first sample; the runner takes it for none, the core
+// can still be handed it) and turnarounds of an hour gave a growth brake of
+// 1 h 5 min. The brake is a queue the fast arm lets pass over the least
+// turnaround of the last wcTurnWin: never past that window.
+func TestWcoreFixBrakeBounded(t *testing.T) {
+	c := wtCore(1)
+	in := wtIn(wtT0, 3, 4*wtMiB)
+	c.inF[1], c.inF[3] = true, true
+	c.state, c.B, c.bPub = wcHold, 12*wtMiB, 12*wtMiB
+	c.turnMins.add(wtT0, 100*time.Millisecond, wcTurnWin)
+	c.tBase = time.Duration(^uint32(0)) * time.Microsecond
+	c.spread = 29 * time.Minute
+	o := c.out(in, wtT0, nil)
+	if o.qBrake <= 0 || o.qBrake > wcTurnWin {
+		t.Fatalf("T_base %v, spread %v: brake %v, want (0, %v]", c.tBase, c.spread, o.qBrake, wcTurnWin)
+	}
+	// an ordinary path keeps its brake as it was
+	c.tBase, c.spread = 100*time.Millisecond, 3*time.Millisecond
+	if o := c.out(in, wtT0, nil); o.qBrake != max(c.probeQ(wtT0), c.dq())+2*c.spread {
+		t.Fatalf("T_base 100 ms: brake %v", o.qBrake)
+	}
+}
