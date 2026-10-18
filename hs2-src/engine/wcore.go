@@ -2033,7 +2033,11 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	clean := !m.oooOK || m.ooo < wcOooCongAbs
 	unbiased := m.sndOK && m.qSndOK && m.qSnd <= dq/2 || m.qOwnOK && m.qOwn <= dq/2
 	floor := uint64(max(len(m.f), 1)) * uint64(c.cmin())
-	atFloor := c.bCap > 0 && c.bCap <= floor*21/20 && c.B <= floor*21/20
+	// (the backoff too where no cap is left: z12 P4, 300 → 50 → 300, the
+	// cap was gone, B sat at the floor window-limited with q_snd 1.4 ms,
+	// and the backoff of the 50 Mbit/s spell held the next probe 8 s off;
+	// 2 of 3 runs never got back to 90%)
+	atFloor := (c.bCap == 0 || c.bCap <= floor*21/20) && c.B <= floor*21/20 && (c.bCap > 0 || c.backoff > 0)
 	if c.wlN >= 2 && clean && unbiased && atFloor ||
 		c.wlN >= 3 && !(m.qOK && m.qTurn > c.qRef+dq/2) && clean && now.Sub(c.bCapAt) >= wcCapStale {
 		c.bCap, c.backoff = 0, 0

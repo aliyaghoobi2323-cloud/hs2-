@@ -110,10 +110,18 @@ func TestWcoreCapClearedAtFloor(t *testing.T) {
 	}{
 		{"at the floor", wtNeed, true},
 		{"above it", 6 * wtMiB, false},
+		{"no cap left, B at the floor: the backoff goes", 0, true},
 	} {
 		c, in := wtHold()
-		c.B, c.bCap, c.bCapAt, c.backoff = tc.cap, tc.cap, wtT0.Add(-time.Second), 3
-		m := wtMeas(1, 60e6, float64(tc.cap))
+		b, r := max(tc.cap, wtNeed), 60e6
+		c.B, c.bCap, c.bCapAt, c.backoff = b, tc.cap, wtT0.Add(-time.Second), 3
+		if tc.cap == 0 {
+			// after a slower spell: R̂ of the slow path, its knee under the
+			// floor, B stays there
+			r = 5e6
+			c.rhat, c.bGood = c.rhat[:0], 0
+		}
+		m := wtMeas(1, r, float64(b))
 		m.at = wtT0
 		m.qOwn, m.qOwnOK = time.Millisecond, true
 		m.qTurn, m.qOK = c.qRef, true
