@@ -143,6 +143,7 @@ type wcLink struct {
 	frame uint32 // smux MaxFrameSize (the hit gap)
 	off   bool   // no core (Wcore 0, the exit's without WcoreUpload): registered for the pacing net or cap only
 	pnet  bool   // the exit's link socket: the pacing net runs on it (pacenet.go)
+	lab   bool   // WcorePaceCap as the session registered: the lab's always-on cap runs on it
 	set   *wcSet // the registry that steps it
 	name  atomic.Pointer[string]
 	// ap is the edge's LinkManager's apProbing (set when it adopts the link)
@@ -354,7 +355,7 @@ func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *link
 	} else {
 		name = "link"
 	}
-	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side, frame: uint32(cfg.MaxFrameSize), off: off, pnet: pnet,
+	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side, frame: uint32(cfg.MaxFrameSize), off: off, pnet: pnet, lab: WcorePaceCap > 0,
 		ceils: map[uint32]uint32{}, sampled: map[uint32]bool{}, ceiled: map[uint32]*smux.Stream{},
 		rates: map[uint32]float64{}, gaps: map[uint32]time.Duration{}, gapSet: map[uint32]time.Duration{}}
 	if WcoreFixedWin > 0 {
@@ -417,7 +418,7 @@ func (l *wcLink) label() string { return *l.name.Load() }
 
 // wake steps the link if its turn has come, and reports whether it did.
 func (l *wcLink) wake(now time.Time) bool {
-	if WcorePaceCap > 0 {
+	if l.lab {
 		l.paceCap(now)
 	} else if l.pnet {
 		l.paceNet(now)
