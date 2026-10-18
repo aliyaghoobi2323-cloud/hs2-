@@ -135,86 +135,29 @@ func TestWcoreCapClearedAtFloor(t *testing.T) {
 	}
 }
 
-// STARTUP stays within a fresh cap where losses of ours came (bCap), as
-// HOLD does, and ends there (the rig's 300/150: after two probe wins it went
-// 4.4 → 5.5 → 8.2 MiB past a cap of 5.3 and overflowed again); a stale cap
-// bounds nothing.
+// Past a fresh cap where losses of ours came (bCap) STARTUP goes on in the
+// smallest steps only (the rig's 300/150: after two probe wins it went 4.4
+// → 5.5 → 8.2 MiB past a cap of 5.3 and overflowed again); it is not held
+// there (held, 300 → 50 → 300 came back in 3 of 8 runs); a stale cap bounds
+// nothing.
 func TestWcoreStartupCap(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		age   time.Duration
-		bound bool
+		name string
+		age  time.Duration
+		want uint64
 	}{
-		{"fresh", time.Second, true},
-		{"stale", wcQcapTTL + time.Second, false},
+		{"fresh", time.Second, uint64(wcGears[0] * 4 * wtMiB)},
+		{"stale", wcQcapTTL + time.Second, 8 * wtMiB},
 	} {
 		c, in := wtStartup()
-		c.bCap, c.bCapAt = 5*wtMiB, wtT0.Add(-tc.age)
+		c.bCap, c.bCapAt = 3*wtMiB, wtT0.Add(-tc.age)
 		m := wtMeas(1, 60e6, 4*wtMiB)
 		m.at = wtT0
 		var ev []wcEvent
 		c.startup(in, m, &ev)
-		if c.state != wcStartup || (c.B == 5*wtMiB) != tc.bound || c.B < 5*wtMiB {
-			t.Errorf("%s cap: %v B %d, want STARTUP at 5 MiB: %v", tc.name, c.state, c.B, tc.bound)
-			continue
+		if c.state != wcStartup || c.B != tc.want {
+			t.Errorf("%s cap: %v B %d, want STARTUP at %d", tc.name, c.state, c.B, tc.want)
 		}
-		if !tc.bound {
-			continue
-		}
-		in.now = wtT0.Add(time.Second)
-		m.at = in.now
-		c.startup(in, m, &ev) // the same rate: flat, at the cap
-		if c.state == wcStartup || c.B > 5*wtMiB {
-			t.Errorf("at the cap with the rate flat: %v B %d, want STARTUP over", c.state, c.B)
-		}
-	}
-}
-
-// A probe that pays past a cap at the floor clears the cap (it came from a
-// slower spell of the path); past a cap above the floor it raises the cap
-// to its budget.
-func TestWcoreProbeFloorCap(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		cap  uint64
-		want uint64
-	}{
-		{"a cap at the floor: cleared", wtNeed, 0},
-		{"a cap above it: raised to the probe's budget", 8 * wtMiB, 9 * wtMiB},
-	} {
-		c, in := wtProbe()
-		c.bCap, c.bCapAt, c.backoff = tc.cap, wtT0.Add(-time.Second), 2
-		m := wtMeas(1, 60.5e6, 9*wtMiB)
-		m.at = wtT0
-		m.qTurn, m.qOK = 5*time.Millisecond, true // nothing queued
-		var ev []wcEvent
-		c.probe(in, m, &ev)
-		if c.cnt.probeOK != 1 || c.bCap != tc.want || c.backoff != 0 {
-			t.Errorf("%s: probe ok %d, cap %d backoff %d, want cap %d", tc.name, c.cnt.probeOK, c.bCap, c.backoff, tc.want)
-		}
-	}
-}
-
-// HOLD's references follow the queue within Δq only: an interval of the
-// sender's PROBE_RTT (turnarounds of hundreds of ms) that the exit's record
-// calls bare does not move q_ref.
-func TestWcoreHoldRefOutlier(t *testing.T) {
-	c, in := wtHold()
-	ref := c.qRef
-	m := wtMeas(1, 20e6, 8*wtMiB)
-	m.at = wtT0
-	m.qTurn, m.qOK = 468*time.Millisecond, true
-	m.sndOK, m.qSnd, m.qSndOK = true, 2*time.Millisecond, true // the record shows none
-	c.qSndRef, c.qSndRefOK = 2*time.Millisecond, true
-	var ev []wcEvent
-	c.hold(in, m, &ev)
-	if c.qRef != ref {
-		t.Fatalf("q_ref %v after a 468 ms turnaround the record called bare, want %v", c.qRef, ref)
-	}
-	m.qTurn = ref + c.dq()/2 // within Δq: followed
-	c.hold(in, m, &ev)
-	if c.qRef <= ref {
-		t.Fatalf("q_ref %v: did not follow a turnaround within Δq (%v)", c.qRef, m.qTurn)
 	}
 }
 

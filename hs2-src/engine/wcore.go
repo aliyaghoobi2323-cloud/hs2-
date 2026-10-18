@@ -1701,17 +1701,16 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if m.qOwnOK && !qUp && m.qOwn < c.qOwnRef {
 		c.qOwnRef = m.qOwn
 	}
-	// a budget that brought losses of our own (bCap, fresh) bounds STARTUP
-	// as it bounds HOLD: past it only a probe goes, one probeQ at a time
-	// (the rig's 300/150: a STARTUP after two probe wins went 4.4 → 5.5 →
-	// 8.2 MiB past a cap of 5.3 and overflowed the queue again, 59% of the
-	// interval's packets out of order)
-	capB := uint64(math.MaxUint64)
-	if c.bCap > 0 && in.now.Sub(c.bCapAt) < wcQcapTTL {
-		capB = max(c.bCap, c.B)
-	}
-	atCap := c.B >= capB
-	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || in.apProbing || ((c.capped || c.burstHeld || atCap) && c.flat >= 1) {
+	// past a budget that brought losses of our own (bCap, fresh) STARTUP
+	// goes on in the smallest steps only (the rig's 300/150: a STARTUP after
+	// two probe wins went 4.4 → 5.5 → 8.2 MiB past a cap of 5.3 and
+	// overflowed the queue again, 59% of the interval's packets out of
+	// order). It is not stopped there: held at the cap (z12 core2–core5),
+	// 300 → 50 → 300 got back to 90% in 3 of 8 runs, against 3 of 3 without
+	// (core1), with no fewer losses on the steady paths (300/150: 0.27%
+	// resent, 216 Mbit/s against 0.23%, 231)
+	pastCap := c.bCap > 0 && in.now.Sub(c.bCapAt) < wcQcapTTL && c.B >= c.bCap
+	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || in.apProbing || ((c.capped || c.burstHeld) && c.flat >= 1) {
 		c.endStartup(in, m, ev, cong || qUp, cong)
 		return
 	}
@@ -1733,6 +1732,9 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// 24 s, 228 Mbit/s against 363 before, with q_snd 1.2–2 ms all along.)
 		c.gear = min(c.gear, 0)
 	}
+	if pastCap {
+		c.gear = min(c.gear, 0)
+	}
 	g := 1.0
 	if c.gear >= 0 {
 		g = wcGears[c.gear]
@@ -1741,7 +1743,7 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	}
 	k := c.knee(m.rF, m)
 	c.prevR, c.prevB = m.rF, c.B
-	c.setB(in, m, min(max(c.B, uint64(g*math.Min(float64(c.B), k))), capB))
+	c.setB(in, m, max(c.B, uint64(g*math.Min(float64(c.B), k))))
 }
 
 // endStartup: the knee is found. To DRAIN if the queue grew or loss came
