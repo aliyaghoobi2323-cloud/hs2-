@@ -2100,6 +2100,28 @@ independent red team before anything was kept.
   back (datagrams) still gets one frame per turn; measured with BBR only, on
   a 6.x kernel (the gate does less before Linux 5.10, above).
 
+## smux fixes found while measuring Phase Z5
+
+Two bugs in the vendored smux (both also in upstream v1.5.24), each with a test
+that fails without the fix:
+
+- **A write that gave up still lent its buffer to the sender.** When a
+  session died, or a write's deadline passed, `Write` returned at once while
+  `sendLoop` was still copying the frame out of the caller's buffer, or the
+  frame was still queued and later went out of that same buffer. The engine
+  hands the buffer straight back to its pool, so another relay could be
+  writing into it: a data race seen under `-race`, and at worst the last frame
+  of a dying link carrying another connection's bytes. Now a writer that stops
+  waiting returns only once `sendLoop` is done with its buffer, or leaves it a
+  copy; a frame still queued goes out with its own data.
+- **Data sent at once on a stream just opened could be dropped.** `OpenStream`
+  registered the stream only after its SYN was written; a peer that accepted
+  and wrote straight away could get frames in first, and they were dropped as
+  frames of an unknown stream (a download that stalled from the start or ended
+  short: 8 of 200 runs of a 96 MiB transfer on loopback, 0 after the fix).
+  Users of the tunnel were not affected: the Iran side opens every stream and
+  the Kharej side reads the stream's kind byte before it writes anything.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.
