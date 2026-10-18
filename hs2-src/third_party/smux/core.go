@@ -59,9 +59,10 @@ const hitGap = 2 * time.Millisecond
 // drop each before its turnaround came in).
 const turnRing = 4
 
-// turnIdle: data that paused short of its limit this long (or four
-// turnarounds, if longer) paused at its source; the updates pending across
-// the pause go unsampled (turned).
+// turnIdle: a stream that received nothing this long was idle; the updates
+// pending across the silence go unsampled (turned). A window turnaround of
+// a second or more is a pathological queue that the link's other signals
+// (its own srtt, the exit's record) show as well.
 const turnIdle = time.Second
 
 // StepOf is how much a reader reads between two window updates under a
@@ -404,21 +405,20 @@ func (s *Stream) announced(window uint32) {
 // sends whole frames) for its hit gap or more before it went on. The caller
 // holds bufferLock, just after unread grew.
 //
-// Data that paused short of the oldest pending limit for turnIdle (or four
-// turnarounds, if longer) stopped at its source, not at the window: the
-// peer had credit and sent nothing (a keep-alive connection between
-// transfers, a player between segments). The updates pending across such a
-// pause are dropped unsampled: their "turnaround" would be the idle time.
+// A stream that received nothing for turnIdle or longer was idle: its
+// source paused (a keep-alive connection between transfers, a player
+// between segments), its reader stopped, or its path did. The updates
+// pending across such a silence go unsampled: their "turnaround" would be
+// the silence, however long (the end of a transfer leaves a step or two of
+// them pending, their limits past its last byte).
 func (s *Stream) turned() {
 	c := &s.core
 	now := monoNow()
-	idle := c.rxAt != 0 && now-c.rxAt >= int64(turnIdle) && now-c.rxAt >= 4*c.turnSeen
+	if c.rxAt != 0 && now-c.rxAt >= int64(turnIdle) {
+		c.n = 0
+	}
 	c.rxAt = now
 	if c.n == 0 {
-		return
-	}
-	if idle && c.ring[c.head].reach == 0 {
-		c.n = 0
 		return
 	}
 	near := c.readTot.Load() + uint64(s.unread) + uint64(s.frameSize)

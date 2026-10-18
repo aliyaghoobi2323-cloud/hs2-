@@ -1,11 +1,14 @@
 package engine
 
 import (
+	"io"
 	"math"
 	"math/rand"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/xtaci/smux"
 )
 
 // Red team (Z5 window core, part A): what the edge's runner hands the core
@@ -233,4 +236,58 @@ func TestRedFrozenFastAppThenGuard(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Logf("guard closed %d relays", killed)
+}
+
+// A download that comes in bursts with idle gaps between them (a player
+// fetching segments over one connection), read at once, on the emulated
+// path of 5 MB/s and a 100 ms round trip, looked at every 100 ms as the
+// runner does (CoreSnapshot): no turnaround it is handed is the length of a
+// gap, and the runner's core, run on it, drains for no queue of a gap.
+func TestRedBurstyDownloadNoFalseDrain(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real time")
+	}
+	p := newWcPath(5<<20, 50*time.Millisecond)
+	cfg := wcTestConfig()
+	edge, exit := wcSessions(t, p.edge(), p.exit(), cfg, nil)
+	st, err := edge.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		x, err := exit.AcceptStream()
+		if err != nil {
+			return
+		}
+		buf := make([]byte, 32<<10)
+		for {
+			for n := 0; n < 3<<20+12345; n += len(buf) { // a burst of 3 MiB ...
+				if _, err := x.Write(buf); err != nil {
+					return
+				}
+			}
+			time.Sleep(1500 * time.Millisecond) // ... then nothing
+		}
+	}()
+	go io.Copy(io.Discard, st)
+	var samples []smux.CoreSample
+	looks, stale := 0, 0
+	var worst, typical time.Duration
+	for end := time.Now().Add(12 * time.Second); time.Now().Before(end); time.Sleep(wcRampTick) {
+		samples, _ = edge.CoreSnapshot(samples)
+		looks++
+		for _, x := range samples {
+			d := max(x.TurnMin, x.TurnLast)
+			if d >= time.Second {
+				stale++
+			} else {
+				typical = max(typical, d)
+			}
+			worst = max(worst, d)
+		}
+	}
+	t.Logf("%d looks, %d with a turnaround of a second or more (worst %v; the rest up to %v)", looks, stale, worst, typical)
+	if stale > 0 {
+		t.Errorf("%d looks handed the core a turnaround of a gap (worst %v) on a 100 ms path", stale, worst)
+	}
 }

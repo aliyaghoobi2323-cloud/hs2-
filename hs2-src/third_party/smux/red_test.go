@@ -305,29 +305,39 @@ func TestRedTurnaroundAfterIdle(t *testing.T) {
 	}
 }
 
-// The other side of it: a peer held at its limit for over turnIdle (its
-// update was that slow to come) is a turnaround, and is sampled; one whose
-// data stopped short of the limit for as long is not.
+// The other side of it: a peer held at its limit for most of turnIdle (its
+// update was that slow to come) is a turnaround, and is sampled; a silence
+// of turnIdle or more is not, whether the data stopped at the limit (a
+// source that happened to stop there, a reader that stopped) or short of it.
 func TestRedLongTurnaroundAtTheLimitKept(t *testing.T) {
 	const w = 1 << 20
-	for _, atLimit := range []bool{true, false} {
+	for _, tc := range []struct {
+		atLimit bool
+		pause   time.Duration
+		kept    bool
+	}{
+		{true, turnIdle - 100*time.Millisecond, true},
+		{false, turnIdle - 100*time.Millisecond, true},
+		{true, turnIdle + 100*time.Millisecond, false},
+		{false, turnIdle + 100*time.Millisecond, false},
+	} {
 		s := coreBare(4096)
 		s.arrive(64 << 10)
 		s.readAndAnnounce(64<<10, w)
 		recv := s.core.readTot.Load() + uint64(s.unread)
 		short := 0
-		if !atLimit {
+		if !tc.atLimit {
 			short = 64 << 10
 		}
 		s.arrive(int(s.core.ring[s.core.head].lim-recv) - short) // up to (or short of) the limit ...
-		time.Sleep(turnIdle + 100*time.Millisecond)              // ... a long wait ...
+		time.Sleep(tc.pause)                                     // ... a wait ...
 		s.arrive(short + 4096)                                   // ... past it
 		d := time.Duration(s.core.turnLast.Load())
-		if atLimit && (d < turnIdle || s.core.n != 0) {
-			t.Errorf("held at the limit for %v: turnaround %v, ring %d", turnIdle, d, s.core.n)
+		if tc.kept && (d < tc.pause || s.core.n != 0) {
+			t.Errorf("at the limit %v, %v: turnaround %v, ring %d, want it sampled", tc.atLimit, tc.pause, d, s.core.n)
 		}
-		if !atLimit && (d != 0 || s.core.n != 0) {
-			t.Errorf("stopped short of the limit for %v: turnaround %v, ring %d, want none", turnIdle, d, s.core.n)
+		if !tc.kept && (d != 0 || s.core.n != 0) {
+			t.Errorf("at the limit %v, %v: turnaround %v, ring %d, want none", tc.atLimit, tc.pause, d, s.core.n)
 		}
 	}
 }
