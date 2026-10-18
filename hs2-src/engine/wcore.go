@@ -513,18 +513,30 @@ type wcRate struct {
 }
 
 // wcMinWin is a windowed minimum kept in six buckets of a sixth of the
-// window each.
+// window each. Its epochs count from its first sample by the monotonic clock
+// (now.Sub), as the rest of the core counts time: on the wall clock
+// (UnixNano) a step of it (NTP, a VM's migration) took the whole window
+// away, and the next sample alone, with the queue in it, was turnBase.
 type wcMinWin struct {
 	b  [6]time.Duration
-	ep [6]int64 // the bucket's epoch (now / (win/6))
+	ep [6]int64  // the bucket's epoch ((now − t0) / (win/6))
+	t0 time.Time // the first sample's time
+}
+
+// epoch is now's bucket epoch and its bucket.
+func (w *wcMinWin) epoch(now time.Time, win time.Duration) (int64, int) {
+	if w.t0.IsZero() {
+		w.t0 = now
+	}
+	e := int64(now.Sub(w.t0) / (win / 6))
+	return e, int((e%6 + 6) % 6)
 }
 
 func (w *wcMinWin) add(now time.Time, v, win time.Duration) {
 	if v <= 0 {
 		return
 	}
-	e := now.UnixNano() / int64(win/6)
-	i := int(e % 6)
+	e, i := w.epoch(now, win)
 	if w.ep[i] != e || w.b[i] == 0 || v < w.b[i] {
 		if w.ep[i] != e {
 			w.b[i] = v
@@ -536,10 +548,13 @@ func (w *wcMinWin) add(now time.Time, v, win time.Duration) {
 }
 
 func (w *wcMinWin) min(now time.Time, win time.Duration) time.Duration {
-	e := now.UnixNano() / int64(win/6)
+	if w.t0.IsZero() {
+		return 0
+	}
+	e, _ := w.epoch(now, win)
 	m := time.Duration(0)
 	for i, v := range w.b {
-		if v > 0 && e-w.ep[i] < 6 && (m == 0 || v < m) {
+		if v > 0 && e-w.ep[i] < 6 && e-w.ep[i] >= 0 && (m == 0 || v < m) {
 			m = v
 		}
 	}
@@ -1746,8 +1761,15 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// (core1), with no fewer losses on the steady paths (300/150: 0.27%
 	// resent, 216 Mbit/s against 0.23%, 231)
 	pastCap := c.bCap > 0 && in.now.Sub(c.bCapAt) < wcQcapTTL && c.B >= c.bCap
-	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || in.apProbing || ((c.capped || c.burstHeld) && c.flat >= 1) {
+	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || ((c.capped || c.burstHeld) && c.flat >= 1) {
 		c.endStartup(in, m, ev, cong || qUp, cong)
+		return
+	}
+	if in.apProbing {
+		// the autopilot probes the pool size: STARTUP stops where it is,
+		// with no knee found (no "fill the path" line, and the path is not
+		// full: in stage 2 that took c_min under need)
+		c.toHold(in, m)
 		return
 	}
 	switch {
@@ -2386,6 +2408,7 @@ type wcLinkSnap struct {
 	minRTT, srtt           time.Duration
 	segsIn, ooo            uint64
 	oooOK                  bool
+	tcpNone                bool // TCP_INFO could not be read: no counters of the socket in this one
 	rcvd                   uint64
 	parks, borrows, brakes uint32 // a borrow from the pool counts as a park too
 	poolShort              uint32
@@ -2405,6 +2428,8 @@ type wcLinkSnap struct {
 type wcBuilder struct {
 	have            bool
 	prev            wcLinkSnap
+	tcpHave         bool   // tcpSegs, tcpOoo are the last counters TCP_INFO gave
+	tcpSegs, tcpOoo uint64
 	prevS           map[uint32]wcStreamSnap
 	sndAt           time.Time
 	sndRet, sndSegs uint64
@@ -2420,9 +2445,19 @@ func wcDelta(cur, prev uint64) uint64 {
 func (b *wcBuilder) build(s wcLinkSnap) wcIn {
 	in := wcIn{now: s.now, minRTT: s.minRTT, srtt: s.srtt, oooOK: s.oooOK, poolFree: s.poolFree,
 		ctrlMin: s.ctrlMin, pongs: s.pongs, apProbing: s.apProbing}
+	if s.tcpNone {
+		// no TCP_INFO this time: nothing of the socket, and the next one
+		// counts from the last that had it (from 0, one wake's delta was
+		// the link's lifetime)
+		in.minRTT, in.srtt, in.oooOK = 0, 0, false
+	} else {
+		if b.tcpHave {
+			in.segsIn = wcDelta(s.segsIn, b.tcpSegs)
+			in.ooo = wcDelta(s.ooo, b.tcpOoo)
+		}
+		b.tcpHave, b.tcpSegs, b.tcpOoo = true, s.segsIn, s.ooo
+	}
 	if b.have {
-		in.segsIn = wcDelta(s.segsIn, b.prev.segsIn)
-		in.ooo = wcDelta(s.ooo, b.prev.ooo)
 		in.linkBytes = wcDelta(s.rcvd, b.prev.rcvd)
 		// the reader waited for buffer space: a borrow from the pool
 		// counts as a park as well, and is none

@@ -423,8 +423,9 @@ func (l *wcLink) idle() bool {
 
 // snap takes one snapshot of the link.
 func (l *wcLink) snap(now time.Time) wcLinkSnap {
-	s := wcLinkSnap{now: now, poolFree: -1}
+	s := wcLinkSnap{now: now, poolFree: -1, tcpNone: true}
 	if ts, ok := tcpStats(l.tcp); ok {
+		s.tcpNone = false
 		s.minRTT, s.srtt = wcMinRTTOf(ts.minRTT), usDur(uint64(ts.rtt))
 		s.segsIn, s.ooo, s.oooOK = l.segs.add(ts.segsIn), l.ooo.add(ts.rcvOOO), true
 	}
