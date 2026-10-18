@@ -136,6 +136,35 @@ func readAt(rate int) func(u *wUser) {
 	}
 }
 
+// openHeld opens n users whose apps never read, each seen in a write (its
+// relay holding data it cannot hand over) before any of them fills the
+// link's buffer: more of them than the buffer holds, one opened after it
+// filled would get its first data only once the guard released the others,
+// on a link that then never fills again.
+func (r *wedgeRig) openHeld(n int) []*wUser {
+	r.t.Helper()
+	release := make(chan struct{})
+	r.t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	held := func(w io.Writer) {
+		w.Write(make([]byte, 4<<10))
+		<-release
+		pushForever(w)
+	}
+	var users []*wUser
+	for i := 0; i < n; i++ {
+		users = append(users, r.openPush(nil, held))
+		r.waitWriting(i + 1)
+	}
+	close(release)
+	return users
+}
+
 // waitWriting waits until n of the link's relays are in a local write
 // (holding data their app does not take).
 func (r *wedgeRig) waitWriting(n int) {
@@ -194,10 +223,7 @@ func smallSessionBuffer(t *testing.T) {
 func TestWedgeGuardReleasesStuckReaders(t *testing.T) {
 	smallSessionBuffer(t)
 	r := newWedgeRig(t, true)
-	var stuck []*wUser
-	for i := 0; i < 5; i++ {
-		stuck = append(stuck, r.open(nil))
-	}
+	stuck := r.openHeld(5)
 	healthy := r.open(readAt(0))
 	killed := 0
 	for i := 0; i < 15 && killed < len(stuck); i++ {
@@ -260,30 +286,7 @@ func TestWedgeGuardTricklingReaderDoesNotHideStall(t *testing.T) {
 	}
 	smallSessionBuffer(t)
 	r := newWedgeRig(t, false)
-	// Every app that stops reading is first seen in a write (its relay
-	// holding data it cannot hand over) before any of them fills the link's
-	// buffer: six of them hold more than the buffer, so one opened after the
-	// buffer filled would get its first data only once the guard released
-	// the others, on a link that then never fills again.
-	release := make(chan struct{})
-	t.Cleanup(func() {
-		select {
-		case <-release:
-		default:
-			close(release)
-		}
-	})
-	held := func(w io.Writer) {
-		w.Write(make([]byte, 4<<10))
-		<-release
-		pushForever(w)
-	}
-	var stuck []*wUser
-	for i := 0; i < 6; i++ {
-		stuck = append(stuck, r.openPush(nil, held))
-		r.waitWriting(i + 1)
-	}
-	close(release)
+	stuck := r.openHeld(6)
 	slow := r.open(readAt(16 << 10))
 	fast := r.open(readAt(0))
 	start := time.Now()

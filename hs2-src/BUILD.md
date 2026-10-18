@@ -209,4 +209,12 @@ it only under the window core), `HS2_TUNE_SMUX_POOL` (the process's window
 pool, bytes; 0 = no window past `HS2_TUNE_SMUX_NEEDBUF` and no buffer
 borrowed), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
 about half its unsent cap and a burst, on Linux 5.10+; 0 = off) and `HS2_TUNE_CC`; the defaults in the code are
-the ones the sweeps chose.
+the ones the sweeps chose. The window core (`engine/wcore_run.go`, which lets a
+fast stream's window grow past `HS2_TUNE_SMUX_NEEDBUF` only as far as its path
+carries) takes `HS2_TUNE_WCORE=0` (off: every window stays within the need, as
+before; also the field safety switch), `HS2_TUNE_WCORE_QTARGET` and
+`HS2_TUNE_WCORE_PROBEQ` (ms of standing and probing queue),
+`HS2_TUNE_WCORE_STAGE=2` (ceilings below the need once the path is full) and,
+for the lab only, `HS2_TUNE_WCORE_TRACE=<file>` (one JSON line per link per
+evaluation) and `HS2_TUNE_WCORE_FIXEDWIN=<bytes>` (every fast stream held at
+that window instead of the core's decision, still traced).
