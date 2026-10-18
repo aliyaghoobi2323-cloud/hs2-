@@ -140,6 +140,19 @@ type wmCfg struct {
 	hitTruth  bool // hit from the sender's truth instead of the receiver's pause
 	apProbing func(t time.Duration) bool
 	trace     bool
+	// red team: exit runs the core as the exit's (uploads: no record of the
+	// sender, no control ping); lossAt changes the path's random loss at
+	// given times
+	exit   bool
+	lossAt []wmChange
+	// oldExit: the edge's core with an exit whose record has no TCP_INFO
+	// in it (a 64-byte record: no q_snd, no resend share)
+	oldExit bool
+	// reorder, reorderMs: a packet of the link's connection is held this
+	// many ms past its turn with this probability (multipath, link
+	// aggregation): what comes after it meanwhile arrives behind a hole
+	reorder   float64
+	reorderMs int
 	// check sees every step of the core (the invariant tests)
 	check func(t time.Duration, c *wcore, in wcIn, o wcOut)
 }
@@ -167,6 +180,8 @@ type wmResult struct {
 	// rig's analysis measures it; -1: never)
 	back90 time.Duration
 	trace  []string
+	// rtxSec: the sender's cumulative (resent, sent) segments at each second
+	rtxSec [][2]uint64
 }
 
 func (r wmResult) String() string {
@@ -711,6 +726,8 @@ type wmModel struct {
 	qCap       int64
 	serveCred  float64
 	line       wmQ[*wmPkt]
+	late       []*wmPkt // reordered: held past their turn (cfg.reorder)
+	due        []*wmPkt // arrive's own
 	lossUnit   float64
 	tokens     float64
 	free       []*wmPkt
@@ -836,7 +853,11 @@ func newModel(cfg wmCfg) *wmModel {
 		m.ss = append(m.ss, &wmSnd{limit: wmInitWin, src: s.src, start: s.start.Milliseconds()})
 	}
 	if cfg.mode == wmCore {
-		m.core = newWcore(wcConfig{side: wcEdge, stage: cfg.stage, need: wmNeed, maxWin: wmMaxWin, minWin: wmMinWin}, m.rnd.Float64)
+		side := wcEdge
+		if cfg.exit {
+			side = wcExit
+		}
+		m.core = newWcore(wcConfig{side: side, stage: cfg.stage, need: wmNeed, maxWin: wmMaxWin, minWin: wmMinWin}, m.rnd.Float64)
 	}
 	m.readMs = make([]uint64, m.end/100+1)
 	m.qHist = make([]uint64, 4001)
@@ -940,6 +961,11 @@ func (m *wmModel) serve() {
 			continue
 		}
 		p.arrive = m.t + m.d
+		if m.cfg.reorder > 0 && p.f.main && m.rnd.Float64() < m.cfg.reorder {
+			p.arrive += int64(m.cfg.reorderMs)
+			m.late = append(m.late, p)
+			continue
+		}
 		m.line.push(p)
 	}
 	if m.q.len() == 0 && m.serveCred > m.rate {
@@ -957,8 +983,24 @@ func (m *wmModel) arrive() {
 			return
 		}
 	}
+	due := m.due[:0]
+	defer func() { clear(due); m.due = due[:0] }()
 	for m.line.len() > 0 && m.line.peek().arrive <= m.t {
-		p := m.line.pop()
+		due = append(due, m.line.pop())
+	}
+	if len(m.late) > 0 {
+		k := 0
+		for _, p := range m.late {
+			if p.arrive <= m.t {
+				due = append(due, p)
+			} else {
+				m.late[k] = p
+				k++
+			}
+		}
+		m.late = m.late[:k]
+	}
+	for _, p := range due {
 		p.inNet = false
 		f := p.f
 		if !p.lost {
@@ -1351,6 +1393,14 @@ func (m *wmModel) runCore() {
 	if m.cfg.apProbing != nil {
 		s.apProbing = m.cfg.apProbing(time.Duration(m.t) * time.Millisecond)
 	}
+	if m.cfg.oldExit {
+		s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = 0, 0, 0, 0
+	}
+	if m.cfg.exit {
+		// the exit's runner: no record of the sender, no control ping
+		s.sndAt, s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = time.Time{}, 0, 0, 0, 0
+		s.ctrlMin, s.pongs, s.apProbing = 0, nil, false
+	}
 	// Session.CoreSnapshot: the streams at need/4 or more, or with a fresh
 	// hit; the turnaround samples are swapped out
 	for _, st := range m.rs {
@@ -1470,8 +1520,16 @@ func (m *wmModel) periodic() {
 
 func (m *wmModel) run() wmResult {
 	warm := m.cfg.warm.Milliseconds()
-	ci := 0
+	ci, li := 0, 0
 	for m.t = 0; m.t < m.end; m.t++ {
+		for li < len(m.cfg.lossAt) && m.t >= m.cfg.lossAt[li].at.Milliseconds() {
+			m.cfg.loss = m.cfg.lossAt[li].rate
+			m.lossUnit = 1 - math.Pow(1-m.cfg.loss, float64(m.unit/wmMSS))
+			li++
+		}
+		if m.t%1000 == 0 {
+			m.res.rtxSec = append(m.res.rtxSec, [2]uint64{m.main.retrans, m.main.segsOut})
+		}
 		for ci < len(m.cfg.changes) && m.t >= m.cfg.changes[ci].at.Milliseconds() {
 			// (the rig's emulator sets the queue to the same time at the
 			// new rate)

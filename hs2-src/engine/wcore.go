@@ -86,6 +86,12 @@ type wcore struct {
 	capPool    bool              // capped by the window pool (not by MaxStreamBuffer)
 	holeyPrev  bool              // the previous evaluation's packets waited behind holes
 	burstHeld  bool              // B is held where a burst after the sender's PROBE_RTT fits Q_cap
+	blindN     int               // evaluations in a row that were blind (blind)
+	// sndCarry: the resends of a record of the exit that came in the settle
+	// part of a HOLD or DRAIN interval (settled judges no loss there), for
+	// the next measured interval to judge; sndCarryAt: when it came
+	sndCarry   wcSnd
+	sndCarryAt time.Time
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -604,7 +610,8 @@ type wcMeas struct {
 	qSndOK   bool
 	snd      float64 // the exit's resend share (fresh record)
 	sndOK    bool
-	sndSegs  uint64 // ... over this many segments
+	sndSegs  uint64    // ... over this many segments
+	sndAt    time.Time // when that record came (a record carried from a settle part came before at)
 	ooo      float64
 	oooOK    bool
 	spread   time.Duration
@@ -689,6 +696,17 @@ func (c *wcore) step(in wcIn) wcOut {
 		return c.out(c.acc, now, nil)
 	}
 	in, c.accOK = c.acc, false
+	carryAt := time.Time{}
+	if c.sndCarry.fresh {
+		// (its srtt is left out: notePaths took its q_snd as it came)
+		if in.snd.fresh {
+			in.snd.retrans += c.sndCarry.retrans
+			in.snd.segsOut += c.sndCarry.segsOut
+		} else {
+			in.snd = c.sndCarry
+		}
+		carryAt, c.sndCarry = c.sndCarryAt, wcSnd{}
+	}
 	stopQ := c.stopQ
 	c.stopQ = false
 	var ev []wcEvent
@@ -707,6 +725,9 @@ func (c *wcore) step(in wcIn) wcOut {
 		}
 	}
 	m := c.measure(in, dt)
+	if !carryAt.IsZero() {
+		m.sndAt = carryAt
+	}
 	c.last = m
 	if in.poolShort > 0 {
 		c.cnt.poolShort += int(in.poolShort)
@@ -727,10 +748,15 @@ func (c *wcore) step(in wcIn) wcOut {
 		c.fEmpty = 0
 	}
 
+	if c.blind(m) {
+		c.blindN++
+	} else {
+		c.blindN = 0
+	}
 	switch {
 	case c.state == wcOff:
 		c.off(in, m, &ev)
-	case c.fEmpty >= wcOffAfter:
+	case c.fEmpty >= wcOffAfter || c.blindN >= wcOffAfter:
 		c.toOff()
 	case len(m.f) == 0 || m.idleF:
 		// the fast streams paused (or one of them was sent nothing: its
@@ -742,7 +768,14 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.setB(in, m, min(c.B, c.probeFrom))
 		}
 	case c.settling:
+		st := c.state
 		c.settled(in, m, &ev)
+		if (st == wcHold || st == wcDrain) && m.sndOK {
+			// no loss is judged in their settle part: the record's
+			// resends wait for the measured part
+			c.sndCarry = wcSnd{fresh: true, retrans: in.snd.retrans, segsOut: in.snd.segsOut}
+			c.sndCarryAt = m.sndAt
+		}
 	default:
 		switch c.state {
 		case wcStartup:
@@ -1095,7 +1128,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	}
 	m.qSnd3, m.qSnd3OK = c.qSndMax(now)
 	if in.snd.fresh && in.snd.segsOut > 0 {
-		m.snd, m.sndOK, m.sndSegs = float64(in.snd.retrans)/float64(in.snd.segsOut), true, in.snd.segsOut
+		m.snd, m.sndOK, m.sndSegs, m.sndAt = float64(in.snd.retrans)/float64(in.snd.segsOut), true, in.snd.segsOut, now
 	}
 	// no standing queue past the core's own target, by a signal with no
 	// bias: the exit's record, else the link socket's own srtt
@@ -1409,7 +1442,7 @@ func (c *wcore) bSpan() (lo, hi uint64) {
 // packets that waited behind a hole, saturates once holes come every round
 // trip: it is judged only on a path that is otherwise clean.
 func (c *wcore) lossVerdict(m wcMeas, growth bool) (cong, jump bool, src wcLossSrc) {
-	if m.sndOK && !c.sndStale(m.at) && c.sndRef.past(m.snd, c.sndAbs(m)) {
+	if m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m)) {
 		_, hi := c.bSpan()
 		if growth || float64(hi) > 1.05*float64(c.sndRef.b) {
 			return true, false, wcSrcSnd
@@ -1449,7 +1482,7 @@ func (c *wcore) sndStale(now time.Time) bool {
 // congestive, with the budget they were measured at, and the random-loss
 // flag.
 func (c *wcore) noteLoss(m wcMeas) {
-	if m.sndOK && !c.sndStale(m.at) {
+	if m.sndOK && !c.sndStale(m.sndAt) {
 		if lo, hi := c.bSpan(); float64(hi) <= 1.05*float64(lo) {
 			c.sndRef.note(m.snd, hi, 0.3)
 		}
@@ -1592,6 +1625,8 @@ func (c *wcore) harm(m wcMeas) bool {
 		return true
 	case !m.qSnd3OK && m.rF > 0 && m.wF >= wcPastKnee*(m.rF*c.tBase.Seconds()+m.hStep):
 		return true
+	case c.blind(m):
+		return true
 	}
 	return false
 }
@@ -1607,6 +1642,7 @@ func (c *wcore) toOff() {
 	c.refPending = false
 	c.capped = false
 	c.lossTest = wcSrcNone
+	c.sndCarry = wcSnd{} // (a record of the core's own budgets is no level of the windows without it)
 	clear(c.inF)
 }
 
@@ -1690,7 +1726,7 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if (tracked || m.hit >= wcHitShare) && !qUp && !cong {
 		c.noteTau(m)
 	}
-	if (tracked || m.holey) && !qUp && !cong {
+	if (tracked || m.holey && !c.blind(m)) && !qUp && !cong {
 		// paid: the rate grew with B, or (where data waits behind holes
 		// and the rate of an interval says little) no queue came of it
 		c.bGood = max(c.bGood, min(c.B, c.bPub))
@@ -1874,7 +1910,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// on: a run of losses that keeps itself going stops only once
 		// what was held behind its holes is through
 		lossy := m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) ||
-			m.sndOK && !c.sndStale(now) && c.sndRef.past(m.snd, c.sndAbs(m))
+			m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m))
 		if c.lossDrainN++; lossy && c.lossDrainN < 3 {
 			return
 		}
@@ -2048,7 +2084,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.probeAt = now
 	}
 	hold := c.bHold(now, m)
-	if !now.Before(c.refreshAt) && c.holdN >= 2 && !testing && now.Before(c.probeAt) {
+	if !now.Before(c.refreshAt) && c.holdN >= 2 && !testing && now.Before(c.probeAt) && !in.apProbing {
 		c.B = hold
 		c.refresh(in, m)
 		return
@@ -2091,6 +2127,18 @@ func wcLossSig(src wcLossSrc) wcSig {
 func (c *wcore) tauOK2(m wcMeas) bool {
 	return !m.holey || m.qOwnOK && m.qOwn <= c.qOwnRef+wcDqOwn/2
 }
+
+// blind: data waits behind holes and no record of the sender's socket
+// comes (the exit's core for uploads; the edge's with an old exit). There
+// Rcv_ooopack is no congestion signal (it reads the holes, ours or the
+// path's: a run of losses of our own keeps its level past wcOooClean), no
+// resend share tells them apart, and the only queue signal, the link
+// socket's own srtt, reads the queue's floor (§3.3). An absent queue there
+// is no sign that more window paid: only the rate is (red team, round 1:
+// probes "paid" on q_own alone and took the windows of 300/150 behind a
+// 20 ms queue to 13–31% resent, past the loss rule's lossFrac, with the
+// windows without the core at 0.05–2%).
+func (c *wcore) blind(m wcMeas) bool { return m.holey && !c.sndSeen }
 
 // lossTestDone resolves a drain that tested a jump of loss at a steady
 // budget, once its source has measured after it: still past its level, the
@@ -2172,7 +2220,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// first byte past each limit leads its burst, so the turnaround shows no
 	// queue until the bursts already overflow (the model: every probe kept
 	// up to the next loss, 1.2–1.6% resent where rate verdicts left 0.4–0.9%)
-	paid := m.holey || !c.qcapKnown(now) || gain >= math.Max(wcPayMin, wcPayShare*exp)
+	paid := (m.holey || !c.qcapKnown(now)) && !c.blind(m) || gain >= math.Max(wcPayMin, wcPayShare*exp)
 	if cong || jump || !ok || qUp || !paid {
 		c.probeFailed(in, m, ev, cong, ok)
 		return
@@ -2200,7 +2248,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.noteTau(m)
 	}
 	c.schedProbe(now)
-	if rise >= pq/4 || !m.holey && gain < math.Max(2*wcPayMin, wcSuccStartup*exp) {
+	if rise >= pq/4 || (!m.holey || c.blind(m)) && gain < math.Max(2*wcPayMin, wcSuccStartup*exp) {
 		c.probeWins = 0
 		c.toHold(in, m)
 		return
@@ -2303,7 +2351,12 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	if any {
 		o.turnRef = c.turnMins.min(now, wcTurnWin) + c.qRef
 		o.qBrake = max(c.probeQ(now), c.dq()) + 2*c.spread
-		o.growOK = c.state != wcDrain && !in.apProbing && c.parkHold == 0
+		// (not held while the autopilot probes the pool size: its freeze is
+		// no PROBE and no STARTUP, so B stays within what was shown to pay,
+		// bGood; a growth brake for the spell kept each drain, cut or
+		// refresh of it for the whole spell: 800 → 160 Mbit/s on 1000/100
+		// in the model, and the autopilot measured that)
+		o.growOK = c.state != wcDrain && c.parkHold == 0
 	}
 	return o
 }
