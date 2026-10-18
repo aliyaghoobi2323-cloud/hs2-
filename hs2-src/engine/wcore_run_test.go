@@ -759,6 +759,47 @@ func TestWcoreRunnerLogCaps(t *testing.T) {
 	}
 }
 
+// The rarer lines (random loss, a route change, a window at its ceiling) are
+// held to wcAggLinks links a minute as the drain and "fill the path" lines
+// are, the rest summed up in one line each once the minute is over: a path
+// every link shares that turns lossy or longer made each of 300 links write
+// its line in the same minute (red team, round 1: 609 lines in 30 s).
+func TestWcoreRunnerLogFloodCapped(t *testing.T) {
+	ws := &wcSet{}
+	var logs wcLogs
+	logs.set(ws)
+	now := time.Unix(1e9, 0)
+	for i := 0; i < 300; i++ {
+		l := wcLogLink(fmt.Sprintf("link %d", i), wcEdge)
+		ws.logEvents(l, now.Add(time.Duration(i)*100*time.Millisecond), wcOut{events: []wcEvent{
+			{kind: wcEvLossy, loss: 0.004, q: 18 * time.Millisecond, T: 100 * time.Millisecond},
+			{kind: wcEvDrain, why: wcWhyLoss, from: 6 << 20, B: 3 << 20, n: 1, q: 30 * time.Millisecond},
+			{kind: wcEvRoute, T: 400 * time.Millisecond},
+			{kind: wcEvCapped, B: 16 << 20, n: 1, T: 480 * time.Millisecond},
+		}})
+	}
+	ws.flush(now.Add(2 * time.Minute))
+	for _, k := range []struct{ line, sum string }{
+		{"loss with no queue — windows cover", "more link(s) saw loss with no queue"},
+		{"(a route change) — the window core follows it", "more link(s) saw their round trip grow"},
+		{"ceiling (round trip", "more link(s) had a window at its"},
+		{"download windows 6.0 MiB → 3.0 MiB", "more link(s) drained their windows"},
+	} {
+		if n := logs.count(k.line); n != wcAggLinks {
+			t.Errorf("%q: %d per-link lines from 300 links in 30 s, want %d", k.line, n, wcAggLinks)
+		}
+		if n := logs.count(k.sum); n != 1 {
+			t.Errorf("%q: %d summary lines, want 1", k.sum, n)
+		}
+	}
+	if t.Failed() {
+		t.Logf("%d lines: %q", len(logs.all()), logs.all()[len(logs.all())-min(6, len(logs.all())):])
+	}
+	if n := logs.count("window core: 292 more link(s) saw loss with no queue in the last minute"); n != 1 {
+		t.Errorf("loss summary: %q", logs.all()[len(logs.all())-min(4, len(logs.all())):])
+	}
+}
+
 // A HOLD budget more than 25% off the latest "fill the path" line is a
 // knee that moved: it gets a line of its own.
 func TestWcoreRunnerKneeMoveLine(t *testing.T) {

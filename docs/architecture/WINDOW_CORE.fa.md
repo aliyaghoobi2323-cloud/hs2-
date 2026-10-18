@@ -558,15 +558,16 @@
 ## ۷. دیدپذیری
 
 ### ۷.۱ سطرهای لاگ
-سطرهای لاگ به انگلیسی‌اند، مانند بقیهٔ لاگ‌ها، و هر کدام سقف تکرار دارند.
+سطرهای لاگ به انگلیسی‌اند، مانند بقیهٔ لاگ‌ها، و هر کدام سقف تکرار دارند. «جمعی بالای ۸» یعنی هر نوع سطر در هر دقیقه حداکثر برای ۸ لینک جدا نوشته می‌شود و بقیه در یک سطر جمعی در پایان دقیقه می‌آیند (`wcAgg`). این برای همهٔ سطرهای هر لینک برقرار است، چون مسیری که همهٔ لینک‌ها در آن شریک‌اند می‌تواند همه را با هم پراتلاف یا طولانی کند (تیم قرمز دور ۱: ۳۰۰ لینک، ۶۰۹ سطر در ۳۰ ثانیه).
 
 | رویداد | نمونه | سقف تکرار |
 |---|---|---|
 | پایان STARTUP یا تغییر بزرگ زانو (بیش از ۲۵٪) | `mtcp: link 3: downloads fill the path at ~287 Mbit/s (round trip 151 ms): window held at 6.4 MiB for 2 fast connection(s), queue ~4 ms` | هر لینک ۱ در ۶۰s؛ با بیش از ۸ لینک در یک دقیقه، یک سطر جمعی |
 | DRAIN | `mtcp: link 3: path queue grew to 38 ms (resent 2.1%) — download windows 6.4 → 3.1 MiB` | هر لینک ۱ در ۳۰s؛ جمعی بالای ۸ |
-| رژیم اتلاف تصادفی | `mtcp: link 3: 0.4% loss with no queue — windows cover the resends (+18 ms)` | ۱ در ۱۰ دقیقه برای هر لینک |
+| رژیم اتلاف تصادفی | `mtcp: link 3: 0.4% loss with no queue — windows cover the resends (+18 ms)` | ۱ در ۱۰ دقیقه برای هر لینک؛ جمعی بالای ۸ |
 | استخر پر | `mtcp: window pool full (128 MiB): 5 fast connection(s) on 3 link(s) held below what their path carries` | ۱ در ۵ دقیقه برای هر پردازه |
-| سقف ۱۶MiB یا rwnd | `mtcp: link 3: one connection's window is at its 16 MiB ceiling (round trip 480 ms)` | ۱ در ۱۰ دقیقه |
+| سقف ۱۶MiB یا rwnd | `mtcp: link 3: one connection's window is at its 16 MiB ceiling (round trip 480 ms)` | ۱ در ۱۰ دقیقه؛ جمعی بالای ۸ |
+| تغییر مسیر | `mtcp: link 3: the path's round trip grew to ~400 ms (a route change) — the window core follows it` | ۱ در ۱۰ دقیقه؛ جمعی بالای ۸ |
 | سمت خروجی | همان سطرها با `link from 1.2.3.4:` و `uploads` | همان |
 
 ### ۷.۲ یادداشت پایان لینک

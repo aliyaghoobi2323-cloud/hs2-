@@ -217,7 +217,7 @@ type wcSet struct {
 	list      []*wcLink
 	trace     *os.File
 	traceOpen bool
-	agg       [2]wcAgg // filled, drain
+	agg       [wcAggKinds]wcAgg
 	pool      map[*wcLink]wcPoolSeenAt
 	poolLogAt time.Time
 }
@@ -226,6 +226,19 @@ type wcPoolSeenAt struct {
 	n  int
 	at time.Time
 }
+
+// The kinds of per-link lines held to wcAggLinks links a minute (ws.agg):
+// every line of a link's core, so a path all the links share that drains,
+// turns lossy or gets longer writes a few lines and a summary, not one per
+// link (red team, round 1: 300 links, 609 lines in 30 s).
+const (
+	wcAggFilled = iota
+	wcAggDrain
+	wcAggLossy
+	wcAggRoute
+	wcAggCapped
+	wcAggKinds
+)
 
 // wcAgg holds back one kind's per-link lines past wcAggLinks a minute and
 // sums them up in one line once the minute is over.
@@ -751,13 +764,13 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 			l.heldB = max(e.B, uint64(max(e.n, 1))*uint64(c.cmin()))
 			ws.filled(l, now, logf, e.R, e.T, l.heldB, e.n, e.q)
 		case wcEvDrain:
-			if !l.due(wcLogDrain, now, wcLogDrainEvery) || !ws.agg[1].admit(l, now, e.n, e.R) {
+			if !l.due(wcLogDrain, now, wcLogDrainEvery) || !ws.agg[wcAggDrain].admit(l, now, e.n, e.R) {
 				continue
 			}
 			logf("mtcp: %s: %s — %s windows %s → %s", l.label(), wcDrainCause(e), l.dir(),
 				wcMiB(e.from), wcMiB(e.B))
 		case wcEvLossy:
-			if !l.due(wcLogLossy, now, wcLogRareEvery) {
+			if !l.due(wcLogLossy, now, wcLogRareEvery) || !ws.agg[wcAggLossy].admit(l, now, 0, 0) {
 				continue
 			}
 			loss := e.loss
@@ -771,7 +784,7 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 				continue
 			}
 			if e.n > 0 && e.B/uint64(e.n) >= uint64(c.cfg.maxWin) {
-				if !l.due(wcLogCapped, now, wcLogRareEvery) {
+				if !l.due(wcLogCapped, now, wcLogRareEvery) || !ws.agg[wcAggCapped].admit(l, now, e.n, 0) {
 					continue
 				}
 				if e.n == 1 {
@@ -785,7 +798,7 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 		case wcEvPool:
 			ws.poolHeld(l, now, e.n)
 		case wcEvRoute:
-			if l.due(wcLogRoute, now, wcLogRareEvery) {
+			if l.due(wcLogRoute, now, wcLogRareEvery) && ws.agg[wcAggRoute].admit(l, now, 0, 0) {
 				logf("mtcp: %s: the path's round trip grew to ~%d ms (a route change) — the window core follows it", l.label(), e.T.Milliseconds())
 			}
 		}
@@ -800,7 +813,7 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 
 // filled is the "fill the path" line.
 func (ws *wcSet) filled(l *wcLink, now time.Time, logf func(string, ...any), r float64, t time.Duration, b uint64, n int, q time.Duration) {
-	if !l.due(wcLogFilled, now, wcLogFilledEvery) || !ws.agg[0].admit(l, now, n, r) {
+	if !l.due(wcLogFilled, now, wcLogFilledEvery) || !ws.agg[wcAggFilled].admit(l, now, n, r) {
 		return
 	}
 	logf("mtcp: %s: %ss fill the path at ~%.0f Mbit/s (round trip %d ms): window held at %s for %d fast connection(s), queue ~%d ms",
@@ -934,12 +947,20 @@ func (ws *wcSet) flushAgg(now time.Time) {
 			continue
 		}
 		if lp != nil && a.held > 0 {
-			if i == 0 {
+			switch i {
+			case wcAggFilled:
 				(*lp)("mtcp: window core: %d more link(s) found the window that fills their path in the last minute (%d fast connection(s), ~%.0f Mbit/s)",
 					len(a.links), a.conns, mbitps(a.rate))
-			} else {
+			case wcAggDrain:
 				(*lp)("mtcp: window core: %d more link(s) drained their windows %d time(s) in the last minute (a queue grew, or loss came, on their path)",
 					len(a.links), a.held)
+			case wcAggLossy:
+				(*lp)("mtcp: window core: %d more link(s) saw loss with no queue in the last minute (windows cover the resends)", len(a.links))
+			case wcAggRoute:
+				(*lp)("mtcp: window core: %d more link(s) saw their round trip grow in the last minute (a route change; the window core follows it)", len(a.links))
+			case wcAggCapped:
+				(*lp)("mtcp: window core: %d more link(s) had a window at its ceiling in the last minute (%d connection(s))",
+					len(a.links), a.conns)
 			}
 		}
 		*a = wcAgg{}
