@@ -109,7 +109,13 @@ type wcore struct {
 	srttMins wcMinWin      // fallback: least srtt over 60 s
 	turnMins wcMinWin      // turnBase: least window turnaround over 60 s
 	tbOff    time.Duration // turnBase − T_base while both agreed (route change)
+	tbOK     bool          // ... they agreed at least once
 	routeLog bool
+	// after a route change the exit's min_rtt keeps the old floor too:
+	// qSndRaw is srtt − min_rtt of its records (their floor over 60 s in
+	// qSndMins), and sndOff what of it is the longer path (q_snd is the rest)
+	qSndMins wcMinWin
+	sndOff   time.Duration
 
 	// rate
 	rhat    []wcRate // R_link samples for R̂ (windowed max)
@@ -1240,27 +1246,71 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 		}
 	}
 	tb := c.turnMins.min(now, wcTurnWin)
+	fresh := in.snd.fresh && in.snd.minRTT > 0 && in.snd.srtt >= in.snd.minRTT
+	raw := time.Duration(0)
+	if fresh {
+		raw = in.snd.srtt - in.snd.minRTT
+		c.qSndMins.add(now, max(raw, 1), wcTurnWin)
+		if c.sndOff > 0 && raw+c.dq() < c.sndOff {
+			c.sndOff = 0 // the exit's min_rtt took the path as it is (renewed, or the route back)
+		}
+		c.qSnd, c.qSndAt = max(raw-c.sndOff, 0), now
+	}
 	if t > 0 {
 		switch {
 		case tb > 0 && float64(tb) <= 1.3*float64(t):
-			c.tbOff = tb - t
+			c.tbOff, c.tbOK = tb-t, true
 			c.routeLog = false
-		case tb > 0 && c.tbOff > 0 && float64(tb) > 1.3*float64(t) && c.qSnd <= c.dq():
+		case tb > 0 && c.tbOK && float64(tb) > 1.3*float64(t):
 			// the path got longer: min_rtt keeps the old floor for up to
-			// 5 minutes, turnaround has moved
-			t = tb - c.tbOff
-			if !c.routeLog {
-				c.routeLog = true
-				*ev = append(*ev, wcEvent{kind: wcEvRoute, T: t})
+			// 5 minutes, turnaround has moved. The exit's own min_rtt is as
+			// stale (a new exit's q_snd reads the longer path as queue):
+			// where q_snd's floor over the same 60 s rose as much as the
+			// turnaround's and its records stay there, that rise is the
+			// path's, not a queue's (a queue swings, and the sender's
+			// PROBE_RTT empties its own)
+			if rise := tb - t - c.tbOff; c.sndOff == 0 && fresh && c.routeSnd(now, rise, raw) {
+				c.sndOff = c.qSndMins.min(now, wcTurnWin)
+				c.qSnd = max(raw-c.sndOff, 0)
+			}
+			if c.qSnd <= c.dq() {
+				t = tb - c.tbOff
+				if !c.routeLog {
+					c.routeLog = true
+					*ev = append(*ev, wcEvent{kind: wcEvRoute, T: t})
+				}
 			}
 		}
 		c.tBase = t
 	}
-	if in.snd.fresh && in.snd.minRTT > 0 && in.snd.srtt >= in.snd.minRTT {
-		c.qSnd, c.qSndAt = in.snd.srtt-in.snd.minRTT, now
+	if fresh {
 		copy(c.qSnds[1:], c.qSnds[:])
 		c.qSnds[0] = wcRate{now, c.qSnd.Seconds()}
 	}
+}
+
+// routeSnd says whether the exit's records read a longer path of rise (the
+// turnaround floor's rise past T_base) where its stale min_rtt makes q_snd
+// read it as queue: q_snd's floor over wcTurnWin within max(Δq, rise/4) of
+// rise, and its latest records (raw: this one's) as flat around it.
+func (c *wcore) routeSnd(now time.Time, rise, raw time.Duration) bool {
+	if rise <= c.dq() {
+		return false
+	}
+	tol := max(c.dq(), rise/4)
+	lo := c.qSndMins.min(now, wcTurnWin)
+	if lo <= 0 || lo < rise-tol || lo > rise+tol || raw-lo > tol {
+		return false
+	}
+	for _, r := range c.qSnds {
+		if r.at.IsZero() || now.Sub(r.at) > wcSndHist*wcSndSpan {
+			continue
+		}
+		if q := time.Duration(r.r * float64(time.Second)); q-lo > tol {
+			return false
+		}
+	}
+	return true
 }
 
 // qSndMax is the largest q_snd of the latest wcSndHist records, if they

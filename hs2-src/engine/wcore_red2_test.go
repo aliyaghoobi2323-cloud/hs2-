@@ -531,25 +531,96 @@ func TestWcoreRed2RecordsStop(t *testing.T) {
 	}
 }
 
-// TestWcoreRed2OpenRouteChange (open, HS2_WCORE_RED2=1): after a route
-// change (300 → 600 ms) the edge's T_base never follows: both ends' min_rtt
-// keep the old floor (Linux: 5 minutes), and notePaths takes the turnaround's
-// new floor only on a record of the exit that shows no queue, which the
-// exit's own stale min_rtt never shows (q_snd reads the longer path as
-// ~300 ms of queue). Meanwhile the long round trip's rules (wcLongRTT,
-// wcLongGear) do not apply. Fails until the route change is told apart.
-func TestWcoreRed2OpenRouteChange(t *testing.T) {
-	if os.Getenv("HS2_WCORE_RED2") != "1" {
-		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
-	}
+// TestWcoreRed2RouteChange (round 2, finding 4): after a route change (300
+// → 600 ms) both ends' min_rtt keep the old floor (Linux: 5 minutes), and
+// notePaths took the turnaround's new floor only on a record of the exit
+// that showed no queue, which the exit's own stale min_rtt never shows
+// (q_snd read the longer path as ~300 ms of queue): T_base stayed 300 ms to
+// the end and the long round trip's rules (wcLongRTT, wcLongGear) did not
+// apply. The longer path is taken where q_snd's floor rose with the
+// turnaround's and stays there.
+func TestWcoreRed2RouteChange(t *testing.T) {
 	c := wmPath(300, wmMS(300), wmMS(50))
 	c.rttAt = []wmChange{{20 * time.Second, 600}}
 	c.dur, c.mode, c.seed = 120*time.Second, wmCore, 1
 	var tb, qs time.Duration
 	c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) { tb, qs = k.tBase, k.qSnd }
 	wmRun(c)
-	if tb < 500*time.Millisecond {
-		t.Errorf("100 s after 300 → 600 ms: T_base %v (q_snd %v), want the new path's", tb, qs)
+	if tb < 500*time.Millisecond || qs > 100*time.Millisecond {
+		t.Errorf("100 s after 300 → 600 ms: T_base %v (q_snd %v), want the new path's (and q_snd of its queue only)", tb, qs)
+	}
+}
+
+// wtRoute feeds the core's notePaths a record and a turnaround every 2 s for
+// d from *now: the edge's socket and the exit's at min_rtt minRTT with srtt,
+// a stream's least turnaround turn; it returns the route events.
+func wtRoute(c *wcore, now *time.Time, d, minRTT, srtt, sndSrtt, turn time.Duration) int {
+	n := 0
+	for end := now.Add(d); now.Before(end); *now = now.Add(2 * time.Second) {
+		in := wcIn{now: *now, minRTT: minRTT, srtt: srtt, poolFree: -1,
+			snd:     wcSnd{fresh: true, srtt: sndSrtt, minRTT: minRTT, segsOut: 1000},
+			streams: []wcStream{{id: 1, turnMin: turn}}}
+		var ev []wcEvent
+		c.notePaths(in, &ev)
+		for _, e := range ev {
+			if e.kind == wcEvRoute {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// notePaths after a route change: the longer path is T_base once the
+// turnaround's floor and the exit's q_snd floor rose together (both ends'
+// min_rtt stale) and q_snd then reads the queue past the new path only; a
+// turnaround floor equal to min_rtt before the change is no trap (tbOff 0);
+// a turnaround that rose while the exit's q_snd did not rise with it (a
+// queue only the turnaround shows) or swings (a queue) is no route change.
+func TestWcoreRed2RouteNotePaths(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	for _, tc := range []struct {
+		name             string
+		turn0            time.Duration // the least turnaround before the change
+		sndSrtt, turn    []time.Duration
+		route            bool
+		tBase, qSndUnder time.Duration
+	}{
+		{"300 → 600 ms, both min_rtt stale", ms(310), []time.Duration{ms(605)}, []time.Duration{ms(610)}, true, ms(600), ms(20)},
+		{"... with a turnaround floor that was min_rtt (tbOff 0)", ms(300), []time.Duration{ms(605)}, []time.Duration{ms(600)}, true, ms(600), ms(20)},
+		{"the turnaround rose, the exit's q_snd did not", ms(310), []time.Duration{ms(340)}, []time.Duration{ms(610)}, false, ms(300), 0},
+		{"q_snd swings (a queue)", ms(310), []time.Duration{ms(420), ms(605), ms(780)}, []time.Duration{ms(610)}, false, ms(300), 0},
+	} {
+		c := wtCore(1)
+		now := wtT0
+		wtRoute(c, &now, time.Minute, ms(300), ms(305), ms(305), tc.turn0)
+		if c.tBase != ms(300) {
+			t.Fatalf("%s: before the change T_base %v", tc.name, c.tBase)
+		}
+		n := 0
+		for end := now.Add(80 * time.Second); now.Before(end); {
+			for i := range tc.sndSrtt {
+				n += wtRoute(c, &now, 2*time.Second, ms(300), tc.sndSrtt[i]+5*time.Millisecond, tc.sndSrtt[i], tc.turn[min(i, len(tc.turn)-1)])
+			}
+		}
+		if got := n > 0; got != tc.route || c.tBase != tc.tBase {
+			t.Errorf("%s: route %v (T_base %v, q_snd %v), want %v (%v)", tc.name, got, c.tBase, c.qSnd, tc.route, tc.tBase)
+		}
+		if tc.route && c.qSnd > tc.qSndUnder {
+			t.Errorf("%s: q_snd %v past the new path's floor, want under %v", tc.name, c.qSnd, tc.qSndUnder)
+		}
+		if !tc.route {
+			continue
+		}
+		// the exit's min_rtt catches up (Linux renews it after 5 minutes):
+		// q_snd reads its socket as it is again
+		wtRoute(c, &now, 10*time.Second, ms(300), ms(605), ms(605), tc.turn[0])
+		in := wcIn{now: now, minRTT: ms(300), srtt: ms(605), poolFree: -1, snd: wcSnd{fresh: true, srtt: ms(612), minRTT: ms(600), segsOut: 1000},
+			streams: []wcStream{{id: 1, turnMin: tc.turn[0]}}}
+		c.notePaths(in, new([]wcEvent))
+		if c.qSnd != ms(12) || c.tBase != tc.tBase {
+			t.Errorf("%s: the exit's min_rtt renewed: q_snd %v (want 12ms), T_base %v", tc.name, c.qSnd, c.tBase)
+		}
 	}
 }
 
