@@ -537,13 +537,12 @@ func (w *wcMinWin) add(now time.Time, v, win time.Duration) {
 		return
 	}
 	e, i := w.epoch(now, win)
-	if w.ep[i] != e || w.b[i] == 0 || v < w.b[i] {
-		if w.ep[i] != e {
-			w.b[i] = v
-		} else {
-			w.b[i] = min(w.b[i], v)
-		}
-		w.ep[i] = e
+	switch {
+	case w.ep[i] != e || w.b[i] == 0:
+		// (an empty bucket too: the first epoch is 0, as an unset one)
+		w.b[i], w.ep[i] = v, e
+	case v < w.b[i]:
+		w.b[i] = v
 	}
 }
 

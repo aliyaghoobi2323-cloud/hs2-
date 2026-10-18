@@ -59,6 +59,10 @@ func TestWcoreFixMinWinMonotonic(t *testing.T) {
 		t.Skip("time.Time's layout is not the one this test assumes")
 	}
 	var w wcMinWin
+	w.add(base, 150*time.Millisecond, wcTurnWin)
+	if got := w.min(base, wcTurnWin); got != 150*time.Millisecond {
+		t.Fatalf("the first sample: min %v, want 150ms", got)
+	}
 	for i := 0; i < 50; i++ {
 		v := 130 * time.Millisecond
 		if i == 10 {
