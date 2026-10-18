@@ -287,7 +287,9 @@ type tcpStat struct {
 	// Segments that arrived out of order, behind a hole (Linux ≥ 5.4; 0
 	// before): over segsIn, both a loss reading and the share of data held
 	// back behind a resend at this end (the window core, WINDOW_CORE §3.4).
+	// oooOK: the kernel reports it (its TCP_INFO is long enough to hold it).
 	rcvOOO uint32
+	oooOK  bool
 	// Payload bytes received and acknowledged (Linux ≥ 4.1).
 	bytesReceived uint64
 	// Payload bytes this end sent that the peer acknowledged (Linux ≥ 4.1):

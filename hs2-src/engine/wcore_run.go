@@ -427,7 +427,9 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 	if ts, ok := tcpStats(l.tcp); ok {
 		s.tcpNone = false
 		s.minRTT, s.srtt = wcMinRTTOf(ts.minRTT), usDur(uint64(ts.rtt))
-		s.segsIn, s.ooo, s.oooOK = l.segs.add(ts.segsIn), l.ooo.add(ts.rcvOOO), true
+		// (rcv_ooopack is Linux 5.4's: before it the field reads 0, which is
+		// no clean path)
+		s.segsIn, s.ooo, s.oooOK = l.segs.add(ts.segsIn), l.ooo.add(ts.rcvOOO), ts.oooOK
 	}
 	var cc smux.CoreCounters
 	l.samples, cc = l.sess.CoreSnapshot(l.samples)
