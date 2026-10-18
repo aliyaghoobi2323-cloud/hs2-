@@ -40,6 +40,49 @@ type writeRequest struct {
 	result chan writeResult
 	// fair-queue start tag of a data frame (fairQueue), set by the shaper
 	start uint64
+	// the frame's data as sendLoop reads it (nil: the frame has none)
+	data *frameData
+}
+
+// frameData hands a frame's data from its writer to sendLoop. A writer that
+// stops waiting for its frame (frameWritten: the session died, a write error,
+// its deadline) returns only once sendLoop is done with the caller's buffer,
+// or has left sendLoop a copy of it: the caller may reuse the buffer at once,
+// and a frame still queued goes out with the data it was written with.
+type frameData struct {
+	mu   sync.Mutex
+	b    []byte
+	read bool // sendLoop has read b (it holds mu while it does)
+}
+
+// take gives sendLoop the frame's data, to read until it calls done: until
+// it has copied it, or, over a connection that writes by WriteBuffers, until
+// the connection has written it.
+func (r writeRequest) take() []byte {
+	if r.data == nil {
+		return r.frame.data
+	}
+	r.data.mu.Lock()
+	r.data.read = true
+	return r.data.b
+}
+
+func (r writeRequest) done() {
+	if r.data != nil {
+		r.data.mu.Unlock()
+	}
+}
+
+// giveUp: the writer of r stops waiting for its frame; see frameData.
+func (r writeRequest) giveUp() {
+	if r.data == nil {
+		return
+	}
+	r.data.mu.Lock()
+	if !r.data.read {
+		r.data.b = append([]byte(nil), r.data.b...)
+	}
+	r.data.mu.Unlock()
 }
 
 type writeResult struct {
@@ -512,13 +555,16 @@ func (s *Session) sendLoop() {
 			binary.LittleEndian.PutUint16(buf[2:], uint16(len(request.frame.data)))
 			binary.LittleEndian.PutUint32(buf[4:], request.frame.sid)
 
+			data := request.take()
 			if len(vec) > 0 {
 				vec[0] = buf[:headerSize]
-				vec[1] = request.frame.data
+				vec[1] = data
 				n, err = bw.WriteBuffers(vec)
+				request.done()
 			} else {
-				copy(buf[headerSize:], request.frame.data)
-				n, err = s.conn.Write(buf[:headerSize+len(request.frame.data)])
+				copy(buf[headerSize:], data)
+				request.done()
+				n, err = s.conn.Write(buf[:headerSize+len(data)])
 			}
 
 			n -= headerSize
@@ -567,6 +613,9 @@ func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) 
 		seq:    atomic.AddUint32(&s.requestID, 1),
 		result: make(chan writeResult, 1),
 	}
+	if len(f.data) > 0 {
+		req.data = &frameData{b: f.data}
+	}
 	select {
 	case s.shaper <- req:
 		return req, nil
@@ -580,16 +629,20 @@ func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) 
 }
 
 // frameWritten waits until the frame of req, queued by queueFrame, is
-// written.
+// written. If it stops waiting before, the frame's data is no longer the
+// caller's to read (frameData).
 func (s *Session) frameWritten(req writeRequest, deadline <-chan time.Time) (int, error) {
+	var err error
 	select {
 	case result := <-req.result:
 		return result.n, result.err
 	case <-s.die:
-		return 0, io.ErrClosedPipe
+		err = io.ErrClosedPipe
 	case <-s.chSocketWriteError:
-		return 0, s.socketWriteError.Load().(error)
+		err = s.socketWriteError.Load().(error)
 	case <-deadline:
-		return 0, ErrTimeout
+		err = ErrTimeout
 	}
+	req.giveUp()
+	return 0, err
 }
