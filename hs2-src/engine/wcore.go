@@ -99,6 +99,7 @@ type wcore struct {
 	wakeOoo   uint64
 	holeSeen  bool      // a loss's hole since the previous evaluation (lossHole)
 	policedAt time.Time // the latest policer's loss (policerLoss)
+	cleanRecs int       // the exit's latest records in a row that showed no queue and no resends
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -311,33 +312,58 @@ var (
 	// runs a streak of resends past lossFrac, none without the core).
 	wcPoliceQ       = wcDqMin
 	wcPoliceBackoff = 3
-	wcLossRand      = 0.0005
-	wcLossRandN     = 3
-	wcSndSpan       = 2500 * time.Millisecond // a record covers the exit's last stats tick
-	wcRhatWin       = 10 * time.Second
-	wcRhatMinN      = 8
-	wcTauAlpha      = 0.25
-	wcRefAlpha      = 0.25
-	wcProbeMin      = 4 * time.Second
-	wcProbeMax      = 8 * time.Second
-	wcProbeRTTs     = 10
-	wcProbeBackMax  = 32 * time.Second
-	wcQcapTTL       = 10 * time.Minute
-	wcTurnWin       = 60 * time.Second
-	wcKPrevTTL      = 30 * time.Second
-	wcOffAfter      = 3
-	wcCtrlQMin      = 30 * time.Millisecond
-	wcCtrlQShare    = 1.0 / 3
-	wcRateDrop      = 0.3
-	wcHoldSlack     = 0.85
-	wcStage2Min     = uint32(256 << 10)
-	wcParkHold      = 2
-	wcHitShare      = 0.5
-	wcLagShare      = 0.25
-	wcUseShare      = 0.9  // a window is in use: R·turnaround ≥ this share of it less half a step
-	wcPeerShare     = 0.25 // a stream joins F on use alone only at this share of the fastest
-	wcDemandGain    = 1.25
-	wcResettle      = 0.05 // a change of B by more than this share settles first
+	// wcLongRTT: past this T_base (paths a DPI box holds back, satellite
+	// links) the core is outside what it was calibrated on: Δq (T_base/10)
+	// and q_ctrl's threshold (T_base/3) outgrow a shallow queue, a measuring
+	// part of T_eval's 2 s is under a round trip and two, and a window
+	// update's step outgrows the queue at the sender's STARTUP pacing. In
+	// the red team's sweep 7 of 24 runs at 500 ms and 39 of 120 at 600 ms to
+	// 2 s drained or resent past base + 3 points. There the edge grows B (a
+	// STARTUP step, a probe) only on a fresh record of the exit that shows no
+	// queue (q_snd up to wcDqMin) and no new resends (longGrow), and leaves
+	// OFF only after wcLongClean such records in a row; a core with no such
+	// record (the exit's side, an edge with an old exit) stays OFF
+	// (longBlind). Past wcLongGear STARTUP takes its smallest gear (×1.25)
+	// only: at 600 ms to 2 s ×1.5 left 19 of 120 runs, ×1.25 5; at 500 ms
+	// ×1.25 on records 2.5 s apart took the table's 1000/500 q50 to 56 Mbit/s
+	// in its 24 s (target 108.5; ×1.5: 133). The rest is the sender's: a
+	// window-limited BBR's STARTUP pacing only rises, and on a shallow queue
+	// a window much past the one it started at loses a share of each round
+	// trip's flight (TestWcoreFixLongRTTModel). In the sweep 0 of 48 runs at
+	// 450 and 500 ms and 5 of 120 at 600 ms to 2 s stay, and the core keeps
+	// about half of its gain there (base 12.8, core 46.7 before, 30.4 Mbit/s
+	// now). (From 400 ms one run at 400 that resends 3.7–3.9% from before
+	// these rules went too, but the mean there fell from 128 to 83 Mbit/s.)
+	wcLongRTT      = 450 * time.Millisecond
+	wcLongClean    = 3
+	wcLongGear     = 600 * time.Millisecond
+	wcLossRand     = 0.0005
+	wcLossRandN    = 3
+	wcSndSpan      = 2500 * time.Millisecond // a record covers the exit's last stats tick
+	wcRhatWin      = 10 * time.Second
+	wcRhatMinN     = 8
+	wcTauAlpha     = 0.25
+	wcRefAlpha     = 0.25
+	wcProbeMin     = 4 * time.Second
+	wcProbeMax     = 8 * time.Second
+	wcProbeRTTs    = 10
+	wcProbeBackMax = 32 * time.Second
+	wcQcapTTL      = 10 * time.Minute
+	wcTurnWin      = 60 * time.Second
+	wcKPrevTTL     = 30 * time.Second
+	wcOffAfter     = 3
+	wcCtrlQMin     = 30 * time.Millisecond
+	wcCtrlQShare   = 1.0 / 3
+	wcRateDrop     = 0.3
+	wcHoldSlack    = 0.85
+	wcStage2Min    = uint32(256 << 10)
+	wcParkHold     = 2
+	wcHitShare     = 0.5
+	wcLagShare     = 0.25
+	wcUseShare     = 0.9  // a window is in use: R·turnaround ≥ this share of it less half a step
+	wcPeerShare    = 0.25 // a stream joins F on use alone only at this share of the fastest
+	wcDemandGain   = 1.25
+	wcResettle     = 0.05 // a change of B by more than this share settles first
 	// wcRampQ, wcRampShare: a ceiling rises by at most the larger of this
 	// much queue at R̂ and this share of the budget per runner wake
 	// (wcRampTick). A window-limited BBR sender stays in its STARTUP (its
@@ -697,6 +723,32 @@ func (c *wcore) probeQ(now time.Time) time.Duration {
 	return q
 }
 
+// longRTT: T_base is past wcLongRTT.
+func (c *wcore) longRTT() bool {
+	return c.tBase >= wcLongRTT
+}
+
+// longBlind: past wcLongRTT with no record of the exit's socket to grow on
+// (the exit's side; an edge whose exit sends no TCP_INFO in its record, or
+// none yet): the core stays OFF.
+func (c *wcore) longBlind() bool {
+	return c.longRTT() && (c.cfg.side == wcExit || !c.sndSeen)
+}
+
+// longGrow says, past wcLongRTT, whether the interval has a fresh record of
+// the exit (judged: it came in the interval, after the latest drain, cut or
+// start) and whether it shows no queue at the exit's socket and no new
+// resends (clean). Under wcLongRTT every interval is judged clean.
+func (c *wcore) longGrow(m wcMeas) (judged, clean bool) {
+	if !c.longRTT() {
+		return true, true
+	}
+	if c.cfg.side != wcEdge || !c.sndSeen || !m.sndOK || c.sndStale(m.sndAt) {
+		return false, false
+	}
+	return true, m.qSndOK && m.qSnd <= wcDqMin && m.snd == 0
+}
+
 // policed: a policer's loss (noteQcap) came within wcQcapTTL.
 func (c *wcore) policed(now time.Time) bool {
 	return !c.policedAt.IsZero() && now.Sub(c.policedAt) < wcQcapTTL
@@ -775,6 +827,11 @@ func (c *wcore) step(in wcIn) wcOut {
 		if !c.sndAny {
 			c.sndAny, c.sndAnyAt = true, now
 		}
+		if in.snd.segsOut > 0 && in.snd.retrans == 0 && in.snd.minRTT > 0 && in.snd.srtt-in.snd.minRTT <= wcDqMin {
+			c.cleanRecs++
+		} else if in.snd.segsOut > 0 || in.snd.srtt > 0 {
+			c.cleanRecs = 0
+		}
 		if in.snd.srtt > 0 || in.snd.segsOut > 0 {
 			c.sndSeen = true // (an old exit's record has no TCP_INFO in it)
 		}
@@ -812,7 +869,7 @@ func (c *wcore) step(in wcIn) wcOut {
 	switch {
 	case c.state == wcOff:
 		c.off(in, m, &ev)
-	case c.fEmpty >= wcOffAfter || c.blindN >= wcOffAfter:
+	case c.fEmpty >= wcOffAfter || c.blindN >= wcOffAfter || c.longBlind():
 		c.toOff()
 	case len(m.f) == 0 || m.idleF:
 		// the fast streams paused (or one of them was sent nothing: its
@@ -1675,6 +1732,11 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.offN = 0
 		return
 	}
+	if _, clean := c.longGrow(m); !clean || c.longRTT() && c.cleanRecs < wcLongClean {
+		// past wcLongRTT: wait for wcLongClean records in a row that show
+		// the path with no queue and no resends
+		return
+	}
 	c.offN = 0
 	c.bGood = 0
 	c.state = wcStartup
@@ -1685,6 +1747,9 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.pathFull = false
 	c.flat = 0
 	c.gear = 1
+	if c.tBase >= wcLongGear {
+		c.gear = 0
+	}
 	c.fullR, c.prevR = m.rF, m.rF
 	c.qRef = m.qTurn
 	c.qOwnRef = m.qOwn
@@ -1725,7 +1790,7 @@ func (c *wcore) harm(m wcMeas) bool {
 		return true
 	case !m.qSnd3OK && m.rF > 0 && m.wF >= wcPastKnee*(m.rF*c.tBase.Seconds()+m.hStep):
 		return true
-	case c.blind(m):
+	case c.blind(m), c.longBlind():
 		return true
 	}
 	return false
@@ -1812,6 +1877,16 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 		qUp = false // the exit's record of this interval shows none
 	}
 	cong, jump, _ := c.lossVerdict(m, qUp)
+	if judged, clean := c.longGrow(m); !cong && !clean {
+		if !judged {
+			// past wcLongRTT with no fresh record of the exit: B stays
+			// where it is and the interval counts for nothing
+			return
+		}
+		// the record shows a queue or resends: the knee
+		c.endStartup(in, m, ev, qUp, false)
+		return
+	}
 	if !cong && !jump {
 		// what the data held behind a hole adds when it is released at
 		// once is no rate of the path
@@ -1875,7 +1950,7 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// 24 s, 228 Mbit/s against 363 before, with q_snd 1.2–2 ms all along.)
 		c.gear = min(c.gear, 0)
 	}
-	if pastCap {
+	if pastCap || c.tBase >= wcLongGear {
 		c.gear = min(c.gear, 0)
 	}
 	g := 1.0
@@ -2235,7 +2310,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.refresh(in, m)
 		return
 	}
-	if !now.Before(c.probeAt) && !in.apProbing && !c.capped && !c.burstHeld && c.holdN >= 2 && m.sameF && !testing {
+	if _, clean := c.longGrow(m); !now.Before(c.probeAt) && !in.apProbing && !c.capped && !c.burstHeld && c.holdN >= 2 && m.sameF && !testing && clean {
 		pr := c.bProbe(now, m, hold)
 		if in.poolFree < 0 || uint64(in.poolFree) >= pr-hold {
 			c.state = wcProbe
@@ -2355,6 +2430,13 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	pq := c.probeQ(now)
 	qUp := ok && rise >= pq/2
 	cong, jump, _ := c.lossVerdict(m, qUp)
+	if judged, clean := c.longGrow(m); !cong && !clean {
+		// past wcLongRTT a probe pays only on a fresh record of the exit
+		// that shows no queue and no new resends; with none it is no
+		// verdict (back, no backoff)
+		c.probeFailed(in, m, ev, false, judged)
+		return
+	}
 	if !cong && !jump {
 		c.noteRate(now, m.rLink)
 	}

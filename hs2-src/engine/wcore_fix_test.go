@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 	"unsafe"
@@ -300,6 +301,185 @@ func TestWcoreFixPolicerModel(t *testing.T) {
 			t.Errorf("the loss rule would drain the link under the core: %s", msg)
 		} else {
 			t.Log(msg)
+		}
+	}
+}
+
+// Item 1: past wcLongRTT (paths a DPI box holds back, satellite links) the
+// core is outside what it was calibrated on: on the exit's side, and on the
+// edge with an exit that sends no TCP_INFO in its record, it has no signal
+// of its own losses at all there, and it stays OFF.
+func TestWcoreFixLongRTTBlindOff(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		side wcSide
+		seen bool // the exit's record has TCP_INFO in it
+		off  bool
+	}{{"the exit's side", wcExit, false, true}, {"the edge, an old exit", wcEdge, false, true}, {"the edge, a new exit", wcEdge, true, false}} {
+		c := newWcore(wcConfig{side: tc.side, stage: 1, need: wtNeed, maxWin: wtMax, minWin: wtMin}, func() float64 { return 0.5 })
+		c.tBase = 600 * time.Millisecond
+		c.sndAny, c.sndSeen = tc.side == wcEdge, tc.seen
+		m := wtMeas(1, 6e6, 2*wtMiB)
+		m.qSnd3, m.qSnd3OK = time.Millisecond, tc.seen
+		if got := c.harm(m); got != tc.off {
+			t.Errorf("%s, T_base 600 ms, OFF: harm %v, want %v", tc.name, got, tc.off)
+		}
+		// in HOLD: OFF at the next evaluation
+		c.state, c.B, c.bPub, c.bGood = wcHold, 6*wtMiB, 6*wtMiB, 6*wtMiB
+		in := wtIn(wtT0, 1, 6*wtMiB)
+		in.streams[0].read = 6e6
+		in.streams[0].turnMin, in.streams[0].turnLast = 610*time.Millisecond, 610*time.Millisecond
+		in.minRTT, in.srtt, in.segsIn, in.oooOK = 600*time.Millisecond, 601*time.Millisecond, 4000, true
+		wtInF(c, in)
+		c.lastAt = wtT0.Add(-2 * time.Second)
+		c.step(in)
+		if (c.state == wcOff) != tc.off {
+			t.Errorf("%s, T_base 600 ms, HOLD: %v after an evaluation, want off %v", tc.name, c.state, tc.off)
+		}
+	}
+}
+
+// Item 1: past wcLongRTT the edge grows B (a STARTUP step, a probe) only on
+// a fresh record of the exit that shows no queue (q_snd up to wcDqMin) and
+// no new resends; an interval with no record waits, one whose record shows
+// either ends STARTUP.
+func TestWcoreFixLongRTTGrowsOnRecord(t *testing.T) {
+	rec := func(m *wcMeas, q time.Duration, snd float64) {
+		m.sndOK, m.snd, m.sndSegs, m.sndAt = true, snd, 20000, wtT0
+		m.qSnd, m.qSndOK = q, true
+	}
+	for _, tc := range []struct {
+		name  string
+		setup func(m *wcMeas)
+		state wcState
+		grew  bool
+	}{
+		{"no record in the interval: wait", func(m *wcMeas) {}, wcStartup, false},
+		{"a clean record: a step", func(m *wcMeas) { rec(m, 2*time.Millisecond, 0) }, wcStartup, true},
+		{"a record with a queue: the knee", func(m *wcMeas) { rec(m, 20*time.Millisecond, 0) }, wcHold, false},
+		{"a record with resends: the knee", func(m *wcMeas) { rec(m, 2*time.Millisecond, 0.0002) }, wcHold, false},
+	} {
+		c, in := wtStartup()
+		c.tBase, c.sndSeen, c.sndAny = 600*time.Millisecond, true, true
+		m := wtMeas(1, 4e6, 4*wtMiB) // the rate doubled with B (from 2 MB/s)
+		c.prevR, c.fullR = 2e6, 2e6
+		m.at = wtT0
+		tc.setup(&m)
+		flat := c.flat
+		var ev []wcEvent
+		c.startup(in, m, &ev)
+		if c.state != tc.state || (c.B > 4*wtMiB) != tc.grew {
+			t.Errorf("%s: %v B %.1f MiB, want %v grown %v", tc.name, c.state, float64(c.B)/wtMiB, tc.state, tc.grew)
+		}
+		if tc.name == "no record in the interval: wait" && c.flat != flat {
+			t.Errorf("%s: flat %d → %d, want the interval not counted", tc.name, flat, c.flat)
+		}
+	}
+	// HOLD: a probe that is due starts only on a clean record
+	for _, clean := range []bool{false, true} {
+		c, in := wtHold()
+		c.tBase, c.sndSeen, c.sndAny = 600*time.Millisecond, true, true
+		c.probeAt = wtT0
+		m := wtMeas(1, 60e6, 8*wtMiB)
+		m.at = wtT0
+		m.qTurn, m.qOK, m.qOwn, m.qOwnOK = c.qRef, true, time.Millisecond, true
+		if clean {
+			rec(&m, 2*time.Millisecond, 0)
+		}
+		var ev []wcEvent
+		c.hold(in, m, &ev)
+		if (c.state == wcProbe) != clean {
+			t.Errorf("HOLD at 600 ms, a probe due, clean record %v: %v", clean, c.state)
+		}
+	}
+}
+
+// Item 1, in the model: runs of the red team's long round trip sweep that
+// drained or resent past base + 3 points.
+func TestWcoreFixLongRTTModel(t *testing.T) {
+	for _, x := range []struct {
+		rate   float64
+		rtt, q int
+		seed   uint64
+		exit   bool
+	}{{100, 600, 50, 2, false}, {50, 600, 50, 2, false}, {300, 800, 50, 1, false}, {50, 500, 100, 1, false}, {100, 600, 50, 2, true}} {
+		c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
+		c.seed, c.dur, c.warm, c.exit = x.seed, 90*time.Second, 20*time.Second, x.exit
+		b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
+		msg := fmt.Sprintf("%s s%d exit %v: base %.1f Mbit resent %.2f%% | core %.1f Mbit resent %.2f%% [%s] drains %v", c.name, x.seed, x.exit,
+			b.mbit, 100*b.resend, k.mbit, 100*k.resend, wmLossNote(k), k.drains)
+		if wmDrainedByCore(b, k) || k.resend > b.resend+0.03 || x.exit && math.Abs(k.mbit-b.mbit) > 0.01*b.mbit {
+			t.Errorf("%s", msg)
+		} else {
+			t.Log(msg)
+		}
+	}
+}
+
+// Item 1: past wcLongRTT the core leaves OFF only after wcLongClean of the
+// exit's records in a row showed the path with no queue and no resends (one
+// with a queue or resends starts the count over; one with no data in it
+// leaves it); past wcLongGear its STARTUP takes the smallest gear (×1.25)
+// only.
+func TestWcoreFixLongRTTLeavesOffOnCleanRecords(t *testing.T) {
+	c := wtCore(1)
+	c.tBase = 600 * time.Millisecond
+	now := wtT0
+	recs := []struct {
+		snd  wcSnd
+		want int
+	}{
+		{wcSnd{fresh: true, srtt: 601 * time.Millisecond, minRTT: 600 * time.Millisecond, segsOut: 5000}, 1},
+		{wcSnd{fresh: true, srtt: 602 * time.Millisecond, minRTT: 600 * time.Millisecond, segsOut: 5000}, 2},
+		{wcSnd{fresh: true, srtt: 640 * time.Millisecond, minRTT: 600 * time.Millisecond, segsOut: 5000}, 0}, // a queue
+		{wcSnd{fresh: true, srtt: 601 * time.Millisecond, minRTT: 600 * time.Millisecond, segsOut: 5000}, 1},
+		{wcSnd{fresh: true, srtt: 601 * time.Millisecond, minRTT: 600 * time.Millisecond, segsOut: 5000, retrans: 3}, 0}, // resends
+		{wcSnd{fresh: true}, 0}, // no data, no TCP_INFO: no verdict
+		{wcSnd{fresh: true, srtt: 601 * time.Millisecond, minRTT: 600 * time.Millisecond, segsOut: 5000}, 1},
+		{wcSnd{}, 1}, // no record in the interval
+	}
+	for i, r := range recs {
+		now = now.Add(2500 * time.Millisecond)
+		in := wtIn(now, 1, 2*wtMiB)
+		in.snd = r.snd
+		c.step(in)
+		if c.cleanRecs != r.want {
+			t.Fatalf("record %d %+v: %d clean records in a row, want %d", i, r.snd, c.cleanRecs, r.want)
+		}
+	}
+	for _, tc := range []struct {
+		tBase time.Duration
+		n     int
+		gear  float64 // STARTUP's first step; 0: stays OFF
+		top   float64 // the most a step takes in its top gear
+	}{{600 * time.Millisecond, wcLongClean - 1, 0, 0}, {600 * time.Millisecond, wcLongClean, 1.25, 1.25}, {500 * time.Millisecond, wcLongClean, 1.5, 2}} {
+		c := wtCore(1)
+		c.tBase = tc.tBase
+		c.sndAny, c.sndSeen, c.sndAnyAt = true, true, wtT0.Add(-time.Minute)
+		c.offN, c.cleanRecs = 1, tc.n
+		in := wtIn(wtT0, 1, 2*wtMiB)
+		m := wtMeas(1, 3e6, 2*wtMiB)
+		m.at = wtT0
+		m.sndOK, m.snd, m.sndSegs, m.sndAt = true, 0, 20000, wtT0
+		m.qSnd, m.qSndOK, m.qSnd3, m.qSnd3OK = 2*time.Millisecond, true, 2*time.Millisecond, true
+		var ev []wcEvent
+		c.off(in, m, &ev)
+		if tc.gear == 0 {
+			if c.state != wcOff {
+				t.Errorf("T_base %v, %d clean records: %v, want OFF", tc.tBase, tc.n, c.state)
+			}
+			continue
+		}
+		if c.state != wcStartup || c.B != uint64(tc.gear*2*wtMiB) {
+			t.Errorf("T_base %v, %d clean records: %v B %.2f MiB, want STARTUP at ×%g", tc.tBase, tc.n, c.state, float64(c.B)/wtMiB, tc.gear)
+		}
+		c.gear = 2
+		in.now, m.at, m.sndAt = wtT0.Add(3*time.Second), wtT0.Add(3*time.Second), wtT0.Add(3*time.Second)
+		m.rF, m.rLink, m.wF, m.wPrev = 4e6, 4e6, float64(c.B), float64(c.B)
+		b := c.B
+		c.startup(in, m, &ev)
+		if got := float64(c.B) / float64(b); c.state != wcStartup || got > tc.top+0.01 || got < tc.top-0.3 {
+			t.Errorf("T_base %v, STARTUP in its top gear: %v B %.2f → %.2f MiB (×%.2f), want ×%g", tc.tBase, c.state, float64(b)/wtMiB, float64(c.B)/wtMiB, got, tc.top)
 		}
 	}
 }
