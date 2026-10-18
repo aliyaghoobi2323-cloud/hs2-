@@ -65,3 +65,50 @@ func TestRed2BorrowedDataKeepsItsPoolAfterClose(t *testing.T) {
 		}
 	}
 }
+
+// The session's share of the pool (FreeFor) binds its windows, not its
+// borrowing (borrow, exempt by design: a fast link's claims must not keep
+// it from borrowing for what was in flight to its other streams). A link
+// with a frozen fast app holds half the pool in claims; when its other
+// readers then stop too (frozen apps rarely come alone: a phone that
+// sleeps) it borrows the rest. Every other link of the process can then
+// neither grow a window past NeedStreamBuffer nor borrow: the situation
+// the share was meant to prevent, reached by one link instead of two.
+// (Logged, not failed: a design limit, WINDOW_CORE §2.3; the data is in
+// memory, nothing leaks.)
+func TestRed2OneLinkTakesThePoolByBorrowing(t *testing.T) {
+	probe := poolConfig(NewWindowPool(1))
+	excess := probe.MaxStreamBuffer - probe.NeedStreamBuffer
+	size := 2 * excess
+	pool := NewWindowPool(size)
+	cfg := poolConfig(pool)
+	a, sa, pa := newRawPeer(t, cfg)
+	sa.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
+	keepUp(t, pa, sa, 4<<20)
+	pa.sync(sa)
+	pa.fill(cfg.MaxFrameSize) // the fast app freezes
+	pa.settle(sa)
+	claim, _ := extraOf(a)
+	// its other users' apps stop too
+	other, sid := pa.open(a)
+	n := cfg.MaxReceiveBuffer + borrowMax*cfg.MaxReceiveBuffer
+	go pa.trySendOn(sid, n, cfg.MaxFrameSize)
+	deadline := time.Now().Add(2 * time.Second)
+	for pool.Free() > 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	held, spare := extraOf(a)
+	// another link: a fast reader under a ceiling, and a reader that stops
+	b, sb, pb := newRawPeer(t, poolConfig(pool))
+	sb.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
+	keepUp(t, pb, sb, 2<<20)
+	pb.sync(sb)
+	w := maxWindow(pb.updates())
+	ob, sidb := pb.open(b)
+	go pb.trySendOn(sidb, cfg.MaxReceiveBuffer+64<<10, cfg.MaxFrameSize)
+	time.Sleep(100 * time.Millisecond)
+	t.Logf("pool %d KiB: the frozen link holds %d KiB (claims %d, borrowed %d; %d KiB unread on its other stream); free %d KiB. "+
+		"The other link: window up to %d KiB (need %d), %d KiB taken in of %d sent, borrows %d, parks %d",
+		size>>10, held>>10, claim>>10, spare>>10, unreadOf(other)>>10, pool.Free()>>10,
+		w>>10, cfg.NeedStreamBuffer>>10, unreadOf(ob)>>10, (cfg.MaxReceiveBuffer+64<<10)>>10, b.Borrows(), b.Parks())
+}

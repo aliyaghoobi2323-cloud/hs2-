@@ -27,7 +27,8 @@ func red2Seeds() int {
 }
 
 // TestRed2ChaosMoreSeeds: round 1's three chaos runs with HS2_RED2_SEEDS
-// seeds each, from 100 (round 1 used 0 to 3).
+// seeds each, from 100 (round 1 used 0 to 3) or HS2_RED2_FROM, all three or
+// HS2_RED2_ONLY (inv, sweep, core).
 func TestRed2ChaosMoreSeeds(t *testing.T) {
 	n := red2Seeds()
 	if n == 0 {
@@ -35,10 +36,21 @@ func TestRed2ChaosMoreSeeds(t *testing.T) {
 	}
 	defer func(g time.Duration) { closeGrace = g }(closeGrace)
 	closeGrace = 300 * time.Millisecond
-	for seed := int64(100); seed < int64(100+n); seed++ {
-		redChaos(t, seed)
-		redSweepChaos(t, seed)
-		coreChaosRound(t, seed)
+	from, _ := strconv.Atoi(os.Getenv("HS2_RED2_FROM"))
+	if from == 0 {
+		from = 100
+	}
+	only := os.Getenv("HS2_RED2_ONLY") // inv, sweep or core: that chaos only
+	for seed := int64(from); seed < int64(from+n); seed++ {
+		if only == "" || only == "inv" {
+			redChaos(t, seed)
+		}
+		if only == "" || only == "sweep" {
+			redSweepChaos(t, seed)
+		}
+		if only == "" || only == "core" {
+			coreChaosRound(t, seed)
+		}
 	}
 }
 
@@ -368,4 +380,23 @@ func red2Abrupt(t *testing.T, seed int64) {
 	}
 	t.Logf("seed %d (death %d): %d checks, claims up to %d KiB; borrows %d/%d, pool short %d/%d", seed, how, checks, maxClaims>>10,
 		cli.Borrows(), srv.Borrows(), atomic.LoadUint32(&cli.poolShorts), atomic.LoadUint32(&srv.poolShorts))
+}
+
+// dumpStreams says, for a stall, where every stream of the sessions is.
+func dumpStreams(sessions ...*Session) string {
+	out := ""
+	for k, s := range sessions {
+		out += fmt.Sprintf("session %d: closed %v bucket %d extra %d spare %d parks %d borrows %d brakes %d\n", k, s.IsClosed(),
+			atomic.LoadInt32(&s.bucket), atomic.LoadInt32(&s.extra), atomic.LoadInt32(&s.spare), s.Parks(), s.Borrows(), s.Brakes())
+		s.streamLock.Lock()
+		for _, st := range s.streams {
+			st.bufferLock.Lock()
+			out += fmt.Sprintf("  stream %d: rcvWin %d incr %d step %d numRead %d unread %d updLost %v braking %v settling %v preBrake %d claim %d ceil %d | written %d peerConsumed %d peerWindow %d\n",
+				st.id, st.rcvWin, st.incr, st.updStep(s.config), st.numRead, st.unread, st.updLost, st.braking, st.settling, st.preBrake, st.claim,
+				st.core.ceil.Load(), atomic.LoadUint32(&st.numWritten), atomic.LoadUint32(&st.peerConsumed), atomic.LoadUint32(&st.peerWindow))
+			st.bufferLock.Unlock()
+		}
+		s.streamLock.Unlock()
+	}
+	return out
 }

@@ -378,7 +378,13 @@ func redSweepChaos(t *testing.T, seed int64) {
 	recv := func(st *Stream, i int, r *rand.Rand) error {
 		want := data(i)
 		got := 0
-		buf := make([]byte, 1+r.Intn(64<<10))
+		n := 1 + r.Intn(64<<10)
+		if n < 1<<10 {
+			// (seed 120 drew a 1-byte buffer: 3 MiB a byte per Read
+			// takes minutes under -race, which reads as a stall)
+			n = 1 << 10
+		}
+		buf := make([]byte, n)
 		for got < size {
 			st.SetReadDeadline(time.Now().Add(15 * time.Second))
 			n, err := st.Read(buf)
@@ -483,8 +489,13 @@ func redSweepChaos(t *testing.T, seed int64) {
 		}
 	}
 	for i := 0; i < streams; i++ {
-		if err := <-errs; err != nil {
-			t.Fatalf("seed %d: %v", seed, err)
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Fatalf("seed %d: %v", seed, err)
+			}
+		case <-time.After(60 * time.Second):
+			t.Fatalf("seed %d: %d of %d streams still moving after a minute:\n%s", seed, streams-i, streams, dumpStreams(cli, srv))
 		}
 	}
 	close(stop)
