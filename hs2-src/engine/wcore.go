@@ -95,14 +95,14 @@ type wcore struct {
 	// the next measured interval to judge; sndCarryAt: when it came
 	sndCarry   wcSnd
 	sndCarryAt time.Time
-	// the previous runner wake: when it was, how long its packets waited
-	// behind holes (ooo/segs_in of its length) and how many did (fastStop)
+	// the previous runner wake, and how long the packets of the wakes
+	// before waited behind holes (ooo/segs_in of each one's length) and how
+	// many did (fastStop)
 	wakeAt    time.Time
-	wakeHole  time.Duration
-	wakeOoo   uint64
-	holeSeen  bool      // a loss's hole since the previous evaluation (lossHole)
-	policedAt time.Time // the latest policer's loss (policerLoss)
-	cleanRecs int       // the exit's latest records in a row that showed no queue and no resends
+	holeWakes []wcHoleWake // the wakes before, newest last (lossHole: T_base/4 of them)
+	holeSeen  bool         // a loss's hole since the previous evaluation (lossHole)
+	policedAt time.Time    // the latest policer's loss (policerLoss)
+	cleanRecs int          // the exit's latest records in a row that showed no queue and no resends
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -793,7 +793,13 @@ func (c *wcore) step(in wcIn) wcOut {
 	hole := c.wakeHoles(in)
 	lossHole := c.lossHole(in, hole)
 	c.holeSeen = c.holeSeen || lossHole
-	defer func() { c.wakeAt, c.wakeHole, c.wakeOoo = now, hole, in.ooo }()
+	defer func() {
+		c.wakeAt = now
+		c.holeWakes = append(c.holeWakes, wcHoleWake{hole, in.ooo})
+		if n := len(c.holeWakes) - c.holeSpan(); n > 0 {
+			c.holeWakes = c.holeWakes[:copy(c.holeWakes, c.holeWakes[n:])]
+		}
+	}()
 	if c.accOK {
 		wcMerge(&c.acc, in)
 	} else {
@@ -1003,14 +1009,48 @@ func (c *wcore) wakeHoles(in wcIn) time.Duration {
 	return time.Duration(float64(dt) * math.Min(float64(in.ooo)/float64(in.segsIn), 1))
 }
 
+// wcHoleWake is a runner wake's holes: how long its packets waited behind
+// them, and how many did.
+type wcHoleWake struct {
+	hole time.Duration
+	ooo  uint64
+}
+
+// wcHoleWakesMax: lossHole sums at most this many wakes (T_base up to
+// ~12 s).
+const wcHoleWakesMax = 128
+
+// holeSpan is how many wakes before this one lossHole sums: as many as
+// wcOooHole of T_base takes at a wake each wcRampTick, less this one, and
+// one at least (two wakes: a hole of a loss stays open a round trip and
+// more; at most a wake each can hold, and two held at most ~200 ms, under
+// T_base/4 past T_base ~800 ms).
+func (c *wcore) holeSpan() int {
+	n := int(math.Ceil(wcOooHole * float64(c.tBase) / float64(wcRampTick)))
+	return min(max(n-1, 1), wcHoleWakesMax)
+}
+
 // lossHole says whether the holes of the wake (hole: how long its packets
-// waited behind them) and of the one before were a loss's: they kept packets
-// waiting wcOooHole of T_base or more, wcOooMinSegs segments or more of them.
-// A path that reorders packets by a few ms opens holes that short; summed
-// over a whole interval they come to more (1 Gbit/s, 0.05% held 2 ms: 40 to
-// 65 ms a second), so an interval is judged by its wakes (holeSeen).
+// waited behind them) and of the ones before it (holeSpan) were a loss's:
+// they kept packets waiting wcOooHole of T_base or more, wcOooMinSegs
+// segments or more of them. A path that reorders packets by a few ms opens
+// holes that short; summed over a whole interval they come to more (1
+// Gbit/s, 0.05% held 2 ms: 40 to 65 ms a second), so an interval is judged
+// by its wakes (holeSeen).
 func (c *wcore) lossHole(in wcIn, hole time.Duration) bool {
-	return in.oooOK && hole+c.wakeHole >= time.Duration(wcOooHole*float64(c.tBase)) && in.ooo+c.wakeOoo >= uint64(wcOooMinSegs)
+	if !in.oooOK {
+		return false
+	}
+	h, n := hole, in.ooo
+	w := c.holeWakes
+	if k := c.holeSpan(); len(w) > k {
+		w = w[len(w)-k:]
+	}
+	for _, x := range w {
+		h += x.hole
+		n += x.ooo
+	}
+	return h >= time.Duration(wcOooHole*float64(c.tBase)) && n >= uint64(wcOooMinSegs)
 }
 
 // cut halves the budget for loss between evaluations: the knee is found if
