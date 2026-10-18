@@ -305,6 +305,46 @@ func TestPaceNetUnboundCapFollows(t *testing.T) {
 	// down with no queue (the ratchet): TestPaceNetEngageRelease
 }
 
+// A cap that comes down to half the one being judged or less is a new cap:
+// it is judged from then on, not on the resends under the old one (z17 rig,
+// the 180 Mbit/s policer at 15 s on 300/150 under the core: set at 364,
+// raised to 512 by the stale delivery rate, down to 165 with the queue at
+// 17.6 s and lifted by the judge at 18.1 s on the resends under 512; 10 to
+// 15% resent after, past the loss rule's 12% in two of three seconds).
+func TestPaceNetJudgedAfterLargeMove(t *testing.T) {
+	f := newWnFeed()
+	f.run(wcNetWarm, 30000, 0, 400*wnMB, 1560*wnMB)
+	if o := f.run(time.Second, 30000, 0.1, 400*wnMB, 1560*wnMB); len(o) == 0 || o[0].act != wcNetEngage {
+		t.Fatalf("not engaged: %+v", o)
+	}
+	// the policer: 130 Mbit/s delivered, a queue, the cap (500) binds, 30%
+	// resent; the cap follows the delivery rate down once the stale rate
+	// left the span, in the second before the judge
+	f.q = 8 * time.Millisecond
+	var o []wcNetOut
+	for i := 0; i < 30 && (len(o) == 0 || o[0].act != wcNetMoveCap); i++ {
+		o = f.run(wcRampTick, 4000, 0.3, 130*wnMB, float64(f.n.cap))
+	}
+	moved := f.n.cap
+	if want := uint64(wcNetK * 130 * wnMB); math.Abs(float64(moved)-float64(want)) > 0.06*float64(want) {
+		t.Fatalf("followed down to %.0f Mbit/s (%+v), want ~%.0f", float64(moved)/wnMB, o, float64(want)/wnMB)
+	}
+	// under the new cap the resends stop (the old ones still in the share
+	// for a second): judged at max(wcNetJudge, 3·srtt) from the engagement,
+	// that is on the old cap's resends; it must not be lifted
+	at := f.now
+	o = f.run(time.Second, 4000, 0.3, 130*wnMB, float64(moved))
+	o = append(o, f.run(wcNetJudge, 4000, 0, 130*wnMB, float64(moved))...)
+	for _, x := range o {
+		if x.act == wcNetRelease {
+			t.Fatalf("a cap that came down from 500 to %.0f Mbit/s, judged on the resends under 500 and lifted: %+v", float64(moved)/wnMB, o)
+		}
+	}
+	if f.n.cap != moved {
+		t.Fatalf("cap %d %v after it came down to %d", f.n.cap, f.now.Sub(at), moved)
+	}
+}
+
 // A socket whose delivery rate still grows past wcNetGrow a second (its
 // STARTUP, longer than the warm-up on a long round trip) is capped only
 // past wcNetWarmLoss: a cap at k times a rate that doubles each round trip

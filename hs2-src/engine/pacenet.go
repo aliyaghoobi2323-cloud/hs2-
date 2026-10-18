@@ -41,7 +41,9 @@ import (
 //     its cap and its windows delivers less, and following that down
 //     ratchets);
 //   - it must pay: still resending as much after wcNetJudge, it is lifted
-//     (random loss, windows past what the path holds: not the bursts');
+//     (random loss, windows past what the path holds: not the bursts'); a
+//     cap that came down to half the one judged or less, or that starts to
+//     bind, is judged anew;
 //   - lift: once the socket was clean for wcNetClean (longer each time the
 //     trouble comes back soon), or at once when it goes idle.
 //
@@ -194,6 +196,7 @@ type wcNet struct {
 	onAt   time.Time // when the cap was set
 	share0 float64   // ... and the largest resend share around then
 	judged bool      // the cap was judged (wcNetJudge)
+	jcap   uint64    // the cap being judged (as set then)
 	lvl    float64   // the path's resend level a cap did not lower (0: none)
 	lvlAt  time.Time
 	busyAt time.Time // since when the socket sends (zero: idle)
@@ -310,7 +313,7 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 		} else {
 			n.back = 0
 		}
-		n.cap, n.rtxAt, n.onAt, n.share0, n.judged = target, now, now, share, false
+		n.cap, n.rtxAt, n.onAt, n.share0, n.judged, n.jcap = target, now, now, share, false, target
 		n.n++
 		n.maxShare = math.Max(n.maxShare, share)
 		return wcNetOut{act: wcNetEngage, cap: n.cap, share: share, ratio: in.pace / dlv, k: k, dlv: dlv}
@@ -359,9 +362,14 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 	if dlv <= 0 || math.Abs(float64(c)-float64(n.cap)) <= wcNetMove*float64(n.cap) {
 		return wcNetOut{}
 	}
-	if unbound && c < n.cap {
-		// it binds from now: judged from now (wcNetJudge)
-		n.onAt, n.share0, n.judged = now, share, false
+	if c < n.cap && (unbound || float64(c) <= wcNetPaid*float64(n.jcap)) {
+		// a cap that binds from now, or a new one (half the one judged or
+		// less), is judged from now (wcNetJudge), not on the resends under
+		// the one before: the rig's 180 Mbit/s policer at 15 s on 300/150
+		// under the core had the cap at 512 (the stale delivery rate), down
+		// to 165 with the queue at 17.6 s, lifted by the judge at 18.1 s on
+		// the resends under 512, and 10 to 15% resent after
+		n.onAt, n.share0, n.judged, n.jcap = now, share, false, c
 	}
 	n.cap = c
 	return wcNetOut{act: wcNetMoveCap, cap: c, k: k, dlv: dlv}
