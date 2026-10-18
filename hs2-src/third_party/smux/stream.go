@@ -794,8 +794,12 @@ func (s *Stream) Close() error {
 		if s.sess.IsClosed() {
 			// its session closed it (sessionClose): its app lets go of it
 			// now, and of what it holds with it -- the buffers and, with
-			// a WindowPool, the claim that covered them (pool.go)
-			s.recycleTokens()
+			// a WindowPool, the claim and the spare that covered them
+			// (pool.go)
+			if n := s.recycleTokens(); n > 0 {
+				s.sess.returnTokens(n)
+			}
+			s.sess.returnSpare()
 		}
 		return io.ErrClosedPipe
 	}

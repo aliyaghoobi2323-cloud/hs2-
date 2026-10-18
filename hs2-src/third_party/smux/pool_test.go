@@ -237,7 +237,9 @@ func TestPoolNoBorrowOnceClosed(t *testing.T) {
 	}
 }
 
-// What a session borrowed goes back to the pool when it closes, read or not.
+// What a session borrowed goes back to the pool when it closes as far as
+// its buffer is free, and the rest as its streams let their data go (here:
+// closed; read, or closeGrace later: TestRed2BorrowedDataKeepsItsPoolAfterClose).
 func TestPoolBorrowBackOnClose(t *testing.T) {
 	pool := NewWindowPool(4 << 20)
 	cfg := poolConfig(pool)
@@ -248,8 +250,12 @@ func TestPoolBorrowBackOnClose(t *testing.T) {
 		t.Fatal("nothing borrowed")
 	}
 	session.Close()
+	if held, past := 4<<20-pool.Free(), unreadOf(stream)-cfg.MaxReceiveBuffer; held != past {
+		t.Fatalf("session closed with %d unread past its buffer: the pool holds %d for it", past, held)
+	}
+	stream.Close()
 	if e, sp := extraOf(session); pool.Free() != 4<<20 || e != 0 || sp != 0 {
-		t.Fatalf("session closed: pool free %d extra %d spare %d", pool.Free(), e, sp)
+		t.Fatalf("stream let go: pool free %d extra %d spare %d", pool.Free(), e, sp)
 	}
 }
 
