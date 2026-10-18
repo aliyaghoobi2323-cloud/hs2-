@@ -63,8 +63,8 @@ var (
 	// WcorePaceCap (> 0): lab experiment, off by default. Each end caps its
 	// link socket's pacing (SO_MAX_PACING_RATE) at this many times the
 	// largest delivery rate its own TCP_INFO reported in the last second,
-	// or the windows its peer grants per min_rtt if that is more (the cap
-	// never holds a sender under what the windows allow), refreshed on the
+	// or, while its own round trip shows no queue, the windows its peer
+	// grants per min_rtt if that is more (wcPaceRate), refreshed on the
 	// runner's wake, never under wcPaceFloor, and lifted
 	// while the socket sends nothing. A window-limited BBR sender (in its
 	// STARTUP for good) sends each window update's credit, and after its
@@ -558,7 +558,7 @@ func (l *wcLink) paceCap(now time.Time) {
 	if l.sess != nil {
 		win = l.sess.PeerWindows()
 	}
-	v := wcPaceRate(r, win, time.Duration(ts.minRTT)*time.Microsecond)
+	v := wcPaceRate(r, win, time.Duration(ts.minRTT)*time.Microsecond, time.Duration(ts.rtt)*time.Microsecond)
 	if l.pcSet == 0 || math.Abs(float64(v)-float64(l.pcSet)) > 0.05*float64(l.pcSet) {
 		if setMaxPacing(l.tcp, v) {
 			l.pcSet = v
@@ -568,14 +568,19 @@ func (l *wcLink) paceCap(now time.Time) {
 
 // wcPaceRate is the pacing cap for a socket whose largest delivery rate of
 // the last wcPaceSpan is r (bytes/s) and whose streams that sent hold win of
-// the peer's windows: WcorePaceCap·r, but never under what those windows
-// allow per min_rtt (a sender held by its windows, capped at 1.25 times its
-// own delivery rate, could not leave a slower turnaround regime: z12 P2, the
-// windows without the core on 300/150 stayed at 55 Mbit/s, 2 MiB in two
-// round trips, where without the cap they ran at 77–90), nor wcPaceFloor.
-func wcPaceRate(r float64, win uint64, minRTT time.Duration) uint64 {
+// the peer's windows: WcorePaceCap·r, never under wcPaceFloor, and, where
+// the socket's own round trip shows no queue (srtt within max(5 ms,
+// min_rtt/10) of min_rtt: the path has room), never under what those
+// windows allow per min_rtt. A sender held by its windows, capped at 1.25
+// times its own delivery rate, could not leave a slower turnaround regime
+// (z12 P2: the windows without the core on 300/150 stayed at 55 Mbit/s, 2
+// MiB in two round trips, where without the cap they ran at 77–90); where
+// the windows already fill the path (100/50: 2 MiB is 3.4 times what
+// fits), the window's rate would undo the cap, which took the resends of
+// the windows without the core there from 20% to 0.03%.
+func wcPaceRate(r float64, win uint64, minRTT, srtt time.Duration) uint64 {
 	v := WcorePaceCap * r
-	if minRTT > 0 {
+	if minRTT > 0 && srtt > 0 && srtt-minRTT <= max(wcDqMin, minRTT/10) {
 		v = math.Max(v, float64(win)/minRTT.Seconds())
 	}
 	return uint64(math.Max(v, wcPaceFloor))

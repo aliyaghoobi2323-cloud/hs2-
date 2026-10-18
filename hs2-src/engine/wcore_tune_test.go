@@ -508,25 +508,28 @@ func TestWcorePaceCap(t *testing.T) {
 	}
 }
 
-// The cap is never under what the peer's windows allow per min_rtt, nor
-// the floor; past both it is WcorePaceCap times the delivery rate.
+// The cap is WcorePaceCap times the delivery rate, never under the floor,
+// and where the socket's round trip shows no queue never under what the
+// peer's windows allow per min_rtt.
 func TestWcorePaceRate(t *testing.T) {
 	old := WcorePaceCap
 	t.Cleanup(func() { WcorePaceCap = old })
 	WcorePaceCap = 1.25
+	const T = 125 * time.Millisecond
 	for _, tc := range []struct {
-		name   string
-		r      float64
-		win    uint64
-		minRTT time.Duration
-		want   uint64
+		name         string
+		r            float64
+		win          uint64
+		minRTT, srtt time.Duration
+		want         uint64
 	}{
-		{"the delivery rate rules", 40e6, 2 << 20, 125 * time.Millisecond, 50e6},
-		{"the windows allow more (a sender in a slow turnaround)", 6.9e6, 2 << 20, 125 * time.Millisecond, 8 * (2 << 20)},
-		{"no min_rtt: the delivery rate", 6.9e6, 2 << 20, 0, 8625000},
-		{"the floor", 1e3, 0, 125 * time.Millisecond, wcPaceFloor},
+		{"the delivery rate rules", 40e6, 2 << 20, T, T, 50e6},
+		{"no queue, the windows allow more (a sender in a slow turnaround)", 6.9e6, 2 << 20, T, T + 5*time.Millisecond, 8 * (2 << 20)},
+		{"a standing queue: the delivery rate (the windows fill the path)", 6.9e6, 2 << 20, T, T + 30*time.Millisecond, 8625000},
+		{"no min_rtt: the delivery rate", 6.9e6, 2 << 20, 0, T, 8625000},
+		{"the floor", 1e3, 0, T, T, wcPaceFloor},
 	} {
-		if got := wcPaceRate(tc.r, tc.win, tc.minRTT); got != tc.want {
+		if got := wcPaceRate(tc.r, tc.win, tc.minRTT, tc.srtt); got != tc.want {
 			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
 		}
 	}
