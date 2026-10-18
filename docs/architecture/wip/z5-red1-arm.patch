@@ -1,0 +1,850 @@
+diff --git a/hs2-src/engine/red_wcore_test.go b/hs2-src/engine/red_wcore_test.go
+new file mode 100644
+index 0000000..164f268
+--- /dev/null
++++ b/hs2-src/engine/red_wcore_test.go
+@@ -0,0 +1,293 @@
++package engine
++
++import (
++	"io"
++	"math"
++	"math/rand"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/xtaci/smux"
++)
++
++// Red team (Z5 window core, part A): what the edge's runner hands the core
++// from the exit's record and from smux's arm, at its most hostile -- a
++// record with srtt 0 or 2^32-1 µs, a least round trip above srtt, resends
++// that go backwards, wrap or outnumber the segments, records that repeat or
++// come out of order; turnarounds of 0, of an hour, of an idle -- never
++// panics the core and never gives a ceiling past MaxStreamBuffer, a
++// negative or absurd reference, or a step that never comes back.
++func TestRedWcoreHostileInputs(t *testing.T) {
++	states := map[wcState]int{}
++	ceils := 0
++	for seed := int64(1); seed <= 40; seed++ {
++		redWcoreRun(t, seed, states, &ceils)
++	}
++	t.Logf("states %v, %d ceilings set", states, ceils)
++	if len(states) < 3 || ceils == 0 {
++		t.Fatalf("the core hardly ran: states %v, %d ceilings", states, ceils)
++	}
++}
++
++func redWcoreRun(t *testing.T, seed int64, states map[wcState]int, nCeil *int) {
++	r := rand.New(rand.NewSource(seed))
++	c := newWcore(wcConfig{side: wcEdge, stage: 1 + r.Intn(2), need: wtNeed, maxWin: wtMax, minWin: wtMin}, r.Float64)
++	var b wcBuilder
++	now := wtT0
++	var snap wcLinkSnap
++	snap.minRTT, snap.srtt = 100*time.Millisecond, 105*time.Millisecond
++	type st struct {
++		id   uint32
++		read uint64
++		upd  uint32
++		hit  uint32
++		win  uint32
++	}
++	streams := []*st{{id: 1, win: wtNeed}, {id: 3, win: wtNeed}}
++	var sndRet, sndSegs uint64
++	sndAt := now
++	hostile := func() uint32 {
++		switch r.Intn(6) {
++		case 0:
++			return 0
++		case 1:
++			return math.MaxUint32
++		case 2:
++			return 1
++		default:
++			return uint32(50_000 + r.Intn(500_000))
++		}
++	}
++	turn := func() time.Duration {
++		switch r.Intn(8) {
++		case 0:
++			return 0
++		case 1:
++			return time.Hour
++		case 2:
++			return time.Duration(1+r.Intn(30)) * time.Second // an idle stream's
++		default:
++			return time.Duration(100+r.Intn(400)) * time.Millisecond
++		}
++	}
++	defer func() {
++		if p := recover(); p != nil {
++			t.Fatalf("seed %d: the core panicked: %v", seed, p)
++		}
++	}()
++	for step := 0; step < 600; step++ {
++		now = now.Add(time.Duration(50+r.Intn(400)) * time.Millisecond)
++		snap.now = now
++		snap.rcvd += uint64(r.Intn(40 << 20))
++		snap.segsIn += uint64(r.Intn(30000))
++		snap.ooo += uint64(r.Intn(100))
++		snap.oooOK = r.Intn(5) > 0
++		if r.Intn(10) == 0 {
++			snap.minRTT = time.Duration(hostile()) * time.Microsecond
++			snap.srtt = time.Duration(hostile()) * time.Microsecond
++		}
++		snap.poolFree = int64(r.Intn(128 << 20))
++		if r.Intn(4) == 0 { // a record from the exit
++			switch r.Intn(5) {
++			case 0: // backwards (a reset counter, a wrap)
++				sndRet, sndSegs = uint64(r.Intn(100)), uint64(r.Intn(100))
++			case 1: // resends past the segments
++				sndRet += uint64(r.Intn(1 << 20))
++				sndSegs += uint64(r.Intn(2))
++			default:
++				sndSegs += uint64(r.Intn(100000))
++				sndRet += uint64(r.Intn(2000))
++			}
++			switch r.Intn(4) {
++			case 0: // the same record again
++			case 1: // an older one
++				sndAt = sndAt.Add(-time.Second)
++			default:
++				sndAt = now
++			}
++			snap.sndAt = sndAt
++			snap.sndSrtt = time.Duration(hostile()) * time.Microsecond
++			snap.sndMinRTT = time.Duration(hostile()) * time.Microsecond
++			snap.sndRetrans, snap.sndSegsOut = sndRet, sndSegs
++		}
++		snap.pongs = snap.pongs[:0]
++		for k := r.Intn(3); k > 0; k-- {
++			snap.pongs = append(snap.pongs, turn())
++		}
++		snap.ctrlMin = time.Duration(hostile()) * time.Microsecond
++		if r.Intn(30) == 0 && len(streams) > 0 { // a stream goes, another comes
++			streams = streams[1:]
++			streams = append(streams, &st{id: uint32(5 + 2*step), win: wtNeed})
++		}
++		snap.streams = snap.streams[:0]
++		for _, s := range streams {
++			s.read += uint64(r.Intn(20 << 20))
++			s.upd += uint32(r.Intn(20))
++			s.hit += uint32(r.Intn(20))
++			if c.ceils[s.id] > 0 && r.Intn(2) == 0 {
++				s.win = c.ceils[s.id]
++			}
++			snap.streams = append(snap.streams, wcStreamSnap{id: s.id, readTot: s.read, updN: s.upd, hitN: s.hit,
++				turnMin: turn(), turnLast: turn(), win: s.win, braked: r.Intn(20) == 0})
++		}
++		snap.parks += uint32(r.Intn(2))
++		snap.brakes += uint32(r.Intn(2))
++		in := b.build(snap)
++		out := c.step(in)
++		states[out.state]++
++		for _, x := range out.ceils {
++			if x.ceil > 0 {
++				*nCeil++
++			}
++			if x.ceil > wtMax {
++				t.Fatalf("seed %d step %d: ceiling %d past MaxStreamBuffer (state %v)", seed, step, x.ceil, out.state)
++			}
++		}
++		if out.turnRef < 0 || out.turnRef > time.Hour || out.qBrake < 0 || out.qBrake > time.Hour {
++			t.Fatalf("seed %d step %d: reference %v, brake %v", seed, step, out.turnRef, out.qBrake)
++		}
++		if out.B > uint64(len(in.streams)+1)*wtMax {
++			t.Fatalf("seed %d step %d: budget %d for %d streams", seed, step, out.B, len(in.streams))
++		}
++		if !out.next.After(now) || out.next.Sub(now) > time.Minute {
++			t.Fatalf("seed %d step %d: next step %v after this one", seed, step, out.next.Sub(now))
++		}
++	}
++}
++
++// A user whose app downloads fast under a ceiling of SmuxStreamBuffer (its
++// window grows past SmuxNeedStreamBuffer, its claim on the window pool with
++// it) and then freezes holds that claim, and the link keeps moving; once
++// frozen apps fill the link's grown buffer too, the wedge guard closes
++// every stuck relay, the frozen fast one with them, and the whole pool
++// comes back.
++func TestRedFrozenFastAppThenGuard(t *testing.T) {
++	if testing.Short() {
++		t.Skip("real-time readers")
++	}
++	w := Wcore
++	Wcore = 0 // this test is the core: no runner to reset its ceilings
++	defer func() { Wcore = w }()
++	free := windowPool().Free()
++	r := newWedgeRig(t, true)
++	var stop atomic.Bool
++	fast := r.open(func(u *wUser) {
++		buf := make([]byte, 64<<10)
++		for !stop.Load() {
++			n, err := u.app.Read(buf)
++			u.got.Add(int64(n))
++			if err != nil {
++				return
++			}
++		}
++		<-u.ended // frozen: never reads again
++	})
++	r.edge.SetCoreRef(0, 0, true)
++	var win uint32
++	for end := time.Now().Add(20 * time.Second); time.Now().Before(end) && win < 8<<20; time.Sleep(20 * time.Millisecond) {
++		s, _ := r.edge.CoreSnapshot(nil)
++		for _, x := range s {
++			x.Stream.SetCoreCeil(uint32(SmuxStreamBuffer))
++			win = max(win, x.Win)
++		}
++	}
++	if win < 8<<20 {
++		t.Fatalf("the fast download's window grew to %d only", win)
++	}
++	stop.Store(true)
++	time.Sleep(time.Second) // what its window let in arrives
++	held := r.edge.Extra()
++	if held <= 0 {
++		t.Fatalf("a frozen app past its fast start holds no claim (extra %d)", held)
++	}
++	healthy := r.open(readAt(0))
++	time.Sleep(500 * time.Millisecond)
++	before := healthy.got.Load()
++	time.Sleep(time.Second)
++	if healthy.got.Load()-before < 4<<20 {
++		t.Fatalf("healthy user moved %d KiB in 1 s next to the frozen fast app", (healthy.got.Load()-before)>>10)
++	}
++	for i := 0; i < 4; i++ {
++		if k := r.lookFast(); k != 0 {
++			t.Fatalf("guard closed %d relays while the link flowed", k)
++		}
++	}
++	t.Logf("frozen fast app: window %d MiB, link extra %d MiB, pool %d of %d MiB", win>>20, held>>20, windowPool().Free()>>20, free>>20)
++	stuck := r.openFrozen(150)
++	killed := 0
++	for i := 0; i < 60 && !ended(fast); i++ {
++		killed += r.lookFast()
++	}
++	if !ended(fast) {
++		t.Fatalf("the frozen fast app's relay is still open (guard closed %d)", killed)
++	}
++	for i := 0; i < 40 && killed < len(stuck)+1; i++ {
++		killed += r.lookFast()
++	}
++	if ended(healthy) {
++		t.Fatal("the healthy relay was closed")
++	}
++	deadline := time.Now().Add(10 * time.Second)
++	for r.edge.Extra() != 0 || windowPool().Free() != free {
++		if time.Now().After(deadline) {
++			t.Fatalf("after the release: buffer %d past SmuxSessionBuffer, pool %d of %d", r.edge.Extra(), windowPool().Free(), free)
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	t.Logf("guard closed %d relays", killed)
++}
++
++// A download that comes in bursts with idle gaps between them (a player
++// fetching segments over one connection), read at once, on the emulated
++// path of 5 MB/s and a 100 ms round trip, looked at every 100 ms as the
++// runner does (CoreSnapshot): no turnaround it is handed is the length of a
++// gap, and the runner's core, run on it, drains for no queue of a gap.
++func TestRedBurstyDownloadNoFalseDrain(t *testing.T) {
++	if testing.Short() {
++		t.Skip("real time")
++	}
++	p := newWcPath(5<<20, 50*time.Millisecond)
++	cfg := wcTestConfig()
++	edge, exit := wcSessions(t, p.edge(), p.exit(), cfg, nil)
++	st, err := edge.OpenStream()
++	if err != nil {
++		t.Fatal(err)
++	}
++	go func() {
++		x, err := exit.AcceptStream()
++		if err != nil {
++			return
++		}
++		buf := make([]byte, 32<<10)
++		for {
++			for n := 0; n < 3<<20+12345; n += len(buf) { // a burst of 3 MiB ...
++				if _, err := x.Write(buf); err != nil {
++					return
++				}
++			}
++			time.Sleep(1500 * time.Millisecond) // ... then nothing
++		}
++	}()
++	go io.Copy(io.Discard, st)
++	var samples []smux.CoreSample
++	looks, stale := 0, 0
++	var worst, typical time.Duration
++	for end := time.Now().Add(12 * time.Second); time.Now().Before(end); time.Sleep(wcRampTick) {
++		samples, _ = edge.CoreSnapshot(samples)
++		looks++
++		for _, x := range samples {
++			d := max(x.TurnMin, x.TurnLast)
++			if d >= time.Second {
++				stale++
++			} else {
++				typical = max(typical, d)
++			}
++			worst = max(worst, d)
++		}
++	}
++	t.Logf("%d looks, %d with a turnaround of a second or more (worst %v; the rest up to %v)", looks, stale, worst, typical)
++	if stale > 0 {
++		t.Errorf("%d looks handed the core a turnaround of a gap (worst %v) on a 100 ms path", stale, worst)
++	}
++}
+diff --git a/hs2-src/third_party/smux/core.go b/hs2-src/third_party/smux/core.go
+index bc934b2..8d724f9 100644
+--- a/hs2-src/third_party/smux/core.go
++++ b/hs2-src/third_party/smux/core.go
+@@ -59,6 +59,12 @@ const hitGap = 2 * time.Millisecond
+ // drop each before its turnaround came in).
+ const turnRing = 4
+ 
++// turnIdle: a stream that received nothing this long was idle; the updates
++// pending across the silence go unsampled (turned). A window turnaround of
++// a second or more is a pathological queue that the link's other signals
++// (its own srtt, the exit's record) show as well.
++const turnIdle = time.Second
++
+ // StepOf is how much a reader reads between two window updates under a
+ // window of w: half of it up to need (NeedStreamBuffer); past need, need/2
+ // or w/updShare if that is more, never more than half. So no more updates
+@@ -144,6 +150,7 @@ type streamCore struct {
+ 	hit      bool   // a turnaround since our latest update came after a pause at its limit
+ 	lagged   bool   // the cycle that just ended left more than StreamLagTarget/4 unread throughout
+ 	turnSeen int64  // the latest turnaround, ns (0: none yet)
++	rxAt     int64  // monoNow of the latest frame received (0: none yet)
+ 
+ 	// written under bufferLock, read without it (CoreSnapshot)
+ 	readTot   atomic.Uint64 // bytes read in all (numRead wraps)
+@@ -397,8 +404,20 @@ func (s *Stream) announced(window uint32) {
+ // whose data paused at that limit (from within a frame of it, the peer
+ // sends whole frames) for its hit gap or more before it went on. The caller
+ // holds bufferLock, just after unread grew.
++//
++// A stream that received nothing for turnIdle or longer was idle: its
++// source paused (a keep-alive connection between transfers, a player
++// between segments), its reader stopped, or its path did. The updates
++// pending across such a silence go unsampled: their "turnaround" would be
++// the silence, however long (the end of a transfer leaves a step or two of
++// them pending, their limits past its last byte).
+ func (s *Stream) turned() {
+ 	c := &s.core
++	now := monoNow()
++	if c.rxAt != 0 && now-c.rxAt >= int64(turnIdle) {
++		c.n = 0
++	}
++	c.rxAt = now
+ 	if c.n == 0 {
+ 		return
+ 	}
+@@ -407,7 +426,6 @@ func (s *Stream) turned() {
+ 		return
+ 	}
+ 	recv := near - uint64(s.frameSize)
+-	now := monoNow()
+ 	gap := c.hitGap.Load()
+ 	if gap < int64(hitGap) {
+ 		gap = int64(hitGap)
+diff --git a/hs2-src/third_party/smux/red_test.go b/hs2-src/third_party/smux/red_test.go
+new file mode 100644
+index 0000000..f5683d7
+--- /dev/null
++++ b/hs2-src/third_party/smux/red_test.go
+@@ -0,0 +1,491 @@
++package smux
++
++import (
++	"fmt"
++	"math/rand"
++	"net"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++// Red team (Z5 window core, part A): invariants of the window pool and the
++// window core's arm, checked while a fake core, readers and writers race.
++
++// poolInvariants checks, with every lock of every session held, what the
++// pool's bookkeeping promises at any moment: the pool and what the sessions
++// hold from it add up to its size; a session's extra is its streams' claims
++// plus its spare; a window past NeedStreamBuffer is covered by its claim;
++// nothing is negative; no window is past MaxStreamBuffer; and the bucket is
++// never more than a frame below zero.
++func poolInvariants(pool *WindowPool, size int, sessions ...*Session) error {
++	for _, s := range sessions {
++		s.streamLock.Lock()
++		defer s.streamLock.Unlock()
++	}
++	for _, s := range sessions {
++		for _, st := range s.streams {
++			st.bufferLock.Lock()
++			defer st.bufferLock.Unlock()
++		}
++	}
++	for _, s := range sessions {
++		s.spareLock.Lock()
++		defer s.spareLock.Unlock()
++	}
++	sum := int64(pool.free.Load())
++	for _, s := range sessions {
++		extra, spare := atomic.LoadInt32(&s.extra), atomic.LoadInt32(&s.spare)
++		if spare < 0 || extra < 0 {
++			return fmt.Errorf("session extra %d spare %d", extra, spare)
++		}
++		claims := 0
++		need := uint32(s.config.NeedStreamBuffer)
++		for _, st := range s.streams {
++			if st.claim < 0 {
++				return fmt.Errorf("stream %d claim %d", st.id, st.claim)
++			}
++			claims += st.claim
++			if st.rcvWin > uint32(s.config.MaxStreamBuffer) {
++				return fmt.Errorf("stream %d window %d past MaxStreamBuffer", st.id, st.rcvWin)
++			}
++			closed := false
++			select {
++			case <-st.die:
++				closed = true
++			default:
++			}
++			if !closed && st.rcvWin > need && int(st.rcvWin-need) > st.claim {
++				return fmt.Errorf("stream %d window %d past need %d by more than its claim %d", st.id, st.rcvWin, need, st.claim)
++			}
++		}
++		if s.IsClosed() {
++			sum += int64(extra) // what a closing session still holds
++			continue
++		}
++		if int(extra) != claims+int(spare) {
++			return fmt.Errorf("session extra %d, claims %d + spare %d", extra, claims, spare)
++		}
++		if b := atomic.LoadInt32(&s.bucket); int(b) < -s.config.MaxFrameSize {
++			return fmt.Errorf("bucket %d", b)
++		}
++		sum += int64(extra)
++	}
++	if sum != int64(size) {
++		return fmt.Errorf("pool free %d + held %d = %d, want %d", pool.free.Load(), sum-pool.free.Load(), sum, size)
++	}
++	return nil
++}
++
++// TestRedPoolInvariantsUnderChaos: two sessions sharing a pool over a real
++// socket, many streams moving data both ways under readers that run fast,
++// slow, pause and stop, a fake core flipping ceilings and references every
++// few ms, sweeps every 20 ms: the pool's bookkeeping holds at every check.
++func TestRedPoolInvariantsUnderChaos(t *testing.T) {
++	for round := 0; round < 3; round++ {
++		redChaos(t, int64(round))
++	}
++}
++
++func redChaos(t *testing.T, seed int64) {
++	const poolSize = 2 << 20
++	pool := NewWindowPool(poolSize)
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	cfgOf := func() *Config {
++		c := poolConfig(pool)
++		c.KeepAliveDisabled = false
++		c.KeepAliveInterval = 20 * time.Millisecond
++		c.KeepAliveTimeout = 30 * time.Second
++		return c
++	}
++	srvCh := make(chan *Session, 1)
++	var wg sync.WaitGroup
++	stopIO := make(chan struct{})
++	push := func(st *Stream) {
++		defer wg.Done()
++		buf := make([]byte, 16<<10)
++		for {
++			select {
++			case <-stopIO:
++				return
++			default:
++			}
++			st.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
++			if _, err := st.Write(buf); err != nil && err != ErrTimeout {
++				return
++			}
++		}
++	}
++	read := func(st *Stream, r *rand.Rand) {
++		defer wg.Done()
++		mode := r.Intn(4)
++		buf := make([]byte, 1+r.Intn(64<<10))
++		for {
++			select {
++			case <-stopIO:
++				return
++			default:
++			}
++			switch mode {
++			case 1:
++				time.Sleep(time.Millisecond)
++			case 2:
++				if r.Intn(200) == 0 {
++					time.Sleep(time.Duration(r.Intn(300)) * time.Millisecond)
++				}
++			case 3:
++				if r.Intn(2000) == 0 {
++					mode = 0
++				}
++			}
++			st.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
++			if _, err := st.Read(buf); err != nil && err != ErrTimeout {
++				return
++			}
++		}
++	}
++	go func() {
++		c, err := ln.Accept()
++		if err != nil {
++			return
++		}
++		s, _ := Server(c, cfgOf())
++		srvCh <- s
++		r := rand.New(rand.NewSource(seed + 100))
++		for i := 0; ; i++ {
++			st, err := s.AcceptStream()
++			if err != nil {
++				return
++			}
++			wg.Add(1)
++			if i%2 == 0 {
++				go push(st)
++			} else {
++				go read(st, rand.New(rand.NewSource(r.Int63())))
++			}
++		}
++	}()
++	c, err := net.Dial("tcp", ln.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	cli, err := Client(c, cfgOf())
++	if err != nil {
++		t.Fatal(err)
++	}
++	srv := <-srvCh
++	stop := make(chan struct{})
++	core := fakeCore(seed+200, stop, cli, srv)
++	core.Add(1)
++	go func() { // the pacing-cap experiment's reader, on a goroutine of its own
++		defer core.Done()
++		for {
++			select {
++			case <-stop:
++				return
++			case <-time.After(time.Millisecond):
++			}
++			cli.PeerWindows()
++			srv.PeerWindows()
++		}
++	}()
++	r := rand.New(rand.NewSource(seed))
++	var streams []*Stream
++	for i := 0; i < 16; i++ {
++		st, err := cli.OpenStream()
++		if err != nil {
++			t.Fatal(err)
++		}
++		streams = append(streams, st)
++		wg.Add(1)
++		if i%2 == 0 {
++			go read(st, rand.New(rand.NewSource(r.Int63())))
++		} else {
++			go push(st)
++		}
++	}
++	end := time.Now().Add(2 * time.Second)
++	checks, maxHeld := 0, 0
++	for time.Now().Before(end) {
++		if h := poolSize - pool.Free(); h > maxHeld {
++			maxHeld = h
++		}
++		time.Sleep(time.Duration(1+r.Intn(5)) * time.Millisecond)
++		if err := poolInvariants(pool, poolSize, cli, srv); err != nil {
++			t.Fatalf("seed %d, check %d: %v", seed, checks, err)
++		}
++		checks++
++		// now and then a stream closes and another opens
++		if r.Intn(50) == 0 && len(streams) > 0 {
++			k := r.Intn(len(streams))
++			streams[k].Close()
++			streams = append(streams[:k], streams[k+1:]...)
++			st, err := cli.OpenStream()
++			if err == nil {
++				streams = append(streams, st)
++				wg.Add(1)
++				go read(st, rand.New(rand.NewSource(r.Int63())))
++			}
++		}
++	}
++	close(stopIO)
++	close(stop)
++	core.Wait()
++	cli.Close()
++	srv.Close()
++	for _, st := range streams {
++		st.Close()
++	}
++	wg.Wait()
++	if f := pool.Free(); f != poolSize {
++		t.Fatalf("seed %d: pool free %d after both sessions closed, want %d", seed, f, poolSize)
++	}
++	t.Logf("seed %d: %d checks, at most %d KiB of the pool held, borrows %d/%d, pool short %d/%d", seed, checks, maxHeld>>10,
++		cli.Borrows(), srv.Borrows(), atomic.LoadUint32(&cli.poolShorts), atomic.LoadUint32(&srv.poolShorts))
++}
++
++// A stream that carries one transfer, idles (a keep-alive connection, a
++// video player between segments), then carries the next: the first data of
++// the next transfer passes the limits of the updates still pending from the
++// end of the first, and their "turnarounds" are the idle time, not the
++// window's way to the peer and back. The core must not be told a turnaround
++// of a second on a path whose turnaround is well under a millisecond, nor
++// should growth (turnOK) or the claim's hold (claimTurn) go by it.
++func TestRedTurnaroundAfterIdle(t *testing.T) {
++	const idle = time.Second
++	cfg := poolConfig(NewWindowPool(4 << 20))
++	session, stream, p := newRawPeer(t, cfg)
++	keepUp(t, p, stream, 1<<20+12345) // ends anywhere: not at a limit
++	p.sync(stream)
++	stream.bufferLock.Lock()
++	pending := stream.core.n
++	stream.bufferLock.Unlock()
++	before, _ := session.CoreSnapshot(nil)
++	var turn time.Duration
++	for _, s := range before {
++		if s.TurnLast > turn {
++			turn = s.TurnLast
++		}
++		if s.TurnMin > turn {
++			turn = s.TurnMin
++		}
++	}
++	time.Sleep(idle)
++	// the core looks often (its wakes): the latest turnaround of each look
++	var after CoreSample
++	var seen, hold time.Duration
++	for n := 0; n < 512<<10; n += 4096 {
++		keepUp(t, p, stream, 4096)
++		s, _ := session.CoreSnapshot(nil)
++		if len(s) == 1 && (s[0].TurnLast > after.TurnLast || s[0].TurnMin > after.TurnMin) {
++			after = s[0]
++		}
++		stream.bufferLock.Lock()
++		if d := time.Duration(stream.core.turnSeen); d > seen {
++			seen = d
++			hold = claimHold * stream.claimTurn()
++		}
++		stream.bufferLock.Unlock()
++	}
++	t.Logf("%d updates pending at the idle; turnarounds before it up to %v; after it: least %v, latest %v; stream's own up to %v (claim hold %v)",
++		pending, turn, after.TurnMin, after.TurnLast, seen, hold)
++	if after.TurnMin >= idle/2 || after.TurnLast >= idle/2 {
++		t.Errorf("a turnaround of the idle time reached the core: least %v, latest %v (before the idle: up to %v)", after.TurnMin, after.TurnLast, turn)
++	}
++	if seen >= idle/2 {
++		t.Errorf("the stream's own turnaround (growth past the need goes by it) was %v", seen)
++	}
++	if hold >= idle {
++		t.Errorf("a claim would be held %v after its window came down", hold)
++	}
++}
++
++// The other side of it: a peer held at its limit for most of turnIdle (its
++// update was that slow to come) is a turnaround, and is sampled; a silence
++// of turnIdle or more is not, whether the data stopped at the limit (a
++// source that happened to stop there, a reader that stopped) or short of it.
++func TestRedLongTurnaroundAtTheLimitKept(t *testing.T) {
++	const w = 1 << 20
++	for _, tc := range []struct {
++		atLimit bool
++		pause   time.Duration
++		kept    bool
++	}{
++		{true, turnIdle - 100*time.Millisecond, true},
++		{false, turnIdle - 100*time.Millisecond, true},
++		{true, turnIdle + 100*time.Millisecond, false},
++		{false, turnIdle + 100*time.Millisecond, false},
++	} {
++		s := coreBare(4096)
++		s.arrive(64 << 10)
++		s.readAndAnnounce(64<<10, w)
++		recv := s.core.readTot.Load() + uint64(s.unread)
++		short := 0
++		if !tc.atLimit {
++			short = 64 << 10
++		}
++		s.arrive(int(s.core.ring[s.core.head].lim-recv) - short) // up to (or short of) the limit ...
++		time.Sleep(tc.pause)                                     // ... a wait ...
++		s.arrive(short + 4096)                                   // ... past it
++		d := time.Duration(s.core.turnLast.Load())
++		if tc.kept && (d < tc.pause || s.core.n != 0) {
++			t.Errorf("at the limit %v, %v: turnaround %v, ring %d, want it sampled", tc.atLimit, tc.pause, d, s.core.n)
++		}
++		if !tc.kept && (d != 0 || s.core.n != 0) {
++			t.Errorf("at the limit %v, %v: turnaround %v, ring %d, want none", tc.atLimit, tc.pause, d, s.core.n)
++		}
++	}
++}
++
++// TestRedNoStallUnderSweepsAndChaos: streams of two sessions sharing a small
++// pool move data both ways while a fake core flips ceilings and references,
++// and a sweeper takes random streams' windows down as if they had idled
++// (sweepClaims, mid-transfer), and readers pause: every byte arrives, in
++// order, within the deadline, the pool's bookkeeping holds throughout, and
++// the pool is whole at the end.
++func TestRedNoStallUnderSweepsAndChaos(t *testing.T) {
++	for seed := int64(0); seed < 3; seed++ {
++		redSweepChaos(t, seed)
++	}
++}
++
++func redSweepChaos(t *testing.T, seed int64) {
++	const poolSize = 384 << 10
++	pool := NewWindowPool(poolSize)
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	const streams, size = 10, 3 << 20
++	data := func(i int) []byte {
++		b := make([]byte, size)
++		rand.New(rand.NewSource(int64(i) + 1000*seed)).Read(b)
++		return b
++	}
++	recv := func(st *Stream, i int, r *rand.Rand) error {
++		want := data(i)
++		got := 0
++		buf := make([]byte, 1+r.Intn(64<<10))
++		for got < size {
++			st.SetReadDeadline(time.Now().Add(15 * time.Second))
++			n, err := st.Read(buf)
++			for k := 0; k < n; k++ {
++				if buf[k] != want[got+k] {
++					return fmt.Errorf("stream %d: byte %d wrong", i, got+k)
++				}
++			}
++			got += n
++			if err != nil && got < size {
++				return fmt.Errorf("stream %d: %v after %d", i, err, got)
++			}
++			if r.Intn(40) == 0 {
++				time.Sleep(time.Duration(r.Intn(30)) * time.Millisecond)
++			}
++		}
++		return nil
++	}
++	errs := make(chan error, streams)
++	srvDone := make(chan *Session, 1)
++	go func() {
++		c, err := ln.Accept()
++		if err != nil {
++			return
++		}
++		s, _ := Server(c, poolConfig(pool))
++		srvDone <- s
++		r := rand.New(rand.NewSource(seed + 50))
++		for {
++			st, err := s.AcceptStream()
++			if err != nil {
++				return
++			}
++			rr := rand.New(rand.NewSource(r.Int63()))
++			go func() {
++				var k [1]byte
++				if _, err := st.Read(k[:]); err != nil {
++					errs <- err
++					return
++				}
++				if i := int(k[0]); i%2 == 0 {
++					errs <- recv(st, i, rr)
++				} else {
++					st.Write(data(i))
++				}
++			}()
++		}
++	}()
++	c, err := net.Dial("tcp", ln.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	cli, err := Client(c, poolConfig(pool))
++	if err != nil {
++		t.Fatal(err)
++	}
++	srv := <-srvDone
++	stop := make(chan struct{})
++	core := fakeCore(seed+7, stop, cli, srv)
++	var sweeps sync.WaitGroup
++	sweeps.Add(1)
++	go func() { // the sweeper, and checks of the bookkeeping
++		defer sweeps.Done()
++		r := rand.New(rand.NewSource(seed + 9))
++		for {
++			select {
++			case <-stop:
++				return
++			case <-time.After(time.Duration(1+r.Intn(10)) * time.Millisecond):
++			}
++			for _, s := range []*Session{cli, srv} {
++				s.streamLock.Lock()
++				for _, st := range s.streams {
++					if r.Intn(4) == 0 {
++						st.bufferLock.Lock()
++						st.readAt = monoNow() - int64(claimIdle)
++						st.bufferLock.Unlock()
++					}
++				}
++				s.streamLock.Unlock()
++				s.sweepClaims()
++			}
++			if err := poolInvariants(pool, poolSize, cli, srv); err != nil {
++				errs <- err
++				return
++			}
++		}
++	}()
++	rr := rand.New(rand.NewSource(seed + 11))
++	for i := 0; i < streams; i++ {
++		st, err := cli.OpenStream()
++		if err != nil {
++			t.Fatal(err)
++		}
++		defer st.Close()
++		st.Write([]byte{byte(i)})
++		if i%2 == 0 {
++			go st.Write(data(i))
++		} else {
++			r := rand.New(rand.NewSource(rr.Int63()))
++			go func(i int) { errs <- recv(st, i, r) }(i)
++		}
++	}
++	for i := 0; i < streams; i++ {
++		if err := <-errs; err != nil {
++			t.Fatalf("seed %d: %v", seed, err)
++		}
++	}
++	close(stop)
++	core.Wait()
++	sweeps.Wait()
++	cli.Close()
++	srv.Close()
++	if pool.Free() != poolSize {
++		t.Fatalf("seed %d: pool free %d after both sessions closed, want all of it", seed, pool.Free())
++	}
++}
