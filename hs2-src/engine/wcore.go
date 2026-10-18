@@ -2765,11 +2765,19 @@ func (b *wcBuilder) build(s wcLinkSnap) wcIn {
 	b.prevS = next
 	if !s.sndAt.IsZero() && !s.sndAt.Equal(b.sndAt) {
 		in.snd = wcSnd{fresh: true, srtt: s.sndSrtt, minRTT: s.sndMinRTT}
-		if !b.sndAt.IsZero() {
-			in.snd.retrans = wcDelta(s.sndRetrans, b.sndRet)
-			in.snd.segsOut = wcDelta(s.sndSegsOut, b.sndSegs)
+		if s.sndSrtt == 0 && s.sndRetrans == 0 && s.sndSegsOut == 0 && b.sndSegs > 0 {
+			// the exit's tcpStats failed for this poll (serveStats sends
+			// the extended fields 0): its counters are no reading, and the
+			// next record counts from the last one that had them (from 0,
+			// its resend share was the link's lifetime one)
+			b.sndAt = s.sndAt
+		} else {
+			if !b.sndAt.IsZero() {
+				in.snd.retrans = wcDelta(s.sndRetrans, b.sndRet)
+				in.snd.segsOut = wcDelta(s.sndSegsOut, b.sndSegs)
+			}
+			b.sndAt, b.sndRet, b.sndSegs = s.sndAt, s.sndRetrans, s.sndSegsOut
 		}
-		b.sndAt, b.sndRet, b.sndSegs = s.sndAt, s.sndRetrans, s.sndSegsOut
 	}
 	b.prev, b.have = s, true
 	return in

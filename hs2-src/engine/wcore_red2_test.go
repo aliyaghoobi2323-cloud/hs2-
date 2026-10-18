@@ -529,3 +529,92 @@ func TestWcoreRed2RecordsStop(t *testing.T) {
 		}
 	}
 }
+
+// TestWcoreRed2OpenRouteChange (open, HS2_WCORE_RED2=1): after a route
+// change (300 → 600 ms) the edge's T_base never follows: both ends' min_rtt
+// keep the old floor (Linux: 5 minutes), and notePaths takes the turnaround's
+// new floor only on a record of the exit that shows no queue, which the
+// exit's own stale min_rtt never shows (q_snd reads the longer path as
+// ~300 ms of queue). Meanwhile the long round trip's rules (wcLongRTT,
+// wcLongGear) do not apply. Fails until the route change is told apart.
+func TestWcoreRed2OpenRouteChange(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED2") != "1" {
+		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
+	}
+	c := wmPath(300, wmMS(300), wmMS(50))
+	c.rttAt = []wmChange{{20 * time.Second, 600}}
+	c.dur, c.mode, c.seed = 120*time.Second, wmCore, 1
+	var tb, qs time.Duration
+	c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) { tb, qs = k.tBase, k.qSnd }
+	wmRun(c)
+	if tb < 500*time.Millisecond {
+		t.Errorf("100 s after 300 → 600 ms: T_base %v (q_snd %v), want the new path's", tb, qs)
+	}
+}
+
+// TestWcoreRed2PolicerLifted (report, HS2_WCORE_RED2=1): a policer at 60% of
+// the path for the first 20 s, then none: a policer's loss point (bCap)
+// holds for wcQcapTTL (10 minutes) and is not cleared below it (policed).
+// What the core carries after the policer is gone, against the same path
+// with no policer at all and the windows without the core.
+func TestWcoreRed2PolicerLifted(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED2") != "1" {
+		t.Skip("HS2_WCORE_RED2=1")
+	}
+	for _, p := range []struct {
+		rate   float64
+		rtt, q int
+	}{{300, 150, 50}, {1000, 100, 50}, {1000, 150, 200}, {300, 300, 50}} {
+		for seed := uint64(1); seed <= 2; seed++ {
+			mk := func(pol bool, mode wmMode) (*wmModel, wmResult) {
+				c := wmPath(p.rate, wmMS(p.rtt), wmMS(p.q))
+				c.seed, c.dur, c.mode = seed, 200*time.Second, mode
+				if pol {
+					c.policer = 0.6 * p.rate * wmMbit
+					c.polAt = []wmChange{{20 * time.Second, 0}}
+				}
+				m := newModel(c)
+				return m, m.run()
+			}
+			mp, rp := mk(true, wmCore)
+			mn, rn := mk(false, wmCore)
+			mb, rb := mk(true, wmBase)
+			var parts []string
+			for _, w := range [][2]int{{20, 40}, {40, 80}, {80, 140}, {140, 200}} {
+				from, to := time.Duration(w[0])*time.Second, time.Duration(w[1])*time.Second
+				parts = append(parts, fmt.Sprintf("%d-%ds %.0f/%.0f/%.0f", w[0], w[1],
+					wmMbitOver(rp, mp, from, to), wmMbitOver(rn, mn, from, to), wmMbitOver(rb, mb, from, to)))
+			}
+			t.Logf("%s s%d policed then lifted / never policed / base: %s | drains %v probes %v", wm2Name(p.rate, p.rtt, p.q), seed, strings.Join(parts, " | "), rp.drains, rp.probes)
+		}
+	}
+}
+
+// TestWcoreRed2RecordWithoutTCPInfo (round 2): when the exit's tcpStats fails
+// for a poll, serveStats sends a record whose extended fields are all 0. The
+// builder took its counters as the base of the next record, whose resend
+// share was then the link's lifetime one (all of its resends over all of
+// its segments), judged as one record's: a lossy start long ago read as a
+// jump of loss now (a policer's signature too, with q_snd under wcPoliceQ).
+func TestWcoreRed2RecordWithoutTCPInfo(t *testing.T) {
+	var b wcBuilder
+	s := wcLinkSnap{now: wtT0, poolFree: -1}
+	s.sndAt, s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = wtT0, 120*time.Millisecond, 100*time.Millisecond, 50000, 100000
+	b.build(s)
+	s.now, s.sndAt, s.sndRetrans, s.sndSegsOut = wtT0.Add(2*time.Second), wtT0.Add(2*time.Second), 50010, 110000
+	if in := b.build(s); in.snd.retrans != 10 || in.snd.segsOut != 10000 {
+		t.Fatalf("a record: %+v", in.snd)
+	}
+	// no TCP_INFO at the exit for one poll
+	s.now, s.sndAt = wtT0.Add(4*time.Second), wtT0.Add(4*time.Second)
+	s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = 0, 0, 0, 0
+	if in := b.build(s); in.snd.retrans != 0 || in.snd.segsOut != 0 || in.snd.srtt != 0 {
+		t.Fatalf("a record without TCP_INFO: %+v", in.snd)
+	}
+	s.now, s.sndAt = wtT0.Add(6*time.Second), wtT0.Add(6*time.Second)
+	s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = 120*time.Millisecond, 100*time.Millisecond, 50020, 130000
+	if in := b.build(s); in.snd.retrans != 10 || in.snd.segsOut != 20000 {
+		t.Errorf("the record after one without TCP_INFO: %d resent of %d (%.1f%%), want 10 of 20000 since the last that had it",
+			in.snd.retrans, in.snd.segsOut, 100*float64(in.snd.retrans)/float64(max(in.snd.segsOut, 1)))
+	}
+}
