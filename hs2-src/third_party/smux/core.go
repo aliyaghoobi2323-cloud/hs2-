@@ -59,6 +59,11 @@ const hitGap = 2 * time.Millisecond
 // drop each before its turnaround came in).
 const turnRing = 4
 
+// turnIdle: data that paused short of its limit this long (or four
+// turnarounds, if longer) paused at its source; the updates pending across
+// the pause go unsampled (turned).
+const turnIdle = time.Second
+
 // StepOf is how much a reader reads between two window updates under a
 // window of w: half of it up to need (NeedStreamBuffer); past need, need/2
 // or w/updShare if that is more, never more than half. So no more updates
@@ -144,6 +149,7 @@ type streamCore struct {
 	hit      bool   // a turnaround since our latest update came after a pause at its limit
 	lagged   bool   // the cycle that just ended left more than StreamLagTarget/4 unread throughout
 	turnSeen int64  // the latest turnaround, ns (0: none yet)
+	rxAt     int64  // monoNow of the latest frame received (0: none yet)
 
 	// written under bufferLock, read without it (CoreSnapshot)
 	readTot   atomic.Uint64 // bytes read in all (numRead wraps)
@@ -397,9 +403,22 @@ func (s *Stream) announced(window uint32) {
 // whose data paused at that limit (from within a frame of it, the peer
 // sends whole frames) for its hit gap or more before it went on. The caller
 // holds bufferLock, just after unread grew.
+//
+// Data that paused short of the oldest pending limit for turnIdle (or four
+// turnarounds, if longer) stopped at its source, not at the window: the
+// peer had credit and sent nothing (a keep-alive connection between
+// transfers, a player between segments). The updates pending across such a
+// pause are dropped unsampled: their "turnaround" would be the idle time.
 func (s *Stream) turned() {
 	c := &s.core
+	now := monoNow()
+	idle := c.rxAt != 0 && now-c.rxAt >= int64(turnIdle) && now-c.rxAt >= 4*c.turnSeen
+	c.rxAt = now
 	if c.n == 0 {
+		return
+	}
+	if idle && c.ring[c.head].reach == 0 {
+		c.n = 0
 		return
 	}
 	near := c.readTot.Load() + uint64(s.unread) + uint64(s.frameSize)
@@ -407,7 +426,6 @@ func (s *Stream) turned() {
 		return
 	}
 	recv := near - uint64(s.frameSize)
-	now := monoNow()
 	gap := c.hitGap.Load()
 	if gap < int64(hitGap) {
 		gap = int64(hitGap)
