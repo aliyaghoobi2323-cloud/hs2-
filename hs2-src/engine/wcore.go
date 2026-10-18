@@ -2124,6 +2124,20 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, sig wc
 func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	now := in.now
 	dq := c.dq()
+	if (c.lossDrain || c.refPending) && c.slowed(now, m) {
+		// the path got slower, and its loss came first: a cut between
+		// evaluations (fastStop) took B to half and HOLD's own test of a
+		// slower path below never saw the drop (its rLinkHold is the first
+		// measured HOLD interval's, after the cut), so R̂ kept the faster
+		// rate for wcRhatWin and the loss drain's end took B back to a
+		// budget of that rate (bHold, within bCap) into the standing queue:
+		// lost again, cut again, 0.9 of the cap lower each time (red team,
+		// round 2: 1000 → 100 Mbit/s behind 200 ms, 7 cuts in 10 s with
+		// q_snd past 100 ms, the loss rule's streak 4; base 0%)
+		c.lossDrain = false
+		c.toDrain(in, m, ev, wcWhyRate, wcSigRate, 0, true)
+		return
+	}
 	if c.lossDrain {
 		// after a drain for loss, stay at its budget while the loss goes
 		// on: a run of losses that keeps itself going stops only once
@@ -2340,6 +2354,37 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.probeAt = now.Add(wcProbeMin)
 	}
 	c.setB(in, m, hold)
+}
+
+// slowed says whether the path got slower than R̂: the link's rate of the
+// interval fell past wcRateDrop under the largest of R̂'s samples while a
+// signal with no bias shows a standing queue past the core's target (a
+// record of the exit that came since the latest drain, cut or start; else
+// the link socket's own srtt). A budget cut to half on a path that is no
+// slower drains its queue: there the rate fell with the windows, not the
+// path.
+func (c *wcore) slowed(now time.Time, m wcMeas) bool {
+	if !m.sameF || len(c.rhat) == 0 || m.rLink <= 0 {
+		return false
+	}
+	hi, n := 0.0, 0
+	for i := len(c.rhat) - 1; i >= 0; i-- {
+		if now.Sub(c.rhat[i].at) > wcRhatWin && n >= wcRhatMinN {
+			break
+		}
+		hi = math.Max(hi, c.rhat[i].r)
+		n++
+	}
+	if m.rLink >= (1-wcRateDrop)*hi {
+		return false
+	}
+	switch {
+	case m.sndOK && m.qSndOK && !c.sndStale(m.sndAt):
+		return m.qSnd > c.qTarget(now)+c.dq()
+	case m.qOwnOK:
+		return m.qOwn > c.qTarget(now)+wcDqOwn
+	}
+	return false
 }
 
 // wcLossSig is the drain signal of a loss source.

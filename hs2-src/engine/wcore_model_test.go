@@ -154,6 +154,19 @@ type wmCfg struct {
 	// aggregation): what comes after it meanwhile arrives behind a hole
 	reorder   float64
 	reorderMs int
+	// red team, round 2: rttAt changes the path's round trip at given times
+	// (rate: the new round trip in ms; a route change: the sockets' min_rtt
+	// keep the old floor, as Linux's for 5 minutes); polAt changes the
+	// policer's rate (0: none); recEvery is the cadence of the exit's records
+	// (0: 2 s); recOff: no record comes within these spans (the stats stream
+	// stalled and is reopening; the next one covers the gap); recZero: the
+	// records within these spans have no TCP_INFO in them (all of the
+	// extended fields 0, as serveStats sends when tcpStats fails)
+	rttAt    []wmChange
+	polAt    []wmChange
+	recEvery time.Duration
+	recOff   [][2]time.Duration
+	recZero  [][2]time.Duration
 	// check sees every step of the core (the invariant tests)
 	check func(t time.Duration, c *wcore, in wcIn, o wcOut)
 }
@@ -1507,12 +1520,27 @@ func (m *wmModel) periodic() {
 	r := &m.sndRec
 	// the edge polls the exit's record each health tick (2 s), the first one
 	// 2 s after the link came up (TestZ5Rig's pollStats)
-	if t%2000 == 0 && t > 0 {
+	every := int64(2000)
+	if m.cfg.recEvery > 0 {
+		every = m.cfg.recEvery.Milliseconds()
+	}
+	in := func(spans [][2]time.Duration) bool {
+		for _, s := range spans {
+			if t >= s[0].Milliseconds() && t < s[1].Milliseconds() {
+				return true
+			}
+		}
+		return false
+	}
+	if t%every == 0 && t > 0 && !in(m.cfg.recOff) {
 		f := m.main
 		r.pendAt = t + m.d
 		r.pSrtt = time.Duration(f.srtt * float64(time.Millisecond))
 		r.pMin = time.Duration(f.minRTT) * time.Millisecond
 		r.pRetrans, r.pSegs = f.retrans, f.segsOut
+		if in(m.cfg.recZero) {
+			r.pSrtt, r.pMin, r.pRetrans, r.pSegs = 0, 0, 0, 0
+		}
 	}
 	if r.pendAt > 0 && t >= r.pendAt {
 		r.at, r.srtt, r.minRTT, r.retrans, r.segsOut = t, r.pSrtt, r.pMin, r.pRetrans, r.pSegs
@@ -1525,12 +1553,25 @@ func (m *wmModel) periodic() {
 
 func (m *wmModel) run() wmResult {
 	warm := m.cfg.warm.Milliseconds()
-	ci, li := 0, 0
+	ci, li, ri, pi := 0, 0, 0, 0
 	for m.t = 0; m.t < m.end; m.t++ {
 		for li < len(m.cfg.lossAt) && m.t >= m.cfg.lossAt[li].at.Milliseconds() {
 			m.cfg.loss = m.cfg.lossAt[li].rate
 			m.lossUnit = 1 - math.Pow(1-m.cfg.loss, float64(m.unit/wmMSS))
 			li++
+		}
+		for ri < len(m.cfg.rttAt) && m.t >= m.cfg.rttAt[ri].at.Milliseconds() {
+			// (packets on the line keep their arrival; the line and the
+			// way back are FIFO: a shorter delay does not reorder them)
+			m.d = int64(m.cfg.rttAt[ri].rate) / 2
+			ri++
+		}
+		for pi < len(m.cfg.polAt) && m.t >= m.cfg.polAt[pi].at.Milliseconds() {
+			if m.cfg.policer <= 0 && m.cfg.polAt[pi].rate > 0 {
+				m.tokens = m.cfg.polAt[pi].rate * 0.02
+			}
+			m.cfg.policer = m.cfg.polAt[pi].rate
+			pi++
 		}
 		if m.t%1000 == 0 {
 			m.res.rtxSec = append(m.res.rtxSec, [2]uint64{m.main.retrans, m.main.segsOut})
