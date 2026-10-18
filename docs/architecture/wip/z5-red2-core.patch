@@ -1,0 +1,993 @@
+diff --git a/hs2-src/engine/wcore.go b/hs2-src/engine/wcore.go
+index 8857eb0..bd8d8ab 100644
+--- a/hs2-src/engine/wcore.go
++++ b/hs2-src/engine/wcore.go
+@@ -79,6 +79,7 @@ type wcore struct {
+ 	sndSeen    bool // an extended record of the exit came (srtt != 0: an edge with a new exit); the edge leaves OFF only then
+ 	sndAny     bool // a record of the exit came (an old exit's too)
+ 	sndAnyAt   time.Time
++	sndLastAt  time.Time         // the latest record of the exit (blind: none for wcSndQuiet)
+ 	qSnds      [wcSndHist]wcRate // q_snd of the latest records (r: seconds), newest first
+ 	chgAt      time.Time         // the latest drain, cut or start: a record from before it judges no B of now
+ 	nfPrev     int               // n_F of the previous evaluation
+@@ -342,6 +343,7 @@ var (
+ 	wcLossRand     = 0.0005
+ 	wcLossRandN    = 3
+ 	wcSndSpan      = 2500 * time.Millisecond // a record covers the exit's last stats tick
++	wcSndQuiet     = 2 * wcSndSpan           // no record for this long: the records stopped (blind)
+ 	wcRhatWin      = 10 * time.Second
+ 	wcRhatMinN     = 8
+ 	wcTauAlpha     = 0.25
+@@ -828,6 +830,7 @@ func (c *wcore) step(in wcIn) wcOut {
+ 		if !c.sndAny {
+ 			c.sndAny, c.sndAnyAt = true, now
+ 		}
++		c.sndLastAt = now
+ 		if in.snd.segsOut > 0 && in.snd.retrans == 0 && in.snd.minRTT > 0 && in.snd.srtt-in.snd.minRTT <= wcDqMin {
+ 			c.cleanRecs++
+ 		} else if in.snd.segsOut > 0 || in.snd.srtt > 0 {
+@@ -2124,6 +2127,20 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, sig wc
+ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
+ 	now := in.now
+ 	dq := c.dq()
++	if (c.lossDrain || c.refPending) && c.slowed(now, m) {
++		// the path got slower, and its loss came first: a cut between
++		// evaluations (fastStop) took B to half and HOLD's own test of a
++		// slower path below never saw the drop (its rLinkHold is the first
++		// measured HOLD interval's, after the cut), so R̂ kept the faster
++		// rate for wcRhatWin and the loss drain's end took B back to a
++		// budget of that rate (bHold, within bCap) into the standing queue:
++		// lost again, cut again, 0.9 of the cap lower each time (red team,
++		// round 2: 1000 → 100 Mbit/s behind 200 ms, 7 cuts in 10 s with
++		// q_snd past 100 ms, the loss rule's streak 4; base 0%)
++		c.lossDrain = false
++		c.toDrain(in, m, ev, wcWhyRate, wcSigRate, 0, true)
++		return
++	}
+ 	if c.lossDrain {
+ 		// after a drain for loss, stay at its budget while the loss goes
+ 		// on: a run of losses that keeps itself going stops only once
+@@ -2342,6 +2359,37 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
+ 	c.setB(in, m, hold)
+ }
+ 
++// slowed says whether the path got slower than R̂: the link's rate of the
++// interval fell past wcRateDrop under the largest of R̂'s samples while a
++// signal with no bias shows a standing queue past the core's target (a
++// record of the exit that came since the latest drain, cut or start; else
++// the link socket's own srtt). A budget cut to half on a path that is no
++// slower drains its queue: there the rate fell with the windows, not the
++// path.
++func (c *wcore) slowed(now time.Time, m wcMeas) bool {
++	if !m.sameF || len(c.rhat) == 0 || m.rLink <= 0 {
++		return false
++	}
++	hi, n := 0.0, 0
++	for i := len(c.rhat) - 1; i >= 0; i-- {
++		if now.Sub(c.rhat[i].at) > wcRhatWin && n >= wcRhatMinN {
++			break
++		}
++		hi = math.Max(hi, c.rhat[i].r)
++		n++
++	}
++	if m.rLink >= (1-wcRateDrop)*hi {
++		return false
++	}
++	switch {
++	case m.sndOK && m.qSndOK && !c.sndStale(m.sndAt):
++		return m.qSnd > c.qTarget(now)+c.dq()
++	case m.qOwnOK:
++		return m.qOwn > c.qTarget(now)+wcDqOwn
++	}
++	return false
++}
++
+ // wcLossSig is the drain signal of a loss source.
+ func wcLossSig(src wcLossSrc) wcSig {
+ 	if src == wcSrcOoo {
+@@ -2370,7 +2418,21 @@ func (c *wcore) tauOK2(m wcMeas) bool {
+ // probes "paid" on q_own alone and took the windows of 300/150 behind a
+ // 20 ms queue to 13–31% resent, past the loss rule's lossFrac, with the
+ // windows without the core at 0.05–2%).
+-func (c *wcore) blind(m wcMeas) bool { return m.holey && !c.sndSeen }
++//
++// The same where the exit's records stopped coming (sndQuiet: its stats
++// stream stalled, or its replies wait behind a congested link and it is
++// being reopened, statsReopenAfter): an edge that once had them was never
++// blind again, and on 1000/100 behind 20 ms with 0.1% loss, records gone
++// from 10 to 50 s, its probes and STARTUP took B from 6 to 16 MiB on q_own
++// alone, 12-30% resent each second for 16 s (red team, round 2; base
++// 0.1%).
++func (c *wcore) blind(m wcMeas) bool { return m.holey && (!c.sndSeen || c.sndQuiet(m.at)) }
++
++// sndQuiet: no record of the exit came for wcSndQuiet (it comes every
++// ~2 s while the link moves data).
++func (c *wcore) sndQuiet(now time.Time) bool {
++	return !c.sndLastAt.IsZero() && now.Sub(c.sndLastAt) > wcSndQuiet
++}
+ 
+ // lossTestDone resolves a drain that tested a jump of loss at a steady
+ // budget, once its source has measured after it: still past its level, the
+@@ -2703,11 +2765,19 @@ func (b *wcBuilder) build(s wcLinkSnap) wcIn {
+ 	b.prevS = next
+ 	if !s.sndAt.IsZero() && !s.sndAt.Equal(b.sndAt) {
+ 		in.snd = wcSnd{fresh: true, srtt: s.sndSrtt, minRTT: s.sndMinRTT}
+-		if !b.sndAt.IsZero() {
+-			in.snd.retrans = wcDelta(s.sndRetrans, b.sndRet)
+-			in.snd.segsOut = wcDelta(s.sndSegsOut, b.sndSegs)
++		if s.sndSrtt == 0 && s.sndRetrans == 0 && s.sndSegsOut == 0 && b.sndSegs > 0 {
++			// the exit's tcpStats failed for this poll (serveStats sends
++			// the extended fields 0): its counters are no reading, and the
++			// next record counts from the last one that had them (from 0,
++			// its resend share was the link's lifetime one)
++			b.sndAt = s.sndAt
++		} else {
++			if !b.sndAt.IsZero() {
++				in.snd.retrans = wcDelta(s.sndRetrans, b.sndRet)
++				in.snd.segsOut = wcDelta(s.sndSegsOut, b.sndSegs)
++			}
++			b.sndAt, b.sndRet, b.sndSegs = s.sndAt, s.sndRetrans, s.sndSegsOut
+ 		}
+-		b.sndAt, b.sndRet, b.sndSegs = s.sndAt, s.sndRetrans, s.sndSegsOut
+ 	}
+ 	b.prev, b.have = s, true
+ 	return in
+diff --git a/hs2-src/engine/wcore_model_test.go b/hs2-src/engine/wcore_model_test.go
+index 974858e..afc4426 100644
+--- a/hs2-src/engine/wcore_model_test.go
++++ b/hs2-src/engine/wcore_model_test.go
+@@ -154,6 +154,25 @@ type wmCfg struct {
+ 	// aggregation): what comes after it meanwhile arrives behind a hole
+ 	reorder   float64
+ 	reorderMs int
++	// red team, round 2: rttAt changes the path's round trip at given times
++	// (rate: the new round trip in ms; a route change: the sockets' min_rtt
++	// keep the old floor, as Linux's for 5 minutes); polAt changes the
++	// policer's rate (0: none); recEvery is the cadence of the exit's records
++	// (0: 2 s); recOff: no record comes within these spans (the stats stream
++	// stalled and is reopening; the next one covers the gap); recZero: the
++	// records within these spans have no TCP_INFO in them (all of the
++	// extended fields 0, as serveStats sends when tcpStats fails)
++	rttAt []wmChange
++	polAt []wmChange
++	// paceCap: the exit caps its socket's pacing as the lab's WcorePaceCap
++	// (wcPaceRate) at this many times the largest rate it delivered in a
++	// runner wake of the last wcPaceSpan, or the windows granted per min_rtt
++	// while its round trip shows no queue; lifted while it sends next to
++	// nothing (0: no cap)
++	paceCap  float64
++	recEvery time.Duration
++	recOff   [][2]time.Duration
++	recZero  [][2]time.Duration
+ 	// check sees every step of the core (the invariant tests)
+ 	check func(t time.Duration, c *wcore, in wcIn, o wcOut)
+ }
+@@ -335,8 +354,12 @@ func (f *wmFlow) bdp(gain float64) float64 {
+ func (f *wmFlow) send() {
+ 	m := f.m
+ 	t := m.t
+-	f.credit += f.pacing
+-	cap := math.Max(2*float64(f.unit), f.pacing)
++	pace := f.pacing
++	if f.main && m.pcCap > 0 {
++		pace = math.Min(pace, m.pcCap)
++	}
++	f.credit += pace
++	cap := math.Max(2*float64(f.unit), pace)
+ 	if f.credit > cap {
+ 		f.credit = cap
+ 	}
+@@ -793,6 +816,11 @@ type wmModel struct {
+ 	}
+ 	res     wmResult
+ 	ackHold []*wmPkt
++
++	// the exit's pacing cap (cfg.paceCap): bytes/ms, 0 none
++	pcCap  float64
++	pcDlv  []wcRate
++	pcLast uint64
+ }
+ 
+ func (m *wmModel) newPkt() *wmPkt {
+@@ -1507,12 +1535,27 @@ func (m *wmModel) periodic() {
+ 	r := &m.sndRec
+ 	// the edge polls the exit's record each health tick (2 s), the first one
+ 	// 2 s after the link came up (TestZ5Rig's pollStats)
+-	if t%2000 == 0 && t > 0 {
++	every := int64(2000)
++	if m.cfg.recEvery > 0 {
++		every = m.cfg.recEvery.Milliseconds()
++	}
++	in := func(spans [][2]time.Duration) bool {
++		for _, s := range spans {
++			if t >= s[0].Milliseconds() && t < s[1].Milliseconds() {
++				return true
++			}
++		}
++		return false
++	}
++	if t%every == 0 && t > 0 && !in(m.cfg.recOff) {
+ 		f := m.main
+ 		r.pendAt = t + m.d
+ 		r.pSrtt = time.Duration(f.srtt * float64(time.Millisecond))
+ 		r.pMin = time.Duration(f.minRTT) * time.Millisecond
+ 		r.pRetrans, r.pSegs = f.retrans, f.segsOut
++		if in(m.cfg.recZero) {
++			r.pSrtt, r.pMin, r.pRetrans, r.pSegs = 0, 0, 0, 0
++		}
+ 	}
+ 	if r.pendAt > 0 && t >= r.pendAt {
+ 		r.at, r.srtt, r.minRTT, r.retrans, r.segsOut = t, r.pSrtt, r.pMin, r.pRetrans, r.pSegs
+@@ -1521,17 +1564,70 @@ func (m *wmModel) periodic() {
+ 	if m.cfg.policer > 0 {
+ 		m.tokens = math.Min(m.tokens+m.cfg.policer/1000, math.Max(m.cfg.policer*0.02, 64<<10))
+ 	}
++	if m.cfg.paceCap > 0 && t%100 == 0 {
++		m.paceCapStep()
++	}
++}
++
++// paceCapStep is the exit's runner wake for the pacing cap (wcLink.paceCap,
++// wcPaceRate), on the model's sender: its delivery rate as what it delivered
++// since the previous wake.
++func (m *wmModel) paceCapStep() {
++	f := m.main
++	acked := f.delivered - m.pcLast
++	m.pcLast = f.delivered
++	now := m.epoch.Add(time.Duration(m.t) * time.Millisecond)
++	if acked < wcPaceIdle {
++		m.pcCap, m.pcDlv = 0, m.pcDlv[:0]
++		return
++	}
++	m.pcDlv = append(m.pcDlv, wcRate{now, float64(acked) * 10}) // bytes/s
++	cut := 0
++	for cut < len(m.pcDlv)-1 && now.Sub(m.pcDlv[cut].at) > wcPaceSpan {
++		cut++
++	}
++	m.pcDlv = m.pcDlv[cut:]
++	r := 0.0
++	for _, x := range m.pcDlv {
++		r = math.Max(r, x.r)
++	}
++	win := uint64(0)
++	for _, st := range m.rs {
++		if m.t >= st.start {
++			win += uint64(st.annWin)
++		}
++	}
++	// (wcPaceRate with the model's own factor)
++	v := m.cfg.paceCap * r
++	minRTT, srtt := time.Duration(f.minRTT)*time.Millisecond, time.Duration(f.srtt*float64(time.Millisecond))
++	if minRTT > 0 && srtt > 0 && srtt-minRTT <= max(wcDqMin, minRTT/10) {
++		v = math.Max(v, float64(win)/minRTT.Seconds())
++	}
++	m.pcCap = math.Max(v, wcPaceFloor) / 1000
+ }
+ 
+ func (m *wmModel) run() wmResult {
+ 	warm := m.cfg.warm.Milliseconds()
+-	ci, li := 0, 0
++	ci, li, ri, pi := 0, 0, 0, 0
+ 	for m.t = 0; m.t < m.end; m.t++ {
+ 		for li < len(m.cfg.lossAt) && m.t >= m.cfg.lossAt[li].at.Milliseconds() {
+ 			m.cfg.loss = m.cfg.lossAt[li].rate
+ 			m.lossUnit = 1 - math.Pow(1-m.cfg.loss, float64(m.unit/wmMSS))
+ 			li++
+ 		}
++		for ri < len(m.cfg.rttAt) && m.t >= m.cfg.rttAt[ri].at.Milliseconds() {
++			// (packets on the line keep their arrival; the line and the
++			// way back are FIFO: a shorter delay does not reorder them)
++			m.d = int64(m.cfg.rttAt[ri].rate) / 2
++			ri++
++		}
++		for pi < len(m.cfg.polAt) && m.t >= m.cfg.polAt[pi].at.Milliseconds() {
++			if m.cfg.policer <= 0 && m.cfg.polAt[pi].rate > 0 {
++				m.tokens = m.cfg.polAt[pi].rate * 0.02
++			}
++			m.cfg.policer = m.cfg.polAt[pi].rate
++			pi++
++		}
+ 		if m.t%1000 == 0 {
+ 			m.res.rtxSec = append(m.res.rtxSec, [2]uint64{m.main.retrans, m.main.segsOut})
+ 		}
+diff --git a/hs2-src/engine/wcore_red2_test.go b/hs2-src/engine/wcore_red2_test.go
+new file mode 100644
+index 0000000..4885300
+--- /dev/null
++++ b/hs2-src/engine/wcore_red2_test.go
+@@ -0,0 +1,695 @@
++package engine
++
++import (
++	"fmt"
++	"os"
++	"slices"
++	"sort"
++	"strings"
++	"testing"
++	"time"
++)
++
++// Red team, round 2 (Phase Z5, part B): the rules the fix round added
++// (long round trips, the policer's signature, reordering, the old exit's
++// gate) and the loss rule, on the link model with the options of round 2
++// (wmCfg.rttAt, polAt, recEvery, recOff, recZero).
++
++// wm2Cell is one cell of the round-2 sweep.
++type wm2Cell struct {
++	cat string // the sweep's category (its summary line)
++	c   wmCfg
++}
++
++// wm2Outcome is what one cell gave: base and core, and the verdict.
++type wm2Outcome struct {
++	cell    wm2Cell
++	b, k    wmResult
++	drained bool // the loss rule would drain the link under the core but not without it
++	resent  bool // the core resent 3 points or more past base
++	slower  bool // the core under 90% of base
++}
++
++func wm2Run(cell wm2Cell) wm2Outcome {
++	b, k := wmRun(cell.c.with(wmBase)), wmRun(cell.c.with(wmCore))
++	return wm2Outcome{cell: cell, b: b, k: k, drained: wmDrainedByCore(b, k),
++		resent: k.resend > b.resend+0.03, slower: k.mbit < 0.9*b.mbit}
++}
++
++func (o wm2Outcome) String() string {
++	return fmt.Sprintf("%-46s s%d: base %6.1f Mbit rs %5.2f%% [%s] | core %6.1f Mbit rs %5.2f%% [%s] d%v p%v B%.1f",
++		o.cell.c.name, o.cell.c.seed, o.b.mbit, 100*o.b.resend, wmLossNote(o.b), o.k.mbit, 100*o.k.resend, wmLossNote(o.k),
++		o.k.drains, o.k.probes, float64(o.k.peakB)/(1<<20))
++}
++
++// wm2Sweep runs the cells and logs every one the core drains (or resends
++// past base + 3 points), and a summary per category.
++func wm2Sweep(t *testing.T, cells []wm2Cell) []wm2Outcome {
++	type sum struct {
++		n, drained, resent, slower int
++		b, k                       float64
++	}
++	sums := map[string]*sum{}
++	var cats []string
++	var out []wm2Outcome
++	for _, cell := range cells {
++		o := wm2Run(cell)
++		out = append(out, o)
++		s := sums[cell.cat]
++		if s == nil {
++			s = &sum{}
++			sums[cell.cat] = s
++			cats = append(cats, cell.cat)
++		}
++		s.n++
++		s.b += o.b.mbit
++		s.k += o.k.mbit
++		flag := ""
++		if o.drained {
++			s.drained++
++			flag += " DRAINED"
++		}
++		if o.resent {
++			s.resent++
++			flag += " RESENT"
++		}
++		if o.slower {
++			s.slower++
++		}
++		if flag != "" {
++			t.Logf("BAD%s %s", flag, o)
++		} else if os.Getenv("HS2_WCORE_RED2_ALL") == "1" {
++			t.Logf("ok %s", o)
++		}
++	}
++	sort.Strings(cats)
++	for _, c := range cats {
++		s := sums[c]
++		t.Logf("SUM %-28s %4d runs: drained by the core %d, resent past base+3 %d, slower than 90%% of base %d; mean base %.1f core %.1f Mbit",
++			c, s.n, s.drained, s.resent, s.slower, s.b/float64(s.n), s.k/float64(s.n))
++	}
++	return out
++}
++
++func wm2Name(rate float64, rtt, q int) string { return fmt.Sprintf("%.0f/%d q%d", rate, rtt, q) }
++
++// wm2Imp is an impairment of a grid cell.
++type wm2Imp struct {
++	tag     string
++	loss    float64
++	pol     float64 // share of the path's rate
++	reorder float64
++	roMs    int
++}
++
++var wm2Imps = []wm2Imp{
++	{tag: "clean"}, {tag: "l0.1", loss: 0.001}, {tag: "l1", loss: 0.01}, {tag: "l3", loss: 0.03},
++	{tag: "pol30", pol: 0.3}, {tag: "pol60", pol: 0.6}, {tag: "pol90", pol: 0.9},
++}
++
++func wm2Apply(c *wmCfg, rate float64, x wm2Imp) {
++	c.loss = x.loss
++	if x.pol > 0 {
++		c.policer = x.pol * rate * wmMbit
++	}
++	c.reorder, c.reorderMs = x.reorder, x.roMs
++	c.name += " " + x.tag
++}
++
++func wm2Ints(env string, def []int) []int {
++	s := os.Getenv(env)
++	if s == "" {
++		return def
++	}
++	var v []int
++	for _, f := range strings.Split(s, ",") {
++		var x int
++		fmt.Sscan(f, &x)
++		v = append(v, x)
++	}
++	return v
++}
++
++// TestWcoreRed2Grid is the loss rule's grid of round 2 (HS2_WCORE_RED2=1):
++// rates 50 to 1000 Mbit/s × round trips (HS2_WCORE_RED2_RTTS, default 20 to
++// 300 ms) × queues 10 to 400 ms × clean, random loss 0.1 to 3%, a policer at
++// 30 to 90% × 1 and 4 streams (HS2_WCORE_RED2_STREAMS) × 2 seeds.
++func TestWcoreRed2Grid(t *testing.T) {
++	if os.Getenv("HS2_WCORE_RED2") != "1" {
++		t.Skip("HS2_WCORE_RED2=1")
++	}
++	wm2Sweep(t, wm2Grid(wm2Ints("HS2_WCORE_RED2_RTTS", []int{20, 50, 100, 150, 300}), wm2Ints("HS2_WCORE_RED2_STREAMS", []int{1, 4})))
++}
++
++// wm2Grid is the grid of TestWcoreRed2Grid for the given round trips and
++// stream counts.
++func wm2Grid(rtts, streams []int) []wm2Cell {
++	var cells []wm2Cell
++	for _, rtt := range rtts {
++		for _, rate := range []float64{50, 100, 300, 1000} {
++			for _, q := range []int{10, 50, 200, 400} {
++				for _, x := range wm2Imps {
++					for _, n := range streams {
++						for seed := uint64(1); seed <= 2; seed++ {
++							c := wmPath(rate, wmMS(rtt), wmMS(q))
++							c.name = wm2Name(rate, rtt, q)
++							wm2Apply(&c, rate, x)
++							if n > 1 {
++								c.streams = make([]wmStreamCfg, n)
++								c.name += fmt.Sprintf(" x%d", n)
++							}
++							c.seed, c.dur = seed, 40*time.Second
++							if rtt >= 450 {
++								c.dur, c.warm = 90*time.Second, 20*time.Second
++							}
++							cat := fmt.Sprintf("rtt%d %s", rtt, x.tag)
++							cells = append(cells, wm2Cell{cat: cat, c: c})
++						}
++					}
++				}
++			}
++		}
++	}
++	return cells
++}
++
++// wm2Dyn is the round-2 sweep of what changes during a run
++// (HS2_WCORE_RED2=1; HS2_WCORE_RED2_CAT picks categories by prefix):
++// route changes across the long round trip's thresholds, a policer whose
++// rate changes or that shares the path with a real queue, the exit's records
++// stalling, slower or without TCP_INFO, reordering, path rate changes.
++func wm2Dyn() []wm2Cell {
++	var cells []wm2Cell
++	add := func(cat string, c wmCfg) {
++		for seed := uint64(1); seed <= 2; seed++ {
++			c.seed = seed
++			cells = append(cells, wm2Cell{cat: cat, c: c})
++		}
++	}
++	// route changes (min_rtt keeps the old floor)
++	for _, rc := range [][2]int{{150, 600}, {300, 600}, {300, 1000}, {100, 500}, {250, 450}, {400, 800}, {300, 2000}, {600, 150}, {1000, 300}} {
++		for _, rate := range []float64{100, 300, 1000} {
++			for _, q := range []int{20, 50, 200} {
++				for _, loss := range []float64{0, 0.001} {
++					c := wmPath(rate, wmMS(rc[0]), wmMS(q))
++					c.loss = loss
++					c.rttAt = []wmChange{{20 * time.Second, float64(rc[1])}}
++					c.dur, c.warm = 90*time.Second, 10*time.Second
++					c.name = fmt.Sprintf("%s rtt>%d l%g", wm2Name(rate, rc[0], q), rc[1], 100*loss)
++					add(fmt.Sprintf("route %d>%d", rc[0], rc[1]), c)
++				}
++			}
++		}
++	}
++	// a policer whose rate changes, or that shares the path with a queue
++	for _, rate := range []float64{300, 1000} {
++		for _, rtt := range []int{100, 150, 300} {
++			for _, q := range []int{20, 50, 200} {
++				for _, pc := range []struct {
++					tag      string
++					from, to float64
++				}{{"pol60>none", 0.6, 0}, {"none>pol60", 0, 0.6}, {"pol60>pol30", 0.6, 0.3}, {"pol30>pol90", 0.3, 0.9}, {"pol90>pol40", 0.9, 0.4}} {
++					c := wmPath(rate, wmMS(rtt), wmMS(q))
++					c.policer = pc.from * rate * wmMbit
++					c.polAt = []wmChange{{20 * time.Second, pc.to * rate * wmMbit}}
++					c.dur = 60 * time.Second
++					c.name = fmt.Sprintf("%s %s", wm2Name(rate, rtt, q), pc.tag)
++					add("policer "+pc.tag, c)
++				}
++				c := wmPath(rate, wmMS(rtt), wmMS(q))
++				c.policer, c.compete, c.dur = 0.6*rate*wmMbit, 10*time.Second, 60*time.Second
++				c.name = fmt.Sprintf("%s pol60+compete", wm2Name(rate, rtt, q))
++				add("policer pol60+compete", c)
++				c = wmPath(rate, wmMS(rtt), wmMS(q))
++				c.policer, c.loss, c.dur = 0.6*rate*wmMbit, 0.001, 60*time.Second
++				c.name = fmt.Sprintf("%s pol60+l0.1", wm2Name(rate, rtt, q))
++				add("policer pol60+l0.1", c)
++			}
++		}
++	}
++	// the exit's records: a stall (the stream reopens), a slower cadence,
++	// records without TCP_INFO after a lossy start
++	type rp struct {
++		rate   float64
++		rtt, q int
++		loss   float64
++		pol    float64
++	}
++	recPaths := []rp{{300, 150, 20, 0.001, 0}, {1000, 100, 50, 0.001, 0}, {300, 150, 50, 0.003, 0}, {1000, 100, 20, 0.001, 0},
++		{300, 100, 20, 0, 0}, {1000, 150, 50, 0, 0.6}, {300, 300, 50, 0, 0.6}, {100, 150, 20, 0.001, 0}, {1000, 50, 20, 0.0005, 0}}
++	for _, p := range recPaths {
++		base := func(tag string) wmCfg {
++			c := wmPath(p.rate, wmMS(p.rtt), wmMS(p.q))
++			c.loss, c.policer, c.dur = p.loss, p.pol*p.rate*wmMbit, 60*time.Second
++			c.name = fmt.Sprintf("%s l%g pol%g %s", wm2Name(p.rate, p.rtt, p.q), 100*p.loss, p.pol, tag)
++			return c
++		}
++		for _, gap := range [][2]int{{15, 30}, {15, 45}, {10, 50}} {
++			c := base(fmt.Sprintf("recoff%d-%d", gap[0], gap[1]))
++			c.recOff = [][2]time.Duration{{time.Duration(gap[0]) * time.Second, time.Duration(gap[1]) * time.Second}}
++			add("records stall", c)
++		}
++		for _, ev := range []int{3, 4, 6} {
++			c := base(fmt.Sprintf("rec/%ds", ev))
++			c.recEvery = time.Duration(ev) * time.Second
++			add("records slower", c)
++		}
++		c := base("rec0@20s")
++		c.recZero = [][2]time.Duration{{19 * time.Second, 21 * time.Second}}
++		c.lossAt = []wmChange{{0, 0.03}, {8 * time.Second, p.loss}}
++		add("records no tcp_info", c)
++	}
++	// reordering
++	for _, rate := range []float64{300, 1000} {
++		for _, rtt := range []int{20, 50, 100, 150} {
++			for _, ro := range []struct {
++				p  float64
++				ms int
++			}{{0.0005, 2}, {0.0005, 5}, {0.002, 2}, {0.01, 1}, {0.001, 10}} {
++				c := wmPath(rate, wmMS(rtt), wmMS(50))
++				c.reorder, c.reorderMs, c.dur = ro.p, ro.ms, 40*time.Second
++				c.name = fmt.Sprintf("%s ro%g/%dms", wm2Name(rate, rtt, 50), 100*ro.p, ro.ms)
++				add("reorder", c)
++			}
++		}
++	}
++	// path rate changes
++	for _, rtt := range []int{50, 100, 150, 300} {
++		for _, q := range []int{20, 50, 200} {
++			for _, ch := range []struct {
++				tag   string
++				rate  float64
++				steps []wmChange
++			}{
++				{"1000>100", 1000, []wmChange{{15 * time.Second, 100 * wmMbit}}},
++				{"300>50>300", 300, []wmChange{{15 * time.Second, 50 * wmMbit}, {30 * time.Second, 300 * wmMbit}}},
++				{"100>1000", 100, []wmChange{{15 * time.Second, 1000 * wmMbit}}},
++				{"1000>300>1000", 1000, []wmChange{{15 * time.Second, 300 * wmMbit}, {30 * time.Second, 1000 * wmMbit}}},
++			} {
++				c := wmPath(ch.rate, wmMS(rtt), wmMS(q))
++				c.changes, c.dur = ch.steps, 50*time.Second
++				c.name = fmt.Sprintf("%s %s", wm2Name(ch.rate, rtt, q), ch.tag)
++				add("rate "+ch.tag, c)
++			}
++		}
++	}
++	return cells
++}
++
++func TestWcoreRed2Dyn(t *testing.T) {
++	if os.Getenv("HS2_WCORE_RED2") != "1" {
++		t.Skip("HS2_WCORE_RED2=1")
++	}
++	var cells []wm2Cell
++	for _, c := range wm2Dyn() {
++		if p := os.Getenv("HS2_WCORE_RED2_CAT"); p == "" || strings.HasPrefix(c.cat, p) {
++			cells = append(cells, c)
++		}
++	}
++	wm2Sweep(t, cells)
++}
++
++// TestWcoreRed2Trace traces one cell of the round-2 sweeps whose name (and
++// seed) is HS2_WCORE_RED2_TRACE="<name>/<seed>[/base]".
++func TestWcoreRed2Trace(t *testing.T) {
++	spec := os.Getenv("HS2_WCORE_RED2_TRACE")
++	if spec == "" {
++		t.Skip("HS2_WCORE_RED2_TRACE=<name>/<seed>[/base]")
++	}
++	p := strings.Split(spec, "/s")
++	name, seed := p[0], uint64(1)
++	base := strings.HasSuffix(spec, "/base")
++	if len(p) > 1 {
++		fmt.Sscan(strings.TrimSuffix(p[len(p)-1], "/base"), &seed)
++		name = strings.Join(p[:len(p)-1], "/s")
++	}
++	var rtt, n int
++	fmt.Sscanf(name[strings.Index(name, "/")+1:], "%d", &rtt)
++	if i := strings.Index(name, " x"); i >= 0 {
++		fmt.Sscanf(name[i+2:], "%d", &n)
++	}
++	all := append(wm2Dyn(), wm2Grid([]int{rtt}, []int{max(n, 1)})...)
++	for _, c := range all {
++		if c.c.name != name || c.c.seed != seed {
++			continue
++		}
++		c.c.trace, c.c.mode = true, wmCore
++		if base {
++			c.c.mode = wmBase
++		}
++		r := wmRun(c.c)
++		w := wmLossWins(r, 1)
++		for _, l := range r.trace {
++			if sec := 0; len(l) > 6 {
++				fmt.Sscanf(strings.TrimSpace(l[:6]), "%d", &sec)
++				if sec < len(w) && !strings.HasPrefix(strings.TrimSpace(l), "event") {
++					l += fmt.Sprintf(" | rs1s %.1f%%", 100*w[sec])
++				}
++			}
++			t.Log(l)
++		}
++		t.Log(r, wmLossNote(r))
++		return
++	}
++	t.Fatalf("no cell %q seed %d", name, seed)
++}
++
++// TestWcoreRed2SlowedAfterCut (round 2): the path slows down (1000 → 100
++// Mbit/s) under a full window; its loss comes first and a cut between
++// evaluations halves B. HOLD's own test of a slower path compares with the
++// rate of its first measured interval, which is after the cut, and R̂ keeps
++// the faster rate for wcRhatWin: the loss drain's end took B back to a
++// budget of the old rate (bHold within bCap) into a standing queue of 100 ms
++// and more, lost again and was cut again, seven times in ten seconds (the
++// model's 1000/100 q200 1000>100: the loss rule's streak 4, base 0%). With
++// the queue standing and the rate past wcRateDrop under R̂, it is a drain
++// for rate: R̂ starts over and B goes under the knee of the slower path.
++func TestWcoreRed2SlowedAfterCut(t *testing.T) {
++	for _, pending := range []bool{false, true} {
++		c, in := wtHold()
++		c.lossDrain, c.lossDrainN, c.refPending = !pending, 2, pending
++		c.B, c.bPub = 4*wtMiB, 4*wtMiB
++		c.bCap, c.bCapAt = 7*wtMiB, wtT0
++		now := wtT0.Add(3 * time.Second)
++		in.now = now
++		in.streams[0].win = 4 * wtMiB
++		m := wtMeas(1, 12e6, 4*wtMiB)
++		m.at = now
++		m.qOwn, m.qOwnOK = 140*time.Millisecond, true
++		m.qTurn, m.qOK = 150*time.Millisecond, true
++		var ev []wcEvent
++		c.hold(in, m, &ev)
++		if c.B > 4*wtMiB || c.state != wcDrain || c.cnt.drainRate != 1 {
++			t.Errorf("pending %v: the path slowed (12 of 60 MB/s, q_own 140 ms) after a cut: %v B %.1f MiB, drains for rate %d; want a drain for rate under 4 MiB",
++				pending, c.state, float64(c.B)/wtMiB, c.cnt.drainRate)
++		}
++		// a cut on a path that did not slow: the queue is empty, B stays
++		c, in = wtHold()
++		c.lossDrain, c.lossDrainN = true, 2
++		c.B, c.bPub = 4*wtMiB, 4*wtMiB
++		in.now = now
++		m.qOwn, m.qTurn = 2*time.Millisecond, 6*time.Millisecond
++		ev = nil
++		c.hold(in, m, &ev)
++		if c.cnt.drainRate != 0 {
++			t.Errorf("pending %v: a cut with the queue empty (the rate fell with B): a drain for rate", pending)
++		}
++	}
++}
++
++// TestWcoreRed2RateDropModel: 1000 → 100 Mbit/s behind a 200 ms queue on
++// 100 and 150 ms paths, where the windows without the core lose nothing:
++// the core's one wave of loss at the drop must not become a streak the loss
++// rule drains the link for.
++func TestWcoreRed2RateDropModel(t *testing.T) {
++	for _, rtt := range []int{100, 150} {
++		for seed := uint64(1); seed <= 2; seed++ {
++			c := wmPath(1000, wmMS(rtt), wmMS(200))
++			c.changes, c.dur, c.seed = []wmChange{{15 * time.Second, 100 * wmMbit}}, 50*time.Second, seed
++			o := wm2Run(wm2Cell{c: c})
++			if o.drained {
++				t.Errorf("drained by the core: %s", o)
++			} else {
++				t.Log(o)
++			}
++		}
++	}
++}
++
++// TestWcoreRed2PaceCap (HS2_WCORE_RED2=1): the cells the round-2 sweeps
++// found drained by the core (HS2_WCORE_RED2_CELLS: a file of "name/sseed"
++// lines; default: a built-in set), each with the exit's pacing cap of the
++// lab (WcorePaceCap, HS2_WCORE_RED2_PACE: its factor, default 2) on base
++// and on the core.
++func TestWcoreRed2PaceCap(t *testing.T) {
++	if os.Getenv("HS2_WCORE_RED2") != "1" {
++		t.Skip("HS2_WCORE_RED2=1")
++	}
++	k := 2.0
++	if v := os.Getenv("HS2_WCORE_RED2_PACE"); v != "" {
++		fmt.Sscan(v, &k)
++	}
++	var cells []wm2Cell
++	for _, c := range wm2Named(t) {
++		c.c.paceCap = k
++		cells = append(cells, c)
++	}
++	wm2Sweep(t, cells)
++}
++
++// wm2Named is the cells of HS2_WCORE_RED2_CELLS (a file of "name/sseed"
++// lines from the sweeps' BAD lines), found in the grid and the dynamic
++// sweep.
++func wm2Named(t *testing.T) []wm2Cell {
++	path := os.Getenv("HS2_WCORE_RED2_CELLS")
++	if path == "" {
++		t.Skip("HS2_WCORE_RED2_CELLS=<file>")
++	}
++	b, err := os.ReadFile(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	type key struct {
++		name string
++		seed uint64
++	}
++	want := map[key]bool{}
++	var rtts, streams []int
++	for _, l := range strings.Split(string(b), "\n") {
++		l = strings.TrimSpace(l)
++		i := strings.LastIndex(l, "/s")
++		if i < 0 {
++			continue
++		}
++		var seed uint64
++		fmt.Sscan(l[i+2:], &seed)
++		want[key{l[:i], seed}] = true
++		var rtt, n int
++		fmt.Sscanf(l[strings.Index(l, "/")+1:], "%d", &rtt)
++		n = 1
++		if j := strings.Index(l, " x"); j >= 0 {
++			fmt.Sscanf(l[j+2:], "%d", &n)
++		}
++		rtts, streams = append(rtts, rtt), append(streams, n)
++	}
++	slices.Sort(rtts)
++	slices.Sort(streams)
++	var out []wm2Cell
++	for _, c := range append(wm2Dyn(), wm2Grid(slices.Compact(rtts), slices.Compact(streams))...) {
++		if want[key{c.c.name, c.c.seed}] {
++			c.cat = "named"
++			out = append(out, c)
++			delete(want, key{c.c.name, c.c.seed})
++		}
++	}
++	for k := range want {
++		t.Logf("no cell %q s%d", k.name, k.seed)
++	}
++	return out
++}
++
++// TestWcoreRed2RecordsStop (round 2): an edge whose exit's records stop
++// (the stats stream stalled on a congested link and is being reopened) has
++// no unbiased loss signal left where packets wait behind holes: the core is
++// blind there as without the records (round 1, finding 1), and goes OFF.
++func TestWcoreRed2RecordsStop(t *testing.T) {
++	c := wtCore(1)
++	c.sndSeen, c.sndLastAt = true, wtT0
++	m := wtMeas(1, 60e6, 4*wtMiB)
++	m.ooo, m.oooOK, m.holey = 0.5, true, true
++	m.at = wtT0.Add(2 * time.Second)
++	if c.blind(m) {
++		t.Errorf("a record 2 s ago: blind")
++	}
++	m.at = wtT0.Add(2*wcSndSpan + time.Second)
++	if !c.blind(m) {
++		t.Errorf("no record for %v on a path with holes: not blind", 2*wcSndSpan+time.Second)
++	}
++	m.holey = false
++	if c.blind(m) {
++		t.Errorf("no record on a clean path: blind (q_turn and Rcv_ooopack judge it)")
++	}
++	for _, x := range []struct {
++		rate   float64
++		rtt, q int
++		loss   float64
++		off    [2]int
++	}{{1000, 100, 20, 0.001, [2]int{10, 50}}, {300, 150, 20, 0.001, [2]int{15, 45}}} {
++		for seed := uint64(1); seed <= 2; seed++ {
++			c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
++			c.loss, c.seed, c.dur = x.loss, seed, 60*time.Second
++			c.recOff = [][2]time.Duration{{time.Duration(x.off[0]) * time.Second, time.Duration(x.off[1]) * time.Second}}
++			c.name = fmt.Sprintf("%s l%g recoff%d-%d", wm2Name(x.rate, x.rtt, x.q), 100*x.loss, x.off[0], x.off[1])
++			o := wm2Run(wm2Cell{c: c})
++			if o.drained || o.resent {
++				t.Errorf("records stopped: %s", o)
++			} else {
++				t.Log(o)
++			}
++		}
++	}
++}
++
++// TestWcoreRed2OpenRouteChange (open, HS2_WCORE_RED2=1): after a route
++// change (300 → 600 ms) the edge's T_base never follows: both ends' min_rtt
++// keep the old floor (Linux: 5 minutes), and notePaths takes the turnaround's
++// new floor only on a record of the exit that shows no queue, which the
++// exit's own stale min_rtt never shows (q_snd reads the longer path as
++// ~300 ms of queue). Meanwhile the long round trip's rules (wcLongRTT,
++// wcLongGear) do not apply. Fails until the route change is told apart.
++func TestWcoreRed2OpenRouteChange(t *testing.T) {
++	if os.Getenv("HS2_WCORE_RED2") != "1" {
++		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
++	}
++	c := wmPath(300, wmMS(300), wmMS(50))
++	c.rttAt = []wmChange{{20 * time.Second, 600}}
++	c.dur, c.mode, c.seed = 120*time.Second, wmCore, 1
++	var tb, qs time.Duration
++	c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) { tb, qs = k.tBase, k.qSnd }
++	wmRun(c)
++	if tb < 500*time.Millisecond {
++		t.Errorf("100 s after 300 → 600 ms: T_base %v (q_snd %v), want the new path's", tb, qs)
++	}
++}
++
++// TestWcoreRed2PolicerLifted (report, HS2_WCORE_RED2=1): a policer at 60% of
++// the path for the first 20 s, then none: a policer's loss point (bCap)
++// holds for wcQcapTTL (10 minutes) and is not cleared below it (policed).
++// What the core carries after the policer is gone, against the same path
++// with no policer at all and the windows without the core.
++func TestWcoreRed2PolicerLifted(t *testing.T) {
++	if os.Getenv("HS2_WCORE_RED2") != "1" {
++		t.Skip("HS2_WCORE_RED2=1")
++	}
++	for _, p := range []struct {
++		rate   float64
++		rtt, q int
++	}{{300, 150, 50}, {1000, 100, 50}, {1000, 150, 200}, {300, 300, 50}} {
++		for seed := uint64(1); seed <= 2; seed++ {
++			mk := func(pol bool, mode wmMode) (*wmModel, wmResult) {
++				c := wmPath(p.rate, wmMS(p.rtt), wmMS(p.q))
++				c.seed, c.dur, c.mode = seed, 200*time.Second, mode
++				if pol {
++					c.policer = 0.6 * p.rate * wmMbit
++					c.polAt = []wmChange{{20 * time.Second, 0}}
++				}
++				m := newModel(c)
++				return m, m.run()
++			}
++			mp, rp := mk(true, wmCore)
++			mn, rn := mk(false, wmCore)
++			mb, rb := mk(true, wmBase)
++			var parts []string
++			for _, w := range [][2]int{{20, 40}, {40, 80}, {80, 140}, {140, 200}} {
++				from, to := time.Duration(w[0])*time.Second, time.Duration(w[1])*time.Second
++				parts = append(parts, fmt.Sprintf("%d-%ds %.0f/%.0f/%.0f", w[0], w[1],
++					wmMbitOver(rp, mp, from, to), wmMbitOver(rn, mn, from, to), wmMbitOver(rb, mb, from, to)))
++			}
++			t.Logf("%s s%d policed then lifted / never policed / base: %s | drains %v probes %v", wm2Name(p.rate, p.rtt, p.q), seed, strings.Join(parts, " | "), rp.drains, rp.probes)
++		}
++	}
++}
++
++// TestWcoreRed2RecordWithoutTCPInfo (round 2): when the exit's tcpStats fails
++// for a poll, serveStats sends a record whose extended fields are all 0. The
++// builder took its counters as the base of the next record, whose resend
++// share was then the link's lifetime one (all of its resends over all of
++// its segments), judged as one record's: a lossy start long ago read as a
++// jump of loss now (a policer's signature too, with q_snd under wcPoliceQ).
++func TestWcoreRed2RecordWithoutTCPInfo(t *testing.T) {
++	var b wcBuilder
++	s := wcLinkSnap{now: wtT0, poolFree: -1}
++	s.sndAt, s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = wtT0, 120*time.Millisecond, 100*time.Millisecond, 50000, 100000
++	b.build(s)
++	s.now, s.sndAt, s.sndRetrans, s.sndSegsOut = wtT0.Add(2*time.Second), wtT0.Add(2*time.Second), 50010, 110000
++	if in := b.build(s); in.snd.retrans != 10 || in.snd.segsOut != 10000 {
++		t.Fatalf("a record: %+v", in.snd)
++	}
++	// no TCP_INFO at the exit for one poll
++	s.now, s.sndAt = wtT0.Add(4*time.Second), wtT0.Add(4*time.Second)
++	s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = 0, 0, 0, 0
++	if in := b.build(s); in.snd.retrans != 0 || in.snd.segsOut != 0 || in.snd.srtt != 0 {
++		t.Fatalf("a record without TCP_INFO: %+v", in.snd)
++	}
++	s.now, s.sndAt = wtT0.Add(6*time.Second), wtT0.Add(6*time.Second)
++	s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = 120*time.Millisecond, 100*time.Millisecond, 50020, 130000
++	if in := b.build(s); in.snd.retrans != 10 || in.snd.segsOut != 20000 {
++		t.Errorf("the record after one without TCP_INFO: %d resent of %d (%.1f%%), want 10 of 20000 since the last that had it",
++			in.snd.retrans, in.snd.segsOut, 100*float64(in.snd.retrans)/float64(max(in.snd.segsOut, 1)))
++	}
++}
++
++// wm2RatchetCells are one drained cell of each class the round-2 sweeps
++// found where a drain to the floor does not give back the behaviour without
++// the core: the exit's BBR, held by the windows, stays in its STARTUP and
++// its pacing (3.9 times the largest rate it delivered) only rises, so once
++// the core's windows took the rate up, each window update's credit at the
++// floor (1 MiB at need) goes out faster than a shallow queue or a policer's
++// bucket takes it.
++var wm2RatchetCells = []string{
++	"300/450 q50 pol60/s1",          // a policer past wcLongRTT (×2 STARTUP gear under wcLongGear)
++	"300/800 q50 pol30/s1",          // ... and past wcLongGear (×1.25)
++	"1000/300 q10 clean x4/s1",      // four streams, shallow queue (the ramp's B/8 a wake)
++	"1000/100 q20 1000>300>1000/s2", // the path slows to 300 under a raised pacing
++	"300/300 q50 none>pol60/s2",     // a policer comes mid-transfer
++	"1000/20 q10 clean/s1",          // a short path whose base windows nearly fill it
++	"1000/150 q50 pol90>pol40/s1",   // a policer gets stricter
++}
++
++// TestWcoreRed2OpenRatchet (open, HS2_WCORE_RED2=1): the loss rule must not
++// drain a link under the core that it leaves alone without it. Fails on the
++// cells of wm2RatchetCells; with the exit's pacing cap of the lab
++// (WcorePaceCap ×2, HS2_WCORE_RED2_PACE) logged beside them.
++func TestWcoreRed2OpenRatchet(t *testing.T) {
++	if os.Getenv("HS2_WCORE_RED2") != "1" {
++		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
++	}
++	f := t.TempDir() + "/cells"
++	if err := os.WriteFile(f, []byte(strings.Join(wm2RatchetCells, "\n")), 0o644); err != nil {
++		t.Fatal(err)
++	}
++	t.Setenv("HS2_WCORE_RED2_CELLS", f)
++	k := 2.0
++	if v := os.Getenv("HS2_WCORE_RED2_PACE"); v != "" {
++		fmt.Sscan(v, &k)
++	}
++	for _, c := range wm2Named(t) {
++		o := wm2Run(c)
++		c.c.paceCap = k
++		p := wm2Run(c)
++		msg := fmt.Sprintf("%s\n    with the exit's pacing cap ×%g: %s", o, k, p)
++		if o.drained {
++			t.Errorf("drained by the core: %s", msg)
++		} else {
++			t.Log(msg)
++		}
++	}
++}
++
++// TestWcoreRed2OpenLossHoleLongRTT (open, HS2_WCORE_RED2=1): a wake's hole
++// time is at most its own length (wakeHoles: the wake's length times the
++// share of its segments behind a hole), and an active core wakes every
++// wcRampTick: two wakes hold at most ~200 ms, so past a T_base of ~800 ms
++// no hole is ever a loss's (lossHole asks for T_base/4) however long it
++// stays open: Rcv_ooopack never cuts B between evaluations (fastStop) nor
++// counts as congestion (oooPast) there, and only the exit's records (every
++// ~2 s) tell the core of its losses.
++func TestWcoreRed2OpenLossHoleLongRTT(t *testing.T) {
++	if os.Getenv("HS2_WCORE_RED2") != "1" {
++		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
++	}
++	for _, tb := range []time.Duration{400 * time.Millisecond, 800 * time.Millisecond, 1500 * time.Millisecond} {
++		c := wtCore(1)
++		c.tBase = tb
++		now := wtT0
++		c.wakeAt = now
++		in := wtWake(c, now.Add(wcRampTick), 1000, 1000) // every segment behind a hole
++		c.wakeHole, c.wakeOoo = c.wakeHoles(in), in.ooo
++		now = now.Add(2 * wcRampTick)
++		c.wakeAt = now.Add(-wcRampTick)
++		in = wtWake(c, now, 1000, 1000)
++		if !c.lossHole(in, c.wakeHoles(in)) {
++			t.Errorf("T_base %v: two wakes with every segment behind a hole are no loss's hole", tb)
++		}
++	}
++}
