@@ -294,11 +294,13 @@ type managedLink struct {
 	poor         bool      // clearly worse than the pool's other links (quality.go)
 	rates        [5]float64
 	doms         [3]float64
+	growns       [3]float64 // grown at the same ticks as doms
 	nSamples     int
 	rate         float64 // bytes/s this tick, both directions
 	rate10       float64 // mean rate over the last 5 ticks
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
 	grown        float64 // of rate, what its window core's grown windows carry (grownRate)
+	grownSus     float64 // the most grown of the ticks sustained is taken over
 	flowing      int     // user streams really moving data
 	open         int     // user streams open
 	recent       int     // user streams that moved a byte within drainIdle
@@ -2057,14 +2059,16 @@ func (m *LinkManager) sampleHealth() {
 		dom := float64(max(dRd, dWr)) / secs
 		ml.rates[ml.nSamples%len(ml.rates)] = ml.rate
 		ml.doms[ml.nSamples%len(ml.doms)] = dom
+		ml.growns[ml.nSamples%len(ml.growns)] = ml.grown
 		ml.nSamples++
 		ml.rate10 = mean(ml.rates[:min(ml.nSamples, len(ml.rates))])
-		ml.sustained = 0
+		ml.sustained, ml.grownSus = 0, 0
 		if ml.nSamples >= len(ml.doms) {
 			ml.sustained = ml.doms[0]
 			for _, d := range ml.doms[1:] {
 				ml.sustained = min(ml.sustained, d)
 			}
+			ml.grownSus = slices.Max(ml.growns[:])
 		}
 		if ml.goodput == 0 {
 			ml.goodput = ml.rate
@@ -2353,7 +2357,7 @@ func (ml *managedLink) apLink() apLink {
 	return apLink{
 		id: ml.id, serving: ml.serving(), retiring: ml.retiring && ml.link.Alive(),
 		servingSince: ml.servingSince, pressed: ml.pressed,
-		rate: ml.rate, rate10: ml.rate10, sustained: ml.sustained, grown: ml.grown,
+		rate: ml.rate, rate10: ml.rate10, sustained: ml.sustained, grown: ml.grown, grownSus: ml.grownSus,
 		flowing: ml.flowing, open: ml.open,
 	}
 }

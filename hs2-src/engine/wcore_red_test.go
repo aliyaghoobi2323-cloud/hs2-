@@ -2,7 +2,10 @@ package engine
 
 import (
 	"fmt"
+	"math"
+	"math/rand/v2"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +179,9 @@ func TestWcoreRedTrace(t *testing.T) {
 	}
 	c := wmPath(rate, time.Duration(rtt)*time.Millisecond, time.Duration(q)*time.Millisecond)
 	c.loss, c.seed, c.exit, c.policer, c.trace, c.dur = loss/100, uint64(seed), exit == 1, pol*wmMbit, true, 40*time.Second
+	if rtt >= 1000 {
+		c.dur, c.warm = 90*time.Second, 20*time.Second
+	}
 	if n > 1 {
 		c.streams = make([]wmStreamCfg, n)
 	}
@@ -544,6 +550,255 @@ func TestWcoreRedApProbingFreeze(t *testing.T) {
 			t.Errorf("%s", msg)
 		} else {
 			t.Log(msg)
+		}
+	}
+}
+
+// TestWcoreRedExtremes: base against the core on round trips far from the
+// table's (LAN, satellite, DPI-delayed) and with transfers that come and go
+// (HS2_WCORE_RED=1).
+func TestWcoreRedExtremes(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED") != "1" {
+		t.Skip("HS2_WCORE_RED=1")
+	}
+	type ex struct {
+		rate   float64
+		rtt, q int
+		loss   float64
+		n      int
+		churn  bool
+	}
+	for _, x := range []ex{
+		{1000, 2, 5, 0, 1, false}, {1000, 4, 10, 0, 4, false}, {100, 2, 20, 0, 1, false},
+		{300, 1000, 50, 0, 1, false}, {100, 2000, 100, 0, 1, false}, {50, 1500, 200, 0.001, 1, false},
+		{1000, 800, 50, 0, 1, false}, {300, 150, 50, 0, 6, true}, {1000, 100, 50, 0, 6, true},
+	} {
+		for seed := uint64(1); seed <= 2; seed++ {
+			c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
+			c.loss, c.seed, c.dur = x.loss, seed, 40*time.Second
+			if x.rtt >= 1000 {
+				c.dur, c.warm = 90*time.Second, 20*time.Second
+			}
+			if x.n > 1 {
+				c.streams = make([]wmStreamCfg, x.n)
+				if x.churn {
+					// downloads that start a few seconds apart, each with
+					// a source that stops: F changes every few intervals
+					for i := range c.streams {
+						c.streams[i].start = time.Duration(i) * 3 * time.Second
+						c.streams[i].src = x.rate * wmMbit / float64(x.n) * float64(1+i%3)
+					}
+				}
+			}
+			b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
+			flag := ""
+			if wmDrainedByCore(b, k) {
+				flag = " <<< DRAINED"
+			}
+			if k.mbit < 0.9*b.mbit {
+				flag += " <<< SLOWER"
+			}
+			t.Logf("%-22s n%d churn%v s%d: base %6.1f Mbit rs %5.2f%% | core %6.1f Mbit rs %5.2f%% q %.0f/%.0f d%v p%v B%.1f last %v%s",
+				c.name, x.n, x.churn, seed, b.mbit, 100*b.resend, k.mbit, 100*k.resend, k.qMean, k.q99, k.drains, k.probes, float64(k.peakB)/(1<<20), k.lastState, flag)
+		}
+	}
+}
+
+// TestWcoreRedLongRTTSweep: base against the core on round trips of 600 ms
+// to 2 s (DPI-held paths, satellite): HS2_WCORE_RED=1.
+func TestWcoreRedLongRTTSweep(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED") != "1" {
+		t.Skip("HS2_WCORE_RED=1")
+	}
+	bad, n := 0, 0
+	var sb, sk float64
+	for _, rate := range []float64{50, 100, 300, 1000} {
+		for _, rtt := range wmRedRTTs() {
+			for _, q := range []int{50, 100, 200} {
+				for seed := uint64(1); seed <= 2; seed++ {
+					c := wmPath(rate, wmMS(rtt), wmMS(q))
+					c.seed, c.dur, c.warm = seed, 90*time.Second, 20*time.Second
+					b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
+					n++
+					sb += b.mbit
+					sk += k.mbit
+					if wmDrainedByCore(b, k) || k.resend > b.resend+0.03 {
+						bad++
+						t.Logf("BAD %s s%d: base %.1f Mbit rs %.2f%% | core %.1f Mbit rs %.2f%% [%s] d%v p%v B%.1f",
+							c.name, seed, b.mbit, 100*b.resend, k.mbit, 100*k.resend, wmLossNote(k), k.drains, k.probes, float64(k.peakB)/(1<<20))
+					}
+				}
+			}
+		}
+	}
+	t.Logf("%d of %d runs drained by the core or past base + 3 points resent; mean base %.1f core %.1f Mbit", bad, n, sb/float64(n), sk/float64(n))
+}
+
+// wmRedRTTs: the long round trips TestWcoreRedLongRTTSweep runs
+// (HS2_WCORE_RED_RTTS=300,400,500 to change them).
+func wmRedRTTs() []int {
+	v := []int{600, 800, 1000, 1500, 2000}
+	if s := os.Getenv("HS2_WCORE_RED_RTTS"); s != "" {
+		v = nil
+		for _, f := range strings.Split(s, ",") {
+			var x int
+			fmt.Sscan(f, &x)
+			v = append(v, x)
+		}
+	}
+	return v
+}
+
+// TestWcoreRedGarbage: the controller fed hostile inputs (round trips of 0
+// to 71 minutes, counters that jump, ooo past segs_in, a record of the exit
+// with srtt under min_rtt or resends past its segments, the clock stepping
+// back or a day forward, thousands of streams appearing and leaving): no
+// panic, no NaN, and the published budget and ceilings within their
+// bounds.
+func TestWcoreRedGarbage(t *testing.T) {
+	r := rand.New(rand.NewPCG(7, 11))
+	durs := []time.Duration{0, time.Microsecond, time.Millisecond, 100 * time.Millisecond, 2 * time.Second, time.Hour, wcMinRTTOf(^uint32(0) - 1)}
+	pick := func() time.Duration { return durs[r.IntN(len(durs))] }
+	big := func() uint64 {
+		switch r.IntN(4) {
+		case 0:
+			return 0
+		case 1:
+			return uint64(r.IntN(1000))
+		case 2:
+			return uint64(r.Int64N(1 << 40))
+		}
+		return ^uint64(0) >> uint(r.IntN(8))
+	}
+	for run := 0; run < 200; run++ {
+		side := wcEdge
+		if run%2 == 1 {
+			side = wcExit
+		}
+		c := newWcore(wcConfig{side: side, stage: 1 + run%2, need: wtNeed, maxWin: wtMax, minWin: wtMin}, r.Float64)
+		now := wtT0
+		var nHist []int // stream counts of the latest steps (B follows them an evaluation late)
+		for i := 0; i < 400; i++ {
+			switch r.IntN(20) {
+			case 0:
+				now = now.Add(-time.Duration(r.IntN(5000)) * time.Millisecond) // a step back
+			case 1:
+				now = now.Add(24 * time.Hour)
+			default:
+				now = now.Add(100 * time.Millisecond)
+			}
+			in := wcIn{now: now, minRTT: pick(), srtt: pick(), segsIn: big(), ooo: big(), oooOK: r.IntN(2) == 0,
+				linkBytes: big(), parks: uint32(r.IntN(3)), brakes: uint32(r.IntN(2)), poolFree: int64(r.IntN(1<<30)) - 1<<20,
+				poolShort: uint32(r.IntN(2)), ctrlMin: pick(), apProbing: r.IntN(10) == 0}
+			if r.IntN(3) == 0 {
+				in.pongs = []time.Duration{pick(), pick()}
+			}
+			if r.IntN(4) == 0 {
+				in.snd = wcSnd{fresh: true, srtt: pick(), minRTT: pick(), retrans: big(), segsOut: big()}
+			}
+			n := r.IntN(6)
+			if r.IntN(50) == 0 {
+				n = 2000
+			}
+			for k := 0; k < n; k++ {
+				in.streams = append(in.streams, wcStream{id: uint32(1 + 2*r.IntN(n+3)), read: big(), upd: uint32(r.IntN(10)), hit: uint32(r.IntN(10)),
+					lag: uint32(r.IntN(3)), turnMin: pick(), turnLast: pick(), win: uint32(r.Int64N(wtMax + 1)), braked: r.IntN(20) == 0})
+			}
+			func() {
+				defer func() {
+					if e := recover(); e != nil {
+						t.Fatalf("run %d step %d: panic %v (state %v)", run, i, e, c.state)
+					}
+				}()
+				o := c.step(in)
+				for _, f := range []float64{c.tau.Seconds(), c.spread.Seconds(), c.last.rF, c.last.rLink, c.rhatF(now, c.last), c.cnt.peakR} {
+					if math.IsNaN(f) || math.IsInf(f, 0) {
+						t.Fatalf("run %d step %d: NaN/Inf in the core's estimators (tau %v rF %v)", run, i, c.tau, c.last.rF)
+					}
+				}
+				nHist = append(nHist, max(len(in.streams), len(c.inF), 1))
+				if len(nHist) > 40 {
+					nHist = nHist[1:]
+				}
+				ns := uint64(slices.Max(nHist))
+				if o.B > ns*wtMax {
+					t.Fatalf("run %d step %d: B %d past %d streams × MaxStreamBuffer", run, i, o.B, ns)
+				}
+				sum := uint64(0)
+				for _, x := range o.ceils {
+					if x.ceil > wtMax {
+						t.Fatalf("run %d step %d: ceiling %d", run, i, x.ceil)
+					}
+					sum += uint64(x.ceil)
+				}
+				if sum > max(o.B, uint64(len(c.inF))*uint64(c.cmin())) {
+					t.Fatalf("run %d step %d: ceilings %d past B %d", run, i, sum, o.B)
+				}
+				if !o.next.After(now) {
+					t.Fatalf("run %d step %d: next step at %v, not after now %v", run, i, o.next, now)
+				}
+			}()
+		}
+	}
+}
+
+// TestWcoreRedGrownDip (finding 6): the autopilot takes a pressed link's
+// capacity for ordinary connections as sustained − grown, the least
+// dominant rate of the last ticks less the grown windows' share of the
+// latest one, and keeps the best of it over capWindow. One tick in which
+// the core's latest interval read little grown (the sender's PROBE_RTT
+// every ~10 s, a drain, a refresh) while the rate over the ticks stayed
+// up took the whole rate as one link's capacity for ordinary connections:
+// a capacity 6× too large, and the pool sized by it 6× too small.
+func TestWcoreRedGrownDip(t *testing.T) {
+	const mbit = 1e6 / 8
+	run := func(dip bool) *autopilot {
+		a := newAutopilot(2, 64, 8)
+		now := time.Unix(1e9, 0)
+		for tick := 0; tick < 10; tick++ {
+			s := apSample{now: now.Add(time.Duration(tick) * healthTick), growable: true}
+			for i := 0; i < 8; i++ {
+				l := apLink{id: i, serving: true, rate: 100 * mbit, sustained: 100 * mbit, flowing: 1, open: 1}
+				if i < 6 {
+					l.pressed, l.rate, l.sustained, l.grown = true, 300*mbit, 300*mbit, 250*mbit
+					if dip && tick == 4 {
+						l.grown = 0 // this tick's latest evaluation of the core fell in a dip
+					}
+					// (the LinkManager's: the most grown of the ticks
+					// sustained is taken over)
+					l.grownSus = 250 * mbit
+				}
+				s.links = append(s.links, l)
+				s.G += l.rate
+				s.grown += l.grown
+				s.flowing++
+			}
+			a.decide(s)
+		}
+		return a
+	}
+	steady, dipped := run(false), run(true)
+	t.Logf("capacity for ordinary connections: steady %.0f, with one dip %.0f Mbit/s", steady.cCap/mbit, dipped.cCap/mbit)
+	if dipped.cCap > 1.5*steady.cCap {
+		t.Errorf("one tick's dip of grownRate took the capacity from %.0f to %.0f Mbit/s for capWindow", steady.cCap/mbit, dipped.cCap/mbit)
+	}
+}
+
+// The LinkManager hands the autopilot the most grown of the ticks the
+// sustained rate is taken over (finding 6).
+func TestWcoreRedGrownSus(t *testing.T) {
+	m := NewLinkManager(nil, 2, 2, 50, nil)
+	f := newMeteredFake()
+	f.m.wc = wcLogLink("link 1", wcEdge)
+	ml := &managedLink{link: f, mtr: f.m}
+	m.links = []*managedLink{ml}
+	for i, g := range []float64{0, 3e6, 3e6, 3e6, 0} {
+		f.m.wc.inStats.grown.Store(math.Float64bits(g))
+		f.m.rdBytes.Add(20 << 20)
+		m.sampleHealth()
+		if i == 4 && (ml.grown != 0 || ml.grownSus != 3e6 || m.sample.links[0].grownSus != 3e6) {
+			t.Fatalf("a tick with no grown after three with 3e6: grown %.0f, grownSus %.0f (sample %.0f), want 0 and 3e6",
+				ml.grown, ml.grownSus, m.sample.links[0].grownSus)
 		}
 	}
 }
