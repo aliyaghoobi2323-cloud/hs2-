@@ -665,3 +665,31 @@ func TestWcoreRed2OpenRatchet(t *testing.T) {
 		}
 	}
 }
+
+// TestWcoreRed2OpenLossHoleLongRTT (open, HS2_WCORE_RED2=1): a wake's hole
+// time is at most its own length (wakeHoles: the wake's length times the
+// share of its segments behind a hole), and an active core wakes every
+// wcRampTick: two wakes hold at most ~200 ms, so past a T_base of ~800 ms
+// no hole is ever a loss's (lossHole asks for T_base/4) however long it
+// stays open: Rcv_ooopack never cuts B between evaluations (fastStop) nor
+// counts as congestion (oooPast) there, and only the exit's records (every
+// ~2 s) tell the core of its losses.
+func TestWcoreRed2OpenLossHoleLongRTT(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED2") != "1" {
+		t.Skip("HS2_WCORE_RED2=1 (an open finding: it fails)")
+	}
+	for _, tb := range []time.Duration{400 * time.Millisecond, 800 * time.Millisecond, 1500 * time.Millisecond} {
+		c := wtCore(1)
+		c.tBase = tb
+		now := wtT0
+		c.wakeAt = now
+		in := wtWake(c, now.Add(wcRampTick), 1000, 1000) // every segment behind a hole
+		c.wakeHole, c.wakeOoo = c.wakeHoles(in), in.ooo
+		now = now.Add(2 * wcRampTick)
+		c.wakeAt = now.Add(-wcRampTick)
+		in = wtWake(c, now, 1000, 1000)
+		if !c.lossHole(in, c.wakeHoles(in)) {
+			t.Errorf("T_base %v: two wakes with every segment behind a hole are no loss's hole", tb)
+		}
+	}
+}
