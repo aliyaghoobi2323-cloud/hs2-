@@ -565,9 +565,11 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 	for _, e := range o.events {
 		switch e.kind {
 		case wcEvFilled:
+			// (the knee may be under the least budget, the windows of F at
+			// c_min: that is what is held)
 			filled = true
-			l.heldB = e.B
-			ws.filled(l, now, logf, e.R, e.T, e.B, e.n, e.q)
+			l.heldB = max(e.B, uint64(max(e.n, 1))*uint64(c.cmin()))
+			ws.filled(l, now, logf, e.R, e.T, l.heldB, e.n, e.q)
 		case wcEvDrain:
 			if !l.due(wcLogDrain, now, wcLogDrainEvery) || !ws.agg[1].admit(l, now, e.n, e.R) {
 				continue

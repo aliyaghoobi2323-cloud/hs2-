@@ -777,6 +777,12 @@ func TestWcoreRunnerKneeMoveLine(t *testing.T) {
 	if n := logs.count("window held at 6.0 MiB"); n != 1 {
 		t.Fatalf("a move of 50%%: %q", logs.all())
 	}
+	// a knee under the least budget: the least budget is what is held
+	l2 := wcLogLink("link 5", wcEdge)
+	ws.logEvents(l2, now, wcOut{events: []wcEvent{{kind: wcEvFilled, B: 100 << 10, n: 2, R: 1e6, T: 100 * time.Millisecond}}})
+	if n := logs.count("link 5: downloads fill the path at ~8 Mbit/s (round trip 100 ms): window held at 0.5 MiB for 2 fast connection(s)"); n != 1 {
+		t.Fatalf("a knee under the floor: %q", logs.all())
+	}
 }
 
 // The link-end notes: nothing for a core that never left OFF; what it did
