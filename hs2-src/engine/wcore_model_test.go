@@ -1948,23 +1948,23 @@ var wmKnown = map[string]struct {
 	kinds []string
 	why   string
 }{
-	"300/150 q50": {[]string{"resent", "interactive", "drain"},
-		"STARTUP's last step and the sender's PROBE_RTT every ~10 s (then its whole window at 3.9 times the path's rate) overflow the 50 ms queue (0.33 BDP): one loss and the run of losses behind it after the warm-up"},
+	"300/150 q50": {[]string{"resent"},
+		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (it announced the credit before it could see the dip); the rig: a loss every 10–11 s at 5–6 MiB"},
 	"1000/150 q50": {[]string{"drain"},
 		"a burst after PROBE_RTT overflows the queue in HOLD (a cut)"},
 	"300/100 q50": {[]string{"interactive"},
 		"the bursts after PROBE_RTT (one loss holds the user behind its hole)"},
-	"300/150 q200": {[]string{"interactive", "queue", "drain"},
+	"300/150 q200": {[]string{"queue"},
 		"the 200 ms queue lets STARTUP and the probes build a mean queue past 20 ms before the turnarounds show it"},
-	"1000/100 q50 l0.1": {[]string{"gain", "interactive"},
-		"every hole holds the user's reply for a round trip (p50 1.3–1.5×; the rig's N4 too)"},
-	"300/150 q50 l0.1": {[]string{"gain", "interactive", "resent"},
-		"probes judged by q_own climb ~probeQ each, and the bursts after PROBE_RTT on the 50 ms queue (0.33 BDP) end the climb with losses"},
-	"1000/100 q50 x4": {[]string{"resent", "drain", "queue"},
-		"four streams' updates clump: the turnaround median moves with the clumps, HOLD drains"},
+	"1000/100 q50 l0.1": {[]string{"interactive"},
+		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere"},
+	"300/150 q50 l0.1": {[]string{"gain"},
+		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (54% of N4's gain)"},
+	"1000/100 q50 x4": {[]string{"resent"},
+		"four streams at the knee of a saturated path: the bursts after PROBE_RTT (0.21% against 0.01%)"},
 	"300/150 q50 +slow reader": {[]string{"gain", "resent", "interactive"},
 		"a probe's loss while the slow stream's window holds a hole"},
-	"1000/100 q50 policer 300": {[]string{"gain", "slower", "resent", "interactive"},
+	"1000/100 q50 policer 300": {[]string{"gain", "resent"},
 		"STARTUP raises BBR's pacing for good; past it the base window's bursts trip the policer"},
 }
 
@@ -2011,9 +2011,16 @@ func TestWcoreModelTable(t *testing.T) {
 			continue
 		}
 		known := wmKnown[name]
+		missed := map[string]bool{}
 		for _, f := range v.fails {
+			missed[wmKindOf(f)] = true
 			if !slices.Contains(known.kinds, wmKindOf(f)) {
 				t.Errorf("%s: %s", name, f)
+			}
+		}
+		for _, k := range known.kinds {
+			if !missed[k] {
+				t.Logf("%s now meets its %s target: take it off wmKnown", name, k)
 			}
 		}
 		if len(v.fails) == 0 && len(known.kinds) > 0 {

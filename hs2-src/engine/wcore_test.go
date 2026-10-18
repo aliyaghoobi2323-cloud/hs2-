@@ -411,10 +411,9 @@ func TestWcoreOff(t *testing.T) {
 			q3(m, 40*time.Millisecond)
 			m.qSnd = 5 * time.Millisecond // the latest shows less
 		}, 3, wcOff},
-		{"stage 1: ... or lose with a queue behind them", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+		{"stage 1: ... past Δq, under qTarget+Δq (the rig's 100/100: 6.6 to 32 ms; one of 19.7 started it)", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
 			rec(c)
 			q3(m, 12*time.Millisecond)
-			m.snd, m.sndOK = 0.005, true
 		}, 3, wcOff},
 		{"stage 1: ... or lose over 1% whatever the queue", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
 			rec(c)
@@ -498,6 +497,15 @@ func TestWcoreStartup(t *testing.T) {
 			m.qOwn, m.qOwnOK = 2*time.Millisecond, true
 			m.rF = 36e6
 		}, wcStartup, 0, func(c *wcore) bool { return c.B >= 5*wtMiB-1 && c.B <= 5*wtMiB && c.gear == 0 && c.bGood == 4*wtMiB }},
+		{"holes, the exit's latest record shows no path queue: the gears of a clean path", func(c *wcore, in *wcIn, m *wcMeas) {
+			c.flat = 1
+			m.qTurn, m.qOK = 90*time.Millisecond, true
+			m.ooo, m.oooOK, m.holey = 0.5, true, true
+			c.oooRef = wcLossRef{v: 0.5, b: 2 * wtMiB, ok: true}
+			m.qOwn, m.qOwnOK = 2*time.Millisecond, true
+			m.qSnd, m.qSndOK = 2*time.Millisecond, true
+			m.rF = 36e6
+		}, wcStartup, 0, func(c *wcore) bool { return c.gear == 2 }},
 		{"holes: q_own grew past its reference", func(c *wcore, in *wcIn, m *wcMeas) {
 			c.flat = 1
 			m.qTurn, m.qOK = 2*time.Millisecond, true

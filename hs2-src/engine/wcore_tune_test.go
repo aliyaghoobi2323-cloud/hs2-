@@ -127,6 +127,41 @@ func TestWcoreCapClearedAtFloor(t *testing.T) {
 	}
 }
 
+// STARTUP stays within a fresh cap where losses of ours came (bCap), as
+// HOLD does, and ends there (the rig's 300/150: after two probe wins it went
+// 4.4 → 5.5 → 8.2 MiB past a cap of 5.3 and overflowed again); a stale cap
+// bounds nothing.
+func TestWcoreStartupCap(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		age   time.Duration
+		bound bool
+	}{
+		{"fresh", time.Second, true},
+		{"stale", wcQcapTTL + time.Second, false},
+	} {
+		c, in := wtStartup()
+		c.bCap, c.bCapAt = 5*wtMiB, wtT0.Add(-tc.age)
+		m := wtMeas(1, 60e6, 4*wtMiB)
+		m.at = wtT0
+		var ev []wcEvent
+		c.startup(in, m, &ev)
+		if c.state != wcStartup || (c.B == 5*wtMiB) != tc.bound || c.B < 5*wtMiB {
+			t.Errorf("%s cap: %v B %d, want STARTUP at 5 MiB: %v", tc.name, c.state, c.B, tc.bound)
+			continue
+		}
+		if !tc.bound {
+			continue
+		}
+		in.now = wtT0.Add(time.Second)
+		m.at = in.now
+		c.startup(in, m, &ev) // the same rate: flat, at the cap
+		if c.state == wcStartup || c.B > 5*wtMiB {
+			t.Errorf("at the cap with the rate flat: %v B %d, want STARTUP over", c.state, c.B)
+		}
+	}
+}
+
 // setB takes the larger n_F of this interval and the previous one (a stream
 // of F sent nothing for an interval: B was cut to the other's ceiling), and
 // blames the pool only when it has less than a step of a window left.
@@ -319,6 +354,16 @@ func TestWcoreCtrlFloor(t *testing.T) {
 	m := c.measure(q, 1)
 	if !m.ctrlUp || m.ctrlQ < 99*time.Millisecond {
 		t.Fatalf("q_ctrl %v up %v under a standing queue of 100 ms, want ~100 ms over T_base + 3 ms", m.ctrlQ, m.ctrlUp)
+	}
+	// an interval with no pong after the run shows nothing (no new sample)
+	q2 := wcIn{now: wtT0.Add(31 * time.Second), srtt: c.tBase + 100*time.Millisecond, ctrlMin: 200 * time.Millisecond}
+	if m := c.measure(q2, 1); m.ctrlUp {
+		t.Fatal("q_ctrl up again in an interval with no pong")
+	}
+	// the next high pong of the run does
+	q2.now, q2.pongs = wtT0.Add(32*time.Second), []time.Duration{205 * time.Millisecond}
+	if m := c.measure(q2, 1); !m.ctrlUp {
+		t.Fatal("q_ctrl not up on the run's next high pong")
 	}
 	// with no offset measured yet the channel's rttMin is the floor
 	d := wtCore(1)

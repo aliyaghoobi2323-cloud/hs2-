@@ -364,7 +364,12 @@ var (
 	// when no sample reached it in that time, sends nothing past 4 packets
 	// for 200 ms (PROBE_RTT); a sender held by its window a standing queue
 	// past the knee never sees the bare round trip, and after its PROBE_RTT
-	// it sent all the credit it had gathered at 2.89 times its rate.
+	// it sends all the credit it gathered at its STARTUP pacing (≈3.9× the
+	// path on the rig). A refresh does NOT keep PROBE_RTT away: Linux keeps
+	// min_rtt in µs and takes only a strictly lower sample, so an emptied
+	// queue renews it now and then at best (the staler the floor, the less
+	// often); the core must take the burst after it (noteTau skips the dip),
+	// not count on avoiding it. The refresh stays for the knee's estimate.
 	wcRefreshMin = 7 * time.Second
 	wcRefreshMax = 9 * time.Second
 )
@@ -1229,18 +1234,24 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	if off := c.ctrlOffs.min(now, wcCtrlOffWin); off > 0 && c.tBase > 0 {
 		floor = c.tBase + off - 1
 	}
+	// (a run of high pongs counts across intervals, but only an interval
+	// with a pong of the run in it shows it: an interval without pongs
+	// after two high ones showed a queue again with no new sample, and the
+	// rig's 4 × 1000/100 drained on it, "q=0.0ms")
 	thr := max(wcCtrlQMin, time.Duration(float64(c.tBase)*wcCtrlQShare))
+	hi := false
 	for _, p := range in.pongs {
 		if floor > 0 {
 			m.ctrlQ = max(m.ctrlQ, p-floor)
 		}
 		if floor > 0 && p-floor > thr {
 			c.pongHi++
+			hi = hi || c.pongHi >= 2
 		} else {
 			c.pongHi = 0
 		}
 	}
-	m.ctrlUp = c.pongHi >= 2 && lossFree
+	m.ctrlUp = hi && c.pongHi >= 2 && lossFree
 	return m
 }
 
@@ -1559,9 +1570,14 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 // harm says whether the windows without the core are already past the knee
 // (stage 1: nothing under them is the core's to change, and growing them
 // can only add loss):
-//   - the exit's records show a standing queue past the core's target (the
-//     largest of the latest three: one record's spread is 3 to 17 ms), or
-//     loss with a queue behind it (random loss leaves none);
+//   - the exit's records show a queue past Δq (the largest of the latest
+//     three). The rig (z12, P0–P1) split in two: where the core gains, the
+//     windows without it left 0.9–3.2 ms (300/150, 1000/100, with or without
+//     0.1% loss, a 200 ms queue, a speed change); where they already fill
+//     the path (100/100, 100/50, 4 downloads on 300/150), 6.6 to 52 ms,
+//     mostly past 10. Past qTarget+Δq (20 ms) as before, 100/100 started on
+//     a 19.7 ms record, crept to 2.5 MiB and lost 26% of an interval's
+//     packets for 86 → 90 Mbit/s;
 //   - the exit's records show over 1% resent;
 //   - with no record to tell a queue from data held behind holes (the
 //     exit's side, an old exit): the windows hold wcPastKnee times what
@@ -1569,9 +1585,8 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 //     a record: under random loss the windows hold that much behind holes,
 //     with no queue at the exit, and that is where the core gains most.)
 func (c *wcore) harm(m wcMeas) bool {
-	q := c.qTarget(m.at) + c.dq()
 	switch {
-	case m.qSnd3OK && (m.qSnd3 > q || c.sndRef.ok && c.sndRef.v > wcLossCongAbs && m.qSnd3 >= c.dq()):
+	case m.qSnd3OK && m.qSnd3 > c.dq():
 		return true
 	case c.sndRef.ok && c.sndRef.v > wcOffLoss:
 		return true
@@ -1686,7 +1701,17 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if m.qOwnOK && !qUp && m.qOwn < c.qOwnRef {
 		c.qOwnRef = m.qOwn
 	}
-	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || in.apProbing || ((c.capped || c.burstHeld) && c.flat >= 1) {
+	// a budget that brought losses of our own (bCap, fresh) bounds STARTUP
+	// as it bounds HOLD: past it only a probe goes, one probeQ at a time
+	// (the rig's 300/150: a STARTUP after two probe wins went 4.4 → 5.5 →
+	// 8.2 MiB past a cap of 5.3 and overflowed the queue again, 59% of the
+	// interval's packets out of order)
+	capB := uint64(math.MaxUint64)
+	if c.bCap > 0 && in.now.Sub(c.bCapAt) < wcQcapTTL {
+		capB = max(c.bCap, c.B)
+	}
+	atCap := c.B >= capB
+	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || in.apProbing || ((c.capped || c.burstHeld || atCap) && c.flat >= 1) {
 		c.endStartup(in, m, ev, cong || qUp, cong)
 		return
 	}
@@ -1698,9 +1723,14 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	default:
 		c.gear = max(c.gear-1, 0)
 	}
-	if m.holey {
+	if m.holey && !(m.qSndOK && m.qSnd <= c.dq()/2) {
 		// where data waits behind holes q_own (an srtt) shows a queue only
-		// a while after it formed: the smallest steps
+		// a while after it formed: the smallest steps, unless the exit's
+		// latest record (no wait behind holes in it) shows the path queue
+		// empty. (Always the smallest, z12 P1: the rate of a ×1.25 step
+		// never grew the 25% STARTUP asks, so each STARTUP ended after
+		// wcFullRounds; 1000/100 with 0.1% loss crept from 2 to 14 MiB in
+		// 24 s, 228 Mbit/s against 363 before, with q_snd 1.2–2 ms all along.)
 		c.gear = min(c.gear, 0)
 	}
 	g := 1.0
@@ -1711,7 +1741,7 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	}
 	k := c.knee(m.rF, m)
 	c.prevR, c.prevB = m.rF, c.B
-	c.setB(in, m, max(c.B, uint64(g*math.Min(float64(c.B), k))))
+	c.setB(in, m, min(max(c.B, uint64(g*math.Min(float64(c.B), k))), capB))
 }
 
 // endStartup: the knee is found. To DRAIN if the queue grew or loss came
