@@ -47,9 +47,11 @@ import (
 // whatever the edge runs: base windows past a shallow queue or a policer
 // gain from it too. In the link model (pacenet_model_test.go, the red team's
 // round-2 grid of 2240 runs, base and core each with the net off and on):
-// the links the loss rule drains under the core and not under base 30 → 1,
-// the base's own drains 321 → 15, the core's 343 → 16; on clean paths the
-// mean rate of base 163.3 → 165.4 and of the core 236.9 → 252.9 Mbit/s.
+// the links the loss rule drains under the core and not under base 30 → 2,
+// the base's own drains 321 → 20, the core's 343 → 18; on clean paths the
+// mean rate of base 163.3 → 166.1 and of the core 236.9 → 254.1 Mbit/s.
+// Over all of round 2's sweeps and round 1's (7216 runs): 131 → 37, base
+// 1547 → 194, core 1630 → 187.
 
 // Knobs (cmd/hs2 applyTuning: HS2_TUNE_PACENET*), read as a session
 // registers (PaceNet) and at each step (the others).
@@ -63,10 +65,12 @@ var (
 )
 
 var (
-	// wcNetK: in the grid, ×1.25 left 1 drain under the core and not under
-	// base, ×1.5 7 (×2, an early variant: 27 of the 131 drained cells of
-	// round 2, against 20 at ×1.25), and the clean paths' mean rate was
-	// 252.9 at ×1.25, 250.2 at ×1.5 (core) Mbit/s. A burst at 1.5 times a
+	// wcNetK: in the grid (the net as it was before wcNetIdle took the
+	// round trip and the delivery rate its acked bytes), ×1.25 left 1
+	// drain under the core and not under base, ×1.5 7 (×2, an early
+	// variant: 27 of the 131 drained cells of round 2, against 20 at
+	// ×1.25), and the clean paths' mean rate was 252.9 at ×1.25, 250.2 at
+	// ×1.5 (core) Mbit/s. A burst at 1.5 times a
 	// shallow queue's rate still overflows it. (Linux's delivery_rate runs
 	// past what the path carries with ACKs that come in clumps: the rig
 	// judges how much of that margin is real.)
