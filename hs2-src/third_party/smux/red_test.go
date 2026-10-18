@@ -181,6 +181,19 @@ func redChaos(t *testing.T, seed int64) {
 	srv := <-srvCh
 	stop := make(chan struct{})
 	core := fakeCore(seed+200, stop, cli, srv)
+	core.Add(1)
+	go func() { // the pacing-cap experiment's reader, on a goroutine of its own
+		defer core.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(time.Millisecond):
+			}
+			cli.PeerWindows()
+			srv.PeerWindows()
+		}
+	}()
 	r := rand.New(rand.NewSource(seed))
 	var streams []*Stream
 	for i := 0; i < 16; i++ {

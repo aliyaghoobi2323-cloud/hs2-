@@ -3,6 +3,7 @@ package engine
 import (
 	"math"
 	"math/rand"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -150,4 +151,86 @@ func redWcoreRun(t *testing.T, seed int64, states map[wcState]int, nCeil *int) {
 			t.Fatalf("seed %d step %d: next step %v after this one", seed, step, out.next.Sub(now))
 		}
 	}
+}
+
+// A user whose app downloads fast under a ceiling of SmuxStreamBuffer (its
+// window grows past SmuxNeedStreamBuffer, its claim on the window pool with
+// it) and then freezes holds that claim, and the link keeps moving; once
+// frozen apps fill the link's grown buffer too, the wedge guard closes
+// every stuck relay, the frozen fast one with them, and the whole pool
+// comes back.
+func TestRedFrozenFastAppThenGuard(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real-time readers")
+	}
+	w := Wcore
+	Wcore = 0 // this test is the core: no runner to reset its ceilings
+	defer func() { Wcore = w }()
+	free := windowPool().Free()
+	r := newWedgeRig(t, true)
+	var stop atomic.Bool
+	fast := r.open(func(u *wUser) {
+		buf := make([]byte, 64<<10)
+		for !stop.Load() {
+			n, err := u.app.Read(buf)
+			u.got.Add(int64(n))
+			if err != nil {
+				return
+			}
+		}
+		<-u.ended // frozen: never reads again
+	})
+	r.edge.SetCoreRef(0, 0, true)
+	var win uint32
+	for end := time.Now().Add(20 * time.Second); time.Now().Before(end) && win < 8<<20; time.Sleep(20 * time.Millisecond) {
+		s, _ := r.edge.CoreSnapshot(nil)
+		for _, x := range s {
+			x.Stream.SetCoreCeil(uint32(SmuxStreamBuffer))
+			win = max(win, x.Win)
+		}
+	}
+	if win < 8<<20 {
+		t.Fatalf("the fast download's window grew to %d only", win)
+	}
+	stop.Store(true)
+	time.Sleep(time.Second) // what its window let in arrives
+	held := r.edge.Extra()
+	if held <= 0 {
+		t.Fatalf("a frozen app past its fast start holds no claim (extra %d)", held)
+	}
+	healthy := r.open(readAt(0))
+	time.Sleep(500 * time.Millisecond)
+	before := healthy.got.Load()
+	time.Sleep(time.Second)
+	if healthy.got.Load()-before < 4<<20 {
+		t.Fatalf("healthy user moved %d KiB in 1 s next to the frozen fast app", (healthy.got.Load()-before)>>10)
+	}
+	for i := 0; i < 4; i++ {
+		if k := r.lookFast(); k != 0 {
+			t.Fatalf("guard closed %d relays while the link flowed", k)
+		}
+	}
+	t.Logf("frozen fast app: window %d MiB, link extra %d MiB, pool %d of %d MiB", win>>20, held>>20, windowPool().Free()>>20, free>>20)
+	stuck := r.openFrozen(150)
+	killed := 0
+	for i := 0; i < 60 && !ended(fast); i++ {
+		killed += r.lookFast()
+	}
+	if !ended(fast) {
+		t.Fatalf("the frozen fast app's relay is still open (guard closed %d)", killed)
+	}
+	for i := 0; i < 40 && killed < len(stuck)+1; i++ {
+		killed += r.lookFast()
+	}
+	if ended(healthy) {
+		t.Fatal("the healthy relay was closed")
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for r.edge.Extra() != 0 || windowPool().Free() != free {
+		if time.Now().After(deadline) {
+			t.Fatalf("after the release: buffer %d past SmuxSessionBuffer, pool %d of %d", r.edge.Extra(), windowPool().Free(), free)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Logf("guard closed %d relays", killed)
 }
