@@ -1,0 +1,938 @@
+diff --git a/docs/architecture/WINDOW_CORE.fa.md b/docs/architecture/WINDOW_CORE.fa.md
+index 8d38f67..b7c0731 100644
+--- a/docs/architecture/WINDOW_CORE.fa.md
++++ b/docs/architecture/WINDOW_CORE.fa.md
+@@ -670,7 +670,8 @@
+   - `PoolWorstCaseMiB = 1.5 × WindowPoolMiB` یک بار برای هر پردازه شمرده می‌شود؛
+   - `maxLinksRule` آن را از RAM کم می‌کند: ۱۶GB/۴ هسته همچنان ۳۰۰ لینک، و ۸GB/۸ هسته ۱۶۲.
+ - هسته بدترین حالت را بالا نمی‌برد: پنجره‌ها هرگز بیش از `MaxStreamBuffer` و استخر نمی‌گیرند. در عمل کمتر از N4 مصرف می‌کند.
+-- **لینکی که می‌میرد (تیم قرمز دور ۱، بند ۸):** دادهٔ خوانده‌نشدهٔ آن تا وقتی رله‌هایش جریان‌ها را رها کنند در حافظه است (`relayDieGrace`، ۵ ثانیه). ادعای استخر هر جریان تا همان وقت با داده می‌ماند و وقتی جریان آن را رها می‌کند برمی‌گردد (`Stream.Close` روی جریانِ نشستِ بسته هم `recycleTokens` را اجرا می‌کند؛ بخشی از ادعا که داده‌ای پشتش نیست همان لحظهٔ بستن نشست برمی‌گردد). جریانی که اپش هرگز آن را نبندد، ادعایش را `closeGrace` (۱۰ ثانیه) پس از مرگ نشست پس می‌دهد، پس استخر همیشه کامل برمی‌گردد. پیش‌تر ادعا همان لحظهٔ بستن نشست برمی‌گشت و حافظهٔ واقعی تا ۵ ثانیه از کران بیشتر می‌شد. بخش `SmuxSessionBuffer` لینکِ مرده همچنان تا آن چند ثانیه بیرون از شمار است (شمار لینک‌ها لینک زنده را می‌شمارد)؛ این در پایه هم بود و در `tune.go` نوشته شده است.
++- **لینکی که می‌میرد (تیم قرمز دور ۱، بند ۸):** دادهٔ خوانده‌نشدهٔ آن تا وقتی رله‌هایش جریان‌ها را رها کنند در حافظه است (`relayDieGrace`، ۵ ثانیه). ادعای استخر هر جریان تا همان وقت با داده می‌ماند و وقتی جریان آن را رها می‌کند برمی‌گردد (`Stream.Close` روی جریانِ نشستِ بسته هم `recycleTokens` را اجرا می‌کند؛ بخشی از ادعا که داده‌ای پشتش نیست همان لحظهٔ بستن نشست برمی‌گردد). جریانی که اپش هرگز آن را نبندد، ادعایش را `closeGrace` (۱۰ ثانیه) پس از مرگ نشست پس می‌دهد، پس استخر همیشه کامل برمی‌گردد. پیش‌تر ادعا همان لحظهٔ بستن نشست برمی‌گشت و حافظهٔ واقعی تا ۵ ثانیه از کران بیشتر می‌شد.
++  - **قرض هم همین‌طور (تیم قرمز دور ۲، یافتهٔ ۱):** آنچه نشستِ پرشده قرض گرفته (یدک) دادهٔ جریان‌هایش را می‌پوشاند. هنگام بستن نشست فقط تا جایی که سطل آزاد است برمی‌گردد؛ باقی با خواندن داده یا `Close` جریان (که اکنون توکن‌هایش را هم پس می‌دهد)، یا `closeGrace` بعد. پیش‌تر `dropSpare` همهٔ یدک را همان لحظه برمی‌گرداند و تا ۲·`SmuxSessionBuffer` برای هر لینکِ مرده (جمعاً تا کل استخر) همان حافظه دوباره به لینک‌های دیگر داده می‌شد (`TestRed2BorrowedDataKeepsItsPoolAfterClose`). بخش `SmuxSessionBuffer` لینکِ مرده همچنان تا آن چند ثانیه بیرون از شمار است (شمار لینک‌ها لینک زنده را می‌شمارد)؛ این در پایه هم بود و در `tune.go` نوشته شده است.
+ - **حافظهٔ خود هسته:**
+   - حدود ۳۰۰ بایت برای هر لینک با هستهٔ فعال؛
+   - حدود ۸۰ بایت برای هر جریان: شمارنده‌ها و حلقهٔ ۴تایی UPD؛
+diff --git a/hs2-src/engine/red2_wcore_test.go b/hs2-src/engine/red2_wcore_test.go
+new file mode 100644
+index 0000000..0096c78
+--- /dev/null
++++ b/hs2-src/engine/red2_wcore_test.go
+@@ -0,0 +1,162 @@
++package engine
++
++import (
++	"context"
++	"encoding/binary"
++	"io"
++	"path/filepath"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/xtaci/smux"
++)
++
++// Red team round 2 (Z5 window core, part A).
++
++// An edge whose exit is of the version before the window core, end to end
++// over one real link: the exit answers the stats handshake with a recLen of
++// 64 and sends 64-byte records (as b765677's serveStats does: no sender's
++// fields), read by the edge's own openStats/runStats over a smux stream of
++// the same link that carries a fast download, polled as the link manager
++// polls. On the path where a new exit's records let the core grow the
++// window past Need (TestWcoreRunnerGrowsAndDrains), the core never leaves
++// OFF, no stream ever gets a ceiling, and no window passes Need.
++// (TestWcoreStep1OldExitStaysOff stores the records in the meter itself.)
++func TestRed2OldExitRealStatsNoCeiling(t *testing.T) {
++	p := newWcPath(5<<20, 50*time.Millisecond)
++	cfg := wcTestConfig()
++	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}
++	mtr.rttMin.Store(100_000)
++	edge, exit := wcSessions(t, p.edge(), p.exit(), cfg, mtr)
++	var sent atomic.Uint64
++	go func() { // the exit: an old one's stats, and the download
++		for {
++			st, err := exit.AcceptStream()
++			if err != nil {
++				return
++			}
++			go func(st *smux.Stream) {
++				defer st.Close()
++				var hs [2]byte
++				if _, err := io.ReadFull(st, hs[:]); err != nil {
++					return
++				}
++				if hs[0] != kindStats {
++					buf := make([]byte, 32<<10)
++					for {
++						n, err := st.Write(buf)
++						sent.Add(uint64(n))
++						if err != nil {
++							return
++						}
++					}
++				}
++				st.Write([]byte{statsVer, statsRecMin, 3})
++				start := time.Now()
++				var q [4]byte
++				for {
++					if _, err := io.ReadFull(st, q[:]); err != nil {
++						return
++					}
++					rec := make([]byte, statsRecMin)
++					putStatsRec(rec, statsRec{seq: binary.BigEndian.Uint32(q[:]), flags: statsFlagChrono,
++						mono: uint64(time.Since(start)), tx: sent.Load()})
++					if _, err := st.Write(rec); err != nil {
++						return
++					}
++				}
++			}(st)
++		}
++	}()
++	ws := &wcSet{tracePath: filepath.Join(t.TempDir(), "trace")}
++	l := newWcLink(edge, cfg, nil, mtr, false, nil)
++	ws.put(l)
++	ctx, cancel := context.WithCancel(context.Background())
++	statsDone := make(chan struct{})
++	go func() { defer close(statsDone); openStats(ctx, &ctrlFakeLink{sess: edge, m: mtr}, nil) }()
++	t.Cleanup(func() { cancel(); edge.Close(); <-statsDone })
++	st, err := edge.OpenStream()
++	if err != nil {
++		t.Fatal(err)
++	}
++	st.Write([]byte{0xFF, 0xFF}) // not a stats stream: the download
++	go io.Copy(io.Discard, st)
++	runWcSet(t, ws)
++	need := uint32(cfg.NeedStreamBuffer)
++	var seq uint32
++	for end := time.Now().Add(8 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
++		pollStats(mtr)
++		if r := mtr.peer.Load(); r != nil {
++			seq = r.seq
++			if r.srtt != 0 || r.segsOut != 0 {
++				t.Fatalf("an old exit's record read with the sender's fields: %+v", r)
++			}
++		}
++		if s := wcState(l.inStats.state.Load()); s != wcOff || l.inStats.active.Load() || st.CoreCeil() != 0 {
++			t.Fatalf("an old exit's records only (%d so far): core %v (active %v), ceiling %d", seq, s, l.inStats.active.Load(), st.CoreCeil())
++		}
++	}
++	if mtr.statsState.Load() != statsOK || seq < 5 {
++		t.Fatalf("stats state %d, %d records: the old exit's records never came", mtr.statsState.Load(), seq)
++	}
++	tr := readTrace(t, ws.tracePath)
++	if fast := wcStayedOff(t, tr, need); fast < 5 {
++		t.Fatalf("the stream counted as fast in %d of %d evaluations: the path tested nothing", fast, len(tr))
++	}
++	if e := edge.Extra(); e != 0 {
++		t.Fatalf("the edge's buffer is %d past its own with no ceiling", e)
++	}
++	t.Logf("%d records of 64 bytes, %d MiB downloaded, %d evaluations, core OFF throughout, no ceiling, no window past %d",
++		seq, sent.Load()>>20, len(tr), need)
++}
++
++// A link whose frozen apps filled its buffer and made it borrow from the
++// window pool dies (its session closes, as on a link lost while wedged).
++// What it borrowed covers data its relays still hold, unread, until they let
++// the streams go relayDieGrace later: until then that part of the pool is
++// not handed to any other link (before red team round 2 it came back the
++// moment the session closed); once the relays end it all comes back.
++func TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo(t *testing.T) {
++	if testing.Short() {
++		t.Skip("real-time relays")
++	}
++	grace := relayDieGrace.Load()
++	relayDieGrace.Store(int64(time.Second))
++	t.Cleanup(func() { relayDieGrace.Store(grace) })
++	free := windowPool().Free()
++	r := newWedgeRig(t, true)
++	stuck := r.openFrozen(40) // 256 KiB each: 10 MiB, past SmuxSessionBuffer
++	var borrowed int
++	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
++		if b := free - windowPool().Free(); b > 0 && b == borrowed {
++			break
++		} else {
++			borrowed = b
++		}
++	}
++	if borrowed < 1<<20 || r.edge.Borrows() == 0 {
++		t.Fatalf("the frozen apps made the link borrow %d (borrows %d): the rig tested nothing", borrowed, r.edge.Borrows())
++	}
++	r.edge.Close() // the link dies
++	closedAt := time.Now()
++	time.Sleep(100 * time.Millisecond)
++	if held := free - windowPool().Free(); held < borrowed/2 {
++		t.Fatalf("the link died holding %d KiB borrowed, its relays still holding the data: the pool holds %d KiB for it", borrowed>>10, held>>10)
++	}
++	for _, u := range stuck {
++		select {
++		case <-u.ended:
++		case <-time.After(5 * time.Second):
++			t.Fatal("a relay outlived relayDieGrace")
++		}
++	}
++	for windowPool().Free() != free {
++		if time.Since(closedAt) > 5*time.Second {
++			t.Fatalf("the relays let go: pool %d of %d", windowPool().Free(), free)
++		}
++		time.Sleep(10 * time.Millisecond)
++	}
++	t.Logf("borrowed %d KiB; held with the data after the death, whole %v after it (relayDieGrace %v)", borrowed>>10,
++		time.Since(closedAt).Round(10*time.Millisecond), time.Second)
++}
+diff --git a/hs2-src/third_party/smux/pool.go b/hs2-src/third_party/smux/pool.go
+index 09c2b58..cf0b85b 100644
+--- a/hs2-src/third_party/smux/pool.go
++++ b/hs2-src/third_party/smux/pool.go
+@@ -66,13 +66,15 @@ const spareRoom = 4
+ // past NeedStreamBuffer back, then the claim it covered (sweepClaims).
+ const claimIdle = 5 * time.Second
+ 
+-// closeGrace: a session that closed gives back what its streams still claim
+-// this long after, whatever their apps do (dropClaims). Until then a claim
+-// covers what its stream holds unread past NeedStreamBuffer, and goes back
+-// as the stream lets the data go: the process's memory stays within what the
+-// pool accounts for while a dead link's relays drain (hs2's relayDieGrace,
+-// 5 s); a stream its app never closes would keep its claim for good. A
+-// variable for the tests.
++// closeGrace: a session that closed gives back what its streams still claim,
++// and its spare, this long after, whatever their apps do (dropClaims). Until
++// then a claim covers what its stream holds unread past NeedStreamBuffer,
++// and the spare what the streams hold past MaxReceiveBuffer and their claims
++// (what the session borrowed as it ran full), and each goes back as the
++// streams let the data go: the process's memory stays within what the pool
++// accounts for while a dead link's relays drain (hs2's relayDieGrace, 5 s);
++// a stream its app never closes would keep it for good. A variable for the
++// tests.
+ var closeGrace = 2 * claimIdle
+ 
+ // WindowPool is the excess past Config.NeedStreamBuffer that the windows of
+@@ -285,8 +287,9 @@ func (s *Stream) dropClaim() {
+ }
+ 
+ // letGo takes n bytes of a stream's claim off it: into the session's spare,
+-// or, the session closed, straight back to the pool (its spare went back as
+-// it closed, dropSpare, under the same lock).
++// or, the session closed, straight back to the pool, its buffer with it
++// (nothing more comes in: the spare is only what still holds data,
++// returnSpare).
+ func (s *Session) letGo(n int) {
+ 	if n <= 0 {
+ 		return
+@@ -295,6 +298,7 @@ func (s *Session) letGo(n int) {
+ 	defer s.spareLock.Unlock()
+ 	if s.IsClosed() {
+ 		atomic.AddInt32(&s.extra, -int32(n))
++		atomic.AddInt32(&s.bucket, -int32(n))
+ 		s.config.WindowPool.give(n)
+ 		return
+ 	}
+@@ -302,7 +306,7 @@ func (s *Session) letGo(n int) {
+ }
+ 
+ // dropClaims gives back what the streams of a closed session still claim,
+-// closeGrace after it closed.
++// and its spare, closeGrace after it closed.
+ func (s *Session) dropClaims() {
+ 	s.streamLock.Lock()
+ 	for _, st := range s.streams {
+@@ -311,6 +315,7 @@ func (s *Session) dropClaims() {
+ 		st.bufferLock.Unlock()
+ 	}
+ 	s.streamLock.Unlock()
++	s.dropSpare()
+ }
+ 
+ // grow grows the session's buffer by n bytes a stream took from the pool.
+@@ -331,7 +336,9 @@ func (s *Session) spareUp(n int) { atomic.AddInt32(&s.spare, int32(n)) }
+ // under a larger window stays in the buffer it came into until it is read,
+ // and the other streams keep room to move meanwhile -- more than they would
+ // have had if those windows had stayed within NeedStreamBuffer, as that
+-// data would then have emptied a buffer of MaxReceiveBuffer.
++// data would then have emptied a buffer of MaxReceiveBuffer. Once the
++// session closed nothing more comes in: all that is free goes back, and
++// the rest as the streams let their data go (read, or closed).
+ func (s *Session) returnSpare() {
+ 	if atomic.LoadInt32(&s.spare) <= 0 {
+ 		return
+@@ -339,6 +346,9 @@ func (s *Session) returnSpare() {
+ 	s.spareLock.Lock()
+ 	defer s.spareLock.Unlock()
+ 	room := int32(s.config.MaxReceiveBuffer / spareRoom)
++	if s.IsClosed() {
++		room = 0
++	}
+ 	for {
+ 		sp := atomic.LoadInt32(&s.spare)
+ 		free := atomic.LoadInt32(&s.bucket)
+@@ -373,8 +383,9 @@ func (s *Session) returnSpare() {
+ // kept the session from borrowing at all, and such a link stalled 10 s).
+ // Readers that do not read at all (frozen apps) fill it all the same, a
+ // buffer later: then the session waits as it did, and the wedge guard
+-// (hs2's) sees it. A closed session borrows nothing: its spare has gone back
+-// (dropSpare, under the same lock), and what it took now would never be.
++// (hs2's) sees it. A closed session borrows nothing: nothing more comes in,
++// and its spare only goes back from then on (returnSpare, under the same
++// lock).
+ func (s *Session) borrow() bool {
+ 	s.spareLock.Lock()
+ 	defer s.spareLock.Unlock()
+@@ -391,9 +402,10 @@ func (s *Session) borrow() bool {
+ 	return true
+ }
+ 
+-// dropSpare gives the session's spare back to the pool, as it closes. Its
+-// streams' claims keep only what they hold unread (sessionClose) and go back
+-// as the streams let it go, or closeGrace later (dropClaims).
++// dropSpare gives all of the session's spare back to the pool, closeGrace
++// after it closed (dropClaims). As it closes, the spare goes back as far as
++// it is free (returnSpare), its streams' claims keep only what they hold
++// unread (sessionClose), and both go back as the streams let it go.
+ func (s *Session) dropSpare() {
+ 	s.spareLock.Lock()
+ 	defer s.spareLock.Unlock()
+diff --git a/hs2-src/third_party/smux/pool_test.go b/hs2-src/third_party/smux/pool_test.go
+index f952281..1a34e76 100644
+--- a/hs2-src/third_party/smux/pool_test.go
++++ b/hs2-src/third_party/smux/pool_test.go
+@@ -237,7 +237,9 @@ func TestPoolNoBorrowOnceClosed(t *testing.T) {
+ 	}
+ }
+ 
+-// What a session borrowed goes back to the pool when it closes, read or not.
++// What a session borrowed goes back to the pool when it closes as far as
++// its buffer is free, and the rest as its streams let their data go (here:
++// closed; read, or closeGrace later: TestRed2BorrowedDataKeepsItsPoolAfterClose).
+ func TestPoolBorrowBackOnClose(t *testing.T) {
+ 	pool := NewWindowPool(4 << 20)
+ 	cfg := poolConfig(pool)
+@@ -248,8 +250,12 @@ func TestPoolBorrowBackOnClose(t *testing.T) {
+ 		t.Fatal("nothing borrowed")
+ 	}
+ 	session.Close()
++	if held, past := 4<<20-pool.Free(), unreadOf(stream)-cfg.MaxReceiveBuffer; held != past {
++		t.Fatalf("session closed with %d unread past its buffer: the pool holds %d for it", past, held)
++	}
++	stream.Close()
+ 	if e, sp := extraOf(session); pool.Free() != 4<<20 || e != 0 || sp != 0 {
+-		t.Fatalf("session closed: pool free %d extra %d spare %d", pool.Free(), e, sp)
++		t.Fatalf("stream let go: pool free %d extra %d spare %d", pool.Free(), e, sp)
+ 	}
+ }
+ 
+diff --git a/hs2-src/third_party/smux/red2_chaos_test.go b/hs2-src/third_party/smux/red2_chaos_test.go
+new file mode 100644
+index 0000000..a17ee7f
+--- /dev/null
++++ b/hs2-src/third_party/smux/red2_chaos_test.go
+@@ -0,0 +1,402 @@
++package smux
++
++import (
++	"fmt"
++	"math/rand"
++	"net"
++	"os"
++	"runtime"
++	"strconv"
++	"sync"
++	"sync/atomic"
++	"testing"
++	"time"
++)
++
++// Red team round 2: the round-1 chaos runs with more seeds, and a chaos run
++// of its own for the fix round's rules: links that die abruptly (the socket
++// goes, not Close) or close while their streams close at both ends at once,
++// readers that stop for good or never close, the pool watched between the
++// checks for a moment past its size (a double return) or below zero.
++
++// red2Seeds is how many seeds the round-2 chaos runs take: HS2_RED2_SEEDS,
++// else 0 (only TestRed2AbruptDeathChaos runs, with 6).
++func red2Seeds() int {
++	n, _ := strconv.Atoi(os.Getenv("HS2_RED2_SEEDS"))
++	return n
++}
++
++// TestRed2ChaosMoreSeeds: round 1's three chaos runs with HS2_RED2_SEEDS
++// seeds each, from 100 (round 1 used 0 to 3) or HS2_RED2_FROM, all three or
++// HS2_RED2_ONLY (inv, sweep, core).
++func TestRed2ChaosMoreSeeds(t *testing.T) {
++	n := red2Seeds()
++	if n == 0 {
++		t.Skip("HS2_RED2_SEEDS not set")
++	}
++	defer func(g time.Duration) { closeGrace = g }(closeGrace)
++	closeGrace = 300 * time.Millisecond
++	from, _ := strconv.Atoi(os.Getenv("HS2_RED2_FROM"))
++	if from == 0 {
++		from = 100
++	}
++	only := os.Getenv("HS2_RED2_ONLY") // inv, sweep or core: that chaos only
++	for seed := int64(from); seed < int64(from+n); seed++ {
++		if only == "" || only == "inv" {
++			redChaos(t, seed)
++		}
++		if only == "" || only == "sweep" {
++			redSweepChaos(t, seed)
++		}
++		if only == "" || only == "core" {
++			coreChaosRound(t, seed)
++		}
++	}
++}
++
++// poolStrict checks, with every lock of every session held, the pool's
++// books for open and closed sessions alike: the pool and what the sessions
++// hold add up to its size, and each session's extra is its streams' claims
++// plus its spare -- also once it closed (letGo, dropSpare and dropClaims
++// keep it so) -- and nothing is negative.
++func poolStrict(pool *WindowPool, size int, sessions ...*Session) error {
++	_, err := poolStrictClaims(pool, size, sessions...)
++	return err
++}
++
++// poolStrictClaims is poolStrict, also returning the claims of all streams.
++func poolStrictClaims(pool *WindowPool, size int, sessions ...*Session) (all int, err error) {
++	for _, s := range sessions {
++		s.streamLock.Lock()
++		defer s.streamLock.Unlock()
++	}
++	for _, s := range sessions {
++		for _, st := range s.streams {
++			st.bufferLock.Lock()
++			defer st.bufferLock.Unlock()
++		}
++	}
++	for _, s := range sessions {
++		s.spareLock.Lock()
++		defer s.spareLock.Unlock()
++	}
++	sum := pool.free.Load()
++	if sum < 0 || sum > int64(size) {
++		return 0, fmt.Errorf("pool free %d of %d", sum, size)
++	}
++	for _, s := range sessions {
++		extra, spare := atomic.LoadInt32(&s.extra), atomic.LoadInt32(&s.spare)
++		claims := 0
++		for _, st := range s.streams {
++			if st.claim < 0 {
++				return 0, fmt.Errorf("stream %d claim %d", st.id, st.claim)
++			}
++			claims += st.claim
++		}
++		if spare < 0 || extra < 0 || int(extra) != claims+int(spare) {
++			return 0, fmt.Errorf("session (closed %v) extra %d, claims %d + spare %d", s.IsClosed(), extra, claims, spare)
++		}
++		all += claims
++		sum += int64(extra)
++	}
++	if sum != int64(size) {
++		return 0, fmt.Errorf("pool free %d + held %d = %d, want %d", pool.free.Load(), sum-pool.free.Load(), sum, size)
++	}
++	return all, nil
++}
++
++// TestRed2AbruptDeathChaos: see red2Abrupt; 6 seeds, or HS2_RED2_SEEDS.
++func TestRed2AbruptDeathChaos(t *testing.T) {
++	defer func(g time.Duration) { closeGrace = g }(closeGrace)
++	closeGrace = 300 * time.Millisecond
++	n := red2Seeds()
++	if n == 0 {
++		n = 6
++	}
++	for seed := int64(0); seed < int64(n); seed++ {
++		red2Abrupt(t, seed)
++	}
++}
++
++// red2Abrupt: two sessions sharing a small pool over a real socket, streams
++// both ways under readers that run fast, slow, pause, or stop for good
++// after a fast start, a fake core flipping ceilings, sweeps every 20 ms;
++// then the link dies one of three ways: its socket closes under both
++// sessions (each closes at its keepalive timeout, or, parked on a full
++// buffer, when its owner gives up on it, as hs2's suspect check does), one
++// session closes while streams close at both ends at once, or both
++// sessions close at once with the same. A third of the readers close their
++// stream when their reads fail, a third later, a third never. The pool's
++// books hold throughout (poolStrict), a watcher never sees the pool past its
++// size or below zero, and the pool is whole closeGrace after the end.
++func red2Abrupt(t *testing.T, seed int64) {
++	const poolSize = 3 << 20
++	pool := NewWindowPool(poolSize)
++	var bad atomic.Value
++	stopWatch := make(chan struct{})
++	var watch sync.WaitGroup
++	watch.Add(1)
++	go func() {
++		defer watch.Done()
++		for i := 0; ; i++ {
++			select {
++			case <-stopWatch:
++				return
++			default:
++			}
++			if f := pool.free.Load(); f > poolSize || f < 0 {
++				bad.CompareAndSwap(nil, fmt.Sprintf("pool free %d of %d", f, poolSize))
++			}
++			if i%64 == 0 {
++				runtime.Gosched()
++			}
++		}
++	}()
++	ln, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer ln.Close()
++	cfgOf := func() *Config {
++		c := poolConfig(pool)
++		if seed/3%2 == 0 {
++			c.MaxReceiveBuffer = 2 << 20 // room for windows to grow past the need
++		} // else 512 KiB: the session runs full and borrows
++		c.KeepAliveDisabled = false
++		c.KeepAliveInterval = 20 * time.Millisecond
++		c.KeepAliveTimeout = 300 * time.Millisecond
++		return c
++	}
++	srvCh := make(chan *Session, 1)
++	rawCh := make(chan net.Conn, 1)
++	var wg sync.WaitGroup
++	var mu sync.Mutex
++	var all []*Stream
++	keep := func(st *Stream) {
++		mu.Lock()
++		all = append(all, st)
++		mu.Unlock()
++	}
++	stopIO := make(chan struct{})
++	push := func(st *Stream) {
++		defer wg.Done()
++		buf := make([]byte, 16<<10)
++		for {
++			select {
++			case <-stopIO:
++				return
++			default:
++			}
++			st.SetWriteDeadline(time.Now().Add(100 * time.Millisecond))
++			if _, err := st.Write(buf); err != nil && err != ErrTimeout {
++				return
++			}
++		}
++	}
++	read := func(st *Stream, r *rand.Rand) {
++		defer wg.Done()
++		mode := r.Intn(5)
++		if mode == 4 {
++			mode = 0 // fast, twice as often
++		}
++		closing := r.Intn(3)
++		buf := make([]byte, 1+r.Intn(64<<10))
++		start := time.Now()
++		defer func() {
++			switch closing {
++			case 0:
++				st.Close()
++			case 1:
++				time.Sleep(closeGrace / 2)
++				st.Close()
++			} // 2: never
++		}()
++		for {
++			select {
++			case <-stopIO:
++				return
++			default:
++			}
++			switch mode {
++			case 1:
++				time.Sleep(time.Millisecond)
++			case 2:
++				if r.Intn(200) == 0 {
++					time.Sleep(time.Duration(r.Intn(300)) * time.Millisecond)
++				}
++			case 3: // fast, then stopped for good
++				if time.Since(start) > 150*time.Millisecond {
++					<-stopIO
++					return
++				}
++			}
++			st.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
++			if _, err := st.Read(buf); err != nil && err != ErrTimeout {
++				return
++			}
++		}
++	}
++	go func() {
++		c, err := ln.Accept()
++		if err != nil {
++			return
++		}
++		rawCh <- c
++		s, _ := Server(c, cfgOf())
++		srvCh <- s
++		r := rand.New(rand.NewSource(seed + 100))
++		for i := 0; ; i++ {
++			st, err := s.AcceptStream()
++			if err != nil {
++				return
++			}
++			keep(st)
++			wg.Add(1)
++			if i%2 == 0 {
++				go push(st)
++			} else {
++				go read(st, rand.New(rand.NewSource(r.Int63())))
++			}
++		}
++	}()
++	c, err := net.Dial("tcp", ln.Addr().String())
++	if err != nil {
++		t.Fatal(err)
++	}
++	cli, err := Client(c, cfgOf())
++	if err != nil {
++		t.Fatal(err)
++	}
++	srvRaw := <-rawCh
++	srv := <-srvCh
++	stop := make(chan struct{})
++	core := fakeCore(seed+200, stop, cli, srv)
++	checks, maxClaims := 0, 0
++	var checkErr atomic.Value
++	core.Add(1)
++	go func() { // sweeps, as the keepalive tick runs them, and the books
++		defer core.Done()
++		r := rand.New(rand.NewSource(seed + 300))
++		for {
++			select {
++			case <-stop:
++				return
++			case <-time.After(time.Duration(1+r.Intn(4)) * time.Millisecond):
++			}
++			claims, err := poolStrictClaims(pool, poolSize, cli, srv)
++			if err != nil {
++				checkErr.CompareAndSwap(nil, err.Error())
++				return
++			}
++			if claims > maxClaims {
++				maxClaims = claims
++			}
++			checks++
++		}
++	}()
++	r := rand.New(rand.NewSource(seed))
++	for i := 0; i < 10; i++ {
++		st, err := cli.OpenStream()
++		if err != nil {
++			t.Fatal(err)
++		}
++		keep(st)
++		wg.Add(1)
++		if i%2 == 0 {
++			go read(st, rand.New(rand.NewSource(r.Int63())))
++		} else {
++			go push(st)
++		}
++	}
++	time.Sleep(time.Duration(300+r.Intn(900)) * time.Millisecond)
++	closeSome := func(k int) {
++		mu.Lock()
++		list := append([]*Stream(nil), all...)
++		mu.Unlock()
++		var cw sync.WaitGroup
++		for i := 0; i < k && len(list) > 0; i++ {
++			st := list[r.Intn(len(list))]
++			cw.Add(1)
++			go func() { defer cw.Done(); st.Close() }()
++		}
++		cw.Wait()
++	}
++	how := int(seed % 3)
++	switch how {
++	case 0: // the socket goes under both sessions
++		c.Close()
++		srvRaw.Close()
++		time.Sleep(cfgOf().KeepAliveTimeout*2 + 50*time.Millisecond)
++		cli.Close() // what keepalive left open (parked), its owner closes
++		srv.Close()
++	case 1: // one session closes as streams close at both ends
++		var cw sync.WaitGroup
++		cw.Add(2)
++		go func() { defer cw.Done(); cli.Close() }()
++		go func() { defer cw.Done(); closeSome(8) }()
++		cw.Wait()
++		time.Sleep(cfgOf().KeepAliveTimeout*2 + 50*time.Millisecond)
++		srv.Close()
++	case 2: // both close at once, as streams close at both ends
++		var cw sync.WaitGroup
++		cw.Add(3)
++		go func() { defer cw.Done(); cli.Close() }()
++		go func() { defer cw.Done(); srv.Close() }()
++		go func() { defer cw.Done(); closeSome(8) }()
++		cw.Wait()
++	}
++	time.Sleep(50 * time.Millisecond)
++	close(stopIO)
++	close(stop)
++	core.Wait()
++	done := make(chan struct{})
++	go func() { wg.Wait(); close(done) }()
++	select {
++	case <-done:
++	case <-time.After(20 * time.Second):
++		t.Fatalf("seed %d: streams did not end", seed)
++	}
++	for deadline := time.Now().Add(closeGrace + 2*time.Second); pool.Free() != poolSize && time.Now().Before(deadline); {
++		time.Sleep(10 * time.Millisecond)
++	}
++	close(stopWatch)
++	watch.Wait()
++	if e := checkErr.Load(); e != nil {
++		t.Fatalf("seed %d (death %d): books: %v", seed, how, e)
++	}
++	if b := bad.Load(); b != nil {
++		t.Fatalf("seed %d (death %d): the watcher saw %v", seed, how, b)
++	}
++	if err := poolStrict(pool, poolSize, cli, srv); err != nil {
++		t.Fatalf("seed %d (death %d): at the end: %v", seed, how, err)
++	}
++	if f := pool.Free(); f != poolSize {
++		t.Fatalf("seed %d (death %d): pool free %d closeGrace after the end, want %d", seed, how, f, poolSize)
++	}
++	for _, s := range []*Session{cli, srv} {
++		if e, sp := extraOf(s); e != 0 || sp != 0 {
++			t.Fatalf("seed %d (death %d): a closed session holds extra %d spare %d", seed, how, e, sp)
++		}
++	}
++	t.Logf("seed %d (death %d): %d checks, claims up to %d KiB; borrows %d/%d, pool short %d/%d", seed, how, checks, maxClaims>>10,
++		cli.Borrows(), srv.Borrows(), atomic.LoadUint32(&cli.poolShorts), atomic.LoadUint32(&srv.poolShorts))
++}
++
++// dumpStreams says, for a stall, where every stream of the sessions is.
++func dumpStreams(sessions ...*Session) string {
++	out := ""
++	for k, s := range sessions {
++		out += fmt.Sprintf("session %d: closed %v bucket %d extra %d spare %d parks %d borrows %d brakes %d\n", k, s.IsClosed(),
++			atomic.LoadInt32(&s.bucket), atomic.LoadInt32(&s.extra), atomic.LoadInt32(&s.spare), s.Parks(), s.Borrows(), s.Brakes())
++		s.streamLock.Lock()
++		for _, st := range s.streams {
++			st.bufferLock.Lock()
++			out += fmt.Sprintf("  stream %d: rcvWin %d incr %d step %d numRead %d unread %d updLost %v braking %v settling %v preBrake %d claim %d ceil %d | written %d peerConsumed %d peerWindow %d\n",
++				st.id, st.rcvWin, st.incr, st.updStep(s.config), st.numRead, st.unread, st.updLost, st.braking, st.settling, st.preBrake, st.claim,
++				st.core.ceil.Load(), atomic.LoadUint32(&st.numWritten), atomic.LoadUint32(&st.peerConsumed), atomic.LoadUint32(&st.peerWindow))
++			st.bufferLock.Unlock()
++		}
++		s.streamLock.Unlock()
++	}
++	return out
++}
+diff --git a/hs2-src/third_party/smux/red2_test.go b/hs2-src/third_party/smux/red2_test.go
+new file mode 100644
+index 0000000..478c831
+--- /dev/null
++++ b/hs2-src/third_party/smux/red2_test.go
+@@ -0,0 +1,114 @@
++package smux
++
++import (
++	"testing"
++	"time"
++)
++
++// Red team round 2 (Z5 window core, part A): the fix round's rules -- claims
++// that stay with their data after a session closes (closeGrace), the
++// session's share of the pool (FreeFor) -- and what they promise for memory.
++
++// A session whose buffer ran full borrowed from the pool; its link dies
++// with that data unread (a link wedged by readers that stopped is the one
++// most likely to die). What it borrowed is in the stream buffers until the
++// relays let the streams go (hs2's relayDieGrace), just as a claim's data
++// is: it must stay off the pool until then, or the pool is handed out a
++// second time while the first data is still in memory.
++func TestRed2BorrowedDataKeepsItsPoolAfterClose(t *testing.T) {
++	defer func(g time.Duration) { closeGrace = g }(closeGrace)
++	closeGrace = 300 * time.Millisecond
++	const size = 4 << 20
++	for _, how := range []string{"closed", "read", "never"} {
++		pool := NewWindowPool(size)
++		cfg := poolConfig(pool)
++		session, stream, p := newRawPeer(t, cfg)
++		sendWithin(t, p, p.sid, cfg.MaxReceiveBuffer+600<<10, cfg.MaxFrameSize, "more than the buffer, not read")
++		p.settle(stream)
++		_, sp := extraOf(session)
++		if sp < 600<<10 {
++			t.Fatalf("%s: borrowed %d, want at least what came in past MaxReceiveBuffer", how, sp)
++		}
++		session.Close()
++		past := unreadOf(stream) - cfg.MaxReceiveBuffer // in memory past the session's own buffer
++		if held := size - pool.Free(); held < past {
++			t.Errorf("%s: link closed holding %d unread (%d past its MaxReceiveBuffer, all of it borrowed); the pool holds %d for it: %d of that data is handed out again",
++				how, unreadOf(stream), past, held, past-held)
++		}
++		switch how {
++		case "closed": // its relay lets it go: the pool comes back at once
++			stream.Close()
++			if pool.Free() != size {
++				t.Errorf("%s: pool free %d after the stream let its data go, want %d", how, pool.Free(), size)
++			}
++		case "read": // its relay drains it: the pool comes back as it is read
++			buf := make([]byte, 64<<10)
++			for unreadOf(stream) > 0 { // (its update fails: the session is closed)
++				if n, _ := stream.Read(buf); n == 0 {
++					t.Fatalf("%s: nothing read with %d unread", how, unreadOf(stream))
++				}
++			}
++			if pool.Free() != size {
++				t.Errorf("%s: pool free %d after all of it was read, want %d", how, pool.Free(), size)
++			}
++		case "never": // nothing lets go of it: closeGrace
++			deadline := time.Now().Add(closeGrace + time.Second)
++			for pool.Free() != size && time.Now().Before(deadline) {
++				time.Sleep(5 * time.Millisecond)
++			}
++			if pool.Free() != size {
++				t.Errorf("%s: pool free %d closeGrace after the close, want %d", how, pool.Free(), size)
++			}
++		}
++		if e, sp := extraOf(session); e != 0 || sp != 0 {
++			t.Errorf("%s: closed session left with extra %d spare %d", how, e, sp)
++		}
++	}
++}
++
++// The session's share of the pool (FreeFor) binds its windows, not its
++// borrowing (borrow, exempt by design: a fast link's claims must not keep
++// it from borrowing for what was in flight to its other streams). A link
++// with a frozen fast app holds half the pool in claims; when its other
++// readers then stop too (frozen apps rarely come alone: a phone that
++// sleeps) it borrows the rest. Every other link of the process can then
++// neither grow a window past NeedStreamBuffer nor borrow: the situation
++// the share was meant to prevent, reached by one link instead of two.
++// (Logged, not failed: a design limit, WINDOW_CORE §2.3; the data is in
++// memory, nothing leaks.)
++func TestRed2OneLinkTakesThePoolByBorrowing(t *testing.T) {
++	probe := poolConfig(NewWindowPool(1))
++	excess := probe.MaxStreamBuffer - probe.NeedStreamBuffer
++	size := 2 * excess
++	pool := NewWindowPool(size)
++	cfg := poolConfig(pool)
++	a, sa, pa := newRawPeer(t, cfg)
++	sa.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
++	keepUp(t, pa, sa, 4<<20)
++	pa.sync(sa)
++	pa.fill(cfg.MaxFrameSize) // the fast app freezes
++	pa.settle(sa)
++	claim, _ := extraOf(a)
++	// its other users' apps stop too
++	other, sid := pa.open(a)
++	n := cfg.MaxReceiveBuffer + borrowMax*cfg.MaxReceiveBuffer
++	go pa.trySendOn(sid, n, cfg.MaxFrameSize)
++	deadline := time.Now().Add(2 * time.Second)
++	for pool.Free() > 0 && time.Now().Before(deadline) {
++		time.Sleep(time.Millisecond)
++	}
++	held, spare := extraOf(a)
++	// another link: a fast reader under a ceiling, and a reader that stops
++	b, sb, pb := newRawPeer(t, poolConfig(pool))
++	sb.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
++	keepUp(t, pb, sb, 2<<20)
++	pb.sync(sb)
++	w := maxWindow(pb.updates())
++	ob, sidb := pb.open(b)
++	go pb.trySendOn(sidb, cfg.MaxReceiveBuffer+64<<10, cfg.MaxFrameSize)
++	time.Sleep(100 * time.Millisecond)
++	t.Logf("pool %d KiB: the frozen link holds %d KiB (claims %d, borrowed %d; %d KiB unread on its other stream); free %d KiB. "+
++		"The other link: window up to %d KiB (need %d), %d KiB taken in of %d sent, borrows %d, parks %d",
++		size>>10, held>>10, claim>>10, spare>>10, unreadOf(other)>>10, pool.Free()>>10,
++		w>>10, cfg.NeedStreamBuffer>>10, unreadOf(ob)>>10, (cfg.MaxReceiveBuffer+64<<10)>>10, b.Borrows(), b.Parks())
++}
+diff --git a/hs2-src/third_party/smux/red_test.go b/hs2-src/third_party/smux/red_test.go
+index 9b5692d..61953e7 100644
+--- a/hs2-src/third_party/smux/red_test.go
++++ b/hs2-src/third_party/smux/red_test.go
+@@ -378,7 +378,13 @@ func redSweepChaos(t *testing.T, seed int64) {
+ 	recv := func(st *Stream, i int, r *rand.Rand) error {
+ 		want := data(i)
+ 		got := 0
+-		buf := make([]byte, 1+r.Intn(64<<10))
++		n := 1 + r.Intn(64<<10)
++		if n < 1<<10 {
++			// (seed 120 drew a 1-byte buffer: 3 MiB a byte per Read
++			// takes minutes under -race, which reads as a stall)
++			n = 1 << 10
++		}
++		buf := make([]byte, n)
+ 		for got < size {
+ 			st.SetReadDeadline(time.Now().Add(15 * time.Second))
+ 			n, err := st.Read(buf)
+@@ -483,8 +489,13 @@ func redSweepChaos(t *testing.T, seed int64) {
+ 		}
+ 	}
+ 	for i := 0; i < streams; i++ {
+-		if err := <-errs; err != nil {
+-			t.Fatalf("seed %d: %v", seed, err)
++		select {
++		case err := <-errs:
++			if err != nil {
++				t.Fatalf("seed %d: %v", seed, err)
++			}
++		case <-time.After(60 * time.Second):
++			t.Fatalf("seed %d: %d of %d streams still moving after a minute:\n%s", seed, streams-i, streams, dumpStreams(cli, srv))
+ 		}
+ 	}
+ 	close(stop)
+diff --git a/hs2-src/third_party/smux/session.go b/hs2-src/third_party/smux/session.go
+index 8ea11fa..07be5b4 100644
+--- a/hs2-src/third_party/smux/session.go
++++ b/hs2-src/third_party/smux/session.go
+@@ -278,7 +278,7 @@ func (s *Session) Close() error {
+ 		}
+ 		s.streamLock.Unlock()
+ 		if s.config.WindowPool != nil {
+-			s.dropSpare()
++			s.returnSpare() // as far as it is free
+ 			if atomic.LoadInt32(&s.extra) > 0 {
+ 				// what the streams still hold goes back as they let it go,
+ 				// and the rest closeGrace from now (pool.go)
+diff --git a/hs2-src/third_party/smux/stream.go b/hs2-src/third_party/smux/stream.go
+index 98a260a..4fade28 100644
+--- a/hs2-src/third_party/smux/stream.go
++++ b/hs2-src/third_party/smux/stream.go
+@@ -794,8 +794,12 @@ func (s *Stream) Close() error {
+ 		if s.sess.IsClosed() {
+ 			// its session closed it (sessionClose): its app lets go of it
+ 			// now, and of what it holds with it -- the buffers and, with
+-			// a WindowPool, the claim that covered them (pool.go)
+-			s.recycleTokens()
++			// a WindowPool, the claim and the spare that covered them
++			// (pool.go)
++			if n := s.recycleTokens(); n > 0 {
++				s.sess.returnTokens(n)
++			}
++			s.sess.returnSpare()
+ 		}
+ 		return io.ErrClosedPipe
+ 	}
+diff --git a/hs2-src/tune/tune.go b/hs2-src/tune/tune.go
+index fa01eb0..a34157b 100644
+--- a/hs2-src/tune/tune.go
++++ b/hs2-src/tune/tune.go
+@@ -191,10 +191,12 @@ func ProfileFor(ramMB, cpus int) string { return profileFor(ramMB, cpus) }
+ // runs full borrows from it too: the links of one process share it, so it
+ // counts once per process, not per link (PoolWorstCaseMiB). A link that
+ // dies keeps what its readers had not taken until its relays let go of its
+-// streams (engine relayDieGrace, 5 s): the claims on the pool stay with that
+-// data until then (smux closeGrace at the latest), so the pool's part is not
+-// overshot; its session buffer's part is, for those seconds, as the link
+-// count counts live links (a dead link's backlog next to its replacement's).
++// streams (engine relayDieGrace, 5 s): what it holds of the pool (its
++// windows' claims, and what it borrowed as its buffer ran full) stays with
++// that data until then (smux closeGrace at the latest), so the pool's part
++// is not overshot; its session buffer's part is, for those seconds, as the
++// link count counts live links (a dead link's backlog next to its
++// replacement's).
+ // The rule keeps the links' worst case and the pool's together at or below a
+ // quarter of RAM:
+ //
