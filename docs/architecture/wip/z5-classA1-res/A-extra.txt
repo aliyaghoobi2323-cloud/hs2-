@@ -1,0 +1,31 @@
+== A6: stall seconds (bulk < 1 Mbit/s) and relays ended (guard), summed over runs, per kind: version (stall s, ended)
+   base: runs 132, stall s 291 in 31 runs, relays ended 90 in 14 runs
+   n4: runs 132, stall s 1 in 1 runs, relays ended 0 in 0 runs
+   core: runs 132, stall s 2 in 2 runs, relays ended 0 in 0 runs
+   slow2   base (0, 0)  n4 (0, 0)  core (0, 0)
+   slow4   base (0, 0)  n4 (0, 0)  core (0, 0)
+   slow8   base (0, 0)  n4 (0, 0)  core (0, 0)
+   slow16  base (0, 0)  n4 (0, 0)  core (0, 0)
+   frz32   base (0, 0)  n4 (0, 0)  core (0, 0)
+   ftf4    base (0, 0)  n4 (0, 0)  core (0, 0)
+   ftf8    base (55, 52)  n4 (0, 0)  core (1, 0)
+   z3f8s   base (0, 0)  n4 (0, 0)  core (0, 0)
+   fts12   base (199, 0)  n4 (0, 0)  core (1, 0)
+   seqf6   base (0, 0)  n4 (0, 0)  core (0, 0)
+   seqf12  base (37, 38)  n4 (1, 0)  core (0, 0)
+
+== A7: interactive users (multi-link and bad-link cells)
+   lmi@300-150-l0.1
+     base: users 12, on the download's link 0, on the bad link 0, download link pressed 3, links serving [5, 8], p50 154 [154-155] p99 167 [163-356]
+     n4: users 12, on the download's link 0, on the bad link 0, download link pressed 0, links serving [5, 8], p50 176 [162-216] p99 968 [816-1271]
+     core: users 12, on the download's link 0, on the bad link 0, download link pressed 0, links serving [5, 8], p50 156 [155-158] p99 203 [186-401]
+   lmbad@300-150
+     base: users 9, on the download's link 9, on the bad link 0, download link pressed 0, links serving [2], p50 152 [152-152] p99 206 [166-262]
+     n4: users 9, on the download's link 6, on the bad link 0, download link pressed 0, links serving [2], p50 312 [164-327] p99 796 [531-1058]
+     core: users 9, on the download's link 9, on the bad link 0, download link pressed 0, links serving [2], p50 161 [160-163] p99 371 [299-524]
+
+== load at the runs' starts (1-min load; 4 cores)
+   A1: runs 379, mean 1.62, max 4.09, runs that waited 0
+   A7: runs 72, mean 1.80, max 3.84, runs that waited 0
+   A8: runs 24, mean 2.09, max 4.14, runs that waited 0
+   A6: runs 396, mean 1.68, max 4.84, runs that waited 0
