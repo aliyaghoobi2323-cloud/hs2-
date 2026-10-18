@@ -1,0 +1,224 @@
+== lm1@100-100
+   base r1: 75.1 [0-30s 79, 30-130s 74]  links=2 verdicts={'closed': 6}
+      |    0.3s exit: link up from 10.214.2.1:49268 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:49284 (now 2)
+      |    0.6s exit: link up from 10.214.2.1:49286 (now 3)
+      |    0.6s exit: link up from 10.214.2.1:49296 (now 4)
+      |    0.7s exit: link up from 10.214.2.1:49300 (now 5)
+      |    0.8s exit: link up from 10.214.2.1:49316 (now 6)
+      |    0.9s exit: link up from 10.214.2.1:49320 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:49336 (now 8)
+   base r2: 76.1 [0-30s 80, 30-130s 75]  links=2 verdicts={'closed': 6}
+      |    0.3s exit: link up from 10.214.2.1:33326 (now 1)
+      |    0.4s exit: link up from 10.214.2.1:33340 (now 2)
+      |    0.4s exit: link up from 10.214.2.1:33356 (now 3)
+      |    0.5s exit: link up from 10.214.2.1:33364 (now 4)
+      |    0.6s exit: link up from 10.214.2.1:33378 (now 5)
+      |    0.7s exit: link up from 10.214.2.1:33388 (now 6)
+      |    0.8s exit: link up from 10.214.2.1:33398 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:33400 (now 8)
+   core r1: 80.1 [0-30s 83, 30-130s 79]  links=2 verdicts={'closed': 6}
+           9.4s exit: mtcp: link 1: downloads fill the path at ~90 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+           9.4s exit: mtcp: link 1: path queue grew to 52 ms — download windows 2.7 MiB → 2.0 MiB
+          40.7s exit: mtcp: link 1: path queue grew to 4 ms — download windows 2.2 MiB → 2.0 MiB
+          75.1s exit: mtcp: link 1: packets arrived behind holes on a clean path — download windows 2.7 MiB → 2.0 MiB
+         130.9s exit: mtcp: link 1: path queue grew to 2 ms — download windows 2.4 MiB → 2.3 MiB
+      |    0.3s exit: link up from 10.214.2.1:47004 (now 1)
+      |    0.4s exit: link up from 10.214.2.1:47012 (now 2)
+      |    0.6s exit: link up from 10.214.2.1:47024 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:47036 (now 4)
+      |    0.7s exit: link up from 10.214.2.1:47040 (now 5)
+      |    0.8s exit: link up from 10.214.2.1:47056 (now 6)
+      |    0.9s exit: link up from 10.214.2.1:47070 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:47082 (now 8)
+      trace edge: 70 state changes; first: [(1.2, 'off', 0.0, 'link 1'), (3.0, 'startup', 3.0, 'link 1'), (4.0, 'drain', 2.0, 'link 1'), (4.5, 'hold', 2.0, 'link 1'), (5.7, 'probe', 2.2, 'link 1'), (6.3, 'startup', 2.7, 'link 1'), (7.2, 'drain', 2.1, 'link 1'), (7.8, 'hold', 2.0, 'link 1'), (9.1, 'drain', 2.0, 'link 1'), (9.3, 'hold', 2.0, 'link 1'), (10.5, 'probe', 2.2, 'link 1'), (11.1, 'hold', 2.0, 'link 1'), (13.0, 'probe', 2.6, 'link 1'), (13.9, 'hold', 2.5, 'link 1'), (17.2, 'drain', 2.3, 'link 1'), (17.4, 'hold', 2.2, 'link 1')]
+      events edge: 11: [(4.0, 'filled'), (4.0, 'drain:queue'), (7.2, 'filled'), (7.2, 'drain:queue'), (9.1, 'drain:queue'), (17.2, 'drain:queue'), (31.1, 'drain:queue'), (35.3, 'drain:queue'), (53.4, 'drain:queue'), (69.7, 'drain:loss'), (125.5, 'drain:queue')]
+      trace exit: 0 state changes; first: []
+      events exit: 0: []
+   core r2: 80.2 [0-30s 83, 30-130s 79]  links=2 verdicts={'closed': 6}
+           9.5s exit: mtcp: link 1: downloads fill the path at ~90 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+           9.5s exit: mtcp: link 1: path queue grew to 52 ms — download windows 3.0 MiB → 2.0 MiB
+          51.3s exit: mtcp: link 1: packets arrived behind holes on a clean path — download windows 2.6 MiB → 2.0 MiB
+          92.7s exit: mtcp: link 1: path queue grew to 0 ms — download windows 2.4 MiB → 2.4 MiB
+         124.6s exit: mtcp: link 1: path queue grew to 0 ms — download windows 2.2 MiB → 2.0 MiB
+      |    0.3s exit: link up from 10.214.2.1:49798 (now 1)
+      |    0.4s exit: link up from 10.214.2.1:49806 (now 2)
+      |    0.5s exit: link up from 10.214.2.1:49808 (now 3)
+      |    0.6s exit: link up from 10.214.2.1:49810 (now 4)
+      |    0.7s exit: link up from 10.214.2.1:49816 (now 5)
+      |    0.8s exit: link up from 10.214.2.1:49818 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:49826 (now 7)
+      |    1.1s exit: link up from 10.214.2.1:49838 (now 8)
+      trace edge: 60 state changes; first: [(1.1, 'off', 0.0, 'link 1'), (2.8, 'startup', 3.0, 'link 1'), (4.1, 'drain', 2.0, 'link 1'), (4.6, 'hold', 2.0, 'link 1'), (5.8, 'probe', 2.2, 'link 1'), (6.5, 'hold', 2.3, 'link 1'), (11.9, 'probe', 2.9, 'link 1'), (12.6, 'startup', 3.4, 'link 1'), (13.3, 'drain', 2.6, 'link 1'), (13.9, 'hold', 2.3, 'link 1'), (15.1, 'probe', 2.6, 'link 1'), (15.8, 'hold', 2.3, 'link 1'), (21.0, 'drain', 2.1, 'link 1'), (21.2, 'hold', 2.1, 'link 1'), (22.8, 'probe', 2.4, 'link 1'), (23.4, 'hold', 2.2, 'link 1')]
+      events edge: 12: [(4.1, 'filled'), (4.1, 'drain:queue'), (13.3, 'filled'), (13.3, 'drain:queue'), (21.0, 'drain:queue'), (25.5, 'drain:queue'), (31.3, 'drain:queue'), (45.9, 'drain:loss'), (51.4, 'drain:queue'), (87.3, 'drain:queue'), (111.0, 'drain:queue'), (119.2, 'drain:queue')]
+      trace exit: 0 state changes; first: []
+      events exit: 0: []
+== lm1@300-150
+   base r1: 74.9 [0-30s 82, 30-130s 73]  links=2 verdicts={'closed': 6}
+      |    0.5s exit: link up from 10.214.2.1:36956 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:36960 (now 2)
+      |    0.6s exit: link up from 10.214.2.1:36970 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:36972 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:36988 (now 5)
+      |    0.9s exit: link up from 10.214.2.1:36990 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:37000 (now 7)
+      |    1.1s exit: link up from 10.214.2.1:37004 (now 8)
+   base r2: 71.0 [0-30s 80, 30-130s 68]  links=2 verdicts={'closed': 6}
+      |    0.4s exit: link up from 10.214.2.1:35848 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:35862 (now 2)
+      |    0.6s exit: link up from 10.214.2.1:35864 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:35868 (now 4)
+      |    0.9s exit: link up from 10.214.2.1:35884 (now 5)
+      |    1.0s exit: link up from 10.214.2.1:35900 (now 6)
+      |    1.1s exit: link up from 10.214.2.1:35914 (now 7)
+      |    1.2s exit: link up from 10.214.2.1:35922 (now 8)
+   core r1: 162.9 [0-30s 200, 30-130s 152]  links=2 verdicts={'closed': 6}
+          11.5s exit: mtcp: link 4: packets arrived behind holes on a clean path — download windows 6.6 MiB → 3.3 MiB
+          44.8s exit: mtcp: link 4: packets arrived behind holes on a clean path — download windows 4.8 MiB → 2.4 MiB
+          82.0s exit: mtcp: link 4: packets arrived behind holes on a clean path — download windows 6.9 MiB → 3.4 MiB
+         112.3s exit: mtcp: link 4: packets arrived behind holes on a clean path — download windows 6.5 MiB → 3.3 MiB
+      |    0.4s exit: link up from 10.214.2.1:43398 (now 1)
+      |    0.6s exit: link up from 10.214.2.1:43406 (now 2)
+      |    0.7s exit: link up from 10.214.2.1:43420 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:43428 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:43444 (now 5)
+      |    0.9s exit: link up from 10.214.2.1:43458 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:43470 (now 7)
+      |    1.2s exit: link up from 10.214.2.1:43472 (now 8)
+      trace edge: 78 state changes; first: [(1.3, 'off', 0.0, 'link 4'), (2.7, 'startup', 3.0, 'link 4'), (6.0, 'drain', 3.3, 'link 4'), (6.3, 'hold', 3.3, 'link 4'), (13.5, 'probe', 6.3, 'link 4'), (14.2, 'hold', 5.9, 'link 4'), (21.8, 'drain', 3.0, 'link 4'), (22.5, 'hold', 3.0, 'link 4'), (24.9, 'drain', 4.7, 'link 4'), (25.2, 'hold', 5.3, 'link 4'), (26.4, 'probe', 5.5, 'link 4'), (27.1, 'hold', 5.5, 'link 4'), (27.3, 'drain', 2.8, 'link 4'), (27.6, 'hold', 2.8, 'link 4'), (31.2, 'probe', 5.2, 'link 4'), (31.9, 'hold', 5.2, 'link 4')]
+      events edge: 16: [(6.0, 'drain:loss'), (21.8, 'drain:loss'), (27.3, 'drain:loss'), (32.8, 'drain:loss'), (39.3, 'drain:loss'), (43.6, 'drain:loss'), (49.9, 'drain:loss'), (54.6, 'drain:loss'), (58.8, 'drain:loss'), (76.5, 'drain:loss'), (86.2, 'drain:rate'), (86.4, 'drain:loss'), (87.6, 'drain:loss'), (106.8, 'drain:loss'), (122.7, 'drain:loss'), (127.0, 'drain:loss')]
+      trace exit: 0 state changes; first: []
+      events exit: 0: []
+   core r2: 159.5 [0-30s 178, 30-130s 154]  links=2 verdicts={'closed': 6}
+          11.7s exit: mtcp: link 2: packets arrived behind holes on a clean path — download windows 7.3 MiB → 3.6 MiB
+          18.5s exit: mtcp: link 2: downloads fill the path at ~269 Mbit/s (round trip 150 ms): window held at 5.5 MiB for 1 fast connection(s), queue ~7 ms
+          52.0s exit: mtcp: link 2: packets arrived behind holes on a clean path — download windows 7.6 MiB → 3.8 MiB
+          87.9s exit: mtcp: link 2: packets arrived behind holes on a clean path — download windows 4.5 MiB → 2.3 MiB
+         111.4s exit: mtcp: link 2: downloads fill the path at ~234 Mbit/s (round trip 150 ms): window held at 4.1 MiB for 1 fast connection(s), queue ~0 ms
+         125.7s exit: mtcp: link 2: packets arrived behind holes as the windows grew — download windows 4.6 MiB → 2.3 MiB
+      |    0.5s exit: link up from 10.214.2.1:38596 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:38602 (now 2)
+      |    0.7s exit: link up from 10.214.2.1:38612 (now 3)
+      |    0.8s exit: link up from 10.214.2.1:38624 (now 4)
+      |    0.9s exit: link up from 10.214.2.1:38638 (now 5)
+      |    0.9s exit: link up from 10.214.2.1:38644 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:38652 (now 7)
+      |    1.1s exit: link up from 10.214.2.1:38660 (now 8)
+      trace edge: 74 state changes; first: [(1.3, 'off', 0.0, 'link 2'), (2.7, 'startup', 3.0, 'link 2'), (6.1, 'drain', 3.6, 'link 2'), (6.4, 'hold', 3.6, 'link 2'), (11.3, 'probe', 5.2, 'link 2'), (12.0, 'startup', 6.6, 'link 2'), (12.9, 'drain', 5.5, 'link 2'), (13.2, 'hold', 5.5, 'link 2'), (14.7, 'probe', 5.9, 'link 2'), (15.5, 'startup', 7.2, 'link 2'), (16.2, 'drain', 3.6, 'link 2'), (16.5, 'hold', 3.6, 'link 2'), (20.0, 'drain', 5.3, 'link 2'), (20.3, 'hold', 5.9, 'link 2'), (21.5, 'probe', 6.1, 'link 2'), (22.2, 'hold', 5.9, 'link 2')]
+      events edge: 18: [(6.1, 'drain:loss'), (12.9, 'filled'), (12.9, 'drain:queue'), (16.2, 'drain:loss'), (24.9, 'drain:rate'), (25.1, 'drain:loss'), (26.9, 'drain:loss'), (46.4, 'drain:loss'), (55.1, 'drain:loss'), (57.4, 'drain:loss'), (69.2, 'drain:loss'), (82.3, 'drain:loss'), (87.4, 'drain:queue'), (93.2, 'drain:loss'), (100.6, 'drain:loss'), (105.8, 'filled'), (105.8, 'drain:loss'), (120.1, 'drain:loss')]
+      trace exit: 0 state changes; first: []
+      events exit: 0: []
+== lm1u@100-100
+   base r1: 76.3 [0-30s 83, 30-130s 74]  links=2 verdicts={'closed': 6}
+      |    0.3s exit: link up from 10.214.2.1:34792 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:34796 (now 2)
+      |    0.5s exit: link up from 10.214.2.1:34804 (now 3)
+      |    0.6s exit: link up from 10.214.2.1:34814 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:34824 (now 5)
+      |    0.8s exit: link up from 10.214.2.1:34826 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:34836 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:34848 (now 8)
+   base r2: 77.5 [0-30s 83, 30-130s 76]  links=2 verdicts={'closed': 6}
+      |    0.3s exit: link up from 10.214.2.1:41730 (now 1)
+      |    0.4s exit: link up from 10.214.2.1:41746 (now 2)
+      |    0.5s exit: link up from 10.214.2.1:41752 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:41762 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:41768 (now 5)
+      |    0.9s exit: link up from 10.214.2.1:41770 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:41774 (now 7)
+      |    1.1s exit: link up from 10.214.2.1:41776 (now 8)
+   core r1: 79.9 [0-30s 85, 30-130s 78]  links=2 verdicts={'closed': 6}
+           9.4s exit: mtcp: link from 10.214.2.1:48408: uploads fill the path at ~90 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~10 ms
+           9.4s exit: mtcp: link from 10.214.2.1:48408: path queue grew to 26 ms — upload windows 2.5 MiB → 2.0 MiB
+          41.1s exit: mtcp: link from 10.214.2.1:48408: path queue grew to 14 ms — upload windows 2.4 MiB → 2.3 MiB
+          69.7s exit: mtcp: link from 10.214.2.1:48408: uploads fill the path at ~91 Mbit/s (round trip 100 ms): window held at 2.1 MiB for 1 fast connection(s), queue ~10 ms
+          72.8s exit: mtcp: link from 10.214.2.1:48408: path queue grew to 29 ms — upload windows 2.4 MiB → 2.0 MiB
+      |    0.3s exit: link up from 10.214.2.1:48344 (now 1)
+      |    0.4s exit: link up from 10.214.2.1:48354 (now 2)
+      |    0.5s exit: link up from 10.214.2.1:48358 (now 3)
+      |    0.6s exit: link up from 10.214.2.1:48374 (now 4)
+      |    0.7s exit: link up from 10.214.2.1:48388 (now 5)
+      |    0.9s exit: link up from 10.214.2.1:48392 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:48396 (now 7)
+      |    1.1s exit: link up from 10.214.2.1:48408 (now 8)
+      trace edge: 0 state changes; first: []
+      events edge: 0: []
+      trace exit: 84 state changes; first: [(1.1, 'off', 0.0, 'link from 10.214.2.1:48408'), (1.5, 'startup', 3.0, 'link from 10.214.2.1:48408'), (4.0, 'drain', 2.0, 'link from 10.214.2.1:48408'), (4.5, 'hold', 2.0, 'link from 10.214.2.1:48408'), (5.8, 'probe', 2.2, 'link from 10.214.2.1:48408'), (6.4, 'startup', 2.5, 'link from 10.214.2.1:48408'), (7.2, 'drain', 2.0, 'link from 10.214.2.1:48408'), (7.7, 'hold', 2.0, 'link from 10.214.2.1:48408'), (9.0, 'probe', 2.1, 'link from 10.214.2.1:48408'), (9.6, 'hold', 2.0, 'link from 10.214.2.1:48408'), (10.9, 'probe', 2.2, 'link from 10.214.2.1:48408'), (11.5, 'hold', 2.1, 'link from 10.214.2.1:48408'), (13.5, 'probe', 2.3, 'link from 10.214.2.1:48408'), (14.2, 'hold', 2.1, 'link from 10.214.2.1:48408'), (15.5, 'drain', 2.0, 'link from 10.214.2.1:48408'), (15.7, 'hold', 2.2, 'link from 10.214.2.1:48408')]
+      events exit: 19: [(4.0, 'filled'), (4.0, 'drain:queue'), (7.2, 'filled'), (7.2, 'drain:queue'), (35.7, 'drain:queue'), (48.9, 'drain:queue'), (52.1, 'filled'), (52.1, 'drain:queue'), (55.3, 'filled'), (55.3, 'drain:queue'), (61.0, 'filled'), (61.0, 'drain:queue'), (64.3, 'filled'), (64.3, 'drain:queue'), (67.4, 'filled'), (67.4, 'drain:queue'), (70.5, 'filled'), (70.5, 'drain:queue'), (82.2, 'drain:rate')]
+   core r2: 58.0 CUT@117s (write tcp 127.0.0.1:38624->127.0.0.1:41451: write: connection reset by peer) [0-30s 64, 30-130s 56]  links=3 verdicts={'degraded': 1, 'closed': 7}
+           8.8s exit: mtcp: link from 10.214.2.1:60030: uploads fill the path at ~63 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~10 ms
+           8.8s exit: mtcp: link from 10.214.2.1:60030: path queue grew to 142 ms — upload windows 2.4 MiB → 2.3 MiB
+          11.5s exit: mtcp: link from 10.214.2.1:60030: 2.8% loss with no queue — windows cover the resends (+107 ms)
+          44.1s exit: mtcp: link from 10.214.2.1:60030: path queue grew to 145 ms — upload windows 3.6 MiB → 2.6 MiB
+          73.5s exit: mtcp: link from 10.214.2.1:60030: uploads fill the path at ~93 Mbit/s (round trip 100 ms): window held at 3.1 MiB for 1 fast connection(s), queue ~10 ms
+          75.3s exit: mtcp: link from 10.214.2.1:60030: path queue grew to 27 ms — upload windows 3.1 MiB → 2.7 MiB
+         107.6s exit: mtcp: link from 10.214.2.1:60030: path slowed to ~11 Mbit/s with its queue growing — upload windows 2.0 MiB → 2.0 MiB
+      |    0.3s exit: link up from 10.214.2.1:59946 (now 1)
+      |    0.4s exit: link up from 10.214.2.1:59962 (now 2)
+      |    0.5s exit: link up from 10.214.2.1:59974 (now 3)
+      |    0.6s exit: link up from 10.214.2.1:59986 (now 4)
+      |    0.7s exit: link up from 10.214.2.1:59994 (now 5)
+      |    0.8s exit: link up from 10.214.2.1:60000 (now 6)
+      |    0.9s exit: link up from 10.214.2.1:60016 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:60030 (now 8)
+      trace edge: 0 state changes; first: []
+      events edge: 0: []
+      trace exit: 65 state changes; first: [(0.9, 'off', 0.0, 'link from 10.214.2.1:60030'), (1.7, 'startup', 3.0, 'link from 10.214.2.1:60030'), (3.4, 'drain', 2.3, 'link from 10.214.2.1:60030'), (3.6, 'hold', 2.0, 'link from 10.214.2.1:60030'), (4.4, 'probe', 2.1, 'link from 10.214.2.1:60030'), (4.9, 'hold', 2.0, 'link from 10.214.2.1:60030'), (10.4, 'drain', 2.0, 'link from 10.214.2.1:60030'), (10.9, 'hold', 2.0, 'link from 10.214.2.1:60030'), (17.8, 'drain', 2.0, 'link from 10.214.2.1:60030'), (18.0, 'hold', 2.0, 'link from 10.214.2.1:60030'), (20.3, 'probe', 2.1, 'link from 10.214.2.1:60030'), (20.9, 'startup', 2.6, 'link from 10.214.2.1:60030'), (24.3, 'hold', 3.2, 'link from 10.214.2.1:60030'), (25.9, 'drain', 3.0, 'link from 10.214.2.1:60030'), (26.1, 'hold', 3.4, 'link from 10.214.2.1:60030'), (28.1, 'probe', 3.4, 'link from 10.214.2.1:60030')]
+      events exit: 19: [(3.4, 'filled'), (3.4, 'drain:queue'), (6.1, 'lossy'), (10.4, 'drain:queue'), (24.3, 'filled'), (32.8, 'filled'), (38.7, 'filled'), (38.7, 'drain:queue'), (44.2, 'filled'), (57.3, 'drain:queue'), (62.4, 'drain:queue'), (69.9, 'drain:queue'), (73.8, 'drain:queue'), (77.3, 'drain:queue'), (89.0, 'drain:rate'), (94.0, 'drain:queue'), (98.6, 'drain:queue'), (102.2, 'drain:rate'), (106.5, 'drain:queue')]
+== lm1u@300-150
+   base r1: 67.4 [0-30s 78, 30-130s 64]  links=2 verdicts={'closed': 6}
+      |    0.4s exit: link up from 10.214.2.1:48570 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:48572 (now 2)
+      |    0.6s exit: link up from 10.214.2.1:48584 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:48598 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:48612 (now 5)
+      |    0.8s exit: link up from 10.214.2.1:48618 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:48622 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:48638 (now 8)
+   base r2: 63.8 [0-30s 58, 30-130s 65]  links=2 verdicts={'closed': 6}
+      |    0.4s exit: link up from 10.214.2.1:58242 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:58254 (now 2)
+      |    0.6s exit: link up from 10.214.2.1:58262 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:58268 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:58270 (now 5)
+      |    0.9s exit: link up from 10.214.2.1:58278 (now 6)
+      |    0.9s exit: link up from 10.214.2.1:58288 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:58304 (now 8)
+   core r1: 160.9 [0-30s 198, 30-130s 150]  links=2 verdicts={'closed': 6}
+          12.2s exit: mtcp: link from 10.214.2.1:57798: packets arrived behind holes on a clean path — upload windows 6.5 MiB → 3.2 MiB
+          31.4s exit: mtcp: link from 10.214.2.1:57798: uploads fill the path at ~270 Mbit/s (round trip 150 ms): window held at 5.5 MiB for 1 fast connection(s), queue ~1 ms
+          44.7s exit: mtcp: link from 10.214.2.1:57798: packets arrived behind holes on a clean path — upload windows 5.5 MiB → 2.8 MiB
+          85.5s exit: mtcp: link from 10.214.2.1:57798: packets arrived behind holes on a clean path — upload windows 7.9 MiB → 4.0 MiB
+          99.6s exit: mtcp: link from 10.214.2.1:57798: uploads fill the path at ~269 Mbit/s (round trip 150 ms): window held at 4.4 MiB for 1 fast connection(s), queue ~0 ms
+         120.3s exit: mtcp: link from 10.214.2.1:57798: packets arrived behind holes on a clean path — upload windows 2.0 MiB → 2.0 MiB
+      |    0.4s exit: link up from 10.214.2.1:57772 (now 1)
+      |    0.5s exit: link up from 10.214.2.1:57774 (now 2)
+      |    0.7s exit: link up from 10.214.2.1:57790 (now 3)
+      |    0.8s exit: link up from 10.214.2.1:57796 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:57798 (now 5)
+      |    0.9s exit: link up from 10.214.2.1:57804 (now 6)
+      |    1.0s exit: link up from 10.214.2.1:57810 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:57816 (now 8)
+      trace edge: 0 state changes; first: []
+      events edge: 0: []
+      trace exit: 71 state changes; first: [(1.1, 'off', 0.0, 'link from 10.214.2.1:57798'), (2.0, 'startup', 3.0, 'link from 10.214.2.1:57798'), (6.7, 'drain', 3.2, 'link from 10.214.2.1:57798'), (7.0, 'hold', 3.2, 'link from 10.214.2.1:57798'), (12.1, 'probe', 5.5, 'link from 10.214.2.1:57798'), (12.8, 'hold', 5.7, 'link from 10.214.2.1:57798'), (15.1, 'drain', 5.1, 'link from 10.214.2.1:57798'), (15.4, 'hold', 5.7, 'link from 10.214.2.1:57798'), (18.2, 'probe', 5.9, 'link from 10.214.2.1:57798'), (18.9, 'startup', 7.4, 'link from 10.214.2.1:57798'), (19.4, 'drain', 3.4, 'link from 10.214.2.1:57798'), (19.7, 'hold', 3.4, 'link from 10.214.2.1:57798'), (21.5, 'drain', 3.0, 'link from 10.214.2.1:57798'), (21.8, 'hold', 3.0, 'link from 10.214.2.1:57798'), (24.2, 'probe', 5.5, 'link from 10.214.2.1:57798'), (24.9, 'startup', 6.9, 'link from 10.214.2.1:57798')]
+      events exit: 18: [(6.7, 'drain:loss'), (19.4, 'drain:loss'), (21.5, 'drain:loss'), (25.9, 'filled'), (25.9, 'drain:loss'), (39.2, 'drain:loss'), (43.9, 'drain:loss'), (45.4, 'drain:loss'), (50.2, 'drain:loss'), (62.6, 'drain:loss'), (80.0, 'drain:loss'), (86.5, 'drain:loss'), (91.1, 'drain:loss'), (93.1, 'drain:loss'), (101.9, 'drain:rate'), (102.1, 'drain:loss'), (114.8, 'drain:loss'), (122.8, 'drain:loss')]
+   core r2: 132.1 [0-30s 165, 30-130s 122]  links=2 verdicts={'closed': 6}
+          10.7s exit: mtcp: link from 10.214.2.1:33886: packets arrived behind holes on a clean path — upload windows 6.7 MiB → 3.4 MiB
+          44.7s exit: mtcp: link from 10.214.2.1:33886: uploads fill the path at ~258 Mbit/s (round trip 150 ms): window held at 3.4 MiB for 1 fast connection(s), queue ~0 ms
+          44.7s exit: mtcp: link from 10.214.2.1:33886: path queue grew to 405 ms — upload windows 4.3 MiB → 2.4 MiB
+          75.0s exit: mtcp: link from 10.214.2.1:33886: packets arrived behind holes on a clean path — upload windows 3.6 MiB → 2.0 MiB
+         116.3s exit: mtcp: link from 10.214.2.1:33886: uploads fill the path at ~119 Mbit/s (round trip 150 ms): window held at 2.7 MiB for 1 fast connection(s), queue ~0 ms
+         122.4s exit: mtcp: link from 10.214.2.1:33886: packets arrived behind holes on a clean path — upload windows 6.4 MiB → 3.2 MiB
+      |    0.5s exit: link up from 10.214.2.1:33832 (now 1)
+      |    0.6s exit: link up from 10.214.2.1:33842 (now 2)
+      |    0.6s exit: link up from 10.214.2.1:33844 (now 3)
+      |    0.7s exit: link up from 10.214.2.1:33848 (now 4)
+      |    0.8s exit: link up from 10.214.2.1:33862 (now 5)
+      |    0.8s exit: link up from 10.214.2.1:33866 (now 6)
+      |    0.9s exit: link up from 10.214.2.1:33880 (now 7)
+      |    1.0s exit: link up from 10.214.2.1:33886 (now 8)
+      trace edge: 0 state changes; first: []
+      events edge: 0: []
+      trace exit: 86 state changes; first: [(1.2, 'off', 0.0, 'link from 10.214.2.1:33886'), (2.0, 'startup', 3.0, 'link from 10.214.2.1:33886'), (5.1, 'drain', 3.4, 'link from 10.214.2.1:33886'), (5.4, 'hold', 3.4, 'link from 10.214.2.1:33886'), (10.3, 'probe', 6.3, 'link from 10.214.2.1:33886'), (11.0, 'hold', 6.1, 'link from 10.214.2.1:33886'), (14.1, 'drain', 3.0, 'link from 10.214.2.1:33886'), (14.6, 'hold', 2.0, 'link from 10.214.2.1:33886'), (17.1, 'probe', 2.8, 'link from 10.214.2.1:33886'), (17.8, 'startup', 3.5, 'link from 10.214.2.1:33886'), (19.7, 'drain', 2.6, 'link from 10.214.2.1:33886'), (20.0, 'hold', 2.6, 'link from 10.214.2.1:33886'), (22.3, 'probe', 2.9, 'link from 10.214.2.1:33886'), (23.0, 'startup', 3.6, 'link from 10.214.2.1:33886'), (25.5, 'drain', 3.0, 'link from 10.214.2.1:33886'), (25.8, 'hold', 3.0, 'link from 10.214.2.1:33886')]
+      events exit: 20: [(5.1, 'drain:loss'), (14.1, 'drain:rate'), (14.3, 'drain:loss'), (19.7, 'drain:loss'), (25.5, 'drain:loss'), (30.7, 'drain:loss'), (39.1, 'filled'), (39.1, 'drain:queue'), (50.7, 'filled'), (50.7, 'drain:loss'), (54.4, 'drain:loss'), (58.6, 'drain:loss'), (66.9, 'drain:loss'), (69.4, 'drain:loss'), (92.9, 'drain:rate'), (93.1, 'drain:loss'), (116.8, 'drain:loss'), (119.3, 'drain:loss'), (125.8, 'filled'), (125.8, 'drain:loss')]

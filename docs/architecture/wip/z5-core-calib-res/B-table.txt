@@ -1,0 +1,203 @@
+== dl1i@300-150  (n base=3 core=3)
+   base  T=77.4[68.8 78.4 77.4]  rs=0.00[0.00 0.00 0.00]  rs3=0.00[0.00 0.00 0.00]  p50=152[152 152 152]  p99=182[182 167 218]  cpu=32.6[32.6 32.0 33.0]  hcpu=22.7[22.7 22.2 22.8]  drops=0.0[0.0 0.0 0.0]
+   core  T=230[174 236 230]  rs=0.24[0.24 0.20 0.46]  rs3=0.97[0.92 0.97 1.49]  p50=163[158 163 164]  p99=343[319 343 540]  cpu=41.3[43.6 41.3 40.5]  hcpu=28.3[30.6 28.3 27.8]  drops=1397[891 1397 3139]
+   => G 151% of N4's old gain; S 2.98x; R(rs3) +0.97pp ok; rs +0.24pp ok; L 1.07x/1.89x FAIL; C 1.27x FAIL
+   core r1: t_startup=4.5 t_hold=7.8 B_hold=0.76BDP (max 1.03) Bpub med/max=0.76/1.26 time_in={'startup': 3.0, 'drain': 1.5, 'hold': 17.7, 'probe': 1.7} offF=7 off_qsnd=[1.2, 1.2, 1.2, 1.2, 1.2] probes=[(14.0, 'startup'), (19.9, 'hold')] refresh=1
+      seq: off@0.0 startup@4.5(B0.56) drain@7.5(B0.63) hold@7.8(B0.63) drain@10.2(B0.45) hold@10.5(B0.45) probe@13.3(B0.85) startup@14.0(B1.06) drain@15.5(B0.60) hold@15.8(B0.60) probe@19.2(B0.88) hold@19.9(B0.85) drain@21.1(B0.42) hold@21.4(B0.42) drain@24.4(B0.67) hold@24.7(B0.76) probe@29.6(B0.79)
+      drain {'t': 7.5, 'why': 'drain:loss', 'qtrue_max': 43.2, 'qtrue_mean': 22.228571428571428, 'drops1s': 621, 'q_turn': 0, 'q_ref': 0, 'q_snd': 23.4, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 10.2, 'why': 'drain:loss', 'qtrue_max': 14.9, 'qtrue_mean': 5.271428571428571, 'drops1s': 0, 'q_turn': 0.7, 'q_ref': 0, 'q_snd': 13.4, 'ooo': 2.08, 'state': 'drain'}
+      drain {'t': 15.5, 'why': 'drain:loss', 'qtrue_max': 47.6, 'qtrue_mean': 24.057142857142857, 'drops1s': 183, 'q_turn': 0.1, 'q_ref': 0.1, 'q_snd': 4.0, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 21.1, 'why': 'drain:loss', 'qtrue_max': 42, 'qtrue_mean': 7.442857142857143, 'drops1s': 87, 'q_turn': 415.2, 'q_ref': 104.2, 'q_snd': 6.1, 'ooo': 0, 'state': 'drain'}
+      log:    8.0s mtcp: link to 10.214.1.1:36587: packets arrived behind holes on a clean path — download windows 6.7 MiB → 3.4 MiB
+   core r2: t_startup=4.2 t_hold=7.7 B_hold=1.02BDP (max 1.13) Bpub med/max=1.02/1.26 time_in={'startup': 1.4, 'drain': 0.9, 'hold': 20.0, 'probe': 1.4} offF=6 off_qsnd=[1.2, 1.2, 1.2, 1.2] probes=[(15.2, 'hold'), (25.4, 'hold')] refresh=1
+      seq: off@0.0 startup@4.2(B0.56) drain@7.4(B0.63) hold@7.7(B0.63) probe@14.5(B1.20) hold@15.2(B1.13) drain@18.5(B0.57) hold@18.8(B0.57) drain@23.2(B0.91) hold@23.5(B1.02) probe@24.7(B1.06) hold@25.4(B1.02)
+      drain {'t': 7.4, 'why': 'drain:loss', 'qtrue_max': 50, 'qtrue_mean': 24.714285714285715, 'drops1s': 641, 'q_turn': 0, 'q_ref': 0, 'q_snd': 25.1, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 18.5, 'why': 'drain:loss', 'qtrue_max': 38.4, 'qtrue_mean': 6.885714285714285, 'drops1s': 211, 'q_turn': 7.7, 'q_ref': 7.5, 'q_snd': 11.3, 'ooo': 0, 'state': 'drain'}
+      log:    7.9s mtcp: link to 10.214.1.1:44513: packets arrived behind holes on a clean path — download windows 6.7 MiB → 3.4 MiB
+   core r3: t_startup=4.2 t_hold=7.4 B_hold=1.09BDP (max 1.17) Bpub med/max=1.09/1.26 time_in={'startup': 1.1, 'drain': 1.5, 'hold': 20.0, 'probe': 1.4} offF=6 off_qsnd=[1.5, 1.5, 1.5, 1.5] probes=[(13.2, 'hold'), (25.4, 'hold')] refresh=2
+      seq: off@0.0 startup@4.2(B0.56) drain@7.1(B0.80) hold@7.4(B0.80) probe@12.5(B1.24) hold@13.2(B1.17) drain@15.1(B1.04) hold@15.4(B1.17) drain@18.1(B0.59) hold@18.4(B0.59) drain@22.4(B0.94) hold@22.7(B1.06) probe@24.7(B1.09) hold@25.4(B1.09) drain@29.0(B0.55) hold@29.3(B0.55)
+      drain {'t': 7.1, 'why': 'drain:loss', 'qtrue_max': 50, 'qtrue_mean': 29.742857142857144, 'drops1s': 1235, 'q_turn': 0, 'q_ref': 0, 'q_snd': 5.0, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 18.1, 'why': 'drain:loss', 'qtrue_max': 42.5, 'qtrue_mean': 7.014285714285714, 'drops1s': 967, 'q_turn': 0, 'q_ref': 15.1, 'q_snd': 20.1, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 29.0, 'why': 'drain:loss', 'qtrue_max': 43, 'qtrue_mean': 7.957142857142857, 'drops1s': 937, 'q_turn': 0, 'q_ref': 0.7, 'q_snd': 11.6, 'ooo': 22.3, 'state': 'drain'}
+      log:    7.6s mtcp: link to 10.214.1.1:42159: packets arrived behind holes on a clean path — download windows 8.5 MiB → 4.3 MiB
+== ul1i@300-150  (n base=3 core=3)
+   base  T=89.1[88.5 89.7 89.1]  rs=0.00[0.00 0.00 0.00]  rs3=0.00[0.00 0.00 0.00]  p50=155[155 155 156]  p99=303[303 270 309]  cpu=31.0[31.3 30.2 31.0]  hcpu=21.2[21.5 20.9 21.2]  drops=0.0[0.0 0.0 0.0]
+   core  T=171[223 158 171]  rs=0.17[0.22 0.06 0.17]  rs3=1.14[1.76 0.32 1.14]  p50=162[168 158 162]  p99=321[321 250 560]  cpu=42.1[40.7 42.1 43.9]  hcpu=29.4[28.2 29.4 30.8]  drops=1398[1656 265 1398]
+   => G 97% of N4's old gain; S 1.92x; R(rs3) +1.14pp ok; rs +0.17pp ok; L 1.04x/1.06x ok; C 1.36x FAIL
+   core r1: t_startup=2.2 t_hold=5.5 B_hold=1.05BDP (max 1.13) Bpub med/max=1.02/1.18 time_in={'hold': 20.0, 'probe': 1.4, 'drain': 1.6} offF=2 off_qsnd=[] probes=[(12.1, 'hold'), (24.5, 'hold')] refresh=2
+      seq: off@0.0 startup@2.2(B0.56) drain@5.2(B0.63) hold@5.5(B0.63) probe@11.4(B1.18) hold@12.1(B1.13) drain@13.2(B1.01) hold@13.5(B1.13) drain@14.0(B0.57) hold@14.3(B0.57) drain@20.7(B0.91) hold@21.0(B1.02) probe@23.8(B1.05) hold@24.5(B1.05) drain@27.6(B0.37) hold@28.3(B0.37)
+      drain {'t': 5.2, 'why': 'drain:loss', 'qtrue_max': 35.5, 'qtrue_mean': 15.271428571428572, 'drops1s': 662, 'q_turn': 1.0, 'q_ref': 0.2, 'q_snd': None, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 14.0, 'why': 'drain:loss', 'qtrue_max': 50, 'qtrue_mean': 8.914285714285715, 'drops1s': 994, 'q_turn': 0.1, 'q_ref': 7.4, 'q_snd': None, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 27.6, 'why': 'drain:loss', 'qtrue_max': 13.8, 'qtrue_mean': 7.228571428571429, 'drops1s': 0, 'q_turn': 0.3, 'q_ref': 0.3, 'q_snd': None, 'ooo': 30.56, 'state': 'drain'}
+      log:    5.8s mtcp: link from 10.214.2.1:50764: packets arrived behind holes on a clean path — upload windows 6.7 MiB → 3.4 MiB
+   core r2: t_startup=2.2 t_hold=8.2 B_hold=0.37BDP (max 1.11) Bpub med/max=0.37/1.33 time_in={'startup': 1.9, 'drain': 1.1, 'hold': 19.2, 'probe': 1.5} offF=2 off_qsnd=[] probes=[(14.6, 'hold'), (18.8, 'hold')] refresh=1
+      seq: off@0.0 startup@2.2(B0.56) drain@7.9(B1.01) hold@8.2(B1.11) probe@13.8(B1.20) hold@14.6(B1.11) drain@15.7(B0.38) hold@16.2(B0.37) probe@18.1(B0.37) hold@18.8(B0.37) drain@24.3(B0.37) hold@24.6(B0.37)
+      drain {'t': 7.9, 'why': 'drain:queue', 'qtrue_max': 27, 'qtrue_mean': 20.8, 'drops1s': 0, 'q_turn': 15.7, 'q_ref': 0, 'q_snd': None, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 15.7, 'why': 'drain:rate', 'qtrue_max': 34.7, 'qtrue_mean': 9.228571428571428, 'drops1s': 265, 'q_turn': 92.2, 'q_ref': 4.2, 'q_snd': None, 'ooo': 51.03, 'state': 'drain'}
+      drain {'t': 15.9, 'why': 'drain:loss', 'qtrue_max': 34.7, 'qtrue_mean': 5.471428571428572, 'drops1s': 265, 'q_turn': 92.2, 'q_ref': 4.2, 'q_snd': None, 'ooo': 51.03, 'state': 'drain'}
+      log:    8.4s mtcp: link from 10.214.2.1:33632: uploads fill the path at ~270 Mbit/s (round trip 150 ms): window held at 6.0 MiB for 1 fast connection(s), queue ~10 ms
+      log:    8.4s mtcp: link from 10.214.2.1:33632: path queue grew to 15 ms — upload windows 6.3 MiB → 5.4 MiB
+   core r3: t_startup=1.9 t_hold=5.2 B_hold=0.8BDP (max 1.06) Bpub med/max=0.8/1.06 time_in={'hold': 19.7, 'drain': 1.9, 'probe': 2.1} offF=1 off_qsnd=[] probes=[(15.6, 'hold'), (21.0, 'hold'), (24.0, 'hold')] refresh=2
+      seq: off@0.0 startup@1.9(B0.56) drain@4.9(B0.63) hold@5.2(B0.63) drain@9.6(B0.37) hold@10.3(B0.37) probe@14.9(B1.00) hold@15.6(B0.85) drain@15.8(B0.42) hold@16.1(B0.42) drain@18.3(B0.66) hold@18.6(B0.76) probe@20.3(B0.80) hold@21.0(B0.80) probe@23.3(B0.83) hold@24.0(B0.80) drain@25.9(B0.72) hold@26.2(B0.80) drain@26.7(B0.38) hold@27.0(B0.38)
+      drain {'t': 4.9, 'why': 'drain:loss', 'qtrue_max': 45.1, 'qtrue_mean': 16.95714285714286, 'drops1s': 597, 'q_turn': 0.3, 'q_ref': 0.3, 'q_snd': None, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 9.6, 'why': 'drain:loss', 'qtrue_max': 13.6, 'qtrue_mean': 3.457142857142857, 'drops1s': 0, 'q_turn': 0.1, 'q_ref': 0.2, 'q_snd': None, 'ooo': 18.66, 'state': 'drain'}
+      drain {'t': 15.8, 'why': 'drain:loss', 'qtrue_max': 13.9, 'qtrue_mean': 5.3, 'drops1s': 710, 'q_turn': 0, 'q_ref': 0.6, 'q_snd': None, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 26.7, 'why': 'drain:loss', 'qtrue_max': 17.5, 'qtrue_mean': 5.328571428571428, 'drops1s': 91, 'q_turn': 283.6, 'q_ref': 0.4, 'q_snd': None, 'ooo': 7.35, 'state': 'drain'}
+      log:    5.5s mtcp: link from 10.214.2.1:50118: packets arrived behind holes on a clean path — upload windows 6.7 MiB → 3.4 MiB
+== dl1i@1000-100  (n base=3 core=3)
+   base  T=126[126 119 140]  rs=0.00[0.00 0.00 0.00]  rs3=0.00[0.00 0.00 0.00]  p50=102[102 102 102]  p99=111[111 108 132]  cpu=24.3[23.9 24.3 24.8]  hcpu=17.3[17.0 17.3 17.6]  drops=0.0[0.0 0.0 0.0]
+   core  T=273[230 273 310]  rs=0.01[0.01 0.01 0.07]  rs3=0.05[0.03 0.05 0.15]  p50=101[101 102 101]  p99=174[174 140 201]  cpu=32.6[37.2 32.1 32.6]  hcpu=22.2[26.5 21.6 22.2]  drops=0.0[0.0 0.0 0.0]
+   => G 38% of N4's old gain; S 2.17x; R(rs3) +0.05pp ok; rs +0.01pp ok; L 1.00x/1.57x FAIL; C 1.34x FAIL
+   core r1: t_startup=1.9 t_hold=4.3 B_hold=0.3BDP (max 0.36) Bpub med/max=0.3/0.41 time_in={'probe': 2.7, 'startup': 2.2, 'drain': 1.2, 'hold': 17.4} offF=2 off_qsnd=[] probes=[(6.5, 'startup'), (11.0, 'hold'), (22.9, 'hold'), (25.0, 'startup'), (28.5, 'startup')] refresh=2
+      seq: off@0.0 startup@1.9(B0.25) drain@4.1(B0.25) hold@4.3(B0.25) probe@5.9(B0.26) startup@6.5(B0.33) drain@8.0(B0.21) hold@8.3(B0.21) probe@10.4(B0.29) hold@11.0(B0.28) drain@12.4(B0.26) hold@12.6(B0.29) drain@20.5(B0.34) hold@20.8(B0.32) probe@22.4(B0.34) hold@22.9(B0.33) probe@24.5(B0.35) startup@25.0(B0.44) drain@25.5(B0.22) hold@25.7(B0.22) probe@28.0(B0.38) startup@28.5(B0.47) drain@28.7(B0.20) hold@29.1(B0.20)
+      drain {'t': 4.1, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0.0, 'q_ref': 0, 'q_snd': 6.3, 'ooo': 27.64, 'state': 'drain'}
+      drain {'t': 8.0, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0.7, 'q_ref': 0.7, 'q_snd': 0.6, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 25.5, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0.1, 'q_ref': 0.3, 'q_snd': 0.6, 'ooo': 9.54, 'state': 'drain'}
+      drain {'t': 28.7, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0, 'q_ref': 0.1, 'q_snd': 2.5, 'ooo': 0, 'state': 'drain'}
+      log:    4.6s mtcp: link to 10.214.1.1:35689: downloads fill the path at ~289 Mbit/s (round trip 100 ms): window held at 3.4 MiB for 1 fast connection(s), queue ~15 ms
+      log:    4.6s mtcp: link to 10.214.1.1:35689: packets arrived behind holes as the windows grew — download windows 5.9 MiB → 2.9 MiB
+   core r2: t_startup=1.8 t_hold=5.0 B_hold=0.34BDP (max 0.42) Bpub med/max=0.34/0.42 time_in={'drain': 1.7, 'hold': 21.1, 'probe': 1.1} offF=1 off_qsnd=[] probes=[(12.5, 'hold'), (27.6, 'hold')] refresh=2
+      seq: off@0.1 startup@1.8(B0.25) drain@4.8(B0.44) hold@5.0(B0.44) drain@5.9(B0.23) hold@6.3(B0.23) drain@9.6(B0.17) hold@10.1(B0.17) probe@12.0(B0.40) hold@12.5(B0.38) drain@16.8(B0.32) hold@16.9(B0.38) drain@19.0(B0.19) hold@19.3(B0.19) drain@23.9(B0.30) hold@24.2(B0.34) probe@27.0(B0.35) hold@27.6(B0.34) drain@28.0(B0.17) hold@28.4(B0.17)
+      drain {'t': 4.8, 'why': 'drain:loss', 'qtrue_max': 1, 'qtrue_mean': 0.3285714285714286, 'drops1s': 0, 'q_turn': 0, 'q_ref': 0.1, 'q_snd': 0.9, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 5.9, 'why': 'drain:loss', 'qtrue_max': 0.1, 'qtrue_mean': 0.014285714285714287, 'drops1s': 0, 'q_turn': 0.3, 'q_ref': 0.1, 'q_snd': 0.9, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 9.6, 'why': 'drain:loss', 'qtrue_max': 0.2, 'qtrue_mean': 0.042857142857142864, 'drops1s': 0, 'q_turn': 0.2, 'q_ref': 0.3, 'q_snd': 1.5, 'ooo': 33.2, 'state': 'drain'}
+      drain {'t': 19.0, 'why': 'drain:loss', 'qtrue_max': 0.7, 'qtrue_mean': 0.14285714285714285, 'drops1s': 0, 'q_turn': 0.2, 'q_ref': 0.5, 'q_snd': 1.7, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 28.0, 'why': 'drain:loss', 'qtrue_max': 0.2, 'qtrue_mean': 0.028571428571428574, 'drops1s': 0, 'q_turn': 0.6, 'q_ref': 0.5, 'q_snd': 0.4, 'ooo': 7.63, 'state': 'drain'}
+      log:    5.1s mtcp: link to 10.214.1.1:36977: packets arrived behind holes on a clean path — download windows 10.5 MiB → 5.2 MiB
+   core r3: t_startup=1.8 t_hold=4.7 B_hold=0.43BDP (max 0.48) Bpub med/max=0.43/0.6 time_in={'hold': 19.2, 'drain': 2.1, 'probe': 1.8, 'startup': 0.7} offF=2 off_qsnd=[] probes=[(10.3, 'hold'), (12.0, 'startup'), (17.1, 'hold'), (29.2, 'hold')] refresh=1
+      seq: off@0.1 startup@1.8(B0.25) drain@4.5(B0.36) hold@4.7(B0.36) drain@6.2(B0.24) hold@6.5(B0.24) probe@9.7(B0.45) hold@10.3(B0.45) probe@11.5(B0.48) startup@12.0(B0.60) drain@12.7(B0.30) hold@13.0(B0.30) probe@16.6(B0.49) hold@17.1(B0.48) drain@18.8(B0.24) hold@19.8(B0.24) drain@22.1(B0.38) hold@22.3(B0.43) drain@25.1(B0.17) hold@25.7(B0.17) probe@29.0(B0.40) hold@29.2(B0.39)
+      drain {'t': 4.5, 'why': 'drain:loss', 'qtrue_max': 0.1, 'qtrue_mean': 0.014285714285714287, 'drops1s': 0, 'q_turn': 0, 'q_ref': 0, 'q_snd': 0.3, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 6.2, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0.0, 'q_ref': 0, 'q_snd': 0.3, 'ooo': 23.55, 'state': 'drain'}
+      drain {'t': 12.7, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0.2, 'q_ref': 0.5, 'q_snd': 0.9, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 18.8, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0.2, 'q_ref': 0.3, 'q_snd': 0.7, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 25.1, 'why': 'drain:loss', 'qtrue_max': 0, 'qtrue_mean': 0.0, 'drops1s': 0, 'q_turn': 0.8, 'q_ref': 0.5, 'q_snd': 0.3, 'ooo': 31.12, 'state': 'drain'}
+      log:    4.9s mtcp: link to 10.214.1.1:41149: packets arrived behind holes on a clean path — download windows 8.5 MiB → 4.3 MiB
+== dl1i@100-100  (n base=3 core=3)
+   base  T=82.7[55.9 82.7 83.8]  rs=0.00[10.13 0.00 0.00]  rs3=0.00[13.12 0.00 0.00]  p50=112[176 110 112]  p99=140[473 126 140]  cpu=42.7[42.7 42.3 43.3]  hcpu=28.4[28.4 27.9 28.4]  drops=726[16589 695 726]
+   core  T=87.6[87.6 87.2 87.8]  rs=0.00[0.00 0.00 0.00]  rs3=0.00[0.00 0.00 0.00]  p50=114[114 117 112]  p99=156[156 379 136]  cpu=43.0[40.9 43.0 44.5]  hcpu=28.2[26.8 28.2 29.2]  drops=914[914 938 886]
+   => S 1.06x; R(rs3) +0.00pp ok; rs +0.00pp ok; L 1.03x/1.11x ok; C 1.01x ok
+   core r1: t_startup=2.0 t_hold=5.1 B_hold=1.99BDP (max 3.36) Bpub med/max=1.99/2.17 time_in={'hold': 22.0, 'probe': 1.4, 'drain': 0.6} offF=2 off_qsnd=[] probes=[(8.8, 'hold'), (25.8, 'hold')] refresh=2
+      seq: off@0.0 startup@2.0(B2.52) drain@4.5(B2.15) hold@5.1(B1.93) probe@8.2(B2.17) hold@8.8(B1.99) drain@11.8(B1.81) hold@12.0(B2.04) drain@20.1(B1.87) hold@20.4(B1.78) probe@25.1(B2.00) hold@25.8(B1.82) drain@28.6(B1.68) hold@28.8(B1.84)
+      drain {'t': 4.5, 'why': 'drain:queue', 'qtrue_max': 21.6, 'qtrue_mean': 6.671428571428571, 'drops1s': 0, 'q_turn': 41.0, 'q_ref': 0.7, 'q_snd': 2.0, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 20.1, 'why': 'drain:queue', 'qtrue_max': 26.3, 'qtrue_mean': 15.5, 'drops1s': 0, 'q_turn': 38.5, 'q_ref': 38.2, 'q_snd': 30.4, 'ooo': 0, 'state': 'drain'}
+      log:    5.0s mtcp: link to 10.214.1.1:43881: downloads fill the path at ~90 Mbit/s (round trip 100 ms): window held at 2.6 MiB for 1 fast connection(s), queue ~15 ms
+      log:    5.0s mtcp: link to 10.214.1.1:43881: path queue grew to 40 ms — download windows 2.5 MiB → 2.6 MiB
+   core r2: t_startup=1.9 t_hold=4.9 B_hold=1.9BDP (max 3.36) Bpub med/max=1.9/3.25 time_in={'hold': 20.5, 'probe': 2.6, 'drain': 0.6} offF=2 off_qsnd=[] probes=[(7.0, 'hold'), (10.6, 'hold'), (19.6, 'hold'), (28.1, 'hold')] refresh=1
+      seq: off@0.1 startup@1.9(B2.52) drain@4.4(B1.72) hold@4.9(B1.68) probe@6.4(B1.86) hold@7.0(B1.82) drain@8.5(B1.68) hold@8.7(B1.68) probe@10.0(B1.88) hold@10.6(B1.70) drain@16.2(B1.91) hold@16.4(B2.14) probe@18.9(B2.32) hold@19.6(B2.14) drain@22.6(B1.90) hold@22.8(B1.79) probe@27.4(B2.08) hold@28.1(B1.90)
+      drain {'t': 4.4, 'why': 'drain:queue', 'qtrue_max': 19, 'qtrue_mean': 10.185714285714285, 'drops1s': 0, 'q_turn': 15.5, 'q_ref': 0, 'q_snd': 21.3, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 8.5, 'why': 'drain:queue', 'qtrue_max': 23.2, 'qtrue_mean': 16.52857142857143, 'drops1s': 0, 'q_turn': 6.6, 'q_ref': 6.3, 'q_snd': 22.0, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 22.6, 'why': 'drain:queue', 'qtrue_max': 28.4, 'qtrue_mean': 14.028571428571428, 'drops1s': 0, 'q_turn': 42.8, 'q_ref': 42.7, 'q_snd': 31.7, 'ooo': 0, 'state': 'drain'}
+      log:    4.7s mtcp: link to 10.214.1.1:37985: downloads fill the path at ~90 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+      log:    4.7s mtcp: link to 10.214.1.1:37985: path queue grew to 15 ms — download windows 2.5 MiB → 2.1 MiB
+   core r3: t_startup=2.0 t_hold=4.7 B_hold=1.8BDP (max 3.36) Bpub med/max=1.8/3.36 time_in={'hold': 18.9, 'probe': 3.4, 'drain': 1.5} offF=2 off_qsnd=[] probes=[(11.0, 'hold'), (17.5, 'hold'), (21.0, 'hold'), (26.2, 'hold'), (28.5, 'hold')] refresh=1
+      seq: off@0.1 startup@2.0(B2.52) drain@4.2(B2.13) hold@4.7(B1.91) probe@10.4(B2.21) hold@11.0(B2.03) drain@12.1(B1.80) hold@12.8(B2.03) drain@14.5(B1.74) hold@15.0(B1.72) probe@16.7(B1.97) hold@17.5(B1.79) drain@18.7(B1.68) hold@18.9(B1.68) probe@20.3(B1.93) hold@21.0(B1.75) drain@22.7(B1.68) hold@23.0(B3.36) probe@25.4(B1.90) hold@26.2(B1.72) probe@27.8(B1.98) hold@28.5(B1.80)
+      drain {'t': 4.2, 'why': 'drain:queue', 'qtrue_max': 16.7, 'qtrue_mean': 6.7, 'drops1s': 0, 'q_turn': 39.7, 'q_ref': 1.4, 'q_snd': 17.6, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 14.5, 'why': 'drain:queue', 'qtrue_max': 7.9, 'qtrue_mean': 2.9, 'drops1s': 0, 'q_turn': 31.6, 'q_ref': 21.5, 'q_snd': 23.4, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 18.7, 'why': 'drain:queue', 'qtrue_max': 16.5, 'qtrue_mean': 11.985714285714286, 'drops1s': 0, 'q_turn': 6.6, 'q_ref': 3.4, 'q_snd': 24.2, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 22.7, 'why': 'drain:queue', 'qtrue_max': 19.7, 'qtrue_mean': 13.557142857142859, 'drops1s': 0, 'q_turn': 1.9, 'q_ref': 2.0, 'q_snd': 16.2, 'ooo': 0, 'state': 'drain'}
+      log:    4.5s mtcp: link to 10.214.1.1:44901: downloads fill the path at ~90 Mbit/s (round trip 100 ms): window held at 2.6 MiB for 1 fast connection(s), queue ~15 ms
+      log:    4.5s mtcp: link to 10.214.1.1:44901: path queue grew to 38 ms — download windows 2.5 MiB → 2.5 MiB
+== dl1i@300-150-l0.1  (n base=3 core=3)
+   base  T=54.7[53.0 62.2 54.7]  rs=0.09[0.09 0.09 0.10]  rs3=0.15[0.15 0.16 0.13]  p50=158[156 158 159]  p99=309[309 308 311]  cpu=30.5[30.5 30.1 30.5]  hcpu=21.6[21.6 21.3 21.6]  drops=141[130 149 141]
+   core  T=75.9[75.4 89.7 75.9]  rs=0.31[0.14 2.06 0.31]  rs3=0.36[0.36 6.45 0.10]  p50=177[177 215 163]  p99=440[329 440 454]  cpu=29.4[27.5 29.4 29.4]  hcpu=20.7[19.4 20.8 20.7]  drops=560[196 4447 560]
+   => G 22% of N4's old gain; S 1.39x; R(rs3) +0.21pp ok; rs +0.22pp ok; L 1.12x/1.42x FAIL; C 0.97x ok
+   core r1: t_startup=4.5 t_hold=8.2 B_hold=0.54BDP (max 0.59) Bpub med/max=0.54/0.66 time_in={'startup': 2.2, 'hold': 18.6, 'probe': 0.8, 'drain': 2.0} offF=7 off_qsnd=[1.7, 1.7, 1.7, 1.7, 1.7] probes=[(14.2, 'hold')] refresh=1
+      seq: off@0.0 startup@4.5(B0.56) hold@8.2(B0.43) probe@13.4(B0.58) hold@14.2(B0.54) drain@15.7(B0.47) hold@16.0(B0.54) drain@20.9(B1.01) hold@21.8(B0.59) drain@24.9(B0.67) hold@25.4(B0.59) drain@26.5(B0.37) hold@26.8(B0.37)
+      drain {'t': 20.9, 'why': 'drain:queue', 'qtrue_max': 16.3, 'qtrue_mean': 2.6, 'drops1s': 8, 'q_turn': 0.9, 'q_ref': 1.9, 'q_snd': 26.8, 'ooo': 63.75, 'state': 'drain'}
+      drain {'t': 24.9, 'why': 'drain:queue', 'qtrue_max': 13.4, 'qtrue_mean': 4.428571428571429, 'drops1s': 9, 'q_turn': 0.8, 'q_ref': 1.1, 'q_snd': 31.9, 'ooo': 27.51, 'state': 'drain'}
+      drain {'t': 26.5, 'why': 'drain:loss', 'qtrue_max': 23.6, 'qtrue_mean': 5.928571428571429, 'drops1s': 7, 'q_turn': 0.1, 'q_ref': 1.4, 'q_snd': 30.4, 'ooo': 76.35, 'state': 'drain'}
+      log:    8.7s mtcp: link to 10.214.1.1:41221: downloads fill the path at ~48 Mbit/s (round trip 150 ms): window held at 2.3 MiB for 1 fast connection(s), queue ~15 ms
+      log:   21.4s mtcp: link to 10.214.1.1:41221: path queue grew to 0 ms — download windows 3.2 MiB → 5.4 MiB
+   core r2: t_startup=4.3 t_hold=7.0 B_hold=0.78BDP (max 0.88) Bpub med/max=0.65/0.98 time_in={'startup': 6.5, 'hold': 13.8, 'probe': 2.4, 'drain': 1.3} offF=5 off_qsnd=[1.5, 1.5, 1.5, 1.5] probes=[(9.5, 'startup'), (17.9, 'startup'), (24.8, 'hold')] refresh=0
+      seq: off@0.0 startup@4.3(B0.56) hold@7.0(B0.37) probe@8.5(B0.46) startup@9.5(B0.57) drain@14.6(B0.49) hold@14.9(B0.49) probe@17.2(B0.90) startup@17.9(B0.87) drain@18.3(B0.43) hold@18.6(B0.43) probe@24.1(B0.80) hold@24.8(B0.80) drain@26.3(B0.37) hold@27.0(B0.37)
+      drain {'t': 14.6, 'why': 'drain:loss', 'qtrue_max': 31.1, 'qtrue_mean': 9.971428571428572, 'drops1s': 8, 'q_turn': 0.9, 'q_ref': 0.1, 'q_snd': 24.5, 'ooo': 97.77, 'state': 'drain'}
+      drain {'t': 18.3, 'why': 'drain:loss', 'qtrue_max': 24.9, 'qtrue_mean': 5.457142857142857, 'drops1s': 329, 'q_turn': 70.6, 'q_ref': 70.6, 'q_snd': 27.3, 'ooo': 97.12, 'state': 'drain'}
+      drain {'t': 26.3, 'why': 'drain:loss', 'qtrue_max': 26, 'qtrue_mean': 3.7142857142857144, 'drops1s': 183, 'q_turn': 0.8, 'q_ref': 1.0, 'q_snd': 11.2, 'ooo': 92.74, 'state': 'drain'}
+      log:    7.5s mtcp: link to 10.214.1.1:45657: downloads fill the path at ~109 Mbit/s (round trip 150 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+      log:   15.1s mtcp: link to 10.214.1.1:45657: path queue grew to 0 ms (resent 1.9%) — download windows 5.3 MiB → 2.6 MiB
+   core r3: t_startup=4.2 t_hold=9.1 B_hold=0.5BDP (max 0.66) Bpub med/max=0.5/0.89 time_in={'startup': 4.9, 'hold': 16.9, 'probe': 1.6, 'drain': 0.6} offF=6 off_qsnd=[5.4, 5.4, 5.4, 5.4] probes=[(11.8, 'hold'), (28.2, 'startup')] refresh=2
+      seq: off@0.0 startup@4.2(B0.56) hold@9.1(B0.37) probe@11.0(B0.46) hold@11.8(B0.41) drain@17.3(B0.43) hold@17.6(B0.50) drain@25.0(B0.53) hold@25.3(B0.60) probe@27.4(B0.71) startup@28.2(B0.89)
+      log:    9.6s mtcp: link to 10.214.1.1:34983: downloads fill the path at ~114 Mbit/s (round trip 150 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+      log:   17.0s mtcp: link to 10.214.1.1:34983: 0.1% loss with no queue — windows cover the resends (+115 ms)
+== dl1i@1000-100-l0.1  (n base=3 core=3)
+   base  T=73.8[75.3 71.5 73.8]  rs=0.10[0.10 0.09 0.10]  rs3=0.12[0.12 0.12 0.15]  p50=108[108 106 108]  p99=209[206 309 209]  cpu=31.2[29.9 31.2 31.8]  hcpu=21.2[20.6 21.2 21.7]  drops=195[220 173 195]
+   core  T=259[259 329 232]  rs=0.15[0.13 0.19 0.15]  rs3=0.36[0.30 0.36 0.45]  p50=187[187 191 162]  p99=317[266 324 317]  cpu=28.2[29.2 25.8 28.2]  hcpu=19.5[20.4 17.6 19.5]  drops=956[956 1090 744]
+   => G 70% of N4's old gain; S 3.51x; R(rs3) +0.24pp ok; rs +0.05pp ok; L 1.74x/1.52x FAIL; C 0.90x ok
+   core r1: t_startup=1.9 t_hold=8.4 B_hold=0.55BDP (max 0.92) Bpub med/max=0.55/0.93 time_in={'startup': 2.4, 'hold': 19.6, 'probe': 1.5, 'drain': 0.4} offF=2 off_qsnd=[] probes=[(16.7, 'hold'), (28.2, 'hold')] refresh=2
+      seq: off@0.1 startup@1.9(B0.25) hold@8.4(B0.36) probe@16.0(B0.62) hold@16.7(B0.55) drain@17.6(B0.47) hold@17.7(B0.55) drain@24.9(B0.71) hold@25.1(B0.80) probe@27.4(B1.02) hold@28.2(B0.92)
+      log:    8.9s mtcp: link to 10.214.1.1:43083: downloads fill the path at ~177 Mbit/s (round trip 100 ms): window held at 4.3 MiB for 1 fast connection(s), queue ~15 ms
+      log:   14.9s mtcp: link to 10.214.1.1:43083: 0.1% loss with no queue — windows cover the resends (+107 ms)
+   core r2: t_startup=1.8 t_hold=4.0 B_hold=0.87BDP (max 1.32) Bpub med/max=0.76/1.32 time_in={'probe': 1.2, 'startup': 7.8, 'hold': 14.2, 'drain': 0.7} offF=2 off_qsnd=[] probes=[(6.4, 'startup'), (15.9, 'hold')] refresh=2
+      seq: off@0.1 startup@1.8(B0.25) hold@4.0(B0.17) probe@5.7(B0.20) startup@6.4(B0.25) hold@14.3(B0.66) probe@15.1(B0.73) hold@15.9(B0.66) drain@21.7(B0.77) hold@22.2(B0.87) drain@29.2(B1.16) hold@29.4(B1.32)
+      log:    4.4s mtcp: link to 10.214.1.1:40945: downloads fill the path at ~157 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+      log:   24.7s mtcp: link to 10.214.1.1:40945: 0.1% loss with no queue — windows cover the resends (+96 ms)
+   core r3: t_startup=2.0 t_hold=4.4 B_hold=0.29BDP (max 1.0) Bpub med/max=0.68/1.0 time_in={'probe': 1.9, 'hold': 11.5, 'drain': 0.7, 'startup': 9.8} offF=2 off_qsnd=[] probes=[(6.5, 'hold'), (14.0, 'startup'), (22.2, 'startup')] refresh=1
+      seq: off@0.1 startup@2.0(B0.25) hold@4.4(B0.17) probe@5.8(B0.20) hold@6.5(B0.22) drain@12.0(B0.25) hold@12.3(B0.29) probe@13.4(B0.32) startup@14.0(B0.40) hold@20.3(B0.71) probe@21.5(B0.75) startup@22.2(B0.82) hold@25.7(B0.87) drain@28.4(B0.88) hold@29.0(B1.00)
+      log:    4.8s mtcp: link to 10.214.1.1:34815: downloads fill the path at ~151 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+      log:   28.8s mtcp: link to 10.214.1.1:34815: 0.1% loss with no queue — windows cover the resends (+101 ms)
+== dlchg@300-150  (n base=3 core=3)
+   base  T=58.1[57.5 63.4 58.1]  rs=7.87[8.20 7.87 6.63]  rs3=36.82[36.82 34.90 37.06]  p50=152[152 152 154]  p99=764[764 678 780]  cpu=39.2[39.2 38.4 45.2]  hcpu=26.6[26.6 25.7 29.9]  drops=17169[17169 18154 13758]
+         chg: pre=91.5[91.5 92.0 79.0]  low=30.1[29.6 31.8 30.1]  post=68.9[54.5 68.9 69.4]  back90=6.5[7.0 6.0]  back90low=0.0[0.0 0.0 0.0]  rslow=31.0[31.5 31.0 26.1]  rsall=8.4[8.7 8.4 7.0]
+   core  T=115[142 115 106]  rs=5.77[5.21 5.77 5.92]  rs3=43.15[56.91 42.43 43.15]  p50=158[165 158 158]  p99=873[1213 834 873]  cpu=48.9[46.4 48.9 50.8]  hcpu=32.8[30.9 32.8 33.5]  drops=31883[34493 31883 29654]
+         chg: pre=207[250 197 207]  low=25.3[25.3 25.1 26.0]  post=121[158 121 85]  back90=3.5[4.0 3.0]  back90low=0.0[0.0 0.0 0.0]  rslow=34.8[38.9 34.7 34.8]  rsall=6.1[5.5 6.1 6.3]
+   => R(rs3) +6.33pp FAIL; rs -2.10pp ok; L 1.04x/1.14x ok; C 1.25x FAIL
+   core r1: t_startup=4.2 t_hold=7.4 B_hold=1.13BDP (max 1.13) Bpub med/max=0.61/1.26 time_in={'startup': 5.4, 'drain': 1.6, 'hold': 15.5, 'probe': 2.1, 'off': 11.1} offF=26 off_qsnd=[5.8, 5.8, 5.8, 5.8, 49.5, 49.5, 49.5, 50.4] probes=[(13.3, 'hold'), (37.9, 'hold'), (40.5, 'hold')] refresh=1
+      seq: off@0.0 startup@4.2(B0.56) drain@7.1(B0.63) hold@7.4(B0.63) probe@12.6(B1.20) hold@13.3(B1.13) drain@15.2(B1.00) hold@15.5(B1.13) drain@18.2(B0.57) hold@18.5(B0.57) off@19.6 startup@30.7(B0.56) drain@35.0(B1.16) hold@35.7(B0.58) probe@37.2(B0.61) hold@37.9(B0.58) probe@39.8(B0.61) hold@40.5(B0.75)
+      drain {'t': 7.1, 'why': 'drain:loss', 'qtrue_max': 49.1, 'qtrue_mean': 23.5, 'drops1s': 627, 'q_turn': 0.2, 'q_ref': 0.2, 'q_snd': 12.2, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 18.2, 'why': 'drain:loss', 'qtrue_max': 49, 'qtrue_mean': 30.485714285714288, 'drops1s': 5083, 'q_turn': 7.8, 'q_ref': 7.6, 'q_snd': 13.7, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 35.0, 'why': 'drain:queue', 'qtrue_max': 29.8, 'qtrue_mean': 23.428571428571427, 'drops1s': 0, 'q_turn': 16.1, 'q_ref': 0.6, 'q_snd': 10.8, 'ooo': 0, 'state': 'drain'}
+      log:    7.6s mtcp: link to 10.214.1.1:38793: packets arrived behind holes on a clean path — download windows 6.7 MiB → 3.4 MiB
+      log:   35.5s mtcp: link to 10.214.1.1:38793: downloads fill the path at ~268 Mbit/s (round trip 150 ms): window held at 3.1 MiB for 1 fast connection(s), queue ~3 ms
+   core r2: t_startup=4.3 t_hold=7.7 B_hold=0.37BDP (max 1.12) Bpub med/max=0.42/1.36 time_in={'startup': 5.6, 'drain': 4.0, 'hold': 23.6, 'probe': 1.6, 'off': 0.9} offF=7 off_qsnd=[1.0, 1.0, 1.0, 1.0, 3.6] probes=[(11.5, 'startup'), (16.9, 'drain'), (39.0, 'hold')] refresh=1
+      seq: off@0.0 startup@4.3(B0.56) drain@7.4(B0.63) hold@7.7(B0.63) probe@10.7(B1.10) startup@11.5(B1.33) drain@12.1(B0.62) hold@12.8(B0.62) probe@16.8(B1.15) drain@16.9(B0.58) hold@17.2(B0.58) drain@18.3(B0.42) hold@18.6(B0.42) drain@20.2(B0.37) hold@20.5(B0.37) drain@22.1(B0.37) hold@22.4(B0.37) drain@24.0(B0.37) hold@24.3(B0.37) drain@26.0(B0.37) hold@26.3(B0.37) drain@28.5(B0.37) hold@28.8(B0.37) off@29.9 startup@30.8(B0.56) drain@34.4(B0.68) hold@34.7(B0.68) drain@36.5(B0.37) hold@36.8(B0.37) probe@38.3(B0.37) hold@39.0(B0.37) drain@41.1(B0.37) hold@41.4(B0.37)
+      drain {'t': 7.4, 'why': 'drain:loss', 'qtrue_max': 50, 'qtrue_mean': 22.685714285714287, 'drops1s': 678, 'q_turn': 0, 'q_ref': 0, 'q_snd': 13.0, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 12.1, 'why': 'drain:loss', 'qtrue_max': 37.7, 'qtrue_mean': 20.12857142857143, 'drops1s': 89, 'q_turn': 2.0, 'q_ref': 0.3, 'q_snd': 9.8, 'ooo': 10.08, 'state': 'drain'}
+      drain {'t': 16.9, 'why': 'drain:loss', 'qtrue_max': 18.5, 'qtrue_mean': 4.457142857142857, 'drops1s': 470, 'q_turn': 304.3, 'q_ref': 76.9, 'q_snd': 6.7, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 18.3, 'why': 'drain:loss', 'qtrue_max': 49.9, 'qtrue_mean': 25.814285714285713, 'drops1s': 3709, 'q_turn': 0.4, 'q_ref': 76.9, 'q_snd': 6.7, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 20.2, 'why': 'drain:loss', 'qtrue_max': 49.9, 'qtrue_mean': 8.185714285714285, 'drops1s': 2652, 'q_turn': 130.3, 'q_ref': 76.9, 'q_snd': 3.2, 'ooo': 65.07, 'state': 'drain'}
+      drain {'t': 22.1, 'why': 'drain:loss', 'qtrue_max': 49.9, 'qtrue_mean': 7.442857142857143, 'drops1s': 2910, 'q_turn': 192.9, 'q_ref': 76.9, 'q_snd': 39.8, 'ooo': 44.66, 'state': 'drain'}
+      drain {'t': 24.0, 'why': 'drain:loss', 'qtrue_max': 49.9, 'qtrue_mean': 11.614285714285714, 'drops1s': 2405, 'q_turn': 5.0, 'q_ref': 76.9, 'q_snd': 49.6, 'ooo': 45.23, 'state': 'drain'}
+      drain {'t': 26.0, 'why': 'drain:loss', 'qtrue_max': 38.5, 'qtrue_mean': 18.97142857142857, 'drops1s': 2605, 'q_turn': 181.0, 'q_ref': 76.9, 'q_snd': 49.4, 'ooo': 46.71, 'state': 'drain'}
+      drain {'t': 28.5, 'why': 'drain:loss', 'qtrue_max': 49.9, 'qtrue_mean': 9.185714285714285, 'drops1s': 2012, 'q_turn': 155.1, 'q_ref': 155.1, 'q_snd': 42.6, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 34.4, 'why': 'drain:loss', 'qtrue_max': 40.1, 'qtrue_mean': 17.82857142857143, 'drops1s': 54, 'q_turn': 0.1, 'q_ref': 0.5, 'q_snd': 30.8, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 41.1, 'why': 'drain:loss', 'qtrue_max': 15.2, 'qtrue_mean': 4.6, 'drops1s': 206, 'q_turn': 0.4, 'q_ref': 1.0, 'q_snd': 14.1, 'ooo': 0, 'state': 'drain'}
+      log:    7.9s mtcp: link to 10.214.1.1:38909: packets arrived behind holes on a clean path — download windows 6.8 MiB → 3.4 MiB
+      log:   12.6s mtcp: link to 10.214.1.1:38909: downloads fill the path at ~268 Mbit/s (round trip 150 ms): window held at 5.9 MiB for 1 fast connection(s), queue ~7 ms
+      log:   41.6s mtcp: link to 10.214.1.1:38909: packets arrived behind holes on a clean path — download windows 4.0 MiB → 2.0 MiB
+   core r3: t_startup=4.5 t_hold=7.8 B_hold=0.37BDP (max 1.16) Bpub med/max=0.37/1.26 time_in={'startup': 1.5, 'drain': 5.6, 'hold': 28.0, 'probe': 0.7} offF=7 off_qsnd=[1.4, 1.4, 1.4, 1.4, 1.4] probes=[(13.0, 'hold')] refresh=0
+      seq: off@0.0 startup@4.5(B0.56) drain@7.5(B0.80) hold@7.8(B0.80) probe@12.3(B1.21) hold@13.0(B1.15) drain@14.9(B0.37) hold@15.6(B0.37) drain@18.3(B0.52) hold@19.4(B0.52) drain@21.1(B0.37) hold@21.4(B0.37) drain@23.7(B0.37) hold@24.0(B0.37) drain@26.1(B0.37) hold@26.8(B0.37) drain@29.3(B0.37) hold@30.0(B0.37) drain@32.3(B0.37) hold@33.0(B0.37) drain@34.9(B0.40) hold@35.7(B0.37)
+      drain {'t': 7.5, 'why': 'drain:loss', 'qtrue_max': 46.2, 'qtrue_mean': 27.0, 'drops1s': 707, 'q_turn': 0, 'q_ref': 0, 'q_snd': 7.2, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 14.9, 'why': 'drain:loss', 'qtrue_max': 45.3, 'qtrue_mean': 11.285714285714286, 'drops1s': 101, 'q_turn': 11.2, 'q_ref': 9.9, 'q_snd': 12.5, 'ooo': 17.55, 'state': 'drain'}
+      drain {'t': 18.3, 'why': 'drain:loss', 'qtrue_max': 49.8, 'qtrue_mean': 38.699999999999996, 'drops1s': 4847, 'q_turn': 11.8, 'q_ref': 0.4, 'q_snd': 8.4, 'ooo': 10.29, 'state': 'drain'}
+      drain {'t': 21.1, 'why': 'drain:loss', 'qtrue_max': 34.3, 'qtrue_mean': 10.857142857142858, 'drops1s': 3196, 'q_turn': 498.4, 'q_ref': 0.4, 'q_snd': 39.4, 'ooo': 96.92, 'state': 'drain'}
+      drain {'t': 23.7, 'why': 'drain:loss', 'qtrue_max': 49.9, 'qtrue_mean': 17.128571428571426, 'drops1s': 1997, 'q_turn': 321.6, 'q_ref': 0.4, 'q_snd': 6.1, 'ooo': 86.19, 'state': 'drain'}
+      drain {'t': 26.1, 'why': 'drain:loss', 'qtrue_max': 49.9, 'qtrue_mean': 21.585714285714285, 'drops1s': 1927, 'q_turn': 646.7, 'q_ref': 0.4, 'q_snd': 50.1, 'ooo': 93.76, 'state': 'drain'}
+      drain {'t': 29.3, 'why': 'drain:loss', 'qtrue_max': 32.5, 'qtrue_mean': 13.714285714285714, 'drops1s': 1806, 'q_turn': 659.0, 'q_ref': 0.4, 'q_snd': 50.2, 'ooo': 93.0, 'state': 'drain'}
+      drain {'t': 32.3, 'why': 'drain:loss', 'qtrue_max': 4.8, 'qtrue_mean': 1.5142857142857142, 'drops1s': 0, 'q_turn': 0.4, 'q_ref': 0.4, 'q_snd': 5.1, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 34.9, 'why': 'drain:queue', 'qtrue_max': 12.4, 'qtrue_mean': 1.9428571428571428, 'drops1s': 0, 'q_turn': 0.4, 'q_ref': 0.9, 'q_snd': 28.6, 'ooo': 0, 'state': 'drain'}
+      log:    8.1s mtcp: link to 10.214.1.1:33021: packets arrived behind holes on a clean path — download windows 8.5 MiB → 4.3 MiB
+== dl4@300-150  (n base=3 core=3)
+   base  T=164[164 171 155]  rs=6.65[6.65 8.60 5.94]  rs3=8.45[7.82 13.24 8.45]  p50=174[170 244 174]  p99=453[453 428 624]  cpu=42.0[41.6 42.0 43.1]  hcpu=28.6[28.5 28.6 29.7]  drops=42416[42416 57021 33623]
+   core  T=176[176 196 169]  rs=13.26[13.26 22.95 6.53]  rs3=19.96[19.96 29.19 10.68]  p50=263[263 341 178]  p99=753[753 1129 451]  cpu=42.8[42.8 39.6 43.7]  hcpu=28.1[28.1 24.1 29.9]  drops=88382[88382 180460 36766]
+   => G 49% of N4's old gain; S 1.07x; R(rs3) +11.52pp FAIL; rs +6.61pp over+0.5; L 1.51x/1.66x FAIL; C 1.02x ok
+   core r1: t_startup=8.4 t_hold=12.4 B_hold=1.69BDP (max 2.03) Bpub med/max=1.58/2.16 time_in={'off': 2.4, 'startup': 7.7, 'hold': 9.9, 'probe': 2.9, 'drain': 1.1} offF=15 off_qsnd=[3.6, 3.6, 3.6, 3.6, 3.6, 17.8, 17.8, 17.8] probes=[(16.8, 'startup'), (22.8, 'hold')] refresh=0
+      seq: off@0.0 startup@8.4(B2.24) hold@12.4(B1.49) probe@14.6(B1.60) startup@16.8(B1.54) hold@20.5(B2.03) probe@22.1(B2.16) hold@22.8(B2.03) drain@25.9(B1.54) hold@26.2(B1.56) drain@28.5(B1.84) hold@29.3(B1.69)
+      drain {'t': 25.9, 'why': 'drain:queue', 'qtrue_max': 34.3, 'qtrue_mean': 13.314285714285713, 'drops1s': 3100, 'q_turn': 140.8, 'q_ref': 192.3, 'q_snd': 50.6, 'ooo': 72.45, 'state': 'drain'}
+      drain {'t': 28.5, 'why': 'drain:queue', 'qtrue_max': 49.9, 'qtrue_mean': 24.142857142857142, 'drops1s': 5209, 'q_turn': 11.6, 'q_ref': 7.4, 'q_snd': 51.3, 'ooo': 20.96, 'state': 'drain'}
+      log:   13.0s mtcp: link to 10.214.1.1:41963: downloads fill the path at ~243 Mbit/s (round trip 150 ms): window held at 8.0 MiB for 4 fast connection(s), queue ~15 ms
+      log:   26.5s mtcp: link to 10.214.1.1:41963: path queue grew to 0 ms — download windows 10.9 MiB → 8.3 MiB
+   core r2: t_startup=2.3 t_hold=8.0 B_hold=2.69BDP (max 2.69) Bpub med/max=2.69/3.25 time_in={'startup': 10.5, 'hold': 10.1, 'probe': 2.4, 'drain': 0.7} offF=2 off_qsnd=[] probes=[(9.8, 'startup'), (17.1, 'hold'), (26.7, 'startup')] refresh=0
+      seq: off@0.0 startup@2.3(B2.24) hold@8.0(B2.34) probe@9.1(B2.45) startup@9.8(B3.06) hold@15.3(B2.69) probe@16.4(B2.86) hold@17.1(B2.69) drain@22.6(B1.49) hold@23.3(B1.50) probe@25.7(B2.10) startup@26.7(B2.63)
+      drain {'t': 22.6, 'why': 'drain:rate', 'qtrue_max': 50, 'qtrue_mean': 22.5, 'drops1s': 7680, 'q_turn': 9.3, 'q_ref': 187.4, 'q_snd': 51.6, 'ooo': 63.18, 'state': 'drain'}
+      log:    8.6s mtcp: link to 10.214.1.1:35375: downloads fill the path at ~255 Mbit/s (round trip 150 ms): window held at 12.5 MiB for 4 fast connection(s), queue ~15 ms
+      log:   15.9s mtcp: window pool full (128 MiB): 4 fast connection(s) on 1 link(s) held below what their path carries
+      log:   21.6s mtcp: link to 10.214.1.1:35375: 28.3% loss with no queue — windows cover the resends (+207 ms)
+      log:   23.2s mtcp: link to 10.214.1.1:35375: path slowed to ~127 Mbit/s with its queue growing — download windows 14.4 MiB → 8.0 MiB
+   core r3: t_startup=4.6 t_hold=6.7 B_hold=1.49BDP (max 1.49) Bpub med/max=1.49/1.49 time_in={'startup': 0.4, 'drain': 2.9, 'hold': 19.7, 'probe': 0.7} offF=6 off_qsnd=[17.9, 17.9, 17.9, 17.9, 17.9] probes=[(13.7, 'hold')] refresh=2
+      seq: off@0.0 startup@4.6(B2.24) drain@6.4(B1.49) hold@6.7(B1.49) drain@8.2(B1.49) hold@8.9(B1.49) drain@10.8(B1.49) hold@11.5(B1.49) probe@13.0(B1.49) hold@13.7(B1.49) drain@19.7(B1.49) hold@20.6(B1.49) drain@27.9(B1.49) hold@28.2(B1.49)
+      drain {'t': 6.4, 'why': 'drain:loss', 'qtrue_max': 48.1, 'qtrue_mean': 25.728571428571428, 'drops1s': 0, 'q_turn': 0.7, 'q_ref': 0.7, 'q_snd': 13.9, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 8.2, 'why': 'drain:loss', 'qtrue_max': 26.6, 'qtrue_mean': 5.242857142857143, 'drops1s': 1313, 'q_turn': 3.4, 'q_ref': 6.8, 'q_snd': 2.0, 'ooo': 26.96, 'state': 'drain'}
+      drain {'t': 10.8, 'why': 'drain:rate', 'qtrue_max': 49.9, 'qtrue_mean': 15.914285714285715, 'drops1s': 2218, 'q_turn': 4.9, 'q_ref': 40.0, 'q_snd': 41.3, 'ooo': 44.24, 'state': 'drain'}
+      log:    6.9s mtcp: link to 10.214.1.1:45581: downloads fill the path at ~246 Mbit/s (round trip 150 ms): window held at 8.0 MiB for 4 fast connection(s), queue ~15 ms
+      log:    6.9s mtcp: link to 10.214.1.1:45581: packets were lost as the windows grew (resent 2.3%) — download windows 8.0 MiB → 8.0 MiB
+      log:   13.1s mtcp: link to 10.214.1.1:45581: 9.5% loss with no queue — windows cover the resends (+54 ms)

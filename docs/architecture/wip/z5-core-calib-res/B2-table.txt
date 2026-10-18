@@ -1,0 +1,39 @@
+== dl1i@1000-100  (n base=3 core=3)
+   base  T=122[131 118 122]  rs=0.00[0.00 0.00 0.00]  rs3=0.00[0.00 0.00 0.00]  p50=102[102 102 102]  p99=111[111 117 106]  cpu=24.2[24.2 24.3 24.0]  hcpu=17.1[17.1 17.3 17.0]  drops=0.0[0.0 0.0 0.0]
+   core  T=854[849 858 854]  rs=0.00[0.00 0.00 0.00]  rs3=0.00[0.00 0.00 0.00]  p50=117[117 114 119]  p99=141[138 141 374]  cpu=22.0[22.1 21.7 22.0]  hcpu=13.6[13.7 13.4 13.6]  drops=0.0[0.0 0.0 0.0]
+   => G 190% of N4's old gain; S 6.99x; R(rs3) +0.00pp ok; rs +0.00pp ok; L 1.15x/1.27x ok; C 0.91x ok
+   core r1: t_startup=1.9 t_hold=6.9 B_hold=1.19BDP (max 1.21) Bpub med/max=1.19/1.34 time_in={'startup': 0.7, 'drain': 0.4, 'hold': 21.3, 'probe': 1.3} offF=1 off_qsnd=[] probes=[(15.7, 'hold'), (26.4, 'hold')] refresh=1
+      seq: off@0.1 startup@1.9(B0.25) drain@6.7(B0.99) hold@6.9(B1.13) probe@15.0(B1.34) hold@15.7(B1.20) drain@24.4(B0.97) hold@24.6(B1.18) probe@25.7(B1.34) hold@26.4(B1.20)
+      drain {'t': 6.7, 'why': 'drain:queue', 'qtrue_max': 15.5, 'qtrue_mean': 12.028571428571428, 'drops1s': 0, 'q_turn': 10.8, 'q_ref': 0, 'q_snd': 11.7, 'ooo': 0, 'state': 'drain'}
+      log:    7.1s mtcp: link to 10.214.1.1:43519: downloads fill the path at ~891 Mbit/s (round trip 100 ms): window held at 13.4 MiB for 1 fast connection(s), queue ~15 ms
+      log:    7.1s mtcp: link to 10.214.1.1:43519: path queue grew to 10 ms — download windows 14.0 MiB → 11.8 MiB
+      log:    7.1s mtcp: window pool full (128 MiB): 1 fast connection(s) on 1 link(s) held below what their path carries
+   core r2: t_startup=1.8 t_hold=7.6 B_hold=1.18BDP (max 1.24) Bpub med/max=1.18/1.34 time_in={'startup': 1.4, 'drain': 0.8, 'hold': 19.5, 'probe': 2.1} offF=2 off_qsnd=[] probes=[(13.2, 'hold'), (23.3, 'hold'), (29.6, 'hold')] refresh=2
+      seq: off@0.1 startup@1.8(B0.25) drain@7.4(B0.99) hold@7.6(B0.96) probe@12.5(B1.29) hold@13.2(B1.11) drain@15.5(B0.97) hold@15.7(B1.19) drain@18.7(B0.96) hold@18.9(B1.12) probe@22.5(B1.32) hold@23.3(B1.23) drain@26.9(B1.01) hold@27.1(B1.22) probe@29.0(B1.34) hold@29.6(B1.24)
+      drain {'t': 7.4, 'why': 'drain:queue', 'qtrue_max': 34.2, 'qtrue_mean': 25.428571428571427, 'drops1s': 0, 'q_turn': 24.8, 'q_ref': 0, 'q_snd': 14.0, 'ooo': 0, 'state': 'drain'}
+      drain {'t': 18.7, 'why': 'drain:queue', 'qtrue_max': 21.6, 'qtrue_mean': 12.314285714285715, 'drops1s': 0, 'q_turn': 13.7, 'q_ref': 13.7, 'q_snd': 25.6, 'ooo': 0, 'state': 'drain'}
+      log:    7.8s mtcp: link to 10.214.1.1:39697: downloads fill the path at ~892 Mbit/s (round trip 100 ms): window held at 11.5 MiB for 1 fast connection(s), queue ~15 ms
+      log:    7.8s mtcp: link to 10.214.1.1:39697: path queue grew to 24 ms — download windows 15.8 MiB → 11.8 MiB
+   core r3: t_startup=1.9 t_hold=6.7 B_hold=1.2BDP (max 1.21) Bpub med/max=1.2/1.34 time_in={'startup': 0.6, 'drain': 0.6, 'hold': 21.4, 'probe': 1.3} offF=2 off_qsnd=[] probes=[(13.5, 'hold'), (28.6, 'hold')] refresh=2
+      seq: off@0.1 startup@1.9(B0.25) drain@6.6(B1.02) hold@6.7(B1.13) probe@13.0(B1.34) hold@13.5(B1.20) drain@14.4(B0.99) hold@14.6(B1.20) drain@22.1(B0.99) hold@22.2(B1.19) probe@28.0(B1.34) hold@28.6(B1.21)
+      drain {'t': 6.6, 'why': 'drain:queue', 'qtrue_max': 25.4, 'qtrue_mean': 15.12857142857143, 'drops1s': 0, 'q_turn': 12.4, 'q_ref': 0, 'q_snd': 17.4, 'ooo': 0, 'state': 'drain'}
+      log:    6.9s mtcp: link to 10.214.1.1:34455: downloads fill the path at ~891 Mbit/s (round trip 100 ms): window held at 13.5 MiB for 1 fast connection(s), queue ~15 ms
+      log:    6.9s mtcp: link to 10.214.1.1:34455: path queue grew to 12 ms — download windows 14.0 MiB → 12.2 MiB
+      log:    6.9s mtcp: window pool full (128 MiB): 1 fast connection(s) on 1 link(s) held below what their path carries
+== dl1i@1000-100-l0.1  (n base=3 core=3)
+   base  T=81.9[79.1 81.9 91.1]  rs=0.10[0.10 0.10 0.10]  rs3=0.14[0.16 0.14 0.14]  p50=106[107 106 106]  p99=307[314 307 207]  cpu=23.3[24.8 23.3 23.1]  hcpu=16.6[17.5 16.6 16.4]  drops=219[214 219 239]
+   core  T=370[181 370 387]  rs=0.10[0.10 0.10 0.10]  rs3=0.11[0.16 0.11 0.11]  p50=192[126 192 196]  p99=292[219 396 292]  cpu=25.4[27.9 25.4 24.3]  hcpu=17.1[19.7 17.1 16.3]  drops=1236[582 1236 1311]
+   => G 108% of N4's old gain; S 4.52x; R(rs3) -0.03pp ok; rs +0.00pp ok; L 1.80x/0.95x FAIL; C 1.09x ok
+   core r1: t_startup=1.9 t_hold=4.5 B_hold=0.25BDP (max 0.43) Bpub med/max=0.29/1.17 time_in={'hold': 14.9, 'probe': 2.2, 'drain': 0.2, 'startup': 6.7} offF=2 off_qsnd=[] probes=[(6.8, 'hold'), (20.6, 'startup'), (24.9, 'startup')] refresh=1
+      seq: off@0.1 startup@1.9(B0.25) hold@4.5(B0.17) probe@6.1(B0.20) hold@6.8(B0.17) drain@11.9(B0.18) hold@12.1(B0.22) probe@20.1(B0.37) startup@20.6(B0.47) hold@22.2(B0.43) probe@24.1(B0.49) startup@24.9(B0.55)
+      log:    4.8s mtcp: link to 10.214.1.1:33465: downloads fill the path at ~164 Mbit/s (round trip 100 ms): window held at 2.0 MiB for 1 fast connection(s), queue ~15 ms
+      log:   14.6s mtcp: link to 10.214.1.1:33465: 0.1% loss with no queue — windows cover the resends (+61 ms)
+   core r2: t_startup=1.9 t_hold=13.7 B_hold=0.91BDP (max 1.05) Bpub med/max=0.91/1.14 time_in={'startup': 17.9, 'hold': 5.3, 'probe': 0.6} offF=2 off_qsnd=[] probes=[(16.2, 'startup')] refresh=0
+      seq: off@0.1 startup@1.9(B0.25) hold@13.7(B0.65) probe@15.5(B0.73) startup@16.2(B0.79) hold@26.3(B0.91) probe@29.8(B1.16)
+      log:   14.1s mtcp: link to 10.214.1.1:35551: downloads fill the path at ~345 Mbit/s (round trip 100 ms): window held at 7.7 MiB for 1 fast connection(s), queue ~15 ms
+   core r3: t_startup=1.9 t_hold=10.5 B_hold=0.96BDP (max 1.34) Bpub med/max=0.96/1.34 time_in={'startup': 4.5, 'hold': 16.4, 'probe': 2.3, 'drain': 0.7} offF=2 off_qsnd=[] probes=[(13.0, 'hold'), (16.5, 'hold'), (28.6, 'hold')] refresh=1
+      seq: off@0.1 startup@1.9(B0.25) hold@10.5(B0.67) probe@12.3(B0.84) hold@13.0(B0.79) probe@15.8(B1.05) hold@16.5(B0.96) drain@18.8(B0.90) hold@19.4(B1.02) drain@26.2(B0.97) hold@26.4(B1.10) probe@28.1(B0.98) hold@28.6(B0.96) probe@29.5(B1.06)
+      drain {'t': 26.2, 'why': 'drain:queue', 'qtrue_max': 6.8, 'qtrue_mean': 2.8, 'drops1s': 71, 'q_turn': 145.1, 'q_ref': 64.9, 'q_snd': 10.2, 'ooo': 84.65, 'state': 'drain'}
+      log:   10.8s mtcp: link to 10.214.1.1:41625: downloads fill the path at ~386 Mbit/s (round trip 100 ms): window held at 7.9 MiB for 1 fast connection(s), queue ~15 ms
+      log:   22.7s mtcp: link to 10.214.1.1:41625: 0.1% loss with no queue — windows cover the resends (+84 ms)
+      log:   26.6s mtcp: link to 10.214.1.1:41625: path queue grew to 80 ms — download windows 16.0 MiB → 11.5 MiB
