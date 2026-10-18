@@ -66,13 +66,15 @@ const spareRoom = 4
 // past NeedStreamBuffer back, then the claim it covered (sweepClaims).
 const claimIdle = 5 * time.Second
 
-// closeGrace: a session that closed gives back what its streams still claim
-// this long after, whatever their apps do (dropClaims). Until then a claim
-// covers what its stream holds unread past NeedStreamBuffer, and goes back
-// as the stream lets the data go: the process's memory stays within what the
-// pool accounts for while a dead link's relays drain (hs2's relayDieGrace,
-// 5 s); a stream its app never closes would keep its claim for good. A
-// variable for the tests.
+// closeGrace: a session that closed gives back what its streams still claim,
+// and its spare, this long after, whatever their apps do (dropClaims). Until
+// then a claim covers what its stream holds unread past NeedStreamBuffer,
+// and the spare what the streams hold past MaxReceiveBuffer and their claims
+// (what the session borrowed as it ran full), and each goes back as the
+// streams let the data go: the process's memory stays within what the pool
+// accounts for while a dead link's relays drain (hs2's relayDieGrace, 5 s);
+// a stream its app never closes would keep it for good. A variable for the
+// tests.
 var closeGrace = 2 * claimIdle
 
 // WindowPool is the excess past Config.NeedStreamBuffer that the windows of
@@ -285,8 +287,9 @@ func (s *Stream) dropClaim() {
 }
 
 // letGo takes n bytes of a stream's claim off it: into the session's spare,
-// or, the session closed, straight back to the pool (its spare went back as
-// it closed, dropSpare, under the same lock).
+// or, the session closed, straight back to the pool, its buffer with it
+// (nothing more comes in: the spare is only what still holds data,
+// returnSpare).
 func (s *Session) letGo(n int) {
 	if n <= 0 {
 		return
@@ -295,6 +298,7 @@ func (s *Session) letGo(n int) {
 	defer s.spareLock.Unlock()
 	if s.IsClosed() {
 		atomic.AddInt32(&s.extra, -int32(n))
+		atomic.AddInt32(&s.bucket, -int32(n))
 		s.config.WindowPool.give(n)
 		return
 	}
@@ -302,7 +306,7 @@ func (s *Session) letGo(n int) {
 }
 
 // dropClaims gives back what the streams of a closed session still claim,
-// closeGrace after it closed.
+// and its spare, closeGrace after it closed.
 func (s *Session) dropClaims() {
 	s.streamLock.Lock()
 	for _, st := range s.streams {
@@ -311,6 +315,7 @@ func (s *Session) dropClaims() {
 		st.bufferLock.Unlock()
 	}
 	s.streamLock.Unlock()
+	s.dropSpare()
 }
 
 // grow grows the session's buffer by n bytes a stream took from the pool.
@@ -331,7 +336,9 @@ func (s *Session) spareUp(n int) { atomic.AddInt32(&s.spare, int32(n)) }
 // under a larger window stays in the buffer it came into until it is read,
 // and the other streams keep room to move meanwhile -- more than they would
 // have had if those windows had stayed within NeedStreamBuffer, as that
-// data would then have emptied a buffer of MaxReceiveBuffer.
+// data would then have emptied a buffer of MaxReceiveBuffer. Once the
+// session closed nothing more comes in: all that is free goes back, and
+// the rest as the streams let their data go (read, or closed).
 func (s *Session) returnSpare() {
 	if atomic.LoadInt32(&s.spare) <= 0 {
 		return
@@ -339,6 +346,9 @@ func (s *Session) returnSpare() {
 	s.spareLock.Lock()
 	defer s.spareLock.Unlock()
 	room := int32(s.config.MaxReceiveBuffer / spareRoom)
+	if s.IsClosed() {
+		room = 0
+	}
 	for {
 		sp := atomic.LoadInt32(&s.spare)
 		free := atomic.LoadInt32(&s.bucket)
@@ -373,8 +383,9 @@ func (s *Session) returnSpare() {
 // kept the session from borrowing at all, and such a link stalled 10 s).
 // Readers that do not read at all (frozen apps) fill it all the same, a
 // buffer later: then the session waits as it did, and the wedge guard
-// (hs2's) sees it. A closed session borrows nothing: its spare has gone back
-// (dropSpare, under the same lock), and what it took now would never be.
+// (hs2's) sees it. A closed session borrows nothing: nothing more comes in,
+// and its spare only goes back from then on (returnSpare, under the same
+// lock).
 func (s *Session) borrow() bool {
 	s.spareLock.Lock()
 	defer s.spareLock.Unlock()
@@ -391,9 +402,10 @@ func (s *Session) borrow() bool {
 	return true
 }
 
-// dropSpare gives the session's spare back to the pool, as it closes. Its
-// streams' claims keep only what they hold unread (sessionClose) and go back
-// as the streams let it go, or closeGrace later (dropClaims).
+// dropSpare gives all of the session's spare back to the pool, closeGrace
+// after it closed (dropClaims). As it closes, the spare goes back as far as
+// it is free (returnSpare), its streams' claims keep only what they hold
+// unread (sessionClose), and both go back as the streams let it go.
 func (s *Session) dropSpare() {
 	s.spareLock.Lock()
 	defer s.spareLock.Unlock()
