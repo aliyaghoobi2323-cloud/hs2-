@@ -4,14 +4,21 @@ package engine
 
 import (
 	"net"
+	"sync/atomic"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
 )
 
 // tcpInfoRead reads a socket's TCP_INFO and the length the kernel filled
-// (-1: unknown). A test replaces it to play an older kernel.
-var tcpInfoRead = getsockoptTCPInfo
+// (-1: unknown): getsockoptTCPInfo. A test stands in an older kernel for it
+// (atomic: the runners other tests left read it meanwhile).
+var tcpInfoRead atomic.Pointer[func(fd int) (*unix.TCPInfo, int, error)]
+
+func init() {
+	f := getsockoptTCPInfo
+	tcpInfoRead.Store(&f)
+}
 
 // getsockoptTCPInfo is unix.GetsockoptTCPInfo that keeps the length the
 // kernel returned: a kernel fills as much of struct tcp_info as it knows,
@@ -57,7 +64,7 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 	var st tcpStat
 	var ok bool
 	rc.Control(func(fd uintptr) {
-		info, n, e := tcpInfoRead(int(fd))
+		info, n, e := (*tcpInfoRead.Load())(int(fd))
 		if e != nil || info == nil {
 			return
 		}

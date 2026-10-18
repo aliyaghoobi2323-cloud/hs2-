@@ -40,9 +40,10 @@ func TestWcoreFixOooSupportByLength(t *testing.T) {
 	full := ts.oooOK // this kernel's own answer (5.4 or later: true)
 
 	// a kernel before 5.4: the struct ends before tcpi_rcv_ooopack
-	real := tcpInfoRead
-	t.Cleanup(func() { tcpInfoRead = real })
-	tcpInfoRead = func(fd int) (*unix.TCPInfo, int, error) {
+	realp := tcpInfoRead.Load()
+	real := *realp
+	t.Cleanup(func() { tcpInfoRead.Store(realp) })
+	short := func(fd int) (*unix.TCPInfo, int, error) {
 		info, _, err := real(fd)
 		if info != nil {
 			short := *info
@@ -52,6 +53,7 @@ func TestWcoreFixOooSupportByLength(t *testing.T) {
 		}
 		return info, off, err
 	}
+	tcpInfoRead.Store(&short)
 	ts, ok = tcpStats(edge)
 	if !ok || ts.oooOK || ts.segsIn == 0 {
 		t.Fatalf("a TCP_INFO short of rcv_ooopack: ok %v oooOK %v segsIn %d, want the rest read and oooOK false", ok, ts.oooOK, ts.segsIn)
@@ -68,7 +70,7 @@ func TestWcoreFixOooSupportByLength(t *testing.T) {
 	if s := l.snap(time.Now()); s.tcpNone || s.oooOK || s.minRTT == 0 {
 		t.Fatalf("snapshot of a socket on a kernel before 5.4: tcpNone %v oooOK %v min_rtt %v, want the socket read and oooOK false", s.tcpNone, s.oooOK, s.minRTT)
 	}
-	tcpInfoRead = real
+	tcpInfoRead.Store(realp)
 	if s := l.snap(time.Now()); s.oooOK != full {
 		t.Fatalf("snapshot with this kernel's own TCP_INFO: oooOK %v, want %v", s.oooOK, full)
 	}
