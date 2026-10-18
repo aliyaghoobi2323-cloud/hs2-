@@ -781,3 +781,35 @@ func TestWcoreRed2LossHoleLongRTT(t *testing.T) {
 		t.Errorf("T_base 1.5 s: two wakes (200 ms) behind a hole taken for a loss's (375 ms)")
 	}
 }
+
+// TestWcoreRed2CarryKeepsCleanRecs (round 2, finding 7): a record of the exit
+// that came in the settle part of an interval is carried to the next
+// evaluation (sndCarry) with no srtt or min_rtt in it; it was counted as it
+// came, and taken again as a record that is "not clean" it reset the
+// clean records in a row (cleanRecs) that leaving OFF past wcLongRTT waits
+// for. (Its time still counts as the latest record's, sndLastAt, as before:
+// taking that away too made the core blind an evaluation sooner when the
+// records stop, and TestWcoreRed2RecordsStop's 300/150 q20 l0.1 s1 resent
+// 4.8% against base 1.3%.)
+func TestWcoreRed2CarryKeepsCleanRecs(t *testing.T) {
+	c := wtCore(1)
+	c.tBase = 500 * time.Millisecond
+	c.cleanRecs, c.sndSeen, c.sndLastAt = 2, true, wtT0
+	c.sndCarry, c.sndCarryAt = wcSnd{fresh: true, retrans: 0, segsOut: 900}, wtT0
+	c.lastAt = wtT0
+	in := wtIn(wtT0.Add(2*time.Second), 1, 2*wtMiB)
+	in.minRTT, in.srtt = 500*time.Millisecond, 505*time.Millisecond
+	c.step(in)
+	if c.cleanRecs != 2 {
+		t.Errorf("an evaluation with only the carried record: cleanRecs %d, want 2", c.cleanRecs)
+	}
+	// a clean record next to a carried one that had resends: one more
+	c.sndCarry, c.sndCarryAt = wcSnd{fresh: true, retrans: 30, segsOut: 900}, wtT0.Add(3*time.Second)
+	in = wtIn(wtT0.Add(4*time.Second), 1, 2*wtMiB)
+	in.minRTT, in.srtt = 500*time.Millisecond, 505*time.Millisecond
+	in.snd = wcSnd{fresh: true, srtt: 502 * time.Millisecond, minRTT: 500 * time.Millisecond, segsOut: 800}
+	c.step(in)
+	if c.cleanRecs != 3 {
+		t.Errorf("a clean record with a carried one's resends: cleanRecs %d, want 3", c.cleanRecs)
+	}
+}

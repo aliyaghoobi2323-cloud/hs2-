@@ -818,6 +818,9 @@ func (c *wcore) step(in wcIn) wcOut {
 		return c.out(c.acc, now, nil)
 	}
 	in, c.accOK = c.acc, false
+	// the record that came in this interval (a carried one was counted in
+	// cleanRecs as it came)
+	rec := in.snd
 	carryAt := time.Time{}
 	if c.sndCarry.fresh {
 		// (its srtt is left out: notePaths took its q_snd as it came)
@@ -839,16 +842,20 @@ func (c *wcore) step(in wcIn) wcOut {
 	c.lastAt = now
 	c.notePaths(in, &ev)
 	if in.snd.fresh {
+		c.sndLastAt = now
+	}
+	if rec.fresh {
 		if !c.sndAny {
 			c.sndAny, c.sndAnyAt = true, now
 		}
-		c.sndLastAt = now
-		if in.snd.segsOut > 0 && in.snd.retrans == 0 && in.snd.minRTT > 0 && in.snd.srtt-in.snd.minRTT <= wcDqMin {
+		// (q_snd as notePaths has it: past the exit's stale floor after a
+		// route change)
+		if rec.segsOut > 0 && rec.retrans == 0 && rec.minRTT > 0 && c.qSnd <= wcDqMin {
 			c.cleanRecs++
-		} else if in.snd.segsOut > 0 || in.snd.srtt > 0 {
+		} else if rec.segsOut > 0 || rec.srtt > 0 {
 			c.cleanRecs = 0
 		}
-		if in.snd.srtt > 0 {
+		if rec.srtt > 0 {
 			// the sender's fields of a 96-byte record (an old exit's 64
 			// bytes, or an exit with no TCP_INFO, read srtt 0 for good)
 			c.sndSeen = true
