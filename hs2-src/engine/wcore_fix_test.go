@@ -208,3 +208,98 @@ func TestWcoreFixReorderModel(t *testing.T) {
 		}
 	}
 }
+
+// Item 2: a loss of ours whose record from the exit shows no queue at its
+// socket (q_snd under wcPoliceQ) is a policer's signature: the loss point
+// (bCap) holds for the Q_cap TTL (10 min), not until three window-limited
+// intervals without a queue (that is how a policed path always looks below
+// the policer's rate), probes back off at once, the drain goes to the floor,
+// and a loss that goes on at the budget a drain left is a loss point too. A
+// loss with a queue at the exit keeps the rules it had.
+func TestWcoreFixPolicerCap(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		q    time.Duration // the exit's queue (q_snd) as the loss came
+		keep bool
+	}{{"no queue (a policer)", time.Millisecond, true}, {"a queue of 12 ms (a tail drop; under its growth past q_ref)", 12 * time.Millisecond, false}} {
+		c, in := wtHold()
+		c.bHist = []wcRate{{wtT0, 10 * wtMiB}} // a budget past the level's earlier in the record: the loss came with B
+		m := wtMeas(1, 60e6, 8*wtMiB)
+		m.at = wtT0
+		m.snd, m.sndOK, m.sndSegs, m.sndAt = 0.05, true, 100000, wtT0
+		m.qSnd, m.qSndOK, m.qOwn, m.qOwnOK = tc.q, true, time.Millisecond, true
+		m.qTurn, m.qOK = c.qRef, true
+		var ev []wcEvent
+		c.hold(in, m, &ev)
+		if c.state != wcDrain || c.bCap == 0 {
+			t.Fatalf("%s: %v cap %d, want a drain for loss and a cap", tc.name, c.state, c.bCap)
+		}
+		if tc.keep && (c.backoff < wcPoliceBackoff || c.B > wtNeed) {
+			t.Errorf("%s: backoff %d B %.1f MiB, want backoff %d or more and B at the floor", tc.name, c.backoff, float64(c.B)/wtMiB, wcPoliceBackoff)
+		}
+		cp := c.bCap
+		// 20 s later: HOLD at the cap, window-limited, no queue, clean
+		c.state, c.lossDrain, c.B, c.bPub, c.bHist = wcHold, false, cp, cp, nil
+		m = wtMeas(1, 60e6, float64(cp))
+		m.at = wtT0.Add(20 * time.Second)
+		m.qOwn, m.qOwnOK = time.Millisecond, true
+		m.qTurn, m.qOK = c.qRef, true
+		hin := wtIn(m.at, 1, uint32(cp))
+		for i := 0; i < 4; i++ {
+			c.hold(hin, m, &ev)
+			c.state = wcHold
+		}
+		if kept := c.bCap != 0; kept != tc.keep {
+			t.Errorf("%s: 20 s on, cap %d (was %d), want kept %v", tc.name, c.bCap, cp, tc.keep)
+		}
+	}
+
+	// a loss that goes on, with no queue at the exit, at the budget the drain left
+	c, in := wtHold()
+	c.B, c.bPub, c.bCap, c.bCapAt = 8*wtMiB, 8*wtMiB, 14*wtMiB, wtT0
+	c.lossDrain, c.lossDrainN = true, 0
+	m := wtMeas(1, 60e6, 8*wtMiB)
+	m.at = wtT0.Add(time.Second)
+	m.snd, m.sndOK, m.sndSegs, m.sndAt = 0.05, true, 100000, m.at
+	m.qSnd, m.qSndOK, m.qOwn, m.qOwnOK = 0, true, 0, true
+	var ev []wcEvent
+	c.hold(in, m, &ev)
+	if want := uint64(wcCapBack * 8 * wtMiB); c.bCap > want || c.B > wtNeed || !c.policed(m.at) {
+		t.Errorf("a policer's loss going on at 8 MiB: cap %.1f MiB B %.1f MiB, want cap at most %.1f, B at the floor",
+			float64(c.bCap)/wtMiB, float64(c.B)/wtMiB, float64(want)/wtMiB)
+	}
+	// ... and no policer from packets behind holes alone (a path that
+	// reorders them, the link socket's srtt at its floor)
+	c, in = wtHold()
+	c.B, c.bPub, c.lossDrain = 8*wtMiB, 8*wtMiB, true
+	c.oooRef = wcLossRef{v: 0.0005, b: 8 * wtMiB, ok: true}
+	m = wtMeas(1, 60e6, 8*wtMiB)
+	m.at = wtT0.Add(time.Second)
+	m.ooo, m.oooOK, m.oooLoss = 0.3, true, true
+	m.qOwn, m.qOwnOK = 0, true
+	c.hold(in, m, &ev)
+	if c.policed(m.at) || c.B < 8*wtMiB {
+		t.Errorf("holes and no queue at the link socket: policed %v B %.1f MiB, want no policer's verdict", c.policed(m.at), float64(c.B)/wtMiB)
+	}
+}
+
+// Item 2, in the model: behind a policer at 60% of a 1 Gbit/s path with a
+// 300 ms round trip, the run the red team's grid saw drained (a streak of
+// windows past lossFrac where the windows without the core resend nothing).
+func TestWcoreFixPolicerModel(t *testing.T) {
+	for _, x := range []struct {
+		rate, rtt, q, pol float64
+		seed              uint64
+	}{{1000, 300, 50, 600, 2}} {
+		c := wmPath(x.rate, wmMS(int(x.rtt)), wmMS(int(x.q)))
+		c.policer, c.seed, c.dur = x.pol*wmMbit, x.seed, 40*time.Second
+		b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
+		msg := fmt.Sprintf("%s pol%.0f s%d: base %.0f Mbit resent %.2f%% [%s] | core %.0f Mbit resent %.2f%% [%s] drains %v",
+			c.name, x.pol, x.seed, b.mbit, 100*b.resend, wmLossNote(b), k.mbit, 100*k.resend, wmLossNote(k), k.drains)
+		if wmDrainedByCore(b, k) {
+			t.Errorf("the loss rule would drain the link under the core: %s", msg)
+		} else {
+			t.Log(msg)
+		}
+	}
+}

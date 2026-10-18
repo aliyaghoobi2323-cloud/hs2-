@@ -94,10 +94,11 @@ type wcore struct {
 	sndCarryAt time.Time
 	// the previous runner wake: when it was, how long its packets waited
 	// behind holes (ooo/segs_in of its length) and how many did (fastStop)
-	wakeAt   time.Time
-	wakeHole time.Duration
-	wakeOoo  uint64
-	holeSeen bool // a loss's hole since the previous evaluation (lossHole)
+	wakeAt    time.Time
+	wakeHole  time.Duration
+	wakeOoo   uint64
+	holeSeen  bool      // a loss's hole since the previous evaluation (lossHole)
+	policedAt time.Time // the latest policer's loss (policerLoss)
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -281,11 +282,11 @@ var (
 	// record's spread under 0.1% random loss is 0.015 to 0.025 points: 0.3
 	// points was 12σ at 300 Mbit/s and under 1σ on a record of a few
 	// hundred segments)
-	wcLossCongMin  = 0.001
-	wcLossCongSig  = 5.0
-	wcLossCongRel  = 2.0  // ... or twice the HOLD level, whichever is more
-	wcOooCongAbs   = 0.01 // the same on Rcv_ooopack (a share of packets, not of losses)
-	wcOooClean     = 0.10 // ooo is a congestion signal only on a path that is otherwise clean
+	wcLossCongMin = 0.001
+	wcLossCongSig = 5.0
+	wcLossCongRel = 2.0  // ... or twice the HOLD level, whichever is more
+	wcOooCongAbs  = 0.01 // the same on Rcv_ooopack (a share of packets, not of losses)
+	wcOooClean    = 0.10 // ooo is a congestion signal only on a path that is otherwise clean
 	// wcOooHole, wcOooMinSegs: between evaluations, packets behind holes
 	// past their level cut B only where the holes of the wake and the one
 	// before kept packets waiting wcOooHole of T_base or more, with
@@ -297,33 +298,46 @@ var (
 	// round 1).
 	wcOooHole    = 0.25
 	wcOooMinSegs = 16
-	wcLossRand     = 0.0005
-	wcLossRandN    = 3
-	wcSndSpan      = 2500 * time.Millisecond // a record covers the exit's last stats tick
-	wcRhatWin      = 10 * time.Second
-	wcRhatMinN     = 8
-	wcTauAlpha     = 0.25
-	wcRefAlpha     = 0.25
-	wcProbeMin     = 4 * time.Second
-	wcProbeMax     = 8 * time.Second
-	wcProbeRTTs    = 10
-	wcProbeBackMax = 32 * time.Second
-	wcQcapTTL      = 10 * time.Minute
-	wcTurnWin      = 60 * time.Second
-	wcKPrevTTL     = 30 * time.Second
-	wcOffAfter     = 3
-	wcCtrlQMin     = 30 * time.Millisecond
-	wcCtrlQShare   = 1.0 / 3
-	wcRateDrop     = 0.3
-	wcHoldSlack    = 0.85
-	wcStage2Min    = uint32(256 << 10)
-	wcParkHold     = 2
-	wcHitShare     = 0.5
-	wcLagShare     = 0.25
-	wcUseShare     = 0.9  // a window is in use: R·turnaround ≥ this share of it less half a step
-	wcPeerShare    = 0.25 // a stream joins F on use alone only at this share of the fastest
-	wcDemandGain   = 1.25
-	wcResettle     = 0.05 // a change of B by more than this share settles first
+	// wcPoliceQ, wcPoliceBackoff: a loss of ours whose record from the exit
+	// shows no more queue than wcPoliceQ at its socket is a policer's
+	// (policerLoss): its loss point (bCap) holds for wcQcapTTL, not until a
+	// few intervals without a queue (a policed path shows none below the
+	// policer's rate), probes back off this far at once, a loss that goes on
+	// at the budget a drain left is a loss point too, and the drain goes to
+	// the floor. What the windows announced before a loss is sent once its
+	// hole fills, past the policer's bucket again: in the model a 60% policer
+	// at 300 ms lost whole bursts again after each loss, the sender timed out
+	// and crawled at a few Mbit/s for 20 s (red team, round 1: 4 to 8 of 96
+	// runs a streak of resends past lossFrac, none without the core).
+	wcPoliceQ       = wcDqMin
+	wcPoliceBackoff = 3
+	wcLossRand      = 0.0005
+	wcLossRandN     = 3
+	wcSndSpan       = 2500 * time.Millisecond // a record covers the exit's last stats tick
+	wcRhatWin       = 10 * time.Second
+	wcRhatMinN      = 8
+	wcTauAlpha      = 0.25
+	wcRefAlpha      = 0.25
+	wcProbeMin      = 4 * time.Second
+	wcProbeMax      = 8 * time.Second
+	wcProbeRTTs     = 10
+	wcProbeBackMax  = 32 * time.Second
+	wcQcapTTL       = 10 * time.Minute
+	wcTurnWin       = 60 * time.Second
+	wcKPrevTTL      = 30 * time.Second
+	wcOffAfter      = 3
+	wcCtrlQMin      = 30 * time.Millisecond
+	wcCtrlQShare    = 1.0 / 3
+	wcRateDrop      = 0.3
+	wcHoldSlack     = 0.85
+	wcStage2Min     = uint32(256 << 10)
+	wcParkHold      = 2
+	wcHitShare      = 0.5
+	wcLagShare      = 0.25
+	wcUseShare      = 0.9  // a window is in use: R·turnaround ≥ this share of it less half a step
+	wcPeerShare     = 0.25 // a stream joins F on use alone only at this share of the fastest
+	wcDemandGain    = 1.25
+	wcResettle      = 0.05 // a change of B by more than this share settles first
 	// wcRampQ, wcRampShare: a ceiling rises by at most the larger of this
 	// much queue at R̂ and this share of the budget per runner wake
 	// (wcRampTick). A window-limited BBR sender stays in its STARTUP (its
@@ -683,6 +697,11 @@ func (c *wcore) probeQ(now time.Time) time.Duration {
 	return q
 }
 
+// policed: a policer's loss (noteQcap) came within wcQcapTTL.
+func (c *wcore) policed(now time.Time) bool {
+	return !c.policedAt.IsZero() && now.Sub(c.policedAt) < wcQcapTTL
+}
+
 func (c *wcore) qcapKnown(now time.Time) bool {
 	return c.qcapOK && now.Sub(c.qcapAt) < wcQcapTTL
 }
@@ -965,6 +984,17 @@ func (c *wcore) cut(in wcIn) {
 	c.lossDrain, c.lossDrainN = true, 0
 	n := uint64(max(len(c.inF), 1))
 	c.B = max(from/2, n*uint64(c.cmin()))
+	if (in.srtt > 0 && c.tBase > 0 || !c.qSndAt.IsZero() && now.Sub(c.qSndAt) <= wcSndSpan) && q < wcPoliceQ {
+		// no queue behind the loss (a policer's, or a burst's whose queue
+		// the link socket reads at its floor): to the floor. What the
+		// windows announced before the loss is sent once its hole fills;
+		// with no queue to take it, half of B lost its next bursts whole
+		// behind a 60% policer (the sender timed out and crawled at a few
+		// Mbit/s for 20 s: a streak the loss rule drains a link for). Only
+		// the exit's record calls it a policer's (policerLoss): packets a
+		// path reorders come behind holes with no queue too
+		c.B = n * uint64(c.cmin())
+	}
 	c.bPub = c.B
 	c.cuts++
 	// judge from a turnaround on
@@ -1649,7 +1679,9 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.bGood = 0
 	c.state = wcStartup
 	c.chgAt = in.now
-	c.backoff = 0
+	if !c.policed(in.now) {
+		c.backoff = 0
+	}
 	c.pathFull = false
 	c.flat = 0
 	c.gear = 1
@@ -1899,7 +1931,31 @@ func (c *wcore) learnQcap(now time.Time, m wcMeas) {
 	if !ok && m.qOK {
 		q = max(0, m.qTurn-c.qRef)
 	}
+	if c.policerLoss(m) {
+		c.notePoliced(now)
+	}
 	c.noteQcap(now, q)
+}
+
+// policerLoss: the exit's record of the interval shows resends past their
+// level and no queue at its socket (q_snd under wcPoliceQ; nor at the link
+// socket's own): a policer's signature, when the loss is ours (it came with
+// B, or went on at the budget a drain left). Only the exit's record tells:
+// Rcv_ooopack also counts packets a path reorders, and q_own reads the
+// queue's floor (a tail drop of a burst read 13.6 ms of a 50 ms queue on
+// the rig).
+func (c *wcore) policerLoss(m wcMeas) bool {
+	return m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m)) &&
+		m.qSndOK && m.qSnd < wcPoliceQ && (!m.qOwnOK || m.qOwn < wcPoliceQ)
+}
+
+// notePoliced: a policer's loss came now. Its loss point holds for
+// wcQcapTTL (policed), probes back off, and the drain it brings goes to the
+// floor (toDrain).
+func (c *wcore) notePoliced(now time.Time) {
+	c.policedAt = now
+	c.backoff = max(c.backoff, wcPoliceBackoff)
+	c.schedProbe(now)
 }
 
 // noteQcap takes q, the queue measured as packets of our own were lost, as
@@ -1957,6 +2013,9 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, sig wc
 	}
 	if why == wcWhyLoss {
 		b = math.Min(b, float64(from)/2)
+		if c.policedAt.Equal(in.now) {
+			b = 0 // a policer's loss (learnQcap): to the floor, as cut
+		}
 		c.lossDrain, c.lossDrainN = true, 0
 	}
 	b = math.Min(b, wcDrainShrink*float64(from))
@@ -1986,6 +2045,13 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// what was held behind its holes is through
 		lossy := c.oooPast(m) ||
 			m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m))
+		if lossy && c.policerLoss(m) {
+			// a policer's loss going on at the budget the drain left: a
+			// loss point too, and down to the floor
+			c.notePoliced(now)
+			c.noteCap(now, c.B)
+			c.setB(in, m, 0)
+		}
 		if c.lossDrainN++; lossy && c.lossDrainN < 3 {
 			return
 		}
@@ -2155,8 +2221,9 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// and the backoff of the 50 Mbit/s spell held the next probe 8 s off;
 	// 2 of 3 runs never got back to 90%)
 	atFloor := (c.bCap == 0 || c.bCap <= floor*21/20) && c.B <= floor*21/20 && (c.bCap > 0 || c.backoff > 0)
-	if c.wlN >= 2 && clean && unbiased && atFloor ||
-		c.wlN >= 3 && !(m.qOK && m.qTurn > c.qRef+dq/2) && clean && now.Sub(c.bCapAt) >= wcCapStale {
+	// (not a policer's: below its rate a policed path always looks so)
+	if !c.policed(now) && (c.wlN >= 2 && clean && unbiased && atFloor ||
+		c.wlN >= 3 && !(m.qOK && m.qTurn > c.qRef+dq/2) && clean && now.Sub(c.bCapAt) >= wcCapStale) {
 		c.bCap, c.backoff = 0, 0
 	}
 	if c.backoff == 0 && (c.wlN >= 2 || (m.qOK && c.qRef > dq && m.qTurn < c.qRef-dq)) && c.probeAt.After(now) {
@@ -2311,7 +2378,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	good := float64(c.B) - math.Max(rise.Seconds(), 0)*r
 	c.bGood = max(c.bGood, uint64(math.Max(good, 0)))
 	if c.bCap > 0 && c.B > c.bCap {
-		if floor := uint64(max(len(m.f), 1)) * uint64(c.cmin()); c.bCap <= floor*21/20 {
+		if floor := uint64(max(len(m.f), 1)) * uint64(c.cmin()); c.bCap <= floor*21/20 && !c.policed(now) {
 			// a cap at the floor came from a slower spell of the path (no
 			// budget of ours above the windows without the core lost): a
 			// probe past it that paid says the spell is over (z12 P2, 300 →

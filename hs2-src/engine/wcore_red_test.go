@@ -741,7 +741,15 @@ func TestWcoreRedGarbage(t *testing.T) {
 					}
 					sum += uint64(x.ceil)
 				}
-				if sum > max(o.B, uint64(len(c.inF))*uint64(c.cmin())) {
+				// (the input's streams in F, a repeated id each time:
+				// out() gives each at least c_min)
+				nF := 0
+				for _, x := range in.streams {
+					if c.inF[x.id] {
+						nF++
+					}
+				}
+				if sum > max(o.B, uint64(max(nF, len(c.inF)))*uint64(c.cmin())) {
 					t.Fatalf("run %d step %d: ceilings %d past B %d", run, i, sum, o.B)
 				}
 				if !o.next.After(now) {
