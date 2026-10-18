@@ -187,6 +187,29 @@ func TestWcoreProbeFloorCap(t *testing.T) {
 	}
 }
 
+// HOLD's references follow the queue within Δq only: an interval of the
+// sender's PROBE_RTT (turnarounds of hundreds of ms) that the exit's record
+// calls bare does not move q_ref.
+func TestWcoreHoldRefOutlier(t *testing.T) {
+	c, in := wtHold()
+	ref := c.qRef
+	m := wtMeas(1, 20e6, 8*wtMiB)
+	m.at = wtT0
+	m.qTurn, m.qOK = 468*time.Millisecond, true
+	m.sndOK, m.qSnd, m.qSndOK = true, 2*time.Millisecond, true // the record shows none
+	c.qSndRef, c.qSndRefOK = 2*time.Millisecond, true
+	var ev []wcEvent
+	c.hold(in, m, &ev)
+	if c.qRef != ref {
+		t.Fatalf("q_ref %v after a 468 ms turnaround the record called bare, want %v", c.qRef, ref)
+	}
+	m.qTurn = ref + c.dq()/2 // within Δq: followed
+	c.hold(in, m, &ev)
+	if c.qRef <= ref {
+		t.Fatalf("q_ref %v: did not follow a turnaround within Δq (%v)", c.qRef, m.qTurn)
+	}
+}
+
 // setB takes the larger n_F of this interval and the previous one (a stream
 // of F sent nothing for an interval: B was cut to the other's ceiling), and
 // blames the pool only when it has less than a step of a window left.

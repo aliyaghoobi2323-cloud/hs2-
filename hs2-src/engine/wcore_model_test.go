@@ -548,6 +548,14 @@ func (f *wmFlow) bbr(t int64, bw float64, bwOK, appLim bool, priorDlv uint64, rt
 		f.probeRTTDone = 0
 	}
 	if f.mode == bbrProbeRTT {
+		// Linux's bbr_update_min_rtt marks PROBE_RTT app-limited
+		// (tp->app_limited = delivered + in flight): its small samples
+		// neither enter the bandwidth filter nor count toward a full pipe.
+		// Without it a window-limited sender whose samples had all been
+		// app-limited for 10 rounds took a PROBE_RTT sample as max_bw,
+		// "filled" the pipe within PROBE_RTT and paced at ~0 in ProbeBW
+		// (z12: 2 of 3 seeds of 300/150 q200 with a steady HOLD)
+		f.appLimUntil = max(f.delivered+uint64(f.inflight), 1)
 		if f.probeRTTDone == 0 && f.inflight <= 4*wmMSS {
 			f.probeRTTDone = t + 200
 			f.probeRTTRoundOK = false
@@ -1948,8 +1956,10 @@ var wmKnown = map[string]struct {
 	kinds []string
 	why   string
 }{
-	"300/150 q50": {[]string{"resent"},
-		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (it announced the credit before it could see the dip); the rig: a loss every 10–11 s at 5–6 MiB"},
+	"300/150 q50": {[]string{"resent", "gain"},
+		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (it announced the credit before it could see the dip); the rig: a loss every 10–11 s at 5–6 MiB. Gain: 75% of N4's in the model, 137–182% on the rig (the model's base and N4 both run higher than the rig's)"},
+	"1000/100 q50": {[]string{"drain"},
+		"a burst after PROBE_RTT overflows the queue in HOLD (a cut)"},
 	"1000/150 q50": {[]string{"drain"},
 		"a burst after PROBE_RTT overflows the queue in HOLD (a cut)"},
 	"300/100 q50": {[]string{"interactive"},
@@ -1962,10 +1972,8 @@ var wmKnown = map[string]struct {
 		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (54% of N4's gain)"},
 	"1000/100 q50 x4": {[]string{"resent"},
 		"four streams at the knee of a saturated path: the bursts after PROBE_RTT (0.21% against 0.01%)"},
-	"300/150 q50 +slow reader": {[]string{"gain", "resent", "interactive"},
+	"300/150 q50 +slow reader": {[]string{"resent", "interactive"},
 		"a probe's loss while the slow stream's window holds a hole"},
-	"1000/100 q50 policer 300": {[]string{"gain", "resent"},
-		"STARTUP raises BBR's pacing for good; past it the base window's bursts trip the policer"},
 }
 
 // wmKnownRoadmap are the cells of the full table where the core misses the
@@ -1974,10 +1982,16 @@ var wmKnown = map[string]struct {
 // the core's first growth, never lowered while the sender is window-limited)
 // sends each half-window update's credit faster than the path and the
 // queue overflows at the floor too. Stage 2's smaller steps or paced credit
-// at the exit are what helps there; stage 1 cannot.
+// at the exit are what helps there; stage 1 cannot. Since z12 (the model's
+// sender as the rig's: STARTUP pacing 3.9×, PROBE_RTT every ~10 s and the
+// whole window after it) also 100/500 q200 and 300/300 q50, where the
+// window the path's BDP needs is 2.5 to 6 times the queue: the burst after
+// each PROBE_RTT overflows it. The exit's pacing cap (WcorePaceCap, a lab
+// experiment) is what removes that burst on the rig.
 var wmKnownRoadmap = map[string]bool{
 	"100/100 q50 l1": true, "100/150 q50 l0.1": true, "100/300 q50 l0.1": true, "100/500 q50": true,
 	"100/500 q50 l0.1": true, "300/300 q50 l0.1": true, "300/500 q50": true,
+	"100/500 q200": true, "300/300 q50": true,
 }
 
 // TestWcoreModelTable runs base, N4 and the core on each cell and judges the

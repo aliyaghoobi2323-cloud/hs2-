@@ -1988,10 +1988,16 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.cnt.lossy += time.Duration(m.dt * float64(time.Second))
 	}
 	if !growth {
-		if m.qOK {
+		// the references follow the queue within Δq only: what the exit's
+		// record (bare) or no growth let pass may still be the turnarounds
+		// of the sender's PROBE_RTT (z12 P3, 300/150 q200: one interval's
+		// q_turn of 468 ms took q_ref from 13 to 127 ms, the next probe
+		// was judged against it, "paid" with a negative rise, and HOLD
+		// kept 30–50 ms of standing queue for the rest of the run)
+		if m.qOK && m.qTurn <= c.qRef+dq {
 			c.qRef += time.Duration(wcRefAlpha * float64(m.qTurn-c.qRef))
 		}
-		if m.qOwnOK {
+		if m.qOwnOK && m.qOwn <= c.qOwnRef+wcDqOwn {
 			c.qOwnRef += time.Duration(wcRefAlpha * float64(m.qOwn-c.qOwnRef))
 		}
 		c.rLinkHold += 0.25 * (m.rLink - c.rLinkHold)
