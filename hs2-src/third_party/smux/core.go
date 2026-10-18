@@ -158,6 +158,7 @@ type streamCore struct {
 	brakeAt   atomic.Int64  // monoNow of the latest (0: none)
 
 	snapHit uint32 // hitN at the last snapshot (under the session's snapLock)
+	pwSent  uint32 // numWritten at the last PeerWindows (under the session's pwLock)
 }
 
 // turnMark is one update whose turnaround is not in yet.
@@ -283,6 +284,26 @@ func (s *Session) CoreSnapshot(dst []CoreSample) ([]CoreSample, CoreCounters) {
 		Extra:     int(atomic.LoadInt32(&s.extra)),
 		Rcvd:      s.rcvd.Load(),
 	}
+}
+
+// PeerWindows is the sum of the windows the peer grants the streams that
+// sent data since the previous call: what this end may have in flight on
+// the link. The window core's pacing-cap experiment keeps the link socket's
+// pacing at least this much per round trip, so the cap never holds a sender
+// under what the receiver's windows allow.
+func (s *Session) PeerWindows() uint64 {
+	s.pwLock.Lock()
+	defer s.pwLock.Unlock()
+	var sum uint64
+	s.streamLock.Lock()
+	for _, st := range s.streams {
+		if w := atomic.LoadUint32(&st.numWritten); w != st.core.pwSent {
+			st.core.pwSent = w
+			sum += uint64(atomic.LoadUint32(&st.peerWindow))
+		}
+	}
+	s.streamLock.Unlock()
+	return sum
 }
 
 // fitCore holds the window adaptWindow just made of old to what the window

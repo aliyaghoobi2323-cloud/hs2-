@@ -508,6 +508,30 @@ func TestWcorePaceCap(t *testing.T) {
 	}
 }
 
+// The cap is never under what the peer's windows allow per min_rtt, nor
+// the floor; past both it is WcorePaceCap times the delivery rate.
+func TestWcorePaceRate(t *testing.T) {
+	old := WcorePaceCap
+	t.Cleanup(func() { WcorePaceCap = old })
+	WcorePaceCap = 1.25
+	for _, tc := range []struct {
+		name   string
+		r      float64
+		win    uint64
+		minRTT time.Duration
+		want   uint64
+	}{
+		{"the delivery rate rules", 40e6, 2 << 20, 125 * time.Millisecond, 50e6},
+		{"the windows allow more (a sender in a slow turnaround)", 6.9e6, 2 << 20, 125 * time.Millisecond, 8 * (2 << 20)},
+		{"no min_rtt: the delivery rate", 6.9e6, 2 << 20, 0, 8625000},
+		{"the floor", 1e3, 0, 125 * time.Millisecond, wcPaceFloor},
+	} {
+		if got := wcPaceRate(tc.r, tc.win, tc.minRTT); got != tc.want {
+			t.Errorf("%s: %d, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
 func uint32Cap(v uint64) uint64 { return min(v, 1<<31-1) }
 
 var _ = strings.Contains

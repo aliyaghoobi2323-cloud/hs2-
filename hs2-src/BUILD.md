@@ -219,6 +219,7 @@ for the lab only, `HS2_TUNE_WCORE_TRACE=<file>` (one JSON line per link per
 evaluation), `HS2_TUNE_WCORE_FIXEDWIN=<bytes>` (every large stream held at
 that window instead of the core's decision, still traced), and two
 experiments, off by default: `HS2_TUNE_WCORE_PACECAP=<x>` (each end caps its
-link socket's pacing, `SO_MAX_PACING_RATE`, at x times its own delivery rate)
+link socket's pacing, `SO_MAX_PACING_RATE`, at x times its own delivery rate,
+but never under what the peer's windows allow per round trip)
 and `HS2_TUNE_WCORE_BURST=<share>` (the budget held where the burst after the
 sender's PROBE_RTT, that share of the window, fits the queue learned).

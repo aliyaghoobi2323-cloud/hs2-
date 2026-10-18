@@ -113,6 +113,7 @@ type Session struct {
 	rcvd         atomic.Uint64 // core: data bytes received
 	snapLock     sync.Mutex    // core: one CoreSnapshot at a time
 	snapList     []*Stream     // core: CoreSnapshot's copy of the streams (under snapLock)
+	pwLock       sync.Mutex    // core: one PeerWindows at a time
 
 	streams    map[uint32]*Stream // all streams in this session
 	streamLock sync.Mutex         // locks streams

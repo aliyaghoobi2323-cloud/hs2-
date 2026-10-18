@@ -614,3 +614,28 @@ func TestCoreHitGapPerStream(t *testing.T) {
 		t.Fatalf("a pause past hitGap with a 1 ms gap: %d hit(s), want 2", h)
 	}
 }
+
+// PeerWindows sums the windows the peer grants the streams that sent data
+// since the previous call, and nothing for a stream that sent nothing.
+func TestCorePeerWindows(t *testing.T) {
+	cs, ss, err := getSmuxStreamPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	defer ss.Close()
+	sess := cs.sess
+	if w := sess.PeerWindows(); w != 0 {
+		t.Fatalf("no data sent: %d", w)
+	}
+	if _, err := cs.Write(make([]byte, 1000)); err != nil {
+		t.Fatal(err)
+	}
+	want := uint64(atomic.LoadUint32(&cs.peerWindow))
+	if w := sess.PeerWindows(); w != want || w == 0 {
+		t.Fatalf("a stream sent 1000 bytes: %d, want its peer window %d", w, want)
+	}
+	if w := sess.PeerWindows(); w != 0 {
+		t.Fatalf("nothing sent since: %d", w)
+	}
+}
