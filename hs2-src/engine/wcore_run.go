@@ -412,7 +412,7 @@ func (l *wcLink) idle() bool {
 func (l *wcLink) snap(now time.Time) wcLinkSnap {
 	s := wcLinkSnap{now: now, poolFree: -1}
 	if ts, ok := tcpStats(l.tcp); ok {
-		s.minRTT, s.srtt = usDur(uint64(ts.minRTT)), usDur(uint64(ts.rtt))
+		s.minRTT, s.srtt = wcMinRTTOf(ts.minRTT), usDur(uint64(ts.rtt))
 		s.segsIn, s.ooo, s.oooOK = l.segs.add(ts.segsIn), l.ooo.add(ts.rcvOOO), true
 	}
 	var cc smux.CoreCounters
@@ -451,7 +451,7 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 	}
 	if r := m.peer.Load(); r != nil {
 		s.sndAt = r.at
-		s.sndSrtt, s.sndMinRTT = usDur(uint64(r.srtt)), usDur(uint64(r.minRTT))
+		s.sndSrtt, s.sndMinRTT = usDur(uint64(r.srtt)), wcMinRTTOf(r.minRTT)
 		s.sndRetrans, s.sndSegsOut = r.retrans, r.segsOut
 	}
 	if p := l.ap.Load(); p != nil {
@@ -461,6 +461,16 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 }
 
 func usDur(us uint64) time.Duration { return time.Duration(us) * time.Microsecond }
+
+// wcMinRTTOf is a socket's tcpi_min_rtt (µs) as a round trip: Linux reports
+// ~0U (71 minutes) until the socket's first round-trip sample (minmax_reset
+// in tcp_init_sock), which is no round trip (0: unknown).
+func wcMinRTTOf(us uint32) time.Duration {
+	if us == ^uint32(0) {
+		return 0
+	}
+	return usDur(uint64(us))
+}
 
 // pin puts the lab's fixed window (WcoreFixedWin) in place of the
 // controller's ceilings: on every large stream of the snapshot (a window of

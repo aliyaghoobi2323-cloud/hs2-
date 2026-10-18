@@ -390,3 +390,131 @@ func TestWcoreRedSettleDropsRecord(t *testing.T) {
 		}
 	}
 }
+
+// BenchmarkWcoreRedStep: one runner wake of an active core (HOLD) with n
+// large streams: the cost per link per 100 ms.
+func BenchmarkWcoreRedStep(b *testing.B) {
+	for _, n := range []int{4, 64, 1000} {
+		b.Run(fmt.Sprintf("streams=%d", n), func(b *testing.B) {
+			c := newWcore(wcConfig{side: wcEdge, stage: 1, need: wtNeed, maxWin: wtMax, minWin: wtMin}, func() float64 { return 0.5 })
+			now := wtT0
+			mk := func() wcIn {
+				in := wcIn{now: now, minRTT: 100 * time.Millisecond, srtt: 102 * time.Millisecond, segsIn: 1000, oooOK: true, linkBytes: uint64(n) * 100000, poolFree: -1}
+				for i := 0; i < n; i++ {
+					in.streams = append(in.streams, wcStream{id: uint32(2*i + 1), win: 3 * wtMiB, upd: 2, hit: 1, read: 100000,
+						turnMin: 101 * time.Millisecond, turnLast: 103 * time.Millisecond})
+				}
+				return in
+			}
+			// in HOLD with every stream in F
+			c.state, c.B, c.bPub, c.bGood, c.tBase = wcHold, uint64(n)*3*wtMiB, uint64(n)*3*wtMiB, uint64(n)*3*wtMiB, 100*time.Millisecond
+			c.sndSeen, c.lastAt = true, now
+			c.noteRate(now, float64(n)*1e6)
+			c.probeAt, c.refreshAt = now.Add(time.Hour), now.Add(time.Hour)
+			for i := 0; i < n; i++ {
+				c.inF[uint32(2*i+1)] = true
+			}
+			for i := 0; i < 40; i++ {
+				now = now.Add(100 * time.Millisecond)
+				c.step(mk())
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				now = now.Add(100 * time.Millisecond)
+				c.step(mk())
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(len(c.inF)), "nF")
+			b.Logf("state %v B %.1f MiB nF %d", c.state, float64(c.B)/wtMiB, len(c.inF))
+		})
+	}
+}
+
+// TestWcoreRedMinRTTUnset (finding 5): before a socket's first round-trip
+// sample Linux reports tcpi_min_rtt as ~0U; read as 71 minutes it became
+// T_base, and with it Δq (7 minutes), q_ctrl's threshold and the knee: no
+// queue signal could ever fire.
+func TestWcoreRedMinRTTUnset(t *testing.T) {
+	if d := wcMinRTTOf(^uint32(0)); d != 0 {
+		t.Errorf("min_rtt ~0U read as %v, want 0 (unknown)", d)
+	}
+	if d := wcMinRTTOf(150000); d != 150*time.Millisecond {
+		t.Errorf("min_rtt 150000 µs read as %v", d)
+	}
+	c := wtCore(1)
+	c.tBase = 0
+	in := wtIn(wtT0, 1, 2*wtMiB)
+	in.minRTT, in.srtt = wcMinRTTOf(^uint32(0)), 100*time.Millisecond
+	c.notePaths(in, new([]wcEvent))
+	if c.tBase > time.Minute {
+		t.Errorf("T_base %v from a socket with no round-trip sample", c.tBase)
+	}
+}
+
+// wmMbitOver is the link's goodput over [from, to).
+func wmMbitOver(r wmResult, m *wmModel, from, to time.Duration) float64 {
+	var sum uint64
+	for b := from.Milliseconds() / 100; b < to.Milliseconds()/100 && b < int64(len(m.readMs)); b++ {
+		sum += m.readMs[b]
+	}
+	return float64(sum) / (to - from).Seconds() / wmMbit
+}
+
+// TestWcoreRedApProbingSweep: the autopilot probes the pool size (apProbing)
+// for 20 s in the middle of a transfer: what the link carries before,
+// during and after, against a run with no probe (HS2_WCORE_RED=1).
+func TestWcoreRedApProbingSweep(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED") != "1" {
+		t.Skip("HS2_WCORE_RED=1")
+	}
+	for _, p := range []struct {
+		rate   float64
+		rtt, q int
+		loss   float64
+	}{{300, 150, 50, 0}, {1000, 100, 50, 0}, {1000, 150, 50, 0}, {300, 100, 50, 0}, {1000, 100, 50, 0.001}, {300, 150, 200, 0}} {
+		for seed := uint64(1); seed <= 3; seed++ {
+			c := wmPath(p.rate, wmMS(p.rtt), wmMS(p.q))
+			c.loss, c.seed, c.dur = p.loss, seed, 45*time.Second
+			c.mode = wmCore
+			m0 := newModel(c)
+			r0 := m0.run()
+			c.apProbing = func(at time.Duration) bool { return at >= 15*time.Second && at < 35*time.Second }
+			m1 := newModel(c)
+			r1 := m1.run()
+			t.Logf("%s l%g s%d: before %.0f/%.0f | probe 15-35s %.0f vs %.0f (%.0f%%) | 20-35s %.0f vs %.0f (%.0f%%) | after %.0f/%.0f",
+				c.name, 100*p.loss, seed,
+				wmMbitOver(r0, m0, 8*time.Second, 15*time.Second), wmMbitOver(r1, m1, 8*time.Second, 15*time.Second),
+				wmMbitOver(r1, m1, 15*time.Second, 35*time.Second), wmMbitOver(r0, m0, 15*time.Second, 35*time.Second),
+				100*wmMbitOver(r1, m1, 15*time.Second, 35*time.Second)/wmMbitOver(r0, m0, 15*time.Second, 35*time.Second),
+				wmMbitOver(r1, m1, 20*time.Second, 35*time.Second), wmMbitOver(r0, m0, 20*time.Second, 35*time.Second),
+				100*wmMbitOver(r1, m1, 20*time.Second, 35*time.Second)/wmMbitOver(r0, m0, 20*time.Second, 35*time.Second),
+				wmMbitOver(r0, m0, 35*time.Second, 45*time.Second), wmMbitOver(r1, m1, 35*time.Second, 45*time.Second))
+		}
+	}
+}
+
+// TestWcoreRedApTrace: HS2_WCORE_RED_APTRACE=rate/rtt/queue/seed traces an
+// apProbing spell from 15 to 35 s.
+func TestWcoreRedApTrace(t *testing.T) {
+	spec := os.Getenv("HS2_WCORE_RED_APTRACE")
+	if spec == "" {
+		t.Skip("HS2_WCORE_RED_APTRACE=rate/rtt/queue/seed")
+	}
+	var rate, rtt, q float64
+	var seed int
+	p := strings.Split(spec, "/")
+	fmt.Sscan(p[0], &rate)
+	fmt.Sscan(p[1], &rtt)
+	fmt.Sscan(p[2], &q)
+	fmt.Sscan(p[3], &seed)
+	c := wmPath(rate, time.Duration(rtt)*time.Millisecond, time.Duration(q)*time.Millisecond)
+	c.seed, c.trace, c.dur, c.mode = uint64(seed), true, 45*time.Second, wmCore
+	c.apProbing = func(at time.Duration) bool { return at >= 15*time.Second && at < 35*time.Second }
+	r := wmRun(c)
+	for _, l := range r.trace {
+		t.Log(l)
+	}
+	t.Log(r)
+}
+
