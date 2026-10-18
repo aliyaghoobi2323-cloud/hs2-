@@ -169,7 +169,11 @@ type wmCfg struct {
 	// runner wake of the last wcPaceSpan, or the windows granted per min_rtt
 	// while its round trip shows no queue; lifted while it sends next to
 	// nothing (0: no cap)
-	paceCap  float64
+	paceCap float64
+	// netOff: the exit's link socket runs without the pacing net
+	// (pacenet.go), as before it (the rig's calibration runs); the net runs
+	// on the exit's socket only (the downloads' sender), as PaceNet says
+	netOff   bool
 	recEvery time.Duration
 	recOff   [][2]time.Duration
 	recZero  [][2]time.Duration
@@ -202,6 +206,9 @@ type wmResult struct {
 	trace  []string
 	// rtxSec: the sender's cumulative (resent, sent) segments at each second
 	rtxSec [][2]uint64
+	// netN: the times the pacing net engaged; netMs: ms it held the pace
+	netN  int
+	netMs int64
 }
 
 func (r wmResult) String() string {
@@ -295,6 +302,9 @@ type wmFlow struct {
 	minRTT           int64   // tcp min_rtt, ms (0: none)
 	retrans, segsOut uint64  // segments
 	rtxBytes         uint64
+	// rateDlv: tcpi_delivery_rate (tcp_rate_gen): the latest rate sample
+	// that was not app-limited, or an app-limited one past it, bytes/ms
+	rateDlv float64
 
 	// BBR
 	mode             int
@@ -461,6 +471,9 @@ func (f *wmFlow) onAcks(pkts []*wmPkt) {
 		bw = float64(f.delivered-newest.dlv) / float64(ival)
 	}
 	priorDlv, appLim := newest.dlv, newest.appLim
+	if bwOK && (!appLim || bw >= f.rateDlv) {
+		f.rateDlv = bw
+	}
 	// RACK: what was sent before the newest acked packet and is not acked
 	// is lost (the path keeps order)
 	lost := int64(0)
@@ -817,10 +830,13 @@ type wmModel struct {
 	res     wmResult
 	ackHold []*wmPkt
 
-	// the exit's pacing cap (cfg.paceCap): bytes/ms, 0 none
+	// the exit's pacing cap (cfg.paceCap, or the pacing net's): bytes/ms,
+	// 0 none
 	pcCap  float64
 	pcDlv  []wcRate
 	pcLast uint64
+	netOn  bool
+	net    wcNet
 }
 
 func (m *wmModel) newPkt() *wmPkt {
@@ -890,6 +906,9 @@ func newModel(cfg wmCfg) *wmModel {
 		}
 		m.core = newWcore(wcConfig{side: side, stage: cfg.stage, need: wmNeed, maxWin: wmMaxWin, minWin: wmMinWin}, m.rnd.Float64)
 	}
+	// the pacing net on the exit's socket (the lab's always-on cap, when
+	// set, in its place as in the runner)
+	m.netOn = !cfg.netOff && !cfg.exit && PaceNet != 0 && cfg.paceCap <= 0
 	m.readMs = make([]uint64, m.end/100+1)
 	m.qHist = make([]uint64, 4001)
 	m.res.cfg = cfg
@@ -1567,6 +1586,37 @@ func (m *wmModel) periodic() {
 	if m.cfg.paceCap > 0 && t%100 == 0 {
 		m.paceCapStep()
 	}
+	if m.netOn && t%100 == 0 {
+		m.netStep()
+	}
+}
+
+// netStep is the exit's runner wake for the pacing net (wcLink.paceNet), on
+// the model's sender: its TCP_INFO as Linux reports it (the pacing rate
+// within the cap, the delivery rate of tcp_rate_gen).
+func (m *wmModel) netStep() {
+	f := m.main
+	pace := f.pacing
+	if m.pcCap > 0 {
+		pace = math.Min(pace, m.pcCap)
+		m.res.netMs += 100
+	}
+	now := m.epoch.Add(time.Duration(m.t) * time.Millisecond)
+	o := m.net.step(wcNetIn{now: now, retrans: f.retrans, segsOut: f.segsOut, acked: f.delivered, dlv: f.rateDlv * 1000, pace: pace * 1000,
+		srtt: time.Duration(f.srtt * float64(time.Millisecond)), minRTT: time.Duration(f.minRTT) * time.Millisecond})
+	switch o.act {
+	case wcNetEngage:
+		m.res.netN++
+		m.pcCap = float64(o.cap) / 1000
+	case wcNetMoveCap:
+		m.pcCap = float64(o.cap) / 1000
+	case wcNetRelease:
+		m.pcCap = 0
+	}
+	if m.cfg.trace && o.act != wcNetNone {
+		m.res.trace = append(m.res.trace, fmt.Sprintf("        net %5.1fs act%d cap %.0f Mbit share %.1f%% ratio %.1f dlv %.0f idle %v",
+			float64(m.t)/1000, o.act, float64(o.cap)/wmMbit, 100*o.share, o.ratio, o.dlv/wmMbit, o.idle))
+	}
 }
 
 // paceCapStep is the exit's runner wake for the pacing cap (wcLink.paceCap,
@@ -1844,6 +1894,8 @@ func wmRunN(cfg wmCfg, n int) wmResult {
 	out.holdDrains = int(medF(func(r *wmResult) float64 { return float64(r.holdDrains) }))
 	out.probeRTTs = int(medF(func(r *wmResult) float64 { return float64(r.probeRTTs) }))
 	out.peakB = uint64(medF(func(r *wmResult) float64 { return float64(r.peakB) }))
+	out.netN = int(medF(func(r *wmResult) float64 { return float64(r.netN) }))
+	out.netMs = int64(medF(func(r *wmResult) float64 { return float64(r.netMs) }))
 	return out
 }
 
@@ -1867,12 +1919,15 @@ func (c wmCfg) with(mode wmMode) wmCfg { c.mode = mode; return c }
 // what the rig measured (70.8–77 on 300/150, 110–122 on 1000/100).
 func TestWcoreModelReproducesRig(t *testing.T) {
 	const seeds = 5
+	// (the rig measured these without the exit's pacing net)
 	p300 := wmPath(300, 150*time.Millisecond, 50*time.Millisecond)
 	l1000 := wmPath(1000, 100*time.Millisecond, 50*time.Millisecond)
 	l1000.loss, l1000.name = 0.001, "1000/100 q50 l0.1"
+	p1000 := wmPath(1000, 100*time.Millisecond, 50*time.Millisecond)
+	p300.netOff, l1000.netOff, p1000.netOff = true, true, true
 	base3, n43 := wmRunN(p300.with(wmBase), seeds), wmRunN(p300.with(wmN4), seeds)
 	fin1, n41, base1 := wmRunN(l1000.with(wmFin), seeds), wmRunN(l1000.with(wmN4), seeds), wmRunN(l1000.with(wmBase), seeds)
-	b1000 := wmRunN(wmPath(1000, 100*time.Millisecond, 50*time.Millisecond).with(wmBase), seeds)
+	b1000 := wmRunN(p1000.with(wmBase), seeds)
 	for _, r := range []wmResult{base3, n43, base1, n41, fin1, b1000} {
 		t.Log(r)
 	}
@@ -2115,24 +2170,26 @@ var wmKnown = map[string]struct {
 	kinds []string
 	why   string
 }{
-	"300/150 q50": {[]string{"resent", "gain"},
-		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (it announced the credit before it could see the dip); the rig: a loss every 10–11 s at 5–6 MiB. Gain: 75% of N4's in the model, 137–182% on the rig (the model's base and N4 both run higher than the rig's)"},
-	"1000/100 q50": {[]string{"drain"},
-		"a burst after PROBE_RTT overflows the queue in HOLD (a cut)"},
-	"1000/150 q50": {[]string{"drain"},
-		"a burst after PROBE_RTT overflows the queue in HOLD (a cut)"},
+	"300/150 q50": {[]string{"drain"},
+		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (the rig: a loss every 10–11 s at 5–6 MiB). The exit's pacing net (pacenet.go) holds that pace once it loses (151 → 244 Mbit/s, 1.65 → 0.24% resent, against the model before it); a burst before it holds (or after a lift) still overflows the queue in HOLD in one of three seeds (a cut)"},
+	"1000/150 q50": {[]string{"drain", "resent"},
+		"a burst after PROBE_RTT overflows the queue in HOLD (a cut); 0.26 to 0.54% resent against base's 0 over the 30 s table's seeds, with the exit's pacing net or without (0.37% either way in the 40 s grid)"},
 	"300/100 q50": {[]string{"interactive"},
 		"the bursts after PROBE_RTT (one loss holds the user behind its hole)"},
+	"100/100 q50": {[]string{"drain"},
+		"with the exit's pacing net the 2 MiB windows of base no longer overflow this path (base 66.8 Mbit/s with 7.1% resent without it, 83.5 with 0.2%), so the core leaves OFF (do no harm passes), and drains from HOLD at the sender's PROBE_RTT bursts before the net holds its pace: 84 Mbit/s with 0.22% resent, base's"},
 	"300/150 q200": {[]string{"queue"},
 		"the 200 ms queue lets STARTUP and the probes build a mean queue past 20 ms before the turnarounds show it"},
 	"1000/100 q50 l0.1": {[]string{"interactive"},
 		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere"},
 	"300/150 q50 l0.1": {[]string{"gain"},
-		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (54% of N4's gain)"},
-	"1000/100 q50 x4": {[]string{"resent", "drain"},
-		"four streams at the knee of a saturated path: the bursts after PROBE_RTT (0.21% against 0.01%); one of them in HOLD drains at an evaluation (red team round 1, item 3: a cut between evaluations now waits for a hole as long as a loss's, two wakes, and the evaluation judges it first; the model counts only the evaluation's drains)"},
-	"300/150 q50 +slow reader": {[]string{"resent", "interactive"},
-		"a probe's loss while the slow stream's window holds a hole"},
+		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain). The exit's pacing net costs one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median)"},
+	"300/150 q50 +slow reader": {[]string{"resent", "interactive", "gain", "drain"},
+		"a probe's loss while the slow stream's window holds a hole; with the exit's pacing net N4 no longer overflows the queue (180 → 250 Mbit/s, 3.3 → 0% resent), and the gain target is against that (the core 209 → 211 Mbit/s, 75% of it); one seed of three drains from HOLD at a PROBE_RTT burst"},
+	"300/150 q50 300>50>300": {[]string{"resent", "interactive", "t90"},
+		"with the exit's pacing net base resends 2.6% here (8.9% without it) and the core 7.4% (10.4% without): both less, base far less, past the roadmap's base + 3 points (wmKnownRoadmap); the net holds the pace at 1.25 times the 50 Mbit/s phase's rate and lifts it 10 s after the resends stop, and the core's way back runs under it: back to 90% in 10.7 s (6.5 s without)"},
+	"1000/100 q50 policer 300": {[]string{"gain"},
+		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 142 Mbit/s with 0.43% resent, a third of N4's gain (N4 resends 10%)"},
 }
 
 // wmKnownRoadmap are the cells of the full table where the core misses the
@@ -2151,6 +2208,9 @@ var wmKnownRoadmap = map[string]bool{
 	"100/100 q50 l1": true, "100/150 q50 l0.1": true, "100/300 q50 l0.1": true, "100/500 q50": true,
 	"100/500 q50 l0.1": true, "300/300 q50 l0.1": true, "300/500 q50": true,
 	"100/500 q200": true, "300/300 q50": true,
+
+	// the exit's pacing net: base 8.9 → 2.6%, the core 10.4 → 7.4% (wmKnown)
+	"300/150 q50 300>50>300": true,
 }
 
 // TestWcoreModelTable runs base, N4 and the core on each cell and judges the

@@ -301,6 +301,12 @@ func applyTuning() {
 	}
 	flt("HS2_TUNE_WCORE_PACECAP", &engine.WcorePaceCap)
 	flt("HS2_TUNE_WCORE_BURST", &engine.WcoreBurstShare)
+	// The exit's pacing net (engine/pacenet.go), on by default: 0 turns it
+	// off; the cap's factor over the socket's delivery rate, and the resend
+	// share that engages it (0.02: 2%).
+	num("HS2_TUNE_PACENET", &engine.PaceNet)
+	flt("HS2_TUNE_PACENET_K", &engine.PaceNetK)
+	flt("HS2_TUNE_PACENET_LOSS", &engine.PaceNetLoss)
 	if engine.SmuxMinStreamBuffer > 0 && engine.SmuxStreamLagTarget > 0 && engine.SmuxAdaptiveWindow() == 0 {
 		log.Printf("tuning: smux adaptive stream window off — no room for it (two %d B frames) in a %d B stream window", engine.SmuxFrameSize, engine.SmuxStreamBuffer)
 	}

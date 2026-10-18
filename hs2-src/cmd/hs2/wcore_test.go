@@ -69,3 +69,20 @@ func TestApplyTuningWcoreKnobs(t *testing.T) {
 			engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace)
 	}
 }
+
+// The exit's pacing net is on by default; its knobs reach the engine
+// (HS2_TUNE_PACENET=0 turns it off).
+func TestApplyTuningPaceNetKnobs(t *testing.T) {
+	on, k, loss := engine.PaceNet, engine.PaceNetK, engine.PaceNetLoss
+	t.Cleanup(func() { engine.PaceNet, engine.PaceNetK, engine.PaceNetLoss = on, k, loss })
+	if engine.PaceNet != 1 {
+		t.Fatalf("the pacing net is off by default (PaceNet %d)", engine.PaceNet)
+	}
+	t.Setenv("HS2_TUNE_PACENET", "0")
+	t.Setenv("HS2_TUNE_PACENET_K", "1.25")
+	t.Setenv("HS2_TUNE_PACENET_LOSS", "0.01")
+	applyTuning()
+	if engine.PaceNet != 0 || engine.PaceNetK != 1.25 || engine.PaceNetLoss != 0.01 {
+		t.Fatalf("pacing net %d, k %g, loss %g", engine.PaceNet, engine.PaceNetK, engine.PaceNetLoss)
+	}
+}

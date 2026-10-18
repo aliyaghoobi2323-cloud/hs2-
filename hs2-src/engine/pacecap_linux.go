@@ -9,8 +9,8 @@ import (
 )
 
 // setMaxPacing caps the socket's pacing rate at rate bytes/s
-// (SO_MAX_PACING_RATE); 0 lifts the cap. The window core's lab experiment
-// only (WcorePaceCap).
+// (SO_MAX_PACING_RATE); 0 lifts the cap. The pacing net's (pacenet.go) and
+// the window core's lab experiment (WcorePaceCap).
 func setMaxPacing(tc *net.TCPConn, rate uint64) bool {
 	if tc == nil {
 		return false

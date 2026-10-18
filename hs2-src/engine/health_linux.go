@@ -85,6 +85,7 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			oooOK:         tcpInfoHasOoo(n),
 			bytesReceived: info.Bytes_received,
 			bytesAcked:    info.Bytes_acked,
+			pacingRate:    info.Pacing_rate,
 		}
 		ok = true
 	})

@@ -293,9 +293,12 @@ type tcpStat struct {
 	// Payload bytes received and acknowledged (Linux ≥ 4.1).
 	bytesReceived uint64
 	// Payload bytes this end sent that the peer acknowledged (Linux ≥ 4.1):
-	// whether the socket sends at all (the window core's pacing-cap lab
-	// experiment).
+	// whether the socket sends at all (the pacing net, the window core's
+	// pacing-cap lab experiment).
 	bytesAcked uint64
+	// The socket's pacing rate, bytes/s (Linux ≥ 4.1; ~0: no pacing): the
+	// pacing net's (pacenet.go).
+	pacingRate uint64
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

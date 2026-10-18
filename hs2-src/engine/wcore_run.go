@@ -42,6 +42,11 @@ import (
 // (atomics: linkStallNote, the autopilot's grownRate, the status line),
 // writes its log lines (§7.1, each with its repeat cap) and, in the lab, a
 // JSON line per evaluation (HS2_TUNE_WCORE_TRACE).
+//
+// It also runs the exit's pacing net (pacenet.go): every exit link socket is
+// registered for it (with no core unless WcoreUpload), whatever the edge
+// runs, and read on each wake (one TCP_INFO); its cap is set with
+// SO_MAX_PACING_RATE only when the net engages, moves or lifts it.
 
 // Lab knobs (cmd/hs2 applyTuning: HS2_TUNE_WCORE*), read as a session
 // registers; WcoreQTarget and WcoreProbeQ when the first one does.
@@ -115,6 +120,7 @@ const (
 	wcLogDrainEvery  = 30 * time.Second
 	wcLogRareEvery   = 10 * time.Minute // random loss, a window at its ceiling, a route change
 	wcLogPoolEvery   = 5 * time.Minute  // per process
+	wcLogNetEvery    = 5 * time.Minute  // the pacing net held a link's pacing
 	wcAggLinks       = 8
 	wcAggEvery       = time.Minute
 	// wcKneeMove: a HOLD budget this far from the last "fill the path"
@@ -135,7 +141,8 @@ type wcLink struct {
 	side  wcSide
 	fixed uint32 // WcoreFixedWin
 	frame uint32 // smux MaxFrameSize (the hit gap)
-	off   bool   // no core (Wcore 0, the exit's without WcoreUpload): registered for the pacing cap only
+	off   bool   // no core (Wcore 0, the exit's without WcoreUpload): registered for the pacing net or cap only
+	pnet  bool   // the exit's link socket: the pacing net runs on it (pacenet.go)
 	set   *wcSet // the registry that steps it
 	name  atomic.Pointer[string]
 	// ap is the edge's LinkManager's apProbing (set when it adopts the link)
@@ -169,6 +176,10 @@ type wcLink struct {
 	pcOK    bool
 	pcDlv   []wcRate
 	pcSet   uint64
+	// the pacing net (pnet)
+	net     wcNet
+	netRtx  wcWrap32
+	netSegs wcWrap32
 }
 
 // wcStats is what the engine reads of a link's core, at any time.
@@ -187,6 +198,10 @@ type wcStats struct {
 	peakB     atomic.Uint64
 	peakR     atomic.Uint64 // float64 bits, bytes/s
 	lossy     atomic.Int64  // ns under random loss
+	// the pacing net: times it held the socket's pacing, and the largest
+	// resend share it saw (float64 bits)
+	netHeld  atomic.Int32
+	netShare atomic.Uint64
 }
 
 // wcWrap32 makes a cumulative 32-bit kernel counter (tcp_info's segs_in,
@@ -212,6 +227,7 @@ const (
 	wcLogLossy
 	wcLogCapped
 	wcLogRoute
+	wcLogNet
 	wcLogKinds
 )
 
@@ -250,6 +266,7 @@ const (
 	wcAggLossy
 	wcAggRoute
 	wcAggCapped
+	wcAggNet
 	wcAggKinds
 )
 
@@ -309,13 +326,23 @@ func wcCoreOn(server bool) bool {
 	return Wcore != 0 && (!server || WcoreUpload != 0)
 }
 
+// wcNetOn says whether the exit's link sockets get the pacing net: PaceNet,
+// and not the lab's always-on cap (WcorePaceCap) in its place.
+func wcNetOn() bool { return PaceNet != 0 && WcorePaceCap <= 0 }
+
 // newWcLink is the core of one session, not registered (nil: the session
 // gets none). The exit's end (server) gets none without WcoreUpload: only
-// the pacing cap's registration if that is on.
+// the pacing net's registration (its link socket, whatever its config) and
+// the pacing cap's if that is on.
 func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *linkMeter, server bool, remote net.Addr) *wcLink {
 	off := !wcCoreOn(server)
-	if off && WcorePaceCap <= 0 || cfg.NeedStreamBuffer <= 0 || cfg.MinStreamBuffer <= 0 || cfg.WindowPool == nil ||
-		cfg.NeedStreamBuffer >= cfg.MaxStreamBuffer {
+	pnet := server && tcp != nil && wcNetOn()
+	grow := cfg.NeedStreamBuffer > 0 && cfg.MinStreamBuffer > 0 && cfg.WindowPool != nil && cfg.NeedStreamBuffer < cfg.MaxStreamBuffer
+	switch {
+	case grow && (!off || WcorePaceCap > 0):
+	case pnet:
+		off = true
+	default:
 		return nil
 	}
 	side, name := wcEdge, "link to "
@@ -327,7 +354,7 @@ func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *link
 	} else {
 		name = "link"
 	}
-	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side, frame: uint32(cfg.MaxFrameSize), off: off,
+	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side, frame: uint32(cfg.MaxFrameSize), off: off, pnet: pnet,
 		ceils: map[uint32]uint32{}, sampled: map[uint32]bool{}, ceiled: map[uint32]*smux.Stream{},
 		rates: map[uint32]float64{}, gaps: map[uint32]time.Duration{}, gapSet: map[uint32]time.Duration{}}
 	if WcoreFixedWin > 0 {
@@ -392,6 +419,8 @@ func (l *wcLink) label() string { return *l.name.Load() }
 func (l *wcLink) wake(now time.Time) bool {
 	if WcorePaceCap > 0 {
 		l.paceCap(now)
+	} else if l.pnet {
+		l.paceNet(now)
 	}
 	if l.off || now.Before(l.next) {
 		return false
@@ -614,6 +643,51 @@ func (l *wcLink) paceCap(now time.Time) {
 		if setMaxPacing(l.tcp, v) {
 			l.pcSet = v
 		}
+	}
+}
+
+// wcPaceSet sets a socket's pacing cap (setMaxPacing); a test stands in
+// for it (atomic: the runner reads it as it steps).
+var wcPaceSet atomic.Pointer[func(*net.TCPConn, uint64) bool]
+
+func init() {
+	f := setMaxPacing
+	wcPaceSet.Store(&f)
+}
+
+// paceNet is the pacing net's wake (pacenet.go): one TCP_INFO of the link's
+// socket, and its cap set, moved or lifted as the net decides.
+func (l *wcLink) paceNet(now time.Time) {
+	ts, ok := tcpStats(l.tcp)
+	if !ok {
+		return
+	}
+	pace := float64(ts.pacingRate)
+	if ts.pacingRate == math.MaxUint64 {
+		pace = 0 // no pacing: unknown
+	}
+	o := l.net.step(wcNetIn{now: now, retrans: l.netRtx.add(uint32(ts.retrans)), segsOut: l.netSegs.add(ts.segsOut),
+		acked: ts.bytesAcked, dlv: float64(ts.deliveryRate), pace: pace, srtt: usDur(uint64(ts.rtt)), minRTT: wcMinRTTOf(ts.minRTT)})
+	set := *wcPaceSet.Load()
+	switch o.act {
+	case wcNetEngage, wcNetMoveCap:
+		if !set(l.tcp, o.cap) {
+			l.net.cap = 0 // not capped after all: the next reading judges again
+			return
+		}
+	case wcNetRelease:
+		set(l.tcp, 0)
+	}
+	if o.act != wcNetEngage {
+		return
+	}
+	st := &l.inStats
+	st.netHeld.Add(1)
+	if v := math.Float64frombits(st.netShare.Load()); o.share > v {
+		st.netShare.Store(math.Float64bits(o.share))
+	}
+	if ws := l.set; ws != nil {
+		ws.netLine(l, now, o)
 	}
 }
 
@@ -848,19 +922,36 @@ func (ws *wcSet) filled(l *wcLink, now time.Time, logf func(string, ...any), r f
 		l.label(), l.dir(), mbitps(r), t.Milliseconds(), wcMiB(b), n, q.Milliseconds())
 }
 
-// wcoreEndNote is wcoreNote as the exit's link-end lines end: " (while up:
-// window core: …)", or "".
-func wcoreEndNote(m *linkMeter) string {
-	if n := wcoreNote(m); n != "" {
-		return wcEndNoteSep + n[len(wcEndNoteHead):] + ")"
+// wcNetNote says, for the exit's link-end lines, what the pacing net did
+// on the link ("" if it never engaged).
+func wcNetNote(m *linkMeter) string {
+	if m == nil || m.wc == nil {
+		return ""
 	}
-	return ""
+	st := &m.wc.inStats
+	n := st.netHeld.Load()
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf("pacing held %d time(s) for resends (up to %.1f%%)", n, 100*math.Float64frombits(st.netShare.Load()))
 }
 
-const (
-	wcEndNoteHead = "window core:"
-	wcEndNoteSep  = " (while up: " + wcEndNoteHead
-)
+// wcoreEndNote is what the exit's link-end lines end with: " (while up:
+// window core: …; pacing held …)", or "".
+func wcoreEndNote(m *linkMeter) string {
+	var parts []string
+	for _, n := range []string{wcoreNote(m), wcNetNote(m)} {
+		if n != "" {
+			parts = append(parts, n)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return wcEndNoteSep + strings.Join(parts, "; ") + ")"
+}
+
+const wcEndNoteSep = " (while up: "
 
 // cutEndNote splits a link's end reason from the note wcoreEndNote put after
 // it.
@@ -906,6 +997,20 @@ func wcQueueCause(sig wcSig, ms int64) string {
 		return fmt.Sprintf("control pings came back %d ms late", ms)
 	}
 	return fmt.Sprintf("path queue grew by %d ms", ms)
+}
+
+// netLine is the pacing net's line as it engages on a link, within its cap.
+func (ws *wcSet) netLine(l *wcLink, now time.Time, o wcNetOut) {
+	lp := ws.logf.Load()
+	if lp == nil {
+		return
+	}
+	ws.flushAgg(now)
+	if !l.due(wcLogNet, now, wcLogNetEvery) || !ws.agg[wcAggNet].admit(l, now, 0, 0) {
+		return
+	}
+	(*lp)("mtcp: %s: resending %.1f%% at a pacing rate %.1f× what the path delivers — pacing held at %.4g× (~%.0f Mbit/s) until the resends stop",
+		l.label(), 100*o.share, o.ratio, o.k, mbitps(float64(o.cap)))
 }
 
 // due says whether a line of kind k may go out for the link now, and takes
@@ -989,6 +1094,9 @@ func (ws *wcSet) flushAgg(now time.Time) {
 			case wcAggCapped:
 				(*lp)("mtcp: window core: %d more link(s) had a window at its ceiling in the last minute (%d connection(s))",
 					len(a.links), a.conns)
+			case wcAggNet:
+				(*lp)("mtcp: pacing net: %d more link(s) resent past %.4g%% and had their pacing held in the last minute",
+					len(a.links), 100*wcNetLossOf())
 			}
 		}
 		*a = wcAgg{}
