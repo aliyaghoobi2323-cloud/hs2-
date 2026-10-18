@@ -56,10 +56,38 @@ var (
 	// WcoreTrace: a file the runner appends one JSON line to per evaluation
 	// per link (lab only).
 	WcoreTrace = ""
-	// WcoreFixedWin (bytes, > 0): no controller; every fast stream's ceiling
-	// is this window, with no growth brake, the rest traced as usual (lab
-	// only: calibrating the signals under fixed windows).
+	// WcoreFixedWin (bytes, > 0): no controller; every large stream's
+	// ceiling is this window, with no growth brake, the rest traced as usual
+	// (lab only: calibrating the signals under fixed windows).
 	WcoreFixedWin = 0
+	// WcorePaceCap (> 0): lab experiment, off by default. Each end caps its
+	// link socket's pacing (SO_MAX_PACING_RATE) at this many times the
+	// largest delivery rate its own TCP_INFO reported in the last second,
+	// refreshed on the runner's wake, never under wcPaceFloor, and lifted
+	// while the socket sends nothing. A window-limited BBR sender (in its
+	// STARTUP for good) sends each window update's credit, and after its
+	// PROBE_RTT the whole window, at 3.9 times the path's rate: on a shallow
+	// queue that burst is the loss the receiver's window core cannot prevent.
+	// With WcorePaceCap > 0 a link is registered even with Wcore 0 (the
+	// windows as without the core, the sender's pace capped).
+	WcorePaceCap = 0.0
+	// WcoreBurstShare (> 0): wcBurstShare (B held where a burst after the
+	// sender's PROBE_RTT fits Q_cap); lab knob.
+	WcoreBurstShare = 0.0
+)
+
+const (
+	// wcPaceFloor: the pacing cap is never under this (bytes/s).
+	wcPaceFloor = 1 << 20
+	// wcPaceIdle: a socket that had less than this acknowledged since the
+	// previous wake sends nothing: its cap is lifted.
+	wcPaceIdle = 64 << 10
+	// wcPaceSpan: the cap follows the largest delivery rate of this span.
+	wcPaceSpan = time.Second
+	// wcHitFrames: a stream's hit gap is this many of its own frames' time
+	// at its rate (smux.Stream.SetCoreHitGap), at most wcHitGapMax.
+	wcHitFrames = 3
+	wcHitGapMax = 50 * time.Millisecond
 )
 
 const (
@@ -91,6 +119,8 @@ type wcLink struct {
 	pool  *smux.WindowPool // nil: none
 	side  wcSide
 	fixed uint32 // WcoreFixedWin
+	frame uint32 // smux MaxFrameSize (the hit gap)
+	off   bool   // Wcore 0: registered for the pacing cap only
 	set   *wcSet // the registry that steps it
 	name  atomic.Pointer[string]
 	// ap is the edge's LinkManager's apProbing (set when it adopts the link)
@@ -113,6 +143,17 @@ type wcLink struct {
 	logAt   [wcLogKinds]time.Time
 	heldB   uint64 // the budget of the latest "fill the path" line
 	inStats wcStats
+	// the hit gap: each stream's rate (bytes/s, smoothed over wakes) and the
+	// gap set for it
+	rateAt time.Time
+	rates  map[uint32]float64
+	gaps   map[uint32]time.Duration
+	gapSet map[uint32]time.Duration
+	// the pacing cap (WcorePaceCap)
+	pcAcked uint64
+	pcOK    bool
+	pcDlv   []wcRate
+	pcSet   uint64
 }
 
 // wcStats is what the engine reads of a link's core, at any time.
@@ -235,7 +276,7 @@ func (ws *wcSet) put(l *wcLink) {
 // newWcLink is the core of one session, not registered (nil: the session
 // gets none).
 func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *linkMeter, server bool, remote net.Addr) *wcLink {
-	if Wcore == 0 || cfg.NeedStreamBuffer <= 0 || cfg.MinStreamBuffer <= 0 || cfg.WindowPool == nil ||
+	if Wcore == 0 && WcorePaceCap <= 0 || cfg.NeedStreamBuffer <= 0 || cfg.MinStreamBuffer <= 0 || cfg.WindowPool == nil ||
 		cfg.NeedStreamBuffer >= cfg.MaxStreamBuffer {
 		return nil
 	}
@@ -248,8 +289,9 @@ func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *link
 	} else {
 		name = "link"
 	}
-	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side,
-		ceils: map[uint32]uint32{}, sampled: map[uint32]bool{}, ceiled: map[uint32]*smux.Stream{}}
+	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side, frame: uint32(cfg.MaxFrameSize), off: Wcore == 0,
+		ceils: map[uint32]uint32{}, sampled: map[uint32]bool{}, ceiled: map[uint32]*smux.Stream{},
+		rates: map[uint32]float64{}, gaps: map[uint32]time.Duration{}, gapSet: map[uint32]time.Duration{}}
 	if WcoreFixedWin > 0 {
 		l.fixed = uint32(min(WcoreFixedWin, cfg.MaxStreamBuffer))
 	}
@@ -268,6 +310,9 @@ func wcApplyKnobs() {
 	if WcoreProbeQ > 0 {
 		wcProbeQ = time.Duration(WcoreProbeQ) * time.Millisecond
 		wcProbeQExit = wcProbeQ
+	}
+	if WcoreBurstShare > 0 {
+		wcBurstShare = WcoreBurstShare
 	}
 }
 
@@ -307,7 +352,10 @@ func (l *wcLink) label() string { return *l.name.Load() }
 
 // wake steps the link if its turn has come, and reports whether it did.
 func (l *wcLink) wake(now time.Time) bool {
-	if now.Before(l.next) {
+	if WcorePaceCap > 0 {
+		l.paceCap(now)
+	}
+	if l.off || now.Before(l.next) {
 		return false
 	}
 	if l.idle() {
@@ -316,15 +364,17 @@ func (l *wcLink) wake(now time.Time) bool {
 	}
 	c := l.core
 	pub, drainLoss := c.bPub, c.cnt.drainLoss
-	out := c.step(l.bld.build(l.snap(now)))
+	in := l.bld.build(l.snap(now))
+	l.noteRates(now, in)
+	out := c.step(in)
 	if l.fixed > 0 {
 		l.pin(&out)
 	}
 	l.apply(out)
 	l.publish(now)
-	if c.cnt.drainLoss > drainLoss && !wcHasDrain(out.events) {
+	if c.cnt.drainLoss > drainLoss && !wcHasDrain(out.events) && c.B < pub {
 		// halved for loss between evaluations (wcore.cut)
-		out.events = append(out.events, wcEvent{kind: wcEvDrain, why: wcWhyLoss, from: pub, B: c.B, n: len(c.inF), T: c.tBase, q: -1})
+		out.events = append(out.events, wcEvent{kind: wcEvDrain, why: wcWhyLoss, sig: wcSigOoo, from: pub, B: c.B, n: len(c.inF), T: c.tBase, q: -1})
 	}
 	if ws := l.set; ws != nil {
 		if c.lastAt.Equal(now) || len(out.events) > 0 { // an evaluation, not only a step of the ramp
@@ -411,15 +461,101 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 func usDur(us uint64) time.Duration { return time.Duration(us) * time.Microsecond }
 
 // pin puts the lab's fixed window (WcoreFixedWin) in place of the
-// controller's ceilings: on every fast stream, with no growth brake.
+// controller's ceilings: on every large stream of the snapshot (a window of
+// need/4 or more), with no growth brake. (Only the fast streams before:
+// one that left F under random loss or a slow reader went back to 2 MiB.)
 func (l *wcLink) pin(o *wcOut) {
+	big := map[uint32]bool{}
+	for _, x := range l.samples {
+		if x.Win >= l.core.cfg.need/4 {
+			big[x.ID] = true
+		}
+	}
 	for i := range o.ceils {
 		o.ceils[i].ceil = 0
-		if l.core.inF[o.ceils[i].id] {
+		if big[o.ceils[i].id] {
 			o.ceils[i].ceil = l.fixed
 		}
 	}
 	o.turnRef, o.qBrake, o.growOK = 0, 0, true
+}
+
+// noteRates keeps each stream's rate (smoothed over the wakes) and the hit
+// gap it makes: wcHitFrames of its own frames' time at that rate, at least
+// smux's 2 ms. Under ~85 Mbit/s a stream's own frames come more than 2 ms
+// apart in clumps, and the rig counted 87 to 100% of such streams' cycles as
+// hits with the window nowhere near the limit.
+func (l *wcLink) noteRates(now time.Time, in wcIn) {
+	dt := now.Sub(l.rateAt).Seconds()
+	l.rateAt = now
+	if dt <= 0 || dt > 1 || l.frame == 0 {
+		return
+	}
+	seen := map[uint32]bool{}
+	for _, s := range in.streams {
+		seen[s.id] = true
+		r := float64(s.read) / dt
+		e, ok := l.rates[s.id]
+		if ok {
+			e += 0.3 * (r - e)
+		} else {
+			e = r
+		}
+		l.rates[s.id] = e
+		g := wcHitGapMax
+		if e > 0 {
+			g = min(wcHitGapMax, time.Duration(wcHitFrames*float64(l.frame)/e*float64(time.Second)))
+		}
+		l.gaps[s.id] = g
+	}
+	for id := range l.rates {
+		if !seen[id] {
+			delete(l.rates, id)
+			delete(l.gaps, id)
+			delete(l.gapSet, id)
+		}
+	}
+}
+
+// paceCap is the lab's pacing-cap experiment (WcorePaceCap): the link
+// socket's pacing at most WcorePaceCap times the largest delivery rate of
+// the last wcPaceSpan, never under wcPaceFloor, and no cap while the socket
+// sends nothing (the next transfer starts as without the cap).
+func (l *wcLink) paceCap(now time.Time) {
+	ts, ok := tcpStats(l.tcp)
+	if !ok {
+		return
+	}
+	acked := ts.bytesAcked - l.pcAcked
+	first := !l.pcOK
+	l.pcAcked, l.pcOK = ts.bytesAcked, true
+	if first {
+		return
+	}
+	if acked < wcPaceIdle {
+		if l.pcSet != 0 {
+			setMaxPacing(l.tcp, 0)
+			l.pcSet = 0
+		}
+		l.pcDlv = l.pcDlv[:0]
+		return
+	}
+	l.pcDlv = append(l.pcDlv, wcRate{now, float64(ts.deliveryRate)})
+	cut := 0
+	for cut < len(l.pcDlv)-1 && now.Sub(l.pcDlv[cut].at) > wcPaceSpan {
+		cut++
+	}
+	l.pcDlv = l.pcDlv[cut:]
+	r := 0.0
+	for _, x := range l.pcDlv {
+		r = math.Max(r, x.r)
+	}
+	v := uint64(math.Max(WcorePaceCap*r, wcPaceFloor))
+	if l.pcSet == 0 || math.Abs(float64(v)-float64(l.pcSet)) > 0.05*float64(l.pcSet) {
+		if setMaxPacing(l.tcp, v) {
+			l.pcSet = v
+		}
+	}
 }
 
 // apply hands the decision to smux: the session's reference first (a
@@ -439,6 +575,12 @@ func (l *wcLink) apply(o wcOut) {
 		c := l.ceils[x.ID]
 		if c != x.Ceil {
 			x.Stream.SetCoreCeil(c)
+		}
+		if g, ok := l.gaps[x.ID]; ok {
+			if s := l.gapSet[x.ID]; s == 0 || math.Abs(float64(g-s)) > 0.1*float64(s) {
+				x.Stream.SetCoreHitGap(g)
+				l.gapSet[x.ID] = g
+			}
 		}
 		if c > 0 {
 			l.ceiled[x.ID] = x.Stream
@@ -586,6 +728,10 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 			}
 			logf("mtcp: %s: %.1f%% loss with no queue — windows cover the resends (+%d ms)", l.label(), 100*loss, e.q.Milliseconds())
 		case wcEvCapped:
+			if e.pool {
+				ws.poolHeld(l, now, e.n) // the pool had less than a step of a window left
+				continue
+			}
 			if e.n > 0 && e.B/uint64(e.n) >= uint64(c.cfg.maxWin) {
 				if !l.due(wcLogCapped, now, wcLogRareEvery) {
 					continue
@@ -597,7 +743,7 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 				}
 				continue
 			}
-			ws.poolHeld(l, now, e.n) // held by the pool, not the ceiling
+			// capped by the pool with a step or more of it left: no line
 		case wcEvPool:
 			ws.poolHeld(l, now, e.n)
 		case wcEvRoute:
@@ -648,21 +794,39 @@ func cutEndNote(s string) (why, note string) {
 
 func wcMiB(b uint64) string { return fmt.Sprintf("%.1f MiB", float64(b)/(1<<20)) }
 
-// wcDrainCause says why a drain came, for its line.
+// wcDrainCause says why a drain came, for its line: the signal that set it
+// off and its value past its reference.
 func wcDrainCause(e wcEvent) string {
+	ms := max(e.q, 0).Milliseconds()
 	switch {
 	case e.why == wcWhyRate:
 		return fmt.Sprintf("path slowed to ~%.0f Mbit/s with its queue growing", mbitps(e.R))
 	case e.why == wcWhyLoss && e.q < 0:
 		return "packets arrived behind holes on a clean path"
-	case e.why == wcWhyLoss && e.loss > 0 && e.q > 0:
-		return fmt.Sprintf("path queue grew to %d ms (resent %.1f%%)", e.q.Milliseconds(), 100*e.loss)
+	case e.why == wcWhyLoss && e.sig == wcSigOoo:
+		return "packets arrived behind holes as the windows grew"
+	case e.why == wcWhyLoss && e.loss > 0 && e.q > 0 && e.sig != wcSigLoss:
+		return fmt.Sprintf("%s (resent %.1f%%)", wcQueueCause(e.sig, ms), 100*e.loss)
 	case e.why == wcWhyLoss && e.loss > 0:
 		return fmt.Sprintf("packets were lost as the windows grew (resent %.1f%%)", 100*e.loss)
 	case e.why == wcWhyLoss:
-		return "packets arrived behind holes as the windows grew"
+		return "packets were lost as the windows grew"
 	}
-	return fmt.Sprintf("path queue grew to %d ms", max(e.q, 0).Milliseconds())
+	return wcQueueCause(e.sig, ms)
+}
+
+// wcQueueCause names the queue signal of a drain and how far past its
+// reference it was.
+func wcQueueCause(sig wcSig, ms int64) string {
+	switch sig {
+	case wcSigSnd:
+		return fmt.Sprintf("the exit's queue grew by %d ms", ms)
+	case wcSigOwn:
+		return fmt.Sprintf("path queue grew by %d ms (the link's own round trip)", ms)
+	case wcSigCtrl:
+		return fmt.Sprintf("control pings came back %d ms late", ms)
+	}
+	return fmt.Sprintf("path queue grew by %d ms", ms)
 }
 
 // due says whether a line of kind k may go out for the link now, and takes
@@ -904,6 +1068,7 @@ func (e wcEvent) String() string {
 		b.WriteString("filled")
 	case wcEvDrain:
 		b.WriteString([...]string{"drain:queue", "drain:loss", "drain:rate"}[e.why])
+		b.WriteString([...]string{"/turn", "/own", "/snd", "/ctrl", "/loss", "/ooo", "/rate"}[e.sig])
 	case wcEvLossy:
 		b.WriteString("lossy")
 	case wcEvPool:

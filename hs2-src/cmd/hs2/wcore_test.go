@@ -42,8 +42,10 @@ func TestStatusWindowsLine(t *testing.T) {
 // The window core's lab knobs reach the engine.
 func TestApplyTuningWcoreKnobs(t *testing.T) {
 	on, q, p, stage, fixed, trace := engine.Wcore, engine.WcoreQTarget, engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace
+	pace, burst := engine.WcorePaceCap, engine.WcoreBurstShare
 	t.Cleanup(func() {
 		engine.Wcore, engine.WcoreQTarget, engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace = on, q, p, stage, fixed, trace
+		engine.WcorePaceCap, engine.WcoreBurstShare = pace, burst
 	})
 	t.Setenv("HS2_TUNE_WCORE", "0")
 	t.Setenv("HS2_TUNE_WCORE_QTARGET", "12")
@@ -51,7 +53,12 @@ func TestApplyTuningWcoreKnobs(t *testing.T) {
 	t.Setenv("HS2_TUNE_WCORE_STAGE", "2")
 	t.Setenv("HS2_TUNE_WCORE_FIXEDWIN", "3145728")
 	t.Setenv("HS2_TUNE_WCORE_TRACE", "/tmp/wcore.jsonl")
+	t.Setenv("HS2_TUNE_WCORE_PACECAP", "1.25")
+	t.Setenv("HS2_TUNE_WCORE_BURST", "0.55")
 	applyTuning()
+	if engine.WcorePaceCap != 1.25 || engine.WcoreBurstShare != 0.55 {
+		t.Fatalf("lab experiments: pacing cap %g, burst share %g", engine.WcorePaceCap, engine.WcoreBurstShare)
+	}
 	if engine.Wcore != 0 || engine.WcoreQTarget != 12 || engine.WcoreProbeQ != 18 || engine.WcoreStage != 2 ||
 		engine.WcoreFixedWin != 3<<20 || engine.WcoreTrace != "/tmp/wcore.jsonl" {
 		t.Fatalf("knobs: on %d, qTarget %d, probeQ %d, stage %d, fixed %d, trace %q", engine.Wcore, engine.WcoreQTarget,

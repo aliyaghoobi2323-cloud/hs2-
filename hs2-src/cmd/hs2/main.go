@@ -285,6 +285,20 @@ func applyTuning() {
 		engine.WcoreTrace = v
 		log.Printf("tuning: HS2_TUNE_WCORE_TRACE=%q", v)
 	}
+	// lab experiments, off by default: the sender's pacing capped at this
+	// many times its own delivery rate, and B held where a burst after the
+	// sender's PROBE_RTT fits the queue learned (share of the window that
+	// becomes queue)
+	flt := func(name string, dst *float64) {
+		if v := os.Getenv(name); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				*dst = f
+				log.Printf("tuning: %s=%g", name, f)
+			}
+		}
+	}
+	flt("HS2_TUNE_WCORE_PACECAP", &engine.WcorePaceCap)
+	flt("HS2_TUNE_WCORE_BURST", &engine.WcoreBurstShare)
 	if engine.SmuxMinStreamBuffer > 0 && engine.SmuxStreamLagTarget > 0 && engine.SmuxAdaptiveWindow() == 0 {
 		log.Printf("tuning: smux adaptive stream window off — no room for it (two %d B frames) in a %d B stream window", engine.SmuxFrameSize, engine.SmuxStreamBuffer)
 	}

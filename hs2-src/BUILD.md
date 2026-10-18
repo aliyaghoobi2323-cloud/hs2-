@@ -216,5 +216,9 @@ before; also the field safety switch), `HS2_TUNE_WCORE_QTARGET` and
 `HS2_TUNE_WCORE_PROBEQ` (ms of standing and probing queue),
 `HS2_TUNE_WCORE_STAGE=2` (ceilings below the need once the path is full) and,
 for the lab only, `HS2_TUNE_WCORE_TRACE=<file>` (one JSON line per link per
-evaluation) and `HS2_TUNE_WCORE_FIXEDWIN=<bytes>` (every fast stream held at
-that window instead of the core's decision, still traced).
+evaluation), `HS2_TUNE_WCORE_FIXEDWIN=<bytes>` (every large stream held at
+that window instead of the core's decision, still traced), and two
+experiments, off by default: `HS2_TUNE_WCORE_PACECAP=<x>` (each end caps its
+link socket's pacing, `SO_MAX_PACING_RATE`, at x times its own delivery rate)
+and `HS2_TUNE_WCORE_BURST=<share>` (the budget held where the burst after the
+sender's PROBE_RTT, that share of the window, fits the queue learned).

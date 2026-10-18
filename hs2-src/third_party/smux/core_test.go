@@ -583,3 +583,34 @@ func TestCoreRestoreCapped(t *testing.T) {
 		}
 	}
 }
+
+// A stream's own hit gap (SetCoreHitGap) replaces hitGap when longer: a pause
+// at the limit shorter than it is no hit, one past it is; a gap under hitGap
+// leaves hitGap in force.
+func TestCoreHitGapPerStream(t *testing.T) {
+	const w = 1 << 20
+	cycle := func(s *Stream, pause time.Duration) {
+		recv := s.core.readTot.Load() + uint64(s.unread)
+		s.arrive(int(s.core.ring[s.core.head].lim - recv)) // up to the limit ...
+		time.Sleep(pause)                                  // ... a pause ...
+		s.arrive(4096)                                     // ... past it
+		s.readAndAnnounce(64<<10, w)
+	}
+	s := coreBare(4096)
+	s.arrive(64 << 10)
+	s.readAndAnnounce(64<<10, w)
+	s.SetCoreHitGap(30 * time.Millisecond)
+	cycle(s, 5*time.Millisecond) // past hitGap, under the stream's own gap
+	if h := s.core.hitN.Load(); h != 0 {
+		t.Fatalf("a 5 ms pause under a 30 ms gap: %d hit(s), want 0", h)
+	}
+	cycle(s, 35*time.Millisecond)
+	if h := s.core.hitN.Load(); h != 1 {
+		t.Fatalf("a 35 ms pause under a 30 ms gap: %d hit(s), want 1", h)
+	}
+	s.SetCoreHitGap(time.Millisecond) // under hitGap: hitGap holds
+	cycle(s, hitGap+time.Millisecond)
+	if h := s.core.hitN.Load(); h != 2 {
+		t.Fatalf("a pause past hitGap with a 1 ms gap: %d hit(s), want 2", h)
+	}
+}

@@ -44,6 +44,7 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			segsIn:        info.Data_segs_in,
 			rcvOOO:        info.Rcv_ooopack,
 			bytesReceived: info.Bytes_received,
+			bytesAcked:    info.Bytes_acked,
 		}
 		ok = true
 	})

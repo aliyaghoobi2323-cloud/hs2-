@@ -230,7 +230,7 @@ func TestWcoreKneeAndHold(t *testing.T) {
 		}, r*0.12 + wtMiB + 0.1*r*0.1},
 		{"capped where losses of ours came", func(c *wcore) { c.bGood = 1 << 40; c.bCap, c.bCapAt = 9e6, wtT0 }, 9e6},
 		{"a stale cap is gone", func(c *wcore) { c.bGood = 1 << 40; c.bCap, c.bCapAt = 9e6, wtT0.Add(-wcQcapTTL) }, r*0.12 + wtMiB + 0.15*r*0.1},
-		{"past what paid only by the margin", func(c *wcore) { c.bGood = 8e6 }, 8e6 * 1.15},
+		{"past what paid only by the margin (h·R̂·T_base)", func(c *wcore) { c.bGood = 8e6 }, 8e6 + 0.15*r*0.1},
 		{"never below the floor", func(c *wcore) { c.bGood = 0 }, 2 * wtNeed},
 	} {
 		c := wtCore(1)
@@ -266,24 +266,42 @@ func TestWcoreKneeAndHold(t *testing.T) {
 	}
 }
 
+// Q_cap is the queue measured as packets of ours were lost, by the signals
+// with no wait behind holes in them (the larger of q_own and q_snd; q_turn
+// above q_ref only with neither), at least wcQcapMin, averaged with the one
+// known: each cut measures it anew, none halves it (1.5·qTarget per cut took
+// it from 22.5 to 0.7 ms on the rig's 300 → 50 → 300).
 func TestWcoreLearnQcap(t *testing.T) {
 	c := wtCore(1)
 	c.qRef = 10 * time.Millisecond
-	c.learnQcap(wtT0, wcMeas{qTurn: 70 * time.Millisecond})
-	if c.qcap != 60*time.Millisecond || c.qTarget(wtT0) != 15*time.Millisecond || c.probeQ(wtT0) != 20*time.Millisecond {
+	c.learnQcap(wtT0, wcMeas{qTurn: 70 * time.Millisecond, qOwn: 30 * time.Millisecond, qOwnOK: true, qSnd: 45 * time.Millisecond, qSndOK: true})
+	if c.qcap != 45*time.Millisecond || c.qTarget(wtT0) != 15*time.Millisecond || c.probeQ(wtT0) != 20*time.Millisecond {
 		t.Fatalf("Q_cap %v: qTarget %v probeQ %v", c.qcap, c.qTarget(wtT0), c.probeQ(wtT0))
 	}
-	c.learnQcap(wtT0.Add(time.Second), wcMeas{qTurn: 40 * time.Millisecond}) // the least one counts
+	c.learnQcap(wtT0.Add(time.Second), wcMeas{qOwn: 15 * time.Millisecond, qOwnOK: true}) // averaged
 	if c.qcap != 30*time.Millisecond || c.qTarget(wtT0) != 10*time.Millisecond || c.probeQ(wtT0) != 15*time.Millisecond {
 		t.Fatalf("Q_cap %v: qTarget %v probeQ %v", c.qcap, c.qTarget(wtT0), c.probeQ(wtT0))
 	}
-	c.learnQcap(wtT0.Add(2*time.Second), wcMeas{qTurn: 90 * time.Millisecond})
-	if c.qcap != 30*time.Millisecond {
-		t.Fatalf("a larger queue raised Q_cap: %v", c.qcap)
+	for i := 0; i < 5; i++ { // cuts on: no halving, no ratchet under wcQcapMin
+		c.qcap, c.qcapAt, c.qcapOK = 30*time.Millisecond, wtT0, true
+		c.cut(wcIn{now: wtT0.Add(time.Duration(i) * time.Second), srtt: c.tBase + 30*time.Millisecond})
+		if c.qcap != 30*time.Millisecond {
+			t.Fatalf("cut %d: Q_cap %v, want 30ms", i, c.qcap)
+		}
 	}
-	c.learnQcap(wtT0.Add(wcQcapTTL+3*time.Second), wcMeas{qTurn: 90 * time.Millisecond}) // a stale one is replaced
-	if c.qcap != 80*time.Millisecond {
-		t.Fatalf("stale Q_cap kept: %v", c.qcap)
+	c.learnQcap(wtT0.Add(10*time.Second), wcMeas{qOwn: 0, qOwnOK: true}) // a loss with no queue (a policer)
+	if c.qcap != 20*time.Millisecond {
+		t.Fatalf("Q_cap %v after a loss with no queue, want (30+10)/2", c.qcap)
+	}
+	d := wtCore(1)
+	d.learnQcap(wtT0, wcMeas{qOwn: 2 * time.Millisecond, qOwnOK: true})
+	if d.qcap != wcQcapMin {
+		t.Fatalf("Q_cap %v, want the floor %v", d.qcap, wcQcapMin)
+	}
+	d.qRef = 10 * time.Millisecond
+	d.learnQcap(wtT0.Add(wcQcapTTL+time.Second), wcMeas{qTurn: 70 * time.Millisecond, qOK: true}) // stale: replaced; q_turn with no other
+	if d.qcap != 60*time.Millisecond {
+		t.Fatalf("Q_cap %v from q_turn, want 60ms", d.qcap)
 	}
 }
 
@@ -297,7 +315,7 @@ func TestWcoreTau(t *testing.T) {
 	}{
 		{"window-limited on a clean path", 11e6 + 1e6, 12e6, r, -1, 10 * time.Millisecond},
 		{"held behind holes", 31e6, 31e6, r, -1, 200 * time.Millisecond},
-		{"at most 2·T_base", 101e6, 101e6, r, -1, 200 * time.Millisecond},
+		{"at most 3·T_base", 101e6, 101e6, r, -1, 300 * time.Millisecond},
 		{"never below 0", 5e6, 5e6, r, -1, 0},
 		{"moved windows say nothing", 24e6, 12e6, r, 30 * time.Millisecond, 30 * time.Millisecond},
 		{"EWMA", 21e6, 21e6, r, 40 * time.Millisecond, 40*time.Millisecond + time.Duration(wcTauAlpha*float64(60*time.Millisecond))},
@@ -314,6 +332,14 @@ func TestWcoreTau(t *testing.T) {
 		if d := c.tau - tc.want; d < -time.Microsecond || d > time.Microsecond {
 			t.Errorf("%s: τ %v, want %v", tc.name, c.tau, tc.want)
 		}
+	}
+	// an interval whose rate fell under half of R̂ (the sender's PROBE_RTT)
+	// teaches nothing
+	c := wtCore(1)
+	c.noteRate(wtT0, 3*r)
+	c.noteTau(wcMeas{at: wtT0, rF: r, wF: 31e6, wPrev: 31e6, hStep: 1e6})
+	if c.tauOK {
+		t.Errorf("τ %v from a PROBE_RTT's interval", c.tau)
 	}
 }
 
@@ -352,36 +378,72 @@ func TestWcoreRhat(t *testing.T) {
 // off: steady fast streams for two intervals start STARTUP at 1.5× their
 // windows (bPub starts at the windows in force); anything unsteady waits.
 func TestWcoreOff(t *testing.T) {
+	rec := func(c *wcore) { c.sndAny, c.sndAnyAt = true, wtT0.Add(-time.Minute) }
+	q3 := func(m *wcMeas, d time.Duration) { m.qSnd, m.qSndOK, m.qSnd3, m.qSnd3OK = d, true, d, true }
 	for _, tc := range []struct {
 		name  string
 		stage int
+		exit  bool
 		setup func(c *wcore, in *wcIn, m *wcMeas)
 		calls int
 		want  wcState
 	}{
-		{"one steady interval", 1, nil, 1, wcOff},
-		{"two", 1, nil, 2, wcStartup},
-		{"the autopilot probes the pool (freeze)", 1, func(c *wcore, in *wcIn, m *wcMeas) { in.apProbing = true }, 3, wcOff},
-		{"windows still moving", 1, func(c *wcore, in *wcIn, m *wcMeas) { m.wPrev = 0.7 * m.wF }, 3, wcOff},
-		{"no fast stream", 1, func(c *wcore, in *wcIn, m *wcMeas) { m.f = nil }, 3, wcOff},
-		{"waits for the exit's first loss level", 1, func(c *wcore, in *wcIn, m *wcMeas) { c.sndSeen = true }, 3, wcOff},
-		{"... not for ever", 1, func(c *wcore, in *wcIn, m *wcMeas) { c.sndSeen = true }, wcOffWait, wcStartup},
-		{"stage 1: the windows without the core already queue at the exit", 1, func(c *wcore, in *wcIn, m *wcMeas) {
-			m.qSnd, m.qSndOK = 40*time.Millisecond, true
+		{"one steady interval", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c) }, 1, wcOff},
+		{"two", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c) }, 2, wcStartup},
+		{"the edge waits for the exit's first record", 1, false, nil, 3, wcOff},
+		{"... not for ever", 1, false, nil, wcOffWait, wcStartup},
+		{"the autopilot probes the pool (freeze)", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); in.apProbing = true }, 3, wcOff},
+		{"windows still moving", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); m.wPrev = 0.7 * m.wF }, 3, wcOff},
+		{"no fast stream", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); m.f = nil }, 3, wcOff},
+		{"a stream of F was sent nothing", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); m.idleF = true }, 3, wcOff},
+		{"waits for the exit's first loss level (a second record)", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			c.sndSeen, c.sndAny, c.sndAnyAt = true, true, wtT0.Add(-time.Second)
 		}, 3, wcOff},
-		{"stage 1: ... or lose with a queue behind them", 1, func(c *wcore, in *wcIn, m *wcMeas) {
-			m.qSnd, m.qSndOK = 12*time.Millisecond, true
-			m.snd, m.sndOK = 0.05, true
-		}, 3, wcOff},
-		{"stage 1: random loss leaves no queue", 1, func(c *wcore, in *wcIn, m *wcMeas) {
-			m.qSnd, m.qSndOK = 1*time.Millisecond, true
-			m.snd, m.sndOK = 0.05, true
+		{"... for two record spans", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			c.sndSeen, c.sndAny, c.sndAnyAt = true, true, wtT0.Add(-2*wcSndSpan)
 		}, 2, wcStartup},
-		{"stage 2 may go below them", 2, func(c *wcore, in *wcIn, m *wcMeas) { m.qSnd, m.qSndOK = 40*time.Millisecond, true }, 2, wcStartup},
+		{"stage 1: the windows without the core already queue at the exit", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			rec(c)
+			q3(m, 40*time.Millisecond)
+		}, 3, wcOff},
+		{"stage 1: ... in any of the latest three records", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			rec(c)
+			q3(m, 40*time.Millisecond)
+			m.qSnd = 5 * time.Millisecond // the latest shows less
+		}, 3, wcOff},
+		{"stage 1: ... or lose with a queue behind them", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			rec(c)
+			q3(m, 12*time.Millisecond)
+			m.snd, m.sndOK = 0.005, true
+		}, 3, wcOff},
+		{"stage 1: ... or lose over 1% whatever the queue", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			rec(c)
+			q3(m, 1*time.Millisecond)
+			m.snd, m.sndOK = 0.05, true
+		}, 3, wcOff},
+		{"stage 1: random loss of 0.5% leaves no queue", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			rec(c)
+			q3(m, 1*time.Millisecond)
+			m.snd, m.sndOK = 0.005, true
+		}, 2, wcStartup},
+		{"stage 1, edge with records: windows that hold more than the rate needs (holes) start", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			rec(c)
+			q3(m, 3*time.Millisecond)
+			m.rF = 5e6
+		}, 2, wcStartup},
+		{"stage 1, the exit's side: base windows past the knee (no record to tell)", 1, true, func(c *wcore, in *wcIn, m *wcMeas) {
+			m.rF = 10e6 // 2 MiB of window for 1 MB in a round trip and a 0.5 MiB step
+		}, 3, wcOff},
+		{"stage 1, the exit's side: windows under the knee", 1, true, nil, 2, wcStartup},
+		{"stage 2 may go below them", 2, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); q3(m, 40*time.Millisecond) }, 2, wcStartup},
 	} {
 		c := wtCore(tc.stage)
+		if tc.exit {
+			c.cfg.side = wcExit
+		}
 		in := wtIn(wtT0, 1, wtNeed)
 		m := wtMeas(1, 20e6, wtNeed)
+		m.at = wtT0
 		if tc.setup != nil {
 			tc.setup(c, &in, &m)
 		}
@@ -428,13 +490,21 @@ func TestWcoreStartup(t *testing.T) {
 		}, wcDrain, wcWhyQueue, nil},
 		{"loss came with B", func(c *wcore, in *wcIn, m *wcMeas) { m.snd, m.sndOK = 0.02, true }, wcDrain, wcWhyLoss,
 			func(c *wcore) bool { return c.bCap == uint64(wcCapBack*4*wtMiB) && c.qcapOK && c.B <= 2*wtMiB }},
-		{"holes, no record yet: keep B, wait", func(c *wcore, in *wcIn, m *wcMeas) {
+		{"holes: a long turnaround is no queue (q_own shows none), small steps", func(c *wcore, in *wcIn, m *wcMeas) {
 			c.flat = 1
 			m.qTurn, m.qOK = 90*time.Millisecond, true
-			m.ooo, m.oooOK = 0.5, true
+			m.ooo, m.oooOK, m.holey = 0.5, true, true
 			c.oooRef = wcLossRef{v: 0.5, b: 2 * wtMiB, ok: true}
-			m.qSnd, m.qSndOK = 0, true
-		}, wcStartup, 0, func(c *wcore) bool { return c.B == 4*wtMiB && c.flat == 1 }},
+			m.qOwn, m.qOwnOK = 2*time.Millisecond, true
+			m.rF = 36e6
+		}, wcStartup, 0, func(c *wcore) bool { return c.B >= 5*wtMiB-1 && c.B <= 5*wtMiB && c.gear == 0 && c.bGood == 4*wtMiB }},
+		{"holes: q_own grew past its reference", func(c *wcore, in *wcIn, m *wcMeas) {
+			c.flat = 1
+			m.qTurn, m.qOK = 2*time.Millisecond, true
+			m.ooo, m.oooOK, m.holey = 0.5, true, true
+			c.oooRef = wcLossRef{v: 0.5, b: 2 * wtMiB, ok: true}
+			m.qOwn, m.qOwnOK = 25*time.Millisecond, true
+		}, wcDrain, wcWhyQueue, nil},
 		{"holes, the exit's record shows no queue: no queue", func(c *wcore, in *wcIn, m *wcMeas) {
 			m.rF = 36e6
 			m.qTurn, m.qOK = 90*time.Millisecond, true
@@ -549,29 +619,67 @@ func TestWcoreHold(t *testing.T) {
 	}
 }
 
-// wtProbe is a core probing 9 MiB from 8 MiB, at 60 MB/s before it.
+// wtProbe is a core probing 9 MiB from 8 MiB, at 60 MB/s before it, its
+// queue (q_ref) 5 ms as it began.
 func wtProbe() (*wcore, wcIn) {
 	c, in := wtHold()
 	c.state, c.probeFrom, c.probeBase, c.B = wcProbe, 8*wtMiB, 60e6, 9*wtMiB
+	c.probeQ0, c.probeOwn0 = c.qRef, 3*time.Millisecond
 	return c, in
 }
 
+// A probe is judged by the queue's answer: kept if the queue grew by less
+// than probeQ/2 and no loss of ours came, less what of it queued; on a clean
+// path with Q_cap known (a shallow queue whose bursts the turnaround does not
+// show), only if the rate grew too; where data waits behind holes, by q_own;
+// twice in a row with nothing queued and the rate up, STARTUP.
 func TestWcoreProbe(t *testing.T) {
+	q := func(m *wcMeas, d time.Duration) { m.qTurn, m.qOK = 5*time.Millisecond+d, true }
+	holes := func(c *wcore, m *wcMeas, own time.Duration) {
+		c.oooRef = wcLossRef{v: 0.5, b: 8 * wtMiB, ok: true} // a lossy path's level
+		m.ooo, m.oooOK, m.holey = 0.5, true, true
+		m.qTurn, m.qOK = 120*time.Millisecond, true // the wait behind holes
+		m.qOwn, m.qOwnOK = 3*time.Millisecond+own, true
+	}
 	for _, tc := range []struct {
 		name    string
 		rF      float64
 		setup   func(c *wcore, in *wcIn, m *wcMeas)
 		want    wcState
 		ok, bad int
+		good    uint64
 	}{
-		{"paid", 63.6e6, nil, wcHold, 1, 0},
-		{"paid as much as it could: grow on", 66.6e6, nil, wcStartup, 1, 0},
-		{"did not pay", 60.5e6, nil, wcHold, 0, 1},
-		{"loss came with it", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) { m.snd, m.sndOK = 0.02, true }, wcDrain, 0, 1},
-		{"F changed: inconclusive", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) { m.sameF = false }, wcHold, 0, 0},
+		{"no queue came of it: kept", 60.5e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 0) }, wcHold, 1, 0, 9 * wtMiB},
+		{"part of it queued: kept, less what queued", 61e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 8*time.Millisecond) }, wcHold, 1, 0,
+			9*wtMiB - uint64(0.008*61e6)}, // (R̂ took the probe's own rate)
+		{"nothing queued, the rate up, twice in a row: grow on", 66.6e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 0); c.probeWins = 1 }, wcStartup, 1, 0, 9 * wtMiB},
+		{"... once: probe again soon", 66.6e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 0) }, wcHold, 1, 0, 9 * wtMiB},
+		{"the queue grew by probeQ: back", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 20*time.Millisecond) }, wcHold, 0, 1, 0},
+		{"the exit's record of the probe shows no queue", 61e6, func(c *wcore, in *wcIn, m *wcMeas) {
+			q(m, 30*time.Millisecond)
+			m.snd, m.sndOK, m.qSnd, m.qSndOK = 0, true, 6*time.Millisecond, true
+		}, wcHold, 1, 0, 9 * wtMiB},
+		{"Q_cap known on a clean path: the rate must have grown too", 60.5e6, func(c *wcore, in *wcIn, m *wcMeas) {
+			q(m, 0)
+			c.qcap, c.qcapAt, c.qcapOK = 50*time.Millisecond, wtT0, true
+		}, wcHold, 0, 1, 0},
+		{"... and with it the probe is kept", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) {
+			q(m, 0)
+			c.qcap, c.qcapAt, c.qcapOK = 50*time.Millisecond, wtT0, true
+		}, wcHold, 1, 0, 9 * wtMiB},
+		{"holes: judged by q_own, not the turnaround", 58e6, func(c *wcore, in *wcIn, m *wcMeas) { holes(c, m, time.Millisecond) }, wcHold, 1, 0,
+			9*wtMiB - uint64(0.001*60e6)},
+		{"holes: q_own grew", 64e6, func(c *wcore, in *wcIn, m *wcMeas) { holes(c, m, 12*time.Millisecond) }, wcHold, 0, 1, 0},
+		{"holes: nothing queued twice, the rate as it was: grow on", 58e6, func(c *wcore, in *wcIn, m *wcMeas) {
+			holes(c, m, 0)
+			c.probeWins = 1
+		}, wcStartup, 1, 0, 9 * wtMiB},
+		{"loss came with it", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 0); m.snd, m.sndOK = 0.02, true }, wcDrain, 0, 1, 0},
+		{"F changed: inconclusive", 63.6e6, func(c *wcore, in *wcIn, m *wcMeas) { q(m, 0); m.sameF = false }, wcHold, 0, 0, 0},
 	} {
 		c, in := wtProbe()
 		m := wtMeas(1, tc.rF, 9*wtMiB)
+		m.at = wtT0
 		if tc.setup != nil {
 			tc.setup(c, &in, &m)
 		}
@@ -582,12 +690,16 @@ func TestWcoreProbe(t *testing.T) {
 			continue
 		}
 		switch {
-		case tc.ok > 0 && c.bGood != 9*wtMiB:
-			t.Errorf("%s: bGood %d", tc.name, c.bGood)
+		case tc.ok > 0 && (c.bGood < tc.good-2 || c.bGood > tc.good+2):
+			t.Errorf("%s: bGood %d, want %d", tc.name, c.bGood, tc.good)
 		case tc.bad > 0 && (c.B > c.probeFrom || c.backoff != 1):
 			t.Errorf("%s: B %d (from %d) backoff %d", tc.name, c.B, c.probeFrom, c.backoff)
 		case tc.bad > 0 && c.probeAt.Sub(wtT0) < 2*wcProbeMin:
 			t.Errorf("%s: next probe in %v: no backoff", tc.name, c.probeAt.Sub(wtT0))
+		case tc.ok == 0 && tc.bad == 0 && c.B > c.probeFrom:
+			t.Errorf("%s: B %d past where it began %d", tc.name, c.B, c.probeFrom)
+		case tc.name == "... once: probe again soon" && (c.probeWins != 1 || c.probeAt.Sub(wtT0) > 2*time.Second):
+			t.Errorf("%s: wins %d, next probe in %v", tc.name, c.probeWins, c.probeAt.Sub(wtT0))
 		}
 	}
 	// the backoff doubles the interval up to wcProbeBackMax

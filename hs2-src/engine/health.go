@@ -290,6 +290,10 @@ type tcpStat struct {
 	rcvOOO uint32
 	// Payload bytes received and acknowledged (Linux ≥ 4.1).
 	bytesReceived uint64
+	// Payload bytes this end sent that the peer acknowledged (Linux ≥ 4.1):
+	// whether the socket sends at all (the window core's pacing-cap lab
+	// experiment).
+	bytesAcked uint64
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

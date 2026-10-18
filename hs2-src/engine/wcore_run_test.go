@@ -398,7 +398,8 @@ func TestWcoreRunnerFixedWindow(t *testing.T) {
 	time.Sleep(2 * time.Second)
 	for _, x := range readTrace(t, ws.tracePath) {
 		for _, s := range x.Streams {
-			if s.Win > fixed || s.F && s.Ceil != fixed || !s.F && s.Ceil != 0 {
+			big := s.Win >= uint32(cfg.NeedStreamBuffer)/4
+			if s.Win > fixed || big && s.Ceil != fixed || !big && s.Ceil != 0 {
 				t.Fatalf("a window past the fixed one, or a ceiling that is not it: %+v", x)
 			}
 		}
@@ -579,14 +580,15 @@ func TestWcoreRunnerCeilingsByID(t *testing.T) {
 	if len(l.ceiled) != 1 {
 		t.Fatalf("the runner holds %d ceiled streams, want 1", len(l.ceiled))
 	}
-	// the lab's fixed window: on the fast streams only, no brake
+	// the lab's fixed window: on every large stream of the snapshot (a
+	// window of need/4 or more), fast or not, no brake
 	l.fixed = 900 << 10
 	l.core.inF = map[uint32]bool{id(2): true}
 	o := wcOut{ceils: []wcCeil{{id(0), 1 << 20}, {id(2), 0}}, turnRef: 5 * time.Millisecond, growOK: false}
-	l.pin(&o)
 	snap()
+	l.pin(&o)
 	l.apply(o)
-	if c := [3]uint32{sts[0].CoreCeil(), sts[1].CoreCeil(), sts[2].CoreCeil()}; c != [3]uint32{0, 0, 900 << 10} || o.turnRef != 0 || !o.growOK {
+	if c := [3]uint32{sts[0].CoreCeil(), sts[1].CoreCeil(), sts[2].CoreCeil()}; c != [3]uint32{900 << 10, 0, 900 << 10} || o.turnRef != 0 || !o.growOK {
 		t.Fatalf("fixed window: ceilings %v, out %+v", c, o)
 	}
 }
@@ -683,7 +685,7 @@ func TestWcoreRunnerLogCaps(t *testing.T) {
 	ev := func(at time.Duration, e ...wcEvent) { ws.logEvents(l, now.Add(at), wcOut{events: e}) }
 	ev(0, drain, filled, lossy, capped)
 	want := []string{
-		"mtcp: link 3: path queue grew to 38 ms (resent 2.1%) — download windows 6.2 MiB → 3.0 MiB",
+		"mtcp: link 3: path queue grew by 38 ms (resent 2.1%) — download windows 6.2 MiB → 3.0 MiB",
 		"mtcp: link 3: downloads fill the path at ~287 Mbit/s (round trip 151 ms): window held at 6.4 MiB for 2 fast connection(s), queue ~4 ms",
 		"mtcp: link 3: 0.4% loss with no queue — windows cover the resends (+18 ms)",
 		"mtcp: link 3: one connection's window is at its 16 MiB ceiling (round trip 480 ms)",

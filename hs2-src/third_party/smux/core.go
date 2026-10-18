@@ -47,7 +47,10 @@ const updShare = 8
 // peer sent all it was allowed and waited for the update (the window held
 // it). A peer that had credit to spare sends on without a pause, and a
 // receiver's own backlog, which reaching the latest limit would show, says
-// nothing about the sender.
+// nothing about the sender. The window core sets a longer gap for a stream
+// whose own frames come further apart (SetCoreHitGap): a few frames' time at
+// its rate, else data that flows on at 80 Mbit/s already looks like a pause
+// (the rig: 0.87 to 1.0 of the cycles of such streams were hits).
 const hitGap = 2 * time.Millisecond
 
 // turnRing: updates whose turnaround is not in yet that a stream keeps
@@ -131,7 +134,8 @@ func FitCore(old, want, ceil, need, minWin, unread uint32, growOK, turnOK bool) 
 
 // streamCore is a stream's side of the window core.
 type streamCore struct {
-	ceil atomic.Uint32 // the core's ceiling for the window (0: none; SetCoreCeil)
+	ceil   atomic.Uint32 // the core's ceiling for the window (0: none; SetCoreCeil)
+	hitGap atomic.Int64  // ns: the pause at the limit that makes a hit, past hitGap (SetCoreHitGap; 0: hitGap)
 
 	// under bufferLock
 	ring     [turnRing]turnMark // updates whose turnaround is not in yet, oldest at head
@@ -177,6 +181,12 @@ func (s *Stream) SetCoreCeil(ceil uint32) {
 
 // CoreCeil is the ceiling SetCoreCeil set.
 func (s *Stream) CoreCeil() uint32 { return s.core.ceil.Load() }
+
+// SetCoreHitGap sets how long the stream's data must pause at its limit for
+// the cycle to count as a hit (CoreSample.Hits): gap, if it is longer than
+// hitGap (2 ms). The window core sets a few frames' time at the stream's
+// rate. It takes no lock.
+func (s *Stream) SetCoreHitGap(gap time.Duration) { s.core.hitGap.Store(int64(gap)) }
 
 // SetCoreRef sets the session's turnaround reference for the window core:
 // a stream's window grows past NeedStreamBuffer only while its latest
@@ -364,7 +374,7 @@ func (s *Stream) announced(window uint32) {
 // stream has received now passes -- the peer could not send it before the
 // update reached it -- and notes a cycle that ran up to the window: one
 // whose data paused at that limit (from within a frame of it, the peer
-// sends whole frames) for hitGap or more before it went on. The caller
+// sends whole frames) for its hit gap or more before it went on. The caller
 // holds bufferLock, just after unread grew.
 func (s *Stream) turned() {
 	c := &s.core
@@ -377,6 +387,10 @@ func (s *Stream) turned() {
 	}
 	recv := near - uint64(s.frameSize)
 	now := monoNow()
+	gap := c.hitGap.Load()
+	if gap < int64(hitGap) {
+		gap = int64(hitGap)
+	}
 	for c.n > 0 {
 		k := &c.ring[c.head]
 		if k.reach == 0 && near >= k.lim {
@@ -385,7 +399,7 @@ func (s *Stream) turned() {
 		if recv <= k.lim {
 			return
 		}
-		if now-k.reach >= int64(hitGap) {
+		if now-k.reach >= gap {
 			c.hit = true
 		}
 		d := now - k.at
