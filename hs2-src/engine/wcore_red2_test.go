@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -408,6 +409,120 @@ func TestWcoreRed2RateDropModel(t *testing.T) {
 			o := wm2Run(wm2Cell{c: c})
 			if o.drained {
 				t.Errorf("drained by the core: %s", o)
+			} else {
+				t.Log(o)
+			}
+		}
+	}
+}
+
+// TestWcoreRed2PaceCap (HS2_WCORE_RED2=1): the cells the round-2 sweeps
+// found drained by the core (HS2_WCORE_RED2_CELLS: a file of "name/sseed"
+// lines; default: a built-in set), each with the exit's pacing cap of the
+// lab (WcorePaceCap, HS2_WCORE_RED2_PACE: its factor, default 2) on base
+// and on the core.
+func TestWcoreRed2PaceCap(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED2") != "1" {
+		t.Skip("HS2_WCORE_RED2=1")
+	}
+	k := 2.0
+	if v := os.Getenv("HS2_WCORE_RED2_PACE"); v != "" {
+		fmt.Sscan(v, &k)
+	}
+	var cells []wm2Cell
+	for _, c := range wm2Named(t) {
+		c.c.paceCap = k
+		cells = append(cells, c)
+	}
+	wm2Sweep(t, cells)
+}
+
+// wm2Named is the cells of HS2_WCORE_RED2_CELLS (a file of "name/sseed"
+// lines from the sweeps' BAD lines), found in the grid and the dynamic
+// sweep.
+func wm2Named(t *testing.T) []wm2Cell {
+	path := os.Getenv("HS2_WCORE_RED2_CELLS")
+	if path == "" {
+		t.Skip("HS2_WCORE_RED2_CELLS=<file>")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type key struct {
+		name string
+		seed uint64
+	}
+	want := map[key]bool{}
+	var rtts, streams []int
+	for _, l := range strings.Split(string(b), "\n") {
+		l = strings.TrimSpace(l)
+		i := strings.LastIndex(l, "/s")
+		if i < 0 {
+			continue
+		}
+		var seed uint64
+		fmt.Sscan(l[i+2:], &seed)
+		want[key{l[:i], seed}] = true
+		var rtt, n int
+		fmt.Sscanf(l[strings.Index(l, "/")+1:], "%d", &rtt)
+		n = 1
+		if j := strings.Index(l, " x"); j >= 0 {
+			fmt.Sscanf(l[j+2:], "%d", &n)
+		}
+		rtts, streams = append(rtts, rtt), append(streams, n)
+	}
+	slices.Sort(rtts)
+	slices.Sort(streams)
+	var out []wm2Cell
+	for _, c := range append(wm2Dyn(), wm2Grid(slices.Compact(rtts), slices.Compact(streams))...) {
+		if want[key{c.c.name, c.c.seed}] {
+			c.cat = "named"
+			out = append(out, c)
+			delete(want, key{c.c.name, c.c.seed})
+		}
+	}
+	for k := range want {
+		t.Logf("no cell %q s%d", k.name, k.seed)
+	}
+	return out
+}
+
+// TestWcoreRed2RecordsStop (round 2): an edge whose exit's records stop
+// (the stats stream stalled on a congested link and is being reopened) has
+// no unbiased loss signal left where packets wait behind holes: the core is
+// blind there as without the records (round 1, finding 1), and goes OFF.
+func TestWcoreRed2RecordsStop(t *testing.T) {
+	c := wtCore(1)
+	c.sndSeen, c.sndLastAt = true, wtT0
+	m := wtMeas(1, 60e6, 4*wtMiB)
+	m.ooo, m.oooOK, m.holey = 0.5, true, true
+	m.at = wtT0.Add(2 * time.Second)
+	if c.blind(m) {
+		t.Errorf("a record 2 s ago: blind")
+	}
+	m.at = wtT0.Add(2*wcSndSpan + time.Second)
+	if !c.blind(m) {
+		t.Errorf("no record for %v on a path with holes: not blind", 2*wcSndSpan+time.Second)
+	}
+	m.holey = false
+	if c.blind(m) {
+		t.Errorf("no record on a clean path: blind (q_turn and Rcv_ooopack judge it)")
+	}
+	for _, x := range []struct {
+		rate   float64
+		rtt, q int
+		loss   float64
+		off    [2]int
+	}{{1000, 100, 20, 0.001, [2]int{10, 50}}, {300, 150, 20, 0.001, [2]int{15, 45}}} {
+		for seed := uint64(1); seed <= 2; seed++ {
+			c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
+			c.loss, c.seed, c.dur = x.loss, seed, 60*time.Second
+			c.recOff = [][2]time.Duration{{time.Duration(x.off[0]) * time.Second, time.Duration(x.off[1]) * time.Second}}
+			c.name = fmt.Sprintf("%s l%g recoff%d-%d", wm2Name(x.rate, x.rtt, x.q), 100*x.loss, x.off[0], x.off[1])
+			o := wm2Run(wm2Cell{c: c})
+			if o.drained || o.resent {
+				t.Errorf("records stopped: %s", o)
 			} else {
 				t.Log(o)
 			}

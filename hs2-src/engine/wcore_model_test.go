@@ -162,8 +162,14 @@ type wmCfg struct {
 	// stalled and is reopening; the next one covers the gap); recZero: the
 	// records within these spans have no TCP_INFO in them (all of the
 	// extended fields 0, as serveStats sends when tcpStats fails)
-	rttAt    []wmChange
-	polAt    []wmChange
+	rttAt []wmChange
+	polAt []wmChange
+	// paceCap: the exit caps its socket's pacing as the lab's WcorePaceCap
+	// (wcPaceRate) at this many times the largest rate it delivered in a
+	// runner wake of the last wcPaceSpan, or the windows granted per min_rtt
+	// while its round trip shows no queue; lifted while it sends next to
+	// nothing (0: no cap)
+	paceCap  float64
 	recEvery time.Duration
 	recOff   [][2]time.Duration
 	recZero  [][2]time.Duration
@@ -348,8 +354,12 @@ func (f *wmFlow) bdp(gain float64) float64 {
 func (f *wmFlow) send() {
 	m := f.m
 	t := m.t
-	f.credit += f.pacing
-	cap := math.Max(2*float64(f.unit), f.pacing)
+	pace := f.pacing
+	if f.main && m.pcCap > 0 {
+		pace = math.Min(pace, m.pcCap)
+	}
+	f.credit += pace
+	cap := math.Max(2*float64(f.unit), pace)
 	if f.credit > cap {
 		f.credit = cap
 	}
@@ -806,6 +816,11 @@ type wmModel struct {
 	}
 	res     wmResult
 	ackHold []*wmPkt
+
+	// the exit's pacing cap (cfg.paceCap): bytes/ms, 0 none
+	pcCap  float64
+	pcDlv  []wcRate
+	pcLast uint64
 }
 
 func (m *wmModel) newPkt() *wmPkt {
@@ -1549,6 +1564,46 @@ func (m *wmModel) periodic() {
 	if m.cfg.policer > 0 {
 		m.tokens = math.Min(m.tokens+m.cfg.policer/1000, math.Max(m.cfg.policer*0.02, 64<<10))
 	}
+	if m.cfg.paceCap > 0 && t%100 == 0 {
+		m.paceCapStep()
+	}
+}
+
+// paceCapStep is the exit's runner wake for the pacing cap (wcLink.paceCap,
+// wcPaceRate), on the model's sender: its delivery rate as what it delivered
+// since the previous wake.
+func (m *wmModel) paceCapStep() {
+	f := m.main
+	acked := f.delivered - m.pcLast
+	m.pcLast = f.delivered
+	now := m.epoch.Add(time.Duration(m.t) * time.Millisecond)
+	if acked < wcPaceIdle {
+		m.pcCap, m.pcDlv = 0, m.pcDlv[:0]
+		return
+	}
+	m.pcDlv = append(m.pcDlv, wcRate{now, float64(acked) * 10}) // bytes/s
+	cut := 0
+	for cut < len(m.pcDlv)-1 && now.Sub(m.pcDlv[cut].at) > wcPaceSpan {
+		cut++
+	}
+	m.pcDlv = m.pcDlv[cut:]
+	r := 0.0
+	for _, x := range m.pcDlv {
+		r = math.Max(r, x.r)
+	}
+	win := uint64(0)
+	for _, st := range m.rs {
+		if m.t >= st.start {
+			win += uint64(st.annWin)
+		}
+	}
+	// (wcPaceRate with the model's own factor)
+	v := m.cfg.paceCap * r
+	minRTT, srtt := time.Duration(f.minRTT)*time.Millisecond, time.Duration(f.srtt*float64(time.Millisecond))
+	if minRTT > 0 && srtt > 0 && srtt-minRTT <= max(wcDqMin, minRTT/10) {
+		v = math.Max(v, float64(win)/minRTT.Seconds())
+	}
+	m.pcCap = math.Max(v, wcPaceFloor) / 1000
 }
 
 func (m *wmModel) run() wmResult {

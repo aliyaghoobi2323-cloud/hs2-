@@ -79,6 +79,7 @@ type wcore struct {
 	sndSeen    bool // an extended record of the exit came (srtt != 0: an edge with a new exit); the edge leaves OFF only then
 	sndAny     bool // a record of the exit came (an old exit's too)
 	sndAnyAt   time.Time
+	sndLastAt  time.Time         // the latest record of the exit (blind: none for wcSndQuiet)
 	qSnds      [wcSndHist]wcRate // q_snd of the latest records (r: seconds), newest first
 	chgAt      time.Time         // the latest drain, cut or start: a record from before it judges no B of now
 	nfPrev     int               // n_F of the previous evaluation
@@ -342,6 +343,7 @@ var (
 	wcLossRand     = 0.0005
 	wcLossRandN    = 3
 	wcSndSpan      = 2500 * time.Millisecond // a record covers the exit's last stats tick
+	wcSndQuiet     = 2 * wcSndSpan           // no record for this long: the records stopped (blind)
 	wcRhatWin      = 10 * time.Second
 	wcRhatMinN     = 8
 	wcTauAlpha     = 0.25
@@ -828,6 +830,7 @@ func (c *wcore) step(in wcIn) wcOut {
 		if !c.sndAny {
 			c.sndAny, c.sndAnyAt = true, now
 		}
+		c.sndLastAt = now
 		if in.snd.segsOut > 0 && in.snd.retrans == 0 && in.snd.minRTT > 0 && in.snd.srtt-in.snd.minRTT <= wcDqMin {
 			c.cleanRecs++
 		} else if in.snd.segsOut > 0 || in.snd.srtt > 0 {
@@ -2415,7 +2418,21 @@ func (c *wcore) tauOK2(m wcMeas) bool {
 // probes "paid" on q_own alone and took the windows of 300/150 behind a
 // 20 ms queue to 13–31% resent, past the loss rule's lossFrac, with the
 // windows without the core at 0.05–2%).
-func (c *wcore) blind(m wcMeas) bool { return m.holey && !c.sndSeen }
+//
+// The same where the exit's records stopped coming (sndQuiet: its stats
+// stream stalled, or its replies wait behind a congested link and it is
+// being reopened, statsReopenAfter): an edge that once had them was never
+// blind again, and on 1000/100 behind 20 ms with 0.1% loss, records gone
+// from 10 to 50 s, its probes and STARTUP took B from 6 to 16 MiB on q_own
+// alone, 12-30% resent each second for 16 s (red team, round 2; base
+// 0.1%).
+func (c *wcore) blind(m wcMeas) bool { return m.holey && (!c.sndSeen || c.sndQuiet(m.at)) }
+
+// sndQuiet: no record of the exit came for wcSndQuiet (it comes every
+// ~2 s while the link moves data).
+func (c *wcore) sndQuiet(now time.Time) bool {
+	return !c.sndLastAt.IsZero() && now.Sub(c.sndLastAt) > wcSndQuiet
+}
 
 // lossTestDone resolves a drain that tested a jump of loss at a steady
 // budget, once its source has measured after it: still past its level, the
