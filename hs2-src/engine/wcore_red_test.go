@@ -351,3 +351,42 @@ func TestWcoreRedBlindOff(t *testing.T) {
 		t.Errorf("blind HOLD: %v after %d evaluations, want off", c.state, 2*wcOffAfter)
 	}
 }
+
+// wtRedIn is an interval of the HOLD core of wtHold through step: its one
+// fast stream reading at 60 MB/s, a clean socket, and (snd) the exit's record.
+func wtRedIn(now time.Time, dt time.Duration, snd wcSnd) wcIn {
+	in := wtIn(now, 1, 8*wtMiB)
+	in.streams[0].read = uint64(60e6 * dt.Seconds())
+	in.streams[0].turnMin, in.streams[0].turnLast = 105*time.Millisecond, 105*time.Millisecond
+	in.segsIn, in.oooOK, in.srtt, in.minRTT = 4000, true, 101*time.Millisecond, 100*time.Millisecond
+	in.linkBytes = in.streams[0].read
+	in.snd = snd
+	return in
+}
+
+// TestWcoreRedSettleDropsRecord (finding 2): the exit's record is the edge's
+// only unbiased loss signal and comes once per ~2 s. One that lands in the
+// settle part of a HOLD interval (each toHold, and each change of B by more
+// than wcResettle) is merged into that interval and dropped with it:
+// settled() judges loss in PROBE and STARTUP only. A record of 10% resent
+// against a level of 0.01% at the budget in force was never judged.
+func TestWcoreRedSettleDropsRecord(t *testing.T) {
+	for _, settling := range []bool{false, true} {
+		c, _ := wtHold()
+		c.lastAt, c.settling = wtT0, settling
+		lossy := wcSnd{fresh: true, srtt: 101 * time.Millisecond, minRTT: 100 * time.Millisecond, retrans: 1000, segsOut: 10000}
+		now := wtT0.Add(400 * time.Millisecond)
+		c.step(wtRedIn(now, 400*time.Millisecond, lossy))
+		judged := func() bool { return c.lossTest != wcSrcNone || c.cnt.drainLoss > 0 || c.state == wcDrain }
+		for i := 0; i < 3 && !judged(); i++ {
+			c.evalAt = time.Time{}
+			now = now.Add(400 * time.Millisecond)
+			c.step(wtRedIn(now, 400*time.Millisecond, wcSnd{}))
+		}
+		if !judged() {
+			t.Errorf("settling %v: a record of 10%% resent (level 0.01%%) was never judged: %v B %.1f MiB (from 8)", settling, c.state, float64(c.B)/wtMiB)
+		} else {
+			t.Logf("settling %v: judged: %v B %.1f MiB lossTest %d drains %d", settling, c.state, float64(c.B)/wtMiB, c.lossTest, c.cnt.drainLoss)
+		}
+	}
+}

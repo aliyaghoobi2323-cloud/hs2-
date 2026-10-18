@@ -87,6 +87,11 @@ type wcore struct {
 	holeyPrev  bool              // the previous evaluation's packets waited behind holes
 	burstHeld  bool              // B is held where a burst after the sender's PROBE_RTT fits Q_cap
 	blindN     int               // evaluations in a row that were blind (blind)
+	// sndCarry: the resends of a record of the exit that came in the settle
+	// part of a HOLD or DRAIN interval (settled judges no loss there), for
+	// the next measured interval to judge; sndCarryAt: when it came
+	sndCarry   wcSnd
+	sndCarryAt time.Time
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -605,7 +610,8 @@ type wcMeas struct {
 	qSndOK   bool
 	snd      float64 // the exit's resend share (fresh record)
 	sndOK    bool
-	sndSegs  uint64 // ... over this many segments
+	sndSegs  uint64    // ... over this many segments
+	sndAt    time.Time // when that record came (a record carried from a settle part came before at)
 	ooo      float64
 	oooOK    bool
 	spread   time.Duration
@@ -690,6 +696,17 @@ func (c *wcore) step(in wcIn) wcOut {
 		return c.out(c.acc, now, nil)
 	}
 	in, c.accOK = c.acc, false
+	carryAt := time.Time{}
+	if c.sndCarry.fresh {
+		// (its srtt is left out: notePaths took its q_snd as it came)
+		if in.snd.fresh {
+			in.snd.retrans += c.sndCarry.retrans
+			in.snd.segsOut += c.sndCarry.segsOut
+		} else {
+			in.snd = c.sndCarry
+		}
+		carryAt, c.sndCarry = c.sndCarryAt, wcSnd{}
+	}
 	stopQ := c.stopQ
 	c.stopQ = false
 	var ev []wcEvent
@@ -708,6 +725,9 @@ func (c *wcore) step(in wcIn) wcOut {
 		}
 	}
 	m := c.measure(in, dt)
+	if !carryAt.IsZero() {
+		m.sndAt = carryAt
+	}
 	c.last = m
 	if in.poolShort > 0 {
 		c.cnt.poolShort += int(in.poolShort)
@@ -748,7 +768,14 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.setB(in, m, min(c.B, c.probeFrom))
 		}
 	case c.settling:
+		st := c.state
 		c.settled(in, m, &ev)
+		if (st == wcHold || st == wcDrain) && m.sndOK {
+			// no loss is judged in their settle part: the record's
+			// resends wait for the measured part
+			c.sndCarry = wcSnd{fresh: true, retrans: in.snd.retrans, segsOut: in.snd.segsOut}
+			c.sndCarryAt = m.sndAt
+		}
 	default:
 		switch c.state {
 		case wcStartup:
@@ -1101,7 +1128,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	}
 	m.qSnd3, m.qSnd3OK = c.qSndMax(now)
 	if in.snd.fresh && in.snd.segsOut > 0 {
-		m.snd, m.sndOK, m.sndSegs = float64(in.snd.retrans)/float64(in.snd.segsOut), true, in.snd.segsOut
+		m.snd, m.sndOK, m.sndSegs, m.sndAt = float64(in.snd.retrans)/float64(in.snd.segsOut), true, in.snd.segsOut, now
 	}
 	// no standing queue past the core's own target, by a signal with no
 	// bias: the exit's record, else the link socket's own srtt
@@ -1415,7 +1442,7 @@ func (c *wcore) bSpan() (lo, hi uint64) {
 // packets that waited behind a hole, saturates once holes come every round
 // trip: it is judged only on a path that is otherwise clean.
 func (c *wcore) lossVerdict(m wcMeas, growth bool) (cong, jump bool, src wcLossSrc) {
-	if m.sndOK && !c.sndStale(m.at) && c.sndRef.past(m.snd, c.sndAbs(m)) {
+	if m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m)) {
 		_, hi := c.bSpan()
 		if growth || float64(hi) > 1.05*float64(c.sndRef.b) {
 			return true, false, wcSrcSnd
@@ -1455,7 +1482,7 @@ func (c *wcore) sndStale(now time.Time) bool {
 // congestive, with the budget they were measured at, and the random-loss
 // flag.
 func (c *wcore) noteLoss(m wcMeas) {
-	if m.sndOK && !c.sndStale(m.at) {
+	if m.sndOK && !c.sndStale(m.sndAt) {
 		if lo, hi := c.bSpan(); float64(hi) <= 1.05*float64(lo) {
 			c.sndRef.note(m.snd, hi, 0.3)
 		}
@@ -1882,7 +1909,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// on: a run of losses that keeps itself going stops only once
 		// what was held behind its holes is through
 		lossy := m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) ||
-			m.sndOK && !c.sndStale(now) && c.sndRef.past(m.snd, c.sndAbs(m))
+			m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m))
 		if c.lossDrainN++; lossy && c.lossDrainN < 3 {
 			return
 		}
