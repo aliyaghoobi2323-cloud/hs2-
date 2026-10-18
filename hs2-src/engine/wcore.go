@@ -2427,7 +2427,7 @@ type wcLinkSnap struct {
 type wcBuilder struct {
 	have            bool
 	prev            wcLinkSnap
-	tcpHave         bool   // tcpSegs, tcpOoo are the last counters TCP_INFO gave
+	tcpHave         bool // tcpSegs, tcpOoo are the last counters TCP_INFO gave
 	tcpSegs, tcpOoo uint64
 	prevS           map[uint32]wcStreamSnap
 	sndAt           time.Time
