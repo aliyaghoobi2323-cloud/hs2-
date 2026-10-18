@@ -1,0 +1,65 @@
+== lm1@100-100
+   base r1: 76.1 [0-30s 78, 30s- 76]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base r2: 76.8 [0-30s 80, 30s- 76]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base: mean 76.5 Mbit/s (median of 2), cuts 0
+   core4 r1: 78.3 [0-30s 81, 30s- 78]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=3
+   core4 r1: 76.9 [0-30s 80, 30s- 76]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=3
+   core4 r2: 76.7 [0-30s 80, 30s- 76]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4 r2: 79.0 [0-30s 80, 30s- 79]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=4
+   core4 r3: 79.6 [0-30s 82, 30s- 79]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=5
+   core4 r4: 51.3 [0-30s 54, 30s- 50]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4: mean 77.6 Mbit/s (median of 6), cuts 0
+   corep4 r1: 74.6 [0-30s 80, 30s- 73]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=3
+   corep4 r2: 74.6 [0-30s 79, 30s- 73]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   corep4: mean 74.6 Mbit/s (median of 2), cuts 0
+== lm1@300-150
+   base r1: 69.4 [0-30s 68, 30s- 70]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base r2: 71.3 [0-30s 83, 30s- 68]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base: mean 70.4 Mbit/s (median of 2), cuts 0
+   core4 r1: 187.5 [0-30s 195, 30s- 185]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=5
+   core4 r2: 194.5 [0-30s 201, 30s- 192]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=5
+   core4: mean 191.0 Mbit/s (median of 2), cuts 0
+== lm1u@100-100
+   base r1: 77.0 [0-30s 82, 30s- 76]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base r2: 73.9 [0-30s 79, 30s- 72]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base: mean 75.4 Mbit/s (median of 2), cuts 0
+   core4 r1: 76.9 [0-30s 82, 30s- 75]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4 r1: 75.7 [0-30s 79, 30s- 75]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4 r2: 76.8 [0-30s 82, 30s- 75]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4 r2: 51.5 [0-30s 56, 30s- 50]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4 r3: 75.8 [0-30s 80, 30s- 74]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4 r4: 77.2 [0-30s 83, 30s- 76]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   core4: mean 76.3 Mbit/s (median of 6), cuts 0
+   corep4 r1: 76.7 [0-30s 84, 30s- 74]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   corep4 r2: 75.8 [0-30s 83, 30s- 74]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   corep4: mean 76.2 Mbit/s (median of 2), cuts 0
+== lm1u@300-150
+   base r1: 73.0 [0-30s 69, 30s- 74]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base r2: 62.7 [0-30s 63, 30s- 63]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=0
+   base: mean 67.8 Mbit/s (median of 2), cuts 0
+   core4 r1: 179.7 [0-30s 140, 30s- 191]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=4
+   core4 r2: 193.5 [0-30s 206, 30s- 190]  links=2 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 6} core lines=6
+   core4: mean 186.6 Mbit/s (median of 2), cuts 0
+== lmi@300-150-l0.1
+   base r1: 46.5 [0-30s 46, 30s- 47]  links=5 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 3} core lines=0
+        int at 15s: on the download's link False, links 8, download link pressed False, lat p50 154.4 p99 177.8 n 472
+        int at 30s: on the download's link False, links 8, download link pressed True, lat p50 154.4 p99 179.6 n 378
+        int at 45s: on the download's link False, links 8, download link pressed True, lat p50 154.3 p99 187 n 281
+        int at 60s: on the download's link False, links 5, download link pressed True, lat p50 154.3 p99 348.8 n 183
+   base r2: 52.8 [0-30s 51, 30s- 53]  links=5 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 3} core lines=0
+        int at 15s: on the download's link False, links 8, download link pressed False, lat p50 154.9 p99 305.5 n 465
+        int at 30s: on the download's link False, links 8, download link pressed False, lat p50 154.9 p99 170.3 n 378
+        int at 45s: on the download's link False, links 8, download link pressed False, lat p50 154.8 p99 350.6 n 277
+        int at 60s: on the download's link False, links 5, download link pressed False, lat p50 154.8 p99 168.9 n 186
+   base: mean 49.6 Mbit/s (median of 2), cuts 0
+   core4 r1: 76.3 [0-30s 84, 30s- 72]  links=5 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 3} core lines=5
+        int at 15s: on the download's link False, links 8, download link pressed False, lat p50 155.4 p99 200.4 n 459
+        int at 30s: on the download's link False, links 8, download link pressed False, lat p50 155.2 p99 363.6 n 360
+        int at 45s: on the download's link False, links 8, download link pressed False, lat p50 155 p99 357.1 n 272
+        int at 60s: on the download's link False, links 5, download link pressed False, lat p50 155.1 p99 530.7 n 175
+   core4 r2: 90.0 [0-30s 97, 30s- 86]  links=5 verdicts={'link down (idle links reaped to Z5_LM_MIN)': 3} core lines=5
+        int at 15s: on the download's link False, links 8, download link pressed False, lat p50 155.9 p99 338.3 n 451
+        int at 30s: on the download's link False, links 8, download link pressed False, lat p50 156.1 p99 192.3 n 369
+        int at 45s: on the download's link False, links 8, download link pressed False, lat p50 156.3 p99 212.1 n 273
+        int at 60s: on the download's link False, links 5, download link pressed False, lat p50 155.8 p99 195.1 n 181
+   core4: mean 83.1 Mbit/s (median of 2), cuts 0

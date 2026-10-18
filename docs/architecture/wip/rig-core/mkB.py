@@ -2,7 +2,7 @@
 # variants' order rotated per repetition; a core run gets its own window core trace file.
 # scen syntax: kind[+ENV=V...]@dn-rtt[-l<loss%>][-up<mbit>][-q<ms>]
 import sys
-S = "/tmp/claude-0/-home-user-hs2-/48e4aec7-ad72-5cc1-b09e-d3366fa010b6/scratchpad/z11"
+S = "/tmp/claude-0/-home-user-hs2-/48e4aec7-ad72-5cc1-b09e-d3366fa010b6/scratchpad/z12"
 VAR = {
  "base": ("base2", ""),
  "core": ("core2", "Z5_POOL=128"),
