@@ -141,12 +141,13 @@ type wmCfg struct {
 	apProbing func(t time.Duration) bool
 	trace     bool
 	// red team: exit runs the core as the exit's (uploads: no record of the
-	// sender, no control ping); lossAt changes the path's random loss at
-	// given times
+	// sender, no control ping), and only with WcoreUpload (the lab knob):
+	// without it the exit has no core, as the runner's; lossAt changes the
+	// path's random loss at given times
 	exit   bool
 	lossAt []wmChange
 	// oldExit: the edge's core with an exit whose record has no TCP_INFO
-	// in it (a 64-byte record: no q_snd, no resend share)
+	// in it (a 64-byte record: no q_snd, no resend share): it stays OFF
 	oldExit bool
 	// reorder, reorderMs: a packet of the link's connection is held this
 	// many ms past its turn with this probability (multipath, link
@@ -852,7 +853,9 @@ func newModel(cfg wmCfg) *wmModel {
 			rcvWin: wmInitWin, annWin: wmInitWin, limHigh: wmInitWin, minUnread: math.MaxInt64})
 		m.ss = append(m.ss, &wmSnd{limit: wmInitWin, src: s.src, start: s.start.Milliseconds()})
 	}
-	if cfg.mode == wmCore {
+	// (the exit's end gets a core only with the lab knob WcoreUpload, as the
+	// runner's newWcLink: without it the exit variant is base)
+	if cfg.mode == wmCore && wcCoreOn(cfg.exit) {
 		side := wcEdge
 		if cfg.exit {
 			side = wcExit

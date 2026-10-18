@@ -274,9 +274,11 @@ func applyTuning() {
 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
 	num("HS2_TUNE_SENDGATE", &engine.SendGateRate)
 	// The window core (engine/wcore_run.go): 0 turns it off (the field safety
-	// switch); the queue targets in ms; stage 2; and, lab only, a trace file
-	// and fixed windows in place of the controller.
+	// switch); the queue targets in ms; stage 2; and, lab only, the exit's
+	// core for uploads (off until step 3), a trace file and fixed windows in
+	// place of the controller.
 	num("HS2_TUNE_WCORE", &engine.Wcore)
+	num("HS2_TUNE_WCORE_UPLOAD", &engine.WcoreUpload)
 	num("HS2_TUNE_WCORE_QTARGET", &engine.WcoreQTarget)
 	num("HS2_TUNE_WCORE_PROBEQ", &engine.WcoreProbeQ)
 	num("HS2_TUNE_WCORE_STAGE", &engine.WcoreStage)

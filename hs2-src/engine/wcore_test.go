@@ -379,9 +379,12 @@ func TestWcoreRhat(t *testing.T) {
 }
 
 // off: steady fast streams for two intervals start STARTUP at 1.5× their
-// windows (bPub starts at the windows in force); anything unsteady waits.
+// windows (bPub starts at the windows in force); anything unsteady waits,
+// and the edge waits for the exit's extended record for as long as it
+// takes.
 func TestWcoreOff(t *testing.T) {
-	rec := func(c *wcore) { c.sndAny, c.sndAnyAt = true, wtT0.Add(-time.Minute) }
+	// (rec: a new exit's records came, with the sender's fields in them)
+	rec := func(c *wcore) { c.sndSeen, c.sndAny, c.sndAnyAt = true, true, wtT0.Add(-time.Minute) }
 	q3 := func(m *wcMeas, d time.Duration) { m.qSnd, m.qSndOK, m.qSnd3, m.qSnd3OK = d, true, d, true }
 	for _, tc := range []struct {
 		name  string
@@ -394,7 +397,10 @@ func TestWcoreOff(t *testing.T) {
 		{"one steady interval", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c) }, 1, wcOff},
 		{"two", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c) }, 2, wcStartup},
 		{"the edge waits for the exit's first record", 1, false, nil, 3, wcOff},
-		{"... not for ever", 1, false, nil, wcOffWait, wcStartup},
+		{"... for as long as the link lives", 1, false, nil, 100, wcOff},
+		{"an old exit's records (no sender's fields): OFF for good", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			c.sndAny, c.sndAnyAt = true, wtT0.Add(-time.Minute)
+		}, 100, wcOff},
 		{"the autopilot probes the pool (freeze)", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); in.apProbing = true }, 3, wcOff},
 		{"windows still moving", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); m.wPrev = 0.7 * m.wF }, 3, wcOff},
 		{"no fast stream", 1, false, func(c *wcore, in *wcIn, m *wcMeas) { rec(c); m.f = nil }, 3, wcOff},

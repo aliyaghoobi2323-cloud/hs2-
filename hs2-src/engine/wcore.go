@@ -10,8 +10,10 @@ import (
 
 // wcore is the pure decision core of the window core (Phase Z5,
 // docs/architecture/WINDOW_CORE.fa.md): one per link and per direction its
-// end receives (the edge's downloads, the exit's uploads). A measurement
-// interval in, the link's window budget and each fast stream's ceiling out.
+// end receives (the edge's downloads; the exit's uploads only with the lab
+// knob WcoreUpload, until step 3). A measurement interval in, the link's
+// window budget and each fast stream's ceiling out. The edge's core leaves
+// OFF only once the exit sent an extended record (srtt != 0, sndSeen).
 // It holds no locks, opens no sockets and never reads the clock (time and
 // randomness come in through wcIn and c.rnd), so its whole behaviour is
 // exercised by the link model in wcore_model_test.go; the actuator is the
@@ -74,7 +76,7 @@ type wcore struct {
 	lossDrainN int
 	cuts       int  // halvings for loss between evaluations
 	offN       int  // OFF: intervals in a row with steady fast streams
-	sndSeen    bool // the exit sends its record (an edge with a new exit)
+	sndSeen    bool // an extended record of the exit came (srtt != 0: an edge with a new exit); the edge leaves OFF only then
 	sndAny     bool // a record of the exit came (an old exit's too)
 	sndAnyAt   time.Time
 	qSnds      [wcSndHist]wcRate // q_snd of the latest records (r: seconds), newest first
@@ -375,7 +377,6 @@ var (
 	wcRampShare = 1.0 / 8
 	wcRampTick  = 100 * time.Millisecond
 	wcCapBack   = 0.9              // past a budget that brought losses of our own, HOLD stays at this share of it
-	wcOffWait   = 8                // OFF waits this many intervals at most for the exit's first loss level
 	wcCapStale  = 15 * time.Second // a cap confirmed by losses this recently is no sign of a faster path
 	// wcDqOwn: where data waits behind holes (Rcv_ooopack past wcOooClean),
 	// the window turnaround holds that wait (its slope under 0.1% loss was
@@ -832,8 +833,10 @@ func (c *wcore) step(in wcIn) wcOut {
 		} else if in.snd.segsOut > 0 || in.snd.srtt > 0 {
 			c.cleanRecs = 0
 		}
-		if in.snd.srtt > 0 || in.snd.segsOut > 0 {
-			c.sndSeen = true // (an old exit's record has no TCP_INFO in it)
+		if in.snd.srtt > 0 {
+			// the sender's fields of a 96-byte record (an old exit's 64
+			// bytes, or an exit with no TCP_INFO, read srtt 0 for good)
+			c.sndSeen = true
 		}
 	}
 	m := c.measure(in, dt)
@@ -1723,8 +1726,14 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// exit's first record (its queue tells whether they are past the knee
 	// already) and its first resend share with them
 	// (a resend share takes two records: the first sets the base of the
-	// next; wait for it up to two record spans after the first came)
-	if c.offN++; c.offN < 2 || c.cfg.side == wcEdge && !c.sndAny && c.offN < wcOffWait ||
+	// next; wait for it up to two record spans after the first came).
+	// The edge waits for an extended record (sndSeen) for as long as the
+	// link lives: an old exit (64 bytes, or srtt 0 for good) leaves the
+	// windows as without the core. Without the sender's record the core
+	// cannot see a policer's signature, and its growth lifts the exit's BBR
+	// pacing past the policer for good (red team, round 1: 8 of 96 model
+	// runs behind a policer at 60% of the path drained the link).
+	if c.offN++; c.offN < 2 || c.cfg.side == wcEdge && !c.sndSeen ||
 		c.sndSeen && !c.sndRef.ok && in.now.Sub(c.sndAnyAt) < 2*wcSndSpan {
 		return
 	}
@@ -1778,10 +1787,11 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 //     packets for 86 → 90 Mbit/s;
 //   - the exit's records show over 1% resent;
 //   - with no record to tell a queue from data held behind holes (the
-//     exit's side, an old exit): the windows hold wcPastKnee times what
-//     their rate needs (R_F·T_base + H_step) or more. (Not on the edge with
-//     a record: under random loss the windows hold that much behind holes,
-//     with no queue at the exit, and that is where the core gains most.)
+//     exit's side; an edge with an old exit never leaves OFF, off()): the
+//     windows hold wcPastKnee times what their rate needs (R_F·T_base +
+//     H_step) or more. (Not on the edge with a record: under random loss
+//     the windows hold that much behind holes, with no queue at the exit,
+//     and that is where the core gains most.)
 func (c *wcore) harm(m wcMeas) bool {
 	switch {
 	case m.qSnd3OK && m.qSnd3 > c.dq():
@@ -2350,7 +2360,8 @@ func (c *wcore) tauOK2(m wcMeas) bool {
 }
 
 // blind: data waits behind holes and no record of the sender's socket
-// comes (the exit's core for uploads; the edge's with an old exit). There
+// comes (the exit's core for uploads, WcoreUpload; an edge with an old exit
+// never leaves OFF since the decision of step 1, off()). There
 // Rcv_ooopack is no congestion signal (it reads the holes, ours or the
 // path's: a run of losses of our own keeps its level past wcOooClean), no
 // resend share tells them apart, and the only queue signal, the link

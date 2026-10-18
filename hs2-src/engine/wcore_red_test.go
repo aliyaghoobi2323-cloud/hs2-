@@ -53,6 +53,18 @@ func wmLossStreak(v []float64, frac float64) (streak int, worst float64) {
 	return streak, worst
 }
 
+// wmRedUpload sets the lab knob WcoreUpload for a red-team sweep run with
+// HS2_WCORE_RED_UPLOAD=1, so its "up" side runs the exit's core; by default
+// (step 1) the exit has none and that side is base (WINDOW_CORE §2.2).
+func wmRedUpload(t *testing.T) {
+	if os.Getenv("HS2_WCORE_RED_UPLOAD") != "1" {
+		return
+	}
+	up := WcoreUpload
+	WcoreUpload = 1
+	t.Cleanup(func() { WcoreUpload = up })
+}
+
 func wmLossNote(r wmResult) string {
 	var parts []string
 	for _, w := range []int{2, 3} {
@@ -66,10 +78,12 @@ func wmLossNote(r wmResult) string {
 // degradeStreak samples in a row) drain a link the core runs on where it
 // would not drain the same link without the core? Report with
 // HS2_WCORE_RED=1; the scenarios that fail it are their own tests below.
+// The "up" side is base unless HS2_WCORE_RED_UPLOAD=1 (wmRedUpload).
 func TestWcoreRedLossRuleSweep(t *testing.T) {
 	if os.Getenv("HS2_WCORE_RED") != "1" {
 		t.Skip("HS2_WCORE_RED=1")
 	}
+	wmRedUpload(t)
 	type sc struct {
 		c wmCfg
 	}
@@ -177,6 +191,12 @@ func TestWcoreRedTrace(t *testing.T) {
 	if len(p) > 7 {
 		fmt.Sscan(p[7], &n)
 	}
+	if exit == 1 {
+		// (the exit's core runs only with the lab knob)
+		up := WcoreUpload
+		WcoreUpload = 1
+		t.Cleanup(func() { WcoreUpload = up })
+	}
 	c := wmPath(rate, time.Duration(rtt)*time.Millisecond, time.Duration(q)*time.Millisecond)
 	c.loss, c.seed, c.exit, c.policer, c.trace, c.dur = loss/100, uint64(seed), exit == 1, pol*wmMbit, true, 40*time.Second
 	if rtt >= 1000 {
@@ -202,11 +222,15 @@ func TestWcoreRedTrace(t *testing.T) {
 // TestWcoreRedGrid: a grid of paths, each side, base against the core: how
 // often the core takes a link the loss rule would leave alone into
 // degradeStreak windows past lossFrac (HS2_WCORE_RED=1; HS2_WCORE_RED_SIDE
-// up|dn|both).
+// up|dn|old|both). Since step 1's decision the "up" side (the exit's core)
+// and "old" (an edge with an old exit) are base: the former runs the core
+// only with HS2_WCORE_RED_UPLOAD=1 (wmRedUpload), the latter never leaves
+// OFF (before: 8 of 96 runs each drained behind a policer at 60%).
 func TestWcoreRedGrid(t *testing.T) {
 	if os.Getenv("HS2_WCORE_RED") != "1" {
 		t.Skip("HS2_WCORE_RED=1")
 	}
+	wmRedUpload(t)
 	sides := []bool{false, true}
 	old := false
 	switch os.Getenv("HS2_WCORE_RED_SIDE") {
@@ -292,8 +316,12 @@ func wmDrainedByCore(b, k wmResult) bool {
 // probes "paid" and it grew the windows into a queue they overflowed, for
 // as long as it ran: resends past lossFrac for degradeStreak samples in a
 // row, which the loss rule drains the link for, where the windows without
-// the core resent 0.05-2%.
+// the core resent 0.05-2%. Since step 1's decision the exit's core runs
+// only with the lab knob (WcoreUpload, set here for its cases) and an edge
+// with an old exit stays OFF: its cases are base.
 func TestWcoreRedBlindHoley(t *testing.T) {
+	up := WcoreUpload
+	t.Cleanup(func() { WcoreUpload = up })
 	cases := []struct {
 		rate      float64
 		rtt, q    int
@@ -312,12 +340,18 @@ func TestWcoreRedBlindHoley(t *testing.T) {
 	for _, x := range cases {
 		c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
 		c.loss, c.seed, c.exit, c.oldExit, c.dur = x.loss, x.seed, x.exit, x.old, 40*time.Second
+		WcoreUpload = 0
+		if x.exit {
+			WcoreUpload = 1
+		}
 		b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
 		side := map[bool]string{true: "up", false: "dn-old"}[x.exit]
 		msg := fmt.Sprintf("%s %s l%g s%d: base %.0f Mbit resent %.2f%% [%s]; core %.0f Mbit resent %.2f%% [%s] drains %v probes %v",
 			side, c.name, 100*x.loss, x.seed, b.mbit, 100*b.resend, wmLossNote(b), k.mbit, 100*k.resend, wmLossNote(k), k.drains, k.probes)
 		if wmDrainedByCore(b, k) {
 			t.Errorf("the loss rule would drain the link under the core: %s", msg)
+		} else if x.old && (k.mbit != b.mbit || k.resend != b.resend || k.peakB != 0) {
+			t.Errorf("an edge with an old exit is not base: %s", msg)
 		} else {
 			t.Log(msg)
 		}

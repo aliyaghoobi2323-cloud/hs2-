@@ -17,15 +17,19 @@ import (
 
 // The window core's runner (WINDOW_CORE §2.2, §2.5, §7).
 //
-// Every smux session that can grow a window past NeedStreamBuffer gets a
-// core for the direction its end receives (the edge's downloads, the exit's
-// uploads), registered with wcores where newSession registers the session
-// with the wedge guard. One goroutine wakes every wcRampTick (100 ms) and
-// steps each link whose turn has come (wcOut.next): one TCP_INFO of the
-// link's own socket, one CoreSnapshot of its session (the runner is the
-// session's only caller: a snapshot restarts the turnaround samples), the
-// window pool's free bytes and, on the edge, the exit's latest stats
-// record, the control ping's round trips and the autopilot's probing flag.
+// Every edge's smux session that can grow a window past NeedStreamBuffer
+// gets a core for the direction it receives (its downloads), registered with
+// wcores where newSession registers the session with the wedge guard. Its
+// core leaves OFF only once the exit sent an extended stats record (srtt !=
+// 0, wcore.sndSeen): with an old exit it stays OFF for the link's life. The
+// exit's sessions get one for their uploads only with WcoreUpload (a lab
+// knob until step 3, WINDOW_CORE §11). One goroutine wakes every
+// wcRampTick (100 ms) and steps each link whose turn has come (wcOut.next):
+// one TCP_INFO of the link's own socket, one CoreSnapshot of its session
+// (the runner is the session's only caller: a snapshot restarts the
+// turnaround samples), the window pool's free bytes and, on the edge, the
+// exit's latest stats record, the control ping's round trips and the
+// autopilot's probing flag.
 // wcBuilder turns them into wcIn, the pure controller (wcore.step) decides,
 // and the runner applies it: each stream's ceiling by id, none for a stream
 // the snapshot left out, and the session's turnaround reference. A link
@@ -46,6 +50,14 @@ var (
 	// window stays within NeedStreamBuffer as without it (the field safety
 	// switch).
 	Wcore = 1
+	// WcoreUpload 1 gives the exit's sessions a core for their uploads
+	// too (lab only, off by default, until step 3 sends the exit a record
+	// of the edge's socket). The exit's core has no record of the sender:
+	// it cannot see a policer's signature, and its growth lifts the edge's
+	// BBR pacing past the policer for good (app-limited samples never lower
+	// BBR's max-bw filter): behind a policer at 60% of the path 8 of 96 of
+	// the red team's model runs drained the link (WINDOW_CORE §2.2, §8.1).
+	WcoreUpload = 0
 	// WcoreStage 2 lets ceilings go below NeedStreamBuffer once the core
 	// found the path full (§4.4).
 	WcoreStage = 1
@@ -70,8 +82,9 @@ var (
 	// STARTUP for good) sends each window update's credit, and after its
 	// PROBE_RTT the whole window, at 3.9 times the path's rate: on a shallow
 	// queue that burst is the loss the receiver's window core cannot prevent.
-	// With WcorePaceCap > 0 a link is registered even with Wcore 0 (the
-	// windows as without the core, the sender's pace capped).
+	// With WcorePaceCap > 0 a link is registered even with Wcore 0, and the
+	// exit's without WcoreUpload (the windows as without the core, the
+	// sender's pace capped).
 	WcorePaceCap = 0.0
 	// WcoreBurstShare (> 0): wcBurstShare (B held where a burst after the
 	// sender's PROBE_RTT fits Q_cap); lab knob.
@@ -122,7 +135,7 @@ type wcLink struct {
 	side  wcSide
 	fixed uint32 // WcoreFixedWin
 	frame uint32 // smux MaxFrameSize (the hit gap)
-	off   bool   // Wcore 0: registered for the pacing cap only
+	off   bool   // no core (Wcore 0, the exit's without WcoreUpload): registered for the pacing cap only
 	set   *wcSet // the registry that steps it
 	name  atomic.Pointer[string]
 	// ap is the edge's LinkManager's apProbing (set when it adopts the link)
@@ -262,7 +275,8 @@ func setWcoreLog(logf func(string, ...any)) {
 
 // add gives sess a window core if the window core is on and its config can
 // grow a window past NeedStreamBuffer (an adaptive window and a pool), and
-// returns it (nil: none). server is the exit's end (it receives uploads).
+// returns it (nil: none). server is the exit's end (it receives uploads):
+// it gets a core only with WcoreUpload.
 func (ws *wcSet) add(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *linkMeter, server bool, remote net.Addr) *wcLink {
 	l := newWcLink(sess, cfg, tcp, mtr, server, remote)
 	if l == nil {
@@ -288,10 +302,19 @@ func (ws *wcSet) put(l *wcLink) {
 	ws.mu.Unlock()
 }
 
+// wcCoreOn says whether a session's end gets a core (more than the pacing
+// cap's registration): the window core is on and, on the exit's end
+// (server: it receives uploads), WcoreUpload too.
+func wcCoreOn(server bool) bool {
+	return Wcore != 0 && (!server || WcoreUpload != 0)
+}
+
 // newWcLink is the core of one session, not registered (nil: the session
-// gets none).
+// gets none). The exit's end (server) gets none without WcoreUpload: only
+// the pacing cap's registration if that is on.
 func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *linkMeter, server bool, remote net.Addr) *wcLink {
-	if Wcore == 0 && WcorePaceCap <= 0 || cfg.NeedStreamBuffer <= 0 || cfg.MinStreamBuffer <= 0 || cfg.WindowPool == nil ||
+	off := !wcCoreOn(server)
+	if off && WcorePaceCap <= 0 || cfg.NeedStreamBuffer <= 0 || cfg.MinStreamBuffer <= 0 || cfg.WindowPool == nil ||
 		cfg.NeedStreamBuffer >= cfg.MaxStreamBuffer {
 		return nil
 	}
@@ -304,7 +327,7 @@ func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *link
 	} else {
 		name = "link"
 	}
-	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side, frame: uint32(cfg.MaxFrameSize), off: Wcore == 0,
+	l := &wcLink{sess: sess, tcp: tcp, mtr: mtr, pool: cfg.WindowPool, side: side, frame: uint32(cfg.MaxFrameSize), off: off,
 		ceils: map[uint32]uint32{}, sampled: map[uint32]bool{}, ceiled: map[uint32]*smux.Stream{},
 		rates: map[uint32]float64{}, gaps: map[uint32]time.Duration{}, gapSet: map[uint32]time.Duration{}}
 	if WcoreFixedWin > 0 {

@@ -66,6 +66,11 @@ func TestWcoreFixOooSupportByLength(t *testing.T) {
 	}
 	srv, _ := smux.Server(sconn, newSmuxConfig())
 	t.Cleanup(func() { cli.Close(); srv.Close() })
+	// (the exit's core, whose loss signal this is, runs only with the lab
+	// knob until step 3)
+	up := WcoreUpload
+	WcoreUpload = 1
+	t.Cleanup(func() { WcoreUpload = up })
 	l := newWcLink(cli, cfg, edge, nil, true, nil)
 	if s := l.snap(time.Now()); s.tcpNone || s.oooOK || s.minRTT == 0 {
 		t.Fatalf("snapshot of a socket on a kernel before 5.4: tcpNone %v oooOK %v min_rtt %v, want the socket read and oooOK false", s.tcpNone, s.oooOK, s.minRTT)

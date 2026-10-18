@@ -215,7 +215,12 @@ carries) takes `HS2_TUNE_WCORE=0` (off: every window stays within the need, as
 before; also the field safety switch), `HS2_TUNE_WCORE_QTARGET` and
 `HS2_TUNE_WCORE_PROBEQ` (ms of standing and probing queue),
 `HS2_TUNE_WCORE_STAGE=2` (ceilings below the need once the path is full) and,
-for the lab only, `HS2_TUNE_WCORE_TRACE=<file>` (one JSON line per link per
+for the lab only, `HS2_TUNE_WCORE_UPLOAD=1` (the exit's core for its uploads
+too; off by default until the edge sends the exit a record of its own socket:
+without one that core cannot see a policer, and the edge's download core
+likewise starts only once the exit's stats record carries the exit's socket,
+so an old exit leaves the windows as without the core),
+`HS2_TUNE_WCORE_TRACE=<file>` (one JSON line per link per
 evaluation), `HS2_TUNE_WCORE_FIXEDWIN=<bytes>` (every large stream held at
 that window instead of the core's decision, still traced), and two
 experiments, off by default: `HS2_TUNE_WCORE_PACECAP=<x>` (each end caps its
