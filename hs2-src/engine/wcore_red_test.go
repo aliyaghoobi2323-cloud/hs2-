@@ -518,3 +518,32 @@ func TestWcoreRedApTrace(t *testing.T) {
 	t.Log(r)
 }
 
+// TestWcoreRedApProbingFreeze (finding 3): while the autopilot probes the
+// pool size (apProbing) the core starts no PROBE and no STARTUP, so its
+// budget stays within what was shown to pay; it also held every window's
+// growth (growOK false), so a drain, a cut (the sender's PROBE_RTT burst) or
+// a refresh in the spell kept the windows down for all of it: the link
+// carried 16-26% of what it did without the spell (1000/100, 1000/150 behind
+// 50 ms), which is what the autopilot measured its probe against.
+func TestWcoreRedApProbingFreeze(t *testing.T) {
+	for _, x := range []struct {
+		rate float64
+		rtt  int
+		seed uint64
+	}{{1000, 100, 2}, {1000, 100, 3}, {1000, 150, 2}, {300, 150, 2}} {
+		c := wmPath(x.rate, wmMS(x.rtt), 50*time.Millisecond)
+		c.seed, c.dur, c.mode = x.seed, 45*time.Second, wmCore
+		m0 := newModel(c)
+		r0 := m0.run()
+		c.apProbing = func(at time.Duration) bool { return at >= 15*time.Second && at < 35*time.Second }
+		m1 := newModel(c)
+		r1 := m1.run()
+		with, without := wmMbitOver(r1, m1, 15*time.Second, 35*time.Second), wmMbitOver(r0, m0, 15*time.Second, 35*time.Second)
+		msg := fmt.Sprintf("%s s%d: %.0f Mbit/s while the autopilot probed, %.0f without", c.name, x.seed, with, without)
+		if with < 0.7*without {
+			t.Errorf("%s", msg)
+		} else {
+			t.Log(msg)
+		}
+	}
+}

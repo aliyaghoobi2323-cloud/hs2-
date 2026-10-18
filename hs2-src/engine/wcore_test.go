@@ -752,7 +752,7 @@ func TestWcoreOut(t *testing.T) {
 		{"stage 1: at need or below is no ceiling", 1, wcHold, 4 * wtMiB, false, false, []uint32{0, 0, 0}, true, false},
 		{"stage 2, path full: below need too", 2, wcHold, 3 * wtMiB, true, false, []uint32{3 * wtMiB / 2, 3 * wtMiB / 2, 0}, true, true},
 		{"DRAIN: no growth", 1, wcDrain, 12 * wtMiB, false, false, []uint32{6 * wtMiB, 6 * wtMiB, 0}, false, true},
-		{"the autopilot probes the pool: no growth", 1, wcHold, 12 * wtMiB, false, true, []uint32{6 * wtMiB, 6 * wtMiB, 0}, false, true},
+		{"the autopilot probes the pool: back up to the budget (no budget past it: step)", 1, wcHold, 12 * wtMiB, false, true, []uint32{6 * wtMiB, 6 * wtMiB, 0}, true, true},
 	} {
 		c := wtCore(tc.stage)
 		in := wtIn(wtT0, 3, 4*wtMiB)

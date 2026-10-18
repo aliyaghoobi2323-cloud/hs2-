@@ -2083,7 +2083,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.probeAt = now
 	}
 	hold := c.bHold(now, m)
-	if !now.Before(c.refreshAt) && c.holdN >= 2 && !testing && now.Before(c.probeAt) {
+	if !now.Before(c.refreshAt) && c.holdN >= 2 && !testing && now.Before(c.probeAt) && !in.apProbing {
 		c.B = hold
 		c.refresh(in, m)
 		return
@@ -2350,7 +2350,12 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	if any {
 		o.turnRef = c.turnMins.min(now, wcTurnWin) + c.qRef
 		o.qBrake = max(c.probeQ(now), c.dq()) + 2*c.spread
-		o.growOK = c.state != wcDrain && !in.apProbing && c.parkHold == 0
+		// (not held while the autopilot probes the pool size: its freeze is
+		// no PROBE and no STARTUP, so B stays within what was shown to pay,
+		// bGood; a growth brake for the spell kept each drain, cut or
+		// refresh of it for the whole spell: 800 → 160 Mbit/s on 1000/100
+		// in the model, and the autopilot measured that)
+		o.growOK = c.state != wcDrain && c.parkHold == 0
 	}
 	return o
 }
