@@ -1,0 +1,30 @@
+== compat -ceil 16 (rtt 150 ms, 300 Mbit/s, 64 MiB) 02:39:59
+core -> upstream v1.5.24         93.2 Mbit/s (2 MiB/RTT: 111.8)  intact  pool back true
+core -> hs2 base d70ff19         93.1 Mbit/s (2 MiB/RTT: 111.8)  intact  pool back true
+upstream v1.5.24 -> core        260.5 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> core +pause  212.9 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)  15.1 MiB  borrows 0  pool back true
+hs2 base d70ff19 -> core        260.4 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 base d70ff19 -> core +pause  213.9 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)  15.1 MiB  borrows 0  pool back true
+core -> core                    260.6 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+core -> core +pause             213.4 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)  15.1 MiB  borrows 0  pool back true
+exit 0
+== compat -ceil 0 (rtt 150 ms, 300 Mbit/s, 64 MiB) 02:40:52
+core -> upstream v1.5.24         93.2 Mbit/s (2 MiB/RTT: 111.8)  intact  pool back true
+core -> hs2 base d70ff19         93.2 Mbit/s (2 MiB/RTT: 111.8)  intact  pool back true
+upstream v1.5.24 -> core         93.1 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax   2.0 MiB  extraMax   0.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> core +pause   92.5 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax   2.0 MiB  extraMax   0.0 MiB  heldMax(pause)   1.1 MiB  borrows 0  pool back true
+hs2 base d70ff19 -> core         93.2 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax   2.0 MiB  extraMax   0.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 base d70ff19 -> core +pause   92.4 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax   2.0 MiB  extraMax   0.0 MiB  heldMax(pause)   1.1 MiB  borrows 0  pool back true
+core -> core                     93.2 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax   2.0 MiB  extraMax   0.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+core -> core +pause              92.6 Mbit/s (2 MiB/RTT: 111.8)  intact  winMax   2.0 MiB  extraMax   0.0 MiB  heldMax(pause)   1.1 MiB  borrows 0  pool back true
+exit 0
+== compat -ceil 16 -rtt 100ms -mbit 1000 -mb 128 02:42:05
+core -> upstream v1.5.24        152.9 Mbit/s (2 MiB/RTT: 167.8)  intact  pool back true
+core -> hs2 base d70ff19        152.9 Mbit/s (2 MiB/RTT: 167.8)  intact  pool back true
+upstream v1.5.24 -> core        820.6 Mbit/s (2 MiB/RTT: 167.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+upstream v1.5.24 -> core +pause  461.5 Mbit/s (2 MiB/RTT: 167.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)  15.1 MiB  borrows 0  pool back true
+hs2 base d70ff19 -> core        820.4 Mbit/s (2 MiB/RTT: 167.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+hs2 base d70ff19 -> core +pause  462.1 Mbit/s (2 MiB/RTT: 167.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)  15.1 MiB  borrows 0  pool back true
+core -> core                    820.8 Mbit/s (2 MiB/RTT: 167.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)   0.0 MiB  borrows 0  pool back true
+core -> core +pause             461.8 Mbit/s (2 MiB/RTT: 167.8)  intact  winMax  16.0 MiB  extraMax  14.0 MiB  heldMax(pause)  15.1 MiB  borrows 0  pool back true
+exit 0
