@@ -300,7 +300,7 @@ type managedLink struct {
 	rate10       float64 // mean rate over the last 5 ticks
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
 	grown        float64 // of rate, what its window core's grown windows carry (grownRate)
-	grownSus     float64 // the most grown of the ticks sustained is taken over
+	grownSus     float64 // sustained less the least that windows within NeedStreamBuffer carried over the same ticks
 	flowing      int     // user streams really moving data
 	open         int     // user streams open
 	recent       int     // user streams that moved a byte within drainIdle
@@ -2068,7 +2068,19 @@ func (m *LinkManager) sampleHealth() {
 			for _, d := range ml.doms[1:] {
 				ml.sustained = min(ml.sustained, d)
 			}
-			ml.grownSus = slices.Max(ml.growns[:])
+			// the capacity for ordinary connections is the least that
+			// windows within NeedStreamBuffer carried over these ticks, each
+			// tick's rate less its own grown: the least rate less the most
+			// grown took the core's swings for a slower link (a tick of a
+			// drain and a tick of a probe: 250 − 232 = 18 Mbit/s where the
+			// windows of need carried 168), and the pool for that many more
+			// links (red team, round 3, finding 3: 4 links serving against 2
+			// for the same load, 6 against 2 in skmany)
+			base := math.Inf(1)
+			for k, d := range ml.doms {
+				base = min(base, max(0, d-ml.growns[k]))
+			}
+			ml.grownSus = max(0, ml.sustained-base)
 		}
 		if ml.goodput == 0 {
 			ml.goodput = ml.rate

@@ -203,12 +203,16 @@ type apLink struct {
 	rate10       float64 // mean rate over the last 5 ticks
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
 	grown        float64 // of rate, what its window core's windows past NeedStreamBuffer carry
-	// grownSus: the most grown of the ticks sustained is taken over. The
-	// capacity for ordinary connections leaves that out: sustained is the
-	// least of those ticks and grown only the latest one, and a tick whose
-	// core read little grown (the sender's PROBE_RTT, a drain) took the
+	// grownSus: sustained less the least that windows within
+	// NeedStreamBuffer carried over the ticks sustained is taken over (each
+	// tick's rate less its own grown). The capacity for ordinary connections
+	// is sustained less grownSus: with grown only the latest tick's, a tick
+	// whose core read little grown (the sender's PROBE_RTT, a drain) took the
 	// whole rate as capacity for capWindow (red team, round 1: 50 → 300
-	// Mbit/s, the pool sized 6× too small)
+	// Mbit/s, the pool sized 6× too small); with the most grown of the ticks
+	// against the least rate, the core's swings between a probe and a drain
+	// read as a link of a few Mbit/s and sized the pool too large (red team,
+	// round 3, finding 3)
 	grownSus float64
 	flowing  int // user streams really moving data
 	open     int // user streams open
@@ -368,7 +372,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 			S++
 			if l.pressed {
 				P++
-				if v := l.sustained - max(l.grown, l.grownSus); v > 0 {
+				if v := l.sustained - l.grownSus; v > 0 {
 					a.noteCap(now, l.id, v)
 				}
 			}

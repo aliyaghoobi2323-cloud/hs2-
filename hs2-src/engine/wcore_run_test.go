@@ -959,7 +959,10 @@ func TestAutopilotLeavesGrownOut(t *testing.T) {
 			for i := 0; i < 8; i++ {
 				l := apLink{id: i, serving: true, rate: 100 * mbit, sustained: 100 * mbit, flowing: 1, open: 1}
 				if i < 6 {
-					l.pressed, l.rate, l.sustained, l.grown = true, 300*mbit, 300*mbit, grown
+					// (grownSus as the LinkManager hands it over steady
+					// ticks: sustained less the least the windows of need
+					// carried, here grown)
+					l.pressed, l.rate, l.sustained, l.grown, l.grownSus = true, 300*mbit, 300*mbit, grown, grown
 				}
 				s.links = append(s.links, l)
 				s.G += l.rate
