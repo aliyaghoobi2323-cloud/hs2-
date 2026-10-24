@@ -1726,7 +1726,14 @@ var wcShareSlack = 1.2
 // fairShare is, with other cores on the peer and a queue that stands on the
 // path (the records' lower quartile at qTarget/2 or more), what each one's
 // fast streams would carry if they carried alike (their smoothed R_F over
-// the cores).
+// the cores). Where Q_cap lowers qTarget (a shallow queue: a third of it)
+// the shared rule holds only a core past that share, and the others keep
+// their own (R̂ and probes): there qTarget is a few ms, under what the
+// exit's records read from the senders' bursts alone on a path with room
+// (its srtt counts every packet of a burst), and the rule's equilibrium held
+// two downloads on 300/150 behind 50 ms at 203 against 230 Mbit/s before
+// (z24 rig: records 7–11 ms, qTarget 3–5, the ping through the path 3 ms);
+// the drop-tail queue itself bounds what the cores can stack there.
 func (c *wcore) fairShare(now time.Time, m wcMeas) (float64, bool) {
 	if !m.grp || c.rAvg <= 0 || !m.qStandOK || m.qStand < c.qTarget(now)/2 {
 		// (a queue that does not stand is a path with room: there each
@@ -1740,7 +1747,11 @@ func (c *wcore) fairShare(now time.Time, m wcMeas) (float64, bool) {
 	if n == 0 {
 		return 0, false
 	}
-	return (r + c.rAvg) / float64(n+1), true
+	f := (r + c.rAvg) / float64(n+1)
+	if c.qTarget(now) < wcQTarget && c.rAvg <= f {
+		return f, false
+	}
+	return f, true
 }
 
 // noteCap remembers that losses of our own came at budget b.

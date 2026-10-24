@@ -229,3 +229,46 @@ func TestWcorePeerShare(t *testing.T) {
 		t.Errorf("no queue standing: B_hold %d, want R̂'s %.0f", b, want)
 	}
 }
+
+// TestWcorePeerShareQcap: where Q_cap lowers qTarget (a shallow queue,
+// qTarget a third of it) the shared rule holds only a core past the fair
+// share; one at
+// or below it keeps its own rule (R̂'s knee and margin) and may probe: the
+// rule's equilibrium at a qTarget of a few ms sat under the exit's records of
+// the senders' bursts and held two downloads on 300/150 behind 50 ms at 203
+// against 230 Mbit/s (z24 rig).
+func TestWcorePeerShareQcap(t *testing.T) {
+	ms := time.Millisecond
+	p := newWcPeer()
+	mk := func(rAvg float64) (*wcore, wcMeas) {
+		c := wtCore(1)
+		c.noteRate(wtT0, rAvg)
+		c.rAvg, c.bGood, c.peer = rAvg, 64*wtMiB, p
+		c.qcap, c.qcapAt, c.qcapOK = 12*ms, wtT0, true
+		p.noteCore(c, wtT0, true, rAvg)
+		m := wtMeas(1, rAvg, 8*wtMiB)
+		m.at, m.grp, m.qStand, m.qStandOK = wtT0, true, 8*ms, true
+		return c, m
+	}
+	big, mb := mk(60e6)
+	small, msm := mk(30e6)
+	if _, ok := big.fairShare(wtT0, mb); !ok {
+		t.Errorf("a core past the fair share with qTarget lowered by Q_cap: no shared rule")
+	}
+	if f, ok := small.fairShare(wtT0, msm); ok || f != 45e6 {
+		t.Errorf("a core under the fair share with qTarget lowered by Q_cap: shared %v (%.0f), want its own rule", ok, f)
+	}
+	h := math.Min(math.Max(small.qTarget(wtT0).Seconds()/small.tBase.Seconds(), wcHMin), wcHMax)
+	r := small.rhatF(wtT0, msm)
+	if b, want := small.bHold(wtT0, msm), small.knee(r, msm)+h*r*small.tBase.Seconds(); math.Abs(float64(b)-want) > 2 {
+		t.Errorf("under the share: B_hold %d, want R̂'s %.0f", b, want)
+	}
+	// no Q_cap, or one deep enough to leave qTarget as it is: both under the
+	// shared rule, as before
+	for _, q := range []time.Duration{0, 60 * ms} {
+		small.qcap, small.qcapOK = q, q > 0
+		if _, ok := small.fairShare(wtT0, msm); !ok {
+			t.Errorf("Q_cap %v: a core under the fair share left out of the shared rule", q)
+		}
+	}
+}
