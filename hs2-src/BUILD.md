@@ -201,31 +201,33 @@ BIN=/tmp/hs2 MODE=mtcp RATE=50mbit DELAY=40ms LOSS=0.005 FLOWRATE=10mbit lab/run
 ```
 
 Data-path tuning can be overridden for experiments with `HS2_TUNE_NOTSENT`,
-`HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_STREAMBUF`, `HS2_TUNE_SMUX_SESSBUF`,
-`HS2_TUNE_SMUX_MINSTREAMBUF`, `HS2_TUNE_SMUX_LAGTARGET` (0 = fixed stream
-window), `HS2_TUNE_SMUX_NEEDBUF` (how far a stream's window grows on its
-reader keeping up alone; `HS2_TUNE_SMUX_STREAMBUF` is the largest window, past
-it only under the window core), `HS2_TUNE_SMUX_POOL` (the process's window
-pool, bytes; 0 = no window past `HS2_TUNE_SMUX_NEEDBUF` and no buffer
-borrowed), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
-about half its unsent cap and a burst, on Linux 5.10+; 0 = off) and `HS2_TUNE_CC`; the defaults in the code are
-the ones the sweeps chose. The window core (`engine/wcore_run.go`, which lets a
-fast stream's window grow past `HS2_TUNE_SMUX_NEEDBUF` only as far as its path
-carries) takes `HS2_TUNE_WCORE=0` (off: every window stays within the need, as
-before; also the field safety switch), `HS2_TUNE_WCORE_QTARGET` and
-`HS2_TUNE_WCORE_PROBEQ` (ms of standing and probing queue),
-`HS2_TUNE_WCORE_STAGE=2` (ceilings below the need once the path is full) and,
-for the lab only, `HS2_TUNE_WCORE_UPLOAD=1` (the exit's core for its uploads
-too; off by default until the edge sends the exit a record of its own socket:
-without one that core cannot see a policer, and the edge's download core
-likewise starts only once the exit's stats record carries the exit's socket,
-so an old exit leaves the windows as without the core),
-`HS2_TUNE_WCORE_TRACE=<file>` (one JSON line per link per
-evaluation), `HS2_TUNE_WCORE_FIXEDWIN=<bytes>` (every large stream held at
-that window instead of the core's decision, still traced), and two
-experiments, off by default: `HS2_TUNE_WCORE_PACECAP=<x>` (each end caps its
-link socket's pacing, `SO_MAX_PACING_RATE`, at x times its own delivery rate,
-and, while the path shows no queue, never under what the peer's windows allow
-per round trip)
-and `HS2_TUNE_WCORE_BURST=<share>` (the budget held where the burst after the
-sender's PROBE_RTT, that share of the window, fits the queue learned).
+`HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_SESSBUF` (8 MiB),
+`HS2_TUNE_SMUX_MINSTREAMBUF` (64 KiB), `HS2_TUNE_SMUX_LAGTARGET` (128 KiB;
+0 = fixed stream window), `HS2_TUNE_SENDGATE` (bytes/s under which a link's
+socket is held to about half its unsent cap and a burst, on Linux 5.10+; 0 =
+off) and `HS2_TUNE_CC`; the defaults in the code are the ones the sweeps
+chose. Each value read is logged at start (`tuning: NAME=value`). These are
+read once at start: on an installed server set them with `systemctl edit
+<unit>` (`[Service]` / `Environment=NAME=value`) and a restart.
+
+The stream windows, the window core (Phase Z5; `engine/wcore_run.go`, which
+lets a fast download's window grow past the need only as far as its path
+carries) and the exit's pacing net (`engine/pacenet.go`):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `HS2_TUNE_SMUX_NEEDBUF` | 2 MiB (2097152) | how far a stream's window grows on its reader keeping up alone; past it only under the window core's ceiling, and only from the window pool |
+| `HS2_TUNE_SMUX_STREAMBUF` | 16 MiB | the largest stream window (what the window core may grow one to) |
+| `HS2_TUNE_SMUX_POOL` | 1/128 of the RAM, 16–128 MiB (32 MiB if the RAM is unknown) | the process's window pool, bytes: what windows past the need hold, and what links whose buffer ran full borrow; 0 = no window past `HS2_TUNE_SMUX_NEEDBUF` and no buffer borrowed |
+| `HS2_TUNE_WCORE` | 1 | 0 turns the window core off: no link gets one and every window stays within the need, as before (the field safety switch; Iran server) |
+| `HS2_TUNE_PACENET` | 1 | 0 turns the exit's pacing net off: no link socket's pacing is touched (the field safety switch; Kharej server) |
+| `HS2_TUNE_PACENET_K` | 1.25 | the net's cap as a multiple of the socket's delivery rate |
+| `HS2_TUNE_PACENET_LOSS` | 0.02 | the resend share (of the last second) that engages the net |
+| `HS2_TUNE_WCORE_QTARGET` | 15 ms (exit side 10) | ms of standing queue the core keeps in HOLD |
+| `HS2_TUNE_WCORE_PROBEQ` | 20 ms (exit side 15) | ms of queue one probe adds |
+| `HS2_TUNE_WCORE_UPLOAD` | 0 | lab only: 1 gives the exit a core for its uploads too. Off until step 3 sends the exit a record of the edge's socket: without one that core cannot see a per-connection policer (the edge's download core likewise starts only once the exit's 96-byte stats record arrives, so an old exit leaves the windows as without the core) |
+| `HS2_TUNE_WCORE_STAGE` | 1 | lab only: 2 lets ceilings go below the need once the core found the path full (step 2, not yet measured) |
+| `HS2_TUNE_WCORE_TRACE` | none | lab only: a file that gets one JSON line per link per evaluation |
+| `HS2_TUNE_WCORE_FIXEDWIN` | 0 | lab only: bytes; every large stream held at that window instead of the core's decision, still traced |
+| `HS2_TUNE_WCORE_PACECAP` | 0 (off) | lab experiment: each end caps its link socket's pacing (`SO_MAX_PACING_RATE`) at x times its own delivery rate, and, while the path shows no queue, never under what the peer's windows allow per round trip; takes the pacing net's place while on |
+| `HS2_TUNE_WCORE_BURST` | 0 (off) | lab experiment: the budget held where the burst after the sender's PROBE_RTT, that share of the window, fits the queue learned |

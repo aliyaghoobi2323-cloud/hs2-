@@ -1,35 +1,44 @@
-# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X), the user-port path (Z, Z2, Z3)
+# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X), the user-port path (Z, Z2, Z3), one fast connection (Z5 step 1)
 
 This is the checklist for validating the releases from Q7 on (see CHANGELOG:
-"Q7 — stuck links", "Q8 — the health rules at high bandwidth", Phases V, W
-and X) on a real Iran/Kharej server pair with real users. The load rig showed
-the rules work and do not cut users needlessly in the scenarios it can make;
-what it cannot make is Iran's real DPI, real evening congestion and real user
-traffic. Both servers must run the release build (`hs2 version` shows the
-build id below).
+"Q7 — stuck links", "Q8 — the health rules at high bandwidth", Phases V, W,
+X, Z–Z3 and Z5 step 1) on a real Iran/Kharej server pair with real users.
+The load rig showed the rules work and do not cut users needlessly in the
+scenarios it can make; what it cannot make is Iran's real DPI, real evening
+congestion and real user traffic. Both servers must run the release build
+(`hs2 version` shows the build id below).
 
 - Release commit: see the "Release" line at the end of this file.
-- Previous main (rollback target): `0812bc9` (binary build `da621f5db2bb`,
-  Phases Y and CA); before it `9b74b3c` (binary build `2b2e2c8c3f86`, Phase
-  W).
+- Previous release (rollback target): binary build `ef2dffdbbb87` (Phases Z,
+  Z2 and Z3; built from `ef2dffd`, the binary carried by commit `c9825f2` on
+  the work branch `claude/smux-buffer-constants-fv9bu8`) — the build your
+  servers may run now. Before it `0812bc9` on main (binary build
+  `da621f5db2bb`, Phases Y and CA), and `9b74b3c` (binary build
+  `2b2e2c8c3f86`, Phase W).
 
 ## Rollback
 
-On each server, reinstall the previous binary pinned to its commit (no change
-to the repository needed):
+For this release's own parts, try their switches first: they need no
+reinstall (V16, "Switching a part off"). To go back to the previous binary,
+on each server reinstall it pinned to the commit that carries it (no change to
+the repository needed):
 
 ```
-HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/0812bc9 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/0812bc9/install.sh)
+HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/c9825f2 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/c9825f2/install.sh)
 ```
 
-then Upgrade the tunnel(s) in the menu. To roll `main` itself back, revert the
-release commits on main (do not force-push).
+then Upgrade the tunnel(s) in the menu (`hs2 version` must then show `build
+ef2dffdbbb87`; pin to `ef2dffd` itself and you get the older binary that
+commit still carried). To go back past Phases Z–Z3 as well, use `0812bc9` in
+both places (binary build `da621f5db2bb`). To roll `main` itself back, revert
+the release commits on main (do not force-push).
 
 Roll back at once if any of these happens: users report being cut in waves;
 more than a handful of `stuck:` lines an hour that no real throttle explains;
 a burst of `stuck:` lines at the same second (more than an eighth of the
 pool); `degraded (up-loss` lines by the dozen right after a congestion spell;
-`hs2 doctor` FAILs that the old build did not have.
+`hs2 doctor` FAILs that the old build did not have; any of V16's reasons that
+remain with both of its switches off.
 
 ## What to watch
 
@@ -298,24 +307,162 @@ link dies; the verdict lines name links that really are slower or lossier
 never most of the pool at once; uploads next to heavy downloads (and the
 reverse) and interactive use next to bulk transfers feel no worse than on the
 previous release. Report the counts of each line per hour and any user
-complaint with its time. Roll back (above, to `0812bc9`, binary build
-`da621f5db2bb`) if verdict or move lines come in waves across the pool, or if
-users are cut or stalled more than before.
+complaint with its time. Roll back to the release before Phases Z–Z3 (above:
+`0812bc9`, binary build `da621f5db2bb`) if verdict or move lines come in waves
+across the pool, or if users are cut or stalled more than before.
+
+**V16 — one connection past ~100 Mbit/s (Phase Z5 step 1: the download
+window core and the exit's pacing net).** Before this release one connection
+moved at most about 2 MiB per round trip (~112 Mbit/s at 150 ms, ~168 at
+100 ms; on the rig 81 Mbit/s on a 300 Mbit/s path at 150 ms). Now:
+
+- the **window core** runs on the **Iran (edge) server**, for downloads only:
+  it lets a fast download's window grow past 2 MiB as far as the path carries.
+  It starts on a link only once the Kharej server sends its new 96-byte stats
+  record, so **both servers must run this release**; with an old Kharej server
+  downloads stay exactly as before. It also stays off where the old windows
+  already fill the path or the Kharej server resends over 1%.
+- the **pacing net** runs on the **Kharej (exit) server**, on every link
+  socket, whatever the Iran server runs: when a link socket resends 2% or
+  more while it paces at over twice what the path delivers, its pacing is
+  held at 1.25× the delivery rate until the resends stop.
+- uploads are unchanged until step 3.
+
+*1. One big download, before and after.* On a test pair with a fast path
+between the servers (the clearest difference: 300 Mbit/s or more each way and
+a round trip of 100 ms or more), move one large download through the tunnel:
+either `iperf3 -s -p 5201` on the Kharej server behind a test user port (the
+port in the Iran server's `forward_ports`, and `5201=127.0.0.1:5201` in the
+Kharej server's `port_map`) and from the Iran server or a client behind it
+`iperf3 -c <Iran server IP> -p 5201 -R -P 1 -t 60` (one connection, the
+Kharej side sending), or one large file through a user's client. Take six runs
+in turn: core on (the default), core off (`HS2_TUNE_WCORE=0` on the Iran
+server, below), on, off, on, off. In each run record the Mbit/s, the Iran
+server's `hs2 status` during the transfer, the new log lines on both servers,
+and, from another client through the same tunnel, an interactive user's
+latency (a small request every 200 ms): its p50/p99. Pass: with the core on
+the download is clearly faster where the path has room (rig: 81 → 223 Mbit/s
+on 300/150, 112 → 834 on 1000/100; a real path will differ), and never
+clearly slower than with it off; during the transfer
+the Iran server's `hs2 status` shows `windows:    fast connections: 1 (windows
+6 MiB of 64 MiB pool)` (sizes vary) and its log a `downloads fill the path`
+line for the link; no cut, and no `degraded` or `stuck:` line for that link;
+the interactive user's p50 about the same (its p99 may be higher: the known
+cost, below — report it). If the core never starts (no `windows:` line, no
+`fill the path` line, the same speed as off): check `hs2 version` on the
+Kharej server (an old one keeps the core off), whether one connection already
+fills the path with 2 MiB windows (then the core stays off by design), and
+whether the Kharej server's socket resends over 1% (`ss -ti` on the link).
+
+*2. 24 h with real users,* alongside V1 and V15. Watch both servers:
+
+```
+# Iran (edge)
+journalctl -u <unit> -f -o cat | grep -E 'fill the path|download windows|loss with no queue|window pool full|MiB ceiling|round trip grew to|window core:'
+# Kharej (exit)
+journalctl -u <unit> -f -o cat | grep -E 'pacing held|pacing net:'
+```
+
+| Log line (exact format; numbers vary) | Meaning | Expected |
+|---|---|---|
+| `mtcp: link N: downloads fill the path at ~287 Mbit/s (round trip 151 ms): window held at 6.4 MiB for 2 fast connection(s), queue ~4 ms` (Iran) | the core found the window that fills the link's path (end of its start-up, or the knee moved by more than 25%) | when large downloads run; at most once a minute per link |
+| `mtcp: link N: <why> — download windows 6.4 MiB → 3.1 MiB` (Iran), `<why>` one of `path queue grew by 38 ms`, `the exit's queue grew by 12 ms`, `path queue grew by 12 ms (the link's own round trip)`, `control pings came back 40 ms late`, the same with ` (resent 2.1%)`, `packets were lost as the windows grew (resent 1.8%)`, `packets arrived behind holes as the windows grew`, `packets arrived behind holes on a clean path`, `path slowed to ~90 Mbit/s with its queue growing` | a drain: the core shrank the link's download windows (never below 2 MiB) because the path's queue grew, or loss came with the growth | now and then, mostly at the evening peak or when the path changes; at most once per link per 30 s |
+| `mtcp: link N: 0.4% loss with no queue — windows cover the resends (+18 ms)` (Iran) | random loss with no queue: the core does not back off for it | on lossy paths; at most once per link per 10 min |
+| `mtcp: window pool full (64 MiB): 5 fast connection(s) on 3 link(s) held below what their path carries` (Iran) | several fast downloads at once took the whole window pool; each keeps what it has | rare (at most once in 5 min); harmless when frequent on a small server (report it) |
+| `mtcp: link N: one connection's window is at its 16 MiB ceiling (round trip 480 ms)` or `… N connections' windows are at their 16 MiB ceiling …` (Iran) | a very fast or very long path: 16 MiB is the most a window gets | rare |
+| `mtcp: link N: the path's round trip grew to ~400 ms (a route change) — the window core follows it` (Iran) | the link's path changed | rare |
+| `mtcp: window core: N more link(s) …` (Iran) | the lines above past 8 links in a minute, in one summary line | only on a busy pool |
+| `mtcp: link from 1.2.3.4:5678: resending 6.1% at a pacing rate 3.9× what the path delivers — pacing held at 1.25× (~240 Mbit/s) until the resends stop` (Kharej) | the pacing net engaged on that link socket | now and then (a shallow queue, a policer, several downloads on one link); at most once per link per 5 min |
+| `mtcp: pacing net: N more link(s) resent past 2% and had their pacing held in the last minute` (Kharej) | the same past 8 links in a minute | only while the path itself loses |
+| the line of a link's end, Iran (`mtcp: link N down: …`, a retired or drained link, a reverse link): `… (while up: its receive buffer ran full N time(s), K of them grown from the window pool instead; …; window core: up to 9.1 MiB at 412 Mbit/s, drained 3 time(s) for queue, 1 for loss, held by the window pool 0 time(s))` (`, N for a slower path` before `held` when the path slowed) | what the core did on that link while it was up; `K of them grown from the window pool instead` counts the times its full buffer borrowed from the pool instead of stalling | only on links that carried fast downloads |
+| the line of a link's end, Kharej (`link down from 1.2.3.4:5678: … (now 5)`, or in reverse `mtcp: exit link down (slot N: …)`, `mtcp: exit slot N retired …`): `… (while up: pacing held 2 time(s) for resends (up to 2.8%))` | how often the pacing net held that link and the largest resend share it saw | only on links it engaged on |
+
+Count per hour (Iran, then Kharej):
+
+```
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'fill the path'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'download windows'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'loss with no queue'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'window pool full'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'pacing held at'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'pacing net:'
+```
+
+Normal: the lines above at the rates in the table; large downloads faster
+than on the previous release; no more cuts, `stuck:` or `degraded` lines than
+the previous release had in the same hours. Known costs, accepted for this
+step (CHANGELOG, Phase Z5 step 1): a user whose connection shares the link
+(or the bottleneck) with a fast download may see more delay spikes (on the
+rig p99 up to ~2.3×, and p50 up to 1.7× on a lossy path); on lossy, very
+long (500 ms and more) or shallow-queue paths the gain is small; uploads gain
+nothing yet.
+
+Reasons to switch a part off (below) and, if it stays with both off, to roll
+back:
+- any user cut that the previous release did not have (connections reset in
+  waves, users reporting drops during large downloads);
+- `degraded` or `stuck:` lines the previous release did not have — above all
+  on links whose end line shows `window core: up to …` (the core is never
+  meant to bring the loss rule to a link) → `HS2_TUNE_WCORE=0`;
+- `pacing held` on many links at once (the `pacing net: N more link(s)` line
+  minute after minute) together with downloads slower than with the net off
+  → `HS2_TUNE_PACENET=0`;
+- interactive users (calls, games) next to heavy downloads clearly worse than
+  on the previous release → `HS2_TUNE_WCORE=0`;
+- `hs2 doctor` FAILs or a memory or CPU climb the previous release did not
+  have.
+
+*Switching a part off (no reinstall).* The switches are environment variables
+read when hs2 starts; set them in a systemd drop-in of the tunnel's unit (find
+it with `systemctl list-units 'hs2*'`):
+
+```
+systemctl edit <unit>
+```
+
+and add, in the editor:
+
+```
+[Service]
+Environment=HS2_TUNE_WCORE=0
+```
+
+on the **Iran** server to turn the window core off (every download window
+back within 2 MiB, as before), or `Environment=HS2_TUNE_PACENET=0` on the
+**Kharej** server to turn the pacing net off — two separate switches, one per
+server. Then `systemctl restart <unit>` (the tunnel's users reconnect at once)
+and check the start lines: `journalctl -u <unit> --since "-2min" -o cat |
+grep 'tuning: HS2_TUNE'` shows `tuning: HS2_TUNE_WCORE=0` (or `…PACENET=0`).
+To turn it back on, delete that line with `systemctl edit <unit>` (or
+`systemctl revert <unit>` when the drop-in holds nothing else) and restart. A
+drop-in survives Upgrade in the menu (only the unit file is rewritten; it goes
+only with the tunnel's removal), so remove it after the test. With both
+switches off, what remains of this release on the data path is mostly the
+window pool's borrowing (a link whose buffer runs full borrows from the pool
+instead of stalling); to rule that out too, add
+`Environment=HS2_TUNE_SMUX_POOL=0` on both servers (with `HS2_TUNE_WCORE=0`
+on the Iran server). If a problem stays with all of them off, roll back the
+binary (above).
 
 ## What to send back
 
 For each scenario: the counts, the relevant log lines (Iran side, with
-timestamps), the time of the action (V2–V4), and whether users noticed.
+timestamps), the time of the action (V2–V4), and whether users noticed. For
+V16 also: the six runs' Mbit/s and the interactive p50/p99 with the core on
+and off, the round trip between the servers (`ping`), the Iran server's
+`windows:` line, and the Kharej side's `pacing held` lines with timestamps.
 
-Release: binary build `ef2dffdbbb87` (Phases Z, Z2 and Z3 — the user-port
-path: adaptive stream windows and brakes, new users kept off dying and
-clearly worse links, unanswered new connections moved off a link that went
-black, window updates and small streams ahead of bulk data inside a link, and
-a send gate on slow links; V15 above; `hs2 version` shows it). Built on the
-work branch `claude/smux-buffer-constants-fv9bu8`, not yet on main: install it
-on a test pair with `HS2_REPO_RAW` pinned to the commit that carries this
-binary. Everything in these phases was measured on loopback rigs and
-simulators (BBR, Linux 6.x), not yet across the real Iran–abroad path. The
-previous release, binary build `da621f5db2bb` (Phase CA + CA1b and Phase Y),
-is the rollback target. See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X,
-Phase Y, Phase CA, Phase Z, Phase Z2, Phase Z3) and `git log`.
+Release: <filled at build time>
+
+This release: Phase Z5 step 1 (one connection past ~100 Mbit/s: the window
+core for the Iran server's downloads, the window pool, the 96-byte stats
+record and the Kharej server's pacing net; V16 above; `hs2 version` shows its
+build id), on top of Phases Z, Z2 and Z3 (V15). Built on the work branch
+`claude/smux-buffer-constants-fv9bu8`: install it on a test pair with
+`HS2_REPO_RAW` pinned to the commit that carries this binary. Everything in
+these phases was measured on loopback rigs and simulators (BBR, Linux 6.x),
+not yet across the real Iran–abroad path. The previous release, binary build
+`ef2dffdbbb87` (Phases Z, Z2 and Z3; commit `c9825f2`), is the rollback
+target; before it `da621f5db2bb` (Phase CA + CA1b and Phase Y; `0812bc9`).
+See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y, Phase CA, Phase Z,
+Phase Z2, Phase Z3, Phase Z5 step 1) and `git log`.
