@@ -1,0 +1,619 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index a88ba51..6f57fd0 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -2122,6 +2122,251 @@ that fails without the fix:
+   Users of the tunnel were not affected: the Iran side opens every stream and
+   the Kharej side reads the stream's kind byte before it writes anything.
+ 
++## Phase Z5 (step 1) — one connection past ~100 Mbit/s: the download window core, and a pacing safety net on the exit
++
++One user connection moved at most about its 2 MiB stream window per round trip
++(~112 Mbit/s at 150 ms, ~168 at 100 ms, less in practice): 81 Mbit/s on a
++300 Mbit/s path at 150 ms, 112 on 1 Gbit/s at 100 ms. Two earlier rounds were
++not merged (round 1's "window as large as needed", N4: windows of ~3 BDP that
++flooded shallow queues; round 2's queue-delay and probing designs: no gain
++under random loss). Step 1 of a new design (`docs/architecture/WINDOW_CORE.fa.md`)
++was tuned on a real-TCP rig, measured against base (the branch with Phases
++Z–Z3 and the smux fixes above) with N4 as the gain reference, attacked by two
++red-team rounds and judged by an independent judge. Step 2 and step 3 come
++later inside Z5 (below).
++
++What changed:
++- **Window pool (smux, both ends).** Past `NeedStreamBuffer` (2 MiB, as
++  before) a stream's window grows toward `MaxStreamBuffer` (16 MiB) only as
++  far as a ceiling its session's owner sets (none by default: it stays at
++  2 MiB), and only from one window pool per process, 1/128 of the RAM,
++  16–128 MiB (`tune.WindowPoolMiB`). The link's session buffer grows by what
++  the stream claims and gets it back once the data is read (a claim outlives
++  its window by two turnarounds, an idle stream gives it back after 5 s, a
++  dead link's claims follow its data out, at the latest 10 s after). One
++  session holds no more of the pool than it leaves for the others (half of it
++  when alone). A session whose buffer runs full anyway borrows from the same
++  pool (1/8 of its buffer at a time, up to twice it) instead of stalling its
++  link; the link-end note says `…, N of them grown from the window pool
++  instead`.
++- **The window core (engine; the edge's downloads only).** One controller per
++  link (`engine/wcore.go`, pure and clock-free like the autopilot, tested in a
++  link model; `engine/wcore_run.go` wakes every 100 ms and evaluates each
++  active link every 0.4–2 s) reads the delivery rate, the base round trip,
++  the queue (the windows' turnaround, the link socket's own srtt, the exit
++  socket's srtt from its stats record, the control pings), loss and its kind,
++  and the fast streams. It holds the link's window budget just past the knee
++  (the smallest window that fills the path, plus ~15 ms of queue), probes 20
++  ms of queue at a time and keeps growth only when it pays, drains on a
++  growing queue or congestion loss, and does not back off for random loss
++  that comes with no queue. Each fast stream gets a ceiling that the smux arm
++  applies at its next window update (at most ×2 a step, held while the
++  stream's own turnaround slows). In step 1 a ceiling is never below 2 MiB, so
++  nothing below the knee differs from base, and the Z–Z3 protections (adaptive
++  window, brakes, window updates first, the fair queue) are untouched. The
++  core leaves OFF only after the exit's first extended stats record: with an
++  old exit it stays off for the link's life (exactly base). It also stays off
++  while the windows without it already fill the path (the exit's queue over
++  max(5 ms, RTT/10) in its last three records) or the exit resends over 1%
++  ("first, do no harm"); above 450 ms it leaves OFF only after 3 clean exit
++  records in a row and grows only on a fresh clean one. The autopilot sizes
++  the pool without what the grown windows carry (one fast download is no
++  demand for more links), and the core starts no probe while the autopilot
++  probes. The loss rule is unchanged: no exemption for grown windows (N4 had
++  one) — a link the core grew is drained for loss like any other.
++- **No upload core in step 1.** The exit's core for uploads is in the code but
++  off (`HS2_TUNE_WCORE_UPLOAD=1`, lab only): without a record of the sending
++  socket a receiver cannot see a per-connection policer, and in the red team's
++  model its growth took the link to the loss rule in 8 of 96 runs behind a
++  policer at 60% of the path. Step 3 sends the exit a record of the edge's
++  socket and turns it on. The edge with an old exit is off for the same reason.
++- **Stats record 96 bytes.** The exit's `kindStats` record carries its link
++  socket's srtt, min_rtt, total resends, data segments sent and rttvar after
++  the existing 64 bytes (the existing `recLen` negotiation; an old edge reads
++  the first 64; no new system call). Nothing else is new on the wire: no new
++  stream, frame or timer, and in step 1 no more window updates per byte than
++  base (one per MiB at most).
++- **The pacing safety net (exit, every link socket, on by default;
++  `engine/pacenet.go`).** A window-limited BBR sender stays in STARTUP and
++  sends each window update's credit at ~3.9× the rate it has ever delivered.
++  Once the path gets worse (it slows, a policer comes mid-transfer, a shallow
++  queue, several downloads) even base windows resend 12–35% and the loss rule
++  drains a link it would not drain otherwise; the receiver cannot prevent it,
++  having granted the credit before any loss. Every 100 ms the exit reads each
++  link socket's TCP_INFO; when the socket resent 2% or more over the last
++  second and paces at more than twice its delivery rate, its
++  `SO_MAX_PACING_RATE` is capped at 1.25× the delivery rate (1 MiB/s at
++  least). The cap follows the rate down only while the path shows a queue or
++  the cap does not bind; it is lifted when it does not pay (still resending
++  as much after max(3 s, 3·srtt): random loss), after 10 s clean (under 0.5%;
++  longer each time the trouble comes back within 30 s, up to 80 s), or at once
++  when the socket goes idle. A clean socket is never touched. It runs whatever
++  the edge runs, so base windows and old edges gain from it too.
++- **Status and logs.** `hs2 status`: `windows: fast connections: N (windows X
++  MiB of Y MiB pool)`. Edge lines `downloads fill the path at …`, a drain line
++  (`… — download windows 6.4 MiB → 3.1 MiB`), `… loss with no queue — windows
++  cover the resends`, `window pool full`, a 16 MiB ceiling and a route change;
++  exit line `… pacing held at 1.25× (~… Mbit/s) until the resends stop`; each
++  with a repeat cap and one summary line a minute past 8 links. Link-end notes:
++  `window core: up to …` (edge) and `pacing held N time(s) for resends (up to
++  X%)` (exit). Exact formats: `hs2-src/VALIDATION.md`, V16.
++- **Memory.** The auto link ceiling now counts the pool once per process (four
++  times its worst case comes off the RAM before one link per 48 MB), so it is
++  lower: 8 GB/8 cores 170 → 162 links, 4 GB/2 cores 85 → 81, 16 GB still 300.
++  The core itself: ~300 B per link with an active core, ~80 B per stream.
++
++Measured (real kernel TCP through a TUN path emulator, BBR; base d70ff19 and
++the final core 229f682 interleaved; 606 runs in class A, 3 runs a cell, and
++576 in class B, 2 a cell; median Mbit/s; a cell is the path's Mbit/s / its
++RTT in ms; gain as a share of N4's gain over base):
++- **One download, clean paths:** 300/150 81.2 → 223 (150% of N4's gain),
++  1000/100 112 → 834 (119%), 1000/150 73.2 → 678 (124%), 300/100 107 → 234
++  (157%), 300/300 36.8 → 145 (126%), 300/150 with a 200 ms queue 77.1 → 252,
++  1000/100 with a 200 ms queue 95.6 → 805; class B 1000/300 42.9 → 331, 1000/50
++  208 → 716. Resends at most 0.47% where base had 0. Four downloads on
++  1000/100 472 → 823; a download and an upload on 300/150 159 → 268.
++- **Full edge stack** (real LinkManager): one download on 300/150 78.7 → 243
++  (N4 181), on 100/100 83.2 → 85.8; next to a bad link 86.3 → 240.5, on the
++  healthy link; the second download after the first one's link was cut 83–90
++  → 210–228; several links with 0.1% loss 51.3 → 131.9.
++- **Not slower where base already fills the path:** 100/100 1.01× (class B
++  0.97×), 100/50 1.10×, 8 and 16 users 0.96–1.23×.
++- **0.1% loss:** 1000/100 72.9 → 318 (78% of N4's gain; the target there was
++  60%).
++- **The pacing net:** 100/50 (the core stays off there) resends 20.2% →
++  0.04%, 80.0 → 88.2 Mbit/s, the interactive user's p50/p99 140/423 → 80/154
++  ms; a 180 Mbit/s policer arriving 15 s into a 300/150 download: base 50.9
++  Mbit/s, 7.4% resent and the loss rule draining 3 of 3 runs; core with the
++  net 128, 1.1% and 0 of 3 (base with the net alone, earlier round: 48 → 71,
++  3 of 3 → 0 of 3); 4 downloads on 300/150 167 → 199 and 7.6% → 3.8% resent;
++  a 300 Mbit/s policer on 1000/100 82.8 → 149; class B 100/100 with 0.1% loss
++  5.1% → 0.10% resent (58 → 81). It never engaged on a clean path with base
++  (0 of 18 runs) or with the core on 1000/100 (0 of 13); on clean 300/150 the
++  core's own PROBE_RTT burst engaged it once or twice a run at no cost. In the
++  link model (7216 runs) it removed 1447 drains with the core and 1358 with
++  base, and made 3 and 5 new ones.
++- **Mixed versions:** a new edge with an old exit and an old edge with a new
++  exit stay at base level (80.4 and 77.0 against base's 78.7 on 300/150), no
++  cut. Compatibility in memory: upstream v1.5.24 or base sending to the new
++  receiver 260.5 and 260.4 Mbit/s where 2 MiB per round trip allows 111.8
++  (820.6 and 820.4 on 1000/100); the new sender keeps an old receiver's 2 MiB
++  window (93.2); data intact, the pool back in full.
++- **CPU per MB:** the smux benchmark 1.03× (one stream) and 0.89× (four);
++  on the rig within 1.1× in 38 of 42, 42 of 44 and 92 of 96 cells — the rig's
++  noise reaches 1.41× on identical code; download 300/150 with a 200 ms queue
++  stays at 1.24–1.35× and is watched.
++
++Safety:
++- **No transfer cut in any core run:** 483 runs (classes A and B, the pacing
++  cells and the full stack) and 24 mixed-version runs. (In the link-cut test
++  the transfer on the black-holed link closes at 56.5 s in base and core
++  alike: the test's design.)
++- **Stall matrix** (11 kinds of slow, frozen and fast-then-slow readers × 4
++  paths × 3 runs): base 283 stalled seconds in 31 runs and 95 relays ended in
++  14 runs (ftf8, fts12, seqf12, as before); core 0 and 0.
++- **Class B:** 3 single seconds under 1 Mbit/s in core runs, 4 in base and 15
++  in N4 (TCP retransmission timeouts on long-RTT lossy paths: 23, 28 and 35 in
++  all), none from the core or the net: one was an upload (the base-equivalent
++  path), in one the core stayed off all run, in the third TCP itself stalled
++  as it does in base.
++- **No loss-rule drain made by the core or the net** (a run of 3 windows of
++  2–3 s over 12% resent): downloads in class A core 7 against base 13, all 7
++  in cells base drains too (8 and 16 users on 300/150, the 50 Mbit/s phase of
++  the speed change); pacing cells 0 against 3; stall matrix 1 (in a cell base
++  drains 3 of 3) against 9; class B 0 against 3. Uploads in class B 8 against
++  6, all on the base-equivalent path.
++- **Phases Z–Z3 not undone:** the stall matrix above; a dying link: the same
++  verdicts, 81 short users after the cut with no failure and none on the cut
++  link, first byte p99 183–198 ms (base 173–192), rescue 1.67–1.69 s (base
++  1.66–1.68); a bad link judged poor 3 of 3, the healthy one never, downloads
++  and 9 of 9 interactive users on the healthy one; window-update priority and
++  the fair queue unchanged — but see latency below.
++
++Known limits (accepted by the owner for step 1):
++- **Tail latency of users already on the download's link or bottleneck.** The
++  p50 stays within 1.00–1.16× of base on clean paths, but the p99 rises up to
++  ~2.3×: 300/150 with a 200 ms queue 2.33×, 8 users on 1000/100 2.27×,
++  1000/100 with a 200 ms queue 1.60×, 1000/100 1.31×, 1 Gbit/s with slow or
++  frozen readers 1.44–2.74×. Under random loss the median rises too: 1000/100
++  with 0.1% loss 107 → 182 ms (1.69×; class B 1.73×), class B 300/100 with
++  0.1% 1.40× (more data per round trip, so more loss holes a second for the
++  link's other users to wait behind). On the full stack new
++  users go to other links (12 of 12), which lessens it without removing it:
++  users of the other links behind the same bottleneck saw p99 177–393 ms
++  against 165–179 (median 205 against 166). For scale, two runs of the same
++  code path show up to 2.2× in p99, and N4 was worse in each of these cells.
++  Cause: the core's target and probe queue (15 and 20 ms) plus the sender's
++  credit bursts at ~3.9×; damping them is the first task of step 2.
++- **Download gain below 80% of N4's** where loss, a long round trip or a
++  shallow queue limit it — never meaningfully below base: 1000/500 77% (class
++  B 73%, 60% with a 200 ms queue), 200/500 31%, 100 Mbit/s at 150–500 ms
++  21–47% (class B), 300/50 27% (class B; the core stayed off), 300/150 with
++  0.1% loss 53% (target 60%), 1000/100 with 1% loss 11% (class B 17%: the exit
++  resending right at the gate's 1% kept the core off for 8.8–16.6 s), 3% loss
++  −26% to 7%, the speed change 300 → 50 → 300 70% (back to 90% of the rate
++  before the drop in [never, 8, never] s; after the return 92, 154 and 79
++  against base's 73, 85 and 92). The gate decides on single noisy records, so
++  the gain in such cells is bimodal (300/100: 123, 234, 258). The lowest
++  download ratios, 0.90× (class B 1000/300 with 3% loss, 1–2 Mbit/s) and
++  0.95× (class B 100/100 with 3%), are runs where the core stayed off: the
++  pacing net's cost under random loss. In the stall matrix one cell (16 slow
++  readers, 200 Mbit/s at 300 ms) gave the fast reader 30.1 against 35.2 Mbit/s,
++  the runs overlapping.
++- **Uploads stay at base until step 3** (class A 0 of 15 cells, class B 0 of
++  44; 300/150 89.4 → 88.8). The 2 MiB windows' own lossy regime on 100 Mbit/s
++  uploads (some runs resend 8–16%, base and core alike) is the base code path:
++  the exit runs no upload core, and the net does not reach it because the edge
++  sends uploads. Step 3 puts the net on the edge's link sockets too.
++- **The net's upkeep:** one TCP_INFO per exit link socket every 100 ms, idle
++  links included (~3000 a second at 300 links, a fraction of a percent of one
++  core; not measured at scale). With CUBIC (`HS2_TUNE_CC`) in slow start,
++  pacing is already 2× and the engagement rule sits at its border.
++- All of it on a loopback rig and a link model (BBR, Linux 6.x), not yet across
++  the real Iran–abroad path (`hs2-src/VALIDATION.md`, V16).
++
++Knobs (read at start; on a running server via `systemctl edit` and a restart,
++see V16): `HS2_TUNE_WCORE=0` turns the core off (Iran server: every window
++back within 2 MiB), `HS2_TUNE_PACENET=0` turns the net off (Kharej server) —
++two separate switches; `HS2_TUNE_SMUX_POOL=0` also turns the window pool off
++(no window past 2 MiB, no borrowing). Lab only: `HS2_TUNE_WCORE_UPLOAD`,
++`…_QTARGET`, `…_PROBEQ`, `…_STAGE`, `…_TRACE`, `…_FIXEDWIN`, `…_PACECAP`,
++`…_BURST`, `HS2_TUNE_PACENET_K`, `HS2_TUNE_PACENET_LOSS`,
++`HS2_TUNE_SMUX_NEEDBUF` (all with their defaults in `hs2-src/BUILD.md`).
++
++Old and new peers: the core needs both a new edge (it runs there) and a new
++exit (its 96-byte record); the net runs on any new exit, whatever the edge;
++every other combination moves data as base did. Upgrade in either order.
++
++Red team (code and model; each finding with a test that fails without its
++fix):
++- Round 1 fixed: a "blind" core (no sender record) growing windows under loss
++  holes up to the loss rule; windows held down after any drain until the
++  autopilot's probe ended; an exit record lost when it arrived in a settling
++  period; the autopilot's per-link capacity inflated by a one-tick dip of the
++  grown rate; an unset min_rtt; a stale turnaround sample after a stream
++  idled; packet reordering read as loss (runs slower than base 13 → 1); long
++  round trips (bad runs at 600 ms–2 s 39 → 5 of 120); a policer on the
++  download side (4 → 0); log floods; Linux kernels before 5.4; one session
++  holding the whole pool (the per-session share); a dead link's pool claims
++  returned before its data was freed. The blind sides were then switched off
++  (8 of 96 model runs behind a policer, as above).
++- Round 2 fixed: a saw-tooth of budget cuts after the path slowed; an edge
++  whose exit records stopped arriving still treated as seeing; a record
++  without TCP_INFO zeroing the next one's base; a closed session's borrowing
++  returned to the pool while its data was still held. Its root finding — a
++  window-limited BBR never lowers its pacing (131 of 6478 model cells
++  drained) — became the pacing net.
++- Open: borrowing is not under the per-session share (no regression from base;
++  the wedge guard frees a stuck link). A third round on the real rig (path
++  events, soak) is the last step before the merge (ROADMAP).
++
++Next, inside Z5: **step 2** — ceilings below 2 MiB and damping the credit
++bursts (the tail latency above), with the judge's five fixes (a robust "do no
++harm" gate, no probing at the floor with a standing queue, a two-record end of
++STARTUP on long round trips, recovery after a slowdown, idle sockets read less
++often by the net); **step 3** — the edge's socket record to the exit, the
++upload core on, and the net on the edge's link sockets.
++
+ ## Verification, every phase
+ 
+ - Go: `go test ./...` and `go test -race ./...`.
+diff --git a/docs/architecture/ARCHITECTURE.fa.md b/docs/architecture/ARCHITECTURE.fa.md
+index d52609a..bd5d9b3 100644
+--- a/docs/architecture/ARCHITECTURE.fa.md
++++ b/docs/architecture/ARCHITECTURE.fa.md
+@@ -28,6 +28,23 @@
+ > - `engine/sendgate.go` روی لینک کندتر از ۳MiB/s صف ارسال‌نشدهٔ سوکت را از میانگین حدود ۴۰KB (بیشینه ۶۴KB) به میانگین حدود ۲۰KB (بیشینه ۲۴ تا ۲۶KB) می‌آورد. این عددها برای هستهٔ لینوکس ۵٫۱۰ و بالاتر است. در هستهٔ قدیمی‌تر بیشینه حدود ۴۰KB است. این کار با poll پیش از هر ۸KiB انجام می‌شود، چون هسته `TCP_NOTSENT_LOWAT` را فقط هنگام ساختن skb تازه بررسی می‌کند. `Close` آن انتظار را با بستن سوکت تمام می‌کند.
+ > - لینکی که پاسخ آخرین پینگ کنترلش ۲ ثانیه یا بیشتر طول کشیده، تا پاسخ سریع‌تر (و فقط تا وقتی پرکار است) lagging می‌ماند (`ctrlSlow` در `engine/health.go` و `engine/control.go`).
+ >
++> **به‌روزرسانی پس از گام ۱ فاز Z5 (۲۰۲۶-۱۰-۲۴، همان شاخه):** شکاف ۵ (سقف سرعت یک اتصال با پنجرهٔ ۲MiB، یعنی حدود ۱۱۲Mbit/s در RTT ۱۵۰ms) برای دانلود رسیدگی شد. جزئیات و عددها در `CHANGELOG.md`، بخش Phase Z5 (step 1)؛ طراحی کامل در `docs/architecture/WINDOW_CORE.fa.md`.
++> - **کجا اجرا می‌شود:** فقط روی لبه (سرور ایران) و فقط برای دانلود. هر نشست smux لبه یک نمونهٔ هسته دارد (رجیستری `wcores` در `engine/wcore_run.go`، ثبت در `newSession`). هسته فقط پس از نخستین رکورد آمار ۹۶ بایتی از خروجی تازه (`srtt ≠ 0`) از OFF بیرون می‌آید؛ با خروجی قدیمی تا پایان عمر لینک OFF است و رفتار دقیقاً پایه است. هستهٔ آپلود در خروجی کدش هست ولی تا گام ۳ خاموش است (`engine.WcoreUpload`، فقط آزمایشگاه)، چون گیرنده بی رکورد سوکت فرستنده پلیسر را نمی‌بیند.
++> - **لایهٔ ۱، بازوی سریع در smux** (`third_party/smux/core.go` و `stream.go`): هر جریان در هر UPD سقفی را که هسته داده اجرا می‌کند (`fitCore`): رشد حداکثر ×۲ در هر گام، ترمز رشد وقتی چرخش پنجرهٔ خود جریان از مرجع لینک کندتر شده، و کوچک شدن همان‌دم تا سقف. بی سقف، پنجره از `NeedStreamBuffer` (۲MiB) بالاتر نمی‌رود. در گام ۱ سقف هرگز زیر ۲MiB نیست، پس زیر زانو هیچ رفتاری با پایه فرق ندارد و حفاظت‌های Z تا Z3 (`adaptWindow`، `checkLag`، اولویت UPD، صف منصفانه) دست نخورده‌اند.
++> - **لایهٔ ۲، هستهٔ کند در موتور:** `engine/wcore.go` کنترل‌گر خالص و بی‌ساعت است، مانند `autopilot`؛ `engine/wcore_run.go` هر ۱۰۰ms بیدار می‌شود و هر لینک فعال را هر ۰٫۴ تا ۲ ثانیه ارزیابی می‌کند. ورودی‌ها: پهنای تحویل، RTT پایه، صف (چرخش پنجره، srtt سوکت خود لینک، srtt سوکت خروجی از رکورد آمار، پینگ کنترل)، اتلاف و نوعش، و جریان‌های تند. بودجهٔ پنجرهٔ لینک کمی بالای «زانو» می‌ماند (صف هدف ۱۵ms، کاوش ۲۰ms)؛ با رشد صف یا اتلاف ازدحامی تخلیه می‌کند و برای اتلاف تصادفیِ بی صف عقب نمی‌نشیند. دروازهٔ «نخست آسیب نزن» (`harm()`) هسته را خاموش نگه می‌دارد اگر پنجره‌های بی‌هسته خودشان مسیر را پر کرده باشند یا خروجی بیش از ۱٪ بازارسال کند. بالای ۴۵۰ms فقط روی رکورد پاک تازهٔ خروجی رشد می‌کند. هماهنگی با autopilot: پهنای پنجره‌های بزرگ‌شده (`grownRate`) از پهنایی که اندازهٔ استخر لینک‌ها را می‌سازد کم می‌شود، و تا وقتی autopilot کاوش می‌کند هسته کاوش تازه‌ای آغاز نمی‌کند. قاعدهٔ اتلاف (`engine/loss.go`) بی‌تغییر است و برای پنجرهٔ بزرگ‌شده معافیتی ندارد.
++> - **استخر پنجره** (`third_party/smux/pool.go`، از N4): پنجرهٔ بالای ۲MiB فقط از استخر پردازه برمی‌دارد (`RAM/128`، بین ۱۶ و ۱۲۸MiB؛ `tune.WindowPoolMiB`)، و هر نشست بیش از آنچه برای دیگران می‌گذارد نمی‌گیرد (`FreeFor`؛ نشست تنها تا نصف استخر). نشستی که سطلش پر شود از همان استخر قرض می‌گیرد (`borrow`، تا دو برابر سطل). سقف خودکار لینک (`tune/tune.go`) استخر را یک بار برای هر پردازه حساب می‌کند و کمی پایین‌تر آمد: ۸GB با ۸ هسته از ۱۷۰ به ۱۶۲ لینک.
++> - **تور ایمنی pacing در خروجی** (`engine/pacenet.go`، اجرا در `paceNet` همان اجراکننده؛ پیش‌فرض روشن): روی هر سوکت لینک خروجی، هر نسخه‌ای که لبه داشته باشد، هر ۱۰۰ms یک `TCP_INFO`. وقتی سوکت ≥۲٪ بازارسال دارد و pacing آن بیش از دو برابر نرخ تحویل است، `SO_MAX_PACING_RATE` را به ۱٫۲۵ برابر نرخ تحویل می‌بندد و با پاک شدن یا بیکاری رها می‌کند؛ سوکت پاک دست نمی‌خورد. ریشه: فرستندهٔ BBR محدود به پنجره در STARTUP می‌ماند و اعتبار هر UPD را با حدود ۳٫۹ برابر نرخ مسیر می‌فرستد، و گیرنده جلوی آن را نمی‌تواند بگیرد.
++> - **سازگاری:** قالب سیم smux عوض نشد و هیچ جریان، قاب یا زمان‌سنج تازه‌ای روی سیم نیست. رکورد `kindStats` خروجی از ۶۴ به ۹۶ بایت رسید (srtt، min_rtt، کل بازارسال، بخش‌های فرستاده و rttvar سوکت لینک؛ با مذاکرهٔ موجود `recLen`) و لبهٔ قدیمی فیلدهای افزوده را رد می‌کند. هسته فقط با «لبهٔ تازه و خروجی تازه» کار می‌کند؛ تور روی هر خروجی تازه. هر ترکیب دیگر همان پایه است و ترتیب ارتقا مهم نیست.
++> - **حافظه:** سهم بزرگ همان استخر است؛ خود هسته حدود ۳۰۰ بایت برای هر لینک با هستهٔ فعال و حدود ۸۰ بایت برای هر جریان.
++> - **دیدپذیری:** سطرهای لاگ `downloads fill the path`، تخلیه (`… — download windows … → …`)، `loss with no queue`، `window pool full` و در خروجی `pacing held`؛ دنبالهٔ یادداشت پایان لینک (`window core: up to …` در لبه، `pacing held N time(s) for resends` در خروجی)؛ سطر `windows:` در `hs2 status`. فهرست دقیق در `hs2-src/VALIDATION.md`، سناریوی V16.
++> - **کلیدها:** `HS2_TUNE_WCORE=0` روی سرور ایران هسته را خاموش می‌کند و `HS2_TUNE_PACENET=0` روی سرور خارج تور را؛ دو کلید جدا.
++> - **محدودیت‌های شناخته (پذیرفتهٔ صاحب پروژه برای گام ۱):**
++>   - دُم تأخیر کاربرانی که روی همان لینک یا همان گلوگاه دانلودند: p99 تا حدود ۲٫۳ برابر پایه، و زیر اتلاف تصادفی p50 تا ۱٫۷ برابر؛
++>   - سود دانلود زیر ۸۰٪ سود N4 در خانه‌های پراتلاف، RTT بلند (≥۵۰۰ms)، ۱۰۰Mbit با RTT بلند، ۳۰۰/۵۰ و تغییر سرعت، ولی هرگز به‌طور معنادار زیر پایه؛
++>   - آپلود تا گام ۳ در سطح پایه.
++>
++>   گام ۲ (سقف زیر ۲MiB و مهار موج اعتبار) و گام ۳ (رکورد سوکت لبه برای خروجی، هستهٔ آپلود و تور روی سوکت‌های لبه) درون همین فاز می‌آیند.
++>
+ > **مبنا:** مخزن `/home/user/hs2-`، شاخهٔ برابر `main`، ثبت `0812bc9`. کد Go باینری منتشرشده (`hs2-linux-amd64`، build `da621f5db2bb`، `go1.27.0`) با همین ثبت یکسان است؛ `git diff da621f5 0812bc9` فقط باینری، هش آن و `hs2-src/VALIDATION.md` را نشان می‌دهد. پس هر path:line این سند همان رفتاری است که سرورهای میدانی اجرا می‌کنند.
+ >
+ > **قرارداد مسیرها:** مسیر بی‌پیشوند نسبت به `/home/user/hs2-/hs2-src` است (مثلاً `engine/l3_link.go:62`). `install.sh`، `README.md` و `CHANGELOG.md` بی‌پیشوند یعنی فایل‌های ریشهٔ مخزن؛ README درونی با `hs2-src/README.md` آمده است. `smux@` یعنی `/root/go/pkg/mod/github.com/xtaci/smux@v1.5.24`.
+diff --git a/docs/architecture/WINDOW_CORE.fa.md b/docs/architecture/WINDOW_CORE.fa.md
+index 5bb36d1..87bf9d4 100644
+--- a/docs/architecture/WINDOW_CORE.fa.md
++++ b/docs/architecture/WINDOW_CORE.fa.md
+@@ -1,6 +1,18 @@
+ # طراحی «هستهٔ پنجره» برای تونل hs2 (فاز Z5، شکاف ۵)
+ 
+-> **وضعیت:** طراحی پذیرفته شد (۱۷ مهر)؛ پیاده‌سازی گام ۱ آغاز شده است.
++> **وضعیت (۲۴ مهر):** طراحی پذیرفته شد (۱۷ مهر). **گام ۱ ساخته، سنجیده و داوری شد** و برای ادغام آماده است: شاخهٔ `z5-final` (ثبت `229f682`)؛ سنجش نهایی در `wip/z5-final-meas.fa.md`؛ حکم داور جدا «ادغام پس از اصلاح‌ها» در `wip/z5-judge.fa.md`؛ عددها و محدودیت‌ها در `CHANGELOG.md`، بخش Phase Z5 (step 1).
++> - **دامنهٔ ادغام گام ۱:**
++>   - هستهٔ دانلود لبه، که فقط با رکورد آمار ۹۶ بایتی خروجی تازه از OFF بیرون می‌آید (بخش ۲.۲)؛ سقف هرگز زیر ۲MiB نیست (بخش ۴.۴)؛
++>   - استخر پنجره با سهم هر نشست و قرض سطل (بخش ۴.۵)؛
++>   - تور ایمنی pacing روی همهٔ سوکت‌های لینک خروجی، پیش‌فرض روشن (بخش ۵.۶)؛
++>   - هستهٔ آپلود خروجی: کدش هست ولی خاموش است (`HS2_TUNE_WCORE_UPLOAD=1` فقط در آزمایشگاه).
++> - **استثناهای پذیرفته‌شده (تصمیم صاحب پروژه، ۲۴ مهر؛ بخش Z5 نقشهٔ راه):**
++>   - (الف) سود آپلود تا گام ۳ صفر است؛
++>   - (ب) سود دانلود در خانه‌های پراتلاف، RTT ≥ ۵۰۰ms، ۱۰۰Mbit با RTT بلند، ۳۰۰/۵۰ و تغییر سرعت زیر ۸۰٪ سود N4 است، ولی هرگز به‌طور معنادار زیر پایه نیست؛
++>   - (ج) دُم تأخیر کاربرِ روی همان لینک یا گلوگاه: p99 تا حدود ۲٫۳ برابر، و زیر اتلاف تصادفی p50 تا ۱٫۷ برابر.
++> - **گام ۲ (درون Z5، سنجش و ادغام جدا):** نخست مهار موج اعتبار، که درمان (ج) است: سقف زیر ۲MiB (`c_min` تا ۲۵۶KiB با سنجش بودجهٔ UPD، بخش ۴.۴)، سقف pacing مشروط به صف، و بازنگری گام UPD برای قفل نیم‌پنجره. سپس پنج اصلاح پیشنهادی داور: `harm()` مقاوم (پ۱)، بی کاوش در کف با صف ایستا (پ۲)، پایان STARTUP در RTT بلند با دو رکورد (پ۳)، بازگشت پس از کندی (پ۴)، و خواندن کم‌بسامدتر سوکت بیکار در تور (پ۵).
++> - **گام ۳ (درون Z5، پس از گام ۱):** رکورد سوکت فرستندهٔ لبه برای خروجی (بیت تازهٔ `caps`)، پرچم `apProbing` برای خروجی، روشن شدن هستهٔ آپلود فقط با همان رکورد، و تور pacing روی سوکت‌های لینک لبه (بخش ۱۱).
++> - بقیهٔ این سند همان متن طراحی است و بازنویسی نشده است.
+ > **مبنا:** کد ثبت `c9825f2` (HEAD شاخه `182e4f0` فقط سند تغییر داده است)، وصله‌های `docs/architecture/wip/z5-round1-n4.patch`، `z5-round2-probe.patch` و `z5-round2-delay.patch`، و نتیجه‌های نیمه‌کارهٔ دور دوم (در پوشهٔ موقت نشست ابری؛ در مخزن نیستند).
+ > **قرارداد مسیرها:** مسیر بی‌پیشوند نسبت به پوشهٔ `hs2-src` مخزن است.
+ > **عددهای دور دوم موقت‌اند:** جدول FA با ۳ تکرار، FB با ۱ تا ۲ تکرار، E با ۲ تا ۳ تکرار؛ سنجش هنوز ادامه دارد.
+diff --git a/hs2-src/BUILD.md b/hs2-src/BUILD.md
+index 8fa7188..303b5d0 100644
+--- a/hs2-src/BUILD.md
++++ b/hs2-src/BUILD.md
+@@ -201,31 +201,33 @@ BIN=/tmp/hs2 MODE=mtcp RATE=50mbit DELAY=40ms LOSS=0.005 FLOWRATE=10mbit lab/run
+ ```
+ 
+ Data-path tuning can be overridden for experiments with `HS2_TUNE_NOTSENT`,
+-`HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_STREAMBUF`, `HS2_TUNE_SMUX_SESSBUF`,
+-`HS2_TUNE_SMUX_MINSTREAMBUF`, `HS2_TUNE_SMUX_LAGTARGET` (0 = fixed stream
+-window), `HS2_TUNE_SMUX_NEEDBUF` (how far a stream's window grows on its
+-reader keeping up alone; `HS2_TUNE_SMUX_STREAMBUF` is the largest window, past
+-it only under the window core), `HS2_TUNE_SMUX_POOL` (the process's window
+-pool, bytes; 0 = no window past `HS2_TUNE_SMUX_NEEDBUF` and no buffer
+-borrowed), `HS2_TUNE_SENDGATE` (bytes/s under which a link's socket is held to
+-about half its unsent cap and a burst, on Linux 5.10+; 0 = off) and `HS2_TUNE_CC`; the defaults in the code are
+-the ones the sweeps chose. The window core (`engine/wcore_run.go`, which lets a
+-fast stream's window grow past `HS2_TUNE_SMUX_NEEDBUF` only as far as its path
+-carries) takes `HS2_TUNE_WCORE=0` (off: every window stays within the need, as
+-before; also the field safety switch), `HS2_TUNE_WCORE_QTARGET` and
+-`HS2_TUNE_WCORE_PROBEQ` (ms of standing and probing queue),
+-`HS2_TUNE_WCORE_STAGE=2` (ceilings below the need once the path is full) and,
+-for the lab only, `HS2_TUNE_WCORE_UPLOAD=1` (the exit's core for its uploads
+-too; off by default until the edge sends the exit a record of its own socket:
+-without one that core cannot see a policer, and the edge's download core
+-likewise starts only once the exit's stats record carries the exit's socket,
+-so an old exit leaves the windows as without the core),
+-`HS2_TUNE_WCORE_TRACE=<file>` (one JSON line per link per
+-evaluation), `HS2_TUNE_WCORE_FIXEDWIN=<bytes>` (every large stream held at
+-that window instead of the core's decision, still traced), and two
+-experiments, off by default: `HS2_TUNE_WCORE_PACECAP=<x>` (each end caps its
+-link socket's pacing, `SO_MAX_PACING_RATE`, at x times its own delivery rate,
+-and, while the path shows no queue, never under what the peer's windows allow
+-per round trip)
+-and `HS2_TUNE_WCORE_BURST=<share>` (the budget held where the burst after the
+-sender's PROBE_RTT, that share of the window, fits the queue learned).
++`HS2_TUNE_SMUX_FRAME`, `HS2_TUNE_SMUX_SESSBUF` (8 MiB),
++`HS2_TUNE_SMUX_MINSTREAMBUF` (64 KiB), `HS2_TUNE_SMUX_LAGTARGET` (128 KiB;
++0 = fixed stream window), `HS2_TUNE_SENDGATE` (bytes/s under which a link's
++socket is held to about half its unsent cap and a burst, on Linux 5.10+; 0 =
++off) and `HS2_TUNE_CC`; the defaults in the code are the ones the sweeps
++chose. Each value read is logged at start (`tuning: NAME=value`). These are
++read once at start: on an installed server set them with `systemctl edit
++<unit>` (`[Service]` / `Environment=NAME=value`) and a restart.
++
++The stream windows, the window core (Phase Z5; `engine/wcore_run.go`, which
++lets a fast download's window grow past the need only as far as its path
++carries) and the exit's pacing net (`engine/pacenet.go`):
++
++| Variable | Default | Meaning |
++|---|---|---|
++| `HS2_TUNE_SMUX_NEEDBUF` | 2 MiB (2097152) | how far a stream's window grows on its reader keeping up alone; past it only under the window core's ceiling, and only from the window pool |
++| `HS2_TUNE_SMUX_STREAMBUF` | 16 MiB | the largest stream window (what the window core may grow one to) |
++| `HS2_TUNE_SMUX_POOL` | 1/128 of the RAM, 16–128 MiB (32 MiB if the RAM is unknown) | the process's window pool, bytes: what windows past the need hold, and what links whose buffer ran full borrow; 0 = no window past `HS2_TUNE_SMUX_NEEDBUF` and no buffer borrowed |
++| `HS2_TUNE_WCORE` | 1 | 0 turns the window core off: no link gets one and every window stays within the need, as before (the field safety switch; Iran server) |
++| `HS2_TUNE_PACENET` | 1 | 0 turns the exit's pacing net off: no link socket's pacing is touched (the field safety switch; Kharej server) |
++| `HS2_TUNE_PACENET_K` | 1.25 | the net's cap as a multiple of the socket's delivery rate |
++| `HS2_TUNE_PACENET_LOSS` | 0.02 | the resend share (of the last second) that engages the net |
++| `HS2_TUNE_WCORE_QTARGET` | 15 ms (exit side 10) | ms of standing queue the core keeps in HOLD |
++| `HS2_TUNE_WCORE_PROBEQ` | 20 ms (exit side 15) | ms of queue one probe adds |
++| `HS2_TUNE_WCORE_UPLOAD` | 0 | lab only: 1 gives the exit a core for its uploads too. Off until step 3 sends the exit a record of the edge's socket: without one that core cannot see a per-connection policer (the edge's download core likewise starts only once the exit's 96-byte stats record arrives, so an old exit leaves the windows as without the core) |
++| `HS2_TUNE_WCORE_STAGE` | 1 | lab only: 2 lets ceilings go below the need once the core found the path full (step 2, not yet measured) |
++| `HS2_TUNE_WCORE_TRACE` | none | lab only: a file that gets one JSON line per link per evaluation |
++| `HS2_TUNE_WCORE_FIXEDWIN` | 0 | lab only: bytes; every large stream held at that window instead of the core's decision, still traced |
++| `HS2_TUNE_WCORE_PACECAP` | 0 (off) | lab experiment: each end caps its link socket's pacing (`SO_MAX_PACING_RATE`) at x times its own delivery rate, and, while the path shows no queue, never under what the peer's windows allow per round trip; takes the pacing net's place while on |
++| `HS2_TUNE_WCORE_BURST` | 0 (off) | lab experiment: the budget held where the burst after the sender's PROBE_RTT, that share of the window, fits the queue learned |
+diff --git a/hs2-src/VALIDATION.md b/hs2-src/VALIDATION.md
+index 897eae6..991f04b 100644
+--- a/hs2-src/VALIDATION.md
++++ b/hs2-src/VALIDATION.md
+@@ -1,35 +1,44 @@
+-# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X), the user-port path (Z, Z2, Z3)
++# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X), the user-port path (Z, Z2, Z3), one fast connection (Z5 step 1)
+ 
+ This is the checklist for validating the releases from Q7 on (see CHANGELOG:
+-"Q7 — stuck links", "Q8 — the health rules at high bandwidth", Phases V, W
+-and X) on a real Iran/Kharej server pair with real users. The load rig showed
+-the rules work and do not cut users needlessly in the scenarios it can make;
+-what it cannot make is Iran's real DPI, real evening congestion and real user
+-traffic. Both servers must run the release build (`hs2 version` shows the
+-build id below).
++"Q7 — stuck links", "Q8 — the health rules at high bandwidth", Phases V, W,
++X, Z–Z3 and Z5 step 1) on a real Iran/Kharej server pair with real users.
++The load rig showed the rules work and do not cut users needlessly in the
++scenarios it can make; what it cannot make is Iran's real DPI, real evening
++congestion and real user traffic. Both servers must run the release build
++(`hs2 version` shows the build id below).
+ 
+ - Release commit: see the "Release" line at the end of this file.
+-- Previous main (rollback target): `0812bc9` (binary build `da621f5db2bb`,
+-  Phases Y and CA); before it `9b74b3c` (binary build `2b2e2c8c3f86`, Phase
+-  W).
++- Previous release (rollback target): binary build `ef2dffdbbb87` (Phases Z,
++  Z2 and Z3; built from `ef2dffd`, the binary carried by commit `c9825f2` on
++  the work branch `claude/smux-buffer-constants-fv9bu8`) — the build your
++  servers may run now. Before it `0812bc9` on main (binary build
++  `da621f5db2bb`, Phases Y and CA), and `9b74b3c` (binary build
++  `2b2e2c8c3f86`, Phase W).
+ 
+ ## Rollback
+ 
+-On each server, reinstall the previous binary pinned to its commit (no change
+-to the repository needed):
++For this release's own parts, try their switches first: they need no
++reinstall (V16, "Switching a part off"). To go back to the previous binary,
++on each server reinstall it pinned to the commit that carries it (no change to
++the repository needed):
+ 
+ ```
+-HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/0812bc9 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/0812bc9/install.sh)
++HS2_REPO_RAW=https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/c9825f2 bash <(curl -fsSL https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/c9825f2/install.sh)
+ ```
+ 
+-then Upgrade the tunnel(s) in the menu. To roll `main` itself back, revert the
+-release commits on main (do not force-push).
++then Upgrade the tunnel(s) in the menu (`hs2 version` must then show `build
++ef2dffdbbb87`; pin to `ef2dffd` itself and you get the older binary that
++commit still carried). To go back past Phases Z–Z3 as well, use `0812bc9` in
++both places (binary build `da621f5db2bb`). To roll `main` itself back, revert
++the release commits on main (do not force-push).
+ 
+ Roll back at once if any of these happens: users report being cut in waves;
+ more than a handful of `stuck:` lines an hour that no real throttle explains;
+ a burst of `stuck:` lines at the same second (more than an eighth of the
+ pool); `degraded (up-loss` lines by the dozen right after a congestion spell;
+-`hs2 doctor` FAILs that the old build did not have.
++`hs2 doctor` FAILs that the old build did not have; any of V16's reasons that
++remain with both of its switches off.
+ 
+ ## What to watch
+ 
+@@ -298,24 +307,162 @@ link dies; the verdict lines name links that really are slower or lossier
+ never most of the pool at once; uploads next to heavy downloads (and the
+ reverse) and interactive use next to bulk transfers feel no worse than on the
+ previous release. Report the counts of each line per hour and any user
+-complaint with its time. Roll back (above, to `0812bc9`, binary build
+-`da621f5db2bb`) if verdict or move lines come in waves across the pool, or if
+-users are cut or stalled more than before.
++complaint with its time. Roll back to the release before Phases Z–Z3 (above:
++`0812bc9`, binary build `da621f5db2bb`) if verdict or move lines come in waves
++across the pool, or if users are cut or stalled more than before.
++
++**V16 — one connection past ~100 Mbit/s (Phase Z5 step 1: the download
++window core and the exit's pacing net).** Before this release one connection
++moved at most about 2 MiB per round trip (~112 Mbit/s at 150 ms, ~168 at
++100 ms; on the rig 81 Mbit/s on a 300 Mbit/s path at 150 ms). Now:
++
++- the **window core** runs on the **Iran (edge) server**, for downloads only:
++  it lets a fast download's window grow past 2 MiB as far as the path carries.
++  It starts on a link only once the Kharej server sends its new 96-byte stats
++  record, so **both servers must run this release**; with an old Kharej server
++  downloads stay exactly as before. It also stays off where the old windows
++  already fill the path or the Kharej server resends over 1%.
++- the **pacing net** runs on the **Kharej (exit) server**, on every link
++  socket, whatever the Iran server runs: when a link socket resends 2% or
++  more while it paces at over twice what the path delivers, its pacing is
++  held at 1.25× the delivery rate until the resends stop.
++- uploads are unchanged until step 3.
++
++*1. One big download, before and after.* On a test pair with a fast path
++between the servers (the clearest difference: 300 Mbit/s or more each way and
++a round trip of 100 ms or more), move one large download through the tunnel:
++either `iperf3 -s -p 5201` on the Kharej server behind a test user port (the
++port in the Iran server's `forward_ports`, and `5201=127.0.0.1:5201` in the
++Kharej server's `port_map`) and from the Iran server or a client behind it
++`iperf3 -c <Iran server IP> -p 5201 -R -P 1 -t 60` (one connection, the
++Kharej side sending), or one large file through a user's client. Take six runs
++in turn: core on (the default), core off (`HS2_TUNE_WCORE=0` on the Iran
++server, below), on, off, on, off. In each run record the Mbit/s, the Iran
++server's `hs2 status` during the transfer, the new log lines on both servers,
++and, from another client through the same tunnel, an interactive user's
++latency (a small request every 200 ms): its p50/p99. Pass: with the core on
++the download is clearly faster where the path has room (rig: 81 → 223 Mbit/s
++on 300/150, 112 → 834 on 1000/100; a real path will differ), and never
++clearly slower than with it off; during the transfer
++the Iran server's `hs2 status` shows `windows:    fast connections: 1 (windows
++6 MiB of 64 MiB pool)` (sizes vary) and its log a `downloads fill the path`
++line for the link; no cut, and no `degraded` or `stuck:` line for that link;
++the interactive user's p50 about the same (its p99 may be higher: the known
++cost, below — report it). If the core never starts (no `windows:` line, no
++`fill the path` line, the same speed as off): check `hs2 version` on the
++Kharej server (an old one keeps the core off), whether one connection already
++fills the path with 2 MiB windows (then the core stays off by design), and
++whether the Kharej server's socket resends over 1% (`ss -ti` on the link).
++
++*2. 24 h with real users,* alongside V1 and V15. Watch both servers:
++
++```
++# Iran (edge)
++journalctl -u <unit> -f -o cat | grep -E 'fill the path|download windows|loss with no queue|window pool full|MiB ceiling|round trip grew to|window core:'
++# Kharej (exit)
++journalctl -u <unit> -f -o cat | grep -E 'pacing held|pacing net:'
++```
++
++| Log line (exact format; numbers vary) | Meaning | Expected |
++|---|---|---|
++| `mtcp: link N: downloads fill the path at ~287 Mbit/s (round trip 151 ms): window held at 6.4 MiB for 2 fast connection(s), queue ~4 ms` (Iran) | the core found the window that fills the link's path (end of its start-up, or the knee moved by more than 25%) | when large downloads run; at most once a minute per link |
++| `mtcp: link N: <why> — download windows 6.4 MiB → 3.1 MiB` (Iran), `<why>` one of `path queue grew by 38 ms`, `the exit's queue grew by 12 ms`, `path queue grew by 12 ms (the link's own round trip)`, `control pings came back 40 ms late`, the same with ` (resent 2.1%)`, `packets were lost as the windows grew (resent 1.8%)`, `packets arrived behind holes as the windows grew`, `packets arrived behind holes on a clean path`, `path slowed to ~90 Mbit/s with its queue growing` | a drain: the core shrank the link's download windows (never below 2 MiB) because the path's queue grew, or loss came with the growth | now and then, mostly at the evening peak or when the path changes; at most once per link per 30 s |
++| `mtcp: link N: 0.4% loss with no queue — windows cover the resends (+18 ms)` (Iran) | random loss with no queue: the core does not back off for it | on lossy paths; at most once per link per 10 min |
++| `mtcp: window pool full (64 MiB): 5 fast connection(s) on 3 link(s) held below what their path carries` (Iran) | several fast downloads at once took the whole window pool; each keeps what it has | rare (at most once in 5 min); harmless when frequent on a small server (report it) |
++| `mtcp: link N: one connection's window is at its 16 MiB ceiling (round trip 480 ms)` or `… N connections' windows are at their 16 MiB ceiling …` (Iran) | a very fast or very long path: 16 MiB is the most a window gets | rare |
++| `mtcp: link N: the path's round trip grew to ~400 ms (a route change) — the window core follows it` (Iran) | the link's path changed | rare |
++| `mtcp: window core: N more link(s) …` (Iran) | the lines above past 8 links in a minute, in one summary line | only on a busy pool |
++| `mtcp: link from 1.2.3.4:5678: resending 6.1% at a pacing rate 3.9× what the path delivers — pacing held at 1.25× (~240 Mbit/s) until the resends stop` (Kharej) | the pacing net engaged on that link socket | now and then (a shallow queue, a policer, several downloads on one link); at most once per link per 5 min |
++| `mtcp: pacing net: N more link(s) resent past 2% and had their pacing held in the last minute` (Kharej) | the same past 8 links in a minute | only while the path itself loses |
++| the line of a link's end, Iran (`mtcp: link N down: …`, a retired or drained link, a reverse link): `… (while up: its receive buffer ran full N time(s), K of them grown from the window pool instead; …; window core: up to 9.1 MiB at 412 Mbit/s, drained 3 time(s) for queue, 1 for loss, held by the window pool 0 time(s))` (`, N for a slower path` before `held` when the path slowed) | what the core did on that link while it was up; `K of them grown from the window pool instead` counts the times its full buffer borrowed from the pool instead of stalling | only on links that carried fast downloads |
++| the line of a link's end, Kharej (`link down from 1.2.3.4:5678: … (now 5)`, or in reverse `mtcp: exit link down (slot N: …)`, `mtcp: exit slot N retired …`): `… (while up: pacing held 2 time(s) for resends (up to 2.8%))` | how often the pacing net held that link and the largest resend share it saw | only on links it engaged on |
++
++Count per hour (Iran, then Kharej):
++
++```
++journalctl -u <unit> --since "-1h" -o cat | grep -c 'fill the path'
++journalctl -u <unit> --since "-1h" -o cat | grep -c 'download windows'
++journalctl -u <unit> --since "-1h" -o cat | grep -c 'loss with no queue'
++journalctl -u <unit> --since "-1h" -o cat | grep -c 'window pool full'
++journalctl -u <unit> --since "-1h" -o cat | grep -c 'pacing held at'
++journalctl -u <unit> --since "-1h" -o cat | grep -c 'pacing net:'
++```
++
++Normal: the lines above at the rates in the table; large downloads faster
++than on the previous release; no more cuts, `stuck:` or `degraded` lines than
++the previous release had in the same hours. Known costs, accepted for this
++step (CHANGELOG, Phase Z5 step 1): a user whose connection shares the link
++(or the bottleneck) with a fast download may see more delay spikes (on the
++rig p99 up to ~2.3×, and p50 up to 1.7× on a lossy path); on lossy, very
++long (500 ms and more) or shallow-queue paths the gain is small; uploads gain
++nothing yet.
++
++Reasons to switch a part off (below) and, if it stays with both off, to roll
++back:
++- any user cut that the previous release did not have (connections reset in
++  waves, users reporting drops during large downloads);
++- `degraded` or `stuck:` lines the previous release did not have — above all
++  on links whose end line shows `window core: up to …` (the core is never
++  meant to bring the loss rule to a link) → `HS2_TUNE_WCORE=0`;
++- `pacing held` on many links at once (the `pacing net: N more link(s)` line
++  minute after minute) together with downloads slower than with the net off
++  → `HS2_TUNE_PACENET=0`;
++- interactive users (calls, games) next to heavy downloads clearly worse than
++  on the previous release → `HS2_TUNE_WCORE=0`;
++- `hs2 doctor` FAILs or a memory or CPU climb the previous release did not
++  have.
++
++*Switching a part off (no reinstall).* The switches are environment variables
++read when hs2 starts; set them in a systemd drop-in of the tunnel's unit (find
++it with `systemctl list-units 'hs2*'`):
++
++```
++systemctl edit <unit>
++```
++
++and add, in the editor:
++
++```
++[Service]
++Environment=HS2_TUNE_WCORE=0
++```
++
++on the **Iran** server to turn the window core off (every download window
++back within 2 MiB, as before), or `Environment=HS2_TUNE_PACENET=0` on the
++**Kharej** server to turn the pacing net off — two separate switches, one per
++server. Then `systemctl restart <unit>` (the tunnel's users reconnect at once)
++and check the start lines: `journalctl -u <unit> --since "-2min" -o cat |
++grep 'tuning: HS2_TUNE'` shows `tuning: HS2_TUNE_WCORE=0` (or `…PACENET=0`).
++To turn it back on, delete that line with `systemctl edit <unit>` (or
++`systemctl revert <unit>` when the drop-in holds nothing else) and restart. A
++drop-in survives Upgrade in the menu (only the unit file is rewritten; it goes
++only with the tunnel's removal), so remove it after the test. With both
++switches off, what remains of this release on the data path is mostly the
++window pool's borrowing (a link whose buffer runs full borrows from the pool
++instead of stalling); to rule that out too, add
++`Environment=HS2_TUNE_SMUX_POOL=0` on both servers (with `HS2_TUNE_WCORE=0`
++on the Iran server). If a problem stays with all of them off, roll back the
++binary (above).
+ 
+ ## What to send back
+ 
+ For each scenario: the counts, the relevant log lines (Iran side, with
+-timestamps), the time of the action (V2–V4), and whether users noticed.
+-
+-Release: binary build `ef2dffdbbb87` (Phases Z, Z2 and Z3 — the user-port
+-path: adaptive stream windows and brakes, new users kept off dying and
+-clearly worse links, unanswered new connections moved off a link that went
+-black, window updates and small streams ahead of bulk data inside a link, and
+-a send gate on slow links; V15 above; `hs2 version` shows it). Built on the
+-work branch `claude/smux-buffer-constants-fv9bu8`, not yet on main: install it
+-on a test pair with `HS2_REPO_RAW` pinned to the commit that carries this
+-binary. Everything in these phases was measured on loopback rigs and
+-simulators (BBR, Linux 6.x), not yet across the real Iran–abroad path. The
+-previous release, binary build `da621f5db2bb` (Phase CA + CA1b and Phase Y),
+-is the rollback target. See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X,
+-Phase Y, Phase CA, Phase Z, Phase Z2, Phase Z3) and `git log`.
++timestamps), the time of the action (V2–V4), and whether users noticed. For
++V16 also: the six runs' Mbit/s and the interactive p50/p99 with the core on
++and off, the round trip between the servers (`ping`), the Iran server's
++`windows:` line, and the Kharej side's `pacing held` lines with timestamps.
++
++Release: <filled at build time>
++
++This release: Phase Z5 step 1 (one connection past ~100 Mbit/s: the window
++core for the Iran server's downloads, the window pool, the 96-byte stats
++record and the Kharej server's pacing net; V16 above; `hs2 version` shows its
++build id), on top of Phases Z, Z2 and Z3 (V15). Built on the work branch
++`claude/smux-buffer-constants-fv9bu8`: install it on a test pair with
++`HS2_REPO_RAW` pinned to the commit that carries this binary. Everything in
++these phases was measured on loopback rigs and simulators (BBR, Linux 6.x),
++not yet across the real Iran–abroad path. The previous release, binary build
++`ef2dffdbbb87` (Phases Z, Z2 and Z3; commit `c9825f2`), is the rollback
++target; before it `da621f5db2bb` (Phase CA + CA1b and Phase Y; `0812bc9`).
++See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y, Phase CA, Phase Z,
++Phase Z2, Phase Z3, Phase Z5 step 1) and `git log`.
