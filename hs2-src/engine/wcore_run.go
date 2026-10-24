@@ -1159,57 +1159,65 @@ func (ws *wcSet) poolHeld(l *wcLink, now time.Time, n int) {
 // wcTraceLine is one evaluation of one link: all its inputs, what the core
 // made of them, and what it decided.
 type wcTraceLine struct {
-	T         string          `json:"t"`
-	Link      string          `json:"link"`
-	Side      string          `json:"side"` // edge (downloads) | exit (uploads)
-	State     string          `json:"state"`
-	B         uint64          `json:"b"`     // the budget decided
-	BPub      uint64          `json:"b_pub"` // ... and published (the ramp's)
-	Fixed     uint32          `json:"fixed,omitempty"`
-	Dt        float64         `json:"dt_s"`
-	NF        int             `json:"n_f"`
-	RF        float64         `json:"r_f"` // bytes/s
-	RLink     float64         `json:"r_link"`
-	RHat      float64         `json:"r_hat"` // R̂ for F
-	Grown     float64         `json:"grown"`
-	WF        float64         `json:"w_f"`
-	HStep     float64         `json:"h_step"`
-	Hit       float64         `json:"hit"`
-	TBase     float64         `json:"t_base_ms"`
-	TurnBase  float64         `json:"turn_base_ms"`
-	Tau       float64         `json:"tau_hold_ms"`
-	QTurn     float64         `json:"q_turn_ms"`
-	QTurnOK   bool            `json:"q_turn_ok"`
-	QRef      float64         `json:"q_ref_ms"`
-	QSnd      float64         `json:"q_snd_ms"`
-	QSndOK    bool            `json:"q_snd_ok"`
-	QOwn      float64         `json:"q_own_ms"`
-	QCtrl     float64         `json:"q_ctrl_ms"` // the longest pong over rttMin in the interval (0: none)
-	CtrlMin   float64         `json:"ctrl_min_ms"`
-	Pongs     []float64       `json:"pongs_ms,omitempty"`
-	MinRTT    float64         `json:"min_rtt_ms"` // the link socket's own
-	SRTT      float64         `json:"srtt_ms"`
-	SegsIn    uint64          `json:"segs_in"`
-	Ooo       float64         `json:"ooo"`
-	OooOK     bool            `json:"ooo_ok"`
-	Snd       float64         `json:"snd"` // the exit's resend share (a fresh record)
-	SndOK     bool            `json:"snd_ok"`
-	SndSRTT   float64         `json:"snd_srtt_ms,omitempty"`
-	SndMinRTT float64         `json:"snd_min_rtt_ms,omitempty"`
-	Spread    float64         `json:"spread_ms"`
-	QTarget   float64         `json:"q_target_ms"`
-	ProbeQ    float64         `json:"probe_q_ms"`
-	Qcap      float64         `json:"q_cap_ms,omitempty"`
-	Parks     uint32          `json:"parks"`
-	Brakes    uint32          `json:"brakes"`
-	PoolFree  int64           `json:"pool_free"`
-	PoolShort uint32          `json:"pool_short"`
-	APProbing bool            `json:"ap_probing"`
-	TurnRef   float64         `json:"turn_ref_ms"`
-	QBrake    float64         `json:"q_brake_ms"`
-	GrowOK    bool            `json:"grow_ok"`
-	Streams   []wcTraceStream `json:"streams"`
-	Events    []string        `json:"events,omitempty"`
+	T         string    `json:"t"`
+	Link      string    `json:"link"`
+	Side      string    `json:"side"` // edge (downloads) | exit (uploads)
+	State     string    `json:"state"`
+	B         uint64    `json:"b"`     // the budget decided
+	BPub      uint64    `json:"b_pub"` // ... and published (the ramp's)
+	Fixed     uint32    `json:"fixed,omitempty"`
+	Dt        float64   `json:"dt_s"`
+	NF        int       `json:"n_f"`
+	RF        float64   `json:"r_f"` // bytes/s
+	RLink     float64   `json:"r_link"`
+	RHat      float64   `json:"r_hat"` // R̂ for F
+	Grown     float64   `json:"grown"`
+	WF        float64   `json:"w_f"`
+	HStep     float64   `json:"h_step"`
+	Hit       float64   `json:"hit"`
+	TBase     float64   `json:"t_base_ms"`
+	TurnBase  float64   `json:"turn_base_ms"`
+	Tau       float64   `json:"tau_hold_ms"`
+	QTurn     float64   `json:"q_turn_ms"`
+	QTurnOK   bool      `json:"q_turn_ok"`
+	QRef      float64   `json:"q_ref_ms"`
+	QSnd      float64   `json:"q_snd_ms"`
+	QSndOK    bool      `json:"q_snd_ok"`
+	QOwn      float64   `json:"q_own_ms"`
+	QCtrl     float64   `json:"q_ctrl_ms"` // the longest pong over rttMin in the interval (0: none)
+	CtrlMin   float64   `json:"ctrl_min_ms"`
+	Pongs     []float64 `json:"pongs_ms,omitempty"`
+	MinRTT    float64   `json:"min_rtt_ms"` // the link socket's own
+	SRTT      float64   `json:"srtt_ms"`
+	SegsIn    uint64    `json:"segs_in"`
+	Ooo       float64   `json:"ooo"`
+	OooOK     bool      `json:"ooo_ok"`
+	Snd       float64   `json:"snd"` // the exit's resend share (a fresh record)
+	SndOK     bool      `json:"snd_ok"`
+	SndSRTT   float64   `json:"snd_srtt_ms,omitempty"`
+	SndMinRTT float64   `json:"snd_min_rtt_ms,omitempty"`
+	Spread    float64   `json:"spread_ms"`
+	QTarget   float64   `json:"q_target_ms"`
+	ProbeQ    float64   `json:"probe_q_ms"`
+	Qcap      float64   `json:"q_cap_ms,omitempty"`
+	Parks     uint32    `json:"parks"`
+	Brakes    uint32    `json:"brakes"`
+	PoolFree  int64     `json:"pool_free"`
+	PoolShort uint32    `json:"pool_short"`
+	APProbing bool      `json:"ap_probing"`
+	TurnRef   float64   `json:"turn_ref_ms"`
+	QBrake    float64   `json:"q_brake_ms"`
+	GrowOK    bool      `json:"grow_ok"`
+	// the links to the same peer (wcPeer): another core is on (grp), the
+	// path's queue by every link's records (median) and what of it stands
+	// (lower quartile), and the fair share and rAvg the shared rule uses
+	Grp     bool            `json:"grp,omitempty"`
+	QPath   float64         `json:"q_path_ms,omitempty"`
+	QStand  float64         `json:"q_stand_ms,omitempty"`
+	Fair    float64         `json:"fair,omitempty"` // bytes/s (0: no shared rule this interval)
+	RAvg    float64         `json:"r_avg,omitempty"`
+	Streams []wcTraceStream `json:"streams"`
+	Events  []string        `json:"events,omitempty"`
 }
 
 type wcTraceStream struct {
@@ -1272,6 +1280,13 @@ func (l *wcLink) traceOf(now time.Time, o wcOut) wcTraceLine {
 	if m.dt > 0 && c.tBase > 0 {
 		t.RHat = c.rhatF(now, m)
 	}
+	if m.grp {
+		t.Grp, t.QPath, t.QStand = true, msOf(m.qPath), msOf(m.qStand)
+		if f, ok := c.fairShare(now, m); ok {
+			t.Fair = f
+		}
+	}
+	t.RAvg = c.rAvg
 	if c.qcapKnown(now) {
 		t.Qcap = msOf(c.qcap)
 	}

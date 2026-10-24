@@ -2790,7 +2790,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	} else if m.qOK {
 		rise, ok = m.qTurn-c.probeQ0, true
 	}
-	if pq, ok := m.pathQueue(); m.sndOK && ok && pq <= max(c.qSndRefOf(now, m), 0)+c.dq()/2 {
+	if q, qok := m.pathQueue(); m.sndOK && qok && q <= max(c.qSndRefOf(now, m), 0)+c.dq()/2 {
 		rise, ok = min(rise, 0), true // the exit's record of the probe shows no queue
 	}
 	pq := c.probeQ(now)
