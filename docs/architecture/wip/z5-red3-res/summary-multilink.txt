@@ -1,0 +1,90 @@
+P6-lmx4@1000-100-base-r1                     int p99 [131.9, 125.6, 138.5] max [205.7, 139.7, 203.5] | short n 241 fail 0 p50 109 p99 133
+P6-lmx4@1000-100-base-r2                     int p99 [118.8, 116.2, 116.9] max [190.8, 123.2, 302.4] | short n 241 fail 0 p50 108 p99 124
+P6-lmx4@1000-100-core-r1                     int p99 [214.2, 222, 203.7] max [230, 244.7, 230.1] | short n 241 fail 0 p50 166 p99 239
+P6-lmx4@1000-100-core-r2                     int p99 [209.7, 223.2, 221.9] max [238.5, 269.3, 235.3] | short n 241 fail 0 p50 169 p99 283
+P6-lmx4@300-150-base-r1                      int p99 [216.6, 372.4, 370.2] max [511.4, 839.3, 398.5] | short n 241 fail 0 p50 175 p99 440
+P6-lmx4@300-150-base-r2                      int p99 [437.1, 214.5, 463.2] max [974.2, 631.4, 644.1] | short n 241 fail 0 p50 176 p99 457
+P6-lmx4@300-150-core-r1                      int p99 [204.1, 206.6, 209.6] max [404.5, 399.6, 232] | short n 241 fail 0 p50 178 p99 216
+P6-lmx4@300-150-core-r2                      int p99 [203.6, 211.1, 479.1] max [377.7, 426.5, 533.2] | short n 241 fail 0 p50 175 p99 357
+P6-lmx8@1000-100-q20-base-r1                 int p99 [314.5, 301, 289.2] max [509.8, 434.4, 456.7] | short n 241 fail 0 p50 124 p99 315
+P6-lmx8@1000-100-q20-base-r2                 int p99 [283, 308.2, 327.6] max [501.7, 405, 399.1] | short n 241 fail 0 p50 131 p99 330
+P6-lmx8@1000-100-q20-core-r1                 int p99 [232.3, 253.7, 367.2] max [465.3, 394.4, 468] | short n 241 fail 0 p50 116 p99 254
+P6-lmx8@1000-100-q20-core-r2                 int p99 [248.3, 238.8, 227.5] max [423.2, 497.6, 412.1] | short n 241 fail 0 p50 115 p99 238
+P6L-lmx4q200L@1000-100-base-r1               int p99 [136.3, 145.1, 147.7] max [203.8, 432.9, 414.3] | short n 1201 fail 0 p50 111 p99 230
+P6L-lmx4q200L@1000-100-core-r1               int p99 [213.9, 360.1, 312.6] max [267.6, 545.8, 405.6] | short n 1201 fail 0 p50 170 p99 376
+P6X-lmx1q200@1000-100-base-r1                int p99 [110.4, 110.9, 109.4] max [195.5, 209.8, 219.6] | short n 241 fail 0 p50 107 p99 122
+P6X-lmx1q200@1000-100-base-r2                int p99 [110.8, 110.1, 109.9] max [132.4, 157.2, 111.8] | short n 241 fail 0 p50 107 p99 115
+P6X-lmx1q200@1000-100-core-r1                int p99 [139.9, 139, 136.6] max [148.2, 143.7, 153.1] | short n 241 fail 0 p50 122 p99 151
+P6X-lmx1q200@1000-100-core-r2                int p99 [144.8, 143.7, 143.3] max [154.7, 219.2, 145.3] | short n 241 fail 0 p50 124 p99 178
+P6X-lmx2q200@1000-100-base-r1                int p99 [111, 111.8, 116.1] max [204.8, 117.5, 192.8] | short n 241 fail 0 p50 107 p99 118
+P6X-lmx2q200@1000-100-base-r2                int p99 [109.9, 111.9, 114.6] max [153.2, 202.3, 201.1] | short n 241 fail 0 p50 106 p99 116
+P6X-lmx2q200@1000-100-core-r1                int p99 [159.8, 163.8, 232.1] max [168, 185.7, 489.9] | short n 241 fail 0 p50 136 p99 173
+P6X-lmx2q200@1000-100-core-r2                int p99 [166.7, 172, 171.2] max [213.2, 193.2, 189.4] | short n 241 fail 0 p50 138 p99 183
+P6X-lmx4q200@1000-100-base-r1                int p99 [124.6, 121.6, 127.2] max [134.5, 127.5, 320] | short n 241 fail 0 p50 110 p99 141
+P6X-lmx4q200@1000-100-base-r2                int p99 [122.5, 119.9, 121.9] max [142.4, 139.5, 423.8] | short n 241 fail 0 p50 109 p99 152
+P6X-lmx4q200@1000-100-core-r1                int p99 [205.7, 206.8, 350.8] max [233.8, 216.9, 474.1] | short n 241 fail 0 p50 156 p99 219
+P6X-lmx4q200@1000-100-core-r2                int p99 [219.3, 224.2, 322.3] max [239.3, 234.4, 532.8] | short n 241 fail 0 p50 172 p99 244
+P6X-lmx4q50@1000-100-base-r1                 int p99 [125, 125.1, 134.6] max [133.2, 134.7, 462.3] | short n 241 fail 0 p50 109 p99 138
+P6X-lmx4q50@1000-100-base-r2                 int p99 [132.1, 134, 197.9] max [192.5, 229.3, 343.5] | short n 241 fail 0 p50 112 p99 184
+P6X-lmx4q50@1000-100-core-r1                 int p99 [208.5, 209.7, 276.8] max [244.2, 229.1, 412.7] | short n 241 fail 0 p50 163 p99 238
+P6X-lmx4q50@1000-100-core-r2                 int p99 [215.9, 217.7, 223.6] max [226.8, 234, 433] | short n 241 fail 0 p50 171 p99 261
+P8-lmx12q200@1000-100-base-r1                int p99 [198.8, 198, 192.9] max [277.9, 212.6, 211.4] | short n 361 fail 0 p50 175 p99 211
+P8-lmx12q200@1000-100-base-r2                int p99 [204.8, 205.3, 203.8] max [216.8, 223.7, 212] | short n 361 fail 0 p50 173 p99 213
+P8-lmx12q200@1000-100-core-r1                int p99 [228.5, 233.8, 234.2] max [317.2, 250.3, 259.7] | short n 361 fail 0 p50 176 p99 250
+P8-lmx12q200@1000-100-core-r2                int p99 [215.7, 221.6, 227.6] max [244.8, 253.5, 232.2] | short n 361 fail 0 p50 172 p99 230
+P8-lmx12q50@1000-100-base-r1                 int p99 [246.1, 263.1, 236.4] max [658.7, 642.3, 246.5] | short n 361 fail 0 p50 172 p99 303
+P8-lmx12q50@1000-100-base-r2                 int p99 [280.8, 268.5, 260.9] max [701, 293, 291.5] | short n 361 fail 0 p50 185 p99 309
+P8-lmx12q50@1000-100-core-r1                 int p99 [180.1, 160, 162.2] max [728.9, 716.4, 299.9] | short n 361 fail 0 p50 144 p99 242
+P8-lmx12q50@1000-100-core-r2                 int p99 [168.5, 177.5, 189.8] max [725.1, 749.6, 753.7] | short n 361 fail 0 p50 145 p99 253
+== lmx1q200@1000-100
+   base       r1: users 122.9@L2 | links end 4 | verdicts exitdown:4 | core lines 0
+   base       r2: users 87.2@L1 | links end 4 | verdicts exitdown:4 | core lines 0
+   base       => mean 105.0 Mbit/s (median of 2 users), cuts 0, verdict lines {'exitdown': 8}, netns resends % [0.01, 0.01]
+   core       r1: users 796.4@L3 | links end 4 | verdicts exitdown:4 | core lines 4
+   core       r2: users 779.5@L2 | links end 4 | verdicts exitdown:4 | core lines 4
+   core       => mean 787.9 Mbit/s (median of 2 users), cuts 0, verdict lines {'core': 8, 'exitdown': 8}, netns resends % [0.0, 0.0]
+== lmx2q200@1000-100
+   base       r1: users 99.5@L0; 101.2@L4 | links end 4 | verdicts exitdown:4 | core lines 0
+   base       r2: users 95.0@L5; 100.2@L4 | links end 4 | verdicts exitdown:4 | core lines 0
+   base       => mean 99.8 Mbit/s (median of 4 users), cuts 0, verdict lines {'exitdown': 8}, netns resends % [0.01, 0.01]
+   core       r1: users 414.8@L2; 428.5@L7 | links end 4 | verdicts exitdown:4 | core lines 11
+   core       r2: users 449.0@L4; 391.0@L1 | links end 4 | verdicts exitdown:4 | core lines 10
+   core       => mean 421.6 Mbit/s (median of 4 users), cuts 0, verdict lines {'core': 21, 'exitdown': 8}, netns resends % [0.01, 0.01]
+== lmx4q200@1000-100
+   base       r1: users 90.5@L7; 107.0@L2; 99.1@L4; 123.1@L0 | links end 6 | verdicts exitdown:2 | core lines 0
+   base       r2: users 105.8@L2; 107.1@L3; 95.4@L5; 104.0@L4 | links end 6 | verdicts exitdown:2 | core lines 0
+   base       => mean 104.9 Mbit/s (median of 8 users), cuts 0, verdict lines {'exitdown': 4}, netns resends % [0.02, 0.02]
+   core       r1: users 246.6@L3; 255.1@L5; 245.5@L7; 77.6@L6 | links end 6 | verdicts exitdown:2 | core lines 16
+   core       r2: users 189.7@L3; 211.9@L5; 243.2@L2; 187.5@L1 | links end 6 | verdicts exitdown:2 | core lines 23
+   core       => mean 227.5 Mbit/s (median of 8 users), cuts 0, verdict lines {'core': 39, 'exitdown': 4}, netns resends % [0.03, 0.03]
+== lmx4q50@1000-100
+   base       r1: users 112.6@L6; 108.9@L3; 101.0@L7; 97.5@L2 | links end 6 | verdicts exitdown:2 | core lines 0
+   base       r2: users 95.8@L6; 112.8@L0; 123.1@L1; 114.6@L2 | links end 6 | verdicts exitdown:2 | core lines 0
+   base       => mean 110.7 Mbit/s (median of 8 users), cuts 0, verdict lines {'exitdown': 4}, netns resends % [0.02, 0.02]
+   core       r1: users 185.0@L7; 245.1@L1; 180.4@L5; 197.0@L2 | links end 6 | verdicts exitdown:2 pacing:1 | core lines 21
+   core       r2: users 217.2@L7; 206.3@L2; 181.1@L3; 192.6@L6 | links end 6 | verdicts exitdown:2 | core lines 23
+   core       => mean 194.8 Mbit/s (median of 8 users), cuts 0, verdict lines {'core': 44, 'exitdown': 4, 'pacing': 1}, netns resends % [0.04, 0.04]
+P6X-lmx4q200@1000-100-core-r1 users [(3, 247), (5, 255), (7, 246), (6, 78)]
+   0s xq   6 short p50  120 | 3:ho B5.1 r13 s8 q13 tb101 5:ho B4.1 r15 s24 q9 tb101 6:of B0.0 r0 s13 q13 tb100 7:ho B4.8 r17 s9 q15 tb101
+  10s xq  12 short p50  141 | 3:ho B5.9 r26 s11 q19 tb101 5:ho B4.7 r25 s11 q31 tb101 6:of B0.0 r0 s12 q17 tb100 7:ho B5.1 r18 s14 q23 tb101
+  20s xq  14 short p50  154 | 3:ho B5.4 r22 s21 q37 tb101 5:ho B5.8 r21 s20 q34 tb101 6:of B0.0 r0 s19 q16 tb100 7:ho B5.2 r33 s16 q26 tb101
+  30s xq  17 short p50  150 | 3:ho B5.3 r26 s14 q26 tb101 5:ho B5.7 r24 s15 q21 tb101 6:of B0.0 r0 s16 q22 tb100 7:ho B4.8 r17 s15 q26 tb101
+  40s xq  18 short p50  155 | 3:ho B5.5 r21 s10 q36 tb101 5:ho B5.8 r27 s10 q37 tb101 6:of B0.0 r0 s15 q29 tb100 7:ho B5.7 r30 s9 q35 tb101
+  50s xq  14 short p50  150 | 3:ho B5.0 r11 s23 q17 tb101 5:ho B4.1 r20 s24 q12 tb101 6:of B0.0 r0 s15 q14 tb100 7:pr B6.9 r23 s23 q28 tb101
+  60s xq  16 short p50  167 | 3:ho B5.4 r18 s14 q20 tb101 5:ho B4.7 r25 s14 q25 tb102 6:of B0.0 r0 s20 q17 tb102 7:ho B5.6 r15 s17 q14 tb102
+  70s xq  21 short p50  149 | 3:pr B5.6 r17 s30 q24 tb102 5:ho B5.3 r22 s29 q36 tb103 6:of B0.0 r0 s26 q25 tb102 7:ho B6.0 r27 s29 q24 tb102
+  80s xq  25 short p50  156 | 3:ho B6.0 r25 s20 q18 tb103 5:ho B5.1 r24 s36 q24 tb103 6:of B0.0 r0 s39 q24 tb101 7:ho B5.3 r37 s28 q37 tb101
+  90s xq  30 short p50  172 | 3:ho B4.6 r21 s32 q33 tb103 5:ho B7.5 r41 s21 q47 tb103 6:of B0.0 r0 s22 q29 tb101 7:ho B5.7 r35 s29 q41 tb101
+ 100s xq  39 short p50  180 | 3:ho B5.4 r24 s49 q35 tb103 5:ho B7.5 r48 s50 q55 tb103 6:of B0.0 r0 s30 q36 tb101 7:pr B5.6 r33 s32 q32 tb101
+ 110s xq  35 short p50  180 | 3:ho B7.1 r39 s40 q47 tb103 5:ho B5.8 r30 s39 q29 tb103 6:of B0.0 r0 s49 q41 tb101 7:ho B4.5 r28 s43 q28 tb101
+P6L-lmx4q200L@1000-100-core-r1 users [(0, 228), (1, 254), (2, 173), (5, 201)]
+   0s xq  16 short p50  160 | 0:ho B5.0 r18 s27 q29 tb101 1:dr B4.0 r28 s32 q28 tb101 2:ho B4.6 r33 s35 q33 tb101 5:ho B5.1 r39 s26 q29 tb101
+  60s xq  25 short p50  173 | 0:ho B6.2 r24 s30 q44 tb102 1:pr B2.4 r38 s30 q33 tb103 2:ho B5.0 r31 s27 q42 tb101 5:ho B7.0 r28 s30 q43 tb101
+ 120s xq  31 short p50  180 | 0:pr B4.3 r39 s66 q2 tb102 1:dr B2.4 r58 s68 q0 tb101 2:dr B6.9 r69 s69 q0 tb102 5:dr B2.1 r34 s69 q75 tb101
+ 180s xq  35 short p50  176 | 0:pr B4.0 r41 s49 q42 tb104 1:ho B8.0 r57 s45 q59 tb105 2:ho B6.0 r56 s33 q53 tb101 5:ho B4.4 r45 s30 q45 tb101
+ 240s xq  31 short p50  174 | 0:ho B2.3 r13 s29 q22 tb101 1:dr B3.0 r17 s32 q31 tb102 2:ho B5.6 r26 s31 q26 tb101 5:ho B6.5 r26 s25 q27 tb105
+ 300s xq  36 short p50  173 | 0:ho B6.9 r47 s47 q48 tb101 1:ho B4.7 r32 s41 q36 tb102 2:ho B3.6 r25 s26 q20 tb101 5:ho B7.0 r19 s50 q32 tb101
+ 360s xq  37 short p50  179 | 0:ho B4.8 r33 s42 q69 tb102 1:ho B8.1 r31 s41 q57 tb103 2:of B0.0 r25 s45 q52 tb101 5:ho B7.4 r47 s48 q49 tb107
+ 420s xq  35 short p50  172 | 0:ho B5.0 r19 s14 q29 tb103 1:ho B8.3 r32 s15 q34 tb106 2:of B0.0 r25 s21 q34 tb101 5:st B4.2 r36 s14 q35 tb101
+ 480s xq  33 short p50  163 | 0:ho B5.2 r38 s47 q30 tb101 1:ho B8.3 r30 s46 q34 tb101 2:of B0.0 r25 s46 q16 tb101 5:of B0.0 r35 s57 q35 tb101
+ 540s xq  33 short p50  157 | 0:ho B5.7 r23 s41 q23 tb102 1:ho B7.8 r11 s46 q32 tb101 2:of B0.0 r25 s44 q29 tb101 5:of B0.0 r35 s41 q28 tb102
