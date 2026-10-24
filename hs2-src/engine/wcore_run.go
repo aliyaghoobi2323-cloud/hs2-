@@ -146,6 +146,9 @@ type wcLink struct {
 	lab   bool   // WcorePaceCap as the session registered: the lab's always-on cap runs on it
 	set   *wcSet // the registry that steps it
 	name  atomic.Pointer[string]
+	// peerKey: the peer's address (its host): the cores of the links to it
+	// share a wcPeer (wcSet.peers)
+	peerKey string
 	// ap is the edge's LinkManager's apProbing (set when it adopts the link)
 	ap atomic.Pointer[atomic.Bool]
 
@@ -243,6 +246,13 @@ type wcSet struct {
 
 	tracePath string // WcoreTrace as the first session registered
 
+	// peers: what the cores of the links to each peer share (wcPeer), by
+	// the peer's host (red team, round 3, finding 1: the links of the pool
+	// to one exit share its path, and each core took the queue the others
+	// held for the path's own). The map is under mu; each wcPeer is the
+	// runner's own (it steps every link from one goroutine).
+	peers map[string]*wcPeer
+
 	// the runner's own
 	list      []*wcLink
 	trace     *os.File
@@ -317,6 +327,17 @@ func (ws *wcSet) put(l *wcLink) {
 		ws.all = map[*wcLink]struct{}{}
 	}
 	ws.all[l] = struct{}{}
+	if !l.off && l.core != nil {
+		if ws.peers == nil {
+			ws.peers = map[string]*wcPeer{}
+		}
+		p := ws.peers[l.peerKey]
+		if p == nil {
+			p = newWcPeer()
+			ws.peers[l.peerKey] = p
+		}
+		l.core.peer = p
+	}
 	ws.mu.Unlock()
 }
 
@@ -362,9 +383,24 @@ func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *link
 		l.fixed = uint32(min(WcoreFixedWin, cfg.MaxStreamBuffer))
 	}
 	l.name.Store(&name)
+	l.peerKey = wcPeerKey(remote)
 	l.core = newWcore(wcConfig{side: side, stage: WcoreStage, need: uint32(cfg.NeedStreamBuffer),
 		maxWin: uint32(cfg.MaxStreamBuffer), minWin: uint32(cfg.MinStreamBuffer)}, rand.Float64)
 	return l
+}
+
+// wcPeerKey is the key of a link's peer in wcSet.peers: its host (links
+// to one exit over other ports or carriers still share its path); "" with
+// no address.
+func wcPeerKey(remote net.Addr) string {
+	if remote == nil {
+		return ""
+	}
+	s := remote.String()
+	if h, _, err := net.SplitHostPort(s); err == nil {
+		return h
+	}
+	return s
 }
 
 // wcApplyKnobs sets the core's queue targets from the lab knobs.
@@ -399,6 +435,12 @@ func (ws *wcSet) wakeAll() {
 		if l.sess.IsClosed() {
 			delete(ws.all, l)
 			l.ceiled, l.samples = nil, nil // what it reads of the link stays (wcStats)
+			if p := l.core.peer; p != nil {
+				p.drop(l.core)
+				if p.empty() {
+					delete(ws.peers, l.peerKey)
+				}
+			}
 			continue
 		}
 		ws.list = append(ws.list, l)

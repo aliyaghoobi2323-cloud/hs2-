@@ -134,6 +134,7 @@ type wcore struct {
 	qOwnRef    time.Duration
 	rLinkHold  float64
 	holdR      [2]float64 // R_F of the last two HOLD intervals, newest first
+	rAvg       float64    // R_F smoothed over the evaluations (wcRAvgAlpha): the knee's rate with other cores on the peer
 	holdN      int
 	growthN    int
 	wlN        int
@@ -180,7 +181,15 @@ type wcore struct {
 	ceils map[uint32]uint32
 	cnt   wcCounters
 	last  wcMeas // the latest interval's measurements (lab trace)
+
+	// peer: what the cores of the links to the same peer share (wcPeer; nil:
+	// none, the link is alone)
+	peer *wcPeer
 }
+
+// wcRAvgAlpha: R_F's smoothing for the knee with other cores on the peer
+// (rAvg).
+var wcRAvgAlpha = 0.25
 
 // wcLossRef is a loss level and the budget it was measured at: loss past
 // it at a larger budget came with B (congestive); at the same budget it is
@@ -700,8 +709,18 @@ type wcMeas struct {
 	ctrlUp   bool
 	ctrlQ    time.Duration // the longest pong past q_ctrl's floor
 	holey    bool          // data waits behind holes (ooo ≥ wcOooClean): q_own judges the queue
-	qSnd3    time.Duration // the largest q_snd of the latest wcSndHist records
+	qSnd3    time.Duration // the largest q_snd of the latest wcSndHist records (with other cores on: the median of every link's)
 	qSnd3OK  bool
+	grp      bool // another core of the peer is on (grouped)
+	// qPath: with other cores on the peer (grp), the path's queue by the
+	// exit's records of every link to it (pathQ): what the links' cores hold
+	// there together
+	qPath   time.Duration
+	qPathOK bool
+	// qStand: with other cores on the peer, the lower quartile of the
+	// records of the last two spans (what of the queue stands)
+	qStand   time.Duration
+	qStandOK bool
 	idleF    bool // a stream of F was sent nothing (kept in F, nothing judged)
 	at       time.Time
 }
@@ -891,6 +910,13 @@ func (c *wcore) step(in wcIn) wcOut {
 	} else {
 		c.blindN = 0
 	}
+	if len(m.f) > 0 && !m.idleF {
+		if c.rAvg == 0 || !m.sameF {
+			c.rAvg = m.rF
+		} else {
+			c.rAvg += wcRAvgAlpha * (m.rF - c.rAvg)
+		}
+	}
 	switch {
 	case c.state == wcOff:
 		c.off(in, m, &ev)
@@ -931,6 +957,9 @@ func (c *wcore) step(in wcIn) wcOut {
 		case wcDrain:
 			c.toHold(in, m)
 		}
+	}
+	if c.peer != nil {
+		c.peer.noteCore(c, now, c.state != wcOff && len(m.f) > 0, c.rAvg)
 	}
 	settle, measure := c.interval()
 	c.ramp()
@@ -1293,6 +1322,9 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 	if fresh {
 		copy(c.qSnds[1:], c.qSnds[:])
 		c.qSnds[0] = wcRate{now, c.qSnd.Seconds()}
+		if c.peer != nil {
+			c.peer.noteRec(c, now, c.qSnd)
+		}
 	}
 }
 
@@ -1331,6 +1363,48 @@ func (c *wcore) qSndMax(now time.Time) (time.Duration, bool) {
 		q, ok = max(q, time.Duration(r.r*float64(time.Second))), true
 	}
 	return q, ok
+}
+
+// pathQ is, with other cores on the peer, the path's queue by the exit's
+// records: the median of every link's records of the last two record spans
+// (a record is a snapshot of the queue, and on a shallow queue each sender's
+// bursts at 3.9 times the path's rate swing it from 0 to 40 ms: 300/150
+// behind 50 ms in the model).
+func (c *wcore) pathQ(now time.Time) (time.Duration, bool) {
+	if q, n := c.peer.queue(now, wcPeerSpan, 0.5); n > 0 {
+		return q, true
+	}
+	return 0, false
+}
+
+// pathQueue is the path's queue the interval judges by: with other cores on
+// the peer the records of every link (qPath), else the link's own latest
+// (qSnd).
+func (m *wcMeas) pathQueue() (time.Duration, bool) {
+	if m.grp {
+		return m.qPath, m.qPathOK
+	}
+	return m.qSnd, m.qSndOK
+}
+
+// grouped says whether another core of the peer is on (wcPeer): the path's
+// queue is then theirs too.
+func (c *wcore) grouped(now time.Time) bool {
+	if c.peer == nil {
+		return false
+	}
+	n, _ := c.peer.others(c, now)
+	return n > 0
+}
+
+// heldQ is the queue the other cores of the peer hold on the path as they
+// should (qTarget, while one of them is on): a late core judges its windows
+// past it, not past the path's own floor.
+func (c *wcore) heldQ(m wcMeas) time.Duration {
+	if !m.grp {
+		return 0
+	}
+	return c.qTarget(m.at)
 }
 
 // measure classifies the streams and takes the interval's estimators.
@@ -1377,7 +1451,22 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	if !c.qSndAt.IsZero() && now.Sub(c.qSndAt) <= wcSndSpan {
 		m.qSnd, m.qSndOK = c.qSnd, true
 	}
+	m.grp = c.grouped(now)
 	m.qSnd3, m.qSnd3OK = c.qSndMax(now)
+	if m.grp {
+		// the records of every link: the others' bursts and probes are in
+		// them, and one record of them is no standing queue (judge, p1)
+		if q, n := c.peer.queue(now, wcSndHist*wcSndSpan, 0.5); n > 0 {
+			m.qSnd3, m.qSnd3OK = q, true
+		}
+		// the queue that stands: the lower quartile of the records
+		if q, n := c.peer.queue(now, wcPeerSpan, 0.25); n > 0 {
+			m.qStand, m.qStandOK = q, true
+		}
+	}
+	if m.grp {
+		m.qPath, m.qPathOK = c.pathQ(now)
+	}
 	if in.snd.fresh && in.snd.segsOut > 0 {
 		m.snd, m.sndOK, m.sndSegs, m.sndAt = float64(in.snd.retrans)/float64(in.snd.segsOut), true, in.snd.segsOut, now
 	}
@@ -1386,7 +1475,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	noQ := true
 	switch {
 	case m.qSndOK:
-		noQ = m.qSnd <= c.qTarget(now)+c.dq()
+		noQ = m.qSnd <= c.qTarget(now)+c.dq()+c.heldQ(m)
 	case m.qOwnOK:
 		noQ = m.qOwn <= c.qTarget(now)+wcDqOwn
 	}
@@ -1591,7 +1680,18 @@ func (c *wcore) bHold(now time.Time, m wcMeas) uint64 {
 	r := c.rhatF(now, m)
 	t := c.tBase.Seconds()
 	h := math.Min(math.Max(c.qTarget(now).Seconds()/t, wcHMin), wcHMax)
-	b := uint64(c.knee(r, m) + h*r*t)
+	margin := h * r * t
+	if f, ok := c.fairShare(now, m); ok {
+		// other cores on the peer: the knee at the rate the streams carry
+		// (R̂ is its largest of 10 s, and the shares of one bottleneck swing:
+		// the sum of the links' R̂ was past the path), and the same margin
+		// for every core (qTarget at the fair share): each holds as much in
+		// the shared queue, so the links' rates even out (a link's rate is
+		// what it holds there over the queue) and the queue adds up to
+		// qTarget, not n·qTarget
+		r, margin = math.Min(r, c.rAvg), h*f*t
+	}
+	b := uint64(c.knee(r, m) + margin)
 	if c.bCap > 0 && now.Sub(c.bCapAt) < wcQcapTTL {
 		b = min(b, c.bCap)
 	}
@@ -1599,8 +1699,48 @@ func (c *wcore) bHold(now time.Time, m wcMeas) uint64 {
 	// standing queue of qTarget): τ_hold and R̂ alone (the delay behind
 	// holes the window itself may cause) never take B into budgets nothing
 	// has tried
-	lim := c.bGood + uint64(h*r*t)
+	lim := c.bGood + uint64(margin)
 	return min(b, max(lim, uint64(max(len(m.f), 1))*uint64(c.cmin())))
+}
+
+// aboveShare: other cores are on the peer and this one's fast streams carry
+// more than wcShareSlack times what each would carry alike. Such a core does
+// not probe: on a path with room the others' probes take what is left, and a
+// probe sized by its own R̂ (probeQ at its rate) kept the largest share the
+// largest (4 links on 1000/100 behind 50 ms: 430 against 140 Mbit/s for a
+// minute in the model, the queue too bursty to stand).
+func (c *wcore) aboveShare(now time.Time, m wcMeas) bool {
+	if !m.grp || c.peer == nil || c.rAvg <= 0 {
+		return false
+	}
+	n, r := c.peer.others(c, now)
+	if n == 0 {
+		return false
+	}
+	return c.rAvg > wcShareSlack*(r+c.rAvg)/float64(n+1)
+}
+
+// wcShareSlack: aboveShare's margin over the fair share.
+var wcShareSlack = 1.2
+
+// fairShare is, with other cores on the peer and a queue that stands on the
+// path (the records' lower quartile at qTarget/2 or more), what each one's
+// fast streams would carry if they carried alike (their smoothed R_F over
+// the cores).
+func (c *wcore) fairShare(now time.Time, m wcMeas) (float64, bool) {
+	if !m.grp || c.rAvg <= 0 || !m.qStandOK || m.qStand < c.qTarget(now)/2 {
+		// (a queue that does not stand is a path with room: there each
+		// core grows as alone, on R̂ and its probes; with two links on
+		// 300/150 behind 50 ms, whose senders' bursts swing the queue from 0
+		// to 40 ms around a mean of 5, the shared rule held each at its
+		// floor, 190 against 218 Mbit/s in the model)
+		return 0, false
+	}
+	n, r := c.peer.others(c, now)
+	if n == 0 {
+		return 0, false
+	}
+	return (r + c.rAvg) / float64(n+1), true
 }
 
 // noteCap remembers that losses of our own came at budget b.
@@ -1773,6 +1913,21 @@ func (c *wcore) noteTau(m wcMeas) {
 	}
 	w := (m.wF + m.wPrev) / 2
 	s := time.Duration(((w-m.hStep)/m.rF - c.tBase.Seconds()) * float64(time.Second))
+	if m.grp && m.qStandOK {
+		// with other cores on the peer the queue that stands on the path is
+		// theirs too, and no wait behind holes: a stream held by its window
+		// turns in T_base plus that queue, whether its own sender waited at
+		// the limit or not (τ_hold took it in, B with it, and the queue grew
+		// by the margin each time; red team, round 3). Only what stands (the
+		// records' lower quartile): one record is a snapshot, a burst's as
+		// often as not, and τ_hold also holds what the receiver keeps
+		// unannounced past H_step (300/150 behind 50 ms with two links: 26 ms
+		// with 5 ms of queue). (Alone, the queue a sender held by its window
+		// meets is its own, and the knee τ_hold made of it is what the link's
+		// rate needed: taken out, 1000/100 fell from 778 to 697 Mbit/s over 12
+		// model seeds.)
+		s -= m.qStand
+	}
 	s = min(max(s, 0), 3*c.tBase) // (under 0.1% loss on 300/150 τ_hold reached 2.7–2.9·T_base at 2 BDP)
 	if c.tauOK {
 		c.tau += time.Duration(wcTauAlpha * float64(s-c.tau))
@@ -1894,7 +2049,7 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 //     and that is where the core gains most.)
 func (c *wcore) harm(m wcMeas) bool {
 	switch {
-	case m.qSnd3OK && m.qSnd3 > c.dq():
+	case m.qSnd3OK && m.qSnd3 > c.dq()+c.heldQ(m):
 		return true
 	case c.sndRef.ok && c.sndRef.v > wcOffLoss:
 		return true
@@ -1913,6 +2068,7 @@ func (c *wcore) toOff() {
 	}
 	c.state = wcOff
 	c.B = 0
+	c.rAvg = 0
 	c.settling = false
 	c.refPending = false
 	c.capped = false
@@ -1971,6 +2127,30 @@ func (c *wcore) queueGrew(m wcMeas, k float64) (bool, wcSig, time.Duration) {
 	}
 	d := m.qTurn - c.qRef
 	return d > time.Duration(k*float64(c.dq())), wcSigTurn, d
+}
+
+// capRef holds q_ref within qTarget + Δq/2 while other cores are on the
+// peer, on a path whose packets do not wait behind holes (there q_turn is
+// the path's queue and little else): a reference past it is the others'
+// standing queue taken for the path's own floor (their q_ref crept from
+// 13–17 to 30–48 ms in two minutes, red team, round 3). Where data waits
+// behind holes q_turn holds that wait, and q_own judges the queue.
+func (c *wcore) capRef(now time.Time, m wcMeas) {
+	if m.holey || !m.grp {
+		return
+	}
+	c.qRef = min(c.qRef, c.qTarget(now)+c.dq()/2)
+}
+
+// qSndRefOf is q_snd's HOLD reference as it judges: with other cores on the
+// peer never past qTarget, the queue all of them together should hold (each
+// took the queue it found as HOLD began, and the others' was in it: 2 and 4
+// downloads on separate links held 21–32 ms, red team, round 3).
+func (c *wcore) qSndRefOf(now time.Time, m wcMeas) time.Duration {
+	if m.grp {
+		return min(c.qSndRef, c.qTarget(now))
+	}
+	return c.qSndRef
 }
 
 func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
@@ -2268,8 +2448,9 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.refPending = false
 		if m.qOK {
 			c.qRef = m.qTurn
+			c.capRef(now, m)
 		}
-		c.qSndRef, c.qSndRefOK = m.qSnd, m.qSndOK
+		c.qSndRef, c.qSndRefOK = m.pathQueue()
 		c.qOwnRef = m.qOwn
 		c.rLinkHold = m.rLink
 		c.holdR = [2]float64{m.rF, m.rF}
@@ -2283,8 +2464,9 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.setB(in, m, c.bHold(now, m))
 		return
 	}
-	if !c.qSndRefOK && m.qSndOK {
-		c.qSndRef, c.qSndRefOK = m.qSnd, true
+	pq, pqOK := m.pathQueue()
+	if !c.qSndRefOK && pqOK {
+		c.qSndRef, c.qSndRefOK = pq, true
 	}
 	// the queue: q_turn on a clean path, q_own where data waits behind
 	// holes (queueGrew); the exit sees the download queue itself (its srtt
@@ -2292,13 +2474,14 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// a longer turnaround or srtt is no queue
 	qUp, sig, qv := c.queueGrew(m, 1)
 	strong, _, _ := c.queueGrew(m, 3)
-	bare := m.qSndOK && m.qSnd <= max(c.qSndRef, 0)+dq/2
+	sref := c.qSndRefOf(now, m)
+	bare := pqOK && pq <= max(sref, 0)+dq/2
 	if bare {
 		qUp, strong = false, false
 	}
-	sndUp := m.qSndOK && c.qSndRefOK && m.qSnd > c.qSndRef+dq
+	sndUp := pqOK && c.qSndRefOK && pq > sref+dq
 	if !qUp && sndUp {
-		sig, qv = wcSigSnd, m.qSnd-c.qSndRef
+		sig, qv = wcSigSnd, pq-sref
 	}
 	if !qUp && !sndUp && m.ctrlUp {
 		sig, qv = wcSigCtrl, m.ctrlQ
@@ -2374,6 +2557,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// kept 30–50 ms of standing queue for the rest of the run)
 		if m.qOK && m.qTurn <= c.qRef+dq {
 			c.qRef += time.Duration(wcRefAlpha * float64(m.qTurn-c.qRef))
+			c.capRef(now, m)
 		}
 		if m.qOwnOK && m.qOwn <= c.qOwnRef+wcDqOwn {
 			c.qOwnRef += time.Duration(wcRefAlpha * float64(m.qOwn-c.qOwnRef))
@@ -2389,6 +2573,11 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// (on the edge, also: the exit's record shows no queue on the path,
 	// which holds under random loss where holes hide the sender's pauses)
 	empty := m.sndOK && m.qSndOK && m.qSnd <= dq // a record came in this interval
+	if m.grp && m.sndOK && m.qPathOK {
+		// with other cores on the peer the path holds their queue as it
+		// should: empty is no more than that
+		empty = m.qPath <= c.heldQ(m)+dq/2
+	}
 	wl := (m.hit >= wcHitShare || empty) && !growth && m.sameF
 	if wl {
 		c.wlN++
@@ -2434,7 +2623,14 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.refresh(in, m)
 		return
 	}
-	if _, clean := c.longGrow(m); !now.Before(c.probeAt) && !in.apProbing && !c.capped && !c.burstHeld && c.holdN >= 2 && m.sameF && !testing && clean {
+	// (no probe while the cores of the peer share a queue that stands: the
+	// path is full, the shared rule of bHold sets each one's share, and a
+	// probe only takes the others' for an interval; its queue rise is a
+	// share of probeQ, so it "paid" nearly always: 4 links' cores on 1000/100
+	// behind 200 ms probed the shared queue from 15 to 30 ms and drained it
+	// back, each every 4 s, in the model)
+	_, shared := c.fairShare(now, m)
+	if _, clean := c.longGrow(m); !now.Before(c.probeAt) && !in.apProbing && !c.capped && !c.burstHeld && c.holdN >= 2 && m.sameF && !testing && clean && !shared && !c.aboveShare(now, m) {
 		pr := c.bProbe(now, m, hold)
 		if in.poolFree < 0 || uint64(in.poolFree) >= pr-hold {
 			c.state = wcProbe
@@ -2594,7 +2790,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	} else if m.qOK {
 		rise, ok = m.qTurn-c.probeQ0, true
 	}
-	if m.sndOK && m.qSndOK && m.qSnd <= max(c.qSndRef, 0)+c.dq()/2 {
+	if pq, ok := m.pathQueue(); m.sndOK && ok && pq <= max(c.qSndRefOf(now, m), 0)+c.dq()/2 {
 		rise, ok = min(rise, 0), true // the exit's record of the probe shows no queue
 	}
 	pq := c.probeQ(now)

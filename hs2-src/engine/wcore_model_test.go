@@ -776,6 +776,14 @@ type wmModel struct {
 	main, comp *wmFlow
 	fwdWake    int64 // the forward delivery stalls until then
 	revWake    int64
+	// bn is the model whose path (queue, line, random loss, stalls) this
+	// link's packets take: itself, or with several links on one bottleneck
+	// (wcore_shared_test.go) the first link's, which holds them all in links
+	bn    *wmModel
+	links []*wmModel
+	// recPhase: the exit's records of this link come this many ms past
+	// each record span (each link's stats poll runs on its own ticker)
+	recPhase int64
 
 	// the link's receiving end
 	rcvNxt    uint64
@@ -873,6 +881,7 @@ func newModel(cfg wmCfg) *wmModel {
 		end: cfg.dur.Milliseconds(), rtt: cfg.rtt.Milliseconds(), rate: cfg.rate / 1000,
 		epoch: time.Unix(1_700_000_000, 0), growOK: true}
 	m.d = m.rtt / 2
+	m.bn, m.links = m, []*wmModel{m}
 	maxRate := cfg.rate
 	for _, c := range cfg.changes {
 		maxRate = math.Max(maxRate, c.rate)
@@ -985,15 +994,16 @@ func (m *wmModel) enqueue(p *wmPkt) {
 		}
 		m.tokens -= float64(p.n)
 	}
-	if m.qBytes+wmWire(p.n) > m.qCap {
+	b := m.bn // (the shared bottleneck's, with several links)
+	if b.qBytes+wmWire(p.n) > b.qCap {
 		if p.f.main {
 			m.tailDrops += segs
 		}
 		return
 	}
 	p.inNet = true
-	m.q.push(p)
-	m.qBytes += wmWire(p.n)
+	b.q.push(p)
+	b.qBytes += wmWire(p.n)
 }
 
 func (m *wmModel) serve() {
@@ -1006,7 +1016,7 @@ func (m *wmModel) serve() {
 			p.inNet = false
 			p.rnd = true
 			if p.f.main {
-				m.randDrops++
+				p.f.m.randDrops++
 			}
 			continue
 		}
@@ -1060,31 +1070,34 @@ func (m *wmModel) arrive() {
 			f.gotAll += uint64(p.n)
 			continue
 		}
+		lm := f.m // the link it belongs to (m itself, but on a shared bottleneck)
 		segs := f.segs(p.n)
-		m.segsIn += segs
+		lm.segsIn += segs
 		s, e := p.seq, p.seq+uint64(p.n)
 		switch {
-		case e <= m.rcvNxt:
-		case s > m.rcvNxt:
-			m.oooPkts += segs
-			m.oooAdd(s, e)
+		case e <= lm.rcvNxt:
+		case s > lm.rcvNxt:
+			lm.oooPkts += segs
+			lm.oooAdd(s, e)
 		default:
-			m.rcvNxt = e
-			for len(m.ooo) > 0 && m.ooo[0][0] <= m.rcvNxt {
-				m.rcvNxt = max(m.rcvNxt, m.ooo[0][1])
-				m.ooo = m.ooo[1:]
+			lm.rcvNxt = e
+			for len(lm.ooo) > 0 && lm.ooo[0][0] <= lm.rcvNxt {
+				lm.rcvNxt = max(lm.rcvNxt, lm.ooo[0][1])
+				lm.ooo = lm.ooo[1:]
 			}
 		}
 	}
-	for _, f := range []*wmFlow{m.main, m.comp} {
-		if f == nil || len(f.ackBatch) == 0 {
-			continue
+	for _, l := range m.links {
+		for _, f := range []*wmFlow{l.main, l.comp} {
+			if f == nil || len(f.ackBatch) == 0 {
+				continue
+			}
+			if m.cfg.ackAgg > 1 && m.t%int64(m.cfg.ackAgg) != 0 {
+				continue
+			}
+			l.rev.push(wmRev{at: m.t + l.d, kind: 0, f: f, pkts: f.ackBatch})
+			f.ackBatch = nil
 		}
-		if m.cfg.ackAgg > 1 && m.t%int64(m.cfg.ackAgg) != 0 {
-			continue
-		}
-		m.rev.push(wmRev{at: m.t + m.d, kind: 0, f: f, pkts: f.ackBatch})
-		f.ackBatch = nil
 	}
 }
 
@@ -1412,7 +1425,7 @@ func (m *wmModel) atSender() {
 		}
 		// the edge's segment is acked with the next data the exit sends:
 		// its round trip has the download queue as it is now
-		r := float64(m.t-e.sent) + float64(m.qBytes)/m.rate + float64(m.d)
+		r := float64(m.t-e.sent) + float64(m.bn.qBytes)/m.bn.rate + float64(m.d)
 		if m.rSrtt == 0 {
 			m.rSrtt = r
 		} else {
@@ -1511,7 +1524,7 @@ func (m *wmModel) runCore() {
 		f := m.main
 		m.res.trace = append(m.res.trace, fmt.Sprintf("%5.1fs %-7s B%5.2f/%5.2f cap%5.2f nF%d RF%4.0f RL%4.0f hit%.2f qt%3d(ok%v) qo%3d qs%3d snd%.3f ooo%.3f | tau%3d qref%3d brake%3d grow%v | bbr%d pace%4.0f q%3.0f %s",
 			float64(m.t)/1000, o.state, float64(o.B)/(1<<20), float64(c.B)/(1<<20), float64(c.bCap)/(1<<20), len(lm.f), lm.rF/wmMbit, lm.rLink/wmMbit, lm.hit, lm.qTurn.Milliseconds(), lm.qOK, lm.qOwn.Milliseconds(), lm.qSnd.Milliseconds(), lm.snd, lm.ooo,
-			c.tau.Milliseconds(), c.qRef.Milliseconds(), o.qBrake.Milliseconds(), o.growOK, f.mode, f.pacing*1000/wmMbit, float64(m.qBytes)/m.rate, ss.String()))
+			c.tau.Milliseconds(), c.qRef.Milliseconds(), o.qBrake.Milliseconds(), o.growOK, f.mode, f.pacing*1000/wmMbit, float64(m.bn.qBytes)/m.bn.rate, ss.String()))
 		for _, e := range o.events {
 			m.res.trace = append(m.res.trace, "        event "+e.String())
 		}
@@ -1566,7 +1579,7 @@ func (m *wmModel) periodic() {
 		}
 		return false
 	}
-	if t%every == 0 && t > 0 && !in(m.cfg.recOff) {
+	if (t-m.recPhase)%every == 0 && t > m.recPhase && !in(m.cfg.recOff) {
 		f := m.main
 		r.pendAt = t + m.d
 		r.pSrtt = time.Duration(f.srtt * float64(time.Millisecond))
