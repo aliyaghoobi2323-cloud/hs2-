@@ -27,7 +27,9 @@ package engine
 // F and U open at Z5_F_AT s, the others at Z5_BG_AT s (from when the link is
 // up). After Z5_WARM_S it measures Z5_DUR_S s and appends one JSON line to
 // Z5_OUT. Path: Z5_DN_MBIT / Z5_UP_MBIT, Z5_RTT_MS, Z5_QMS (bottleneck
-// queue, ms at its rate), Z5_LOSS (share of packets, both ways), Z5_MTU.
+// queue, ms at its rate), Z5_LOSS (share of packets, both ways), Z5_MTU;
+// reordering (S2): Z5_REORDER, Z5_REORDER_MS, Z5_REORDER_FIELD,
+// Z5_REORDER_SCALE, Z5_REORDER_DIR (newZ5Emu in z5emu_test.go).
 
 import (
 	"bytes"
@@ -183,6 +185,7 @@ type z5Res struct {
 	SegsOut  [2]uint32          `json:"segsOut"` // data segments sent, resends included (TCP_INFO), over the window
 	Srtt     [2]float64         `json:"srttMs"`
 	Drops    [2]int64           `json:"drops"`
+	Held     []int64            `json:"held,omitempty"` // S2: packets the emulator reordered, up, dn (Z5_REORDER*)
 	WireDn   float64            `json:"wireDnMbit"`
 	WireUp   float64            `json:"wireUpMbit"`
 	Ended    int                `json:"relaysEnded"` // Z5_RELAY: relays the guard (or anything) ended
@@ -970,6 +973,9 @@ func TestZ5Rig(t *testing.T) {
 			add("qu", emu.qms(&emu.up))
 			add("dropd", float64(emu.dn.drops.Load()))
 			add("dropu", float64(emu.up.drops.Load()))
+			if emu.dn.late != nil {
+				add("heldd", float64(emu.dn.held.Load())) // S2: reordered so far
+			}
 			for i, nm := range []string{"e", "x"} {
 				var sr, mr, cw, un, rt, nsent, rr, ts float64
 				if ti := z5TCPInfo(socks[i]); ti != nil {
@@ -1060,6 +1066,9 @@ func TestZ5Rig(t *testing.T) {
 		}
 	}
 	res.Drops = [2]int64{emu.up.drops.Load(), emu.dn.drops.Load()}
+	if emu.up.late != nil || emu.dn.late != nil {
+		res.Held = []int64{emu.up.held.Load(), emu.dn.held.Load()}
+	}
 	if ns0 != nil {
 		res.Netstat = map[string]int64{}
 		for k, v := range z5Netstat() {
