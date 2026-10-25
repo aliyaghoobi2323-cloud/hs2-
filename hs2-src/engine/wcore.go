@@ -153,6 +153,10 @@ type wcore struct {
 	tbOff    time.Duration // turnBase − T_base while both agreed (route change)
 	tbOK     bool          // ... they agreed at least once
 	routeLog bool
+	// routeT: the longer path a route change took (0: none), kept until the
+	// path is seen to change back (notePaths, routeBack); routeMin: the
+	// floor (min_rtt) it was taken over
+	routeT, routeMin time.Duration
 	// the exit's srtt by its latest record, and when (sndAllows)
 	sndRTT   time.Duration
 	sndRTTAt time.Time
@@ -1960,7 +1964,7 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 		switch {
 		case tb > 0 && float64(tb) <= 1.3*float64(t):
 			c.tbOff, c.tbOK = tb-t, true
-			c.routeLog = false
+			c.routeLog, c.routeT = false, 0
 		case tb > 0 && c.tbOK && float64(tb) > 1.3*float64(t):
 			// the path got longer: min_rtt keeps the old floor for up to
 			// 5 minutes, turnaround has moved. The exit's own min_rtt is as
@@ -1973,13 +1977,35 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 				c.sndOff = c.qSndMins.min(now, wcTurnWin)
 				c.qSnd = max(raw-c.sndOff, 0)
 			}
-			if c.qSnd <= c.dq() && c.sndAllows(now, tb-c.tbOff, t) {
-				t = tb - c.tbOff
+			p := tb - c.tbOff
+			if c.routeT > 0 && c.routeBack(in, t, fresh) {
+				c.routeT, c.routeLog = 0, false
+			}
+			if c.qSnd <= c.dq() && c.sndAllows(now, p, t) {
+				c.routeT, c.routeMin = p, t
+				t = p
 				if !c.routeLog {
 					c.routeLog = true
 					*ev = append(*ev, wcEvent{kind: wcEvRoute, T: t})
 					c.oooRo, c.oooRoAt = 0, time.Time{} // (a new path reorders as it does)
 				}
+			} else if c.routeT > 0 {
+				// a route change taken stays until the path is seen to change
+				// back (the case above, routeBack). Taken anew at each
+				// evaluation, and only while q_snd stayed within Δq, the
+				// longer path was gone as soon as a queue built on it (the
+				// core's own growth, a probe): T_base fell back to the stale
+				// min_rtt, the core read the whole rise as queue and drained,
+				// and Δq shrank with T_base, so the path came back only once
+				// that queue was gone (the model, 300/100 → 300 ms at 20 s:
+				// back to 100 ms at 90.4 and 108.4 s in one seed, at 114.3
+				// and 128.5 s in the other, 4 s after the exit's records came
+				// back from a gap; TestWcoreS2RouteSticky). Never past the
+				// path it took: the turnaround's floor rises too once a queue
+				// has stood for its 60 s, and a queue taken for path is one
+				// the core no longer sees (it moves up only as it was taken,
+				// on q_snd within Δq)
+				t = min(c.routeT, p)
 			}
 		}
 		c.tBase = t
@@ -2001,21 +2027,38 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 // their source -- the time a sender takes to reach the limit it had, which
 // no socket sees -- and with the exit's srtt flat that is no route change
 // (the field: "~2199 ms" on a 72 ms path once a download had ended). While
-// the exit's records have stopped, the decision stands as it was: a route
-// change already taken is kept (dropped, T_base fell back to the stale
-// min_rtt for the length of the gap and the model's runs took a queue drain
-// each) and none is taken anew. A side that never had a record of its
-// sender decides by the turnaround, as before -- no core runs there (the
-// edge's leaves OFF only on the exit's records; the exit's own one gets the
-// edge's record in step 3).
+// the exit's records have stopped, none is taken or moved: a route change
+// already taken is kept as notePaths keeps it (routeT; dropped, T_base fell
+// back to the stale min_rtt for the length of the gap and the model's runs
+// took a queue drain each). A side that never had a record of its sender
+// decides by the turnaround, as before -- no core runs there (the edge's
+// leaves OFF only on the exit's records; the exit's own one gets the edge's
+// record in step 3).
 func (c *wcore) sndAllows(now time.Time, p, t time.Duration) bool {
 	if c.sndRTTAt.IsZero() {
 		return true
 	}
 	if now.Sub(c.sndRTTAt) > wcSndHist*wcSndSpan {
-		return c.routeLog
+		return false
 	}
 	return c.sndRTT >= p-max(c.dq(), (p-t)/4)
+}
+
+// routeBack says whether the path is seen to have changed since a route
+// change took routeT over a floor of routeMin (the turnaround's floor back
+// within 1.3·min_rtt is notePaths' own case): the floor moved past Δq (the
+// link socket's min_rtt renewed, or it saw a shorter round trip), or a
+// record of the exit has its srtt back under the longer path as sndAllows
+// judges it (a smoothed round trip never goes under the path: one record
+// says it). The exit's min_rtt needs no rule of its own: back under the old
+// floor it is a shorter path, which its srtt shows as well, and renewed on
+// the longer path it moves q_snd only (sndOff), not the path.
+func (c *wcore) routeBack(in wcIn, t time.Duration, fresh bool) bool {
+	d := c.dq()
+	if t > c.routeMin+d || t < c.routeMin-d {
+		return true
+	}
+	return fresh && in.snd.srtt < c.routeT-max(d, (c.routeT-t)/4)
 }
 
 // routeSnd says whether the exit's records read a longer path of rise (the

@@ -98,8 +98,8 @@ func TestWcoreS2SlowStreamsAreNoRouteChange(t *testing.T) {
 // T_base while they are away. Taking the stale min_rtt again for the gap
 // gave each of these runs a queue drain on the longer path and two of them
 // lost 7-8% of their rate (the independent judge of step 2's route fix).
-// What T_base does once they are back is the code before this fix (in one
-// of these runs it falls back 4 s later, as it did before): not judged here.
+// What T_base does once they are back (in one of these runs it fell back 4 s
+// later, until the route change was kept for good) is TestWcoreS2RouteSticky's.
 func TestWcoreS2RouteHeldThroughRecordGap(t *testing.T) {
 	for _, x := range []struct {
 		rate         float64
@@ -801,5 +801,124 @@ func TestWcoreS2LossRecNeedsLevel(t *testing.T) {
 	c.judgeCut(in(100))
 	if !c.lossRecAt.Equal(now) {
 		t.Errorf("a level of 0.01%%, 1%% resent: lossRecAt %v, want %v", c.lossRecAt, now)
+	}
+}
+
+// A route change, once taken, stays until the path is seen to change back
+// (notePaths: the turnaround's floor back within 1.3·min_rtt, the link
+// socket's min_rtt renewed or lower, the exit's srtt back under the longer
+// path). notePaths took the longer path anew at each evaluation, and only
+// while q_snd stayed within Δq: a queue on the longer path (the core's own
+// growth, a probe) sent T_base back to the stale min_rtt, where the core read
+// the whole rise as queue and drained, and Δq shrank with T_base, so it came
+// back only once the queue was gone (300/100 → 300 ms at 20 s, seed 1: back
+// to 100 ms at 90.4 and 108.4 s; seed 2 at 114.3 and 128.5 s, and with the
+// exit's records off 85-110 s at 114.3 s, 4 s after they came back). Nor
+// may a queue on the longer path be taken for path: T_base never goes past
+// the path the route change took.
+func TestWcoreS2RouteSticky(t *testing.T) {
+	for _, x := range []struct {
+		rate       float64
+		rtt, q, to int
+		off        [2]int // the exit's records off (s); none if 0
+	}{{300, 100, 50, 300, [2]int{85, 110}}, {300, 150, 50, 600, [2]int{85, 115}},
+		{300, 100, 50, 300, [2]int{}}, {300, 150, 50, 600, [2]int{}}} {
+		for seed := uint64(1); seed <= 2; seed++ {
+			c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
+			c.seed, c.dur, c.mode = seed, 160*time.Second, wmCore
+			c.rttAt = []wmChange{{20 * time.Second, float64(x.to)}}
+			if x.off[1] > 0 {
+				c.recOff = [][2]time.Duration{{time.Duration(x.off[0]) * time.Second, time.Duration(x.off[1]) * time.Second}}
+			}
+			moved, top := time.Duration(0), time.Duration(0)
+			var fell []time.Duration
+			c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+				long := float64(k.tBase) >= 0.9*float64(wmMS(x.to))
+				if moved == 0 && long {
+					moved = at
+				}
+				if moved > 0 && !long && len(fell) < 3 {
+					fell = append(fell, at)
+				}
+				top = max(top, k.tBase)
+			}
+			r := wmRun(c)
+			name := fmt.Sprintf("%v/%d→%d records off %v s%d", x.rate, x.rtt, x.to, x.off, seed)
+			switch {
+			case moved == 0:
+				t.Errorf("%s: T_base never took the longer path", name)
+			case len(fell) > 0:
+				t.Errorf("%s: T_base took the longer path at %v and fell back at %v (%.1f Mbit, drains %v)", name, moved, fell, r.mbit, r.drains)
+			case float64(top) > 1.1*float64(wmMS(x.to)):
+				t.Errorf("%s: T_base up to %v on a %d ms path: a queue taken for path", name, top, x.to)
+			default:
+				t.Logf("%s: T_base the longer path from %v to the end (%.1f Mbit, drains %v)", name, moved, r.mbit, r.drains)
+			}
+		}
+	}
+}
+
+// notePaths keeps a route change it took (72 → 300 ms) while a queue builds
+// on the longer path, standing past the turnaround's 60 s floor or swinging
+// (T_base stays the path's: neither the stale min_rtt nor the path with the
+// queue, and q_snd reads the queue), and drops it when the path is seen to
+// change back: the turnaround's floor back near min_rtt, or the exit's srtt
+// back under the longer path while that floor still holds the longer one.
+func TestWcoreS2RouteKeptUntilBack(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	fast := func(turn time.Duration) wcStream {
+		return wcStream{id: 1, read: 1 << 20, upd: 4, hit: 4, turnMin: turn}
+	}
+	near := func(d, want time.Duration) bool { return d >= want-ms(10) && d <= want+ms(10) }
+	for _, side := range []wcSide{wcEdge, wcExit} {
+		name := map[wcSide]string{wcEdge: "edge", wcExit: "exit"}[side]
+		route := func() (*wcore, time.Time) {
+			c := wsCore(side)
+			now := wtT0
+			wsPaths(c, &now, time.Minute, ms(72), ms(73), ms(74), ms(72), fast(ms(75)))
+			c.inF = map[uint32]bool{1: true}
+			if n := wsPaths(c, &now, 80*time.Second, ms(72), ms(302), ms(302), ms(72), fast(ms(303))); n != 1 || !near(c.tBase, ms(300)) {
+				t.Fatalf("%s: the route change 72 → 300 ms: %d logged, T_base %v", name, n, c.tBase)
+			}
+			return c, now
+		}
+		// a standing queue of 100 ms for 90 s: the turnaround's floor rises
+		// with it once it has stood for 60 s
+		c, now := route()
+		for end := now.Add(90 * time.Second); now.Before(end); {
+			wsPaths(c, &now, 2*time.Second, ms(72), ms(402), ms(402), ms(72), fast(ms(403)))
+			if !near(c.tBase, ms(300)) {
+				t.Fatalf("%s: a standing queue of 100 ms on the longer path, %v on: T_base %v, want the path's (~300ms)", name, now.Sub(wtT0), c.tBase)
+			}
+		}
+		if c.qSnd < ms(90) {
+			t.Errorf("%s: a standing queue of 100 ms: q_snd %v", name, c.qSnd)
+		}
+		// a queue that swings 0-150 ms
+		for i := 0; i < 30; i++ {
+			q := ms(50 * (i % 4))
+			wsPaths(c, &now, 2*time.Second, ms(72), ms(302)+q, ms(302)+q, ms(72), fast(ms(303)+q))
+			if !near(c.tBase, ms(300)) {
+				t.Fatalf("%s: a queue of %v on the longer path: T_base %v, want ~300ms", name, q, c.tBase)
+			}
+		}
+		// the path back: the turnaround and the exit's srtt at 72 ms again
+		wsPaths(c, &now, 4*time.Second, ms(72), ms(73), ms(74), ms(72), fast(ms(75)))
+		if c.tBase != ms(72) || c.routeLog {
+			t.Errorf("%s: the path back to 72 ms: T_base %v (route %v)", name, c.tBase, c.routeLog)
+		}
+		// the exit's srtt back at 74 ms while no turnaround came under the
+		// longer path's yet: the longer path is gone
+		c, now = route()
+		wsPaths(c, &now, 4*time.Second, ms(72), ms(73), ms(74), ms(72), fast(ms(303)))
+		if c.tBase != ms(72) {
+			t.Errorf("%s: the exit's srtt back at 74 ms: T_base %v, want the route dropped (72ms)", name, c.tBase)
+		}
+		// the link socket's min_rtt renewed on the longer path: T_base is it
+		c, now = route()
+		wsPaths(c, &now, 4*time.Second, ms(300), ms(302), ms(302), ms(72), fast(ms(303)))
+		if c.tBase != ms(300) {
+			t.Errorf("%s: min_rtt renewed at 300 ms: T_base %v", name, c.tBase)
+		}
 	}
 }
