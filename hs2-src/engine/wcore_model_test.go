@@ -1989,7 +1989,8 @@ func (m *wmModel) periodic() {
 
 // netStep is the exit's runner wake for the pacing net (wcLink.paceNet), on
 // the model's sender: its TCP_INFO as Linux reports it (the pacing rate
-// within the cap, the delivery rate of tcp_rate_gen).
+// within the cap, the delivery rate of tcp_rate_gen) when the net has it due,
+// what its app wrote as the link meter counts it.
 func (m *wmModel) netStep() {
 	f := m.main
 	pace := f.pacing
@@ -1998,7 +1999,10 @@ func (m *wmModel) netStep() {
 		m.res.netMs += 100
 	}
 	now := m.epoch.Add(time.Duration(m.t) * time.Millisecond)
-	o := m.net.step(wcNetIn{now: now, retrans: f.retrans, segsOut: f.segsOut, acked: f.delivered, dlv: f.rateDlv * 1000, pace: pace * 1000,
+	if !m.net.due(now, f.writeSeq) {
+		return
+	}
+	o := m.net.step(wcNetIn{now: now, retrans: f.retrans, segsOut: f.segsOut, acked: f.delivered, wrote: f.writeSeq, dlv: f.rateDlv * 1000, pace: pace * 1000,
 		srtt: time.Duration(f.srtt * float64(time.Millisecond)), minRTT: time.Duration(f.minRTT) * time.Millisecond})
 	switch o.act {
 	case wcNetEngage:

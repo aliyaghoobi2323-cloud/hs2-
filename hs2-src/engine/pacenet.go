@@ -148,6 +148,27 @@ var (
 	// STARTUP runs into to the loss rule: 32 → 16 drains at 150 ms behind
 	// one at 60% of the path, 0 with the warm-up's threshold).
 	wcNetGrow = 1.25
+	// wcNetQuiet, wcNetQuietBytes: a socket with no cap that had less than
+	// wcNetQuietBytes acknowledged, and as little written to it (its link
+	// meter), over its idle span (wcNetIdle) is quiet: the runner reads it
+	// only every wcNetQuiet (due), and at the first wake its meter has
+	// wcNetQuietBytes written to it since. Read every 100 ms, the exit's
+	// idle links cost one TCP_INFO each (~3000 a second at 300 links: the
+	// independent judge of step 1, row پ۵); quiet, one a second, and on a
+	// link that holds the smux keepalive's NOP (every 4-8 s) and the control
+	// channel's pong (every 9-15 s on an idle link), each padded to at most
+	// ~1.4 KB, still quiet. A quiet socket is idle to the net (less than
+	// wcPaceIdle over the same span) and has no cap to lift: no reading of
+	// it can engage or lift anything, and one that holds a cap is read on
+	// every wake, so its lift for idleness comes when it did. A download
+	// that starts writes to the socket before its first ACK: the meter has
+	// the net read it from that wake on, as it did, and only a socket that
+	// sends what was written before its quiet span (a path back from a
+	// stall) waits for the next reading, at most wcNetQuiet
+	// (TestPaceNetQuietReads; the round-2 sweeps and the model's table do
+	// not move).
+	wcNetQuiet      = time.Second
+	wcNetQuietBytes = uint64(8 << 10)
 )
 
 // wcNetIn is one reading of a link socket's TCP_INFO.
@@ -155,6 +176,7 @@ type wcNetIn struct {
 	now              time.Time
 	retrans, segsOut uint64  // cumulative segments (resent; sent, resends included)
 	acked            uint64  // cumulative bytes acknowledged
+	wrote            uint64  // cumulative bytes written to the socket (its link meter; 0: none)
 	dlv              float64 // tcpi_delivery_rate, bytes/s
 	pace             float64 // tcpi_pacing_rate, bytes/s (0: unknown)
 	srtt, minRTT     time.Duration
@@ -182,8 +204,8 @@ type wcNetOut struct {
 }
 
 type wcNetPt struct {
-	at               time.Time
-	rtx, segs, acked uint64
+	at                      time.Time
+	rtx, segs, acked, wrote uint64
 }
 
 // wcNet is the net of one link socket: pure, its readings in, the cap out.
@@ -201,6 +223,7 @@ type wcNet struct {
 	lvl    float64   // the path's resend level a cap did not lower (0: none)
 	lvlAt  time.Time
 	busyAt time.Time // since when the socket sends (zero: idle)
+	quiet  bool      // the latest reading found it quiet (wcNetQuiet: due)
 	// counters (the link-end note)
 	n        int
 	maxShare float64
@@ -232,6 +255,19 @@ func (n *wcNet) since(now time.Time, d time.Duration) wcNetPt {
 	return p
 }
 
+// due says whether the runner reads the socket at this wake (wrote: the
+// bytes written to it so far, as its link meter counts them; 0 with none):
+// always, but a quiet one (step) only every wcNetQuiet, or at the first wake
+// that has wcNetQuietBytes written to it since the latest reading.
+func (n *wcNet) due(now time.Time, wrote uint64) bool {
+	k := len(n.pts)
+	if !n.quiet || k == 0 {
+		return true
+	}
+	p := n.pts[k-1]
+	return wrote-p.wrote >= wcNetQuietBytes || now.Sub(p.at) >= wcNetQuiet-wcRampTick/2
+}
+
 // step takes one reading and says what to do with the socket's cap.
 func (n *wcNet) step(in wcNetIn) wcNetOut {
 	now := in.now
@@ -245,13 +281,29 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 	// rate the higher one, and tcpi's stands
 	dlvNow := in.dlv
 	if k := len(n.pts); k > 0 {
-		if dt := now.Sub(n.pts[k-1].at).Seconds(); dt > 0 && in.acked >= n.pts[k-1].acked {
-			if a := float64(in.acked-n.pts[k-1].acked) / dt; dlvNow <= 0 || a < dlvNow {
+		p := n.pts[k-1]
+		dt := now.Sub(p.at)
+		if n.quiet {
+			// the first reading after a quiet spell (due): what it
+			// acknowledged since came after it woke up, within the wake when
+			// its meter woke the reading (a download's first write), within
+			// the spell's last second when it woke up on its own (a path
+			// back from a stall acknowledges what was written before it).
+			// Taken over one wake, as a reading every wake takes it, and
+			// never past tcpi's own rate; over the spell, the first rate
+			// read up to 10 times too low and the cap set on it as much
+			// lower (the dyn sweep's 300/300 rtt>2000 l0/s2, base: capped
+			// at 8 Mbit/s where a reading every wake set 58, 29 after, 12.0
+			// → 11.6 Mbit/s)
+			dt = min(dt, wcRampTick)
+		}
+		if dts := dt.Seconds(); dts > 0 && in.acked >= p.acked {
+			if a := float64(in.acked-p.acked) / dts; dlvNow <= 0 || a < dlvNow {
 				dlvNow = a
 			}
 		}
 	}
-	n.pts = append(n.pts, wcNetPt{at: now, rtx: in.retrans, segs: in.segsOut, acked: in.acked})
+	n.pts = append(n.pts, wcNetPt{at: now, rtx: in.retrans, segs: in.segsOut, acked: in.acked, wrote: in.wrote})
 	idleSpan := min(max(wcNetIdle, 2*in.srtt), wcNetIdleMax)
 	keep := max(wcNetWin, idleSpan)
 	cut := 0
@@ -268,6 +320,7 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 	}
 	n.dlvs = n.dlvs[cut:]
 	if len(n.pts) < 2 {
+		n.quiet = false
 		return wcNetOut{}
 	}
 	dlv, last, prev := 0.0, 0.0, 0.0
@@ -289,7 +342,12 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 	if rtx > 0 && share >= wcNetCleanShare {
 		n.rtxAt = now
 	}
-	idle := in.acked-n.since(now, idleSpan).acked < wcPaceIdle
+	ip := n.since(now, idleSpan)
+	idle := in.acked-ip.acked < wcPaceIdle
+	// quiet (due) once its decision is made, if it holds no cap: a full idle
+	// span read, with next to nothing acknowledged or written over it
+	still := now.Sub(ip.at) >= idleSpan && in.acked-ip.acked < wcNetQuietBytes && in.wrote-ip.wrote < wcNetQuietBytes
+	defer func() { n.quiet = still && n.cap == 0 }()
 	switch {
 	case idle:
 		n.busyAt = time.Time{}
