@@ -217,6 +217,28 @@ func CoverNext(covered bool, miss uint8, old, want, need uint32, ranUp, growOK, 
 	return true, miss + 1
 }
 
+// CoverHold is a stream's cover across the window core's SetCover, at a
+// window update, before CoverNext: allowed is whether the core lets covers
+// now. A cover the core takes is held (covered false, held the updates
+// since); if the core lets covers again within coverMiss updates it comes
+// back at once (back), for CoverNext to judge as any cover held. The core
+// takes covers when a cut finds the path full, and lets them again when it
+// takes that cut back (engine wcore.go undoCut: holes of a path that
+// reorders, no loss): the covers are back as the cut found them, not after
+// each stream's next run-up to its window. Past coverMiss updates it is
+// gone, as a cover that did not run up for as long.
+func CoverHold(covered bool, held uint8, allowed bool) (bool, uint8, bool) {
+	switch {
+	case allowed:
+		return covered || held > 0, 0, !covered && held > 0
+	case covered:
+		return false, 1, false
+	case held > 0 && held < coverMiss:
+		return false, held + 1, false
+	}
+	return false, 0, false
+}
+
 // FitCore is the window of a window update: want is what adaptWindow made
 // of the previous window old, ceil the core's ceiling (0: none), need the
 // stream's own window (NeedStreamBuffer, or its cover while it holds one:
@@ -289,6 +311,7 @@ type streamCore struct {
 	updRead  uint64 // readTot at our latest update
 	covered  bool   // the stream holds its cover (CoverNext)
 	miss     uint8  // updates in a row since it last ran up to its window, while covered
+	held     uint8  // updates since the window core took its cover, while it may give it back (CoverHold; 0: none)
 
 	// written under bufferLock, read without it (CoreSnapshot)
 	readTot   atomic.Uint64 // bytes read in all (numRead wraps)
@@ -350,8 +373,10 @@ func (s *Session) SetCoreRef(turnRef, qBrake time.Duration, growOK bool) {
 // step while the window holds a stream back: Cover), the default, or takes
 // it from them: the window core does once it found the path full, or while
 // other cores of its peer run, its floor NeedStreamBuffer again, and a
-// stream without a ceiling then stays within it from its next update on. It
-// takes no lock.
+// stream without a ceiling then stays within it from its next update on.
+// A stream whose cover it took gets it back at its first update after the
+// core lets covers again, within coverMiss updates (CoverHold: a cut the
+// core takes back). It takes no lock.
 func (s *Session) SetCover(ok bool) { s.noCover.Store(!ok) }
 
 // CoreSample is what one stream did, as CoreSnapshot found it. The counts
@@ -467,11 +492,21 @@ func (s *Stream) fitCore(cfg *Config, old uint32) {
 	growOK, turnOK := s.sess.growOK.Load(), s.turnOK()
 	c := &s.core
 	was := c.covered
-	allowed := cfg.WindowPool != nil && cfg.NeedStreamBuffer > 0 && !cfg.NoCover && !s.sess.noCover.Load()
+	cfgOK := cfg.WindowPool != nil && cfg.NeedStreamBuffer > 0 && !cfg.NoCover
+	allowed := cfgOK && !s.sess.noCover.Load()
+	if cfgOK {
+		var back bool
+		if c.covered, c.held, back = CoverHold(c.covered, c.held, allowed); back {
+			s.sess.cover.back.Add(1)
+			was = true // (given back as the core took it: no grant)
+		}
+	} else {
+		c.covered, c.held = false, 0
+	}
 	if allowed {
 		c.covered, c.miss = CoverNext(c.covered, c.miss, old, s.rcvWin, needOf(cfg), s.ranUp(), growOK, turnOK)
 	} else {
-		c.covered, c.miss = false, 0
+		c.miss = 0
 	}
 	if c.covered != was {
 		why := coverTaken
@@ -533,6 +568,7 @@ func (s *Stream) coreCap(cfg *Config, w uint32) uint32 {
 // sweepClaims; a stream or session that closed). The caller holds
 // bufferLock.
 func (s *Stream) uncover(why coverWhy) {
+	s.core.held = 0
 	if s.core.covered {
 		s.core.covered, s.core.miss = false, 0
 		s.coverChanged(false, why)
@@ -552,8 +588,8 @@ const (
 
 // coverStats counts what a session's covers did (CoverStats).
 type coverStats struct {
-	grants, reader, miss, taken, idle, closed, capped atomic.Uint32
-	now                                               atomic.Int32
+	grants, reader, miss, taken, idle, closed, capped, back atomic.Uint32
+	now                                                     atomic.Int32
 }
 
 // coverChanged counts a cover granted (on) or gone, for why, in the
@@ -605,21 +641,23 @@ type CoverCounters struct {
 	Reader uint32 // gone as the reader fell behind (it asked the need or less)
 	Miss   uint32 // gone after coverMiss updates in a row that did not run up to the window
 	Taken  uint32 // taken by the window core (SetCover)
+	Back   uint32 // of those, given back as the core let covers again (CoverHold: a cut taken back)
 	Idle   uint32 // gone with an idle stream's claim (sweepClaims)
 	Closed uint32 // gone with the stream or its session
 	Capped uint32 // windows the covers' share of the pool could not cover in full (coverShare)
 	Now    int    // streams holding pool memory for a cover now
 }
 
-// Lost is how many covers went, for any reason.
+// Lost is how many covers went, for any reason (a cover the core took and
+// gave back counted in Taken and Back).
 func (c CoverCounters) Lost() uint32 { return c.Reader + c.Miss + c.Taken + c.Idle + c.Closed }
 
 // CoverStats is what the session's covers did. It takes no lock.
 func (s *Session) CoverStats() CoverCounters {
 	st := &s.cover
 	return CoverCounters{Grants: st.grants.Load(), Reader: st.reader.Load(), Miss: st.miss.Load(),
-		Taken: st.taken.Load(), Idle: st.idle.Load(), Closed: st.closed.Load(), Capped: st.capped.Load(),
-		Now: int(st.now.Load())}
+		Taken: st.taken.Load(), Back: st.back.Load(), Idle: st.idle.Load(), Closed: st.closed.Load(),
+		Capped: st.capped.Load(), Now: int(st.now.Load())}
 }
 
 // turnOK reports whether the stream's latest turnaround is within its

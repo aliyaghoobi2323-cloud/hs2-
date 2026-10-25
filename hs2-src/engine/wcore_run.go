@@ -1295,6 +1295,7 @@ type wcTraceCover struct {
 	Reader uint32 `json:"lost_reader,omitempty"`
 	Miss   uint32 `json:"lost_miss,omitempty"`
 	Taken  uint32 `json:"lost_core,omitempty"`
+	Back   uint32 `json:"back,omitempty"`
 	Idle   uint32 `json:"lost_idle,omitempty"`
 	Closed uint32 `json:"lost_closed,omitempty"`
 	Capped uint32 `json:"capped,omitempty"`
@@ -1310,7 +1311,7 @@ func wcTraceCoverOf(sess *smux.Session) *wcTraceCover {
 	if c.Grants == 0 && c.Capped == 0 {
 		return nil
 	}
-	return &wcTraceCover{Now: c.Now, Grants: c.Grants, Reader: c.Reader, Miss: c.Miss, Taken: c.Taken,
+	return &wcTraceCover{Now: c.Now, Grants: c.Grants, Reader: c.Reader, Miss: c.Miss, Taken: c.Taken, Back: c.Back,
 		Idle: c.Idle, Closed: c.Closed, Capped: c.Capped}
 }
 

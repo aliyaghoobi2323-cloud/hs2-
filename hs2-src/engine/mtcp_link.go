@@ -417,6 +417,9 @@ func coverNoteOf(c smux.CoverCounters) string {
 		}
 		s += fmt.Sprintf(", lost %d (%s)", lost, strings.Join(why, ", "))
 	}
+	if c.Back > 0 {
+		s += fmt.Sprintf(", %d given back as the window core let covers again", c.Back)
+	}
 	if c.Capped > 0 {
 		s += fmt.Sprintf(", held to the covers' share of the window pool %d time(s)", c.Capped)
 	}
