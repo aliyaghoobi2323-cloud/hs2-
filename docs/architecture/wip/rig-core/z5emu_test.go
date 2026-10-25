@@ -17,6 +17,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"os"
 	"runtime"
@@ -41,6 +42,18 @@ type z5Path struct {
 	Delay time.Duration // one-way delay
 	Queue int           // bottleneck queue, bytes (drop-tail)
 	Loss  float64       // random loss, share of packets (0: none)
+	// S2 rig: reordering past the bottleneck (z5Reo; newZ5Emu sets it from
+	// Z5_REORDER*): a packet held is delivered ReorderMs late on a lane of
+	// its own, so what comes behind it meanwhile arrives first. Reorder:
+	// each packet is held with this probability; ReorderField: the field's
+	// bursty reordering instead (wmReo in engine/wcore_model_test.go), in
+	// episodes whose share of the time grows with the direction's rate, half
+	// of the packets held (Reorder, if set, in place of half), the episodes'
+	// share times ReorderScale (0: 1)
+	Reorder      float64
+	ReorderMs    time.Duration
+	ReorderField bool
+	ReorderScale float64
 }
 
 type z5Pkt struct {
@@ -58,6 +71,80 @@ type z5Dir struct {
 	maxQ     atomic.Int64 // largest queue seen, bytes
 	nf       atomic.Int64 // delay rig: a copy of nextFree for the tracer
 	chg      atomic.Pointer[z5Path] // speed-change rig: the path's rate and queue now (nil: p)
+	// S2 rig: the held packets' lane (nil: no reordering), the reordering's
+	// state (reader only) and the packets it held
+	late chan z5Pkt
+	reo  z5Reo
+	held atomic.Int64
+}
+
+// z5Reo is the reordering of a direction (z5Path.Reorder*), as the model's
+// wmReo (engine/wcore_model_test.go) but in the emulator's time: the rate is
+// the direction's IP bytes over the last ~100 ms (an exponential average),
+// and an episode's start is drawn at each packet for the time since the
+// previous one.
+type z5Reo struct {
+	acc, last float64 // the rate's bytes, and when they were last decayed (ns)
+	on        bool
+	until     float64 // ns: the episode ends then
+	checked   float64 // ns: an episode's start was drawn up to then
+}
+
+// z5ReoTab is the model's wmReoTab: the episodes' share of the time and
+// their mean length (ms) at the rate (Mbit/s), linear in between, the last
+// row's past it. (The model's rate is the connection's payload, the
+// emulator's the direction's IP bytes: ~4% more.)
+var z5ReoTab = []struct{ mbit, duty, len float64 }{
+	{0, 0, 120}, {300, 0.040, 120}, {600, 0.122, 140}, {1700, 0.294, 200},
+}
+
+func z5ReoAt(r float64) (duty, l float64) {
+	t := z5ReoTab
+	if r >= t[len(t)-1].mbit {
+		return t[len(t)-1].duty, t[len(t)-1].len
+	}
+	for i := 1; i < len(t); i++ {
+		if r < t[i].mbit {
+			a, b := t[i-1], t[i]
+			x := (math.Max(r, 0) - a.mbit) / (b.mbit - a.mbit)
+			return a.duty + x*(b.duty-a.duty), a.len + x*(b.len-a.len)
+		}
+	}
+	return 0, t[0].len
+}
+
+// hold takes a packet of n bytes at now (ns since the emulator's start) and
+// says whether it is held.
+func (r *z5Reo) hold(p *z5Path, now float64, n int) bool {
+	if !p.ReorderField {
+		return rand.Float64() < p.Reorder
+	}
+	const tau = 100e6 // ns
+	r.acc = r.acc*math.Exp(-(now-r.last)/tau) + float64(n)
+	r.last = now
+	if r.on && now >= r.until {
+		r.on = false
+		r.checked = r.until
+	}
+	if !r.on {
+		duty, l := z5ReoAt(r.acc / tau * 1e9 * 8 / 1e6)
+		scale := p.ReorderScale
+		if scale <= 0 {
+			scale = 1
+		}
+		duty = math.Min(duty*scale, 0.9)
+		// (a two-state process: episodes of l ms on average take duty of the
+		// time, so one starts after (1-duty)·l/duty ms between them)
+		if dt := now - r.checked; duty > 0 && dt > 0 && rand.Float64() < -math.Expm1(-dt/1e6*duty/(l*(1-duty))) {
+			r.on, r.until = true, now+rand.ExpFloat64()*l*1e6
+		}
+		r.checked = now
+	}
+	q := p.Reorder
+	if q <= 0 {
+		q = 0.5
+	}
+	return r.on && rand.Float64() < q
 }
 
 type z5Emu struct {
@@ -162,9 +249,39 @@ func newZ5Emu(up, dn z5Path, mtu int) (*z5Emu, error) {
 	e.up.p, e.dn.p = up, dn
 	e.up.out = make(chan z5Pkt, 1<<17)
 	e.dn.out = make(chan z5Pkt, 1<<17)
+	// S2 rig: Z5_REORDER (the share of packets held), Z5_REORDER_MS (how
+	// late they come, ms; default 3), Z5_REORDER_FIELD=1 (the field's bursty
+	// reordering, z5Reo; Z5_REORDER then sets the share held within an
+	// episode, half by default) and Z5_REORDER_SCALE (its episodes' share of
+	// the time times this), on Z5_REORDER_DIR: dn (default: the exit's
+	// packets to the edge, the downloads' data, as the model reorders them),
+	// up, or both
+	if ro, field := z5Env("Z5_REORDER", 0), z5Env("Z5_REORDER_FIELD", 0) > 0; ro > 0 || field {
+		dirs := []*z5Dir{&e.dn}
+		switch os.Getenv("Z5_REORDER_DIR") {
+		case "up":
+			dirs = []*z5Dir{&e.up}
+		case "both":
+			dirs = []*z5Dir{&e.up, &e.dn}
+		}
+		for _, d := range dirs {
+			d.p.Reorder, d.p.ReorderField, d.p.ReorderScale = ro, field, z5Env("Z5_REORDER_SCALE", 0)
+			d.p.ReorderMs = time.Duration(z5Env("Z5_REORDER_MS", 3) * float64(time.Millisecond))
+		}
+	}
+	for _, d := range []*z5Dir{&e.up, &e.dn} {
+		if d.p.Reorder > 0 || d.p.ReorderField {
+			d.late = make(chan z5Pkt, 1<<17)
+		}
+	}
 	go func() { e.lockThread(); e.readLoop(mtu) }()
-	go func() { e.lockThread(); e.deliver(&e.up) }()
-	go func() { e.lockThread(); e.deliver(&e.dn) }()
+	go func() { e.lockThread(); e.deliver(&e.up, e.up.out) }()
+	go func() { e.lockThread(); e.deliver(&e.dn, e.dn.out) }()
+	for _, d := range []*z5Dir{&e.up, &e.dn} {
+		if d.late != nil {
+			go func() { e.lockThread(); e.deliver(d, d.late) }()
+		}
+	}
 	return e, nil
 }
 
@@ -219,16 +336,26 @@ func (e *z5Emu) readLoop(mtu int) {
 			d.nf.Store(d.nextFree)
 			at = d.nextFree
 		}
+		dep := at // (it leaves the bottleneck)
 		at += int64(d.p.Delay)
 		b := make([]byte, n)
 		copy(b, buf[:n])
 		z5Rewrite(b, nsrc, z5Local)
+		if d.late != nil && d.reo.hold(&d.p, float64(dep), n) {
+			// (a lane of its own: the ones held come in order among
+			// themselves, ReorderMs after their turn)
+			d.held.Add(1)
+			d.late <- z5Pkt{at: at + int64(d.p.ReorderMs), b: b}
+			continue
+		}
 		d.out <- z5Pkt{at: at, b: b}
 	}
 }
 
-func (e *z5Emu) deliver(d *z5Dir) {
-	for pk := range d.out {
+// deliver writes the packets of one of d's lanes into the TUN as each is
+// due.
+func (e *z5Emu) deliver(d *z5Dir, ch chan z5Pkt) {
+	for pk := range ch {
 		if w := pk.at - e.now(); w > 0 {
 			time.Sleep(time.Duration(w))
 		}
