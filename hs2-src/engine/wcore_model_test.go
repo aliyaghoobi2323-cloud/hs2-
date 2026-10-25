@@ -203,6 +203,13 @@ type wmCfg struct {
 	recEvery time.Duration
 	recOff   [][2]time.Duration
 	recZero  [][2]time.Duration
+	// cpu: the exit's smux writer (its frames and TLS) takes at most this
+	// many bytes/s of the streams' data into its socket (0: no limit),
+	// control frames first: an exit whose CPU, not the path, holds the
+	// link's sender (the rig's 1000 Mbit/s path carries ~750). The data waits
+	// in smux, where no srtt sees it, and the writer is busy, not waiting on
+	// its socket (txBlockedNs); a pong goes ahead of it
+	cpu float64
 	// check sees every step of the core (the invariant tests)
 	check func(t time.Duration, c *wcore, in wcIn, o wcOut)
 }
@@ -1089,6 +1096,9 @@ type wmModel struct {
 	}
 	// blkMs: ms the exit's smux writer waited on its socket (noteBlocked)
 	blkMs int64
+	// cpuCred: what the exit's writer may still write of the streams' data
+	// (cfg.cpu), bytes
+	cpuCred float64
 
 	// the core
 	core     *wcore
@@ -1232,6 +1242,9 @@ func (m *wmModel) fill(f *wmFlow) {
 			continue
 		}
 		wrote := false
+		if m.cfg.cpu > 0 && m.cpuCred <= 0 {
+			return
+		}
 		for k := range m.ss {
 			i := (m.rr + k) % len(m.ss)
 			s := m.ss[i]
@@ -1250,6 +1263,7 @@ func (m *wmModel) fill(f *wmFlow) {
 			s.written += uint64(n)
 			f.writeSeq += uint64(n)
 			m.frames.push(wmFrameRec{end: f.writeSeq, n: int(n), sid: i})
+			m.cpuCred -= float64(n)
 			m.rr = i + 1
 			wrote = true
 			break
@@ -1726,6 +1740,9 @@ func (m *wmModel) noteBlocked() {
 // has handed over (from what was written when it became paced: a source
 // that slows down has no backlog to send at its former pace).
 func (m *wmModel) sources() {
+	if m.cfg.cpu > 0 {
+		m.cpuCred = math.Min(m.cpuCred+m.cfg.cpu/1000, m.cfg.cpu/500)
+	}
 	for _, s := range m.ss {
 		if len(s.srcAt) == 0 && s.srcBurst == 0 {
 			continue
