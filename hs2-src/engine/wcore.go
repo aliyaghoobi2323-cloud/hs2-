@@ -118,6 +118,12 @@ type wcore struct {
 	// movedAt: the latest drain for a queue or a slower path, whether it
 	// moved B or found it at the floor (undoCut takes back nothing past it)
 	movedAt time.Time
+	// keptAt: the latest loss point or backoff learned by a rule other than
+	// holes alone (a resend-based loss test, a policer's loss): undoCut takes
+	// none of the loss point, Q_cap and backoff back past it; relaxAt: the
+	// latest a probe that paid or a cap gone stale eased them: undoCut takes
+	// them back to the easier of the two (undoCut)
+	keptAt, relaxAt time.Time
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -350,6 +356,12 @@ var (
 	// 2 s window past 2.5% (the loss rule drains at 12%).
 	wcRoMargin = 1.25
 	wcRoMax    = 0.75
+	// wcWeakTTL: a cut that stood on a small loss of the sender's (weak) is
+	// taken back with a later cut for holes as dense only this long after
+	// its latest hole: past it, what the core learned since stands (a
+	// minute-old weak wiped a loss point a resend-based test had set since,
+	// TestRevWeakWipesLaterCap).
+	wcWeakTTL = 10 * time.Second
 	// wcPoliceQ, wcPoliceBackoff: a loss of ours whose record from the exit
 	// shows no more queue than wcPoliceQ at its socket is a policer's
 	// (policerLoss): its loss point (bCap) holds for wcQcapTTL, not until a
@@ -1033,7 +1045,11 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.toHold(in, m)
 		}
 	}
-	if prov && (c.cnt.drainLoss > nLoss || c.lossTest != test || c.bCapAt.Equal(now)) {
+	// (what the verdict on holes did: a drain for loss, a test of the holes'
+	// loss, a loss point set now by no other rule; a resend-based loss test
+	// that ends in the same interval and sets its loss point is no reaction
+	// to holes, keptAt, TestRevUndoWipesSndLossTestCap)
+	if prov && (c.cnt.drainLoss > nLoss || c.lossTest == wcSrcOoo && test != wcSrcOoo || c.bCapAt.Equal(now) && !c.keptAt.Equal(now)) {
 		c.provNote(p, now, m.holeMax)
 	}
 	if c.peer != nil {
@@ -1272,6 +1288,9 @@ func (c *wcore) judgeCut(in wcIn) []wcEvent {
 			c.weak = wcProv{} // a loss worth a verdict: what came since is its
 		}
 	}
+	if !c.weak.at.IsZero() && now.Sub(c.weak.last) >= wcWeakTTL {
+		c.weak = wcProv{} // (too old to take back: what came since stands)
+	}
 	p := &c.prov
 	if p.at.IsZero() {
 		return nil
@@ -1330,11 +1349,18 @@ func (c *wcore) sndSmall(s wcSnd) bool {
 // undoCut takes back what holes alone did to B, the exit's record having
 // shown no loss (judgeCut). Every loss point (bCap), Q_cap, backoff and R̂
 // reset since the first of them came of them (a record that showed a loss
-// would have made them stand first), and goes back to what it was; so does
-// B, in the state they found (a probe's: where it began), unless a drain for
-// a queue or a slower path came since (movedAt: its verdict stands, and R̂ as
-// it reset it) or the core is past HOLD again (a probe, STARTUP: it moves on
-// from where it is). The published budget climbs back by the ramp.
+// would have made them stand first), and goes back to what it was, unless a
+// rule other than holes wrote them since: a loss learned from the exit's
+// records (keptAt: a resend-based loss test, a policer's loss) stands, and B
+// goes back no higher than its loss point; what a probe that paid or a cap
+// gone stale eased (relaxAt) goes back to the easier of the two, no cap if
+// either had none (the probe's cap is the cut's, raised as far as the probe
+// found the path clean: taken as a loss of its own it held 1000/72 with the
+// field's reordering at 647 Mbit/s, 668 without); so does B, in the state they
+// found (a probe's: where it began), unless a drain for a queue or a slower
+// path came since (movedAt: its verdict stands, R̂ and the path's fullness as
+// it left them) or the core is past HOLD again (a probe, STARTUP: it moves
+// on from where it is). The published budget climbs back by the ramp.
 //
 // (movedAt, not those drains' counters: a drain for a slower path that finds
 // B at the floor already, where a cut to it put it, drains nothing and
@@ -1361,26 +1387,50 @@ func (c *wcore) undoCut(in wcIn, v float64) []wcEvent {
 	now := in.now
 	c.cnt.undo++
 	c.oooRo, c.oooRoAt = math.Max(c.roLevel(now), math.Min(wcRoMargin*p.share, wcRoMax)), now
-	if w := c.weak; !w.at.IsZero() && w.share <= c.oooRo {
+	if w := c.weak; !w.at.IsZero() && w.share <= c.oooRo && now.Sub(w.last) < wcWeakTTL {
 		c.weak = wcProv{}
 		p.at, p.bCap, p.bCapAt, p.qcap, p.qcapAt, p.qcapOK, p.backoff, p.pathFull =
 			w.at, w.bCap, w.bCapAt, w.qcap, w.qcapAt, w.qcapOK, w.backoff, w.pathFull
 	}
-	if !c.bCapAt.Before(p.at) {
-		c.bCap, c.bCapAt = p.bCap, p.bCapAt
+	// what a rule other than holes alone wrote since stands (keptAt): a
+	// resend-based loss test that ended in the interval of a verdict on
+	// holes, a probe that paid, a cap gone stale since a cut set aside
+	// (TestRevUndoWipesSndLossTestCap, TestRevWeakWipesLaterCap)
+	kept := !c.keptAt.Before(p.at)
+	switch {
+	case kept:
+	case !c.relaxAt.Before(p.at):
+		if c.bCap == 0 || p.bCap == 0 {
+			c.bCap = 0
+		} else if p.bCap > c.bCap {
+			c.bCap, c.bCapAt = p.bCap, p.bCapAt
+		}
+		if !c.qcapAt.Before(p.at) {
+			c.qcap, c.qcapAt, c.qcapOK = p.qcap, p.qcapAt, p.qcapOK
+		}
+		if b := min(c.backoff, p.backoff); b != c.backoff {
+			c.backoff = b
+			c.schedProbe(now)
+		}
+	default:
+		if !c.bCapAt.Before(p.at) {
+			c.bCap, c.bCapAt = p.bCap, p.bCapAt
+		}
+		if !c.qcapAt.Before(p.at) {
+			c.qcap, c.qcapAt, c.qcapOK = p.qcap, p.qcapAt, p.qcapOK
+		}
+		if c.backoff != p.backoff {
+			c.backoff = p.backoff
+			c.schedProbe(now)
+		}
 	}
-	if !c.qcapAt.Before(p.at) {
-		c.qcap, c.qcapAt, c.qcapOK = p.qcap, p.qcapAt, p.qcapOK
-	}
-	if c.backoff != p.backoff {
-		c.backoff = p.backoff
-		c.schedProbe(now)
-	}
-	c.pathFull = p.pathFull
 	if c.lossTest == wcSrcOoo {
 		c.lossTest = wcSrcNone
 	}
 	moved := !c.movedAt.Before(p.at)
+	if !moved {
+		c.pathFull = p.pathFull
+	}
 	if len(c.rhat) > 0 && !c.rhat[0].at.Before(p.at) && len(p.rhat) > 0 && !moved {
 		// (R̂ was reset since, by the verdict taken back: its samples from
 		// before come back)
@@ -1392,6 +1442,9 @@ func (c *wcore) undoCut(in wcIn, v float64) []wcEvent {
 	b := p.b
 	if p.st == wcProbe {
 		b = min(b, p.probeFrom)
+	}
+	if kept && c.bCap > 0 && now.Sub(c.bCapAt) < wcQcapTTL {
+		b = min(b, c.bCap) // (a loss point another rule set stands for B too)
 	}
 	if b <= c.B {
 		return nil
@@ -2797,6 +2850,7 @@ func (c *wcore) policerLoss(m wcMeas) bool {
 func (c *wcore) notePoliced(now time.Time) {
 	c.policedAt = now
 	c.backoff = max(c.backoff, wcPoliceBackoff)
+	c.keptAt = now
 	c.schedProbe(now)
 }
 
@@ -3092,7 +3146,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// (not a policer's: below its rate a policed path always looks so)
 	if !c.policed(now) && (c.wlN >= 2 && clean && unbiased && atFloor ||
 		c.wlN >= 3 && !(m.qOK && m.qTurn > c.qRef+dq/2) && clean && now.Sub(c.bCapAt) >= wcCapStale) {
-		c.bCap, c.backoff = 0, 0
+		c.bCap, c.backoff, c.relaxAt = 0, 0, now
 	}
 	if c.backoff == 0 && (c.wlN >= 2 || (m.qOK && c.qRef > dq && m.qTurn < c.qRef-dq)) && c.probeAt.After(now) {
 		c.probeAt = now
@@ -3225,6 +3279,7 @@ func (c *wcore) lossTestDone(in wcIn, m wcMeas, ev *[]wcEvent) bool {
 			*ev = append(*ev, wcEvent{kind: wcEvLossy, loss: m.snd, T: c.tBase, q: c.tau})
 		} else {
 			c.noteCap(in.now, c.lossTestB)
+			c.keptAt = in.now // (the exit's records', no holes': undoCut leaves it)
 		}
 	case wcSrcOoo:
 		if !m.oooOK {
@@ -3300,7 +3355,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 		return
 	}
 	c.cnt.probeOK++
-	c.backoff = 0
+	c.backoff, c.relaxAt = 0, now // (and the loss point below: undoCut keeps the easier)
 	c.pathFull = false
 	r := c.rhatF(now, m)
 	good := float64(c.B) - math.Max(rise.Seconds(), 0)*r
