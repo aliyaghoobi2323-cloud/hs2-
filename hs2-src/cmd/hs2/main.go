@@ -307,8 +307,8 @@ func applyTuning() {
 	num("HS2_TUNE_PACENET", &engine.PaceNet)
 	flt("HS2_TUNE_PACENET_K", &engine.PaceNetK)
 	flt("HS2_TUNE_PACENET_LOSS", &engine.PaceNetLoss)
-	if engine.SmuxMinStreamBuffer > 0 && engine.SmuxStreamLagTarget > 0 && engine.SmuxAdaptiveWindow() == 0 {
-		log.Printf("tuning: smux adaptive stream window off — no room for it (two %d B frames) in a %d B stream window", engine.SmuxFrameSize, engine.SmuxStreamBuffer)
+	for _, n := range engine.SmuxTuningNotes() {
+		log.Printf("tuning: %s", n)
 	}
 	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
 		tlscarrier.CongestionControl = v

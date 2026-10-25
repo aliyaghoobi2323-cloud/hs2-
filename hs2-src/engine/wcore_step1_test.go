@@ -221,6 +221,32 @@ func TestWcoreStep1SeenNeedsSrtt(t *testing.T) {
 	}
 }
 
+// An exit whose kernel's TCP_INFO ends before tcpi_min_rtt (Linux before
+// 4.6) still fills srtt, and nothing past it: no q_snd and no resend share
+// of the sender ever comes. Its records are no extended record either (the
+// blind regime step 1 leaves OFF), whatever its srtt and segments say.
+func TestWcoreStep1SeenNeedsMinRTT(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		snd  wcSnd
+	}{
+		{"srtt only", wcSnd{fresh: true, srtt: 101 * time.Millisecond}},
+		{"srtt and segments, no min_rtt", wcSnd{fresh: true, srtt: 101 * time.Millisecond, segsOut: 200}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := wtCore(1)
+			for i := range 4 {
+				in := wtIn(wtT0.Add(time.Duration(i)*time.Second), 1, wtNeed)
+				in.snd = tc.snd
+				c.step(in)
+			}
+			if c.sndSeen || !c.sndAny {
+				t.Fatalf("records with no min_rtt: sndSeen %v sndAny %v, want only records seen", c.sndSeen, c.sndAny)
+			}
+		})
+	}
+}
+
 // In the model the exit's side (uploads) and an edge with an old exit run
 // as base under the default config: on the red team's policer grid at ~300
 // ms, where those blind sides drained links, and on clean and lossy paths

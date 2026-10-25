@@ -46,6 +46,45 @@ func TestSmuxConfigWindowPool(t *testing.T) {
 	}
 }
 
+// A lab need or adaptive window that leaves no room for windows past the
+// need keeps a fixed window the link's buffer holds (no pool brings the
+// rest): a valid config, not a 16 MiB window that smux refuses on every
+// link. A smallest window above it turns the adaptive window off, as with
+// the 2 MiB window before the pool.
+func TestSmuxConfigFixedWindowFitsTheBuffer(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		need, min       int
+		wantMax, wantLo int
+	}{
+		{"need 0", 0, SmuxMinStreamBuffer, smuxFixedWindow, SmuxMinStreamBuffer},
+		{"need below the adaptive window", 32 << 10, SmuxMinStreamBuffer, 32 << 10, 0},
+		{"need at the stream buffer", SmuxStreamBuffer, SmuxMinStreamBuffer, SmuxSessionBuffer, SmuxMinStreamBuffer},
+		{"need past the stream buffer", 2 * SmuxStreamBuffer, SmuxMinStreamBuffer, SmuxSessionBuffer, SmuxMinStreamBuffer},
+		{"adaptive window above the need", SmuxNeedStreamBuffer, 3 << 20, SmuxNeedStreamBuffer, 0},
+		{"adaptive window at twice the need", SmuxNeedStreamBuffer, 4 << 20, SmuxNeedStreamBuffer, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			need, min := SmuxNeedStreamBuffer, SmuxMinStreamBuffer
+			SmuxNeedStreamBuffer, SmuxMinStreamBuffer = tc.need, tc.min
+			defer func() { SmuxNeedStreamBuffer, SmuxMinStreamBuffer = need, min }()
+			c := newSmuxConfig()
+			if err := smux.VerifyConfig(c); err != nil {
+				t.Fatalf("need %d max %d min %d pool %v: %v", c.NeedStreamBuffer, c.MaxStreamBuffer, c.MinStreamBuffer, c.WindowPool != nil, err)
+			}
+			if c.WindowPool != nil || c.NeedStreamBuffer != 0 || c.MaxStreamBuffer != tc.wantMax || c.MinStreamBuffer != tc.wantLo {
+				t.Fatalf("need %d max %d min %d pool %v, want a fixed %d window, smallest %d", c.NeedStreamBuffer, c.MaxStreamBuffer, c.MinStreamBuffer, c.WindowPool != nil, tc.wantMax, tc.wantLo)
+			}
+			if SmuxTuningNotes() == nil {
+				t.Fatal("no tuning note says windows past the need are off")
+			}
+		})
+	}
+	if n := SmuxTuningNotes(); n != nil {
+		t.Fatalf("the default config: %q", n)
+	}
+}
+
 // Without a ceiling from the window core a fast download's window stays
 // within SmuxNeedStreamBuffer: the real link stack takes nothing from the
 // pool for it and its buffer stays SmuxSessionBuffer.

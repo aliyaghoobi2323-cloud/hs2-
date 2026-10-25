@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand/v2"
 	"net"
@@ -316,13 +317,34 @@ var (
 // the variables above: its smallest window, or 0 when it is off — turned off,
 // or left no room by a lab override (it needs two frames within
 // SmuxStreamBuffer, smux.VerifyConfig), in which case the fixed window stays
-// rather than every link failing.
+// rather than every link failing (newSmuxConfig also leaves it off if it
+// does not fit a fixed window: SmuxTuningNotes).
 func SmuxAdaptiveWindow() (min int) {
 	min = max(SmuxMinStreamBuffer, 2*SmuxFrameSize)
 	if SmuxMinStreamBuffer <= 0 || SmuxStreamLagTarget <= 0 || min > SmuxStreamBuffer {
 		return 0
 	}
 	return min
+}
+
+// smuxFixedWindow is the stream window before the window pool (2 MiB): what
+// newSmuxConfig keeps, within the link's buffer, when a lab need of 0
+// leaves no window past the need.
+const smuxFixedWindow = 2 << 20
+
+// SmuxTuningNotes says what lab overrides of the variables above turned
+// off in newSmuxConfig, for applyTuning's log (none: the windows as built).
+func SmuxTuningNotes() (notes []string) {
+	c := newSmuxConfig()
+	if SmuxMinStreamBuffer > 0 && SmuxStreamLagTarget > 0 && c.MinStreamBuffer == 0 {
+		notes = append(notes, fmt.Sprintf("smux adaptive stream window off — no room for it (two %d B frames, at least %d B) in a %d B stream window",
+			SmuxFrameSize, SmuxMinStreamBuffer, c.MaxStreamBuffer))
+	}
+	if c.WindowPool == nil {
+		notes = append(notes, fmt.Sprintf("smux windows past the need off — the need %d B is outside [the adaptive window, %d B): a fixed %d B stream window",
+			SmuxNeedStreamBuffer, SmuxStreamBuffer, c.MaxStreamBuffer))
+	}
+	return notes
 }
 
 // windowPool is the process's smux.WindowPool, of SmuxWindowPool bytes as
@@ -346,16 +368,22 @@ func newSmuxConfig() *smux.Config {
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer
-	need := SmuxNeedStreamBuffer
-	if min := SmuxAdaptiveWindow(); min > 0 {
-		c.MinStreamBuffer = min
-		c.StreamLagTarget = SmuxStreamLagTarget
-		if need >= min && need < SmuxStreamBuffer {
-			c.NeedStreamBuffer = need
-			c.WindowPool = windowPool()
-		}
-	} else if need > 0 && need < SmuxStreamBuffer {
-		c.MaxStreamBuffer = need // the fixed window, as it was
+	need, lo := SmuxNeedStreamBuffer, SmuxAdaptiveWindow()
+	if lo > 0 && need >= lo && need < SmuxStreamBuffer {
+		c.MinStreamBuffer, c.StreamLagTarget = lo, SmuxStreamLagTarget
+		c.NeedStreamBuffer, c.WindowPool = need, windowPool()
+		return c
+	}
+	// No window past the need (a lab override left it no room): the fixed
+	// window, as it was (the need, 2 MiB if it is 0), within the link's
+	// buffer, since no pool brings the rest (smux.VerifyConfig refuses
+	// more on every link), and the adaptive window in it if it still fits.
+	if need <= 0 {
+		need = smuxFixedWindow
+	}
+	c.MaxStreamBuffer = min(need, SmuxStreamBuffer, SmuxSessionBuffer)
+	if lo > 0 && lo <= c.MaxStreamBuffer {
+		c.MinStreamBuffer, c.StreamLagTarget = lo, SmuxStreamLagTarget
 	}
 	return c
 }

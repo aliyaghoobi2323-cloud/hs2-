@@ -13,7 +13,8 @@ import (
 // end receives (the edge's downloads; the exit's uploads only with the lab
 // knob WcoreUpload, until step 3). A measurement interval in, the link's
 // window budget and each fast stream's ceiling out. The edge's core leaves
-// OFF only once the exit sent an extended record (srtt != 0, sndSeen).
+// OFF only once the exit sent an extended record (srtt and min_rtt != 0,
+// sndSeen).
 // It holds no locks, opens no sockets and never reads the clock (time and
 // randomness come in through wcIn and c.rnd), so its whole behaviour is
 // exercised by the link model in wcore_model_test.go; the actuator is the
@@ -76,7 +77,7 @@ type wcore struct {
 	lossDrainN int
 	cuts       int  // halvings for loss between evaluations
 	offN       int  // OFF: intervals in a row with steady fast streams
-	sndSeen    bool // an extended record of the exit came (srtt != 0: an edge with a new exit); the edge leaves OFF only then
+	sndSeen    bool // an extended record of the exit came (srtt and min_rtt != 0: an edge with a new exit on Linux 4.6 or later); the edge leaves OFF only then
 	sndAny     bool // a record of the exit came (an old exit's too)
 	sndAnyAt   time.Time
 	sndLastAt  time.Time         // the latest record of the exit (blind: none for wcSndQuiet)
@@ -874,9 +875,11 @@ func (c *wcore) step(in wcIn) wcOut {
 		} else if rec.segsOut > 0 || rec.srtt > 0 {
 			c.cleanRecs = 0
 		}
-		if rec.srtt > 0 {
+		if rec.srtt > 0 && rec.minRTT > 0 {
 			// the sender's fields of a 96-byte record (an old exit's 64
-			// bytes, or an exit with no TCP_INFO, read srtt 0 for good)
+			// bytes, or an exit with no TCP_INFO, read srtt 0 for good; one
+			// whose kernel's TCP_INFO ends before tcpi_min_rtt, Linux before
+			// 4.6, srtt alone: no q_snd and no resend share for good)
 			c.sndSeen = true
 		}
 	}
@@ -1994,7 +1997,7 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// (a resend share takes two records: the first sets the base of the
 	// next; wait for it up to two record spans after the first came).
 	// The edge waits for an extended record (sndSeen) for as long as the
-	// link lives: an old exit (64 bytes, or srtt 0 for good) leaves the
+	// link lives: an old exit (64 bytes, srtt 0 or min_rtt 0 for good) leaves the
 	// windows as without the core. Without the sender's record the core
 	// cannot see a policer's signature, and its growth lifts the exit's BBR
 	// pacing past the policer for good (red team, round 1: 8 of 96 model

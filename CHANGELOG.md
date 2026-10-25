@@ -2164,8 +2164,10 @@ What changed:
   stream's own turnaround slows). In step 1 a ceiling is never below 2 MiB, so
   nothing below the knee differs from base, and the Z–Z3 protections (adaptive
   window, brakes, window updates first, the fair queue) are untouched. The
-  core leaves OFF only after the exit's first extended stats record: with an
-  old exit it stays off for the link's life (exactly base). It also stays off
+  core leaves OFF only after the exit's first extended stats record (its srtt
+  and min_rtt set: an exit on Linux 4.6 or later): with an old exit, or one
+  whose kernel's TCP_INFO has no min_rtt, it stays off for the link's life
+  (exactly base). It also stays off
   while the windows without it already fill the path (the exit's queue over
   max(5 ms, RTT/10) in its last three records) or the exit resends over 1%
   ("first, do no harm"); above 450 ms it leaves OFF only after 3 clean exit
@@ -2426,6 +2428,16 @@ fix):
     base in 3 and the core before in 2, its link judged degraded) — damping
     the credit bursts is step 2; a short black hole or a burst of loss loses
     the gain for 10–20 s (never below base).
+- The independent review after the merge fixed: an exit on Linux before 4.6
+  (srtt in its record, no min_rtt or segment counts) counted as one the edge
+  can see, so the edge's core left OFF with no sender signal at all (the
+  blind side step 1 keeps off; no BBR on such a kernel, so not the known
+  harm, but never measured); and lab values of `HS2_TUNE_SMUX_NEEDBUF` (0,
+  below 64 KiB, 16 MiB or more) or `HS2_TUNE_SMUX_MINSTREAMBUF` (above
+  2 MiB, which base ran with) left a 16 MiB stream window with no pool, which
+  smux refuses: every link failed to come up. Such values now keep a fixed
+  window (the need, 2 MiB for 0) within the link's buffer, and the start log
+  says so.
 - Open: borrowing is not under the per-session share (no regression from base;
   the wedge guard frees a stuck link). The peer's records are sorted at each
   evaluation and its cores listed at each step (estimated at up to a tenth

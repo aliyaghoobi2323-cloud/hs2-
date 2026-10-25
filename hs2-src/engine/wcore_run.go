@@ -20,8 +20,9 @@ import (
 // Every edge's smux session that can grow a window past NeedStreamBuffer
 // gets a core for the direction it receives (its downloads), registered with
 // wcores where newSession registers the session with the wedge guard. Its
-// core leaves OFF only once the exit sent an extended stats record (srtt !=
-// 0, wcore.sndSeen): with an old exit it stays OFF for the link's life. The
+// core leaves OFF only once the exit sent an extended stats record (srtt and
+// min_rtt != 0, wcore.sndSeen): with an old exit, or one on Linux before 4.6,
+// it stays OFF for the link's life. The
 // exit's sessions get one for their uploads only with WcoreUpload (a lab
 // knob until step 3, WINDOW_CORE §11). One goroutine wakes every
 // wcRampTick (100 ms) and steps each link whose turn has come (wcOut.next):

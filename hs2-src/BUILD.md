@@ -216,7 +216,7 @@ carries) and the exit's pacing net (`engine/pacenet.go`):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `HS2_TUNE_SMUX_NEEDBUF` | 2 MiB (2097152) | how far a stream's window grows on its reader keeping up alone; past it only under the window core's ceiling, and only from the window pool |
+| `HS2_TUNE_SMUX_NEEDBUF` | 2 MiB (2097152) | how far a stream's window grows on its reader keeping up alone; past it only under the window core's ceiling, and only from the window pool. A value outside [`HS2_TUNE_SMUX_MINSTREAMBUF`, `HS2_TUNE_SMUX_STREAMBUF`) turns windows past it off: a fixed window of it (2 MiB for 0) within `HS2_TUNE_SMUX_SESSBUF`, logged at start |
 | `HS2_TUNE_SMUX_STREAMBUF` | 16 MiB | the largest stream window (what the window core may grow one to) |
 | `HS2_TUNE_SMUX_POOL` | 1/128 of the RAM, 16–128 MiB (32 MiB if the RAM is unknown) | the process's window pool, bytes: what windows past the need hold, and what links whose buffer ran full borrow; 0 = no window past `HS2_TUNE_SMUX_NEEDBUF` and no buffer borrowed |
 | `HS2_TUNE_WCORE` | 1 | 0 turns the window core off: no link gets one and every window stays within the need, as before (the field safety switch; Iran server) |
