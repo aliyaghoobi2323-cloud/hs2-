@@ -112,6 +112,9 @@ type wcore struct {
 	tbOff    time.Duration // turnBase − T_base while both agreed (route change)
 	tbOK     bool          // ... they agreed at least once
 	routeLog bool
+	// the exit's srtt by its latest record, and when (sndAllows)
+	sndRTT   time.Duration
+	sndRTTAt time.Time
 	// after a route change the exit's min_rtt keeps the old floor too:
 	// qSndRaw is srtt − min_rtt of its records (their floor over 60 s in
 	// qSndMins), and sndOff what of it is the longer path (q_snd is the rest)
@@ -1294,6 +1297,7 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 			c.sndOff = 0 // the exit's min_rtt took the path as it is (renewed, or the route back)
 		}
 		c.qSnd, c.qSndAt = max(raw-c.sndOff, 0), now
+		c.sndRTT, c.sndRTTAt = in.snd.srtt, now
 	}
 	if t > 0 {
 		switch {
@@ -1312,7 +1316,7 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 				c.sndOff = c.qSndMins.min(now, wcTurnWin)
 				c.qSnd = max(raw-c.sndOff, 0)
 			}
-			if c.qSnd <= c.dq() {
+			if c.qSnd <= c.dq() && c.sndAllows(now, tb-c.tbOff, t) {
 				t = tb - c.tbOff
 				if !c.routeLog {
 					c.routeLog = true
@@ -1329,6 +1333,31 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 			c.peer.noteRec(c, now, c.qSnd)
 		}
 	}
+}
+
+// sndAllows says whether the exit's own round trip allows a path of p where
+// T_base is t. A longer path is longer for the sender as well: with a record
+// of the exit's socket within wcSndHist record spans, its srtt (on a stale
+// min_rtt or a renewed one) must have come within a quarter of p's rise past
+// t. The turnaround floor rises too when the link's streams are all slow at
+// their source -- the time a sender takes to reach the limit it had, which
+// no socket sees -- and with the exit's srtt flat that is no route change
+// (the field: "~2199 ms" on a 72 ms path once a download had ended). While
+// the exit's records have stopped, the decision stands as it was: a route
+// change already taken is kept (dropped, T_base fell back to the stale
+// min_rtt for the length of the gap and the model's runs took a queue drain
+// each) and none is taken anew. A side that never had a record of its
+// sender decides by the turnaround, as before -- no core runs there (the
+// edge's leaves OFF only on the exit's records; the exit's own one gets the
+// edge's record in step 3).
+func (c *wcore) sndAllows(now time.Time, p, t time.Duration) bool {
+	if c.sndRTTAt.IsZero() {
+		return true
+	}
+	if now.Sub(c.sndRTTAt) > wcSndHist*wcSndSpan {
+		return c.routeLog
+	}
+	return c.sndRTT >= p-max(c.dq(), (p-t)/4)
 }
 
 // routeSnd says whether the exit's records read a longer path of rise (the
