@@ -653,3 +653,43 @@ func TestWcoreS2EvidencePastNeed(t *testing.T) {
 		}
 	}
 }
+
+// A slow source beside a fast download on a lossy path (0.1% random loss):
+// data waits behind holes, no interval judges the lack of evidence, and a
+// slow source that joined F (on its "use" of the window) stayed in it in 52
+// to 98% of the evaluations. B, the knee and q_turn were made with it: the
+// download beside it got 0.30 to 0.67 of what it gets alone on 1000/50
+// (sources of 8, 14 and 27 Mbit/s, three seeds each), and 0.30 to 0.70 on
+// 1000/100. A stream that moves under wcPeerShare of the link's fastest
+// stream could not join F; it leaves it on two evaluations in a row too,
+// holes or not.
+func TestWcoreS2SlowBesideFastLossy(t *testing.T) {
+	for _, x := range []struct {
+		rtt  int
+		gain bool // the download gets 3/4 of its rate alone
+	}{{50, true}, {100, false}} {
+		for _, src := range []float64{8, 14, 27} {
+			for seed := uint64(1); seed <= 3; seed++ {
+				c := wmPath(1000, wmMS(x.rtt), wmMS(50))
+				c.mode, c.seed, c.loss, c.dur = wmCore, seed, 0.001, 60*time.Second
+				alone := wmRun(c)
+				c.streams = []wmStreamCfg{{}, {srcAt: []wmChange{{0, src * wmMbit}}}}
+				evals, slowF := 0, 0
+				c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+					if at >= 10*time.Second && k.lastAt.Equal(in.now) {
+						evals++
+						if k.inF[3] {
+							slowF++
+						}
+					}
+				}
+				both := wmRun(c)
+				// (the source's own pace is all it gets either way)
+				if 2*slowF > evals || x.gain && both.mbit-src < 0.75*alone.mbit {
+					t.Errorf("1000/%d l0.1, a source of %.0f Mbit/s beside the download, seed %d: the source in F in %d of %d evaluations, the download %.1f Mbit/s against %.1f alone",
+						x.rtt, src, seed, slowF, evals, both.mbit-src, alone.mbit)
+				}
+			}
+		}
+	}
+}
