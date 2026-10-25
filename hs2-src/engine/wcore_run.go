@@ -539,7 +539,7 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 	l.snaps = l.snaps[:0]
 	for _, x := range l.samples {
 		l.snaps = append(l.snaps, wcStreamSnap{id: x.ID, readTot: x.Read, updN: x.Upds, hitN: x.Hits, lagN: x.Lags,
-			turnMin: x.TurnMin, turnLast: x.TurnLast, win: x.Win, braked: x.Braked})
+			turnMin: x.TurnMin, turnLast: x.TurnLast, win: x.Win, braked: x.Braked, step: x.Step})
 	}
 	s.streams = l.snaps
 	m := l.mtr

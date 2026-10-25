@@ -95,6 +95,7 @@ type Session struct {
 	conn io.ReadWriteCloser
 
 	config           *Config
+	client           bool   // it dialed (Client): hs2's edge (fineStepOf)
 	nextStreamID     uint32 // next stream identifier
 	nextStreamIDLock sync.Mutex
 
@@ -163,6 +164,7 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 	s.chSocketWriteError = make(chan struct{})
 	s.chProtoError = make(chan struct{})
 
+	s.client = client
 	if client {
 		s.nextStreamID = 1
 	} else {

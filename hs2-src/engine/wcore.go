@@ -476,6 +476,7 @@ type wcStream struct {
 	turnLast time.Duration // latest window turnaround (0: none)
 	win      uint32        // its window now
 	braked   bool          // checkLag's brake is on
+	step     uint32        // what its reader reads between two updates now (smux CoreSample.Step; 0: wcStep of its window)
 	// turns: each runner wake's turnMin and turnLast over the interval
 	// (wcMerge): q_turn is their 25th percentile, not the interval's least
 	turns []time.Duration
@@ -648,6 +649,16 @@ func newWcore(cfg wcConfig, rnd func() float64) *wcore {
 // fast arm uses): half of it, or, past need, need/2 or an eighth of it if
 // that is more, never more than half.
 func wcStep(need, w uint32) uint32 { return smux.StepOf(need, w) }
+
+// stepOf is the step the stream's updates leave at now: the fast arm's word for
+// it (a stream its window holds steps finer: smux.FineStepOf, to 8 MiB),
+// else wcStep of its window.
+func (s *wcStream) stepOf(need uint32) uint32 {
+	if s.step > 0 {
+		return s.step
+	}
+	return wcStep(need, s.win)
+}
 
 // wcSplit shares budget among streams max-min fairly by window (the streams
 // of one link see one round trip, so equal windows are equal rates): each
@@ -1246,7 +1257,7 @@ func wcMerge(a *wcIn, b wcIn) {
 				o.turnLast = s.turnLast
 			}
 			o.turns = wcWakeTurns(o.turns, s)
-			o.win, o.braked = s.win, s.braked
+			o.win, o.braked, o.step = s.win, s.braked, s.step
 			break
 		}
 		if !found {
@@ -1506,7 +1517,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 				m.f = append(m.f, i)
 				m.wF += float64(s.win)
 				m.wPrev += float64(s.win)
-				m.hStep += float64(wcStep(need, s.win)) / 2
+				m.hStep += float64(s.stepOf(need)) / 2
 			}
 			continue
 		}
@@ -1532,7 +1543,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 			if turn <= 0 {
 				turn = s.turnMin
 			}
-			step := float64(wcStep(need, s.win))
+			step := float64(s.stepOf(need))
 			used := turn > 0 && r*turn.Seconds() >= wcUseShare*(float64(s.win)-step/2)
 			hint := float64(s.hit) >= wcHitShare*float64(s.upd) && tb > 0 && s.turnMin > 0 && s.turnMin <= tb+c.dq()
 			if s.win < need/2 || r < wcPeerShare*maxR || !noQ || !(used || hint) {
@@ -1548,7 +1559,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 		} else {
 			m.wPrev += float64(s.win)
 		}
-		m.hStep += float64(wcStep(need, s.win)) / 2
+		m.hStep += float64(s.stepOf(need)) / 2
 		hits += float64(s.hit)
 		upds += float64(s.upd)
 		switch {
@@ -2974,10 +2985,10 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 
 // wcStreamSnap is one stream's counters as the smux arm keeps them
 // (smux.CoreSample: ID, Win, Read, Upds, Hits, Lags, TurnMin, TurnLast,
-// Braked): cumulative, except turnMin and turnLast, which the snapshot
-// swaps out (what came since the previous one). Session.CoreSnapshot leaves
-// out streams under need/4 with no fresh hit: one that comes back counts
-// from that snapshot on.
+// Braked, Step): cumulative, except turnMin and turnLast, which the
+// snapshot swaps out (what came since the previous one), and win and step,
+// as they are. Session.CoreSnapshot leaves out streams under need/4 with no
+// fresh hit: one that comes back counts from that snapshot on.
 type wcStreamSnap struct {
 	id                uint32
 	readTot           uint64
@@ -2985,6 +2996,7 @@ type wcStreamSnap struct {
 	turnMin, turnLast time.Duration
 	win               uint32
 	braked            bool
+	step              uint32 // 0: wcStep of win
 }
 
 // wcLinkSnap is one snapshot of a link: cumulative counters of its socket
@@ -3059,7 +3071,7 @@ func (b *wcBuilder) build(s wcLinkSnap) wcIn {
 	next := make(map[uint32]wcStreamSnap, len(s.streams))
 	in.streams = make([]wcStream, 0, len(s.streams))
 	for _, st := range s.streams {
-		w := wcStream{id: st.id, win: st.win, braked: st.braked, turnMin: st.turnMin, turnLast: st.turnLast}
+		w := wcStream{id: st.id, win: st.win, braked: st.braked, step: st.step, turnMin: st.turnMin, turnLast: st.turnLast}
 		if p, ok := b.prevS[st.id]; ok {
 			w.read = wcDelta(st.readTot, p.readTot)
 			w.upd = st.updN - p.updN

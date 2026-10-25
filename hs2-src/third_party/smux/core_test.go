@@ -357,7 +357,7 @@ func (s *Stream) readAndAnnounce(n int, window uint32) {
 	s.bufferLock.Lock()
 	s.unread -= n
 	s.core.readTot.Add(uint64(n))
-	s.announced(window)
+	s.announced(window, false)
 	s.bufferLock.Unlock()
 }
 
@@ -499,7 +499,12 @@ func TestCoreHitsAndLags(t *testing.T) {
 	cfg.MaxStreamBuffer = 256 << 10 // stays at the start window
 	session, stream, p := newRawPeer(t, cfg)
 	// a reader that keeps up, a peer an update behind (the round trip of a
-	// long path) that sends all its window allows and waits there
+	// long path) that sends all its window allows and waits there. Under the
+	// coarse step: each round of this peer is a cycle. (Held, the stream
+	// would step finer, and a round, the round trip, spans several cycles;
+	// a held stream's hits: TestFineStepHeldStreamStillHits.)
+	fineOff = true
+	defer func() { fineOff = false }()
 	for i := 0; i < 20; i++ {
 		p.sync(stream)
 		for n := p.behind(); n > 0; n -= 4096 {
@@ -550,7 +555,7 @@ func TestCoreSnapshotPicksLargeStreams(t *testing.T) {
 	small.bufferLock.Lock()
 	small.rcvWin = uint32(cfg.MinStreamBuffer)
 	small.bufferLock.Unlock()
-	small.sendWindowUpdate()
+	small.sendWindowUpdate(false)
 	samples, c := session.CoreSnapshot(make([]CoreSample, 8))
 	if len(samples) != 1 || samples[0].ID != big.ID() || samples[0].Win != uint32(cfg.NeedStreamBuffer) {
 		t.Fatalf("snapshot %+v, want the large stream alone", samples)

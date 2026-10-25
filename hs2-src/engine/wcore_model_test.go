@@ -135,9 +135,12 @@ type wmCfg struct {
 	// then one wakes late and delivers what is overdue at once (each
 	// direction, a stall starts with probability stall per ms and lasts up
 	// to stallMax ms)
-	stall     float64
-	stallMax  int
-	hitTruth  bool // hit from the sender's truth instead of the receiver's pause
+	stall    float64
+	stallMax int
+	hitTruth bool // hit from the sender's truth instead of the receiver's pause
+	// coarse: the receiver's step as it was before the fine step
+	// (smux.FineStepOf): no stream is held. The rig measured with it.
+	coarse    bool
 	apProbing func(t time.Duration) bool
 	trace     bool
 	// red team: exit runs the core as the exit's (uploads: no record of the
@@ -209,6 +212,9 @@ type wmResult struct {
 	// netN: the times the pacing net engaged; netMs: ms it held the pace
 	netN  int
 	netMs int64
+	// updS, updMiB: the receiver's window updates over [warm, dur], a second
+	// and per MiB read
+	updS, updMiB float64
 }
 
 func (r wmResult) String() string {
@@ -724,6 +730,16 @@ type wmRcvStream struct {
 	rateRead uint64
 	rateE    float64
 	hitGap   int64
+	// the fine step (smux core.go, "The fine step of a held stream")
+	cyc      uint64 // read since the latest update that ended a cycle
+	paused   bool   // a pause at a limit of hitGap or more since the cycle began
+	held     bool
+	fast     bool
+	fastAt   int64 // ms
+	fastRead uint64
+	turnLow  time.Duration
+	hitAt    int64 // ms of the latest pause at a limit (0: none)
+	fineN    uint32
 }
 
 type wmFrameRec struct {
@@ -743,6 +759,7 @@ type wmRev struct {
 	cons uint64
 	win  uint32
 	sent int64
+	fine bool // an update within a cycle (a held stream's fine step)
 }
 
 // ---- the model ---------------------------------------------------------------------
@@ -828,6 +845,7 @@ type wmModel struct {
 
 	// metrics
 	readMs   []uint64 // bytes read per 100 ms
+	upds     uint64   // window updates past the warm-up
 	qHist    []uint64 // ms of queue, histogram
 	qSum, qN float64
 	inter    []float64
@@ -1189,8 +1207,14 @@ func (m *wmModel) push(st *wmRcvStream, n int64) {
 		if st.turnMin == 0 || s < st.turnMin {
 			st.turnMin = s
 		}
+		if st.turnLow == 0 || s < st.turnLow {
+			st.turnLow = s
+		}
 		if m.t-e.aAt >= max(wmHitGap, st.hitGap) {
-			st.hitCycle = true
+			st.hitCycle, st.hitAt = true, m.t
+		}
+		if m.t-e.aAt >= wmHitGap {
+			st.paused = true // (smux: the pause that makes a stream held is hitGap's)
 		}
 		st.ringHead = (st.ringHead + 1) % len(st.ring)
 		st.ringN--
@@ -1223,6 +1247,7 @@ func (m *wmModel) read() {
 func (m *wmModel) consumed(i int, st *wmRcvStream, n int64) {
 	st.numRead += uint64(n)
 	st.incr += uint64(n)
+	st.cyc += uint64(n)
 	st.unread -= n
 	m.unreadSum -= n
 	if st.unread < st.minUnread {
@@ -1236,16 +1261,87 @@ func (m *wmModel) consumed(i int, st *wmRcvStream, n int64) {
 	if m.cfg.mode == wmFin || m.cfg.mode == wmCore {
 		step = uint64(smux.StepOf(wmNeed, st.rcvWin))
 	}
-	if !first && st.incr < step {
+	if !first && st.cyc < step {
+		// a held stream also announces each fine step (smux consumed)
+		if !st.held || st.incr < uint64(m.fineStepOf(st.rcvWin)) {
+			return
+		}
+		m.fineUpdate(i, st)
 		return
 	}
 	m.update(i, st, first)
+}
+
+// fineStepOf is smux's Session.fineStepOf: the exit's sessions (cfg.exit: its core
+// as the exit's, the lab knob WcoreUpload) step at StepOf past need.
+func (m *wmModel) fineStepOf(w uint32) uint32 {
+	if w > wmNeed && m.cfg.exit {
+		return smux.StepOf(wmNeed, w)
+	}
+	return smux.FineStepOf(wmNeed, w)
+}
+
+// paced is smux's: each turnLow or more, whether the stream read at least
+// fineKeep of w-StepOf(w) a turnLow (smux.PacedFast).
+func (m *wmModel) paced(st *wmRcvStream) {
+	el := time.Duration(m.t-st.fastAt) * time.Millisecond
+	if st.turnLow <= 0 || el < st.turnLow {
+		return
+	}
+	st.fast = smux.PacedFast(wmNeed, st.rcvWin, st.numRead-st.fastRead, el, st.turnLow)
+	st.fastAt, st.fastRead = m.t, st.numRead
+}
+
+// hold is smux's: at an update that ends a cycle, a hit makes a fast stream
+// held whose reader kept up and whose window is at the need or past it; one
+// that is not all three is not held. Base and core run today's smux; N4 and
+// fin had steps of their own, and coarse runs are the step as it was before
+// the fine one.
+func (m *wmModel) hold(st *wmRcvStream, lagged bool) {
+	m.paced(st)
+	switch {
+	case m.cfg.coarse || m.cfg.mode != wmBase && m.cfg.mode != wmCore || lagged || !st.fast || st.rcvWin < wmNeed:
+		st.held = false
+	case st.paused:
+		st.held = true
+	}
+}
+
+// fineUpdate is a held stream's update within a cycle (smux: a fine one):
+// the consumed count with the window as it is; it counts no cycle, and
+// times the limit it raises as any update does.
+func (m *wmModel) fineUpdate(i int, st *wmRcvStream) {
+	m.paced(st)
+	if !st.fast {
+		st.held = false
+	}
+	st.fineN++
+	if lim := st.numRead + uint64(st.rcvWin); lim > st.limHigh {
+		if st.ringN < len(st.ring) {
+			st.ring[(st.ringHead+st.ringN)%len(st.ring)] = wmTurn{tUpd: m.t, lPrev: st.limHigh}
+			st.ringN++
+		}
+		st.limHigh = lim
+	}
+	st.annCons, st.annWin = st.numRead, st.rcvWin
+	st.incr = 0
+	m.countUpd()
+	m.rev.push(wmRev{at: m.t + m.d, kind: 1, sid: i, cons: st.numRead, win: st.rcvWin, sent: m.t, fine: true})
+}
+
+// countUpd counts a window update on the wire, past the warm-up.
+func (m *wmModel) countUpd() {
+	if m.t >= m.cfg.warm.Milliseconds() {
+		m.upds++
+	}
 }
 
 // update sends a window update, resizing the window first (adaptWindow and
 // the mode's own rule).
 func (m *wmModel) update(i int, st *wmRcvStream, first bool) {
 	old := st.rcvWin
+	m.hold(st, !first && st.minUnread > wmLagTarget/4)
+	st.cyc = 0
 	if !first {
 		parked := m.parks != st.lastParks
 		var w uint32
@@ -1278,10 +1374,16 @@ func (m *wmModel) update(i int, st *wmRcvStream, first bool) {
 		st.lagN++
 	}
 	st.updN++
+	m.countUpd()
+	st.paused = false
 	if m.cfg.hitTruth {
 		st.hitCycle = false
-	} else if st.hitCycle {
-		st.hitN++
+	} else {
+		// (smux announced: a held stream's cycle is a hit also when a pause
+		// came within its latest turnaround)
+		if st.hitCycle || st.held && st.hitAt != 0 && time.Duration(m.t-st.hitAt)*time.Millisecond < st.lastTurn {
+			st.hitN++
+		}
 		st.hitCycle = false
 	}
 	// as smux's announced: a turnaround starts only with an update that
@@ -1413,7 +1515,7 @@ func (m *wmModel) atSender() {
 			s.limit = e.cons + uint64(e.win)
 			if s.blocked {
 				s.hitS++
-				if m.cfg.hitTruth {
+				if m.cfg.hitTruth && !e.fine {
 					m.rs[e.sid].hitN++
 				}
 			}
@@ -1471,8 +1573,12 @@ func (m *wmModel) runCore() {
 	for _, st := range m.rs {
 		s.poolShort += st.poolShort
 		if st.rcvWin >= wmNeed/4 || st.hitN != st.snapHit {
+			step := smux.StepOf(wmNeed, st.rcvWin)
+			if st.held {
+				step = m.fineStepOf(st.rcvWin)
+			}
 			s.streams = append(s.streams, wcStreamSnap{id: st.id, readTot: st.numRead, updN: st.updN, hitN: st.hitN,
-				lagN: st.lagN, turnMin: st.turnMin, turnLast: st.turnLast, win: st.rcvWin})
+				lagN: st.lagN, turnMin: st.turnMin, turnLast: st.turnLast, win: st.rcvWin, step: step})
 		}
 		st.turnMin, st.turnLast, st.snapHit = 0, 0, st.hitN
 	}
@@ -1749,6 +1855,10 @@ func (m *wmModel) result() wmResult {
 	}
 	secs := float64(m.end-warm) / 1000
 	r.mbit = float64(read) / secs / wmMbit
+	r.updS = float64(m.upds) / secs
+	if read > 0 {
+		r.updMiB = float64(m.upds) / (float64(read) / (1 << 20))
+	}
 	if segs := f.segsOut - m.at0.segs; segs > 0 {
 		r.resend = float64(f.retrans-m.at0.rtx) / float64(segs)
 		r.selfDrop = float64(m.tailDrops+m.polDrops-m.at0.tail-m.at0.pol) / float64(segs)
@@ -1909,6 +2019,8 @@ func wmRunN(cfg wmCfg, n int) wmResult {
 	out.peakB = uint64(medF(func(r *wmResult) float64 { return float64(r.peakB) }))
 	out.netN = int(medF(func(r *wmResult) float64 { return float64(r.netN) }))
 	out.netMs = int64(medF(func(r *wmResult) float64 { return float64(r.netMs) }))
+	out.updS = medF(func(r *wmResult) float64 { return r.updS })
+	out.updMiB = medF(func(r *wmResult) float64 { return r.updMiB })
 	return out
 }
 
@@ -1938,6 +2050,8 @@ func TestWcoreModelReproducesRig(t *testing.T) {
 	l1000.loss, l1000.name = 0.001, "1000/100 q50 l0.1"
 	p1000 := wmPath(1000, 100*time.Millisecond, 50*time.Millisecond)
 	p300.netOff, l1000.netOff, p1000.netOff = true, true, true
+	// (and with the coarse step: the fine one came after)
+	p300.coarse, l1000.coarse, p1000.coarse = true, true, true
 	base3, n43 := wmRunN(p300.with(wmBase), seeds), wmRunN(p300.with(wmN4), seeds)
 	fin1, n41, base1 := wmRunN(l1000.with(wmFin), seeds), wmRunN(l1000.with(wmN4), seeds), wmRunN(l1000.with(wmBase), seeds)
 	b1000 := wmRunN(p1000.with(wmBase), seeds)
@@ -2183,22 +2297,24 @@ var wmKnown = map[string]struct {
 	kinds []string
 	why   string
 }{
-	"300/150 q50": {[]string{"drain"},
-		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (the rig: a loss every 10–11 s at 5–6 MiB). The exit's pacing net (pacenet.go) holds that pace once it loses (151 → 244 Mbit/s, 1.65 → 0.24% resent, against the model before it); a burst before it holds (or after a lift) still overflows the queue in HOLD in one of three seeds (a cut)"},
+	"300/150 q50": {[]string{"resent", "interactive"},
+		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (the rig: a loss every 10–11 s at 5–6 MiB). The exit's pacing net (pacenet.go) holds that pace once it loses (151 → 244 Mbit/s, 1.65 → 0.24% resent, against the model before it). With smux's fine step (FineStepOf) the cut is gone, but the core's windows of 3 to 8 MiB now carry 7/8 of themselves a round trip, not 2/3 to 7/8: 0.57% resent against 0.24, and base's own credit comes in quarter-MiB bursts (its interactive p99 375 → 215 ms, the core's 379 → 500)"},
 	"1000/150 q50": {[]string{"drain", "resent"},
-		"a burst after PROBE_RTT overflows the queue in HOLD (a cut); 0.26 to 0.54% resent against base's 0 over the 30 s table's seeds, with the exit's pacing net or without (0.37% either way in the 40 s grid)"},
-	"300/100 q50": {[]string{"interactive"},
-		"the bursts after PROBE_RTT (one loss holds the user behind its hole)"},
+		"a burst after PROBE_RTT overflows the queue in HOLD (a cut); 0.26 to 0.55% resent against base's 0 over the 30 s table's seeds, with the exit's pacing net or without (0.37% either way in the 40 s grid)"},
+	"1000/100 q50": {[]string{"interactive"},
+		"against base, whose p99 the fine step (smux FineStepOf) took 288 → 223 ms: its credit in quarter-MiB bursts; the core's is 334 → 344 ms (781 → 785 Mbit/s)"},
+	"300/100 q50": {[]string{"drain"},
+		"the bursts after PROBE_RTT: one seed of three drains from HOLD. (The fine step, smux FineStepOf, lifted base out of the half-window lock, 84 → 152 Mbit/s; the core 219 → 233)"},
 	"100/100 q50": {[]string{"drain"},
 		"with the exit's pacing net the 2 MiB windows of base no longer overflow this path (base 66.8 Mbit/s with 7.1% resent without it, 83.5 with 0.2%), so the core leaves OFF (do no harm passes), and drains from HOLD at the sender's PROBE_RTT bursts before the net holds its pace: 84 Mbit/s with 0.22% resent, base's"},
-	"300/150 q200": {[]string{"queue"},
-		"the 200 ms queue lets STARTUP and the probes build a mean queue past 20 ms before the turnarounds show it"},
+	"300/150 q200": {[]string{"queue", "interactive", "drain"},
+		"the 200 ms queue lets STARTUP and the probes build a mean queue past 20 ms before the turnarounds show it; the interactive target is against base, whose p99 the fine step (smux FineStepOf) took 375 → 215 ms (the core's 443 → 338), and one seed of three drains from HOLD"},
 	"1000/100 q50 l0.1": {[]string{"interactive"},
 		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere"},
 	"300/150 q50 l0.1": {[]string{"gain"},
 		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain without the exit's pacing net). The net takes N4 from 129 to 158 Mbit/s (its bursts held once they lose: 25% of that gain now) and costs the core one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median)"},
-	"300/150 q50 +slow reader": {[]string{"resent", "interactive", "gain", "drain"},
-		"a probe's loss while the slow stream's window holds a hole; with the exit's pacing net N4 no longer overflows the queue (180 → 250 Mbit/s, 3.3 → 0% resent), and the gain target is against that (the core 209 → 211 Mbit/s, 75% of it); one seed of three drains from HOLD at a PROBE_RTT burst"},
+	"300/150 q50 +slow reader": {[]string{"resent", "interactive"},
+		"a probe's loss while the slow stream's window holds a hole; with the exit's pacing net N4 no longer overflows the queue (180 → 250 Mbit/s, 3.3 → 0% resent); with smux's fine step the core makes 232 Mbit/s (84% of N4's gain) and no longer drains from HOLD"},
 	"300/150 q50 300>50>300": {[]string{"interactive"},
 		"the loss of the drop to 50 Mbit/s holds the user behind its holes (p99 1.1 s against base's 0.7 s; the exit's pacing net takes the core's resends 10.4 → 2.9% and base's 8.9 → 1.9%)"},
 	"1000/100 q50 policer 300": {[]string{"gain"},
@@ -2391,6 +2507,7 @@ func TestWcoreModelInvariants(t *testing.T) {
 			prev     = wcOff
 			holdB    uint64
 			drains   int
+			fine     bool // a stream stepped finer than its window's step since the latest probe
 		)
 		fail := func(f string, a ...any) {
 			if len(errs) < 5 {
@@ -2415,14 +2532,29 @@ func TestWcoreModelInvariants(t *testing.T) {
 			if sum > o.B {
 				fail("%v: ceilings %d above B %d", at, sum, o.B)
 			}
+			for _, x := range in.streams {
+				if x.step > 0 && x.step < wcStep(wmNeed, x.win) {
+					fine = true
+				}
+			}
 			switch {
 			case o.state == wcProbe && prev != wcProbe:
 				s, mz := k.interval()
 				inProbe, probeAt, fails = true, at, k.cnt.probeFail
 				// the hold budget it probed from (HOLD's estimate at that
-				// step: within the margin of the one in force before)
+				// step: within the margin of the one in force before). A
+				// stream the window held that began to step finer meanwhile
+				// (smux FineStepOf) carries up to 7/8 of its window a round
+				// trip instead of 1/2 (at the 2 MiB floor), and HOLD's
+				// estimate of the same B rises with it: 2 of 60 lossy seeds
+				// probed from 1.34 and 1.49 times the B HOLD held
+				lim := 1.3
+				if fine {
+					lim *= 1.75
+				}
+				fine = false
 				probeB = max(k.probeFrom, uint64(len(k.last.f))*wmNeed)
-				if holdB > 0 && float64(k.probeFrom) > 1.3*float64(holdB) {
+				if holdB > 0 && float64(k.probeFrom) > lim*float64(holdB) {
 					fail("%v: a probe from %d while HOLD held %d", at, k.probeFrom, holdB)
 				}
 				// its settle and measure parts, each after the ramp, each

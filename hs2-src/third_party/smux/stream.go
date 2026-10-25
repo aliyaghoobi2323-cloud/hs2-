@@ -38,7 +38,8 @@ type Stream struct {
 	// per stream sliding window control
 	numRead    uint32     // number of consumed bytes
 	numWritten uint32     // count num of bytes written
-	incr       uint32     // counting for sending
+	incr       uint32     // counting for sending: bytes read since our last UPD
+	cyc        uint32     // bytes read since our last UPD that ended a cycle (incr, but for a held stream's fine ones: core.go)
 	rcvWin     uint32     // window announced in our last UPD (adaptive: under bufferLock)
 	unread     int        // bytes in buffers not yet read (under bufferLock)
 	minUnread  int        // adaptive: least unread left by a read since our last UPD
@@ -169,7 +170,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	var notify bool
+	var notify, fine bool
 	s.bufferLock.Lock()
 	if len(s.buffers) > 0 {
 		n = copy(b, s.buffers[0])
@@ -191,7 +192,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 	// consumer keeps on reading data
 	// s.numRead == n also notify window at the first read
 	if n > 0 {
-		notify = s.consumed(uint32(n))
+		notify, fine = s.consumed(uint32(n))
 	}
 	s.bufferLock.Unlock()
 
@@ -199,7 +200,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 		s.sess.returnTokens(n)
 		s.sess.returnSpare()
 		if notify {
-			err := s.sendWindowUpdate()
+			err := s.sendWindowUpdate(fine)
 			return n, err
 		} else {
 			return n, nil
@@ -250,7 +251,7 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 
 func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 	for {
-		var notify bool
+		var notify, fine bool
 		var buf []byte
 		s.bufferLock.Lock()
 		if len(s.buffers) > 0 {
@@ -260,7 +261,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 		}
 		s.unread -= len(buf)
 		if len(buf) > 0 {
-			notify = s.consumed(uint32(len(buf)))
+			notify, fine = s.consumed(uint32(len(buf)))
 		}
 		s.bufferLock.Unlock()
 
@@ -278,7 +279,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 			}
 
 			if notify {
-				if err := s.sendWindowUpdate(); err != nil {
+				if err := s.sendWindowUpdate(fine); err != nil {
 					return n, err
 				}
 			}
@@ -289,25 +290,30 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 }
 
 // consumed accounts n bytes just read (n > 0) and reports whether a window
-// update is due. The caller holds bufferLock and has already taken the n
-// bytes off unread.
+// update is due, and whether it is a fine one. The caller holds bufferLock
+// and has already taken the n bytes off unread.
 //
 // An update is due at the first read and each time a step (updStep: half of
 // the window announced in the last update, less past NeedStreamBuffer) has
-// been read since. The peer may run at most rcvWin bytes past the consumed
-// count of our last update; we always read a step of that and announce
-// again, so the peer never waits for an update that is not coming, whatever
-// the window does in between (a brake, see checkLag, announces a smaller
-// window early and restarts that count).
+// been read since the last one that ended a cycle. The peer may run at most
+// rcvWin bytes past the consumed count of our last update; we always read a
+// step of that and announce again, so the peer never waits for an update
+// that is not coming, whatever the window does in between (a brake, see
+// checkLag, announces a smaller window early and restarts that count).
+//
+// A stream the window holds back (held, core.go) also announces each fine
+// step (FineStepOf) read since its last update of any kind: a fine update,
+// the consumed count with the window as it is, which ends no cycle.
 //
 // The first update of an adaptive stream announces the window the peer
 // assumes anyway; the next one (adaptWindow) is the stream's first resize,
 // judged on the reads after the first.
-func (s *Stream) consumed(n uint32) (notify bool) {
+func (s *Stream) consumed(n uint32) (notify, fine bool) {
 	cfg := s.sess.config
 	s.numRead += n
 	s.core.readTot.Add(uint64(n))
 	s.incr += n
+	s.cyc += n
 	if s.unread < s.minUnread {
 		s.minUnread = s.unread
 	}
@@ -341,15 +347,24 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 		s.readAt = monoNow()
 		s.reclaim(cfg) // the claim of a window that came down, once its hold is over
 	}
-	if s.incr < s.updStep(cfg) && !first && !s.updLost && !restore {
-		return false
+	if s.cyc < s.updStep(cfg) && !first && !s.updLost && !restore {
+		if !s.core.held.Load() || s.incr < s.fineStep(cfg) {
+			return false, false
+		}
+		fine = true
 	}
 	resend := s.updLost
 	s.updLost = false
 	s.incr = 0
+	if fine {
+		s.heldOn(cfg)
+		return true, true
+	}
+	s.cyc = 0
 	if cfg.MinStreamBuffer > 0 {
 		parks := atomic.LoadUint32(&s.sess.parks)
 		s.core.lagged = s.minUnread > cfg.StreamLagTarget/4 // (CoreSample.Lags)
+		s.hold(cfg)
 		if !first && !resend && !restore {
 			old := s.rcvWin
 			s.adaptWindow(cfg, parks != s.lastParks)
@@ -364,7 +379,7 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 			s.firstAt, s.firstRead = monoNow(), s.numRead
 		}
 	}
-	return true
+	return true, false
 }
 
 // adaptWindow resizes the adaptive receive window (Config.MinStreamBuffer >
@@ -435,8 +450,9 @@ func (s *Stream) adaptWindow(cfg *Config, parked bool) {
 }
 
 // sendWindowUpdate announces the consumed count and window, by the read
-// deadline (writeWindowUpdate).
-func (s *Stream) sendWindowUpdate() error {
+// deadline (writeUpdate); fine: a held stream's update within a cycle
+// (consumed).
+func (s *Stream) sendWindowUpdate(fine bool) error {
 	var timer *time.Timer
 	var deadline <-chan time.Time
 	if d, ok := s.readDeadline.Load().(time.Time); ok && !d.IsZero() {
@@ -444,14 +460,21 @@ func (s *Stream) sendWindowUpdate() error {
 		defer timer.Stop()
 		deadline = timer.C
 	}
-	return s.writeWindowUpdate(deadline)
+	return s.writeUpdate(deadline, fine)
 }
 
-// writeWindowUpdate announces the consumed count and window as they are when
-// the update is queued, one update at a time: the reader and a brake
-// (checkLag) may both send one, and the peer must never act on an older pair
-// after a newer one. Only the queueing is serialized; the wait for the write
-// is not.
+// writeWindowUpdate announces the consumed count and window with an update
+// that ends a cycle: a brake's (checkLag), a window the claim sweep took
+// down (windowDown). See writeUpdate.
+func (s *Stream) writeWindowUpdate(deadline <-chan time.Time) error {
+	return s.writeUpdate(deadline, false)
+}
+
+// writeUpdate announces the consumed count and window as they are when the
+// update is queued, one update at a time: the reader and a brake (checkLag)
+// may both send one, and the peer must never act on an older pair after a
+// newer one. Only the queueing is serialized; the wait for the write is not.
+// fine: an update within a cycle (announced).
 //
 // The update is queued as a control frame, ahead of every data frame waiting
 // for the session's writer: the peer's writer of this stream may be waiting
@@ -460,12 +483,14 @@ func (s *Stream) sendWindowUpdate() error {
 // uploads, an upload on one busy with downloads, and a brake came late).
 // There are no more of them than before: one per half a window read, or per
 // frame received while a brake runs -- 16 bytes, though on an hs2 link each
-// leaves as one length-shaped TLS record, about 1 KB.
-func (s *Stream) writeWindowUpdate(deadline <-chan time.Time) error {
+// leaves as one length-shaped TLS record, about 1 KB -- but for a stream the
+// window holds back, which sends one per fine step read, at most four per
+// MiB (FineStepOf).
+func (s *Stream) writeUpdate(deadline <-chan time.Time, fine bool) error {
 	s.updLock.Lock()
 	s.bufferLock.Lock()
 	consumed, window := s.numRead, s.rcvWin
-	s.announced(window)
+	s.announced(window, fine)
 	s.bufferLock.Unlock()
 
 	frame := newFrame(byte(s.sess.config.Version), cmdUPD, s.id)
@@ -587,7 +612,8 @@ func (s *Stream) checkLag(free int) {
 		s.preBrake, s.brakeAt = s.rcvWin, monoNow() // the first brake of a run
 	}
 	s.setWindow(cfg, win)
-	s.incr = 0
+	s.incr, s.cyc = 0, 0
+	s.core.held.Store(false) // its reader is the limit now (hold)
 	s.minUnread = s.unread
 	s.lastParks = atomic.LoadUint32(&s.sess.parks)
 	// what was in flight still arrives: that backlog is not the

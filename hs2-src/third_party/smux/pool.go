@@ -249,7 +249,7 @@ func (s *Session) sweepClaims() {
 		if st.claim > 0 && now-st.readAt >= int64(claimIdle) {
 			if st.rcvWin > uint32(s.config.NeedStreamBuffer) {
 				st.setWindow(s.config, uint32(s.config.NeedStreamBuffer))
-				st.incr = 0
+				st.incr, st.cyc = 0, 0
 				down = append(down, st)
 			} else {
 				st.reclaim(s.config)

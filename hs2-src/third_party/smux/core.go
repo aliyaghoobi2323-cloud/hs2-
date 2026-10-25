@@ -85,6 +85,123 @@ func StepOf(need, w uint32) uint32 {
 	return step
 }
 
+// The fine step of a held stream.
+//
+// A stream whose sender the window holds back moves at most what the window
+// leaves free a round trip, and with an update each StepOf read that is less
+// than the window: the peer may run w past the consumed count of our latest
+// update, and that count lags what was read by up to a step. Data that comes
+// in evenly (a sender paced at about its own delivery rate, as a
+// window-limited BBR sender is) has the peer reach its limit just as each
+// update lands, and the stream settles at (w-step)/RTT: 1 MiB a round trip
+// under the 2 MiB window, half of it -- the "half-window lock". The field
+// (Iran-abroad, 74 to 82 ms, no window core) measured single downloads at
+// 101, 102 and 109 Mbit/s, 1 MiB a round trip to within a few percent; the
+// rig 84 Mbit/s at 100 ms (WINDOW_CORE.fa.md §5.6); the window-core model's
+// base 83.7 on 300/100 (TestWcoreModelTable); and every cut of the window
+// core to the 2 MiB floor lands on the same rate.
+//
+// A held stream steps at FineStepOf instead: under 2 MiB the peer has 7/8 of
+// the window free as each update lands, not 1/2 (1.75 MiB a round trip, 196
+// instead of 112 Mbit/s at 75 ms), and the credit comes in bursts of 256 KiB
+// rather than 1 MiB (the base's 1 MiB ones overflow queues of 0.6 to 2 MB:
+// z5-core-controller-notes.fa.md). Each update leaves as one length-shaped
+// TLS record of about 1 KB (writeUpdate), so the fine step is bounded per
+// byte -- an eighth of the window, never under an eighth of the need, 256
+// KiB: at most 4 updates per MiB read, where the coarse step sends 1 under 2
+// MiB (WINDOW_CORE.fa.md §8.2) -- and only a stream the window holds takes
+// it: a slow reader, a slow source, an interactive stream that never runs up
+// to its window, and one that slowed down keep StepOf. Held, a stream sends
+// at most updShare updates per window read: about updShare a round trip
+// (107 a second at 75 ms), whatever its rate.
+//
+// The window core's windows past need step at an eighth of the window, or
+// need/2 if more (StepOf): a 4 MiB window leaves its peer 3/4 of it, and the
+// core's growth from the floor first meets a 1 MiB step at every size up to
+// 8 MiB. Held, they step at an eighth too, so a window carries 7/8 of itself
+// a round trip at every size, and B and the rate it carries grow together
+// (the core's STARTUP takes a rate that did not grow with B for the knee:
+// with the fine step at the floor alone, a 2 -> 3.8 MiB growth carried 14%
+// more and STARTUP slowed, 781 -> 732 Mbit/s on the model's 1000/100). The
+// core reads each stream's step (CoreSample.Step) for its knee's half step.
+//
+// Held: an update that ends a cycle in which the data paused at a limit for
+// hitGap or more (paused: the peer had sent all it was allowed and waited
+// for the update; turned) makes the stream held, if
+//
+//   - its reader kept up (not lagged): a reader that left a backlog all
+//     through the cycle is the limit, not the window, and steps no faster;
+//   - its window is at the need or past it: a window adaptWindow keeps
+//     under it is sized to its reader's pace (a reader that runs dry
+//     doubles it each cycle), and finer steps would only bring a backlog
+//     that shrinks it again;
+//   - and it is fast: it read, over the latest round trip or more, at least
+//     fineKeep of what the coarse step lets through a round trip (w-StepOf).
+//     The round trip is the least turnaround of its life (turnLow): none is
+//     shorter than the round trip, and nearly every stream has one close to
+//     it from its start, when it ran up to the 256 KiB the peer starts with.
+//     A pause alone does not tell a sender the window holds from a source
+//     that sends in clumps with gaps of hitGap or more (under ~65 Mbit/s of
+//     16 KiB frames), nor does the turnaround of a stream that comes in
+//     evenly: that is (w-step)/rate whether the window holds it or its
+//     source does.
+//
+// The pause is hitGap's, not the gap the window core sets a stream for its
+// hits (SetCoreHitGap): the core sets it on the links it watches while it is
+// OFF too, and a link the core leaves OFF (the blind sides, a long round
+// trip with a clean path) must step as one without the core does
+// (TestWcoreStep1ModelBlindSidesAreBase, TestWcoreRedBlindHoley).
+//
+// It stays held while its reader keeps up, its window stays at the need or
+// past it, and it stays fast: at the fine step a stream the window holds
+// need not pause at its limit any more (the point of it), so no hit can keep
+// it held, but its pace can. One that falls under that (its source or its
+// path slowed down, its reader stopped) steps at StepOf again, and one that
+// a brake takes back (checkLag) at once.
+//
+// Only an update that ends a cycle (each StepOf read since the previous one,
+// as before; the first, a resend, a restore, a brake, a window the claim
+// sweep took down) resizes the window (adaptWindow, fitCore) and counts for
+// the core (updN, hitN, lagN). The fine updates in between announce the
+// consumed count with the window as it is; a turnaround starts at each, as
+// at any update that raises the peer's limit, and a pause at its limit is a
+// hit of the cycle it is in (announced). So the adaptive window, the brakes,
+// the pool and the window core see the cycles they were tuned on, held or
+// not, and a sender that is not held sees no change at all.
+
+// fineKeep: a stream is fast (held) while it reads at least this share of
+// w-StepOf(w) a round trip. Under it, the coarse step would hold it back by
+// less than a quarter: what it gains is not worth four updates per MiB.
+const fineKeep = 0.75
+
+// fineOff holds no stream (the coarse step only, as before the fine one): for
+// tests that compare the two.
+var fineOff = false
+
+// PacedFast reports whether a stream that read n bytes over el, the least
+// turnaround of its life low, is fast under a window of w (paced): at least
+// fineKeep of w-StepOf(need, w) a turnaround. (The window-core model's
+// streams take it as smux's do.)
+func PacedFast(need, w uint32, n uint64, el, low time.Duration) bool {
+	return float64(n)*float64(low) >= fineKeep*float64(w-StepOf(need, w))*float64(el)
+}
+
+// FineStepOf is the step of a held stream under a window of w: w/updShare,
+// but no less than need/updShare (at most updShare updates per need read: 4
+// per MiB under a need of 2 MiB), and never more than StepOf. From a window
+// of 8 times need/updShare on it is StepOf.
+func FineStepOf(need, w uint32) uint32 {
+	step := StepOf(need, w)
+	f := w / updShare
+	if m := need / updShare; f < m {
+		f = m
+	}
+	if f < step {
+		return f
+	}
+	return step
+}
+
 // FitCore is the window of a window update: want is what adaptWindow made
 // of the previous window old, ceil the core's ceiling (0: none), need
 // NeedStreamBuffer, minWin MinStreamBuffer, unread what the stream holds.
@@ -148,13 +265,21 @@ type streamCore struct {
 	head, n  int
 	limHigh  uint64 // the highest limit announced so far (readTot plus window)
 	hit      bool   // a turnaround since our latest update came after a pause at its limit
+	paused   bool   // ... after a pause of hitGap or more, whatever the core's gap: since the cycle began (hold)
 	lagged   bool   // the cycle that just ended left more than StreamLagTarget/4 unread throughout
 	turnSeen int64  // the latest turnaround, ns (0: none yet)
 	rxAt     int64  // monoNow of the latest frame received (0: none yet)
+	hitAt    int64  // monoNow of the latest pause at a limit (hit; 0: none yet)
+	turnLow  int64  // the least turnaround of the stream's life, ns (0: none yet): its round trip, or more
+	fast     bool   // over the latest turnLow or more it read at least fineKeep of w-StepOf(w) (paced)
+	paceAt   int64  // monoNow when the current measure of its pace began (paced)
+	paceRead uint64 // readTot then
 
 	// written under bufferLock, read without it (CoreSnapshot)
+	held      atomic.Bool   // the window holds the stream back: it steps at FineStepOf (hold)
 	readTot   atomic.Uint64 // bytes read in all (numRead wraps)
-	updN      atomic.Uint32 // window updates
+	fineN     atomic.Uint32 // fine updates: within a cycle, none of the counts below (announced)
+	updN      atomic.Uint32 // window updates that ended a cycle
 	hitN      atomic.Uint32 // of those, ones ending a cycle that ran up to the window (hit)
 	lagN      atomic.Uint32 // of those, ones ending a cycle whose reader lagged (lagged)
 	turnMin   atomic.Int64  // least turnaround since the last snapshot, ns (0: none)
@@ -225,6 +350,11 @@ type CoreSample struct {
 	PoolShort uint32        // windows the WindowPool could not cover in full
 	Brakes    uint32        // braking updates (a reader that fell behind)
 	Braked    bool          // braked within the last brakeDrain
+	// Step is what its reader reads between two updates now: FineStepOf
+	// while the window holds it (held), StepOf otherwise. The window core's
+	// knee holds half a step of each fast stream (H_step): under the 2 MiB
+	// floor a held stream's is 128 KiB, not 512.
+	Step uint32
 }
 
 // CoreCounters is what the whole session did, cumulative.
@@ -252,7 +382,8 @@ func (s *Session) CoreSnapshot(dst []CoreSample) ([]CoreSample, CoreCounters) {
 		list = append(list, st)
 	}
 	s.streamLock.Unlock()
-	big := needOf(s.config) / 4
+	need := needOf(s.config)
+	big := need / 4
 	now := monoNow()
 	dst = dst[:0]
 	for i, st := range list {
@@ -264,6 +395,10 @@ func (s *Session) CoreSnapshot(dst []CoreSample) ([]CoreSample, CoreCounters) {
 		list[i] = nil
 		if win < big && !fresh {
 			continue
+		}
+		step := StepOf(need, win)
+		if c.held.Load() {
+			step = s.fineStepOf(need, win)
 		}
 		at := c.brakeAt.Load()
 		dst = append(dst, CoreSample{
@@ -280,6 +415,7 @@ func (s *Session) CoreSnapshot(dst []CoreSample) ([]CoreSample, CoreCounters) {
 			PoolShort: c.poolShort.Load(),
 			Brakes:    c.brakes.Load(),
 			Braked:    at != 0 && now-at < int64(brakeDrain),
+			Step:      step,
 		})
 	}
 	s.snapList = list[:0]
@@ -367,25 +503,103 @@ func (s *Stream) poolShort() {
 	atomic.AddUint32(&s.sess.poolShorts, 1)
 }
 
-// updStep is how much the reader reads between two window updates
-// (StepOf). The caller holds bufferLock.
+// updStep is how much the reader reads between two updates that end a
+// cycle (StepOf). The caller holds bufferLock.
 func (s *Stream) updStep(cfg *Config) uint32 { return StepOf(needOf(cfg), s.rcvWin) }
 
+// fineStep is how much a held reader reads between two updates of any kind
+// (fineStepOf). The caller holds bufferLock.
+func (s *Stream) fineStep(cfg *Config) uint32 { return s.sess.fineStepOf(needOf(cfg), s.rcvWin) }
+
+// fineStepOf is FineStepOf on the dialing side (Client: hs2's edge); on the
+// accepting side, past need, StepOf. A window past need is the window core's,
+// and the edge's core reads the exit's record of the sender's socket (its
+// queue, its resends: q_snd), while the exit's core (uploads, the lab knob
+// WcoreUpload only) has no record of the edge's and is blind to the queue a
+// window that carries 7/8 of itself instead of 3/4 builds: in the model its
+// 300/100 behind a 20 ms queue went from 0.92 to 2.73% resent, past the loss
+// rule's drain (TestWcoreRedBlindHoley). Up to need, as without the core.
+func (s *Session) fineStepOf(need, w uint32) uint32 {
+	if w > need && !s.client {
+		return StepOf(need, w)
+	}
+	return FineStepOf(need, w)
+}
+
+// hold judges, at an update that ends a cycle, whether the window holds the
+// stream back (held: see "The fine step of a held stream" above): a pause at
+// a limit makes a fast stream held whose reader kept up and whose window is
+// at the need or past it; a stream that is not all three is not held. The
+// caller holds bufferLock, has set lagged, has not yet resized the window,
+// and has not announced the update (announced takes the pause).
+func (s *Stream) hold(cfg *Config) {
+	c := &s.core
+	s.paced(cfg)
+	switch {
+	case c.lagged || !c.fast || s.rcvWin < needOf(cfg) || fineOff:
+		c.held.Store(false)
+	case c.paused:
+		c.held.Store(true)
+	}
+}
+
+// heldOn keeps a held stream held, at a fine update, while it stays fast. The
+// caller holds bufferLock.
+func (s *Stream) heldOn(cfg *Config) {
+	s.paced(cfg)
+	if !s.core.fast {
+		s.core.held.Store(false)
+	}
+}
+
+// paced measures the stream's pace: each time turnLow or more has passed
+// since the measure began, whether it read at least fineKeep of w-StepOf(w)
+// a turnLow over that time (fast), and the next measure begins. No
+// turnaround yet: not fast. The caller holds bufferLock.
+func (s *Stream) paced(cfg *Config) {
+	c := &s.core
+	now := monoNow()
+	el := now - c.paceAt
+	if c.turnLow <= 0 || el < c.turnLow {
+		return
+	}
+	read := c.readTot.Load()
+	c.fast = PacedFast(needOf(cfg), s.rcvWin, read-c.paceRead, time.Duration(el), time.Duration(c.turnLow))
+	c.paceAt, c.paceRead = now, read
+}
+
 // announced records the window update about to be queued, of window past
-// the stream's reads: it ends a cycle (updN, and hitN and lagN for what the
-// cycle was), and when it raises the highest limit the peer has had, the
-// turnaround of that limit starts. The caller holds bufferLock.
-func (s *Stream) announced(window uint32) {
+// the stream's reads. One that ends a cycle (fine false) counts it (updN,
+// and hitN and lagN for what the cycle was); a fine one (a held stream's,
+// within a cycle) counts no cycle, and a hit or a lag seen meanwhile counts
+// for the cycle it is in. Either, when it raises the highest limit the peer
+// has had, starts the turnaround of that limit: a pause at a fine update's
+// limit is the cycle's hit. The caller holds bufferLock.
+//
+// A held stream's cycle is a hit also when its data paused at a limit
+// within its latest turnaround before the cycle ends. Handed the window a
+// fine step at a time, a sender the window holds sends it in one train a
+// round trip, at its path's rate, and pauses at the end of each: once a
+// round trip, with two cycles of a 2 MiB window ending in between. Under
+// the coarse step each half window was a train of its own with a pause
+// after it, and the window core reads its hits per cycle (wcHitShare 0.5:
+// TestFineStepHeldStreamStillHits measured 1.0 of the cycles coarse, 0.5
+// fine, through a path three times the window's rate).
+func (s *Stream) announced(window uint32, fine bool) {
 	c := &s.core
 	c.winNow.Store(window)
-	c.updN.Add(1)
-	if c.hit {
-		c.hitN.Add(1)
-		c.hit = false
-	}
-	if c.lagged {
-		c.lagN.Add(1)
-		c.lagged = false
+	if fine {
+		c.fineN.Add(1)
+	} else {
+		c.updN.Add(1)
+		if c.hit || c.held.Load() && c.hitAt != 0 && monoNow()-c.hitAt < c.turnSeen {
+			c.hitN.Add(1)
+		}
+		c.hit, c.paused = false, false
+		if c.lagged {
+			c.lagN.Add(1)
+			c.lagged = false
+		}
 	}
 	lim := c.readTot.Load() + uint64(window)
 	if lim <= c.limHigh {
@@ -439,12 +653,18 @@ func (s *Stream) turned() {
 			return
 		}
 		if now-k.reach >= gap {
-			c.hit = true
+			c.hit, c.hitAt = true, now
+		}
+		if now-k.reach >= int64(hitGap) {
+			c.paused = true
 		}
 		d := now - k.at
 		c.head = (c.head + 1) % turnRing
 		c.n--
 		c.turnSeen = d
+		if c.turnLow == 0 || d < c.turnLow {
+			c.turnLow = d
+		}
 		c.turnLast.Store(d)
 		for {
 			m := c.turnMin.Load()
