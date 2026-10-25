@@ -36,10 +36,11 @@ import (
 //   - the cap: SO_MAX_PACING_RATE at wcNetK times that delivery rate, never
 //     under wcPaceFloor. It follows the delivery rate down only while the
 //     socket still resends past wcNetLoss with a queue at it (the path
-//     slowed down) or paces under the cap (it does not bind: a policer
-//     that comes mid-transfer); otherwise it only rises (a sender held by
-//     its cap and its windows delivers less, and following that down
-//     ratchets);
+//     slowed down), paces under the cap (it does not bind: a policer
+//     that comes mid-transfer) or delivers under half of what the cap
+//     allows (a policer under a cap that binds: stale); otherwise it only
+//     rises (a sender held by its cap and its windows delivers less, and
+//     following that down ratchets);
 //   - it must pay: still resending as much after wcNetJudge, it is lifted
 //     (random loss, windows past what the path holds: not the bursts'); a
 //     cap that came down to half the one judged or less, or that starts to
@@ -358,6 +359,32 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 		// at ×1.5 (under random loss past wcNetLoss: the model lost 20% at
 		// 3%)
 		c = target
+	}
+	if share >= loss && last > 0 && k*last < wcNetPaid*float64(n.cap) {
+		// stale: what the path delivered over the last second is under half
+		// of what the cap was set for, while the resends go on. A policer that
+		// comes mid-transfer builds no queue, and while the sender's own pace
+		// (a window-limited BBR's STARTUP: ~3.9 times the highest rate it
+		// ever delivered) stays past the cap, the cap binds: neither rule
+		// above moved it, and it stayed at wcNetK times the rate from before
+		// the policer. The bursts at that pace overflowed the policer's
+		// bucket at any window, the judge then found the cap unpaid against
+		// the smaller trouble that had set it off, lifted it and took the
+		// policer's loss for the path's level (wcNetLvlTTL), and the core's
+		// own drain to the floor read the loss that went on as the path's
+		// (lossTestDone). In the link model (TestWcoreS2RedPolicer: 1000
+		// Mbit/s at 20 to 300 ms, a policer at 30, 60 or 90% coming 20, 30 or
+		// 40 s in, 3 seeds; 270 runs) the loss rule drained the link under
+		// the core and not under base in 20 runs, 10 with this; 1000/150
+		// behind a policer at 30% resent 13.6% (field's reordering) and 15.6%
+		// (none), 7.5% and 7.1% with this. The round-2 sweeps
+		// (TestPaceNetSweep short, red1: 2240 and 738 cells four ways) are
+		// unchanged; dyn's core-only drains 15 → 9 ("policer none>pol60"
+		// 1 → 0, "pol60>pol30" 3 → 0, "pol90>pol40" 4 → 2). The ratchet the
+		// rule above avoids needs no such guard: a sender held by its cap and
+		// its windows delivers more than half of it (TestPaceNetEngageRelease:
+		// 150 of 240 Mbit/s is held).
+		c = uint64(math.Max(k*last, wcPaceFloor))
 	}
 	if dlv <= 0 || math.Abs(float64(c)-float64(n.cap)) <= wcNetMove*float64(n.cap) {
 		return wcNetOut{}
