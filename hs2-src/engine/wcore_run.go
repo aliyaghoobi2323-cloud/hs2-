@@ -199,7 +199,9 @@ type wcStats struct {
 	drainLoss atomic.Int32
 	drainRate atomic.Int32
 	probeFail atomic.Int32
-	poolShort atomic.Int32 // windows the pool could not cover in full
+	undo      atomic.Int32  // drains for holes taken back on the exit's record (wcore.undoCut)
+	oooRo     atomic.Uint64 // float64 bits: the path's reordering level now (wcore.roLevel)
+	poolShort atomic.Int32  // windows the pool could not cover in full
 	peakB     atomic.Uint64
 	peakR     atomic.Uint64 // float64 bits, bytes/s
 	lossy     atomic.Int64  // ns under random loss
@@ -808,6 +810,8 @@ func (l *wcLink) publish(now time.Time) {
 	st.drainLoss.Store(int32(c.cnt.drainLoss))
 	st.drainRate.Store(int32(c.cnt.drainRate))
 	st.probeFail.Store(int32(c.cnt.probeFail))
+	st.undo.Store(int32(c.cnt.undo))
+	st.oooRo.Store(math.Float64bits(c.roLevel(now)))
 	st.poolShort.Store(int32(c.cnt.poolShort))
 	st.peakB.Store(c.cnt.peakB)
 	st.peakR.Store(math.Float64bits(c.cnt.peakR))
@@ -866,6 +870,11 @@ func wcoreNote(m *linkMeter) string {
 		wcMiB(st.peakB.Load()), mbitps(math.Float64frombits(st.peakR.Load())), st.drainQ.Load(), st.drainLoss.Load())
 	if r := st.drainRate.Load(); r > 0 {
 		s += fmt.Sprintf(", %d for a slower path", r)
+	}
+	if u := st.undo.Load(); u > 0 {
+		// (each a drain for holes the exit's record showed were reordering:
+		// counted in "for loss" above too)
+		s += fmt.Sprintf(", %d for holes taken back (reordering level %.0f%%)", u, 100*math.Float64frombits(st.oooRo.Load()))
 	}
 	return s + fmt.Sprintf(", held by the window pool %d time(s)", st.poolShort.Load())
 }
@@ -1222,6 +1231,10 @@ type wcTraceLine struct {
 	TurnRef   float64   `json:"turn_ref_ms"`
 	QBrake    float64   `json:"q_brake_ms"`
 	GrowOK    bool      `json:"grow_ok"`
+	// the path's reordering level now (wcore.roLevel) and the drains for
+	// holes taken back so far (wcore.undoCut)
+	OooRo float64 `json:"ooo_ro,omitempty"`
+	Undo  int     `json:"undo,omitempty"`
 	// the links to the same peer (wcPeer): another core is on (grp), the
 	// path's queue by every link's records (median) and what of it stands
 	// (lower quartile), and the fair share and rAvg the shared rule uses
@@ -1290,7 +1303,8 @@ func (l *wcLink) traceOf(now time.Time, o wcOut) wcTraceLine {
 		SegsIn: in.segsIn, Ooo: m.ooo, OooOK: m.oooOK, Snd: m.snd, SndOK: m.sndOK, Spread: msOf(c.spread),
 		QTarget: msOf(c.qTarget(now)), ProbeQ: msOf(c.probeQ(now)), Parks: in.parks, Brakes: in.brakes,
 		PoolFree: in.poolFree, PoolShort: in.poolShort, APProbing: in.apProbing,
-		TurnRef: msOf(o.turnRef), QBrake: msOf(o.qBrake), GrowOK: o.growOK}
+		TurnRef: msOf(o.turnRef), QBrake: msOf(o.qBrake), GrowOK: o.growOK,
+		OooRo: c.roLevel(now), Undo: c.cnt.undo}
 	if m.dt > 0 && c.tBase > 0 {
 		t.RHat = c.rhatF(now, m)
 	}
