@@ -374,8 +374,16 @@ func SmuxTuningNotes() (notes []string) {
 }
 
 // smuxCoverOn says whether a session's end gives its streams their cover
-// (SmuxCover): server is the exit's end, which receives uploads.
-func smuxCoverOn(server bool) bool { return SmuxCover >= 2 || SmuxCover == 1 && !server }
+// (SmuxCover): server is the exit's end, which receives uploads. Not with a
+// window pool of 0 (HS2_TUNE_SMUX_POOL=0): no cover could hold a byte of
+// it, and smux would still mark streams covered, count each of their
+// windows short of the pool and log covers granted, and the window core
+// would judge loss by the covers' level spread (sndAbsN) and floor of a
+// cover (cmin): with NoCover the session and its core are base's to the
+// byte (red team, H2).
+func smuxCoverOn(server bool) bool {
+	return (SmuxCover >= 2 || SmuxCover == 1 && !server) && SmuxWindowPool > 0
+}
 
 // windowPool is the process's smux.WindowPool, of SmuxWindowPool bytes as
 // it is when the first link comes up (at most 1 GiB: a session's buffer is

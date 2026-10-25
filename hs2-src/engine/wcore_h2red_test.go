@@ -222,3 +222,25 @@ func TestWcoreH2RedBlindPolicer(t *testing.T) {
 		t.Error("the covers off: blind for covers there are none of")
 	}
 }
+
+// Finding 3: HS2_TUNE_SMUX_POOL=0 left the covers on. No cover could hold a
+// byte of an empty pool, so the windows on the wire were the need's, but
+// smux marked streams covered (CoverStats.Grants, the link's end line
+// "streams covered"), counted each of their windows short of the pool
+// (PoolShort, the core's "held by the window pool"), and the edge's core
+// judged loss by the covers' level spread and kept a cover's floor (cmin):
+// not base's to the byte. Now a pool of 0 is the covers off.
+func TestWcoreH2RedPoolZeroIsNoCover(t *testing.T) {
+	defer func(p, c int) { SmuxWindowPool, SmuxCover = p, c }(SmuxWindowPool, SmuxCover)
+	SmuxCover = 1
+	for _, pool := range []int{0, -1, 32 << 20} {
+		SmuxWindowPool = pool
+		cfg := newSmuxConfig()
+		if cfg.WindowPool == nil {
+			t.Fatalf("pool %d: no window pool in the config", pool)
+		}
+		if want := pool <= 0; cfg.NoCover != want || smuxCoverOn(false) == want {
+			t.Errorf("pool %d: NoCover %v, smuxCoverOn %v, want the covers off %v", pool, cfg.NoCover, smuxCoverOn(false), want)
+		}
+	}
+}
