@@ -107,6 +107,23 @@ func (a *dgFakeAccepter) Accept(ctx context.Context) (Carrier, error) {
 }
 func (a *dgFakeAccepter) Close() error { return nil }
 
+// dgTestLog is t.Logf until the test ends, then nothing: the pools'
+// goroutines outlive the test's cancel (a carrier's read loop still logs
+// the other side's close), and a t.Logf past the test's end races with it
+// (-race).
+func dgTestLog(t *testing.T) func(string, ...any) {
+	var mu sync.Mutex
+	done := false
+	t.Cleanup(func() { mu.Lock(); done = true; mu.Unlock() })
+	return func(f string, a ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !done {
+			t.Logf(f, a...)
+		}
+	}
+}
+
 // A packet sent into the edge TUN comes out of the exit TUN unchanged, in both
 // directions, over a small direct datagram pool.
 func TestDgPoolRoundTrip(t *testing.T) {
@@ -114,9 +131,10 @@ func TestDgPoolRoundTrip(t *testing.T) {
 	dialer, accepter := newDgFakeLink()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	logf := dgTestLog(t)
 
-	go RunDgEdge(ctx, DgConfig{Dev: edgeTUN, Min: 2, Max: 8, PerLink: 8, Dialer: dialer, Log: t.Logf})
-	go RunDgExit(ctx, DgConfig{Dev: exitTUN, Min: 2, Max: 8, PerLink: 8, Listener: accepter, Log: t.Logf})
+	go RunDgEdge(ctx, DgConfig{Dev: edgeTUN, Min: 2, Max: 8, PerLink: 8, Dialer: dialer, Log: logf})
+	go RunDgExit(ctx, DgConfig{Dev: exitTUN, Min: 2, Max: 8, PerLink: 8, Listener: accepter, Log: logf})
 
 	waitTunUp(t, edgeTUN, exitTUN)
 
