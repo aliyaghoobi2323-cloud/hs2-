@@ -242,9 +242,10 @@ func TestCoverFallsBackWithoutThePool(t *testing.T) {
 	cfg = poolConfig(pool)
 	_, s, p = newRawPeer(t, cfg)
 	heldRounds(t, p, s, 12, 10*time.Millisecond)
-	// a session alone takes up to half of what the pool has (FreeFor)
-	if w := maxWindow(p.updates()); w != need+32<<10 || claimOf(s) != 32<<10 {
-		t.Fatalf("a short pool: window %d claim %d, want the need and the 32 KiB the pool has for it", w, claimOf(s))
+	// a session alone takes up to half of what the pool has (FreeFor), and
+	// a cover no more than the covers' share (a quarter: coverShare)
+	if w := maxWindow(p.updates()); w != need+16<<10 || claimOf(s) != 16<<10 {
+		t.Fatalf("a short pool: window %d claim %d, want the need and the 16 KiB the covers' share of it has", w, claimOf(s))
 	}
 
 	cfg = poolConfig(NewWindowPool(4 << 20))
@@ -296,6 +297,171 @@ func TestCoverUnderACeiling(t *testing.T) {
 	heldRounds(t, p2, s2, 16, 10*time.Millisecond)
 	if w := maxWindow(p2.updates()); w <= Cover(need, uint32(cfg.MaxStreamBuffer)) {
 		t.Fatalf("under a ceiling of MaxStreamBuffer: window %d, want past the cover (updates %v)", w, p2.updates())
+	}
+}
+
+// CoverPause: a pause counts when the update that ended it came back within
+// coverTurn of the stream's previous turnaround (or it has none yet).
+func TestCoverPause(t *testing.T) {
+	const ms = time.Millisecond
+	for _, tc := range []struct {
+		turn, prev time.Duration
+		want       bool
+	}{
+		{80 * ms, 0, true},
+		{80 * ms, 75 * ms, true},
+		{150 * ms, 75 * ms, true},
+		{151 * ms, 75 * ms, false},
+		{1331 * ms, 170 * ms, false}, // a PROBE_RTT's stall on 100/20
+	} {
+		if got := CoverPause(tc.turn, tc.prev); got != tc.want {
+			t.Errorf("CoverPause(%v, %v) = %v, want %v", tc.turn, tc.prev, got, tc.want)
+		}
+	}
+}
+
+// A pause at a limit whose update came back far later than the stream's
+// turnarounds -- the sender stopped for its own reasons -- is no run up to
+// the window for the cover; the core's hit is as before.
+func TestCoverStallIsNoRunUp(t *testing.T) {
+	for _, stall := range []bool{false, true} {
+		s := coreBare(4096)
+		s.arrive(64 << 10)
+		s.readAndAnnounce(64<<10, 1<<20)
+		s.core.turnSeen = int64(20 * time.Millisecond)
+		recv := s.core.readTot.Load() + uint64(s.unread)
+		s.arrive(int(s.core.ring[s.core.head].lim - recv)) // up to the limit ...
+		time.Sleep(hitGap + 2*time.Millisecond)            // ... a pause ...
+		at := monoNow() - int64(25*time.Millisecond)
+		if stall {
+			at = monoNow() - int64(time.Second)
+		}
+		s.core.ring[s.core.head].at = at
+		s.arrive(4096) // ... past it
+		if !s.core.hit {
+			t.Fatalf("stall %v: no hit", stall)
+		}
+		if counted := s.core.pause > 0; counted == stall {
+			t.Fatalf("stall %v: pause %v counted for the cover %v", stall, time.Duration(s.core.pause), counted)
+		}
+	}
+}
+
+// The cover's counters: granted, gone as its peer no longer waits (miss),
+// taken by the core, gone with an idle stream's claim and with a closed
+// stream; and the count of streams holding pool memory for a cover, the
+// session's and the pool's, which drops once the claim's hold is over.
+func TestCoverCounters(t *testing.T) {
+	pool := NewWindowPool(4 << 20)
+	cfg := poolConfig(pool)
+	need := uint32(cfg.NeedStreamBuffer)
+	step := int(StepOf(need, Cover(need, uint32(cfg.MaxStreamBuffer))))
+	session, s, p := newRawPeer(t, cfg)
+	released := func(what string) {
+		t.Helper()
+		s.bufferLock.Lock()
+		s.claimDown = monoNow() - 1 // the claim's hold is over
+		s.reclaim(cfg)
+		s.bufferLock.Unlock()
+		if c := session.CoverStats(); c.Now != 0 || pool.CoverStreams() != 0 || pool.Covers() != 0 {
+			t.Fatalf("%s, the claim let go: %+v, pool covers %d holding %d", what, c, pool.CoverStreams(), pool.Covers())
+		}
+	}
+	heldRounds(t, p, s, 8, 10*time.Millisecond)
+	if c := session.CoverStats(); c.Grants != 1 || c.Now != 1 || pool.CoverStreams() != 1 || pool.Covers() != claimOf(s) {
+		t.Fatalf("held: %+v, pool covers %d of %d bytes (claim %d), want one granted", c, pool.CoverStreams(), pool.Covers(), claimOf(s))
+	}
+	for i := 0; i < 4*coverMiss && p.lastWindow() != need; i++ {
+		keepUp(t, p, s, step)
+		p.sync(s)
+	}
+	if c := session.CoverStats(); c.Miss != 1 {
+		t.Fatalf("flowing on: %+v, want one gone for misses", c)
+	}
+	released("flowing on")
+	heldRounds(t, p, s, 8, 10*time.Millisecond)
+	session.SetCover(false)
+	heldRounds(t, p, s, 2, 10*time.Millisecond)
+	session.SetCover(true)
+	if c := session.CoverStats(); c.Grants != 2 || c.Taken != 1 {
+		t.Fatalf("taken by the core: %+v", c)
+	}
+	released("taken")
+	heldRounds(t, p, s, 8, 10*time.Millisecond)
+	s.bufferLock.Lock()
+	s.readAt = monoNow() - int64(claimIdle)
+	s.bufferLock.Unlock()
+	session.sweepClaims()
+	if c := session.CoverStats(); c.Grants != 3 || c.Idle != 1 {
+		t.Fatalf("idle: %+v", c)
+	}
+	released("idle")
+	_, s2, p2 := newRawPeer(t, cfg)
+	heldRounds(t, p2, s2, 8, 10*time.Millisecond)
+	if pool.CoverStreams() != 1 {
+		t.Fatalf("a second link's cover: pool covers %d", pool.CoverStreams())
+	}
+	s2.Close()
+	if c := s2.sess.CoverStats(); c.Closed != 1 || c.Now != 0 || pool.CoverStreams() != 0 {
+		t.Fatalf("closed: %+v, pool covers %d", c, pool.CoverStreams())
+	}
+	if c := session.CoverStats(); c.Lost() != 3 {
+		t.Fatalf("%+v: %d lost, want 3", c, c.Lost())
+	}
+}
+
+// The covers of all the sessions sharing a pool hold at most a quarter of
+// it (coverShare): with a cover held on every one of eight links, a link
+// whose readers stopped (three of them at once) still borrows the room it
+// would have with no cover anywhere (here half the pool), where covers
+// within each session's share alone (FreeFor) would have left it 128 KiB.
+func TestCoverLeavesBorrowItsRoom(t *testing.T) {
+	pool := NewWindowPool(1 << 20)
+	cfg := poolConfig(pool)
+	capped := uint32(0)
+	for i := 0; i < 8; i++ {
+		session, s, p := newRawPeer(t, cfg)
+		heldRounds(t, p, s, 8, 5*time.Millisecond)
+		capped += session.CoverStats().Capped
+	}
+	if int64(pool.Covers()) > pool.size/coverShare || capped == 0 || pool.Free() < 3<<18 {
+		t.Fatalf("covers hold %d of the pool (%d covered, %d capped), free %d: want at most a quarter, the rest free",
+			pool.Covers(), pool.CoverStreams(), capped, pool.Free())
+	}
+	t.Logf("eight held links: %d covered holding %d B, %d windows capped, pool free %d", pool.CoverStreams(), pool.Covers(), capped, pool.Free())
+	session, _, p := newRawPeer(t, cfg)
+	var sids []uint32
+	for i := 0; i < 3; i++ {
+		_, sid := p.open(session)
+		sids = append(sids, sid)
+	}
+	n := cfg.MaxReceiveBuffer + 512<<10 // past the session's buffer by half the pool, not read
+	for _, sid := range sids {
+		sendWithin(t, p, sid, n/len(sids), cfg.MaxFrameSize, "three readers stopped next to eight covered links")
+	}
+	if session.Borrows() == 0 {
+		t.Fatal("no borrow")
+	}
+}
+
+// With the cover off (Config.NoCover: HS2_TUNE_SMUX_COVER=0) a stream held
+// by its window gets the window updates it gets with no pool at all, update
+// for update: the need, as before the cover.
+func TestCoverOffIsTheWindowsAsBefore(t *testing.T) {
+	off := poolConfig(NewWindowPool(4 << 20))
+	off.NoCover = true
+	_, s, p := newRawPeer(t, off)
+	heldRounds(t, p, s, 16, 5*time.Millisecond)
+	_, s0, p0 := newRawPeer(t, poolConfig(nil))
+	heldRounds(t, p0, s0, 16, 5*time.Millisecond)
+	got, want := p.updates(), p0.updates()
+	if len(got) != len(want) {
+		t.Fatalf("%d updates with the cover off, %d with no pool:\n%v\n%v", len(got), len(want), got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("update %d: %v with the cover off, %v with no pool", i, got[i], want[i])
+		}
 	}
 }
 

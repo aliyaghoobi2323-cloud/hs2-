@@ -881,6 +881,10 @@ func (ws *wcSet) fillStats(st *PoolStats) {
 	ws.mu.Unlock()
 	st.FastConns, st.FastWinMiB = n, float64(w)/(1<<20)
 	st.PoolMiB = min(max(SmuxWindowPool, 0), 1<<30) >> 20
+	if windowPoolUp.Load() {
+		p := windowPool()
+		st.Covers, st.CoverMiB = p.CoverStreams(), float64(p.Covers())/(1<<20)
+	}
 }
 
 // ---- log lines (§7.1) ----
@@ -983,10 +987,15 @@ func wcNetNote(m *linkMeter) string {
 }
 
 // wcoreEndNote is what the exit's link-end lines end with: " (while up:
-// window core: …; pacing held …)", or "".
+// window core: …; pacing held …; streams covered …)", or "" (the exit's
+// covers: SmuxCover 2, lab only, and only on a link with a core).
 func wcoreEndNote(m *linkMeter) string {
 	var parts []string
-	for _, n := range []string{wcoreNote(m), wcNetNote(m)} {
+	cover := ""
+	if m != nil && m.wc != nil {
+		cover = smuxCoverNote(m.wc.sess)
+	}
+	for _, n := range []string{wcoreNote(m), wcNetNote(m), cover} {
 		if n != "" {
 			parts = append(parts, n)
 		}
@@ -1162,56 +1171,57 @@ func (ws *wcSet) poolHeld(l *wcLink, now time.Time, n int) {
 // wcTraceLine is one evaluation of one link: all its inputs, what the core
 // made of them, and what it decided.
 type wcTraceLine struct {
-	T         string    `json:"t"`
-	Link      string    `json:"link"`
-	Side      string    `json:"side"` // edge (downloads) | exit (uploads)
-	State     string    `json:"state"`
-	B         uint64    `json:"b"`     // the budget decided
-	BPub      uint64    `json:"b_pub"` // ... and published (the ramp's)
-	Fixed     uint32    `json:"fixed,omitempty"`
-	Dt        float64   `json:"dt_s"`
-	NF        int       `json:"n_f"`
-	RF        float64   `json:"r_f"` // bytes/s
-	RLink     float64   `json:"r_link"`
-	RHat      float64   `json:"r_hat"` // R̂ for F
-	Grown     float64   `json:"grown"`
-	WF        float64   `json:"w_f"`
-	HStep     float64   `json:"h_step"`
-	Hit       float64   `json:"hit"`
-	TBase     float64   `json:"t_base_ms"`
-	TurnBase  float64   `json:"turn_base_ms"`
-	Tau       float64   `json:"tau_hold_ms"`
-	QTurn     float64   `json:"q_turn_ms"`
-	QTurnOK   bool      `json:"q_turn_ok"`
-	QRef      float64   `json:"q_ref_ms"`
-	QSnd      float64   `json:"q_snd_ms"`
-	QSndOK    bool      `json:"q_snd_ok"`
-	QOwn      float64   `json:"q_own_ms"`
-	QCtrl     float64   `json:"q_ctrl_ms"` // the longest pong over rttMin in the interval (0: none)
-	CtrlMin   float64   `json:"ctrl_min_ms"`
-	Pongs     []float64 `json:"pongs_ms,omitempty"`
-	MinRTT    float64   `json:"min_rtt_ms"` // the link socket's own
-	SRTT      float64   `json:"srtt_ms"`
-	SegsIn    uint64    `json:"segs_in"`
-	Ooo       float64   `json:"ooo"`
-	OooOK     bool      `json:"ooo_ok"`
-	Snd       float64   `json:"snd"` // the exit's resend share (a fresh record)
-	SndOK     bool      `json:"snd_ok"`
-	SndSRTT   float64   `json:"snd_srtt_ms,omitempty"`
-	SndMinRTT float64   `json:"snd_min_rtt_ms,omitempty"`
-	Spread    float64   `json:"spread_ms"`
-	QTarget   float64   `json:"q_target_ms"`
-	ProbeQ    float64   `json:"probe_q_ms"`
-	Qcap      float64   `json:"q_cap_ms,omitempty"`
-	Parks     uint32    `json:"parks"`
-	Brakes    uint32    `json:"brakes"`
-	PoolFree  int64     `json:"pool_free"`
-	PoolShort uint32    `json:"pool_short"`
-	APProbing bool      `json:"ap_probing"`
-	TurnRef   float64   `json:"turn_ref_ms"`
-	QBrake    float64   `json:"q_brake_ms"`
-	GrowOK    bool      `json:"grow_ok"`
-	NoCover   bool      `json:"no_cover,omitempty"` // the session's streams hold no cover (smux Session.SetCover)
+	T         string        `json:"t"`
+	Link      string        `json:"link"`
+	Side      string        `json:"side"` // edge (downloads) | exit (uploads)
+	State     string        `json:"state"`
+	B         uint64        `json:"b"`     // the budget decided
+	BPub      uint64        `json:"b_pub"` // ... and published (the ramp's)
+	Fixed     uint32        `json:"fixed,omitempty"`
+	Dt        float64       `json:"dt_s"`
+	NF        int           `json:"n_f"`
+	RF        float64       `json:"r_f"` // bytes/s
+	RLink     float64       `json:"r_link"`
+	RHat      float64       `json:"r_hat"` // R̂ for F
+	Grown     float64       `json:"grown"`
+	WF        float64       `json:"w_f"`
+	HStep     float64       `json:"h_step"`
+	Hit       float64       `json:"hit"`
+	TBase     float64       `json:"t_base_ms"`
+	TurnBase  float64       `json:"turn_base_ms"`
+	Tau       float64       `json:"tau_hold_ms"`
+	QTurn     float64       `json:"q_turn_ms"`
+	QTurnOK   bool          `json:"q_turn_ok"`
+	QRef      float64       `json:"q_ref_ms"`
+	QSnd      float64       `json:"q_snd_ms"`
+	QSndOK    bool          `json:"q_snd_ok"`
+	QOwn      float64       `json:"q_own_ms"`
+	QCtrl     float64       `json:"q_ctrl_ms"` // the longest pong over rttMin in the interval (0: none)
+	CtrlMin   float64       `json:"ctrl_min_ms"`
+	Pongs     []float64     `json:"pongs_ms,omitempty"`
+	MinRTT    float64       `json:"min_rtt_ms"` // the link socket's own
+	SRTT      float64       `json:"srtt_ms"`
+	SegsIn    uint64        `json:"segs_in"`
+	Ooo       float64       `json:"ooo"`
+	OooOK     bool          `json:"ooo_ok"`
+	Snd       float64       `json:"snd"` // the exit's resend share (a fresh record)
+	SndOK     bool          `json:"snd_ok"`
+	SndSRTT   float64       `json:"snd_srtt_ms,omitempty"`
+	SndMinRTT float64       `json:"snd_min_rtt_ms,omitempty"`
+	Spread    float64       `json:"spread_ms"`
+	QTarget   float64       `json:"q_target_ms"`
+	ProbeQ    float64       `json:"probe_q_ms"`
+	Qcap      float64       `json:"q_cap_ms,omitempty"`
+	Parks     uint32        `json:"parks"`
+	Brakes    uint32        `json:"brakes"`
+	PoolFree  int64         `json:"pool_free"`
+	PoolShort uint32        `json:"pool_short"`
+	APProbing bool          `json:"ap_probing"`
+	TurnRef   float64       `json:"turn_ref_ms"`
+	QBrake    float64       `json:"q_brake_ms"`
+	GrowOK    bool          `json:"grow_ok"`
+	NoCover   bool          `json:"no_cover,omitempty"` // the session's streams hold no cover (smux Session.SetCover)
+	Cover     *wcTraceCover `json:"cover,omitempty"`    // what the session's covers did (none granted or held back: absent)
 	// the links to the same peer (wcPeer): another core is on (grp), the
 	// path's queue by every link's records (median) and what of it stands
 	// (lower quartile), and the fair share and rAvg the shared rule uses
@@ -1236,6 +1246,34 @@ type wcTraceStream struct {
 	TurnMin  float64 `json:"turn_min_ms"`
 	TurnLast float64 `json:"turn_last_ms"`
 	Braked   bool    `json:"braked,omitempty"`
+}
+
+// wcTraceCover is smux.CoverCounters for the trace: the streams holding a
+// cover now, and since the session began the covers granted, lost (and
+// why) and held back by the covers' share of the window pool.
+type wcTraceCover struct {
+	Now    int    `json:"now"`
+	Grants uint32 `json:"grants"`
+	Reader uint32 `json:"lost_reader,omitempty"`
+	Miss   uint32 `json:"lost_miss,omitempty"`
+	Taken  uint32 `json:"lost_core,omitempty"`
+	Idle   uint32 `json:"lost_idle,omitempty"`
+	Closed uint32 `json:"lost_closed,omitempty"`
+	Capped uint32 `json:"capped,omitempty"`
+}
+
+// wcTraceCoverOf is the session's covers for the trace (nil: none granted
+// or held back).
+func wcTraceCoverOf(sess *smux.Session) *wcTraceCover {
+	if sess == nil {
+		return nil
+	}
+	c := sess.CoverStats()
+	if c.Grants == 0 && c.Capped == 0 {
+		return nil
+	}
+	return &wcTraceCover{Now: c.Now, Grants: c.Grants, Reader: c.Reader, Miss: c.Miss, Taken: c.Taken,
+		Idle: c.Idle, Closed: c.Closed, Capped: c.Capped}
 }
 
 func msOf(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
@@ -1280,7 +1318,8 @@ func (l *wcLink) traceOf(now time.Time, o wcOut) wcTraceLine {
 		SegsIn: in.segsIn, Ooo: m.ooo, OooOK: m.oooOK, Snd: m.snd, SndOK: m.sndOK, Spread: msOf(c.spread),
 		QTarget: msOf(c.qTarget(now)), ProbeQ: msOf(c.probeQ(now)), Parks: in.parks, Brakes: in.brakes,
 		PoolFree: in.poolFree, PoolShort: in.poolShort, APProbing: in.apProbing,
-		TurnRef: msOf(o.turnRef), QBrake: msOf(o.qBrake), GrowOK: o.growOK, NoCover: o.noCover}
+		TurnRef: msOf(o.turnRef), QBrake: msOf(o.qBrake), GrowOK: o.growOK, NoCover: o.noCover,
+		Cover: wcTraceCoverOf(l.sess)}
 	if m.dt > 0 && c.tBase > 0 {
 		t.RHat = c.rhatF(now, m)
 	}

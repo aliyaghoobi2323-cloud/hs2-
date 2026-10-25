@@ -634,7 +634,8 @@ func linkDownReason(l Link) string {
 // up (every user on it stalled until a reader made room, unless the buffer
 // grew from the window pool instead: SmuxWindowPool), how often a reader
 // that fell behind was braked to keep it from filling (smux
-// Config.MinStreamBuffer) and what its window core did (wcoreNote); "" when
+// Config.MinStreamBuffer), what its window core did (wcoreNote) and its
+// streams' covers (smuxCoverNote); "" when
 // none of that happened, or for a link without a smux session of its own.
 func linkStallNote(l Link) string {
 	ml, ok := l.(*mtcpLink)
@@ -650,6 +651,9 @@ func linkStallNote(l Link) string {
 		parts = append(parts, fmt.Sprintf("its receive buffer ran full %d time(s)%s; readers that fell behind braked %d time(s)", parks, grew, brakes))
 	}
 	if n := wcoreNote(ml.mtr); n != "" {
+		parts = append(parts, n)
+	}
+	if n := smuxCoverNote(ml.sess); n != "" {
 		parts = append(parts, n)
 	}
 	if len(parts) == 0 {
@@ -2526,6 +2530,10 @@ type PoolStats struct {
 	FastConns  int
 	FastWinMiB float64
 	PoolMiB    int
+	// smux's covers (SmuxCover), process-wide: the streams holding one now,
+	// and what they hold of the window pool.
+	Covers   int
+	CoverMiB float64
 	// Counted: Users, Flowing, MbitPerS and PeakMbit are this side's own
 	// measurement (every side of this hs2 counts them; false only from code
 	// that does not, so a display can say where the numbers live instead of

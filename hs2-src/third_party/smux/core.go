@@ -164,6 +164,26 @@ func Cover(need, maxWin uint32) uint32 {
 	return uint32(w)
 }
 
+// coverTurn: a pause at a limit is the window's (RanUp) only when the data
+// past it came back within coverTurn times the stream's previous turnaround
+// of the update that let it go (CoverPause). A sender held by the window
+// sends on as soon as the update reaches it, so that turnaround is the
+// stream's usual one; a sender that stopped for its own reasons -- BBR's
+// PROBE_RTT (four packets for 200 ms), a timeout's resend, its source --
+// comes back far later. In the model such a stall on 100/20 (2 MiB far past
+// its BDP: no cycle held by the window) paused 15 ms at a limit with a
+// turnaround of 1.33 s on a 20 ms path: it was covered, the cover's F
+// (engine wcore.go, measure) let the core start where base's never did, and
+// the core drained for the queue the larger window made.
+const coverTurn = 2
+
+// CoverPause says whether a pause at a limit counts for the cover: the
+// turnaround of the update that ended it, turn, within coverTurn times the
+// stream's previous one, prev (0: none yet, it counts).
+func CoverPause(turn, prev time.Duration) bool {
+	return prev <= 0 || turn <= coverTurn*prev
+}
+
 // RanUp reports whether a cycle ran up to its window, for the cover: its
 // data paused at the limit the peer had for pause, at least gap (the
 // stream's hit gap) and coverFrames frames' time at the rate it read over
@@ -446,10 +466,22 @@ func (s *Session) PeerWindows() uint64 {
 func (s *Stream) fitCore(cfg *Config, old uint32) {
 	growOK, turnOK := s.sess.growOK.Load(), s.turnOK()
 	c := &s.core
-	if cfg.WindowPool != nil && cfg.NeedStreamBuffer > 0 && !cfg.NoCover && !s.sess.noCover.Load() {
+	was := c.covered
+	allowed := cfg.WindowPool != nil && cfg.NeedStreamBuffer > 0 && !cfg.NoCover && !s.sess.noCover.Load()
+	if allowed {
 		c.covered, c.miss = CoverNext(c.covered, c.miss, old, s.rcvWin, needOf(cfg), s.ranUp(), growOK, turnOK)
 	} else {
 		c.covered, c.miss = false, 0
+	}
+	if c.covered != was {
+		why := coverTaken
+		if allowed {
+			why = coverMissed
+			if s.rcvWin <= needOf(cfg) {
+				why = coverReader
+			}
+		}
+		s.coverChanged(c.covered, why)
 	}
 	w := FitCore(old, s.rcvWin, s.core.ceil.Load(), s.ownWin(cfg), uint32(cfg.MinStreamBuffer),
 		uint32(s.unread), growOK, turnOK)
@@ -497,9 +529,98 @@ func (s *Stream) coreCap(cfg *Config, w uint32) uint32 {
 	return w
 }
 
-// uncover takes the stream's cover away (an idle stream: sweepClaims).
-// The caller holds bufferLock.
-func (s *Stream) uncover() { s.core.covered, s.core.miss = false, 0 }
+// uncover takes the stream's cover away, for why (an idle stream:
+// sweepClaims; a stream or session that closed). The caller holds
+// bufferLock.
+func (s *Stream) uncover(why coverWhy) {
+	if s.core.covered {
+		s.core.covered, s.core.miss = false, 0
+		s.coverChanged(false, why)
+	}
+}
+
+// coverWhy is why a stream's cover went (CoverCounters).
+type coverWhy uint8
+
+const (
+	coverReader coverWhy = iota // its reader fell behind
+	coverMissed                 // coverMiss updates in a row did not run up to the window
+	coverTaken                  // the window core took it (SetCover), or the config has none
+	coverIdle                   // the stream idled (sweepClaims)
+	coverClosed                 // the stream or its session closed
+)
+
+// coverStats counts what a session's covers did (CoverStats).
+type coverStats struct {
+	grants, reader, miss, taken, idle, closed, capped atomic.Uint32
+	now                                               atomic.Int32
+}
+
+// coverChanged counts a cover granted (on) or gone, for why, in the
+// session's counters. The caller holds bufferLock.
+func (s *Stream) coverChanged(on bool, why coverWhy) {
+	st := &s.sess.cover
+	if on {
+		st.grants.Add(1)
+		return
+	}
+	switch why {
+	case coverReader:
+		st.reader.Add(1)
+	case coverMissed:
+		st.miss.Add(1)
+	case coverTaken:
+		st.taken.Add(1)
+	case coverIdle:
+		st.idle.Add(1)
+	default:
+		st.closed.Add(1)
+	}
+}
+
+// coverCapped counts a window the covers' share of the pool could not cover
+// in full (takeCover). The caller holds bufferLock.
+func (s *Stream) coverCapped() { s.sess.cover.capped.Add(1) }
+
+// coverHeld counts a stream that starts (on) or stops holding pool memory
+// for its cover (coverClaim), in its session's and the pool's count of
+// covers held. The caller holds bufferLock.
+func (s *Stream) coverHeld(on bool) {
+	d := int64(-1)
+	if on {
+		d = 1
+	}
+	s.sess.cover.now.Add(int32(d))
+	if pool := s.sess.config.WindowPool; pool != nil {
+		pool.coverN.Add(d)
+	}
+}
+
+// CoverCounters is what a session's covers did (Cover), cumulative but Now.
+// A cover granted holds pool memory as far as the pool and the covers'
+// share have it (setWindow); Now counts the streams that hold some (a claim
+// outlives its window by claimHold turnarounds).
+type CoverCounters struct {
+	Grants uint32 // covers granted
+	Reader uint32 // gone as the reader fell behind (it asked the need or less)
+	Miss   uint32 // gone after coverMiss updates in a row that did not run up to the window
+	Taken  uint32 // taken by the window core (SetCover)
+	Idle   uint32 // gone with an idle stream's claim (sweepClaims)
+	Closed uint32 // gone with the stream or its session
+	Capped uint32 // windows the covers' share of the pool could not cover in full (coverShare)
+	Now    int    // streams holding pool memory for a cover now
+}
+
+// Lost is how many covers went, for any reason.
+func (c CoverCounters) Lost() uint32 { return c.Reader + c.Miss + c.Taken + c.Idle + c.Closed }
+
+// CoverStats is what the session's covers did. It takes no lock.
+func (s *Session) CoverStats() CoverCounters {
+	st := &s.cover
+	return CoverCounters{Grants: st.grants.Load(), Reader: st.reader.Load(), Miss: st.miss.Load(),
+		Taken: st.taken.Load(), Idle: st.idle.Load(), Closed: st.closed.Load(), Capped: st.capped.Load(),
+		Now: int(st.now.Load())}
+}
 
 // turnOK reports whether the stream's latest turnaround is within its
 // session's reference and brake margin (or there is no reference, or no
@@ -608,10 +729,10 @@ func (s *Stream) turned() {
 		if now-k.reach >= gap {
 			c.hit = true
 		}
-		if p := now - k.reach; p > c.pause {
+		d := now - k.at
+		if p := now - k.reach; p > c.pause && CoverPause(time.Duration(d), time.Duration(c.turnSeen)) {
 			c.pause = p
 		}
-		d := now - k.at
 		c.head = (c.head + 1) % turnRing
 		c.n--
 		c.turnSeen = d

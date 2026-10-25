@@ -2,11 +2,13 @@ package engine
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math"
 	"math/rand/v2"
 	"os"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -210,6 +212,10 @@ type wmResult struct {
 	// netN: the times the pacing net engaged; netMs: ms it held the pace
 	netN  int
 	netMs int64
+	// updMiB: window updates per MiB read, of the streams that read past
+	// the need (each past its first update; smux sends one per step, a MiB
+	// at the need)
+	updMiB float64
 }
 
 func (r wmResult) String() string {
@@ -1191,6 +1197,9 @@ func (m *wmModel) push(st *wmRcvStream, n int64) {
 			break
 		}
 		s := time.Duration(m.t-e.tUpd) * time.Millisecond
+		if smux.CoverPause(s, st.lastTurn) {
+			st.pause = max(st.pause, m.t-e.aAt) // (smux turned: the cover's pause)
+		}
 		st.turnLast, st.lastTurn = s, s
 		if st.turnMin == 0 || s < st.turnMin {
 			st.turnMin = s
@@ -1198,7 +1207,6 @@ func (m *wmModel) push(st *wmRcvStream, n int64) {
 		if m.t-e.aAt >= max(wmHitGap, st.hitGap) {
 			st.hitCycle = true
 		}
-		st.pause = max(st.pause, m.t-e.aAt)
 		st.ringHead = (st.ringHead + 1) % len(st.ring)
 		st.ringN--
 	}
@@ -1274,7 +1282,14 @@ func (m *wmModel) update(i int, st *wmRcvStream, first bool) {
 				w = min(w, lim)
 			}
 		case wmCore:
-			w = m.adapt(st, parked, max(wmCoverWin, st.ceil))
+			// (adaptWindow runs to MaxStreamBuffer, and FitCore holds it to
+			// the ceiling or the stream's own window: its cover only with
+			// the covers on, HS2_TUNE_SMUX_COVER)
+			capW := uint32(wmNeed)
+			if m.pool && smuxCoverOn(m.cfg.exit) {
+				capW = wmCoverWin
+			}
+			w = m.adapt(st, parked, max(capW, st.ceil))
 			turnOK := m.turnRef == 0 || st.lastTurn <= m.turnRef+m.qBrake
 			own := m.cover(st, old, w, m.growOK, turnOK)
 			w = smux.FitCore(old, w, st.ceil, own, wmMinWin, uint32(min(st.unread, math.MaxUint32)), m.growOK, turnOK)
@@ -1814,6 +1829,16 @@ func (m *wmModel) result() wmResult {
 		r.compMbit = float64(m.comp.gotAll-m.at0.read) / secs / wmMbit
 	}
 	r.probeRTTs = f.probeRTTs
+	var upd, got uint64
+	for _, st := range m.rs {
+		if st.numRead > wmNeed && st.updN > 1 {
+			upd += uint64(st.updN - 1)
+			got += st.numRead
+		}
+	}
+	if got > 0 {
+		r.updMiB = float64(upd) / (float64(got) / (1 << 20))
+	}
 	if len(cfg.changes) > 0 {
 		c0 := cfg.changes[0].at.Milliseconds()
 		var pre uint64
@@ -1947,6 +1972,7 @@ func wmRunN(cfg wmCfg, n int) wmResult {
 	out.peakB = uint64(medF(func(r *wmResult) float64 { return float64(r.peakB) }))
 	out.netN = int(medF(func(r *wmResult) float64 { return float64(r.netN) }))
 	out.netMs = int64(medF(func(r *wmResult) float64 { return float64(r.netMs) }))
+	out.updMiB = medF(func(r *wmResult) float64 { return r.updMiB })
 	return out
 }
 
@@ -2217,10 +2243,7 @@ func wmKindOf(msg string) string {
 // cell of the default table, and why (core-NOTES.md has the traces). A
 // cell that misses a target not listed for it fails the test; a listed
 // cell that meets every target is reported, to be taken off the list.
-var wmKnown = map[string]struct {
-	kinds []string
-	why   string
-}{
+var wmKnown = map[string]wmKnownCell{
 	"300/150 q50": {[]string{"resent"},
 		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (the rig: a loss every 10–11 s at 5–6 MiB). The exit's pacing net (pacenet.go) holds that pace once it loses (151 → 244 Mbit/s, 1.65 → 0.24% resent, against the model before it). With the covers (smux Cover, the floor: wcore.go cover) it no longer drains from HOLD, and resends 0.51% against base's 0 (0.24% before them; the target is 0.5)"},
 	"1000/150 q50": {[]string{"resent", "interactive"},
@@ -2243,6 +2266,45 @@ var wmKnown = map[string]struct {
 		"the loss of the drop to 50 Mbit/s holds the user behind its holes (p99 1.1 s against base's 0.7 s; the exit's pacing net takes the core's resends 10.4 → 2.9% and base's 8.9 → 1.9%)"},
 	"1000/100 q50 policer 300": {[]string{"gain", "interactive"},
 		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 149 Mbit/s with 0.46% resent, 38% of N4's gain (N4 resends 10%); with the covers 187 Mbit/s with 0.04% (67%; the windows without the core 177), and the user's p99 377 ms against base's 288 (1.31×)"},
+}
+
+// wmKnownNoCover is wmKnown as it was before smux's covers (ec15a8f): with
+// the covers off (HS2_TUNE_SMUX_COVER=0) the model is base's to the byte
+// (TestWcoreModelCoverOff), and so are the core's misses.
+var wmKnownNoCover = map[string]wmKnownCell{
+	"300/150 q50": {[]string{"drain"},
+		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (the rig: a loss every 10–11 s at 5–6 MiB). The exit's pacing net (pacenet.go) holds that pace once it loses (151 → 244 Mbit/s, 1.65 → 0.24% resent, against the model before it); a burst before it holds (or after a lift) still overflows the queue in HOLD in one of three seeds (a cut)"},
+	"1000/150 q50": {[]string{"drain", "resent"},
+		"a burst after PROBE_RTT overflows the queue in HOLD (a cut); 0.26 to 0.54% resent against base's 0 over the 30 s table's seeds, with the exit's pacing net or without (0.37% either way in the 40 s grid)"},
+	"300/100 q50": {[]string{"interactive"},
+		"the bursts after PROBE_RTT (one loss holds the user behind its hole)"},
+	"100/100 q50": {[]string{"drain"},
+		"with the exit's pacing net the 2 MiB windows of base no longer overflow this path (base 66.8 Mbit/s with 7.1% resent without it, 83.5 with 0.2%), so the core leaves OFF (do no harm passes), and drains from HOLD at the sender's PROBE_RTT bursts before the net holds its pace: 84 Mbit/s with 0.22% resent, base's"},
+	"300/150 q200": {[]string{"queue"},
+		"the 200 ms queue lets STARTUP and the probes build a mean queue past 20 ms before the turnarounds show it"},
+	"1000/100 q50 l0.1": {[]string{"interactive"},
+		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere"},
+	"300/150 q50 l0.1": {[]string{"gain"},
+		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain without the exit's pacing net). The net takes N4 from 129 to 158 Mbit/s (its bursts held once they lose: 25% of that gain now) and costs the core one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median)"},
+	"300/150 q50 +slow reader": {[]string{"resent", "interactive", "gain", "drain"},
+		"a probe's loss while the slow stream's window holds a hole; with the exit's pacing net N4 no longer overflows the queue (180 → 250 Mbit/s, 3.3 → 0% resent), and the gain target is against that (the core 209 → 211 Mbit/s, 75% of it); one seed of three drains from HOLD at a PROBE_RTT burst"},
+	"300/150 q50 300>50>300": {[]string{"interactive"},
+		"the loss of the drop to 50 Mbit/s holds the user behind its holes (p99 1.1 s against base's 0.7 s; the exit's pacing net takes the core's resends 10.4 → 2.9% and base's 8.9 → 1.9%)"},
+	"1000/100 q50 policer 300": {[]string{"gain"},
+		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 149 Mbit/s with 0.46% resent, 38% of N4's gain (N4 resends 10%)"},
+}
+
+type wmKnownCell struct {
+	kinds []string
+	why   string
+}
+
+// wmKnownNow is wmKnown, or wmKnownNoCover with the covers off.
+func wmKnownNow() map[string]wmKnownCell {
+	if !smuxCoverOn(false) {
+		return wmKnownNoCover
+	}
+	return wmKnown
 }
 
 // wmKnownRoadmap are the cells of the full table where the core misses the
@@ -2276,6 +2338,7 @@ func TestWcoreModelTable(t *testing.T) {
 	}
 	cells := wmCells(full)
 	bad, seen := 0, map[string]bool{}
+	knownNow := wmKnownNow()
 	for _, c := range cells {
 		v := wmJudge(c)
 		t.Log(v)
@@ -2293,7 +2356,7 @@ func TestWcoreModelTable(t *testing.T) {
 		if !gate[name] {
 			continue
 		}
-		known := wmKnown[name]
+		known := knownNow[name]
 		missed := map[string]bool{}
 		for _, f := range v.fails {
 			missed[wmKindOf(f)] = true
@@ -2310,7 +2373,7 @@ func TestWcoreModelTable(t *testing.T) {
 			t.Logf("%s now meets every target: take it off wmKnown", name)
 		}
 	}
-	for name := range wmKnown {
+	for name := range knownNow {
 		if !seen[name] {
 			t.Errorf("wmKnown names %q, which is no cell", name)
 		}
@@ -2333,23 +2396,43 @@ func TestWcoreModelTable(t *testing.T) {
 //     (the need in flight where base had about the need less a step);
 //   - nowhere under 95% of base;
 //   - resent no more than base + 0.5 points (+3 across a drop of the
-//     path's rate, as the table's targets).
+//     path's rate, as the table's targets);
+//   - window updates (wmUpdMiBMax): no more than 1.05 per MiB read, as
+//     base (one per step, a MiB at the need), or than base's own where its
+//     windows came down -- the cover and the core alike.
 //
 // HS2_WCORE_MODEL_FULL=1 adds the full table as a report: there, under 1%
 // and 3% random loss, the cover runs 4 to 20% under base (100/50, 300/100,
 // 1000/150 at 1%; 300/300 at 3%), and on 100/500 at 0.1% it resends 2.0%
-// against base's 0.6%.
+// against base's 0.6%. With the covers off (HS2_TUNE_SMUX_COVER=0) there is
+// nothing to hold (TestWcoreModelCoverOff holds the model to base's).
 func TestWcoreModelCover(t *testing.T) {
+	if !smuxCoverOn(false) {
+		t.Skip("the covers are off (HS2_TUNE_SMUX_COVER=0)")
+	}
 	full := os.Getenv("HS2_WCORE_MODEL_FULL") == "1"
 	gate := map[string]bool{}
 	for _, c := range wmCells(false) {
 		gate[c.cfg.name] = true
 	}
 	held, gained := 0, 0
+	updMax := [3]float64{} // base, cover, core: the most updates per MiB of a cell
 	for _, c := range wmCells(full) {
 		b, k := wmRunN(c.cfg.with(wmBase), wmSeeds), wmRunN(c.cfg.with(wmCover), wmSeeds)
-		t.Logf("%-28s base %6.1f %5.2f%% q%3.0f/%3.0f i%4.0f/%4.0f | cover %6.1f %5.2f%% q%3.0f/%3.0f i%4.0f/%4.0f | %.2fx",
-			c.cfg.name, b.mbit, 100*b.resend, b.qMean, b.q99, b.iP50, b.iP99, k.mbit, 100*k.resend, k.qMean, k.q99, k.iP50, k.iP99, k.mbit/b.mbit)
+		o := wmRunN(c.cfg.with(wmCore), wmSeeds)
+		t.Logf("%-28s base %6.1f %5.2f%% q%3.0f/%3.0f i%4.0f/%4.0f | cover %6.1f %5.2f%% q%3.0f/%3.0f i%4.0f/%4.0f | %.2fx | upd/MiB %.3f %.3f core %.3f",
+			c.cfg.name, b.mbit, 100*b.resend, b.qMean, b.q99, b.iP50, b.iP99, k.mbit, 100*k.resend, k.qMean, k.q99, k.iP50, k.iP99, k.mbit/b.mbit,
+			b.updMiB, k.updMiB, o.updMiB)
+		for i, v := range []float64{b.updMiB, k.updMiB, o.updMiB} {
+			updMax[i] = math.Max(updMax[i], v)
+		}
+		updLim := math.Max(wmUpdMiBMax, wmUpdMiBMax*b.updMiB)
+		if k.updMiB > updLim {
+			t.Errorf("%s: the cover sends %.3f window updates per MiB, base %.3f", c.cfg.name, k.updMiB, b.updMiB)
+		}
+		if o.updMiB > updLim {
+			t.Errorf("%s: the core sends %.3f window updates per MiB, base %.3f", c.cfg.name, o.updMiB, b.updMiB)
+		}
 		isHeld := c.kind == wmGain && len(c.cfg.streams) == 0 && b.mbit < 0.6*c.cfg.rate*wmEff/wmMbit
 		if isHeld {
 			held++
@@ -2375,6 +2458,96 @@ func TestWcoreModelCover(t *testing.T) {
 		}
 	}
 	t.Logf("the cover at 1.4 times base or more in %d of %d cells where base's window holds a single download", gained, held)
+	t.Logf("window updates per MiB, the most of a cell: base %.3f, cover %.3f, core %.3f", updMax[0], updMax[1], updMax[2])
+}
+
+// wmUpdMiBMax is as many window updates per MiB read as the covers and the
+// core may send (TestWcoreModelCover; smux's TestCoverHalfWindowLock): base's
+// one per step of a MiB at the need, and 5% for the rest.
+const wmUpdMiBMax = 1.05
+
+// TestWcoreModelCoverOff: with the covers off (HS2_TUNE_SMUX_COVER=0; the
+// roll-back of the window work takes HS2_TUNE_WCORE=0 too) the model is
+// base's (ec15a8f, before the covers) to the byte: every run of base, N4,
+// fin and the core, each seed of each cell of the default table
+// (HS2_WCORE_MODEL_FULL=1: of the full one), gives what
+// testdata/wcore_model_nocover.txt holds for it, made on ec15a8f by the same
+// wmRunLine (a hash of a cell's runs per mode). HS2_WCORE_MODEL_GOLDEN=1
+// writes the file anew from this tree: only for a change to the core meant
+// to show with the covers off too, and said so in its commit.
+func TestWcoreModelCoverOff(t *testing.T) {
+	defer func(v int) { SmuxCover = v }(SmuxCover)
+	SmuxCover = 0
+	const golden = "testdata/wcore_model_nocover.txt"
+	full := os.Getenv("HS2_WCORE_MODEL_FULL") == "1"
+	write := os.Getenv("HS2_WCORE_MODEL_GOLDEN") == "1"
+	want := map[string]string{}
+	if !write {
+		b, err := os.ReadFile(golden)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			if i := strings.LastIndexByte(l, ' '); i > 0 {
+				want[l[:i]] = l[i+1:]
+			}
+		}
+	}
+	var out []string
+	n := 0
+	for _, c := range wmCells(full || write) {
+		for _, mode := range []wmMode{wmBase, wmN4, wmFin, wmCore} {
+			key, got := wmRunLine(c.cfg.with(mode))
+			out = append(out, key+" "+got)
+			if write {
+				continue
+			}
+			n++
+			if w, ok := want[key]; !ok {
+				t.Errorf("%s: not in %s", key, golden)
+			} else if got != w {
+				t.Errorf("%s: %s with the covers off, base %s", key, got, w)
+			}
+		}
+	}
+	if write {
+		if err := os.WriteFile(golden, []byte(strings.Join(out, "\n")+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("wrote %d runs to %s", len(out), golden)
+		return
+	}
+	t.Logf("%d cells and modes as base's to the byte", n)
+}
+
+// wmRunLine runs cfg on each seed of wmRunN and hashes what each run gave
+// (every field of wmResult base had, each float to its last bit, and the
+// sender's resent and sent segments of each second); key names the cell and
+// the mode.
+func wmRunLine(cfg wmCfg) (key, sum string) {
+	h := fnv.New64a()
+	for i := 0; i < wmSeeds; i++ {
+		c := cfg
+		c.seed = cfg.seed + uint64(i)
+		r := wmRun(c)
+		fmt.Fprintf(h, "%x %x %x %x %x %x %x %x %x %x|%d %d %v %d %v %d %v %x %d %d %d %d|",
+			r.mbit, r.reach, r.resend, r.resendAll, r.selfDrop, r.randDrop, r.qMean, r.q99, r.iP50, r.iP99,
+			r.t90, r.back90, r.drains, r.holdDrains, r.probes, r.peakB, r.lastState, r.compMbit, r.probeRTTs, r.netN, r.netMs, len(r.trace))
+		for _, s := range r.rtxSec {
+			fmt.Fprintf(h, "%d,%d ", s[0], s[1])
+		}
+	}
+	return strings.ReplaceAll(cfg.name, " ", "_") + "|" + cfg.mode.String(), fmt.Sprintf("%016x", h.Sum64())
+}
+
+// The model takes HS2_TUNE_SMUX_COVER as cmd/hs2 does (SmuxCover), so that
+// HS2_TUNE_SMUX_COVER=0 HS2_WCORE_MODEL_FULL=1 go test -run TestWcoreModel
+// ./engine prints base's model (ec15a8f) to the byte: the roll-back's check
+// (TestWcoreModelCoverOff holds it).
+func init() {
+	if v, err := strconv.Atoi(os.Getenv("HS2_TUNE_SMUX_COVER")); err == nil {
+		SmuxCover = v
+	}
 }
 
 func TestWcoreModelTrace(t *testing.T) {
