@@ -468,7 +468,8 @@ V16 also: the six runs' Mbit/s and the interactive p50/p99 with the core on
 and off, the round trip between the servers (`ping`), the Iran server's
 `windows:` line, and the Kharej side's `pacing held` lines with timestamps.
 
-Release: <filled at build time>
+Release: binary build `a372b1301121` (source commit `a372b13`, static,
+`CGO_ENABLED=0`; `hs2 version` shows `build a372b1301121`).
 
 This release: Phase Z5 step 1 (one connection past ~100 Mbit/s: the window
 core for the Iran server's downloads, the window pool, the 96-byte stats
