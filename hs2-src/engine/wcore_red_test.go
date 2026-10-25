@@ -344,12 +344,10 @@ func TestWcoreRedBlindHoley(t *testing.T) {
 		if x.exit {
 			WcoreUpload = 1
 		}
-		// (an edge's windows without the core are its downloads' covers,
-		// wmCover; an old exit's edge has them only until the exit's first
-		// record shows no TCP_INFO to see a policer by, coverBlind, red
-		// team H2: it is held to no budget and base's resends, and to most
-		// of base's rate, the covered start having taken the sender out of
-		// STARTUP for good: TestWcoreStep1ModelBlindSidesAreBase)
+		// (an old exit's edge gets no cover: its stats handshake shows no
+		// sender's fields to see a policer by, coverBlind, red team H2; it
+		// is held to no budget and to base, rate and resends:
+		// TestWcoreStep1ModelBlindSidesAreBase)
 		b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
 		cv := b
 		if x.old {
@@ -360,8 +358,8 @@ func TestWcoreRedBlindHoley(t *testing.T) {
 			side, c.name, 100*x.loss, x.seed, b.mbit, 100*b.resend, wmLossNote(b), cv.mbit, 100*cv.resend, k.mbit, 100*k.resend, wmLossNote(k), k.drains, k.probes)
 		if wmDrainedByCore(b, k) {
 			t.Errorf("the loss rule would drain the link under the core: %s", msg)
-		} else if x.old && (k.mbit < 0.55*b.mbit || k.resend > b.resend+0.003 || k.peakB != 0) {
-			t.Errorf("an edge with an old exit is not base's resends: %s", msg)
+		} else if x.old && (k.mbit < 0.95*b.mbit || k.resend > b.resend+0.001 || k.peakB != 0) {
+			t.Errorf("an edge with an old exit is not base: %s", msg)
 		} else {
 			t.Log(msg)
 		}

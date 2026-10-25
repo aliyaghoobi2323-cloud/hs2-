@@ -1204,6 +1204,7 @@ func newModel(cfg wmCfg) *wmModel {
 		}
 		m.core = newWcore(wcConfig{side: side, stage: cfg.stage, need: wmNeed, maxWin: wmMaxWin, minWin: wmMinWin,
 			noCover: !smuxCoverOn(cfg.exit)}, m.rnd.Float64)
+		m.noCover = true // (smux Config.CoverWait: the core lets them)
 	}
 	// the pacing net on the exit's socket (the lab's always-on cap, when
 	// set, in its place as in the runner)
@@ -1811,6 +1812,14 @@ func (m *wmModel) runCore() {
 	}
 	if m.cfg.oldExit {
 		s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = 0, 0, 0, 0
+	}
+	// the exit's stats handshake, a round trip after the link came up
+	// (runStats, before the first record): what its records carry
+	if !m.cfg.exit && m.t >= 2*m.d {
+		s.sndExt = statsExtSender
+		if m.cfg.oldExit {
+			s.sndExt = statsExtNone
+		}
 	}
 	if m.cfg.exit {
 		// the exit's runner: no record of the sender, no control ping
@@ -2712,7 +2721,9 @@ func TestWcoreModelTable(t *testing.T) {
 }
 
 // TestWcoreModelCover runs smux's windows without the core (wmCover: the
-// need, or its cover while the window holds a stream back) next to base
+// need, or its cover while the window holds a stream back; a mode the
+// engine no longer runs: an end with no core gives no cover, smuxCoverOn)
+// next to base
 // (the 2 MiB window as the rig measured it, before the cover) and, on the
 // default table's cells, holds the cover to:
 //
@@ -2791,8 +2802,8 @@ func TestWcoreModelCover(t *testing.T) {
 // one per step of a MiB at the need, and 5% for the rest.
 const wmUpdMiBMax = 1.05
 
-// TestWcoreModelCoverOff: with the covers off (HS2_TUNE_SMUX_COVER=0; the
-// roll-back of the window work takes HS2_TUNE_WCORE=0 too) the model is
+// TestWcoreModelCoverOff: with the covers off (HS2_TUNE_SMUX_COVER=0, the
+// covers alone; HS2_TUNE_WCORE=0 takes the core and its covers) the model is
 // base's (93d0faa: the reordering fix, before the covers) to the byte:
 // every run of base, N4, fin and the core, each seed of each cell of the
 // default table

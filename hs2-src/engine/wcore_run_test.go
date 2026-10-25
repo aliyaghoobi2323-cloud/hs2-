@@ -415,10 +415,11 @@ func TestWcoreRunnerFixedWindow(t *testing.T) {
 	}
 }
 
-// HS2_TUNE_WCORE=0: no session gets a core, nothing sets a ceiling, and on
-// the path where the core grows windows none passes Need and its cover (the
-// window a stream its window holds back has without the core: smux Cover);
-// with HS2_TUNE_SMUX_COVER=0 too, none passes Need.
+// HS2_TUNE_WCORE=0: no session gets a core, nothing sets a ceiling, no
+// session gives a cover (nothing would watch what it costs: smuxCoverOn),
+// and on the path where the core grows windows none passes Need. The same
+// for the exit's end without WcoreUpload; where a core runs, the session
+// starts with its covers taken until the core lets them (CoverWait).
 func TestWcoreOffIsBase(t *testing.T) {
 	old := Wcore
 	Wcore = 0
@@ -441,8 +442,24 @@ func TestWcoreOffIsBase(t *testing.T) {
 	if newWcLink(cli, cfg, nil, nil, false, nil) != nil {
 		t.Fatal("newWcLink made a core with the window core off")
 	}
+	for _, server := range []bool{false, true} {
+		if smuxCoverOn(server) {
+			t.Fatalf("covers on with the window core off (server %v)", server)
+		}
+	}
+	if c := newSmuxConfig(); c.WindowPool != nil && (!c.NoCover || c.CoverWait) {
+		t.Fatalf("the config gives covers with the window core off: NoCover %v CoverWait %v", c.NoCover, c.CoverWait)
+	}
+	Wcore = old
+	if c := newSmuxConfig(); c.WindowPool != nil && smuxCoverOn(false) && (c.NoCover || !c.CoverWait) {
+		t.Fatalf("the core on: NoCover %v CoverWait %v, want the covers waiting for the core", c.NoCover, c.CoverWait)
+	}
+	if up := WcoreUpload; up == 0 && smuxCoverOn(true) {
+		t.Fatal("covers on the exit's end with no core there (WcoreUpload 0)")
+	}
+	Wcore = 0
 	need := uint32(cfg.NeedStreamBuffer)
-	for _, noCover := range []bool{false, true} {
+	for _, noCover := range []bool{!smuxCoverOn(false)} {
 		cfg := wcTestConfig()
 		cfg.NoCover = noCover
 		lim := smux.Cover(need, uint32(cfg.MaxStreamBuffer))

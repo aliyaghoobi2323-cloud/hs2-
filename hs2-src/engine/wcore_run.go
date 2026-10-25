@@ -568,6 +568,7 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 		}
 		l.pongN = p.n
 	}
+	s.sndExt = m.statsExt.Load()
 	if r := m.peer.Load(); r != nil {
 		s.sndAt = r.at
 		s.sndSrtt, s.sndMinRTT = usDur(uint64(r.srtt)), wcMinRTTOf(r.minRTT)

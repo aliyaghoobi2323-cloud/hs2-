@@ -38,6 +38,7 @@ func TestWcoreCoverFloor(t *testing.T) {
 	cover := uint32(wtNeed + wtNeed/2)
 	c := wtCore(1)
 	c.cfg.noCover = false
+	c.sndExt = statsExtSender // (a new exit's handshake: coverBlind)
 	if c.cover() != cover || c.cmin() != cover || !c.coverFloor() {
 		t.Fatalf("cover %d cmin %d floor %v, want the cover %d", c.cover(), c.cmin(), c.coverFloor(), cover)
 	}

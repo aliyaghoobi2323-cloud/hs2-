@@ -164,6 +164,7 @@ type linkMeter struct {
 	// peer holds the latest record received from the exit.
 	statsPoll  chan struct{}
 	statsState atomic.Int32
+	statsExt   atomic.Int32 // what the exit's stats handshake said of its records (statsExtSender, statsExtNone; 0: none yet)
 	statsSeq   atomic.Uint32
 	peer       atomic.Pointer[statsRec]
 

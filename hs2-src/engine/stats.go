@@ -57,6 +57,13 @@ const (
 	statsOK          int32 = 1
 	statsUnsupported int32 = 2
 
+	// what the exit's handshake says of its records (linkMeter.statsExt):
+	// statsRecLen or more with TCP_INFO at the exit carries the sender's
+	// fields (srtt, min_rtt, its resends); a shorter one (an exit before the
+	// window core), none at the exit, or no stats at all (an older exit) none
+	statsExtSender int32 = 1
+	statsExtNone   int32 = 2
+
 	statsFlagChrono      = 1 << 0
 	statsFlagTCPInfo     = 1 << 1
 	statsFlagMemPressure = 1 << 2 // older edges ignore it (mempressure.go)
@@ -189,6 +196,7 @@ func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, l
 			return true
 		}
 		mtr.statsState.Store(statsUnsupported)
+		mtr.statsExt.Store(statsExtNone)
 		if statsOldLogged.CompareAndSwap(false, true) && logf != nil {
 			logf("mtcp: the other server does not report link stats (older hs2) — download pressure unknown; sizing by activity and upload pressure until it is upgraded")
 		}
@@ -196,6 +204,11 @@ func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, l
 	}
 	st.SetReadDeadline(time.Time{})
 	recLen := int(hdr[1])
+	ext := statsExtNone
+	if recLen >= statsRecLen && hdr[2]&1 != 0 {
+		ext = statsExtSender
+	}
+	mtr.statsExt.Store(ext) // (before the first record: wcore.coverBlind)
 	mtr.statsState.Store(statsOK)
 
 	done := make(chan struct{})
