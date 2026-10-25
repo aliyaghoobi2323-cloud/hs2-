@@ -85,10 +85,20 @@ type Config struct {
 	// window grows on its reader keeping up alone. Past it, up to
 	// MaxStreamBuffer, a window grows only as far as the ceiling the
 	// session's owner set for the stream allows (Stream.SetCoreCeil, the
-	// window core: 0, the default, keeps it within NeedStreamBuffer), and,
-	// with a WindowPool, only by what the pool has left. Zero (the default):
-	// adaptive windows grow to MaxStreamBuffer. Requires MinStreamBuffer.
+	// window core: 0, the default, keeps it within NeedStreamBuffer, or its
+	// cover: see NoCover), and, with a WindowPool, only by what the pool has
+	// left. Zero (the default): adaptive windows grow to MaxStreamBuffer.
+	// Requires MinStreamBuffer.
 	NeedStreamBuffer int
+
+	// NoCover, with a WindowPool, keeps a window without a ceiling within
+	// NeedStreamBuffer whatever holds its stream back. By default (false) a
+	// stream whose peer runs up to its window while its reader keeps up is
+	// announced NeedStreamBuffer plus a step from the pool (its cover,
+	// core.go): a window update leaves each step read, so the peer has the
+	// window less a step in flight, and the cover makes that
+	// NeedStreamBuffer, with no more updates per byte.
+	NoCover bool
 
 	// WindowPool, with NeedStreamBuffer, is what windows past
 	// NeedStreamBuffer take their excess from: a window grows only as far

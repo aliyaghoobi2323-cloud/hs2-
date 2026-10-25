@@ -110,6 +110,7 @@ type Session struct {
 	turnRef      atomic.Int64  // core: the window turnaround reference, ns (0: none; SetCoreRef)
 	qBrake       atomic.Int64  // core: how far past turnRef a turnaround holds growth back, ns
 	growOK       atomic.Bool   // core: windows may grow past NeedStreamBuffer
+	noCover      atomic.Bool   // core: no stream holds its cover (SetCover)
 	rcvd         atomic.Uint64 // core: data bytes received
 	snapLock     sync.Mutex    // core: one CoreSnapshot at a time
 	snapList     []*Stream     // core: CoreSnapshot's copy of the streams (under snapLock)
