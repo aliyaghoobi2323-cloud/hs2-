@@ -19,14 +19,17 @@ import (
 // (the stream's claim) while the stream may still be sent that much or holds
 // that much unread past NeedStreamBuffer, and gives it back only as far as it
 // is free. A stream without a ceiling never holds more than
-// NeedStreamBuffer; the sessions sharing a pool hold at most its size past
-// their MaxReceiveBuffer; and the other streams keep at least the room they
-// would have had with every window within NeedStreamBuffer, while a large
-// window's data comes in and after its reader stopped. A stream that idles
-// gives its larger window back with an update (sweepClaims), so the next
-// transfer cannot land more than NeedStreamBuffer uncovered. A session whose
-// buffer runs full anyway (what was in flight when its readers slowed down)
-// borrows from the same pool (borrow), whatever its windows.
+// NeedStreamBuffer, or its cover while the window holds it back (core.go:
+// half as much again, from the pool as any window past NeedStreamBuffer);
+// the sessions sharing a pool hold at most its size past their
+// MaxReceiveBuffer; and the other streams keep at least the room they would
+// have had with every window within NeedStreamBuffer, while a large window's
+// data comes in and after its reader stopped. A stream that idles gives its
+// larger window back with an update, and its cover with it (sweepClaims), so
+// the next transfer cannot land more than NeedStreamBuffer uncovered. A
+// session whose buffer runs full anyway (what was in flight when its
+// readers slowed down) borrows from the same pool (borrow), whatever its
+// windows.
 //
 // A window grows past NeedStreamBuffer only as far as its session holds no
 // more of the pool than the pool has left for the others (FreeFor: half the
@@ -247,6 +250,7 @@ func (s *Session) sweepClaims() {
 	for _, st := range s.streams {
 		st.bufferLock.Lock()
 		if st.claim > 0 && now-st.readAt >= int64(claimIdle) {
+			st.uncover() // the next transfer runs up to its window again first
 			if st.rcvWin > uint32(s.config.NeedStreamBuffer) {
 				st.setWindow(s.config, uint32(s.config.NeedStreamBuffer))
 				st.incr = 0
