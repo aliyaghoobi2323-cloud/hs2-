@@ -1015,6 +1015,35 @@ func TestWcoreFillStats(t *testing.T) {
 	}
 }
 
+// What a link's end line and the lab trace say of its streams' covers
+// (SmuxCover; smux TestCoverCounters counts them), and the status line's
+// count of the streams covered now.
+func TestSmuxCoverNote(t *testing.T) {
+	if n := smuxCoverNote(&smux.Session{}); n != "" {
+		t.Fatalf("no cover: %q", n)
+	}
+	if c := wcTraceCoverOf(&smux.Session{}); c != nil {
+		t.Fatalf("no cover in the trace: %+v", c)
+	}
+	if n := coverNoteOf(smux.CoverCounters{Grants: 2, Now: 2}); n != "streams covered 2 time(s)" {
+		t.Fatalf("note %q", n)
+	}
+	n := coverNoteOf(smux.CoverCounters{Grants: 5, Reader: 1, Miss: 2, Closed: 1, Capped: 3})
+	if want := "streams covered 5 time(s), lost 4 (1 reader fell behind, 2 window no longer held it, 1 closed), held to the covers' share of the window pool 3 time(s)"; n != want {
+		t.Fatalf("note %q, want %q", n, want)
+	}
+	b, _ := json.Marshal(wcTraceLine{Cover: &wcTraceCover{Now: 1, Grants: 5, Taken: 2}})
+	if !strings.Contains(string(b), `"cover":{"now":1,"grants":5,"lost_core":2}`) {
+		t.Fatalf("trace %s", b)
+	}
+	p := windowPool()
+	var st PoolStats
+	(&wcSet{}).fillStats(&st)
+	if st.Covers != p.CoverStreams() || st.CoverMiB != float64(p.Covers())/(1<<20) {
+		t.Fatalf("stats %+v, the pool's covers %d streams %d B", st, p.CoverStreams(), p.Covers())
+	}
+}
+
 // What the runner takes from the edge's meter: the control ping's pongs
 // since its previous snapshot (openControl keeps their round trips), its
 // floor, the exit's latest record and the autopilot's flag; the exit's end

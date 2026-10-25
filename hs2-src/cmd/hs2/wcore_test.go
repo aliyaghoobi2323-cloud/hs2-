@@ -37,6 +37,14 @@ func TestStatusWindowsLine(t *testing.T) {
 	if l := windowsLine(liveStatus{PoolMiB: 128}); l != "" {
 		t.Fatalf("windows line with none: %q", l)
 	}
+	// smux's covers, with the fast connections or alone
+	ls.Covers, ls.CoverMiB = 2, 1.5
+	if l := windowsLine(ls); l != "fast connections: 3 (windows 14 MiB of 128 MiB pool); covered streams: 2 (1.5 MiB of the pool)" {
+		t.Fatalf("windows line with covers %q", l)
+	}
+	if l := windowsLine(liveStatus{PoolMiB: 128, Covers: 1, CoverMiB: 1}); l != "fast connections: 0 (windows 0 MiB of 128 MiB pool); covered streams: 1 (1.0 MiB of the pool)" {
+		t.Fatalf("windows line with covers alone %q", l)
+	}
 }
 
 // The window core's lab knobs reach the engine.

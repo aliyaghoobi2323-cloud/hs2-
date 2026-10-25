@@ -246,10 +246,21 @@ var wcRAvgAlpha = 0.25
 // burst overflows the queue, the data held behind the hole is released at
 // once, its window updates leave together and the sender sends their credit
 // as one more burst), and a drain tells which.
+//
+// w is the level's own spread: v·w is its variance as a resend share, the
+// sum over the records behind it of each one's weight squared over its
+// segments (0: unknown, as for Rcv_ooopack). A level of one or two records
+// is a sample, not the path's share: on a quiet path at 0.3% random loss
+// (1790/300, two links) the core left OFF on records of 0.21% and 0.17%,
+// and a record of 0.47% on 9949 segments in STARTUP read as congestive
+// against 0.21% ± the record's own spread alone (threshold 0.44%), though
+// 0.47% is the path's 0.30% plus 3σ. With the level's spread (sndAbs) the
+// threshold there is 0.58%.
 type wcLossRef struct {
 	v  float64
 	b  uint64
 	ok bool
+	w  float64
 }
 
 type wcLossSrc uint8
@@ -260,18 +271,24 @@ const (
 	wcSrcOoo            // Rcv_ooopack of the link's own socket
 )
 
-// note keeps the level of an interval that was not judged congestive.
-func (r *wcLossRef) note(v float64, b uint64, alpha float64) {
+// note keeps the level of an interval that was not judged congestive, of
+// segs segments (0: unknown).
+func (r *wcLossRef) note(v float64, b uint64, alpha float64, segs uint64) {
+	a := alpha
 	switch {
 	case !r.ok:
-		r.v, r.b, r.ok = v, b, true
+		a = 1
+		r.ok = true
 	case float64(b) <= 1.05*float64(r.b):
-		r.v += alpha * (v - r.v)
-		r.b = b
 	default:
 		// as clean at a larger budget: the level holds there too
-		r.v += alpha / 3 * (v - r.v)
-		r.b = b
+		a = alpha / 3
+	}
+	r.v += a * (v - r.v)
+	r.b = b
+	r.w *= (1 - a) * (1 - a)
+	if segs > 0 {
+		r.w += a * a / float64(segs)
 	}
 }
 
@@ -3020,9 +3037,19 @@ func (c *wcore) oooLoss(m wcMeas) bool {
 }
 
 // sndAbs is how far past its level a record's resend share must be to be
-// more than the level's own spread: wcLossCongSig standard deviations of a
-// binomial share at the level over the record's segments, at least
-// wcLossCongMin.
+// more than the spread of the two: wcLossCongSig standard deviations of a
+// binomial share at the level over the record's segments, and, with the
+// cover on, of the level itself (its records' segments: wcLossRef.w), at
+// least wcLossCongMin.
+//
+// The level's own spread comes with the cover: its larger windows carry
+// more segments a record (the core starts from them, and from a STARTUP of
+// 1.5 times them), so the record's spread no longer hides the level's, and a
+// level of one or two records in OFF read random loss as congestive: on the
+// invariant test's quiet paths (no queue the windows can make), 7 of 300
+// drained for loss with the cover against base's 6; with the level's spread
+// 1 (seed 60 among the 6 it spares). With the cover off it is left out: the
+// core then is base's to the byte (HS2_TUNE_SMUX_COVER=0, the roll-back).
 func (c *wcore) sndAbs(m wcMeas) float64 { return c.sndAbsN(m.sndSegs) }
 
 // sndAbsN is sndAbs for a record of segs segments.
@@ -3030,7 +3057,11 @@ func (c *wcore) sndAbsN(segs uint64) float64 {
 	if segs == 0 || !c.sndRef.ok {
 		return wcLossCongAbs
 	}
-	return math.Max(wcLossCongMin, wcLossCongSig*math.Sqrt(c.sndRef.v/float64(segs)))
+	w := c.sndRef.w
+	if c.cfg.noCover {
+		w = 0
+	}
+	return math.Max(wcLossCongMin, wcLossCongSig*math.Sqrt(c.sndRef.v*(1/float64(segs)+w)))
 }
 
 // sndStale: a record of the exit that came now covers time from before the
@@ -3047,11 +3078,11 @@ func (c *wcore) sndStale(now time.Time) bool {
 func (c *wcore) noteLoss(m wcMeas) {
 	if m.sndOK && !c.sndStale(m.sndAt) {
 		if lo, hi := c.bSpan(); float64(hi) <= 1.05*float64(lo) {
-			c.sndRef.note(m.snd, hi, 0.3)
+			c.sndRef.note(m.snd, hi, 0.3, m.sndSegs)
 		}
 	}
 	if m.oooOK {
-		c.oooRef.note(m.ooo, c.B, 0.3)
+		c.oooRef.note(m.ooo, c.B, 0.3, 0)
 	}
 	l, ok := m.snd, m.sndOK
 	if !ok && c.cfg.side == wcExit && m.oooOK {
@@ -3131,10 +3162,10 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if len(m.f) > 0 {
 		// the loss of the path with the windows without the core
 		if m.sndOK {
-			c.sndRef.note(m.snd, uint64(m.wF), 0.3)
+			c.sndRef.note(m.snd, uint64(m.wF), 0.3, m.sndSegs)
 		}
 		if m.oooOK {
-			c.oooRef.note(m.ooo, uint64(m.wF), 0.3)
+			c.oooRef.note(m.ooo, uint64(m.wF), 0.3, 0)
 		}
 	}
 	if len(m.f) == 0 || in.apProbing || m.idleF || m.quiet || math.Abs(m.wF-m.wPrev) > 0.1*m.wF {

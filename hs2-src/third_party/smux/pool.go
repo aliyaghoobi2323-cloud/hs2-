@@ -80,19 +80,71 @@ const claimIdle = 5 * time.Second
 // tests.
 var closeGrace = 2 * claimIdle
 
+// coverShare: the covers of all the sessions sharing a pool hold at most
+// 1/coverShare of it (takeCover). The rest is the window core's growth and
+// what sessions whose buffer runs full borrow (borrow): a stalled session
+// takes MaxReceiveBuffer/borrowShare at a time from what the pool has left,
+// whatever the windows hold, and covers on every busy link of a server (a
+// MiB each, within each session's share, FreeFor) could leave it nothing
+// when a dozen readers slow down at once, the stall borrow exists for
+// (TestCoverLeavesBorrowItsRoom).
+const coverShare = 4
+
 // WindowPool is the excess past Config.NeedStreamBuffer that the windows of
 // the sessions sharing it may hold at once (Config.WindowPool), in bytes.
-type WindowPool struct{ free atomic.Int64 }
+type WindowPool struct {
+	free   atomic.Int64
+	covers atomic.Int64 // of what the windows hold, what covers took (takeCover)
+	coverN atomic.Int64 // streams holding a cover, of the sessions sharing it
+	size   int64
+}
+
+// CoverStreams is how many streams of the sessions sharing the pool hold a
+// cover now (core.go, Cover).
+func (p *WindowPool) CoverStreams() int { return int(p.coverN.Load()) }
 
 // NewWindowPool returns a pool of size bytes.
 func NewWindowPool(size int) *WindowPool {
-	p := new(WindowPool)
+	p := &WindowPool{size: int64(size)}
 	p.free.Store(int64(size))
 	return p
 }
 
 // Free is what the pool has left.
 func (p *WindowPool) Free() int { return int(p.free.Load()) }
+
+// Covers is what the streams' covers hold of the pool now (core.go, Cover).
+func (p *WindowPool) Covers() int { return int(p.covers.Load()) }
+
+// takeCover takes up to n bytes for a cover of a session that holds held of
+// the pool: as takeFor, and within what the covers may still hold
+// (1/coverShare of the pool). It returns how many it took, and whether the
+// covers' share is what held it back (not the pool: then it is short).
+func (p *WindowPool) takeCover(held, n int) (int, bool) {
+	var r int64
+	for {
+		c := p.covers.Load()
+		r = p.size/coverShare - c
+		if r > int64(n) {
+			r = int64(n)
+		}
+		if r <= 0 {
+			return 0, p.FreeFor(held) > 0
+		}
+		if p.covers.CompareAndSwap(c, c+r) {
+			break
+		}
+	}
+	got := p.takeFor(held, int(r))
+	if int64(got) < r {
+		p.covers.Add(int64(got) - r)
+	}
+	return got, r < int64(n) && int64(got) == r
+}
+
+// giveCover counts n bytes of a cover's claim as let go (letClaim): the
+// bytes themselves go where the claim's go (letGo).
+func (p *WindowPool) giveCover(n int) { p.covers.Add(-int64(n)) }
 
 // FreeFor is what a session that holds held of the pool may still take for
 // its windows: as much as leaves it holding no more than the pool then has
@@ -152,26 +204,43 @@ func needOf(cfg *Config) uint32 {
 
 // setWindow sets the window to w; with a WindowPool, past NeedStreamBuffer
 // only as far as the stream's claim on the pool covers it, the claim taking
-// what more the pool has left for its session (FreeFor). The caller holds
-// bufferLock.
+// what more the pool has left for its session (FreeFor), and for a cover
+// (a covered stream with no ceiling) what the covers' share has left
+// (takeCover). The caller holds bufferLock.
 func (s *Stream) setWindow(cfg *Config, w uint32) {
 	if pool := cfg.WindowPool; pool != nil && w > uint32(cfg.NeedStreamBuffer) {
 		if want := int(w) - cfg.NeedStreamBuffer - s.claim; want > 0 {
-			got := 0
+			cover := s.core.covered && s.core.ceil.Load() == 0
+			got, capped := 0, false
 			select {
 			case <-s.die: // closed: its claim is given back for good
 			default:
-				got = pool.takeFor(int(atomic.LoadInt32(&s.sess.extra)), want)
+				held := int(atomic.LoadInt32(&s.sess.extra))
+				if cover {
+					got, capped = pool.takeCover(held, want)
+				} else {
+					got = pool.takeFor(held, want)
+				}
 			}
 			if got > 0 {
 				if s.claim == 0 {
 					s.readAt = monoNow()
 				}
 				s.claim += got
+				if cover {
+					if s.coverClaim == 0 {
+						s.coverHeld(true)
+					}
+					s.coverClaim += got
+				}
 				s.sess.grow(got)
 			}
 			if got < want {
-				s.poolShort()
+				if capped {
+					s.coverCapped()
+				} else {
+					s.poolShort()
+				}
 			}
 			w -= uint32(want - got)
 		}
@@ -226,8 +295,27 @@ func (s *Stream) reclaim(cfg *Config) {
 		}
 	}
 	s.claimDown = 0
-	s.sess.letGo(s.claim - keep)
-	s.claim = keep
+	s.letClaim(s.claim - keep)
+}
+
+// letClaim lets go of n bytes of the stream's claim (letGo), its cover's part
+// first. The caller holds bufferLock.
+func (s *Stream) letClaim(n int) {
+	if n <= 0 {
+		return
+	}
+	if k := s.coverClaim; k > 0 {
+		if k > n {
+			k = n
+		}
+		s.coverClaim -= k
+		s.sess.config.WindowPool.giveCover(k)
+		if s.coverClaim == 0 {
+			s.coverHeld(false)
+		}
+	}
+	s.sess.letGo(n)
+	s.claim -= n
 }
 
 // sweepClaims takes the windows of the streams that have read nothing for
@@ -250,7 +338,7 @@ func (s *Session) sweepClaims() {
 	for _, st := range s.streams {
 		st.bufferLock.Lock()
 		if st.claim > 0 && now-st.readAt >= int64(claimIdle) {
-			st.uncover() // the next transfer runs up to its window again first
+			st.uncover(coverIdle) // the next transfer runs up to its window again first
 			if st.rcvWin > uint32(s.config.NeedStreamBuffer) {
 				st.setWindow(s.config, uint32(s.config.NeedStreamBuffer))
 				st.incr = 0
@@ -284,10 +372,7 @@ func (s *Stream) windowDown() {
 // (recycleTokens; with die closed: it takes no more), or closeGrace after its
 // session closed (dropClaims). The caller holds bufferLock.
 func (s *Stream) dropClaim() {
-	if s.claim > 0 {
-		s.sess.letGo(s.claim)
-		s.claim = 0
-	}
+	s.letClaim(s.claim)
 }
 
 // letGo takes n bytes of a stream's claim off it: into the session's spare,
