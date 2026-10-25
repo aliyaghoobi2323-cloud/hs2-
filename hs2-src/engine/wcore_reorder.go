@@ -28,36 +28,67 @@ import (
 // burst of 38% keeps packets behind holes 76 ms of two wakes, past T_base/4
 // (18 ms) and past the round trip itself.
 //
-// What only the receiver sees cannot tell such a burst from a loss on a path
-// whose round trip is under the runner's wake (100 ms): a loss's hole of
-// ~1.25 round trips holds about as many packets as the burst. What tells
-// them is what the sender did: the exit resends every packet it lost, and a
-// reordered one it does not. On the edge every ~2 s record of the exit says
-// how many segments it resent. So the edge learns, per link, how long its
-// path's reordering keeps packets behind holes at a given rate, from windows
-// of wakes the records showed held no loss (wcReo), and a hole is a loss's
-// only past that (holeThr); and a cut or a drain whose only sign of loss was
-// the holes is undone when the records that cover its hole and its resend
-// show nothing resent (wcUndo), as TCP undoes a window it cut for a loss its
-// DSACKs showed spurious. A record that did resend keeps both as they were:
-// the policer's loss, any loss of ours, and a sender that resends reordered
-// packets are judged as before, and with no record (the exit's side, an old
-// exit, records that stopped or carry no TCP_INFO) nothing is learned or
-// undone.
+// Three things tell them apart here, each where it can:
+//
+//   - The hole itself (wcBacklog, the receiver's own counters): a loss's hole
+//     stays open until its resend comes, a round trip and RACK's window
+//     after it opened; one that reordering opens is gone within RACK's
+//     window (else the sender resends it). The hole still open at a wake's end
+//     shows in what passed it (tcpi_bytes_received against Data_segs_in, the
+//     same TCP_INFO): open past T_base/4, by an age the estimate trusts, it is
+//     a loss's whatever else says (lossHole). It sees a loss's hole at a wake's
+//     end only if one falls in it: always where the round trip is a wake and
+//     T_base/4 or longer, at 72 ms in about 7 of 10 (more with a queue in the
+//     round trip, as a loss of ours has).
+//   - The link's reordering profile (wcReo): the share of a window's time its
+//     holes kept packets waiting, at the window's rate, in windows shown to
+//     hold no loss; lossHole's sum of holes is a loss's only past wcReoMargin
+//     times what the profile allows at the rate (holeThr). The proof is the
+//     exit's records on the edge: the exit resends every packet it lost and a
+//     reordered one it does not, and its ~2 s record says how many it resent
+//     (a window is learned once the records that would hold its loss's resend
+//     came with none). With no record (the exit's side) the proof is the
+//     receiver's own where it is one: from two wakes of round trip a loss's
+//     hole is always seen open (reoSelf). Where wcBacklog judges the
+//     holes, the profile may take the sum to a window's length (its episodes
+//     of the model of the field keep half the packets behind holes for 120
+//     to 200 ms: two wakes' sum of a loss's at 72 ms); where it does not, to
+//     wcReoCap of T_base, under what a loss's hole keeps.
+//   - The undo (wcUndo): a cut or a drain whose only sign of loss was the
+//     holes is undone when the records that cover its hole and its resend
+//     show nothing resent, as TCP undoes a window it cut for a loss its DSACKs
+//     showed spurious, and the profile learns its windows.
+//
+// A record that did resend keeps everything as it was: the policer's loss,
+// any loss of ours, and a sender that resends reordered packets (Linux before
+// its first DSACK) are judged as before. A path that does not reorder learns
+// nothing and its holes are judged as before (the model's table is the same,
+// byte for byte).
+//
+// On the reproduction of the field (wcore_s2_reorder_test.go, 1000/72 behind
+// 50 ms with its reordering and a RACK sender, three seeds) the core of
+// before kept 106 of its 624 Mbit/s gain over base, with 8 drains for loss
+// and 5 cuts, the exit resending 0.000%; this one keeps 482 (the cuts come
+// before the profile has learned the path, in its first ~15 s, and are undone).
 var (
 	// wcReoMargin: a window's holes are a loss's past this many times what
 	// the profile allows at its rate (one burst's share over two wakes is
 	// no bound of the next one's).
 	wcReoMargin = 1.5
-	// wcReoCap: the profile raises lossHole's threshold to at most this share
-	// of T_base (and 0.9 of the window's length): a loss's hole keeps the
-	// packets that arrive behind it waiting a round trip at least (its resend
-	// comes no sooner), so a window whose holes held less is no loss's once
-	// the path is known to reorder, and one past it still is.
+	// wcReoCap: with no wcBacklog to judge the holes, the profile raises
+	// lossHole's threshold to at most this share of T_base (and 0.9 of the
+	// window's length): a loss's hole keeps the packets that arrive behind it
+	// waiting a round trip at least (its resend comes no sooner), so a window
+	// whose holes held less is no loss's once the path is known to reorder,
+	// and one past it still is.
 	wcReoCap = 0.75
-	// wcReoTTL: a learned point of the profile holds this long (a route
-	// change may take the reordering away).
-	wcReoTTL = 3 * time.Minute
+	// wcReoTTL: a learned point of the profile holds this long, as a loss
+	// point does (wcQcapTTL): reordering is the path's, and its episodes
+	// renew the profile while it lasts (the model of the field's: one every
+	// 0.5 to 3 s at 300 to 1000 Mbit/s); a route change may take it away, and
+	// then a loss's hole is told by wcBacklog and the exit's records until the
+	// profile ages out.
+	wcReoTTL = 10 * time.Minute
 	// wcReoLearn: a window is kept for the profile only if its holes held
 	// this share of the base threshold (T_base/4) or more: the profile only
 	// matters near it.
@@ -151,8 +182,14 @@ func (c *wcore) holeThr(now time.Time, segs uint64, span time.Duration) time.Dur
 	if s <= 0 {
 		return thr
 	}
-	lim := max(thr, min(time.Duration(wcReoCap*float64(c.tBase)), time.Duration(0.9*float64(span))))
-	return min(max(thr, time.Duration(wcReoMargin*s*float64(span))), lim)
+	lim := time.Duration(0.9 * float64(span))
+	if !c.bk.ok {
+		// no hole of the receiver's own to tell a loss by: no more than a
+		// loss's hole keeps packets waiting (a round trip, less what the
+		// sender held back)
+		lim = min(lim, time.Duration(wcReoCap*float64(c.tBase)))
+	}
+	return min(max(thr, time.Duration(wcReoMargin*s*float64(span))), max(thr, lim))
 }
 
 // reoLag is how long after a hole the exit's record that would hold its
@@ -183,14 +220,20 @@ func (c *wcore) reoWindow(now time.Time, h time.Duration, segs uint64, span time
 // records): a window whose holes summed past T_base/4 with no hole open past
 // it at its end is reordering if, in the wakes after it, none stays open
 // past T_base/4 either. A loss's hole stays open a round trip at the least
-// (its resend comes no sooner), so where what is left of it past T_base/4
-// is longer than a wake, some wake's end finds it open past T_base/4: wcBacklog
-// sees it (open), given an age it trusts at every wake. Where the round trip
-// is shorter (under ~133 ms at 100 ms wakes: the edge's path to Iran) a
-// loss's hole can open and close between two wakes, and only the exit's
-// records tell.
+// (its resend comes no sooner), so where the round trip is two wakes or more
+// the hole spans a whole wake, in which nothing passes it: wcBacklog's age
+// grows by the wake's length there, whatever the pace the packets came at
+// (openAny). An age it measures within a wake takes the packets as evenly
+// spread over it; a window-limited sender's bursts, and a policer that drops
+// their tails, leave a hole of a round trip with few packets behind it, an
+// age of a few ms at the wake's end: with three wakes to a round trip
+// (0.75·T_base past a wake, the first rule) such holes went for reordering,
+// the profile took the sum past them, and the red team's policer cells at
+// 150 ms lost up to 28% (1000/150 q50 pol90>pol40: 269 → 195 Mbit/s, resent
+// 0.97 → 1.50%). Under two wakes (the edge's 72 ms path to Iran) only the
+// exit's records tell.
 func (c *wcore) reoSelf(now time.Time, w wcHoleWin, dt time.Duration) {
-	sure := c.bk.ok && time.Duration((1-wcOooHole)*float64(c.tBase)) > dt
+	sure := c.bk.ok && c.tBase >= 2*dt
 	if !sure || c.bk.openAny(c.tBase) {
 		// no proof (or a loss's hole): none of the windows waiting, nor one
 		// with this wake in it, is learned
@@ -261,7 +304,6 @@ func (c *wcore) reoRecord(in wcIn, span time.Duration) {
 type wcUndo struct {
 	on     bool
 	at     time.Time // the verdict
-	last   time.Time // ... and the latest one since that waits with it
 	until  time.Time // a record that came after this would hold the resend of its loss
 	drains int       // the core's drains after the verdict: another one since voids it
 	state  wcState
@@ -300,11 +342,11 @@ func (c *wcore) markUndo(now time.Time) {
 	}
 	until := now.Add(c.reoLag())
 	if c.undo.on {
-		c.undo.last, c.undo.until = now, until
+		c.undo.until = until
 		c.undo.drains = -1 // set after the change (undoNoted)
 		return
 	}
-	c.undo = wcUndo{on: true, at: now, last: now, until: until, drains: -1, state: c.state, B: c.B, from: c.probeFrom,
+	c.undo = wcUndo{on: true, at: now, until: until, drains: -1, state: c.state, B: c.B, from: c.probeFrom,
 		bCap: c.bCap, bCapAt: c.bCapAt, qcap: c.qcap, qcapAt: c.qcapAt, qcapOK: c.qcapOK, back: c.backoff, full: c.pathFull,
 		fullR: c.fullR, prevR: c.prevR, prevB: c.prevB, flat: c.flat, gear: c.gear}
 	if c.state == wcProbe {
@@ -344,9 +386,12 @@ func (c *wcore) applyUndo(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if !u.on || c.state == wcOff {
 		return
 	}
-	// (a cap or Q_cap set from the first verdict to the last is theirs: any
-	// other loss of ours since came with a drain, which voids the undo)
-	ours := func(t time.Time) bool { return !t.Before(u.at) && !t.After(u.last) }
+	// (a cap or Q_cap set since the first verdict is theirs, or the test of
+	// a jump's (lossTestDone: back at its level at the floor, as a path whose
+	// reordering grows with the rate reads there): any other loss of ours
+	// since came with a drain, which voids the undo, or with resends, which
+	// drop it)
+	ours := func(t time.Time) bool { return !t.Before(u.at) }
 	if ours(c.bCapAt) {
 		c.bCap, c.bCapAt = u.bCap, u.bCapAt
 	}

@@ -836,6 +836,7 @@ func (c *wcore) step(in wcIn) wcOut {
 	hole := c.wakeHoles(in, wdt)
 	hw := c.holeWindow(in, hole, wdt)
 	c.bk.wake(in, wdt)
+	c.reoSelf(now, hw, wdt)
 	lossHole := c.lossHole(in, hw)
 	c.holeSeen = c.holeSeen || lossHole
 	defer func() {
@@ -2845,10 +2846,7 @@ func (c *wcore) lossTestDone(in wcIn, m wcMeas, ev *[]wcEvent) bool {
 			c.noteCap(in.now, c.lossTestB)
 		}
 	case wcSrcOoo:
-		if !m.oooOK || c.undo.on {
-			// (a test of holes alone waits for the records that may
-			// undo it: its drain back at the floor reads no holes of a
-			// path that reorders more as it carries more)
+		if !m.oooOK {
 			return false
 		}
 		if c.oooRef.past(m.ooo, wcOooCongAbs) {

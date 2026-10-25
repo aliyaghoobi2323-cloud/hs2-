@@ -1352,6 +1352,8 @@ func (e wcEvent) String() string {
 		b.WriteString("capped")
 	case wcEvRoute:
 		b.WriteString("route")
+	case wcEvUndo:
+		b.WriteString("undo")
 	}
 	fmt.Fprintf(&b, " from=%d b=%d n=%d r=%.0f t=%.1fms q=%.1fms loss=%.4f", e.from, e.B, e.n, e.R, msOf(e.T), msOf(e.q), e.loss)
 	return b.String()

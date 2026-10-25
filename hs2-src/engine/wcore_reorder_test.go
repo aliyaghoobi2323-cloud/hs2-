@@ -162,3 +162,144 @@ func TestWcoreReoProfile(t *testing.T) {
 		t.Errorf("the exit's side: drains %d, profile %.2f — want the cut and no profile", c.cnt.drainLoss, c.reo.share(now, 10000))
 	}
 }
+
+// wtBk is a wake of n segments, ooo of them behind a hole, of which wait
+// still wait behind one at its end (full segments of wmMSS bytes): the
+// in-order bytes are those of the rest, plus what waited at the wake
+// before and passed (rel).
+func wtBk(n, ooo, wait, rel uint64) wcIn {
+	return wcIn{segsIn: n, ooo: ooo, oooOK: true, inOrder: (n - wait + rel) * wmMSS, inOrderOK: true}
+}
+
+// TestWcoreReoBacklog: the receiver's own view of the oldest hole
+// (wcBacklog). A path's reordering opens holes that close within a few ms:
+// whatever share of a wake's packets came behind them, what waits at its end
+// is a few ms' worth, never past T_base/4. A loss's hole stays open until
+// its resend comes: open past T_base/4 at a wake's end, or open all of a
+// wake (nothing passed), it is a loss's. An age measured through wakes in
+// which something passed while a hole stayed open (dense reordering, segB's
+// error adding up) is not trusted.
+func TestWcoreReoBacklog(t *testing.T) {
+	dt := 100 * time.Millisecond
+	fresh := func() *wcBacklog {
+		var b wcBacklog
+		for i := 0; i < 3; i++ {
+			b.wake(wtBk(1000, 0, 0, 0), dt)
+		}
+		if b.segB != wmMSS || !b.ok {
+			t.Fatalf("segB %.0f after wakes with no hole, want %d", b.segB, wmMSS)
+		}
+		return &b
+	}
+	b := fresh()
+	b.wake(wtBk(1000, 400, 5, 0), dt) // 40% behind holes, 5 waiting at the end: 0.5 ms
+	if b.bk != 0 || b.open(100*time.Millisecond) {
+		t.Errorf("reordering, 40%% of a wake behind short holes: %.0f waiting, %v old, open %v — want none", b.bk, b.age, b.open(100*time.Millisecond))
+	}
+	b.wake(wtBk(1000, 300, 300, 0), dt) // a loss's hole opened 30 ms before the wake's end
+	if !b.open(100*time.Millisecond) || b.open(200*time.Millisecond) || b.age != 30*time.Millisecond {
+		t.Errorf("a hole 30 ms old: age %v, open at T_base 100 ms %v (want true), at 200 ms %v (want false)",
+			b.age, b.open(100*time.Millisecond), b.open(200*time.Millisecond))
+	}
+	b.wake(wcIn{segsIn: 1000, ooo: 1000, oooOK: true, inOrderOK: true}, dt) // nothing passed
+	if b.age != 130*time.Millisecond || !b.open(200*time.Millisecond) {
+		t.Errorf("the same hole a wake later: age %v open %v, want 130ms and open at T_base 200 ms", b.age, b.open(200*time.Millisecond))
+	}
+	b.wake(wtBk(1000, 0, 0, 1300), dt) // its resend came: all of it passed
+	if b.bk != 0 || b.open(100*time.Millisecond) {
+		t.Errorf("after the resend: %.0f waiting, open %v", b.bk, b.open(100*time.Millisecond))
+	}
+	// dense reordering: a hole open at each wake's end, the one before passed
+	b = fresh()
+	b.wake(wtBk(1000, 500, 30, 0), dt)
+	for i := 0; i < 5; i++ {
+		b.wake(wtBk(1000, 500, 300, 30), dt) // segB's error, or a burst, reads 300 waiting
+	}
+	if b.trusted || b.open(100*time.Millisecond) || !b.openAny(100*time.Millisecond) {
+		t.Errorf("an age through wakes that passed while holes stayed open: trusted %v, open %v (want false), openAny %v (want true)",
+			b.trusted, b.open(100*time.Millisecond), b.openAny(100*time.Millisecond))
+	}
+	// no in-order counter (an old kernel, a test's input): nothing judged
+	b = fresh()
+	b.wake(wcIn{segsIn: 1000, ooo: 1000, oooOK: true}, dt)
+	if b.ok || b.open(100*time.Millisecond) {
+		t.Errorf("a wake with no in-order counter: ok %v open %v", b.ok, b.open(100*time.Millisecond))
+	}
+}
+
+// TestWcoreReoSelf: with no record of the sender (the exit's side), the
+// receiver learns the profile from its own proof where it is one: on a
+// 200 ms path a loss's hole is always seen open past T_base/4 at some
+// wake's end, so a window whose holes summed past T_base/4 while none stayed
+// open is reordering's, and the same burst no longer cuts; a loss's hole
+// still does, and teaches nothing. On a 72 ms path a loss's hole can open
+// and close between two wakes: nothing is learned there.
+func TestWcoreReoSelf(t *testing.T) {
+	run := func(tBase time.Duration) (*wcore, *time.Time) {
+		c := wtReo()
+		c.cfg.side, c.sndSeen, c.tBase = wcExit, false, tBase
+		now := wtT0
+		return c, &now
+	}
+	wake := func(c *wcore, now *time.Time, n, ooo, wait, rel uint64) {
+		*now = now.Add(100 * time.Millisecond)
+		in := wtRedIn(*now, 100*time.Millisecond, wcSnd{})
+		tb := c.tBase
+		in.minRTT, in.srtt = tb, tb+time.Millisecond
+		in.streams[0].turnMin, in.streams[0].turnLast = tb+5*time.Millisecond, tb+5*time.Millisecond
+		in.segsIn, in.ooo, in.inOrderOK = n, ooo, true
+		if wait <= n+rel {
+			in.inOrder = wtBk(n, ooo, wait, rel).inOrder
+		}
+		c.step(in)
+	}
+	quiet := func(c *wcore, now *time.Time, k int) {
+		for i := 0; i < k; i++ {
+			wake(c, now, 1000, 0, 0, 0)
+		}
+	}
+	burst := func(c *wcore, now *time.Time) {
+		for i := 0; i < 3; i++ {
+			wake(c, now, 1000, 450, 3, 3*uint64(min(i, 1))) // 45% behind holes of a few ms
+		}
+	}
+	c, now := run(200 * time.Millisecond)
+	quiet(c, now, 5)
+	burst(c, now)
+	quiet(c, now, 10)
+	if c.cnt.drainLoss != 1 || c.reo.share(*now, 10000) <= 0 {
+		t.Fatalf("T_base 200 ms, a burst of short holes: drains %d (want the cut, as before), profile %.2f (want it learned)",
+			c.cnt.drainLoss, c.reo.share(*now, 10000))
+	}
+	d := c.cnt.drainLoss
+	quiet(c, now, 30)
+	if c.lossDrain || c.oooRef.v >= wcOooClean {
+		t.Fatalf("T_base 200 ms: still in the cut's loss drain (%v) or holes past wcOooClean (%.2f): the next burst could not cut anyway", c.lossDrain, c.oooRef.v)
+	}
+	burst(c, now)
+	quiet(c, now, 10)
+	if c.cnt.drainLoss != d {
+		t.Errorf("T_base 200 ms: the same burst after the profile cut again")
+	}
+	// a loss: a hole 40 ms old at a wake's end, then open all of the next
+	quiet(c, now, 30)
+	pts := len(c.reo.pts)
+	wake(c, now, 1000, 400, 400, 0)
+	wake(c, now, 1000, 1000, 1400, 0)
+	if c.cnt.drainLoss == d {
+		t.Errorf("T_base 200 ms: a loss's hole open 140 ms did not cut")
+	}
+	wake(c, now, 1000, 0, 0, 1400)
+	quiet(c, now, 10)
+	if len(c.reo.pts) != pts {
+		t.Errorf("T_base 200 ms: the loss's window was learned as reordering (%d points, %d before)", len(c.reo.pts), pts)
+	}
+	// a 72 ms path: no proof
+	c, now = run(72 * time.Millisecond)
+	quiet(c, now, 5)
+	burst(c, now)
+	quiet(c, now, 10)
+	if c.reo.share(*now, 10000) != 0 {
+		t.Errorf("T_base 72 ms: a profile learned with no record (%.2f): a loss's hole fits between two wakes there", c.reo.share(*now, 10000))
+	}
+}
