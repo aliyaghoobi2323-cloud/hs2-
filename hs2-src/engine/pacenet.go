@@ -360,7 +360,7 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 		// 3%)
 		c = target
 	}
-	if share >= loss && last > 0 && k*last < wcNetPaid*float64(n.cap) {
+	if share >= loss && last > 0 && k*last < wcNetPaid*float64(c) {
 		// stale: what the path delivered over the last second is under half
 		// of what the cap was set for, while the resends go on. A policer that
 		// comes mid-transfer builds no queue, and while the sender's own pace
@@ -385,6 +385,23 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 		// its windows delivers more than half of it (TestPaceNetEngageRelease:
 		// 150 of 240 Mbit/s is held).
 		c = uint64(math.Max(k*last, wcPaceFloor))
+		//
+		// (Against the cap the reading would set, not the one in force: once
+		// the rule took the cap down, the next reading's "only rises", on the
+		// span's rate from before the policer, took it back up and the rule
+		// down again, 125 <-> 1000 Mbit/s each 100 ms for a second, 11
+		// setsockopts; the post-merge review, TestPaceNetStaleCapFollows.
+		// Short sweep: drains the same, runs slower than without the net
+		// 123 -> 135 (base) and 149 -> 163 (core) of 2240; red1's and dyn's
+		// drains the same (dyn's core-only 9 -> 8); TestWcoreS2RedPolicer
+		// 10 -> 12 of 270 drained, within the model's spread. Seven rows of
+		// the model's table move, those where the rule fired under random
+		// loss or a rate change and the cap flipped (1000/150 l1 30.2 -> 28.4
+		// Mbit/s, l3 13.3 -> 15.0, 300>50>300 145.5 -> 150.5; the passing
+		// count the same). Refusing only the rise for a span after the rule
+		// fired moves the same rows and slows more runs (150/178, red policer
+		// 13), as does dropping the span's rates from before the last second
+		// as it fires (161/193).)
 	}
 	if dlv <= 0 || math.Abs(float64(c)-float64(n.cap)) <= wcNetMove*float64(n.cap) {
 		return wcNetOut{}
