@@ -556,3 +556,60 @@ func TestStatsNotOlderWhenExitAnsweredInfo(t *testing.T) {
 		t.Fatal("openStats did not stop with its context")
 	}
 }
+
+// A record the exit takes while its writer has been waiting on the socket
+// for a while (a write in progress, wrStart) counts that wait in its
+// txBlockedNs: before, the wait counted only once the write returned, and a
+// record taken mid-stall read ~0 blocked, as a link whose path has room
+// (the window core's path-held guard, wcore.sndHeld, judged a stream held by
+// the path a slow source; post-merge review of FM2, L1). The counter stays
+// monotonic: the write that completes later adds at least what was counted.
+func TestStatsRecordCountsAWriteInProgress(t *testing.T) {
+	mtr := &linkMeter{}
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+	mc := &meteredConn{Conn: a, m: mtr}
+	done := make(chan struct{})
+	go func() {
+		mc.Write(make([]byte, 64<<10)) // nobody reads b yet: it waits
+		close(done)
+	}()
+	time.Sleep(300 * time.Millisecond)
+
+	ex, ed := net.Pipe()
+	defer ex.Close()
+	defer ed.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go serveStats(ctx, ex, nil, mtr)
+	ed.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := ed.Write([]byte{statsVer}); err != nil {
+		t.Fatal(err)
+	}
+	hs := make([]byte, 3)
+	if _, err := io.ReadFull(ed, hs); err != nil {
+		t.Fatal(err)
+	}
+	poll := func(seq uint32) uint64 {
+		var q [4]byte
+		binary.BigEndian.PutUint32(q[:], seq)
+		if _, err := ed.Write(q[:]); err != nil {
+			t.Fatal(err)
+		}
+		rec := make([]byte, int(hs[1]))
+		if _, err := io.ReadFull(ed, rec); err != nil {
+			t.Fatal(err)
+		}
+		return binary.BigEndian.Uint64(rec[24:32])
+	}
+	mid := poll(1)
+	if mid < uint64(250*time.Millisecond) {
+		t.Fatalf("a record taken 300 ms into a write that waits on its socket reads %v blocked, want ≥ 250ms", time.Duration(mid))
+	}
+	go io.Copy(io.Discard, b)
+	<-done
+	if after := poll(2); after < mid {
+		t.Fatalf("txBlockedNs went back from %v to %v once the write returned", time.Duration(mid), time.Duration(after))
+	}
+}
