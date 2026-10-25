@@ -336,6 +336,7 @@ func (ws *wcSet) put(l *wcLink) {
 			p = newWcPeer()
 			ws.peers[l.peerKey] = p
 		}
+		p.refs++
 		l.core.peer = p
 	}
 	ws.mu.Unlock()
@@ -437,7 +438,7 @@ func (ws *wcSet) wakeAll() {
 			l.ceiled, l.samples = nil, nil // what it reads of the link stays (wcStats)
 			if p := l.core.peer; p != nil {
 				p.drop(l.core)
-				if p.empty() {
+				if p.refs--; p.refs <= 0 {
 					delete(ws.peers, l.peerKey)
 				}
 			}

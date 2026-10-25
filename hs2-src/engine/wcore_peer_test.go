@@ -2,8 +2,11 @@ package engine
 
 import (
 	"math"
+	"net"
 	"testing"
 	"time"
+
+	"github.com/xtaci/smux"
 )
 
 // TestWcorePeerQueue: a peer keeps every link's records for wcPeerKeep and
@@ -270,5 +273,51 @@ func TestWcorePeerShareQcap(t *testing.T) {
 		if _, ok := small.fairShare(wtT0, msm); !ok {
 			t.Errorf("Q_cap %v: a core under the fair share left out of the shared rule", q)
 		}
+	}
+}
+
+// TestWcorePeerRegistry: the runner's registry keeps a peer while any link to
+// it is registered, idle ones included (an idle link is not stepped, so its
+// core is in neither the records nor the cores): when the one busy link to
+// a host ended beside an idle one, the registry forgot the peer the idle
+// link still held, and the next link to that host got another, so the two
+// never shared.
+func TestWcorePeerRegistry(t *testing.T) {
+	cfg := wcTestConfig()
+	ws := &wcSet{}
+	var sess []*smux.Session
+	link := func() *wcLink {
+		a, b := net.Pipe()
+		edge, exit := wcSessions(t, a, b, cfg, nil)
+		t.Cleanup(func() { edge.Close(); exit.Close() })
+		sess = append(sess, edge)
+		l := newWcLink(edge, cfg, nil, nil, false, &net.TCPAddr{IP: net.IPv4(192, 0, 2, 7), Port: 40000 + len(sess)})
+		if l == nil {
+			t.Fatal("no window core link")
+		}
+		ws.put(l)
+		return l
+	}
+	busy, idle := link(), link()
+	p := busy.core.peer
+	if p == nil || idle.core.peer != p || len(ws.peers) != 1 {
+		t.Fatalf("two links to one host: peers %p and %p, %d in the registry", p, idle.core.peer, len(ws.peers))
+	}
+	// the busy one was evaluated, the idle one never; the busy one ends
+	p.noteCore(busy.core, time.Now(), true, 50e6)
+	sess[0].Close()
+	ws.wakeAll()
+	if ws.peers[busy.peerKey] != p {
+		t.Fatalf("the busy link ended: the registry forgot the peer its idle link holds")
+	}
+	if l := link(); l.core.peer != p {
+		t.Errorf("a new link to the host after the busy one ended: another peer, not the idle link's")
+	}
+	// the last links end: the peer goes
+	sess[1].Close()
+	sess[2].Close()
+	ws.wakeAll()
+	if len(ws.peers) != 0 {
+		t.Errorf("every link ended: %d peers left in the registry", len(ws.peers))
 	}
 }

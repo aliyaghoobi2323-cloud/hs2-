@@ -22,6 +22,12 @@ import "time"
 type wcPeer struct {
 	recs  []wcPeerRec // the links' records within wcPeerKeep, oldest first
 	cores map[*wcore]wcPeerCore
+	// refs: the links registered to it (wcSet.mu, not the runner's): the
+	// registry forgets a peer when its last link ends, not when no core of
+	// it was evaluated lately (an idle link is not stepped, so its core is in
+	// neither recs nor cores, and it would have kept a peer no new link of
+	// that host shares)
+	refs int
 }
 
 // wcPeerRec is one record of the exit for one link: its q_snd.
