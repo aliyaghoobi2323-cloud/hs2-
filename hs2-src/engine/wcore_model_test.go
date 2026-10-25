@@ -28,7 +28,8 @@ import (
 //     and DRAIN with full-pipe detection on rounds that were not
 //     app-limited, the 1.25/0.75/1×6 pacing cycle, inflight ≤ cwnd =
 //     2·BDP_est, packet conservation in recovery, RACK-style loss detection
-//     and a tail timer, resends counted), fed by an smux writer that sends
+//     (with cfg.rack Linux's reordering window too) and a tail timer, resends
+//     counted), fed by an smux writer that sends
 //     each stream only as far as its window credit and puts control frames
 //     (pongs, short replies) first;
 //   - the receiver (the edge): in-order delivery (data behind a hole waits
@@ -154,6 +155,24 @@ type wmCfg struct {
 	// aggregation): what comes after it meanwhile arrives behind a hole
 	reorder   float64
 	reorderMs int
+	// rack: the senders find their losses as Linux's RACK does
+	// (tcp_recovery.c) instead of taking every packet sent before the newest
+	// (s)acked one for lost at once (wmFlow.rackMark): once a packet came in
+	// after one sent later (reordering seen), a packet is lost only when it is
+	// still out a reordering window (min_rtt/4, more steps of it after DSACKs)
+	// past the round trip of the latest sent one that came. A packet the path
+	// holds less than that is not resent: it shows only at the receiver, as
+	// what arrived behind its hole (Rcv_ooopack), and not in the exit's
+	// record. Without it the model's sender resends every reordered packet
+	// and the record shows reordering as loss (z5-red1-core-notes §7).
+	rack bool
+	// reoField: the link's connection is reordered as the real Iran↔abroad
+	// path reordered a direct TCP flow (wmReo): bursty episodes, more of them
+	// the faster the connection runs, in which half its packets come
+	// reorderMs (3 if 0) late; reoScale multiplies the episodes' share of the
+	// time (0: 1)
+	reoField bool
+	reoScale float64
 	// red team, round 2: rttAt changes the path's round trip at given times
 	// (rate: the new round trip in ms; a route change: the sockets' min_rtt
 	// keep the old floor, as Linux's for 5 minutes); polAt changes the
@@ -209,6 +228,20 @@ type wmResult struct {
 	// netN: the times the pacing net engaged; netMs: ms it held the pace
 	netN  int
 	netMs int64
+	// ooo: the share of the link's segments that arrived behind a hole
+	// (Rcv_ooopack / Data_segs_in at the receiver) over [warm, dur];
+	// oooHalf: the receiver's cumulative (behind a hole, in) segments at
+	// each 500 ms, as the field's samples (wmReoBins); spurious: segments the
+	// sender resent whose first copy arrived after all (a DSACK each)
+	ooo      float64
+	oooHalf  [][2]uint64
+	spurious uint64
+	// cuts: the core's halvings for loss between evaluations (fastStop;
+	// counted in drains[1] too), each a line "packets arrived behind holes on
+	// a clean path" of the runner
+	cuts int
+	// reoEps: the field's reordering episodes that started (cfg.reoField)
+	reoEps int
 }
 
 func (r wmResult) String() string {
@@ -239,6 +272,9 @@ type wmPkt struct {
 	// events come as often as on the real path): its resend counts as one
 	// segment, else the resend share would read k× the path's loss
 	rnd bool
+	// spur (cfg.rack): it was marked lost and came after all; the sender
+	// took its DSACK
+	spur bool
 }
 
 type wmQ[T any] struct {
@@ -330,10 +366,29 @@ type wmFlow struct {
 	ackBatch         []*wmPkt // arrived at its receiver, not yet sent back
 	gotBytes, gotAll uint64   // competitor: bytes its sink received
 	probeRTTs        int      // PROBE_RTTs entered
+
+	// RACK (cfg.rack, rackMark): rackXid and rackRTT are the latest sent
+	// packet that was (s)acked and its round trip (rack.mstamp, rack.rtt_us);
+	// reordSeen: a packet came in after one sent later (tp->reord_seen);
+	// reoSteps: the reordering window in steps of min_rtt/4, one more for a
+	// DSACK at most once a round trip (reoDlv: delivered at the latest),
+	// back to one after reoPersist recoveries with none; dsack: a DSACK
+	// came with the acks being taken; rackLost: what the reordering timer
+	// marked lost since the latest ack (BBR answers it there)
+	rack                 bool
+	rackXid              uint64
+	rackRTT              int64
+	reordSeen            bool
+	reoSteps, reoPersist int
+	reoDlv               uint64
+	dsack                bool
+	rackLost             int64
+	spurious             uint64
 }
 
 func newFlow(m *wmModel, main bool, unit int) *wmFlow {
-	f := &wmFlow{m: m, main: main, unit: unit, cwnd: 10 * wmMSS, pacingGain: bbrHighGain, cwndGain: bbrHighGain}
+	f := &wmFlow{m: m, main: main, unit: unit, cwnd: 10 * wmMSS, pacingGain: bbrHighGain, cwndGain: bbrHighGain,
+		rack: m.cfg.rack, reoSteps: 1}
 	f.pacing = wmStartPace * float64(10*wmMSS) / float64(m.rtt)
 	if !main {
 		f.writeSeq = math.MaxUint64 / 2
@@ -433,9 +488,22 @@ func (f *wmFlow) onAcks(pkts []*wmPkt) {
 	t := m.t
 	var newest *wmPkt
 	acked := int64(0)
+	prior := f.maxAckXid
 	for _, p := range pkts {
 		if p.sacked || p.lost {
+			if f.rack && p.lost && !p.rtx && !p.spur {
+				// (RACK) its first copy came after all: what came in
+				// behind it was reordering, and its resend will come in
+				// twice (a DSACK; the model takes it now, not a round trip
+				// on with the resend)
+				p.spur = true
+				f.reordSeen, f.dsack = true, true
+				f.spurious += f.segs(p.n)
+			}
 			continue
+		}
+		if f.rack && !p.rtx && p.xid < prior {
+			f.reordSeen = true // it came in after one sent later
 		}
 		p.sacked = true
 		f.inflight -= int64(p.n)
@@ -474,6 +542,18 @@ func (f *wmFlow) onAcks(pkts []*wmPkt) {
 	if bwOK && (!appLim || bw >= f.rateDlv) {
 		f.rateDlv = bw
 	}
+	if f.rack {
+		// (tcp_rack_advance: a resend's round trip shorter than min_rtt
+		// may be its first copy's, and does not count)
+		if newest.xid > f.rackXid && (!newest.rtx || t-newest.sentAt >= f.minRTT) {
+			f.rackXid, f.rackRTT = newest.xid, t-newest.sentAt
+		}
+		f.reoUpdate(priorDlv)
+		lost := f.rackMark() + f.rackLost
+		f.rackLost = 0
+		f.bbr(t, bw, bwOK, appLim, priorDlv, rtt, acked, lost, priorInflight)
+		return
+	}
 	// RACK: what was sent before the newest acked packet and is not acked
 	// is lost (the path keeps order)
 	lost := int64(0)
@@ -495,9 +575,73 @@ func (f *wmFlow) onAcks(pkts []*wmPkt) {
 	f.bbr(t, bw, bwOK, appLim, priorDlv, rtt, acked, lost, priorInflight)
 }
 
+// rackMark is RACK's loss detection (tcp_rack_detect_loss, cfg.rack), from
+// the oldest packet out: one sent before the latest sent packet that came in
+// (rackXid) is lost once it has been out for that one's round trip and the
+// reordering window. The first that has not been is the oldest still in time,
+// and so is every packet after it (sent later). It returns the bytes it
+// marked lost.
+func (f *wmFlow) rackMark() int64 {
+	t := f.m.t
+	wnd := f.reoWnd()
+	lost := int64(0)
+	for f.out.len() > 0 {
+		p := f.out.peek()
+		if p.sacked {
+			f.out.pop()
+			f.m.freePkt(p)
+			continue
+		}
+		if p.xid >= f.rackXid || t-p.sentAt < f.rackRTT+wnd {
+			break
+		}
+		f.out.pop()
+		p.lost = true
+		f.inflight -= int64(p.n)
+		lost += int64(p.n)
+		f.rtxQ.push(p)
+	}
+	return lost
+}
+
+// reoWnd is RACK's reordering window (tcp_rack_reo_wnd): none until
+// reordering was seen (Linux waits min_rtt/4 then too, but neither in
+// recovery nor once the dupthresh's three segments were sacked past a hole,
+// and a packet of the model holds k segments: past three within the ms),
+// then min_rtt/4 a step, at most srtt.
+func (f *wmFlow) reoWnd() int64 {
+	if !f.reordSeen {
+		return 0
+	}
+	return min(f.minRTT/4*int64(f.reoSteps), int64(f.srtt))
+}
+
+// reoUpdate is tcp_rack_update_reo_wnd, at each ack: a DSACK takes the
+// reordering window a step up, at most once a round trip (priorDlv:
+// delivered when the newest packet acked was sent), and holds it for 16
+// recoveries (counted down as each starts, in bbr); past those with no
+// DSACK it is one step again.
+func (f *wmFlow) reoUpdate(priorDlv uint64) {
+	if f.dsack && priorDlv < f.reoDlv {
+		f.dsack = false // a round trip has not passed since the last step
+	}
+	if f.dsack {
+		f.reoSteps = min(f.reoSteps+1, 255)
+		f.reoDlv, f.reoPersist = f.delivered, 16
+		f.dsack = false
+	} else if f.reoPersist == 0 {
+		f.reoSteps = 1
+	}
+}
+
 // tailTimer marks the oldest outstanding packet lost when nothing was
-// acked past it for long (a tail loss: no later packet to reveal it).
+// acked past it for long (a tail loss: no later packet to reveal it). With
+// cfg.rack it first runs RACK's reordering timer (tcp_rack_reo_timeout): what
+// it marks lost the sender's BBR answers at the next ack.
 func (f *wmFlow) tailTimer() {
+	if f.rack {
+		f.rackLost += f.rackMark()
+	}
 	if f.out.len() == 0 || f.srtt == 0 {
 		return
 	}
@@ -535,6 +679,9 @@ func (f *wmFlow) bbr(t int64, bw float64, bwOK, appLim bool, priorDlv uint64, rt
 		f.pktConservation = true
 		f.nextRoundDlv = f.delivered
 		f.cwnd = f.inflight + acked
+		if f.rack && f.reoPersist > 0 {
+			f.reoPersist--
+		}
 	}
 	if f.inRecovery && f.maxAckXid >= f.recoveryXid {
 		f.inRecovery = false
@@ -745,6 +892,114 @@ type wmRev struct {
 	sent int64
 }
 
+// ---- the field's reordering (cfg.reoField) ------------------------------------------
+
+// The real Iran↔abroad path (72 ms) reordered a direct TCP flow (BBR) as its
+// receiver's Rcv_ooopack / Data_segs_in read, sampled every 0.5 s, while the
+// sender resent next to nothing (3, 13 and 26 segments in 15 s: Linux's
+// RACK waited the reordering out):
+//
+//	300 Mbit/s:   2.0% overall; 5 of 29 samples had any; p90 6.6%, max 38%
+//	600 Mbit/s:   6.1% overall; 13 of 28 had any; p90 22%, max 35%
+//	1.7 Gbit/s:  14.7% overall; p50 20%, p90 42%, max 49%
+//	a few Mbit/s: 0 to 0.5%
+//
+// It comes in episodes, more of them the faster the flow runs, and no sample
+// read more than half of its packets behind holes. wmReo has the path, within
+// an episode, send each packet of the link's connection by a branch reorderMs
+// longer with probability wmReoHalf (a link aggregate or a balancer spraying
+// over two routes): what goes the short way while one is held arrives behind
+// its hole, so a sample within an episode reads half of its packets behind
+// holes (at a few Mbit/s fewer: few packets pass one in reorderMs), and one
+// the episode covered in part that share of it. The episodes take a share of
+// the time that grows with the connection's own rate (its packets through
+// the bottleneck, a 100 ms average: the field's flows were alone on the
+// path), wmReoTab, each of an exponential length; TestWcoreS2ReorderProfile
+// holds the profile to the field's samples.
+//
+// The reorderMs of the field is not known: RACK waits min_rtt/4 (18 ms on
+// the 72 ms path) and the sender resent none, so it was under that; 3 ms by
+// default (a route through another box of the same site).
+const (
+	wmReoHalf = 0.5
+	wmReoMs   = 3
+)
+
+// wmReoTab: the episodes' share of the time and their mean length (ms) at
+// the connection's rate (Mbit/s), linear in between, the last row's past it.
+var wmReoTab = []struct{ mbit, duty, len float64 }{
+	{0, 0, 120}, {300, 0.040, 120}, {600, 0.122, 140}, {1700, 0.294, 200},
+}
+
+// wmReoAt is wmReoTab at r Mbit/s.
+func wmReoAt(r float64) (duty, l float64) {
+	t := wmReoTab
+	if r >= t[len(t)-1].mbit {
+		return t[len(t)-1].duty, t[len(t)-1].len
+	}
+	for i := 1; i < len(t); i++ {
+		if r < t[i].mbit {
+			a, b := t[i-1], t[i]
+			x := (math.Max(r, 0) - a.mbit) / (b.mbit - a.mbit)
+			return a.duty + x*(b.duty-a.duty), a.len + x*(b.len-a.len)
+		}
+	}
+	return 0, t[0].len
+}
+
+// wmReo is the field's reordering of one link's connection. It draws from
+// its own generator, so it leaves the model's draws as they were.
+type wmReo struct {
+	rnd   *rand.Rand
+	ms    int64   // how late a held packet comes
+	scale float64 // times the episodes' share of the time
+	rate  float64 // the connection's rate through the bottleneck, Mbit/s (100 ms average)
+	bytes int     // its bytes this ms
+	on    bool
+	until int64 // the episode ends then (ms)
+	eps   int   // episodes started
+}
+
+func newWmReo(seed uint64, ms int, scale float64) *wmReo {
+	if ms <= 0 {
+		ms = wmReoMs
+	}
+	if scale <= 0 {
+		scale = 1
+	}
+	return &wmReo{rnd: rand.New(rand.NewPCG(seed^0x7e0de12, seed+0x9e3779b97f4a7c15)), ms: int64(ms), scale: scale}
+}
+
+// hold takes a packet of n bytes of the connection off the bottleneck and
+// says how many ms late it comes (0: on time).
+func (r *wmReo) hold(n int) int64 {
+	r.bytes += n
+	if r.on && r.rnd.Float64() < wmReoHalf {
+		return r.ms
+	}
+	return 0
+}
+
+// tick ends the ms at t: the rate, and an episode's end or start (a two-state
+// process whose episodes last l ms on average and take duty of the time: one
+// starts with probability duty/(l·(1−duty)) a ms between them).
+func (r *wmReo) tick(t int64) {
+	r.rate += (float64(r.bytes)*8/1000 - r.rate) / 100
+	r.bytes = 0
+	if r.on {
+		if t >= r.until {
+			r.on = false
+		}
+		return
+	}
+	duty, l := wmReoAt(r.rate)
+	duty = math.Min(duty*r.scale, 0.9)
+	if duty > 0 && r.rnd.Float64() < duty/(l*(1-duty)) {
+		r.on, r.until = true, t+1+int64(r.rnd.ExpFloat64()*l)
+		r.eps++
+	}
+}
+
 // ---- the model ---------------------------------------------------------------------
 
 type wmModel struct {
@@ -784,6 +1039,8 @@ type wmModel struct {
 	// recPhase: the exit's records of this link come this many ms past
 	// each record span (each link's stats poll runs on its own ticker)
 	recPhase int64
+	// reo: the field's reordering of this link's connection (cfg.reoField)
+	reo *wmReo
 
 	// the link's receiving end
 	rcvNxt    uint64
@@ -834,6 +1091,7 @@ type wmModel struct {
 	at0      struct {
 		segs, rtx, tail, pol, rnd uint64
 		read                      uint64
+		ooo, in                   uint64
 	}
 	res     wmResult
 	ackHold []*wmPkt
@@ -895,6 +1153,9 @@ func newModel(cfg wmCfg) *wmModel {
 	m.main = newFlow(m, true, m.unit)
 	if cfg.compete > 0 {
 		m.comp = newFlow(m, false, m.unit)
+	}
+	if cfg.reoField {
+		m.reo = newWmReo(cfg.seed, cfg.reorderMs, cfg.reoScale)
 	}
 	m.pool = cfg.pool >= 0 && cfg.mode != wmBase
 	m.poolFree = cfg.pool
@@ -1021,6 +1282,15 @@ func (m *wmModel) serve() {
 			continue
 		}
 		p.arrive = m.t + m.d
+		if lm := p.f.m; p.f.main && lm.reo != nil {
+			// (its own link's episodes: with several links on one
+			// bottleneck each connection runs at its own rate)
+			if d := lm.reo.hold(p.n); d > 0 {
+				p.arrive += d
+				m.late = append(m.late, p)
+				continue
+			}
+		}
 		if m.cfg.reorder > 0 && p.f.main && m.rnd.Float64() < m.cfg.reorder {
 			p.arrive += int64(m.cfg.reorderMs)
 			m.late = append(m.late, p)
@@ -1030,6 +1300,11 @@ func (m *wmModel) serve() {
 	}
 	if m.q.len() == 0 && m.serveCred > m.rate {
 		m.serveCred = m.rate
+	}
+	for _, l := range m.links {
+		if l.reo != nil {
+			l.reo.tick(m.t)
+		}
 	}
 }
 
@@ -1063,7 +1338,9 @@ func (m *wmModel) arrive() {
 	for _, p := range due {
 		p.inNet = false
 		f := p.f
-		if !p.lost {
+		// (with RACK a first copy marked lost is acked too: the sender
+		// learns that it was reordering, onAcks)
+		if !p.lost || f.rack && !p.rtx {
 			f.ackBatch = append(f.ackBatch, p)
 		}
 		if !f.main {
@@ -1492,6 +1769,7 @@ func (m *wmModel) runCore() {
 		st.hitGap = int64((g + time.Millisecond - 1) / time.Millisecond)
 	}
 	in := m.bld.build(s)
+	pub, drainLoss := m.core.bPub, m.core.cnt.drainLoss
 	o := m.core.step(in)
 	if m.cfg.check != nil {
 		m.cfg.check(time.Duration(m.t)*time.Millisecond, m.core, in, o)
@@ -1527,6 +1805,10 @@ func (m *wmModel) runCore() {
 			c.tau.Milliseconds(), c.qRef.Milliseconds(), o.qBrake.Milliseconds(), o.growOK, f.mode, f.pacing*1000/wmMbit, float64(m.bn.qBytes)/m.bn.rate, ss.String()))
 		for _, e := range o.events {
 			m.res.trace = append(m.res.trace, "        event "+e.String())
+		}
+		if m.core.cnt.drainLoss > drainLoss && !wcHasDrain(o.events) && m.core.B < pub {
+			// (as the runner logs a halving between evaluations, wcore.cut)
+			m.res.trace = append(m.res.trace, fmt.Sprintf("        event cut from=%d b=%d (packets arrived behind holes on a clean path)", pub, m.core.B))
 		}
 	}
 	m.lastSt = o.state
@@ -1694,6 +1976,9 @@ func (m *wmModel) run() wmResult {
 		if m.t%1000 == 0 {
 			m.res.rtxSec = append(m.res.rtxSec, [2]uint64{m.main.retrans, m.main.segsOut})
 		}
+		if m.t%500 == 0 {
+			m.res.oooHalf = append(m.res.oooHalf, [2]uint64{m.oooPkts, m.segsIn})
+		}
 		for ci < len(m.cfg.changes) && m.t >= m.cfg.changes[ci].at.Milliseconds() {
 			// (the rig's emulator sets the queue to the same time at the
 			// new rate)
@@ -1704,6 +1989,7 @@ func (m *wmModel) run() wmResult {
 		if m.t == warm {
 			m.at0.segs, m.at0.rtx = m.main.segsOut, m.main.retrans
 			m.at0.tail, m.at0.pol, m.at0.rnd = m.tailDrops, m.polDrops, m.randDrops
+			m.at0.ooo, m.at0.in = m.oooPkts, m.segsIn
 			if m.comp != nil {
 				m.at0.read = m.comp.gotAll
 			}
@@ -1757,6 +2043,13 @@ func (m *wmModel) result() wmResult {
 	if f.segsOut > 0 {
 		r.resendAll = float64(f.retrans) / float64(f.segsOut)
 	}
+	if in := m.segsIn - m.at0.in; in > 0 {
+		r.ooo = float64(m.oooPkts-m.at0.ooo) / float64(in)
+	}
+	r.spurious = f.spurious
+	if m.reo != nil {
+		r.reoEps = m.reo.eps
+	}
 	if m.qN > 0 {
 		r.qMean = m.qSum / m.qN
 		r.q99 = histPct(m.qHist, 0.99)
@@ -1774,6 +2067,7 @@ func (m *wmModel) result() wmResult {
 		r.probes = [2]int{c.probeOK, c.probeFail}
 		r.peakB = c.peakB
 		r.lastState = m.core.state
+		r.cuts = m.core.cuts
 	}
 	if m.comp != nil {
 		r.compMbit = float64(m.comp.gotAll-m.at0.read) / secs / wmMbit
@@ -1909,6 +2203,9 @@ func wmRunN(cfg wmCfg, n int) wmResult {
 	out.peakB = uint64(medF(func(r *wmResult) float64 { return float64(r.peakB) }))
 	out.netN = int(medF(func(r *wmResult) float64 { return float64(r.netN) }))
 	out.netMs = int64(medF(func(r *wmResult) float64 { return float64(r.netMs) }))
+	out.ooo = medF(func(r *wmResult) float64 { return r.ooo })
+	out.spurious = uint64(medF(func(r *wmResult) float64 { return float64(r.spurious) }))
+	out.cuts = int(medF(func(r *wmResult) float64 { return float64(r.cuts) }))
 	return out
 }
 
