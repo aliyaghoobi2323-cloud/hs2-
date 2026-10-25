@@ -1081,10 +1081,14 @@ type wmModel struct {
 		at               int64
 		srtt, minRTT     time.Duration
 		retrans, segsOut uint64
+		mono, blk        uint64 // ns: the record's monoNs and txBlockedNs
 		pendAt           int64
 		pSrtt, pMin      time.Duration
 		pRetrans, pSegs  uint64
+		pMono, pBlk      uint64
 	}
+	// blkMs: ms the exit's smux writer waited on its socket (noteBlocked)
+	blkMs int64
 
 	// the core
 	core     *wcore
@@ -1235,18 +1239,7 @@ func (m *wmModel) fill(f *wmFlow) {
 				continue
 			}
 			credit := int64(s.limit) - int64(s.written)
-			src := int64(wmFrame)
-			switch {
-			case len(s.srcAt) > 0 || s.srcBurst > 0:
-				if s.src > 0 {
-					src = int64(s.srcAcc) - int64(s.written)
-					if b := int64(s.srcBurst); b > 0 {
-						src = int64(s.srcAcc)/b*b - int64(s.written)
-					}
-				}
-			case s.src > 0:
-				src = int64(s.src*float64(m.t-s.start)/1000) - int64(s.written)
-			}
+			src := m.srcLeft(s)
 			if credit <= 0 && src > 0 {
 				s.blocked = true
 			}
@@ -1690,6 +1683,44 @@ func (m *wmModel) setWindow(st *wmRcvStream, w uint32) {
 	st.rcvWin = w
 }
 
+// srcLeft is what s's source has handed over and the writer has not taken
+// yet (a frame's worth for an unlimited source).
+func (m *wmModel) srcLeft(s *wmSnd) int64 {
+	switch {
+	case len(s.srcAt) > 0 || s.srcBurst > 0:
+		if s.src > 0 {
+			if b := int64(s.srcBurst); b > 0 {
+				return int64(s.srcAcc)/b*b - int64(s.written)
+			}
+			return int64(s.srcAcc) - int64(s.written)
+		}
+	case s.src > 0:
+		return int64(s.src*float64(m.t-s.start)/1000) - int64(s.written)
+	}
+	return wmFrame
+}
+
+// noteBlocked counts a ms in which the exit's smux writer had a frame to
+// write (a control frame, or a stream with credit and data from its source)
+// and its socket held wmLowat unsent already: the writer waits on the
+// socket (the runner's linkMeter.wrBlocked, the record's txBlockedNs).
+func (m *wmModel) noteBlocked() {
+	f := m.main
+	if f.writeSeq-f.sndNxt < wmLowat {
+		return
+	}
+	if len(m.ctrlQ) > 0 {
+		m.blkMs++
+		return
+	}
+	for _, s := range m.ss {
+		if m.t >= s.start && int64(s.limit) > int64(s.written) && m.srcLeft(s) > 0 {
+			m.blkMs++
+			return
+		}
+	}
+}
+
 // sources moves the paced sources of wmStreamCfg.srcAt and srcBurst on by
 // a ms: a change of pace takes effect, and the pace adds to what the source
 // has handed over (from what was written when it became paced: a source
@@ -1774,6 +1805,7 @@ func (m *wmModel) runCore() {
 	if r := &m.sndRec; r.at > 0 {
 		s.sndAt = m.epoch.Add(time.Duration(r.at) * time.Millisecond)
 		s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = r.srtt, r.minRTT, r.retrans, r.segsOut
+		s.sndMono, s.sndBlocked = r.mono, r.blk
 	}
 	if m.cfg.apProbing != nil {
 		s.apProbing = m.cfg.apProbing(time.Duration(m.t) * time.Millisecond)
@@ -1784,6 +1816,7 @@ func (m *wmModel) runCore() {
 	if m.cfg.exit {
 		// the exit's runner: no record of the sender, no control ping
 		s.sndAt, s.sndSrtt, s.sndMinRTT, s.sndRetrans, s.sndSegsOut = time.Time{}, 0, 0, 0, 0
+		s.sndMono, s.sndBlocked = 0, 0
 		s.ctrlMin, s.pongs, s.apProbing = 0, nil, false
 	}
 	// Session.CoreSnapshot: the streams at need/4 or more, or with a fresh
@@ -1914,12 +1947,16 @@ func (m *wmModel) periodic() {
 		r.pSrtt = time.Duration(f.srtt * float64(time.Millisecond))
 		r.pMin = time.Duration(f.minRTT) * time.Millisecond
 		r.pRetrans, r.pSegs = f.retrans, f.segsOut
+		r.pMono, r.pBlk = uint64(t)*1e6, uint64(m.blkMs)*1e6
 		if in(m.cfg.recZero) {
+			// (the extended fields only: the first 64 bytes are the
+			// exit's own counters)
 			r.pSrtt, r.pMin, r.pRetrans, r.pSegs = 0, 0, 0, 0
 		}
 	}
 	if r.pendAt > 0 && t >= r.pendAt {
 		r.at, r.srtt, r.minRTT, r.retrans, r.segsOut = t, r.pSrtt, r.pMin, r.pRetrans, r.pSegs
+		r.mono, r.blk = r.pMono, r.pBlk
 		r.pendAt = 0
 	}
 	if m.cfg.policer > 0 {
@@ -2045,6 +2082,7 @@ func (m *wmModel) run() wmResult {
 		m.atSender()
 		m.main.tailTimer()
 		m.main.send()
+		m.noteBlocked()
 		if m.comp != nil && m.t >= m.cfg.compete.Milliseconds() {
 			m.comp.tailTimer()
 			m.comp.send()
