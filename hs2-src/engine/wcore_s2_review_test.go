@@ -216,3 +216,44 @@ func TestWcoreS2UndoLines(t *testing.T) {
 		t.Errorf("trace wcQcapTTL on: ooo_ro %v, want 0 (expired)", tl.OooRo)
 	}
 }
+
+// 1b (round 2), the reviewer reproduction as written.
+// Reviewer (round 2): a record showing a real loss that lands between
+// evaluations just BEFORE a cut for holes is never judged (the first
+// evaluation after a cut is DRAIN -> toHold, no lossVerdict), and judgeCut saw
+// it with no reaction pending. The next clean record takes the cut back: B
+// returns to the budget the exit just reported 5% resends at, with no cap.
+func TestRevLossRecordBeforeCut(t *testing.T) {
+	for _, after := range []bool{false, true} {
+		c := wtS2Edge()
+		c.lastAt = wtT0
+		loss := map[int]wcSnd{0: wtS2Rec(5000)} // 5% resent, no queue
+		var at time.Time
+		if !after {
+			at = wtS2Wakes(c, wtT0, [][2]uint64{{1000, 0}}, loss)           // the record at t0+100
+			at = wtS2Wakes(c, at, [][2]uint64{{1000, 0}, {1000, 500}}, nil) // the cut at t0+300
+		} else {
+			at = wtS2Wakes(c, wtT0, [][2]uint64{{1000, 0}, {1000, 0}, {1000, 500}}, nil) // the cut at t0+300
+		}
+		cutCap := c.bCap
+		// the evaluation the cut scheduled (t0+500), with the record if it came after
+		at = at.Add(200 * time.Millisecond)
+		in := wtRedIn(at, 200*time.Millisecond, wcSnd{})
+		if after {
+			in.snd = wtS2Rec(5000)
+		}
+		c.step(in)
+		t.Logf("after=%v eval at +%dms: state %v B %.1f MiB bCap %.2f (cut's %.2f) prov %v",
+			after, at.Sub(wtT0).Milliseconds(), c.state, float64(c.B)/wtMiB, float64(c.bCap)/wtMiB, float64(cutCap)/wtMiB, !c.prov.at.IsZero())
+		// B at the floor, the losses stop: the next record (2 s on) is clean
+		wakes := make([][2]uint64, 18)
+		for i := range wakes {
+			wakes[i] = [2]uint64{1000, 0}
+		}
+		wtS2Wakes(c, at, wakes, map[int]wcSnd{17: wtS2Rec(0)})
+		t.Logf("after=%v clean record 2 s on: undo %d B %.1f MiB bCap %.2f MiB state %v", after, c.cnt.undo, float64(c.B)/wtMiB, float64(c.bCap)/wtMiB, c.state)
+		if !after && c.cnt.undo > 0 && c.B >= 8*wtMiB {
+			t.Errorf("a record of 5%% resent at 8 MiB came 200 ms before the cut: the cut was taken back to 8 MiB (cap %.2f MiB); the loss it showed was never judged", float64(c.bCap)/wtMiB)
+		}
+	}
+}
