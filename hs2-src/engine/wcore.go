@@ -124,6 +124,10 @@ type wcore struct {
 	// latest a probe that paid or a cap gone stale eased them: undoCut takes
 	// them back to the easier of the two (undoCut)
 	keptAt, relaxAt time.Time
+	// lossRecAt: a record of the exit that showed a loss worth a verdict with
+	// no reaction to holes pending (judgeCut), until an evaluation judged it:
+	// a reaction to holes meanwhile is that loss's and stands (lossUnjudged)
+	lossRecAt time.Time
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -1004,6 +1008,9 @@ func (c *wcore) step(in wcIn) wcOut {
 	p, prov := c.provSnap(now, c.state != wcOff && c.oooLoss(m) && c.sndJudges(now) &&
 		!(m.sndOK && c.sndRef.past(m.snd, c.sndAbs(m))))
 	nLoss, test := c.cnt.drainLoss, c.lossTest
+	// (the interval's record is judged here: lossUnjudged)
+	judging := m.sndOK && !c.sndStale(m.sndAt) && len(m.f) > 0 && !m.idleF &&
+		(c.state == wcStartup || c.state == wcProbe || c.state == wcHold && !c.settling)
 	switch {
 	case c.state == wcOff:
 		c.off(in, m, &ev)
@@ -1051,6 +1058,9 @@ func (c *wcore) step(in wcIn) wcOut {
 	// to holes, keptAt, TestRevUndoWipesSndLossTestCap)
 	if prov && (c.cnt.drainLoss > nLoss || c.lossTest == wcSrcOoo && test != wcSrcOoo || c.bCapAt.Equal(now) && !c.keptAt.Equal(now)) {
 		c.provNote(p, now, m.holeMax)
+	}
+	if judging {
+		c.lossRecAt = time.Time{}
 	}
 	if c.peer != nil {
 		c.peer.noteCore(c, now, c.state != wcOff && len(m.f) > 0, c.rAvg)
@@ -1215,7 +1225,14 @@ type wcProv struct {
 
 // provSnap is what the core has before a reaction to holes alone that a
 // record will judge (ok: want); the first one's is kept (provNote).
+//
+// A record that showed a loss worth a verdict that nothing has judged yet
+// (lossUnjudged) makes the reaction no question for the next record: the
+// sender confirmed the loss already, and the reaction stands.
 func (c *wcore) provSnap(now time.Time, want bool) (wcProv, bool) {
+	if want && c.lossUnjudged(now) {
+		want = false
+	}
 	if !want || !c.prov.at.IsZero() {
 		return wcProv{}, want
 	}
@@ -1223,6 +1240,32 @@ func (c *wcore) provSnap(now time.Time, want bool) (wcProv, bool) {
 		bCap: c.bCap, bCapAt: c.bCapAt, qcap: c.qcap, qcapAt: c.qcapAt, qcapOK: c.qcapOK,
 		backoff: c.backoff, pathFull: c.pathFull, rhat: append([]wcRate(nil), c.rhat...),
 		fullR: c.fullR, prevR: c.prevR, prevB: c.prevB, flat: c.flat, gear: c.gear}, true
+}
+
+// lossUnjudged: a record of the exit showed a loss worth a verdict a record
+// span or less ago with no reaction to holes pending (lossRecAt), about the
+// budget in force (its span after the latest change, and no change since,
+// even at its own wake: chgAt), and nothing has judged it yet: no
+// evaluation in STARTUP, PROBE or a measured HOLD with the record not stale
+// (judging, which clears it), and no verdict on loss of it (no loss point,
+// Q_cap or resend-based loss test set at it or after).
+//
+// Such a record that came with no reaction pending was judged by nothing
+// when a cut for holes followed it: the evaluation after a cut is DRAIN's
+// (toHold, no verdict) and the record's span began before the cut (sndStale).
+// The next clean record took the cut back, B to the budget the exit had just
+// reported 5% resent at, with no cap, where the same record a little after
+// the cut kept it (TestRevLossRecordBeforeCut). One an evaluation did judge
+// (its loss point, a policer's) is no confirmation of later holes: a burst of
+// reordering after it is taken back as any (TestWcoreS2RedWeakAfterVerdict).
+// And one from before a change is about a budget that is no more: a record
+// of RACK's resends before its first DSACK that came in OFF, on the field's
+// reordering, held STARTUP's first verdict on holes for good and took the
+// harness's 1000/72 from 717 to 619 Mbit/s.
+func (c *wcore) lossUnjudged(now time.Time) bool {
+	r := c.lossRecAt
+	return !r.IsZero() && now.Sub(r) < wcSndSpan && c.chgAt.Before(r) && c.bCapAt.Before(r) && c.qcapAt.Before(r) &&
+		!(c.lossTest == wcSrcSnd && !c.lossTestAt.Before(r))
 }
 
 // provNote notes a reaction to holes alone (p: provSnap's, before it) that
@@ -1286,6 +1329,11 @@ func (c *wcore) judgeCut(in wcIn) []wcEvent {
 		small = loss && c.sndSmall(s)
 		if loss && !small {
 			c.weak = wcProv{} // a loss worth a verdict: what came since is its
+			if c.prov.at.IsZero() && !c.sndStale(now) {
+				// (nothing pending, and about the budget in force: the next
+				// evaluation is to judge it)
+				c.lossRecAt = now
+			}
 		}
 	}
 	if !c.weak.at.IsZero() && now.Sub(c.weak.last) >= wcWeakTTL {
