@@ -12,7 +12,7 @@ congestion and real user traffic. Both servers must run the release build
 - Previous release (rollback target): binary build `ef2dffdbbb87` (Phases Z,
   Z2 and Z3; built from `ef2dffd`, the binary carried by commit `c9825f2` on
   the work branch `claude/smux-buffer-constants-fv9bu8`) — the build your
-  servers may run now. Before it `0812bc9` on main (binary build
+  servers may run now. Before it `0812bc9`, main until this release (binary build
   `da621f5db2bb`, Phases Y and CA), and `9b74b3c` (binary build
   `2b2e2c8c3f86`, Phase W).
 
@@ -475,8 +475,10 @@ This release: Phase Z5 step 1 (one connection past ~100 Mbit/s: the window
 core for the Iran server's downloads, the window pool, the 96-byte stats
 record and the Kharej server's pacing net; V16 above; `hs2 version` shows its
 build id), on top of Phases Z, Z2 and Z3 (V15). Built on the work branch
-`claude/smux-buffer-constants-fv9bu8`: install it on a test pair with
-`HS2_REPO_RAW` pinned to the commit that carries this binary. Everything in
+`claude/smux-buffer-constants-fv9bu8` and, at the owner's request, on `main`
+too (fast-forwarded from `0812bc9` on 2026-10-25): a plain install or an
+Upgrade in the menu gets it; to pin this exact build, set `HS2_REPO_RAW` to
+the commit that carries this binary. Everything in
 these phases was measured on loopback rigs and simulators (BBR, Linux 6.x),
 not yet across the real Iran–abroad path. The previous release, binary build
 `ef2dffdbbb87` (Phases Z, Z2 and Z3; commit `c9825f2`), is the rollback
