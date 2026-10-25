@@ -83,6 +83,12 @@ func newWedgeRig(t *testing.T, manual bool) *wedgeRig {
 // app's reading loop (nil: an app that never reads).
 func (r *wedgeRig) open(read func(u *wUser)) *wUser {
 	r.t.Helper()
+	return r.openPush(read, pushForever)
+}
+
+// openPush is open with push as what the exit side does with the stream.
+func (r *wedgeRig) openPush(read func(u *wUser), push func(w io.Writer)) *wUser {
+	r.t.Helper()
 	st, err := r.edge.OpenStream()
 	if err != nil {
 		r.t.Fatal(err)
@@ -96,7 +102,7 @@ func (r *wedgeRig) open(read func(u *wUser)) *wUser {
 	}
 	var one [1]byte
 	io.ReadFull(xs, one[:])
-	go pushForever(xs)
+	go push(xs)
 	local, app := net.Pipe()
 	u := &wUser{app: app, ended: make(chan struct{})}
 	go func() { relayStream(local, st, r.g); close(u.ended) }()
@@ -126,6 +132,57 @@ func readAt(rate int) func(u *wUser) {
 			if rate > 0 {
 				time.Sleep(time.Duration(n) * time.Second / time.Duration(rate))
 			}
+		}
+	}
+}
+
+// openHeld opens n users whose apps never read, each seen in a write (its
+// relay holding data it cannot hand over) before any of them fills the
+// link's buffer: more of them than the buffer holds, one opened after it
+// filled would get its first data only once the guard released the others,
+// on a link that then never fills again.
+func (r *wedgeRig) openHeld(n int) []*wUser {
+	r.t.Helper()
+	release := make(chan struct{})
+	r.t.Cleanup(func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	})
+	held := func(w io.Writer) {
+		w.Write(make([]byte, 4<<10))
+		<-release
+		pushForever(w)
+	}
+	var users []*wUser
+	for i := 0; i < n; i++ {
+		users = append(users, r.openPush(nil, held))
+		r.waitWriting(i + 1)
+	}
+	close(release)
+	return users
+}
+
+// waitWriting waits until n of the link's relays are in a local write
+// (holding data their app does not take).
+func (r *wedgeRig) waitWriting(n int) {
+	r.t.Helper()
+	for end := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		r.g.mu.Lock()
+		w := 0
+		for rw := range r.g.relays {
+			if rw.wseq.Load()&1 == 1 {
+				w++
+			}
+		}
+		r.g.mu.Unlock()
+		if w >= n {
+			return
+		}
+		if time.Now().After(end) {
+			r.t.Fatalf("%d relays in a write after 5 s, want %d", w, n)
 		}
 	}
 }
@@ -166,10 +223,7 @@ func smallSessionBuffer(t *testing.T) {
 func TestWedgeGuardReleasesStuckReaders(t *testing.T) {
 	smallSessionBuffer(t)
 	r := newWedgeRig(t, true)
-	var stuck []*wUser
-	for i := 0; i < 5; i++ {
-		stuck = append(stuck, r.open(nil))
-	}
+	stuck := r.openHeld(5)
 	healthy := r.open(readAt(0))
 	killed := 0
 	for i := 0; i < 15 && killed < len(stuck); i++ {
@@ -232,10 +286,7 @@ func TestWedgeGuardTricklingReaderDoesNotHideStall(t *testing.T) {
 	}
 	smallSessionBuffer(t)
 	r := newWedgeRig(t, false)
-	var stuck []*wUser
-	for i := 0; i < 6; i++ {
-		stuck = append(stuck, r.open(nil))
-	}
+	stuck := r.openHeld(6)
 	slow := r.open(readAt(16 << 10))
 	fast := r.open(readAt(0))
 	start := time.Now()

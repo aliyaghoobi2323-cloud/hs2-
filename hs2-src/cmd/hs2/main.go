@@ -267,10 +267,46 @@ func applyTuning() {
 	num("HS2_TUNE_NOTSENT", &tlscarrier.NotSentLowat)
 	num("HS2_TUNE_SMUX_FRAME", &engine.SmuxFrameSize)
 	num("HS2_TUNE_SMUX_STREAMBUF", &engine.SmuxStreamBuffer)
+	num("HS2_TUNE_SMUX_NEEDBUF", &engine.SmuxNeedStreamBuffer)
+	num("HS2_TUNE_SMUX_POOL", &engine.SmuxWindowPool)
 	num("HS2_TUNE_SMUX_SESSBUF", &engine.SmuxSessionBuffer)
 	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
 	num("HS2_TUNE_SENDGATE", &engine.SendGateRate)
+	// The window core (engine/wcore_run.go): 0 turns it off (the field safety
+	// switch); the queue targets in ms; stage 2; and, lab only, the exit's
+	// core for uploads (off until step 3), a trace file and fixed windows in
+	// place of the controller.
+	num("HS2_TUNE_WCORE", &engine.Wcore)
+	num("HS2_TUNE_WCORE_UPLOAD", &engine.WcoreUpload)
+	num("HS2_TUNE_WCORE_QTARGET", &engine.WcoreQTarget)
+	num("HS2_TUNE_WCORE_PROBEQ", &engine.WcoreProbeQ)
+	num("HS2_TUNE_WCORE_STAGE", &engine.WcoreStage)
+	num("HS2_TUNE_WCORE_FIXEDWIN", &engine.WcoreFixedWin)
+	if v := os.Getenv("HS2_TUNE_WCORE_TRACE"); v != "" {
+		engine.WcoreTrace = v
+		log.Printf("tuning: HS2_TUNE_WCORE_TRACE=%q", v)
+	}
+	// lab experiments, off by default: the sender's pacing capped at this
+	// many times its own delivery rate, and B held where a burst after the
+	// sender's PROBE_RTT fits the queue learned (share of the window that
+	// becomes queue)
+	flt := func(name string, dst *float64) {
+		if v := os.Getenv(name); v != "" {
+			if f, err := strconv.ParseFloat(v, 64); err == nil {
+				*dst = f
+				log.Printf("tuning: %s=%g", name, f)
+			}
+		}
+	}
+	flt("HS2_TUNE_WCORE_PACECAP", &engine.WcorePaceCap)
+	flt("HS2_TUNE_WCORE_BURST", &engine.WcoreBurstShare)
+	// The exit's pacing net (engine/pacenet.go), on by default: 0 turns it
+	// off; the cap's factor over the socket's delivery rate, and the resend
+	// share that engages it (0.02: 2%).
+	num("HS2_TUNE_PACENET", &engine.PaceNet)
+	flt("HS2_TUNE_PACENET_K", &engine.PaceNetK)
+	flt("HS2_TUNE_PACENET_LOSS", &engine.PaceNetLoss)
 	if engine.SmuxMinStreamBuffer > 0 && engine.SmuxStreamLagTarget > 0 && engine.SmuxAdaptiveWindow() == 0 {
 		log.Printf("tuning: smux adaptive stream window off — no room for it (two %d B frames) in a %d B stream window", engine.SmuxFrameSize, engine.SmuxStreamBuffer)
 	}
@@ -329,6 +365,9 @@ func runCmd(args []string) {
 	// Whatever path runCmd leaves by, no icmp reply rule outlives the daemon
 	// (the listeners release theirs on close; this catches the rest).
 	defer encap.ReleaseAllEchoGuards()
+	if ramMB, _ := detectHW(); ramMB > 0 {
+		engine.SmuxWindowPool = tune.WindowPoolMiB(ramMB) << 20 // what the auto ceiling counted on
+	}
 	applyTuning()
 	setMemoryLimit()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)

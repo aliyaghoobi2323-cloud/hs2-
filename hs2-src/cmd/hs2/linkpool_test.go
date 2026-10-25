@@ -36,7 +36,7 @@ func TestLinkCeilingAutoFollowsHardware(t *testing.T) {
 		ram, cpu int
 		want     int
 		profile  string
-	}{{lowRAM, lowCPU, 32, "low"}, {medRAM, medCPU, 48, "medium"}, {highRAM, highCPU, 170, "high"},
+	}{{lowRAM, lowCPU, 32, "low"}, {medRAM, medCPU, 48, "medium"}, {highRAM, highCPU, 162, "high"},
 		{17408, 20, 300, "high"}, {22528, 12, 300, "high"}} { // the production pair
 		pinHW(t, c.ram, c.cpu)
 		for _, cfg := range []string{`{"max_links": 0}`, `{"mode":"dial","max_links":0,"min_links":2}`} {
@@ -110,7 +110,7 @@ func TestLinkEnvelopeMinAboveAuto(t *testing.T) {
 func TestCeilingLogLine(t *testing.T) {
 	pinHW(t, highRAM, highCPU)
 	auto := ceilingLogLine(autoFC(fileConfig{Carrier: "mtcp"}))
-	if !strings.Contains(auto, "ceiling 170 links") || !strings.Contains(auto, "auto from this server's hardware (8.0 GB RAM, 4 cores: one link per 48 MB of RAM") {
+	if !strings.Contains(auto, "ceiling 162 links") || !strings.Contains(auto, "auto from this server's hardware (8.0 GB RAM, 4 cores: one link per 48 MB of RAM after 384 MB for the window pool") {
 		t.Fatalf("auto startup line: %q", auto)
 	}
 	fixed := ceilingLogLine(fileConfig{Carrier: "mtcp", MaxLinks: 40})
@@ -267,11 +267,11 @@ func TestDoctorLinkPool(t *testing.T) {
 
 	// auto, daemon not running: ok.
 	pinHW(t, highRAM, highCPU)
-	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "auto: 170 links") {
+	if d := doctorLinkPool(iranRev, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "auto: 162 links") {
 		t.Fatalf("auto ok: %v", d.lines)
 	}
 	// auto, the daemon started on a high box but RAM is now low: restart WARN.
-	writeLive(t, cfg, liveStatus{CfgMax: 170})
+	writeLive(t, cfg, liveStatus{CfgMax: 162})
 	pinHW(t, lowRAM, lowCPU)
 	if d := doctorLinkPool(iranRev, cfg); d.warns != 1 || !strings.Contains(strings.Join(d.lines, ""), "restart the tunnel to apply the lower ceiling") {
 		t.Fatalf("auto shrunk under a running daemon: %v", d.lines)
@@ -294,7 +294,7 @@ func TestDoctorLinkPool(t *testing.T) {
 	pinHW(t, highRAM, highCPU)
 	fixed32 := iranRev
 	fixed32.MaxLinks, fixed32.maxLinksSet = 32, true
-	if d := doctorLinkPool(fixed32, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "could use up to 170") {
+	if d := doctorLinkPool(fixed32, cfg); d.warns != 0 || !strings.Contains(strings.Join(d.lines, ""), "could use up to 162") {
 		t.Fatalf("fixed 32 on a high box: %v", d.lines)
 	}
 
@@ -343,7 +343,7 @@ func TestStatusFileCarriesCeiling(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if ls.CfgMax != 170 || ls.CeilMode != ceilAuto || ls.PeerMax != 48 || ls.EffMax != 48 || ls.LimitBy != "kharej" {
+	if ls.CfgMax != 162 || ls.CeilMode != ceilAuto || ls.PeerMax != 48 || ls.EffMax != 48 || ls.LimitBy != "kharej" {
 		t.Fatalf("status ceiling fields: %+v", ls)
 	}
 	if !strings.Contains(ls.CeilingText, "limited by the Kharej server") {

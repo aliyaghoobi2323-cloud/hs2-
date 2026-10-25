@@ -84,6 +84,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		logf = func(string, ...any) {}
 	}
 	setGuardLog(cfg.Log)
+	setWcoreLog(cfg.Log)
 	var l3 *l3Set
 	if cfg.TUN != nil {
 		l3 = &l3Set{}
@@ -109,6 +110,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			// the edge's ceiling and user ports as reported by the links up NOW
 			st := PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max(), Routes: cfg.peers.edgeRoutes()}
 			cfg.traffic.fill(&st) // this exit's own user connections and throughput
+			wcores.fillStats(&st)
 			return st
 		})
 	}
@@ -151,7 +153,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			}
 			sess.Close()
 			car.Close()
-			logf("link down from %s: %s (now %d)", conn.RemoteAddr(), sessionEndReason(why, downErr), links.Add(-1))
+			logf("link down from %s: %s (now %d)%s", conn.RemoteAddr(), sessionEndReason(why, downErr), links.Add(-1), wcoreEndNote(mtr))
 		})
 	}
 }

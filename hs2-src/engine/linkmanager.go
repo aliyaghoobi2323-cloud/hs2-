@@ -145,6 +145,10 @@ type LinkManager struct {
 	lastSampleAt time.Time
 	target       atomic.Int32 // SERVING links wanted (published to the reverse exit)
 	pin          atomic.Int32 // > 0: overrides the autopilot (tests only)
+	// apProbing: the autopilot is measuring whether more links help (a
+	// probe or its confirmation); the links' window cores start no growth
+	// of their own meanwhile (WINDOW_CORE §6.3). Published each tick.
+	apProbing atomic.Bool
 	// targetDropAt is when the target last went down; the reverse edge closes a
 	// retiring link only once the exit has had time to learn the lower target,
 	// so it retires that slot instead of redialing it.
@@ -290,10 +294,13 @@ type managedLink struct {
 	poor         bool      // clearly worse than the pool's other links (quality.go)
 	rates        [5]float64
 	doms         [3]float64
+	growns       [3]float64 // grown at the same ticks as doms
 	nSamples     int
 	rate         float64 // bytes/s this tick, both directions
 	rate10       float64 // mean rate over the last 5 ticks
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
+	grown        float64 // of rate, what its window core's grown windows carry (grownRate)
+	grownSus     float64 // sustained less the least that windows within NeedStreamBuffer carried over the same ticks
 	flowing      int     // user streams really moving data
 	open         int     // user streams open
 	recent       int     // user streams that moved a byte within drainIdle
@@ -395,7 +402,12 @@ const suspectAfter = 12 * time.Second
 
 // newManaged wraps a Link with a managed entry, capturing its meter (if any).
 func (m *LinkManager) newManaged(l Link, id int, now time.Time) *managedLink {
-	return &managedLink{link: l, id: id, born: now, servingSince: now, mtr: linkMeterOf(l)}
+	ml := &managedLink{link: l, id: id, born: now, servingSince: now, mtr: linkMeterOf(l)}
+	if ml.mtr != nil && ml.mtr.wc != nil {
+		ml.mtr.wc.setName(fmt.Sprintf("link %d", id))
+		ml.mtr.wc.ap.Store(&m.apProbing)
+	}
+	return ml
 }
 
 func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, ...any)) *LinkManager {
@@ -619,20 +631,31 @@ func linkDownReason(l Link) string {
 
 // linkStallNote says, for the log line of a link's end (down, retired, or
 // closed while degraded), how often its receive buffer ran full while it was
-// up (every user on it stalled until a reader made room) and how often a
-// reader that fell behind was braked to keep it from filling (smux
-// Config.MinStreamBuffer); "" when neither happened, or for a link without a
-// smux session of its own.
+// up (every user on it stalled until a reader made room, unless the buffer
+// grew from the window pool instead: SmuxWindowPool), how often a reader
+// that fell behind was braked to keep it from filling (smux
+// Config.MinStreamBuffer) and what its window core did (wcoreNote); "" when
+// none of that happened, or for a link without a smux session of its own.
 func linkStallNote(l Link) string {
 	ml, ok := l.(*mtcpLink)
 	if !ok || ml.sess == nil {
 		return ""
 	}
-	parks, brakes := ml.sess.Parks(), ml.sess.Brakes()
-	if parks == 0 && brakes == 0 {
+	var parts []string
+	if parks, brakes := ml.sess.Parks(), ml.sess.Brakes(); parks > 0 || brakes > 0 {
+		grew := ""
+		if b := ml.sess.Borrows(); b > 0 {
+			grew = fmt.Sprintf(", %d of them grown from the window pool instead", b)
+		}
+		parts = append(parts, fmt.Sprintf("its receive buffer ran full %d time(s)%s; readers that fell behind braked %d time(s)", parks, grew, brakes))
+	}
+	if n := wcoreNote(ml.mtr); n != "" {
+		parts = append(parts, n)
+	}
+	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (while up: its receive buffer ran full %d time(s); readers that fell behind braked %d time(s))", parks, brakes)
+	return " (while up: " + strings.Join(parts, "; ") + ")"
 }
 
 // Run brings the pool up and then maintains it: rebuilds dead links, heals
@@ -686,6 +709,7 @@ func (m *LinkManager) decideTarget() int {
 	if p := int(m.pin.Load()); p > 0 {
 		m.setTarget(p)
 		m.dec = apDecision{target: p, phase: apSteady, reason: "pinned"}
+		m.apProbing.Store(false)
 		return p
 	}
 	s := m.sample
@@ -693,6 +717,7 @@ func (m *LinkManager) decideTarget() int {
 		s = apSample{now: m.now(), growable: true}
 	}
 	d := m.ap.decide(s)
+	m.apProbing.Store(m.ap.pr != nil || m.ap.confirm.active)
 	m.setTarget(d.target)
 	m.dec = d
 	if d.note != "" {
@@ -2027,19 +2052,35 @@ func (m *LinkManager) sampleHealth() {
 		ml.prevBusy, ml.prevRwnd = o.ts.busyUs, o.ts.rwndUs
 		ml.prevSegsOut = o.ts.segsOut
 
-		// Throughput.
+		// Throughput, and what of it windows past NeedStreamBuffer carry
+		// (the autopilot leaves that out: wcore_run.go grownRate).
 		ml.rate = float64(dRd+dWr) / secs
+		ml.grown = min(wcGrownOf(ml.mtr), ml.rate)
 		dom := float64(max(dRd, dWr)) / secs
 		ml.rates[ml.nSamples%len(ml.rates)] = ml.rate
 		ml.doms[ml.nSamples%len(ml.doms)] = dom
+		ml.growns[ml.nSamples%len(ml.growns)] = ml.grown
 		ml.nSamples++
 		ml.rate10 = mean(ml.rates[:min(ml.nSamples, len(ml.rates))])
-		ml.sustained = 0
+		ml.sustained, ml.grownSus = 0, 0
 		if ml.nSamples >= len(ml.doms) {
 			ml.sustained = ml.doms[0]
 			for _, d := range ml.doms[1:] {
 				ml.sustained = min(ml.sustained, d)
 			}
+			// the capacity for ordinary connections is the least that
+			// windows within NeedStreamBuffer carried over these ticks, each
+			// tick's rate less its own grown: the least rate less the most
+			// grown took the core's swings for a slower link (a tick of a
+			// drain and a tick of a probe: 250 − 232 = 18 Mbit/s where the
+			// windows of need carried 168), and the pool for that many more
+			// links (red team, round 3, finding 3: 4 links serving against 2
+			// for the same load, 6 against 2 in skmany)
+			base := math.Inf(1)
+			for k, d := range ml.doms {
+				base = min(base, max(0, d-ml.growns[k]))
+			}
+			ml.grownSus = max(0, ml.sustained-base)
 		}
 		if ml.goodput == 0 {
 			ml.goodput = ml.rate
@@ -2156,6 +2197,7 @@ func (m *LinkManager) sampleHealth() {
 			}
 		}
 		s.G += ml.rate
+		s.grown += ml.grown
 		s.flowing += ml.flowing
 		s.links = append(s.links, ml.apLink())
 	}
@@ -2327,7 +2369,7 @@ func (ml *managedLink) apLink() apLink {
 	return apLink{
 		id: ml.id, serving: ml.serving(), retiring: ml.retiring && ml.link.Alive(),
 		servingSince: ml.servingSince, pressed: ml.pressed,
-		rate: ml.rate, rate10: ml.rate10, sustained: ml.sustained,
+		rate: ml.rate, rate10: ml.rate10, sustained: ml.sustained, grown: ml.grown, grownSus: ml.grownSus,
 		flowing: ml.flowing, open: ml.open,
 	}
 }
@@ -2479,6 +2521,11 @@ type PoolStats struct {
 	Min, Max int     // envelope
 	Users    int     // open user connections
 	MbitPerS float64 // aggregate throughput, Mbit/s
+	// The window core (wcore_run.go): this server's streams with a window
+	// past NeedStreamBuffer now, what those windows are, and the window pool.
+	FastConns  int
+	FastWinMiB float64
+	PoolMiB    int
 	// Counted: Users, Flowing, MbitPerS and PeakMbit are this side's own
 	// measurement (every side of this hs2 counts them; false only from code
 	// that does not, so a display can say where the numbers live instead of
@@ -2559,9 +2606,10 @@ func (m *LinkManager) publishStats() {
 	st := PoolStats{
 		Min: m.min, Max: m.max,
 		MbitPerS: mbitps(m.sample.G), Phase: m.dec.phase.String(), Reason: m.dec.reason,
-		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(max(m.ap.gPeak, m.sample.G)),
+		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(max(m.ap.gShown, m.sample.G)),
 		ExitStats: m.exitStats,
 	}
+	wcores.fillStats(&st)
 	if m.pin.Load() == 0 && m.ap.next.After(now) && m.dec.phase == apHolding {
 		st.NextProbeS = int(m.ap.next.Sub(now).Seconds() + 0.5)
 	}

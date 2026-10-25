@@ -79,7 +79,8 @@ type autopilot struct {
 	phase  apPhase
 	reason string
 	cCap   float64 // last per-link capacity estimate, bytes/s (0 = unknown)
-	gPeak  float64 // last 60 s peak aggregate, bytes/s
+	gPeak  float64 // last 60 s peak aggregate, bytes/s, less what grown windows carry (apSample.grown)
+	gShown float64 // ... with them (display)
 }
 
 // apTunables holds every clock and threshold, so tests can shorten them.
@@ -201,8 +202,20 @@ type apLink struct {
 	rate         float64 // bytes/s both directions, this tick
 	rate10       float64 // mean rate over the last 5 ticks
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
-	flowing      int     // user streams really moving data
-	open         int     // user streams open
+	grown        float64 // of rate, what its window core's windows past NeedStreamBuffer carry
+	// grownSus: sustained less the least that windows within
+	// NeedStreamBuffer carried over the ticks sustained is taken over (each
+	// tick's rate less its own grown). The capacity for ordinary connections
+	// is sustained less grownSus: with grown only the latest tick's, a tick
+	// whose core read little grown (the sender's PROBE_RTT, a drain) took the
+	// whole rate as capacity for capWindow (red team, round 1: 50 → 300
+	// Mbit/s, the pool sized 6× too small); with the most grown of the ticks
+	// against the least rate, the core's swings between a probe and a drain
+	// read as a link of a few Mbit/s and sized the pool too large (red team,
+	// round 3, finding 3)
+	grownSus float64
+	flowing  int // user streams really moving data
+	open     int // user streams open
 }
 
 // apSample is one health tick's measurements.
@@ -210,6 +223,7 @@ type apSample struct {
 	now      time.Time
 	links    []apLink
 	G        float64 // aggregate bytes/s over every live link
+	grown    float64 // of G, what windows past NeedStreamBuffer carry (grownRate): no reason for more links
 	flowing  int     // flowing user streams over every link
 	open     int     // open user connections
 	growable bool    // false: the peer cannot add links (reverse exit without pool control)
@@ -225,6 +239,7 @@ type apDecision struct {
 
 type apTick struct {
 	g       float64
+	gn      float64 // g less grown: what the pool is sized by
 	flowing int
 	p, s    int
 	short   bool
@@ -357,8 +372,8 @@ func (a *autopilot) decide(s apSample) apDecision {
 			S++
 			if l.pressed {
 				P++
-				if l.sustained > 0 {
-					a.noteCap(now, l.id, l.sustained)
+				if v := l.sustained - l.grownSus; v > 0 {
+					a.noteCap(now, l.id, v)
 				}
 			}
 		case l.retiring:
@@ -366,7 +381,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 		}
 	}
 	shortTick := P >= 1 && S-P < spare(P)
-	a.hist = append(a.hist, apTick{g: s.G, flowing: s.flowing, p: P, s: S, short: shortTick})
+	a.hist = append(a.hist, apTick{g: s.G, gn: max(s.G-s.grown, 0), flowing: s.flowing, p: P, s: S, short: shortTick})
 	if len(a.hist) > t.histTicks {
 		a.hist = a.hist[len(a.hist)-t.histTicks:]
 	}
@@ -386,8 +401,8 @@ func (a *autopilot) decide(s apSample) apDecision {
 		}
 	}
 	fl60, p60 := 0, 0
-	gPeak := 0.0
-	prevG := -1.0
+	gPeak, gShown := 0.0, 0.0
+	prevG, prevShown := -1.0, -1.0
 	for _, h := range a.hist {
 		if h.flowing > fl60 {
 			fl60 = h.flowing
@@ -398,14 +413,19 @@ func (a *autopilot) decide(s apSample) apDecision {
 		if h.short {
 			shortIn60 = true
 		}
-		g := h.g
+		g := h.gn
 		if prevG >= 0 {
-			g = (h.g + prevG) / 2 // a single-tick spike is not a peak
+			g = (h.gn + prevG) / 2 // a single-tick spike is not a peak
 		}
 		if g > gPeak {
 			gPeak = g
 		}
-		prevG = h.g
+		prevG = h.gn
+		g = h.g
+		if prevShown >= 0 {
+			g = (h.g + prevShown) / 2
+		}
+		gShown, prevShown = max(gShown, g), h.g
 	}
 	fGrow := ceilDiv(fl5, a.perLink)
 	fHold := ceilDiv(fl60, a.perLink)
@@ -440,7 +460,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 		need = fHold
 	}
 	H := a.clamp(need)
-	a.cCap, a.gPeak = cCap, gPeak
+	a.cCap, a.gPeak, a.gShown = cCap, gPeak, gShown
 
 	// Backoff resets when demand clearly and steadily outgrew the last ceiling
 	// (re-check soon) or long after the last failure. "Steadily": over the last

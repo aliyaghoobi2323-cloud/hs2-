@@ -258,24 +258,49 @@ var (
 	// how long a small reply waits behind a bulk transfer sharing the link:
 	// the one frame being written (then the socket's unsent bytes).
 	SmuxFrameSize = 16 << 10
-	// SmuxStreamBuffer is the per-stream receive window: how far one stream
-	// may run ahead of its reader. Flow control keeps a slow reader from
-	// piling data into the link.
-	SmuxStreamBuffer = 2 << 20
-	// SmuxSessionBuffer bounds all streams of one link together.
+	// SmuxStreamBuffer is the largest per-stream receive window: how far one
+	// stream may run ahead of its reader. Flow control keeps a slow reader
+	// from piling data into the link. A stream moves at most about its
+	// window per round trip; past SmuxNeedStreamBuffer only the window core
+	// grows it (third_party/smux core.go): 16 MiB carries one connection at
+	// ~650 Mbit/s at 100 ms, ~430 at 150 ms, ~220 at 300 ms.
+	SmuxStreamBuffer = 16 << 20
+	// SmuxNeedStreamBuffer is as far as a stream's window grows on its
+	// reader keeping up (2 MiB: ~90 Mbit/s at 150 ms). Past it, up to
+	// SmuxStreamBuffer, it grows only as far as the window core's ceiling
+	// for the stream allows (none: it stays here), and only by what the
+	// process's SmuxWindowPool has left; the link's SmuxSessionBuffer grows
+	// by just as much while the stream holds it (third_party/smux, pool.go).
+	// So the other users of its link keep the room they would have if it had
+	// stayed at SmuxNeedStreamBuffer.
+	SmuxNeedStreamBuffer = 2 << 20
+	// SmuxSessionBuffer bounds all streams of one link together (past it
+	// only by what windows past SmuxNeedStreamBuffer hold from the pool, and
+	// what a link whose buffer ran full borrowed from it).
 	SmuxSessionBuffer = 8 << 20
+	// SmuxWindowPool is what the windows past SmuxNeedStreamBuffer of all
+	// of this process's links may hold at once, in bytes, with what links
+	// whose buffer ran full borrowed (up to twice SmuxSessionBuffer more each,
+	// until it is free again: what was in flight when a dozen readers
+	// slowed down at once stalled such a link for seconds): what the links'
+	// buffers may hold past SmuxSessionBuffer in all. The server's RAM sizes
+	// it (tune.WindowPoolMiB, set at start; each server's own, for the
+	// direction it receives); 0 keeps every window within
+	// SmuxNeedStreamBuffer and every buffer within SmuxSessionBuffer.
+	SmuxWindowPool = 32 << 20
 	// SmuxMinStreamBuffer and SmuxStreamLagTarget turn on smux's adaptive
 	// stream window: a stream whose reader leaves more than
 	// SmuxStreamLagTarget unread is offered a smaller window, down to
 	// SmuxMinStreamBuffer, and one whose reader keeps up gets
-	// SmuxStreamBuffer back. A slow-but-alive reader then holds a few hundred
-	// KiB of SmuxSessionBuffer instead of up to SmuxStreamBuffer, so a handful
-	// of them can no longer empty the bucket and stall every other stream on
-	// the link (which the wedge guard cannot see: their writes complete).
+	// SmuxNeedStreamBuffer back. A slow-but-alive reader then holds a few
+	// hundred KiB of SmuxSessionBuffer instead of up to SmuxNeedStreamBuffer,
+	// so a handful of them can no longer empty the bucket and stall every
+	// other stream on the link (which the wedge guard cannot see: their
+	// writes complete).
 	// 0 keeps the fixed window. A new stream whose reader keeps up with
 	// the 256 KiB the exit starts with gets at its first resize the larger
 	// of twice that and what it reads in a second at its pace
-	// (SmuxStreamBuffer for a fast transfer, which so starts as with the
+	// (SmuxNeedStreamBuffer for a fast transfer, which so starts as with the
 	// fixed window), and a stream whose reader falls behind while the other
 	// streams hold a third of SmuxSessionBuffer has its window halved frame
 	// by frame at once rather than at its next update (third_party/smux,
@@ -300,6 +325,11 @@ func SmuxAdaptiveWindow() (min int) {
 	return min
 }
 
+// windowPool is the process's smux.WindowPool, of SmuxWindowPool bytes as
+// it is when the first link comes up (at most 1 GiB: a session's buffer is
+// counted in an int32).
+var windowPool = sync.OnceValue(func() *smux.WindowPool { return smux.NewWindowPool(min(max(SmuxWindowPool, 0), 1<<30)) })
+
 func newSmuxConfig() *smux.Config {
 	c := smux.DefaultConfig()
 	c.Version = 2
@@ -316,9 +346,16 @@ func newSmuxConfig() *smux.Config {
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer
+	need := SmuxNeedStreamBuffer
 	if min := SmuxAdaptiveWindow(); min > 0 {
 		c.MinStreamBuffer = min
 		c.StreamLagTarget = SmuxStreamLagTarget
+		if need >= min && need < SmuxStreamBuffer {
+			c.NeedStreamBuffer = need
+			c.WindowPool = windowPool()
+		}
+	} else if need > 0 && need < SmuxStreamBuffer {
+		c.MaxStreamBuffer = need // the fixed window, as it was
 	}
 	return c
 }

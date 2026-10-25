@@ -369,7 +369,9 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		n := p.dialed()
 		up := time.Now()
 		p.upLog.log("mtcp: exit link up to edge (slot %d; now %d)", s.id, n)
-		why := p.serve(ctx, car) // returns when the link dies or ctx ends
+		// returns when the link dies or ctx ends; what the link's window
+		// core did rides after the reason (wcoreEndNote)
+		why, note := cutEndNote(p.serve(ctx, car))
 		car.Close()
 		n = p.incLive(-1)
 		if ctx.Err() != nil {
@@ -387,18 +389,18 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		if p.retireIfOver(s) {
 			switch {
 			case edgeClosed(why):
-				p.downLog.log("mtcp: exit slot %d retired — closed by the edge while above its target (pattern shrinking) (now %d)", s.id, n)
+				p.downLog.log("mtcp: exit slot %d retired — closed by the edge while above its target (pattern shrinking) (now %d)%s", s.id, n, note)
 			case why == "": // reason unknown: claim neither
-				p.downLog.log("mtcp: exit slot %d retired — pool above target (now %d)", s.id, n)
+				p.downLog.log("mtcp: exit slot %d retired — pool above target (now %d)%s", s.id, n, note)
 			default:
-				p.downLog.log("mtcp: exit slot %d lost (%s) — not redialed, pool above target (now %d)", s.id, why, n)
+				p.downLog.log("mtcp: exit slot %d lost (%s) — not redialed, pool above target (now %d)%s", s.id, why, n, note)
 			}
 			return
 		}
 		if why == "" {
 			why = "reason unknown"
 		}
-		p.downLog.log("mtcp: exit link down (slot %d: %s; now %d); redial", s.id, why, n)
+		p.downLog.log("mtcp: exit link down (slot %d: %s; now %d); redial%s", s.id, why, n, note)
 		// A link that lived is redialed after a short jittered pause; one that
 		// died right after coming up backs off like a failed dial.
 		if time.Since(up) >= slotStableAfter {
@@ -442,6 +444,7 @@ func (p *exitPool) stats() PoolStats {
 	st.PeerMax = p.peers.max() // reported by the links up NOW (never a gone link's value)
 	st.Routes = p.peers.edgeRoutes()
 	p.traffic.fill(&st)
+	wcores.fillStats(&st)
 	return st
 }
 

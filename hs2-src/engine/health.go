@@ -182,6 +182,9 @@ type linkMeter struct {
 	// guard watches the link's smux session for a reader stuck on a full
 	// receive buffer (wedge.go); set once by newSession, before any stream.
 	guard *sessGuard
+	// wc is the link's window core (wcore_run.go), nil: none; set once by
+	// newSession, before any stream.
+	wc *wcLink
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	// peerLoss is what the last pong said and what this side had received
@@ -198,7 +201,8 @@ type linkMeter struct {
 	// (microseconds, 0: none yet): the link's round trip without its own
 	// queue, near enough (openAnswerWait).
 	rttMin   atomic.Uint64
-	peerSeen atomic.Bool // a control response has been received at least once
+	pongRTT  [4]atomic.Uint64 // the latest pongs' round trips (µs), the k-th (from 0) at k%4: peerLoss.n says how many came
+	peerSeen atomic.Bool      // a control response has been received at least once
 	// ctrlWait is when (ctrlNow) the oldest control ping still unanswered was
 	// sent, 0 if none waits (see ctrlWaitOf); ctrlAnsweredSent is when the
 	// last ping that got its own answer was sent.
@@ -273,12 +277,28 @@ type tcpStat struct {
 	deliveryRate uint64 // kernel delivery-rate estimate, bytes/s
 	notsent      uint32 // bytes queued but not yet sent
 	rtt, rttVar  uint32 // smoothed round trip and its mean deviation, µs (0: none yet)
+	minRTT       uint32 // the least round trip the socket has seen, µs (Linux >= 4.9; 0: none)
 	chronoValid  bool   // the kernel reports chrono counters (busy > 0)
 	// Data segments sent (retransmits included) and received (Linux ≥ 4.6;
 	// 0 on older kernels): the loss fraction's denominator, counted the way
 	// retrans is — per segment on the wire, whatever the frame sizes and
 	// padding (payload bytes / mss misread a link of small frames, up to 10×).
 	segsOut, segsIn uint32
+	// Segments that arrived out of order, behind a hole (Linux ≥ 5.4; 0
+	// before): over segsIn, both a loss reading and the share of data held
+	// back behind a resend at this end (the window core, WINDOW_CORE §3.4).
+	// oooOK: the kernel reports it (its TCP_INFO is long enough to hold it).
+	rcvOOO uint32
+	oooOK  bool
+	// Payload bytes received and acknowledged (Linux ≥ 4.1).
+	bytesReceived uint64
+	// Payload bytes this end sent that the peer acknowledged (Linux ≥ 4.1):
+	// whether the socket sends at all (the pacing net, the window core's
+	// pacing-cap lab experiment).
+	bytesAcked uint64
+	// The socket's pacing rate, bytes/s (Linux ≥ 4.1; ~0: no pacing): the
+	// pacing net's (pacenet.go).
+	pacingRate uint64
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

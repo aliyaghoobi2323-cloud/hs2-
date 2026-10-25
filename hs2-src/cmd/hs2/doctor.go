@@ -680,7 +680,8 @@ func checkTunnelsTogether(d *doctorReport) {
 		return
 	}
 	ram, _ := detectHW()
-	worst := links * tune.LinkWorstCaseMiB
+	// each tunnel's links, and each tunnel's own window pool
+	worst := links*tune.LinkWorstCaseMiB + n*tune.PoolWorstCaseMiB(ram)
 	msg := fmt.Sprintf("%d pooled tunnels run on this server, up to %d links in all: worst-case link buffers %.1f GB", n, links, float64(worst)/1024)
 	if unknown > 0 {
 		msg = fmt.Sprintf("%d pooled tunnels run on this server; %d of them direct, whose ceiling the Iran server has not reported yet (not counted); the others up to %d links: worst-case link buffers %.1f GB", n, unknown, links, float64(worst)/1024)

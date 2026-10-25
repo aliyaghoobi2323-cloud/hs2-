@@ -27,19 +27,30 @@ import (
 //	exit -> edge  [ver=1][recLen][caps]         once (caps bit0 tcp_info, bit1 meter)
 //	edge -> exit  [seq u32]                     per poll
 //	exit -> edge  record, exactly recLen bytes  per poll (fields past the known
-//	              64 bytes are skipped, so the record can grow compatibly)
+//	              96 bytes are skipped, so the record can grow compatibly)
 //
 //	record: 0 seq u32 | 4 flags u16 (bit0 chrono valid, bit1 tcp_info ok,
 //	        bit2 the exit's kernel TCP memory is above its pressure mark) |
 //	        6 reserved u16 | 8 monoNs u64 | 16 txBytes u64 | 24 txBlockedNs u64 |
 //	        32 busyUs u64 | 40 rwndLimUs u64 | 48 sndbufLimUs u64 | 56 deliveryRate u64
+//	        -- 64 bytes, all an exit before the window core sends; then --
+//	        64 srttUs u32 | 68 minRttUs u32 | 72 retransTotal u64 |
+//	        80 dataSegsOut u64 | 88 rttVarUs u32 | 92 reserved u32
+//
+// The fields past 64 are the exit socket's own view of the download's path
+// (its smoothed and least round trip, its resends and the segments they are
+// a share of), which only the sender sees well (the window core,
+// WINDOW_CORE §3.3); they read 0 from an exit that sends 64 bytes or has no
+// TCP_INFO. An edge accepts any recLen of 64 or more, and an older edge, which
+// knows 64, skips the rest.
 //
 // An older exit closes the unknown stream kind; the edge notices (the link is
 // still alive) and marks stats unsupported for that link — the pool then sizes
 // by activity and upload pressure only, which never over-grows.
 const (
 	statsVer              = 1
-	statsRecLen           = 64
+	statsRecLen           = 96 // what this version sends
+	statsRecMin           = 64 // the least it accepts: the first version's record
 	statsHandshakeTimeout = 5 * time.Second
 
 	statsPending     int32 = 0
@@ -59,7 +70,10 @@ type statsRec struct {
 	seq                                               uint32
 	flags                                             uint16
 	mono, tx, txBlocked, busy, rwnd, sndbuf, delivery uint64
-	at                                                time.Time
+	// past 64 bytes (0: an older exit, or no TCP_INFO)
+	srtt, minRTT, rttVar uint32 // µs
+	retrans, segsOut     uint64
+	at                   time.Time
 }
 
 func (r *statsRec) chrono() bool { return r.flags&statsFlagChrono != 0 }
@@ -75,10 +89,21 @@ func putStatsRec(b []byte, r statsRec) {
 	binary.BigEndian.PutUint64(b[40:], r.rwnd)
 	binary.BigEndian.PutUint64(b[48:], r.sndbuf)
 	binary.BigEndian.PutUint64(b[56:], r.delivery)
+	if len(b) < statsRecLen {
+		return
+	}
+	binary.BigEndian.PutUint32(b[64:], r.srtt)
+	binary.BigEndian.PutUint32(b[68:], r.minRTT)
+	binary.BigEndian.PutUint64(b[72:], r.retrans)
+	binary.BigEndian.PutUint64(b[80:], r.segsOut)
+	binary.BigEndian.PutUint32(b[88:], r.rttVar)
+	binary.BigEndian.PutUint32(b[92:], 0)
 }
 
+// parseStatsRec decodes a record of statsRecMin bytes or more; the fields
+// past them only from one of statsRecLen or more.
 func parseStatsRec(b []byte) statsRec {
-	return statsRec{
+	r := statsRec{
 		seq:       binary.BigEndian.Uint32(b[0:]),
 		flags:     binary.BigEndian.Uint16(b[4:]),
 		mono:      binary.BigEndian.Uint64(b[8:]),
@@ -89,6 +114,14 @@ func parseStatsRec(b []byte) statsRec {
 		sndbuf:    binary.BigEndian.Uint64(b[48:]),
 		delivery:  binary.BigEndian.Uint64(b[56:]),
 	}
+	if len(b) >= statsRecLen {
+		r.srtt = binary.BigEndian.Uint32(b[64:])
+		r.minRTT = binary.BigEndian.Uint32(b[68:])
+		r.retrans = binary.BigEndian.Uint64(b[72:])
+		r.segsOut = binary.BigEndian.Uint64(b[80:])
+		r.rttVar = binary.BigEndian.Uint32(b[88:])
+	}
+	return r
 }
 
 // statsOldLogged makes the older-exit fallback log once per process.
@@ -135,7 +168,7 @@ func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, l
 	}
 	st.SetReadDeadline(time.Now().Add(statsHandshakeTimeout))
 	var hdr [3]byte
-	if _, err := io.ReadFull(st, hdr[:]); err != nil || hdr[0] != statsVer || int(hdr[1]) < statsRecLen {
+	if _, err := io.ReadFull(st, hdr[:]); err != nil || hdr[0] != statsVer || int(hdr[1]) < statsRecMin {
 		// An older exit closes the unknown kind at once (EOF); a dying link
 		// fails the same read. Tell them apart by whether the link is still up
 		// a moment later, so a link lost during the handshake is not
@@ -234,6 +267,8 @@ func serveStats(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carr
 				r.flags |= statsFlagChrono
 			}
 			r.busy, r.rwnd, r.sndbuf, r.delivery = ts.busyUs, ts.rwndUs, ts.sndbufUs, ts.deliveryRate
+			r.srtt, r.minRTT, r.rttVar = ts.rtt, ts.minRTT, ts.rttVar
+			r.retrans, r.segsOut = ts.retrans, uint64(ts.segsOut)
 		}
 		if tcpMemPressure.Load() {
 			r.flags |= statsFlagMemPressure

@@ -55,7 +55,11 @@ type Stream struct {
 	settling   bool       // adaptive: after a brake, the backlog in flight before it is not yet down (under bufferLock)
 	preBrake   uint32     // adaptive: rcvWin before the first brake of the latest run (0: none; under bufferLock)
 	brakeAt    int64      // adaptive: monoNow of that first brake (under bufferLock)
+	claim      int        // pool: what the window holds from the WindowPool (under bufferLock)
+	claimDown  int64      // pool: monoNow from which the claim may come down to the window (0: not due; under bufferLock)
+	readAt     int64      // pool: monoNow of the last read while it holds a claim (under bufferLock)
 	updLock    sync.Mutex // one UPD at a time, so a later one never carries older values
+	core       streamCore // the window core's (core.go)
 
 	// answered is set (atomic) once the peer has sent anything for this
 	// stream: data, a window update or its FIN (see Answered)
@@ -77,7 +81,8 @@ func newStream(id uint32, frameSize int, sess *Session) *Stream {
 	s.sess = sess
 	s.die = make(chan struct{})
 	s.chFinEvent = make(chan struct{})
-	s.peerWindow = initialPeerWindow // set to initial window size
+	s.peerWindow = initialPeerWindow   // set to initial window size
+	s.core.limHigh = initialPeerWindow // what the peer may send before our first update
 	s.rcvWin = uint32(sess.config.MaxStreamBuffer)
 	if sess.config.MinStreamBuffer > 0 {
 		s.rcvWin = startWindow(sess.config)
@@ -192,6 +197,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 
 	if n > 0 {
 		s.sess.returnTokens(n)
+		s.sess.returnSpare()
 		if notify {
 			err := s.sendWindowUpdate()
 			return n, err
@@ -261,6 +267,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 		if buf != nil {
 			nw, ew := w.Write(buf)
 			s.sess.returnTokens(len(buf))
+			s.sess.returnSpare()
 			defaultAllocator.Put(buf)
 			if nw > 0 {
 				n += int64(nw)
@@ -285,12 +292,13 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 // update is due. The caller holds bufferLock and has already taken the n
 // bytes off unread.
 //
-// An update is due at the first read and each time half of the window
-// announced in the last update has been read since. The peer may run at most
-// rcvWin bytes past the consumed count of our last update; we always read
-// rcvWin/2 of that and announce again, so the peer never waits for an update
-// that is not coming, whatever the window does in between (a brake, see
-// checkLag, announces a smaller window early and restarts that count).
+// An update is due at the first read and each time a step (updStep: half of
+// the window announced in the last update, less past NeedStreamBuffer) has
+// been read since. The peer may run at most rcvWin bytes past the consumed
+// count of our last update; we always read a step of that and announce
+// again, so the peer never waits for an update that is not coming, whatever
+// the window does in between (a brake, see checkLag, announces a smaller
+// window early and restarts that count).
 //
 // The first update of an adaptive stream announces the window the peer
 // assumes anyway; the next one (adaptWindow) is the stream's first resize,
@@ -298,6 +306,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 func (s *Stream) consumed(n uint32) (notify bool) {
 	cfg := s.sess.config
 	s.numRead += n
+	s.core.readTot.Add(uint64(n))
 	s.incr += n
 	if s.unread < s.minUnread {
 		s.minUnread = s.unread
@@ -325,9 +334,14 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 	restore := s.preBrake > s.rcvWin && s.unread == 0 &&
 		monoNow()-s.brakeAt < int64(brakeDrain)
 	if restore {
-		s.rcvWin, s.settling, s.preBrake = s.preBrake, false, 0
+		s.setWindow(cfg, s.coreCap(cfg, s.preBrake))
+		s.settling, s.preBrake = false, 0
 	}
-	if s.incr < s.rcvWin/2 && !first && !s.updLost && !restore {
+	if s.claim > 0 {
+		s.readAt = monoNow()
+		s.reclaim(cfg) // the claim of a window that came down, once its hold is over
+	}
+	if s.incr < s.updStep(cfg) && !first && !s.updLost && !restore {
 		return false
 	}
 	resend := s.updLost
@@ -335,8 +349,11 @@ func (s *Stream) consumed(n uint32) (notify bool) {
 	s.incr = 0
 	if cfg.MinStreamBuffer > 0 {
 		parks := atomic.LoadUint32(&s.sess.parks)
+		s.core.lagged = s.minUnread > cfg.StreamLagTarget/4 // (CoreSample.Lags)
 		if !first && !resend && !restore {
+			old := s.rcvWin
 			s.adaptWindow(cfg, parks != s.lastParks)
+			s.fitCore(cfg, old)
 		}
 		s.lastParks = parks
 		s.minUnread = s.unread
@@ -448,6 +465,7 @@ func (s *Stream) writeWindowUpdate(deadline <-chan time.Time) error {
 	s.updLock.Lock()
 	s.bufferLock.Lock()
 	consumed, window := s.numRead, s.rcvWin
+	s.announced(window)
 	s.bufferLock.Unlock()
 
 	frame := newFrame(byte(s.sess.config.Version), cmdUPD, s.id)
@@ -538,7 +556,7 @@ func (s *Stream) checkLag(free int) {
 		s.lagSince, s.lagRead = now, s.numRead
 		return
 	}
-	others := cfg.MaxReceiveBuffer - free - s.unread
+	others := cfg.MaxReceiveBuffer + int(atomic.LoadInt32(&s.sess.extra)) - free - s.unread
 	lag := now.Sub(s.lagSince)
 	if s.braking || int64(others)*brakeShare < int64(cfg.MaxReceiveBuffer) || lag < brakeLag {
 		return
@@ -568,7 +586,7 @@ func (s *Stream) checkLag(free int) {
 	if s.preBrake == 0 || monoNow()-s.brakeAt >= int64(brakeDrain) {
 		s.preBrake, s.brakeAt = s.rcvWin, monoNow() // the first brake of a run
 	}
-	s.rcvWin = win
+	s.setWindow(cfg, win)
 	s.incr = 0
 	s.minUnread = s.unread
 	s.lastParks = atomic.LoadUint32(&s.sess.parks)
@@ -577,6 +595,7 @@ func (s *Stream) checkLag(free int) {
 	s.settling = true
 	s.braking = true
 	atomic.AddUint32(&s.sess.brakes, 1)
+	s.braked()
 	go func() {
 		select {
 		case <-s.die:
@@ -772,6 +791,16 @@ func (s *Stream) Close() error {
 		s.sess.streamClosed(s.id)
 		return err
 	} else {
+		if s.sess.IsClosed() {
+			// its session closed it (sessionClose): its app lets go of it
+			// now, and of what it holds with it -- the buffers and, with
+			// a WindowPool, the claim and the spare that covered them
+			// (pool.go)
+			if n := s.recycleTokens(); n > 0 {
+				s.sess.returnTokens(n)
+			}
+			s.sess.returnSpare()
+		}
 		return io.ErrClosedPipe
 	}
 }
@@ -829,8 +858,15 @@ func (s *Stream) SetDeadline(t time.Time) error {
 	return nil
 }
 
-// session closes
-func (s *Stream) sessionClose() { s.dieOnce.Do(func() { close(s.die) }) }
+// session closes: the claim keeps what the stream holds unread past
+// NeedStreamBuffer (it is still in memory, and may still be read) and lets
+// go of the rest (reclaim)
+func (s *Stream) sessionClose() {
+	s.dieOnce.Do(func() { close(s.die) })
+	s.bufferLock.Lock()
+	s.reclaim(s.sess.config)
+	s.bufferLock.Unlock()
+}
 
 // LocalAddr satisfies net.Conn interface
 func (s *Stream) LocalAddr() net.Addr {
@@ -859,11 +895,13 @@ func (s *Stream) pushBytes(buf []byte) (written int, err error) {
 	s.buffers = append(s.buffers, buf)
 	s.heads = append(s.heads, buf)
 	s.unread += len(buf)
+	s.turned()
 	s.bufferLock.Unlock()
 	return
 }
 
-// recycleTokens transform remaining bytes to tokens(will truncate buffer)
+// recycleTokens transform remaining bytes to tokens(will truncate buffer),
+// and lets go of the stream's claim on the WindowPool
 func (s *Stream) recycleTokens() (n int) {
 	s.bufferLock.Lock()
 	for k := range s.buffers {
@@ -873,6 +911,7 @@ func (s *Stream) recycleTokens() (n int) {
 	s.buffers = nil
 	s.heads = nil
 	s.unread = 0
+	s.dropClaim()
 	s.bufferLock.Unlock()
 	return
 }
