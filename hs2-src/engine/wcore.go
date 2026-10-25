@@ -109,6 +109,7 @@ type wcore struct {
 	// the latest one with resends, and a verdict of loss on holes alone
 	// waiting for the records that cover it (undo; undoDue: they came, clean)
 	reo      wcReo
+	bk       wcBacklog // the oldest hole by the receiver's own counters
 	recSrtt  time.Duration
 	recRtxAt time.Time
 	undo     wcUndo
@@ -501,12 +502,16 @@ type wcSnd struct {
 // wcIn is one interval of the link as the runner (or the model) saw it:
 // counters as deltas since the previous step.
 type wcIn struct {
-	now       time.Time
-	minRTT    time.Duration // the link socket's tcpi_min_rtt (0: unknown)
-	srtt      time.Duration // the link socket's tcpi_rtt (0: unknown)
-	segsIn    uint64        // data segments received
-	ooo       uint64        // ... that arrived behind a hole (Rcv_ooopack)
-	oooOK     bool
+	now    time.Time
+	minRTT time.Duration // the link socket's tcpi_min_rtt (0: unknown)
+	srtt   time.Duration // the link socket's tcpi_rtt (0: unknown)
+	segsIn uint64        // data segments received
+	ooo    uint64        // ... that arrived behind a hole (Rcv_ooopack)
+	oooOK  bool
+	// inOrder: payload bytes the socket took in order (tcpi_bytes_received:
+	// what passed every hole), read with Rcv_ooopack (inOrderOK)
+	inOrder   uint64
+	inOrderOK bool
 	linkBytes uint64 // bytes the session received
 	streams   []wcStream
 	parks     uint32          // the session's reader waited for buffer space
@@ -830,6 +835,7 @@ func (c *wcore) step(in wcIn) wcOut {
 	wdt := c.wakeDt(in)
 	hole := c.wakeHoles(in, wdt)
 	hw := c.holeWindow(in, hole, wdt)
+	c.bk.wake(in, wdt)
 	lossHole := c.lossHole(in, hw)
 	c.holeSeen = c.holeSeen || lossHole
 	defer func() {
@@ -1152,11 +1158,15 @@ func (c *wcore) holeWindow(in wcIn, hole, dt time.Duration) wcHoleWin {
 // packets by a few ms opens holes that short; summed over a whole interval
 // they come to more (1 Gbit/s, 0.05% held 2 ms: 40 to 65 ms a second), so an
 // interval is judged by its wakes (holeSeen).
+//
+// Or a hole is still open at the wake's end and has been past RACK's window,
+// by the receiver's own counters (wcBacklog): a loss's whatever the profile
+// allows (a path's reordering that RACK does not resend is gone within it).
 func (c *wcore) lossHole(in wcIn, w wcHoleWin) bool {
 	if !in.oooOK {
 		return false
 	}
-	return w.hole >= c.holeThr(in.now, w.segs, w.span) && w.ooo >= uint64(wcOooMinSegs)
+	return c.bk.open(c.tBase) || w.hole >= c.holeThr(in.now, w.segs, w.span) && w.ooo >= uint64(wcOooMinSegs)
 }
 
 // cut halves the budget for loss between evaluations: the knee is found if
@@ -1272,9 +1282,10 @@ func wcWakeTurns(v []time.Duration, s wcStream) []time.Duration {
 
 // wcMerge adds what came in b (later) to a.
 func wcMerge(a *wcIn, b wcIn) {
-	a.now, a.minRTT, a.srtt, a.oooOK = b.now, b.minRTT, b.srtt, b.oooOK
+	a.now, a.minRTT, a.srtt, a.oooOK, a.inOrderOK = b.now, b.minRTT, b.srtt, b.oooOK, b.inOrderOK
 	a.segsIn += b.segsIn
 	a.ooo += b.ooo
+	a.inOrder += b.inOrder
 	a.linkBytes += b.linkBytes
 	a.parks += b.parks
 	a.brakes += b.brakes
@@ -3076,6 +3087,8 @@ type wcLinkSnap struct {
 	minRTT, srtt           time.Duration
 	segsIn, ooo            uint64
 	oooOK                  bool
+	inOrder                uint64 // tcpi_bytes_received (inOrderOK: the kernel has it, with Rcv_ooopack)
+	inOrderOK              bool
 	tcpNone                bool // TCP_INFO could not be read: no counters of the socket in this one
 	rcvd                   uint64
 	parks, borrows, brakes uint32 // a borrow from the pool counts as a park too
@@ -3096,8 +3109,9 @@ type wcLinkSnap struct {
 type wcBuilder struct {
 	have            bool
 	prev            wcLinkSnap
-	tcpHave         bool // tcpSegs, tcpOoo are the last counters TCP_INFO gave
+	tcpHave         bool // tcpSegs, tcpOoo, tcpInOrder are the last counters TCP_INFO gave
 	tcpSegs, tcpOoo uint64
+	tcpInOrder      uint64
 	prevS           map[uint32]wcStreamSnap
 	sndAt           time.Time
 	sndRet, sndSegs uint64
@@ -3122,8 +3136,9 @@ func (b *wcBuilder) build(s wcLinkSnap) wcIn {
 		if b.tcpHave {
 			in.segsIn = wcDelta(s.segsIn, b.tcpSegs)
 			in.ooo = wcDelta(s.ooo, b.tcpOoo)
+			in.inOrder, in.inOrderOK = wcDelta(s.inOrder, b.tcpInOrder), s.inOrderOK && s.oooOK
 		}
-		b.tcpHave, b.tcpSegs, b.tcpOoo = true, s.segsIn, s.ooo
+		b.tcpHave, b.tcpSegs, b.tcpOoo, b.tcpInOrder = true, s.segsIn, s.ooo, s.inOrder
 	}
 	if b.have {
 		in.linkBytes = wcDelta(s.rcvd, b.prev.rcvd)

@@ -1447,6 +1447,7 @@ func (m *wmModel) runCore() {
 	s := wcLinkSnap{now: now, minRTT: time.Duration(m.rMinRTT * float64(time.Millisecond)),
 		srtt: time.Duration(m.rSrtt * float64(time.Millisecond)), segsIn: m.segsIn, ooo: m.oooPkts, oooOK: true,
 		rcvd: m.rcvd, parks: m.parks, poolFree: -1, ctrlMin: m.ctrlMin, pongs: m.pongs}
+	s.inOrder, s.inOrderOK = m.rcvNxt, true // (tcpi_bytes_received: what passed every hole)
 	if m.pool {
 		s.poolFree = max((m.poolFree-m.claimSum)/2, 0) // (smux WindowPool.FreeFor)
 	}

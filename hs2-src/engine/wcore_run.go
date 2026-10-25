@@ -530,6 +530,9 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 		// (rcv_ooopack is Linux 5.4's: before it the field reads 0, which is
 		// no clean path)
 		s.segsIn, s.ooo, s.oooOK = l.segs.add(ts.segsIn), l.ooo.add(ts.rcvOOO), ts.oooOK
+		// (tcpi_bytes_received, Linux 4.1's: in the same read, and there
+		// wherever Rcv_ooopack is)
+		s.inOrder, s.inOrderOK = ts.bytesReceived, ts.oooOK
 	}
 	var cc smux.CoreCounters
 	l.samples, cc = l.sess.CoreSnapshot(l.samples)

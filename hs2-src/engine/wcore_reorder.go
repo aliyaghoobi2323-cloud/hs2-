@@ -80,13 +80,24 @@ type wcReoPt struct {
 	share float64
 }
 
-// wcReo is the link's reordering profile: the windows the exit's records
-// showed held no loss (pts), and the windows that wait for a record's
-// verdict (wait).
+// wcReo is the link's reordering profile: the windows shown to hold no loss
+// (pts), the windows that wait for a record's verdict (wait), and those that
+// wait for the receiver's own (self: reoSelf).
 type wcReo struct {
 	pts   []wcReoPt
 	wait  []wcReoPt
+	self  []wcReoCand
 	dirty time.Time // windows that end before this may hold the hole of a loss a record resent
+	// selfBad: the latest wake the receiver's own counters could not judge,
+	// or that found a loss's hole (no window with it in it is learned)
+	selfBad time.Time
+}
+
+// wcReoCand is a window that waits for the receiver's own verdict until
+// until.
+type wcReoCand struct {
+	wcReoPt
+	until time.Time
 }
 
 // share is the share of a window's time reordering keeps packets behind
@@ -164,6 +175,45 @@ func (c *wcore) reoWindow(now time.Time, h time.Duration, segs uint64, span time
 	c.reo.wait = append(c.reo.wait, wcReoPt{at: now, rate: float64(segs) / span.Seconds(), share: math.Min(float64(h)/float64(span), 1)})
 	if n := len(c.reo.wait) - wcReoWait; n > 0 {
 		c.reo.wait = c.reo.wait[:copy(c.reo.wait, c.reo.wait[n:])]
+	}
+}
+
+// reoSelf learns the profile from the receiver's own counters, with no
+// record of the sender (the exit's side; the edge too, sooner than its
+// records): a window whose holes summed past T_base/4 with no hole open past
+// it at its end is reordering if, in the wakes after it, none stays open
+// past T_base/4 either. A loss's hole stays open a round trip at the least
+// (its resend comes no sooner), so where what is left of it past T_base/4
+// is longer than a wake, some wake's end finds it open past T_base/4: wcBacklog
+// sees it (open), given an age it trusts at every wake. Where the round trip
+// is shorter (under ~133 ms at 100 ms wakes: the edge's path to Iran) a
+// loss's hole can open and close between two wakes, and only the exit's
+// records tell.
+func (c *wcore) reoSelf(now time.Time, w wcHoleWin, dt time.Duration) {
+	sure := c.bk.ok && time.Duration((1-wcOooHole)*float64(c.tBase)) > dt
+	if !sure || c.bk.openAny(c.tBase) {
+		// no proof (or a loss's hole): none of the windows waiting, nor one
+		// with this wake in it, is learned
+		c.reo.self, c.reo.selfBad = c.reo.self[:0], now
+		return
+	}
+	k := 0
+	for _, x := range c.reo.self {
+		if !now.Before(x.until) {
+			c.reo.learn(x.wcReoPt)
+			continue
+		}
+		c.reo.self[k] = x
+		k++
+	}
+	c.reo.self = c.reo.self[:k]
+	thr := time.Duration(wcOooHole * float64(c.tBase))
+	if w.span > 0 && w.segs > 0 && w.hole >= thr && w.ooo >= uint64(wcOooMinSegs) && len(c.reo.self) < wcReoWait &&
+		now.Sub(c.reo.selfBad) > w.span {
+		// (a hole that opened as the window ended is past T_base/4 at the
+		// end of the wake after T_base/4, if it lasts: a loss's does)
+		c.reo.self = append(c.reo.self, wcReoCand{wcReoPt{at: now, rate: float64(w.segs) / w.span.Seconds(),
+			share: math.Min(float64(w.hole)/float64(w.span), 1)}, now.Add(thr + 2*dt)})
 	}
 }
 
@@ -323,4 +373,97 @@ func (c *wcore) applyUndo(in wcIn, m wcMeas, ev *[]wcEvent) {
 	}
 	c.settling = true
 	*ev = append(*ev, wcEvent{kind: wcEvUndo, from: from, B: c.B, n: len(m.f), T: c.tBase})
+}
+
+// wcBacklog is the receiver's own view of the oldest hole at the latest
+// runner wake: how many segments arrived behind it and wait (bk), and how
+// long it has been open (age). A loss's hole stays open until its resend
+// comes, a round trip and RACK's reordering window (T_base/4) after the
+// packets that showed it at the least; a hole a path that reorders opens is
+// gone once the late packet comes, within RACK's window (else the sender
+// resends it). Rcv_ooopack alone sums every hole of a wake, many short ones
+// as one long one; the hole still open at the wake's end shows in what went
+// in order: of the segments that came (Data_segs_in) the payload that passed
+// every hole (tcpi_bytes_received, in the same TCP_INFO) is short by what
+// waits behind the oldest one.
+//
+// Bytes and segments meet through segB, the payload of a segment, learned
+// from wakes with no hole at either end. Its error adds up over wakes in
+// which a hole stays open and something passes (the late packets of one hole
+// come, another opens: dense reordering), so the age is trusted only when it
+// was measured from a wake that ended with no hole open, through wakes in
+// which nothing passed (the same hole, a wake older each: exact).
+type wcBacklog struct {
+	segB    float64       // payload bytes per segment
+	clean   bool          // the previous wake had no segment behind a hole
+	ok      bool          // segB is known and the wake had both counters
+	bk      float64       // segments waiting behind the oldest hole (0: none open)
+	age     time.Duration // how long it has been open
+	trusted bool          // ... measured from a wake that ended with none
+}
+
+// wcBkAlpha: segB's smoothing over wakes with no hole.
+const wcBkAlpha = 0.1
+
+// wake takes a runner wake dt long.
+func (b *wcBacklog) wake(in wcIn, dt time.Duration) {
+	if !in.oooOK || !in.inOrderOK {
+		*b = wcBacklog{segB: b.segB}
+		return
+	}
+	a, o, d := float64(in.segsIn), float64(in.ooo), float64(in.inOrder)
+	if o == 0 && b.clean && a >= float64(2*wcOooMinSegs) {
+		// no hole at either end of it: what came went in order
+		if r := d / a; b.segB == 0 {
+			b.segB = r
+		} else {
+			b.segB += wcBkAlpha * (r - b.segB)
+		}
+	}
+	if a > 0 {
+		b.clean = o == 0
+	}
+	if b.segB <= 0 {
+		b.ok, b.bk, b.age, b.trusted = false, 0, 0, false
+		return
+	}
+	b.ok = true
+	prev, prevAge := b.bk, b.age
+	if o == 0 && a > 0 {
+		// all that came went in order: no hole open at the wake's end
+		b.bk, b.age, b.trusted = 0, 0, true
+		return
+	}
+	if prev > 0 && d < 4*b.segB {
+		// nothing passed the hole open at the wake before: the same one, a
+		// wake older
+		b.bk, b.age = prev+a, prevAge+dt
+		return
+	}
+	bk := prev + a - d/b.segB
+	if bk < math.Max(4, 0.02*a) {
+		// what waits is within segB's noise: no hole open at the wake's end
+		b.bk, b.age, b.trusted = 0, 0, true
+		return
+	}
+	// what waited at the wake before passed (or none did): the segments
+	// behind the hole open now came since it opened, at the wake's pace,
+	// and behind a hole (no more than the wake's Rcv_ooopack: segB's error
+	// adds up to no more than that)
+	b.trusted = prev == 0 && b.trusted
+	bk = math.Min(bk, o)
+	b.bk, b.age = bk, time.Duration(math.Min(bk/a, 1)*float64(dt))
+}
+
+// open says whether a hole has been open past RACK's reordering window
+// (T_base/4, wcOooHole), wcOooMinSegs segments or more behind it, by an age
+// the estimate trusts: a loss's, by the receiver's own signs.
+func (b *wcBacklog) open(tBase time.Duration) bool {
+	return b.trusted && b.openAny(tBase)
+}
+
+// openAny is open by any age the estimate has, trusted or not: what may be a
+// loss's hole (no window with it is learned as reordering, reoSelf).
+func (b *wcBacklog) openAny(tBase time.Duration) bool {
+	return b.ok && b.bk >= float64(wcOooMinSegs) && b.age >= time.Duration(wcOooHole*float64(tBase))
 }
