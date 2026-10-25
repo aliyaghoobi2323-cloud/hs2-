@@ -161,3 +161,64 @@ func TestWcoreH2RedCoverOffPastKnee(t *testing.T) {
 		t.Error("the covers off: a hold of covers there are none of")
 	}
 }
+
+// Finding 2: covers no one supervises behind a policer. Only the exit's
+// record shows a policer's loss to the edge (the core grows nothing without
+// it, off), and a cover puts the need in flight where the windows had the
+// need less a step: past a policer that the need less a step stayed under,
+// at BBR's STARTUP pace. An edge with an old exit (no TCP_INFO in its
+// records) kept its covers with its core OFF for good: on 300/72 behind a
+// policer at 60% of the path it resent 10.4% against base's 0.3%, on
+// 1000/72 behind one at 20% 7.4% against 0.2%, on 300/100 at 60% 5.5%
+// against 0.2%. The edge's core now holds the covers back while the exit's
+// records come without the sender's fields, or stopped (coverBlind): such
+// an edge is base's resends once its first record came, and most of base's
+// rate (the covered start took the sender out of BBR's STARTUP for good:
+// TestWcoreStep1ModelBlindSidesAreBase).
+func TestWcoreH2RedBlindPolicer(t *testing.T) {
+	if !smuxCoverOn(false) {
+		t.Skip("the covers are off (HS2_TUNE_SMUX_COVER=0)")
+	}
+	for _, x := range []struct {
+		rate float64
+		rtt  int
+		pol  float64
+	}{{300, 72, 0.6}, {1000, 72, 0.2}, {300, 100, 0.6}} {
+		for s := uint64(1); s <= 2; s++ {
+			c := wmPath(x.rate, wmMS(x.rtt), wmMS(50))
+			c.policer, c.oldExit, c.seed, c.dur = x.pol*x.rate*wmMbit, true, s, 40*time.Second
+			b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
+			msg := fmt.Sprintf("%s pol%.1f old exit s%d: base %.1f Mbit resent %.2f%%; the default config %.1f Mbit resent %.2f%%",
+				c.name, x.pol, s, b.mbit, 100*b.resend, k.mbit, 100*k.resend)
+			if k.resend > b.resend+0.005 || k.mbit < 0.85*b.mbit {
+				t.Errorf("%s", msg)
+			} else {
+				t.Log(msg)
+			}
+		}
+	}
+	// the core's side: OFF on the edge whose exit's records came without the
+	// sender's fields, or stopped for wcSndQuiet, holds the covers back; with
+	// records, or before the first one, it does not
+	c := wtCore(1)
+	c.cfg.noCover = false
+	in := wtIn(wtT0, 1, wtNeed)
+	if o := c.out(in, wtT0, nil); o.noCover {
+		t.Error("before the first record: the covers taken")
+	}
+	c.sndAny, c.sndAnyAt, c.sndLastAt = true, wtT0, wtT0
+	if o := c.out(in, wtT0, nil); !o.noCover || !c.coverBlind(wtT0) {
+		t.Error("records with no sender's fields (an old exit): the covers kept")
+	}
+	c.sndSeen = true
+	if o := c.out(in, wtT0, nil); o.noCover {
+		t.Error("records of the exit: the covers taken")
+	}
+	if at := wtT0.Add(wcSndQuiet + time.Second); !c.out(in, at, nil).noCover {
+		t.Error("the records stopped: the covers kept")
+	}
+	c.cfg.noCover = true
+	if c.coverBlind(wtT0.Add(time.Hour)) {
+		t.Error("the covers off: blind for covers there are none of")
+	}
+}

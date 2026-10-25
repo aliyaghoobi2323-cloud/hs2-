@@ -2,7 +2,6 @@ package engine
 
 import (
 	"fmt"
-	"math"
 	"net"
 	"path/filepath"
 	"slices"
@@ -255,10 +254,17 @@ func TestWcoreStep1SeenNeedsMinRTT(t *testing.T) {
 // team's policer grid at ~300 ms, where those blind sides drained links, and
 // on clean and lossy paths where they started. The exit's side is base
 // exactly (no core, and no cover on the exit's end: SmuxCover); an edge with
-// an old exit has its downloads' covers (wmCover), with the hit gaps its OFF
-// core's runner sets (fewer cycles run up to the window than at 2 ms), so its
-// runs are held to no budget, OFF throughout, base's rate or more and the
-// covers' resends. The lab knob (WcoreUpload) still runs the exit's core.
+// an old exit has its downloads' covers only until the exit's first record
+// shows it has no TCP_INFO to see a policer by (coverBlind; red team, H2:
+// behind a policer at 60% of 300/72 its covers resent 10.4% against base's
+// 0.3%), so its runs are held to no budget, OFF throughout and base's
+// resends. Not to base's rate: the covered start takes the sender out of
+// BBR's STARTUP for good, and its PROBE_BW paces each step where STARTUP
+// bursts it (3–17% under base over six seeds, with the model's max_bw or
+// Linux's), and the model's max_bw, which expires after 10 rounds whatever
+// came, takes a PROBE_RTT sample for the path in one seed of 300/150 behind
+// 20 ms (32.6 against 54.7 Mbit/s). The lab knob (WcoreUpload) still runs
+// the exit's core.
 func TestWcoreStep1ModelBlindSidesAreBase(t *testing.T) {
 	type run struct {
 		rate      float64
@@ -293,8 +299,8 @@ func TestWcoreStep1ModelBlindSidesAreBase(t *testing.T) {
 				t.Errorf("the default config ran the core: %s", msg)
 			case side == "up" && (k.mbit != b.mbit || k.resend != b.resend || !slices.Equal(k.rtxSec, b.rtxSec)):
 				t.Errorf("the default config is not base: %s", msg)
-			case side == "dn-old" && (k.mbit < 0.95*b.mbit || k.resend > math.Max(b.resend, cv.resend)+0.001):
-				t.Errorf("the default config is not the windows without the core: %s", msg)
+			case side == "dn-old" && (k.mbit < 0.55*b.mbit || k.resend > b.resend+0.003):
+				t.Errorf("the default config is not base's resends: %s", msg)
 			default:
 				t.Log(msg)
 			}
