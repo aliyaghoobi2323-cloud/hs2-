@@ -177,6 +177,15 @@ func Cover(need, maxWin uint32) uint32 {
 // the core drained for the queue the larger window made.
 const coverTurn = 2
 
+// CoverGains says whether a cycle of cycle whose sender paused pause at the
+// stream's limit shows a cover worth granting under Config.CoverGain n: the
+// pause an n-th of the cycle or more, so that unpaused the sender would have
+// sent cycle/(cycle-pause) times as much, n/(n-1) at least (n 5: a quarter
+// more); any run-up for n 0.
+func CoverGains(n int, pause, cycle time.Duration) bool {
+	return n <= 0 || pause > 0 && time.Duration(n)*pause >= cycle
+}
+
 // CoverPause says whether a pause at a limit counts for the cover: the
 // turnaround of the update that ended it, turn, within coverTurn times the
 // stream's previous one, prev (0: none yet, it counts).
@@ -504,7 +513,11 @@ func (s *Stream) fitCore(cfg *Config, old uint32) {
 		c.covered, c.held = false, 0
 	}
 	if allowed {
-		c.covered, c.miss = CoverNext(c.covered, c.miss, old, s.rcvWin, needOf(cfg), s.ranUp(), growOK, turnOK)
+		ran := s.ranUp()
+		if ran && !c.covered && !CoverGains(cfg.CoverGain, time.Duration(c.pause), time.Duration(monoNow()-c.updAt)) {
+			ran = false // (no cover where it gains less: CoverGain)
+		}
+		c.covered, c.miss = CoverNext(c.covered, c.miss, old, s.rcvWin, needOf(cfg), ran, growOK, turnOK)
 	} else {
 		c.miss = 0
 	}

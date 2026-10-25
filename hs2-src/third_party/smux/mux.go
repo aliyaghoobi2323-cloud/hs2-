@@ -105,6 +105,12 @@ type Config struct {
 	// them (SetCover(true): the window core, which watches what they cost).
 	CoverWait bool
 
+	// CoverGain n > 0 grants a cover only where the stream's sender paused
+	// at its limit an n-th of its cycle or more (CoverGains): where the
+	// window holds it to less than (n-1)/n of what it would send. 0 (the
+	// default): any run-up to the window.
+	CoverGain int
+
 	// WindowPool, with NeedStreamBuffer, is what windows past
 	// NeedStreamBuffer take their excess from: a window grows only as far
 	// as the pool has left, and the session's MaxReceiveBuffer grows by

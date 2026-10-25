@@ -270,6 +270,7 @@ func applyTuning() {
 	num("HS2_TUNE_SMUX_NEEDBUF", &engine.SmuxNeedStreamBuffer)
 	num("HS2_TUNE_SMUX_POOL", &engine.SmuxWindowPool)
 	num("HS2_TUNE_SMUX_COVER", &engine.SmuxCover)
+	num("HS2_TUNE_SMUX_COVER_GAIN", &engine.SmuxCoverGain)
 	num("HS2_TUNE_SMUX_SESSBUF", &engine.SmuxSessionBuffer)
 	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)

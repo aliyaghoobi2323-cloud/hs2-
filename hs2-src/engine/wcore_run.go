@@ -391,7 +391,8 @@ func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *link
 	l.name.Store(&name)
 	l.peerKey = wcPeerKey(remote)
 	l.core = newWcore(wcConfig{side: side, stage: WcoreStage, need: uint32(cfg.NeedStreamBuffer),
-		maxWin: uint32(cfg.MaxStreamBuffer), minWin: uint32(cfg.MinStreamBuffer), noCover: cfg.NoCover}, rand.Float64)
+		maxWin: uint32(cfg.MaxStreamBuffer), minWin: uint32(cfg.MinStreamBuffer), noCover: cfg.NoCover,
+		coverSeen: cfg.CoverGain > 0}, rand.Float64)
 	return l
 }
 

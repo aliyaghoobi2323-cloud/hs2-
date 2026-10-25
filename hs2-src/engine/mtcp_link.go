@@ -318,6 +318,20 @@ var (
 	// full); what they did is in each link's end line (smuxCoverNote), the
 	// lab trace (cover) and hs2 status's windows line (Covers).
 	SmuxCover = 1
+	// SmuxCoverGain (lab only; 0, the default, off): a cover only where the
+	// stream's sender paused at its limit a SmuxCoverGain-th of its cycle or
+	// more (smux Config.CoverGain; 5: where it gains a quarter of its rate or
+	// more), and the window core's floor the cover only once its link held
+	// one in OFF (wcore.go coverFloor). In the model 5 brought the user's p99
+	// next to a download on 100/100 from 408 to 258 ms (base 301) and on
+	// 150/72 from 231 to base's 148 (the cover's +10% given up), kept the
+	// large paths' gains, and moved 1000/100 q50 x4's links further apart
+	// (TestWcoreSharedBottleneck's spread: 2.3 in one seed, the gate 2), and
+	// with it on the model misses gates the default meets (an invariant seed:
+	// a probe from above HOLD's budget; the table 37 of 85 cells against 39,
+	// 1000/100 at 1% loss under base): a prototype for the rig to weigh, not
+	// for the field.
+	SmuxCoverGain = 0
 	// SmuxMinStreamBuffer and SmuxStreamLagTarget turn on smux's adaptive
 	// stream window: a stream whose reader leaves more than
 	// SmuxStreamLagTarget unread is offered a smaller window, down to
@@ -466,6 +480,7 @@ func newSmuxConfig() *smux.Config {
 		c.NeedStreamBuffer, c.WindowPool = need, windowPool()
 		c.NoCover = !smuxCoverOn(false)
 		c.CoverWait = !c.NoCover // (its core lets them: smuxCoverOn)
+		c.CoverGain = SmuxCoverGain
 		return c
 	}
 	// No window past the need (a lab override left it no room): the fixed
