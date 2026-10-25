@@ -365,9 +365,22 @@ func TestPaceNetStaleCapFollows(t *testing.T) {
 	for i := 0; i < 20 && f.n.cap == cap0; i++ {
 		o = append(o, f.run(wcRampTick, 10000, 0.3, 100*wnMB, float64(f.n.cap))...)
 	}
-	if want := uint64(wcNetK * 100 * wnMB); math.Abs(float64(f.n.cap)-float64(want)) > 0.06*float64(want) {
+	want := uint64(wcNetK * 100 * wnMB)
+	if math.Abs(float64(f.n.cap)-float64(want)) > 0.06*float64(want) {
 		t.Fatalf("a policer under a cap of %.0f Mbit/s that binds, 100 delivered, 30%% resent, no queue: cap %.0f Mbit/s (%+v), want ~%.0f",
 			float64(cap0)/wnMB, float64(f.n.cap)/wnMB, o, float64(want)/wnMB)
+	}
+	// and it stays down while the resends go on: the next reading's "only
+	// rises", on the span's rate from before the policer, took it back up
+	// and the two flipped it 125 <-> 1000 Mbit/s each 100 ms (the post-merge
+	// review: 11 setsockopts in a second)
+	for i := 1; i <= 10; i++ {
+		for _, x := range f.run(wcRampTick, 10000, 0.3, 100*wnMB, float64(f.n.cap)) {
+			if x.act != wcNetMoveCap || float64(x.cap) > 1.06*float64(want) {
+				t.Fatalf("%d ms after the cap followed the policer down to %.0f Mbit/s, the resends going on: %+v",
+					100*i, float64(want)/wnMB, x)
+			}
+		}
 	}
 	// under it the resends stop: kept, not judged on the ones before
 	held := f.n.cap
