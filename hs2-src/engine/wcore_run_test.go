@@ -311,8 +311,9 @@ func TestWcoreRunnerGrowsAndDrains(t *testing.T) {
 	fast := false
 	for _, x := range tr {
 		for _, s := range x.Streams {
-			if s.Win > need {
-				t.Fatalf("a window past Need while the autopilot probes: %+v", x)
+			// (its cover is the window's own without the core: smux Cover)
+			if s.Win > smux.Cover(need, uint32(cfg.MaxStreamBuffer)) {
+				t.Fatalf("a window past Need and its cover while the autopilot probes: %+v", x)
 			}
 		}
 		fast = fast || x.NF > 0 && x.APProbing
@@ -415,7 +416,9 @@ func TestWcoreRunnerFixedWindow(t *testing.T) {
 }
 
 // HS2_TUNE_WCORE=0: no session gets a core, nothing sets a ceiling, and on
-// the path where the core grows windows none passes Need.
+// the path where the core grows windows none passes Need and its cover (the
+// window a stream its window holds back has without the core: smux Cover);
+// with HS2_TUNE_SMUX_COVER=0 too, none passes Need.
 func TestWcoreOffIsBase(t *testing.T) {
 	old := Wcore
 	Wcore = 0
@@ -438,22 +441,30 @@ func TestWcoreOffIsBase(t *testing.T) {
 	if newWcLink(cli, cfg, nil, nil, false, nil) != nil {
 		t.Fatal("newWcLink made a core with the window core off")
 	}
-	p := newWcPath(5<<20, 50*time.Millisecond)
-	edge, exit := wcSessions(t, p.edge(), p.exit(), cfg, nil)
-	wcDownload(t, edge, exit)
 	need := uint32(cfg.NeedStreamBuffer)
-	top := uint32(0)
-	for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
-		s, _ := edge.CoreSnapshot(nil) // no runner: this is the only caller
-		for _, x := range s {
-			if x.Win > need || x.Ceil != 0 {
-				t.Fatalf("with the window core off: %+v", x)
-			}
-			top = max(top, x.Win)
+	for _, noCover := range []bool{false, true} {
+		cfg := wcTestConfig()
+		cfg.NoCover = noCover
+		lim := smux.Cover(need, uint32(cfg.MaxStreamBuffer))
+		if noCover {
+			lim = need
 		}
-	}
-	if top < need {
-		t.Fatalf("the window reached %d only, under Need %d: the path tested nothing", top, need)
+		p := newWcPath(5<<20, 50*time.Millisecond)
+		edge, exit := wcSessions(t, p.edge(), p.exit(), cfg, nil)
+		wcDownload(t, edge, exit)
+		top := uint32(0)
+		for end := time.Now().Add(3 * time.Second); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+			s, _ := edge.CoreSnapshot(nil) // no runner: this is the only caller
+			for _, x := range s {
+				if x.Win > lim || x.Ceil != 0 {
+					t.Fatalf("with the window core off (cover off %v): %+v", noCover, x)
+				}
+				top = max(top, x.Win)
+			}
+		}
+		if top < need {
+			t.Fatalf("the window reached %d only, under Need %d: the path tested nothing", top, need)
+		}
 	}
 }
 
@@ -830,10 +841,11 @@ func TestWcoreRunnerKneeMoveLine(t *testing.T) {
 	if n := logs.count("window held at 6.0 MiB"); n != 1 {
 		t.Fatalf("a move of 50%%: %q", logs.all())
 	}
-	// a knee under the least budget: the least budget is what is held
+	// a knee under the least budget: the least budget is what is held (two
+	// covers of the need: cmin)
 	l2 := wcLogLink("link 5", wcEdge)
 	ws.logEvents(l2, now, wcOut{events: []wcEvent{{kind: wcEvFilled, B: 100 << 10, n: 2, R: 1e6, T: 100 * time.Millisecond}}})
-	if n := logs.count("link 5: downloads fill the path at ~8 Mbit/s (round trip 100 ms): window held at 0.5 MiB for 2 fast connection(s)"); n != 1 {
+	if n := logs.count("link 5: downloads fill the path at ~8 Mbit/s (round trip 100 ms): window held at " + wcMiB(2*uint64(l2.core.cmin())) + " for 2 fast connection(s)"); n != 1 {
 		t.Fatalf("a knee under the floor: %q", logs.all())
 	}
 }

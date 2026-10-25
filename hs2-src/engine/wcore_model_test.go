@@ -94,14 +94,15 @@ func wmWire(n int) int64 { return int64(math.Ceil(float64(n) / wmEff)) }
 type wmMode uint8
 
 const (
-	wmBase wmMode = iota // the 2 MiB window as today
-	wmN4                 // round 1: 3·pace·min_rtt, step w/2
-	wmFin                // round 2 "delay": (1+m(q))·pace·min_rtt + step, fine step
-	wmCore               // the window core
+	wmBase  wmMode = iota // the 2 MiB window as the rig measured it (before the cover)
+	wmN4                  // round 1: 3·pace·min_rtt, step w/2
+	wmFin                 // round 2 "delay": (1+m(q))·pace·min_rtt + step, fine step
+	wmCore                // the window core (on smux's windows: the cover past need, smux.CoverNext)
+	wmCover               // smux's windows without the core: the need, or its cover while the window holds the stream back
 )
 
 func (m wmMode) String() string {
-	return [...]string{"base", "n4", "fin", "core"}[m]
+	return [...]string{"base", "n4", "fin", "core", "cover"}[m]
 }
 
 type wmStreamCfg struct {
@@ -873,6 +874,9 @@ type wmRcvStream struct {
 	ringN     int
 	ringHead  int
 	hitCycle  bool
+	pause     int64 // ms: the longest pause at a limit since the latest update (smux streamCore.pause)
+	covered   bool  // smux streamCore.covered
+	miss      uint8
 	updN      uint32
 	hitN      uint32
 	lagN      uint32
@@ -1107,6 +1111,7 @@ type wmModel struct {
 	turnRef  time.Duration
 	qBrake   time.Duration
 	growOK   bool
+	noCover  bool // smux Session.SetCover(false)
 	epoch    time.Time
 	lastSt   wcState
 
@@ -1201,7 +1206,8 @@ func newModel(cfg wmCfg) *wmModel {
 		if cfg.exit {
 			side = wcExit
 		}
-		m.core = newWcore(wcConfig{side: side, stage: cfg.stage, need: wmNeed, maxWin: wmMaxWin, minWin: wmMinWin}, m.rnd.Float64)
+		m.core = newWcore(wcConfig{side: side, stage: cfg.stage, need: wmNeed, maxWin: wmMaxWin, minWin: wmMinWin,
+			noCover: !smuxCoverOn(cfg.exit)}, m.rnd.Float64)
 	}
 	// the pacing net on the exit's socket (the lab's always-on cap, when
 	// set, in its place as in the runner)
@@ -1497,6 +1503,7 @@ func (m *wmModel) push(st *wmRcvStream, n int64) {
 		if m.t-e.aAt >= max(wmHitGap, st.hitGap) {
 			st.hitCycle = true
 		}
+		st.pause = max(st.pause, m.t-e.aAt)
 		st.ringHead = (st.ringHead + 1) % len(st.ring)
 		st.ringN--
 	}
@@ -1538,7 +1545,7 @@ func (m *wmModel) consumed(i int, st *wmRcvStream, n int64) {
 	}
 	first := st.numRead == uint64(n)
 	step := uint64(st.rcvWin / 2)
-	if m.cfg.mode == wmFin || m.cfg.mode == wmCore {
+	if m.cfg.mode == wmFin || m.cfg.mode == wmCore || m.cfg.mode == wmCover {
 		step = uint64(smux.StepOf(wmNeed, st.rcvWin))
 	}
 	if !first && st.incr < step {
@@ -1572,12 +1579,18 @@ func (m *wmModel) update(i int, st *wmRcvStream, first bool) {
 				w = min(w, lim)
 			}
 		case wmCore:
-			w = m.adapt(st, parked, max(wmNeed, st.ceil))
+			w = m.adapt(st, parked, max(wmCoverWin, st.ceil))
 			turnOK := m.turnRef == 0 || st.lastTurn <= m.turnRef+m.qBrake
-			w = smux.FitCore(old, w, st.ceil, wmNeed, wmMinWin, uint32(min(st.unread, math.MaxUint32)), m.growOK, turnOK)
+			own := m.cover(st, old, w, m.growOK, turnOK)
+			w = smux.FitCore(old, w, st.ceil, own, wmMinWin, uint32(min(st.unread, math.MaxUint32)), m.growOK, turnOK)
+		case wmCover:
+			w = m.adapt(st, parked, wmCoverWin)
+			own := m.cover(st, old, w, true, true)
+			w = smux.FitCore(old, w, 0, own, wmMinWin, uint32(min(st.unread, math.MaxUint32)), true, true)
 		}
 		m.setWindow(st, w)
 	}
+	st.pause = 0 // (smux's announced)
 	st.lastParks = m.parks
 	if !first && st.minUnread > wmLagTarget/4 {
 		st.lagN++
@@ -1640,6 +1653,28 @@ func (m *wmModel) adapt(st *wmRcvStream, parked bool, maxW uint32) uint32 {
 		w = uint32(min(w2, uint64(maxW)))
 	}
 	return w
+}
+
+// wmCoverWin is smux's cover of the need (smux.Cover).
+var wmCoverWin = smux.Cover(wmNeed, wmMaxWin)
+
+// cover is smux's fitCore before FitCore: the stream's cover after this
+// update (smux.RanUp and smux.CoverNext on the longest pause at a limit
+// since the previous update), and its own window with it (Stream.ownWin).
+// No pool, the exit's end (SmuxCover: the edge's only), or the core took
+// the covers away: no cover.
+func (m *wmModel) cover(st *wmRcvStream, old, want uint32, growOK, turnOK bool) uint32 {
+	if !m.pool || m.noCover || !smuxCoverOn(m.cfg.exit) {
+		st.covered, st.miss = false, 0
+		return wmNeed
+	}
+	ms := func(v int64) time.Duration { return time.Duration(v) * time.Millisecond }
+	ran := st.updAt > 0 && smux.RanUp(ms(st.pause), ms(max(wmHitGap, st.hitGap)), ms(m.t-st.updAt), st.numRead-st.updRead, wmFrame)
+	st.covered, st.miss = smux.CoverNext(st.covered, st.miss, old, want, wmNeed, ran, growOK, turnOK)
+	if st.covered {
+		return wmCoverWin
+	}
+	return wmNeed
 }
 
 // paceNeed is N4's and fin's needWindow.
@@ -1876,7 +1911,7 @@ func (m *wmModel) runCore() {
 			}
 		}
 	}
-	m.turnRef, m.qBrake, m.growOK = o.turnRef, o.qBrake, o.growOK
+	m.turnRef, m.qBrake, m.growOK, m.noCover = o.turnRef, o.qBrake, o.growOK, o.noCover
 	m.coreNext = o.next.Sub(m.epoch).Milliseconds()
 	for _, e := range o.events {
 		if e.kind == wcEvDrain && m.lastSt == wcHold {
@@ -2201,8 +2236,11 @@ func (m *wmModel) reach(rate float64) float64 {
 		r = math.Min(r, cfg.policer)
 	}
 	w := float64(wmMaxWin - smux.StepOf(wmNeed, wmMaxWin)/2)
-	if cfg.mode == wmBase {
+	switch cfg.mode {
+	case wmBase:
 		w = float64(wmNeed - wmNeed/4)
+	case wmCover:
+		w = float64(wmCoverWin - smux.StepOf(wmNeed, wmCoverWin)/2)
 	}
 	win := 0.0
 	for _, s := range cfg.streams {
@@ -2587,26 +2625,28 @@ var wmKnown = map[string]struct {
 	kinds []string
 	why   string
 }{
-	"300/150 q50": {[]string{"drain"},
-		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (the rig: a loss every 10–11 s at 5–6 MiB). The exit's pacing net (pacenet.go) holds that pace once it loses (151 → 244 Mbit/s, 1.65 → 0.24% resent, against the model before it); a burst before it holds (or after a lift) still overflows the queue in HOLD in one of three seeds (a cut)"},
-	"1000/150 q50": {[]string{"drain", "resent"},
-		"a burst after PROBE_RTT overflows the queue in HOLD (a cut); 0.26 to 0.54% resent against base's 0 over the 30 s table's seeds, with the exit's pacing net or without (0.37% either way in the 40 s grid)"},
-	"300/100 q50": {[]string{"interactive"},
-		"the bursts after PROBE_RTT (one loss holds the user behind its hole)"},
-	"100/100 q50": {[]string{"drain"},
-		"with the exit's pacing net the 2 MiB windows of base no longer overflow this path (base 66.8 Mbit/s with 7.1% resent without it, 83.5 with 0.2%), so the core leaves OFF (do no harm passes), and drains from HOLD at the sender's PROBE_RTT bursts before the net holds its pace: 84 Mbit/s with 0.22% resent, base's"},
+	"300/150 q50": {[]string{"resent"},
+		"the sender's PROBE_RTT every ~10 s (Linux takes a new min_rtt only from a strictly lower sample), then its whole window at 3.9 times the path's rate: past ~2.5 MB of window the 50 ms queue (0.33 BDP) overflows whatever the receiver does (the rig: a loss every 10–11 s at 5–6 MiB). The exit's pacing net (pacenet.go) holds that pace once it loses (151 → 244 Mbit/s, 1.65 → 0.24% resent, against the model before it). With the covers (smux Cover, the floor: wcore.go cover) it no longer drains from HOLD, and resends 0.51% against base's 0 (0.24% before them; the target is 0.5)"},
+	"1000/150 q50": {[]string{"resent", "interactive"},
+		"a burst after PROBE_RTT overflows the queue (a cut); 0.26 to 0.54% resent against base's 0 over the 30 s table's seeds, with the exit's pacing net or without (0.37% either way in the 40 s grid). With the covers the core gets 637 Mbit/s (616 before) and no drain from HOLD, and the user next to it a p99 of 438 ms against base's 304 (373 before)"},
+	"300/100 q50": {[]string{"interactive", "gain"},
+		"the bursts after PROBE_RTT (one loss holds the user behind its hole). With the covers the windows without the core carry 168 Mbit/s (base 84) in bursts the exit's record reads as 14 ms of queue (the need's read 9): past Δq, harm() keeps the core OFF until the sender's PROBE_RTT clears them, 12 s later, so it gets 182 Mbit/s against 219 before (59% of N4's gain, the target 80%; 199 with the need as floor)"},
+	"100/100 q50": {[]string{"interactive"},
+		"with the exit's pacing net the 2 MiB windows of base no longer overflow this path (base 66.8 Mbit/s with 7.1% resent without it, 83.5 with 0.2%), so the core leaves OFF. Its 1.25 MB BDP lies between the need less a step and the need: a cover there adds no rate (84 against 83 Mbit/s) and its sender's bursts after PROBE_RTT (the whole 3 MiB window at 3.9 times the path) take the user's p99 to 408 ms against base's 266 (the windows without the core alone: 400)"},
 	"300/150 q200": {[]string{"queue"},
 		"the 200 ms queue lets STARTUP and the probes build a mean queue past 20 ms before the turnarounds show it"},
-	"1000/100 q50 l0.1": {[]string{"interactive"},
-		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere"},
-	"300/150 q50 l0.1": {[]string{"gain"},
-		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain without the exit's pacing net). The net takes N4 from 129 to 158 Mbit/s (its bursts held once they lose: 25% of that gain now) and costs the core one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median)"},
-	"300/150 q50 +slow reader": {[]string{"resent", "interactive", "gain", "drain"},
-		"a probe's loss while the slow stream's window holds a hole; with the exit's pacing net N4 no longer overflows the queue (180 → 250 Mbit/s, 3.3 → 0% resent), and the gain target is against that (the core 209 → 211 Mbit/s, 75% of it); one seed of three drains from HOLD at a PROBE_RTT burst"},
+	"1000/100 q50 l0.1": {[]string{"interactive", "gain"},
+		"every hole holds the user's reply for a round trip, and 3–4 times the rate is 3–4 times the holes (p50 1.3–1.5×; the rig's N4 too): one link shared with the download; the multi-link cell has new users land elsewhere. With the covers (in OFF too) the window-limited sender no longer waits for credit every round and leaves BBR's STARTUP (pacing 3.9 times the path) for PROBE_BW at ~4.7 s, where it stayed in STARTUP to 13 s before; the core's later steps of B turn into rate only at BBR's probing pace: 160 Mbit/s against 241 (42% of N4's gain, the target 60%), the windows without the core 109 against base's 83"},
+	"300/150 q50 l0.1": {[]string{"gain", "interactive"},
+		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain without the exit's pacing net). The net takes N4 from 129 to 158 Mbit/s (its bursts held once they lose: 25% of that gain now) and costs the core one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median). With the covers 97 Mbit/s (44%), and the user's p50 next to it 225 ms against base's 169 (1.33×; 194 before them, at 76 Mbit/s)"},
+	"300/150 q50 x4": {[]string{"interactive"},
+		"four downloads fill the path at base already (255 Mbit/s); their covers (smux Cover) add no rate, and the bursts of 3 MiB windows after each sender's PROBE_RTT take the user's p99 to ~495 ms against base's 326 (the windows without the core alone: 491)"},
+	"1000/100 q50 x4": {[]string{"interactive"},
+		"the bursts of four 3 MiB windows after their senders' PROBE_RTT (smux Cover, in OFF and the core's floor): the user's p99 301 ms against base's 219 (1.37×; 249 before the covers), at 757–779 Mbit/s as before"},
 	"300/150 q50 300>50>300": {[]string{"interactive"},
 		"the loss of the drop to 50 Mbit/s holds the user behind its holes (p99 1.1 s against base's 0.7 s; the exit's pacing net takes the core's resends 10.4 → 2.9% and base's 8.9 → 1.9%)"},
-	"1000/100 q50 policer 300": {[]string{"gain"},
-		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 149 Mbit/s with 0.46% resent, 38% of N4's gain (N4 resends 10%)"},
+	"1000/100 q50 policer 300": {[]string{"gain", "interactive"},
+		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 149 Mbit/s with 0.46% resent, 38% of N4's gain (N4 resends 10%); with the covers 187 Mbit/s with 0.04% (67%; the windows without the core 177), and the user's p99 377 ms against base's 288 (1.31×)"},
 }
 
 // wmKnownRoadmap are the cells of the full table where the core misses the
@@ -2687,6 +2727,60 @@ func TestWcoreModelTable(t *testing.T) {
 	t.Logf("%d of %d cells meet every target", len(cells)-bad, len(cells))
 }
 
+// TestWcoreModelCover runs smux's windows without the core (wmCover: the
+// need, or its cover while the window holds a stream back) next to base
+// (the 2 MiB window as the rig measured it, before the cover) and, on the
+// default table's cells, holds the cover to:
+//
+//   - a single download on a clean path that base leaves at under 60% of
+//     what the path carries (its window holds it): at least 1.4 times base
+//     (the need in flight where base had about the need less a step);
+//   - nowhere under 95% of base;
+//   - resent no more than base + 0.5 points (+3 across a drop of the
+//     path's rate, as the table's targets).
+//
+// HS2_WCORE_MODEL_FULL=1 adds the full table as a report: there, under 1%
+// and 3% random loss, the cover runs 4 to 20% under base (100/50, 300/100,
+// 1000/150 at 1%; 300/300 at 3%), and on 100/500 at 0.1% it resends 2.0%
+// against base's 0.6%.
+func TestWcoreModelCover(t *testing.T) {
+	full := os.Getenv("HS2_WCORE_MODEL_FULL") == "1"
+	gate := map[string]bool{}
+	for _, c := range wmCells(false) {
+		gate[c.cfg.name] = true
+	}
+	held, gained := 0, 0
+	for _, c := range wmCells(full) {
+		b, k := wmRunN(c.cfg.with(wmBase), wmSeeds), wmRunN(c.cfg.with(wmCover), wmSeeds)
+		t.Logf("%-28s base %6.1f %5.2f%% q%3.0f/%3.0f i%4.0f/%4.0f | cover %6.1f %5.2f%% q%3.0f/%3.0f i%4.0f/%4.0f | %.2fx",
+			c.cfg.name, b.mbit, 100*b.resend, b.qMean, b.q99, b.iP50, b.iP99, k.mbit, 100*k.resend, k.qMean, k.q99, k.iP50, k.iP99, k.mbit/b.mbit)
+		isHeld := c.kind == wmGain && len(c.cfg.streams) == 0 && b.mbit < 0.6*c.cfg.rate*wmEff/wmMbit
+		if isHeld {
+			held++
+			if k.mbit >= 1.4*b.mbit {
+				gained++
+			}
+		}
+		if !gate[c.cfg.name] {
+			continue
+		}
+		if isHeld && k.mbit < 1.4*b.mbit {
+			t.Errorf("%s: cover %.1f Mbit/s, base %.1f: want 1.4 times base where its window holds it", c.cfg.name, k.mbit, b.mbit)
+		}
+		if k.mbit < 0.95*b.mbit {
+			t.Errorf("%s: cover %.1f Mbit/s, slower than base %.1f", c.cfg.name, k.mbit, b.mbit)
+		}
+		lim := b.resend + 0.005
+		if c.kind == wmChangeK {
+			lim = b.resend + 0.03
+		}
+		if k.resend > lim {
+			t.Errorf("%s: cover resent %.2f%%, base %.2f%%", c.cfg.name, 100*k.resend, 100*b.resend)
+		}
+	}
+	t.Logf("the cover at 1.4 times base or more in %d of %d cells where base's window holds a single download", gained, held)
+}
+
 func TestWcoreModelTrace(t *testing.T) {
 	spec := os.Getenv("HS2_WCORE_MODEL_TRACE")
 	if spec == "" {
@@ -2714,7 +2808,7 @@ func TestWcoreModelTrace(t *testing.T) {
 	if streams > 1 {
 		c.streams = make([]wmStreamCfg, streams)
 	}
-	for i, n := range []string{"base", "n4", "fin", "core"} {
+	for i, n := range []string{"base", "n4", "fin", "core", "cover"} {
 		if n == mode {
 			c.mode = wmMode(i)
 		}
