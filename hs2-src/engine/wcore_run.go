@@ -868,13 +868,15 @@ func wcoreNote(m *linkMeter) string {
 	st := &m.wc.inStats
 	s := fmt.Sprintf("window core: up to %s at %.0f Mbit/s, drained %d time(s) for queue, %d for loss",
 		wcMiB(st.peakB.Load()), mbitps(math.Float64frombits(st.peakR.Load())), st.drainQ.Load(), st.drainLoss.Load())
+	if u := st.undo.Load(); u > 0 {
+		// ("for loss" counts every drain and cut for holes, those the exit's
+		// record later took back too: wcore.undoCut; the level is the one
+		// that holds as the link ends, 0 once it expired)
+		s += fmt.Sprintf(" (%d of them for holes taken back: the other server resent no more than its level; reordering level %.0f%%)",
+			u, 100*math.Float64frombits(st.oooRo.Load()))
+	}
 	if r := st.drainRate.Load(); r > 0 {
 		s += fmt.Sprintf(", %d for a slower path", r)
-	}
-	if u := st.undo.Load(); u > 0 {
-		// (each a drain for holes the exit's record showed were reordering:
-		// counted in "for loss" above too)
-		s += fmt.Sprintf(", %d for holes taken back (reordering level %.0f%%)", u, 100*math.Float64frombits(st.oooRo.Load()))
 	}
 	return s + fmt.Sprintf(", held by the window pool %d time(s)", st.poolShort.Load())
 }
@@ -1161,7 +1163,7 @@ func (ws *wcSet) flushAgg(now time.Time) {
 				(*lp)("mtcp: pacing net: %d more link(s) resent past %.4g%% and had their pacing held in the last minute",
 					len(a.links), 100*wcNetLossOf())
 			case wcAggUndo:
-				(*lp)("mtcp: window core: %d more link(s) took back %d drain(s) for holes in the last minute (the other server resent nothing: reordering)",
+				(*lp)("mtcp: window core: %d more link(s) took back %d drain(s) for holes in the last minute (the other server resent no more than its level: reordering)",
 					len(a.links), a.held)
 			}
 		}
