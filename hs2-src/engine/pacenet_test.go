@@ -488,3 +488,194 @@ func TestPaceNetIdleLongRTT(t *testing.T) {
 		t.Fatalf("4.5 s with no ACK on a 2 s path: %+v, want it lifted for idleness", o)
 	}
 }
+
+// wnSock is a socket the net reads a wake (100 ms) at a time: rate bytes/s
+// written to it (what its link meter counts) and acknowledged lag wakes
+// later, segs segments a second sent of which share are resends, paced at
+// pace; its delivery and pacing rates stay at their latest while it idles,
+// as Linux keeps them. With stalled, it acknowledges rate bytes/s of what
+// was written before and nothing is written to it (a path back from a
+// stall).
+type wnSock struct {
+	now          time.Time
+	rtx, segs    float64
+	acked, wrote float64
+	lag          int
+	pend         []float64
+	dlv, pace    float64
+	stalled      bool
+}
+
+func (s *wnSock) tick(segs, share, rate, pace float64) {
+	s.now = s.now.Add(wcRampTick)
+	s.segs += segs / 10
+	s.rtx += share * segs / 10
+	switch {
+	case s.stalled:
+		s.acked += rate / 10
+	default:
+		s.wrote += rate / 10
+		s.pend = append(s.pend, rate/10)
+	}
+	if len(s.pend) > s.lag {
+		s.acked += s.pend[0]
+		s.pend = s.pend[1:]
+	}
+	if rate > 0 {
+		s.dlv = rate
+	}
+	if pace > 0 {
+		s.pace = pace
+	}
+}
+
+func (s *wnSock) in(meter bool) wcNetIn {
+	in := wcNetIn{now: s.now, retrans: uint64(s.rtx), segsOut: uint64(s.segs), acked: uint64(s.acked), dlv: s.dlv, pace: s.pace,
+		srtt: 100 * time.Millisecond, minRTT: 100 * time.Millisecond}
+	if meter {
+		in.wrote = uint64(s.wrote)
+	}
+	return in
+}
+
+type wnAt struct {
+	at time.Time
+	o  wcNetOut
+}
+
+// wnPair reads one socket two ways: on every wake, as the runner did, and
+// when the net has it due (wcNet.due), as it does, with or without its link
+// meter; reads counts the second's readings.
+type wnPair struct {
+	s            wnSock
+	every, gated wcNet
+	meter        bool
+	reads        int
+	eOut, gOut   []wnAt
+}
+
+func (p *wnPair) run(d time.Duration, segs, share, rate, pace float64) {
+	for t := time.Duration(0); t < d; t += wcRampTick {
+		p.s.tick(segs, share, rate, pace)
+		in := p.s.in(p.meter)
+		if o := p.every.step(in); o.act != wcNetNone {
+			p.eOut = append(p.eOut, wnAt{in.now, o})
+		}
+		if p.gated.due(in.now, in.wrote) {
+			p.reads++
+			if o := p.gated.step(in); o.act != wcNetNone {
+				p.gOut = append(p.gOut, wnAt{in.now, o})
+			}
+		}
+	}
+}
+
+// keepalive: d of an idle link's own traffic, a 1.4 KB frame (a NOP or a
+// pong, padded) written and acknowledged every 5 s.
+func (p *wnPair) keepalive(d time.Duration) {
+	for t := time.Duration(0); t < d; t += 5 * time.Second {
+		p.run(wcRampTick, 10, 0, 14000, 0)
+		p.run(5*time.Second-wcRampTick, 0, 0, 0, 0)
+	}
+}
+
+// script: an idle link and its keepalives; a download that runs into a
+// policer's bursts (20% resent at 3.9 times its delivery rate: the cap) and
+// gets clean under the cap, then idles (the cap lifted for idleness); a
+// clean download, idle, again, and one that runs into it past its warm-up
+// (5%) and idles. It returns the readings of the first minute (idle) and of
+// the first download's 50 wakes.
+func (p *wnPair) script() (idleReads, busyReads int) {
+	p.run(30*time.Second, 0, 0, 0, 0)
+	p.keepalive(30 * time.Second)
+	idleReads = p.reads
+	p.run(time.Second, 20000, 0.2, 240*wnMB, 940*wnMB)
+	p.run(4*time.Second, 20000, 0, 240*wnMB, 940*wnMB)
+	busyReads = p.reads - idleReads
+	p.run(20*time.Second, 0, 0, 0, 0)
+	p.keepalive(10 * time.Second)
+	p.run(15*time.Second, 20000, 0, 240*wnMB, 940*wnMB)
+	p.run(5*time.Second, 0, 0, 0, 0)
+	p.run(5*time.Second, 20000, 0, 240*wnMB, 940*wnMB)
+	p.run(time.Second, 20000, 0.05, 240*wnMB, 940*wnMB)
+	p.run(2*time.Second, 20000, 0, 240*wnMB, 940*wnMB)
+	p.run(20*time.Second, 0, 0, 0, 0)
+	return
+}
+
+// The net reads a quiet socket (no cap, next to nothing acknowledged or
+// written over its idle span: wcNetQuiet) once a second, an idle link's
+// keepalives included, and a busy one on every wake. With the socket's link
+// meter (every exit link has one) its decisions are those of a net that
+// reads it on every wake: same wakes, same caps, whether its ACKs come a
+// wake after the write or within it. Without one, a download that starts
+// is engaged on at most wcNetQuiet late, and a held cap is lifted for
+// idleness on the same wake; so is a path back from a stall, which ACKs
+// what was written before and wakes no meter.
+func TestPaceNetQuietReads(t *testing.T) {
+	t0 := time.Unix(1e9, 0)
+	for _, lag := range []int{1, 0} {
+		p := &wnPair{s: wnSock{now: t0, lag: lag}, meter: true}
+		idle, busy := p.script()
+		if idle > 80 {
+			t.Errorf("lag %d: %d readings in 60 s of an idle link (keepalives for 30 s), want about one a second", lag, idle)
+		}
+		if busy != 50 {
+			t.Errorf("lag %d: %d readings in the 50 wakes of a download", lag, busy)
+		}
+		if len(p.eOut) < 4 || fmt.Sprint(p.gOut) != fmt.Sprint(p.eOut) {
+			t.Errorf("lag %d, with the link meter: decisions\n%v\nwant those of a reading every wake\n%v", lag, p.gOut, p.eOut)
+		}
+		t.Logf("lag %d: %d readings over the script's %v (%d wakes), %d in its first idle minute; %d decisions", lag, p.reads,
+			p.s.now.Sub(t0), int(p.s.now.Sub(t0)/wcRampTick), idle, len(p.gOut))
+	}
+	p := &wnPair{s: wnSock{now: t0, lag: 1}}
+	p.script()
+	for _, x := range p.gOut {
+		t.Logf("no meter: %5.1fs %+v", x.at.Sub(t0).Seconds(), x.o)
+	}
+	for _, x := range p.eOut {
+		t.Logf("every wake: %5.1fs %+v", x.at.Sub(t0).Seconds(), x.o)
+	}
+	var eng, gEng, rel, gRel []wnAt
+	pick := func(outs []wnAt, act wcNetAct) (v []wnAt) {
+		for _, x := range outs {
+			if x.o.act == act {
+				v = append(v, x)
+			}
+		}
+		return
+	}
+	eng, gEng = pick(p.eOut, wcNetEngage), pick(p.gOut, wcNetEngage)
+	rel, gRel = pick(p.eOut, wcNetRelease), pick(p.gOut, wcNetRelease)
+	if len(eng) != 2 || len(gEng) != len(eng) || len(gRel) != len(rel) {
+		t.Fatalf("no meter: engaged %v, %v reading every wake; lifted %v, %v", gEng, eng, gRel, rel)
+	}
+	for i := range eng {
+		if d := gEng[i].at.Sub(eng[i].at); d < 0 || d > wcNetQuiet+wcRampTick {
+			t.Errorf("no meter: engaged %v after a reading every wake did, want at most %v", d, wcNetQuiet)
+		}
+		if gRel[i].at != rel[i].at || !gRel[i].o.idle || !rel[i].o.idle {
+			t.Errorf("no meter: lifted %+v, reading every wake %+v", gRel[i], rel[i])
+		}
+	}
+	// a path back from a stall: what was written before the quiet spell is
+	// acknowledged, with 20% resent at 3.9 times the delivery rate, and
+	// nothing new written for 2 s: the meter does not wake the reading, the
+	// net engages at most wcNetQuiet late, at the cap of a reading every wake
+	p = &wnPair{s: wnSock{now: t0, lag: 1}, meter: true}
+	p.run(30*time.Second, 0, 0, 0, 0)
+	p.s.stalled = true
+	p.run(2*time.Second, 20000, 0.2, 240*wnMB, 940*wnMB)
+	p.s.stalled = false
+	p.run(2*time.Second, 20000, 0, 240*wnMB, 940*wnMB)
+	p.run(10*time.Second, 0, 0, 0, 0)
+	eng, gEng = pick(p.eOut, wcNetEngage), pick(p.gOut, wcNetEngage)
+	if len(eng) != 1 || len(gEng) != 1 {
+		t.Fatalf("back from a stall: engaged %v, %v reading every wake", gEng, eng)
+	}
+	if d := gEng[0].at.Sub(eng[0].at); d < 0 || d > wcNetQuiet+wcRampTick || gEng[0].o.cap != eng[0].o.cap {
+		t.Errorf("back from a stall: engaged %v after a reading every wake did at a cap of %d, want at most %v and %d",
+			d, gEng[0].o.cap, wcNetQuiet, eng[0].o.cap)
+	}
+}

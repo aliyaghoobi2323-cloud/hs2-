@@ -46,7 +46,8 @@ import (
 //
 // It also runs the exit's pacing net (pacenet.go): every exit link socket is
 // registered for it (with no core unless WcoreUpload), whatever the edge
-// runs, and read on each wake (one TCP_INFO); its cap is set with
+// runs, and read on each wake (one TCP_INFO; a quiet one, idle with no cap,
+// once a second: wcNetQuiet); its cap is set with
 // SO_MAX_PACING_RATE only when the net engages, moves or lifts it.
 
 // Lab knobs (cmd/hs2 applyTuning: HS2_TUNE_WCORE*), read as a session
@@ -705,8 +706,17 @@ func init() {
 }
 
 // paceNet is the pacing net's wake (pacenet.go): one TCP_INFO of the link's
-// socket, and its cap set, moved or lifted as the net decides.
+// socket when the net has it due (a quiet socket once a second, or at once
+// when its meter has it written to), and its cap set, moved or lifted as the
+// net decides.
 func (l *wcLink) paceNet(now time.Time) {
+	wrote := uint64(0)
+	if l.mtr != nil {
+		wrote = l.mtr.wrBytes.Load()
+	}
+	if !l.net.due(now, wrote) {
+		return
+	}
 	ts, ok := tcpStats(l.tcp)
 	if !ok {
 		return
@@ -716,7 +726,7 @@ func (l *wcLink) paceNet(now time.Time) {
 		pace = 0 // no pacing: unknown
 	}
 	o := l.net.step(wcNetIn{now: now, retrans: l.netRtx.add(uint32(ts.retrans)), segsOut: l.netSegs.add(ts.segsOut),
-		acked: ts.bytesAcked, dlv: float64(ts.deliveryRate), pace: pace, srtt: usDur(uint64(ts.rtt)), minRTT: wcMinRTTOf(ts.minRTT)})
+		acked: ts.bytesAcked, wrote: wrote, dlv: float64(ts.deliveryRate), pace: pace, srtt: usDur(uint64(ts.rtt)), minRTT: wcMinRTTOf(ts.minRTT)})
 	set := *wcPaceSet.Load()
 	switch o.act {
 	case wcNetEngage, wcNetMoveCap:
