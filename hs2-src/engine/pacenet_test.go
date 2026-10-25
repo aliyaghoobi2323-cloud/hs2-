@@ -679,3 +679,35 @@ func TestPaceNetQuietReads(t *testing.T) {
 			d, gEng[0].o.cap, wcNetQuiet, eng[0].o.cap)
 	}
 }
+
+// A socket that sends into a dead path -- its sender resending all it has in
+// flight, nothing acknowledged, nothing new written past the send gate -- is
+// no quiet one (red team of پ۵): the net reads it on every wake, and its
+// decisions are those of a net that always did. Quiet by its acknowledged
+// and written bytes alone, it was read once a second, and the path's first
+// wake back (its ACKs, the delivery rate of that wake under a fifth of the
+// pace) went unread: a reading every wake engaged there on the dead span's
+// resends; the gated net read the next wake, the meter's, at the full
+// delivery rate, and never engaged. In the model (outages of 0.8 to 5 s on
+// 100/300/1000 Mbit at 50/150/300 ms, q20/q50, no policer or one at 30% or
+// 60%, base and core, 2 seeds: 432 runs) 41 runs went another way, 35 fewer
+// engagements, the core's loss drains 1280 → 1310 (one run 10 → 24) and the
+// mean resend 4.46 → 4.50%.
+func TestPaceNetDeadPathIsNotQuiet(t *testing.T) {
+	t0 := time.Unix(1e9, 0)
+	p := &wnPair{s: wnSock{now: t0, lag: 1}, meter: true}
+	p.run(30*time.Second, 0, 0, 0, 0)
+	p.run(5*time.Second, 3000, 0, 30*wnMB, 30*wnMB)
+	// dead for 2.5 s: 1000 resends a second, nothing acknowledged or written
+	p.s.stalled = true
+	p.run(2500*time.Millisecond, 1000, 1, 0, 0)
+	// back: one wake of ACKs of what was in flight at 6 Mbit/s, then the
+	// download again
+	p.run(wcRampTick, 3000, 1, 6*wnMB, 0)
+	p.s.stalled = false
+	p.run(5*time.Second, 3000, 0, 30*wnMB, 30*wnMB)
+	p.run(20*time.Second, 0, 0, 0, 0)
+	if len(p.eOut) == 0 || fmt.Sprint(p.gOut) != fmt.Sprint(p.eOut) {
+		t.Errorf("a path back from dead, with the link meter: decisions\n%v\nwant those of a reading every wake\n%v", p.gOut, p.eOut)
+	}
+}
