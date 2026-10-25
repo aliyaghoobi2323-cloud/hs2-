@@ -863,6 +863,7 @@ type wmRcvStream struct {
 	pause     int64 // ms: the longest pause at a limit since the latest update (smux streamCore.pause)
 	covered   bool  // smux streamCore.covered
 	miss      uint8
+	held      uint8 // smux streamCore.held (CoverHold)
 	updN      uint32
 	hitN      uint32
 	lagN      uint32
@@ -1648,11 +1649,18 @@ var wmCoverWin = smux.Cover(wmNeed, wmMaxWin)
 // cover is smux's fitCore before FitCore: the stream's cover after this
 // update (smux.RanUp and smux.CoverNext on the longest pause at a limit
 // since the previous update), and its own window with it (Stream.ownWin).
-// No pool, the exit's end (SmuxCover: the edge's only), or the core took
-// the covers away: no cover.
+// No pool or the exit's end (SmuxCover: the edge's only): no cover. The
+// core took the covers away: none, and the one it took comes back if it
+// lets covers again within coverMiss updates (smux.CoverHold: a cut taken
+// back, wcore.go undoCut).
 func (m *wmModel) cover(st *wmRcvStream, old, want uint32, growOK, turnOK bool) uint32 {
-	if !m.pool || m.noCover || !smuxCoverOn(m.cfg.exit) {
-		st.covered, st.miss = false, 0
+	if !m.pool || !smuxCoverOn(m.cfg.exit) {
+		st.covered, st.miss, st.held = false, 0, 0
+		return wmNeed
+	}
+	st.covered, st.held, _ = smux.CoverHold(st.covered, st.held, !m.noCover)
+	if m.noCover {
+		st.miss = 0
 		return wmNeed
 	}
 	ms := func(v int64) time.Duration { return time.Duration(v) * time.Millisecond }
@@ -2569,7 +2577,7 @@ var wmKnown = map[string]wmKnownCell{
 		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 149 Mbit/s with 0.46% resent, 38% of N4's gain (N4 resends 10%); with the covers 187 Mbit/s with 0.04% (67%; the windows without the core 177), and the user's p99 377 ms against base's 288 (1.31×)"},
 }
 
-// wmKnownNoCover is wmKnown as it was before smux's covers (ec15a8f): with
+// wmKnownNoCover is wmKnown as it was before smux's covers (93d0faa): with
 // the covers off (HS2_TUNE_SMUX_COVER=0) the model is base's to the byte
 // (TestWcoreModelCoverOff), and so are the core's misses.
 var wmKnownNoCover = map[string]wmKnownCell{
@@ -2769,10 +2777,11 @@ const wmUpdMiBMax = 1.05
 
 // TestWcoreModelCoverOff: with the covers off (HS2_TUNE_SMUX_COVER=0; the
 // roll-back of the window work takes HS2_TUNE_WCORE=0 too) the model is
-// base's (ec15a8f, before the covers) to the byte: every run of base, N4,
-// fin and the core, each seed of each cell of the default table
+// base's (93d0faa: the reordering fix, before the covers) to the byte:
+// every run of base, N4, fin and the core, each seed of each cell of the
+// default table
 // (HS2_WCORE_MODEL_FULL=1: of the full one), gives what
-// testdata/wcore_model_nocover.txt holds for it, made on ec15a8f by the same
+// testdata/wcore_model_nocover.txt holds for it, made on 93d0faa by the same
 // wmRunLine (a hash of a cell's runs per mode). HS2_WCORE_MODEL_GOLDEN=1
 // writes the file anew from this tree: only for a change to the core meant
 // to show with the covers off too, and said so in its commit.
@@ -2843,7 +2852,7 @@ func wmRunLine(cfg wmCfg) (key, sum string) {
 
 // The model takes HS2_TUNE_SMUX_COVER as cmd/hs2 does (SmuxCover), so that
 // HS2_TUNE_SMUX_COVER=0 HS2_WCORE_MODEL_FULL=1 go test -run TestWcoreModel
-// ./engine prints base's model (ec15a8f) to the byte: the roll-back's check
+// ./engine prints base's model (93d0faa) to the byte: the roll-back's check
 // (TestWcoreModelCoverOff holds it).
 func init() {
 	if v, err := strconv.Atoi(os.Getenv("HS2_TUNE_SMUX_COVER")); err == nil {

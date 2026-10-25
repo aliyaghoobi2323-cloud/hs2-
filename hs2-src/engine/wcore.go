@@ -3344,7 +3344,8 @@ func (c *wcore) lossTestDone(in wcIn, m wcMeas, ev *[]wcEvent) bool {
 			return false
 		}
 		if c.sndRef.past(m.snd, c.sndAbs(m)) {
-			c.sndRef = wcLossRef{v: m.snd, b: c.B, ok: true}
+			c.sndRef = wcLossRef{} // (a level of this one record, and its spread)
+			c.sndRef.note(m.snd, c.B, 1, m.sndSegs)
 			*ev = append(*ev, wcEvent{kind: wcEvLossy, loss: m.snd, T: c.tBase, q: c.tau})
 		} else {
 			c.noteCap(in.now, c.lossTestB)

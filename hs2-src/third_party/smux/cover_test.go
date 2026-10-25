@@ -392,7 +392,9 @@ func TestCoverCounters(t *testing.T) {
 	s.readAt = monoNow() - int64(claimIdle)
 	s.bufferLock.Unlock()
 	session.sweepClaims()
-	if c := session.CoverStats(); c.Grants != 3 || c.Idle != 1 {
+	// (the cover the core took came back at the first update after it let
+	// covers again: CoverHold, no grant)
+	if c := session.CoverStats(); c.Grants != 2 || c.Back != 1 || c.Idle != 1 {
 		t.Fatalf("idle: %+v", c)
 	}
 	released("idle")
@@ -407,6 +409,71 @@ func TestCoverCounters(t *testing.T) {
 	}
 	if c := session.CoverStats(); c.Lost() != 3 {
 		t.Fatalf("%+v: %d lost, want 3", c, c.Lost())
+	}
+}
+
+// A cover the window core takes (SetCover(false): a cut that found the path
+// full) comes back at the stream's first update once the core lets covers
+// again within coverMiss updates (the cut taken back: engine wcore.go
+// undoCut), with no run-up to its window first and no grant counted; past
+// coverMiss updates it is gone. (CoverHold.)
+func TestCoverBackAfterSetCover(t *testing.T) {
+	for _, tc := range []struct {
+		covered bool
+		held    uint8
+		allowed bool
+		want    bool
+		held2   uint8
+		back    bool
+	}{
+		{true, 0, false, false, 1, false},  // taken
+		{false, 1, false, false, 2, false}, // held
+		{false, coverMiss - 1, false, false, coverMiss, false},
+		{false, coverMiss, false, false, 0, false}, // gone
+		{false, 3, true, true, 0, true},            // given back
+		{true, 0, true, true, 0, false},
+		{false, 0, true, false, 0, false},
+	} {
+		if c, h, b := CoverHold(tc.covered, tc.held, tc.allowed); c != tc.want || h != tc.held2 || b != tc.back {
+			t.Fatalf("CoverHold(%v, %d, %v) = %v, %d, %v, want %v, %d, %v", tc.covered, tc.held, tc.allowed, c, h, b, tc.want, tc.held2, tc.back)
+		}
+	}
+
+	pool := NewWindowPool(4 << 20)
+	cfg := poolConfig(pool)
+	need := uint32(cfg.NeedStreamBuffer)
+	cover := Cover(need, uint32(cfg.MaxStreamBuffer))
+	step := int(StepOf(need, need))
+	session, s, p := newRawPeer(t, cfg)
+	heldRounds(t, p, s, 8, 10*time.Millisecond)
+	if w := p.lastWindow(); w != cover {
+		t.Fatalf("held: window %d, want the cover %d", w, cover)
+	}
+	update := func() {
+		keepUp(t, p, s, step) // a reader that keeps up, the peer never at the limit
+		p.sync(s)
+	}
+	session.SetCover(false)
+	update()
+	if w := p.lastWindow(); w != need {
+		t.Fatalf("taken by the core: window %d, want the need %d", w, need)
+	}
+	session.SetCover(true)
+	update()
+	if w := p.lastWindow(); w != cover {
+		t.Fatalf("the core lets covers again: window %d, want the cover %d back", w, cover)
+	}
+	if c := session.CoverStats(); c.Grants != 1 || c.Taken != 1 || c.Back != 1 || c.Now != 1 {
+		t.Fatalf("given back: %+v, want one granted, taken and given back, held", c)
+	}
+	session.SetCover(false)
+	for i := 0; i < coverMiss+1; i++ {
+		update()
+	}
+	session.SetCover(true)
+	update()
+	if c := session.CoverStats(); c.Taken != 2 || c.Back != 1 {
+		t.Fatalf("let again %d updates after it was taken: %+v, want it gone (not given back)", coverMiss+1, c)
 	}
 }
 
