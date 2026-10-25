@@ -1020,6 +1020,23 @@ func (c *wcore) coverPastKnee(now time.Time) bool {
 	return n >= 2
 }
 
+// coverBlind says whether, in OFF, the edge's core holds the covers back
+// for want of the exit's records: they came without the sender's fields (an
+// old exit's 64 bytes, or one with no TCP_INFO), or none came for
+// wcSndQuiet. The covers put the need in flight where the windows had the
+// need less a step, and only the exit's record shows what that costs behind
+// a policer: the edge's core grows nothing without it (off; red team, round
+// 1), and its covers alone resent 10.4% on 300/72 behind a policer at 60%
+// of the path against base's 0.3%, 7.4% on 1000/72 behind one at 20%
+// against 0.2% (red team, H2: TestWcoreH2RedBlindPolicer). Before the first
+// record (the edge's first poll, ~2 s) the covers are as they were: held
+// back there too, the cores' trajectories moved and four cells of the
+// table's gate missed a target (1000/100 behind a policer at 300: 1.22%
+// resent against 0.04%).
+func (c *wcore) coverBlind(now time.Time) bool {
+	return !c.cfg.noCover && c.cfg.side == wcEdge && (c.sndAny && !c.sndSeen || c.sndQuiet(now))
+}
+
 // coverHarmed says whether, in OFF, the covers stay taken: within
 // wcCoverHarmHold of the latest evaluation that found the windows without the
 // core past the knee (coverPastKnee).
@@ -3598,9 +3615,10 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	// shares, and covers in OFF beside them split four links on 1000/100
 	// behind 50 ms up to 2.4–3.0 times apart, 1.2–2.0 without: cover; nor
 	// while the exit's records show the windows without the core past the
-	// knee: coverPastKnee)
+	// knee: coverPastKnee; nor on an edge with no records of the exit to see
+	// a policer by: coverBlind)
 	o := wcOut{state: c.state, B: c.bPub, next: next, events: ev, growOK: true,
-		noCover: c.last.grp || c.coverHarmed(now)}
+		noCover: c.last.grp || c.coverHarmed(now) || c.coverBlind(now)}
 	o.ceils = make([]wcCeil, len(in.streams))
 	for i, s := range in.streams {
 		o.ceils[i].id = s.id
