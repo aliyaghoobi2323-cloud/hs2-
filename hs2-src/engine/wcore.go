@@ -1874,6 +1874,12 @@ func wcMerge(a *wcIn, b wcIn) {
 		if a.snd.fresh {
 			b.snd.retrans += a.snd.retrans
 			b.snd.segsOut += a.snd.segsOut
+			// (the larger of the two records' writer waits: the path-held
+			// guard looks at both records, sndBlocked; post-merge review of
+			// FM2, L2)
+			if a.snd.blockedOK && (!b.snd.blockedOK || a.snd.blocked > b.snd.blocked) {
+				b.snd.blocked, b.snd.blockedOK = a.snd.blocked, true
+			}
 		}
 		a.snd = b.snd
 	}

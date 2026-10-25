@@ -743,3 +743,34 @@ func TestWcoreS2SlowSourceReordered(t *testing.T) {
 		}
 	}
 }
+
+// Two records of the exit in one interval (an evaluation interval of up to
+// 2 s and a record every 2 s): the merge keeps the larger share of the two
+// spans in which the exit's writer waited on its socket, not only the later
+// record's (post-merge review of FM2, L2). The path-held guard looks at the
+// latest two records (sndBlocked), and with only the later one's share it
+// never saw the earlier one's.
+func TestWcoreS2MergeKeepsBlocked(t *testing.T) {
+	rec := func(blk float64, ok bool) wcIn {
+		return wcIn{now: wtT0, snd: wcSnd{fresh: true, srtt: 80 * time.Millisecond, minRTT: 72 * time.Millisecond,
+			retrans: 1, segsOut: 1000, blocked: blk, blockedOK: ok}}
+	}
+	for _, tc := range []struct {
+		a, b   wcIn
+		want   float64
+		wantOK bool
+	}{
+		{rec(0.8, true), rec(0.1, true), 0.8, true},
+		{rec(0.1, true), rec(0.8, true), 0.8, true},
+		{rec(0.8, true), rec(0, false), 0.8, true},
+		{rec(0, false), rec(0.3, true), 0.3, true},
+		{rec(0, false), rec(0, false), 0, false},
+	} {
+		acc := wcCopy(tc.a)
+		wcMerge(&acc, tc.b)
+		if acc.snd.blocked != tc.want || acc.snd.blockedOK != tc.wantOK || acc.snd.retrans != 2 || acc.snd.segsOut != 2000 {
+			t.Errorf("records blocked %v (%v) then %v (%v): merged %+v, want blocked %v (%v) and the resends summed",
+				tc.a.snd.blocked, tc.a.snd.blockedOK, tc.b.snd.blocked, tc.b.snd.blockedOK, acc.snd, tc.want, tc.wantOK)
+		}
+	}
+}
