@@ -922,3 +922,39 @@ func TestWcoreS2RouteKeptUntilBack(t *testing.T) {
 		}
 	}
 }
+
+// A route change takes the longer path no further than the exit's own srtt
+// shows it (red team of step 2's sticky route). The turnaround's 60 s floor
+// holds the core's own standing queue where every window update comes while
+// HOLD keeps a queue, while the exit's srtt comes back to the bare path as
+// that queue empties now and then: q_snd is then within Δq, and sndAllows
+// lets p run a quarter of its rise past that srtt. Taken for path, it was
+// kept (routeT) and moved up again on the next such floor: 300 → 330 → 360 ms
+// with the exit's srtt at 302 ms all along. In the model's route sweep (30>60,
+// 50>150, 100>200, 100>300, 20>100, 150>600 × q20/q50 × 100/300/1000 Mbit ×
+// 3 seeds × records off or not, 300 s) 5 of 216 runs held T_base past the
+// path by 9 to 24 ms for 11 to 124 s (300/30>60 q20 seed 3: T_base 69 ms
+// on a 60 ms path from 142 s on, accepted on a record of srtt 60.0 ms
+// against a turnaround floor of 72).
+func TestWcoreS2RouteTakesNoTurnaroundQueue(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	fast := func(turn time.Duration) wcStream {
+		return wcStream{id: 1, read: 1 << 20, upd: 4, hit: 4, turnMin: turn}
+	}
+	for _, side := range []wcSide{wcEdge, wcExit} {
+		name := map[wcSide]string{wcEdge: "edge", wcExit: "exit"}[side]
+		c := wsCore(side)
+		now := wtT0
+		wsPaths(c, &now, time.Minute, ms(72), ms(73), ms(74), ms(72), fast(ms(75)))
+		c.inF = map[uint32]bool{1: true}
+		if n := wsPaths(c, &now, 80*time.Second, ms(72), ms(302), ms(302), ms(72), fast(ms(303))); n != 1 || c.tBase < ms(295) || c.tBase > ms(305) {
+			t.Fatalf("%s: the route change 72 → 300 ms: %d logged, T_base %v", name, n, c.tBase)
+		}
+		for _, q := range []int{30, 60} {
+			wsPaths(c, &now, 70*time.Second, ms(72), ms(302), ms(302), ms(72), fast(ms(303+q)))
+			if c.tBase > ms(305) {
+				t.Errorf("%s: turnarounds %d ms over the path for 70 s, the exit's srtt at 302 ms: T_base %v, want the path's (~300ms)", name, q, c.tBase)
+			}
+		}
+	}
+}

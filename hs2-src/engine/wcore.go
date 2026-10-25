@@ -1982,6 +1982,21 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 				c.routeT, c.routeLog = 0, false
 			}
 			if c.qSnd <= c.dq() && c.sndAllows(now, p, t) {
+				if !c.sndRTTAt.IsZero() {
+					// no longer than the exit's srtt shows it: a smoothed
+					// round trip never goes under the path, and what the
+					// turnaround's floor holds past it is queue. That floor
+					// holds the core's own standing queue where each window
+					// update comes while HOLD keeps one, as the exit's srtt
+					// comes back to the bare path when it empties now and
+					// then; sndAllows lets p run a quarter of its rise past
+					// that srtt, and taken for path it was kept (routeT) and
+					// moved up on the next such floor (300 → 330 → 360 ms
+					// with the exit's srtt at 302; the model's route sweep:
+					// 5 of 216 runs 9 to 24 ms past the path for 11 to 124 s;
+					// TestWcoreS2RouteTakesNoTurnaroundQueue)
+					p = min(p, c.sndRTT)
+				}
 				c.routeT, c.routeMin = p, t
 				t = p
 				if !c.routeLog {
