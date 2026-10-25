@@ -115,6 +115,9 @@ type wcore struct {
 	prov, weak wcProv
 	oooRo      float64
 	oooRoAt    time.Time
+	// movedAt: the latest drain for a queue or a slower path, whether it
+	// moved B or found it at the floor (undoCut takes back nothing past it)
+	movedAt time.Time
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -875,6 +878,19 @@ func (c *wcore) step(in wcIn) wcOut {
 	if ro := c.roLevel(now); judged && ro > 0 && share <= ro {
 		holeLoss = false // within the path's reordering level (undoCut)
 	}
+	if judged && holeLoss && !c.prov.at.IsZero() {
+		// a hole past the level while a reaction to holes waits for its
+		// record (the drain holds B: no cut, no verdict): the record judges
+		// holeLag after the latest one (judgeCut). Only the holes that cut or
+		// gave a verdict were counted, and a loss right after a burst of
+		// reordering was taken back by a record that came before its resend
+		// could show (TestWcoreS2RedHolesAfterCut). (Not their share: the
+		// level learns what cut. With it, the loss bursts of
+		// TestWcoreS2RedBursts had 13 cuts taken back around drops of the
+		// link's own packets, against 7 without it and the angle as the judge
+		// took it.)
+		c.prov.last = now
+	}
 	if !c.evalAt.IsZero() && now.Before(c.evalAt) {
 		// (where the exit's records come, a cut for holes waits for one:
 		// provNote)
@@ -1175,7 +1191,6 @@ type wcProv struct {
 	backoff         int
 	pathFull        bool
 	rhat            []wcRate
-	moved           int // drains for a queue or a slower path then (one since moved B for its own reason)
 	// STARTUP's comparison: what the next step is judged against
 	fullR, prevR float64
 	prevB        uint64
@@ -1191,7 +1206,6 @@ func (c *wcore) provSnap(now time.Time, want bool) (wcProv, bool) {
 	return wcProv{at: now, st: c.state, b: c.B, probeFrom: c.probeFrom,
 		bCap: c.bCap, bCapAt: c.bCapAt, qcap: c.qcap, qcapAt: c.qcapAt, qcapOK: c.qcapOK,
 		backoff: c.backoff, pathFull: c.pathFull, rhat: append([]wcRate(nil), c.rhat...),
-		moved: c.cnt.drainQ + c.cnt.drainRate,
 		fullR: c.fullR, prevR: c.prevR, prevB: c.prevB, flat: c.flat, gear: c.gear}, true
 }
 
@@ -1236,29 +1250,46 @@ func (c *wcore) holeLag(s wcSnd) time.Duration {
 //
 // Where the records stop (sndQuiet) or the core goes OFF, it stands, as
 // without records.
+//
+// Every record that shows a loss worth a verdict, whether a reaction waits
+// for it or not, makes a small loss kept aside before it (weak) no more a
+// cut to take back: what was learned since is that loss's (its loss point,
+// Q_cap, backoff). Only a record that judged a pending reaction did before,
+// and a policer's verdict that came at an evaluation with nothing pending was
+// wiped, its loss point, Q_cap and backoff back to what they were before the
+// small loss, by the next cut for reordering taken back
+// (TestWcoreS2RedWeakAfterVerdict).
 func (c *wcore) judgeCut(in wcIn) []wcEvent {
+	now := in.now
+	s := in.snd
+	judged := c.sndJudges(now)
+	rec := judged && s.fresh && s.segsOut > 0
+	loss, small := false, false
+	if rec {
+		loss = !c.sndNoLoss(s)
+		small = loss && c.sndSmall(s)
+		if loss && !small {
+			c.weak = wcProv{} // a loss worth a verdict: what came since is its
+		}
+	}
 	p := &c.prov
 	if p.at.IsZero() {
 		return nil
 	}
-	now := in.now
-	if !c.sndJudges(now) || c.state == wcOff {
+	if !judged || c.state == wcOff {
 		*p, c.weak = wcProv{}, wcProv{}
 		return nil
 	}
-	s := in.snd
-	if !s.fresh || s.segsOut == 0 {
+	if !rec {
 		return nil
 	}
 	switch {
-	case !c.sndNoLoss(s):
-		if v := float64(s.retrans) / float64(s.segsOut); c.sndRef.ok && !c.sndRef.past(v, c.sndAbsN(s.segsOut)) {
+	case loss:
+		if small {
 			if c.weak.at.IsZero() {
 				c.weak = *p
 			}
 			c.weak.share = math.Max(c.weak.share, p.share)
-		} else {
-			c.weak = wcProv{} // a loss worth a verdict: what came since is its
 		}
 		*p = wcProv{}
 		return nil
@@ -1289,14 +1320,28 @@ func (c *wcore) sndNoLoss(s wcSnd) bool {
 	return float64(s.retrans) <= exp+wcLossCongSig*math.Sqrt(exp) && float64(s.retrans) < wcLossRand*float64(s.segsOut)
 }
 
+// sndSmall says whether a record's loss is under what the verdict calls one
+// (sndRef.past by sndAbs): kept aside (weak), not a verdict of its own.
+func (c *wcore) sndSmall(s wcSnd) bool {
+	v := float64(s.retrans) / float64(s.segsOut)
+	return c.sndRef.ok && !c.sndRef.past(v, c.sndAbsN(s.segsOut))
+}
+
 // undoCut takes back what holes alone did to B, the exit's record having
 // shown no loss (judgeCut). Every loss point (bCap), Q_cap, backoff and R̂
 // reset since the first of them came of them (a record that showed a loss
 // would have made them stand first), and goes back to what it was; so does
 // B, in the state they found (a probe's: where it began), unless a drain for
-// a queue or a slower path moved B since (its verdict stands) or the core is
-// past HOLD again (a probe, STARTUP: it moves on from where it is). The
-// published budget climbs back by the ramp.
+// a queue or a slower path came since (movedAt: its verdict stands, and R̂ as
+// it reset it) or the core is past HOLD again (a probe, STARTUP: it moves on
+// from where it is). The published budget climbs back by the ramp.
+//
+// (movedAt, not those drains' counters: a drain for a slower path that finds
+// B at the floor already, where a cut to it put it, drains nothing and
+// counts nothing, but resets R̂ to the slower rate; the record that took the
+// cut back restored the budget from before it and the faster R̂, and HOLD
+// sized B from that into the slower path's queue,
+// TestWcoreS2RedUndoKeepsSlowerRate.)
 //
 // It also sets the path's reordering level oooRo: the largest share of a
 // wake's packets behind the holes taken back, with a margin (wcRoMargin, at
@@ -1335,11 +1380,13 @@ func (c *wcore) undoCut(in wcIn, v float64) []wcEvent {
 	if c.lossTest == wcSrcOoo {
 		c.lossTest = wcSrcNone
 	}
-	if len(c.rhat) > 0 && !c.rhat[0].at.Before(p.at) && len(p.rhat) > 0 {
-		// (R̂ was reset since: its samples from before come back)
+	moved := !c.movedAt.Before(p.at)
+	if len(c.rhat) > 0 && !c.rhat[0].at.Before(p.at) && len(p.rhat) > 0 && !moved {
+		// (R̂ was reset since, by the verdict taken back: its samples from
+		// before come back)
 		c.rhat = append(p.rhat, c.rhat...)
 	}
-	if c.state != wcDrain && c.state != wcHold || c.cnt.drainQ+c.cnt.drainRate != p.moved {
+	if c.state != wcDrain && c.state != wcHold || moved {
 		return nil
 	}
 	b := p.b
@@ -1385,6 +1432,21 @@ func (c *wcore) wakeMeas(in wcIn) wcMeas {
 // reordering is its route's and its rate's (the field's grew with the rate,
 // 2% at 300 Mbit/s, 15% at 1.7 Gbit/s): a level learned once is no licence
 // for holes for good (a route change and OFF reset it too).
+//
+// (Red team: within the level a loss that comes later, a policer's, is seen
+// only in the exit's records, ~2 s apart; on the field's path at ~860
+// Mbit/s Rcv_ooopack's own level often sits past wcOooClean too, and holes
+// are no signal there at all. In the link model's policer sweep,
+// TestWcoreS2RedPolicer, the loss rule drained 11 of the 135 runs on the
+// field's path and 6 of 135 on the same path without reordering, where the
+// core without the angle drained 2 and 6 (it never ran fast there: the
+// sender's pace stayed low); 1000/20 behind a policer at 60% resent 9.84%
+// against 1.48% without reordering. Not the level's own doing: with no level
+// at all, cuts only taken back, 10 drained. Suspending the level while the
+// latest record shows a loss took the field's 1000/72 from 670 to 634 Mbit/s
+// and drained as many. The larger part was the pacing net's cap held at
+// the rate from before the policer (pacenet.go: with it following the
+// delivery down, 6 and 4); 1000/20 at 60% still resends 9.95%.)
 func (c *wcore) roLevel(now time.Time) float64 {
 	if c.oooRo == 0 || now.Sub(c.oooRoAt) >= wcQcapTTL {
 		return 0
@@ -2783,6 +2845,9 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, sig wc
 	c.refreshing = false
 	c.schedRefresh(in.now)
 	c.chgAt = in.now
+	if why != wcWhyLoss {
+		c.movedAt = in.now
+	}
 	t := c.tBase.Seconds()
 	b := 0.9*m.rF*t + m.rF*c.tau.Seconds() + m.hStep
 	if rate {
