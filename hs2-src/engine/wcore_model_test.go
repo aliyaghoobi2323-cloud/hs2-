@@ -1803,6 +1803,10 @@ func (m *wmModel) runCore() {
 		m.res.trace = append(m.res.trace, fmt.Sprintf("%5.1fs %-7s B%5.2f/%5.2f cap%5.2f nF%d RF%4.0f RL%4.0f hit%.2f qt%3d(ok%v) qo%3d qs%3d snd%.3f ooo%.3f | tau%3d qref%3d brake%3d grow%v | bbr%d pace%4.0f q%3.0f %s",
 			float64(m.t)/1000, o.state, float64(o.B)/(1<<20), float64(c.B)/(1<<20), float64(c.bCap)/(1<<20), len(lm.f), lm.rF/wmMbit, lm.rLink/wmMbit, lm.hit, lm.qTurn.Milliseconds(), lm.qOK, lm.qOwn.Milliseconds(), lm.qSnd.Milliseconds(), lm.snd, lm.ooo,
 			c.tau.Milliseconds(), c.qRef.Milliseconds(), o.qBrake.Milliseconds(), o.growOK, f.mode, f.pacing*1000/wmMbit, float64(m.bn.qBytes)/m.bn.rate, ss.String()))
+		if ro := c.roLevel(in.now); ro > 0 || c.cnt.undo > 0 {
+			// (the path's reordering level and the cuts for holes taken back)
+			m.res.trace[len(m.res.trace)-1] += fmt.Sprintf(" ro%.2f undo%d", ro, c.cnt.undo)
+		}
 		for _, e := range o.events {
 			m.res.trace = append(m.res.trace, "        event "+e.String())
 		}
