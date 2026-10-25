@@ -575,3 +575,45 @@ func TestWcoreS2SndHeld(t *testing.T) {
 		}
 	}
 }
+
+// An exit whose CPU, not the path, holds the link's sender (the rig's
+// 1000 Mbit/s path carries ~750: TLS and the smux writer). The data waits in
+// the exit's smux, where no srtt sees it; its writer is busy, not waiting on
+// its socket (txBlockedNs), and a pong goes ahead of it. τ_hold learns that
+// wait, and HOLD's windows hold it: twice what the path takes in a round trip,
+// turnarounds 50-80 ms past the path's floor with every queue signal at 0.
+// The download is held by its window all the same (base's 2 MiB is far under
+// what it moves in a round trip), and it stays fast. Judged against its own
+// window (the share of it moved in floor + queue), FM2 found no evidence on
+// the intervals where the rate dipped a little or a probe added window, the
+// stream left F twice in a row, the core went OFF and STARTUP came again (the
+// rig, 1000/72 q50, one download: 720 → 654 Mbit/s over three runs; the
+// model: 728 → 662-694).
+func TestWcoreS2CPUHeldStaysFast(t *testing.T) {
+	for _, x := range []struct {
+		rate     float64
+		rtt, cpu int // cpu: the exit's writer, % of the path's nominal rate
+	}{{1000, 72, 75}, {1000, 50, 75}, {1000, 72, 60}, {1000, 50, 60}, {300, 150, 75}} {
+		for seed := uint64(1); seed <= 3; seed++ {
+			c := wmPath(x.rate, wmMS(x.rtt), wmMS(50))
+			c.mode, c.seed, c.dur, c.cpu = wmCore, seed, 45*time.Second, float64(x.cpu)/100*c.rate
+			held := false
+			var neg []string
+			c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+				if !k.lastAt.Equal(in.now) {
+					return
+				}
+				held = held || k.state == wcHold
+				at0, ok := k.srcAt[1]
+				if held && (ok && at0.Equal(in.now) || !k.inF[1] || k.state == wcOff) && len(neg) < 3 {
+					neg = append(neg, fmt.Sprintf("%.1fs (%s, in F %v)", at.Seconds(), k.state, k.inF[1]))
+				}
+			}
+			r := wmRun(c)
+			if !held || len(neg) > 0 {
+				t.Errorf("%.0f/%d, the exit's CPU at %d%%, seed %d: HOLD reached %v; judged without evidence, out of F or OFF after it at %v (%.1f Mbit)",
+					x.rate, x.rtt, x.cpu, seed, held, neg, r.mbit)
+			}
+		}
+	}
+}
