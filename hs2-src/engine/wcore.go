@@ -173,6 +173,13 @@ type wcore struct {
 	parkHold       int
 	pathFull       bool
 	capped         bool
+	// coverHarmAt: in OFF, the latest evaluation whose records of the exit
+	// showed the windows without the core past the knee (coverPastKnee): the
+	// covers stay taken for wcCoverHarmHold after it (coverHarmed; zero:
+	// none, and leaving OFF ends it); coverRecs: the latest records as OFF
+	// judged them for it, newest first (coverNote)
+	coverHarmAt time.Time
+	coverRecs   [wcSndHist]wcCoverRec
 
 	// STARTUP
 	fullR, prevR float64
@@ -937,6 +944,87 @@ func (c *wcore) cover() uint32 {
 		return c.cfg.need
 	}
 	return smux.Cover(c.cfg.need, c.cfg.maxWin)
+}
+
+// wcCoverHarmHold: in OFF the core takes its session's covers while the
+// exit's records show the windows without the core past the knee
+// (coverPastKnee), and for this long after the latest evaluation that saw
+// them so (coverHarmed), unless it leaves OFF first (its floor rules them
+// from then on: coverFloor). A minute: the covers leave their mark on the
+// sender, whose STARTUP pacing the covered rate raised and nothing lowers
+// before BBR's full pipe, so the need's windows burst harder than before
+// them and harm() can hold the core OFF on them alone; with a hold of 10 s
+// the covers came back while the eight cores of 1000/100 were still OFF and
+// put the path past the knee again, a cycle that kept seven of them OFF
+// most of the run (the user next to them: p99 420–433 ms against 159–233
+// with the covers off).
+var wcCoverHarmHold = 24 * wcSndSpan
+
+// wcCoverRec is one record of the exit as the core in OFF judged it for the
+// covers (coverNote): whether it showed the queue overflowing.
+type wcCoverRec struct {
+	at  time.Time
+	bad bool
+}
+
+// coverNote keeps, in OFF, what a fresh record of the exit (in this
+// evaluation) says of the windows without the core: past the knee when it
+// resent (past wcLossRand) with a queue past Δq at the exit's socket (past
+// the others' held queue with other cores on): the loss of a queue that
+// overflows, not the path's random loss, which comes with the queue empty.
+// Neither alone: resends past wcOffLoss alone took the covers on paths of
+// 1% and 3% random loss, where the core gains with them (the full table: 33
+// cells of 85 at every target against 39, 300/100 at 1% 44 against 52
+// Mbit/s), and a queue past the core's target alone on paths whose knee
+// lies between the need less a step and the need (300/50 behind 50 ms: the
+// covers' 244 Mbit/s back to base's 198). With the cover off nothing is
+// kept (the core is base's to the byte).
+func (c *wcore) coverNote(in wcIn, m wcMeas) {
+	if c.cfg.noCover || !in.snd.fresh {
+		return
+	}
+	bad := c.qSndAt.Equal(in.now) && c.qSnd > c.dq()+c.heldQ(m) && m.sndOK && m.snd > wcLossRand
+	copy(c.coverRecs[1:], c.coverRecs[:])
+	c.coverRecs[0] = wcCoverRec{in.now, bad}
+}
+
+// coverPastKnee says whether, in OFF, the exit's records show the windows
+// without the core past the knee for the covers (coverNote): two of the
+// latest wcSndHist records within their span. The covers then add only
+// queue and loss, and the core takes them (coverHarmed). Not harm()'s
+// reading (the largest q_snd of three records past Δq): the covers' bursts
+// read 14 ms on 300/100 where the need's read 9, with twice the rate and no
+// loss, and a sender's STARTUP pacing, raised by the covered rate, stays
+// raised (it never comes down before BBR's full pipe): taken there, the
+// covers left the need's windows reading 13 ms, the core OFF for good, 105
+// Mbit/s against 219 with the covers off (the model with Linux's max_bw).
+//
+// Red team, H2 (TestWcoreH2RedSharedPathFull): links to one peer whose
+// downloads fill the path with the need's windows. Each link's download,
+// held by its own window, pauses at its limit while the other links' data
+// fills the gap on the bottleneck, so smux covers it; the covers put the
+// need of every link in flight, far past the knee (300/72 behind 50 ms, two
+// links: 1.0–1.4% resent against 0.1–0.2%, records q_snd 29–31 ms median
+// against 12–18; 1000/100 behind 50 ms, eight links: 0.8–0.9% against
+// 0.0%, 806 against 860 Mbit/s, p99 next to them 431–468 ms against
+// 159–233), and the queue and resends they made held every core OFF
+// (harm), where it took the covers only next to a running core of the peer
+// (grp): none was.
+func (c *wcore) coverPastKnee(now time.Time) bool {
+	n := 0
+	for _, r := range c.coverRecs {
+		if r.bad && !r.at.IsZero() && now.Sub(r.at) <= wcSndHist*wcSndSpan {
+			n++
+		}
+	}
+	return n >= 2
+}
+
+// coverHarmed says whether, in OFF, the covers stay taken: within
+// wcCoverHarmHold of the latest evaluation that found the windows without the
+// core past the knee (coverPastKnee).
+func (c *wcore) coverHarmed(now time.Time) bool {
+	return !c.coverHarmAt.IsZero() && now.Sub(c.coverHarmAt) < wcCoverHarmHold
 }
 
 // step takes what the runner saw since its previous call. The runner calls
@@ -2561,6 +2649,9 @@ func (c *wcore) schedProbe(now time.Time) {
 // off: no ceilings. A fast stream with T_base known starts STARTUP, unless
 // there is nothing for the core to find (do no harm, stage 1).
 func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
+	if c.coverNote(in, m); c.coverPastKnee(in.now) {
+		c.coverHarmAt = in.now // (the covers go: out, coverHarmed)
+	}
 	if len(m.f) > 0 {
 		// the loss of the path with the windows without the core
 		if m.sndOK {
@@ -2602,6 +2693,7 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.offN = 0
 	c.bGood = 0
 	c.state = wcStartup
+	c.coverHarmAt, c.coverRecs = time.Time{}, [wcSndHist]wcCoverRec{} // (out of OFF the floor rules the covers: coverFloor)
 	c.chgAt = in.now
 	if !c.policed(in.now) {
 		c.backoff = 0
@@ -3504,8 +3596,11 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	// (in OFF the covers are the windows' own, but not next to the running
 	// cores of other links to the peer: their shared rule holds the path's
 	// shares, and covers in OFF beside them split four links on 1000/100
-	// behind 50 ms up to 2.4–3.0 times apart, 1.2–2.0 without: cover)
-	o := wcOut{state: c.state, B: c.bPub, next: next, events: ev, growOK: true, noCover: c.last.grp}
+	// behind 50 ms up to 2.4–3.0 times apart, 1.2–2.0 without: cover; nor
+	// while the exit's records show the windows without the core past the
+	// knee: coverPastKnee)
+	o := wcOut{state: c.state, B: c.bPub, next: next, events: ev, growOK: true,
+		noCover: c.last.grp || c.coverHarmed(now)}
 	o.ceils = make([]wcCeil, len(in.streams))
 	for i, s := range in.streams {
 		o.ceils[i].id = s.id

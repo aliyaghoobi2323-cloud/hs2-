@@ -201,6 +201,14 @@ type wmCfg struct {
 	recZero  [][2]time.Duration
 	// check sees every step of the core (the invariant tests)
 	check func(t time.Duration, c *wcore, in wcIn, o wcOut)
+	// bwKeep: the sender keeps its max_bw through app-limited phases, as
+	// Linux does (bbr_update_bw: an app-limited sample under the max is left
+	// out, and the minmax filter expires the max only as a new sample comes).
+	// Without it the max expires after 10 rounds whatever came, and the next
+	// app-limited sample (PROBE_RTT's four packets) is max_bw: a
+	// window-limited sender in PROBE_BW then paces at next to nothing for
+	// seconds (red team, H2: what the covers cost next to it)
+	bwKeep bool
 }
 
 type wmResult struct {
@@ -373,6 +381,7 @@ type wmFlow struct {
 	ackBatch         []*wmPkt // arrived at its receiver, not yet sent back
 	gotBytes, gotAll uint64   // competitor: bytes its sink received
 	probeRTTs        int      // PROBE_RTTs entered
+	bwLast           float64  // cfg.bwKeep: the latest max_bw
 
 	// RACK (cfg.rack, rackMark): rackXid and rackRTT are the latest sent
 	// packet that was (s)acked and its round trip (rack.mstamp, rack.rtt_us);
@@ -410,6 +419,13 @@ func (f *wmFlow) maxBW() float64 {
 	for i, v := range f.bw {
 		if f.bwRound[i]+10 > f.round && v > b {
 			b = v
+		}
+	}
+	if f.m.cfg.bwKeep {
+		if b > 0 {
+			f.bwLast = b
+		} else {
+			b = f.bwLast
 		}
 	}
 	return b
