@@ -354,6 +354,22 @@ Kharej server (an old one keeps the core off), whether one connection already
 fills the path with 2 MiB windows (then the core stays off by design), and
 whether the Kharej server's socket resends over 1% (`ss -ti` on the link).
 
+*1b. Several big downloads at once.* The window cores of the Iran server's
+links to one Kharej server share that server's path: since the third red-team
+round they hold one queue target between them (~15 ms in all, not 15 ms each)
+and even out their rates, so a download that starts late still gets its share.
+With the core on, run two, then four single-connection downloads at once
+(`iperf3 -c <Iran server IP> -p 5201 -R -P 1 -t 120`, each from its own
+client or shell, started 20 s apart; the Iran server spreads new connections
+over its links), and the interactive user of test 1 beside them. Pass: after
+the first minute each download runs within 2× of the others (none stuck near
+its old ~100 Mbit/s while the others take the path); the sum about what one
+download reaches alone; the interactive user's p50 within about 10 ms of
+its p50 with one download (rig, 2 and 4 downloads on 1000/100: the path's
+queue 11–14 ms where it was 19–34 ms; a download started 30 s after three
+others 205 Mbit/s where it stayed at 69–96); no cut. Report each download's
+Mbit/s per 10 s.
+
 *2. 24 h with real users,* alongside V1 and V15. Watch both servers:
 
 ```

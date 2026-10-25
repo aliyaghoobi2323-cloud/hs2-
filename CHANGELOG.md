@@ -2131,9 +2131,9 @@ not merged (round 1's "window as large as needed", N4: windows of ~3 BDP that
 flooded shallow queues; round 2's queue-delay and probing designs: no gain
 under random loss). Step 1 of a new design (`docs/architecture/WINDOW_CORE.fa.md`)
 was tuned on a real-TCP rig, measured against base (the branch with Phases
-Z–Z3 and the smux fixes above) with N4 as the gain reference, attacked by two
-red-team rounds and judged by an independent judge. Step 2 and step 3 come
-later inside Z5 (below).
+Z–Z3 and the smux fixes above) with N4 as the gain reference, attacked by
+three red-team rounds (the third on the rig) and judged by an independent
+judge. Step 2 and step 3 come later inside Z5 (below).
 
 What changed:
 - **Window pool (smux, both ends).** Past `NeedStreamBuffer` (2 MiB, as
@@ -2356,9 +2356,81 @@ fix):
   returned to the pool while its data was still held. Its root finding — a
   window-limited BBR never lowers its pacing (131 of 6478 model cells
   drained) — became the pacing net.
+- Round 3 (the real rig: path events, soak, several links at once) fixed:
+  - **Several downloads on separate links to one exit stacked their queues.**
+    Each link's core took the queue the others held for the path's own floor
+    (its HOLD references, and τ_hold, which on a shared bottleneck reads the
+    others' queue as data held in the receiver), so the exit sockets' queue
+    rose with the number of busy links (1, 2, 4 downloads on 1000/100: 13, 21,
+    21–32 ms, creeping to 39 in two minutes; base 1–2) and a core that came late
+    stayed OFF behind the others' queue for good ("do no harm" judged the
+    absolute queue): 78 against 245–255 Mbit/s, two links of four OFF for the
+    last minutes of a 10-minute run. Now the cores of the links to one peer
+    (one host) share, in the process's registry and with nothing new on the
+    wire, the exit's records of all of them and each one's rate
+    (`engine/wcore_peer.go`); while another core of the peer is on, a core's
+    queue references never exceed the 15 ms target, τ_hold leaves out what of
+    the path's queue stands, the queue is judged by every link's records
+    (their median), and while a queue stands each core holds the knee at its
+    own smoothed rate plus the same margin as the others (15 ms at the fair
+    share), probes nothing, and a core above 1.2× the fair share never probes;
+    "do no harm" and a stream's joining the fast set allow for the target the
+    others hold. Behind a shallow queue (Q_cap lowers the target to a few ms,
+    under what the exit's srtt reads from the senders' bursts alone) that
+    shared rule holds only a core past the fair share. A link alone behaves
+    exactly as before. On the rig (3 runs each, base and the core before and
+    after interleaved), the path's queue (an ICMP ping through the emulator)
+    with 2 and 4 downloads on 1000/100 is 14 and 11–13 ms where it was 31 and
+    19–30; a fourth download started 30 s after three others gets 205 Mbit/s
+    where it stayed at 69–96 (base 96), the fastest of the four within 1.2× of
+    the slowest (3.8×); over 10 minutes with 4 downloads the queue stays at
+    11–15 ms and no link turns OFF, where the core before crept from 20–26 to
+    28–61 ms with one or two of the four links OFF for the last 4 minutes of
+    every run. The sum is 0.92–0.98× the core's before on 1000/100 (850 and
+    784–838 Mbit/s) and 0.91–0.94× for two downloads behind
+    a 50 ms queue on 300/150 (217 against 238; base 157), which the core
+    before reached by stacking more queue. The users' latency against base
+    (short users' first byte p50, interactive replies' p99): 2 downloads
+    1.23× and 1.45× (before 1.36× and 1.62×); 4 downloads at equal load
+    (500 Mbit/s) 1.05× and 1.06× (before 1.62× and 1.74×, with 94 ms of
+    queue). With 4 downloads at ~800 Mbit/s it stays 1.37–1.44× and
+    1.42–1.57× (before 1.49–1.52× and 1.52–2.40×): the rig's single process
+    (both ends, the emulator and the users on 4 cores) at 75–79% CPU adds
+    25–47 ms to every reply whatever the queue — the base path with fixed
+    3–3.5 MiB windows and no core adds 7–17 ms at 67–72% — so test 1b of
+    `hs2-src/VALIDATION.md` checks it across two real servers.
+  - **The autopilot kept more links with the core** (4 serving where base kept
+    2 for the same load): a link's capacity for ordinary connections was the
+    least rate of three ticks less the most grown of them, which read the
+    core's own swings (a probe tick, a drain tick) as a link of a few Mbit/s.
+    It is now each tick's rate less its own grown, at its least over the
+    ticks. On the rig's soak (12 big downloads in turn beside slow, frozen
+    and pausing readers, 1000/100, 600 s) the pool now serves on 2 links like
+    base (6 before), ends with 45 goroutines (105), and short users' first
+    byte p50 is 124–132 ms (156–161; base 169–173); the sum is 0.90× the
+    core's before (630–665 against 717–722 Mbit/s; base 615–643) — the same
+    candidate with the old capacity kept 5 links and 719 in one run and 2
+    links and 643 in the other, so the soak's throughput follows the number
+    of TCP connections, not the shared rules.
+  - The judge's safety set again with the candidate: no transfer cut but the
+    link-cut test's own (as base and the core before), no stalled second in
+    the stall matrix, no drain of the loss rule; throughput at least 0.95×
+    the merged core's z20 measurement in 18 of 25
+    cells, and the other 7 run again beside the merged core: the 6 with one
+    transfer 0.96–1.15× (the rig's drift: the merged core itself 352 against
+    399 Mbit/s in one of them), two downloads behind a 50 ms queue 0.93×
+    (above).
+  - Not fixed in step 1: interactive users on other links while the path's
+    speed swings 300 ↔ 60 Mbit/s every 10 s (p99 367 ms against base's 209
+    and the core before's 386; the download itself was cut in none of 3 runs,
+    base in 3 and the core before in 2, its link judged degraded) — damping
+    the credit bursts is step 2; a short black hole or a burst of loss loses
+    the gain for 10–20 s (never below base).
 - Open: borrowing is not under the per-session share (no regression from base;
-  the wedge guard frees a stuck link). A third round on the real rig (path
-  events, soak) is the last step before the merge (ROADMAP).
+  the wedge guard frees a stuck link). The peer's records are sorted at each
+  evaluation and its cores listed at each step (estimated at up to a tenth
+  of a core with 300 busy links to one exit; not measured), and links to two
+  exits that share the Iran server's own access are not grouped.
 
 Next, inside Z5: **step 2** — ceilings below 2 MiB and damping the credit
 bursts (the tail latency above), with the judge's five fixes (a robust "do no
