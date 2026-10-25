@@ -345,6 +345,41 @@ func TestPaceNetJudgedAfterLargeMove(t *testing.T) {
 	}
 }
 
+// A cap that binds and goes stale: set at wcNetK times what the socket
+// delivered before a policer came (the sender's own pace, ~3.9 times its
+// highest rate, stays past it), then the policer: a tenth of that
+// delivered, 30% resent, no queue. Neither a queue nor an unbound cap moved
+// it, and it held at 1000 Mbit/s for the policer's 100 (S2 red team, the
+// model's 1000/150 behind a policer at 30% from 30 s: lifted by the judge
+// 3 s on against the 15% that had set it, the policer's 51% taken for the
+// path's level, 20–40% resent at the floor for 15 s). It follows what the
+// last second delivered, and is judged from then on.
+func TestPaceNetStaleCapFollows(t *testing.T) {
+	f := newWnFeed()
+	f.run(wcNetWarm, 80000, 0, 800*wnMB, 3120*wnMB)
+	if o := f.run(time.Second, 80000, 0.1, 800*wnMB, 3120*wnMB); len(o) == 0 || o[0].act != wcNetEngage {
+		t.Fatalf("not engaged: %+v", o)
+	}
+	cap0 := f.n.cap
+	var o []wcNetOut
+	for i := 0; i < 20 && f.n.cap == cap0; i++ {
+		o = append(o, f.run(wcRampTick, 10000, 0.3, 100*wnMB, float64(f.n.cap))...)
+	}
+	if want := uint64(wcNetK * 100 * wnMB); math.Abs(float64(f.n.cap)-float64(want)) > 0.06*float64(want) {
+		t.Fatalf("a policer under a cap of %.0f Mbit/s that binds, 100 delivered, 30%% resent, no queue: cap %.0f Mbit/s (%+v), want ~%.0f",
+			float64(cap0)/wnMB, float64(f.n.cap)/wnMB, o, float64(want)/wnMB)
+	}
+	// under it the resends stop: kept, not judged on the ones before
+	held := f.n.cap
+	o = f.run(time.Second, 10000, 0.3, 100*wnMB, float64(held))
+	o = append(o, f.run(wcNetJudge, 10000, 0.002, 100*wnMB, float64(held))...)
+	for _, x := range o {
+		if x.act == wcNetRelease {
+			t.Fatalf("the cap that followed the policer down was lifted: %+v", o)
+		}
+	}
+}
+
 // A socket whose delivery rate still grows past wcNetGrow a second (its
 // STARTUP, longer than the warm-up on a long round trip) is capped only
 // past wcNetWarmLoss: a cap at k times a rate that doubles each round trip
