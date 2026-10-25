@@ -156,9 +156,11 @@ func wmRunShared(cfg wmCfg, n int, lc []wmLinkCfg) wmShared {
 			order[k] = links[(int(t)+k)%n]
 		}
 		for _, l := range order {
+			l.sources()
 			l.atSender()
 			l.main.tailTimer()
 			l.main.send()
+			l.noteBlocked()
 		}
 		if bn.comp != nil && t >= cfg.compete.Milliseconds() {
 			bn.comp.tailTimer()
