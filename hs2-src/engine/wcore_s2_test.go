@@ -693,3 +693,53 @@ func TestWcoreS2SlowBesideFastLossy(t *testing.T) {
 		}
 	}
 }
+
+// The slow source on the field's reordering (wmS2Field: the Iran path's
+// bursts of reordered packets, the exit's RACK sender): holes keep an
+// interval from judging the lack of evidence (they lengthen the turnaround
+// and hide the pauses), and the provisional reactions to holes take back
+// what reordering alone did; neither keeps a slow source fast. A download
+// whose source drops to 14–27 Mbit/s 15 s in, on 1000/72 and 300/85: no
+// drain or cut, no "fill the path" and not fast from 5 s after the drop
+// (the core before FM2, on a sweep of 48 such runs: fast in 9129 of 9166
+// evaluations, 30 "fill the path", 39 drains; with it none; holes kept 37
+// of 6581 evaluations from judging).
+func TestWcoreS2SlowSourceReordered(t *testing.T) {
+	for _, x := range []struct {
+		rate float64
+		rtt  int
+		src  float64
+	}{{1000, 72, 14}, {1000, 72, 27}, {300, 85, 20}} {
+		for seed := uint64(1); seed <= 2; seed++ {
+			c := wmS2Field(wmPath(x.rate, wmMS(x.rtt), wmMS(50)))
+			c.mode, c.seed = wmCore, seed
+			drop := 15 * time.Second
+			c.dur = drop + 60*time.Second
+			c.streams = []wmStreamCfg{{srcAt: []wmChange{{drop, x.src * wmMbit}}}}
+			var ev []string
+			fast := 0
+			var cnt0, cnt1 wcCounters
+			c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+				if at <= drop+time.Second {
+					cnt0 = k.cnt
+					return
+				}
+				cnt1 = k.cnt
+				for _, e := range o.events {
+					if e.kind == wcEvDrain || e.kind == wcEvFilled {
+						ev = append(ev, fmt.Sprintf("%.1fs %s", at.Seconds(), e))
+					}
+				}
+				if at > drop+5*time.Second && k.lastAt.Equal(in.now) && k.inF[1] {
+					fast++
+				}
+			}
+			r := wmRun(c)
+			drains := cnt1.drainQ + cnt1.drainLoss + cnt1.drainRate - cnt0.drainQ - cnt0.drainLoss - cnt0.drainRate
+			if len(ev) > 0 || fast > 0 || drains > 0 {
+				t.Errorf("%s, source %.0f Mbit/s from 15 s, seed %d: fast in %d evaluations, %d drain(s) or cut(s), events %q (%.1f Mbit)",
+					c.name, x.src, seed, fast, drains, ev, r.mbit)
+			}
+		}
+	}
+}
