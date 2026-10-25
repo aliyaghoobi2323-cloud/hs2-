@@ -169,6 +169,19 @@ var (
 	// not move).
 	wcNetQuiet      = time.Second
 	wcNetQuietBytes = uint64(8 << 10)
+	// wcNetQuietSegs: nor is a socket that sent this many data segments over
+	// its idle span quiet, whatever came back: one that sends into a dead
+	// path (its sender resending what it has in flight, nothing acknowledged,
+	// nothing new written past the send gate) is read on every wake, so the
+	// first wake the path is back (its ACKs) is read as a net that reads
+	// every wake reads it. Read once a second, that wake went unread and the
+	// meter's next one had the full delivery rate: no engagement where the
+	// every-wake net engaged on the dead span's resends (the model's outages
+	// of 0.8-5 s: 41 of 432 runs another way, the core's loss drains 1280 →
+	// 1310; TestPaceNetDeadPathIsNotQuiet). An idle link's NOP and pong are
+	// one or two segments over its idle span, Linux's RTO backoff into a
+	// dead path two or three a second: both stay quiet.
+	wcNetQuietSegs = uint64(8)
 )
 
 // wcNetIn is one reading of a link socket's TCP_INFO.
@@ -346,7 +359,8 @@ func (n *wcNet) step(in wcNetIn) wcNetOut {
 	idle := in.acked-ip.acked < wcPaceIdle
 	// quiet (due) once its decision is made, if it holds no cap: a full idle
 	// span read, with next to nothing acknowledged or written over it
-	still := now.Sub(ip.at) >= idleSpan && in.acked-ip.acked < wcNetQuietBytes && in.wrote-ip.wrote < wcNetQuietBytes
+	still := now.Sub(ip.at) >= idleSpan && in.acked-ip.acked < wcNetQuietBytes && in.wrote-ip.wrote < wcNetQuietBytes &&
+		in.segsOut-ip.segs < wcNetQuietSegs
 	defer func() { n.quiet = still && n.cap == 0 }()
 	switch {
 	case idle:
