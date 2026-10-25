@@ -89,6 +89,7 @@ type wcore struct {
 	srcAt      map[uint32]time.Time // the latest interval that judged a stream and found no evidence (in F or not)
 	joinN      map[uint32]int       // intervals in a row that judged such a stream, out of F, and found evidence
 	noTurnN    map[uint32]int       // intervals in a row in which a stream had window updates and no turnaround
+	peerN      map[uint32]int       // intervals in a row a stream of F moved under wcPeerShare of the link's fastest stream
 	ctrlOffs   wcMinWin             // pong − T_base while the link's own queue was empty (q_ctrl's floor)
 	capPool    bool                 // capped by the window pool (not by MaxStreamBuffer)
 	holeyPrev  bool                 // the previous evaluation's packets waited behind holes
@@ -445,7 +446,7 @@ var (
 	wcHitShare     = 0.5
 	wcLagShare     = 0.25
 	wcUseShare     = 0.9  // a window is in use: R·turnaround ≥ this share of it less half a step
-	wcPeerShare    = 0.25 // a stream joins F on use alone only at this share of the fastest
+	wcPeerShare    = 0.25 // a stream joins F on use alone only at this share of the fastest, and leaves it under it (measure)
 	wcDemandGain   = 1.25
 	wcResettle     = 0.05 // a change of B by more than this share settles first
 	// wcRampQ, wcRampShare: a ceiling rises by at most the larger of this
@@ -795,7 +796,7 @@ func newWcore(cfg wcConfig, rnd func() float64) *wcore {
 	}
 	return &wcore{cfg: cfg, rnd: rnd, inF: map[uint32]bool{}, prevWin: map[uint32]uint32{}, ceils: map[uint32]uint32{},
 		slowN: map[uint32]int{}, idleN: map[uint32]int{}, srcAt: map[uint32]time.Time{}, joinN: map[uint32]int{},
-		noTurnN: map[uint32]int{}}
+		noTurnN: map[uint32]int{}, peerN: map[uint32]int{}}
 }
 
 // wcStep is the window update step of a window w (smux.StepOf, which the
@@ -2123,7 +2124,10 @@ func (c *wcore) heldQ(m wcMeas) time.Duration {
 // that far apart, and the runner sets each stream's hit gap to a few
 // frames' time.
 //
-// It stays in F while it reads, its reader keeps up and no interval that
+// It stays in F while it reads, its reader keeps up, it moves at least
+// wcPeerShare of the link's fastest stream (it could not join under it; two
+// intervals in a row under it, holes or not, and it leaves: no interval judges
+// a slow source beside a fast download on a lossy path), and no interval that
 // can judge it finds it without evidence twice in a row (wcSlowN), and
 // while its sender sends nothing for up to wcIdleKeep evaluations if its
 // reader is not behind (the sender's PROBE_RTT: dropped, its ceiling went to
@@ -2308,6 +2312,19 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 		// stayed fast up to 15 s after it slowed down)
 		sample := s.turnMin > 0 || c.noTurnN[s.id] >= 2
 		quiet := false // its turnarounds and hits are its source's, not the path's queue
+		// under wcPeerShare of the link's fastest stream two intervals in a
+		// row, a stream of F leaves it as it could not join, holes or not:
+		// on a lossy path no interval judges the lack of evidence, and a
+		// slow source beside a fast download stayed in F in 52 to 98% of the
+		// evaluations, B and the knee made with it (1000/50 with 0.1% loss:
+		// the download 0.30 to 0.67 of its rate alone)
+		if c.inF[s.id] && r < wcPeerShare*maxR {
+			if c.peerN[s.id]++; c.peerN[s.id] >= wcSlowN {
+				continue
+			}
+		} else {
+			delete(c.peerN, s.id)
+		}
 		if c.inF[s.id] {
 			switch {
 			case ev.judge && sample && !held:
@@ -2419,6 +2436,11 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	for id := range c.idleN {
 		if !newF[id] {
 			delete(c.idleN, id)
+		}
+	}
+	for id := range c.peerN {
+		if !newF[id] {
+			delete(c.peerN, id)
 		}
 	}
 	for id, at := range c.srcAt {
