@@ -1437,9 +1437,13 @@ func (c *wcore) judgeCut(in wcIn) []wcEvent {
 		small = loss && c.sndSmall(s)
 		if loss && !small {
 			c.weak = wcProv{} // a loss worth a verdict: what came since is its
-			if c.prov.at.IsZero() && !c.sndStale(now) {
+			if c.prov.at.IsZero() && !c.sndStale(now) && c.sndRef.ok {
 				// (nothing pending, and about the budget in force: the next
-				// evaluation is to judge it)
+				// evaluation is to judge it. Not before the resend level is
+				// learned: until then any resent segment reads as a loss
+				// worth a verdict, sndSmall, and one segment of 10000 held
+				// the next reaction to holes unjudged; post-merge review of
+				// FM2, L4)
 				c.lossRecAt = now
 			}
 		}
