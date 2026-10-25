@@ -259,7 +259,7 @@ func serveStats(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carr
 		r := statsRec{seq: binary.BigEndian.Uint32(p[:]), mono: uint64(time.Since(procStart))}
 		if mtr != nil {
 			r.tx = mtr.wrBytes.Load()
-			r.txBlocked = uint64(mtr.wrBlocked.Load())
+			r.txBlocked = uint64(mtr.blockedNs())
 		}
 		if ts, ok := tcpStats(tcpConnOf(car)); ok {
 			r.flags |= statsFlagTCPInfo

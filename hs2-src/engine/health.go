@@ -235,6 +235,26 @@ type meteredConn struct {
 	gate *sendGate // the link's send gate, told what each write took (nil: none)
 }
 
+// blockedNs is wrBlocked with the wait of the write in progress counted in
+// (wrStart; past blockedMin, as Write counts one once it returns): a record
+// the exit takes while its writer has waited on the socket for a while reads
+// that wait, not ~0 as a link whose path has room (the edge's window core
+// takes the share for the path holding the sender, wcore.sndHeld; post-merge
+// review of FM2, L1). It never reads less than a later call: wrBlocked is
+// read first and the time before wrStart, so the write in progress, which
+// adds its whole wait once it returns (after storing wrStart 0), adds no
+// less than what was counted of it; a write that starts after the time was
+// taken counts nothing yet. (Its own goroutine only stores wrStart, the
+// smux writer's: no lock.)
+func (m *linkMeter) blockedNs() int64 {
+	b := m.wrBlocked.Load()
+	now := ctrlNow()
+	if s := m.wrStart.Load(); s != 0 && now-s > int64(blockedMin) {
+		b += now - s
+	}
+	return b
+}
+
 func (c *meteredConn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	if n > 0 {
