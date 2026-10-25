@@ -91,6 +91,8 @@ type wcore struct {
 	holeyPrev  bool              // the previous evaluation's packets waited behind holes
 	burstHeld  bool              // B is held where a burst after the sender's PROBE_RTT fits Q_cap
 	blindN     int               // evaluations in a row that were blind (blind)
+	// slowAt: the first evaluation of a stream's slowN
+	slowAt map[uint32]time.Time
 	// sndCarry: the resends of a record of the exit that came in the settle
 	// part of a HOLD or DRAIN interval (settled judges no loss there), for
 	// the next measured interval to judge; sndCarryAt: when it came
@@ -111,6 +113,10 @@ type wcore struct {
 	turnMins wcMinWin      // turnBase: least window turnaround over 60 s
 	tbOff    time.Duration // turnBase − T_base while both agreed (route change)
 	tbOK     bool          // ... they agreed at least once
+	// tbCap: where notePaths refused a rise of turnBase past T_base (the
+	// exit's own srtt showed no longer path), the floor it took instead,
+	// T_base + tbOff, which the queue is judged against (turnBase); 0: none
+	tbCap    time.Duration
 	routeLog bool
 	// the exit's srtt by its latest record, and when (sndAllows)
 	sndRTT   time.Duration
@@ -644,7 +650,7 @@ func newWcore(cfg wcConfig, rnd func() float64) *wcore {
 		cfg.stage = 1
 	}
 	return &wcore{cfg: cfg, rnd: rnd, inF: map[uint32]bool{}, prevWin: map[uint32]uint32{}, ceils: map[uint32]uint32{},
-		slowN: map[uint32]int{}, idleN: map[uint32]int{}}
+		slowN: map[uint32]int{}, slowAt: map[uint32]time.Time{}, idleN: map[uint32]int{}}
 }
 
 // wcStep is the window update step of a window w (smux.StepOf, which the
@@ -726,6 +732,7 @@ type wcMeas struct {
 	qStand   time.Duration
 	qStandOK bool
 	idleF    bool // a stream of F was sent nothing (kept in F, nothing judged)
+	slowF    bool // every stream of F that was sent something looks like a slow source (kept in F, nothing judged)
 	at       time.Time
 }
 
@@ -916,7 +923,7 @@ func (c *wcore) step(in wcIn) wcOut {
 	} else {
 		c.blindN = 0
 	}
-	if len(m.f) > 0 && !m.idleF {
+	if len(m.f) > 0 && !m.idleF && !m.slowF { // (slow sources' pace is no knee)
 		if c.rAvg == 0 || !m.sameF {
 			c.rAvg = m.rF
 		} else {
@@ -928,10 +935,12 @@ func (c *wcore) step(in wcIn) wcOut {
 		c.off(in, m, &ev)
 	case c.fEmpty >= wcOffAfter || c.blindN >= wcOffAfter || c.longBlind():
 		c.toOff()
-	case len(m.f) == 0 || m.idleF:
+	case len(m.f) == 0 || m.idleF || m.slowF && c.state == wcStartup:
 		// the fast streams paused (or one of them was sent nothing: its
-		// sender's PROBE_RTT): keep the state, judge nothing (a probe is
-		// over: it measured nothing, back to where it started)
+		// sender's PROBE_RTT; or, in STARTUP, all that were sent something
+		// look like slow sources, whose rate is no knee: measure): keep the
+		// state, judge nothing (a probe is over: it measured nothing, back
+		// to where it started)
 		c.settling = false
 		if c.state == wcProbe {
 			c.toHold(in, m)
@@ -1015,7 +1024,7 @@ func (c *wcore) fastStop(in wcIn, lossHole bool) {
 		return
 	}
 	stop := false
-	if tb := c.turnMins.min(in.now, wcTurnWin); tb > 0 {
+	if tb := c.turnBase(in.now); tb > 0 {
 		var lasts []time.Duration
 		for _, s := range in.streams {
 			if c.inF[s.id] && s.turnLast > 0 {
@@ -1299,11 +1308,16 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 		c.qSnd, c.qSndAt = max(raw-c.sndOff, 0), now
 		c.sndRTT, c.sndRTTAt = in.snd.srtt, now
 	}
+	c.tbCap = 0
 	if t > 0 {
 		switch {
 		case tb > 0 && float64(tb) <= 1.3*float64(t):
 			c.tbOff, c.tbOK = tb-t, true
 			c.routeLog = false
+		case tb > 0 && !c.tbOK && float64(tb) > 1.3*float64(t) && !c.sndAllows(now, tb, t):
+			// (never agreed: no offset known, and the exit's srtt shows no
+			// path as long as the floor; see the refusal below)
+			c.tbCap = t
 		case tb > 0 && c.tbOK && float64(tb) > 1.3*float64(t):
 			// the path got longer: min_rtt keeps the old floor for up to
 			// 5 minutes, turnaround has moved. The exit's own min_rtt is as
@@ -1316,12 +1330,24 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 				c.sndOff = c.qSndMins.min(now, wcTurnWin)
 				c.qSnd = max(raw-c.sndOff, 0)
 			}
-			if c.qSnd <= c.dq() && c.sndAllows(now, tb-c.tbOff, t) {
+			allows := c.sndAllows(now, tb-c.tbOff, t)
+			if c.qSnd <= c.dq() && allows {
 				t = tb - c.tbOff
 				if !c.routeLog {
 					c.routeLog = true
 					*ev = append(*ev, wcEvent{kind: wcEvRoute, T: t})
 				}
+			} else if !allows {
+				// refused for the exit's own srtt: the floor rose with the
+				// turnarounds of streams whose source is slow (the time
+				// their sender takes to reach the limit it had), and the
+				// queue is judged against the floor T_base has, not theirs
+				// (turnBase). Refused for a queue at the exit (a record
+				// past Δq) it stays as it is: after a real route change
+				// T_base goes back to the stale min_rtt for that record
+				// (a decision of its own, ROADMAP), and the turnarounds'
+				// floor is still the path's
+				c.tbCap = t + c.tbOff
 			}
 		}
 		c.tBase = t
@@ -1333,6 +1359,24 @@ func (c *wcore) notePaths(in wcIn, ev *[]wcEvent) {
 			c.peer.noteRec(c, now, c.qSnd)
 		}
 	}
+}
+
+// turnBase is the window turnaround's floor the queue is judged against
+// (q_turn, the slow-source and hint tests of F, the ramp's stop, turnRef):
+// the least turnaround over wcTurnWin, or, where notePaths refused its rise
+// past T_base for the exit's own srtt, the floor it took instead (tbCap).
+// That rise is the turnarounds of streams whose source is slow (the field,
+// build a372b1301121 on a 72 ms path: 206 to 4230 ms once a link had had
+// no fast download for a minute), and against it a slow stream is judged
+// against a floor of its own kind: hardly ever past twice it (the
+// slow-source test) and within Δq of it (the hint: a bare turnaround, a
+// stream of F).
+func (c *wcore) turnBase(now time.Time) time.Duration {
+	tb := c.turnMins.min(now, wcTurnWin)
+	if c.tbCap > 0 && tb > c.tbCap {
+		return c.tbCap
+	}
+	return tb
 }
 
 // sndAllows says whether the exit's own round trip allows a path of p where
@@ -1453,6 +1497,14 @@ func (c *wcore) heldQ(m wcMeas) time.Duration {
 // (hit) with a bare turnaround. A sender that stops at its limit for
 // 2 ms is not enough: under ~85 Mbit/s a stream's own frames come that far
 // apart, and the runner sets each stream's hit gap to a few frames' time.
+// A stream that looks like a slow source (below) does not join on use: a
+// source's turnaround is how long it takes to write what its window had
+// left, so R·turnaround is its window less a step by construction, and
+// right after it left F its turnarounds are timed from the limits of the
+// larger window it had (4.7 s at 14 Mbit/s against a window of 2 MiB:
+// R·turnaround 8 MB) -- in the model it was back in F at once (1000/50, a
+// source down to 27 Mbit/s: 224 of the 301 evaluations after in STARTUP,
+// against 4).
 //
 // It stays in F while it reads and its reader keeps up (right after B grows
 // the sender has a window it has not filled yet, which is no reason to take
@@ -1462,7 +1514,35 @@ func (c *wcore) heldQ(m wcMeas) time.Duration {
 // It leaves when its source got slow, two evaluations in a row on a clean
 // path: no update of an interval in a window-limited cycle, every turnaround
 // past twice turnBase, a rate under a quarter of what its window allows in a
-// round trip, and (on the edge) the exit's record showing no queue.
+// round trip, and (on the edge) the exit's record showing no queue. The
+// edge counts an evaluation with one update (the exit's side, with no record
+// of its sender: two, as before): a window of 2 MiB steps every MiB read,
+// and on a 72 ms path an evaluation measures 0.3 s, so two updates in one
+// took 56 Mbit/s or more while the rate test asks under 58 -- the field's
+// downloads of 12–27 Mbit/s never left F, and in the model a source down to
+// 14 Mbit/s on 300/72 was in it at each of the 414 evaluations of 120 s. An
+// evaluation with no turnaround in it counts neither way, and once a stream
+// looks slow one whose turnaround came with no update of its own counts as
+// well (a window of 3.7 MiB at 14 Mbit/s on 300/100: an update every 0.6 s,
+// a turnaround of 1.6 s, each in an interval of its own: it looked slow
+// once and then never again, and stayed). The edge lets it go only after a
+// record span of it (a sender's PROBE_RTT is 200 ms and a round trip) and
+// with the exit's latest wcSndHist records clean (no queue, no resends:
+// cleanRecs). A sender whose rate collapsed in a loss recovery looks the
+// same: on the model's path that reorders 0.05% of packets by 2 ms the fast
+// download left F and 1000/150 fell from 531 to 218 Mbit/s
+// (TestWcoreFixReorderModel).
+//
+// From its first slow evaluation on, its turnarounds, spreads and hits are
+// left out (they are its source's, and in q_turn they were a drain before
+// it left: the field's "path queue grew by 99–1630 ms", 3.0 → 2.0 MiB, on
+// users' downloads of 12–27 Mbit/s), and while every stream of F that was
+// sent something looks slow (slowF) OFF does not start and STARTUP judges
+// nothing (the field's "fill the path at ~12–27 Mbit/s"). The other states
+// go on: frozen in HOLD or DRAIN as well, a path that slowed down to 20
+// Mbit/s (BBR then paces at the path with no queue, and looks the same as a
+// slow source) left the model's 100/100 q50 100>20>100 at 55.7 Mbit/s over
+// 150 runs (16 of them under 50) against 56.5 (7).
 func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	m := wcMeas{dt: dt, at: in.now}
 	if dt <= 0 {
@@ -1515,17 +1595,20 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	for _, s := range in.streams {
 		maxR = math.Max(maxR, float64(s.read)/dt)
 	}
-	tb := c.turnMins.min(now, wcTurnWin)
+	tb := c.turnBase(now)
 	newF := map[uint32]bool{}
 	var turns, spreads []time.Duration
 	sndBare := c.cfg.side == wcExit || !c.qSndAt.IsZero() && now.Sub(c.qSndAt) <= wcSndSpan && c.qSnd <= c.dq()
 	hits, upds := 0.0, 0.0
+	nSlow, nSent := 0, 0 // streams of F that look slow, and that were sent something
 	for i, s := range in.streams {
 		r := float64(s.read) / dt
 		if s.braked || float64(s.lag) > wcLagShare*float64(s.upd) {
 			continue
 		}
-		if s.upd == 0 || r <= 0 {
+		// (a stream that looks slow was sent something if a turnaround came
+		// in: its updates and its turnarounds come in intervals of their own)
+		if (s.upd == 0 || r <= 0) && !(r > 0 && s.turnMin > 0 && c.slowN[s.id] > 0) {
 			// its sender sent nothing: a stream of F whose reader is not
 			// behind stays in it for a while (the sender's PROBE_RTT)
 			if c.inF[s.id] && s.lag == 0 && c.idleN[s.id] < wcIdleKeep && s.win >= need/2 {
@@ -1540,19 +1623,33 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 			continue
 		}
 		delete(c.idleN, s.id)
+		// a slow source: never all of the window in use, a rate far under
+		// what the window allows, no queue at the exit to explain it (a
+		// path that slowed down queues there) and no holes to hold the data
+		// (quiet), and a turnaround that is how long the source takes to
+		// fill the window, past twice turnBase (slowTurn)
+		quiet := s.hit == 0 && r*tb.Seconds() < float64(s.win)/4 && sndBare && !m.holey
+		slowTurn := tb > 0 && s.turnMin > 2*tb
+		slow := false
 		if c.inF[s.id] {
-			if s.hit == 0 && s.upd >= 2 && tb > 0 && s.turnMin > 2*tb && r*tb.Seconds() < float64(s.win)/4 && sndBare && !m.holey {
-				// its source got slow: never all of the window in use, a
-				// turnaround that is how long the source takes to fill it,
-				// a rate far under what the window allows, no queue at the
-				// exit to explain it (a path that slowed down queues there)
-				// and no holes to hold the data: twice in a row
-				if c.slowN[s.id]++; c.slowN[s.id] >= wcSlowN {
+			switch {
+			case quiet && slowTurn && (c.cfg.side == wcEdge || s.upd >= 2):
+				// twice in a row; on the edge for a record span, with the
+				// exit's latest records clean
+				if c.slowN[s.id] == 0 {
+					c.slowAt[s.id] = now
+				}
+				if c.slowN[s.id]++; c.slowN[s.id] >= wcSlowN && (c.cfg.side == wcExit ||
+					c.cleanRecs >= wcSndHist && now.Sub(c.slowAt[s.id]) >= wcSndSpan) {
 					continue
 				}
-			} else {
+			case quiet && s.turnMin == 0:
+				// no turnaround came in: neither way
+			default:
 				delete(c.slowN, s.id)
+				delete(c.slowAt, s.id)
 			}
+			slow = c.slowN[s.id] > 0
 		} else {
 			turn := s.turnLast
 			if len(s.turns) > 0 {
@@ -1562,7 +1659,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 				turn = s.turnMin
 			}
 			step := float64(wcStep(need, s.win))
-			used := turn > 0 && r*turn.Seconds() >= wcUseShare*(float64(s.win)-step/2)
+			used := turn > 0 && r*turn.Seconds() >= wcUseShare*(float64(s.win)-step/2) && !(quiet && slowTurn)
 			hint := float64(s.hit) >= wcHitShare*float64(s.upd) && tb > 0 && s.turnMin > 0 && s.turnMin <= tb+c.dq()
 			if s.win < need/2 || r < wcPeerShare*maxR || !noQ || !(used || hint) {
 				continue
@@ -1578,6 +1675,13 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 			m.wPrev += float64(s.win)
 		}
 		m.hStep += float64(wcStep(need, s.win)) / 2
+		nSent++
+		if slow {
+			// from its first slow evaluation on its turnarounds, spreads
+			// and hits are its source's, not the path's
+			nSlow++
+			continue
+		}
 		hits += float64(s.hit)
 		upds += float64(s.upd)
 		switch {
@@ -1590,6 +1694,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 			spreads = append(spreads, s.turnLast-s.turnMin)
 		}
 	}
+	m.slowF = nSlow > 0 && nSlow == nSent
 	m.sameF = len(newF) == len(c.inF)
 	for id := range newF {
 		if !c.inF[id] {
@@ -1599,6 +1704,7 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	for id := range c.slowN {
 		if !newF[id] {
 			delete(c.slowN, id)
+			delete(c.slowAt, id)
 		}
 	}
 	for id := range c.idleN {
@@ -2015,7 +2121,9 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 			c.oooRef.note(m.ooo, uint64(m.wF), 0.3)
 		}
 	}
-	if len(m.f) == 0 || in.apProbing || m.idleF || math.Abs(m.wF-m.wPrev) > 0.1*m.wF {
+	// (nor on streams that all look like slow sources: what their windows
+	// carry is their sources' pace, nothing for STARTUP to grow; measure)
+	if len(m.f) == 0 || in.apProbing || m.idleF || m.slowF || math.Abs(m.wF-m.wPrev) > 0.1*m.wF {
 		c.offN = 0
 		return
 	}
@@ -2986,7 +3094,7 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 		}
 	}
 	if any {
-		o.turnRef = c.turnMins.min(now, wcTurnWin) + c.qRef
+		o.turnRef = c.turnBase(now) + c.qRef
 		// (a brake is a queue over the least turnaround of the last
 		// wcTurnWin: never past that window, whatever round trips and
 		// turnarounds the core was handed; TestRedWcoreHostileInputs)
