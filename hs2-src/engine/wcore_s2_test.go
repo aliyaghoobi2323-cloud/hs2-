@@ -774,3 +774,32 @@ func TestWcoreS2MergeKeepsBlocked(t *testing.T) {
 		}
 	}
 }
+
+// Before the exit's resend level is learned (sndRef), any resent segment
+// reads as a loss worth a verdict (sndSmall needs the level): a record with
+// one segment resent of 10000 set lossRecAt, and the next reaction to holes
+// stood unjudged (lossUnjudged). It is set only once the level is known
+// (post-merge review of FM2, L4).
+func TestWcoreS2LossRecNeedsLevel(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	now := wtT0.Add(10 * time.Second)
+	mk := func() *wcore {
+		c := wfCore(now, 0)
+		c.sndSeen, c.sndLastAt = true, now
+		return c
+	}
+	in := func(retrans uint64) wcIn {
+		return wcIn{now: now, poolFree: -1, snd: wcSnd{fresh: true, srtt: ms(80), minRTT: ms(72), retrans: retrans, segsOut: 10000}}
+	}
+	c := mk()
+	c.judgeCut(in(1))
+	if !c.lossRecAt.IsZero() {
+		t.Errorf("no resend level yet, one segment resent of 10000: lossRecAt %v, want none", c.lossRecAt)
+	}
+	c = mk()
+	c.sndRef = wcLossRef{v: 0.0001, b: 4 * wtMiB, ok: true}
+	c.judgeCut(in(100))
+	if !c.lossRecAt.Equal(now) {
+		t.Errorf("a level of 0.01%%, 1%% resent: lossRecAt %v, want %v", c.lossRecAt, now)
+	}
+}
