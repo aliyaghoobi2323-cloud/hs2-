@@ -180,7 +180,10 @@ func TestCoverHalfWindowLock(t *testing.T) {
 // A covered stream whose peer no longer waits at its window (its source
 // slowed down, or the path is full with the need in flight: the data flows
 // on past each limit) goes back to the need after coverMiss updates, and the
-// pool gets the cover's part back once the claim's hold is over.
+// pool gets the cover's part back once the claim's hold is over. (A frame
+// that comes late at a limit, a scheduler's pause under -race, reads as a
+// cycle that ran up to the window and holds the cover a while longer: the
+// need is held to come within 4·coverMiss updates, never before coverMiss.)
 func TestCoverGoesWhenTheWindowNoLongerHolds(t *testing.T) {
 	pool := NewWindowPool(4 << 20)
 	cfg := poolConfig(pool)
@@ -197,8 +200,10 @@ func TestCoverGoesWhenTheWindowNoLongerHolds(t *testing.T) {
 	if w := p.lastWindow(); w == need {
 		t.Fatalf("the need after %d updates, before coverMiss %d", len(p.updates())-before, coverMiss)
 	}
-	keepUp(t, p, s, 2*step)
-	p.sync(s)
+	for i := 0; i < 3*coverMiss+2 && p.lastWindow() != need; i++ {
+		keepUp(t, p, s, step)
+		p.sync(s)
+	}
 	if w := p.lastWindow(); w != need {
 		t.Fatalf("window %d after %d updates that did not run up to it, want the need %d", w, len(p.updates())-before, need)
 	}

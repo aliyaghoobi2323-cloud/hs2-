@@ -20,10 +20,88 @@ const (
 
 var wtT0 = time.Unix(1_700_000_000, 0)
 
+// wtCore is a core whose session has the cover off (smux Config.NoCover):
+// its floor the need, as the tests of its decisions were written for;
+// TestWcoreCoverFloor has the cover.
 func wtCore(stage int) *wcore {
-	c := newWcore(wcConfig{side: wcEdge, stage: stage, need: wtNeed, maxWin: wtMax, minWin: wtMin}, func() float64 { return 0.5 })
+	c := newWcore(wcConfig{side: wcEdge, stage: stage, need: wtNeed, maxWin: wtMax, minWin: wtMin, noCover: true}, func() float64 { return 0.5 })
 	c.tBase = 100 * time.Millisecond
 	return c
+}
+
+// With the cover on, the core's floor is the cover (1.5 need) until it found
+// the path full or other cores of the peer are on: then the need, and the
+// session's streams lose their covers (noCover). At the cover a share is no
+// ceiling; the floor of B is n_F covers as far as the pool has them; in OFF
+// the covers are the session's unless other cores of the peer are on.
+func TestWcoreCoverFloor(t *testing.T) {
+	cover := uint32(wtNeed + wtNeed/2)
+	c := wtCore(1)
+	c.cfg.noCover = false
+	if c.cover() != cover || c.cmin() != cover || !c.coverFloor() {
+		t.Fatalf("cover %d cmin %d floor %v, want the cover %d", c.cover(), c.cmin(), c.coverFloor(), cover)
+	}
+	in := wtIn(wtT0, 2, wtNeed)
+	in.poolFree = 64 << 20
+	o := c.out(in, wtT0, nil)
+	if o.noCover {
+		t.Fatal("OFF, alone on the peer: the covers taken")
+	}
+	// out of OFF at the floor: no ceiling, the covers kept
+	c.state, c.inF = wcHold, map[uint32]bool{1: true, 3: true}
+	m := wtMeas(2, 20e6, 2*wtNeed)
+	c.setB(in, m, 0)
+	c.bPub = c.B
+	if c.B != 2*uint64(cover) {
+		t.Fatalf("B %d at the floor of two streams, want two covers %d", c.B, 2*cover)
+	}
+	o = c.out(in, wtT0, nil)
+	if o.noCover || o.ceils[0].ceil != 0 || o.ceils[1].ceil != 0 {
+		t.Fatalf("at the floor of covers: noCover %v ceilings %+v, want covers kept and no ceiling", o.noCover, o.ceils)
+	}
+	// a pool with less: the floor what it has, never under the need
+	in.poolFree = 256 << 10
+	c.setB(in, m, 0)
+	if c.B != 2*wtNeed+256<<10 {
+		t.Fatalf("B %d with 256 KiB of pool, want 2·need + 256 KiB", c.B)
+	}
+	in.poolFree = 0
+	c.setB(in, m, 0)
+	if c.B != 2*wtNeed {
+		t.Fatalf("B %d with no pool left, want 2·need", c.B)
+	}
+	// the path full: the need, and the covers taken
+	c.pathFull = true
+	if c.cmin() != wtNeed {
+		t.Fatalf("path full: cmin %d, want the need", c.cmin())
+	}
+	if o = c.out(in, wtT0, nil); !o.noCover {
+		t.Fatal("path full: the covers kept")
+	}
+	// other cores of the peer on: the need, in OFF too
+	c.pathFull, c.last.grp = false, true
+	if c.cmin() != wtNeed {
+		t.Fatalf("other cores on: cmin %d, want the need", c.cmin())
+	}
+	if o = c.out(in, wtT0, nil); !o.noCover {
+		t.Fatal("other cores on: the covers kept")
+	}
+	c.state = wcOff
+	if o = c.out(in, wtT0, nil); !o.noCover {
+		t.Fatal("OFF next to other cores on: the covers kept")
+	}
+	// the floor of the need (wcCoverFloor off): the covers only in OFF
+	old := wcCoverFloor
+	wcCoverFloor = false
+	t.Cleanup(func() { wcCoverFloor = old })
+	c.last.grp = false
+	if o = c.out(in, wtT0, nil); o.noCover || c.cmin() != wtNeed {
+		t.Fatalf("floor of the need, OFF: noCover %v cmin %d", o.noCover, c.cmin())
+	}
+	c.state = wcHold
+	if o = c.out(in, wtT0, nil); !o.noCover {
+		t.Fatal("floor of the need, out of OFF: the covers kept")
+	}
 }
 
 // wtIn is an interval with n fast-looking streams of window w (no pool).

@@ -187,6 +187,9 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 	var sess *smux.Session
 	var err error
 	cfg := newSmuxConfig()
+	if cfg.WindowPool != nil && !smuxCoverOn(server) {
+		cfg.NoCover = true // the exit's end: no cover for uploads (SmuxCover)
+	}
 	if server {
 		sess, err = smux.Server(w, cfg)
 	} else {

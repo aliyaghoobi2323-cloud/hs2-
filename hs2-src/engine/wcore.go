@@ -284,11 +284,12 @@ const (
 // wcConfig is fixed per link: the stream window sizes of the session's smux
 // config and the stage.
 type wcConfig struct {
-	side   wcSide
-	stage  int    // 1: no ceiling below need; 2: down to wcStage2Min once the path is full
-	need   uint32 // smux NeedStreamBuffer (2 MiB)
-	maxWin uint32 // smux MaxStreamBuffer (16 MiB)
-	minWin uint32 // smux MinStreamBuffer (64 KiB)
+	side    wcSide
+	stage   int    // 1: no ceiling below need; 2: down to wcStage2Min once the path is full
+	need    uint32 // smux NeedStreamBuffer (2 MiB)
+	maxWin  uint32 // smux MaxStreamBuffer (16 MiB)
+	minWin  uint32 // smux MinStreamBuffer (64 KiB)
+	noCover bool   // smux Config.NoCover: no window past need without a ceiling (cover)
 }
 
 // Constants of the core (§5.2), variables so the calibration (step 0) and
@@ -613,6 +614,7 @@ type wcOut struct {
 	turnRef time.Duration
 	qBrake  time.Duration
 	growOK  bool
+	noCover bool // no cover for the session's streams: the core's floor is the need, or other cores of the peer are on (smux Session.SetCover; cover)
 	next    time.Time
 	events  []wcEvent
 }
@@ -836,13 +838,88 @@ func (c *wcore) interval() (settle, measure time.Duration) {
 	return settle, measure
 }
 
-// cmin is the least ceiling of a fast stream: need in stage 1; in stage 2,
-// once the core found the path full, down to max(4·MinStreamBuffer, 256 KiB).
+// cmin is the least ceiling of a fast stream: the cover while the floor is
+// it (coverFloor), else need in stage 1; in stage 2, once the core found the
+// path full, down to max(4·MinStreamBuffer, 256 KiB).
 func (c *wcore) cmin() uint32 {
+	if c.coverFloor() {
+		return c.cover()
+	}
 	if c.cfg.stage >= 2 && c.pathFull {
 		return min(max(4*c.cfg.minWin, wcStage2Min), c.cfg.need)
 	}
 	return c.cfg.need
+}
+
+// wcCoverFloor: the core's floor is the cover until it found the path full
+// (coverFloor); false keeps it at the need, the covers the session's only
+// while the core is OFF (a variable for the tests and the lab).
+var wcCoverFloor = true
+
+// coverFloor says whether the core's floor is the cover (cmin): the cover
+// on, no verdict that the path is full, and no other core of the peer on.
+// Then a share at the cover or below is no ceiling (out) and the streams
+// keep their covers; else the core takes them (out: noCover).
+func (c *wcore) coverFloor() bool {
+	return wcCoverFloor && !c.cfg.noCover && !c.pathFull && !c.last.grp
+}
+
+// cover is the window a stream the window holds back has without the core
+// (smux.Cover: need plus a step), within MaxStreamBuffer; need with the
+// cover off (smux Config.NoCover).
+//
+// Without a ceiling such a stream has the need plus a step from the window
+// pool: an update leaves each step read, so at the need its sender has the
+// need less a step in flight (the half-window lock: 1 MiB per round trip,
+// 101–112 Mbit/s at 75 ms in the field, and every cut of the core to its
+// floor of 2 MiB the same), covered the need. That is the windows' own
+// without the core, and stage 1's floor ("nothing below what the windows
+// have without the core"): while the core is OFF (and on a link with none)
+// the streams hold their covers, what the core measures in OFF (F, harm, the
+// windows STARTUP starts from) is them, and out of OFF its least ceiling is
+// the cover (cmin; at the cover a share is no ceiling, out), B never under
+// n_F covers as far as the pool has them (setB). Its knee and budget keep
+// their arithmetic (H_step = Σ step/2 of the windows in force: a cover's
+// step is the need's).
+//
+// Once the core found the path full (a drain, a cut, a failed probe:
+// pathFull) its floor is the need again and the session's streams lose their
+// covers (out: noCover, smux Session.SetCover): it holds the windows it
+// found too large between the need and the cover, the half step of queue a
+// cover adds on a path whose knee lies there. So too while other cores of
+// the peer are on (grp), in OFF as well: on a bottleneck the links share,
+// floors that moved between the need and the cover with each core's own
+// verdict, and covers in OFF beside running cores, split four links on
+// 1000/100 behind 50 ms up to 2.4–3.0 times apart, where the shared rule
+// keeps them within 1.2–2.0 (wcore_shared_test.go).
+//
+// Against a floor of the need with the covers only in OFF (wcCoverFloor
+// false), in the model: better in 11 cells, worse in 5 (the table's targets
+// 38 of 85 cells against 39): a policer at 300 on 1000/100 187 against 128
+// Mbit/s (resent 0.04 against 0.21%), 300/150 at 0.1% loss 97 against 72,
+// 300/100 at 0.1% 167 against 119; worse 300/100 clean, 182 against 199
+// (p99 next to it 379 against 210 ms), and 1% loss on 300/50 and 300/100 by
+// 10%. With the need as floor the core ran under the windows without it
+// (the policer: 128 against 177 Mbit/s): its cuts to the floor are the lock.
+//
+// What the covers change in OFF, in the model: its window-limited sender
+// stays in BBR's STARTUP (pacing 3.9 times the path, as the rig's did) only
+// while every round waits for credit; with the need in flight some rounds
+// do not, and it leaves STARTUP for PROBE_BW, where the core's later steps
+// of B turn into rate only at BBR's own probing pace (1000/100 at 0.1% loss:
+// 241 → 160 Mbit/s for the core, 83 → 109 for the windows without it), and
+// the covered base's bursts read 14 ms on the exit's record where the need's
+// read 9, past Δq, so harm() keeps the core OFF longer (300/100: 219 → 182).
+// The field's downloads move exactly 1 MiB per round trip, a sender pacing
+// at its delivery rate (PROBE_BW) rather than bursting: there the covers
+// change no sender state, and they lift the lock the core cannot see (a
+// sender that never pauses at the limit makes no hits, and a window less a
+// full step in flight is not "used": F stays empty).
+func (c *wcore) cover() uint32 {
+	if c.cfg.noCover {
+		return c.cfg.need
+	}
+	return smux.Cover(c.cfg.need, c.cfg.maxWin)
 }
 
 // step takes what the runner saw since its previous call. The runner calls
@@ -1980,8 +2057,19 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 				turn = s.turnMin
 			}
 			step := float64(wcStep(need, s.win))
-			used := turn > 0 && r*turn.Seconds() >= wcUseShare*(float64(s.win)-step/2)
-			hint := float64(s.hit) >= wcHitShare*float64(s.upd) && tb > 0 && s.turnMin > 0 && s.turnMin <= tb+c.dq()
+			held, share := step/2, wcHitShare
+			if s.win > need && s.win <= c.cover() {
+				// a cover (smux Cover: the need plus a step, without a
+				// ceiling): built to keep the need in flight, the window
+				// less a step, and with two updates a round trip at most
+				// one of them ends a cycle that paused at the limit (the
+				// model: 0.3 to 0.6 of them; without this a covered stream
+				// under 0.1% loss stayed out of F for its first seconds
+				// in OFF: 1000/100)
+				held, share = step, wcHitShare/2
+			}
+			used := turn > 0 && r*turn.Seconds() >= wcUseShare*(float64(s.win)-held)
+			hint := float64(s.hit) >= share*float64(s.upd) && tb > 0 && s.turnMin > 0 && s.turnMin <= tb+c.dq()
 			if s.win < need/2 || r < wcPeerShare*maxR || !noQ || !(used || hint) {
 				continue
 			}
@@ -2242,8 +2330,12 @@ func (c *wcore) setB(in wcIn, m wcMeas, b uint64) {
 				held += float64(w - c.cfg.need)
 			}
 		}
-		if p := n*uint64(c.cfg.need) + uint64(held) + uint64(in.poolFree); p < hi {
+		p := n*uint64(c.cfg.need) + uint64(held) + uint64(in.poolFree)
+		if p < hi {
 			hi, pool = p, true
+		}
+		if need := n * uint64(c.cfg.need); p < lo && lo > need {
+			lo = max(p, need)
 		}
 	}
 	hi = max(hi, lo)
@@ -3377,7 +3469,11 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	if c.state != wcOff && now.Add(wcRampTick).Before(next) {
 		next = now.Add(wcRampTick)
 	}
-	o := wcOut{state: c.state, B: c.bPub, next: next, events: ev, growOK: true}
+	// (in OFF the covers are the windows' own, but not next to the running
+	// cores of other links to the peer: their shared rule holds the path's
+	// shares, and covers in OFF beside them split four links on 1000/100
+	// behind 50 ms up to 2.4–3.0 times apart, 1.2–2.0 without: cover)
+	o := wcOut{state: c.state, B: c.bPub, next: next, events: ev, growOK: true, noCover: c.last.grp}
 	o.ceils = make([]wcCeil, len(in.streams))
 	for i, s := range in.streams {
 		o.ceils[i].id = s.id
@@ -3386,6 +3482,7 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 		clear(c.ceils)
 		return o
 	}
+	o.noCover = !c.coverFloor() // the core takes the covers once its floor is the need (cover)
 	var idx []int
 	var demand []float64
 	anyHit := false
@@ -3412,9 +3509,10 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 	for k, i := range idx {
 		v := share[k]
 		c.ceils[in.streams[i].id] = v
-		// at need or below: the behaviour without the core (no brake), until
-		// stage 2 found the path full
-		if v <= c.cfg.need && !(c.cfg.stage >= 2 && c.pathFull) {
+		// at the floor or below (need, or the cover while it is the floor:
+		// cmin): the behaviour without the core (no brake), until stage 2
+		// found the path full
+		if v <= max(c.cmin(), c.cfg.need) && !(c.cfg.stage >= 2 && c.pathFull) {
 			v = 0
 		}
 		o.ceils[i].ceil = v

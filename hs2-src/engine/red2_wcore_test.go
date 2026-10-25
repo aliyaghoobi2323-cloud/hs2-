@@ -104,11 +104,13 @@ func TestRed2OldExitRealStatsNoCeiling(t *testing.T) {
 	if fast := wcStayedOff(t, tr, need); fast < 5 {
 		t.Fatalf("the stream counted as fast in %d of %d evaluations: the path tested nothing", fast, len(tr))
 	}
-	if e := edge.Extra(); e != 0 {
+	// (the download's cover, the windows' own without the core, is all the
+	// buffer it may hold past its own: smux Cover)
+	if e := edge.Extra(); e > int(smux.Cover(need, ^uint32(0))-need) {
 		t.Fatalf("the edge's buffer is %d past its own with no ceiling", e)
 	}
 	t.Logf("%d records of 64 bytes, %d MiB downloaded, %d evaluations, core OFF throughout, no ceiling, no window past %d",
-		seq, sent.Load()>>20, len(tr), need)
+		seq, sent.Load()>>20, len(tr), smux.Cover(need, ^uint32(0)))
 }
 
 // A link whose frozen apps filled its buffer and made it borrow from the

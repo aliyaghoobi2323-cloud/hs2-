@@ -391,7 +391,7 @@ func newWcLink(sess *smux.Session, cfg *smux.Config, tcp *net.TCPConn, mtr *link
 	l.name.Store(&name)
 	l.peerKey = wcPeerKey(remote)
 	l.core = newWcore(wcConfig{side: side, stage: WcoreStage, need: uint32(cfg.NeedStreamBuffer),
-		maxWin: uint32(cfg.MaxStreamBuffer), minWin: uint32(cfg.MinStreamBuffer)}, rand.Float64)
+		maxWin: uint32(cfg.MaxStreamBuffer), minWin: uint32(cfg.MinStreamBuffer), noCover: cfg.NoCover}, rand.Float64)
 	return l
 }
 
@@ -766,6 +766,7 @@ func wcPaceRate(r float64, win uint64, minRTT, srtt time.Duration) uint64 {
 // snapshot.
 func (l *wcLink) apply(o wcOut) {
 	l.sess.SetCoreRef(o.turnRef, o.qBrake, o.growOK)
+	l.sess.SetCover(!o.noCover)
 	clear(l.ceils)
 	for _, c := range o.ceils {
 		l.ceils[c.id] = c.ceil
@@ -1231,6 +1232,7 @@ type wcTraceLine struct {
 	TurnRef   float64   `json:"turn_ref_ms"`
 	QBrake    float64   `json:"q_brake_ms"`
 	GrowOK    bool      `json:"grow_ok"`
+	NoCover   bool      `json:"no_cover,omitempty"` // the session's streams hold no cover (smux Session.SetCover)
 	// the path's reordering level now (wcore.roLevel) and the drains for
 	// holes taken back so far (wcore.undoCut)
 	OooRo float64 `json:"ooo_ro,omitempty"`
@@ -1303,7 +1305,7 @@ func (l *wcLink) traceOf(now time.Time, o wcOut) wcTraceLine {
 		SegsIn: in.segsIn, Ooo: m.ooo, OooOK: m.oooOK, Snd: m.snd, SndOK: m.sndOK, Spread: msOf(c.spread),
 		QTarget: msOf(c.qTarget(now)), ProbeQ: msOf(c.probeQ(now)), Parks: in.parks, Brakes: in.brakes,
 		PoolFree: in.poolFree, PoolShort: in.poolShort, APProbing: in.apProbing,
-		TurnRef: msOf(o.turnRef), QBrake: msOf(o.qBrake), GrowOK: o.growOK,
+		TurnRef: msOf(o.turnRef), QBrake: msOf(o.qBrake), GrowOK: o.growOK, NoCover: o.noCover,
 		OooRo: c.roLevel(now), Undo: c.cnt.undo}
 	if m.dt > 0 && c.tBase > 0 {
 		t.RHat = c.rhatF(now, m)
