@@ -525,7 +525,19 @@ var (
 	// fifth under them and the exit's writer waited on its socket: no
 	// judgement there, wcEvidBlocked); a source of 27 Mbit/s with 2 MiB on
 	// 150 ms moves 0.32 of it, of 40 Mbit/s on 100 and 150 ms 0.32 and 0.48,
-	// each within one T_base of slack.
+	// each within one T_base of slack. Its window counts up to need, and past
+	// need the test holds past the slack too: there the core's own windows
+	// hold what a wait no signal shows takes (an exit whose CPU, not the path,
+	// holds its sender: its writer is busy, not waiting on its socket, and a
+	// pong goes ahead of the data; τ_hold learns the wait, up to 3·T_base, and
+	// HOLD's windows hold twice what the path takes in a round trip), and a
+	// stream that moves half of what a window of need allows in the path's
+	// round trip is one the windows bind (base's 2 MiB holds it), however long
+	// it turns. Against its own window, the rig's download on 1000/72 (~750
+	// Mbit/s, the exit's CPU) left F twice in a row on a dip of its rate or a
+	// probe's window, and the core went OFF and through STARTUP again: 720 →
+	// 654 Mbit/s over three runs (the model, TestWcoreS2CPUHeldStaysFast: 728
+	// → 662-694).
 	wcEvidUse = 0.5
 	// wcEvidSettle: an interval judges the lack of evidence only with a
 	// record of the exit that came this many T_base after the published
@@ -2079,7 +2091,10 @@ func (c *wcore) heldQ(m wcMeas) time.Duration {
 // F (the fast streams) holds a stream only on evidence that its window, not
 // its source, holds its sender: its least turnaround of the interval is the
 // path's (evidence: within its floor, the queue a signal with no bias shows
-// and wcEvidRTTs of slack). A sender the window holds has sent all it may by
+// and wcEvidRTTs of slack; past a quarter of it, with the stream moving half
+// of what its window, up to need, allows in the path's round trip, and past
+// the slack only so and with its window past need: wcEvidUse). A sender the
+// window holds has sent all it may by
 // the time an update reaches it, and the data past its old limit comes a
 // round trip later, queue and all; a source slower than the window allows
 // reaches that limit (window − step) / rate after the update, so its rate
@@ -2226,17 +2241,21 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	var turns, spreads []time.Duration
 	hits, upds := 0.0, 0.0
 	// evidence that the window held a sender: a turnaround the path explains
-	// (wcEvidUse: within a quarter of the slack where it moved under half of
-	// what its window allows in such a round trip)
+	// (wcEvidUse: past a quarter of the slack only where it moved half of what
+	// its window, up to need, allows in such a round trip; past the slack only
+	// so, with its window past need)
 	heldOf := func(s wcStream, r float64) bool {
-		if s.turnMin <= 0 || s.turnMin > ev.floor+ev.q+ev.slack {
+		switch {
+		case s.turnMin <= 0:
+			return false
+		case s.turnMin <= ev.floor+ev.q+ev.slack/4:
+			return true
+		case s.turnMin > ev.floor+ev.q+ev.slack && s.win <= need:
 			return false
 		}
-		if s.turnMin <= ev.floor+ev.q+ev.slack/4 {
-			return true
-		}
-		step := float64(wcStep(need, s.win))
-		return r*(ev.floor+ev.q).Seconds() >= wcEvidUse*(float64(s.win)-step/2)
+		w := min(s.win, need)
+		step := float64(wcStep(need, w))
+		return r*(ev.floor+ev.q).Seconds() >= wcEvidUse*(float64(w)-step/2)
 	}
 	for i, s := range in.streams {
 		r := float64(s.read) / dt
