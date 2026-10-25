@@ -346,4 +346,111 @@ func TestWcoreS2Evidence(t *testing.T) {
 			t.Errorf("the exit's side, interval %d: F %v, want %d stream(s)", i+1, m.f, want)
 		}
 	}
+
+	// the path holds the link's sender: the exit's writer waited on its
+	// socket for most of a record's span (a path slower than the windows:
+	// the data a turnaround waits for sits in the exit's socket). No
+	// judgement, as long as one of the latest two records says so.
+	c = wfCore(now, 0)
+	c.inF[1] = true
+	c.sndBlks[0] = wcRate{now, 0.9}
+	pathHeld := wcStream{id: 1, win: wtNeed, upd: 2, read: uint64(17 * wmMbit * dt), turnMin: ms(492), turnLast: ms(492)}
+	for i := 0; i < 3; i++ {
+		c.qSndAt = next()
+		if i == 1 {
+			copy(c.sndBlks[1:], c.sndBlks[:])
+			c.sndBlks[0] = wcRate{now, 0.45}
+		}
+		if m := c.measure(wfIn(now, pathHeld), dt); len(m.f) != 1 || !m.qOK {
+			t.Errorf("the exit's writer waited on its socket, interval %d: F %v, q_turn ok %v; want kept, counted", i, m.f, m.qOK)
+		}
+	}
+
+	// within the slack but past a quarter of it, a stream moving under half
+	// of what its window allows in such a round trip is no evidence (a
+	// source of 60 Mbit/s with 2 MiB: 140 ms); one moving 200 Mbit/s is
+	ret := func(id uint32, mbit float64, turn time.Duration) wcStream {
+		return wcStream{id: id, win: wtNeed, upd: 4, read: uint64(mbit * wmMbit * dt), turnMin: turn, turnLast: turn}
+	}
+	c = wfCore(now, 0)
+	c.inF[1], c.inF[3] = true, true
+	for i, want := range []int{2, 1} {
+		c.qSndAt = next()
+		in := wfIn(now, ret(1, 60, ms(140)))
+		in.streams = append(in.streams, ret(3, 200, ms(120)))
+		in.streams[1].turns = wcWakeTurns(nil, in.streams[1])
+		in.linkBytes += in.streams[1].read
+		if m := c.measure(in, dt); len(m.f) != want {
+			t.Errorf("60 Mbit/s at 140 ms beside 200 at 120, interval %d: F %v, want %d stream(s)", i+1, m.f, want)
+		}
+	}
+	// marked, it joins again only on two intervals in a row whose
+	// turnaround is the floor and the queue seen within Δq (its sender
+	// waited for the update): not on one within the slack
+	for i, tc := range []struct {
+		s    wcStream
+		join bool
+	}{{ret(1, 200, ms(120)), false}, {fastS, false}, {fastS, true}} {
+		c.qSndAt = next()
+		in := wfIn(now, tc.s)
+		in.streams = append(in.streams, ret(3, 200, ms(120)))
+		in.streams[1].turns = wcWakeTurns(nil, in.streams[1])
+		if m := c.measure(in, dt); c.inF[1] != tc.join {
+			t.Errorf("rejoining, interval %d (turnaround %v): F %v, want it joined %v", i+1, tc.s.turnMin, m.f, tc.join)
+		}
+	}
+}
+
+// The share of a record's span in which the exit's writer waited on its
+// socket: txBlockedNs over monoNs between two records (the first has none).
+func TestWcoreS2BuilderBlocked(t *testing.T) {
+	var b wcBuilder
+	at := wtT0
+	snap := func(mono, blk uint64) wcIn {
+		at = at.Add(2 * time.Second)
+		return b.build(wcLinkSnap{now: at, sndAt: at, sndSrtt: 80 * time.Millisecond, sndMinRTT: 72 * time.Millisecond,
+			sndSegsOut: mono / 1e6, sndMono: mono, sndBlocked: blk})
+	}
+	if in := snap(10e9, 1e9); !in.snd.fresh || in.snd.blockedOK {
+		t.Fatalf("first record: %+v, want fresh with no share", in.snd)
+	}
+	if in := snap(12e9, 2e9); !in.snd.blockedOK || in.snd.blocked != 0.5 {
+		t.Fatalf("second record: %+v, want a share of 0.5", in.snd)
+	}
+	if in := snap(14e9, 1e9); in.snd.blockedOK {
+		t.Fatalf("a counter that went back (a restarted exit): %+v, want no share", in.snd)
+	}
+}
+
+// A path that slows to 20 Mbit/s under 2 MiB windows (100 ms, 100 → 20 →
+// 100 Mbit/s): the exit's BBR is held by its cwnd and the data waits in the
+// exit's socket, where no srtt sees it, and the turnarounds run to 490 ms.
+// The exit's writer waits on its socket all along: the path holds the
+// sender, and the stream stays fast through the slow spell (stage 2 shrinks
+// exactly such windows). Left out of F, the core went OFF for the spell and
+// came back through STARTUP when the path recovered (+12 queue drains over
+// 20 seeds of the full table's cell).
+func TestWcoreS2PathHeldStaysFast(t *testing.T) {
+	for seed := uint64(1); seed <= 3; seed++ {
+		c := wmPath(100, wmMS(100), wmMS(50))
+		c.mode, c.seed, c.dur = wmCore, seed, 45*time.Second
+		c.changes = []wmChange{{20 * time.Second, 20 * wmMbit}, {40 * time.Second, 100 * wmMbit}}
+		evals, fast, off := 0, 0, 0
+		c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+			if at < 25*time.Second || at >= 40*time.Second || !k.lastAt.Equal(in.now) {
+				return
+			}
+			evals++
+			if k.inF[1] {
+				fast++
+			}
+			if k.state == wcOff {
+				off++
+			}
+		}
+		wmRun(c)
+		if fast < evals*9/10 || off > 0 {
+			t.Errorf("seed %d: fast in %d of %d evaluations of the slow spell, OFF in %d", seed, fast, evals, off)
+		}
+	}
 }

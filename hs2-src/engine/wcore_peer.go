@@ -106,6 +106,20 @@ func (p *wcPeer) others(c *wcore, now time.Time) (n int, r float64) {
 	return n, r
 }
 
+// rise is the latest rise of the published budget of the cores other than
+// c that are on (wcore.riseAt): their growth builds the path's queue as
+// c's own does, and a record from before it does not show that queue
+// (wcore.evidence).
+func (p *wcPeer) rise(c *wcore, now time.Time) time.Time {
+	var t time.Time
+	for k, v := range p.cores {
+		if k != c && v.on && now.Sub(v.at) <= wcPeerStale && k.riseAt.After(t) {
+			t = k.riseAt
+		}
+	}
+	return t
+}
+
 // empty: no core and no record is left.
 func (p *wcPeer) empty() bool { return len(p.cores) == 0 && len(p.recs) == 0 }
 

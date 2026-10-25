@@ -572,6 +572,7 @@ func (l *wcLink) snap(now time.Time) wcLinkSnap {
 		s.sndAt = r.at
 		s.sndSrtt, s.sndMinRTT = usDur(uint64(r.srtt)), wcMinRTTOf(r.minRTT)
 		s.sndRetrans, s.sndSegsOut = r.retrans, r.segsOut
+		s.sndMono, s.sndBlocked = r.mono, r.txBlocked
 	}
 	if p := l.ap.Load(); p != nil {
 		s.apProbing = p.Load()
