@@ -104,6 +104,15 @@ type wcore struct {
 	holeSeen  bool         // a loss's hole since the previous evaluation (lossHole)
 	policedAt time.Time    // the latest policer's loss (policerLoss)
 	cleanRecs int          // the exit's latest records in a row that showed no queue and no resends
+	// the path's reordering (wcore_reorder.go): what the exit's records
+	// showed its holes hold with no loss (reo), the latest record's srtt and
+	// the latest one with resends, and a verdict of loss on holes alone
+	// waiting for the records that cover it (undo; undoDue: they came, clean)
+	reo      wcReo
+	recSrtt  time.Duration
+	recRtxAt time.Time
+	undo     wcUndo
+	undoDue  bool
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -524,6 +533,7 @@ const (
 	wcEvPool
 	wcEvCapped
 	wcEvRoute
+	wcEvUndo // a verdict of loss on holes alone undone: the exit resent nothing (wcore_reorder.go)
 )
 
 type wcDrainWhy uint8
@@ -565,6 +575,7 @@ const (
 type wcCounters struct {
 	grow, probeOK, probeFail     int
 	drainQ, drainLoss, drainRate int
+	undo                         int // drains for loss (and cuts) the exit's records undid
 	poolShort                    int
 	peakB                        uint64
 	peakR                        float64
@@ -816,16 +827,28 @@ func (c *wcore) cmin() uint32 {
 // the previous one.
 func (c *wcore) step(in wcIn) wcOut {
 	now := in.now
-	hole := c.wakeHoles(in)
-	lossHole := c.lossHole(in, hole)
+	wdt := c.wakeDt(in)
+	hole := c.wakeHoles(in, wdt)
+	hw := c.holeWindow(in, hole, wdt)
+	lossHole := c.lossHole(in, hw)
 	c.holeSeen = c.holeSeen || lossHole
 	defer func() {
 		c.wakeAt = now
-		c.holeWakes = append(c.holeWakes, wcHoleWake{hole, in.ooo})
+		c.holeWakes = append(c.holeWakes, wcHoleWake{hole, in.ooo, in.segsIn, wdt})
 		if n := len(c.holeWakes) - c.holeSpan(); n > 0 {
 			c.holeWakes = c.holeWakes[:copy(c.holeWakes, c.holeWakes[n:])]
 		}
 	}()
+	// the exit's record of this wake judges the windows and the verdict
+	// that wait for it, then this wake's window waits
+	c.reoRecord(in, hw.span)
+	if in.oooOK {
+		c.reoWindow(now, hw.hole, hw.segs, hw.span)
+	}
+	c.undoCheck(now)
+	if c.undoDue {
+		c.evalAt = now // undone at an evaluation now (applyUndo)
+	}
 	if c.accOK {
 		wcMerge(&c.acc, in)
 	} else {
@@ -920,7 +943,14 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.rAvg += wcRAvgAlpha * (m.rF - c.rAvg)
 		}
 	}
+	undone := c.undoDue
+	if undone {
+		// the records showed a verdict of loss on holes alone was none:
+		// undo it, and settle into what it gave back
+		c.applyUndo(in, m, &ev)
+	}
 	switch {
+	case undone:
 	case c.state == wcOff:
 		c.off(in, m, &ev)
 	case c.fEmpty >= wcOffAfter || c.blindN >= wcOffAfter || c.longBlind():
@@ -961,6 +991,7 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.toHold(in, m)
 		}
 	}
+	c.undoNoted()
 	if c.peer != nil {
 		c.peer.noteCore(c, now, c.state != wcOff && len(m.f) > 0, c.rAvg)
 	}
@@ -1005,7 +1036,10 @@ func (c *wcore) fastStop(in wcIn, lossHole bool) {
 	}
 	if in.oooOK && in.segsIn > 0 && c.oooRef.ok && c.oooRef.v < wcOooClean &&
 		c.oooRef.past(float64(in.ooo)/float64(in.segsIn), wcOooCongAbs) && !c.lossDrain && lossHole {
+		// (holes alone: the exit's records may undo it, wcUndo)
+		c.markUndo(in.now)
 		c.cut(in)
+		c.undoNoted()
 		return
 	}
 	if c.bPub >= c.B {
@@ -1040,25 +1074,32 @@ func (c *wcore) fastStop(in wcIn, lossHole bool) {
 	}
 }
 
-// wakeHoles is how long the packets of a runner wake waited behind holes:
-// the wake's length (since the previous one; wcRampTick if that is not
-// known) times the share of its segments that arrived behind one.
-func (c *wcore) wakeHoles(in wcIn) time.Duration {
-	if !in.oooOK || in.segsIn == 0 {
-		return 0
-	}
+// wakeDt is a runner wake's length: since the previous one, or wcRampTick
+// if that is not known.
+func (c *wcore) wakeDt(in wcIn) time.Duration {
 	dt := in.now.Sub(c.wakeAt)
 	if c.wakeAt.IsZero() || dt <= 0 || dt > wcTickMax {
 		dt = wcRampTick
+	}
+	return dt
+}
+
+// wakeHoles is how long the packets of a runner wake (dt long) waited
+// behind holes: dt times the share of its segments that arrived behind one.
+func (c *wcore) wakeHoles(in wcIn, dt time.Duration) time.Duration {
+	if !in.oooOK || in.segsIn == 0 {
+		return 0
 	}
 	return time.Duration(float64(dt) * math.Min(float64(in.ooo)/float64(in.segsIn), 1))
 }
 
 // wcHoleWake is a runner wake's holes: how long its packets waited behind
-// them, and how many did.
+// them, how many did, how many segments came, and how long it was.
 type wcHoleWake struct {
 	hole time.Duration
 	ooo  uint64
+	segs uint64
+	dt   time.Duration
 }
 
 // wcHoleWakesMax: lossHole sums at most this many wakes (T_base up to
@@ -1075,27 +1116,47 @@ func (c *wcore) holeSpan() int {
 	return min(max(n-1, 1), wcHoleWakesMax)
 }
 
-// lossHole says whether the holes of the wake (hole: how long its packets
-// waited behind them) and of the ones before it (holeSpan) were a loss's:
-// they kept packets waiting wcOooHole of T_base or more, wcOooMinSegs
-// segments or more of them. A path that reorders packets by a few ms opens
-// holes that short; summed over a whole interval they come to more (1
-// Gbit/s, 0.05% held 2 ms: 40 to 65 ms a second), so an interval is judged
-// by its wakes (holeSeen).
-func (c *wcore) lossHole(in wcIn, hole time.Duration) bool {
+// wcHoleWin is the window of wakes lossHole judges: the wake and the
+// holeSpan before it, their holes, the segments behind them, the segments
+// that came and how long they took.
+type wcHoleWin struct {
+	hole      time.Duration
+	ooo, segs uint64
+	span      time.Duration
+}
+
+// holeWindow sums the wake (hole: how long its packets waited behind holes,
+// dt long) and the holeSpan wakes before it.
+func (c *wcore) holeWindow(in wcIn, hole, dt time.Duration) wcHoleWin {
 	if !in.oooOK {
-		return false
+		return wcHoleWin{}
 	}
-	h, n := hole, in.ooo
+	s := wcHoleWin{hole: hole, ooo: in.ooo, segs: in.segsIn, span: dt}
 	w := c.holeWakes
 	if k := c.holeSpan(); len(w) > k {
 		w = w[len(w)-k:]
 	}
 	for _, x := range w {
-		h += x.hole
-		n += x.ooo
+		s.hole += x.hole
+		s.ooo += x.ooo
+		s.segs += x.segs
+		s.span += x.dt
 	}
-	return h >= time.Duration(wcOooHole*float64(c.tBase)) && n >= uint64(wcOooMinSegs)
+	return s
+}
+
+// lossHole says whether the holes of the wake and of the ones before it
+// (holeSpan; summed in w) were a loss's: they kept packets waiting wcOooHole
+// of T_base or more (more where the exit's records showed the path reorders:
+// holeThr), wcOooMinSegs segments or more of them. A path that reorders
+// packets by a few ms opens holes that short; summed over a whole interval
+// they come to more (1 Gbit/s, 0.05% held 2 ms: 40 to 65 ms a second), so an
+// interval is judged by its wakes (holeSeen).
+func (c *wcore) lossHole(in wcIn, w wcHoleWin) bool {
+	if !in.oooOK {
+		return false
+	}
+	return w.hole >= c.holeThr(in.now, w.segs, w.span) && w.ooo >= uint64(wcOooMinSegs)
 }
 
 // cut halves the budget for loss between evaluations: the knee is found if
@@ -2097,7 +2158,10 @@ func (c *wcore) settled(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.settling = false
 	switch c.state {
 	case wcProbe, wcStartup:
-		if cong, _, _ := c.lossVerdict(m, false); cong {
+		if cong, _, src := c.lossVerdict(m, false); cong {
+			if src == wcSrcOoo {
+				c.markUndo(in.now)
+			}
 			if c.state == wcProbe {
 				c.probeFailed(in, m, ev, true, true)
 			} else {
@@ -2180,7 +2244,7 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if qUp && m.sndOK && m.qSndOK && m.qSnd <= c.dq()/2 {
 		qUp = false // the exit's record of this interval shows none
 	}
-	cong, jump, _ := c.lossVerdict(m, qUp)
+	cong, jump, src := c.lossVerdict(m, qUp)
 	if judged, clean := c.longGrow(m); !cong && !clean {
 		if !judged {
 			// past wcLongRTT with no fresh record of the exit: B stays
@@ -2226,6 +2290,9 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// resent, 216 Mbit/s against 0.23%, 231)
 	pastCap := c.bCap > 0 && in.now.Sub(c.bCapAt) < wcQcapTTL && c.B >= c.bCap
 	if cong || c.flat >= wcFullRounds || (qUp && c.flat >= 1) || ((c.capped || c.burstHeld) && c.flat >= 1) {
+		if cong && src == wcSrcOoo && !qUp {
+			c.markUndo(in.now) // holes alone
+		}
 		c.endStartup(in, m, ev, cong || qUp, cong)
 		return
 	}
@@ -2531,6 +2598,9 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	case cong:
 		// loss that came with B (a probe or STARTUP whose loss the exit
 		// reported late): back off, and probe less
+		if src == wcSrcOoo {
+			c.markUndo(now) // holes alone
+		}
 		c.learnQcap(now, m)
 		_, hi := c.bSpan()
 		c.noteCap(now, hi)
@@ -2542,6 +2612,9 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// loss past its level at this very budget: ours if it stops at
 		// the floor (bursts that keep overflowing the queue; in stage 1 the
 		// floor is the behaviour without the core), the path's if not
+		if src == wcSrcOoo {
+			c.markUndo(now) // holes alone
+		}
 		c.lossTest, c.lossTestAt, c.lossTestB = src, now, c.B
 		c.toDrain(in, m, ev, wcWhyLoss, wcLossSig(src), 0, false)
 		c.B = 0
@@ -2761,7 +2834,10 @@ func (c *wcore) lossTestDone(in wcIn, m wcMeas, ev *[]wcEvent) bool {
 			c.noteCap(in.now, c.lossTestB)
 		}
 	case wcSrcOoo:
-		if !m.oooOK {
+		if !m.oooOK || c.undo.on {
+			// (a test of holes alone waits for the records that may
+			// undo it: its drain back at the floor reads no holes of a
+			// path that reorders more as it carries more)
 			return false
 		}
 		if c.oooRef.past(m.ooo, wcOooCongAbs) {
@@ -2809,7 +2885,7 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	}
 	pq := c.probeQ(now)
 	qUp := ok && rise >= pq/2
-	cong, jump, _ := c.lossVerdict(m, qUp)
+	cong, jump, src := c.lossVerdict(m, qUp)
 	if judged, clean := c.longGrow(m); !cong && !clean {
 		// past wcLongRTT a probe pays only on a fresh record of the exit
 		// that shows no queue and no new resends; with none it is no
@@ -2830,6 +2906,9 @@ func (c *wcore) probe(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// up to the next loss, 1.2–1.6% resent where rate verdicts left 0.4–0.9%)
 	paid := (m.holey || !c.qcapKnown(now)) && !c.blind(m) || gain >= math.Max(wcPayMin, wcPayShare*exp)
 	if cong || jump || !ok || qUp || !paid {
+		if cong && src == wcSrcOoo && !qUp {
+			c.markUndo(now) // holes alone
+		}
 		c.probeFailed(in, m, ev, cong, ok)
 		return
 	}

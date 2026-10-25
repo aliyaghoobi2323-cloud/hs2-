@@ -198,6 +198,7 @@ type wcStats struct {
 	drainQ    atomic.Int32
 	drainLoss atomic.Int32
 	drainRate atomic.Int32
+	undo      atomic.Int32 // drains for loss on holes alone the exit's records undid (the path reorders)
 	probeFail atomic.Int32
 	poolShort atomic.Int32 // windows the pool could not cover in full
 	peakB     atomic.Uint64
@@ -233,6 +234,7 @@ const (
 	wcLogCapped
 	wcLogRoute
 	wcLogNet
+	wcLogUndo
 	wcLogKinds
 )
 
@@ -279,6 +281,7 @@ const (
 	wcAggRoute
 	wcAggCapped
 	wcAggNet
+	wcAggUndo
 	wcAggKinds
 )
 
@@ -805,6 +808,7 @@ func (l *wcLink) publish(now time.Time) {
 	st.drainQ.Store(int32(c.cnt.drainQ))
 	st.drainLoss.Store(int32(c.cnt.drainLoss))
 	st.drainRate.Store(int32(c.cnt.drainRate))
+	st.undo.Store(int32(c.cnt.undo))
 	st.probeFail.Store(int32(c.cnt.probeFail))
 	st.poolShort.Store(int32(c.cnt.poolShort))
 	st.peakB.Store(c.cnt.peakB)
@@ -864,6 +868,9 @@ func wcoreNote(m *linkMeter) string {
 		wcMiB(st.peakB.Load()), mbitps(math.Float64frombits(st.peakR.Load())), st.drainQ.Load(), st.drainLoss.Load())
 	if r := st.drainRate.Load(); r > 0 {
 		s += fmt.Sprintf(", %d for a slower path", r)
+	}
+	if u := st.undo.Load(); u > 0 {
+		s += fmt.Sprintf(", %d drain(s) for holes undone (the exit resent nothing: the path reorders)", u)
 	}
 	return s + fmt.Sprintf(", held by the window pool %d time(s)", st.poolShort.Load())
 }
@@ -944,6 +951,13 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 			// capped by the pool with a step or more of it left: no line
 		case wcEvPool:
 			ws.poolHeld(l, now, e.n)
+		case wcEvUndo:
+			// (the drain's own line went out as it came: this one says it
+			// was none)
+			if l.due(wcLogUndo, now, wcLogDrainEvery) && ws.agg[wcAggUndo].admit(l, now, e.n, 0) {
+				logf("mtcp: %s: the drain for packets behind holes undone — the exit resent nothing (the path reorders them) — %s windows %s → %s",
+					l.label(), l.dir(), wcMiB(e.from), wcMiB(e.B))
+			}
 		case wcEvRoute:
 			if l.due(wcLogRoute, now, wcLogRareEvery) && ws.agg[wcAggRoute].admit(l, now, 0, 0) {
 				logf("mtcp: %s: the path's round trip grew to ~%d ms (a route change) — the window core follows it", l.label(), e.T.Milliseconds())
@@ -1142,6 +1156,9 @@ func (ws *wcSet) flushAgg(now time.Time) {
 			case wcAggNet:
 				(*lp)("mtcp: pacing net: %d more link(s) resent past %.4g%% and had their pacing held in the last minute",
 					len(a.links), 100*wcNetLossOf())
+			case wcAggUndo:
+				(*lp)("mtcp: window core: %d more link(s) undid %d drain(s) for packets behind holes in the last minute (the exit resent nothing: their path reorders)",
+					len(a.links), a.held)
 			}
 		}
 		*a = wcAgg{}
