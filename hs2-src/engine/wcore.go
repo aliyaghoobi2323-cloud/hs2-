@@ -102,8 +102,17 @@ type wcore struct {
 	wakeAt    time.Time
 	holeWakes []wcHoleWake // the wakes before, newest last (lossHole: T_base/4 of them)
 	holeSeen  bool         // a loss's hole since the previous evaluation (lossHole)
+	holeMax   float64      // ... the largest share of a wake's packets behind one
 	policedAt time.Time    // the latest policer's loss (policerLoss)
 	cleanRecs int          // the exit's latest records in a row that showed no queue and no resends
+	// prov: what holes alone did to B where the exit's records judge loss
+	// (sndJudges), until one does (judgeCut), with what the core had before,
+	// to take back; weak: one that stood on a small loss of the sender's
+	// (judgeCut); oooRo: the largest share of a wake's packets behind holes
+	// that a record showed were no loss (the path reorders packets): holes
+	// within it cut no more
+	prov, weak wcProv
+	oooRo      float64
 
 	// paths
 	tBase    time.Duration // T_base: the link socket's min_rtt (or the fallbacks)
@@ -321,6 +330,21 @@ var (
 	// round 1).
 	wcOooHole    = 0.25
 	wcOooMinSegs = 16
+	// wcRoMargin, wcRoMax: a cut for holes that the exit's record took back
+	// (undoCut) sets the path's reordering level (oooRo) to this many times
+	// the largest share of a wake's packets behind its holes, at most
+	// wcRoMax: a wake whose holes were a loss's is mostly behind them (at
+	// 72 ms, 90% of a 100 ms wake waits on a hole a round trip and RACK's
+	// quarter of one long), the field's reordering kept up to 49% of a 0.5 s
+	// span waiting. On the field's profile at 1000/72 (wcore_s2_reorder_test,
+	// RACK, the means of 3 seeds) the core carried 614 Mbit/s at ×1, 670 at
+	// ×1.25, 665 at ×1.5, 678 at ×2 (base 174, the core without reordering
+	// 798, the core before these rules 280); behind a 60% policer on the
+	// same reordering path it resent 0.14 to 0.49% at ×1.25 over 4 seeds
+	// (base windows 0.00–0.02%, the core before the rules 0.00–0.08%), no
+	// 2 s window past 2.5% (the loss rule drains at 12%).
+	wcRoMargin = 1.25
+	wcRoMax    = 0.75
 	// wcPoliceQ, wcPoliceBackoff: a loss of ours whose record from the exit
 	// shows no more queue than wcPoliceQ at its socket is a policer's
 	// (policerLoss): its loss point (bCap) holds for wcQcapTTL, not until a
@@ -527,6 +551,7 @@ const (
 	wcEvPool
 	wcEvCapped
 	wcEvRoute
+	wcEvUndo // a cut for holes taken back: the exit's record showed no loss (undoCut)
 )
 
 type wcDrainWhy uint8
@@ -707,7 +732,8 @@ type wcMeas struct {
 	sndAt    time.Time // when that record came (a record carried from a settle part came before at)
 	ooo      float64
 	oooOK    bool
-	oooLoss  bool // a loss's hole came in the interval (lossHole)
+	oooLoss  bool    // a loss's hole came in the interval (lossHole)
+	holeMax  float64 // ... the largest share of a wake's packets behind one
 	spread   time.Duration
 	spreadOK bool
 	ctrlUp   bool
@@ -835,10 +861,28 @@ func (c *wcore) step(in wcIn) wcOut {
 		c.acc = wcCopy(in)
 		c.accOK = true
 	}
+	// a record of the exit that came in this wake judges what holes before
+	// it did to B: it stands, or is taken back (judgeCut)
+	jev := c.judgeCut(in)
+	share, holeLoss := c.holeLoss(in, lossHole)
+	if lossHole {
+		c.holeMax = math.Max(c.holeMax, share)
+	}
+	judged := c.sndJudges(now)
+	if judged && c.oooRo > 0 && share <= c.oooRo {
+		holeLoss = false // within the path's reordering level (undoCut)
+	}
 	if !c.evalAt.IsZero() && now.Before(c.evalAt) {
-		c.fastStop(in, lossHole)
+		// (where the exit's records come, a cut for holes waits for one:
+		// provNote)
+		p, prov := c.provSnap(now, judged && holeLoss)
+		n := c.cnt.drainLoss
+		c.fastStop(in, holeLoss)
+		if prov && c.cnt.drainLoss > n {
+			c.provNote(p, now, share)
+		}
 		c.ramp()
-		return c.out(c.acc, now, nil)
+		return c.out(c.acc, now, jev)
 	}
 	in, c.accOK = c.acc, false
 	// the record that came in this interval (a carried one was counted in
@@ -857,7 +901,7 @@ func (c *wcore) step(in wcIn) wcOut {
 	}
 	stopQ := c.stopQ
 	c.stopQ = false
-	var ev []wcEvent
+	ev := jev
 	dt := 0.0
 	if !c.lastAt.IsZero() {
 		dt = now.Sub(c.lastAt).Seconds()
@@ -888,6 +932,7 @@ func (c *wcore) step(in wcIn) wcOut {
 	}
 	m := c.measure(in, dt)
 	m.oooLoss, c.holeSeen = c.holeSeen, false
+	m.holeMax, c.holeMax = c.holeMax, 0
 	if !carryAt.IsZero() {
 		m.sndAt = carryAt
 	}
@@ -923,6 +968,11 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.rAvg += wcRAvgAlpha * (m.rF - c.rAvg)
 		}
 	}
+	// a verdict of holes alone (no record of the interval past its level)
+	// where the exit's records come waits for one too (provNote)
+	p, prov := c.provSnap(now, c.state != wcOff && c.oooLoss(m) && c.sndJudges(now) &&
+		!(m.sndOK && c.sndRef.past(m.snd, c.sndAbs(m))))
+	nLoss, test := c.cnt.drainLoss, c.lossTest
 	switch {
 	case c.state == wcOff:
 		c.off(in, m, &ev)
@@ -964,6 +1014,9 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.toHold(in, m)
 		}
 	}
+	if prov && (c.cnt.drainLoss > nLoss || c.lossTest != test || c.bCapAt.Equal(now)) {
+		c.provNote(p, now, m.holeMax)
+	}
 	if c.peer != nil {
 		c.peer.noteCore(c, now, c.state != wcOff && len(m.f) > 0, c.rAvg)
 	}
@@ -1002,12 +1055,16 @@ func (c *wcore) step(in wcIn) wcOut {
 // of the fast streams past turnRef+qBrake (the fast arm's own brake). B
 // stays where the ramp got to (in STARTUP, where it was a turnaround ago:
 // what the queue shows came from that); the evaluation judges.
-func (c *wcore) fastStop(in wcIn, lossHole bool) {
+//
+// holeCut: the wake's holes look like a loss's (holeLoss), past the path's
+// reordering level where the exit's records judge loss (oooRo); there the
+// cut waits for the next record, which keeps it or takes it back (provNote,
+// judgeCut).
+func (c *wcore) fastStop(in wcIn, holeCut bool) {
 	if c.state == wcOff || c.bPub == 0 {
 		return
 	}
-	if in.oooOK && in.segsIn > 0 && c.oooRef.ok && c.oooRef.v < wcOooClean &&
-		c.oooRef.past(float64(in.ooo)/float64(in.segsIn), wcOooCongAbs) && !c.lossDrain && lossHole {
+	if holeCut && !c.lossDrain {
 		c.cut(in)
 		return
 	}
@@ -1041,6 +1098,251 @@ func (c *wcore) fastStop(in wcIn, lossHole bool) {
 		}
 		c.B, c.bPub, c.stopQ = b, b, true
 	}
+}
+
+// holeLoss says whether a wake's holes look like a loss's on a path that is
+// otherwise clean: the share of its packets that arrived behind one is past
+// their level (oooRef, under wcOooClean) by wcOooCongAbs, and the holes kept
+// them waiting as a loss's does (lossHole). It reports the share too.
+func (c *wcore) holeLoss(in wcIn, lossHole bool) (float64, bool) {
+	if !in.oooOK || in.segsIn == 0 {
+		return 0, false
+	}
+	v := float64(in.ooo) / float64(in.segsIn)
+	return v, lossHole && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(v, wcOooCongAbs)
+}
+
+// sndJudges: the edge's core with the exit's records coming (an extended
+// record came, and the latest within wcSndQuiet). There packets behind holes
+// are no loss by themselves: the exit's resends say whether they were.
+//
+// Rcv_ooopack counts every packet that arrives behind a hole, the path's
+// reordering as much as a loss, and no test of the holes alone tells them
+// apart on the real path. Field, 72 ms (Iran edge), single and four-
+// connection downloads of 90–120 s at 180–1000 Mbit/s: the core drained 4 to
+// 11 times a run, nearly all "packets arrived behind holes on a clean path"
+// (fastStop, to the floor: no queue behind them) or "... as the windows grew"
+// (oooPast), while the exit's link sockets resent 0.000–0.002%; one download
+// swung 180–338 Mbit/s with the core (102 without). Direct TCP on the same
+// path: Rcv_ooopack/data_segs_in per 0.5 s 2% at 300 Mbit/s (bursts to
+// 38%), 6% at 600 (to 35%), 15% at 1.7 Gbit/s (to 49%), the sender's
+// resends ≈ 0 (Linux's RACK resends none of it). Bursts that dense keep a
+// wake's packets waiting T_base/4 and more (lossHole's test: at 38%, 38 ms
+// of a 100 ms wake against 18 ms), so lossHole passed them as a loss's.
+// The exit's record (resends and segments sent, every ~2 s) has no such
+// bias: it counts what the sender itself took for lost.
+//
+// The exit's side (no record of the edge) and an edge whose records stopped
+// (sndQuiet: also blind) keep the rules they had: holes cut there.
+func (c *wcore) sndJudges(now time.Time) bool {
+	return c.cfg.side == wcEdge && c.sndSeen && !c.sndQuiet(now)
+}
+
+// wcProv is what holes alone did to B where the exit's records judge loss
+// (sndJudges), until a record does (judgeCut): when the first such cut or
+// verdict came (at) and the latest (cutAt, last), the largest share of a
+// wake's packets behind their holes, and what the core had before them, to
+// take back (undoCut).
+//
+// The reaction itself stays as it was: fastStop's cut between evaluations
+// (halved, or to the floor with no queue behind the holes) and the
+// evaluation's verdict on Rcv_ooopack (oooLoss). Holding B instead until the
+// record came (up to a record span, 2 s, after the holes; tried first) left
+// a policer's first losses uncut that long: behind a policer at 30% of
+// 1000/100 (the table's "policer 300") the sender's pacing rose from 585 to
+// 680 Mbit/s over the second the windows stayed (a window-limited BBR's
+// STARTUP pacing only rises) and the run resent 1.71% against 0.46% (base
+// windows 0.28%); in the round-2 sweep "policer none>pol60" drained 4 runs
+// (1 before) and "pol90>pol40" resent past base + 3 points in 8 (0 before).
+// A loss of ours on a shallow queue keeps itself going too (wcLossRef: what
+// a hole holds is released a round trip on as one burst), and only a cut
+// before that stops it. So the record does not decide whether to cut; it
+// decides whether the cut stands.
+type wcProv struct {
+	at, cutAt, last time.Time
+	share           float64
+	st              wcState // the state the first one found
+	b               uint64  // B before it
+	probeFrom       uint64
+	bCap            uint64
+	bCapAt          time.Time
+	qcap            time.Duration
+	qcapAt          time.Time
+	qcapOK          bool
+	backoff         int
+	pathFull        bool
+	rhat            []wcRate
+	moved           int // drains for a queue or a slower path then (one since moved B for its own reason)
+}
+
+// provSnap is what the core has before a reaction to holes alone that a
+// record will judge (ok: want); the first one's is kept (provNote).
+func (c *wcore) provSnap(now time.Time, want bool) (wcProv, bool) {
+	if !want || !c.prov.at.IsZero() {
+		return wcProv{}, want
+	}
+	return wcProv{at: now, st: c.state, b: c.B, probeFrom: c.probeFrom,
+		bCap: c.bCap, bCapAt: c.bCapAt, qcap: c.qcap, qcapAt: c.qcapAt, qcapOK: c.qcapOK,
+		backoff: c.backoff, pathFull: c.pathFull, rhat: append([]wcRate(nil), c.rhat...),
+		moved: c.cnt.drainQ + c.cnt.drainRate}, true
+}
+
+// provNote notes a reaction to holes alone (p: provSnap's, before it) that
+// the exit's next record judges (judgeCut).
+func (c *wcore) provNote(p wcProv, now time.Time, share float64) {
+	if c.prov.at.IsZero() {
+		c.prov = p
+	}
+	c.prov.cutAt, c.prov.last, c.prov.share = now, now, math.Max(c.prov.share, share)
+}
+
+// holeLag is how long after a hole the exit's record shows its resend: the
+// hole's SACK reaches the sender half a round trip on, RACK resends it a
+// quarter of min_rtt after that (up to a round trip once it has seen
+// reordering), and the record taken then comes half a round trip later;
+// with a wake to spare.
+func (c *wcore) holeLag() time.Duration {
+	return 2*c.tBase + wcRampTick
+}
+
+// judgeCut judges what holes alone did to B (wcProv) by a record of the
+// exit that came in this wake (in: the wake's own input):
+//
+//   - it shows a loss of the sender's own (not sndNoLoss): the holes were a
+//     loss, and what was done stands, with everything it learned (the loss
+//     point, Q_cap, the backoff, a policer's floor), as without records. A
+//     loss under what the verdict calls one (sndRef.past by sndAbs) is kept
+//     aside (weak): a sender that has not seen the path reorder yet resends
+//     what it held (Linux's RACK until its first DSACK: the field's 3 to 26
+//     segments in 15 s, all of them then; the model's RACK 96–116 segments of
+//     a 40 s run at 1 Gbit/s), and the first burst's cut stood on them; once
+//     a later cut for holes as dense is taken back, so is that one (undoCut);
+//   - no loss, and it came holeLag or more after the latest hole: they were
+//     no loss of ours (the sender resent none of what arrived behind them:
+//     the path reordered it), and it is taken back (undoCut);
+//   - no loss but too soon after the latest hole: the next record judges.
+//
+// Where the records stop (sndQuiet) or the core goes OFF, it stands, as
+// without records.
+func (c *wcore) judgeCut(in wcIn) []wcEvent {
+	p := &c.prov
+	if p.at.IsZero() {
+		return nil
+	}
+	now := in.now
+	if !c.sndJudges(now) || c.state == wcOff {
+		*p, c.weak = wcProv{}, wcProv{}
+		return nil
+	}
+	s := in.snd
+	if !s.fresh || s.segsOut == 0 {
+		return nil
+	}
+	switch {
+	case !c.sndNoLoss(s):
+		if v := float64(s.retrans) / float64(s.segsOut); c.sndRef.ok && !c.sndRef.past(v, c.sndAbsN(s.segsOut)) {
+			if c.weak.at.IsZero() {
+				c.weak = *p
+			}
+			c.weak.share = math.Max(c.weak.share, p.share)
+		} else {
+			c.weak = wcProv{} // a loss worth a verdict: what came since is its
+		}
+		*p = wcProv{}
+		return nil
+	case now.Sub(p.last) < c.holeLag():
+		return nil
+	}
+	return c.undoCut(in, float64(s.retrans)/float64(s.segsOut))
+}
+
+// sndNoLoss says whether a record of the exit shows no loss of its own: its
+// resent segments no more than its level (sndRef) explains, with its spread
+// (wcLossCongSig standard deviations), on a path that resends under
+// wcLossRand (the random-loss flag's threshold). Not the verdict's test
+// (sndAbs: 0.1% of the record at least, a loss worth a drain): a cut for
+// holes stands on any loss the sender saw. With a slack of 1 to 4 segments
+// the model's 300/100 behind 50 ms took back a STARTUP's verdict on a
+// burst's tail drop (two segments), overshot and drained for the queue: 214
+// against 219 Mbit/s and 78% of N4's gain (the table wants 80%); with none,
+// as before. And where the level holds losses of its own (a policer's: on
+// 1000/150 behind a 200 Mbit/s policer the level took its 1.2%, records at
+// it took back 3 of 10 cuts and the run resent 1.03% against 0.53%) holes
+// are judged as before: there a hole is as likely a loss.
+func (c *wcore) sndNoLoss(s wcSnd) bool {
+	exp := 0.0
+	if c.sndRef.ok {
+		exp = c.sndRef.v * float64(s.segsOut)
+	}
+	return float64(s.retrans) <= exp+wcLossCongSig*math.Sqrt(exp) && float64(s.retrans) < wcLossRand*float64(s.segsOut)
+}
+
+// undoCut takes back what holes alone did to B, the exit's record having
+// shown no loss (judgeCut). Every loss point (bCap), Q_cap, backoff and R̂
+// reset since the first of them came of them (a record that showed a loss
+// would have made them stand first), and goes back to what it was; so does
+// B, in the state they found (a probe's: where it began), unless a drain for
+// a queue or a slower path moved B since (its verdict stands) or the core is
+// past HOLD again (a probe, STARTUP: it moves on from where it is). The
+// published budget climbs back by the ramp.
+//
+// It also sets the path's reordering level oooRo: the largest share of a
+// wake's packets behind the holes taken back, with a margin (wcRoMargin, at
+// most wcRoMax). Holes within it cut no more and give no verdict (oooLoss).
+// Each reordering burst past what was seen cuts once more, so a path whose
+// reordering is bursty (the field's 35–49% of a 0.5 s span) cuts for its
+// first bursts, not for each; a loss's hole keeps every packet of a round
+// trip and more waiting, past all but the densest bursts, and a loss within
+// the level still comes to the evaluation in the record's resends
+// (lossVerdict). A cut that stood on a small loss (weak) with holes within
+// the new level goes back too: its loss point, Q_cap and backoff (not B: it
+// is past).
+func (c *wcore) undoCut(in wcIn, v float64) []wcEvent {
+	p := c.prov
+	c.prov = wcProv{}
+	now := in.now
+	c.oooRo = math.Max(c.oooRo, math.Min(wcRoMargin*p.share, wcRoMax))
+	if w := c.weak; !w.at.IsZero() && w.share <= c.oooRo {
+		c.weak = wcProv{}
+		p.at, p.bCap, p.bCapAt, p.qcap, p.qcapAt, p.qcapOK, p.backoff, p.pathFull =
+			w.at, w.bCap, w.bCapAt, w.qcap, w.qcapAt, w.qcapOK, w.backoff, w.pathFull
+	}
+	if !c.bCapAt.Before(p.at) {
+		c.bCap, c.bCapAt = p.bCap, p.bCapAt
+	}
+	if !c.qcapAt.Before(p.at) {
+		c.qcap, c.qcapAt, c.qcapOK = p.qcap, p.qcapAt, p.qcapOK
+	}
+	if c.backoff != p.backoff {
+		c.backoff = p.backoff
+		c.schedProbe(now)
+	}
+	c.pathFull = p.pathFull
+	if c.lossTest == wcSrcOoo {
+		c.lossTest = wcSrcNone
+	}
+	if len(c.rhat) > 0 && !c.rhat[0].at.Before(p.at) && len(p.rhat) > 0 {
+		// (R̂ was reset since: its samples from before come back)
+		c.rhat = append(p.rhat, c.rhat...)
+	}
+	if c.state != wcDrain && c.state != wcHold || c.cnt.drainQ+c.cnt.drainRate != p.moved {
+		return nil
+	}
+	b := p.b
+	if p.st == wcProbe {
+		b = min(b, p.probeFrom)
+	}
+	if b <= c.B {
+		return nil
+	}
+	from := c.bPub
+	c.lossDrain, c.refreshing = false, false
+	c.state = wcHold
+	if p.st == wcStartup {
+		c.state = wcStartup
+	}
+	c.B, c.chgAt, c.settling = b, now, true
+	return []wcEvent{{kind: wcEvUndo, from: from, B: c.B, n: len(c.inF), T: c.tBase, loss: v}}
 }
 
 // wakeHoles is how long the packets of a runner wake waited behind holes:
@@ -1118,15 +1420,7 @@ func (c *wcore) cut(in wcIn) {
 	}
 	c.cnt.drainLoss++
 	c.noteCap(now, from)
-	// the queue the loss came at: the link socket's own srtt above T_base
-	// now, or the exit's latest record's (a record is up to 2 s old)
-	q := time.Duration(0)
-	if in.srtt > 0 && c.tBase > 0 {
-		q = max(q, in.srtt-c.tBase)
-	}
-	if !c.qSndAt.IsZero() && now.Sub(c.qSndAt) <= wcSndSpan {
-		q = max(q, c.qSnd)
-	}
+	q, qOK := c.lossQ(in)
 	c.noteQcap(now, q)
 	c.chgAt = now
 	c.pathFull = true
@@ -1135,7 +1429,7 @@ func (c *wcore) cut(in wcIn) {
 	c.lossDrain, c.lossDrainN = true, 0
 	n := uint64(max(len(c.inF), 1))
 	c.B = max(from/2, n*uint64(c.cmin()))
-	if (in.srtt > 0 && c.tBase > 0 || !c.qSndAt.IsZero() && now.Sub(c.qSndAt) <= wcSndSpan) && q < wcPoliceQ {
+	if qOK && q < wcPoliceQ {
 		// no queue behind the loss (a policer's, or a burst's whose queue
 		// the link socket reads at its floor): to the floor. What the
 		// windows announced before the loss is sent once its hole fills;
@@ -1151,6 +1445,20 @@ func (c *wcore) cut(in wcIn) {
 	// judge from a turnaround on
 	c.evalAt = now.Add(c.tBase + wcRampTick)
 	c.settling = false
+}
+
+// lossQ is the queue a loss of the wake came at: the link socket's own srtt
+// above T_base now, or the exit's latest record's (a record is up to 2 s
+// old), whichever is more; ok: either was read.
+func (c *wcore) lossQ(in wcIn) (time.Duration, bool) {
+	q, ok := time.Duration(0), false
+	if in.srtt > 0 && c.tBase > 0 {
+		q, ok = max(q, in.srtt-c.tBase), true
+	}
+	if !c.qSndAt.IsZero() && in.now.Sub(c.qSndAt) <= wcSndSpan {
+		q, ok = max(q, c.qSnd), true
+	}
+	return q, ok
 }
 
 // rampStep is how far the published budget may rise per runner wake from
@@ -1874,7 +2182,8 @@ func (c *wcore) bSpan() (lo, hi uint64) {
 // of the same budget (it came with nothing of ours: a drain tells whether it
 // keeps itself going or the path turned lossy). Rcv_ooopack, a share of the
 // packets that waited behind a hole, saturates once holes come every round
-// trip: it is judged only on a path that is otherwise clean.
+// trip: it is judged only on a path that is otherwise clean, and not within
+// the path's reordering level where the exit's records judge loss (oooLoss).
 func (c *wcore) lossVerdict(m wcMeas, growth bool) (cong, jump bool, src wcLossSrc) {
 	if m.sndOK && !c.sndStale(m.sndAt) && c.sndRef.past(m.snd, c.sndAbs(m)) {
 		_, hi := c.bSpan()
@@ -1883,7 +2192,7 @@ func (c *wcore) lossVerdict(m wcMeas, growth bool) (cong, jump bool, src wcLossS
 		}
 		jump, src = true, wcSrcSnd
 	}
-	if c.oooPast(m) {
+	if c.oooLoss(m) {
 		// c.B is still the budget the interval was measured under
 		if growth || float64(c.B) > 1.05*float64(c.oooRef.b) {
 			return true, false, wcSrcOoo
@@ -1900,15 +2209,27 @@ func (c *wcore) oooPast(m wcMeas) bool {
 	return m.oooOK && c.oooRef.ok && c.oooRef.v < wcOooClean && c.oooRef.past(m.ooo, wcOooCongAbs) && m.oooLoss
 }
 
+// oooLoss: packets behind holes past their level (oooPast) are a loss
+// verdict of the interval, unless the exit's records judge loss (sndJudges)
+// and no wake of the interval had more of its packets behind a loss's hole
+// than the path's reordering level (oooRo, undoCut). Where they judge, the
+// verdict waits for a record (provNote).
+func (c *wcore) oooLoss(m wcMeas) bool {
+	return c.oooPast(m) && !(c.oooRo > 0 && m.holeMax <= c.oooRo && c.sndJudges(m.at))
+}
+
 // sndAbs is how far past its level a record's resend share must be to be
 // more than the level's own spread: wcLossCongSig standard deviations of a
 // binomial share at the level over the record's segments, at least
 // wcLossCongMin.
-func (c *wcore) sndAbs(m wcMeas) float64 {
-	if m.sndSegs == 0 || !c.sndRef.ok {
+func (c *wcore) sndAbs(m wcMeas) float64 { return c.sndAbsN(m.sndSegs) }
+
+// sndAbsN is sndAbs for a record of segs segments.
+func (c *wcore) sndAbsN(segs uint64) float64 {
+	if segs == 0 || !c.sndRef.ok {
 		return wcLossCongAbs
 	}
-	return math.Max(wcLossCongMin, wcLossCongSig*math.Sqrt(c.sndRef.v/float64(m.sndSegs)))
+	return math.Max(wcLossCongMin, wcLossCongSig*math.Sqrt(c.sndRef.v/float64(segs)))
 }
 
 // sndStale: a record of the exit that came now covers time from before the
@@ -2106,6 +2427,7 @@ func (c *wcore) harm(m wcMeas) bool {
 
 func (c *wcore) toOff() {
 	c.lossDrain = false
+	c.prov, c.weak = wcProv{}, wcProv{} // (OFF's windows are without the core: nothing to take back)
 	if c.state == wcHold || c.state == wcProbe {
 		c.kPrev, c.kPrevAt = c.B, c.lastAt
 	}

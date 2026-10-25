@@ -233,6 +233,7 @@ const (
 	wcLogCapped
 	wcLogRoute
 	wcLogNet
+	wcLogUndo
 	wcLogKinds
 )
 
@@ -279,6 +280,7 @@ const (
 	wcAggRoute
 	wcAggCapped
 	wcAggNet
+	wcAggUndo
 	wcAggKinds
 )
 
@@ -948,6 +950,13 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 			if l.due(wcLogRoute, now, wcLogRareEvery) && ws.agg[wcAggRoute].admit(l, now, 0, 0) {
 				logf("mtcp: %s: the path's round trip grew to ~%d ms (a route change) — the window core follows it", l.label(), e.T.Milliseconds())
 			}
+		case wcEvUndo:
+			// (the drain line for holes before it says why it came; this one
+			// that the exit's record took it back: wcore.undoCut)
+			if l.due(wcLogUndo, now, wcLogDrainEvery) && ws.agg[wcAggUndo].admit(l, now, e.n, 0) {
+				logf("mtcp: %s: the other server resent %.3f%% — the holes were reordering, not loss; %s windows back %s → %s",
+					l.label(), 100*e.loss, l.dir(), wcMiB(e.from), wcMiB(e.B))
+			}
 		}
 	}
 	// a knee that moved by more than wcKneeMove in HOLD
@@ -1142,6 +1151,9 @@ func (ws *wcSet) flushAgg(now time.Time) {
 			case wcAggNet:
 				(*lp)("mtcp: pacing net: %d more link(s) resent past %.4g%% and had their pacing held in the last minute",
 					len(a.links), 100*wcNetLossOf())
+			case wcAggUndo:
+				(*lp)("mtcp: window core: %d more link(s) took back %d drain(s) for holes in the last minute (the other server resent nothing: reordering)",
+					len(a.links), a.held)
 			}
 		}
 		*a = wcAgg{}
@@ -1332,6 +1344,8 @@ func (e wcEvent) String() string {
 		b.WriteString("capped")
 	case wcEvRoute:
 		b.WriteString("route")
+	case wcEvUndo:
+		b.WriteString("undo")
 	}
 	fmt.Fprintf(&b, " from=%d b=%d n=%d r=%.0f t=%.1fms q=%.1fms loss=%.4f", e.from, e.B, e.n, e.R, msOf(e.T), msOf(e.q), e.loss)
 	return b.String()
