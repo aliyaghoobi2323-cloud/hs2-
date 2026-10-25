@@ -617,3 +617,39 @@ func TestWcoreS2CPUHeldStaysFast(t *testing.T) {
 		}
 	}
 }
+
+// The evidence of a stream whose window is past need (wcEvidUse): the share
+// of a window of need it moves in the path's round trip, however long it
+// turns. A download the exit's CPU holds (750 Mbit/s on a 72 ms path, its
+// window from HOLD's τ_hold past twice what the path takes, no queue any
+// signal shows) stays in F with its rate dipped to 576 Mbit/s and with a
+// probe's window turning past the slack; a source of 40 Mbit/s whose window
+// STARTUP took to 3 MiB leaves, as one under need does.
+func TestWcoreS2EvidencePastNeed(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	const dt = 0.4
+	now := wtT0
+	next := func() time.Time { now = now.Add(400 * time.Millisecond); return now }
+	mib := func(x float64) uint32 { return uint32(x * wtMiB) }
+	for _, tc := range []struct {
+		name string
+		s    wcStream
+		stay bool
+	}{
+		{"held by the exit's CPU, 13 MiB, 125 ms", wcStream{id: 1, win: mib(13), upd: 20, read: uint64(750 * wmMbit * dt), turnMin: ms(125), turnLast: ms(130)}, true},
+		{"held by the exit's CPU, its rate dipped to 576 Mbit/s", wcStream{id: 1, win: mib(12.94), upd: 19, read: uint64(576 * wmMbit * dt), turnMin: ms(128), turnLast: ms(128)}, true},
+		{"held by the exit's CPU, a probe's 15 MiB past the slack", wcStream{id: 1, win: mib(15), upd: 18, read: uint64(740 * wmMbit * dt), turnMin: ms(160), turnLast: ms(165)}, true},
+		{"a source of 40 Mbit/s with 3 MiB", wcStream{id: 1, win: mib(3), upd: 2, read: uint64(40 * wmMbit * dt), turnMin: ms(700), turnLast: ms(700)}, false},
+		{"a source of 40 Mbit/s with 2 MiB, within the slack", wcStream{id: 1, win: mib(2), upd: 2, read: uint64(40 * wmMbit * dt), turnMin: ms(140), turnLast: ms(140)}, false},
+	} {
+		c := wfCore(now, 0)
+		c.inF[1] = true
+		for i := 0; i < 2; i++ {
+			c.qSndAt = next()
+			c.measure(wfIn(now, tc.s), dt)
+		}
+		if c.inF[1] != tc.stay {
+			t.Errorf("%s: in F after two judged intervals %v, want %v", tc.name, c.inF[1], tc.stay)
+		}
+	}
+}
