@@ -85,9 +85,122 @@ func StepOf(need, w uint32) uint32 {
 	return step
 }
 
+// The cover: a window past the need for a stream the window holds back, so
+// that the need is what it has in flight (Cover, RanUp, CoverNext).
+//
+// A reader announces its window at each step it reads (StepOf: half the
+// window up to the need), and the peer may run the window past the consumed
+// count of the latest update it has. When an update leaves, the reader has
+// just read the step it announces, so a peer that sends no faster than it
+// is read has the window less a step in flight, never more: a stream at the
+// need of 2 MiB moves 1 MiB per round trip, not 2 (WINDOW_CORE.fa.md calls
+// it the half-window lock). A peer that bursts each update's credit at many
+// times the rate gets more (two steps in flight at once); one that paces at
+// its delivery rate, as BBR does once it left STARTUP, settles exactly there
+// (the window less a step per round trip is its only fixed point). The
+// field showed that on the Iran-abroad path, round trip 74 to 82 ms: single
+// downloads without the window core 101, 102 and 109 Mbit/s, four at once
+// 112, 112, 102 and 112 -- 1 MiB per round trip each -- and every cut of the
+// core to its 2 MiB floor the same rate.
+//
+// So a stream whose cycles run up to its window -- its data paused at the
+// limit the peer had: the window held it, not its source and not the path
+// -- is announced the need plus a step: 1.5 times the need, 3 MiB, whose
+// step is still need/2 (StepOf), so the peer has the need in flight and
+// updates leave no more often per byte than at the need, one per MiB under
+// 2 MiB (each leaves as one length-shaped TLS record of about 1 KB:
+// writeWindowUpdate, WINDOW_CORE.fa.md §8.2). What it holds past the need
+// comes from the WindowPool as the window core's growth does (setWindow: a
+// claim within its session's share, FreeFor, the session's buffer growing
+// by just as much, back after claimHold turnarounds once the window comes
+// down, reclaim); where the pool has less left the window gets what it has,
+// down to the need (the window as it was), and without a pool, or with
+// Config.NoCover, there is no cover. It is the windows' own without the
+// window core, and the core's floor: a ceiling bounds it as any window
+// (FitCore), and the core takes the covers from its session's streams once
+// it found the path full, or while other cores of its peer run (SetCover):
+// its floor is then the need as it was (engine wcore.go, cover).
+//
+// A stream gets its cover at an update ending a cycle that ran up to a
+// window of the need or more (RanUp), while its reader keeps up (adaptWindow
+// asks for more than the need) and the session may grow (the window core's
+// growOK and turnaround brake hold it back as they hold growth past the
+// need; without the core both always allow). It keeps it while its reader
+// keeps up and until coverMiss updates in a row end cycles that did not run
+// up to the window (its source slowed down, or the path is full with the
+// need in flight: then the data flows on past each limit), and it loses it
+// with its claim when it idles (sweepClaims). No frame is sent for it: a
+// window it changes goes out with the stream's next update.
+
+// coverFrames: for the cover a cycle ran up to the window (RanUp) when its
+// data paused at the limit for this many of the stream's own frames' time at
+// its rate over the cycle, if that is more than its hit gap. Without the
+// window core no stream has a hit gap of its own, and 2 ms is a 16 KiB
+// frame's time at 65 Mbit/s: a slower stream that flows on would run up to
+// its window at every cycle. (The runner gives the core's hits the same
+// rule, wcHitFrames.) A peer held by the window pauses for what its pacing
+// gains on the rate: BBR's probing phase (1.25 times) leaves a fifth of a
+// round trip at each step, 15 ms at 75 ms; three frames at 100 Mbit/s are
+// 4 ms.
+const coverFrames = 3
+
+// coverMiss: a stream keeps its cover until this many updates in a row end
+// cycles that did not run up to the window. A sender that paces at its
+// delivery rate pauses at the limit only where its pacing runs ahead of
+// what the window lets through: BBR in PROBE_BW does that one round trip in
+// eight, two updates in sixteen of a covered window (an update each half a
+// round trip); 32 is two of its cycles. A source that slowed down holds the
+// cover, half a need from the pool, for 32 steps of reads more.
+const coverMiss = 32
+
+// Cover is the window that keeps need in flight for a peer held by it: need
+// plus that window's step (StepOf: need/2 past the need, up to 4·need),
+// within maxWin.
+func Cover(need, maxWin uint32) uint32 {
+	w := uint64(need) + uint64(need/2)
+	if w > uint64(maxWin) {
+		w = uint64(maxWin)
+	}
+	return uint32(w)
+}
+
+// RanUp reports whether a cycle ran up to its window, for the cover: its
+// data paused at the limit the peer had for pause, at least gap (the
+// stream's hit gap) and coverFrames frames' time at the rate it read over
+// the cycle (read bytes in cycle, frames of frameSize).
+func RanUp(pause, gap, cycle time.Duration, read uint64, frameSize int) bool {
+	if pause <= 0 || pause < gap {
+		return false
+	}
+	if read == 0 {
+		return true
+	}
+	return float64(pause) >= coverFrames*float64(frameSize)*float64(cycle)/float64(read)
+}
+
+// CoverNext is a stream's cover after a window update, from what it was
+// (covered, and miss updates in a row that did not run up to the window
+// since it last did): old is the window of the previous update, want what
+// adaptWindow made of it, need NeedStreamBuffer, ranUp whether the cycle
+// that ends ran up to the window (RanUp), growOK and turnOK the window
+// core's growth brakes (FitCore).
+func CoverNext(covered bool, miss uint8, old, want, need uint32, ranUp, growOK, turnOK bool) (bool, uint8) {
+	if want <= need {
+		return false, 0 // its reader does not keep up (or its window is still on its way to the need)
+	}
+	if ranUp {
+		return covered || old >= need && growOK && turnOK, 0
+	}
+	if !covered || miss+1 >= coverMiss {
+		return false, 0
+	}
+	return true, miss + 1
+}
+
 // FitCore is the window of a window update: want is what adaptWindow made
-// of the previous window old, ceil the core's ceiling (0: none), need
-// NeedStreamBuffer, minWin MinStreamBuffer, unread what the stream holds.
+// of the previous window old, ceil the core's ceiling (0: none), need the
+// stream's own window (NeedStreamBuffer, or its cover while it holds one:
+// Stream.ownWin), minWin MinStreamBuffer, unread what the stream holds.
 //
 //   - No ceiling: want, within need (the window as it always was).
 //   - Growth past need (want > old and want > need) only while growOK (the
@@ -151,6 +264,11 @@ type streamCore struct {
 	lagged   bool   // the cycle that just ended left more than StreamLagTarget/4 unread throughout
 	turnSeen int64  // the latest turnaround, ns (0: none yet)
 	rxAt     int64  // monoNow of the latest frame received (0: none yet)
+	pause    int64  // the longest pause at a limit since our latest update, ns (the cover's RanUp)
+	updAt    int64  // monoNow of our latest update (0: none yet)
+	updRead  uint64 // readTot at our latest update
+	covered  bool   // the stream holds its cover (CoverNext)
+	miss     uint8  // updates in a row since it last ran up to its window, while covered
 
 	// written under bufferLock, read without it (CoreSnapshot)
 	readTot   atomic.Uint64 // bytes read in all (numRead wraps)
@@ -207,6 +325,14 @@ func (s *Session) SetCoreRef(turnRef, qBrake time.Duration, growOK bool) {
 	s.qBrake.Store(int64(qBrake))
 	s.growOK.Store(growOK)
 }
+
+// SetCover lets the session's streams hold their cover (the need plus a
+// step while the window holds a stream back: Cover), the default, or takes
+// it from them: the window core does once it found the path full, or while
+// other cores of its peer run, its floor NeedStreamBuffer again, and a
+// stream without a ceiling then stays within it from its next update on. It
+// takes no lock.
+func (s *Session) SetCover(ok bool) { s.noCover.Store(!ok) }
 
 // CoreSample is what one stream did, as CoreSnapshot found it. The counts
 // are cumulative (the core takes differences); the turnarounds are since
@@ -314,28 +440,66 @@ func (s *Session) PeerWindows() uint64 {
 }
 
 // fitCore holds the window adaptWindow just made of old to what the window
-// core allows (FitCore), and sets it (setWindow). The caller holds
+// core allows (FitCore) past the stream's own window (its cover, CoverNext,
+// or NeedStreamBuffer), and sets it (setWindow). The caller holds
 // bufferLock.
 func (s *Stream) fitCore(cfg *Config, old uint32) {
-	w := FitCore(old, s.rcvWin, s.core.ceil.Load(), needOf(cfg), uint32(cfg.MinStreamBuffer),
-		uint32(s.unread), s.sess.growOK.Load(), s.turnOK())
+	growOK, turnOK := s.sess.growOK.Load(), s.turnOK()
+	c := &s.core
+	if cfg.WindowPool != nil && cfg.NeedStreamBuffer > 0 && !cfg.NoCover && !s.sess.noCover.Load() {
+		c.covered, c.miss = CoverNext(c.covered, c.miss, old, s.rcvWin, needOf(cfg), s.ranUp(), growOK, turnOK)
+	} else {
+		c.covered, c.miss = false, 0
+	}
+	w := FitCore(old, s.rcvWin, s.core.ceil.Load(), s.ownWin(cfg), uint32(cfg.MinStreamBuffer),
+		uint32(s.unread), growOK, turnOK)
 	s.rcvWin = old
 	s.setWindow(cfg, w)
 }
 
+// ownWin is as far as the stream's window grows on its reader keeping up,
+// without a ceiling of the window core: its cover while it holds one, else
+// NeedStreamBuffer. The caller holds bufferLock.
+func (s *Stream) ownWin(cfg *Config) uint32 {
+	if s.core.covered {
+		return Cover(needOf(cfg), uint32(cfg.MaxStreamBuffer))
+	}
+	return needOf(cfg)
+}
+
+// ranUp reports whether the cycle that ends with the update about to be
+// queued ran up to the window, for the cover (RanUp). The caller holds
+// bufferLock.
+func (s *Stream) ranUp() bool {
+	c := &s.core
+	if c.updAt == 0 {
+		return false
+	}
+	gap := c.hitGap.Load()
+	if gap < int64(hitGap) {
+		gap = int64(hitGap)
+	}
+	return RanUp(time.Duration(c.pause), time.Duration(gap), time.Duration(monoNow()-c.updAt),
+		c.readTot.Load()-c.updRead, s.frameSize)
+}
+
 // coreCap is w within what the window core allows a window that is not
 // growing on its own (a braked reader's restored window): its ceiling, or
-// NeedStreamBuffer without one.
+// its own window without one (ownWin: NeedStreamBuffer, or its cover).
 func (s *Stream) coreCap(cfg *Config, w uint32) uint32 {
 	lim := s.core.ceil.Load()
 	if lim == 0 {
-		lim = needOf(cfg)
+		lim = s.ownWin(cfg)
 	}
 	if w > lim {
 		return lim
 	}
 	return w
 }
+
+// uncover takes the stream's cover away (an idle stream: sweepClaims).
+// The caller holds bufferLock.
+func (s *Stream) uncover() { s.core.covered, s.core.miss = false, 0 }
 
 // turnOK reports whether the stream's latest turnaround is within its
 // session's reference and brake margin (or there is no reference, or no
@@ -373,10 +537,12 @@ func (s *Stream) updStep(cfg *Config) uint32 { return StepOf(needOf(cfg), s.rcvW
 
 // announced records the window update about to be queued, of window past
 // the stream's reads: it ends a cycle (updN, and hitN and lagN for what the
-// cycle was), and when it raises the highest limit the peer has had, the
-// turnaround of that limit starts. The caller holds bufferLock.
+// cycle was; the cover's pause starts over), and when it raises the highest
+// limit the peer has had, the turnaround of that limit starts. The caller
+// holds bufferLock.
 func (s *Stream) announced(window uint32) {
 	c := &s.core
+	now := monoNow()
 	c.winNow.Store(window)
 	c.updN.Add(1)
 	if c.hit {
@@ -387,12 +553,13 @@ func (s *Stream) announced(window uint32) {
 		c.lagN.Add(1)
 		c.lagged = false
 	}
-	lim := c.readTot.Load() + uint64(window)
+	c.pause, c.updAt, c.updRead = 0, now, c.readTot.Load()
+	lim := c.updRead + uint64(window)
 	if lim <= c.limHigh {
 		return // nothing the peer could not send before
 	}
 	if c.n < turnRing {
-		c.ring[(c.head+c.n)%turnRing] = turnMark{at: monoNow(), lim: c.limHigh}
+		c.ring[(c.head+c.n)%turnRing] = turnMark{at: now, lim: c.limHigh}
 		c.n++
 	}
 	c.limHigh = lim
@@ -440,6 +607,9 @@ func (s *Stream) turned() {
 		}
 		if now-k.reach >= gap {
 			c.hit = true
+		}
+		if p := now - k.reach; p > c.pause {
+			c.pause = p
 		}
 		d := now - k.at
 		c.head = (c.head + 1) % turnRing
