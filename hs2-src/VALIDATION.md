@@ -446,8 +446,9 @@ and add, in the editor:
 Environment=HS2_TUNE_WCORE=0
 ```
 
-on the **Iran** server to turn the window core off (every download window
-back within 2 MiB, as before), or `Environment=HS2_TUNE_PACENET=0` on the
+on the **Iran** server to turn the window core off, its covers with it
+(every download window back within 2 MiB, as before; `HS2_TUNE_SMUX_COVER=0`
+turns the covers alone off), or `Environment=HS2_TUNE_PACENET=0` on the
 **Kharej** server to turn the pacing net off — two separate switches, one per
 server. Then `systemctl restart <unit>` (the tunnel's users reconnect at once)
 and check the start lines: `journalctl -u <unit> --since "-2min" -o cat |

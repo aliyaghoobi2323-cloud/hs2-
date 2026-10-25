@@ -304,12 +304,15 @@ var (
 	// core's step 1; the exit's end (uploads) has no pacing net for its
 	// sender (the edge) and no record to see a policer by, and in the model
 	// a cover there behind a policer at 60% of the path resent 13% against
-	// base's 0.2% (wcore_step1_test.go, blind sides). 2: both ends, lab
-	// only. 0: none, the window at the need as before, smux's windows and
+	// base's 0.2% (wcore_step1_test.go, blind sides). 2: both ends (the
+	// exit's with its core only: WcoreUpload), lab only. 0: none, the
+	// window at the need as before, smux's windows and
 	// the window core's model base's to the byte (smux TestCoverOffIsBase,
-	// TestWcoreModelCoverOff). Rolling the window work back takes both
-	// HS2_TUNE_WCORE=0 and HS2_TUNE_SMUX_COVER=0: either alone leaves the
-	// other's windows past the need. The covers' memory is at most a
+	// TestWcoreModelCoverOff). Only on an end with a window core: it takes
+	// them where they cost (wcore.go: cover, coverPastKnee, coverBlind), and
+	// the session starts with them taken until it lets them; so
+	// HS2_TUNE_WCORE=0 alone rolls the window work back, the covers too (and
+	// HS2_TUNE_SMUX_COVER=0 the covers alone). The covers' memory is at most a
 	// quarter of the window pool, process-wide (smux coverShare: the rest
 	// stays for the windows the cores grow and the links whose buffer ran
 	// full); what they did is in each link's end line (smuxCoverNote), the
@@ -380,9 +383,16 @@ func SmuxTuningNotes() (notes []string) {
 // windows short of the pool and log covers granted, and the window core
 // would judge loss by the covers' level spread (sndAbsN) and floor of a
 // cover (cmin): with NoCover the session and its core are base's to the
-// byte (red team, H2).
+// byte (red team, H2). Nor on an end with no window core (wcCoreOn:
+// HS2_TUNE_WCORE=0, the exit's without WcoreUpload): nothing there sees
+// what they cost, and without one, in the model, links to one exit that
+// fill the path at the need resent 0.5–3% with their covers (base 0–0.2%),
+// and a download behind a per-connection policer under the need's rate
+// 5–10% (base 0.2–0.3%; red team, H2). Where they are on the session
+// starts with them taken (smux Config.CoverWait) and its core lets them
+// (wcLink.apply: wcOut.noCover).
 func smuxCoverOn(server bool) bool {
-	return (SmuxCover >= 2 || SmuxCover == 1 && !server) && SmuxWindowPool > 0
+	return (SmuxCover >= 2 || SmuxCover == 1 && !server) && SmuxWindowPool > 0 && wcCoreOn(server)
 }
 
 // windowPool is the process's smux.WindowPool, of SmuxWindowPool bytes as
@@ -455,6 +465,7 @@ func newSmuxConfig() *smux.Config {
 		c.MinStreamBuffer, c.StreamLagTarget = lo, SmuxStreamLagTarget
 		c.NeedStreamBuffer, c.WindowPool = need, windowPool()
 		c.NoCover = !smuxCoverOn(false)
+		c.CoverWait = !c.NoCover // (its core lets them: smuxCoverOn)
 		return c
 	}
 	// No window past the need (a lab override left it no room): the fixed

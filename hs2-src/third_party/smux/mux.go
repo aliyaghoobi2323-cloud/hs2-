@@ -100,6 +100,11 @@ type Config struct {
 	// NeedStreamBuffer, with no more updates per byte.
 	NoCover bool
 
+	// CoverWait starts the session with its covers taken, as
+	// Session.SetCover(false) would: none is granted until its owner lets
+	// them (SetCover(true): the window core, which watches what they cost).
+	CoverWait bool
+
 	// WindowPool, with NeedStreamBuffer, is what windows past
 	// NeedStreamBuffer take their excess from: a window grows only as far
 	// as the pool has left, and the session's MaxReceiveBuffer grows by

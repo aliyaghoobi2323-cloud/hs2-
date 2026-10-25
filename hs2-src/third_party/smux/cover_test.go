@@ -739,3 +739,25 @@ func TestCoverThroughAPacedPath(t *testing.T) {
 		t.Errorf("covered: %.0f B/s, want about the need per round trip, %.0f (%.0f at the need)", r1, need/rtt.Seconds(), r0)
 	}
 }
+
+// A session whose config has CoverWait starts with its covers taken: a
+// stream its window holds back stays at the need until the session's owner
+// lets them (SetCover(true): the window core, which watches what they cost).
+func TestCoverWait(t *testing.T) {
+	cfg := poolConfig(NewWindowPool(4 << 20))
+	cfg.CoverWait = true
+	need := uint32(cfg.NeedStreamBuffer)
+	session, s, p := newRawPeer(t, cfg)
+	heldRounds(t, p, s, 8, 10*time.Millisecond)
+	if w := maxWindow(p.updates()); w != need {
+		t.Fatalf("CoverWait: window %d, want the need %d", w, need)
+	}
+	if c := session.CoverStats(); c.Grants != 0 || c.Taken != 0 {
+		t.Fatalf("CoverWait: %+v, want no cover granted (none to take)", c)
+	}
+	session.SetCover(true)
+	heldRounds(t, p, s, 8, 10*time.Millisecond)
+	if w := p.lastWindow(); w != Cover(need, uint32(cfg.MaxStreamBuffer)) {
+		t.Fatalf("let: window %d, want the cover", w)
+	}
+}

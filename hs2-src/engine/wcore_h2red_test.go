@@ -171,9 +171,10 @@ func TestWcoreH2RedCoverOffPastKnee(t *testing.T) {
 // policer at 60% of the path it resent 10.4% against base's 0.3%, on
 // 1000/72 behind one at 20% 7.4% against 0.2%, on 300/100 at 60% 5.5%
 // against 0.2%. The edge's core now holds the covers back while the exit's
-// records come without the sender's fields, or stopped (coverBlind): such
-// an edge is base's resends once its first record came, and most of base's
-// rate (the covered start took the sender out of BBR's STARTUP for good:
+// records come without the sender's fields, or stopped, and grants none
+// before its exit's stats handshake shows them (coverBlind): such an edge is
+// base, rate and resends (granted until its first record, ~2 s, the covers
+// took the sender out of BBR's STARTUP for good, 3–17% under base:
 // TestWcoreStep1ModelBlindSidesAreBase).
 func TestWcoreH2RedBlindPolicer(t *testing.T) {
 	if !smuxCoverOn(false) {
@@ -190,21 +191,30 @@ func TestWcoreH2RedBlindPolicer(t *testing.T) {
 			b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
 			msg := fmt.Sprintf("%s pol%.1f old exit s%d: base %.1f Mbit resent %.2f%%; the default config %.1f Mbit resent %.2f%%",
 				c.name, x.pol, s, b.mbit, 100*b.resend, k.mbit, 100*k.resend)
-			if k.resend > b.resend+0.005 || k.mbit < 0.85*b.mbit {
+			if k.resend > b.resend+0.001 || k.mbit < 0.95*b.mbit {
 				t.Errorf("%s", msg)
 			} else {
 				t.Log(msg)
 			}
 		}
 	}
-	// the core's side: OFF on the edge whose exit's records came without the
-	// sender's fields, or stopped for wcSndQuiet, holds the covers back; with
-	// records, or before the first one, it does not
+	// the core's side: OFF on the edge holds the covers back until the
+	// exit's stats handshake (or an extended record) shows the sender's
+	// fields come, and while its records come without them, or stopped for
+	// wcSndQuiet
 	c := wtCore(1)
 	c.cfg.noCover = false
 	in := wtIn(wtT0, 1, wtNeed)
+	if o := c.out(in, wtT0, nil); !o.noCover {
+		t.Error("before the exit's handshake: the covers let")
+	}
+	c.sndExt = statsExtNone
+	if o := c.out(in, wtT0, nil); !o.noCover {
+		t.Error("an old exit's handshake: the covers let")
+	}
+	c.sndExt = statsExtSender
 	if o := c.out(in, wtT0, nil); o.noCover {
-		t.Error("before the first record: the covers taken")
+		t.Error("a new exit's handshake, before its first record: the covers taken")
 	}
 	c.sndAny, c.sndAnyAt, c.sndLastAt = true, wtT0, wtT0
 	if o := c.out(in, wtT0, nil); !o.noCover || !c.coverBlind(wtT0) {

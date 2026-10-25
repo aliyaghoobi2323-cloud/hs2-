@@ -75,10 +75,11 @@ type wcore struct {
 	pubHist    []wcRate // the published budget at each wake of the last second
 	lossDrain  bool     // a drain for loss: HOLD stays at its budget until the loss is gone
 	lossDrainN int
-	cuts       int  // halvings for loss between evaluations
-	offN       int  // OFF: intervals in a row with steady fast streams
-	sndSeen    bool // an extended record of the exit came (srtt and min_rtt != 0: an edge with a new exit on Linux 4.6 or later); the edge leaves OFF only then
-	sndAny     bool // a record of the exit came (an old exit's too)
+	cuts       int   // halvings for loss between evaluations
+	offN       int   // OFF: intervals in a row with steady fast streams
+	sndSeen    bool  // an extended record of the exit came (srtt and min_rtt != 0: an edge with a new exit on Linux 4.6 or later); the edge leaves OFF only then
+	sndAny     bool  // a record of the exit came (an old exit's too)
+	sndExt     int32 // what the exit's stats handshake said of its records (in.sndExt; 0: nothing yet)
 	sndAnyAt   time.Time
 	sndLastAt  time.Time            // the latest record of the exit (blind: none for wcSndQuiet)
 	qSnds      [wcSndHist]wcRate    // q_snd of the latest records (r: seconds), newest first
@@ -689,6 +690,7 @@ type wcIn struct {
 	pongs     []time.Duration // edge: pong round trips in the interval, oldest first
 	snd       wcSnd           // edge: the exit's record
 	apProbing bool            // edge: the autopilot is probing the pool size (freeze)
+	sndExt    int32           // edge: what the exit's stats handshake said of its records (statsExtSender, statsExtNone; 0: none yet)
 }
 
 type wcCeil struct {
@@ -1154,13 +1156,21 @@ func (c *wcore) coverPastKnee(now time.Time) bool {
 // a policer: the edge's core grows nothing without it (off; red team, round
 // 1), and its covers alone resent 10.4% on 300/72 behind a policer at 60%
 // of the path against base's 0.3%, 7.4% on 1000/72 behind one at 20%
-// against 0.2% (red team, H2: TestWcoreH2RedBlindPolicer). Before the first
-// record (the edge's first poll, ~2 s) the covers are as they were: held
-// back there too, the cores' trajectories moved and four cells of the
-// table's gate missed a target (1000/100 behind a policer at 300: 1.22%
-// resent against 0.04%).
+// against 0.2% (red team, H2: TestWcoreH2RedBlindPolicer).
+//
+// Nor before the edge knows the exit sends the sender's fields: its stats
+// handshake (sndExt: statsRecLen with TCP_INFO there, a round trip after
+// the link came up, before the first record) or an extended record
+// (sndSeen). With the covers on from the start until the first record of an
+// old exit (~2 s) showed it blind, the covered start took its sender out of
+// BBR's STARTUP for good, and the old exit's downloads ran 3 to 17% under
+// base; held back until the first extended record instead, the new exit's
+// cores started later and four cells of the table's gate missed a target
+// (1000/100 behind a policer at 300: 1.22% resent against 0.04%). The
+// handshake comes long before a stream first runs up to its window.
 func (c *wcore) coverBlind(now time.Time) bool {
-	return !c.cfg.noCover && c.cfg.side == wcEdge && (c.sndAny && !c.sndSeen || c.sndQuiet(now))
+	return !c.cfg.noCover && c.cfg.side == wcEdge &&
+		(c.sndExt != statsExtSender && !c.sndSeen || c.sndAny && !c.sndSeen || c.sndQuiet(now))
 }
 
 // coverHarmed says whether, in OFF, the covers stay taken: within
@@ -1176,6 +1186,9 @@ func (c *wcore) coverHarmed(now time.Time) bool {
 // the previous one.
 func (c *wcore) step(in wcIn) wcOut {
 	now := in.now
+	if in.sndExt != 0 {
+		c.sndExt = in.sndExt // (every wake: the covers wait for it, coverBlind)
+	}
 	hole := c.wakeHoles(in)
 	lossHole := c.lossHole(in, hole)
 	c.holeSeen = c.holeSeen || lossHole
@@ -4328,6 +4341,7 @@ type wcLinkSnap struct {
 	sndRetrans, sndSegsOut uint64
 	sndMono, sndBlocked    uint64 // its monoNs and txBlockedNs (every exit's 64 bytes: the writer waiting on its socket)
 	apProbing              bool
+	sndExt                 int32 // what the exit's stats handshake said of its records (linkMeter.statsExt)
 }
 
 // wcBuilder turns snapshots into the deltas of wcIn, for the runner and the
@@ -4353,7 +4367,7 @@ func wcDelta(cur, prev uint64) uint64 {
 
 func (b *wcBuilder) build(s wcLinkSnap) wcIn {
 	in := wcIn{now: s.now, minRTT: s.minRTT, srtt: s.srtt, oooOK: s.oooOK, poolFree: s.poolFree,
-		ctrlMin: s.ctrlMin, pongs: s.pongs, apProbing: s.apProbing}
+		ctrlMin: s.ctrlMin, pongs: s.pongs, apProbing: s.apProbing, sndExt: s.sndExt}
 	if s.tcpNone {
 		// no TCP_INFO this time: nothing of the socket, and the next one
 		// counts from the last that had it (from 0, one wake's delta was
