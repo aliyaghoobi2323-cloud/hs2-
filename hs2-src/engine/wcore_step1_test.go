@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"path/filepath"
 	"slices"
@@ -131,16 +132,18 @@ func wcOldExitRig(t *testing.T) (l *wcLink, ws *wcSet, st *smux.Stream, ext *ato
 }
 
 // wcStayedOff checks every trace line of the rig so far: OFF, no budget, no
-// ceiling and no window past Need; it returns how many saw a fast stream.
+// ceiling and no window past what it has without the core (Need, or its
+// cover: smux Cover); it returns how many saw a fast stream.
 func wcStayedOff(t *testing.T, tr []wcTraceLine, need uint32) (fast int) {
 	t.Helper()
+	base := smux.Cover(need, ^uint32(0))
 	for _, x := range tr {
 		if x.State != "off" || x.B != 0 || x.BPub != 0 {
 			t.Fatalf("an old exit's records only: %s, budget %d/%d (%+v)", x.State, x.B, x.BPub, x)
 		}
 		for _, s := range x.Streams {
-			if s.Ceil != 0 || s.Win > need {
-				t.Fatalf("an old exit's records only: ceiling %d, window %d (Need %d): %+v", s.Ceil, s.Win, need, x)
+			if s.Ceil != 0 || s.Win > base {
+				t.Fatalf("an old exit's records only: ceiling %d, window %d (Need %d, its cover %d): %+v", s.Ceil, s.Win, need, base, x)
 			}
 		}
 		if x.NF > 0 {
@@ -248,9 +251,14 @@ func TestWcoreStep1SeenNeedsMinRTT(t *testing.T) {
 }
 
 // In the model the exit's side (uploads) and an edge with an old exit run
-// as base under the default config: on the red team's policer grid at ~300
-// ms, where those blind sides drained links, and on clean and lossy paths
-// where they started. The lab knob (WcoreUpload) still runs the exit's core.
+// as the windows without the core under the default config: on the red
+// team's policer grid at ~300 ms, where those blind sides drained links, and
+// on clean and lossy paths where they started. The exit's side is base
+// exactly (no core, and no cover on the exit's end: SmuxCover); an edge with
+// an old exit has its downloads' covers (wmCover), with the hit gaps its OFF
+// core's runner sets (fewer cycles run up to the window than at 2 ms), so its
+// runs are held to no budget, OFF throughout, base's rate or more and the
+// covers' resends. The lab knob (WcoreUpload) still runs the exit's core.
 func TestWcoreStep1ModelBlindSidesAreBase(t *testing.T) {
 	type run struct {
 		rate      float64
@@ -274,10 +282,21 @@ func TestWcoreStep1ModelBlindSidesAreBase(t *testing.T) {
 			c.loss, c.policer, c.seed, c.dur = x.loss, x.pol*x.rate*wmMbit, x.seed, 40*time.Second
 			c.exit, c.oldExit = side == "up", side == "dn-old"
 			b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
-			msg := fmt.Sprintf("%s %s l%g pol%g s%d: base %.1f Mbit resent %.3f%% | core %.1f Mbit resent %.3f%% peakB %.1f MiB last %v",
-				side, c.name, 100*x.loss, x.pol, x.seed, b.mbit, 100*b.resend, k.mbit, 100*k.resend, float64(k.peakB)/(1<<20), k.lastState)
-			if k.mbit != b.mbit || k.resend != b.resend || k.peakB != 0 || k.lastState != wcOff || !slices.Equal(k.rtxSec, b.rtxSec) {
+			cv := b
+			if side == "dn-old" {
+				cv = wmRun(c.with(wmCover))
+			}
+			msg := fmt.Sprintf("%s %s l%g pol%g s%d: base %.1f Mbit resent %.3f%% | cover %.1f Mbit resent %.3f%% | core %.1f Mbit resent %.3f%% peakB %.1f MiB last %v",
+				side, c.name, 100*x.loss, x.pol, x.seed, b.mbit, 100*b.resend, cv.mbit, 100*cv.resend, k.mbit, 100*k.resend, float64(k.peakB)/(1<<20), k.lastState)
+			switch {
+			case k.peakB != 0 || k.lastState != wcOff:
+				t.Errorf("the default config ran the core: %s", msg)
+			case side == "up" && (k.mbit != b.mbit || k.resend != b.resend || !slices.Equal(k.rtxSec, b.rtxSec)):
 				t.Errorf("the default config is not base: %s", msg)
+			case side == "dn-old" && (k.mbit < 0.95*b.mbit || k.resend > math.Max(b.resend, cv.resend)+0.001):
+				t.Errorf("the default config is not the windows without the core: %s", msg)
+			default:
+				t.Log(msg)
 			}
 		}
 	}

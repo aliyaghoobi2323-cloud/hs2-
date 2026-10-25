@@ -289,6 +289,23 @@ var (
 	// direction it receives); 0 keeps every window within
 	// SmuxNeedStreamBuffer and every buffer within SmuxSessionBuffer.
 	SmuxWindowPool = 32 << 20
+	// SmuxCover gives a stream its window holds back, while its reader keeps
+	// up, SmuxNeedStreamBuffer plus a step from the window pool (its cover,
+	// third_party/smux core.go): a window update leaves each step read, so
+	// the exit has the window less a step in flight -- 1 MiB per round trip
+	// at the need, the half-window lock (101–112 Mbit/s per download at
+	// 74–82 ms in the field) -- and covered it has the need, 2 MiB, with
+	// one update per MiB as before. Receiver side only: any exit honours it.
+	// A link's window core keeps the cover as its floor until it found the
+	// path full, or while other cores of the peer run: then it takes the
+	// covers, its floor the need as before (wcore.go, cover).
+	// 1 (the default): on the edge's end only, for downloads, as the window
+	// core's step 1; the exit's end (uploads) has no pacing net for its
+	// sender (the edge) and no record to see a policer by, and in the model
+	// a cover there behind a policer at 60% of the path resent 13% against
+	// base's 0.2% (wcore_step1_test.go, blind sides). 2: both ends. 0: none,
+	// the window at the need as before.
+	SmuxCover = 1
 	// SmuxMinStreamBuffer and SmuxStreamLagTarget turn on smux's adaptive
 	// stream window: a stream whose reader leaves more than
 	// SmuxStreamLagTarget unread is offered a smaller window, down to
@@ -347,6 +364,10 @@ func SmuxTuningNotes() (notes []string) {
 	return notes
 }
 
+// smuxCoverOn says whether a session's end gives its streams their cover
+// (SmuxCover): server is the exit's end, which receives uploads.
+func smuxCoverOn(server bool) bool { return SmuxCover >= 2 || SmuxCover == 1 && !server }
+
 // windowPool is the process's smux.WindowPool, of SmuxWindowPool bytes as
 // it is when the first link comes up (at most 1 GiB: a session's buffer is
 // counted in an int32).
@@ -372,6 +393,7 @@ func newSmuxConfig() *smux.Config {
 	if lo > 0 && need >= lo && need < SmuxStreamBuffer {
 		c.MinStreamBuffer, c.StreamLagTarget = lo, SmuxStreamLagTarget
 		c.NeedStreamBuffer, c.WindowPool = need, windowPool()
+		c.NoCover = !smuxCoverOn(false)
 		return c
 	}
 	// No window past the need (a lab override left it no room): the fixed
