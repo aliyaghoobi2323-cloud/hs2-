@@ -108,6 +108,13 @@ type wmStreamCfg struct {
 	read  float64       // reader pace, bytes/s (0: reads what it has at once)
 	src   float64       // source pace at the sender, bytes/s (0: unlimited)
 	start time.Duration // when its transfer begins
+	// srcAt changes the source's pace at given times (rate: bytes/s, 0:
+	// unlimited); srcBurst: the source hands its data over in chunks of this
+	// many bytes, as an upstream connection's reads come (0: as it comes).
+	// A source that slows down after its start is a user's download whose
+	// server, not the window, sets its pace (the field's "~14 Mbit/s").
+	srcAt    []wmChange
+	srcBurst int
 }
 
 type wmChange struct {
@@ -822,6 +829,12 @@ type wmSnd struct {
 	start   int64
 	blocked bool // wanted to send past its credit since the last update came
 	hitS    uint32
+	// the source's pace changes (wmStreamCfg.srcAt), the next of them, what
+	// it has handed over in all (a paced source), and its chunk
+	srcAt    []wmChange
+	srcI     int
+	srcAcc   float64
+	srcBurst int
 }
 
 type wmTurn struct {
@@ -1165,7 +1178,7 @@ func newModel(cfg wmCfg) *wmModel {
 	for i, s := range cfg.streams {
 		m.rs = append(m.rs, &wmRcvStream{id: uint32(2*i + 1), read: s.read, start: s.start.Milliseconds(),
 			rcvWin: wmInitWin, annWin: wmInitWin, limHigh: wmInitWin, minUnread: math.MaxInt64})
-		m.ss = append(m.ss, &wmSnd{limit: wmInitWin, src: s.src, start: s.start.Milliseconds()})
+		m.ss = append(m.ss, &wmSnd{limit: wmInitWin, src: s.src, start: s.start.Milliseconds(), srcAt: s.srcAt, srcBurst: s.srcBurst})
 	}
 	// (the exit's end gets a core only with the lab knob WcoreUpload, as the
 	// runner's newWcLink: without it the exit variant is base)
@@ -1223,7 +1236,15 @@ func (m *wmModel) fill(f *wmFlow) {
 			}
 			credit := int64(s.limit) - int64(s.written)
 			src := int64(wmFrame)
-			if s.src > 0 {
+			switch {
+			case len(s.srcAt) > 0 || s.srcBurst > 0:
+				if s.src > 0 {
+					src = int64(s.srcAcc) - int64(s.written)
+					if b := int64(s.srcBurst); b > 0 {
+						src = int64(s.srcAcc)/b*b - int64(s.written)
+					}
+				}
+			case s.src > 0:
 				src = int64(s.src*float64(m.t-s.start)/1000) - int64(s.written)
 			}
 			if credit <= 0 && src > 0 {
@@ -1669,6 +1690,28 @@ func (m *wmModel) setWindow(st *wmRcvStream, w uint32) {
 	st.rcvWin = w
 }
 
+// sources moves the paced sources of wmStreamCfg.srcAt and srcBurst on by
+// a ms: a change of pace takes effect, and the pace adds to what the source
+// has handed over (from what was written when it became paced: a source
+// that slows down has no backlog to send at its former pace).
+func (m *wmModel) sources() {
+	for _, s := range m.ss {
+		if len(s.srcAt) == 0 && s.srcBurst == 0 {
+			continue
+		}
+		for s.srcI < len(s.srcAt) && m.t >= s.srcAt[s.srcI].at.Milliseconds() {
+			if s.src <= 0 {
+				s.srcAcc = float64(s.written)
+			}
+			s.src = s.srcAt[s.srcI].rate
+			s.srcI++
+		}
+		if m.t >= s.start && s.src > 0 {
+			s.srcAcc += s.src / 1000
+		}
+	}
+}
+
 // atSender takes what reaches the exit this ms on the way back.
 func (m *wmModel) atSender() {
 	if m.cfg.stall > 0 {
@@ -1998,6 +2041,7 @@ func (m *wmModel) run() wmResult {
 				m.at0.read = m.comp.gotAll
 			}
 		}
+		m.sources()
 		m.atSender()
 		m.main.tailTimer()
 		m.main.send()
