@@ -29,7 +29,9 @@ package engine
 // Z5_OUT. Path: Z5_DN_MBIT / Z5_UP_MBIT, Z5_RTT_MS, Z5_QMS (bottleneck
 // queue, ms at its rate), Z5_LOSS (share of packets, both ways), Z5_MTU;
 // reordering (S2): Z5_REORDER, Z5_REORDER_MS, Z5_REORDER_FIELD,
-// Z5_REORDER_SCALE, Z5_REORDER_DIR (newZ5Emu in z5emu_test.go).
+// Z5_REORDER_SCALE, Z5_REORDER_DIR (newZ5Emu in z5emu_test.go); a
+// download policer: Z5_POL_MBIT, Z5_POL_MS, Z5_POL_AT, Z5_POL_S,
+// Z5_POL2_MBIT, Z5_POL2_AT (below, "policer rig").
 
 import (
 	"bytes"
@@ -185,7 +187,8 @@ type z5Res struct {
 	SegsOut  [2]uint32          `json:"segsOut"` // data segments sent, resends included (TCP_INFO), over the window
 	Srtt     [2]float64         `json:"srttMs"`
 	Drops    [2]int64           `json:"drops"`
-	Held     []int64            `json:"held,omitempty"` // S2: packets the emulator reordered, up, dn (Z5_REORDER*)
+	Held     []int64            `json:"held,omitempty"`     // S2: packets the emulator reordered, up, dn (Z5_REORDER*)
+	PolDrops int64              `json:"polDrops,omitempty"` // the policer's drops (download; in drops too; Z5_POL_*)
 	WireDn   float64            `json:"wireDnMbit"`
 	WireUp   float64            `json:"wireUpMbit"`
 	Ended    int                `json:"relaysEnded"` // Z5_RELAY: relays the guard (or anything) ended
@@ -920,6 +923,49 @@ func TestZ5Rig(t *testing.T) {
 			emu.dn.chg.Store(nil)
 		}()
 	}
+	// policer rig (from rig-z17): a per-connection policer on the download
+	// direction (the exit's packets to the edge, in front of that
+	// direction's bottleneck) from Z5_POL_AT s after t0 (default 0):
+	// Z5_POL_MBIT, its bucket Z5_POL_MS ms at that rate (default 20);
+	// Z5_POL2_MBIT from Z5_POL2_AT s (default 20, not before Z5_POL_AT): the
+	// policer's rate changes (tightens) with a bucket of Z5_POL_MS at the new
+	// rate. Z5_POL_S > 0: it is lifted Z5_POL_S s after it arrived
+	// (Z5_POL_AT + Z5_POL_S), for good; a Z5_POL2_AT at or past the lift
+	// does nothing. Without Z5_POL_MBIT nothing of this runs.
+	if pm := z5Env("Z5_POL_MBIT", 0); pm > 0 {
+		pol := func(mbit float64) *z5Pol {
+			r := mbit * 1e6 / 8
+			return &z5Pol{rate: r, burst: r * z5Env("Z5_POL_MS", 20) / 1000}
+		}
+		type polStep struct {
+			at float64 // s after t0
+			p  *z5Pol  // nil: lifted
+		}
+		on := z5Env("Z5_POL_AT", 0)
+		lift := math.Inf(1)
+		if s := z5Env("Z5_POL_S", 0); s > 0 {
+			lift = on + s
+		}
+		steps := []polStep{{on, pol(pm)}}
+		if p2 := z5Env("Z5_POL2_MBIT", 0); p2 > 0 {
+			if at2 := math.Max(z5Env("Z5_POL2_AT", 20), on); at2 < lift {
+				steps = append(steps, polStep{at2, pol(p2)})
+			}
+		}
+		if !math.IsInf(lift, 1) {
+			steps = append(steps, polStep{lift, nil})
+		}
+		go func() {
+			for _, s := range steps {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(time.Until(t0.Add(time.Duration(s.at * float64(time.Second))))):
+				}
+				emu.dn.pol.Store(s.p)
+			}
+		}()
+	}
 	if z5Env("Z5_INT", 0) > 0 {
 		st := open('I', 0)
 		go func() {
@@ -975,6 +1021,9 @@ func TestZ5Rig(t *testing.T) {
 			add("dropu", float64(emu.up.drops.Load()))
 			if emu.dn.late != nil {
 				add("heldd", float64(emu.dn.held.Load())) // S2: reordered so far
+			}
+			if z5Env("Z5_POL_MBIT", 0) > 0 {
+				add("pold", float64(emu.dn.polDrops.Load())) // the policer's drops so far
 			}
 			for i, nm := range []string{"e", "x"} {
 				var sr, mr, cw, un, rt, nsent, rr, ts float64
@@ -1069,6 +1118,7 @@ func TestZ5Rig(t *testing.T) {
 	if emu.up.late != nil || emu.dn.late != nil {
 		res.Held = []int64{emu.up.held.Load(), emu.dn.held.Load()}
 	}
+	res.PolDrops = emu.dn.polDrops.Load()
 	if ns0 != nil {
 		res.Netstat = map[string]int64{}
 		for k, v := range z5Netstat() {

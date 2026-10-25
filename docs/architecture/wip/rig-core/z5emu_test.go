@@ -76,6 +76,19 @@ type z5Dir struct {
 	late chan z5Pkt
 	reo  z5Reo
 	held atomic.Int64
+	// policer rig (from rig-z17): a token-bucket policer in front of the
+	// bottleneck (nil: none; TestZ5Rig arms it, Z5_POL_*): a packet that
+	// finds the bucket short is dropped (counted in drops and polDrops),
+	// with no queue
+	pol      atomic.Pointer[z5Pol]
+	polTok   float64 // bytes (reader only)
+	polAt    int64   // ns of the last refill (reader only)
+	polDrops atomic.Int64
+}
+
+// z5Pol is a policer: rate bytes/s, a bucket of burst bytes.
+type z5Pol struct {
+	rate, burst float64
 }
 
 // z5Reo is the reordering of a direction (z5Path.Reorder*), as the model's
@@ -315,6 +328,22 @@ func (e *z5Emu) readLoop(mtu int) {
 			continue
 		}
 		now := e.now()
+		if pl := d.pol.Load(); pl != nil {
+			// (the bucket starts full when the policer first arrives; a
+			// policer that replaces it keeps its tokens, at most its burst)
+			if d.polAt == 0 {
+				d.polTok = pl.burst
+			} else {
+				d.polTok = math.Min(pl.burst, d.polTok+float64(now-d.polAt)*pl.rate/1e9)
+			}
+			d.polAt = now
+			if d.polTok < float64(n) {
+				d.drops.Add(1)
+				d.polDrops.Add(1)
+				continue
+			}
+			d.polTok -= float64(n)
+		}
 		at := now
 		p := d.p
 		if c := d.chg.Load(); c != nil {
