@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"testing"
 	"time"
 )
@@ -425,32 +426,152 @@ func TestWcoreS2BuilderBlocked(t *testing.T) {
 // A path that slows to 20 Mbit/s under 2 MiB windows (100 ms, 100 → 20 →
 // 100 Mbit/s): the exit's BBR is held by its cwnd and the data waits in the
 // exit's socket, where no srtt sees it, and the turnarounds run to 490 ms.
-// The exit's writer waits on its socket all along: the path holds the
-// sender, and the stream stays fast through the slow spell (stage 2 shrinks
-// exactly such windows). Left out of F, the core went OFF for the spell and
-// came back through STARTUP when the path recovered (+12 queue drains over
-// 20 seeds of the full table's cell).
+// The path holds the sender: the exit's writer waits on its socket, or
+// while the exit recovers from the loss the slowdown brought, resends (two
+// records read a wait of 0.39–0.47 with 24–57% of the segments resent, the
+// next one a wait of 0.91), and no interval may judge the stream without
+// evidence (stage 2 shrinks exactly such windows). Judged by the wait alone,
+// the stream left F in 5 of these 24 runs and the core went OFF for the
+// spell (the independent judge: 10 of 24 runs with OFF against base's 5;
+// base's 5 leave F when the sender stalls for three intervals, as here).
+// The spell starts at 18 to 31 s, four seeds each.
 func TestWcoreS2PathHeldStaysFast(t *testing.T) {
-	for seed := uint64(1); seed <= 3; seed++ {
-		c := wmPath(100, wmMS(100), wmMS(50))
-		c.mode, c.seed, c.dur = wmCore, seed, 45*time.Second
-		c.changes = []wmChange{{20 * time.Second, 20 * wmMbit}, {40 * time.Second, 100 * wmMbit}}
-		evals, fast, off := 0, 0, 0
-		c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
-			if at < 25*time.Second || at >= 40*time.Second || !k.lastAt.Equal(in.now) {
-				return
+	for _, st := range []int{18, 20, 22, 25, 28, 31} {
+		for seed := uint64(1); seed <= 4; seed++ {
+			c := wmPath(100, wmMS(100), wmMS(50))
+			from := time.Duration(st) * time.Second
+			c.mode, c.seed, c.dur = wmCore, seed, from+25*time.Second
+			c.changes = []wmChange{{from, 20 * wmMbit}, {from + 20*time.Second, 100 * wmMbit}}
+			var neg []string
+			c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+				if at < from || at >= from+20*time.Second || !k.lastAt.Equal(in.now) {
+					return
+				}
+				if at0, ok := k.srcAt[1]; (ok && at0.Equal(in.now) || k.slowN[1] > 0) && len(neg) < 3 {
+					neg = append(neg, fmt.Sprintf("%.1fs (%s, held share %.2f)", at.Seconds(), k.state, k.sndBlocked(in.now)))
+				}
 			}
-			evals++
-			if k.inF[1] {
-				fast++
-			}
-			if k.state == wcOff {
-				off++
+			wmRun(c)
+			if len(neg) > 0 {
+				t.Errorf("spell from %d s, seed %d: the path-held stream judged without evidence at %v", st, seed, neg)
 			}
 		}
-		wmRun(c)
-		if fast < evals*9/10 || off > 0 {
-			t.Errorf("seed %d: fast in %d of %d evaluations of the slow spell, OFF in %d", seed, fast, evals, off)
+	}
+}
+
+// The independent judge's two defects of the first version, and the rules
+// that answer them:
+//   - (a) after the first interval that judged a stream without evidence, one
+//     that cannot judge (a dip of the link's rate) counted its 600 ms
+//     turnaround as a 527 ms queue: a stream so judged keeps its turnarounds
+//     out of q_turn until evidence returns (FM1's rule);
+//   - (b) a held stream whose updates and turnarounds fell in turns (one
+//     interval an update and no turnaround, the next the turnaround and no
+//     update) left F after two updates: an update without a turnaround is no
+//     verdict, a turnaround without an update is one; but two intervals in a
+//     row with updates and no turnaround are (none turned within an interval).
+func TestWcoreS2EvidenceGaps(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	const dt = 0.4
+	now := wtT0
+	next := func() time.Time { now = now.Add(400 * time.Millisecond); return now }
+
+	slow := wcStream{id: 1, win: wtNeed, upd: 1, read: uint64(14 * wmMbit * dt), turnMin: ms(600), turnLast: ms(600)}
+	c := wfCore(now, 0)
+	c.inF[1] = true
+	for i, rd := range []float64{14, 5, 14, 14} { // judged, a dip, after it, judged
+		s := slow
+		s.read = uint64(rd * wmMbit * dt)
+		c.qSndAt = now
+		m := c.measure(wfIn(next(), s), dt)
+		if want := i < 3; (len(m.f) == 1) != want || want && (m.qOK || !m.quiet) {
+			t.Errorf("(a) interval %d: F %v, quiet %v, q_turn %v (ok %v); want in F %v with its turnaround out of q_turn", i+1, m.f, m.quiet, m.qTurn, m.qOK, want)
+		}
+	}
+
+	held := func(upd uint32, turn time.Duration) wcStream {
+		return wcStream{id: 1, win: wtNeed, upd: upd, hit: upd, read: uint64(40 * wmMbit * dt), turnMin: turn, turnLast: turn}
+	}
+	c = wfCore(now, 0)
+	c.inF[1] = true
+	for i := 0; i < 6; i++ {
+		s := held(1, 0)
+		if i%2 == 1 {
+			s = held(0, ms(75))
+		}
+		c.qSndAt = now
+		if m := c.measure(wfIn(next(), s), dt); len(m.f) != 1 || c.slowN[1] > 0 {
+			t.Errorf("(b) interval %d (update %d, turnaround %v): F %v, slowN %d; want kept, no verdict against it", i+1, s.upd, s.turnMin, m.f, c.slowN[1])
+		}
+	}
+	// a slow source whose updates and turnarounds fall in turns is judged on
+	// its turnarounds; one with updates and no turnaround twice in a row on
+	// the second of them
+	c = wfCore(now, 0)
+	c.inF[1] = true
+	for i, s := range []wcStream{held(1, 0), held(0, ms(2700)), held(1, 0), held(0, ms(2700))} {
+		c.qSndAt = now
+		if m := c.measure(wfIn(next(), s), dt); (len(m.f) == 1) != (i < 3) {
+			t.Errorf("updates and 2.7 s turnarounds in turns, interval %d: F %v, want in F %v", i+1, m.f, i < 3)
+		}
+	}
+	c = wfCore(now, 0)
+	c.inF[1] = true
+	for i, want := range []int{1, 1, 0} {
+		c.qSndAt = now
+		if m := c.measure(wfIn(next(), held(1, 0)), dt); len(m.f) != want {
+			t.Errorf("updates and no turnaround, interval %d: F %v, want %d stream(s)", i+1, m.f, want)
+		}
+	}
+}
+
+// turnBase made of slow streams' turnarounds (595 ms on a 72 ms path, a
+// rise notePaths refused as a route change) is capped at T_base and the
+// offset they had for the growth brake (turnRef) and the ramp's stop
+// (fastStop) as for the evidence, but not where packets wait behind holes
+// (every turnaround holds that wait there, and turnBase with it).
+func TestWcoreS2CapTurn(t *testing.T) {
+	ms := func(n int) time.Duration { return time.Duration(n) * time.Millisecond }
+	mk := func(holey bool) *wcore {
+		c := wfCore(wtT0, 0)
+		c.turnMins = wcMinWin{}
+		c.turnMins.add(wtT0, ms(595), wcTurnWin)
+		c.state, c.B, c.bPub = wcHold, 4*wtMiB, 4*wtMiB
+		c.inF[1] = true
+		c.last.holey = holey
+		return c
+	}
+	in := wcIn{now: wtT0, poolFree: -1, streams: []wcStream{{id: 1, win: 4 * wtMiB, upd: 4, turnLast: ms(120)}}}
+	for _, tc := range []struct {
+		holey bool
+		ref   time.Duration
+	}{{false, ms(73)}, {true, ms(595)}} {
+		c := mk(tc.holey)
+		if o := c.out(in, wtT0, nil); o.turnRef != tc.ref {
+			t.Errorf("holey %v: turnRef %v, want %v", tc.holey, o.turnRef, tc.ref)
+		}
+		c.state, c.B, c.bPub = wcStartup, 8*wtMiB, 4*wtMiB
+		c.fastStop(in, false)
+		if stopped := c.B == c.bPub && c.stopQ; stopped != !tc.holey {
+			t.Errorf("holey %v: a ramp past a 120 ms turnaround stopped %v, want %v", tc.holey, stopped, !tc.holey)
+		}
+	}
+}
+
+// What of a record's span the path held the exit's sender: its writer's
+// wait on the socket and the share of its segments resent.
+func TestWcoreS2SndHeld(t *testing.T) {
+	for _, tc := range []struct {
+		snd  wcSnd
+		want float64
+	}{
+		{wcSnd{fresh: true}, -1},
+		{wcSnd{fresh: true, blocked: 0.45, blockedOK: true}, 0.45},
+		{wcSnd{fresh: true, retrans: 30, segsOut: 100}, 0.3},
+		{wcSnd{fresh: true, blocked: 0.45, blockedOK: true, retrans: 30, segsOut: 100}, 0.75},
+	} {
+		if got := sndHeld(tc.snd); math.Abs(got-tc.want) > 1e-9 {
+			t.Errorf("%+v: %v, want %v", tc.snd, got, tc.want)
 		}
 	}
 }

@@ -88,6 +88,7 @@ type wcore struct {
 	idleN      map[uint32]int       // ... in which a stream of F was sent nothing
 	srcAt      map[uint32]time.Time // the latest interval that judged a stream and found no evidence (in F or not)
 	joinN      map[uint32]int       // intervals in a row that judged such a stream, out of F, and found evidence
+	noTurnN    map[uint32]int       // intervals in a row in which a stream had window updates and no turnaround
 	ctrlOffs   wcMinWin             // pong − T_base while the link's own queue was empty (q_ctrl's floor)
 	capPool    bool                 // capped by the window pool (not by MaxStreamBuffer)
 	holeyPrev  bool                 // the previous evaluation's packets waited behind holes
@@ -116,9 +117,8 @@ type wcore struct {
 	riseFrom  uint64
 	rLinkPrev float64
 	dipPrev   bool
-	// sndBlks: the latest wcEvidRecs records' shares of their spans in
-	// which the exit's writer waited on its socket (wcSnd.blocked; r < 0:
-	// not known), newest first
+	// sndBlks: what of the latest wcEvidRecs records' spans the path held
+	// the exit's sender (sndHeld; r < 0: not known), newest first
 	sndBlks [wcEvidRecs]wcRate
 
 	// paths
@@ -492,7 +492,8 @@ var (
 	// wcEvidBlocked: the exit's smux writer waited on its socket for this
 	// share of the latest record's span or more (txBlockedNs, the 64 bytes
 	// every exit sends: ~100% on a path that is not taking data, ~0% with
-	// room however busy): the path holds the link's sender, and a long
+	// room however busy), its resend share counted in (sndHeld): the path
+	// holds the link's sender, and a long
 	// turnaround is the wait in the exit's socket behind what its TCP has
 	// not sent yet, not the source. A path that slows to 20 Mbit/s under
 	// 2 MiB windows queues ~1.6 MB there and its turnarounds run to 490 ms
@@ -734,7 +735,8 @@ func newWcore(cfg wcConfig, rnd func() float64) *wcore {
 		cfg.stage = 1
 	}
 	return &wcore{cfg: cfg, rnd: rnd, inF: map[uint32]bool{}, prevWin: map[uint32]uint32{}, ceils: map[uint32]uint32{},
-		slowN: map[uint32]int{}, idleN: map[uint32]int{}, srcAt: map[uint32]time.Time{}, joinN: map[uint32]int{}}
+		slowN: map[uint32]int{}, idleN: map[uint32]int{}, srcAt: map[uint32]time.Time{}, joinN: map[uint32]int{},
+		noTurnN: map[uint32]int{}}
 }
 
 // wcStep is the window update step of a window w (smux.StepOf, which the
@@ -963,10 +965,7 @@ func (c *wcore) step(in wcIn) wcOut {
 			c.sndAny, c.sndAnyAt = true, now
 		}
 		copy(c.sndBlks[1:], c.sndBlks[:])
-		c.sndBlks[0] = wcRate{now, -1}
-		if rec.blockedOK {
-			c.sndBlks[0].r = rec.blocked
-		}
+		c.sndBlks[0] = wcRate{now, sndHeld(rec)}
 		// (q_snd as notePaths has it: past the exit's stale floor after a
 		// route change)
 		if rec.segsOut > 0 && rec.retrans == 0 && rec.minRTT > 0 && c.qSnd <= wcDqMin {
@@ -1111,7 +1110,7 @@ func (c *wcore) fastStop(in wcIn, lossHole bool) {
 		return
 	}
 	stop := false
-	if tb := c.turnMins.min(in.now, wcTurnWin); tb > 0 {
+	if tb := c.capTurn(c.turnMins.min(in.now, wcTurnWin), c.last.holey); tb > 0 {
 		var lasts []time.Duration
 		for _, s := range in.streams {
 			if c.inF[s.id] && s.turnLast > 0 {
@@ -1602,17 +1601,21 @@ func (c *wcore) heldQ(m wcMeas) time.Duration {
 // round trips after the published budget last rose (a queue the core's
 // growth made and no record shows yet is the path's: right after B grows
 // the turnaround is longer by it, which is no reason to take the stream's
-// ceiling away), and where the exit's writer did not wait on its socket
-// for half a record's span (wcEvidBlocked: a path slower than the windows
-// holds the sender, and the data waits in the exit, where no srtt sees it).
-// Where an interval cannot judge, the tests are as they were. The moment
-// an interval judges a stream of F without evidence, its turnarounds and
-// hits stop counting toward q_turn and the hit share: they are its
-// source's, not the path's queue; and a stream so judged (in F or not)
-// joins again within wcEvidMemory only on wcSlowN judged intervals in a
-// row whose turnaround is the floor and the queue seen within Δq. The core
-// leaves OFF only on intervals in which no stream of F is without evidence
-// (off).
+// ceiling away), and where the path did not hold the exit's sender for
+// half of either of the latest two records' spans (wcEvidBlocked, sndHeld:
+// its writer's wait on the socket and its resend share; a path slower than
+// the windows holds the sender, and the data waits in the exit, where no
+// srtt sees it). Where an interval cannot judge, the tests are as they
+// were. An interval with an update of a stream and no turnaround of it is
+// no verdict, unless the one before was such too; one with its turnaround
+// and no update is. From the moment an interval judges a stream of F
+// without evidence until one finds evidence, its turnarounds and hits stay
+// out of q_turn and the hit share (but where packets wait behind holes):
+// they are its source's, not the path's queue; and a stream so judged (in
+// F or not) joins again within wcEvidMemory only on wcSlowN judged
+// intervals in a row whose turnaround is the floor and the queue seen
+// within Δq. The core leaves OFF only on intervals in which no stream of F
+// is without evidence (off).
 func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	m := wcMeas{dt: dt, at: in.now}
 	if dt <= 0 {
@@ -1703,12 +1706,46 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 	newF := map[uint32]bool{}
 	var turns, spreads []time.Duration
 	hits, upds := 0.0, 0.0
+	// evidence that the window held a sender: a turnaround the path explains
+	// (wcEvidUse: within a quarter of the slack where it moved under half of
+	// what its window allows in such a round trip)
+	heldOf := func(s wcStream, r float64) bool {
+		if s.turnMin <= 0 || s.turnMin > ev.floor+ev.q+ev.slack {
+			return false
+		}
+		if s.turnMin <= ev.floor+ev.q+ev.slack/4 {
+			return true
+		}
+		step := float64(wcStep(need, s.win))
+		return r*(ev.floor+ev.q).Seconds() >= wcEvidUse*(float64(s.win)-step/2)
+	}
 	for i, s := range in.streams {
 		r := float64(s.read) / dt
 		if s.braked || float64(s.lag) > wcLagShare*float64(s.upd) {
 			continue
 		}
+		if s.turnMin > 0 {
+			delete(c.noTurnN, s.id)
+		} else if s.upd > 0 {
+			c.noTurnN[s.id]++
+		}
 		if s.upd == 0 || r <= 0 {
+			// (a turnaround in an interval without an update is a verdict
+			// all the same: an interval holds a stream's update or its
+			// turnaround, or both, as they fall; a source of 8 Mbit/s under
+			// 3.5 MiB had its updates and its 2.7 s turnarounds in turns and
+			// was never judged)
+			if c.inF[s.id] && s.turnMin > 0 && r > 0 {
+				switch {
+				case heldOf(s, r):
+					delete(c.slowN, s.id)
+				case ev.judge:
+					c.srcAt[s.id] = now
+					if c.slowN[s.id]++; c.slowN[s.id] >= wcSlowN {
+						continue
+					}
+				}
+			}
 			// its sender sent nothing: a stream of F whose reader is not
 			// behind stays in it for a while (the sender's PROBE_RTT)
 			if c.inF[s.id] && s.lag == 0 && c.idleN[s.id] < wcIdleKeep && s.win >= need/2 {
@@ -1723,18 +1760,19 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 			continue
 		}
 		delete(c.idleN, s.id)
-		// evidence that the window held its sender: a turnaround the path
-		// explains (wcEvidUse: within a quarter of the slack where it moved
-		// under half of what its window allows in such a round trip)
-		held := s.turnMin > 0 && s.turnMin <= ev.floor+ev.q+ev.slack
-		if held && s.turnMin > ev.floor+ev.q+ev.slack/4 {
-			step := float64(wcStep(need, s.win))
-			held = r*(ev.floor+ev.q).Seconds() >= wcEvidUse*(float64(s.win)-step/2)
-		}
-		quiet := false // judged without evidence: its turnarounds and hits are its source's
+		held := heldOf(s, r)
+		// (an interval with an update of the stream but no turnaround of it
+		// is no verdict either way: a held stream whose updates and
+		// turnarounds fell in turns left F after two updates. The second
+		// such interval in a row is: no update of it turned within an
+		// interval, 2.5 round trips and more, past the slack. A source of
+		// 8 Mbit/s under an 8 MiB window turns it in 7 s, and without this
+		// stayed fast up to 15 s after it slowed down)
+		sample := s.turnMin > 0 || c.noTurnN[s.id] >= 2
+		quiet := false // its turnarounds and hits are its source's, not the path's queue
 		if c.inF[s.id] {
 			switch {
-			case ev.judge && !held:
+			case ev.judge && sample && !held:
 				// its source sets its pace: twice in a row, out (and marked)
 				quiet = true
 				c.srcAt[s.id] = now
@@ -1743,6 +1781,18 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 				}
 			case held:
 				delete(c.slowN, s.id)
+			default:
+				// no verdict (an interval that cannot judge, or no
+				// turnaround): a stream judged without evidence keeps its
+				// turnarounds out until evidence returns. A dip of the
+				// link's rate after the first such interval counted the
+				// source's 600 ms turnaround as a 527 ms queue for two
+				// intervals (the independent judge; FM1's rule). Not where
+				// packets wait behind holes: q_turn judges no queue there
+				// (q_own does), and the hits the core learns τ_hold from
+				// were held out for good after one judged outlier (300/100
+				// under 0.1% loss: 93 → 83 Mbit/s in the model)
+				quiet = c.slowN[s.id] > 0 && !m.holey
 			}
 		} else {
 			// a stream an interval judged without evidence lately (marked)
@@ -1757,10 +1807,10 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 			at, marked := c.srcAt[s.id]
 			marked = marked && now.Sub(at) < wcEvidMemory
 			switch {
-			case !ev.judge || s.win < need/2:
+			case !ev.judge || s.win < need/2 || !sample:
 			case !marked && !held:
 				c.srcAt[s.id], marked = now, true
-			case marked && s.turnMin > 0 && s.turnMin <= ev.floor+ev.q+c.dq():
+			case marked && s.turnMin <= ev.floor+ev.q+c.dq():
 				c.joinN[s.id]++
 			case marked:
 				c.srcAt[s.id] = now
@@ -1838,6 +1888,18 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 			delete(c.srcAt, id)
 		}
 	}
+	for id := range c.noTurnN {
+		gone := true
+		for _, s := range in.streams {
+			if s.id == id {
+				gone = false
+				break
+			}
+		}
+		if gone {
+			delete(c.noTurnN, id)
+		}
+	}
 	for id := range c.joinN {
 		if _, ok := c.srcAt[id]; !ok || newF[id] {
 			delete(c.joinN, id)
@@ -1878,22 +1940,43 @@ type wcEvid struct {
 	dip   bool // the link's rate fell under wcDipShare of the previous interval's
 }
 
-// evidence is the interval's wcEvid. The floor is turnBase where it agrees
-// with T_base (within 1.3 times, as notePaths), else T_base and the offset
-// they had while they agreed: turnBase is the least turnaround of every
-// stream of the link over 60 s, and with the link's streams all slow at
-// their source it is how long they take to reach their limits (the field:
-// 206 to 4230 ms on a 72 ms path, notePaths), which made a slow stream's
-// own turnaround look bare. The queue is the largest of q_snd (the latest
+// capTurn is turnBase tb as the path's floor for a window turnaround: tb
+// where it agrees with T_base (within 1.3 times, as notePaths), else T_base
+// and the offset they had while they agreed (where notePaths refused tb's
+// rise as a route change, or none came). turnBase is the least turnaround of
+// every stream of the link over 60 s, and with the link's streams all slow
+// at their source it is how long they take to reach their limits (the
+// field: 206 to 4230 ms on a 72 ms path, notePaths): as the floor it made a
+// slow stream's own turnaround look bare (evidence), and held the growth
+// brake (out's turnRef) and the ramp's stop (fastStop) ~600 ms up. Where
+// the link's packets wait behind holes (holey) every turnaround holds that
+// wait, and turnBase with it is the floor as it is: capped there, the brake
+// held the windows of 300/100 under 0.1% loss back (93 → 83 Mbit/s in the
+// model). 0: no turnBase.
+func (c *wcore) capTurn(tb time.Duration, holey bool) time.Duration {
+	switch {
+	case tb <= 0:
+		return 0
+	case holey || c.tBase <= 0 || float64(tb) <= 1.3*float64(c.tBase):
+		return tb
+	case c.tbOK:
+		return c.tBase + max(c.tbOff, 0)
+	}
+	return c.tBase
+}
+
+// evidence is the interval's wcEvid. The floor is turnBase as capTurn has
+// it (T_base, with the offset if any, where there is no turnBase). The
+// queue is the largest of q_snd (the latest
 // record, the latest wcSndHist, and with other cores on the peer the path's
 // by every link's), q_own and q_ctrl.
 func (c *wcore) evidence(now time.Time, m *wcMeas, tb time.Duration) wcEvid {
-	e := wcEvid{floor: c.tBase}
-	switch {
-	case tb > 0 && (c.tBase <= 0 || float64(tb) <= 1.3*float64(c.tBase)):
-		e.floor = tb
-	case c.tbOK:
-		e.floor = c.tBase + max(c.tbOff, 0)
+	e := wcEvid{floor: c.capTurn(tb, m.holey)}
+	if e.floor <= 0 {
+		e.floor = c.tBase
+		if c.tbOK {
+			e.floor += max(c.tbOff, 0)
+		}
 	}
 	e.q = m.ctrlQ
 	if m.qSndOK {
@@ -1933,11 +2016,33 @@ func (c *wcore) evidence(now time.Time, m *wcMeas, tb time.Duration) wcEvid {
 	return e
 }
 
-// sndBlocked is the largest share of the latest wcEvidRecs records' spans
-// (those that came within as many spans) in which the exit's writer waited
-// on its socket (0: none known). (Two: a record whose span holds the moment
-// the path slowed down or recovered from a loss reads half of what the
-// next one does, 0.5 against 0.9 at 100 → 20 Mbit/s in the model.)
+// sndHeld is what of a record's span the path held the exit's sender: the
+// share in which its writer waited on its socket (wcSnd.blocked), and the
+// share of its segments it resent (−1: neither known). While the exit
+// recovers from the loss a path that slowed down under the windows brings,
+// its writer waits on the resends rather than on the socket: in the model's
+// 100 → 20 Mbit/s on 100 ms the two records after the slowdown read a wait
+// of 0.22–0.50 with 22–64% of the segments resent, and the next one a wait
+// of 0.9; a source that slowed down reads 0–0.4 with 0–13% resent (its last
+// fast burst's loss), never past 0.4 together. (A gate of two records with
+// no resends, the independent judge's variant, left slow sources fast from
+// the start: 94 runs of 600 with "fill the path" against 7.)
+func sndHeld(rec wcSnd) float64 {
+	v := -1.0
+	if rec.blockedOK {
+		v = rec.blocked
+	}
+	if rec.segsOut > 0 {
+		v = math.Max(v, 0) + float64(rec.retrans)/float64(rec.segsOut)
+	}
+	return v
+}
+
+// sndBlocked is the largest of the latest wcEvidRecs records' sndHeld
+// (those that came within as many spans; 0: none known). (Two: a record
+// whose span holds the moment the path slowed down or recovered from a loss
+// reads half of what the next one does, 0.5 against 0.9 at 100 → 20 Mbit/s
+// in the model.)
 func (c *wcore) sndBlocked(now time.Time) float64 {
 	b := 0.0
 	for _, r := range c.sndBlks {
@@ -3289,7 +3394,7 @@ func (c *wcore) out(in wcIn, now time.Time, ev []wcEvent) wcOut {
 		}
 	}
 	if any {
-		o.turnRef = c.turnMins.min(now, wcTurnWin) + c.qRef
+		o.turnRef = c.capTurn(c.turnMins.min(now, wcTurnWin), c.last.holey) + c.qRef
 		// (a brake is a queue over the least turnaround of the last
 		// wcTurnWin: never past that window, whatever round trips and
 		// turnarounds the core was handed; TestRedWcoreHostileInputs)
