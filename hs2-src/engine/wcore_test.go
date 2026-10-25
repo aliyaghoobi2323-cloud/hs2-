@@ -213,21 +213,41 @@ func TestWcoreSplit(t *testing.T) {
 	}
 }
 
+// With the cover on, a level of one record is a sample: a record past it by
+// its own spread alone is no congestion while the level's spread hides it
+// (the invariant test's seed 60: 0.3% random loss, a level of 0.21% on 5232
+// segments, a record of 0.47% on 9949). With the cover off the threshold is
+// base's, the record's spread alone.
+func TestWcoreLossSpreadWithCover(t *testing.T) {
+	for _, noCover := range []bool{false, true} {
+		c := wtCore(1)
+		c.cfg.noCover = noCover
+		c.sndRef.note(0.0021, 6*wtMiB, 0.3, 5232)
+		m := wcMeas{snd: 0.0047, sndOK: true, sndSegs: 9949}
+		past := c.sndRef.past(m.snd, c.sndAbs(m))
+		if past != noCover {
+			t.Errorf("cover off %v: 0.47%% on 9949 segments past a level of 0.21%% on 5232: %v (threshold +%.3f%%)", noCover, past, 100*c.sndAbs(m))
+		}
+	}
+}
+
 func TestWcoreLossRef(t *testing.T) {
 	var r wcLossRef
 	if r.past(1, 0) {
 		t.Fatal("an empty level is past")
 	}
-	r.note(0.01, 4*wtMiB, 0.3)
-	if !r.ok || r.v != 0.01 || r.b != 4*wtMiB {
+	r.note(0.01, 4*wtMiB, 0.3, 1000)
+	if !r.ok || r.v != 0.01 || r.b != 4*wtMiB || math.Abs(r.w-1e-3) > 1e-12 {
 		t.Fatalf("first note: %+v", r)
 	}
-	r.note(0.02, 4*wtMiB, 0.3) // the same budget: EWMA
-	if math.Abs(r.v-0.013) > 1e-9 {
-		t.Fatalf("same budget: %v, want 0.013", r.v)
+	// the same budget: EWMA (its spread 0.7² of the first record's, 0.3² of
+	// this one's)
+	r.note(0.02, 4*wtMiB, 0.3, 1000)
+	if math.Abs(r.v-0.013) > 1e-9 || math.Abs(r.w-0.58e-3) > 1e-12 {
+		t.Fatalf("same budget: %+v, want 0.013", r)
 	}
-	r.note(0.043, 8*wtMiB, 0.3) // as clean at a larger budget: a third of the weight
-	if math.Abs(r.v-0.016) > 1e-9 || r.b != 8*wtMiB {
+	r.note(0.043, 8*wtMiB, 0.3, 1000) // as clean at a larger budget: a third of the weight
+	if math.Abs(r.v-0.016) > 1e-9 || r.b != 8*wtMiB || math.Abs(r.w-0.4798e-3) > 1e-12 {
 		t.Fatalf("larger budget: %+v, want 0.016 at 8 MiB", r)
 	}
 	for _, tc := range []struct {

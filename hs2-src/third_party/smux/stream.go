@@ -56,6 +56,7 @@ type Stream struct {
 	preBrake   uint32     // adaptive: rcvWin before the first brake of the latest run (0: none; under bufferLock)
 	brakeAt    int64      // adaptive: monoNow of that first brake (under bufferLock)
 	claim      int        // pool: what the window holds from the WindowPool (under bufferLock)
+	coverClaim int        // pool: of claim, what its cover took (takeCover; under bufferLock)
 	claimDown  int64      // pool: monoNow from which the claim may come down to the window (0: not due; under bufferLock)
 	readAt     int64      // pool: monoNow of the last read while it holds a claim (under bufferLock)
 	updLock    sync.Mutex // one UPD at a time, so a later one never carries older values
@@ -864,6 +865,7 @@ func (s *Stream) SetDeadline(t time.Time) error {
 func (s *Stream) sessionClose() {
 	s.dieOnce.Do(func() { close(s.die) })
 	s.bufferLock.Lock()
+	s.uncover(coverClosed)
 	s.reclaim(s.sess.config)
 	s.bufferLock.Unlock()
 }
@@ -911,6 +913,7 @@ func (s *Stream) recycleTokens() (n int) {
 	s.buffers = nil
 	s.heads = nil
 	s.unread = 0
+	s.uncover(coverClosed)
 	s.dropClaim()
 	s.bufferLock.Unlock()
 	return

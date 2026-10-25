@@ -115,10 +115,14 @@ func TestPoolVerifyConfig(t *testing.T) {
 // Without a ceiling a reader that keeps up grows its window to
 // NeedStreamBuffer and no further, exactly as a window whose
 // MaxStreamBuffer is NeedStreamBuffer does, update for update, and takes
-// nothing from the pool.
+// nothing from the pool. (With the cover off: keepUp's peer reaches within a
+// frame of its previous limit each cycle, just before the update, and under
+// -race a scheduling pause of a few ms there is a pause at the limit, and a
+// cover past the need -- cover_test.go has the cover's own tests.)
 func TestPoolNoCeilingStaysAtNeed(t *testing.T) {
 	pool := NewWindowPool(4 << 20)
 	cfg := poolConfig(pool)
+	cfg.NoCover = true
 	session, stream, p := newRawPeer(t, cfg)
 	keepUp(t, p, stream, 6<<20)
 	p.sync(stream)

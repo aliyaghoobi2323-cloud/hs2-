@@ -81,6 +81,10 @@ type liveStatus struct {
 	FastConns  int     `json:"fast_conns,omitempty"`
 	FastWinMiB float64 `json:"fast_win_mib,omitempty"`
 	PoolMiB    int     `json:"pool_mib,omitempty"`
+	// smux's covers: the streams holding one now and what they hold of the
+	// window pool (absent: none)
+	Covers   int     `json:"covers,omitempty"`
+	CoverMiB float64 `json:"cover_mib,omitempty"`
 
 	// Link-pool ceiling (pool carriers only; absent otherwise). CfgMax is THIS
 	// server's ceiling as it runs (auto: derived from the hardware at start;
@@ -299,6 +303,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		ls.Users, ls.Mbit, ls.Sat = s.Users, round1(s.MbitPerS), s.Saturated
 		ls.Counted, ls.Flowing, ls.PeakMbit = s.Counted, s.Flowing, round1(s.PeakMbit)
 		ls.FastConns, ls.FastWinMiB, ls.PoolMiB = s.FastConns, round1(s.FastWinMiB), s.PoolMiB
+		ls.Covers, ls.CoverMiB = s.Covers, round1(s.CoverMiB)
 		if s.Phase != "" {
 			ls.Phase = s.Phase
 		}
@@ -880,13 +885,18 @@ func cpuLine(ls liveStatus) string {
 }
 
 // windowsLine is the window core's: the connections whose window grew past
-// the base 2 MiB and what their windows hold of the window pool ("" when
-// none has).
+// the base 2 MiB and what their windows hold of the window pool, and the
+// streams smux's covers hold past it now and what of the pool ("" when
+// none has either).
 func windowsLine(ls liveStatus) string {
-	if ls.FastConns <= 0 {
+	if ls.FastConns <= 0 && ls.Covers <= 0 {
 		return ""
 	}
-	return fmt.Sprintf("fast connections: %d (windows %.0f MiB of %d MiB pool)", ls.FastConns, ls.FastWinMiB, ls.PoolMiB)
+	s := fmt.Sprintf("fast connections: %d (windows %.0f MiB of %d MiB pool)", ls.FastConns, ls.FastWinMiB, ls.PoolMiB)
+	if ls.Covers > 0 {
+		s += fmt.Sprintf("; covered streams: %d (%.1f MiB of the pool)", ls.Covers, ls.CoverMiB)
+	}
+	return s
 }
 
 // poolLine is the datagram pool's fair share and the queue its busy carriers

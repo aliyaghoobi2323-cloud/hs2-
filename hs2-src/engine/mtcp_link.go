@@ -6,6 +6,7 @@ import (
 	"math"
 	"math/rand/v2"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -303,8 +304,16 @@ var (
 	// core's step 1; the exit's end (uploads) has no pacing net for its
 	// sender (the edge) and no record to see a policer by, and in the model
 	// a cover there behind a policer at 60% of the path resent 13% against
-	// base's 0.2% (wcore_step1_test.go, blind sides). 2: both ends. 0: none,
-	// the window at the need as before.
+	// base's 0.2% (wcore_step1_test.go, blind sides). 2: both ends, lab
+	// only. 0: none, the window at the need as before, smux's windows and
+	// the window core's model base's to the byte (smux TestCoverOffIsBase,
+	// TestWcoreModelCoverOff). Rolling the window work back takes both
+	// HS2_TUNE_WCORE=0 and HS2_TUNE_SMUX_COVER=0: either alone leaves the
+	// other's windows past the need. The covers' memory is at most a
+	// quarter of the window pool, process-wide (smux coverShare: the rest
+	// stays for the windows the cores grow and the links whose buffer ran
+	// full); what they did is in each link's end line (smuxCoverNote), the
+	// lab trace (cover) and hs2 status's windows line (Covers).
 	SmuxCover = 1
 	// SmuxMinStreamBuffer and SmuxStreamLagTarget turn on smux's adaptive
 	// stream window: a stream whose reader leaves more than
@@ -371,7 +380,48 @@ func smuxCoverOn(server bool) bool { return SmuxCover >= 2 || SmuxCover == 1 && 
 // windowPool is the process's smux.WindowPool, of SmuxWindowPool bytes as
 // it is when the first link comes up (at most 1 GiB: a session's buffer is
 // counted in an int32).
-var windowPool = sync.OnceValue(func() *smux.WindowPool { return smux.NewWindowPool(min(max(SmuxWindowPool, 0), 1<<30)) })
+var windowPool = sync.OnceValue(func() *smux.WindowPool {
+	windowPoolUp.Store(true)
+	return smux.NewWindowPool(min(max(SmuxWindowPool, 0), 1<<30))
+})
+
+// windowPoolUp: windowPool was made (a link came up), for what only reads it.
+var windowPoolUp atomic.Bool
+
+// smuxCoverNote says, for the log line of a link's end, what its streams'
+// covers did (SmuxCover): granted, lost and why, and how often the covers'
+// share of the window pool held one back; "" when none was granted or held
+// back.
+func smuxCoverNote(sess *smux.Session) string {
+	if sess == nil {
+		return ""
+	}
+	return coverNoteOf(sess.CoverStats())
+}
+
+func coverNoteOf(c smux.CoverCounters) string {
+	if c.Grants == 0 && c.Capped == 0 {
+		return ""
+	}
+	s := fmt.Sprintf("streams covered %d time(s)", c.Grants)
+	if lost := c.Lost(); lost > 0 {
+		var why []string
+		for _, w := range []struct {
+			n    uint32
+			what string
+		}{{c.Reader, "reader fell behind"}, {c.Miss, "window no longer held it"}, {c.Taken, "window core took it"},
+			{c.Idle, "idle"}, {c.Closed, "closed"}} {
+			if w.n > 0 {
+				why = append(why, fmt.Sprintf("%d %s", w.n, w.what))
+			}
+		}
+		s += fmt.Sprintf(", lost %d (%s)", lost, strings.Join(why, ", "))
+	}
+	if c.Capped > 0 {
+		s += fmt.Sprintf(", held to the covers' share of the window pool %d time(s)", c.Capped)
+	}
+	return s
+}
 
 func newSmuxConfig() *smux.Config {
 	c := smux.DefaultConfig()
