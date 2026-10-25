@@ -96,7 +96,7 @@ func (o wnOutcome) String() string {
 // nothing changing during the run.
 func wnClean(c wmCfg) bool {
 	return c.loss == 0 && c.policer == 0 && len(c.lossAt) == 0 && len(c.changes) == 0 && len(c.polAt) == 0 &&
-		len(c.rttAt) == 0 && c.reorder == 0 && c.compete == 0 && len(c.recOff) == 0 && len(c.recZero) == 0 && c.recEvery == 0
+		len(c.rttAt) == 0 && c.reorder == 0 && !c.reoField && c.compete == 0 && len(c.recOff) == 0 && len(c.recZero) == 0 && c.recEvery == 0
 }
 
 // wnSweep runs the cells four ways, logs a line per cell that drains or

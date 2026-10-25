@@ -856,11 +856,14 @@ func TestWcoreRedGrownSus(t *testing.T) {
 }
 
 // TestWcoreRedReorder: a path that reorders a share of the link's packets
-// by a few ms (no loss at all): base against the core (HS2_WCORE_RED=1).
+// by a few ms (no loss at all): base against the core (HS2_WCORE_RED=1;
+// HS2_WCORE_RED_RACK=1: the sender finds its losses as Linux's RACK does,
+// cfg.rack, and does not resend what the path only held).
 func TestWcoreRedReorder(t *testing.T) {
 	if os.Getenv("HS2_WCORE_RED") != "1" {
 		t.Skip("HS2_WCORE_RED=1")
 	}
+	rack := os.Getenv("HS2_WCORE_RED_RACK") == "1"
 	for _, p := range []struct {
 		rate   float64
 		rtt, q int
@@ -871,7 +874,7 @@ func TestWcoreRedReorder(t *testing.T) {
 		}{{0, 0}, {0.0005, 2}, {0.002, 2}, {0.002, 5}, {0.01, 3}} {
 			for seed := uint64(1); seed <= 2; seed++ {
 				c := wmPath(p.rate, wmMS(p.rtt), wmMS(p.q))
-				c.reorder, c.reorderMs, c.seed, c.dur = ro.p, ro.ms, seed, 40*time.Second
+				c.reorder, c.reorderMs, c.seed, c.dur, c.rack = ro.p, ro.ms, seed, 40*time.Second, rack
 				b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
 				t.Logf("%s reorder %.2f%%/%dms s%d: base %.0f Mbit rs %.2f%% | core %.0f Mbit rs %.2f%% d%v p%v B%.1f",
 					c.name, 100*ro.p, ro.ms, seed, b.mbit, 100*b.resend, k.mbit, 100*k.resend, k.drains, k.probes, float64(k.peakB)/(1<<20))
@@ -881,6 +884,7 @@ func TestWcoreRedReorder(t *testing.T) {
 }
 
 // TestWcoreRedReorderTrace: HS2_WCORE_RED_RTRACE=rate/rtt/queue/reorder%/ms/seed[/base]
+// (HS2_WCORE_RED_RACK=1 as TestWcoreRedReorder)
 func TestWcoreRedReorderTrace(t *testing.T) {
 	spec := os.Getenv("HS2_WCORE_RED_RTRACE")
 	if spec == "" {
@@ -897,6 +901,7 @@ func TestWcoreRedReorderTrace(t *testing.T) {
 	fmt.Sscan(p[5], &seed)
 	c := wmPath(rate, time.Duration(rtt)*time.Millisecond, time.Duration(q)*time.Millisecond)
 	c.reorder, c.reorderMs, c.seed, c.trace, c.dur, c.mode = ro/100, ms, uint64(seed), true, 40*time.Second, wmCore
+	c.rack = os.Getenv("HS2_WCORE_RED_RACK") == "1"
 	if len(p) > 6 {
 		c.mode = wmBase
 	}
