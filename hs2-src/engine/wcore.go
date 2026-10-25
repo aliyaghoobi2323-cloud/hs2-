@@ -204,6 +204,7 @@ type wcore struct {
 	qcapOK         bool
 	parkHold       int
 	pathFull       bool
+	covSeen        bool // a stream of the link held a cover in OFF (coverFloor)
 	capped         bool
 	// coverHarmAt: in OFF, the latest evaluation whose records of the exit
 	// showed the windows without the core past the knee (coverPastKnee): the
@@ -340,12 +341,13 @@ const (
 // wcConfig is fixed per link: the stream window sizes of the session's smux
 // config and the stage.
 type wcConfig struct {
-	side    wcSide
-	stage   int    // 1: no ceiling below need; 2: down to wcStage2Min once the path is full
-	need    uint32 // smux NeedStreamBuffer (2 MiB)
-	maxWin  uint32 // smux MaxStreamBuffer (16 MiB)
-	minWin  uint32 // smux MinStreamBuffer (64 KiB)
-	noCover bool   // smux Config.NoCover: no window past need without a ceiling (cover)
+	side      wcSide
+	stage     int    // 1: no ceiling below need; 2: down to wcStage2Min once the path is full
+	need      uint32 // smux NeedStreamBuffer (2 MiB)
+	maxWin    uint32 // smux MaxStreamBuffer (16 MiB)
+	minWin    uint32 // smux MinStreamBuffer (64 KiB)
+	noCover   bool   // smux Config.NoCover: no window past need without a ceiling (cover)
+	coverSeen bool   // the floor is the cover only once the link held one in OFF (SmuxCoverGain: coverFloor)
 }
 
 // Constants of the core (§5.2), variables so the calibration (step 0) and
@@ -1009,11 +1011,17 @@ func (c *wcore) cmin() uint32 {
 var wcCoverFloor = true
 
 // coverFloor says whether the core's floor is the cover (cmin): the cover
-// on, no verdict that the path is full, and no other core of the peer on.
+// on, no verdict that the path is full, and no other core of the peer on;
+// with SmuxCoverGain (a lab knob, cfg.coverSeen) also a stream of the link
+// held a cover in OFF (covSeen). Where none did there, the window never held
+// a stream back by the knob's share of its rate and a floor of covers only
+// adds their bursts: in the model the core left OFF on 100/100 with that
+// floor and the user next to it had a p99 of 336 ms against base's 301 (258
+// with the need as floor).
 // Then a share at the cover or below is no ceiling (out) and the streams
 // keep their covers; else the core takes them (out: noCover).
 func (c *wcore) coverFloor() bool {
-	return wcCoverFloor && !c.cfg.noCover && !c.pathFull && !c.last.grp
+	return wcCoverFloor && !c.cfg.noCover && !c.pathFull && !c.last.grp && (!c.cfg.coverSeen || c.covSeen)
 }
 
 // cover is the window a stream the window holds back has without the core
@@ -2435,6 +2443,13 @@ func (c *wcore) heldQ(m wcMeas) time.Duration {
 // within Δq. The core leaves OFF only on intervals in which no stream of F
 // is without evidence (off).
 func (c *wcore) measure(in wcIn, dt float64) wcMeas {
+	if c.state == wcOff && !c.cfg.noCover {
+		// (a window past the need with no ceiling is a cover: the floor
+		// is the cover from then on, coverFloor)
+		for _, s := range in.streams {
+			c.covSeen = c.covSeen || s.win > c.cfg.need
+		}
+	}
 	m := wcMeas{dt: dt, at: in.now}
 	if dt <= 0 {
 		return m

@@ -1011,3 +1011,18 @@ func TestWcoreOldExitRecord(t *testing.T) {
 		t.Fatalf("new record: sndSeen %v q_snd %v", c.sndSeen, c.qSnd)
 	}
 }
+
+// With SmuxCoverGain (cfg.coverSeen) the core's floor is the cover only once
+// a stream of its link held one in OFF (a window past the need there).
+func TestWcoreCoverFloorSeen(t *testing.T) {
+	cover := uint32(wtNeed + wtNeed/2)
+	c := wtCore(1)
+	c.cfg.noCover, c.cfg.coverSeen, c.sndExt = false, true, statsExtSender
+	if c.coverFloor() || c.cmin() != wtNeed {
+		t.Fatalf("no cover held yet: floor %v cmin %d, want the need", c.coverFloor(), c.cmin())
+	}
+	c.measure(wtIn(wtT0, 1, cover), 1)
+	if !c.coverFloor() || c.cmin() != cover {
+		t.Fatalf("a cover held in OFF: floor %v cmin %d, want the cover %d", c.coverFloor(), c.cmin(), cover)
+	}
+}

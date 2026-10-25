@@ -1230,7 +1230,7 @@ func newModel(cfg wmCfg) *wmModel {
 			side = wcExit
 		}
 		m.core = newWcore(wcConfig{side: side, stage: cfg.stage, need: wmNeed, maxWin: wmMaxWin, minWin: wmMinWin,
-			noCover: !smuxCoverOn(cfg.exit)}, m.rnd.Float64)
+			noCover: !smuxCoverOn(cfg.exit), coverSeen: SmuxCoverGain > 0}, m.rnd.Float64)
 		m.noCover = true // (smux Config.CoverWait: the core lets them)
 	}
 	// the pacing net on the exit's socket (the lab's always-on cap, when
@@ -1710,6 +1710,9 @@ func (m *wmModel) cover(st *wmRcvStream, old, want uint32, growOK, turnOK bool) 
 	}
 	ms := func(v int64) time.Duration { return time.Duration(v) * time.Millisecond }
 	ran := st.updAt > 0 && smux.RanUp(ms(st.pause), ms(max(wmHitGap, st.hitGap)), ms(m.t-st.updAt), st.numRead-st.updRead, wmFrame)
+	if ran && !st.covered && !smux.CoverGains(SmuxCoverGain, ms(st.pause), ms(m.t-st.updAt)) {
+		ran = false
+	}
 	st.covered, st.miss = smux.CoverNext(st.covered, st.miss, old, want, wmNeed, ran, growOK, turnOK)
 	if st.covered {
 		return wmCoverWin
@@ -2987,6 +2990,44 @@ func wmRunLine(cfg wmCfg) (key, sum string) {
 func init() {
 	if v, err := strconv.Atoi(os.Getenv("HS2_TUNE_SMUX_COVER")); err == nil {
 		SmuxCover = v
+	}
+	if v, err := strconv.Atoi(os.Getenv("HS2_TUNE_SMUX_COVER_GAIN")); err == nil {
+		SmuxCoverGain = v
+	}
+}
+
+// TestWcoreModelCoverGain: the lab knob SmuxCoverGain 5 (a cover only where
+// it gains a quarter of the rate or more, and the core's floor the cover
+// only once its link held one in OFF). On paths whose BDP lies between the
+// need less a step and the need the user next to the download keeps base's
+// p99 within 20 ms (the judge's bar; with the covers as they are 100/100
+// 408 ms against base's 301, 150/72 231 against 148), and on large paths
+// the cover's gain stays (1.4 times base or more). Not on 300/50 behind
+// 50 ms: the cover gains a quarter there, and its p99 stays 178–206 ms
+// against base's 114.
+func TestWcoreModelCoverGain(t *testing.T) {
+	if !smuxCoverOn(false) {
+		t.Skip("the covers are off (HS2_TUNE_SMUX_COVER=0)")
+	}
+	defer func(v int) { SmuxCoverGain = v }(SmuxCoverGain)
+	SmuxCoverGain = 5
+	for _, x := range []struct {
+		rate   float64
+		rtt, q int
+		mid    bool
+	}{{100, 100, 50, true}, {150, 72, 50, true}, {1000, 72, 50, false}, {300, 72, 50, false}} {
+		c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
+		c.dur = 40 * time.Second
+		b, k := wmRunN(c.with(wmBase), wmSeeds), wmRunN(c.with(wmCore), wmSeeds)
+		msg := fmt.Sprintf("%s: base %.1f Mbit p99 %.0f ms; core with CoverGain 5 %.1f Mbit p99 %.0f ms", c.name, b.mbit, b.iP99, k.mbit, k.iP99)
+		switch {
+		case x.mid && k.iP99 > b.iP99+20:
+			t.Errorf("the user's p99 past base's + 20 ms: %s", msg)
+		case !x.mid && k.mbit < 1.4*b.mbit:
+			t.Errorf("the cover's gain lost: %s", msg)
+		default:
+			t.Log(msg)
+		}
 	}
 }
 

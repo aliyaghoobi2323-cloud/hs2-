@@ -761,3 +761,32 @@ func TestCoverWait(t *testing.T) {
 		t.Fatalf("let: window %d, want the cover", w)
 	}
 }
+
+// Config.CoverGain n: a cover only where the sender paused at the limit an
+// n-th of the cycle or more (CoverGains); a stream its window holds back for
+// most of each round trip still gets one.
+func TestCoverGains(t *testing.T) {
+	ms := time.Millisecond
+	for _, tc := range []struct {
+		n            int
+		pause, cycle time.Duration
+		want         bool
+	}{
+		{0, 0, 100 * ms, true},
+		{5, 20 * ms, 100 * ms, true},
+		{5, 19 * ms, 100 * ms, false},
+		{5, 0, 100 * ms, false},
+		{5, 90 * ms, 100 * ms, true},
+	} {
+		if got := CoverGains(tc.n, tc.pause, tc.cycle); got != tc.want {
+			t.Fatalf("CoverGains(%d, %v, %v) = %v", tc.n, tc.pause, tc.cycle, got)
+		}
+	}
+	cfg := poolConfig(NewWindowPool(4 << 20))
+	cfg.CoverGain = 5
+	_, s, p := newRawPeer(t, cfg)
+	heldRounds(t, p, s, 8, 10*time.Millisecond)
+	if w := p.lastWindow(); w != Cover(uint32(cfg.NeedStreamBuffer), uint32(cfg.MaxStreamBuffer)) {
+		t.Fatalf("CoverGain 5, a peer held most of each round: window %d, want the cover", w)
+	}
+}
