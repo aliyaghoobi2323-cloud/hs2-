@@ -107,6 +107,11 @@ type wmStreamCfg struct {
 	read  float64       // reader pace, bytes/s (0: reads what it has at once)
 	src   float64       // source pace at the sender, bytes/s (0: unlimited)
 	start time.Duration // when its transfer begins
+	// srcAt changes the source's pace at given times (rate: bytes/s, 0:
+	// unlimited): a download whose server slows down (its own limit, a
+	// longer path behind the exit). What the source gave and the sender has
+	// not written yet stays for it to write.
+	srcAt []wmChange
 }
 
 type wmChange struct {
@@ -675,6 +680,37 @@ type wmSnd struct {
 	start   int64
 	blocked bool // wanted to send past its credit since the last update came
 	hitS    uint32
+	// the source's pace changes (wmStreamCfg.srcAt): the next one, and what
+	// the source gave up to srcT (bytes) at the pace before it
+	srcAt  []wmChange
+	srcI   int
+	srcTot float64
+	srcT   int64
+}
+
+// srcLeft is what the stream's source gave its sender by t and the sender
+// has not written yet (an unlimited source: a frame, whatever it wrote).
+func (s *wmSnd) srcLeft(t int64) int64 {
+	if len(s.srcAt) == 0 {
+		if s.src <= 0 {
+			return wmFrame
+		}
+		return int64(s.src*float64(t-s.start)/1000) - int64(s.written)
+	}
+	for s.srcI < len(s.srcAt) && t >= s.srcAt[s.srcI].at.Milliseconds() {
+		at := max(s.srcAt[s.srcI].at.Milliseconds(), s.srcT)
+		if s.src > 0 {
+			s.srcTot += s.src * float64(at-s.srcT) / 1000
+		} else {
+			s.srcTot = float64(s.written) // unlimited until then: it gave what was written
+		}
+		s.src, s.srcT = s.srcAt[s.srcI].rate, at
+		s.srcI++
+	}
+	if s.src <= 0 {
+		return wmFrame
+	}
+	return int64(s.srcTot+s.src*float64(t-s.srcT)/1000) - int64(s.written)
 }
 
 type wmTurn struct {
@@ -904,7 +940,7 @@ func newModel(cfg wmCfg) *wmModel {
 	for i, s := range cfg.streams {
 		m.rs = append(m.rs, &wmRcvStream{id: uint32(2*i + 1), read: s.read, start: s.start.Milliseconds(),
 			rcvWin: wmInitWin, annWin: wmInitWin, limHigh: wmInitWin, minUnread: math.MaxInt64})
-		m.ss = append(m.ss, &wmSnd{limit: wmInitWin, src: s.src, start: s.start.Milliseconds()})
+		m.ss = append(m.ss, &wmSnd{limit: wmInitWin, src: s.src, start: s.start.Milliseconds(), srcAt: s.srcAt, srcT: s.start.Milliseconds()})
 	}
 	// (the exit's end gets a core only with the lab knob WcoreUpload, as the
 	// runner's newWcLink: without it the exit variant is base)
@@ -961,10 +997,7 @@ func (m *wmModel) fill(f *wmFlow) {
 				continue
 			}
 			credit := int64(s.limit) - int64(s.written)
-			src := int64(wmFrame)
-			if s.src > 0 {
-				src = int64(s.src*float64(m.t-s.start)/1000) - int64(s.written)
-			}
+			src := s.srcLeft(m.t)
 			if credit <= 0 && src > 0 {
 				s.blocked = true
 			}
