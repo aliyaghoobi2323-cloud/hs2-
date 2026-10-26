@@ -118,6 +118,14 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 	var m map[string]json.RawMessage
 	if json.Unmarshal(raw, &m) == nil {
 		known := jsonKeys(reflect.TypeOf(fc))
+		// "link": the hs2:// link fields the installer keeps for `hs2 link`
+		// (C15); the daemon never reads it, so a bad one is only a warning.
+		known["link"] = true
+		if lb, ok := m["link"]; ok {
+			for _, w := range checkLinkBlock(lb) {
+				warn("%s", w)
+			}
+		}
 		var unknown []string
 		for k := range m {
 			if !known[k] {
@@ -407,6 +415,44 @@ func checkExitTable(fc fileConfig, needTarget bool, dg string, bad, warn func(st
 			warn(`%s uses port %s, which the tunnel's own forwarder listens on (on the tun IP): a panel bound on 0.0.0.0:%s stops the forwarder from starting — move the panel to another port`, what, pport, pport)
 		}
 	}
+}
+
+// checkLinkBlock validates the config's "link" block (C15): an object of the
+// link fields endpoint, domain, transport, panel (strings) and udp (true/false),
+// none holding '|' or a line break (a link cannot carry them).
+func checkLinkBlock(raw json.RawMessage) []string {
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		return []string{`"link" must be an object of the hs2:// link fields (endpoint, domain, transport, udp, panel) — hs2 link cannot use it`}
+	}
+	var out []string
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		v := m[k]
+		switch k {
+		case "endpoint", "domain", "transport", "panel":
+			s, ok := v.(string)
+			switch {
+			case !ok:
+				out = append(out, fmt.Sprintf(`"link.%s" must be a string — hs2 link cannot use it`, k))
+			case strings.ContainsAny(s, "|\n\r"):
+				out = append(out, fmt.Sprintf(`"link.%s" holds '|' or a line break, which a link cannot carry`, k))
+			case k == "transport" && s != "tcp" && s != "tun" && s != "udp" && s != "auto":
+				out = append(out, fmt.Sprintf(`"link.transport" must be tcp, tun, udp or auto, got %q`, s))
+			}
+		case "udp":
+			if _, ok := v.(bool); !ok {
+				out = append(out, `"link.udp" must be true or false (no quotes) — hs2 link cannot use it`)
+			}
+		default:
+			out = append(out, fmt.Sprintf(`"link.%s" is not a link field (endpoint, domain, transport, udp, panel) — a typo?`, k))
+		}
+	}
+	return out
 }
 
 // jsonKeys lists the JSON field names of a struct type.

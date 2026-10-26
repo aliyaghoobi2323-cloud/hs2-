@@ -49,6 +49,14 @@ var configKeys = map[string]configKey{
 	"expose":        {"", "expose", false, false},
 	"udp":           {"", "udp", false, true},
 
+	// The hs2:// link fields the config does not otherwise hold (C15, hs2 link);
+	// the installer's "Show a tunnel's link" screen saves asked fields here.
+	"link.endpoint":  {"link", "endpoint", false, false},
+	"link.domain":    {"link", "domain", false, false},
+	"link.transport": {"link", "transport", false, false},
+	"link.udp":       {"link", "udp", false, true},
+	"link.panel":     {"link", "panel", false, false},
+
 	"tuning.mode":           {"tuning", "mode", false, false},
 	"tuning.congestion":     {"tuning", "congestion", false, false},
 	"tuning.qdisc":          {"tuning", "qdisc", false, false},
@@ -200,6 +208,15 @@ func setKey(m map[string]any, ck configKey, val string) error {
 		} else {
 			obj[ck.name] = val // the check below names the bad entry
 		}
+	case ck.parent == "link":
+		v := strings.TrimSpace(val)
+		switch {
+		case v == "" || strings.ContainsAny(v, "|\"\\ \t\r\n"):
+			return fmt.Errorf("link.%s %q: a link field cannot be empty or hold '|', quotes or spaces", ck.name, val)
+		case ck.name == "transport" && v != "tcp" && v != "tun" && v != "udp" && v != "auto":
+			return fmt.Errorf("link.transport must be tcp, tun, udp or auto, got %q", val)
+		}
+		obj[ck.name] = v
 	default:
 		obj[ck.name] = strings.TrimSpace(val)
 	}
