@@ -2708,7 +2708,7 @@ var wmKnown = map[string]wmKnownCell{
 		"with the exit's pacing net base no longer runs past the policer (2.7 → 0.3% resent, 95 → 100 Mbit/s), and the gain target applies: the core 101 → 149 Mbit/s with 0.46% resent, 38% of N4's gain (N4 resends 10%); with the covers 187 Mbit/s with 0.04% (67%; the windows without the core 177), and the user's p99 377 ms against base's 288 (1.31×)"},
 }
 
-// wmKnownNoCover is wmKnown as it was before smux's covers (93d0faa): with
+// wmKnownNoCover is wmKnown as it was before smux's covers (ce7c1be): with
 // the covers off (HS2_TUNE_SMUX_COVER=0) the model is base's to the byte
 // (TestWcoreModelCoverOff), and so are the core's misses.
 var wmKnownNoCover = map[string]wmKnownCell{
@@ -2910,11 +2910,11 @@ const wmUpdMiBMax = 1.05
 
 // TestWcoreModelCoverOff: with the covers off (HS2_TUNE_SMUX_COVER=0, the
 // covers alone; HS2_TUNE_WCORE=0 takes the core and its covers) the model is
-// base's (93d0faa: the reordering fix, before the covers) to the byte:
+// base's (ce7c1be: the work branch before the covers) to the byte:
 // every run of base, N4, fin and the core, each seed of each cell of the
 // default table
 // (HS2_WCORE_MODEL_FULL=1: of the full one), gives what
-// testdata/wcore_model_nocover.txt holds for it, made on 93d0faa by the same
+// testdata/wcore_model_nocover.txt holds for it, made on ce7c1be by the same
 // wmRunLine (a hash of a cell's runs per mode). HS2_WCORE_MODEL_GOLDEN=1
 // writes the file anew from this tree: only for a change to the core meant
 // to show with the covers off too, and said so in its commit.
@@ -2985,7 +2985,7 @@ func wmRunLine(cfg wmCfg) (key, sum string) {
 
 // The model takes HS2_TUNE_SMUX_COVER as cmd/hs2 does (SmuxCover), so that
 // HS2_TUNE_SMUX_COVER=0 HS2_WCORE_MODEL_FULL=1 go test -run TestWcoreModel
-// ./engine prints base's model (93d0faa) to the byte: the roll-back's check
+// ./engine prints base's model (ce7c1be) to the byte: the roll-back's check
 // (TestWcoreModelCoverOff holds it).
 func init() {
 	if v, err := strconv.Atoi(os.Getenv("HS2_TUNE_SMUX_COVER")); err == nil {

@@ -309,7 +309,7 @@ var (
 	// window at the need as before, smux's windows and
 	// the window core's model base's to the byte (smux TestCoverOffIsBase,
 	// TestWcoreModelCoverOff). Only on an end with a window core: it takes
-	// them where they cost (wcore.go: cover, coverPastKnee, coverBlind), and
+	// them where they cost (wcore.go: cover, coverPastKnee, coverQueued, coverBlind), and
 	// the session starts with them taken until it lets them; so
 	// HS2_TUNE_WCORE=0 alone rolls the window work back, the covers too (and
 	// HS2_TUNE_SMUX_COVER=0 the covers alone). The covers' memory is at most a

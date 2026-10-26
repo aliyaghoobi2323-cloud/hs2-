@@ -59,10 +59,8 @@ func TestWcoreH2RedSharedPathFull(t *testing.T) {
 			// (the cores may stay OFF: the covered rate raised each sender's
 			// STARTUP pacing for good, and the need's windows then burst past
 			// Δq on the exit's records, harm; the path is full either way.
-			// A queue the covers stand in with no loss is not taken: 300/72
-			// with two links 23 ms against 12 in one seed, with 6% more rate,
-			// the cost of a cover on a path whose knee lies between the need
-			// less a step and the need)
+			// A queue the covers stand past the core's target with no loss
+			// goes too, coverQueued)
 			if rs(k) > rs(k0)+0.002 || k.qMean > k0.qMean+15 || k.mbit < 0.95*k0.mbit {
 				t.Errorf("%s", msg)
 				continue
@@ -76,9 +74,11 @@ func TestWcoreH2RedSharedPathFull(t *testing.T) {
 // three records of the exit show its queue overflowing (resends with a
 // queue past Δq), and come back wcCoverHarmHold after the latest evaluation
 // that found so; leaving OFF ends the hold (the core's own floor rules from
-// then on). Resends with no queue (a path's random loss), a standing queue
-// with no resends (a knee between the need less a step and the need), or
-// one record of three, take nothing. With the covers off nothing is noted.
+// then on). So does a standing queue past the core's target and Δq with no
+// resends (the lead's rule after the rig: covers must not stand a queue;
+// TestWcoreCoverStandingQueue). Resends with no queue (a path's random
+// loss), a queue within the target and Δq, or one record of three, take
+// nothing. With the covers off nothing is noted.
 func TestWcoreH2RedCoverOffPastKnee(t *testing.T) {
 	rec := func(q time.Duration, retrans uint64) wcSnd {
 		return wcSnd{fresh: true, srtt: 100*time.Millisecond + q, minRTT: 100 * time.Millisecond, retrans: retrans, segsOut: 100000}
@@ -106,7 +106,8 @@ func TestWcoreH2RedCoverOffPastKnee(t *testing.T) {
 	}{
 		{"the queue overflowing: resends with a queue past Δq", func(int) wcSnd { return rec(30*time.Millisecond, 200) }, true},
 		{"resends with no queue (random loss)", func(int) wcSnd { return rec(time.Millisecond, 2000) }, false},
-		{"a standing queue with no resends", func(int) wcSnd { return rec(40*time.Millisecond, 0) }, false},
+		{"a standing queue past the target with no resends", func(int) wcSnd { return rec(40*time.Millisecond, 0) }, true},
+		{"a queue within the target and Δq", func(int) wcSnd { return rec(8*time.Millisecond, 0) }, false},
 		{"one record of three overflowing", func(k int) wcSnd {
 			if k%3 == 0 {
 				return rec(30*time.Millisecond, 200)
@@ -252,5 +253,60 @@ func TestWcoreH2RedPoolZeroIsNoCover(t *testing.T) {
 		if want := pool <= 0; cfg.NoCover != want || smuxCoverOn(false) == want {
 			t.Errorf("pool %d: NoCover %v, smuxCoverOn %v, want the covers off %v", pool, cfg.NoCover, smuxCoverOn(false), want)
 		}
+	}
+}
+
+// The lead's rule after the rig (H2): covers must not stand a queue, out of
+// OFF too. With the core at its floor of covers (HOLD, B at n_F covers),
+// two of the exit's latest three records with its queue past the core's
+// target and Δq make the floor the need, and the covers go, for
+// wcCoverHarmHold; above its floor (the core's own budget) or with a queue
+// within the target the core keeps them, and with the covers off nothing is
+// noted. (In OFF: TestWcoreH2RedCoverOffPastKnee.)
+func TestWcoreCoverStandingQueue(t *testing.T) {
+	cover := uint64(wtNeed + wtNeed/2)
+	run := func(c *wcore, b uint64, q time.Duration, at time.Time) time.Time {
+		c.state, c.B, c.bPub = wcHold, b, b
+		m := wtMeas(1, 80e6, float64(b))
+		for k := 0; k < 3; k++ {
+			at = at.Add(2 * time.Second)
+			c.lastAt, c.qSnd, c.qSndAt = at, q, at
+			c.coverFloorNote(wtRedIn(at, time.Second, wcSnd{fresh: true, srtt: 100*time.Millisecond + q,
+				minRTT: 100 * time.Millisecond, segsOut: 100000}), m)
+		}
+		return at
+	}
+	for _, tc := range []struct {
+		name  string
+		b     uint64
+		q     time.Duration
+		taken bool
+	}{
+		{"at the floor of covers, the exit's queue past the target and Δq", cover, 40 * time.Millisecond, true},
+		{"at the floor of covers, a queue within them", cover, 8 * time.Millisecond, false},
+		{"above the floor (the core's own budget)", 3 * cover, 40 * time.Millisecond, false},
+	} {
+		c := wtCore(1)
+		c.cfg.noCover, c.sndExt, c.sndSeen = false, statsExtSender, true
+		at := run(c, tc.b, tc.q, wtT0)
+		in := wtIn(at, 1, uint32(cover))
+		if o := c.out(in, at, nil); c.coverFloor() == tc.taken || o.noCover != tc.taken {
+			t.Errorf("%s: floor of covers %v, covers taken %v, want taken %v", tc.name, c.coverFloor(), o.noCover, tc.taken)
+			continue
+		}
+		if tc.taken {
+			if c.cmin() != wtNeed {
+				t.Errorf("%s: floor %d, want the need", tc.name, c.cmin())
+			}
+			c.lastAt = at.Add(wcCoverHarmHold)
+			if !c.coverFloor() {
+				t.Errorf("%s: the floor of covers still taken %v on", tc.name, wcCoverHarmHold)
+			}
+		}
+	}
+	c := wtCore(1) // the covers off
+	run(c, cover, 40*time.Millisecond, wtT0)
+	if !c.coverQAt.IsZero() || c.coverRecs[0].queued {
+		t.Error("the covers off: a queue noted for covers there are none of")
 	}
 }
