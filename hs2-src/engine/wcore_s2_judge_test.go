@@ -435,7 +435,7 @@ func TestWcoreS2FirstStepTrial(t *testing.T) {
 	}{
 		{"within wcFullOff, as many fast streams", wcFullOff - time.Second, 1, true},
 		{"past wcFullOff", wcFullOff + time.Second, 1, false},
-		{"another count of fast streams", time.Second, 2, false},
+		{"more fast streams (their windows without the core only add to it)", time.Second, 2, true},
 	} {
 		c := *c
 		_, m := wtOffMeas(&c, t1.Add(x.after), x.n)
@@ -472,5 +472,87 @@ func TestWcoreS2FirstStepTrial(t *testing.T) {
 	ev = wtStep1(c, t1, 1, 20e6, 18*ms, true)
 	if c.state == wcOff || !c.fullAt.IsZero() {
 		t.Errorf("no step (the pool), the queue up 18 ms: %v fullAt %v events %+v, want no finding", c.state, c.fullAt.Sub(wtT0), ev)
+	}
+}
+
+// TestWcoreS2FirstStepTrialBackoff (review, J2): on a path the windows
+// without the core already fill, with records that swing, the least of the
+// latest three dips under Δq now and then, and the first step's trial came
+// again each wcFullOff (32 s) for as long as the downloads ran: each time a
+// ×1.25 to ×1.5 step for an interval or two (a wave of queue every 32 s), a
+// "fill the path … window held at …" line though the core went OFF, and a
+// count of growth; and with the hold kept only for as many fast streams,
+// F's count swinging by one let the trial come again within seconds. The
+// hold doubles with each trial in a row on the link that found the path
+// full, up to wcFullOffMax, and keeps OFF with as many fast streams or
+// more; a first step the rate followed starts it over.
+func TestWcoreS2FirstStepTrialBackoff(t *testing.T) {
+	ms, sec := time.Millisecond, time.Second
+	// trial runs a first step at at with n fast streams, the rate flat and
+	// the queue up 18 ms: the finding; then the hold harm keeps, to the
+	// second (and the next trial may come at its end)
+	trial := func(c *wcore, at time.Time, n int) (time.Duration, time.Time, []wcEvent) {
+		t.Helper()
+		wtFirstStep(c, at, n, -1)
+		if c.state != wcStartup {
+			t.Fatalf("at %v: %v, want STARTUP (no hold left)", at.Sub(wtT0), c.state)
+		}
+		t1 := at.Add(2 * sec)
+		ev := wtStep1(c, t1, n, 20e6, 18*ms, true)
+		if c.state != wcOff || !c.fullAt.Equal(t1) {
+			t.Fatalf("at %v: %v fullAt %v, want the finding", t1.Sub(wtT0), c.state, c.fullAt.Sub(wtT0))
+		}
+		for s := sec; s <= 10*time.Minute; s += sec {
+			if _, m := wtOffMeas(c, t1.Add(s), n); !c.harm(m) {
+				return s, t1.Add(s), ev
+			}
+		}
+		t.Fatalf("at %v: harm past 10 minutes", t1.Sub(wtT0))
+		return 0, t1, ev
+	}
+	c, _ := wtOffRecs(100*ms, 1, 1, 1)
+	at := wtT0
+	var got []time.Duration
+	for i := 0; i < 6; i++ {
+		h, end, ev := trial(c, at, 1)
+		got = append(got, h)
+		at = end
+		// (its line: the core is off for the hold, and holds no window)
+		if len(ev) != 1 || ev[0].kind != wcEvFilled || ev[0].off != h {
+			t.Errorf("trial %d: events %+v, want a finding that the core is off for %v", i+1, ev, h)
+		}
+	}
+	want := []time.Duration{32 * sec, 64 * sec, 128 * sec, 256 * sec, 256 * sec, 256 * sec}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Errorf("six trials in a row that found the path full: holds %v, want %v", got, want)
+	}
+	// a first step the rate followed starts the backoff over
+	wtFirstStep(c, at, 1, -1)
+	wtStep1(c, at.Add(2*sec), 1, 30e6, 0, true)
+	if c.state != wcStartup {
+		t.Fatalf("a first step the rate followed: %v, want STARTUP on", c.state)
+	}
+	c.toOff()
+	if h, _, _ := trial(c, at.Add(10*sec), 1); h != wcFullOff {
+		t.Errorf("after a first step the rate followed: hold %v, want %v", h, wcFullOff)
+	}
+	// the hold keeps OFF with as many fast streams or more (each adds its
+	// own windows without the core to what filled the path), not with
+	// fewer: a trial may come at once, and the backoff goes on
+	c, _ = wtOffRecs(100*ms, 1, 1, 1)
+	trial(c, wtT0, 2)
+	t1 := c.fullAt
+	for _, x := range []struct {
+		n    int
+		harm bool
+	}{{2, true}, {3, true}, {1, false}} {
+		c := *c
+		_, m := wtOffMeas(&c, t1.Add(sec), x.n)
+		if got := c.harm(m); got != x.harm {
+			t.Errorf("a second after a finding with 2 fast streams, %d: harm %v, want %v", x.n, got, x.harm)
+		}
+	}
+	if h, _, _ := trial(c, t1.Add(2*sec), 1); h != 2*wcFullOff {
+		t.Errorf("a finding with 2 fast streams, then at once one with 1: hold %v, want %v", h, 2*wcFullOff)
 	}
 }

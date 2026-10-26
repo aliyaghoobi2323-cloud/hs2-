@@ -947,9 +947,17 @@ func (ws *wcSet) logEvents(l *wcLink, now time.Time, o wcOut) {
 	for _, e := range o.events {
 		switch e.kind {
 		case wcEvFilled:
+			filled = true
+			if e.off > 0 {
+				// STARTUP's first step found the windows without the core
+				// past the knee: the core is OFF, nothing is held (and no
+				// knee moves from it)
+				l.heldB = 0
+				ws.filledOff(l, now, logf, e)
+				continue
+			}
 			// (the knee may be under the least budget, the windows of F at
 			// c_min: that is what is held)
-			filled = true
 			l.heldB = max(e.B, uint64(max(e.n, 1))*uint64(c.cmin()))
 			ws.filled(l, now, logf, e.R, e.T, l.heldB, e.n, e.q)
 		case wcEvDrain:
@@ -1014,6 +1022,18 @@ func (ws *wcSet) filled(l *wcLink, now time.Time, logf func(string, ...any), r f
 	}
 	logf("mtcp: %s: %ss fill the path at ~%.0f Mbit/s (round trip %d ms): window held at %s for %d fast connection(s), queue ~%d ms",
 		l.label(), l.dir(), mbitps(r), t.Milliseconds(), wcMiB(b), n, q.Milliseconds())
+}
+
+// filledOff is the line of STARTUP's first step from OFF that found the
+// windows without the core past the knee (wcore.fullHold): the windows are
+// their own, the core is off for e.off. Within the "fill the path" line's
+// cap.
+func (ws *wcSet) filledOff(l *wcLink, now time.Time, logf func(string, ...any), e wcEvent) {
+	if !l.due(wcLogFilled, now, wcLogFilledEvery) || !ws.agg[wcAggFilled].admit(l, now, e.n, e.R) {
+		return
+	}
+	logf("mtcp: %s: %ss fill the path at ~%.0f Mbit/s (round trip %d ms) with their own windows (%s for %d fast connection(s)) — the window core's step only added queue; it stays off for %d s",
+		l.label(), l.dir(), mbitps(e.R), e.T.Milliseconds(), wcMiB(e.B), e.n, int64(e.off/time.Second))
 }
 
 // wcNetNote says, for the exit's link-end lines, what the pacing net did

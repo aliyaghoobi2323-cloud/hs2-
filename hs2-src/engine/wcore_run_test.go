@@ -846,6 +846,33 @@ func TestWcoreRunnerKneeMoveLine(t *testing.T) {
 	}
 }
 
+// STARTUP's first step from OFF that found the windows without the core
+// past the knee puts the core back OFF: its line said "window held at" the
+// windows' size though the core holds none. It says the windows are the
+// downloads' own and for how long the core stays off, and no knee moves
+// from it (review, J2).
+func TestWcoreRunnerFullOffLine(t *testing.T) {
+	ws := &wcSet{}
+	var logs wcLogs
+	logs.set(ws)
+	now := time.Unix(1e9, 0)
+	l := wcLogLink("link 6", wcEdge)
+	ws.logEvents(l, now, wcOut{events: []wcEvent{{kind: wcEvFilled, from: 8 << 20, B: 8 << 20, n: 4, R: 260e6 / 8, T: 150 * time.Millisecond,
+		q: 15 * time.Millisecond, off: 64 * time.Second}}})
+	want := "mtcp: link 6: downloads fill the path at ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast connection(s)) — the window core's step only added queue; it stays off for 64 s"
+	if got := logs.all(); len(got) != 1 || got[0] != want {
+		t.Fatalf("lines %q, want %q", got, want)
+	}
+	if l.heldB != 0 {
+		t.Errorf("held %d, want none", l.heldB)
+	}
+	// within the "fill the path" line's cap per link
+	ws.logEvents(l, now.Add(30*time.Second), wcOut{events: []wcEvent{{kind: wcEvFilled, B: 8 << 20, n: 4, R: 260e6 / 8, T: 150 * time.Millisecond, off: 128 * time.Second}}})
+	if n := logs.count("fill the path"); n != 1 {
+		t.Errorf("a second one 30 s later: %d lines, want 1", n)
+	}
+}
+
 // The link-end notes: nothing for a core that never left OFF; what it did
 // otherwise, on the edge's linkStallNote and the exit's lines (cut back off
 // the reason for the reverse exit's).

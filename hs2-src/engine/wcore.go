@@ -118,10 +118,14 @@ type wcore struct {
 	// startOff: STARTUP began from OFF and no interval has judged its first
 	// step yet; fullAt, fullN: when that first step found the windows
 	// without the core past the knee (the rate did not follow it, the queue
-	// did), and with how many fast streams: harm holds OFF for wcFullOff
+	// did), and with how many fast streams: harm holds OFF for fullHold
+	// with as many or more; fullOffN: such findings in a row on the link,
+	// with no first step the rate followed between (the hold doubles with
+	// each)
 	startOff  bool
 	fullAt    time.Time
 	fullN     int
+	fullOffN  int
 	cleanRecs int // the exit's latest records in a row that showed no queue and no resends
 	// qOffSnd: the largest q_snd of the exit's latest records as the core
 	// left OFF (wcLongRTT: STARTUP's knee is a queue past it by Δq)
@@ -507,13 +511,23 @@ var (
 	// (wcStartFast of its growth) while the queue grew on a path with no holes
 	// found the windows without the core past the knee: what harm() stands
 	// for, by experiment rather than by a value. Back to OFF, and harm holds
-	// it there this long while F keeps its size. A path whose bursts swing
-	// the records' queue to 0 and back looks to harm like one with room: 4
-	// downloads on 300/150 (the model: 260 Mbit/s, all of the path, with
-	// records of 0 to 36 ms) left OFF on such a record, and in HOLD each
-	// probe "paid" (the bursts left q_turn where it was): B crept from 8 to
-	// 9.5 MiB with the rate at 260 Mbit/s, a drain from HOLD between.
-	wcFullOff = wcProbeBackMax
+	// it there this long while F keeps its size or grows. A path whose
+	// bursts swing the records' queue to 0 and back looks to harm like one
+	// with room: 4 downloads on 300/150 (the model: 260 Mbit/s, all of the
+	// path, with records of 0 to 36 ms) left OFF on such a record, and in
+	// HOLD each probe "paid" (the bursts left q_turn where it was): B crept
+	// from 8 to 9.5 MiB with the rate at 260 Mbit/s, a drain from HOLD
+	// between.
+	// wcFullOffMax: each finding in a row on the link doubles the hold, up
+	// to this (fullHold). Without it a path the windows fill, whose
+	// records' least of three dips under Δq now and then, had the trial
+	// again each 32 s for as long as the downloads ran: a step of ×1.25 to
+	// ×1.5 for an interval or two (a wave of queue each time) and a "fill
+	// the path" line (review, J2). At 256 s that is under 1% of the time,
+	// and a path that got room waits for the core at most as long (a first
+	// step the rate follows starts the count over).
+	wcFullOff    = wcProbeBackMax
+	wcFullOffMax = 8 * wcFullOff
 	// wcFloorQN: HOLD at the floor (n_F·c_min: in stage 1 the windows without
 	// the core) behind a queue that stood past qTarget + Δq for this many
 	// evaluations in a row starts no probe (and so no STARTUP after one):
@@ -753,6 +767,10 @@ type wcEvent struct {
 	q    time.Duration
 	loss float64
 	pool bool // capped: by the window pool
+	// off: filled by STARTUP's first step from OFF, which found the windows
+	// without the core past the knee: the core is OFF this long (fullHold)
+	// and holds no window
+	off time.Duration
 }
 
 // wcSig is the signal a drain came from.
@@ -3225,8 +3243,13 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 //     policer's, windows that overflow a queue, a slow start's overshoot:
 //     100/300 behind 50 ms started on a first record of 1.26% and the next
 //     came at 1.92%, in the model) and no policer met (policed);
-//   - STARTUP's first step from OFF found them past the knee within
-//     wcFullOff, with as many fast streams (startup);
+//   - STARTUP's first step from OFF found them past the knee within its
+//     hold (fullHold: wcFullOff, doubled for each such finding in a row),
+//     with as many fast streams or more (startup: each more adds its own
+//     windows without the core to what filled the path; with fewer, a
+//     trial may come at once). Held with as many only, F's count swinging
+//     by one (6 downloads on 300/150 behind 50 ms in the model) had the
+//     trial again 2 and 7 s after one (review, J2);
 //   - with no record to tell a queue from data held behind holes (the
 //     exit's side; an edge with an old exit never leaves OFF, off()): the
 //     windows hold wcPastKnee times what their rate needs (R_F·T_base +
@@ -3243,7 +3266,7 @@ func (c *wcore) harm(m wcMeas) bool {
 		return true
 	case c.sndRef.ok && c.sndRef.v > wcOffLoss && (c.offSteadyN < wcOffSteady || c.policed(m.at) || !c.offBurstAt.IsZero() && m.at.Sub(c.offBurstAt) < wcQcapTTL):
 		return true
-	case !c.fullAt.IsZero() && m.at.Sub(c.fullAt) < wcFullOff && len(m.f) == c.fullN:
+	case !c.fullAt.IsZero() && m.at.Sub(c.fullAt) < c.fullHold() && len(m.f) >= c.fullN:
 		return true
 	case !m.qSnd3OK && m.rF > 0 && m.wF >= wcPastKnee*(m.rF*c.tBase.Seconds()+m.hStep):
 		return true
@@ -3251,6 +3274,17 @@ func (c *wcore) harm(m wcMeas) bool {
 		return true
 	}
 	return false
+}
+
+// fullHold is how long harm holds OFF after STARTUP's first step found the
+// windows without the core past the knee: wcFullOff, doubled for each
+// finding in a row before it (fullOffN), up to wcFullOffMax.
+func (c *wcore) fullHold() time.Duration {
+	h := wcFullOff
+	for i := 1; i < c.fullOffN && h < wcFullOffMax; i++ {
+		h *= 2
+	}
+	return min(h, wcFullOffMax)
 }
 
 func (c *wcore) toOff() {
@@ -3447,10 +3481,13 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	pastCap := c.bCap > 0 && in.now.Sub(c.bCapAt) < wcQcapTTL && c.B >= c.bCap
 	first := c.startOff
 	c.startOff = false
+	if first && tracked {
+		c.fullOffN = 0 // (the windows without the core had room: fullHold)
+	}
 	if first && gB > 0 && !cong && qUp && !tracked && !m.holey && !m.grp && c.cfg.stage < 2 {
 		// the first step from the windows without the core: the rate did
 		// not follow it and the queue did, so they were past the knee
-		// already (harm, wcFullOff). (Not with other cores on the peer: the
+		// already (harm, fullHold). (Not with other cores on the peer: the
 		// queue is theirs too, and they hold the rate's share a late core's
 		// step asks for; back OFF, the 4th of 4 links on 1000/100 behind 200
 		// ms that came 30 s late kept 93 Mbit/s against the others' 241–274.
@@ -3461,8 +3498,11 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// is no step of the core's either; review, J1.)
 		c.cnt.grow++
 		c.pathFull = true
-		*ev = append(*ev, wcEvent{kind: wcEvFilled, from: c.prevB, B: c.prevB, n: len(m.f), R: m.rF, T: c.tBase, q: c.qTarget(in.now)})
+		c.fullOffN = min(c.fullOffN+1, 8)
 		c.fullAt, c.fullN = in.now, len(m.f)
+		// (its line says the core is off, and for how long: it holds no
+		// window, review J2)
+		*ev = append(*ev, wcEvent{kind: wcEvFilled, from: c.prevB, B: c.prevB, n: len(m.f), R: m.rF, T: c.tBase, q: c.qTarget(in.now), off: c.fullHold()})
 		c.toOff()
 		return
 	}
