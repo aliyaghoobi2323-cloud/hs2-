@@ -148,3 +148,118 @@ func TestWcoreS2HarmModel(t *testing.T) {
 		}
 	}
 }
+
+// TestWcoreS2FloorQueueNoProbe (judge p2): at the floor (B = n_F·need: in
+// stage 1 the windows without the core) behind a queue that stands past
+// qTarget + Δq, the base windows already fill the path and a probe only adds
+// queue: the rig's 8 downloads on 1000/100 held 16 MiB with q_snd at 24 to
+// 43 ms and probed to 18.2 MiB, 3.5% more rate for a p99 2.27 times base's.
+// Once two evaluations in a row showed such a queue (the exit's record, or
+// the link socket's own srtt past qTarget + wcDqOwn) no probe starts; off
+// the floor, or under that queue, a due probe does.
+func TestWcoreS2FloorQueueNoProbe(t *testing.T) {
+	ms := time.Millisecond
+	for _, tc := range []struct {
+		name       string
+		b          uint64        // B, one stream (the floor: need)
+		r          float64       // the link's rate (10 MB/s: HOLD's budget at the floor)
+		qSnd, qOwn time.Duration // qSnd 0: no record of the exit
+		probe      bool
+	}{
+		{"at the floor, the exit's record past qTarget+Δq", wtNeed, 10e6, 32 * ms, 1 * ms, false},
+		{"... the link's own srtt past qTarget+wcDqOwn, no record", wtNeed, 10e6, 0, 32 * ms, false},
+		{"at the floor, a queue under qTarget+Δq", wtNeed, 10e6, 18 * ms, 1 * ms, true},
+		{"off the floor (a queue there is HOLD's to drain)", 4 * wtMiB, 60e6, 32 * ms, 1 * ms, true},
+	} {
+		c, _ := wtHold()
+		c.rhat = c.rhat[:0]
+		c.noteRate(wtT0, tc.r)
+		in := wtIn(wtT0, 1, uint32(tc.b))
+		c.B, c.bPub, c.bGood = tc.b, tc.b, tc.b
+		// (the references hold the queue as HOLD found it: no growth)
+		c.qSndRef, c.qSndRefOK, c.qOwnRef = tc.qSnd, tc.qSnd > 0, tc.qOwn
+		probed := false
+		for i := 0; i < 3; i++ {
+			now := wtT0.Add(time.Duration(i) * time.Second)
+			in.now = now
+			if i == 2 {
+				c.probeAt = now // due at the third
+			}
+			m := wtMeas(1, tc.r, float64(tc.b))
+			m.at, m.qOK, m.qTurn = now, true, c.qRef
+			if tc.qSnd > 0 {
+				m.qSnd, m.qSndOK = tc.qSnd, true
+			}
+			m.qOwn, m.qOwnOK = tc.qOwn, true
+			var ev []wcEvent
+			c.hold(in, m, &ev)
+			if c.state == wcProbe {
+				probed = true
+				break
+			}
+			if c.state != wcHold {
+				t.Fatalf("%s: %v at evaluation %d, want HOLD", tc.name, c.state, i)
+			}
+		}
+		if probed != tc.probe {
+			t.Errorf("%s: probed %v, want %v (B %.2f MiB)", tc.name, probed, tc.probe, float64(c.B)/wtMiB)
+		}
+	}
+}
+
+// TestWcoreS2FloorQueueModel (judge p2): on the link model, one download on
+// 1000/100 and 7 more that join it at 10 s: 16 MiB of windows without the
+// core hold a standing queue of 30 to 40 ms there, and the core probed from
+// that floor to 16–18.1 MiB 8 to 12 times in 6 seeds. None starts at the
+// floor behind such a queue now.
+func TestWcoreS2FloorQueueModel(t *testing.T) {
+	for _, q := range []int{50, 100, 200} {
+		for seed := uint64(1); seed <= 3; seed++ {
+			c := wmPath(1000, wmMS(100), wmMS(q))
+			c.seed, c.mode = seed, wmCore
+			c.streams = make([]wmStreamCfg, 8)
+			for i := 1; i < len(c.streams); i++ {
+				c.streams[i].start = 10 * time.Second
+			}
+			// each HOLD evaluation: at the floor behind a queue past
+			// qTarget + Δq (the record's, or q_own's past qTarget + wcDqOwn)
+			floorQ := func(k *wcore) bool {
+				m, now, b := k.last, k.lastAt, k.B
+				if k.state == wcProbe {
+					b = k.probeFrom // (the evaluation that started it)
+				}
+				if floor := uint64(max(len(m.f), 1)) * uint64(k.cmin()); b > floor*21/20 {
+					return false
+				}
+				if q, ok := m.pathQueue(); ok && q > k.qTarget(now)+k.dq() {
+					return true
+				}
+				return m.qOwnOK && m.qOwn > k.qTarget(now)+wcDqOwn
+			}
+			var queued []bool
+			var bad []string
+			prev, lastEval := wcOff, time.Time{}
+			c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+				if k.lastAt != lastEval && (k.state == wcHold || prev == wcHold) {
+					lastEval = k.lastAt
+					queued = append(queued, floorQ(k))
+				}
+				if o.state == wcProbe && prev != wcProbe {
+					n := len(queued)
+					floor := uint64(max(len(k.last.f), 1)) * uint64(k.cmin())
+					if n >= 2 && queued[n-1] && queued[n-2] && k.probeFrom <= floor*21/20 {
+						bad = append(bad, fmt.Sprintf("%.1fs → %.1f MiB", at.Seconds(), float64(k.B)/wtMiB))
+					}
+				}
+				prev = o.state
+			}
+			r := wmRun(c)
+			name := fmt.Sprintf("1000/100 q%d 1+7 at 10 s s%d", q, seed)
+			if len(bad) > 0 {
+				t.Errorf("%s: probes from the floor behind a standing queue at %v (%.0f Mbit, interactive p99 %.0f ms)", name, bad, r.mbit, r.iP99)
+			} else {
+				t.Logf("%s: %.0f Mbit, resent %.2f%%, interactive %.0f/%.0f ms, probes %v", name, r.mbit, 100*r.resend, r.iP50, r.iP99, r.probes)
+			}
+		}
+	}
+}
