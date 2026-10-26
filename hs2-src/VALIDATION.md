@@ -484,20 +484,23 @@ V16 also: the six runs' Mbit/s and the interactive p50/p99 with the core on
 and off, the round trip between the servers (`ping`), the Iran server's
 `windows:` line, and the Kharej side's `pacing held` lines with timestamps.
 
-Release: binary build `a372b1301121` (source commit `a372b13`, static,
-`CGO_ENABLED=0`; `hs2 version` shows `build a372b1301121`).
+Release: binary build `1c23629533c9` (source commit `1c23629`, static,
+`CGO_ENABLED=0`; `hs2 version` shows `build 1c23629533c9`).
 
-This release: Phase Z5 step 1 (one connection past ~100 Mbit/s: the window
-core for the Iran server's downloads, the window pool, the 96-byte stats
-record and the Kharej server's pacing net; V16 above; `hs2 version` shows its
-build id), on top of Phases Z, Z2 and Z3 (V15). Built on the work branch
-`claude/smux-buffer-constants-fv9bu8` and, at the owner's request, on `main`
-too (fast-forwarded from `0812bc9` on 2026-10-25): a plain install or an
+This release: Phase Z5 step 2 (the window core on the real path: reordering
+answered only on loss the sender confirms, no false route change from slow
+sources, a sticky accepted route change, fast-set membership only with a held
+window, the pacing net's stale-cap fix and quiet sockets read once a second,
+the judge's P1–P3 and the post-merge review fixes; V16 above, with its new
+log lines and the new `windows:` line; `hs2 version` shows its build id), on
+top of Phase Z5 step 1 and Phases Z, Z2 and Z3 (V15). Built on the work branch
+`claude/smux-buffer-constants-fv9bu8` and on `main` (fast-forwarded once the
+field test against the previous release passed): a plain install or an
 Upgrade in the menu gets it; to pin this exact build, set `HS2_REPO_RAW` to
-the commit that carries this binary. Everything in
-these phases was measured on loopback rigs and simulators (BBR, Linux 6.x),
-not yet across the real Iran–abroad path. The previous release, binary build
-`ef2dffdbbb87` (Phases Z, Z2 and Z3; commit `c9825f2`), is the rollback
-target; before it `da621f5db2bb` (Phase CA + CA1b and Phase Y; `0812bc9`).
-See CHANGELOG (Q7, Q8, Phase V, Phase W, Phase X, Phase Y, Phase CA, Phase Z,
-Phase Z2, Phase Z3, Phase Z5 step 1) and `git log`.
+the commit that carries this binary. Measured on the real-TCP rig and the
+link model, and across the real Iran–abroad path against the previous release
+(CHANGELOG, Phase Z5 step 2, "Field"). The previous release, binary build
+`a372b1301121` (Phase Z5 step 1; commit `bfea5e8`), is the rollback target;
+before it `ef2dffdbbb87` (Phases Z, Z2 and Z3; `c9825f2`). See CHANGELOG (Q7,
+Q8, Phase V, Phase W, Phase X, Phase Y, Phase CA, Phase Z, Phase Z2, Phase Z3,
+Phase Z5 step 1, Phase Z5 step 2) and `git log`.
