@@ -200,13 +200,30 @@ cat > "$M/etc-hs2/hs2-lt2.json" <<EOF
 EOF
 chmod 600 "$M/etc-hs2/"*.json
 for u in hs2-lt1 hs2-lt2; do printf '[Service]\nExecStart=%s run -c %s\n' "$M/bin/hs2" "$M/etc-hs2/$u.json" > "$M/units/$u.service"; done
+# hs2-* units that are NOT tunnels (a monitor, hs2 run on a file that is no
+# tunnel config, another program given -c): never listed as tunnels
+printf '[Service]\nExecStart=/usr/local/sbin/hs2-mon\n' > "$M/units/hs2-mon.service"
+printf '{"foo": 1}\n' > "$M/etc-hs2/junk.json"
+printf '[Service]\nExecStart=%s run -c %s\n' "$M/bin/hs2" "$M/etc-hs2/junk.json" > "$M/units/hs2-junk.service"
+printf '[Service]\nExecStart=/usr/bin/python3 /opt/x.py -c %s\n' "$M/etc-hs2/hs2-lt1.json" > "$M/units/hs2-aaa.service"
+# a masked tunnel (a /dev/null link) whose config is still there counts; one without a config does not
+ln -s /dev/null "$M/units/hs2-lt9.service"; cp "$M/etc-hs2/hs2-lt2.json" "$M/etc-hs2/hs2-lt9.json"
+ln -s /dev/null "$M/units/hs2-gone.service"
+out=$(run "$M" 'echo "UNITS=[$(tm_units | tr "\n" " ")]"' "")
+check "tm_units: only the tunnels (hs2 run -c <tunnel config>, or masked with its config), not hs2-mon and the like" \
+  'echo "$out" | grep -qx "UNITS=\[hs2-lt1 hs2-lt2 hs2-lt9 \]"'
+rm -f "$M/units/hs2-lt9.service" "$M/etc-hs2/hs2-lt9.json"
 orig1=$(cat "$M/etc-hs2/hs2-lt1.json"); orig2=$(cat "$M/etc-hs2/hs2-lt2.json")
 want1="hs2://$(printf '%s' "192.0.2.10:2096|tunnel.example.com|$KEY|127.0.0.1:8443|mtcp|true|tcp|direct||||hs2-lt1|10.77.4.0" | base64 -w0)"
 want2="hs2://$(printf '%s' "192.0.2.10:2097|tunnel.example.com|$KEY|127.0.0.1:8443|l3mtcp|false|tun|direct|1320|tcp||hs2-lt2|10.77.8.0" | base64 -w0)"
 
 # pick 1 → endpoint (Enter = this server's first address + the listen port) → udp yes → save yes
 out=$(run "$M" "show_tunnel_link" "1\n\ny\ny\n")
-check "menu: lists the tunnels" 'echo "$out" | grep -q "1) hs2-lt1" && echo "$out" | grep -q "2) hs2-lt2"'
+check "menu: lists the tunnels, and only them" \
+  'echo "$out" | grep -q "1) hs2-lt1" && echo "$out" | grep -q "2) hs2-lt2" && ! echo "$out" | grep -q "hs2-mon\|hs2-junk\|hs2-aaa\|hs2-gone"'
+out2=$(run "$M" "tunnel_manager" "0\n")
+check "tunnel manager: lists only the tunnels" \
+  'echo "$out2" | grep -q "1) .*hs2-lt1" && ! echo "$out2" | grep -q "hs2-mon\|hs2-junk\|hs2-aaa\|hs2-gone"'
 check "menu: asks the endpoint with this server's address and the listen port as the default" 'echo "$out" | grep -q "\[192.0.2.10:2096\]"'
 check "menu: asks whether the Iran server forwards UDP" 'echo "$out" | grep -qi "forward.* UDP"'
 check "menu: shows the rebuilt link" '[ "$(linkof "$out")" = "$want1" ]'

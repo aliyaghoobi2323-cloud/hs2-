@@ -2599,15 +2599,33 @@ status_fresh(){
   [ $((now - upd)) -le 7 ]
 }
 
-# tm_units lists every tunnel (hs2.service first, then hs2-*.service by name).
-# A MASKED unit is a /dev/null symlink, not a tunnel file — it is listed too, so
-# setting one up again (which unmasks it) and the manager can see it.
+# tm_units lists every tunnel (hs2.service first, then hs2-*.service by name),
+# and only tunnels (tm_is_tunnel). A MASKED tunnel is a /dev/null symlink, not a
+# tunnel file — it is listed too while its config is there, so setting it up
+# again (which unmasks it) and the manager can see it.
 tm_units(){
-  local f
+  local f u
   for f in "$UNIT_DIR/hs2.service" "$UNIT_DIR"/hs2-*.service; do
-    { [ -f "$f" ] || [ -L "$f" ]; } && basename "$f" .service
+    { [ -f "$f" ] || [ -L "$f" ]; } || continue
+    u=$(basename "$f" .service)
+    tm_is_tunnel "$u" && echo "$u"
   done
   return 0
+}
+# tm_is_tunnel UNIT: the unit is an hs2 tunnel — its ExecStart runs the hs2
+# binary with -c <config>, and that config is a tunnel's ("mode" dial or
+# listen) — not another hs2-* unit on this server (a monitor, a timer job),
+# which the menus must neither list nor back up nor remove. A MASKED tunnel (a
+# /dev/null link) counts while its config is in place, so setup can unmask it.
+tm_is_tunnel(){ # unit
+  local f="$UNIT_DIR/$1.service" c
+  if [ -L "$f" ] && [ "$(readlink "$f" 2>/dev/null)" = /dev/null ]; then
+    c=$(unit_cfg "$1")
+  else
+    grep -Eq '^ExecStart=[-@+!:]*([^ ]*/)?hs2 (.* )?-c [^ ]' "$f" 2>/dev/null || return 1
+    c=$(tm_cfg "$1")
+  fi
+  [ -n "$c" ] && grep -Eq '"mode"[[:space:]]*:[[:space:]]*"(dial|listen)"' "$c" 2>/dev/null
 }
 tm_cfg(){ { sed -n 's/^ExecStart=.* -c \([^ ]*\).*/\1/p' "$UNIT_DIR/$1.service" 2>/dev/null || true; } | head -1; }
 tm_prop(){ systemctl show -p "$2" --value "$1" 2>/dev/null || true; }

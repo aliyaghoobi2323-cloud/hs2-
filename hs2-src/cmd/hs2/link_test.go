@@ -836,11 +836,27 @@ func TestLinkList(t *testing.T) {
 	unit("hs2", mc)
 	unit("hs2-de1", pc)
 	os.WriteFile(filepath.Join(units, "ssh.service"), []byte("[Service]\nExecStart=/usr/sbin/sshd -D\n"), 0644)
+	// hs2-* units that are not tunnels: a monitor, another program given -c,
+	// a binary only named like hs2, and hs2 run on a file that is no tunnel config
+	os.WriteFile(filepath.Join(units, "hs2-mon.service"), []byte("[Service]\nExecStart=/usr/local/sbin/hs2-mon\n"), 0644)
+	os.WriteFile(filepath.Join(units, "hs2-py.service"), []byte("[Service]\nExecStart=/usr/bin/python3 /opt/x.py -c "+pc+"\n"), 0644)
+	os.WriteFile(filepath.Join(units, "hs2-my.service"), []byte("[Service]\nExecStart=/opt/myhs2 run -c "+pc+"\n"), 0644)
+	junk := filepath.Join(dir, "junk.json")
+	os.WriteFile(junk, []byte(`{"foo": 1}`), 0600)
+	unit("hs2-junk", junk)
+	broken := filepath.Join(dir, "broken.json")
+	os.WriteFile(broken, []byte(`not json`), 0600)
+	unit("hs2-broken", broken)
 
-	code, out, _ := runLink(t, "", "--list")
+	code, out, errOut := runLink(t, "", "--list")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if code != 0 || len(lines) != 3 {
-		t.Fatalf("code=%d out=%q", code, out)
+	if code != 0 || len(lines) != 3 || errOut != "" {
+		t.Fatalf("code=%d out=%q err=%q", code, out, errOut)
+	}
+	for _, u := range []string{"hs2-mon", "hs2-py", "hs2-my", "hs2-junk", "hs2-broken"} {
+		if strings.Contains(out, u) {
+			t.Errorf("%s is not a tunnel, but listed", u)
+		}
 	}
 	for _, w := range []string{"hs2 ", mc, "exit", "dgtun", "direct", "makes", "needs: endpoint"} {
 		if !strings.Contains(lines[1], w) {
@@ -854,6 +870,20 @@ func TestLinkList(t *testing.T) {
 	}
 	if strings.Contains(out, "hs2://") || strings.Contains(out, tShared) {
 		t.Fatal("--list printed a link or a key")
+	}
+
+	// a tunnel whose config this user cannot read: not shown, said so, exit 4
+	old2 := linkReadFile
+	linkReadFile = func(p string) ([]byte, error) {
+		if p == pc {
+			return nil, &fs.PathError{Op: "open", Path: p, Err: fs.ErrPermission}
+		}
+		return old2(p)
+	}
+	defer func() { linkReadFile = old2 }()
+	code, out, errOut = runLink(t, "", "--list")
+	if code != 4 || strings.Contains(out, "hs2-de1") || !strings.Contains(out, mc) || !strings.Contains(errOut, "root") {
+		t.Fatalf("unreadable: code=%d out=%q err=%q", code, out, errOut)
 	}
 }
 
