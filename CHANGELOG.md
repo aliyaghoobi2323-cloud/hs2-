@@ -2451,6 +2451,239 @@ STARTUP on long round trips, recovery after a slowdown, idle sockets read less
 often by the net); **step 3** — the edge's socket record to the exit, the
 upload core on, and the net on the edge's link sockets.
 
+## Phase Z5 (step 2) — the real path: reordering that is not loss, slow sources that are not fast, route changes that hold
+
+Step 1 in the field (build `a372b1301121`, Iran–Kharej at 72–85 ms, core on
+and off in turn) took one download from 102 to 284 Mbit/s (medians) and four
+at once from 437 to 1005, with no cut, and the pacing net did not engage in
+those runs. But the real path showed three things the core read wrong. It
+reorders packets in bursts that grow with the rate (2.0% of packets behind
+holes at 300 Mbit/s, 6.1% at 600, 14.7% at 1.7 Gbit/s, up to 49% in half a
+second), which Linux RACK does not resend: nearly every back-off of the core
+was such a burst, each a cut to 2 MiB, with the exit resending nothing. Users'
+downloads from slow servers (12–27 Mbit/s) counted as fast connections: 12
+`fill the path` lines in an hour, and drains for 99–1630 ms of "queue". And
+the turnarounds of such slow streams read as route changes: 29 lines in an
+hour, 206–4230 ms, while the ping between the servers stayed at 72–81 ms. Each
+fix was built as two designs or several variants, chosen by a separate judge,
+attacked by a red team and reviewed again by an independent reviewer after
+the merge: first in the link model, which now has a RACK-like sender and the
+field's reordering profile, then on the real-TCP rig, which now replays that
+reordering (`Z5_REORDER*`, `docs/architecture/wip/rig-core/README.fa.md`),
+each cell against the branch before it with 3–5 interleaved runs. Design:
+`docs/architecture/WINDOW_CORE.fa.md` (§3.5, §4.5, §5.5, §5.6, §7.3).
+
+What changed:
+- **Holes on a clean path: loss confirmed by the sender** (`engine/wcore.go`:
+  `provSnap`, `judgeCut`, `undoCut`). The core still reacts to holes at once
+  (the `fastStop` cut, an evaluation's verdict on `Rcv_ooopack`): holding the
+  budget until the next record left a policer uncut for up to 2 s (the model's
+  "policer 300" cell resent 1.71% against 0.46%). But while the exit's records
+  arrive the reaction is provisional. The first record at least
+  2·max(T_base, the exit's srtt) + 100 ms after the last hole judges it: if
+  the exit resent more than its own level and spread, the cut stays with all
+  it learned; if not (and under 0.05%), the budget (within the window pool),
+  the ceiling, Q_cap, the probe backoff and the rate estimate come back, and
+  the link's reordering level rises (1.25× the share of a wake behind holes,
+  at most 75%), so holes as dense neither cut nor judge for 10 minutes (reset
+  by a route change or OFF). Only what the holes did is undone (red team and
+  post-merge review): loss learned from the exit's records stays; what a
+  paying probe or a lifted stale cap eased returns to the easier of the two;
+  a cut on RACK's spurious resends before its first DSACK is set aside for
+  10 s; nothing comes back after a drain for a queue or a slower path; a loss
+  record that came before the cut and was never judged keeps it. The exit
+  side and an edge whose exit records stopped or never came are unchanged.
+  Model gate (1000/72 with the field's reordering, RACK sender, median of 3
+  seeds): 282 → 722 Mbit/s (base 173, the core with no reordering 797). Rig,
+  the field's bursty reordering: 1000/72 235 → 548 Mbit/s (5 runs), a 2 Gbit/s
+  path 264 → 480; the red team's policer-with-reordering attacks on the rig
+  all faster than before.
+- **The pacing net's stale cap** (`engine/pacenet.go`). A policer that comes
+  in under a cap that binds builds no queue (the sender's own pacing, ~3.9×
+  its best rate, stays above the cap), so the cap stayed at 1.25× the rate
+  before the policer and the bursts overfilled its bucket. Now, when the last
+  second delivered under half what the cap was set for and the socket still
+  resends past the net's share, the cap comes down to 1.25× that delivery.
+  Model, the red team's policer sweep (270 runs): drains made with the core
+  only 20 → 10; 1000/150 behind a 30% policer resends 13.6 → 7.5% (the
+  field's reordering) and 15.6 → 7.1%. The post-merge review fixed its
+  flip-flop: the rule is judged against the cap the reading itself sets, so
+  the cap stays down while the resends go on (before, it jumped between 125
+  and 1000 Mbit/s every 100 ms, 11 `setsockopt` calls in that second; drains
+  in the sweep 10 → 12, within the model's spread).
+- **Fast connections only with evidence that the window holds them** (FM2;
+  `measure`, `evidence`). A download whose server sends slowly turns its
+  window in (window − step)/rate, so "rate × turnaround" comes out near the
+  window by itself, the source's pauses fall on the limit as "hits", and the
+  60 s turnaround floor is built from such streams when a link carries
+  nothing else. Now a stream stays in the fast set only while its least
+  turnaround in the period is within the path (floor + the largest unbiased
+  queue + slack, slack = max(T_base, target + probe) + Δq) and, past a quarter
+  of the slack, it moved at least half of (window − step/2) in it, the window
+  counted at most at the need (past the need the rate test alone is evidence,
+  so a download held by the exit's CPU stays fast). It is judged only on a
+  clean path, not in or right after a link-rate dip (the sender's
+  PROBE_RTT), not within 3 T_base of a budget rise, and not while the path
+  holds the exit's sender (its smux writer waiting behind the socket, plus
+  its resends, for half a record's span or more, from the writer's blocked
+  time every exit's record already carries). A stream judged without evidence
+  leaves the queue and hit references at once and the fast set after two such
+  periods; one under a quarter of the link's fastest stream for two periods
+  leaves too, holes or not; the core leaves OFF only while no fast stream
+  lacks evidence. Model: a 600-run slow-source sweep (8–40 Mbit/s sources on
+  100–1000 Mbit/s paths at 50–150 ms) 556 → 18 unhealthy runs, a drain or cut
+  in 289 → 4, `fill the path` in 305 → 7 (the 18 left: 40 Mbit/s sources at
+  100–150 ms); a download held by the exit's CPU 670–689 → 728 Mbit/s (base
+  728); a slow source beside a download on 1 Gbit/s with 0.1% loss, the
+  download 159 → 268 (~297 alone). Rig: a 14 Mbit/s source counted fast in
+  176 evaluations → 0; clean and lossy paths no slower.
+- **Route changes** (`notePaths`). False ones: the turnaround floor sampled
+  slow-source streams, whose turnaround is the time their source takes to
+  reach the old limit, and with little exit queue that read as a route
+  change. A route change now also needs the exit's own srtt to have reached
+  the new path to within a quarter of the rise (`sndAllows`); while its
+  records do not come, the previous decision stands (the judge's pick of
+  three variants; clearing the floor instead moved 11 lossy model cells and
+  took step 1's whole gain at 1000/100 with 3% loss, 19.4 → 16.7). Real ones
+  now hold: T_base was rebuilt at each evaluation and kept the longer path
+  only while the exit's queue stayed under Δq, so the first queue on it (the
+  core's own growth, a probe) dropped it back to the stale min_rtt (up to 5
+  minutes old) and the core drained the whole rise as queue. The path taken
+  (`routeT`) is now kept until evidence shows it came back (the turnaround
+  floor back within 1.3× min_rtt, the socket's min_rtt moving by more than
+  Δq, or a fresh exit record whose srtt is under the longer path), and never
+  taken above the last exit record's srtt (red team: the floor carried the
+  core's own standing queue, 300 → 330 → 360 ms with the exit's srtt at 302).
+  Model, 180 runs of five route changes: 176.7 → 186.5 Mbit/s over seconds
+  80–160, runs where T_base fell back 61 → 0, drains after the change
+  311 → 222; the red team's 216-run sweep: runs with T_base above the path
+  (by more than max(5 ms, 10%)) for over 5 s 5 → 0.
+- **Quiet sockets read once a second** (the step-1 judge's fifth fix;
+  `engine/pacenet.go`). The net read every exit link socket's TCP_INFO every
+  100 ms, idle links too (~3000 calls a second at 300 links). A socket with
+  no cap that over its idle span had under 8 KiB acknowledged and written,
+  and sent fewer than 8 data segments (resends count: a socket sending into a
+  dead path is not quiet), is now read once a second, and at once when its
+  link's write counter shows 8 KiB written. 300 idle links: 3000 → 300 reads
+  a second, one wake 690–880 → 84–97 µs, 324 → 44 allocations, 105 → 11 KB;
+  the model's sweeps and 432 dead-path runs make the same decisions as
+  reading at every wake.
+- **Smaller fixes from the reviews.** The exit's record counts a write still
+  blocked when the record is taken (one taken mid-stall read ~0 before); two
+  records merged in one period keep the larger blocked time; a loss record is
+  marked unjudged only once the exit's resend level is learned.
+- **The step-1 reviewer's notes.** The status line shows what the pool has
+  given out (below). Borrowing stays outside the per-session share, by
+  decision: a session that borrows cannot tell "alone in trouble" from
+  "leaving others without a pool later", and each share tried either left a
+  lone link stalled (5 s and 10 s in the tests) or gave nothing back. It is
+  bounded (a session holds at
+  most its share in claims, plus borrowMax × its buffer and one piece: one
+  link takes in full only pools up to ~34 MiB, on 64 MiB at least 15 stay for
+  the others), costs the other links nothing worse than base (a window up to
+  the need, then waiting for the reader), and comes back as the data is read
+  or the frozen streams close (`WINDOW_CORE.fa.md` §4.5).
+<!-- P14-BEGIN -->
+- **The step-1 judge's fixes P1–P4** (`engine/wcore.go`; link model, 6–8
+  seeds; the judge, red team and rig measurement of these four are not
+  finished).
+  - "First, do no harm" judges what stays, not one sample: for queue the core
+    stays OFF only when all of the exit's last three records show one over Δq;
+    a first STARTUP step from OFF that brought queue and no rate (a hole-free
+    path, no other core of the peer on) goes back to OFF for 32 s; a loss
+    level over 1.5% keeps it off, between 1% and 1.5% it turns on only when two
+    records in a row after the first find the level steady within its binomial
+    spread (random loss), and bursty loss (a record over 1.5% or above the
+    level by its spread) keeps it OFF at any level. 1000/100 with 1% loss on in
+    7 → 8 of 8 seeds; 300/100 with 1% 50.0 → 55.2 Mbit/s (base 49.6); 300/72
+    with the field's reordering and a 50 ms queue, where the core stayed off,
+    140 → 239 (resends 0 → 0.14% with RACK); the cost: the p99 of a user beside
+    a download in lossy cells where the core is now on (model cells meeting
+    every target 31 → 28 of 85).
+  - At the floor behind a standing queue (over target + Δq for 2 evaluations)
+    HOLD starts no probe (on the rig 8 downloads on 1000/100 had probed to
+    18.2 MiB for 3.5% more with p99 2.27× base): probes from the floor behind
+    a standing queue 13 → 0 (1000/100 with a 200 ms queue, 7 downloads
+    joining).
+  - On long round trips a record with a queue over 5 ms but within Δq of what
+    the windows left without the core, and no resends, holds the budget
+    instead of ending STARTUP (on the rig one 6.4 ms record had ended it at
+    2 MiB on 1000/500): 300/500 with a 200 ms queue 47 → 74% of N4's gain,
+    200/500 with the same queue 22 → 44% (cells meeting every target
+    28 → 29); 300/500 with a 50 ms queue resends 1.16 → 1.89% (base 0).
+  - After a slowdown the rate of the slow period itself (2 s after the loss
+    point, not a dip the core made) is kept with the ceiling that came with a
+    queue; when HOLD carries over 1.15× it for 2 evaluations with an empty
+    queue, the ceiling and the probe backoff are cleared and a probe comes at
+    once (never after a policer's signature): 300 → 50 → 300 back to 90%
+    within 10 s in 9 → 10 of 12 seeds; on steady paths it fires in 4 of 432
+    runs; 1000 → 300 → 1000 behind a 20 ms queue still 1 of 12 (the judge
+    asked for 5 of 6).
+<!-- P14-END -->
+
+Status and logs (exact formats: `hs2-src/VALIDATION.md`, V16):
+- `hs2 status`: `windows: fast connections: N (windows X MiB) · pool U of Y
+  MiB in use (grown windows W MiB, borrowed B MiB)` — X the windows the core
+  lets grow, U all the pool has given out (every link of the process), W
+  those windows' part past the base 2 MiB (a window still at 2 MiB takes
+  nothing), B the rest, borrowed by link buffers that ran full. Build
+  `a372b1301121` shows `… (windows X MiB of Y MiB pool)`, whose MiB are the
+  windows themselves; the prefix `fast connections: N (windows X MiB` is the
+  same.
+- Edge: `mtcp: link N: the other server resent 0.002% — the holes were
+  reordering, not loss; download windows back 2.0 MiB → 8.0 MiB` (at most once
+  per link per 30 s; past 8 links a minute `mtcp: window core: N more link(s)
+  took back K drain(s) for holes in the last minute (the other server resent
+  no more than its level: reordering)`). A drain for holes (`packets arrived
+  behind holes …`) now waits for the exit's next record (~2 s), which keeps
+  it or takes it back.
+- Link-end note (edge): `…, drained 3 time(s) for queue, 5 for loss (2 of them
+  for holes taken back: the other server resent no more than its level;
+  reordering level 60%), held by the window pool 0 time(s)` — `for loss` now
+  counts the drains later taken back too; the parenthesis only when one was.
+- Nothing new on the wire and no new knob; old and new peers, upgrade order
+  and the switches as in step 1.
+
+Field: FIELD_PLACEHOLDER
+
+Not in step 2 (the owner's decisions, 2026-10-26):
+- **Credit-wave damping** (ceilings below 2 MiB, a pacing cap that depends on
+  the queue): the tail latency it was for did not show in the field (four
+  downloads: the interactive user's p99 +105 ms over the floor with the core,
+  +136 ms without), the net already treats base's resends on shallow queues,
+  and its cost is real (up to 8× the window updates per byte, HOLD at a
+  256 KiB floor when STARTUP did not pay, a stream wrongly counted fast
+  choked). Ceilings below the need stay behind the lab knob
+  `HS2_TUNE_WCORE_STAGE=2`, looked at again if the field shows the tail after
+  this install; step 1's speed-swing finding (users on other links while the
+  path swings 300 ↔ 60 Mbit/s) stays open with it.
+- **The half-window lock** (a window W updated every W/2 keeps at most W/2 in
+  flight: 1 MiB a round trip, 102–112 Mbit/s at 75–82 ms, exactly the runs
+  without the core, and where every cut to 2 MiB lands). H2, a "need + step"
+  window from the pool, stays on branch `s2-hw2-fin`: no gain on large-BDP
+  paths with the core on (1000/72 679 against 689; with the field's
+  reordering 617 against 612), and a worse p99 on mid-BDP paths (300/50
+  +30 ms, 150/72 +94 ms with 2% resends). H1, a finer step, was dropped for
+  four times the window updates per MiB and its latency.
+- **Step 3** (the edge's socket record to the exit, the upload core, the net
+  on the edge) starts only on the owner's word.
+
+Open:
+- A policer that arrives on a short (20 ms) reordering path takes the run's
+  resends to ~1.7% (under the loss rule's 12%): there the holes are no sign
+  and only the exit's record, every ~2 s, sees the loss. The cure, a faster
+  stats record, changes the traffic's shape and is the owner's call.
+- Mid-band sources (100–200 Mbit/s) whose window passed the need stay in the
+  fast set (FM2 review, M1); a slow source alone on a lossy link is not
+  judged (0.1% loss: in the fast set in 52% of evaluations).
+- A second, longer route change on top of the first is not taken until
+  min_rtt renews (up to 5 minutes on Linux).
+- The exit's upload core (lab only) has no "the path holds the sender" guard
+  under FM2: for step 3.
+- Flaky under concurrent load, on base too: `TestDgPortsUDPFlowFollowsState`,
+  `TestPortRoutesEndToEnd`, `TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo`
+  and udpcarrier's `TestLabBursty26` — for Z8.
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

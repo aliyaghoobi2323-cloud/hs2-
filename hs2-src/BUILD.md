@@ -226,7 +226,7 @@ carries) and the exit's pacing net (`engine/pacenet.go`):
 | `HS2_TUNE_WCORE_QTARGET` | 15 ms (exit side 10) | ms of standing queue the core keeps in HOLD |
 | `HS2_TUNE_WCORE_PROBEQ` | 20 ms (exit side 15) | ms of queue one probe adds |
 | `HS2_TUNE_WCORE_UPLOAD` | 0 | lab only: 1 gives the exit a core for its uploads too. Off until step 3 sends the exit a record of the edge's socket: without one that core cannot see a per-connection policer (the edge's download core likewise starts only once the exit's 96-byte stats record arrives, so an old exit leaves the windows as without the core) |
-| `HS2_TUNE_WCORE_STAGE` | 1 | lab only: 2 lets ceilings go below the need once the core found the path full (step 2, not yet measured) |
+| `HS2_TUNE_WCORE_STAGE` | 1 | lab only: 2 lets ceilings go below the need once the core found the path full (left out of step 2 by the owner's decision, 2026-10-26: CHANGELOG, Phase Z5 step 2) |
 | `HS2_TUNE_WCORE_TRACE` | none | lab only: a file that gets one JSON line per link per evaluation |
 | `HS2_TUNE_WCORE_FIXEDWIN` | 0 | lab only: bytes; every large stream held at that window instead of the core's decision, still traced |
 | `HS2_TUNE_WCORE_PACECAP` | 0 (off) | lab experiment: each end caps its link socket's pacing (`SO_MAX_PACING_RATE`) at x times its own delivery rate, and, while the path shows no queue, never under what the peer's windows allow per round trip; takes the pacing net's place while on |
