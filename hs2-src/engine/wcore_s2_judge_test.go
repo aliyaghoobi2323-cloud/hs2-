@@ -555,4 +555,31 @@ func TestWcoreS2FirstStepTrialBackoff(t *testing.T) {
 	if h, _, _ := trial(c, t1.Add(2*sec), 1); h != 2*wcFullOff {
 		t.Errorf("a finding with 2 fast streams, then at once one with 1: hold %v, want %v", h, 2*wcFullOff)
 	}
+
+	// "in a row" is within a hold of the previous one's end: on a link that
+	// lives for hours the count reached 4 in a busy hour, and an hour later,
+	// after a first step neither the rate nor the queue followed (STARTUP
+	// went on, nothing reset), the next finding held 256 s at once (review
+	// of J2, j1)
+	c, _ = wtOffRecs(100*ms, 1, 1, 1)
+	at = wtT0
+	for i := 0; i < 4; i++ {
+		_, at, _ = trial(c, at, 1)
+	}
+	at = at.Add(time.Hour)
+	wtFirstStep(c, at, 1, -1)
+	wtStep1(c, at.Add(2*sec), 1, 20e6, 0, true)
+	if c.state != wcStartup {
+		t.Fatalf("an hour on, a first step the rate did not follow and no queue came of: %v, want STARTUP on", c.state)
+	}
+	c.toOff()
+	if h, _, _ := trial(c, at.Add(10*sec), 1); h != wcFullOff {
+		t.Errorf("four findings, then one an hour later: hold %v, want %v", h, wcFullOff)
+	}
+	// ... and one a hold past the previous hold's end is still in a row
+	c, _ = wtOffRecs(100*ms, 1, 1, 1)
+	h1, end1, _ := trial(c, wtT0, 1)
+	if h, _, _ := trial(c, end1.Add(h1-3*sec), 1); h != 2*wcFullOff {
+		t.Errorf("a finding %v after the previous hold ended: hold %v, want %v", h1-sec, h, 2*wcFullOff)
+	}
 }

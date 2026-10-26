@@ -119,9 +119,9 @@ type wcore struct {
 	// step yet; fullAt, fullN: when that first step found the windows
 	// without the core past the knee (the rate did not follow it, the queue
 	// did), and with how many fast streams: harm holds OFF for fullHold
-	// with as many or more; fullOffN: such findings in a row on the link,
-	// with no first step the rate followed between (the hold doubles with
-	// each)
+	// with as many or more; fullOffN: such findings in a row on the link
+	// (each within a hold of the previous hold's end), with no first step
+	// the rate followed between (the hold doubles with each)
 	startOff  bool
 	fullAt    time.Time
 	fullN     int
@@ -525,7 +525,8 @@ var (
 	// ×1.5 for an interval or two (a wave of queue each time) and a "fill
 	// the path" line (review, J2). At 256 s that is under 1% of the time,
 	// and a path that got room waits for the core at most as long (a first
-	// step the rate follows starts the count over).
+	// step the rate follows starts the count over, and so does a finding
+	// more than a hold after the previous hold ended).
 	wcFullOff    = wcProbeBackMax
 	wcFullOffMax = 8 * wcFullOff
 	// wcFloorQN: HOLD at the floor (n_F·c_min: in stage 1 the windows without
@@ -3498,6 +3499,12 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 		// is no step of the core's either; review, J1.)
 		c.cnt.grow++
 		c.pathFull = true
+		if !c.fullAt.IsZero() && in.now.Sub(c.fullAt) > 2*c.fullHold() {
+			// (in a row only within a hold of the previous hold's end: on a
+			// link that lives for hours the count of a busy hour held the
+			// first finding hours later 256 s at once; review of J2, j1)
+			c.fullOffN = 0
+		}
 		c.fullOffN = min(c.fullOffN+1, 8)
 		c.fullAt, c.fullN = in.now, len(m.f)
 		// (its line says the core is off, and for how long: it holds no
