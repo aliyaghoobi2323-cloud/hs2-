@@ -2593,8 +2593,9 @@ What changed:
     first STARTUP step is the smallest (×1.25). A first step from OFF that was
     taken and brought queue but no rate (a hole-free path, no other core of
     the peer on) shows the windows without the core already past the knee:
-    back to OFF for 32 s, doubled on each repeat on the link up to 256 s,
-    reset by a first step the rate followed. Loss: a level over 1.5% keeps
+    back to OFF for 32 s, doubled with each such finding within a hold of
+    the previous one's end, up to 256 s, and reset by a first step the rate
+    followed. Loss: a level over 1.5% keeps
     the core off; between 1% and 1.5% it turns on only when two records in a
     row after the first find the level steady within its binomial spread
     (random loss); bursty loss (a record over 1.5% or above the level by its
@@ -2626,7 +2627,9 @@ What changed:
     trial only on a step actually taken and with the fast set unchanged
     (J1); and the trial's backoff and its own log line (J2: it repeated
     every ~32 s with a `window held` line while the core went OFF; trials to
-    OFF in 300 s on 300/100 with 3 downloads, 4 seeds, 19 → 14).
+    OFF in 300 s on 300/100 with 3 downloads, 4 seeds, 19 → 14; then a
+    finding counts as in a row only within one hold after the previous hold
+    ended, and the line gives the windows the downloads ran on).
   - Model cells meeting every target 31 → 29 of 85 (the cost: the p99 of a
     user beside a download in lossy cells where the core is now on). Rig,
     P1–P4 as first built against the branch before them (medians of 3
@@ -2635,8 +2638,16 @@ What changed:
     50 ms queue 84 → 85 Mbit/s with the interactive p99 266 → 128 ms
     (resends 0.16% → 0); 1000/500 with a 50 ms queue 35 → 136 (runs
     35/161/33 → 162/136/35); 300/500 with a 200 ms queue 90 → 142. The final
-    candidate (P1–P3 with the review's fixes) is measured with the release:
-    RIG_P13F_PLACEHOLDER.
+    candidate (`47c0c9c`; the later fixes changed only the trial's backoff
+    and log text), 3 interleaved runs against the same branch: 300/50
+    203 → 257 Mbit/s (1.27×); 1000/500 120 → 156 (1.31×); 300/500 with a
+    200 ms queue 100 → 120 (1.19×); 1000/100 with 1% loss 250 → 270 (the
+    least of six runs: 80 for the branch over both measurements, 238 for the
+    P1 builds); 4 downloads on 1000/100 with a 10 ms queue 666 → 694;
+    100/100 with a 50 ms queue, over 40 s and 120 s, the same, the core never
+    standing in OFF. The judge: met, with notes (Open). The interactive p99
+    on 300/50 was 88–150 ms against 79–84 in the branch's runs with the core
+    on (the STARTUP transition; within step 1's accepted tail latency).
 
 Status and logs (exact formats: `hs2-src/VALIDATION.md`, V16):
 - `hs2 status`: `windows: fast connections: N (windows X MiB) · pool U of Y
@@ -2661,7 +2672,8 @@ Status and logs (exact formats: `hs2-src/VALIDATION.md`, V16):
 - Edge, the first-step trial (J2): `mtcp: link N: downloads fill the path at
   ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast
   connection(s)) — the window core's step only added queue; it stays off for
-  64 s` (within the `fill the path` line's cap, once a minute per link).
+  64 s while 4 or more run` (the windows the downloads ran on as the core
+  left OFF; within the `fill the path` line's cap, once a minute per link).
 - Nothing new on the wire and no new knob; old and new peers, upgrade order
   and the switches as in step 1.
 
@@ -2690,10 +2702,10 @@ Not in step 2 (the owner's decisions, 2026-10-26):
   `s2-p14-red`, `d721a13` and its fix `76a3ca4`), by the separate judge's
   verdict: on the current base the rig's 300 → 50 → 300 on 150 ms already
   recovers to 90% within 10 s in 9 of 9 runs; its gain shows only in the
-  model and is small (60 seeds, 1000 → 300 → 1000 behind a 50 ms queue: back
+  model and is small (model, 60 seeds, 1000 → 300 → 1000 behind a 50 ms queue: back
   within 10 s in 42 → 51 of 60, 487 → 507 Mbit/s); and it costs on a path
-  whose speed swings (120 seeds, 1000 ↔ 300 on 100 ms with a 200 ms queue:
-  median p99 539 → 657 ms). The branch stays for later work.
+  whose speed swings (1000 ↔ 300 on 100 ms with a 200 ms queue:
+  median p99 539 → 657 ms; model, 120 seeds). The branch stays for later work.
 - **Step 3** (the edge's socket record to the exit, the upload core, the net
   on the edge) starts only on the owner's word.
 
@@ -2713,10 +2725,24 @@ Open:
   and 100/150 with a 50 ms queue: in the model (120 s, 100 seeds) 27 and 44
   of 100 runs with the interactive p99 over 800 ms (base 0 and 22). This is
   step 1's behaviour (`a372b13` the same); step 2 does not change it.
-- The gain lost on 100/300 with a 50 ms queue (model 51.5 → 40.1 Mbit/s, base
+- The gain lost on 100/300 with a 50 ms queue (model, 30 seeds: 51.5 → 40.1 Mbit/s, base
   37.0), where "first, do no harm" now keeps the resends lower (1.26 →
   0.58%); the p99 about 10% higher in lossy and long-round-trip cells
-  (within the criterion).
+  (model, 30 seeds; within the criterion).
+- The judge's notes on the final candidate: the first-step trial gave a
+  wrong finding on 300/50 in 1 of 3 rig runs and kept the core off ~38 s
+  (264–267 Mbit/s after it) — the backoff bounds the cost, the model does
+  not build the case, and the field watches the `stays off for` count; the
+  floor rule's `wcFloorQN` counts evaluations, not records (review of J2,
+  item 3: conservative, a probe 4–8 s later); the p99 of 4 downloads on
+  1000/100 with a 10 ms queue about 15–20% higher on the rig (the model the
+  same; rig noise, in the judge's view).
+- In the settle part of the first interval after OFF, `step()` calls only
+  `settled()`, so a connection joining or leaving the fast set there goes
+  unseen (the branch for a changed set and the clearing of `startOff` do not
+  run in it): a step may count as followed and reset the trial's backoff
+  count for nothing, or a finding may be logged with fewer connections and
+  larger windows. Small and harmless (reviewer's note, from the code).
 - Flaky under concurrent load, on base too: `TestDgPortsUDPFlowFollowsState`,
   `TestPortRoutesEndToEnd`, `TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo`
   and udpcarrier's `TestLabBursty26` — for Z8.
