@@ -123,6 +123,9 @@ type wcore struct {
 	fullAt    time.Time
 	fullN     int
 	cleanRecs int // the exit's latest records in a row that showed no queue and no resends
+	// floorQN: HOLD's evaluations in a row at the floor behind a queue that
+	// stands past qTarget + Δq (floorQueued): from wcFloorQN no probe starts
+	floorQN int
 	// prov: what holes alone did to B where the exit's records judge loss
 	// (sndJudges), until one does (judgeCut), with what the core had before,
 	// to take back; weak: one that stood on a small loss of the sender's
@@ -508,6 +511,16 @@ var (
 	// probe "paid" (the bursts left q_turn where it was): B crept from 8 to
 	// 9.5 MiB with the rate at 260 Mbit/s, a drain from HOLD between.
 	wcFullOff = wcProbeBackMax
+	// wcFloorQN: HOLD at the floor (n_F·c_min: in stage 1 the windows without
+	// the core) behind a queue that stood past qTarget + Δq for this many
+	// evaluations in a row starts no probe (and so no STARTUP after one):
+	// the windows without the core already fill the path, and a probe only
+	// adds queue. The rig's 8 downloads on 1000/100 held 16 MiB with q_snd at
+	// 24 to 43 ms and probed to 18.2 MiB: 3.5% more rate for a p99 2.27
+	// times base's (judge, p2); in the model 7 downloads that join one at 10
+	// s on 1000/100 probed from 16 to 16–18.1 MiB behind 36 ms 8 to 12 times
+	// in 6 seeds.
+	wcFloorQN = 2
 	// wcPastKnee: the base windows hold this many times what their rate
 	// needs in a round trip and a step (R_F·T_base + H_step) or more: they
 	// are past the knee already. With no record of the exit to tell a queue
@@ -3236,6 +3249,7 @@ func (c *wcore) toOff() {
 	}
 	c.state = wcOff
 	c.startOff = false
+	c.floorQN = 0
 	c.offSteadyN = 0 // (the level is the core's budgets' until records of the windows without it judge it)
 	c.B = 0
 	c.rAvg = 0
@@ -3806,7 +3820,18 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.wlN >= 3 && !(m.qOK && m.qTurn > c.qRef+dq/2) && clean && now.Sub(c.bCapAt) >= wcCapStale) {
 		c.bCap, c.backoff, c.relaxAt = 0, 0, now
 	}
-	if c.backoff == 0 && (c.wlN >= 2 || (m.qOK && c.qRef > dq && m.qTurn < c.qRef-dq)) && c.probeAt.After(now) {
+	if c.floorQueued(now, m) {
+		c.floorQN++
+	} else {
+		c.floorQN = 0
+	}
+	full := c.floorQN >= wcFloorQN // (wcFloorQN)
+	if full && !now.Before(c.probeAt) {
+		// a probe due is put off, not kept due: HOLD refreshes its queue
+		// only between probes (a probe kept due held the refresh off)
+		c.schedProbe(now)
+	}
+	if c.backoff == 0 && (c.wlN >= 2 || (m.qOK && c.qRef > dq && m.qTurn < c.qRef-dq)) && c.probeAt.After(now) && !full {
 		c.probeAt = now
 	}
 	hold := c.bHold(now, m)
@@ -3822,7 +3847,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	// behind 200 ms probed the shared queue from 15 to 30 ms and drained it
 	// back, each every 4 s, in the model)
 	_, shared := c.fairShare(now, m)
-	if _, clean := c.longGrow(m); !now.Before(c.probeAt) && !in.apProbing && !c.capped && !c.burstHeld && c.holdN >= 2 && m.sameF && !testing && clean && !shared && !c.aboveShare(now, m) {
+	if _, clean := c.longGrow(m); !now.Before(c.probeAt) && !in.apProbing && !c.capped && !c.burstHeld && c.holdN >= 2 && m.sameF && !testing && clean && !shared && !c.aboveShare(now, m) && !full {
 		pr := c.bProbe(now, m, hold)
 		if in.poolFree < 0 || uint64(in.poolFree) >= pr-hold {
 			c.state = wcProbe
@@ -3842,6 +3867,20 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.probeAt = now.Add(wcProbeMin)
 	}
 	c.setB(in, m, hold)
+}
+
+// floorQueued: B is at the floor (n_F·c_min) and a signal with no bias
+// shows a queue past qTarget + Δq: the exit's record (the path's queue by
+// every link's, with other cores on the peer: what they hold together is
+// qTarget), or the link socket's own srtt past qTarget + wcDqOwn (wcFloorQN).
+func (c *wcore) floorQueued(now time.Time, m wcMeas) bool {
+	if floor := uint64(max(len(m.f), 1)) * uint64(c.cmin()); c.B > floor*21/20 {
+		return false
+	}
+	if q, ok := m.pathQueue(); ok && q > c.qTarget(now)+c.dq() {
+		return true
+	}
+	return m.qOwnOK && m.qOwn > c.qTarget(now)+wcDqOwn
 }
 
 // slowed says whether the path got slower than R̂: the link's rate of the
