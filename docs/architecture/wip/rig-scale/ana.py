@@ -12,7 +12,8 @@ the mixes, their windows and the verdicts are defined in one place.
 Definitions (REDESIGN.fa.md section 5.1 and 6):
   capacity  the bottleneck's TCP payload rate: rate x 1448/1514 (MSS 1448 with
             timestamps; htb counts the 1514 B Ethernet frame). rate = RATE, or
-            min(RATE, AR) with MODE=agg:AR; MODE=police:PR: min(RATE, N x PR).
+            min(RATE, AR) with agg:AR in MODE; with police:PR in MODE the
+            capacity is also at most N x PR (MODE=police:PR+agg:AR: both).
   RTT_floor p1 of the probe over the whole measured span of the same run (for
             the TUN ping: p1 of the TUN ping itself).
   (a) the lone user (16 connections) >= 0.95 x capacity
@@ -73,6 +74,20 @@ def num(d, k, default=None):
     return float(v) if ("." in v or "e" in v) else int(v)
 
 
+def parse_mode(m):
+    """MODE = [police:PR+]LEAF or LEAF[+police:PR]; LEAF = fqcodel | pfifo:L | agg:AR.
+    Returns (PR or None, LEAF), or None when malformed."""
+    pol, leaf = None, None
+    for p in m.split("+"):
+        if re.match(r"^police:\d+(\.\d+)?$", p) and pol is None:
+            pol = float(p[7:])
+        elif re.match(r"^(fqcodel|pfifo:\d+|agg:\d+(\.\d+)?)$", p) and leaf is None:
+            leaf = p
+        else:
+            return None
+    return pol, leaf or "fqcodel"
+
+
 # ------------------------------------------------------------------ schedule
 
 def schedule(plan, reps):
@@ -88,8 +103,8 @@ def schedule(plan, reps):
             die("%s:%d: missing %s" % (plan, ln, " ".join(miss)))
         if d["MIX"] not in MIXES:
             die("%s:%d: MIX %s (one of %s)" % (plan, ln, d["MIX"], " ".join(MIXES)))
-        if not re.match(r"^(fqcodel|pfifo:\d+|police:[\d.]+|agg:[\d.]+)$", d["MODE"]):
-            die("%s:%d: MODE %s" % (plan, ln, d["MODE"]))
+        if parse_mode(d["MODE"]) is None:
+            die("%s:%d: MODE %s (fqcodel, pfifo:L, police:PR, agg:AR, police:PR+LEAF)" % (plan, ln, d["MODE"]))
         if d["BIN"] not in ("old", "new"):
             die("%s:%d: BIN %s (old or new)" % (plan, ln, d["BIN"]))
         v6 = int(d.get("V6", "0"))
@@ -390,17 +405,17 @@ def compose(r, ok, why):
 
 def rate_eff(rec):
     r = float(rec["RATE"])
-    m = rec["MODE"]
-    if m.startswith("agg:"):
-        r = min(r, float(m[4:]))
+    pol, leaf = parse_mode(rec["MODE"])
+    if leaf.startswith("agg:"):
+        r = min(r, float(leaf[4:]))
     return r
 
 
 def capacity(rec):
     r = rate_eff(rec)
-    m = rec["MODE"]
-    if m.startswith("police:"):
-        r = min(r, float(rec["N"]) * float(m[7:]))
+    pol, leaf = parse_mode(rec["MODE"])
+    if pol is not None:
+        r = min(r, float(rec["N"]) * pol)
     return r * EFF
 
 

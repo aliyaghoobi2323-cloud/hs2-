@@ -6,7 +6,7 @@
 #
 #   RATE=50 RTT=72 LOSS=0 MODE=fqcodel NUSERS=200 V6=1 rig.sh up   (NUSERS: IPv4 users)
 #   rig.sh down
-#   rig.sh police      (loop: one policer per hs2 link connection, MODE=police:PR)
+#   rig.sh police      (loop: one policer per hs2 link connection, MODE with police:PR)
 #   rig.sh show        (tc -s of the bottleneck, both directions)
 #   rig.sh wait-links N SECONDS   (until r-exit has N established link sockets)
 #
@@ -22,11 +22,14 @@
 #        -> leaf by MODE:
 #           fqcodel     fq_codel (defaults: target 5ms, interval 100ms, limit 10240)
 #           pfifo:L     pfifo limit L packets (drop-tail)
+#           agg:AR      tbf rate AR Mbit/s, one shaper for all links, with a
+#                       drop-tail buffer of AGGQ_MS ms (default 50) at AR
 #           police:PR   fq_codel, plus a policer of PR Mbit/s on each hs2 link
 #                       connection (flower on its five-tuple at r-mid's ingress,
 #                       both directions; `rig.sh police` adds them as links appear)
-#           agg:AR      tbf rate AR Mbit/s, one shaper for all links, with a
-#                       drop-tail buffer of AGGQ_MS ms (default 50) at AR
+#           police:PR+LEAF   the policer and that leaf together, e.g.
+#                       police:20+agg:300: the mixed regime (per-connection
+#                       policer and an aggregate shaper at once)
 # Endpoint qdiscs as on the field servers: fq on the edge's e0, fq_codel on the
 # exit's x0. TCP sysctls in r-edge and r-exit: the "high" profile hs2 applies
 # on these hosts (tune.Build), only the per-namespace ones.
@@ -44,6 +47,21 @@ die() { echo "rig.sh: $*" >&2; exit 1; }
 
 nsx() { local n=$1; shift; ip netns exec "$n" "$@"; }
 
+# MODE: POL (policer Mbit/s, empty: none) and LEAF
+parse_mode() {
+  local p
+  POL=""; LEAF=""
+  IFS=+ read -ra parts <<< "${MODE:-fqcodel}"
+  for p in "${parts[@]}"; do
+    case "$p" in
+      police:*) [ -z "$POL" ] || die "two policers in MODE $MODE"; POL=${p#police:} ;;
+      fqcodel|pfifo:*|agg:*) [ -z "$LEAF" ] || die "two leaves in MODE $MODE"; LEAF=$p ;;
+      *) die "unknown MODE part $p" ;;
+    esac
+  done
+  [ -n "$LEAF" ] || LEAF=fqcodel
+}
+
 tcp_sysctls() {
   local n=$1
   nsx $n sysctl -qw net.ipv4.tcp_congestion_control=bbr \
@@ -58,7 +76,7 @@ offloads_off() { q nsx $1 ethtool -K $2 tso off gso off gro off tx off rx off; }
 
 # bottleneck DEV: the tree above on r-mid's egress DEV
 bottleneck() {
-  local d=$1 half rate loss leaf burst
+  local d=$1 half loss leaf burst
   half=$(awk -v r="$RTT" 'BEGIN{printf "%.3f", r/2}')
   loss=""
   awk -v l="$LOSS" 'BEGIN{exit !(l>0)}' && loss="loss ${LOSS}%"
@@ -69,14 +87,13 @@ bottleneck() {
   nsx $M tc qdisc add dev $d parent 1:1 handle 2: htb default 10 || die "htb on $d"
   nsx $M tc class add dev $d parent 2: classid 2:10 htb rate ${RATE}mbit ceil ${RATE}mbit \
     burst $burst cburst $burst quantum 60000 || die "htb class on $d"
-  case "$MODE" in
-    fqcodel|police:*) leaf="fq_codel" ;;
-    pfifo:*) leaf="pfifo limit ${MODE#pfifo:}" ;;
+  case "$LEAF" in
+    fqcodel) leaf="fq_codel" ;;
+    pfifo:*) leaf="pfifo limit ${LEAF#pfifo:}" ;;
     agg:*)
-      local ar=${MODE#agg:} aq=${AGGQ_MS:-50} tb
+      local ar=${LEAF#agg:} aq=${AGGQ_MS:-50} tb
       tb=$(awk -v r="$ar" 'BEGIN{b=r*1e6/8*0.001; if(b<16000)b=16000; printf "%d", b}')
       leaf="tbf rate ${ar}mbit burst $tb latency ${aq}ms" ;;
-    *) die "unknown MODE $MODE" ;;
   esac
   nsx $M tc qdisc add dev $d parent 2:10 handle 3: $leaf || die "leaf $leaf on $d"
 }
@@ -84,6 +101,7 @@ bottleneck() {
 up() {
   : ${RATE:?} ${RTT:?} ${LOSS:=0} ${MODE:=fqcodel} ${NUSERS:=1} ${V6:=0}
   [ "$NUSERS" -le 500 ] || die "NUSERS $NUSERS > 500"
+  parse_mode
   down 2>/dev/null
   for n in $E $M $X; do ip netns add $n || die "netns add $n"; done
   for n in $E $M $X; do ip -n $n link set lo up; done
@@ -112,9 +130,9 @@ up() {
   nsx $E tc qdisc replace dev e0 root fq || die "fq on e0"
   nsx $X tc qdisc replace dev x0 root fq_codel || die "fq_codel on x0"
   bottleneck me; bottleneck mx
-  case "$MODE" in
-    police:*) for d in me mx; do nsx $M tc qdisc add dev $d clsact || die "clsact $d"; done ;;
-  esac
+  if [ -n "$POL" ]; then
+    for d in me mx; do nsx $M tc qdisc add dev $d clsact || die "clsact $d"; done
+  fi
   # users
   {
     for i in $(seq 0 $((NUSERS - 1))); do
@@ -148,17 +166,19 @@ down() {
 # the exit's packets, me the edge's). Burst POLICE_BURST_MS (default 20) ms of
 # PR, at least 16 KB. Prints each connection it polices.
 police() {
-  local pr=${MODE#police:} burst seen=" " p
-  burst=$(awk -v r="$pr" -v m="${POLICE_BURST_MS:-20}" 'BEGIN{b=r*1e6/8*m/1000; if(b<16000)b=16000; printf "%d", b}')
+  local burst seen=" " p
+  parse_mode
+  [ -n "$POL" ] || die "MODE $MODE has no police:PR"
+  burst=$(awk -v r="$POL" -v m="${POLICE_BURST_MS:-20}" 'BEGIN{b=r*1e6/8*m/1000; if(b<16000)b=16000; printf "%d", b}')
   while true; do
     for p in $(nsx $X ss -HtnO state established '( dport = :2096 )' 2>/dev/null | awk '{split($3,a,":"); print a[length(a)]}'); do
       case "$seen" in *" $p "*) continue ;; esac
       nsx $M tc filter add dev mx ingress protocol ip prio 10 flower ip_proto tcp \
         src_ip 10.202.0.1 src_port $p dst_port 2096 \
-        action police rate ${pr}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
+        action police rate ${POL}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
       nsx $M tc filter add dev me ingress protocol ip prio 10 flower ip_proto tcp \
         dst_ip 10.202.0.1 dst_port $p src_port 2096 \
-        action police rate ${pr}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
+        action police rate ${POL}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
         echo "$(date +%s.%N) policed $p"
       seen="$seen$p "
     done
@@ -167,7 +187,10 @@ police() {
 }
 
 show() {
-  for d in me mx; do echo "== $d"; nsx $M tc -s qdisc show dev $d; done
+  for d in me mx; do
+    echo "== $d"; nsx $M tc -s qdisc show dev $d
+    nsx $M tc -s filter show dev $d ingress 2>/dev/null | grep -c "police" | sed 's/^/policers: /'
+  done
 }
 
 # wait-links N SECONDS: the exit's established link sockets reach N

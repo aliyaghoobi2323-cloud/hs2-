@@ -5,7 +5,7 @@
 #
 #   N      hs2 links (min_links = max_links = N on both servers)
 #   RATE   bottleneck, Mbit/s, each direction      RTT  ms      LOSS  %, each direction
-#   MODE   fqcodel | pfifo:LIMIT | police:RATE | agg:RATE   (rig.sh)
+#   MODE   fqcodel | pfifo:LIMIT | agg:RATE | police:RATE | police:RATE+LEAF   (rig.sh)
 #   USERS  synthetic users = source addresses (<= 500 IPv4, + 1 with V6)
 #   MIX    s5 | lone16 | one_vs_16 | newheavy | tunping     (ana.py spec)
 #   BIN    old | new: the binaries in $OLD_BIN / $NEW_BIN
@@ -160,8 +160,8 @@ run_steps() {
   echo "{\"links_wait_s\":$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f", b - a}'),\"links_at_start\":${n:-0},\"pid_edge\":$pe,\"pid_exit\":$px}" > "$r/links.json"
   [ "${n:-0}" -ge "$N" ] || { why="only ${n:-0} of $N links up after $lw s"; return 1; }
   case "$MODE" in
-    police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
-              PIDS+=($!); sleep 1.5 ;;
+    *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
+               PIDS+=($!); sleep 1.5 ;;
   esac
   # measurement: the client from t=0 to total; snapshots at WARM and near the end
   ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') "$RL" client -spec "$r/spec.json" > "$r/client.json" 2> "$r/client.err" &
