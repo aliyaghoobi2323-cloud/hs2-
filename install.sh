@@ -1712,7 +1712,7 @@ show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu
   echo >&2; hr
   ok "SETUP LINK — copy it to the OTHER server:"
   _c '1;33' "$L"
-  info "It holds this tunnel's key: keep it private. Show it again any time: hs2-menu → 9) Show a tunnel's hs2:// link."
+  info "It holds this tunnel's key: keep it private (if it leaks, reinstall the tunnel on both servers; hs2 rekey arrives in a later release). Show it again any time: hs2-menu → 9) Show a tunnel's hs2:// link."
   hr
 }
 
@@ -3996,7 +3996,7 @@ show_tunnel_link(){ # [unit]
   { grep -v '^link: this link contains' "$ef" || true; } | sed 's/^link: /  note: /' >&2
   rm -f "$ef"
   warn "This link contains the tunnel key: whoever has it can connect to this tunnel's other server in place of this one."
-  warn "Keep it private. If it leaked, set this tunnel up again on both servers: a new setup makes a new key."
+  warn "Keep it private: if it leaks, reinstall the tunnel on both servers (a new setup makes a new key); hs2 rekey arrives in a later release."
   # The address this side once announced may be stale (a new NAT or public IP).
   if ! tm_dials "$cfg" && [[ " $LINK_ASKED " != *" endpoint "* ]]; then
     ep=$( { printf '%s\n' "$out" | "$BIN" link --decode 2>/dev/null || true; } | sed -n 's/^endpoint=//p')

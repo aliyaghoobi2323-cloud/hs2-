@@ -37,7 +37,7 @@ const (
 	tBase    = "10.77.4.0"
 	tAlt     = "203.0.113.7:2096,[2001:db8::7]:2096"
 	tTunMTU  = 1320
-	tKeyNote = "link: this link contains the tunnel key; keep it private (revoke with hs2 rekey)"
+	tKeyNote = "link: this link contains the tunnel key; keep it private (if it leaks, reinstall the tunnel on both servers; hs2 rekey arrives in a later release)"
 )
 
 var tPin = func() string {

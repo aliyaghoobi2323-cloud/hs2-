@@ -55,7 +55,7 @@ import (
 const (
 	linkScheme   = "hs2://"
 	linkSchemeV3 = "hs2v3://"
-	linkKeyNote  = "link: this link contains the tunnel key; keep it private (revoke with hs2 rekey)"
+	linkKeyNote  = "link: this link contains the tunnel key; keep it private (if it leaks, reinstall the tunnel on both servers; hs2 rekey arrives in a later release)"
 	linkUDPNote  = "link: udp is not recorded on this side; written as false, which the side that pastes this link does not use"
 )
 

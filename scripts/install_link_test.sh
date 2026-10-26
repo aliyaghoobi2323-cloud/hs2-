@@ -136,6 +136,8 @@ roundtrip(){ # transport carrier encap proto udp direction [binary]
   want="hs2://$(printf '%s' "$pub$psuf|$dom|$shared|$pan|$car|$uf|$tr|$dir|$mtu|$en|$pr|hs2-lt1|10.77.4.0" | base64 -w0)"
   check "$name: setup prints the link, byte-for-byte what the bash encoder makes of the same answers" \
     '[ -n "$shared" ] && [ "$link" = "$want" ] && echo "$out" | grep -q RETURNED'
+  check "$name: setup says the link holds the key and what to do if it leaks" \
+    'echo "$out" | grep -q "keep it private (if it leaks, reinstall the tunnel on both servers; hs2 rekey arrives in a later release)"'
   check "$name: the config keeps the link block" \
     '[ "$("$T/hs2" config -c "$cfg" get link.endpoint)" = "$pub$psuf" ] && [ "$("$T/hs2" config -c "$cfg" get link.transport)" = "$tr" ]'
   check "$name: hs2 link -c rebuilds it on the side that made it" \
@@ -227,7 +229,8 @@ check "tunnel manager: lists only the tunnels" \
 check "menu: asks the endpoint with this server's address and the listen port as the default" 'echo "$out" | grep -q "\[192.0.2.10:2096\]"'
 check "menu: asks whether the Iran server forwards UDP" 'echo "$out" | grep -qi "forward.* UDP"'
 check "menu: shows the rebuilt link" '[ "$(linkof "$out")" = "$want1" ]'
-check "menu: warns that the link holds the key" 'echo "$out" | grep -q "contains the tunnel key"'
+check "menu: warns that the link holds the key, and says what to do if it leaks (no command that does not exist yet)" \
+  'echo "$out" | grep -q "contains the tunnel key" && echo "$out" | grep -q "if it leaks, reinstall the tunnel on both servers" && echo "$out" | grep -q "hs2 rekey arrives in a later release" && ! echo "$out" | grep -qi "revoke with hs2 rekey\|run hs2 rekey"'
 check "menu: no qrencode → a hint, not an error" 'command -v qrencode >/dev/null || echo "$out" | grep -q "qrencode"'
 c1="$M/etc-hs2/hs2-lt1.json"
 check "menu save: the asked fields go into the config's link block" \
