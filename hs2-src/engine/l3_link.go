@@ -102,6 +102,15 @@ type l3Link struct {
 	dead      atomic.Bool
 	once      sync.Once
 	done      chan struct{}
+	// ls, st: a stream-mode link whose session has the link scheduler
+	// (C2, linksched.go): its packets go to their flows' queues there, in
+	// the same scheduler as the link's streams, on the TUN stream st; no
+	// FIFO and no writer of its own (HS2_TUNE_SCHED=0, or a peer without
+	// the cap: ls is nil). lastTx: ctrlNow of its latest frame written
+	// (the keepalive's clock)
+	ls     *linkSched
+	st     *smux.Stream
+	lastTx atomic.Int64
 }
 
 // qpkt is a queued packet and when it was queued.
@@ -134,6 +143,11 @@ func newL3Link(car pktConn) *l3Link {
 // channel is dropped (watchSession).
 func newStreamL3Link(st *smux.Stream, quiet func() bool, sessReads func() uint64) *l3Link {
 	l := newL3Link(newStreamPkt(st))
+	if st != nil {
+		if ls, ok := st.Session().Queue().(*linkSched); ok && ls != nil {
+			l.ls, l.st = ls, st
+		}
+	}
 	if sessReads != nil {
 		go l.watchSession(sessReads)
 	}
@@ -195,11 +209,17 @@ func (l *l3Link) markDead() {
 		l.dead.Store(true)
 		close(l.done)
 		l.car.Close()
+		if l.ls != nil {
+			l.ls.detachTun(l)
+		}
 	})
 }
 
 // enqueue hands a packet to the link without ever blocking.
 func (l *l3Link) enqueue(b *[]byte, tag, flow uint32) bool {
+	if l.ls != nil {
+		return l.ls.pushTun(l, b, tag, flow)
+	}
 	select {
 	case l.q <- l3pkt{qpkt{b, time.Now()}, tag, flow}:
 		return true
@@ -338,10 +358,88 @@ func (s *l3Set) pickFlow(h uint32) *l3Link {
 }
 
 // serveLink runs a link's writer and reader. The reader runs on the calling
-// goroutine and returns when the link dies.
+// goroutine and returns when the link dies. A link on the link scheduler
+// has no writer: the scheduler's writes its frames; only its keepalive
+// runs beside the reader.
 func (s *l3Set) serveLink(ctx context.Context, l *l3Link, dev tunWriter) {
-	go l.writeLoop(&s.pool, &s.drops)
+	if l.ls != nil {
+		l.lastTx.Store(ctrlNow())
+		l.ls.attachTun(l, &s.pool, &s.drops)
+		go l.keepLoop()
+	} else {
+		go l.writeLoop(&s.pool, &s.drops)
+	}
 	s.linkToTun(ctx, l, dev)
+}
+
+// keepLoop sends the keepalive of a link on the link scheduler, in the
+// control lane, when it has written nothing for keepalive().
+func (l *l3Link) keepLoop() {
+	t := time.NewTimer(l.keepalive())
+	defer t.Stop()
+	for {
+		select {
+		case <-l.done:
+			return
+		case <-t.C:
+		}
+		ka := l.keepalive()
+		if idle := time.Duration(ctrlNow() - l.lastTx.Load()); idle < ka {
+			t.Reset(ka - idle)
+			continue
+		}
+		l.ls.pushTunPing(l)
+		t.Reset(ka)
+	}
+}
+
+// The pinned flow table (§5.1, both ends): a TUN flow takes a link with its
+// first packet, by today's rendezvous hash, and keeps it while the link
+// lives, whatever links come and go meanwhile; its entry goes after
+// l3PinIdle without a packet. HS2_TUNE_SCHED=0: the rendezvous hash of
+// each packet, as before.
+const (
+	l3PinIdle  = 2 * time.Minute
+	l3PinSweep = 10 * time.Second
+)
+
+type l3Pin struct {
+	l  *l3Link
+	at int64
+}
+
+// l3Pins is pumpTun's own (one goroutine).
+type l3Pins struct {
+	m       map[uint32]*l3Pin
+	sweptAt int64
+}
+
+// pinned is the link of flow h: its pinned one while it lives, else a new
+// pick, pinned.
+func (s *l3Set) pinned(p *l3Pins, h uint32, now int64) *l3Link {
+	if SchedOff() {
+		return s.pickFlow(h)
+	}
+	if p.m == nil {
+		p.m = map[uint32]*l3Pin{}
+	}
+	if time.Duration(now-p.sweptAt) >= l3PinSweep {
+		p.sweptAt = now
+		for k, e := range p.m {
+			if !e.l.Alive() || time.Duration(now-e.at) >= l3PinIdle {
+				delete(p.m, k)
+			}
+		}
+	}
+	if e := p.m[h]; e != nil && e.l.Alive() {
+		e.at = now
+		return e.l
+	}
+	l := s.pickFlow(h)
+	if l != nil {
+		p.m[h] = &l3Pin{l, now}
+	}
+	return l
 }
 
 // pumpTun reads IP packets from the TUN and queues each on its flow's link,
@@ -349,6 +447,7 @@ func (s *l3Set) serveLink(ctx context.Context, l *l3Link, dev tunWriter) {
 // never blocks on a link: no link or a full queue means drop.
 func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 	size := dev.MTU() + 128
+	var pins l3Pins
 	for ctx.Err() == nil {
 		bp, _ := s.pool.Get().(*[]byte)
 		if bp == nil || cap(*bp) < size {
@@ -370,7 +469,7 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 		if ok {
 			tag = UserTag(user, classV6Prefix)
 		}
-		if l := s.pickFlow(flow); l == nil || !l.enqueue(bp, tag, flow) {
+		if l := s.pinned(&pins, flow, ctrlNow()); l == nil || !l.enqueue(bp, tag, flow) {
 			s.pool.Put(bp)
 			s.drops.Add(1)
 		}

@@ -96,6 +96,9 @@ type sendCap struct {
 	full float64
 	// tallies (the status line)
 	appLim, lifts uint64
+	// off: no cap of its own on this link (a peer without the cap, or
+	// C4-lite off): its readings only move C3
+	off bool
 }
 
 // Update takes a reading and says the cap in force (0: none), whether to
@@ -148,7 +151,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	}
 	c.quiet = idle
 	switch {
-	case SendCapOff():
+	case SendCapOff() || c.off:
 		c.on = false
 	case c.on && idle:
 		c.on = false

@@ -165,6 +165,8 @@ type hostQ struct {
 	// waiting at the gate
 	hist    [hostqHist]atomic.Uint32
 	blocked atomic.Int64 // ns
+	// waiting: a write waits at the gate (hostQConn.Close)
+	waiting atomic.Bool
 }
 
 // newHostQ guards c, the link's conn, through sys (nil: none, as off Linux:
@@ -213,7 +215,9 @@ func (h *hostQ) Write(p []byte) (int, error) {
 			h.hist[min(bits.Len(uint(ns)), hostqHist-1)].Add(1)
 			if c-ns < need {
 				t0 := ctrlNow()
+				h.waiting.Store(true)
 				err = h.sys.waitBelow(c - need + 1)
+				h.waiting.Store(false)
 				h.blocked.Add(ctrlNow() - t0)
 			}
 		}
@@ -224,6 +228,30 @@ func (h *hostQ) Write(p []byte) (int, error) {
 		// (any other error: the socket is gone, and the write says so)
 	}
 	return h.conn.Write(p)
+}
+
+// hostQConn is the link's conn with C3's guard on its writes: what the
+// shaper writes its records to, in the send gate's place (newSessionCaps).
+type hostQConn struct {
+	net.Conn // the link's TLS conn
+	hq       *hostQ
+	tcp      *net.TCPConn // its socket (nil: none)
+}
+
+func (c *hostQConn) Write(p []byte) (int, error) { return c.hq.Write(p) }
+
+// Close closes the link's conn. A write waiting at the gate (in the
+// netpoller, on the socket's write lock) would hold the TLS conn's
+// close_notify behind it until the socket drains: as sendGate.Close does,
+// the socket is closed under it first.
+func (c *hostQConn) Close() error {
+	if fb := c.hq.fb.Load(); fb != nil {
+		return fb.Close()
+	}
+	if c.hq.waiting.Load() && c.tcp != nil {
+		c.tcp.Close()
+	}
+	return c.Conn.Close()
 }
 
 // hostqUnsupported says whether err is a kernel's "no such option" or "no

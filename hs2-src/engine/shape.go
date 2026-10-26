@@ -36,6 +36,10 @@ type shapedConn struct {
 
 	wmu  sync.Mutex
 	wbuf []byte // reused frame-build scratch (write side)
+	// pend: data of a write's last record left open (writeHold), not yet
+	// written; pendT its sampled size
+	pend  []byte
+	pendT int
 
 	rmu  sync.Mutex
 	rbuf []byte // reused frame-read scratch (read side)
@@ -61,12 +65,37 @@ func newShapedConn(c net.Conn, s *obfs.LengthSampler) *shapedConn {
 // each becomes one TLS record of the sampled size. The final short chunk is
 // padded up to its target. It returns len(p) on success (all bytes accepted).
 func (c *shapedConn) Write(p []byte) (int, error) {
-	if len(p) == 0 {
+	if len(p) == 0 && len(c.pend) == 0 {
 		return 0, nil
 	}
+	return c.writeHold(p, false)
+}
+
+// writeHold is Write that, with hold, leaves the last record open when p
+// does not fill it: its data waits, unpadded, for the next write's bytes to
+// fill the record to its sampled size (the link's writer holds only when
+// it has the next frame in hand, and flushes, flushHeld, before it waits
+// for one). The records on the wire keep the sampled sizes; a frame smaller
+// than a record's worth of them just does not pad its tail. It returns the
+// bytes of p accepted (written or held).
+func (c *shapedConn) writeHold(p []byte, hold bool) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	written := 0
+	if len(c.pend) > 0 {
+		take := min(c.pendT-shapeHdrLen-len(c.pend), len(p))
+		c.pend = append(c.pend, p[:take]...)
+		p = p[take:]
+		written += take
+		if hold && len(c.pend) < c.pendT-shapeHdrLen {
+			return written, nil
+		}
+		err := c.record(c.pend, c.pendT)
+		c.pend = c.pend[:0]
+		if err != nil {
+			return written, err
+		}
+	}
 	for len(p) > 0 {
 		target := c.sampler.Sample()
 		maxData := target - shapeHdrLen
@@ -77,29 +106,50 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 		if len(d) > maxData {
 			d = d[:maxData]
 		}
-		pad := target - shapeHdrLen - len(d)
-		if pad < 0 {
-			pad = 0
+		if hold && len(d) < maxData {
+			c.pend, c.pendT = append(c.pend[:0], d...), target
+			return written + len(d), nil
 		}
-		need := shapeHdrLen + len(d) + pad
-		if cap(c.wbuf) < need {
-			c.wbuf = make([]byte, need)
-		}
-		f := c.wbuf[:need]
-		f[0], f[1] = byte(len(d)>>8), byte(len(d))
-		f[2], f[3] = byte(pad>>8), byte(pad)
-		copy(f[shapeHdrLen:], d)
-		// pad bytes: zero them (they are inside TLS, so unobservable and harmless)
-		for i := shapeHdrLen + len(d); i < need; i++ {
-			f[i] = 0
-		}
-		if _, err := c.Conn.Write(f); err != nil {
+		if err := c.record(d, target); err != nil {
 			return written, err
 		}
 		written += len(d)
 		p = p[len(d):]
 	}
 	return written, nil
+}
+
+// flushHeld writes the record writeHold left open, padded to its size.
+func (c *shapedConn) flushHeld() error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if len(c.pend) == 0 {
+		return nil
+	}
+	err := c.record(c.pend, c.pendT)
+	c.pend = c.pend[:0]
+	return err
+}
+
+// record writes d as one record of target bytes (padded up to it), in one
+// conn write: one TLS record.
+func (c *shapedConn) record(d []byte, target int) error {
+	pad := target - shapeHdrLen - len(d)
+	if pad < 0 {
+		pad = 0
+	}
+	need := shapeHdrLen + len(d) + pad
+	if cap(c.wbuf) < need {
+		c.wbuf = make([]byte, need)
+	}
+	f := c.wbuf[:need]
+	f[0], f[1] = byte(len(d)>>8), byte(len(d))
+	f[2], f[3] = byte(pad>>8), byte(pad)
+	copy(f[shapeHdrLen:], d)
+	// pad bytes: zero them (they are inside TLS, so unobservable and harmless)
+	clear(f[shapeHdrLen+len(d):])
+	_, err := c.Conn.Write(f)
+	return err
 }
 
 // Read reassembles the original byte stream: it returns buffered decoded data
