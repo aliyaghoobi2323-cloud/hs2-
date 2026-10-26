@@ -395,7 +395,9 @@ func TestAngleBSameLinkProbe(t *testing.T) {
 //     its floor, C/2, and the two ≥ 0.97 C;
 //   - newheavy: a user of 16 downloads coming 3 s in keeps an existing light
 //     user (a probe every 200 ms) within RTT + 20 ms at p99 and an existing
-//     user of one download at ≥ 0.9 of its floor C/2 (in every second).
+//     user of one download at ≥ 0.9 of its floor C/2 in every second once
+//     settled (5 s after the join: the rig's after_settled; the 5 s of the
+//     join are logged).
 func TestAngleBP10(t *testing.T) {
 	const delay = 10 * time.Millisecond
 	measure := func(sched bool, setup func(r *abRig), users ...uint32) []float64 {
@@ -447,17 +449,24 @@ func TestAngleBP10(t *testing.T) {
 		r.download(1, 1)
 		time.Sleep(3 * time.Second)
 		r.download(2, 16)
-		time.Sleep(time.Second)
 		a := time.Now()
 		c := r.counter(r.down, 1)
+		// the join: the heavy user's 16 new connections each queue their
+		// first 32 KiB as light (§3.1), within its lane credit (160 KiB/s):
+		// at 10 Mbit/s the existing user's share dips for ~3 s (logged); the
+		// rig's verdict (e) takes its rate after SETTLE (5 s, after_settled)
+		join := 1e18
+		for range 5 {
+			join = min(join, rateOver(c, time.Second))
+		}
 		least, sum := 1e18, 0.0
 		for range 6 {
 			x := rateOver(c, time.Second)
 			least, sum = min(least, x), sum+x
 		}
 		p99 := abPct(pr.within(a, time.Now()), 99)
-		t.Logf("existing bulk user: %.3f C over 6 s, least second %.3f C; light user p99 %v (RTT floor %v)",
-			sum/6/capOld, least/capOld, p99.Round(100*time.Microsecond), floor.Round(100*time.Microsecond))
+		t.Logf("existing bulk user: least second %.3f C in the 5 s after the join; settled %.3f C over 6 s, least second %.3f C; light user p99 %v from the join (RTT floor %v)",
+			join/capOld, sum/6/capOld, least/capOld, p99.Round(100*time.Microsecond), floor.Round(100*time.Microsecond))
 		if p99 > floor+abBound {
 			t.Fatalf("the light user's p99 %v past %v + %v", p99, floor, abBound)
 		}

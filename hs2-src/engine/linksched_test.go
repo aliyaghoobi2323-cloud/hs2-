@@ -334,7 +334,9 @@ func TestAngleBTunQueues(t *testing.T) {
 		t.Fatalf("the TUN flow's first turn is not next (or not a bulk frame of 4 packets: %d)", it.pkts)
 	}
 	go st.Write(make([]byte, 128<<10))
-	for range (classNewBytes + lsLightData - 1) / lsLightData { // the stream's first 32 KiB (light), ahead of the TUN flow's bulk turn
+	// the stream's first frames (light: its first 32 KiB, within its user's
+	// credit of 32 KiB, no tick refilling it), ahead of the TUN flow's bulk turn
+	for range schedLaneBurst / LaneFrameMax {
 		m.waitN(2, 0, 0)
 		it := m.take()
 		if it.f == nil || it.f.Sid() != st.ID() {
@@ -342,7 +344,7 @@ func TestAngleBTunQueues(t *testing.T) {
 		}
 		m.done(it)
 	}
-	m.waitN(2, 0, 0) // the TUN flow's turn and the stream's first bulk frame
+	m.waitN(2, 0, 0) // the TUN flow's turn and the stream's next frame (bulk: past the credit)
 	ping := tunPkt4(0, 84, true)
 	ls.pushTun(l, ping, 14, 99)
 	it := m.take()
@@ -353,8 +355,8 @@ func TestAngleBTunQueues(t *testing.T) {
 		t.Fatalf("the ping's frame is %d B", len(got))
 	}
 	// then the bulk
-	if it := m.take(); it.light {
-		t.Fatal("a light item after the ping")
+	if it := m.take(); it.tf != nil && it.tf.id == 99 {
+		t.Fatal("the ping twice")
 	} else {
 		m.done(it)
 	}
