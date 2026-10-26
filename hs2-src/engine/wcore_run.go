@@ -186,6 +186,9 @@ type wcLink struct {
 	net     wcNet
 	netRtx  wcWrap32
 	netSegs wcWrap32
+	// sc: the socket's C4-lite (sendcap.go), nil: none; the net hands its
+	// cap to it (netSet)
+	sc atomic.Pointer[sendCapLink]
 }
 
 // wcStats is what the engine reads of a link's core, at any time.
@@ -731,12 +734,12 @@ func (l *wcLink) paceNet(now time.Time) {
 	set := *wcPaceSet.Load()
 	switch o.act {
 	case wcNetEngage, wcNetMoveCap:
-		if !set(l.tcp, o.cap) {
+		if !l.netSet(set, o.cap) {
 			l.net.cap = 0 // not capped after all: the next reading judges again
 			return
 		}
 	case wcNetRelease:
-		set(l.tcp, 0)
+		l.netSet(set, 0)
 	}
 	if o.act != wcNetEngage {
 		return

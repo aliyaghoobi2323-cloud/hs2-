@@ -199,7 +199,14 @@ type wmCfg struct {
 	// netOff: the exit's link socket runs without the pacing net
 	// (pacenet.go), as before it (the rig's calibration runs); the net runs
 	// on the exit's socket only (the downloads' sender), as PaceNet says
-	netOff   bool
+	netOff bool
+	// sendCap: C4-lite (sendcap.go) caps the link's sender, the pacing
+	// net's cap handed to it (the lesser of the two in force); txLog: the
+	// wire bytes the sender sent each ms are kept (txWire); quietAt: from
+	// then the link carries nothing new (no stream data, no probe, no ping)
+	sendCap  bool
+	txLog    bool
+	quietAt  time.Duration
 	recEvery time.Duration
 	recOff   [][2]time.Duration
 	recZero  [][2]time.Duration
@@ -353,8 +360,13 @@ type wmFlow struct {
 	retrans, segsOut uint64  // segments
 	rtxBytes         uint64
 	// rateDlv: tcpi_delivery_rate (tcp_rate_gen): the latest rate sample
-	// that was not app-limited, or an app-limited one past it, bytes/ms
-	rateDlv float64
+	// that was not app-limited, or an app-limited one past it, bytes/ms;
+	// rateAppLim: tcpi_delivery_rate_app_limited, that sample's flag;
+	// fullAt: when the first sample that was not app-limited came (ms; -1:
+	// none yet)
+	rateDlv    float64
+	rateAppLim bool
+	fullAt     int64
 
 	// BBR
 	mode             int
@@ -402,7 +414,7 @@ type wmFlow struct {
 
 func newFlow(m *wmModel, main bool, unit int) *wmFlow {
 	f := &wmFlow{m: m, main: main, unit: unit, cwnd: 10 * wmMSS, pacingGain: bbrHighGain, cwndGain: bbrHighGain,
-		rack: m.cfg.rack, reoSteps: 1}
+		rack: m.cfg.rack, reoSteps: 1, fullAt: -1}
 	f.pacing = wmStartPace * float64(10*wmMSS) / float64(m.rtt)
 	if !main {
 		f.writeSeq = math.MaxUint64 / 2
@@ -479,6 +491,9 @@ func (f *wmFlow) send() {
 		f.out.push(p)
 		f.lastSendAt = t
 		f.segsOut += f.segs(p.n)
+		if f.main && m.txWire != nil {
+			m.txWire[t] += int32(wmWire(p.n))
+		}
 		f.credit -= float64(p.n)
 		m.enqueue(p)
 	}
@@ -554,7 +569,10 @@ func (f *wmFlow) onAcks(pkts []*wmPkt) {
 	}
 	priorDlv, appLim := newest.dlv, newest.appLim
 	if bwOK && (!appLim || bw >= f.rateDlv) {
-		f.rateDlv = bw
+		f.rateDlv, f.rateAppLim = bw, appLim
+	}
+	if bwOK && !appLim && f.fullAt < 0 {
+		f.fullAt = t
 	}
 	if f.rack {
 		// (tcp_rack_advance: a resend's round trip shorter than min_rtt
@@ -1130,6 +1148,11 @@ type wmModel struct {
 	pcLast uint64
 	netOn  bool
 	net    wcNet
+	// C4-lite (cfg.sendCap); the sender's wire bytes each ms (cfg.txLog);
+	// when C4-lite's cap was lifted after cfg.quietAt (ms; 0: not yet)
+	sc     sendCap
+	txWire []int32
+	capOff int64
 }
 
 func (m *wmModel) newPkt() *wmPkt {
@@ -1207,6 +1230,9 @@ func newModel(cfg wmCfg) *wmModel {
 	// set, in its place as in the runner)
 	m.netOn = !cfg.netOff && !cfg.exit && PaceNet != 0 && cfg.paceCap <= 0
 	m.readMs = make([]uint64, m.end/100+1)
+	if cfg.txLog || cfg.sendCap {
+		m.txWire = make([]int32, m.end+1)
+	}
 	m.qHist = make([]uint64, 4001)
 	m.res.cfg = cfg
 	return m
@@ -1243,6 +1269,9 @@ func (m *wmModel) fill(f *wmFlow) {
 		}
 		wrote := false
 		if m.cfg.cpu > 0 && m.cpuCred <= 0 {
+			return
+		}
+		if q := m.cfg.quietAt; q > 0 && m.t >= q.Milliseconds() {
 			return
 		}
 		for k := range m.ss {
@@ -1937,10 +1966,11 @@ func winsMiB(rs []*wmRcvStream) string {
 
 func (m *wmModel) periodic() {
 	t := m.t
-	if t%3000 == 1500 {
+	quiet := m.cfg.quietAt > 0 && t >= m.cfg.quietAt.Milliseconds()
+	if !quiet && t%3000 == 1500 {
 		m.rev.push(wmRev{at: t + m.d, kind: 2, sent: t})
 	}
-	if t%100 == 37 {
+	if !quiet && t%100 == 37 {
 		m.rev.push(wmRev{at: t + m.d, kind: 3, sent: t})
 	}
 	r := &m.sndRec
@@ -1985,6 +2015,9 @@ func (m *wmModel) periodic() {
 	if m.netOn && t%100 == 0 {
 		m.netStep()
 	}
+	if m.cfg.sendCap && t%100 == 0 {
+		m.capStep()
+	}
 }
 
 // netStep is the exit's runner wake for the pacing net (wcLink.paceNet), on
@@ -2007,15 +2040,45 @@ func (m *wmModel) netStep() {
 	switch o.act {
 	case wcNetEngage:
 		m.res.netN++
-		m.pcCap = float64(o.cap) / 1000
+		m.netCap(float64(o.cap) / 1000)
 	case wcNetMoveCap:
-		m.pcCap = float64(o.cap) / 1000
+		m.netCap(float64(o.cap) / 1000)
 	case wcNetRelease:
-		m.pcCap = 0
+		m.netCap(0)
 	}
 	if m.cfg.trace && o.act != wcNetNone {
 		m.res.trace = append(m.res.trace, fmt.Sprintf("        net %5.1fs act%d cap %.0f Mbit share %.1f%% ratio %.1f dlv %.0f idle %v",
 			float64(m.t)/1000, o.act, float64(o.cap)/wmMbit, 100*o.share, o.ratio, o.dlv/wmMbit, o.idle))
+	}
+}
+
+// netCap takes the pacing net's cap (bytes/ms; 0: lifted): the socket's,
+// or with C4-lite handed to it, the lesser of the two in force.
+func (m *wmModel) netCap(c float64) {
+	if !m.cfg.sendCap {
+		m.pcCap = c
+		return
+	}
+	m.sc.SetPacenetCap(uint64(c * 1000))
+	m.sc.decide()
+	m.pcCap = float64(m.sc.set) / 1000
+}
+
+// capStep is the runner's wake for C4-lite (sendcap.go) on the model's
+// sender: its TCP_INFO as Linux reports it (the delivery rate of
+// tcp_rate_gen and that sample's app-limited flag, bytes acked, data
+// segments out, srtt) when C4-lite has it due, what its app wrote.
+func (m *wmModel) capStep() {
+	f := m.main
+	now := time.Duration(m.t) * time.Millisecond
+	if !m.sc.due(now, f.writeSeq) {
+		return
+	}
+	m.sc.Update(capSample{Now: now, Delivery: f.rateDlv * 1000, AppLimited: f.rateAppLim, Acked: f.delivered,
+		Written: f.writeSeq, Segs: uint32(f.segsOut), SRTT: time.Duration(f.srtt * float64(time.Millisecond))})
+	m.pcCap = float64(m.sc.set) / 1000
+	if q := m.cfg.quietAt; q > 0 && m.t >= q.Milliseconds() && m.sc.set == 0 && m.capOff == 0 {
+		m.capOff = m.t
 	}
 }
 

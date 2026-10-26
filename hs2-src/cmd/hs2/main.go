@@ -309,9 +309,10 @@ func applyTuning() {
 	flt("HS2_TUNE_PACENET_LOSS", &engine.PaceNetLoss)
 	// R1's cores (docs/architecture/REDESIGN.fa.md §3.1-3.4), on by
 	// default; 0 turns each off.
-	num("HS2_TUNE_CLASS", &engine.TuneClass) // C1, the classifier: every flow bulk
-	num("HS2_TUNE_SCHED", &engine.TuneSched) // C2, the scheduler: the old heap and FIFO
-	num("HS2_TUNE_HQG", &engine.TuneHQG)     // C3, the host-queue guard: the fixed mark and sendGate
+	num("HS2_TUNE_CLASS", &engine.TuneClass)     // C1, the classifier: every flow bulk
+	num("HS2_TUNE_SCHED", &engine.TuneSched)     // C2, the scheduler: the old heap and FIFO
+	num("HS2_TUNE_HQG", &engine.TuneHQG)         // C3, the host-queue guard: the fixed mark and sendGate
+	num("HS2_TUNE_SENDCAP", &engine.TuneSendCap) // C4-lite, the pacing cap: the pacing net alone, exit only
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}

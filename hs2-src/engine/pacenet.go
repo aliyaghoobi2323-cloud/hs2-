@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"net"
 	"time"
 )
 
@@ -183,6 +184,17 @@ var (
 	// dead path two or three a second: both stay quiet.
 	wcNetQuietSegs = uint64(8)
 )
+
+// netSet sets the net's cap on the link socket (rate bytes/s; 0: lifted):
+// handed to the link's C4-lite when it has one (sendcap.go: one writer for
+// the cap, the lesser of the two in force; REDESIGN §3.4), by set itself as
+// before when not. False: the socket refused it.
+func (l *wcLink) netSet(set func(*net.TCPConn, uint64) bool, rate uint64) bool {
+	if sc := l.sc.Load(); sc != nil {
+		return sc.SetPacenetCap(rate)
+	}
+	return set(l.tcp, rate)
+}
 
 // wcNetIn is one reading of a link socket's TCP_INFO.
 type wcNetIn struct {
