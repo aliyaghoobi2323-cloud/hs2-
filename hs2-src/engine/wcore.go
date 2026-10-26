@@ -2154,19 +2154,27 @@ func (c *wcore) routeSnd(now time.Time, rise, raw time.Duration) bool {
 }
 
 // qSndSpan is the least and the largest q_snd of the latest wcSndHist
-// records, if they came within as many record spans.
-func (c *wcore) qSndSpan(now time.Time) (lo, hi time.Duration, ok bool) {
+// records that came within as many record spans, and how many did.
+func (c *wcore) qSndSpan(now time.Time) (lo, hi time.Duration, n int) {
 	for _, r := range c.qSnds {
 		if r.at.IsZero() || now.Sub(r.at) > wcSndHist*wcSndSpan {
 			continue
 		}
 		q := time.Duration(r.r * float64(time.Second))
-		if !ok {
-			lo, hi, ok = q, q, true
+		if n == 0 {
+			lo, hi = q, q
 		}
-		lo, hi = min(lo, q), max(hi, q)
+		lo, hi, n = min(lo, q), max(hi, q), n+1
 	}
-	return lo, hi, ok
+	return lo, hi, n
+}
+
+// qSndStays: each of the exit's latest wcSndHist records came within as
+// many record spans and shows a queue past wcDqMin: one that stays, not a
+// snapshot (STARTUP past wcLongRTT; harm judges OFF by what stays as well).
+func (c *wcore) qSndStays(now time.Time) bool {
+	lo, _, n := c.qSndSpan(now)
+	return n >= wcSndHist && lo > wcDqMin
 }
 
 // pathQ is, with other cores on the peer, the path's queue by the exit's
@@ -2299,7 +2307,8 @@ func (c *wcore) measure(in wcIn, dt float64) wcMeas {
 		m.qSnd, m.qSndOK = c.qSnd, true
 	}
 	m.grp = c.grouped(now)
-	m.qSndLo, m.qSnd3, m.qSnd3OK = c.qSndSpan(now)
+	sLo, sHi, sN := c.qSndSpan(now)
+	m.qSndLo, m.qSnd3, m.qSnd3OK = sLo, sHi, sN > 0
 	if m.grp {
 		// the records of every link: the others' bursts and probes are in
 		// them, and one record of them is no standing queue (judge, p1)
@@ -3371,10 +3380,32 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 			// row ending it instead took the model's 300/500 behind 200 ms to
 			// 53% of N4's gain over 6 seeds, this 74% (47% before), with no
 			// run of the long round trips' sweep drained or past base + 3
-			// points either way
-			return
+			// points either way.
+			// What the interval shows of the rate is HOLD's all the same (R̂,
+			// and whether the latest step paid: the rate followed it), for
+			// a queue that stays ends STARTUP (qSndStays): a ×1.25 step past
+			// the knee by 5 to 10% leaves one that stands under Δq (60 ms at
+			// 600 ms), and nothing else ended STARTUP then (flat, the
+			// autopilot's freeze and a settle part need intervals that count
+			// or a B that moves): 60 records of 45 ms held it at 4 MiB for
+			// 120 s (review, M1). HOLD takes B to what the rate needs and
+			// paid. The model's 300/500 behind 200 ms reads 15 to 21 ms in
+			// every record under the knee too (the sender's STARTUP pacing
+			// past the path's rate): its step to 10.7 MiB doubled the rate in
+			// such intervals, and with neither noted HOLD took B to 6.2 MiB
+			// (78 → 59% of N4's gain over 12 seeds; 76% with them).
+			if !jump {
+				c.noteRate(in.now, m.rLink)
+			}
+			if gB > 0 && gR >= wcStartFast*gB && !qUp {
+				c.bGood = max(c.bGood, min(c.B, c.bPub))
+			}
+			if !c.qSndStays(in.now) {
+				return
+			}
 		}
-		// the record shows a queue past that, or resends: the knee
+		// the record shows a queue past that, one that stays, or resends:
+		// the knee
 		c.endStartup(in, m, ev, qUp, false)
 		return
 	}

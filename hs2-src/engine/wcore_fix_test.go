@@ -343,7 +343,9 @@ func TestWcoreFixLongRTTBlindOff(t *testing.T) {
 // a fresh record of the exit that shows no queue (q_snd up to wcDqMin) and
 // no new resends; an interval with no record waits, one whose record shows
 // resends ends STARTUP, and one whose record shows a queue ends it only past
-// the queue OFF left by Δq (judge, p3): under that, B stays where it is.
+// the queue OFF left by Δq (judge, p3), or once the queue stays: under that,
+// B stays where it is, interval after interval, until the exit's latest
+// wcSndHist records all show a queue past wcDqMin (post-merge review, M1).
 func TestWcoreFixLongRTTGrowsOnRecord(t *testing.T) {
 	rec := func(m *wcMeas, q time.Duration, snd float64) {
 		m.sndOK, m.snd, m.sndSegs, m.sndAt = true, snd, 20000, wtT0
@@ -375,6 +377,49 @@ func TestWcoreFixLongRTTGrowsOnRecord(t *testing.T) {
 		}
 		if tc.name == "no record in the interval: wait" && c.flat != flat {
 			t.Errorf("%s: flat %d → %d, want the interval not counted", tc.name, flat, c.flat)
+		}
+	}
+	// a queue under qOffSnd + Δq, interval after interval (records 2.5 s
+	// apart, an interval with none between): B stays at 4 MiB and nothing is
+	// counted while one of the exit's latest three records shows the path
+	// clean; once all three show the queue it stays, and STARTUP ends there
+	{
+		c, in := wtStartup()
+		c.tBase, c.sndSeen, c.sndAny = 600*time.Millisecond, true, true
+		c.qOffSnd = 2 * time.Millisecond
+		push := func(at time.Time, q time.Duration) {
+			copy(c.qSnds[1:], c.qSnds[:])
+			c.qSnds[0] = wcRate{at, q.Seconds()}
+			c.qSnd, c.qSndAt = q, at
+		}
+		for i := 3; i >= 1; i-- { // the clean records OFF left on
+			push(wtT0.Add(-time.Duration(i)*2500*time.Millisecond), 2*time.Millisecond)
+		}
+		c.prevR, c.fullR = 2e6, 2e6
+		for i, q := range []int{20, -1, 20, -1, 20} { // ms; -1: no record
+			now := wtT0.Add(time.Duration(i) * 1250 * time.Millisecond)
+			in.now = now
+			m := wtMeas(1, 4e6, 4*wtMiB)
+			m.at = now
+			m.qTurn, m.qOK = c.qRef, true
+			if q >= 0 {
+				push(now, time.Duration(q)*time.Millisecond)
+				rec(&m, time.Duration(q)*time.Millisecond, 0)
+				m.sndAt = now
+			}
+			flat, gear := c.flat, c.gear
+			var ev []wcEvent
+			c.startup(in, m, &ev)
+			if i < 4 {
+				if c.state != wcStartup || c.B != 4*wtMiB || c.flat != flat || c.gear != gear {
+					t.Errorf("a queue of 20 ms that does not stay, interval %d: %v B %.2f MiB flat %d → %d gear %d → %d, want STARTUP at 4 MiB, nothing counted",
+						i, c.state, float64(c.B)/wtMiB, flat, c.flat, gear, c.gear)
+				}
+				continue
+			}
+			if c.state == wcStartup || len(ev) == 0 || ev[0].kind != wcEvFilled {
+				t.Errorf("a queue of 20 ms in each of the latest three records: %v B %.2f MiB events %+v, want the knee", c.state, float64(c.B)/wtMiB, ev)
+			}
 		}
 	}
 	// HOLD: a probe that is due starts only on a clean record

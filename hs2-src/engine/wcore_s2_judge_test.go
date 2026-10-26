@@ -14,12 +14,17 @@ import (
 // records (2 s apart, the newest now) showed the queues qs (ms, oldest
 // first) and no resends; m is its interval of one fast stream with 2 MiB.
 func wtOffRecs(tb time.Duration, qs ...int) (*wcore, wcMeas) {
+	return wtOffRecsGap(tb, 2*time.Second, qs...)
+}
+
+// wtOffRecsGap is wtOffRecs with the records gap apart.
+func wtOffRecsGap(tb, gap time.Duration, qs ...int) (*wcore, wcMeas) {
 	c := wtCore(1)
 	c.tBase = tb
 	c.sndSeen, c.sndAny, c.sndAnyAt = true, true, wtT0.Add(-time.Minute)
 	c.sndRef = wcLossRef{v: 0, b: wtNeed, ok: true}
 	for i, q := range qs {
-		at := wtT0.Add(-time.Duration(len(qs)-1-i) * 2 * time.Second)
+		at := wtT0.Add(-time.Duration(len(qs)-1-i) * gap)
 		d := time.Duration(q) * time.Millisecond
 		copy(c.qSnds[1:], c.qSnds[:])
 		c.qSnds[0] = wcRate{at, d.Seconds()}
@@ -45,19 +50,29 @@ func TestWcoreS2HarmStandingQueue(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		tb   int
+		gap  time.Duration // between records (0: 2 s)
 		qs   []int
 		harm bool
 	}{
-		{"300/50: bursts, one record under Δq (5 ms)", 50, []int{14, 3, 18}, false},
-		{"300/100: bursts, one record under Δq (10 ms)", 100, []int{18, 12, 4}, false},
-		{"100/50: a queue in every record", 50, []int{7, 30, 12}, true},
-		{"100/100: a queue in every record", 100, []int{14, 30, 11}, true},
-		{"one record, a queue", 50, []int{12}, true},
-		{"a record older than three spans is no part of it", 50, []int{2, 12, 9, 14}, true},
+		{"300/50: bursts, one record under Δq (5 ms)", 50, 0, []int{14, 3, 18}, false},
+		{"300/100: bursts, one record under Δq (10 ms)", 100, 0, []int{18, 12, 4}, false},
+		{"100/50: a queue in every record", 50, 0, []int{7, 30, 12}, true},
+		{"100/100: a queue in every record", 100, 0, []int{14, 30, 11}, true},
+		{"one record, a queue", 50, 0, []int{12}, true},
+		{"a record past the latest three is no part of it", 50, 0, []int{2, 12, 9, 14}, true},
+		// (4 s apart the three slots hold records of 8, 4 and 0 s ago: the
+		// oldest is past three record spans, 7.5 s, and only its age leaves it
+		// out)
+		{"a record older than three spans is no part of it", 50, 4 * time.Second, []int{2, 12, 14}, true},
+		{"... within them it is", 50, 3 * time.Second, []int{2, 12, 14}, false},
 	} {
-		c, m := wtOffRecs(time.Duration(tc.tb)*time.Millisecond, tc.qs...)
+		gap := tc.gap
+		if gap == 0 {
+			gap = 2 * time.Second
+		}
+		c, m := wtOffRecsGap(time.Duration(tc.tb)*time.Millisecond, gap, tc.qs...)
 		if got := c.harm(m); got != tc.harm {
-			t.Errorf("%s (records %v ms, T_base %d ms): harm %v, want %v", tc.name, tc.qs, tc.tb, got, tc.harm)
+			t.Errorf("%s (records %v ms %v apart, T_base %d ms): harm %v, want %v", tc.name, tc.qs, gap, tc.tb, got, tc.harm)
 		}
 	}
 }
@@ -282,5 +297,59 @@ func TestWcoreS2LongStartupModel(t *testing.T) {
 		} else {
 			t.Log(msg)
 		}
+	}
+}
+
+// Post-merge review of step 2's p1 to p3: what the three commits left open,
+// each reproduced here before its fix.
+
+// TestWcoreS2LongStandingQueue (review, M1): past wcLongRTT a record of the
+// exit whose queue is past wcDqMin but within Δq of what OFF left, with no
+// resends, holds B where it is and counts for nothing (judge p3: one such
+// record is a snapshot). A run of them is no snapshot: a ×1.25 step past the
+// knee by 5 to 10% leaves a queue that stands under Δq (60 ms at 600 ms),
+// and no rule of STARTUP saw it (flat, the autopilot's freeze, a settle
+// part: none came). 60 records of 45 ms, 2 s apart, with the autopilot
+// probing the pool in every other interval, left STARTUP at 4 MiB with flat
+// 0 after 120 s. Once the exit's latest three records all show the queue,
+// STARTUP ends there.
+func TestWcoreS2LongStandingQueue(t *testing.T) {
+	c, in := wtStartup()
+	c.tBase, c.sndSeen, c.sndAny = 600*time.Millisecond, true, true
+	c.qOffSnd = 3 * time.Millisecond
+	push := func(at time.Time, q time.Duration) {
+		copy(c.qSnds[1:], c.qSnds[:])
+		c.qSnds[0] = wcRate{at, q.Seconds()}
+		c.qSnd, c.qSndAt = q, at
+	}
+	for i := 3; i >= 1; i-- { // the clean records OFF left on
+		push(wtT0.Add(-time.Duration(i)*2*time.Second), 2*time.Millisecond)
+	}
+	end := -1
+	var ev []wcEvent
+	for i := 0; i < 60; i++ {
+		now := wtT0.Add(time.Duration(i) * 2 * time.Second)
+		in.now, in.apProbing = now, i%2 == 1
+		m := wtMeas(1, 6e6, 4*wtMiB)
+		m.at = now
+		m.qTurn, m.qOK = c.qRef, true
+		push(now, 45*time.Millisecond)
+		m.sndOK, m.snd, m.sndSegs, m.sndAt = true, 0, 20000, now
+		m.qSnd, m.qSndOK = 45*time.Millisecond, true
+		c.startup(in, m, &ev)
+		if c.state != wcStartup {
+			end = i
+			break
+		}
+	}
+	switch {
+	case end < 0:
+		t.Errorf("60 records of 45 ms (Δq 60 ms): still STARTUP at %.2f MiB, flat %d", float64(c.B)/wtMiB, c.flat)
+	case end != wcSndHist-1:
+		t.Errorf("STARTUP ended at record %d, want the %dth (a queue in each of the latest %d)", end+1, wcSndHist, wcSndHist)
+	case len(ev) == 0 || ev[0].kind != wcEvFilled:
+		t.Errorf("STARTUP ended with events %+v, want the knee", ev)
+	default:
+		t.Logf("the knee at record %d: %v, B %.2f MiB", end+1, c.state, float64(c.B)/wtMiB)
 	}
 }
