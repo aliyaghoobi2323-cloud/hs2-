@@ -25,7 +25,8 @@ import (
 // shapedConn → C3's hostQ → TLS), taking the next one only once the write
 // returned: no more than one frame past the socket's low-water mark. smux
 // asks the frame size of a stream's next frame (FrameSize): LaneFrameMax
-// for a light one, BulkFrameSize of the link's rate for a bulk one.
+// on the wire for a light one (lsLightData of data), BulkFrameSize of the
+// link's rate for a bulk one.
 //
 // What the engine adds around Sched:
 //
@@ -85,6 +86,10 @@ const (
 	// soon as its writer has its Done), then goes padded.
 	lsHoldWait = time.Millisecond
 )
+
+// lsLightData: a light frame's data, so that with its header it is
+// LaneFrameMax on the wire (a larger one the latency lane queues as bulk).
+const lsLightData = LaneFrameMax - smux.HeaderSize
 
 // The process's share of memory per user (§3.2, user_mem_share): a floor,
 // not a ceiling. A user holds more while memory is plentiful; only under
@@ -349,15 +354,16 @@ func (ls *linkSched) Push(f *smux.OutFrame) {
 }
 
 // FrameSize is the largest next data frame of stream sid (smux.FrameQueue):
-// LaneFrameMax while it is light (or not judged yet, within its first
-// classNewBytes), the link's bulk frame once it is bulk.
+// lsLightData while it is light (or not judged yet, within its first
+// classNewBytes): LaneFrameMax on the wire, as the latency lane takes it;
+// the link's bulk frame once it is bulk.
 func (ls *linkSched) FrameSize(sid uint32) int {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 	if fl := ls.flows[sid]; fl != nil && queueClass(fl.cls, &fl.stats) == ClassBulk {
 		return ls.frame
 	}
-	return LaneFrameMax
+	return lsLightData
 }
 
 // admit puts a stream frame in the scheduler.
@@ -496,6 +502,18 @@ func (ls *linkSched) run() {
 			}
 		}
 		buf = f.AppendTo(buf[:0])
+		// A stream's writer has its Done as soon as its frame's bytes are in
+		// hand, so it queues its next frame while this one is written: a
+		// stream of a user's own (one download) keeps its turn instead of
+		// losing it to every frame its writer is late for (a user of one
+		// stream next to one of 16 took 47.5% of the link where its floor
+		// was 50%, at 10 Mbit/s). A stream still has one frame queued at
+		// most, past the one being written; a failed write fails the
+		// session's writers (Failed) as it did.
+		early := it.u != nil
+		if early {
+			f.Done(len(buf), nil)
+		}
 		// a bulk frame leaves its last record open for the next frame's
 		// bytes (for lsHoldWait at most, when none is queued); a light or
 		// control one goes whole
@@ -508,7 +526,11 @@ func (ls *linkSched) run() {
 		} else {
 			n, err = ls.out.Write(buf)
 		}
-		f.Done(n, err)
+		if early {
+			f.Failed(err)
+		} else {
+			f.Done(n, err)
+		}
 		now := ctrlNow()
 		if it.ping != nil {
 			it.ping.lastTx.Store(now)
@@ -694,9 +716,9 @@ func (ls *linkSched) tunTurn(f *tunFlow, now int64) {
 	light := ls.tunLight(f)
 	lane, fmax := LaneBulk, ls.frame
 	if light {
-		lane, fmax = LaneLatency, LaneFrameMax
+		lane, fmax = LaneLatency, lsLightData
 	}
-	size := min(f.bytes+tunHdr*f.len(), fmax)
+	size := min(f.bytes+tunHdr*f.len(), fmax) + smux.HeaderSize
 	ls.s.Push(lsItem{tf: f, at: now, light: light}, f.u.tag, tunFlowFor|uint64(f.id), lane, size)
 	f.queued = true
 	ls.n++
@@ -718,7 +740,7 @@ func (ls *linkSched) buildTun(f *tunFlow, tb *[]byte) (at int64, pkts int) {
 	now := ctrlNow()
 	fmax := ls.frame
 	if light {
-		fmax = LaneFrameMax
+		fmax = lsLightData
 	}
 	room := st.Room()
 	b := (*tb)[:0]

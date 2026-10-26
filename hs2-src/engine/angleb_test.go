@@ -315,7 +315,7 @@ func (p *abProbe) within(a, b time.Time) []time.Duration {
 	return out
 }
 
-func pctDur(v []time.Duration, q int) time.Duration {
+func abPct(v []time.Duration, q int) time.Duration {
 	if len(v) == 0 {
 		return 0
 	}
@@ -364,7 +364,7 @@ func TestAngleBSameLinkProbe(t *testing.T) {
 		a := time.Now()
 		dn := rateOver(r.counter(r.down, 1), 8*time.Second)
 		b := time.Now()
-		p99o, p99x := pctDur(own.within(a, b), 99), pctDur(other.within(a, b), 99)
+		p99o, p99x := abPct(own.within(a, b), 99), abPct(other.within(a, b), 99)
 		up := float64(r.counter(r.up, 1).Load())
 		r.close()
 		t.Logf("sched %v: RTT floor %v; probe p99 %v (the bulk user's own), %v (another user), %d probes each; downloads %.2f Mbit/s, uploads %.2f Mbit/s overall",
@@ -455,7 +455,7 @@ func TestAngleBP10(t *testing.T) {
 			x := rateOver(c, time.Second)
 			least, sum = min(least, x), sum+x
 		}
-		p99 := pctDur(pr.within(a, time.Now()), 99)
+		p99 := abPct(pr.within(a, time.Now()), 99)
 		t.Logf("existing bulk user: %.3f C over 6 s, least second %.3f C; light user p99 %v (RTT floor %v)",
 			sum/6/capOld, least/capOld, p99.Round(100*time.Microsecond), floor.Round(100*time.Microsecond))
 		if p99 > floor+abBound {

@@ -99,6 +99,15 @@ func (f *OutFrame) Done(written int, err error) {
 	}
 }
 
+// Failed reports a failed write of a frame whose writer the queue already
+// told (Done before the write: the frame's data was in hand): it fails the
+// session's writers as Done with an error does.
+func (f *OutFrame) Failed(err error) {
+	if err != nil && f.sess != nil {
+		f.sess.notifyWriteError(err)
+	}
+}
+
 // Drop: the queue let go of a frame it will not write (its session died).
 func (f *OutFrame) Drop() {
 	if r := f.req.result; r != nil {

@@ -156,7 +156,7 @@ func TestAngleBUserBound64(t *testing.T) {
 	other := m.open(6)
 	errs := make(chan error, n+1)
 	for _, st := range sts {
-		go func() { _, err := st.Write(make([]byte, 4<<10)); errs <- err }()
+		go func() { _, err := st.Write(make([]byte, 2*lsLightData)); errs <- err }()
 	}
 	m.waitN(lsUserPending, 5, n-lsUserPending)
 	go func() { _, err := other.Write(make([]byte, 100)); errs <- err }()
@@ -172,7 +172,7 @@ func TestAngleBUserBound64(t *testing.T) {
 	if blocked != n-lsUserPending {
 		t.Fatalf("blocked writers %d, want %d", blocked, n-lsUserPending)
 	}
-	// each 4 KiB write is two 2 KiB frames (light, LaneFrameMax): 200 frames
+	// each write is two light frames (lsLightData): 200 frames
 	// of user 5 and the other user's one
 	var admitted []uint32
 	frames := 0
@@ -224,7 +224,7 @@ func TestAngleBUserBound64(t *testing.T) {
 	}
 }
 
-// smux asks the scheduler each frame's size: LaneFrameMax while the stream
+// smux asks the scheduler each frame's size: lsLightData while the stream
 // is light (unknown, within its first 32 KiB), the link's bulk frame
 // (BulkFrameSize of its rate) once it is bulk.
 func TestAngleBFrameSizes(t *testing.T) {
@@ -244,8 +244,8 @@ func TestAngleBFrameSizes(t *testing.T) {
 		}
 	}
 	for i, s := range sizes[:16] {
-		if s != LaneFrameMax {
-			t.Fatalf("frame %d of a new stream: %d B, want %d (%v)", i, s, LaneFrameMax, sizes)
+		if s != lsLightData {
+			t.Fatalf("frame %d of a new stream: %d B, want %d (%v)", i, s, lsLightData, sizes)
 		}
 	}
 	if s := sizes[len(sizes)-1]; s != BulkFrameSize(abRate) {
@@ -334,11 +334,11 @@ func TestAngleBTunQueues(t *testing.T) {
 		t.Fatalf("the TUN flow's first turn is not next (or not a bulk frame of 4 packets: %d)", it.pkts)
 	}
 	go st.Write(make([]byte, 128<<10))
-	for range 16 { // the stream's first 32 KiB (light), ahead of the TUN flow's bulk turn
+	for range (classNewBytes + lsLightData - 1) / lsLightData { // the stream's first 32 KiB (light), ahead of the TUN flow's bulk turn
 		m.waitN(2, 0, 0)
 		it := m.take()
 		if it.f == nil || it.f.Sid() != st.ID() {
-			t.Fatal("not the new stream's light frame")
+			t.Fatalf("not the new stream's light frame: f %v tf %v light %v", it.f != nil, it.tf != nil, it.light)
 		}
 		m.done(it)
 	}
