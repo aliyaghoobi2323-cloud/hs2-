@@ -1,12 +1,19 @@
 // rigload: the synthetic users of the big rig (R1 task 2,
 // docs/architecture/wip/rig-scale). Standard library only.
 //
-//	rigload server -listen 127.0.0.1:5211,127.0.0.1:5212,0.0.0.0:5213
+//	rigload server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213
 //	rigload client -spec spec.json        (one JSON object on stdout)
 //
-// A user is a source address (IPv4, or rotating addresses of one IPv6 /64).
-// Each user has flows; every connection starts with a 12 byte header
-// "RL" cmd 1 user(u32) flow(u32), so one server handles every port:
+// A user is a source address. A user takes one of two paths:
+//
+//	port  through the edge's user ports (hs2 relays the TCP connection): an
+//	      IPv4 address, or with v6 one IPv6 /64, a fresh address in it for
+//	      every connection
+//	tun   through the TUN (hs0), from its own inner address (src; IPv4, or
+//	      IPv6 with v6), to the exit's hs0 address; empty src: hs0's own
+//
+// Every connection starts with a 12 byte header "RL" cmd 1 user(u32) flow(u32),
+// so one server handles every port. Flows:
 //
 //	dn     bulk download: the server writes 32 KiB buffers until the connection
 //	       ends; counted where it arrives (the client)
@@ -15,13 +22,13 @@
 //	       so an upload is also counted where it arrives
 //	probe  interactive: 32 B every 200 ms on one connection, echoed; one RTT
 //	       per probe, sent on schedule whether or not the last one came back
+//	ping   tun users only: ICMP (ICMPv6 with v6) echo every 200 ms to the
+//	       exit's hs0 address, from the user's inner address
 //
-// Not tied to a user address: "tun_flows" (dn/up to the exit's hs0 address,
-// through the TUN) and "ping_tun" (ICMP echo every 200 ms to the exit's hs0
-// address). Bytes are counted in 100 ms bins (both ends run on the same host,
-// so the server's wall clock places an upload's bytes) and reported per
-// measurement window; probe and ping samples belong to the window they were
-// sent in, and one that has no answer 2 s after the run counts as lost.
+// Bytes are counted in 100 ms bins (both ends run on the same host, so the
+// server's wall clock places an upload's bytes) and reported per measurement
+// window; probe and ping samples belong to the window they were sent in, and
+// one that has no answer 2 s after the run counts as lost.
 package main
 
 import (
@@ -72,6 +79,9 @@ func main() {
 		}
 		var s Spec
 		if err := json.Unmarshal(b, &s); err != nil {
+			log.Fatalf("spec: %v", err)
+		}
+		if err := s.check(); err != nil {
 			log.Fatalf("spec: %v", err)
 		}
 		out := runClient(&s)
@@ -169,7 +179,7 @@ func serveConn(c net.Conn) {
 // ---------------------------------------------------------------- client
 
 type Flow struct {
-	Kind   string  `json:"kind"` // dn | up | probe
+	Kind   string  `json:"kind"` // dn | up | probe | ping
 	N      int     `json:"n"`
 	StartS float64 `json:"start_s"`
 	StopS  float64 `json:"stop_s"` // 0: the end of the run
@@ -177,8 +187,9 @@ type Flow struct {
 
 type User struct {
 	ID    string `json:"id"`
-	Src   string `json:"src"` // IPv4 source address; empty with V6
-	V6    bool   `json:"v6"`  // every connection from a fresh address in V6Prefix/64
+	Path  string `json:"path"` // port (default) | tun
+	Src   string `json:"src"`  // source address; port+v6: empty (rotating); tun: empty = hs0's own
+	V6    bool   `json:"v6"`   // IPv6 (port: rotating over V6Prefix/64)
 	Flows []Flow `json:"flows"`
 }
 
@@ -195,15 +206,35 @@ type Spec struct {
 	Bulk6      string   `json:"bulk6"` // the same over IPv6
 	Echo6      string   `json:"echo6"`
 	V6Prefix   string   `json:"v6_prefix"` // e.g. "fd77:1::"
-	TunBulk    string   `json:"tun_bulk"`  // exit's hs0 address:port
-	TunPing    string   `json:"tun_ping"`  // exit's hs0 address
-	PingTun    bool     `json:"ping_tun"`
+	TunBulk    string   `json:"tun_bulk"`  // exit's hs0 address:port (dn, up and probe)
+	TunBulk6   string   `json:"tun_bulk6"`
+	TunPing    string   `json:"tun_ping"` // exit's hs0 address
+	TunPing6   string   `json:"tun_ping6"`
 	ProbeMs    int      `json:"probe_ms"`
 	ProbeBytes int      `json:"probe_bytes"`
 	PingMs     int      `json:"ping_ms"`
 	Users      []User   `json:"users"`
-	TunFlows   []Flow   `json:"tun_flows"`
 	Windows    []Window `json:"windows"`
+}
+
+func (s *Spec) check() error {
+	for _, u := range s.Users {
+		if u.Path != "" && u.Path != "port" && u.Path != "tun" {
+			return fmt.Errorf("user %s: path %q", u.ID, u.Path)
+		}
+		for _, f := range u.Flows {
+			switch f.Kind {
+			case "dn", "up", "probe":
+			case "ping":
+				if u.Path != "tun" {
+					return fmt.Errorf("user %s: ping on the port path (ICMP does not cross user ports)", u.ID)
+				}
+			default:
+				return fmt.Errorf("user %s: flow kind %q", u.ID, f.Kind)
+			}
+		}
+	}
+	return nil
 }
 
 type bins struct{ b []atomic.Int64 }
@@ -310,13 +341,17 @@ func latOf(all []*rtts, from, to float64) *Lat {
 
 type ustate struct {
 	u         User
+	idx       int
 	dn, up    *bins
 	probe     rtts
+	ping      rtts
 	conns     atomic.Int32 // connections made
 	dialErrs  atomic.Int32
 	shortEnds atomic.Int32 // bulk connections that ended before their stop
 	probeErrs atomic.Int32
 }
+
+func (us *ustate) tun() bool { return us.u.Path == "tun" }
 
 type client struct {
 	s     *Spec
@@ -325,8 +360,6 @@ type client struct {
 	mu    sync.Mutex
 	errs  map[string]int
 	users []*ustate
-	tun   *ustate
-	ping  rtts
 }
 
 func (c *client) err(f string, a ...any) {
@@ -360,15 +393,31 @@ func randV6(prefix string) net.IP {
 	return out
 }
 
-func (c *client) dial(us *ustate, port string) (net.Conn, error) {
-	d := net.Dialer{Timeout: dialWait}
-	addr := port
+// target: where a flow of this user goes (bulk/echo for TCP flows)
+func (c *client) target(us *ustate, probe bool) string {
+	s := c.s
 	switch {
-	case us == c.tun:
+	case us.tun() && us.u.V6:
+		return s.TunBulk6
+	case us.tun():
+		return s.TunBulk
+	case us.u.V6 && probe:
+		return s.Echo6
 	case us.u.V6:
-		d.LocalAddr = &net.TCPAddr{IP: randV6(c.s.V6Prefix)}
-	default:
+		return s.Bulk6
+	case probe:
+		return s.Echo
+	}
+	return s.Bulk
+}
+
+func (c *client) dial(us *ustate, addr string) (net.Conn, error) {
+	d := net.Dialer{Timeout: dialWait}
+	switch {
+	case us.u.Src != "":
 		d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(us.u.Src)}
+	case !us.tun() && us.u.V6:
+		d.LocalAddr = &net.TCPAddr{IP: randV6(c.s.V6Prefix)}
 	}
 	return d.Dial("tcp", addr)
 }
@@ -381,11 +430,16 @@ func header(cmd byte, user, flow int) []byte {
 	return h
 }
 
-func (c *client) bulk(us *ustate, ui, fi int, f Flow, addr string) {
-	stop := c.end
+func (c *client) stopOf(f Flow) time.Time {
 	if f.StopS > 0 {
-		stop = c.at(f.StopS)
+		return c.at(f.StopS)
 	}
+	return c.end
+}
+
+func (c *client) bulk(us *ustate, fi int, f Flow) {
+	stop := c.stopOf(f)
+	addr := c.target(us, false)
 	sleepUntil(c.at(f.StartS))
 	for time.Until(stop) > 100*time.Millisecond {
 		conn, err := c.dial(us, addr)
@@ -401,7 +455,7 @@ func (c *client) bulk(us *ustate, ui, fi int, f Flow, addr string) {
 		if f.Kind == "up" {
 			cmd = 'U'
 		}
-		if _, err := conn.Write(header(cmd, ui, fi)); err != nil {
+		if _, err := conn.Write(header(cmd, us.idx, fi)); err != nil {
 			conn.Close()
 			c.err("header %s: %v", f.Kind, err)
 			continue
@@ -446,20 +500,22 @@ func (c *client) bulk(us *ustate, ui, fi int, f Flow, addr string) {
 	}
 }
 
-func (c *client) probe(us *ustate, ui, fi int, f Flow, addr string) {
-	stop := c.end
-	if f.StopS > 0 {
-		stop = c.at(f.StopS)
-	}
+// phase: a random start within one period, so hundreds of probes do not fire together
+func phase(every time.Duration) time.Duration {
+	var ph [2]byte
+	rand.Read(ph[:])
+	return time.Duration(binary.BigEndian.Uint16(ph[:])) * every / 65536
+}
+
+func (c *client) probe(us *ustate, fi int, f Flow) {
+	stop := c.stopOf(f)
+	addr := c.target(us, true)
 	every := time.Duration(c.s.ProbeMs) * time.Millisecond
 	size := c.s.ProbeBytes
 	if size < 8 {
 		size = 8
 	}
-	// a random phase, so hundreds of probes do not fire together
-	var ph [2]byte
-	rand.Read(ph[:])
-	sleepUntil(c.at(f.StartS).Add(time.Duration(binary.BigEndian.Uint16(ph[:])) * every / 65536))
+	sleepUntil(c.at(f.StartS).Add(phase(every)))
 	conn, err := c.dial(us, addr)
 	if err != nil {
 		us.dialErrs.Add(1)
@@ -468,7 +524,7 @@ func (c *client) probe(us *ustate, ui, fi int, f Flow, addr string) {
 	}
 	us.conns.Add(1)
 	defer conn.Close()
-	if _, err := conn.Write(header('E', ui, fi)); err != nil {
+	if _, err := conn.Write(header('E', us.idx, fi)); err != nil {
 		c.err("probe header: %v", err)
 		return
 	}
@@ -529,22 +585,33 @@ func csum(b []byte) uint16 {
 	return ^uint16(s)
 }
 
-func (c *client) pingTun() {
-	dst := net.ParseIP(c.s.TunPing)
-	pc, err := net.ListenPacket("ip4:icmp", "0.0.0.0")
+var pingIDs atomic.Uint32
+
+// ping: ICMP echo from the user's inner address (ICMPv6 with v6; the kernel
+// fills the ICMPv6 checksum), each ping flow with its own echo id
+func (c *client) ping(us *ustate, f Flow) {
+	stop := c.stopOf(f)
+	netw, dst, bind, req, rep := "ip4:icmp", c.s.TunPing, "0.0.0.0", byte(8), byte(0)
+	if us.u.V6 {
+		netw, dst, bind, req, rep = "ip6:ipv6-icmp", c.s.TunPing6, "::", 128, 129
+	}
+	if us.u.Src != "" {
+		bind = us.u.Src
+	}
+	pc, err := net.ListenPacket(netw, bind)
 	if err != nil {
-		c.err("icmp socket: %v", err)
+		c.err("icmp socket %s %s: %v", netw, bind, err)
 		return
 	}
 	defer pc.Close()
-	id := uint16(os.Getpid())
+	id := uint16(os.Getpid()) + uint16(pingIDs.Add(1))*7919
 	every := time.Duration(c.s.PingMs) * time.Millisecond
 	var mu sync.Mutex
 	sentAt := map[uint16]time.Duration{}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		pc.SetReadDeadline(c.end.Add(grace))
+		pc.SetReadDeadline(stop.Add(grace))
 		b := make([]byte, 2048)
 		for {
 			n, _, err := pc.ReadFrom(b)
@@ -552,7 +619,7 @@ func (c *client) pingTun() {
 				return
 			}
 			now := c.off()
-			if n < 8 || b[0] != 0 || binary.BigEndian.Uint16(b[4:]) != id {
+			if n < 8 || b[0] != rep || binary.BigEndian.Uint16(b[4:]) != id {
 				continue
 			}
 			seq := binary.BigEndian.Uint16(b[6:])
@@ -561,25 +628,29 @@ func (c *client) pingTun() {
 			delete(sentAt, seq)
 			mu.Unlock()
 			if ok {
-				c.ping.got(s.Seconds(), float64(now-s)/1e6)
+				us.ping.got(s.Seconds(), float64(now-s)/1e6)
 			}
 		}
 	}()
+	to := &net.IPAddr{IP: net.ParseIP(dst)}
+	sleepUntil(c.at(f.StartS).Add(phase(every)))
 	msg := make([]byte, 8+56)
 	t := time.NewTicker(every)
 	defer t.Stop()
-	for seq := uint16(0); time.Now().Before(c.end); seq++ {
-		msg[0], msg[1], msg[2], msg[3] = 8, 0, 0, 0
+	for seq := uint16(0); time.Now().Before(stop); seq++ {
+		msg[0], msg[1], msg[2], msg[3] = req, 0, 0, 0
 		binary.BigEndian.PutUint16(msg[4:], id)
 		binary.BigEndian.PutUint16(msg[6:], seq)
 		binary.BigEndian.PutUint64(msg[8:], uint64(time.Now().UnixNano()))
-		binary.BigEndian.PutUint16(msg[2:], csum(msg))
+		if !us.u.V6 {
+			binary.BigEndian.PutUint16(msg[2:], csum(msg))
+		}
 		s := c.off()
 		mu.Lock()
 		sentAt[seq] = s
 		mu.Unlock()
-		c.ping.sent(s.Seconds())
-		if _, err := pc.WriteTo(msg, &net.IPAddr{IP: dst}); err != nil {
+		us.ping.sent(s.Seconds())
+		if _, err := pc.WriteTo(msg, to); err != nil {
 			c.err("icmp send: %v", err)
 		}
 		<-t.C
@@ -589,11 +660,13 @@ func (c *client) pingTun() {
 
 type UserOut struct {
 	ID        string             `json:"id"`
+	Path      string             `json:"path"`
 	Src       string             `json:"src"`
 	Flows     []Flow             `json:"flows"`
 	Dn        map[string]float64 `json:"dn_mbit"`
 	Up        map[string]float64 `json:"up_mbit"`
 	Probe     map[string]*Lat    `json:"probe,omitempty"`
+	Ping      map[string]*Lat    `json:"ping,omitempty"`
 	Conns     int32              `json:"conns"`
 	DialErrs  int32              `json:"dial_errs,omitempty"`
 	ShortEnds int32              `json:"short_ends,omitempty"`
@@ -605,12 +678,14 @@ type Out struct {
 	TotalS   float64            `json:"total_s"`
 	Windows  []Window           `json:"windows"`
 	Users    []UserOut          `json:"users"`
-	DnSum    map[string]float64 `json:"dn_sum_mbit"`
+	DnSum    map[string]float64 `json:"dn_sum_mbit"` // port users
 	UpSum    map[string]float64 `json:"up_sum_mbit"`
-	ProbeAll map[string]*Lat    `json:"probe_all,omitempty"`
-	Tun      *UserOut           `json:"tun,omitempty"`
-	PingTun  map[string]*Lat    `json:"ping_tun,omitempty"`
-	Dn1s     []float64          `json:"dn_1s"` // users' downloads together, per second from t0
+	TunDnSum map[string]float64 `json:"tun_dn_sum_mbit"` // tun users (inner goodput)
+	TunUpSum map[string]float64 `json:"tun_up_sum_mbit"`
+	ProbeAll map[string]*Lat    `json:"probe_all,omitempty"` // port users' probes together
+	ProbeTun map[string]*Lat    `json:"probe_tun,omitempty"` // tun users' TCP probes together
+	PingTun  map[string]*Lat    `json:"ping_tun,omitempty"`  // every ICMP ping together
+	Dn1s     []float64          `json:"dn_1s"`               // every user's downloads, per second from t0
 	Up1s     []float64          `json:"up_1s"`
 	Errs     map[string]int     `json:"errs,omitempty"`
 }
@@ -631,12 +706,14 @@ func runClient(s *Spec) *Out {
 	c := &client{s: s, errs: map[string]int{}}
 	c.t0 = time.Now()
 	c.end = c.at(s.TotalS)
-	for _, u := range s.Users {
-		c.users = append(c.users, &ustate{u: u, dn: newBins(s.TotalS), up: newBins(s.TotalS)})
+	for i, u := range s.Users {
+		if u.Path == "" {
+			u.Path = "port"
+		}
+		c.users = append(c.users, &ustate{u: u, idx: i + 1, dn: newBins(s.TotalS), up: newBins(s.TotalS)})
 	}
-	c.tun = &ustate{u: User{ID: "tun", Flows: s.TunFlows}, dn: newBins(s.TotalS), up: newBins(s.TotalS)}
 	var wg sync.WaitGroup
-	start := func(us *ustate, ui int, bulk, echo string) {
+	for _, us := range c.users {
 		for fi, f := range us.u.Flows {
 			for k := 0; k < max(f.N, 1); k++ {
 				wg.Add(1)
@@ -644,81 +721,70 @@ func runClient(s *Spec) *Out {
 					defer wg.Done()
 					switch f.Kind {
 					case "dn", "up":
-						c.bulk(us, ui, fi*1000+k, f, bulk)
+						c.bulk(us, fi*1000+k, f)
 					case "probe":
-						c.probe(us, ui, fi*1000+k, f, echo)
-					default:
-						c.err("unknown flow kind %q", f.Kind)
+						c.probe(us, fi*1000+k, f)
+					case "ping":
+						c.ping(us, f)
 					}
 				}()
 			}
 		}
 	}
-	for i, us := range c.users {
-		bulk, echo := s.Bulk, s.Echo
-		if us.u.V6 {
-			bulk, echo = s.Bulk6, s.Echo6
-		}
-		start(us, i+1, bulk, echo)
-	}
-	if len(s.TunFlows) > 0 {
-		start(c.tun, 0, s.TunBulk, s.TunBulk)
-	}
-	if s.PingTun {
-		wg.Add(1)
-		go func() { defer wg.Done(); c.pingTun() }()
-	}
 	wg.Wait()
 
 	out := &Out{T0: c.t0.UnixMilli(), TotalS: s.TotalS, Windows: s.Windows,
-		DnSum: map[string]float64{}, UpSum: map[string]float64{}, Errs: c.errs}
-	uo := func(us *ustate) UserOut {
-		o := UserOut{ID: us.u.ID, Src: us.u.Src, Flows: us.u.Flows,
+		DnSum: map[string]float64{}, UpSum: map[string]float64{},
+		TunDnSum: map[string]float64{}, TunUpSum: map[string]float64{}, Errs: c.errs}
+	lat := func(r []*rtts, w Window, m *map[string]*Lat) {
+		if l := latOf(r, w.From, w.To); l != nil {
+			if *m == nil {
+				*m = map[string]*Lat{}
+			}
+			(*m)[w.Name] = l
+		}
+	}
+	var probes, tprobes, pings []*rtts
+	for _, us := range c.users {
+		o := UserOut{ID: us.u.ID, Path: us.u.Path, Src: us.u.Src, Flows: us.u.Flows,
 			Dn: map[string]float64{}, Up: map[string]float64{},
 			Conns: us.conns.Load(), DialErrs: us.dialErrs.Load(), ShortEnds: us.shortEnds.Load(), ProbeErrs: us.probeErrs.Load()}
-		if us.u.V6 {
+		switch {
+		case !us.tun() && us.u.V6:
 			o.Src = s.V6Prefix + "/64"
+		case us.tun() && us.u.Src == "":
+			o.Src = "hs0"
 		}
 		for _, w := range s.Windows {
 			o.Dn[w.Name] = us.dn.mbit(w.From, w.To)
 			o.Up[w.Name] = us.up.mbit(w.From, w.To)
-			if l := latOf([]*rtts{&us.probe}, w.From, w.To); l != nil {
-				if o.Probe == nil {
-					o.Probe = map[string]*Lat{}
-				}
-				o.Probe[w.Name] = l
-			}
+			lat([]*rtts{&us.probe}, w, &o.Probe)
+			lat([]*rtts{&us.ping}, w, &o.Ping)
 		}
-		return o
-	}
-	var all []*rtts
-	for _, us := range c.users {
-		out.Users = append(out.Users, uo(us))
-		all = append(all, &us.probe)
+		out.Users = append(out.Users, o)
+		pings = append(pings, &us.ping)
+		if us.tun() {
+			tprobes = append(tprobes, &us.probe)
+		} else {
+			probes = append(probes, &us.probe)
+		}
 	}
 	for _, w := range s.Windows {
-		var d, u float64
-		for _, x := range out.Users {
-			d += x.Dn[w.Name]
-			u += x.Up[w.Name]
+		var d, u, td, tu float64
+		for i, x := range out.Users {
+			if c.users[i].tun() {
+				td += x.Dn[w.Name]
+				tu += x.Up[w.Name]
+			} else {
+				d += x.Dn[w.Name]
+				u += x.Up[w.Name]
+			}
 		}
 		out.DnSum[w.Name], out.UpSum[w.Name] = round3(d), round3(u)
-		if l := latOf(all, w.From, w.To); l != nil {
-			if out.ProbeAll == nil {
-				out.ProbeAll = map[string]*Lat{}
-			}
-			out.ProbeAll[w.Name] = l
-		}
-		if s.PingTun {
-			if out.PingTun == nil {
-				out.PingTun = map[string]*Lat{}
-			}
-			out.PingTun[w.Name] = latOf([]*rtts{&c.ping}, w.From, w.To)
-		}
-	}
-	if len(s.TunFlows) > 0 {
-		t := uo(c.tun)
-		out.Tun = &t
+		out.TunDnSum[w.Name], out.TunUpSum[w.Name] = round3(td), round3(tu)
+		lat(probes, w, &out.ProbeAll)
+		lat(tprobes, w, &out.ProbeTun)
+		lat(pings, w, &out.PingTun)
 	}
 	for sec := 0; float64(sec) < s.TotalS; sec++ {
 		var d, u float64

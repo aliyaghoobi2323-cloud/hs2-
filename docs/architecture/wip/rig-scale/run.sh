@@ -6,15 +6,18 @@
 #   N      hs2 links (min_links = max_links = N on both servers)
 #   RATE   bottleneck, Mbit/s, each direction      RTT  ms      LOSS  %, each direction
 #   MODE   fqcodel | pfifo:LIMIT | agg:RATE | police:RATE | police:RATE+LEAF   (rig.sh)
-#   USERS  synthetic users = source addresses (<= 500 IPv4, + 1 with V6)
+#   USERS  synthetic users = source addresses (<= 500 IPv4, + 1 with V6, + TUN users)
 #   MIX    s5 | lone16 | one_vs_16 | newheavy | tunping     (ana.py spec)
 #   BIN    old | new: the binaries in $OLD_BIN / $NEW_BIN
 #   extra: DIR=dn|up (bulk direction of lone16/one_vs_16/newheavy), DN, UP (s5
-#          flows, 4 and 2), TDN (tunping's TUN downloads, 4), CONNS (the heavy
-#          user's connections, 16), NHBULK (newheavy's existing bulk user, 1),
-#          V6=K (user K is one IPv6 /64, a fresh address per connection),
-#          WARM, DUR, SETTLE (s), AGGQ_MS, POLICE_BURST_MS, and any HS2_*=V,
-#          passed to both hs2 processes (the R1 kill switches, for example).
+#          flows, 4 and 2), TDN, TUNDIR (tunping's bulk through hs0, 4 dn),
+#          CONNS (the heavy user's connections, 16), NHBULK (newheavy's existing
+#          bulk user, 1), V6=K (port user K is one IPv6 /64, a fresh address
+#          per connection), TUN=K (the first K users go through the TUN, each
+#          from its own inner address; tunping: 1), TUNV6=1 (those inner
+#          addresses and hs0 in IPv6), WARM, DUR, SETTLE (s), AGGQ_MS,
+#          POLICE_BURST_MS, and any HS2_*=V, passed to both hs2 processes (the
+#          R1 kill switches, for example).
 #
 # Lines that differ only in BIN form one cell; the cell runs in the order
 # ABBABA (A = old) for REPS (3) repeats each; a cell with one BIN runs REPS
@@ -107,7 +110,7 @@ sssnap() {
 run_one() {
   local id=$1 bin=$2 order=$3 rep=$4 cell=$5
   local r=$OUT/raw/$id w=$WORK/$id bp tok k v hs2env="" wait=0 ok=1 why=""
-  local total="" nusers="" pe="" px=""
+  local total="" nusers="" ntun="" pe="" px=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
   local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6
   WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20
@@ -142,12 +145,12 @@ run_steps() {
   [ -n "${EDGE_CPUS:-}" ] && te="taskset -c $EDGE_CPUS"
   [ -n "${EXIT_CPUS:-}" ] && tx="taskset -c $EXIT_CPUS"
   # the users and the timeline
-  read -r nusers total < <(python3 "$D/ana.py" spec "$cell" "$r/spec.json" 2> "$r/spec.err")
-  [ -n "$total" ] || { why="spec: $(tail -1 "$r/spec.err")"; return 1; }
-  RATE=$RATE RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers V6=$V6 AGGQ_MS=$AGGQ_MS \
+  read -r nusers total ntun < <(python3 "$D/ana.py" spec "$cell" "$r/spec.json" 2> "$r/spec.err")
+  [ -n "$ntun" ] || { why="spec: $(tail -1 "$r/spec.err")"; return 1; }
+  RATE=$RATE RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers NTUN=$ntun V6=$V6 AGGQ_MS=$AGGQ_MS \
     "$D/rig.sh" up 2> "$r/rig.err" || { why="rig up: $(tail -1 "$r/rig.err")"; return 1; }
   mkconf "$w" "$N" || { why="hs2 config"; return 1; }
-  ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,0.0.0.0:5213 > "$r/rigload-server.log" 2>&1 &
+  ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 > "$r/rigload-server.log" 2>&1 &
   PIDS+=($!)
   ip netns exec $E $te env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/edge.json" > "$r/edge.log" 2>&1 &
   pe=$!; PIDS+=($pe)
@@ -159,6 +162,7 @@ run_steps() {
   n=$("$D/rig.sh" wait-links "$N" $lw)
   echo "{\"links_wait_s\":$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f", b - a}'),\"links_at_start\":${n:-0},\"pid_edge\":$pe,\"pid_exit\":$px}" > "$r/links.json"
   [ "${n:-0}" -ge "$N" ] || { why="only ${n:-0} of $N links up after $lw s"; return 1; }
+  "$D/rig.sh" tun-up 2> "$r/tun-up.err" || { why="tun-up: $(tail -1 "$r/tun-up.err")"; return 1; }
   case "$MODE" in
     *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
                PIDS+=($!); sleep 1.5 ;;

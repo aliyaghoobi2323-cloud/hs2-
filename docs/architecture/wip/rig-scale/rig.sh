@@ -4,7 +4,8 @@
 # side), the bottleneck in r-mid and the users' source addresses in r-edge.
 # It never touches the root namespace: every device is made inside r-mid.
 #
-#   RATE=50 RTT=72 LOSS=0 MODE=fqcodel NUSERS=200 V6=1 rig.sh up   (NUSERS: IPv4 users)
+#   RATE=50 RTT=72 LOSS=0 MODE=fqcodel NUSERS=200 V6=1 NTUN=4 rig.sh up
+#   rig.sh tun-up      (once hs2 has made hs0 on both ends: IPv6 on hs0, routes back to the TUN users)
 #   rig.sh down
 #   rig.sh police      (loop: one policer per hs2 link connection, MODE with police:PR)
 #   rig.sh show        (tc -s of the bottleneck, both directions)
@@ -37,6 +38,11 @@
 # most 500), the i-th (from 0) is 10.100.(i/250).(i%250+1); V6 other than 0
 # adds the /64 fd77:1::/64 as a local route with ip_nonlocal_bind, so a user
 # can rotate over any address in it (one /64 = one user in R1).
+# TUN users (r-edge): NTUN inner addresses on lo, the i-th (from 0)
+# 10.110.(i/250).(i%250+1)/32 and fd00:110:(i+1)::1/128 (each in a /64 of its
+# own). Their packets leave through hs0 (routes to the exit's hs0 address);
+# `tun-up` gives hs0 fd00:77::1/64 (edge) and fd00:77::2/64 (exit) and routes
+# 10.110.0.0/16 and fd00:110::/32 back through the exit's hs0.
 set -u
 ID=${RIG_ID:-}
 E=r-edge$ID; M=r-mid$ID; X=r-exit$ID
@@ -99,8 +105,9 @@ bottleneck() {
 }
 
 up() {
-  : ${RATE:?} ${RTT:?} ${LOSS:=0} ${MODE:=fqcodel} ${NUSERS:=1} ${V6:=0}
+  : ${RATE:?} ${RTT:?} ${LOSS:=0} ${MODE:=fqcodel} ${NUSERS:=1} ${V6:=0} ${NTUN:=0}
   [ "$NUSERS" -le 500 ] || die "NUSERS $NUSERS > 500"
+  [ "$NTUN" -le 500 ] || die "NTUN $NTUN > 500"
   parse_mode
   down 2>/dev/null
   for n in $E $M $X; do ip netns add $n || die "netns add $n"; done
@@ -133,10 +140,14 @@ up() {
   if [ -n "$POL" ]; then
     for d in me mx; do nsx $M tc qdisc add dev $d clsact || die "clsact $d"; done
   fi
-  # users
+  # users, and the TUN users' inner addresses
   {
     for i in $(seq 0 $((NUSERS - 1))); do
       echo "addr add 10.100.$((i / 250)).$((i % 250 + 1))/32 dev lo"
+    done
+    for i in $(seq 0 $((NTUN - 1))); do
+      echo "addr add 10.110.$((i / 250)).$((i % 250 + 1))/32 dev lo"
+      printf 'addr add fd00:110:%x::1/128 dev lo nodad\n' $((i + 1))
     done
   } | ip -n $E -batch - || die "user addresses"
   if [ "$V6" != 0 ]; then
@@ -145,6 +156,18 @@ up() {
   fi
   # the path answers before anyone uses it
   nsx $E ping -c1 -W2 10.202.0.1 >/dev/null || die "edge cannot reach exit"
+}
+
+# tun-up: IPv6 on hs0 (both ends) and the routes back to the TUN users; hs2
+# makes hs0 at its start, so this runs once both hs2 are up
+tun_up() {
+  local n
+  for n in $E $X; do ip -n $n link show hs0 >/dev/null 2>&1 || die "no hs0 in $n"; done
+  ip -n $E addr replace fd00:77::1/64 dev hs0 nodad || die "hs0 v6 edge"
+  ip -n $X addr replace fd00:77::2/64 dev hs0 nodad || die "hs0 v6 exit"
+  ip -n $X route replace 10.110.0.0/16 dev hs0 || die "route to TUN users"
+  ip -n $X -6 route replace fd00:110::/32 dev hs0 || die "v6 route to TUN users"
+  nsx $E ping -c1 -W3 10.77.0.2 >/dev/null || die "no answer through hs0"
 }
 
 down() {
@@ -206,9 +229,10 @@ wait_links() {
 
 case "$cmd" in
   up) up ;;
+  tun-up) tun_up ;;
   down) down ;;
   police) police ;;
   show) show ;;
   wait-links) wait_links "$2" "$3" ;;
-  *) echo "usage: rig.sh up|down|police|show|wait-links N S" >&2; exit 2 ;;
+  *) echo "usage: rig.sh up|tun-up|down|police|show|wait-links N S" >&2; exit 2 ;;
 esac
