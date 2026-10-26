@@ -1691,14 +1691,36 @@ ask_direction(){
 #   direct : listener = kharej (exit) , dialer = iran (edge)
 #   reverse: listener = iran  (edge) , dialer = kharej (exit)
 
+#
+# The link is built by the binary from the config just written (`hs2 link`,
+# C15): the same builder as the "Show a tunnel's hs2:// link" screen, so the
+# link always says what the tunnel runs with, and it can be shown again later
+# from the config's "link" block (link_json). An older binary without
+# `hs2 link` falls back to the bash encoder — the same 13 fields, byte for byte.
 show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu] [encap] [proto]
   # Fields 12 and 13 are this tunnel's service name and tun subnet, so the
   # other server runs it under the same name on the same addresses.
-  local L; L=$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}|${11:-}|$UNIT|$TUN_BASE")
+  local L
+  L=$("$BIN" link -c "$CFG" --unit "$UNIT" 2>/dev/null) || L=""
+  case "$L" in
+    hs2://?*|hs2v3://?*) ;;
+    *) L="hs2://$(encode_link "$1|$2|$3|$4|$5|$6|$7|$8|${9:-}|${10:-}|${11:-}|$UNIT|$TUN_BASE")" ;;
+  esac
   echo >&2; hr
   ok "SETUP LINK — copy it to the OTHER server:"
-  _c '1;33' "hs2://$L"
+  _c '1;33' "$L"
+  info "It holds this tunnel's key: keep it private. Show it again any time: hs2-menu → 9) Show a tunnel's hs2:// link."
   hr
+}
+
+# link_json ENDPOINT DOMAIN TRANSPORT UDP PANEL prints the config's "link" block
+# (C15): the link fields a config does not otherwise hold — on the side that
+# makes the link the values it put in, on the side that pastes it the values it
+# read — so `hs2 link` rebuilds the very same link from either server later.
+# `hs2 check` knows the block; the daemon never reads it. udp is JSON true/false.
+link_json(){
+  local u=false; [ "$4" = true ] && u=true
+  printf '"link": {"endpoint": "%s", "domain": "%s", "transport": "%s", "udp": %s, "panel": "%s"}' "$1" "$2" "$3" "$u" "$5"
 }
 
 # parse_link reads a pasted hs2:// link into ENDPOINT DOMAIN SHARED PANEL
@@ -1709,10 +1731,35 @@ show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu
 # tunnel "hs2" on 10.77.0.0/30, exactly what it always was).
 parse_link(){
   read -rp "Paste the hs2:// setup link from the OTHER server: " RAW </dev/tty
-  RAW=${RAW#hs2://}
-  local DEC; DEC=$(decode_link "$RAW") || die "invalid link"
-  IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU ENCAP PROTO LNAME LSUBNET <<< "$DEC"
+  local DEC out k v rc=0
+  ENDPOINT="" DOMAIN="" SHARED="" PANEL="" CARRIER="" UDP="" TRANSPORT="" DIRECTION="" MTU="" ENCAP="" PROTO="" LNAME="" LSUBNET=""
+  # The extended form (more addresses, R9; a certificate pin, R8) needs a newer
+  # installer: dropping those fields silently would weaken the tunnel.
+  case "$RAW" in
+    hs2v3://*) die "this link is from a newer installer (hs2v3://) — update the installer on THIS server (bash install.sh → 5) Upgrade), then paste it again." ;;
+  esac
+  # The binary reads the link (`hs2 link --decode`, C15) — on stdin, so the key
+  # never shows on a command line. An older binary without it: the bash decoder.
+  out=$(printf '%s\n' "$RAW" | "$BIN" link --decode 2>&1) || rc=$?
+  if [ "$rc" = 0 ]; then
+    while IFS='=' read -r k v; do
+      case "$k" in
+        endpoint) ENDPOINT=$v ;; domain) DOMAIN=$v ;; shared) SHARED=$v ;; panel) PANEL=$v ;;
+        carrier) CARRIER=$v ;; udp) UDP=$v ;; transport) TRANSPORT=$v ;; direction) DIRECTION=$v ;;
+        mtu) MTU=$v ;; encap) ENCAP=$v ;; proto) PROTO=$v ;; unit) LNAME=$v ;; tun_base) LSUBNET=$v ;;
+      esac
+    done <<< "$out"
+  elif printf '%s' "$out" | grep -q "unknown command"; then
+    RAW=${RAW#hs2://}
+    DEC=$(decode_link "$RAW") || die "invalid link"
+    IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU ENCAP PROTO LNAME LSUBNET <<< "$DEC"
+  else
+    die "${out#link: } — copy the whole link from the OTHER server again."
+  fi
   [ -n "$ENDPOINT" ] && [ -n "$SHARED" ] || die "link is missing fields"
+  # The link's own panel field, for this side's link block: the reverse exit
+  # asks its own panel into PANEL afterwards (ask_kharej_targets).
+  LPANEL=$PANEL
   CARRIER=${CARRIER:-mtcp}; UDP=${UDP:-false}
   if [ -z "$TRANSPORT" ]; then
     case "$CARRIER" in udp) TRANSPORT=udp ;; auto) TRANSPORT=auto ;; *) TRANSPORT=tcp ;; esac
@@ -1877,7 +1924,8 @@ kharej_listener(){
   "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
-  "expose": "$PANEL"${PMJ}
+  "expose": "$PANEL"${PMJ},
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "$PANEL")
 }
 EOF
   elif [ "$TRANSPORT" = "tun" ] && [ "$TUN_ENCAP" = "tcp" ]; then
@@ -1903,7 +1951,8 @@ EOF
   "cover_seed": "$COVER_SEED",
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
-  "expose": "$PANEL"${PMJ}
+  "expose": "$PANEL"${PMJ},
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "$PANEL")
 }
 EOF
   elif [ "$TRANSPORT" = "tun" ]; then
@@ -1925,7 +1974,8 @@ EOF
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
   "shared_key": "$SHARED",${PROTOLINE}
   "expose": "$PANEL"${PMJ},
-  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "$PANEL")
 }
 EOF
   else
@@ -1937,7 +1987,8 @@ EOF
   "mode": "listen", "carrier": "$CARRIER", "reverse": false,
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
-  "shared_key": "$SHARED"
+  "shared_key": "$SHARED",
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "$PANEL")
 }
 EOF
   fi
@@ -1981,7 +2032,8 @@ kharej_dialer(){
   "shared_key": "$SHARED",
   "expose": "$PANEL"${PMJ},
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
-  "bind_local_ip": "$EGRESSIP"
+  "bind_local_ip": "$EGRESSIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
@@ -2003,7 +2055,8 @@ EOF
   "shared_key": "$SHARED",
   "expose": "$PANEL"${PMJ},
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
-  "bind_local_ip": "$EGRESSIP"
+  "bind_local_ip": "$EGRESSIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
@@ -2028,7 +2081,8 @@ EOF
   "shared_key": "$SHARED",${PROTOLINE}
   "expose": "$PANEL"${PMJ},
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
-  "bind_local_ip": "$EGRESSIP"
+  "bind_local_ip": "$EGRESSIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
@@ -2042,7 +2096,8 @@ EOF
   "mode": "listen", "carrier": "$CARRIER", "reverse": true,
   "addr": "$ENDPOINT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_KHAREJ", "peer_ip": "$TUN_PEER_KHAREJ", "mtu": 1280,
-  "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP"
+  "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service kharej; start_service kharej
@@ -2104,7 +2159,8 @@ iran_dialer(){
   "shared_key": "$SHARED",
   "forward_ports": "$PORTS", "peer_panel": "$PANEL",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
-  "bind_local_ip": "$EGRESSIP", "user_listen_ip": "$USERIP"
+  "bind_local_ip": "$EGRESSIP", "user_listen_ip": "$USERIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -2133,7 +2189,8 @@ EOF
   "shared_key": "$SHARED",
   "forward_ports": "$PORTS", "peer_panel": "$PANEL", "user_listen_ip": "$USERIP",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
-  "bind_local_ip": "$EGRESSIP"
+  "bind_local_ip": "$EGRESSIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -2165,7 +2222,8 @@ EOF
   "shared_key": "$SHARED",${PROTOLINE}
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
   "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
-  "bind_local_ip": "$EGRESSIP"
+  "bind_local_ip": "$EGRESSIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -2180,7 +2238,8 @@ EOF
   "mode": "dial", "carrier": "$CARRIER", "reverse": false,
   "addr": "$ENDPOINT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
-  "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP"
+  "shared_key": "$SHARED", "bind_local_ip": "$EGRESSIP",
+  $(link_json "$ENDPOINT" "$DOMAIN" "$TRANSPORT" "$UDP" "$LPANEL")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -2242,7 +2301,8 @@ iran_listener(){
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
-  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "-")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -2279,7 +2339,8 @@ EOF
   "shared_key": "$SHARED",
   "cert_file": "$CERT", "key_file": "$KEY",
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
-  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "-")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -2311,7 +2372,8 @@ EOF
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
   "shared_key": "$SHARED",${PROTOLINE}
   "forward_ports": "$PORTS", "user_listen_ip": "$USERIP",
-  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER
+  "min_links": $LINK_MIN, "max_links": $LINK_MAX, "per_link": $LINK_PER,
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "-")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -2327,7 +2389,8 @@ EOF
   "mode": "dial", "carrier": "$CARRIER", "reverse": true,
   "addr": "$BINDADDR:$TPORT",
   "iface": "$TUNIF", "local_cidr": "$TUN_SUBNET_IRAN", "peer_ip": "$TUN_PEER_IRAN", "mtu": 1280,
-  "shared_key": "$SHARED"
+  "shared_key": "$SHARED",
+  $(link_json "$PUBIP$PSUF" "$DOMAIN" "$TRANSPORT" "$UDP" "-")
 }
 EOF
     chmod 600 "$CFG"; write_service iran; start_service iran
@@ -3415,7 +3478,10 @@ tm_ports(){ # unit cfg
     "$BIN" ports -c "$cfg" 2>&1 | sed 's/^/  /' >&2 || true
     hr
     if cfg_is_dial "$cfg"; then
-      udp=$(jraw "$cfg" udp)
+      # The binary reads the top-level key: jraw takes the first "udp" in the
+      # file, which can be the link block's (C15) once the binary rewrote the
+      # file with its keys sorted.
+      udp=$("$BIN" config -c "$cfg" get udp 2>/dev/null) || udp=""
       say "  This Iran server OPENS the user ports; the Kharej server decides where each one goes."
       say "  1) Add user port(s)"
       say "  2) Remove user port(s)"
@@ -3755,6 +3821,181 @@ tm_cert(){ # unit cfg
   pause
 }
 
+# ---------- the hs2:// link of a tunnel (C15) ----------------------------------
+# bin_has_link: the installed binary rebuilds links (`hs2 link`, from R1). An
+# older one prints "unknown command" for it.
+bin_has_link(){
+  local out
+  out=$("$BIN" link 2>&1) || true
+  case "$out" in *"unknown command"*|"") return 1 ;; esac
+  return 0
+}
+
+# link_ask_missing CFG FIELDS: ask the link fields an older install never stored
+# (`hs2 link` names them), with this server's own defaults. Fills LINK_ARGS (the
+# flags for hs2 link) and LINK_ASKED (their names). 1 = a field that cannot be
+# asked here (the config itself needs fixing).
+link_ask_missing(){ # cfg fields
+  local cfg="$1" f v def port addr names
+  LINK_ARGS=(); LINK_ASKED=""
+  for f in $2; do
+    case "$f" in
+      endpoint)
+        addr=$(jget "$cfg" addr); port=""
+        case "$addr" in *:*) port=":${addr##*:}" ;; esac
+        def="$(first_public_ip)$port"
+        say "  This server makes the link, but its public address — the one the other server connects to — was never stored (it listens on ${addr:-all addresses})."
+        while :; do
+          read -rp "  Public address of THIS server${port:+ (IP:PORT)} [$def]: " v </dev/tty || return 1
+          v=${v:-$def}
+          if [ -n "$port" ]; then valid_hostport "$v" && break; warn "Enter it as IP:PORT, e.g. $def."
+          else valid_domain "$v" && break; warn "Enter the IP address (this tunnel has no port), e.g. $def."; fi
+        done
+        LINK_ARGS+=(--endpoint "$v") ;;
+      domain)
+        names=$( { openssl x509 -in "$(jget "$cfg" cert_file)" -noout -ext subjectAltName 2>/dev/null || true; } \
+                 | { grep -o 'DNS:[^, ]*' || true; } | sed 's/^DNS://' | tr '\n' ' ')
+        names=${names% }; def=${names%% *}
+        say "  The domain the other server checks this server's certificate for was never stored${names:+ (the certificate names: $names)}."
+        while :; do
+          read -rp "  Domain${def:+ [$def]}: " v </dev/tty || return 1
+          v=${v:-$def}
+          valid_domain "$v" && break
+          warn "Enter a domain name, e.g. tunnel.example.com."
+        done
+        LINK_ARGS+=(--domain "$v") ;;
+      transport)
+        def=2; [ "$(jraw "$cfg" mtu)" = 1380 ] && def=1
+        say "  Carrier $(jget "$cfg" carrier) runs two ways, and which one this tunnel was set up as was never stored (tcp or tun):"
+        say "    1) tcp — the user ports over the TLS links (setup: Transport → tcp)"
+        say "    2) tun — a tun interface over TLS, plus the user ports (setup: Transport → tun → tcp)"
+        say "  (The default is read from the MTU: setup writes 1380 for tcp and asks it — 1320 by default — for tun.)"
+        while :; do
+          read -rp "  Which one? [$def]: " v </dev/tty || return 1
+          case "${v:-$def}" in 1|tcp) v=tcp; break ;; 2|tun) v=tun; break ;; esac
+          warn "Choose 1 or 2."
+        done
+        LINK_ARGS+=(--transport "$v") ;;
+      udp)
+        say "  Whether the Iran server also forwards UDP on the user ports was never stored on this server."
+        say "  (On the Iran server: Tunnel manager → this tunnel → p) Ports says UDP ON or OFF.)"
+        read -rp "  Does the Iran server forward UDP on the user ports too? [y/N]: " v </dev/tty || return 1
+        case "$v" in y|Y|yes) v=true ;; *) v=false ;; esac
+        LINK_ARGS+=(--udp "$v") ;;
+      *)
+        err "The config lacks $f, which cannot be asked here — fix the config (Tunnel manager → Edit) or set the tunnel up again."
+        return 1 ;;
+    esac
+    LINK_ASKED="$LINK_ASKED $f"
+  done
+  return 0
+}
+
+# link_save CFG: write the asked link fields (LINK_ARGS) into the config's link
+# block, through the binary (JSON-aware, validated like hs2 check, written
+# atomically at 0600) after keeping the config as .prev. Only the record
+# changes: the daemon never reads the block, so nothing restarts.
+link_save(){ # cfg
+  local cfg="$1" i k v saved=""
+  tm_ports_backup "$cfg" || return 0
+  for ((i = 0; i < ${#LINK_ARGS[@]}; i += 2)); do
+    k=${LINK_ARGS[$i]#--}; v=${LINK_ARGS[$((i + 1))]}
+    if ! tm_cfgset "$cfg" "link.$k" "$v"; then
+      [ -z "$saved" ] || cat "$cfg.prev" > "$cfg"
+      err "Not saved — the config is as it was."
+      return 0
+    fi
+    saved="$saved $k"
+  done
+  chmod 600 "$cfg" 2>/dev/null || true
+  ok "Saved in $cfg (link block:$saved); the previous version is $cfg.prev. The tunnel itself is unchanged and keeps running."
+}
+
+# show_tunnel_link [UNIT]: "Show a tunnel's hs2:// link" (main menu 9, and l) in
+# a tunnel's menu) — for setting the OTHER server up again without a new setup
+# here. The binary rebuilds the link from the tunnel's config (`hs2 link`); a
+# field an older install never stored is asked (link_ask_missing) and can be
+# saved so it is never asked again. Nothing about the tunnel changes, and the
+# link is only shown on this screen — never written to a file or a log.
+show_tunnel_link(){ # [unit]
+  local u="${1:-}" units=() c i cfg out rc ef miss ep host ips
+  if [ -z "$u" ]; then
+    mapfile -t units < <(tm_units)
+    if [ ${#units[@]} -eq 0 ]; then
+      warn "No hs2 tunnel on this server yet."; pause; return 0
+    fi
+    echo >&2; hr; say " ${C_B}Show a tunnel's hs2:// link${C_0}"; hr
+    i=0
+    for c in "${units[@]}"; do i=$((i + 1)); say "  $i) $c — $(unit_desc "$c")"; done
+    say "  0) Back"
+    read -rp "Which tunnel? " c </dev/tty || return 0
+    case "$c" in
+      ''|0|b|B) return 0 ;;
+      *[!0-9]*) warn "Invalid choice."; return 0 ;;
+    esac
+    if [ "$c" -lt 1 ] || [ "$c" -gt ${#units[@]} ]; then warn "There is no tunnel $c."; return 0; fi
+    u=${units[$((10#$c - 1))]}
+  fi
+  cfg=$(tm_cfg "$u"); [ -n "$cfg" ] || cfg=$(unit_cfg "$u")
+  if [ ! -r "$cfg" ]; then
+    err "Cannot read $cfg: a tunnel's config holds its key, so only root can read it (mode 0600)."
+    info "Run the menu as root:  sudo hs2-menu"
+    pause; return 0
+  fi
+  if ! bin_has_link; then
+    warn "This hs2 binary predates 'hs2 link'. Upgrade it first (main menu → 5) Upgrade), then show the link."
+    pause; return 0
+  fi
+  LINK_ARGS=(); LINK_ASKED=""
+  ef=$(mktemp)
+  rc=0; out=$("$BIN" link -c "$cfg" --unit "$u" 2>"$ef") || rc=$?
+  if [ "$rc" = 3 ]; then
+    miss=$(sed -n 's/^link: missing: //p' "$ef" | sed 's/ (.*//')
+    echo >&2; info "$u: the link needs what this server never stored:"
+    if link_ask_missing "$cfg" "$miss"; then
+      rc=0; out=$("$BIN" link -c "$cfg" --unit "$u" ${LINK_ARGS[@]+"${LINK_ARGS[@]}"} 2>"$ef") || rc=$?
+    fi
+  fi
+  case "$rc" in
+    0) ;;
+    4) err "Cannot read $cfg: only root can (it holds the tunnel key). Run the menu as root:  sudo hs2-menu"
+       rm -f "$ef"; pause; return 0 ;;
+    *) err "The link of $u cannot be rebuilt from its config:"; sed 's/^/     /' "$ef" >&2
+       rm -f "$ef"; pause; return 0 ;;
+  esac
+  echo >&2; hr
+  ok "hs2:// link of $u — paste it on the OTHER server when you set it up there:"
+  _c '1;33' "$out"
+  if command -v qrencode >/dev/null 2>&1; then
+    printf '%s' "$out" | qrencode -t ANSIUTF8 >&2 2>/dev/null || true
+  else
+    info "(Install qrencode to also see it as a QR code: apt install qrencode)"
+  fi
+  { grep -v '^link: this link contains' "$ef" || true; } | sed 's/^link: /  note: /' >&2
+  rm -f "$ef"
+  warn "This link contains the tunnel key: whoever has it can connect to this tunnel's other server in place of this one."
+  warn "Keep it private. If it leaked, set this tunnel up again on both servers: a new setup makes a new key."
+  # The address this side once announced may be stale (a new NAT or public IP).
+  if ! tm_dials "$cfg" && [[ " $LINK_ASKED " != *" endpoint "* ]]; then
+    ep=$( { printf '%s\n' "$out" | "$BIN" link --decode 2>/dev/null || true; } | sed -n 's/^endpoint=//p')
+    host=${ep%:*}; host=${host#[}; host=${host%]}
+    ips=$(local_ips)
+    case $'\n'"$ips"$'\n' in
+      *$'\n'"$host"$'\n'*|$'\n'$'\n'*) ;;
+      *) [ -z "$host" ] || warn "The link's address $host is not on this server's interfaces: fine if the provider NATs it to this server; if this server's public IP changed, the link must carry the new one: hs2 link -c $cfg --endpoint <new-ip:port>" ;;
+    esac
+  fi
+  hr
+  if [ -n "$LINK_ASKED" ]; then
+    read -rp "Save${LINK_ASKED} in this tunnel's config, so it is not asked next time? [Y/n]: " c </dev/tty || c=n
+    case "$c" in
+      n|N|no) info "Not saved: it will be asked again next time." ;;
+      *) link_save "$cfg" ;;
+    esac
+  fi
+  pause
+}
+
 tm_tunnel_menu(){
   local u="$1" cfg c
   cfg=$(tm_cfg "$u")
@@ -3769,6 +4010,7 @@ tm_tunnel_menu(){
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
     if tm_has_ports "$cfg"; then say "  p) Ports — user ports and where each one goes"; fi
+    say "  l) Show the hs2:// link (to set the other server up again)"
     say "  d) Diagnose (health check — config, endpoint, certificate, tuning)"
     if tm_cert_side "$cfg"; then say "  c) Certificate — expiry, renewal check, renew now"; fi
     say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
@@ -3785,6 +4027,7 @@ tm_tunnel_menu(){
       7) tm_toggle_autostart "$u" ;;
       8) tm_tune "$u" "$cfg" ;;
       p|P) tm_ports "$u" "$cfg" ;;
+      l|L) show_tunnel_link "$u" ;;
       d|D) tm_doctor "$u" "$cfg" ;;
       c|C) tm_cert "$u" "$cfg" ;;
       u|U) upgrade "$u"; pause ;;
@@ -4234,9 +4477,10 @@ main_menu(){
     echo "    6) Backup current config" >&2
     echo "    7) Restore a backup" >&2
     echo "    8) Uninstall hs2 (removes ALL tunnels; asks before removing the program)" >&2
+    echo "    9) Show a tunnel's hs2:// link (to set the other server up again)" >&2
     echo "    0) Exit" >&2
     echo >&2
-    read -rp "Choose [0-8]: " CH </dev/tty || exit 0
+    read -rp "Choose [0-9]: " CH </dev/tty || exit 0
     case "$CH" in
       1) setup_kharej; exit 0 ;;
       2) setup_iran; exit 0 ;;
@@ -4246,6 +4490,7 @@ main_menu(){
       6) backup >/dev/null; pause ;;
       7) restore; exit 0 ;;
       8) uninstall; exit 0 ;;
+      9) show_tunnel_link ;;
       0|q|Q) exit 0 ;;
       *) warn "Invalid choice: pick a number from the list." ;;
     esac

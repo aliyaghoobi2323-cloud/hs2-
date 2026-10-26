@@ -443,12 +443,22 @@ func statusCmd(args []string) {
 	path := statusPath(*cfgPath)
 	if !*watch {
 		printStatus(path)
+		printLinkStatus(*cfgPath)
 		return
 	}
 	for {
 		fmt.Print("\033[H\033[2J") // clear
 		printStatus(path)
+		printLinkStatus(*cfgPath)
 		time.Sleep(statusInterval)
+	}
+}
+
+// printLinkStatus: whether this tunnel's hs2:// link can be rebuilt from its
+// config (C15), never the link itself.
+func printLinkStatus(cfgPath string) {
+	if l := linkStatusLine(cfgPath); l != "" {
+		fmt.Printf("  link:       %s\n", strings.TrimPrefix(l, "link: "))
 	}
 }
 

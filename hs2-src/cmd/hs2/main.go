@@ -3,6 +3,7 @@
 //	hs2 keygen                 -> print a fresh static keypair
 //	hs2 run -c <config.json>   -> run the engine with the configured carrier
 //	hs2 check -c <config.json> -> validate a config without starting anything
+//	hs2 link -c <config.json>  -> rebuild the tunnel's hs2:// setup link (link.go)
 package main
 
 import (
@@ -243,6 +244,8 @@ func main() {
 		portsCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])
+	case "link":
+		os.Exit(linkCmd(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)
