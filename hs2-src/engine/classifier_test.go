@@ -18,7 +18,7 @@ import (
 )
 
 // C1's model tests (REDESIGN §3.1): the classifier on synthetic time, one
-// tick each classTick, and the replay of the edge's one-day capture.
+// tick each classTick, and the replay of the edge's capture.
 
 // clsTick is one evaluation of a flow.
 type clsTick struct {
@@ -434,7 +434,7 @@ func TestClassifierStatusLine(t *testing.T) {
 	}
 }
 
-// ---- the replay (task 3's one-day capture of the edge) ------------------------
+// ---- the replay (task 3's capture of the edge) ------------------------------
 
 // clsRec is one line of the capture: a flow's bytes up (user → abroad, the
 // edge's tx) and down over the 100 ms that end at t (ms).
@@ -445,9 +445,14 @@ type clsRec struct {
 	Dn int64           `json:"dn"`
 }
 
-// clsReplayPath is the capture (task 3, ≤ 5 MB). Until it is checked in, the
-// replay runs on a synthetic capture in the same format (clsSynth).
-const clsReplayPath = "testdata/c1_replay.jsonl.gz"
+// clsReplayPath is the edge's capture (task 3: 20 minutes of real traffic,
+// ≤ 5 MB); clsSynthPath a synthetic capture in its format (clsSynth, seed
+// 1; HS2_C1_SYNTH=1 writes it anew), replayed where the real one is not in
+// the tree.
+const (
+	clsReplayPath = "testdata/c1_replay.jsonl.gz"
+	clsSynthPath  = "testdata/c1_synth.jsonl.gz"
+)
 
 func clsLoad(path string) (map[string][]clsRec, error) {
 	fh, err := os.Open(path)
@@ -599,9 +604,9 @@ func clsRef(x []int64) (cls []Class, lightNow []bool) {
 	return cls, lightNow
 }
 
-// TestClassifierReplay replays the edge's capture (task 3), or a synthetic
-// one in its format while that is pending, each flow from either end (the
-// edge sends up, the exit down), ticked on the capture's 100 ms bins:
+// TestClassifierReplay replays the edge's capture (task 3), or the
+// synthetic one where that is not in the tree, each flow from either end
+// (the edge sends up, the exit down), ticked on the capture's 100 ms bins:
 //
 //   - each verdict (class_tx, class_flow, confirmed) is the rule's on the
 //     bins, computed the plain way;
@@ -611,13 +616,15 @@ func clsRef(x []int64) (cls []Class, lightNow []bool) {
 //     often the rule's hold (bulk until 2 s of silence) kept light traffic
 //     in the bulk lane.
 func TestClassifierReplay(t *testing.T) {
-	path := clsReplayPath
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
-		path = filepath.Join(t.TempDir(), "c1_synth.jsonl.gz")
-		if err := clsSynth(path, 1); err != nil {
+	if os.Getenv("HS2_C1_SYNTH") == "1" {
+		if err := clsSynth(clsSynthPath, 1); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("PENDING: %s (task 3) is not in the tree yet: replaying a synthetic capture in its format", clsReplayPath)
+	}
+	path := clsReplayPath
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		path = clsSynthPath
+		t.Logf("%s is not in the tree: replaying the synthetic %s", clsReplayPath, clsSynthPath)
 	}
 	flows, err := clsLoad(path)
 	if err != nil {
