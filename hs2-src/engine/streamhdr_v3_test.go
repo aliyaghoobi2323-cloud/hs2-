@@ -156,7 +156,8 @@ func TestBadSynLogged(t *testing.T) {
 	var lines []string
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	before := WireCounters()
+	badSyns := func() uint64 { n, _ := WireCounters(); return n }
+	before := badSyns()
 	started := make(chan struct{})
 	go logWireEvery(ctx, func(f string, a ...any) {
 		mu.Lock()
@@ -180,10 +181,10 @@ func TestBadSynLogged(t *testing.T) {
 		c1.Write([]byte{2, 0, 0, 0, sid, 0, 0, 0}) // version 2, SYN, no payload
 	}
 	deadline := time.Now().Add(2 * time.Second)
-	for WireCounters() < before+2 && time.Now().Before(deadline) {
+	for badSyns() < before+2 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if n := WireCounters() - before; n != 2 || sess.BadSyn() != 2 {
+	if n := badSyns() - before; n != 2 || sess.BadSyn() != 2 {
 		t.Fatalf("bad syn counted %d (session %d), want 2", n, sess.BadSyn())
 	}
 	time.Sleep(100 * time.Millisecond) // several ticks

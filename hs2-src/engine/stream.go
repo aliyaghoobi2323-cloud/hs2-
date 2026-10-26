@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/xtaci/smux"
 )
 
@@ -37,7 +38,7 @@ const (
 	// numbers stay taken.
 	kindTCP   byte = 1
 	kindUDP   byte = 2
-	kindL3    byte = 3 // TUN packets, tlscarrier frame format
+	kindL3    byte = 3 // TUN packets, tlscarrier TUN frames (AppendTunFrame)
 	kindCtrl  byte = 4 // per-link health control channel (ping/pong stats)
 	kindPool  byte = 5 // reverse pool-control: edge tells the exit its desired link count
 	kindStats byte = 6 // exit -> edge per-link send-side stats (download pressure)
@@ -214,12 +215,13 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 
 // streamPkt carries L3 frames over one smux stream (see pktConn).
 type streamPkt struct {
-	st   *smux.Stream
-	hdr  [7]byte
-	rbuf []byte
+	st  *smux.Stream
+	tun tlscarrier.TunReader
 }
 
-func newStreamPkt(st *smux.Stream) *streamPkt { return &streamPkt{st: st} }
+func newStreamPkt(st *smux.Stream) *streamPkt {
+	return &streamPkt{st: st, tun: tlscarrier.TunReader{R: st}}
+}
 
 func (s *streamPkt) WriteRaw(b []byte) error {
 	s.st.SetWriteDeadline(time.Now().Add(5 * time.Second))
@@ -227,25 +229,7 @@ func (s *streamPkt) WriteRaw(b []byte) error {
 	return err
 }
 
-func (s *streamPkt) ReadFrameReuse() (byte, []byte, error) {
-	if _, err := io.ReadFull(s.st, s.hdr[:]); err != nil {
-		return 0, nil, err
-	}
-	h := s.hdr
-	n := int(h[1])<<16 | int(h[2])<<8 | int(h[3])
-	pad := int(h[4])<<16 | int(h[5])<<8 | int(h[6])
-	if n > 1<<16 || pad > 1<<16 {
-		return 0, nil, errors.New("engine: oversized L3 frame")
-	}
-	if cap(s.rbuf) < n+pad {
-		s.rbuf = make([]byte, n+pad)
-	}
-	body := s.rbuf[:n+pad]
-	if _, err := io.ReadFull(s.st, body); err != nil {
-		return 0, nil, err
-	}
-	return h[0], body[:n], nil
-}
+func (s *streamPkt) ReadTunFrame() (byte, []byte, uint32, uint32, error) { return s.tun.Read() }
 
 func (s *streamPkt) SetReadDeadline(t time.Time) { s.st.SetReadDeadline(t) }
 func (s *streamPkt) Close() error                { return s.st.Close() }

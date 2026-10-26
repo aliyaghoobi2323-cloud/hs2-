@@ -100,7 +100,7 @@ func TestStatusProtocolLine(t *testing.T) {
 	if l := wireLine(liveStatus{}); l != "" {
 		t.Errorf("wire line %q with nothing refused", l)
 	}
-	if l := wireLine(liveStatus{BadSyn: 3}); l != "bad syn 3" {
+	if l := wireLine(liveStatus{BadSyn: 3}); l != "bad syn 3, bad tun frames 0" {
 		t.Errorf("wire line %q", l)
 	}
 }

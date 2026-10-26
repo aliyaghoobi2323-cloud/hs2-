@@ -88,7 +88,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	go logWire(ctx, logf)
 	var l3 *l3Set
 	if cfg.TUN != nil {
-		l3 = &l3Set{}
+		l3 = &l3Set{toUser: true} // its TUN's packets go to the users
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}

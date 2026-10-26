@@ -188,9 +188,11 @@ type liveStatus struct {
 
 	// The wire protocol (TLS carriers): the negotiated level and caps and the
 	// peers refused for their version, as rendered by tlscarrier.ProtocolLine,
-	// and the streams refused for a SYN without the v3 payload since start.
+	// and since start the streams refused for a SYN without the v3 payload and
+	// the TUN frames dropped for a descriptor that is not v3.
 	Protocol string `json:"protocol,omitempty"`
 	BadSyn   uint64 `json:"bad_syn,omitempty"`
+	BadTun   uint64 `json:"bad_tun,omitempty"`
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -349,7 +351,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		udpcarrier.SetHostSaturated(hs.Saturated)
 		if tlsCarrier(fc) {
 			ls.Protocol = tlscarrier.ProtocolLine()
-			ls.BadSyn = engine.WireCounters()
+			ls.BadSyn, ls.BadTun = engine.WireCounters()
 		}
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
@@ -833,10 +835,10 @@ func carrierName(fc fileConfig) string {
 // wireLine is what the receiver refused of the other server's wire v3 (§4.5),
 // "" while nothing was.
 func wireLine(ls liveStatus) string {
-	if ls.BadSyn == 0 {
+	if ls.BadSyn == 0 && ls.BadTun == 0 {
 		return ""
 	}
-	return fmt.Sprintf("bad syn %d", ls.BadSyn)
+	return fmt.Sprintf("bad syn %d, bad tun frames %d", ls.BadSyn, ls.BadTun)
 }
 
 // tlsCarrier reports whether the tunnel runs over TLS links (tlscarrier),

@@ -116,7 +116,7 @@ func TestPumpNeverBlocksOnStuckLink(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var s l3Set
-	s.add(&l3Link{id: 1, q: make(chan qpkt, l3QueueLen)}) // no writer
+	s.add(&l3Link{id: 1, q: make(chan l3pkt, l3QueueLen)}) // no writer
 	dev := &fakeTun{n: 5000, ctx: ctx}
 	go s.pumpTun(ctx, dev)
 	deadline := time.Now().Add(2 * time.Second)
@@ -140,7 +140,7 @@ func TestWriteLoopDeliversAndKeepsAlive(t *testing.T) {
 	var pool sync.Pool
 	for i := 0; i < 10; i++ {
 		p := tcpPacket(uint16(i), 1)
-		if !l.enqueue(&p) {
+		if !l.enqueue(&p, 7, flowHash(p)) {
 			t.Fatal("enqueue failed")
 		}
 	}
@@ -151,15 +151,15 @@ func TestWriteLoopDeliversAndKeepsAlive(t *testing.T) {
 	peer := tlscarrier.NewCarrier(b)
 	peer.SetReadDeadline(time.Now().Add(2 * time.Second))
 	for i := 0; i < 10; i++ {
-		ft, p, err := peer.ReadFrame()
-		if err != nil || ft != core.TypeData {
-			t.Fatalf("frame %d: ft=%d err=%v", i, ft, err)
+		ft, p, tag, flow, err := peer.ReadTunFrame()
+		if err != nil || ft != core.TypeData || tag != 7 || flow != flowHash(p) {
+			t.Fatalf("frame %d: ft=%d tag=%d flow=%#x err=%v", i, ft, tag, flow, err)
 		}
 		if got := binary.BigEndian.Uint16(p[20:]); got != uint16(i) {
 			t.Fatalf("frame %d out of order: sport %d", i, got)
 		}
 	}
-	ft, _, err := peer.ReadFrame()
+	ft, _, _, _, err := peer.ReadTunFrame()
 	if err != nil || ft != core.TypePing {
 		t.Fatalf("expected keepalive, got ft=%d err=%v", ft, err)
 	}
@@ -172,15 +172,15 @@ func TestWriteLoopDropsStalePackets(t *testing.T) {
 	l := newL3Link(tlscarrier.NewCarrier(a))
 	stale := tcpPacket(1, 1)
 	fresh := tcpPacket(2, 1)
-	l.q <- qpkt{&stale, time.Now().Add(-time.Second)}
-	l.q <- qpkt{&fresh, time.Now()}
+	l.q <- l3pkt{qpkt: qpkt{&stale, time.Now().Add(-time.Second)}}
+	l.q <- l3pkt{qpkt: qpkt{&fresh, time.Now()}}
 	var pool sync.Pool
 	var drops atomic.Uint64
 	go l.writeLoop(&pool, &drops)
 	defer l.markDead()
 	peer := tlscarrier.NewCarrier(b)
 	peer.SetReadDeadline(time.Now().Add(2 * time.Second))
-	ft, p, err := peer.ReadFrame()
+	ft, p, _, _, err := peer.ReadTunFrame()
 	if err != nil || ft != core.TypeData || binary.BigEndian.Uint16(p[20:]) != 2 {
 		t.Fatalf("expected only the fresh packet, got ft=%d err=%v", ft, err)
 	}
