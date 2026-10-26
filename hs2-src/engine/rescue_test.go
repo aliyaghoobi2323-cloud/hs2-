@@ -269,7 +269,7 @@ func TestRescueMovesUnansweredHello(t *testing.T) {
 	lag(m, 0) // it goes quiet
 	waitUntil(t, "a stream on link 1", 2*time.Second, func() bool { return len(ls[1].opened()) == 1 })
 	second := ls[1].opened()[0]
-	waitUntil(t, "the hello sent again", time.Second, func() bool { return bytes.Equal(second.written(), append([]byte{kindTCP}, hello...)) })
+	waitUntil(t, "the hello sent again", time.Second, func() bool { return bytes.Equal(second.written(), append([]byte{kindTCPPort, 0, 0}, hello...)) })
 	waitUntil(t, "the old stream closed", time.Second, first.closed)
 	if n := m.links[0].users.Load(); n != 0 {
 		t.Fatalf("link 0 keeps %d users after the move", n)
@@ -308,7 +308,7 @@ func TestRescueMovesSilentApp(t *testing.T) {
 	waitUntil(t, "a stream on link 1", 2*time.Second, func() bool { return len(ls[1].opened()) == 1 })
 	second := ls[1].opened()[0]
 	waitUntil(t, "the old stream closed", time.Second, first.closed)
-	if w := second.written(); !bytes.Equal(w, []byte{kindTCP}) {
+	if w := second.written(); !bytes.Equal(w, []byte{kindTCPPort, 0, 0}) {
 		t.Fatalf("new stream got %q, want the header only", w)
 	}
 	app.Write([]byte("SSH-2.0-x\r\n"))
@@ -338,7 +338,7 @@ func TestRescueLeavesWhatCannotBeSentAgain(t *testing.T) {
 			app, edge := tcpPair(t)
 			first, _, ended := startRelay(t, m, edge)
 			app.Write(c.b)
-			waitUntil(t, "the bytes on the first stream", time.Second, func() bool { return len(first.written()) == 1+len(c.b) }) // the header, then the bytes
+			waitUntil(t, "the bytes on the first stream", time.Second, func() bool { return len(first.written()) == len(userStreamHeader(false, 0))+len(c.b) }) // the header, then the bytes
 			lag(m, 0)
 			time.Sleep(400 * time.Millisecond)
 			if n := len(ls[1].opened()); n != 0 || first.closed() || m.rescue.moves.Load() != 0 {

@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"math/rand/v2"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,10 +22,11 @@ type tunWriter interface {
 }
 
 // pktConn is what an L3 link sends framed packets over: a whole TLS carrier,
-// or (in stream mode) one smux stream of a shared link.
+// or (in stream mode) one smux stream of a shared link. Frames are TUN frames
+// (tlscarrier.AppendTunFrame): each carries its packet's user tag and flow.
 type pktConn interface {
 	WriteRaw([]byte) error
-	ReadFrameReuse() (byte, []byte, error)
+	ReadTunFrame() (ftype byte, payload []byte, userTag, flow uint32, err error)
 	SetReadDeadline(time.Time)
 	Close() error
 }
@@ -90,7 +93,7 @@ var l3SessionSilent = 12 * time.Second
 type l3Link struct {
 	car pktConn
 	id  uint32        // rendezvous hash seed
-	q   chan qpkt     // packets waiting for the writer
+	q   chan l3pkt    // packets waiting for the writer
 	ka  time.Duration // idle time before a keepalive is sent
 	// kaFn, when set, decides ka per keepalive (stream mode: by what the peer
 	// supports); deadAfter, when set, replaces l3DeadAfter for the reader.
@@ -107,11 +110,18 @@ type qpkt struct {
 	t time.Time
 }
 
+// l3pkt is a packet queued on an L3 link with what its TUN frame carries:
+// its user's tag and its flow (flowKey).
+type l3pkt struct {
+	qpkt
+	tag, flow uint32
+}
+
 func newL3Link(car pktConn) *l3Link {
 	return &l3Link{
 		car:  car,
 		id:   rand.Uint32(),
-		q:    make(chan qpkt, l3QueueLen),
+		q:    make(chan l3pkt, l3QueueLen),
 		ka:   l3KeepaliveEvery,
 		done: make(chan struct{}),
 	}
@@ -189,9 +199,9 @@ func (l *l3Link) markDead() {
 }
 
 // enqueue hands a packet to the link without ever blocking.
-func (l *l3Link) enqueue(b *[]byte) bool {
+func (l *l3Link) enqueue(b *[]byte, tag, flow uint32) bool {
 	select {
-	case l.q <- qpkt{b, time.Now()}:
+	case l.q <- l3pkt{qpkt{b, time.Now()}, tag, flow}:
 		return true
 	default:
 		return false
@@ -203,11 +213,11 @@ func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 	batch := make([]byte, 0, l3BatchBytes+4096)
 	idle := time.NewTimer(l.keepalive())
 	defer idle.Stop()
-	add := func(p qpkt, now time.Time) {
+	add := func(p l3pkt, now time.Time) {
 		if now.Sub(p.t) > l3MaxSojourn {
 			drops.Add(1)
 		} else {
-			batch = tlscarrier.AppendFrame(batch, core.TypeData, *p.b)
+			batch = tlscarrier.AppendTunFrame(batch, core.TypeData, p.tag, p.flow, *p.b)
 		}
 		pool.Put(p.b)
 	}
@@ -232,7 +242,7 @@ func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 				continue // everything was stale
 			}
 		case <-idle.C:
-			batch = tlscarrier.AppendFrame(batch, core.TypePing, make([]byte, core.KeepalivePad()))
+			batch = tlscarrier.AppendTunFrame(batch, core.TypePing, 0, 0, make([]byte, core.KeepalivePad()))
 		}
 		if err := l.car.WriteRaw(batch); err != nil {
 			l.markDead()
@@ -249,6 +259,9 @@ type l3Set struct {
 	links []*l3Link
 	pool  sync.Pool     // *[]byte packet buffers
 	drops atomic.Uint64 // no link, queue full, or waited too long
+	// toUser: the TUN's packets go to the users (the exit's side); their
+	// user tag is that of their destination, else of their source (§3.1).
+	toUser bool
 }
 
 func (s *l3Set) add(l *l3Link) {
@@ -305,8 +318,10 @@ func (s *l3Set) closeAll() {
 // pick maps a packet to a live link by rendezvous (highest-random-weight)
 // hashing on its flow: a flow keeps its link for as long as that link lives,
 // and a dying link only moves its own flows.
-func (s *l3Set) pick(pkt []byte) *l3Link {
-	h := flowHash(pkt)
+func (s *l3Set) pick(pkt []byte) *l3Link { return s.pickFlow(flowHash(pkt)) }
+
+// pickFlow is pick for a packet whose flow hash is h.
+func (s *l3Set) pickFlow(h uint32) *l3Link {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	var best *l3Link
@@ -329,8 +344,9 @@ func (s *l3Set) serveLink(ctx context.Context, l *l3Link, dev tunWriter) {
 	s.linkToTun(ctx, l, dev)
 }
 
-// pumpTun reads IP packets from the TUN and queues each on its flow's link.
-// It never blocks on a link: no link or a full queue means drop.
+// pumpTun reads IP packets from the TUN and queues each on its flow's link,
+// with its user's tag and its flow for its frame (flowKey is parsed once). It
+// never blocks on a link: no link or a full queue means drop.
 func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 	size := dev.MTU() + 128
 	for ctx.Err() == nil {
@@ -349,7 +365,12 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 			continue
 		}
 		*bp = b[:n]
-		if l := s.pick(*bp); l == nil || !l.enqueue(bp) {
+		flow, user, ok := flowKey(*bp, s.toUser)
+		var tag uint32
+		if ok {
+			tag = UserTag(user, classV6Prefix)
+		}
+		if l := s.pickFlow(flow); l == nil || !l.enqueue(bp, tag, flow) {
 			s.pool.Put(bp)
 			s.drops.Add(1)
 		}
@@ -357,7 +378,9 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 }
 
 // linkToTun pumps received IP packets from one link into the TUN. Any frame,
-// keepalives included, proves the link is alive and extends the deadline.
+// keepalives included, proves the link is alive and extends the deadline. A
+// frame without the v3 descriptor ends the link's side channel: the stream is
+// out of step (counted, logged by logWire).
 func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 	defer l.markDead()
 	for ctx.Err() == nil {
@@ -366,8 +389,11 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 			dead = l.deadAfter
 		}
 		l.car.SetReadDeadline(time.Now().Add(dead))
-		ft, payload, err := l.car.ReadFrameReuse()
+		ft, payload, _, _, err := l.car.ReadTunFrame()
 		if err != nil {
+			if errors.Is(err, tlscarrier.ErrTunDesc) {
+				badTunFrames.Add(1)
+			}
 			return
 		}
 		if ft == core.TypeData {
@@ -392,13 +418,33 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 	}
 }
 
-// flowHash extracts a 5-tuple-ish key from an IP packet and hashes it with
-// FNV-1a (inline, so the per-packet path does not allocate). Supports IPv4
-// TCP/UDP; falls back to src+dst+proto for others, so every packet still maps
-// deterministically to a link.
+// flowHash is a packet's flow (flowKey): what picks its link, and what its TUN
+// frame carries.
 func flowHash(pkt []byte) uint32 {
+	flow, _, _ := flowKey(pkt, false)
+	return flow
+}
+
+// The bounds of the IPv6 extension-header walk (§3.1): past them the flow is
+// the 3-tuple.
+const (
+	l3MaxExtHdrs  = 8
+	l3MaxExtBytes = 256
+)
+
+// flowKey extracts a packet's flow key and hashes it with FNV-1a (inline, so
+// the per-packet path does not allocate): the 5-tuple — addresses, protocol,
+// ports — of TCP and UDP, over IPv4 and IPv6; the 3-tuple of anything else,
+// and of an IPv6 packet whose extension headers pass the walk's bounds or
+// that is a fragment. user is the inner address on the user's side (§3.1): the
+// source of a packet from the user, the destination of one going to the user
+// (toUser). ok is false for anything but an IPv4 or IPv6 packet; its flow is
+// then a hash of its bytes, so every packet still maps deterministically to a
+// link.
+func flowKey(pkt []byte, toUser bool) (flow uint32, user netip.Addr, ok bool) {
 	h := uint32(fnvOffset)
-	if len(pkt) >= 20 && pkt[0]>>4 == 4 { // IPv4
+	switch {
+	case len(pkt) >= 20 && pkt[0]>>4 == 4: // IPv4
 		ihl := int(pkt[0]&0x0f) * 4
 		proto := pkt[9]
 		h = fnvAdd(h, pkt[12:20]) // src+dst IP
@@ -406,12 +452,57 @@ func flowHash(pkt []byte) uint32 {
 		if (proto == 6 || proto == 17) && len(pkt) >= ihl+4 {
 			h = fnvAdd(h, pkt[ihl:ihl+4]) // src+dst ports
 		}
-	} else if len(pkt) >= 40 && pkt[0]>>4 == 6 { // IPv6
-		h = fnvAdd(h, pkt[8:40])
-	} else {
-		h = fnvAdd(h, pkt)
+		at := 12
+		if toUser {
+			at = 16
+		}
+		return h, netip.AddrFrom4([4]byte(pkt[at : at+4])), true
+	case len(pkt) >= 40 && pkt[0]>>4 == 6: // IPv6
+		h = fnvAdd(h, pkt[8:40]) // src+dst IP
+		proto, l4 := ipv6Transport(pkt)
+		h = fnvAdd(h, []byte{proto})
+		if (proto == 6 || proto == 17) && l4 > 0 && len(pkt) >= l4+4 {
+			h = fnvAdd(h, pkt[l4:l4+4]) // src+dst ports
+		}
+		at := 8
+		if toUser {
+			at = 24
+		}
+		return h, netip.AddrFrom16([16]byte(pkt[at : at+16])), true
 	}
-	return h
+	return fnvAdd(h, pkt), netip.Addr{}, false
+}
+
+// ipv6Transport walks an IPv6 packet's extension headers to its transport
+// header: its protocol and offset. Past l3MaxExtHdrs headers or l3MaxExtBytes
+// bytes of them, at a fragment header (the ports are in the first piece only:
+// all of them keep one flow), or where the packet ends, it gives up: the
+// first next header and offset 0, which keys the packet by its 3-tuple.
+func ipv6Transport(pkt []byte) (proto byte, off int) {
+	next, off := pkt[6], 40
+	for i := 0; ; i++ {
+		var size int
+		switch next {
+		case 0, 43, 60, 135, 139, 140: // hop-by-hop, routing, destination, mobility, HIP, shim6
+			if len(pkt) < off+2 {
+				return pkt[6], 0
+			}
+			size = (int(pkt[off+1]) + 1) * 8
+		case 51: // authentication header: in 4-byte words, less two
+			if len(pkt) < off+2 {
+				return pkt[6], 0
+			}
+			size = (int(pkt[off+1]) + 2) * 4
+		case 44: // fragment
+			return pkt[6], 0
+		default:
+			return next, off
+		}
+		if i == l3MaxExtHdrs || off-40+size > l3MaxExtBytes || len(pkt) < off+size {
+			return pkt[6], 0
+		}
+		next, off = pkt[off], off+size
+	}
 }
 
 const (

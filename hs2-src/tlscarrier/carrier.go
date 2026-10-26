@@ -19,7 +19,12 @@ import (
 type Carrier struct {
 	conn   net.Conn // *tls.Conn (server) or *utls.UConn (client)
 	sendMu sync.Mutex
-	rbuf   []byte // body buffer reused by ReadFrameReuse
+	rbuf   []byte    // body buffer reused by ReadFrameReuse
+	tun    TunReader // ReadTunFrame's
+	// the protocol level and the caps both ends have, as negotiated in the
+	// auth records (auth.go); zero on a carrier made by NewCarrier
+	level byte
+	caps  uint32
 }
 
 // writeTimeout bounds one write; a link that cannot drain for this long is
@@ -29,12 +34,94 @@ const writeTimeout = 5 * time.Second
 // NewCarrier wraps an already-authenticated connection as a Carrier.
 func NewCarrier(conn net.Conn) *Carrier { return &Carrier{conn: conn} }
 
+// Level is the protocol level negotiated for this link.
+func (c *Carrier) Level() byte { return c.level }
+
+// Caps is the caps both ends have on this link: a core runs on it only when
+// its bit is set (and its level is at most Level).
+func (c *Carrier) Caps() uint32 { return c.caps }
+
 // AppendFrame appends one unpadded frame to dst in the wire format SendFrame
 // uses, so a caller can coalesce several frames into one WriteRaw.
 func AppendFrame(dst []byte, ftype byte, payload []byte) []byte {
 	n := len(payload)
 	dst = append(dst, ftype, byte(n>>16), byte(n>>8), byte(n), 0, 0, 0)
 	return append(dst, payload...)
+}
+
+// A TUN frame (the packets of the TUN side channel, wire v3 §4.3) has a
+// 15-byte descriptor: the frame's 7 bytes, then the user tag and the flow
+// hash of its packet, so the receiver has both without parsing the packet:
+//
+//	[ftype:1][len:3][pad:3][user tag:4 BE][flow hash:4 BE][payload(len)][pad(pad)]
+const (
+	tunDescLen  = 15
+	maxTunFrame = 1 << 16 // a TUN frame's payload, or its pad: one IP packet at most
+)
+
+// ErrTunDesc is a TUN frame whose descriptor is not a v3 one: v2's 7 bytes,
+// or lengths no packet has (the stream is out of step: nothing after it can
+// be read).
+var ErrTunDesc = errors.New("tun frame with v2 descriptor")
+
+// AppendTunFrame appends one unpadded TUN frame to dst, for a coalesced
+// WriteRaw.
+func AppendTunFrame(dst []byte, ftype byte, userTag, flow uint32, pkt []byte) []byte {
+	n := len(pkt)
+	dst = append(dst, ftype, byte(n>>16), byte(n>>8), byte(n), 0, 0, 0,
+		byte(userTag>>24), byte(userTag>>16), byte(userTag>>8), byte(userTag),
+		byte(flow>>24), byte(flow>>16), byte(flow>>8), byte(flow))
+	return append(dst, pkt...)
+}
+
+// ParseTunDesc reads a TUN frame's descriptor h: its type, the payload's
+// length (the pad after it is h[4:7]), the user tag and the flow hash.
+func ParseTunDesc(h []byte) (ftype byte, n int, userTag, flow uint32, err error) {
+	if len(h) != tunDescLen {
+		return 0, 0, 0, 0, ErrTunDesc
+	}
+	n = int(h[1])<<16 | int(h[2])<<8 | int(h[3])
+	if pad := int(h[4])<<16 | int(h[5])<<8 | int(h[6]); n > maxTunFrame || pad > maxTunFrame {
+		return 0, 0, 0, 0, ErrTunDesc
+	}
+	return h[0], n, binary.BigEndian.Uint32(h[7:]), binary.BigEndian.Uint32(h[11:]), nil
+}
+
+// TunReader reads TUN frames off a byte stream — a carrier, or the smux
+// stream of a stream-mode link — without an allocation per frame.
+type TunReader struct {
+	R   io.Reader
+	hdr [tunDescLen]byte
+	buf []byte
+}
+
+// Read reads one frame; the payload is valid until the next Read. An error
+// wrapping ErrTunDesc leaves the stream out of step: drop it.
+func (t *TunReader) Read() (ftype byte, payload []byte, userTag, flow uint32, err error) {
+	if _, err = io.ReadFull(t.R, t.hdr[:]); err != nil {
+		return 0, nil, 0, 0, err
+	}
+	ftype, n, userTag, flow, err := ParseTunDesc(t.hdr[:])
+	if err != nil {
+		return 0, nil, 0, 0, err
+	}
+	body := n + (int(t.hdr[4])<<16 | int(t.hdr[5])<<8 | int(t.hdr[6]))
+	if cap(t.buf) < body {
+		t.buf = make([]byte, body)
+	}
+	if _, err = io.ReadFull(t.R, t.buf[:body]); err != nil {
+		return 0, nil, 0, 0, err
+	}
+	return ftype, t.buf[:n], userTag, flow, nil
+}
+
+// ReadTunFrame reads one TUN frame (AppendTunFrame) off the carrier; the
+// payload is valid until the next call.
+func (c *Carrier) ReadTunFrame() (ftype byte, payload []byte, userTag, flow uint32, err error) {
+	if c.tun.R == nil {
+		c.tun.R = c.conn
+	}
+	return c.tun.Read()
 }
 
 // WriteRaw writes frames built with AppendFrame in a single write.
@@ -203,17 +290,26 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 		raw.Close()
 		return nil, err
 	}
-	rec, nonce := makeClientAuth(sharedKey, ekm)
+	h := LocalAuthHdr()
+	rec, nonce := makeClientAuth(sharedKey, ekm, h)
 	if _, err := u.Write(rec); err != nil {
 		raw.Close()
 		return nil, err
 	}
-	if err := readServerProof(u, sharedKey, nonce, ekm); err != nil {
+	p, err := readServerProof(u, sharedKey, nonce, ekm)
+	if err == nil {
+		if err = checkProofLevel(h, p); err != nil {
+			proto.refused(false)
+		}
+	}
+	if err != nil {
 		raw.Close()
 		return nil, err
 	}
 	raw.SetDeadline(time.Time{})
-	return &Carrier{conn: u}, nil
+	caps := p.Caps & h.Caps // never more than this side has
+	proto.linked(p.Level, caps)
+	return &Carrier{conn: u, level: p.Level, caps: caps}, nil
 }
 
 // clientEKM exports the channel-binding secret of a finished uTLS handshake.

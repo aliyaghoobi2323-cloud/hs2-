@@ -225,7 +225,8 @@ func TestStatsRoundTripSlowVsFastReader(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := st.Write([]byte{kindTCP}); err != nil {
+		h := userStreamHeader(false, 0)
+		if _, err := st.Write(h[:]); err != nil {
 			t.Fatal(err)
 		}
 		go io.Copy(io.Discard, st)

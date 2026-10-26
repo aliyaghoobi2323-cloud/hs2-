@@ -30,7 +30,7 @@ func (c *synConn) Read(b []byte) (int, error) {
 
 func (c *synConn) Write(b []byte) (int, error) {
 	n, err := c.Conn.Write(b)
-	if len(b) == headerSize && b[1] == cmdSYN {
+	if len(b) == headerSize+SynPayloadLen && b[1] == cmdSYN {
 		for t := time.Now(); time.Since(t) < 5*time.Second; time.Sleep(time.Millisecond) {
 			if atomic.LoadInt64(&c.read) >= c.want && atomic.LoadInt32(&c.inRead) == 1 {
 				break

@@ -146,7 +146,7 @@ func TestRescueOldStreamEndsDuringMove(t *testing.T) {
 	first, _, ended := startRelay(t, m, edge)
 	hello := clientHello(t)
 	app.Write(hello)
-	waitUntil(t, "hello on first", time.Second, func() bool { return len(first.written()) == 1+len(hello) })
+	waitUntil(t, "hello on first", time.Second, func() bool { return len(first.written()) == len(userStreamHeader(false, 0))+len(hello) })
 	lag(m, 0)
 	select {
 	case <-l1.blocked:

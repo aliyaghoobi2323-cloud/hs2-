@@ -81,3 +81,26 @@ func TestLiveStatusShrinkingPool(t *testing.T) {
 		t.Errorf("exit status carries edge-only keys: %s", b)
 	}
 }
+
+// The wire protocol line rides the status file for the TLS carriers only, in
+// the words tlscarrier renders.
+func TestStatusProtocolLine(t *testing.T) {
+	for c, want := range map[string]bool{"mtcp": true, "l3mtcp": true, "tls": true, "dgtun": false, "udp": false, "": false} {
+		if got := tlsCarrier(fileConfig{Carrier: c}); got != want {
+			t.Errorf("carrier %q: tlsCarrier=%v, want %v", c, got, want)
+		}
+	}
+	line := "protocol: v3 level 1 (peer levels 1-1, caps 0xF); refused v2 peers: 0, refused peers (level): 0"
+	b, _ := json.Marshal(liveStatus{Protocol: line})
+	var got liveStatus
+	if err := json.Unmarshal(b, &got); err != nil || got.Protocol != line || !strings.Contains(string(b), `"protocol":`) {
+		t.Fatalf("protocol line lost in the status file: %s", b)
+	}
+	// What was refused of the other server's wire shows only once there is any.
+	if l := wireLine(liveStatus{}); l != "" {
+		t.Errorf("wire line %q with nothing refused", l)
+	}
+	if l := wireLine(liveStatus{BadSyn: 3}); l != "bad syn 3, bad tun frames 0" {
+		t.Errorf("wire line %q", l)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -119,8 +120,16 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		tconn.Close()
 		return
 	}
-	nonce, more, ok := parseClientAuth(s.SharedKey, ekm, first)
+	nonce, hdr, more, v2, ok := parseClientAuth(s.SharedKey, ekm, first)
 	if !ok {
+		if v2 {
+			// A v2 hs2 that knows the key: there is no v2 mode to serve it in.
+			// Closed (it redials with its backoff), and said why.
+			proto.refused(true)
+			s.logPeer(raw.RemoteAddr(), ErrPeerV2.Error())
+			tconn.Close()
+			return
+		}
 		if isLegacyAuth(s.SharedKey, first) {
 			s.logRare("tls: refused a pre-v2 client (no channel binding) from %s: upgrade the Iran server", raw.RemoteAddr())
 		}
@@ -139,12 +148,40 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		tconn.Close()
 		return
 	}
-	if _, err := tconn.Write(makeServerProof(s.SharedKey, nonce, ekm)); err != nil {
+	// The level and caps for this link. With no level in common the proof
+	// says level 0 — the client then knows why — and the link closes.
+	level, caps, agreed := negotiate(hdr, levelMin, levelMax, localCaps())
+	if _, err := tconn.Write(makeServerProof(s.SharedKey, nonce, ekm, ProofHdr{Ver: protoVersion, Level: level, Caps: caps})); err != nil || !agreed {
+		if !agreed {
+			proto.refused(false)
+			s.logPeer(raw.RemoteAddr(), fmt.Sprintf("peer speaks protocol v3 levels %d-%d, this server %d-%d; upgrade the older server",
+				hdr.MinLevel, hdr.MaxLevel, levelMin, levelMax))
+		}
 		tconn.Close()
 		return
 	}
 	tconn.SetDeadline(time.Time{})
-	onTunnel(&Carrier{conn: tconn})
+	proto.linked(level, caps)
+	proto.peerLevels(hdr.MinLevel, hdr.MaxLevel)
+	onTunnel(&Carrier{conn: tconn, level: level, caps: caps})
+}
+
+// logPeer logs line for peer at most once a minute (the refusals of §4.5: a
+// peer that keeps redialing would fill the log).
+func (s *Server) logPeer(peer net.Addr, line string) {
+	if s.Logf == nil {
+		return
+	}
+	host := ""
+	if peer != nil {
+		host = peer.String()
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+	}
+	if proto.mayLog(host+" "+line, time.Now()) {
+		s.Logf("%s", line)
+	}
 }
 
 // logRare logs at most once every 30 seconds.

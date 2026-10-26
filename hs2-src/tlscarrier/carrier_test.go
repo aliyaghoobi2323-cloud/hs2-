@@ -156,10 +156,10 @@ func TestReplayRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, nonce := makeClientAuth(key, ekm)
+	rec, nonce := makeClientAuth(key, ekm, LocalAuthHdr())
 	u1.Write(rec)
 	u1.SetReadDeadline(time.Now().Add(2 * time.Second))
-	if err := readServerProof(u1, key, nonce, ekm); err != nil {
+	if _, err := readServerProof(u1, key, nonce, ekm); err != nil {
 		t.Fatalf("genuine client refused: %v", err)
 	}
 	u1.Close()
@@ -299,8 +299,8 @@ func TestLegacyClientRefused(t *testing.T) {
 	}
 	cs := &fakeEKM{}
 	ekm, _ := exportEKM(cs)
-	if _, _, ok := parseClientAuth(key, ekm, legacyRecord(key)); ok {
-		t.Fatal("legacy record accepted as v2")
+	if _, _, _, v2, ok := parseClientAuth(key, ekm, legacyRecord(key)); ok || v2 {
+		t.Fatal("legacy record accepted as v3 or taken for v2")
 	}
 }
 

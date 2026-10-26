@@ -769,7 +769,8 @@ func serveOldExitLink(ctx context.Context, car *tlscarrier.Carrier, panel string
 }
 
 // serveOldStream is the previous release's serveStream: kindCtrl, kindPool and
-// user TCP; any other kind (kindStats) is closed at once.
+// user TCP (in today's wire v3 header, [kind][port u16]: a v2 exit would not
+// pass the auth); any other kind (kindStats) is closed at once.
 func serveOldStream(ctx context.Context, st *smux.Stream, panel string, car *tlscarrier.Carrier, pool *exitPool) {
 	var kind [1]byte
 	st.SetReadDeadline(time.Now().Add(kindTimeout))
@@ -783,7 +784,11 @@ func serveOldStream(ctx context.Context, st *smux.Stream, panel string, car *tls
 		serveControl(ctx, st, car)
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
-	case kindTCP:
+	case kindTCPPort:
+		if _, err := io.ReadFull(st, make([]byte, 2)); err != nil {
+			st.Close()
+			return
+		}
 		up, err := net.DialTimeout("tcp", panel, 5*time.Second)
 		if err != nil {
 			st.Close()

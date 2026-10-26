@@ -85,9 +85,10 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	}
 	setGuardLog(cfg.Log)
 	setWcoreLog(cfg.Log)
+	go logWire(ctx, logf)
 	var l3 *l3Set
 	if cfg.TUN != nil {
-		l3 = &l3Set{}
+		l3 = &l3Set{toUser: true} // its TUN's packets go to the users
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}
@@ -198,19 +199,19 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 				mtr.peerInfo.Store(&pi)
 			}
 		})
-	case kindTCP, kindTCPPort, kindUDP, kindUDPPort:
-		udp := kind[0] == kindUDP || kind[0] == kindUDPPort
-		port := 0
-		if kind[0] == kindTCPPort || kind[0] == kindUDPPort {
-			var b [2]byte
-			st.SetReadDeadline(time.Now().Add(kindTimeout))
-			if _, err := io.ReadFull(st, b[:]); err != nil {
-				st.Close()
-				return
-			}
-			st.SetReadDeadline(time.Time{})
-			port = int(b[0])<<8 | int(b[1])
+	case kindTCPPort, kindUDPPort: // wire v3: the one-byte kindTCP / kindUDP are refused (default)
+		udp := kind[0] == kindUDPPort
+		var b [2]byte
+		st.SetReadDeadline(time.Now().Add(kindTimeout))
+		if _, err := io.ReadFull(st, b[:]); err != nil {
+			st.Close()
+			return
 		}
+		st.SetReadDeadline(time.Time{})
+		port := int(b[0])<<8 | int(b[1])
+		// The user's tag comes from the SYN the edge opened the stream with
+		// (§3.1): the exit never hashes an address of its own.
+		tag, _ := st.Syn()
 		target, ok := cfg.routeTable().Target(port)
 		if !ok {
 			proto := "tcp"
@@ -227,7 +228,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 				st.Close()
 				return
 			}
-			c := cfg.traffic.open()
+			c := cfg.traffic.open(tag)
 			defer cfg.traffic.done(c)
 			relayUDPConn(exitCountedStream{st, c}, up)
 			return
@@ -241,7 +242,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		if mtr != nil {
 			g = mtr.guard
 		}
-		c := cfg.traffic.open()
+		c := cfg.traffic.open(tag)
 		defer cfg.traffic.done(c)
 		relayStream(up, exitCountedStream{st, c}, g)
 	case kindL3:

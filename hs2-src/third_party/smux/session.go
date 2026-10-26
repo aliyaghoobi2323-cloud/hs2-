@@ -117,6 +117,7 @@ type Session struct {
 
 	streams    map[uint32]*Stream // all streams in this session
 	streamLock sync.Mutex         // locks streams
+	badSyn     atomic.Uint64      // SYNs refused for their payload (BadSyn)
 
 	die     chan struct{} // flag session has died
 	dieOnce sync.Once
@@ -178,8 +179,14 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 	return s
 }
 
-// OpenStream is used to create a new stream
+// OpenStream is used to create a new stream. Its SYN carries user tag 0 and
+// no class hint, as the control streams have (OpenStreamSyn).
 func (s *Session) OpenStream() (*Stream, error) {
+	return s.OpenStreamSyn(EncodeSyn(0, 0))
+}
+
+// OpenStreamSyn creates a new stream whose SYN carries p (EncodeSyn).
+func (s *Session) OpenStreamSyn(p [SynPayloadLen]byte) (*Stream, error) {
 	if s.IsClosed() {
 		return nil, io.ErrClosedPipe
 	}
@@ -201,6 +208,7 @@ func (s *Session) OpenStream() (*Stream, error) {
 	s.nextStreamIDLock.Unlock()
 
 	stream := newStream(sid, s.config.MaxFrameSize, s)
+	stream.syn = p
 
 	// The stream is known before its SYN leaves: the peer may send on it as
 	// soon as it has the SYN, before writeFrame returns, and recvLoop drops
@@ -222,7 +230,9 @@ func (s *Session) OpenStream() (*Stream, error) {
 		return nil, err
 	}
 
-	if _, err := s.writeFrame(newFrame(byte(s.config.Version), cmdSYN, sid)); err != nil {
+	f := newFrame(byte(s.config.Version), cmdSYN, sid)
+	f.data = stream.syn[:]
+	if _, err := s.writeFrame(f); err != nil {
 		s.streamClosed(sid)
 		return nil, err
 	}
@@ -304,6 +314,16 @@ func (s *Session) Borrows() uint32 { return atomic.LoadUint32(&s.borrows) }
 // Brakes returns how many braking window updates the session's adaptive
 // streams have sent (Config.MinStreamBuffer).
 func (s *Session) Brakes() uint32 { return atomic.LoadUint32(&s.brakes) }
+
+// badSyns counts the SYNs every session of the process refused (BadSyns).
+var badSyns atomic.Uint64
+
+// BadSyn returns how many SYNs the session refused: without the payload,
+// with one of another length, or with a role and no group (SynPayloadLen).
+func (s *Session) BadSyn() uint64 { return s.badSyn.Load() }
+
+// BadSyns is BadSyn summed over every session the process has had.
+func BadSyns() uint64 { return badSyns.Load() }
 
 // CloseChan can be used by someone who wants to be notified immediately when this
 // session is closed
@@ -436,13 +456,38 @@ func (s *Session) recvLoop() {
 			switch hdr.Cmd() {
 			case cmdNOP:
 			case cmdSYN:
+				var syn [SynPayloadLen]byte
+				var rerr error
+				good := hdr.Length() == SynPayloadLen
+				if good {
+					_, rerr = io.ReadFull(s.conn, syn[:])
+				} else if hdr.Length() > 0 {
+					_, rerr = io.CopyN(io.Discard, s.conn, int64(hdr.Length()))
+				}
+				if rerr != nil {
+					s.notifyReadError(rerr)
+					return
+				}
 				s.streamLock.Lock()
-				if _, ok := s.streams[sid]; !ok {
-					stream := newStream(sid, s.config.MaxFrameSize, s)
-					s.streams[sid] = stream
-					select {
-					case s.chAccepts <- stream:
-					case <-s.die:
+				_, known := s.streams[sid]
+				if good && synValid(syn) {
+					if !known {
+						stream := newStream(sid, s.config.MaxFrameSize, s)
+						stream.syn = syn
+						s.streams[sid] = stream
+						select {
+						case s.chAccepts <- stream:
+						case <-s.die:
+						}
+					}
+				} else {
+					// No v3 payload: no stream. The opener gets a FIN for it
+					// (sent aside, so the reader never waits on the writer:
+					// the FINs of several refusals leave in no set order).
+					s.badSyn.Add(1)
+					badSyns.Add(1)
+					if !known {
+						go s.writeFrame(newFrame(byte(s.config.Version), cmdFIN, sid))
 					}
 				}
 				s.streamLock.Unlock()
