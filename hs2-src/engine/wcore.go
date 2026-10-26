@@ -553,8 +553,25 @@ var (
 	// policer (policed); below its rate a policed path always looks so (a
 	// 60% policer on 1000/150 resent 0.37 → 0.64% with the rule taking every
 	// loss point, and its p99 went 336 → 414 ms).
+	// With backR the spell's own rate (wcBackDwell, and R̂'s samples of the
+	// budget the loss came at), not a dip of it, the margin over it covers
+	// the rate's noise between intervals alone: 0.25 over such a rate took
+	// the model's 300 → 50 → 300 back within 10 s in 9 of 12 seeds, 0.15 in
+	// 10 (as the rule on dips did), with no fire in 432 runs on steady paths
+	// at 0.25 and 4 at 0.15 (red team of the judge's fixes).
 	wcBackN      = 2
-	wcBackGrowth = 0.25
+	wcBackGrowth = 0.15
+	// wcBackDwell: what the link carries within this long of the loss point
+	// (or slower-path drain) that set backR is the rate of its spell too, and
+	// lifts backR: the interval a loss point came in is often a dip of the
+	// core's own making (the recovery of the cut just before it, the windows
+	// full of data behind its holes; a drain; the sender's PROBE_RTT), and on
+	// a steady path the next intervals carry the path's rate at once. The
+	// rule fired 38 times in 42 model runs on steady paths without it (red
+	// team of the judge's fixes): 4 downloads on 1000/100 behind 10 ms armed at
+	// 338 Mbit/s with the path at ~550, probed from a cap of 9.5 MiB to 12.2
+	// and cut four times after (551 → 517 Mbit/s, twice the cuts).
+	wcBackDwell = 2 * time.Second
 	// wcPastKnee: the base windows hold this many times what their rate
 	// needs in a round trip and a step (R_F·T_base + H_step) or more: they
 	// are past the knee already. With no record of the exit to tell a queue
@@ -804,6 +821,7 @@ type wcCounters struct {
 	grow, probeOK, probeFail     int
 	drainQ, drainLoss, drainRate int
 	undo                         int // what holes alone did taken back (undoCut): B with its loss point, or the loss point alone
+	back                         int // the recovery rule cleared a loss point and probed (wcBackN)
 	poolShort                    int
 	peakB                        uint64
 	peakR                        float64
@@ -1168,6 +1186,7 @@ func (c *wcore) step(in wcIn) wcOut {
 		m.sndAt = carryAt
 	}
 	c.rLinkBefore, c.last = c.last.rLink, m
+	c.backDwell(now, m.rLink)
 	if in.poolShort > 0 {
 		c.cnt.poolShort += int(in.poolShort)
 	}
@@ -3553,15 +3572,35 @@ func (c *wcore) learnQcap(now time.Time, m wcMeas) {
 	c.noteBack(now, q, ok)
 }
 
+// backDwell: an evaluation at now carried r; within wcBackDwell of the loss
+// point (or slower-path drain) that set backR, that is the rate of its spell
+// too.
+func (c *wcore) backDwell(now time.Time, r float64) {
+	if c.backR > 0 && now.Sub(c.backAt) < wcBackDwell {
+		c.backR = math.Max(c.backR, r)
+	}
+}
+
 // noteBack: a loss point came now with q of queue (ok: known); one that
 // came with a queue sets the rate wcBackN measures recovery from, one with
 // none (a policer's signature) takes it away.
 func (c *wcore) noteBack(now time.Time, q time.Duration, ok bool) {
+	if c.state == wcStartup && !(ok && q < wcPoliceQ) {
+		// (STARTUP's overshoot: its rate is a ramp's, behind B by design,
+		// not the path's; HOLD after it carries more at once)
+		return
+	}
 	c.backR, c.backN = 0, 0
 	if ok && q < wcPoliceQ {
 		return
 	}
-	if r := math.Max(c.last.rLink, c.rLinkBefore); r > 0 {
+	r := math.Max(c.last.rLink, c.rLinkBefore)
+	for i := len(c.rhat) - 1; i >= 0 && now.Sub(c.rhat[i].at) <= wcBackDwell; i-- {
+		// (R̂'s samples of the budget the loss came at: a cut halves B, and
+		// what the link carries in the dwell after it is half B's)
+		r = math.Max(r, c.rhat[i].r)
+	}
+	if r > 0 {
 		c.backR, c.backAt = r, now
 	}
 }
@@ -3877,7 +3916,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if c.backR > 0 && now.Sub(c.backAt) >= wcTurnWin {
 		c.backR, c.backN = 0, 0
 	}
-	if c.backR > 0 && m.sameF {
+	if c.backR > 0 && m.sameF && now.Sub(c.backAt) >= wcBackDwell {
 		if unbiased && clean && m.rLink > (1+wcBackGrowth)*c.backR && !c.policed(now) && (c.bCap > 0 || c.backoff > 0) {
 			c.backN++
 		} else {
@@ -3885,6 +3924,7 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		}
 		if c.backN >= wcBackN {
 			c.bCap, c.backoff, c.relaxAt = 0, 0, now
+			c.cnt.back++
 			c.probeAt = now
 			c.backR, c.backN = 0, 0
 		}

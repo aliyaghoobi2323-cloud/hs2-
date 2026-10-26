@@ -304,7 +304,7 @@ func TestWcoreS2BackAfterSlower(t *testing.T) {
 		{"faster with the queue empty", 10e6, 1 * ms, false, true},
 		{"... behind a policer", 10e6, 1 * ms, true, false},
 		{"faster with a queue standing", 10e6, 30 * ms, false, false},
-		{"within wcBackGrowth of the rate then", 7e6, 1 * ms, false, false},
+		{"within wcBackGrowth of the rate then", (1 + wcBackGrowth/2) * 6e6, 1 * ms, false, false},
 	} {
 		c, _ := wtHold()
 		c.rhat = c.rhat[:0]
@@ -338,9 +338,11 @@ func TestWcoreS2BackAfterSlower(t *testing.T) {
 // TestWcoreS2BackAfterSlowerModel (judge p4): the model's 300 → 50 → 300
 // behind 50 ms (the rig's dlchg) got back to 90% of the rate before the
 // drop within 10 s in 4 of 6 seeds, 1000 → 300 → 1000 behind 20 ms (the
-// rig's FP chg) in none; now 5 of 6 and 1 of 6 (the loss points of that
+// rig's FP chg) in none; now 5 of 6 and none (the loss points of that
 // spell on a 20 ms queue come with under wcPoliceQ of it, as a policer's,
-// and set no backR), with resends within base's + 3 points.
+// and set no backR; the one seed the rule brought back armed on a dip of
+// the spell's rate, 220 against its 260 Mbit/s, which wcBackDwell lifts:
+// red team of the judge's fixes), with resends within base's + 3 points.
 func TestWcoreS2BackAfterSlowerModel(t *testing.T) {
 	for _, x := range []struct {
 		rate, to    float64
@@ -350,7 +352,7 @@ func TestWcoreS2BackAfterSlowerModel(t *testing.T) {
 		want, seeds int
 	}{
 		{300, 50, 150, 50, 18 * time.Second, 30 * time.Second, 42 * time.Second, 5, 6},
-		{1000, 300, 100, 20, 15 * time.Second, 30 * time.Second, 50 * time.Second, 1, 6},
+		{1000, 300, 100, 20, 15 * time.Second, 30 * time.Second, 50 * time.Second, 0, 6},
 	} {
 		ok := 0
 		var b90 []string
