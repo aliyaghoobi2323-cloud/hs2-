@@ -811,7 +811,7 @@
 | رویداد | نمونه | سقف تکرار |
 |---|---|---|
 | پایان STARTUP یا تغییر بزرگ زانو (بیش از ۲۵٪) | `mtcp: link 3: downloads fill the path at ~287 Mbit/s (round trip 151 ms): window held at 6.4 MiB for 2 fast connection(s), queue ~4 ms` | هر لینک ۱ در ۶۰s؛ با بیش از ۸ لینک در یک دقیقه، یک سطر جمعی |
-| آزمایش گام نخست مسیر را پر یافت و هسته به OFF برگشت (بخش ۵.۵) | `mtcp: link 6: downloads fill the path at ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast connection(s)) — the window core's step only added queue; it stays off for 64 s` | همان سقف سطر بالا (هیچ «تغییر زانو»یی از آن گزارش نمی‌شود) |
+| آزمایش گام نخست مسیر را پر یافت و هسته به OFF برگشت (بخش ۵.۵) | `mtcp: link 6: downloads fill the path at ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast connection(s)) — the window core's step only added queue; it stays off for 64 s while 4 or more run` (پنجره‌ها همان‌اند که هنگام ترک OFF بر سر کار بودند؛ نگه‌داشت فقط با همان شمار جریان تند یا بیشتر است) | همان سقف سطر بالا (هیچ «تغییر زانو»یی از آن گزارش نمی‌شود) |
 | DRAIN | `mtcp: link 3: path queue grew to 38 ms (resent 2.1%) — download windows 6.4 → 3.1 MiB` | هر لینک ۱ در ۳۰s؛ جمعی بالای ۸ |
 | رژیم اتلاف تصادفی | `mtcp: link 3: 0.4% loss with no queue — windows cover the resends (+18 ms)` | ۱ در ۱۰ دقیقه برای هر لینک؛ جمعی بالای ۸ |
 | استخر پر | `mtcp: window pool full (128 MiB): 5 fast connection(s) on 3 link(s) held below what their path carries` | ۱ در ۵ دقیقه برای هر پردازه |

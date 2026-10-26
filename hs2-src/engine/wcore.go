@@ -121,11 +121,14 @@ type wcore struct {
 	// did), and with how many fast streams: harm holds OFF for fullHold
 	// with as many or more; fullOffN: such findings in a row on the link
 	// (each within a hold of the previous hold's end), with no first step
-	// the rate followed between (the hold doubles with each)
+	// the rate followed between (the hold doubles with each); offW: the
+	// windows of F in force as the core left OFF (the finding's line: not
+	// prevB, which takes half of a HOLD's budget within wcKPrevTTL)
 	startOff  bool
 	fullAt    time.Time
 	fullN     int
 	fullOffN  int
+	offW      uint64
 	cleanRecs int // the exit's latest records in a row that showed no queue and no resends
 	// qOffSnd: the largest q_snd of the exit's latest records as the core
 	// left OFF (wcLongRTT: STARTUP's knee is a queue past it by Δq)
@@ -3188,6 +3191,7 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.state = wcStartup
 	c.startOff = true
 	c.qOffSnd = m.qSnd3
+	c.offW = uint64(m.wF)
 	c.chgAt = in.now
 	if !c.policed(in.now) {
 		c.backoff = 0
@@ -3509,7 +3513,7 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.fullAt, c.fullN = in.now, len(m.f)
 		// (its line says the core is off, and for how long: it holds no
 		// window, review J2)
-		*ev = append(*ev, wcEvent{kind: wcEvFilled, from: c.prevB, B: c.prevB, n: len(m.f), R: m.rF, T: c.tBase, q: c.qTarget(in.now), off: c.fullHold()})
+		*ev = append(*ev, wcEvent{kind: wcEvFilled, from: c.prevB, B: c.offW, n: len(m.f), R: m.rF, T: c.tBase, q: c.qTarget(in.now), off: c.fullHold()})
 		c.toOff()
 		return
 	}

@@ -850,7 +850,8 @@ func TestWcoreRunnerKneeMoveLine(t *testing.T) {
 // past the knee puts the core back OFF: its line said "window held at" the
 // windows' size though the core holds none. It says the windows are the
 // downloads' own and for how long the core stays off, and no knee moves
-// from it (review, J2).
+// from it (review, J2); the hold keeps it off only while as many fast
+// connections run or more, and the line says so (review of J2, j2).
 func TestWcoreRunnerFullOffLine(t *testing.T) {
 	ws := &wcSet{}
 	var logs wcLogs
@@ -859,7 +860,7 @@ func TestWcoreRunnerFullOffLine(t *testing.T) {
 	l := wcLogLink("link 6", wcEdge)
 	ws.logEvents(l, now, wcOut{events: []wcEvent{{kind: wcEvFilled, from: 8 << 20, B: 8 << 20, n: 4, R: 260e6 / 8, T: 150 * time.Millisecond,
 		q: 15 * time.Millisecond, off: 64 * time.Second}}})
-	want := "mtcp: link 6: downloads fill the path at ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast connection(s)) — the window core's step only added queue; it stays off for 64 s"
+	want := "mtcp: link 6: downloads fill the path at ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast connection(s)) — the window core's step only added queue; it stays off for 64 s while 4 or more run"
 	if got := logs.all(); len(got) != 1 || got[0] != want {
 		t.Fatalf("lines %q, want %q", got, want)
 	}

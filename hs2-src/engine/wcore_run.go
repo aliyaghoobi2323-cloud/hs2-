@@ -1026,14 +1026,15 @@ func (ws *wcSet) filled(l *wcLink, now time.Time, logf func(string, ...any), r f
 
 // filledOff is the line of STARTUP's first step from OFF that found the
 // windows without the core past the knee (wcore.fullHold): the windows are
-// their own, the core is off for e.off. Within the "fill the path" line's
-// cap.
+// their own (those in force as the core left OFF), the core is off for
+// e.off while as many fast connections run or more. Within the "fill the
+// path" line's cap.
 func (ws *wcSet) filledOff(l *wcLink, now time.Time, logf func(string, ...any), e wcEvent) {
 	if !l.due(wcLogFilled, now, wcLogFilledEvery) || !ws.agg[wcAggFilled].admit(l, now, e.n, e.R) {
 		return
 	}
-	logf("mtcp: %s: %ss fill the path at ~%.0f Mbit/s (round trip %d ms) with their own windows (%s for %d fast connection(s)) — the window core's step only added queue; it stays off for %d s",
-		l.label(), l.dir(), mbitps(e.R), e.T.Milliseconds(), wcMiB(e.B), e.n, int64(e.off/time.Second))
+	logf("mtcp: %s: %ss fill the path at ~%.0f Mbit/s (round trip %d ms) with their own windows (%s for %d fast connection(s)) — the window core's step only added queue; it stays off for %d s while %d or more run",
+		l.label(), l.dir(), mbitps(e.R), e.T.Milliseconds(), wcMiB(e.B), e.n, int64(e.off/time.Second), e.n)
 }
 
 // wcNetNote says, for the exit's link-end lines, what the pacing net did

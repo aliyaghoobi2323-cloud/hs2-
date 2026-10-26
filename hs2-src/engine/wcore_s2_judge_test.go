@@ -583,3 +583,26 @@ func TestWcoreS2FirstStepTrialBackoff(t *testing.T) {
 		t.Errorf("a finding %v after the previous hold ended: hold %v, want %v", h1-sec, h, 2*wcFullOff)
 	}
 }
+
+// TestWcoreS2FirstStepTrialWindows (review of J2, j2): the finding's line
+// names the downloads' own windows, those in force as the core left OFF.
+// It named the budget the first step started from (prevB), which is at
+// least half the budget HOLD or PROBE had if the core went OFF from them
+// within wcKPrevTTL: 2 MiB of windows and 12 MiB 5 s before read "with their
+// own windows (6.0 MiB …)".
+func TestWcoreS2FirstStepTrialWindows(t *testing.T) {
+	ms := time.Millisecond
+	c, _ := wtOffRecs(100*ms, 1, 1, 1)
+	c.kPrev, c.kPrevAt = 12*wtMiB, wtT0.Add(-5*time.Second)
+	wtFirstStep(c, wtT0, 1, -1)
+	if c.state != wcStartup || c.B != 9*wtMiB {
+		t.Fatalf("from OFF 5 s after HOLD at 12 MiB: %v B %.2f MiB, want STARTUP's first step from 6 MiB to 9", c.state, float64(c.B)/wtMiB)
+	}
+	ev := wtStep1(c, wtT0.Add(2*time.Second), 1, 20e6, 18*ms, true)
+	if c.state != wcOff || len(ev) != 1 || ev[0].kind != wcEvFilled || ev[0].off == 0 {
+		t.Fatalf("the rate flat, the queue up 18 ms: %v events %+v, want the finding", c.state, ev)
+	}
+	if ev[0].B != 2*wtMiB || ev[0].n != 1 {
+		t.Errorf("the finding's windows %.2f MiB for %d stream(s), want the 2 MiB in force as the core left OFF", float64(ev[0].B)/wtMiB, ev[0].n)
+	}
+}
