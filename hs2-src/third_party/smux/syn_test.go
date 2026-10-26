@@ -140,7 +140,8 @@ func nextFrame(t *testing.T, frames <-chan rawFrame) rawFrame {
 
 // A SYN without the payload, or with one of another length, opens no stream:
 // the opener gets a FIN for it and the session counts it, and the session
-// goes on serving good SYNs.
+// goes on serving good SYNs. Each FIN goes out on its own (the reader never
+// waits on the writer), so two refusals' FINs come in either order.
 func TestBadSynRefused(t *testing.T) {
 	c1, c2 := net.Pipe()
 	cfg := DefaultConfig()
@@ -154,10 +155,16 @@ func TestBadSynRefused(t *testing.T) {
 	frames := rawFrames(c1)
 	writeRaw(t, c1, cmdSYN, 3, nil)
 	writeRaw(t, c1, cmdSYN, 5, make([]byte, 12))
-	for _, sid := range []uint32{3, 5} {
-		if f := nextFrame(t, frames); f.cmd != cmdFIN || f.sid != sid {
-			t.Fatalf("got cmd %d sid %d, want a FIN for %d", f.cmd, f.sid, sid)
+	fins := map[uint32]bool{}
+	for i := 0; i < 2; i++ {
+		f := nextFrame(t, frames)
+		if f.cmd != cmdFIN || fins[f.sid] {
+			t.Fatalf("got cmd %d sid %d, want a FIN for each of 3 and 5", f.cmd, f.sid)
 		}
+		fins[f.sid] = true
+	}
+	if !fins[3] || !fins[5] {
+		t.Fatalf("FINs for %v, want 3 and 5", fins)
 	}
 	good := EncodeSyn(7, 0)
 	writeRaw(t, c1, cmdSYN, 7, good[:])

@@ -482,7 +482,8 @@ func (s *Session) recvLoop() {
 					}
 				} else {
 					// No v3 payload: no stream. The opener gets a FIN for it
-					// (sent aside, so the reader never waits on the writer).
+					// (sent aside, so the reader never waits on the writer:
+					// the FINs of several refusals leave in no set order).
 					s.badSyn.Add(1)
 					badSyns.Add(1)
 					if !known {
