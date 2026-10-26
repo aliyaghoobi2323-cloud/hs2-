@@ -155,7 +155,7 @@ up() {
     nsx $E sysctl -qw net.ipv6.ip_nonlocal_bind=1 || die "v6 nonlocal bind"
   fi
   # the path answers before anyone uses it
-  nsx $E ping -c1 -W2 10.202.0.1 >/dev/null || die "edge cannot reach exit"
+  nsx $E ping -c1 -i0.5 -w6 10.202.0.1 >/dev/null || die "edge cannot reach exit"
 }
 
 # tun-up: IPv6 on hs0 (both ends) and the routes back to the TUN users; hs2
@@ -167,7 +167,9 @@ tun_up() {
   ip -n $X addr replace fd00:77::2/64 dev hs0 nodad || die "hs0 v6 exit"
   ip -n $X route replace 10.110.0.0/16 dev hs0 || die "route to TUN users"
   ip -n $X -6 route replace fd00:110::/32 dev hs0 || die "v6 route to TUN users"
-  nsx $E ping -c1 -W3 10.77.0.2 >/dev/null || die "no answer through hs0"
+  # the first packets can come before the link carries TUN frames (its TLS
+  # handshake takes a few RTTs after the socket is up): retry for up to 10 s
+  nsx $E ping -c1 -i0.5 -w10 10.77.0.2 >/dev/null || die "no answer through hs0"
 }
 
 down() {

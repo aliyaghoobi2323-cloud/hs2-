@@ -1,0 +1,13 @@
+22:46:01 host busy: 2099018 bash -c cd /root/hs2-wt/r1-angle-a && tar -xf - && test -e /root/r1-quiet.lock && echo LOCK |2099020 bash -c cd /root/hs2-wt/r1-angle-a && tar -xf - && test -e /root/r1-quiet.lock && echo LOCK |2099216 /usr/local/go/bin/go test -count=1 ./...|2099365 /tmp/go-build1703089979/b001/smux.test -test.paniconexit0 -test.timeout=10m0s -test.count=1
+22:48:01 lock taken after 120s
+22:48:02 field start
+22:54:48 field done (status 0)
+22:54:49 rig start
+23:37:04 rigs A and B done, 1065s left
+23:42:45 rig C done
+23:42:45 done
+23:42:45 lock released
+23:44:13 rerun: host busy: 2176209 bash -c test -e /root/r1-quiet.lock && { echo LOCK; exit 0; }; cd /root/|2176210 go test ./engine/ -count=1 -run AngleB|ShapedConnHold|ShapedConn -v -tim|2176583 /tmp/go-build4220326164/b001/engine.test -test.paniconexit0 -test.count=|2177539 bash -c cat > /root/r1-lab/rerun.sh <<"EOF" #!/bin/bash # rerun the fail
+23:46:13 rerun: host busy: 2178319 bash -c mkdir -p /root/r1-angle-a-logs && cd /root/hs2-wt/r1-angle-a/hs2|2178321 sh -c /usr/local/go/bin/go test ./... -count=1 -timeout 30m > /root/r1-a|2178322 /usr/local/go/bin/go test ./... -count=1 -timeout 30m|2178876 /tmp/go-build534257019/b304/udpcarrier.test -test.paniconexit0 -test.cou|2178901 /tmp/go-build534257019/b282/engine.test -test.paniconexit0 -test.count=1
+23:48:13 rerun: host busy: 2178319 bash -c mkdir -p /root/r1-angle-a-logs && cd /root/hs2-wt/r1-angle-a/hs2|2178321 sh -c /usr/local/go/bin/go test ./... -count=1 -timeout 30m > /root/r1-a|2178322 /usr/local/go/bin/go test ./... -count=1 -timeout 30m|2178901 /tmp/go-build534257019/b282/engine.test -test.paniconexit0 -test.count=1
+23:48:47 rerun: cancelled; the host stayed busy with a full go test of another agent and the rig hour ends 23:54:49

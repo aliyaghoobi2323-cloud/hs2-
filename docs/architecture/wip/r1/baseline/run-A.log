@@ -1,0 +1,122 @@
+22:54:49 plan /root/hs2-wt/r1-baseline/docs/architecture/wip/r1/baseline/plans/rigA.txt: 60 runs
+22:54:50 start ae0cf9da-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 2.05 waited 0s
+22:55:29 done ae0cf9da-old-1 ok=1 
+22:55:30 start ae0cf9da-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 2.34 waited 0s
+22:56:09 done ae0cf9da-old-2 ok=1 
+22:56:10 start ae0cf9da-old-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.19 waited 0s
+22:56:49 done ae0cf9da-old-3 ok=1 
+22:56:50 start 340c98ae-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.99 waited 0s
+22:57:30 done 340c98ae-old-1 ok=1 
+22:57:30 start 340c98ae-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 3.71 waited 0s
+22:58:10 done 340c98ae-old-2 ok=1 
+22:58:11 start 340c98ae-old-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 3.84 waited 0s
+22:58:50 done 340c98ae-old-3 ok=1 
+22:58:51 start 7b68f4fa-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 4.08 waited 0s
+22:59:35 done 7b68f4fa-old-1 ok=1 
+22:59:36 start 7b68f4fa-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 3.14 waited 0s
+23:00:20 done 7b68f4fa-old-2 ok=1 
+23:00:21 start 7b68f4fa-old-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.19 waited 0s
+23:01:05 done 7b68f4fa-old-3 ok=1 
+23:01:06 start af75e3c1-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 3.20 waited 0s
+23:01:46 done af75e3c1-old-1 ok=1 
+23:01:46 start af75e3c1-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 3.49 waited 0s
+23:02:26 done af75e3c1-old-2 ok=1 
+23:02:26 start af75e3c1-old-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 3.92 waited 0s
+23:03:06 done af75e3c1-old-3 ok=1 
+23:03:07 start 53d6c183-old-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.60 waited 0s
+23:03:46 done 53d6c183-old-1 ok=1 
+23:03:47 start 53d6c183-old-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.10 waited 0s
+23:04:27 done 53d6c183-old-2 ok=1 
+23:04:27 start 53d6c183-old-3 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 2.87 waited 0s
+23:05:07 done 53d6c183-old-3 ok=1 
+23:05:08 start affa6def-old-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.77 waited 0s
+23:05:47 done affa6def-old-1 ok=1 
+23:05:48 start affa6def-old-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 3.63 waited 0s
+23:06:28 done affa6def-old-2 ok=1 
+23:06:28 start affa6def-old-3 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 3.23 waited 0s
+23:07:08 done affa6def-old-3 ok=1 
+23:07:09 start 862ada8e-old-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 3.08 waited 0s
+23:07:53 done 862ada8e-old-1 ok=1 
+23:07:54 start 862ada8e-old-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.95 waited 0s
+23:08:39 done 862ada8e-old-2 ok=1 
+23:08:39 start 862ada8e-old-3 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 3.53 waited 0s
+23:09:24 done 862ada8e-old-3 ok=1 
+23:09:25 start f331a999-old-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 3.60 waited 0s
+23:10:04 done f331a999-old-1 ok=1 
+23:10:05 start f331a999-old-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 4.30 waited 0s
+23:10:45 done f331a999-old-2 ok=1 
+23:10:45 start f331a999-old-3 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 4.33 waited 0s
+23:11:25 done f331a999-old-3 ok=1 
+23:11:26 start f29ef6c5-old-1 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.97 waited 0s
+23:12:06 done f29ef6c5-old-1 ok=1 
+23:12:07 start f29ef6c5-old-2 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 2.72 waited 0s
+23:12:48 done f29ef6c5-old-2 ok=1 
+23:12:49 start f29ef6c5-old-3 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 2.85 waited 0s
+23:13:29 done f29ef6c5-old-3 ok=1 
+23:13:30 start fd1b6407-old-1 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.88 waited 0s
+23:14:11 done fd1b6407-old-1 ok=1 
+23:14:12 start fd1b6407-old-2 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.88 waited 0s
+23:14:52 done fd1b6407-old-2 ok=1 
+23:14:53 start fd1b6407-old-3 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 3.04 waited 0s
+23:15:34 done fd1b6407-old-3 ok=1 
+23:15:35 start e92ef012-old-1 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.64 waited 0s
+23:16:21 done e92ef012-old-1 ok=1 
+23:16:21 start e92ef012-old-2 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.20 waited 0s
+23:17:07 done e92ef012-old-2 ok=1 
+23:17:08 start e92ef012-old-3 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 3.06 waited 0s
+23:17:54 done e92ef012-old-3 ok=1 
+23:17:54 start 865aaebb-old-1 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 3.08 waited 0s
+23:18:35 done 865aaebb-old-1 ok=1 
+23:18:36 start 865aaebb-old-2 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 3.38 waited 0s
+23:19:17 done 865aaebb-old-2 ok=1 
+23:19:18 start 865aaebb-old-3 (N=16 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 4.07 waited 0s
+23:19:58 done 865aaebb-old-3 ok=1 
+23:19:59 start a6ec45ad-old-1 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.84 waited 0s
+23:20:52 done a6ec45ad-old-1 ok=1 
+23:20:52 start a6ec45ad-old-2 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 2.92 waited 0s
+23:21:44 done a6ec45ad-old-2 ok=1 
+23:21:45 start a6ec45ad-old-3 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 2.74 waited 0s
+23:22:37 done a6ec45ad-old-3 ok=1 
+23:22:38 start 1807b28a-old-1 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.84 waited 0s
+23:23:29 done 1807b28a-old-1 ok=1 
+23:23:30 start 1807b28a-old-2 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.66 waited 0s
+23:24:22 done 1807b28a-old-2 ok=1 
+23:24:23 start 1807b28a-old-3 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.94 waited 0s
+23:25:15 done 1807b28a-old-3 ok=1 
+23:25:16 start edeb8382-old-1 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.00 waited 0s
+23:26:13 done edeb8382-old-1 ok=1 
+23:26:14 start edeb8382-old-2 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.17 waited 0s
+23:27:11 done edeb8382-old-2 ok=1 
+23:27:11 start edeb8382-old-3 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.54 waited 0s
+23:28:09 done edeb8382-old-3 ok=1 
+23:28:10 start cfd8a359-old-1 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 2.40 waited 0s
+23:29:02 done cfd8a359-old-1 ok=1 
+23:29:03 start cfd8a359-old-2 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 2.53 waited 0s
+23:29:55 done cfd8a359-old-2 ok=1 
+23:29:56 start cfd8a359-old-3 (N=128 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 2.88 waited 0s
+23:30:49 done cfd8a359-old-3 ok=1 
+23:30:50 start 4b72f781-old-1 (N=1 RATE=1 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 3.10 waited 0s
+23:31:19 done 4b72f781-old-1 ok=1 
+23:31:20 start 4b72f781-old-2 (N=1 RATE=1 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.75 waited 0s
+23:31:49 done 4b72f781-old-2 ok=1 
+23:31:50 start 4b72f781-old-3 (N=1 RATE=1 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.33 waited 0s
+23:32:19 done 4b72f781-old-3 ok=1 
+23:32:20 start fd18dfe1-old-1 (N=1 RATE=50 RTT=20 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.57 waited 0s
+23:32:49 done fd18dfe1-old-1 ok=1 
+23:32:50 start fd18dfe1-old-2 (N=1 RATE=50 RTT=20 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.32 waited 0s
+23:33:19 done fd18dfe1-old-2 ok=1 
+23:33:20 start fd18dfe1-old-3 (N=1 RATE=50 RTT=20 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.55 waited 0s
+23:33:49 done fd18dfe1-old-3 ok=1 
+23:33:50 start a4014e0e-old-1 (N=1 RATE=50 RTT=150 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.74 waited 0s
+23:33:56 done a4014e0e-old-1 ok=0 tun-up: rig.sh: no answer through hs0
+23:33:56 start a4014e0e-old-2 (N=1 RATE=50 RTT=150 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.46 waited 0s
+23:34:02 done a4014e0e-old-2 ok=0 tun-up: rig.sh: no answer through hs0
+23:34:03 start a4014e0e-old-3 (N=1 RATE=50 RTT=150 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.26 waited 0s
+23:34:08 done a4014e0e-old-3 ok=0 tun-up: rig.sh: no answer through hs0
+23:34:09 start fcfc49c9-old-1 (N=8 RATE=20 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=tunping DUR=20 TUNV6=1 BIN=old) load 2.08 waited 0s
+23:34:39 done fcfc49c9-old-1 ok=1 
+23:34:39 start fcfc49c9-old-2 (N=8 RATE=20 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=tunping DUR=20 TUNV6=1 BIN=old) load 3.03 waited 0s
+23:35:09 done fcfc49c9-old-2 ok=1 
+23:35:10 start fcfc49c9-old-3 (N=8 RATE=20 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=tunping DUR=20 TUNV6=1 BIN=old) load 3.09 waited 0s
+23:35:40 done fcfc49c9-old-3 ok=1 
+23:35:40 done /root/hs2-wt/r1-baseline/docs/architecture/wip/r1/baseline/plans/rigA.txt
