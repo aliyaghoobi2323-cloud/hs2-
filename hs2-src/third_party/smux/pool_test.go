@@ -492,3 +492,125 @@ func TestPoolBorrowNextToAGrownWindow(t *testing.T) {
 		t.Fatalf("spare %d past %d times MaxReceiveBuffer %d", sp, borrowMax, cfg.MaxReceiveBuffer)
 	}
 }
+
+// Borrowing stays outside the session's share of the pool, by decision
+// (WINDOW_CORE §4.5): when a session borrows it cannot tell a link that
+// is alone in trouble from one that will later leave the others short,
+// and any share small enough to leave them room takes from a lone link
+// what was in flight to it (half of borrowMax times MaxReceiveBuffer on a
+// pool of that size; less still next to a grown window's claim, the 10 s
+// stall above). So one link with a frozen fast app (its share of the pool
+// in claims) whose other apps freeze too holds the whole pool
+// (TestRed2OneLinkTakesThePoolByBorrowing). This pins what that costs and
+// that it comes back:
+//   - the link holds no more than its share in claims and borrowMax times
+//     MaxReceiveBuffer, and a block, in spare;
+//   - another link meanwhile is a link without a pool, never worse: its
+//     windows stay within NeedStreamBuffer, it runs full and waits, and
+//     takes all in as soon as its reader reads;
+//   - once the frozen streams close -- hs2's wedge guard closes the relays
+//     of frozen apps once their link starves, as the full link here does
+//     (engine TestRedFrozenFastAppThenGuard) -- the whole pool is back at
+//     once, and the other link grows its window and borrows again.
+func TestPoolBorrowPastTheShareIsBoundedAndComesBack(t *testing.T) {
+	probe := poolConfig(NewWindowPool(1))
+	size := 2 * (probe.MaxStreamBuffer - probe.NeedStreamBuffer) // a grown window's claim is half of it
+	pool := NewWindowPool(size)
+	cfg := poolConfig(pool)
+	block := cfg.MaxReceiveBuffer / borrowShare
+
+	// a link with a frozen fast app ...
+	a, sa, pa := newRawPeer(t, cfg)
+	sa.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
+	keepUp(t, pa, sa, 4<<20)
+	pa.sync(sa)
+	pa.fill(cfg.MaxFrameSize)
+	pa.settle(sa)
+	claim := claimOf(sa)
+	if claim == 0 || claim > size/2 {
+		t.Fatalf("rig: the frozen fast app claims %d of the %d pool", claim, size)
+	}
+	// ... whose other apps freeze too, with more in flight than it can borrow
+	frozen, sid := pa.open(a)
+	go pa.trySendOn(sid, (borrowMax+2)*cfg.MaxReceiveBuffer, cfg.MaxFrameSize)
+	for end := time.Now().Add(5 * time.Second); pool.Free() > 0 && time.Now().Before(end); {
+		time.Sleep(time.Millisecond)
+	}
+	if pool.Free() != 0 {
+		t.Fatalf("rig: the link left %d of the pool (borrowing bounded now? then update this test and WINDOW_CORE §4.5)", pool.Free())
+	}
+	held, spare := extraOf(a)
+	if c := claimOf(sa); int(held-spare) != c || c > size/2 || int(spare) > borrowMax*cfg.MaxReceiveBuffer+block {
+		t.Fatalf("the frozen link holds %d: claims %d (its share: %d), spare %d (at most %d)",
+			held, c, size/2, spare, borrowMax*cfg.MaxReceiveBuffer+block)
+	}
+
+	// another link meanwhile: no window past NeedStreamBuffer ...
+	b, sb, pb := newRawPeer(t, poolConfig(pool))
+	sb.SetCoreCeil(uint32(cfg.MaxStreamBuffer))
+	keepUp(t, pb, sb, 2<<20)
+	pb.sync(sb)
+	if w := maxWindow(pb.updates()); w > uint32(cfg.NeedStreamBuffer) {
+		t.Fatalf("with the pool all held, the other link's window grew to %d", w)
+	}
+	// ... and no borrowing: a stream whose reader stopped fills its buffer,
+	// and the rest waits, as without a pool ...
+	ob, sidb := pb.open(b)
+	n := cfg.MaxReceiveBuffer + 64<<10
+	sent := make(chan error, 1)
+	go func() { sent <- pb.trySendOn(sidb, n, cfg.MaxFrameSize) }()
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case err := <-sent:
+		t.Fatalf("the other link took in %d past its buffer with the pool all held (%v)", n-cfg.MaxReceiveBuffer, err)
+	default:
+	}
+	if b.Borrows() != 0 || b.Extra() != 0 {
+		t.Fatalf("the other link borrowed %d time(s), extra %d, from a pool with %d left", b.Borrows(), b.Extra(), pool.Free())
+	}
+	// ... until its reader reads
+	go func() {
+		buf := make([]byte, 16<<10)
+		for got := 0; got < n; {
+			ob.SetReadDeadline(time.Now().Add(5 * time.Second))
+			k, err := ob.Read(buf)
+			if err != nil {
+				return
+			}
+			got += k
+		}
+	}()
+	select {
+	case err := <-sent:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the other link's reader read, and the rest never came in")
+	}
+
+	// the frozen apps' streams close: the whole pool is back at once
+	frozen.Close()
+	sa.Close()
+	for end := time.Now().Add(time.Second); pool.Free() != size; time.Sleep(time.Millisecond) {
+		if time.Now().After(end) {
+			e, sp := extraOf(a)
+			t.Fatalf("the frozen streams closed: pool %d of %d, the link still holds %d (spare %d)", pool.Free(), size, e, sp)
+		}
+	}
+	// and the other link grows its window and borrows again
+	keepUp(t, pb, sb, 4<<20)
+	pb.sync(sb)
+	if w := maxWindow(pb.updates()); w <= uint32(cfg.NeedStreamBuffer) || claimOf(sb) == 0 {
+		t.Fatalf("with the pool back, the other link's window stayed at %d (claim %d)", w, claimOf(sb))
+	}
+	stopped, sidc := pb.open(b)
+	m := cfg.MaxReceiveBuffer + claimOf(sb) + 64<<10
+	sendWithin(t, pb, sidc, m, cfg.MaxFrameSize, "the other link, with the pool back")
+	waitUnread(t, stopped, m)
+	if b.Borrows() == 0 {
+		t.Fatal("with the pool back, the other link never borrowed")
+	}
+	t.Logf("pool %d KiB: the frozen link held %d KiB (claims %d, borrowed %d); back once its frozen streams closed; the other link then grew to %d KiB and borrowed %d time(s)",
+		size>>10, held>>10, (held-spare)>>10, spare>>10, maxWindow(pb.updates())>>10, b.Borrows())
+}
