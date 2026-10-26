@@ -1,0 +1,26 @@
+23:37:05 plan /root/hs2-wt/r1-baseline/docs/architecture/wip/r1/baseline/plans/rigC.txt: 12 runs
+23:37:06 start da5e3973-old-1 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.03 waited 0s
+23:37:35 done da5e3973-old-1 ok=1 
+23:37:36 start da5e3973-old-2 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.82 waited 0s
+23:38:05 done da5e3973-old-2 ok=1 
+23:38:06 start da5e3973-old-3 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 3.54 waited 0s
+23:38:36 done da5e3973-old-3 ok=1 
+23:38:36 start 49c74cd4-old-1 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 3.83 waited 0s
+23:39:06 done 49c74cd4-old-1 ok=1 
+23:39:07 start 49c74cd4-old-2 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 4.37 waited 0s
+23:39:37 done 49c74cd4-old-2 ok=1 
+23:39:38 start 49c74cd4-old-3 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 5.10 waited 0s
+23:40:08 done 49c74cd4-old-3 ok=1 
+23:40:09 start 0ff5b237-old-1 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 5.66 waited 0s
+23:40:38 done 0ff5b237-old-1 ok=1 
+23:40:39 start 0ff5b237-old-2 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 3.86 waited 0s
+23:41:08 done 0ff5b237-old-2 ok=1 
+23:41:09 start 0ff5b237-old-3 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.80 waited 0s
+23:41:12 done 0ff5b237-old-3 ok=0 rig up: rig.sh: edge cannot reach exit
+23:41:13 start 31476142-old-1 (N=8 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.58 waited 0s
+23:41:43 done 31476142-old-1 ok=1 
+23:41:43 start 31476142-old-2 (N=8 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 3.12 waited 0s
+23:42:13 done 31476142-old-2 ok=1 
+23:42:14 start 31476142-old-3 (N=8 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.89 waited 0s
+23:42:44 done 31476142-old-3 ok=1 
+23:42:44 done /root/hs2-wt/r1-baseline/docs/architecture/wip/r1/baseline/plans/rigC.txt
