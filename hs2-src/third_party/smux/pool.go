@@ -387,6 +387,14 @@ func (s *Session) returnSpare() {
 // windows let in, and a link carrying a fast stream is the one with the most
 // in flight for the others too (counted with them, a fast stream's claim
 // kept the session from borrowing at all, and such a link stalled 10 s).
+// Nor does the session's share of the pool (FreeFor) bind it: as it
+// borrows, a session cannot tell being alone in trouble from leaving the
+// others short later, and a share that leaves them room takes from a lone
+// link what was in flight to it. So a link can hold the whole pool, at
+// most its share in claims and borrowMax times MaxReceiveBuffer (and a
+// block) in spare; the others meanwhile get what a session without a pool
+// gets, and the pool is back as the data is read or its streams close
+// (TestPoolBorrowPastTheShareIsBoundedAndComesBack).
 // Readers that do not read at all (frozen apps) fill it all the same, a
 // buffer later: then the session waits as it did, and the wedge guard
 // (hs2's) sees it. A closed session borrows nothing: nothing more comes in,

@@ -74,8 +74,9 @@ func TestRed2BorrowedDataKeepsItsPoolAfterClose(t *testing.T) {
 // sleeps) it borrows the rest. Every other link of the process can then
 // neither grow a window past NeedStreamBuffer nor borrow: the situation
 // the share was meant to prevent, reached by one link instead of two.
-// (Logged, not failed: a design limit, WINDOW_CORE §2.3; the data is in
-// memory, nothing leaks.)
+// (Logged, not failed: a design limit, WINDOW_CORE §4.5; the data is in
+// memory, nothing leaks. Its bound, and the pool back once the frozen
+// streams close: TestPoolBorrowPastTheShareIsBoundedAndComesBack.)
 func TestRed2OneLinkTakesThePoolByBorrowing(t *testing.T) {
 	probe := poolConfig(NewWindowPool(1))
 	excess := probe.MaxStreamBuffer - probe.NeedStreamBuffer
