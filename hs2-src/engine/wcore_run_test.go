@@ -412,6 +412,14 @@ func TestWcoreRunnerFixedWindow(t *testing.T) {
 	if n := len(logs.all()); n != 0 {
 		t.Fatalf("lines logged under fixed windows: %q", logs.all())
 	}
+	// the status line's numbers: the fast stream's window, and of the pool
+	// only its part past Need (its claim), all the pool gave out
+	var ps PoolStats
+	ws.fillStats(&ps)
+	claim := float64(fixed-cfg.NeedStreamBuffer) / (1 << 20)
+	if ps.FastConns != 1 || ps.FastWinMiB != float64(fixed)/(1<<20) || ps.PoolWinMiB != claim || ps.PoolUsedMiB != claim || ps.PoolMiB != 16 {
+		t.Fatalf("stats %+v, want one fast connection with a window of %d KiB holding %.3f MiB of the 16 MiB pool", ps, fixed>>10, claim)
+	}
 }
 
 // HS2_TUNE_WCORE=0: no session gets a core, nothing sets a ceiling, and on
@@ -986,19 +994,25 @@ func TestAutopilotLeavesGrownOut(t *testing.T) {
 }
 
 // The status line's numbers: the streams past Need on every registered
-// link and what their windows are.
+// link and what their windows are, and the pool their links take from:
+// its size, and nothing of it given out while those windows hold nothing
+// past Need (a grown window's claim: TestWcoreRunnerFixedWindow).
 func TestWcoreFillStats(t *testing.T) {
 	ws := &wcSet{}
+	var st PoolStats
+	ws.fillStats(&st)
+	if st.FastConns != 0 || st.PoolMiB != min(max(SmuxWindowPool, 0), 1<<30)>>20 || st.PoolUsedMiB != 0 || st.PoolWinMiB != 0 {
+		t.Fatalf("stats with no link %+v", st)
+	}
 	for i := 0; i < 3; i++ {
-		l := wcLogLink("link", wcEdge)
-		l.sess = &smux.Session{} // never closed: only counted here
+		l := wcLogLink("link", wcEdge) // a pool of 16 MiB (wcTestConfig)
+		l.sess = &smux.Session{}       // never closed: only counted here
 		l.inStats.fastN.Store(int32(i))
 		l.inStats.fastWin.Store(int64(i) << 20)
 		ws.put(l)
 	}
-	var st PoolStats
 	ws.fillStats(&st)
-	if st.FastConns != 3 || st.FastWinMiB != 3 || st.PoolMiB != min(max(SmuxWindowPool, 0), 1<<30)>>20 {
+	if st.FastConns != 3 || st.FastWinMiB != 3 || st.PoolMiB != 16 || st.PoolUsedMiB != 0 || st.PoolWinMiB != 0 {
 		t.Fatalf("stats %+v", st)
 	}
 }

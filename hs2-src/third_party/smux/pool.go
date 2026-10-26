@@ -79,17 +79,23 @@ var closeGrace = 2 * claimIdle
 
 // WindowPool is the excess past Config.NeedStreamBuffer that the windows of
 // the sessions sharing it may hold at once (Config.WindowPool), in bytes.
-type WindowPool struct{ free atomic.Int64 }
+type WindowPool struct {
+	free atomic.Int64
+	size int
+}
 
 // NewWindowPool returns a pool of size bytes.
 func NewWindowPool(size int) *WindowPool {
-	p := new(WindowPool)
+	p := &WindowPool{size: size}
 	p.free.Store(int64(size))
 	return p
 }
 
 // Free is what the pool has left.
 func (p *WindowPool) Free() int { return int(p.free.Load()) }
+
+// Size is the pool's size: Size-Free is what its sessions hold of it.
+func (p *WindowPool) Size() int { return p.size }
 
 // FreeFor is what a session that holds held of the pool may still take for
 // its windows: as much as leaves it holding no more than the pool then has
@@ -419,3 +425,9 @@ func (s *Session) dropSpare() {
 // its streams' windows hold from the WindowPool, what it borrowed, and what
 // came in under larger windows and has not been read yet.
 func (s *Session) Extra() int { return int(atomic.LoadInt32(&s.extra)) }
+
+// Spare is the part of Extra that no window covers: what the session
+// borrowed as its buffer ran full, and what came in under a larger window
+// since taken down that it still holds (returnSpare). Extra-Spare is what
+// its streams' windows claim from the WindowPool.
+func (s *Session) Spare() int { return int(atomic.LoadInt32(&s.spare)) }
