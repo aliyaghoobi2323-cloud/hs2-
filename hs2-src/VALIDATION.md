@@ -321,7 +321,9 @@ moved at most about 2 MiB per round trip (~112 Mbit/s at 150 ms, ~168 at
   It starts on a link only once the Kharej server sends its new 96-byte stats
   record, so **both servers must run this release**; with an old Kharej server
   downloads stay exactly as before. It also stays off where the old windows
-  already fill the path or the Kharej server resends over 1%.
+  already fill the path or the Kharej server resends over 1.5% (or over 1%
+  that is not steady over its records, comes in bursts, or follows a policer;
+  and for a few seconds after any record that lost in a burst).
 - the **pacing net** runs on the **Kharej (exit) server**, on every link
   socket, whatever the Iran server runs: when a link socket resends 2% or
   more while it paces at over twice what the path delivers, its pacing is
@@ -350,13 +352,17 @@ vary: a window takes from the pool only its part past the base 2 MiB, and
 `borrowed` is what link buffers that ran full took; build `a372b1301121`
 shows the older `fast connections: 1 (windows 6 MiB of 64 MiB pool)`, whose
 MiB are the windows, not what they take of the pool) and its log a
-`downloads fill the path` line for the link; no cut, and no `degraded` or `stuck:` line for that link;
+`downloads fill the path … window held at …` line for the link; no cut, and no `degraded` or `stuck:` line for that link;
 the interactive user's p50 about the same (its p99 may be higher: the known
 cost, below — report it). If the core never starts (no `windows:` line, no
-`fill the path` line, the same speed as off): check `hs2 version` on the
+`fill the path` line, the same speed as off; or only `… with their own
+windows … it stays off for N s` lines: the old windows already fill the path,
+and the core stays off by design): check `hs2 version` on the
 Kharej server (an old one keeps the core off), whether one connection already
 fills the path with 2 MiB windows (then the core stays off by design), and
-whether the Kharej server's socket resends over 1% (`ss -ti` on the link).
+whether the Kharej server's socket resends over 1.5% (or over 1% that is not
+steady over its records, comes in bursts, or follows a policer; `ss -ti` on
+the link).
 
 *1b. Several big downloads at once.* The window cores of the Iran server's
 links to one Kharej server share that server's path: since the third red-team
@@ -386,6 +392,7 @@ journalctl -u <unit> -f -o cat | grep -E 'pacing held|pacing net:'
 | Log line (exact format; numbers vary) | Meaning | Expected |
 |---|---|---|
 | `mtcp: link N: downloads fill the path at ~287 Mbit/s (round trip 151 ms): window held at 6.4 MiB for 2 fast connection(s), queue ~4 ms` (Iran) | the core found the window that fills the link's path (end of its start-up, or the knee moved by more than 25%) | when large downloads run; at most once a minute per link |
+| `mtcp: link N: downloads fill the path at ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast connection(s)) — the window core's step only added queue; it stays off for 64 s` (Iran) | the core's first step found the path already full with the downloads' own windows (the rate did not follow it, the queue did): the core went back off, and stays off that long (32 s, doubling with each such finding in a row up to 256 s) while as many fast connections or more run | on paths the old windows already fill (several downloads on one link); within the cap of the line above, at most once a minute per link |
 | `mtcp: link N: <why> — download windows 6.4 MiB → 3.1 MiB` (Iran), `<why>` one of `path queue grew by 38 ms`, `the exit's queue grew by 12 ms`, `path queue grew by 12 ms (the link's own round trip)`, `control pings came back 40 ms late`, the same with ` (resent 2.1%)`, `packets were lost as the windows grew (resent 1.8%)`, `packets arrived behind holes as the windows grew`, `packets arrived behind holes on a clean path`, `path slowed to ~90 Mbit/s with its queue growing` | a drain: the core shrank the link's download windows (never below 2 MiB) because the path's queue grew, or loss came with the growth; a drain for holes (`packets arrived behind holes …`) waits for the Kharej server's next stats record (~2 s), which keeps it or takes it back (next row) | now and then, mostly at the evening peak or when the path changes; at most once per link per 30 s |
 | `mtcp: link N: the other server resent 0.002% — the holes were reordering, not loss; download windows back 2.0 MiB → 8.0 MiB` (Iran) | a drain for holes taken back: the Kharej server's next record showed it resent no more than its usual level (within its spread, and under 0.05%), so the packets behind the holes were reordered by the path, not lost. The windows climb back to where they were (within the window pool), and holes as dense cut no more on that link for 10 minutes (the link's reordering level) | on a path that reorders packets (the Iran–Kharej path does, more the faster the download): a few times early in a fast download, then rarely; at most once per link per 30 s |
 | `mtcp: link N: 0.4% loss with no queue — windows cover the resends (+18 ms)` (Iran) | random loss with no queue: the core does not back off for it | on lossy paths; at most once per link per 10 min |
@@ -402,7 +409,8 @@ journalctl -u <unit> -f -o cat | grep -E 'pacing held|pacing net:'
 Count per hour (Iran, then Kharej):
 
 ```
-journalctl -u <unit> --since "-1h" -o cat | grep -c 'fill the path'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'window held at'
+journalctl -u <unit> --since "-1h" -o cat | grep -c 'stays off for'
 journalctl -u <unit> --since "-1h" -o cat | grep -c 'download windows'
 journalctl -u <unit> --since "-1h" -o cat | grep -c 'reordering, not loss'
 journalctl -u <unit> --since "-1h" -o cat | grep -c 'loss with no queue'

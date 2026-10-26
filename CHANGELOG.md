@@ -2583,43 +2583,60 @@ What changed:
   the others), costs the other links nothing worse than base (a window up to
   the need, then waiting for the reader), and comes back as the data is read
   or the frozen streams close (`WINDOW_CORE.fa.md` §4.5).
-<!-- P14-BEGIN -->
-- **The step-1 judge's fixes P1–P4** (`engine/wcore.go`; link model, 6–8
-  seeds; the judge, red team and rig measurement of these four are not
-  finished).
-  - "First, do no harm" judges what stays, not one sample: for queue the core
-    stays OFF only when all of the exit's last three records show one over Δq;
-    a first STARTUP step from OFF that brought queue and no rate (a hole-free
-    path, no other core of the peer on) goes back to OFF for 32 s; a loss
-    level over 1.5% keeps it off, between 1% and 1.5% it turns on only when two
-    records in a row after the first find the level steady within its binomial
-    spread (random loss), and bursty loss (a record over 1.5% or above the
-    level by its spread) keeps it OFF at any level. 1000/100 with 1% loss on in
-    7 → 8 of 8 seeds; 300/100 with 1% 50.0 → 55.2 Mbit/s (base 49.6); 300/72
-    with the field's reordering and a 50 ms queue, where the core stayed off,
-    140 → 239 (resends 0 → 0.14% with RACK); the cost: the p99 of a user beside
-    a download in lossy cells where the core is now on (model cells meeting
-    every target 31 → 28 of 85).
-  - At the floor behind a standing queue (over target + Δq for 2 evaluations)
-    HOLD starts no probe (on the rig 8 downloads on 1000/100 had probed to
-    18.2 MiB for 3.5% more with p99 2.27× base): probes from the floor behind
-    a standing queue 13 → 0 (1000/100 with a 200 ms queue, 7 downloads
-    joining).
-  - On long round trips a record with a queue over 5 ms but within Δq of what
-    the windows left without the core, and no resends, holds the budget
-    instead of ending STARTUP (on the rig one 6.4 ms record had ended it at
-    2 MiB on 1000/500): 300/500 with a 200 ms queue 47 → 74% of N4's gain,
-    200/500 with the same queue 22 → 44% (cells meeting every target
-    28 → 29); 300/500 with a 50 ms queue resends 1.16 → 1.89% (base 0).
-  - After a slowdown the rate of the slow period itself (2 s after the loss
-    point, not a dip the core made) is kept with the ceiling that came with a
-    queue; when HOLD carries over 1.15× it for 2 evaluations with an empty
-    queue, the ceiling and the probe backoff are cleared and a probe comes at
-    once (never after a policer's signature): 300 → 50 → 300 back to 90%
-    within 10 s in 9 → 10 of 12 seeds; on steady paths it fires in 4 of 432
-    runs; 1000 → 300 → 1000 behind a 20 ms queue still 1 of 12 (the judge
-    asked for 5 of 6).
-<!-- P14-END -->
+- **The step-1 judge's P1–P3: "first, do no harm" judges what stays, no
+  probing at the floor behind a standing queue, and the end of STARTUP on
+  long round trips** (`engine/wcore.go`; P4 is not in step 2, below).
+  - "First, do no harm": for queue the core stays OFF only when all of the
+    exit's last three records (all within three record spans) show one over
+    Δq — a record is a snapshot, and the sender's ~3.9× bursts swing it
+    between 0 and 20 ms on a path with room; when some but not all do, the
+    first STARTUP step is the smallest (×1.25). A first step from OFF that was
+    taken and brought queue but no rate (a hole-free path, no other core of
+    the peer on) shows the windows without the core already past the knee:
+    back to OFF for 32 s, doubled on each repeat on the link up to 256 s,
+    reset by a first step the rate followed. Loss: a level over 1.5% keeps
+    the core off; between 1% and 1.5% it turns on only when two records in a
+    row after the first find the level steady within its binomial spread
+    (random loss); bursty loss (a record over 1.5% or above the level by its
+    spread within the last three record spans) or a policer the core saw
+    keeps the 1% gate. Model (8 seeds): 1000/100 with 1% loss on in 7 → 8 of
+    8; 300/100 with 1% 50.0 → 55.2 Mbit/s (base 49.6); 300/72 with the
+    field's reordering and a 50 ms queue, where the core stayed off,
+    140 → 239.
+  - At the floor, behind a queue over target + Δq for 2 evaluations in a row
+    (by the exit's records; the link's own srtt only when no fresh record
+    came), HOLD starts no probe: on the rig 8 downloads on 1000/100 had
+    probed from the 16 MiB floor to 18.2 MiB for 3.5% more, with p99 2.27×
+    base. Model: such probes 13 → 0 (1000/100 with a 200 ms queue, 7
+    downloads joining).
+  - Above 450 ms one record with a queue no longer ends STARTUP (on the rig
+    a 6.4 ms record had ended it at 2 MiB on 1000/500, the run at ~22
+    Mbit/s): only a queue over what the windows left when the core left OFF
+    plus Δq, a queue in all three last records, or resends end it; a record
+    in between holds the budget. Model, share of N4's gain (before P3, 6
+    seeds → now, 12 seeds): 300/500 with a 200 ms queue 47 → 76%, with a
+    50 ms queue 38 → 44%; 200/500 22 → 36% and 19 → 29%; 1000/500 with a
+    50 ms queue 90%; resends on 300/500 with a 50 ms queue 1.16 → 1.91%
+    (base 0, within base + 3 points).
+  - Post-merge review fixes: a queue that stays in all three records ends
+    STARTUP on long round trips, with the rate and the last step's payment
+    recorded meanwhile (M1: such a queue kept STARTUP for good); at the floor
+    the link's own srtt counts only without a fresh exit record (M2: an
+    upload on the same link kept HOLD from ever probing); the first-step
+    trial only on a step actually taken and with the fast set unchanged
+    (J1); and the trial's backoff and its own log line (J2: it repeated
+    every ~32 s with a `window held` line while the core went OFF; trials to
+    OFF in 300 s on 300/100 with 3 downloads, 4 seeds, 19 → 14).
+  - Model cells meeting every target 31 → 29 of 85 (the cost: the p99 of a
+    user beside a download in lossy cells where the core is now on). Rig,
+    P1–P4 as first built against the branch before them (medians of 3
+    interleaved runs): 300/50 with a 50 ms queue 203 → 262 Mbit/s; 1000/100
+    with 1% loss 186 → 250 (runs 80/287/186 → 250/275/239); 100/100 with a
+    50 ms queue 84 → 85 Mbit/s with the interactive p99 266 → 128 ms
+    (resends 0.16% → 0); 1000/500 with a 50 ms queue 35 → 136 (runs
+    35/161/33 → 162/136/35); 300/500 with a 200 ms queue 90 → 142. The final
+    candidate (P1–P3 with the review's fixes) is measured with the release:
+    RIG_P13F_PLACEHOLDER.
 
 Status and logs (exact formats: `hs2-src/VALIDATION.md`, V16):
 - `hs2 status`: `windows: fast connections: N (windows X MiB) · pool U of Y
@@ -2641,6 +2658,10 @@ Status and logs (exact formats: `hs2-src/VALIDATION.md`, V16):
   for holes taken back: the other server resent no more than its level;
   reordering level 60%), held by the window pool 0 time(s)` — `for loss` now
   counts the drains later taken back too; the parenthesis only when one was.
+- Edge, the first-step trial (J2): `mtcp: link N: downloads fill the path at
+  ~260 Mbit/s (round trip 150 ms) with their own windows (8.0 MiB for 4 fast
+  connection(s)) — the window core's step only added queue; it stays off for
+  64 s` (within the `fill the path` line's cap, once a minute per link).
 - Nothing new on the wire and no new knob; old and new peers, upgrade order
   and the switches as in step 1.
 
@@ -2665,6 +2686,14 @@ Not in step 2 (the owner's decisions, 2026-10-26):
   reordering 617 against 612), and a worse p99 on mid-BDP paths (300/50
   +30 ms, 150/72 +94 ms with 2% resends). H1, a finer step, was dropped for
   four times the window updates per MiB and its latency.
+- **P4, recovery after a slowdown** (the step-1 judge's fourth fix; branch
+  `s2-p14-red`, `d721a13` and its fix `76a3ca4`), by the separate judge's
+  verdict: on the current base the rig's 300 → 50 → 300 on 150 ms already
+  recovers to 90% within 10 s in 9 of 9 runs; its gain shows only in the
+  model and is small (60 seeds, 1000 → 300 → 1000 behind a 50 ms queue: back
+  within 10 s in 42 → 51 of 60, 487 → 507 Mbit/s); and it costs on a path
+  whose speed swings (120 seeds, 1000 ↔ 300 on 100 ms with a 200 ms queue:
+  median p99 539 → 657 ms). The branch stays for later work.
 - **Step 3** (the edge's socket record to the exit, the upload core, the net
   on the edge) starts only on the owner's word.
 
@@ -2680,6 +2709,14 @@ Open:
   min_rtt renews (up to 5 minutes on Linux).
 - The exit's upload core (lab only) has no "the path holds the sender" guard
   under FM2: for step 3.
+- The core going back to OFF after it was on, and staying there, on 100/100
+  and 100/150 with a 50 ms queue: in the model (120 s, 100 seeds) 27 and 44
+  of 100 runs with the interactive p99 over 800 ms (base 0 and 22). This is
+  step 1's behaviour (`a372b13` the same); step 2 does not change it.
+- The gain lost on 100/300 with a 50 ms queue (model 51.5 → 40.1 Mbit/s, base
+  37.0), where "first, do no harm" now keeps the resends lower (1.26 →
+  0.58%); the p99 about 10% higher in lossy and long-round-trip cells
+  (within the criterion).
 - Flaky under concurrent load, on base too: `TestDgPortsUDPFlowFollowsState`,
   `TestPortRoutesEndToEnd`, `TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo`
   and udpcarrier's `TestLabBursty26` — for Z8.
