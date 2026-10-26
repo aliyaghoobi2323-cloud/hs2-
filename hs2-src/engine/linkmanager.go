@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/xtaci/smux"
 )
 
@@ -126,14 +127,14 @@ type LinkManager struct {
 
 	// OnLink, if set, is called (in its own goroutine) for every new link.
 	OnLink func(Link)
-	// gateInfo (the stream edge): a link takes user connections only once its
-	// kindInfo exchange is over (linkMeter.infoDone), so the first connection
-	// on it already knows whether the exit routes port tags (routes.go). Links
-	// without a meter are never held back.
-	gateInfo bool
-	// exitInfo is the exit's latest kindInfo answer on any link; a link whose
-	// own answer is late goes by it (userStreamHeader).
-	exitInfo atomic.Pointer[peerInfo]
+	// showRoutes (the stream edge): Stats carries what the exit reported over
+	// kindInfo about its per-port routing (routes.go), for `hs2 status`. A
+	// user connection never waits for that exchange: since wire v3 every one
+	// is tagged with its user port (userStreamHeader).
+	showRoutes bool
+	// refuse spaces the dials while the other server refuses this one's
+	// protocol (refusal.go).
+	refuse refusalBackoff
 
 	// The sizing brain and what feeds it. ap, sample, dec, lastSampleAt,
 	// targetDropAt and the log-throttle times are touched only by the pool's
@@ -573,9 +574,6 @@ func (m *LinkManager) DropLink(l Link, from string) {
 	}
 	m.links = kept
 	n := m.aliveLocked()
-	if n == 0 {
-		m.exitInfo.Store(nil) // no link left: the next exit may be another process
-	}
 	m.mu.Unlock()
 	l.Close()
 	if id < 0 || m.closing.Load() {
@@ -1013,14 +1011,17 @@ func (m *LinkManager) alive() int {
 // max (make-before-break); any other dial is dropped if the pool reached max
 // meanwhile. A dial queued before another one failed is dropped unattempted.
 func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
+	if m.refuse.holding(m.now()) > 0 {
+		return // the other server refuses this one's protocol: not yet
+	}
 	m.dialing.Add(1)
 	m.dialWG.Add(1)
 	epoch := m.dialEpoch.Load()
-	// Still wanted? Not after a run of failures, not past max, and not once
-	// enough links serve (retiring links came back, or the target fell). A
-	// replacement is wanted while its epoch holds.
+	// Still wanted? Not after a run of failures or a refusal, not past max,
+	// and not once enough links serve (retiring links came back, or the
+	// target fell). A replacement is wanted while its epoch holds.
 	valid := func() bool {
-		if m.dialEpoch.Load() != epoch {
+		if m.dialEpoch.Load() != epoch || m.refuse.holding(m.now()) > 0 {
 			return false
 		}
 		return replacement || m.wantsDial()
@@ -1037,6 +1038,16 @@ func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
 			return
 		}
 		l, err := m.dialer.DialLink(ctx)
+		if err != nil && tlscarrier.PeerRefused(err) {
+			// Every dial would be refused the same way: drop the queued
+			// ones and wait (refusal.go), saying so once a minute instead
+			// of the "dials failing" line.
+			m.dialEpoch.Add(1)
+			if wait, logIt := m.refuse.refused(m.now()); logIt {
+				m.log("%s", refusalLine(err, wait))
+			}
+			return
+		}
 		if err != nil {
 			if m.failStreak.Add(1) >= dialFailRun || m.alive() == 0 {
 				m.dialEpoch.Add(1)
@@ -1046,6 +1057,7 @@ func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
 			m.dialFails.Add(1)
 			return
 		}
+		m.refuse.ok()
 		m.failStreak.Store(0)
 		m.mu.Lock()
 		if ctx.Err() != nil || m.closing.Load() {
@@ -1537,11 +1549,6 @@ func (m *LinkManager) reap() {
 		}
 	}
 	m.links = alive
-	if len(alive) == 0 {
-		// No link left: the exit that answered may have restarted with
-		// another table, so links whose own answer is late must not go by it.
-		m.exitInfo.Store(nil)
-	}
 	m.mu.Unlock()
 	now := m.now()
 	for _, ml := range dead {
@@ -1754,7 +1761,7 @@ func (m *LinkManager) pickLocked(limit int, avoid ...Link) *managedLink {
 		ties, tiesPrompt := 0, 0
 		serving, lagging := 0, 0
 		for _, ml := range m.links {
-			if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
+			if !ml.link.Alive() {
 				continue
 			}
 			if len(avoid) > 0 && slices.Contains(avoid, ml.link) {
@@ -1825,7 +1832,7 @@ func (m *LinkManager) stranded(l Link) bool {
 		if ml.link == l {
 			own = ml
 		}
-		if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
+		if !ml.link.Alive() {
 			continue
 		}
 		if ml.retiring || ml.degraded || ml.draining || ml.suspect {
@@ -2668,7 +2675,7 @@ func (m *LinkManager) Stats() PoolStats {
 		}
 	}
 	m.mu.RUnlock()
-	if m.gateInfo {
+	if m.showRoutes {
 		if routes == nil {
 			routes = &PeerRoutes{}
 		}
