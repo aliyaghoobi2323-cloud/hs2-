@@ -2677,7 +2677,28 @@ Status and logs (exact formats: `hs2-src/VALIDATION.md`, V16):
 - Nothing new on the wire and no new knob; old and new peers, upgrade order
   and the switches as in step 1.
 
-Field: FIELD_PLACEHOLDER
+Field (2026-10-26, build 1c23629533c9 against a372b1301121, both servers switched together through
+hs2-safe-apply, Kharej first; balanced order new/old/old/new/new/old, 3 reps each; real users on the tunnel):
+- The path that day: the ISP disturbed TCP on the tunnel's first Iran address (a direct TCP test outside the
+  tunnel: 54 Mbit/s with 7,842 retransmits on it, 420 Mbit/s on another address of the same server; ICMP clean
+  on both). At the owner's request the tunnel moved to the other address; the runs below are after the move.
+  Even there the link sockets resent 2-6%, above the core's 1.5% "first, do no harm" bound, so the window core
+  stayed OFF in nearly every run: this field test compares the two builds with the core off (no regression
+  check of everything else), not the core's gain (the step-1 baseline on a clean path: 284 vs 102 Mbit/s).
+- One download, 90 s (median of 4 new / 4 old runs; runs whose iperf3 control connection the tunnel closed
+  on a degraded link are averaged over the seconds they reported): 68.5 vs 60.4 Mbit/s (new 1.13x).
+- Four downloads, 120 s: 228 vs 225 Mbit/s (equal). Resends 3.1% / 4.5% vs 3.1% / 4.6%.
+- Interactive probe (32 B every 200 ms) during the downloads: p50 100 vs 81 ms with one download (the new
+  build's last two runs fell in a congested stretch: every run then, old or new, had p50 113-175 ms), 73 vs
+  88 ms with four; p99 306 / 367 vs 327 / 352 ms.
+- Latency with no test load (3-minute windows, real users only): new 82 / 174 / 356 ms (p50 / p90 / p99,
+  17.7% of samples over 150 ms); old 75 / 164 / 281 (13.6%) and, 30 s later, 84 / 181 / 316 (20.1%); the
+  second new window was cut short. The owner's VPN client in the same windows: new 166 / 220 / 350 ms, old
+  114 / 120 / 180 ms. Our probe shows as much spread between two windows of the same build as between builds;
+  the owner's observation is not explained and stays open.
+- Verdict: no throughput regression; latency not settled. main is NOT fast-forwarded to this build: the next
+  release to main is the redesign's first phase (R1: per-user fair scheduling and a latency lane), which
+  targets exactly this; production runs this build meanwhile (rollback: a372b1301121).
 
 Not in step 2 (the owner's decisions, 2026-10-26):
 - **Credit-wave damping** (ceilings below 2 MiB, a pacing cap that depends on

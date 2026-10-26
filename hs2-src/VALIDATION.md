@@ -494,10 +494,11 @@ window, the pacing net's stale-cap fix and quiet sockets read once a second,
 the judge's P1–P3 and the post-merge review fixes; V16 above, with its new
 log lines and the new `windows:` line; `hs2 version` shows its build id), on
 top of Phase Z5 step 1 and Phases Z, Z2 and Z3 (V15). Built on the work branch
-`claude/smux-buffer-constants-fv9bu8` and on `main` (fast-forwarded once the
-field test against the previous release passed): a plain install or an
-Upgrade in the menu gets it; to pin this exact build, set `HS2_REPO_RAW` to
-the commit that carries this binary. Measured on the real-TCP rig and the
+`claude/smux-buffer-constants-fv9bu8` only: `main` stays on the previous release
+(the field test showed no throughput regression but left a latency question
+open; the next release to `main` is the redesign's phase R1). Production runs
+this build; to pin it, set `HS2_REPO_RAW` to the commit that carries this
+binary. Measured on the real-TCP rig and the
 link model, and across the real Iran–abroad path against the previous release
 (CHANGELOG, Phase Z5 step 2, "Field"). The previous release, binary build
 `a372b1301121` (Phase Z5 step 1; commit `bfea5e8`), is the rollback target;
