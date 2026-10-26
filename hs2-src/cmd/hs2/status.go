@@ -16,6 +16,7 @@ import (
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier"
 )
@@ -184,6 +185,10 @@ type liveStatus struct {
 	PSICPU60        *float64 `json:"psi_cpu60,omitempty"`
 	HostSaturated   bool     `json:"host_saturated,omitempty"`
 	HostOutDiscards uint64   `json:"host_out_discards,omitempty"`
+
+	// The wire protocol (TLS carriers): the negotiated level and caps and the
+	// peers refused for their version, as rendered by tlscarrier.ProtocolLine.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -340,6 +345,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		// pacer then catches up after the scheduler puts it aside (pacerSatCredit),
 		// instead of sending under its rate on an asymmetrically loaded box.
 		udpcarrier.SetHostSaturated(hs.Saturated)
+		if tlsCarrier(fc) {
+			ls.Protocol = tlscarrier.ProtocolLine()
+		}
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
@@ -538,6 +546,9 @@ func printStatus(path string) {
 			fmt.Printf("  reorder:    %d segments held behind a gap; %d gaps filled in order, %d released after the hold\n",
 				ls.ReorderHeld, ls.ReorderFilled, ls.ReorderTimedOut)
 		}
+	}
+	if ls.Protocol != "" {
+		fmt.Printf("  %s\n", ls.Protocol)
 	}
 	if ls.CPUCores > 0 {
 		fmt.Printf("  cpu:        %s\n", cpuLine(ls))
@@ -811,6 +822,16 @@ func carrierName(fc fileConfig) string {
 		return "noise"
 	}
 	return fc.Carrier
+}
+
+// tlsCarrier reports whether the tunnel runs over TLS links (tlscarrier),
+// whose wire protocol `hs2 status` shows.
+func tlsCarrier(fc fileConfig) bool {
+	switch carrierName(fc) {
+	case "mtcp", "l3mtcp", "l3", "tls":
+		return true
+	}
+	return false
 }
 
 func transportLabel(fc fileConfig) string {

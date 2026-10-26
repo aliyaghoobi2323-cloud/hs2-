@@ -20,6 +20,10 @@ type Carrier struct {
 	conn   net.Conn // *tls.Conn (server) or *utls.UConn (client)
 	sendMu sync.Mutex
 	rbuf   []byte // body buffer reused by ReadFrameReuse
+	// the protocol level and the caps both ends have, as negotiated in the
+	// auth records (auth.go); zero on a carrier made by NewCarrier
+	level byte
+	caps  uint32
 }
 
 // writeTimeout bounds one write; a link that cannot drain for this long is
@@ -28,6 +32,13 @@ const writeTimeout = 5 * time.Second
 
 // NewCarrier wraps an already-authenticated connection as a Carrier.
 func NewCarrier(conn net.Conn) *Carrier { return &Carrier{conn: conn} }
+
+// Level is the protocol level negotiated for this link.
+func (c *Carrier) Level() byte { return c.level }
+
+// Caps is the caps both ends have on this link: a core runs on it only when
+// its bit is set (and its level is at most Level).
+func (c *Carrier) Caps() uint32 { return c.caps }
 
 // AppendFrame appends one unpadded frame to dst in the wire format SendFrame
 // uses, so a caller can coalesce several frames into one WriteRaw.
@@ -203,17 +214,26 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 		raw.Close()
 		return nil, err
 	}
-	rec, nonce := makeClientAuth(sharedKey, ekm)
+	h := LocalAuthHdr()
+	rec, nonce := makeClientAuth(sharedKey, ekm, h)
 	if _, err := u.Write(rec); err != nil {
 		raw.Close()
 		return nil, err
 	}
-	if err := readServerProof(u, sharedKey, nonce, ekm); err != nil {
+	p, err := readServerProof(u, sharedKey, nonce, ekm)
+	if err == nil {
+		if err = checkProofLevel(h, p); err != nil {
+			proto.refused(false)
+		}
+	}
+	if err != nil {
 		raw.Close()
 		return nil, err
 	}
 	raw.SetDeadline(time.Time{})
-	return &Carrier{conn: u}, nil
+	caps := p.Caps & h.Caps // never more than this side has
+	proto.linked(p.Level, caps)
+	return &Carrier{conn: u, level: p.Level, caps: caps}, nil
 }
 
 // clientEKM exports the channel-binding secret of a finished uTLS handshake.
