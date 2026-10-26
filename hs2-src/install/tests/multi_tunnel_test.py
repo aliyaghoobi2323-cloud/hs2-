@@ -195,7 +195,7 @@ class World:
 source "$LIB"
 R="$ROOT"
 BIN="$R/usr/local/bin/hs2"; CFG_DIR="$R/etc/hs2"; UNIT_DIR="$R/etc/systemd/system"
-BACKUP_DIR="$R/root/hs2-backups"; MENU_BIN="$R/usr/local/bin/hs2-menu"
+BACKUP_DIR="$R/root/hs2-backups"; MENU_BIN="$R/usr/local/bin/hs2-menu"; SAFE_APPLY_BIN="$R/usr/local/sbin/hs2-safe-apply"
 use_unit hs2
 install_prereqs(){ :; }
 install_binary(){ ok "(test) hs2 binary in place"; }

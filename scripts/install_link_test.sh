@@ -53,6 +53,7 @@ chmod 755 "$T/hs2old"
         -e 's#^CFG_DIR=/etc/hs2$#CFG_DIR="$SBX/etc-hs2"#' \
         -e 's#^UNIT_DIR=/etc/systemd/system$#UNIT_DIR="$SBX/units"#' \
         -e 's#^MENU_BIN=.*#MENU_BIN="$SBX/bin/hs2-menu"#' \
+        -e 's#^SAFE_APPLY_BIN=.*#SAFE_APPLY_BIN="$SBX/bin/hs2-safe-apply"#' \
         -e 's#^BACKUP_DIR=.*#BACKUP_DIR="$SBX/backups"#' \
         -e 's#^\[ "\$(id -u)" = 0 \] || die .*#:#' > "$T/core.sh"
 for want in 'BIN="$SBX/bin/hs2"' 'CFG_DIR="$SBX/etc-hs2"' 'UNIT_DIR="$SBX/units"' 'BACKUP_DIR="$SBX/backups"' 'main_menu(){'; do

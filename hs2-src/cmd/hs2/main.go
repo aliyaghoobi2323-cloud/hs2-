@@ -450,6 +450,13 @@ func runCmd(args []string) {
 	}()
 	go watchCerts(ctx)
 
+	// Tell systemd the daemon is up (a no-op under today's Type=simple, which
+	// sets no NOTIFY_SOCKET): a unit or a rollback (hs2-safe-apply) that ever
+	// waits for READY=1 works with every binary from R1 on.
+	if err := sdNotifyReady(); err != nil {
+		log.Printf("systemd notify: %v (ignored)", err)
+	}
+
 	switch fc.Carrier {
 	case "reality":
 		runReality(ctx, eng, fc)
@@ -470,6 +477,27 @@ func runCmd(args []string) {
 	default:
 		log.Fatalf("unknown carrier %q", fc.Carrier)
 	}
+}
+
+// sdNotifyReady sends one "READY=1" datagram to $NOTIFY_SOCKET — an absolute
+// path, or "@name" for the abstract namespace (Go maps the '@') — the
+// sd_notify(3) protocol without a dependency. Without NOTIFY_SOCKET it does
+// nothing; an error is for the log only and never stops the tunnel.
+func sdNotifyReady() error {
+	sock := os.Getenv("NOTIFY_SOCKET")
+	if sock == "" {
+		return nil
+	}
+	if sock[0] != '/' && sock[0] != '@' {
+		return fmt.Errorf("NOTIFY_SOCKET %q is not a unix socket path", sock)
+	}
+	c, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: sock, Net: "unixgram"})
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_, err = c.Write([]byte("READY=1"))
+	return err
 }
 
 // dialing reports whether this side initiates the connection. mode is the fixed

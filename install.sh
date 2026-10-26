@@ -2503,8 +2503,8 @@ uninstall(){
   read -rp "Also remove the hs2 program and the hs2-menu command? Keep them (Enter) to set up again without a download [y/N]: " a </dev/tty || a=""
   case "$a" in
     y|Y|yes)
-      rm -f "$BIN" "$MENU_BIN"
-      ok "Removed $BIN and $MENU_BIN — hs2 is gone from this server (backups aside)." ;;
+      rm -f "$BIN" "$MENU_BIN" "$SAFE_APPLY_BIN"
+      ok "Removed $BIN, $MENU_BIN and $SAFE_APPLY_BIN — hs2 is gone from this server (backups aside)." ;;
     *) info "Kept $BIN and $MENU_BIN (run hs2-menu to set up again)." ;;
   esac
   if ls "$BACKUP_DIR"/hs2-*.tar.gz >/dev/null 2>&1; then
@@ -2556,6 +2556,7 @@ status(){
 # if it fails) and follow its log. Tunnels are found from their systemd units,
 # so this works for hs2.service today and hs2-<name>.service later.
 MENU_BIN=/usr/local/bin/hs2-menu
+SAFE_APPLY_BIN=/usr/local/sbin/hs2-safe-apply
 
 # Colours for the manager screens (stderr, like the rest of the UI).
 C_G=$'\033[1;32m'; C_R=$'\033[1;31m'; C_Y=$'\033[1;33m'; C_B=$'\033[1;34m'; C_D=$'\033[2m'; C_0=$'\033[0m'
@@ -4060,6 +4061,7 @@ tunnel_manager(){
 # Keep a copy of this script as the `hs2-menu` command, so the menu works even
 # when GitHub is unreachable (Iran side).
 install_self(){
+  install_safe_apply   # from this script itself: no download, works on the Iran server too
   local tmp; tmp=$(mktemp)
   # Prefer the script that is actually running (a local file we already trust),
   # so there is no network fetch and no window to swap the root-run hs2-menu.
@@ -4082,6 +4084,180 @@ install_self(){
     rm -f "$tmp"; return 0
   fi
   install -m755 "$tmp" "$MENU_BIN"; rm -f "$tmp"
+  return 0
+}
+
+# install_safe_apply writes $SAFE_APPLY_BIN: apply a staged binary, config or
+# drop-in to one tunnel, and put all of it back when hs2 does not stay up or the
+# tunnel does not return. It is scripts/hs2-safe-apply of the repository, byte
+# for byte (scripts/hs2-safe-apply_test.sh holds the two together); a tool for
+# the operator — nothing runs it on its own.
+install_safe_apply(){
+  local tmp; tmp=$(mktemp)
+  cat > "$tmp" <<'HS2_SAFE_APPLY_EOF'
+#!/bin/bash
+# hs2-safe-apply STAGE — apply a staged change to one hs2 tunnel, restart it, and
+# put everything back if hs2 does not stay up or the tunnel does not return
+# (docs/architecture/REDESIGN.fa.md §5.1 «بازگشت‌پذیری»). install.sh installs it
+# as /usr/local/sbin/hs2-safe-apply. Run it detached, so it outlives an SSH
+# session that rides the tunnel itself:
+#
+#   systemd-run --unit=hs2-safe-apply-$(date +%s) --collect \
+#     --setenv=HS2_SAFE_UNIT=hs2 /usr/local/sbin/hs2-safe-apply STAGE
+#
+# STAGE (a directory) may hold any of:
+#   hs2          a new binary (installed as the hs2 binary once it runs `version`)
+#   config.json  a new config for the tunnel (refused unless `hs2 check` passes it,
+#                run by the staged binary when there is one)
+#   dropin.conf  the test drop-in, <unit>.service.d/zz-test.conf; an empty file
+#                removes it. Every service change goes through a drop-in — the
+#                unit file itself is never edited.
+#
+# The tunnel is the unit HS2_SAFE_UNIT (default hs2); its config is the one its
+# ExecStart runs (-c PATH, as systemd sees it). The binary, that config and the
+# unit's WHOLE drop-in directory are backed up first and put back exactly on a
+# revert.
+#
+# Revert when hs2 is not running steadily HS2_SAFE_UPWAIT (60) s after the
+# restart (failed, or restarted meanwhile), or the tunnel's peer does not answer
+# a ping within HS2_SAFE_PEER_WAIT (300) s of the restart. The peer is the
+# config's peer_ip — the other end of the tun — or HS2_SAFE_PEER (needed for an
+# mtcp tunnel, which has no tun). An l3mtcp reverse tunnel takes ~105 s to come
+# back after the Iran side restarts; that is not a reason to revert. A change
+# that must reach BOTH servers before the tunnel can come back (the first
+# wire-3 binary, which the old one does not talk to) is applied to both within
+# one window, or the first one gets a longer HS2_SAFE_PEER_WAIT.
+#
+# The result is written to /root/hs2-safe-apply.last — "OK <backup>",
+# "REVERTED <why> <backup>" or "REFUSED <why> <backup>" — and every step to
+# /root/hs2-safe-apply.log. The paths can be moved (HS2_SAFE_BIN,
+# HS2_SAFE_UNIT_DIR, HS2_SAFE_LOG, HS2_SAFE_LAST, HS2_SAFE_BACKUPS); the tests do.
+set -u
+STAGE=${1:?stage directory}
+UNIT=${HS2_SAFE_UNIT:-hs2}
+BIN=${HS2_SAFE_BIN:-/usr/local/bin/hs2}
+UNIT_DIR=${HS2_SAFE_UNIT_DIR:-/etc/systemd/system}
+UPWAIT=${HS2_SAFE_UPWAIT:-60}
+PEERWAIT=${HS2_SAFE_PEER_WAIT:-${HS2_SAFE_TUNWAIT:-300}}
+LOG=${HS2_SAFE_LOG:-/root/hs2-safe-apply.log}
+LAST=${HS2_SAFE_LAST:-/root/hs2-safe-apply.last}
+BK=${HS2_SAFE_BACKUPS:-/root/hs2-backups}/apply-$(date -u +%Y%m%d-%H%M%S)-$$
+DDIR=$UNIT_DIR/$UNIT.service.d
+DROP=$DDIR/zz-test.conf
+
+log() { echo "$(date -u +%FT%T.%3N) $*" | tee -a "$LOG"; }
+now() { date +%s; }
+nrestarts() { systemctl show -p NRestarts --value "$UNIT"; }
+refuse() { # why message
+	log "$2: nothing applied"
+	echo "REFUSED $1 $BK" >"$LAST"
+	exit 1
+}
+
+# unit_config: the config the unit runs — ExecStart … -c PATH as systemd sees it
+# (a drop-in may replace ExecStart), else the unit file's own line.
+unit_config() {
+	local c
+	c=$(systemctl show -p ExecStart --value "$UNIT" 2>/dev/null | sed -n 's/.*argv\[\]=[^;]* -c \([^ ;]*\).*/\1/p' | head -1)
+	[ -n "$c" ] || c=$(sed -n 's/^ExecStart=.* -c \([^ ]*\).*/\1/p' "$UNIT_DIR/$UNIT.service" 2>/dev/null | head -1)
+	printf '%s' "$c"
+}
+# jstr FILE KEY: a top-level string value of a config
+jstr() { sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -1; }
+
+echo "RUNNING $BK" >"$LAST"
+case "$UNIT" in
+hs2 | hs2-*) ;;
+*) refuse not-hs2 "$UNIT is not an hs2 tunnel (hs2 or hs2-<name>)" ;;
+esac
+CFG=$(unit_config)
+[ -n "$CFG" ] && [ -f "$CFG" ] || refuse no-config "cannot find the config $UNIT runs (ExecStart … -c PATH)"
+NEWCFG=$CFG
+[ -f "$STAGE/config.json" ] && NEWCFG=$STAGE/config.json
+PEER=${HS2_SAFE_PEER:-}
+if [ -z "$PEER" ]; then
+	[ "$(jstr "$NEWCFG" carrier)" != mtcp ] ||
+		refuse no-tun "carrier mtcp has no tun, so its peer_ip never answers a ping: set HS2_SAFE_PEER to an address reached only through this tunnel"
+	PEER=$(jstr "$NEWCFG" peer_ip)
+	[ -n "$PEER" ] || refuse no-peer-ip "the config has no peer_ip to ping: set HS2_SAFE_PEER"
+fi
+
+mkdir -p "$BK"
+cp -a "$BIN" "$BK/hs2"
+cp -a "$CFG" "$BK/config.json"
+[ -d "$DDIR" ] && cp -a "$DDIR" "$BK/dropins"
+log "stage $STAGE; unit $UNIT; config $CFG; peer $PEER (wait ${PEERWAIT} s); backup in $BK"
+
+CHECK=$BIN
+if [ -f "$STAGE/hs2" ]; then
+	"$STAGE/hs2" version >>"$LOG" 2>&1 || refuse binary "the staged binary does not run"
+	CHECK=$STAGE/hs2
+fi
+if [ -f "$STAGE/config.json" ]; then
+	"$CHECK" check -c "$STAGE/config.json" >>"$LOG" 2>&1 || refuse config-check "the staged config fails hs2 check"
+fi
+
+[ -f "$STAGE/hs2" ] && install -m 755 "$STAGE/hs2" "$BIN.new" && mv -f "$BIN.new" "$BIN"
+[ -f "$STAGE/config.json" ] && install -m 600 "$STAGE/config.json" "$CFG"
+if [ -f "$STAGE/dropin.conf" ]; then
+	if [ -s "$STAGE/dropin.conf" ]; then
+		mkdir -p "$DDIR" && install -m 644 "$STAGE/dropin.conf" "$DROP"
+	else
+		rm -f "$DROP"
+	fi
+fi
+systemctl daemon-reload
+n0=$(nrestarts)
+log "applied; restarting $UNIT ($("$BIN" version 2>/dev/null | grep -o 'build [0-9a-f+]*'); env: $(systemctl show -p Environment --value "$UNIT"))"
+systemctl restart "$UNIT"
+t0=$(now)
+
+why=''
+sleep "$UPWAIT"
+if [ "$(systemctl is-active "$UNIT")" != active ] || [ "$(nrestarts)" != "$n0" ]; then
+	why="hs2-not-up(state=$(systemctl is-active "$UNIT"),restarts=$(nrestarts)-was-$n0)"
+else
+	while :; do
+		if ping -c 1 -W 2 "$PEER" >/dev/null 2>&1; then
+			log "tunnel back: $PEER answers $(($(now) - t0)) s after the restart"
+			break
+		fi
+		if [ $(($(now) - t0)) -ge "$PEERWAIT" ]; then
+			why="tunnel-not-back-in-${PEERWAIT}s"
+			break
+		fi
+		sleep 2
+	done
+fi
+
+if [ -z "$why" ]; then
+	echo "OK $BK" >"$LAST"
+	log "OK"
+	exit 0
+fi
+
+log "REVERTING: $why ($(($(now) - t0)) s after the restart)"
+cp -a "$BK/hs2" "$BIN.new" && mv -f "$BIN.new" "$BIN"
+cp -a "$BK/config.json" "$CFG"
+rm -rf -- "${DDIR:?}"
+[ -d "$BK/dropins" ] && cp -a "$BK/dropins" "$DDIR"
+systemctl daemon-reload
+systemctl reset-failed "$UNIT" 2>/dev/null
+systemctl restart "$UNIT"
+t1=$(now)
+while [ $(($(now) - t1)) -lt "$PEERWAIT" ]; do
+	if ping -c 1 -W 2 "$PEER" >/dev/null 2>&1; then
+		log "after revert: tunnel back in $(($(now) - t1)) s"
+		break
+	fi
+	sleep 2
+done
+echo "REVERTED $why $BK" >"$LAST"
+exit 1
+HS2_SAFE_APPLY_EOF
+  mkdir -p "$(dirname "$SAFE_APPLY_BIN")" 2>/dev/null || true
+  install -m755 "$tmp" "$SAFE_APPLY_BIN" 2>/dev/null || warn "Could not install $SAFE_APPLY_BIN (the safe-apply tool); the tunnels are not affected."
+  rm -f "$tmp"
   return 0
 }
 
