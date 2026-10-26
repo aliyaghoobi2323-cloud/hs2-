@@ -46,6 +46,7 @@ var configKeys = map[string]configKey{
 	// Per-port routing (ports.go has the friendlier `hs2 ports`).
 	"forward_ports": {"", "forward_ports", false, false},
 	"port_map":      {"", "port_map", false, false},
+	"proxy_from":    {"", "proxy_from", false, false},
 	"expose":        {"", "expose", false, false},
 	"udp":           {"", "udp", false, true},
 
@@ -203,8 +204,8 @@ func setKey(m map[string]any, ck configKey, val string) error {
 	case ck.parent == "" && ck.name == "forward_ports":
 		obj[ck.name] = strings.Join(splitComma(val), ",") // "8443, 2053" -> "8443,2053"
 	case ck.parent == "" && ck.name == "port_map":
-		if m, err := engine.ParsePortMap(val); err == nil {
-			obj[ck.name] = engine.FormatPortMap(m) // canonical: sorted, short form
+		if s, err := engine.CanonicalPortMap(val); err == nil {
+			obj[ck.name] = s // canonical: sorted, short form, flags kept
 		} else {
 			obj[ck.name] = val // the check below names the bad entry
 		}

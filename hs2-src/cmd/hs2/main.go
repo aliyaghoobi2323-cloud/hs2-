@@ -84,7 +84,11 @@ type fileConfig struct {
 	// "P" (= 127.0.0.1:P) or "P=host:port"; a port not listed goes to expose
 	// (engine/routes.go). The Iran server only says the port number; the
 	// targets live here, so it can never make this server dial anything else.
-	PortMap string `json:"port_map,omitempty"`
+	// On the Iran server it holds only flags: "P/proxy" marks user port P as
+	// behind a proxy that sends a PROXY protocol header, believed only from
+	// ProxyFrom (comma-separated addresses or prefixes; default loopback).
+	PortMap   string `json:"port_map,omitempty"`
+	ProxyFrom string `json:"proxy_from,omitempty"`
 
 	// tls / reality carrier
 	SNI         string `json:"sni"`          // domain (dial)
@@ -565,6 +569,11 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		if links == 0 {
 			cfg.WarmLinks = warmLinks(logf, min, max)
 		}
+		proxyPorts, err := engine.ParsePortFlags(fc.PortMap) // the user ports behind a proxy
+		must(err)
+		proxyFrom, err := engine.ParseProxyFrom(fc.ProxyFrom)
+		must(err)
+		cfg.ProxyPorts, cfg.ProxyFrom = proxyPorts, proxyFrom
 		if dev != nil {
 			cfg.TUN = dev
 		}

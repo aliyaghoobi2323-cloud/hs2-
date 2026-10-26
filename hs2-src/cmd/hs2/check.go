@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -273,13 +274,25 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 	}
 
 	// port_map lives on the kharej server, and only carriers with user ports
-	// use it: anywhere else it would be silently ignored.
+	// use it: anywhere else it would be silently ignored. On the Iran server it
+	// holds only the proxy flag of its user ports (PROXY protocol).
 	if strings.TrimSpace(fc.PortMap) != "" {
 		switch {
 		case !stream && !dgtun:
 			warn(`"port_map" has no effect: carrier %q is an IP tunnel with no user ports`, carrier)
 		case edge:
-			warn(`"port_map" has no effect on the Iran server: where each user port goes is set on the kharej server (its port_map / expose)`)
+			checkProxyPorts(fc, stream, bad, warn)
+		default:
+			if proxy, err := engine.ParsePortFlags(fc.PortMap); err == nil && len(proxy) > 0 {
+				warn(`"port_map": the proxy flag (%d/proxy) has no effect on the kharej server — set it on the Iran server, whose user port the proxy connects to`, proxy[0])
+			}
+		}
+	}
+	if strings.TrimSpace(fc.ProxyFrom) != "" {
+		if _, err := engine.ParseProxyFrom(fc.ProxyFrom); err != nil {
+			bad(`"proxy_from": %v`, err)
+		} else if proxy, _ := engine.ParsePortFlags(fc.PortMap); !edge || !stream || len(proxy) == 0 {
+			warn(`"proxy_from" has no effect: no user port of this server has the proxy flag (on the Iran server, "port_map": "443/proxy")`)
 		}
 	}
 
@@ -373,6 +386,31 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		}
 	}
 	return
+}
+
+// checkProxyPorts validates port_map on the Iran server: there only "P/proxy"
+// entries mean something — user port P is behind a proxy that sends a PROXY
+// protocol header (engine/proxyproto.go); targets are the kharej server's.
+func checkProxyPorts(fc fileConfig, stream bool, bad, warn func(string, ...any)) {
+	targets, err := engine.ParsePortMap(fc.PortMap)
+	proxy, _ := engine.ParsePortFlags(fc.PortMap)
+	if err != nil {
+		bad(`"port_map": %v — on the Iran server its entries are "443/proxy": a user port behind a proxy that sends a PROXY protocol header`, err)
+		return
+	}
+	if len(targets) > 0 {
+		warn(`"port_map" targets have no effect on the Iran server: where each user port goes is set on the kharej server (its port_map / expose); here only "P/proxy" entries apply`)
+	}
+	if len(proxy) > 0 && !stream {
+		warn(`"port_map": the proxy flag works on the user ports of the mtcp, l3mtcp and tls carriers; this carrier ignores it`)
+		return
+	}
+	user := splitComma(fc.ForwardPorts)
+	for _, p := range proxy {
+		if !slices.Contains(user, strconv.Itoa(p)) {
+			warn(`"port_map": %d/proxy is not one of this server's user ports ("forward_ports")`, p)
+		}
+	}
 }
 
 // checkExitTable validates the kharej server's routing table: port_map entries
