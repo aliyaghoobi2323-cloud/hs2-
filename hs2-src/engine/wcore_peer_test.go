@@ -90,12 +90,12 @@ func wtPeer(c *wcore, now time.Time, on bool, qs ...int) *wcore {
 
 // TestWcorePeerLateCore (red team 3, finding 1): a core in OFF judges its
 // link's windows past the knee when the exit's records show a queue past Δq
-// (the largest of the link's last three). Where other cores of the peer are
-// on, the queue they hold (qTarget) is theirs: a late download's core stayed
-// OFF for good behind it (P6X, P6L: 78 against 245–255 Mbit/s, and two of four
-// links OFF from 360 and 480 s to the end). With another core on, the records
-// of every link judge (their median: one is a burst as often as a queue), past
-// Δq + qTarget.
+// (alone, in every one of the link's last three: judge, p1). Where other
+// cores of the peer are on, the queue they hold (qTarget) is theirs: a late
+// download's core stayed OFF for good behind it (P6X, P6L: 78 against
+// 245–255 Mbit/s, and two of four links OFF from 360 and 480 s to the end).
+// With another core on, the records of every link judge (their median: one
+// is a burst as often as a queue), past Δq + qTarget.
 func TestWcorePeerLateCore(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -104,7 +104,7 @@ func TestWcorePeerLateCore(t *testing.T) {
 		harm bool
 	}{
 		{"alone: the windows hold a queue past Δq", false, []int{14, 16, 15, 13}, true},
-		{"alone: one record past Δq is enough (as before)", false, []int{4, 16, 3, 5}, true},
+		{"alone: one record past Δq is a burst (judge, p1)", false, []int{4, 16, 3, 5}, false},
 		{"another core on holds qTarget", true, []int{14, 16, 15, 13}, false},
 		{"... a burst among the records", true, []int{14, 45, 15, 13}, false},
 		{"... and the path queues past it", true, []int{28, 32, 30, 29}, true},

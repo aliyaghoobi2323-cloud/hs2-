@@ -1,0 +1,150 @@
+package engine
+
+import (
+	"fmt"
+	"testing"
+	"time"
+)
+
+// Step 2: the code fixes the independent judge of step 1 proposed
+// (docs/architecture/wip/z5-judge.fa.md §7.3, p1 to p4), each reproduced
+// here before its fix.
+
+// wtOffRecs is a core in OFF on a path of T_base tb whose exit's latest
+// records (2 s apart, the newest now) showed the queues qs (ms, oldest
+// first) and no resends; m is its interval of one fast stream with 2 MiB.
+func wtOffRecs(tb time.Duration, qs ...int) (*wcore, wcMeas) {
+	c := wtCore(1)
+	c.tBase = tb
+	c.sndSeen, c.sndAny, c.sndAnyAt = true, true, wtT0.Add(-time.Minute)
+	c.sndRef = wcLossRef{v: 0, b: wtNeed, ok: true}
+	for i, q := range qs {
+		at := wtT0.Add(-time.Duration(len(qs)-1-i) * 2 * time.Second)
+		d := time.Duration(q) * time.Millisecond
+		copy(c.qSnds[1:], c.qSnds[:])
+		c.qSnds[0] = wcRate{at, d.Seconds()}
+		c.qSnd, c.qSndAt = d, at
+	}
+	m := c.measure(wtIn(wtT0, 1, wtNeed), 1)
+	// (the stream is F, steady at 20 MB/s: only the queue fields are measure's)
+	w := wtMeas(1, 20e6, wtNeed)
+	m.f, m.sameF, m.rF, m.rLink, m.wF, m.wPrev, m.hStep, m.hit = w.f, true, w.rF, w.rLink, w.wF, w.wPrev, w.hStep, 1
+	m.idleF, m.quiet = false, false
+	return c, m
+}
+
+// TestWcoreS2HarmStandingQueue (judge p1): "do no harm" kept the core OFF
+// on the largest q_snd of the exit's latest three records past Δq. A record
+// is a snapshot of the queue, and on a path with room the sender's credit
+// bursts (3.9 times the path's rate) swing it: the rig's 300/50 read 0.9 to
+// 20.3 ms, 300/100 3.3 to 18.4 ms, so one burst's record kept the core OFF
+// (300/100: 123, 234 and 258 Mbit/s; 300/50 OFF in both class B runs). A
+// queue the windows hold past the knee stands in every record (the rig's
+// full paths, 100/100, 100/50 and 4 downloads on 300/150: 6.6 to 52 ms).
+func TestWcoreS2HarmStandingQueue(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		tb   int
+		qs   []int
+		harm bool
+	}{
+		{"300/50: bursts, one record under Δq (5 ms)", 50, []int{14, 3, 18}, false},
+		{"300/100: bursts, one record under Δq (10 ms)", 100, []int{18, 12, 4}, false},
+		{"100/50: a queue in every record", 50, []int{7, 30, 12}, true},
+		{"100/100: a queue in every record", 100, []int{14, 30, 11}, true},
+		{"one record, a queue", 50, []int{12}, true},
+		{"a record older than three spans is no part of it", 50, []int{2, 12, 9, 14}, true},
+	} {
+		c, m := wtOffRecs(time.Duration(tc.tb)*time.Millisecond, tc.qs...)
+		if got := c.harm(m); got != tc.harm {
+			t.Errorf("%s (records %v ms, T_base %d ms): harm %v, want %v", tc.name, tc.qs, tc.tb, got, tc.harm)
+		}
+	}
+}
+
+// TestWcoreS2HarmLossLevel (judge p1): "do no harm" kept the core OFF on
+// the exit's resend share past 1%, its OFF level an average anchored on the
+// first record. The rig's 1000/100 with 1% random loss resent 1.02 to 1.10%
+// in its first records and 1.0 to 1.03% after: the core stayed OFF for 8.8
+// to 16.6 s (213 → 79 Mbit/s against ce19dee, whose first records came
+// under 1%). Random loss steady at its level is what τ_hold covers: up to
+// 1.5% the core starts once two records in a row found the level steady;
+// past 1%, loss that comes in bursts (a record past 1.5% or past the level
+// by its spread: a policer's, the windows overflowing a queue, a slow
+// start's overshoot), or a policer the core met, keeps it OFF.
+
+func TestWcoreS2HarmLossLevel(t *testing.T) {
+	rec := func(c *wcore, m *wcMeas, share float64) {
+		m.snd, m.sndOK, m.sndSegs, m.sndAt = share, true, 50000, m.at
+	}
+	for _, tc := range []struct {
+		name   string
+		shares []float64
+		police bool
+		harm   bool
+	}{
+		{"1% random loss, the first record past it", []float64{0.0110, 0.0102, 0.0103, 0.0101}, false, false},
+		{"... not yet steady for two records", []float64{0.0110, 0.0102}, false, true},
+		{"1.4% steady", []float64{0.014, 0.0138, 0.0141, 0.0139}, false, false},
+		{"a slow start's 1.26%, then 1.92%", []float64{0.0126, 0.0192, 0.0110, 0.0105, 0.0102}, false, true},
+		{"past 1.5%", []float64{0.016, 0.0158, 0.0162}, false, true},
+		{"1.2% in bursts", []float64{0.012, 0.025, 0.004, 0.011}, false, true},
+		{"1.3% left by a slow start's 11% (its first record)", []float64{0.11, 0, 0, 0, 0, 0, 0}, false, true},
+
+		{"1.1% behind a policer the core met", []float64{0.0110, 0.0108, 0.0109}, true, true},
+		{"0.5%", []float64{0.005, 0.005}, false, false},
+		{"a loss burst in the latest records (2.3%), the level under 1%", []float64{0.004, 0.023}, false, true},
+		{"... older than three record spans", []float64{0.004, 0.023, 0.002, 0.002, 0.002, 0.002}, false, false},
+	} {
+		c, m := wtOffRecs(100*time.Millisecond, 1, 1, 1)
+		c.sndRef = wcLossRef{}
+		if tc.police {
+			c.policedAt = wtT0.Add(-time.Minute)
+		}
+		for i, s := range tc.shares {
+			m.at = wtT0.Add(time.Duration(i) * 2 * time.Second)
+			rec(c, &m, s)
+			c.off(wtIn(m.at, 1, wtNeed), m, nil)
+			c.state, c.offN = wcOff, 0 // (only the level and its signature are under test)
+		}
+		if got := c.harm(m); got != tc.harm {
+			t.Errorf("%s (records %v, level %.2f%%): harm %v, want %v", tc.name, tc.shares, 100*c.sndRef.v, got, tc.harm)
+		}
+	}
+}
+
+// TestWcoreS2HarmModel (judge p1): the link model's 1000/100 behind a 50 ms
+// queue with 1% random loss: the exit resends 0.85 to 1.18% a record, and the
+// core stayed OFF until 16.4 s in seed 2 (8 s in seed 1). Each seed leaves
+// OFF within the first 10 s now (two records after the first that find the
+// level steady), and the core resends within its level.
+func TestWcoreS2HarmModel(t *testing.T) {
+	for _, x := range []struct {
+		rate   float64
+		rtt, q int
+		loss   float64
+		seeds  int
+		within time.Duration
+	}{{1000, 100, 50, 0.01, 3, 10 * time.Second}} {
+		for seed := 1; seed <= x.seeds; seed++ {
+			c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
+			c.loss, c.seed, c.mode = x.loss, uint64(seed), wmCore
+			on := time.Duration(-1)
+			c.check = func(at time.Duration, k *wcore, in wcIn, o wcOut) {
+				if on < 0 && k.state != wcOff {
+					on = at
+				}
+			}
+			r := wmRun(c)
+			name := fmt.Sprintf("%s l%g s%d", c.name, 100*x.loss, seed)
+			if on < 0 || on > x.within {
+				t.Errorf("%s: the core left OFF at %v, want within %v (%.1f Mbit, resent %.2f%%)", name, on, x.within, r.mbit, 100*r.resend)
+			} else {
+				t.Logf("%s: on at %v, %.1f Mbit, resent %.2f%%", name, on, r.mbit, 100*r.resend)
+			}
+			if r.resend > x.loss+0.005 {
+				t.Errorf("%s: resent %.2f%% on %g%% random loss", name, 100*r.resend, 100*x.loss)
+			}
+		}
+	}
+}

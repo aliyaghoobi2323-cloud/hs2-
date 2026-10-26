@@ -385,7 +385,7 @@ func TestWcoreRhat(t *testing.T) {
 func TestWcoreOff(t *testing.T) {
 	// (rec: a new exit's records came, with the sender's fields in them)
 	rec := func(c *wcore) { c.sndSeen, c.sndAny, c.sndAnyAt = true, true, wtT0.Add(-time.Minute) }
-	q3 := func(m *wcMeas, d time.Duration) { m.qSnd, m.qSndOK, m.qSnd3, m.qSnd3OK = d, true, d, true }
+	q3 := func(m *wcMeas, d time.Duration) { m.qSnd, m.qSndOK, m.qSnd3, m.qSndLo, m.qSnd3OK = d, true, d, d, true }
 	for _, tc := range []struct {
 		name  string
 		stage int
@@ -415,11 +415,16 @@ func TestWcoreOff(t *testing.T) {
 			rec(c)
 			q3(m, 40*time.Millisecond)
 		}, 3, wcOff},
-		{"stage 1: ... in any of the latest three records", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+		{"stage 1: ... in every one of the latest three records (one that stands)", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
 			rec(c)
 			q3(m, 40*time.Millisecond)
-			m.qSnd = 5 * time.Millisecond // the latest shows less
+			m.qSndLo = 12 * time.Millisecond
 		}, 3, wcOff},
+		{"stage 1: ... not one of them under Δq (a burst's queue: judge p1)", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
+			rec(c)
+			q3(m, 40*time.Millisecond)
+			m.qSndLo = 4 * time.Millisecond
+		}, 2, wcStartup},
 		{"stage 1: ... past Δq, under qTarget+Δq (the rig's 100/100: 6.6 to 32 ms; one of 19.7 started it)", 1, false, func(c *wcore, in *wcIn, m *wcMeas) {
 			rec(c)
 			q3(m, 12*time.Millisecond)
@@ -462,9 +467,16 @@ func TestWcoreOff(t *testing.T) {
 			t.Errorf("%s: %v, want %v", tc.name, c.state, tc.want)
 			continue
 		}
-		if c.state == wcStartup && (c.B != 3*wtMiB || c.bPub != wtNeed) {
-			t.Errorf("%s: B %d bPub %d, want 1.5·2 MiB and 2 MiB", tc.name, c.B, c.bPub)
+		// (a record of the latest three past Δq: the first step is the
+		// smallest, ×1.25)
+		want := uint64(3 * wtMiB)
+		if m.qSnd3OK && m.qSnd3 > c.dq() {
+			want = 5 * wtMiB / 2
 		}
+		if c.state == wcStartup && (c.B != want || c.bPub != wtNeed) {
+			t.Errorf("%s: B %d bPub %d, want %d and 2 MiB", tc.name, c.B, c.bPub, want)
+		}
+
 	}
 }
 
