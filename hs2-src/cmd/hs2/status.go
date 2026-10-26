@@ -193,6 +193,9 @@ type liveStatus struct {
 	Protocol string `json:"protocol,omitempty"`
 	BadSyn   uint64 `json:"bad_syn,omitempty"`
 	BadTun   uint64 `json:"bad_tun,omitempty"`
+	// Cores: R1's cores on this side's links, their status lines (C2's
+	// scheduler, C1's classes, C3's guard, C4-lite's cap: engine.CoreLines)
+	Cores []string `json:"cores,omitempty"`
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -352,6 +355,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		if tlsCarrier(fc) {
 			ls.Protocol = tlscarrier.ProtocolLine()
 			ls.BadSyn, ls.BadTun = engine.WireCounters()
+			ls.Cores = engine.CoreLines()
 		}
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
@@ -564,6 +568,9 @@ func printStatus(path string) {
 	}
 	if ls.Protocol != "" {
 		fmt.Printf("  %s\n", ls.Protocol)
+	}
+	for _, l := range ls.Cores {
+		fmt.Printf("  cores:      %s\n", l)
 	}
 	if l := wireLine(ls); l != "" {
 		fmt.Printf("  wire:       %s\n", l)

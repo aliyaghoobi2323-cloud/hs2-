@@ -56,6 +56,11 @@ type FrameSched interface {
 	Tick(now time.Duration, rate float64)
 }
 
+// FrameHeaderSize is a frame's header on the wire: the scheduler counts a
+// frame's size with it (a latency-lane frame of LaneFrame data bytes is
+// this much more to it).
+const FrameHeaderSize = headerSize
+
 var (
 	// ErrNoSched: a frame scheduler's call on a session without one.
 	ErrNoSched = errors.New("smux: the session has no frame scheduler")
@@ -109,6 +114,7 @@ type schedUser struct {
 	pending    int         // data frames in the scheduler
 	head, tail *schedFrame // writers waiting for room, in order
 	mem        func(n int, force bool) bool
+	seen       uint64 // the tick of its latest frame (forget)
 }
 
 type rateMark struct {
@@ -128,6 +134,7 @@ type schedState struct {
 	// the ticks: the latest, and what the writer had written at the last
 	// ones (ring)
 	tickAt int64
+	ticks  uint64
 	marks  [schedRateWin + 1]rateMark
 	mi     int
 	wrote  atomic.Uint64 // bytes written, headers included (the writer's)
@@ -170,6 +177,7 @@ func (sc *schedState) user(tag uint32) *schedUser {
 		}
 		sc.users[tag] = u
 	}
+	u.seen = sc.ticks
 	return u
 }
 
@@ -262,7 +270,14 @@ func (sc *schedState) cancel(sf *schedFrame) {
 	sf.next, sf.state = nil, sfGone
 	sc.waiting--
 	sc.letIn(u, monoNow()) // the ones behind it may fit
-	sc.forget(u)
+}
+
+// gone says whether sf left its user's FIFO without going out (its writer
+// gave up, or the session died, while it waited).
+func (sc *schedState) gone(sf *schedFrame) bool {
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	return sf.state == sfGone
 }
 
 // letIn lets u's waiting writers in, in order, while it has room.
@@ -279,10 +294,14 @@ func (sc *schedState) letIn(u *schedUser, now int64) {
 	}
 }
 
-// forget drops u's record once nothing of it is queued or waits.
-func (sc *schedState) forget(u *schedUser) {
-	if u.pending == 0 && u.head == nil && sc.users[u.tag] == u {
-		delete(sc.users, u.tag)
+// forget drops the records of the users with nothing queued or waiting and
+// no frame since the tick before (each tick: a user's record, and its
+// memory account, outlive its frames, one at a time, of a busy stream).
+func (sc *schedState) forget() {
+	for tag, u := range sc.users {
+		if u.pending == 0 && u.head == nil && u.seen+1 < sc.ticks {
+			delete(sc.users, tag)
+		}
 	}
 }
 
@@ -316,7 +335,6 @@ func (sc *schedState) take() *schedFrame {
 			sf.mem = 0
 		}
 		sc.letIn(u, now)
-		sc.forget(u)
 	}
 	return sf
 }
@@ -325,6 +343,8 @@ func (sc *schedState) take() *schedFrame {
 // the last second (under mu).
 func (sc *schedState) tick(now int64) {
 	sc.tickAt = now
+	sc.ticks++
+	sc.forget()
 	sc.mi = (sc.mi + 1) % len(sc.marks)
 	sc.marks[sc.mi] = rateMark{at: now, wrote: sc.wrote.Load()}
 	// the oldest mark within the last second, else the newest before it
@@ -516,6 +536,9 @@ type SchedStats struct {
 	Blocked          uint64 // writers that waited for their user's room
 	Waiting          int    // writers waiting now
 	Queued           int    // frames queued now
+	// MostPending: the most data frames one user has queued now, and whose
+	MostPending     int
+	MostPendingUser uint32
 }
 
 // SchedStats says what the session's scheduler did since the previous call
@@ -528,6 +551,11 @@ func (s *Session) SchedStats() (SchedStats, bool) {
 	sc.mu.Lock()
 	st := SchedStats{Rate: float64(sc.rate.Load()), BulkFrame: int(sc.bulk.Load()), Blocked: sc.blocked,
 		Waiting: sc.waiting, Queued: sc.queued, LaneN: sc.latN - sc.latSeen}
+	for _, u := range sc.users {
+		if u.pending > st.MostPending {
+			st.MostPending, st.MostPendingUser = u.pending, u.tag
+		}
+	}
 	k := st.LaneN
 	if k > schedLatKeep {
 		k = schedLatKeep

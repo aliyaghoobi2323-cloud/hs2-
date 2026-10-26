@@ -195,6 +195,9 @@ func TestSchedUserBoundDeadline(t *testing.T) {
 	if err := <-errc; err != ErrTimeout {
 		t.Fatalf("a3: %v, want a timeout", err)
 	}
+	if r := a3.WindowRoom(); r != initialPeerWindow {
+		t.Fatalf("a3's window has %d left, want all %d: its frame never went out", r, initialPeerWindow)
+	}
 	p.until("a3 gone", func(st SchedStats) bool { return st.Waiting == 1 })
 	var sids []uint32
 	for i := 0; i < 3; i++ {
