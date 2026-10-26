@@ -2603,6 +2603,8 @@ var wmKnown = map[string]struct {
 		"each recovered hole releases its credit at once and the sender sends it at 3.9 times the path's rate: on the 50 ms queue those bursts overflow near the knee, so HOLD stays under it (48% of N4's gain without the exit's pacing net). The net takes N4 from 129 to 158 Mbit/s (its bursts held once they lose: 25% of that gain now) and costs the core one seed of three: a tail loss's resends set it off for 10 s in the core's STARTUP, which ends lower (87 → 76 Mbit/s median)"},
 	"300/150 q50 +slow reader": {[]string{"resent", "interactive", "gain", "drain"},
 		"a probe's loss while the slow stream's window holds a hole; with the exit's pacing net N4 no longer overflows the queue (180 → 250 Mbit/s, 3.3 → 0% resent), and the gain target is against that (the core 209 → 211 Mbit/s, 75% of it); one seed of three drains from HOLD at a PROBE_RTT burst"},
+	"300/150 q50 x4": {[]string{"interactive"},
+		"the windows without the core already fill this path (260 Mbit/s, all of it) with records that swing 0 to 36 ms: the core leaves OFF on one under Δq (do no harm takes a queue in every one of the latest three, judge p1), its first step finds the knee (the rate does not follow it) and it goes back OFF; in one seed of three that step's queue sets the user's p99 (445 against 326 ms; base's own seeds 315 to 470 ms, and over 8 seeds pooled 461 against 458)"},
 	"300/150 q50 300>50>300": {[]string{"interactive"},
 		"the loss of the drop to 50 Mbit/s holds the user behind its holes (p99 1.1 s against base's 0.7 s; the exit's pacing net takes the core's resends 10.4 → 2.9% and base's 8.9 → 1.9%)"},
 	"1000/100 q50 policer 300": {[]string{"gain"},
