@@ -3352,7 +3352,9 @@ func (c *wcore) qSndRefOf(now time.Time, m wcMeas) time.Duration {
 
 func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	if !m.sameF {
-		// a stream joined or left: start the comparison over
+		// a stream joined or left: start the comparison over (the first
+		// step's trial too: what it was to be judged against is gone)
+		c.startOff = false
 		c.prevR, c.prevB, c.fullR, c.flat = m.rF, c.B, m.rF, 0
 		c.setB(in, m, max(c.B, uint64(len(m.f))*uint64(c.cmin())))
 		return
@@ -3445,13 +3447,18 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 	pastCap := c.bCap > 0 && in.now.Sub(c.bCapAt) < wcQcapTTL && c.B >= c.bCap
 	first := c.startOff
 	c.startOff = false
-	if first && !cong && qUp && !tracked && !m.holey && !m.grp && c.cfg.stage < 2 {
+	if first && gB > 0 && !cong && qUp && !tracked && !m.holey && !m.grp && c.cfg.stage < 2 {
 		// the first step from the windows without the core: the rate did
 		// not follow it and the queue did, so they were past the knee
 		// already (harm, wcFullOff). (Not with other cores on the peer: the
 		// queue is theirs too, and they hold the rate's share a late core's
 		// step asks for; back OFF, the 4th of 4 links on 1000/100 behind 200
-		// ms that came 30 s late kept 93 Mbit/s against the others' 241–274.)
+		// ms that came 30 s late kept 93 Mbit/s against the others' 241–274.
+		// Only on a step taken, gB > 0: where the window pool left no room
+		// for one the queue was none of its doing, and any rise took the
+		// core OFF for wcFullOff; nor after an interval in which F changed,
+		// above: its comparison started over, and a joining stream's floor
+		// is no step of the core's either; review, J1.)
 		c.cnt.grow++
 		c.pathFull = true
 		*ev = append(*ev, wcEvent{kind: wcEvFilled, from: c.prevB, B: c.prevB, n: len(m.f), R: m.rF, T: c.tBase, q: c.qTarget(in.now)})

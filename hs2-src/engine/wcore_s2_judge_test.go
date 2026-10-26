@@ -361,3 +361,116 @@ func TestWcoreS2LongStandingQueue(t *testing.T) {
 		t.Logf("the knee at record %d: %v, B %.2f MiB", end+1, c.state, float64(c.B)/wtMiB)
 	}
 }
+
+// wtOffMeas is an OFF interval at at of the core c with n fast streams of
+// need each, steady at 20 MB/s, after three records of the exit 2 s apart
+// that showed 1 ms and no resends.
+func wtOffMeas(c *wcore, at time.Time, n int) (wcIn, wcMeas) {
+	for i := wcSndHist - 1; i >= 0; i-- {
+		rat := at.Add(-time.Duration(i) * 2 * time.Second)
+		copy(c.qSnds[1:], c.qSnds[:])
+		c.qSnds[0] = wcRate{rat, 0.001}
+		c.qSnd, c.qSndAt = time.Millisecond, rat
+	}
+	in := wtIn(at, n, wtNeed)
+	m := c.measure(in, 1)
+	w := wtMeas(n, 20e6, float64(n)*wtNeed)
+	m.f, m.sameF, m.rF, m.rLink, m.wF, m.wPrev, m.hStep, m.hit = w.f, true, w.rF, w.rLink, w.wF, w.wPrev, w.hStep, 1
+	m.idleF, m.quiet = false, false
+	return in, m
+}
+
+// wtFirstStep takes c out of OFF at at (n fast streams; the window pool
+// has poolFree left, < 0: none): STARTUP's first step.
+func wtFirstStep(c *wcore, at time.Time, n int, poolFree int64) {
+	in, m := wtOffMeas(c, at, n)
+	in.poolFree = poolFree
+	c.state, c.offN = wcOff, 1
+	c.off(in, m, nil)
+}
+
+// wtStep1 is a STARTUP interval at at: the n streams read rF together, the
+// window turnaround is q past q_ref.
+func wtStep1(c *wcore, at time.Time, n int, rF float64, q time.Duration, sameF bool) []wcEvent {
+	in := wtIn(at, n, uint32(c.B/uint64(n)))
+	m := wtMeas(n, rF, float64(c.B))
+	m.at, m.sameF = at, sameF
+	m.qTurn, m.qOK = c.qRef+q, true
+	var ev []wcEvent
+	c.startup(in, m, &ev)
+	return ev
+}
+
+// TestWcoreS2FirstStepTrial (judge p1; review, J1): STARTUP's first step
+// from OFF is the test of whether the windows without the core were past
+// the knee already. When the rate did not follow it and the queue did, the
+// core goes back OFF (startOff, fullAt, fullN) and harm holds it there for
+// wcFullOff while F keeps its size; a step the rate followed is no such
+// finding. The step has to be one: in an interval where a stream joined or
+// left F (sameF false) STARTUP starts its comparison over, and a step the
+// window pool left no room for is none. Judged in the interval after,
+// either took the core OFF for 32 s on a queue the step had no part in: a
+// multi-connection download whose second connection joins F in STARTUP's
+// first interval (steady rate after, q_turn 18 ms past q_ref).
+func TestWcoreS2FirstStepTrial(t *testing.T) {
+	ms := time.Millisecond
+	t1 := wtT0.Add(2 * time.Second)
+
+	// the rule
+	c, _ := wtOffRecs(100*ms, 1, 1, 1)
+	wtFirstStep(c, wtT0, 1, -1)
+	if c.state != wcStartup || !c.startOff || c.B != 3*wtMiB {
+		t.Fatalf("from OFF: %v startOff %v B %.2f MiB, want STARTUP's first step to 3 MiB", c.state, c.startOff, float64(c.B)/wtMiB)
+	}
+	ev := wtStep1(c, t1, 1, 20e6, 18*ms, true)
+	if c.state != wcOff || !c.fullAt.Equal(t1) || c.fullN != 1 || c.startOff || len(ev) != 1 || ev[0].kind != wcEvFilled {
+		t.Errorf("the first step, the rate flat and the queue up 18 ms: %v fullAt %v fullN %d events %+v, want OFF, the finding at %v with 1 stream",
+			c.state, c.fullAt.Sub(wtT0), c.fullN, ev, t1.Sub(wtT0))
+	}
+	for _, x := range []struct {
+		name  string
+		after time.Duration
+		n     int
+		harm  bool
+	}{
+		{"within wcFullOff, as many fast streams", wcFullOff - time.Second, 1, true},
+		{"past wcFullOff", wcFullOff + time.Second, 1, false},
+		{"another count of fast streams", time.Second, 2, false},
+	} {
+		c := *c
+		_, m := wtOffMeas(&c, t1.Add(x.after), x.n)
+		if got := c.harm(m); got != x.harm {
+			t.Errorf("after the finding, %s: harm %v, want %v", x.name, got, x.harm)
+		}
+	}
+
+	// the rate followed the step: no finding, STARTUP goes on
+	c, _ = wtOffRecs(100*ms, 1, 1, 1)
+	wtFirstStep(c, wtT0, 1, -1)
+	wtStep1(c, t1, 1, 30e6, 0, true)
+	if c.state != wcStartup || c.startOff || !c.fullAt.IsZero() {
+		t.Errorf("the first step, the rate up 50%% with B: %v startOff %v fullAt %v, want STARTUP on, no finding", c.state, c.startOff, c.fullAt)
+	}
+
+	// a stream joined or left F in the first interval: its step was never
+	// judged
+	c, _ = wtOffRecs(100*ms, 1, 1, 1)
+	wtFirstStep(c, wtT0, 1, -1)
+	wtStep1(c, t1, 1, 20e6, 0, false)
+	ev = wtStep1(c, t1.Add(2*time.Second), 1, 20e6, 18*ms, true)
+	if c.state == wcOff || !c.fullAt.IsZero() {
+		t.Errorf("F changed in the first interval, then the queue up 18 ms at a steady rate: %v fullAt %v events %+v, want no finding",
+			c.state, c.fullAt.Sub(wtT0), ev)
+	}
+
+	// the window pool left no room for the step: no step, no finding
+	c, _ = wtOffRecs(100*ms, 1, 1, 1)
+	wtFirstStep(c, wtT0, 1, 0)
+	if c.state != wcStartup || c.B != 2*wtMiB {
+		t.Fatalf("from OFF with the pool empty: %v B %.2f MiB, want STARTUP at 2 MiB", c.state, float64(c.B)/wtMiB)
+	}
+	ev = wtStep1(c, t1, 1, 20e6, 18*ms, true)
+	if c.state == wcOff || !c.fullAt.IsZero() {
+		t.Errorf("no step (the pool), the queue up 18 ms: %v fullAt %v events %+v, want no finding", c.state, c.fullAt.Sub(wtT0), ev)
+	}
+}
