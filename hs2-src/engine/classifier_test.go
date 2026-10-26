@@ -504,7 +504,17 @@ type clsRec struct {
 	T  int64           `json:"t"`
 	Up int64           `json:"up"`
 	Dn int64           `json:"dn"`
+	// Want: the labeled session's verdict for the flow's pattern ("light",
+	// "bulk"; c1_labeled.jsonl.gz only)
+	Want string `json:"want"`
 }
+
+// clsBin is the 100 ms tick a capture's line ends in. flowcap writes its
+// lines a few ms either side of a 100 ms mark (the edge's 20 minutes: 95-99
+// ms past one, the labeled session 0-4 ms past), and a line up to 5 ms past
+// a mark is that mark's tick: rounded up, the session's 3301 and 3400 fell
+// in one tick (884 of its lines).
+func clsBin(t int64) int64 { return (t + 94) / 100 }
 
 // clsReplayPath is the edge's capture (task 3: 20 minutes of real traffic,
 // ≤ 5 MB); clsSynthPath a synthetic capture in its format (clsSynth, seed
@@ -708,7 +718,7 @@ func TestClassifierReplay(t *testing.T) {
 	for _, id := range ids {
 		recs := flows[id]
 		sort.SliceStable(recs, func(i, j int) bool { return recs[i].T < recs[j].T })
-		bin := func(t int64) int64 { return (t + 99) / 100 } // the bin a record's 100 ms end in
+		bin := clsBin
 		b0 := bin(recs[0].T)
 		n := int(bin(recs[len(recs)-1].T)-b0) + 21 // its last byte, and 2 s of silence and a tick
 		up, dn := make([]int64, n), make([]int64, n)
@@ -789,6 +799,217 @@ func TestClassifierReplay(t *testing.T) {
 		share(bulkLight, bulkBytes), bulkLight, bulkBytes, share(bulkLight, laneBytes), worst)
 	t.Logf("held bulk (light windows, bulk until under 8 KiB over 2 s): %.2f%% of bulk ticks (%d of %d)",
 		share(int64(heldTicks), int64(bulkTicks)), heldTicks, bulkTicks)
+}
+
+// clsLabeledPath is the labeled session (task 3, step 3b;
+// docs/architecture/wip/r1/labeled): known patterns played one after
+// another through the live tunnel, captured by flowcap on the edge, each
+// line with the verdict its pattern should get ("want", one for the whole
+// flow).
+const clsLabeledPath = "testdata/c1_labeled.jsonl.gz"
+
+// clsSession is the session's patterns in the order session.sh plays them,
+// each with its label and where its data goes (up, dn; both: a light
+// pattern's two directions).
+var clsSession = []struct {
+	name, want string
+	dir        string
+}{
+	{"bulkdn", "bulk", "dn"}, {"bulkup", "bulk", "up"}, {"http", "light", "both"},
+	{"burst", "bulk", "dn"}, {"onoff", "bulk", "dn"}, {"voip", "light", "both"},
+}
+
+// TestClassifierLabeled replays the labeled session through the classifier
+// (each flow from both ends, on the capture's 100 ms ticks) and reports,
+// per pattern, how often the verdict differs from the label, and which part
+// of the rule (§3.1, decision T1) makes it differ:
+//
+//   - quiet: a bulk flow's data moved less than 8 KiB over 2 s (between the
+//     bursts of "burst"): the rule says light (T1), the label bulk;
+//   - below: a bulk flow under the light thresholds (a transfer's first
+//     ticks, before 16 KiB in 200 ms or 64 KiB in 2 s): the rule says light;
+//   - held: a light flow kept bulk until it is quiet;
+//   - over: a light flow past the thresholds;
+//   - other: none of these (none may be).
+//
+// It asserts the rule's bounds: each verdict is the rule's (computed the
+// plain way); no bulk episode of a flow puts more than 32 KiB and one tick
+// of its bytes in the latency lane; and no flow is bulk more than one tick
+// into a quiet spell (T1).
+func TestClassifierLabeled(t *testing.T) {
+	flows, err := clsLoad(clsLabeledPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type lflow struct {
+		id    string
+		recs  []clsRec
+		start int64
+	}
+	var all []lflow
+	for id, recs := range flows {
+		sort.SliceStable(recs, func(i, j int) bool { return recs[i].T < recs[j].T })
+		all = append(all, lflow{id, recs, recs[0].T})
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i].start < all[j].start })
+	// a pattern's connections start together, 5 s or more after the
+	// pattern before's last
+	var groups [][]lflow
+	for i, f := range all {
+		if i == 0 || f.start-all[i-1].start > 3000 {
+			groups = append(groups, nil)
+		}
+		groups[len(groups)-1] = append(groups[len(groups)-1], f)
+	}
+	if len(groups) != len(clsSession) {
+		t.Fatalf("%d groups of flows, the session plays %d patterns", len(groups), len(clsSession))
+	}
+	type tally struct {
+		flows, ticks                         int
+		flowErr, txErr, txTicks              int
+		quiet, below, held, over, other      int
+		laneBulk, bulkBytes, worst, worstLim int64
+	}
+	for gi, g := range groups {
+		p := clsSession[gi]
+		var tl tally
+		for _, f := range g {
+			var up, dn int64
+			for _, r := range f.recs {
+				if r.Want != p.want {
+					t.Fatalf("pattern %d (%s): flow %s labeled %q", gi, p.name, f.id, r.Want)
+				}
+				up += r.Up
+				dn += r.Dn
+			}
+			if p.dir == "dn" && dn <= up || p.dir == "up" && up <= dn {
+				t.Fatalf("pattern %d (%s): flow %s moved %d B up, %d B down", gi, p.name, f.id, up, dn)
+			}
+			b0 := clsBin(f.recs[0].T)
+			span := int(clsBin(f.recs[len(f.recs)-1].T)-b0) + 1 // its lines
+			n := span + 21                                     // and 2 s of silence and a tick
+			x := map[string][]int64{"up": make([]int64, n), "dn": make([]int64, n)}
+			for _, r := range f.recs {
+				b := clsBin(r.T) - b0
+				x["up"][b] += r.Up
+				x["dn"][b] += r.Dn
+			}
+			tl.flows++
+			// the rule on each direction, the plain way
+			ref, light := map[string][]Class{}, map[string][]bool{}
+			quiet := map[string][]bool{}
+			for _, d := range []string{"up", "dn"} {
+				ref[d], light[d] = clsRef(x[d])
+				quiet[d] = make([]bool, n)
+				var w int64
+				for b := range n {
+					w += x[d][b]
+					if b >= 20 {
+						w -= x[d][b-20]
+					}
+					quiet[d][b] = w < classQuietBytes
+				}
+			}
+			for _, tx := range []string{"up", "dn"} {
+				rx := map[string]string{"up": "dn", "dn": "up"}[tx]
+				var st flowStats
+				var c flowClassifier
+				cur := ClassUnknown
+				run := 0
+				epLight, epFirst := int64(0), int64(0)
+				for b := range n {
+					inLight := x[tx][b] > 0 && queueClass(cur, &st) == ClassLight
+					st.Add(true, int(x[tx][b]))
+					st.Add(false, int(x[rx][b]))
+					ct, cf, ok := c.Tick(&st, time.Duration(b0+int64(b))*classTick)
+					wantF := ref[tx][b]
+					if ref[rx][b] == ClassBulk {
+						wantF = ClassBulk
+					}
+					if ref[tx][b] == ClassLight {
+						run++
+					} else {
+						run = 0
+					}
+					if ct != ref[tx][b] || cf != wantF || ok != (run >= 2) {
+						t.Fatalf("%s flow %s (tx %s) tick %d: got tx %v flow %v confirmed %v, the rule's %v %v %v",
+							p.name, f.id, tx, b, ct, cf, ok, ref[tx][b], wantF, run >= 2)
+					}
+					// no flow bulk more than a tick into a quiet spell
+					if ct == ClassBulk && b > 0 && quiet[tx][b] && quiet[tx][b-1] {
+						t.Fatalf("%s flow %s (tx %s) tick %d: bulk, quiet since the tick before", p.name, f.id, tx, b)
+					}
+					// the latency lane's share of the rule's bulk episodes
+					if ref[tx][b] == ClassBulk {
+						if b == 0 || ref[tx][b-1] != ClassBulk {
+							epLight, epFirst = 0, x[tx][b]
+						}
+						tl.bulkBytes += x[tx][b]
+						if inLight {
+							tl.laneBulk += x[tx][b]
+							epLight += x[tx][b]
+							if epLight > tl.worst {
+								tl.worst, tl.worstLim = epLight, 32<<10+epFirst
+							}
+							if epLight > 32<<10+epFirst {
+								t.Fatalf("%s flow %s (tx %s) tick %d: %d B of a bulk episode in the latency lane, past 32 KiB and its first tick (%d B)",
+									p.name, f.id, tx, b, epLight, epFirst)
+							}
+						}
+					}
+					cur = ct
+					if b >= span {
+						continue // (after its last line: the bounds only)
+					}
+					want := ClassLight
+					if p.want == "bulk" {
+						want = ClassBulk
+					}
+					// class_tx of the data's direction (both, for a light
+					// pattern) against the label
+					if p.dir == tx || p.dir == "both" {
+						tl.txTicks++
+						if ct != want {
+							tl.txErr++
+						}
+					}
+					if tx != "up" {
+						continue // (class_flow once a flow)
+					}
+					tl.ticks++
+					if cf == want {
+						continue
+					}
+					tl.flowErr++
+					data := p.dir
+					switch {
+					case want == ClassBulk && data != "both" && quiet[data][b]:
+						tl.quiet++
+					case want == ClassBulk && data != "both" && light[data][b]:
+						tl.below++
+					case want == ClassLight && light["up"][b] && light["dn"][b]:
+						tl.held++
+					case want == ClassLight:
+						tl.over++
+					default:
+						tl.other++
+					}
+				}
+			}
+		}
+		pct := func(a, b int) float64 {
+			if b == 0 {
+				return 0
+			}
+			return 100 * float64(a) / float64(b)
+		}
+		t.Logf("%-6s want %-5s flows %d ticks %4d | class_flow off %5.2f%% (quiet %d, below %d, held %d, over %d, other %d) | class_tx off %5.2f%% | latency lane %d of %d bulk B, worst episode %d (bound %d)",
+			p.name, p.want, tl.flows, tl.ticks, pct(tl.flowErr, tl.ticks), tl.quiet, tl.below, tl.held, tl.over, tl.other,
+			pct(tl.txErr, tl.txTicks), tl.laneBulk, tl.bulkBytes, tl.worst, tl.worstLim)
+		if tl.other != 0 {
+			t.Fatalf("%s: %d verdicts off the label that the rule does not explain", p.name, tl.other)
+		}
+	}
 }
 
 // BenchmarkClassifierTick: one flow's tick (one per op), at 10 and 10000
