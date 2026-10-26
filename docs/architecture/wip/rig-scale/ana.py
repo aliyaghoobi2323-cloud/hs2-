@@ -6,13 +6,18 @@ the mixes, their windows and the verdicts are defined in one place.
                                     each cell and binary, P10 verdicts (a)-(e),
                                     the probe and TUN ping p99 bounds, and new/old
   ana.py schedule PLAN REPS         run.sh: the runs, ABBABA per cell (TSV)
-  ana.py spec "CELL" SPEC.json      run.sh: rigload's spec; prints "NUSERS TOTAL_S"
+  ana.py spec "CELL" SPEC.json      run.sh: rigload's spec; prints "NUSERS TOTAL_S NTUN"
+                                    (IPv4 port users, run length, TUN users)
   ana.py compose RAWDIR OK WHY      run.sh: one res.jsonl line from a run's raw files
 
 Definitions (REDESIGN.fa.md section 5.1 and 6):
   capacity  the bottleneck's TCP payload rate: rate x 1448/1514 (MSS 1448 with
             timestamps; htb counts the 1514 B Ethernet frame). rate = RATE, or
-            min(RATE, AR) with MODE=agg:AR; MODE=police:PR: min(RATE, N x PR).
+            min(RATE, AR) with agg:AR in MODE; with police:PR in MODE the
+            capacity is also at most N x PR (MODE=police:PR+agg:AR: both).
+            A TUN user's goodput is counted as the inner IP packets it took
+            (x 1320/1268 for IPv4, x 1320/1248 for IPv6: TUN MTU 1320, inner
+            MSS with timestamps), so it compares with the same capacity.
   RTT_floor p1 of the probe over the whole measured span of the same run (for
             the TUN ping: p1 of the TUN ping itself).
   (a) the lone user (16 connections) >= 0.95 x capacity
@@ -73,6 +78,20 @@ def num(d, k, default=None):
     return float(v) if ("." in v or "e" in v) else int(v)
 
 
+def parse_mode(m):
+    """MODE = [police:PR+]LEAF or LEAF[+police:PR]; LEAF = fqcodel | pfifo:L | agg:AR.
+    Returns (PR or None, LEAF), or None when malformed."""
+    pol, leaf = None, None
+    for p in m.split("+"):
+        if re.match(r"^police:\d+(\.\d+)?$", p) and pol is None:
+            pol = float(p[7:])
+        elif re.match(r"^(fqcodel|pfifo:\d+|agg:\d+(\.\d+)?)$", p) and leaf is None:
+            leaf = p
+        else:
+            return None
+    return pol, leaf or "fqcodel"
+
+
 # ------------------------------------------------------------------ schedule
 
 def schedule(plan, reps):
@@ -88,13 +107,18 @@ def schedule(plan, reps):
             die("%s:%d: missing %s" % (plan, ln, " ".join(miss)))
         if d["MIX"] not in MIXES:
             die("%s:%d: MIX %s (one of %s)" % (plan, ln, d["MIX"], " ".join(MIXES)))
-        if not re.match(r"^(fqcodel|pfifo:\d+|police:[\d.]+|agg:[\d.]+)$", d["MODE"]):
-            die("%s:%d: MODE %s" % (plan, ln, d["MODE"]))
+        if parse_mode(d["MODE"]) is None:
+            die("%s:%d: MODE %s (fqcodel, pfifo:L, police:PR, agg:AR, police:PR+LEAF)" % (plan, ln, d["MODE"]))
         if d["BIN"] not in ("old", "new"):
             die("%s:%d: BIN %s (old or new)" % (plan, ln, d["BIN"]))
-        v6 = int(d.get("V6", "0"))
-        if int(d["USERS"]) > 500 + (v6 > 0) or int(d["USERS"]) < 1 or v6 > int(d["USERS"]):
-            die("%s:%d: USERS %s, V6 %d (at most 500 IPv4 users, plus the IPv6 user V6=K)" % (plan, ln, d["USERS"], v6))
+        U, v6 = int(d["USERS"]), int(d.get("V6", "0"))
+        k = int(d.get("TUN", "1" if d["MIX"] == "tunping" else "0"))
+        if U < 1 or U - k - (v6 > 0) > 500 or k > 500 or k > U:
+            die("%s:%d: USERS %d, TUN %d, V6 %d (at most 500 IPv4 port users, 500 TUN users and the IPv6 user)" % (plan, ln, U, k, v6))
+        if v6 and v6 <= k:
+            die("%s:%d: V6=%d is a TUN user (TUN=%d takes the first users); the IPv6 port user must be a port user" % (plan, ln, v6, k))
+        if d["MIX"] == "tunping" and k < 1:
+            die("%s:%d: tunping needs TUN >= 1" % (plan, ln))
         c = cell_str(d)
         if c not in cells:
             cells[c] = []
@@ -127,6 +151,15 @@ def user_src(i):
     return "10.100.%d.%d" % (i // 250, i % 250 + 1)
 
 
+def tun_src(i, v6):
+    """the i-th TUN user's inner address (from 0): IPv4, or IPv6 in a /64 of its own"""
+    return "fd00:110:%x::1" % (i + 1) if v6 else "10.110.%d.%d" % (i // 250, i % 250 + 1)
+
+
+TUN_MTU = 1320
+TUN_MSS = {4: TUN_MTU - 52, 6: TUN_MTU - 72}  # inner TCP payload per full packet (timestamps on)
+
+
 def spec(cellstr, path):
     d = parse_cell(cellstr)
     U = int(d["USERS"])
@@ -138,10 +171,17 @@ def spec(cellstr, path):
     if dirn not in ("dn", "up"):
         die("DIR %s" % dirn)
     conns = num(d, "CONNS", 16)
-    users = [{"id": "u%d" % (i + 1), "src": user_src(i), "role": "light", "flows": []} for i in range(U)]
+    # TUN=K: the first K users go through the TUN, each from its own inner
+    # address; TUNV6=1: those inner addresses (and hs0's) are IPv6
+    K = num(d, "TUN", 1 if mix == "tunping" else 0)
+    tunv6 = d.get("TUNV6", "0") == "1"
+    if K > U:
+        die("TUN %d > USERS %d" % (K, U))
+    users = [{"id": "u%d" % (i + 1), "role": "light", "path": "tun" if i < K else "port", "flows": []}
+             for i in range(U)]
     probe = lambda: {"kind": "probe", "n": 1, "start_s": 0}
-    ping_tun = False
-    tun_flows = []
+    ping = lambda: {"kind": "ping", "n": 1, "start_s": 0}
+    light_flow = lambda u: ping() if u["path"] == "tun" else probe()
     total = warm + dur
     windows = [{"name": "main", "from": warm, "to": warm + dur}]
 
@@ -181,23 +221,36 @@ def spec(cellstr, path):
             u["role"] = "bulk"
             u["flows"].append({"kind": k, "n": 1, "start_s": 0})
         light = list(range(nb, U))
-        ping_tun = True
     elif mix == "tunping":
-        tun_flows = [{"kind": d.get("TUNDIR", "dn"), "n": num(d, "TDN", 4), "start_s": 0}]
-        ping_tun = True
-        light = list(range(U))
-    # light users: one probe each; if the mix leaves none, user 1 carries the probe
+        # the same inner host: bulk through hs0 and the ping next to it
+        if K < 1:
+            die("tunping needs TUN >= 1")
+        users[0]["role"] = "tunbulk"
+        users[0]["flows"].append({"kind": d.get("TUNDIR", "dn"), "n": num(d, "TDN", 4), "start_s": 0})
+        users[0]["flows"].append(ping())
+        light = list(range(1, U))
+    # light users: one probe each (a ping on the TUN); if the mix leaves none,
+    # user 1 carries it (tunping's user 1 already pings)
     for i in light:
-        users[i]["flows"].append(probe())
-    if not light:
-        users[0]["flows"].append(probe())
+        users[i]["flows"].append(light_flow(users[i]))
+    if not light and mix != "tunping":
+        users[0]["flows"].append(light_flow(users[0]))
+    if mix == "s5":
+        # S5's TUN ping, from hs0's own address (not one of the USERS)
+        users.append({"id": "hs0", "role": "pinger", "path": "tun", "src": "", "v6": tunv6, "flows": [ping()]})
     windows.append({"name": "all", "from": warm, "to": total})
-    # V6=K: user K is one IPv6 /64 (a fresh address in it for every connection);
-    # the IPv4 addresses go to the others in order
+    # V6=K: port user K is one IPv6 /64 (a fresh address in it for every
+    # connection); the IPv4 addresses go to the other port users in order
     v6 = int(d.get("V6", "0"))
-    n4 = 0
+    n4 = nt = 0
     for i, u in enumerate(users):
-        if i + 1 == v6:
+        if u["role"] == "pinger":
+            continue
+        if u["path"] == "tun":
+            u["v6"] = tunv6
+            u["src"] = tun_src(nt, tunv6)
+            nt += 1
+        elif i + 1 == v6:
             u["v6"] = True
             u["src"] = ""
         else:
@@ -205,14 +258,15 @@ def spec(cellstr, path):
             n4 += 1
     s = {"total_s": total, "bulk": "10.201.0.1:5311", "echo": "10.201.0.1:5312",
          "bulk6": "[fd00:201::1]:5311", "echo6": "[fd00:201::1]:5312", "v6_prefix": "fd77:1::",
-         "tun_bulk": "10.77.0.2:5213", "tun_ping": "10.77.0.2", "ping_tun": ping_tun,
+         "tun_bulk": "10.77.0.2:5213", "tun_bulk6": "[fd00:77::2]:5213",
+         "tun_ping": "10.77.0.2", "tun_ping6": "fd00:77::2",
          "probe_ms": 200, "probe_bytes": 32, "ping_ms": 200,
-         "users": users, "tun_flows": tun_flows, "windows": windows}
-    if n4 > 500:
-        die("%d IPv4 users (at most 500)" % n4)
+         "users": users, "windows": windows}
+    if n4 > 500 or nt > 500:
+        die("%d IPv4 port users, %d TUN users (at most 500 each)" % (n4, nt))
     with open(path, "w") as f:
         json.dump(s, f, indent=1)
-    print(n4, total)
+    print(n4, total, nt)
 
 
 # ------------------------------------------------------------------ compose
@@ -357,21 +411,25 @@ def compose(r, ok, why):
                     "end": rt["exit"]["sockets_end"], "edge_status": st["edge"].get("links"),
                     "exit_status": st["exit"].get("links"), "policed": policed}
     if cl is not None:
-        roles = [u.get("role") for u in sp.get("users", [])]
+        su = sp.get("users", [])
         users = []
         for i, u in enumerate(cl.get("users", [])):
-            x = {"id": u["id"], "src": u["src"], "role": roles[i] if i < len(roles) else None,
+            s_u = su[i] if i < len(su) else {}
+            x = {"id": u["id"], "src": u["src"], "role": s_u.get("role"), "path": u.get("path", "port"),
+                 "fam": 6 if s_u.get("v6") else 4,
                  "flows": ",".join("%s%d@%g" % (f["kind"], f.get("n", 1), f.get("start_s", 0)) for f in u["flows"]),
                  "dn_mbit": u["dn_mbit"], "up_mbit": u["up_mbit"], "conns": u["conns"]}
             for k in ("dial_errs", "short_ends", "probe_errs"):
                 if u.get(k):
                     x[k] = u[k]
-            if u.get("probe"):
-                x["probe_p99"] = {w: l["p99"] for w, l in u["probe"].items() if l}
+            for k in ("probe", "ping"):
+                if u.get(k):
+                    x[k + "_p99"] = {w: l["p99"] for w, l in u[k].items() if l}
             users.append(x)
         rec.update({"total_s": cl.get("total_s"), "windows": cl.get("windows"), "users": users,
                     "dn_sum_mbit": cl.get("dn_sum_mbit"), "up_sum_mbit": cl.get("up_sum_mbit"),
-                    "probe": cl.get("probe_all"), "ping_tun": cl.get("ping_tun"), "tun": cl.get("tun"),
+                    "tun_dn_sum_mbit": cl.get("tun_dn_sum_mbit"), "tun_up_sum_mbit": cl.get("tun_up_sum_mbit"),
+                    "probe": cl.get("probe_all"), "probe_tun": cl.get("probe_tun"), "ping_tun": cl.get("ping_tun"),
                     "dn_1s": cl.get("dn_1s"), "up_1s": cl.get("up_1s")})
         if cl.get("errs"):
             rec["client_errs"] = cl["errs"]
@@ -390,17 +448,17 @@ def compose(r, ok, why):
 
 def rate_eff(rec):
     r = float(rec["RATE"])
-    m = rec["MODE"]
-    if m.startswith("agg:"):
-        r = min(r, float(m[4:]))
+    pol, leaf = parse_mode(rec["MODE"])
+    if leaf.startswith("agg:"):
+        r = min(r, float(leaf[4:]))
     return r
 
 
 def capacity(rec):
     r = rate_eff(rec)
-    m = rec["MODE"]
-    if m.startswith("police:"):
-        r = min(r, float(rec["N"]) * float(m[7:]))
+    pol, leaf = parse_mode(rec["MODE"])
+    if pol is not None:
+        r = min(r, float(rec["N"]) * pol)
     return r * EFF
 
 
@@ -438,8 +496,13 @@ def derive(rec):
     dirn = rec.get("extra", {}).get("DIR", "dn")
     users = rec["users"]
     m["cap"] = cap
-    m["dn"] = rec["dn_sum_mbit"].get("main", rec["dn_sum_mbit"].get("after_settled"))
-    m["up"] = rec["up_sum_mbit"].get("main", rec["up_sum_mbit"].get("after_settled"))
+    wsum = "after_settled" if mix == "newheavy" else "main"
+    # goodput through the tunnel: port users and TUN users together
+    m["dn"] = rec["dn_sum_mbit"].get(wsum, 0) + (rec.get("tun_dn_sum_mbit") or {}).get(wsum, 0)
+    m["up"] = rec["up_sum_mbit"].get(wsum, 0) + (rec.get("tun_up_sum_mbit") or {}).get(wsum, 0)
+    if any(u.get("path") == "tun" and u.get("role") != "pinger" for u in users):
+        m["tun_dn"] = (rec.get("tun_dn_sum_mbit") or {}).get(wsum)
+        m["tun_up"] = (rec.get("tun_up_sum_mbit") or {}).get(wsum)
     pa = lat(rec, "probe", "all")
     if pa and pa["n"]:
         floor = pa["p1"]
@@ -460,7 +523,11 @@ def derive(rec):
     win = "after_settled" if mix == "newheavy" else "main"
 
     def thr(u, d, w=win):
-        return (u["dn_mbit"] if d == "dn" else u["up_mbit"]).get(w, 0.0)
+        """a user's goodput as bytes on the link: a TUN user's inner packets"""
+        v = (u["dn_mbit"] if d == "dn" else u["up_mbit"]).get(w, 0.0)
+        if u.get("path") == "tun":
+            v *= TUN_MTU / TUN_MSS[u.get("fam", 4)]
+        return v
 
     def bulk_dir(u, d):
         return any(f.startswith(d) for f in u["flows"].split(","))
@@ -468,7 +535,7 @@ def derive(rec):
     # (b) generic and (c), per direction carrying bulk
     worst = None
     for d in ("dn", "up"):
-        bulk = [u for u in users if bulk_dir(u, d) and u["role"] != "light"]
+        bulk = [u for u in users if bulk_dir(u, d) and u["role"] not in ("light", "pinger")]
         if not bulk:
             continue
         if mix == "newheavy" and win == "after_settled":
@@ -498,7 +565,7 @@ def derive(rec):
     if mix == "newheavy":
         ex = next(u for u in users if u["role"] == "exist")
         hv = next(u for u in users if u["role"] == "heavy")
-        light = sum(thr(u, dirn) for u in users if u["role"] == "light")
+        light = sum(thr(u, dirn) for u in users if u["role"] in ("light", "pinger"))
         fl = fair_floor(cap - light, [None, None])[0]
         m["exist_before"] = thr(ex, dirn, "before")
         m["exist_after"] = thr(ex, dirn, "after_settled")
@@ -512,9 +579,6 @@ def derive(rec):
             m["p99_after"] = pa2["p99"]
             m["e"] = pa2["p99"] <= m["d_bound"] and m["e_bulk_ratio"] >= 0.9
         m["b_ratio"] = m["e_bulk_ratio"]
-    if mix == "tunping" and rec.get("tun"):
-        m["tun_dn"] = rec["tun"]["dn_mbit"].get("main")
-        m["tun_up"] = rec["tun"]["up_mbit"].get("main")
     c = rec.get("cpu", {})
     m["cpu_edge"] = c.get("edge", {}).get("mean")
     m["cpu_exit"] = c.get("exit", {}).get("mean")
@@ -625,7 +689,7 @@ def analyze(path, as_json=False):
             print("   TUN ping p50 %s  p99 %s ms  lost %s   floor %s  bound %s" % (
                 fmt(md["t50"]), fmt(md["t99"]), fmt(md.get("tlost"), 0), fmt(md.get("tfloor")), fmt(md.get("t_bound"))))
         if "tun_dn" in md:
-            print("   TUN bulk dn %s  up %s Mbit/s" % (fmt(md["tun_dn"], 2), fmt(md.get("tun_up"), 2)))
+            print("   of which TUN users (inner goodput) dn %s  up %s Mbit/s" % (fmt(md["tun_dn"], 2), fmt(md.get("tun_up"), 2)))
         print("   CPU %% (one core = 100): edge %s  exit %s   retrans %%: exit %s  edge %s" % (
             fmt(md.get("cpu_edge")), fmt(md.get("cpu_exit")), fmt(md.get("rt_exit"), 3), fmt(md.get("rt_edge"), 3)))
         if s.get("verdict"):

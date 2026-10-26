@@ -4,9 +4,10 @@
 # side), the bottleneck in r-mid and the users' source addresses in r-edge.
 # It never touches the root namespace: every device is made inside r-mid.
 #
-#   RATE=50 RTT=72 LOSS=0 MODE=fqcodel NUSERS=200 V6=1 rig.sh up   (NUSERS: IPv4 users)
+#   RATE=50 RTT=72 LOSS=0 MODE=fqcodel NUSERS=200 V6=1 NTUN=4 rig.sh up
+#   rig.sh tun-up      (once hs2 has made hs0 on both ends: IPv6 on hs0, routes back to the TUN users)
 #   rig.sh down
-#   rig.sh police      (loop: one policer per hs2 link connection, MODE=police:PR)
+#   rig.sh police      (loop: one policer per hs2 link connection, MODE with police:PR)
 #   rig.sh show        (tc -s of the bottleneck, both directions)
 #   rig.sh wait-links N SECONDS   (until r-exit has N established link sockets)
 #
@@ -22,11 +23,14 @@
 #        -> leaf by MODE:
 #           fqcodel     fq_codel (defaults: target 5ms, interval 100ms, limit 10240)
 #           pfifo:L     pfifo limit L packets (drop-tail)
+#           agg:AR      tbf rate AR Mbit/s, one shaper for all links, with a
+#                       drop-tail buffer of AGGQ_MS ms (default 50) at AR
 #           police:PR   fq_codel, plus a policer of PR Mbit/s on each hs2 link
 #                       connection (flower on its five-tuple at r-mid's ingress,
 #                       both directions; `rig.sh police` adds them as links appear)
-#           agg:AR      tbf rate AR Mbit/s, one shaper for all links, with a
-#                       drop-tail buffer of AGGQ_MS ms (default 50) at AR
+#           police:PR+LEAF   the policer and that leaf together, e.g.
+#                       police:20+agg:300: the mixed regime (per-connection
+#                       policer and an aggregate shaper at once)
 # Endpoint qdiscs as on the field servers: fq on the edge's e0, fq_codel on the
 # exit's x0. TCP sysctls in r-edge and r-exit: the "high" profile hs2 applies
 # on these hosts (tune.Build), only the per-namespace ones.
@@ -34,6 +38,11 @@
 # most 500), the i-th (from 0) is 10.100.(i/250).(i%250+1); V6 other than 0
 # adds the /64 fd77:1::/64 as a local route with ip_nonlocal_bind, so a user
 # can rotate over any address in it (one /64 = one user in R1).
+# TUN users (r-edge): NTUN inner addresses on lo, the i-th (from 0)
+# 10.110.(i/250).(i%250+1)/32 and fd00:110:(i+1)::1/128 (each in a /64 of its
+# own). Their packets leave through hs0 (routes to the exit's hs0 address);
+# `tun-up` gives hs0 fd00:77::1/64 (edge) and fd00:77::2/64 (exit) and routes
+# 10.110.0.0/16 and fd00:110::/32 back through the exit's hs0.
 set -u
 ID=${RIG_ID:-}
 E=r-edge$ID; M=r-mid$ID; X=r-exit$ID
@@ -43,6 +52,21 @@ q() { "$@" >/dev/null 2>&1; }
 die() { echo "rig.sh: $*" >&2; exit 1; }
 
 nsx() { local n=$1; shift; ip netns exec "$n" "$@"; }
+
+# MODE: POL (policer Mbit/s, empty: none) and LEAF
+parse_mode() {
+  local p
+  POL=""; LEAF=""
+  IFS=+ read -ra parts <<< "${MODE:-fqcodel}"
+  for p in "${parts[@]}"; do
+    case "$p" in
+      police:*) [ -z "$POL" ] || die "two policers in MODE $MODE"; POL=${p#police:} ;;
+      fqcodel|pfifo:*|agg:*) [ -z "$LEAF" ] || die "two leaves in MODE $MODE"; LEAF=$p ;;
+      *) die "unknown MODE part $p" ;;
+    esac
+  done
+  [ -n "$LEAF" ] || LEAF=fqcodel
+}
 
 tcp_sysctls() {
   local n=$1
@@ -58,7 +82,7 @@ offloads_off() { q nsx $1 ethtool -K $2 tso off gso off gro off tx off rx off; }
 
 # bottleneck DEV: the tree above on r-mid's egress DEV
 bottleneck() {
-  local d=$1 half rate loss leaf burst
+  local d=$1 half loss leaf burst
   half=$(awk -v r="$RTT" 'BEGIN{printf "%.3f", r/2}')
   loss=""
   awk -v l="$LOSS" 'BEGIN{exit !(l>0)}' && loss="loss ${LOSS}%"
@@ -69,21 +93,22 @@ bottleneck() {
   nsx $M tc qdisc add dev $d parent 1:1 handle 2: htb default 10 || die "htb on $d"
   nsx $M tc class add dev $d parent 2: classid 2:10 htb rate ${RATE}mbit ceil ${RATE}mbit \
     burst $burst cburst $burst quantum 60000 || die "htb class on $d"
-  case "$MODE" in
-    fqcodel|police:*) leaf="fq_codel" ;;
-    pfifo:*) leaf="pfifo limit ${MODE#pfifo:}" ;;
+  case "$LEAF" in
+    fqcodel) leaf="fq_codel" ;;
+    pfifo:*) leaf="pfifo limit ${LEAF#pfifo:}" ;;
     agg:*)
-      local ar=${MODE#agg:} aq=${AGGQ_MS:-50} tb
+      local ar=${LEAF#agg:} aq=${AGGQ_MS:-50} tb
       tb=$(awk -v r="$ar" 'BEGIN{b=r*1e6/8*0.001; if(b<16000)b=16000; printf "%d", b}')
       leaf="tbf rate ${ar}mbit burst $tb latency ${aq}ms" ;;
-    *) die "unknown MODE $MODE" ;;
   esac
   nsx $M tc qdisc add dev $d parent 2:10 handle 3: $leaf || die "leaf $leaf on $d"
 }
 
 up() {
-  : ${RATE:?} ${RTT:?} ${LOSS:=0} ${MODE:=fqcodel} ${NUSERS:=1} ${V6:=0}
+  : ${RATE:?} ${RTT:?} ${LOSS:=0} ${MODE:=fqcodel} ${NUSERS:=1} ${V6:=0} ${NTUN:=0}
   [ "$NUSERS" -le 500 ] || die "NUSERS $NUSERS > 500"
+  [ "$NTUN" -le 500 ] || die "NTUN $NTUN > 500"
+  parse_mode
   down 2>/dev/null
   for n in $E $M $X; do ip netns add $n || die "netns add $n"; done
   for n in $E $M $X; do ip -n $n link set lo up; done
@@ -112,13 +137,17 @@ up() {
   nsx $E tc qdisc replace dev e0 root fq || die "fq on e0"
   nsx $X tc qdisc replace dev x0 root fq_codel || die "fq_codel on x0"
   bottleneck me; bottleneck mx
-  case "$MODE" in
-    police:*) for d in me mx; do nsx $M tc qdisc add dev $d clsact || die "clsact $d"; done ;;
-  esac
-  # users
+  if [ -n "$POL" ]; then
+    for d in me mx; do nsx $M tc qdisc add dev $d clsact || die "clsact $d"; done
+  fi
+  # users, and the TUN users' inner addresses
   {
     for i in $(seq 0 $((NUSERS - 1))); do
       echo "addr add 10.100.$((i / 250)).$((i % 250 + 1))/32 dev lo"
+    done
+    for i in $(seq 0 $((NTUN - 1))); do
+      echo "addr add 10.110.$((i / 250)).$((i % 250 + 1))/32 dev lo"
+      printf 'addr add fd00:110:%x::1/128 dev lo nodad\n' $((i + 1))
     done
   } | ip -n $E -batch - || die "user addresses"
   if [ "$V6" != 0 ]; then
@@ -127,6 +156,18 @@ up() {
   fi
   # the path answers before anyone uses it
   nsx $E ping -c1 -W2 10.202.0.1 >/dev/null || die "edge cannot reach exit"
+}
+
+# tun-up: IPv6 on hs0 (both ends) and the routes back to the TUN users; hs2
+# makes hs0 at its start, so this runs once both hs2 are up
+tun_up() {
+  local n
+  for n in $E $X; do ip -n $n link show hs0 >/dev/null 2>&1 || die "no hs0 in $n"; done
+  ip -n $E addr replace fd00:77::1/64 dev hs0 nodad || die "hs0 v6 edge"
+  ip -n $X addr replace fd00:77::2/64 dev hs0 nodad || die "hs0 v6 exit"
+  ip -n $X route replace 10.110.0.0/16 dev hs0 || die "route to TUN users"
+  ip -n $X -6 route replace fd00:110::/32 dev hs0 || die "v6 route to TUN users"
+  nsx $E ping -c1 -W3 10.77.0.2 >/dev/null || die "no answer through hs0"
 }
 
 down() {
@@ -148,17 +189,19 @@ down() {
 # the exit's packets, me the edge's). Burst POLICE_BURST_MS (default 20) ms of
 # PR, at least 16 KB. Prints each connection it polices.
 police() {
-  local pr=${MODE#police:} burst seen=" " p
-  burst=$(awk -v r="$pr" -v m="${POLICE_BURST_MS:-20}" 'BEGIN{b=r*1e6/8*m/1000; if(b<16000)b=16000; printf "%d", b}')
+  local burst seen=" " p
+  parse_mode
+  [ -n "$POL" ] || die "MODE $MODE has no police:PR"
+  burst=$(awk -v r="$POL" -v m="${POLICE_BURST_MS:-20}" 'BEGIN{b=r*1e6/8*m/1000; if(b<16000)b=16000; printf "%d", b}')
   while true; do
     for p in $(nsx $X ss -HtnO state established '( dport = :2096 )' 2>/dev/null | awk '{split($3,a,":"); print a[length(a)]}'); do
       case "$seen" in *" $p "*) continue ;; esac
       nsx $M tc filter add dev mx ingress protocol ip prio 10 flower ip_proto tcp \
         src_ip 10.202.0.1 src_port $p dst_port 2096 \
-        action police rate ${pr}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
+        action police rate ${POL}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
       nsx $M tc filter add dev me ingress protocol ip prio 10 flower ip_proto tcp \
         dst_ip 10.202.0.1 dst_port $p src_port 2096 \
-        action police rate ${pr}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
+        action police rate ${POL}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
         echo "$(date +%s.%N) policed $p"
       seen="$seen$p "
     done
@@ -167,7 +210,10 @@ police() {
 }
 
 show() {
-  for d in me mx; do echo "== $d"; nsx $M tc -s qdisc show dev $d; done
+  for d in me mx; do
+    echo "== $d"; nsx $M tc -s qdisc show dev $d
+    nsx $M tc -s filter show dev $d ingress 2>/dev/null | grep -c "police" | sed 's/^/policers: /'
+  done
 }
 
 # wait-links N SECONDS: the exit's established link sockets reach N
@@ -183,9 +229,10 @@ wait_links() {
 
 case "$cmd" in
   up) up ;;
+  tun-up) tun_up ;;
   down) down ;;
   police) police ;;
   show) show ;;
   wait-links) wait_links "$2" "$3" ;;
-  *) echo "usage: rig.sh up|down|police|show|wait-links N S" >&2; exit 2 ;;
+  *) echo "usage: rig.sh up|tun-up|down|police|show|wait-links N S" >&2; exit 2 ;;
 esac
