@@ -1,12 +1,14 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math"
 	"math/bits"
 	"net"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -149,8 +151,8 @@ const hostqHist = 24
 type hostQ struct {
 	conn  net.Conn
 	sys   hostSys
-	gate  hostGate // Update's
-	lowat int      // the mark written (0: none yet); Update's
+	gate  hostGate     // Update's
+	lowat atomic.Int64 // the mark written (0: none yet)
 	on    atomic.Bool
 	cap   atomic.Int64
 	// fb: the kernel lacks a call of the guard: today's send gate
@@ -180,12 +182,14 @@ func (h *hostQ) Update(rate float64, mss int) {
 		return
 	}
 	on, cap, lowat := h.gate.Update(rate, mss)
-	if h.lowat == 0 || math.Abs(float64(lowat-h.lowat)) >= hostqMove*float64(h.lowat) {
+	if w := int(h.lowat.Load()); w == 0 || math.Abs(float64(lowat-w)) >= hostqMove*float64(w) {
 		if err := h.sys.setLowat(lowat); err != nil {
-			h.fallback(err)
-			return
+			if hostqUnsupported(err) {
+				h.fallback(err)
+			}
+			return // (any other error: the socket is gone, its writer finds out)
 		}
-		h.lowat = lowat
+		h.lowat.Store(int64(lowat))
 	}
 	h.cap.Store(int64(cap))
 	h.on.Store(on)
@@ -201,22 +205,29 @@ func (h *hostQ) Write(p []byte) (int, error) {
 		c := int(h.cap.Load())
 		need := min(len(p), c/2)
 		ns, err := h.sys.notsent()
-		if err != nil {
+		if err == nil {
+			h.hist[min(bits.Len(uint(ns)), hostqHist-1)].Add(1)
+			if c-ns < need {
+				t0 := ctrlNow()
+				err = h.sys.waitBelow(c - need + 1)
+				h.blocked.Add(ctrlNow() - t0)
+			}
+		}
+		if err != nil && hostqUnsupported(err) {
 			h.fallback(err)
 			return h.fb.Load().Write(p)
 		}
-		h.hist[min(bits.Len(uint(ns)), hostqHist-1)].Add(1)
-		if c-ns < need {
-			t0 := ctrlNow()
-			err := h.sys.waitBelow(c - need + 1)
-			h.blocked.Add(ctrlNow() - t0)
-			if err != nil {
-				h.fallback(err)
-				return h.fb.Load().Write(p)
-			}
-		}
+		// (any other error: the socket is gone, and the write says so)
 	}
 	return h.conn.Write(p)
+}
+
+// hostqUnsupported says whether err is a kernel's "no such option" or "no
+// such ioctl" (a kernel without the guard's calls), not a socket's own
+// failure (closed: the writer's error to report).
+func hostqUnsupported(err error) bool {
+	return errors.Is(err, syscall.ENOPROTOOPT) || errors.Is(err, syscall.ENOTTY) ||
+		errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.EINVAL)
 }
 
 // took feeds the fallback send gate its rate (meteredConn's tally).
@@ -236,7 +247,7 @@ func (h *hostQ) fallback(err error) {
 	if err == nil {
 		return
 	}
-	if h.lowat != 0 && tlscarrier.NotSentLowat > 0 {
+	if h.lowat.Load() != 0 && tlscarrier.NotSentLowat > 0 {
 		h.sys.setLowat(tlscarrier.NotSentLowat) // (best effort: the mark as before)
 	}
 	if hostqNoSys.CompareAndSwap(false, true) {
@@ -270,5 +281,5 @@ func (h *hostQ) line(n int, elapsed time.Duration) string {
 		ratio = float64(h.blocked.Swap(0)) / float64(elapsed)
 	}
 	return fmt.Sprintf("hostq link %d: lowat %.1f KiB, gate %s (cap %d B), notsent p95 %d B, blocked ratio %.2f",
-		n, float64(h.lowat)/1024, gate, h.cap.Load(), p95, ratio)
+		n, float64(h.lowat.Load())/1024, gate, h.cap.Load(), p95, ratio)
 }

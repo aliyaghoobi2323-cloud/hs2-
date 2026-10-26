@@ -320,6 +320,18 @@ func TestHostQNoSyscalls(t *testing.T) {
 		t.Fatalf("log lines: %q", lines)
 	}
 	t.Log(lines[0])
+	// a socket that is gone (EBADF) is no old kernel: no fallback, no line,
+	// and the write goes on to the conn (whose error it is to report)
+	s := newSkbSock(10*mbit, 1448, 1)
+	h := newHostQ(s, s)
+	h.Update(5*mbit, 1448)
+	s.nsErr = syscall.EBADF
+	h.Write(make([]byte, 1000))
+	s.err = syscall.EBADF
+	h.Update(50*mbit, 1448)
+	if h.fb.Load() != nil || len(lines) != 1 || s.written != 1000 {
+		t.Fatalf("EBADF: fallback %v, %d lines, %d B written", h.fb.Load() != nil, len(lines), s.written)
+	}
 }
 
 // TestHostQOffSwitch: HS2_TUNE_HQG=0 (TuneHQG 0) says off.
