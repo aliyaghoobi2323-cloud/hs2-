@@ -10,11 +10,25 @@
 # Driven on a pty under the installer's real `set -euo pipefail`.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
+# Inside sandbox.sh (its own PID and mount namespaces, checked first), or not
+# at all: no installer test may reach this server's own tunnels or files.
+case "${HS2_SANDBOX:-}" in proven|nonroot) ;; *) exec bash "$HERE/sandbox.sh" bash "$0" "$@" ;; esac
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; echo "      got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-400)"; fail=1; fi; }
 command -v script >/dev/null 2>&1 || { echo "SKIP link_ceiling_test (no script(1))"; exit 0; }
 
-awk '/^case "\$\{1:-\}" in$/{exit} {print}' "$INST" > "$T/core.sh"
+# The installer's own paths are moved into the temp dir: migrate_config (run
+# below) stages a copy in CFG_DIR and rewrites MODULES_CONF, which used to be
+# the server's real /etc/hs2 and /etc/modules-load.d/hs2.conf.
+awk '/^case "\$\{1:-\}" in$/{exit} {print}' "$INST" \
+  | sed -e "s#^BIN=/usr/local/bin/hs2\$#BIN=$T/root/hs2#" -e "s#^CFG_DIR=/etc/hs2\$#CFG_DIR=$T/root/etc-hs2#" \
+        -e "s#^UNIT_DIR=/etc/systemd/system\$#UNIT_DIR=$T/root/units#" -e "s#^SYSCTL_CONF=.*#SYSCTL_CONF=$T/root/sysctl.conf#" \
+        -e "s#^MODULES_CONF=.*#MODULES_CONF=$T/root/modules.conf#" -e "s#^MENU_BIN=.*#MENU_BIN=$T/root/hs2-menu#" \
+        -e "s#^SAFE_APPLY_BIN=.*#SAFE_APPLY_BIN=$T/root/hs2-safe-apply#" -e "s#^BACKUP_DIR=.*#BACKUP_DIR=$T/root/backups#" > "$T/core.sh"
+for v in BIN CFG_DIR UNIT_DIR SYSCTL_CONF MODULES_CONF MENU_BIN SAFE_APPLY_BIN BACKUP_DIR; do
+  grep -q "^$v=$T/root/" "$T/core.sh" || { echo "FAIL $v not moved into the sandbox — not run"; exit 1; }
+done
+mkdir -p "$T/root/etc-hs2" "$T/root/units"
 
 # A fake hs2 that answers recommend-links like a high-profile box.
 cat > "$T/hs2" <<'FAKE'

@@ -25,6 +25,12 @@
 #   bash scripts/install_link_test.sh      (exit 0 = all PASS; needs root, go, script)
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/.." && pwd); INST="$ROOT/install.sh"
+# Inside hs2-src/install/tests/sandbox.sh (its own PID and mount namespaces,
+# checked first), or not at all.
+case "${HS2_SANDBOX:-}" in
+  proven|nonroot) ;;
+  *) exec bash "$ROOT/hs2-src/install/tests/sandbox.sh" bash "$0" "$@" ;;
+esac
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 chmod 755 "$T"
 fail=0; out=""
@@ -53,10 +59,13 @@ chmod 755 "$T/hs2old"
         -e 's#^CFG_DIR=/etc/hs2$#CFG_DIR="$SBX/etc-hs2"#' \
         -e 's#^UNIT_DIR=/etc/systemd/system$#UNIT_DIR="$SBX/units"#' \
         -e 's#^MENU_BIN=.*#MENU_BIN="$SBX/bin/hs2-menu"#' \
+        -e 's#^SYSCTL_CONF=.*#SYSCTL_CONF="$SBX/sysctl-99-hs2.conf"#' \
+        -e 's#^MODULES_CONF=.*#MODULES_CONF="$SBX/modules-hs2.conf"#' \
         -e 's#^SAFE_APPLY_BIN=.*#SAFE_APPLY_BIN="$SBX/bin/hs2-safe-apply"#' \
         -e 's#^BACKUP_DIR=.*#BACKUP_DIR="$SBX/backups"#' \
         -e 's#^\[ "\$(id -u)" = 0 \] || die .*#:#' > "$T/core.sh"
-for want in 'BIN="$SBX/bin/hs2"' 'CFG_DIR="$SBX/etc-hs2"' 'UNIT_DIR="$SBX/units"' 'BACKUP_DIR="$SBX/backups"' 'main_menu(){'; do
+for want in 'BIN="$SBX/bin/hs2"' 'CFG_DIR="$SBX/etc-hs2"' 'UNIT_DIR="$SBX/units"' 'BACKUP_DIR="$SBX/backups"' 'main_menu(){' \
+            'SYSCTL_CONF="$SBX/sysctl-99-hs2.conf"' 'MODULES_CONF="$SBX/modules-hs2.conf"' 'SAFE_APPLY_BIN="$SBX/bin/hs2-safe-apply"' 'MENU_BIN="$SBX/bin/hs2-menu"'; do
   grep -qxF "$want" "$T/core.sh" || grep -qF "$want" "$T/core.sh" || { echo "FAIL sandbox: $want not found in install.sh"; exit 1; }
 done
 grep -q '^\[ "\$(id -u)" = 0 \]' "$T/core.sh" && { echo "FAIL sandbox: root check still there"; exit 1; }

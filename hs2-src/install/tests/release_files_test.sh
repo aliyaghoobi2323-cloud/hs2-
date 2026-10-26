@@ -9,6 +9,9 @@
 #     regenerate this and hs2-menu silently stops installing on curl|bash hosts.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
+# Inside sandbox.sh (its own PID and mount namespaces, checked first), or not
+# at all: no installer test may reach this server's own tunnels or files.
+case "${HS2_SANDBOX:-}" in proven|nonroot) ;; *) exec bash "$HERE/sandbox.sh" bash "$0" "$@" ;; esac
 ROOT=$(cd "$HERE/../../.." && pwd)
 fail=0
 ok(){   echo "PASS $1"; }

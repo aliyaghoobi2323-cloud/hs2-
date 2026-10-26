@@ -6,6 +6,9 @@
 # certbot lineage (e.g. a panel's certificate) that this tunnel does not use.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
+# Inside sandbox.sh (its own PID and mount namespaces, checked first), or not
+# at all: no installer test may reach this server's own tunnels or files.
+case "${HS2_SANDBOX:-}" in proven|nonroot) ;; *) exec bash "$HERE/sandbox.sh" bash "$0" "$@" ;; esac
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 
@@ -23,7 +26,9 @@ cp "$T/renewal/z-panel.example.conf" "$T/panel.orig"
 # matched as single lines — a range would run on into the functions after
 # them). LE_DIR is pointed at the sandbox, whose renewal/ holds the lineages.
 sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p;/^LE_DIR=/p;/^cert_lineage(){/,/^}/p;/^cert_conf_get(){/,/^}/p;/^cert_renew_method(){/,/^}/p;/^cert_until(){/,/^}/p' "$INST" \
- | sed "s#^LE_DIR=.*#LE_DIR=$T#; s#/etc/letsencrypt/renewal#$T/renewal#g; s#/etc/modules-load.d/hs2.conf#/dev/null#; s#/etc/sysctl.d/99-hs2.conf#$T/sysctl.conf#g" > "$T/fns.sh"
+ | sed "s#^LE_DIR=.*#LE_DIR=$T#; s#/etc/letsencrypt/renewal#$T/renewal#g" > "$T/fns.sh"
+# the paths migrate_config writes: inside the temp dir, never the server's own
+printf 'CFG_DIR=%s\nSYSCTL_CONF=%s\nMODULES_CONF=%s\n' "$T" "$T/sysctl.conf" "$T/modules.conf" >> "$T/fns.sh"
 for f in configure_renewal migrate_config cert_lineage cert_conf_get cert_renew_method cert_until; do
   grep -q "^$f(){" "$T/fns.sh" || { echo "FAIL $f not found in install.sh"; exit 1; }
 done

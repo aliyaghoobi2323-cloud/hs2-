@@ -6,8 +6,19 @@
 #   kill_this_tunnel — stops THIS config's hs2 only, never another tunnel's
 #                      (the old uninstall ran `pkill -x hs2`);
 #   prune_backups    — keeps the newest N backups (each holds the tunnel key).
+#
+# It only ever signals processes it started itself, each running on a config
+# path inside its own temp directory (the old version used /etc/hs2/config.json
+# and so also stopped the server's LIVE tunnel), and it runs inside sandbox.sh
+# (its own PID and mount namespaces, checked first): a running tunnel is not
+# even visible to it. Outside a proven sandbox it re-runs itself in one, or not
+# at all.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"; SRC=$(cd "$HERE/../.." && pwd)
+case "${HS2_SANDBOX:-}" in
+  proven|nonroot) ;;
+  *) exec bash "$HERE/sandbox.sh" bash "$0" "$@" ;;
+esac
 T=$(mktemp -d); trap 'kill $(jobs -p) 2>/dev/null; rm -rf "$T"' EXIT
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 
@@ -43,11 +54,16 @@ if command -v go >/dev/null 2>&1; then
   (cd "$T/fake" && GOFLAGS= GO111MODULE=off go build -o "$T/hs2" main.go) >/dev/null 2>&1
 fi
 if [ -x "$T/hs2" ]; then
-  "$T/hs2" run -c /etc/hs2/config.json & mine=$!
-  "$T/hs2" run -c /etc/hs2/config.json.bak & similar=$!
-  "$T/hs2" run -c /etc/hs2/other.json & other=$!
+  # Config paths of the test's own, inside its temp directory: kill_this_tunnel
+  # matches " -c <config> " on every hs2 process, so a real path here would
+  # stop that config's live tunnel.
+  C="$T/etc/hs2"; mkdir -p "$C"
+  case "$C" in "$T"/*) ;; *) echo "FAIL the test's configs must be inside its temp dir"; exit 1 ;; esac
+  "$T/hs2" run -c "$C/config.json" & mine=$!
+  "$T/hs2" run -c "$C/config.json.bak" & similar=$!
+  "$T/hs2" run -c "$C/other.json" & other=$!
   sleep 0.3
-  bash -c "source '$T/run.sh'; CFG=/etc/hs2/config.json; kill_this_tunnel TERM ''" 2>/dev/null
+  bash -c "source '$T/run.sh'; CFG='$C/config.json'; kill_this_tunnel TERM ''" 2>/dev/null
   sleep 0.3
   alive(){ kill -0 "$1" 2>/dev/null && [ "$(ps -o stat= -p "$1" 2>/dev/null | cut -c1)" != Z ]; }
   check "kill_this_tunnel: this config's hs2 is stopped" '! alive $mine'
@@ -55,7 +71,7 @@ if [ -x "$T/hs2" ]; then
   check "kill_this_tunnel: a config whose path only starts the same keeps running" 'alive $similar'
   # the unit's last PID is signalled only when it still is an hs2 process
   sleep 60 & notours=$!
-  bash -c "source '$T/run.sh'; CFG=/nonexistent; kill_this_tunnel TERM $notours; kill_this_tunnel TERM $other" 2>/dev/null
+  bash -c "source '$T/run.sh'; CFG='$C/none.json'; kill_this_tunnel TERM $notours; kill_this_tunnel TERM $other" 2>/dev/null
   sleep 0.3
   check "kill_this_tunnel: a recycled PID that is not hs2 is left alone" 'alive $notours'
   check "kill_this_tunnel: the unit's PID is stopped when it is hs2" '! alive $other'

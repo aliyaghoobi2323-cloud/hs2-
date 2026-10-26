@@ -11,6 +11,9 @@
 #     certbot command (a stub records it) — or none, when port 80 is taken.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
+# Inside sandbox.sh (its own PID and mount namespaces, checked first), or not
+# at all: no installer test may reach this server's own tunnels or files.
+case "${HS2_SANDBOX:-}" in proven|nonroot) ;; *) exec bash "$HERE/sandbox.sh" bash "$0" "$@" ;; esac
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; echo "      got: $(printf '%s' "${out:-}" | tr '\n' ' ' | cut -c1-300)"; fail=1; fi; }
 command -v openssl >/dev/null 2>&1 || { echo "SKIP cert_test (needs openssl)"; exit 0; }

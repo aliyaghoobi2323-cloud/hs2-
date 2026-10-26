@@ -24,6 +24,9 @@ BIN=/usr/local/bin/hs2
 REPO_RAW="${HS2_REPO_RAW:-https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main}"
 CFG_DIR=/etc/hs2
 UNIT_DIR=/etc/systemd/system
+# Kernel files hs2 owns (the installer tests point them into their sandbox):
+SYSCTL_CONF=/etc/sysctl.d/99-hs2.conf      # the old static tuning file, removed when found
+MODULES_CONF=/etc/modules-load.d/hs2.conf  # loads tcp_bbr at boot
 
 # Every tunnel is its own systemd service, so several run side by side and each
 # is started, stopped, edited and deleted on its own. The default tunnel is
@@ -298,9 +301,9 @@ install_prereqs(){
 # remove the old static sysctl file so it cannot be a stale second source.
 tune_kernel(){
   modprobe tcp_bbr 2>/dev/null || true
-  echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
-  if [ -f /etc/sysctl.d/99-hs2.conf ]; then
-    rm -f /etc/sysctl.d/99-hs2.conf
+  echo tcp_bbr > "$MODULES_CONF" 2>/dev/null || true
+  if [ -f "$SYSCTL_CONF" ]; then
+    rm -f "$SYSCTL_CONF"
     info "Kernel tuning is now applied by hs2 at runtime (RAM/CPU-aware). Removed the old static file."
   fi
   ok "BBR available. hs2 applies RAM/CPU-aware tuning at startup (see 'hs2-menu' → tunnel → Tuning)."
@@ -2493,7 +2496,7 @@ uninstall(){
   case "$a" in "REMOVE ALL") ;; *) info "Nothing removed."; return 0 ;; esac
   auto_backup
   for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
-  rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
+  rm -f "$SYSCTL_CONF" "$MODULES_CONF"
   # What the daemons left in /run/hs2: warm-start records and status files of
   # tunnels that are gone, and the (now empty) ping-guard marker folder.
   rm -f /run/hs2/*.warm /run/hs2/*.status.json 2>/dev/null || true
@@ -4299,7 +4302,7 @@ backup(){
       esac
     done
   done
-  for p in "$BIN" /etc/sysctl.d/99-hs2.conf; do [ -e "$p" ] && items+=("${p#/}"); done
+  for p in "$BIN" "$SYSCTL_CONF"; do [ -e "$p" ] && items+=("${p#/}"); done
   [ ${#items[@]} -gt 0 ] || { warn "Nothing to back up."; return 0; }
   # Dedupe (cert and key share a lineage) and write a human-readable summary.
   mapfile -t items < <(printf '%s\n' "${items[@]}" | sort -u)
@@ -4406,7 +4409,7 @@ restore(){
     tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
   fi
   systemctl daemon-reload
-  [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
+  [ -f "$SYSCTL_CONF" ] && sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1 || true
   for u in $units; do
     use_unit "$u"
     if [ ! -f "$SVC" ] && [ -f "$CFG" ]; then   # a very old backup without the unit
@@ -4504,12 +4507,12 @@ migrate_config(){
   fi
 
   # hs2 now owns tuning at runtime — drop the old static file, keep BBR for boot.
-  if [ -f /etc/sysctl.d/99-hs2.conf ]; then
-    rm -f /etc/sysctl.d/99-hs2.conf
-    info "Removed the old /etc/sysctl.d/99-hs2.conf — hs2 now applies RAM/CPU-aware tuning at startup."
+  if [ -f "$SYSCTL_CONF" ]; then
+    rm -f "$SYSCTL_CONF"
+    info "Removed the old $SYSCTL_CONF — hs2 now applies RAM/CPU-aware tuning at startup."
   fi
   modprobe tcp_bbr 2>/dev/null || true
-  echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
+  echo tcp_bbr > "$MODULES_CONF" 2>/dev/null || true
 
   # Point the certbot renewal of the certificate THIS tunnel uses at reload +
   # 30-day window. Other certbot lineages on the box (a panel's own certificate,

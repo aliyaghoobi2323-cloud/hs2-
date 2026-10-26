@@ -16,6 +16,9 @@
 #   - an editor exiting non-zero (vim's :cq) does not apply a change silently.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
+# Inside sandbox.sh (its own PID and mount namespaces, checked first), or not
+# at all: no installer test may reach this server's own tunnels or files.
+case "${HS2_SANDBOX:-}" in proven|nonroot) ;; *) exec bash "$HERE/sandbox.sh" bash "$0" "$@" ;; esac
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 
