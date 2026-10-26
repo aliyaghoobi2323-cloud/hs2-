@@ -47,6 +47,25 @@ func tcpInfoHasOoo(n int) bool {
 	return n >= int(unsafe.Offsetof(unix.TCPInfo{}.Rcv_ooopack)+unsafe.Sizeof(unix.TCPInfo{}.Rcv_ooopack))
 }
 
+// tcpInfoHasDelivery says whether a TCP_INFO of n bytes has
+// tcpi_delivery_rate in it (Linux 4.9 on; n -1, a length not known, is a
+// kernel before 4.3). Before it the field reads 0, and so does the
+// app-limited bit beside it.
+func tcpInfoHasDelivery(n int) bool {
+	return n >= int(unsafe.Offsetof(unix.TCPInfo{}.Delivery_rate)+unsafe.Sizeof(unix.TCPInfo{}.Delivery_rate))
+}
+
+// tcpInfoAppLimited reads tcpi_delivery_rate_app_limited, the bit
+// x/sys's TCPInfo leaves out: the low bit of struct tcp_info's eighth byte
+// (after tcpi_options and the window-scale byte, before tcpi_rto: the Go
+// struct's padding there holds what the kernel wrote).
+func tcpInfoAppLimited(info *unix.TCPInfo) bool {
+	if unsafe.Offsetof(info.Rto) != 8 {
+		return false
+	}
+	return (*[8]byte)(unsafe.Pointer(info))[7]&1 != 0
+}
+
 // tcpStats reads one TCP_INFO snapshot of a link socket: the cumulative
 // retransmits (path loss, used by the degrade logic) and the kernel's "chrono"
 // counters (Linux ≥ 4.10), which say how long the socket was busy sending and
@@ -86,7 +105,10 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			bytesReceived: info.Bytes_received,
 			bytesAcked:    info.Bytes_acked,
 			pacingRate:    info.Pacing_rate,
+			dlvOK:         tcpInfoHasDelivery(n),
+			sndMSS:        info.Snd_mss,
 		}
+		st.appLimited = st.dlvOK && tcpInfoAppLimited(info)
 		ok = true
 	})
 	return st, ok

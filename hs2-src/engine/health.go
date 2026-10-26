@@ -319,6 +319,12 @@ type tcpStat struct {
 	// The socket's pacing rate, bytes/s (Linux ≥ 4.1; ~0: no pacing): the
 	// pacing net's (pacenet.go).
 	pacingRate uint64
+	// dlvOK: the kernel reports the delivery rate (Linux ≥ 4.9: its TCP_INFO
+	// holds tcpi_delivery_rate); appLimited: tcpi_delivery_rate_app_limited,
+	// the rate's sample was app-limited (C4-lite, sendcap.go)
+	dlvOK, appLimited bool
+	// sndMSS: the socket's send segment, tcpi_snd_mss (C3, hostq.go)
+	sndMSS uint32
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

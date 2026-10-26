@@ -29,3 +29,20 @@ func setMaxPacing(tc *net.TCPConn, rate uint64) bool {
 	})
 	return ok
 }
+
+// linkCapSys is C4-lite's capSys on a Linux link socket (sendcap.go): its
+// TCP_INFO (tcpStats) and SO_MAX_PACING_RATE (wcPaceSet: setMaxPacing, or a
+// test's).
+type linkCapSys struct{ tc *net.TCPConn }
+
+// newCapSys is the capSys of a link socket (nil: none).
+func newCapSys(tc *net.TCPConn) capSys {
+	if tc == nil {
+		return nil
+	}
+	return linkCapSys{tc}
+}
+
+func (s linkCapSys) info() (tcpStat, bool) { return tcpStats(s.tc) }
+
+func (s linkCapSys) setPacing(rate uint64) bool { return (*wcPaceSet.Load())(s.tc, rate) }
