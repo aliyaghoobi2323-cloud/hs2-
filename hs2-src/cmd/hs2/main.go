@@ -307,6 +307,9 @@ func applyTuning() {
 	num("HS2_TUNE_PACENET", &engine.PaceNet)
 	flt("HS2_TUNE_PACENET_K", &engine.PaceNetK)
 	flt("HS2_TUNE_PACENET_LOSS", &engine.PaceNetLoss)
+	// R1's cores (docs/architecture/REDESIGN.fa.md §3.1-3.4), on by
+	// default; 0 turns each off: the flow classifier (every flow bulk).
+	num("HS2_TUNE_CLASS", &engine.TuneClass)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}
