@@ -345,8 +345,12 @@ the download is clearly faster where the path has room (rig: 81 → 223 Mbit/s
 on 300/150, 112 → 834 on 1000/100; a real path will differ), and never
 clearly slower than with it off; during the transfer
 the Iran server's `hs2 status` shows `windows:    fast connections: 1 (windows
-6 MiB of 64 MiB pool)` (sizes vary) and its log a `downloads fill the path`
-line for the link; no cut, and no `degraded` or `stuck:` line for that link;
+6 MiB) · pool 4 of 64 MiB in use (grown windows 4 MiB, borrowed 0 MiB)` (sizes
+vary: a window takes from the pool only its part past the base 2 MiB, and
+`borrowed` is what link buffers that ran full took; build `a372b1301121`
+shows the older `fast connections: 1 (windows 6 MiB of 64 MiB pool)`, whose
+MiB are the windows, not what they take of the pool) and its log a
+`downloads fill the path` line for the link; no cut, and no `degraded` or `stuck:` line for that link;
 the interactive user's p50 about the same (its p99 may be higher: the known
 cost, below — report it). If the core never starts (no `windows:` line, no
 `fill the path` line, the same speed as off): check `hs2 version` on the

@@ -893,17 +893,35 @@ func wcoreNote(m *linkMeter) string {
 }
 
 // fillStats adds the process's window cores to a pool snapshot (the status
-// line, §7.3).
+// line, §7.3): their fast streams and those windows, and the window pool
+// their links take from — its size, all it has given out (to every link of
+// the process, those without a core and those that ended but still hold
+// unread data too), and of that what the windows' claims hold (only a
+// core's ceiling lets a window past Need: a link without one claims
+// nothing).
 func (ws *wcSet) fillStats(st *PoolStats) {
 	ws.mu.Lock()
-	n, w := 0, int64(0)
+	n, w, claims := 0, int64(0), 0
+	var pool *smux.WindowPool
 	for l := range ws.all {
 		n += int(l.inStats.fastN.Load())
 		w += l.inStats.fastWin.Load()
+		if l.sess != nil {
+			claims += max(l.sess.Extra()-l.sess.Spare(), 0)
+		}
+		if pool == nil {
+			pool = l.pool
+		}
 	}
 	ws.mu.Unlock()
 	st.FastConns, st.FastWinMiB = n, float64(w)/(1<<20)
 	st.PoolMiB = min(max(SmuxWindowPool, 0), 1<<30) >> 20
+	st.PoolUsedMiB, st.PoolWinMiB = 0, 0
+	if pool != nil {
+		used := max(pool.Size()-pool.Free(), 0)
+		st.PoolMiB = pool.Size() >> 20
+		st.PoolUsedMiB, st.PoolWinMiB = float64(used)/(1<<20), float64(min(claims, used))/(1<<20)
+	}
 }
 
 // ---- log lines (§7.1) ----

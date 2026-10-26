@@ -2521,11 +2521,17 @@ type PoolStats struct {
 	Min, Max int     // envelope
 	Users    int     // open user connections
 	MbitPerS float64 // aggregate throughput, Mbit/s
-	// The window core (wcore_run.go): this server's streams with a window
-	// past NeedStreamBuffer now, what those windows are, and the window pool.
-	FastConns  int
-	FastWinMiB float64
-	PoolMiB    int
+	// The window core (wcore_run.go): this server's streams the core lets
+	// grow past NeedStreamBuffer now (a ceiling past it) and what their
+	// windows are; the window pool's size, what it has given out now, and
+	// of that what grown windows hold (their part past NeedStreamBuffer;
+	// the rest is what link buffers that ran full borrowed, and data that
+	// came in under a larger window not read yet).
+	FastConns   int
+	FastWinMiB  float64
+	PoolMiB     int
+	PoolUsedMiB float64
+	PoolWinMiB  float64
 	// Counted: Users, Flowing, MbitPerS and PeakMbit are this side's own
 	// measurement (every side of this hs2 counts them; false only from code
 	// that does not, so a display can say where the numbers live instead of

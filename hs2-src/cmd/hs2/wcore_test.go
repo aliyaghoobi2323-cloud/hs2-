@@ -11,8 +11,10 @@ import (
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 )
 
-// The window core's line: the connections whose window grew past the base,
-// their windows and the pool; nothing while none has.
+// The window core's line: the connections whose window grew past the base
+// and their windows, then what the window pool has given out of its size:
+// to grown windows (their part past the base) and, the rest, to link
+// buffers that ran full; nothing while no connection's window grew.
 func TestStatusWindowsLine(t *testing.T) {
 	useTempStatusDir(t)
 	cfg := filepath.Join(t.TempDir(), "ir.json")
@@ -20,7 +22,7 @@ func TestStatusWindowsLine(t *testing.T) {
 	defer cancel()
 	startStatusWriter(ctx, fileConfig{Mode: "dial", Carrier: "mtcp"}, cfg, func() engine.PoolStats {
 		return engine.PoolStats{Links: 8, Target: 8, Min: 2, Max: 64, Phase: "steady", Users: 3,
-			FastConns: 3, FastWinMiB: 14.24, PoolMiB: 128}
+			FastConns: 3, FastWinMiB: 14.24, PoolMiB: 128, PoolUsedMiB: 11.63, PoolWinMiB: 8.24}
 	})
 	var ls liveStatus
 	for end := time.Now().Add(3 * time.Second); ; time.Sleep(20 * time.Millisecond) {
@@ -31,10 +33,15 @@ func TestStatusWindowsLine(t *testing.T) {
 			t.Fatal("no status file")
 		}
 	}
-	if l := windowsLine(ls); l != "fast connections: 3 (windows 14 MiB of 128 MiB pool)" {
+	if l := windowsLine(ls); l != "fast connections: 3 (windows 14 MiB) · pool 12 of 128 MiB in use (grown windows 8 MiB, borrowed 4 MiB)" {
 		t.Fatalf("windows line %q", l)
 	}
-	if l := windowsLine(liveStatus{PoolMiB: 128}); l != "" {
+	// a window the core let grow that is still at the base 2 MiB takes
+	// nothing from the pool
+	if l := windowsLine(liveStatus{FastConns: 1, FastWinMiB: 2, PoolMiB: 64}); l != "fast connections: 1 (windows 2 MiB) · pool 0 of 64 MiB in use (grown windows 0 MiB, borrowed 0 MiB)" {
+		t.Fatalf("windows line at the base: %q", l)
+	}
+	if l := windowsLine(liveStatus{PoolMiB: 128, PoolUsedMiB: 3}); l != "" {
 		t.Fatalf("windows line with none: %q", l)
 	}
 }

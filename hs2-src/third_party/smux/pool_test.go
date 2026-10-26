@@ -159,6 +159,10 @@ func TestPoolBorrowWhenFull(t *testing.T) {
 	if e < 200<<10 || e > int32(borrowMax*cfg.MaxReceiveBuffer) || sp != e {
 		t.Fatalf("buffer past MaxReceiveBuffer %d (spare %d), want what it took in past it, as spare", e, sp)
 	}
+	// what a status shows of it (hs2's windows line): all of it borrowed
+	if session.Extra() != int(e) || session.Spare() != int(sp) || pool.Size()-pool.Free() != int(e) {
+		t.Fatalf("Extra %d, Spare %d, pool %d of %d given out: want %d, all of it spare", session.Extra(), session.Spare(), pool.Size()-pool.Free(), pool.Size(), e)
+	}
 	if b, n := session.Borrows(), session.Parks(); b == 0 || b > n {
 		t.Fatalf("borrows %d of %d parks, want some, at most all", b, n)
 	}
