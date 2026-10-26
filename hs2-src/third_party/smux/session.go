@@ -146,10 +146,18 @@ type Session struct {
 	requestID uint32            // write request monotonic increasing
 	shaper    chan writeRequest // a shaper for writing
 	writes    chan writeRequest
+	// queue, when set, takes every frame instead of shaperLoop and
+	// sendLoop (FrameQueue)
+	queue FrameQueue
 }
 
 func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
+	return newSessionQ(config, conn, client, nil)
+}
+
+func newSessionQ(config *Config, conn io.ReadWriteCloser, client bool, q FrameQueue) *Session {
 	s := new(Session)
+	s.queue = q
 	s.die = make(chan struct{})
 	s.conn = conn
 	s.config = config
@@ -170,9 +178,11 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 		s.nextStreamID = 0
 	}
 
-	go s.shaperLoop()
+	if q == nil {
+		go s.shaperLoop()
+		go s.sendLoop()
+	}
 	go s.recvLoop()
-	go s.sendLoop()
 	if !config.KeepAliveDisabled {
 		go s.keepalive()
 	}
@@ -684,7 +694,13 @@ func (s *Session) writeFrame(f Frame) (n int, err error) {
 
 // internal writeFrame version to support deadline used in keepalive
 func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class CLASSID) (int, error) {
-	req, err := s.queueFrame(f, deadline, class)
+	return s.writeFrameOf(nil, f, deadline, class)
+}
+
+// writeFrameOf is writeFrameInternal for a frame of stream st (nil: the
+// session's own frame): a FrameQueue learns its user tag and class hint.
+func (s *Session) writeFrameOf(st *Stream, f Frame, deadline <-chan time.Time, class CLASSID) (int, error) {
+	req, err := s.queueFrameOf(st, f, deadline, class)
 	if err != nil {
 		return 0, err
 	}
@@ -694,6 +710,12 @@ func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class C
 // queueFrame hands f to the shaper. Control frames leave in the order they
 // were queued, and so do the data frames of one stream.
 func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) (writeRequest, error) {
+	return s.queueFrameOf(nil, f, deadline, class)
+}
+
+// queueFrameOf is queueFrame for a frame of stream st (nil: the session's
+// own); with a FrameQueue, the frame goes to it (FrameQueue.Push).
+func (s *Session) queueFrameOf(st *Stream, f Frame, deadline <-chan time.Time, class CLASSID) (writeRequest, error) {
 	req := writeRequest{
 		class:  class,
 		frame:  f,
@@ -702,6 +724,21 @@ func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) 
 	}
 	if len(f.data) > 0 {
 		req.data = &frameData{b: f.data}
+	}
+	if s.queue != nil {
+		select {
+		case <-s.die:
+			return req, io.ErrClosedPipe
+		case <-s.chSocketWriteError:
+			return req, s.socketWriteError.Load().(error)
+		default:
+		}
+		of := &OutFrame{req: req, sess: s, data: class == CLSDATA && f.cmd == cmdPSH}
+		if st != nil {
+			of.user, of.hint = st.Syn()
+		}
+		s.queue.Push(of)
+		return req, nil
 	}
 	select {
 	case s.shaper <- req:

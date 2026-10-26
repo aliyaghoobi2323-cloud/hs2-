@@ -683,12 +683,12 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 	bts := b
 	for len(bts) > 0 {
 		sz := len(bts)
-		if sz > s.frameSize {
-			sz = s.frameSize
+		if fs := s.nextFrameSize(); sz > fs {
+			sz = fs
 		}
 		frame.data = bts[:sz]
 		bts = bts[sz:]
-		n, err := s.sess.writeFrameInternal(frame, deadline, CLSDATA)
+		n, err := s.sess.writeFrameOf(s, frame, deadline, CLSDATA)
 		s.numWritten++
 		sent += n
 		if err != nil {
@@ -751,12 +751,14 @@ func (s *Stream) writeV2(b []byte) (n int, err error) {
 
 			for len(bts) > 0 {
 				sz := len(bts)
-				if sz > s.frameSize {
-					sz = s.frameSize
+				// the frame's size: a FrameQueue's for the stream (its lane's,
+				// hs2's link scheduler), within MaxFrameSize
+				if fs := s.nextFrameSize(); sz > fs {
+					sz = fs
 				}
 				frame.data = bts[:sz]
 				bts = bts[sz:]
-				n, err := s.sess.writeFrameInternal(frame, deadline, CLSDATA)
+				n, err := s.sess.writeFrameOf(s, frame, deadline, CLSDATA)
 				atomic.AddUint32(&s.numWritten, uint32(sz))
 				sent += n
 				if err != nil {
