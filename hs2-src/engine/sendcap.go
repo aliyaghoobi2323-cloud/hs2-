@@ -94,6 +94,9 @@ type sendCap struct {
 	// full: the delivery rate of the latest sample that was not app-limited
 	// (0: none yet), for C3 (hostRate)
 	full float64
+	// off: no cap of its own on this link (the other end lacks CapSendCap),
+	// as SendCapOff for the process
+	off bool
 	// tallies (the status line)
 	appLim, lifts uint64
 }
@@ -148,7 +151,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	}
 	c.quiet = idle
 	switch {
-	case SendCapOff():
+	case SendCapOff() || c.off:
 		c.on = false
 	case c.on && idle:
 		c.on = false

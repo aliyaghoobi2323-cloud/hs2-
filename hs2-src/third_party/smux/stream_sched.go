@@ -62,6 +62,12 @@ func (s *Stream) writeSched(b []byte, window bool) (n int, err error) {
 			n := 0
 			if err == nil {
 				n, err = sess.frameWritten(req, deadline)
+				if err != nil && sess.sch.gone(req.sf) {
+					// it left its user's FIFO unsent: not in the window
+					return sent, err
+				}
+			} else {
+				return sent, err
 			}
 			atomic.AddUint32(&s.numWritten, uint32(sz))
 			sent += n
@@ -177,3 +183,6 @@ func (s *Stream) WindowRoom() int {
 // WindowNotify is signalled when the peer updates the stream's window (one
 // pending signal at most; Write waits on it too).
 func (s *Stream) WindowNotify() <-chan struct{} { return s.chUpdate }
+
+// Session is the session the stream belongs to.
+func (s *Stream) Session() *Session { return s.sess }

@@ -230,6 +230,28 @@ type meteredConn struct {
 	net.Conn
 	m    *linkMeter
 	gate *sendGate // the link's send gate, told what each write took (nil: none)
+	hq   *hostQ    // the link's host-queue guard, likewise (its fallback gate's; nil: none)
+}
+
+// Flush flushes what the conn under it holds back (the shaper's tail, C2's
+// writer: shapedConn.Flush), timed as a write.
+func (c *meteredConn) Flush() error {
+	f, ok := c.Conn.(interface{ Flush() error })
+	if !ok {
+		return nil
+	}
+	t0 := ctrlNow()
+	c.m.wrStart.Store(t0)
+	err := f.Flush()
+	c.m.wrStart.Store(0)
+	if d := time.Duration(ctrlNow() - t0); d > blockedMin {
+		c.m.wrBlocked.Add(int64(d))
+		c.m.sentAt.Store(t0 + int64(d))
+	}
+	if err != nil {
+		c.m.stalls.Add(1)
+	}
+	return err
 }
 
 // blockedNs is wrBlocked with the wait of the write in progress counted in
@@ -269,6 +291,9 @@ func (c *meteredConn) Write(p []byte) (int, error) {
 	d := time.Duration(ctrlNow() - t0)
 	if c.gate != nil {
 		c.gate.took(n, d)
+	}
+	if c.hq != nil {
+		c.hq.took(n, d)
 	}
 	if d > blockedMin {
 		c.m.wrBlocked.Add(int64(d))

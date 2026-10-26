@@ -36,6 +36,16 @@ type shapedConn struct {
 
 	wmu  sync.Mutex
 	wbuf []byte // reused frame-build scratch (write side)
+	// carry (a link with C2's scheduler, whose writer flushes it): a write's
+	// short tail is held, with the target sampled for its record, and goes
+	// out at the head of the next write (filling that record) or at Flush
+	// (padded to it). The smux writer writes a frame at a time, and a tail
+	// padded per frame cost up to half a record per frame: ~3% of a link at
+	// 16 KiB frames, a third at the 1 KiB ones of C2 on a slow link. Records
+	// keep the sampled sizes, and a frame's end no longer shows in them.
+	carry bool
+	tail  []byte
+	tgt   int // the target of the record the tail fills (0: none sampled)
 
 	rmu  sync.Mutex
 	rbuf []byte // reused frame-read scratch (read side)
@@ -66,6 +76,9 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	if c.carry {
+		return c.writeCarry(p)
+	}
 	written := 0
 	for len(p) > 0 {
 		target := c.sampler.Sample()
@@ -100,6 +113,61 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 		p = p[len(d):]
 	}
 	return written, nil
+}
+
+// writeCarry is Write in carry mode: full records of the sampled sizes, the
+// held tail first; what is left short of a record is held (under wmu).
+func (c *shapedConn) writeCarry(p []byte) (int, error) {
+	n := len(p)
+	for len(p) > 0 {
+		if c.tgt == 0 {
+			c.tgt = c.sampler.Sample()
+		}
+		need := max(c.tgt-shapeHdrLen, 1) - len(c.tail)
+		if len(p) < need {
+			c.tail = append(c.tail, p...)
+			return n, nil
+		}
+		d := p[:need]
+		if len(c.tail) > 0 {
+			c.tail = append(c.tail, d...)
+			d = c.tail
+		}
+		if err := c.record(d, c.tgt); err != nil {
+			return n - len(p), err
+		}
+		p = p[need:]
+		c.tail, c.tgt = c.tail[:0], 0
+	}
+	return n, nil
+}
+
+// Flush writes the held tail (carry mode), padded to its record's target.
+func (c *shapedConn) Flush() error {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if len(c.tail) == 0 {
+		return nil
+	}
+	err := c.record(c.tail, c.tgt)
+	c.tail, c.tgt = c.tail[:0], 0
+	return err
+}
+
+// record writes d as one record of target bytes (padded up to it).
+func (c *shapedConn) record(d []byte, target int) error {
+	pad := max(target-shapeHdrLen-len(d), 0)
+	need := shapeHdrLen + len(d) + pad
+	if cap(c.wbuf) < need {
+		c.wbuf = make([]byte, need)
+	}
+	f := c.wbuf[:need]
+	f[0], f[1] = byte(len(d)>>8), byte(len(d))
+	f[2], f[3] = byte(pad>>8), byte(pad)
+	copy(f[shapeHdrLen:], d)
+	clear(f[shapeHdrLen+len(d):])
+	_, err := c.Conn.Write(f)
+	return err
 }
 
 // Read reassembles the original byte stream: it returns buffered decoded data
