@@ -169,9 +169,14 @@ func TestWcoreS2HarmModel(t *testing.T) {
 // qTarget + Δq, the base windows already fill the path and a probe only adds
 // queue: the rig's 8 downloads on 1000/100 held 16 MiB with q_snd at 24 to
 // 43 ms and probed to 18.2 MiB, 3.5% more rate for a p99 2.27 times base's.
-// Once two evaluations in a row showed such a queue (the exit's record, or
-// the link socket's own srtt past qTarget + wcDqOwn) no probe starts; off
-// the floor, or under that queue, a due probe does.
+// Once two evaluations in a row showed such a queue (the exit's record, or,
+// with no fresh record, the link socket's own srtt past qTarget + wcDqOwn)
+// no probe starts; off the floor, or under that queue, a due probe does.
+// The link socket's srtt holds the edge's own sending too (the user's
+// uploads, window updates): with a fresh record of the exit it judges
+// nothing, as everywhere else (measure's noQ, slowed). Taken with the
+// record, an upload on the same link lifting q_own past 25 ms with q_snd
+// at 1 ms held the floor's probes off for good (review, M2).
 func TestWcoreS2FloorQueueNoProbe(t *testing.T) {
 	ms := time.Millisecond
 	for _, tc := range []struct {
@@ -185,6 +190,8 @@ func TestWcoreS2FloorQueueNoProbe(t *testing.T) {
 		{"... the link's own srtt past qTarget+wcDqOwn, no record", wtNeed, 10e6, 0, 32 * ms, false},
 		{"at the floor, a queue under qTarget+Δq", wtNeed, 10e6, 18 * ms, 1 * ms, true},
 		{"off the floor (a queue there is HOLD's to drain)", 4 * wtMiB, 60e6, 32 * ms, 1 * ms, true},
+		{"at the floor, the exit's record 1 ms, the link's own srtt 30 ms (an upload on it)", wtNeed, 10e6, 1 * ms, 30 * ms, true},
+		{"... the link's own srtt 1 ms", wtNeed, 10e6, 1 * ms, 1 * ms, true},
 	} {
 		c, _ := wtHold()
 		c.rhat = c.rhat[:0]
@@ -237,7 +244,8 @@ func TestWcoreS2FloorQueueModel(t *testing.T) {
 				c.streams[i].start = 10 * time.Second
 			}
 			// each HOLD evaluation: at the floor behind a queue past
-			// qTarget + Δq (the record's, or q_own's past qTarget + wcDqOwn)
+			// qTarget + Δq (the record's; with none fresh, q_own's past
+			// qTarget + wcDqOwn)
 			floorQ := func(k *wcore) bool {
 				m, now, b := k.last, k.lastAt, k.B
 				if k.state == wcProbe {
@@ -246,8 +254,8 @@ func TestWcoreS2FloorQueueModel(t *testing.T) {
 				if floor := uint64(max(len(m.f), 1)) * uint64(k.cmin()); b > floor*21/20 {
 					return false
 				}
-				if q, ok := m.pathQueue(); ok && q > k.qTarget(now)+k.dq() {
-					return true
+				if q, ok := m.pathQueue(); ok {
+					return q > k.qTarget(now)+k.dq()
 				}
 				return m.qOwnOK && m.qOwn > k.qTarget(now)+wcDqOwn
 			}

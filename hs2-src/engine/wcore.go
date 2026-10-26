@@ -3658,6 +3658,16 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, sig wc
 func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	now := in.now
 	dq := c.dq()
+	// (every evaluation of HOLD counts, those that wait on a loss drain's
+	// end or set the references too: counted only past them, a probe due
+	// at the first evaluation after a drain at the floor started behind
+	// the records' 36–38 ms, 7 downloads on 1000/100 behind 200 ms in the
+	// model, once q_own no longer stood in for the record; review, M2)
+	if c.floorQueued(now, m) {
+		c.floorQN++
+	} else {
+		c.floorQN = 0
+	}
 	if (c.lossDrain || c.refPending) && c.slowed(now, m) {
 		// the path got slower, and its loss came first: a cut between
 		// evaluations (fastStop) took B to half and HOLD's own test of a
@@ -3868,11 +3878,6 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 		c.wlN >= 3 && !(m.qOK && m.qTurn > c.qRef+dq/2) && clean && now.Sub(c.bCapAt) >= wcCapStale) {
 		c.bCap, c.backoff, c.relaxAt = 0, 0, now
 	}
-	if c.floorQueued(now, m) {
-		c.floorQN++
-	} else {
-		c.floorQN = 0
-	}
 	full := c.floorQN >= wcFloorQN // (wcFloorQN)
 	if full && !now.Before(c.probeAt) {
 		// a probe due is put off, not kept due: HOLD refreshes its queue
@@ -3920,13 +3925,17 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 // floorQueued: B is at the floor (n_F·c_min) and a signal with no bias
 // shows a queue past qTarget + Δq: the exit's record (the path's queue by
 // every link's, with other cores on the peer: what they hold together is
-// qTarget), or the link socket's own srtt past qTarget + wcDqOwn (wcFloorQN).
+// qTarget); with no fresh record, the link socket's own srtt past qTarget +
+// wcDqOwn (wcFloorQN). (Not the srtt beside a record, as measure's noQ and
+// slowed: it holds the edge's own sending too, the user's uploads and the
+// window updates, and one past 25 ms with the record at 1 ms held the
+// floor's probes off for good; review, M2.)
 func (c *wcore) floorQueued(now time.Time, m wcMeas) bool {
 	if floor := uint64(max(len(m.f), 1)) * uint64(c.cmin()); c.B > floor*21/20 {
 		return false
 	}
-	if q, ok := m.pathQueue(); ok && q > c.qTarget(now)+c.dq() {
-		return true
+	if q, ok := m.pathQueue(); ok {
+		return q > c.qTarget(now)+c.dq()
 	}
 	return m.qOwnOK && m.qOwn > c.qTarget(now)+wcDqOwn
 }
