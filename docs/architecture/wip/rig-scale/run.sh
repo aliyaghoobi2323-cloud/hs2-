@@ -58,7 +58,7 @@ cleanup() {
   fi
 }
 trap 'cleanup; exit 130' INT TERM
-trap cleanup EXIT
+trap 'cleanup; rmdir "$WORK" 2>/dev/null' EXIT
 
 # rigload, built once per OUT (its own module, standard library only)
 RL=$OUT/rigload
@@ -123,7 +123,7 @@ run_one() {
   rm -rf "$r"; mkdir -p "$r" "$w"; CUR=$w
   # quiet host
   while [ $wait -lt "$LOAD_WAIT" ] && awk -v m="$LOAD_MAX" '{exit !($1 > m)}' /proc/loadavg; do sleep 10; wait=$((wait + 10)); done
-  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\"}" > "$r/meta.json"
+  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
   run_steps || ok=0
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev me > "$r/tc-dn.txt" 2>&1
@@ -136,8 +136,11 @@ run_one() {
 # run_steps: the body of one run (it uses run_one's variables); on failure it
 # sets why and returns 1, and run_one still tears down and writes the line
 run_steps() {
-  local n t0 c0 pc lw
+  local n t0 c0 pc lw te="" tx=""
   [ -x "$bp" ] || { why="no binary for BIN=$bin ($bp)"; return 1; }
+  # optional CPU sets (the field edge has 4 cores): EDGE_CPUS=0-3 EXIT_CPUS=4-11
+  [ -n "${EDGE_CPUS:-}" ] && te="taskset -c $EDGE_CPUS"
+  [ -n "${EXIT_CPUS:-}" ] && tx="taskset -c $EXIT_CPUS"
   # the users and the timeline
   read -r nusers total < <(python3 "$D/ana.py" spec "$cell" "$r/spec.json" 2> "$r/spec.err")
   [ -n "$total" ] || { why="spec: $(tail -1 "$r/spec.err")"; return 1; }
@@ -146,10 +149,10 @@ run_steps() {
   mkconf "$w" "$N" || { why="hs2 config"; return 1; }
   ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,0.0.0.0:5213 > "$r/rigload-server.log" 2>&1 &
   PIDS+=($!)
-  ip netns exec $E env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/edge.json" > "$r/edge.log" 2>&1 &
+  ip netns exec $E $te env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/edge.json" > "$r/edge.log" 2>&1 &
   pe=$!; PIDS+=($pe)
   sleep 0.5
-  ip netns exec $X env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/exit.json" > "$r/exit.log" 2>&1 &
+  ip netns exec $X $tx env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/exit.json" > "$r/exit.log" 2>&1 &
   px=$!; PIDS+=($px)
   t0=$(date +%s.%N)
   lw=$((30 + N / 5))

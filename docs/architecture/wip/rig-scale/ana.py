@@ -343,6 +343,9 @@ def compose(r, ok, why):
     rec["extra"] = {k: v for k, v in cell.items() if k not in ORDER}
     rec.update({"start": meta.get("start"), "load0": meta.get("load0"), "waited_s": meta.get("waited_s"),
                 "host_busy_pct": host_busy(r)})
+    for k in ("edge_cpus", "exit_cpus"):
+        if meta.get(k):
+            rec[k] = meta[k]
     st = {s: readj("%s/status-%s.json" % (r, s), {}) for s in ("edge", "exit")}
     policed = 0
     try:
