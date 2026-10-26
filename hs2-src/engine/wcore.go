@@ -123,6 +123,17 @@ type wcore struct {
 	fullAt    time.Time
 	fullN     int
 	cleanRecs int // the exit's latest records in a row that showed no queue and no resends
+	// backR: the link's rate as the latest loss point that came with a
+	// queue, or drain for a slower path, came (the larger of its interval's
+	// and the one before: a loss right after the sender's PROBE_RTT comes in
+	// a dip of the rate), 0: none or used; backAt: when; backN: HOLD's
+	// evaluations in a row past it by wcBackGrowth with the queue empty
+	// (wcBackN)
+	backR  float64
+	backAt time.Time
+	backN  int
+	// rLinkBefore: R_link of the evaluation before the latest (backR)
+	rLinkBefore float64
 	// qOffSnd: the largest q_snd of the exit's latest records as the core
 	// left OFF (wcLongRTT: STARTUP's knee is a queue past it by Δq)
 	qOffSnd time.Duration
@@ -524,6 +535,26 @@ var (
 	// s on 1000/100 probed from 16 to 16–18.1 MiB behind 36 ms 8 to 12 times
 	// in 6 seeds.
 	wcFloorQN = 2
+	// wcBackN, wcBackGrowth: HOLD evaluations in a row in which the link
+	// carries more than wcBackGrowth past its rate as the latest loss point
+	// or drain for a slower path came (backR), while a signal with no bias
+	// shows the queue empty, clear the loss point and the backoff and probe
+	// at once, within wcTurnWin of it: what a slower spell taught held the
+	// core under the path once it was fast again. The rig's 300 → 50 → 300
+	// got back to 90% in [never, 8, never] s, a probe failing on a small
+	// resend right after the return and its backoff putting the next out of
+	// the last 12 s (judge, p4). The model's 300 → 50 → 300 behind 50 ms got
+	// back within 10 s in 4 of 6 seeds before the rule, 5 with it, and its
+	// 1000 → 300 → 1000 behind 50 ms in 5.6–8.2 s before, 3.9–8 s with it
+	// (behind 20 ms that spell's loss points come with under wcPoliceQ of
+	// queue, as a policer's, and wcCapStale lifts them). Not behind a
+	// policer: a loss point that came with no queue (under wcPoliceQ, a
+	// policer's signature) sets no backR, and none acts once the core met a
+	// policer (policed); below its rate a policed path always looks so (a
+	// 60% policer on 1000/150 resent 0.37 → 0.64% with the rule taking every
+	// loss point, and its p99 went 336 → 414 ms).
+	wcBackN      = 2
+	wcBackGrowth = 0.25
 	// wcPastKnee: the base windows hold this many times what their rate
 	// needs in a round trip and a step (R_F·T_base + H_step) or more: they
 	// are past the knee already. With no record of the exit to tell a queue
@@ -1136,7 +1167,7 @@ func (c *wcore) step(in wcIn) wcOut {
 	if !carryAt.IsZero() {
 		m.sndAt = carryAt
 	}
-	c.last = m
+	c.rLinkBefore, c.last = c.last.rLink, m
 	if in.poolShort > 0 {
 		c.cnt.poolShort += int(in.poolShort)
 	}
@@ -1801,6 +1832,7 @@ func (c *wcore) cut(in wcIn) {
 	c.noteCap(now, from)
 	q, qOK := c.lossQ(in)
 	c.noteQcap(now, q)
+	c.noteBack(now, q, qOK)
 	c.chgAt = now
 	c.pathFull = true
 	c.state = wcDrain
@@ -3254,6 +3286,7 @@ func (c *wcore) toOff() {
 	c.state = wcOff
 	c.startOff = false
 	c.floorQN = 0
+	c.backR, c.backN = 0, 0
 	c.offSteadyN = 0 // (the level is the core's budgets' until records of the windows without it judge it)
 	c.B = 0
 	c.rAvg = 0
@@ -3517,6 +3550,20 @@ func (c *wcore) learnQcap(now time.Time, m wcMeas) {
 		c.notePoliced(now)
 	}
 	c.noteQcap(now, q)
+	c.noteBack(now, q, ok)
+}
+
+// noteBack: a loss point came now with q of queue (ok: known); one that
+// came with a queue sets the rate wcBackN measures recovery from, one with
+// none (a policer's signature) takes it away.
+func (c *wcore) noteBack(now time.Time, q time.Duration, ok bool) {
+	c.backR, c.backN = 0, 0
+	if ok && q < wcPoliceQ {
+		return
+	}
+	if r := math.Max(c.last.rLink, c.rLinkBefore); r > 0 {
+		c.backR, c.backAt = r, now
+	}
 }
 
 // policerLoss: the exit's record of the interval shows resends past their
@@ -3596,6 +3643,7 @@ func (c *wcore) toDrain(in wcIn, m wcMeas, ev *[]wcEvent, why wcDrainWhy, sig wc
 	if rate {
 		c.rhat = append(c.rhat[:0], wcRate{in.now, m.rLink})
 		c.backoff = 0
+		c.backR, c.backAt, c.backN = m.rLink, in.now, 0 // (wcBackN)
 	} else if c.tau > c.dq() && why == wcWhyQueue {
 		c.tau /= 2 // a queue HOLD itself built: τ_hold may hold a queue
 	}
@@ -3826,6 +3874,21 @@ func (c *wcore) hold(in wcIn, m wcMeas, ev *[]wcEvent) {
 	clean := !m.oooOK || m.ooo < wcOooCongAbs ||
 		c.oooRef.ok && c.oooRef.v < wcOooClean && !c.oooRef.past(m.ooo, wcOooCongAbs) && !(m.sndOK && m.snd >= wcLossRand)
 	unbiased := m.sndOK && m.qSndOK && m.qSnd <= dq/2 || m.qOwnOK && m.qOwn <= dq/2
+	if c.backR > 0 && now.Sub(c.backAt) >= wcTurnWin {
+		c.backR, c.backN = 0, 0
+	}
+	if c.backR > 0 && m.sameF {
+		if unbiased && clean && m.rLink > (1+wcBackGrowth)*c.backR && !c.policed(now) && (c.bCap > 0 || c.backoff > 0) {
+			c.backN++
+		} else {
+			c.backN = 0
+		}
+		if c.backN >= wcBackN {
+			c.bCap, c.backoff, c.relaxAt = 0, 0, now
+			c.probeAt = now
+			c.backR, c.backN = 0, 0
+		}
+	}
 	floor := uint64(max(len(m.f), 1)) * uint64(c.cmin())
 	// (the backoff too where no cap is left: z12 P4, 300 → 50 → 300, the
 	// cap was gone, B sat at the floor window-limited with q_snd 1.4 ms,

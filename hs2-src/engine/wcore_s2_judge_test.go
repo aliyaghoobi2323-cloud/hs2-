@@ -284,3 +284,98 @@ func TestWcoreS2LongStartupModel(t *testing.T) {
 		}
 	}
 }
+
+// TestWcoreS2BackAfterSlower (judge p4): what a slower spell of the path
+// taught (its loss point, the backoff of probes that failed in it or right
+// after it) held the core under the path once it was fast again. HOLD
+// evaluations in a row (wcBackN) in which the link carries more than
+// wcBackGrowth past its rate when that loss point came, with the queue
+// empty, clear both and probe at once; not behind a policer, not with a
+// queue standing, not for a rate within wcBackGrowth of it.
+func TestWcoreS2BackAfterSlower(t *testing.T) {
+	ms := time.Millisecond
+	for _, tc := range []struct {
+		name    string
+		r       float64       // the link's rate (the loss point came at 6 MB/s)
+		q       time.Duration // the exit's record
+		policed bool
+		back    bool
+	}{
+		{"faster with the queue empty", 10e6, 1 * ms, false, true},
+		{"... behind a policer", 10e6, 1 * ms, true, false},
+		{"faster with a queue standing", 10e6, 30 * ms, false, false},
+		{"within wcBackGrowth of the rate then", 7e6, 1 * ms, false, false},
+	} {
+		c, _ := wtHold()
+		c.rhat = c.rhat[:0]
+		c.noteRate(wtT0, tc.r)
+		c.B, c.bPub, c.bGood = 3*wtMiB, 3*wtMiB, 3*wtMiB
+		c.bCap, c.bCapAt, c.backoff = 3*wtMiB, wtT0.Add(-time.Second), 2
+		c.backR, c.backAt = 6e6, wtT0.Add(-5*time.Second)
+		c.qSndRef, c.qSndRefOK = tc.q, true
+		if tc.policed {
+			c.policedAt = wtT0.Add(-time.Minute)
+		}
+		in := wtIn(wtT0, 1, 3*wtMiB)
+		for i := 0; i < wcBackN; i++ {
+			now := wtT0.Add(time.Duration(i) * time.Second)
+			in.now = now
+			m := wtMeas(1, tc.r, 3*wtMiB)
+			m.at, m.qOK, m.qTurn = now, true, c.qRef
+			m.snd, m.sndOK, m.sndSegs, m.sndAt = 0, true, 20000, now
+			m.qSnd, m.qSndOK, m.qOwn, m.qOwnOK = tc.q, true, tc.q, true
+			var ev []wcEvent
+			c.hold(in, m, &ev)
+		}
+		back := c.bCap == 0 && c.backoff == 0 && (c.state == wcProbe || !c.probeAt.After(in.now))
+		if back != tc.back {
+			t.Errorf("%s: loss point %.2f MiB, backoff %d, %v (probe at %v): back %v, want %v",
+				tc.name, float64(c.bCap)/wtMiB, c.backoff, c.state, c.probeAt.Sub(in.now), back, tc.back)
+		}
+	}
+}
+
+// TestWcoreS2BackAfterSlowerModel (judge p4): the model's 300 → 50 → 300
+// behind 50 ms (the rig's dlchg) got back to 90% of the rate before the
+// drop within 10 s in 4 of 6 seeds, 1000 → 300 → 1000 behind 20 ms (the
+// rig's FP chg) in none; now 5 of 6 and 1 of 6 (the loss points of that
+// spell on a 20 ms queue come with under wcPoliceQ of it, as a policer's,
+// and set no backR), with resends within base's + 3 points.
+func TestWcoreS2BackAfterSlowerModel(t *testing.T) {
+	for _, x := range []struct {
+		rate, to    float64
+		rtt, q      int
+		down, up    time.Duration
+		dur         time.Duration
+		want, seeds int
+	}{
+		{300, 50, 150, 50, 18 * time.Second, 30 * time.Second, 42 * time.Second, 5, 6},
+		{1000, 300, 100, 20, 15 * time.Second, 30 * time.Second, 50 * time.Second, 1, 6},
+	} {
+		ok := 0
+		var b90 []string
+		for seed := 1; seed <= x.seeds; seed++ {
+			c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
+			c.seed, c.dur = uint64(seed), x.dur
+			c.changes = []wmChange{{x.down, x.to * wmMbit}, {x.up, x.rate * wmMbit}}
+			b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
+			if k.back90 >= 0 && k.back90 <= 10*time.Second {
+				ok++
+			}
+			if k.back90 < 0 {
+				b90 = append(b90, "never")
+			} else {
+				b90 = append(b90, fmt.Sprintf("%.1f", k.back90.Seconds()))
+			}
+			if k.resend > b.resend+0.03 {
+				t.Errorf("%s s%d: resent %.2f%% (base %.2f%%)", c.name, seed, 100*k.resend, 100*b.resend)
+			}
+		}
+		name := fmt.Sprintf("%.0f>%.0f>%.0f/%d q%d", x.rate, x.to, x.rate, x.rtt, x.q)
+		if ok < x.want {
+			t.Errorf("%s: back to 90%% within 10 s in %d of %d seeds, want %d (%v s)", name, ok, x.seeds, x.want, b90)
+		} else {
+			t.Logf("%s: back to 90%% within 10 s in %d of %d seeds (%v s)", name, ok, x.seeds, b90)
+		}
+	}
+}
