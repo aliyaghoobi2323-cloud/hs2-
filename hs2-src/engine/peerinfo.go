@@ -44,9 +44,10 @@ import (
 // exit's info unknown. An older edge never opens it, so a newer exit leaves the
 // edge's info unknown. Either way nothing else changes.
 //
-// The edge uses a link for user connections only once this exchange is over
-// (answered, refused or given up — LinkManager.gateInfo): it must know whether
-// the exit understands port tags BEFORE the first user connection rides it.
+// Since wire v3 every user connection is tagged with its user port
+// (userStreamHeader), so a link carries them before this exchange is over;
+// what the exchange brings is for the status (LinkManager.showRoutes) and the
+// quiet L3 keepalives.
 const (
 	infoVer     = 2
 	infoTimeout = 5 * time.Second
@@ -257,19 +258,15 @@ func readInfo(r io.Reader) (peerInfo, error) {
 }
 
 // openInfo runs the EDGE side for one link: send this side's info, read the
-// exit's, and store it on the link's meter (LinkManager.Stats reports it, and
-// openStream reads from it whether to tag a user connection). The link may
-// carry user connections (infoDone) once the FIRST attempt is over, however it
-// ended: answered, refused by an older exit (infoRefused: definitive), or no
-// answer in time — then the link uses what the pool's other links learned from
-// the same exit (LinkManager.exitInfo) while this one keeps asking, so a slow
-// answer never holds a link back for long nor leaves it untagged for its life.
+// exit's, and store it on the link's meter (LinkManager.Stats reports it). It
+// tries infoTries times; an older exit's refusal is definitive (infoRefused).
+// User connections never wait for it: every one is tagged with its user port
+// since wire v3.
 func openInfo(ctx context.Context, l Link, mine peerInfo) {
 	mtr := linkMeterOf(l)
 	if mtr == nil {
 		return
 	}
-	defer mtr.infoDone.Store(true)
 	ro, ok := l.(rawStreamOpener)
 	if !ok {
 		return
@@ -288,7 +285,6 @@ func openInfo(ctx context.Context, l Link, mine peerInfo) {
 			mtr.infoRefused.Store(true)
 			return // an older exit closed the unknown kind (or the link died)
 		}
-		mtr.infoDone.Store(true) // no answer in time: carry users meanwhile
 	}
 }
 

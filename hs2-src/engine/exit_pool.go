@@ -9,6 +9,8 @@ import (
 	"math/rand/v2"
 	"sync"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // The reverse exit pool makes the kharej side's link count DYNAMIC.
@@ -109,6 +111,28 @@ type exitPool struct {
 	peers *linkPeers
 	// traffic: this exit's own count of user connections and throughput.
 	traffic *exitTraffic
+
+	// refuse spaces every slot's dials while the edge refuses this server's
+	// protocol (refusal.go).
+	refuse refusalBackoff
+	// clock and sleep stand in for time.Now and sleepCtx in the slots'
+	// pacing (nil: those; tests inject a fake clock).
+	clock func() time.Time
+	sleep func(context.Context, time.Duration) bool
+}
+
+func (p *exitPool) now() time.Time {
+	if p.clock != nil {
+		return p.clock()
+	}
+	return time.Now()
+}
+
+func (p *exitPool) pause(ctx context.Context, d time.Duration) bool {
+	if p.sleep != nil {
+		return p.sleep(ctx, d)
+	}
+	return sleepCtx(ctx, d)
 }
 
 type exitSlot struct {
@@ -258,7 +282,27 @@ func (p *exitPool) isScout(s *exitSlot) bool {
 // slot's old backoff (up to 8 s) while the line just logged says ≤2 s.
 func (p *exitPool) dialFailed(s *exitSlot, err error, backoff *time.Duration) (next time.Duration) {
 	p.mu.Lock()
-	now := time.Now()
+	now := p.now()
+	if tlscarrier.PeerRefused(err) {
+		// The edge refuses this server's protocol: every slot waits the
+		// refusal backoff (refusal.go), said once a minute; with no link up
+		// one slot scouts as in any outage.
+		if p.live == 0 && !p.outage {
+			p.outage, p.outageAt, p.outageFails = true, now, 0
+		}
+		if p.outage {
+			if p.scout == nil {
+				p.scout = s
+			}
+			p.outageFails++
+		}
+		next, logIt := p.refuse.refused(now)
+		p.mu.Unlock()
+		if logIt {
+			p.log("%s", refusalLine(err, next))
+		}
+		return next
+	}
 	var line string
 	if p.live == 0 && !p.outage {
 		// The outage begins: said at once, not folded into the next summary
@@ -304,6 +348,7 @@ func (p *exitPool) dialFailed(s *exitSlot, err error, backoff *time.Duration) (n
 // dialed records a successful dial: an outage is over, and every waiting slot
 // comes back (through the gate).
 func (p *exitPool) dialed() int {
+	p.refuse.ok()
 	p.mu.Lock()
 	var line string
 	if p.outage {
@@ -334,6 +379,12 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		if !p.waitTurn(ctx, s) {
 			return
 		}
+		if d := p.refuse.holding(p.now()); d > 0 { // another slot was refused
+			if !p.pause(ctx, d) {
+				return
+			}
+			continue
+		}
 		// A slot that is over the target retires instead of taking a turn:
 		// checked when a place is free and before the start spacing is
 		// reserved, so after an outage the slots that must retire never hold
@@ -358,7 +409,7 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		release()
 		if err != nil {
 			wait := p.dialFailed(s, err, &backoff)
-			if !sleepCtx(ctx, wait) {
+			if !p.pause(ctx, wait) {
 				return
 			}
 			if backoff < slotBackoffMax {
@@ -367,7 +418,7 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 			continue
 		}
 		n := p.dialed()
-		up := time.Now()
+		up := p.now()
 		p.upLog.log("mtcp: exit link up to edge (slot %d; now %d)", s.id, n)
 		// returns when the link dies or ctx ends; what the link's window
 		// core did rides after the reason (wcoreEndNote)
@@ -403,12 +454,12 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		p.downLog.log("mtcp: exit link down (slot %d: %s; now %d); redial%s", s.id, why, n, note)
 		// A link that lived is redialed after a short jittered pause; one that
 		// died right after coming up backs off like a failed dial.
-		if time.Since(up) >= slotStableAfter {
+		if p.now().Sub(up) >= slotStableAfter {
 			backoff = slotBackoffMin
 		} else if backoff < slotBackoffMax {
 			backoff *= 2
 		}
-		if !sleepCtx(ctx, jitterDur(backoff)) {
+		if !p.pause(ctx, jitterDur(backoff)) {
 			return
 		}
 	}

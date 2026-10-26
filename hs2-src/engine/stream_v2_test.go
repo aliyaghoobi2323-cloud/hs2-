@@ -190,9 +190,9 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 	if o.tune != nil {
 		o.tune(&lm.ap.tun)
 	}
-	// As RunIran: a link takes user connections once its kindInfo exchange is
-	// over (an older edge has no exchange to wait for).
-	lm.gateInfo = !o.oldEdge
+	// As RunIran: the status shows the exit's routing report (an older edge
+	// has no exchange to show).
+	lm.showRoutes = !o.oldEdge
 	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags, Ports: o.userPorts}
 	if o.udp {
 		mine.Flags |= flagUDP

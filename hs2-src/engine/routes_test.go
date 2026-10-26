@@ -92,35 +92,24 @@ func (fakeLinkNoMeter) Active() int32               { return 0 }
 func (fakeLinkNoMeter) Alive() bool                 { return true }
 func (fakeLinkNoMeter) Close() error                { return nil }
 
-// With the gate on, a link whose kindInfo exchange is not over takes no user
-// connection; it does the moment the exchange ends, however it ended.
-func TestPickWaitsForInfo(t *testing.T) {
+// A link whose kindInfo exchange is not over takes user connections at once:
+// since wire v3 every one is tagged with its user port, so none has to know
+// first whether the exit routes tags (the edge used to hold a link back).
+func TestPickDoesNotWaitForInfo(t *testing.T) {
 	m, _, _ := newV2Manager(nil, 1, 4, false)
-	m.gateInfo = true
+	m.showRoutes = true
 	f := newMeteredFake()
 	addManaged(m, f)
-	if _, _, ok := m.Pick(); ok {
-		t.Fatal("picked a link whose info exchange is still running")
-	}
-	f.m.infoDone.Store(true)
-	if _, rel, ok := m.Pick(); !ok {
-		t.Fatal("the exchange is over: the link must be picked")
-	} else {
-		rel()
-	}
-	// An older edge build (gate off) never waits.
-	m2, _, _ := newV2Manager(nil, 1, 4, false)
-	addManaged(m2, newMeteredFake())
-	if _, rel, ok := m2.Pick(); !ok {
-		t.Fatal("gate off: picked nothing")
+	if l, rel, ok := m.Pick(); !ok || l != f {
+		t.Fatal("a link whose info exchange is still running was not picked")
 	} else {
 		rel()
 	}
 }
 
-// openInfo always ends the gate — answered, refused by an older exit, or
-// given up — and records what the exit said.
-func TestOpenInfoEndsGate(t *testing.T) {
+// openInfo records what the exit said — answered, refused by an older exit,
+// or given up after its tries.
+func TestOpenInfoRecordsAnswer(t *testing.T) {
 	ctx := context.Background()
 	t.Run("v2 exit", func(t *testing.T) {
 		exit := func(ctx context.Context, _ *smux.Session, st *smux.Stream, mtr *linkMeter) {
@@ -129,8 +118,8 @@ func TestOpenInfoEndsGate(t *testing.T) {
 		p := newStatsPair(t, ctx, nil, exit)
 		openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags, Flags: flagUDP, Ports: []int{8443, 2053}})
 		pi := p.edge.m.peerInfo.Load()
-		if !p.edge.m.infoDone.Load() || !pi.tags() || fmt.Sprint(pi.Ports) != "[2053]" || pi.Flags&flagDefault == 0 {
-			t.Fatalf("edge: done %v, info %+v", p.edge.m.infoDone.Load(), pi)
+		if !pi.tags() || fmt.Sprint(pi.Ports) != "[2053]" || pi.Flags&flagDefault == 0 || p.edge.m.infoRefused.Load() {
+			t.Fatalf("edge: info %+v, refused %v", pi, p.edge.m.infoRefused.Load())
 		}
 		epi := p.exitMtr.peerInfo.Load()
 		if epi == nil || fmt.Sprint(epi.Ports) != "[8443 2053]" || epi.Flags&flagUDP == 0 {
@@ -147,8 +136,8 @@ func TestOpenInfoEndsGate(t *testing.T) {
 		}
 		p := newStatsPair(t, ctx, nil, v1)
 		openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags})
-		if !p.edge.m.infoDone.Load() || p.edge.m.peerInfo.Load().tags() || p.edge.m.peerMax.Load() != 48 {
-			t.Fatalf("v1 exit: done %v, info %+v, max %d", p.edge.m.infoDone.Load(), p.edge.m.peerInfo.Load(), p.edge.m.peerMax.Load())
+		if p.edge.m.peerInfo.Load().tags() || p.edge.m.peerMax.Load() != 48 {
+			t.Fatalf("v1 exit: info %+v, max %d", p.edge.m.peerInfo.Load(), p.edge.m.peerMax.Load())
 		}
 	})
 	t.Run("older exit (no kindInfo)", func(t *testing.T) {
@@ -159,11 +148,11 @@ func TestOpenInfoEndsGate(t *testing.T) {
 		}
 		p := newStatsPair(t, ctx, nil, older)
 		openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags})
-		if !p.edge.m.infoDone.Load() || p.edge.m.peerInfo.Load() != nil {
-			t.Fatal("an older exit must end the gate with no info")
+		if !p.edge.m.infoRefused.Load() || p.edge.m.peerInfo.Load() != nil {
+			t.Fatal("an older exit must be marked refused, with no info")
 		}
 	})
-	t.Run("no reply: the gate opens after the first attempt, retries go on", func(t *testing.T) {
+	t.Run("no reply: the retries go on, and it is no refusal", func(t *testing.T) {
 		oldRetry, oldTries := infoRetry, infoTries
 		infoRetry, infoTries = 20*time.Millisecond, 2
 		defer func() { infoRetry, infoTries = oldRetry, oldTries }()
@@ -171,22 +160,15 @@ func TestOpenInfoEndsGate(t *testing.T) {
 		p := newStatsPair(t, ctx, nil, silent)
 		done := make(chan struct{})
 		go func() { openInfo(ctx, p.edge, peerInfo{}); close(done) }()
-		time.Sleep(100 * time.Millisecond)
-		if p.edge.m.infoDone.Load() {
-			t.Fatal("the gate opened before the first attempt was over")
-		}
-		v2Wait(t, 7*time.Second, "the gate opens after the first attempt", func() bool { return p.edge.m.infoDone.Load() })
+		time.Sleep(infoTimeout + time.Second) // the first attempt timed out
 		select {
 		case <-done:
 			t.Fatal("openInfo returned after one attempt; it must keep asking")
 		default:
 		}
 		<-done
-		if p.edge.m.infoRefused.Load() {
+		if p.edge.m.infoRefused.Load() || p.edge.m.peerInfo.Load() != nil {
 			t.Fatal("no answer is not a refusal: the link must not be marked older")
-		}
-		if !p.edge.m.infoDone.Load() {
-			t.Fatal("given up: the gate must end")
 		}
 	})
 }
@@ -365,31 +347,5 @@ func TestPortRoutesMixedVersions(t *testing.T) {
 				t.Errorf("the exit must not claim to know the ports of an edge that never said them: %+v", x)
 			}
 		})
-	}
-}
-
-// The pool's remembered exit answer (what a link whose own answer is late
-// goes by) is forgotten when no link is left: the next links may reach an exit
-// restarted with another table.
-func TestExitInfoForgottenWithNoLinks(t *testing.T) {
-	m, _, _ := newV2Manager(nil, 1, 4, false)
-	f := newMeteredFake()
-	addManaged(m, f)
-	m.exitInfo.Store(&peerInfo{V2: true, Caps: capPortTags, Flags: flagDefault, Ports: []int{2053}})
-	m.reap()
-	if m.exitInfo.Load() == nil {
-		t.Fatal("forgotten while a link is still up")
-	}
-	f.alive.Store(false)
-	m.reap()
-	if m.exitInfo.Load() != nil {
-		t.Fatal("still remembered with no link left")
-	}
-	g := newMeteredFake()
-	m.AddLink(g, "x")
-	m.exitInfo.Store(&peerInfo{V2: true})
-	m.DropLink(g, "x")
-	if m.exitInfo.Load() != nil {
-		t.Fatal("reverse: still remembered after the last link was dropped")
 	}
 }

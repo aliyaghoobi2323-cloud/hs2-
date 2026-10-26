@@ -126,6 +126,15 @@ var (
 	ErrLevel = errors.New("no common protocol level with the peer")
 )
 
+// PeerRefused reports whether a dial failed because the other server refuses
+// this one's protocol, so every dial would (§4.5): a v2 peer, no level in
+// common, or the cover website — what a v2 server answers a v3 record with
+// (ErrOldServer, which a different shared_key gets as well). The dialing side
+// backs off instead of redialing at its usual pace.
+func PeerRefused(err error) bool {
+	return errors.Is(err, ErrPeerV2) || errors.Is(err, ErrLevel) || errors.Is(err, ErrOldServer)
+}
+
 type ekmSource interface {
 	ExportKeyingMaterial(label string, context []byte, length int) ([]byte, error)
 }

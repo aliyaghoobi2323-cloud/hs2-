@@ -80,9 +80,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		lm.SetDrainIdle(cfg.DrainIdle)
 	}
 	lm.SetWarm(cfg.WarmLinks)
-	// A link carries user connections only once its kindInfo exchange is over,
-	// so each one knows whether the exit routes port tags (routes.go).
-	lm.gateInfo = true
+	// The status shows what the exit reports over kindInfo about its routing
+	// (routes.go); user connections do not wait for it (userStreamHeader).
+	lm.showRoutes = true
 	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
@@ -116,13 +116,12 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 				if mtr == nil || mtr.infoRefused.Load() || !l.Alive() || ctx.Err() != nil {
 					return
 				}
-				if v := mtr.peerInfo.Load(); v != nil {
-					lm.exitInfo.Store(v) // what links whose own answer is late go by
+				if mtr.peerInfo.Load() != nil {
 					return
 				}
-				// No answer in all of openInfo's tries (a congested link): the
-				// link goes by the pool's answer meanwhile; keep asking, slowly,
-				// so it never stays without one for its whole life.
+				// No answer in all of openInfo's tries (a congested link): keep
+				// asking, slowly, so the status never lacks it for the link's
+				// whole life.
 			}
 		}()
 		if reverse {
