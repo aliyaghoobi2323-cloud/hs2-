@@ -165,6 +165,32 @@ func TestSendCapLiftOnIdle(t *testing.T) {
 	}
 }
 
+// TestSendCapHostRate: C3's rate from C4-lite's readings (decision T2) is
+// the least of the largest delivery rate of 2 s and the latest sample that
+// was not app-limited: a drop shows at once (where the pacing cap keeps the
+// largest of 2 s), an app-limited sample past the rest raises neither; none
+// before a sample that is not app-limited.
+func TestSendCapHostRate(t *testing.T) {
+	var c sendCap
+	var k capSock
+	k.feed(&c, 5, 50e6, true)
+	if _, ok := c.hostRate(); ok {
+		t.Fatal("a rate for C3 before any sample not app-limited")
+	}
+	k.feed(&c, 5, 50e6, false)
+	if r, ok := c.hostRate(); !ok || r != 50e6 {
+		t.Fatalf("busy at 50 MB/s: %v %v", r, ok)
+	}
+	k.feed(&c, 3, 80e6, true) // a higher app-limited sample Linux kept
+	if r, _ := c.hostRate(); r != 50e6 {
+		t.Fatalf("after app-limited samples at 80 MB/s: %v, want the latest not app-limited, 50 MB/s", r)
+	}
+	rate, _, _ := k.feed(&c, 1, 5e6, false) // the path dropped
+	if r, _ := c.hostRate(); r != 5e6 || rate != 100e6 {
+		t.Fatalf("a drop to 5 MB/s: C3's rate %v (want 5e6), the cap %d (want 1.25 × 80 MB/s, the largest of 2 s)", r, rate)
+	}
+}
+
 // fakeCapSys is a link socket for C4-lite's runner: its TCP_INFO, and the
 // caps set on it.
 type fakeCapSys struct {
@@ -213,7 +239,7 @@ func TestSendCapMinWithPacenet(t *testing.T) {
 	}
 	// the runner: the net's hand-off sets the lesser at once
 	sys := &fakeCapSys{ok: true, st: tcpStat{dlvOK: true, deliveryRate: 80e6, bytesAcked: 1 << 30, segsOut: 1 << 20, rtt: 50000}}
-	l := newSendCapLink(sys)
+	l := newSendCapLink(sys, nil)
 	for i := 1; i <= 5; i++ {
 		sys.st.bytesAcked += 8e6
 		sys.st.segsOut += 6000
@@ -245,7 +271,7 @@ func TestSendCapNoDeliveryRate(t *testing.T) {
 	sendcapNoDlv.Store(false)
 	for range 2 {
 		sys := &fakeCapSys{ok: true, st: tcpStat{bytesAcked: 1 << 30, segsOut: 1 << 20}}
-		l := newSendCapLink(sys)
+		l := newSendCapLink(sys, nil)
 		for i := 1; i <= 30; i++ {
 			sys.st.bytesAcked += 8e6
 			sys.st.segsOut += 6000
@@ -264,7 +290,7 @@ func TestSendCapNoDeliveryRate(t *testing.T) {
 // TestSendCapStatusLine: the document's line (§3.4).
 func TestSendCapStatusLine(t *testing.T) {
 	sys := &fakeCapSys{ok: true, st: tcpStat{dlvOK: true, deliveryRate: 10e6, bytesAcked: 1 << 30, segsOut: 1 << 20}}
-	l := newSendCapLink(sys)
+	l := newSendCapLink(sys, nil)
 	for i := 1; i <= 10; i++ {
 		sys.st.appLimited = i <= 5
 		sys.st.bytesAcked += 1e6
