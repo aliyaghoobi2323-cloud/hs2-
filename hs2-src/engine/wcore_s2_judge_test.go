@@ -263,3 +263,24 @@ func TestWcoreS2FloorQueueModel(t *testing.T) {
 		}
 	}
 }
+
+// TestWcoreS2LongStartupModel (judge p3): past wcLongRTT one record of the
+// exit with a queue past wcDqMin (5 ms) ended STARTUP, and a record is a
+// snapshot: the rig's 1000/500 ended at 2 MiB on one of 6.4 ms. On the
+// model's 300/500 behind 200 ms the core reached 53 to 61% of N4's gain in
+// seeds 1 to 4; with STARTUP ending only on a queue past what the windows
+// without the core left by Δq (or on resends), 78 to 86%.
+func TestWcoreS2LongStartupModel(t *testing.T) {
+	for seed := uint64(1); seed <= 4; seed++ {
+		c := wmPath(300, wmMS(500), wmMS(200))
+		c.seed = seed
+		b, n, k := wmRun(c.with(wmBase)), wmRun(c.with(wmN4)), wmRun(c.with(wmCore))
+		share := (k.mbit - b.mbit) / (n.mbit - b.mbit)
+		msg := fmt.Sprintf("300/500 q200 s%d: base %.1f, N4 %.1f, core %.1f Mbit (%.0f%% of N4's gain), resent %.2f%%", seed, b.mbit, n.mbit, k.mbit, 100*share, 100*k.resend)
+		if share < 0.7 || k.resend > b.resend+0.005 {
+			t.Error(msg)
+		} else {
+			t.Log(msg)
+		}
+	}
+}

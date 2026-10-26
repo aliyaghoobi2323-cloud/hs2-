@@ -123,6 +123,9 @@ type wcore struct {
 	fullAt    time.Time
 	fullN     int
 	cleanRecs int // the exit's latest records in a row that showed no queue and no resends
+	// qOffSnd: the largest q_snd of the exit's latest records as the core
+	// left OFF (wcLongRTT: STARTUP's knee is a queue past it by Δq)
+	qOffSnd time.Duration
 	// floorQN: HOLD's evaluations in a row at the floor behind a queue that
 	// stands past qTarget + Δq (floorQueued): from wcFloorQN no probe starts
 	floorQN int
@@ -3156,6 +3159,7 @@ func (c *wcore) off(in wcIn, m wcMeas, ev *[]wcEvent) {
 	c.bGood = 0
 	c.state = wcStartup
 	c.startOff = true
+	c.qOffSnd = m.qSnd3
 	c.chgAt = in.now
 	if !c.policed(in.now) {
 		c.backoff = 0
@@ -3357,7 +3361,20 @@ func (c *wcore) startup(in wcIn, m wcMeas, ev *[]wcEvent) {
 			// where it is and the interval counts for nothing
 			return
 		}
-		// the record shows a queue or resends: the knee
+		if m.snd == 0 && m.qSndOK && m.qSnd <= c.qOffSnd+c.dq() {
+			// a queue within Δq of what the windows without the core left,
+			// and no resends: B stays where it is and the interval counts
+			// for nothing. A record is a snapshot of the queue, and one of
+			// 6.4 ms ended the rig's 1000/500 STARTUP at 2 MiB at 24.5 s, after
+			// which the download ran at ~22 Mbit/s to the end (151 and 157
+			// Mbit/s in its two other runs; judge, p3). Two such records in a
+			// row ending it instead took the model's 300/500 behind 200 ms to
+			// 53% of N4's gain over 6 seeds, this 74% (47% before), with no
+			// run of the long round trips' sweep drained or past base + 3
+			// points either way
+			return
+		}
+		// the record shows a queue past that, or resends: the knee
 		c.endStartup(in, m, ev, qUp, false)
 		return
 	}

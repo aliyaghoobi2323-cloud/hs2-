@@ -342,7 +342,8 @@ func TestWcoreFixLongRTTBlindOff(t *testing.T) {
 // Item 1: past wcLongRTT the edge grows B (a STARTUP step, a probe) only on
 // a fresh record of the exit that shows no queue (q_snd up to wcDqMin) and
 // no new resends; an interval with no record waits, one whose record shows
-// either ends STARTUP.
+// resends ends STARTUP, and one whose record shows a queue ends it only past
+// the queue OFF left by Δq (judge, p3): under that, B stays where it is.
 func TestWcoreFixLongRTTGrowsOnRecord(t *testing.T) {
 	rec := func(m *wcMeas, q time.Duration, snd float64) {
 		m.sndOK, m.snd, m.sndSegs, m.sndAt = true, snd, 20000, wtT0
@@ -356,7 +357,8 @@ func TestWcoreFixLongRTTGrowsOnRecord(t *testing.T) {
 	}{
 		{"no record in the interval: wait", func(m *wcMeas) {}, wcStartup, false},
 		{"a clean record: a step", func(m *wcMeas) { rec(m, 2*time.Millisecond, 0) }, wcStartup, true},
-		{"a record with a queue: the knee", func(m *wcMeas) { rec(m, 20*time.Millisecond, 0) }, wcHold, false},
+		{"a record with a queue: B stays", func(m *wcMeas) { rec(m, 20*time.Millisecond, 0) }, wcStartup, false},
+		{"... past the queue OFF left by Δq (60 ms): the knee", func(m *wcMeas) { rec(m, 70*time.Millisecond, 0) }, wcHold, false},
 		{"a record with resends: the knee", func(m *wcMeas) { rec(m, 2*time.Millisecond, 0.0002) }, wcHold, false},
 	} {
 		c, in := wtStartup()
