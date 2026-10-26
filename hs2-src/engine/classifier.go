@@ -20,10 +20,14 @@ import (
 //   - unknown from its opening to its first tick; C2 queues the first
 //     classNewBytes it sends meanwhile as light (fq_codel's credit for a new
 //     sparse flow), the rest as bulk (queueClass);
-//   - bulk otherwise, and once bulk it stays bulk until 2 s of silence: a
-//     flow that went quiet after a burst waits at most behind one bulk frame
-//     meanwhile (C2), while one that pauses between chunks of a download
-//     does not get its next chunk into the latency lane;
+//   - bulk otherwise, and once bulk it stays bulk until it is quiet, less
+//     than classQuietBytes over 2 s (the "2 s of silence" of §3.1, with
+//     room for an app's keepalives and acks: held to no byte at all, 54% of
+//     the bulk verdicts on 20 minutes of the edge's traffic were flows that
+//     only trickled; decision T1): a flow that went quiet after a burst
+//     waits at most behind one bulk frame meanwhile (C2), while one that
+//     pauses between chunks of a download does not get its next chunk into
+//     the latency lane;
 //   - confirmed light after two light evaluations in a row (≥ 200 ms): only
 //     those are duplicated on a second link (C11, R2), never unknown ones.
 //
@@ -76,6 +80,11 @@ const (
 	// classNewBytes: a flow not judged yet is queued as light for the first
 	// this many bytes it sends.
 	classNewBytes = 32 << 10
+	// classQuietBytes: a bulk flow is light again once it moved less than
+	// this over 2 s (the pacing net's quiet socket, wcNetQuietBytes; the
+	// lead's decision T1, docs/architecture/wip/r1/decisions.fa.md): an
+	// app's keepalives and acks never leave 2 s without a byte.
+	classQuietBytes = 8 << 10
 	// classV6Prefix: an IPv6 user is its address's /64 unless set otherwise
 	// (a subscriber's privacy addresses rotate within it).
 	classV6Prefix = 64
@@ -210,8 +219,8 @@ func (c *flowClassifier) Tick(f *flowStats, now time.Duration) (classTx, classFl
 // judge is one direction's verdict over its last 200 ms (b200) and 2 s.
 func (d *classDir) judge(b200, b2s uint32) {
 	switch {
-	case d.cls == ClassBulk && b2s != 0:
-		// bulk until 2 s of silence
+	case d.cls == ClassBulk && b2s >= classQuietBytes:
+		// bulk until quiet: less than 8 KiB over 2 s
 	case b2s < classLightSpan && b200 < classLightBurst:
 		d.cls = ClassLight
 	default:

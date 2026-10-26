@@ -57,8 +57,9 @@ func clsRun(dur time.Duration, phase int, bytes func(ms int) (tx, rx int)) (tick
 
 // clsOracle is the rule in continuous time: each ms, over exact windows of
 // the last 200 ms and 2 s (one direction), unknown or light → light while
-// the windows are light, bulk otherwise, and bulk → light only after 2 s of
-// silence. verdicts[ms] is the class at the end of that ms.
+// the windows are light, bulk otherwise, and bulk → light only once quiet
+// (less than classQuietBytes over 2 s). verdicts[ms] is the class at the
+// end of that ms.
 func clsOracle(n int, x func(ms int) int) []Class {
 	out := make([]Class, n)
 	cls := ClassUnknown
@@ -75,7 +76,7 @@ func clsOracle(n int, x func(ms int) int) []Class {
 			b2s -= v[ms-2000]
 		}
 		switch {
-		case cls == ClassBulk && b2s != 0:
+		case cls == ClassBulk && b2s >= classQuietBytes:
 		case b2s < classLightSpan && b200 < classLightBurst:
 			cls = ClassLight
 		default:
@@ -192,7 +193,8 @@ func TestClassifierHTTP(t *testing.T) {
 }
 
 // TestClassifierBurst20KiB: 20 KiB within 200 ms makes a quiet flow bulk,
-// and it stays bulk until 2 s of silence, then is light within a tick.
+// and it stays bulk until it is quiet (less than 8 KiB over the last 2 s,
+// at most 2 s after its last byte), then is light within a tick.
 //
 // The rule is judged each 100 ms over the last 200 ms, and the hot path
 // counts bytes only (no clock), so a burst is seen by where the ticks fall:
@@ -221,6 +223,22 @@ func TestClassifierBurst20KiB(t *testing.T) {
 		}, start + 199, false},
 	}
 	for _, sh := range shapes {
+		// quiet: the first ms from its last byte whose 2 s hold less than
+		// 8 KiB of it (2 s of silence at the latest)
+		quiet := sh.last
+		for ; ; quiet++ {
+			n := 0
+			for m := quiet - 1999; m <= quiet; m++ {
+				n += sh.bytes(m)
+			}
+			if n < classQuietBytes {
+				break
+			}
+		}
+		if quiet > sh.last+2000 {
+			t.Fatalf("%s: quiet at %d ms, past 2 s of silence", sh.name, quiet)
+		}
+		q := time.Duration(quiet) * time.Millisecond
 		caught := 0
 		for phase := 0; phase < 100; phase++ {
 			ticks, _ := clsRun(6*time.Second, phase, func(ms int) (int, int) { return sh.bytes(ms), 0 })
@@ -250,18 +268,61 @@ func TestClassifierBurst20KiB(t *testing.T) {
 			if bulkAt < 0 || bulkAt > time.Duration(sh.last)*time.Millisecond+classTick {
 				t.Fatalf("%s phase %d: bulk at %v, the burst ended at %d ms", sh.name, phase, bulkAt, sh.last)
 			}
-			silent := time.Duration(sh.last+2000) * time.Millisecond // 2 s after its last byte
 			for _, k := range ticks {
 				switch {
 				case k.at < bulkAt:
-				case k.at < silent && k.tx != ClassBulk:
-					t.Fatalf("%s phase %d: %v at %v, before 2 s of silence", sh.name, phase, k.tx, k.at)
-				case k.at >= silent+classTick && k.tx != ClassLight:
-					t.Fatalf("%s phase %d: still %v at %v, past 2 s of silence and a tick", sh.name, phase, k.tx, k.at)
+				case k.at < q && k.tx != ClassBulk:
+					t.Fatalf("%s phase %d: %v at %v, before it was quiet (%v)", sh.name, phase, k.tx, k.at, q)
+				case k.at >= q+classTick && k.tx != ClassLight:
+					t.Fatalf("%s phase %d: still %v at %v, quiet since %v", sh.name, phase, k.tx, k.at, q)
 				}
 			}
 		}
 		t.Logf("%s: caught at %d of 100 phases", sh.name, caught)
+	}
+}
+
+// TestClassifierTrickleIsQuiet: a flow that only trickles after a burst
+// (an app's keepalives and acks) goes back to light once its last 2 s hold
+// less than 8 KiB, never 2 s without a byte (decisions, T1); one that
+// trickles past 8 KiB over 2 s stays bulk.
+func TestClassifierTrickleIsQuiet(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		every int // ms between its writes after the burst
+		size  int
+		light bool
+	}{
+		{"500 B each 200 ms (5 KB/2 s)", 200, 500, true},
+		{"100 B each 20 ms (10 KB/2 s)", 20, 100, false},
+		{"1 KiB each 200 ms (10 KiB/2 s)", 200, 1 << 10, false},
+	} {
+		for _, phase := range []int{0, 33, 77} {
+			x := func(ms int) int {
+				switch {
+				case ms < 500:
+					return 0
+				case ms < 1000: // 512 KiB in 0.5 s
+					return 1 << 10
+				case ms%c.every == 0:
+					return c.size
+				}
+				return 0
+			}
+			ticks, _ := clsRun(8*time.Second, phase, func(ms int) (int, int) { return x(ms), 0 })
+			oracle := clsOracle(8000, x)
+			clsLagOK(t, fmt.Sprintf("%s phase %d", c.name, phase), ticks, oracle)
+			// the burst's 512 KiB leave the 2 s window at 3 s; a tick on
+			got := ticks[len(ticks)-1].tx
+			for _, k := range ticks {
+				if k.at >= 3100*time.Millisecond && k.tx != got {
+					t.Fatalf("%s phase %d: %v at %v, %v at the end", c.name, phase, k.tx, k.at, got)
+				}
+			}
+			if (got == ClassLight) != c.light {
+				t.Fatalf("%s phase %d: %v after the burst left the window", c.name, phase, got)
+			}
+		}
 	}
 }
 
@@ -593,7 +654,7 @@ func clsRef(x []int64) (cls []Class, lightNow []bool) {
 		}
 		lightNow[b] = b2s < classLightSpan && b200 < classLightBurst
 		switch {
-		case c == ClassBulk && b2s != 0:
+		case c == ClassBulk && b2s >= classQuietBytes:
 		case lightNow[b]:
 			c = ClassLight
 		default:
@@ -613,7 +674,7 @@ func clsRef(x []int64) (cls []Class, lightNow []bool) {
 //   - no bulk episode of a flow puts more than 32 KiB and one tick of its
 //     bytes in the latency lane;
 //   - it reports how much bulk traffic went in the latency lane, and how
-//     often the rule's hold (bulk until 2 s of silence) kept light traffic
+//     often the rule's hold (bulk until quiet: under 8 KiB over 2 s) kept light traffic
 //     in the bulk lane.
 func TestClassifierReplay(t *testing.T) {
 	if os.Getenv("HS2_C1_SYNTH") == "1" {
@@ -726,7 +787,7 @@ func TestClassifierReplay(t *testing.T) {
 	t.Logf("%s: %d flows, %d ticks (both ends)", filepath.Base(path), nFlows, ticks)
 	t.Logf("bulk traffic in the latency lane: %.2f%% of bulk bytes (%d of %d B), %.2f%% of the lane's bytes; most of one episode %d B",
 		share(bulkLight, bulkBytes), bulkLight, bulkBytes, share(bulkLight, laneBytes), worst)
-	t.Logf("held bulk (light windows, bulk until 2 s of silence): %.2f%% of bulk ticks (%d of %d)",
+	t.Logf("held bulk (light windows, bulk until under 8 KiB over 2 s): %.2f%% of bulk ticks (%d of %d)",
 		share(int64(heldTicks), int64(bulkTicks)), heldTicks, bulkTicks)
 }
 
