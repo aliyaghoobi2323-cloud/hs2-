@@ -62,9 +62,80 @@ func sameHostPort(port int) string { return net.JoinHostPort("127.0.0.1", strcon
 // ParsePortMap reads a port_map value: comma-separated entries "P" (the same
 // port on 127.0.0.1) or "P=host:port". It returns the table and, for a bad
 // entry, an error naming it. A port listed twice is an error too: the second
-// would silently win.
+// would silently win. An entry may carry the flag "/proxy" (ParsePortFlags):
+// "P/proxy" alone is a flag and no target.
 func ParsePortMap(s string) (map[int]string, error) {
+	es, err := parsePortEntries(s)
+	if err != nil {
+		return nil, err
+	}
 	out := map[int]string{}
+	for p, e := range es {
+		if e.target != "" {
+			out[p] = e.target
+		}
+	}
+	return out, nil
+}
+
+// ParsePortFlags returns the ports of a port_map value marked "/proxy",
+// ascending: on the Iran server, user ports behind a proxy that sends a PROXY
+// protocol header (proxyproto.go).
+func ParsePortFlags(s string) (proxy []int, err error) {
+	es, err := parsePortEntries(s)
+	if err != nil {
+		return nil, err
+	}
+	for p, e := range es {
+		if e.proxy {
+			proxy = append(proxy, p)
+		}
+	}
+	sort.Ints(proxy)
+	return proxy, nil
+}
+
+// CanonicalPortMap rewrites a port_map value in the form FormatPortMap
+// writes, flags kept: an entry with the flag and a target always names the
+// target ("P/proxy" alone is the flag only).
+func CanonicalPortMap(s string) (string, error) {
+	es, err := parsePortEntries(s)
+	if err != nil {
+		return "", err
+	}
+	ports := make([]int, 0, len(es))
+	for p := range es {
+		ports = append(ports, p)
+	}
+	sort.Ints(ports)
+	var b strings.Builder
+	for i, p := range ports {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		e := es[p]
+		b.WriteString(strconv.Itoa(p))
+		if e.proxy {
+			b.WriteString("/proxy")
+		}
+		if e.target != "" && (e.proxy || e.target != sameHostPort(p)) {
+			b.WriteString("=" + e.target)
+		}
+	}
+	return b.String(), nil
+}
+
+// portEntry is one port_map entry: its target ("": a flag-only entry) and
+// whether it has the proxy flag.
+type portEntry struct {
+	target string
+	proxy  bool
+}
+
+// parsePortEntries reads a port_map value: entries "P", "P=host:port",
+// "P/proxy" or "P/proxy=host:port".
+func parsePortEntries(s string) (map[int]portEntry, error) {
+	out := map[int]portEntry{}
 	for _, raw := range strings.Split(s, ",") {
 		e := strings.TrimSpace(raw)
 		if e == "" {
@@ -72,19 +143,29 @@ func ParsePortMap(s string) (map[int]string, error) {
 		}
 		ps, target, hasTarget := strings.Cut(e, "=")
 		ps, target = strings.TrimSpace(ps), strings.TrimSpace(target)
+		ps, flag, hasFlag := strings.Cut(ps, "/")
+		if hasFlag && strings.TrimSpace(flag) != "proxy" {
+			return nil, fmt.Errorf("%q: unknown flag %q (the one flag is \"proxy\")", e, flag)
+		}
+		ps = strings.TrimSpace(ps)
 		p, err := strconv.Atoi(ps)
 		if err != nil || p < 1 || p > 65535 || ps != strconv.Itoa(p) {
 			return nil, fmt.Errorf("%q: %q is not a port (1-65535)", e, ps)
 		}
-		if !hasTarget {
+		switch {
+		case !hasTarget && !hasFlag:
 			target = sameHostPort(p)
-		} else if err := checkTarget(target); err != nil {
-			return nil, fmt.Errorf("%q: %v", e, err)
+		case !hasTarget:
+			target = "" // the flag alone
+		default:
+			if err := checkTarget(target); err != nil {
+				return nil, fmt.Errorf("%q: %v", e, err)
+			}
 		}
 		if _, dup := out[p]; dup {
 			return nil, fmt.Errorf("port %d is listed twice", p)
 		}
-		out[p] = target
+		out[p] = portEntry{target: target, proxy: hasFlag}
 	}
 	return out, nil
 }

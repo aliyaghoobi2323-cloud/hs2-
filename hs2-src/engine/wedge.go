@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 	"io"
-	"net"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -314,8 +313,8 @@ func relayStream(local, st io.ReadWriteCloser, g *sessGuard) {
 			// A reset, not a FIN: the app took nothing for seconds, and a
 			// FIN would leave its unread data queued in the kernel for
 			// minutes; a reset frees it at once.
-			if tc, ok := local.(*net.TCPConn); ok {
-				tc.SetLinger(0)
+			if tc, ok := local.(interface{ SetLinger(int) error }); ok {
+				tc.SetLinger(0) // a TCP socket, or one behind a PROXY header
 			}
 			local.Close()
 		}}

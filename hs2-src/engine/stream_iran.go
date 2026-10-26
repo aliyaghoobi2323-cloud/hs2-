@@ -48,6 +48,12 @@ type IranConfig struct {
 	// OnStart, if set, is called once with a function that returns a live
 	// snapshot of the link pattern, so the caller can publish it for monitoring.
 	OnStart func(StatsFn)
+
+	// ProxyPorts: the user ports (of Ports) behind a proxy that sends a PROXY
+	// protocol header (proxyproto.go), believed only from ProxyFrom (nil:
+	// loopback). Their users are told apart by the address in the header.
+	ProxyPorts []int
+	ProxyFrom  []netip.Prefix
 }
 
 // StatsFn returns a live snapshot of the link pattern.
@@ -139,9 +145,11 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		go acceptReverseLinks(ctx, cfg.RevListener, cfg.RevServer, lm, logf)
 	}
 
+	var refusals proxyRefusals // what the proxy ports close, logged once a minute each
 	for _, p := range cfg.Ports {
 		bind := net.JoinHostPort(cfg.ListenIP, p)
 		port, _ := strconv.Atoi(p) // the tag the exit routes by (0: none)
+		proxied := port > 0 && slices.Contains(cfg.ProxyPorts, port)
 		ln, err := ListenReuse(bind)
 		if err != nil {
 			return err
@@ -160,7 +168,11 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 					continue
 				}
 				bo.ok()
-				go serveUserTCP(ctx, c, lm, port)
+				if proxied {
+					go serveProxiedTCP(ctx, c, lm, port, cfg.ProxyFrom, &refusals, logf)
+				} else {
+					go serveUserTCP(ctx, c, lm, port)
+				}
 			}
 		}()
 		msg := "tcp"
@@ -172,6 +184,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 			go func() { <-ctx.Done(); pc.Close() }()
 			go serveUserUDP(ctx, pc, lm, port, logf)
 			msg = "tcp+udp"
+		}
+		if proxied {
+			msg += "; tcp behind a proxy: a PROXY protocol header first"
 		}
 		logf("user port %s open (%s), carried over the link pool", p, msg)
 	}
@@ -470,6 +485,20 @@ func (t *openTry) abandon() {
 		go t.st.Close()
 	}
 	t.release()
+}
+
+// serveProxiedTCP is serveUserTCP on a proxy port: the connection is the
+// proxy's, and the user is the one its PROXY header names (proxyproto.go).
+// Without a valid header, or from outside allow, it is closed.
+func serveProxiedTCP(ctx context.Context, c net.Conn, lm *LinkManager, port int, allow []netip.Prefix,
+	refusals *proxyRefusals, logf func(string, ...any)) {
+	user, ok, why := acceptProxied(c, allow)
+	if !ok {
+		refusals.note(port, why, logf)
+		c.Close()
+		return
+	}
+	serveUserTCP(ctx, user, lm, port)
 }
 
 func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {
