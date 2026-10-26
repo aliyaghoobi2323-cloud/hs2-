@@ -39,11 +39,15 @@ import (
 //     behaviour (the fixed mark of tlscarrier.NotSentLowat and sendGate),
 //     with one log line for the process.
 //
-// The rate comes from the caller: the largest delivery rate of the last 2 s
-// that C4-lite reads (sendcap.go), the link meter's written rate until its
-// first sample that is not app-limited (R3: C4's). Before the first, the
-// gate is on at its floor (an unknown rate is low; the first reading
-// corrects it within a tick).
+// The rate comes from C4-lite's reading of the same socket each hostqTick
+// (sendCapLink.guard, sendcap.go): the least of the largest delivery rate
+// of the last 2 s and the latest sample that was not app-limited, so a
+// drop shows at its first sample, where the pacing cap keeps the largest
+// of 2 s (decision T2; with the 2 s max alone, a tenfold drop held the old
+// mark and cap for 2 s, past the 20 ms bound); the link meter's written
+// rate until the first sample not app-limited (R3: C4's). Before the first
+// update the gate is on at its floor (an unknown rate is low; the first
+// reading corrects it).
 
 // TuneHQG 0 (cmd/hs2 applyTuning: HS2_TUNE_HQG=0) keeps the fixed
 // low-water mark and sendGate instead of C3.

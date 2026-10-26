@@ -91,6 +91,9 @@ type sendCap struct {
 	pn    uint64 // the pacing net's (0: none)
 	set   uint64 // the cap in force (0: none)
 	quiet bool   // the latest reading found the socket quiet
+	// full: the delivery rate of the latest sample that was not app-limited
+	// (0: none yet), for C3 (hostRate)
+	full float64
 	// tallies (the status line)
 	appLim, lifts uint64
 }
@@ -102,6 +105,8 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	c.n++
 	if s.AppLimited {
 		c.appLim++
+	} else if s.Delivery > 0 {
+		c.full = s.Delivery
 	}
 	pt := capPt{at: s.Now, acked: s.Acked, wrote: s.Written, segs: s.Segs}
 	c.last = pt
@@ -152,13 +157,36 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 		c.on = true
 	}
 	if c.on {
-		mx := 0.0
-		for i := range c.dN {
-			mx = math.Max(mx, c.dlv[(c.dHead+i)%capDlvN].r)
-		}
-		c.own = uint64(math.Max(wcNetKOf()*mx, wcPaceFloor))
+		c.own = uint64(math.Max(wcNetKOf()*c.maxDlv(), wcPaceFloor))
 	}
 	return c.decide()
+}
+
+// maxDlv is the largest delivery rate of the last capSpan.
+func (c *sendCap) maxDlv() float64 {
+	mx := 0.0
+	for i := range c.dN {
+		mx = math.Max(mx, c.dlv[(c.dHead+i)%capDlvN].r)
+	}
+	return mx
+}
+
+// hostRate is C3's rate from these readings (hostq.go; decision T2): the
+// least of the largest delivery rate of the last capSpan and the latest
+// sample that was not app-limited. A drop shows at its first sample (the
+// mark and the gate follow at the next hostqTick), where the pacing cap
+// keeps the largest of the span, not to collapse on a passing dip; a
+// higher app-limited sample Linux kept raises neither. False before any
+// sample that was not app-limited (C3 takes the link meter's written rate
+// then).
+func (c *sendCap) hostRate() (float64, bool) {
+	if c.full <= 0 {
+		return 0, false
+	}
+	if mx := c.maxDlv(); mx > 0 {
+		return math.Min(mx, c.full), true
+	}
+	return c.full, true
 }
 
 // SetPacenetCap takes the pacing net's cap (bytes/s; 0: none): the lesser
@@ -209,18 +237,28 @@ var sendcapNoDlv atomic.Bool
 
 // sendCapLink is one link socket's C4-lite with its runner's state: step
 // is the runner's wake (each 100 ms), SetPacenetCap the pacing net's
-// hand-off (the exit's runner); the lock keeps the two to one cap.
+// hand-off (the exit's runner); the lock keeps the two to one cap. The
+// same reading moves the link's host-queue guard (C3) each hostqTick.
 type sendCapLink struct {
 	mu   sync.Mutex
 	sys  capSys
 	core sendCap
+	// hq: the link's C3 (nil: none); hqAt, hqWrote: its latest update and
+	// what the link meter had written then (hqSet: one was made)
+	hq      *hostQ
+	hqAt    time.Duration
+	hqWrote uint64
+	hqSet   bool
 }
 
-func newSendCapLink(sys capSys) *sendCapLink { return &sendCapLink{sys: sys} }
+// newSendCapLink: the C4-lite of a link socket (sys), and the C3 its
+// readings move (hq; nil: none).
+func newSendCapLink(sys capSys, hq *hostQ) *sendCapLink { return &sendCapLink{sys: sys, hq: hq} }
 
 // step reads the socket when the core has it due (written: what its link
-// meter counted written to it) and sets or lifts its cap. A kernel without
-// tcpi_delivery_rate gets none of C4-lite's (one line for the process).
+// meter counted written to it), sets or lifts its cap, and moves C3. A
+// kernel without tcpi_delivery_rate gets none of C4-lite's (one line for
+// the process), and C3 the link meter's written rate.
 func (l *sendCapLink) step(now time.Duration, written uint64) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -231,14 +269,33 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 	if !ok {
 		return
 	}
-	if !ts.dlvOK {
-		if sendcapNoDlv.CompareAndSwap(false, true) {
-			coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
-		}
+	if ts.dlvOK {
+		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: ts.appLimited,
+			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt))}))
+	} else if sendcapNoDlv.CompareAndSwap(false, true) {
+		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
+	}
+	l.guard(now, written, ts)
+}
+
+// guard moves C3 each hostqTick: its rate is hostRate, or, until the first
+// sample not app-limited (or on a kernel without the delivery rate), what
+// the link meter had written to the socket since the update before (0, an
+// unknown rate, at the first: the gate at its floor); its segment the
+// socket's.
+func (l *sendCapLink) guard(now time.Duration, written uint64, ts tcpStat) {
+	if l.hq == nil || l.hqSet && now-l.hqAt < hostqTick {
 		return
 	}
-	l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: ts.appLimited,
-		Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt))}))
+	rate, ok := l.core.hostRate()
+	if !ok || !ts.dlvOK {
+		rate = 0
+		if l.hqSet && now > l.hqAt {
+			rate = float64(written-l.hqWrote) / (now - l.hqAt).Seconds()
+		}
+	}
+	l.hq.Update(rate, int(ts.sndMSS))
+	l.hqAt, l.hqWrote, l.hqSet = now, written, true
 }
 
 // SetPacenetCap takes the pacing net's cap (0: lifted) and sets the lesser

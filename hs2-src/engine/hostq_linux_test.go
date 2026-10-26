@@ -7,7 +7,89 @@ import (
 	"net"
 	"testing"
 	"time"
+	"unsafe"
+
+	"golang.org/x/sys/unix"
 )
+
+// TestLowatAdaptsLinux: TestLowatAdapts on a real link socket: its
+// TCP_INFO (the delivery rate, bytes acknowledged and segments made up by
+// tcpInfoRead, as a busy socket's: 100 then 10 Mbit/s, no sample
+// app-limited), C4-lite's reading of it, C3, and the socket's own
+// TCP_NOTSENT_LOWAT read back with getsockopt: the new mark is on the
+// socket within 600 ms of the drop.
+func TestLowatAdaptsLinux(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	acc := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			acc <- c
+		}
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	srv := <-acc
+	defer srv.Close()
+	tc := c.(*net.TCPConn)
+	var rate, acked uint64
+	var segs uint32
+	fake := func(fd int) (*unix.TCPInfo, int, error) {
+		info, n, err := getsockoptTCPInfo(fd)
+		if err != nil {
+			return info, n, err
+		}
+		info.Delivery_rate, info.Bytes_acked, info.Data_segs_out, info.Snd_mss = rate, acked, segs, 1448
+		(*[8]byte)(unsafe.Pointer(info))[7] &^= 1 // not app-limited
+		return info, n, nil
+	}
+	cur := tcpInfoRead.Load()
+	tcpInfoRead.Store(&fake)
+	defer tcpInfoRead.Store(cur)
+	raw, err := tc.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mark := func() int {
+		v := 0
+		raw.Control(func(fd uintptr) { v, _ = unix.GetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_NOTSENT_LOWAT) })
+		return v
+	}
+	h := newHostQ(tc, newHostSys(tc))
+	l := newSendCapLink(newCapSys(tc), h)
+	var g hostGate
+	g.Update(100*mbit, 1448)
+	_, _, want := g.Update(10*mbit, 1448)
+	drop, at := 2450*time.Millisecond, time.Duration(-1)
+	written := uint64(0)
+	for now := 100 * time.Millisecond; now <= 4*time.Second; now += 100 * time.Millisecond {
+		r := 100 * mbit
+		if now >= drop {
+			r = 10 * mbit
+		}
+		rate = uint64(r)
+		acked += uint64(r / 10)
+		segs += uint32(r/10/1448) + 1
+		written += uint64(r / 10)
+		l.step(now, written)
+		if now < drop && now > time.Second && mark() != Lowat(100*mbit, 1448) {
+			t.Fatalf("at %v (100 Mbit/s) the socket's mark is %d, want %d", now, mark(), Lowat(100*mbit, 1448))
+		}
+		if now >= drop && at < 0 && mark() == want {
+			at = now - drop
+		}
+	}
+	t.Logf("the socket's mark %d → %d B %v after the drop", Lowat(100*mbit, 1448), want, at)
+	if at < 0 || at > 600*time.Millisecond {
+		t.Fatalf("the socket's mark was %d after the drop (want %d within 600 ms; at %v)", mark(), want, at)
+	}
+}
 
 // TestHostQLinuxSocket: the guard on a real loopback socket whose reader
 // takes 400 KB/s: the gate (2 Mbit/s: cap 2896 B) keeps the socket's unsent

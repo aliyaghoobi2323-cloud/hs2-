@@ -86,7 +86,7 @@ func TestSendCapLinuxTCPInfo(t *testing.T) {
 	coreLog.Store(&f)
 	defer coreLog.Store(nil)
 	sendcapNoDlv.Store(false)
-	l := newSendCapLink(newCapSys(tc))
+	l := newSendCapLink(newCapSys(tc), nil)
 	for i := 1; i <= 5; i++ {
 		c.Write(buf)
 		l.step(time.Duration(i)*100*time.Millisecond, uint64(i)*uint64(len(buf)))

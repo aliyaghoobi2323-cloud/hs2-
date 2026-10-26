@@ -237,34 +237,71 @@ func TestHostWaitBound(t *testing.T) {
 	}
 }
 
-// TestLowatAdapts: the rate drops tenfold (100 → 10 Mbit/s: the gate comes
-// on; 1000 → 100: the mark only): the mark and the cap follow within a
-// 500 ms update.
+// adaptRun runs a link's runner end to end on synthetic TCP_INFO readings
+// each 100 ms (a busy socket delivering from Mbit/s, to Mbit/s from drop
+// on, no sample app-limited): C4-lite's reading (sendCapLink.step) moves
+// C3 each hostqTick, and C3 sets the socket's mark (s). It returns the
+// first time from drop that the mark set, the gate and the cap were the
+// new rate's, and C4-lite's cap 1.9 s and 2.2 s after the drop.
+func adaptRun(s *skbSock, from, to float64, drop time.Duration) (at time.Duration, capHeld, capAfter uint64) {
+	sys := &fakeCapSys{ok: true, st: tcpStat{dlvOK: true, sndMSS: 1448, rtt: 50000}}
+	h := newHostQ(s, s)
+	l := newSendCapLink(sys, h)
+	var g hostGate
+	g.Update(from*mbit, 1448)
+	on, cp, lw := g.Update(to*mbit, 1448)
+	at = -1
+	written := uint64(0)
+	for now := 100 * time.Millisecond; now <= drop+3*time.Second; now += 100 * time.Millisecond {
+		r := from * mbit
+		if now >= drop {
+			r = to * mbit
+		}
+		s.now = now
+		sys.st.deliveryRate = uint64(r)
+		sys.st.bytesAcked += uint64(r / 10)
+		sys.st.segsOut += uint32(r/10/1448) + 1
+		written += uint64(r / 10)
+		l.step(now, written)
+		if now >= drop && at < 0 && len(s.sets) > 0 && s.sets[len(s.sets)-1] == lw && h.on.Load() == on && int(h.cap.Load()) == cp {
+			at = s.setAt[len(s.sets)-1] - drop
+		}
+		switch d := now - drop; {
+		case d >= 1900*time.Millisecond && capHeld == 0:
+			capHeld = l.core.set
+		case d >= 2200*time.Millisecond && capAfter == 0:
+			capAfter = l.core.set
+		}
+	}
+	return at, capHeld, capAfter
+}
+
+// TestLowatAdapts: end to end (a TCP_INFO reading to the socket's
+// setsockopt), the link's rate drops tenfold (100 → 10 Mbit/s: the gate
+// comes on; 1000 → 100: the mark only): C3 takes the drop at its first
+// sample, min(the largest of 2 s, the latest sample not app-limited), and
+// the mark, the gate and the cap follow within 600 ms whatever the drop's
+// phase against the 100 ms readings and the 500 ms updates (decision T2),
+// while C4-lite's cap keeps the largest of 2 s and comes down after them.
 func TestLowatAdapts(t *testing.T) {
 	for _, c := range []struct{ from, to float64 }{{100, 10}, {1000, 100}} {
-		s := newSkbSock(c.from*mbit, 1448, 1)
-		h := newHostQ(s, s)
-		drop := 2300 * time.Millisecond
-		var at time.Duration = -1
-		for now := time.Duration(0); now < 5*time.Second; now += hostqTick {
-			s.now = now
-			r := c.from * mbit
-			if now >= drop {
-				r = c.to * mbit
+		worst := time.Duration(0)
+		// (C3 moves at 100 ms, then each 500 ms: 2100 and 2600 ms; the drops
+		// span that period, the worst just past an update)
+		for _, ms := range []int{2100, 2101, 2150, 2199, 2200, 2250, 2300, 2350, 2399, 2401, 2450, 2499, 2550, 2599} {
+			drop := time.Duration(ms) * time.Millisecond
+			at, held, after := adaptRun(newSkbSock(c.from*mbit, 1448, 1), c.from, c.to, drop)
+			if at < 0 || at > 600*time.Millisecond {
+				t.Fatalf("%.0f → %.0f Mbit/s at %v: the mark, gate and cap followed %v after (want ≤ 600 ms; -1: never)", c.from, c.to, drop, at)
 			}
-			h.Update(r, 1448)
-			if now >= drop && at < 0 {
-				at = now
+			worst = max(worst, at)
+			old, cur := uint64(1.25*c.from*mbit), uint64(math.Max(1.25*c.to*mbit, 1<<20))
+			if held != old || after != cur {
+				t.Fatalf("%.0f → %.0f Mbit/s at %v: C4-lite's cap %d 1.9 s on (want the old %d), %d 2.2 s on (want %d)",
+					c.from, c.to, drop, held, old, after, cur)
 			}
 		}
-		var g hostGate
-		g.Update(c.from*mbit, 1448)
-		on, cp, lw := g.Update(c.to*mbit, 1448)
-		k := len(s.sets) - 1
-		if s.sets[k] != lw || s.setAt[k] > drop+hostqTick || h.on.Load() != on || int(h.cap.Load()) != cp {
-			t.Fatalf("%.0f → %.0f Mbit/s at %v: lowat %d at %v (want %d), gate %v cap %d (want %v %d)",
-				c.from, c.to, drop, s.sets[k], s.setAt[k], lw, h.on.Load(), h.cap.Load(), on, cp)
-		}
+		t.Logf("%.0f → %.0f Mbit/s: the mark, gate and cap followed within %v (worst of 14 phases)", c.from, c.to, worst)
 	}
 }
 
