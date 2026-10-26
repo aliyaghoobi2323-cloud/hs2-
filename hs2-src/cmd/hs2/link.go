@@ -55,7 +55,7 @@ import (
 const (
 	linkScheme   = "hs2://"
 	linkSchemeV3 = "hs2v3://"
-	linkKeyNote  = "link: this link contains the tunnel key; keep it private (revoke with hs2 rekey)"
+	linkKeyNote  = "link: this link contains the tunnel key; keep it private (if it leaks, reinstall the tunnel on both servers; hs2 rekey arrives in a later release)"
 	linkUDPNote  = "link: udp is not recorded on this side; written as false, which the side that pastes this link does not use"
 )
 
@@ -622,7 +622,9 @@ func decodeConfigMap(b []byte) (map[string]any, error) {
 var (
 	reUnitName = regexp.MustCompile(`^hs2(-[a-z0-9]([a-z0-9-]{0,18}[a-z0-9])?)?$`)
 	reDomain   = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$`)
-	reExecC    = regexp.MustCompile(`(?m)^ExecStart=.* -c ([^ \n]*)`)
+	// an ExecStart that runs the hs2 binary (any path; the file is named hs2)
+	// with -c CONFIG — not another program, and not one merely named like it
+	reExecC = regexp.MustCompile(`(?m)^ExecStart=[-@+!:]*(?:\S*/)?hs2 (?:.* )?-c ([^ \n]+)`)
 )
 
 // validEndpoint: IPv4:port, [IPv6]:port, name:port — or a bare IP (the raw
@@ -669,7 +671,14 @@ func hs2UnitFiles(dir string) []string {
 	return append(out, more...)
 }
 
-// unitConfig: the config a unit file runs (ExecStart … -c PATH, install.sh tm_cfg).
+// isTunnelConfig: a config of an hs2 tunnel ("mode" dial or listen).
+func isTunnelConfig(cfg map[string]any) bool {
+	mode, _ := cfg["mode"].(string)
+	return mode == "dial" || mode == "listen"
+}
+
+// unitConfig: the config a unit file runs the hs2 binary with (ExecStart …hs2 …
+// -c PATH, install.sh tm_cfg); "" for a unit that runs something else.
 func unitConfig(unitFile string) string {
 	b, err := os.ReadFile(unitFile)
 	if err != nil {
@@ -876,37 +885,33 @@ func linkDecodeCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 
 // linkListCmd lists this server's tunnels: unit, config, side, carrier,
 // direction, whether this side makes or pastes the link, and whether the link
-// can be rebuilt from the config alone (never the link itself).
+// can be rebuilt from the config alone (never the link itself). A tunnel is a
+// unit whose ExecStart runs the hs2 binary with -c <config>, and that config
+// parses as a tunnel's; any other hs2-* unit (a monitor, a timer job) is not
+// one. A unit whose config this user cannot read is not shown, and said so.
 func linkListCmd(stdout, stderr io.Writer) int {
-	units := hs2UnitFiles(linkUnitDir)
-	if len(units) == 0 {
-		fmt.Fprintf(stderr, "link: no hs2 tunnel on this server (no hs2*.service in %s)\n", linkUnitDir)
-		return 0
-	}
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	var b strings.Builder
+	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "UNIT\tCONFIG\tSIDE\tCARRIER\tDIRECTION\tLINK\tSTATUS")
-	code := 0
-	for _, uf := range units {
+	n, hidden := 0, 0
+	for _, uf := range hs2UnitFiles(linkUnitDir) {
 		u := strings.TrimSuffix(filepath.Base(uf), ".service")
 		p := unitConfig(uf)
 		if p == "" {
-			fmt.Fprintf(tw, "%s\t?\t?\t?\t?\t?\tno config in the unit (ExecStart … -c)\n", u)
-			continue
+			continue // not the hs2 binary with -c <config>
 		}
 		raw, err := linkReadFile(p)
 		if err != nil {
-			st := "cannot read the config: " + err.Error()
 			if errors.Is(err, fs.ErrPermission) {
-				st, code = "cannot read the config (run as root)", 4
+				hidden++
 			}
-			fmt.Fprintf(tw, "%s\t%s\t?\t?\t?\t?\t%s\n", u, p, st)
 			continue
 		}
 		cfg, err := decodeConfigMap(raw)
-		if err != nil {
-			fmt.Fprintf(tw, "%s\t%s\t?\t?\t?\t?\tnot valid JSON\n", u, p)
+		if err != nil || !isTunnelConfig(cfg) {
 			continue
 		}
+		n++
 		mode, _ := cfg["mode"].(string)
 		reverse, _ := cfg["reverse"].(bool)
 		carrier, _ := cfg["carrier"].(string)
@@ -935,7 +940,17 @@ func linkListCmd(stdout, stderr io.Writer) int {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", u, p, side, carrier, dir, role, st)
 	}
 	tw.Flush()
-	return code
+	if n > 0 {
+		io.WriteString(stdout, b.String())
+	}
+	if hidden > 0 {
+		fmt.Fprintf(stderr, "link: %d unit(s) not shown: their configs hold the tunnel key and only root can read them; run as root\n", hidden)
+		return 4
+	}
+	if n == 0 {
+		fmt.Fprintf(stderr, "link: no hs2 tunnel on this server (no unit in %s runs hs2 with a tunnel config)\n", linkUnitDir)
+	}
+	return 0
 }
 
 // linkStatusLine is §3.16's status line for a config, without the link; "" if

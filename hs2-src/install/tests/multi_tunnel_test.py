@@ -39,6 +39,12 @@ Scenarios (each checks what the user sees AND the real state behind it):
 
 Needs root, iproute2, go (or HS2_BIN / PROBE_BIN). Usage:
   python3 install/tests/multi_tunnel_test.py      (exit 0 = all PASS)
+
+Every path the installer writes points into the temp root (checked before the
+first scenario), and the whole test runs inside sandbox.sh — its own PID and
+mount namespaces, checked first: the server's own tunnels, /etc/hs2,
+/etc/modules-load.d, /run/hs2 and the rest are out of its reach. Outside a
+proven sandbox it re-runs itself in one, or not at all.
 """
 import base64
 import json
@@ -70,6 +76,21 @@ def res(name, ok, info=""):
     if not ok:
         FAILS.append(name)
     return ok
+
+
+def into_root(body, var):
+    """install.sh's own paths, moved under $var (the test's temp root) where
+    they are defined, so even the code that runs while install.sh is sourced
+    never sees the real ones; a definition that moved is a refusal, not a guess."""
+    for name, path in (("BIN", "/usr/local/bin/hs2"), ("CFG_DIR", "/etc/hs2"), ("UNIT_DIR", "/etc/systemd/system"),
+                       ("SYSCTL_CONF", "/etc/sysctl.d/99-hs2.conf"), ("MODULES_CONF", "/etc/modules-load.d/hs2.conf"),
+                       ("MENU_BIN", "/usr/local/bin/hs2-menu"), ("SAFE_APPLY_BIN", "/usr/local/sbin/hs2-safe-apply"),
+                       ("BACKUP_DIR", "/root/hs2-backups")):
+        body, n = re.subn(r"^%s=%s(\s|$)" % (name, re.escape(path)), '%s="${%s:?}%s"\\1' % (name, var, path), body,
+                          flags=re.M)
+        if n != 1:
+            raise SystemExit("REFUSED: install.sh no longer defines %s=%s on its own line — not run" % (name, path))
+    return body
 
 
 def sh(cmd, timeout=60, env=None):
@@ -165,6 +186,7 @@ class World:
         assert lines[-1].strip() == "main_menu", "install.sh no longer ends with main_menu"
         body = "\n".join(lines[:-1]) + "\n"
         body = re.sub(r'^\[ "\$\(id -u\)" = 0 \] \|\| die .*$', ":", body, flags=re.M)
+        body = into_root(body, "ROOT")
         open(self.lib, "w").write(body)
         self.fakebin = os.path.join(sb, "fakebin")
         os.makedirs(self.fakebin)
@@ -176,9 +198,24 @@ class World:
                         "-addext", "subjectAltName=DNS:test.local"], check=True, capture_output=True)
         for s in NS:
             r = self.root(s)
-            for d in ("etc/hs2", "etc/systemd/system", "usr/local/bin", "root/hs2-backups", "sd"):
+            for d in ("etc/hs2", "etc/systemd/system", "etc/sysctl.d", "etc/modules-load.d", "usr/local/bin",
+                      "usr/local/sbin", "root/hs2-backups", "sd"):
                 os.makedirs(os.path.join(r, d), exist_ok=True)
             shutil.copy(hs2, os.path.join(r, "usr/local/bin/hs2"))
+
+    def check_paths(self):
+        """Every path the installer writes must point into this test's temp
+        root; anything else would touch the real server — refuse to run."""
+        names = ("BIN", "CFG_DIR", "UNIT_DIR", "BACKUP_DIR", "MENU_BIN", "SAFE_APPLY_BIN", "SYSCTL_CONF",
+                 "MODULES_CONF", "CFG", "SVC")
+        for s in NS:
+            p = subprocess.run(["bash", "-c", self.PRELUDE + "".join('echo "%s=${%s}"\n' % (n, n) for n in names)],
+                               env=self.env(s), capture_output=True, text=True, timeout=30)
+            got = dict(l.split("=", 1) for l in p.stdout.splitlines() if "=" in l)
+            bad = [n for n in names if not got.get(n, "").startswith(self.root(s) + "/")]
+            if bad:
+                raise SystemExit("REFUSED: %s would write outside the test's temp root (%s) — not run"
+                                 % (", ".join("%s=%s" % (n, got.get(n)) for n in bad), self.root(s)))
 
     def root(self, s):
         return os.path.join(self.sb, s)
@@ -196,6 +233,7 @@ source "$LIB"
 R="$ROOT"
 BIN="$R/usr/local/bin/hs2"; CFG_DIR="$R/etc/hs2"; UNIT_DIR="$R/etc/systemd/system"
 BACKUP_DIR="$R/root/hs2-backups"; MENU_BIN="$R/usr/local/bin/hs2-menu"; SAFE_APPLY_BIN="$R/usr/local/sbin/hs2-safe-apply"
+SYSCTL_CONF="$R/etc/sysctl.d/99-hs2.conf"; MODULES_CONF="$R/etc/modules-load.d/hs2.conf"
 use_unit hs2
 install_prereqs(){ :; }
 install_binary(){ ok "(test) hs2 binary in place"; }
@@ -540,7 +578,10 @@ def scenarios(w):
         units = w.units(s)
         cfgs = [w.cfg(s, u) for u in units]
         # wiping every tunnel needs the phrase typed, not a single 'y' (U14)
-        rc, out = w.run(s, "uninstall", [(r"Type REMOVE ALL to wipe every tunnel", "REMOVE ALL")], timeout=200)
+        # (Enter at "Also remove the hs2 program…?" keeps it — the default)
+        rc, out = w.run(s, "uninstall", [(r"Type REMOVE ALL to wipe every tunnel", "REMOVE ALL"),
+                                         (r"Also remove the hs2 program and the hs2-menu command\?[^\n]*: ", "")],
+                        timeout=200)
         left = sh("pgrep -af '%s'" % os.path.join(w.root(s), "usr/local/bin/hs2")).stdout.strip()
         ifs = [c["iface"] for c in cfgs if c and c.get("carrier") != "mtcp"]
         guards = sh("ip netns exec %s nft list tables 2>/dev/null | grep hs2_icmp" % NS[s]).stdout.strip()
@@ -581,7 +622,16 @@ def net(up):
             raise RuntimeError("%s: %s" % (c, p.stderr))
 
 
+def sandboxed():
+    """Re-run this test inside sandbox.sh unless it already is in a proven one;
+    sandbox.sh refuses (and nothing runs) when it cannot prove the sandbox."""
+    if os.environ.get("HS2_SANDBOX") in ("proven", "nonroot"):
+        return
+    os.execvp("bash", ["bash", os.path.join(HERE, "sandbox.sh"), sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
+
+
 def main():
+    sandboxed()
     if os.geteuid() != 0 or shutil.which("ip") is None:
         print("SKIP multi-tunnel test (needs root and iproute2)")
         return 0
@@ -591,6 +641,7 @@ def main():
         hs2, probe = build(sb)
         net(True)
         w = World(sb, hs2, probe)
+        w.check_paths()
         panel = subprocess.Popen(["ip", "netns", "exec", NS["kh"], probe, "-server", "-listen", PANEL],
                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         scenarios(w)

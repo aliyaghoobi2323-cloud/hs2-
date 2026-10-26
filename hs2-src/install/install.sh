@@ -24,6 +24,9 @@ BIN=/usr/local/bin/hs2
 REPO_RAW="${HS2_REPO_RAW:-https://raw.githubusercontent.com/aliyaghoobi2323-cloud/hs2-/main}"
 CFG_DIR=/etc/hs2
 UNIT_DIR=/etc/systemd/system
+# Kernel files hs2 owns (the installer tests point them into their sandbox):
+SYSCTL_CONF=/etc/sysctl.d/99-hs2.conf      # the old static tuning file, removed when found
+MODULES_CONF=/etc/modules-load.d/hs2.conf  # loads tcp_bbr at boot
 
 # Every tunnel is its own systemd service, so several run side by side and each
 # is started, stopped, edited and deleted on its own. The default tunnel is
@@ -298,9 +301,9 @@ install_prereqs(){
 # remove the old static sysctl file so it cannot be a stale second source.
 tune_kernel(){
   modprobe tcp_bbr 2>/dev/null || true
-  echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
-  if [ -f /etc/sysctl.d/99-hs2.conf ]; then
-    rm -f /etc/sysctl.d/99-hs2.conf
+  echo tcp_bbr > "$MODULES_CONF" 2>/dev/null || true
+  if [ -f "$SYSCTL_CONF" ]; then
+    rm -f "$SYSCTL_CONF"
     info "Kernel tuning is now applied by hs2 at runtime (RAM/CPU-aware). Removed the old static file."
   fi
   ok "BBR available. hs2 applies RAM/CPU-aware tuning at startup (see 'hs2-menu' → tunnel → Tuning)."
@@ -1709,7 +1712,7 @@ show_link(){ # endpoint domain shared panel carrier udp transport direction [mtu
   echo >&2; hr
   ok "SETUP LINK — copy it to the OTHER server:"
   _c '1;33' "$L"
-  info "It holds this tunnel's key: keep it private. Show it again any time: hs2-menu → 9) Show a tunnel's hs2:// link."
+  info "It holds this tunnel's key: keep it private (if it leaks, reinstall the tunnel on both servers; hs2 rekey arrives in a later release). Show it again any time: hs2-menu → 9) Show a tunnel's hs2:// link."
   hr
 }
 
@@ -2493,7 +2496,7 @@ uninstall(){
   case "$a" in "REMOVE ALL") ;; *) info "Nothing removed."; return 0 ;; esac
   auto_backup
   for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
-  rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
+  rm -f "$SYSCTL_CONF" "$MODULES_CONF"
   # What the daemons left in /run/hs2: warm-start records and status files of
   # tunnels that are gone, and the (now empty) ping-guard marker folder.
   rm -f /run/hs2/*.warm /run/hs2/*.status.json 2>/dev/null || true
@@ -2596,15 +2599,33 @@ status_fresh(){
   [ $((now - upd)) -le 7 ]
 }
 
-# tm_units lists every tunnel (hs2.service first, then hs2-*.service by name).
-# A MASKED unit is a /dev/null symlink, not a tunnel file — it is listed too, so
-# setting one up again (which unmasks it) and the manager can see it.
+# tm_units lists every tunnel (hs2.service first, then hs2-*.service by name),
+# and only tunnels (tm_is_tunnel). A MASKED tunnel is a /dev/null symlink, not a
+# tunnel file — it is listed too while its config is there, so setting it up
+# again (which unmasks it) and the manager can see it.
 tm_units(){
-  local f
+  local f u
   for f in "$UNIT_DIR/hs2.service" "$UNIT_DIR"/hs2-*.service; do
-    { [ -f "$f" ] || [ -L "$f" ]; } && basename "$f" .service
+    { [ -f "$f" ] || [ -L "$f" ]; } || continue
+    u=$(basename "$f" .service)
+    tm_is_tunnel "$u" && echo "$u"
   done
   return 0
+}
+# tm_is_tunnel UNIT: the unit is an hs2 tunnel — its ExecStart runs the hs2
+# binary with -c <config>, and that config is a tunnel's ("mode" dial or
+# listen) — not another hs2-* unit on this server (a monitor, a timer job),
+# which the menus must neither list nor back up nor remove. A MASKED tunnel (a
+# /dev/null link) counts while its config is in place, so setup can unmask it.
+tm_is_tunnel(){ # unit
+  local f="$UNIT_DIR/$1.service" c
+  if [ -L "$f" ] && [ "$(readlink "$f" 2>/dev/null)" = /dev/null ]; then
+    c=$(unit_cfg "$1")
+  else
+    grep -Eq '^ExecStart=[-@+!:]*([^ ]*/)?hs2 (.* )?-c [^ ]' "$f" 2>/dev/null || return 1
+    c=$(tm_cfg "$1")
+  fi
+  [ -n "$c" ] && grep -Eq '"mode"[[:space:]]*:[[:space:]]*"(dial|listen)"' "$c" 2>/dev/null
 }
 tm_cfg(){ { sed -n 's/^ExecStart=.* -c \([^ ]*\).*/\1/p' "$UNIT_DIR/$1.service" 2>/dev/null || true; } | head -1; }
 tm_prop(){ systemctl show -p "$2" --value "$1" 2>/dev/null || true; }
@@ -3975,7 +3996,7 @@ show_tunnel_link(){ # [unit]
   { grep -v '^link: this link contains' "$ef" || true; } | sed 's/^link: /  note: /' >&2
   rm -f "$ef"
   warn "This link contains the tunnel key: whoever has it can connect to this tunnel's other server in place of this one."
-  warn "Keep it private. If it leaked, set this tunnel up again on both servers: a new setup makes a new key."
+  warn "Keep it private: if it leaks, reinstall the tunnel on both servers (a new setup makes a new key); hs2 rekey arrives in a later release."
   # The address this side once announced may be stale (a new NAT or public IP).
   if ! tm_dials "$cfg" && [[ " $LINK_ASKED " != *" endpoint "* ]]; then
     ep=$( { printf '%s\n' "$out" | "$BIN" link --decode 2>/dev/null || true; } | sed -n 's/^endpoint=//p')
@@ -4299,7 +4320,7 @@ backup(){
       esac
     done
   done
-  for p in "$BIN" /etc/sysctl.d/99-hs2.conf; do [ -e "$p" ] && items+=("${p#/}"); done
+  for p in "$BIN" "$SYSCTL_CONF"; do [ -e "$p" ] && items+=("${p#/}"); done
   [ ${#items[@]} -gt 0 ] || { warn "Nothing to back up."; return 0; }
   # Dedupe (cert and key share a lineage) and write a human-readable summary.
   mapfile -t items < <(printf '%s\n' "${items[@]}" | sort -u)
@@ -4406,7 +4427,7 @@ restore(){
     tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
   fi
   systemctl daemon-reload
-  [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
+  [ -f "$SYSCTL_CONF" ] && sysctl -p "$SYSCTL_CONF" >/dev/null 2>&1 || true
   for u in $units; do
     use_unit "$u"
     if [ ! -f "$SVC" ] && [ -f "$CFG" ]; then   # a very old backup without the unit
@@ -4504,12 +4525,12 @@ migrate_config(){
   fi
 
   # hs2 now owns tuning at runtime — drop the old static file, keep BBR for boot.
-  if [ -f /etc/sysctl.d/99-hs2.conf ]; then
-    rm -f /etc/sysctl.d/99-hs2.conf
-    info "Removed the old /etc/sysctl.d/99-hs2.conf — hs2 now applies RAM/CPU-aware tuning at startup."
+  if [ -f "$SYSCTL_CONF" ]; then
+    rm -f "$SYSCTL_CONF"
+    info "Removed the old $SYSCTL_CONF — hs2 now applies RAM/CPU-aware tuning at startup."
   fi
   modprobe tcp_bbr 2>/dev/null || true
-  echo tcp_bbr > /etc/modules-load.d/hs2.conf 2>/dev/null || true
+  echo tcp_bbr > "$MODULES_CONF" 2>/dev/null || true
 
   # Point the certbot renewal of the certificate THIS tunnel uses at reload +
   # 30-day window. Other certbot lineages on the box (a panel's own certificate,

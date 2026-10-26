@@ -8,6 +8,9 @@
 #     leaves a custom backend_addr alone, and never adds a second one.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
+# Inside sandbox.sh (its own PID and mount namespaces, checked first), or not
+# at all: no installer test may reach this server's own tunnels or files.
+case "${HS2_SANDBOX:-}" in proven|nonroot) ;; *) exec bash "$HERE/sandbox.sh" bash "$0" "$@" ;; esac
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 PY=$(command -v python3 || true)
@@ -23,6 +26,8 @@ check "cover_seed is generated independently (openssl rand), not from the key" '
 # --- migrate_config: extract it and the helpers it calls, run against sandbox -
 sed -n '/^configure_renewal(){/,/^}/p;/^migrate_config(){/,/^}/p;/^cfg_field(){/,/^}/p;/^say(){/p;/^CERT_HOOK=/p;/^LE_DIR=/p;/^cert_lineage(){/,/^}/p;/^cert_conf_get(){/,/^}/p;/^cert_renew_method(){/,/^}/p;/^cert_until(){/,/^}/p' "$INST" \
  | sed "s#^LE_DIR=.*#LE_DIR=$T/le#" > "$T/fns.sh"
+# the paths migrate_config writes: inside the temp dir, never the server's own
+printf 'CFG_DIR=%s\nSYSCTL_CONF=%s\nMODULES_CONF=%s\n' "$T" "$T/sysctl.conf" "$T/modules.conf" >> "$T/fns.sh"
 mkdir -p "$T/le/renewal"
 run_migrate(){ # cfg-path
   bash -c "set -euo pipefail

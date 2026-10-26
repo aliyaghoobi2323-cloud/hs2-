@@ -30,6 +30,13 @@ Parts 1-2 need bash/python/openssl and the hs2 binary (the installer validates
 every config with `hs2 check`). Part 3 needs root and `ip netns`. hs2 and the
 lab probe are built with `go` (or taken from HS2_BIN / PROBE_BIN).
 Usage:  python3 install/tests/tun_ports_test.py      (exit 0 = all PASS)
+
+Every path the installer owns is moved into the test's temp directory where
+install.sh defines it (a definition that moved is a refusal), and the whole
+test runs inside sandbox.sh — its own PID and mount namespaces, checked first:
+the server's own tunnels, /etc/hs2, /etc/modules-load.d, /run/hs2 and the rest
+are out of its reach. Outside a proven sandbox it re-runs itself in one, or not
+at all.
 """
 import json
 import os
@@ -133,9 +140,33 @@ def make_lib(sb):
     assert lines[-1].strip() == "main_menu", "install.sh no longer ends with main_menu"
     body = "\n".join(lines[:-1]) + "\n"
     body = re.sub(r'^\[ "\$\(id -u\)" = 0 \] \|\| die .*$', ":", body, flags=re.M)
+    body = into_root(body, "HS2_TEST_ROOT")
     lib = os.path.join(sb, "lib.sh")
     open(lib, "w").write(body)
     return lib
+
+
+def into_root(body, var):
+    """install.sh's own paths, moved under $var (the test's temp directory)
+    where they are defined, so even the code that runs while install.sh is
+    sourced never sees the real ones; a definition that moved is a refusal."""
+    for name, path in (("BIN", "/usr/local/bin/hs2"), ("CFG_DIR", "/etc/hs2"), ("UNIT_DIR", "/etc/systemd/system"),
+                       ("SYSCTL_CONF", "/etc/sysctl.d/99-hs2.conf"), ("MODULES_CONF", "/etc/modules-load.d/hs2.conf"),
+                       ("MENU_BIN", "/usr/local/bin/hs2-menu"), ("SAFE_APPLY_BIN", "/usr/local/sbin/hs2-safe-apply"),
+                       ("BACKUP_DIR", "/root/hs2-backups")):
+        body, n = re.subn(r"^%s=%s(\s|$)" % (name, re.escape(path)), '%s="${%s:?}%s"\\1' % (name, var, path), body,
+                          flags=re.M)
+        if n != 1:
+            raise SystemExit("REFUSED: install.sh no longer defines %s=%s on its own line — not run" % (name, path))
+    return body
+
+
+def sandboxed():
+    """Re-run this test inside sandbox.sh unless it already is in a proven one;
+    sandbox.sh refuses (and nothing runs) when it cannot prove the sandbox."""
+    if os.environ.get("HS2_SANDBOX") in ("proven", "nonroot"):
+        return
+    os.execvp("bash", ["bash", os.path.join(HERE, "sandbox.sh"), sys.executable, os.path.abspath(__file__)] + sys.argv[1:])
 
 
 # ---------------------------------------------------------------- part 1 -----
@@ -562,7 +593,12 @@ def build_bins(sb):
 
 
 def main():
+    sandboxed()
     sb = tempfile.mkdtemp(prefix="hs2tun_")
+    os.environ["HS2_TEST_ROOT"] = os.path.join(sb, "root")
+    for d in ("etc/hs2", "etc/systemd/system", "etc/sysctl.d", "etc/modules-load.d", "usr/local/bin", "usr/local/sbin",
+              "root/hs2-backups"):
+        os.makedirs(os.path.join(sb, "root", d), exist_ok=True)
     try:
         # a self-signed cert stands in for Let's Encrypt (the carrier binds auth
         # to the shared key, not to a CA)

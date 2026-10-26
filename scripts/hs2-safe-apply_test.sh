@@ -22,6 +22,12 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/.." && pwd)
 SA="$HERE/hs2-safe-apply"; INST="$ROOT/install.sh"
+# Inside hs2-src/install/tests/sandbox.sh (its own PID and mount namespaces,
+# checked first), or not at all.
+case "${HS2_SANDBOX:-}" in
+  proven|nonroot) ;;
+  *) exec bash "$ROOT/hs2-src/install/tests/sandbox.sh" bash "$0" "$@" ;;
+esac
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 fail=0; out=""
 check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; echo "      got: $(printf '%s' "$out" | tr '\n' ' ' | cut -c1-700)"; fail=1; fi; }
@@ -213,6 +219,7 @@ check "install.sh carries scripts/hs2-safe-apply byte for byte" '[ -n "$emb" ] &
   | sed -e 's#^BIN=/usr/local/bin/hs2$#BIN="$SBX/bin/hs2"#' -e 's#^CFG_DIR=/etc/hs2$#CFG_DIR="$SBX/etc"#' \
         -e 's#^UNIT_DIR=/etc/systemd/system$#UNIT_DIR="$SBX/units"#' -e 's#^MENU_BIN=.*#MENU_BIN="$SBX/bin/hs2-menu"#' \
         -e 's#^SAFE_APPLY_BIN=.*#SAFE_APPLY_BIN="$SBX/sbin/hs2-safe-apply"#' -e 's#^BACKUP_DIR=.*#BACKUP_DIR="$SBX/bk"#' \
+        -e 's#^SYSCTL_CONF=.*#SYSCTL_CONF="$SBX/sysctl-99-hs2.conf"#' -e 's#^MODULES_CONF=.*#MODULES_CONF="$SBX/modules-hs2.conf"#' \
         -e 's#^\[ "\$(id -u)" = 0 \] || die .*#:#' > "$T/core.sh"
 if grep -q 'SAFE_APPLY_BIN="$SBX/sbin/hs2-safe-apply"' "$T/core.sh"; then
   mkdir -p "$T/sbx/sbin" "$T/sbx/bin" "$T/sbx/etc" "$T/sbx/units"
