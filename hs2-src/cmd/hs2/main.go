@@ -311,6 +311,7 @@ func applyTuning() {
 	// default; 0 turns each off.
 	num("HS2_TUNE_CLASS", &engine.TuneClass) // C1, the classifier: every flow bulk
 	num("HS2_TUNE_SCHED", &engine.TuneSched) // C2, the scheduler: the old heap and FIFO
+	num("HS2_TUNE_HQG", &engine.TuneHQG)     // C3, the host-queue guard: the fixed mark and sendGate
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}
