@@ -57,8 +57,12 @@ func (l *mtcpLink) tcpStats() (tcpStat, bool) {
 	return tcpStats(l.tls.TCPConn())
 }
 
-func (l *mtcpLink) OpenStream() (stream, error) {
-	s, err := l.sess.OpenStream()
+func (l *mtcpLink) OpenStream() (stream, error) { return l.OpenStreamSyn(smux.EncodeSyn(0, 0)) }
+
+// OpenStreamSyn opens a user stream whose SYN carries p: the user's tag
+// (synOpener).
+func (l *mtcpLink) OpenStreamSyn(p [smux.SynPayloadLen]byte) (stream, error) {
+	s, err := l.sess.OpenStreamSyn(p)
 	if err != nil {
 		return nil, err
 	}

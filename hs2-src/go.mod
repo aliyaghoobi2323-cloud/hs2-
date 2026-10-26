@@ -22,6 +22,7 @@ require (
 )
 
 // smux v1.5.24 with the adaptive per-stream receive window
-// (Config.MinStreamBuffer, Config.StreamLagTarget; third_party/smux). The wire
-// format is unchanged, so either end works with an unpatched peer.
+// (Config.MinStreamBuffer, Config.StreamLagTarget; third_party/smux), and the
+// SYN payload of hs2's wire v3 (smux.SynPayloadLen): a SYN without it opens no
+// stream, so both ends must run this copy.
 replace github.com/xtaci/smux => ./third_party/smux

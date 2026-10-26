@@ -69,6 +69,10 @@ type Stream struct {
 	peerConsumed uint32        // num of bytes the peer has consumed
 	peerWindow   uint32        // peer window, initialized to 256KB, updated by peer
 	chUpdate     chan struct{} // notify of remote data consuming and window update
+
+	// the payload of the stream's SYN (EncodeSyn): set before the stream is
+	// handed out, read-only after
+	syn [SynPayloadLen]byte
 }
 
 // newStream initiates a Stream struct
@@ -110,6 +114,12 @@ func startWindow(cfg *Config) uint32 {
 // ID returns the unique stream ID.
 func (s *Stream) ID() uint32 {
 	return s.id
+}
+
+// Syn returns the user tag and the class hint the stream's SYN carried (the
+// ones it was opened with, on the opening side).
+func (s *Stream) Syn() (userTag uint32, classHint byte) {
+	return binary.BigEndian.Uint32(s.syn[0:]), s.syn[4] & 0x03
 }
 
 // Read implements net.Conn

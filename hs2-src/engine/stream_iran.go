@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"sync"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
+	"github.com/xtaci/smux"
 )
 
 // IranConfig configures the Iran (edge) side of stream mode: the side users
@@ -61,6 +63,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	}
 	setGuardLog(cfg.Log)
 	setWcoreLog(cfg.Log)
+	go logWire(ctx, logf)
 	reverse := cfg.RevServer != nil
 	var lm *LinkManager
 	if reverse {
@@ -212,31 +215,68 @@ func pickWait(ctx context.Context, lm *LinkManager, hold bool, tried ...Link) (L
 	return nil, nil, false
 }
 
-// userStreamHeader is what opens a user stream on link l: the kind tagged with
-// the user port whenever the exit routes tags — it then decides with the table
-// it has now (2 bytes once per stream, inside TLS) — else the untagged kind
-// every exit understands. What the exit said on THIS link decides; a link
-// whose exchange has not been answered yet (slow, still retrying) goes by what
-// the pool's other links learned from the exit (pool, may be nil). An exit
-// that refused the exchange is never tagged.
-func userStreamHeader(l Link, udp bool, port int, pool *peerInfo) []byte {
-	if mtr := linkMeterOf(l); mtr != nil && port > 0 && port <= 65535 {
-		pi := mtr.peerInfo.Load()
-		if pi == nil && !mtr.infoRefused.Load() {
-			pi = pool
-		}
-		if pi.tags() {
-			k := kindTCPPort
-			if udp {
-				k = kindUDPPort
-			}
-			return []byte{k, byte(port >> 8), byte(port)}
-		}
-	}
+// userStreamHeader is what opens a user stream: the kind tagged with the user
+// port (0: none known), so the exit routes it by the table it has now — 2
+// bytes once per stream, inside TLS. Wire v3 has only this form (§4.2): the
+// one-byte kindTCP / kindUDP of v2 is gone with the v2 peers that needed it.
+func userStreamHeader(udp bool, port int) [3]byte {
+	k := kindTCPPort
 	if udp {
-		return []byte{kindUDP}
+		k = kindUDPPort
 	}
-	return []byte{kindTCP}
+	if port < 0 || port > 65535 {
+		port = 0
+	}
+	return [3]byte{k, byte(port >> 8), byte(port)}
+}
+
+// userTagKey carries a user connection's tag (UserTag) in its context down to
+// the SYN of every stream opened for it: the first, and one a rescue opens.
+type userTagKey struct{}
+
+// withUserTag is ctx carrying the user tag of the client at addr.
+func withUserTag(ctx context.Context, addr net.Addr) context.Context {
+	return context.WithValue(ctx, userTagKey{}, connUserTag(addr))
+}
+
+// userTagOf is the user tag ctx carries (0: none).
+func userTagOf(ctx context.Context) uint32 {
+	tag, _ := ctx.Value(userTagKey{}).(uint32)
+	return tag
+}
+
+// connUserTag is the user tag of the client at addr (0: not an IP address).
+func connUserTag(addr net.Addr) uint32 {
+	var ip netip.Addr
+	switch a := addr.(type) {
+	case *net.TCPAddr:
+		ip, _ = netip.AddrFromSlice(a.IP)
+	case *net.UDPAddr:
+		ip, _ = netip.AddrFromSlice(a.IP)
+	case nil:
+	default:
+		ap, _ := netip.ParseAddrPort(a.String())
+		ip = ap.Addr()
+	}
+	if !ip.IsValid() {
+		return 0
+	}
+	return UserTag(ip, userTagV6Prefix)
+}
+
+// synOpener is a link that opens a user stream with the SYN payload it is
+// given (mtcpLink); any other (a test fake) opens it with tag 0.
+type synOpener interface {
+	OpenStreamSyn(p [smux.SynPayloadLen]byte) (stream, error)
+}
+
+// openUserStream opens a user stream on link with the user's tag in its SYN.
+// The class hint is unknown: the edge has no guess before the first byte.
+func openUserStream(link Link, tag uint32) (stream, error) {
+	if so, ok := link.(synOpener); ok {
+		return so.OpenStreamSyn(smux.EncodeSyn(tag, 0))
+	}
+	return link.OpenStream()
 }
 
 // openTimeout: how long one try at opening a user stream waits for its link —
@@ -254,7 +294,8 @@ var (
 const openTries = 3
 
 // openStream opens a user stream for a connection that came in on the user
-// port `port` (0: unknown — never tagged).
+// port `port` (0: unknown — the exit's default panel), with the user tag ctx
+// carries (withUserTag) in its SYN.
 //
 // A link can die between Pick and OpenStream, or be dying already: one
 // black-holed under load holds a new stream's SYN behind a writer that never
@@ -289,9 +330,10 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoi
 			t.abandon()
 		}
 	}()
+	hdr, tag := userStreamHeader(udp, port), userTagOf(ctx)
 	start := func(link Link, release func()) {
 		tried = append(tried, link)
-		live = append(live, startOpen(link, release, userStreamHeader(link, udp, port, lm.exitInfo.Load()), done))
+		live = append(live, startOpen(link, release, hdr[:], tag, done))
 	}
 	for {
 		if len(live) == 0 {
@@ -369,13 +411,14 @@ type openTry struct {
 	claim atomic.Int32
 }
 
-// startOpen opens a stream on link and writes its header in a goroutine of
-// its own; the result comes on done unless the try is abandoned first.
-func startOpen(link Link, release func(), hdr []byte, done chan<- *openTry) *openTry {
+// startOpen opens a stream on link, with the user tag in its SYN, and writes
+// its header in a goroutine of its own; the result comes on done unless the
+// try is abandoned first.
+func startOpen(link Link, release func(), hdr []byte, tag uint32, done chan<- *openTry) *openTry {
 	t := &openTry{link: link, release: release, at: time.Now()}
 	limit := t.at.Add(openGiveUp)
 	go func() {
-		st, err := link.OpenStream()
+		st, err := openUserStream(link, tag)
 		if err == nil {
 			t.opened.Store(true)
 			if t.claim.Load() == 2 {
@@ -431,6 +474,7 @@ func (t *openTry) abandon() {
 }
 
 func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {
+	ctx = withUserTag(ctx, user.RemoteAddr())
 	st, link, release, ok := openStreamOn(ctx, lm, false, port)
 	if !ok {
 		user.Close()
@@ -517,7 +561,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			}
 			mu.Unlock()
 		}
-		st, release, ok := openStream(ctx, lm, true, port)
+		st, release, ok := openStream(withUserTag(ctx, addr), lm, true, port)
 		if !ok {
 			gone()
 			return

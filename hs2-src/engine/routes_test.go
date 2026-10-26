@@ -64,45 +64,24 @@ func TestRouteTableTarget(t *testing.T) {
 	}
 }
 
-// The header a user stream opens with: tagged whenever the exit routes tags
-// (it decides with its current table); what THIS link's exit said decides, a
-// late link goes by the pool's, a refusing (older) exit is never tagged.
+// The header a user stream opens with: always tagged with its user port (wire
+// v3 has no untagged form; a v2 exit is refused at its auth), so the exit
+// decides with the table it has now — mapped or not, and 0 for no port.
 func TestUserStreamHeader(t *testing.T) {
-	f := newMeteredFake()
-	routed := &peerInfo{V2: true, Caps: capPortTags, Flags: flagDefault, Ports: []int{2053, 443}}
 	for _, c := range []struct {
 		name string
-		pi   *peerInfo
 		port int
 		udp  bool
 		want []byte
 	}{
-		{"no info (older exit)", nil, 2053, false, []byte{kindTCP}},
-		{"v1 exit (ceiling only)", &peerInfo{MaxLinks: 48}, 2053, false, []byte{kindTCP}},
-		{"v2 exit without tags", &peerInfo{V2: true, Flags: flagDefault, Ports: []int{2053}}, 2053, false, []byte{kindTCP}},
-		{"mapped port, tcp", routed, 2053, false, []byte{kindTCPPort, 0x08, 0x05}},
-		{"mapped port, udp", routed, 443, true, []byte{kindUDPPort, 0x01, 0xbb}},
-		{"unmapped port: tagged too — the exit decides with the table it has now", routed, 8443, false, []byte{kindTCPPort, 0x20, 0xfb}},
-		{"no port", routed, 0, true, []byte{kindUDP}},
+		{"mapped port, tcp", 2053, false, []byte{kindTCPPort, 0x08, 0x05}},
+		{"mapped port, udp", 443, true, []byte{kindUDPPort, 0x01, 0xbb}},
+		{"unmapped port: tagged too — the exit decides with the table it has now", 8443, false, []byte{kindTCPPort, 0x20, 0xfb}},
+		{"no port: the exit's default panel", 0, true, []byte{kindUDPPort, 0, 0}},
 	} {
-		f.m.peerInfo.Store(c.pi)
-		if got := userStreamHeader(f, c.udp, c.port, nil); string(got) != string(c.want) {
+		if got := userStreamHeader(c.udp, c.port); string(got[:]) != string(c.want) {
 			t.Errorf("%s: header %v, want %v", c.name, got, c.want)
 		}
-	}
-	// A link whose own answer is late goes by what the pool learned...
-	f.m.peerInfo.Store(nil)
-	if got := userStreamHeader(f, false, 2053, routed); got[0] != kindTCPPort {
-		t.Errorf("late link with the pool's answer: %v, want tagged", got)
-	}
-	// ...but a link whose exit REFUSED the exchange is an older exit: never.
-	f.m.infoRefused.Store(true)
-	if got := userStreamHeader(f, false, 2053, routed); got[0] != kindTCP {
-		t.Errorf("refused link: %v, want untagged", got)
-	}
-	// A link without a meter never tags.
-	if got := userStreamHeader(&fakeLinkNoMeter{}, false, 2053, routed); string(got) != string([]byte{kindTCP}) {
-		t.Errorf("unmetered link: %v", got)
 	}
 }
 
@@ -170,9 +149,6 @@ func TestOpenInfoEndsGate(t *testing.T) {
 		openInfo(ctx, p.edge, peerInfo{MaxLinks: 64, Caps: capPortTags})
 		if !p.edge.m.infoDone.Load() || p.edge.m.peerInfo.Load().tags() || p.edge.m.peerMax.Load() != 48 {
 			t.Fatalf("v1 exit: done %v, info %+v, max %d", p.edge.m.infoDone.Load(), p.edge.m.peerInfo.Load(), p.edge.m.peerMax.Load())
-		}
-		if got := userStreamHeader(p.edge, false, 2053, nil); got[0] != kindTCP {
-			t.Fatalf("a v1 exit must get untagged streams, got %v", got)
 		}
 	})
 	t.Run("older exit (no kindInfo)", func(t *testing.T) {
@@ -351,9 +327,14 @@ func TestPortRoutesNoDefaultRefuses(t *testing.T) {
 }
 
 // Compatibility: a newer Iran server with several user ports in front of an
-// OLDER kharej server, and an older Iran server in front of a newer kharej
-// server with a port_map — both keep working exactly as before (everything
-// reaches the one panel / the default), in both directions.
+// exit that routes by none of them (the previous release's serveStream), and
+// an Iran server that opens no kindInfo in front of a kharej server with a
+// port_map, in both directions. A v2 server of either kind is refused at its
+// auth record since wire v3 (tlscarrier), so what is left to check is the
+// routing: the first keeps working (everything reaches the one panel); on the
+// second, every connection is tagged with its user port anyway (the only user
+// header of wire v3), so the exit routes it by its table without knowing the
+// edge's ports.
 func TestPortRoutesMixedVersions(t *testing.T) {
 	for _, direct := range []bool{true, false} {
 		dir := map[bool]string{true: "direct", false: "reverse"}[direct]
@@ -372,16 +353,16 @@ func TestPortRoutesMixedVersions(t *testing.T) {
 				return er != nil && er.Older && !er.Known
 			})
 		})
-		t.Run("older edge "+dir, func(t *testing.T) {
+		t.Run("edge without info "+dir, func(t *testing.T) {
 			def, a := namedPanel(t, "default"), namedPanel(t, "A")
 			r := startV2(t, v2Opts{direct: direct, min: 2, max: 4, perLink: 8, exitLinks: 2, exitMin: 2, exitMax: 4,
 				panel: def, oldEdge: true, userPorts: []int{2053}, routes: map[int]string{2053: a}})
 			r.waitFor("links up", 10*time.Second, func() bool { return r.lm.Stats().Links >= 2 })
-			if got := tcpReaches(r.portAddr[2053]); got != "default" {
-				t.Errorf("an older edge's connection reached %q, want the default panel", got)
+			if got := tcpReaches(r.portAddr[2053]); got != "A" {
+				t.Errorf("a connection from an edge without kindInfo reached %q, want its port's panel A", got)
 			}
 			if x := r.exitView().Routes; x == nil || x.Known {
-				t.Errorf("the exit must not claim to know an older edge's ports: %+v", x)
+				t.Errorf("the exit must not claim to know the ports of an edge that never said them: %+v", x)
 			}
 		})
 	}

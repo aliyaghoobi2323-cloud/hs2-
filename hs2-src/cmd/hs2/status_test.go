@@ -96,4 +96,11 @@ func TestStatusProtocolLine(t *testing.T) {
 	if err := json.Unmarshal(b, &got); err != nil || got.Protocol != line || !strings.Contains(string(b), `"protocol":`) {
 		t.Fatalf("protocol line lost in the status file: %s", b)
 	}
+	// What was refused of the other server's wire shows only once there is any.
+	if l := wireLine(liveStatus{}); l != "" {
+		t.Errorf("wire line %q with nothing refused", l)
+	}
+	if l := wireLine(liveStatus{BadSyn: 3}); l != "bad syn 3" {
+		t.Errorf("wire line %q", l)
+	}
 }

@@ -21,6 +21,7 @@ import (
 // exitConn is one user connection relayed by the exit.
 type exitConn struct {
 	bytes atomic.Uint64 // payload moved either way (data path: one atomic add)
+	tag   uint32        // the user's tag, from the stream's SYN (set at open)
 
 	// sampler-only
 	prev       uint64
@@ -57,9 +58,10 @@ func newExitTraffic(peers *linkPeers) *exitTraffic {
 	return &exitTraffic{peers: peers, conns: map[*exitConn]struct{}{}, prevB: map[*linkMeter]uint64{}}
 }
 
-// open registers a relayed user connection; close it with done.
-func (t *exitTraffic) open() *exitConn {
-	c := &exitConn{lastActive: time.Now()}
+// open registers a relayed user connection of the user with tag; close it
+// with done.
+func (t *exitTraffic) open(tag uint32) *exitConn {
+	c := &exitConn{tag: tag, lastActive: time.Now()}
 	if t == nil {
 		return c
 	}

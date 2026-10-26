@@ -28,6 +28,33 @@ const (
 	initialPeerWindow = 262144
 )
 
+// SynPayloadLen is the size of the payload every SYN carries (hs2 wire v3,
+// docs/architecture/REDESIGN.fa.md §4.2):
+//
+//	[user tag u32 BE][class/role u8][group id u32 BE][seq base u32 BE]
+//
+// class/role: bits 0-1 the class hint (0 unknown, 1 light, 2 bulk; a hint
+// only, the receiver decides), bits 2-3 the stream's role (0: a stream on its
+// own), bits 4-7 reserved. A SYN without it, or with another length, opens no
+// stream: the opener gets a FIN for it (BadSyn).
+const SynPayloadLen = 13
+
+// EncodeSyn is the payload of a stream on its own: group id 0, seq base 0,
+// role 0.
+func EncodeSyn(userTag uint32, classHint byte) [SynPayloadLen]byte {
+	var p [SynPayloadLen]byte
+	binary.BigEndian.PutUint32(p[0:], userTag)
+	p[4] = classHint & 0x03
+	return p
+}
+
+// synValid reports whether a SYN payload of the right length can open a
+// stream: a sub-stream role (bits 2-3) needs a group.
+func synValid(p [SynPayloadLen]byte) bool {
+	role := p[4] >> 2 & 0x03
+	return role == 0 || binary.BigEndian.Uint32(p[5:]) != 0
+}
+
 const (
 	sizeOfVer    = 1
 	sizeOfCmd    = 1

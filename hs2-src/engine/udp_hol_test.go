@@ -92,11 +92,11 @@ func rateLink(t *testing.T, ctx context.Context, rate float64, seen *udpSeen) *m
 				return
 			}
 			go func() {
-				var k [1]byte
+				var k [3]byte // the user stream header: [kind][port u16]
 				if _, err := io.ReadFull(st, k[:]); err != nil {
 					return
 				}
-				if k[0] != kindUDP {
+				if k[0] != kindUDPPort {
 					io.Copy(io.Discard, st)
 					return
 				}
@@ -152,7 +152,8 @@ func TestUDPFlowDoesNotHoldUpThePort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	up.Write([]byte{kindTCP})
+	h := userStreamHeader(false, 0)
+	up.Write(h[:])
 	go func() {
 		b := make([]byte, 32<<10)
 		for ctx.Err() == nil {
