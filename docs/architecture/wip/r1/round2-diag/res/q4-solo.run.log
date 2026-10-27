@@ -1,0 +1,10 @@
+06:45:21 plan /root/r1-diag/sched/q4-solo.tsv: 4 runs
+06:45:21 start da5e3973-a-1 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.73 waited 0s
+06:45:51 done da5e3973-a-1 ok=1 
+06:45:52 start da5e3973-b-1 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 3.05 waited 0s
+06:46:21 done da5e3973-b-1 ok=1 
+06:46:22 start da5e3973-b-2 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 3.21 waited 0s
+06:46:51 done da5e3973-b-2 ok=1 
+06:46:52 start da5e3973-a-2 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 3.30 waited 0s
+06:47:21 done da5e3973-a-2 ok=1 
+06:47:21 done /root/r1-diag/sched/q4-solo.tsv

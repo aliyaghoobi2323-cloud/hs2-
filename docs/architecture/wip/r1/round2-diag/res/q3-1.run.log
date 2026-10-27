@@ -1,0 +1,26 @@
+06:37:06 plan /root/r1-diag/sched/q3-1.tsv: 12 runs
+06:37:07 start a58a9226-a-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 HS2_LAB_TRACE_NOFRAMES=1 BIN=a) load 2.25 waited 0s
+06:37:46 done a58a9226-a-1 ok=1 
+06:37:47 start a58a9226-raw-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 HS2_LAB_TRACE_NOFRAMES=1 BIN=raw) load 2.73 waited 0s
+06:38:25 done a58a9226-raw-1 ok=1 
+06:38:26 start a58a9226-raw-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 HS2_LAB_TRACE_NOFRAMES=1 BIN=raw) load 2.65 waited 0s
+06:39:05 done a58a9226-raw-2 ok=1 
+06:39:05 start a58a9226-a-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 HS2_LAB_TRACE_NOFRAMES=1 BIN=a) load 2.91 waited 0s
+06:39:45 done a58a9226-a-2 ok=1 
+06:39:46 start c73df46d-a-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=a) load 2.79 waited 0s
+06:40:25 done c73df46d-a-1 ok=1 
+06:40:26 start c73df46d-anb-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=anb) load 3.02 waited 0s
+06:41:05 done c73df46d-anb-1 ok=1 
+06:41:06 start c73df46d-anw-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=anw) load 3.04 waited 0s
+06:41:45 done c73df46d-anw-1 ok=1 
+06:41:46 start c73df46d-ap100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=ap100) load 4.03 waited 0s
+06:42:25 done c73df46d-ap100-1 ok=1 
+06:42:26 start c73df46d-ap100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=ap100) load 2.88 waited 0s
+06:43:06 done c73df46d-ap100-2 ok=1 
+06:43:06 start c73df46d-anw-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=anw) load 2.63 waited 0s
+06:43:46 done c73df46d-anw-2 ok=1 
+06:43:47 start c73df46d-anb-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=anb) load 2.86 waited 0s
+06:44:26 done c73df46d-anb-2 ok=1 
+06:44:27 start c73df46d-a-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 HS2_LAB_TRACE_NOFRAMES=1 BIN=a) load 3.23 waited 0s
+06:45:06 done c73df46d-a-2 ok=1 
+06:45:06 done /root/r1-diag/sched/q3-1.tsv

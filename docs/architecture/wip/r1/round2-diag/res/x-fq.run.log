@@ -1,0 +1,38 @@
+06:47:23 plan /root/r1-diag/sched/x-fq.tsv: 18 runs
+06:47:24 start 4fc27ce7-acw5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 CWNDLOCK=36 BIN=acw5) load 3.31 waited 0s
+06:47:54 done 4fc27ce7-acw5-1 ok=1 
+06:47:55 start 9263f84b-acub-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=acub) load 3.23 waited 0s
+06:48:25 done 9263f84b-acub-1 ok=1 
+06:48:26 start 43e71802-apinp5-1 (N=2 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apinp5) load 2.98 waited 0s
+06:48:55 done 43e71802-apinp5-1 ok=1 
+06:48:56 start 43e71802-apinp5-2 (N=2 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apinp5) load 2.76 waited 0s
+06:49:26 done 43e71802-apinp5-2 ok=1 
+06:49:27 start 9263f84b-acub-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.59 waited 0s
+06:49:57 done 9263f84b-acub-2 ok=1 
+06:49:57 start 4fc27ce7-acw5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 CWNDLOCK=36 BIN=acw5) load 2.25 waited 0s
+06:50:27 done 4fc27ce7-acw5-2 ok=1 
+06:50:28 start 8666e75c-acw25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 CWNDLOCK=180 BIN=acw25) load 2.74 waited 0s
+06:50:58 done 8666e75c-acw25-1 ok=1 
+06:50:59 start 05500279-acub-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.46 waited 0s
+06:51:29 done 05500279-acub-1 ok=1 
+06:51:29 start 16f8675a-apinp25-1 (N=2 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apinp25) load 2.20 waited 0s
+06:51:59 done 16f8675a-apinp25-1 ok=1 
+06:52:00 start 16f8675a-apinp25-2 (N=2 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apinp25) load 2.82 waited 0s
+06:52:30 done 16f8675a-apinp25-2 ok=1 
+06:52:31 start 05500279-acub-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=acub) load 3.01 waited 0s
+06:53:00 done 05500279-acub-2 ok=1 
+06:53:01 start 8666e75c-acw25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 CWNDLOCK=180 BIN=acw25) load 2.97 waited 0s
+06:53:31 done 8666e75c-acw25-2 ok=1 
+06:53:32 start 49ebbfd7-acw100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 CWNDLOCK=718 BIN=acw100) load 2.37 waited 0s
+06:54:02 done 49ebbfd7-acw100-1 ok=1 
+06:54:03 start 1f16be95-acub-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.30 waited 0s
+06:54:33 done 1f16be95-acub-1 ok=1 
+06:54:33 start a7795c4e-apinp100-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apinp100) load 3.03 waited 0s
+06:55:03 done a7795c4e-apinp100-1 ok=1 
+06:55:04 start a7795c4e-apinp100-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apinp100) load 2.77 waited 0s
+06:55:34 done a7795c4e-apinp100-2 ok=1 
+06:55:35 start 1f16be95-acub-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.46 waited 0s
+06:56:04 done 1f16be95-acub-2 ok=1 
+06:56:05 start 49ebbfd7-acw100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 CWNDLOCK=718 BIN=acw100) load 2.62 waited 0s
+06:56:35 done 49ebbfd7-acw100-2 ok=1 
+06:56:35 done /root/r1-diag/sched/x-fq.tsv

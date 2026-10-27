@@ -1,0 +1,4 @@
+06:11:42 plan /root/r1-diag/sched/smoke2.tsv: 1 runs
+06:11:43 start 453753c1-base-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 SMOKE=2 BIN=base) load 0.72 waited 0s
+06:12:13 done 453753c1-base-1 ok=1 
+06:12:13 done /root/r1-diag/sched/smoke2.tsv

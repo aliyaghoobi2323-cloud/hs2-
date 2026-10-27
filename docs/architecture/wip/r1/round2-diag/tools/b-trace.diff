@@ -1,0 +1,295 @@
+diff --git a/hs2-src/engine/l3_link.go b/hs2-src/engine/l3_link.go
+index 69a0387..0d3702e 100644
+--- a/hs2-src/engine/l3_link.go
++++ b/hs2-src/engine/l3_link.go
+@@ -217,6 +217,9 @@ func (l *l3Link) markDead() {
+ 
+ // enqueue hands a packet to the link without ever blocking.
+ func (l *l3Link) enqueue(b *[]byte, tag, flow uint32) bool {
++	if labTraceOn && len(*b) > 20 && (*b)[0]>>4 == 4 && (*b)[9] == 1 {
++		labTun(l, *b)
++	}
+ 	if l.ls != nil {
+ 		return l.ls.pushTun(l, b, tag, flow)
+ 	}
+diff --git a/hs2-src/engine/shape.go b/hs2-src/engine/shape.go
+index 8c6571e..37e7efc 100644
+--- a/hs2-src/engine/shape.go
++++ b/hs2-src/engine/shape.go
+@@ -41,6 +41,12 @@ type shapedConn struct {
+ 	pend  []byte
+ 	pendT int
+ 
++	// lab only (labtrace.go, HS2_LAB_TRACE)
++	labTCP  *net.TCPConn
++	labIn   uint64
++	labOut  uint64
++	labPend []labPend
++
+ 	rmu  sync.Mutex
+ 	rbuf []byte // reused frame-read scratch (read side)
+ 	rem  []byte // decoded data not yet handed to smux (slice into rbuf)
+@@ -81,6 +87,9 @@ func (c *shapedConn) Write(p []byte) (int, error) {
+ func (c *shapedConn) writeHold(p []byte, hold bool) (int, error) {
+ 	c.wmu.Lock()
+ 	defer c.wmu.Unlock()
++	if labTraceOn {
++		c.labNote(p)
++	}
+ 	written := 0
+ 	if len(c.pend) > 0 {
+ 		take := min(c.pendT-shapeHdrLen-len(c.pend), len(p))
+@@ -149,6 +158,9 @@ func (c *shapedConn) record(d []byte, target int) error {
+ 	// pad bytes: zero them (they are inside TLS, so unobservable and harmless)
+ 	clear(f[shapeHdrLen+len(d):])
+ 	_, err := c.Conn.Write(f)
++	if labTraceOn && err == nil {
++		c.labRecord(len(d))
++	}
+ 	return err
+ }
+ 
+diff --git a/hs2-src/engine/stream.go b/hs2-src/engine/stream.go
+index ff58aca..5fef1e7 100644
+--- a/hs2-src/engine/stream.go
++++ b/hs2-src/engine/stream.go
+@@ -226,7 +226,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
+ 		gate := newSendGate(conn)
+ 		low, tally = gate, gate
+ 	}
+-	var c net.Conn = newShapedConn(low, sampler)
++	sh := newShapedConn(low, sampler)
++	sh.labTCP = tcp // lab only (labtrace.go)
++	var c net.Conn = sh
+ 	if meter != nil {
+ 		c = &meteredConn{Conn: c, m: meter, gate: tally}
+ 	}
+diff --git a/hs2-src/third_party/smux/session.go b/hs2-src/third_party/smux/session.go
+index f14262d..d5de3d9 100644
+--- a/hs2-src/third_party/smux/session.go
++++ b/hs2-src/third_party/smux/session.go
+@@ -4,6 +4,7 @@ import (
+ 	"container/heap"
+ 	"encoding/binary"
+ 	"errors"
++	"fmt"
+ 	"io"
+ 	"net"
+ 	"sync"
+@@ -512,6 +513,9 @@ func (s *Session) recvLoop() {
+ 				if hdr.Length() > 0 {
+ 					newbuf := defaultAllocator.Get(int(hdr.Length()))
+ 					if written, err := io.ReadFull(s.conn, newbuf); err == nil {
++						if labSmall(cmdPSH, written) {
++							LabTrace(fmt.Sprintf("R %p %d %d %s %d\n", s, sid, written, LabKey(newbuf[:written]), labWall()))
++						}
+ 						s.rcvd.Add(uint64(written))
+ 						s.streamLock.Lock()
+ 						if stream, ok := s.streams[sid]; ok {
+diff --git a/hs2-src/engine/labtrace.go b/hs2-src/engine/labtrace.go
+new file mode 100644
+index 0000000..1716f9a
+--- /dev/null
++++ b/hs2-src/engine/labtrace.go
+@@ -0,0 +1,149 @@
++package engine
++
++import (
++	"fmt"
++	"net"
++	"os"
++	"path/filepath"
++	"sync"
++	"time"
++
++	"github.com/xtaci/smux"
++	"golang.org/x/sys/unix"
++)
++
++// Lab only (branch r1-diag, docs/architecture/wip/r1/round2-diagnosis.fa.md;
++// not a candidate). Every switch is off unless its variable is set:
++//
++//	HS2_LAB_TRACE=DIR     trace lines (smux.LabTrace's, the shaper's W lines,
++//	                      the TUN side channel's T lines) to DIR/trace-PID.txt
++//	HS2_LAB_PACE_MBIT=X   every link socket, both ends, paced at X Mbit/s
++//	                      (SO_MAX_PACING_RATE, fixed: C4-lite's and the
++//	                      pacing net's writes take X instead)
++//	HS2_LAB_WCLAMP=B      TCP_WINDOW_CLAMP of B bytes on every link socket:
++//	                      each end advertises at most B, the peer's bytes in
++//	                      flight
++//	HS2_LAB_PIN_PORT=P    user connections on port P open on the first link
++//	                      only, the others never on it (a probe on a TCP
++//	                      connection of its own)
++//	HS2_LAB_NEWBYTES=B    a flow not judged yet goes light for its first B
++//	                      bytes (classNewBytes, 32 KiB; 0: as bulk)
++//
++//	W shaper sid len key t_write t_record off lport rport srtt_us minrtt_us
++//	  rttvar_us cwnd unacked notsent outq total_retrans lost ca_state
++//	  delivery_Bps pacing_Bps retrans_now sacked
++//
++// off is the TCP stream offset of the end of the TLS record that carries the
++// frame (bytes_acked + SIOCOUTQ, read so that no ACK moved between them).
++var (
++	labTraceOn bool
++)
++
++func init() {
++	d := os.Getenv("HS2_LAB_TRACE")
++	if d == "" {
++		return
++	}
++	f, err := os.OpenFile(filepath.Join(d, fmt.Sprintf("trace-%d.txt", os.Getpid())), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
++	if err != nil {
++		return
++	}
++	var mu sync.Mutex
++	smux.LabTrace = func(s string) {
++		mu.Lock()
++		f.WriteString(s)
++		mu.Unlock()
++	}
++	labTraceOn = true
++	smux.LabTrace(fmt.Sprintf("H %d %d base args=%q\n", os.Getpid(), time.Now().UnixNano(), os.Args))
++}
++
++type labPend struct {
++	end    uint64 // the shaper's input offset past the frame
++	sid, n uint32
++	key    string
++	t      int64
++}
++
++// labNote: p, one smux frame, goes into the shaper (under wmu).
++func (c *shapedConn) labNote(p []byte) {
++	if smux.LabSmallFrame(p) {
++		n := int(p[2]) | int(p[3])<<8
++		sid := uint32(p[4]) | uint32(p[5])<<8 | uint32(p[6])<<16 | uint32(p[7])<<24
++		c.labPend = append(c.labPend, labPend{end: c.labIn + uint64(len(p)), sid: sid, n: uint32(n), key: smux.LabKey(p[8 : 8+n]), t: time.Now().UnixNano()})
++	}
++	c.labIn += uint64(len(p))
++}
++
++// labRecord: a record of n data bytes went to the conn (under wmu).
++func (c *shapedConn) labRecord(n int) {
++	c.labOut += uint64(n)
++	for len(c.labPend) > 0 && c.labPend[0].end <= c.labOut {
++		p := c.labPend[0]
++		c.labPend = c.labPend[1:]
++		smux.LabTrace(fmt.Sprintf("W %p %d %d %s %d %d %s\n", c, p.sid, p.n, p.key, p.t, time.Now().UnixNano(), labSockLine(c.labTCP)))
++	}
++}
++
++// labSockLine: the socket's offset and TCP_INFO for a W line.
++func labSockLine(tc *net.TCPConn) string {
++	if tc == nil {
++		return "-1 0 0"
++	}
++	rc, err := tc.SyscallConn()
++	if err != nil {
++		return "-1 0 0"
++	}
++	var out string
++	rc.Control(func(fd uintptr) {
++		var ti *unix.TCPInfo
++		var off uint64
++		for range 8 {
++			a, err := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
++			if err != nil {
++				return
++			}
++			q, err := unix.IoctlGetInt(int(fd), unix.SIOCOUTQ)
++			if err != nil {
++				return
++			}
++			b, err := unix.GetsockoptTCPInfo(int(fd), unix.IPPROTO_TCP, unix.TCP_INFO)
++			if err != nil {
++				return
++			}
++			ti, off = b, b.Bytes_acked+uint64(q)
++			if a.Bytes_acked == b.Bytes_acked {
++				break
++			}
++			off = 1<<63 | off // moved each time: flagged
++		}
++		if ti == nil {
++			return
++		}
++		la, _ := tc.LocalAddr().(*net.TCPAddr)
++		ra, _ := tc.RemoteAddr().(*net.TCPAddr)
++		lp, rp := 0, 0
++		if la != nil {
++			lp = la.Port
++		}
++		if ra != nil {
++			rp = ra.Port
++		}
++		q := off &^ (1 << 63)
++		out = fmt.Sprintf("%d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d %d",
++			int64(off), lp, rp, ti.Rtt, ti.Min_rtt, ti.Rttvar, ti.Snd_cwnd, ti.Unacked, ti.Notsent_bytes,
++			q-ti.Bytes_acked, ti.Total_retrans, ti.Lost, ti.Ca_state, ti.Delivery_rate, ti.Pacing_rate,
++			ti.Retrans, ti.Sacked, ti.Snd_mss, ti.Backoff)
++	})
++	if out == "" {
++		return "-1 0 0"
++	}
++	return out
++}
++
++// labTun: a TUN packet b (an echo, a ping) goes into link l's queue.
++func labTun(l *l3Link, b []byte) {
++	if labTraceOn {
++		smux.LabTrace(fmt.Sprintf("T %p %d %s %d\n", l, len(b), smux.LabKey(b), time.Now().UnixNano()))
++	}
++}
+diff --git a/hs2-src/third_party/smux/labtrace.go b/hs2-src/third_party/smux/labtrace.go
+new file mode 100644
+index 0000000..3297a24
+--- /dev/null
++++ b/hs2-src/third_party/smux/labtrace.go
+@@ -0,0 +1,46 @@
++package smux
++
++import (
++	"encoding/hex"
++	"time"
++)
++
++// Lab only (branch r1-diag, docs/architecture/wip/r1/round2-diagnosis.fa.md;
++// not a candidate): the engine sets LabTrace when HS2_LAB_TRACE is set, and
++// nil leaves every hook below off. One line per small data frame (a probe, a
++// TUN ping) at each step it takes through a session, so a probe's delay can
++// be cut into its parts, (base: no S lines).
++//
++//	Q sess sid len key t_push t_take lane      the writer took it
++//	R sess sid len key t                       the reader parsed it
++//	S sess t sid tx_delta peer_window inflight window_wait_ns_delta
++//
++// Times are wall-clock ns (both hs2 processes and the capture share a host).
++var LabTrace func(line string)
++
++const (
++	labMax = 200 // data frames of at most this many bytes are traced
++)
++
++func labSmall(cmd byte, n int) bool { return LabTrace != nil && cmd == cmdPSH && n > 0 && n <= labMax }
++
++func labWall() int64 { return time.Now().UnixNano() }
++
++// LabKey is a traced frame's key: its first 128 data bytes, hex (probes
++// lead with their sequence numbers; a TUN frame carries the IP header).
++func LabKey(b []byte) string {
++	if len(b) > 128 {
++		b = b[:128]
++	}
++	return hex.EncodeToString(b)
++}
++
++// LabSmallFrame says whether p, one frame as the session writes it to its
++// conn ([ver][cmd][len u16 LE][sid u32 LE][data]), is traced.
++func LabSmallFrame(p []byte) bool {
++	if LabTrace == nil || len(p) < headerSize+1 || p[1] != cmdPSH {
++		return false
++	}
++	n := int(p[2]) | int(p[3])<<8
++	return n > 0 && n <= labMax && len(p) >= headerSize+n
++}
