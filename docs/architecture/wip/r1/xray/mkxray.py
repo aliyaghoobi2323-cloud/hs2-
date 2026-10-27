@@ -67,7 +67,7 @@ def tls_server(cert, key):
 def inbound(kind, port, a, k):
     vl = lambda flow="", dec="none": {"clients": [{"id": k["UUID"], "flow": flow, "email": "u@lab"}],
                                      "decryption": dec}
-    base = {"tag": "in-" + kind, "listen": a.listen, "port": port, "sniffing": SNIFF}
+    base = {"tag": "in-%s-%d" % (kind, port), "listen": a.listen, "port": port, "sniffing": SNIFF}
     rs = {"security": "reality", "realitySettings": reality_server(k, a.target)}
     ts = {"security": "tls", "tlsSettings": tls_server(a.cert, a.key)}
     if kind == "xr":
