@@ -15,7 +15,8 @@ func TestMain(m *testing.M) {
 	for _, k := range []struct {
 		env string
 		v   *int
-	}{{"HS2_TUNE_SCHED", &TuneSched}, {"HS2_TUNE_HQG", &TuneHQG}, {"HS2_TUNE_SENDCAP", &TuneSendCap}, {"HS2_TUNE_CLASS", &TuneClass}} {
+	}{{"HS2_TUNE_SCHED", &TuneSched}, {"HS2_TUNE_HQG", &TuneHQG}, {"HS2_TUNE_SENDCAP", &TuneSendCap}, {"HS2_TUNE_CLASS", &TuneClass},
+		{"HS2_TUNE_HQG_SEGS", &HQGSegs}, {"HS2_TUNE_HQG_GATE", &HQGGate}, {"HS2_TUNE_SENDCAP_BLOCKED", &SendCapBlocked}} {
 		if s := os.Getenv(k.env); s != "" {
 			if n, err := strconv.Atoi(s); err == nil {
 				*k.v = n

@@ -320,6 +320,11 @@ func applyTuning() {
 	num("HS2_TUNE_SCHED", &engine.TuneSched)     // C2, the scheduler: the old heap and FIFO
 	num("HS2_TUNE_HQG", &engine.TuneHQG)         // C3, the host-queue guard: the fixed mark and sendGate
 	num("HS2_TUNE_SENDCAP", &engine.TuneSendCap) // C4-lite, the pacing cap: the pacing net alone, exit only
+	// C3's gate variants for the judge (decision T12), and C4-lite reading
+	// the writer's waits as not app-limited (lab)
+	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
+	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
+	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}
