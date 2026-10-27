@@ -1,0 +1,56 @@
+04:01:55 plan /root/r1-judge/plan-b2-solo.txt: 27 runs
+04:01:56 start 0ff5b237-old-1 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.46 waited 0s
+04:02:25 done 0ff5b237-old-1 ok=1 
+04:02:26 start 0ff5b237-a-1 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.69 waited 0s
+04:02:56 done 0ff5b237-a-1 ok=1 
+04:02:56 start 0ff5b237-b-1 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 3.69 waited 0s
+04:03:26 done 0ff5b237-b-1 ok=1 
+04:03:27 start 0ff5b237-b-2 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 2.82 waited 0s
+04:03:56 done 0ff5b237-b-2 ok=1 
+04:03:57 start 0ff5b237-a-2 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.38 waited 0s
+04:04:26 done 0ff5b237-a-2 ok=1 
+04:04:27 start 0ff5b237-old-2 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.30 waited 0s
+04:04:56 done 0ff5b237-old-2 ok=1 
+04:04:57 start 0ff5b237-b-3 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 2.05 waited 0s
+04:05:26 done 0ff5b237-b-3 ok=1 
+04:05:27 start 0ff5b237-a-3 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.43 waited 0s
+04:05:57 done 0ff5b237-a-3 ok=1 
+04:05:57 start 0ff5b237-old-3 (N=1 RATE=1000 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.13 waited 0s
+04:06:27 done 0ff5b237-old-3 ok=1 
+04:06:27 start da5e3973-old-1 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.12 waited 0s
+04:06:57 done da5e3973-old-1 ok=1 
+04:06:58 start da5e3973-a-1 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 3.43 waited 0s
+04:07:27 done da5e3973-a-1 ok=1 
+04:07:28 start da5e3973-b-1 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 4.11 waited 0s
+04:07:57 done da5e3973-b-1 ok=1 
+04:07:58 start da5e3973-b-2 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 4.81 waited 0s
+04:08:27 done da5e3973-b-2 ok=1 
+04:08:28 start da5e3973-a-2 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 4.26 waited 0s
+04:08:57 done da5e3973-a-2 ok=1 
+04:08:58 start da5e3973-old-2 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 4.42 waited 0s
+04:09:27 done da5e3973-old-2 ok=1 
+04:09:28 start da5e3973-b-3 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 5.34 waited 0s
+04:09:58 done da5e3973-b-3 ok=1 
+04:09:58 start da5e3973-a-3 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 4.56 waited 0s
+04:10:28 done da5e3973-a-3 ok=1 
+04:10:29 start da5e3973-old-3 (N=1 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 4.74 waited 0s
+04:10:58 done da5e3973-old-3 ok=1 
+04:10:59 start 49c74cd4-old-1 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 4.63 waited 0s
+04:11:29 done 49c74cd4-old-1 ok=1 
+04:11:30 start 49c74cd4-a-1 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 4.54 waited 0s
+04:12:00 done 49c74cd4-a-1 ok=1 
+04:12:00 start 49c74cd4-b-1 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 4.12 waited 0s
+04:12:31 done 49c74cd4-b-1 ok=1 
+04:12:31 start 49c74cd4-b-2 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 4.23 waited 0s
+04:13:01 done 49c74cd4-b-2 ok=1 
+04:13:02 start 49c74cd4-a-2 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 4.54 waited 0s
+04:13:32 done 49c74cd4-a-2 ok=1 
+04:13:33 start 49c74cd4-old-2 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 5.06 waited 0s
+04:14:03 done 49c74cd4-old-2 ok=1 
+04:14:04 start 49c74cd4-b-3 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 5.72 waited 0s
+04:14:34 done 49c74cd4-b-3 ok=1 
+04:14:35 start 49c74cd4-a-3 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 4.50 waited 0s
+04:15:05 done 49c74cd4-a-3 ok=1 
+04:15:06 start 49c74cd4-old-3 (N=8 RATE=1000 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 4.95 waited 0s
+04:15:35 done 49c74cd4-old-3 ok=1 
+04:15:35 done /root/r1-judge/plan-b2-solo.txt

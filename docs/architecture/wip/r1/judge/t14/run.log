@@ -1,0 +1,26 @@
+04:59:37 plan /root/r1-judge/t14/plan.txt: 12 runs
+04:59:38 start 340c98ae-b-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 2.67 waited 0s
+05:00:17 done 340c98ae-b-1 ok=1 
+05:00:18 start 340c98ae-bl-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=bl) load 1.67 waited 0s
+05:00:57 done 340c98ae-bl-1 ok=1 
+05:00:58 start 340c98ae-bl-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=bl) load 1.44 waited 0s
+05:01:38 done 340c98ae-bl-2 ok=1 
+05:01:38 start 340c98ae-b-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 1.45 waited 0s
+05:02:18 done 340c98ae-b-2 ok=1 
+05:02:19 start 340c98ae-bl-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=bl) load 1.37 waited 0s
+05:02:58 done 340c98ae-bl-3 ok=1 
+05:02:59 start 340c98ae-b-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 1.26 waited 0s
+05:03:38 done 340c98ae-b-3 ok=1 
+05:03:39 start 3e7aaeab-b-1 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 1.18 waited 0s
+05:04:18 done 3e7aaeab-b-1 ok=1 
+05:04:19 start 3e7aaeab-bl-1 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=bl) load 2.68 waited 0s
+05:04:59 done 3e7aaeab-bl-1 ok=1 
+05:04:59 start 3e7aaeab-bl-2 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=bl) load 1.81 waited 0s
+05:05:39 done 3e7aaeab-bl-2 ok=1 
+05:05:40 start 3e7aaeab-b-2 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 1.22 waited 0s
+05:06:19 done 3e7aaeab-b-2 ok=1 
+05:06:20 start 3e7aaeab-bl-3 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=bl) load 2.38 waited 0s
+05:06:59 done 3e7aaeab-bl-3 ok=1 
+05:07:00 start 3e7aaeab-b-3 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 2.11 waited 0s
+05:07:39 done 3e7aaeab-b-3 ok=1 
+05:07:39 done /root/r1-judge/t14/plan.txt

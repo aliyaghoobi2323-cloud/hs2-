@@ -1,0 +1,9 @@
+03:02:41 host busy: 2474877 bash -c cd /root/r1-judge && pgrep -af "go test|go build|\.test -test\." | cut -c1-150 | gre
+03:03:11 lock taken after 30s
+03:03:12 rig start, limit 3540s
+03:58:03 parallel done, 249s left
+03:58:04 r1: 0 runs over 75 % busy, 0 failed
+03:58:04 r2: 0 runs over 75 % busy, 0 failed
+03:58:05 reruns done, 247s left
+03:58:06 done after 3294s of rig time
+03:58:06 lock released

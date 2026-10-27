@@ -1,0 +1,60 @@
+== start 2026-10-27T04:01:54+00:00
+ 04:01:54 up 13 days,  5:34,  8 users,  load average: 1.58, 2.04, 2.05
+top - 04:01:55 up 13 days,  5:34,  8 users,  load average: 1.46, 2.00, 2.04
+Tasks: 251 total,   1 running, 250 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.2 us,  5.4 sy,  0.0 ni, 89.3 id,  0.0 wa,  0.0 hi,  2.2 si,  0.0 st 
+MiB Mem :  23456.9 total,   1871.3 free,   1556.5 used,  20445.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21900.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2534231 root      20   0 1433980 160416  28876 S  62.7   0.7   3:31.89 xray-linux-amd6
+1648832 root      20   0 1475912  82448  10876 S  54.9   0.3 110:21.32 hs2
+2545486 root      20   0   11908   6020   3864 R   3.9   0.0   0:00.03 top
+    930 root      20   0 2007328 299732  53400 S   2.0   1.2     6d+4h x-ui
+ 860115 root      20   0 5658272 242548 131164 S   2.0   1.0   9:05.61 2.1.308-3f6ee6c
+      1 root      20   0   22636  14116   9736 S   0.0   0.1   5:37.64 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:01.39 kthreadd
+== after-solo 2026-10-27T04:15:36+00:00
+ 04:15:36 up 13 days,  5:48, 10 users,  load average: 6.67, 4.91, 3.53
+top - 04:15:37 up 13 days,  5:48, 10 users,  load average: 6.67, 4.91, 3.53
+Tasks: 256 total,   1 running, 255 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.9 us,  4.4 sy,  0.0 ni, 91.4 id,  0.0 wa,  0.0 hi,  1.4 si,  0.0 st 
+MiB Mem :  23456.9 total,   1844.2 free,   1573.7 used,  20455.5 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21883.2 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2534231 root      20   0 1434348 155248  28876 S  53.8   0.6   7:17.73 xray-linux-amd6
+1648832 root      20   0 1475912  80820  10876 S  42.3   0.3 113:29.51 hs2
+    930 root      20   0 2007336 300104  53400 S   5.8   1.2     6d+4h x-ui
+ 795448 systemd+  20   0   22912  14848  11136 S   1.9   0.1  13:33.53 systemd-resolve
+2555151 root      20   0   11908   6084   3932 R   1.9   0.0   0:00.04 top
+      1 root      20   0   22636  14116   9736 S   0.0   0.1   5:38.22 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:01.39 kthreadd
+== after-par 2026-10-27T04:59:25+00:00
+ 04:59:25 up 13 days,  6:32, 12 users,  load average: 3.43, 2.77, 2.47
+top - 04:59:26 up 13 days,  6:32, 12 users,  load average: 3.16, 2.72, 2.45
+Tasks: 263 total,   1 running, 262 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.3 us,  2.3 sy,  0.0 ni, 95.7 id,  0.0 wa,  0.0 hi,  0.7 si,  0.0 st 
+MiB Mem :  23456.9 total,   1814.6 free,   1543.3 used,  20515.5 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21913.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2593220 root      20   0 1432956 133864  29248 S  23.1   0.6   1:22.02 xray-linux-amd6
+1648832 root      20   0 1475912  69028  10876 S  19.2   0.3 120:36.80 hs2
+ 860115 root      20   0 5658272 242552 131164 S   3.8   1.0   9:17.84 2.1.308-3f6ee6c
+2603960 root      20   0   11908   6040   3884 R   3.8   0.0   0:00.03 top
+ 795448 systemd+  20   0   22912  14848  11136 S   1.9   0.1  13:41.63 systemd-resolve
+      1 root      20   0   22636  14116   9736 S   0.0   0.1   5:40.67 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:01.40 kthreadd
+== end 2026-10-27T04:59:26+00:00
+ 04:59:26 up 13 days,  6:32, 12 users,  load average: 3.16, 2.72, 2.45
+top - 04:59:27 up 13 days,  6:32, 12 users,  load average: 3.16, 2.72, 2.45
+Tasks: 263 total,   1 running, 262 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.5 us,  3.2 sy,  0.0 ni, 94.4 id,  0.0 wa,  0.0 hi,  1.0 si,  0.0 st 
+MiB Mem :  23456.9 total,   1806.5 free,   1551.4 used,  20515.5 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21905.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2593220 root      20   0 1432956 133884  29248 S  35.3   0.6   1:22.34 xray-linux-amd6
+1648832 root      20   0 1475912  69028  10876 S  33.3   0.3 120:37.09 hs2
+    930 root      20   0 2007332 295132  53400 S   3.9   1.2     6d+4h x-ui
+     60 root      20   0       0      0      0 S   2.0   0.0   2:50.47 ksoftirqd/7
+2552238 root      20   0       0      0      0 I   2.0   0.0   0:00.32 kworker/6:2-events
+2603980 root      20   0   11908   6032   3880 R   2.0   0.0   0:00.04 top
+      1 root      20   0   22636  14116   9736 S   0.0   0.1   5:40.67 systemd

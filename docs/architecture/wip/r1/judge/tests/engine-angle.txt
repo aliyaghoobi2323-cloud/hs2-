@@ -1,0 +1,48 @@
+=== RUN   TestAngleHQGVariants
+--- PASS: TestAngleHQGVariants (0.00s)
+=== RUN   TestAngleSendCapBothEnds
+--- PASS: TestAngleSendCapBothEnds (1.20s)
+=== RUN   TestAngleSameLinkProbe
+    angle_test.go:395: probe p50 65.469151ms p99 71.244825ms (59 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 11584/11584 B
+    angle_test.go:401: probe p99 71.244825ms, want <= 60ms (RTT 40ms + 20 ms)
+--- FAIL: TestAngleSameLinkProbe (14.00s)
+=== RUN   TestAngleP10
+=== RUN   TestAngleP10/lone16
+    angle_test.go:429: lone user, 16 streams: 9.94 Mbit/s of 10
+=== RUN   TestAngleP10/one_vs_16
+    angle_test.go:443: 1 stream 4.72, 16 streams 5.23, total 9.94 Mbit/s
+=== RUN   TestAngleP10/newheavy
+    angle_test.go:468: existing bulk in the new user's first second: 4.61 Mbit/s (0.921 of its floor)
+    angle_test.go:474: existing bulk 4.81, new heavy 5.13 Mbit/s; light probe p99 58.267223ms (45)
+--- PASS: TestAngleP10 (28.05s)
+    --- PASS: TestAngleP10/lone16 (7.01s)
+    --- PASS: TestAngleP10/one_vs_16 (9.02s)
+    --- PASS: TestAngleP10/newheavy (12.02s)
+=== RUN   TestAngleClassesAndStatusLines
+    angle_test.go:516: sched link 14: lane p50/p99 1.2/4.7 ms, bulk frame 6.1 KiB, users 1 (active 1), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+    angle_test.go:516: classes: light 1 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0
+    angle_test.go:516: hostq link 14: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 1.96
+--- PASS: TestAngleClassesAndStatusLines (2.00s)
+=== RUN   TestAngleSchedOff
+    angle_test.go:561: old path: down 9.57 Mbit/s, probe p50 58.354484ms (14)
+--- PASS: TestAngleSchedOff (4.00s)
+=== RUN   TestAngleBackpressure64
+    angle_test.go:616: user's most queued 64, writers that waited 9469, other user's probe p99 46.665577ms (20), open 3.212293ms, upload 103.32 Mbit/s
+--- PASS: TestAngleBackpressure64 (7.39s)
+=== RUN   TestAngleCtrlNeverBehindData
+    angle_test.go:660: SYN out within 6.862758ms at worst, under 16 downloads (9.96 Mbit/s) and 16 uploads (9.97 Mbit/s)
+--- PASS: TestAngleCtrlNeverBehindData (6.21s)
+=== RUN   TestAngleTunPinned
+--- PASS: TestAngleTunPinned (0.00s)
+=== RUN   TestAngleTunFlowQueues
+--- PASS: TestAngleTunFlowQueues (0.03s)
+=== RUN   TestAngleTunUserMemShare
+--- PASS: TestAngleTunUserMemShare (0.00s)
+=== RUN   TestAngleTunPingAheadOfBulk
+    angle_tun_test.go:327: ping one-way p50 32.569351ms p99 36.604057ms (80); TUN bulk in 4.72 Mbit/s; drops light/bulk 0/2995
+    angle_tun_test.go:330: ping p99 one-way 36.604057ms, want <= 30ms
+--- FAIL: TestAngleTunPingAheadOfBulk (6.04s)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	68.941s
+FAIL
+exit 1
