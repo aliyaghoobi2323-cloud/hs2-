@@ -1,0 +1,52 @@
+# reply-source window (r1-udp): RED, fix, GREEN, suites
+== 21:07:57 RED: the reply-source test on the code without replyPin
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.18s)
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	10.188s
+FAIL
+== 21:08:11 the fix
+patched /root/hs2-wt/r1-udp/hs2-src/engine/stream_iran.go
+# github.com/hosseintaghipoursori-alt/hs2-tunnel/engine
+# [github.com/hosseintaghipoursori-alt/hs2-tunnel/engine]
+vet: engine/engine.go:42:15: undefined: tun.Device
+== 21:08:15 GREEN
+=== RUN   TestDgPortsUDPPortTakenKeepsTCP
+--- PASS: TestDgPortsUDPPortTakenKeepsTCP (1.06s)
+=== RUN   TestReplyPinBothFamilies
+=== RUN   TestReplyPinBothFamilies/udp
+=== RUN   TestReplyPinBothFamilies/udp4
+--- PASS: TestReplyPinBothFamilies (0.00s)
+=== RUN   TestUDPPortTakenKeepsTheTunnel
+--- PASS: TestUDPPortTakenKeepsTheTunnel (1.09s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.17s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	2.349s
+== 21:08:21 full suites, r1-udp and hotfix-udp side by side
+== 21:18:10 build and the rig's secondip case
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build 63c537f6080b+ 2026-10-27]
+{"case":"rev-l3mtcp-udptrue-secondip-hs2-r1udp","topo":"rev-l3mtcp","udp":true,"cond":"secondip","bin":"hs2-r1udp","check_edge":0,"check_exit":0,"links_up_s":"0.8","links":2,"links_after":8,"edge_alive":1,"edge_alive_after":1,"exit_alive":1,"tcp":{"ok": 5, "n": 5, "err": ""},"udpc":{"ok": 20, "n": 20, "err": ""},"edge_userport":"user port 8443 open (tcp+udp), carried over the link pool","edge_fatal":""}
+{"case":"rev-l3mtcp-udptrue-base-hs2-r1udp","topo":"rev-l3mtcp","udp":true,"cond":"base","bin":"hs2-r1udp","check_edge":0,"check_exit":0,"links_up_s":"0.8","links":3,"links_after":8,"edge_alive":1,"edge_alive_after":1,"exit_alive":1,"tcp":{"ok": 5, "n": 5, "err": ""},"udpc":{"ok": 20, "n": 20, "err": ""},"edge_userport":"user port 8443 open (tcp+udp), carried over the link pool","edge_fatal":""}
+{"case":"rev-l3mtcp-udptrue-collide+release-hs2-r1udp","topo":"rev-l3mtcp","udp":true,"cond":"collide release","bin":"hs2-r1udp","check_edge":0,"check_exit":0,"links_up_s":"0.8","links":3,"links_after":8,"edge_alive":1,"edge_alive_after":1,"exit_alive":1,"tcp":{"ok": 5, "n": 5, "err": ""},"udpc":{"ok": 20, "n": 20, "err": ""},"edge_userport":"user port 8443 open (tcp; udp waits for the port), carried over the link pool","edge_fatal":"21:18:27.351123 user port 8443: UDP is NOT forwarded: listen udp :8443: bind: address already in use — another program holds UDP 8443 on this server (ss -lunp shows which); TCP on it works, and UDP "}
+== 21:18:37 done
+
+# go test ./engine ./cmd/hs2 (r1-udp, run side by side with the hotfix suite)
+--- FAIL: TestDgPortsOlderExit (5.06s)
+    dgports_test.go:97: udp reached "" through an older exit
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	587.260s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.698s
+FAIL
+EXIT=1
+
+# go test -race (r1-udp, UDP|Udp|Stream|Reverse|DgPorts|Proxy|Routes|ReplyPin; ./cmd/hs2)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	121.195s
+EXIT=0
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	7.316s
+EXIT2=0
+
+# go test ./engine ./cmd/hs2 (hotfix-udp)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	566.990s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	2.617s
+EXIT=0

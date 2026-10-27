@@ -570,6 +570,9 @@ type udpFlow struct {
 	st    stream       // nil until the flow's stream is open (under mu)
 	stop  chan struct{}
 	ended bool // stop is closed (under mu)
+	// dst: the address the user sent to, on a port bound to every address
+	// (replyPin): its replies leave from it (under mu)
+	dst netip.Addr
 }
 
 const (
@@ -593,6 +596,7 @@ func (f *udpFlow) end() {
 func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port int, logf func(string, ...any)) {
 	var mu sync.Mutex
 	flows := map[string]*udpFlow{}
+	pin := pinReplies(pc) // a port on every address: answer from the address used
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
@@ -647,7 +651,14 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 				if err != nil {
 					break
 				}
-				pc.WriteTo(p, addr)
+				if ua, ok := addr.(*net.UDPAddr); pin != nil && ok {
+					mu.Lock()
+					src := f.dst
+					mu.Unlock()
+					pin.writeTo(p, ua, src)
+				} else {
+					pc.WriteTo(p, addr)
+				}
 				mu.Lock()
 				f.last = time.Now()
 				mu.Unlock()
@@ -670,9 +681,21 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 		}
 		<-done // the stream is closed: the reader ends, then the slot is released
 	}
-	buf := make([]byte, maxDatagram)
+	buf, oob := make([]byte, maxDatagram), make([]byte, replyPinOOB)
 	for {
-		n, addr, err := pc.ReadFrom(buf)
+		var (
+			n    int
+			addr net.Addr
+			dst  netip.Addr
+			err  error
+		)
+		if pin != nil {
+			var ua *net.UDPAddr
+			n, ua, dst, err = pin.readFrom(buf, oob)
+			addr = ua
+		} else {
+			n, addr, err = pc.ReadFrom(buf)
+		}
 		if err != nil {
 			mu.Lock()
 			for k, f := range flows {
@@ -691,6 +714,9 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			go run(key, addr, f)
 		}
 		f.last = time.Now()
+		if dst.IsValid() {
+			f.dst = dst
+		}
 		mu.Unlock()
 		if f.qb.Load()+int64(n) > udpFlowBytes {
 			continue // the flow's link is behind: drop
