@@ -109,15 +109,19 @@ type sendCap struct {
 	// cap of its own on this link, as SendCapOff for the process
 	linked, off bool
 	// alpha: a BULK link's socket (β2): its own cap is α's (alphaStep), not
-	// C4-lite's 1.25 × the delivery rate; aK is α's factor on the largest
-	// delivery of the last alphaSpan (aMax: one maximum a second, ring, from
-	// aSec), aRate the cap, aQ the queue delay of the latest reading
+	// C4-lite's 1.25 × the delivery rate; aRate is the cap, aQ the queue
+	// delay of the latest reading, aDlv the delivery rates of its latest
+	// readings (ring), aMax one delivery maximum a second over alphaSpan
+	// (ring, from aSec)
 	alpha bool
-	aK    float64
-	aMax  [alphaSpan]float64
-	aSec  int64
 	aRate float64
 	aQ    time.Duration
+	aQ0   time.Duration // the reading before's
+	aUp   int           // readings in a row q grew past alphaLow
+	aDlv  [alphaRecent]float64
+	aDi   int
+	aMax  [alphaSpan]float64
+	aSec  int64
 	// tallies (the status line)
 	appLim, lifts uint64
 	aCuts, aGrows uint64
@@ -133,38 +137,47 @@ func AlphaOff() bool { return TuneAlpha == 0 }
 // round-2 diagnosis found the bulk link's own standing queue (BBR's
 // cwnd_gain, 85 to 175 ms on a deep FIFO) the one thing a light flow on a
 // TCP connection of its own still waits behind, and CoDel's drops at its
-// 5 ms target a link above it never stops making. So the cap follows the
-// queue, q = srtt − min_rtt, each reading of the socket (100 ms): it is
-// aK × the largest delivery rate of the last alphaSpan seconds, and
+// 5 ms target a link above it never stops making. Each reading of the
+// socket (100 ms), with q = srtt − min_rtt and d the largest delivery rate
+// of its last alphaRecent readings:
 //
-//   - q under alphaLow (CoDel's 5 ms target): aK grows by alphaGrow, up to
-//     alphaKMax (C4-lite's 1.25: room to find a faster path);
-//   - q over alphaHigh: aK backs off in proportion to the excess (to drain
-//     it within alphaDrain), at most alphaCutMax a reading, down to
-//     alphaKMin;
-//   - between the two it holds.
+//   - the path delivered clearly less than the cap (d < alphaKeep × the
+//     cap): this direction is at its bottleneck, and the queue is its own;
+//     the cap goes to d less the share that drains q past alphaLow (CoDel's
+//     5 ms target) within alphaDrain, at most alphaCutMax;
+//   - it delivered about what the cap let out but q past alphaLow grew (by
+//     alphaRise) since the reading before (alphaRiseN readings in a row):
+//     the cap is a little past the path
+//     (a delivery sample is too noisy to see a few %: a test at 0.97 cut the
+//     cap to every dip and held a download at half the path on the rig),
+//     and it backs off the same way;
+//   - else the queue, if any, is not this socket's doing: the cap grows,
+//     by alphaGrowFast under alphaLow, by alphaGrow over it, to 1.25 × the
+//     2 s delivery maximum (C4-lite's), so it finds a path that got faster.
 //
-// The headroom low rates need (the other direction's acks, the TUN's pings
-// and the QUIET link share the bottleneck; a fixed 0.95 left 21 to 32 ms
-// there) comes from the queue itself: whatever else crosses the bottleneck
-// shows as q, and the cap backs off until it does not. srtt holds both
-// directions' queues (the acks come back through the other one, and wait
-// there behind that end's own data and its pacing: a few ms on the rig),
-// so the band is 5 to 8 ms of the two-way reading, and the cap is a share
-// of what the path delivered over 10 s, never less than alphaKMin of it: a
-// direction whose acks wait behind the other one's backlog (q stuck past
-// the band with nothing of its own queued) is held back, never starved (a
-// cap that followed its own delivery down, as the first version did, fell
-// to its floor in a second, the download of a link with an upload on it at
-// 0.3 Mbit/s of 25). Never under alphaFloor.
+// Why not q alone: srtt holds both directions' queues (the acks come back
+// through the other one, behind that end's data and pacing), so on a link
+// that carries both a download and an upload the two ends read the same
+// sum. A cap that backed off on q alone held the lighter direction down for
+// good (on the rig, the download of a link with an upload on it at 0.3
+// Mbit/s of 25, then at 6 with a factor of its own 10 s maximum): it cut
+// for a queue its cuts could not drain. The headroom low rates need (the
+// other direction's acks, the TUN's pings and the QUIET link share the
+// bottleneck; a fixed 0.95 left 21 to 32 ms there) comes from the queue:
+// whatever else crosses the bottleneck shows in q while this direction is
+// at it. Never under alphaKMin × the 10 s delivery maximum (a noisy reading
+// never starves it), nor alphaFloor.
 const (
 	alphaLow    = 5 * time.Millisecond
-	alphaHigh   = 8 * time.Millisecond
 	alphaDrain  = 100 * time.Millisecond
 	alphaCutMax = 0.1
-	alphaGrow   = 0.02
+	alphaGrow     = 0.02
+	alphaGrowFast = 0.05
+	alphaRise     = 500 * time.Microsecond
+	alphaRiseN    = 1
+	alphaKeep     = 0.85
 	alphaKMin   = 0.75
-	alphaKMax   = 1.25
+	alphaRecent = 3
 	alphaSpan   = 10
 	alphaFloor  = 32 << 10
 )
@@ -196,25 +209,51 @@ func (c *sendCap) alphaLongMax(s capSample) float64 {
 // not app-limited since it was last idle; arming: this is the first).
 func (c *sendCap) alphaStep(s capSample, arming bool) {
 	long := c.alphaLongMax(s)
-	if arming || c.aK <= 0 {
-		c.aK = 1
+	if arming || c.aRate <= 0 {
+		c.aRate = math.Max(c.maxDlv(), s.Delivery)
+		c.aDlv = [alphaRecent]float64{}
 	}
 	c.aQ = 0
 	if s.SRTT > 0 && s.MinRTT > 0 && s.SRTT > s.MinRTT {
 		c.aQ = s.SRTT - s.MinRTT
 	}
+	if s.AppLimited || s.Delivery <= 0 {
+		return // nothing to judge by: it holds
+	}
+	c.aDi = (c.aDi + 1) % alphaRecent
+	c.aDlv[c.aDi] = s.Delivery
+	d := 0.0
+	for _, v := range c.aDlv {
+		d = math.Max(d, v)
+	}
+	ceil := wcNetKOf() * c.maxDlv()
+	if c.aQ > alphaLow && c.aQ > c.aQ0+alphaRise {
+		c.aUp++
+	} else {
+		c.aUp = 0
+	}
+	c.aQ0 = c.aQ
+	cut := math.Min(math.Max(float64(c.aQ-alphaLow), 0)/float64(alphaDrain), alphaCutMax)
 	switch {
 	case s.SRTT <= 0 || s.MinRTT <= 0:
-		c.aK = alphaKMax // no queue reading: C4-lite's 1.25 ×
-	case c.aQ > alphaHigh:
-		cut := math.Min(float64(c.aQ-alphaHigh)/float64(alphaDrain), alphaCutMax)
-		c.aK = math.Max(alphaKMin, c.aK-cut)
+		c.aRate = ceil // no queue reading: C4-lite's
+	case d < alphaKeep*c.aRate:
+		c.aRate = d * (1 - cut)
+		if cut > 0 {
+			c.aCuts++
+		}
+	case c.aUp >= alphaRiseN:
+		c.aRate = math.Min(c.aRate, d) * (1 - cut)
 		c.aCuts++
-	case c.aQ < alphaLow:
-		c.aK = math.Min(alphaKMax, c.aK+alphaGrow)
+	default:
+		g := alphaGrow
+		if c.aQ < alphaLow {
+			g = alphaGrowFast
+		}
+		c.aRate = math.Min(c.aRate*(1+g), math.Max(ceil, c.aRate))
 		c.aGrows++
 	}
-	c.aRate = math.Max(c.aK*long, alphaFloor)
+	c.aRate = math.Max(c.aRate, math.Max(alphaKMin*long, alphaFloor))
 }
 
 // Update takes a reading and says the cap in force (0: none), whether to
@@ -474,8 +513,8 @@ func (l *sendCapLink) line(n int) string {
 		share = 100 * float64(c.appLim) / float64(c.n)
 	}
 	if c.alpha {
-		return fmt.Sprintf("sendcap link %d: alpha cap %.1f Mbit/s (%.2f x max delivery 10s; queue %.1f ms, band %.0f-%.0f ms; cuts %d, grows %d), app-limited %.0f%%, idle-lifted %d",
-			n, float64(c.set)*8/1e6, c.aK, msOf(c.aQ), msOf(alphaLow), msOf(alphaHigh), c.aCuts, c.aGrows, share, c.lifts)
+		return fmt.Sprintf("sendcap link %d: alpha cap %.1f Mbit/s (queue %.1f ms, target %.0f ms; cuts %d, grows %d), app-limited %.0f%%, idle-lifted %d",
+			n, float64(c.set)*8/1e6, msOf(c.aQ), msOf(alphaLow), c.aCuts, c.aGrows, share, c.lifts)
 	}
 	return fmt.Sprintf("sendcap link %d: cap %.0f Mbit/s (%g x max delivery 2s), app-limited %.0f%%, idle-lifted %d",
 		n, float64(c.set)*8/1e6, wcNetKOf(), share, c.lifts)
