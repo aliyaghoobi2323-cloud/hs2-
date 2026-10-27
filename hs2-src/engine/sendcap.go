@@ -346,7 +346,7 @@ const (
 	alphaProbeMax  = 0.25
 	// ownSegs, ownMSS: the own cap's target is at least ownSegs segments
 	// at the rate the link is served (a DRR round each, on fq_codel)
-	ownSegs = 3
+	ownSegs = 2
 	ownMSS  = 1448
 	// ownCutStand: the most the own cap cuts a reading for a queue past
 	// its target that stands (alphaCutMax while it rises)
