@@ -228,6 +228,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		gate = newSendGate(conn)
 		bottom = gate
 	}
+	if q, _ := classOf(caps); q && QuietRec != 0 {
+		sampler = obfs.NewInteractiveLengthSampler() // (lab: QUIET's records, quiet.go)
+	}
 	shaped := newShapedConn(bottom, sampler)
 	shaped.carry = sched
 	var c net.Conn = shaped
@@ -290,6 +293,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			scl = newSendCapLink(sys, hq)
 			scl.core.linked, scl.core.off = true, !capOn
 			scl.core.alpha = bulkLink && !AlphaOff()
+			if bulkLink && meter != nil {
+				scl.owd = &meter.owd // α's one-way delays (owd.go)
+			}
 			if meter != nil && SendCapBlocked != 0 {
 				scl.blocked = meter.blockedNs
 			}

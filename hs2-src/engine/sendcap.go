@@ -73,8 +73,8 @@ type capSample struct {
 	SRTT           time.Duration // the socket's srtt (0: unknown): the idle span
 	MinRTT         time.Duration // the socket's min_rtt (0: unknown): α's queue delay, SRTT - MinRTT
 	Received       uint64        // bytes received on the socket (tcpi_bytes_received), cumulative: α's other direction
-	// OWD: the queue delay of this end's sending direction from the QUIET
-	// link's one-way delays (owd.go; OWDok false: none), α's in place of
+	// OWD: the queue delay of this end's sending direction from the link's
+	// one-way delays (owd.go; OWDok false: none), α's in place of
 	// SRTT - MinRTT
 	OWD   time.Duration
 	OWDok bool
@@ -255,7 +255,6 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 		c.aDlv = [alphaRecent]float64{}
 		c.aStart = TuneAlphaStart != 0
 	}
-	owdNoteRate(long)
 	c.aQ, c.aOWD = 0, false
 	switch {
 	case s.OWDok:
@@ -489,6 +488,11 @@ type sendCapLink struct {
 	// blockedMin; nil: unknown), and its value at the reading before
 	blocked   func() int64
 	blockSeen int64
+	// owd: the link's one-way delays (a BULK link's, owd.go; nil: none),
+	// and the bytes received at the reading before, for its beat
+	owd  *owdLink
+	rx0  uint64
+	rxAt time.Duration
 }
 
 // newSendCapLink: the C4-lite of a link socket (sys), and the C3 its
@@ -525,8 +529,17 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 	if ts.dlvOK {
 		var oq time.Duration
 		ook := false
-		if l.core.alpha {
-			oq, ook = owdQueue()
+		if l.owd != nil {
+			// the beat follows the busier direction of the link
+			rx := 0.0
+			if l.rxAt > 0 && now > l.rxAt && ts.bytesReceived >= l.rx0 {
+				rx = float64(ts.bytesReceived-l.rx0) / (now - l.rxAt).Seconds()
+			}
+			l.rx0, l.rxAt = ts.bytesReceived, now
+			l.owd.noteRate(max(l.core.maxDlv(), rx))
+			if l.core.alpha {
+				oq, ook = l.owd.queue()
+			}
 		}
 		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),

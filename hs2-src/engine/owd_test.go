@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"net"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -52,21 +51,48 @@ func TestOWDCodec(t *testing.T) {
 	}
 }
 
-// The beat costs at most 1% of the BULK rate, within 100 ms to 1 s.
+// The beat costs at most 1% of the link's rate, within 25 ms to 1 s.
 func TestOWDTick(t *testing.T) {
 	for _, c := range []struct {
 		mbit float64
 		want time.Duration
-	}{{0, time.Second}, {0.5, time.Second}, {1, 800 * time.Millisecond}, {4, 200 * time.Millisecond}, {8, 100 * time.Millisecond}, {1000, 100 * time.Millisecond}} {
+	}{{0, time.Second}, {0.5, time.Second}, {1, 800 * time.Millisecond}, {4, 200 * time.Millisecond},
+		{8, 100 * time.Millisecond}, {32, 25 * time.Millisecond}, {1000, 25 * time.Millisecond}} {
 		if got := owdTickOf(c.mbit * 1e6 / 8); got != c.want {
 			t.Fatalf("%.1f Mbit/s: beat %v, want %v", c.mbit, got, c.want)
 		}
 	}
+	var o owdLink
+	if o.tick() != owdTickMax {
+		t.Fatal("no rate yet: the slow beat")
+	}
+	o.noteRate(100e6 / 8)
+	if o.tick() != owdTickMin {
+		t.Fatalf("100 Mbit/s: beat %v", o.tick())
+	}
 }
 
-func owdReset() {
-	for _, a := range []*atomic.Int64{&owd.qIn, &owd.qInAt, &owd.qOut, &owd.qOutAt, &owd.rate, &owd.rateAt, &owd.msgs} {
-		a.Store(0)
+// The queue is the least reading of the last owdLook: one message held
+// behind a lost segment is no queue, a queue that stands is.
+func TestOWDRecent(t *testing.T) {
+	var r owdRecent
+	ms := int64(time.Millisecond)
+	at := int64(time.Hour)
+	for i := 0; i < 8; i++ {
+		at += 25 * ms
+		r.add(at, 1*ms)
+	}
+	at += 25 * ms
+	if q := r.add(at, 80*ms); q != 1*ms {
+		t.Fatalf("one held message: queue %v, want 1 ms", time.Duration(q))
+	}
+	var q int64
+	for i := 0; i < 9; i++ {
+		at += 25 * ms
+		q = r.add(at, 12*ms)
+	}
+	if q != 12*ms {
+		t.Fatalf("a standing 12 ms for 225 ms: queue %v", time.Duration(q))
 	}
 }
 
@@ -76,19 +102,22 @@ func TestOWDLoopPipe(t *testing.T) {
 	a, b := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	owdReset()
-	defer owdReset()
-	go owdLoop(ctx, a)
-	go owdLoop(ctx, b)
+	var oa, ob owdLink
+	oa.noteRate(100e6 / 8)
+	ob.noteRate(100e6 / 8)
+	go owdLoop(ctx, a, &oa)
+	go owdLoop(ctx, b, &ob)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := owdQueue(); ok {
-			if n := owd.msgs.Load(); n < 2 {
-				t.Fatalf("a queue heard after %d messages", n)
+		_, okA := oa.queue()
+		_, okB := ob.queue()
+		if okA && okB {
+			if oa.msgs.Load() < 2 || ob.msgs.Load() < 2 {
+				t.Fatalf("a queue heard after %d and %d messages", oa.msgs.Load(), ob.msgs.Load())
 			}
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("no one-way queue heard in 5 s")
 }

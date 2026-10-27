@@ -4,3 +4,7 @@ b2 /root/r2j/bins/hs2-b2
 b2na /root/r2j/bins/hs2-b2 HS2_TUNE_ALPHA=0
 b2f /root/r2j/bins/hs2-b2f
 b2fs /root/r2j/bins/hs2-b2f HS2_TUNE_OWD=0
+b2bbrq /root/r2j/bins/hs2-b2 HS2_TUNE_QUIET_CC=bbr
+b2g /root/r2j/bins/hs2-b2f2
+b2gs /root/r2j/bins/hs2-b2f2 HS2_TUNE_OWD=0
+b2gr /root/r2j/bins/hs2-b2f2 HS2_TUNE_QUIET_REC=1
