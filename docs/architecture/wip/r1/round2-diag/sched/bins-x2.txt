@@ -1,0 +1,3 @@
+acl5 /root/r1-bins/hs2-diag-a2 HS2_LAB_WCLAMP=52000
+acl25 /root/r1-bins/hs2-diag-a2 HS2_LAB_WCLAMP=260000
+acl100 /root/r1-bins/hs2-diag-a2 HS2_LAB_WCLAMP=1040000

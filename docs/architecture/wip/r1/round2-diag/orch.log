@@ -1,0 +1,24 @@
+06:11:38 lock taken after 0s
+06:11:39 smoke
+06:12:11 smoke1 done (1 ok, 0 failed), 3508s left
+06:12:13 smoke2 done (1 ok, 0 failed), 3506s left
+06:12:14 smoke done; waiting for GO
+06:14:06 GO, 3393s left
+06:37:06 q12-fq done (45 ok, 0 failed), 2013s left
+06:37:14 q12-pf done (45 ok, 0 failed), 2005s left
+06:45:07 q3-1 done (12 ok, 0 failed), 1532s left
+06:45:19 q3-2 done (12 ok, 0 failed), 1520s left
+06:47:22 q4-solo done (4 ok, 0 failed), 1397s left
+06:47:22 done after 2143s of rig time
+06:47:22 lock released
+06:47:23 extra: lock held again, 1395s left in the block
+06:56:35 x-fq done (18 ok), 843s left
+06:56:43 x-pf done (18 ok), 835s left
+06:56:43 extra done after 2705s of rig time
+06:56:43 lock released (extra)
+06:56:44 extra2: lock held again, 834s left in the block; building hs2-diag-a2
+06:56:46 extra2: built, 832s left
+07:01:23 x2-fq done (9 ok), 555s left
+07:01:31 x2-pf done (9 ok), 547s left
+07:01:31 extra2 done after 2993s of rig time
+07:01:31 lock released (extra2)

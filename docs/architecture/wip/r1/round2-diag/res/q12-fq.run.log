@@ -1,0 +1,92 @@
+06:14:06 plan /root/r1-diag/sched/q12-fq.tsv: 45 runs
+06:14:07 start 9263f84b-base-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 0.54 waited 0s
+06:14:37 done 9263f84b-base-1 ok=1 
+06:14:38 start 9263f84b-a-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 0.55 waited 0s
+06:15:07 done 9263f84b-a-1 ok=1 
+06:15:08 start 9263f84b-ap5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap5) load 0.51 waited 0s
+06:15:38 done 9263f84b-ap5-1 ok=1 
+06:15:39 start 9263f84b-ac5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac5) load 1.02 waited 0s
+06:16:09 done 9263f84b-ac5-1 ok=1 
+06:16:10 start 43e71802-apin-1 (N=2 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.39 waited 0s
+06:16:39 done 43e71802-apin-1 ok=1 
+06:16:40 start 9263f84b-ac5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac5) load 1.54 waited 0s
+06:17:10 done 9263f84b-ac5-2 ok=1 
+06:17:11 start 9263f84b-ap5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap5) load 1.49 waited 0s
+06:17:41 done 9263f84b-ap5-2 ok=1 
+06:17:42 start 9263f84b-a-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 1.68 waited 0s
+06:18:12 done 9263f84b-a-2 ok=1 
+06:18:12 start 9263f84b-base-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 1.88 waited 0s
+06:18:42 done 9263f84b-base-2 ok=1 
+06:18:43 start 43e71802-apin-2 (N=2 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.40 waited 0s
+06:19:13 done 43e71802-apin-2 ok=1 
+06:19:14 start 9263f84b-base-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 1.34 waited 0s
+06:19:44 done 9263f84b-base-3 ok=1 
+06:19:44 start 9263f84b-a-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 1.43 waited 0s
+06:20:14 done 9263f84b-a-3 ok=1 
+06:20:15 start 9263f84b-ap5-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap5) load 1.34 waited 0s
+06:20:45 done 9263f84b-ap5-3 ok=1 
+06:20:46 start 9263f84b-ac5-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac5) load 1.49 waited 0s
+06:21:16 done 9263f84b-ac5-3 ok=1 
+06:21:16 start 43e71802-apin-3 (N=2 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.88 waited 0s
+06:21:46 done 43e71802-apin-3 ok=1 
+06:21:47 start 05500279-base-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 1.67 waited 0s
+06:22:17 done 05500279-base-1 ok=1 
+06:22:18 start 05500279-a-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 1.82 waited 0s
+06:22:47 done 05500279-a-1 ok=1 
+06:22:48 start 05500279-ap25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap25) load 2.38 waited 0s
+06:23:18 done 05500279-ap25-1 ok=1 
+06:23:19 start 05500279-ac25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac25) load 2.26 waited 0s
+06:23:49 done 05500279-ac25-1 ok=1 
+06:23:49 start 16f8675a-apin-1 (N=2 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.27 waited 0s
+06:24:19 done 16f8675a-apin-1 ok=1 
+06:24:20 start 05500279-ac25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac25) load 2.04 waited 0s
+06:24:50 done 05500279-ac25-2 ok=1 
+06:24:51 start 05500279-ap25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap25) load 2.31 waited 0s
+06:25:21 done 05500279-ap25-2 ok=1 
+06:25:21 start 05500279-a-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.29 waited 0s
+06:25:51 done 05500279-a-2 ok=1 
+06:25:52 start 05500279-base-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 2.65 waited 0s
+06:26:22 done 05500279-base-2 ok=1 
+06:26:23 start 16f8675a-apin-2 (N=2 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.16 waited 0s
+06:26:53 done 16f8675a-apin-2 ok=1 
+06:26:53 start 05500279-base-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 2.43 waited 0s
+06:27:23 done 05500279-base-3 ok=1 
+06:27:24 start 05500279-a-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.02 waited 0s
+06:27:54 done 05500279-a-3 ok=1 
+06:27:55 start 05500279-ap25-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap25) load 2.08 waited 0s
+06:28:24 done 05500279-ap25-3 ok=1 
+06:28:25 start 05500279-ac25-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac25) load 2.25 waited 0s
+06:28:55 done 05500279-ac25-3 ok=1 
+06:28:56 start 16f8675a-apin-3 (N=2 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.98 waited 0s
+06:29:26 done 16f8675a-apin-3 ok=1 
+06:29:27 start 1f16be95-base-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 2.24 waited 0s
+06:29:56 done 1f16be95-base-1 ok=1 
+06:29:57 start 1f16be95-a-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.94 waited 0s
+06:30:27 done 1f16be95-a-1 ok=1 
+06:30:28 start 1f16be95-ap100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap100) load 2.54 waited 0s
+06:30:58 done 1f16be95-ap100-1 ok=1 
+06:30:58 start 1f16be95-ac100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac100) load 2.62 waited 0s
+06:31:28 done 1f16be95-ac100-1 ok=1 
+06:31:29 start a7795c4e-apin-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.48 waited 0s
+06:31:59 done a7795c4e-apin-1 ok=1 
+06:32:00 start 1f16be95-ac100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac100) load 1.90 waited 0s
+06:32:29 done 1f16be95-ac100-2 ok=1 
+06:32:30 start 1f16be95-ap100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap100) load 2.02 waited 0s
+06:33:00 done 1f16be95-ap100-2 ok=1 
+06:33:01 start 1f16be95-a-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 1.97 waited 0s
+06:33:31 done 1f16be95-a-2 ok=1 
+06:33:31 start 1f16be95-base-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 2.23 waited 0s
+06:34:01 done 1f16be95-base-2 ok=1 
+06:34:02 start a7795c4e-apin-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.69 waited 0s
+06:34:32 done a7795c4e-apin-2 ok=1 
+06:34:33 start 1f16be95-base-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 2.31 waited 0s
+06:35:02 done 1f16be95-base-3 ok=1 
+06:35:03 start 1f16be95-a-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.35 waited 0s
+06:35:33 done 1f16be95-a-3 ok=1 
+06:35:34 start 1f16be95-ap100-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ap100) load 2.93 waited 0s
+06:36:04 done 1f16be95-ap100-3 ok=1 
+06:36:05 start 1f16be95-ac100-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=ac100) load 2.63 waited 0s
+06:36:34 done 1f16be95-ac100-3 ok=1 
+06:36:35 start a7795c4e-apin-3 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.16 waited 0s
+06:37:05 done a7795c4e-apin-3 ok=1 
+06:37:05 done /root/r1-diag/sched/q12-fq.tsv

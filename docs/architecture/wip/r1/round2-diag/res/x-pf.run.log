@@ -1,0 +1,38 @@
+06:47:31 plan /root/r1-diag/sched/x-pf.tsv: 18 runs
+06:47:32 start d78dba87-acw5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 CWNDLOCK=36 BIN=acw5) load 3.69 waited 0s
+06:48:02 done d78dba87-acw5-1 ok=1 
+06:48:03 start f9a10ea5-acub-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=acub) load 3.66 waited 0s
+06:48:33 done f9a10ea5-acub-1 ok=1 
+06:48:33 start 02457ae0-apinp5-1 (N=2 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=apinp5) load 2.76 waited 0s
+06:49:03 done 02457ae0-apinp5-1 ok=1 
+06:49:04 start 02457ae0-apinp5-2 (N=2 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=apinp5) load 2.78 waited 0s
+06:49:34 done 02457ae0-apinp5-2 ok=1 
+06:49:35 start f9a10ea5-acub-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.38 waited 0s
+06:50:05 done f9a10ea5-acub-2 ok=1 
+06:50:05 start d78dba87-acw5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 CWNDLOCK=36 BIN=acw5) load 2.07 waited 0s
+06:50:35 done d78dba87-acw5-2 ok=1 
+06:50:36 start 30f6e53a-acw25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 CWNDLOCK=180 BIN=acw25) load 2.60 waited 0s
+06:51:06 done 30f6e53a-acw25-1 ok=1 
+06:51:07 start 2d23c440-acub-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.24 waited 0s
+06:51:37 done 2d23c440-acub-1 ok=1 
+06:51:37 start a6e92124-apinp25-1 (N=2 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=apinp25) load 2.26 waited 0s
+06:52:07 done a6e92124-apinp25-1 ok=1 
+06:52:08 start a6e92124-apinp25-2 (N=2 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=apinp25) load 2.76 waited 0s
+06:52:38 done a6e92124-apinp25-2 ok=1 
+06:52:39 start 2d23c440-acub-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.63 waited 0s
+06:53:09 done 2d23c440-acub-2 ok=1 
+06:53:09 start 30f6e53a-acw25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 CWNDLOCK=180 BIN=acw25) load 3.29 waited 0s
+06:53:39 done 30f6e53a-acw25-2 ok=1 
+06:53:40 start ebf8372d-acw100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 CWNDLOCK=718 BIN=acw100) load 2.34 waited 0s
+06:54:10 done ebf8372d-acw100-1 ok=1 
+06:54:11 start df2a19e0-acub-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.35 waited 0s
+06:54:40 done df2a19e0-acub-1 ok=1 
+06:54:41 start c06a84b5-apinp100-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=apinp100) load 3.11 waited 0s
+06:55:11 done c06a84b5-apinp100-1 ok=1 
+06:55:12 start c06a84b5-apinp100-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=apinp100) load 2.67 waited 0s
+06:55:42 done c06a84b5-apinp100-2 ok=1 
+06:55:42 start df2a19e0-acub-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=acub) load 2.45 waited 0s
+06:56:12 done df2a19e0-acub-2 ok=1 
+06:56:13 start ebf8372d-acw100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 CWNDLOCK=718 BIN=acw100) load 3.32 waited 0s
+06:56:43 done ebf8372d-acw100-2 ok=1 
+06:56:43 done /root/r1-diag/sched/x-pf.tsv
