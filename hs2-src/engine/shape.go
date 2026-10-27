@@ -1,9 +1,12 @@
 package engine
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
 )
@@ -46,6 +49,13 @@ type shapedConn struct {
 	carry bool
 	tail  []byte
 	tgt   int // the target of the record the tail fills (0: none sampled)
+	// count: the records are tallied (a QUIET link's, for its status line
+	// and γ2's batching measure): records written, their data and pad bytes
+	count              bool
+	recs, dataB, padB  atomic.Uint64
+	lineRecs, lineData uint64 // the tallies at the status line before (the runner's)
+	linePad            uint64
+	lineAt             time.Duration
 
 	rmu  sync.Mutex
 	rbuf []byte // reused frame-read scratch (read side)
@@ -109,6 +119,7 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 		if _, err := c.Conn.Write(f); err != nil {
 			return written, err
 		}
+		c.tally(len(d), pad)
 		written += len(d)
 		p = p[len(d):]
 	}
@@ -167,7 +178,43 @@ func (c *shapedConn) record(d []byte, target int) error {
 	copy(f[shapeHdrLen:], d)
 	clear(f[shapeHdrLen+len(d):])
 	_, err := c.Conn.Write(f)
+	if err == nil {
+		c.tally(len(d), pad)
+	}
 	return err
+}
+
+// tally counts a record of data and pad bytes written (count).
+func (c *shapedConn) tally(data, pad int) {
+	if c.count {
+		c.recs.Add(1)
+		c.dataB.Add(uint64(data))
+		c.padB.Add(uint64(pad))
+	}
+}
+
+// recLine is a QUIET link's records line since the previous one (the
+// runner's): records a second, data bytes a record, and the share of pad.
+func (c *shapedConn) recLine(n int, now time.Duration) string {
+	r, d, p := c.recs.Load(), c.dataB.Load(), c.padB.Load()
+	dr, dd, dp := r-c.lineRecs, d-c.lineData, p-c.linePad
+	el := time.Duration(0)
+	if c.lineAt > 0 && now > c.lineAt {
+		el = now - c.lineAt
+	}
+	c.lineRecs, c.lineData, c.linePad, c.lineAt = r, d, p, now
+	rate, per, padShare := 0.0, 0.0, 0.0
+	if el > 0 {
+		rate = float64(dr) / el.Seconds()
+	}
+	if dr > 0 {
+		per = float64(dd) / float64(dr)
+	}
+	if dd+dp > 0 {
+		padShare = 100 * float64(dp) / float64(dd+dp)
+	}
+	return fmt.Sprintf("quiet records link %d: %.0f/s, data %.0f B a record, pad %.1f%% (all: %d records, %d B data, %d B pad)",
+		n, rate, per, padShare, r, d, p)
 }
 
 // Read reassembles the original byte stream: it returns buffered decoded data

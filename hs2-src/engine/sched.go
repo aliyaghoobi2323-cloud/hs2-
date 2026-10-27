@@ -264,9 +264,10 @@ func (s *Sched[T]) Push(it T, user uint32, flow uint64, lane Lane, size int) {
 	}
 }
 
-// Next takes the next item to write: control, then the latency lane, then
-// the users under their floor, then the surplus by flows. O(1).
-func (s *Sched[T]) Next() (it T, ok bool) {
+// NextUrgent takes the next control or latency-lane item (false: none),
+// leaving the bulk ones (a bulk frame waits at a BULK link's in-flight
+// budget, budget.go: these go past it). O(1).
+func (s *Sched[T]) NextUrgent() (it T, ok bool) {
 	if n := s.ctrl.pop(); n != nil {
 		return s.take(n, LaneCtrl), true
 	}
@@ -275,6 +276,15 @@ func (s *Sched[T]) Next() (it T, ok bool) {
 		f.lat--
 		it = s.take(n, LaneLatency)
 		s.maybeIdle(f)
+		return it, true
+	}
+	return it, false
+}
+
+// Next takes the next item to write: control, then the latency lane, then
+// the users under their floor, then the surplus by flows. O(1).
+func (s *Sched[T]) Next() (it T, ok bool) {
+	if it, ok := s.NextUrgent(); ok {
 		return it, true
 	}
 	switch {

@@ -592,6 +592,19 @@ type sendCapLink struct {
 	owd  *owdLink
 	rx0  uint64
 	rxAt time.Duration
+	// budget: a BULK link's in-flight budget (γ2, budget.go; nil: none, α's
+	// cap or C4-lite's), stepped with each reading
+	budget *linkBudget
+}
+
+// budgetLine is the link's budget line ("": it has none).
+func (l *sendCapLink) budgetLine(n int) string {
+	if l.budget == nil {
+		return ""
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.budget.line(n)
 }
 
 // newSendCapLink: the C4-lite of a link socket (sys), and the C3 its
@@ -645,6 +658,9 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),
 			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook, OWDwait: owait}))
+		if l.budget != nil {
+			l.budget.step(now, l.core.on, ts, l.core.maxDlv())
+		}
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
 	}
