@@ -37,6 +37,29 @@ type angleWire struct {
 	closed bool
 	// the most unsent seen at a write
 	maxNotsent int
+	// clk: a bottleneck this wire shares with others, FIFO (nil: its own)
+	clk *wireClock
+	// holdTill: nothing arrives before it (an RTO on this connection alone)
+	holdTill time.Time
+}
+
+// wireClock is a bottleneck's departure clock that wires share (FIFO): a
+// write leaves after everything any of them wrote before it.
+type wireClock struct {
+	mu     sync.Mutex
+	depEnd time.Time
+}
+
+// depart books n bytes at rate on the shared clock: when they have left.
+func (c *wireClock) depart(now time.Time, n int, rate float64) time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	start := now
+	if c.depEnd.After(now) {
+		start = c.depEnd
+	}
+	c.depEnd = start.Add(time.Duration(float64(n) / rate * float64(time.Second)))
+	return c.depEnd
 }
 
 func newAngleWire(rate float64, delay time.Duration) *angleWire {
@@ -78,11 +101,15 @@ func (w *angleWire) write(b []byte) (int, error) {
 	}
 	now := time.Now()
 	w.maxNotsent = max(w.maxNotsent, w.notsentAt(now)+len(b))
-	start := now
-	if w.depEnd.After(now) {
-		start = w.depEnd
+	if w.clk != nil {
+		w.depEnd = w.clk.depart(now, len(b), w.rate)
+	} else {
+		start := now
+		if w.depEnd.After(now) {
+			start = w.depEnd
+		}
+		w.depEnd = start.Add(time.Duration(float64(len(b)) / w.rate * float64(time.Second)))
 	}
-	w.depEnd = start.Add(time.Duration(float64(len(b)) / w.rate * float64(time.Second)))
 	w.q = append(w.q, wcChunk{w.depEnd.Add(w.delay), append([]byte(nil), b...)})
 	w.cond.Broadcast()
 	return len(b), nil
@@ -107,7 +134,11 @@ func (w *angleWire) read(b []byte) (int, error) {
 			continue
 		}
 		c := &w.q[0]
-		if d := time.Until(c.at); d > 0 {
+		due := c.at
+		if w.holdTill.After(due) {
+			due = w.holdTill
+		}
+		if d := time.Until(due); d > 0 {
 			w.mu.Unlock()
 			time.Sleep(d)
 			w.mu.Lock()

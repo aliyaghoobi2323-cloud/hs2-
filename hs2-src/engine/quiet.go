@@ -684,8 +684,10 @@ func (q *quietSet) moverTick(now int64) {
 }
 
 // move moves gs to a BULK link the pool picks: the group's move stream
-// there, the connection counted there, its QUIET slot given back. False:
-// no BULK link took it now (the mover tries again at its next tick).
+// there, the connection counted there, its QUIET slot given back. True: the
+// mover is done with gs (it moved, or its group cannot move: it ended or
+// moved already); false: no BULK link took it now (tried again at the
+// mover's next tick).
 func (q *quietSet) move(gs *groupStream, dir string) bool {
 	link, rel, ok := q.m.pickExcept(nil, false)
 	if !ok {

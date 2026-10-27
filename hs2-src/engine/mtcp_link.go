@@ -228,6 +228,9 @@ func (l *mtcpLink) Close() error {
 	if l.sess != nil {
 		l.sess.Close()
 	}
+	if l.tls == nil { // a bare session (tests)
+		return nil
+	}
 	return l.tls.Close()
 }
 
