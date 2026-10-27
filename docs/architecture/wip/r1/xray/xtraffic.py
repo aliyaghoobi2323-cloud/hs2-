@@ -18,6 +18,7 @@ same user into one TCP connection, and what does the game's latency become).
              UDP), three web bursts, two downloads, a second game later
       lat:   a TCP and a UDP game for warm + dur + 3 s, a download from warm
              for dur s (step 2)
+      idle:  a game for 5 s, a web burst and a 2 s download, then nothing
 Standard library only. Times: time.time() (one clock: client and server run
 on one host, in two network namespaces).
 """
@@ -257,9 +258,16 @@ def download(ctx, name, t_start, secs):
     try:
         s = socks_connect(ctx, f["port"])
         s.sendall(b"D" + struct.pack("!Qd", 0, secs))
+        # some proxies (Shadowsocks-2022 in xray 26.6.27) do not pass the
+        # server's close on: 8 s with no byte ends the download too
+        s.settimeout(8)
         bins = {}
         while True:
-            d = s.recv(65536)
+            try:
+                d = s.recv(65536)
+            except socket.timeout:
+                f["end_by"] = "idle 8 s"
+                break
             if not d:
                 break
             now = time.time()
@@ -280,6 +288,7 @@ def web_conn(ctx, f, reqs, size):
     t1 = time.time()
     try:
         s = socks_connect(ctx, ctx.a.base + 2)
+        s.settimeout(20)
         for i in range(reqs):
             s.sendall(struct.pack("!Q", size))
             got = 0
@@ -319,6 +328,10 @@ def client(a):
         jobs = [(game, ("G1", 0, 45, a.hz)), (game, ("U1", 0, 45, a.hz, True)),
                 (web, ("W1", 3)), (download, ("D1", 6, 10)), (web, ("W2", 9)),
                 (web, ("W3", 18)), (download, ("D2", 21, 6)), (game, ("G2", 24, 34, a.hz))]
+    elif a.scenario == "idle":
+        # a short burst of everything, then nothing (survey.sh IDLE watches
+        # how long the pooled connections stay)
+        jobs = [(game, ("G1", 0, 5, a.hz)), (web, ("W1", 1)), (download, ("D1", 2, 2))]
     elif a.scenario == "lat":
         T = a.warm + a.dur + 3
         jobs = [(game, ("G1", 0, T, a.hz)), (game, ("U1", 0, T, a.hz, True)),

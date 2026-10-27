@@ -6,7 +6,7 @@
 # xr-s runs the REALITY target (tlstarget.py), the traffic server
 # (xtraffic.py) and one xray server with every inbound kind (mkxray.py); per
 # VARIANT, xr-c runs an xray client with a SOCKS inbound and xtraffic.py's
-# "share" timeline through it, then IDLE s more with nothing to send, while
+# "share" timeline (SCEN) through it, then IDLE s more with nothing to send, while
 # xr-m records the headers of every packet between the two. RATE (10) keeps
 # it light: another agent may be measuring on the shared rig meanwhile.
 # Keys and configs live in $KEYS (outside the repo); OUT/raw gets the pcaps
@@ -85,8 +85,8 @@ for v in "$@"; do
   ip netns exec $C "$XR" run -c "$KEYS/client-$v.json" > "$OUT/raw/$v-client-stdout.log" 2>&1 &
   xc=$!
   sleep 1
-  echo "$(date +%T) $v: share timeline"
-  ip netns exec $C python3 "$D/xtraffic.py" client --scenario share --out "$OUT/raw/$v-flows.json" 2> "$OUT/raw/$v-flows.err"
+  echo "$(date +%T) $v: ${SCEN:-share} timeline"
+  ip netns exec $C python3 "$D/xtraffic.py" client --scenario ${SCEN:-share} --out "$OUT/raw/$v-flows.json" 2> "$OUT/raw/$v-flows.err"
   # idle: nothing to send; who keeps or closes the connections
   for i in $(seq 1 $((IDLE / 5))); do
     echo "T $(date +%s.%N)" >> "$OUT/raw/$v-ss.txt"
@@ -97,5 +97,6 @@ for v in "$@"; do
   sleep 0.5
   tail -n +$((a0 + 1)) "$OUT/raw/server-access.log" > "$OUT/raw/$v-access.log"
   python3 "$D/survey.py" "$OUT/raw" $v --json "$OUT/$v.json" | tee -a "$OUT/survey.txt"
+  gzip -f "$OUT/raw/$v.pcap"
   sleep 2
 done

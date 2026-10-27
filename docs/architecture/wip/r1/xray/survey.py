@@ -10,7 +10,7 @@ way, and the proxied flows (game, udpgame, dl, web) the server's access log
 puts on it ("from <client ip:port>"), and which flows share one; plus each
 game's RTT before and during the downloads (xray alone, no hs2).
 """
-import argparse, json, re, struct, sys
+import argparse, json, os, re, struct, sys
 from collections import defaultdict
 
 CLIENT_NET = "10.231.1."
@@ -88,7 +88,7 @@ def conns_from_pcap(path, t0):
     return cs
 
 
-ACC = re.compile(r"^(\S+ \S+) from (?:(?:tcp|udp):)?([\d.]+):(\d+) accepted (tcp|udp):([\d.]+):(\d+)")
+ACC = re.compile(r"^(\S+ \S+) from (?:(?:tcp|udp):)?([\d.]+):(\d+) accepted (?:(tcp|udp):)?([\d.]+):(\d+)")
 
 
 def access(path, t0):
@@ -99,7 +99,7 @@ def access(path, t0):
         if not m:
             continue
         ts = datetime.datetime.strptime(m.group(1), "%Y/%m/%d %H:%M:%S.%f").timestamp()
-        out.append({"t": round(ts - t0, 3), "cport": int(m.group(3)), "net": m.group(4),
+        out.append({"t": round(ts - t0, 3), "cport": int(m.group(3)), "net": m.group(4) or "?",
                     "dport": int(m.group(6)), "kind": KIND.get(int(m.group(6)), "?")})
     return out
 
@@ -119,7 +119,15 @@ def main():
     a = p.parse_args()
     fl = json.load(open("%s/%s-flows.json" % (a.raw, a.variant)))
     t0 = fl["t0"]
-    cs = conns_from_pcap("%s/%s.pcap" % (a.raw, a.variant), t0)
+    pc = "%s/%s.pcap" % (a.raw, a.variant)
+    if not os.path.exists(pc) and os.path.exists(pc + ".gz"):
+        import gzip, shutil, tempfile
+        tmp = tempfile.NamedTemporaryFile(suffix=".pcap", delete=False)
+        with gzip.open(pc + ".gz") as src:
+            shutil.copyfileobj(src, tmp)
+        tmp.close()
+        pc = tmp.name
+    cs = conns_from_pcap(pc, t0)
     acc = access("%s/%s-access.log" % (a.raw, a.variant), t0)
     # proxied flows by kind, in start order: an access entry takes the
     # earliest flow of its kind not taken yet whose start is before it

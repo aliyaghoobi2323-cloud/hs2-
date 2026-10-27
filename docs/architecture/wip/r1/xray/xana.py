@@ -77,7 +77,7 @@ def compose(raw, rid, cell, sha, benv):
     port = {}
     try:
         for l in open(raw + "/xaccess.log", errors="replace"):
-            m = re.search(r" from (?:tcp:|udp:)?[\d.]+:(\d+) accepted (?:tcp|udp):[\d.]+:(700[1-4])", l)
+            m = re.search(r" from (?:tcp:|udp:)?[\d.]+:(\d+) accepted (?:tcp:|udp:)?[\d.]+:(700[1-4])", l)
             if m:
                 port.setdefault({"7001": "game", "7002": "dl", "7003": "web", "7004": "udpgame"}[m.group(2)], m.group(1))
     except OSError:
