@@ -79,8 +79,10 @@ const (
 	serverPadMin, serverPadMax = 120 - proofHdrLen, 480 - proofHdrLen // typical response headers
 
 	// The protocol levels this binary speaks (§4.1): one up with every change
-	// of the wire format; min stays down to the previous build's max.
-	levelMin, levelMax byte = 1, 1
+	// of the wire format; min stays down to the previous build's max. Level
+	// 2: group streams (frames numbered, one-time move; CapGroup) and the
+	// link classes (CapQuiet).
+	levelMin, levelMax byte = 1, 2
 
 	legacyRecordLen = 32 // v1 clients: nonce + tag, no binding
 )
@@ -92,7 +94,25 @@ const (
 	CapSched                      // C2, the link scheduler (HS2_TUNE_SCHED)
 	CapHostQ                      // C3, the host queue guard (HS2_TUNE_HQG)
 	CapSendCap                    // C4-lite, the pacing cap (HS2_TUNE_SENDCAP)
+	// CapGroup (level 2): group streams, their frames numbered, and the
+	// one-time move of a connection from a QUIET link to a BULK one (C5,
+	// R1 round 2 β2; HS2_TUNE_QUIET). Needs CapSched.
+	CapGroup
+	// CapQuiet and CapBulk (level 2): not cores but the link's class, QUIET
+	// or BULK, in a pool that has classes. The edge offers one of them on
+	// each link (as the client in the dial's header, as the server in its
+	// proof, Server.OfferCaps); the exit offers both on every link, so a
+	// link has the one the edge chose, and neither when the edge keeps no
+	// classes (every link as before).
+	CapQuiet
+	CapBulk
 )
+
+// RoleCaps are the link-class bits.
+const RoleCaps = CapQuiet | CapBulk
+
+// level2Caps: the caps of level 2, never in force on a level 1 link.
+const level2Caps = CapGroup | RoleCaps
 
 // AuthHdr is the header of the client's record (7 B on the wire).
 type AuthHdr struct {
@@ -184,13 +204,16 @@ func (p ProofHdr) bytes() []byte {
 	return b
 }
 
-// localCaps is every cap this binary has, less those whose kill switch is set.
+// localCaps is every cap this binary has, less those whose kill switch is
+// set (CapQuiet is a link's class, offered per link: OfferCaps, the dial's
+// extra caps).
 func localCaps() uint32 {
-	caps := CapClass | CapSched | CapHostQ | CapSendCap
+	caps := CapClass | CapSched | CapHostQ | CapSendCap | CapGroup
 	for _, k := range []struct {
 		env string
 		bit uint32
-	}{{"HS2_TUNE_CLASS", CapClass}, {"HS2_TUNE_SCHED", CapSched}, {"HS2_TUNE_HQG", CapHostQ}, {"HS2_TUNE_SENDCAP", CapSendCap}} {
+	}{{"HS2_TUNE_CLASS", CapClass}, {"HS2_TUNE_SCHED", CapSched | CapGroup}, {"HS2_TUNE_HQG", CapHostQ},
+		{"HS2_TUNE_SENDCAP", CapSendCap}, {"HS2_TUNE_QUIET", CapGroup}} {
 		if os.Getenv(k.env) == "0" {
 			caps &^= k.bit
 		}
@@ -210,7 +233,15 @@ func negotiate(c AuthHdr, srvMin, srvMax byte, srvCaps uint32) (level byte, caps
 	if level < max(c.MinLevel, srvMin) {
 		return 0, 0, false
 	}
-	return level, c.Caps & srvCaps, true
+	return level, levelCaps(level, c.Caps&srvCaps), true
+}
+
+// levelCaps is caps less what level does not have.
+func levelCaps(level byte, caps uint32) uint32 {
+	if level < 2 {
+		caps &^= level2Caps
+	}
+	return caps
 }
 
 // checkProofLevel is the client's check of the level the server chose: it

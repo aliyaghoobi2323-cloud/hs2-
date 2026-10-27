@@ -85,11 +85,20 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	if cfg.DrainIdle != 0 {
 		lm.SetDrainIdle(cfg.DrainIdle)
 	}
+	// β2: QUIET links next to the pool's (quiet.go); they count toward
+	// max_links, so the ceiling the exit is told holds them too
+	quiet := lm.enableQuiet()
 	lm.SetWarm(cfg.WarmLinks)
 	// The status shows what the exit reports over kindInfo about its routing
 	// (routes.go); user connections do not wait for it (userStreamHeader).
 	lm.showRoutes = true
 	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet}
+	if quiet != nil {
+		mine.MaxLinks = QuietTotal(lm.max)
+		if reverse {
+			cfg.RevServer.OfferCaps = quiet.offer
+		}
+	}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
 			mine.Ports = append(mine.Ports, n)
@@ -111,6 +120,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// link count.
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, logf)
+		go openOWD(ctx, l) // a QUIET link: α's one-way delays (owd.go)
 		go openStats(ctx, l, logf)
 		go func() { // tell the exit our ceiling and user ports, learn its own
 			mtr := linkMeterOf(l)
@@ -286,7 +296,16 @@ type synOpener interface {
 
 // openUserStream opens a user stream on link with the user's tag in its SYN.
 // The class hint is unknown: the edge has no guess before the first byte.
-func openUserStream(link Link, tag uint32) (stream, error) {
+// On a QUIET link it is a group stream (quiet.go), which may move once to a
+// BULK link; rel is its slot on link.
+func openUserStream(lm *LinkManager, link Link, tag uint32, rel func()) (stream, error) {
+	if ml, ok := link.(*mtcpLink); ok && ml.quiet && ml.sess.HasSched() {
+		var q *quietSet
+		if lm != nil {
+			q = lm.quiet
+		}
+		return openGroupStream(q, ml, tag, rel)
+	}
 	if so, ok := link.(synOpener); ok {
 		return so.OpenStreamSyn(smux.EncodeSyn(tag, 0))
 	}
@@ -347,14 +366,14 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoi
 	hdr, tag := userStreamHeader(udp, port), userTagOf(ctx)
 	start := func(link Link, release func()) {
 		tried = append(tried, link)
-		live = append(live, startOpen(link, release, hdr[:], tag, done))
+		live = append(live, startOpen(lm, link, release, hdr[:], tag, done))
 	}
 	for {
 		if len(live) == 0 {
 			if len(tried) >= maxTried {
 				return nil, nil, nil, false
 			}
-			link, release, ok := pickWait(ctx, lm, !udp, tried...)
+			link, release, ok := pickOpen(ctx, lm, !udp, tried...)
 			if !ok {
 				return nil, nil, nil, false
 			}
@@ -376,7 +395,7 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoi
 			if len(live) > 0 && len(tried) < maxTried && !anyOpened(live) {
 				// an older try still waits for its SYN: the next link now,
 				// not a whole openTimeout later
-				if link, release, ok := lm.pickExcept(tried, !udp); ok {
+				if link, release, ok := pickOpenExcept(lm, tried, !udp); ok {
 					start(link, release)
 				}
 			}
@@ -388,7 +407,7 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoi
 				}
 			}
 			if len(tried) < maxTried && !anyOpened(live) {
-				if link, release, ok := lm.pickExcept(tried, !udp); ok {
+				if link, release, ok := pickOpenExcept(lm, tried, !udp); ok {
 					start(link, release)
 				}
 			}
@@ -428,11 +447,11 @@ type openTry struct {
 // startOpen opens a stream on link, with the user tag in its SYN, and writes
 // its header in a goroutine of its own; the result comes on done unless the
 // try is abandoned first.
-func startOpen(link Link, release func(), hdr []byte, tag uint32, done chan<- *openTry) *openTry {
+func startOpen(lm *LinkManager, link Link, release func(), hdr []byte, tag uint32, done chan<- *openTry) *openTry {
 	t := &openTry{link: link, release: release, at: time.Now()}
 	limit := t.at.Add(openGiveUp)
 	go func() {
-		st, err := openUserStream(link, tag)
+		st, err := openUserStream(lm, link, tag, release)
 		if err == nil {
 			t.opened.Store(true)
 			if t.claim.Load() == 2 {
@@ -684,6 +703,9 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 		return
 	}
 	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)))
+	if ml, ok := l.(*mtcpLink); ok {
+		pl.class = l3ClassOf(ml.quiet, ml.bulk) // β2: new flows on QUIET
+	}
 	set.add(pl)
 	go func() {
 		set.serveLink(ctx, pl, dev)

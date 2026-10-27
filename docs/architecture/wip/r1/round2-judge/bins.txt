@@ -1,0 +1,4 @@
+b1 /root/r2j/bins/hs2-b1
+b1na /root/r2j/bins/hs2-b1 HS2_TUNE_ALPHA=0
+b2 /root/r2j/bins/hs2-b2
+b2na /root/r2j/bins/hs2-b2 HS2_TUNE_ALPHA=0

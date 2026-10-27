@@ -1,0 +1,10 @@
+09:18:17 plan /root/r2b-smoke/plan-mini.txt: 4 runs
+09:18:17 start 05500279-b2-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.11 waited 0s
+09:18:47 done 05500279-b2-1 ok=1 
+09:18:48 start 05500279-b2-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.13 waited 0s
+09:19:17 done 05500279-b2-2 ok=1 
+09:19:18 start 2d23c440-b2-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.88 waited 0s
+09:19:47 done 2d23c440-b2-1 ok=1 
+09:19:48 start 2d23c440-b2-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.41 waited 0s
+09:20:17 done 2d23c440-b2-2 ok=1 
+09:20:17 done /root/r2b-smoke/plan-mini.txt

@@ -1,0 +1,32 @@
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20  BIN=b2  runs 1 (ok 1)
+   capacity 23.91 Mbit/s   links 2   host busy 14%
+   total dn 20.95  up 21.80 Mbit/s   (c) 88%
+   (b) worst bulk user 86% of its floor
+   probe p50 72.8  p99 73.6  max 74.4 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   TUN ping p50 72.9  p99 73.5 ms  lost 0   floor 72.5  bound 82.5
+   CPU % (one core = 100): edge 22.1  exit 22.7   retrans %: exit 0.060  edge 0.109
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)  tun PASS (1/1)
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20  BIN=b2  runs 1 (ok 1)
+   capacity 23.91 Mbit/s   links 2   host busy 13%
+   total dn 21.52  up 21.65 Mbit/s   (c) 90%
+   (b) worst bulk user 89% of its floor
+   probe p50 76.3  p99 93.8  max 94.0 ms  lost 0   RTT_floor 72.5  bound (d) 92.5
+   TUN ping p50 73.3  p99 95.0 ms  lost 0   floor 72.5  bound 82.5
+   CPU % (one core = 100): edge 24.4  exit 25.6   retrans %: exit 0.000  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d FAIL (0/1)  tun FAIL (0/1)
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30  BIN=b2  runs 1 (ok 1)
+   capacity 95.64 Mbit/s   links 2   host busy 20%
+   total dn 71.96  up 0.00 Mbit/s   (c) 75%
+   1-connection user 33.22 Mbit/s
+   (b) worst bulk user 69% of its floor
+   probe p50 72.8  p99 203.2  max 292.9 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   CPU % (one core = 100): edge 49.1  exit 42.9   retrans %: exit 0.024  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d FAIL (0/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30  BIN=b2  runs 1 (ok 1)
+   capacity 95.64 Mbit/s   links 8   host busy 22%
+   total dn 73.78  up 0.00 Mbit/s   (c) 80%
+   probe p50 72.7  p99 219.5  max 277.3 ms  lost 0   RTT_floor 72.3  bound (d) 92.3
+   TUN ping p50 72.9  p99 241.0 ms  lost 0   floor 72.4  bound 82.4
+   of which TUN users (inner goodput) dn 73.78  up 0.00 Mbit/s
+   CPU % (one core = 100): edge 66.9  exit 63.7   retrans %: exit 0.445  edge 0.000
+   verdict: c FAIL (0/1)  d FAIL (0/1)  tun FAIL (0/1)

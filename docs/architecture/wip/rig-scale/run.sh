@@ -5,6 +5,7 @@
 #
 #   N      hs2 links (min_links = max_links = N on both servers)
 #   RATE   bottleneck, Mbit/s, each direction      RTT  ms      LOSS  %, each direction
+#          (RATE_UP=R: the upload direction at R instead, an asymmetric path)
 #   MODE   fqcodel | pfifo:LIMIT | agg:RATE | police:RATE | police:RATE+LEAF   (rig.sh)
 #   USERS  synthetic users = source addresses (<= 500 IPv4, + 1 with V6, + TUN users)
 #   MIX    s5 | lone16 | one_vs_16 | newheavy | tunping     (ana.py spec)
@@ -119,14 +120,14 @@ run_one() {
   local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
-  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6
-  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20
+  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP
+  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=
   for tok in $cell; do
     k=${tok%%=*}; v=${tok#*=}
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
     case "$k" in
       HS2_*) hs2env="$hs2env $k=$v" ;;
-      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6) printf -v "$k" '%s' "$v" ;;
+      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP) printf -v "$k" '%s' "$v" ;;
     esac
   done
   bp=$(binpath "$bin")
@@ -160,7 +161,7 @@ run_steps() {
   # the users and the timeline
   read -r nusers total ntun < <(python3 "$D/ana.py" spec "$cell" "$r/spec.json" 2> "$r/spec.err")
   [ -n "$ntun" ] || { why="spec: $(tail -1 "$r/spec.err")"; return 1; }
-  RATE=$RATE RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers NTUN=$ntun V6=$V6 AGGQ_MS=$AGGQ_MS \
+  RATE=$RATE RATE_UP=${RATE_UP:-$RATE} RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers NTUN=$ntun V6=$V6 AGGQ_MS=$AGGQ_MS \
     "$D/rig.sh" up 2> "$r/rig.err" || { why="rig up: $(tail -1 "$r/rig.err")"; return 1; }
   mkconf "$w" "$N" || { why="hs2 config"; return 1; }
   ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 > "$r/rigload-server.log" 2>&1 &
@@ -180,10 +181,24 @@ run_steps() {
     *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
                PIDS+=($!); sleep 1.5 ;;
   esac
+  # TRACE_SS=1 (the judge of round 2): ss -ti of the link sockets of both
+  # ends every 0.5 s through the run (pacing and max_pacing_rate, delivery,
+  # srtt, min_rtt), each sample after a "T <epoch>" line: the trace of α's cap
+  if [ "${TRACE_SS:-0}" = 1 ]; then
+    ( while :; do
+        echo "T $(date +%s.%N)" >> "$r/sstrace-exit.txt"
+        ip netns exec $X ss -tinH state established '( dport = :2096 )' >> "$r/sstrace-exit.txt" 2>/dev/null
+        echo "T $(date +%s.%N)" >> "$r/sstrace-edge.txt"
+        ip netns exec $E ss -tinH state established '( sport = :2096 )' >> "$r/sstrace-edge.txt" 2>/dev/null
+        sleep 0.5
+      done ) &
+    PIDS+=($!)
+  fi
   # measurement: the client from t=0 to total; snapshots at WARM and near the end
   ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') "$RL" client -spec "$r/spec.json" > "$r/client.json" 2> "$r/client.err" &
   pc=$!; PIDS+=($pc)
   c0=$(date +%s.%N)
+  echo "$c0" > "$r/client-t0.txt"
   sleep "$WARM"
   sssnap start "$r"
   LC_ALL=C pidstat -u -p "$pe,$px" 1 $(awk -v t="$total" -v w="$WARM" 'BEGIN{printf "%d", t - w - 1}') > "$r/pidstat.txt" 2>&1 &

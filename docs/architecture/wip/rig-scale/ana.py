@@ -15,22 +15,36 @@ Definitions (REDESIGN.fa.md section 5.1 and 6):
             timestamps; htb counts the 1514 B Ethernet frame). rate = RATE, or
             min(RATE, AR) with agg:AR in MODE; with police:PR in MODE the
             capacity is also at most N x PR (MODE=police:PR+agg:AR: both).
+            RATE_UP (optional) is the upload direction's rate (default RATE),
+            so each direction has its own capacity.
             A TUN user's goodput is counted as the inner IP packets it took
             (x 1320/1268 for IPv4, x 1320/1248 for IPv6: TUN MTU 1320, inner
             MSS with timestamps), so it compares with the same capacity.
+  cap_P10   decision T17 (wip/r1/decisions.fa.md): the P10 gates (a), (b),
+            (c) and the bulk part of (e) are taken at the socket, after hs2's
+            record framing: cap_P10 = capacity x F, F = 0.9743 = (991.4 - 4) /
+            (991.4 + 22), the shaped record sizes of obfs.NewHTTPSLengthSampler
+            (mean 991.4 B, 4 B shaper header, 22 B TLS 1.3 overhead). F is a
+            constant of the record shape, not measured per run; changing it
+            needs a DPI review. Both ratios are reported: to cap_P10 (the gate)
+            and to the raw capacity ("raw").
   RTT_floor p1 of the probe over the whole measured span of the same run (for
             the TUN ping: p1 of the TUN ping itself).
-  (a) the lone user (16 connections) >= 0.95 x capacity
-  (b) every bulk user >= 0.9 x its floor; floor = max-min fair share of the
-      capacity (water-filling): min(demand, capacity / active users), the light
+  (a) the lone user (16 connections) >= 0.95 x cap_P10
+  (b) every bulk user >= 0.9 x its floor; floor = max-min fair share of
+      cap_P10 (water-filling): min(demand, cap_P10 / active users), the light
       users' (measured) demand first. In one_vs_16 this is the 1-connection user
-      next to the 16-connection user (floor = (capacity - light) / 2).
-  (c) total bulk >= 0.97 x capacity, in each direction that carries bulk
-  (d) light (probe) p99 <= RTT_floor + max(20 ms, 3 x 1500 B / rate)
+      next to the 16-connection user (floor = (cap_P10 - light) / 2).
+  (c) total bulk >= 0.97 x cap_P10, in each direction that carries bulk
+  (d) light (probe) p99 <= RTT_floor + max(20 ms, 3 x 1500 B / rate), where a
+      probe still unanswered 2 s after the run counts as infinitely late: more
+      than 1% lost fails (d) whatever the p99 of the answered ones (judge
+      round 1, open item 9); rate = the slower direction
   (e) newheavy: after the heavy user joins, the probe p99 (from the join to the
       end) stays within (d), and the existing bulk user (from SETTLE s after the
       join) >= 0.9 x its floor (now shared with the heavy user)
-  tun TUN ping p99 <= RTT_floor(ping) + max(10 ms, 3 x 1500 B / rate)
+  tun TUN ping p99 <= RTT_floor(ping) + max(10 ms, 3 x 1500 B / rate), lost
+      pings counted as for (d)
   thr new/old total >= 0.97 (when a cell has both binaries)
 Verdicts are taken on the median of the repeats; "k/n" says in how many runs
 the criterion held on its own.
@@ -44,6 +58,8 @@ import statistics
 import sys
 
 EFF = 1448 / 1514
+F_REC = 0.9743  # T17: hs2's record framing, (991.4 - 4) / (991.4 + 22)
+LOST_MAX = 0.01  # more lost probes or pings than this: p99 over all sent is infinite
 REQ = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX", "BIN"]
 MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping"]
 ORDER = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX"]
@@ -461,20 +477,35 @@ def compose(r, ok, why):
 
 # ------------------------------------------------------------------ analysis
 
-def rate_eff(rec):
+def rate_eff(rec, d="dn"):
+    """the bottleneck rate of direction d (dn, up), Mbit/s"""
     r = float(rec["RATE"])
+    if d == "up":
+        r = float((rec.get("extra") or {}).get("RATE_UP", rec.get("RATE_UP", r)))
     pol, leaf = parse_mode(rec["MODE"])
     if leaf.startswith("agg:"):
         r = min(r, float(leaf[4:]))
     return r
 
 
-def capacity(rec):
-    r = rate_eff(rec)
+def capacity(rec, d="dn"):
+    """the raw capacity of direction d: the bottleneck's TCP payload rate"""
+    r = rate_eff(rec, d)
     pol, leaf = parse_mode(rec["MODE"])
     if pol is not None:
         r = min(r, float(rec["N"]) * pol)
     return r * EFF
+
+
+def cap_p10(rec, d="dn"):
+    """T17: the capacity at the socket, after the record framing (the P10 gates)"""
+    return capacity(rec, d) * F_REC
+
+
+def lost_frac(l):
+    """the share of the sent probes or pings never answered"""
+    sent = l.get("sent") or (l.get("n", 0) + l.get("lost", 0))
+    return (l.get("lost", 0) / sent) if sent else 0.0
 
 
 def fair_floor(cap, demands):
@@ -505,12 +536,17 @@ def derive(rec):
     m = {}
     if not rec.get("ok") or "users" not in rec:
         return m
-    cap = capacity(rec)
-    rate = rate_eff(rec)
+    caps = {d: capacity(rec, d) for d in ("dn", "up")}
+    caps10 = {d: cap_p10(rec, d) for d in ("dn", "up")}
+    rate = min(rate_eff(rec, "dn"), rate_eff(rec, "up"))
     mix = rec["MIX"]
     dirn = rec.get("extra", {}).get("DIR", "dn")
+    cap, cap10 = caps[dirn], caps10[dirn]
     users = rec["users"]
     m["cap"] = cap
+    m["cap_p10"] = cap10
+    if caps["up"] != caps["dn"]:
+        m["cap_up"] = caps["up"]
     wsum = "after_settled" if mix == "newheavy" else "main"
     # goodput through the tunnel: port users and TUN users together
     m["dn"] = rec["dn_sum_mbit"].get(wsum, 0) + (rec.get("tun_dn_sum_mbit") or {}).get(wsum, 0)
@@ -527,14 +563,16 @@ def derive(rec):
         if pm and pm["n"]:
             m["p50"], m["p99"], m["pmax"] = pm["p50"], pm["p99"], pm["max"]
             m["plost"] = pm["lost"]
-            m["d"] = pm["p99"] <= m["d_bound"]
+            m["plost_frac"] = lost_frac(pm)
+            m["d"] = pm["p99"] <= m["d_bound"] and m["plost_frac"] <= LOST_MAX
     ta = lat(rec, "ping_tun", "all")
     if ta and ta["n"]:
         tm = lat(rec, "ping_tun", "main") or ta
         m["tfloor"] = ta["p1"]
         m["t_bound"] = ta["p1"] + max(10.0, 3 * 1500 * 8 / (rate * 1e6) * 1000)
         m["t50"], m["t99"], m["tlost"] = tm["p50"], tm["p99"], tm["lost"]
-        m["tun"] = tm["p99"] <= m["t_bound"]
+        m["tlost_frac"] = lost_frac(tm)
+        m["tun"] = tm["p99"] <= m["t_bound"] and m["tlost_frac"] <= LOST_MAX
     win = "after_settled" if mix == "newheavy" else "main"
 
     def thr(u, d, w=win):
@@ -547,8 +585,9 @@ def derive(rec):
     def bulk_dir(u, d):
         return any(f.startswith(d) for f in u["flows"].split(","))
 
-    # (b) generic and (c), per direction carrying bulk
-    worst = None
+    # (b) generic and (c), per direction carrying bulk; each ratio both to
+    # cap_P10 (the gate, T17) and to the raw capacity (*_raw)
+    worst = worst_raw = None
     for d in ("dn", "up"):
         bulk = [u for u in users if bulk_dir(u, d) and u["role"] not in ("light", "pinger")]
         if not bulk:
@@ -557,22 +596,28 @@ def derive(rec):
             bulk = [u for u in bulk if u["role"] in ("exist", "heavy")]
         light = sum(thr(u, d) for u in users if u not in bulk)
         tot = sum(thr(u, d) for u in bulk)
-        m["c_" + d] = tot / cap
+        m["c_" + d] = tot / caps10[d]
+        m["c_raw_" + d] = tot / caps[d]
         if len(bulk) > 1:
-            fl = fair_floor(cap - light, [None] * len(bulk))
-            ratios = [thr(u, d) / f for u, f in zip(bulk, fl)]
-            m["fair_" + d] = min(ratios)
-            worst = min(ratios) if worst is None else min(worst, min(ratios))
+            for cp, key in ((caps10[d], "fair_"), (caps[d], "fair_raw_")):
+                fl = fair_floor(cp - light, [None] * len(bulk))
+                ratios = [thr(u, d) / f for u, f in zip(bulk, fl)]
+                m[key + d] = min(ratios)
+            worst = m["fair_" + d] if worst is None else min(worst, m["fair_" + d])
+            worst_raw = m["fair_raw_" + d] if worst_raw is None else min(worst_raw, m["fair_raw_" + d])
     cs = [m[k] for k in ("c_dn", "c_up") if k in m]
     if cs:
         m["c_ratio"] = min(cs)
+        m["c_raw"] = min(m[k] for k in ("c_raw_dn", "c_raw_up") if k in m)
         m["c"] = min(cs) >= 0.97
     if mix == "lone16":
         u = next(u for u in users if u["role"] == "lone")
-        m["a_ratio"] = thr(u, dirn) / cap
+        m["a_ratio"] = thr(u, dirn) / cap10
+        m["a_raw"] = thr(u, dirn) / cap
         m["a"] = m["a_ratio"] >= 0.95
     if mix in ("one_vs_16", "s5") and worst is not None:
         m["b_ratio"] = worst
+        m["b_raw"] = worst_raw
         m["b"] = worst >= 0.9
     if mix == "one_vs_16":
         one = next(u for u in users if u["role"] == "one")
@@ -581,19 +626,23 @@ def derive(rec):
         ex = next(u for u in users if u["role"] == "exist")
         hv = next(u for u in users if u["role"] == "heavy")
         light = sum(thr(u, dirn) for u in users if u["role"] in ("light", "pinger"))
-        fl = fair_floor(cap - light, [None, None])[0]
+        fl = fair_floor(cap10 - light, [None, None])[0]
+        fl_raw = fair_floor(cap - light, [None, None])[0]
         m["exist_before"] = thr(ex, dirn, "before")
         m["exist_after"] = thr(ex, dirn, "after_settled")
         m["heavy_after"] = thr(hv, dirn, "after_settled")
         m["e_bulk_ratio"] = m["exist_after"] / fl
+        m["e_bulk_raw"] = m["exist_after"] / fl_raw
         pa2 = lat(rec, "probe", "after")
         pb = lat(rec, "probe", "before")
         if pb and pb["n"]:
             m["p99_before"] = pb["p99"]
         if pa2 and pa2["n"] and "d_bound" in m:
             m["p99_after"] = pa2["p99"]
-            m["e"] = pa2["p99"] <= m["d_bound"] and m["e_bulk_ratio"] >= 0.9
+            m["plost_after_frac"] = lost_frac(pa2)
+            m["e"] = pa2["p99"] <= m["d_bound"] and m["plost_after_frac"] <= LOST_MAX and m["e_bulk_ratio"] >= 0.9
         m["b_ratio"] = m["e_bulk_ratio"]
+        m["b_raw"] = m["e_bulk_raw"]
     c = rec.get("cpu", {})
     m["cpu_edge"] = c.get("edge", {}).get("mean")
     m["cpu_exit"] = c.get("exit", {}).get("mean")
@@ -653,11 +702,12 @@ def analyze(path, as_json=False):
             elif flag == "c":
                 v = med["c_ratio"][0] >= 0.97
             elif flag == "d":
-                v = med["p99"][0] <= med["d_bound"][0]
+                v = med["p99"][0] <= med["d_bound"][0] and med["plost_frac"][0] <= LOST_MAX
             elif flag == "e":
-                v = med["p99_after"][0] <= med["d_bound"][0] and med["e_bulk_ratio"][0] >= 0.9
+                v = (med["p99_after"][0] <= med["d_bound"][0] and med["e_bulk_ratio"][0] >= 0.9
+                     and med["plost_after_frac"][0] <= LOST_MAX)
             else:
-                v = med["t99"][0] <= med["t_bound"][0]
+                v = med["t99"][0] <= med["t_bound"][0] and med["tlost_frac"][0] <= LOST_MAX
             s.setdefault("verdict", {})[flag] = {"pass": v, "runs": "%d/%d" % (sum(got), len(got))}
         summary.append(s)
     # new against old, per cell
@@ -688,14 +738,17 @@ def analyze(path, as_json=False):
             print("   failed run: %s" % f)
         if not s["ok"]:
             continue
-        print("   capacity %.2f Mbit/s   links %s   host busy %s%%" % (md["cap"][0], fmt(md.get("links"), 0), fmt(md.get("busy"), 0)))
-        print("   total dn %s  up %s Mbit/s   (c) %s" % (fmt(md.get("dn"), 2), fmt(md.get("up"), 2), fmt(md.get("c_ratio"), pct=True)))
+        print("   capacity %.2f Mbit/s (cap_P10 %.2f)%s   links %s   host busy %s%%" % (
+            md["cap"][0], md["cap_p10"][0], ("   up capacity %.2f" % md["cap_up"][0]) if "cap_up" in md else "",
+            fmt(md.get("links"), 0), fmt(md.get("busy"), 0)))
+        print("   total dn %s  up %s Mbit/s   (c) %s of cap_P10 (raw %s)" % (
+            fmt(md.get("dn"), 2), fmt(md.get("up"), 2), fmt(md.get("c_ratio"), pct=True), fmt(md.get("c_raw"), pct=True)))
         if "a_ratio" in md:
-            print("   (a) lone user %s of capacity" % fmt(md["a_ratio"], pct=True))
+            print("   (a) lone user %s of cap_P10 (raw %s)" % (fmt(md["a_ratio"], pct=True), fmt(md.get("a_raw"), pct=True)))
         if "one" in md:
             print("   1-connection user %s Mbit/s" % fmt(md["one"], 2))
         if "b_ratio" in md:
-            print("   (b) worst bulk user %s of its floor" % fmt(md["b_ratio"], pct=True))
+            print("   (b) worst bulk user %s of its floor in cap_P10 (raw %s)" % (fmt(md["b_ratio"], pct=True), fmt(md.get("b_raw"), pct=True)))
         if "exist_after" in md:
             print("   newheavy: existing bulk before %s, after %s, heavy after %s Mbit/s; probe p99 before %s, after %s ms" % (
                 fmt(md.get("exist_before"), 2), fmt(md.get("exist_after"), 2), fmt(md.get("heavy_after"), 2),

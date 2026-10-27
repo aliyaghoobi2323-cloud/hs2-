@@ -53,3 +53,21 @@ func tuneTCP(c net.Conn) {
 		}
 	})
 }
+
+// SetCongestion sets the congestion control of a link socket that is up
+// (a QUIET link's: engine.QuietCC); false: the kernel refused it (the
+// socket keeps its own).
+func SetCongestion(tc *net.TCPConn, cc string) bool {
+	if tc == nil || cc == "" {
+		return false
+	}
+	rc, err := tc.SyscallConn()
+	if err != nil {
+		return false
+	}
+	ok := false
+	rc.Control(func(fd uintptr) {
+		ok = unix.SetsockoptString(int(fd), unix.IPPROTO_TCP, unix.TCP_CONGESTION, cc) == nil
+	})
+	return ok
+}
