@@ -1,0 +1,16 @@
+17:46:20 plan /root/r3b/M2/plan.txt: 7 runs
+17:46:21 start 05500279-g2b-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=g2b) load 1.80 waited 0s
+17:46:50 done 05500279-g2b-1 ok=1 
+17:46:51 start cb51e9b2-g2b-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=g2b) load 1.87 waited 0s
+17:47:20 done cb51e9b2-g2b-1 ok=1 
+17:47:21 start 4fe96b96-g2b-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g2b) load 1.60 waited 0s
+17:47:50 done 4fe96b96-g2b-1 ok=1 
+17:47:51 start e9a34d17-g2b-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g2b) load 1.68 waited 0s
+17:48:36 done e9a34d17-g2b-1 ok=1 
+17:48:37 start ae0cf9da-g2b-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g2b) load 2.13 waited 0s
+17:49:16 done ae0cf9da-g2b-1 ok=1 
+17:49:17 start 340c98ae-g2b-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g2b) load 2.00 waited 0s
+17:49:56 done 340c98ae-g2b-1 ok=1 
+17:49:57 start 2d23c440-g2b-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=g2b) load 1.80 waited 0s
+17:50:26 done 2d23c440-g2b-1 ok=1 
+17:50:26 done /root/r3b/M2/plan.txt

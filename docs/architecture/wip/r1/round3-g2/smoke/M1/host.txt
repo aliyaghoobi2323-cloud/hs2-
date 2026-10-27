@@ -1,0 +1,30 @@
+== start 2026-10-27T17:15:45+00:00
+ 17:15:45 up  6:10,  7 users,  load average: 2.62, 1.67, 1.26
+top - 17:15:46 up  6:10,  7 users,  load average: 2.62, 1.67, 1.26
+Tasks: 269 total,   1 running, 268 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.7 us,  5.1 sy,  0.0 ni, 91.0 id,  0.0 wa,  0.0 hi,  1.2 si,  0.0 st 
+MiB Mem :  23456.9 total,  16866.3 free,   1259.7 used,   5747.4 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22197.3 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 441391 root      20   0 1500860 219396  28664 S  32.7   0.9   3:17.11 xray-linux-amd6
+    992 root      20   0 1475712 125136  10420 S  26.9   0.5  95:14.01 hs2
+ 453773 root      20   0    7604   4040   3544 S   1.9   0.0   0:00.28 bash
+ 457035 root      20   0   11908   6048   3884 R   1.9   0.0   0:00.03 top
+ 457094 root      20   0   12156   8576   7452 S   1.9   0.0   0:00.01 sshd
+      1 root      20   0   22656  14156   9776 S   0.0   0.1   0:30.08 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.04 kthreadd
+== end 2026-10-27T17:19:53+00:00
+ 17:19:53 up  6:14,  7 users,  load average: 2.43, 2.05, 1.51
+top - 17:19:54 up  6:14,  8 users,  load average: 2.43, 2.05, 1.51
+Tasks: 263 total,   1 running, 262 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  7.6 us,  6.1 sy,  0.0 ni, 83.7 id,  0.0 wa,  0.0 hi,  2.6 si,  0.0 st 
+MiB Mem :  23456.9 total,  17809.1 free,   1243.4 used,   4820.9 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22213.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 467163 root      20   0    3428   2032   1392 S  43.1   0.0   0:00.31 gzip
+    992 root      20   0 1475712 143344  10420 S  37.3   0.6  96:44.10 hs2
+ 441391 root      20   0 1501252 245364  28664 S  37.3   1.0   5:00.89 xray-linux-amd6
+ 467023 root      20   0   17508  13412   8824 S  15.7   0.1   0:00.10 sshd
+ 467161 root      20   0    7048   3376   2972 S   7.8   0.0   0:00.05 tar
+ 467047 sshd      20   0   12156   6104   4964 S   3.9   0.0   0:00.02 sshd
+ 467158 root      20   0    6676   2860   2636 S   3.9   0.0   0:00.04 find

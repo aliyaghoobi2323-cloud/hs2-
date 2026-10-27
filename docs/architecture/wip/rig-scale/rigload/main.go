@@ -22,6 +22,9 @@
 //	       so an upload is also counted where it arrives
 //	probe  interactive: 32 B every 200 ms on one connection, echoed; one RTT
 //	       per probe, sent on schedule whether or not the last one came back
+//	call   app-limited both ways (R1 round 3, the lead's note: a video call):
+//	       Bytes (1875) every EveryMs (10 ms, 1.5 Mbit/s) on one connection,
+//	       echoed; one RTT per message, as probe, counted apart (call)
 //	ping   tun users only: ICMP (ICMPv6 with v6) echo every 200 ms to the
 //	       exit's hs0 address, from the user's inner address
 //
@@ -183,6 +186,9 @@ type Flow struct {
 	N      int     `json:"n"`
 	StartS float64 `json:"start_s"`
 	StopS  float64 `json:"stop_s"` // 0: the end of the run
+	// call: its message and its period (0: 1875 B, 10 ms)
+	Bytes   int `json:"bytes,omitempty"`
+	EveryMs int `json:"every_ms,omitempty"`
 }
 
 type User struct {
@@ -224,7 +230,7 @@ func (s *Spec) check() error {
 		}
 		for _, f := range u.Flows {
 			switch f.Kind {
-			case "dn", "up", "probe":
+			case "dn", "up", "probe", "call":
 			case "ping":
 				if u.Path != "tun" {
 					return fmt.Errorf("user %s: ping on the port path (ICMP does not cross user ports)", u.ID)
@@ -344,6 +350,7 @@ type ustate struct {
 	idx       int
 	dn, up    *bins
 	probe     rtts
+	call      rtts // call flows' messages
 	ping      rtts
 	conns     atomic.Int32 // connections made
 	dialErrs  atomic.Int32
@@ -508,10 +515,25 @@ func phase(every time.Duration) time.Duration {
 }
 
 func (c *client) probe(us *ustate, fi int, f Flow) {
+	c.echoFlow(us, fi, f, time.Duration(c.s.ProbeMs)*time.Millisecond, c.s.ProbeBytes, &us.probe)
+}
+
+// call: an app-limited flow both ways (Flow.Bytes every Flow.EveryMs), echoed
+func (c *client) call(us *ustate, fi int, f Flow) {
+	every, size := time.Duration(f.EveryMs)*time.Millisecond, f.Bytes
+	if every <= 0 {
+		every = 10 * time.Millisecond
+	}
+	if size <= 0 {
+		size = 1875
+	}
+	c.echoFlow(us, fi, f, every, size, &us.call)
+}
+
+// echoFlow: size bytes every period on one connection, echoed; one RTT each, in r
+func (c *client) echoFlow(us *ustate, fi int, f Flow, every time.Duration, size int, r *rtts) {
 	stop := c.stopOf(f)
 	addr := c.target(us, true)
-	every := time.Duration(c.s.ProbeMs) * time.Millisecond
-	size := c.s.ProbeBytes
 	if size < 8 {
 		size = 8
 	}
@@ -546,7 +568,7 @@ func (c *client) probe(us *ustate, fi int, f Flow) {
 			delete(sentAt, seq)
 			mu.Unlock()
 			if ok {
-				us.probe.got(s.Seconds(), float64(now-s)/1e6)
+				r.got(s.Seconds(), float64(now-s)/1e6)
 			}
 		}
 	}()
@@ -559,7 +581,7 @@ func (c *client) probe(us *ustate, fi int, f Flow) {
 		mu.Lock()
 		sentAt[seq] = s
 		mu.Unlock()
-		us.probe.sent(s.Seconds())
+		r.sent(s.Seconds())
 		conn.SetWriteDeadline(stop.Add(grace))
 		if _, err := conn.Write(b); err != nil {
 			us.probeErrs.Add(1)
@@ -666,6 +688,7 @@ type UserOut struct {
 	Dn        map[string]float64 `json:"dn_mbit"`
 	Up        map[string]float64 `json:"up_mbit"`
 	Probe     map[string]*Lat    `json:"probe,omitempty"`
+	Call      map[string]*Lat    `json:"call,omitempty"`
 	Ping      map[string]*Lat    `json:"ping,omitempty"`
 	Conns     int32              `json:"conns"`
 	DialErrs  int32              `json:"dial_errs,omitempty"`
@@ -689,6 +712,7 @@ type Out struct {
 	ProbeAll map[string]*Lat    `json:"probe_all,omitempty"` // port users' probes together
 	ProbeTun map[string]*Lat    `json:"probe_tun,omitempty"` // tun users' TCP probes together
 	PingTun  map[string]*Lat    `json:"ping_tun,omitempty"`  // every ICMP ping together
+	CallAll  map[string]*Lat    `json:"call_all,omitempty"`  // every call's messages together
 	Dn1s     []float64          `json:"dn_1s"`               // every user's downloads, per second from t0
 	Up1s     []float64          `json:"up_1s"`
 	Errs     map[string]int     `json:"errs,omitempty"`
@@ -728,6 +752,8 @@ func runClient(s *Spec) *Out {
 						c.bulk(us, fi*1000+k, f)
 					case "probe":
 						c.probe(us, fi*1000+k, f)
+					case "call":
+						c.call(us, fi*1000+k, f)
 					case "ping":
 						c.ping(us, f)
 					}
@@ -748,7 +774,7 @@ func runClient(s *Spec) *Out {
 			(*m)[w.Name] = l
 		}
 	}
-	var probes, tprobes, pings []*rtts
+	var probes, tprobes, pings, calls []*rtts
 	for _, us := range c.users {
 		o := UserOut{ID: us.u.ID, Path: us.u.Path, Src: us.u.Src, Flows: us.u.Flows,
 			Dn: map[string]float64{}, Up: map[string]float64{},
@@ -774,9 +800,11 @@ func runClient(s *Spec) *Out {
 			o.Up[w.Name] = us.up.mbit(w.From, w.To)
 			lat([]*rtts{&us.probe}, w, &o.Probe)
 			lat([]*rtts{&us.ping}, w, &o.Ping)
+			lat([]*rtts{&us.call}, w, &o.Call)
 		}
 		out.Users = append(out.Users, o)
 		pings = append(pings, &us.ping)
+		calls = append(calls, &us.call)
 		if us.tun() {
 			tprobes = append(tprobes, &us.probe)
 		} else {
@@ -798,6 +826,7 @@ func runClient(s *Spec) *Out {
 		out.TunDnSum[w.Name], out.TunUpSum[w.Name] = round3(td), round3(tu)
 		lat(probes, w, &out.ProbeAll)
 		lat(tprobes, w, &out.ProbeTun)
+		lat(calls, w, &out.CallAll)
 		lat(pings, w, &out.PingTun)
 	}
 	for sec := 0; float64(sec) < s.TotalS; sec++ {
