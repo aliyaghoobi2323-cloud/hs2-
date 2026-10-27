@@ -295,6 +295,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			scl.core.alpha = bulkLink && !AlphaOff()
 			if bulkLink && meter != nil {
 				scl.owd = &meter.owd // α's one-way delays (owd.go)
+				meter.owd.sys = sys
 			}
 			if meter != nil && SendCapBlocked != 0 {
 				scl.blocked = meter.blockedNs

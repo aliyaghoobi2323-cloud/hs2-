@@ -227,3 +227,35 @@ func TestAlphaStartFix(t *testing.T) {
 		t.Fatalf("without fix 1 (%d) no slower than with it (%d): the test does not test it", off, on)
 	}
 }
+
+// A message's stamp moves on by the socket's unsent bytes at its pacing
+// rate: 20 KiB unsent at a 9 Mbit/s cap is 18.2 ms (version 2 read it as
+// queue).
+func TestOWDLocalWait(t *testing.T) {
+	if w := owdLocalWait(tcpStat{notsent: 20 << 10, pacingRate: 9e6 / 8}); math.Abs(float64(w)-18.2e6) > 0.1e6 {
+		t.Fatalf("20 KiB at 9 Mbit/s: %v", time.Duration(w))
+	}
+	if w := owdLocalWait(tcpStat{notsent: 1250, deliveryRate: 1.25e6}); w != int64(time.Millisecond) {
+		t.Fatalf("no pacing rate: the delivery rate's, 1 ms; got %v", time.Duration(w))
+	}
+	if owdLocalWait(tcpStat{notsent: 1000}) != 0 || owdLocalWait(tcpStat{pacingRate: 1e6}) != 0 {
+		t.Fatal("no rate or nothing unsent: no wait")
+	}
+}
+
+// α's start holds while the link's one-way delay is not heard yet: an srtt
+// holding the other direction's queue (30 ms here) does not end it.
+func TestAlphaStartWaitsForOWD(t *testing.T) {
+	const ms = time.Millisecond
+	c := &sendCap{linked: true, alpha: true}
+	at, acked := time.Hour, 0.0
+	for i := 0; i < 5; i++ {
+		at += 100 * ms
+		acked += 1e6
+		c.Update(capSample{Now: at, Delivery: 1e7, Acked: uint64(acked), Written: uint64(acked),
+			Segs: uint32(acked / 1000), SRTT: 102 * ms, MinRTT: 72 * ms, OWDwait: true})
+	}
+	if !c.aStart || c.aRate < wcNetKOf()*1e7*0.999 {
+		t.Fatalf("no one-way delay yet: start %v, cap %.0f, want the start and C4-lite's %.0f", c.aStart, c.aRate, wcNetKOf()*1e7)
+	}
+}

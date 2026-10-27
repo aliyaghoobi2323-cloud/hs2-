@@ -78,6 +78,9 @@ type capSample struct {
 	// SRTT - MinRTT
 	OWD   time.Duration
 	OWDok bool
+	// OWDwait: the link has one-way delays (OWD on) but none heard yet:
+	// α's start holds (srtt − min_rtt holds the other direction's queue)
+	OWDwait bool
 }
 
 type capRate struct {
@@ -283,8 +286,8 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 		return // the sender had less to send than the cap let out: it holds
 	}
 	ceil := wcNetKOf() * c.maxDlv()
-	if c.aStart && (c.aOWD || s.SRTT > 0 && s.MinRTT > 0) {
-		if c.aQ <= alphaLow {
+	if c.aStart && (c.aOWD || s.OWDwait || s.SRTT > 0 && s.MinRTT > 0) {
+		if c.aQ <= alphaLow || s.OWDwait {
 			// fix 1: no queue of its own yet, C4-lite's cap
 			c.aRate = math.Max(c.aRate, ceil)
 			c.aGrows++
@@ -541,9 +544,10 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 				oq, ook = l.owd.queue()
 			}
 		}
+		owait := l.owd != nil && l.core.alpha && !ook && !OWDOff()
 		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),
-			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook}))
+			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook, OWDwait: owait}))
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
 	}

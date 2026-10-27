@@ -25,7 +25,13 @@ import (
 // queue only, the one this end's sending makes:
 //
 //   - each end stamps a message with its monotonic clock (ctrlNow) every
-//     owdTickOf(rate) while the link is busy; the receiver keeps the least
+//     owdTickOf(rate) while the link is busy, moved on by the time the
+//     socket's unsent bytes take at its pacing rate (owdLocalWait): the
+//     stamp is when the message leaves the host, so the wait behind this
+//     end's own unsent data is no queue (version 2 counted it: 20 KiB
+//     unsent is 18 ms at a 9 Mbit/s cap, so a low cap read a queue, cut
+//     and read a longer one; a download beside an upload took 20 s to
+//     reach 80 Mbit/s on the rig); the receiver keeps the least
 //     raw delay (its clock less the stamp: the clocks' offset and the path)
 //     of each second over owdWin as the base, and the least of the readings
 //     of the last owdLook less the base is the queue the other end's
@@ -139,6 +145,23 @@ type owdLink struct {
 	qOut, qOutAt atomic.Int64
 	rate, rateAt atomic.Int64 // float64 bits, bytes/s; ctrlNow
 	msgs         atomic.Int64
+	// sys: the link socket's TCP_INFO (set before the loop starts; nil:
+	// the stamp is the send time)
+	sys capSys
+}
+
+// owdLocalWait is how long (ns) a byte written now waits in the socket
+// before it is sent: the unsent bytes at the pacing rate (or the delivery
+// rate without one; 0 when neither is known).
+func owdLocalWait(ts tcpStat) int64 {
+	r := float64(ts.pacingRate)
+	if r <= 0 || r > 1e12 {
+		r = float64(ts.deliveryRate)
+	}
+	if r <= 0 || ts.notsent == 0 {
+		return 0
+	}
+	return int64(float64(ts.notsent) / r * 1e9)
 }
 
 // noteRate is the link's delivery rate (bytes/s) for the beat.
@@ -257,7 +280,13 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 		}
 		at := o.qInAt.Load()
 		fresh := at != 0 && time.Duration(ctrlNow()-at) <= owdFresh
-		owdEncode(b[:], ctrlNow(), o.qIn.Load(), fresh)
+		stamp := ctrlNow()
+		if o.sys != nil {
+			if ts, ok := o.sys.info(); ok {
+				stamp += owdLocalWait(ts)
+			}
+		}
+		owdEncode(b[:], stamp, o.qIn.Load(), fresh)
 		if _, err := st.Write(b[:]); err != nil {
 			end()
 			return
