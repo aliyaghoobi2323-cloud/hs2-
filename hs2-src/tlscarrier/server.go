@@ -24,7 +24,12 @@ type Server struct {
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 	BackendAddr    string // a real local web server; probes are proxied here
 	// Logf, if set, receives rare diagnostic messages (e.g. an old client).
-	Logf    func(string, ...any)
+	Logf func(string, ...any)
+	// OfferCaps, if set, gives caps this server offers on one link besides
+	// its own, asked once per authenticated client: CapQuiet, the link's
+	// class (the exit offers it always; a reverse edge when it wants one
+	// more QUIET link).
+	OfferCaps func() uint32
 	replay  *replayMem
 	once    sync.Once
 	lastLog atomic.Int64
@@ -150,7 +155,11 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	}
 	// The level and caps for this link. With no level in common the proof
 	// says level 0 — the client then knows why — and the link closes.
-	level, caps, agreed := negotiate(hdr, levelMin, levelMax, localCaps())
+	srvCaps := localCaps()
+	if s.OfferCaps != nil && hdr.Caps&CapQuiet != 0 {
+		srvCaps |= s.OfferCaps() & CapQuiet
+	}
+	level, caps, agreed := negotiate(hdr, levelMin, levelMax, srvCaps)
 	if _, err := tconn.Write(makeServerProof(s.SharedKey, nonce, ekm, ProofHdr{Ver: protoVersion, Level: level, Caps: caps})); err != nil || !agreed {
 		if !agreed {
 			proto.refused(false)
