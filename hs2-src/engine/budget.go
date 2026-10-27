@@ -112,6 +112,11 @@ const (
 	budgetWaitMin    = 100 * time.Microsecond
 	budgetWaitMax    = 5 * time.Millisecond
 	budgetWaitBeyond = 16 // a wait is for the deficit and 1/budgetWaitBeyond of B more
+	// budgetRoom, budgetLong: a two-way link budget-limited at its target
+	// that acks less than budgetRoom of its most over budgetLong seconds
+	// grows as if it had no queue (see step)
+	budgetRoom = 0.97
+	budgetLong = 10
 )
 
 // budgetTarget is T.
@@ -139,6 +144,7 @@ func (m budgetMode) String() string {
 
 // budgetIn is one reading of a BULK link socket for its budget.
 type budgetIn struct {
+	Now            time.Duration // the reading's clock
 	On             bool          // C4-lite is armed (sendCap.on): not idle since its first full sample
 	Delivery       float64       // tcpi_delivery_rate, bytes/s (0: none)
 	SRTT, MinRTT   time.Duration // the socket's (0: unknown)
@@ -157,16 +163,45 @@ type budgetCore struct {
 	dlv  [budgetRecent]float64
 	di   int
 	noQ  int // readings in a row budget-limited with qFwd under T/2
+	// long: the most acked a second over the last budgetLong seconds (a
+	// ring from sec)
+	long [budgetLong]float64
+	sec  int64
 	// the latest reading's, for the status line
 	q, qRev, s, base time.Duration
 	d                float64
+	two              bool
 	cuts, grows      uint64
+	rooms            uint64 // two-way growth for room of its own
+}
+
+// longMax notes the acked rate of the reading and is the most of the last
+// budgetLong seconds.
+func (c *budgetCore) longMax(now time.Duration, r float64) float64 {
+	sec := int64(now / time.Second)
+	switch d := sec - c.sec; {
+	case d >= budgetLong || d < 0:
+		c.long = [budgetLong]float64{}
+	default:
+		for i := int64(1); i <= d; i++ {
+			c.long[(c.sec+i)%budgetLong] = 0
+		}
+	}
+	c.sec = sec
+	if k := sec % budgetLong; r > c.long[k] {
+		c.long[k] = r
+	}
+	mx := 0.0
+	for _, v := range c.long {
+		mx = math.Max(mx, v)
+	}
+	return mx
 }
 
 // step takes a reading and says B (bytes; 0: no budget).
 func (c *budgetCore) step(in budgetIn) float64 {
 	if !in.On {
-		*c = budgetCore{cuts: c.cuts, grows: c.grows}
+		*c = budgetCore{cuts: c.cuts, grows: c.grows, rooms: c.rooms}
 		return 0
 	}
 	T := budgetTarget()
@@ -174,10 +209,13 @@ func (c *budgetCore) step(in budgetIn) float64 {
 	if in.SRTT > 0 && in.MinRTT > 0 && in.SRTT > in.MinRTT {
 		S = in.SRTT - in.MinRTT
 	}
+	long := c.longMax(in.Now, in.TxRate)
 	qRev := time.Duration(0)
-	if BudgetTwoWay != 0 && in.RxRate > budgetRevMin && in.RxRate > budgetRevShare*in.TxRate {
+	two := BudgetTwoWay != 0 && in.RxRate > budgetRevMin && in.RxRate > budgetRevShare*in.TxRate
+	if two {
 		qRev = min(S/2, T)
 	}
+	c.two = two
 	if in.QInOK {
 		qRev = max(qRev, in.QIn)
 	}
@@ -240,6 +278,16 @@ func (c *budgetCore) step(in budgetIn) float64 {
 		c.noQ = 0
 	}
 	switch {
+	case two && in.Blocked && qFwd <= T+T/2 && in.TxRate < budgetRoom*long:
+		// both ends read the same srtt, so a split of its queue that held
+		// this direction under its path stays (the way back's queue past
+		// what is taken for it, and this one's empty): budget-limited at
+		// the target and acking less than it did lately, it grows a FAST
+		// step at least. A path of its own that got slower makes a queue of
+		// its own as it grows, and the cut below takes it back, until its
+		// 10 s maximum ages.
+		c.b *= 1 + math.Max(ratio-1, float64(T)/float64(base))
+		c.rooms++
 	case qFwd > T:
 		w := c.b * ratio
 		if !in.Blocked {
@@ -340,7 +388,7 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 		}
 	}
 	lb.ack0, lb.rx0, lb.at0 = ts.bytesAcked, ts.bytesReceived, now
-	in := budgetIn{On: on, Delivery: float64(ts.deliveryRate), SRTT: usDur(uint64(ts.rtt)),
+	in := budgetIn{Now: now, On: on, Delivery: float64(ts.deliveryRate), SRTT: usDur(uint64(ts.rtt)),
 		MinRTT: usDur(uint64(ts.minRTT)), TxRate: tx, RxRate: rx, Blocked: lb.blocked.Swap(false),
 		MSS: int(ts.sndMSS), Frame: BulkFrameSize(dlvMax), DlvMax: dlvMax}
 	if o := quietOWD.Load(); o != nil {
@@ -360,7 +408,11 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 // starts the next one's tallies.
 func (lb *linkBudget) line(n int) string {
 	c := &lb.core
-	return fmt.Sprintf("budget link %d: %s, B %.0f KiB (in flight at most %.0f KiB), queue %.1f ms (srtt-min %.1f, way back %.1f, target %.1f), delivery %.1f Mbit/s, cuts %d, grows %d, gate waits %d (%.0f ms)",
-		n, c.mode, float64(lb.b.Load())/1024, float64(lb.outqMax.Swap(0))/1024, msOf(c.q), msOf(c.s), msOf(c.qRev),
-		msOf(budgetTarget()), c.d*8/1e6, c.cuts, c.grows, lb.held.Swap(0), float64(lb.waitNs.Swap(0))/1e6)
+	way := "one-way"
+	if c.two {
+		way = "two-way"
+	}
+	return fmt.Sprintf("budget link %d: %s %s, B %.0f KiB (in flight at most %.0f KiB), queue %.1f ms (srtt-min %.1f, way back %.1f, target %.1f), delivery %.1f Mbit/s, cuts %d, grows %d, room %d, gate waits %d (%.0f ms)",
+		n, c.mode, way, float64(lb.b.Load())/1024, float64(lb.outqMax.Swap(0))/1024, msOf(c.q), msOf(c.s), msOf(c.qRev),
+		msOf(budgetTarget()), c.d*8/1e6, c.cuts, c.grows, c.rooms, lb.held.Swap(0), float64(lb.waitNs.Swap(0))/1e6)
 }
