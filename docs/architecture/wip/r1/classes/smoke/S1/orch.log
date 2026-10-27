@@ -1,0 +1,4 @@
+2026-10-27T19:19:05Z lock taken after 2280s (pid 589685), plan /root/rmix/plans/S1.txt, REPS 2, limit 1200s
+2026-10-27T19:28:05Z pass 1: 0 runs busy (>75%) or failed, 661s left
+2026-10-27T19:28:05Z done after 539s of rig time
+2026-10-27T19:28:05Z lock released
