@@ -1,0 +1,20 @@
+# smoke: one run first
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0 3 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0 3 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 8 0 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 8 0 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 8 0 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 8 0 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 8 0 3 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 8 0 3 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0 1 idle
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0 1 idle
+# again, with the edge user port on one address (the first four ran with the reply source mismatch)
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0 2 bulk

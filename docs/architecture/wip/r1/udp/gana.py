@@ -106,8 +106,12 @@ def med(xs):
 
 
 def table(argv):
-    rows = [json.loads(l) for l in open(argv[0]) if l.strip()]
-    rows = [r for r in rows if r.get("ok")]
+    last = {}
+    for l in open(argv[0]):
+        if l.strip():
+            r = json.loads(l)
+            last[r["id"]] = r  # a run done again replaces the earlier line
+    rows = [r for r in last.values() if r.get("ok")]
     cells = {}
     for r in rows:
         cells.setdefault((r["mix"], r["loss"], r["n"], r["label"]), []).append(r)
