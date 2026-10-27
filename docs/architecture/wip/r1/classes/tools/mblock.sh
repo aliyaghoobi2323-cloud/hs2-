@@ -1,16 +1,18 @@
 #!/bin/bash
-# mblock.sh NAME PLAN: one locked rig block of the classes smoke (R1 round 3,
+# mblock.sh NAME PLAN [PLAN2 REPS2]: one locked rig block of the classes smoke (R1 round 3,
 # branch r1-mix), RIG_ID=m, at most LIMIT s (1200) of rig time. The quiet
 # lock /root/r1-quiet.lock is taken atomically (set -C) when no go build/test
 # runs, retried every 60 s while someone else holds it, and only ever removed
 # by this script for its own pid. The rig is a frozen copy (/root/rmix/rig)
 # and rigload is prebuilt (/root/rmix/rigload): nothing is built under the
 # lock. Runs: REPS (2) each binary, interleaved (ABBA); base = old = OLD_BIN,
-# b2nx from BINS. Runs that failed or whose host was busier than 75 % are run
-# again while time is left. Raw run files go to /root/rmix/raw-NAME (never
-# committed), the results to /root/rmix/NAME.
+# b2nx from BINS; PLAN2 (optional) then runs with REPS2 each, in the same
+# block and the same res.jsonl. Runs that failed or whose host was busier
+# than 75 % are run again while time is left. Raw run files go to
+# /root/rmix/raw-NAME (never committed), the results to /root/rmix/NAME.
 set -u
 NAME=${1:?usage: mblock.sh NAME PLAN}; PLAN=${2:?usage: mblock.sh NAME PLAN}
+PLAN2=${3:-}; REPS2=${4:-1}
 REPS=${REPS:-2}
 RS=/root/rmix/rig
 O=/root/rmix/$NAME; R=/root/rmix/raw-$NAME
@@ -35,13 +37,17 @@ while :; do
 done
 trap 'mine && rm -f "$LOCK"; log "lock released"' EXIT
 trap 'exit 130' INT TERM
-log "lock taken after ${w}s (pid $$), plan $PLAN, REPS $REPS, limit ${LIMIT}s"
+log "lock taken after ${w}s (pid $$), plan $PLAN, REPS $REPS${PLAN2:+, then $PLAN2, REPS $REPS2}, limit ${LIMIT}s"
 hostsnap start > "$O/host.txt"
 t0=$(date +%s); dl=$((t0 + LIMIT))
 left() { echo $((dl - $(date +%s))); }
 run() {
   REPS=$REPS RIG_ID=m BINS=$BINS OLD_BIN=$OLD_BIN LOAD_WAIT=60 \
     timeout -s TERM "$(left)"s "$RS/run.sh" "$PLAN" "$R" >> "$O/run.out" 2>&1
+  if [ -n "$PLAN2" ] && [ "$(left)" -gt 60 ]; then
+    REPS=$REPS2 RIG_ID=m BINS=$BINS OLD_BIN=$OLD_BIN LOAD_WAIT=60 \
+      timeout -s TERM "$(left)"s "$RS/run.sh" "$PLAN2" "$R" >> "$O/run.out" 2>&1
+  fi
 }
 run
 for k in 1 2; do
