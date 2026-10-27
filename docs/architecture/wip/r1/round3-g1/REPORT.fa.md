@@ -125,7 +125,9 @@
 | `88fc8f3` | مهر هنگام برداشتن نویسنده (`SetStamp`)؛ کلید TUN فوری |
 | `5e6ec3d` | بررسی کارایی برش، نسخهٔ نخست؛ پنجرهٔ ۴ms و TUN فوری پیش‌فرض؛ THIN آزمایشی؛ آزمون جریان app-limited |
 | `8c4fd47` | بررسی کارایی برش، بازنوشته بر پایهٔ دورهٔ برش‌ها (نامزد نهایی `g1e`) |
-| بعدی | این سند و داده‌ها |
+| `fc6045f` | این سند، داده‌های دود و ماتریس، ضبط DPI |
+| `564a40e` | `TestPeerInfoReverseBothServers` با پیش‌فرض ت۱۹ (فقط آزمون) |
+| بعدی | نتیجهٔ آزمون‌ها در این سند |
 
 ## روش
 
@@ -394,7 +396,21 @@
 - نسخهٔ ۴ در مدل به ۰٫۹۷۱ می‌رسد. فروریزش ۸۹ به ۵۰ چیدمان در مدل بازتولید نشد، پس مدل نسخهٔ ۴ را سخت‌گیرانه نمی‌آزماید. شاهد اصلی برای γ1 چیدمان است: `N=64` ۸۹٫۱ و `N=300` ۸۸٫۳ Mbit/s.
 - **مدل FIFO** (۲۵ Mbit/s، ۱، ۴ و ۶۴ لینک): γ1 همان نسخهٔ ۵ است (۰٫۹۹۷ تا ۰٫۹۹۸، صف تا ۷٫۶ تا ۸٫۱ms)، با صفر برش سقف خودی.
 
-**آزمون کامل شاخه** (`go vet`، `gofmt`، `go test ./...`، `-race`، fuzz): در انتظار نخستین بازهٔ بی‌قفل؛ نتیجه در ثبت بعدی همین سند.
+**آزمون کامل شاخه** (`tests/`؛ ثبت `8c4fd47`، و برای `peerinfo` ثبت `564a40e`):
+- اجرا تکه‌تکه بود (`tools/tests2.sh`، ۲۵ آزمون در هر تکه). هر تکه فقط وقتی آغاز شد که هیچ قفل آرامی و هیچ ساخت یا آزمون Go دیگری نبود. کارهای دیگر چیدمان بی‌آن‌که منتظر آزمونِ در حال اجرا بمانند قفل می‌گیرند، و تکه‌های کوتاه هم‌پوشانی را کوتاه نگه می‌دارد.
+- **`go vet ./...`** و **`go vet`** در `third_party/smux`: تمیز.
+- **`gofmt -l .`:** همان سه فایل دور ۲ (`engine/angle_hqg_test.go`، `engine/stream_reverse.go`، `lab/netem/main.go`)، که دست نخورده‌اند. فایل‌های تازه و تغییرکرده تمیزند.
+- **`engine`** (۶۸۷ آزمون، ۲۸ تکه): سرخ‌ها همان هفت آزمون شناخته‌اند:
+  - `TestAngleSameLinkProbe` و `TestAngleTunPingAheadOfBulk`؛
+  - `TestHostWaitBound`، `TestLowatAdapts`، `TestLowatAdaptsLinux`، `TestHostQLinuxSocket` و `TestHostQStatusLine`.
+  - به‌اضافهٔ `TestPeerInfoReverseBothServers`. علتش پیش‌فرض ت۱۹ است: خروجی معکوس بیشینهٔ ۴ را با یک QUIET بیرون از `max_links` ۵ به کار می‌گیرد. آزمون در `564a40e` اصلاح شد و دوباره سبز است (`tests/peerinfo-rerun.txt`).
+- **بسته‌های دیگر** (`cmd/hs2`، `core`، `encap`، `fec`، `reality`، `tlscarrier`، `tun`، `tune`، `udpcarrier`): سبز.
+- **`-race`:**
+  - `third_party/smux` (کل ماژول، با آزمون‌های جمع‌کردن و قلاب مهر)؛
+  - زیرمجموعهٔ موتور (`OWD|AlphaOwn|AlphaProbe|AlphaCap|AlphaLoop|AlphaStart|QuietCounts|Restamp|MoveRule|SendCap`)؛
+  - `tlscarrier` و `cmd/...`.
+  - همه سبز، بی data race.
+- **`FuzzOWDDecode`:** ۶۰ ثانیه و ۷۳۸۸۷ اجرا، بی شکست.
 
 ## موارد باز
 

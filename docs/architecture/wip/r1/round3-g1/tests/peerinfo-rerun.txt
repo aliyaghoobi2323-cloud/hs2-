@@ -1,0 +1,27 @@
+=== RUN   TestPeerInfoWire
+--- PASS: TestPeerInfoWire (0.00s)
+=== RUN   TestPeerInfoExchange
+--- PASS: TestPeerInfoExchange (0.00s)
+=== RUN   TestPeerInfoExitForgetsGoneLinks
+--- PASS: TestPeerInfoExitForgetsGoneLinks (0.00s)
+=== RUN   TestPeerInfoReverseExitReportsPoolMax
+--- PASS: TestPeerInfoReverseExitReportsPoolMax (0.00s)
+=== RUN   TestPeerInfoOlderExit
+--- PASS: TestPeerInfoOlderExit (0.00s)
+=== RUN   TestPeerInfoNoReplyIsBounded
+--- PASS: TestPeerInfoNoReplyIsBounded (10.05s)
+=== RUN   TestPeerInfoInPoolStats
+--- PASS: TestPeerInfoInPoolStats (0.00s)
+=== RUN   TestPeerInfoDirectBothServers
+--- PASS: TestPeerInfoDirectBothServers (0.13s)
+=== RUN   TestPeerInfoReverseBothServers
+--- PASS: TestPeerInfoReverseBothServers (0.47s)
+=== RUN   TestPeerInfoMixedVersions
+=== RUN   TestPeerInfoMixedVersions/older_exit
+=== RUN   TestPeerInfoMixedVersions/older_edge
+--- PASS: TestPeerInfoMixedVersions (2.87s)
+    --- PASS: TestPeerInfoMixedVersions/older_exit (1.60s)
+    --- PASS: TestPeerInfoMixedVersions/older_edge (1.27s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	13.542s
+exit 0
