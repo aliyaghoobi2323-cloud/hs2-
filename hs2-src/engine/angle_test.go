@@ -456,10 +456,16 @@ func TestAngleP10(t *testing.T) {
 		p := l.probe(ctx, 3) // the light user
 		l.download(ctx, 1, 4, &h1)
 		time.Sleep(3 * time.Second)
-		l.download(ctx, 2, 16, &h2) // the new heavy user
-		time.Sleep(time.Second)
 		p.on()
+		l.download(ctx, 2, 16, &h2) // the new heavy user
+		// its first second: each new stream's first 32 KiB goes as light
+		// (unknown), charged to its user's latency-lane credit (T14)
+		first := angleRate(time.Second, &h1)
 		r := angleRate(8*time.Second, &h1, &h2)
+		t.Logf("existing bulk in the new user's first second: %.2f Mbit/s (%.3f of its floor)", first[0]*8/1e6, first[0]/(c/2))
+		if first[0] < 0.9*c/2 {
+			t.Fatalf("the existing bulk user got %.3f of its floor in the new user's first second, want >= 0.9", first[0]/(c/2))
+		}
 		p99, n := p.pct(0.99)
 		t.Logf("existing bulk %.2f, new heavy %.2f Mbit/s; light probe p99 %v (%d)", r[0]*8/1e6, r[1]*8/1e6, p99, n)
 		if r[0] < 0.9*c/2 {

@@ -276,7 +276,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		if sys := newCapSys(tc); sys != nil {
 			scl = newSendCapLink(sys, hq)
 			scl.core.linked, scl.core.off = true, !capOn
-			if meter != nil {
+			if meter != nil && SendCapBlocked != 0 {
 				scl.blocked = meter.blockedNs
 			}
 			if wc != nil && capOn {
