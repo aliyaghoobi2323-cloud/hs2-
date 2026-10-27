@@ -57,8 +57,13 @@ func wnFakeInfo(t *testing.T, c *net.TCPConn, share *float64, mu *sync.Mutex) {
 // The runner runs the net on every exit link socket (the exit's session has
 // no core by default): it caps the pacing of one that resends at 3.9 times
 // its delivery rate, at wcNetK times that rate; with PaceNet 0 the exit's
-// session is not even registered and no socket's pacing is touched.
+// session is not even registered and no socket's pacing is touched. The net
+// alone, as with HS2_TUNE_SENDCAP=0 (TestAngleBPaceNetHandsCap: with C4-lite
+// on, the net hands its cap to it).
 func TestPaceNetRunner(t *testing.T) {
+	oldSC := TuneSendCap
+	TuneSendCap = 0
+	defer func() { TuneSendCap = oldSC }()
 	for _, on := range []bool{true, false} {
 		old := PaceNet
 		PaceNet = 0

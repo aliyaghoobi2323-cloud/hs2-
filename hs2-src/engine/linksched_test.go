@@ -407,14 +407,14 @@ func TestAngleBTunPinned(t *testing.T) {
 // scheduler (one still goes), and the status line counts it.
 func TestAngleBMemCap(t *testing.T) {
 	oldShare := UserMemShare
-	UserMemShare = 4 << 10
+	UserMemShare = 3 << 10
 	SetTCPMemPressure(true)
 	defer func() { UserMemShare = oldShare; SetTCPMemPressure(false) }()
 	m := newLSManual(t)
 	a, b := m.open(21), m.open(21)
-	go a.Write(make([]byte, 2<<10))
+	go a.Write(make([]byte, lsLightData))
 	m.waitN(1, 21, 0)
-	go b.Write(make([]byte, 4<<10))
+	go b.Write(make([]byte, 2*lsLightData))
 	m.waitN(1, 21, 1)
 	m.ls.tick(ctrlNow(), 0)
 	if !regexp.MustCompile(`users at memory cap 1$`).MatchString(m.ls.line(1)) {
