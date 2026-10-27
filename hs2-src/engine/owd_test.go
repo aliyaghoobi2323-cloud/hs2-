@@ -358,3 +358,31 @@ func TestAlphaStartWhileGrowing(t *testing.T) {
 		t.Fatal("a queue at a flat delivery: want the start over")
 	}
 }
+
+// Version 5 (HS2_TUNE_OWD_QUIET, default): a BULK link's α reads the QUIET
+// link's one-way delays (none before a QUIET link runs its loop); version
+// 4: its own link's.
+func TestOWDShared(t *testing.T) {
+	var own, q owdLink
+	old := quietOWD.Load()
+	defer quietOWD.Store(old)
+	quietOWD.Store(nil)
+	if owdShared(&own) != nil {
+		t.Fatal("no QUIET link yet: want none")
+	}
+	quietOWD.Store(&q)
+	if owdShared(&own) != &q {
+		t.Fatal("want the QUIET link's")
+	}
+	TuneOWDQuiet = 0
+	defer func() { TuneOWDQuiet = 1 }()
+	if owdShared(&own) != &own {
+		t.Fatal("version 4: want its own")
+	}
+	// the beat of a QUIET link follows the fastest BULK link of the second
+	q.noteRate(100e6 / 8)
+	q.noteRate(1e6 / 8)
+	if q.tick() != owdTickMin {
+		t.Fatalf("beat %v after 100 and 1 Mbit/s within a second: want the 100's", q.tick())
+	}
+}

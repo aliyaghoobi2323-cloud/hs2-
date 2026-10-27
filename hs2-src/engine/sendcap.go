@@ -635,9 +635,10 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 				rx = float64(ts.bytesReceived-l.rx0) / (now - l.rxAt).Seconds()
 			}
 			l.rx0, l.rxAt = ts.bytesReceived, now
-			l.owd.noteRate(max(l.core.maxDlv(), rx))
+			src := owdShared(l.owd)
+			src.noteRate(max(l.core.maxDlv(), rx))
 			if l.core.alpha {
-				oq, ook = l.owd.queue()
+				oq, ook = src.queue()
 			}
 		}
 		owait := l.owd != nil && l.core.alpha && !ook && !OWDOff()

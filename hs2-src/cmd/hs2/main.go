@@ -331,6 +331,7 @@ func applyTuning() {
 	// queue (0: srtt − min_rtt)
 	num("HS2_TUNE_ALPHA_START", &engine.TuneAlphaStart)
 	num("HS2_TUNE_OWD", &engine.TuneOWD)
+	num("HS2_TUNE_OWD_QUIET", &engine.TuneOWDQuiet)
 	num("HS2_TUNE_ALPHA_HALF", &engine.AlphaHalf)
 	num("HS2_TUNE_ALPHA_PLATEAU", &engine.AlphaPlateau)
 	num("HS2_TUNE_ALPHA_FREE", &engine.AlphaFree)

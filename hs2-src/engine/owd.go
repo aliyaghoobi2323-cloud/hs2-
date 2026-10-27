@@ -75,6 +75,31 @@ const (
 // TuneOWD 0 (HS2_TUNE_OWD=0): α reads srtt − min_rtt (β2's).
 var TuneOWD = 1
 
+// TuneOWDQuiet 0 (HS2_TUNE_OWD_QUIET=0): each BULK link trades its own
+// messages and α reads its own link's queue (version 4). On (version 5,
+// the default): the edge opens kindOWD on the QUIET links and every BULK
+// link's α reads the QUIET link's one-way queue of its own direction —
+// the queue the light flows wait in. Version 4 on fq_codel, where each
+// BULK link has a flow queue of its own the light flows never see, cut
+// each link for its own queue: with 17 flows on 64 links the sum fell
+// from 89 to 50 Mbit/s over 30 s, and of two uploads on two links one
+// held 65 Mbit/s, the other 9 (F3). There a QUIET link sees no queue and
+// α is C4-lite; on a shared FIFO it sees what each direction's bulk makes.
+var TuneOWDQuiet = 1
+
+// quietOWD is the process's QUIET link one-way delays (version 5; nil:
+// none up yet), the latest QUIET link's.
+var quietOWD atomic.Pointer[owdLink]
+
+// owdShared is what a BULK link's α reads: the QUIET link's (version 5) or
+// its own (version 4, own).
+func owdShared(own *owdLink) *owdLink {
+	if TuneOWDQuiet == 0 {
+		return own
+	}
+	return quietOWD.Load()
+}
+
 // OWDOff says whether α's one-way delay is off.
 func OWDOff() bool { return TuneOWD == 0 }
 
@@ -164,13 +189,18 @@ func owdLocalWait(ts tcpStat) int64 {
 	return int64(float64(ts.notsent) / r * 1e9)
 }
 
-// noteRate is the link's delivery rate (bytes/s) for the beat.
+// noteRate is the link's delivery rate (bytes/s) for the beat; a QUIET
+// link's (version 5) takes the largest of its BULK links' within a second.
 func (o *owdLink) noteRate(r float64) {
 	if o == nil {
 		return
 	}
+	now := ctrlNow()
+	if at := o.rateAt.Load(); at != 0 && time.Duration(now-at) < time.Second && math.Float64frombits(uint64(o.rate.Load())) > r {
+		return
+	}
 	o.rate.Store(int64(math.Float64bits(r)))
-	o.rateAt.Store(ctrlNow())
+	o.rateAt.Store(now)
 }
 
 // tick is the beat now: owdTickOf the link's rate, owdTickMax when unknown.
@@ -294,10 +324,19 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 	}
 }
 
-// openOWD runs the edge's end of kindOWD on a BULK link (others: none).
+// openOWD runs the edge's end of kindOWD on a QUIET link (version 5) or
+// a BULK one (version 4); others: none.
 func openOWD(ctx context.Context, l Link) {
 	ml, ok := l.(*mtcpLink)
-	if !ok || !ml.bulk || OWDOff() || ml.mtr == nil {
+	if !ok || OWDOff() || ml.mtr == nil {
+		return
+	}
+	if TuneOWDQuiet != 0 {
+		if !ml.quiet {
+			return
+		}
+		quietOWD.Store(&ml.mtr.owd)
+	} else if !ml.bulk {
 		return
 	}
 	st, err := ml.OpenRawStream()
