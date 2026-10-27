@@ -23,6 +23,8 @@
 #         spray        3000 one-datagram flows from fresh source ports in ~3 s
 #                      first (scanner/QUIC-probe like), then the checks
 #         late         the colliding UDP program starts 5 s AFTER hs2 (it loses)
+#         release      (with collide*) the other program lets the port go once the
+#                      links are up; the UDP check runs 4 s later
 #         noipv6       IPv6 switched off in the edge's namespace (disable_ipv6=1 on
 #                      all, default, lo and e0), as on many Iran VPSes
 #
@@ -154,9 +156,9 @@ nsx $X python3 "$D/udpt.py" echo $PANEL $PU > "$R/panel.log" 2>&1 &
 PIDS+=($!)
 # a program holding the UDP port on the edge
 case " $CONDS " in
-  *" collide "*)   nsx $E python3 "$D/udpt.py" hold "[::]:$PORTS" > "$R/hold.log" 2>&1 & PIDS+=($!) ;;
-  *" collide4 "*)  nsx $E python3 "$D/udpt.py" hold "0.0.0.0:$PORTS" > "$R/hold.log" 2>&1 & PIDS+=($!) ;;
-  *" collideip "*) nsx $E python3 "$D/udpt.py" hold "$EIP:$PORTS" > "$R/hold.log" 2>&1 & PIDS+=($!) ;;
+  *" collide "*)   nsx $E python3 "$D/udpt.py" hold "[::]:$PORTS" > "$R/hold.log" 2>&1 & HOLD=$!; PIDS+=($!) ;;
+  *" collide4 "*)  nsx $E python3 "$D/udpt.py" hold "0.0.0.0:$PORTS" > "$R/hold.log" 2>&1 & HOLD=$!; PIDS+=($!) ;;
+  *" collideip "*) nsx $E python3 "$D/udpt.py" hold "$EIP:$PORTS" > "$R/hold.log" 2>&1 & HOLD=$!; PIDS+=($!) ;;
 esac
 has fwdrop && nsx $E iptables -I INPUT -p udp --dport $PORTS -j DROP
 has noipv6 && nsx $E sysctl -qw net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1   net.ipv6.conf.lo.disable_ipv6=1 net.ipv6.conf.e0.disable_ipv6=1
@@ -202,6 +204,7 @@ PY
   sleep 2
 fi
 
+if has release && [ -n "${HOLD:-}" ]; then kill $HOLD 2>/dev/null; sleep 4; fi
 if has v6; then UA="[fd00:201::1]:$PORTS"; SRC=fd77:1::5; else UA="$EIP:$PORTS"; SRC=10.100.0.1; fi
 EALIVE=0; kill -0 $P_edge 2>/dev/null && EALIVE=1
 XALIVE=0; kill -0 $P_exit 2>/dev/null && XALIVE=1
