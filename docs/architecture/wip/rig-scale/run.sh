@@ -70,7 +70,7 @@ trap 'cleanup; rmdir "$WORK" 2>/dev/null' EXIT
 
 # rigload, built once per OUT (its own module, standard library only)
 RL=$OUT/rigload
-if [ ! -x "$RL" ] || [ "$D/rigload/main.go" -nt "$RL" ]; then
+if [ ! -x "$RL" ] || [ -n "$(find "$D/rigload" -name '*.go' -newer "$RL")" ]; then
   (cd "$D/rigload" && CGO_ENABLED=0 nice -n 10 /usr/local/go/bin/go build -o "$RL" .) || { echo "rigload build failed" >&2; exit 1; }
 fi
 
