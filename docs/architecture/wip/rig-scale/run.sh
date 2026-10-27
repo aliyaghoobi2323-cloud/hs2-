@@ -69,12 +69,19 @@ if [ ! -x "$RL" ] || [ "$D/rigload/main.go" -nt "$RL" ]; then
   (cd "$D/rigload" && CGO_ENABLED=0 nice -n 10 /usr/local/go/bin/go build -o "$RL" .) || { echo "rigload build failed" >&2; exit 1; }
 fi
 
+# BINS=FILE (the judge, R1 task 17): more binaries than old and new, one
+# per line "LABEL PATH [HS2_K=V ...]"; the HS2_* go to both hs2 processes of
+# that label's runs, so one cell can interleave binaries and their variants
+BINS=${BINS:-}
 binpath() {
   case "$1" in
     old) echo "$OLD_BIN" ;;
     new) echo "$NEW_BIN" ;;
-    *) echo "" ;;
+    *) [ -n "$BINS" ] && awk -v l="$1" '$1 == l {print $2; exit}' "$BINS" ;;
   esac
+}
+binenv() {
+  [ -n "$BINS" ] && awk -v l="$1" '$1 == l {for (i = 3; i <= NF; i++) if ($i ~ /^HS2_[A-Z0-9_]+=[A-Za-z0-9_.:+-]*$/) printf " %s", $i; exit}' "$BINS"
 }
 
 # hs2 config: edge (mode dial, reverse: listens) and exit (mode listen, reverse:
@@ -109,7 +116,7 @@ sssnap() {
 
 run_one() {
   local id=$1 bin=$2 order=$3 rep=$4 cell=$5
-  local r=$OUT/raw/$id w=$WORK/$id bp tok k v hs2env="" wait=0 ok=1 why=""
+  local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
   local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6
@@ -123,6 +130,8 @@ run_one() {
     esac
   done
   bp=$(binpath "$bin")
+  benv=$(binenv "$bin")
+  hs2env="$hs2env$benv"
   rm -rf "$r"; mkdir -p "$r" "$w"; CUR=$w
   # quiet host
   while [ $wait -lt "$LOAD_WAIT" ] && awk -v m="$LOAD_MAX" '{exit !($1 > m)}' /proc/loadavg; do sleep 10; wait=$((wait + 10)); done
@@ -130,7 +139,7 @@ run_one() {
   # (%CPU over 0.5 s, command name only)
   hup=$(uptime | sed 's/^ *//' | tr -d '"\\')
   htop=$(top -bn2 -d0.5 -w 200 2>/dev/null | awk '/^top -/{f++} f==2 && /^ *[0-9]+ /{print $9" "$12}' | head -5 | paste -sd';' | tr -d '"\\')
-  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
+  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
   run_steps || ok=0
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev me > "$r/tc-dn.txt" 2>&1
@@ -185,6 +194,8 @@ run_steps() {
   cp "/run/hs2/$(echo "${w#/}" | tr / -)-edge.json.status.json" "$r/status-edge.json" 2>/dev/null
   cp "/run/hs2/$(echo "${w#/}" | tr / -)-exit.json.status.json" "$r/status-exit.json" 2>/dev/null
   sssnap end "$r"
+  grep -E "^Vm(RSS|HWM):" /proc/$pe/status > "$r/mem-edge.txt" 2>/dev/null
+  grep -E "^Vm(RSS|HWM):" /proc/$px/status > "$r/mem-exit.txt" 2>/dev/null
   wait "$pc" || { why="client exit status $? ($(tail -1 "$r/client.err"))"; return 1; }
   kill -0 "$pe" 2>/dev/null || { why="edge hs2 exited during the run"; return 1; }
   kill -0 "$px" 2>/dev/null || { why="exit hs2 exited during the run"; return 1; }

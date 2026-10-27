@@ -1,0 +1,89 @@
+=== RUN   TestAngleSendCapBothEnds
+--- PASS: TestAngleSendCapBothEnds (1.21s)
+=== RUN   TestStallGate
+--- PASS: TestStallGate (0.00s)
+=== RUN   TestDialGatePacesAndBounds
+--- PASS: TestDialGatePacesAndBounds (0.27s)
+=== RUN   TestDialGateCancel
+--- PASS: TestDialGateCancel (0.05s)
+=== RUN   TestLowatAdaptsLinux
+    hostq_linux_test.go:88: the socket's mark 25000 → 1448 B -1ns after the drop
+    hostq_linux_test.go:90: the socket's mark was 11584 after the drop (want 1448 within 600 ms; at -1ns)
+--- FAIL: TestLowatAdaptsLinux (0.00s)
+=== RUN   TestHostQLinuxSocket
+    hostq_linux_test.go:139: gate true cap 11584
+--- FAIL: TestHostQLinuxSocket (0.00s)
+=== RUN   TestLowatTable
+--- PASS: TestLowatTable (0.00s)
+=== RUN   TestGateCap
+--- PASS: TestGateCap (0.00s)
+=== RUN   TestGateHysteresis
+--- PASS: TestGateHysteresis (0.00s)
+=== RUN   TestHostWaitBound
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 95.487ms, bound 36ms
+    hostq_test.go:235: 1 Mbit/s (from 0): a light frame waited 95.487ms on the host, more than 36ms
+--- FAIL: TestHostWaitBound (0.00s)
+=== RUN   TestLowatAdapts
+    hostq_test.go:295: 100 → 10 Mbit/s at 2.1s: the mark, gate and cap followed -1ns after (want ≤ 600 ms; -1: never)
+--- FAIL: TestLowatAdapts (0.00s)
+=== RUN   TestLowatWriteOnChange
+--- PASS: TestLowatWriteOnChange (0.00s)
+=== RUN   TestHostQNoSyscalls
+    hostq_test.go:359: hostq: the kernel lacks TCP_NOTSENT_LOWAT or SIOCOUTQNSD (protocol not available): link sockets keep the fixed low-water mark (32768 B) and the old send gate
+--- PASS: TestHostQNoSyscalls (0.00s)
+=== RUN   TestHostQOffSwitch
+--- PASS: TestHostQOffSwitch (0.00s)
+=== RUN   TestHostQStatusLine
+    hostq_test.go:396: "hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.00"
+--- FAIL: TestHostQStatusLine (0.00s)
+=== RUN   TestSendCapLinuxTCPInfo
+--- PASS: TestSendCapLinuxTCPInfo (0.05s)
+=== RUN   TestSendCapFloor
+--- PASS: TestSendCapFloor (0.00s)
+=== RUN   TestSendCapAfterNonAppLimited
+--- PASS: TestSendCapAfterNonAppLimited (0.00s)
+=== RUN   TestSendCapLiftOnIdle
+--- PASS: TestSendCapLiftOnIdle (0.00s)
+=== RUN   TestSendCapHostRate
+--- PASS: TestSendCapHostRate (0.00s)
+=== RUN   TestSendCapMinWithPacenet
+--- PASS: TestSendCapMinWithPacenet (0.00s)
+=== RUN   TestSendCapNoDeliveryRate
+    sendcap_test.go:287: sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)
+--- PASS: TestSendCapNoDeliveryRate (0.00s)
+=== RUN   TestSendCapStatusLine
+--- PASS: TestSendCapStatusLine (0.00s)
+=== RUN   TestSendCapModelNoOvershoot
+    sendcap_test.go:370: down   10/72 q50 l0      worst RTT 1.22× the bottleneck (without C4-lite 2.00×); 8.4 Mbit/s resent 0.00% (without 8.4, 0.00%)
+    sendcap_test.go:370: up   10/72 q50 l0        worst RTT 1.22× the bottleneck (without C4-lite 2.22×); 8.4 Mbit/s resent 0.00% (without 8.4, 0.00%)
+    sendcap_test.go:370: down   25/72 q50 l0      worst RTT 1.26× the bottleneck (without C4-lite 2.03×); 21.2 Mbit/s resent 0.00% (without 21.2, 0.00%)
+    sendcap_test.go:370: up   25/72 q50 l0        worst RTT 1.26× the bottleneck (without C4-lite 2.93×); 21.2 Mbit/s resent 0.00% (without 21.2, 0.00%)
+    sendcap_test.go:370: down  100/72 q50 l0      worst RTT 1.21× the bottleneck (without C4-lite 2.03×); 85.1 Mbit/s resent 0.00% (without 85.1, 0.00%)
+    sendcap_test.go:370: up  100/72 q50 l0        worst RTT 1.21× the bottleneck (without C4-lite 2.72×); 85.1 Mbit/s resent 0.00% (without 65.3, 36.42%)
+    sendcap_test.go:370: down  100/20 q20 l0      worst RTT 1.25× the bottleneck (without C4-lite 2.09×); 79.9 Mbit/s resent 0.00% (without 79.2, 0.00%)
+    sendcap_test.go:370: up  100/20 q20 l0        worst RTT 1.25× the bottleneck (without C4-lite 2.09×); 79.9 Mbit/s resent 0.00% (without 77.8, 0.00%)
+    sendcap_test.go:370: down  300/150 q50 l0     worst RTT 1.24× the bottleneck (without C4-lite 1.71×); 240.8 Mbit/s resent 0.04% (without 251.7, 0.00%)
+    sendcap_test.go:370: up  300/150 q50 l0       worst RTT 0.86× the bottleneck (without C4-lite 0.86×); 178.2 Mbit/s resent 0.00% (without 129.0, 8.43%)
+    sendcap_test.go:370: down  100/72 q50 l0.1    worst RTT 1.25× the bottleneck (without C4-lite 2.01×); 79.6 Mbit/s resent 0.10% (without 82.3, 0.10%)
+    sendcap_test.go:370: up  100/72 q50 l0.1      worst RTT 1.23× the bottleneck (without C4-lite 2.70×); 79.6 Mbit/s resent 0.10% (without 84.7, 0.10%)
+    sendcap_test.go:370: down    5/72 q100 l0     worst RTT 2.00× the bottleneck (without C4-lite 2.00×); 4.2 Mbit/s resent 0.00% (without 4.2, 0.00%)
+    sendcap_test.go:370: up    5/72 q100 l0       worst RTT 2.00× the bottleneck (without C4-lite 2.00×); 4.2 Mbit/s resent 0.00% (without 4.2, 0.00%)
+    sendcap_test.go:383: quiet from 12 s: C4-lite's cap lifted at 13.1 s
+--- PASS: TestSendCapModelNoOvershoot (0.65s)
+=== RUN   TestSendGateHoldsUnsentToLowat
+    sendgate_test.go:113: gated: unsent at most 23800 B, 1016400 B written in 1 s
+    sendgate_test.go:121: not gated: unsent at most 62464 B
+--- PASS: TestSendGateHoldsUnsentToLowat (2.76s)
+=== RUN   TestSendGateOnlyForSlowLinks
+--- PASS: TestSendGateOnlyForSlowLinks (0.00s)
+=== RUN   TestSendGateEndsOnClose
+--- PASS: TestSendGateEndsOnClose (0.30s)
+=== RUN   TestSessionGatesASlowLink
+    sendgate_test.go:218: unsent at most 25360 B, 495373 B written in 0.5 s
+--- PASS: TestSessionGatesASlowLink (0.84s)
+=== RUN   TestSendGateCloseEndsAWait
+--- PASS: TestSendGateCloseEndsAWait (1.46s)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	7.618s
+FAIL
+exit 1

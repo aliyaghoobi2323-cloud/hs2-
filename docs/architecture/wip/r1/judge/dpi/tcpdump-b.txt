@@ -1,0 +1,4 @@
+tcpdump: listening on mx, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+103753 packets captured
+103815 packets received by filter
+0 packets dropped by kernel

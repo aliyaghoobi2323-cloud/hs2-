@@ -63,8 +63,16 @@ func HostQOff() bool { return TuneHQG == 0 }
 var (
 	// HQGSegs (HS2_TUNE_HQG_SEGS, > 0): the gate's cap is at least this many
 	// segments, and its low-water mark is the cap. 0: the document's (two
-	// segments; the mark max(cap/2, MSS)).
-	HQGSegs = 0
+	// segments; the mark max(cap/2, MSS)). The default is 8, the judge's
+	// choice on the rig (R1 task 17, decision T12;
+	// docs/architecture/wip/r1/judge.fa.md): of the four variants it passed
+	// most cells on retransmits (11 of 16 against the base + 1 point) and
+	// throughput (15 of 16 at 0.97 x the base), with the lowest probe p99;
+	// the document's gate kept BBR in STARTUP (25-44 % resent) and SEGS=4
+	// cut the upload at 25 Mbit/s to 0.38-0.58 x the base. At 1 Mbit/s its
+	// cap (8 segments, 93 ms) is past the host-wait model's 36 ms
+	// (TestHostWaitBound): an open item for the red team.
+	HQGSegs = 8
 	// HQGGate 0 (HS2_TUNE_HQG_GATE=0): no write gate; the dynamic low-water
 	// mark (Lowat) alone, at every rate.
 	HQGGate = 1
