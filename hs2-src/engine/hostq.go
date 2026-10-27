@@ -76,6 +76,9 @@ var (
 	// HQGGate 0 (HS2_TUNE_HQG_GATE=0): no write gate; the dynamic low-water
 	// mark (Lowat) alone, at every rate.
 	HQGGate = 1
+	// HQGQuietSegs (HS2_TUNE_HQG_QUIET_SEGS, lab, β2): a QUIET link's gate
+	// variant when >= 0 (0: the document's), else HQGSegs as every link.
+	HQGQuietSegs = -1
 )
 
 const (

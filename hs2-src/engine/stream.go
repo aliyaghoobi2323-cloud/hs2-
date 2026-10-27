@@ -219,6 +219,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			sys = gateSys{sys, hc}
 		}
 		hq = newHostQ(conn, sys)
+		if quiet, _ := classOf(caps); quiet && HQGQuietSegs >= 0 {
+			hq.gate.segs = HQGQuietSegs // (lab: a QUIET link's own gate variant)
+		}
 		hc.h = hq
 		bottom = hc
 	} else {

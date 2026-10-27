@@ -330,6 +330,7 @@ func applyTuning() {
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
 	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
+	num("HS2_TUNE_HQG_QUIET_SEGS", &engine.HQGQuietSegs)
 	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)

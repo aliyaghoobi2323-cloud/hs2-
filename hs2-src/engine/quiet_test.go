@@ -508,66 +508,137 @@ func TestQuietCounts(t *testing.T) {
 	}
 }
 
-// α (sendcap.go) on a BULK link's socket: over CoDel's 5 ms of queue the
-// cap goes below what was delivered, in proportion to the excess; under
-// half of it it grows 5% a reading up to 1.25 × the 2 s delivery maximum;
-// never under its floor; a QUIET link keeps C4-lite's 1.25 ×.
+// α (sendcap.go) on a BULK link's socket, reading by reading: once the
+// path delivers less than the cap, the cap goes to what it delivered, less
+// the share that drains the queue past 5 ms within 100 ms (at most 10%);
+// while it keeps up, the cap grows (5% under 5 ms of queue, 2% over it:
+// that queue is not its own) unless the queue grew since the reading
+// before (then it is: it backs off the same way); never under 0.75 of the 10 s
+// maximum nor the floor; an app-limited reading holds it; a QUIET link
+// keeps C4-lite's 1.25 ×.
 func TestAlphaCap(t *testing.T) {
 	const ms = time.Millisecond
-	feed := func(c *sendCap, n int, at *time.Duration, dlv float64, srtt, minRTT time.Duration, acked *uint64) {
-		for i := 0; i < n; i++ {
-			*at += 100 * ms
-			*acked += uint64(dlv / 10)
-			c.Update(capSample{Now: *at, Delivery: dlv, Acked: *acked, Written: *acked, Segs: uint32(*acked / 1000), SRTT: srtt, MinRTT: minRTT})
-		}
+	near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-6*b+1 }
+	at, acked := time.Hour, uint64(0)
+	feed := func(c *sendCap, dlv float64, q time.Duration, app bool) {
+		at += 100 * ms
+		acked += uint64(dlv / 10)
+		c.Update(capSample{Now: at, Delivery: dlv, AppLimited: app, Acked: acked, Written: acked, Segs: uint32(acked / 1000),
+			SRTT: 72*ms + q, MinRTT: 72 * ms})
 	}
 	const rate = 25e6 / 8
-	{
+	c := &sendCap{linked: true, alpha: true}
+	feed(c, rate, 2*ms, false) // C4-lite's rule: armed from the second reading
+	feed(c, rate, 2*ms, false) // armed at what was delivered, kept up at 2 ms: +5%
+	if !near(c.aRate, rate*1.05) || uint64(c.aRate) != c.own {
+		t.Fatalf("armed at %.0f (own %d), want %.0f", c.aRate, c.own, rate*1.05)
+	}
+	feed(c, rate*1.05, 2*ms, false) // kept up, 2 ms: +5%
+	if !near(c.aRate, rate*1.05*1.05) {
+		t.Fatalf("kept up: cap %.0f, want %.0f", c.aRate, rate*1.05*1.05)
+	}
+	feed(c, rate*1.08, 9*ms, false) // kept up, but 9 ms and rising: its own, 4% off what it delivered
+	if !near(c.aRate, rate*1.08*0.96) {
+		t.Fatalf("a rising queue: cap %.0f, want %.0f", c.aRate, rate*1.08*0.96)
+	}
+	r := c.aRate
+	feed(c, r, 9*ms, false) // kept up, 9 ms that did not grow: not its own, +2%
+	if !near(c.aRate, r*1.02) {
+		t.Fatalf("a standing queue not its own: cap %.0f, want %.0f", c.aRate, r*1.02)
+	}
+
+	r = c.aRate
+	c.aDlv = [alphaRecent]float64{}
+	feed(c, rate*0.4, 2*ms, true) // app-limited, far under the cap: holds
+	if !near(c.aRate, r) {
+		t.Fatalf("app-limited: cap %.0f, want it held at %.0f", c.aRate, r)
+	}
+	feed(c, r, 2*ms, true) // app-limited but at the cap (a cap that binds): kept up, +5%
+	if !near(c.aRate, r*1.05) {
+		t.Fatalf("app-limited at the cap: cap %.0f, want %.0f", c.aRate, r*1.05)
+	}
+	c2 := &sendCap{linked: true, alpha: true}
+	for i := 0; i < 5; i++ {
+		feed(c2, rate, 2*ms, false)
+	}
+	for i := 0; i < alphaRecent; i++ {
+		feed(c2, rate*0.8, time.Duration(20+10*i)*ms, false) // the path took less, its queue grows
+	}
+	if c2.aRate > 0.8*rate || c2.aRate < alphaKMin*rate || c2.aCuts < alphaRecent {
+		t.Fatalf("at the bottleneck with a growing queue: cap %.0f after %d cuts, want under what the path delivered (%.0f), at least %.0f",
+			c2.aRate, c2.aCuts, 0.8*rate, alphaKMin*rate)
+	}
+	for i := 0; i < 30; i++ {
+		feed(c2, rate*0.2, 300*ms, false) // a collapse: never under 0.75 of the 10 s maximum
+	}
+	if !near(c2.aRate, alphaKMin*rate) {
+		t.Fatalf("collapse within 10 s: cap %.0f, want %.0f", c2.aRate, alphaKMin*rate)
+	}
+	for i := 0; i < 120; i++ {
+		feed(c2, 10e3, 300*ms, false)
+	}
+	if c2.aRate != alphaFloor {
+		t.Fatalf("collapse: cap %.0f, want the floor %d", c2.aRate, alphaFloor)
+	}
+	if !hasPrefix(c2, "alpha cap ") {
+		t.Fatal("status line lacks alpha")
+	}
+	q := &sendCap{linked: true} // QUIET: C4-lite
+	feed(q, rate, 55*ms, false)
+	feed(q, rate, 55*ms, false)
+	if !near(float64(q.own), wcNetKOf()*rate) {
+		t.Fatalf("C4-lite: cap %d, want %.0f", q.own, wcNetKOf()*rate)
+	}
+}
+
+// α in a loop with a path: its delivery is the lesser of the cap and the
+// path's rate, its queue grows while the cap is past the path and drains
+// while under it, and the srtt reading holds besides q0 of queue that is
+// not its own (the other direction's, its acks behind). The cap fills the
+// path (>= 0.9 of it, mean of the last 10 s), keeps its own queue within
+// 10 ms, and climbs from 1 Mbit/s to the path within 10 s, with q0 of 0 and
+// of 6 ms (the first versions held the second one down for good).
+func TestAlphaLoop(t *testing.T) {
+	const ms = time.Millisecond
+	for _, c0 := range []struct {
+		path float64
+		q0   time.Duration
+		from float64
+	}{
+		{25e6 / 8, 0, 25e6 / 8}, {25e6 / 8, 6 * ms, 25e6 / 8}, {25e6 / 8, 6 * ms, 1e6 / 8},
+		{5e6 / 8, 6 * ms, 5e6 / 8}, {100e6 / 8, 3 * ms, 10e6 / 8},
+	} {
 		c := &sendCap{linked: true, alpha: true}
-		var at time.Duration
-		var acked uint64
-		feed(c, 3, &at, rate, 72*ms+2*ms, 72*ms, &acked) // 2 ms of queue: under half the target
-		if c.aRate <= rate || c.aRate > wcNetKOf()*rate+1 {
-			t.Fatalf("an empty queue: cap %.0f, want past %.0f up to %.0f", c.aRate, rate, wcNetKOf()*rate)
+		at, acked := time.Hour, uint64(0)
+		qOwn := time.Duration(0)
+		var sum float64
+		var worstQ time.Duration
+		capNow := c0.from
+		for i := 0; i < 300; i++ { // 30 s
+			dlv := math.Min(capNow, c0.path)
+			// the queue the cap builds or drains over the 100 ms
+			qOwn += time.Duration((capNow - c0.path) / c0.path * float64(100*ms))
+			qOwn = max(qOwn, 0)
+			at += 100 * ms
+			acked += uint64(dlv / 10)
+			c.Update(capSample{Now: at, Delivery: dlv, Acked: acked, Written: acked, Segs: uint32(acked / 1000),
+				SRTT: 72*ms + c0.q0 + qOwn, MinRTT: 72 * ms})
+			if c.own > 0 {
+				capNow = float64(c.own)
+			}
+			if i >= 100 {
+				worstQ = max(worstQ, qOwn)
+			}
+			if i >= 200 {
+				sum += dlv
+			}
 		}
-		feed(c, 1, &at, rate, 72*ms+55*ms, 72*ms, &acked) // 55 ms of queue: 50 ms over
-		want := rate * (1 - math.Min(0.05/0.1, alphaCutMax))
-		if math.Abs(c.aRate-want) > 1 || uint64(c.aRate) != c.own {
-			t.Fatalf("55 ms of queue: cap %.0f (own %d), want %.0f", c.aRate, c.own, want)
-		}
-		feed(c, 1, &at, rate, 72*ms+15*ms, 72*ms, &acked) // 10 ms over: 10% below what was delivered
-		if want2 := math.Min(want, rate) * 0.9; math.Abs(c.aRate-want2) > 1 {
-			t.Fatalf("15 ms of queue: cap %.0f, want %.0f", c.aRate, want2)
-		}
-		hold := c.aRate
-		feed(c, 1, &at, rate, 72*ms+4*ms, 72*ms, &acked) // within the target: held
-		if c.aRate != hold {
-			t.Fatalf("4 ms of queue: cap %.0f, want it held at %.0f", c.aRate, hold)
-		}
-		feed(c, 40, &at, 10e3, 72*ms+300*ms, 72*ms, &acked) // a collapse
-		if c.aRate != alphaFloor {
-			t.Fatalf("collapse: cap %.0f, want the floor %d", c.aRate, alphaFloor)
-		}
-		if !hasPrefix(c, "alpha cap ") {
-			t.Fatal("status line lacks alpha")
-		}
-	}
-	{
-		c := &sendCap{linked: true} // QUIET: C4-lite
-		var at time.Duration
-		var acked uint64
-		feed(c, 3, &at, rate, 72*ms+55*ms, 72*ms, &acked)
-		if math.Abs(float64(c.own)-wcNetKOf()*rate) > 1 {
-			t.Fatalf("C4-lite: cap %d, want %.0f", c.own, wcNetKOf()*rate)
-		}
-	}
-	{
-		c := &sendCap{linked: true, alpha: true} // no min_rtt reading: C4-lite's
-		var at time.Duration
-		var acked uint64
-		feed(c, 3, &at, rate, 0, 0, &acked)
-		if math.Abs(c.aRate-wcNetKOf()*rate) > 1 {
-			t.Fatalf("no queue reading: cap %.0f, want %.0f", c.aRate, wcNetKOf()*rate)
+		mean := sum / 100
+		t.Logf("path %.0f Mbit/s, q0 %v, from %.0f: delivered %.3f of the path, its own queue at most %v (after 10 s)",
+			c0.path*8/1e6, c0.q0, c0.from*8/1e6, mean/c0.path, worstQ)
+		if mean < 0.9*c0.path || worstQ > 10*ms {
+			t.Fatalf("path %.0f Mbit/s, q0 %v: delivered %.3f of the path, own queue up to %v; want >= 0.9 and <= 10 ms",
+				c0.path*8/1e6, c0.q0, mean/c0.path, worstQ)
 		}
 	}
 }
@@ -734,5 +805,36 @@ func TestEarlyDoneOneVsSixteen(t *testing.T) {
 	t.Logf("the user of one stream: %.3f of its floor with the early Done, %.3f without", on, off)
 	if on < 0.9 {
 		t.Fatalf("with the early Done the user of one stream got %.3f of its floor, want >= 0.9", on)
+	}
+}
+
+// A moved download fills a 100 Mbit/s path of 72 ms alone: its stream
+// window grows past the 256 KiB a peer assumes at first (28 Mbit/s at
+// 72 ms), as a stream that never moved does.
+func TestQuietMovedWindowGrows(t *testing.T) {
+	angleCores(t)
+	if testing.Short() {
+		t.Skip("emulated links, 12 s")
+	}
+	const rate = 100e6 / 8
+	r := newQuietRig(t, rate, 36*time.Millisecond, false)
+	st := r.open(3, qpDown)
+	var got atomic.Uint64
+	go func() {
+		b := make([]byte, 64<<10)
+		for r.ctx.Err() == nil {
+			n, err := st.Read(b)
+			got.Add(uint64(n))
+			if err != nil {
+				return
+			}
+		}
+	}()
+	waitQuiet(t, "the download moved", func() bool { return r.q.moved.Load() == 1 })
+	time.Sleep(3 * time.Second)
+	rates := angleRate(5*time.Second, &got)
+	t.Logf("a moved download: %.1f Mbit/s of 100", rates[0]*8/1e6)
+	if rates[0] < 0.9*rate {
+		t.Fatalf("a moved download took %.1f Mbit/s of 100", rates[0]*8/1e6)
 	}
 }
