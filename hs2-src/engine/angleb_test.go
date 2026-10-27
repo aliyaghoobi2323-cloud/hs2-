@@ -526,3 +526,28 @@ func TestAngleBSchedOff(t *testing.T) {
 		t.Fatal("a link without CapSched has a link scheduler")
 	}
 }
+
+// The lab knobs of C3's gate (hostq.go: HS2_TUNE_HQG_SEGS,
+// HS2_TUNE_HQG_GATE): a cap of at least that many segments with the mark at
+// the cap, or the mark alone without the gate; by default the gate of §3.3.
+func TestAngleBHostQLabKnobs(t *testing.T) {
+	oldSegs, oldGate := TuneHQGSegs, TuneHQGGate
+	defer func() { TuneHQGSegs, TuneHQGGate = oldSegs, oldGate }()
+	for _, c := range []struct {
+		segs, gate int
+		on         bool
+		cap, lowat int
+	}{
+		{0, 1, true, 2896, 1448},
+		{4, 1, true, 4 * 1448, 4 * 1448},
+		{0, 0, false, 2896, Lowat(3*mbit, 1448)},
+	} {
+		TuneHQGSegs, TuneHQGGate = c.segs, c.gate
+		s := newSkbSock(3*mbit, 1448, 1)
+		h := newHostQ(s, s)
+		h.Update(3*mbit, 1448)
+		if h.on.Load() != c.on || int(h.cap.Load()) != c.cap || s.lowat != c.lowat {
+			t.Fatalf("segs %d gate %d: on %v cap %d mark %d, want %v %d %d", c.segs, c.gate, h.on.Load(), h.cap.Load(), s.lowat, c.on, c.cap, c.lowat)
+		}
+	}
+}
