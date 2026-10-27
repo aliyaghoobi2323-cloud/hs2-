@@ -227,6 +227,8 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	}
 	shaped := newShapedConn(bottom, sampler)
 	shaped.carry = sched
+	shaped.labTCP = tc
+	labSock(tc)
 	var c net.Conn = shaped
 	if meter != nil {
 		c = &meteredConn{Conn: c, m: meter, gate: gate, hq: hq}

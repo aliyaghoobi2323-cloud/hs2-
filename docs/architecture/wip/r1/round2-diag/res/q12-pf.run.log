@@ -1,0 +1,92 @@
+06:14:14 plan /root/r1-diag/sched/q12-pf.tsv: 45 runs
+06:14:15 start f9a10ea5-base-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=base) load 0.50 waited 0s
+06:14:45 done f9a10ea5-base-1 ok=1 
+06:14:46 start f9a10ea5-a-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=a) load 0.67 waited 0s
+06:15:16 done f9a10ea5-a-1 ok=1 
+06:15:16 start f9a10ea5-ap5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=ap5) load 0.43 waited 0s
+06:15:46 done f9a10ea5-ap5-1 ok=1 
+06:15:47 start f9a10ea5-ac5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=ac5) load 1.25 waited 0s
+06:16:17 done f9a10ea5-ac5-1 ok=1 
+06:16:18 start 02457ae0-apin-1 (N=2 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.18 waited 0s
+06:16:47 done 02457ae0-apin-1 ok=1 
+06:16:48 start f9a10ea5-ac5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=ac5) load 1.60 waited 0s
+06:17:18 done f9a10ea5-ac5-2 ok=1 
+06:17:19 start f9a10ea5-ap5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=ap5) load 1.53 waited 0s
+06:17:49 done f9a10ea5-ap5-2 ok=1 
+06:17:50 start f9a10ea5-a-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=a) load 2.10 waited 0s
+06:18:20 done f9a10ea5-a-2 ok=1 
+06:18:20 start f9a10ea5-base-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=base) load 1.73 waited 0s
+06:18:50 done f9a10ea5-base-2 ok=1 
+06:18:51 start 02457ae0-apin-2 (N=2 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.35 waited 0s
+06:19:21 done 02457ae0-apin-2 ok=1 
+06:19:22 start f9a10ea5-base-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=base) load 1.82 waited 0s
+06:19:51 done f9a10ea5-base-3 ok=1 
+06:19:52 start f9a10ea5-a-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=a) load 1.21 waited 0s
+06:20:22 done f9a10ea5-a-3 ok=1 
+06:20:23 start f9a10ea5-ap5-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=ap5) load 1.53 waited 0s
+06:20:53 done f9a10ea5-ap5-3 ok=1 
+06:20:54 start f9a10ea5-ac5-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=ac5) load 2.05 waited 0s
+06:21:23 done f9a10ea5-ac5-3 ok=1 
+06:21:24 start 02457ae0-apin-3 (N=2 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.81 waited 0s
+06:21:54 done 02457ae0-apin-3 ok=1 
+06:21:55 start 2d23c440-base-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=base) load 1.62 waited 0s
+06:22:25 done 2d23c440-base-1 ok=1 
+06:22:25 start 2d23c440-a-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=a) load 2.16 waited 0s
+06:22:55 done 2d23c440-a-1 ok=1 
+06:22:56 start 2d23c440-ap25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=ap25) load 2.16 waited 0s
+06:23:26 done 2d23c440-ap25-1 ok=1 
+06:23:27 start 2d23c440-ac25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=ac25) load 2.35 waited 0s
+06:23:57 done 2d23c440-ac25-1 ok=1 
+06:23:58 start a6e92124-apin-1 (N=2 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.08 waited 0s
+06:24:27 done a6e92124-apin-1 ok=1 
+06:24:28 start 2d23c440-ac25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=ac25) load 2.58 waited 0s
+06:24:58 done 2d23c440-ac25-2 ok=1 
+06:24:59 start 2d23c440-ap25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=ap25) load 2.32 waited 0s
+06:25:29 done 2d23c440-ap25-2 ok=1 
+06:25:29 start 2d23c440-a-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=a) load 2.67 waited 0s
+06:25:59 done 2d23c440-a-2 ok=1 
+06:26:00 start 2d23c440-base-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=base) load 2.84 waited 0s
+06:26:30 done 2d23c440-base-2 ok=1 
+06:26:31 start a6e92124-apin-2 (N=2 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.31 waited 0s
+06:27:00 done a6e92124-apin-2 ok=1 
+06:27:01 start 2d23c440-base-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=base) load 2.22 waited 0s
+06:27:31 done 2d23c440-base-3 ok=1 
+06:27:32 start 2d23c440-a-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=a) load 2.09 waited 0s
+06:28:02 done 2d23c440-a-3 ok=1 
+06:28:03 start 2d23c440-ap25-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=ap25) load 1.84 waited 0s
+06:28:32 done 2d23c440-ap25-3 ok=1 
+06:28:33 start 2d23c440-ac25-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=ac25) load 2.20 waited 0s
+06:29:03 done 2d23c440-ac25-3 ok=1 
+06:29:04 start a6e92124-apin-3 (N=2 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.04 waited 0s
+06:29:34 done a6e92124-apin-3 ok=1 
+06:29:35 start df2a19e0-base-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=base) load 2.38 waited 0s
+06:30:04 done df2a19e0-base-1 ok=1 
+06:30:05 start df2a19e0-a-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=a) load 3.02 waited 0s
+06:30:35 done df2a19e0-a-1 ok=1 
+06:30:36 start df2a19e0-ap100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=ap100) load 2.50 waited 0s
+06:31:06 done df2a19e0-ap100-1 ok=1 
+06:31:06 start df2a19e0-ac100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=ac100) load 2.52 waited 0s
+06:31:36 done df2a19e0-ac100-1 ok=1 
+06:31:37 start c06a84b5-apin-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.32 waited 0s
+06:32:07 done c06a84b5-apin-1 ok=1 
+06:32:08 start df2a19e0-ac100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=ac100) load 1.99 waited 0s
+06:32:38 done df2a19e0-ac100-2 ok=1 
+06:32:38 start df2a19e0-ap100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=ap100) load 1.78 waited 0s
+06:33:08 done df2a19e0-ap100-2 ok=1 
+06:33:09 start df2a19e0-a-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=a) load 1.97 waited 0s
+06:33:39 done df2a19e0-a-2 ok=1 
+06:33:40 start df2a19e0-base-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=base) load 2.29 waited 0s
+06:34:10 done df2a19e0-base-2 ok=1 
+06:34:10 start c06a84b5-apin-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=apin) load 2.55 waited 0s
+06:34:40 done c06a84b5-apin-2 ok=1 
+06:34:41 start df2a19e0-base-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=base) load 2.35 waited 0s
+06:35:11 done df2a19e0-base-3 ok=1 
+06:35:12 start df2a19e0-a-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=a) load 2.21 waited 0s
+06:35:42 done df2a19e0-a-3 ok=1 
+06:35:42 start df2a19e0-ap100-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=ap100) load 2.79 waited 0s
+06:36:12 done df2a19e0-ap100-3 ok=1 
+06:36:13 start df2a19e0-ac100-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=ac100) load 2.38 waited 0s
+06:36:43 done df2a19e0-ac100-3 ok=1 
+06:36:44 start c06a84b5-apin-3 (N=2 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 BIN=apin) load 1.98 waited 0s
+06:37:14 done c06a84b5-apin-3 ok=1 
+06:37:14 done /root/r1-diag/sched/q12-pf.tsv

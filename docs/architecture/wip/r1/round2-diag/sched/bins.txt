@@ -1,0 +1,13 @@
+base /root/r1-bins/hs2-diag-base
+a /root/r1-bins/hs2-diag-a
+b /root/r1-bins/hs2-diag-b HS2_TUNE_HQG_SEGS=8
+apin /root/r1-bins/hs2-diag-a HS2_LAB_PIN_PORT=5312
+anb /root/r1-bins/hs2-diag-a HS2_TUNE_SMUX_NEEDBUF=8388608 HS2_TUNE_SMUX_SESSBUF=33554432
+anw /root/r1-bins/hs2-diag-a HS2_TUNE_WCORE=0
+an0 /root/r1-bins/hs2-diag-a HS2_LAB_NEWBYTES=0
+ap5 /root/r1-bins/hs2-diag-a HS2_LAB_PACE_MBIT=4.706
+ac5 /root/r1-bins/hs2-diag-a HS2_LAB_WCLAMP=52000
+ap25 /root/r1-bins/hs2-diag-a HS2_LAB_PACE_MBIT=23.53
+ac25 /root/r1-bins/hs2-diag-a HS2_LAB_WCLAMP=260000
+ap100 /root/r1-bins/hs2-diag-a HS2_LAB_PACE_MBIT=94.12
+ac100 /root/r1-bins/hs2-diag-a HS2_LAB_WCLAMP=1040000

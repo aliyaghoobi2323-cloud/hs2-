@@ -1,0 +1,26 @@
+06:37:14 plan /root/r1-diag/sched/q3-2.tsv: 12 runs
+06:37:15 start 0815feea-a-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=a) load 2.31 waited 0s
+06:38:00 done 0815feea-a-1 ok=1 
+06:38:00 start 0815feea-an0-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=an0) load 2.47 waited 0s
+06:38:45 done 0815feea-an0-1 ok=1 
+06:38:46 start 0815feea-anb-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=anb) load 2.31 waited 0s
+06:39:30 done 0815feea-anb-1 ok=1 
+06:39:31 start 0815feea-ap100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=ap100) load 3.01 waited 0s
+06:40:15 done 0815feea-ap100-1 ok=1 
+06:40:16 start 0815feea-ap100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=ap100) load 2.90 waited 0s
+06:41:00 done 0815feea-ap100-2 ok=1 
+06:41:01 start 0815feea-anb-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=anb) load 3.13 waited 0s
+06:41:45 done 0815feea-anb-2 ok=1 
+06:41:46 start 0815feea-an0-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=an0) load 4.03 waited 0s
+06:42:31 done 0815feea-an0-2 ok=1 
+06:42:31 start 0815feea-a-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy HS2_LAB_TRACE_NOFRAMES=1 BIN=a) load 3.13 waited 0s
+06:43:16 done 0815feea-a-2 ok=1 
+06:43:17 start 9dfe3fb2-a-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 2.22 waited 0s
+06:43:47 done 9dfe3fb2-a-1 ok=1 
+06:43:47 start 9dfe3fb2-b-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 2.86 waited 0s
+06:44:17 done 9dfe3fb2-b-1 ok=1 
+06:44:18 start 9dfe3fb2-b-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b) load 2.66 waited 0s
+06:44:48 done 9dfe3fb2-b-2 ok=1 
+06:44:49 start 9dfe3fb2-a-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=a) load 3.44 waited 0s
+06:45:19 done 9dfe3fb2-a-2 ok=1 
+06:45:19 done /root/r1-diag/sched/q3-2.tsv

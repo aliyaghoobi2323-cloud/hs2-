@@ -75,6 +75,7 @@ fi
 BINS=${BINS:-}
 binpath() {
   case "$1" in
+    raw) echo raw ;;  # lab (r1-diag): no hs2, the client straight to the server
     old) echo "$OLD_BIN" ;;
     new) echo "$NEW_BIN" ;;
     *) [ -n "$BINS" ] && awk -v l="$1" '$1 == l {print $2; exit}' "$BINS" ;;
@@ -109,6 +110,7 @@ J
 # ss snapshot of the link sockets in both namespaces, and the host's CPU counters
 sssnap() {
   local tag=$1 r=$2
+  date +%s.%N > "$r/sstime-$tag.txt"
   ip netns exec $X ss -tinH state established '( dport = :2096 )' > "$r/ss-exit-$tag.txt" 2>/dev/null
   ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-$tag.txt" 2>/dev/null
   head -1 /proc/stat > "$r/stat-$tag.txt"
@@ -142,6 +144,7 @@ run_one() {
   echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
   run_steps || ok=0
+  labstop "$r"
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev me > "$r/tc-dn.txt" 2>&1
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev mx > "$r/tc-up.txt" 2>&1
   cleanup
@@ -149,11 +152,38 @@ run_one() {
   log "done $id ok=$ok $why"
 }
 
+# lab (r1-diag, round 2 step 1): CAP=1 tcpdump of the link's packets
+# (headers only) on the edge's and the exit's veth, from before the link's
+# SYN; TCS=1 the bottleneck qdiscs every 100 ms. labstop ends both before
+# the namespaces go.
+LABP=()
+labstart() {
+  local r=$1
+  LABP=()
+  if [ "${CAP:-0}" = 1 ]; then
+    ip netns exec $E tcpdump -i e0 -s 80 -B 32768 -nn -w "$r/e0.pcap" tcp port 2096 2> "$r/cap-e0.err" &
+    LABP+=($!)
+    ip netns exec $X tcpdump -i x0 -s 80 -B 32768 -nn -w "$r/x0.pcap" tcp port 2096 2> "$r/cap-x0.err" &
+    LABP+=($!)
+    sleep 0.5
+  fi
+  if [ "${TCS:-0}" = 1 ]; then
+    ( while :; do echo "T $(date +%s.%N)"; ip netns exec r-mid$RIG_ID tc -s qdisc show dev me | sed 's/^/D /'; ip netns exec r-mid$RIG_ID tc -s qdisc show dev mx | sed 's/^/U /'; sleep 0.1; done ) > "$r/tcs.txt" 2>/dev/null &
+    LABP+=($!)
+  fi
+}
+labstop() {
+  local p
+  for p in "${LABP[@]}"; do kill -TERM "$p" 2>/dev/null; done
+  for p in "${LABP[@]}"; do wait "$p" 2>/dev/null; done
+  LABP=()
+}
+
 # run_steps: the body of one run (it uses run_one's variables); on failure it
 # sets why and returns 1, and run_one still tears down and writes the line
 run_steps() {
   local n t0 c0 pc lw te="" tx=""
-  [ -x "$bp" ] || { why="no binary for BIN=$bin ($bp)"; return 1; }
+  [ "$bp" = raw ] || [ -x "$bp" ] || { why="no binary for BIN=$bin ($bp)"; return 1; }
   # optional CPU sets (the field edge has 4 cores): EDGE_CPUS=0-3 EXIT_CPUS=4-11
   [ -n "${EDGE_CPUS:-}" ] && te="taskset -c $EDGE_CPUS"
   [ -n "${EXIT_CPUS:-}" ] && tx="taskset -c $EXIT_CPUS"
@@ -165,6 +195,19 @@ run_steps() {
   mkconf "$w" "$N" || { why="hs2 config"; return 1; }
   ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 > "$r/rigload-server.log" 2>&1 &
   PIDS+=($!)
+  labstart "$r"
+  local rlenv=""
+  if [ "${TRACE:-0}" = 1 ]; then
+    mkdir -p "$r/trace"
+    hs2env="$hs2env HS2_LAB_TRACE=$r/trace"
+    rlenv="RIGLOAD_PROBE_DUMP=$r/probes.json"
+  fi
+  if [ "$bp" = raw ]; then
+    # lab: no hs2; every flow straight to the rigload server in r-exit
+    python3 -c 'import json,sys; p=sys.argv[1]; s=json.load(open(p)); s["bulk"]=s["echo"]="10.202.0.1:5213"; [u.update(src="") for u in s["users"] if u.get("path","port")=="port"]; s["users"]=[u for u in s["users"] if u.get("path","port")=="port"]; json.dump(s,open(p,"w"))' "$r/spec.json"
+    echo '{"links_wait_s":0,"links_at_start":0,"raw":true}' > "$r/links.json"
+    pe=$$; px=$$
+  else
   ip netns exec $E $te env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/edge.json" > "$r/edge.log" 2>&1 &
   pe=$!; PIDS+=($pe)
   sleep 0.5
@@ -176,12 +219,13 @@ run_steps() {
   echo "{\"links_wait_s\":$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f", b - a}'),\"links_at_start\":${n:-0},\"pid_edge\":$pe,\"pid_exit\":$px}" > "$r/links.json"
   [ "${n:-0}" -ge "$N" ] || { why="only ${n:-0} of $N links up after $lw s"; return 1; }
   "$D/rig.sh" tun-up 2> "$r/tun-up.err" || { why="tun-up: $(tail -1 "$r/tun-up.err")"; return 1; }
+  fi
   case "$MODE" in
     *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
                PIDS+=($!); sleep 1.5 ;;
   esac
   # measurement: the client from t=0 to total; snapshots at WARM and near the end
-  ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') "$RL" client -spec "$r/spec.json" > "$r/client.json" 2> "$r/client.err" &
+  ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') env $rlenv "$RL" client -spec "$r/spec.json" > "$r/client.json" 2> "$r/client.err" &
   pc=$!; PIDS+=($pc)
   c0=$(date +%s.%N)
   sleep "$WARM"
@@ -189,14 +233,17 @@ run_steps() {
   LC_ALL=C pidstat -u -p "$pe,$px" 1 $(awk -v t="$total" -v w="$WARM" 'BEGIN{printf "%d", t - w - 1}') > "$r/pidstat.txt" 2>&1 &
   PIDS+=($!)
   sleep $(awk -v t="$total" -v c="$c0" -v n="$(date +%s.%N)" 'BEGIN{s = c + t - 1.2 - n; if (s < 0) s = 0; printf "%.2f", s}')
+  if [ "$bp" != raw ]; then
   "$bp" status -c "$w/edge.json" > "$r/status-edge.txt" 2>&1
   "$bp" status -c "$w/exit.json" > "$r/status-exit.txt" 2>&1
+  fi
   cp "/run/hs2/$(echo "${w#/}" | tr / -)-edge.json.status.json" "$r/status-edge.json" 2>/dev/null
   cp "/run/hs2/$(echo "${w#/}" | tr / -)-exit.json.status.json" "$r/status-exit.json" 2>/dev/null
   sssnap end "$r"
   grep -E "^Vm(RSS|HWM):" /proc/$pe/status > "$r/mem-edge.txt" 2>/dev/null
   grep -E "^Vm(RSS|HWM):" /proc/$px/status > "$r/mem-exit.txt" 2>/dev/null
   wait "$pc" || { why="client exit status $? ($(tail -1 "$r/client.err"))"; return 1; }
+  [ "$bp" = raw ] && return 0
   kill -0 "$pe" 2>/dev/null || { why="edge hs2 exited during the run"; return 1; }
   kill -0 "$px" 2>/dev/null || { why="exit hs2 exited during the run"; return 1; }
   return 0
@@ -204,7 +251,11 @@ run_steps() {
 
 # the schedule: id bin order rep cell (tab separated); CR stripped first
 tr -d '\r' < "$PLAN" > "$OUT/plan.txt"
-python3 "$D/ana.py" schedule "$OUT/plan.txt" "$REPS" > "$OUT/schedule.tsv" || exit 1
+if [ -n "${SCHED:-}" ]; then
+  cp "$SCHED" "$OUT/schedule.tsv"  # lab (r1-diag): a schedule made elsewhere, as ana.py schedule prints one
+else
+  python3 "$D/ana.py" schedule "$OUT/plan.txt" "$REPS" > "$OUT/schedule.tsv" || exit 1
+fi
 log "plan $PLAN: $(wc -l < "$OUT/schedule.tsv") runs"
 while IFS=$'\t' read -r id bin order rep cell; do
   grep -q "\"id\": *\"$id\".*\"ok\": *true" "$RES" && continue

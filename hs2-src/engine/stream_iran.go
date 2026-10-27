@@ -333,6 +333,9 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 // and never tries the links in avoid (a connection moving off its link,
 // rescue.go).
 func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoid ...Link) (stream, Link, func(), bool) {
+	if labPinPort > 0 {
+		avoid = append(slices.Clone(avoid), lm.labPinAvoid(port)...) // lab only (labtrace.go)
+	}
 	giveUp := time.NewTimer(openGiveUp)
 	defer giveUp.Stop()
 	done := make(chan *openTry, openTries) // never blocks a try

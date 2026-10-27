@@ -3,6 +3,7 @@ package smux
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"sync"
@@ -477,6 +478,10 @@ func (s *Session) sendLoopSched() {
 			}
 		}
 		req := sf.req
+		if labSmall(req.frame.cmd, len(req.frame.data)) {
+			w := labWall()
+			LabTrace(fmt.Sprintf("Q %p %d %d %s %d %d %d\n", s, req.frame.sid, len(req.frame.data), LabKey(req.frame.data), w-(monoNow()-sf.at), w, sf.lane))
+		}
 		buf[0] = req.frame.ver
 		buf[1] = req.frame.cmd
 		binary.LittleEndian.PutUint16(buf[2:], uint16(len(req.frame.data)))

@@ -218,6 +218,9 @@ func (l *l3Link) markDead() {
 // echo). With the per-flow queues (sq) it is always taken: what they drop
 // they count.
 func (l *l3Link) enqueue(b *[]byte, tag, flow uint32, echo bool) bool {
+	if echo {
+		labTun(l, *b)
+	}
 	if l.sq != nil {
 		l.sq.push(b, tag, flow, echo)
 		return true

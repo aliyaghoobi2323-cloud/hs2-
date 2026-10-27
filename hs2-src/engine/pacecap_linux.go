@@ -20,6 +20,9 @@ func setMaxPacing(tc *net.TCPConn, rate uint64) bool {
 		return false
 	}
 	v := int(int32(-1)) // ~0U: no cap
+	if labPaceBps > 0 {
+		rate = labPaceBps // lab only (labtrace.go)
+	}
 	if rate > 0 {
 		v = int(min(rate, 1<<31-1))
 	}
