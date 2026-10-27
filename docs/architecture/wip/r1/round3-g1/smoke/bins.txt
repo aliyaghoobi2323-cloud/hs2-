@@ -12,3 +12,7 @@ g1d /root/r3a/bins/hs2-g1d
 g1dz /root/r3a/bins/hs2-g1d
 g1dy /root/r3a/bins/hs2-g1d
 g1dt /root/r3a/bins/hs2-g1d HS2_TUNE_QUIET_THIN=1
+g1e /root/r3a/bins/hs2-g1e
+g1ez /root/r3a/bins/hs2-g1e
+g1ey /root/r3a/bins/hs2-g1e
+g1et /root/r3a/bins/hs2-g1e HS2_TUNE_QUIET_THIN=1

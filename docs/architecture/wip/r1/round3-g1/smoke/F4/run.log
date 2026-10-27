@@ -1,0 +1,52 @@
+20:49:20 plan plans/F4.txt: 16 runs
+20:49:21 start cd018225-old-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 1.28 waited 0s
+20:49:56 done cd018225-old-1 ok=1 
+20:49:57 start cd018225-b2nx-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2nx) load 1.85 waited 0s
+20:50:32 done cd018225-b2nx-1 ok=1 
+20:50:33 start cd018225-g1e-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g1e) load 2.21 waited 0s
+20:51:09 done cd018225-g1e-1 ok=1 
+20:51:10 start cd018225-g1e-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g1e) load 1.95 waited 0s
+20:51:46 done cd018225-g1e-2 ok=1 
+20:51:47 start cd018225-b2nx-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2nx) load 2.49 waited 0s
+20:52:23 done cd018225-b2nx-2 ok=1 
+20:52:23 start cd018225-old-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 2.48 waited 0s
+20:52:58 done cd018225-old-2 ok=1 
+20:52:59 start e9a34d17-old-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.51 waited 0s
+20:53:45 done e9a34d17-old-1 ok=1 
+20:53:46 start e9a34d17-b2nx-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.75 waited 0s
+20:54:32 done e9a34d17-b2nx-1 ok=1 
+20:54:33 start e9a34d17-g1e-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 3.43 waited 0s
+20:55:18 done e9a34d17-g1e-1 ok=1 
+20:55:19 start e9a34d17-g1e-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 3.04 waited 0s
+20:56:05 done e9a34d17-g1e-2 ok=1 
+20:56:05 start e9a34d17-b2nx-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.32 waited 0s
+20:56:51 done e9a34d17-b2nx-2 ok=1 
+20:56:52 start e9a34d17-old-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.60 waited 0s
+20:57:37 done e9a34d17-old-2 ok=1 
+20:57:38 start ae0cf9da-g1e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1e) load 2.32 waited 0s
+20:58:18 done ae0cf9da-g1e-1 ok=1 
+20:58:18 start ae0cf9da-g1e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1e) load 2.62 waited 0s
+20:58:58 done ae0cf9da-g1e-2 ok=1 
+20:58:58 start c841daea-g1e-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=g1e) load 3.52 waited 0s
+20:59:28 done c841daea-g1e-1 ok=1 
+20:59:29 start c841daea-g1e-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=g1e) load 2.86 waited 0s
+20:59:58 done c841daea-g1e-2 ok=1 
+20:59:58 done plans/F4.txt
+20:59:59 plan plans/F4z.txt: 8 runs
+20:59:59 start cd018225-g1ez-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g1ez) load 2.01 waited 0s
+21:00:35 done cd018225-g1ez-1 ok=1 
+21:00:36 start e9a34d17-g1ez-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1ez) load 2.79 waited 0s
+21:01:22 done e9a34d17-g1ez-1 ok=1 
+21:01:23 start d8fe8919-old-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 3.09 waited 0s
+21:02:32 done d8fe8919-old-1 ok=1 
+21:02:32 start d8fe8919-b2nx-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.34 waited 0s
+21:03:41 done d8fe8919-b2nx-1 ok=1 
+21:03:42 start d8fe8919-g1e-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 3.05 waited 0s
+21:04:51 done d8fe8919-g1e-1 ok=1 
+21:04:52 start d8fe8919-g1ez-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1ez) load 2.00 waited 0s
+21:06:01 done d8fe8919-g1ez-1 ok=1 
+21:06:02 start d8fe8919-g1ey-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1ey) load 2.81 waited 0s
+21:07:11 done d8fe8919-g1ey-1 ok=1 
+21:07:12 start 03017a06-old-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.34 waited 0s
+21:07:52 done 03017a06-old-1 ok=1 
+21:07:52 done plans/F4z.txt

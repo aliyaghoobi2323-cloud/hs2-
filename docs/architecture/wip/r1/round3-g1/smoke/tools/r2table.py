@@ -17,9 +17,9 @@ LABEL = {"old": "پایه", "b1": "β1", "b1na": "β1 بی α", "b2": "β2", "b2
          "b2jx": "ن۴ + QUIET بیرون (b2jx)", "b2jxr": "b2jx + رکورد تعاملی",
          "b2kx": "ن۴ + FIFO (b2kx)", "b2kxr": "b2kx + رکورد تعاملی", "b2kxn": "b2kx بی تنظیم FIFO",
          "b2mx": "ن۴ + FIFO + شروع (b2mx)", "b2mxr": "b2mx + رکورد تعاملی",
-         "b2nx": "نهایی دور ۲ (b2nx)", "b2nxr": "نهایی + رکورد تعاملی", "g1a": "γ1", "g1anc": "γ1 بی جمع‌کردن", "g1ano": "γ1 بی صف خودی"}
+         "b2nx": "نهایی دور ۲ (b2nx)", "b2nxr": "نهایی + رکورد تعاملی", "g1a": "γ1 دود ۱ (g1a)", "g1anc": "g1a بی جمع‌کردن", "g1ano": "g1a بی صف خودی", "g1b": "γ1 دود ۲ (g1b)", "g1bnc": "g1b بی جمع‌کردن", "g1": "γ1 پنجرهٔ ۲ms (g1)", "g1w": "γ1 پنجرهٔ ۴ms و TUN فوری (g1w)", "g1d": "g1d", "g1dt": "g1d با THIN", "g1e": "γ1 نهایی (g1e)", "g1et": "γ1 نهایی با THIN (g1et)"}
 BINORD = ["old", "b1", "b1na", "b2", "b2na", "b2f", "b2g", "b2h", "b2i", "b2jx", "b2jxr", "b2kxn", "b2kx", "b2kxr",
-          "b2mx", "b2mxr", "b2nx", "b2nxr", "g1a", "g1anc", "g1ano", "g1b", "g1c", "g1d"]
+          "b2mx", "b2mxr", "b2nx", "b2nxr", "g1a", "g1anc", "g1ano", "g1b", "g1bnc", "g1", "g1w", "g1d", "g1dt", "g1e", "g1et"]
 
 
 def label(b):

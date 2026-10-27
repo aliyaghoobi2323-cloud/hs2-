@@ -1,0 +1,56 @@
+19:44:34 plan plans/F2.txt: 22 runs
+19:44:35 start 340c98ae-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.82 waited 0s
+19:45:14 done 340c98ae-old-1 ok=1 
+19:45:15 start 340c98ae-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.93 waited 0s
+19:45:54 done 340c98ae-b2nx-1 ok=1 
+19:45:55 start 340c98ae-g1e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 2.69 waited 0s
+19:46:34 done 340c98ae-g1e-1 ok=1 
+19:46:35 start 340c98ae-g1e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 2.61 waited 0s
+19:47:15 done 340c98ae-g1e-2 ok=1 
+19:47:15 start 340c98ae-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.12 waited 0s
+19:47:55 done 340c98ae-b2nx-2 ok=1 
+19:47:56 start 340c98ae-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.83 waited 0s
+19:48:35 done 340c98ae-old-2 ok=1 
+19:48:36 start 7b68f4fa-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.41 waited 0s
+19:49:20 done 7b68f4fa-old-1 ok=1 
+19:49:21 start 7b68f4fa-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2nx) load 2.96 waited 0s
+19:50:05 done 7b68f4fa-b2nx-1 ok=1 
+19:50:06 start 7b68f4fa-g1e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=g1e) load 2.37 waited 0s
+19:50:51 done 7b68f4fa-g1e-1 ok=1 
+19:50:51 start 7b68f4fa-g1e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=g1e) load 2.91 waited 0s
+19:51:36 done 7b68f4fa-g1e-2 ok=1 
+19:51:37 start 7b68f4fa-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2nx) load 3.26 waited 0s
+19:52:21 done 7b68f4fa-b2nx-2 ok=1 
+19:52:22 start 7b68f4fa-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.85 waited 0s
+19:53:06 done 7b68f4fa-old-2 ok=1 
+19:53:07 start 5c170184-old-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 2.86 waited 0s
+19:53:47 done 5c170184-old-1 ok=1 
+19:53:48 start 5c170184-b2nx-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=b2nx) load 2.23 waited 0s
+19:54:28 done 5c170184-b2nx-1 ok=1 
+19:54:29 start 5c170184-g1e-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=g1e) load 2.21 waited 0s
+19:55:09 done 5c170184-g1e-1 ok=1 
+19:55:10 start 5c170184-g1e-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=g1e) load 1.82 waited 0s
+19:55:50 done 5c170184-g1e-2 ok=1 
+19:55:51 start 5c170184-b2nx-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=b2nx) load 1.81 waited 0s
+19:56:31 done 5c170184-b2nx-2 ok=1 
+19:56:31 start 5c170184-old-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=old) load 2.56 waited 0s
+19:57:12 done 5c170184-old-2 ok=1 
+19:57:12 start 03017a06-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.80 waited 0s
+19:57:52 done 03017a06-b2nx-1 ok=1 
+19:57:53 start 03017a06-g1e-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 1.97 waited 0s
+19:58:32 done 03017a06-g1e-1 ok=1 
+19:58:33 start 03017a06-g1e-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 1.58 waited 0s
+19:59:12 done 03017a06-g1e-2 ok=1 
+19:59:13 start 03017a06-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.07 waited 0s
+19:59:52 done 03017a06-b2nx-2 ok=1 
+19:59:52 done plans/F2.txt
+19:59:53 plan plans/F2z.txt: 4 runs
+19:59:54 start 340c98ae-g1ez-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1ez) load 2.07 waited 0s
+20:00:33 done 340c98ae-g1ez-1 ok=1 
+20:00:34 start 7b68f4fa-g1ez-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=g1ez) load 2.17 waited 0s
+20:01:18 done 7b68f4fa-g1ez-1 ok=1 
+20:01:19 start 5c170184-g1ez-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=g1ez) load 2.27 waited 0s
+20:01:59 done 5c170184-g1ez-1 ok=1 
+20:02:00 start 03017a06-g1et-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1et) load 2.71 waited 0s
+20:02:40 done 03017a06-g1et-1 ok=1 
+20:02:40 done plans/F2z.txt

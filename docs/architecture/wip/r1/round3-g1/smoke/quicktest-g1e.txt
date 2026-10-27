@@ -1,0 +1,135 @@
+=== RUN   TestAlphaOwnFQ
+    alpha_own_test.go:190: 100 Mbit/s,   1 busy links: sum γ1 1.000 (CoDel drops 0.079%), version 4 0.999 (0.012%), version 5 1.000 (1.158%)
+    alpha_own_test.go:190:  25 Mbit/s,   1 busy links: sum γ1 1.000 (CoDel drops 0.315%), version 4 0.998 (0.061%), version 5 1.000 (4.634%)
+    alpha_own_test.go:190: 100 Mbit/s,   2 busy links: sum γ1 1.000 (CoDel drops 0.153%), version 4 0.998 (0.031%), version 5 1.000 (2.317%)
+    alpha_own_test.go:190: 100 Mbit/s,  17 busy links: sum γ1 0.998 (CoDel drops 1.429%), version 4 0.999 (0.142%), version 5 1.000 (19.693%)
+    alpha_own_test.go:190: 100 Mbit/s,  64 busy links: sum γ1 1.000 (CoDel drops 72.983%), version 4 0.987 (2.525%), version 5 1.000 (74.138%)
+    alpha_own_test.go:190: 100 Mbit/s, 300 busy links: sum γ1 1.000 (CoDel drops 347.520%), version 4 0.971 (7.724%), version 5 1.000 (347.520%)
+    alpha_own_test.go:190:  25 Mbit/s,  17 busy links: sum γ1 1.000 (CoDel drops 78.771%), version 4 0.985 (2.432%), version 5 1.000 (78.771%)
+    alpha_own_test.go:190:  10 Mbit/s,  64 busy links: sum γ1 1.000 (CoDel drops 741.376%), version 4 1.000 (741.376%), version 5 1.000 (741.376%)
+--- PASS: TestAlphaOwnFQ (0.39s)
+=== RUN   TestAlphaOwnFIFO
+    alpha_own_test.go:271: FIFO 25 Mbit/s, 1 links: γ1 0.997 (queue up to 8.062015ms, own cuts 0), version 5 0.997 (up to 8.062015ms)
+    alpha_own_test.go:271: FIFO 25 Mbit/s, 4 links: γ1 0.998 (queue up to 7.60512ms, own cuts 0), version 5 0.998 (up to 7.60512ms)
+    alpha_own_test.go:271: FIFO 25 Mbit/s, 64 links: γ1 0.998 (queue up to 7.702272ms, own cuts 0), version 5 0.998 (up to 7.702272ms)
+--- PASS: TestAlphaOwnFIFO (0.02s)
+=== RUN   TestAlphaOwnSteps
+--- PASS: TestAlphaOwnSteps (0.00s)
+=== RUN   TestAlphaOwnStatusLine
+--- PASS: TestAlphaOwnStatusLine (0.00s)
+=== RUN   TestAlphaProbe
+    alpha_own_test.go:419: a path ten times faster: the cap x1.16 in 2 s and x13.27 in 5 s with the probe, x1.16 and x2.68 without
+--- PASS: TestAlphaProbe (0.00s)
+=== RUN   TestOWDIdle
+--- PASS: TestOWDIdle (0.00s)
+=== RUN   TestOWDRestamp
+--- PASS: TestOWDRestamp (0.00s)
+=== RUN   TestAlphaOwnCheck
+    alpha_own_test.go:539: a queue that grows as the cap falls: own cap 10.0 Mbit/s, cuts 3, not its own 1 (base 10ms)
+    alpha_own_test.go:550: check off: own cap 6.0 Mbit/s after 35 cuts
+--- PASS: TestAlphaOwnCheck (0.00s)
+=== RUN   TestAngleSendCapBothEnds
+--- PASS: TestAngleSendCapBothEnds (1.20s)
+=== RUN   TestMoveRuleAppLimited
+    move_applimited_test.go:39: app-limited 0.25 Mbit/s each way: moves to BULK false (tick -1)
+    move_applimited_test.go:39: app-limited 0.50 Mbit/s each way: moves to BULK true (tick 10)
+    move_applimited_test.go:39: app-limited 1.50 Mbit/s each way: moves to BULK true (tick 3)
+    move_applimited_test.go:39: app-limited 5.00 Mbit/s each way: moves to BULK true (tick 2)
+--- PASS: TestMoveRuleAppLimited (0.00s)
+=== RUN   TestOWDBase
+--- PASS: TestOWDBase (0.00s)
+=== RUN   TestOWDCodec
+--- PASS: TestOWDCodec (0.00s)
+=== RUN   TestOWDTick
+--- PASS: TestOWDTick (0.00s)
+=== RUN   TestOWDRecent
+--- PASS: TestOWDRecent (0.00s)
+=== RUN   TestOWDLoopPipe
+--- PASS: TestOWDLoopPipe (0.06s)
+=== RUN   TestAlphaOWDTwoWays
+    owd_test.go:186: down 25 / up 25 Mbit/s (down from 2): one-way: down 0.992, up 0.993 of their paths, down filled 0.9 at reading 12, queue at most 5.942208ms; srtt (β2): down 0.969, up 0.969
+    owd_test.go:186: down 5 / up 5 Mbit/s (down from 1): one-way: down 0.992, up 0.992 of their paths, down filled 0.9 at reading 8, queue at most 5.93632ms; srtt (β2): down 0.969, up 0.969
+    owd_test.go:186: down 25 / up 25 Mbit/s (down from 25): one-way: down 0.993, up 0.993 of their paths, down filled 0.9 at reading 0, queue at most 5.833312ms; srtt (β2): down 0.970, up 0.970
+    owd_test.go:186: down 100 / up 20 Mbit/s (down from 10): one-way: down 0.992, up 0.994 of their paths, down filled 0.9 at reading 11, queue at most 5.915032ms; srtt (β2): down 0.207, up 0.969
+    owd_test.go:186: down 100 / up 20 Mbit/s (down from 100): one-way: down 0.992, up 0.994 of their paths, down filled 0.9 at reading 0, queue at most 5.887816ms; srtt (β2): down 0.536, up 0.977
+    owd_test.go:186: down 20 / up 100 Mbit/s (down from 2): one-way: down 0.992, up 0.992 of their paths, down filled 0.9 at reading 11, queue at most 5.92244ms; srtt (β2): down 0.980, up 0.660
+--- PASS: TestAlphaOWDTwoWays (0.00s)
+=== RUN   TestAlphaStartFix
+    owd_test.go:225: 0.9 of a 100 Mbit/s path from 8 Mbit/s: reading 12 with fix 1, 32 without
+--- PASS: TestAlphaStartFix (0.00s)
+=== RUN   TestOWDLocalWait
+--- PASS: TestOWDLocalWait (0.00s)
+=== RUN   TestAlphaStartWaitsForOWD
+--- PASS: TestAlphaStartWaitsForOWD (0.00s)
+=== RUN   TestAlphaStartEndsWhenAppLimited
+--- PASS: TestAlphaStartEndsWhenAppLimited (0.00s)
+=== RUN   TestAlphaStartWhileGrowing
+--- PASS: TestAlphaStartWhileGrowing (0.00s)
+=== RUN   TestOWDShared
+--- PASS: TestOWDShared (0.00s)
+=== RUN   TestOWDJitter
+--- PASS: TestOWDJitter (0.00s)
+=== RUN   TestQuietCountsExtra
+--- PASS: TestQuietCountsExtra (0.00s)
+=== RUN   TestMoveRule
+--- PASS: TestMoveRule (0.00s)
+=== RUN   TestQuietCounts
+--- PASS: TestQuietCounts (0.00s)
+=== RUN   TestAlphaCap
+--- PASS: TestAlphaCap (0.00s)
+=== RUN   TestAlphaLoop
+    quiet_test.go:669: path 25 Mbit/s, q0 0s, from 25: delivered 0.990 of the path, its own queue at most 10.992831ms (after 10 s)
+    quiet_test.go:669: path 25 Mbit/s, q0 6ms, from 25: delivered 0.984 of the path, its own queue at most 5.010176ms (after 10 s)
+    quiet_test.go:669: path 25 Mbit/s, q0 6ms, from 1: delivered 0.984 of the path, its own queue at most 4.824704ms (after 10 s)
+    quiet_test.go:669: path 5 Mbit/s, q0 6ms, from 5: delivered 0.984 of the path, its own queue at most 4.96544ms (after 10 s)
+    quiet_test.go:669: path 100 Mbit/s, q0 3ms, from 10: delivered 0.989 of the path, its own queue at most 7.57601ms (after 10 s)
+--- PASS: TestAlphaLoop (0.00s)
+=== RUN   TestSendCapLinuxTCPInfo
+--- PASS: TestSendCapLinuxTCPInfo (0.05s)
+=== RUN   TestSendCapFloor
+--- PASS: TestSendCapFloor (0.00s)
+=== RUN   TestSendCapAfterNonAppLimited
+--- PASS: TestSendCapAfterNonAppLimited (0.00s)
+=== RUN   TestSendCapLiftOnIdle
+--- PASS: TestSendCapLiftOnIdle (0.00s)
+=== RUN   TestSendCapHostRate
+--- PASS: TestSendCapHostRate (0.00s)
+=== RUN   TestSendCapMinWithPacenet
+--- PASS: TestSendCapMinWithPacenet (0.00s)
+=== RUN   TestSendCapNoDeliveryRate
+    sendcap_test.go:287: sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)
+--- PASS: TestSendCapNoDeliveryRate (0.00s)
+=== RUN   TestSendCapStatusLine
+--- PASS: TestSendCapStatusLine (0.00s)
+=== RUN   TestSendCapModelNoOvershoot
+    sendcap_test.go:370: down   10/72 q50 l0      worst RTT 1.22× the bottleneck (without C4-lite 2.00×); 8.4 Mbit/s resent 0.00% (without 8.4, 0.00%)
+    sendcap_test.go:370: up   10/72 q50 l0        worst RTT 1.22× the bottleneck (without C4-lite 2.22×); 8.4 Mbit/s resent 0.00% (without 8.4, 0.00%)
+    sendcap_test.go:370: down   25/72 q50 l0      worst RTT 1.26× the bottleneck (without C4-lite 2.03×); 21.2 Mbit/s resent 0.00% (without 21.2, 0.00%)
+    sendcap_test.go:370: up   25/72 q50 l0        worst RTT 1.26× the bottleneck (without C4-lite 2.93×); 21.2 Mbit/s resent 0.00% (without 21.2, 0.00%)
+    sendcap_test.go:370: down  100/72 q50 l0      worst RTT 1.21× the bottleneck (without C4-lite 2.03×); 85.1 Mbit/s resent 0.00% (without 85.1, 0.00%)
+    sendcap_test.go:370: up  100/72 q50 l0        worst RTT 1.21× the bottleneck (without C4-lite 2.72×); 85.1 Mbit/s resent 0.00% (without 65.3, 36.42%)
+    sendcap_test.go:370: down  100/20 q20 l0      worst RTT 1.25× the bottleneck (without C4-lite 2.09×); 79.9 Mbit/s resent 0.00% (without 79.2, 0.00%)
+    sendcap_test.go:370: up  100/20 q20 l0        worst RTT 1.25× the bottleneck (without C4-lite 2.09×); 79.9 Mbit/s resent 0.00% (without 77.8, 0.00%)
+    sendcap_test.go:370: down  300/150 q50 l0     worst RTT 1.24× the bottleneck (without C4-lite 1.71×); 240.8 Mbit/s resent 0.04% (without 251.7, 0.00%)
+    sendcap_test.go:370: up  300/150 q50 l0       worst RTT 0.86× the bottleneck (without C4-lite 0.86×); 178.2 Mbit/s resent 0.00% (without 129.0, 8.43%)
+    sendcap_test.go:370: down  100/72 q50 l0.1    worst RTT 1.25× the bottleneck (without C4-lite 2.01×); 79.6 Mbit/s resent 0.10% (without 82.3, 0.10%)
+    sendcap_test.go:370: up  100/72 q50 l0.1      worst RTT 1.23× the bottleneck (without C4-lite 2.70×); 79.6 Mbit/s resent 0.10% (without 84.7, 0.10%)
+    sendcap_test.go:370: down    5/72 q100 l0     worst RTT 2.00× the bottleneck (without C4-lite 2.00×); 4.2 Mbit/s resent 0.00% (without 4.2, 0.00%)
+    sendcap_test.go:370: up    5/72 q100 l0       worst RTT 2.00× the bottleneck (without C4-lite 2.00×); 4.2 Mbit/s resent 0.00% (without 4.2, 0.00%)
+    sendcap_test.go:383: quiet from 12 s: C4-lite's cap lifted at 13.1 s
+--- PASS: TestSendCapModelNoOvershoot (0.43s)
+=== RUN   FuzzOWDDecode
+=== RUN   FuzzOWDDecode/seed#0
+=== RUN   FuzzOWDDecode/seed#1
+=== RUN   FuzzOWDDecode/seed#2
+=== RUN   FuzzOWDDecode/seed#3
+=== RUN   FuzzOWDDecode/seed#4
+--- PASS: FuzzOWDDecode (0.00s)
+    --- PASS: FuzzOWDDecode/seed#0 (0.00s)
+    --- PASS: FuzzOWDDecode/seed#1 (0.00s)
+    --- PASS: FuzzOWDDecode/seed#2 (0.00s)
+    --- PASS: FuzzOWDDecode/seed#3 (0.00s)
+    --- PASS: FuzzOWDDecode/seed#4 (0.00s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	2.189s
+ok  	github.com/xtaci/smux	1.768s
