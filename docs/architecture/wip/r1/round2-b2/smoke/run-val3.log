@@ -1,0 +1,6 @@
+10:09:41 plan /root/r2b-smoke/plan-val3.txt: 2 runs
+10:09:42 start 340c98ae-b2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2) load 2.53 waited 0s
+10:10:21 done 340c98ae-b2-1 ok=1 
+10:10:22 start 5c170184-b2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=b2) load 2.11 waited 0s
+10:11:02 done 5c170184-b2-1 ok=1 
+10:11:02 done /root/r2b-smoke/plan-val3.txt

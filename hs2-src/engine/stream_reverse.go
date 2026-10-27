@@ -86,6 +86,18 @@ func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Se
 				car.Close()
 				return
 			}
+			if lm.quiet != nil && lm.quiet.place(l, " from "+from) {
+				// a QUIET link (it was offered CapQuiet): the pool's QUIET
+				// set holds it, not the BULK pool
+				lm.quiet.arrived()
+				select {
+				case <-ctx.Done():
+					l.Close()
+				case <-l.closed():
+					lm.quiet.drop(l)
+				}
+				return
+			}
 			lm.AddLink(l, from)
 			// Hold the carrier open until the link's smux session ends, then take
 			// it out of the pool at once (and log why) instead of waiting for the
@@ -113,6 +125,11 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	}
 	if max < min {
 		max = min
+	}
+	if !QuietOff() {
+		// β2: the edge's QUIET links count toward max_links, but a pool
+		// of one link still has a BULK one (QuietTotal)
+		max = QuietTotal(max)
 	}
 	initial := cfg.RevLinks
 	if initial < min {
@@ -148,7 +165,7 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 // pool (may be nil) lets the link's pool-control stream resize the exit pool.
 func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejConfig, l3 *l3Set, pool *exitPool) string {
 	mtr := &linkMeter{}                                         // download-side counters, reported over kindStats
-	sess, why, err := newSession(car.RawConn(), true, nil, mtr) // smux server
+	sess, why, err := newSessionCaps(car.RawConn(), true, nil, mtr, car.Caps()) // smux server
 	if err != nil {
 		return "session setup failed: " + describeNetErr(err)
 	}

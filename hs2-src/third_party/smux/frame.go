@@ -55,6 +55,27 @@ func synValid(p [SynPayloadLen]byte) bool {
 	return role == 0 || binary.BigEndian.Uint32(p[5:]) != 0
 }
 
+// The roles of a group's streams (SYN class/role bits 2-3, §4.2).
+const (
+	RoleMain uint8 = 0 // the stream a logical connection opens with
+	RoleMove uint8 = 1 // the one it moves to, once (C5's one-time move)
+)
+
+// EncodeSynGroup is the payload of a stream of group `group` (≠ 0): a
+// logical connection whose data frames each start with their sequence
+// number (group.go, §4.7), and that may move once to a stream of another
+// session (role RoleMove, seqBase: the first number its opener sends on it).
+func EncodeSynGroup(userTag uint32, classHint, role byte, group, seqBase uint32) [SynPayloadLen]byte {
+	p := EncodeSyn(userTag, classHint)
+	p[4] |= (role & 0x03) << 2
+	binary.BigEndian.PutUint32(p[5:], group)
+	binary.BigEndian.PutUint32(p[9:], seqBase)
+	return p
+}
+
+// seqLen: a group stream's data frame starts with its sequence number.
+const seqLen = 4
+
 const (
 	sizeOfVer    = 1
 	sizeOfCmd    = 1
@@ -69,6 +90,18 @@ type Frame struct {
 	cmd  byte
 	sid  uint32
 	data []byte
+	// a group stream's data frame: its sequence number goes on the wire
+	// ahead of data (seqLen bytes, counted in the frame's length)
+	seq    uint32
+	hasSeq bool
+}
+
+// wireLen is the frame's length field: its data, and its sequence number.
+func (f *Frame) wireLen() int {
+	if f.hasSeq {
+		return seqLen + len(f.data)
+	}
+	return len(f.data)
 }
 
 func newFrame(version byte, cmd byte, sid uint32) Frame {

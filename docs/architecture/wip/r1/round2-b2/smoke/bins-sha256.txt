@@ -1,0 +1,6 @@
+base /root/r2b-bins/hs2-base
+b2 /root/r2b-bins/hs2-b2
+b2late /root/r2b-bins/hs2-b2 HS2_TUNE_EARLYDONE=0
+
+fc4e5ebebd9a4d2e41cacc5a853a5fa0253723dedc3fa4a35d7156ab5e52e34e  /root/r2b-bins/hs2-b2
+846470794485b29ddd7925f08b2d3c69f2bad30cc6ee8bb5764431a5e797ad58  /root/r2b-bins/hs2-base

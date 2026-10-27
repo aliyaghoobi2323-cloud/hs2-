@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand/v2"
+	"os"
 	"sort"
 	"testing"
 	"time"
@@ -442,7 +443,7 @@ func TestBulkFrameSize(t *testing.T) {
 // TestSchedOffSwitch: HS2_TUNE_SCHED=0 (TuneSched 0) says off.
 func TestSchedOffSwitch(t *testing.T) {
 	defer func(v int) { TuneSched = v }(TuneSched)
-	if SchedOff() {
+	if SchedOff() && os.Getenv("HS2_TUNE_SCHED") == "" { // (TestMain applies it)
 		t.Fatal("off by default")
 	}
 	TuneSched = 0

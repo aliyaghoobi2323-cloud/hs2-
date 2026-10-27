@@ -16,3 +16,6 @@ func tuneTCP(c net.Conn) {
 		tc.SetNoDelay(true)
 	}
 }
+
+// SetCongestion is Linux's only.
+func SetCongestion(tc *net.TCPConn, cc string) bool { return false }

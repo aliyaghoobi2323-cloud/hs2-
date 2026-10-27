@@ -140,7 +140,7 @@ func TestWriteLoopDeliversAndKeepsAlive(t *testing.T) {
 	var pool sync.Pool
 	for i := 0; i < 10; i++ {
 		p := tcpPacket(uint16(i), 1)
-		if !l.enqueue(&p, 7, flowHash(p)) {
+		if !l.enqueue(&p, 7, flowHash(p), false) {
 			t.Fatal("enqueue failed")
 		}
 	}

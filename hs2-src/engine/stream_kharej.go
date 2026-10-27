@@ -116,6 +116,11 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		})
 	}
 	go func() { <-ctx.Done(); cfg.Listener.Close() }()
+	if cfg.Server != nil && cfg.Server.OfferCaps == nil && !QuietOff() {
+		// β2: the edge chooses each link's class; the exit takes it on
+		// every link (quiet.go)
+		cfg.Server.OfferCaps = func() uint32 { return tlscarrier.RoleCaps }
+	}
 	var bo acceptBackoff
 	for {
 		conn, err := cfg.Listener.Accept()
@@ -128,7 +133,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		bo.ok()
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
 			mtr := &linkMeter{} // download-side counters, reported over kindStats
-			sess, why, err := newSession(car.RawConn(), true, nil, mtr)
+			sess, why, err := newSessionCaps(car.RawConn(), true, nil, mtr, car.Caps())
 			if err != nil {
 				car.Close()
 				return
@@ -174,13 +179,36 @@ func sessionEndReason(why func() string, sessErr error) string {
 }
 
 func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3Set, car *tlscarrier.Carrier, pool *exitPool, mtr *linkMeter) {
+	// conn: the user connection, the stream or, when its SYN names a group
+	// (β2, quiet_exit.go), the group; a group's move stream joins its group
+	var conn exitStream = st
+	var eg *exitGroup
+	if id, role, _ := st.GroupInfo(); id != 0 {
+		if role == smux.RoleMove {
+			if !exitGroups.attach(st, mtr) {
+				st.Close() // no live group: refused (§4.5)
+			}
+			return
+		}
+		if eg = exitGroups.add(st, mtr); eg == nil {
+			st.Close()
+			return
+		}
+		defer exitGroups.remove(eg)
+		conn = eg
+	}
+	rd, _ := conn.(interface{ SetReadDeadline(time.Time) error })
 	var kind [1]byte
-	st.SetReadDeadline(time.Now().Add(kindTimeout))
-	if _, err := io.ReadFull(st, kind[:]); err != nil {
-		st.Close()
+	rd.SetReadDeadline(time.Now().Add(kindTimeout))
+	if _, err := io.ReadFull(conn, kind[:]); err != nil {
+		conn.Close()
 		return
 	}
-	st.SetReadDeadline(time.Time{})
+	rd.SetReadDeadline(time.Time{})
+	if eg != nil && kind[0] != kindTCPPort && kind[0] != kindUDPPort {
+		conn.Close() // only user connections are groups
+		return
+	}
 	switch kind[0] {
 	case kindCtrl:
 		serveControl(ctx, st, car)
@@ -202,12 +230,12 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	case kindTCPPort, kindUDPPort: // wire v3: the one-byte kindTCP / kindUDP are refused (default)
 		udp := kind[0] == kindUDPPort
 		var b [2]byte
-		st.SetReadDeadline(time.Now().Add(kindTimeout))
-		if _, err := io.ReadFull(st, b[:]); err != nil {
-			st.Close()
+		rd.SetReadDeadline(time.Now().Add(kindTimeout))
+		if _, err := io.ReadFull(conn, b[:]); err != nil {
+			conn.Close()
 			return
 		}
-		st.SetReadDeadline(time.Time{})
+		rd.SetReadDeadline(time.Time{})
 		port := int(b[0])<<8 | int(b[1])
 		// The user's tag comes from the SYN the edge opened the stream with
 		// (§3.1): the exit never hashes an address of its own.
@@ -219,23 +247,23 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 				proto = "udp"
 			}
 			cfg.noRoute.note(port, proto, cfg.Log)
-			st.Close()
+			conn.Close()
 			return
 		}
 		if udp {
 			up, err := net.Dial("udp", target)
 			if err != nil {
-				st.Close()
+				conn.Close()
 				return
 			}
 			c := cfg.traffic.open(tag)
 			defer cfg.traffic.done(c)
-			relayUDPConn(exitCountedStream{st, c}, up)
+			relayUDPConn(exitCountedStream{conn, c}, up)
 			return
 		}
 		up, err := net.DialTimeout("tcp", target, 5*time.Second)
 		if err != nil {
-			st.Close()
+			conn.Close()
 			return
 		}
 		var g *sessGuard
@@ -244,13 +272,16 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		}
 		c := cfg.traffic.open(tag)
 		defer cfg.traffic.done(c)
-		relayStream(up, exitCountedStream{st, c}, g)
+		relayStream(up, exitCountedStream{conn, c}, g)
 	case kindL3:
 		if l3 == nil {
 			st.Close() // this side runs without a TUN
 			return
 		}
 		pl := newStreamL3Link(st, peerL3Quiet(mtr), sessReadsOf(mtr))
+		if car != nil {
+			pl.class = l3ClassOf(classOf(car.Caps())) // β2: replies by arrival
+		}
 		l3.add(pl)
 		l3.serveLink(ctx, pl, cfg.TUN)
 		l3.remove(pl)

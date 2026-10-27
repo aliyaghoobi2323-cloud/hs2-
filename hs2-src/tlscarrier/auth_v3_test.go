@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -152,14 +153,16 @@ func TestNegotiate(t *testing.T) {
 	}
 }
 
-// R1 speaks level 1 only; each kill switch takes its core's bit out of caps.
+// R1 round 2 speaks levels 1 and 2 (group streams at 2); each kill switch
+// takes its core's bit out of caps, HS2_TUNE_SCHED the group's with it (it
+// needs the scheduler). The link class (CapQuiet) is never a local cap.
 func TestLocalAuthHdrKillSwitches(t *testing.T) {
-	all := CapClass | CapSched | CapHostQ | CapSendCap
-	if h := LocalAuthHdr(); h != (AuthHdr{Ver: 3, MinLevel: 1, MaxLevel: 1, Caps: all}) {
+	all := CapClass | CapSched | CapHostQ | CapSendCap | CapGroup
+	if h := LocalAuthHdr(); h != (AuthHdr{Ver: 3, MinLevel: 1, MaxLevel: 2, Caps: all}) {
 		t.Fatalf("local header %+v", h)
 	}
-	for env, bit := range map[string]uint32{"HS2_TUNE_CLASS": CapClass, "HS2_TUNE_SCHED": CapSched,
-		"HS2_TUNE_HQG": CapHostQ, "HS2_TUNE_SENDCAP": CapSendCap} {
+	for env, bit := range map[string]uint32{"HS2_TUNE_CLASS": CapClass, "HS2_TUNE_SCHED": CapSched | CapGroup,
+		"HS2_TUNE_HQG": CapHostQ, "HS2_TUNE_SENDCAP": CapSendCap, "HS2_TUNE_QUIET": CapGroup} {
 		t.Run(env, func(t *testing.T) {
 			t.Setenv(env, "0")
 			if c := LocalAuthHdr().Caps; c != all&^bit {
@@ -235,9 +238,15 @@ func (l *logSink) all() []string {
 
 func startLoggedServer(t *testing.T, key []byte, logs *logSink, onTunnel func(*Carrier)) (string, func()) {
 	t.Helper()
+	return serveWith(t, &Server{SharedKey: key, Logf: logs.logf}, onTunnel)
+}
+
+// serveWith runs srv (its cert and backend set here) on a local listener.
+func serveWith(t *testing.T, srv *Server, onTunnel func(*Carrier)) (string, func()) {
+	t.Helper()
 	be, stopB := backend(t)
 	ln, _ := net.Listen("tcp", "127.0.0.1:0")
-	srv := &Server{SharedKey: key, Cert: testCert(t, "vpn.example.com"), BackendAddr: be, Logf: logs.logf}
+	srv.Cert, srv.BackendAddr = testCert(t, "vpn.example.com"), be
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {
@@ -302,7 +311,7 @@ func TestServerRefusesLevel(t *testing.T) {
 	defer stop()
 	u, ekm := rawAuthConn(t, addr)
 	defer u.Close()
-	h := AuthHdr{Ver: protoVersion, MinLevel: 2, MaxLevel: 3, Caps: 0xF}
+	h := AuthHdr{Ver: protoVersion, MinLevel: 3, MaxLevel: 4, Caps: 0xF}
 	rec, nonce := makeClientAuth(key, ekm, h)
 	u.Write(rec)
 	u.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -311,7 +320,7 @@ func TestServerRefusesLevel(t *testing.T) {
 		t.Fatalf("proof: %v", err)
 	}
 	if err := checkProofLevel(h, p); !errors.Is(err, ErrLevel) {
-		t.Fatalf("level %d accepted by a client speaking 2-3: %v", p.Level, err)
+		t.Fatalf("level %d accepted by a client speaking 3-4: %v", p.Level, err)
 	}
 	if n, _ := u.Read(make([]byte, 1)); n != 0 {
 		t.Fatal("the link stayed open")
@@ -321,7 +330,7 @@ func TestServerRefusesLevel(t *testing.T) {
 		t.Fatal("a peer with no common level got a tunnel")
 	case <-time.After(100 * time.Millisecond):
 	}
-	want := "peer speaks protocol v3 levels 2-3, this server 1-1; upgrade the older server"
+	want := "peer speaks protocol v3 levels 3-4, this server 1-2; upgrade the older server"
 	if got := logs.all(); len(got) != 1 || got[0] != want {
 		t.Fatalf("log %q, want %q", got, want)
 	}
@@ -345,21 +354,85 @@ func TestCarrierNegotiatedLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer car.Close()
-	want := CapClass | CapSched | CapSendCap
-	if car.Level() != 1 || car.Caps() != want {
+	want := CapClass | CapSched | CapSendCap | CapGroup
+	if car.Level() != 2 || car.Caps() != want {
 		t.Fatalf("client carrier: level %d caps %#x", car.Level(), car.Caps())
 	}
 	select {
 	case sc := <-got:
 		defer sc.Close()
-		if sc.Level() != 1 || sc.Caps() != want {
+		if sc.Level() != 2 || sc.Caps() != want {
 			t.Fatalf("server carrier: level %d caps %#x", sc.Level(), sc.Caps())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no tunnel")
 	}
-	if l := ProtocolLine(); l != "protocol: v3 level 1 (peer levels 1-1, caps 0xB); refused v2 peers: 0, refused peers (level): 0" {
+	if l := ProtocolLine(); l != "protocol: v3 level 2 (peer levels 1-2, caps 0x1B); refused v2 peers: 0, refused peers (level): 0" {
 		t.Fatalf("status line %q", l)
+	}
+}
+
+// The link class (RoleCaps) is in a link's caps exactly as both ends
+// offered it: the dialer by its extra caps, the server by OfferCaps (asked
+// only when the dialer offered a class); the edge offers one class, the
+// exit both, so the link has the edge's; a level 1 link never has a level 2
+// cap.
+func TestCarrierLinkClass(t *testing.T) {
+	resetProtoStats()
+	defer resetProtoStats()
+	key := bytes.Repeat([]byte{0x3a}, 32)
+	for _, c := range []struct {
+		name          string
+		client, offer uint32
+		class         uint32
+		asked         int
+	}{
+		{"edge dials QUIET", CapQuiet, RoleCaps, CapQuiet, 1},
+		{"edge dials BULK", CapBulk, RoleCaps, CapBulk, 1},
+		{"exit dials, edge wants QUIET", RoleCaps, CapQuiet, CapQuiet, 1},
+		{"exit dials, edge wants BULK", RoleCaps, CapBulk, CapBulk, 1},
+		{"exit dials, edge has no classes", RoleCaps, 0, 0, 1},
+		{"edge has no classes", 0, RoleCaps, 0, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := make(chan *Carrier, 1)
+			var asked atomic.Int32
+			srv := &Server{SharedKey: key, OfferCaps: func() uint32 {
+				asked.Add(1)
+				return c.offer
+			}}
+			addr, stop := serveWith(t, srv, func(car *Carrier) { got <- car })
+			defer stop()
+			car, err := DialFromTimeoutCaps(addr, "vpn.example.com", key, "", 2*time.Second, c.client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer car.Close()
+			var sc *Carrier
+			select {
+			case sc = <-got:
+				defer sc.Close()
+			case <-time.After(2 * time.Second):
+				t.Fatal("no tunnel")
+			}
+			if car.Caps()&RoleCaps != c.class || sc.Caps()&RoleCaps != c.class {
+				t.Fatalf("client caps %#x, server caps %#x: class want %#x", car.Caps(), sc.Caps(), c.class)
+			}
+			if car.Caps()&CapGroup == 0 || car.Caps() != sc.Caps() {
+				t.Fatalf("client caps %#x, server caps %#x", car.Caps(), sc.Caps())
+			}
+			if int(asked.Load()) != c.asked {
+				t.Fatalf("OfferCaps asked %d times, want %d", asked.Load(), c.asked)
+			}
+		})
+	}
+	// a level 1 peer: the level 2 caps are out whatever both offered
+	if lc := levelCaps(1, CapGroup|RoleCaps|CapSched); lc != CapSched {
+		t.Fatalf("level 1 caps %#x, want %#x", lc, CapSched)
+	}
+	if _, caps, ok := negotiate(AuthHdr{Ver: protoVersion, MinLevel: 1, MaxLevel: 1, Caps: CapGroup | RoleCaps | CapSched},
+		1, 2, CapGroup|RoleCaps|CapSched); !ok || caps != CapSched {
+		t.Fatalf("a level 1 client: caps %#x ok %v, want %#x", caps, ok, CapSched)
 	}
 }
 
