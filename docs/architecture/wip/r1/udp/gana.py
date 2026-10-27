@@ -80,8 +80,8 @@ def run(argv):
     sf = sv["flows"].get("1", {})
     first = cf.get("first", 0)
     a, b = first + warm * 1e9, first + (warm + dur - 1) * 1e9
-    up = direction(sf.get("recv", []), first, HZ["up"], a, b)
-    dn = direction(cf.get("recv", []), sf.get("first", first), HZ["dn"], a, b)
+    up = direction(sf.get("recv") or [], first, HZ["up"], a, b)
+    dn = direction(cf.get("recv") or [], sf.get("first", first), HZ["dn"], a, b)
     bulk = probe = None
     try:
         c = json.load(open(raw + "/client.json"))
@@ -106,8 +106,12 @@ def med(xs):
 
 
 def table(argv):
-    rows = [json.loads(l) for l in open(argv[0]) if l.strip()]
-    rows = [r for r in rows if r.get("ok")]
+    last = {}
+    for l in open(argv[0]):
+        if l.strip():
+            r = json.loads(l)
+            last[r["id"]] = r  # a run done again replaces the earlier line
+    rows = [r for r in last.values() if r.get("ok")]
     cells = {}
     for r in rows:
         cells.setdefault((r["mix"], r["loss"], r["n"], r["label"]), []).append(r)

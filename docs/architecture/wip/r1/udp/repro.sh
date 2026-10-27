@@ -25,6 +25,9 @@
 #         late         the colliding UDP program starts 5 s AFTER hs2 (it loses)
 #         release      (with collide*) the other program lets the port go once the
 #                      links are up; the UDP check runs 4 s later
+#         secondip     the edge has a second address 10.201.0.2 on e0 and the user
+#                      (in r-mid, 10.201.0.254) sends to it with a CONNECTED socket,
+#                      as game clients do: are the replies from the address it sent to?
 #         noipv6       IPv6 switched off in the edge's namespace (disable_ipv6=1 on
 #                      all, default, lo and e0), as on many Iran VPSes
 #
@@ -160,6 +163,7 @@ case " $CONDS " in
   *" collide4 "*)  nsx $E python3 "$D/udpt.py" hold "0.0.0.0:$PORTS" > "$R/hold.log" 2>&1 & HOLD=$!; PIDS+=($!) ;;
   *" collideip "*) nsx $E python3 "$D/udpt.py" hold "$EIP:$PORTS" > "$R/hold.log" 2>&1 & HOLD=$!; PIDS+=($!) ;;
 esac
+has secondip && ip -n $E addr add 10.201.0.2/24 dev e0
 has fwdrop && nsx $E iptables -I INPUT -p udp --dport $PORTS -j DROP
 has noipv6 && nsx $E sysctl -qw net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1   net.ipv6.conf.lo.disable_ipv6=1 net.ipv6.conf.e0.disable_ipv6=1
 sleep 0.5
@@ -208,8 +212,13 @@ if has release && [ -n "${HOLD:-}" ]; then pkill -P $HOLD 2>/dev/null; kill $HOL
 if has v6; then UA="[fd00:201::1]:$PORTS"; SRC=fd77:1::5; else UA="$EIP:$PORTS"; SRC=10.100.0.1; fi
 EALIVE=0; kill -0 $P_edge 2>/dev/null && EALIVE=1
 XALIVE=0; kill -0 $P_exit 2>/dev/null && XALIVE=1
+if has secondip; then
+  TC=$(nsx $M python3 "$D/udpt.py" tcpcheck "10.201.0.2:$PORTS" --n 5)
+  UC=$(nsx $M python3 "$D/udpt.py" udpcheck "10.201.0.2:$PORTS" --n 20 --connected)
+else
 TC=$(nsx $E python3 "$D/udpt.py" tcpcheck "$UA" --src $SRC --n 5)
 UC=$(nsx $E python3 "$D/udpt.py" udpcheck "$UA" --src $SRC --n 20)
+fi
 L2=$(links)
 EALIVE2=0; kill -0 $P_edge 2>/dev/null && EALIVE2=1
 sleep 0.5
