@@ -508,10 +508,13 @@ func TestQuietCounts(t *testing.T) {
 	}
 }
 
-// α (sendcap.go) on a BULK link's socket: over CoDel's 5 ms of queue the
-// cap goes below what was delivered, in proportion to the excess; under
-// half of it it grows 5% a reading up to 1.25 × the 2 s delivery maximum;
-// never under its floor; a QUIET link keeps C4-lite's 1.25 ×.
+// α (sendcap.go) on a BULK link's socket: its cap is a factor of the
+// largest delivery of the last 10 s, which grows under 5 ms of queue (to
+// 1.25), holds from 5 to 8 ms, and backs off past 8 ms in proportion to the
+// excess (at most 0.1 a reading), never under 0.75: a direction whose
+// reading stays past the band (its acks behind the other direction's
+// backlog) keeps 0.75 of what it delivered, never starves; never under the
+// floor; a QUIET link keeps C4-lite's 1.25 × of 2 s.
 func TestAlphaCap(t *testing.T) {
 	const ms = time.Millisecond
 	feed := func(c *sendCap, n int, at *time.Duration, dlv float64, srtt, minRTT time.Duration, acked *uint64) {
@@ -522,29 +525,43 @@ func TestAlphaCap(t *testing.T) {
 		}
 	}
 	const rate = 25e6 / 8
+	near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-6*b+1 }
 	{
 		c := &sendCap{linked: true, alpha: true}
-		var at time.Duration
-		var acked uint64
-		feed(c, 3, &at, rate, 72*ms+2*ms, 72*ms, &acked) // 2 ms of queue: under half the target
-		if c.aRate <= rate || c.aRate > wcNetKOf()*rate+1 {
-			t.Fatalf("an empty queue: cap %.0f, want past %.0f up to %.0f", c.aRate, rate, wcNetKOf()*rate)
+		at, acked := time.Hour, uint64(0)
+		feed(c, 3, &at, rate, 72*ms+2*ms, 72*ms, &acked) // under 5 ms: grows
+		if !near(c.aK, 1+2*alphaGrow) || !near(c.aRate, c.aK*rate) || uint64(c.aRate) != c.own {
+			t.Fatalf("an empty queue: factor %.3f cap %.0f (own %d), want %.3f × %.0f", c.aK, c.aRate, c.own, 1+2*alphaGrow, rate)
 		}
-		feed(c, 1, &at, rate, 72*ms+55*ms, 72*ms, &acked) // 55 ms of queue: 50 ms over
-		want := rate * (1 - math.Min(0.05/0.1, alphaCutMax))
-		if math.Abs(c.aRate-want) > 1 || uint64(c.aRate) != c.own {
-			t.Fatalf("55 ms of queue: cap %.0f (own %d), want %.0f", c.aRate, c.own, want)
+		feed(c, 40, &at, rate, 72*ms+1*ms, 72*ms, &acked)
+		if !near(c.aK, alphaKMax) {
+			t.Fatalf("a long empty queue: factor %.3f, want the ceiling %.2f", c.aK, alphaKMax)
 		}
-		feed(c, 1, &at, rate, 72*ms+15*ms, 72*ms, &acked) // 10 ms over: 10% below what was delivered
-		if want2 := math.Min(want, rate) * 0.9; math.Abs(c.aRate-want2) > 1 {
-			t.Fatalf("15 ms of queue: cap %.0f, want %.0f", c.aRate, want2)
+		feed(c, 1, &at, rate, 72*ms+6*ms, 72*ms, &acked) // in the band: holds
+		if !near(c.aK, alphaKMax) {
+			t.Fatalf("6 ms of queue: factor %.3f, want it held", c.aK)
 		}
-		hold := c.aRate
-		feed(c, 1, &at, rate, 72*ms+4*ms, 72*ms, &acked) // within the target: held
-		if c.aRate != hold {
-			t.Fatalf("4 ms of queue: cap %.0f, want it held at %.0f", c.aRate, hold)
+		feed(c, 1, &at, rate, 72*ms+12*ms, 72*ms, &acked) // 4 ms over: 0.04 off
+		if !near(c.aK, alphaKMax-0.04) {
+			t.Fatalf("12 ms of queue: factor %.3f, want %.3f", c.aK, alphaKMax-0.04)
 		}
-		feed(c, 40, &at, 10e3, 72*ms+300*ms, 72*ms, &acked) // a collapse
+		feed(c, 1, &at, rate, 72*ms+100*ms, 72*ms, &acked) // far over: 0.1 at most
+		if !near(c.aK, alphaKMax-0.14) {
+			t.Fatalf("100 ms of queue: factor %.3f, want %.3f", c.aK, alphaKMax-0.14)
+		}
+		// the reading stays past the band while what it delivers falls (its
+		// acks behind the other direction): held at 0.75 of the 10 s maximum
+		feed(c, 30, &at, rate/2, 72*ms+20*ms, 72*ms, &acked)
+		if !near(c.aK, alphaKMin) || !near(c.aRate, alphaKMin*rate) {
+			t.Fatalf("a stuck reading: factor %.3f cap %.0f, want %.2f × %.0f (the 10 s maximum)", c.aK, c.aRate, alphaKMin, rate)
+		}
+		// 10 s on, the maximum is what it delivered since
+		feed(c, 110, &at, rate/2, 72*ms+20*ms, 72*ms, &acked)
+		if !near(c.aRate, alphaKMin*rate/2) {
+			t.Fatalf("10 s later: cap %.0f, want %.0f", c.aRate, alphaKMin*rate/2)
+		}
+		feed(c, 40, &at, 10e3, 72*ms+300*ms, 72*ms, &acked) // a collapse of the path
+		feed(c, 100, &at, 10e3, 72*ms+300*ms, 72*ms, &acked)
 		if c.aRate != alphaFloor {
 			t.Fatalf("collapse: cap %.0f, want the floor %d", c.aRate, alphaFloor)
 		}
@@ -554,20 +571,18 @@ func TestAlphaCap(t *testing.T) {
 	}
 	{
 		c := &sendCap{linked: true} // QUIET: C4-lite
-		var at time.Duration
-		var acked uint64
+		at, acked := time.Hour, uint64(0)
 		feed(c, 3, &at, rate, 72*ms+55*ms, 72*ms, &acked)
-		if math.Abs(float64(c.own)-wcNetKOf()*rate) > 1 {
+		if !near(float64(c.own), wcNetKOf()*rate) {
 			t.Fatalf("C4-lite: cap %d, want %.0f", c.own, wcNetKOf()*rate)
 		}
 	}
 	{
-		c := &sendCap{linked: true, alpha: true} // no min_rtt reading: C4-lite's
-		var at time.Duration
-		var acked uint64
+		c := &sendCap{linked: true, alpha: true} // no min_rtt reading: 1.25 ×
+		at, acked := time.Hour, uint64(0)
 		feed(c, 3, &at, rate, 0, 0, &acked)
-		if math.Abs(c.aRate-wcNetKOf()*rate) > 1 {
-			t.Fatalf("no queue reading: cap %.0f, want %.0f", c.aRate, wcNetKOf()*rate)
+		if !near(c.aRate, alphaKMax*rate) {
+			t.Fatalf("no queue reading: cap %.0f, want %.0f", c.aRate, alphaKMax*rate)
 		}
 	}
 }
