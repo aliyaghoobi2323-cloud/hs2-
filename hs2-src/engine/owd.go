@@ -174,6 +174,39 @@ type owdLink struct {
 	// sys: the link socket's TCP_INFO (set before the loop starts; nil:
 	// the stamp is the send time)
 	sys capSys
+	// own: a BULK link's own one-way delays for its in-flight budget (γ2,
+	// budget.go; set before the loop starts): the beat is owdOwnTickMin at
+	// least, and this end sends a message only while it sends data on the
+	// link (owdOwnBusy), so the messages ride its data and the other end
+	// hears this direction's queue only on a link that carries data both
+	// ways — the one where srtt cannot tell the two directions' queues
+	// apart. acked0, at0: the loop's (its busy test).
+	own    bool
+	acked0 uint64
+	at0    int64
+}
+
+const (
+	// owdOwnTickMin: a BULK link's own beat at least (two readings in
+	// owdLook with the jitter)
+	owdOwnTickMin = 50 * time.Millisecond
+	// owdOwnBusy: bytes/s this end's data must be acknowledged at since the
+	// beat before for its own message to go
+	owdOwnBusy = 64 << 10
+)
+
+// busy says whether this end sent data on the link at owdOwnBusy since the
+// beat before (ts: the socket's TCP_INFO, ok: read).
+func (o *owdLink) busy(ts tcpStat, ok bool) bool {
+	if !ok {
+		return false
+	}
+	now := ctrlNow()
+	dt := time.Duration(now - o.at0)
+	b := o.at0 != 0 && dt > 0 && ts.bytesAcked >= o.acked0 &&
+		float64(ts.bytesAcked-o.acked0) >= owdOwnBusy*dt.Seconds()
+	o.acked0, o.at0 = ts.bytesAcked, now
+	return b
 }
 
 // owdLocalWait is how long (ns) a byte written now waits in the socket
@@ -209,7 +242,11 @@ func (o *owdLink) tick() time.Duration {
 	if at := o.rateAt.Load(); at == 0 || time.Duration(ctrlNow()-at) > owdFresh {
 		return owdTickMax
 	}
-	return owdTickOf(math.Float64frombits(uint64(o.rate.Load())))
+	t := owdTickOf(math.Float64frombits(uint64(o.rate.Load())))
+	if o.own {
+		t = max(t, owdOwnTickMin)
+	}
+	return t
 }
 
 // owdTickOf is the beat for a link rate r (bytes/s; 0: unknown): one
@@ -332,13 +369,19 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 			return
 		case <-t.C:
 		}
+		var ts tcpStat
+		tsOK := false
+		if o.sys != nil {
+			ts, tsOK = o.sys.info()
+		}
+		if o.own && !o.busy(ts, tsOK) {
+			continue // no data of this end to ride: none (γ2's own beat)
+		}
 		at := o.qInAt.Load()
 		fresh := at != 0 && time.Duration(ctrlNow()-at) <= owdFresh
 		stamp := ctrlNow()
-		if o.sys != nil {
-			if ts, ok := o.sys.info(); ok {
-				stamp += owdLocalWait(ts)
-			}
+		if tsOK {
+			stamp += owdLocalWait(ts)
 		}
 		owdEncode(b[:], stamp, o.qIn.Load(), fresh)
 		if _, err := st.Write(b[:]); err != nil {
@@ -355,12 +398,16 @@ func openOWD(ctx context.Context, l Link) {
 	if !ok || OWDOff() || ml.mtr == nil {
 		return
 	}
-	if TuneOWDQuiet != 0 {
-		if !ml.quiet {
+	switch {
+	case TuneOWDQuiet == 0:
+		if !ml.bulk {
 			return
 		}
+	case ml.quiet:
 		quietOWD.Store(&ml.mtr.owd)
-	} else if !ml.bulk {
+	case ml.bulk && budgetLinkOWD():
+		ml.mtr.owd.own = true // γ2: the BULK link's own (budget.go)
+	default:
 		return
 	}
 	st, err := ml.OpenRawStream()

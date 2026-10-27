@@ -82,6 +82,14 @@ import (
 //     takes min(S/2, T) of S as the other's. A spike of the other direction
 //     past T reads as some of this one's for a reading or two (it cuts a
 //     little and grows back in a few), never as a floor under the rate.
+//     Both ends read the same S, so a split of it that left one direction
+//     under its path (the other's queue past what is taken for it, its own
+//     empty) would stay — a neutral balance (TestBudgetTwoWayAsym's model
+//     held a download at 0.966 of its path that way): a two-way link
+//     budget-limited at its target that acks less than budgetRoom of its
+//     most of the last budgetLong seconds grows a FAST step at least. A
+//     path that really got slower makes a queue of its own as it grows, and
+//     the cut takes it back, until its 10 s maximum ages.
 
 // TuneBudget 0 (HS2_TUNE_BUDGET=0): BULK links keep α's rate cap (round 2's
 // final candidate); 1, the default: the in-flight budget, and C4-lite's
@@ -99,11 +107,29 @@ var BudgetTargetUs = 2500
 // link's alone).
 var BudgetTwoWay = 1
 
+// BudgetLinkOWD 0 (HS2_TUNE_BUDGET_LINKOWD=0, lab): no one-way delays of a
+// BULK link's own (owd.go's own beat); a two-way link's ends split S by the
+// guess min(S/2, T) alone.
+var BudgetLinkOWD = 1
+
+// budgetLinkOWD says whether BULK links trade one-way delays of their own.
+func budgetLinkOWD() bool { return BudgetLinkOWD != 0 && !BudgetOff() && !OWDOff() }
+
+// BudgetPaceK (HS2_TUNE_BUDGET_PACE, ×100; 0: none): the pacing cap of a
+// budget link is this share of B over base + T, its rate at the target,
+// the lesser of it and C4-lite's. A window let out at the sender's own
+// pacing rate (BBR's, whose bandwidth filter app-limited samples never
+// bring down) arrives at a fq_codel bottleneck as a burst its flow's share
+// drains slowly: on the rig 17 flows on 64 links read 4 ms of queue a
+// window of 12 segments could not make at 2 Mbit/s, and cut and grew in
+// turn each reading (M1).
+var BudgetPaceK = 125
+
 const (
 	budgetStartGain  = 2.0
 	budgetStartGrow  = 1.25
 	budgetGrowMax    = 0.125
-	budgetKMin       = 0.25
+	budgetKMin       = 0.5 // of the 10 s most acked a second (long) × min_rtt, the floor
 	budgetCapK       = 2.0
 	budgetMinSegs    = 2
 	budgetRecent     = 3
@@ -150,6 +176,8 @@ type budgetIn struct {
 	SRTT, MinRTT   time.Duration // the socket's (0: unknown)
 	QOut, QIn      time.Duration // the QUIET link's one-way queues: this end's sending direction, the other
 	QOutOK, QInOK  bool
+	LOut, LIn      time.Duration // the link's own one-way queues (owd.go's own beat), the same two
+	LOutOK, LInOK  bool
 	TxRate, RxRate float64 // bytes/s acknowledged and received since the reading before
 	Blocked        bool    // the gate held a bulk frame since the reading before
 	MSS, Frame     int     // the socket's segment, the link's bulk frame
@@ -170,7 +198,7 @@ type budgetCore struct {
 	// the latest reading's, for the status line
 	q, qRev, s, base time.Duration
 	d                float64
-	two              bool
+	two, own         bool
 	cuts, grows      uint64
 	rooms            uint64 // two-way growth for room of its own
 }
@@ -212,17 +240,27 @@ func (c *budgetCore) step(in budgetIn) float64 {
 	long := c.longMax(in.Now, in.TxRate)
 	qRev := time.Duration(0)
 	two := BudgetTwoWay != 0 && in.RxRate > budgetRevMin && in.RxRate > budgetRevShare*in.TxRate
-	if two {
+	// own: the link's own one-way delays, both ways (a two-way link whose
+	// ends both send: owd.go's own beat), which split S as it is
+	own := in.LOutOK && in.LInOK
+	switch {
+	case own:
+		qRev = in.LIn
+	case two:
 		qRev = min(S/2, T)
 	}
-	c.two = two
+	c.two, c.own = two || own, own
 	if in.QInOK {
 		qRev = max(qRev, in.QIn)
 	}
 	qFwd := max(S-qRev, 0)
+	if own {
+		qFwd = max(qFwd, in.LOut)
+	}
 	if in.QOutOK {
 		qFwd = max(qFwd, in.QOut)
 	}
+	two = two && !own // the guess (min(S/2, T)) and its room rule
 	minRTT := in.MinRTT
 	if minRTT <= 0 {
 		minRTT = in.SRTT
@@ -242,7 +280,7 @@ func (c *budgetCore) step(in budgetIn) float64 {
 		return c.b // nothing to judge by: it holds
 	}
 	floor := math.Max(float64(budgetMinSegs*max(in.MSS, 536)), float64(2*in.Frame))
-	floor = math.Max(floor, budgetKMin*in.DlvMax*minRTT.Seconds())
+	floor = math.Max(floor, budgetKMin*long*minRTT.Seconds())
 	want := d * (base + T).Seconds() // in flight at the target, at this delivery rate
 	switch c.mode {
 	case budgetIdle:
@@ -375,8 +413,10 @@ func (lb *linkBudget) gate(size int) time.Duration {
 }
 
 // step is the runner's reading of the socket for the budget (under its
-// sendCapLink's lock): on is C4-lite's state, ts the socket's TCP_INFO.
-func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float64) {
+// sendCapLink's lock): on is C4-lite's state, ts the socket's TCP_INFO,
+// own the link's own one-way delays (nil: none); it says the pacing cap
+// (bytes/s; 0: none).
+func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float64, own *owdLink) uint64 {
 	tx, rx := 0.0, 0.0
 	if lb.at0 > 0 && now > lb.at0 {
 		dt := (now - lb.at0).Seconds()
@@ -395,13 +435,23 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 		in.QOut, in.QOutOK = o.queue()
 		in.QIn, in.QInOK = o.queueIn()
 	}
+	if own != nil {
+		in.LOut, in.LOutOK = own.queue()
+		in.LIn, in.LInOK = own.queueIn()
+	}
 	b := lb.core.step(in)
 	lb.b.Store(int64(b))
 	r := lb.core.d
-	if lb.core.base > 0 {
-		r = math.Max(r, b/(lb.core.base+budgetTarget()).Seconds())
+	pace := uint64(0)
+	if lb.core.base > 0 && b > 0 {
+		at := b / (lb.core.base + budgetTarget()).Seconds() // its rate at the target
+		r = math.Max(r, at)
+		if BudgetPaceK > 0 {
+			pace = uint64(float64(BudgetPaceK) / 100 * at)
+		}
 	}
 	lb.rate.Store(int64(r))
+	return pace
 }
 
 // line is the budget's status line (§3.4's sendcore line, in part), and
@@ -409,7 +459,10 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 func (lb *linkBudget) line(n int) string {
 	c := &lb.core
 	way := "one-way"
-	if c.two {
+	switch {
+	case c.own:
+		way = "two-way (own delays)"
+	case c.two:
 		way = "two-way"
 	}
 	return fmt.Sprintf("budget link %d: %s %s, B %.0f KiB (in flight at most %.0f KiB), queue %.1f ms (srtt-min %.1f, way back %.1f, target %.1f), delivery %.1f Mbit/s, cuts %d, grows %d, room %d, gate waits %d (%.0f ms)",

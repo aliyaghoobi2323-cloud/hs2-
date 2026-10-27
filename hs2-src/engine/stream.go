@@ -274,6 +274,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	}
 	if quietLink {
 		shaped.count = true // the QUIET records' tallies (the status line)
+		if sched && QuietBatch != 0 && QuietLazy != 0 && hq != nil && hq.sys != nil && hq.fb.Load() == nil {
+			shaped.lazy = hq.sys.notsent // a tail waits for the socket's unsent bytes (shape.go)
+		}
 	}
 	if quietLink && QuietCC != "" {
 		// a QUIET link carries light traffic only: BBR's PROBE_RTT (its

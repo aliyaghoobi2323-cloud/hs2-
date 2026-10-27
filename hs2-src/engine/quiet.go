@@ -75,21 +75,36 @@ var QuietCC = "cubic"
 var QuietRec = 0
 
 // QuietCount is how many QUIET links a pool of maxLinks keeps: QuietN when
-// set; with QuietExtra (the default) one (decision T19: max_links + 1
-// connections, within the population of dpi_eval2's model for N ≤ 5, and
-// the round-2 judge measured no need of a second); within max_links one,
-// and a second for redundancy once the pool may have four links or more.
+// set; with QuietExtra (the default) one up to quietOneMax links (decision
+// T19: max_links + 1 connections, within the population of dpi_eval2's
+// model, 1 to 6), two past it; within max_links one, and a second for
+// redundancy once the pool may have four links or more.
+//
+// Why two past quietOneMax (γ2's measured need, R1 round 3 M1): a QUIET link
+// carries every light user's messages, each a padded record (~8 Mbit/s a
+// direction with 200 probe users), and on fq_codel it is one flow among the
+// bulk ones: with N=64 and 17 bulk flows its share was 100/18 = 5.6 Mbit/s,
+// CoDel dropped its packets (12 resent) and the probe's p99 went to +75 ms
+// (one_vs_16, against +12.5 for round 2's final with two QUIET links). Two
+// halve each one's rate. Past quietOneMax a pool already has more
+// connections than the model's population, so the second costs no tell
+// the first did not.
 func QuietCount(maxLinks int) int {
 	switch {
 	case QuietN > 0:
 		return QuietN
-	case QuietExtra != 0:
+	case QuietExtra != 0 && maxLinks <= quietOneMax:
 		return 1
+	case QuietExtra != 0:
+		return 2
 	case maxLinks >= 4:
 		return 2
 	}
 	return 1
 }
+
+// quietOneMax: the most links a pool of one QUIET link has (QuietExtra).
+const quietOneMax = 5
 
 // QuietN (HS2_TUNE_QUIET_N, lab): the QUIET links of every pool, when
 // above 0. Both ends must set it alike (the exit dials the reverse pool's
@@ -104,6 +119,14 @@ var QuietN = 0
 // (the shaper's carry; R1 round 3, γ2). Each end's switch is its own
 // sending's.
 var QuietBatch = 1
+
+// QuietLazy 0 (HS2_TUNE_QUIET_LAZY=0, lab): with QuietBatch, a QUIET link's
+// writer that ran out of frames writes the shaper's tail at once. 1, the
+// default: while the socket has bytes unsent, the tail waits for them to go
+// (they are ahead of it whatever it does) and takes what comes meanwhile
+// (shape.go's lazy): more messages to a record, and no wait of its own
+// past shapeLazyCheck.
+var QuietLazy = 1
 
 // QuietExtra 1 (HS2_TUNE_QUIET_EXTRA; the R1 round-2 judge, the default
 // since round 3 by decision T19): the QUIET links come next to max_links

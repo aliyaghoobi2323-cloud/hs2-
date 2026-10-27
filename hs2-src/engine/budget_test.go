@@ -19,6 +19,7 @@ type budgetDir struct {
 	rate   float64 // delivered at the latest step
 	q      time.Duration
 	now    time.Duration // the readings' clock
+	ownOWD bool          // the link's own one-way delays (both directions' queues) are read
 }
 
 // inflight is what the direction holds in flight: its budget when that
@@ -59,6 +60,9 @@ func (d *budgetDir) read(r, qBack time.Duration, blocked bool, back *budgetDir, 
 	}
 	if owd {
 		in.QOut, in.QOutOK, in.QIn, in.QInOK = qOut, true, qIn, true
+	}
+	if d.ownOWD && back != nil {
+		in.LOut, in.LOutOK, in.LIn, in.LInOK = d.q, true, qBack, true
 	}
 	d.b = d.core.step(in)
 }
@@ -201,28 +205,70 @@ func settleTwoWay(dn, up *budgetDir, wd, wu float64, r, extra time.Duration) {
 // its path does not stay: budgetRoom).
 func TestBudgetTwoWayAsym(t *testing.T) {
 	r := 72 * time.Millisecond
-	for _, spike := range []bool{false, true} {
-		dn := &budgetDir{c: 100 * bMbit, rate: 100 * bMbit}
-		up := &budgetDir{c: 20 * bMbit, rate: 20 * bMbit}
-		minDn, minUp := math.Inf(1), math.Inf(1)
-		maxQ := time.Duration(0)
-		for i := 0; i < 600; i++ {
-			wd, bd := dn.inflight(r, up.q)
-			wu, bu := up.inflight(r, dn.q)
-			extra := time.Duration(0)
-			if spike && i >= 200 && i < 203 {
-				extra = 15 * time.Millisecond // a start-up burst of the upload
+	for _, ownOWD := range []bool{false, true} {
+		for _, spike := range []bool{false, true} {
+			dn := &budgetDir{c: 100 * bMbit, rate: 100 * bMbit, ownOWD: ownOWD}
+			up := &budgetDir{c: 20 * bMbit, rate: 20 * bMbit, ownOWD: ownOWD}
+			minDn, minUp := math.Inf(1), math.Inf(1)
+			maxQ := time.Duration(0)
+			for i := 0; i < 600; i++ {
+				wd, bd := dn.inflight(r, up.q)
+				wu, bu := up.inflight(r, dn.q)
+				extra := time.Duration(0)
+				if spike && i >= 200 && i < 203 {
+					extra = 15 * time.Millisecond // a start-up burst of the upload
+				}
+				settleTwoWay(dn, up, wd, wu, r, extra)
+				dn.read(r, up.q, bd, up, 0, 0, true)
+				up.read(r, dn.q, bu, dn, 0, 0, true)
+				if i >= 100 && (i < 200 || i > 230) {
+					minDn, minUp = math.Min(minDn, dn.rate), math.Min(minUp, up.rate)
+					maxQ = max(maxQ, dn.q+up.q)
+				}
 			}
-			settleTwoWay(dn, up, wd, wu, r, extra)
-			dn.read(r, up.q, bd, up, 0, 0, true)
-			up.read(r, dn.q, bu, dn, 0, 0, true)
-			if i >= 100 && (i < 200 || i > 230) {
-				minDn, minUp = math.Min(minDn, dn.rate), math.Min(minUp, up.rate)
-				maxQ = max(maxQ, dn.q+up.q)
+			if minDn < 0.97*dn.c || minUp < 0.97*up.c || maxQ > 5*time.Millisecond {
+				t.Fatalf("own delays %v, spike %v: download at least %.1f, upload %.1f Mbit/s, queue at most %v",
+					ownOWD, spike, minDn/bMbit, minUp/bMbit, maxQ)
 			}
 		}
-		if minDn < 0.97*dn.c || minUp < 0.97*up.c || maxQ > 5*time.Millisecond {
-			t.Fatalf("spike %v: download at least %.1f, upload %.1f Mbit/s, queue at most %v", spike, minDn/bMbit, minUp/bMbit, maxQ)
+	}
+}
+
+// The start of round 3's M1 on the rig (100 down beside 20 up): the
+// upload's start-up held a queue of 20 ms for a second while the download
+// read it in its srtt. With the link's own one-way delays the download
+// takes it for the way back's and keeps its budget; with the guess alone
+// it cuts, but never under half of its 10 s most acked × min_rtt.
+func TestBudgetTwoWayStartSpike(t *testing.T) {
+	r := 72 * time.Millisecond
+	T := budgetTarget()
+	for _, ownOWD := range []bool{true, false} {
+		var c budgetCore
+		in := budgetIn{On: true, Delivery: 90 * bMbit, MinRTT: r, SRTT: r + T, TxRate: 90 * bMbit, RxRate: 18 * bMbit,
+			Blocked: true, MSS: 1448, DlvMax: 90 * bMbit}
+		for i := 0; i < 20; i++ {
+			in.Now += coreTick
+			in.SRTT = r + T + time.Duration(i%2)*10*time.Millisecond // a start-up queue to leave the start
+			c.step(in)
+		}
+		in.SRTT = r + T
+		for i := 0; i < 20; i++ {
+			in.Now += coreTick
+			c.step(in)
+		}
+		b0 := c.b
+		in.SRTT = r + 20*time.Millisecond
+		if ownOWD {
+			in.LIn, in.LInOK, in.LOut, in.LOutOK = 20*time.Millisecond, true, 0, true
+		}
+		for i := 0; i < 10; i++ {
+			in.Now += coreTick
+			in.TxRate = 90 * bMbit * math.Min(1, c.b/b0)
+			c.step(in)
+		}
+		floor := budgetKMin * 90 * bMbit * r.Seconds()
+		if ownOWD && c.b < 0.95*b0 || !ownOWD && c.b < floor*0.999 {
+			t.Fatalf("own delays %v: B %.0f KiB after the way back's 20 ms (was %.0f, floor %.0f)", ownOWD, c.b/1024, b0/1024, floor/1024)
 		}
 	}
 }
@@ -426,11 +472,11 @@ func TestLinkBudgetStep(t *testing.T) {
 	lb.blocked.Store(true)
 	t0 := 10 * time.Second
 	ts := tcpStat{deliveryRate: uint64(20 * bMbit), rtt: 80000, minRTT: 72000, bytesAcked: 1000, bytesReceived: 500, sndMSS: 1448}
-	lb.step(t0, true, ts, 20*bMbit)
+	lb.step(t0, true, ts, 20*bMbit, nil)
 	ts.bytesAcked += uint64(2 * bMbit / 10)
 	ts.bytesReceived += uint64(1 * bMbit / 10)
 	lb.blocked.Store(true)
-	lb.step(t0+100*time.Millisecond, true, ts, 20*bMbit)
+	pace := lb.step(t0+100*time.Millisecond, true, ts, 20*bMbit, nil)
 	if lb.blocked.Load() {
 		t.Fatal("the held mark was not taken")
 	}
@@ -442,11 +488,59 @@ func TestLinkBudgetStep(t *testing.T) {
 	if lb.core.qRev != max(min(4*time.Millisecond, budgetTarget()), 3*time.Millisecond) {
 		t.Fatalf("way back %v", lb.core.qRev)
 	}
+	// the pacing cap: BudgetPaceK of its rate at the target
+	if want := float64(BudgetPaceK) / 100 * float64(lb.b.Load()) / (lb.core.base + budgetTarget()).Seconds(); math.Abs(float64(pace)-want) > 0.01*want {
+		t.Fatalf("pace %d, want %.0f", pace, want)
+	}
 	if s := lb.line(3); s == "" {
 		t.Fatal("no line")
 	}
-	lb.step(t0+200*time.Millisecond, false, ts, 20*bMbit)
+	// the link's own one-way delays, both fresh: the way back is theirs
+	own := &owdLink{}
+	own.qOut.Store(int64(500 * time.Microsecond))
+	own.qOutAt.Store(ctrlNow())
+	own.qIn.Store(int64(7 * time.Millisecond))
+	own.qInAt.Store(ctrlNow())
+	ts.bytesAcked += uint64(2 * bMbit / 10)
+	ts.bytesReceived += uint64(1 * bMbit / 10)
+	lb.step(t0+200*time.Millisecond, true, ts, 20*bMbit, own)
+	if !lb.core.own || lb.core.qRev != 7*time.Millisecond || lb.core.q != time.Millisecond {
+		t.Fatalf("own delays: own %v, way back %v, queue %v; want 7 ms and 1 ms (the QUIET link's)", lb.core.own, lb.core.qRev, lb.core.q)
+	}
+	if p := lb.step(t0+300*time.Millisecond, false, ts, 20*bMbit, nil); p != 0 {
+		t.Fatalf("pace %d idle", p)
+	}
 	if lb.b.Load() != 0 {
 		t.Fatalf("B %d idle", lb.b.Load())
+	}
+}
+
+// A BULK link's own beat (γ2): 50 ms at least, and a message only while
+// this end's data is acknowledged at owdOwnBusy.
+func TestOWDOwnBeat(t *testing.T) {
+	o := &owdLink{own: true}
+	o.noteRate(1e9 / 8) // 1 Gbit/s: the 1% rule's beat is its 25 ms floor
+	if tk := o.tick(); tk != owdOwnTickMin {
+		t.Fatalf("own beat %v, want %v", tk, owdOwnTickMin)
+	}
+	if o.own = false; o.tick() != owdTickMin {
+		t.Fatalf("QUIET beat %v", o.tick())
+	}
+	o.own = true
+	ts := tcpStat{bytesAcked: 1 << 20}
+	if o.busy(ts, true) {
+		t.Fatal("busy at the first look")
+	}
+	o.at0 -= int64(100 * time.Millisecond)
+	if o.busy(ts, true) {
+		t.Fatal("busy with nothing acknowledged")
+	}
+	o.at0 -= int64(100 * time.Millisecond)
+	ts.bytesAcked += 64 << 10 // 640 KiB/s over 100 ms
+	if !o.busy(ts, true) {
+		t.Fatal("not busy at 640 KiB/s")
+	}
+	if o.busy(ts, false) {
+		t.Fatal("busy with no reading")
 	}
 }
