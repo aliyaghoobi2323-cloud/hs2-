@@ -171,6 +171,9 @@ func TestQuietPoolClasses(t *testing.T) {
 			t.Run(name+"/"+string(rune('0'+mx)), func(t *testing.T) {
 				p := startQuietPool(t, direct, mx)
 				wantQ, wantB := QuietCount(mx), max(1, mx-QuietCount(mx))
+				if QuietExtra != 0 {
+					wantB = mx // the QUIET links next to max_links BULK ones (T19)
+				}
 				p.waitFor("the classes up", 20*time.Second, func() bool {
 					return p.q.count() == wantQ && p.serving() == wantB
 				})

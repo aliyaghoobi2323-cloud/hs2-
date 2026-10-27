@@ -81,6 +81,11 @@ type capSample struct {
 	// OWDwait: the link has one-way delays (OWD on) but none heard yet:
 	// α's start holds (srtt − min_rtt holds the other direction's queue)
 	OWDwait bool
+	// OWN: the queue delay of this end's sending direction on the BULK
+	// link's own one-way delays (γ1's second signal, AlphaOwn: each BULK
+	// link trades its own messages too; OWNok false: none heard lately)
+	OWN   time.Duration
+	OWNok bool
 }
 
 type capRate struct {
@@ -142,9 +147,21 @@ type sendCap struct {
 	// target (free growth)
 	aCutFrom float64
 	aFree    int
+	// aLong: the 10 s delivery maximum of the latest reading
+	aLong float64
+	// γ1's second cap (AlphaOwn, ownStep): bRate the cap from the link's
+	// own one-way queue (0: none, no reading of it), bQ the latest queue
+	// past the shared one and bTgt its target then
+	bRate float64
+	bQ    time.Duration
+	bTgt  time.Duration
+	// probe (AlphaProbe): readings in a row with no queue sign while the
+	// cap bound, of each cap
+	aCalm, bCalm int
 	// tallies (the status line)
 	appLim, lifts uint64
 	aCuts, aGrows uint64
+	bCuts, bGrows uint64
 }
 
 // TuneAlpha 0 (HS2_TUNE_ALPHA=0, lab): BULK links keep C4-lite's cap.
@@ -301,14 +318,176 @@ func (c *sendCap) alphaLongMax(s capSample) float64 {
 	return mx
 }
 
+// AlphaOwn 0 (HS2_TUNE_ALPHA_OWN=0): α reads the shared (QUIET) one-way
+// queue alone, version 5 of round 2. On (γ1, R1 round 3, the default):
+// each BULK link trades its own one-way delay messages too (silent while
+// idle), and α is the lesser of two caps: the shared queue's (alphaStepA:
+// version 5's, half the target: the light flows' queue on a shared path)
+// and its own queue's (ownStep: CoDel's full target, only to keep CoDel
+// from dropping). See ownStep.
+var AlphaOwn = 1
+
+// AlphaOwnOn says whether α has its own-queue cap (and the BULK links
+// their own loops): AlphaOwn with version 5's shared queue.
+func AlphaOwnOn() bool { return AlphaOwn != 0 && TuneOWDQuiet != 0 && !OWDOff() && !AlphaOff() }
+
+// AlphaProbe 0 (HS2_TUNE_ALPHA_PROBE=0): no probing. On (γ1, the default):
+// a cap that bound (it delivered about the cap) with no sign of a queue for
+// alphaProbeN readings in a row (2 s) grows faster each reading after
+// (alphaGrowFast × alphaProbeStep^k, up to alphaProbeMax), past the slow
+// growth near its last cut: the path may be faster now (the judge's model:
+// a path ten times faster grew ×1.16 in 2 s). The first sign of a queue
+// (a quarter of the target) ends the probe.
+var AlphaProbe = 1
+
+const (
+	alphaProbeN    = 20
+	alphaProbeStep = 1.5
+	alphaProbeMax  = 0.25
+	// ownSegs, ownMSS: the own cap's target is at least ownSegs segments
+	// at the rate the link is served (a DRR round each, on fq_codel)
+	ownSegs = 3
+	ownMSS  = 1448
+	// ownCutStand: the most the own cap cuts a reading for a queue past
+	// its target that stands (alphaCutMax while it rises)
+	ownCutStand = 0.02
+)
+
+// probeGrow is the probe's growth k readings into it.
+func probeGrow(k int) float64 {
+	return math.Min(alphaGrowFast*math.Pow(alphaProbeStep, float64(k)), alphaProbeMax)
+}
+
 // alphaStep is α's cap from a reading (c.on: the socket has had a sample
-// not app-limited since it was last idle; arming: this is the first).
+// not app-limited since it was last idle; arming: this is the first): the
+// shared queue's (alphaStepA), and with AlphaOwnOn its own queue's
+// (ownStep); alphaCap is the lesser.
 func (c *sendCap) alphaStep(s capSample, arming bool) {
+	c.alphaStepA(s, arming)
+	if AlphaOwnOn() {
+		c.ownStep(s, arming)
+	} else {
+		c.bRate = 0
+	}
+}
+
+// alphaCap is the cap in force of α's two.
+func (c *sendCap) alphaCap() float64 {
+	if c.bRate > 0 && c.bRate < c.aRate {
+		return c.bRate
+	}
+	return c.aRate
+}
+
+// dlvGrowing says whether the delivery of the latest reading rose by
+// alphaStartGrow since the oldest of the last alphaRecent (fewer than two
+// readings: it has just started, as BBR's start-up).
+func (c *sendCap) dlvGrowing(cur float64) bool {
+	n, old := 0, 0.0
+	for k := 1; k <= alphaRecent; k++ {
+		if v := c.aDlv[(c.aDi+k)%alphaRecent]; v > 0 {
+			if n++; old == 0 {
+				old = v
+			}
+		}
+	}
+	return n < 2 || cur >= alphaStartGrow*old
+}
+
+// ownStep is γ1's second cap (AlphaOwn, R1 round 3; decision T19), from
+// the link's own one-way queue of this direction past the shared (QUIET)
+// one, qx: what the link's own flow queue holds that the light flows do
+// not wait in. On fq_codel that is its flow queue, where CoDel drops past
+// 5 ms (version 5 saw no queue there: CoDel dropped 7% of a link's
+// segments in one_vs_16, and (b) fell to 0.36 when a lone flow's window
+// collapsed); on a shared FIFO about none (the shared cap answers: no
+// double cut). Its target is CoDel's full alphaLow, not the shared cap's
+// half, or ownSegs segments at the rate the link is served if that is
+// longer: on fq_codel a link served at r waits a DRR round of MSS/r for
+// each segment queued, so with many links at a few Mbit/s each no rate
+// under the share drains a queue under 5 ms (version 4 cut for that queue
+// at half the target, and from what was delivered: with 17 flows on 64
+// links the sum fell from 89 to 50 Mbit/s); the target grows as the rate
+// falls, which ends such a ratchet. Past its target and rising (by
+// alphaRise) the cap goes to the lesser of itself and the delivery, less
+// the share that drains the excess within alphaDrain (at most
+// alphaCutMax); past it but standing, by at most ownCutStand; not while
+// the delivery still grows by alphaStartGrow (BBR's start-up: its queue
+// is no sign of the share). Under it the cap grows by alphaGrowFast a
+// reading, with no slow growth near its last cut (version 5's plateau
+// would hold a link under its share for seconds), and the probe
+// (AlphaProbe), to C4-lite's ceiling. Never under alphaKMin × the 10 s
+// maximum, nor alphaFloor. No reading of its own (none heard, the link
+// idle): no cap of its own.
+func (c *sendCap) ownStep(s capSample, arming bool) {
+	if !s.OWNok || s.Delivery <= 0 {
+		if !s.OWNok {
+			c.bRate, c.bQ, c.bCalm = 0, 0, 0
+		}
+		return
+	}
+	d := 0.0
+	for _, v := range c.aDlv {
+		d = math.Max(d, v)
+	}
+	ceil := math.Max(wcNetKOf()*c.maxDlv(), alphaFloor)
+	if arming || c.bRate <= 0 {
+		c.bRate, c.bQ, c.bCalm = ceil, 0, 0
+	}
+	qx := s.OWN
+	if s.OWDok {
+		qx -= s.OWD
+	}
+	qx = max(qx, 0)
+	tgt := alphaLow
+	if d > 0 {
+		tgt = max(tgt, time.Duration(float64(ownSegs*ownMSS)/d*float64(time.Second)))
+	}
+	rising := qx > c.bQ+alphaRise
+	c.bQ, c.bTgt = qx, tgt
+	switch {
+	case qx > tgt && !c.dlvGrowing(s.Delivery):
+		cut := math.Max(float64(qx-tgt), 0) / float64(alphaDrain)
+		if rising {
+			cut = math.Min(cut, alphaCutMax)
+		} else {
+			cut = math.Min(cut, ownCutStand)
+		}
+		c.bRate = math.Min(c.bRate, d) * (1 - cut)
+		c.bCuts++
+		c.bCalm = 0
+	case qx > tgt:
+		c.bCalm = 0 // start-up's queue: it holds
+	case s.AppLimited && d < alphaKeep*c.bRate:
+		c.bCalm = 0 // the sender had less to send than the cap let out: it holds
+	default:
+		g := alphaGrowFast
+		if AlphaProbe != 0 {
+			if qx < tgt/4 && d >= alphaMatch*c.bRate {
+				c.bCalm++
+			} else {
+				c.bCalm = 0
+			}
+			if c.bCalm > alphaProbeN {
+				g = math.Max(g, probeGrow(c.bCalm-alphaProbeN))
+			}
+		}
+		c.bRate = math.Min(c.bRate*(1+g), math.Max(ceil, c.bRate))
+		c.bGrows++
+	}
+	c.bRate = math.Max(c.bRate, math.Max(alphaKMin*c.aLong, alphaFloor))
+}
+
+// alphaStepA is α's shared-queue cap (version 5 of round 2; the one cap
+// with AlphaOwn off).
+func (c *sendCap) alphaStepA(s capSample, arming bool) {
 	long := c.alphaLongMax(s)
+	c.aLong = long
 	if arming || c.aRate <= 0 {
 		c.aRate = math.Max(c.maxDlv(), s.Delivery)
 		c.aDlv = [alphaRecent]float64{}
 		c.aStart = TuneAlphaStart != 0 && !OWDOff()
+		c.aCalm = 0
 	}
 	c.aQ, c.aOWD = 0, false
 	switch {
@@ -403,10 +582,12 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 			c.aCutFrom = d
 			c.aCuts++
 		}
+		c.aCalm = 0
 	case c.aUp >= alphaRiseN && mine && (d < alphaMatch*c.aRate || c.aQ > big):
 		c.aCutFrom = math.Min(c.aRate, d)
 		c.aRate = c.aCutFrom * (1 - cut)
 		c.aCuts++
+		c.aCalm = 0
 	default:
 		g := alphaGrow
 		if c.aQ < low {
@@ -414,6 +595,19 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 		}
 		if c.aOWD && AlphaPlateau != 0 && c.aCutFrom > 0 && c.aRate >= alphaNear*c.aCutFrom && c.aRate <= c.aCutFrom/alphaNear {
 			g = alphaGrowNear // near the rate it was cut from: the path's
+		}
+		if c.aOWD && AlphaProbe != 0 {
+			// γ1's probe: a cap that bound with no queue for alphaProbeN
+			// readings grows faster each reading, the plateau over
+			if c.aQ < low/4 && d >= alphaMatch*c.aRate {
+				c.aCalm++
+			} else {
+				c.aCalm = 0
+			}
+			if c.aCalm > alphaProbeN {
+				g = math.Max(g, probeGrow(c.aCalm-alphaProbeN))
+				c.aCutFrom = 0
+			}
 		}
 		if c.aOWD && AlphaFree != 0 && c.aFree >= alphaFreeN {
 			g = math.Max(g, alphaGrowFree) // no queue for a while: room on the path
@@ -487,7 +681,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	if c.on {
 		if c.alpha {
 			c.alphaStep(s, arming)
-			c.own = uint64(c.aRate)
+			c.own = uint64(c.alphaCap())
 		} else {
 			c.own = uint64(math.Max(wcNetKOf()*c.maxDlv(), wcPaceFloor))
 		}
@@ -626,8 +820,8 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 		l.blockSeen = b
 	}
 	if ts.dlvOK {
-		var oq time.Duration
-		ook := false
+		var oq, nq time.Duration
+		ook, nok := false, false
 		if l.owd != nil {
 			// the beat follows the busier direction of the link
 			rx := 0.0
@@ -635,16 +829,25 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 				rx = float64(ts.bytesReceived-l.rx0) / (now - l.rxAt).Seconds()
 			}
 			l.rx0, l.rxAt = ts.bytesReceived, now
+			r := max(l.core.maxDlv(), rx)
 			src := owdShared(l.owd)
-			src.noteRate(max(l.core.maxDlv(), rx))
+			src.noteRate(r)
+			own := AlphaOwnOn() && src != l.owd
+			if own {
+				l.owd.noteRate(r) // its own loop's beat, and whether it is idle (γ1)
+			}
 			if l.core.alpha {
 				oq, ook = src.queue()
+				if own {
+					nq, nok = l.owd.queue()
+				}
 			}
 		}
 		owait := l.owd != nil && l.core.alpha && !ook && !OWDOff()
 		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),
-			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook, OWDwait: owait}))
+			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook, OWDwait: owait,
+			OWN: nq, OWNok: nok}))
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
 	}
@@ -711,8 +914,13 @@ func (l *sendCapLink) line(n int) string {
 		if c.aStart {
 			start = ", start"
 		}
-		return fmt.Sprintf("sendcap link %d: alpha cap %.1f Mbit/s (queue %.1f ms %s, target %.0f ms; cuts %d, grows %d%s), app-limited %.0f%%, idle-lifted %d",
-			n, float64(c.set)*8/1e6, msOf(c.aQ), src, msOf(alphaLow), c.aCuts, c.aGrows, start, share, c.lifts)
+		own := ""
+		if c.bRate > 0 {
+			own = fmt.Sprintf("; own %.1f Mbit/s, queue %.1f ms past the shared, target %.1f ms, cuts %d, grows %d",
+				c.bRate*8/1e6, msOf(c.bQ), msOf(c.bTgt), c.bCuts, c.bGrows)
+		}
+		return fmt.Sprintf("sendcap link %d: alpha cap %.1f Mbit/s (queue %.1f ms %s, target %.0f ms; cuts %d, grows %d%s%s), app-limited %.0f%%, idle-lifted %d",
+			n, float64(c.set)*8/1e6, msOf(c.aQ), src, msOf(alphaLow), c.aCuts, c.aGrows, start, own, share, c.lifts)
 	}
 	return fmt.Sprintf("sendcap link %d: cap %.0f Mbit/s (%g x max delivery 2s), app-limited %.0f%%, idle-lifted %d",
 		n, float64(c.set)*8/1e6, wcNetKOf(), share, c.lifts)

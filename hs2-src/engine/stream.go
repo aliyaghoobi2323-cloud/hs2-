@@ -267,6 +267,12 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		// user's probe that moment, 198 of them a padded record each
 		tlscarrier.SetCongestion(tc, QuietCC)
 	}
+	if quietLink && sched && QuietCoalesce > 0 {
+		// γ1 (quiet.go, QuietCoalesce): the light frames of a busy QUIET
+		// link share their padded records within a short window
+		cfg.Coalesce = time.Duration(QuietCoalesce) * time.Microsecond
+		cfg.CoalesceMin = float64(QuietCoalesceMin)
+	}
 	if server {
 		sess, err = smux.Server(w, cfg)
 	} else {

@@ -87,6 +87,77 @@ const (
 // flushes it each time it runs out of frames.
 type flusher interface{ Flush() error }
 
+// coalescer is the session writer's hold of a tail of light frames
+// (Config.Coalesce; not bulk ones: those wait schedFlushWait for the next
+// as before). A light frame written while the session wrote at least
+// CoalesceMin light frames over the last second starts a hold of
+// Config.Coalesce, from that frame: the frames written within it share the
+// tail's record (hs2's shaper sends a record as soon as it is full, so the
+// hold ends earlier when they fill it). An urgent frame (Stream.SetUrgent)
+// ends the hold at once: its tail goes out as soon as the writer runs dry.
+type coalescer struct {
+	win     time.Duration
+	min     float64
+	holding bool
+	urgent  bool
+	since   int64 // monoNow of the first frame of the hold
+	// the light frames of the last second, coalBuckets of coalBucket each
+	// (ring), and the bucket of the latest
+	n   [coalBuckets]uint32
+	cur int64
+}
+
+const (
+	coalBucket  = 100 * time.Millisecond
+	coalBuckets = 10
+)
+
+// count notes a light frame at now and is the light frames of the last
+// second.
+func (c *coalescer) count(now int64) float64 {
+	b := now / int64(coalBucket)
+	switch d := b - c.cur; {
+	case d >= coalBuckets || d < 0:
+		c.n = [coalBuckets]uint32{}
+	default:
+		for k := int64(1); k <= d; k++ {
+			c.n[(c.cur+k)%coalBuckets] = 0
+		}
+	}
+	c.cur = b
+	c.n[b%coalBuckets]++
+	sum := 0.0
+	for _, v := range c.n {
+		sum += float64(v)
+	}
+	return sum
+}
+
+// wrote: a light frame (urgent: of an urgent stream) went into the conn.
+func (c *coalescer) wrote(urgent bool, now int64) {
+	r := c.count(now)
+	if urgent {
+		c.urgent = true
+	}
+	if !c.holding && r >= c.min {
+		c.holding, c.since = true, now
+	}
+}
+
+// left is how long the hold has left (0: none, or it ends now).
+func (c *coalescer) left(now int64) time.Duration {
+	if !c.holding || c.urgent {
+		return 0
+	}
+	if l := time.Duration(c.since + int64(c.win) - now); l > 0 {
+		return l
+	}
+	return 0
+}
+
+// flushed: the writer flushed the conn.
+func (c *coalescer) flushed() { c.holding, c.urgent = false, false }
+
 // schedFrame is one frame for the scheduler, with its place in its user's
 // FIFO while it waits for room.
 type schedFrame struct {
@@ -106,6 +177,9 @@ type schedFrame struct {
 	// early: a data frame whose writer has its result once the session's
 	// writer has copied it, not once it is written (Config.EarlyDone)
 	early bool
+	// urgent: a frame of an urgent stream (Stream.SetUrgent): no
+	// coalescing hold after it (Config.Coalesce)
+	urgent bool
 }
 
 const (
@@ -437,18 +511,33 @@ func (s *Session) sendLoopSched() {
 	fl, _ := s.conn.(flusher)
 	var hold *time.Timer
 	held := false // the conn holds a tail of a bulk frame (fl)
+	var co *coalescer
+	if fl != nil && s.config.Coalesce > 0 {
+		co = &coalescer{win: s.config.Coalesce, min: s.config.CoalesceMin}
+	}
 	for {
 		sf := sc.take()
 		if sf == nil {
+			// a bulk stream queues its next frame as soon as its last is
+			// written: the tail waits schedFlushWait for it before it goes
+			// out padded (a link of one download flushed, and padded, every
+			// frame); a tail of light frames (Coalesce) waits till its
+			// window from the first of them ends
+			wait := time.Duration(0)
 			if held {
-				// a bulk stream queues its next frame as soon as its last
-				// is written: the tail waits schedFlushWait for it before
-				// it goes out padded (a link of one download flushed, and
-				// padded, every frame)
+				wait = schedFlushWait
+			}
+			if co != nil && co.holding {
+				lw := co.left(monoNow())
+				if !held || lw < wait {
+					wait = lw
+				}
+			}
+			if wait > 0 {
 				if hold == nil {
-					hold = time.NewTimer(schedFlushWait)
+					hold = time.NewTimer(wait)
 				} else {
-					hold.Reset(schedFlushWait)
+					hold.Reset(wait)
 				}
 				select {
 				case <-sc.wake:
@@ -464,6 +553,9 @@ func (s *Session) sendLoopSched() {
 				}
 			}
 			held = false
+			if co != nil {
+				co.flushed()
+			}
 			if fl != nil {
 				if err := fl.Flush(); err != nil {
 					s.notifyWriteError(err)
@@ -515,6 +607,9 @@ func (s *Session) sendLoopSched() {
 			sc.wrote.Add(uint64(n))
 		}
 		held = fl != nil && sf.lane == LaneBulk
+		if co != nil && sf.lane != LaneBulk {
+			co.wrote(sf.urgent, monoNow())
+		}
 		n -= hl
 		if n < 0 {
 			n = 0
@@ -547,7 +642,7 @@ func (s *Session) queueSched(f Frame, class CLASSID, tag uint32, lane uint8) (wr
 		return req, s.socketWriteError.Load().(error)
 	default:
 	}
-	sf := &schedFrame{tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + f.wireLen()}
+	sf := &schedFrame{tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + f.wireLen(), urgent: f.urgent}
 	if class != CLSDATA {
 		sf.tag, sf.lane = 0, LaneCtrl
 	} else {

@@ -489,6 +489,11 @@ func TestQuietCounts(t *testing.T) {
 	if QuietOff() {
 		t.Skip("HS2_TUNE_QUIET=0")
 	}
+	// round 2's counts: QUIET within max_links, two from N=4 on (the
+	// defaults are 1 and 1 since round 3: TestQuietCountsExtra)
+	oe, ot := QuietExtra, QuietTwo
+	QuietExtra, QuietTwo = 0, 1
+	defer func() { QuietExtra, QuietTwo = oe, ot }()
 	for _, c := range []struct{ max, q, bulk, total int }{
 		{1, 1, 1, 2}, {2, 1, 1, 2}, {3, 1, 2, 3}, {4, 2, 2, 4}, {8, 2, 6, 8}, {300, 2, 298, 300},
 	} {
