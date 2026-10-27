@@ -1,5 +1,8 @@
 old /root/r3b/bins/hs2-base
 b2nx /root/r3b/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1
 g2a /root/r3b/bins/hs2-g2a
-g2anb /root/r3b/bins/hs2-g2a HS2_TUNE_QUIET_BATCH=0
-g2aal /root/r3b/bins/hs2-g2a HS2_TUNE_BUDGET=0
+g2b /root/r3b/bins/hs2-g2b
+g2bnb /root/r3b/bins/hs2-g2b HS2_TUNE_QUIET_BATCH=0
+g2blz /root/r3b/bins/hs2-g2b HS2_TUNE_QUIET_LAZY=0
+g2bq1 /root/r3b/bins/hs2-g2b HS2_TUNE_QUIET_N=1
+g2bal /root/r3b/bins/hs2-g2b HS2_TUNE_BUDGET=0
