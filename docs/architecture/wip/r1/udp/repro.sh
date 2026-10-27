@@ -204,7 +204,7 @@ PY
   sleep 2
 fi
 
-if has release && [ -n "${HOLD:-}" ]; then kill $HOLD 2>/dev/null; sleep 4; fi
+if has release && [ -n "${HOLD:-}" ]; then pkill -P $HOLD 2>/dev/null; kill $HOLD 2>/dev/null; sleep 4; fi
 if has v6; then UA="[fd00:201::1]:$PORTS"; SRC=fd77:1::5; else UA="$EIP:$PORTS"; SRC=10.100.0.1; fi
 EALIVE=0; kill -0 $P_edge 2>/dev/null && EALIVE=1
 XALIVE=0; kill -0 $P_exit 2>/dev/null && XALIVE=1
