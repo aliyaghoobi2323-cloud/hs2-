@@ -212,6 +212,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	switch kind[0] {
 	case kindCtrl:
 		serveControl(ctx, st, car)
+	case kindOWD:
+		owdLoop(ctx, st) // α's one-way delays on a QUIET link (owd.go)
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
 	case kindStats:

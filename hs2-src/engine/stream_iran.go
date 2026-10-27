@@ -120,6 +120,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// link count.
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, logf)
+		go openOWD(ctx, l) // a QUIET link: α's one-way delays (owd.go)
 		go openStats(ctx, l, logf)
 		go func() { // tell the exit our ceiling and user ports, learn its own
 			mtr := linkMeterOf(l)

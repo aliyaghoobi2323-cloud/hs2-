@@ -326,6 +326,11 @@ func applyTuning() {
 	num("HS2_TUNE_QUIET", &engine.TuneQuiet)
 	num("HS2_TUNE_EARLYDONE", &engine.TuneEarlyDone)
 	num("HS2_TUNE_ALPHA", &engine.TuneAlpha) // α's cap on BULK links (0: C4-lite's there too)
+	// the judge's fixes to α: C4-lite's cap till the first queue of its
+	// own (0: β2's slow start), and the QUIET link's one-way delay as its
+	// queue (0: srtt − min_rtt)
+	num("HS2_TUNE_ALPHA_START", &engine.TuneAlphaStart)
+	num("HS2_TUNE_OWD", &engine.TuneOWD)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
