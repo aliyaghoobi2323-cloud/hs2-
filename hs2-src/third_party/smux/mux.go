@@ -130,6 +130,14 @@ type Config struct {
 	// the writers of other users do not. 0: no bound.
 	UserFrames int
 
+	// EarlyDone, with Sched: a stream's writer may queue its next data
+	// frame as soon as the session's writer has copied the one before (its
+	// place among the session's frames is then fixed), not once that one
+	// is written: a stream has one frame queued while one is written, so a
+	// user of one stream still has a frame queued each time the writer
+	// takes the next (P10 (b)). False: the writer waits for the write.
+	EarlyDone bool
+
 	// UserMem, with Sched: the account of a user's queued bytes, asked once
 	// per user as its first frame is queued. The session calls it with the
 	// bytes of each data frame it queues (n > 0) and takes (n < 0): for a

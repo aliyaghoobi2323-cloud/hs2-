@@ -103,6 +103,9 @@ type schedFrame struct {
 	// done: WriteFlowAsync's, called by the writer once the frame is written
 	// or will not be (nil: the writer of the frame waits on req.result)
 	done func(error)
+	// early: a data frame whose writer has its result once the session's
+	// writer has copied it, not once it is written (Config.EarlyDone)
+	early bool
 }
 
 const (
@@ -426,10 +429,10 @@ func (s *Session) sendLoopSched() {
 		WriteBuffers(v [][]byte) (n int, err error)
 	})
 	if ok {
-		buf = make([]byte, headerSize)
+		buf = make([]byte, headerSize+seqLen)
 		vec = make([][]byte, 2)
 	} else {
-		buf = make([]byte, (1<<16)+headerSize)
+		buf = make([]byte, (1<<16)+headerSize+seqLen)
 	}
 	fl, _ := s.conn.(flusher)
 	var hold *time.Timer
@@ -479,32 +482,46 @@ func (s *Session) sendLoopSched() {
 		req := sf.req
 		buf[0] = req.frame.ver
 		buf[1] = req.frame.cmd
-		binary.LittleEndian.PutUint16(buf[2:], uint16(len(req.frame.data)))
+		binary.LittleEndian.PutUint16(buf[2:], uint16(req.frame.wireLen()))
 		binary.LittleEndian.PutUint32(buf[4:], req.frame.sid)
+		hl := headerSize
+		if req.frame.hasSeq {
+			binary.BigEndian.PutUint32(buf[headerSize:], req.frame.seq)
+			hl += seqLen
+		}
 		var n int
 		var err error
+		told := false // the frame's writer has its result (EarlyDone)
 		data := req.take()
 		if len(vec) > 0 {
-			vec[0] = buf[:headerSize]
+			vec[0] = buf[:hl]
 			vec[1] = data
 			n, err = bw.WriteBuffers(vec)
 			req.done()
 		} else {
-			copy(buf[headerSize:], data)
+			copy(buf[hl:], data)
 			req.done()
-			n, err = s.conn.Write(buf[:headerSize+len(data)])
+			if sf.early {
+				// its data is copied and its place among the session's
+				// frames fixed: its stream may queue the next one while this
+				// one is written (a write error ends the session)
+				req.result <- writeResult{n: len(data)}
+				close(req.result)
+				told = true
+			}
+			n, err = s.conn.Write(buf[:hl+len(data)])
 		}
 		if n > 0 {
 			sc.wrote.Add(uint64(n))
 		}
 		held = fl != nil && sf.lane == LaneBulk
-		n -= headerSize
+		n -= hl
 		if n < 0 {
 			n = 0
 		}
 		if sf.done != nil {
 			sf.done(err)
-		} else {
+		} else if !told {
 			req.result <- writeResult{n: n, err: err}
 			close(req.result)
 		}
@@ -530,9 +547,11 @@ func (s *Session) queueSched(f Frame, class CLASSID, tag uint32, lane uint8) (wr
 		return req, s.socketWriteError.Load().(error)
 	default:
 	}
-	sf := &schedFrame{tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + len(f.data)}
+	sf := &schedFrame{tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + f.wireLen()}
 	if class != CLSDATA {
 		sf.tag, sf.lane = 0, LaneCtrl
+	} else {
+		sf.early = s.config.EarlyDone
 	}
 	req.sf = sf
 	sf.req = req

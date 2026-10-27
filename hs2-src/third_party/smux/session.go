@@ -120,6 +120,7 @@ type Session struct {
 	streams    map[uint32]*Stream // all streams in this session
 	streamLock sync.Mutex         // locks streams
 	badSyn     atomic.Uint64      // SYNs refused for their payload (BadSyn)
+	badSeq     atomic.Uint64      // group frames without data, dropped (BadSeq)
 
 	die     chan struct{} // flag session has died
 	dieOnce sync.Once
@@ -198,8 +199,18 @@ func (s *Session) OpenStream() (*Stream, error) {
 
 // OpenStreamSyn creates a new stream whose SYN carries p (EncodeSyn).
 func (s *Session) OpenStreamSyn(p [SynPayloadLen]byte) (*Stream, error) {
+	return s.openStreamSyn(p, true)
+}
+
+// openStreamSyn opens a stream whose SYN carries p; wait: return once the
+// SYN is written, else once it is queued (the frames the caller queues on
+// the stream next go out after it).
+func (s *Session) openStreamSyn(p [SynPayloadLen]byte, wait bool) (*Stream, error) {
 	if s.IsClosed() {
 		return nil, io.ErrClosedPipe
+	}
+	if !synValid(p) {
+		return nil, ErrBadSyn
 	}
 
 	// generate stream id
@@ -220,6 +231,7 @@ func (s *Session) OpenStreamSyn(p [SynPayloadLen]byte) (*Stream, error) {
 
 	stream := newStream(sid, s.config.MaxFrameSize, s)
 	stream.syn = p
+	stream.seqOn = binary.BigEndian.Uint32(p[5:]) != 0
 
 	// The stream is known before its SYN leaves: the peer may send on it as
 	// soon as it has the SYN, before writeFrame returns, and recvLoop drops
@@ -243,12 +255,22 @@ func (s *Session) OpenStreamSyn(p [SynPayloadLen]byte) (*Stream, error) {
 
 	f := newFrame(byte(s.config.Version), cmdSYN, sid)
 	f.data = stream.syn[:]
+	if !wait {
+		if _, err := s.queueFrame(f, nil, CLSCTRL); err != nil {
+			s.streamClosed(sid)
+			return nil, err
+		}
+		return stream, nil
+	}
 	if _, err := s.writeFrame(f); err != nil {
 		s.streamClosed(sid)
 		return nil, err
 	}
 	return stream, nil
 }
+
+// ErrBadSyn: a SYN payload with a sub-stream role and no group.
+var ErrBadSyn = errors.New("smux: a sub-stream role needs a group")
 
 // Open returns a generic ReadWriteCloser
 func (s *Session) Open() (io.ReadWriteCloser, error) {
@@ -485,6 +507,7 @@ func (s *Session) recvLoop() {
 					if !known {
 						stream := newStream(sid, s.config.MaxFrameSize, s)
 						stream.syn = syn
+						stream.seqOn = binary.BigEndian.Uint32(syn[5:]) != 0
 						s.streams[sid] = stream
 						select {
 						case s.chAccepts <- stream:
@@ -515,7 +538,21 @@ func (s *Session) recvLoop() {
 					if written, err := io.ReadFull(s.conn, newbuf); err == nil {
 						s.rcvd.Add(uint64(written))
 						s.streamLock.Lock()
-						if stream, ok := s.streams[sid]; ok {
+						if stream, ok := s.streams[sid]; ok && stream.seqOn {
+							// a group stream's frame: its number, then at
+							// least one data byte (the window counts data)
+							if written > seqLen {
+								stream.pushSeq(newbuf, binary.BigEndian.Uint32(newbuf))
+								free := atomic.AddInt32(&s.bucket, -int32(written-seqLen))
+								stream.notifyReadEvent()
+								if s.config.MinStreamBuffer > 0 {
+									stream.checkLag(int(free))
+								}
+							} else {
+								s.badSeq.Add(1)
+								defaultAllocator.Put(newbuf)
+							}
+						} else if ok {
 							stream.pushBytes(newbuf)
 							free := atomic.AddInt32(&s.bucket, -int32(written))
 							stream.notifyReadEvent()
@@ -637,10 +674,10 @@ func (s *Session) sendLoop() {
 	})
 
 	if ok {
-		buf = make([]byte, headerSize)
+		buf = make([]byte, headerSize+seqLen)
 		vec = make([][]byte, 2)
 	} else {
-		buf = make([]byte, (1<<16)+headerSize)
+		buf = make([]byte, (1<<16)+headerSize+seqLen)
 	}
 
 	for {
@@ -650,22 +687,27 @@ func (s *Session) sendLoop() {
 		case request := <-s.writes:
 			buf[0] = request.frame.ver
 			buf[1] = request.frame.cmd
-			binary.LittleEndian.PutUint16(buf[2:], uint16(len(request.frame.data)))
+			binary.LittleEndian.PutUint16(buf[2:], uint16(request.frame.wireLen()))
 			binary.LittleEndian.PutUint32(buf[4:], request.frame.sid)
+			hl := headerSize
+			if request.frame.hasSeq {
+				binary.BigEndian.PutUint32(buf[headerSize:], request.frame.seq)
+				hl += seqLen
+			}
 
 			data := request.take()
 			if len(vec) > 0 {
-				vec[0] = buf[:headerSize]
+				vec[0] = buf[:hl]
 				vec[1] = data
 				n, err = bw.WriteBuffers(vec)
 				request.done()
 			} else {
-				copy(buf[headerSize:], data)
+				copy(buf[hl:], data)
 				request.done()
-				n, err = s.conn.Write(buf[:headerSize+len(data)])
+				n, err = s.conn.Write(buf[:hl+len(data)])
 			}
 
-			n -= headerSize
+			n -= hl
 			if n < 0 {
 				n = 0
 			}

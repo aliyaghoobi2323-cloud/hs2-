@@ -79,6 +79,16 @@ type Stream struct {
 	// (SetFlowCtx)
 	txBytes atomic.Uint64
 	fctx    atomic.Value
+
+	// a group stream (its SYN names a group, group.go): each data frame
+	// starts with its sequence number. seqs holds the numbers of the frames
+	// in buffers (under bufferLock); grp is its logical connection (set
+	// once, before it reads or writes).
+	seqOn bool
+	seqs  []uint32
+	grp   *Group
+	// rxBytes: data bytes received so far (RxBytes)
+	rxBytes atomic.Uint64
 }
 
 // newStream initiates a Stream struct
@@ -128,6 +138,27 @@ func (s *Stream) Syn() (userTag uint32, classHint byte) {
 	return binary.BigEndian.Uint32(s.syn[0:]), s.syn[4] & 0x03
 }
 
+// GroupInfo returns the group, role and sequence base its SYN carried
+// (group 0: a stream on its own).
+func (s *Stream) GroupInfo() (group uint32, role uint8, seqBase uint32) {
+	return binary.BigEndian.Uint32(s.syn[5:]), s.syn[4] >> 2 & 0x03, binary.BigEndian.Uint32(s.syn[9:])
+}
+
+// RxBytes is how many data bytes the stream has received so far.
+func (s *Stream) RxBytes() uint64 { return s.rxBytes.Load() }
+
+// popLocked drops the head buffer (all of it read) and its sequence
+// number. Caller holds bufferLock.
+func (s *Stream) popLocked() {
+	s.buffers[0] = nil
+	s.buffers = s.buffers[1:]
+	defaultAllocator.Put(s.heads[0])
+	s.heads = s.heads[1:]
+	if s.seqOn {
+		s.seqs = s.seqs[1:]
+	}
+}
+
 // Read implements net.Conn
 func (s *Stream) Read(b []byte) (n int, err error) {
 	for {
@@ -157,11 +188,7 @@ func (s *Stream) tryRead(b []byte) (n int, err error) {
 		n = copy(b, s.buffers[0])
 		s.buffers[0] = s.buffers[0][n:]
 		if len(s.buffers[0]) == 0 {
-			s.buffers[0] = nil
-			s.buffers = s.buffers[1:]
-			// full recycle
-			defaultAllocator.Put(s.heads[0])
-			s.heads = s.heads[1:]
+			s.popLocked() // full recycle
 		}
 	}
 	s.unread -= n
@@ -191,11 +218,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 		n = copy(b, s.buffers[0])
 		s.buffers[0] = s.buffers[0][n:]
 		if len(s.buffers[0]) == 0 {
-			s.buffers[0] = nil
-			s.buffers = s.buffers[1:]
-			// full recycle
-			defaultAllocator.Put(s.heads[0])
-			s.heads = s.heads[1:]
+			s.popLocked() // full recycle
 		}
 	}
 	s.unread -= n
@@ -243,6 +266,9 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 			buf = s.buffers[0]
 			s.buffers = s.buffers[1:]
 			s.heads = s.heads[1:]
+			if s.seqOn {
+				s.seqs = s.seqs[1:]
+			}
 		}
 		s.unread -= len(buf)
 		s.bufferLock.Unlock()
@@ -273,6 +299,9 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 			buf = s.buffers[0]
 			s.buffers = s.buffers[1:]
 			s.heads = s.heads[1:]
+			if s.seqOn {
+				s.seqs = s.seqs[1:]
+			}
 		}
 		s.unread -= len(buf)
 		if len(buf) > 0 {
@@ -910,6 +939,7 @@ func (s *Stream) RemoteAddr() net.Addr {
 // pushBytes append buf to buffers
 func (s *Stream) pushBytes(buf []byte) (written int, err error) {
 	s.markAnswered()
+	s.rxBytes.Add(uint64(len(buf)))
 	s.bufferLock.Lock()
 	s.buffers = append(s.buffers, buf)
 	s.heads = append(s.heads, buf)
@@ -917,6 +947,21 @@ func (s *Stream) pushBytes(buf []byte) (written int, err error) {
 	s.turned()
 	s.bufferLock.Unlock()
 	return
+}
+
+// pushSeq appends a group stream's frame: head is the frame as read (its
+// sequence number, then its data), seq the number.
+func (s *Stream) pushSeq(head []byte, seq uint32) {
+	s.markAnswered()
+	data := head[seqLen:]
+	s.rxBytes.Add(uint64(len(data)))
+	s.bufferLock.Lock()
+	s.buffers = append(s.buffers, data)
+	s.heads = append(s.heads, head)
+	s.seqs = append(s.seqs, seq)
+	s.unread += len(data)
+	s.turned()
+	s.bufferLock.Unlock()
 }
 
 // recycleTokens transform remaining bytes to tokens(will truncate buffer),
@@ -929,6 +974,7 @@ func (s *Stream) recycleTokens() (n int) {
 	}
 	s.buffers = nil
 	s.heads = nil
+	s.seqs = nil
 	s.unread = 0
 	s.dropClaim()
 	s.bufferLock.Unlock()

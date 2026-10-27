@@ -28,6 +28,23 @@ func (s *Stream) writeSched(b []byte, window bool) (n int, err error) {
 		defer timer.Stop()
 		deadline = timer.C
 	}
+	if s.grp != nil {
+		// a group's stream: its frames are the group's (Group.Write)
+		return 0, ErrNoMove
+	}
+	return s.writeFrames(b, window, deadline, nil, nil)
+}
+
+// writeFrames is writeSched's body. With g (the stream is one of g's), each
+// frame carries g's next number, and it stops (errSwitched, what it sent so
+// far) at the frame boundary where g's writer has moved to another stream:
+// sw closes then.
+func (s *Stream) writeFrames(b []byte, window bool, deadline <-chan time.Time, g *Group, sw <-chan struct{}) (n int, err error) {
+	select {
+	case <-s.die:
+		return 0, io.ErrClosedPipe
+	default:
+	}
 	sess := s.sess
 	sent := 0
 	frame := newFrame(byte(sess.config.Version), cmdPSH, s.id)
@@ -56,20 +73,42 @@ func (s *Stream) writeSched(b []byte, window bool) (n int, err error) {
 				sz = len(bts)
 			}
 			frame.data = bts[:sz]
+			if g != nil {
+				seq, ok := g.nextSeq(s)
+				if !ok {
+					return sent, errSwitched
+				}
+				frame.seq, frame.hasSeq = seq, true
+			}
 			bts = bts[sz:]
 			s.txBytes.Add(uint64(sz))
+			// counted before it can go out: the peer's update for it never
+			// finds more consumed than written (EarlyDone hands the result
+			// back while the frame is being written)
+			atomic.AddUint32(&s.numWritten, uint32(sz))
 			req, err := sess.queueSched(frame, CLSDATA, tag, lane)
 			n := 0
 			if err == nil {
 				n, err = sess.frameWritten(req, deadline)
+				if g != nil {
+					g.frameDone(s)
+				}
 				if err != nil && sess.sch.gone(req.sf) {
 					// it left its user's FIFO unsent: not in the window
+					atomic.AddUint32(&s.numWritten, ^uint32(sz-1))
+					if g != nil {
+						g.lose() // its number never goes out
+					}
 					return sent, err
 				}
 			} else {
+				atomic.AddUint32(&s.numWritten, ^uint32(sz-1))
+				if g != nil {
+					g.frameDone(s)
+					g.lose()
+				}
 				return sent, err
 			}
-			atomic.AddUint32(&s.numWritten, uint32(sz))
 			sent += n
 			if err != nil {
 				return sent, err
@@ -81,6 +120,9 @@ func (s *Stream) writeSched(b []byte, window bool) (n int, err error) {
 		// wait until stream closes, window changes or deadline reached
 		select {
 		case <-s.chFinEvent: // if fin arrived, future window update is impossible
+			if g != nil {
+				return sent, io.EOF
+			}
 			return 0, io.EOF
 		case <-s.die:
 			return sent, io.ErrClosedPipe
@@ -89,6 +131,8 @@ func (s *Stream) writeSched(b []byte, window bool) (n int, err error) {
 		case <-sess.chSocketWriteError:
 			return sent, sess.socketWriteError.Load().(error)
 		case <-s.chUpdate:
+		case <-sw:
+			return sent, errSwitched
 		}
 	}
 }
