@@ -127,6 +127,32 @@ func (w *watchConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// writeHold, flushHeld: the shaper's under it (holdWriter; the link
+// scheduler's writer), watched as Write.
+func (w *watchConn) writeHold(p []byte, hold bool) (int, error) {
+	h, ok := w.Conn.(holdWriter)
+	if !ok {
+		return w.Write(p)
+	}
+	n, err := h.writeHold(p, hold)
+	if err != nil {
+		w.fail("write", err)
+	}
+	return n, err
+}
+
+func (w *watchConn) flushHeld() error {
+	h, ok := w.Conn.(holdWriter)
+	if !ok {
+		return nil
+	}
+	err := h.flushHeld()
+	if err != nil {
+		w.fail("write", err)
+	}
+	return err
+}
+
 // reasonPeerClosed is describeNetErr's words for a clean close by the peer: EOF
 // at a TLS record boundary — after its close_notify (how the edge ends a link it
 // retires), or after a bare TCP FIN (crypto/tls reports both as io.EOF, so they
@@ -175,16 +201,38 @@ func describeNetErr(err error) string {
 // Every session is watched by the wedge guard (wedge.go); its guard is left in
 // meter.guard for the relays on the link. A session that can grow windows
 // past NeedStreamBuffer gets a window core (wcore_run.go), left in meter.wc.
+//
+// R1's cores run on it as far as this side's kill switches and caps, the
+// caps both ends have (tlscarrier.Carrier.Caps; newSession: this binary's),
+// allow (r1run.go): the link scheduler (C2, linksched.go) writes the
+// session's frames in place of smux's own writer, C3's guard (hostq.go)
+// takes the send gate's place under the shaper, and C4-lite (sendcap.go)
+// caps the socket's pacing.
 func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, func() string, error) {
+	return newSessionCaps(conn, server, sampler, meter, tlscarrier.LocalAuthHdr().Caps)
+}
+
+// newSessionCaps is newSession for a link whose ends both have caps.
+func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter, caps uint32) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
-	gate := newSendGate(conn)
-	var c net.Conn = newShapedConn(gate, sampler)
+	tcp := tcpUnder(conn)
+	var low net.Conn // what the shaper writes to: C3's guard, or the send gate
+	var tally writeTally
+	var hq *hostQ
+	if !HostQOff() && caps&tlscarrier.CapHostQ != 0 {
+		hq = newHostQ(conn, newHostSys(conn))
+		low, tally = &hostQConn{Conn: conn, hq: hq, tcp: tcp}, hq
+	} else {
+		gate := newSendGate(conn)
+		low, tally = gate, gate
+	}
+	var c net.Conn = newShapedConn(low, sampler)
 	if meter != nil {
-		c = &meteredConn{Conn: c, m: meter, gate: gate}
+		c = &meteredConn{Conn: c, m: meter, gate: tally}
 	}
 	w := &watchConn{Conn: c}
 	w.onErr = func() {
-		gate.Close() // conn's Close, ending a write waiting at the gate
+		low.Close() // conn's Close, ending a write waiting at the gate
 		if s := sp.Load(); s != nil {
 			s.Close()
 		}
@@ -192,24 +240,38 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 	var sess *smux.Session
 	var err error
 	cfg := newSmuxConfig()
-	if server {
+	var ls *linkSched
+	if !SchedOff() && caps&tlscarrier.CapSched != 0 {
+		ls = newLinkSched(w)
+	}
+	switch {
+	case ls != nil && server:
+		sess, err = smux.ServerQueued(w, cfg, ls)
+	case ls != nil:
+		sess, err = smux.ClientQueued(w, cfg, ls)
+	case server:
 		sess, err = smux.Server(w, cfg)
-	} else {
+	default:
 		sess, err = smux.Client(w, cfg)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	sp.Store(sess)
+	if ls != nil {
+		ls.start(sess)
+	}
 	g := &sessGuard{w: w}
 	g.sess.Store(sess)
 	if meter != nil {
 		meter.guard = g
 	}
 	guards.add(g)
-	if wc := wcores.add(sess, cfg, gate.tcp, meter, server, conn.RemoteAddr()); wc != nil && meter != nil {
+	wc := wcores.add(sess, cfg, tcp, meter, server, conn.RemoteAddr())
+	if wc != nil && meter != nil {
 		meter.wc = wc
 	}
+	r1Links.add(sess, ls, hq, tcp, meter, wc, caps)
 	return sess, w.reason, nil
 }
 

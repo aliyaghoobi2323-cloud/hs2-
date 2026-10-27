@@ -229,8 +229,12 @@ type peerLossRec struct {
 type meteredConn struct {
 	net.Conn
 	m    *linkMeter
-	gate *sendGate // the link's send gate, told what each write took (nil: none)
+	gate writeTally // the link's send gate (or C3's guard), told what each write took (nil: none)
 }
+
+// writeTally is told what each of the link writer's writes took (sendGate,
+// hostQ).
+type writeTally interface{ took(n int, d time.Duration) }
 
 // blockedNs is wrBlocked with the wait of the write in progress counted in
 // (wrStart; past blockedMin, as Write counts one once it returns): a record
@@ -261,10 +265,29 @@ func (c *meteredConn) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (c *meteredConn) Write(p []byte) (int, error) {
+func (c *meteredConn) Write(p []byte) (int, error) { return c.write(p, false, false) }
+
+// writeHold, flushHeld: the shaper's (holdWriter), metered as a write.
+func (c *meteredConn) writeHold(p []byte, hold bool) (int, error) { return c.write(p, hold, true) }
+
+func (c *meteredConn) flushHeld() error {
+	_, err := c.write(nil, false, true)
+	return err
+}
+
+func (c *meteredConn) write(p []byte, hold, hw bool) (int, error) {
 	t0 := ctrlNow()
 	c.m.wrStart.Store(t0)
-	n, err := c.Conn.Write(p)
+	var n int
+	var err error
+	switch h, ok := c.Conn.(holdWriter); {
+	case hw && ok && len(p) == 0:
+		err = h.flushHeld()
+	case hw && ok:
+		n, err = h.writeHold(p, hold)
+	default:
+		n, err = c.Conn.Write(p)
+	}
 	c.m.wrStart.Store(0)
 	d := time.Duration(ctrlNow() - t0)
 	if c.gate != nil {
