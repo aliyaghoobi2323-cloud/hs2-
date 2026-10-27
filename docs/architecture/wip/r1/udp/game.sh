@@ -46,7 +46,7 @@ cat > "$W/edge.json" <<J
 {"mode":"dial","reverse":true,"carrier":"l3mtcp","udp":true,"addr":"10.201.0.1:2096",
  "iface":"hs0","local_cidr":"10.77.0.1/30","peer_ip":"10.77.0.2","mtu":1320,
  "shared_key":"$key","cert_file":"$W/cert.pem","key_file":"$W/key.pem","backend_addr":"builtin",
- "forward_ports":"5311,5312","min_links":$N,"max_links":$N,"per_link":8}
+ "forward_ports":"5311,5312","user_listen_ip":"10.201.0.1","min_links":$N,"max_links":$N,"per_link":8}
 J
 cat > "$W/exit.json" <<J
 {"mode":"listen","reverse":true,"carrier":"l3mtcp","addr":"10.201.0.1:2096","sni":"rig.example.com",

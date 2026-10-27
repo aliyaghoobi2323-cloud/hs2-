@@ -4,8 +4,12 @@
 #
 #   udpt.py echo ADDR [--no-udp] [--no-tcp]   echo server: TCP and UDP on ADDR
 #   udpt.py tcpcheck ADDR [--src IP] [--n N]   N round trips of 1 KiB over one connection
-#   udpt.py udpcheck ADDR [--src IP] [--n N]   N datagrams, one at a time, each waits
-#                                              up to 2 s for its echo
+#   udpt.py udpcheck ADDR [--src IP] [--n N] [--connected]
+#                                              N datagrams, one at a time, each waits
+#                                              up to 2 s for its echo; --connected: a
+#                                              connected socket (as game clients and
+#                                              xray use), which takes replies only from
+#                                              ADDR itself
 #   udpt.py hold ADDR                          bind UDP on ADDR and sleep (a port taken by
 #                                              another program)
 # tcpcheck/udpcheck print one JSON object: {"ok": k, "n": N, "err": "..."}.
@@ -110,10 +114,16 @@ def udpcheck(addr):
     s.settimeout(2)
     if src:
         s.bind((src, 0))
+    conn = "--connected" in sys.argv
+    if conn:
+        s.connect((host, port))
     for i in range(n):
         msg = b"udpt-%d-" % i + os.urandom(48)
         try:
-            s.sendto(msg, (host, port))
+            if conn:
+                s.send(msg)
+            else:
+                s.sendto(msg, (host, port))
             end = time.time() + 2
             while time.time() < end:
                 b, _ = s.recvfrom(65536)
