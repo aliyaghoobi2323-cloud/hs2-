@@ -532,13 +532,20 @@ func TestAlphaCap(t *testing.T) {
 	const rate = 25e6 / 8
 	// the judge's fix 1: till its own queue first passes 5 ms the cap is
 	// C4-lite's (1.25 x the 2 s delivery maximum); the queue ends the start
+	// (the start is judged on the link's one-way delay alone)
+	feedOWD := func(c *sendCap, dlv float64, q time.Duration, app bool) {
+		at += 100 * ms
+		acked += uint64(dlv / 10)
+		c.Update(capSample{Now: at, Delivery: dlv, AppLimited: app, Acked: acked, Written: acked, Segs: uint32(acked / 1000),
+			SRTT: 72*ms + q, MinRTT: 72 * ms, OWD: q, OWDok: true})
+	}
 	s := &sendCap{linked: true, alpha: true}
-	feed(s, rate, 2*ms, false)
-	feed(s, rate, 2*ms, false) // armed, no queue of its own: C4-lite's cap
+	feedOWD(s, rate, 2*ms, false)
+	feedOWD(s, rate, 2*ms, false) // armed, no queue of its own: C4-lite's cap
 	if !s.aStart || !near(s.aRate, wcNetKOf()*rate) {
 		t.Fatalf("start: cap %.0f (start %v), want C4-lite's %.0f", s.aRate, s.aStart, wcNetKOf()*rate)
 	}
-	feed(s, rate, 9*ms, false) // a queue past 5 ms: the start ends, the rules below hold
+	feedOWD(s, rate, 9*ms, false) // a queue past 5 ms: the start ends, the rules below hold
 	if s.aStart || s.aRate >= wcNetKOf()*rate {
 		t.Fatalf("a queue: cap %.0f (start %v), want the start over and the cap cut", s.aRate, s.aStart)
 	}

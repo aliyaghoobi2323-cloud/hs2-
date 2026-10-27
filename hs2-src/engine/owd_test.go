@@ -259,3 +259,28 @@ func TestAlphaStartWaitsForOWD(t *testing.T) {
 		t.Fatalf("no one-way delay yet: start %v, cap %.0f, want the start and C4-lite's %.0f", c.aStart, c.aRate, wcNetKOf()*1e7)
 	}
 }
+
+// Fix 1's start is judged before the app-limited hold: an app-limited
+// reading with a queue of its own past 5 ms ends it, the cap cut to what
+// was delivered (the first version held the start, and C4-lite's 1.25 x,
+// for good on app-limited readings).
+func TestAlphaStartEndsWhenAppLimited(t *testing.T) {
+	const ms = time.Millisecond
+	c := &sendCap{linked: true, alpha: true}
+	at, acked := time.Hour, 0.0
+	feed := func(q time.Duration, app bool) {
+		at += 100 * ms
+		acked += 1e6
+		c.Update(capSample{Now: at, Delivery: 1e7, AppLimited: app, Acked: uint64(acked), Written: uint64(acked),
+			Segs: uint32(acked / 1000), SRTT: 72 * ms, MinRTT: 72 * ms, OWD: q, OWDok: true})
+	}
+	feed(0, false)
+	feed(0, false)
+	if !c.aStart {
+		t.Fatal("armed: want the start")
+	}
+	feed(30*ms, true)
+	if c.aStart || c.aRate >= 1e7 {
+		t.Fatalf("app-limited with a 30 ms queue of its own: start %v, cap %.0f; want it over and the cap under %.0f", c.aStart, c.aRate, 1e7)
+	}
+}

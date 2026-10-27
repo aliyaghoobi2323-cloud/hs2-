@@ -146,7 +146,10 @@ type sendCap struct {
 var TuneAlpha = 1
 
 // TuneAlphaStart 0 (HS2_TUNE_ALPHA_START=0, lab): α starts from the
-// delivery rate it armed at and grows a few % a reading, as β2 had it.
+// delivery rate it armed at and grows a few % a reading, as β2 had it. The
+// start is judged on the link's one-way delay (fix 2) alone: with
+// HS2_TUNE_OWD=0 α is β2's (srtt − min_rtt holds the other direction's
+// queue, and β2's two-way loop test held its queue under 15 ms that way).
 //
 // The judge's fix 1 (R1 round 2): β2's α armed at the first delivery
 // sample of a BULK socket that flows had just moved to (4 to 10 Mbit/s) and
@@ -256,7 +259,7 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 	if arming || c.aRate <= 0 {
 		c.aRate = math.Max(c.maxDlv(), s.Delivery)
 		c.aDlv = [alphaRecent]float64{}
-		c.aStart = TuneAlphaStart != 0
+		c.aStart = TuneAlphaStart != 0 && !OWDOff()
 	}
 	c.aQ, c.aOWD = 0, false
 	switch {
@@ -282,20 +285,31 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 	for _, v := range c.aDlv {
 		d = math.Max(d, v)
 	}
-	if s.AppLimited && d < alphaKeep*c.aRate {
-		return // the sender had less to send than the cap let out: it holds
-	}
 	ceil := wcNetKOf() * c.maxDlv()
-	if c.aStart && (c.aOWD || s.OWDwait || s.SRTT > 0 && s.MinRTT > 0) {
+	// fix 1: till its own queue first passes alphaLow the cap is C4-lite's,
+	// whatever Linux's app-limited bit (under C4-lite's 1.25 x a sender
+	// fed by a 20 KiB lowat finds its queue empty on most samples: the
+	// judge's first version held the start, and a download's standing
+	// queue past 300 ms, for good behind the app-limited hold below); the
+	// first queue of its own ends it, the cap at what was delivered less
+	// the share that drains the queue past alphaLow
+	if c.aStart && (c.aOWD || s.OWDwait) {
 		if c.aQ <= alphaLow || s.OWDwait {
-			// fix 1: no queue of its own yet, C4-lite's cap
-			c.aRate = math.Max(c.aRate, ceil)
+			c.aRate = math.Max(ceil, alphaFloor)
 			c.aGrows++
 			c.aQ0 = c.aQ
-			c.aRate = math.Max(c.aRate, math.Max(alphaKMin*long, alphaFloor))
 			return
 		}
 		c.aStart = false
+		cut := math.Min(math.Max(float64(c.aQ-alphaLow), 0)/float64(alphaDrain), alphaCutMax)
+		c.aRate = math.Min(c.aRate, d) * (1 - cut)
+		c.aCuts++
+		c.aQ0 = c.aQ
+		c.aRate = math.Max(c.aRate, math.Max(alphaKMin*long, alphaFloor))
+		return
+	}
+	if s.AppLimited && d < alphaKeep*c.aRate {
+		return // the sender had less to send than the cap let out: it holds
 	}
 	if c.aQ > alphaLow && c.aQ > c.aQ0+alphaRise {
 		c.aUp++
