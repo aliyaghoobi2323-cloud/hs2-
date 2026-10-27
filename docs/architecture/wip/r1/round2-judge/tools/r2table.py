@@ -14,9 +14,12 @@ import ana  # noqa: E402
 
 LABEL = {"old": "پایه", "b1": "β1", "b1na": "β1 بی α", "b2": "β2", "b2na": "β2 بی α",
          "b2f": "وصله ن۱", "b2g": "وصله ن۲", "b2h": "وصله ن۳", "b2i": "وصله ن۴",
-         "b2jx": "وصله ن۴ + QUIET بیرون", "b2jxr": "همان + رکورد تعاملی",
-         "b2kx": "نهایی (b2kx)", "b2kxr": "نهایی + رکورد تعاملی", "b2kxn": "نهایی بی تنظیم FIFO"}
-BINORD = ["old", "b1", "b1na", "b2", "b2na", "b2f", "b2g", "b2h", "b2i", "b2jx", "b2jxr", "b2kxn", "b2kx", "b2kxr"]
+         "b2jx": "ن۴ + QUIET بیرون (b2jx)", "b2jxr": "b2jx + رکورد تعاملی",
+         "b2kx": "ن۴ + FIFO (b2kx)", "b2kxr": "b2kx + رکورد تعاملی", "b2kxn": "b2kx بی تنظیم FIFO",
+         "b2mx": "ن۴ + FIFO + شروع (b2mx)", "b2mxr": "b2mx + رکورد تعاملی",
+         "b2nx": "نهایی ن۵ (b2nx)", "b2nxr": "نهایی + رکورد تعاملی"}
+BINORD = ["old", "b1", "b1na", "b2", "b2na", "b2f", "b2g", "b2h", "b2i", "b2jx", "b2jxr", "b2kxn", "b2kx", "b2kxr",
+          "b2mx", "b2mxr", "b2nx", "b2nxr"]
 
 
 def label(b):

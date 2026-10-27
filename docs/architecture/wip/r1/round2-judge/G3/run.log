@@ -1,0 +1,18 @@
+16:00:26 plan /root/r2j/plans/G1b.txt: 8 runs
+16:00:27 start e9a34d17-old-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.00 waited 0s
+16:01:13 done e9a34d17-old-1 ok=1 
+16:01:13 start e9a34d17-b2nx-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 1.30 waited 0s
+16:01:58 done e9a34d17-b2nx-1 ok=1 
+16:01:59 start e9a34d17-b2nx-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.01 waited 0s
+16:02:44 done e9a34d17-b2nx-2 ok=1 
+16:02:45 start e9a34d17-old-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.15 waited 0s
+16:03:30 done e9a34d17-old-2 ok=1 
+16:03:31 start cd018225-old-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 2.21 waited 0s
+16:04:07 done cd018225-old-1 ok=1 
+16:04:08 start cd018225-b2nx-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2nx) load 2.88 waited 0s
+16:04:43 done cd018225-b2nx-1 ok=1 
+16:04:44 start cd018225-b2nx-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2nx) load 2.62 waited 0s
+16:05:19 done cd018225-b2nx-2 ok=1 
+16:05:20 start cd018225-old-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 2.75 waited 0s
+16:05:56 done cd018225-old-2 ok=1 
+16:05:56 done /root/r2j/plans/G1b.txt

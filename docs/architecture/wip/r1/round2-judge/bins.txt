@@ -26,3 +26,5 @@ b2mx /root/r2j/bins/hs2-b2m HS2_TUNE_QUIET_EXTRA=1
 b2mxr /root/r2j/bins/hs2-b2m HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1
 b2nx /root/r2j/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1
 b2nxr /root/r2j/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1
+b2ox /root/r2j/bins/hs2-b2o HS2_TUNE_QUIET_EXTRA=1
+b2oxr /root/r2j/bins/hs2-b2o HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1

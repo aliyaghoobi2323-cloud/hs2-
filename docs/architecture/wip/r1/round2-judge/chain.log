@@ -15,3 +15,14 @@
 15:13:39 dpi_post done
 15:13:41 chain5 pid 275513 start
 15:33:15 G1 exit 0
+15:54:55 G2 exit 0
+16:05:57 G3 exit 0
+16:05:57 chain5 done
+16:05:57 chain6 pid 296278 start
+16:05:59 b2o built
+16:10:01 capture A exit 0
+16:12:06 capture B exit 0
+16:12:37 capture C exit 0
+16:12:47 dpi2 done
+16:24:52 go test ./... done
+16:28:35 chain6 done

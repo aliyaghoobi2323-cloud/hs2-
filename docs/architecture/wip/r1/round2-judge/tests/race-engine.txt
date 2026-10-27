@@ -1,0 +1,14 @@
+--- FAIL: TestAngleSameLinkProbe (14.01s)
+    angle_test.go:426: probe p50 66.732232ms p99 71.225964ms (60 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 11583/11583 B
+    angle_test.go:432: probe p99 71.225964ms, want <= 60ms (RTT 40ms + 20 ms)
+--- FAIL: TestAngleTunPingAheadOfBulk (6.05s)
+    angle_tun_test.go:327: ping one-way p50 33.023343ms p99 36.386649ms (80); TUN bulk in 4.72 Mbit/s; drops light/bulk 0/3037
+    angle_tun_test.go:330: ping p99 one-way 36.386649ms, want <= 30ms
+--- FAIL: TestHostQLinuxSocket (0.00s)
+    hostq_linux_test.go:139: gate true cap 11584
+--- FAIL: TestHostQStatusLine (0.00s)
+    hostq_test.go:396: "hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.00"
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	129.352s
+FAIL
+exit 1

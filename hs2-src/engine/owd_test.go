@@ -112,7 +112,10 @@ func TestOWDLoopPipe(t *testing.T) {
 		_, okA := oa.queue()
 		_, okB := ob.queue()
 		if okA && okB {
-			if oa.msgs.Load() < 2 || ob.msgs.Load() < 2 {
+			// a queue of its own direction comes with the other end's
+			// report, so at least one message each way (one is enough when
+			// the other end had already heard one before its first beat)
+			if oa.msgs.Load() < 1 || ob.msgs.Load() < 1 {
 				t.Fatalf("a queue heard after %d and %d messages", oa.msgs.Load(), ob.msgs.Load())
 			}
 			return
