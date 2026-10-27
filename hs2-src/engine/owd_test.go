@@ -285,16 +285,17 @@ func TestAlphaStartEndsWhenAppLimited(t *testing.T) {
 	}
 }
 
-// Free growth: when the start ended at a queue BBR's start-up made while it
-// delivered a tenth of the path, a one-way queue under a quarter of the
-// target for alphaFreeN readings lets the cap grow by alphaGrowFree a
-// reading (HS2_TUNE_ALPHA_FREE=0: by a few % from the cut).
+// Free growth (HS2_TUNE_ALPHA_FREE=1, off by default): a path that got
+// faster after the start ended (10 Mbit/s, then 100): a one-way queue under
+// a quarter of the target for alphaFreeN readings lets the cap grow by
+// alphaGrowFree a reading; without it, by a few % (and slowly near the rate
+// it was cut from).
 func TestAlphaFreeGrowth(t *testing.T) {
 	const ms = time.Millisecond
 	grow := func() float64 {
 		c := &sendCap{linked: true, alpha: true}
 		at, acked := time.Hour, 0.0
-		path, cap := 100e6/8, 8e6/8
+		path, cap := 10e6/8, 10e6/8
 		feed := func(q time.Duration) {
 			at += 100 * ms
 			dlv := math.Min(cap, path)
@@ -305,24 +306,55 @@ func TestAlphaFreeGrowth(t *testing.T) {
 				cap = float64(c.own)
 			}
 		}
-		feed(0)
-		feed(0)
-		feed(20 * ms) // start-up's queue at a tenth of the path: the start ends with a cut
-		if c.aStart {
-			t.Fatal("a 20 ms queue of its own: want the start over")
+		for i := 0; i < 5; i++ {
+			feed(0)
 		}
+		feed(20 * ms) // at the 10 Mbit/s path: the start ends with a cut
+		if c.aStart {
+			t.Fatal("a 20 ms queue of its own at a flat delivery: want the start over")
+		}
+		path = 100e6 / 8
 		from := c.aRate
 		for i := 0; i < 20; i++ {
 			feed(0)
 		}
 		return c.aRate / from
 	}
+	AlphaFree = 1
 	on := grow()
 	AlphaFree = 0
 	off := grow()
-	AlphaFree = 1
-	t.Logf("2 s without a queue after the start's cut: the cap x%.2f with free growth, x%.2f without", on, off)
+	t.Logf("2 s without a queue on a path 10 times faster: the cap x%.2f with free growth, x%.2f without", on, off)
 	if on < 2.5 || off >= 2 {
 		t.Fatalf("free growth x%.2f (want >= 2.5), without x%.2f (want < 2)", on, off)
+	}
+}
+
+// The start does not end on a queue while the delivery still grows (BBR's
+// start-up doubling): it ends at the first queue once the delivery is flat.
+func TestAlphaStartWhileGrowing(t *testing.T) {
+	const ms = time.Millisecond
+	c := &sendCap{linked: true, alpha: true}
+	at, acked := time.Hour, 0.0
+	feed := func(dlv float64, q time.Duration) {
+		at += 100 * ms
+		acked += dlv / 10
+		c.Update(capSample{Now: at, Delivery: dlv, Acked: uint64(acked), Written: uint64(acked),
+			Segs: uint32(acked / 1000), SRTT: 72 * ms, MinRTT: 72 * ms, OWD: q, OWDok: true})
+	}
+	r := 1e6 / 8
+	feed(r, 0)
+	feed(r, 0)
+	for i := 0; i < 4; i++ {
+		r *= 1.6
+		feed(r, 15*ms) // start-up's queue while it grows by 60% a reading
+	}
+	if !c.aStart {
+		t.Fatal("a queue while the delivery grows: want the start held")
+	}
+	feed(r, 15*ms)
+	feed(r, 15*ms) // flat now
+	if c.aStart {
+		t.Fatal("a queue at a flat delivery: want the start over")
 	}
 }
