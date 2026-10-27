@@ -1,0 +1,384 @@
+== out3/raw/05500279-new-1/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 14.0 KiB, users 3 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 9 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 2
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.96
+  cores:      sendcap link 1: cap 12 Mbit/s (1.25 x max delivery 2s), app-limited 3%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 19.0 Mbit/s (own queue 12.0 ms over a base of 0.1, target 5.0 ms, headroom 0.23 Mbit/s), app-limited 4%, idle-lifted 0
+== out3/raw/05500279-new-1/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 4.7 KiB, users 4 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 4
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.98
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 7.1 Mbit/s (own queue 2.8 ms over a base of 0.1, target 5.0 ms, headroom 0.63 Mbit/s), app-limited 4%, idle-lifted 0
+== out3/raw/05500279-new-2/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 12.5 KiB, users 3 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 9 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 2
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.96
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 17.0 Mbit/s (own queue 7.5 ms over a base of 0.1, target 5.0 ms, headroom 0.73 Mbit/s), app-limited 3%, idle-lifted 0
+== out3/raw/05500279-new-2/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 12.5 KiB, users 4 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 4
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.95
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 19.5 Mbit/s (own queue 0.4 ms over a base of 2.2, target 5.0 ms, headroom 0.57 Mbit/s), app-limited 4%, idle-lifted 0
+== out3/raw/2d23c440-new-1/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 10.8 KiB, users 3 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 9 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 2
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.97
+  cores:      sendcap link 1: cap 13 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 29.9 Mbit/s (own queue 13.4 ms over a base of 0.1, target 5.0 ms, headroom 0.20 Mbit/s), app-limited 4%, idle-lifted 0
+== out3/raw/2d23c440-new-1/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.1 ms, bulk frame 3.5 KiB, users 4 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 4
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 4.6 Mbit/s (own queue 3.0 ms over a base of 0.1, target 5.3 ms, headroom 0.57 Mbit/s), app-limited 4%, idle-lifted 0
+== out3/raw/2d23c440-new-2/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 13.9 KiB, users 3 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 9 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 2
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.97
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 20.7 Mbit/s (own queue 4.0 ms over a base of 0.0, target 5.0 ms, headroom 0.19 Mbit/s), app-limited 4%, idle-lifted 0
+== out3/raw/2d23c440-new-2/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 3.7 KiB, users 4 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 4
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 6.5 Mbit/s (own queue 2.4 ms over a base of 0.1, target 5.0 ms, headroom 0.71 Mbit/s), app-limited 4%, idle-lifted 0
+== out3/raw/340c98ae-new-1/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 199 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 219 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+== out3/raw/340c98ae-new-1/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.1 ms, bulk frame 16.0 KiB, users 198 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 200 / bulk 17 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 17
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 18.7 KiB, gate off (cap 22277 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 93.3 Mbit/s (own queue 3.6 ms over a base of 0.1, target 5.0 ms, headroom 0.38 Mbit/s), app-limited 6%, idle-lifted 0
+== out3/raw/340c98ae-new-2/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/63.3 ms, bulk frame 1.0 KiB, users 199 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 219 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.14
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+== out3/raw/340c98ae-new-2/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.9 ms, bulk frame 16.0 KiB, users 198 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 200 / bulk 17 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 17
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 18.8 KiB, gate off (cap 21524 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 84.6 Mbit/s (own queue 0.0 ms over a base of 0.1, target 5.0 ms, headroom 0.33 Mbit/s), app-limited 11%, idle-lifted 0
+== out3/raw/5c170184-new-1/status-edge.txt
+  ceiling:    8 links — both servers allow the same (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 8
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 8 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 2: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 2: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 2 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 2: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 2 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 3: lane p50/p99 0.0/30.7 ms, bulk frame 1.0 KiB, users 27 (active 0), drops light/bulk 63/12, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 3: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.12
+  cores:      hostq link 3 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.07
+  cores:      sendcap link 3: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 3 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 4: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 27 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 4: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 4 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 4: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 4 bulk: alpha cap 8.5 Mbit/s (own queue 0.4 ms over a base of 0.2, target 5.0 ms, headroom 1.12 Mbit/s), app-limited 96%, idle-lifted 0
+  cores:      sched link 5: lane p50/p99 0.0/30.2 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 5: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 1023 B, blocked ratio 0.04
+  cores:      hostq link 5 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 5: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 5 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 6: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 6: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 2047 B, blocked ratio 0.00
+  cores:      hostq link 6 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 6: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 6 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 7: lane p50/p99 0.0/62.1 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 7: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 63 B, blocked ratio 0.03
+  cores:      hostq link 7 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 7: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 7 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 8: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 8: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 2047 B, blocked ratio 0.00
+  cores:      hostq link 8 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 8: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 8 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+== out3/raw/5c170184-new-1/status-exit.txt
+  ceiling:    8 links — both servers allow the same (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 8
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 8 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 2: lane p50/p99 0.0/0.0 ms, bulk frame 6.1 KiB, users 25 (active 0), drops light/bulk 0/461, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 2: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 2 bulk: lowat 7.6 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 2: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 2 bulk: alpha cap 31.7 Mbit/s (own queue 2.7 ms over a base of 0.1, target 5.0 ms, headroom 0.09 Mbit/s), app-limited 56%, idle-lifted 0
+  cores:      sched link 3: lane p50/p99 0.0/0.3 ms, bulk frame 16.0 KiB, users 25 (active 0), drops light/bulk 0/658, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 3: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 3 bulk: lowat 7.5 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 3: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 3 bulk: alpha cap 41.0 Mbit/s (own queue 21.8 ms over a base of 0.1, target 5.0 ms, headroom 0.08 Mbit/s), app-limited 28%, idle-lifted 0
+  cores:      sched link 4: lane p50/p99 0.0/39.3 ms, bulk frame 16.0 KiB, users 26 (active 0), drops light/bulk 0/26, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 4: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 2047 B, blocked ratio 0.08
+  cores:      hostq link 4 bulk: lowat 6.7 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 4: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 4 bulk: alpha cap 45.5 Mbit/s (own queue 17.0 ms over a base of 0.2, target 5.0 ms, headroom 0.15 Mbit/s), app-limited 47%, idle-lifted 0
+  cores:      sched link 5: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 5: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 5 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 5: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 5 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 6: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 6: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 2047 B, blocked ratio 0.00
+  cores:      hostq link 6 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 6: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 6 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 7: lane p50/p99 0.0/0.7 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 7: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 4095 B, blocked ratio 0.00
+  cores:      hostq link 7 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 7: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 7 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 8: lane p50/p99 0.0/60.9 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 26 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 8: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 4095 B, blocked ratio 0.04
+  cores:      hostq link 8 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 8: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 8 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+== out3/raw/5c170184-new-2/status-edge.txt
+  ceiling:    8 links — both servers allow the same (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 8
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 8 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 127 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 3.7 Mbit/s (own queue 0.5 ms over a base of 0.2, target 6.7 ms, headroom 0.74 Mbit/s), app-limited 88%, idle-lifted 0
+  cores:      sched link 2: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 2: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 2 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 2: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 2 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 3: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 3: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 3 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 3: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 3 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 4: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 4: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 4 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 4: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 4 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 5: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 27 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 5: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 5 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 5: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 5 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 6: lane p50/p99 0.0/37.6 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 6: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 511 B, blocked ratio 0.08
+  cores:      hostq link 6 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 6: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 6 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 7: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 29 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 7: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 7 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 7: cap 8 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 7 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 8: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 28 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 8: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 2047 B, blocked ratio 0.00
+  cores:      hostq link 8 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 8: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 8 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+== out3/raw/5c170184-new-2/status-exit.txt
+  ceiling:    8 links — both servers allow the same (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 8
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 8 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/17.1 ms, bulk frame 14.3 KiB, users 25 (active 0), drops light/bulk 0/840, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 1023 B, blocked ratio 0.07
+  cores:      hostq link 1 bulk: lowat 7.3 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: alpha cap 28.8 Mbit/s (own queue 1.2 ms over a base of 0.1, target 5.0 ms, headroom 0.12 Mbit/s), app-limited 30%, idle-lifted 0
+  cores:      sched link 2: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 2: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 2 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 2: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 2 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 3: lane p50/p99 0.0/0.1 ms, bulk frame 13.2 KiB, users 25 (active 0), drops light/bulk 0/94, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 3: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 3 bulk: lowat 7.1 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 3: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 3 bulk: alpha cap 43.5 Mbit/s (own queue 5.2 ms over a base of 0.1, target 5.0 ms, headroom 0.06 Mbit/s), app-limited 60%, idle-lifted 0
+  cores:      sched link 4: lane p50/p99 0.0/0.0 ms, bulk frame 16.0 KiB, users 26 (active 0), drops light/bulk 0/21, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 4: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 4 bulk: lowat 6.8 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 4: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 4 bulk: alpha cap 38.3 Mbit/s (own queue 30.9 ms over a base of 0.1, target 5.0 ms, headroom 0.09 Mbit/s), app-limited 55%, idle-lifted 0
+  cores:      sched link 5: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 26 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 5: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 5 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 5: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 5 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 6: lane p50/p99 0.0/0.0 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 6: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 6 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 6: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 6 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 7: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 27 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 7: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 7 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 7: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 7 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+  cores:      sched link 8: lane p50/p99 0.0/65.9 ms, bulk frame 1.0 KiB, users 25 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 26 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 8: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 2047 B, blocked ratio 0.04
+  cores:      hostq link 8 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 8: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 8 bulk: alpha cap 0.0 Mbit/s (own queue 0.0 ms over a base of 0.0, target 0.0 ms, headroom 0.00 Mbit/s), app-limited 100%, idle-lifted 0
+== out3-x/raw/05500279-nalpha-1/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 14.1 KiB, users 3 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 9 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 2
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.97
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: cap 32 Mbit/s (1.25 x max delivery 2s), app-limited 4%, idle-lifted 0
+== out3-x/raw/05500279-nalpha-1/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.0 ms, bulk frame 13.5 KiB, users 4 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 4
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.97
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: cap 34 Mbit/s (1.25 x max delivery 2s), app-limited 4%, idle-lifted 0
+== out3-x/raw/340c98ae-nalpha-1/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/0.1 ms, bulk frame 1.0 KiB, users 199 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 219 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 0
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      hostq link 1 bulk: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 17 Mbit/s (1.25 x max delivery 2s), app-limited 99%, idle-lifted 0
+  cores:      sendcap link 1 bulk: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+== out3-x/raw/340c98ae-nalpha-1/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0x1F); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/58.3 ms, bulk frame 16.0 KiB, users 198 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 200 / bulk 17 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; moved to BULK 17
+  cores:      hostq link 1: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 0 B, blocked ratio 0.12
+  cores:      hostq link 1 bulk: lowat 20.5 KiB, gate off (cap 22003 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 0 Mbit/s (1.25 x max delivery 2s), app-limited 100%, idle-lifted 0
+  cores:      sendcap link 1 bulk: cap 112 Mbit/s (1.25 x max delivery 2s), app-limited 53%, idle-lifted 0
+== out3-x/raw/340c98ae-npair-1/status-edge.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Kharej server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels 1-2, caps 0xF); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 0.0/149.3 ms, bulk frame 1.0 KiB, users 199 (active 0), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 219 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0
+  cores:      hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.19
+  cores:      sendcap link 1: cap 22 Mbit/s (1.25 x max delivery 2s), app-limited 99%, idle-lifted 0
+== out3-x/raw/340c98ae-npair-1/status-exit.txt
+  ceiling:    1 links — both servers allow the same (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300), the Iran server: 1
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 1 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  protocol: v3 level 2 (peer levels -, caps 0xF); refused v2 peers: 0, refused peers (level): 0
+  cores:      sched link 1: lane p50/p99 1.3/6.4 ms, bulk frame 16.0 KiB, users 200 (active 2), drops light/bulk 0/0, blocked-writers 0, users at memory cap 0
+  cores:      classes: light 200 / bulk 17 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0
+  cores:      hostq link 1: lowat 11.3 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+  cores:      sendcap link 1: cap 119 Mbit/s (1.25 x max delivery 2s), app-limited 96%, idle-lifted 0

@@ -1,0 +1,4 @@
+old /root/r2a/bins/hs2-base
+new /root/r2a/bins/hs2-b1
+nalpha /root/r2a/bins/hs2-b1 HS2_TUNE_ALPHA=0
+npair /root/r2a/bins/hs2-b1 HS2_TUNE_PAIR=0

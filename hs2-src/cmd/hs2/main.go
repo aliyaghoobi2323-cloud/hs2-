@@ -326,8 +326,8 @@ func applyTuning() {
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGBulkSegs)
 	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
 	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
-	// round 2, β1 (decisions T16-T18): α, the queue-delay rate cap of the
-	// sockets that carry bulk (0: C4-lite there too), and early Done (0: a
+	// round 2, β1 (decisions T16-T18): α, the queue-delay rate cap of a
+	// pair's BULK socket (0: C4-lite there too), and early Done (0: a
 	// stream's frame is written before it cuts the next). The pair itself
 	// (HS2_TUNE_PAIR) is a caps bit, read by tlscarrier.
 	num("HS2_TUNE_ALPHA", &engine.TuneAlpha)

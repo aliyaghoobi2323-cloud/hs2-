@@ -1,0 +1,6 @@
+09:09:12 plan /root/r2a/smoke/plan4x.txt: 2 runs
+09:09:13 start 2d23c440-nalpha-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=nalpha) load 1.67 waited 0s
+09:09:43 done 2d23c440-nalpha-1 ok=1 
+09:09:44 start 5c170184-nalpha-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=nalpha) load 2.02 waited 0s
+09:10:24 done 5c170184-nalpha-1 ok=1 
+09:10:24 done /root/r2a/smoke/plan4x.txt

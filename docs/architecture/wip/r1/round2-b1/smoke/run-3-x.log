@@ -1,0 +1,8 @@
+09:06:35 plan /root/r2a/smoke/plan3x.txt: 3 runs
+09:06:36 start 05500279-nalpha-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=nalpha) load 1.97 waited 0s
+09:07:06 done 05500279-nalpha-1 ok=1 
+09:07:07 start 340c98ae-nalpha-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=nalpha) load 1.56 waited 0s
+09:07:46 done 340c98ae-nalpha-1 ok=1 
+09:07:47 start 340c98ae-npair-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=npair) load 1.72 waited 0s
+09:08:26 done 340c98ae-npair-1 ok=1 
+09:08:26 done /root/r2a/smoke/plan3x.txt

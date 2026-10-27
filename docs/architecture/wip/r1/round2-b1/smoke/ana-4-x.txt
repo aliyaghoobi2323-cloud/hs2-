@@ -1,0 +1,16 @@
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20  BIN=nalpha  runs 1 (ok 1)
+   capacity 23.91 Mbit/s   links 2   host busy 13%
+   total dn 20.37  up 21.84 Mbit/s   (c) 85%
+   (b) worst bulk user 84% of its floor
+   probe p50 156.8  p99 242.2  max 251.7 ms  lost 0   RTT_floor 72.9  bound (d) 92.9
+   TUN ping p50 155.5  p99 234.8 ms  lost 0   floor 72.9  bound 82.9
+   CPU % (one core = 100): edge 25.5  exit 28.8   retrans %: exit 0.000  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d FAIL (0/1)  tun FAIL (0/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30  BIN=nalpha  runs 1 (ok 1)
+   capacity 95.64 Mbit/s   links 16   host busy 22%
+   total dn 74.96  up 0.00 Mbit/s   (c) 82%
+   probe p50 72.7  p99 131.5  max 208.3 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   TUN ping p50 72.5  p99 129.9 ms  lost 0   floor 72.3  bound 82.3
+   of which TUN users (inner goodput) dn 74.96  up 0.00 Mbit/s
+   CPU % (one core = 100): edge 57.5  exit 71.8   retrans %: exit 1.238  edge 0.000
+   verdict: c FAIL (0/1)  d FAIL (0/1)  tun FAIL (0/1)

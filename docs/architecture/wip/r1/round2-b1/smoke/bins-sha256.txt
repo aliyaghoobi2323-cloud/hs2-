@@ -1,0 +1,2 @@
+62b29c79b62b89f34437b7ea7d3e9b619fb0c5a46e85a8cb172c7ce97ea322b7  /root/r2a/bins/hs2-b1
+48dabb5639a2f7eff2b6d93e4cd98b91fb95be9b66c0df5145810955c4282e3b  /root/r2a/bins/hs2-base

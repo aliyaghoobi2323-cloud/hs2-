@@ -1,0 +1,24 @@
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20  BIN=old  runs 2 (ok 2)
+   capacity 23.91 Mbit/s   links 1   host busy 9 [8..10]%
+   total dn 21.63 [21.41..21.84]  up 21.63 [21.51..21.75] Mbit/s   (c) 90% [90%..91%]
+   (b) worst bulk user 89% [88%..91%] of its floor
+   probe p50 467.9 [424.9..510.9]  p99 853.2 [753.2..953.2]  max 905.1 [800.2..1010.0] ms  lost 0   RTT_floor 132.0 [90.2..173.8]  bound (d) 152.0 [110.2..193.8]
+   TUN ping p50 479.6 [426.8..532.4]  p99 903.2 [731.4..1075.1] ms  lost 2 [0..3]   floor 133.7 [89.5..177.9]  bound 143.7 [99.5..187.9]
+   CPU % (one core = 100): edge 16.8 [16.4..17.1]  exit 17.3 [16.8..17.8]   retrans %: exit 4.338 [3.780..4.896]  edge 4.657 [4.536..4.779]
+   verdict: b FAIL (1/2)  c FAIL (0/2)  d FAIL (0/2)  tun FAIL (0/2)
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20  BIN=new  runs 2 (ok 2)
+   capacity 23.91 Mbit/s   links 2   host busy 9 [7..10]%
+   total dn 3.76 [3.74..3.78]  up 21.07 [21.03..21.11] Mbit/s   (c) 16% [16%..16%]
+   (b) worst bulk user 15% [15%..16%] of its floor
+   probe p50 72.8  p99 73.4 [73.3..73.6]  max 95.2 [73.3..117.1] ms  lost 0   RTT_floor 72.5 [72.4..72.5]  bound (d) 92.5 [92.4..92.5]
+   TUN ping p50 72.8  p99 73.4 [73.3..73.5] ms  lost 0   floor 72.5 [72.4..72.5]  bound 82.5 [82.4..82.5]
+   CPU % (one core = 100): edge 15.6 [14.9..16.4]  exit 16.4 [15.4..17.3]   retrans %: exit 0.000  edge 0.079
+   verdict: b FAIL (0/2)  c FAIL (0/2)  d PASS (2/2)  tun PASS (2/2)  thr FAIL (dn 0.174 up 0.974)
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20  BIN=old  runs 1 (ok 1)
+   capacity 23.91 Mbit/s   links 1   host busy 10%
+   total dn 20.46  up 22.01 Mbit/s   (c) 86%
+   (b) worst bulk user 85% of its floor
+   probe p50 234.8  p99 601.5  max 636.5 ms  lost 0   RTT_floor 98.0  bound (d) 118.0
+   TUN ping p50 234.9  p99 610.9 ms  lost 3   floor 82.9  bound 92.9
+   CPU % (one core = 100): edge 24.4  exit 25.3   retrans %: exit 0.346  edge 0.830
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d FAIL (0/1)  tun FAIL (0/1)
