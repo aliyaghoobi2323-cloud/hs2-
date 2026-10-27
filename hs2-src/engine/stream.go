@@ -201,16 +201,39 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 // C3: the host-queue guard under the shaper in place of sendGate; C4-lite:
 // the pacing cap of the link socket. The cores' runner steps the link.
 func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter, caps uint32) (*smux.Session, func() string, error) {
-	var sp atomic.Pointer[smux.Session]
-	sched := !SchedOff() && caps&tlscarrier.CapSched != 0
-	guardOn := !HostQOff() && caps&tlscarrier.CapHostQ != 0
-	capOn := !SendCapOff() && caps&tlscarrier.CapSendCap != 0
-	tc := tcpUnder(conn)
-	var bottom net.Conn
-	var gate *sendGate
-	var hq *hostQ
+	return newSessionPairCaps(conn, nil, server, sampler, meter, caps)
+}
+
+// newSessionCar is newSession over an authenticated carrier: over both its
+// connections when it is a pair (tlscarrier.Carrier.Bulk), with the caps it
+// negotiated.
+func newSessionCar(car *tlscarrier.Carrier, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, func() string, error) {
+	var bulk net.Conn
+	if b := car.Bulk(); b != nil {
+		bulk = b.RawConn()
+	}
+	return newSessionPairCaps(car.RawConn(), bulk, server, sampler, meter, car.Caps())
+}
+
+// linkSock is one connection of a link with what wraps it: C3's guard (hq)
+// or the old send gate (gate) at the bottom, the shaper, the link meter
+// and the watch.
+type linkSock struct {
+	tc     *net.TCPConn
+	bottom net.Conn
+	gate   *sendGate
+	hq     *hostQ
+	w      *watchConn
+}
+
+// newLinkSock wraps conn as a link's connection: C3 with a gate of segs
+// segments (guardOn) or the send gate, the shaper (carrying its tail with
+// C2: sched), the meter (timing: a meter of its own for the write waits,
+// nil: meter's) and the watch.
+func newLinkSock(conn net.Conn, sched, guardOn bool, segs int, sampler *obfs.LengthSampler, meter, timing *linkMeter) *linkSock {
+	ls := &linkSock{tc: tcpUnder(conn)}
 	if guardOn {
-		hc := &hostQConn{Conn: conn, tcp: tc}
+		hc := &hostQConn{Conn: conn, tcp: ls.tc}
 		sys, ok := conn.(hostSys) // (a test's emulated socket)
 		if !ok {
 			sys = newHostSys(conn)
@@ -218,78 +241,176 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		if sys != nil {
 			sys = gateSys{sys, hc}
 		}
-		hq = newHostQ(conn, sys)
-		hc.h = hq
-		bottom = hc
+		ls.hq = newHostQSegs(conn, sys, segs)
+		hc.h = ls.hq
+		ls.bottom = hc
 	} else {
-		gate = newSendGate(conn)
-		bottom = gate
+		ls.gate = newSendGate(conn)
+		ls.bottom = ls.gate
 	}
-	shaped := newShapedConn(bottom, sampler)
+	shaped := newShapedConn(ls.bottom, sampler)
 	shaped.carry = sched
 	var c net.Conn = shaped
 	if meter != nil {
-		c = &meteredConn{Conn: c, m: meter, gate: gate, hq: hq}
+		c = &meteredConn{Conn: c, m: meter, wt: timing, gate: ls.gate, hq: ls.hq}
 	}
-	w := &watchConn{Conn: c}
-	w.onErr = func() {
-		bottom.Close() // conn's Close, ending a write waiting at the gate
+	ls.w = &watchConn{Conn: c}
+	return ls
+}
+
+// newSessionPairCaps is newSessionCaps over a pair of connections when bulk
+// is not nil (round 2, β1; decision T16): quiet carries the control frames
+// and the latency lane, bulk the bulk lane, under one smux session
+// (smux.ClientPair). Each has its own C3 guard (QUIET the document's gate,
+// HQGSegs; BULK the judge's, HQGBulkSegs), pacing cap (QUIET C4-lite's;
+// BULK α's, TuneAlpha) and watch, and the end of either ends both. The
+// link meter counts both; QUIET's write waits go to a meter of its own,
+// so the link's (the health checks', the window core's) are BULK's, as is
+// the socket the window core and the pacing net read. A link of one
+// connection carries bulk on it: the judge's gate and α there.
+func newSessionPairCaps(conn, bulk net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter, caps uint32) (*smux.Session, func() string, error) {
+	var sp atomic.Pointer[smux.Session]
+	pair := bulk != nil
+	// (a pair runs a scheduler on each connection whatever the local switch:
+	// the other end counts on its frames' connections)
+	sched := pair || !SchedOff() && caps&tlscarrier.CapSched != 0
+	guardOn := !HostQOff() && caps&tlscarrier.CapHostQ != 0
+	capOn := !SendCapOff() && caps&tlscarrier.CapSendCap != 0
+	alpha := capOn && TuneAlpha != 0
+	segs := HQGBulkSegs
+	var qm *linkMeter
+	if pair {
+		segs = HQGSegs
+		if meter != nil {
+			qm = &linkMeter{}
+		}
+	}
+	q := newLinkSock(conn, sched, guardOn, segs, sampler, meter, qm)
+	socks := []*linkSock{q}
+	var b *linkSock
+	if pair {
+		b = newLinkSock(bulk, sched, guardOn, HQGBulkSegs, sampler, meter, nil)
+		socks = append(socks, b)
+	}
+	onErr := func() {
+		for _, ls := range socks {
+			ls.bottom.Close() // conn's Close, ending a write waiting at the gate
+		}
 		if s := sp.Load(); s != nil {
 			s.Close()
 		}
+	}
+	for _, ls := range socks {
+		ls.w.onErr = onErr
 	}
 	var sess *smux.Session
 	var err error
 	cfg := newSmuxConfig()
 	var flows *linkFlows
 	if sched {
-		flows = &linkFlows{}
+		flows = &linkFlows{pair: pair}
 		cfg.Sched = newSchedAdapter
 		cfg.FlowInfo = flows.info
 		cfg.BulkFrame = BulkFrameSize
 		cfg.LaneFrame = laneData
 		cfg.UserFrames = schedUserFrames
 		cfg.UserMem = userMems.handle
+		cfg.EarlyDone = TuneEarlyDone != 0
 	}
-	if server {
-		sess, err = smux.Server(w, cfg)
-	} else {
-		sess, err = smux.Client(w, cfg)
+	switch {
+	case pair && server:
+		sess, err = smux.ServerPair(q.w, b.w, cfg)
+	case pair:
+		sess, err = smux.ClientPair(q.w, b.w, cfg)
+	case server:
+		sess, err = smux.Server(q.w, cfg)
+	default:
+		sess, err = smux.Client(q.w, cfg)
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	sp.Store(sess)
-	g := &sessGuard{w: w}
+	data := q // the connection the bulk rides
+	if pair {
+		data = b
+	}
+	// the wedge guard watches the reader that waits for buffer room (a
+	// pair's BULK's: QUIET's has MaxReceiveBuffer more)
+	g := &sessGuard{w: data.w}
 	g.sess.Store(sess)
 	if meter != nil {
 		meter.guard = g
 	}
 	guards.add(g)
-	wc := wcores.add(sess, cfg, tc, meter, server, conn.RemoteAddr())
+	wc := wcores.add(sess, cfg, data.tc, meter, server, conn.RemoteAddr())
 	if wc != nil && meter != nil {
 		meter.wc = wc
 	}
-	// C4-lite on every link socket at both ends, and C3's readings of it
-	var scl *sendCapLink
-	if capOn || hq != nil {
-		if sys := newCapSys(tc); sys != nil {
-			scl = newSendCapLink(sys, hq)
-			scl.core.linked, scl.core.off = true, !capOn
-			if meter != nil && SendCapBlocked != 0 {
-				scl.blocked = meter.blockedNs
-			}
-			if wc != nil && capOn {
-				wc.sc.Store(scl) // the pacing net hands its cap here: the lesser holds
-			}
-		} else if hq != nil {
-			scl = newSendCapLink(nil, hq) // C3 on the link's written rate alone
+	// C4-lite (α on a socket that carries bulk) on every link socket at
+	// both ends, and C3's readings of it
+	var blockedQ, blockedB func() int64
+	if meter != nil && SendCapBlocked != 0 {
+		blockedQ, blockedB = meter.blockedNs, meter.blockedNs
+		if qm != nil {
+			blockedQ = qm.blockedNs
 		}
 	}
-	if scl != nil || flows != nil {
-		coreLinks.add(&coreLink{sess: sess, mtr: meter, sc: scl, hq: hq, flows: flows})
+	scl := newLinkCap(q, capOn, alpha && !pair, blockedQ)
+	var sclB *sendCapLink
+	if pair {
+		sclB = newLinkCap(b, capOn, alpha, blockedB)
+		if sclB != nil && qm != nil {
+			sclB.side = qm.wrBytes.Load // QUIET's bytes take room on the path too
+		}
 	}
-	return sess, w.reason, nil
+	dsc := scl // the data socket's
+	if pair {
+		dsc = sclB
+	}
+	if wc != nil && capOn && dsc != nil && dsc.sys != nil {
+		wc.sc.Store(dsc) // the pacing net hands its cap here: the lesser holds
+	}
+	if scl != nil || sclB != nil || flows != nil {
+		cl := &coreLink{sess: sess, mtr: meter, sc: scl, hq: q.hq, flows: flows, qm: qm, scB: sclB}
+		if pair {
+			cl.hqB = b.hq
+		}
+		coreLinks.add(cl)
+	}
+	why := q.w.reason
+	if pair {
+		why = func() string {
+			if r := q.w.reason(); r != "" {
+				return "QUIET " + r
+			}
+			if r := b.w.reason(); r != "" {
+				return "BULK " + r
+			}
+			return ""
+		}
+	}
+	return sess, why, nil
+}
+
+// newLinkCap is the pacing cap of a link socket with C3's readings of it
+// (nil: neither): C4-lite's, α's when alpha (sendcap.go), on capOn; C3 on
+// the link's written rate alone where the socket cannot be read.
+func newLinkCap(ls *linkSock, capOn, alpha bool, blocked func() int64) *sendCapLink {
+	if !capOn && ls.hq == nil {
+		return nil
+	}
+	sys := newCapSys(ls.tc)
+	if sys == nil {
+		if ls.hq != nil {
+			return newSendCapLink(nil, ls.hq)
+		}
+		return nil
+	}
+	scl := newSendCapLink(sys, ls.hq)
+	scl.core.linked, scl.core.off, scl.core.alpha = true, !capOn, alpha
+	scl.blocked = blocked
+	return scl
 }
 
 // streamPkt carries L3 frames over one smux stream (see pktConn).

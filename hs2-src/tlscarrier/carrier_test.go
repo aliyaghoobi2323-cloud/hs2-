@@ -156,7 +156,7 @@ func TestReplayRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rec, nonce := makeClientAuth(key, ekm, LocalAuthHdr())
+	rec, nonce := makeClientAuth(key, ekm, LocalAuthHdr(), nil)
 	u1.Write(rec)
 	u1.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if _, err := readServerProof(u1, key, nonce, ekm); err != nil {

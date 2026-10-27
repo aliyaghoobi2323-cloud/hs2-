@@ -292,16 +292,16 @@ func TestGetDieCh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ss.Close()
+	defer cs.Close()
 	dieCh := ss.GetDieCh()
-	go func() {
-		select {
-		case <-dieCh:
-		case <-time.Tick(time.Second):
-			t.Fatal("wait die chan timeout")
-		}
-	}()
-	cs.Close()
+	// (the check ran in a goroutine that outlived the test: go vet's
+	// "Fatal from a non-test goroutine", and it never failed)
+	ss.Close()
+	select {
+	case <-dieCh:
+	case <-time.After(time.Second):
+		t.Fatal("wait die chan timeout")
+	}
 }
 
 func TestSpeed(t *testing.T) {

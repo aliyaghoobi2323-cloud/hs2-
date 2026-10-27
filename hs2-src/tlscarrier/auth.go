@@ -79,8 +79,9 @@ const (
 	serverPadMin, serverPadMax = 120 - proofHdrLen, 480 - proofHdrLen // typical response headers
 
 	// The protocol levels this binary speaks (§4.1): one up with every change
-	// of the wire format; min stays down to the previous build's max.
-	levelMin, levelMax byte = 1, 1
+	// of the wire format; min stays down to the previous build's max. Level
+	// 2: a link is a pair of connections (LevelPair).
+	levelMin, levelMax byte = 1, 2
 
 	legacyRecordLen = 32 // v1 clients: nonce + tag, no binding
 )
@@ -92,7 +93,16 @@ const (
 	CapSched                      // C2, the link scheduler (HS2_TUNE_SCHED)
 	CapHostQ                      // C3, the host queue guard (HS2_TUNE_HQG)
 	CapSendCap                    // C4-lite, the pacing cap (HS2_TUNE_SENDCAP)
+	// CapPair: the link is a pair of TCP connections, QUIET and BULK, under
+	// one smux session (pair.go; level LevelPair; HS2_TUNE_PAIR). It needs
+	// C2 (a scheduler for each connection): HS2_TUNE_SCHED=0 takes it out
+	// too.
+	CapPair
 )
+
+// LevelPair is the protocol level of a link that is a pair of connections
+// (with CapPair): smux's MOV frame and a FIN with its count (decision T16).
+const LevelPair byte = 2
 
 // AuthHdr is the header of the client's record (7 B on the wire).
 type AuthHdr struct {
@@ -186,16 +196,65 @@ func (p ProofHdr) bytes() []byte {
 
 // localCaps is every cap this binary has, less those whose kill switch is set.
 func localCaps() uint32 {
-	caps := CapClass | CapSched | CapHostQ | CapSendCap
+	caps := CapClass | CapSched | CapHostQ | CapSendCap | CapPair
 	for _, k := range []struct {
 		env string
 		bit uint32
-	}{{"HS2_TUNE_CLASS", CapClass}, {"HS2_TUNE_SCHED", CapSched}, {"HS2_TUNE_HQG", CapHostQ}, {"HS2_TUNE_SENDCAP", CapSendCap}} {
+	}{{"HS2_TUNE_CLASS", CapClass}, {"HS2_TUNE_SCHED", CapSched | CapPair}, {"HS2_TUNE_HQG", CapHostQ}, {"HS2_TUNE_SENDCAP", CapSendCap},
+		{"HS2_TUNE_PAIR", CapPair}} {
 		if os.Getenv(k.env) == "0" {
 			caps &^= k.bit
 		}
 	}
 	return caps
+}
+
+// A pair's hello rides the client's auth record, at the head of its pad
+// (whose bytes were random): which half of which pair this connection is.
+// Its tag proves it is one (random pad bytes never match it), and it is
+// bound to this TLS session like the auth tag. A server that does not pair
+// (an older one, or one without CapPair) never reads it, so the record is
+// the same on the wire either way.
+//
+//	[ tag  : 16 = HMAC(key, "hs2-pair-v3" || nonce || EKM) ]
+//	[ role : 1 (pairQuiet, pairBulk) ]
+//	[ id   : 16 random bytes, the pair's ]
+const (
+	pairQuiet   byte = 1
+	pairBulk    byte = 2
+	pairIDLen        = 16
+	pairHelloLn      = authTagLen + 1 + pairIDLen
+)
+
+// pairHello is a pair connection's role and its pair's id.
+type pairHello struct {
+	role byte
+	id   [pairIDLen]byte
+}
+
+func pairTag(key, nonce, ekm []byte) []byte {
+	return mac(key, []byte("hs2-pair-v3"), nonce, ekm)
+}
+
+// put writes the hello at the head of pad (at least pairHelloLn bytes).
+func (h pairHello) put(pad, key, nonce, ekm []byte) {
+	copy(pad, pairTag(key, nonce, ekm))
+	pad[authTagLen] = h.role
+	copy(pad[authTagLen+1:], h.id[:])
+}
+
+// parsePairHello reads a pair's hello from the head of a client's pad
+// (false: none there).
+func parsePairHello(pad, key, nonce, ekm []byte) (pairHello, bool) {
+	if len(pad) < pairHelloLn || subtle.ConstantTimeCompare(pad[:authTagLen], pairTag(key, nonce, ekm)) != 1 {
+		return pairHello{}, false
+	}
+	h := pairHello{role: pad[authTagLen]}
+	copy(h.id[:], pad[authTagLen+1:pairHelloLn])
+	if h.role != pairQuiet && h.role != pairBulk {
+		return pairHello{}, false
+	}
+	return h, true
 }
 
 // LocalAuthHdr is the header this binary sends: its levels and its caps.
@@ -238,13 +297,18 @@ func padded(head []byte, lo, hi int) []byte {
 	return out
 }
 
-// makeClientAuth builds the client's first record and returns its nonce.
-func makeClientAuth(key, ekm []byte, h AuthHdr) (rec, nonce []byte) {
+// makeClientAuth builds the client's first record and returns its nonce;
+// with a pair's hello (not nil) at the head of its pad.
+func makeClientAuth(key, ekm []byte, h AuthHdr, hello *pairHello) (rec, nonce []byte) {
 	nonce = make([]byte, authNonceLen)
 	rand.Read(nonce)
 	hdr := h.bytes()
 	head := append(append([]byte{}, nonce...), clientTag(key, nonce, ekm, minuteBucket(), hdr)...)
-	return padded(append(head, hdr...), clientPadMin, clientPadMax), nonce
+	rec = padded(append(head, hdr...), clientPadMin, clientPadMax)
+	if hello != nil {
+		hello.put(rec[authHeadLen:], key, nonce, ekm) // (the pad is never shorter than the hello)
+	}
+	return rec, nonce
 }
 
 // parseClientAuth checks the head of the client's first record. On success it

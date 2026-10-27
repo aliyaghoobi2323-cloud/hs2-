@@ -507,6 +507,11 @@ func (s *Session) recvLoop(conn io.Reader, bulk bool) {
 	if pair && !bulk {
 		low = -int32(s.config.MaxReceiveBuffer)
 	}
+	if pair {
+		// a pair is torn down together: the end of either connection is
+		// the session's
+		defer s.Close()
+	}
 
 	for {
 		for atomic.LoadInt32(&s.bucket) <= low && !s.IsClosed() {

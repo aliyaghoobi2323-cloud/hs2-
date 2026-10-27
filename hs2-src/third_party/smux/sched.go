@@ -513,6 +513,9 @@ func (s *Session) sendLoopSched(sc *schedState, conn io.Writer) {
 		}
 		if err != nil {
 			s.notifyWriteError(err)
+			if s.bconn != nil {
+				s.Close() // a pair is torn down together
+			}
 			return
 		}
 	}

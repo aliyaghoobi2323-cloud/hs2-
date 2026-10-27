@@ -49,6 +49,16 @@ import (
 // schedUserFrames: a user's data frames queued on a link at most (§3.2).
 const schedUserFrames = 64
 
+// TuneEarlyDone 0 (HS2_TUNE_EARLYDONE=0): a stream's bulk frame is written
+// before its writer cuts the next. 1, the default (smux.Config.EarlyDone;
+// the (b) fix of round 2, decision T18): the writer queues its next frame
+// while the one before is being written, one queued and one in flight at
+// most. Without it the user of one stream next to a user of sixteen had
+// 44.9% of the link where 50% was due (round 2 diagnosis): its writer came
+// back for its turn only after the scheduler, work-conserving, had served
+// the other.
+var TuneEarlyDone = 1
+
 // laneData: a latency-lane frame's data at most, so the frame with smux's
 // header is within LaneFrameMax (a larger one the scheduler queues as bulk).
 const laneData = LaneFrameMax - smux.FrameHeaderSize
@@ -85,6 +95,32 @@ type flowEnt struct {
 	class atomic.Uint32  // class_tx at the latest tick
 	// the flips counted into the link's tallies so far (the runner's)
 	toBulk, toLight uint32
+	// a pair's (the runner's): its writer's busy time at the two ticks
+	// before (moveDue), and whether it was asked to move
+	busy  [2]busyMark
+	moved bool
+}
+
+// busyMark is a stream's WriteBusy at a tick.
+type busyMark struct {
+	at, busy time.Duration
+}
+
+// The move of a pair's stream to BULK (§3.5's bulk behaviour, decision
+// T16): at least classLightSpan sent over 2 s, and a send backlog that held
+// for moveSpan: its writer had data to send moveBusy of the last two ticks.
+const (
+	moveSpan = 200 * time.Millisecond
+	moveBusy = 0.9
+)
+
+// moveDue says whether a stream judged at now, its writer busy busy in
+// all, moves: C1's 2 s window holds sent bytes, and was is its mark two
+// ticks before.
+func moveDue(sent uint32, was busyMark, now, busy time.Duration) bool {
+	span := now - was.at
+	return sent >= classLightSpan && was.at > 0 && span >= moveSpan*9/10 &&
+		float64(busy-was.busy) >= moveBusy*float64(span)
 }
 
 // linkFlows is a link's streams as C1 sees them: smux's FlowInfo, and the
@@ -92,11 +128,15 @@ type flowEnt struct {
 type linkFlows struct {
 	mu   sync.Mutex
 	ents []*flowEnt
+	// pair: the link is a pair, whose streams move to BULK once (moveDue)
+	pair bool
 	// the status line's (the runner's, read under mu): flows by class at the
-	// latest tick, flips since the latest line and when that was
+	// latest tick, flips since the latest line and when that was, and the
+	// streams moved to BULK
 	light, bulk, unknown int
 	toBulk, toLight      uint64
 	lineAt               time.Duration
+	moves                uint64
 }
 
 // info is smux's FlowInfo: the stream's user tag (its SYN's) and the lane of
@@ -142,6 +182,18 @@ func (t *linkFlows) tick(now time.Duration) {
 		e.stats.tx.Store(e.st.TxBytes())
 		c, _, _ := e.cls.Tick(&e.stats, now)
 		e.class.Store(uint32(c))
+		if t.pair && !e.moved {
+			b := e.st.WriteBusy()
+			was := e.busy[0]
+			e.busy[0], e.busy[1] = e.busy[1], busyMark{now, b}
+			if moveDue(e.cls.d[0].sum, was, now, b) {
+				e.st.RequestMove()
+				e.moved = true
+				t.mu.Lock()
+				t.moves++
+				t.mu.Unlock()
+			}
+		}
 		switch c {
 		case ClassLight:
 			light++
@@ -175,7 +227,11 @@ func (t *linkFlows) line(now time.Duration) string {
 		b, l = float64(t.toBulk)/mins, float64(t.toLight)/mins
 	}
 	t.toBulk, t.toLight, t.lineAt = 0, 0, now
-	return classLine(t.light, t.bulk, t.unknown, b, l)
+	line := classLine(t.light, t.bulk, t.unknown, b, l)
+	if t.pair {
+		line += fmt.Sprintf("; moved to BULK %d", t.moves)
+	}
+	return line
 }
 
 // ---- user_mem_share ----
@@ -330,10 +386,15 @@ type coreLink struct {
 	id    int
 	sess  *smux.Session
 	mtr   *linkMeter   // nil: none
-	sc    *sendCapLink // C4-lite's and C3's readings (nil: neither)
+	sc    *sendCapLink // C4-lite's and C3's readings (nil: neither); a pair's QUIET's
 	hq    *hostQ       // nil: C3 off
 	flows *linkFlows   // nil: C2 off
-	tun   atomic.Pointer[l3Link]
+	// a pair's: BULK's α and C3 (nil: none), and QUIET's meter (what it was
+	// written; the link meter counts both)
+	scB *sendCapLink
+	hqB *hostQ
+	qm  *linkMeter
+	tun atomic.Pointer[l3Link]
 	// the status lines': when the hostq line was last made
 	hqAt time.Duration
 }
@@ -405,20 +466,33 @@ func (cs *coreSet) wake(now time.Duration) {
 	}
 }
 
-// step: C4-lite's reading of the link socket and C3's guard, and C1's tick.
+// step: C4-lite's (α's) reading of the link sockets and C3's guards, and
+// C1's tick.
 func (l *coreLink) step(now time.Duration) {
 	wrote := uint64(0)
 	if l.mtr != nil {
 		wrote = l.mtr.wrBytes.Load()
 	}
-	if sc := l.sc; sc != nil {
+	qw, bw := wrote, uint64(0)
+	if l.qm != nil {
+		qw = l.qm.wrBytes.Load()
+		bw = wrote - qw
+	}
+	for _, x := range []struct {
+		sc *sendCapLink
+		w  uint64
+	}{{l.sc, qw}, {l.scB, bw}} {
+		sc := x.sc
+		if sc == nil {
+			continue
+		}
 		if sc.sys != nil {
-			sc.step(now, wrote)
+			sc.step(now, x.w)
 		} else {
 			// no socket to read (not TCP, or off Linux): C3 on the
 			// written rate alone
 			sc.mu.Lock()
-			sc.guard(now, wrote, tcpStat{})
+			sc.guard(now, x.w, tcpStat{})
 			sc.mu.Unlock()
 		}
 	}
@@ -465,16 +539,22 @@ func CoreLines() []string {
 		if l.flows != nil {
 			out = append(out, l.flows.line(now))
 		}
+		el := time.Duration(0)
+		if l.hqAt > 0 {
+			el = now - l.hqAt
+		}
+		l.hqAt = now
 		if l.hq != nil {
-			el := time.Duration(0)
-			if l.hqAt > 0 {
-				el = now - l.hqAt
-			}
-			l.hqAt = now
 			out = append(out, l.hq.line(l.id, el))
+		}
+		if l.hqB != nil {
+			out = append(out, l.hqB.lineOf(fmt.Sprintf("%d bulk", l.id), el))
 		}
 		if l.sc != nil && l.sc.sys != nil {
 			out = append(out, l.sc.line(l.id))
+		}
+		if l.scB != nil && l.scB.sys != nil {
+			out = append(out, l.scB.lineOf(fmt.Sprintf("%d bulk", l.id)))
 		}
 	}
 	return out

@@ -312,4 +312,3 @@ func (s *Session) pairStats() (early int, held int) {
 	}
 	return s.earlyN, held
 }
-

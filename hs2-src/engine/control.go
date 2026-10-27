@@ -270,7 +270,7 @@ func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Ca
 		if car == nil {
 			return 0
 		}
-		n, _ := retransmits(car.TCPConn())
+		n, _ := retransmits(car.DataTCPConn()) // a pair's BULK: the download's socket
 		return n
 	}
 	ping := make([]byte, ctrlPingLen)

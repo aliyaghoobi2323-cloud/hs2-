@@ -61,18 +61,26 @@ func HostQOff() bool { return TuneHQG == 0 }
 // reads every delivery sample as app-limited, and BBR never leaves
 // STARTUP), read as a link's guard is made (newHostQ):
 var (
-	// HQGSegs (HS2_TUNE_HQG_SEGS, > 0): the gate's cap is at least this many
-	// segments, and its low-water mark is the cap. 0: the document's (two
-	// segments; the mark max(cap/2, MSS)). The default is 8, the judge's
+	// HQGSegs (> 0): the gate's cap is at least this many segments, and its
+	// low-water mark is the cap. 0, the default: the document's (two
+	// segments; the mark max(cap/2, MSS)). It is the gate of a guard
+	// newHostQ makes, and of a pair's QUIET socket (round 2, β1): that one
+	// carries the control frames and the latency lane, whose host wait the
+	// document's gate bounds (TestHostWaitBound), and its BBR's STARTUP
+	// costs nothing (it sends little, and never fills the path).
+	HQGSegs = 0
+	// HQGBulkSegs (HS2_TUNE_HQG_SEGS): HQGSegs for a socket that carries
+	// bulk, a pair's BULK and a link of one connection. 8, the judge's
 	// choice on the rig (R1 task 17, decision T12;
 	// docs/architecture/wip/r1/judge.fa.md): of the four variants it passed
 	// most cells on retransmits (11 of 16 against the base + 1 point) and
 	// throughput (15 of 16 at 0.97 x the base), with the lowest probe p99;
 	// the document's gate kept BBR in STARTUP (25-44 % resent) and SEGS=4
 	// cut the upload at 25 Mbit/s to 0.38-0.58 x the base. At 1 Mbit/s its
-	// cap (8 segments, 93 ms) is past the host-wait model's 36 ms
-	// (TestHostWaitBound): an open item for the red team.
-	HQGSegs = 8
+	// cap (8 segments, 93 ms) is past the host-wait model's 36 ms: a light
+	// frame meets it only on a link of one connection (an older peer), on a
+	// pair it waits on QUIET's.
+	HQGBulkSegs = 8
 	// HQGGate 0 (HS2_TUNE_HQG_GATE=0): no write gate; the dynamic low-water
 	// mark (Lowat) alone, at every rate.
 	HQGGate = 1
@@ -200,8 +208,12 @@ type hostQ struct {
 
 // newHostQ guards c, the link's conn, through sys (nil: none, as off Linux:
 // today's send gate). The gate is on at its floor until the first Update.
-func newHostQ(c net.Conn, sys hostSys) *hostQ {
-	h := &hostQ{conn: c, sys: sys, gate: hostGate{segs: HQGSegs, never: HQGGate == 0}}
+// Its gate is HQGSegs's.
+func newHostQ(c net.Conn, sys hostSys) *hostQ { return newHostQSegs(c, sys, HQGSegs) }
+
+// newHostQSegs is newHostQ with a gate of segs segments (HQGSegs).
+func newHostQSegs(c net.Conn, sys hostSys, segs int) *hostQ {
+	h := &hostQ{conn: c, sys: sys, gate: hostGate{segs: segs, never: HQGGate == 0}}
 	if sys == nil {
 		h.fallback(nil)
 		return h
@@ -292,7 +304,10 @@ func (h *hostQ) fallback(err error) {
 
 // line is the guard's status line (§3.3) over the last elapsed, and starts
 // the next one's tallies.
-func (h *hostQ) line(n int, elapsed time.Duration) string {
+func (h *hostQ) line(n int, elapsed time.Duration) string { return h.lineOf(fmt.Sprint(n), elapsed) }
+
+// lineOf is line for the link socket named name (a pair's BULK: "N bulk").
+func (h *hostQ) lineOf(name string, elapsed time.Duration) string {
 	gate := "off"
 	if h.on.Load() {
 		gate = "on"
@@ -315,6 +330,6 @@ func (h *hostQ) line(n int, elapsed time.Duration) string {
 	if elapsed > 0 {
 		ratio = float64(h.blocked.Swap(0)) / float64(elapsed)
 	}
-	return fmt.Sprintf("hostq link %d: lowat %.1f KiB, gate %s (cap %d B), notsent p95 %d B, blocked ratio %.2f",
-		n, float64(h.lowat.Load())/1024, gate, h.cap.Load(), p95, ratio)
+	return fmt.Sprintf("hostq link %s: lowat %.1f KiB, gate %s (cap %d B), notsent p95 %d B, blocked ratio %.2f",
+		name, float64(h.lowat.Load())/1024, gate, h.cap.Load(), p95, ratio)
 }

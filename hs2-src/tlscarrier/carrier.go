@@ -25,6 +25,22 @@ type Carrier struct {
 	// auth records (auth.go); zero on a carrier made by NewCarrier
 	level byte
 	caps  uint32
+	// bulk: the BULK connection of a pair (CapPair; nil: the link is one
+	// connection), dialled or accepted with this one, its QUIET
+	bulk *Carrier
+}
+
+// Bulk is the carrier of the link's BULK connection when the link is a pair
+// (CapPair), nil when it is one connection.
+func (c *Carrier) Bulk() *Carrier { return c.bulk }
+
+// DataTCPConn is the TCP socket the link's bulk data rides: a pair's BULK,
+// else the link's own (TCPConn).
+func (c *Carrier) DataTCPConn() *net.TCPConn {
+	if c.bulk != nil {
+		return c.bulk.TCPConn()
+	}
+	return c.TCPConn()
 }
 
 // writeTimeout bounds one write; a link that cannot drain for this long is
@@ -201,7 +217,13 @@ func (c *Carrier) readFrame(buf []byte) (byte, []byte, error) {
 	return hdr[0], body[:reallen], nil
 }
 
-func (c *Carrier) Close() error { return c.conn.Close() }
+// Close closes the link: both connections of a pair.
+func (c *Carrier) Close() error {
+	if c.bulk != nil {
+		c.bulk.conn.Close()
+	}
+	return c.conn.Close()
+}
 
 // RawConn returns the underlying authenticated TLS connection, for callers that
 // want to run their own multiplexer (smux) on top instead of hs2 framing. After
@@ -252,7 +274,50 @@ func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, erro
 // DialFromTimeout is DialFrom with its own TCP connect timeout. A short one
 // keeps a dial's SYNs close together (the kernel spaces a hanging connect's
 // retransmits 1, 2, 4 s apart), for a caller that retries anyway.
+//
+// When both ends pair (level LevelPair and CapPair), the link is a pair:
+// this dials its QUIET connection and, once QUIET has its proof, its BULK
+// one, the same way (a TLS handshake and the auth record each), and returns
+// QUIET's carrier with BULK's (Bulk). Either failing fails the link.
 func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration) (*Carrier, error) {
+	h := LocalAuthHdr()
+	var hello *pairHello
+	if h.Caps&CapPair != 0 {
+		hello = &pairHello{role: pairQuiet}
+		rand.Read(hello.id[:])
+	}
+	q, err := dialOne(addr, sni, sharedKey, bindIP, connect, h, hello)
+	if err != nil {
+		return nil, err
+	}
+	if hello == nil || q.level < LevelPair || q.caps&CapPair == 0 {
+		q.caps &^= CapPair // one connection: an older peer, or one that does not pair
+		proto.linked(q.level, q.caps)
+		return q, nil
+	}
+	hb := *hello
+	hb.role = pairBulk
+	b, err := dialOne(addr, sni, sharedKey, bindIP, connect, h, &hb)
+	if err == nil && (b.level != q.level || b.caps != q.caps) {
+		b.Close()
+		err = errPairMismatch
+	}
+	if err != nil {
+		q.Close()
+		return nil, fmt.Errorf("tlscarrier: the link's BULK connection: %w", err)
+	}
+	q.bulk = b
+	proto.linked(q.level, q.caps)
+	return q, nil
+}
+
+// errPairMismatch: a pair's two connections negotiated different levels or
+// caps (the other server changed in between).
+var errPairMismatch = errors.New("the pair's connections negotiated differently")
+
+// dialOne dials one connection of a link: TCP, uTLS, the auth record with
+// h (and a pair's hello when not nil) and the server's proof.
+func dialOne(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, h AuthHdr, hello *pairHello) (*Carrier, error) {
 	d := net.Dialer{Timeout: connect}
 	if bindIP != "" {
 		ip := net.ParseIP(bindIP)
@@ -290,8 +355,7 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 		raw.Close()
 		return nil, err
 	}
-	h := LocalAuthHdr()
-	rec, nonce := makeClientAuth(sharedKey, ekm, h)
+	rec, nonce := makeClientAuth(sharedKey, ekm, h, hello)
 	if _, err := u.Write(rec); err != nil {
 		raw.Close()
 		return nil, err
@@ -308,7 +372,6 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 	}
 	raw.SetDeadline(time.Time{})
 	caps := p.Caps & h.Caps // never more than this side has
-	proto.linked(p.Level, caps)
 	return &Carrier{conn: u, level: p.Level, caps: caps}, nil
 }
 
