@@ -220,10 +220,16 @@ func TestPeerInfoDirectBothServers(t *testing.T) {
 	r.waitFor("exit learns the edge's 6", 10*time.Second, func() bool { return r.exitView().PeerMax == 6 })
 }
 
-// End to end, REVERSE: the edge sees the exit's applied max, the exit the edge's.
+// End to end, REVERSE: the edge sees the exit's applied max, the exit the
+// edge's. The exit applies its max with the QUIET links (QuietTotal: 4
+// BULK and one QUIET since R1 round 3, T19; 4 within max_links before).
 func TestPeerInfoReverseBothServers(t *testing.T) {
 	r := startV2(t, v2Opts{min: 2, max: 6, perLink: 8, exitLinks: 2, exitMin: 2, exitMax: 4})
-	r.waitFor("edge learns the exit's 4", 10*time.Second, func() bool { return r.lm.Stats().PeerMax == 4 })
+	want := 4
+	if !QuietOff() {
+		want = QuietTotal(4)
+	}
+	r.waitFor(fmt.Sprintf("edge learns the exit's %d", want), 10*time.Second, func() bool { return r.lm.Stats().PeerMax == want })
 	r.waitFor("exit learns the edge's 6", 10*time.Second, func() bool { return r.exitView().PeerMax == 6 })
 }
 
