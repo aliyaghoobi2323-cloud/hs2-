@@ -60,6 +60,13 @@ var TuneEarlyDone = 1
 // EarlyDoneOff says whether the (b) fix is off.
 func EarlyDoneOff() bool { return TuneEarlyDone == 0 }
 
+// QuietCC is the congestion control of a QUIET link's sockets, at both
+// ends (HS2_TUNE_QUIET_CC; "": the links' own, BBR): its traffic is light,
+// and BBR's PROBE_RTT, its window at 4 segments for 200 ms each 10 s, held
+// the probes of a QUIET link with 198 probe users (each a padded record
+// each 200 ms) for hundreds of ms on the rig.
+var QuietCC = "cubic"
+
 // QuietCount is how many QUIET links a pool of maxLinks keeps: one, and a
 // second for redundancy once the pool may have four links or more.
 func QuietCount(maxLinks int) int {

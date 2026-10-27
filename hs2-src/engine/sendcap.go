@@ -72,6 +72,7 @@ type capSample struct {
 	Segs           uint32        // data segments sent (tcpi_data_segs_out), cumulative
 	SRTT           time.Duration // the socket's srtt (0: unknown): the idle span
 	MinRTT         time.Duration // the socket's min_rtt (0: unknown): α's queue delay, SRTT - MinRTT
+	Received       uint64        // bytes received on the socket (tcpi_bytes_received), cumulative: α's other direction
 }
 
 type capRate struct {
@@ -118,6 +119,8 @@ type sendCap struct {
 	aQ    time.Duration
 	aQ0   time.Duration // the reading before's
 	aUp   int           // readings in a row q grew past alphaLow
+	aAck0 uint64        // acked and received at the reading before
+	aRx0  uint64
 	aDlv  [alphaRecent]float64
 	aDi   int
 	aMax  [alphaSpan]float64
@@ -138,48 +141,64 @@ func AlphaOff() bool { return TuneAlpha == 0 }
 // cwnd_gain, 85 to 175 ms on a deep FIFO) the one thing a light flow on a
 // TCP connection of its own still waits behind, and CoDel's drops at its
 // 5 ms target a link above it never stops making. Each reading of the
-// socket (100 ms), with q = srtt − min_rtt and d the largest delivery rate
-// of its last alphaRecent readings:
+// socket (100 ms), with q = srtt − min_rtt, d the largest delivery rate of
+// its last alphaRecent readings, and share this direction's part of the
+// bytes the connection carried both ways since the reading before:
 //
-//   - the path delivered clearly less than the cap (d < alphaKeep × the
-//     cap): this direction is at its bottleneck, and the queue is its own;
-//     the cap goes to d less the share that drains q past alphaLow (CoDel's
-//     5 ms target) within alphaDrain, at most alphaCutMax;
-//   - it delivered about what the cap let out but q past alphaLow grew (by
-//     alphaRise) since the reading before (alphaRiseN readings in a row):
-//     the cap is a little past the path
-//     (a delivery sample is too noisy to see a few %: a test at 0.97 cut the
-//     cap to every dip and held a download at half the path on the rig),
-//     and it backs off the same way;
-//   - else the queue, if any, is not this socket's doing: the cap grows,
-//     by alphaGrowFast under alphaLow, by alphaGrow over it, to 1.25 × the
-//     2 s delivery maximum (C4-lite's), so it finds a path that got faster.
+//   - the path delivered clearly less than the cap (d under alphaKeep × the
+//     cap): this direction is at its bottleneck, the queue its own; the cap goes
+//     to d less the share of it that drains q past alphaLow (CoDel's 5 ms
+//     target) within alphaDrain, at most alphaCutMax;
+//   - the greater direction (share ≥ alphaMajor) delivered most but not
+//     all of the cap (under alphaMatch: all of it means the cap is under
+//     the path), or q passed
+//     alphaBig, and q past alphaLow grew since the reading before (by
+//     alphaRise): the cap is a little past the path (a delivery sample is too
+//     noisy to see a few %: a test at 0.97 cut the cap at every dip and held
+//     a download at half the path on the rig); it backs off the same way;
+//   - else the queue, if any, is not this socket's doing: the cap grows by
+//     alphaGrowFast under alphaLow, by alphaGrow over it, to 1.25 × the 2 s
+//     delivery maximum (C4-lite's), so it finds a path that got faster.
 //
 // Why not q alone: srtt holds both directions' queues (the acks come back
 // through the other one, behind that end's data and pacing), so on a link
 // that carries both a download and an upload the two ends read the same
 // sum. A cap that backed off on q alone held the lighter direction down for
 // good (on the rig, the download of a link with an upload on it at 0.3
-// Mbit/s of 25, then at 6 with a factor of its own 10 s maximum): it cut
-// for a queue its cuts could not drain. The headroom low rates need (the
-// other direction's acks, the TUN's pings and the QUIET link share the
-// bottleneck; a fixed 0.95 left 21 to 32 ms there) comes from the queue:
-// whatever else crosses the bottleneck shows in q while this direction is
-// at it. Never under alphaKMin × the 10 s delivery maximum (a noisy reading
-// never starves it), nor alphaFloor.
+// Mbit/s of 25, then at 6 with a factor of its own 10 s maximum, then at 16
+// with the delivery test alone): it cut for a queue its cuts could not
+// drain. So a growing queue is the greater direction's to answer (the
+// opposite direction's bytes weigh in, as the lead's T18 has it), and the
+// lesser one's own overshoot only the delivery test catches (a tighter one,
+// 0.97, cut the lesser direction at every noisy sample: a download at 6 of
+// 25 Mbit/s on the rig). The loop tests hold both directions over 0.96 of
+// equal paths (TestAlphaTwoWays); with a lesser direction much slower than
+// the greater one's path (100 down, 20 up) the greater one is held to about
+// the lesser one's rate: an open item. The headroom low rates need (the other direction's
+// acks, the TUN's pings and the QUIET link share the bottleneck; a fixed
+// 0.95 left 21 to 32 ms there) comes from the queue: whatever else crosses
+// the bottleneck shows in q while this direction is at it. Never under
+// alphaKMin × the 10 s delivery maximum (a noisy reading never starves
+// it), nor alphaFloor. A sample Linux marks app-limited holds the cap,
+// unless it delivered about the cap: a cap that binds makes Linux mark
+// most samples so (84% of a 100 Mbit/s link's on the rig, whose cap then
+// never grew).
 const (
-	alphaLow    = 5 * time.Millisecond
-	alphaDrain  = 100 * time.Millisecond
-	alphaCutMax = 0.1
+	alphaLow      = 5 * time.Millisecond
+	alphaDrain    = 100 * time.Millisecond
+	alphaCutMax   = 0.1
 	alphaGrow     = 0.02
-	alphaGrowFast = 0.05
+	alphaGrowFast = 0.03
 	alphaRise     = 500 * time.Microsecond
 	alphaRiseN    = 1
 	alphaKeep     = 0.85
-	alphaKMin   = 0.75
-	alphaRecent = 3
-	alphaSpan   = 10
-	alphaFloor  = 32 << 10
+	alphaMatch    = 0.98
+	alphaBig      = 7500 * time.Microsecond
+	alphaMajor    = 0.5
+	alphaKMin     = 0.75
+	alphaRecent   = 3
+	alphaSpan     = 10
+	alphaFloor    = 32 << 10
 )
 
 // alphaLongMax notes the reading's delivery rate and is the largest of the
@@ -217,6 +236,14 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 	if s.SRTT > 0 && s.MinRTT > 0 && s.SRTT > s.MinRTT {
 		c.aQ = s.SRTT - s.MinRTT
 	}
+	// this direction's share of what the connection carried since the
+	// reading before: the other one's queue is in q too
+	dtx, drx := s.Acked-c.aAck0, s.Received-c.aRx0
+	c.aAck0, c.aRx0 = s.Acked, s.Received
+	share := 1.0
+	if dtx+drx > 0 && s.Received >= drx {
+		share = float64(dtx) / float64(dtx+drx)
+	}
 	if s.Delivery <= 0 {
 		return // nothing to judge by: it holds
 	}
@@ -227,13 +254,7 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 		d = math.Max(d, v)
 	}
 	if s.AppLimited && d < alphaKeep*c.aRate {
-		// the sender had less to send than the cap let out: nothing to
-		// judge the path by, it holds. (A cap that binds makes Linux mark
-		// most samples app-limited too, the socket paced below what its
-		// cwnd allows: on the rig 84% of a 100 Mbit/s link's, whose cap
-		// then never grew; such a sample that delivered about the cap
-		// counts as the path keeping up.)
-		return
+		return // the sender had less to send than the cap let out: it holds
 	}
 	ceil := wcNetKOf() * c.maxDlv()
 	if c.aQ > alphaLow && c.aQ > c.aQ0+alphaRise {
@@ -251,7 +272,7 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 		if cut > 0 {
 			c.aCuts++
 		}
-	case c.aUp >= alphaRiseN:
+	case c.aUp >= alphaRiseN && share >= alphaMajor && (d < alphaMatch*c.aRate || c.aQ > alphaBig):
 		c.aRate = math.Min(c.aRate, d) * (1 - cut)
 		c.aCuts++
 	default:
@@ -463,7 +484,7 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 	if ts.dlvOK {
 		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),
-			MinRTT: usDur(uint64(ts.minRTT))}))
+			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived}))
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
 	}

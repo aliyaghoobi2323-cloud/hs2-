@@ -511,11 +511,14 @@ func TestQuietCounts(t *testing.T) {
 // α (sendcap.go) on a BULK link's socket, reading by reading: once the
 // path delivers less than the cap, the cap goes to what it delivered, less
 // the share that drains the queue past 5 ms within 100 ms (at most 10%);
-// while it keeps up, the cap grows (5% under 5 ms of queue, 2% over it:
+// while it keeps up, the cap grows (3% under 5 ms of queue, 2% over it:
 // that queue is not its own) unless the queue grew since the reading
-// before (then it is: it backs off the same way); never under 0.75 of the 10 s
-// maximum nor the floor; an app-limited reading holds it; a QUIET link
-// keeps C4-lite's 1.25 ×.
+// before while the path delivered less than all of the cap, or past 7.5 ms
+// (then it is its own: it backs off the same way, by its share of the
+// connection's bytes); never under 0.75 of the
+// 10 s maximum nor the floor; an app-limited reading holds it unless it
+// delivered about the cap (a binding cap makes Linux mark samples
+// app-limited); a QUIET link keeps C4-lite's 1.25 ×.
 func TestAlphaCap(t *testing.T) {
 	const ms = time.Millisecond
 	near := func(a, b float64) bool { return math.Abs(a-b) <= 1e-6*b+1 }
@@ -529,17 +532,17 @@ func TestAlphaCap(t *testing.T) {
 	const rate = 25e6 / 8
 	c := &sendCap{linked: true, alpha: true}
 	feed(c, rate, 2*ms, false) // C4-lite's rule: armed from the second reading
-	feed(c, rate, 2*ms, false) // armed at what was delivered, kept up at 2 ms: +5%
-	if !near(c.aRate, rate*1.05) || uint64(c.aRate) != c.own {
-		t.Fatalf("armed at %.0f (own %d), want %.0f", c.aRate, c.own, rate*1.05)
+	feed(c, rate, 2*ms, false) // armed at what was delivered, kept up at 2 ms: +3%
+	if !near(c.aRate, rate*1.03) || uint64(c.aRate) != c.own {
+		t.Fatalf("armed at %.0f (own %d), want %.0f", c.aRate, c.own, rate*1.03)
 	}
-	feed(c, rate*1.05, 2*ms, false) // kept up, 2 ms: +5%
-	if !near(c.aRate, rate*1.05*1.05) {
-		t.Fatalf("kept up: cap %.0f, want %.0f", c.aRate, rate*1.05*1.05)
+	feed(c, rate*1.03, 2*ms, false) // kept up, 2 ms: +3%
+	if !near(c.aRate, rate*1.03*1.03) {
+		t.Fatalf("kept up: cap %.0f, want %.0f", c.aRate, rate*1.03*1.03)
 	}
-	feed(c, rate*1.08, 9*ms, false) // kept up, but 9 ms and rising: its own, 4% off what it delivered
-	if !near(c.aRate, rate*1.08*0.96) {
-		t.Fatalf("a rising queue: cap %.0f, want %.0f", c.aRate, rate*1.08*0.96)
+	feed(c, rate, 9*ms, false) // delivered less than all of the cap, 9 ms and rising: its own, 4% off
+	if !near(c.aRate, rate*1.03*0.96) {
+		t.Fatalf("a rising queue: cap %.0f, want %.0f", c.aRate, rate*1.03*0.96)
 	}
 	r := c.aRate
 	feed(c, r, 9*ms, false) // kept up, 9 ms that did not grow: not its own, +2%
@@ -553,9 +556,9 @@ func TestAlphaCap(t *testing.T) {
 	if !near(c.aRate, r) {
 		t.Fatalf("app-limited: cap %.0f, want it held at %.0f", c.aRate, r)
 	}
-	feed(c, r, 2*ms, true) // app-limited but at the cap (a cap that binds): kept up, +5%
-	if !near(c.aRate, r*1.05) {
-		t.Fatalf("app-limited at the cap: cap %.0f, want %.0f", c.aRate, r*1.05)
+	feed(c, r, 2*ms, true) // app-limited but at the cap (a cap that binds): kept up, +3%
+	if !near(c.aRate, r*1.03) {
+		t.Fatalf("app-limited at the cap: cap %.0f, want %.0f", c.aRate, r*1.03)
 	}
 	c2 := &sendCap{linked: true, alpha: true}
 	for i := 0; i < 5; i++ {
@@ -596,8 +599,10 @@ func TestAlphaCap(t *testing.T) {
 // while under it, and the srtt reading holds besides q0 of queue that is
 // not its own (the other direction's, its acks behind). The cap fills the
 // path (>= 0.9 of it, mean of the last 10 s), keeps its own queue within
-// 10 ms, and climbs from 1 Mbit/s to the path within 10 s, with q0 of 0 and
-// of 6 ms (the first versions held the second one down for good).
+// 12 ms, and climbs from 1 Mbit/s to the path within 10 s, with q0 of 0 and
+// of 6 ms (the first versions held the second one down for good). (The
+// sender here fills the cap at once, a worst case: the queue the cap's
+// last steps above the path leave is what the bound holds, 12 ms.)
 func TestAlphaLoop(t *testing.T) {
 	const ms = time.Millisecond
 	for _, c0 := range []struct {
@@ -636,8 +641,8 @@ func TestAlphaLoop(t *testing.T) {
 		mean := sum / 100
 		t.Logf("path %.0f Mbit/s, q0 %v, from %.0f: delivered %.3f of the path, its own queue at most %v (after 10 s)",
 			c0.path*8/1e6, c0.q0, c0.from*8/1e6, mean/c0.path, worstQ)
-		if mean < 0.9*c0.path || worstQ > 10*ms {
-			t.Fatalf("path %.0f Mbit/s, q0 %v: delivered %.3f of the path, own queue up to %v; want >= 0.9 and <= 10 ms",
+		if mean < 0.9*c0.path || worstQ > 12*ms {
+			t.Fatalf("path %.0f Mbit/s, q0 %v: delivered %.3f of the path, own queue up to %v; want >= 0.9 and <= 12 ms",
 				c0.path*8/1e6, c0.q0, mean/c0.path, worstQ)
 		}
 	}
@@ -805,6 +810,73 @@ func TestEarlyDoneOneVsSixteen(t *testing.T) {
 	t.Logf("the user of one stream: %.3f of its floor with the early Done, %.3f without", on, off)
 	if on < 0.9 {
 		t.Fatalf("with the early Done the user of one stream got %.3f of its floor, want >= 0.9", on)
+	}
+}
+
+// The two ends of one BULK link in a loop, a download and an upload on
+// one connection, each direction its own path: each end's srtt holds both
+// directions' queues (its acks come back behind the other's data), and
+// each one's sender starts behind the other (the upload first at its path,
+// the download from 2 Mbit/s, as the rig's s5 found them). On equal paths
+// both fill them (>= 0.9 over the last 10 s) and keep their queues within
+// 15 ms: neither holds the other down (the first α held the download at
+// 0.3 to 16 Mbit/s of 25 this way). A 100 Mbit/s download next to a 20
+// Mbit/s upload is logged: the open item of sendcap.go's α.
+func TestAlphaTwoWays(t *testing.T) {
+	const ms = time.Millisecond
+	type end struct {
+		c          *sendCap
+		path, cap  float64
+		q          time.Duration
+		acked, sum float64
+	}
+	for _, c0 := range []struct {
+		dn, up, dnFrom float64
+		open           bool // logged, not asserted: the open item of sendcap.go's α
+	}{
+		{25e6 / 8, 25e6 / 8, 2e6 / 8, false}, {5e6 / 8, 5e6 / 8, 1e6 / 8, false}, {25e6 / 8, 25e6 / 8, 25e6 / 8, false},
+		{100e6 / 8, 20e6 / 8, 10e6 / 8, true},
+	} {
+		dn := &end{c: &sendCap{linked: true, alpha: true}, path: c0.dn, cap: c0.dnFrom}
+		up := &end{c: &sendCap{linked: true, alpha: true}, path: c0.up, cap: c0.up}
+		at := time.Hour
+		var worst time.Duration
+		for i := 0; i < 300; i++ {
+			at += 100 * ms
+			for _, e := range []*end{dn, up} {
+				e.q += time.Duration((e.cap - e.path) / e.path * float64(100*ms))
+				e.q = max(e.q, 0)
+				e.acked += math.Min(e.cap, e.path) / 10
+			}
+			for k, e := range []*end{dn, up} {
+				o := up
+				if k == 1 {
+					o = dn
+				}
+				dlv := math.Min(e.cap, e.path)
+				e.c.Update(capSample{Now: at, Delivery: dlv, Acked: uint64(e.acked), Written: uint64(e.acked),
+					Segs: uint32(e.acked / 1000), Received: uint64(o.acked),
+					SRTT: 72*ms + e.q + o.q, MinRTT: 72 * ms})
+				if e.c.own > 0 {
+					e.cap = float64(e.c.own)
+				}
+				if i >= 200 {
+					e.sum += dlv
+				}
+				if i >= 100 {
+					worst = max(worst, e.q)
+				}
+			}
+		}
+		t.Logf("down %.0f / up %.0f Mbit/s (down from %.0f): down %.3f, up %.3f of their paths; a queue at most %v (after 10 s)",
+			c0.dn*8/1e6, c0.up*8/1e6, c0.dnFrom*8/1e6, dn.sum/100/dn.path, up.sum/100/up.path, worst)
+		if c0.open {
+			continue
+		}
+		if dn.sum/100 < 0.9*dn.path || up.sum/100 < 0.9*up.path || worst > 15*ms {
+			t.Fatalf("down %.3f, up %.3f of their paths, a queue up to %v: want >= 0.9 each and <= 15 ms",
+				dn.sum/100/dn.path, up.sum/100/up.path, worst)
+		}
 	}
 }
 
