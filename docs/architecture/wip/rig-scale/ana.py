@@ -109,8 +109,8 @@ def schedule(plan, reps):
             die("%s:%d: MIX %s (one of %s)" % (plan, ln, d["MIX"], " ".join(MIXES)))
         if parse_mode(d["MODE"]) is None:
             die("%s:%d: MODE %s (fqcodel, pfifo:L, police:PR, agg:AR, police:PR+LEAF)" % (plan, ln, d["MODE"]))
-        if d["BIN"] not in ("old", "new"):
-            die("%s:%d: BIN %s (old or new)" % (plan, ln, d["BIN"]))
+        if not re.match(r"^[a-z0-9]+$", d["BIN"]):
+            die("%s:%d: BIN %s (old, new, or a label of BINS)" % (plan, ln, d["BIN"]))
         U, v6 = int(d["USERS"]), int(d.get("V6", "0"))
         k = int(d.get("TUN", "1" if d["MIX"] == "tunping" else "0"))
         if U < 1 or U - k - (v6 > 0) > 500 or k > 500 or k > U:
@@ -137,7 +137,9 @@ def schedule(plan, reps):
                 if len(bins) == 2:
                     seq += bins if r == 0 else bins[::-1]
                 else:
-                    seq += bins[r % len(bins):] + bins[:r % len(bins)]
+                    # k > 2 (the judge): forward, then backward for every
+                    # further repeat, as ABBABA (old, a, b, b, a, old, b, a, old)
+                    seq += bins if r == 0 else bins[::-1]
         count = {}
         for b in seq:
             count[b] = count.get(b, 0) + 1
@@ -390,6 +392,7 @@ def compose(r, ok, why):
         ok = "0"
         errs.append("no client output: " + " ".join(open(r + "/client.err").read().split()[-30:]) if os.path.exists(r + "/client.err") else "no client output")
     rec = {"id": meta.get("id"), "ok": ok == "1", "bin": meta.get("bin"), "bin_sha": meta.get("bin_sha"),
+           "bin_env": meta.get("bin_env", ""),
            "order": meta.get("order"), "rep": meta.get("rep"), "cell": meta.get("cell")}
     for k in ORDER:
         if k in cell:
@@ -422,6 +425,9 @@ def compose(r, ok, why):
             for k in ("dial_errs", "short_ends", "probe_errs"):
                 if u.get(k):
                     x[k] = u[k]
+            for k in ("dn_1s", "up_1s"):
+                if u.get(k):
+                    x[k] = u[k]
             for k in ("probe", "ping"):
                 if u.get(k):
                     x[k + "_p99"] = {w: l["p99"] for w, l in u[k].items() if l}
@@ -435,6 +441,15 @@ def compose(r, ok, why):
             rec["client_errs"] = cl["errs"]
     rec["cpu"] = pidstat(r + "/pidstat.txt", {"edge": links.get("pid_edge"), "exit": links.get("pid_exit")})
     rec["retrans"] = rt
+    mem = {}
+    for s_ in ("edge", "exit"):
+        try:
+            for l in open("%s/mem-%s.txt" % (r, s_)):
+                k, v = l.split(":", 1)
+                mem.setdefault(s_, {})[k.strip()[2:].lower() + "_kb"] = int(v.split()[0])
+        except (OSError, ValueError, IndexError):
+            pass
+    rec["mem"] = mem
     rec["bottleneck"] = {"dn": tc_parse(r + "/tc-dn.txt"), "up": tc_parse(r + "/tc-up.txt")}
     keep = ("links", "target", "users", "mbit", "phase", "flowing", "peak_mbit", "pressed", "cap_mbit")
     rec["status"] = {s: {k: st[s].get(k) for k in keep if k in st[s]} for s in st}
@@ -650,15 +665,19 @@ def analyze(path, as_json=False):
     for s in summary:
         by_cell.setdefault(s["cell"], {})[s["bin"]] = s
     for c, b in by_cell.items():
-        if "old" in b and "new" in b:
+        if "old" not in b:
+            continue
+        for nb in b:
+            if nb == "old":
+                continue
             for d in ("dn", "up"):
-                o, n = b["old"]["med"].get(d), b["new"]["med"].get(d)
+                o, n = b["old"]["med"].get(d), b[nb]["med"].get(d)
                 if o and n and o[0] > 0.01:
-                    b["new"].setdefault("vs_old", {})[d] = round(n[0] / o[0], 3)
-            vo = b["new"].get("vs_old", {})
+                    b[nb].setdefault("vs_old", {})[d] = round(n[0] / o[0], 3)
+            vo = b[nb].get("vs_old", {})
             if vo:
-                b["new"].setdefault("verdict", {})["thr"] = {"pass": all(x >= 0.97 for x in vo.values()),
-                                                             "runs": " ".join("%s %.3f" % i for i in vo.items())}
+                b[nb].setdefault("verdict", {})["thr"] = {"pass": all(x >= 0.97 for x in vo.values()),
+                                                          "runs": " ".join("%s %.3f" % i for i in vo.items())}
     if as_json:
         print(json.dumps(summary, indent=1))
         return
