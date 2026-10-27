@@ -30,7 +30,7 @@ func levelCappedServer(t *testing.T, key []byte, levelCap byte) (string, chan *C
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &Server{SharedKey: key, Cert: testCert(t, "vpn.example.com"), BackendAddr: be, levelCap: levelCap}
+	srv := &Server{SharedKey: key, Cert: testCert(t, "vpn.example.com"), BackendAddr: be, MaxLevel: levelCap}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		for {

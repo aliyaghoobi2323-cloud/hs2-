@@ -19,7 +19,9 @@ import (
 // link is a full real-TLS session (Chrome fingerprint, real cert, in-stream
 // auth) — the same DPI-resistant carrier as the single-link path, just N of
 // them. smux multiplexes user connections onto the one TLS session so a link
-// with many users still looks like a single HTTPS connection on the wire.
+// with many users still looks like a single HTTPS connection on the wire; a
+// link of two binaries that pair is two (QUIET and BULK, tls.Bulk), one
+// smux session over both, and counts as one link.
 type mtcpLink struct {
 	tls     *tlscarrier.Carrier
 	sess    *smux.Session

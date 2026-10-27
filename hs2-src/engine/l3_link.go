@@ -365,6 +365,9 @@ func (s *l3Set) linkFor(h uint32) *l3Link {
 // noteArrival pins the flow of the replies to pkt, a packet that came on l
 // (the exit's: toUser), to l.
 func (s *l3Set) noteArrival(l *l3Link, pkt []byte) {
+	if !s.toUser {
+		return // the edge pins its requests by their hash
+	}
 	h, ok := replyFlow(pkt)
 	if !ok {
 		return
@@ -554,9 +557,7 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 			return
 		}
 		if ft == core.TypeData {
-			if s.toUser {
-				s.noteArrival(l, payload) // its replies go back on l
-			}
+			s.noteArrival(l, payload) // (the exit's) its replies go back on l
 			dev.Write(payload)
 		}
 	}

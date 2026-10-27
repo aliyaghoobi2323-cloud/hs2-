@@ -26,6 +26,11 @@ import (
 //   - smux flow control pushes back on the sender instead of queueing, so a
 //     download cannot bury everything else under seconds of buffered data.
 //   - Each link is one real TLS session; streams of many users share it.
+//     Between two binaries that pair (wire level 2, CapPair; decision T16)
+//     a link is two TLS sessions, QUIET and BULK, under one smux session:
+//     QUIET carries the control frames and the latency lane, BULK the bulk
+//     lane, and a stream's data moves to BULK once it is bulk
+//     (third_party/smux pair.go, newSessionPairCaps).
 //
 // The first byte of every stream says what it carries. The TUN (hs0), when a
 // mode has one, is a side channel for non-TCP traffic (ping, UDP to 10.77.x)
@@ -90,18 +95,31 @@ type watchConn struct {
 	// that smux's reader has stopped asking for data (its bucket is empty).
 	rdCalls atomic.Uint64
 	inRead  atomic.Bool
+	// first, shared by a pair's two watches: the first error of either, the
+	// link's reason (the other one's then is ours closing it)
+	first *atomic.Pointer[string]
 }
 
 func (w *watchConn) fail(op string, err error) {
 	w.once.Do(func() {
 		s := op + ": " + describeNetErr(err)
 		w.why.Store(&s)
+		if w.first != nil {
+			w.first.CompareAndSwap(nil, &s)
+		}
 		go w.onErr()
 	})
 }
 
-// reason returns why the connection failed, or "" if it has not.
+// reason returns why the connection failed, or "" if it has not; a pair's
+// connection, why the first of the two failed.
 func (w *watchConn) reason() string {
+	if w.first != nil {
+		if s := w.first.Load(); s != nil {
+			return *s
+		}
+		return ""
+	}
 	if s := w.why.Load(); s != nil {
 		return *s
 	}
@@ -300,8 +318,12 @@ func newSessionPairCaps(conn, bulk net.Conn, server bool, sampler *obfs.LengthSa
 			s.Close()
 		}
 	}
+	var first atomic.Pointer[string]
 	for _, ls := range socks {
 		ls.w.onErr = onErr
+		if pair {
+			ls.w.first = &first
+		}
 	}
 	var sess *smux.Session
 	var err error
@@ -378,19 +400,7 @@ func newSessionPairCaps(conn, bulk net.Conn, server bool, sampler *obfs.LengthSa
 		}
 		coreLinks.add(cl)
 	}
-	why := q.w.reason
-	if pair {
-		why = func() string {
-			if r := q.w.reason(); r != "" {
-				return "QUIET " + r
-			}
-			if r := b.w.reason(); r != "" {
-				return "BULK " + r
-			}
-			return ""
-		}
-	}
-	return sess, why, nil
+	return sess, q.w.reason, nil
 }
 
 // newLinkCap is the pacing cap of a link socket with C3's readings of it

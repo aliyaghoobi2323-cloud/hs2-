@@ -138,13 +138,25 @@ func echoListener(t *testing.T, addr string) string {
 // freePortOn returns a TCP port on ip that is free right now.
 func freePortOn(t *testing.T, ip string) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", ip+":0")
-	if err != nil {
-		t.Fatal(err)
+	// a port free for TCP and for UDP: the tests listen on both (one free
+	// for TCP alone was sometimes taken for UDP: "bind: address already in
+	// use", docs/architecture/wip/r1/flaky.fa.md)
+	for i := 0; ; i++ {
+		ln, err := net.Listen("tcp", ip+":0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, p, _ := net.SplitHostPort(ln.Addr().String())
+		pc, uerr := net.ListenPacket("udp", net.JoinHostPort(ip, p))
+		ln.Close()
+		if uerr == nil {
+			pc.Close()
+			return p
+		}
+		if i == 50 {
+			t.Fatalf("no port free for both TCP and UDP on %s: %v", ip, uerr)
+		}
 	}
-	_, p, _ := net.SplitHostPort(ln.Addr().String())
-	ln.Close()
-	return p
 }
 
 func echoAccept(ln net.Listener) {

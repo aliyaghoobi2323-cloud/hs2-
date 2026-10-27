@@ -59,15 +59,15 @@ type tunPkt struct {
 
 // tunFlow is one 5-tuple flow's queue on a link.
 type tunFlow struct {
-	key    uint32
-	u      *tunUser
-	sq     *tunSched
-	q      []tunPkt // FIFO: q[head:]
-	head   int
-	busy   bool // a frame of it is with smux
-	ready  bool // in the ready list
-	pend   bool // frame holds a frame smux has not taken yet (the window was full)
-	echo   bool // ICMP echo: always light
+	key   uint32
+	u     *tunUser
+	sq    *tunSched
+	q     []tunPkt // FIFO: q[head:]
+	head  int
+	busy  bool // a frame of it is with smux
+	ready bool // in the ready list
+	pend  bool // frame holds a frame smux has not taken yet (the window was full)
+	echo  bool // ICMP echo: always light
 	// onBulk: on a pair, the flow went on BULK once it was bulk (§3.5's
 	// rule for a TUN flow: pinned once from QUIET to BULK, no reorder buffer;
 	// the few packets in flight on QUIET make a short reorder the inner TCP
