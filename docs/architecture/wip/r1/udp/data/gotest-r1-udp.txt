@@ -1,0 +1,10 @@
+# go test ./engine ./cmd/hs2 -count=1 (r1-udp, after the fix)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	587.034s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.595s
+EXIT=0
+
+# go test -race ./engine -run "UDP|Udp|Stream|Reverse|DgPorts|Proxy|Routes"; go test -race ./cmd/hs2
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	115.448s
+EXIT=0
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	7.164s
+EXIT2=0

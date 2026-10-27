@@ -1,7 +1,8 @@
 #!/bin/bash
 # block.sh WHAT LIST OUT: one rig block of r1-udp under the shared quiet lock
 # (/root/r1-quiet.lock). It takes the lock atomically (set -C), retrying every
-# 60 s while another agent holds it, runs every line of LIST (a command line,
+# RETRY s (default 60; the round-3 agents poll every 15 s) while another agent
+# holds it, runs every line of LIST (a command line,
 # run with bash from this directory, OUT exported), stops at MAXMIN minutes
 # (default 20), and always removes its own lock at the end.
 set -u
@@ -12,8 +13,8 @@ MAXMIN=${MAXMIN:-20}
 mkdir -p "$OUT"
 log() { echo "$(date -u +%FT%TZ) $*" >> "$OUT/block.log"; }
 while ! ( set -C; echo "r1-udp $WHAT, pid $$, $(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null; do
-  log "lock held: $(cat "$LOCK" 2>/dev/null); retry in 60 s"
-  sleep 60
+  log "lock held: $(cat "$LOCK" 2>/dev/null); retry in ${RETRY:-60} s"
+  sleep "${RETRY:-60}"
 done
 mine() { grep -q "^r1-udp $WHAT, pid $$," "$LOCK" 2>/dev/null; }
 drop() { mine && rm -f "$LOCK"; }
