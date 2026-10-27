@@ -249,9 +249,25 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 	}()
 	r.portAddr = map[int]string{}
 	for _, port := range o.userPorts {
-		pl, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
+		// a port free for TCP and, with UDP, for UDP too (one free for TCP
+		// alone was sometimes taken for UDP: "bind: address already in use")
+		var pl net.Listener
+		var pc net.PacketConn
+		for i := 0; ; i++ {
+			var err error
+			if pl, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
+				t.Fatal(err)
+			}
+			if !o.udp {
+				break
+			}
+			if pc, err = net.ListenPacket("udp", pl.Addr().String()); err == nil {
+				break
+			}
+			pl.Close()
+			if i == 50 {
+				t.Fatal(err)
+			}
 		}
 		r.portAddr[port] = pl.Addr().String()
 		go func() { <-ctx.Done(); pl.Close() }()
@@ -265,10 +281,6 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 			}
 		}()
 		if o.udp {
-			pc, err := net.ListenPacket("udp", pl.Addr().String())
-			if err != nil {
-				t.Fatal(err)
-			}
 			go func() { <-ctx.Done(); pc.Close() }()
 			go serveUserUDP(ctx, pc, lm, port, r.edge.logf)
 		}

@@ -726,7 +726,7 @@ func (s *Stream) Write(b []byte) (n int, err error) {
 		frame.data = bts[:sz]
 		bts = bts[sz:]
 		n, err := s.sess.writeFrameInternal(frame, deadline, CLSDATA)
-		s.numWritten++
+		atomic.AddUint32(&s.numWritten, 1) // (Close may read it meanwhile)
 		sent += n
 		if err != nil {
 			return sent, err
@@ -840,7 +840,11 @@ func (s *Stream) Close() error {
 			// much data comes before it instead)
 			s.waitPend(time.After(openCloseTimeout))
 		}
-		_, err = s.sess.writeFrame(s.sess.finFrame(s.id, atomic.LoadUint32(&s.numWritten)))
+		var off uint32
+		if s.sess.bconn != nil {
+			off = atomic.LoadUint32(&s.numWritten)
+		}
+		_, err = s.sess.writeFrame(s.sess.finFrame(s.id, off))
 		s.sess.streamClosed(s.id)
 		return err
 	} else {

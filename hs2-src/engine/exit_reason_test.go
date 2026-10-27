@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -101,6 +102,9 @@ func TestServeReverseLinkReportsWhyItEnded(t *testing.T) {
 			case <-time.After(40 * time.Second):
 				t.Fatal("serveReverseLink did not return after the link ended")
 			}
+			// the edge stays connected until the end: collected earlier, its
+			// sockets would close with the exit's keepalives unread (a reset)
+			runtime.KeepAlive(edge)
 		})
 	}
 }
