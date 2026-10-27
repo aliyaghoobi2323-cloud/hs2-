@@ -39,35 +39,42 @@ import (
 // own cap off: the pacing net's alone, on the exit only, as before.
 var TuneSendCap = 1
 
-// α (round 2, decision T18), in place of C4-lite's own cap on a socket that
-// carries bulk (a pair's BULK, a link of one connection; QUIET keeps
-// C4-lite): a rate cap from the socket's delivery rate and its queue delay,
-// srtt − min_rtt, held at CoDel's target (alphaTarget). The round 2
-// diagnosis measured it: BBRv1's standing queue (85 to 175 ms on a deep
-// FIFO) and, on fq_codel, the drops CoDel makes of it (2 to 12% resent),
-// which hold every byte behind each hole; paced at 0.95 of the bottleneck
-// both went (0 to 0.35% resent, the queue 0 to 23 ms), but a fixed share
-// left 21 to 32 ms of queue at 5 and 25 Mbit/s. So, each reading (100 ms):
+// α (round 2, decision T18), in place of C4-lite's own cap on a pair's BULK
+// socket, at both ends (QUIET keeps C4-lite; so does a link of one
+// connection, today's behaviour, whose other end may be an older hs2 whose
+// bulk keeps BBR's standing queue, 85 to 175 ms on a FIFO, in the round
+// trips this end reads): a rate cap from the socket's delivery rate and its own queue
+// delay, held at CoDel's target (alphaTarget). The round 2 diagnosis
+// measured why: BBRv1's standing queue (85 to 175 ms on a deep FIFO) and, on
+// fq_codel, the drops CoDel makes of it (2 to 12% resent), which hold every
+// byte behind each hole; paced at 0.95 of the bottleneck both went (0 to
+// 0.35% resent, the queue 0 to 23 ms), but a fixed share left 21 to 32 ms of
+// queue at 5 and 25 Mbit/s. So, each reading (100 ms):
 //
-//   - the queue past the target (at least alphaPkts packets' time at the
-//     cap: one full packet is 12 ms at 1 Mbit/s): the cap comes down from
-//     the lesser of itself and the delivery rate by the share of a round
-//     trip the excess is, at most alphaCutMax: the queue drains in about a
-//     round trip;
+//   - its own queue is srtt − min_rtt less the least of that over the last
+//     alphaBaseWin (the base), the base at most alphaBaseK targets: a round
+//     trip on a link that carries bulk both ways also holds what the other
+//     end's bulk keeps queued, which the ACKs wait behind and this end
+//     cannot drain; taken as its own, it starved this end on the rig (the
+//     download at 3.8 of 25 Mbit/s beside the upload). The other end's α
+//     keeps that near its target; a larger queue, BBR's start-up one, is
+//     this end's to drain;
+//   - past the target (at least alphaPkts packets' time at the cap: one full
+//     packet is 12 ms at 1 Mbit/s), once a round trip at most (a cut shows
+//     in srtt only a round trip on): the cap comes down from the lesser of
+//     itself and the delivery rate, less the headroom (what else this end
+//     sends over the path: the pair's QUIET bytes and the ACKs of what the
+//     socket receives, alphaAckShare of it; more of a slow path), by the
+//     share of a round trip the excess is, at most alphaCutMax: the queue
+//     drains in about a round trip;
 //   - under half the target it grows by alphaGrow, under the target by
 //     alphaGrowNear (a path that frees up is found within a second or two);
-//   - never past alphaCeil times the largest delivery rate of 2 s, less the
-//     headroom: what else this end sends over the same path, the pair's
-//     QUIET bytes and the ACKs of what the socket receives (alphaAckShare of
-//     it), which take more of a slow path;
-//   - never under alphaFloor; set when it moved by alphaMove; lifted, and
-//     started again from the delivery rate, when the socket goes idle
-//     (C4-lite's rule).
+//   - never past alphaCeil times the largest delivery rate of 2 s, never
+//     under alphaFloor; set when it moved by alphaMove; lifted, and started
+//     again from the delivery rate, when the socket goes idle (C4-lite's
+//     rule).
 //
-// srtt holds the queue of both directions; each end cuts its own, so a
-// queue the other end's data makes costs this end a little throughput for a
-// round trip or two, never more. TuneAlpha 0 (HS2_TUNE_ALPHA=0): C4-lite's
-// cap there too.
+// TuneAlpha 0 (HS2_TUNE_ALPHA=0): C4-lite's cap there too.
 var TuneAlpha = 1
 
 const (
@@ -75,12 +82,17 @@ const (
 	alphaPkts     = 2
 	alphaPktBytes = 1514
 	alphaGrow     = 0.04
-	alphaGrowNear = 0.01
+	alphaGrowNear = 0.02
 	alphaCutMax   = 0.5
 	alphaFloor    = 32 << 10 // bytes/s (256 kbit/s)
 	alphaCeil     = 1.25
 	alphaAckShare = 0.03 // a 66 B ACK per two 1448 B segments received, with room
 	alphaMove     = 0.01
+	// alphaBaseWin: the base of the queue reading is its least over this
+	// span (more than BBR's 10 s between PROBE_RTTs), alphaBaseN readings
+	alphaBaseWin = 12 * time.Second
+	alphaBaseN   = 128
+	alphaBaseK   = 3
 )
 
 // alphaTargetAt is α's queue target for a cap of r bytes/s: alphaTarget, or
@@ -180,6 +192,17 @@ type sendCap struct {
 	aRcvd, aSide uint64
 	aQ, aTgt     time.Duration
 	aHead        float64
+	// the queue readings of the base's span (ring), and the latest cut
+	aQs    [alphaBaseN]alphaQ
+	aQh    int
+	aQn    int
+	aBase  time.Duration
+	aCutAt time.Duration
+}
+
+// alphaQ is one queue reading of α's: srtt − min_rtt at at.
+type alphaQ struct {
+	at, q time.Duration
 }
 
 // Update takes a reading and says the cap in force (0: none), whether to
@@ -237,7 +260,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	case c.on && idle:
 		c.on = false
 		c.lifts++
-		c.ar = 0
+		c.ar, c.aQn, c.aCutAt = 0, 0, 0
 	case !c.on && !idle && fresh && !s.AppLimited && s.Delivery > 0:
 		c.on = true
 	}
@@ -264,27 +287,52 @@ func (c *sendCap) alphaOwn(s capSample) uint64 {
 		c.ar = mx
 	}
 	if s.SRTT > 0 && s.MinRTT > 0 && s.SRTT >= s.MinRTT {
-		q := s.SRTT - s.MinRTT
 		tgt := alphaTargetAt(c.ar)
+		q := c.ownQueue(s.Now, s.SRTT-s.MinRTT, alphaBaseK*tgt)
 		c.aQ, c.aTgt = q, tgt
 		switch {
 		case q > tgt:
+			if c.aCutAt > 0 && s.Now-c.aCutAt < s.SRTT {
+				break // the cut before has not shown yet
+			}
 			base := c.ar
 			if !s.AppLimited && s.Delivery > 0 && s.Delivery < base {
 				base = s.Delivery
 			}
+			base = math.Max(base-head, alphaFloor)
 			c.ar = base * (1 - math.Min(float64(q-tgt)/float64(s.SRTT), alphaCutMax))
+			c.aCutAt = s.Now
 		case q <= tgt/2:
 			c.ar *= 1 + alphaGrow
 		default:
 			c.ar *= 1 + alphaGrowNear
 		}
 	}
-	if ceil := alphaCeil*mx - head; ceil > 0 && c.ar > ceil {
+	if ceil := alphaCeil * mx; ceil > 0 && c.ar > ceil {
 		c.ar = ceil
 	}
 	c.ar = math.Max(c.ar, alphaFloor)
 	return uint64(c.ar)
+}
+
+// ownQueue keeps the queue reading q (srtt − min_rtt at now) and returns
+// what of it is this end's: q less the least of the readings of the last
+// alphaBaseWin (the base), the base at most baseMax.
+func (c *sendCap) ownQueue(now, q, baseMax time.Duration) time.Duration {
+	for c.aQn > 0 && now-c.aQs[c.aQh].at > alphaBaseWin {
+		c.aQh, c.aQn = (c.aQh+1)%alphaBaseN, c.aQn-1
+	}
+	if c.aQn == alphaBaseN {
+		c.aQh, c.aQn = (c.aQh+1)%alphaBaseN, c.aQn-1
+	}
+	c.aQs[(c.aQh+c.aQn)%alphaBaseN] = alphaQ{now, q}
+	c.aQn++
+	base := min(q, baseMax)
+	for i := range c.aQn {
+		base = min(base, c.aQs[(c.aQh+i)%alphaBaseN].q)
+	}
+	c.aBase = base
+	return q - base
 }
 
 // maxDlv is the largest delivery rate of the last capSpan.
@@ -490,8 +538,8 @@ func (l *sendCapLink) lineOf(name string) string {
 		share = 100 * float64(c.appLim) / float64(c.n)
 	}
 	if c.alpha {
-		return fmt.Sprintf("sendcap link %s: alpha cap %.1f Mbit/s (queue %.1f ms, target %.1f ms, headroom %.2f Mbit/s), app-limited %.0f%%, idle-lifted %d",
-			name, float64(c.set)*8/1e6, msOf(c.aQ), msOf(c.aTgt), c.aHead*8/1e6, share, c.lifts)
+		return fmt.Sprintf("sendcap link %s: alpha cap %.1f Mbit/s (own queue %.1f ms over a base of %.1f, target %.1f ms, headroom %.2f Mbit/s), app-limited %.0f%%, idle-lifted %d",
+			name, float64(c.set)*8/1e6, msOf(c.aQ), msOf(c.aBase), msOf(c.aTgt), c.aHead*8/1e6, share, c.lifts)
 	}
 	return fmt.Sprintf("sendcap link %s: cap %.0f Mbit/s (%g x max delivery 2s), app-limited %.0f%%, idle-lifted %d",
 		name, float64(c.set)*8/1e6, wcNetKOf(), share, c.lifts)

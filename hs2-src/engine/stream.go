@@ -26,6 +26,11 @@ import (
 //   - smux flow control pushes back on the sender instead of queueing, so a
 //     download cannot bury everything else under seconds of buffered data.
 //   - Each link is one real TLS session; streams of many users share it.
+//     Between two binaries that pair (wire level 2, CapPair; decision T16)
+//     a link is two TLS sessions, QUIET and BULK, under one smux session:
+//     QUIET carries the control frames and the latency lane, BULK the bulk
+//     lane, and a stream's data moves to BULK once it is bulk
+//     (third_party/smux pair.go, newSessionPairCaps).
 //
 // The first byte of every stream says what it carries. The TUN (hs0), when a
 // mode has one, is a side channel for non-TCP traffic (ping, UDP to 10.77.x)
@@ -280,7 +285,7 @@ func newLinkSock(conn net.Conn, sched, guardOn bool, segs int, sampler *obfs.Len
 // link meter counts both; QUIET's write waits go to a meter of its own,
 // so the link's (the health checks', the window core's) are BULK's, as is
 // the socket the window core and the pacing net read. A link of one
-// connection carries bulk on it: the judge's gate and α there.
+// connection is today's: the judge's gate and C4-lite.
 func newSessionPairCaps(conn, bulk net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter, caps uint32) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
 	pair := bulk != nil
@@ -373,7 +378,7 @@ func newSessionPairCaps(conn, bulk net.Conn, server bool, sampler *obfs.LengthSa
 			blockedQ = qm.blockedNs
 		}
 	}
-	scl := newLinkCap(q, capOn, alpha && !pair, blockedQ)
+	scl := newLinkCap(q, capOn, false, blockedQ) // C4-lite: QUIET, or one connection as today
 	var sclB *sendCapLink
 	if pair {
 		sclB = newLinkCap(b, capOn, alpha, blockedB)
