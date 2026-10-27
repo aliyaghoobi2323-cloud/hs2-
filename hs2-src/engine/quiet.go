@@ -105,6 +105,13 @@ var QuietTwo = 0
 // end's switch is its own sending's. 0: off.
 var QuietCoalesce = 2000
 
+// QuietCoalTun 1 (HS2_TUNE_QUIET_COAL_TUN=1): the TUN's frames are urgent
+// (smux SetUrgent): a QUIET link's hold ends at a TUN frame, which then
+// waits for none (the TUN ping's bound is 10 ms over its floor, the
+// probe's 20; with a 2 ms window the rig's TUN ping went from +1.2 to +4.8
+// ms, the probe from +3.5 to +4.8). Off by default.
+var QuietCoalTun = 0
+
 // QuietCoalesceMin: light frames a second a QUIET link's writer wrote over
 // the last second before it holds any (fewer: each padded record costs
 // little, ~8 kbit, and the wait would be all cost; one probe user is 5).

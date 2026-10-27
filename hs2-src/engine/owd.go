@@ -286,6 +286,34 @@ func owdDecode(b []byte) (stamp int64, qOut time.Duration, have, ok bool) {
 	return stamp, time.Duration(q) * time.Microsecond, true, true
 }
 
+// OWDStampLate 0 (HS2_TUNE_OWD_STAMP=0): a message's stamp is taken as the
+// loop queues it (round 2's). On (γ1, the default): the session's writer
+// stamps it as it takes it (smux SetStamp), moved on by the socket's unsent
+// bytes at its pacing rate then. A message queued while the writer was in
+// the middle of a bulk frame through a slow socket's gate (C3) waited
+// there for that frame, ~16 KiB at the cap: at 8 Mbit/s 16 ms, read as
+// queue on the path. On the rig (s5, N=64, one run of two) an upload's own
+// cap read that, cut, read a longer wait and cut again: two uploads from 8
+// to 5 Mbit/s with no queue on the path (srtt − min_rtt 0.1 ms); round 2's
+// version 4 had the same two uploads at 65 and 9.
+var OWDStampLate = 1
+
+// owdRestamp writes the stamp of message p (owdEncode's layout) as it
+// leaves the session: now, moved on by the socket's unsent bytes at its
+// pacing rate (owdLocalWait; sys nil: none).
+func owdRestamp(p []byte, sys capSys) {
+	if len(p) < owdMsgLen {
+		return
+	}
+	stamp := ctrlNow()
+	if sys != nil {
+		if ts, ok := sys.info(); ok {
+			stamp += owdLocalWait(ts)
+		}
+	}
+	binary.BigEndian.PutUint64(p[4:12], uint64(stamp))
+}
+
 // owdIdleRate: a BULK link's own loop (γ1, AlphaOwn) sends nothing while
 // the link carries less than this (bytes/s, either way, as its cap's runner
 // notes it): an idle link needs no queue reading, and a message a second on
@@ -316,6 +344,11 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink, quiet bool)
 	defer st.Close()
 	if u, ok := st.(interface{ SetUrgent(bool) }); ok {
 		u.SetUrgent(true)
+	}
+	if u, ok := st.(interface{ SetStamp(func([]byte)) }); ok && OWDStampLate != 0 {
+		// γ1: the stamp as the session's writer takes the message, not as
+		// the loop queues it (owdRestamp)
+		u.SetStamp(func(p []byte) { owdRestamp(p, o.sys) })
 	}
 	var once sync.Once
 	stop := make(chan struct{})

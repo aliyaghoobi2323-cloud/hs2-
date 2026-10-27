@@ -49,6 +49,9 @@ func (s *Stream) writeFrames(b []byte, window bool, deadline <-chan time.Time, g
 	sent := 0
 	frame := newFrame(byte(sess.config.Version), cmdPSH, s.id)
 	frame.urgent = s.urgent.Load()
+	if h, ok := s.stampFn.Load().(stampHook); ok {
+		frame.stamp = h
+	}
 	for {
 		var bts []byte
 		if !window {
@@ -154,6 +157,18 @@ func (s *Stream) flowInfo() (uint32, uint8) {
 // delay messages: a hold would be read as queue).
 func (s *Stream) SetUrgent(v bool) { s.urgent.Store(v) }
 
+// stampHook is a SetStamp hook.
+type stampHook func([]byte)
+
+// SetStamp gives the stream a hook the session's writer (with a frame
+// scheduler) calls with each of its data frames' bytes just before it
+// writes them, after any wait in the scheduler: hs2's one-way delay
+// messages put their time stamp there, so a wait behind the frames being
+// written (a bulk frame through a slow socket's gate) is not read as queue
+// on the path. The hook may change the bytes, not their length. Set before
+// the stream writes.
+func (s *Stream) SetStamp(f func([]byte)) { s.stampFn.Store(stampHook(f)) }
+
 // TxBytes is how many data bytes the stream has queued to send so far, with
 // a frame scheduler (Config.Sched; 0 without one).
 func (s *Stream) TxBytes() uint64 { return s.txBytes.Load() }
@@ -204,7 +219,7 @@ func (s *Stream) WriteFlowAsync(p []byte, tag uint32, flow uint64, lane uint8, d
 	}
 	frame := newFrame(byte(sess.config.Version), cmdPSH, s.id)
 	frame.data = p
-	sf := &schedFrame{tag: tag, flow: flow, lane: lane, size: headerSize + len(p), done: done}
+	sf := &schedFrame{tag: tag, flow: flow, lane: lane, size: headerSize + len(p), done: done, urgent: s.urgent.Load()}
 	sf.req = writeRequest{class: CLSDATA, frame: frame}
 	// counted before it can go out: the peer's update for it never finds
 	// more consumed than written

@@ -81,6 +81,8 @@ type Stream struct {
 	fctx    atomic.Value
 	// urgent: SetUrgent's (no coalescing hold after its frames)
 	urgent atomic.Bool
+	// stampFn: SetStamp's hook (a stampHook; nil: none)
+	stampFn atomic.Value
 
 	// a group stream (its SYN names a group, group.go): each data frame
 	// starts with its sequence number. seqs holds the numbers of the frames

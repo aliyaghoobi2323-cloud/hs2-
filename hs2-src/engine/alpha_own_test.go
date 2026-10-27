@@ -482,3 +482,20 @@ func FuzzOWDDecode(f *testing.F) {
 		}
 	})
 }
+
+// owdRestamp: the stamp as the message leaves the session, moved on by the
+// socket's unsent bytes at its pacing rate (20 KiB at 9 Mbit/s: 18.2 ms).
+func TestOWDRestamp(t *testing.T) {
+	var b [owdMsgLen]byte
+	owdEncode(b[:], 5, int64(3*time.Millisecond), true)
+	before := ctrlNow()
+	owdRestamp(b[:], &fakeCapSys{st: tcpStat{notsent: 20 << 10, pacingRate: 9e6 / 8}, ok: true})
+	st, q, have, ok := owdDecode(b[:])
+	if !ok || !have || q != 3*time.Millisecond {
+		t.Fatalf("restamped message: ok %v have %v queue %v", ok, have, q)
+	}
+	if w := time.Duration(st - before); w < 18*time.Millisecond || w > 50*time.Millisecond {
+		t.Fatalf("stamp %v past the call, want ~18.2 ms (the unsent bytes' wait)", w)
+	}
+	owdRestamp(b[:3], nil) // short: untouched, no panic
+}
