@@ -20,6 +20,7 @@ import (
 // whatever links come (the hash alone would move a share of them to a new
 // link); only the flows of a link that dies move.
 func TestAngleTunPinned(t *testing.T) {
+	angleCores(t)
 	var s l3Set
 	links := []*l3Link{{id: 0x9e3779b9}, {id: 0x3c6ef372}, {id: 0xdaa66d2b}}
 	s.add(links[0])
@@ -110,6 +111,7 @@ func tunPush(sq *tunSched, pkt []byte) {
 // up to the link's bulk frame; and what is queued counts with its user's
 // memory until it leaves.
 func TestAngleTunFlowQueues(t *testing.T) {
+	angleCores(t)
 	l := newAngleLink(t, angleRateBps, angleDelay)
 	st, err := l.edge.OpenStream()
 	if err != nil {
@@ -202,6 +204,7 @@ func TestAngleTunFlowQueues(t *testing.T) {
 // away (counted), another user's are not, and the status counts the user at
 // its cap.
 func TestAngleTunUserMemShare(t *testing.T) {
+	angleCores(t)
 	defer func(s, p int) { UserMemShare, UserMemPool = s, p }(UserMemShare, UserMemPool)
 	UserMemShare, UserMemPool = 8<<10, 0 // pressure: any byte queued
 	l := newAngleLink(t, angleRateBps, angleDelay)
@@ -252,6 +255,7 @@ func (p *paceTun) Write(b []byte) (int, error) {
 // link, its one-way delay stays within the path's and 10 ms (§5.1), while
 // the bulk flow loses what does not fit.
 func TestAngleTunPingAheadOfBulk(t *testing.T) {
+	angleCores(t)
 	if testing.Short() {
 		t.Skip("emulated link")
 	}

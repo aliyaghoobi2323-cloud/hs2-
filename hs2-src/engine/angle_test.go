@@ -369,6 +369,7 @@ const (
 // The probe on the same link as 4 downloads and 2 uploads, both ways at 10
 // Mbit/s (§5.1): its p99 within RTT + 20 ms, the link still full both ways.
 func TestAngleSameLinkProbe(t *testing.T) {
+	angleCores(t)
 	if testing.Short() {
 		t.Skip("emulated link, 14 s")
 	}
@@ -405,6 +406,7 @@ func TestAngleSameLinkProbe(t *testing.T) {
 // neither pushes a light user's probe past the bound nor a bulk user under
 // 0.9 of its floor.
 func TestAngleP10(t *testing.T) {
+	angleCores(t)
 	if testing.Short() {
 		t.Skip("emulated link, 30 s")
 	}
@@ -469,6 +471,7 @@ func TestAngleP10(t *testing.T) {
 // bulk, the probe's echo light; and the link's status lines (§3.1-§3.4) in
 // the documents' words.
 func TestAngleClassesAndStatusLines(t *testing.T) {
+	angleCores(t)
 	if testing.Short() {
 		t.Skip("emulated link")
 	}
@@ -565,6 +568,7 @@ func TestAngleSchedOff(t *testing.T) {
 // link's control frames do not wait for it. (100 Mbit/s: its 100 streams
 // are bulk each; at 10 Mbit/s each would be light, C1.)
 func TestAngleBackpressure64(t *testing.T) {
+	angleCores(t)
 	if testing.Short() {
 		t.Skip("emulated link")
 	}
@@ -613,6 +617,7 @@ func TestAngleBackpressure64(t *testing.T) {
 // downloads (its window updates), a new stream's SYN leaves after the frame
 // being written and the socket's few unsent KiB, not after the queue.
 func TestAngleCtrlNeverBehindData(t *testing.T) {
+	angleCores(t)
 	if testing.Short() {
 		t.Skip("emulated link")
 	}
@@ -638,5 +643,14 @@ func TestAngleCtrlNeverBehindData(t *testing.T) {
 	t.Logf("SYN out within %v at worst, under 16 downloads (%.2f Mbit/s) and 16 uploads (%.2f Mbit/s)", worst, r[0]*8/1e6, r[1]*8/1e6)
 	if worst > 15*time.Millisecond {
 		t.Fatalf("a SYN took %v to leave, want <= 15 ms (a 5 ms frame and the socket's unsent)", worst)
+	}
+}
+
+// angleCores skips a test of the new path when a kill switch from the
+// environment (TestMain) keeps the old one: TestAngleSchedOff is that one's.
+func angleCores(t *testing.T) {
+	t.Helper()
+	if SchedOff() || HostQOff() || ClassOff() {
+		t.Skip("a kill switch is set: the old path")
 	}
 }
