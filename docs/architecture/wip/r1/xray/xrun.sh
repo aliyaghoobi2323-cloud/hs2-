@@ -124,6 +124,11 @@ one_line() {
     stat_edge "$r/status-mid.txt"
     ip netns exec $E ss -tniH '( dport = :5311 or dport = :5312 )' > "$r/ss-user-mid.txt" 2>/dev/null
     ip netns exec $X ss -tinH state established '( dport = :2096 )' > "$r/ss-links-mid.txt" 2>/dev/null
+    # where the bytes ahead of the game wait: the exit's sockets to the xray
+    # server (Recv-Q: read by hs2 yet? Send-Q at xray's end) and the edge's
+    # sockets to the xray client
+    ip netns exec $X ss -tmniH '( dport = :5211 or dport = :5212 or sport = :5211 or sport = :5212 )' > "$r/ss-xsrv-mid.txt" 2>/dev/null
+    ip netns exec $E ss -tmniH '( sport = :5311 or sport = :5312 )' > "$r/ss-xcli-mid.txt" 2>/dev/null
     wait $pc
     stat_edge "$r/status-end.txt"
     kill $xc 2>/dev/null; wait $xc 2>/dev/null

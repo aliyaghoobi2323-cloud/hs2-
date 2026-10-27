@@ -69,7 +69,8 @@ def compose(raw, rid, cell, sha, benv):
             row["dl_ttfb_ms"] = f.get("ttfb_ms")
             row["dl_err"] = f.get("err")
     try:
-        row["user_conns_mid"] = sum(1 for l in open(raw + "/ss-user-mid.txt") if "ESTAB" in l or l.strip())
+        # ss -i puts each socket's info on an indented second line
+        row["user_conns_mid"] = sum(1 for l in open(raw + "/ss-user-mid.txt") if l.strip() and not l[0].isspace())
     except OSError:
         row["user_conns_mid"] = None
     # which user connection (the exit's "from" port at the xray server)
@@ -137,8 +138,27 @@ def table(path, md=False):
             print("\t".join(str(x) for x in o))
 
 
+def recount(path):
+    """Recount user_conns_mid of every row of RES from its raw dir (rows
+    made before the count read ss's info lines as sockets)."""
+    import os
+    base = os.path.join(os.path.dirname(os.path.abspath(path)), "raw")
+    rows = [json.loads(l) for l in open(path) if l.strip()]
+    for r in rows:
+        try:
+            r["user_conns_mid"] = sum(1 for l in open(os.path.join(base, r["id"], "ss-user-mid.txt"))
+                                      if l.strip() and not l[0].isspace())
+        except OSError:
+            pass
+    with open(path, "w") as fh:
+        for r in rows:
+            fh.write(json.dumps(r) + "\n")
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "compose":
         compose(*sys.argv[2:7])
+    elif sys.argv[1] == "recount":
+        recount(sys.argv[2])
     elif sys.argv[1] == "table":
         table(sys.argv[2], "--md" in sys.argv)
