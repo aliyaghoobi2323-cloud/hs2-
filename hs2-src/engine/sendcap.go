@@ -155,6 +155,9 @@ type sendCap struct {
 	bRate float64
 	bQ    time.Duration
 	bTgt  time.Duration
+	// bStart: no queue of its own past its target since it armed (its
+	// start: C4-lite's cap, as the shared cap's fix 1)
+	bStart bool
 	// probe (AlphaProbe): readings in a row with no queue sign while the
 	// cap bound, of each cap
 	aCalm, bCalm int
@@ -434,7 +437,7 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 	}
 	ceil := math.Max(wcNetKOf()*c.maxDlv(), alphaFloor)
 	if arming || c.bRate <= 0 {
-		c.bRate, c.bQ, c.bCalm = ceil, 0, 0
+		c.bRate, c.bQ, c.bCalm, c.bStart = ceil, 0, 0, true
 	}
 	qx := s.OWN
 	if s.OWDok {
@@ -447,6 +450,18 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 	}
 	rising, falling := qx > c.bQ+alphaRise, qx < c.bQ-alphaRise
 	c.bQ, c.bTgt = qx, tgt
+	if c.bStart {
+		// its start: C4-lite's cap till its own queue first passes the
+		// target at a flat delivery (the first rig run grew it by 3% a
+		// reading from the first delivery of a link flows had just moved
+		// to, 6 Mbit/s: 100 Mbit/s took 13 s)
+		if qx <= tgt || c.dlvGrowing(s.Delivery) {
+			c.bRate = ceil
+			c.bGrows++
+			return
+		}
+		c.bStart = false
+	}
 	switch {
 	case qx > tgt && (falling || c.dlvGrowing(s.Delivery)):
 		c.bCalm = 0 // draining already, or start-up's queue: it holds
