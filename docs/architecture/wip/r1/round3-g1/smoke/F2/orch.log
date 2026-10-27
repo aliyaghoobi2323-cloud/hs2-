@@ -1,0 +1,4 @@
+2026-10-27T19:44:33Z lock taken after 424s (pid 696962), plan plans/F2.txt, REPS 2, limit 1500s
+2026-10-27T20:02:40Z pass 1: 0 runs busy (>75%) or failed, 414s left
+2026-10-27T20:02:41Z done after 1087s of rig time
+2026-10-27T20:02:41Z lock released

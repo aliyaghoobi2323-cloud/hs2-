@@ -1,0 +1,30 @@
+17:20:50 plan plans/S1.txt: 28 runs
+17:20:50 start 340c98ae-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 1.25 waited 0s
+17:21:30 done 340c98ae-b2nx-1 ok=1 
+17:21:31 start 340c98ae-g1a-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1a) load 1.92 waited 0s
+17:22:10 done 340c98ae-g1a-1 ok=1 
+17:22:11 start 340c98ae-g1ano-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1ano) load 1.43 waited 0s
+17:22:50 done 340c98ae-g1ano-1 ok=1 
+17:22:51 start 340c98ae-g1ano-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1ano) load 2.00 waited 0s
+17:23:30 done 340c98ae-g1ano-2 ok=1 
+17:23:31 start 340c98ae-g1a-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1a) load 2.23 waited 0s
+17:24:10 done 340c98ae-g1a-2 ok=1 
+17:24:11 start 340c98ae-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.00 waited 0s
+17:24:50 done 340c98ae-b2nx-2 ok=1 
+17:24:51 start ae0cf9da-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2nx) load 2.33 waited 0s
+17:25:30 done ae0cf9da-b2nx-1 ok=1 
+17:25:31 start ae0cf9da-g1a-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1a) load 1.80 waited 0s
+17:26:10 done ae0cf9da-g1a-1 ok=1 
+17:26:11 start ae0cf9da-g1anc-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1anc) load 2.44 waited 0s
+17:26:50 done ae0cf9da-g1anc-1 ok=1 
+17:26:51 start ae0cf9da-g1anc-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1anc) load 2.04 waited 0s
+17:27:31 done ae0cf9da-g1anc-2 ok=1 
+17:27:31 start ae0cf9da-g1a-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1a) load 2.68 waited 0s
+17:28:11 done ae0cf9da-g1a-2 ok=1 
+17:28:11 start ae0cf9da-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2nx) load 2.94 waited 0s
+17:28:51 done ae0cf9da-b2nx-2 ok=1 
+17:28:52 start e9a34d17-b2nx-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.30 waited 0s
+17:29:37 done e9a34d17-b2nx-1 ok=1 
+17:29:38 start e9a34d17-g1a-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1a) load 3.19 waited 0s
+17:30:23 done e9a34d17-g1a-1 ok=1 
+17:30:24 start e9a34d17-g1a-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1a) load 2.97 waited 0s
