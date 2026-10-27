@@ -407,6 +407,12 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		}
 		car, err := dial()
 		release()
+		if err == nil && ctx.Err() != nil {
+			// the pool ended while this dial ran: no session after it (a
+			// test's next one saw this slot's session made after its end)
+			car.Close()
+			return
+		}
 		if err != nil {
 			wait := p.dialFailed(s, err, &backoff)
 			if !p.pause(ctx, wait) {
