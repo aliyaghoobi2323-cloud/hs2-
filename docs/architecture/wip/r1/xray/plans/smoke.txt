@@ -1,0 +1,1 @@
+BIN=new N=1 LOSS=0 VARIANTS=xc16,xb2 REP=0
