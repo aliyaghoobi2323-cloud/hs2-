@@ -1,0 +1,18 @@
+08:40:05 plan /root/r2b-smoke/plan.txt: 18 runs
+08:40:05 start 05500279-base-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 1.50 waited 0s
+08:40:35 done 05500279-base-1 ok=1 
+08:40:35 start 05500279-b2-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.81 waited 0s
+08:41:05 done 05500279-b2-1 ok=1 
+08:41:06 start 05500279-b2-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.44 waited 0s
+08:41:35 done 05500279-b2-2 ok=1 
+08:41:36 start 05500279-base-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=base) load 2.27 waited 0s
+08:42:05 done 05500279-base-2 ok=1 
+08:42:06 start 2d23c440-base-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=base) load 2.07 waited 0s
+08:42:35 done 2d23c440-base-1 ok=1 
+08:42:36 start 2d23c440-b2-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.74 waited 0s
+08:43:05 done 2d23c440-b2-1 ok=1 
+08:43:06 start 2d23c440-b2-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.92 waited 0s
+08:43:35 done 2d23c440-b2-2 ok=1 
+08:43:36 start 2d23c440-base-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=base) load 1.41 waited 0s
+08:44:05 done 2d23c440-base-2 ok=1 
+08:44:06 start 340c98ae-base-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=base) load 1.29 waited 0s

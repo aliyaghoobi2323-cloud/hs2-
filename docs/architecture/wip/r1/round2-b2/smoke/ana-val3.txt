@@ -1,0 +1,16 @@
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30  BIN=b2  runs 1 (ok 1)
+   capacity 95.64 Mbit/s   links 2   host busy 17%
+   total dn 72.61  up 0.00 Mbit/s   (c) 76%
+   1-connection user 33.83 Mbit/s
+   (b) worst bulk user 71% of its floor
+   probe p50 72.8  p99 75.7  max 78.9 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   CPU % (one core = 100): edge 46.3  exit 40.6   retrans %: exit 0.021  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30  BIN=b2  runs 1 (ok 1)
+   capacity 95.64 Mbit/s   links 8   host busy 20%
+   total dn 74.57  up 0.00 Mbit/s   (c) 81%
+   probe p50 72.6  p99 74.3  max 77.2 ms  lost 0   RTT_floor 72.3  bound (d) 92.3
+   TUN ping p50 72.5  p99 72.9 ms  lost 0   floor 72.3  bound 82.3
+   of which TUN users (inner goodput) dn 74.57  up 0.00 Mbit/s
+   CPU % (one core = 100): edge 59.4  exit 58.7   retrans %: exit 0.466  edge 0.000
+   verdict: c FAIL (0/1)  d PASS (1/1)  tun PASS (1/1)
