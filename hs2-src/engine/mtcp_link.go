@@ -407,7 +407,7 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 // TLS connection differs.
 func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLink, error) {
 	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}
-	sess, why, err := newSession(car.RawConn(), false, sampler, mtr)
+	sess, why, err := newSessionCaps(car.RawConn(), false, sampler, mtr, car.Caps())
 	if err != nil {
 		car.Close()
 		return nil, err

@@ -48,6 +48,12 @@ type pktConn interface {
 //   - Links are chosen by rendezvous hashing, so when a link dies only the
 //     flows that were on it move; every other flow stays on its link and in
 //     order.
+//
+// With C2 (R1, angle A; HS2_TUNE_SCHED=0 keeps the above) a flow's first
+// packet picks its link by that hash and the flow is pinned there (linkFor):
+// links that come later take none of it. On a stream-mode link the FIFO and
+// writeLoop give way to per-flow queues fed to the link's smux scheduler
+// (l3sched.go).
 
 const (
 	// l3QueueLen bounds the packets waiting for one link. Kept short on
@@ -102,6 +108,9 @@ type l3Link struct {
 	dead      atomic.Bool
 	once      sync.Once
 	done      chan struct{}
+	// sq: the per-flow queues that feed the link's smux scheduler (C2,
+	// l3sched.go) in place of q and writeLoop (nil: those)
+	sq *tunSched
 }
 
 // qpkt is a queued packet and when it was queued.
@@ -134,6 +143,13 @@ func newL3Link(car pktConn) *l3Link {
 // channel is dropped (watchSession).
 func newStreamL3Link(st *smux.Stream, quiet func() bool, sessReads func() uint64) *l3Link {
 	l := newL3Link(newStreamPkt(st))
+	if st != nil && st.Session().HasSched() {
+		sess := st.Session()
+		l.sq = newTunSched(st)
+		if cl := coreLinks.of(sess); cl != nil {
+			cl.tun.Store(l)
+		}
+	}
 	if sessReads != nil {
 		go l.watchSession(sessReads)
 	}
@@ -198,8 +214,14 @@ func (l *l3Link) markDead() {
 	})
 }
 
-// enqueue hands a packet to the link without ever blocking.
-func (l *l3Link) enqueue(b *[]byte, tag, flow uint32) bool {
+// enqueue hands a packet to the link without ever blocking (echo: an ICMP
+// echo). With the per-flow queues (sq) it is always taken: what they drop
+// they count.
+func (l *l3Link) enqueue(b *[]byte, tag, flow uint32, echo bool) bool {
+	if l.sq != nil {
+		l.sq.push(b, tag, flow, echo)
+		return true
+	}
 	select {
 	case l.q <- l3pkt{qpkt{b, time.Now()}, tag, flow}:
 		return true
@@ -262,9 +284,84 @@ type l3Set struct {
 	// toUser: the TUN's packets go to the users (the exit's side); their
 	// user tag is that of their destination, else of their source (§3.1).
 	toUser bool
+	// pins: each flow's link, pinned by its first packet (C2; pumpTun's
+	// alone), and when the idle ones were last swept
+	pins    map[uint32]*l3Pin
+	pinSwAt int64
+	// pinMode: 1 pinned, 2 by the hash per packet (HS2_TUNE_SCHED=0), as
+	// the first packet found the switch (0: none yet)
+	pinMode int8
+}
+
+// l3Pin is a flow's link and when the flow last had a packet.
+type l3Pin struct {
+	l  *l3Link
+	at int64
+}
+
+const (
+	// l3PinIdle: a flow with no packet this long loses its pin (its next
+	// one is pinned anew); l3PinMax: the most flows pinned (past it, a new
+	// flow goes by the hash alone); l3PinSweep: the idle pins are dropped
+	// this often.
+	l3PinIdle  = 2 * time.Minute
+	l3PinMax   = 1 << 16
+	l3PinSweep = 10 * time.Second
+)
+
+// linkFor is the link of a packet of flow h: with C2 the flow's pinned link
+// (§5.1: its first packet picks one by the rendezvous hash, and it stays
+// there while that link lives, whatever links come and go), else the hash's
+// pick per packet as before.
+func (s *l3Set) linkFor(h uint32) *l3Link {
+	if s.pinMode == 0 {
+		s.pinMode = 1
+		if SchedOff() {
+			s.pinMode = 2
+		}
+	}
+	if s.pinMode == 2 {
+		return s.pickFlow(h)
+	}
+	now := ctrlNow()
+	if now-s.pinSwAt > int64(l3PinSweep) {
+		s.sweepPins(now, l3PinIdle)
+	}
+	p := s.pins[h]
+	if p != nil && p.l.Alive() {
+		p.at = now
+		return p.l
+	}
+	l := s.pickFlow(h)
+	if l == nil {
+		return nil
+	}
+	switch {
+	case p != nil:
+		p.l, p.at = l, now
+	case len(s.pins) < l3PinMax:
+		if s.pins == nil {
+			s.pins = map[uint32]*l3Pin{}
+		}
+		s.pins[h] = &l3Pin{l, now}
+	}
+	return l
+}
+
+// sweepPins drops the pins idle for idle, and those of dead links.
+func (s *l3Set) sweepPins(now int64, idle time.Duration) {
+	s.pinSwAt = now
+	for h, p := range s.pins {
+		if now-p.at > int64(idle) || !p.l.Alive() {
+			delete(s.pins, h)
+		}
+	}
 }
 
 func (s *l3Set) add(l *l3Link) {
+	if l.sq != nil {
+		l.sq.attach(&s.pool, &s.drops)
+	}
 	s.mu.Lock()
 	s.links = append(s.links, l)
 	s.mu.Unlock()
@@ -340,7 +437,11 @@ func (s *l3Set) pickFlow(h uint32) *l3Link {
 // serveLink runs a link's writer and reader. The reader runs on the calling
 // goroutine and returns when the link dies.
 func (s *l3Set) serveLink(ctx context.Context, l *l3Link, dev tunWriter) {
-	go l.writeLoop(&s.pool, &s.drops)
+	if l.sq != nil {
+		go l.sq.run(l)
+	} else {
+		go l.writeLoop(&s.pool, &s.drops)
+	}
 	s.linkToTun(ctx, l, dev)
 }
 
@@ -370,7 +471,7 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 		if ok {
 			tag = UserTag(user, classV6Prefix)
 		}
-		if l := s.pickFlow(flow); l == nil || !l.enqueue(bp, tag, flow) {
+		if l := s.linkFor(flow); l == nil || !l.enqueue(bp, tag, flow, ok && isEcho(*bp)) {
 			s.pool.Put(bp)
 			s.drops.Add(1)
 		}

@@ -42,6 +42,8 @@ type writeRequest struct {
 	start uint64
 	// the frame's data as sendLoop reads it (nil: the frame has none)
 	data *frameData
+	// sf: the frame in the session's scheduler (Config.Sched; nil: none)
+	sf *schedFrame
 }
 
 // frameData hands a frame's data from its writer to sendLoop. A writer that
@@ -146,6 +148,10 @@ type Session struct {
 	requestID uint32            // write request monotonic increasing
 	shaper    chan writeRequest // a shaper for writing
 	writes    chan writeRequest
+
+	// sch: the frame scheduler (Config.Sched) in place of the shaper and
+	// its channels (nil: none)
+	sch *schedState
 }
 
 func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
@@ -170,9 +176,14 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 		s.nextStreamID = 0
 	}
 
-	go s.shaperLoop()
+	if config.Sched != nil {
+		s.sch = newSchedState(config)
+		go s.sendLoopSched()
+	} else {
+		go s.shaperLoop()
+		go s.sendLoop()
+	}
 	go s.recvLoop()
-	go s.sendLoop()
 	if !config.KeepAliveDisabled {
 		go s.keepalive()
 	}
@@ -694,6 +705,11 @@ func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class C
 // queueFrame hands f to the shaper. Control frames leave in the order they
 // were queued, and so do the data frames of one stream.
 func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) (writeRequest, error) {
+	if s.sch != nil {
+		// (a data frame comes here only from a writer with no flow: user 0,
+		// bulk)
+		return s.queueSched(f, class, 0, LaneBulk)
+	}
 	req := writeRequest{
 		class:  class,
 		frame:  f,
@@ -729,6 +745,9 @@ func (s *Session) frameWritten(req writeRequest, deadline <-chan time.Time) (int
 		err = s.socketWriteError.Load().(error)
 	case <-deadline:
 		err = ErrTimeout
+	}
+	if req.sf != nil {
+		s.sch.cancel(req.sf) // out of its user's FIFO if it still waits there
 	}
 	req.giveUp()
 	return 0, err

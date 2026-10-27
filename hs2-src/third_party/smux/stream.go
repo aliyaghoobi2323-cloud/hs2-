@@ -73,6 +73,12 @@ type Stream struct {
 	// the payload of the stream's SYN (EncodeSyn): set before the stream is
 	// handed out, read-only after
 	syn [SynPayloadLen]byte
+
+	// with a frame scheduler (Config.Sched): the data bytes queued so far
+	// (TxBytes), and what the session's owner keeps for the stream
+	// (SetFlowCtx)
+	txBytes atomic.Uint64
+	fctx    atomic.Value
 }
 
 // newStream initiates a Stream struct
@@ -659,6 +665,9 @@ func (s *Stream) waitRead() error {
 // Note that the behavior when multiple goroutines write concurrently is not deterministic,
 // frames may interleave in random way.
 func (s *Stream) Write(b []byte) (n int, err error) {
+	if s.sess.sch != nil {
+		return s.writeSched(b, s.sess.config.Version == 2)
+	}
 	if s.sess.config.Version == 2 {
 		return s.writeV2(b)
 	}

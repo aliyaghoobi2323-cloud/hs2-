@@ -56,6 +56,28 @@ var TuneHQG = 1
 // HostQOff says whether C3 is off (HS2_TUNE_HQG=0).
 func HostQOff() bool { return TuneHQG == 0 }
 
+// The gate's variants the judge compares (decision T12: with the
+// document's gate the writer wakes with less than a segment unsent, Linux
+// reads every delivery sample as app-limited, and BBR never leaves
+// STARTUP), read as a link's guard is made (newHostQ):
+var (
+	// HQGSegs (HS2_TUNE_HQG_SEGS, > 0): the gate's cap is at least this many
+	// segments, and its low-water mark is the cap. 0: the document's (two
+	// segments; the mark max(cap/2, MSS)). The default is 8, the judge's
+	// choice on the rig (R1 task 17, decision T12;
+	// docs/architecture/wip/r1/judge.fa.md): of the four variants it passed
+	// most cells on retransmits (11 of 16 against the base + 1 point) and
+	// throughput (15 of 16 at 0.97 x the base), with the lowest probe p99;
+	// the document's gate kept BBR in STARTUP (25-44 % resent) and SEGS=4
+	// cut the upload at 25 Mbit/s to 0.38-0.58 x the base. At 1 Mbit/s its
+	// cap (8 segments, 93 ms) is past the host-wait model's 36 ms
+	// (TestHostWaitBound): an open item for the red team.
+	HQGSegs = 8
+	// HQGGate 0 (HS2_TUNE_HQG_GATE=0): no write gate; the dynamic low-water
+	// mark (Lowat) alone, at every rate.
+	HQGGate = 1
+)
+
 const (
 	// hostqTick: the mark and the gate follow the rate this often.
 	hostqTick = 500 * time.Millisecond
@@ -93,6 +115,9 @@ func Lowat(rate float64, mss int) int {
 type hostGate struct {
 	off   bool // past hostqGateOff, not yet back under hostqGateOn
 	limit int  // the latest cap
+	// segs, never: HQGSegs and HQGGate 0 as the guard was made (T12)
+	segs  int
+	never bool
 }
 
 // Update takes the link's rate (bytes/s; 0: unknown) and segment, and says
@@ -109,9 +134,15 @@ func (g *hostGate) Update(rate float64, mss int) (on bool, cap, lowat int) {
 		g.off = false
 	}
 	cap = max(int(rate/float64(time.Second/hostqTime)), 2*mss)
+	if g.segs > 0 {
+		cap = max(cap, g.segs*mss)
+	}
 	g.limit = cap
-	if g.off {
+	switch {
+	case g.off || g.never:
 		return false, cap, Lowat(rate, mss)
+	case g.segs > 0:
+		return true, cap, cap
 	}
 	return true, cap, max(cap/2, mss)
 }
@@ -170,7 +201,7 @@ type hostQ struct {
 // newHostQ guards c, the link's conn, through sys (nil: none, as off Linux:
 // today's send gate). The gate is on at its floor until the first Update.
 func newHostQ(c net.Conn, sys hostSys) *hostQ {
-	h := &hostQ{conn: c, sys: sys}
+	h := &hostQ{conn: c, sys: sys, gate: hostGate{segs: HQGSegs, never: HQGGate == 0}}
 	if sys == nil {
 		h.fallback(nil)
 		return h
