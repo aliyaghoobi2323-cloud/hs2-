@@ -72,11 +72,30 @@ def compose(raw, rid, cell, sha, benv):
         row["user_conns_mid"] = sum(1 for l in open(raw + "/ss-user-mid.txt") if "ESTAB" in l or l.strip())
     except OSError:
         row["user_conns_mid"] = None
+    # which user connection (the exit's "from" port at the xray server)
+    # carried the TCP game, the UDP game and the download
+    port = {}
+    try:
+        for l in open(raw + "/xaccess.log", errors="replace"):
+            m = re.search(r" from (?:tcp:|udp:)?[\d.]+:(\d+) accepted (?:tcp|udp):[\d.]+:(700[1-4])", l)
+            if m:
+                port.setdefault({"7001": "game", "7002": "dl", "7003": "web", "7004": "udpgame"}[m.group(2)], m.group(1))
+    except OSError:
+        pass
+    row["conn_of"] = port
+    row["game_dl_shared"] = bool(port.get("game")) and port.get("game") == port.get("dl")
+    row["udp_dl_shared"] = bool(port.get("udpgame")) and port.get("udpgame") == port.get("dl")
     row["status_mid"] = status_lines(raw + "/status-mid.txt")
     row["status_end"] = status_lines(raw + "/status-end.txt")
-    sm = row["status_mid"]
-    if "moved" in sm:
-        row["place"] = "quiet %d, moved %d" % (sm["opened_quiet"], sm["moved"])
+    # the edge's counters run over the hs2 pair's life (several variants):
+    # this run's share is mid (or end) minus pre, taken before its client
+    row["status_pre"] = pre = status_lines(raw + "/status-pre.txt")
+    for w in ("mid", "end"):
+        sm = row["status_" + w]
+        if "moved" in sm:
+            row["place_" + w] = {k: sm[k] - pre.get(k, 0) for k in ("opened_quiet", "opened_bulk", "moved")}
+    if "place_mid" in row:
+        row["place"] = "quiet %d, moved %d" % (row["place_mid"]["opened_quiet"], row["place_mid"]["moved"])
     print(json.dumps(row))
 
 
@@ -93,7 +112,7 @@ def table(path, md=False):
         cells.setdefault(key, []).append(r)
     order = {"xa": 0, "xb1": 1, "xb2": 2, "vv": 3, "gr": 4, "grm": 5}
     hdr = ["variant", "N", "loss", "bin", "reps", "idle p50", "game p50", "game p99", "game max", "lost",
-           "udp p99", "up p99", "down p99", "dl Mbit/s", "user conns", "quiet/moved"]
+           "udp p99", "up p99", "down p99", "dl Mbit/s", "user conns", "game+dl one conn", "quiet/moved"]
     out = []
     for key in sorted(cells, key=lambda k: (order.get(k[0], 9), int(k[1]), float(k[2]), k[3] != "old")):
         rs = cells[key]
@@ -105,7 +124,8 @@ def table(path, md=False):
                     med([x.get("dl_max") for x in g]), sum((x.get("lost_dl") or 0) for x in g),
                     med([x.get("dl_p99") for x in u]), med([x.get("dl_up_p99") for x in g]),
                     med([x.get("dl_down_p99") for x in g]), med([r.get("dl_mbit") for r in rs]),
-                    med([r.get("user_conns_mid") for r in rs]), mv])
+                    med([r.get("user_conns_mid") for r in rs]),
+                    "%d/%d" % (sum(1 for r in rs if r.get("game_dl_shared")), len(rs)), mv])
     if md:
         print("| " + " | ".join(hdr) + " |")
         print("|" + "---|" * len(hdr))

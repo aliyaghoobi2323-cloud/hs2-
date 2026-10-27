@@ -111,6 +111,8 @@ one_line() {
     r=$OUT/raw/$id; rm -rf "$r"; mkdir -p "$r"
     python3 "$D/mkxray.py" client "$KEYS/keys.env" "$WORK/xclient-$v.json" --variant $v --addr 10.201.0.1 --port $port \
       --send-through 10.100.0.1 --loglevel warning --error "$r/xclient.log" || { log "client config $v failed"; continue; }
+    stat_edge "$r/status-pre.txt"
+    a0=$(wc -l < "$OUT/raw/xaccess-$BIN-$N-$LOSS-$REP.log" 2>/dev/null || echo 0)
     ip netns exec $E "$XR" run -c "$WORK/xclient-$v.json" > /dev/null 2>&1 &
     xc=$!
     sleep 1
@@ -125,6 +127,7 @@ one_line() {
     wait $pc
     stat_edge "$r/status-end.txt"
     kill $xc 2>/dev/null; wait $xc 2>/dev/null
+    tail -n +$((a0 + 1)) "$OUT/raw/xaccess-$BIN-$N-$LOSS-$REP.log" > "$r/xaccess.log" 2>/dev/null
     python3 "$D/xana.py" compose "$r" "$id" "BIN=$BIN N=$N LOSS=$LOSS VARIANT=$v REP=$REP" "$(sha256sum "$bp" | cut -c1-12)" "$benv" >> "$OUT/res.jsonl" \
       || log "compose $id failed"
     log "done $id: $(tail -1 "$OUT/res.jsonl" | python3 -c 'import json,sys; d=json.loads(sys.stdin.read()); g=d["game"]; print("game dl p50/p99 %s/%s ms, udp p99 %s, dl %s Mbit/s, %s" % (g["dl_p50"], g["dl_p99"], d["udpgame"]["dl_p99"], d["dl_mbit"], d.get("place", "")))' 2>/dev/null)"
