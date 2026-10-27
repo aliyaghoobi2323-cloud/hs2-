@@ -22,9 +22,9 @@ import (
 //	HS2_LAB_PACE_MBIT=X   every link socket, both ends, paced at X Mbit/s
 //	                      (SO_MAX_PACING_RATE, fixed: C4-lite's and the
 //	                      pacing net's writes take X instead)
-//	HS2_LAB_WCLAMP=B      TCP_WINDOW_CLAMP of B bytes on every link socket:
-//	                      each end advertises at most B, the peer's bytes in
-//	                      flight
+//	HS2_LAB_WCLAMP=B      SO_RCVBUF 4B (locked) and TCP_WINDOW_CLAMP of B bytes
+//	                      on every link socket: each end advertises at most
+//	                      B, the peer's bytes in flight
 //	HS2_LAB_PIN_PORT=P    user connections on port P open on the first link
 //	                      only, the others never on it (a probe on a TCP
 //	                      connection of its own)
@@ -88,6 +88,11 @@ func labSock(tc *net.TCPConn) {
 	if labWclamp > 0 {
 		if rc, err := tc.SyscallConn(); err == nil {
 			rc.Control(func(fd uintptr) {
+				// lock the receive buffer first: autotuning raises an
+				// unlocked socket's clamp with its buffer (the first
+				// try, without it, left the peer a 321 KB window under a
+				// 52 KB clamp)
+				unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF, 4*labWclamp)
 				unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_WINDOW_CLAMP, labWclamp)
 			})
 		}
