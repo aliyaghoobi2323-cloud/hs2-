@@ -1,0 +1,30 @@
+== start 2026-10-27T22:02:20+00:00
+ 22:02:20 up 10:57,  7 users,  load average: 1.45, 1.64, 1.78
+top - 22:02:21 up 10:57,  6 users,  load average: 1.45, 1.64, 1.78
+Tasks: 250 total,   1 running, 249 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.6 us,  3.6 sy,  0.0 ni, 92.6 id,  0.0 wa,  0.0 hi,  1.2 si,  0.0 st 
+MiB Mem :  23456.9 total,  15679.7 free,   1348.9 used,   6844.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22108.0 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 847750 root      20   0 1634124 288756  29552 S  48.1   1.2  23:24.53 xray-linux-amd6
+    992 root      20   0 1476480 171132  10420 S  40.4   0.7 212:57.08 hs2
+    916 root      20   0 1074684  95396  72984 S   1.9   0.4   1:15.19 fail2ban-server
+ 972048 root      20   0   11908   6032   3880 R   1.9   0.0   0:00.04 top
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:10.42 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.08 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+== end 2026-10-27T22:24:41+00:00
+ 22:24:41 up 11:19,  7 users,  load average: 2.66, 2.55, 2.39
+top - 22:24:42 up 11:19,  7 users,  load average: 2.66, 2.55, 2.39
+Tasks: 265 total,   1 running, 264 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.6 us,  5.0 sy,  0.0 ni, 89.9 id,  0.0 wa,  0.0 hi,  1.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  15555.3 free,   1255.0 used,   7063.0 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22202.0 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 984866 root      20   0 1501428 227696  29360 S  48.1   0.9   6:01.50 xray-linux-amd6
+    992 root      20   0 1476480 148588  10420 S  38.5   0.6 219:46.67 hs2
+1044197 root      20   0   11908   6088   3928 R   3.8   0.0   0:00.03 top
+1044205 sshd      20   0   12156   6008   4868 S   3.8   0.0   0:00.02 sshd
+1044206 sshd      20   0   12160   6216   5076 S   3.8   0.0   0:00.02 sshd
+      1 root      20   0   22656  14164   9776 S   1.9   0.1   1:16.24 systemd
+    904 message+  20   0    9832   5760   4776 S   1.9   0.0   0:48.81 dbus-daemon
