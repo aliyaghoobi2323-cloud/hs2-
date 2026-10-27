@@ -56,6 +56,22 @@ var TuneHQG = 1
 // HostQOff says whether C3 is off (HS2_TUNE_HQG=0).
 func HostQOff() bool { return TuneHQG == 0 }
 
+// TuneHQGGate 0 (cmd/hs2 applyTuning: HS2_TUNE_HQG_GATE=0; a lab knob of
+// angle (b), docs/architecture/wip/r1/angle-b.fa.md) keeps C3's mark and
+// drops its write gate: with the gate, below 20-30 Mbit/s a link socket is
+// woken with less than a segment unsent, so Linux marks its every delivery
+// sample app-limited, its BBR never leaves STARTUP (pacing at 2.89 times the
+// path, the round trip at three times the floor) and C4-lite, which waits
+// for a sample not app-limited, never caps it (rig, 8 links of 25 Mbit/s:
+// 33% of the segments resent with the gate, 3.7% without C3).
+var TuneHQGGate = 1
+
+// TuneHQGSegs > 0 (HS2_TUNE_HQG_SEGS; lab, angle (b)) keeps the gate with
+// a cap of at least that many segments and the mark at the cap, so the
+// writer is woken while a segment or more is still unsent (the gate's
+// floor is two segments and its mark half the cap, §3.3).
+var TuneHQGSegs = 0
+
 const (
 	// hostqTick: the mark and the gate follow the rate this often.
 	hostqTick = 500 * time.Millisecond
@@ -188,6 +204,20 @@ func (h *hostQ) Update(rate float64, mss int) {
 		return
 	}
 	on, cap, lowat := h.gate.Update(rate, mss)
+	switch {
+	case TuneHQGGate == 0:
+		on, lowat = false, Lowat(rate, mss)
+	case on && TuneHQGSegs > 0:
+		// lab: the gate's cap at least that many segments, and the mark at
+		// the cap (the socket polls writable under half the mark): the
+		// writer is woken with a segment or more still unsent
+		seg := mss
+		if seg <= 0 {
+			seg = hostqMSS
+		}
+		cap = max(cap, TuneHQGSegs*seg)
+		lowat = cap
+	}
 	if w := int(h.lowat.Load()); w == 0 || math.Abs(float64(lowat-w)) >= hostqMove*float64(w) {
 		if err := h.sys.setLowat(lowat); err != nil {
 			if hostqUnsupported(err) {
