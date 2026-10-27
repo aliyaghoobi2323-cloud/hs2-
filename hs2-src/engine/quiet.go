@@ -128,6 +128,14 @@ var QuietBatch = 1
 // past shapeLazyCheck.
 var QuietLazy = 1
 
+// QuietThin 0 (HS2_TUNE_QUIET_THIN=0): a QUIET link's socket keeps Linux's
+// exponential back-off of its retransmission timeout. 1, the default (the
+// R1 round-3 lead's note): TCP_THIN_LINEAR_TIMEOUTS, so a thin stream (under
+// four segments in flight, a QUIET link's usual state) resends a lost
+// message after one RTO each time, its first six times, not after 2, 4, 8
+// of them; a light user waits one RTO for a lost probe, not seconds.
+var QuietThin = 1
+
 // QuietExtra 1 (HS2_TUNE_QUIET_EXTRA; the R1 round-2 judge, the default
 // since round 3 by decision T19): the QUIET links come next to max_links
 // BULK ones, not within max_links. Within them, a pool of N links under a

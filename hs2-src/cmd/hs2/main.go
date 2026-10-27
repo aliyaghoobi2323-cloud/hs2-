@@ -350,6 +350,7 @@ func applyTuning() {
 	num("HS2_TUNE_QUIET_N", &engine.QuietN)
 	num("HS2_TUNE_QUIET_BATCH", &engine.QuietBatch)
 	num("HS2_TUNE_QUIET_LAZY", &engine.QuietLazy) // a QUIET record waits for the socket's unsent bytes (0: none)
+	num("HS2_TUNE_QUIET_THIN", &engine.QuietThin) // TCP_THIN_LINEAR_TIMEOUTS on QUIET sockets (0: none)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)

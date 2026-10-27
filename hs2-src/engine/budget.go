@@ -34,13 +34,12 @@ import (
 //	       its acks wait in on the way back;
 //	qRev = the queue of the way back: the QUIET link's one-way delay of the
 //	       other direction (owd.go: on a shared FIFO, the queue every flow
-//	       there waits in), and on a link that carries data that way too the
-//	       link's own one-way delay of it (owd.go's own beat), or, without
-//	       one, the guess min(S/2, T);
+//	       there waits in), and on a link that carries data that way too
+//	       S × LIn / (LOut + LIn), the share of S the link's own one-way
+//	       delays (owd.go's own beat: each the middle of 200 ms of the
+//	       other end's readings) give the way back, or, without them, the
+//	       guess min(S/2, T);
 //	qFwd = max(S − qRev, the QUIET link's one-way delay of this direction);
-//	       with the link's own delays, max(the link's own one-way delay of
-//	       this direction, the QUIET link's) — both least of 200 ms, as
-//	       CoDel reads a sojourn;
 //	base = min_rtt + qRev: the time a byte of a link at its target spends
 //	       in flight less its own queue.
 //
@@ -151,6 +150,9 @@ const (
 	// grows as if it had no queue (see step)
 	budgetRoom = 0.97
 	budgetLong = 10
+	// budgetSplitMin: the link's own one-way delays split S only when they
+	// sum to this much or more (else half each)
+	budgetSplitMin = 500 * time.Microsecond
 )
 
 // budgetTarget is T.
@@ -251,26 +253,27 @@ func (c *budgetCore) step(in budgetIn) float64 {
 	// own: the link's own one-way delays, both ways (a two-way link whose
 	// ends both send: owd.go's own beat), which split S as it is
 	own := in.LOutOK && in.LInOK
+	c.two, c.own = two || own, own
 	switch {
 	case own:
-		qRev = in.LIn
+		// measured both ways: S, the smoothed round trip less min_rtt, split
+		// by the link's own one-way delays (each the middle of 200 ms of the
+		// other end's readings, owd.go): the least of them is a window's
+		// trough (M3: 0.5 to 3.6 ms on a link whose S was 17 to 24 ms, so the
+		// budget grew into a queue of 40), and S less one of them read the way
+		// back's swings as this direction's (M2: a download cut to half)
+		if sum := in.LOut + in.LIn; sum >= budgetSplitMin {
+			qRev = time.Duration(float64(S) * float64(in.LIn) / float64(sum))
+		} else {
+			qRev = S / 2
+		}
 	case two:
 		qRev = min(S/2, T)
 	}
-	c.two, c.own = two || own, own
 	if in.QInOK {
 		qRev = max(qRev, in.QIn)
 	}
 	qFwd := max(S-qRev, 0)
-	if own {
-		// measured both ways: S (an average of the round trip) less a least
-		// of 200 ms of the way back reads part of the way back's swings as
-		// this direction's (the rig's M2: a download beside an upload cut to
-		// half by them, and grew back from a queue it never had); the one-way
-		// least is CoDel's own reading too (it drops on a sojourn above its
-		// target for 100 ms, not on its mean)
-		qFwd = in.LOut
-	}
 	if in.QOutOK {
 		qFwd = max(qFwd, in.QOut)
 	}

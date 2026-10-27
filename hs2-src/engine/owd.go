@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"math/rand/v2"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -160,6 +161,24 @@ func (r *owdRecent) add(at, q int64) int64 {
 	return lo
 }
 
+// median is the middle of the readings of the last owdLook (the lower one
+// of an even count; 0 with none): a BULK link's own reading (γ2), whose
+// queue swings by a window between readings, where the least is its
+// trough (M3 on the rig: least readings of 0.5 to 3.6 ms on a link whose
+// srtt − min_rtt was 17 to 24 ms).
+func (r *owdRecent) median() int64 {
+	if r.n == 0 {
+		return 0
+	}
+	var s [64]int64
+	for i := 0; i < r.n; i++ {
+		s[i] = r.q[(r.h+i)%len(r.at)]
+	}
+	v := s[:r.n]
+	slices.Sort(v)
+	return v[(r.n-1)/2]
+}
+
 // owdLink is one link's two one-way queue delays (ns) and when each was
 // last heard (ctrlNow; 0: never), with the link's rate for the beat.
 type owdLink struct {
@@ -304,6 +323,11 @@ func (o *owdLink) recv(now int64, b []byte) bool {
 	o.mu.Lock()
 	q := o.base.add(now/int64(time.Second), now-stamp)
 	q = o.recent.add(now, q)
+	if o.own {
+		// a BULK link's own (γ2): the middle of the window, not its trough;
+		// the other end reads it as its sending direction's (budget.go)
+		q = o.recent.median()
+	}
 	o.mu.Unlock()
 	o.qIn.Store(q)
 	o.qInAt.Store(now)

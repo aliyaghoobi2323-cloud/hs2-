@@ -249,7 +249,17 @@ def spec(cellstr, path):
         light = list(range(1, U))
     # light users: one probe each (a ping on the TUN); if the mix leaves none,
     # user 1 carries it (tunping's user 1 already pings)
+    # CALL=K (R1 round 3, the lead's note): the first K light users on the
+    # port path carry an app-limited call (CALLB bytes every CALLMS ms both
+    # ways, echoed; 1875 B and 10 ms: 1.5 Mbit/s) in place of their probe
+    calls = num(d, "CALL", 0)
     for i in light:
+        if calls > 0 and users[i]["path"] == "port":
+            users[i]["role"] = "call"
+            users[i]["flows"].append({"kind": "call", "n": 1, "start_s": 0,
+                                      "bytes": num(d, "CALLB", 1875), "every_ms": num(d, "CALLMS", 10)})
+            calls -= 1
+            continue
         users[i]["flows"].append(light_flow(users[i]))
     if not light and mix != "tunping":
         users[0]["flows"].append(light_flow(users[0]))
@@ -444,7 +454,7 @@ def compose(r, ok, why):
             for k in ("dn_1s", "up_1s"):
                 if u.get(k):
                     x[k] = u[k]
-            for k in ("probe", "ping"):
+            for k in ("probe", "ping", "call"):
                 if u.get(k):
                     x[k + "_p99"] = {w: l["p99"] for w, l in u[k].items() if l}
             users.append(x)
@@ -452,6 +462,7 @@ def compose(r, ok, why):
                     "dn_sum_mbit": cl.get("dn_sum_mbit"), "up_sum_mbit": cl.get("up_sum_mbit"),
                     "tun_dn_sum_mbit": cl.get("tun_dn_sum_mbit"), "tun_up_sum_mbit": cl.get("tun_up_sum_mbit"),
                     "probe": cl.get("probe_all"), "probe_tun": cl.get("probe_tun"), "ping_tun": cl.get("ping_tun"),
+                    "call": cl.get("call_all"),
                     "dn_1s": cl.get("dn_1s"), "up_1s": cl.get("up_1s")})
         if cl.get("errs"):
             rec["client_errs"] = cl["errs"]
