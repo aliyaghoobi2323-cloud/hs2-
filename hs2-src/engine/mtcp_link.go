@@ -36,8 +36,8 @@ type mtcpLink struct {
 	// in caps): a QUIET one (CapQuiet) carries new connections as group
 	// streams, light flows and control; a BULK one (CapBulk) what moved off
 	// a QUIET one. Neither: a pool without classes, every link as before.
-	caps         uint32
-	quiet, bulk  bool
+	caps        uint32
+	quiet, bulk bool
 }
 
 // classOf is a link's class from its negotiated caps: QUIET or BULK (a
