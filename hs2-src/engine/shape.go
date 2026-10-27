@@ -47,6 +47,13 @@ type shapedConn struct {
 	tail  []byte
 	tgt   int // the target of the record the tail fills (0: none sampled)
 
+	// lab only (labtrace.go, HS2_LAB_TRACE): the link's TCP socket, the
+	// bytes in and out (data), and the traced frames not in a record yet
+	labTCP  *net.TCPConn
+	labIn   uint64
+	labOut  uint64
+	labPend []labPend
+
 	rmu  sync.Mutex
 	rbuf []byte // reused frame-read scratch (read side)
 	rem  []byte // decoded data not yet handed to smux (slice into rbuf)
@@ -76,6 +83,9 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	if labTraceOn {
+		c.labNote(p)
+	}
 	if c.carry {
 		return c.writeCarry(p)
 	}
@@ -108,6 +118,9 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 		}
 		if _, err := c.Conn.Write(f); err != nil {
 			return written, err
+		}
+		if labTraceOn {
+			c.labRecord(len(d))
 		}
 		written += len(d)
 		p = p[len(d):]
@@ -167,6 +180,9 @@ func (c *shapedConn) record(d []byte, target int) error {
 	copy(f[shapeHdrLen:], d)
 	clear(f[shapeHdrLen+len(d):])
 	_, err := c.Conn.Write(f)
+	if labTraceOn && err == nil {
+		c.labRecord(len(d))
+	}
 	return err
 }
 

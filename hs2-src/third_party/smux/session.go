@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -184,6 +185,9 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 		go s.sendLoop()
 	}
 	go s.recvLoop()
+	if LabTrace != nil {
+		go s.labStats()
+	}
 	if !config.KeepAliveDisabled {
 		go s.keepalive()
 	}
@@ -513,6 +517,9 @@ func (s *Session) recvLoop() {
 				if hdr.Length() > 0 {
 					newbuf := defaultAllocator.Get(int(hdr.Length()))
 					if written, err := io.ReadFull(s.conn, newbuf); err == nil {
+						if labSmall(cmdPSH, written) {
+							LabTrace(fmt.Sprintf("R %p %d %d %s %d\n", s, sid, written, LabKey(newbuf[:written]), labWall()))
+						}
 						s.rcvd.Add(uint64(written))
 						s.streamLock.Lock()
 						if stream, ok := s.streams[sid]; ok {

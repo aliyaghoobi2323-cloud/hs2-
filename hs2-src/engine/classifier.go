@@ -242,7 +242,7 @@ func queueClass(c Class, f *flowStats) Class {
 		return ClassBulk
 	case c != ClassUnknown:
 		return c
-	case f.tx.Load() < classNewBytes:
+	case f.tx.Load() < labNewB: // classNewBytes, unless HS2_LAB_NEWBYTES (labtrace.go)
 		return ClassLight
 	}
 	return ClassBulk

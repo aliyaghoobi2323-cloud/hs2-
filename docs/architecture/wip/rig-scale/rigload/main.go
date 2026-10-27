@@ -736,6 +736,9 @@ func runClient(s *Spec) *Out {
 		}
 	}
 	wg.Wait()
+	if p := os.Getenv("RIGLOAD_PROBE_DUMP"); p != "" {
+		c.dump(p)
+	}
 
 	out := &Out{T0: c.t0.UnixMilli(), TotalS: s.TotalS, Windows: s.Windows,
 		DnSum: map[string]float64{}, UpSum: map[string]float64{},
@@ -810,4 +813,43 @@ func runClient(s *Spec) *Out {
 		out.Up1s = append(out.Up1s, round1(u))
 	}
 	return out
+}
+
+// dump (lab only, round 2 step 1): every probe's and ping's send time (s
+// from t0) and, for those answered, send time and RTT (ms); a probe's
+// sequence number is its place among the sends.
+func (c *client) dump(path string) {
+	type rd struct {
+		Send []float64 `json:"send"`
+		Samp []float64 `json:"samp"`
+		Ms   []float64 `json:"ms"`
+	}
+	type ud struct {
+		Idx   int    `json:"idx"`
+		ID    string `json:"id"`
+		Path  string `json:"path"`
+		Probe *rd    `json:"probe,omitempty"`
+		Ping  *rd    `json:"ping,omitempty"`
+	}
+	of := func(r *rtts) *rd {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if len(r.sendS) == 0 {
+			return nil
+		}
+		return &rd{append([]float64(nil), r.sendS...), append([]float64(nil), r.sampS...), append([]float64(nil), r.ms...)}
+	}
+	out := struct {
+		T0    int64 `json:"t0_ns"`
+		Users []ud  `json:"users"`
+	}{T0: c.t0.UnixNano()}
+	for _, us := range c.users {
+		u := ud{Idx: us.idx, ID: us.u.ID, Path: us.u.Path, Probe: of(&us.probe), Ping: of(&us.ping)}
+		if u.Probe != nil || u.Ping != nil {
+			out.Users = append(out.Users, u)
+		}
+	}
+	if b, err := json.Marshal(out); err == nil {
+		os.WriteFile(path, b, 0o644)
+	}
 }

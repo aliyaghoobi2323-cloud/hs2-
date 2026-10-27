@@ -79,6 +79,10 @@ func (s *Stream) writeSched(b []byte, window bool) (n int, err error) {
 			return sent, nil
 		}
 		// wait until stream closes, window changes or deadline reached
+		var w0 int64
+		if LabTrace != nil {
+			w0 = labWall()
+		}
 		select {
 		case <-s.chFinEvent: // if fin arrived, future window update is impossible
 			return 0, io.EOF
@@ -89,6 +93,9 @@ func (s *Stream) writeSched(b []byte, window bool) (n int, err error) {
 		case <-sess.chSocketWriteError:
 			return sent, sess.socketWriteError.Load().(error)
 		case <-s.chUpdate:
+		}
+		if w0 != 0 {
+			labWinAdd(s, labWall()-w0)
 		}
 	}
 }
