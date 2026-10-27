@@ -20,7 +20,7 @@ RATE=${RATE:-10}; RTT=${RTT:-72}; IDLE=${IDLE:-30}
 C=xr-c; M=xr-m; S=xr-s
 PIDS=()
 declare -A PORT=([xr]=4443 [vv]=4444 [vm]=4445 [tj]=4446 [ws]=4447 [hu]=4448 [gr]=4449 [ss]=4450 [kc]=4451 [xt]=4452)
-declare -A KINDOF=([xa]=xr [xb1]=xr [xb2]=xr [xt]=xt [vv]=vv [vm]=vm [tj]=tj [ws]=ws [hu]=hu [gr]=gr [grm]=gr [ss]=ss [kc]=kc)
+declare -A KINDOF=([xa]=xr [xc16]=xr [xb1]=xr [xm3]=xr [xb2]=xr [xt]=xt [vv]=vv [vm]=vm [tj]=tj [ws]=ws [hu]=hu [gr]=gr [grm]=gr [ss]=ss [kc]=kc)
 
 down() {
   local n p

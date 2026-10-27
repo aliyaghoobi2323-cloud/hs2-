@@ -11,8 +11,12 @@ Inbound kinds (server) and the client variants that use them:
   xr  VLESS + XHTTP (mode auto) + REALITY, VLESS Encryption (ML-KEM-768,
       native, 600 s tickets), sniffing as the owner's panel inbound
         xa   no xmux in the client (the panel's XMUX toggle off: xray's
-             built-in XMUX defaults apply)
-        xb1  xmux maxConcurrency 1
+             built-in XMUX defaults apply; in 26.6.27, maxConnections 6)
+        xc16 maxConcurrency 16-32 (the default of clients up to v25.9.11)
+        xb1  maxConcurrency 1 (the default of v25.10.15 to v26.6.22)
+        xm3  maxConnections 3 (the default from v26.7.28)
+             (all three with hMaxRequestTimes 600-900 and hMaxReusableSecs
+             1800-3000, as those defaults)
         xb2  xmux maxConcurrency 1 and cMaxReuseTimes 1 (one proxied
              connection per HTTP/2 connection, never reused)
   xt  VLESS + XHTTP (mode auto) + TLS          xt   no xmux
@@ -108,10 +112,14 @@ def server(a, k):
         ins.append(inbound(kind, int(port), a, k))
     return {"log": {"loglevel": a.loglevel, "access": a.access, "error": a.error or ""},
             "inbounds": ins,
-            "outbounds": [{"protocol": "freedom", "tag": "direct"}, {"protocol": "blackhole", "tag": "blocked"}]}
+            # the lab's targets are on 127.0.0.1, which freedom refuses by
+            # default since Xray 26 ("blocked target"): allow loopback only
+            "outbounds": [{"protocol": "freedom", "tag": "direct",
+                           "settings": {"finalRules": [{"action": "allow", "ip": ["127.0.0.0/8"]}]}},
+                          {"protocol": "blackhole", "tag": "blocked"}]}
 
 
-VARIANT = {"xa": "xr", "xb1": "xr", "xb2": "xr", "xt": "xt", "vv": "vv", "vm": "vm", "tj": "tj",
+VARIANT = {"xa": "xr", "xc16": "xr", "xb1": "xr", "xm3": "xr", "xb2": "xr", "xt": "xt", "vv": "vv", "vm": "vm", "tj": "tj",
            "ws": "ws", "hu": "hu", "gr": "gr", "grm": "gr", "ss": "ss", "kc": "kc"}
 
 
@@ -124,7 +132,11 @@ def client(a, k):
     user = lambda flow="", enc="none": {"id": k["UUID"], "encryption": enc, "flow": flow}
     vnext = lambda u: {"vnext": [{"address": a.addr, "port": a.port, "users": [u]}]}
     if kind == "xr":
-        xmux = {"xa": None, "xb1": {"maxConcurrency": "1"},
+        life = {"hMaxRequestTimes": "600-900", "hMaxReusableSecs": "1800-3000"}
+        xmux = {"xa": None,
+                "xc16": dict(maxConcurrency="16-32", **life),
+                "xb1": dict(maxConcurrency="1", **life),
+                "xm3": dict(maxConnections="3", **life),
                 "xb2": {"maxConcurrency": "1", "cMaxReuseTimes": "1"}}[v]
         ob = dict(protocol="vless", settings=vnext(user(enc=k["ENC"])),
                   streamSettings=dict(network="xhttp", xhttpSettings=xhttp_settings(k, xmux), **rc))
@@ -157,6 +169,8 @@ def client(a, k):
     elif kind == "kc":
         ob = dict(protocol="vless", settings=vnext(user()), streamSettings={"network": "kcp", "security": "none"})
     ob["tag"] = "proxy"
+    if a.send_through:
+        ob["sendThrough"] = a.send_through
     return {"log": {"loglevel": a.loglevel, "error": a.error or "", "access": a.access or ""},
             "inbounds": [{"tag": "socks", "listen": "127.0.0.1", "port": 1080, "protocol": "socks",
                           "settings": {"auth": "noauth", "udp": True, "ip": "127.0.0.1"}}],
@@ -179,6 +193,7 @@ def main():
     p.add_argument("--variant", default="xa")
     p.add_argument("--addr", default="10.231.2.1")
     p.add_argument("--port", type=int, default=4443)
+    p.add_argument("--send-through", default="")
     a = p.parse_args()
     k = keys(a.keys)
     cfg = server(a, k) if a.role == "server" else client(a, k)

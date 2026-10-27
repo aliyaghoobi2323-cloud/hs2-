@@ -234,6 +234,7 @@ def game(ctx, name, t_start, t_end, hz, udp=False):
         time.sleep(0.05)
     done.set()
     f["lost"] = len(sent)
+    f["lost_t"] = sorted(round(t - ctx.t0, 3) for t in list(sent.values()))
     f["end"] = ctx.rel()
     try:
         if udp:
