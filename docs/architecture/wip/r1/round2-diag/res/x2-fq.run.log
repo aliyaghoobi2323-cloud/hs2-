@@ -1,0 +1,20 @@
+06:56:47 plan /root/r1-diag/sched/x2-fq.tsv: 9 runs
+06:56:48 start 344fda9e-acl5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl5) load 3.15 waited 0s
+06:57:17 done 344fda9e-acl5-1 ok=1 
+06:57:18 start 1edb2561-acl25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl25) load 2.57 waited 0s
+06:57:48 done 1edb2561-acl25-1 ok=1 
+06:57:49 start 73cd9af7-acl100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl100) load 2.43 waited 0s
+06:58:19 done 73cd9af7-acl100-1 ok=1 
+06:58:19 start 344fda9e-acl5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl5) load 2.20 waited 0s
+06:58:49 done 344fda9e-acl5-2 ok=1 
+06:58:50 start 1edb2561-acl25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl25) load 1.52 waited 0s
+06:59:20 done 1edb2561-acl25-2 ok=1 
+06:59:21 start 73cd9af7-acl100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl100) load 1.71 waited 0s
+06:59:50 done 73cd9af7-acl100-2 ok=1 
+06:59:51 start 344fda9e-acl5-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl5) load 2.14 waited 0s
+07:00:21 done 344fda9e-acl5-3 ok=1 
+07:00:22 start 1edb2561-acl25-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl25) load 2.23 waited 0s
+07:00:52 done 1edb2561-acl25-3 ok=1 
+07:00:52 start 73cd9af7-acl100-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl100) load 2.39 waited 0s
+07:01:22 done 73cd9af7-acl100-3 ok=1 
+07:01:22 done /root/r1-diag/sched/x2-fq.tsv

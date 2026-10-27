@@ -1,0 +1,7 @@
+acub /root/r1-bins/hs2-diag-a HS2_TUNE_CC=cubic
+apinp5 /root/r1-bins/hs2-diag-a HS2_LAB_PIN_PORT=5312 HS2_LAB_PACE_MBIT=4.706
+acw5 /root/r1-bins/hs2-diag-a
+apinp25 /root/r1-bins/hs2-diag-a HS2_LAB_PIN_PORT=5312 HS2_LAB_PACE_MBIT=23.53
+acw25 /root/r1-bins/hs2-diag-a
+apinp100 /root/r1-bins/hs2-diag-a HS2_LAB_PIN_PORT=5312 HS2_LAB_PACE_MBIT=94.12
+acw100 /root/r1-bins/hs2-diag-a
