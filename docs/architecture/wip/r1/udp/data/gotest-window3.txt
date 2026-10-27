@@ -1,0 +1,7 @@
+== 21:35:35 dgports alone, 5 times
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	31.858s
+== 21:36:08 full engine and cmd/hs2, alone
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	575.492s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.498s
+EXIT=0
+== 21:45:44 done
