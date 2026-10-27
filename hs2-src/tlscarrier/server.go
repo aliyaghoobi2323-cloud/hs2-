@@ -30,9 +30,9 @@ type Server struct {
 	// the link's class (RoleCaps; the exit offers both always, a reverse
 	// edge the one it wants the link to be).
 	OfferCaps func() uint32
-	replay  *replayMem
-	once    sync.Once
-	lastLog atomic.Int64
+	replay    *replayMem
+	once      sync.Once
+	lastLog   atomic.Int64
 }
 
 func (s *Server) init() { s.once.Do(func() { s.replay = newReplayMem() }) }

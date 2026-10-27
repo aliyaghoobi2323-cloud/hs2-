@@ -335,6 +335,10 @@ func applyTuning() {
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}
+	if v, ok := os.LookupEnv("HS2_TUNE_QUIET_CC"); ok {
+		engine.QuietCC = v
+		log.Printf("tuning: HS2_TUNE_QUIET_CC=%q", v)
+	}
 	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
 		tlscarrier.CongestionControl = v
 		log.Printf("tuning: HS2_TUNE_CC=%q", v)

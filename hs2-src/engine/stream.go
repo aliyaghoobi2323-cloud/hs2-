@@ -257,7 +257,13 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	}
 	// β2 (quiet.go): a BULK link's sockets get α's cap in place of
 	// C4-lite's; QUIET ones, and links of no class, keep C4-lite
-	_, bulkLink := classOf(caps)
+	quietLink, bulkLink := classOf(caps)
+	if quietLink && QuietCC != "" {
+		// a QUIET link carries light traffic only: BBR's PROBE_RTT (its
+		// window at 4 segments for 200 ms each 10 s) would hold every
+		// user's probe that moment, 198 of them a padded record each
+		tlscarrier.SetCongestion(tc, QuietCC)
+	}
 	if server {
 		sess, err = smux.Server(w, cfg)
 	} else {
