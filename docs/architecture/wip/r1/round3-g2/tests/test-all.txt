@@ -1,0 +1,3 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.594s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/core	0.061s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/encap	29.575s

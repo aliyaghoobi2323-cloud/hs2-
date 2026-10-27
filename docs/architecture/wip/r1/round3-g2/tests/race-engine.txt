@@ -1,0 +1,8 @@
+--- FAIL: TestHostQLinuxSocket (0.00s)
+    hostq_linux_test.go:139: gate true cap 11584
+--- FAIL: TestHostQStatusLine (0.00s)
+    hostq_test.go:396: "hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.00"
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	66.677s
+FAIL
+exit 1
