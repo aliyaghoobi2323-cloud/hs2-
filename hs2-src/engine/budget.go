@@ -132,6 +132,12 @@ func budgetLinkOWD() bool { return BudgetLinkOWD != 0 && !BudgetOff() && !OWDOff
 // turn each reading (M1).
 var BudgetPaceK = 125
 
+// BudgetInflight 0 (HS2_TUNE_BUDGET_INFLIGHT=0, lab): the budget counts a
+// socket's SIOCOUTQ (all not acknowledged, the bytes past a hole the peer
+// has too) in place of what Linux counts in flight and its unsent bytes
+// (budget_linux.go).
+var BudgetInflight = 1
+
 const (
 	budgetStartGain  = 2.0
 	budgetStartGrow  = 1.25
