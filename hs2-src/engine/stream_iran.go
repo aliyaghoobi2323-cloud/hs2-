@@ -163,18 +163,53 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		}()
 		msg := "tcp"
 		if cfg.UDP {
-			pc, err := net.ListenPacket("udp", bind)
-			if err != nil {
-				return err
+			if pc, err := net.ListenPacket("udp", bind); err == nil {
+				go func() { <-ctx.Done(); pc.Close() }()
+				go serveUserUDP(ctx, pc, lm, port, logf)
+				msg = "tcp+udp"
+			} else {
+				// UDP on the user ports is an addition: a port whose UDP
+				// another program holds must not take the tunnel down
+				// (hs2 run exits on RunIran's error, and systemd restarted
+				// it every 3 s with the TCP port never serving).
+				logf("user port %s: UDP is NOT forwarded: %v — another program holds UDP %s on this server (ss -lunp shows which); TCP on it works, and UDP is forwarded once the port is free", p, err, p)
+				go retryUserUDP(ctx, bind, p, lm, port, logf)
+				msg = "tcp; udp waits for the port"
 			}
-			go func() { <-ctx.Done(); pc.Close() }()
-			go serveUserUDP(ctx, pc, lm, port, logf)
-			msg = "tcp+udp"
 		}
 		logf("user port %s open (%s), carried over the link pool", p, msg)
 	}
 	<-ctx.Done()
 	return nil
+}
+
+// userUDPRetry is how long the edge waits before it tries a user port's UDP
+// socket again (retryUserUDP), doubling up to userUDPRetryMax.
+var (
+	userUDPRetry    = time.Second
+	userUDPRetryMax = 30 * time.Second
+)
+
+// retryUserUDP opens the user port's UDP socket once another program lets it
+// go, and serves it from then on.
+func retryUserUDP(ctx context.Context, bind, p string, lm *LinkManager, port int, logf func(string, ...any)) {
+	wait := userUDPRetry
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		pc, err := net.ListenPacket("udp", bind)
+		if err != nil {
+			wait = min(2*wait, userUDPRetryMax)
+			continue
+		}
+		go func() { <-ctx.Done(); pc.Close() }()
+		logf("user port %s: UDP forwarded now (the port is free)", p)
+		serveUserUDP(ctx, pc, lm, port, logf)
+		return
+	}
 }
 
 // pickWait returns a link, waiting up to a few seconds for one to come up.
