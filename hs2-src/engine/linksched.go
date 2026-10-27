@@ -274,21 +274,24 @@ type holdWriter interface {
 
 // linkSched is one link's (see above).
 type linkSched struct {
-	mu      sync.Mutex
-	s       *Sched[lsItem]
-	n       int // items in s
-	users   map[uint32]*lsUser
-	flows   map[uint32]*lsFlow
-	act     []*lsClass // flows that queued since the latest tick
-	tun     lsTun
-	frame   int // the bulk frame (BulkFrameSize of the link's rate)
-	closed  bool
-	idle    bool // the writer waits for wake
-	wake    chan struct{}
-	sess    *smux.Session
-	out     frameWriter
-	hw      holdWriter // out's, nil: none
-	sweepAt int64
+	mu     sync.Mutex
+	s      *Sched[lsItem]
+	n      int // items in s
+	users  map[uint32]*lsUser
+	flows  map[uint32]*lsFlow
+	act    []*lsClass // flows that queued since the latest tick
+	tun    lsTun
+	frame  int // the bulk frame (BulkFrameSize of the link's rate)
+	closed bool
+	idle   bool // the writer waits for wake
+	wake   chan struct{}
+	sess   *smux.Session
+	out    frameWriter
+	hw     holdWriter // out's, nil: none
+	// classOff: HS2_TUNE_CLASS=0 as the link came up (read once: no goroutine
+	// of the link reads the tuning a test may be setting): every flow bulk
+	classOff bool
+	sweepAt  int64
 	// the status line's
 	lane       [lsLaneRing]int32 // latency-lane waits, µs (ring)
 	laneN      int
@@ -308,6 +311,7 @@ func newLinkSched(out frameWriter) *linkSched {
 		frame: bulkFrameMin, wake: make(chan struct{}, 1), out: out}
 	ls.tun.flows = map[uint32]*tunFlow{}
 	ls.hw, _ = out.(holdWriter)
+	ls.classOff = ClassOff()
 	ls.frameAt.Store(bulkFrameMin)
 	return ls
 }
@@ -338,7 +342,7 @@ func (ls *linkSched) Push(f *smux.OutFrame) {
 	}
 	user, _ := f.User()
 	fl := ls.flowOf(f.Sid(), user, now)
-	light := queueClass(fl.cls, &fl.stats) != ClassBulk
+	light := ls.qclass(&fl.lsClass) != ClassBulk
 	fl.stats.Add(true, f.DataLen())
 	ls.queued(&fl.lsClass, now)
 	u := fl.u
@@ -360,7 +364,7 @@ func (ls *linkSched) Push(f *smux.OutFrame) {
 func (ls *linkSched) FrameSize(sid uint32) int {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
-	if fl := ls.flows[sid]; fl != nil && queueClass(fl.cls, &fl.stats) == ClassBulk {
+	if fl := ls.flows[sid]; ls.classOff || fl != nil && ls.qclass(&fl.lsClass) == ClassBulk {
 		return ls.frame
 	}
 	return lsLightData
@@ -419,7 +423,7 @@ func (ls *linkSched) forget(sid uint32) {
 // and at once if its latest tick is a tick old or more (a flow back from a
 // silence is judged on it before its frame takes a lane).
 func (ls *linkSched) queued(c *lsClass, now int64) {
-	if c.tickAt != 0 && time.Duration(now-c.tickAt) >= classTick {
+	if c.tickAt != 0 && time.Duration(now-c.tickAt) >= classTick && !ls.classOff {
 		ls.classTick(c, now)
 	}
 	c.lastAt = now
@@ -708,7 +712,7 @@ func (ls *linkSched) pushTun(l *l3Link, bp *[]byte, tag, flow uint32) bool {
 const tunHdr = 15 // the TUN frame's descriptor (tlscarrier.AppendTunFrame)
 
 func (ls *linkSched) tunLight(f *tunFlow) bool {
-	return f.echo || queueClass(f.cls, &f.stats) != ClassBulk
+	return !ls.classOff && (f.echo || ls.qclass(&f.lsClass) != ClassBulk)
 }
 
 // tunTurn puts f's turn in the scheduler: its frame is built when taken.
@@ -848,7 +852,7 @@ func (ls *linkSched) tick(now int64, rate float64) {
 	ls.frameAt.Store(int32(st.Quantum))
 	for _, c := range ls.act {
 		c.inAct = false
-		if c.tickAt != now {
+		if c.tickAt != now && !ls.classOff {
 			ls.classTick(c, now)
 		}
 	}
@@ -958,4 +962,13 @@ func (ls *linkSched) classes() (light, bulk, unknown int, flips [2]uint64) {
 		count(&f.lsClass, f.echo)
 	}
 	return light, bulk, unknown, ls.flips
+}
+
+// qclass is the class a flow's next frame is queued by (queueClass), bulk
+// with C1 off.
+func (ls *linkSched) qclass(c *lsClass) Class {
+	if ls.classOff {
+		return ClassBulk
+	}
+	return queueClass(c.cls, &c.stats)
 }

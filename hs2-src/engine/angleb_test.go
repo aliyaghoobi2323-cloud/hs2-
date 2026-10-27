@@ -498,7 +498,7 @@ func TestAngleBSchedOff(t *testing.T) {
 	var set l3Set
 	l1 := &l3Link{id: 1}
 	set.add(l1)
-	var pins l3Pins
+	pins := l3Pins{off: SchedOff()}
 	if set.pinned(&pins, 42, ctrlNow()) != l1 || pins.m != nil {
 		t.Fatal("HS2_TUNE_SCHED=0: the TUN flow was pinned")
 	}

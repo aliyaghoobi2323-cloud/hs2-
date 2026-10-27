@@ -408,16 +408,19 @@ type l3Pin struct {
 	at int64
 }
 
-// l3Pins is pumpTun's own (one goroutine).
+// l3Pins is pumpTun's own (one goroutine). off: HS2_TUNE_SCHED=0 as
+// the pump started (read once: the pump never reads the tuning a test may
+// be setting).
 type l3Pins struct {
 	m       map[uint32]*l3Pin
 	sweptAt int64
+	off     bool
 }
 
 // pinned is the link of flow h: its pinned one while it lives, else a new
 // pick, pinned.
 func (s *l3Set) pinned(p *l3Pins, h uint32, now int64) *l3Link {
-	if SchedOff() {
+	if p.off {
 		return s.pickFlow(h)
 	}
 	if p.m == nil {
@@ -447,7 +450,7 @@ func (s *l3Set) pinned(p *l3Pins, h uint32, now int64) *l3Link {
 // never blocks on a link: no link or a full queue means drop.
 func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 	size := dev.MTU() + 128
-	var pins l3Pins
+	pins := l3Pins{off: SchedOff()}
 	for ctx.Err() == nil {
 		bp, _ := s.pool.Get().(*[]byte)
 		if bp == nil || cap(*bp) < size {
