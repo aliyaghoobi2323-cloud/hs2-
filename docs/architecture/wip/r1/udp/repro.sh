@@ -23,6 +23,8 @@
 #         spray        3000 one-datagram flows from fresh source ports in ~3 s
 #                      first (scanner/QUIC-probe like), then the checks
 #         late         the colliding UDP program starts 5 s AFTER hs2 (it loses)
+#         noipv6       IPv6 switched off in the edge's namespace (disable_ipv6=1 on
+#                      all, default, lo and e0), as on many Iran VPSes
 #
 # Never touches the root namespace, /etc/hs2 or the production service.
 set -u
@@ -30,7 +32,7 @@ D=$(cd "$(dirname "$0")" && pwd)
 RIG=${RIG:-$D/../../rig-scale/rig.sh}
 OUT=${1:?OUT}; TOPO=${2:?TOPO}; UDP=${3:?UDP}; shift 3
 CONDS="$*"; [ -n "$CONDS" ] || CONDS=base
-BIN=${BIN:-/root/r1-bins/hs2-old}
+BIN=${BIN:-/root/rudp/bins/hs2-prod}
 export RIG_ID=${RIG_ID:-u}
 E=r-edge$RIG_ID; M=r-mid$RIG_ID; X=r-exit$RIG_ID
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
@@ -157,6 +159,7 @@ case " $CONDS " in
   *" collideip "*) nsx $E python3 "$D/udpt.py" hold "$EIP:$PORTS" > "$R/hold.log" 2>&1 & PIDS+=($!) ;;
 esac
 has fwdrop && nsx $E iptables -I INPUT -p udp --dport $PORTS -j DROP
+has noipv6 && nsx $E sysctl -qw net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1   net.ipv6.conf.lo.disable_ipv6=1 net.ipv6.conf.e0.disable_ipv6=1
 sleep 0.5
 
 start() { # side
