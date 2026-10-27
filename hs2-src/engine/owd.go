@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
+	"math/rand/v2"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -221,6 +222,15 @@ func owdTickOf(r float64) time.Duration {
 	return min(max(t, owdTickMin), owdTickMax)
 }
 
+// owdJitter is a beat of 0.5 to 1.5 times t: a fixed beat is a timing
+// tell (the judge's capture of version 4: on a download's BULK link the
+// upload direction carried one record each 25.08 ms, p90 25.8 ms; an idle
+// QUIET link's 1 s beat would be the same tell). The queue reading takes
+// the least of owdLook, so the mean beat is what counts.
+func owdJitter(t time.Duration) time.Duration {
+	return t/2 + time.Duration(rand.Int64N(int64(t)+1))
+}
+
 // queue is the queue delay of this end's sending direction on the link,
 // as the other end last measured it (false: none heard lately, OWD off).
 func (o *owdLink) queue() (time.Duration, bool) {
@@ -297,7 +307,7 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 	}()
 	var b [owdMsgLen]byte
 	for {
-		t := time.NewTimer(o.tick())
+		t := time.NewTimer(owdJitter(o.tick()))
 		select {
 		case <-ctx.Done():
 			t.Stop()

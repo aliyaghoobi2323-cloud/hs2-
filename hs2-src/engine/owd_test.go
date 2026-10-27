@@ -386,3 +386,18 @@ func TestOWDShared(t *testing.T) {
 		t.Fatalf("beat %v after 100 and 1 Mbit/s within a second: want the 100's", q.tick())
 	}
 }
+
+// The beat is jittered: 0.5 to 1.5 times the tick, no fixed period.
+func TestOWDJitter(t *testing.T) {
+	seen := map[time.Duration]bool{}
+	for i := 0; i < 200; i++ {
+		j := owdJitter(100 * time.Millisecond)
+		if j < 50*time.Millisecond || j > 150*time.Millisecond {
+			t.Fatalf("beat %v out of 50..150 ms", j)
+		}
+		seen[j/time.Millisecond] = true
+	}
+	if len(seen) < 20 {
+		t.Fatalf("only %d distinct beats in 200", len(seen))
+	}
+}
