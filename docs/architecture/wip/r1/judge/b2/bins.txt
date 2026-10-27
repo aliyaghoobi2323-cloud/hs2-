@@ -1,0 +1,6 @@
+a /root/r1-bins/hs2-a-481fa0a HS2_TUNE_HQG_SEGS=8
+b /root/r1-bins/hs2-b-b7f117f HS2_TUNE_HQG_SEGS=8
+as /root/r1-bins/hs2-a-481fa0a HS2_TUNE_HQG_SEGS=8 HS2_TUNE_SENDCAP=0
+bs /root/r1-bins/hs2-b-b7f117f HS2_TUNE_HQG_SEGS=8 HS2_TUNE_SENDCAP=0
+ar /root/r1-bins/hs2-a-481fa0a-lab HS2_TUNE_HQG_SEGS=8 HS2_LAB_RELFLOOR=1
+br /root/r1-bins/hs2-b-b7f117f-lab HS2_TUNE_HQG_SEGS=8 HS2_LAB_RELFLOOR=1

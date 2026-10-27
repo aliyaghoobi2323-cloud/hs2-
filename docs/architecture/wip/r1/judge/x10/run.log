@@ -1,0 +1,20 @@
+05:11:03 plan x10/plan.txt: 9 runs
+05:11:04 start 3e7aaeab-old-1 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.12 waited 0s
+05:11:43 done 3e7aaeab-old-1 ok=1 
+05:11:44 start 3e7aaeab-a-1 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=a) load 0.85 waited 0s
+05:12:23 done 3e7aaeab-a-1 ok=1 
+05:12:24 start 3e7aaeab-b-1 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 0.97 waited 0s
+05:13:03 done 3e7aaeab-b-1 ok=1 
+05:13:04 start 3e7aaeab-b-2 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 1.08 waited 0s
+05:13:43 done 3e7aaeab-b-2 ok=1 
+05:13:44 start 3e7aaeab-a-2 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=a) load 1.41 waited 0s
+05:14:24 done 3e7aaeab-a-2 ok=1 
+05:14:24 start 3e7aaeab-old-2 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.18 waited 0s
+05:15:04 done 3e7aaeab-old-2 ok=1 
+05:15:05 start 3e7aaeab-b-3 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b) load 0.97 waited 0s
+05:15:44 done 3e7aaeab-b-3 ok=1 
+05:15:45 start 3e7aaeab-a-3 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=a) load 1.26 waited 0s
+05:16:24 done 3e7aaeab-a-3 ok=1 
+05:16:25 start 3e7aaeab-old-3 (N=1 RATE=10 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.12 waited 0s
+05:17:04 done 3e7aaeab-old-3 ok=1 
+05:17:04 done x10/plan.txt

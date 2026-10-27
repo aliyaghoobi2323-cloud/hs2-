@@ -1,0 +1,8 @@
+a /root/r1-bins/hs2-a-481fa0a
+b /root/r1-bins/hs2-b-b7f117f
+a4 /root/r1-bins/hs2-a-481fa0a HS2_TUNE_HQG_SEGS=4
+b4 /root/r1-bins/hs2-b-b7f117f HS2_TUNE_HQG_SEGS=4
+a8 /root/r1-bins/hs2-a-481fa0a HS2_TUNE_HQG_SEGS=8
+b8 /root/r1-bins/hs2-b-b7f117f HS2_TUNE_HQG_SEGS=8
+ag /root/r1-bins/hs2-a-481fa0a HS2_TUNE_HQG_GATE=0
+bg /root/r1-bins/hs2-b-b7f117f HS2_TUNE_HQG_GATE=0

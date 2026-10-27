@@ -1,0 +1,2 @@
+b /root/r1-bins/hs2-b-b7f117f HS2_TUNE_HQG_SEGS=8
+bl /root/r1-bins/hs2-b-b7f117f-lab HS2_TUNE_HQG_SEGS=8 HS2_LAB_LATE_DONE=1

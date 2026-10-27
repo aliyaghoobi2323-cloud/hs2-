@@ -1,0 +1,45 @@
+== start 2026-10-27T03:03:11+00:00
+ 03:03:11 up 13 days,  4:36,  8 users,  load average: 0.26, 0.44, 0.54
+top - 03:03:12 up 13 days,  4:36,  8 users,  load average: 0.26, 0.44, 0.54
+Tasks: 240 total,   1 running, 239 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.4 us,  0.8 sy,  0.0 ni, 98.7 id,  0.0 wa,  0.0 hi,  0.1 si,  0.0 st 
+MiB Mem :  23456.9 total,   2166.2 free,   1503.9 used,  20203.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21953.0 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1648832 root      20   0 1475656  57676  10876 S   9.6   0.2  96:06.82 hs2
+2445923 root      20   0 1366356  99328  28936 S   7.7   0.4   1:12.64 xray-linux-amd6
+ 795448 systemd+  20   0   22912  14848  11136 S   1.9   0.1  13:20.77 systemd-resolve
+ 860115 root      20   0 5658272 243328 131164 S   1.9   1.0   8:51.96 2.1.308-3f6ee6c
+2475045 root      20   0   11912   6032   3880 R   1.9   0.0   0:00.04 top
+      1 root      20   0   22636  14116   9736 S   0.0   0.1   5:33.32 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:01.38 kthreadd
+== after-par 2026-10-27T03:58:03+00:00
+ 03:58:03 up 13 days,  5:31, 12 users,  load average: 3.10, 2.84, 2.27
+top - 03:58:04 up 13 days,  5:31, 12 users,  load average: 3.10, 2.84, 2.27
+Tasks: 257 total,   1 running, 256 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.6 us,  2.2 sy,  0.0 ni, 95.5 id,  0.0 wa,  0.0 hi,  0.7 si,  0.0 st 
+MiB Mem :  23456.9 total,   2023.8 free,   1537.2 used,  20312.4 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21919.7 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2534231 root      20   0 1433596 156260  28748 S  33.3   0.7   1:52.78 xray-linux-amd6
+1648832 root      20   0 1475912  85120  10876 S  31.4   0.4 108:52.58 hs2
+2542716 root      20   0   11908   6044   3884 R   2.0   0.0   0:00.04 top
+      1 root      20   0   22636  14116   9736 S   0.0   0.1   5:37.51 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:01.39 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_g
+== end 2026-10-27T03:58:05+00:00
+ 03:58:05 up 13 days,  5:31, 12 users,  load average: 3.01, 2.83, 2.27
+top - 03:58:06 up 13 days,  5:31, 12 users,  load average: 3.01, 2.83, 2.27
+Tasks: 259 total,   1 running, 258 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.8 us,  3.1 sy,  0.0 ni, 93.9 id,  0.0 wa,  0.0 hi,  1.2 si,  0.0 st 
+MiB Mem :  23456.9 total,   2004.4 free,   1556.7 used,  20312.4 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21900.3 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1648832 root      20   0 1475912  85128  10876 S  35.3   0.4 108:53.31 hs2
+2534231 root      20   0 1433596 156264  28748 S  33.3   0.7   1:53.41 xray-linux-amd6
+2543028 root      20   0   11908   6040   3884 R   2.0   0.0   0:00.03 top
+      1 root      20   0   22636  14116   9736 S   0.0   0.1   5:37.51 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:01.39 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_g

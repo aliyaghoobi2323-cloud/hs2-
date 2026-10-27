@@ -1,0 +1,9 @@
+04:01:54 lock taken after 0s
+04:01:55 rig start, limit 3540s
+04:15:36 solo done, 2719s left
+04:59:25 parallel done, 90s left
+04:59:26 r1: 0 runs over 75 % busy, 0 failed
+04:59:26 r2: 0 runs over 75 % busy, 0 failed
+04:59:26 r3: 0 runs over 75 % busy, 0 failed
+04:59:27 done after 3452s of rig time
+04:59:27 lock released

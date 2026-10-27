@@ -1,0 +1,27 @@
+== old
+DPI v2 — tunnel vs the crowd  (0.5 = coin flip, 1.0 = trivial)
+[per-flow sizes are REAL captures from the Go shaper: 122458 records]
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.590  INDISTINGUISHABLE
+B) behavioral  BEFORE hardening (all features)           AUC=1.000  DETECTABLE
+B) behavioral  AFTER  hardening (all features)           AUC=1.000  DETECTABLE
+
+   single-signal AUC (what each tell alone reveals):
+== a
+DPI v2 — tunnel vs the crowd  (0.5 = coin flip, 1.0 = trivial)
+[per-flow sizes are REAL captures from the Go shaper: 123451 records]
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.575  INDISTINGUISHABLE
+B) behavioral  BEFORE hardening (all features)           AUC=1.000  DETECTABLE
+B) behavioral  AFTER  hardening (all features)           AUC=1.000  DETECTABLE
+
+   single-signal AUC (what each tell alone reveals):
+== b
+DPI v2 — tunnel vs the crowd  (0.5 = coin flip, 1.0 = trivial)
+[per-flow sizes are REAL captures from the Go shaper: 123464 records]
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.596  INDISTINGUISHABLE
+B) behavioral  BEFORE hardening (all features)           AUC=1.000  DETECTABLE
+B) behavioral  AFTER  hardening (all features)           AUC=1.000  DETECTABLE
+
+   single-signal AUC (what each tell alone reveals):

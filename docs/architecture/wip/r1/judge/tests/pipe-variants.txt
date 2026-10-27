@@ -1,0 +1,40 @@
+== HS2_TUNE_HQG_SEGS=0
+    angle_test.go:395: probe p50 51.884999ms p99 56.389708ms (60 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 2847/2847 B
+--- PASS: TestAngleSameLinkProbe (14.01s)
+    angle_tun_test.go:327: ping one-way p50 25.924135ms p99 28.810366ms (80); TUN bulk in 4.75 Mbit/s; drops light/bulk 0/2957
+--- PASS: TestAngleTunPingAheadOfBulk (6.04s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 30.367ms, bound 36ms
+    hostq_test.go:233:    5 Mbit/s (from   0): gate true  worst wait 7.6812ms, bound 20ms
+    hostq_test.go:233:   10 Mbit/s (from   0): gate true  worst wait 7.2564ms, bound 20ms
+    hostq_test.go:233:   25 Mbit/s (from   0): gate true  worst wait 7.09816ms, bound 20ms
+    hostq_test.go:233:   25 Mbit/s (from 100): gate false worst wait 8.89244ms, bound 20ms
+    hostq_test.go:233:  100 Mbit/s (from   0): gate false worst wait 5.21016ms, bound 20ms
+    hostq_test.go:233: 1000 Mbit/s (from   0): gate false worst wait 2.178648ms, bound 20ms
+--- PASS: TestHostWaitBound (0.01s)
+== HS2_TUNE_HQG_SEGS=4
+    angle_test.go:395: probe p50 56.967911ms p99 61.345028ms (60 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 5792/5791 B
+    angle_test.go:401: probe p99 61.345028ms, want <= 60ms (RTT 40ms + 20 ms)
+--- FAIL: TestAngleSameLinkProbe (14.01s)
+    angle_tun_test.go:327: ping one-way p50 28.158924ms p99 31.304127ms (80); TUN bulk in 4.75 Mbit/s; drops light/bulk 0/2967
+    angle_tun_test.go:330: ping p99 one-way 31.304127ms, want <= 30ms
+--- FAIL: TestAngleTunPingAheadOfBulk (6.04s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 47.742999ms, bound 36ms
+--- FAIL: TestHostWaitBound (0.00s)
+== HS2_TUNE_HQG_SEGS=8
+    angle_test.go:395: probe p50 65.914187ms p99 69.508791ms (59 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 11584/11584 B
+    angle_test.go:401: probe p99 69.508791ms, want <= 60ms (RTT 40ms + 20 ms)
+--- FAIL: TestAngleSameLinkProbe (14.00s)
+    angle_tun_test.go:327: ping one-way p50 32.760212ms p99 35.999426ms (80); TUN bulk in 4.75 Mbit/s; drops light/bulk 0/2954
+    angle_tun_test.go:330: ping p99 one-way 35.999426ms, want <= 30ms
+--- FAIL: TestAngleTunPingAheadOfBulk (6.04s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 95.487ms, bound 36ms
+--- FAIL: TestHostWaitBound (0.00s)
+== HS2_TUNE_HQG_SEGS=0 HS2_TUNE_HQG_GATE=0
+    angle_test.go:395: probe p50 55.358694ms p99 61.070987ms (60 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 5495/5495 B
+    angle_test.go:401: probe p99 61.070987ms, want <= 60ms (RTT 40ms + 20 ms)
+--- FAIL: TestAngleSameLinkProbe (14.01s)
+    angle_tun_test.go:327: ping one-way p50 27.867693ms p99 30.935016ms (80); TUN bulk in 4.72 Mbit/s; drops light/bulk 0/2942
+    angle_tun_test.go:330: ping p99 one-way 30.935016ms, want <= 30ms
+--- FAIL: TestAngleTunPingAheadOfBulk (6.04s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate false worst wait 53.82ms, bound 36ms
+--- FAIL: TestHostWaitBound (0.00s)
