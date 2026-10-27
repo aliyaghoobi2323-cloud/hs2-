@@ -399,6 +399,7 @@ type client struct {
 	end    time.Time
 	mu     sync.Mutex
 	errs   map[string]int
+	notes  map[string]int
 	users  []*ustate
 	srvdir string    // the server's records (game, call)
 	rts    []*rtFlow // game and call flows
@@ -408,6 +409,14 @@ func (c *client) err(f string, a ...any) {
 	m := fmt.Sprintf(f, a...)
 	c.mu.Lock()
 	c.errs[m]++
+	c.mu.Unlock()
+}
+
+// note: an observation that is not an error (counted like errs)
+func (c *client) note(f string, a ...any) {
+	m := fmt.Sprintf(f, a...)
+	c.mu.Lock()
+	c.notes[m]++
 	c.mu.Unlock()
 }
 
@@ -739,6 +748,7 @@ type Out struct {
 	Up1s     []float64          `json:"up_1s"`
 	Classes  map[string]any     `json:"classes,omitempty"` // game, gameudp, call, stream, web
 	Errs     map[string]int     `json:"errs,omitempty"`
+	Notes    map[string]int     `json:"notes,omitempty"` // observations, not errors
 }
 
 func runClient(s *Spec, srvdir string) *Out {
@@ -754,7 +764,7 @@ func runClient(s *Spec, srvdir string) *Out {
 	if len(s.Windows) == 0 {
 		s.Windows = []Window{{"all", 0, s.TotalS}}
 	}
-	c := &client{s: s, errs: map[string]int{}, srvdir: srvdir}
+	c := &client{s: s, errs: map[string]int{}, notes: map[string]int{}, srvdir: srvdir}
 	c.t0 = time.Now()
 	c.t0m = clockMono()
 	c.end = c.at(s.TotalS)
@@ -796,6 +806,9 @@ func runClient(s *Spec, srvdir string) *Out {
 		TunDnSum: map[string]float64{}, TunUpSum: map[string]float64{}, Errs: c.errs}
 	if cl := c.classes(); len(cl) > 0 {
 		out.Classes = cl
+	}
+	if len(c.notes) > 0 {
+		out.Notes = c.notes
 	}
 	lat := func(r []*rtts, w Window, m *map[string]*Lat) {
 		if l := latOf(r, w.From, w.To); l != nil {

@@ -452,19 +452,29 @@ func (c *client) rtTCP(fl *rtFlow, us *ustate, fid int, up, dn GenSpec) {
 	<-done
 }
 
+// rtUDP: gameudp. The socket is not connected: the edge answers from a
+// socket bound to the wildcard address, so the kernel picks the answer's
+// source, and in the rig (the users on the edge's own lo) that is the user's
+// own address, not the user port's; a connected socket would drop every
+// answer. Where the answers came from is noted (Out.Notes).
 func (c *client) rtUDP(fl *rtFlow, us *ustate, fid int, up GenSpec) {
 	addr := c.target(us, false)
-	d := net.Dialer{Timeout: dialWait}
+	ra, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		c.err("gameudp %s: %v", addr, err)
+		return
+	}
+	la := &net.UDPAddr{}
 	switch {
 	case us.u.Src != "":
-		d.LocalAddr = &net.UDPAddr{IP: net.ParseIP(us.u.Src)}
+		la.IP = net.ParseIP(us.u.Src)
 	case !us.tun() && us.u.V6:
-		d.LocalAddr = &net.UDPAddr{IP: randV6(c.s.V6Prefix)}
+		la.IP = randV6(c.s.V6Prefix)
 	}
-	conn, err := d.Dial("udp", addr)
+	conn, err := net.ListenUDP("udp", la)
 	if err != nil {
 		us.dialErrs.Add(1)
-		c.err("dial gameudp %s: %v", addr, err)
+		c.err("gameudp socket %s: %v", la, err)
 		return
 	}
 	us.conns.Add(1)
@@ -475,8 +485,9 @@ func (c *client) rtUDP(fl *rtFlow, us *ustate, fid int, up GenSpec) {
 		defer close(done)
 		conn.SetReadDeadline(stopT.Add(grace + rtReadMore))
 		b := make([]byte, 64<<10)
+		noted := false
 		for {
-			n, err := conn.Read(b)
+			n, from, err := conn.ReadFromUDP(b)
 			at := clockMono()
 			if err != nil {
 				if quietErr(err) {
@@ -488,6 +499,15 @@ func (c *client) rtUDP(fl *rtFlow, us *ustate, fid int, up GenSpec) {
 			}
 			if n < udpDnHdr {
 				continue
+			}
+			if !noted {
+				noted = true
+				if from.String() == ra.String() {
+					c.note("gameudp answers from the user port")
+				} else {
+					c.note("gameudp answers from another address than the user port (port %d; from the user's own address: %v)",
+						from.Port, from.IP.Equal(la.IP))
+				}
 			}
 			fl.got(binary.BigEndian.Uint32(b[0:]), at)
 			us.dn.add(c.off(), n)
@@ -501,7 +521,7 @@ func (c *client) rtUDP(fl *rtFlow, us *ustate, fid int, up GenSpec) {
 		binary.BigEndian.PutUint64(m[16:], uint64(made))
 		binary.BigEndian.PutUint64(m[24:], uint64(up.StopNs))
 		fl.sent(seq, made, len(m))
-		if _, err := conn.Write(m); err != nil {
+		if _, err := conn.WriteToUDP(m, ra); err != nil {
 			c.err("gameudp write: %v", err)
 		}
 	})

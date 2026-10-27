@@ -530,6 +530,8 @@ def compose(r, ok, why):
                     "dn_1s": cl.get("dn_1s"), "up_1s": cl.get("up_1s")})
         if cl.get("classes"):
             rec["classes"] = cl["classes"]
+        if cl.get("notes"):
+            rec["client_notes"] = cl["notes"]
         if cl.get("errs"):
             rec["client_errs"] = cl["errs"]
     rec["cpu"] = pidstat(r + "/pidstat.txt", {"edge": links.get("pid_edge"), "exit": links.get("pid_exit")})
