@@ -1,0 +1,17 @@
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0.5 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0.5 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0.5 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0.5 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0.5 3 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0.5 3 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 8 0.5 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 8 0.5 1 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 8 0.5 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 8 0.5 2 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 8 0.5 3 bulk
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 8 0.5 3 bulk
+BIN=/root/r2j/bins/hs2-base BENV= ./game.sh "$OUT" old 1 0.5 1 idle
+BIN=/root/r2j/bins/hs2-b2n BENV=HS2_TUNE_QUIET_EXTRA=1 ./game.sh "$OUT" new 1 0.5 1 idle
+# reply source on a second address (connected client), production build and r1-udp
+OUT=/root/rudp/m3 ./repro.sh /root/rudp/m3 rev-l3mtcp true secondip
+BIN=/root/rudp/bins/hs2-r1udp ./repro.sh /root/rudp/m3 rev-l3mtcp true secondip
