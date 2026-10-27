@@ -168,6 +168,18 @@ done 2>/dev/null || true
 # ---------- helpers ----------------------------------------------------------
 port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
 udp_port_free(){ ! ss -Hlun "sport = :$1" 2>/dev/null | grep -q .; }
+# udp_ports_note PORTS: with UDP on the user ports, port_free (TCP) is not the
+# whole story — a port whose UDP another program holds (a UDP/QUIC inbound, a
+# VPN, another tunnel) gets no UDP forwarding. hs2 still starts and serves TCP
+# on it (it logs the port and retries its UDP in the background); say it now.
+udp_ports_note(){ # ports (comma-separated)
+  local p busy=""
+  for p in ${1//,/ }; do udp_port_free "$p" || busy="${busy:+$busy,}$p"; done
+  [ -n "$busy" ] || return 0
+  warn "UDP on user port(s) $busy is already taken on this server by another program (ss -lunp shows which)."
+  warn "The tunnel and TCP on $busy work; their UDP is forwarded by itself once the port is free."
+  return 0
+}
 
 # transport_to_carrier maps the transport choice to the binary's carrier value.
 # tcp keeps the chosen TLS mode; udp and auto are the datagram carriers.
@@ -2154,6 +2166,7 @@ iran_dialer(){
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
     done
+    if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
@@ -2184,6 +2197,7 @@ EOF
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
     done
+    if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
@@ -2289,6 +2303,7 @@ iran_listener(){
     case "${M:-1}" in 1) CARRIER=mtcp ;; 2) CARRIER=l3mtcp ;; 3) CARRIER=tls ;; *) die "invalid mode" ;; esac
     read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
     case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
+    if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     # Reverse: THIS iran server is the TLS server, so the cert is obtained HERE
     # (in direct it would be on the kharej). The kharej dials in and validates
     # this domain as the TLS name, so it must match the cert.
@@ -2329,6 +2344,7 @@ EOF
     if [ -n "$PORTS" ]; then
       read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
       case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
+      if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     fi
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
