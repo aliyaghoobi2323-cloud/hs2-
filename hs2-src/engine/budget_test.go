@@ -506,7 +506,8 @@ func TestLinkBudgetStep(t *testing.T) {
 	lb.step(t0+200*time.Millisecond, true, ts, 20*bMbit, own)
 	// S 8 ms split 7 : 0.5 by them: the way back 7.47 ms, this direction's
 	// 0.53, under the QUIET link's 1 ms
-	wantRev := time.Duration(float64(8*time.Millisecond) * 7 / 7.5)
+	s := 8 * time.Millisecond
+	wantRev := time.Duration(float64(s) * float64(7*time.Millisecond) / float64(7500*time.Microsecond))
 	if !lb.core.own || lb.core.qRev != wantRev || lb.core.q != time.Millisecond {
 		t.Fatalf("own delays: own %v, way back %v, queue %v; want %v and 1 ms (the QUIET link's)", lb.core.own, lb.core.qRev, lb.core.q, wantRev)
 	}
