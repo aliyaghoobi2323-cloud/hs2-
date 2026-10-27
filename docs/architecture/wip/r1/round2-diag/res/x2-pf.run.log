@@ -1,0 +1,20 @@
+06:56:55 plan /root/r1-diag/sched/x2-pf.tsv: 9 runs
+06:56:56 start 24f046de-acl5-1 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl5) load 2.98 waited 0s
+06:57:25 done 24f046de-acl5-1 ok=1 
+06:57:26 start 67f2bd8e-acl25-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl25) load 2.77 waited 0s
+06:57:56 done 67f2bd8e-acl25-1 ok=1 
+06:57:57 start 1f634d77-acl100-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl100) load 2.68 waited 0s
+06:58:27 done 1f634d77-acl100-1 ok=1 
+06:58:27 start 24f046de-acl5-2 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl5) load 2.01 waited 0s
+06:58:57 done 24f046de-acl5-2 ok=1 
+06:58:58 start 67f2bd8e-acl25-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl25) load 1.36 waited 0s
+06:59:28 done 67f2bd8e-acl25-2 ok=1 
+06:59:29 start 1f634d77-acl100-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl100) load 1.61 waited 0s
+06:59:59 done 1f634d77-acl100-2 ok=1 
+06:59:59 start 24f046de-acl5-3 (N=1 RATE=5 RTT=72 LOSS=0 MODE=pfifo:120 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl5) load 2.64 waited 0s
+07:00:29 done 24f046de-acl5-3 ok=1 
+07:00:30 start 67f2bd8e-acl25-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl25) load 2.05 waited 0s
+07:01:00 done 67f2bd8e-acl25-3 ok=1 
+07:01:00 start 1f634d77-acl100-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:2400 USERS=7 MIX=s5 DUR=20 WCL=2 BIN=acl100) load 2.28 waited 0s
+07:01:30 done 1f634d77-acl100-3 ok=1 
+07:01:30 done /root/r1-diag/sched/x2-pf.tsv
