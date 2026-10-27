@@ -17,8 +17,9 @@ LABEL = {"old": "پایه", "b2nx": "نهایی دور ۲ (b2nx)", "g2a": "γ2 �
          "g2bq1": "γ2 با یک QUIET (g2bq1)", "g2c": "γ2 (g2c)", "g2cnb": "γ2 بی دسته‌بندی (g2cnb)",
          "g2clz": "γ2 بی دم منتظر (g2clz)", "g2cq1": "γ2 با یک QUIET (g2cq1)", "g2cal": "γ2 با α به جای بودجه (g2cal)",
          "g2d": "γ2 (g2d)", "g2dnb": "γ2 بی دسته‌بندی (g2dnb)", "g2dlz": "γ2 بی دم منتظر (g2dlz)",
-         "g2dnt": "γ2 بی thin (g2dnt)", "g2dq1": "γ2 با یک QUIET (g2dq1)", "g2dr": "γ2 + رکورد تعاملی (g2dr)"}
-BINORD = ["old", "b2nx", "g2a", "g2b", "g2bnb", "g2blz", "g2bal", "g2bq1", "g2c", "g2cnb", "g2clz", "g2cq1", "g2cal", "g2d", "g2dnb", "g2dlz", "g2dnt", "g2dq1", "g2dr"]
+         "g2dnt": "γ2 بی thin (g2dnt)", "g2dq1": "γ2 با یک QUIET (g2dq1)", "g2dr": "γ2 + رکورد تعاملی (g2dr)",
+         "g2e": "γ2 (g2e)", "g2enb": "γ2 بی دسته‌بندی (g2enb)", "g2et4": "γ2 با هدف ۴ms (g2et4)", "g2eof": "γ2 با SIOCOUTQ (g2eof)"}
+BINORD = ["old", "b2nx", "g2a", "g2b", "g2bnb", "g2blz", "g2bal", "g2bq1", "g2c", "g2cnb", "g2clz", "g2cq1", "g2cal", "g2d", "g2dnb", "g2dlz", "g2dnt", "g2dq1", "g2dr", "g2e", "g2enb", "g2et4", "g2eof"]
 
 
 def label(b):

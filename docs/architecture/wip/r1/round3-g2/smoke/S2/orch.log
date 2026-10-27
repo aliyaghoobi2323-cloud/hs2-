@@ -1,0 +1,4 @@
+18:58:41 lock taken after 0s (pid 617745), plan /root/r3b/S2/plan.txt, REPS 2, limit 1440s
+19:19:04 pass 1: 0 runs busy (>75%) or failed, 217s left
+19:19:05 done after 1224s of rig time
+19:19:05 lock released after 1224s

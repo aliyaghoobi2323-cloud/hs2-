@@ -15,6 +15,8 @@ import (
 // few shapeLazyCheck); with nothing unsent, or held shapeLazyMax, it goes
 // at once; the tallies count the records and the tails held; a held tail's
 // write error comes back at the next Flush.
+// (Messages of 2 bytes: none fills a record of the least sampled size, 40
+// B, so no record goes but by a flush.)
 func TestShapedConnLazy(t *testing.T) {
 	var unsent atomic.Int64
 	cc := &captureConn{}
@@ -22,17 +24,17 @@ func TestShapedConnLazy(t *testing.T) {
 	w.carry, w.count = true, true
 	w.lazy = func() (int, error) { return int(unsent.Load()), nil }
 	// nothing unsent: a flush writes its record at once
-	w.Write(make([]byte, 40))
+	w.Write(make([]byte, 2))
 	if err := w.Flush(); err != nil || len(cc.snapshot()) != 1 || w.holds.Load() != 0 {
 		t.Fatalf("idle socket: %v, %d records, %d held", err, len(cc.snapshot()), w.holds.Load())
 	}
 	// unsent bytes ahead: two messages ride one record
 	unsent.Store(3000)
-	w.Write(make([]byte, 40))
+	w.Write(make([]byte, 2))
 	if err := w.Flush(); err != nil || len(cc.snapshot()) != 1 {
 		t.Fatalf("a busy socket's tail went: %v, %d records", err, len(cc.snapshot()))
 	}
-	w.Write(make([]byte, 40))
+	w.Write(make([]byte, 2))
 	w.Flush()
 	time.Sleep(3 * shapeLazyCheck)
 	if len(cc.snapshot()) != 1 || w.holds.Load() != 1 {
@@ -46,12 +48,12 @@ func TestShapedConnLazy(t *testing.T) {
 		}
 		time.Sleep(shapeLazyCheck / 2)
 	}
-	if r, d := w.recs.Load(), w.dataB.Load(); r != 2 || d != 120 {
-		t.Fatalf("%d records of %d data bytes; want 2 and 120 (two messages in one)", r, d)
+	if r, d := w.recs.Load(), w.dataB.Load(); r != 2 || d != 6 {
+		t.Fatalf("%d records of %d data bytes; want 2 and 6 (two messages in one)", r, d)
 	}
 	// never past shapeLazyMax
 	unsent.Store(5000)
-	w.Write(make([]byte, 40))
+	w.Write(make([]byte, 2))
 	t0 := time.Now()
 	w.Flush()
 	for len(cc.snapshot()) < 3 {
@@ -64,7 +66,7 @@ func TestShapedConnLazy(t *testing.T) {
 		t.Fatalf("held %v, less than shapeLazyMax with bytes unsent all along", el)
 	}
 	// a full record takes the held tail with it
-	w.Write(make([]byte, 40))
+	w.Write(make([]byte, 2))
 	w.Flush()
 	w.Write(make([]byte, 4000))
 	w.wmu.Lock()

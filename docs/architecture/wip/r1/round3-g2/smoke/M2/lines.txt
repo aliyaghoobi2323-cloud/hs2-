@@ -1,0 +1,56 @@
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 | g2b rep 1
+   retrans % exit 0.003 edge 0.01
+   edge quiet q1: 49 records/s, 210 B data a record, pad 79.2%, wire 0.40 Mbit/s, tails held 12
+   edge budget link 2: run two-way (own delays), B 230 KiB (in flight at most 267 KiB), queue 3.0 ms (srtt-min 2.9, way back 0.7, target 2.5), delivery 27.2 Mbit/s, cuts 115, grows 97, room 0, gate waits 597 
+   exit quiet q1: 57 records/s, 335 B data a record, pad 65.6%, wire 0.45 Mbit/s, tails held 5
+   exit budget link 2: run two-way (own delays), B 217 KiB (in flight at most 232 KiB), queue 1.6 ms (srtt-min 4.3, way back 2.8, target 2.5), delivery 25.9 Mbit/s, cuts 90, grows 130, room 0, gate waits 502 
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 | g2b rep 1
+   retrans % exit 0.001 edge 0.006
+   edge quiet q1: 54 records/s, 168 B data a record, pad 83.3%, wire 0.45 Mbit/s, tails held 10
+   edge budget link 2: run two-way (own delays), B 169 KiB (in flight at most 176 KiB), queue 5.1 ms (srtt-min 2.3, way back 1.0, target 2.5), delivery 22.5 Mbit/s, cuts 115, grows 102, room 0, gate waits 647
+   exit quiet q1: 69 records/s, 336 B data a record, pad 66.0%, wire 0.56 Mbit/s, tails held 7
+   exit budget link 2: run two-way (own delays), B 845 KiB (in flight at most 861 KiB), queue 4.1 ms (srtt-min 5.5, way back 1.5, target 2.5), delivery 94.4 Mbit/s, cuts 59, grows 162, room 0, gate waits 549 
+== N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 | g2b rep 1
+   retrans % exit 0.002 edge 0.004
+   edge quiet q1: 822 records/s, 59 B data a record, pad 94.0%, wire 6.67 Mbit/s, tails held 568
+   edge budget link 2: run two-way (own delays), B 546 KiB (in flight at most 558 KiB), queue 3.1 ms (srtt-min 2.7, way back 17.9, target 2.5), delivery 59.4 Mbit/s, cuts 96, grows 112, room 0, gate waits 594
+   edge budget link 3: run two-way (own delays), B 327 KiB (in flight at most 340 KiB), queue 3.3 ms (srtt-min 5.6, way back 2.3, target 2.5), delivery 47.3 Mbit/s, cuts 92, grows 117, room 0, gate waits 681 
+   exit quiet q1: 900 records/s, 65 B data a record, pad 93.4%, wire 7.28 Mbit/s, tails held 1847
+   exit budget link 2: run two-way (own delays), B 139 KiB (in flight at most 180 KiB), queue 0.8 ms (srtt-min 0.9, way back 0.1, target 2.5), delivery 38.5 Mbit/s, cuts 148, grows 66, room 0, gate waits 954 
+   exit budget link 3: run two-way (own delays), B 536 KiB (in flight at most 781 KiB), queue 10.5 ms (srtt-min 1.9, way back 3.2, target 2.5), delivery 77.2 Mbit/s, cuts 98, grows 117, room 0, gate waits 666
+== N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 | g2b rep 1
+   retrans % exit 0.004 edge 0.0
+   edge quiet q1: 477 records/s, 44 B data a record, pad 95.5%, wire 3.87 Mbit/s, tails held 216
+   edge quiet q2: 474 records/s, 44 B data a record, pad 95.5%, wire 3.84 Mbit/s, tails held 247
+   edge budget link 3: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   edge budget link 4: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   edge budget link 5: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   edge budget link 6: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   edge budget link 7: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   edge budget link 8: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   exit quiet q1: 506 records/s, 85 B data a record, pad 91.4%, wire 4.11 Mbit/s, tails held 203
+   exit quiet q2: 516 records/s, 94 B data a record, pad 90.5%, wire 4.21 Mbit/s, tails held 217
+   exit budget link 3: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   exit budget link 4: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   exit budget link 5: run one-way, B 58 KiB (in flight at most 60 KiB), queue 1.6 ms (srtt-min 1.6, way back 0.0, target 2.5), delivery 8.3 Mbit/s, cuts 139, grows 181, room 0, gate waits 501 (2365 ms)
+   exit budget link 6: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   exit budget link 7: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   exit budget link 8: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 | g2b rep 1
+   retrans % exit 0.0 edge 0.0
+   edge quiet q1: 848 records/s, 50 B data a record, pad 94.9%, wire 6.88 Mbit/s, tails held 1150
+   edge budget link 2: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   exit quiet q1: 965 records/s, 96 B data a record, pad 90.3%, wire 7.82 Mbit/s, tails held 1209
+   exit budget link 2: run two-way (own delays), B 847 KiB (in flight at most 846 KiB), queue 2.4 ms (srtt-min 2.5, way back 0.1, target 2.5), delivery 93.2 Mbit/s, cuts 137, grows 164, room 0, gate waits 718
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 | g2b rep 1
+   retrans % exit 0.0 edge 0.0
+   edge quiet q1: 832 records/s, 51 B data a record, pad 94.8%, wire 6.73 Mbit/s, tails held 455
+   edge budget link 2: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+   exit quiet q1: 878 records/s, 103 B data a record, pad 89.5%, wire 7.08 Mbit/s, tails held 2568
+   exit budget link 2: run two-way (own delays), B 862 KiB (in flight at most 862 KiB), queue 1.5 ms (srtt-min 1.6, way back 0.1, target 2.5), delivery 96.1 Mbit/s, cuts 147, grows 159, room 0, gate waits 729
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 | g2b rep 1
+   retrans % exit 0.0 edge 0.0
+   edge quiet q1: 50 records/s, 210 B data a record, pad 78.6%, wire 0.40 Mbit/s, tails held 16
+   edge budget link 2: run two-way (own delays), B 231 KiB (in flight at most 241 KiB), queue 4.5 ms (srtt-min 4.4, way back 0.4, target 2.5), delivery 27.1 Mbit/s, cuts 121, grows 92, room 0, gate waits 610 
+   exit quiet q1: 56 records/s, 341 B data a record, pad 65.8%, wire 0.46 Mbit/s, tails held 6
+   exit budget link 2: run two-way (own delays), B 258 KiB (in flight at most 263 KiB), queue 0.7 ms (srtt-min 1.7, way back 2.0, target 2.5), delivery 25.8 Mbit/s, cuts 85, grows 136, room 0, gate waits 446 
