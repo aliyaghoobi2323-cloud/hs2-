@@ -61,7 +61,7 @@ func (d *budgetDir) read(r, qBack time.Duration, blocked bool, back *budgetDir, 
 	d.b = d.core.step(in)
 }
 
-const mbit = 1e6 / 8
+const bMbit = 1e6 / 8
 
 // One direction on its own (fq_codel or FIFO: its queue is its own) from
 // the start: the queue settles at the target and the rate at the path's,
@@ -70,7 +70,7 @@ func TestBudgetSettles(t *testing.T) {
 	T := budgetTarget()
 	for _, rate := range []float64{1, 25, 100, 1000} {
 		for _, rtt := range []time.Duration{20 * time.Millisecond, 72 * time.Millisecond, 150 * time.Millisecond} {
-			d := &budgetDir{c: rate * mbit}
+			d := &budgetDir{c: rate * bMbit}
 			d.rate = 0.05 * d.c // the first sample after a move: a little
 			var qs []time.Duration
 			minRate := math.Inf(1)
@@ -103,8 +103,8 @@ func TestBudgetStartWaitsForGrowth(t *testing.T) {
 	var c budgetCore
 	r := 72 * time.Millisecond
 	T := budgetTarget()
-	path := 100 * mbit
-	dlv := 2 * mbit
+	path := 100 * bMbit
+	dlv := 2 * bMbit
 	for i := 0; i < 40; i++ {
 		q := 10 * time.Millisecond // a start-up queue all along
 		if dlv >= path {
@@ -112,7 +112,7 @@ func TestBudgetStartWaitsForGrowth(t *testing.T) {
 		}
 		c.step(budgetIn{On: true, Delivery: dlv, SRTT: r + q, MinRTT: r, TxRate: dlv, MSS: 1448, DlvMax: dlv})
 		if dlv < path && c.mode != budgetStart {
-			t.Fatalf("reading %d: left the start at %.1f Mbit/s of 100, growing", i, dlv/mbit)
+			t.Fatalf("reading %d: left the start at %.1f Mbit/s of 100, growing", i, dlv/bMbit)
 		}
 		dlv *= 2
 	}
@@ -128,13 +128,13 @@ func TestBudgetStartWaitsForGrowth(t *testing.T) {
 // its step each reading and reaches 0.9 of the new rate within 2.5 s.
 func TestBudgetGrowsAfterCapacityRise(t *testing.T) {
 	r := 72 * time.Millisecond
-	d := &budgetDir{c: 10 * mbit, rate: 10 * mbit}
+	d := &budgetDir{c: 10 * bMbit, rate: 10 * bMbit}
 	for i := 0; i < 100; i++ {
 		w, bl := d.inflight(r, 0)
 		d.settle(w, r, 0)
 		d.read(r, 0, bl, nil, 0, 0, false)
 	}
-	d.c = 100 * mbit
+	d.c = 100 * bMbit
 	for i := 1; i <= 60; i++ {
 		w, bl := d.inflight(r, 0)
 		d.settle(w, r, 0)
@@ -146,20 +146,20 @@ func TestBudgetGrowsAfterCapacityRise(t *testing.T) {
 			return
 		}
 	}
-	t.Fatalf("at %.1f Mbit/s of 100 after 6 s", d.rate/mbit)
+	t.Fatalf("at %.1f Mbit/s of 100 after 6 s", d.rate/bMbit)
 }
 
 // A path that halves: the queue comes back under 2T within five readings.
 func TestBudgetCutsAfterCapacityDrop(t *testing.T) {
 	r := 72 * time.Millisecond
 	T := budgetTarget()
-	d := &budgetDir{c: 100 * mbit, rate: 100 * mbit}
+	d := &budgetDir{c: 100 * bMbit, rate: 100 * bMbit}
 	for i := 0; i < 100; i++ {
 		w, bl := d.inflight(r, 0)
 		d.settle(w, r, 0)
 		d.read(r, 0, bl, nil, 0, 0, false)
 	}
-	d.c = 50 * mbit
+	d.c = 50 * bMbit
 	for i := 1; i <= 8; i++ {
 		w, bl := d.inflight(r, 0)
 		d.settle(w, r, 0)
@@ -179,8 +179,8 @@ func TestBudgetCutsAfterCapacityDrop(t *testing.T) {
 func TestBudgetTwoWayAsym(t *testing.T) {
 	r := 72 * time.Millisecond
 	for _, spike := range []bool{false, true} {
-		dn := &budgetDir{c: 100 * mbit, rate: 100 * mbit}
-		up := &budgetDir{c: 20 * mbit, rate: 20 * mbit}
+		dn := &budgetDir{c: 100 * bMbit, rate: 100 * bMbit}
+		up := &budgetDir{c: 20 * bMbit, rate: 20 * bMbit}
 		minDn, minUp := math.Inf(1), math.Inf(1)
 		maxQ := time.Duration(0)
 		back := 0
@@ -206,10 +206,10 @@ func TestBudgetTwoWayAsym(t *testing.T) {
 			}
 		}
 		if minDn < 0.85*dn.c || minUp < 0.85*up.c || maxQ > 5*time.Millisecond {
-			t.Fatalf("spike %v: download at least %.1f, upload %.1f Mbit/s, queue at most %v", spike, minDn/mbit, minUp/mbit, maxQ)
+			t.Fatalf("spike %v: download at least %.1f, upload %.1f Mbit/s, queue at most %v", spike, minDn/bMbit, minUp/bMbit, maxQ)
 		}
 		if !spike && (minDn < 0.97*dn.c || minUp < 0.97*up.c) {
-			t.Fatalf("steady: download at least %.1f, upload %.1f Mbit/s", minDn/mbit, minUp/mbit)
+			t.Fatalf("steady: download at least %.1f, upload %.1f Mbit/s", minDn/bMbit, minUp/bMbit)
 		}
 		if spike && (back == 0 || back > 10) {
 			t.Fatalf("the download back at 0.97 of its path %d readings after the spike", back)
@@ -225,14 +225,14 @@ func TestBudgetQuietOWD(t *testing.T) {
 	r := 72 * time.Millisecond
 	T := budgetTarget()
 	var c budgetCore
-	in := budgetIn{On: true, Delivery: 25 * mbit, MinRTT: r, TxRate: 25 * mbit, Blocked: true, MSS: 1448, DlvMax: 25 * mbit,
+	in := budgetIn{On: true, Delivery: 25 * bMbit, MinRTT: r, TxRate: 25 * bMbit, Blocked: true, MSS: 1448, DlvMax: 25 * bMbit,
 		QOutOK: true, QInOK: true}
 	in.QIn = 20 * time.Millisecond
 	in.SRTT = r + in.QIn + T
 	for i := 0; i < 30; i++ {
 		c.step(in)
 	}
-	if want := 25 * mbit * (r + in.QIn + T).Seconds(); c.b < 0.95*want {
+	if want := 25 * bMbit * (r + in.QIn + T).Seconds(); c.b < 0.95*want {
 		t.Fatalf("B %.0f KiB with the way back's queue of 20 ms, want at least %.0f (the rate kept)", c.b/1024, 0.95*want/1024)
 	}
 	b0 := c.b
@@ -252,7 +252,7 @@ func TestBudgetManyLinksFQ(t *testing.T) {
 	r := 72 * time.Millisecond
 	T := budgetTarget()
 	for _, n := range []int{1, 2, 17, 64, 300} {
-		C := 100 * mbit
+		C := 100 * bMbit
 		links := make([]*budgetDir, n)
 		for i := range links {
 			links[i] = &budgetDir{c: C / float64(n), rate: C / float64(n) * 0.1}
@@ -303,7 +303,7 @@ func TestBudgetManyLinksFQ(t *testing.T) {
 		}
 		if sum < 0.97*C || minShare < 0.5*C/float64(n) || maxQ > 2*T {
 			t.Fatalf("%d links: sum %.1f Mbit/s, least link %.2f (fair %.2f), queue at most %v",
-				n, sum/mbit, minShare/mbit, C/float64(n)/mbit, maxQ)
+				n, sum/bMbit, minShare/bMbit, C/float64(n)/bMbit, maxQ)
 		}
 	}
 }
@@ -315,7 +315,7 @@ func TestBudgetNotLimited(t *testing.T) {
 	r := 72 * time.Millisecond
 	T := budgetTarget()
 	var c budgetCore
-	in := budgetIn{On: true, Delivery: 50 * mbit, SRTT: r, MinRTT: r, TxRate: 50 * mbit, MSS: 1448, DlvMax: 50 * mbit}
+	in := budgetIn{On: true, Delivery: 50 * bMbit, SRTT: r, MinRTT: r, TxRate: 50 * bMbit, MSS: 1448, DlvMax: 50 * bMbit}
 	c.step(in)
 	in.SRTT = r + 20*time.Millisecond
 	c.step(in) // the start ends: a queue, no growth
@@ -323,13 +323,13 @@ func TestBudgetNotLimited(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		c.step(in)
 	}
-	capB := budgetCapK * 50 * mbit * (r + T).Seconds()
+	capB := budgetCapK * 50 * bMbit * (r + T).Seconds()
 	if c.b > capB*1.001 {
 		t.Fatalf("B %.0f KiB unused, past %.0f", c.b/1024, capB/1024)
 	}
 	in.SRTT = r + 30*time.Millisecond // BBR's standing queue, B not binding
 	c.step(in)
-	if want := 50 * mbit * (r + T).Seconds(); c.b > want*1.001 {
+	if want := 50 * bMbit * (r + T).Seconds(); c.b > want*1.001 {
 		t.Fatalf("B %.0f KiB with a queue of 30 ms it did not hold, want the target's %.0f", c.b/1024, want/1024)
 	}
 }
@@ -339,7 +339,7 @@ func TestBudgetNotLimited(t *testing.T) {
 func TestBudgetIdleAndHold(t *testing.T) {
 	r := 72 * time.Millisecond
 	var c budgetCore
-	in := budgetIn{On: true, Delivery: 10 * mbit, SRTT: r, MinRTT: r, TxRate: 10 * mbit, MSS: 1448, DlvMax: 10 * mbit}
+	in := budgetIn{On: true, Delivery: 10 * bMbit, SRTT: r, MinRTT: r, TxRate: 10 * bMbit, MSS: 1448, DlvMax: 10 * bMbit}
 	if b := c.step(in); b <= 0 || c.mode != budgetStart {
 		t.Fatalf("armed: B %.0f, mode %v", b, c.mode)
 	}
@@ -368,7 +368,7 @@ func TestBudgetGate(t *testing.T) {
 		t.Fatal("a gate with no budget held a frame")
 	}
 	lb.b.Store(100 << 10)
-	lb.rate.Store(int64(10 * mbit))
+	lb.rate.Store(int64(10 * bMbit))
 	outq = 50 << 10
 	if lb.gate(16<<10) != 0 || lb.blocked.Load() {
 		t.Fatal("held with room")
@@ -379,11 +379,11 @@ func TestBudgetGate(t *testing.T) {
 	}
 	outq = 95 << 10
 	w := lb.gate(16 << 10)
-	want := time.Duration((float64(11<<10) + float64(100<<10)/budgetWaitBeyond) / (10 * mbit) * float64(time.Second))
+	want := time.Duration((float64(11<<10) + float64(100<<10)/budgetWaitBeyond) / (10 * bMbit) * float64(time.Second))
 	if w != min(max(want, budgetWaitMin), budgetWaitMax) || !lb.blocked.Load() || lb.held.Load() != 1 {
 		t.Fatalf("wait %v (want %v), blocked %v, held %d", w, want, lb.blocked.Load(), lb.held.Load())
 	}
-	lb.rate.Store(int64(10000 * mbit))
+	lb.rate.Store(int64(10000 * bMbit))
 	if w := lb.gate(16 << 10); w != budgetWaitMin {
 		t.Fatalf("wait %v at 10 Gbit/s, want the least, %v", w, budgetWaitMin)
 	}
@@ -415,12 +415,12 @@ func TestLinkBudgetStep(t *testing.T) {
 	lb := newLinkBudget(func() (int, error) { return 0, nil })
 	lb.blocked.Store(true)
 	t0 := 10 * time.Second
-	ts := tcpStat{deliveryRate: uint64(20 * mbit), rtt: 80000, minRTT: 72000, bytesAcked: 1000, bytesReceived: 500, sndMSS: 1448}
-	lb.step(t0, true, ts, 20*mbit)
-	ts.bytesAcked += uint64(2 * mbit / 10)
-	ts.bytesReceived += uint64(1 * mbit / 10)
+	ts := tcpStat{deliveryRate: uint64(20 * bMbit), rtt: 80000, minRTT: 72000, bytesAcked: 1000, bytesReceived: 500, sndMSS: 1448}
+	lb.step(t0, true, ts, 20*bMbit)
+	ts.bytesAcked += uint64(2 * bMbit / 10)
+	ts.bytesReceived += uint64(1 * bMbit / 10)
 	lb.blocked.Store(true)
-	lb.step(t0+100*time.Millisecond, true, ts, 20*mbit)
+	lb.step(t0+100*time.Millisecond, true, ts, 20*bMbit)
 	if lb.blocked.Load() {
 		t.Fatal("the held mark was not taken")
 	}
@@ -435,7 +435,7 @@ func TestLinkBudgetStep(t *testing.T) {
 	if s := lb.line(3); s == "" {
 		t.Fatal("no line")
 	}
-	lb.step(t0+200*time.Millisecond, false, ts, 20*mbit)
+	lb.step(t0+200*time.Millisecond, false, ts, 20*bMbit)
 	if lb.b.Load() != 0 {
 		t.Fatalf("B %d idle", lb.b.Load())
 	}

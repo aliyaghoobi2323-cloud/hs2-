@@ -105,7 +105,7 @@ const (
 	budgetGrowMax    = 0.125
 	budgetKMin       = 0.25
 	budgetCapK       = 2.0
-	budgetMinSegs    = 4
+	budgetMinSegs    = 2
 	budgetRecent     = 3
 	budgetRevShare   = 0.05     // the way back's data rate, of this one's, that makes a link two-way
 	budgetRevMin     = 64 << 10 // ... and at least this, bytes/s
