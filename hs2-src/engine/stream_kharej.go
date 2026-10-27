@@ -128,7 +128,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		bo.ok()
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
 			mtr := &linkMeter{} // download-side counters, reported over kindStats
-			sess, why, err := newSessionCaps(car.RawConn(), true, nil, mtr, car.Caps())
+			sess, why, err := newSessionCar(car, true, nil, mtr)
 			if err != nil {
 				car.Close()
 				return

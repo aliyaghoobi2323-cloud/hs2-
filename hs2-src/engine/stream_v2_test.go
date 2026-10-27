@@ -167,6 +167,7 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 		if o.oldExit {
 			var live atomic.Int32
 			setExit(func() PoolStats { return PoolStats{Links: int(live.Load()), Phase: "listening"} })
+			srv.MaxLevel = 1 // the previous release speaks level 1: one connection a link
 			go runOldExitListener(ctx, ln, srv, panel, &live, r.exit.logf)
 		} else {
 			go RunKharej(ctx, KharejConfig{Listener: ln, Server: srv, Panel: panel, Routes: o.routes, Log: r.exit.logf, OnStart: setExit, MaxLinks: o.exitCfg})
@@ -216,7 +217,12 @@ func startV2(t *testing.T, o v2Opts) *v2Rig {
 			return tlscarrier.DialFrom(carrierAddr, "lab.example.com", key, "")
 		}
 		if o.oldExit {
-			pool := runOldExitReverse(ctx, panel, o.exitLinks, o.exitMin, o.exitMax, dial, r.exit.logf)
+			// the previous release dials at level 1: one connection a link
+			oldDial := func() (*tlscarrier.Carrier, error) {
+				r.dials.Add(1)
+				return tlscarrier.DialFromLevel(carrierAddr, "lab.example.com", key, "", 1)
+			}
+			pool := runOldExitReverse(ctx, panel, o.exitLinks, o.exitMin, o.exitMax, oldDial, r.exit.logf)
 			setExit(pool.stats)
 		} else {
 			go RunKharej(ctx, KharejConfig{

@@ -31,9 +31,11 @@ type Server struct {
 	// pairs: the QUIET halves of pairs waiting for their BULK (pairWait)
 	pairMu sync.Mutex
 	pairs  map[[pairIDLen]byte]chan *Carrier
-	// levelCap, when set, is the highest level this server speaks (tests:
-	// an older server)
-	levelCap byte
+	// MaxLevel, when set, is the highest protocol level this server speaks:
+	// it answers as an older hs2 would (1: a link of one connection, no
+	// pair). For tests of mixed versions; 0, the default: every level this
+	// binary speaks.
+	MaxLevel byte
 }
 
 func (s *Server) init() { s.once.Do(func() { s.replay = newReplayMem() }) }
@@ -209,8 +211,8 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	// The level and caps for this link. With no level in common the proof
 	// says level 0 — the client then knows why — and the link closes.
 	srvMax := levelMax
-	if s.levelCap != 0 {
-		srvMax = s.levelCap
+	if s.MaxLevel != 0 && s.MaxLevel < levelMax {
+		srvMax = s.MaxLevel
 	}
 	level, caps, agreed := negotiate(hdr, levelMin, srvMax, localCaps())
 	// A pair (level 2 and CapPair both ways): this connection is the half

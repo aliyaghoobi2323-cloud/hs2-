@@ -287,7 +287,7 @@ func tcpConnOf(car *tlscarrier.Carrier) *net.TCPConn {
 	if car == nil {
 		return nil
 	}
-	return car.TCPConn()
+	return car.DataTCPConn() // a pair's BULK: the download's socket
 }
 
 // pollStats asks the exit for a fresh record without blocking (at most one poll

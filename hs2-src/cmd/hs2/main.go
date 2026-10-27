@@ -320,11 +320,18 @@ func applyTuning() {
 	num("HS2_TUNE_SCHED", &engine.TuneSched)     // C2, the scheduler: the old heap and FIFO
 	num("HS2_TUNE_HQG", &engine.TuneHQG)         // C3, the host-queue guard: the fixed mark and sendGate
 	num("HS2_TUNE_SENDCAP", &engine.TuneSendCap) // C4-lite, the pacing cap: the pacing net alone, exit only
-	// C3's gate variants for the judge (decision T12), and C4-lite reading
-	// the writer's waits as not app-limited (lab)
-	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
+	// C3's gate variants for the judge (decision T12) on the sockets that
+	// carry bulk (a pair's BULK, a link of one connection), and C4-lite
+	// reading the writer's waits as not app-limited (lab)
+	num("HS2_TUNE_HQG_SEGS", &engine.HQGBulkSegs)
 	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
 	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
+	// round 2, β1 (decisions T16-T18): α, the queue-delay rate cap of the
+	// sockets that carry bulk (0: C4-lite there too), and early Done (0: a
+	// stream's frame is written before it cuts the next). The pair itself
+	// (HS2_TUNE_PAIR) is a caps bit, read by tlscarrier.
+	num("HS2_TUNE_ALPHA", &engine.TuneAlpha)
+	num("HS2_TUNE_EARLYDONE", &engine.TuneEarlyDone)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}

@@ -63,11 +63,14 @@ func TestServeReverseLinkReportsWhyItEnded(t *testing.T) {
 			srv := &tlscarrier.Server{SharedKey: key, Cert: testCert(t), BackendAddr: "127.0.0.1:1"}
 			edgeCar := make(chan *tlscarrier.Carrier, 1)
 			go func() {
-				conn, err := ln.Accept()
-				if err != nil {
-					return
+				// (the link's connections: a pair's two)
+				for {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					go srv.Handle(ctx, conn, func(car *tlscarrier.Carrier) { edgeCar <- car })
 				}
-				srv.Handle(ctx, conn, func(car *tlscarrier.Carrier) { edgeCar <- car })
 			}()
 
 			// The exit dials (reverse) and serves the link until it ends.

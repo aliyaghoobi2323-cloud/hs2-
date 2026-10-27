@@ -311,6 +311,25 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 	return q, nil
 }
 
+// DialFromLevel is DialFrom speaking protocol levels up to maxLevel only, as
+// an older hs2 dials (1: a link of one connection, without CapPair). For
+// tests of mixed versions.
+func DialFromLevel(addr, sni string, sharedKey []byte, bindIP string, maxLevel byte) (*Carrier, error) {
+	h := LocalAuthHdr()
+	if maxLevel < h.MaxLevel {
+		h.MaxLevel = maxLevel
+	}
+	if h.MaxLevel >= LevelPair && h.Caps&CapPair != 0 {
+		return DialFrom(addr, sni, sharedKey, bindIP)
+	}
+	h.Caps &^= CapPair
+	c, err := dialOne(addr, sni, sharedKey, bindIP, 8*time.Second, h, nil)
+	if err == nil {
+		proto.linked(c.level, c.caps)
+	}
+	return c, err
+}
+
 // errPairMismatch: a pair's two connections negotiated different levels or
 // caps (the other server changed in between).
 var errPairMismatch = errors.New("the pair's connections negotiated differently")

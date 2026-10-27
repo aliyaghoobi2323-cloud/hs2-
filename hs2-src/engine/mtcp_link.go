@@ -54,7 +54,7 @@ func (l *mtcpLink) tcpStats() (tcpStat, bool) {
 	if l.tls == nil { // a bare session (tests)
 		return tcpStat{}, false
 	}
-	return tcpStats(l.tls.TCPConn())
+	return tcpStats(l.tls.DataTCPConn()) // a pair's BULK: where the link's data and its losses are
 }
 
 func (l *mtcpLink) OpenStream() (stream, error) { return l.OpenStreamSyn(smux.EncodeSyn(0, 0)) }
@@ -407,7 +407,7 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 // TLS connection differs.
 func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLink, error) {
 	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}
-	sess, why, err := newSessionCaps(car.RawConn(), false, sampler, mtr, car.Caps())
+	sess, why, err := newSessionCar(car, false, sampler, mtr)
 	if err != nil {
 		car.Close()
 		return nil, err

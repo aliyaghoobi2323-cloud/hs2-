@@ -291,6 +291,15 @@ type l3Set struct {
 	// pinMode: 1 pinned, 2 by the hash per packet (HS2_TUNE_SCHED=0), as
 	// the first packet found the switch (0: none yet)
 	pinMode int8
+	// arr (toUser: the exit's): each flow's link by arrival, keyed by the
+	// flow of its replies (replyFlow): a reply goes back on the link its
+	// request came on, not on one its own hash picks (round 2: a ping whose
+	// request came on a link light that way and whose reply the hash put on
+	// a download's link queued behind it). Under arrMu: the links' readers
+	// note, the TUN's reader looks up.
+	arrMu   sync.Mutex
+	arr     map[uint32]*l3Pin
+	arrSwAt int64
 }
 
 // l3Pin is a flow's link and when the flow last had a packet.
@@ -323,6 +332,11 @@ func (s *l3Set) linkFor(h uint32) *l3Link {
 	if s.pinMode == 2 {
 		return s.pickFlow(h)
 	}
+	if s.toUser {
+		if l := s.arrival(h); l != nil {
+			return l
+		}
+	}
 	now := ctrlNow()
 	if now-s.pinSwAt > int64(l3PinSweep) {
 		s.sweepPins(now, l3PinIdle)
@@ -346,6 +360,51 @@ func (s *l3Set) linkFor(h uint32) *l3Link {
 		s.pins[h] = &l3Pin{l, now}
 	}
 	return l
+}
+
+// noteArrival pins the flow of the replies to pkt, a packet that came on l
+// (the exit's: toUser), to l.
+func (s *l3Set) noteArrival(l *l3Link, pkt []byte) {
+	if !s.toUser {
+		return // the edge pins its requests by their hash
+	}
+	h, ok := replyFlow(pkt)
+	if !ok {
+		return
+	}
+	now := ctrlNow()
+	s.arrMu.Lock()
+	defer s.arrMu.Unlock()
+	if p := s.arr[h]; p != nil {
+		p.l, p.at = l, now
+		return
+	}
+	if now-s.arrSwAt > int64(l3PinSweep) {
+		s.arrSwAt = now
+		for k, p := range s.arr {
+			if now-p.at > int64(l3PinIdle) || !p.l.Alive() {
+				delete(s.arr, k)
+			}
+		}
+	}
+	if len(s.arr) >= l3PinMax {
+		return
+	}
+	if s.arr == nil {
+		s.arr = map[uint32]*l3Pin{}
+	}
+	s.arr[h] = &l3Pin{l, now}
+}
+
+// arrival is the link the flow h's last packet from the users' side came
+// on, while it lives (nil: none).
+func (s *l3Set) arrival(h uint32) *l3Link {
+	s.arrMu.Lock()
+	defer s.arrMu.Unlock()
+	if p := s.arr[h]; p != nil && p.l.Alive() {
+		return p.l
+	}
+	return nil
 }
 
 // sweepPins drops the pins idle for idle, and those of dead links.
@@ -498,6 +557,7 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 			return
 		}
 		if ft == core.TypeData {
+			s.noteArrival(l, payload) // (the exit's) its replies go back on l
 			dev.Write(payload)
 		}
 	}
@@ -517,6 +577,36 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 			}
 		}
 	}
+}
+
+// replyFlow is the flow (flowKey) of the replies to pkt: its addresses and
+// ports the other way round (false: not an IP packet).
+func replyFlow(pkt []byte) (uint32, bool) {
+	h := uint32(fnvOffset)
+	switch {
+	case len(pkt) >= 20 && pkt[0]>>4 == 4: // IPv4
+		ihl := int(pkt[0]&0x0f) * 4
+		proto := pkt[9]
+		h = fnvAdd(h, pkt[16:20])
+		h = fnvAdd(h, pkt[12:16])
+		h = fnvAdd(h, []byte{proto})
+		if (proto == 6 || proto == 17) && len(pkt) >= ihl+4 {
+			h = fnvAdd(h, pkt[ihl+2:ihl+4])
+			h = fnvAdd(h, pkt[ihl:ihl+2])
+		}
+		return h, true
+	case len(pkt) >= 40 && pkt[0]>>4 == 6: // IPv6
+		h = fnvAdd(h, pkt[24:40])
+		h = fnvAdd(h, pkt[8:24])
+		proto, l4 := ipv6Transport(pkt)
+		h = fnvAdd(h, []byte{proto})
+		if (proto == 6 || proto == 17) && l4 > 0 && len(pkt) >= l4+4 {
+			h = fnvAdd(h, pkt[l4+2:l4+4])
+			h = fnvAdd(h, pkt[l4:l4+2])
+		}
+		return h, true
+	}
+	return 0, false
 }
 
 // flowHash is a packet's flow (flowKey): what picks its link, and what its TUN
