@@ -42,6 +42,15 @@ var TuneSendCap = 1
 // SendCapOff says whether C4-lite is off (HS2_TUNE_SENDCAP=0).
 func SendCapOff() bool { return TuneSendCap == 0 }
 
+// SendCapBlocked 1 (HS2_TUNE_SENDCAP_BLOCKED=1; lab, for the judge, angle
+// A): a link whose writer waited on its socket since the reading before
+// (the link meter's wrBlocked: C3's gate or the write) is not app-limited
+// to C4-lite, whatever the kernel's bit (§3.3: C4 reads C3's "blocked
+// behind the socket"; §3.4 has C4-lite on the bit alone, the default).
+// Under the document's gate (T12) the bit is set on every sample and the
+// cap never comes; with this it does.
+var SendCapBlocked = 0
+
 const (
 	// capSpan: the cap follows the largest delivery rate of this span.
 	capSpan = 2 * time.Second
@@ -94,6 +103,10 @@ type sendCap struct {
 	// full: the delivery rate of the latest sample that was not app-limited
 	// (0: none yet), for C3 (hostRate)
 	full float64
+	// linked: off was set for the link as it came up (its caps and the
+	// switch then: the cores' runner never reads the switch again); off: no
+	// cap of its own on this link, as SendCapOff for the process
+	linked, off bool
 	// tallies (the status line)
 	appLim, lifts uint64
 }
@@ -148,7 +161,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	}
 	c.quiet = idle
 	switch {
-	case SendCapOff():
+	case c.off || !c.linked && SendCapOff():
 		c.on = false
 	case c.on && idle:
 		c.on = false
@@ -249,6 +262,11 @@ type sendCapLink struct {
 	hqAt    time.Duration
 	hqWrote uint64
 	hqSet   bool
+	// blocked: how long the link's writer has waited on the socket so far,
+	// at C3's gate or in the write (the link meter's wrBlocked, waits past
+	// blockedMin; nil: unknown), and its value at the reading before
+	blocked   func() int64
+	blockSeen int64
 }
 
 // newSendCapLink: the C4-lite of a link socket (sys), and the C3 its
@@ -269,8 +287,21 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 	if !ok {
 		return
 	}
+	app := ts.appLimited
+	if l.blocked != nil {
+		// (SendCapBlocked) a writer that waited on the socket since the
+		// reading before is no app-limited sender, whatever the kernel's
+		// bit says: C3's gate keeps under a segment or two unsent, and
+		// Linux marks every sample of a socket written to with less than a
+		// segment unsent app-limited
+		b := l.blocked()
+		if b > l.blockSeen {
+			app = false
+		}
+		l.blockSeen = b
+	}
 	if ts.dlvOK {
-		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: ts.appLimited,
+		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt))}))
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
