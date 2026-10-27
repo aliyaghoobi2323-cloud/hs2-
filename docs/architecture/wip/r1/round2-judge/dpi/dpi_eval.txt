@@ -1,0 +1,9 @@
+DPI flow-classifier: tunnel vs bulk HTTPS  (0.5=coin flip, 1.0=trivial)
+
+UNSHAPED tunnel                        AUC=1.000  DETECTABLE
+SHAPED tunnel (UDP, QUIC-ish prefix)   AUC=1.000  DETECTABLE
+SHAPED tunnel (TCP, inside real TLS)   AUC=0.932  DETECTABLE
+
+Reading:
+- UDP path: shaping collapses size/timing tells; entropy is the residual.
+- TCP path: riding inside real TLS fixes entropy too -> near coin-flip.

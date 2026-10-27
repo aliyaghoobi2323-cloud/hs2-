@@ -4,3 +4,14 @@
 13:47:14 chain2 pid 200743 start
 14:08:18 F1 exit 0
 14:32:57 F2 exit 0
+14:50:00 F3 exit 0
+14:54:12 chain3 stopped by hand (M3 replaced by G1-G3 for version 5)
+14:55:13 chain4 replaced by chain5 (waits for the DPI post-processing)
+15:02:51 F4 exit 0
+15:09:25 capture 1 exit 0
+15:11:30 capture 2 exit 0
+15:12:31 capture 3 exit 0
+15:12:31 chain2 done
+15:13:39 dpi_post done
+15:13:41 chain5 pid 275513 start
+15:33:15 G1 exit 0

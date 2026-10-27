@@ -8,7 +8,10 @@ p90) in each direction. With the TLS records of the same capture
 (tlsrec.py extract), also each connection's application records: count,
 median and p10/p90 length, share >= 1400 B.
 
-  dpiconn.py PCAP [RECORDS.json] [--md LABEL]
+  dpiconn.py PCAP [RECORDS.json] [--md LABEL] [--sizes PREFIX]
+
+With --sizes, each connection's application record lengths go to
+PREFIX-cN.real_sizes.txt (obfs/dpi_eval2.py's input), cN as in the table.
 """
 import json
 import os
@@ -74,12 +77,63 @@ def pct(v, p):
     return v[min(len(v) - 1, int(p * len(v)))]
 
 
+def rec_profile(path, label, opt):
+    """dpiconn.py RECORDS.json: the same profile from the TLS records alone
+    (when the pcap is gone): per connection and direction, records, bytes,
+    the record rate, the gaps between records, and the record lengths."""
+    by = {}
+    for r in json.load(open(path)):
+        if r["type"] != 23:
+            continue
+        a, b = r["c"].split(">")
+        port = int(a.split(":")[1])
+        if port == PORT:
+            port = int(b.split(":")[1])
+        by.setdefault(port, {}).setdefault(r["d"], []).append((r["t"], r["len"]))
+    t0 = min(x[0] for c in by.values() for d in c.values() for x in d)
+    tot = sum(x[1] for c in by.values() for d in c.values() for x in d) or 1
+    print("#### %s: %d connections (from the TLS records)" % (label, len(by)))
+    print("| connection | first record at s | direction | records | MB | share of bytes | Mbit/s | records/s | gap median / p90 ms | record median [p10..p90] | >=1400 B |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    conns_ = sorted(by.items(), key=lambda kv: min(x[0] for d in kv[1].values() for x in d))
+    for i, (port, dirs) in enumerate(conns_):
+        first = min(x[0] for d in dirs.values() for x in d)
+        allr = []
+        for d in ("exit>edge", "edge>exit"):
+            rs = sorted(dirs.get(d, []))
+            if not rs:
+                continue
+            allr += [x[1] for x in rs]
+            dur = max(rs[-1][0] - rs[0][0], 1e-3)
+            b = sum(x[1] for x in rs)
+            g = [1000 * (y[0] - x[0]) for x, y in zip(rs, rs[1:])]
+            ls = [x[1] for x in rs]
+            print("| c%d | %.2f | %s | %d | %.2f | %.1f%% | %.2f | %.0f | %s / %s | %d [%d..%d] | %.0f%% |" % (
+                i, first - t0, d, len(rs), b / 1e6, 100 * b / tot, b * 8 / dur / 1e6, len(rs) / dur,
+                "-" if not g else "%.2f" % st.median(g), "-" if not g else "%.1f" % pct(g, 0.9),
+                st.median(ls), pct(ls, 0.1), pct(ls, 0.9), 100 * sum(1 for x in ls if x >= 1400) / len(ls)))
+        if "--sizes" in opt and allr:
+            with open("%s-c%d.real_sizes.txt" % (opt["--sizes"], i), "w") as f:
+                for x in allr:
+                    f.write("%d\n" % x)
+
+
 def main():
-    a = [x for x in sys.argv[1:] if not x.startswith("--")]
-    label = sys.argv[sys.argv.index("--md") + 1] if "--md" in sys.argv else os.path.basename(a[0])
+    opt = {}
+    a = []
+    it = iter(sys.argv[1:])
+    for x in it:
+        if x.startswith("--"):
+            opt[x] = next(it)
+        else:
+            a.append(x)
+    label = opt.get("--md", os.path.basename(a[0]))
+    if a[0].endswith(".json"):
+        rec_profile(a[0], label, opt)
+        return
     cs, t0 = conns(a[0])
     recs = {}
-    if len(a) > 1 and a[1] != label:
+    if len(a) > 1:
         for r in json.load(open(a[1])):
             if r["type"] != 23:
                 continue
@@ -97,6 +151,10 @@ def main():
         by = sum(c["by"].values())
         g = [1000 * (b - a_) for a_, b in zip(c["ts"]["exit>edge"], c["ts"]["exit>edge"][1:])]
         r = recs.get(k, [])
+        if "--sizes" in opt and r:
+            with open("%s-c%d.real_sizes.txt" % (opt["--sizes"], i), "w") as f:
+                for x in r:
+                    f.write("%d\n" % x)
         print("| c%d | %s | %.1f | %d / %d | %.2f / %.2f | %.1f%% | %.2f | %s / %s | %s | %s | %s |" % (
             i, "-" if c["syn"] is None else "%.2f" % (c["syn"] - (syns[0] if syns else t0)), dur,
             c["pk"]["exit>edge"], c["pk"]["edge>exit"], c["by"]["exit>edge"] / 1e6, c["by"]["edge>exit"] / 1e6,

@@ -1,0 +1,30 @@
+== start 2026-10-27T15:14:41+00:00
+ 15:14:41 up  4:09,  5 users,  load average: 1.16, 1.39, 1.71
+top - 15:14:42 up  4:09,  4 users,  load average: 1.16, 1.39, 1.71
+Tasks: 250 total,   1 running, 249 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.7 us,  2.1 sy,  0.0 ni, 95.3 id,  0.0 wa,  0.0 hi,  1.0 si,  0.0 st 
+MiB Mem :  23456.9 total,  19018.8 free,   1122.0 used,   3732.5 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22334.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 284192 root      20   0 1434348 183400  28832 S  33.3   0.8   3:01.01 xray-linux-amd6
+    992 root      20   0 1475712  90496  10420 S  29.4   0.4  64:20.93 hs2
+    916 root      20   0 1076712  78992  57012 S   2.0   0.3   0:25.09 fail2ban-server
+  15116 root      20   0 2265788  45376  31796 S   2.0   0.2   0:16.80 containerd
+ 287924 root      20   0       0      0      0 I   2.0   0.0   0:00.02 kworker/11:3-events
+ 291609 root      20   0   11908   6036   3884 R   2.0   0.0   0:00.03 top
+      1 root      20   0   22700  14156   9776 S   0.0   0.1   0:23.55 systemd
+== end 2026-10-27T15:33:14+00:00
+ 15:33:14 up  4:28,  6 users,  load average: 2.44, 2.24, 1.85
+top - 15:33:15 up  4:28,  6 users,  load average: 2.44, 2.24, 1.85
+Tasks: 259 total,   2 running, 257 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.9 us,  2.8 sy,  0.0 ni, 94.2 id,  0.0 wa,  0.0 hi,  1.1 si,  0.0 st 
+MiB Mem :  23456.9 total,  18880.7 free,   1240.4 used,   3752.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22216.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 284192 root      20   0 1501308 235308  28832 R  32.0   1.0   8:34.08 xray-linux-amd6
+    992 root      20   0 1475712 136472  10420 S  28.0   0.6  69:06.44 hs2
+  15116 root      20   0 2265788  45376  31796 S   2.0   0.2   0:18.02 containerd
+ 315717 root      20   0   11908   6040   3884 R   2.0   0.0   0:00.03 top
+      1 root      20   0   22700  14156   9776 S   0.0   0.1   0:24.65 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.03 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release

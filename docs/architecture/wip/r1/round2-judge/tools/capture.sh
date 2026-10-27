@@ -25,7 +25,8 @@ for b in "$@"; do
   mkdir -p "$O/run-$t"; [ -x "$O/run-$t/rigload" ] || cp /root/r2j/rigload "$O/run-$t/rigload"
   REPS=1 RIG_ID=jd BINS=$BINS OLD_BIN=$OLD_BIN "$RS/run.sh" "$O/plan-$t.txt" "$O/run-$t" > "$O/run-$t.out" 2>&1 &
   rp=$!
-  for i in $(seq 1 400); do ip netns exec r-midjd ip link show mx >/dev/null 2>&1 && break; sleep 0.05; done
+  # mx up (not only made): tcpdump on a device that is not up yet fails
+  for i in $(seq 1 400); do ip netns exec r-midjd ip link show mx 2>/dev/null | grep -q ",UP" && break; sleep 0.05; done
   ip netns exec r-midjd timeout "$CAP_S" tcpdump -i mx -s "$SNAP" -B 65536 -w "$O/cap-$t.pcap" "tcp port 2096" > "$O/tcpdump-$t.txt" 2>&1
   wait $rp
   echo "$(date +%T) $t done" >> "$O/capture.log"
