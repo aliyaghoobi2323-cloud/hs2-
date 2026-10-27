@@ -286,10 +286,37 @@ func owdDecode(b []byte) (stamp int64, qOut time.Duration, have, ok bool) {
 	return stamp, time.Duration(q) * time.Microsecond, true, true
 }
 
+// owdIdleRate: a BULK link's own loop (γ1, AlphaOwn) sends nothing while
+// the link carries less than this (bytes/s, either way, as its cap's runner
+// notes it): an idle link needs no queue reading, and a message a second on
+// each of 300 idle links would be 2.4 Mbit/s of padded records each way.
+// owdIdlePoll: how often an idle loop looks again.
+const (
+	owdIdleRate = 1e6 / 8
+	owdIdlePoll = 100 * time.Millisecond
+)
+
+// idle says whether the link carried less than owdIdleRate lately (no rate
+// noted within owdFresh: idle).
+func (o *owdLink) idle() bool {
+	at := o.rateAt.Load()
+	if at == 0 || time.Duration(ctrlNow()-at) > owdFresh {
+		return true
+	}
+	return math.Float64frombits(uint64(o.rate.Load())) < owdIdleRate
+}
+
 // owdLoop trades the messages of link o on st (the kind byte already
-// written or read) until it fails or ctx ends; both ends run it.
-func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
+// written or read) until it fails or ctx ends; both ends run it. quiet: a
+// BULK link's own loop (γ1) that sends nothing while the link is idle. The
+// stream is urgent (smux SetUrgent): a QUIET link's coalescing hold
+// (HS2_TUNE_QUIET_COAL) never holds a message, whose stamp would read the
+// hold as queue.
+func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink, quiet bool) {
 	defer st.Close()
+	if u, ok := st.(interface{ SetUrgent(bool) }); ok {
+		u.SetUrgent(true)
+	}
 	var once sync.Once
 	stop := make(chan struct{})
 	end := func() { once.Do(func() { close(stop); st.Close() }) }
@@ -307,7 +334,11 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 	}()
 	var b [owdMsgLen]byte
 	for {
-		t := time.NewTimer(owdJitter(o.tick()))
+		wait := owdJitter(o.tick())
+		if quiet && o.idle() {
+			wait = owdIdlePoll
+		}
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
@@ -317,6 +348,9 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 			t.Stop()
 			return
 		case <-t.C:
+		}
+		if quiet && o.idle() {
+			continue
 		}
 		at := o.qInAt.Load()
 		fresh := at != 0 && time.Duration(ctrlNow()-at) <= owdFresh
@@ -334,19 +368,22 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 	}
 }
 
-// openOWD runs the edge's end of kindOWD on a QUIET link (version 5) or
-// a BULK one (version 4); others: none.
+// openOWD runs the edge's end of kindOWD on a QUIET link (version 5) and,
+// with AlphaOwn (γ1), on each BULK link too (its own loop, silent while
+// idle), or on a BULK one alone (version 4); others: none.
 func openOWD(ctx context.Context, l Link) {
 	ml, ok := l.(*mtcpLink)
 	if !ok || OWDOff() || ml.mtr == nil {
 		return
 	}
-	if TuneOWDQuiet != 0 {
-		if !ml.quiet {
-			return
-		}
+	idleQuiet := false
+	switch {
+	case TuneOWDQuiet != 0 && ml.quiet:
 		quietOWD.Store(&ml.mtr.owd)
-	} else if !ml.bulk {
+	case TuneOWDQuiet != 0 && ml.bulk && AlphaOwnOn():
+		idleQuiet = true
+	case TuneOWDQuiet == 0 && ml.bulk:
+	default:
 		return
 	}
 	st, err := ml.OpenRawStream()
@@ -357,5 +394,5 @@ func openOWD(ctx context.Context, l Link) {
 		st.Close()
 		return
 	}
-	owdLoop(ctx, st, &ml.mtr.owd)
+	owdLoop(ctx, st, &ml.mtr.owd, idleQuiet)
 }

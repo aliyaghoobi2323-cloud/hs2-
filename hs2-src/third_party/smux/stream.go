@@ -79,6 +79,8 @@ type Stream struct {
 	// (SetFlowCtx)
 	txBytes atomic.Uint64
 	fctx    atomic.Value
+	// urgent: SetUrgent's (no coalescing hold after its frames)
+	urgent atomic.Bool
 
 	// a group stream (its SYN names a group, group.go): each data frame
 	// starts with its sequence number. seqs holds the numbers of the frames

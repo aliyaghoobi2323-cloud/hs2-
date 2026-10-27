@@ -105,8 +105,8 @@ func TestOWDLoopPipe(t *testing.T) {
 	var oa, ob owdLink
 	oa.noteRate(100e6 / 8)
 	ob.noteRate(100e6 / 8)
-	go owdLoop(ctx, a, &oa)
-	go owdLoop(ctx, b, &ob)
+	go owdLoop(ctx, a, &oa, false)
+	go owdLoop(ctx, b, &ob, false)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		_, okA := oa.queue()

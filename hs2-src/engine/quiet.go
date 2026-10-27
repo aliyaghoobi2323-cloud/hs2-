@@ -74,14 +74,41 @@ var QuietCC = "cubic"
 // any size, so each end's switch is its own sending's.
 var QuietRec = 0
 
-// QuietCount is how many QUIET links a pool of maxLinks keeps: one, and a
-// second for redundancy once the pool may have four links or more.
+// QuietCount is how many QUIET links a pool of maxLinks keeps: one (R1
+// round 3, decision T19: a second one only with a measured need; it was a
+// connection more for DPI's count from N=4 on), or with QuietTwo a second
+// for redundancy once the pool may have four links or more (round 2's).
 func QuietCount(maxLinks int) int {
-	if maxLinks >= 4 {
+	if QuietTwo != 0 && maxLinks >= 4 {
 		return 2
 	}
 	return 1
 }
+
+// QuietTwo 1 (HS2_TUNE_QUIET_TWO=1): a second QUIET link from max_links 4
+// on, as round 2 had it.
+var QuietTwo = 0
+
+// QuietCoalesce (HS2_TUNE_QUIET_COAL, µs; γ1, R1 round 3): a QUIET link's
+// session writer holds a tail of light frames up to this long, from the
+// first of them, for more to share its record (smux Config.Coalesce), while
+// it wrote at least QuietCoalesceMin light frames over the last second
+// (HS2_TUNE_QUIET_COAL_MIN). Each small message on a QUIET link went out
+// as a whole record of the bulk sampler's sizes (~990 B on average; the
+// shaper pads a short tail up to its sampled size): 198 probe users, 5
+// messages a second each, cost ~7.5 Mbit/s of padding each way on the rig,
+// against ~0.25 Mbit/s of messages; the base binary carries them in the
+// records of the data going the same way. Records keep the sampler's
+// sizes: only fewer of them go out. The cost is the wait, up to the window
+// for a light message on each end of the link it crosses; the one-way delay
+// messages are urgent (no wait: their stamps would read it as queue). Each
+// end's switch is its own sending's. 0: off.
+var QuietCoalesce = 2000
+
+// QuietCoalesceMin: light frames a second a QUIET link's writer wrote over
+// the last second before it holds any (fewer: each padded record costs
+// little, ~8 kbit, and the wait would be all cost; one probe user is 5).
+var QuietCoalesceMin = 200
 
 // QuietExtra 1 (HS2_TUNE_QUIET_EXTRA=1; the R1 round-2 judge): the QUIET
 // links come next to max_links BULK ones, not within max_links. Within
@@ -91,8 +118,10 @@ func QuietCount(maxLinks int) int {
 // 55 Mbit/s against 72 for the base binary and 74 for β1 (whose QUIET
 // connection is a link's second). The cost is one or two connections more
 // than max_links. Both ends set it alike (the exit dials the reverse pool's
-// links: QuietTotal).
-var QuietExtra = 0
+// links: QuietTotal). On by default from R1 round 3 (decision T19), with
+// one QUIET link (QuietCount): max_links + 1 connections; 0 puts them
+// back within max_links.
+var QuietExtra = 1
 
 // QuietTotal is the most links a pool of maxLinks holds with its QUIET ones
 // (they count toward max_links, but a pool of one link still has a BULK

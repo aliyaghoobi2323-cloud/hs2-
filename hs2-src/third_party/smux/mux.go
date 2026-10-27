@@ -138,6 +138,18 @@ type Config struct {
 	// takes the next (P10 (b)). False: the writer waits for the write.
 	EarlyDone bool
 
+	// Coalesce, with Sched and a conn that holds back a short tail
+	// (hs2's shaper, which pads a short record to its sampled size): after
+	// a frame that is not bulk the tail waits up to this long, from the
+	// first such frame, for more to share its record before it goes out
+	// padded, while the session wrote at least CoalesceMin such frames over
+	// the last second (fewer: each padded record costs little, and the
+	// wait would be all cost). A frame of a stream marked SetUrgent ends
+	// the wait. 0 (the default): the tail goes out as soon as the writer
+	// runs dry, as before.
+	Coalesce    time.Duration
+	CoalesceMin float64
+
 	// UserMem, with Sched: the account of a user's queued bytes, asked once
 	// per user as its first frame is queued. The session calls it with the
 	// bytes of each data frame it queues (n > 0) and takes (n < 0): for a
@@ -227,8 +239,11 @@ func VerifyConfig(config *Config) error {
 		return errors.New("lane frame and user frames must not be negative")
 	}
 	if config.Sched == nil && (config.FlowInfo != nil || config.BulkFrame != nil || config.LaneFrame != 0 ||
-		config.UserFrames != 0 || config.UserMem != nil) {
-		return errors.New("flow info, bulk frame, lane frame, user frames and user mem require a frame scheduler")
+		config.UserFrames != 0 || config.UserMem != nil || config.Coalesce != 0) {
+		return errors.New("flow info, bulk frame, lane frame, user frames, user mem and coalesce require a frame scheduler")
+	}
+	if config.Coalesce < 0 || config.CoalesceMin < 0 {
+		return errors.New("coalesce and coalesce min must not be negative")
 	}
 	return nil
 }

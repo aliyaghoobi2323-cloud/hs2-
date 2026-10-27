@@ -337,6 +337,15 @@ func applyTuning() {
 	num("HS2_TUNE_ALPHA_FREE", &engine.AlphaFree)
 	num("HS2_TUNE_QUIET_REC", &engine.QuietRec)     // lab: QUIET's interactive record sizes
 	num("HS2_TUNE_QUIET_EXTRA", &engine.QuietExtra) // QUIET links next to max_links BULK ones
+	// R1 round 3, γ1: α's own-queue cap next to the shared one, its probe,
+	// a second QUIET link from N=4 (off: one, T19), and the QUIET links'
+	// coalescing window (µs; 0: off) with the light frames a second it
+	// needs
+	num("HS2_TUNE_ALPHA_OWN", &engine.AlphaOwn)
+	num("HS2_TUNE_ALPHA_PROBE", &engine.AlphaProbe)
+	num("HS2_TUNE_QUIET_TWO", &engine.QuietTwo)
+	num("HS2_TUNE_QUIET_COAL", &engine.QuietCoalesce)
+	num("HS2_TUNE_QUIET_COAL_MIN", &engine.QuietCoalesceMin)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
