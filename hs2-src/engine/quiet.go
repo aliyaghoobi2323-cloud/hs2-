@@ -331,8 +331,27 @@ func (q *quietSet) tick(ctx context.Context) {
 			l.Close()
 			return
 		}
-		q.place(l, "")
+		if !q.place(l, "") {
+			// the other server has no classes (an older hs2): a link like
+			// any other, in the pool
+			q.m.adopt(l)
+		}
 	}()
+}
+
+// adopt takes a link dialed as QUIET that came up without the class into
+// the pool, as a dial of its own would (queueDial).
+func (m *LinkManager) adopt(l Link) {
+	m.mu.Lock()
+	id := m.linkSeq
+	m.linkSeq++
+	m.noteArrivalLocked(m.now())
+	m.links = append(m.links, m.newManaged(l, id, m.now()))
+	m.mu.Unlock()
+	m.dialedN.Add(1)
+	if m.OnLink != nil {
+		go m.OnLink(l)
+	}
 }
 
 // place puts a link dialed or accepted as QUIET where its caps say: the set

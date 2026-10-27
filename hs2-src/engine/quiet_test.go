@@ -910,3 +910,24 @@ func TestQuietMovedWindowGrows(t *testing.T) {
 		t.Fatalf("a moved download took %.1f Mbit/s of 100", rates[0]*8/1e6)
 	}
 }
+
+// A QUIET dial that comes up without the class (a level 1 exit, or one with
+// HS2_TUNE_QUIET=0) turns the classes off and the link joins the pool as
+// any other: nothing leaks, the pool's ceiling is max_links again.
+func TestQuietDialWithoutClass(t *testing.T) {
+	if QuietOff() {
+		t.Skip("HS2_TUNE_QUIET=0")
+	}
+	lm := NewLinkManager(nil, 1, 4, 8, nil)
+	q := lm.enableQuiet()
+	up, dn := newAngleWire(angleRateBps, time.Millisecond), newAngleWire(angleRateBps, time.Millisecond)
+	t.Cleanup(func() { up.close(); dn.close() })
+	p := newClassPair(t, up, dn, tlscarrier.LocalAuthHdr().Caps&^tlscarrier.CapGroup)
+	if q.place(p.edge, "") {
+		t.Fatal("a link without the class went QUIET")
+	}
+	lm.adopt(p.edge)
+	if !inPool(lm, p.edge) || q.count() != 0 || q.active() || lm.bulkMax() != 4 || lm.quietWant() != 0 {
+		t.Fatalf("in the pool %v, QUIET %d, classes on %v, BULK max %d", inPool(lm, p.edge), q.count(), q.active(), lm.bulkMax())
+	}
+}
