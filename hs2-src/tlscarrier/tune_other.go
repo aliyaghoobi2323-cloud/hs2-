@@ -19,3 +19,6 @@ func tuneTCP(c net.Conn) {
 
 // SetCongestion is Linux's only.
 func SetCongestion(tc *net.TCPConn, cc string) bool { return false }
+
+// SetThinLinear is Linux's only.
+func SetThinLinear(tc *net.TCPConn) bool { return false }

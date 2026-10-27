@@ -195,10 +195,10 @@ func TestAlphaOwnFQ(t *testing.T) {
 		if r.g < 0.95 {
 			t.Errorf("%.0f Mbit/s, %d links: γ1's sum %.3f of the path, want >= 0.95", c0.mbit, c0.active, r.g)
 		}
-		// where a link's share holds 3 segments within 5 ms, its drops a
-		// tenth of version 5's at most
-		if c0.mbit*1e6/8/float64(c0.active)*0.005 >= 3*ownMSS && r.gd > 0.1*r.v5d {
-			t.Errorf("%.0f Mbit/s, %d links: CoDel drops %.3f%% of the segments, want a tenth of version 5's %.3f%% at most",
+		// where a link's share holds 2 segments within 5 ms, its drops a
+		// fifth of version 5's at most
+		if c0.mbit*1e6/8/float64(c0.active)*0.005 >= 2*ownMSS && r.gd > 0.2*r.v5d {
+			t.Errorf("%.0f Mbit/s, %d links: CoDel drops %.3f%% of the segments, want a fifth of version 5's %.3f%% at most",
 				c0.mbit, c0.active, 100*r.gd, 100*r.v5d)
 		}
 	}
@@ -321,7 +321,7 @@ func TestAlphaOwnSteps(t *testing.T) {
 	if !near(c.bRate, x*(1+0.03*0.6)) {
 		t.Fatalf("2 ms under the target: own cap %.0f, want %.0f", c.bRate, x*(1+0.03*0.6))
 	}
-	// the target at a low rate: 3 segments at 1 Mbit/s is 34.8 ms
+	// the target at a low rate: 2 segments at 1 Mbit/s is 23.2 ms
 	lo := &sendCap{linked: true, alpha: true}
 	at2, ack2 := time.Hour, 0.0
 	feedLo := func(own time.Duration) {
@@ -334,8 +334,8 @@ func TestAlphaOwnSteps(t *testing.T) {
 		feedLo(0)
 	}
 	feedLo(20 * ms)
-	if lo.bCuts != 0 || lo.bTgt < 34*ms {
-		t.Fatalf("1 Mbit/s, 20 ms: own cuts %d, target %v; want none, target ~34.8 ms", lo.bCuts, lo.bTgt)
+	if lo.bCuts != 0 || lo.bTgt < 23*ms {
+		t.Fatalf("1 Mbit/s, 20 ms: own cuts %d, target %v; want none, target ~23.2 ms", lo.bCuts, lo.bTgt)
 	}
 	// start-up: a queue while the delivery grows by 60% a reading holds
 	su := &sendCap{linked: true, alpha: true}
@@ -481,4 +481,73 @@ func FuzzOWDDecode(f *testing.F) {
 			t.Fatalf("queue %v %v, want %v", got, ok, q)
 		}
 	})
+}
+
+// owdRestamp: the stamp as the message leaves the session, moved on by the
+// socket's unsent bytes at its pacing rate (20 KiB at 9 Mbit/s: 18.2 ms).
+func TestOWDRestamp(t *testing.T) {
+	var b [owdMsgLen]byte
+	owdEncode(b[:], 5, int64(3*time.Millisecond), true)
+	before := ctrlNow()
+	owdRestamp(b[:], &fakeCapSys{st: tcpStat{notsent: 20 << 10, pacingRate: 9e6 / 8}, ok: true})
+	st, q, have, ok := owdDecode(b[:])
+	if !ok || !have || q != 3*time.Millisecond {
+		t.Fatalf("restamped message: ok %v have %v queue %v", ok, have, q)
+	}
+	if w := time.Duration(st - before); w < 18*time.Millisecond || w > 50*time.Millisecond {
+		t.Fatalf("stamp %v past the call, want ~18.2 ms (the unsent bytes' wait)", w)
+	}
+	owdRestamp(b[:3], nil) // short: untouched, no panic
+}
+
+// A reading that does not fall after the own cap's cuts (here it grows as
+// the cap falls, as a host's wait at a lower cap would) is none of the
+// link's doing: after ownNoHelpN cuts the cap goes back to where they
+// began and that queue is the base of its readings; a queue that drains
+// after each cut is its own (no such reset); HS2_TUNE_ALPHA_OWN_CHECK=0:
+// it cuts on.
+func TestAlphaOwnCheck(t *testing.T) {
+	const ms = time.Millisecond
+	run := func(phantom bool) *sendCap {
+		c := &sendCap{linked: true, alpha: true}
+		at, acked := time.Hour, 0.0
+		capNow := 8e6 / 8
+		for i := 0; i < 40; i++ {
+			at += 100 * ms
+			dlv := capNow
+			acked += dlv / 10
+			q := time.Duration(0)
+			if i >= 5 {
+				if phantom {
+					q = time.Duration(10e6 / 8 / capNow * float64(8*ms)) // 10 ms at 8 Mbit/s, longer as the cap falls
+				} else if i == 5 {
+					q = 8 * ms // its own: drains once cut
+				} else if i == 6 {
+					q = 6 * ms
+				}
+			}
+			c.Update(capSample{Now: at, Delivery: dlv, Acked: uint64(acked), Written: uint64(acked), Segs: uint32(acked / 1000),
+				SRTT: 72 * ms, MinRTT: 72 * ms, OWDok: true, OWN: q, OWNok: true})
+			if c.own > 0 {
+				capNow = math.Min(float64(c.own), 8e6/8)
+			}
+		}
+		return c
+	}
+	p := run(true)
+	t.Logf("a queue that grows as the cap falls: own cap %.1f Mbit/s, cuts %d, not its own %d (base %v)", p.bRate*8/1e6, p.bCuts, p.bPhantoms, p.bOff)
+	if p.bPhantoms == 0 || p.bRate < 7.5e6/8 {
+		t.Fatalf("phantom queue: %d resets, own cap %.1f Mbit/s; want one at least and the cap back near 8", p.bPhantoms, p.bRate*8/1e6)
+	}
+	o := run(false)
+	if o.bPhantoms != 0 || o.bCuts == 0 {
+		t.Fatalf("its own queue: %d resets, %d cuts; want cuts and no reset", o.bPhantoms, o.bCuts)
+	}
+	AlphaOwnCheck = 0
+	defer func() { AlphaOwnCheck = 1 }()
+	n := run(true)
+	t.Logf("check off: own cap %.1f Mbit/s after %d cuts", n.bRate*8/1e6, n.bCuts)
+	if n.bPhantoms != 0 || n.bRate > 7e6/8 {
+		t.Fatalf("check off: %d resets, own cap %.1f Mbit/s; want the ratchet down", n.bPhantoms, n.bRate*8/1e6)
+	}
 }

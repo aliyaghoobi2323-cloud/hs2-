@@ -71,3 +71,22 @@ func SetCongestion(tc *net.TCPConn, cc string) bool {
 	})
 	return ok
 }
+
+// SetThinLinear turns on TCP_THIN_LINEAR_TIMEOUTS on tc: a thin stream
+// (fewer than 4 packets in flight) keeps its retransmission timeout linear
+// for its first 6 retries instead of doubling it (hs2's QUIET links, the
+// R1 round-3 lead's note: light messages behind a loss). False: not set.
+func SetThinLinear(tc *net.TCPConn) bool {
+	if tc == nil {
+		return false
+	}
+	rc, err := tc.SyscallConn()
+	if err != nil {
+		return false
+	}
+	ok := false
+	rc.Control(func(fd uintptr) {
+		ok = unix.SetsockoptInt(int(fd), unix.IPPROTO_TCP, unix.TCP_THIN_LINEAR_TIMEOUTS, 1) == nil
+	})
+	return ok
+}

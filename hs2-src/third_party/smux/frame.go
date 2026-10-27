@@ -97,6 +97,9 @@ type Frame struct {
 	// urgent: a data frame of an urgent stream (Stream.SetUrgent), for the
 	// frame scheduler's writer; not on the wire
 	urgent bool
+	// stamp: the stream's SetStamp hook, called by the frame scheduler's
+	// writer with the data just before it writes them
+	stamp func([]byte)
 }
 
 // wireLen is the frame's length field: its data, and its sequence number.

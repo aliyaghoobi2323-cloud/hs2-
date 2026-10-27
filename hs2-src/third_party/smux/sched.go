@@ -180,6 +180,7 @@ type schedFrame struct {
 	// urgent: a frame of an urgent stream (Stream.SetUrgent): no
 	// coalescing hold after it (Config.Coalesce)
 	urgent bool
+	stamp  func([]byte)
 }
 
 const (
@@ -585,6 +586,9 @@ func (s *Session) sendLoopSched() {
 		var err error
 		told := false // the frame's writer has its result (EarlyDone)
 		data := req.take()
+		if sf.stamp != nil && len(data) > 0 {
+			sf.stamp(data) // (SetStamp) its time stamp, as it leaves the session
+		}
 		if len(vec) > 0 {
 			vec[0] = buf[:hl]
 			vec[1] = data
@@ -642,7 +646,7 @@ func (s *Session) queueSched(f Frame, class CLASSID, tag uint32, lane uint8) (wr
 		return req, s.socketWriteError.Load().(error)
 	default:
 	}
-	sf := &schedFrame{tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + f.wireLen(), urgent: f.urgent}
+	sf := &schedFrame{tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + f.wireLen(), urgent: f.urgent, stamp: f.stamp}
 	if class != CLSDATA {
 		sf.tag, sf.lane = 0, LaneCtrl
 	} else {

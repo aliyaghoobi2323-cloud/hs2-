@@ -155,6 +155,19 @@ type sendCap struct {
 	bRate float64
 	bQ    time.Duration
 	bTgt  time.Duration
+	// bStart: no queue of its own past its target since it armed (its
+	// start: C4-lite's cap, as the shared cap's fix 1)
+	bStart bool
+	// the check that its cuts drain its queue (AlphaOwnCheck): bCut a cut
+	// at the reading before, at queue bRef; bNoHelp cuts in a row the
+	// queue did not fall after; bPre the cap before them; bOff the queue
+	// taken as none of its doing (its readings' base); bPhantoms how often
+	bCut      bool
+	bRef      time.Duration
+	bNoHelp   int
+	bPre      float64
+	bOff      time.Duration
+	bPhantoms uint64
 	// probe (AlphaProbe): readings in a row with no queue sign while the
 	// cap bound, of each cap
 	aCalm, bCalm int
@@ -351,7 +364,16 @@ const (
 	// ownCutStand: the most the own cap cuts a reading for a queue past
 	// its target that stands (alphaCutMax while it rises)
 	ownCutStand = 0.02
+	// ownNoHelpN: cuts in a row after which a queue that did not fall is
+	// none of the link's doing (AlphaOwnCheck)
+	ownNoHelpN = 2
 )
+
+// AlphaOwnCheck 0 (HS2_TUNE_ALPHA_OWN_CHECK=0): the own cap trusts every
+// reading. On (the default): a queue that did not fall after ownNoHelpN of
+// its cuts in a row becomes the base of its readings, and the cap goes back
+// to where those cuts began (ownStep).
+var AlphaOwnCheck = 1
 
 // probeGrow is the probe's growth k readings into it.
 func probeGrow(k int) float64 {
@@ -434,19 +456,57 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 	}
 	ceil := math.Max(wcNetKOf()*c.maxDlv(), alphaFloor)
 	if arming || c.bRate <= 0 {
-		c.bRate, c.bQ, c.bCalm = ceil, 0, 0
+		c.bRate, c.bQ, c.bCalm, c.bStart = ceil, 0, 0, true
+		c.bOff, c.bCut, c.bNoHelp = 0, false, 0
 	}
 	qx := s.OWN
 	if s.OWDok {
 		qx -= s.OWD
 	}
 	qx = max(qx, 0)
+	if AlphaOwnCheck != 0 {
+		// a cut drains a queue of its own within a reading or two: one that
+		// did not fall after ownNoHelpN cuts in a row is none of its doing
+		// (on the rig an upload's own reading grew as its cap fell, 8 to 5
+		// Mbit/s with srtt − min_rtt at 0.1 ms): it is taken as the base
+		// of its readings from then on (bOff, down to any lower reading),
+		// and the cap goes back to where those cuts began
+		if qx < c.bOff {
+			c.bOff = qx
+		}
+		if c.bCut {
+			if qx+alphaRise >= c.bRef {
+				c.bNoHelp++
+			} else {
+				c.bNoHelp = 0
+			}
+			c.bCut = false
+			if c.bNoHelp >= ownNoHelpN {
+				c.bOff, c.bNoHelp = qx, 0
+				c.bRate = math.Max(c.bRate, c.bPre)
+				c.bPhantoms++
+			}
+		}
+		qx = max(qx-c.bOff, 0)
+	}
 	tgt := alphaLow
 	if d > 0 {
 		tgt = max(tgt, time.Duration(float64(ownSegs*ownMSS)/d*float64(time.Second)))
 	}
 	rising, falling := qx > c.bQ+alphaRise, qx < c.bQ-alphaRise
 	c.bQ, c.bTgt = qx, tgt
+	if c.bStart {
+		// its start: C4-lite's cap till its own queue first passes the
+		// target at a flat delivery (the first rig run grew it by 3% a
+		// reading from the first delivery of a link flows had just moved
+		// to, 6 Mbit/s: 100 Mbit/s took 13 s)
+		if qx <= tgt || c.dlvGrowing(s.Delivery) {
+			c.bRate = ceil
+			c.bGrows++
+			return
+		}
+		c.bStart = false
+	}
 	switch {
 	case qx > tgt && (falling || c.dlvGrowing(s.Delivery)):
 		c.bCalm = 0 // draining already, or start-up's queue: it holds
@@ -457,9 +517,13 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 		} else {
 			cut = math.Min(cut, ownCutStand)
 		}
+		if c.bNoHelp == 0 {
+			c.bPre = c.bRate // the cap before this run of cuts
+		}
 		c.bRate = math.Min(c.bRate, d) * (1 - cut)
 		c.bCuts++
 		c.bCalm = 0
+		c.bCut, c.bRef = true, qx
 	case s.AppLimited && d < alphaKeep*c.bRate:
 		c.bCalm = 0 // the sender had less to send than the cap let out: it holds
 	case rising && qx > tgt/4 && d < alphaMatch*c.bRate:
@@ -927,8 +991,8 @@ func (l *sendCapLink) line(n int) string {
 		}
 		own := ""
 		if c.bRate > 0 {
-			own = fmt.Sprintf("; own %.1f Mbit/s, queue %.1f ms past the shared, target %.1f ms, cuts %d, grows %d",
-				c.bRate*8/1e6, msOf(c.bQ), msOf(c.bTgt), c.bCuts, c.bGrows)
+			own = fmt.Sprintf("; own %.1f Mbit/s, queue %.1f ms past the shared, target %.1f ms, cuts %d, grows %d, not its own %d (base %.1f ms)",
+				c.bRate*8/1e6, msOf(c.bQ), msOf(c.bTgt), c.bCuts, c.bGrows, c.bPhantoms, msOf(c.bOff))
 		}
 		return fmt.Sprintf("sendcap link %d: alpha cap %.1f Mbit/s (queue %.1f ms %s, target %.0f ms; cuts %d, grows %d%s%s), app-limited %.0f%%, idle-lifted %d",
 			n, float64(c.set)*8/1e6, msOf(c.aQ), src, msOf(alphaLow), c.aCuts, c.aGrows, start, own, share, c.lifts)

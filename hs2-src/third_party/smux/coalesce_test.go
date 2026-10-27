@@ -170,3 +170,69 @@ func TestSchedCoalesceConfig(t *testing.T) {
 		t.Fatal("negative Coalesce: want an error")
 	}
 }
+
+// SetStamp: the writer calls the stream's hook with each data frame's bytes
+// just before it writes them (what the hook writes goes on the wire), after
+// the frame waited behind the one being written.
+func TestSchedStamp(t *testing.T) {
+	p := newSchedPipe(t, schedConfig())
+	bulk := p.open(1)
+	st := p.open(2)
+	var calls int32
+	var at time.Time
+	st.SetStamp(func(b []byte) {
+		calls++
+		at = time.Now()
+		copy(b, "STAMP")
+	})
+	go bulk.Write(make([]byte, 4000)) // one frame, held in the writer: the peer reads late
+	time.Sleep(20 * time.Millisecond)
+	queued := time.Now()
+	done := make(chan error, 1)
+	go func() { _, err := st.Write([]byte("xxxxxxxx")); done <- err }()
+	time.Sleep(30 * time.Millisecond) // it waits behind the bulk frame the peer has not read
+	var got []byte
+	for i := 0; i < 2; i++ {
+		var hdr rawHeader
+		p.peer.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := io.ReadFull(p.peer, hdr[:]); err != nil {
+			t.Fatal(err)
+		}
+		body := make([]byte, hdr.Length())
+		if _, err := io.ReadFull(p.peer, body); err != nil {
+			t.Fatal(err)
+		}
+		if hdr.StreamID() == st.ID() {
+			got = body
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "STAMPxxx" || calls != 1 {
+		t.Fatalf("on the wire %q after %d calls, want the hook's bytes once", got, calls)
+	}
+	if at.Sub(queued) < 25*time.Millisecond {
+		t.Fatalf("stamped %v after it was queued: want after its wait behind the bulk frame", at.Sub(queued))
+	}
+}
+
+// A WriteFlowAsync frame of an urgent stream ends the coalescing hold.
+func TestSchedCoalesceUrgentAsync(t *testing.T) {
+	const win = 40 * time.Millisecond
+	sess, sc := coalescePipe(t, win, 0)
+	st, err := sess.OpenStreamSyn(EncodeSyn(5, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settle(sc, 3*win)
+	st.SetUrgent(true)
+	sc.reset()
+	t0 := time.Now()
+	st.WriteFlowAsync([]byte("tun"), 5, 1, LaneLatency, nop)
+	settle(sc, 3*win)
+	fl := sc.flushes()
+	if len(fl) != 1 || fl[0].Sub(t0) > win/2 {
+		t.Fatalf("an urgent stream's async frame: %d flushes; want one at once", len(fl))
+	}
+}

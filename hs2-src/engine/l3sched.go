@@ -127,6 +127,9 @@ type tunSched struct {
 }
 
 func newTunSched(st *smux.Stream) *tunSched {
+	if QuietCoalTun != 0 && st != nil {
+		st.SetUrgent(true) // γ1: no coalescing hold after a TUN frame (quiet.go)
+	}
 	return &tunSched{st: st, flows: map[uint32]*tunFlow{}, users: map[uint32]*tunUser{}, kick: make(chan struct{}, 1),
 		pool: &sync.Pool{}, setDrops: new(atomic.Uint64)}
 }

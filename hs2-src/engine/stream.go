@@ -267,6 +267,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		// user's probe that moment, 198 of them a padded record each
 		tlscarrier.SetCongestion(tc, QuietCC)
 	}
+	if quietLink && QuietThin != 0 {
+		tlscarrier.SetThinLinear(tc) // (lab, γ1: the lead's note) linear timeouts for the thin QUIET stream
+	}
 	if quietLink && sched && QuietCoalesce > 0 {
 		// γ1 (quiet.go, QuietCoalesce): the light frames of a busy QUIET
 		// link share their padded records within a short window
