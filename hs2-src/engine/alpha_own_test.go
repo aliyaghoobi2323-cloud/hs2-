@@ -502,7 +502,8 @@ func TestOWDRestamp(t *testing.T) {
 
 // A reading that does not fall after the own cap's cuts (here it grows as
 // the cap falls, as a host's wait at a lower cap would) is none of the
-// link's doing: after ownNoHelpN cuts the cap goes back to where they
+// link's doing: once its cuts took the cap 15% down over 3 readings with
+// the queue still at its peak, the cap goes back to where they
 // began and that queue is the base of its readings; a queue that drains
 // after each cut is its own (no such reset); HS2_TUNE_ALPHA_OWN_CHECK=0:
 // it cuts on.

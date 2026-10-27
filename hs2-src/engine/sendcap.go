@@ -158,13 +158,13 @@ type sendCap struct {
 	// bStart: no queue of its own past its target since it armed (its
 	// start: C4-lite's cap, as the shared cap's fix 1)
 	bStart bool
-	// the check that its cuts drain its queue (AlphaOwnCheck): bCut a cut
-	// at the reading before, at queue bRef; bNoHelp cuts in a row the
-	// queue did not fall after; bPre the cap before them; bOff the queue
+	// the check that its cuts drain its queue (AlphaOwnCheck): bRun a run
+	// of cuts (from the first cut to the next growth), bRunN its readings
+	// so far, bRunMax its peak queue, bPre the cap before it; bOff the queue
 	// taken as none of its doing (its readings' base); bPhantoms how often
-	bCut      bool
-	bRef      time.Duration
-	bNoHelp   int
+	bRun      bool
+	bRunN     int
+	bRunMax   time.Duration
 	bPre      float64
 	bOff      time.Duration
 	bPhantoms uint64
@@ -364,15 +364,17 @@ const (
 	// ownCutStand: the most the own cap cuts a reading for a queue past
 	// its target that stands (alphaCutMax while it rises)
 	ownCutStand = 0.02
-	// ownNoHelpN: cuts in a row after which a queue that did not fall is
-	// none of the link's doing (AlphaOwnCheck)
-	ownNoHelpN = 2
+	// ownCheckN, ownCheckCut: a run of cuts ownCheckN readings long that
+	// took the cap ownCheckCut under where it began, with its queue still
+	// at its peak: that queue is none of the link's doing (AlphaOwnCheck)
+	ownCheckN   = 3
+	ownCheckCut = 0.15
 )
 
 // AlphaOwnCheck 0 (HS2_TUNE_ALPHA_OWN_CHECK=0): the own cap trusts every
-// reading. On (the default): a queue that did not fall after ownNoHelpN of
-// its cuts in a row becomes the base of its readings, and the cap goes back
-// to where those cuts began (ownStep).
+// reading. On (the default): a queue still at its peak ownCheckN readings
+// into a run of its cuts that took the cap ownCheckCut down becomes the base
+// of its readings, and the cap goes back to where those cuts began (ownStep).
 var AlphaOwnCheck = 1
 
 // probeGrow is the probe's growth k readings into it.
@@ -457,32 +459,30 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 	ceil := math.Max(wcNetKOf()*c.maxDlv(), alphaFloor)
 	if arming || c.bRate <= 0 {
 		c.bRate, c.bQ, c.bCalm, c.bStart = ceil, 0, 0, true
-		c.bOff, c.bCut, c.bNoHelp = 0, false, 0
+		c.bOff, c.bRun = 0, false
 	}
 	qx := s.OWN
 	if s.OWDok {
 		qx -= s.OWD
 	}
 	qx = max(qx, 0)
+	qraw := qx
 	if AlphaOwnCheck != 0 {
-		// a cut drains a queue of its own within a reading or two: one that
-		// did not fall after ownNoHelpN cuts in a row is none of its doing
-		// (on the rig an upload's own reading grew as its cap fell, 8 to 5
-		// Mbit/s with srtt − min_rtt at 0.1 ms): it is taken as the base
-		// of its readings from then on (bOff, down to any lower reading),
-		// and the cap goes back to where those cuts began
+		// cuts that took the cap ownCheckCut under where they began drain a
+		// queue of its own within a reading or two from its peak: one still
+		// at its peak ownCheckN readings into such a run of cuts is none of
+		// its doing (on the rig an upload's own reading grew as its cap
+		// fell, 8 to 5 Mbit/s with srtt − min_rtt at 0.1 ms): it is the
+		// base of its readings from then on (bOff, down to any lower
+		// reading), and the cap goes back to where those cuts began
 		if qx < c.bOff {
 			c.bOff = qx
 		}
-		if c.bCut {
-			if qx+alphaRise >= c.bRef {
-				c.bNoHelp++
-			} else {
-				c.bNoHelp = 0
-			}
-			c.bCut = false
-			if c.bNoHelp >= ownNoHelpN {
-				c.bOff, c.bNoHelp = qx, 0
+		if c.bRun {
+			c.bRunN++
+			c.bRunMax = max(c.bRunMax, qx)
+			if c.bRunN >= ownCheckN && c.bRate <= (1-ownCheckCut)*c.bPre && qx+alphaRise >= c.bRunMax {
+				c.bOff, c.bRun = qx, false
 				c.bRate = math.Max(c.bRate, c.bPre)
 				c.bPhantoms++
 			}
@@ -517,13 +517,13 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 		} else {
 			cut = math.Min(cut, ownCutStand)
 		}
-		if c.bNoHelp == 0 {
-			c.bPre = c.bRate // the cap before this run of cuts
+		if !c.bRun {
+			// a run of cuts begins: the cap before it, its peak queue
+			c.bRun, c.bRunN, c.bRunMax, c.bPre = true, 0, qraw, math.Min(c.bRate, d)
 		}
 		c.bRate = math.Min(c.bRate, d) * (1 - cut)
 		c.bCuts++
 		c.bCalm = 0
-		c.bCut, c.bRef = true, qx
 	case s.AppLimited && d < alphaKeep*c.bRate:
 		c.bCalm = 0 // the sender had less to send than the cap let out: it holds
 	case rising && qx > tgt/4 && d < alphaMatch*c.bRate:
@@ -537,6 +537,7 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 		// the path the cap settles with the queue under the target
 		// instead of overshooting by a step each time
 		g := alphaGrowFast * (1 - float64(qx)/float64(tgt))
+		c.bRun = false // the run of cuts is over
 		if AlphaProbe != 0 {
 			if qx < tgt/4 && d >= alphaMatch*c.bRate {
 				c.bCalm++
