@@ -275,7 +275,10 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	if capOn || hq != nil {
 		if sys := newCapSys(tc); sys != nil {
 			scl = newSendCapLink(sys, hq)
-			scl.core.off = !capOn
+			scl.core.linked, scl.core.off = true, !capOn
+			if meter != nil {
+				scl.blocked = meter.blockedNs
+			}
 			if wc != nil && capOn {
 				wc.sc.Store(scl) // the pacing net hands its cap here: the lesser holds
 			}

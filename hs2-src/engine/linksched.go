@@ -313,6 +313,19 @@ type gateSys struct {
 	c *hostQConn
 }
 
+// gateLowatMin: the socket's mark is at least this. Linux wakes a writer
+// once less than half the mark is unsent, and marks a socket written to
+// with less than a segment unsent app-limited; at the gate's own mark,
+// max(cap/2, MSS), every gated write came with less than a segment unsent,
+// every delivery sample of the link read app-limited, and BBR, whose
+// app-limited samples never end its STARTUP, stayed at 2.89 times its rate:
+// the rig's 8 links at 25 Mbit/s resent 35% (3.4% with C3 off). Three
+// segments wake the writer with a segment and a half unsent: the socket
+// holds up to the cap and about half a segment more.
+const gateLowatMin = 3 * hostqMSS
+
+func (g gateSys) setLowat(n int) error { return g.hostSys.setLowat(max(n, gateLowatMin)) }
+
 func (g gateSys) waitBelow(n int) error {
 	g.c.waiting.Store(true)
 	defer g.c.waiting.Store(false)

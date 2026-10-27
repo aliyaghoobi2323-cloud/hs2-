@@ -88,6 +88,13 @@ func (w *angleWire) write(b []byte) (int, error) {
 	return len(b), nil
 }
 
+// most is the most unsent seen at a write.
+func (w *angleWire) most() int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.maxNotsent
+}
+
 func (w *angleWire) read(b []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -386,7 +393,7 @@ func TestAngleSameLinkProbe(t *testing.T) {
 	p99, n := p.pct(0.99)
 	p50, _ := p.pct(0.5)
 	t.Logf("probe p50 %v p99 %v (%d samples); down %.2f up %.2f Mbit/s; most unsent at a write down/up %d/%d B",
-		p50, p99, n, r[0]*8/1e6, r[1]*8/1e6, l.down.maxNotsent, l.up.maxNotsent)
+		p50, p99, n, r[0]*8/1e6, r[1]*8/1e6, l.down.most(), l.up.most())
 	if n < 40 {
 		t.Fatalf("only %d probes", n)
 	}

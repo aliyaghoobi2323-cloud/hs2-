@@ -94,9 +94,10 @@ type sendCap struct {
 	// full: the delivery rate of the latest sample that was not app-limited
 	// (0: none yet), for C3 (hostRate)
 	full float64
-	// off: no cap of its own on this link (the other end lacks CapSendCap),
-	// as SendCapOff for the process
-	off bool
+	// linked: off was set for the link as it came up (its caps and the
+	// switch then: the cores' runner never reads the switch again); off: no
+	// cap of its own on this link, as SendCapOff for the process
+	linked, off bool
 	// tallies (the status line)
 	appLim, lifts uint64
 }
@@ -151,7 +152,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	}
 	c.quiet = idle
 	switch {
-	case SendCapOff() || c.off:
+	case c.off || !c.linked && SendCapOff():
 		c.on = false
 	case c.on && idle:
 		c.on = false
@@ -252,6 +253,11 @@ type sendCapLink struct {
 	hqAt    time.Duration
 	hqWrote uint64
 	hqSet   bool
+	// blocked: how long the link's writer has waited on the socket so far,
+	// at C3's gate or in the write (the link meter's wrBlocked, waits past
+	// blockedMin; nil: unknown), and its value at the reading before
+	blocked   func() int64
+	blockSeen int64
 }
 
 // newSendCapLink: the C4-lite of a link socket (sys), and the C3 its
@@ -272,8 +278,24 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 	if !ok {
 		return
 	}
+	app := ts.appLimited
+	if l.blocked != nil {
+		// a writer that waited on the socket since the reading before is no
+		// app-limited sender, whatever the kernel's bit says (§3.3: C4 reads
+		// C3's "blocked behind the socket" as that signal). C3's gate keeps
+		// under a segment or two unsent, and Linux marks every sample of a
+		// socket written to with less than a segment unsent app-limited: the
+		// bit alone left C4-lite off on every gated link, and BBR, whose
+		// app-limited samples never end its STARTUP, at 2.89 times its rate
+		// (the rig's 8 links at 25 Mbit/s: 35% resent).
+		b := l.blocked()
+		if b > l.blockSeen {
+			app = false
+		}
+		l.blockSeen = b
+	}
 	if ts.dlvOK {
-		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: ts.appLimited,
+		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt))}))
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")

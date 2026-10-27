@@ -288,6 +288,9 @@ type l3Set struct {
 	// alone), and when the idle ones were last swept
 	pins    map[uint32]*l3Pin
 	pinSwAt int64
+	// pinMode: 1 pinned, 2 by the hash per packet (HS2_TUNE_SCHED=0), as
+	// the first packet found the switch (0: none yet)
+	pinMode int8
 }
 
 // l3Pin is a flow's link and when the flow last had a packet.
@@ -311,7 +314,13 @@ const (
 // there while that link lives, whatever links come and go), else the hash's
 // pick per packet as before.
 func (s *l3Set) linkFor(h uint32) *l3Link {
-	if SchedOff() {
+	if s.pinMode == 0 {
+		s.pinMode = 1
+		if SchedOff() {
+			s.pinMode = 2
+		}
+	}
+	if s.pinMode == 2 {
 		return s.pickFlow(h)
 	}
 	now := ctrlNow()
