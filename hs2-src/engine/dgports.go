@@ -654,8 +654,11 @@ func (e *dgEdge) listen(ctx context.Context, p string, port int) error {
 	var pc net.PacketConn
 	if e.cfg.UDP {
 		if pc, err = net.ListenPacket("udp", addr); err != nil {
-			ln.Close()
-			return err
+			// UDP is an addition: a port whose UDP another program holds
+			// keeps its TCP (hs2 run exits on StartDgPorts' error)
+			e.cfg.Log("dg: user port %s: UDP is NOT forwarded: %v — another program holds UDP %s on this server (ss -lunp shows which); TCP on it works, and UDP is forwarded once the port is free", p, err, p)
+			go e.retryUDP(ctx, addr, p, port)
+			pc = nil
 		}
 	}
 	go func() {
@@ -683,6 +686,28 @@ func (e *dgEdge) listen(ctx context.Context, p string, port int) error {
 		go e.serveUDP(ctx, pc, port)
 	}
 	return nil
+}
+
+// retryUDP opens a user port's UDP socket once another program lets it go
+// (as retryUserUDP does for the stream edge), and serves it from then on.
+func (e *dgEdge) retryUDP(ctx context.Context, addr, p string, port int) {
+	wait := userUDPRetry
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		pc, err := net.ListenPacket("udp", addr)
+		if err != nil {
+			wait = min(2*wait, userUDPRetryMax)
+			continue
+		}
+		go func() { <-ctx.Done(); pc.Close() }()
+		e.cfg.Log("dg: user port %s: UDP forwarded now (the port is free)", p)
+		e.serveUDP(ctx, pc, port)
+		return
+	}
 }
 
 // tagTCP reports whether a TCP connection is tagged: always, once the probe
