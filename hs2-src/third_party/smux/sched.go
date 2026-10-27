@@ -91,7 +91,8 @@ type flusher interface{ Flush() error }
 // FIFO while it waits for room.
 type schedFrame struct {
 	req   writeRequest
-	u     *schedUser // the user it counts against (nil: control, or WriteFlowAsync's)
+	sc    *schedState // the scheduler it went to (a pair's QUIET or BULK)
+	u     *schedUser  // the user it counts against (nil: control, or WriteFlowAsync's)
 	tag   uint32
 	flow  uint64
 	lane  uint8
@@ -135,6 +136,8 @@ type schedState struct {
 	users map[uint32]*schedUser
 	wake  chan struct{} // the writer waits here when nothing is queued
 	dead  bool
+	// bulkPath: a pair's BULK writer's (pair.go)
+	bulkPath bool
 	// the ticks: the latest, and what the writer had written at the last
 	// ones (ring)
 	tickAt int64
@@ -416,13 +419,13 @@ func (sc *schedState) drain() {
 	}
 }
 
-// sendLoopSched is the session's writer with a scheduler (sendLoop's).
-func (s *Session) sendLoopSched() {
-	sc := s.sch
+// sendLoopSched is the session's writer with a scheduler (sendLoop's): sc's,
+// to conn (a pair has one for each connection).
+func (s *Session) sendLoopSched(sc *schedState, conn io.Writer) {
 	defer sc.drain()
 	var buf []byte
 	var vec [][]byte
-	bw, ok := s.conn.(interface {
+	bw, ok := conn.(interface {
 		WriteBuffers(v [][]byte) (n int, err error)
 	})
 	if ok {
@@ -431,7 +434,7 @@ func (s *Session) sendLoopSched() {
 	} else {
 		buf = make([]byte, (1<<16)+headerSize)
 	}
-	fl, _ := s.conn.(flusher)
+	fl, _ := conn.(flusher)
 	var hold *time.Timer
 	held := false // the conn holds a tail of a bulk frame (fl)
 	for {
@@ -492,7 +495,7 @@ func (s *Session) sendLoopSched() {
 		} else {
 			copy(buf[headerSize:], data)
 			req.done()
-			n, err = s.conn.Write(buf[:headerSize+len(data)])
+			n, err = conn.Write(buf[:headerSize+len(data)])
 		}
 		if n > 0 {
 			sc.wrote.Add(uint64(n))
@@ -517,8 +520,8 @@ func (s *Session) sendLoopSched() {
 
 // queueSched hands a frame to the scheduler: a control frame (class
 // CLSCTRL) in the control lane, a data frame of user tag in lane, within
-// the user's room.
-func (s *Session) queueSched(f Frame, class CLASSID, tag uint32, lane uint8) (writeRequest, error) {
+// the user's room; on a pair's BULK connection when bulk (pair.go).
+func (s *Session) queueSched(f Frame, class CLASSID, tag uint32, lane uint8, bulk bool) (writeRequest, error) {
 	req := writeRequest{class: class, frame: f, result: make(chan writeResult, 1)}
 	if len(f.data) > 0 {
 		req.data = &frameData{b: f.data}
@@ -530,22 +533,33 @@ func (s *Session) queueSched(f Frame, class CLASSID, tag uint32, lane uint8) (wr
 		return req, s.socketWriteError.Load().(error)
 	default:
 	}
-	sf := &schedFrame{tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + len(f.data)}
+	sc := s.schedOf(bulk)
+	sf := &schedFrame{sc: sc, tag: tag, flow: uint64(f.sid), lane: lane, size: headerSize + len(f.data)}
 	if class != CLSDATA {
 		sf.tag, sf.lane = 0, LaneCtrl
 	}
 	req.sf = sf
 	sf.req = req
-	if err := s.sch.queue(sf, class == CLSDATA); err != nil {
+	if err := sc.queue(sf, class == CLSDATA); err != nil {
 		return req, err
 	}
 	return req, nil
 }
 
-// frameFor is the most a data frame in lane carries now.
-func (s *Session) frameFor(lane uint8) int {
+// schedOf is the scheduler of the writer of a frame for BULK (bulk) or not:
+// a pair's BULK writer's, else the session's one.
+func (s *Session) schedOf(bulk bool) *schedState {
+	if bulk && s.schB != nil {
+		return s.schB
+	}
+	return s.sch
+}
+
+// frameFor is the most a data frame in lane carries now, on BULK (bulk) or
+// not.
+func (s *Session) frameFor(lane uint8, bulk bool) int {
 	n := s.config.MaxFrameSize
-	lim := int(s.sch.bulk.Load())
+	lim := int(s.schedOf(bulk).bulk.Load())
 	if lane == LaneLatency && s.config.LaneFrame > 0 {
 		lim = s.config.LaneFrame
 	}
@@ -573,30 +587,43 @@ type SchedStats struct {
 }
 
 // SchedStats says what the session's scheduler did since the previous call
-// (false: the session has none).
+// (false: the session has none): a pair's two writers' together, the rate
+// and the bulk frame BULK's.
 func (s *Session) SchedStats() (SchedStats, bool) {
-	sc := s.sch
-	if sc == nil {
+	if s.sch == nil {
 		return SchedStats{}, false
 	}
-	sc.mu.Lock()
-	st := SchedStats{Rate: float64(sc.rate.Load()), BulkFrame: int(sc.bulk.Load()), Blocked: sc.blocked,
-		Waiting: sc.waiting, Queued: sc.queued, LaneN: sc.latN - sc.latSeen}
-	for _, u := range sc.users {
-		if u.pending > st.MostPending {
-			st.MostPending, st.MostPendingUser = u.pending, u.tag
+	var st SchedStats
+	var w []uint32
+	for _, sc := range []*schedState{s.sch, s.schB} {
+		if sc == nil {
+			continue
 		}
+		sc.mu.Lock()
+		if sc == s.schedOf(true) {
+			st.BulkFrame = int(sc.bulk.Load())
+		}
+		st.Rate += float64(sc.rate.Load())
+		st.Blocked += sc.blocked
+		st.Waiting += sc.waiting
+		st.Queued += sc.queued
+		n := sc.latN - sc.latSeen
+		st.LaneN += n
+		for _, u := range sc.users {
+			if u.pending > st.MostPending {
+				st.MostPending, st.MostPendingUser = u.pending, u.tag
+			}
+		}
+		k := n
+		if k > schedLatKeep {
+			k = schedLatKeep
+		}
+		for i := uint64(0); i < k; i++ {
+			w = append(w, sc.lat[(sc.latN-1-i)%schedLatKeep])
+		}
+		sc.latSeen, sc.blocked = sc.latN, 0
+		sc.mu.Unlock()
 	}
-	k := st.LaneN
-	if k > schedLatKeep {
-		k = schedLatKeep
-	}
-	w := make([]uint32, 0, k)
-	for i := uint64(0); i < k; i++ {
-		w = append(w, sc.lat[(sc.latN-1-i)%schedLatKeep])
-	}
-	sc.latSeen, sc.blocked = sc.latN, 0
-	sc.mu.Unlock()
 	if len(w) > 0 {
 		sort.Slice(w, func(i, j int) bool { return w[i] < w[j] })
 		st.LaneP50 = time.Duration(w[(len(w)-1)/2]) * time.Microsecond
@@ -606,7 +633,8 @@ func (s *Session) SchedStats() (SchedStats, bool) {
 }
 
 // WithSched runs f with the session's scheduler, under the session's lock
-// (false: the session has none). f must not call back into the session.
+// (false: the session has none); a pair's QUIET writer's. f must not call
+// back into the session.
 func (s *Session) WithSched(f func(FrameSched)) bool {
 	sc := s.sch
 	if sc == nil {
@@ -618,12 +646,35 @@ func (s *Session) WithSched(f func(FrameSched)) bool {
 	return true
 }
 
-// BulkFrame is the session's bulk frame now (0: it has no scheduler).
+// WithBulkSched is WithSched with a pair's BULK writer's scheduler (false:
+// the session is no pair).
+func (s *Session) WithBulkSched(f func(FrameSched)) bool {
+	sc := s.schB
+	if sc == nil {
+		return false
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	f(sc.fs)
+	return true
+}
+
+// BulkFrame is the session's bulk frame now (0: it has no scheduler); a
+// pair's BULK writer's.
 func (s *Session) BulkFrame() int {
 	if s.sch == nil {
 		return 0
 	}
-	return int(s.sch.bulk.Load())
+	return int(s.schedOf(true).bulk.Load())
+}
+
+// BulkFrameOn is BulkFrame for a frame on a pair's BULK (bulk) or QUIET
+// connection.
+func (s *Session) BulkFrameOn(bulk bool) int {
+	if s.sch == nil {
+		return 0
+	}
+	return int(s.schedOf(bulk).bulk.Load())
 }
 
 // HasSched says whether the session runs a frame scheduler (Config.Sched).

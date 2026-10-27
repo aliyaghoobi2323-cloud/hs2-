@@ -79,6 +79,34 @@ type Stream struct {
 	// (SetFlowCtx)
 	txBytes atomic.Uint64
 	fctx    atomic.Value
+
+	// the stream's bulk frame still to be written (Config.EarlyDone), and
+	// how long its writer has had data to send (WriteBusy)
+	pendMu sync.Mutex
+	pend   *pendFrame
+	wrBusy atomic.Int64
+	wrIn   atomic.Int64
+
+	// a pair session (pair.go). Sending: where its data goes (pathQuiet,
+	// pathMoved, pathSplit), its owner's ask to move it, and the data bytes
+	// queued on QUIET so far
+	path    atomic.Uint32
+	moveReq atomic.Bool
+	qSent   atomic.Uint32
+	// receiving (under bufferLock): the path it switched to (pathQuiet:
+	// not yet), the MOV it waits on, the BULK frames held until then, the
+	// data bytes from QUIET and in all, and a FIN that came ahead of its
+	// data
+	rxPath  uint32
+	movSet  bool
+	movKind byte
+	movOff  uint32
+	held    [][]byte
+	heldN   int
+	rxQuiet uint32
+	rxTot   uint32
+	finSet  bool
+	finOff  uint32
 }
 
 // newStream initiates a Stream struct
@@ -806,7 +834,13 @@ func (s *Stream) Close() error {
 	})
 
 	if once {
-		_, err = s.sess.writeFrame(newFrame(byte(s.sess.config.Version), cmdFIN, s.id))
+		if s.sess.bconn == nil {
+			// (EarlyDone) its last data frame first: the FIN goes in the
+			// control lane, ahead of what is queued (a pair's FIN says how
+			// much data comes before it instead)
+			s.waitPend(time.After(openCloseTimeout))
+		}
+		_, err = s.sess.writeFrame(s.sess.finFrame(s.id, atomic.LoadUint32(&s.numWritten)))
 		s.sess.streamClosed(s.id)
 		return err
 	} else {
@@ -911,16 +945,22 @@ func (s *Stream) RemoteAddr() net.Addr {
 func (s *Stream) pushBytes(buf []byte) (written int, err error) {
 	s.markAnswered()
 	s.bufferLock.Lock()
-	s.buffers = append(s.buffers, buf)
-	s.heads = append(s.heads, buf)
-	s.unread += len(buf)
-	s.turned()
+	s.pushLocked(buf)
 	s.bufferLock.Unlock()
 	return
 }
 
+// pushLocked is pushBytes under bufferLock.
+func (s *Stream) pushLocked(buf []byte) {
+	s.buffers = append(s.buffers, buf)
+	s.heads = append(s.heads, buf)
+	s.unread += len(buf)
+	s.turned()
+}
+
 // recycleTokens transform remaining bytes to tokens(will truncate buffer),
-// and lets go of the stream's claim on the WindowPool
+// and lets go of the stream's claim on the WindowPool (a pair's held frames,
+// never counted in the bucket, are dropped)
 func (s *Stream) recycleTokens() (n int) {
 	s.bufferLock.Lock()
 	for k := range s.buffers {
@@ -930,6 +970,10 @@ func (s *Stream) recycleTokens() (n int) {
 	s.buffers = nil
 	s.heads = nil
 	s.unread = 0
+	for _, b := range s.held {
+		defaultAllocator.Put(b)
+	}
+	s.held, s.heldN = nil, 0
 	s.dropClaim()
 	s.bufferLock.Unlock()
 	return
