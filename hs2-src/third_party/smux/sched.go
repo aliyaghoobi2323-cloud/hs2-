@@ -76,6 +76,10 @@ const (
 	schedRateWin = 10
 	// schedLatKeep: the latency lane's waits kept for SchedStats.
 	schedLatKeep = 1024
+	// schedFlushWait: after a bulk frame, a conn that holds back a tail
+	// (flusher) is flushed only once nothing more came for this long; after
+	// any other frame at once.
+	schedFlushWait = time.Millisecond
 )
 
 // flusher is a conn that may hold back a short tail of what it was given
@@ -428,9 +432,35 @@ func (s *Session) sendLoopSched() {
 		buf = make([]byte, (1<<16)+headerSize)
 	}
 	fl, _ := s.conn.(flusher)
+	var hold *time.Timer
+	held := false // the conn holds a tail of a bulk frame (fl)
 	for {
 		sf := sc.take()
 		if sf == nil {
+			if held {
+				// a bulk stream queues its next frame as soon as its last
+				// is written: the tail waits schedFlushWait for it before
+				// it goes out padded (a link of one download flushed, and
+				// padded, every frame)
+				if hold == nil {
+					hold = time.NewTimer(schedFlushWait)
+				} else {
+					hold.Reset(schedFlushWait)
+				}
+				select {
+				case <-sc.wake:
+					if !hold.Stop() {
+						<-hold.C
+					}
+					continue
+				case <-hold.C:
+				case <-s.die:
+					return
+				case <-s.chSocketWriteError:
+					return
+				}
+			}
+			held = false
 			if fl != nil {
 				if err := fl.Flush(); err != nil {
 					s.notifyWriteError(err)
@@ -467,6 +497,7 @@ func (s *Session) sendLoopSched() {
 		if n > 0 {
 			sc.wrote.Add(uint64(n))
 		}
+		held = fl != nil && sf.lane == LaneBulk
 		n -= headerSize
 		if n < 0 {
 			n = 0
