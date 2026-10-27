@@ -39,9 +39,11 @@ import (
 // own cap off: the pacing net's alone, on the exit only, as before.
 var TuneSendCap = 1
 
-// α (round 2, decision T18), in place of C4-lite's own cap on a socket that
-// carries bulk (a pair's BULK, a link of one connection; QUIET keeps
-// C4-lite): a rate cap from the socket's delivery rate and its own queue
+// α (round 2, decision T18), in place of C4-lite's own cap on a pair's BULK
+// socket, at both ends (QUIET keeps C4-lite; so does a link of one
+// connection, today's behaviour, whose other end may be an older hs2 whose
+// bulk keeps BBR's standing queue, 85 to 175 ms on a FIFO, in the round
+// trips this end reads): a rate cap from the socket's delivery rate and its own queue
 // delay, held at CoDel's target (alphaTarget). The round 2 diagnosis
 // measured why: BBRv1's standing queue (85 to 175 ms on a deep FIFO) and, on
 // fq_codel, the drops CoDel makes of it (2 to 12% resent), which hold every
@@ -50,25 +52,33 @@ var TuneSendCap = 1
 // queue at 5 and 25 Mbit/s. So, each reading (100 ms):
 //
 //   - its own queue is srtt − min_rtt less the least of that over the last
-//     alphaBaseWin (the base): a round trip on a link that carries bulk both
-//     ways also holds what the other end's bulk keeps queued, which the ACKs
-//     wait behind and this end cannot drain; taken as its own, it starved
-//     this end on the rig (the download at 3.8 of 25 Mbit/s beside the
-//     upload). BBR's PROBE_RTT, each 10 s, drains its own;
-//   - past the target (at least alphaPkts packets' time at the cap: one full
-//     packet is 12 ms at 1 Mbit/s), once a round trip at most (a cut shows
-//     in srtt only a round trip on): the cap comes down from the lesser of
-//     itself and the delivery rate, less the headroom (what else this end
-//     sends over the path: the pair's QUIET bytes and the ACKs of what the
-//     socket receives, alphaAckShare of it; more of a slow path), by the
-//     share of a round trip the excess is, at most alphaCutMax: the queue
-//     drains in about a round trip;
-//   - under half the target it grows by alphaGrow, under the target by
-//     alphaGrowNear (a path that frees up is found within a second or two);
+//     alphaBaseWin (the base), the base at most alphaBaseK targets: a round
+//     trip on a link that carries bulk both ways also holds what the other
+//     end's bulk keeps queued, which the ACKs wait behind and this end
+//     cannot drain. The other end's α keeps that near its target; a larger
+//     queue, BBR's start-up one, is this end's to drain;
+//   - its own queue past the target (at least alphaPkts packets' time at
+//     the cap: one full packet is 12 ms at 1 Mbit/s) at alphaStandN readings
+//     in a row (a standing queue: the other end's bursts and its start-up
+//     do not stand), once a round trip at most (a cut shows in srtt only a
+//     round trip on): the cap comes down from the lesser of itself and the
+//     delivery rate, less the headroom (what else this end sends over the
+//     path: the pair's QUIET bytes and the ACKs of what the socket
+//     receives, alphaAckShare of it; at most half of it), by the share of a
+//     round trip the standing excess is, at most alphaCutMax, and never
+//     under alphaKeep of the largest delivery rate of the base's span;
+//   - past the target but not standing it holds; under half the target it
+//     grows by alphaGrow, under the target by alphaGrowNear;
 //   - never past alphaCeil times the largest delivery rate of 2 s, never
 //     under alphaFloor; set when it moved by alphaMove; lifted, and started
 //     again from the delivery rate, when the socket goes idle (C4-lite's
 //     rule).
+//
+// The first build cut at any reading past the target, the headroom off its
+// ceiling: on the rig (s5, 25 Mbit/s, fq_codel) the download fell to 4 to 7
+// of 25 Mbit/s beside the upload, each cut by the other end's queue and the
+// ceiling holding it down; a fluid model of the two ends had one direction
+// at 0.01 to 0.13 of the path (TestAlphaDuplexNoStarvation).
 //
 // TuneAlpha 0 (HS2_TUNE_ALPHA=0): C4-lite's cap there too.
 var TuneAlpha = 1
@@ -77,8 +87,8 @@ const (
 	alphaTarget   = 5 * time.Millisecond
 	alphaPkts     = 2
 	alphaPktBytes = 1514
-	alphaGrow     = 0.04
-	alphaGrowNear = 0.02
+	alphaGrow     = 0.03
+	alphaGrowNear = 0.01
 	alphaCutMax   = 0.5
 	alphaFloor    = 32 << 10 // bytes/s (256 kbit/s)
 	alphaCeil     = 1.25
@@ -88,6 +98,15 @@ const (
 	// span (more than BBR's 10 s between PROBE_RTTs), alphaBaseN readings
 	alphaBaseWin = 12 * time.Second
 	alphaBaseN   = 128
+	alphaBaseK   = 3
+	// alphaStandN: its own queue past the target at this many readings in
+	// a row (500 ms) is a standing one, a cause to cut; the other end's
+	// start-up queue lasts less (its α takes it down)
+	alphaStandN = 3
+	// alphaKeep: a cut never takes the cap under this share of the largest
+	// delivery rate of the base's span (a queue it misread as its own costs
+	// it half its rate at most, which it finds back within two seconds)
+	alphaKeep = 0.5
 )
 
 // alphaTargetAt is α's queue target for a cap of r bytes/s: alphaTarget, or
@@ -193,11 +212,15 @@ type sendCap struct {
 	aQn    int
 	aBase  time.Duration
 	aCutAt time.Duration
+	// its own queue at the latest alphaStandN readings (ring)
+	aOwn [alphaStandN]time.Duration
+	aOi  int
 }
 
-// alphaQ is one queue reading of α's: srtt − min_rtt at at.
+// alphaQ is one reading of α's: srtt − min_rtt and the delivery rate at at.
 type alphaQ struct {
 	at, q time.Duration
+	dlv   float64
 }
 
 // Update takes a reading and says the cap in force (0: none), whether to
@@ -255,7 +278,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 	case c.on && idle:
 		c.on = false
 		c.lifts++
-		c.ar, c.aQn, c.aCutAt = 0, 0, 0
+		c.ar, c.aQn, c.aCutAt, c.aOi = 0, 0, 0, 0
 	case !c.on && !idle && fresh && !s.AppLimited && s.Delivery > 0:
 		c.on = true
 	}
@@ -282,11 +305,17 @@ func (c *sendCap) alphaOwn(s capSample) uint64 {
 		c.ar = mx
 	}
 	if s.SRTT > 0 && s.MinRTT > 0 && s.SRTT >= s.MinRTT {
-		q := c.ownQueue(s.Now, s.SRTT-s.MinRTT)
 		tgt := alphaTargetAt(c.ar)
+		q, keep := c.ownQueue(s.Now, s.SRTT-s.MinRTT, alphaBaseK*tgt, s.Delivery)
 		c.aQ, c.aTgt = q, tgt
+		c.aOwn[c.aOi%alphaStandN] = q
+		c.aOi++
+		stand := q // the least of its own queue over the latest readings
+		for i := range min(c.aOi, alphaStandN) {
+			stand = min(stand, c.aOwn[i])
+		}
 		switch {
-		case q > tgt:
+		case c.aOi >= alphaStandN && stand > tgt:
 			if c.aCutAt > 0 && s.Now-c.aCutAt < s.SRTT {
 				break // the cut before has not shown yet
 			}
@@ -294,9 +323,12 @@ func (c *sendCap) alphaOwn(s capSample) uint64 {
 			if !s.AppLimited && s.Delivery > 0 && s.Delivery < base {
 				base = s.Delivery
 			}
-			base = math.Max(base-head, alphaFloor)
-			c.ar = base * (1 - math.Min(float64(q-tgt)/float64(s.SRTT), alphaCutMax))
+			base = math.Max(math.Max(base-head, base/2), alphaFloor)
+			c.ar = math.Max(base*(1-math.Min(float64(stand-tgt)/float64(s.SRTT), alphaCutMax)), alphaKeep*keep)
 			c.aCutAt = s.Now
+		case q > tgt:
+			// over the target, not standing: the other end's burst, or
+			// its own, which the next readings tell
 		case q <= tgt/2:
 			c.ar *= 1 + alphaGrow
 		default:
@@ -310,24 +342,26 @@ func (c *sendCap) alphaOwn(s capSample) uint64 {
 	return uint64(c.ar)
 }
 
-// ownQueue keeps the queue reading q (srtt − min_rtt at now) and returns
-// what of it is this end's: q less the least of the readings of the last
-// alphaBaseWin (the base).
-func (c *sendCap) ownQueue(now, q time.Duration) time.Duration {
+// ownQueue keeps the queue reading q (srtt − min_rtt at now, with the
+// delivery rate dlv) and returns what of it is this end's: q less the least
+// of the readings of the last alphaBaseWin (the base), the base at most
+// baseMax; and the largest delivery rate of that span.
+func (c *sendCap) ownQueue(now, q, baseMax time.Duration, dlv float64) (time.Duration, float64) {
 	for c.aQn > 0 && now-c.aQs[c.aQh].at > alphaBaseWin {
 		c.aQh, c.aQn = (c.aQh+1)%alphaBaseN, c.aQn-1
 	}
 	if c.aQn == alphaBaseN {
 		c.aQh, c.aQn = (c.aQh+1)%alphaBaseN, c.aQn-1
 	}
-	c.aQs[(c.aQh+c.aQn)%alphaBaseN] = alphaQ{now, q}
+	c.aQs[(c.aQh+c.aQn)%alphaBaseN] = alphaQ{now, q, dlv}
 	c.aQn++
-	base := q
+	base, mx := min(q, baseMax), dlv
 	for i := range c.aQn {
-		base = min(base, c.aQs[(c.aQh+i)%alphaBaseN].q)
+		r := c.aQs[(c.aQh+i)%alphaBaseN]
+		base, mx = min(base, r.q), max(mx, r.dlv)
 	}
 	c.aBase = base
-	return q - base
+	return q - base, mx
 }
 
 // maxDlv is the largest delivery rate of the last capSpan.

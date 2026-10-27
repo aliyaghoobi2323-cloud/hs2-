@@ -285,7 +285,7 @@ func newLinkSock(conn net.Conn, sched, guardOn bool, segs int, sampler *obfs.Len
 // link meter counts both; QUIET's write waits go to a meter of its own,
 // so the link's (the health checks', the window core's) are BULK's, as is
 // the socket the window core and the pacing net read. A link of one
-// connection carries bulk on it: the judge's gate and α there.
+// connection is today's: the judge's gate and C4-lite.
 func newSessionPairCaps(conn, bulk net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter, caps uint32) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
 	pair := bulk != nil
@@ -378,7 +378,7 @@ func newSessionPairCaps(conn, bulk net.Conn, server bool, sampler *obfs.LengthSa
 			blockedQ = qm.blockedNs
 		}
 	}
-	scl := newLinkCap(q, capOn, alpha && !pair, blockedQ)
+	scl := newLinkCap(q, capOn, false, blockedQ) // C4-lite: QUIET, or one connection as today
 	var sclB *sendCapLink
 	if pair {
 		sclB = newLinkCap(b, capOn, alpha, blockedB)

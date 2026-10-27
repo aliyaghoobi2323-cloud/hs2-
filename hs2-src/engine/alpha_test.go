@@ -35,11 +35,13 @@ func (k *alphaSock) read(c *sendCap, dlv float64, srtt, minRTT time.Duration, si
 
 func near(a, b float64) bool { return math.Abs(a-b) <= 1e-6*math.Max(math.Abs(a), math.Abs(b))+1 }
 
-// Its own queue past the target cuts the cap from the lesser of itself and
-// the delivery rate, less the headroom, by the excess's share of the round
-// trip (at most half), once a round trip at most; under half the target it
-// grows 4% a reading, under the target 2%. Its own: srtt − min_rtt less the
-// least of that over the last 12 s, the base.
+// Its own queue past the target for 300 ms (three readings: a standing
+// one) cuts the cap from the lesser of itself and the delivery rate, less
+// the headroom, by the excess's share of the round trip (at most half, and
+// never under half the largest delivery of the base's span), once a round
+// trip at most; a reading past the target that does not stand holds it;
+// under half the target it grows 3% a reading, under the target 1%. Its
+// own: srtt − min_rtt less the least of that over the last 12 s, the base.
 func TestAlphaCutAndGrow(t *testing.T) {
 	c := sendCap{alpha: true}
 	var k alphaSock
@@ -52,32 +54,48 @@ func TestAlphaCutAndGrow(t *testing.T) {
 		t.Fatal("on at the first reading")
 	}
 	k.read(&c, dlv, mrtt+time.Millisecond, mrtt, 0, 0)
-	if !near(c.ar, dlv*1.04) {
-		t.Fatalf("on with no queue: %.0f, want %.0f", c.ar, dlv*1.04)
+	if !near(c.ar, dlv*1.03) {
+		t.Fatalf("on with no queue: %.0f, want %.0f", c.ar, dlv*1.03)
 	}
-	// 40 ms of queue at 112 ms srtt, over the base of 1 ms: down by
-	// (39-5)/112 from the delivery rate (the lesser) less QUIET's 1 MB/s
+	// 40 ms of queue, two readings: not standing yet, held
+	prev := c.ar
+	k.read(&c, dlv, mrtt+40*time.Millisecond, mrtt, 0, 0)
+	k.read(&c, dlv, mrtt+40*time.Millisecond, mrtt, 0, 0)
+	if c.ar != prev {
+		t.Fatalf("a queue of 200 ms moved the cap: %.0f, was %.0f", c.ar, prev)
+	}
+	// the third: standing, 39 ms over the base of 1 ms at 112 ms srtt:
+	// down by (39-5)/112 from the delivery rate (the lesser) less QUIET's
+	// 1 MB/s
 	k.read(&c, dlv, mrtt+40*time.Millisecond, mrtt, 1e6, 0)
 	if want := (dlv - 1e6) * (1 - 34.0/112); !near(c.ar, want) {
-		t.Fatalf("40 ms of queue: %.0f, want %.0f", c.ar, want)
+		t.Fatalf("40 ms standing: %.0f, want %.0f", c.ar, want)
 	}
 	// within the round trip after it, no second cut
-	prev := c.ar
+	prev = c.ar
 	k.read(&c, dlv, mrtt+200*time.Millisecond, mrtt, 0, 0)
 	if c.ar != prev {
 		t.Fatalf("a second cut within a round trip: %.0f, was %.0f", c.ar, prev)
 	}
-	// a round trip on, a queue past a round trip cuts by half at most
+	// a round trip on: cut by what has stood (the least of the last three
+	// readings: 39 ms) at 272 ms srtt
 	k.now += 200 * time.Millisecond
 	k.read(&c, dlv, mrtt+200*time.Millisecond, mrtt, 0, 0)
-	if !near(c.ar, prev*alphaCutMax) {
-		t.Fatalf("200 ms of queue: %.0f, want %.0f", c.ar, prev*alphaCutMax)
+	if want := prev * (1 - 34.0/272); !near(c.ar, want) {
+		t.Fatalf("200 ms of queue, 39 standing: %.0f, want %.0f", c.ar, want)
+	}
+	// 199 ms standing: by half at most, and never under half the largest
+	// delivery of the span
+	k.now += 300 * time.Millisecond
+	k.read(&c, dlv, mrtt+300*time.Millisecond, mrtt, 0, 0)
+	if !near(c.ar, alphaKeep*dlv) {
+		t.Fatalf("a third cut: %.0f, want no less than %.0f", c.ar, alphaKeep*dlv)
 	}
 	// 4 ms over the base of 1: under the target, over half of it
 	prev = c.ar
 	k.read(&c, dlv, mrtt+4*time.Millisecond, mrtt, 0, 0)
-	if !near(c.ar, prev*1.02) {
-		t.Fatalf("3 ms of own queue: %.0f, want %.0f", c.ar, prev*1.02)
+	if !near(c.ar, prev*1.01) {
+		t.Fatalf("3 ms of own queue: %.0f, want %.0f", c.ar, prev*1.01)
 	}
 	// the status line
 	l := &sendCapLink{core: c}
@@ -101,10 +119,18 @@ func TestAlphaStandingQueueIsBase(t *testing.T) {
 	}
 	// the base is the least of the last 12 s: an old low reading goes
 	for range 130 {
-		k.read(&c, dlv, 90*time.Millisecond, 72*time.Millisecond, 0, 0)
+		k.read(&c, dlv, 84*time.Millisecond, 72*time.Millisecond, 0, 0)
 	}
-	if c.aBase != 18*time.Millisecond {
-		t.Fatalf("base %v after 13 s at 18 ms", c.aBase)
+	if c.aBase != 12*time.Millisecond {
+		t.Fatalf("base %v after 13 s at 12 ms", c.aBase)
+	}
+	// and it is three targets at most: a larger standing queue (BBR's
+	// start-up one) is this end's to drain
+	for range 130 {
+		k.read(&c, dlv, 102*time.Millisecond, 72*time.Millisecond, 0, 0)
+	}
+	if c.aBase != 3*alphaTarget || c.aQ != 15*time.Millisecond {
+		t.Fatalf("base %v, own queue %v after 13 s at 30 ms", c.aBase, c.aQ)
 	}
 }
 
@@ -146,9 +172,15 @@ func TestAlphaCeilAndFloor(t *testing.T) {
 	if want := alphaCeil * dlv; !near(c.ar, want) || !near(c.aHead, head) {
 		t.Fatalf("held at %.0f (headroom %.0f), want the ceiling %.0f (%.0f)", c.ar, c.aHead, want, head)
 	}
-	k.read(&c, 20e3, 572*time.Millisecond, 72*time.Millisecond, 0, 0)
-	if c.ar != alphaFloor {
-		t.Fatalf("own queue of 500 ms at 20 KB/s: %.0f, want the floor %d", c.ar, alphaFloor)
+	c2 := sendCap{alpha: true}
+	var k2 alphaSock
+	k2.read(&c2, 20e3, 72*time.Millisecond, 72*time.Millisecond, 0, 0)
+	k2.read(&c2, 20e3, 72*time.Millisecond, 72*time.Millisecond, 0, 0)
+	for range 3 {
+		k2.read(&c2, 20e3, 572*time.Millisecond, 72*time.Millisecond, 0, 0)
+	}
+	if c2.ar != alphaFloor {
+		t.Fatalf("own queue of 500 ms standing at 20 KB/s: %.0f, want the floor %d", c2.ar, alphaFloor)
 	}
 }
 
@@ -185,8 +217,8 @@ func TestAlphaRunner(t *testing.T) {
 	plain := newSendCapLink(&fakeCapSys{ok: true, st: sys.st}, nil)
 	plain.core.linked = true
 	written := uint64(0)
-	for i := 1; i <= 4; i++ {
-		// no queue at first, then 40 ms of its own
+	for i := 1; i <= 6; i++ {
+		// no queue at first, then 40 ms of its own, standing
 		if i == 4 {
 			sys.st.rtt = 112000
 		}
@@ -307,6 +339,95 @@ func TestAlphaFluidHoldsQueue(t *testing.T) {
 			}
 			if share < 0.9*(1-side/c) {
 				t.Fatalf("%.0f Mbit/s, %v: the socket had %.3f of the path, want >= 0.9 of what QUIET leaves", mb, bias, share)
+			}
+		}
+	}
+}
+
+// alphaDuplex runs α at both ends of one BULK connection over a fluid model
+// of a path of c bytes/s each way, round trip rtt: each end's bulk queues at
+// its direction's bottleneck, and each end's round trips hold the other
+// direction's queue too (its ACKs ride the other end's bulk, the same
+// flow). Each end offers twice the path (BBR uncapped); up starts upAt
+// before down. It returns each direction's share of the path over the last
+// two thirds, and its queue's median.
+func alphaDuplex(c float64, rtt time.Duration, secs float64, upAt time.Duration) (down, up float64, qd, qu time.Duration) {
+	type end struct {
+		cp                 sendCap
+		cap, queue         float64
+		srtt               float64
+		served, tail       float64
+		acked, wrote, rcvd uint64
+		segs               uint32
+		qs                 []float64
+		start              time.Duration
+	}
+	e := [2]*end{{start: upAt}, {}} // 0: down, 1: up
+	for _, x := range e {
+		x.cp = sendCap{alpha: true, linked: true}
+		x.srtt = rtt.Seconds()
+	}
+	const dt = time.Millisecond
+	steps := int(secs * 1000)
+	for i := 1; i <= steps; i++ {
+		now := time.Duration(i) * dt
+		for k, x := range e {
+			send := 0.0
+			if now >= x.start {
+				send = 2 * c
+				if x.cap > 0 {
+					send = x.cap
+				}
+			}
+			in := send * dt.Seconds()
+			out := math.Min(x.queue+in, c*dt.Seconds())
+			x.queue += in - out
+			x.served += out
+			x.acked += uint64(out)
+			x.wrote += uint64(in)
+			x.segs += uint32(out/1448) + 1
+			e[1-k].rcvd += uint64(out)
+			if i > steps/3 {
+				x.tail += out
+				x.qs = append(x.qs, x.queue/c)
+			}
+		}
+		for k, x := range e {
+			target := rtt.Seconds() + x.queue/c + e[1-k].queue/c
+			x.srtt += (target - x.srtt) * math.Min(1, dt.Seconds()/(rtt.Seconds()/4))
+			if i%100 == 0 && now >= x.start {
+				r, apply, lift := x.cp.Update(capSample{Now: now, Delivery: x.served / 0.1, Acked: x.acked, Written: x.wrote, Segs: x.segs,
+					SRTT: time.Duration(x.srtt * float64(time.Second)), MinRTT: rtt, Rcvd: x.rcvd})
+				switch {
+				case apply:
+					x.cap = float64(r)
+				case lift:
+					x.cap = 0
+				}
+				x.served = 0
+			}
+		}
+	}
+	med := func(v []float64) time.Duration {
+		sort.Float64s(v)
+		return time.Duration(v[len(v)/2] * float64(time.Second))
+	}
+	tail := c * secs * 2 / 3
+	return e[0].tail / tail, e[1].tail / tail, med(e[0].qs), med(e[1].qs)
+}
+
+// α at both ends of one BULK connection, each end's round trips holding
+// the other direction's queue too (its ACKs wait behind it): neither
+// direction starves, whichever starts first (the first build of α left the
+// download at 3.8 of 25 Mbit/s beside the upload on the rig; this model
+// had it at 0.01 to 0.13 of the path).
+func TestAlphaDuplexNoStarvation(t *testing.T) {
+	for _, mb := range []float64{5, 25, 100} {
+		for _, at := range []time.Duration{0, 500 * time.Millisecond, 2 * time.Second} {
+			d, u, qd, qu := alphaDuplex(mb*mbit, 72*time.Millisecond, 30, at)
+			t.Logf("%5.0f Mbit/s, up %v ahead: down %.3f up %.3f of the path; queues %v / %v", mb, at, d, u, qd.Round(100*time.Microsecond), qu.Round(100*time.Microsecond))
+			if d < 0.9 || u < 0.9 {
+				t.Fatalf("%.0f Mbit/s, up %v ahead: down %.3f up %.3f of the path, want >= 0.9 each", mb, at, d, u)
 			}
 		}
 	}
