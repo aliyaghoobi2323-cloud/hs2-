@@ -181,10 +181,24 @@ run_steps() {
     *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
                PIDS+=($!); sleep 1.5 ;;
   esac
+  # TRACE_SS=1 (the judge of round 2): ss -ti of the link sockets of both
+  # ends every 0.5 s through the run (pacing and max_pacing_rate, delivery,
+  # srtt, min_rtt), each sample after a "T <epoch>" line: the trace of α's cap
+  if [ "${TRACE_SS:-0}" = 1 ]; then
+    ( while :; do
+        echo "T $(date +%s.%N)" >> "$r/sstrace-exit.txt"
+        ip netns exec $X ss -tinH state established '( dport = :2096 )' >> "$r/sstrace-exit.txt" 2>/dev/null
+        echo "T $(date +%s.%N)" >> "$r/sstrace-edge.txt"
+        ip netns exec $E ss -tinH state established '( sport = :2096 )' >> "$r/sstrace-edge.txt" 2>/dev/null
+        sleep 0.5
+      done ) &
+    PIDS+=($!)
+  fi
   # measurement: the client from t=0 to total; snapshots at WARM and near the end
   ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') "$RL" client -spec "$r/spec.json" > "$r/client.json" 2> "$r/client.err" &
   pc=$!; PIDS+=($pc)
   c0=$(date +%s.%N)
+  echo "$c0" > "$r/client-t0.txt"
   sleep "$WARM"
   sssnap start "$r"
   LC_ALL=C pidstat -u -p "$pe,$px" 1 $(awk -v t="$total" -v w="$WARM" 'BEGIN{printf "%d", t - w - 1}') > "$r/pidstat.txt" 2>&1 &
