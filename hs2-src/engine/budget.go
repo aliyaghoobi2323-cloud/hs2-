@@ -37,8 +37,10 @@ import (
 //	       there waits in), and on a link that carries data that way too the
 //	       link's own one-way delay of it (owd.go's own beat), or, without
 //	       one, the guess min(S/2, T);
-//	qFwd = max(S − qRev, the link's own and the QUIET link's one-way delay of
-//	       this direction);
+//	qFwd = max(S − qRev, the QUIET link's one-way delay of this direction);
+//	       with the link's own delays, max(the link's own one-way delay of
+//	       this direction, the QUIET link's) — both least of 200 ms, as
+//	       CoDel reads a sojourn;
 //	base = min_rtt + qRev: the time a byte of a link at its target spends
 //	       in flight less its own queue.
 //
@@ -261,7 +263,13 @@ func (c *budgetCore) step(in budgetIn) float64 {
 	}
 	qFwd := max(S-qRev, 0)
 	if own {
-		qFwd = max(qFwd, in.LOut)
+		// measured both ways: S (an average of the round trip) less a least
+		// of 200 ms of the way back reads part of the way back's swings as
+		// this direction's (the rig's M2: a download beside an upload cut to
+		// half by them, and grew back from a queue it never had); the one-way
+		// least is CoDel's own reading too (it drops on a sojourn above its
+		// target for 100 ms, not on its mean)
+		qFwd = in.LOut
 	}
 	if in.QOutOK {
 		qFwd = max(qFwd, in.QOut)
