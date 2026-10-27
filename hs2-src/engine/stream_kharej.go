@@ -218,8 +218,11 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			break
 		}
 		if TuneOWDQuiet != 0 && car != nil {
-			if q, _ := classOf(car.Caps()); q {
+			switch q, b := classOf(car.Caps()); {
+			case q:
 				quietOWD.Store(&mtr.owd) // version 5: the BULK links read it
+			case b && budgetLinkOWD():
+				mtr.owd.own = true // γ2: the BULK link's own (budget.go)
 			}
 		}
 		owdLoop(ctx, st, &mtr.owd) // α's one-way delays (owd.go)

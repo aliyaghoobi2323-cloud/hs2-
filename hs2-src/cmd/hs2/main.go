@@ -345,8 +345,11 @@ func applyTuning() {
 	num("HS2_TUNE_BUDGET", &engine.TuneBudget)
 	num("HS2_TUNE_BUDGET_US", &engine.BudgetTargetUs)
 	num("HS2_TUNE_BUDGET_TWOWAY", &engine.BudgetTwoWay)
+	num("HS2_TUNE_BUDGET_LINKOWD", &engine.BudgetLinkOWD) // a two-way BULK link's own one-way delays (0: the guess)
+	num("HS2_TUNE_BUDGET_PACE", &engine.BudgetPaceK)      // its pacing cap, % of its rate at the target (0: C4-lite's)
 	num("HS2_TUNE_QUIET_N", &engine.QuietN)
 	num("HS2_TUNE_QUIET_BATCH", &engine.QuietBatch)
+	num("HS2_TUNE_QUIET_LAZY", &engine.QuietLazy) // a QUIET record waits for the socket's unsent bytes (0: none)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)

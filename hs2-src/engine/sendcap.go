@@ -108,6 +108,7 @@ type sendCap struct {
 	on    bool   // its own cap: from the first sample not app-limited to idleness
 	own   uint64 // ... bytes/s
 	pn    uint64 // the pacing net's (0: none)
+	limit uint64 // the in-flight budget's rate at its target (budget.go; 0: none), while on
 	set   uint64 // the cap in force (0: none)
 	quiet bool   // the latest reading found the socket quiet
 	// full: the delivery rate of the latest sample that was not app-limited
@@ -532,6 +533,9 @@ func (c *sendCap) decide() (rate uint64, apply, lift bool) {
 	want := uint64(0)
 	if c.on {
 		want = c.own
+		if c.limit > 0 && (want == 0 || c.limit < want) {
+			want = c.limit
+		}
 	}
 	if c.pn > 0 && (want == 0 || c.pn < want) {
 		want = c.pn
@@ -650,6 +654,9 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 			l.rx0, l.rxAt = ts.bytesReceived, now
 			src := owdShared(l.owd)
 			src.noteRate(max(l.core.maxDlv(), rx))
+			if l.budget != nil && src != l.owd {
+				l.owd.noteRate(max(l.core.maxDlv(), rx)) // its own beat (γ2)
+			}
 			if l.core.alpha {
 				oq, ook = src.queue()
 			}
@@ -659,7 +666,8 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),
 			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook, OWDwait: owait}))
 		if l.budget != nil {
-			l.budget.step(now, l.core.on, ts, l.core.maxDlv())
+			l.core.limit = l.budget.step(now, l.core.on, ts, l.core.maxDlv(), l.owd)
+			l.apply(l.core.decide())
 		}
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")

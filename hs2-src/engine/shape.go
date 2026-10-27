@@ -56,6 +56,18 @@ type shapedConn struct {
 	lineRecs, lineData uint64 // the tallies at the status line before (the runner's)
 	linePad            uint64
 	lineAt             time.Duration
+	// lazy (a QUIET link, QuietLazy; γ2's batching): Flush holds the tail
+	// while the socket has bytes unsent (lazy says how many), which it could
+	// not pass anyway, and a timer flushes it once they are sent (each
+	// shapeLazyCheck, shapeLazyMax at most): what comes meanwhile rides the
+	// same record, at no cost of time. lazyAt: when the tail was first held
+	// (zero: not held); lazyErr: a held tail's write error, for the next
+	// Write or Flush; holds: tails held (the status line's)
+	lazy    func() (int, error)
+	lazyT   *time.Timer
+	lazyAt  time.Time
+	lazyErr error
+	holds   atomic.Uint64
 
 	rmu  sync.Mutex
 	rbuf []byte // reused frame-read scratch (read side)
@@ -68,6 +80,10 @@ const (
 	// shapeMaxFrame bounds a single decoded frame, a defensive guard against a
 	// corrupt/hostile length. Comfortably above the sampler's largest size.
 	shapeMaxFrame = 32 << 10
+	// shapeLazyCheck, shapeLazyMax: a held tail looks at the socket this
+	// often, and goes this long after it was first held whatever it finds
+	shapeLazyCheck = 250 * time.Microsecond
+	shapeLazyMax   = 10 * time.Millisecond
 )
 
 func newShapedConn(c net.Conn, s *obfs.LengthSampler) *shapedConn {
@@ -148,21 +164,74 @@ func (c *shapedConn) writeCarry(p []byte) (int, error) {
 			return n - len(p), err
 		}
 		p = p[need:]
-		c.tail, c.tgt = c.tail[:0], 0
+		c.tail, c.tgt, c.lazyAt = c.tail[:0], 0, time.Time{}
 	}
 	return n, nil
 }
 
-// Flush writes the held tail (carry mode), padded to its record's target.
+// Flush writes the held tail (carry mode), padded to its record's target;
+// lazy, it may hold it while the socket has bytes unsent.
 func (c *shapedConn) Flush() error {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	if err := c.lazyErr; err != nil {
+		c.lazyErr = nil
+		return err
+	}
 	if len(c.tail) == 0 {
 		return nil
 	}
+	if c.lazy != nil && c.holdLocked() {
+		return nil
+	}
+	return c.flushLocked()
+}
+
+// flushLocked writes the tail as a record (under wmu).
+func (c *shapedConn) flushLocked() error {
 	err := c.record(c.tail, c.tgt)
-	c.tail, c.tgt = c.tail[:0], 0
+	c.tail, c.tgt, c.lazyAt = c.tail[:0], 0, time.Time{}
 	return err
+}
+
+// holdLocked says whether the tail waits for the socket's unsent bytes,
+// the timer armed (under wmu): none unsent (or no reading), or held
+// shapeLazyMax already, it goes now.
+func (c *shapedConn) holdLocked() bool {
+	ns, err := c.lazy()
+	if err != nil || ns <= 0 {
+		return false
+	}
+	now := time.Now()
+	switch {
+	case c.lazyAt.IsZero():
+		c.lazyAt = now
+		c.holds.Add(1)
+	case now.Sub(c.lazyAt) >= shapeLazyMax:
+		return false
+	}
+	if c.lazyT == nil {
+		c.lazyT = time.AfterFunc(shapeLazyCheck, c.lazyFire)
+	} else {
+		c.lazyT.Reset(shapeLazyCheck)
+	}
+	return true
+}
+
+// lazyFire is the held tail's timer: still held, it goes once the socket
+// has sent what was ahead of it.
+func (c *shapedConn) lazyFire() {
+	c.wmu.Lock()
+	defer c.wmu.Unlock()
+	if len(c.tail) == 0 || c.lazyAt.IsZero() {
+		return // a write took it into a full record meanwhile
+	}
+	if c.holdLocked() {
+		return
+	}
+	if err := c.flushLocked(); err != nil {
+		c.lazyErr = err
+	}
 }
 
 // record writes d as one record of target bytes (padded up to it).
@@ -213,8 +282,8 @@ func (c *shapedConn) recLine(n int, now time.Duration) string {
 	if dd+dp > 0 {
 		padShare = 100 * float64(dp) / float64(dd+dp)
 	}
-	return fmt.Sprintf("quiet records link %d: %.0f/s, data %.0f B a record, pad %.1f%% (all: %d records, %d B data, %d B pad)",
-		n, rate, per, padShare, r, d, p)
+	return fmt.Sprintf("quiet records link %d: %.0f/s, data %.0f B a record, pad %.1f%% (all: %d records, %d B data, %d B pad, %d tails held)",
+		n, rate, per, padShare, r, d, p, c.holds.Load())
 }
 
 // Read reassembles the original byte stream: it returns buffered decoded data

@@ -13,14 +13,17 @@ import (
 // in flight and unsent, SIOCOUTQ — to a budget B, and the link's writer
 // holds a bulk frame that would take the socket past it (smux
 // Config.BulkGate). Control and latency-lane frames go past a waiting bulk
-// frame (the scheduler's urgent lanes); the frame keeps its place.
+// frame (the scheduler's urgent lanes); the frame keeps its place, and so
+// the scheduler, not the socket, holds what waits (its floors decide).
 //
 // Why a budget and not a rate: a window clocks itself. A sender held at B
 // in flight sends B per round trip, so when a queue grows its rate falls
 // that same round trip, before any controller reads anything; a rate cap
 // keeps pushing at its rate until its next reading (α's 100 ms, then 3 to
 // 10% a step). And a byte that goes out only once one came back never
-// stacks a queue past B less the path's bytes.
+// stacks a queue past B less the path's bytes. The socket's pacing cap is
+// BudgetPaceK of the budget's own rate, so a window goes out spread over its
+// round trip, not as a burst at BBR's rate.
 //
 // B follows the queue this direction makes, each reading of the socket
 // (the cores' runner, coreTick), toward the target T (BudgetTargetUs, 2.5
@@ -31,23 +34,30 @@ import (
 //	       its acks wait in on the way back;
 //	qRev = the queue of the way back: the QUIET link's one-way delay of the
 //	       other direction (owd.go: on a shared FIFO, the queue every flow
-//	       there waits in), and, while the link carries data that way too,
-//	       at least min(S/2, T) (budgetTwoWay);
+//	       there waits in), and on a link that carries data that way too the
+//	       link's own one-way delay of it (owd.go's own beat), or, without
+//	       one, the guess min(S/2, T);
 //	qFwd = max(S − qRev, the QUIET link's one-way delay of this direction);
+//	       with the link's own delays, max(the link's own one-way delay of
+//	       this direction, the QUIET link's) — both least of 200 ms, as
+//	       CoDel reads a sojourn;
 //	base = min_rtt + qRev: the time a byte of a link at its target spends
 //	       in flight less its own queue.
 //
 // At the target a link of delivery rate d holds d × (base + T) in flight.
 // Budget-limited (the gate held a frame since the reading before), B moves
-// by (base + T) / (base + qFwd), FAST's step: up while qFwd is under T, down
-// past it, wholly past 2T, half of the way under it. Its queue so settles
-// at T whatever the rate and the round trip. A step up is that ratio (T /
-// base: 3.4% at a 72 ms round trip), doubled for each reading in a row the
-// queue stayed under T/2 (room on the path), at most budgetGrowMax.
-// Not budget-limited (the sender had less to send, or its own window held
-// it), B comes down to d × (base + T) only when qFwd passed T (BBR's own
-// standing queue, cwnd_gain 2, is no longer the link's), and is held within
-// budgetCapK × the 2 s delivery maximum × (base + T) otherwise.
+// by FAST's step (base + T) / (base + qFwd): half of the way (γ 1/2) up
+// while qFwd is under T and down past it, wholly past 4T. Its queue so
+// settles at T whatever the rate and the round trip. A queue under T/2 two
+// readings in a row or more is room on the path: the step up doubles each
+// reading (T / base: 3.4% at a 72 ms round trip, then 7, 14%), at most
+// budgetGrowMax. Not budget-limited (the sender had less to send, or its
+// own window held it), B comes down to d × (base + T) only when qFwd passed
+// T (BBR's own standing queue, cwnd_gain 2, is no longer the link's), and
+// is held within budgetCapK × the 2 s delivery maximum × (base + T)
+// otherwise. Never under budgetKMin of the most it acked a second over the
+// last 10 s × min_rtt (nor two segments, two bulk frames): a run of noisy
+// or misread readings cannot starve a link.
 //
 // Start: from C4-lite's first sample that is not app-limited (sendcap.go),
 // B is budgetStartGain × d × (base + T) — BBR's start-up doubles in a round
@@ -63,25 +73,31 @@ import (
 //     cap, on its own sparse one-way-delay messages (one each 0.5 s on a link
 //     of 1.5 Mbit/s), at 3% (0.5% near the rate it was cut from) a step up
 //     and 10% down: 17 flows on 64 links fell from 89 to 50 Mbit/s, two
-//     uploads held 65 and 9. Here the queue is the socket's own srtt,
-//     refreshed by every ack and never sparse, and a link under its share
-//     sees no queue of its own on fq_codel (its flow queue drains), so it
-//     grows, doubling its step a reading, until it does: each link's
-//     queue settles at T, and with each flow backlogged at T the bottleneck
-//     is full. No floor below a quarter of the 2 s delivery maximum × the
-//     round trip lets a noisy reading starve a link.
+//     uploads held 65 and 9. Here the queue of a one-way link is the
+//     socket's own srtt, refreshed by every ack and never sparse, and a link
+//     under its share sees no queue of its own on fq_codel (its flow queue
+//     drains), so it grows, doubling its step a reading, until it does:
+//     each link's queue settles at T, and with each flow backlogged at T the
+//     bottleneck is full (TestBudgetManyLinksFQ, 1 to 300 links).
 //   - srtt holds the queue of the way back too: the acks of a download wait
 //     behind the upload's data on the same five-tuple (fq_codel's same flow
 //     queue, or the FIFO), and α on srtt held a 100 Mbit/s download beside a
 //     20 Mbit/s upload at 17. Here the way back's queue is in base (a
 //     budget at d × (min_rtt + qRev + T) keeps the download's rate whatever
 //     the upload's queue), and only what is left of S is this direction's.
-//     On a shared FIFO the QUIET link's one-way delays say which direction
-//     queues; on fq_codel, where they see no BULK queue, a two-way link's
-//     ends both run this budget, so the way back holds about T, and each end
-//     takes min(S/2, T) of S as the other's. A spike of the other direction
-//     past T reads as some of this one's for a reading or two (it cuts a
-//     little and grows back in a few), never as a floor under the rate.
+//     Which direction queues: on a shared FIFO the QUIET link's one-way
+//     delays say; on fq_codel, where they see no BULK queue, the link's own
+//     — each end sends its own messages only while it sends data on the
+//     link, so they ride its data and come only on a two-way link, the one
+//     where srtt cannot tell the two queues apart (γ2's first smoke, M1,
+//     with the guess alone: the upload's start-up queue read as the
+//     download's, and the download fell to 7 Mbit/s of 100). Without them
+//     (an older peer, HS2_TUNE_BUDGET_LINKOWD=0) each end takes min(S/2, T)
+//     of S as the other's; both ends read the same S, so a split of it that
+//     left one direction under its path would stay (TestBudgetTwoWayAsym's
+//     model held a download at 0.966 of its path that way): a two-way link
+//     budget-limited at its target that acks less than budgetRoom of its
+//     most of the last budgetLong seconds grows a FAST step at least.
 
 // TuneBudget 0 (HS2_TUNE_BUDGET=0): BULK links keep α's rate cap (round 2's
 // final candidate); 1, the default: the in-flight budget, and C4-lite's
@@ -99,11 +115,29 @@ var BudgetTargetUs = 2500
 // link's alone).
 var BudgetTwoWay = 1
 
+// BudgetLinkOWD 0 (HS2_TUNE_BUDGET_LINKOWD=0, lab): no one-way delays of a
+// BULK link's own (owd.go's own beat); a two-way link's ends split S by the
+// guess min(S/2, T) alone.
+var BudgetLinkOWD = 1
+
+// budgetLinkOWD says whether BULK links trade one-way delays of their own.
+func budgetLinkOWD() bool { return BudgetLinkOWD != 0 && !BudgetOff() && !OWDOff() }
+
+// BudgetPaceK (HS2_TUNE_BUDGET_PACE, ×100; 0: none): the pacing cap of a
+// budget link is this share of B over base + T, its rate at the target,
+// the lesser of it and C4-lite's. A window let out at the sender's own
+// pacing rate (BBR's, whose bandwidth filter app-limited samples never
+// bring down) arrives at a fq_codel bottleneck as a burst its flow's share
+// drains slowly: on the rig 17 flows on 64 links read 4 ms of queue a
+// window of 12 segments could not make at 2 Mbit/s, and cut and grew in
+// turn each reading (M1).
+var BudgetPaceK = 125
+
 const (
 	budgetStartGain  = 2.0
 	budgetStartGrow  = 1.25
 	budgetGrowMax    = 0.125
-	budgetKMin       = 0.25
+	budgetKMin       = 0.5 // of the 10 s most acked a second (long) × min_rtt, the floor
 	budgetCapK       = 2.0
 	budgetMinSegs    = 2
 	budgetRecent     = 3
@@ -150,6 +184,8 @@ type budgetIn struct {
 	SRTT, MinRTT   time.Duration // the socket's (0: unknown)
 	QOut, QIn      time.Duration // the QUIET link's one-way queues: this end's sending direction, the other
 	QOutOK, QInOK  bool
+	LOut, LIn      time.Duration // the link's own one-way queues (owd.go's own beat), the same two
+	LOutOK, LInOK  bool
 	TxRate, RxRate float64 // bytes/s acknowledged and received since the reading before
 	Blocked        bool    // the gate held a bulk frame since the reading before
 	MSS, Frame     int     // the socket's segment, the link's bulk frame
@@ -170,7 +206,7 @@ type budgetCore struct {
 	// the latest reading's, for the status line
 	q, qRev, s, base time.Duration
 	d                float64
-	two              bool
+	two, own         bool
 	cuts, grows      uint64
 	rooms            uint64 // two-way growth for room of its own
 }
@@ -212,17 +248,33 @@ func (c *budgetCore) step(in budgetIn) float64 {
 	long := c.longMax(in.Now, in.TxRate)
 	qRev := time.Duration(0)
 	two := BudgetTwoWay != 0 && in.RxRate > budgetRevMin && in.RxRate > budgetRevShare*in.TxRate
-	if two {
+	// own: the link's own one-way delays, both ways (a two-way link whose
+	// ends both send: owd.go's own beat), which split S as it is
+	own := in.LOutOK && in.LInOK
+	switch {
+	case own:
+		qRev = in.LIn
+	case two:
 		qRev = min(S/2, T)
 	}
-	c.two = two
+	c.two, c.own = two || own, own
 	if in.QInOK {
 		qRev = max(qRev, in.QIn)
 	}
 	qFwd := max(S-qRev, 0)
+	if own {
+		// measured both ways: S (an average of the round trip) less a least
+		// of 200 ms of the way back reads part of the way back's swings as
+		// this direction's (the rig's M2: a download beside an upload cut to
+		// half by them, and grew back from a queue it never had); the one-way
+		// least is CoDel's own reading too (it drops on a sojourn above its
+		// target for 100 ms, not on its mean)
+		qFwd = in.LOut
+	}
 	if in.QOutOK {
 		qFwd = max(qFwd, in.QOut)
 	}
+	two = two && !own // the guess (min(S/2, T)) and its room rule
 	minRTT := in.MinRTT
 	if minRTT <= 0 {
 		minRTT = in.SRTT
@@ -242,7 +294,7 @@ func (c *budgetCore) step(in budgetIn) float64 {
 		return c.b // nothing to judge by: it holds
 	}
 	floor := math.Max(float64(budgetMinSegs*max(in.MSS, 536)), float64(2*in.Frame))
-	floor = math.Max(floor, budgetKMin*in.DlvMax*minRTT.Seconds())
+	floor = math.Max(floor, budgetKMin*long*minRTT.Seconds())
 	want := d * (base + T).Seconds() // in flight at the target, at this delivery rate
 	switch c.mode {
 	case budgetIdle:
@@ -293,7 +345,7 @@ func (c *budgetCore) step(in budgetIn) float64 {
 		if !in.Blocked {
 			w = math.Min(c.b, want) // B was not what held it: the target at its rate
 		}
-		if qFwd <= 2*T {
+		if qFwd <= 4*T {
 			w = c.b + (w-c.b)/2
 		}
 		if w < c.b {
@@ -304,9 +356,9 @@ func (c *budgetCore) step(in budgetIn) float64 {
 		if qFwd < T/2 {
 			c.noQ++
 		}
-		g := ratio - 1
+		g := (ratio - 1) / 2 // FAST's step, half of the way (γ 1/2)
 		if c.noQ > 1 {
-			g = math.Min(g*float64(int(1)<<min(c.noQ-1, 8)), budgetGrowMax)
+			g = math.Min((ratio-1)*float64(int(1)<<min(c.noQ-1, 8)), budgetGrowMax)
 		}
 		if g > 0 {
 			c.b *= 1 + g
@@ -375,8 +427,10 @@ func (lb *linkBudget) gate(size int) time.Duration {
 }
 
 // step is the runner's reading of the socket for the budget (under its
-// sendCapLink's lock): on is C4-lite's state, ts the socket's TCP_INFO.
-func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float64) {
+// sendCapLink's lock): on is C4-lite's state, ts the socket's TCP_INFO,
+// own the link's own one-way delays (nil: none); it says the pacing cap
+// (bytes/s; 0: none).
+func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float64, own *owdLink) uint64 {
 	tx, rx := 0.0, 0.0
 	if lb.at0 > 0 && now > lb.at0 {
 		dt := (now - lb.at0).Seconds()
@@ -395,13 +449,23 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 		in.QOut, in.QOutOK = o.queue()
 		in.QIn, in.QInOK = o.queueIn()
 	}
+	if own != nil {
+		in.LOut, in.LOutOK = own.queue()
+		in.LIn, in.LInOK = own.queueIn()
+	}
 	b := lb.core.step(in)
 	lb.b.Store(int64(b))
 	r := lb.core.d
-	if lb.core.base > 0 {
-		r = math.Max(r, b/(lb.core.base+budgetTarget()).Seconds())
+	pace := uint64(0)
+	if lb.core.base > 0 && b > 0 {
+		at := b / (lb.core.base + budgetTarget()).Seconds() // its rate at the target
+		r = math.Max(r, at)
+		if BudgetPaceK > 0 {
+			pace = uint64(float64(BudgetPaceK) / 100 * at)
+		}
 	}
 	lb.rate.Store(int64(r))
+	return pace
 }
 
 // line is the budget's status line (§3.4's sendcore line, in part), and
@@ -409,7 +473,10 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 func (lb *linkBudget) line(n int) string {
 	c := &lb.core
 	way := "one-way"
-	if c.two {
+	switch {
+	case c.own:
+		way = "two-way (own delays)"
+	case c.two:
 		way = "two-way"
 	}
 	return fmt.Sprintf("budget link %d: %s %s, B %.0f KiB (in flight at most %.0f KiB), queue %.1f ms (srtt-min %.1f, way back %.1f, target %.1f), delivery %.1f Mbit/s, cuts %d, grows %d, room %d, gate waits %d (%.0f ms)",
