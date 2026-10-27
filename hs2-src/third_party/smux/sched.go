@@ -56,6 +56,15 @@ type FrameSched interface {
 	Tick(now time.Duration, rate float64)
 }
 
+// UrgentSched is a FrameSched that can give its control and latency lanes'
+// frames alone (Config.BulkGate: what the writer writes while a bulk frame
+// waits at the gate).
+type UrgentSched interface {
+	// NextUrgent takes the next control or latency-lane frame (false: none
+	// queued); bulk frames stay where they are.
+	NextUrgent() (it interface{}, ok bool)
+}
+
 // FrameHeaderSize is a frame's header on the wire: the scheduler counts a
 // frame's size with it (a latency-lane frame of LaneFrame data bytes is
 // this much more to it).
@@ -328,7 +337,31 @@ func (sc *schedState) take() *schedFrame {
 	if !ok {
 		return nil
 	}
-	sf := it.(*schedFrame)
+	return sc.took(it.(*schedFrame), now)
+}
+
+// takeUrgent is the writer's while a bulk frame waits at the gate: the next
+// control or latency-lane frame (nil: none queued, or the scheduler cannot
+// tell its lanes apart).
+func (sc *schedState) takeUrgent() *schedFrame {
+	us, ok := sc.fs.(UrgentSched)
+	if !ok {
+		return nil
+	}
+	sc.mu.Lock()
+	defer sc.mu.Unlock()
+	if sc.dead {
+		return nil
+	}
+	it, ok := us.NextUrgent()
+	if !ok {
+		return nil
+	}
+	return sc.took(it.(*schedFrame), monoNow())
+}
+
+// took books sf, just taken from the scheduler at now (under mu).
+func (sc *schedState) took(sf *schedFrame, now int64) *schedFrame {
 	sf.state = sfTaken
 	sc.queued--
 	if sf.lane == LaneLatency {
@@ -435,50 +468,16 @@ func (s *Session) sendLoopSched() {
 		buf = make([]byte, (1<<16)+headerSize+seqLen)
 	}
 	fl, _ := s.conn.(flusher)
-	var hold *time.Timer
-	held := false // the conn holds a tail of a bulk frame (fl)
-	for {
-		sf := sc.take()
-		if sf == nil {
-			if held {
-				// a bulk stream queues its next frame as soon as its last
-				// is written: the tail waits schedFlushWait for it before
-				// it goes out padded (a link of one download flushed, and
-				// padded, every frame)
-				if hold == nil {
-					hold = time.NewTimer(schedFlushWait)
-				} else {
-					hold.Reset(schedFlushWait)
-				}
-				select {
-				case <-sc.wake:
-					if !hold.Stop() {
-						<-hold.C
-					}
-					continue
-				case <-hold.C:
-				case <-s.die:
-					return
-				case <-s.chSocketWriteError:
-					return
-				}
-			}
-			held = false
-			if fl != nil {
-				if err := fl.Flush(); err != nil {
-					s.notifyWriteError(err)
-					return
-				}
-			}
-			select {
-			case <-sc.wake:
-				continue
-			case <-s.die:
-				return
-			case <-s.chSocketWriteError:
-				return
-			}
+	gate := s.config.BulkGate
+	var hold, gt *time.Timer
+	defer func() {
+		if gt != nil {
+			gt.Stop()
 		}
+	}()
+	held := false // the conn holds a tail of a bulk frame (fl)
+	// write writes sf; false: the session's writing is over (the error told)
+	write := func(sf *schedFrame) bool {
 		req := sf.req
 		buf[0] = req.frame.ver
 		buf[1] = req.frame.cmd
@@ -525,11 +524,133 @@ func (s *Session) sendLoopSched() {
 			req.result <- writeResult{n: n, err: err}
 			close(req.result)
 		}
+		if err == nil && fl != nil && s.config.FlushEach && sf.lane != LaneBulk {
+			// (lab) no record carries two frames that are not bulk
+			if err = fl.Flush(); err == nil {
+				held = false
+			}
+		}
 		if err != nil {
 			s.notifyWriteError(err)
+			return false
+		}
+		return true
+	}
+	// gated holds sf, a bulk frame, at the gate (BulkGate) until it may go,
+	// writing the urgent lanes' frames that come meanwhile; false: the
+	// session's writing is over (sf told so)
+	gated := func(sf *schedFrame) bool {
+		for {
+			w := gate(sf.size)
+			if w <= 0 {
+				return true
+			}
+			if gt == nil {
+				gt = time.NewTimer(w)
+			} else {
+				gt.Reset(w)
+			}
+			select {
+			case <-gt.C:
+				continue
+			case <-sc.wake:
+			case <-s.die:
+			case <-s.chSocketWriteError:
+			}
+			if !gt.Stop() {
+				select {
+				case <-gt.C:
+				default:
+				}
+			}
+			select {
+			case <-s.die:
+				sf.abandon(io.ErrClosedPipe)
+				return false
+			case <-s.chSocketWriteError:
+				sf.abandon(s.socketWriteError.Load().(error))
+				return false
+			default:
+			}
+			wrote := false
+			for u := sc.takeUrgent(); u != nil; u = sc.takeUrgent() {
+				if !write(u) {
+					sf.abandon(io.ErrClosedPipe)
+					return false
+				}
+				wrote = true
+			}
+			if wrote && fl != nil {
+				// they are light: out at once, the bulk tail before them
+				held = false
+				if err := fl.Flush(); err != nil {
+					s.notifyWriteError(err)
+					sf.abandon(err)
+					return false
+				}
+			}
+		}
+	}
+	for {
+		sf := sc.take()
+		if sf == nil {
+			if held {
+				// a bulk stream queues its next frame as soon as its last
+				// is written: the tail waits schedFlushWait for it before
+				// it goes out padded (a link of one download flushed, and
+				// padded, every frame)
+				if hold == nil {
+					hold = time.NewTimer(schedFlushWait)
+				} else {
+					hold.Reset(schedFlushWait)
+				}
+				select {
+				case <-sc.wake:
+					if !hold.Stop() {
+						<-hold.C
+					}
+					continue
+				case <-hold.C:
+				case <-s.die:
+					return
+				case <-s.chSocketWriteError:
+					return
+				}
+			}
+			held = false
+			if fl != nil {
+				if err := fl.Flush(); err != nil {
+					s.notifyWriteError(err)
+					return
+				}
+			}
+			select {
+			case <-sc.wake:
+				continue
+			case <-s.die:
+				return
+			case <-s.chSocketWriteError:
+				return
+			}
+		}
+		if gate != nil && sf.lane == LaneBulk && !gated(sf) {
+			return
+		}
+		if !write(sf) {
 			return
 		}
 	}
+}
+
+// abandon tells the writer of sf, a frame the session's writer took but
+// will not write, that it is not going out (err).
+func (sf *schedFrame) abandon(err error) {
+	if sf.done != nil {
+		sf.done(err)
+		return
+	}
+	sf.req.result <- writeResult{err: err}
+	close(sf.req.result)
 }
 
 // queueSched hands a frame to the scheduler: a control frame (class

@@ -336,7 +336,17 @@ func applyTuning() {
 	num("HS2_TUNE_ALPHA_PLATEAU", &engine.AlphaPlateau)
 	num("HS2_TUNE_ALPHA_FREE", &engine.AlphaFree)
 	num("HS2_TUNE_QUIET_REC", &engine.QuietRec)     // lab: QUIET's interactive record sizes
-	num("HS2_TUNE_QUIET_EXTRA", &engine.QuietExtra) // QUIET links next to max_links BULK ones
+	num("HS2_TUNE_QUIET_EXTRA", &engine.QuietExtra) // QUIET links next to max_links BULK ones (0: within)
+	// R1 round 3 (γ2): the BULK links' in-flight budget in place of α (0:
+	// α), its queue target a direction (µs) and its share of the way back
+	// on a two-way link (0: the QUIET link's one-way delay alone); the QUIET
+	// links of a pool (0: one, outside max_links), and a QUIET record taking
+	// every frame queued (0, lab: a record a frame)
+	num("HS2_TUNE_BUDGET", &engine.TuneBudget)
+	num("HS2_TUNE_BUDGET_US", &engine.BudgetTargetUs)
+	num("HS2_TUNE_BUDGET_TWOWAY", &engine.BudgetTwoWay)
+	num("HS2_TUNE_QUIET_N", &engine.QuietN)
+	num("HS2_TUNE_QUIET_BATCH", &engine.QuietBatch)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)

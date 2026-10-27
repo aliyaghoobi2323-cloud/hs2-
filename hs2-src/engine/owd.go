@@ -244,6 +244,20 @@ func (o *owdLink) queue() (time.Duration, bool) {
 	return time.Duration(o.qOut.Load()), true
 }
 
+// queueIn is the queue delay of the other end's sending direction (the way
+// to this end), as this end last measured it (false: none heard lately, OWD
+// off): the in-flight budget's way back (budget.go).
+func (o *owdLink) queueIn() (time.Duration, bool) {
+	if o == nil || OWDOff() {
+		return 0, false
+	}
+	at := o.qInAt.Load()
+	if at == 0 || time.Duration(ctrlNow()-at) > owdFresh {
+		return 0, false
+	}
+	return time.Duration(o.qIn.Load()), true
+}
+
 // recv takes a message heard at now.
 func (o *owdLink) recv(now int64, b []byte) bool {
 	stamp, qOut, have, ok := owdDecode(b)

@@ -64,6 +64,10 @@ func (a *schedAdapter) Push(it any, user uint32, flow uint64, lane uint8, size i
 
 func (a *schedAdapter) Next() (any, bool) { return a.s.Next() }
 
+// NextUrgent is smux's UrgentSched: what goes past a bulk frame waiting at
+// the in-flight budget (budget.go).
+func (a *schedAdapter) NextUrgent() (any, bool) { return a.s.NextUrgent() }
+
 func (a *schedAdapter) Tick(now time.Duration, rate float64) { a.s.Tick(now, rate) }
 
 // laneOf is the lane of a flow queued as class c (queueClass).
@@ -339,6 +343,7 @@ type coreLink struct {
 	sc    *sendCapLink // C4-lite's and C3's readings (nil: neither)
 	hq    *hostQ       // nil: C3 off
 	flows *linkFlows   // nil: C2 off
+	shp   *shapedConn  // a QUIET link's shaper (its records' tallies; nil: not one)
 	tun   atomic.Pointer[l3Link]
 	// the status lines': when the hostq line was last made
 	hqAt time.Duration
@@ -487,6 +492,12 @@ func CoreLines() []string {
 		}
 		if l.sc != nil && l.sc.sys != nil {
 			out = append(out, l.sc.line(l.id))
+			if s := l.sc.budgetLine(l.id); s != "" {
+				out = append(out, s)
+			}
+		}
+		if l.shp != nil {
+			out = append(out, l.shp.recLine(l.id, now))
 		}
 	}
 	return out

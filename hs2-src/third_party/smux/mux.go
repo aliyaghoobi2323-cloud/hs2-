@@ -145,6 +145,22 @@ type Config struct {
 	// the session, it must take it), and the frame's writer waits as for
 	// UserFrames. Nil: no account.
 	UserMem func(tag uint32) func(n int, force bool) bool
+
+	// BulkGate, with Sched: the session's writer asks it before it writes a
+	// bulk-lane data frame of size bytes (hs2's in-flight budget of a BULK
+	// link, R1 round 3 γ2): 0 or less, write it now; more, ask again within
+	// that long. While a bulk frame waits so, the writer still writes the
+	// control and latency lanes' frames (a FrameSched that is an
+	// UrgentSched) as they come, and the frame keeps its place: no other
+	// bulk frame goes before it. Nil: bulk frames go as they are taken.
+	BulkGate func(size int) time.Duration
+
+	// FlushEach, with Sched (lab, the γ2 batching's measure): the writer
+	// flushes a conn that holds back a tail (hs2's shaper) after each frame
+	// that is not bulk, even with more frames queued: no record carries two
+	// of them. False (the default): it flushes once it runs out of frames,
+	// so a record takes everything queued by then (no wait for more).
+	FlushEach bool
 }
 
 // DefaultConfig is used to return a default configuration
@@ -227,8 +243,8 @@ func VerifyConfig(config *Config) error {
 		return errors.New("lane frame and user frames must not be negative")
 	}
 	if config.Sched == nil && (config.FlowInfo != nil || config.BulkFrame != nil || config.LaneFrame != 0 ||
-		config.UserFrames != 0 || config.UserMem != nil) {
-		return errors.New("flow info, bulk frame, lane frame, user frames and user mem require a frame scheduler")
+		config.UserFrames != 0 || config.UserMem != nil || config.BulkGate != nil || config.FlushEach) {
+		return errors.New("flow info, bulk frame, lane frame, user frames, user mem, bulk gate and flush each require a frame scheduler")
 	}
 	return nil
 }
