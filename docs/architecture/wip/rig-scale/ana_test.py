@@ -300,6 +300,22 @@ class ClassVerdicts(unittest.TestCase):
         s = self.analyze(recs)
         self.assertIn("web FAIL", s)
 
+    def test_inf_median(self):
+        self.assertEqual(ana.agg([11053.0, ana.INF]), (ana.INF, 11053.0, ana.INF))
+        self.assertEqual(ana.agg([11053.0, 12000.0, ana.INF])[0], 12000.0)
+        self.assertEqual(ana.agg([1.0, 3.0]), (2.0, 1.0, 3.0))
+        cell = CELL + "USERS=9 MIX=stream_vs_dl SBR=15"
+        recs = []
+        for b, p95 in (("old", 2000.0), ("new", 2100.0), ("new", -1)):
+            r = self.stream_rec(15.0)
+            r["classes"]["web"] = {"main": {"pages": 10, "failed": 1 if p95 < 0 else 0, "load_p50_ms": 900.0,
+                                            "load_p95_ms": p95, "load_max_ms": p95, "fb_p50_ms": 80.0, "fb_p95_ms": 120.0}}
+            r.update({"cell": cell, "bin": b})
+            recs.append(r)
+        s = self.analyze(recs)
+        self.assertIn("p95 new/old inf", s)
+        self.assertIn("web FAIL (p95 inf [2100..inf] / old 2000 ms)", s)
+
     def test_standing_queue_flagged(self):
         cell = CELL + "USERS=2 MIX=gamer_vs_dl"
         us = [user("u1", "game", "game1@0", dn=0.1), user("u2", "heavy", "dn16@0", dn=90.0)]

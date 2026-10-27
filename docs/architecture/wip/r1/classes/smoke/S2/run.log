@@ -1,0 +1,36 @@
+22:44:50 plan /root/rmix/plans/S2.txt: 8 runs
+22:44:51 start f4fb6861-old-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=old) load 2.55 waited 0s
+22:45:36 done f4fb6861-old-1 ok=1 
+22:45:37 start f4fb6861-b2nx-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=b2nx) load 4.01 waited 0s
+22:46:23 done f4fb6861-b2nx-1 ok=1 
+22:46:23 start f4fb6861-b2nx-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=b2nx) load 2.98 waited 0s
+22:47:09 done f4fb6861-b2nx-2 ok=1 
+22:47:10 start f4fb6861-old-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=old) load 4.31 waited 0s
+22:47:56 done f4fb6861-old-2 ok=1 
+22:47:56 start 5a68daea-old-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2 BIN=old) load 3.32 waited 0s
+22:48:41 done 5a68daea-old-1 ok=1 
+22:48:42 start 5a68daea-b2nx-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2 BIN=b2nx) load 4.83 waited 0s
+22:49:27 done 5a68daea-b2nx-1 ok=1 
+22:49:28 start 5a68daea-b2nx-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2 BIN=b2nx) load 4.50 waited 0s
+22:50:14 done 5a68daea-b2nx-2 ok=1 
+22:50:14 start 5a68daea-old-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2 BIN=old) load 4.07 waited 0s
+22:51:00 done 5a68daea-old-2 ok=1 
+22:51:00 done /root/rmix/plans/S2.txt
+22:51:00 plan /root/rmix/plans/S3.txt: 8 runs
+22:51:01 start 554e12bf-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=4 BIN=old) load 3.67 waited 0s
+22:51:46 done 554e12bf-old-1 ok=1 
+22:51:47 start 554e12bf-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=4 BIN=b2nx) load 3.15 waited 0s
+22:52:32 done 554e12bf-b2nx-1 ok=1 
+22:52:32 start 2c1d1bb6-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl CONNS=4 SBR=1.2 BIN=old) load 2.27 waited 0s
+22:53:15 done 2c1d1bb6-old-1 ok=1 
+22:53:16 start 2c1d1bb6-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl CONNS=4 SBR=1.2 BIN=b2nx) load 1.25 waited 0s
+22:53:58 done 2c1d1bb6-b2nx-1 ok=1 
+22:53:59 start 3d09e1d2-old-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=old) load 1.17 waited 0s
+22:54:44 done 3d09e1d2-old-1 ok=1 
+22:54:45 start 3d09e1d2-b2nx-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=b2nx) load 3.34 waited 0s
+22:55:30 done 3d09e1d2-b2nx-1 ok=1 
+22:55:31 start ad37b68a-old-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=old) load 2.42 waited 0s
+22:56:14 done ad37b68a-old-1 ok=1 
+22:56:15 start ad37b68a-b2nx-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=b2nx) load 2.20 waited 0s
+22:56:58 done ad37b68a-b2nx-1 ok=1 
+22:56:58 done /root/rmix/plans/S3.txt

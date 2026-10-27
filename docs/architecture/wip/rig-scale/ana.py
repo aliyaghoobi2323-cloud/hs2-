@@ -826,10 +826,13 @@ def derive_classes(rec, m, cap10):
 
 
 def agg(vals):
-    v = [x for x in vals if x is not None]
+    v = sorted(x for x in vals if x is not None)
     if not v:
         return None
-    return (statistics.median(v), min(v), max(v))
+    med = statistics.median(v)
+    if len(v) % 2 == 0 and v[len(v) // 2] >= INF:
+        med = INF  # an even count with "never" in the middle: never, not a mean of the two
+    return (med, v[0], v[-1])
 
 
 def fmt(t, p=1, pct=False):
@@ -906,7 +909,10 @@ def analyze(path, as_json=False):
             # web (report only): p95 page load against the base's
             o, n = b["old"]["med"].get("web_p95"), b[nb]["med"].get("web_p95")
             if o and n:
-                r = n[0] / o[0] if o[0] < INF else (1.0 if n[0] >= INF else 0.0)
+                if o[0] >= INF:
+                    r = 1.0 if n[0] >= INF else 0.0
+                else:
+                    r = INF if n[0] >= INF else n[0] / o[0]
                 b[nb]["web_vs_old"] = round(r, 3)
                 b[nb].setdefault("class_verdict", {})["web"] = {
                     "pass": r <= WEB_TOL, "runs": "p95 %s / old %s ms" % (fmt(n, 0), fmt(o, 0))}
@@ -1026,7 +1032,8 @@ def print_classes(s, md):
     if "web_pages" in md:
         print("   web: page load p50 %s p95 %s ms, first byte p50 %s p95 %s ms; pages %s, failed %s%s" % (
             f("web_p50", 0), f("web_p95", 0), f("web_fb50", 0), f("web_fb95", 0), f("web_pages", 0),
-            f("web_failed", 0), ("   p95 new/old %.3f" % s["web_vs_old"]) if "web_vs_old" in s else ""))
+            f("web_failed", 0), ("   p95 new/old %s" % ("inf" if s["web_vs_old"] >= INF else "%.3f" % s["web_vs_old"]))
+            if "web_vs_old" in s else ""))
 
 
 def main():

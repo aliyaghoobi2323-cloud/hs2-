@@ -2,7 +2,8 @@
 # mblock.sh NAME PLAN [PLAN2 REPS2]: one locked rig block of the classes smoke (R1 round 3,
 # branch r1-mix), RIG_ID=m, at most LIMIT s (1200) of rig time. The quiet
 # lock /root/r1-quiet.lock is taken atomically (set -C) when no go build/test
-# runs, retried every 60 s while someone else holds it, and only ever removed
+# runs, tried at most once every 60 s while someone else holds it (the file
+# is looked at every 5 s), and only ever removed
 # by this script for its own pid. The rig is a frozen copy (/root/rmix/rig)
 # and rigload is prebuilt (/root/rmix/rigload): nothing is built under the
 # lock. Runs: REPS (2) each binary, interleaved (ABBA); base = old = OLD_BIN,
@@ -27,13 +28,22 @@ hostsnap() { echo "== $1 $(date -Is)"; uptime; top -bn2 -d0.5 -w 200 | awk '/^to
 mine() { grep -q "pid $$," "$LOCK" 2>/dev/null; }
 [ -x "$R/rigload" ] || cp /root/rmix/rigload "$R/rigload"
 touch "$R/rigload"
-w=0
+# the lock file is looked at every 5 s (a read, as the other agents' lock
+# scripts do), but taking it is tried at most once every 60 s
+w=0; last=-60
 while :; do
-  if ! busy && ( set -C; echo "r1-mix classes smoke $NAME, pid $$, $(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null; then
-    break
+  if [ ! -e "$LOCK" ] && ! busy && [ $((w - last)) -ge 60 ]; then
+    last=$w
+    if ( set -C; echo "r1-mix classes smoke $NAME, pid $$, $(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null; then
+      break
+    fi
+    log "lost the lock to: $(cat "$LOCK" 2>/dev/null)"
+  elif [ ! -e "$LOCK" ] && busy && [ "${nb:-0}" = 0 ]; then
+    log "lock free, a go build/test runs: waiting"
   fi
+  nb=0; [ ! -e "$LOCK" ] && busy && nb=1
   if [ $w -ge 3000 ]; then log "lock still held after ${w}s ($(cat $LOCK 2>/dev/null)): giving up"; exit 1; fi
-  sleep 60; w=$((w + 60))
+  sleep 5; w=$((w + 5))
 done
 trap 'mine && rm -f "$LOCK"; log "lock released"' EXIT
 trap 'exit 130' INT TERM
