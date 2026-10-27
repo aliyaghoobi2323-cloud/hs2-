@@ -150,14 +150,34 @@ type Session struct {
 	writes    chan writeRequest
 
 	// sch: the frame scheduler (Config.Sched) in place of the shaper and
-	// its channels (nil: none)
+	// its channels (nil: none); a pair's QUIET writer's
 	sch *schedState
+
+	// a pair of connections (pair.go): BULK's connection, its writer's
+	// scheduler and its reader's data flag (nil, nil: one connection)
+	bconn      io.ReadWriteCloser
+	schB       *schedState
+	dataReadyB int32
+	client     bool
+	// BULK data of the peer's streams whose SYN has not come yet, the bytes
+	// held so, and the latest stream id the peer opened (under streamLock)
+	early   map[uint32]*earlyBuf
+	earlyN  int
+	peerSid uint32
 }
 
 func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
+	return newSessionPair(config, conn, nil, client)
+}
+
+// newSessionPair is newSession over conn and, when bulk is not nil, over the
+// pair's BULK connection too (pair.go; config has a scheduler).
+func newSessionPair(config *Config, conn, bulk io.ReadWriteCloser, client bool) *Session {
 	s := new(Session)
 	s.die = make(chan struct{})
 	s.conn = conn
+	s.bconn = bulk
+	s.client = client
 	s.config = config
 	s.streams = make(map[uint32]*Stream)
 	s.chAccepts = make(chan *Stream, defaultAcceptBacklog)
@@ -178,12 +198,18 @@ func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
 
 	if config.Sched != nil {
 		s.sch = newSchedState(config)
-		go s.sendLoopSched()
+		go s.sendLoopSched(s.sch, s.conn)
+		if bulk != nil {
+			s.schB = newSchedState(config)
+			s.schB.bulkPath = true
+			go s.sendLoopSched(s.schB, bulk)
+			go s.recvLoop(bulk, true)
+		}
 	} else {
 		go s.shaperLoop()
 		go s.sendLoop()
 	}
-	go s.recvLoop()
+	go s.recvLoop(s.conn, false)
 	if !config.KeepAliveDisabled {
 		go s.keepalive()
 	}
@@ -216,7 +242,12 @@ func (s *Session) OpenStreamSyn(p [SynPayloadLen]byte) (*Stream, error) {
 		s.nextStreamIDLock.Unlock()
 		return nil, ErrGoAway
 	}
-	s.nextStreamIDLock.Unlock()
+	// a pair's SYNs are queued in stream id order (pair.go): the lock is
+	// held until this one is
+	pair := s.bconn != nil
+	if !pair {
+		s.nextStreamIDLock.Unlock()
+	}
 
 	stream := newStream(sid, s.config.MaxFrameSize, s)
 	stream.syn = p
@@ -238,11 +269,27 @@ func (s *Session) OpenStreamSyn(p [SynPayloadLen]byte) (*Stream, error) {
 	}
 	s.streamLock.Unlock()
 	if err != nil {
+		if pair {
+			s.nextStreamIDLock.Unlock()
+		}
 		return nil, err
 	}
 
 	f := newFrame(byte(s.config.Version), cmdSYN, sid)
 	f.data = stream.syn[:]
+	if pair {
+		deadline := time.After(openCloseTimeout)
+		req, err := s.queueFrame(f, deadline, CLSCTRL)
+		s.nextStreamIDLock.Unlock()
+		if err == nil {
+			_, err = s.frameWritten(req, deadline)
+		}
+		if err != nil {
+			s.streamClosed(sid)
+			return nil, err
+		}
+		return stream, nil
+	}
 	if _, err := s.writeFrame(f); err != nil {
 		s.streamClosed(sid)
 		return nil, err
@@ -297,6 +344,7 @@ func (s *Session) Close() error {
 		for k := range s.streams {
 			s.streams[k].sessionClose()
 		}
+		s.dropEarly()
 		s.streamLock.Unlock()
 		if s.config.WindowPool != nil {
 			s.returnSpare() // as far as it is free
@@ -305,6 +353,9 @@ func (s *Session) Close() error {
 				// and the rest closeGrace from now (pool.go)
 				time.AfterFunc(closeGrace, s.dropClaims)
 			}
+		}
+		if s.bconn != nil {
+			s.bconn.Close() // a pair closes together
 		}
 		return s.conn.Close()
 	} else {
@@ -438,13 +489,32 @@ func (s *Session) returnTokens(n int) {
 	}
 }
 
-// recvLoop keeps on reading from underlying connection if tokens are available
-func (s *Session) recvLoop() {
+// recvLoop keeps on reading from underlying connection if tokens are
+// available: conn, the session's (QUIET of a pair), or the pair's BULK
+// (bulk).
+func (s *Session) recvLoop(conn io.Reader, bulk bool) {
 	var hdr rawHeader
 	var updHdr updHeader
+	var ext [szCmdMOV]byte
+	pair := s.bconn != nil
+	ready := &s.dataReady
+	if bulk {
+		ready = &s.dataReadyB
+	}
+	// a pair's QUIET reader waits for buffer room only past MaxReceiveBuffer
+	// more than BULK's (pair.go)
+	low := int32(0)
+	if pair && !bulk {
+		low = -int32(s.config.MaxReceiveBuffer)
+	}
+	if pair {
+		// a pair is torn down together: the end of either connection is
+		// the session's
+		defer s.Close()
+	}
 
 	for {
-		for atomic.LoadInt32(&s.bucket) <= 0 && !s.IsClosed() {
+		for atomic.LoadInt32(&s.bucket) <= low && !s.IsClosed() {
 			atomic.AddUint32(&s.parks, 1)
 			if s.config.WindowPool != nil && s.borrow() {
 				continue // the buffer grew instead (WindowPool)
@@ -457,8 +527,8 @@ func (s *Session) recvLoop() {
 		}
 
 		// read header first
-		if _, err := io.ReadFull(s.conn, hdr[:]); err == nil {
-			atomic.StoreInt32(&s.dataReady, 1)
+		if _, err := io.ReadFull(conn, hdr[:]); err == nil {
+			atomic.StoreInt32(ready, 1)
 			if hdr.Version() != byte(s.config.Version) {
 				s.notifyProtoError(ErrInvalidProtocol)
 				return
@@ -467,13 +537,17 @@ func (s *Session) recvLoop() {
 			switch hdr.Cmd() {
 			case cmdNOP:
 			case cmdSYN:
+				if bulk { // a pair's control frames are QUIET's
+					s.notifyProtoError(ErrInvalidProtocol)
+					return
+				}
 				var syn [SynPayloadLen]byte
 				var rerr error
 				good := hdr.Length() == SynPayloadLen
 				if good {
-					_, rerr = io.ReadFull(s.conn, syn[:])
+					_, rerr = io.ReadFull(conn, syn[:])
 				} else if hdr.Length() > 0 {
-					_, rerr = io.CopyN(io.Discard, s.conn, int64(hdr.Length()))
+					_, rerr = io.CopyN(io.Discard, conn, int64(hdr.Length()))
 				}
 				if rerr != nil {
 					s.notifyReadError(rerr)
@@ -481,11 +555,17 @@ func (s *Session) recvLoop() {
 				}
 				s.streamLock.Lock()
 				_, known := s.streams[sid]
+				if pair && s.peerOpened(sid) && int32(sid-s.peerSid) > 0 {
+					s.peerSid = sid
+				}
 				if good && synValid(syn) {
 					if !known {
 						stream := newStream(sid, s.config.MaxFrameSize, s)
 						stream.syn = syn
 						s.streams[sid] = stream
+						if pair {
+							s.adoptEarly(stream)
+						}
 						select {
 						case s.chAccepts <- stream:
 						case <-s.die:
@@ -497,30 +577,71 @@ func (s *Session) recvLoop() {
 					// the FINs of several refusals leave in no set order).
 					s.badSyn.Add(1)
 					badSyns.Add(1)
+					if pair {
+						s.dropEarlyOf(sid)
+					}
 					if !known {
-						go s.writeFrame(newFrame(byte(s.config.Version), cmdFIN, sid))
+						go s.writeFrame(s.finFrame(sid, 0))
 					}
 				}
 				s.streamLock.Unlock()
 			case cmdFIN:
+				var off uint32
+				if pair {
+					// a pair's FIN carries the count of data bytes sent
+					if bulk || hdr.Length() != szFinOff {
+						s.notifyProtoError(ErrInvalidProtocol)
+						return
+					}
+					if _, err := io.ReadFull(conn, ext[:szFinOff]); err != nil {
+						s.notifyReadError(err)
+						return
+					}
+					off = binary.LittleEndian.Uint32(ext[:])
+				}
 				s.streamLock.Lock()
 				if stream, ok := s.streams[sid]; ok {
-					stream.fin()
+					if pair {
+						stream.finAt(off)
+					} else {
+						stream.fin()
+					}
 					stream.notifyReadEvent()
 				}
 				s.streamLock.Unlock()
 			case cmdPSH:
 				if hdr.Length() > 0 {
 					newbuf := defaultAllocator.Get(int(hdr.Length()))
-					if written, err := io.ReadFull(s.conn, newbuf); err == nil {
+					if written, err := io.ReadFull(conn, newbuf); err == nil {
 						s.rcvd.Add(uint64(written))
 						s.streamLock.Lock()
 						if stream, ok := s.streams[sid]; ok {
-							stream.pushBytes(newbuf)
-							free := atomic.AddInt32(&s.bucket, -int32(written))
-							stream.notifyReadEvent()
-							if s.config.MinStreamBuffer > 0 {
-								stream.checkLag(int(free))
+							n := written
+							if pair {
+								// into the stream in its order, or held
+								// until its MOV (pair.go)
+								var perr error
+								if n, perr = stream.rxPair(newbuf, bulk); perr != nil {
+									s.streamLock.Unlock()
+									s.notifyProtoError(perr)
+									return
+								}
+							} else {
+								stream.pushBytes(newbuf)
+							}
+							if n > 0 {
+								free := atomic.AddInt32(&s.bucket, -int32(n))
+								stream.notifyReadEvent()
+								if s.config.MinStreamBuffer > 0 {
+									stream.checkLag(int(free))
+								}
+							}
+						} else if pair && bulk && s.peerOpened(sid) && int32(sid-s.peerSid) > 0 {
+							// its SYN is still on its way on QUIET
+							if perr := s.holdEarly(sid, newbuf); perr != nil {
+								s.streamLock.Unlock()
+								s.notifyProtoError(perr)
+								return
 							}
 						}
 						s.streamLock.Unlock()
@@ -530,7 +651,7 @@ func (s *Session) recvLoop() {
 					}
 				}
 			case cmdUPD:
-				if _, err := io.ReadFull(s.conn, updHdr[:]); err == nil {
+				if _, err := io.ReadFull(conn, updHdr[:]); err == nil {
 					s.streamLock.Lock()
 					if stream, ok := s.streams[sid]; ok {
 						stream.update(updHdr.Consumed(), updHdr.Window())
@@ -540,6 +661,32 @@ func (s *Session) recvLoop() {
 					s.notifyReadError(err)
 					return
 				}
+			case cmdMOV:
+				if !pair || bulk || hdr.Length() != szCmdMOV {
+					s.notifyProtoError(ErrInvalidProtocol)
+					return
+				}
+				if _, err := io.ReadFull(conn, ext[:]); err != nil {
+					s.notifyReadError(err)
+					return
+				}
+				s.streamLock.Lock()
+				if stream, ok := s.streams[sid]; ok {
+					n, perr := stream.mov(ext[0], binary.LittleEndian.Uint32(ext[1:]))
+					if perr != nil {
+						s.streamLock.Unlock()
+						s.notifyProtoError(perr)
+						return
+					}
+					if n > 0 {
+						free := atomic.AddInt32(&s.bucket, -int32(n))
+						stream.notifyReadEvent()
+						if s.config.MinStreamBuffer > 0 {
+							stream.checkLag(int(free))
+						}
+					}
+				}
+				s.streamLock.Unlock()
 			default:
 				s.notifyProtoError(ErrInvalidProtocol)
 				return
@@ -559,19 +706,38 @@ func (s *Session) keepalive() {
 	for {
 		select {
 		case <-tickerPing.C:
-			s.writeFrameInternal(newFrame(byte(s.config.Version), cmdNOP, 0), tickerPing.C, CLSCTRL)
+			if s.bconn != nil {
+				// each connection of a pair is kept alive, and watched, on
+				// its own (pair.go)
+				nop := newFrame(byte(s.config.Version), cmdNOP, 0)
+				rq, eq := s.queueSched(nop, CLSCTRL, 0, LaneCtrl, false)
+				rb, eb := s.queueSched(nop, CLSCTRL, 0, LaneCtrl, true)
+				if eq == nil {
+					s.frameWritten(rq, tickerPing.C)
+				}
+				if eb == nil {
+					s.frameWritten(rb, tickerPing.C)
+				}
+			} else {
+				s.writeFrameInternal(newFrame(byte(s.config.Version), cmdNOP, 0), tickerPing.C, CLSCTRL)
+			}
 			s.notifyBucket() // force a signal to the recvLoop
 			if s.config.WindowPool != nil {
 				s.sweepClaims()
 			}
 		case <-tickerTimeout.C:
-			if !atomic.CompareAndSwapInt32(&s.dataReady, 1, 0) {
-				// recvLoop may block while bucket is 0, in this case,
-				// session should not be closed.
-				if atomic.LoadInt32(&s.bucket) > 0 {
-					s.Close()
-					return
-				}
+			quiet := !atomic.CompareAndSwapInt32(&s.dataReady, 1, 0)
+			bulkQuiet := s.bconn != nil && !atomic.CompareAndSwapInt32(&s.dataReadyB, 1, 0)
+			// recvLoop may block while bucket is 0 (a pair's QUIET reader:
+			// MaxReceiveBuffer past it), in this case, session should not be
+			// closed.
+			low := int32(0)
+			if s.bconn != nil {
+				low = -int32(s.config.MaxReceiveBuffer)
+			}
+			if b := atomic.LoadInt32(&s.bucket); quiet && b > low || bulkQuiet && b > 0 {
+				s.Close()
+				return
 			}
 		case <-s.die:
 			return
@@ -707,8 +873,8 @@ func (s *Session) writeFrameInternal(f Frame, deadline <-chan time.Time, class C
 func (s *Session) queueFrame(f Frame, deadline <-chan time.Time, class CLASSID) (writeRequest, error) {
 	if s.sch != nil {
 		// (a data frame comes here only from a writer with no flow: user 0,
-		// bulk)
-		return s.queueSched(f, class, 0, LaneBulk)
+		// bulk; a pair's control frames go on QUIET)
+		return s.queueSched(f, class, 0, LaneBulk, false)
 	}
 	req := writeRequest{
 		class:  class,
@@ -747,7 +913,7 @@ func (s *Session) frameWritten(req writeRequest, deadline <-chan time.Time) (int
 		err = ErrTimeout
 	}
 	if req.sf != nil {
-		s.sch.cancel(req.sf) // out of its user's FIFO if it still waits there
+		req.sf.sc.cancel(req.sf) // out of its user's FIFO if it still waits there
 	}
 	req.giveUp()
 	return 0, err

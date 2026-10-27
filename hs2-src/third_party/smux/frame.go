@@ -15,12 +15,22 @@ const ( // cmds
 	// protocol version 2 extra commands
 	// notify bytes consumed by remote peer-end
 	cmdUPD
+
+	// a session over a pair of connections (hs2 wire level 2, pair.go):
+	// the rest of a stream's data comes on the BULK connection
+	cmdMOV
 )
 
 const (
 	// data size of cmdUPD, format:
 	// |4B data consumed(ACK)| 4B window size(WINDOW) |
 	szCmdUPD = 8
+	// data size of cmdMOV (pair.go): |1B kind (movMove, movSplit)| 4B data
+	// bytes the stream sent on QUIET before it, LE|
+	szCmdMOV = 5
+	// data size of a FIN in a pair session (pair.go): |4B data bytes the
+	// stream sent in all, LE|
+	szFinOff = 4
 )
 
 const (

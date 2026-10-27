@@ -137,6 +137,13 @@ type Config struct {
 	// the session, it must take it), and the frame's writer waits as for
 	// UserFrames. Nil: no account.
 	UserMem func(tag uint32) func(n int, force bool) bool
+
+	// EarlyDone, with Sched: a stream's writer does not wait for its
+	// bulk-lane frame to be written before it cuts and queues the next one;
+	// it waits for the one before (one frame queued and one being written
+	// at most, stream_sched.go), so a stream has its next frame queued when
+	// its turn comes back. False: each frame is written before the next.
+	EarlyDone bool
 }
 
 // DefaultConfig is used to return a default configuration
@@ -219,10 +226,35 @@ func VerifyConfig(config *Config) error {
 		return errors.New("lane frame and user frames must not be negative")
 	}
 	if config.Sched == nil && (config.FlowInfo != nil || config.BulkFrame != nil || config.LaneFrame != 0 ||
-		config.UserFrames != 0 || config.UserMem != nil) {
-		return errors.New("flow info, bulk frame, lane frame, user frames and user mem require a frame scheduler")
+		config.UserFrames != 0 || config.UserMem != nil || config.EarlyDone) {
+		return errors.New("flow info, bulk frame, lane frame, user frames, user mem and early done require a frame scheduler")
 	}
 	return nil
+}
+
+// ServerPair is Server over a pair of connections (pair.go): quiet carries
+// the control frames and the latency lane, bulk the bulk lane. It needs a
+// frame scheduler (Config.Sched), one for each connection.
+func ServerPair(quiet, bulk io.ReadWriteCloser, config *Config) (*Session, error) {
+	return newPair(quiet, bulk, config, false)
+}
+
+// ClientPair is Client over a pair of connections (ServerPair).
+func ClientPair(quiet, bulk io.ReadWriteCloser, config *Config) (*Session, error) {
+	return newPair(quiet, bulk, config, true)
+}
+
+func newPair(quiet, bulk io.ReadWriteCloser, config *Config, client bool) (*Session, error) {
+	if config == nil {
+		config = DefaultConfig()
+	}
+	if err := VerifyConfig(config); err != nil {
+		return nil, err
+	}
+	if config.Sched == nil || bulk == nil {
+		return nil, errors.New("a pair session requires a frame scheduler and both connections")
+	}
+	return newSessionPair(config, quiet, bulk, client), nil
 }
 
 // Server is used to initialize a new server-side connection.
