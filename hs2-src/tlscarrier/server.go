@@ -26,9 +26,9 @@ type Server struct {
 	// Logf, if set, receives rare diagnostic messages (e.g. an old client).
 	Logf func(string, ...any)
 	// OfferCaps, if set, gives caps this server offers on one link besides
-	// its own, asked once per authenticated client: CapQuiet, the link's
-	// class (the exit offers it always; a reverse edge when it wants one
-	// more QUIET link).
+	// its own, asked once per authenticated client that offered a class:
+	// the link's class (RoleCaps; the exit offers both always, a reverse
+	// edge the one it wants the link to be).
 	OfferCaps func() uint32
 	replay  *replayMem
 	once    sync.Once
@@ -156,8 +156,8 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	// The level and caps for this link. With no level in common the proof
 	// says level 0 — the client then knows why — and the link closes.
 	srvCaps := localCaps()
-	if s.OfferCaps != nil && hdr.Caps&CapQuiet != 0 {
-		srvCaps |= s.OfferCaps() & CapQuiet
+	if s.OfferCaps != nil && hdr.Caps&RoleCaps != 0 {
+		srvCaps |= s.OfferCaps() & RoleCaps
 	}
 	level, caps, agreed := negotiate(hdr, levelMin, levelMax, srvCaps)
 	if _, err := tconn.Write(makeServerProof(s.SharedKey, nonce, ekm, ProofHdr{Ver: protoVersion, Level: level, Caps: caps})); err != nil || !agreed {

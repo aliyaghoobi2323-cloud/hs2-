@@ -287,6 +287,9 @@ func guardOf(st io.ReadWriteCloser) *sessGuard {
 	if cs, ok := st.(*countedStream); ok && cs.link != nil && cs.link.mtr != nil {
 		return cs.link.mtr.guard
 	}
+	if lg, ok := st.(interface{ guard() *sessGuard }); ok {
+		return lg.guard() // a group connection: the link it is on now (quiet.go)
+	}
 	return nil
 }
 

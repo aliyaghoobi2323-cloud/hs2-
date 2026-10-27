@@ -372,41 +372,38 @@ func TestCarrierNegotiatedLevel(t *testing.T) {
 	}
 }
 
-// The link class (CapQuiet) is in a link's caps exactly when both ends
+// The link class (RoleCaps) is in a link's caps exactly as both ends
 // offered it: the dialer by its extra caps, the server by OfferCaps (asked
-// only when the dialer offered it); a level 1 link never has a level 2 cap.
-func TestCarrierQuietClass(t *testing.T) {
+// only when the dialer offered a class); the edge offers one class, the
+// exit both, so the link has the edge's; a level 1 link never has a level 2
+// cap.
+func TestCarrierLinkClass(t *testing.T) {
 	resetProtoStats()
 	defer resetProtoStats()
 	key := bytes.Repeat([]byte{0x3a}, 32)
 	for _, c := range []struct {
 		name          string
-		client, offer bool
-		quiet         bool
+		client, offer uint32
+		class         uint32
 		asked         int
 	}{
-		{"both", true, true, true, 1},
-		{"dialer only", true, false, false, 1},
-		{"server only", false, true, false, 0},
-		{"neither", false, false, false, 0},
+		{"edge dials QUIET", CapQuiet, RoleCaps, CapQuiet, 1},
+		{"edge dials BULK", CapBulk, RoleCaps, CapBulk, 1},
+		{"exit dials, edge wants QUIET", RoleCaps, CapQuiet, CapQuiet, 1},
+		{"exit dials, edge wants BULK", RoleCaps, CapBulk, CapBulk, 1},
+		{"exit dials, edge has no classes", RoleCaps, 0, 0, 1},
+		{"edge has no classes", 0, RoleCaps, 0, 0},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := make(chan *Carrier, 1)
 			var asked atomic.Int32
 			srv := &Server{SharedKey: key, OfferCaps: func() uint32 {
 				asked.Add(1)
-				if c.offer {
-					return CapQuiet
-				}
-				return 0
+				return c.offer
 			}}
 			addr, stop := serveWith(t, srv, func(car *Carrier) { got <- car })
 			defer stop()
-			extra := uint32(0)
-			if c.client {
-				extra = CapQuiet
-			}
-			car, err := DialFromTimeoutCaps(addr, "vpn.example.com", key, "", 2*time.Second, extra)
+			car, err := DialFromTimeoutCaps(addr, "vpn.example.com", key, "", 2*time.Second, c.client)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -418,8 +415,8 @@ func TestCarrierQuietClass(t *testing.T) {
 			case <-time.After(2 * time.Second):
 				t.Fatal("no tunnel")
 			}
-			if (car.Caps()&CapQuiet != 0) != c.quiet || (sc.Caps()&CapQuiet != 0) != c.quiet {
-				t.Fatalf("client caps %#x, server caps %#x: quiet want %v", car.Caps(), sc.Caps(), c.quiet)
+			if car.Caps()&RoleCaps != c.class || sc.Caps()&RoleCaps != c.class {
+				t.Fatalf("client caps %#x, server caps %#x: class want %#x", car.Caps(), sc.Caps(), c.class)
 			}
 			if car.Caps()&CapGroup == 0 || car.Caps() != sc.Caps() {
 				t.Fatalf("client caps %#x, server caps %#x", car.Caps(), sc.Caps())
@@ -430,11 +427,11 @@ func TestCarrierQuietClass(t *testing.T) {
 		})
 	}
 	// a level 1 peer: the level 2 caps are out whatever both offered
-	if lc := levelCaps(1, CapGroup|CapQuiet|CapSched); lc != CapSched {
+	if lc := levelCaps(1, CapGroup|RoleCaps|CapSched); lc != CapSched {
 		t.Fatalf("level 1 caps %#x, want %#x", lc, CapSched)
 	}
-	if _, caps, ok := negotiate(AuthHdr{Ver: protoVersion, MinLevel: 1, MaxLevel: 1, Caps: CapGroup | CapQuiet | CapSched},
-		1, 2, CapGroup|CapQuiet|CapSched); !ok || caps != CapSched {
+	if _, caps, ok := negotiate(AuthHdr{Ver: protoVersion, MinLevel: 1, MaxLevel: 1, Caps: CapGroup | RoleCaps | CapSched},
+		1, 2, CapGroup|RoleCaps|CapSched); !ok || caps != CapSched {
 		t.Fatalf("a level 1 client: caps %#x ok %v, want %#x", caps, ok, CapSched)
 	}
 }

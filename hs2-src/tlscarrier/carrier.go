@@ -257,8 +257,8 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 }
 
 // DialFromTimeoutCaps is DialFromTimeout offering extra caps besides this
-// binary's own: CapQuiet, the link's class (the edge's QUIET links; the
-// exit offers it on every link).
+// binary's own: the link's class (RoleCaps: the edge one of them, the exit
+// both).
 func DialFromTimeoutCaps(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, extra uint32) (*Carrier, error) {
 	d := net.Dialer{Timeout: connect}
 	if bindIP != "" {
@@ -298,7 +298,7 @@ func DialFromTimeoutCaps(addr, sni string, sharedKey []byte, bindIP string, conn
 		return nil, err
 	}
 	h := LocalAuthHdr()
-	h.Caps |= extra & CapQuiet
+	h.Caps |= extra & RoleCaps
 	rec, nonce := makeClientAuth(sharedKey, ekm, h)
 	if _, err := u.Write(rec); err != nil {
 		raw.Close()

@@ -228,6 +228,11 @@ type LinkManager struct {
 	// many lagging that were not poor. Under mu.
 	qualMoved                      float64
 	qualServing, qualPoor, qualLag int
+
+	// quiet: the edge's QUIET links and the mover of its group streams
+	// (quiet.go, R1 round 2 β2; nil: none). The pool's links (links) are
+	// then its BULK links, at most bulkMax of them.
+	quiet *quietSet
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
@@ -445,7 +450,7 @@ func (m *LinkManager) SetWarm(n int) {
 	if n <= 0 {
 		return
 	}
-	n = min(max(n, m.min), m.max)
+	n = min(max(n, m.min), m.bulkMax())
 	m.warm = n
 	m.ap.T = n
 	m.target.Store(int32(n))
@@ -456,7 +461,8 @@ func (m *LinkManager) warmCount() int {
 	if m.warm > 0 {
 		return m.warm
 	}
-	return warmSize(m.min, m.max)
+	bm := m.bulkMax()
+	return warmSize(min(m.min, bm), bm)
 }
 
 // SetDrainIdle sets how long a connection on a retiring link may sit idle
@@ -663,10 +669,14 @@ func (m *LinkManager) Run(ctx context.Context) {
 	m.mu.Lock() // AddLink (reverse) reads it under the lock: links may arrive at once
 	m.scaleCtx = ctx
 	m.mu.Unlock()
+	if m.quiet != nil {
+		go m.quiet.runMover(ctx)
+	}
 	if m.accept {
 		m.runAccept(ctx)
 		return
 	}
+	m.quiet.tickIf(ctx) // the QUIET links come up with the pool
 	// Initial fill, through the dial gate: opening the whole pool as one
 	// simultaneous burst of identical TLS connections is a behavioral tell, so
 	// the gate spaces the handshakes (dialgate.go) while the pool's tick runs
@@ -689,10 +699,11 @@ func (m *LinkManager) Run(ctx context.Context) {
 			return
 		case <-tick.C:
 			m.reap()
-			m.sampleHealth() // per-link throughput, pressure, loss, active flows
-			m.heal(ctx)      // replace soft-bad links make-before-break
-			m.autoscale(ctx) // decide the serving count and move the pool to it
-			m.drainTick()    // close retiring links once their connections end
+			m.quiet.tickIf(ctx) // the QUIET links: the dead out, one dial while short
+			m.sampleHealth()    // per-link throughput, pressure, loss, active flows
+			m.heal(ctx)         // replace soft-bad links make-before-break
+			m.autoscale(ctx)    // decide the serving count and move the pool to it
+			m.drainTick()       // close retiring links once their connections end
 			m.publishStats()
 		}
 	}
@@ -714,6 +725,11 @@ func (m *LinkManager) decideTarget() int {
 	if s.now.IsZero() {
 		s = apSample{now: m.now(), growable: true}
 	}
+	// the BULK links' envelope: max_links less the QUIET links while the
+	// pool keeps them (they come and go with the other server's level)
+	bm := m.bulkMax()
+	m.ap.max, m.ap.min = bm, min(m.min, bm)
+	m.ap.T = min(max(m.ap.T, m.ap.min), bm)
 	d := m.ap.decide(s)
 	m.apProbing.Store(m.ap.pr != nil || m.ap.confirm.active)
 	m.setTarget(d.target)
@@ -1059,6 +1075,9 @@ func (m *LinkManager) queueDial(ctx context.Context, replacement bool) {
 		}
 		m.refuse.ok()
 		m.failStreak.Store(0)
+		if ml, ok := l.(*mtcpLink); ok && ml.tls != nil {
+			m.quiet.noteCaps(ml.caps) // a level 1 exit turns the QUIET links off
+		}
 		m.mu.Lock()
 		if ctx.Err() != nil || m.closing.Load() {
 			m.mu.Unlock()
@@ -1262,6 +1281,9 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			m.closeAll()
 			return
 		case <-tick.C:
+			if m.quiet != nil {
+				m.quiet.reap() // the exit redials a QUIET link that died
+			}
 			m.sampleHealth()
 			m.reconcile(ctx, m.decideTarget())
 			m.drainTick()
@@ -1477,7 +1499,7 @@ func (m *LinkManager) ctlTarget() int {
 	m.mu.RLock()
 	d := m.ctlDrain
 	m.mu.RUnlock()
-	return t + d
+	return t + d + m.quietWant()
 }
 
 // reclaimStalled closes, with FIN, the connections on the given draining links
@@ -2513,7 +2535,8 @@ func (m *LinkManager) dialRoomLocked() int {
 			slotted++
 		}
 	}
-	return min(m.max-slotted, m.max+drainHeadroom(m.max)-len(m.links))
+	bm := m.bulkMax()
+	return min(bm-slotted, bm+drainHeadroom(bm)-len(m.links))
 }
 
 // Target is the number of serving links the autopilot currently wants; the
@@ -2700,4 +2723,12 @@ func (m *LinkManager) closeAll() {
 		ml.link.Close()
 	}
 	m.links = nil
+	if q := m.quiet; q != nil {
+		q.mu.Lock()
+		for _, ql := range q.links {
+			ql.link.Close()
+		}
+		q.links = nil
+		q.mu.Unlock()
+	}
 }

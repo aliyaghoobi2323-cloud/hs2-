@@ -31,6 +31,32 @@ type mtcpLink struct {
 
 	flowMu sync.Mutex
 	flows  map[*countedStream]struct{} // open user streams, for activity sampling
+
+	// The link's class (C5, R1 round 2 β2), from its negotiated caps (kept
+	// in caps): a QUIET one (CapQuiet) carries new connections as group
+	// streams, light flows and control; a BULK one (CapBulk) what moved off
+	// a QUIET one. Neither: a pool without classes, every link as before.
+	caps         uint32
+	quiet, bulk  bool
+}
+
+// classOf is a link's class from its negotiated caps: QUIET or BULK (a
+// link of both is QUIET), neither without group streams or classes.
+func classOf(caps uint32) (quiet, bulk bool) {
+	if caps&tlscarrier.CapGroup == 0 || QuietOff() {
+		return false, false
+	}
+	quiet = caps&tlscarrier.CapQuiet != 0
+	return quiet, !quiet && caps&tlscarrier.CapBulk != 0
+}
+
+// bulkClass says whether a link is a BULK one: group streams move to it.
+func (l *mtcpLink) bulkClass() bool { return l.bulk }
+
+// setCaps keeps the link's negotiated caps and its class from them.
+func (l *mtcpLink) setCaps(caps uint32) {
+	l.caps = caps
+	l.quiet, l.bulk = classOf(caps)
 }
 
 func (l *mtcpLink) meter() *linkMeter { return l.mtr }
@@ -237,13 +263,33 @@ func (c *countedStream) Write(p []byte) (int, error) {
 }
 
 func (c *countedStream) Close() error {
+	c.untrack()
+	return c.Stream.Close()
+}
+
+// untrack takes the stream out of its link's count and samples (once): a
+// group's stream (groupStream) is closed by its group, not here.
+func (c *countedStream) untrack() {
 	if c.done.CompareAndSwap(false, true) {
 		c.link.active.Add(-1)
 		c.link.flowMu.Lock()
 		delete(c.link.flows, c)
 		c.link.flowMu.Unlock()
 	}
-	return c.Stream.Close()
+}
+
+// track counts st, a stream of l opened or joined outside OpenStreamSyn (a
+// group's: groupStream), as one of l's user streams.
+func (l *mtcpLink) track(st *smux.Stream) *countedStream {
+	l.active.Add(1)
+	cs := &countedStream{Stream: st, link: l, lastActive: time.Now()}
+	l.flowMu.Lock()
+	if l.flows == nil {
+		l.flows = map[*countedStream]struct{}{}
+	}
+	l.flows[cs] = struct{}{}
+	l.flowMu.Unlock()
+	return cs
 }
 
 // mtcpDialer opens mtcp links: dial the TLS carrier, then start a smux client
@@ -400,6 +446,35 @@ func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
 	return newEdgeLink(car, d.sampler)
 }
 
+// DialClass dials a link of the class the edge wants (its dial offers
+// class, tlscarrier.CapQuiet or CapBulk; the link has it if the exit has
+// classes too).
+func (d *mtcpDialer) DialClass(ctx context.Context, class uint32) (Link, error) {
+	car, err := tlscarrier.DialFromTimeoutCaps(d.addr, d.sni, d.sharedKey, d.bindIP, 8*time.Second, class)
+	if err != nil {
+		return nil, err
+	}
+	return newEdgeLink(car, d.sampler)
+}
+
+// classDialer is a dialer that can dial a link of a class (mtcpDialer; a
+// test's).
+type classDialer interface {
+	LinkDialer
+	DialClass(ctx context.Context, class uint32) (Link, error)
+}
+
+// bulkDialer is the pool's dialer once it has classes: its links are BULK.
+type bulkDialer struct{ d classDialer }
+
+func (b bulkDialer) DialLink(ctx context.Context) (Link, error) {
+	return b.d.DialClass(ctx, tlscarrier.CapBulk)
+}
+
+func (b bulkDialer) DialClass(ctx context.Context, class uint32) (Link, error) {
+	return b.d.DialClass(ctx, class)
+}
+
 // newEdgeLink wraps an authenticated TLS carrier as an edge-side mtcp link: a
 // smux CLIENT that opens one stream per user connection. It is shared by the
 // direct edge (which DIALS the carrier) and the reverse edge (which ACCEPTS it),
@@ -412,7 +487,9 @@ func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLin
 		car.Close()
 		return nil, err
 	}
-	return &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}, nil
+	l := &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}
+	l.setCaps(car.Caps())
+	return l, nil
 }
 
 // closed reports when the link's smux session ends, so a reverse-edge accept

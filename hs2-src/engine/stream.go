@@ -250,7 +250,11 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		cfg.LaneFrame = laneData
 		cfg.UserFrames = schedUserFrames
 		cfg.UserMem = userMems.handle
+		cfg.EarlyDone = !EarlyDoneOff() // P10 (b): a stream's next frame queued while one is written
 	}
+	// β2 (quiet.go): a BULK link's sockets get α's cap in place of
+	// C4-lite's; QUIET ones, and links of no class, keep C4-lite
+	_, bulkLink := classOf(caps)
 	if server {
 		sess, err = smux.Server(w, cfg)
 	} else {
@@ -276,6 +280,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		if sys := newCapSys(tc); sys != nil {
 			scl = newSendCapLink(sys, hq)
 			scl.core.linked, scl.core.off = true, !capOn
+			scl.core.alpha = bulkLink && !AlphaOff()
 			if meter != nil && SendCapBlocked != 0 {
 				scl.blocked = meter.blockedNs
 			}

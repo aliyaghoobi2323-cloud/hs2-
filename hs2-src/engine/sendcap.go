@@ -71,6 +71,7 @@ type capSample struct {
 	Acked, Written uint64
 	Segs           uint32        // data segments sent (tcpi_data_segs_out), cumulative
 	SRTT           time.Duration // the socket's srtt (0: unknown): the idle span
+	MinRTT         time.Duration // the socket's min_rtt (0: unknown): α's queue delay, SRTT - MinRTT
 }
 
 type capRate struct {
@@ -107,8 +108,84 @@ type sendCap struct {
 	// switch then: the cores' runner never reads the switch again); off: no
 	// cap of its own on this link, as SendCapOff for the process
 	linked, off bool
+	// alpha: a BULK link's socket (β2): its own cap is α's (alphaStep), not
+	// C4-lite's 1.25 × the delivery rate; aRate is α's cap now, bytes/s,
+	// and aQ the queue delay of the latest reading
+	alpha bool
+	aRate float64
+	aQ    time.Duration
 	// tallies (the status line)
 	appLim, lifts uint64
+	aCuts, aGrows uint64
+}
+
+// TuneAlpha 0 (HS2_TUNE_ALPHA=0, lab): BULK links keep C4-lite's cap.
+var TuneAlpha = 1
+
+// AlphaOff says whether α is off.
+func AlphaOff() bool { return TuneAlpha == 0 }
+
+// α, the rate cap of a BULK link's socket (R1 round 2, decision T18): the
+// round-2 diagnosis found the bulk link's own standing queue (BBR's
+// cwnd_gain, 85 to 175 ms on a deep FIFO) the one thing a light flow on a
+// TCP connection of its own still waits behind, and CoDel's drops at its
+// 5 ms target a link above it never stops making. So the cap follows the
+// queue: each reading of the socket, with q = srtt − min_rtt,
+//
+//   - q over alphaTarget (CoDel's target): the cap goes to what the path
+//     delivered (the latest sample, at most the cap) less the share of it
+//     that drains the excess within alphaDrain, at most alphaCutMax at once;
+//   - q under half the target: it grows by alphaGrow (per reading, 100 ms),
+//     to no more than 1.25 × the largest delivery of the last 2 s (C4-lite's
+//     own ceiling), so it finds a path that got faster;
+//   - else it holds.
+//
+// The headroom low rates need (the other direction's acks, the TUN's pings
+// and the QUIET link share the bottleneck; a fixed 0.95 left 21 to 32 ms
+// there) comes from the queue itself: whatever else crosses the bottleneck
+// shows as q, and the cap backs off until it does not. srtt holds both
+// directions' queues (the acks come back through the other one), so a
+// link's cap backs off for the other end's queue too: the two ends together
+// hold the path's queues within the target. Never under alphaFloor.
+const (
+	alphaTarget = 5 * time.Millisecond
+	alphaDrain  = 100 * time.Millisecond
+	alphaCutMax = 0.5
+	alphaGrow   = 0.05
+	alphaFloor  = 32 << 10
+)
+
+// alphaStep is α's cap from a reading (c.on: the socket has had a sample
+// not app-limited since it was last idle).
+func (c *sendCap) alphaStep(s capSample, arming bool) {
+	ceil := wcNetKOf() * c.maxDlv()
+	dlv := s.Delivery
+	if arming || c.aRate <= 0 {
+		c.aRate = math.Max(c.maxDlv(), dlv)
+	}
+	c.aQ = 0
+	if s.SRTT > 0 && s.MinRTT > 0 && s.SRTT > s.MinRTT {
+		c.aQ = s.SRTT - s.MinRTT
+	}
+	switch {
+	case s.SRTT <= 0 || s.MinRTT <= 0:
+		// no queue reading: C4-lite's cap
+		c.aRate = ceil
+	case c.aQ > alphaTarget:
+		base := c.aRate
+		if dlv > 0 && dlv < base {
+			base = dlv
+		}
+		cut := math.Min(float64(c.aQ-alphaTarget)/float64(alphaDrain), alphaCutMax)
+		c.aRate = base * (1 - cut)
+		c.aCuts++
+	case c.aQ < alphaTarget/2:
+		if ceil > 0 {
+			c.aRate = math.Min(c.aRate*(1+alphaGrow), math.Max(ceil, c.aRate))
+		}
+		c.aGrows++
+	}
+	c.aRate = math.Max(c.aRate, alphaFloor)
 }
 
 // Update takes a reading and says the cap in force (0: none), whether to
@@ -160,6 +237,7 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 		c.pN++
 	}
 	c.quiet = idle
+	arming := false
 	switch {
 	case c.off || !c.linked && SendCapOff():
 		c.on = false
@@ -167,10 +245,15 @@ func (c *sendCap) Update(s capSample) (rate uint64, apply, lift bool) {
 		c.on = false
 		c.lifts++
 	case !c.on && !idle && fresh && !s.AppLimited && s.Delivery > 0:
-		c.on = true
+		c.on, arming = true, true
 	}
 	if c.on {
-		c.own = uint64(math.Max(wcNetKOf()*c.maxDlv(), wcPaceFloor))
+		if c.alpha {
+			c.alphaStep(s, arming)
+			c.own = uint64(c.aRate)
+		} else {
+			c.own = uint64(math.Max(wcNetKOf()*c.maxDlv(), wcPaceFloor))
+		}
 	}
 	return c.decide()
 }
@@ -302,7 +385,8 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 	}
 	if ts.dlvOK {
 		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
-			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt))}))
+			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),
+			MinRTT: usDur(uint64(ts.minRTT))}))
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
 	}
@@ -359,6 +443,10 @@ func (l *sendCapLink) line(n int) string {
 	share := 0.0
 	if c.n > 0 {
 		share = 100 * float64(c.appLim) / float64(c.n)
+	}
+	if c.alpha {
+		return fmt.Sprintf("sendcap link %d: alpha cap %.1f Mbit/s (queue %.1f ms, target %.0f ms; cuts %d, grows %d), app-limited %.0f%%, idle-lifted %d",
+			n, float64(c.set)*8/1e6, msOf(c.aQ), msOf(alphaTarget), c.aCuts, c.aGrows, share, c.lifts)
 	}
 	return fmt.Sprintf("sendcap link %d: cap %.0f Mbit/s (%g x max delivery 2s), app-limited %.0f%%, idle-lifted %d",
 		n, float64(c.set)*8/1e6, wcNetKOf(), share, c.lifts)

@@ -98,15 +98,21 @@ const (
 	// one-time move of a connection from a QUIET link to a BULK one (C5,
 	// R1 round 2 β2; HS2_TUNE_QUIET). Needs CapSched.
 	CapGroup
-	// CapQuiet (level 2): not a core but the link's class. The edge sets it
-	// on a link it wants QUIET (as the client in the dial's header, as the
-	// server in its proof, Server.OfferCaps); the exit offers it on every
-	// link, so it is in a link's caps exactly when the edge chose so.
+	// CapQuiet and CapBulk (level 2): not cores but the link's class, QUIET
+	// or BULK, in a pool that has classes. The edge offers one of them on
+	// each link (as the client in the dial's header, as the server in its
+	// proof, Server.OfferCaps); the exit offers both on every link, so a
+	// link has the one the edge chose, and neither when the edge keeps no
+	// classes (every link as before).
 	CapQuiet
+	CapBulk
 )
 
+// RoleCaps are the link-class bits.
+const RoleCaps = CapQuiet | CapBulk
+
 // level2Caps: the caps of level 2, never in force on a level 1 link.
-const level2Caps = CapGroup | CapQuiet
+const level2Caps = CapGroup | RoleCaps
 
 // AuthHdr is the header of the client's record (7 B on the wire).
 type AuthHdr struct {
