@@ -6,7 +6,7 @@ ana.py). One-way delays in ms over the class's floor; "late" = late
 (> floor + 100 ms; call: 150 ms) and lost, % of sent."""
 import json
 import os
-import statistics
+
 import sys
 
 sys.path.insert(0, os.path.abspath(sys.argv[1]))
@@ -63,7 +63,7 @@ def cellfmt(vals, mult, prec):
     f = lambda x: "inf" if x >= ana.INF else ("%%.%df" % prec) % (x * mult)
     if len(v) == 1:
         return f(v[0])
-    return "%s (%s)" % (f(statistics.median(v)), ", ".join(f(x) for x in v))
+    return "%s (%s)" % (f(ana.agg(v)[0]), ", ".join(f(x) for x in v))
 
 
 def main():
