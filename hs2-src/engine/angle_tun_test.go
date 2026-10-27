@@ -179,8 +179,11 @@ func TestAngleTunFlowQueues(t *testing.T) {
 	g := sq.flows[flowHash(udpPacketN(4, 4000, 1400))]
 	g.class = ClassBulk
 	f, b, lane = sq.next()
-	if want := max(1, l.edge.BulkFrame()/1415) * 1415; f != g || lane != 2 || len(b) != want {
+	if want := max(1, l.edge.BulkFrame()/1415) * 1415; f != g || lane&^smux.PathBulk != 2 || len(b) != want {
 		t.Fatalf("bulk frame: lane %d, %d bytes, want %d (bulk frame %d)", lane, len(b), want, l.edge.BulkFrame())
+	}
+	if l.edge.Paired() && lane&smux.PathBulk == 0 {
+		t.Fatal("a bulk TUN flow's frame on a pair's QUIET")
 	}
 	// stale: dropped as its frame is built
 	sq.close()

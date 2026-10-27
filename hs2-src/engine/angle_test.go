@@ -175,19 +175,48 @@ var _ hostSys = (*angleEnd)(nil)
 type angleLink struct {
 	t          *testing.T
 	edge, exit *smux.Session
-	down, up   *angleWire
-	upRx       sync.Map // user tag -> *atomic.Uint64: upload bytes the exit read
+	down, up   *angleWire // a link of one connection's path
+	pdown, pup *ppDir     // a pair's, or one over a shared-bottleneck pipe (pair_pipe_test.go)
+	upRx       sync.Map   // user tag -> *atomic.Uint64: upload bytes the exit read
 	// onL3 serves a kindL3 stream (set before one is opened)
 	onL3 func(*smux.Stream)
 }
 
+// newAngleLink is a link of two R1 binaries: a pair since round 2 (β1,
+// decision T16), its QUIET and BULK sharing the path's rate each way.
 func newAngleLink(t *testing.T, rate float64, delay time.Duration) *angleLink {
 	return newAngleLinkCaps(t, rate, delay, tlscarrier.LocalAuthHdr().Caps)
 }
 
-// newAngleLinkCaps: the link's ends have caps in common.
+// most is the most unsent seen at a write, down and up (a pair: BULK's).
+func (l *angleLink) most() (down, up int) {
+	if l.pdown != nil {
+		_, _, d := l.pdown.stats()
+		_, _, u := l.pup.stats()
+		return d[len(d)-1], u[len(u)-1]
+	}
+	return l.down.most(), l.up.most()
+}
+
+// acceptLoop serves the exit's streams.
+func (l *angleLink) acceptLoop() {
+	for {
+		st, err := l.exit.AcceptStream()
+		if err != nil {
+			return
+		}
+		go l.serve(st)
+	}
+}
+
+// newAngleLinkCaps: the link's ends have caps in common: a pair when they
+// have CapPair and C2 (as the carriers negotiate it: HS2_TUNE_SCHED=0 takes
+// CapPair out), else one connection.
 func newAngleLinkCaps(t *testing.T, rate float64, delay time.Duration, caps uint32) *angleLink {
 	t.Helper()
+	if caps&tlscarrier.CapPair != 0 && caps&tlscarrier.CapSched != 0 && !SchedOff() {
+		return newAngleLinkPipe(t, rate, delay, caps, true, ppOpts{})
+	}
 	l := &angleLink{t: t, down: newAngleWire(rate, delay), up: newAngleWire(rate, delay)}
 	var err error
 	l.edge, _, err = newSessionCaps(&angleEnd{in: l.down, out: l.up}, false, nil, &linkMeter{statsPoll: make(chan struct{}, 1)}, caps)
@@ -199,15 +228,7 @@ func newAngleLinkCaps(t *testing.T, rate float64, delay time.Duration, caps uint
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.edge.Close(); l.exit.Close(); l.down.close(); l.up.close() })
-	go func() {
-		for {
-			st, err := l.exit.AcceptStream()
-			if err != nil {
-				return
-			}
-			go l.serve(st)
-		}
-	}()
+	go l.acceptLoop()
 	return l
 }
 
@@ -392,8 +413,9 @@ func TestAngleSameLinkProbe(t *testing.T) {
 	r := angleRate(12*time.Second, &down, up)
 	p99, n := p.pct(0.99)
 	p50, _ := p.pct(0.5)
+	md, mu := l.most()
 	t.Logf("probe p50 %v p99 %v (%d samples); down %.2f up %.2f Mbit/s; most unsent at a write down/up %d/%d B",
-		p50, p99, n, r[0]*8/1e6, r[1]*8/1e6, l.down.most(), l.up.most())
+		p50, p99, n, r[0]*8/1e6, r[1]*8/1e6, md, mu)
 	if n < 40 {
 		t.Fatalf("only %d probes", n)
 	}

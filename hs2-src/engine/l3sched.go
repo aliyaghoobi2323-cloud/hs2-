@@ -68,6 +68,11 @@ type tunFlow struct {
 	ready  bool // in the ready list
 	pend   bool // frame holds a frame smux has not taken yet (the window was full)
 	echo   bool // ICMP echo: always light
+	// onBulk: on a pair, the flow went on BULK once it was bulk (§3.5's
+	// rule for a TUN flow: pinned once from QUIET to BULK, no reorder buffer;
+	// the few packets in flight on QUIET make a short reorder the inner TCP
+	// takes), and stays there
+	onBulk bool
 	stats  flowStats
 	cls    flowClassifier
 	class  Class
@@ -85,6 +90,21 @@ func (f *tunFlow) lane() uint8 {
 		return smux.LaneLatency
 	}
 	return laneOf(queueClass(f.class, &f.stats))
+}
+
+// path is the lane of the flow's next frame with the pair's connection it
+// goes on (smux.PathBulk: BULK; on one connection, the lane): a light flow,
+// an echo and an unknown one go on QUIET, a bulk one on BULK from its first
+// bulk frame on (onBulk).
+func (f *tunFlow) path() uint8 {
+	lane := f.lane()
+	if f.sq.pair && !f.echo && lane == smux.LaneBulk {
+		f.onBulk = true
+	}
+	if f.onBulk {
+		return lane | smux.PathBulk
+	}
+	return lane
 }
 
 // tunUser is a user's flows on the link.
@@ -124,11 +144,14 @@ type tunSched struct {
 	dropSeen [2]uint64
 	ka       []byte
 	kaBusy   atomic.Bool
+	// pair: the link is a pair (smux.Session.Paired): a bulk flow's frames
+	// go on BULK (tunFlow.path)
+	pair bool
 }
 
 func newTunSched(st *smux.Stream) *tunSched {
 	return &tunSched{st: st, flows: map[uint32]*tunFlow{}, users: map[uint32]*tunUser{}, kick: make(chan struct{}, 1),
-		pool: &sync.Pool{}, setDrops: new(atomic.Uint64)}
+		pool: &sync.Pool{}, setDrops: new(atomic.Uint64), pair: st.Session().Paired()}
 }
 
 // attach takes the set's packet pool and drop count (l3Set.add).
@@ -280,12 +303,13 @@ func (sq *tunSched) readyOut() *tunFlow {
 	return f
 }
 
-// limit is what a frame in lane carries at most.
+// limit is what a frame in lane carries at most (lane|smux.PathBulk: on a
+// pair's BULK).
 func (sq *tunSched) limit(lane uint8) int {
-	if lane == smux.LaneLatency {
+	if lane&^smux.PathBulk == smux.LaneLatency {
 		return laneData
 	}
-	if b := sq.st.Session().BulkFrame(); b > 0 {
+	if b := sq.st.Session().BulkFrameOn(lane&smux.PathBulk != 0); b > 0 {
 		return b
 	}
 	return bulkFrameMin
@@ -322,7 +346,7 @@ func (sq *tunSched) next() (*tunFlow, []byte, uint8) {
 		if f == nil {
 			return nil, nil, 0
 		}
-		lane := f.lane()
+		lane := f.path()
 		if !f.pend && len(sq.build(f, sq.limit(lane), now)) == 0 {
 			continue // all of it waited too long
 		}
