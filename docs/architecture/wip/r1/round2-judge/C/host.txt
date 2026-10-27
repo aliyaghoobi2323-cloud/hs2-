@@ -1,0 +1,30 @@
+== start 2026-10-27T12:49:56+00:00
+ 12:49:56 up  1:44,  3 users,  load average: 1.40, 1.76, 1.81
+top - 12:49:56 up  1:44,  3 users,  load average: 1.28, 1.73, 1.80
+Tasks: 233 total,   1 running, 232 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.4 us,  0.7 sy,  0.0 ni, 98.8 id,  0.0 wa,  0.0 hi,  0.1 si,  0.0 st 
+MiB Mem :  23456.9 total,  19735.9 free,   1210.5 used,   2917.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22246.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+    992 root      20   0 1408968 140900  10368 S   7.8   0.6  23:03.58 hs2
+  79616 root      20   0 1567236 251260  28708 S   7.8   1.0  13:10.14 xray-linux-amd6
+      1 root      20   0   22700  14152   9776 S   0.0   0.1   0:15.09 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.02 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_g
+      5 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_p
+== end 2026-10-27T13:06:09+00:00
+ 13:06:09 up  2:01,  3 users,  load average: 2.45, 2.19, 2.03
+top - 13:06:09 up  2:01,  4 users,  load average: 2.45, 2.19, 2.03
+Tasks: 247 total,   2 running, 245 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.6 us,  2.2 sy,  0.0 ni, 95.7 id,  0.0 wa,  0.0 hi,  0.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  19848.6 free,   1079.3 used,   2936.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22377.7 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 152755 root      20   0 1366036 101012  28440 S  19.6   0.4   0:04.56 xray-linux-amd6
+    992 root      20   0 1475712 166788  10368 S  15.7   0.7  27:50.18 hs2
+    904 message+  20   0    9832   5760   4776 S   2.0   0.0   0:05.56 dbus-daemon
+  13056 root      19  -1   50688  28848  27680 S   2.0   0.1   0:04.40 systemd-journal
+ 153009 root      20   0   14844  10460   8792 S   2.0   0.0   0:00.02 sshd
+ 153074 root      20   0   17736   9660   6828 R   2.0   0.0   0:00.01 landscape-sysin
+      1 root      20   0   22700  14156   9776 S   0.0   0.1   0:16.14 systemd

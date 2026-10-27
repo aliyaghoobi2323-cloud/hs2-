@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"net"
-	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -52,21 +51,48 @@ func TestOWDCodec(t *testing.T) {
 	}
 }
 
-// The beat costs at most 1% of the BULK rate, within 100 ms to 1 s.
+// The beat costs at most 1% of the link's rate, within 25 ms to 1 s.
 func TestOWDTick(t *testing.T) {
 	for _, c := range []struct {
 		mbit float64
 		want time.Duration
-	}{{0, time.Second}, {0.5, time.Second}, {1, 800 * time.Millisecond}, {4, 200 * time.Millisecond}, {8, 100 * time.Millisecond}, {1000, 100 * time.Millisecond}} {
+	}{{0, time.Second}, {0.5, time.Second}, {1, 800 * time.Millisecond}, {4, 200 * time.Millisecond},
+		{8, 100 * time.Millisecond}, {32, 25 * time.Millisecond}, {1000, 25 * time.Millisecond}} {
 		if got := owdTickOf(c.mbit * 1e6 / 8); got != c.want {
 			t.Fatalf("%.1f Mbit/s: beat %v, want %v", c.mbit, got, c.want)
 		}
 	}
+	var o owdLink
+	if o.tick() != owdTickMax {
+		t.Fatal("no rate yet: the slow beat")
+	}
+	o.noteRate(100e6 / 8)
+	if o.tick() != owdTickMin {
+		t.Fatalf("100 Mbit/s: beat %v", o.tick())
+	}
 }
 
-func owdReset() {
-	for _, a := range []*atomic.Int64{&owd.qIn, &owd.qInAt, &owd.qOut, &owd.qOutAt, &owd.rate, &owd.rateAt, &owd.msgs} {
-		a.Store(0)
+// The queue is the least reading of the last owdLook: one message held
+// behind a lost segment is no queue, a queue that stands is.
+func TestOWDRecent(t *testing.T) {
+	var r owdRecent
+	ms := int64(time.Millisecond)
+	at := int64(time.Hour)
+	for i := 0; i < 8; i++ {
+		at += 25 * ms
+		r.add(at, 1*ms)
+	}
+	at += 25 * ms
+	if q := r.add(at, 80*ms); q != 1*ms {
+		t.Fatalf("one held message: queue %v, want 1 ms", time.Duration(q))
+	}
+	var q int64
+	for i := 0; i < 9; i++ {
+		at += 25 * ms
+		q = r.add(at, 12*ms)
+	}
+	if q != 12*ms {
+		t.Fatalf("a standing 12 ms for 225 ms: queue %v", time.Duration(q))
 	}
 }
 
@@ -76,19 +102,22 @@ func TestOWDLoopPipe(t *testing.T) {
 	a, b := net.Pipe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	owdReset()
-	defer owdReset()
-	go owdLoop(ctx, a)
-	go owdLoop(ctx, b)
+	var oa, ob owdLink
+	oa.noteRate(100e6 / 8)
+	ob.noteRate(100e6 / 8)
+	go owdLoop(ctx, a, &oa)
+	go owdLoop(ctx, b, &ob)
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if _, ok := owdQueue(); ok {
-			if n := owd.msgs.Load(); n < 2 {
-				t.Fatalf("a queue heard after %d messages", n)
+		_, okA := oa.queue()
+		_, okB := ob.queue()
+		if okA && okB {
+			if oa.msgs.Load() < 2 || ob.msgs.Load() < 2 {
+				t.Fatalf("a queue heard after %d and %d messages", oa.msgs.Load(), ob.msgs.Load())
 			}
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("no one-way queue heard in 5 s")
 }
@@ -196,5 +225,104 @@ func TestAlphaStartFix(t *testing.T) {
 	}
 	if off >= 0 && off <= on {
 		t.Fatalf("without fix 1 (%d) no slower than with it (%d): the test does not test it", off, on)
+	}
+}
+
+// A message's stamp moves on by the socket's unsent bytes at its pacing
+// rate: 20 KiB unsent at a 9 Mbit/s cap is 18.2 ms (version 2 read it as
+// queue).
+func TestOWDLocalWait(t *testing.T) {
+	if w := owdLocalWait(tcpStat{notsent: 20 << 10, pacingRate: 9e6 / 8}); math.Abs(float64(w)-18.2e6) > 0.1e6 {
+		t.Fatalf("20 KiB at 9 Mbit/s: %v", time.Duration(w))
+	}
+	if w := owdLocalWait(tcpStat{notsent: 1250, deliveryRate: 1.25e6}); w != int64(time.Millisecond) {
+		t.Fatalf("no pacing rate: the delivery rate's, 1 ms; got %v", time.Duration(w))
+	}
+	if owdLocalWait(tcpStat{notsent: 1000}) != 0 || owdLocalWait(tcpStat{pacingRate: 1e6}) != 0 {
+		t.Fatal("no rate or nothing unsent: no wait")
+	}
+}
+
+// α's start holds while the link's one-way delay is not heard yet: an srtt
+// holding the other direction's queue (30 ms here) does not end it.
+func TestAlphaStartWaitsForOWD(t *testing.T) {
+	const ms = time.Millisecond
+	c := &sendCap{linked: true, alpha: true}
+	at, acked := time.Hour, 0.0
+	for i := 0; i < 5; i++ {
+		at += 100 * ms
+		acked += 1e6
+		c.Update(capSample{Now: at, Delivery: 1e7, Acked: uint64(acked), Written: uint64(acked),
+			Segs: uint32(acked / 1000), SRTT: 102 * ms, MinRTT: 72 * ms, OWDwait: true})
+	}
+	if !c.aStart || c.aRate < wcNetKOf()*1e7*0.999 {
+		t.Fatalf("no one-way delay yet: start %v, cap %.0f, want the start and C4-lite's %.0f", c.aStart, c.aRate, wcNetKOf()*1e7)
+	}
+}
+
+// Fix 1's start is judged before the app-limited hold: an app-limited
+// reading with a queue of its own past 5 ms ends it, the cap cut to what
+// was delivered (the first version held the start, and C4-lite's 1.25 x,
+// for good on app-limited readings).
+func TestAlphaStartEndsWhenAppLimited(t *testing.T) {
+	const ms = time.Millisecond
+	c := &sendCap{linked: true, alpha: true}
+	at, acked := time.Hour, 0.0
+	feed := func(q time.Duration, app bool) {
+		at += 100 * ms
+		acked += 1e6
+		c.Update(capSample{Now: at, Delivery: 1e7, AppLimited: app, Acked: uint64(acked), Written: uint64(acked),
+			Segs: uint32(acked / 1000), SRTT: 72 * ms, MinRTT: 72 * ms, OWD: q, OWDok: true})
+	}
+	feed(0, false)
+	feed(0, false)
+	if !c.aStart {
+		t.Fatal("armed: want the start")
+	}
+	feed(30*ms, true)
+	if c.aStart || c.aRate >= 1e7 {
+		t.Fatalf("app-limited with a 30 ms queue of its own: start %v, cap %.0f; want it over and the cap under %.0f", c.aStart, c.aRate, 1e7)
+	}
+}
+
+// Free growth: when the start ended at a queue BBR's start-up made while it
+// delivered a tenth of the path, a one-way queue under a quarter of the
+// target for alphaFreeN readings lets the cap grow by alphaGrowFree a
+// reading (HS2_TUNE_ALPHA_FREE=0: by a few % from the cut).
+func TestAlphaFreeGrowth(t *testing.T) {
+	const ms = time.Millisecond
+	grow := func() float64 {
+		c := &sendCap{linked: true, alpha: true}
+		at, acked := time.Hour, 0.0
+		path, cap := 100e6/8, 8e6/8
+		feed := func(q time.Duration) {
+			at += 100 * ms
+			dlv := math.Min(cap, path)
+			acked += dlv / 10
+			c.Update(capSample{Now: at, Delivery: dlv, Acked: uint64(acked), Written: uint64(acked),
+				Segs: uint32(acked / 1000), SRTT: 72 * ms, MinRTT: 72 * ms, OWD: q, OWDok: true})
+			if c.own > 0 {
+				cap = float64(c.own)
+			}
+		}
+		feed(0)
+		feed(0)
+		feed(20 * ms) // start-up's queue at a tenth of the path: the start ends with a cut
+		if c.aStart {
+			t.Fatal("a 20 ms queue of its own: want the start over")
+		}
+		from := c.aRate
+		for i := 0; i < 20; i++ {
+			feed(0)
+		}
+		return c.aRate / from
+	}
+	on := grow()
+	AlphaFree = 0
+	off := grow()
+	AlphaFree = 1
+	t.Logf("2 s without a queue after the start's cut: the cap x%.2f with free growth, x%.2f without", on, off)
+	if on < 2.5 || off >= 2 {
+		t.Fatalf("free growth x%.2f (want >= 2.5), without x%.2f (want < 2)", on, off)
 	}
 }

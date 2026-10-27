@@ -129,6 +129,8 @@ const (
 // per-link control channel (phase 3) with the far side's download-path
 // retransmits and the measured round-trip time.
 type linkMeter struct {
+	// owd: the link's one-way queue delays (a BULK link's, owd.go)
+	owd     owdLink
 	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
 	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
 	stalls  atomic.Uint64 // write errors / timeouts

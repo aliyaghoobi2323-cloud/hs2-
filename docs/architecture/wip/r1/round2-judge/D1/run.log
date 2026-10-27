@@ -1,0 +1,62 @@
+13:06:40 plan /root/r2j/plans/D1a.txt: 12 runs
+13:06:41 start 7b68f4fa-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 3.02 waited 0s
+13:11:03 plan /root/r2j/plans/D1a.txt: 12 runs
+13:11:04 start 7b68f4fa-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 0.60 waited 0s
+13:11:48 done 7b68f4fa-old-1 ok=1 
+13:11:49 start 7b68f4fa-b1-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b1) load 0.61 waited 0s
+13:12:34 done 7b68f4fa-b1-1 ok=1 
+13:12:35 start 7b68f4fa-b2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2) load 2.01 waited 0s
+13:13:19 done 7b68f4fa-b2-1 ok=1 
+13:13:20 start 7b68f4fa-b2g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2g) load 1.28 waited 0s
+13:14:04 done 7b68f4fa-b2g-1 ok=1 
+13:14:05 start 7b68f4fa-b2g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2g) load 1.35 waited 0s
+13:14:50 done 7b68f4fa-b2g-2 ok=1 
+13:14:50 start 7b68f4fa-b2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2) load 2.21 waited 0s
+13:15:35 done 7b68f4fa-b2-2 ok=1 
+13:15:36 start 7b68f4fa-b1-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b1) load 1.35 waited 0s
+13:16:20 done 7b68f4fa-b1-2 ok=1 
+13:16:21 start 7b68f4fa-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 1.07 waited 0s
+13:17:06 done 7b68f4fa-old-2 ok=1 
+13:17:06 start 7b68f4fa-b2g-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2g) load 1.10 waited 0s
+13:17:51 done 7b68f4fa-b2g-3 ok=1 
+13:17:51 start 7b68f4fa-b2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b2) load 1.73 waited 0s
+13:18:36 done 7b68f4fa-b2-3 ok=1 
+13:18:37 start 7b68f4fa-b1-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=b1) load 2.14 waited 0s
+13:19:21 done 7b68f4fa-b1-3 ok=1 
+13:19:22 start 7b68f4fa-old-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=30 BIN=old) load 2.07 waited 0s
+13:20:07 done 7b68f4fa-old-3 ok=1 
+13:20:07 done /root/r2j/plans/D1a.txt
+13:20:07 plan /root/r2j/plans/D1b.txt: 16 runs
+13:20:08 start 4fe96b96-old-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 2.38 waited 0s
+13:20:37 done 4fe96b96-old-1 ok=1 
+13:20:38 start 4fe96b96-b1-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b1) load 3.79 waited 0s
+13:21:08 done 4fe96b96-b1-1 ok=1 
+13:21:09 start 4fe96b96-b2-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2) load 3.39 waited 0s
+13:21:38 done 4fe96b96-b2-1 ok=1 
+13:21:39 start 4fe96b96-b2g-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2g) load 3.92 waited 0s
+13:22:08 done 4fe96b96-b2g-1 ok=1 
+13:22:09 start 4fe96b96-b2g-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2g) load 3.30 waited 0s
+13:22:39 done 4fe96b96-b2g-2 ok=1 
+13:22:39 start 4fe96b96-b2-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2) load 2.81 waited 0s
+13:23:09 done 4fe96b96-b2-2 ok=1 
+13:23:10 start 4fe96b96-b1-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b1) load 2.83 waited 0s
+13:23:39 done 4fe96b96-b1-2 ok=1 
+13:23:40 start 4fe96b96-old-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 2.82 waited 0s
+13:24:09 done 4fe96b96-old-2 ok=1 
+13:24:10 start 6d29a912-old-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.30 waited 0s
+13:24:52 done 6d29a912-old-1 ok=1 
+13:24:52 start 6d29a912-b1-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b1) load 2.90 waited 0s
+13:25:33 done 6d29a912-b1-1 ok=1 
+13:25:34 start 6d29a912-b2-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2) load 2.85 waited 0s
+13:26:16 done 6d29a912-b2-1 ok=1 
+13:26:16 start 6d29a912-b2g-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2g) load 2.83 waited 0s
+13:26:58 done 6d29a912-b2g-1 ok=1 
+13:26:59 start 6d29a912-b2g-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2g) load 2.63 waited 0s
+13:27:40 done 6d29a912-b2g-2 ok=1 
+13:27:41 start 6d29a912-b2-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2) load 2.60 waited 0s
+13:28:23 done 6d29a912-b2-2 ok=1 
+13:28:23 start 6d29a912-b1-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b1) load 2.11 waited 0s
+13:29:05 done 6d29a912-b1-2 ok=1 
+13:29:05 start 6d29a912-old-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 1.84 waited 0s
+13:29:47 done 6d29a912-old-2 ok=1 
+13:29:47 done /root/r2j/plans/D1b.txt

@@ -73,11 +73,14 @@ type capSample struct {
 	SRTT           time.Duration // the socket's srtt (0: unknown): the idle span
 	MinRTT         time.Duration // the socket's min_rtt (0: unknown): α's queue delay, SRTT - MinRTT
 	Received       uint64        // bytes received on the socket (tcpi_bytes_received), cumulative: α's other direction
-	// OWD: the queue delay of this end's sending direction from the QUIET
-	// link's one-way delays (owd.go; OWDok false: none), α's in place of
+	// OWD: the queue delay of this end's sending direction from the link's
+	// one-way delays (owd.go; OWDok false: none), α's in place of
 	// SRTT - MinRTT
 	OWD   time.Duration
 	OWDok bool
+	// OWDwait: the link has one-way delays (OWD on) but none heard yet:
+	// α's start holds (srtt − min_rtt holds the other direction's queue)
+	OWDwait bool
 }
 
 type capRate struct {
@@ -134,6 +137,11 @@ type sendCap struct {
 	// the cap is C4-lite's till then); aOWD: the latest q is the one-way
 	// delay (fix 2), not srtt − min_rtt
 	aStart, aOWD bool
+	// aCutFrom: the cap before its latest cut (0: none yet), the plateau's;
+	// aFree: readings in a row its own queue stayed under a quarter of the
+	// target (free growth)
+	aCutFrom float64
+	aFree    int
 	// tallies (the status line)
 	appLim, lifts uint64
 	aCuts, aGrows uint64
@@ -142,8 +150,44 @@ type sendCap struct {
 // TuneAlpha 0 (HS2_TUNE_ALPHA=0, lab): BULK links keep C4-lite's cap.
 var TuneAlpha = 1
 
+// AlphaHalf, AlphaPlateau 0 (HS2_TUNE_ALPHA_HALF=0, HS2_TUNE_ALPHA_PLATEAU=0;
+// lab): the judge's FIFO tuning off. On a shared FIFO a light flow's round
+// trip crosses both directions' queues, and with the one-way delay each
+// direction answered for its own at CoDel's 5 ms: the probe of the deep
+// FIFO cell (25 Mbit/s, 600 packets) at +27 ms over its floor against +23
+// on srtt, whose sum both ends held near 5 ms together. So with the
+// one-way delay each direction holds half the target (alphaLow/2, and
+// alphaBig/2 for a big one), and the cap grows by alphaGrowNear only
+// within alphaNear of the rate it was cut from last (the path's rate, as
+// far as it knows): the few % a reading past it are the queue's peaks.
+var AlphaHalf, AlphaPlateau = 1, 1
+
+// AlphaFree 0 (HS2_TUNE_ALPHA_FREE=0, lab): the judge's free growth off.
+// The start ends at the first queue of its own, and BBR's start-up can make
+// one while it still delivers a tenth of the path: then the cap climbed by
+// 3% a reading from there (a download beside an upload on a deep FIFO at
+// 6, 8, 9, 11, 12, 14, 16, 18, 20 Mbit/s second by second, 77 at second
+// 19). With the one-way delay, a queue under a quarter of the target for
+// alphaFreeN readings in a row means the path has room: the cap grows by
+// alphaGrowFree a reading (C4-lite's ceiling at most) and the rate it was
+// cut from no longer holds it back.
+var AlphaFree = 1
+
+const (
+	alphaFreeN    = 5
+	alphaGrowFree = 0.1
+)
+
+const (
+	alphaGrowNear = 0.005
+	alphaNear     = 0.95
+)
+
 // TuneAlphaStart 0 (HS2_TUNE_ALPHA_START=0, lab): α starts from the
-// delivery rate it armed at and grows a few % a reading, as β2 had it.
+// delivery rate it armed at and grows a few % a reading, as β2 had it. The
+// start is judged on the link's one-way delay (fix 2) alone: with
+// HS2_TUNE_OWD=0 α is β2's (srtt − min_rtt holds the other direction's
+// queue, and β2's two-way loop test held its queue under 15 ms that way).
 //
 // The judge's fix 1 (R1 round 2): β2's α armed at the first delivery
 // sample of a BULK socket that flows had just moved to (4 to 10 Mbit/s) and
@@ -253,9 +297,8 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 	if arming || c.aRate <= 0 {
 		c.aRate = math.Max(c.maxDlv(), s.Delivery)
 		c.aDlv = [alphaRecent]float64{}
-		c.aStart = TuneAlphaStart != 0
+		c.aStart = TuneAlphaStart != 0 && !OWDOff()
 	}
-	owdNoteRate(long)
 	c.aQ, c.aOWD = 0, false
 	switch {
 	case s.OWDok:
@@ -280,28 +323,49 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 	for _, v := range c.aDlv {
 		d = math.Max(d, v)
 	}
-	if s.AppLimited && d < alphaKeep*c.aRate {
-		return // the sender had less to send than the cap let out: it holds
-	}
 	ceil := wcNetKOf() * c.maxDlv()
-	if c.aStart && (c.aOWD || s.SRTT > 0 && s.MinRTT > 0) {
-		if c.aQ <= alphaLow {
-			// fix 1: no queue of its own yet, C4-lite's cap
-			c.aRate = math.Max(c.aRate, ceil)
+	low, big := alphaLow, alphaBig
+	if c.aOWD && AlphaHalf != 0 {
+		low, big = alphaLow/2, alphaBig/2
+	}
+	// fix 1: till its own queue first passes alphaLow the cap is C4-lite's,
+	// whatever Linux's app-limited bit (under C4-lite's 1.25 x a sender
+	// fed by a 20 KiB lowat finds its queue empty on most samples: the
+	// judge's first version held the start, and a download's standing
+	// queue past 300 ms, for good behind the app-limited hold below); the
+	// first queue of its own ends it, the cap at what was delivered less
+	// the share that drains the queue past alphaLow
+	if c.aStart && (c.aOWD || s.OWDwait) {
+		if c.aQ <= low || s.OWDwait {
+			c.aRate = math.Max(ceil, alphaFloor)
 			c.aGrows++
 			c.aQ0 = c.aQ
-			c.aRate = math.Max(c.aRate, math.Max(alphaKMin*long, alphaFloor))
 			return
 		}
 		c.aStart = false
+		cut := math.Min(math.Max(float64(c.aQ-low), 0)/float64(alphaDrain), alphaCutMax)
+		c.aCutFrom = math.Min(c.aRate, d)
+		c.aRate = c.aCutFrom * (1 - cut)
+		c.aCuts++
+		c.aQ0 = c.aQ
+		c.aRate = math.Max(c.aRate, math.Max(alphaKMin*long, alphaFloor))
+		return
 	}
-	if c.aQ > alphaLow && c.aQ > c.aQ0+alphaRise {
+	if s.AppLimited && d < alphaKeep*c.aRate {
+		return // the sender had less to send than the cap let out: it holds
+	}
+	if c.aOWD && c.aQ < low/4 {
+		c.aFree++
+	} else {
+		c.aFree = 0
+	}
+	if c.aQ > low && c.aQ > c.aQ0+alphaRise {
 		c.aUp++
 	} else {
 		c.aUp = 0
 	}
 	c.aQ0 = c.aQ
-	cut := math.Min(math.Max(float64(c.aQ-alphaLow), 0)/float64(alphaDrain), alphaCutMax)
+	cut := math.Min(math.Max(float64(c.aQ-low), 0)/float64(alphaDrain), alphaCutMax)
 	// fix 2: a one-way delay is this direction's queue alone, so a growing
 	// one is this direction's to answer whatever its share of the bytes
 	mine := share >= alphaMajor || c.aOWD
@@ -311,15 +375,24 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 	case d < alphaKeep*c.aRate:
 		c.aRate = d * (1 - cut)
 		if cut > 0 {
+			c.aCutFrom = d
 			c.aCuts++
 		}
-	case c.aUp >= alphaRiseN && mine && (d < alphaMatch*c.aRate || c.aQ > alphaBig):
-		c.aRate = math.Min(c.aRate, d) * (1 - cut)
+	case c.aUp >= alphaRiseN && mine && (d < alphaMatch*c.aRate || c.aQ > big):
+		c.aCutFrom = math.Min(c.aRate, d)
+		c.aRate = c.aCutFrom * (1 - cut)
 		c.aCuts++
 	default:
 		g := alphaGrow
-		if c.aQ < alphaLow {
+		if c.aQ < low {
 			g = alphaGrowFast
+		}
+		if c.aOWD && AlphaPlateau != 0 && c.aCutFrom > 0 && c.aRate >= alphaNear*c.aCutFrom && c.aRate <= c.aCutFrom/alphaNear {
+			g = alphaGrowNear // near the rate it was cut from: the path's
+		}
+		if c.aOWD && AlphaFree != 0 && c.aFree >= alphaFreeN {
+			g = math.Max(g, alphaGrowFree) // no queue for a while: room on the path
+			c.aCutFrom = 0
 		}
 		c.aRate = math.Min(c.aRate*(1+g), math.Max(ceil, c.aRate))
 		c.aGrows++
@@ -489,6 +562,11 @@ type sendCapLink struct {
 	// blockedMin; nil: unknown), and its value at the reading before
 	blocked   func() int64
 	blockSeen int64
+	// owd: the link's one-way delays (a BULK link's, owd.go; nil: none),
+	// and the bytes received at the reading before, for its beat
+	owd  *owdLink
+	rx0  uint64
+	rxAt time.Duration
 }
 
 // newSendCapLink: the C4-lite of a link socket (sys), and the C3 its
@@ -525,12 +603,22 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 	if ts.dlvOK {
 		var oq time.Duration
 		ook := false
-		if l.core.alpha {
-			oq, ook = owdQueue()
+		if l.owd != nil {
+			// the beat follows the busier direction of the link
+			rx := 0.0
+			if l.rxAt > 0 && now > l.rxAt && ts.bytesReceived >= l.rx0 {
+				rx = float64(ts.bytesReceived-l.rx0) / (now - l.rxAt).Seconds()
+			}
+			l.rx0, l.rxAt = ts.bytesReceived, now
+			l.owd.noteRate(max(l.core.maxDlv(), rx))
+			if l.core.alpha {
+				oq, ook = l.owd.queue()
+			}
 		}
+		owait := l.owd != nil && l.core.alpha && !ook && !OWDOff()
 		l.apply(l.core.Update(capSample{Now: now, Delivery: float64(ts.deliveryRate), AppLimited: app,
 			Acked: ts.bytesAcked, Written: written, Segs: ts.segsOut, SRTT: usDur(uint64(ts.rtt)),
-			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook}))
+			MinRTT: usDur(uint64(ts.minRTT)), Received: ts.bytesReceived, OWD: oq, OWDok: ook, OWDwait: owait}))
 	} else if sendcapNoDlv.CompareAndSwap(false, true) {
 		coreLogf("sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)")
 	}

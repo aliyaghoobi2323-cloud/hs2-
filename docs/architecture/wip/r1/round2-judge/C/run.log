@@ -1,0 +1,50 @@
+12:49:56 plan /root/r2j/plans/C.txt: 24 runs
+12:49:57 start e9a34d17-old-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.28 waited 0s
+12:50:43 done e9a34d17-old-1 ok=1 
+12:50:44 start e9a34d17-b1-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b1) load 1.56 waited 0s
+12:51:26 done e9a34d17-b1-1 ok=1 
+12:51:27 start e9a34d17-b2-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2) load 2.55 waited 0s
+12:52:13 done e9a34d17-b2-1 ok=1 
+12:52:14 start e9a34d17-b2f-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2f) load 2.55 waited 0s
+12:52:59 done e9a34d17-b2f-1 ok=1 
+12:53:00 start e9a34d17-b2f-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2f) load 2.28 waited 0s
+12:53:45 done e9a34d17-b2f-2 ok=1 
+12:53:46 start e9a34d17-b2-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2) load 2.18 waited 0s
+12:54:31 done e9a34d17-b2-2 ok=1 
+12:54:32 start e9a34d17-b1-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b1) load 2.15 waited 0s
+12:55:14 done e9a34d17-b1-2 ok=1 
+12:55:15 start e9a34d17-old-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.14 waited 0s
+12:56:01 done e9a34d17-old-2 ok=1 
+12:56:02 start 2b77e8aa-old-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.89 waited 0s
+12:56:41 done 2b77e8aa-old-1 ok=1 
+12:56:42 start 2b77e8aa-b1-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b1) load 2.09 waited 0s
+12:57:21 done 2b77e8aa-b1-1 ok=1 
+12:57:22 start 2b77e8aa-b2-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2) load 2.11 waited 0s
+12:58:02 done 2b77e8aa-b2-1 ok=1 
+12:58:02 start 2b77e8aa-b2f-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2f) load 2.76 waited 0s
+12:58:42 done 2b77e8aa-b2f-1 ok=1 
+12:58:43 start 2b77e8aa-b2f-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2f) load 2.37 waited 0s
+12:59:22 done 2b77e8aa-b2f-2 ok=1 
+12:59:23 start 2b77e8aa-b2-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2) load 2.13 waited 0s
+13:00:02 done 2b77e8aa-b2-2 ok=1 
+13:00:03 start 2b77e8aa-b1-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b1) load 1.94 waited 0s
+13:00:43 done 2b77e8aa-b1-2 ok=1 
+13:00:44 start 2b77e8aa-old-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.32 waited 0s
+13:01:23 done 2b77e8aa-old-2 ok=1 
+13:01:24 start cd018225-old-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 1.36 waited 0s
+13:01:59 done cd018225-old-1 ok=1 
+13:02:00 start cd018225-b1-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b1) load 1.62 waited 0s
+13:02:33 done cd018225-b1-1 ok=1 
+13:02:33 start cd018225-b2-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2) load 1.91 waited 0s
+13:03:09 done cd018225-b2-1 ok=1 
+13:03:10 start cd018225-b2f-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2f) load 1.69 waited 0s
+13:03:46 done cd018225-b2f-1 ok=1 
+13:03:47 start cd018225-b2f-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2f) load 2.03 waited 0s
+13:04:22 done cd018225-b2f-2 ok=1 
+13:04:23 start cd018225-b2-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2) load 2.13 waited 0s
+13:04:58 done cd018225-b2-2 ok=1 
+13:04:59 start cd018225-b1-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b1) load 2.97 waited 0s
+13:05:32 done cd018225-b1-2 ok=1 
+13:05:33 start cd018225-old-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 2.35 waited 0s
+13:06:08 done cd018225-old-2 ok=1 
+13:06:08 done /root/r2j/plans/C.txt
