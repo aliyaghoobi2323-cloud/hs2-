@@ -1,0 +1,26 @@
+19:19:06 plan /root/rmix/plans/S1.txt: 12 runs
+19:19:07 start 7ee03742-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=old) load 2.93 waited 0s
+19:19:52 done 7ee03742-old-1 ok=1 
+19:19:52 start 7ee03742-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=b2nx) load 2.70 waited 0s
+19:20:37 done 7ee03742-b2nx-1 ok=1 
+19:20:38 start 7ee03742-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=b2nx) load 2.90 waited 0s
+19:21:23 done 7ee03742-b2nx-2 ok=1 
+19:21:24 start 7ee03742-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=old) load 2.57 waited 0s
+19:22:08 done 7ee03742-old-2 ok=1 
+19:22:09 start b216f9c5-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=old) load 2.30 waited 0s
+19:22:51 done b216f9c5-old-1 ok=1 
+19:22:52 start b216f9c5-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=b2nx) load 2.18 waited 0s
+19:23:35 done b216f9c5-b2nx-1 ok=1 
+19:23:35 start b216f9c5-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=b2nx) load 1.49 waited 0s
+19:24:18 done b216f9c5-b2nx-2 ok=1 
+19:24:18 start b216f9c5-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=old) load 1.61 waited 0s
+19:25:01 done b216f9c5-old-2 ok=1 
+19:25:02 start 71802069-old-1 (N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=old) load 1.71 waited 0s
+19:25:46 done 71802069-old-1 ok=1 
+19:25:47 start 71802069-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=b2nx) load 2.28 waited 0s
+19:26:32 done 71802069-b2nx-1 ok=1 
+19:26:33 start 71802069-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=b2nx) load 2.24 waited 0s
+19:27:18 done 71802069-b2nx-2 ok=1 
+19:27:18 start 71802069-old-2 (N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=old) load 1.86 waited 0s
+19:28:04 done 71802069-old-2 ok=1 
+19:28:04 done /root/rmix/plans/S1.txt

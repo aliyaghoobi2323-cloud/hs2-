@@ -1,0 +1,7 @@
+# gamers and viewers next to 16-connection downloaders, N=1 (P10 (b) as users feel it); then the gamers on 0.5 % loss
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=old
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=b2nx
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=old
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 BIN=b2nx
+N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=old
+N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=50 MIX=gamer_vs_dl BIN=b2nx

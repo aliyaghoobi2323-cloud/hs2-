@@ -1,0 +1,3 @@
+# pipeline check: every class, UDP user ports on, old and b2nx once
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=home SBR=1.2 DUR=10 BIN=old
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=home SBR=1.2 DUR=10 BIN=b2nx

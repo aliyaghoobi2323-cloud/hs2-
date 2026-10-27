@@ -300,6 +300,16 @@ class ClassVerdicts(unittest.TestCase):
         s = self.analyze(recs)
         self.assertIn("web FAIL", s)
 
+    def test_standing_queue_flagged(self):
+        cell = CELL + "USERS=2 MIX=gamer_vs_dl"
+        us = [user("u1", "game", "game1@0", dn=0.1), user("u2", "heavy", "dn16@0", dn=90.0)]
+        r = class_rec("gamer_vs_dl", {"game": rt_class(4.0, 3.0, floor=36.0)}, us)
+        r["classes"]["game"]["floor_ms"]["dn"] = 136.0  # 100 ms over the path
+        r["classes"]["game"]["dn"]["main"] = owd(1, 3.0, 136.0)
+        r.update({"cell": cell, "bin": "old"})
+        s = self.analyze([r])
+        self.assertIn("game PASS (1/1; floor over the path: dn +100 ms)", s)
+
 
 if __name__ == "__main__":
     unittest.main()

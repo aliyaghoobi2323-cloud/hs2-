@@ -53,8 +53,9 @@ User classes (R1 round 3, wip/r1/classes; MIX home, gamer_vs_dl,
 stream_vs_dl): per class, what its users feel, in the main window. One-way
 delays are per direction (up = user to server, dn = back) over the class's
 floor in that direction (the least one-way delay of the run, window "all");
-"path" is the same over the path's own RTT/2. Proposed verdicts, REPORT ONLY
-(not gates; the lead decides):
+"path" is the same over the path's own RTT/2 (a floor more than FLOOR_WARN
+over the path, a standing queue the floor hides, is flagged on the verdict
+line). Proposed verdicts, REPORT ONLY (not gates; the lead decides):
   game  p99 <= floor + 10 ms and late (> floor + 100 ms) + lost <= 0.1 %,
         each direction (game over TCP and gameudp each)
   call  p99 <= floor + 30 ms, each direction
@@ -91,6 +92,7 @@ GAME_LATE = 0.001   # late (> floor + 100 ms) and lost, of the sent
 CALL_P99 = 30.0     # ms over the floor, each direction
 STREAM_STARTUP = 2.0  # s
 WEB_TOL = 1.05      # p95 page load against the base's
+FLOOR_WARN = 5.0    # ms: a class's floor this far over RTT/2 is flagged (a standing queue)
 INF = 1e9           # "never": a percentile that falls on a lost message or a failed page
 
 
@@ -969,7 +971,13 @@ def class_verdicts(s, ms):
         else:
             v = all(g("%s_%s_p99" % (k, d)) <= GAME_P99 and g("%s_%s_late" % (k, d)) <= GAME_LATE
                     for d in ("up", "dn"))
-        cv[k] = {"pass": v, "runs": "%d/%d" % (sum(got), len(got))}
+        runs = "%d/%d" % (sum(got), len(got))
+        # a floor well above the path's RTT/2 is a standing queue the verdict does not see
+        sq = ["%s +%.0f ms" % (d, med["%s_%s_floor_path" % (k, d)][0]) for d in ("up", "dn")
+              if med.get("%s_%s_floor_path" % (k, d)) and med["%s_%s_floor_path" % (k, d)][0] > FLOOR_WARN]
+        if sq:
+            runs += "; floor over the path: " + ", ".join(sq)
+        cv[k] = {"pass": v, "runs": runs}
     if "stream_users" in med:
         got = [m["v_stream"] for m in ms if "v_stream" in m]
         if got:
