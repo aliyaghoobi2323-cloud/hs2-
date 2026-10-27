@@ -103,14 +103,26 @@ var QuietTwo = 0
 // for a light message on each end of the link it crosses; the one-way delay
 // messages are urgent (no wait: their stamps would read it as queue). Each
 // end's switch is its own sending's. 0: off.
-var QuietCoalesce = 2000
+//
+// 4 ms (the rig, lone16 with 200 users, N=1, 3 runs each): the QUIET link
+// sent ~8 Mbit/s each way with none, ~2.7 with 2 ms; the lone user got
+// 81.9 Mbit/s with round 2's final candidate, 87.5 (0.939 of cap_P10) with
+// 2 ms and 89.6 (0.962, the base's 89.6) with 4 ms, at a probe p99 over
+// its floor of +2.8, +5.1 and +8.9 ms (the bound +20).
+var QuietCoalesce = 4000
 
-// QuietCoalTun 1 (HS2_TUNE_QUIET_COAL_TUN=1): the TUN's frames are urgent
-// (smux SetUrgent): a QUIET link's hold ends at a TUN frame, which then
-// waits for none (the TUN ping's bound is 10 ms over its floor, the
-// probe's 20; with a 2 ms window the rig's TUN ping went from +1.2 to +4.8
-// ms, the probe from +3.5 to +4.8). Off by default.
-var QuietCoalTun = 0
+// QuietCoalTun (HS2_TUNE_QUIET_COAL_TUN, on by default; 0: off): the TUN's
+// frames are urgent (smux SetUrgent): a QUIET link's hold ends at a TUN
+// frame, which then waits for none (the TUN ping's bound is 10 ms over its
+// floor, the probe's 20; with a 2 ms window and TUN frames held, the rig's
+// TUN ping went from +1.2 to +4.8 ms, the probe from +3.5 to +4.8).
+var QuietCoalTun = 1
+
+// QuietThin 1 (HS2_TUNE_QUIET_THIN=1, lab; the R1 round-3 lead's note):
+// TCP_THIN_LINEAR_TIMEOUTS on the QUIET links' sockets: a thin stream's
+// retransmission timeout stays linear for its first retries (a light
+// message behind a lost segment on a lossy path). Off by default.
+var QuietThin = 0
 
 // QuietCoalesceMin: light frames a second a QUIET link's writer wrote over
 // the last second before it holds any (fewer: each padded record costs

@@ -347,6 +347,8 @@ func applyTuning() {
 	num("HS2_TUNE_QUIET_COAL", &engine.QuietCoalesce)
 	num("HS2_TUNE_QUIET_COAL_MIN", &engine.QuietCoalesceMin)
 	num("HS2_TUNE_QUIET_COAL_TUN", &engine.QuietCoalTun)
+	num("HS2_TUNE_QUIET_THIN", &engine.QuietThin)
+	num("HS2_TUNE_ALPHA_OWN_CHECK", &engine.AlphaOwnCheck)
 	num("HS2_TUNE_OWD_STAMP", &engine.OWDStampLate) // one-way delay stamps as the writer takes them
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)

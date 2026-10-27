@@ -499,3 +499,55 @@ func TestOWDRestamp(t *testing.T) {
 	}
 	owdRestamp(b[:3], nil) // short: untouched, no panic
 }
+
+// A reading that does not fall after the own cap's cuts (here it grows as
+// the cap falls, as a host's wait at a lower cap would) is none of the
+// link's doing: after ownNoHelpN cuts the cap goes back to where they
+// began and that queue is the base of its readings; a queue that drains
+// after each cut is its own (no such reset); HS2_TUNE_ALPHA_OWN_CHECK=0:
+// it cuts on.
+func TestAlphaOwnCheck(t *testing.T) {
+	const ms = time.Millisecond
+	run := func(phantom bool) *sendCap {
+		c := &sendCap{linked: true, alpha: true}
+		at, acked := time.Hour, 0.0
+		capNow := 8e6 / 8
+		for i := 0; i < 40; i++ {
+			at += 100 * ms
+			dlv := capNow
+			acked += dlv / 10
+			q := time.Duration(0)
+			if i >= 5 {
+				if phantom {
+					q = time.Duration(10e6 / 8 / capNow * float64(8*ms)) // 10 ms at 8 Mbit/s, longer as the cap falls
+				} else if i == 5 {
+					q = 8 * ms // its own: drains once cut
+				} else if i == 6 {
+					q = 6 * ms
+				}
+			}
+			c.Update(capSample{Now: at, Delivery: dlv, Acked: uint64(acked), Written: uint64(acked), Segs: uint32(acked / 1000),
+				SRTT: 72 * ms, MinRTT: 72 * ms, OWDok: true, OWN: q, OWNok: true})
+			if c.own > 0 {
+				capNow = math.Min(float64(c.own), 8e6/8)
+			}
+		}
+		return c
+	}
+	p := run(true)
+	t.Logf("a queue that grows as the cap falls: own cap %.1f Mbit/s, cuts %d, not its own %d (base %v)", p.bRate*8/1e6, p.bCuts, p.bPhantoms, p.bOff)
+	if p.bPhantoms == 0 || p.bRate < 7.5e6/8 {
+		t.Fatalf("phantom queue: %d resets, own cap %.1f Mbit/s; want one at least and the cap back near 8", p.bPhantoms, p.bRate*8/1e6)
+	}
+	o := run(false)
+	if o.bPhantoms != 0 || o.bCuts == 0 {
+		t.Fatalf("its own queue: %d resets, %d cuts; want cuts and no reset", o.bPhantoms, o.bCuts)
+	}
+	AlphaOwnCheck = 0
+	defer func() { AlphaOwnCheck = 1 }()
+	n := run(true)
+	t.Logf("check off: own cap %.1f Mbit/s after %d cuts", n.bRate*8/1e6, n.bCuts)
+	if n.bPhantoms != 0 || n.bRate > 7e6/8 {
+		t.Fatalf("check off: %d resets, own cap %.1f Mbit/s; want the ratchet down", n.bPhantoms, n.bRate*8/1e6)
+	}
+}
