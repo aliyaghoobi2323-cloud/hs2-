@@ -284,3 +284,45 @@ func TestAlphaStartEndsWhenAppLimited(t *testing.T) {
 		t.Fatalf("app-limited with a 30 ms queue of its own: start %v, cap %.0f; want it over and the cap under %.0f", c.aStart, c.aRate, 1e7)
 	}
 }
+
+// Free growth: when the start ended at a queue BBR's start-up made while it
+// delivered a tenth of the path, a one-way queue under a quarter of the
+// target for alphaFreeN readings lets the cap grow by alphaGrowFree a
+// reading (HS2_TUNE_ALPHA_FREE=0: by a few % from the cut).
+func TestAlphaFreeGrowth(t *testing.T) {
+	const ms = time.Millisecond
+	grow := func() float64 {
+		c := &sendCap{linked: true, alpha: true}
+		at, acked := time.Hour, 0.0
+		path, cap := 100e6/8, 8e6/8
+		feed := func(q time.Duration) {
+			at += 100 * ms
+			dlv := math.Min(cap, path)
+			acked += dlv / 10
+			c.Update(capSample{Now: at, Delivery: dlv, Acked: uint64(acked), Written: uint64(acked),
+				Segs: uint32(acked / 1000), SRTT: 72 * ms, MinRTT: 72 * ms, OWD: q, OWDok: true})
+			if c.own > 0 {
+				cap = float64(c.own)
+			}
+		}
+		feed(0)
+		feed(0)
+		feed(20 * ms) // start-up's queue at a tenth of the path: the start ends with a cut
+		if c.aStart {
+			t.Fatal("a 20 ms queue of its own: want the start over")
+		}
+		from := c.aRate
+		for i := 0; i < 20; i++ {
+			feed(0)
+		}
+		return c.aRate / from
+	}
+	on := grow()
+	AlphaFree = 0
+	off := grow()
+	AlphaFree = 1
+	t.Logf("2 s without a queue after the start's cut: the cap x%.2f with free growth, x%.2f without", on, off)
+	if on < 2.5 || off >= 2 {
+		t.Fatalf("free growth x%.2f (want >= 2.5), without x%.2f (want < 2)", on, off)
+	}
+}

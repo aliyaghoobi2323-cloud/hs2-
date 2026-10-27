@@ -137,8 +137,11 @@ type sendCap struct {
 	// the cap is C4-lite's till then); aOWD: the latest q is the one-way
 	// delay (fix 2), not srtt − min_rtt
 	aStart, aOWD bool
-	// aCutFrom: the cap before its latest cut (0: none yet), the plateau's
+	// aCutFrom: the cap before its latest cut (0: none yet), the plateau's;
+	// aFree: readings in a row its own queue stayed under a quarter of the
+	// target (free growth)
 	aCutFrom float64
+	aFree    int
 	// tallies (the status line)
 	appLim, lifts uint64
 	aCuts, aGrows uint64
@@ -158,6 +161,22 @@ var TuneAlpha = 1
 // within alphaNear of the rate it was cut from last (the path's rate, as
 // far as it knows): the few % a reading past it are the queue's peaks.
 var AlphaHalf, AlphaPlateau = 1, 1
+
+// AlphaFree 0 (HS2_TUNE_ALPHA_FREE=0, lab): the judge's free growth off.
+// The start ends at the first queue of its own, and BBR's start-up can make
+// one while it still delivers a tenth of the path: then the cap climbed by
+// 3% a reading from there (a download beside an upload on a deep FIFO at
+// 6, 8, 9, 11, 12, 14, 16, 18, 20 Mbit/s second by second, 77 at second
+// 19). With the one-way delay, a queue under a quarter of the target for
+// alphaFreeN readings in a row means the path has room: the cap grows by
+// alphaGrowFree a reading (C4-lite's ceiling at most) and the rate it was
+// cut from no longer holds it back.
+var AlphaFree = 1
+
+const (
+	alphaFreeN    = 5
+	alphaGrowFree = 0.1
+)
 
 const (
 	alphaGrowNear = 0.005
@@ -335,6 +354,11 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 	if s.AppLimited && d < alphaKeep*c.aRate {
 		return // the sender had less to send than the cap let out: it holds
 	}
+	if c.aOWD && c.aQ < low/4 {
+		c.aFree++
+	} else {
+		c.aFree = 0
+	}
 	if c.aQ > low && c.aQ > c.aQ0+alphaRise {
 		c.aUp++
 	} else {
@@ -365,6 +389,10 @@ func (c *sendCap) alphaStep(s capSample, arming bool) {
 		}
 		if c.aOWD && AlphaPlateau != 0 && c.aCutFrom > 0 && c.aRate >= alphaNear*c.aCutFrom && c.aRate <= c.aCutFrom/alphaNear {
 			g = alphaGrowNear // near the rate it was cut from: the path's
+		}
+		if c.aOWD && AlphaFree != 0 && c.aFree >= alphaFreeN {
+			g = math.Max(g, alphaGrowFree) // no queue for a while: room on the path
+			c.aCutFrom = 0
 		}
 		c.aRate = math.Min(c.aRate*(1+g), math.Max(ceil, c.aRate))
 		c.aGrows++

@@ -12,7 +12,11 @@ import sys
 sys.path.insert(0, os.environ.get("RIGSCALE", "/root/hs2-wt/r1-r2j/docs/architecture/wip/rig-scale"))
 import ana  # noqa: E402
 
-LABEL = {"old": "پایه", "b1": "β1", "b1na": "β1 بی α", "b2": "β2", "b2na": "β2 بی α"}
+LABEL = {"old": "پایه", "b1": "β1", "b1na": "β1 بی α", "b2": "β2", "b2na": "β2 بی α",
+         "b2f": "وصله ن۱", "b2g": "وصله ن۲", "b2h": "وصله ن۳", "b2i": "وصله ن۴",
+         "b2jx": "وصله ن۴ + QUIET بیرون", "b2jxr": "همان + رکورد تعاملی",
+         "b2kx": "نهایی (b2kx)", "b2kxr": "نهایی + رکورد تعاملی", "b2kxn": "نهایی بی تنظیم FIFO"}
+BINORD = ["old", "b1", "b1na", "b2", "b2na", "b2f", "b2g", "b2h", "b2i", "b2jx", "b2jxr", "b2kxn", "b2kx", "b2kxr"]
 
 
 def label(b):
@@ -53,6 +57,9 @@ def verdict(ok_runs, n, med_ok):
     return "%s %d/%d" % ("PASS" if med_ok else "FAIL", ok_runs, n)
 
 
+COMPACT = "--compact" in sys.argv
+
+
 def table(recs):
     cells, order = {}, []
     for r in recs:
@@ -64,9 +71,13 @@ def table(recs):
     out = []
     for c in order:
         out.append("#### `%s`\n" % c)
-        out.append("| باینری | اجرا | دانلود Mbit/s | آپلود Mbit/s | (ج) به cap_P10 | (ج) خام | (ب) به cap_P10 | p99 کاوشگر − کف ms | کران | (د) | پینگ TUN − کف ms | کران | tun | گم‌شده کاوشگر/پینگ | بازارسال خروجی/لبه ٪ | CPU لبه/خروجی ٪ | پرکاری ٪ |")
-        out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
-        bins = sorted(cells[c], key=lambda b: ["old", "b1", "b1na", "b2", "b2na"].index(b) if b in LABEL else 9)
+        if COMPACT:
+            out.append("| باینری | دانلود Mbit/s | آپلود Mbit/s | (ج) | (ب) | کاوشگر − کف ms | (د) | پینگ TUN − کف ms | tun | بازارسال خروجی/لبه ٪ |")
+            out.append("|---|---|---|---|---|---|---|---|---|---|")
+        else:
+            out.append("| باینری | اجرا | دانلود Mbit/s | آپلود Mbit/s | (ج) به cap_P10 | (ج) خام | (ب) به cap_P10 | p99 کاوشگر − کف ms | کران | (د) | پینگ TUN − کف ms | کران | tun | گم‌شده کاوشگر/پینگ | بازارسال خروجی/لبه ٪ | CPU لبه/خروجی ٪ | پرکاری ٪ |")
+            out.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+        bins = sorted(cells[c], key=lambda b: BINORD.index(b) if b in BINORD else 99)
         for b in bins:
             rs = [r for r in cells[c][b] if r.get("ok")]
             ms = [ana.derive(r) for r in rs]
@@ -96,6 +107,11 @@ def table(recs):
             ce = statistics.median([m["cpu_edge"] for m in ms if m.get("cpu_edge") is not None] or [0])
             cx = statistics.median([m["cpu_exit"] for m in ms if m.get("cpu_exit") is not None] or [0])
             busy = max((m.get("busy") or 0) for m in ms)
+            if COMPACT:
+                out.append("| %s | %s | %s | %s | %s | %s | %s | %s | %s | %s / %s |" % (
+                    label(b), dn, up, cc, bb, pd, verdict(sum(1 for m in ms if m.get("d")), n, dv),
+                    td, verdict(sum(1 for m in ms if m.get("tun")), n, tv), rt_x.split(" ")[0], rt_e.split(" ")[0]))
+                continue
             out.append("| %s | %d/%d | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s | %s / %s | %.0f / %.0f | %.0f |" % (
                 label(b), n, len(cells[c][b]), dn, up, cc, cr, bb, pd,
                 f(statistics.median(bd), 0) if bd else "-", verdict(sum(1 for m in ms if m.get("d")), n, dv),
@@ -119,7 +135,7 @@ def ramp(recs):
 
 
 def main():
-    a = sys.argv[1:]
+    a = [x for x in sys.argv[1:] if x != "--compact"]
     if a and a[0] == "--ramp":
         print(ramp(load(a[1:])))
     elif a and a[0] == "--json":

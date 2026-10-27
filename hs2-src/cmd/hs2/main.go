@@ -333,6 +333,7 @@ func applyTuning() {
 	num("HS2_TUNE_OWD", &engine.TuneOWD)
 	num("HS2_TUNE_ALPHA_HALF", &engine.AlphaHalf)
 	num("HS2_TUNE_ALPHA_PLATEAU", &engine.AlphaPlateau)
+	num("HS2_TUNE_ALPHA_FREE", &engine.AlphaFree)
 	num("HS2_TUNE_QUIET_REC", &engine.QuietRec)     // lab: QUIET's interactive record sizes
 	num("HS2_TUNE_QUIET_EXTRA", &engine.QuietExtra) // QUIET links next to max_links BULK ones
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
