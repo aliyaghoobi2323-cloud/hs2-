@@ -1,0 +1,23 @@
+{
+ "capture_s": 1206.3,
+ "conns": 2923,
+ "life_s_p50": 239.6,
+ "life_s_p90": 833.4,
+ "life_s_p99": 952.6,
+ "life_s_max": 957.2,
+ "conns_life_ge_60s": 2543,
+ "conns_life_ge_300s": 1172,
+ "conns_censored": 572,
+ "conns_with_bulk": 817,
+ "conns_mixed": 709,
+ "conns_mixed_life_ge_300s": 398,
+ "bytes_share_mixed": 0.872,
+ "light_s": 142148,
+ "light_s_after_first_bulk": 61000,
+ "light_share_after_first_bulk": 0.429,
+ "steady_conns": 32,
+ "steady_conns_with_bulk": 32,
+ "steady_s": 1660,
+ "steady_s_after_first_bulk": 1572,
+ "steady_share_after_first_bulk": 0.947
+}
