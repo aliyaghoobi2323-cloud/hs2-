@@ -118,6 +118,12 @@ func (t *linkFlows) add(st *smux.Stream) *flowEnt {
 	}
 	tag, _ := st.Syn()
 	e := &flowEnt{st: st, tag: tag}
+	if _, role, _ := st.GroupInfo(); role == smux.RoleMove {
+		// a connection that moved here for its bulk behaviour (β2): bulk
+		// from its first frame, until it is quiet (C1's rule)
+		e.cls.d[0].cls = ClassBulk
+		e.class.Store(uint32(ClassBulk))
+	}
 	st.SetFlowCtx(e)
 	t.ents = append(t.ents, e)
 	return e
@@ -454,6 +460,12 @@ func CoreLines() []string {
 	links := coreLinks.links()
 	now := time.Duration(ctrlNow())
 	var out []string
+	if f := placeLine.Load(); f != nil {
+		out = append(out, (*f)()) // the edge's QUIET and BULK links (β2)
+	}
+	if exitGroups.attached.Load()+exitGroups.refused.Load() > 0 {
+		out = append(out, exitGroups.line())
+	}
 	for i, l := range links {
 		if i == coreLinesMax {
 			out = append(out, fmt.Sprintf("... and %d more link(s)", len(links)-coreLinesMax))

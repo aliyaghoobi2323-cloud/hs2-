@@ -86,6 +86,18 @@ func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Se
 				car.Close()
 				return
 			}
+			if lm.quiet != nil && lm.quiet.place(l, " from "+from) {
+				// a QUIET link (it was offered CapQuiet): the pool's QUIET
+				// set holds it, not the BULK pool
+				lm.quiet.arrived()
+				select {
+				case <-ctx.Done():
+					l.Close()
+				case <-l.closed():
+					lm.quiet.drop(l)
+				}
+				return
+			}
 			lm.AddLink(l, from)
 			// Hold the carrier open until the link's smux session ends, then take
 			// it out of the pool at once (and log why) instead of waiting for the
@@ -113,6 +125,11 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	}
 	if max < min {
 		max = min
+	}
+	if !QuietOff() {
+		// β2: the edge's QUIET links count toward max_links, but a pool
+		// of one link still has a BULK one (QuietTotal)
+		max = QuietTotal(max)
 	}
 	initial := cfg.RevLinks
 	if initial < min {

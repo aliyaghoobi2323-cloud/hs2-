@@ -16,7 +16,8 @@ func TestMain(m *testing.M) {
 		env string
 		v   *int
 	}{{"HS2_TUNE_SCHED", &TuneSched}, {"HS2_TUNE_HQG", &TuneHQG}, {"HS2_TUNE_SENDCAP", &TuneSendCap}, {"HS2_TUNE_CLASS", &TuneClass},
-		{"HS2_TUNE_HQG_SEGS", &HQGSegs}, {"HS2_TUNE_HQG_GATE", &HQGGate}, {"HS2_TUNE_SENDCAP_BLOCKED", &SendCapBlocked}} {
+		{"HS2_TUNE_HQG_SEGS", &HQGSegs}, {"HS2_TUNE_HQG_GATE", &HQGGate}, {"HS2_TUNE_SENDCAP_BLOCKED", &SendCapBlocked},
+		{"HS2_TUNE_QUIET", &TuneQuiet}, {"HS2_TUNE_EARLYDONE", &TuneEarlyDone}, {"HS2_TUNE_ALPHA", &TuneAlpha}, {"HS2_TUNE_HQG_QUIET_SEGS", &HQGQuietSegs}} {
 		if s := os.Getenv(k.env); s != "" {
 			if n, err := strconv.Atoi(s); err == nil {
 				*k.v = n

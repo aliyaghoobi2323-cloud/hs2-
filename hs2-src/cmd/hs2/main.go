@@ -320,10 +320,17 @@ func applyTuning() {
 	num("HS2_TUNE_SCHED", &engine.TuneSched)     // C2, the scheduler: the old heap and FIFO
 	num("HS2_TUNE_HQG", &engine.TuneHQG)         // C3, the host-queue guard: the fixed mark and sendGate
 	num("HS2_TUNE_SENDCAP", &engine.TuneSendCap) // C4-lite, the pacing cap: the pacing net alone, exit only
+	// R1 round 2 (β2): QUIET/BULK links with the one-time move and α's cap
+	// on BULK links (0: every link as before, level 1's wire), and a
+	// stream's next frame queued once the one before is copied (0: written)
+	num("HS2_TUNE_QUIET", &engine.TuneQuiet)
+	num("HS2_TUNE_EARLYDONE", &engine.TuneEarlyDone)
+	num("HS2_TUNE_ALPHA", &engine.TuneAlpha) // α's cap on BULK links (0: C4-lite's there too)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
 	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
+	num("HS2_TUNE_HQG_QUIET_SEGS", &engine.HQGQuietSegs)
 	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
@@ -624,11 +631,17 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		}
 		cfg.RevMin, cfg.RevMax = min, max
 		cfg.RevLinks = engine.WarmSize(min, max)
+		// β2: the edge (the TLS server here) chooses each link's class; the
+		// exit offers both classes on every link it dials
+		var class uint32
+		if !engine.QuietOff() {
+			class = tlscarrier.RoleCaps
+		}
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+			return tlscarrier.DialFromTimeoutCaps(fc.Addr, fc.SNI, key, fc.BindLocalIP, 8*time.Second, class)
 		}
 		cfg.RevDialScout = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialFromTimeout(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second)
+			return tlscarrier.DialFromTimeoutCaps(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second, class)
 		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
 		must(engine.RunKharej(ctx, cfg))
