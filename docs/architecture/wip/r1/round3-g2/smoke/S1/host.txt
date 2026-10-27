@@ -1,0 +1,30 @@
+== start 2026-10-27T19:29:16+00:00
+ 19:29:16 up  8:24, 18 users,  load average: 2.08, 2.00, 2.09
+top - 19:29:17 up  8:24, 18 users,  load average: 2.08, 2.00, 2.09
+Tasks: 282 total,   1 running, 281 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.9 us,  5.6 sy,  0.0 ni, 87.3 id,  0.0 wa,  0.0 hi,  3.2 si,  0.0 st 
+MiB Mem :  23456.9 total,  15901.6 free,   1690.3 used,   6281.5 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21766.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 636194 root      20   0 1636024 380076  29360 S  78.8   1.6  12:42.57 xray-linux-amd6
+    992 root      20   0 1476416 200588  10420 S  57.7   0.8 151:48.53 hs2
+    958 root      20   0 1406564 114832  46700 S   9.6   0.5   9:40.03 x-ui
+    899 root      20   0 1284712  25444  16260 S   1.9   0.1   0:09.44 backpack
+ 682750 root      20   0   11908   6036   3868 R   1.9   0.0   0:00.03 top
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   0:45.81 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.06 kthreadd
+== end 2026-10-27T19:44:31+00:00
+ 19:44:31 up  8:39, 19 users,  load average: 1.89, 2.72, 2.54
+top - 19:44:31 up  8:39, 18 users,  load average: 1.82, 2.69, 2.53
+Tasks: 285 total,   1 running, 284 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  4.5 us,  6.2 sy,  0.0 ni, 86.4 id,  0.0 wa,  0.0 hi,  2.9 si,  0.0 st 
+MiB Mem :  23456.9 total,  16027.3 free,   1539.9 used,   6306.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21917.0 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 636194 root      20   0 1702880 406012  29360 S  75.0   1.7  22:29.11 xray-linux-amd6
+    992 root      20   0 1476416 218464  10420 S  55.8   0.9 159:04.22 hs2
+      1 root      20   0   22656  14164   9776 S   3.8   0.1   0:47.25 systemd
+ 710441 root      20   0   11908   6036   3884 R   3.8   0.0   0:00.05 top
+  13056 root      19  -1  132692  94476  93216 S   1.9   0.4   0:24.92 systemd-journal
+  15116 root      20   0 2265788  45444  31796 S   1.9   0.2   0:35.43 containerd
+ 674229 root      20   0       0      0      0 I   1.9   0.0   0:00.39 kworker/u24:2-flush-8:0

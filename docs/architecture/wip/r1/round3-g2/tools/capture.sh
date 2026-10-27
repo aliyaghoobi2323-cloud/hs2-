@@ -20,7 +20,7 @@ w=0
 until [ $(( $(date +%s) - $(cat /root/r3b/last-block-end 2>/dev/null || echo 0) )) -ge 180 ] && ! busy &&
   ( set -C; echo "r1-r3b γ2 DPI capture, pid $$, $(date -u +%FT%TZ)" > "$LOCK" ) 2>/dev/null; do
   [ $w -ge 3600 ] && { echo "no lock after ${w}s"; exit 1; }
-  sleep 60; w=$((w + 60))
+  sleep 20; w=$((w + 20))
 done
 t0=$(date +%s)
 trap 'rm -f "$LOCK"; t1=$(date +%s); echo $t1 > /root/r3b/last-block-end; echo "capture-$(basename "$O") $(date -u -d @$t0 +%FT%TZ) $(date -u -d @$t1 +%FT%TZ) $((t1 - t0))" >> /root/r3b/locktime.log' EXIT
