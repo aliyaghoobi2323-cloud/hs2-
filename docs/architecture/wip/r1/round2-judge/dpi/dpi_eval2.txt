@@ -1,0 +1,9 @@
+== rec-b1-a0a224.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.535  INDISTINGUISHABLE
+== rec-b2-a0a224.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.555  INDISTINGUISHABLE
+== rec-old-a0a224.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.554  INDISTINGUISHABLE

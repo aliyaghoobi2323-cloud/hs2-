@@ -1,0 +1,4 @@
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs	[no test files]
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	4.336s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	7.310s
+exit 0

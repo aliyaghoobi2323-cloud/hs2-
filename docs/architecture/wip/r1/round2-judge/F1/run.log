@@ -1,0 +1,86 @@
+13:47:15 plan /root/r2j/plans/F1.txt: 42 runs
+13:47:16 start 05500279-old-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.08 waited 0s
+13:47:45 done 05500279-old-1 ok=1 
+13:47:46 start 05500279-b2jx-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 1.09 waited 0s
+13:48:15 done 05500279-b2jx-1 ok=1 
+13:48:16 start 05500279-b2jx-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 1.58 waited 0s
+13:48:45 done 05500279-b2jx-2 ok=1 
+13:48:46 start 05500279-old-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.36 waited 0s
+13:49:15 done 05500279-old-2 ok=1 
+13:49:16 start 05500279-b2jx-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 0.94 waited 0s
+13:49:45 done 05500279-b2jx-3 ok=1 
+13:49:46 start 05500279-old-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.09 waited 0s
+13:50:15 done 05500279-old-3 ok=1 
+13:50:16 start 2d23c440-old-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=old) load 1.29 waited 0s
+13:50:45 done 2d23c440-old-1 ok=1 
+13:50:46 start 2d23c440-b2-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.04 waited 0s
+13:51:15 done 2d23c440-b2-1 ok=1 
+13:51:16 start 2d23c440-b2jx-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 0.87 waited 0s
+13:51:45 done 2d23c440-b2jx-1 ok=1 
+13:51:46 start 2d23c440-b2jx-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 1.32 waited 0s
+13:52:15 done 2d23c440-b2jx-2 ok=1 
+13:52:16 start 2d23c440-b2-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.53 waited 0s
+13:52:45 done 2d23c440-b2-2 ok=1 
+13:52:46 start 2d23c440-old-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=old) load 1.97 waited 0s
+13:53:15 done 2d23c440-old-2 ok=1 
+13:53:16 start 2d23c440-b2jx-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 2.30 waited 0s
+13:53:45 done 2d23c440-b2jx-3 ok=1 
+13:53:46 start 2d23c440-b2-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2) load 2.31 waited 0s
+13:54:15 done 2d23c440-b2-3 ok=1 
+13:54:16 start 2d23c440-old-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=old) load 1.64 waited 0s
+13:54:45 done 2d23c440-old-3 ok=1 
+13:54:46 start cb51e9b2-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 1.06 waited 0s
+13:55:15 done cb51e9b2-old-1 ok=1 
+13:55:16 start cb51e9b2-b2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2) load 1.65 waited 0s
+13:55:45 done cb51e9b2-b2-1 ok=1 
+13:55:46 start cb51e9b2-b2jx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2jx) load 1.47 waited 0s
+13:56:15 done cb51e9b2-b2jx-1 ok=1 
+13:56:16 start cb51e9b2-b2jx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2jx) load 1.61 waited 0s
+13:56:46 done cb51e9b2-b2jx-2 ok=1 
+13:56:46 start cb51e9b2-b2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2) load 1.36 waited 0s
+13:57:15 done cb51e9b2-b2-2 ok=1 
+13:57:16 start cb51e9b2-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 1.43 waited 0s
+13:57:46 done cb51e9b2-old-2 ok=1 
+13:57:46 start cb51e9b2-b2jx-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2jx) load 1.21 waited 0s
+13:58:15 done cb51e9b2-b2jx-3 ok=1 
+13:58:16 start cb51e9b2-b2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2) load 1.92 waited 0s
+13:58:46 done cb51e9b2-b2-3 ok=1 
+13:58:46 start cb51e9b2-old-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 1.91 waited 0s
+13:59:16 done cb51e9b2-old-3 ok=1 
+13:59:16 start 80b53ed0-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 1.90 waited 0s
+13:59:46 done 80b53ed0-old-1 ok=1 
+13:59:46 start 80b53ed0-b2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2) load 1.70 waited 0s
+14:00:16 done 80b53ed0-b2-1 ok=1 
+14:00:16 start 80b53ed0-b2jx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2jx) load 1.37 waited 0s
+14:00:46 done 80b53ed0-b2jx-1 ok=1 
+14:00:47 start 80b53ed0-b2jx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2jx) load 1.85 waited 0s
+14:01:16 done 80b53ed0-b2jx-2 ok=1 
+14:01:17 start 80b53ed0-b2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2) load 1.87 waited 0s
+14:01:46 done 80b53ed0-b2-2 ok=1 
+14:01:47 start 80b53ed0-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 1.21 waited 0s
+14:02:16 done 80b53ed0-old-2 ok=1 
+14:02:17 start 80b53ed0-b2jx-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2jx) load 1.10 waited 0s
+14:02:46 done 80b53ed0-b2jx-3 ok=1 
+14:02:47 start 80b53ed0-b2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2) load 0.99 waited 0s
+14:03:16 done 80b53ed0-b2-3 ok=1 
+14:03:17 start 80b53ed0-old-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 0.78 waited 0s
+14:03:46 done 80b53ed0-old-3 ok=1 
+14:03:47 start c841daea-old-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 0.91 waited 0s
+14:04:16 done c841daea-old-1 ok=1 
+14:04:17 start c841daea-b2-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.01 waited 0s
+14:04:46 done c841daea-b2-1 ok=1 
+14:04:47 start c841daea-b2jx-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 1.94 waited 0s
+14:05:16 done c841daea-b2jx-1 ok=1 
+14:05:17 start c841daea-b2jx-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 1.55 waited 0s
+14:05:46 done c841daea-b2jx-2 ok=1 
+14:05:47 start c841daea-b2-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.47 waited 0s
+14:06:16 done c841daea-b2-2 ok=1 
+14:06:17 start c841daea-old-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.34 waited 0s
+14:06:47 done c841daea-old-2 ok=1 
+14:06:47 start c841daea-b2jx-3 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2jx) load 1.13 waited 0s
+14:07:17 done c841daea-b2jx-3 ok=1 
+14:07:17 start c841daea-b2-3 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=b2) load 1.09 waited 0s
+14:07:47 done c841daea-b2-3 ok=1 
+14:07:48 start c841daea-old-3 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.47 waited 0s
+14:08:17 done c841daea-old-3 ok=1 
+14:08:17 done /root/r2j/plans/F1.txt

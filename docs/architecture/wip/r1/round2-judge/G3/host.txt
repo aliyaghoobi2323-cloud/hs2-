@@ -1,0 +1,30 @@
+== start 2026-10-27T16:00:25+00:00
+ 16:00:25 up  4:55, 11 users,  load average: 1.00, 1.33, 1.66
+top - 16:00:26 up  4:55, 11 users,  load average: 1.00, 1.33, 1.66
+Tasks: 276 total,   1 running, 275 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.5 us,  7.8 sy,  0.0 ni, 88.1 id,  0.0 wa,  0.0 hi,  0.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  18797.7 free,   1245.5 used,   3830.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22211.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 284192 root      20   0 1501644 235684  28896 S  13.5   1.0  16:47.75 xray-linux-amd6
+    992 root      20   0 1475712 134732  10420 S   9.6   0.6  76:10.84 hs2
+      1 root      20   0   22656  14156   9776 S   5.8   0.1   0:26.23 systemd
+ 350122 root      20   0   11908   6044   3884 R   1.9   0.0   0:00.04 top
+ 350336 root      20   0    7476   3804   3444 S   1.9   0.0   0:00.01 bash
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.04 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+== end 2026-10-27T16:05:56+00:00
+ 16:05:56 up  5:00,  8 users,  load average: 2.91, 2.18, 1.92
+top - 16:05:57 up  5:00,  8 users,  load average: 2.91, 2.18, 1.92
+Tasks: 265 total,   1 running, 264 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.8 us,  1.8 sy,  0.0 ni, 96.8 id,  0.0 wa,  0.0 hi,  0.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  18796.5 free,   1224.1 used,   3852.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22232.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+    992 root      20   0 1475712 130392  10420 S  21.2   0.5  77:08.88 hs2
+ 284192 root      20   0 1501644 232320  28896 S  21.2   1.0  17:55.22 xray-linux-amd6
+ 361227 root      20   0   11908   6040   3884 R   3.8   0.0   0:00.04 top
+     83 root      rt   0       0      0      0 S   1.9   0.0   0:00.42 migration/11
+ 340354 root      20   0       0      0      0 I   1.9   0.0   0:00.32 kworker/u24:3-events_power_efficient
+      1 root      20   0   22656  14156   9776 S   0.0   0.1   0:26.50 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.04 kthreadd

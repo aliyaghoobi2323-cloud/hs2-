@@ -19,7 +19,8 @@
 # Each direction leaves r-mid through one egress (me: download, exit to edge;
 # mx: upload, edge to exit), with the same tree on both:
 #   root netem delay RTT/2 [loss LOSS%] (limit 1e6: the queue is the leaf's)
-#     -> htb, one class rate RATE Mbit/s (the bottleneck)
+#     -> htb, one class rate RATE Mbit/s (the bottleneck; RATE_UP, default
+#        RATE, for the upload direction mx: an asymmetric path)
 #        -> leaf by MODE:
 #           fqcodel     fq_codel (defaults: target 5ms, interval 100ms, limit 10240)
 #           pfifo:L     pfifo limit L packets (drop-tail)
@@ -82,16 +83,16 @@ offloads_off() { q nsx $1 ethtool -K $2 tso off gso off gro off tx off rx off; }
 
 # bottleneck DEV: the tree above on r-mid's egress DEV
 bottleneck() {
-  local d=$1 half loss leaf burst
+  local d=$1 rate=$2 half loss leaf burst
   half=$(awk -v r="$RTT" 'BEGIN{printf "%.3f", r/2}')
   loss=""
   awk -v l="$LOSS" 'BEGIN{exit !(l>0)}' && loss="loss ${LOSS}%"
   nsx $M tc qdisc add dev $d root handle 1: netem delay ${half}ms $loss limit 1000000 || die "netem on $d"
   # htb burst: 1 ms at the rate, at least 16 KB (smaller bursts cannot hold
   # the rate at 1 Gbit/s with 1 ms timer slack)
-  burst=$(awk -v r="$RATE" 'BEGIN{b=r*1e6/8*0.001; if(b<16000)b=16000; printf "%d", b}')
+  burst=$(awk -v r="$rate" 'BEGIN{b=r*1e6/8*0.001; if(b<16000)b=16000; printf "%d", b}')
   nsx $M tc qdisc add dev $d parent 1:1 handle 2: htb default 10 || die "htb on $d"
-  nsx $M tc class add dev $d parent 2: classid 2:10 htb rate ${RATE}mbit ceil ${RATE}mbit \
+  nsx $M tc class add dev $d parent 2: classid 2:10 htb rate ${rate}mbit ceil ${rate}mbit \
     burst $burst cburst $burst quantum 60000 || die "htb class on $d"
   case "$LEAF" in
     fqcodel) leaf="fq_codel" ;;
@@ -136,7 +137,7 @@ up() {
   tcp_sysctls $E; tcp_sysctls $X
   nsx $E tc qdisc replace dev e0 root fq || die "fq on e0"
   nsx $X tc qdisc replace dev x0 root fq_codel || die "fq_codel on x0"
-  bottleneck me; bottleneck mx
+  bottleneck me "$RATE"; bottleneck mx "${RATE_UP:-$RATE}"
   if [ -n "$POL" ]; then
     for d in me mx; do nsx $M tc qdisc add dev $d clsact || die "clsact $d"; done
   fi

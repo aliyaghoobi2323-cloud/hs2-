@@ -1,0 +1,6 @@
+13:06:39 lock taken after 0s (pid 153744), plan /root/r2j/plans/D1a.txt, REPS 3, limit 1750s
+13:06:56 lock released
+13:11:02 lock taken after 0s (pid 154468), plan /root/r2j/plans/D1a.txt, REPS 3, limit 1750s
+13:29:48 pass 1: 0 runs busy (>75%) or failed, 625s left
+13:29:49 done after 1126s of rig time
+13:29:49 lock released

@@ -1,0 +1,8 @@
+obfs/dpi_eval2.py family A (per-flow record sizes against the bulk-HTTPS crowd), on each connection's own record lengths
+(run on the PC with python -I; the sizes files are dpi*/sizes-*.real_sizes.txt.gz)
+
+dpi/sizes-b2-a0a224-c0      (beta2 QUIET, s5 25 Mbit/s, 1315 records)           AUC=0.548  INDISTINGUISHABLE
+dpi/sizes-b2jxr-612cb1-c0   (b2jxr QUIET, interactive records, one_vs_16, 47113)  AUC=0.997  DETECTABLE
+dpi/sizes-b2jxr-612cb1-c1   (b2jxr BULK, one_vs_16, 231951 records)               AUC=0.513  INDISTINGUISHABLE
+dpi2/all-b2ox               (final b2ox, both connections, s5 25 Mbit/s)          AUC=0.588  INDISTINGUISHABLE
+dpi2/sizes-b2ox-a0a224-c0   (final b2ox QUIET, s5 25 Mbit/s)                      AUC=0.525  INDISTINGUISHABLE

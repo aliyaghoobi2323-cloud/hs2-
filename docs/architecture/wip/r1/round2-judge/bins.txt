@@ -1,0 +1,30 @@
+b1 /root/r2j/bins/hs2-b1
+b1na /root/r2j/bins/hs2-b1 HS2_TUNE_ALPHA=0
+b2 /root/r2j/bins/hs2-b2
+b2na /root/r2j/bins/hs2-b2 HS2_TUNE_ALPHA=0
+b2f /root/r2j/bins/hs2-b2f
+b2fs /root/r2j/bins/hs2-b2f HS2_TUNE_OWD=0
+b2bbrq /root/r2j/bins/hs2-b2 HS2_TUNE_QUIET_CC=bbr
+b2g /root/r2j/bins/hs2-b2f2
+b2gs /root/r2j/bins/hs2-b2f2 HS2_TUNE_OWD=0
+b2gr /root/r2j/bins/hs2-b2f2 HS2_TUNE_QUIET_REC=1
+b2h /root/r2j/bins/hs2-b2h
+b2hs /root/r2j/bins/hs2-b2h HS2_TUNE_OWD=0
+b2hr /root/r2j/bins/hs2-b2h HS2_TUNE_QUIET_REC=1
+b2i /root/r2j/bins/hs2-b2i
+b2is /root/r2j/bins/hs2-b2i HS2_TUNE_OWD=0
+b2ir /root/r2j/bins/hs2-b2i HS2_TUNE_QUIET_REC=1
+b2j /root/r2j/bins/hs2-b2j
+b2jx /root/r2j/bins/hs2-b2j HS2_TUNE_QUIET_EXTRA=1
+b2jxr /root/r2j/bins/hs2-b2j HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1
+b2kx /root/r2j/bins/hs2-b2k HS2_TUNE_QUIET_EXTRA=1
+b2kxr /root/r2j/bins/hs2-b2k HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1
+b2kxn /root/r2j/bins/hs2-b2k HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_ALPHA_HALF=0 HS2_TUNE_ALPHA_PLATEAU=0
+b2lx /root/r2j/bins/hs2-b2l HS2_TUNE_QUIET_EXTRA=1
+b2lxr /root/r2j/bins/hs2-b2l HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1
+b2mx /root/r2j/bins/hs2-b2m HS2_TUNE_QUIET_EXTRA=1
+b2mxr /root/r2j/bins/hs2-b2m HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1
+b2nx /root/r2j/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1
+b2nxr /root/r2j/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1
+b2ox /root/r2j/bins/hs2-b2o HS2_TUNE_QUIET_EXTRA=1
+b2oxr /root/r2j/bins/hs2-b2o HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1

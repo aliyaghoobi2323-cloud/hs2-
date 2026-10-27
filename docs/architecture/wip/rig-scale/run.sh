@@ -5,6 +5,7 @@
 #
 #   N      hs2 links (min_links = max_links = N on both servers)
 #   RATE   bottleneck, Mbit/s, each direction      RTT  ms      LOSS  %, each direction
+#          (RATE_UP=R: the upload direction at R instead, an asymmetric path)
 #   MODE   fqcodel | pfifo:LIMIT | agg:RATE | police:RATE | police:RATE+LEAF   (rig.sh)
 #   USERS  synthetic users = source addresses (<= 500 IPv4, + 1 with V6, + TUN users)
 #   MIX    s5 | lone16 | one_vs_16 | newheavy | tunping     (ana.py spec)
@@ -69,12 +70,19 @@ if [ ! -x "$RL" ] || [ "$D/rigload/main.go" -nt "$RL" ]; then
   (cd "$D/rigload" && CGO_ENABLED=0 nice -n 10 /usr/local/go/bin/go build -o "$RL" .) || { echo "rigload build failed" >&2; exit 1; }
 fi
 
+# BINS=FILE (the judge, R1 task 17): more binaries than old and new, one
+# per line "LABEL PATH [HS2_K=V ...]"; the HS2_* go to both hs2 processes of
+# that label's runs, so one cell can interleave binaries and their variants
+BINS=${BINS:-}
 binpath() {
   case "$1" in
     old) echo "$OLD_BIN" ;;
     new) echo "$NEW_BIN" ;;
-    *) echo "" ;;
+    *) [ -n "$BINS" ] && awk -v l="$1" '$1 == l {print $2; exit}' "$BINS" ;;
   esac
+}
+binenv() {
+  [ -n "$BINS" ] && awk -v l="$1" '$1 == l {for (i = 3; i <= NF; i++) if ($i ~ /^HS2_[A-Z0-9_]+=[A-Za-z0-9_.:+-]*$/) printf " %s", $i; exit}' "$BINS"
 }
 
 # hs2 config: edge (mode dial, reverse: listens) and exit (mode listen, reverse:
@@ -109,20 +117,22 @@ sssnap() {
 
 run_one() {
   local id=$1 bin=$2 order=$3 rep=$4 cell=$5
-  local r=$OUT/raw/$id w=$WORK/$id bp tok k v hs2env="" wait=0 ok=1 why=""
+  local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
-  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6
-  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20
+  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP
+  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=
   for tok in $cell; do
     k=${tok%%=*}; v=${tok#*=}
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
     case "$k" in
       HS2_*) hs2env="$hs2env $k=$v" ;;
-      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6) printf -v "$k" '%s' "$v" ;;
+      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP) printf -v "$k" '%s' "$v" ;;
     esac
   done
   bp=$(binpath "$bin")
+  benv=$(binenv "$bin")
+  hs2env="$hs2env$benv"
   rm -rf "$r"; mkdir -p "$r" "$w"; CUR=$w
   # quiet host
   while [ $wait -lt "$LOAD_WAIT" ] && awk -v m="$LOAD_MAX" '{exit !($1 > m)}' /proc/loadavg; do sleep 10; wait=$((wait + 10)); done
@@ -130,7 +140,7 @@ run_one() {
   # (%CPU over 0.5 s, command name only)
   hup=$(uptime | sed 's/^ *//' | tr -d '"\\')
   htop=$(top -bn2 -d0.5 -w 200 2>/dev/null | awk '/^top -/{f++} f==2 && /^ *[0-9]+ /{print $9" "$12}' | head -5 | paste -sd';' | tr -d '"\\')
-  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
+  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
   run_steps || ok=0
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev me > "$r/tc-dn.txt" 2>&1
@@ -151,7 +161,7 @@ run_steps() {
   # the users and the timeline
   read -r nusers total ntun < <(python3 "$D/ana.py" spec "$cell" "$r/spec.json" 2> "$r/spec.err")
   [ -n "$ntun" ] || { why="spec: $(tail -1 "$r/spec.err")"; return 1; }
-  RATE=$RATE RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers NTUN=$ntun V6=$V6 AGGQ_MS=$AGGQ_MS \
+  RATE=$RATE RATE_UP=${RATE_UP:-$RATE} RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers NTUN=$ntun V6=$V6 AGGQ_MS=$AGGQ_MS \
     "$D/rig.sh" up 2> "$r/rig.err" || { why="rig up: $(tail -1 "$r/rig.err")"; return 1; }
   mkconf "$w" "$N" || { why="hs2 config"; return 1; }
   ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 > "$r/rigload-server.log" 2>&1 &
@@ -171,10 +181,24 @@ run_steps() {
     *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
                PIDS+=($!); sleep 1.5 ;;
   esac
+  # TRACE_SS=1 (the judge of round 2): ss -ti of the link sockets of both
+  # ends every 0.5 s through the run (pacing and max_pacing_rate, delivery,
+  # srtt, min_rtt), each sample after a "T <epoch>" line: the trace of α's cap
+  if [ "${TRACE_SS:-0}" = 1 ]; then
+    ( while :; do
+        echo "T $(date +%s.%N)" >> "$r/sstrace-exit.txt"
+        ip netns exec $X ss -tinH state established '( dport = :2096 )' >> "$r/sstrace-exit.txt" 2>/dev/null
+        echo "T $(date +%s.%N)" >> "$r/sstrace-edge.txt"
+        ip netns exec $E ss -tinH state established '( sport = :2096 )' >> "$r/sstrace-edge.txt" 2>/dev/null
+        sleep 0.5
+      done ) &
+    PIDS+=($!)
+  fi
   # measurement: the client from t=0 to total; snapshots at WARM and near the end
   ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') "$RL" client -spec "$r/spec.json" > "$r/client.json" 2> "$r/client.err" &
   pc=$!; PIDS+=($pc)
   c0=$(date +%s.%N)
+  echo "$c0" > "$r/client-t0.txt"
   sleep "$WARM"
   sssnap start "$r"
   LC_ALL=C pidstat -u -p "$pe,$px" 1 $(awk -v t="$total" -v w="$WARM" 'BEGIN{printf "%d", t - w - 1}') > "$r/pidstat.txt" 2>&1 &
@@ -185,6 +209,8 @@ run_steps() {
   cp "/run/hs2/$(echo "${w#/}" | tr / -)-edge.json.status.json" "$r/status-edge.json" 2>/dev/null
   cp "/run/hs2/$(echo "${w#/}" | tr / -)-exit.json.status.json" "$r/status-exit.json" 2>/dev/null
   sssnap end "$r"
+  grep -E "^Vm(RSS|HWM):" /proc/$pe/status > "$r/mem-edge.txt" 2>/dev/null
+  grep -E "^Vm(RSS|HWM):" /proc/$px/status > "$r/mem-exit.txt" 2>/dev/null
   wait "$pc" || { why="client exit status $? ($(tail -1 "$r/client.err"))"; return 1; }
   kill -0 "$pe" 2>/dev/null || { why="edge hs2 exited during the run"; return 1; }
   kill -0 "$px" 2>/dev/null || { why="exit hs2 exited during the run"; return 1; }

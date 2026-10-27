@@ -671,6 +671,10 @@ type UserOut struct {
 	DialErrs  int32              `json:"dial_errs,omitempty"`
 	ShortEnds int32              `json:"short_ends,omitempty"`
 	ProbeErrs int32              `json:"probe_errs,omitempty"`
+	// a bulk user's own goodput per second from t0 (the judge, R1 task 17:
+	// the existing bulk user's first seconds after a heavy user joins)
+	Dn1s []float64 `json:"dn_1s,omitempty"`
+	Up1s []float64 `json:"up_1s,omitempty"`
 }
 
 type Out struct {
@@ -754,6 +758,16 @@ func runClient(s *Spec) *Out {
 			o.Src = s.V6Prefix + "/64"
 		case us.tun() && us.u.Src == "":
 			o.Src = "hs0"
+		}
+		for _, f := range us.u.Flows {
+			if f.Kind != "dn" && f.Kind != "up" {
+				continue
+			}
+			for sec := 0; float64(sec) < s.TotalS; sec++ {
+				o.Dn1s = append(o.Dn1s, round1(us.dn.mbit(float64(sec), float64(sec+1))))
+				o.Up1s = append(o.Up1s, round1(us.up.mbit(float64(sec), float64(sec+1))))
+			}
+			break
 		}
 		for _, w := range s.Windows {
 			o.Dn[w.Name] = us.dn.mbit(w.From, w.To)

@@ -1,0 +1,6 @@
+-rw-r--r-- 1 tcpdump tcpdump  83620581 Oct 27 15:07 /root/r2j/raw-dpi/cap-b1-a0a224.pcap
+-rw-r--r-- 1 tcpdump tcpdump  41958188 Oct 27 15:10 /root/r2j/raw-dpi/cap-b2-493282.pcap
+-rw-r--r-- 1 tcpdump tcpdump 115976376 Oct 27 15:08 /root/r2j/raw-dpi/cap-b2-a0a224.pcap
+-rw-r--r-- 1 tcpdump tcpdump 277414602 Oct 27 15:12 /root/r2j/raw-dpi/cap-b2jxr-612cb1.pcap
+-rw-r--r-- 1 tcpdump tcpdump  50966312 Oct 27 15:09 /root/r2j/raw-dpi/cap-old-493282.pcap
+-rw-r--r-- 1 tcpdump tcpdump 133865949 Oct 27 15:07 /root/r2j/raw-dpi/cap-old-a0a224.pcap

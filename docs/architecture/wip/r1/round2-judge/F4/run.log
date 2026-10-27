@@ -1,0 +1,18 @@
+14:54:01 plan /root/r2j/plans/F4.txt: 8 runs
+14:54:02 start d8fe8919-old-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.30 waited 0s
+14:55:10 done d8fe8919-old-1 ok=1 
+14:55:11 start d8fe8919-b1-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b1) load 2.66 waited 0s
+14:56:06 done d8fe8919-b1-1 ok=1 
+14:56:07 start d8fe8919-b2-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2) load 2.10 waited 0s
+14:57:16 done d8fe8919-b2-1 ok=1 
+14:57:17 start d8fe8919-b2nx-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.20 waited 0s
+14:58:24 done d8fe8919-b2nx-1 ok=1 
+14:58:25 start d8fe8919-b2nx-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 3.04 waited 0s
+14:59:34 done d8fe8919-b2nx-2 ok=1 
+14:59:35 start d8fe8919-b2-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2) load 3.14 waited 0s
+15:00:45 done d8fe8919-b2-2 ok=1 
+15:00:46 start d8fe8919-b1-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b1) load 2.56 waited 0s
+15:01:40 done d8fe8919-b1-2 ok=1 
+15:01:41 start d8fe8919-old-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.83 waited 0s
+15:02:49 done d8fe8919-old-2 ok=1 
+15:02:49 done /root/r2j/plans/F4.txt
