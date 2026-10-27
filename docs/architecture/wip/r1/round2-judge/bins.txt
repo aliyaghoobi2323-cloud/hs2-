@@ -8,3 +8,12 @@ b2bbrq /root/r2j/bins/hs2-b2 HS2_TUNE_QUIET_CC=bbr
 b2g /root/r2j/bins/hs2-b2f2
 b2gs /root/r2j/bins/hs2-b2f2 HS2_TUNE_OWD=0
 b2gr /root/r2j/bins/hs2-b2f2 HS2_TUNE_QUIET_REC=1
+b2h /root/r2j/bins/hs2-b2h
+b2hs /root/r2j/bins/hs2-b2h HS2_TUNE_OWD=0
+b2hr /root/r2j/bins/hs2-b2h HS2_TUNE_QUIET_REC=1
+b2i /root/r2j/bins/hs2-b2i
+b2is /root/r2j/bins/hs2-b2i HS2_TUNE_OWD=0
+b2ir /root/r2j/bins/hs2-b2i HS2_TUNE_QUIET_REC=1
+b2j /root/r2j/bins/hs2-b2j
+b2jx /root/r2j/bins/hs2-b2j HS2_TUNE_QUIET_EXTRA=1
+b2jxr /root/r2j/bins/hs2-b2j HS2_TUNE_QUIET_EXTRA=1 HS2_TUNE_QUIET_REC=1

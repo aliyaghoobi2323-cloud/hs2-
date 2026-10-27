@@ -83,10 +83,26 @@ func QuietCount(maxLinks int) int {
 	return 1
 }
 
+// QuietExtra 1 (HS2_TUNE_QUIET_EXTRA=1; the R1 round-2 judge): the QUIET
+// links come next to max_links BULK ones, not within max_links. Within
+// them, a pool of N links under a policer on each connection (a per-flow
+// limit on the path) carries bulk on N − 2 (N ≥ 4; N − 1 below): on the
+// rig, N=8 under a 10 Mbit/s policer each, a lone user's 16 connections got
+// 55 Mbit/s against 72 for the base binary and 74 for β1 (whose QUIET
+// connection is a link's second). The cost is one or two connections more
+// than max_links. Both ends set it alike (the exit dials the reverse pool's
+// links: QuietTotal).
+var QuietExtra = 0
+
 // QuietTotal is the most links a pool of maxLinks holds with its QUIET ones
 // (they count toward max_links, but a pool of one link still has a BULK
-// one: one more then).
-func QuietTotal(maxLinks int) int { return max(maxLinks, 1+QuietCount(maxLinks)) }
+// one: one more then; QuietExtra: maxLinks BULK ones and the QUIET ones).
+func QuietTotal(maxLinks int) int {
+	if QuietExtra != 0 {
+		return maxLinks + QuietCount(maxLinks)
+	}
+	return max(maxLinks, 1+QuietCount(maxLinks))
+}
 
 const (
 	// moveBytes, moveSpan: a connection moves once it moved at least this
@@ -182,7 +198,7 @@ func (q *quietSet) noteCaps(caps uint32) {
 // bulkMax is the most BULK links the pool runs: max_links less its QUIET
 // links, at least one.
 func (m *LinkManager) bulkMax() int {
-	if m.quiet.active() {
+	if m.quiet.active() && QuietExtra == 0 {
 		return max(1, m.max-m.quiet.want)
 	}
 	return m.max

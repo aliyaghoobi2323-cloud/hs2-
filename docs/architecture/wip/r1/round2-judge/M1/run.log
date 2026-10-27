@@ -1,0 +1,10 @@
+13:34:54 plan /root/r2j/plans/M1.txt: 4 runs
+13:34:55 start 4fe96b96-b2h-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2h) load 1.32 waited 0s
+13:35:24 done 4fe96b96-b2h-1 ok=1 
+13:35:25 start 6d29a912-b2h-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2h) load 1.63 waited 0s
+13:36:07 done 6d29a912-b2h-1 ok=1 
+13:36:07 start cb51e9b2-b2h-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=b2h) load 2.57 waited 0s
+13:36:37 done cb51e9b2-b2h-1 ok=1 
+13:36:38 start 2d23c440-b2h-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=b2h) load 2.45 waited 0s
+13:37:07 done 2d23c440-b2h-1 ok=1 
+13:37:07 done /root/r2j/plans/M1.txt
