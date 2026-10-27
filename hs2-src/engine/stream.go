@@ -261,6 +261,20 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	// β2 (quiet.go): a BULK link's sockets get α's cap in place of
 	// C4-lite's; QUIET ones, and links of no class, keep C4-lite
 	quietLink, bulkLink := classOf(caps)
+	// γ2 (budget.go): a BULK link's in-flight budget at its writer's bulk
+	// lane, in place of α's rate cap (C4-lite's stays, the outer one)
+	var lb *linkBudget
+	if sched && bulkLink && capOn && !BudgetOff() {
+		if lb = newLinkBudget(newOutQ(tc)); lb != nil {
+			cfg.BulkGate = lb.gate
+		}
+	}
+	if sched && quietLink && QuietBatch == 0 {
+		cfg.FlushEach = true // (lab: γ2's batching measured against none)
+	}
+	if quietLink {
+		shaped.count = true // the QUIET records' tallies (the status line)
+	}
 	if quietLink && QuietCC != "" {
 		// a QUIET link carries light traffic only: BBR's PROBE_RTT (its
 		// window at 4 segments for 200 ms each 10 s) would hold every
@@ -292,7 +306,8 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		if sys := newCapSys(tc); sys != nil {
 			scl = newSendCapLink(sys, hq)
 			scl.core.linked, scl.core.off = true, !capOn
-			scl.core.alpha = bulkLink && !AlphaOff()
+			scl.core.alpha = bulkLink && !AlphaOff() && lb == nil
+			scl.budget = lb
 			if meter != nil {
 				meter.owd.sys = sys // a message's stamp: when it leaves the host
 			}
@@ -309,8 +324,13 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			scl = newSendCapLink(nil, hq) // C3 on the link's written rate alone
 		}
 	}
+	// (a budget whose socket no runner reads keeps its gate open: B 0)
 	if scl != nil || flows != nil {
-		coreLinks.add(&coreLink{sess: sess, mtr: meter, sc: scl, hq: hq, flows: flows})
+		cl := &coreLink{sess: sess, mtr: meter, sc: scl, hq: hq, flows: flows}
+		if quietLink {
+			cl.shp = shaped
+		}
+		coreLinks.add(cl)
 	}
 	return sess, w.reason, nil
 }

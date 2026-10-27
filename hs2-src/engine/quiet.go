@@ -74,25 +74,48 @@ var QuietCC = "cubic"
 // any size, so each end's switch is its own sending's.
 var QuietRec = 0
 
-// QuietCount is how many QUIET links a pool of maxLinks keeps: one, and a
-// second for redundancy once the pool may have four links or more.
+// QuietCount is how many QUIET links a pool of maxLinks keeps: QuietN when
+// set; with QuietExtra (the default) one (decision T19: max_links + 1
+// connections, within the population of dpi_eval2's model for N ≤ 5, and
+// the round-2 judge measured no need of a second); within max_links one,
+// and a second for redundancy once the pool may have four links or more.
 func QuietCount(maxLinks int) int {
-	if maxLinks >= 4 {
+	switch {
+	case QuietN > 0:
+		return QuietN
+	case QuietExtra != 0:
+		return 1
+	case maxLinks >= 4:
 		return 2
 	}
 	return 1
 }
 
-// QuietExtra 1 (HS2_TUNE_QUIET_EXTRA=1; the R1 round-2 judge): the QUIET
-// links come next to max_links BULK ones, not within max_links. Within
-// them, a pool of N links under a policer on each connection (a per-flow
-// limit on the path) carries bulk on N − 2 (N ≥ 4; N − 1 below): on the
-// rig, N=8 under a 10 Mbit/s policer each, a lone user's 16 connections got
-// 55 Mbit/s against 72 for the base binary and 74 for β1 (whose QUIET
-// connection is a link's second). The cost is one or two connections more
-// than max_links. Both ends set it alike (the exit dials the reverse pool's
+// QuietN (HS2_TUNE_QUIET_N, lab): the QUIET links of every pool, when
+// above 0. Both ends must set it alike (the exit dials the reverse pool's
 // links: QuietTotal).
-var QuietExtra = 0
+var QuietN = 0
+
+// QuietBatch 0 (HS2_TUNE_QUIET_BATCH=0, lab: the measure of γ2's batching):
+// a QUIET link's writer flushes the shaper after each frame (smux
+// Config.FlushEach), so each small message is a padded record of its own.
+// 1, the default: a record takes every frame queued by the time it is
+// written, up to the record's sampled length, and nothing waits for more
+// (the shaper's carry; R1 round 3, γ2). Each end's switch is its own
+// sending's.
+var QuietBatch = 1
+
+// QuietExtra 1 (HS2_TUNE_QUIET_EXTRA; the R1 round-2 judge, the default
+// since round 3 by decision T19): the QUIET links come next to max_links
+// BULK ones, not within max_links. Within them, a pool of N links under a
+// policer on each connection (a per-flow limit on the path) carries bulk on
+// N − 2 (N ≥ 4; N − 1 below): on the rig, N=8 under a 10 Mbit/s policer
+// each, a lone user's 16 connections got 55 Mbit/s against 72 for the base
+// binary and 74 for β1 (whose QUIET connection is a link's second); with
+// the QUIET links outside, 73.1. The cost is one connection more than
+// max_links (QuietCount). Both ends set it alike (the exit dials the
+// reverse pool's links: QuietTotal); 0: within max_links, as β2.
+var QuietExtra = 1
 
 // QuietTotal is the most links a pool of maxLinks holds with its QUIET ones
 // (they count toward max_links, but a pool of one link still has a BULK

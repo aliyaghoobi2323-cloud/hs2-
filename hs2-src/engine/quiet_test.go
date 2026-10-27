@@ -482,13 +482,15 @@ func TestMoveRule(t *testing.T) {
 	}
 }
 
-// QUIET links count toward max_links, at least one BULK link: N=1 runs one
-// QUIET and one BULK link, N=8 two and six; a level 1 peer turns the
-// classes off and the pool's ceiling is max_links again.
+// HS2_TUNE_QUIET_EXTRA=0: QUIET links count toward max_links, at least one
+// BULK link: N=1 runs one QUIET and one BULK link, N=8 two and six; a level
+// 1 peer turns the classes off and the pool's ceiling is max_links again.
 func TestQuietCounts(t *testing.T) {
 	if QuietOff() {
 		t.Skip("HS2_TUNE_QUIET=0")
 	}
+	defer func(x, n int) { QuietExtra, QuietN = x, n }(QuietExtra, QuietN)
+	QuietExtra, QuietN = 0, 0
 	for _, c := range []struct{ max, q, bulk, total int }{
 		{1, 1, 1, 2}, {2, 1, 1, 2}, {3, 1, 2, 3}, {4, 2, 2, 4}, {8, 2, 6, 8}, {300, 2, 298, 300},
 	} {
