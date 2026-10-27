@@ -16,36 +16,41 @@ import (
 // queues the link's messages would read (the least of the last two steps,
 // as owdLook's least of 200 ms).
 
-// fqModel: m links on an fq_codel bottleneck of c bytes/s. Each link has a
-// flow queue of its own; the bottleneck serves the backlogged links an
-// equal share (DRR) and the others what they send; a link's own one-way
-// queue is its backlog at its service rate, plus a DRR round (a segment at
-// its rate) while it has one; the QUIET link's (shared) queue is none.
-// active: how many of the links carry a flow (the rest idle). It returns
-// the mean delivered sum over the last 10 s of 30, the share of readings
-// (after 5 s) whose own queue was past CoDel's 5 ms on a link served at
-// least 3 segments a 5 ms (where CoDel could be kept from dropping), and
-// the mean cap set.
-func fqModel(t *testing.T, c float64, active int, version string) (sum, past float64) {
-	t.Helper()
+// fqModel: active busy links on an fq_codel bottleneck of c bytes/s. Each
+// link has a flow queue of its own; the bottleneck serves the backlogged
+// links an equal share (DRR) and the others what they send; a link's own
+// one-way queue is its backlog at its service rate, plus a segment's DRR
+// round while it has one; the QUIET link's (shared) queue is none. Each
+// flow queue runs CoDel (5 ms target, 100 ms interval: a drop once the
+// sojourn stayed past the target an interval, then at interval/√count
+// while it stays; the fluid senders do not answer drops, so these count
+// what a cap that keeps the queue does not prevent). It returns the mean
+// delivered sum over the last 10 s of 30 (of c) and CoDel's drops over the
+// last 25 s, as a share of the segments delivered.
+func fqModel(c float64, active int, version string) (sum, drops float64) {
 	const ms = time.Millisecond
 	const dt = 10 * ms
 	type link struct {
-		sc         *sendCap
-		cap, back  float64
-		q, q1      time.Duration
-		acked, dlv float64
+		sc        *sendCap
+		cap, back float64
+		q1        time.Duration
+		acked     float64
+		// CoDel: the time (ms steps) the sojourn has stayed past the target
+		// since, dropping, the drops so far and when the next is due
+		above, next int
+		dropping    bool
+		count       int
 	}
 	ls := make([]*link, active)
 	for i := range ls {
-		ls[i] = &link{sc: &sendCap{linked: true, alpha: true}, cap: c / float64(active)}
+		ls[i] = &link{sc: &sendCap{linked: true, alpha: true}, cap: c / float64(active), above: -1}
 	}
 	at := time.Hour
-	var tot float64
-	var n, nPast int
+	var tot, segs, nDrops float64
 	for step := 0; step < 300; step++ {
 		served := make([]float64, active)
 		for k := 0; k < 10; k++ { // 10 ms sub-steps
+			now := step*100 + k*10 // ms
 			// DRR: the backlogged links share what the sparse ones leave
 			// (water-filling over demands: a sparse link asks its cap)
 			dem := make([]float64, active)
@@ -61,13 +66,35 @@ func fqModel(t *testing.T, c float64, active int, version string) (sum, past flo
 				out := math.Min(share[i]*dt.Seconds(), l.back+in)
 				l.back = math.Max(l.back+in-out, 0)
 				served[i] += out
+				// CoDel on the flow queue
+				soj := 0.0
+				if l.back > 0 && share[i] > 0 {
+					soj = (l.back + ownMSS) / share[i] * 1000
+				}
+				switch {
+				case soj < 5:
+					l.above, l.dropping = -1, false
+				case l.above < 0:
+					l.above = now
+				case !l.dropping && now-l.above >= 100:
+					l.dropping, l.count = true, l.count/2+1
+					l.next = now + int(100/math.Sqrt(float64(l.count)))
+					if step >= 50 {
+						nDrops++
+					}
+				case l.dropping && now >= l.next:
+					l.count++
+					l.next = now + int(100/math.Sqrt(float64(l.count)))
+					if step >= 50 {
+						nDrops++
+					}
+				}
 			}
 		}
 		at += 100 * ms
 		for i, l := range ls {
 			d := served[i] / 0.1
 			l.acked += served[i]
-			l.dlv = d
 			q := time.Duration(0)
 			if l.back > 0 && d > 0 {
 				q = time.Duration((l.back + ownMSS) / d * float64(time.Second))
@@ -92,21 +119,18 @@ func fqModel(t *testing.T, c float64, active int, version string) (sum, past flo
 			if l.sc.own > 0 {
 				l.cap = float64(l.sc.own)
 			}
-			if step >= 50 && d*0.005 >= 3*ownMSS {
-				n++
-				if q > 5*ms {
-					nPast++
-				}
+			if step >= 50 {
+				segs += served[i] / ownMSS
 			}
 			if step >= 200 {
 				tot += d
 			}
 		}
 	}
-	if n > 0 {
-		past = float64(nPast) / float64(n)
+	if segs > 0 {
+		drops = nDrops / segs
 	}
-	return tot / 100 / c, past
+	return tot / 100 / c, drops
 }
 
 // fairFill is the max-min fair share of c over demands.
@@ -141,28 +165,41 @@ func fairFill(c float64, dem []float64) []float64 {
 	return out
 }
 
-// On fq_codel the own-queue cap keeps a link's flow queue under CoDel's
-// target where its rate allows (one link alone: version 5 let BBR's queue
-// stand there, and CoDel dropped 7% of its segments on the rig), and the
-// sum at the path with any number of busy links: version 4, its own queue
-// at half the target with the plateau's slow growth, fell from 89 to 50
-// Mbit/s with 17 flows on 64 links on the rig.
+// On fq_codel the own-queue cap keeps CoDel from dropping where a link's
+// rate allows (one link alone: version 5 let BBR's queue stand in its flow
+// queue, and CoDel dropped 7% of its segments on the rig), and the sum at
+// the path with any number of busy links: version 4, its own queue at half
+// the target with the plateau's slow growth, fell from 89 to 50 Mbit/s with
+// 17 flows on 64 links on the rig. (Links at a few Mbit/s each are past
+// CoDel's reach: a segment's DRR round alone is past 5 ms there, for any
+// sender.)
 func TestAlphaOwnFQ(t *testing.T) {
-	for _, c0 := range []struct {
+	type res struct{ g, gd, v4, v4d, v5, v5d float64 }
+	cases := []struct {
 		mbit   float64
 		active int
-	}{{100, 1}, {25, 1}, {100, 2}, {100, 17}, {100, 64}, {100, 300}, {25, 17}, {10, 64}} {
+	}{{100, 1}, {25, 1}, {100, 2}, {100, 17}, {100, 64}, {100, 300}, {25, 17}, {10, 64}}
+	var out []res
+	for _, c0 := range cases {
 		c := c0.mbit * 1e6 / 8
-		g, gPast := fqModel(t, c, c0.active, "g1")
-		v4, v4Past := fqModel(t, c, c0.active, "v4")
-		v5, v5Past := fqModel(t, c, c0.active, "v5")
-		t.Logf("%3.0f Mbit/s, %3d busy links: sum γ1 %.3f (own queue past 5 ms in %.0f%% of readings), version 4 %.3f (%.0f%%), version 5 %.3f (%.0f%%)",
-			c0.mbit, c0.active, g, 100*gPast, v4, 100*v4Past, v5, 100*v5Past)
-		if g < 0.95 {
-			t.Fatalf("%.0f Mbit/s, %d links: γ1's sum %.3f of the path, want >= 0.95", c0.mbit, c0.active, g)
+		var r res
+		r.g, r.gd = fqModel(c, c0.active, "g1")
+		r.v4, r.v4d = fqModel(c, c0.active, "v4")
+		r.v5, r.v5d = fqModel(c, c0.active, "v5")
+		out = append(out, r)
+		t.Logf("%3.0f Mbit/s, %3d busy links: sum γ1 %.3f (CoDel drops %.3f%%), version 4 %.3f (%.3f%%), version 5 %.3f (%.3f%%)",
+			c0.mbit, c0.active, r.g, 100*r.gd, r.v4, 100*r.v4d, r.v5, 100*r.v5d)
+	}
+	for k, c0 := range cases {
+		r := out[k]
+		if r.g < 0.95 {
+			t.Errorf("%.0f Mbit/s, %d links: γ1's sum %.3f of the path, want >= 0.95", c0.mbit, c0.active, r.g)
 		}
-		if gPast > 0.2 {
-			t.Fatalf("%.0f Mbit/s, %d links: the own queue past CoDel's 5 ms in %.0f%% of the readings, want <= 20%%", c0.mbit, c0.active, 100*gPast)
+		// where a link's share holds 3 segments within 5 ms, its drops a
+		// tenth of version 5's at most
+		if c0.mbit*1e6/8/float64(c0.active)*0.005 >= 3*ownMSS && r.gd > 0.1*r.v5d {
+			t.Errorf("%.0f Mbit/s, %d links: CoDel drops %.3f%% of the segments, want a tenth of version 5's %.3f%% at most",
+				c0.mbit, c0.active, 100*r.gd, 100*r.v5d)
 		}
 	}
 }
@@ -195,7 +232,7 @@ func fifoModel(c float64, m int, own bool) (sum float64, worst time.Duration, ow
 		for _, l := range ls {
 			in += l.cap
 		}
-		served := math.Min(in, c+queue/0.1)
+		served := math.Min(c, in+queue/0.1) // backlogged: c; else what came
 		queue = math.Max(queue+(in-c)*0.1, 0)
 		q := time.Duration(queue / c * float64(time.Second))
 		read := min(q, q1)
@@ -275,9 +312,14 @@ func TestAlphaOwnSteps(t *testing.T) {
 		t.Fatalf("standing at 9 ms: own cap %.0f, want %.0f", c.bRate, x*0.98)
 	}
 	x = c.bRate
-	feed(x, 2*ms, true) // under the target: +3%
+	feed(x, 0, true) // no queue: +3%
 	if !near(c.bRate, x*1.03) {
-		t.Fatalf("under the target: own cap %.0f, want %.0f", c.bRate, x*1.03)
+		t.Fatalf("no queue: own cap %.0f, want %.0f", c.bRate, x*1.03)
+	}
+	x = c.bRate
+	feed(x, 2*ms, true) // 2 ms of the 5: +3% x 0.6
+	if !near(c.bRate, x*(1+0.03*0.6)) {
+		t.Fatalf("2 ms under the target: own cap %.0f, want %.0f", c.bRate, x*(1+0.03*0.6))
 	}
 	// the target at a low rate: 3 segments at 1 Mbit/s is 34.8 ms
 	lo := &sendCap{linked: true, alpha: true}

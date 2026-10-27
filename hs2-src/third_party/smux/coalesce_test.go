@@ -8,6 +8,9 @@ import (
 	"time"
 )
 
+// nop is a WriteFlowAsync done that does nothing.
+func nop(error) {}
+
 // stampConn notes when the session's writer flushes it.
 type stampConn struct {
 	net.Conn
@@ -81,7 +84,7 @@ func TestSchedCoalesce(t *testing.T) {
 	sc.reset()
 	t0 := time.Now()
 	for i := 0; i < 3; i++ {
-		if err := st.WriteFlowAsync([]byte("light frame"), 5, 1, LaneLatency, nil); err != nil {
+		if err := st.WriteFlowAsync([]byte("light frame"), 5, 1, LaneLatency, nop); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -114,7 +117,7 @@ func TestSchedCoalesce(t *testing.T) {
 	// a light frame held, then an urgent one: both go at once with it
 	sc.reset()
 	t0 = time.Now()
-	st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nil)
+	st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nop)
 	time.Sleep(2 * time.Millisecond)
 	u.Write([]byte("one-way delay"))
 	settle(sc, 3*win)
@@ -134,7 +137,7 @@ func TestSchedCoalesceMin(t *testing.T) {
 	settle(sc, 3*win)
 	sc.reset()
 	t0 := time.Now()
-	st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nil)
+	st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nop)
 	settle(sc, 3*win)
 	fl := sc.flushes()
 	if len(fl) != 1 || fl[0].Sub(t0) > win/2 {
@@ -142,12 +145,12 @@ func TestSchedCoalesceMin(t *testing.T) {
 	}
 	// 60 frames a second: past it, held
 	for i := 0; i < 60; i++ {
-		st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nil)
+		st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nop)
 	}
 	settle(sc, 3*win)
 	sc.reset()
 	t0 = time.Now()
-	st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nil)
+	st.WriteFlowAsync([]byte("light"), 5, 1, LaneLatency, nop)
 	settle(sc, 3*win)
 	fl = sc.flushes()
 	if len(fl) != 1 || fl[0].Sub(t0) < win-5*time.Millisecond {

@@ -412,11 +412,13 @@ func (c *sendCap) dlvGrowing(cur float64) bool {
 // alphaRise) the cap goes to the lesser of itself and the delivery, less
 // the share that drains the excess within alphaDrain (at most
 // alphaCutMax); past it but standing, by at most ownCutStand; not while
-// the delivery still grows by alphaStartGrow (BBR's start-up: its queue
-// is no sign of the share). Under it the cap grows by alphaGrowFast a
-// reading, with no slow growth near its last cut (version 5's plateau
-// would hold a link under its share for seconds), and the probe
-// (AlphaProbe), to C4-lite's ceiling. Never under alphaKMin × the 10 s
+// it falls (it drains already) nor while the delivery still grows by
+// alphaStartGrow (BBR's start-up: its queue is no sign of the share).
+// Under it the cap grows by alphaGrowFast a reading less the share of the
+// target its queue holds (at the path the cap settles with its queue under
+// the target, not a step past it each time), with no slow growth near its
+// last cut (version 5's plateau would hold a link under its share for
+// seconds), and the probe (AlphaProbe), to C4-lite's ceiling. Never under alphaKMin × the 10 s
 // maximum, nor alphaFloor. No reading of its own (none heard, the link
 // idle): no cap of its own.
 func (c *sendCap) ownStep(s capSample, arming bool) {
@@ -443,10 +445,12 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 	if d > 0 {
 		tgt = max(tgt, time.Duration(float64(ownSegs*ownMSS)/d*float64(time.Second)))
 	}
-	rising := qx > c.bQ+alphaRise
+	rising, falling := qx > c.bQ+alphaRise, qx < c.bQ-alphaRise
 	c.bQ, c.bTgt = qx, tgt
 	switch {
-	case qx > tgt && !c.dlvGrowing(s.Delivery):
+	case qx > tgt && (falling || c.dlvGrowing(s.Delivery)):
+		c.bCalm = 0 // draining already, or start-up's queue: it holds
+	case qx > tgt:
 		cut := math.Max(float64(qx-tgt), 0) / float64(alphaDrain)
 		if rising {
 			cut = math.Min(cut, alphaCutMax)
@@ -456,12 +460,19 @@ func (c *sendCap) ownStep(s capSample, arming bool) {
 		c.bRate = math.Min(c.bRate, d) * (1 - cut)
 		c.bCuts++
 		c.bCalm = 0
-	case qx > tgt:
-		c.bCalm = 0 // start-up's queue: it holds
 	case s.AppLimited && d < alphaKeep*c.bRate:
 		c.bCalm = 0 // the sender had less to send than the cap let out: it holds
+	case rising && qx > tgt/4 && d < alphaMatch*c.bRate:
+		// its queue grows while the path took less than the cap: the cap
+		// is past the path already (the reading lags a step); no more
+		// growth, the cap at what was delivered
+		c.bRate = math.Max(d, alphaFloor)
+		c.bCalm = 0
 	default:
-		g := alphaGrowFast
+		// the closer its queue to the target, the slower it grows: at
+		// the path the cap settles with the queue under the target
+		// instead of overshooting by a step each time
+		g := alphaGrowFast * (1 - float64(qx)/float64(tgt))
 		if AlphaProbe != 0 {
 			if qx < tgt/4 && d >= alphaMatch*c.bRate {
 				c.bCalm++
