@@ -331,7 +331,7 @@ func (c *budgetCore) step(in budgetIn) float64 {
 		if !in.Blocked {
 			w = math.Min(c.b, want) // B was not what held it: the target at its rate
 		}
-		if qFwd <= 2*T {
+		if qFwd <= 4*T {
 			w = c.b + (w-c.b)/2
 		}
 		if w < c.b {
@@ -342,9 +342,9 @@ func (c *budgetCore) step(in budgetIn) float64 {
 		if qFwd < T/2 {
 			c.noQ++
 		}
-		g := ratio - 1
+		g := (ratio - 1) / 2 // FAST's step, half of the way (γ 1/2)
 		if c.noQ > 1 {
-			g = math.Min(g*float64(int(1)<<min(c.noQ-1, 8)), budgetGrowMax)
+			g = math.Min((ratio-1)*float64(int(1)<<min(c.noQ-1, 8)), budgetGrowMax)
 		}
 		if g > 0 {
 			c.b *= 1 + g
