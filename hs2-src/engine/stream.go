@@ -278,6 +278,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			shaped.lazy = hq.sys.notsent // a tail waits for the socket's unsent bytes (shape.go)
 		}
 	}
+	if quietLink && QuietThin != 0 {
+		setThinTimeouts(tc) // (best effort: a kernel without it keeps its back-off)
+	}
 	if quietLink && QuietCC != "" {
 		// a QUIET link carries light traffic only: BBR's PROBE_RTT (its
 		// window at 4 segments for 200 ms each 10 s) would hold every

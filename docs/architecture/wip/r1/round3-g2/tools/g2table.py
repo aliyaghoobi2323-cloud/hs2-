@@ -15,8 +15,10 @@ import ana  # noqa: E402
 LABEL = {"old": "پایه", "b2nx": "نهایی دور ۲ (b2nx)", "g2a": "γ2 نسخهٔ ۱ (g2a)", "g2b": "γ2 (g2b)",
          "g2bnb": "γ2 بی دسته‌بندی (g2bnb)", "g2blz": "γ2 بی دم منتظر (g2blz)", "g2bal": "γ2 با α به جای بودجه (g2bal)",
          "g2bq1": "γ2 با یک QUIET (g2bq1)", "g2c": "γ2 (g2c)", "g2cnb": "γ2 بی دسته‌بندی (g2cnb)",
-         "g2clz": "γ2 بی دم منتظر (g2clz)", "g2cq1": "γ2 با یک QUIET (g2cq1)", "g2cal": "γ2 با α به جای بودجه (g2cal)"}
-BINORD = ["old", "b2nx", "g2a", "g2b", "g2bnb", "g2blz", "g2bal", "g2bq1", "g2c", "g2cnb", "g2clz", "g2cq1", "g2cal"]
+         "g2clz": "γ2 بی دم منتظر (g2clz)", "g2cq1": "γ2 با یک QUIET (g2cq1)", "g2cal": "γ2 با α به جای بودجه (g2cal)",
+         "g2d": "γ2 (g2d)", "g2dnb": "γ2 بی دسته‌بندی (g2dnb)", "g2dlz": "γ2 بی دم منتظر (g2dlz)",
+         "g2dnt": "γ2 بی thin (g2dnt)", "g2dq1": "γ2 با یک QUIET (g2dq1)", "g2dr": "γ2 + رکورد تعاملی (g2dr)"}
+BINORD = ["old", "b2nx", "g2a", "g2b", "g2bnb", "g2blz", "g2bal", "g2bq1", "g2c", "g2cnb", "g2clz", "g2cq1", "g2cal", "g2d", "g2dnb", "g2dlz", "g2dnt", "g2dq1", "g2dr"]
 
 
 def label(b):

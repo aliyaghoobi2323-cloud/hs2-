@@ -504,8 +504,11 @@ func TestLinkBudgetStep(t *testing.T) {
 	ts.bytesAcked += uint64(2 * bMbit / 10)
 	ts.bytesReceived += uint64(1 * bMbit / 10)
 	lb.step(t0+200*time.Millisecond, true, ts, 20*bMbit, own)
-	if !lb.core.own || lb.core.qRev != 7*time.Millisecond || lb.core.q != time.Millisecond {
-		t.Fatalf("own delays: own %v, way back %v, queue %v; want 7 ms and 1 ms (the QUIET link's)", lb.core.own, lb.core.qRev, lb.core.q)
+	// S 8 ms split 7 : 0.5 by them: the way back 7.47 ms, this direction's
+	// 0.53, under the QUIET link's 1 ms
+	wantRev := time.Duration(float64(8*time.Millisecond) * 7 / 7.5)
+	if !lb.core.own || lb.core.qRev != wantRev || lb.core.q != time.Millisecond {
+		t.Fatalf("own delays: own %v, way back %v, queue %v; want %v and 1 ms (the QUIET link's)", lb.core.own, lb.core.qRev, lb.core.q, wantRev)
 	}
 	if p := lb.step(t0+300*time.Millisecond, false, ts, 20*bMbit, nil); p != 0 {
 		t.Fatalf("pace %d idle", p)
@@ -542,5 +545,36 @@ func TestOWDOwnBeat(t *testing.T) {
 	}
 	if o.busy(ts, false) {
 		t.Fatal("busy with no reading")
+	}
+}
+
+// A BULK link's own reading (γ2) is the middle of the window's readings,
+// not its trough (a QUIET link keeps the least): a queue swinging between
+// 1 and 30 ms reads about 15, where the least says 1.
+func TestOWDOwnMedian(t *testing.T) {
+	var r owdRecent
+	if r.median() != 0 {
+		t.Fatal("a median with no readings")
+	}
+	for _, own := range []bool{false, true} {
+		o := &owdLink{own: own}
+		now := int64(time.Hour)
+		var m [owdMsgLen]byte
+		// the base first: a message with no queue
+		owdEncode(m[:], now-int64(70*time.Millisecond), 0, false)
+		o.recv(now, m[:])
+		for i, q := range []time.Duration{1, 30, 15, 22, 8, 12, 27} {
+			at := now + int64(i+1)*int64(20*time.Millisecond)
+			owdEncode(m[:], at-int64(70*time.Millisecond)-int64(q*time.Millisecond), 0, false)
+			o.recv(at, m[:])
+		}
+		got := time.Duration(o.qIn.Load())
+		want := time.Duration(0) // the least of the window (the base reading is in it)
+		if own {
+			want = 12 * time.Millisecond // 0 1 8 12 15 22 27 30: the lower middle
+		}
+		if got != want {
+			t.Fatalf("own %v: read %v, want %v", own, got, want)
+		}
 	}
 }
