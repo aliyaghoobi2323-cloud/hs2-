@@ -28,9 +28,64 @@ type Server struct {
 	replay  *replayMem
 	once    sync.Once
 	lastLog atomic.Int64
+	// pairs: the QUIET halves of pairs waiting for their BULK (pairWait)
+	pairMu sync.Mutex
+	pairs  map[[pairIDLen]byte]chan *Carrier
+	// levelCap, when set, is the highest level this server speaks (tests:
+	// an older server)
+	levelCap byte
 }
 
 func (s *Server) init() { s.once.Do(func() { s.replay = newReplayMem() }) }
+
+// pairTimeout: a pair's QUIET half waits this long for its BULK half (which
+// its client dials as soon as it has QUIET's proof).
+var pairTimeout = authTimeout
+
+// pairWait registers the QUIET half of pair id: its BULK half is handed to
+// the channel (pairGive).
+func (s *Server) pairWait(id [pairIDLen]byte) chan *Carrier {
+	s.pairMu.Lock()
+	defer s.pairMu.Unlock()
+	if s.pairs == nil {
+		s.pairs = map[[pairIDLen]byte]chan *Carrier{}
+	}
+	if _, dup := s.pairs[id]; dup {
+		return nil // (a random 128-bit id seen twice: refused)
+	}
+	w := make(chan *Carrier, 1)
+	s.pairs[id] = w
+	return w
+}
+
+// pairGive hands car, the BULK half of pair id, to its QUIET half (false:
+// none waits for it).
+func (s *Server) pairGive(id [pairIDLen]byte, car *Carrier) bool {
+	s.pairMu.Lock()
+	defer s.pairMu.Unlock()
+	w := s.pairs[id]
+	if w == nil {
+		return false
+	}
+	delete(s.pairs, id)
+	w <- car // (buffered: one giver)
+	return true
+}
+
+// pairDrop: the QUIET half of pair id stops waiting; a BULK half handed to
+// it meanwhile is closed.
+func (s *Server) pairDrop(id [pairIDLen]byte, w chan *Carrier) {
+	s.pairMu.Lock()
+	defer s.pairMu.Unlock()
+	if s.pairs[id] == w {
+		delete(s.pairs, id)
+	}
+	select {
+	case b := <-w:
+		b.conn.Close()
+	default:
+	}
+}
 
 // firstReadTimeout is how long a connection may stay silent after the TLS
 // handshake. A real client sends its auth record at once; this only bounds idle
@@ -138,11 +193,14 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		return
 	}
 	tconn.SetDeadline(time.Now().Add(authTimeout))
+	pad := first[authHeadLen:len(first):len(first)] // (its head may be a pair's hello)
 	if more > 0 {
-		if _, err := io.CopyN(io.Discard, tconn, int64(more)); err != nil {
+		rest := make([]byte, more)
+		if _, err := io.ReadFull(tconn, rest); err != nil {
 			tconn.Close()
 			return
 		}
+		pad = append(pad, rest...)
 	}
 	if !s.replay.add(nonce) {
 		tconn.Close()
@@ -150,20 +208,69 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	}
 	// The level and caps for this link. With no level in common the proof
 	// says level 0 — the client then knows why — and the link closes.
-	level, caps, agreed := negotiate(hdr, levelMin, levelMax, localCaps())
+	srvMax := levelMax
+	if s.levelCap != 0 {
+		srvMax = s.levelCap
+	}
+	level, caps, agreed := negotiate(hdr, levelMin, srvMax, localCaps())
+	// A pair (level 2 and CapPair both ways): this connection is the half
+	// its hello says. The QUIET half waits for its BULK half, registered
+	// before its proof leaves (the client dials BULK once it has it); the
+	// BULK half is handed to it and the QUIET half's handler runs the link.
+	var hello pairHello
+	pair := false
+	if agreed && level >= LevelPair && caps&CapPair != 0 {
+		hello, pair = parsePairHello(pad, s.SharedKey, nonce, ekm)
+	}
+	if !pair {
+		caps &^= CapPair // (a pair-capable client always says which half it is)
+	}
+	var wait chan *Carrier
+	if pair && hello.role == pairQuiet {
+		if wait = s.pairWait(hello.id); wait == nil {
+			tconn.Close()
+			return
+		}
+	}
 	if _, err := tconn.Write(makeServerProof(s.SharedKey, nonce, ekm, ProofHdr{Ver: protoVersion, Level: level, Caps: caps})); err != nil || !agreed {
+		if wait != nil {
+			s.pairDrop(hello.id, wait)
+		}
 		if !agreed {
 			proto.refused(false)
 			s.logPeer(raw.RemoteAddr(), fmt.Sprintf("peer speaks protocol v3 levels %d-%d, this server %d-%d; upgrade the older server",
-				hdr.MinLevel, hdr.MaxLevel, levelMin, levelMax))
+				hdr.MinLevel, hdr.MaxLevel, levelMin, srvMax))
 		}
 		tconn.Close()
 		return
 	}
 	tconn.SetDeadline(time.Time{})
+	car := &Carrier{conn: tconn, level: level, caps: caps}
+	if pair && hello.role == pairBulk {
+		if !s.pairGive(hello.id, car) {
+			tconn.Close() // no QUIET half waits for it
+		}
+		return
+	}
+	if wait != nil {
+		t := time.NewTimer(pairTimeout)
+		defer t.Stop()
+		select {
+		case b := <-wait:
+			car.bulk = b
+		case <-t.C:
+			s.pairDrop(hello.id, wait)
+			tconn.Close()
+			return
+		case <-ctx.Done():
+			s.pairDrop(hello.id, wait)
+			tconn.Close()
+			return
+		}
+	}
 	proto.linked(level, caps)
 	proto.peerLevels(hdr.MinLevel, hdr.MaxLevel)
-	onTunnel(&Carrier{conn: tconn, level: level, caps: caps})
+	onTunnel(car)
 }
 
 // logPeer logs line for peer at most once a minute (the refusals of §4.5: a

@@ -34,7 +34,7 @@ func TestAuthV3RoundTrip(t *testing.T) {
 	key := bytes.Repeat([]byte{0x31}, 32)
 	ekm := testEKM()
 	h := AuthHdr{Ver: protoVersion, MinLevel: 1, MaxLevel: 4, Caps: 0xA1B2C3D4}
-	rec, nonce := makeClientAuth(key, ekm, h)
+	rec, nonce := makeClientAuth(key, ekm, h, nil)
 	gotNonce, got, more, v2, ok := parseClientAuth(key, ekm, rec)
 	if !ok || v2 || more != 0 || got != h || !bytes.Equal(gotNonce, nonce) {
 		t.Fatalf("parse: ok=%v v2=%v more=%d hdr=%+v, want %+v", ok, v2, more, got, h)
@@ -66,7 +66,7 @@ func TestAuthV3LengthsUnchanged(t *testing.T) {
 	p := ProofHdr{Ver: protoVersion, Level: 1, Caps: h.Caps}
 	cMin, cMax, sMin, sMax := 1<<20, 0, 1<<20, 0
 	note := func() {
-		rec, _ := makeClientAuth(key, ekm, h)
+		rec, _ := makeClientAuth(key, ekm, h, nil)
 		proof := makeServerProof(key, nonce, ekm, p)
 		cMin, cMax = min(cMin, len(rec)), max(cMax, len(rec))
 		sMin, sMax = min(sMin, len(proof)), max(sMax, len(proof))
@@ -92,7 +92,7 @@ func TestAuthV3LengthsUnchanged(t *testing.T) {
 func TestAuthV3HeaderUnderMAC(t *testing.T) {
 	key := bytes.Repeat([]byte{0x33}, 32)
 	ekm := testEKM()
-	rec, nonce := makeClientAuth(key, ekm, LocalAuthHdr())
+	rec, nonce := makeClientAuth(key, ekm, LocalAuthHdr(), nil)
 	for i := 0; i < authHdrLen*8; i++ {
 		bad := append([]byte(nil), rec...)
 		bad[authNonceLen+authTagLen+i/8] ^= 1 << (i % 8)
@@ -152,14 +152,16 @@ func TestNegotiate(t *testing.T) {
 	}
 }
 
-// R1 speaks level 1 only; each kill switch takes its core's bit out of caps.
+// R1 speaks levels 1 and 2 (2: a link is a pair, decision T16; min stays 1);
+// each kill switch takes its core's bit out of caps, C2's the pair's too (a
+// pair needs a scheduler for each connection).
 func TestLocalAuthHdrKillSwitches(t *testing.T) {
-	all := CapClass | CapSched | CapHostQ | CapSendCap
-	if h := LocalAuthHdr(); h != (AuthHdr{Ver: 3, MinLevel: 1, MaxLevel: 1, Caps: all}) {
+	all := CapClass | CapSched | CapHostQ | CapSendCap | CapPair
+	if h := LocalAuthHdr(); h != (AuthHdr{Ver: 3, MinLevel: 1, MaxLevel: 2, Caps: all}) {
 		t.Fatalf("local header %+v", h)
 	}
-	for env, bit := range map[string]uint32{"HS2_TUNE_CLASS": CapClass, "HS2_TUNE_SCHED": CapSched,
-		"HS2_TUNE_HQG": CapHostQ, "HS2_TUNE_SENDCAP": CapSendCap} {
+	for env, bit := range map[string]uint32{"HS2_TUNE_CLASS": CapClass, "HS2_TUNE_SCHED": CapSched | CapPair,
+		"HS2_TUNE_HQG": CapHostQ, "HS2_TUNE_SENDCAP": CapSendCap, "HS2_TUNE_PAIR": CapPair} {
 		t.Run(env, func(t *testing.T) {
 			t.Setenv(env, "0")
 			if c := LocalAuthHdr().Caps; c != all&^bit {
@@ -173,7 +175,7 @@ func TestLocalAuthHdrKillSwitches(t *testing.T) {
 func FuzzParseClientAuth(f *testing.F) {
 	key := bytes.Repeat([]byte{0x36}, 32)
 	ekm := testEKM()
-	rec, _ := makeClientAuth(key, ekm, LocalAuthHdr())
+	rec, _ := makeClientAuth(key, ekm, LocalAuthHdr(), nil)
 	f.Add(rec)
 	f.Add(rec[:authHeadLen])
 	f.Add(rec[:authHeadLen-1])
@@ -302,8 +304,8 @@ func TestServerRefusesLevel(t *testing.T) {
 	defer stop()
 	u, ekm := rawAuthConn(t, addr)
 	defer u.Close()
-	h := AuthHdr{Ver: protoVersion, MinLevel: 2, MaxLevel: 3, Caps: 0xF}
-	rec, nonce := makeClientAuth(key, ekm, h)
+	h := AuthHdr{Ver: protoVersion, MinLevel: 3, MaxLevel: 4, Caps: 0xF}
+	rec, nonce := makeClientAuth(key, ekm, h, nil)
 	u.Write(rec)
 	u.SetReadDeadline(time.Now().Add(2 * time.Second))
 	p, err := readServerProof(u, key, nonce, ekm)
@@ -311,7 +313,7 @@ func TestServerRefusesLevel(t *testing.T) {
 		t.Fatalf("proof: %v", err)
 	}
 	if err := checkProofLevel(h, p); !errors.Is(err, ErrLevel) {
-		t.Fatalf("level %d accepted by a client speaking 2-3: %v", p.Level, err)
+		t.Fatalf("level %d accepted by a client speaking 3-4: %v", p.Level, err)
 	}
 	if n, _ := u.Read(make([]byte, 1)); n != 0 {
 		t.Fatal("the link stayed open")
@@ -321,7 +323,7 @@ func TestServerRefusesLevel(t *testing.T) {
 		t.Fatal("a peer with no common level got a tunnel")
 	case <-time.After(100 * time.Millisecond):
 	}
-	want := "peer speaks protocol v3 levels 2-3, this server 1-1; upgrade the older server"
+	want := "peer speaks protocol v3 levels 3-4, this server 1-2; upgrade the older server"
 	if got := logs.all(); len(got) != 1 || got[0] != want {
 		t.Fatalf("log %q, want %q", got, want)
 	}
@@ -331,7 +333,8 @@ func TestServerRefusesLevel(t *testing.T) {
 }
 
 // A good link carries the negotiated level and caps on both carriers, and the
-// status line says so in the exact words of the design.
+// status line says so in the exact words of the design: two R1 binaries
+// pair (level 2, CapPair), each end's carrier with its BULK half.
 func TestCarrierNegotiatedLevel(t *testing.T) {
 	resetProtoStats()
 	defer resetProtoStats()
@@ -345,20 +348,20 @@ func TestCarrierNegotiatedLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer car.Close()
-	want := CapClass | CapSched | CapSendCap
-	if car.Level() != 1 || car.Caps() != want {
-		t.Fatalf("client carrier: level %d caps %#x", car.Level(), car.Caps())
+	want := CapClass | CapSched | CapSendCap | CapPair
+	if car.Level() != 2 || car.Caps() != want || car.Bulk() == nil {
+		t.Fatalf("client carrier: level %d caps %#x pair %v", car.Level(), car.Caps(), car.Bulk() != nil)
 	}
 	select {
 	case sc := <-got:
 		defer sc.Close()
-		if sc.Level() != 1 || sc.Caps() != want {
-			t.Fatalf("server carrier: level %d caps %#x", sc.Level(), sc.Caps())
+		if sc.Level() != 2 || sc.Caps() != want || sc.Bulk() == nil {
+			t.Fatalf("server carrier: level %d caps %#x pair %v", sc.Level(), sc.Caps(), sc.Bulk() != nil)
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("no tunnel")
 	}
-	if l := ProtocolLine(); l != "protocol: v3 level 1 (peer levels 1-1, caps 0xB); refused v2 peers: 0, refused peers (level): 0" {
+	if l := ProtocolLine(); l != "protocol: v3 level 2 (peer levels 1-2, caps 0x1B); refused v2 peers: 0, refused peers (level): 0" {
 		t.Fatalf("status line %q", l)
 	}
 }
