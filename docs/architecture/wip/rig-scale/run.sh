@@ -154,8 +154,8 @@ run_one() {
 
 # lab (r1-diag, round 2 step 1): CAP=1 tcpdump of the link's packets
 # (headers only) on the edge's and the exit's veth, from before the link's
-# SYN; TCS=1 the bottleneck qdiscs every 100 ms. labstop ends both (and
-# gzips the captures) before the namespaces go.
+# SYN; TCS=1 the bottleneck qdiscs every 100 ms. labstop ends both before
+# the namespaces go.
 LABP=()
 labstart() {
   local r=$1
@@ -174,7 +174,7 @@ labstart() {
 }
 labstop() {
   local p
-  for p in "${LABP[@]}"; do kill -INT "$p" 2>/dev/null; done
+  for p in "${LABP[@]}"; do kill -TERM "$p" 2>/dev/null; done
   for p in "${LABP[@]}"; do wait "$p" 2>/dev/null; done
   LABP=()
 }
