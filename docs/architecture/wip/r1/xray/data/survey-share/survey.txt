@@ -1,0 +1,364 @@
+== xa: TCP 6, UDP 0, flows 23 (mapped 23), most flows on one conn 5
+   shares: G1+D1=yes, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c48592 open   0.00 close 66.29   by client life   66.3s up    421.0k down   25494.4k  G1,D1,W2.4,W2.5
+   tcp c48596 open   0.01 close 66.29   by client life   66.3s up    310.4k down     603.3k  U1,W2.1
+   tcp c48606 open   3.00 close 66.29   by client life   63.3s up     17.0k down     911.8k  W1.0,W1.1,W1.2,W3.0,W3.4
+   tcp c48622 open   3.00 close 66.29   by client life   63.3s up     91.8k down   14132.7k  W1.3,W2.2,W3.2,D2
+   tcp c48632 open   3.00 close 66.29   by client life   63.3s up     13.6k down     728.3k  W1.5,W2.3,W3.3,W3.5
+   tcp c48636 open   3.00 close 66.29   by client life   63.3s up     72.6k down     605.1k  W1.4,W2.0,W3.1,G2
+   G1 rtt idle p50 72.9 p99 275.8 | during D1 p50 2918.7 p99 5057.0 max 5301.2 (sent 2250 lost 0)
+   U1 rtt idle p50 73.1 p99 278.0 | during D1 p50 73.6 p99 258.8 max 356.8 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.3 p99 74.2 max 75.3 (sent 500 lost 0)
+   D1 24.77 MB 6.0 Mbit/s ttfb 282.4 ms
+   D2 13.5 MB 4.9 Mbit/s ttfb 294.7 ms
+   W1 ttfb med 452.2 max 699.5 errs 0
+   W2 ttfb med 309.1 max 3675.7 errs 0
+   W3 ttfb med 310.7 max 698.4 errs 0
+== xc16: TCP 1, UDP 0, flows 23 (mapped 23), most flows on one conn 23
+   shares: G1+D1=yes, U1+D1=yes, G1+U1=yes, G2+D2=yes, D1+D2=yes, W2.0+D1=yes, W1.0+G1=yes
+   tcp c43690 open   0.01 close 69.665  by client life   69.7s up    963.7k down   50263.6k  G1,U1,W1.0,W1.1,W1.2,W1.3,W1.4,W1.5,D1,W2.0,W2.1,W2.2,W2.3,W2.4,W2.5,W3.0,W3.1,W3.2,W3.3,W3.4,W3.5,D2,G2
+   G1 rtt idle p50 72.9 p99 311.5 | during D1 p50 1858.6 p99 2615.7 max 2755.6 (sent 2250 lost 1)
+   U1 rtt idle p50 73.2 p99 291.4 | during D1 p50 2123.1 p99 3058.6 max 3158.1 (sent 2250 lost 1)
+   G2 rtt idle p50 None p99 None | during D1 p50 1850.4 p99 2483.9 max 2543.1 (sent 500 lost 4)
+   D1 20.81 MB 6.7 Mbit/s ttfb 276.5 ms
+   D2 25.26 MB 7.1 Mbit/s ttfb 2392.0 ms
+   W1 ttfb med 470.1 max 748.2 errs 0
+   W2 ttfb med 2551.1 max 2552.5 errs 0
+   W3 ttfb med 2410.6 max 2411.8 errs 0
+== xb1: TCP 9, UDP 0, flows 23 (mapped 23), most flows on one conn 4
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c53372 open   0.01 close 66.317  by client life   66.3s up    268.3k down     267.0k  G1
+   tcp c53362 open   0.01 close 66.317  by client life   66.3s up    305.8k down     421.2k  U1
+   tcp c53376 open   3.00 close 66.317  by client life   63.3s up    121.8k down   19936.1k  W1.1,D1
+   tcp c53380 open   3.00 close 66.317  by client life   63.3s up     11.4k down     546.4k  W1.0,W2.1,W3.3
+   tcp c53390 open   3.00 close 66.317  by client life   63.3s up     11.1k down     546.8k  W1.3,W2.2,W3.1
+   tcp c53404 open   3.00 close 66.317  by client life   63.3s up     12.3k down     546.3k  W1.4,W2.4,W3.5
+   tcp c53410 open   3.00 close 66.317  by client life   63.3s up     71.9k down     605.8k  W1.5,W2.0,W3.0,G2
+   tcp c53412 open   3.00 close 66.317  by client life   63.3s up    120.1k down   18915.7k  W1.2,W2.3,W3.2,D2
+   tcp c44356 open   9.00 close 66.317  by client life   57.3s up      8.0k down     365.0k  W2.5,W3.4
+   G1 rtt idle p50 72.7 p99 274.4 | during D1 p50 73.2 p99 74.1 max 76.8 (sent 2250 lost 0)
+   U1 rtt idle p50 73.1 p99 307.0 | during D1 p50 73.5 p99 93.8 max 125.5 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.3 p99 74.0 max 74.9 (sent 500 lost 0)
+   D1 19.63 MB 6.5 Mbit/s ttfb 278.9 ms
+   D2 18.25 MB 6.8 Mbit/s ttfb 301.1 ms
+   W1 ttfb med 462.8 max 465.6 errs 0
+   W2 ttfb med 314.7 max 468.1 errs 0
+   W3 ttfb med 324.1 max 324.8 errs 0
+== xm3: TCP 3, UDP 0, flows 23 (mapped 23), most flows on one conn 9
+   shares: G1+D1=yes, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=yes, W2.0+D1=no, W1.0+G1=no
+   tcp c51784 open   0.01 close 79.922  by client life   79.9s up    628.0k down   59367.0k  G1,W1.2,W1.3,D1,W2.5,W3.3,W3.4,W3.5,D2
+   tcp c51788 open   0.01 close 79.922  by client life   79.9s up    328.5k down    1698.1k  U1,W1.0,W1.1,W2.0,W2.1,W2.3,W2.4,W3.0
+   tcp c51790 open   3.00 close 79.922  by client life   76.9s up     77.4k down     970.5k  W1.4,W1.5,W2.2,W3.1,W3.2,G2
+   G1 rtt idle p50 72.9 p99 304.9 | during D1 p50 2121.3 p99 3077.1 max 3340.4 (sent 2250 lost 9)
+   U1 rtt idle p50 73.0 p99 277.2 | during D1 p50 73.5 p99 474.6 max 696.9 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.3 p99 74.1 max 74.4 (sent 500 lost 0)
+   D1 29.46 MB 6.0 Mbit/s ttfb 278.1 ms
+   D2 28.28 MB 5.8 Mbit/s ttfb 2701.0 ms
+   W1 ttfb med 397.4 max 528.6 errs 0
+   W2 ttfb med 774.3 max 3969.7 errs 0
+   W3 ttfb med 3206.9 max 3219.1 errs 0
+== xb2: TCP 23, UDP 0, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c49750 open   0.01 close 67.801  by client life   67.8s up    268.3k down     270.7k  G1
+   tcp c49752 open   0.01 close 67.801  by client life   67.8s up    305.1k down     422.4k  U1
+   tcp c37280 open   3.00 close 67.801  by client life   64.8s up      5.3k down     183.4k  W1.0
+   tcp c37296 open   3.00 close 67.801  by client life   64.8s up      5.3k down     183.2k  W1.1
+   tcp c37302 open   3.00 close 67.801  by client life   64.8s up      5.4k down     182.8k  W1.3
+   tcp c37316 open   3.00 close 67.801  by client life   64.8s up      5.1k down     183.1k  W1.5
+   tcp c37326 open   3.00 close 67.801  by client life   64.8s up      5.2k down     182.8k  W1.2
+   tcp c37332 open   3.00 close 67.801  by client life   64.8s up      5.6k down     182.6k  W1.4
+   tcp c37348 open   6.00 close 67.801  by client life   61.8s up    157.2k down   26250.9k  D1
+   tcp c37362 open   9.00 close 67.801  by client life   58.8s up      5.3k down     183.0k  W2.0
+   tcp c37374 open   9.00 close 67.801  by client life   58.8s up      5.0k down     183.4k  W2.2
+   tcp c37380 open   9.00 close 67.801  by client life   58.8s up      5.6k down     183.3k  W2.3
+   tcp c37394 open   9.00 close 67.801  by client life   58.8s up      5.4k down     182.7k  W2.1
+   tcp c37384 open   9.00 close 67.801  by client life   58.8s up      5.0k down     183.0k  W2.4
+   tcp c37402 open   9.01 close 67.801  by client life   58.8s up      5.2k down     183.4k  W2.5
+   tcp c60232 open  18.00 close 67.801  by client life   49.8s up      5.7k down     182.8k  W3.0
+   tcp c60240 open  18.00 close 67.801  by client life   49.8s up      5.7k down     183.4k  W3.1
+   tcp c60248 open  18.00 close 67.801  by client life   49.8s up      5.4k down     182.7k  W3.5
+   tcp c60254 open  18.00 close 67.801  by client life   49.8s up      5.5k down     183.0k  W3.4
+   tcp c60256 open  18.00 close 67.801  by client life   49.8s up      5.9k down     183.1k  W3.2
+   tcp c60266 open  18.00 close 67.8    by client life   49.8s up      5.5k down     182.8k  W3.3
+   tcp c36298 open  21.00 close 67.801  by client life   46.8s up    106.5k down   17578.4k  D2
+   tcp c36310 open  24.00 close 67.801  by client life   43.8s up     62.7k down      59.8k  G2
+   G1 rtt idle p50 72.8 p99 290.2 | during D1 p50 73.4 p99 74.3 max 75.2 (sent 2250 lost 0)
+   U1 rtt idle p50 72.9 p99 288.3 | during D1 p50 73.5 p99 85.6 max 125.2 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.3 p99 144.8 max 224.7 (sent 500 lost 0)
+   D1 26.08 MB 5.8 Mbit/s ttfb 428.5 ms
+   D2 17.47 MB 5.3 Mbit/s ttfb 436.6 ms
+   W1 ttfb med 466.7 max 468.5 errs 0
+   W2 ttfb med 473.4 max 475.2 errs 0
+   W3 ttfb med 473.7 max 475.7 errs 0
+== xt: TCP 9, UDP 0, flows 23 (mapped 23), most flows on one conn 7
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=yes, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c58870 open   0.03 close 66.318  by client life   66.3s up    794.7k down   15374.0k  G1,W3.0,W3.1,W3.2,D2,G2
+   tcp c58876 open   0.03 close 66.318  by client life   66.3s up    678.7k down     946.0k  U1,W2.3
+   tcp c58882 open   3.00 close 66.318  by client life   63.3s up    421.4k down   22244.0k  W1.0,D1,W2.4,W2.5,W3.3,W3.4,W3.5
+   tcp c58896 open   3.00 close 66.318  by client life   63.3s up     15.8k down     550.4k  W1.2,W1.5,W2.1
+   tcp c58902 open   3.00 close 66.318  by client life   63.3s up      6.2k down     185.5k  W1.4
+   tcp c58912 open   3.00 close 66.318  by client life   63.3s up     15.9k down     733.7k  W1.1,W1.3,W2.0,W2.2
+   tcp c59276 open  23.18 close 66.318  by client life   43.1s up    622.2k down     416.3k  
+   tcp c59280 open  24.28 close 66.318  by client life   42.0s up    570.5k down     386.9k  
+   tcp c40712 open  44.80 close 66.318  by client life   21.5s up      7.0k down       4.6k  
+   G1 rtt idle p50 120.9 p99 225.2 | during D1 p50 261.0 p99 2451.0 max 2521.3 (sent 2250 lost 0)
+   U1 rtt idle p50 121.1 p99 224.1 | during D1 p50 121.0 p99 263.0 max 382.8 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 1938.8 p99 2491.7 max 2526.7 (sent 500 lost 0)
+   D1 20.87 MB 6.0 Mbit/s ttfb 281.5 ms
+   D2 14.09 MB 5.6 Mbit/s ttfb 286.6 ms
+   W1 ttfb med 441.4 max 719.6 errs 0
+   W2 ttfb med 602.4 max 3698.7 errs 0
+   W3 ttfb med 3101.2 max 3113.9 errs 0
+== vv: TCP 23, UDP 0, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c50646 open   0.01 close 46.087  by client life   46.1s up    245.7k down     245.7k  G1
+   tcp c50662 open   0.01 close 45.087  by client life   45.1s up    283.1k down     376.9k  U1
+   tcp c50674 open   3.00 close 5.28    by client life    2.3s up      3.5k down     183.1k  W1.0
+   tcp c50688 open   3.00 close 5.283   by client life    2.3s up      3.6k down     183.4k  W1.1
+   tcp c50704 open   3.00 close 5.681   by client life    2.7s up      3.5k down     183.1k  W1.4
+   tcp c50716 open   3.00 close 5.346   by client life    2.3s up      3.3k down     183.2k  W1.2
+   tcp c50726 open   3.00 close 5.349   by client life    2.3s up      3.6k down     183.6k  W1.3
+   tcp c50742 open   3.00 close 5.338   by client life    2.3s up      3.6k down     182.8k  W1.5
+   tcp c45136 open   6.00 close 51.759  by server life   45.8s up      3.3k down   33074.1k  D1
+   tcp c45144 open   9.00 close 11.79   by client life    2.8s up      3.7k down     182.9k  W2.0
+   tcp c45154 open   9.00 close 11.746  by client life    2.7s up      3.6k down     183.3k  W2.3
+   tcp c45162 open   9.00 close 11.791  by client life    2.8s up      3.6k down     183.4k  W2.2
+   tcp c45174 open   9.00 close 11.745  by client life    2.7s up      3.6k down     183.0k  W2.1
+   tcp c45190 open   9.00 close 11.796  by client life    2.8s up      3.6k down     183.2k  W2.5
+   tcp c45192 open   9.00 close 11.747  by client life    2.7s up      3.7k down     183.1k  W2.4
+   tcp c41180 open  18.00 close 20.728  by client life    2.7s up      3.6k down     182.8k  W3.0
+   tcp c41196 open  18.00 close 20.724  by client life    2.7s up      3.5k down     183.2k  W3.1
+   tcp c41210 open  18.00 close 20.731  by client life    2.7s up      3.4k down     183.3k  W3.3
+   tcp c41222 open  18.00 close 20.754  by client life    2.8s up      3.4k down     183.2k  W3.4
+   tcp c41224 open  18.00 close 20.76   by client life    2.8s up      3.6k down     183.1k  W3.5
+   tcp c41228 open  18.00 close 20.726  by client life    2.7s up      3.5k down     183.5k  W3.2
+   tcp c41242 open  21.00 close 50.521  by server life   29.5s up      3.3k down   17065.0k  D2
+   tcp c41256 open  24.00 close 35.083  by client life   11.1s up     56.9k down      54.9k  G2
+   G1 rtt idle p50 72.7 p99 276.4 | during D1 p50 73.3 p99 74.1 max 76.6 (sent 2250 lost 0)
+   U1 rtt idle p50 72.8 p99 276.6 | during D1 p50 73.5 p99 85.2 max 126.0 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.3 p99 141.5 max 221.2 (sent 500 lost 0)
+   D1 32.9 MB 5.6 Mbit/s ttfb 423.9 ms
+   D2 16.97 MB 4.4 Mbit/s ttfb 437.4 ms
+   W1 ttfb med 454.5 max 458.9 errs 0
+   W2 ttfb med 470.9 max 473.0 errs 0
+   W3 ttfb med 472.7 max 475.6 errs 0
+== vm: TCP 23, UDP 0, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c56062 open   0.01 close 45.088  by client life   45.1s up    291.7k down     290.9k  U1
+   tcp c56070 open   0.01 close 46.088  by client life   46.1s up    254.6k down     255.5k  G1
+   tcp c56080 open   3.00 close 5.294   by client life    2.3s up      0.4k down     181.6k  W1.0
+   tcp c56088 open   3.00 close 5.3     by client life    2.3s up      0.3k down     181.3k  W1.1
+   tcp c56100 open   3.00 close 5.383   by client life    2.4s up      0.3k down     181.5k  W1.4
+   tcp c56108 open   3.00 close 5.407   by client life    2.4s up      0.3k down     181.3k  W1.2
+   tcp c56122 open   3.00 close 5.382   by client life    2.4s up      0.4k down     181.1k  W1.5
+   tcp c56126 open   3.00 close 5.379   by client life    2.4s up      0.3k down     181.3k  W1.3
+   tcp c56132 open   6.00 close 44.625  by server life   38.6s up      0.1k down   28618.1k  D1
+   tcp c44774 open   9.00 close 11.663  by client life    2.7s up      0.3k down     181.3k  W2.0
+   tcp c44782 open   9.00 close 11.664  by client life    2.7s up      0.3k down     181.3k  W2.1
+   tcp c44794 open   9.00 close 11.665  by client life    2.7s up      0.3k down     181.1k  W2.2
+   tcp c44802 open   9.00 close 11.667  by client life    2.7s up      0.3k down     181.4k  W2.3
+   tcp c44816 open   9.01 close 11.671  by client life    2.7s up      0.3k down     181.3k  W2.5
+   tcp c44818 open   9.01 close 11.668  by client life    2.7s up      0.4k down     181.3k  W2.4
+   tcp c51266 open  18.00 close 20.662  by client life    2.7s up      0.3k down     181.3k  W3.0
+   tcp c51270 open  18.00 close 20.682  by client life    2.7s up      0.3k down     181.4k  W3.1
+   tcp c51272 open  18.00 close 20.637  by client life    2.6s up      0.3k down     181.3k  W3.5
+   tcp c51286 open  18.00 close 20.645  by client life    2.6s up      0.3k down     181.3k  W3.2
+   tcp c51292 open  18.00 close 20.631  by client life    2.6s up      0.4k down     181.2k  W3.4
+   tcp c51294 open  18.00 close 20.669  by client life    2.7s up      0.4k down     181.5k  W3.3
+   tcp c51302 open  21.00 close 48.489  by server life   27.5s up      0.2k down   17835.5k  D2
+   tcp c51308 open  24.00 close 35.082  by client life   11.1s up     56.7k down      56.5k  G2
+   G1 rtt idle p50 72.7 p99 127.1 | during D1 p50 73.2 p99 74.2 max 77.6 (sent 2250 lost 0)
+   U1 rtt idle p50 72.9 p99 127.4 | during D1 p50 73.4 p99 74.4 max 76.8 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.2 p99 74.1 max 147.8 (sent 500 lost 0)
+   D1 28.44 MB 5.7 Mbit/s ttfb 347.1 ms
+   D2 17.73 MB 5.0 Mbit/s ttfb 359.9 ms
+   W1 ttfb med 382.9 max 388.3 errs 0
+   W2 ttfb med 396.3 max 402.4 errs 0
+   W3 ttfb med 396.8 max 402.8 errs 0
+== tj: TCP 23, UDP 0, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c60920 open   0.01 close 46.088  by client life   46.1s up    195.2k down     195.3k  G1
+   tcp c60936 open   0.01 close 45.089  by client life   45.1s up    220.0k down     220.2k  U1
+   tcp c53398 open   3.00 close 5.368   by client life    2.4s up      2.0k down     182.5k  W1.0
+   tcp c53412 open   3.00 close 5.37    by client life    2.4s up      2.1k down     182.5k  W1.1
+   tcp c53420 open   3.00 close 5.452   by client life    2.4s up      2.0k down     182.5k  W1.5
+   tcp c53432 open   3.00 close 5.371   by client life    2.4s up      2.0k down     182.5k  W1.2
+   tcp c53436 open   3.00 close 5.496   by client life    2.5s up      2.0k down     182.5k  W1.3
+   tcp c53442 open   3.00 close 5.497   by client life    2.5s up      2.1k down     182.5k  W1.4
+   tcp c53444 open   6.00 close 38.506  by server life   32.5s up      2.0k down   25268.3k  D1
+   tcp c53446 open   9.00 close 11.713  by client life    2.7s up      2.1k down     182.5k  W2.1
+   tcp c53452 open   9.00 close 11.702  by client life    2.7s up      2.0k down     182.5k  W2.5
+   tcp c53454 open   9.00 close 11.755  by client life    2.8s up      2.0k down     182.5k  W2.3
+   tcp c53470 open   9.00 close 11.733  by client life    2.7s up      2.0k down     182.5k  W2.4
+   tcp c53482 open   9.00 close 11.714  by client life    2.7s up      2.0k down     182.5k  W2.0
+   tcp c53498 open   9.00 close 11.728  by client life    2.7s up      2.0k down     182.5k  W2.2
+   tcp c46012 open  18.00 close 20.71   by client life    2.7s up      2.0k down     182.5k  W3.0
+   tcp c46026 open  18.00 close 20.66   by client life    2.7s up      2.0k down     182.5k  W3.1
+   tcp c46032 open  18.00 close 20.699  by client life    2.7s up      2.1k down     182.5k  W3.4
+   tcp c46036 open  18.00 close 20.681  by client life    2.7s up      2.1k down     182.5k  W3.2
+   tcp c46038 open  18.00 close 20.697  by client life    2.7s up      2.0k down     182.5k  W3.3
+   tcp c46040 open  18.00 close 20.675  by client life    2.7s up      2.0k down     182.5k  W3.5
+   tcp c46042 open  21.00 close 46.201  by server life   25.2s up      2.0k down   18664.2k  D2
+   tcp c60274 open  24.00 close 35.082  by client life   11.1s up     44.8k down      44.8k  G2
+   G1 rtt idle p50 72.7 p99 223.6 | during D1 p50 73.3 p99 74.2 max 79.9 (sent 2250 lost 0)
+   U1 rtt idle p50 72.8 p99 222.0 | during D1 p50 73.4 p99 74.3 max 79.5 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.2 p99 145.2 max 225.1 (sent 500 lost 0)
+   D1 25.2 MB 6.0 Mbit/s ttfb 422.8 ms
+   D2 18.61 MB 5.7 Mbit/s ttfb 425.5 ms
+   W1 ttfb med 427.2 max 430.6 errs 0
+   W2 ttfb med 440.0 max 442.9 errs 0
+   W3 ttfb med 438.4 max 442.2 errs 0
+== ws: TCP 23, UDP 0, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c35308 open   0.03 close 46.087  by client life   46.1s up    209.2k down     200.0k  G1
+   tcp c35310 open   0.03 close 45.087  by client life   45.1s up    245.2k down     236.1k  U1
+   tcp c35322 open   3.00 close 5.525   by client life    2.5s up      2.6k down     183.2k  W1.0
+   tcp c35324 open   3.00 close 5.53    by client life    2.5s up      2.7k down     183.2k  W1.4
+   tcp c35326 open   3.00 close 5.563   by client life    2.6s up      2.7k down     183.2k  W1.1
+   tcp c35330 open   3.00 close 5.519   by client life    2.5s up      2.7k down     183.2k  W1.3
+   tcp c35344 open   3.00 close 5.567   by client life    2.6s up      2.7k down     183.2k  W1.5
+   tcp c35358 open   3.00 close 5.524   by client life    2.5s up      2.7k down     183.2k  W1.2
+   tcp c35360 open   6.00 close 64.045  by server life   58.0s up      2.6k down   39949.7k  D1
+   tcp c35376 open   9.00 close 11.68   by client life    2.7s up      2.6k down     183.2k  W2.0
+   tcp c35380 open   9.00 close 11.776  by client life    2.8s up      2.6k down     183.2k  W2.3
+   tcp c35386 open   9.00 close 11.77   by client life    2.8s up      2.7k down     183.2k  W2.1
+   tcp c35388 open   9.00 close 11.801  by client life    2.8s up      2.7k down     183.2k  W2.4
+   tcp c35392 open   9.00 close 11.767  by client life    2.8s up      2.7k down     183.2k  W2.2
+   tcp c35402 open   9.00 close 11.802  by client life    2.8s up      2.6k down     183.2k  W2.5
+   tcp c44574 open  18.00 close 20.677  by client life    2.7s up      2.6k down     183.2k  W3.0
+   tcp c44576 open  18.00 close 20.8    by client life    2.8s up      2.6k down     183.2k  W3.5
+   tcp c44586 open  18.00 close 20.775  by client life    2.8s up      2.7k down     183.2k  W3.3
+   tcp c44592 open  18.00 close 20.803  by client life    2.8s up      2.6k down     183.2k  W3.1
+   tcp c44604 open  18.01 close 20.768  by client life    2.8s up      2.7k down     183.2k  W3.2
+   tcp c44614 open  18.01 close 20.771  by client life    2.8s up      2.7k down     183.2k  W3.4
+   tcp c35420 open  21.00 close 65.667  by server life   44.7s up      2.5k down   26699.7k  D2
+   tcp c35426 open  24.00 close 35.082  by client life   11.1s up     48.2k down      46.0k  G2
+   G1 rtt idle p50 72.6 p99 298.3 | during D1 p50 73.2 p99 74.3 max 76.2 (sent 2250 lost 0)
+   U1 rtt idle p50 72.9 p99 299.1 | during D1 p50 73.4 p99 74.5 max 76.4 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.2 p99 217.4 max 297.3 (sent 500 lost 0)
+   D1 39.71 MB 5.5 Mbit/s ttfb 494.2 ms
+   D2 26.54 MB 4.7 Mbit/s ttfb 499.1 ms
+   W1 ttfb med 504.9 max 508.6 errs 0
+   W2 ttfb med 519.1 max 521.5 errs 0
+   W3 ttfb med 518.8 max 521.5 errs 0
+== hu: TCP 23, UDP 0, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c58674 open   0.01 close 46.087  by client life   46.1s up    195.7k down     195.6k  G1
+   tcp c58686 open   0.01 close 45.087  by client life   45.1s up    231.6k down     281.2k  U1
+   tcp c58688 open   3.00 close 5.407   by client life    2.4s up      2.5k down     182.8k  W1.0
+   tcp c58690 open   3.00 close 5.317   by client life    2.3s up      2.5k down     182.8k  W1.1
+   tcp c58692 open   3.00 close 5.531   by client life    2.5s up      2.6k down     182.8k  W1.3
+   tcp c58696 open   3.00 close 5.528   by client life    2.5s up      2.5k down     182.8k  W1.2
+   tcp c58710 open   3.01 close 5.53    by client life    2.5s up      2.5k down     182.8k  W1.4
+   tcp c58720 open   3.01 close 5.532   by client life    2.5s up      2.6k down     182.8k  W1.5
+   tcp c58730 open   6.00 close 40.203  by server life   34.2s up      2.4k down   25859.9k  D1
+   tcp c37798 open   9.00 close 11.899  by client life    2.9s up      2.5k down     182.8k  W2.0
+   tcp c37808 open   9.00 close 11.762  by client life    2.8s up      2.5k down     182.8k  W2.2
+   tcp c37820 open   9.00 close 11.764  by client life    2.8s up      2.5k down     182.8k  W2.1
+   tcp c37824 open   9.00 close 11.799  by client life    2.8s up      2.6k down     182.8k  W2.3
+   tcp c37828 open   9.00 close 11.767  by client life    2.8s up      2.5k down     182.8k  W2.5
+   tcp c37830 open   9.00 close 11.763  by client life    2.8s up      2.6k down     182.8k  W2.4
+   tcp c45238 open  18.00 close 20.818  by client life    2.8s up      2.6k down     182.8k  W3.0
+   tcp c45246 open  18.00 close 20.807  by client life    2.8s up      2.6k down     182.8k  W3.2
+   tcp c45248 open  18.00 close 20.764  by client life    2.8s up      2.6k down     182.8k  W3.1
+   tcp c45252 open  18.00 close 20.813  by client life    2.8s up      2.5k down     182.8k  W3.4
+   tcp c45256 open  18.00 close 20.816  by client life    2.8s up      2.5k down     182.8k  W3.3
+   tcp c45266 open  18.00 close 20.817  by client life    2.8s up      2.5k down     182.8k  W3.5
+   tcp c45282 open  21.00 close 45.629  by server life   24.6s up      2.4k down   16791.7k  D2
+   tcp c45286 open  24.00 close 35.082  by client life   11.1s up     45.2k down      45.1k  G2
+   G1 rtt idle p50 72.8 p99 290.8 | during D1 p50 73.3 p99 74.2 max 75.7 (sent 2250 lost 0)
+   U1 rtt idle p50 73.0 p99 290.5 | during D1 p50 73.5 p99 86.2 max 126.3 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.2 p99 217.2 max 297.1 (sent 500 lost 0)
+   D1 25.79 MB 5.9 Mbit/s ttfb 503.1 ms
+   D2 16.74 MB 5.2 Mbit/s ttfb 508.4 ms
+   W1 ttfb med 519.9 max 533.0 errs 0
+   W2 ttfb med 550.0 max 550.9 errs 0
+   W3 ttfb med 544.1 max 547.1 errs 0
+== gr: TCP 1, UDP 0, flows 23 (mapped 23), most flows on one conn 23
+   shares: G1+D1=yes, U1+D1=yes, G1+U1=yes, G2+D2=yes, D1+D2=yes, W2.0+D1=yes, W1.0+G1=yes
+   tcp c48014 open   0.01 close 66.237  by client life   66.2s up    587.6k down   45835.9k  G1,U1,W1.0,W1.1,W1.2,W1.3,W1.4,W1.5,D1,W2.0,W2.1,W2.2,W2.3,W2.4,W2.5,W3.0,W3.1,W3.2,W3.3,W3.4,W3.5,D2,G2
+   G1 rtt idle p50 72.7 p99 294.2 | during D1 p50 463.1 p99 727.6 max 807.3 (sent 2250 lost 0)
+   U1 rtt idle p50 72.9 p99 293.3 | during D1 p50 596.2 p99 2500.7 max 2621.5 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 486.4 p99 741.2 max 790.5 (sent 500 lost 0)
+   D1 23.4 MB 5.9 Mbit/s ttfb 278.2 ms
+   D2 18.51 MB 5.9 Mbit/s ttfb 593.3 ms
+   W1 ttfb med 434.7 max 436.9 errs 0
+   W2 ttfb med 374.4 max 622.1 errs 0
+   W3 ttfb med 689.9 max 701.7 errs 0
+== grm: TCP 1, UDP 0, flows 23 (mapped 23), most flows on one conn 23
+   shares: G1+D1=yes, U1+D1=yes, G1+U1=yes, G2+D2=yes, D1+D2=yes, W2.0+D1=yes, W1.0+G1=yes
+   tcp c49856 open   0.01 close 67.305  by client life   67.3s up    565.2k down   47389.7k  G1,U1,W1.0,W1.1,W1.2,W1.3,W1.4,W1.5,D1,W2.0,W2.1,W2.2,W2.3,W2.4,W2.5,W3.0,W3.1,W3.2,W3.3,W3.4,W3.5,D2,G2
+   G1 rtt idle p50 72.7 p99 290.3 | during D1 p50 674.3 p99 1284.7 max 1358.7 (sent 2250 lost 0)
+   U1 rtt idle p50 72.9 p99 290.7 | during D1 p50 674.3 p99 1285.1 max 1358.9 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 778.5 p99 1015.7 max 1093.3 (sent 500 lost 0)
+   D1 24.05 MB 6.0 Mbit/s ttfb 277.9 ms
+   D2 19.5 MB 6.0 Mbit/s ttfb 709.8 ms
+   W1 ttfb med 373.6 max 452.0 errs 0
+   W2 ttfb med 794.3 max 807.0 errs 0
+   W3 ttfb med 846.0 max 847.0 errs 0
+== ss: TCP 22, UDP 1, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c49048 open   0.01 close 45.087  by client life   45.1s up    221.0k down     220.4k  G1
+   udp c36948 open   0.01 close None    by None   life   45.1s up    256.5k down     274.5k  U1
+   tcp c49050 open   3.00 close 4.399   by client life    1.4s up      0.5k down     180.3k  W1.0
+   tcp c49056 open   3.00 close 4.41    by client life    1.4s up      0.7k down     180.3k  W1.1
+   tcp c49068 open   3.00 close 4.373   by client life    1.4s up      0.2k down     180.3k  W1.3
+   tcp c49072 open   3.00 close 4.353   by client life    1.3s up      0.2k down     180.2k  W1.2
+   tcp c49084 open   3.00 close 4.277   by client life    1.3s up      0.6k down     180.3k  W1.4
+   tcp c49100 open   3.00 close 4.37    by client life    1.4s up      0.3k down     180.3k  W1.5
+   tcp c49114 open   6.00 close 33.135  by server life   27.1s up      0.6k down   22108.6k  D1
+   tcp c37062 open   9.00 close 10.298  by client life    1.3s up      0.6k down     180.3k  W2.0
+   tcp c37078 open   9.00 close 10.642  by client life    1.6s up      0.3k down     180.3k  W2.1
+   tcp c37086 open   9.01 close 10.583  by client life    1.6s up      1.1k down     180.3k  W2.4
+   tcp c37096 open   9.01 close 10.624  by client life    1.6s up      0.2k down     180.3k  W2.2
+   tcp c37104 open   9.01 close 10.626  by client life    1.6s up      0.9k down     180.3k  W2.3
+   tcp c37106 open   9.01 close 10.592  by client life    1.6s up      0.8k down     180.3k  W2.5
+   tcp c37112 open  18.00 close 19.561  by client life    1.6s up      0.2k down     180.3k  W3.1
+   tcp c37116 open  18.00 close 19.564  by client life    1.6s up      0.4k down     180.2k  W3.0
+   tcp c37124 open  18.00 close 19.397  by client life    1.4s up      0.3k down     180.3k  W3.2
+   tcp c37140 open  18.00 close 19.582  by client life    1.6s up      0.5k down     180.3k  W3.3
+   tcp c37150 open  18.00 close 19.565  by client life    1.6s up      1.0k down     180.3k  W3.5
+   tcp c37164 open  18.00 close 19.556  by client life    1.6s up      0.4k down     180.3k  W3.4
+   tcp c42544 open  21.00 close 49.354  by server life   28.4s up      0.5k down   25421.6k  D2
+   tcp c42548 open  24.00 close 34.081  by client life   10.1s up     49.1k down      49.0k  G2
+   G1 rtt idle p50 72.7 p99 126.0 | during D1 p50 73.2 p99 74.1 max 76.9 (sent 2250 lost 0)
+   U1 rtt idle p50 72.8 p99 73.3 | during D1 p50 73.4 p99 74.3 max 77.0 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 73.1 p99 75.1 max 147.4 (sent 500 lost 0)
+   D1 22.09 MB 5.0 Mbit/s ttfb 448.7 ms
+   D2 25.4 MB 5.6 Mbit/s ttfb 360.1 ms
+   W1 ttfb med 500.6 max 510.9 errs 0
+   W2 ttfb med 672.4 max 760.5 errs 0
+   W3 ttfb med 668.5 max 672.6 errs 0
+== kc: TCP 0, UDP 23, flows 23 (mapped 23), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   udp c52663 open   0.00 close None    by None   life   55.0s up    304.2k down     257.0k  G1
+   udp c52052 open   0.01 close None    by None   life   55.0s up    410.0k down     362.6k  U1
+   udp c48603 open   3.00 close None    by None   life   15.0s up      6.9k down     221.8k  W1.0
+   udp c58477 open   3.01 close None    by None   life   15.0s up      6.4k down     265.1k  W1.1
+   udp c54682 open   3.01 close None    by None   life   15.0s up      7.2k down     263.8k  W1.2
+   udp c53016 open   3.01 close None    by None   life   15.0s up      7.1k down     265.1k  W1.3
+   udp c36954 open   3.01 close None    by None   life   15.0s up      7.7k down     264.7k  W1.5
+   udp c39323 open   3.01 close None    by None   life   15.0s up      7.3k down     264.9k  W1.4
+   udp c59884 open   6.00 close None    by None   life   70.1s up    852.5k down   37510.6k  D1
+   udp c46200 open   9.00 close None    by None   life   15.0s up      6.8k down     268.7k  W2.0
+   udp c47888 open   9.00 close None    by None   life   15.0s up      5.9k down     251.6k  W2.1
+   udp c59285 open   9.00 close None    by None   life   15.0s up      5.8k down     267.1k  W2.2
+   udp c49019 open   9.00 close None    by None   life   15.0s up      8.0k down     268.7k  W2.4
+   udp c42957 open   9.00 close None    by None   life   15.0s up      6.6k down     269.3k  W2.3
+   udp c45460 open   9.00 close None    by None   life   15.0s up      5.9k down     263.8k  W2.5
+   udp c41662 open  18.00 close None    by None   life   15.0s up      8.8k down     269.3k  W3.0
+   udp c37692 open  18.01 close None    by None   life   15.0s up      7.7k down     259.7k  W3.1
+   udp c52389 open  18.01 close None    by None   life   15.0s up      9.0k down     250.2k  W3.2
+   udp c40792 open  18.01 close None    by None   life   15.0s up      8.5k down     267.4k  W3.4
+   udp c52430 open  18.01 close None    by None   life   15.0s up      4.9k down     263.8k  W3.3
+   udp c33124 open  18.01 close None    by None   life   15.0s up      6.7k down     265.1k  W3.5
+   udp c48859 open  21.00 close None    by None   life   95.1s up   1276.1k down   74396.1k  D2
+   udp c49284 open  24.00 close None    by None   life   20.0s up     65.7k down      57.4k  G2
+   G1 rtt idle p50 142.8 p99 163.7 | during D1 p50 143.3 p99 172.9 max 174.1 (sent 2250 lost 0)
+   U1 rtt idle p50 143.3 p99 164.2 | during D1 p50 144.3 p99 165.3 max 174.2 (sent 2250 lost 0)
+   G2 rtt idle p50 None p99 None | during D1 p50 135.4 p99 164.5 max 172.9 (sent 500 lost 0)
+   D1 12.85 MB 1.7 Mbit/s ttfb 324.6 ms
+   D2 23.66 MB 2.2 Mbit/s ttfb 324.3 ms
+   W1 ttfb med 332.6 max 333.9 errs 0
+   W2 ttfb med 333.0 max 337.7 errs 0
+   W3 ttfb med 334.8 max 337.8 errs 0

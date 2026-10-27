@@ -1,0 +1,143 @@
+{
+ "variant": "xm3",
+ "tcp_conns": 3,
+ "udp_tuples": 0,
+ "proxied_flows": 23,
+ "mapped": 23,
+ "access_entries": 23,
+ "max_flows_on_one_conn": 9,
+ "pairs": {
+  "G1+D1": true,
+  "U1+D1": false,
+  "G1+U1": false,
+  "G2+D2": false,
+  "D1+D2": true,
+  "W2.0+D1": false,
+  "W1.0+G1": false
+ },
+ "lat": {
+  "G1": {
+   "idle_p50": 72.9,
+   "idle_p99": 304.9,
+   "dl_p50": 2121.3,
+   "dl_p99": 3077.1,
+   "dl_max": 3340.4,
+   "sent": 2250,
+   "lost": 9
+  },
+  "U1": {
+   "idle_p50": 73.0,
+   "idle_p99": 277.2,
+   "dl_p50": 73.5,
+   "dl_p99": 474.6,
+   "dl_max": 696.9,
+   "sent": 2250,
+   "lost": 0
+  },
+  "G2": {
+   "idle_p50": null,
+   "idle_p99": null,
+   "dl_p50": 73.3,
+   "dl_p99": 74.1,
+   "dl_max": 74.4,
+   "sent": 500,
+   "lost": 0
+  }
+ },
+ "dl": {
+  "D1": {
+   "MB": 29.46,
+   "ttfb_ms": 278.1,
+   "mbit": 6.0
+  },
+  "D2": {
+   "MB": 28.28,
+   "ttfb_ms": 2701.0,
+   "mbit": 5.8
+  }
+ },
+ "web": {
+  "W1": {
+   "ttfb_ms_med": 397.4,
+   "ttfb_ms_max": 528.6,
+   "errs": 0
+  },
+  "W2": {
+   "ttfb_ms_med": 774.3,
+   "ttfb_ms_max": 3969.7,
+   "errs": 0
+  },
+  "W3": {
+   "ttfb_ms_med": 3206.9,
+   "ttfb_ms_max": 3219.1,
+   "errs": 0
+  }
+ },
+ "conns": [
+  {
+   "proto": "tcp",
+   "cport": 51784,
+   "sport": 4443,
+   "open": 0.01,
+   "close": 79.922,
+   "closer": "client",
+   "last_pkt": 79.99,
+   "life_s": 79.9,
+   "up_kB": 628.0,
+   "down_kB": 59367.0,
+   "flows": [
+    "G1",
+    "W1.2",
+    "W1.3",
+    "D1",
+    "W2.5",
+    "W3.3",
+    "W3.4",
+    "W3.5",
+    "D2"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 51788,
+   "sport": 4443,
+   "open": 0.01,
+   "close": 79.922,
+   "closer": "client",
+   "last_pkt": 79.99,
+   "life_s": 79.9,
+   "up_kB": 328.5,
+   "down_kB": 1698.1,
+   "flows": [
+    "U1",
+    "W1.0",
+    "W1.1",
+    "W2.0",
+    "W2.1",
+    "W2.3",
+    "W2.4",
+    "W3.0"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 51790,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 79.922,
+   "closer": "client",
+   "last_pkt": 79.99,
+   "life_s": 76.9,
+   "up_kB": 77.4,
+   "down_kB": 970.5,
+   "flows": [
+    "W1.4",
+    "W1.5",
+    "W2.2",
+    "W3.1",
+    "W3.2",
+    "G2"
+   ]
+  }
+ ]
+}

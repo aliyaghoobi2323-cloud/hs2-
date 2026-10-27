@@ -1,0 +1,137 @@
+{
+ "variant": "xa",
+ "tcp_conns": 6,
+ "udp_tuples": 0,
+ "proxied_flows": 8,
+ "mapped": 8,
+ "access_entries": 8,
+ "max_flows_on_one_conn": 2,
+ "pairs": {
+  "G1+D1": false,
+  "U1+D1": false,
+  "G1+U1": false,
+  "G2+D2": false,
+  "D1+D2": false,
+  "W2.0+D1": false,
+  "W1.0+G1": false
+ },
+ "lat": {
+  "G1": {
+   "idle_p50": 72.9,
+   "idle_p99": 291.1,
+   "dl_p50": 72.9,
+   "dl_p99": 73.1,
+   "dl_max": 73.1,
+   "sent": 250,
+   "lost": 0
+  }
+ },
+ "dl": {
+  "D1": {
+   "MB": 1.25,
+   "ttfb_ms": 291.3,
+   "mbit": 1.7
+  }
+ },
+ "web": {
+  "W1": {
+   "ttfb_ms_med": 461.5,
+   "ttfb_ms_max": 596.6,
+   "errs": 0
+  }
+ },
+ "conns": [
+  {
+   "proto": "tcp",
+   "cport": 59098,
+   "sport": 4443,
+   "open": 0.01,
+   "close": 306.16,
+   "closer": "rst",
+   "last_pkt": 306.16,
+   "life_s": 306.2,
+   "up_kB": 37.9,
+   "down_kB": 34.2,
+   "flows": [
+    "G1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 59112,
+   "sport": 4443,
+   "open": 1.0,
+   "close": 305.762,
+   "closer": "rst",
+   "last_pkt": 305.76,
+   "life_s": 304.8,
+   "up_kB": 8.6,
+   "down_kB": 364.9,
+   "flows": [
+    "W1.4",
+    "W1.5"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 59126,
+   "sport": 4443,
+   "open": 1.0,
+   "close": 303.291,
+   "closer": "rst",
+   "last_pkt": 303.29,
+   "life_s": 302.3,
+   "up_kB": 5.1,
+   "down_kB": 183.1,
+   "flows": [
+    "W1.1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 59142,
+   "sport": 4443,
+   "open": 1.0,
+   "close": 303.38,
+   "closer": "rst",
+   "last_pkt": 303.38,
+   "life_s": 302.4,
+   "up_kB": 5.3,
+   "down_kB": 183.0,
+   "flows": [
+    "W1.0"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 59152,
+   "sport": 4443,
+   "open": 1.0,
+   "close": 303.376,
+   "closer": "rst",
+   "last_pkt": 303.38,
+   "life_s": 302.4,
+   "up_kB": 6.0,
+   "down_kB": 183.1,
+   "flows": [
+    "W1.3"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 59168,
+   "sport": 4443,
+   "open": 1.01,
+   "close": 307.013,
+   "closer": "rst",
+   "last_pkt": 307.01,
+   "life_s": 306.0,
+   "up_kB": 14.6,
+   "down_kB": 1437.4,
+   "flows": [
+    "W1.2",
+    "D1"
+   ]
+  }
+ ]
+}

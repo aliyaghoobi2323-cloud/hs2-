@@ -1,0 +1,227 @@
+{
+ "variant": "xb1",
+ "tcp_conns": 9,
+ "udp_tuples": 0,
+ "proxied_flows": 23,
+ "mapped": 23,
+ "access_entries": 23,
+ "max_flows_on_one_conn": 4,
+ "pairs": {
+  "G1+D1": false,
+  "U1+D1": false,
+  "G1+U1": false,
+  "G2+D2": false,
+  "D1+D2": false,
+  "W2.0+D1": false,
+  "W1.0+G1": false
+ },
+ "lat": {
+  "G1": {
+   "idle_p50": 72.7,
+   "idle_p99": 274.4,
+   "dl_p50": 73.2,
+   "dl_p99": 74.1,
+   "dl_max": 76.8,
+   "sent": 2250,
+   "lost": 0
+  },
+  "U1": {
+   "idle_p50": 73.1,
+   "idle_p99": 307.0,
+   "dl_p50": 73.5,
+   "dl_p99": 93.8,
+   "dl_max": 125.5,
+   "sent": 2250,
+   "lost": 0
+  },
+  "G2": {
+   "idle_p50": null,
+   "idle_p99": null,
+   "dl_p50": 73.3,
+   "dl_p99": 74.0,
+   "dl_max": 74.9,
+   "sent": 500,
+   "lost": 0
+  }
+ },
+ "dl": {
+  "D1": {
+   "MB": 19.63,
+   "ttfb_ms": 278.9,
+   "mbit": 6.5
+  },
+  "D2": {
+   "MB": 18.25,
+   "ttfb_ms": 301.1,
+   "mbit": 6.8
+  }
+ },
+ "web": {
+  "W1": {
+   "ttfb_ms_med": 462.8,
+   "ttfb_ms_max": 465.6,
+   "errs": 0
+  },
+  "W2": {
+   "ttfb_ms_med": 314.7,
+   "ttfb_ms_max": 468.1,
+   "errs": 0
+  },
+  "W3": {
+   "ttfb_ms_med": 324.1,
+   "ttfb_ms_max": 324.8,
+   "errs": 0
+  }
+ },
+ "conns": [
+  {
+   "proto": "tcp",
+   "cport": 53372,
+   "sport": 4443,
+   "open": 0.01,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 66.3,
+   "up_kB": 268.3,
+   "down_kB": 267.0,
+   "flows": [
+    "G1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 53362,
+   "sport": 4443,
+   "open": 0.01,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 66.3,
+   "up_kB": 305.8,
+   "down_kB": 421.2,
+   "flows": [
+    "U1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 53376,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 63.3,
+   "up_kB": 121.8,
+   "down_kB": 19936.1,
+   "flows": [
+    "W1.1",
+    "D1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 53380,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 63.3,
+   "up_kB": 11.4,
+   "down_kB": 546.4,
+   "flows": [
+    "W1.0",
+    "W2.1",
+    "W3.3"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 53390,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 63.3,
+   "up_kB": 11.1,
+   "down_kB": 546.8,
+   "flows": [
+    "W1.3",
+    "W2.2",
+    "W3.1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 53404,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 63.3,
+   "up_kB": 12.3,
+   "down_kB": 546.3,
+   "flows": [
+    "W1.4",
+    "W2.4",
+    "W3.5"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 53410,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 63.3,
+   "up_kB": 71.9,
+   "down_kB": 605.8,
+   "flows": [
+    "W1.5",
+    "W2.0",
+    "W3.0",
+    "G2"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 53412,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 63.3,
+   "up_kB": 120.1,
+   "down_kB": 18915.7,
+   "flows": [
+    "W1.2",
+    "W2.3",
+    "W3.2",
+    "D2"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 44356,
+   "sport": 4443,
+   "open": 9.0,
+   "close": 66.317,
+   "closer": "client",
+   "last_pkt": 66.39,
+   "life_s": 57.3,
+   "up_kB": 8.0,
+   "down_kB": 365.0,
+   "flows": [
+    "W2.5",
+    "W3.4"
+   ]
+  }
+ ]
+}
