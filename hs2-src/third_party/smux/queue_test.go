@@ -201,7 +201,11 @@ func TestQueuedWriterWaitsForDone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { s, _ := srv.AcceptStream(); io.Copy(io.Discard, s) }()
+	go func() {
+		if s, err := srv.AcceptStream(); err == nil {
+			io.Copy(io.Discard, s)
+		}
+	}()
 	cq.mu.Lock()
 	cq.hold = true
 	cq.mu.Unlock()
@@ -230,7 +234,11 @@ func TestQueuedDoneErrorFailsSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go func() { s, _ := srv.AcceptStream(); io.Copy(io.Discard, s) }()
+	go func() {
+		if s, err := srv.AcceptStream(); err == nil {
+			io.Copy(io.Discard, s)
+		}
+	}()
 	boom := errors.New("boom")
 	cq.mu.Lock()
 	cq.fail = boom
