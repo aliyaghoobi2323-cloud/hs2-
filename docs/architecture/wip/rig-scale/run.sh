@@ -9,6 +9,10 @@
 #   MODE   fqcodel | pfifo:LIMIT | agg:RATE | police:RATE | police:RATE+LEAF   (rig.sh)
 #   USERS  synthetic users = source addresses (<= 500 IPv4, + 1 with V6, + TUN users)
 #   MIX    s5 | lone16 | one_vs_16 | newheavy | tunping     (ana.py spec)
+#          | home | gamer_vs_dl | stream_vs_dl   (the user classes: game,
+#          gameudp, call, stream, web next to bulk users; keys GAME=tcp|udp|both,
+#          SBR, CALLR, PAGE, UPN, TAIL; a cell with gameudp turns on the edge's
+#          "udp": true, UDP on the user ports)
 #   BIN    old | new: the binaries in $OLD_BIN / $NEW_BIN
 #   extra: DIR=dn|up (bulk direction of lone16/one_vs_16/newheavy), DN, UP (s5
 #          flows, 4 and 2), TDN, TUNDIR (tunping's bulk through hs0, 4 dn),
@@ -88,7 +92,8 @@ binenv() {
 # hs2 config: edge (mode dial, reverse: listens) and exit (mode listen, reverse:
 # dials), as the field's reverse l3mtcp tunnel; keys and cert made per run
 mkconf() {
-  local w=$1 n=$2 key
+  local w=$1 n=$2 udp=${3:-0} key uj=""
+  [ "$udp" = 1 ] && uj='"udp":true,'
   key=$(openssl rand -hex 32)
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
     -keyout "$w/key.pem" -out "$w/cert.pem" -days 2 -subj /CN=rig.example.com 2>/dev/null || return 1
@@ -96,7 +101,7 @@ mkconf() {
 {"mode":"dial","reverse":true,"carrier":"l3mtcp","addr":"10.201.0.1:2096",
  "iface":"hs0","local_cidr":"10.77.0.1/30","peer_ip":"10.77.0.2","mtu":1320,
  "shared_key":"$key","cert_file":"$w/cert.pem","key_file":"$w/key.pem","backend_addr":"builtin",
- "forward_ports":"5311,5312","min_links":$n,"max_links":$n,"per_link":8}
+ "forward_ports":"5311,5312",$uj"min_links":$n,"max_links":$n,"per_link":8}
 J
   cat > "$w/exit.json" <<J
 {"mode":"listen","reverse":true,"carrier":"l3mtcp","addr":"10.201.0.1:2096","sni":"rig.example.com",
@@ -153,7 +158,7 @@ run_one() {
 # run_steps: the body of one run (it uses run_one's variables); on failure it
 # sets why and returns 1, and run_one still tears down and writes the line
 run_steps() {
-  local n t0 c0 pc lw te="" tx=""
+  local n t0 c0 pc lw te="" tx="" udp
   [ -x "$bp" ] || { why="no binary for BIN=$bin ($bp)"; return 1; }
   # optional CPU sets (the field edge has 4 cores): EDGE_CPUS=0-3 EXIT_CPUS=4-11
   [ -n "${EDGE_CPUS:-}" ] && te="taskset -c $EDGE_CPUS"
@@ -163,8 +168,11 @@ run_steps() {
   [ -n "$ntun" ] || { why="spec: $(tail -1 "$r/spec.err")"; return 1; }
   RATE=$RATE RATE_UP=${RATE_UP:-$RATE} RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers NTUN=$ntun V6=$V6 AGGQ_MS=$AGGQ_MS \
     "$D/rig.sh" up 2> "$r/rig.err" || { why="rig up: $(tail -1 "$r/rig.err")"; return 1; }
-  mkconf "$w" "$N" || { why="hs2 config"; return 1; }
-  ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 > "$r/rigload-server.log" 2>&1 &
+  # gameudp in the cell: UDP on the edge's user ports ("udp": true)
+  udp=0; grep -q '"kind": "gameudp"' "$r/spec.json" && udp=1
+  mkconf "$w" "$N" $udp || { why="hs2 config"; return 1; }
+  # the server keeps each game and call flow's record in srv/ (the client reads it)
+  ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 -report "$r/srv" > "$r/rigload-server.log" 2>&1 &
   PIDS+=($!)
   ip netns exec $E $te env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/edge.json" > "$r/edge.log" 2>&1 &
   pe=$!; PIDS+=($pe)
@@ -195,7 +203,7 @@ run_steps() {
     PIDS+=($!)
   fi
   # measurement: the client from t=0 to total; snapshots at WARM and near the end
-  ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') "$RL" client -spec "$r/spec.json" > "$r/client.json" 2> "$r/client.err" &
+  ip netns exec $E timeout $(awk -v t="$total" 'BEGIN{printf "%d", t + 30}') "$RL" client -spec "$r/spec.json" -srvdir "$r/srv" > "$r/client.json" 2> "$r/client.err" &
   pc=$!; PIDS+=($pc)
   c0=$(date +%s.%N)
   echo "$c0" > "$r/client-t0.txt"

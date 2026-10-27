@@ -1,8 +1,13 @@
 // rigload: the synthetic users of the big rig (R1 task 2,
 // docs/architecture/wip/rig-scale). Standard library only.
 //
-//	rigload server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213
-//	rigload client -spec spec.json        (one JSON object on stdout)
+//	rigload server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 [-report DIR]
+//	rigload client -spec spec.json [-srvdir DIR]   (one JSON object on stdout)
+//
+// The server listens on each address for TCP and for UDP (gameudp); with
+// -report it keeps each game and call flow's record in DIR, which the client
+// reads after the run (-srvdir, the same DIR). The user classes (game,
+// gameudp, call, stream, web) are in classes.go.
 //
 // A user is a source address. A user takes one of two paths:
 //
@@ -35,6 +40,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -67,11 +73,18 @@ func main() {
 	case "server":
 		fs := flag.NewFlagSet("server", flag.ExitOnError)
 		listen := fs.String("listen", "127.0.0.1:5211,127.0.0.1:5212", "addresses to serve, comma separated")
+		report := fs.String("report", "", "directory for the game and call flows' records")
 		fs.Parse(os.Args[2:])
-		server(strings.Split(*listen, ","))
+		if *report != "" {
+			if err := os.MkdirAll(*report, 0o755); err != nil {
+				log.Fatal(err)
+			}
+		}
+		server(strings.Split(*listen, ","), *report)
 	case "client":
 		fs := flag.NewFlagSet("client", flag.ExitOnError)
 		spec := fs.String("spec", "", "spec JSON file")
+		srvdir := fs.String("srvdir", "", "the server's -report directory")
 		fs.Parse(os.Args[2:])
 		b, err := os.ReadFile(*spec)
 		if err != nil {
@@ -84,7 +97,7 @@ func main() {
 		if err := s.check(); err != nil {
 			log.Fatalf("spec: %v", err)
 		}
-		out := runClient(&s)
+		out := runClient(&s, *srvdir)
 		enc := json.NewEncoder(os.Stdout)
 		if err := enc.Encode(out); err != nil {
 			log.Fatal(err)
@@ -97,7 +110,7 @@ func main() {
 
 // ---------------------------------------------------------------- server
 
-func server(addrs []string) {
+func server(addrs []string, report string) {
 	var wg sync.WaitGroup
 	for _, a := range addrs {
 		a = strings.TrimSpace(a)
@@ -112,21 +125,35 @@ func server(addrs []string) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for {
-				c, err := ln.Accept()
-				if err != nil {
-					log.Printf("accept %s: %v", a, err)
-					time.Sleep(100 * time.Millisecond)
-					continue
-				}
-				go serveConn(c)
-			}
+			acceptLoop(ln, report)
 		}()
+		// UDP on the same address (gameudp); a user port without UDP only
+		// leaves it unused
+		if pc, err := net.ListenPacket("udp", a); err != nil {
+			log.Printf("listen udp %s: %v", a, err)
+		} else {
+			go serveUDP(pc, report)
+		}
 	}
 	wg.Wait()
 }
 
-func serveConn(c net.Conn) {
+func acceptLoop(ln net.Listener, report string) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			log.Printf("accept %s: %v", ln.Addr(), err)
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
+		go serveConn(c, report)
+	}
+}
+
+func serveConn(c net.Conn, report string) {
 	defer c.Close()
 	var h [hdrLen]byte
 	c.SetReadDeadline(time.Now().Add(30 * time.Second))
@@ -173,16 +200,22 @@ func serveConn(c net.Conn) {
 		close(done)
 	case 'E':
 		io.Copy(c, c)
+	case 'G', 'V':
+		serveRT(c, h[:], report)
+	case 'Q':
+		serveReq(c)
 	}
 }
 
 // ---------------------------------------------------------------- client
 
 type Flow struct {
-	Kind   string  `json:"kind"` // dn | up | probe | ping
+	Kind   string  `json:"kind"` // dn | up | probe | ping | game | gameudp | call | stream | web
 	N      int     `json:"n"`
 	StartS float64 `json:"start_s"`
-	StopS  float64 `json:"stop_s"` // 0: the end of the run
+	StopS  float64 `json:"stop_s"`            // 0: the end of the run
+	Rate   float64 `json:"rate,omitempty"`    // stream: bitrate; call: each way (Mbit/s)
+	Every  float64 `json:"every_s,omitempty"` // web: one page every this many s
 }
 
 type User struct {
@@ -224,7 +257,7 @@ func (s *Spec) check() error {
 		}
 		for _, f := range u.Flows {
 			switch f.Kind {
-			case "dn", "up", "probe":
+			case "dn", "up", "probe", "game", "gameudp", "call", "stream", "web":
 			case "ping":
 				if u.Path != "tun" {
 					return fmt.Errorf("user %s: ping on the port path (ICMP does not cross user ports)", u.ID)
@@ -349,17 +382,26 @@ type ustate struct {
 	dialErrs  atomic.Int32
 	shortEnds atomic.Int32 // bulk connections that ended before their stop
 	probeErrs atomic.Int32
+	// the classes (classes.go)
+	mu     sync.Mutex
+	rt     map[string]*Owd // game/call one-way delay per direction, main window
+	stream *StreamOut
+	pages  []pageRec
+	web    *WebStats
 }
 
 func (us *ustate) tun() bool { return us.u.Path == "tun" }
 
 type client struct {
-	s     *Spec
-	t0    time.Time
-	end   time.Time
-	mu    sync.Mutex
-	errs  map[string]int
-	users []*ustate
+	s      *Spec
+	t0     time.Time
+	t0m    int64 // CLOCK_MONOTONIC at t0
+	end    time.Time
+	mu     sync.Mutex
+	errs   map[string]int
+	users  []*ustate
+	srvdir string    // the server's records (game, call)
+	rts    []*rtFlow // game and call flows
 }
 
 func (c *client) err(f string, a ...any) {
@@ -675,6 +717,10 @@ type UserOut struct {
 	// the existing bulk user's first seconds after a heavy user joins)
 	Dn1s []float64 `json:"dn_1s,omitempty"`
 	Up1s []float64 `json:"up_1s,omitempty"`
+	// the classes (classes.go), main window
+	RT     map[string]*Owd `json:"rt,omitempty"` // game/call: "up" client to server, "dn" back
+	Stream *StreamOut      `json:"stream,omitempty"`
+	Web    *WebStats       `json:"web,omitempty"`
 }
 
 type Out struct {
@@ -691,10 +737,11 @@ type Out struct {
 	PingTun  map[string]*Lat    `json:"ping_tun,omitempty"`  // every ICMP ping together
 	Dn1s     []float64          `json:"dn_1s"`               // every user's downloads, per second from t0
 	Up1s     []float64          `json:"up_1s"`
+	Classes  map[string]any     `json:"classes,omitempty"` // game, gameudp, call, stream, web
 	Errs     map[string]int     `json:"errs,omitempty"`
 }
 
-func runClient(s *Spec) *Out {
+func runClient(s *Spec, srvdir string) *Out {
 	if s.ProbeMs <= 0 {
 		s.ProbeMs = 200
 	}
@@ -707,8 +754,9 @@ func runClient(s *Spec) *Out {
 	if len(s.Windows) == 0 {
 		s.Windows = []Window{{"all", 0, s.TotalS}}
 	}
-	c := &client{s: s, errs: map[string]int{}}
+	c := &client{s: s, errs: map[string]int{}, srvdir: srvdir}
 	c.t0 = time.Now()
+	c.t0m = clockMono()
 	c.end = c.at(s.TotalS)
 	for i, u := range s.Users {
 		if u.Path == "" {
@@ -730,6 +778,12 @@ func runClient(s *Spec) *Out {
 						c.probe(us, fi*1000+k, f)
 					case "ping":
 						c.ping(us, f)
+					case "game", "gameudp", "call":
+						c.rt(us, fi*1000+k, f)
+					case "stream":
+						c.stream(us, fi*1000+k, f)
+					case "web":
+						c.web(us, fi*1000+k, f)
 					}
 				}()
 			}
@@ -740,6 +794,9 @@ func runClient(s *Spec) *Out {
 	out := &Out{T0: c.t0.UnixMilli(), TotalS: s.TotalS, Windows: s.Windows,
 		DnSum: map[string]float64{}, UpSum: map[string]float64{},
 		TunDnSum: map[string]float64{}, TunUpSum: map[string]float64{}, Errs: c.errs}
+	if cl := c.classes(); len(cl) > 0 {
+		out.Classes = cl
+	}
 	lat := func(r []*rtts, w Window, m *map[string]*Lat) {
 		if l := latOf(r, w.From, w.To); l != nil {
 			if *m == nil {
@@ -752,7 +809,8 @@ func runClient(s *Spec) *Out {
 	for _, us := range c.users {
 		o := UserOut{ID: us.u.ID, Path: us.u.Path, Src: us.u.Src, Flows: us.u.Flows,
 			Dn: map[string]float64{}, Up: map[string]float64{},
-			Conns: us.conns.Load(), DialErrs: us.dialErrs.Load(), ShortEnds: us.shortEnds.Load(), ProbeErrs: us.probeErrs.Load()}
+			Conns: us.conns.Load(), DialErrs: us.dialErrs.Load(), ShortEnds: us.shortEnds.Load(), ProbeErrs: us.probeErrs.Load(),
+			RT: us.rt, Stream: us.stream, Web: us.web}
 		switch {
 		case !us.tun() && us.u.V6:
 			o.Src = s.V6Prefix + "/64"
