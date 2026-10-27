@@ -67,6 +67,13 @@ func EarlyDoneOff() bool { return TuneEarlyDone == 0 }
 // each 200 ms) for hundreds of ms on the rig.
 var QuietCC = "cubic"
 
+// QuietRec 1 (HS2_TUNE_QUIET_REC=1, lab; the R1 round-2 judge): a QUIET
+// link's records follow an interactive HTTPS connection's sizes
+// (obfs.NewInteractiveLengthSampler), not bulk HTTPS's: each small message
+// is padded to ~390 B on average instead of ~990 B. The other end decodes
+// any size, so each end's switch is its own sending's.
+var QuietRec = 0
+
 // QuietCount is how many QUIET links a pool of maxLinks keeps: one, and a
 // second for redundancy once the pool may have four links or more.
 func QuietCount(maxLinks int) int {

@@ -228,6 +228,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		gate = newSendGate(conn)
 		bottom = gate
 	}
+	if q, _ := classOf(caps); q && QuietRec != 0 {
+		sampler = obfs.NewInteractiveLengthSampler() // (lab: QUIET's records, quiet.go)
+	}
 	shaped := newShapedConn(bottom, sampler)
 	shaped.carry = sched
 	var c net.Conn = shaped

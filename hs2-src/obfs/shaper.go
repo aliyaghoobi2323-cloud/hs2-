@@ -55,6 +55,36 @@ func NewHTTPSLengthSampler() *LengthSampler {
 	return s
 }
 
+// NewInteractiveLengthSampler returns a sampler of the record sizes of an
+// interactive HTTPS connection (requests, small replies, HTTP/2 control):
+// mostly small records with a tail of full ones, the mean ~390 B against the
+// bulk sampler's ~990 B. The R1 round-2 judge's lab choice for QUIET links
+// (HS2_TUNE_QUIET_REC=1): a QUIET link carries small messages, each padded
+// up to a sampled size, and with the bulk sampler 198 users' probes (5 a
+// second each, 32 B) cost 7.5 Mbit/s of padding each way on the rig. Not a
+// default: its DPI footprint is the DPI review's to judge.
+func NewInteractiveLengthSampler() *LengthSampler {
+	pairs := []struct {
+		size   int
+		weight float64
+	}{
+		{1400, 0.10}, {1200, 0.04}, {900, 0.04}, {600, 0.06},
+		{400, 0.10}, {250, 0.16}, {150, 0.18}, {80, 0.18}, {40, 0.14},
+	}
+	s := &LengthSampler{}
+	var total float64
+	for _, p := range pairs {
+		total += p.weight
+	}
+	var acc float64
+	for _, p := range pairs {
+		acc += p.weight / total
+		s.sizes = append(s.sizes, p.size)
+		s.cum = append(s.cum, acc)
+	}
+	return s
+}
+
 // Sample returns a target on-wire size. A payload is padded up to (or split to)
 // this size by the carrier. Sizes never exceed the path MTU on UDP; the carrier
 // clamps.
