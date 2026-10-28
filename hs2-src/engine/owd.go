@@ -117,6 +117,23 @@ func owdShared(own *owdLink) *owdLink {
 // first smoke, C1), and the budget cut a link that had no queue.
 var TuneOWDGuard = 1
 
+// OWDGuardBulk (HS2_TUNE_OWD_GUARD_BULK): what makes a BULK link's own
+// messages (the budget's) none, with TuneOWDGuard on: 0 nothing, 1 this
+// end's resends, 2 its resends and its backlog (owdDirtyWait past its
+// pacing) as for the QUIET link's (the judge's candidate j3f of blocks F1
+// to F3).
+//
+// The backlog is no reason on a BULK link: the stamp already moves on by
+// the local wait (owdLocalWait), and at a low pacing rate C3's own mark is
+// past owdDirtyWait (11.3 KiB is 13 ms at 7 Mbit/s). A BULK link cut low
+// read none, the budget fell back to its two-way guess (min(S/2, T) for
+// the way back) and cut on for the upload's queue: a 100 Mbit/s download
+// beside a 20 Mbit/s upload on one link stayed at 4 to 11 Mbit/s for 25 s
+// in one run of two (F3, cb51e9b2-j3-1: budget B 50 KiB, C4-lite cap 7
+// Mbit/s), 84.5 in the other. Resends at 0.1% loss made the same fallback
+// (F3: the budget's "two-way" without "own delays" in both runs).
+var OWDGuardBulk = 1
+
 const (
 	// owdDirtyWait: a local wait (unsent bytes at the pacing rate) past this
 	// is a backlog of the socket's own
@@ -241,13 +258,13 @@ type owdLink struct {
 // a BULK link's own messages (the guard): a resend since the beat before, or
 // a backlog of its own, makes this end's direction read none for a while.
 func (o *owdLink) noteSocket(ts tcpStat, now int64) {
-	if !o.quiet && !o.own || TuneOWDGuard == 0 {
+	if !o.quiet && (!o.own || OWDGuardBulk == 0) || TuneOWDGuard == 0 {
 		return
 	}
 	resent := o.retr0 != 0 && ts.retrans > o.retr0
 	o.retr0 = max(ts.retrans, 1)
-	if !resent && owdLocalWait(ts) <= int64(owdDirtyWait) {
-		return
+	if !resent && (!o.quiet && OWDGuardBulk < 2 || owdLocalWait(ts) <= int64(owdDirtyWait)) {
+		return // (a BULK link's backlog: only with OWDGuardBulk 2)
 	}
 	hold := owdDirtyLook*int64(owdLook) + 2*int64(usDur(uint64(ts.rtt)))
 	o.dirtyUntil.Store(now + hold)

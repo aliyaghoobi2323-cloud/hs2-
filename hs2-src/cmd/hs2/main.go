@@ -358,6 +358,7 @@ func applyTuning() {
 	// ... the guard of a QUIET link's one-way delays (0: off), and the exit's
 	// receive buffer to a local panel (bytes; 0: the kernel's autotuning)
 	num("HS2_TUNE_OWD_GUARD", &engine.TuneOWDGuard)
+	num("HS2_TUNE_OWD_GUARD_BULK", &engine.OWDGuardBulk)
 	num("HS2_TUNE_PANEL_RCVBUF", &engine.TunePanelRcvbuf)
 	num("HS2_TUNE_PANEL_MSS", &engine.TunePanelMSS)
 	num("HS2_TUNE_BUDGET_QCHECK", &engine.BudgetQuietCheck) // the QUIET queues only within the link's own round trip (0: always)

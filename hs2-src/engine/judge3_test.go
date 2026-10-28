@@ -64,6 +64,31 @@ func TestOWDGuard(t *testing.T) {
 	if _, ok := o2.queue(); ok {
 		t.Fatal("a BULK link's own reading on a resending socket: still read")
 	}
+	// OWDGuardBulk: 0 a BULK link's own messages are never none, 1 (the
+	// default) for its resends, 2 also for its backlog: C3's mark at a low
+	// pacing rate, 11.3 KiB at 7 Mbit/s, is 13 ms past owdDirtyWait (F3)
+	for _, gb := range []int{0, 1, 2} {
+		func() {
+			defer func(v int) { OWDGuardBulk = v }(OWDGuardBulk)
+			OWDGuardBulk = gb
+			read := func(ts tcpStat) bool {
+				var o3 owdLink
+				o3.own = true
+				o3.qOut.Store(1)
+				o3.qOutAt.Store(ctrlNow())
+				o3.noteSocket(tcpStat{retrans: 1}, ctrlNow())
+				o3.noteSocket(ts, ctrlNow())
+				_, ok := o3.queue()
+				return ok
+			}
+			if ok := read(tcpStat{retrans: 3, rtt: 72000}); ok != (gb == 0) {
+				t.Fatalf("OWDGuardBulk=%d: a BULK link's resends read %v", gb, ok)
+			}
+			if ok := read(tcpStat{retrans: 1, notsent: 11584, pacingRate: 7e6 / 8, rtt: 72000}); ok != (gb < 2) {
+				t.Fatalf("OWDGuardBulk=%d: a BULK link's backlog read %v", gb, ok)
+			}
+		}()
+	}
 	var b owdLink
 	b.qOut.Store(1)
 	b.qOutAt.Store(ctrlNow())
