@@ -1,0 +1,30 @@
+old /root/r3j/bins/hs2-base
+prod /root/r3j/bins/hs2-prod
+b2nx /root/r3j/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1
+g1e /root/r3j/bins/hs2-g1e
+g2e /root/r3j/bins/hs2-g2e
+j3 /root/r3j/bins/hs2-j3f
+j3nh /root/r3j/bins/hs2-j3 HS2_TUNE_MOVE_HINT=0
+j3np /root/r3j/bins/hs2-j3 HS2_TUNE_PANEL_RCVBUF=0
+j3ng /root/r3j/bins/hs2-j3 HS2_TUNE_OWD_GUARD=0
+j3nc /root/r3j/bins/hs2-j3 HS2_TUNE_QUIET_COAL=0
+j3nm /root/r3j/bins/hs2-j3 HS2_TUNE_PANEL_MSS=0
+j3nb /root/r3j/bins/hs2-j3 HS2_TUNE_MOVED_BULK=0
+j3hq /root/r3j/bins/hs2-j3 HS2_TUNE_HQG=0
+j3bp /root/r3j/bins/hs2-j3 HS2_TUNE_BUDGET_PACE=0
+j3bo /root/r3j/bins/hs2-j3 HS2_TUNE_BUDGET=0
+j3sc /root/r3j/bins/hs2-j3 HS2_TUNE_SENDCAP=0
+oldhq /root/r3j/bins/hs2-base HS2_TUNE_HQG=0
+oldsc /root/r3j/bins/hs2-base HS2_TUNE_SENDCAP=0
+j3c4 /root/r3j/bins/hs2-j3 HS2_TUNE_BUDGET_C4=0
+j3hg /root/r3j/bins/hs2-j3 HS2_TUNE_HQG_GATE=0
+j3c4hg /root/r3j/bins/hs2-j3 HS2_TUNE_BUDGET_C4=0 HS2_TUNE_HQG_GATE=0
+prodfix /root/r3j/bins/hs2-prodfix
+j3prof /root/r3j/bins/hs2-j3 HS2_PROFILE=prof
+j3ns /root/r3j/bins/hs2-j3 HS2_TUNE_LINK_SNDBUF=0
+j3g /root/r3j/bins/hs2-j3g
+j3g0 /root/r3j/bins/hs2-j3g HS2_TUNE_OWD_GUARD_BULK=0
+j3g2 /root/r3j/bins/hs2-j3g HS2_TUNE_OWD_GUARD_BULK=2
+j3gt5 /root/r3j/bins/hs2-j3g HS2_TUNE_BUDGET_US=5000
+j3gq4 /root/r3j/bins/hs2-j3g HS2_TUNE_QUIET_N=4
+j3gnb /root/r3j/bins/hs2-j3g HS2_TUNE_MOVED_BULK=0

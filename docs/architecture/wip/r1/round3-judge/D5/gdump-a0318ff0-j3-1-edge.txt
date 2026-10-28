@@ -1,0 +1,12 @@
+  425 [select] smux.(*Group).waitRead < smux.(*Group).Read < engine.(*groupStream).Read
+  413 [select] engine.relayStream < engine.relayUser < engine.serveUserTCP
+  400 [IO wait] engine.relayStream.func3 < engine.relayStream.gowrap2
+   13 [runnable] engine.relayStream.func3 < engine.relayStream.gowrap2
+   12 [GC worker (idle)] runtime.gopark < runtime.gcBgMarkWorker
+   11 [select] engine.serveUserUDP.func2 < engine.serveUserUDP.gowrap1
+    5 [select] runtime.gopark < runtime.selectgo
+    2 [chan receive] engine.RunIran.func3
+    2 [IO wait] engine.RunIran.func4
+    2 [chan receive] engine.RunIran.func5
+    2 [select] engine.serveUserUDP.func1
+    2 [select] engine.acceptReverseLinks.func2 < tlscarrier.(*Server).Handle < engine.acceptReverseLinks.gowrap1

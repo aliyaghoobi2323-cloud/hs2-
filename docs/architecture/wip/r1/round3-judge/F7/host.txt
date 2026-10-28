@@ -1,0 +1,30 @@
+== start 2026-10-28T13:11:03+00:00
+ 13:11:03 up 1 day,  2:05,  4 users,  load average: 0.38, 1.59, 1.91
+top - 13:11:04 up 1 day,  2:05,  4 users,  load average: 0.35, 1.57, 1.90
+Tasks: 242 total,   1 running, 241 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.4 us,  1.4 sy,  0.0 ni, 97.0 id,  0.0 wa,  0.0 hi,  0.3 si,  0.0 st 
+MiB Mem :  23456.9 total,  13207.8 free,   1254.7 used,   9410.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22202.2 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1614374 root      20   0 1501044 225768  29296 S  25.5   0.9   1:19.34 xray-linux-amd6
+    992 root      20   0 1477144 144364  10500 S  17.6   0.6      7,22 hs2
+    958 root      20   0 1407124 117272  47136 S   5.9   0.5  31:20.07 x-ui
+1617587 root      20   0   11908   6040   3884 R   3.9   0.0   0:00.04 top
+1616855 root      20   0       0      0      0 I   2.0   0.0   0:00.02 kworker/0:1-events
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   2:00.43 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.16 kthreadd
+== end 2026-10-28T13:18:37+00:00
+ 13:18:37 up 1 day,  2:13,  4 users,  load average: 2.53, 1.94, 1.96
+top - 13:18:37 up 1 day,  2:13,  4 users,  load average: 2.53, 1.94, 1.96
+Tasks: 240 total,   2 running, 238 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.9 us,  3.3 sy,  0.0 ni, 93.7 id,  0.0 wa,  0.0 hi,  1.1 si,  0.0 st 
+MiB Mem :  23456.9 total,  13174.6 free,   1278.4 used,   9420.4 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22178.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1614374 root      20   0 1567236 236164  29360 S  49.0   1.0   3:40.69 xray-linux-amd6
+    992 root      20   0 1477144 144848  10500 S  41.2   0.6      7,24 hs2
+1624590 root      20   0   11908   6036   3884 R   3.9   0.0   0:00.04 top
+  13056 root      19  -1  140664  96080  94752 S   2.0   0.4   1:15.27 systemd-journal
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   2:00.98 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.16 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release

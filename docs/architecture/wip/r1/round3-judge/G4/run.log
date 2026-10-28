@@ -1,0 +1,26 @@
+14:46:48 plan /root/r3j/G4/plan.txt: 12 runs
+14:46:48 start f4fb6861-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 0.71 waited 0s
+14:47:34 done f4fb6861-j3g-1 ok=1 
+14:47:35 start f4fb6861-j3gnb-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3gnb) load 2.28 waited 0s
+14:48:20 done f4fb6861-j3gnb-1 ok=1 
+14:48:21 start f4fb6861-j3gnb-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3gnb) load 2.93 waited 0s
+14:49:06 done f4fb6861-j3gnb-2 ok=1 
+14:49:07 start f4fb6861-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 3.98 waited 0s
+14:49:53 done f4fb6861-j3g-2 ok=1 
+14:49:54 start cab6c0da-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 4.11 waited 0s
+14:50:27 done cab6c0da-j3g-1 ok=1 
+14:50:27 start cab6c0da-j3gnb-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3gnb) load 3.71 waited 0s
+14:51:00 done cab6c0da-j3gnb-1 ok=1 
+14:51:01 start cab6c0da-j3gnb-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3gnb) load 3.41 waited 0s
+14:51:34 done cab6c0da-j3gnb-2 ok=1 
+14:51:35 start cab6c0da-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 2.83 waited 0s
+14:52:08 done cab6c0da-j3g-2 ok=1 
+14:52:09 start a0318ff0-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3g) load 2.85 waited 0s
+14:52:44 done a0318ff0-j3g-1 ok=1 
+14:52:45 start a0318ff0-j3gnb-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3gnb) load 2.98 waited 0s
+14:53:19 done a0318ff0-j3gnb-1 ok=1 
+14:53:20 start a0318ff0-j3gnb-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3gnb) load 2.71 waited 0s
+14:53:55 done a0318ff0-j3gnb-2 ok=1 
+14:53:56 start a0318ff0-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3g) load 1.69 waited 0s
+14:54:31 done a0318ff0-j3g-2 ok=1 
+14:54:31 done /root/r3j/G4/plan.txt

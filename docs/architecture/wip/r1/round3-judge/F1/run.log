@@ -1,0 +1,50 @@
+10:30:13 plan /root/r3j/F1/plan.txt: 24 runs
+10:30:14 start ae0cf9da-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 1.71 waited 0s
+10:30:53 done ae0cf9da-old-1 ok=1 
+10:30:54 start ae0cf9da-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=prod) load 2.12 waited 0s
+10:31:33 done ae0cf9da-prod-1 ok=1 
+10:31:34 start ae0cf9da-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2nx) load 3.02 waited 0s
+10:32:14 done ae0cf9da-b2nx-1 ok=1 
+10:32:14 start ae0cf9da-g1e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1e) load 3.09 waited 0s
+10:32:54 done ae0cf9da-g1e-1 ok=1 
+10:32:55 start ae0cf9da-g2e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g2e) load 2.58 waited 0s
+10:33:34 done ae0cf9da-g2e-1 ok=1 
+10:33:35 start ae0cf9da-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3) load 2.35 waited 0s
+10:34:14 done ae0cf9da-j3-1 ok=1 
+10:34:15 start ae0cf9da-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3) load 2.96 waited 0s
+10:34:54 done ae0cf9da-j3-2 ok=1 
+10:34:55 start ae0cf9da-g2e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g2e) load 3.61 waited 0s
+10:35:35 done ae0cf9da-g2e-2 ok=1 
+10:35:35 start ae0cf9da-g1e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1e) load 3.71 waited 0s
+10:36:15 done ae0cf9da-g1e-2 ok=1 
+10:36:16 start ae0cf9da-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2nx) load 2.81 waited 0s
+10:36:55 done ae0cf9da-b2nx-2 ok=1 
+10:36:56 start ae0cf9da-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=prod) load 2.77 waited 0s
+10:37:35 done ae0cf9da-prod-2 ok=1 
+10:37:36 start ae0cf9da-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.17 waited 0s
+10:38:15 done ae0cf9da-old-2 ok=1 
+10:38:16 start 340c98ae-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.63 waited 0s
+10:38:56 done 340c98ae-old-1 ok=1 
+10:38:56 start 340c98ae-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 2.20 waited 0s
+10:39:36 done 340c98ae-prod-1 ok=1 
+10:39:37 start 340c98ae-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.09 waited 0s
+10:40:16 done 340c98ae-b2nx-1 ok=1 
+10:40:17 start 340c98ae-g1e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 2.30 waited 0s
+10:40:56 done 340c98ae-g1e-1 ok=1 
+10:40:57 start 340c98ae-g2e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g2e) load 3.13 waited 0s
+10:41:36 done 340c98ae-g2e-1 ok=1 
+10:41:37 start 340c98ae-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3) load 2.77 waited 0s
+10:42:17 done 340c98ae-j3-1 ok=1 
+10:42:17 start 340c98ae-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3) load 3.03 waited 0s
+10:42:57 done 340c98ae-j3-2 ok=1 
+10:42:58 start 340c98ae-g2e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g2e) load 3.46 waited 0s
+10:43:37 done 340c98ae-g2e-2 ok=1 
+10:43:38 start 340c98ae-g1e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1e) load 3.09 waited 0s
+10:44:17 done 340c98ae-g1e-2 ok=1 
+10:44:18 start 340c98ae-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.57 waited 0s
+10:44:58 done 340c98ae-b2nx-2 ok=1 
+10:44:58 start 340c98ae-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 1.81 waited 0s
+10:45:38 done 340c98ae-prod-2 ok=1 
+10:45:39 start 340c98ae-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.24 waited 0s
+10:46:18 done 340c98ae-old-2 ok=1 
+10:46:18 done /root/r3j/F1/plan.txt

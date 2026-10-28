@@ -1,0 +1,9 @@
+# a game and a download inside one shared xray connection (XMUX of the older clients, gRPC) and in separate ones, RATE 50, RTT 72, fq_codel (priority 5)
+BIN=old N=1 LOSS=0 VARIANTS=xc16,gr,xb2 REP=1
+BIN=new N=1 LOSS=0 VARIANTS=gr,xb2,xc16 REP=1
+BIN=new N=8 LOSS=0 VARIANTS=xb2,xc16,gr REP=1
+BIN=old N=8 LOSS=0 VARIANTS=xc16,gr,xb2 REP=1
+BIN=new N=1 LOSS=0 VARIANTS=xc16,gr,xb2 REP=2
+BIN=old N=1 LOSS=0 VARIANTS=gr,xb2,xc16 REP=2
+BIN=old N=8 LOSS=0 VARIANTS=xb2,xc16,gr REP=2
+BIN=new N=8 LOSS=0 VARIANTS=xc16,gr,xb2 REP=2

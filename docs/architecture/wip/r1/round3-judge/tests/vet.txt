@@ -1,0 +1,5 @@
+== gofmt -l
+engine/angle_hqg_test.go
+engine/stream_reverse.go
+== go vet ./...
+== smux go vet

@@ -1,0 +1,16 @@
+a0318ff0-j3-1	j3	A	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3c4-1	j3c4	B	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3hg-1	j3hg	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3c4hg-1	j3c4hg	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-prod-1	prod	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-prodfix-1	prodfix	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-prodfix-2	prodfix	C	2	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-prod-2	prod	C	2	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3c4hg-2	j3c4hg	C	2	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3hg-2	j3hg	C	2	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3c4-2	j3c4	B	2	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3-2	j3	A	2	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+5f52d2fc-prod-1	prod	A	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+5f52d2fc-prodfix-1	prodfix	B	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+5f52d2fc-prodfix-2	prodfix	B	2	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+5f52d2fc-prod-2	prod	A	2	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20

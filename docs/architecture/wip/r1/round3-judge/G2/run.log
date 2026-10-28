@@ -1,0 +1,50 @@
+13:21:08 plan /root/r3j/G2/plan.txt: 24 runs
+13:21:09 start 05500279-old-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.30 waited 0s
+13:21:38 done 05500279-old-1 ok=1 
+13:21:39 start 05500279-j3g-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g) load 0.98 waited 0s
+13:22:09 done 05500279-j3g-1 ok=1 
+13:22:09 start 05500279-j3gt5-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3gt5) load 1.38 waited 0s
+13:22:39 done 05500279-j3gt5-1 ok=1 
+13:22:40 start 05500279-j3gt5-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3gt5) load 2.48 waited 0s
+13:23:09 done 05500279-j3gt5-2 ok=1 
+13:23:10 start 05500279-j3g-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g) load 2.16 waited 0s
+13:23:39 done 05500279-j3g-2 ok=1 
+13:23:40 start 05500279-old-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.48 waited 0s
+13:24:09 done 05500279-old-2 ok=1 
+13:24:10 start c841daea-old-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 3.18 waited 0s
+13:24:39 done c841daea-old-1 ok=1 
+13:24:40 start c841daea-j3g-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g) load 2.53 waited 0s
+13:25:10 done c841daea-j3g-1 ok=1 
+13:25:10 start c841daea-j3gt5-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3gt5) load 1.79 waited 0s
+13:25:40 done c841daea-j3gt5-1 ok=1 
+13:25:40 start c841daea-j3gt5-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3gt5) load 1.30 waited 0s
+13:26:10 done c841daea-j3gt5-2 ok=1 
+13:26:11 start c841daea-j3g-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g) load 1.20 waited 0s
+13:26:40 done c841daea-j3g-2 ok=1 
+13:26:41 start c841daea-old-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 0.72 waited 0s
+13:27:10 done c841daea-old-2 ok=1 
+13:27:11 start cb51e9b2-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 0.72 waited 0s
+13:27:40 done cb51e9b2-old-1 ok=1 
+13:27:41 start cb51e9b2-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3g) load 1.54 waited 0s
+13:28:10 done cb51e9b2-j3g-1 ok=1 
+13:28:11 start cb51e9b2-j3gt5-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3gt5) load 1.82 waited 0s
+13:28:40 done cb51e9b2-j3gt5-1 ok=1 
+13:28:41 start cb51e9b2-j3gt5-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3gt5) load 1.97 waited 0s
+13:29:10 done cb51e9b2-j3gt5-2 ok=1 
+13:29:11 start cb51e9b2-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3g) load 2.68 waited 0s
+13:29:41 done cb51e9b2-j3g-2 ok=1 
+13:29:41 start cb51e9b2-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 2.03 waited 0s
+13:30:11 done cb51e9b2-old-2 ok=1 
+13:30:11 start 340c98ae-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 1.99 waited 0s
+13:30:51 done 340c98ae-old-1 ok=1 
+13:30:52 start 340c98ae-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 1.79 waited 0s
+13:31:31 done 340c98ae-j3g-1 ok=1 
+13:31:32 start 340c98ae-j3gt5-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3gt5) load 2.02 waited 0s
+13:32:11 done 340c98ae-j3gt5-1 ok=1 
+13:32:12 start 340c98ae-j3gt5-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3gt5) load 1.64 waited 0s
+13:32:51 done 340c98ae-j3gt5-2 ok=1 
+13:32:52 start 340c98ae-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 1.91 waited 0s
+13:33:31 done 340c98ae-j3g-2 ok=1 
+13:33:32 start 340c98ae-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old) load 2.16 waited 0s
+13:34:12 done 340c98ae-old-2 ok=1 
+13:34:12 done /root/r3j/G2/plan.txt

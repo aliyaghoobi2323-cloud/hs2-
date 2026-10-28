@@ -1,0 +1,18 @@
+09:46:16 plan /root/r3j/D3/plan.txt: 8 runs
+09:46:17 start a0318ff0-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=old) load 1.46 waited 0s
+09:46:51 done a0318ff0-old-1 ok=1 
+09:46:52 start a0318ff0-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 3.07 waited 0s
+09:47:27 done a0318ff0-j3-1 ok=1 
+09:47:28 start a0318ff0-j3hq-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3hq) load 2.27 waited 0s
+09:48:03 done a0318ff0-j3hq-1 ok=1 
+09:48:03 start a0318ff0-j3bp-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3bp) load 1.67 waited 0s
+09:48:38 done a0318ff0-j3bp-1 ok=1 
+09:48:39 start a0318ff0-j3bo-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3bo) load 1.68 waited 0s
+09:49:14 done a0318ff0-j3bo-1 ok=1 
+09:49:15 start a0318ff0-j3sc-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3sc) load 1.98 waited 0s
+09:49:50 done a0318ff0-j3sc-1 ok=1 
+09:49:50 start a0318ff0-oldhq-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=oldhq) load 1.94 waited 0s
+09:50:25 done a0318ff0-oldhq-1 ok=1 
+09:50:26 start a0318ff0-oldsc-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=oldsc) load 2.80 waited 0s
+09:51:01 done a0318ff0-oldsc-1 ok=1 
+09:51:01 done /root/r3j/D3/plan.txt

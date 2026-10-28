@@ -1,0 +1,14 @@
+14:18:07 plan /root/r3j/F2b/plan.txt: 6 runs
+14:18:08 start ae0cf9da-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3g) load 0.89 waited 0s
+14:18:47 done ae0cf9da-j3g-1 ok=1 
+14:18:48 start 340c98ae-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 2.03 waited 0s
+14:19:27 done 340c98ae-j3g-1 ok=1 
+14:19:28 start bded2768-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 1.74 waited 0s
+14:20:22 done bded2768-j3g-1 ok=1 
+14:20:23 start 11690259-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=old) load 2.68 waited 0s
+14:21:08 done 11690259-old-1 ok=1 
+14:21:09 start 11690259-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 1.56 waited 0s
+14:21:54 done 11690259-prod-1 ok=1 
+14:21:54 start 11690259-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 1.59 waited 0s
+14:22:39 done 11690259-j3g-1 ok=1 
+14:22:39 done /root/r3j/F2b/plan.txt

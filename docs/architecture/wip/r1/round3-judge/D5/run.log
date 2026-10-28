@@ -1,0 +1,4 @@
+10:05:42 plan /root/r3j/D5/plan.txt: 1 runs
+10:05:43 start a0318ff0-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 1.09 waited 0s
+10:06:17 done a0318ff0-j3-1 ok=0 edge hs2 exited during the run
+10:06:17 done /root/r3j/D5/plan.txt

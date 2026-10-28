@@ -1,0 +1,8 @@
+a0318ff0-old-1	old	A	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3-1	j3	B	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3hq-1	j3hq	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3bp-1	j3bp	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3bo-1	j3bo	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-j3sc-1	j3sc	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-oldhq-1	oldhq	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+a0318ff0-oldsc-1	oldsc	C	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20

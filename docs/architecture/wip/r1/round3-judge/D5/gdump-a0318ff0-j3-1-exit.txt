@@ -1,0 +1,12 @@
+  425 [select] smux.(*Group).waitRead < smux.(*Group).Read < engine.exitCountedStream.Read
+  413 [select] engine.relayStream < engine.serveStream < engine.serveReverseLink.gowrap2
+  401 [select] smux.(*Session).frameWritten < smux.(*Stream).writeFrames < smux.(*Group).Write
+   13 [runnable] engine.relayStream.func3 < engine.relayStream.gowrap2
+   12 [GC worker (idle)] runtime.gopark < runtime.gcBgMarkWorker
+   11 [runnable] engine.relayUDPConn.func1
+    5 [select] runtime.gopark < runtime.selectgo
+    2 [IO wait] engine.(*shapedConn).Read < engine.(*meteredConn).Read < engine.(*watchConn).Read
+    2 [select] smux.(*Session).AcceptStream < engine.serveReverseLink < engine.runKharejReverse.func3
+    2 [select] smux.(*Session).keepalive < smux.newSession.gowrap5
+    2 [select] engine.serveReverseLink.func1
+    2 [select] smux.(*Stream).waitRead < smux.(*Stream).Read < tlscarrier.(*TunReader).Read

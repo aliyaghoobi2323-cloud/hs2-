@@ -1,0 +1,30 @@
+== start 2026-10-28T10:09:52+00:00
+ 10:09:52 up 23:04,  3 users,  load average: 1.24, 1.42, 1.81
+top - 10:09:53 up 23:04,  3 users,  load average: 1.24, 1.42, 1.81
+Tasks: 237 total,   1 running, 236 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.5 us,  2.5 sy,  0.0 ni, 94.9 id,  0.1 wa,  0.0 hi,  1.0 si,  0.0 st 
+MiB Mem :  23456.9 total,  13959.1 free,   1394.1 used,   8520.1 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22062.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1436689 root      20   0 1500788 223788  29296 S  35.3   0.9   1:09.55 xray-linux-amd6
+    992 root      20   0 1476816 186928  10500 S  29.4   0.8      6,17 hs2
+    958 root      20   0 1407116 116056  47132 S   7.8   0.5  27:21.69 x-ui
+1438253 root      20   0   11908   6024   3868 R   3.9   0.0   0:00.04 top
+1435244 root      20   0       0      0      0 I   2.0   0.0   0:00.12 kworker/u24:2-events_power_efficient
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:48.35 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.14 kthreadd
+== end 2026-10-28T10:10:29+00:00
+ 10:10:29 up 23:05,  4 users,  load average: 2.51, 1.73, 1.90
+top - 10:10:30 up 23:05,  4 users,  load average: 2.51, 1.73, 1.90
+Tasks: 241 total,   2 running, 239 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  5.4 us,  3.6 sy,  0.0 ni, 88.9 id,  0.0 wa,  0.0 hi,  2.2 si,  0.0 st 
+MiB Mem :  23456.9 total,  14069.4 free,   1275.6 used,   8528.4 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22181.3 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1436689 root      20   0 1501364 228052  29296 S  54.9   0.9   1:23.01 xray-linux-amd6
+    992 root      20   0 1476816 173592  10500 S  49.0   0.7      6,17 hs2
+1438698 root      20   0    3428   2056   1396 R  41.2   0.0   0:02.08 gzip
+1437517 root      20   0       0      0      0 I   2.0   0.0   0:00.01 kworker/3:1-mm_percpu_wq
+1438644 root      20   0   19016  14884   8792 S   2.0   0.1   0:00.32 sshd
+1438696 root      20   0    8456   4720   2960 S   2.0   0.0   0:00.41 tar
+1438930 root      20   0   11908   6016   3868 R   2.0   0.0   0:00.04 top

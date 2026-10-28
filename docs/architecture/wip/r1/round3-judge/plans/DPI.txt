@@ -1,0 +1,5 @@
+# DPI captures: record lengths and gaps against the base (s5, 25 Mbit/s, 7 users), and the QUIET link's packet gaps with 200 users (gamma1's fixed 4 ms hold against the candidate's jittered one)
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=g1e
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3

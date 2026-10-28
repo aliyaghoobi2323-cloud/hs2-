@@ -1,0 +1,30 @@
+== start 2026-10-28T13:21:08+00:00
+ 13:21:08 up 1 day,  2:16,  3 users,  load average: 1.24, 1.52, 1.79
+top - 13:21:08 up 1 day,  2:16,  3 users,  load average: 1.24, 1.52, 1.79
+Tasks: 244 total,   1 running, 243 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.7 us,  1.0 sy,  0.0 ni, 98.1 id,  0.0 wa,  0.0 hi,  0.3 si,  0.0 st 
+MiB Mem :  23456.9 total,  13154.2 free,   1297.8 used,   9421.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22159.1 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+    992 root      20   0 1477144 158356  10500 S  12.0   0.7      7,25 hs2
+1614374 root      20   0 1567620 256176  29360 S  10.0   1.1   4:54.76 xray-linux-amd6
+  13068 systemd+  20   0   22672  14612  11144 S   2.0   0.1   6:53.66 systemd-resolve
+1625925 root      20   0   14704   9996   8572 S   2.0   0.0   0:00.02 sshd
+1625993 root      20   0   11908   6040   3884 R   2.0   0.0   0:00.02 top
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   2:01.14 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.16 kthreadd
+== end 2026-10-28T13:34:12+00:00
+ 13:34:12 up 1 day,  2:29,  3 users,  load average: 1.36, 1.77, 1.81
+top - 13:34:13 up 1 day,  2:29,  3 users,  load average: 1.36, 1.77, 1.81
+Tasks: 240 total,   1 running, 239 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.6 us,  2.6 sy,  0.0 ni, 95.0 id,  0.0 wa,  0.0 hi,  0.8 si,  0.0 st 
+MiB Mem :  23456.9 total,  13169.3 free,   1271.7 used,   9432.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22185.2 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1614374 root      20   0 1567876 239604  29360 S  25.0   1.0  10:24.45 xray-linux-amd6
+    992 root      20   0 1477144 133832  10500 S  23.1   0.6      7,30 hs2
+    958 root      20   0 1407116 115660  47136 S   5.8   0.5  31:49.23 x-ui
+  13068 systemd+  20   0   22672  14612  11144 S   1.9   0.1   6:57.88 systemd-resolve
+1637994 root      20   0   11908   6056   3908 R   1.9   0.0   0:00.04 top
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   2:02.14 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.17 kthreadd

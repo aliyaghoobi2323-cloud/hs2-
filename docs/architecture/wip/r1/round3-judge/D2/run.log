@@ -1,0 +1,8 @@
+08:50:37 plan /root/r3j/D2/plan.txt: 3 runs
+08:50:38 start a0318ff0-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=old) load 0.30 waited 0s
+08:51:13 done a0318ff0-old-1 ok=1 
+08:51:14 start a0318ff0-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 0.63 waited 0s
+08:51:48 done a0318ff0-prod-1 ok=1 
+08:51:49 start a0318ff0-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=b2nx) load 0.68 waited 0s
+08:52:24 done a0318ff0-b2nx-1 ok=1 
+08:52:24 done /root/r3j/D2/plan.txt

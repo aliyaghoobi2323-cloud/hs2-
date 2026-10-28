@@ -1,0 +1,30 @@
+== start 2026-10-28T11:05:40+00:00
+ 11:05:40 up 1 day, 0 min,  6 users,  load average: 0.94, 1.47, 1.88
+top - 11:05:41 up 1 day, 0 min,  6 users,  load average: 0.94, 1.47, 1.88
+Tasks: 248 total,   1 running, 247 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.2 us,  3.3 sy,  0.0 ni, 93.2 id,  0.0 wa,  0.0 hi,  1.4 si,  0.0 st 
+MiB Mem :  23456.9 total,  13410.0 free,   1506.8 used,   8956.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21950.1 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1436689 root      20   0 1636544 379524  29424 S  38.5   1.6  30:08.07 xray-linux-amd6
+    992 root      20   0 1477072 230248  10500 S  28.8   1.0      6,41 hs2
+    958 root      20   0 1407148 107256  47132 S  11.5   0.4  28:37.50 x-ui
+1509157 root      20   0   11908   6040   3884 R   1.9   0.0   0:00.03 top
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:52.15 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.15 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+== end 2026-10-28T11:16:44+00:00
+ 11:16:44 up 1 day, 11 min,  7 users,  load average: 2.68, 2.62, 2.34
+top - 11:16:45 up 1 day, 11 min,  7 users,  load average: 2.68, 2.62, 2.34
+Tasks: 252 total,   1 running, 251 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.3 us,  3.8 sy,  0.0 ni, 92.3 id,  0.0 wa,  0.0 hi,  1.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  13566.0 free,   1341.2 used,   8966.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22115.7 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1510307 root      20   0 1567684 269716  29296 S  46.2   1.1   4:30.50 xray-linux-amd6
+    992 root      20   0 1477144 183792  10500 S  40.4   0.8      6,45 hs2
+    958 root      20   0 1407152 114748  47132 S   7.7   0.5  28:51.40 x-ui
+1517643 root      20   0   11908   6036   3884 R   3.8   0.0   0:00.04 top
+  13068 systemd+  20   0   22672  14612  11144 S   1.9   0.1   6:18.32 systemd-resolve
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:52.85 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.15 kthreadd

@@ -1,0 +1,2 @@
+# diagnosis 6: CPU, block and mutex profiles of j3 on one BULK link of 400 connections
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3prof

@@ -1,0 +1,14 @@
+11:31:06 plan plans/X3.txt: 4 lines
+11:31:06 line: BIN=old N=1 LOSS=0 VARIANTS=xc16,gr REP=1 (5212: gr)
+11:31:39 done xc16-old-N1-L0-r1: game dl p50/p99 736.1/1214.1 ms, udp p99 1231.3, dl 43.17 Mbit/s, quiet 1, moved 1
+11:32:12 done gr-old-N1-L0-r1: game dl p50/p99 355.1/519.5 ms, udp p99 520.8, dl 44.97 Mbit/s, quiet 1, moved 1
+11:32:14 line: BIN=new N=1 LOSS=0 VARIANTS=gr,xc16 REP=1 (5212: gr)
+11:32:48 done gr-new-N1-L0-r1: game dl p50/p99 261.6/1137.1 ms, udp p99 1137.2, dl 41.32 Mbit/s, quiet 1, moved 1
+11:33:20 done xc16-new-N1-L0-r1: game dl p50/p99 442.8/716.3 ms, udp p99 724.8, dl 44.34 Mbit/s, quiet 1, moved 1
+11:33:23 line: BIN=new N=1 LOSS=0 VARIANTS=xc16,gr REP=2 (5212: gr)
+11:33:56 done xc16-new-N1-L0-r2: game dl p50/p99 437.5/925.1 ms, udp p99 956.9, dl 42.58 Mbit/s, quiet 1, moved 1
+11:34:28 done gr-new-N1-L0-r2: game dl p50/p99 446.0/781.2 ms, udp p99 781.5, dl 42.46 Mbit/s, quiet 1, moved 1
+11:34:31 line: BIN=old N=1 LOSS=0 VARIANTS=gr,xc16 REP=2 (5212: gr)
+11:35:04 done gr-old-N1-L0-r2: game dl p50/p99 432.8/1102.1 ms, udp p99 1102.3, dl 42.99 Mbit/s, quiet 1, moved 1
+11:35:37 done xc16-old-N1-L0-r2: game dl p50/p99 739.0/1097.8 ms, udp p99 1098.6, dl 42.19 Mbit/s, quiet 1, moved 1
+11:35:39 done

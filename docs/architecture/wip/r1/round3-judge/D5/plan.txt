@@ -1,0 +1,2 @@
+# diagnosis 5: goroutine dumps of j3 trapped at 9 Mbit/s (one BULK link of 400 connections)
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3

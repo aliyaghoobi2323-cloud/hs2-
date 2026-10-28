@@ -1,0 +1,34 @@
+10:49:40 plan plans/X.txt: 8 lines
+10:49:40 line: BIN=old N=1 LOSS=0 VARIANTS=xc16,gr,xb2 REP=1 (5212: gr)
+10:50:13 done xc16-old-N1-L0-r1: game dl p50/p99 726.8/1060.5 ms, udp p99 1060.5, dl 45.22 Mbit/s, 
+10:50:46 done gr-old-N1-L0-r1: game dl p50/p99 805.0/1177.8 ms, udp p99 1178.1, dl 45.28 Mbit/s, 
+10:51:18 done xb2-old-N1-L0-r1: game dl p50/p99 87.9/260.5 ms, udp p99 260.4, dl 44.95 Mbit/s, 
+10:51:21 line: BIN=new N=1 LOSS=0 VARIANTS=gr,xb2,xc16 REP=1 (5212: gr)
+10:51:54 done gr-new-N1-L0-r1: game dl p50/p99 344.6/995.5 ms, udp p99 1000.8, dl 42.48 Mbit/s, quiet 1, moved 1
+10:52:27 done xb2-new-N1-L0-r1: game dl p50/p99 73.8/80.8 ms, udp p99 81.0, dl 42.18 Mbit/s, quiet 3, moved 1
+10:52:59 done xc16-new-N1-L0-r1: game dl p50/p99 735.8/1016.6 ms, udp p99 1016.5, dl 44.26 Mbit/s, quiet 1, moved 1
+10:53:01 line: BIN=new N=8 LOSS=0 VARIANTS=xb2,xc16,gr REP=1 (5212: gr)
+10:53:36 done xb2-new-N8-L0-r1: game dl p50/p99 73.4/74.2 ms, udp p99 75.6, dl 41.87 Mbit/s, quiet 3, moved 1
+10:54:08 done xc16-new-N8-L0-r1: game dl p50/p99 736.8/1368.7 ms, udp p99 1424.8, dl 42.41 Mbit/s, quiet 1, moved 1
+10:54:40 done gr-new-N8-L0-r1: game dl p50/p99 675.2/969.4 ms, udp p99 969.3, dl 42.65 Mbit/s, quiet 1, moved 1
+10:54:43 line: BIN=old N=8 LOSS=0 VARIANTS=xc16,gr,xb2 REP=1 (5212: gr)
+10:55:17 done xc16-old-N8-L0-r1: game dl p50/p99 727.9/1080.4 ms, udp p99 1080.9, dl 44.85 Mbit/s, 
+10:55:49 done gr-old-N8-L0-r1: game dl p50/p99 597.4/852.1 ms, udp p99 852.9, dl 43.39 Mbit/s, 
+10:56:22 done xb2-old-N8-L0-r1: game dl p50/p99 73.5/79.0 ms, udp p99 98.6, dl 43.23 Mbit/s, 
+10:56:24 line: BIN=new N=1 LOSS=0 VARIANTS=xc16,gr,xb2 REP=2 (5212: gr)
+10:56:58 done xc16-new-N1-L0-r2: game dl p50/p99 736.5/1182.7 ms, udp p99 1190.5, dl 42.98 Mbit/s, quiet 1, moved 1
+10:57:30 done gr-new-N1-L0-r2: game dl p50/p99 546.8/861.8 ms, udp p99 862.0, dl 42.38 Mbit/s, quiet 1, moved 1
+10:58:03 done xb2-new-N1-L0-r2: game dl p50/p99 73.4/80.4 ms, udp p99 79.8, dl 43.41 Mbit/s, quiet 3, moved 1
+10:58:05 line: BIN=old N=1 LOSS=0 VARIANTS=gr,xb2,xc16 REP=2 (5212: gr)
+10:58:39 done gr-old-N1-L0-r2: game dl p50/p99 505.8/838.6 ms, udp p99 843.7, dl 43.94 Mbit/s, 
+10:59:11 done xb2-old-N1-L0-r2: game dl p50/p99 87.4/259.1 ms, udp p99 259.3, dl 44.8 Mbit/s, 
+10:59:43 done xc16-old-N1-L0-r2: game dl p50/p99 726.7/1063.3 ms, udp p99 1063.5, dl 45.28 Mbit/s, 
+10:59:46 line: BIN=old N=8 LOSS=0 VARIANTS=xb2,xc16,gr REP=2 (5212: gr)
+11:00:20 done xb2-old-N8-L0-r2: game dl p50/p99 73.4/86.2 ms, udp p99 94.3, dl 43.77 Mbit/s, 
+11:00:53 done xc16-old-N8-L0-r2: game dl p50/p99 742.4/1019.2 ms, udp p99 1019.4, dl 43.71 Mbit/s, 
+11:01:25 done gr-old-N8-L0-r2: game dl p50/p99 677.3/984.6 ms, udp p99 984.8, dl 43.37 Mbit/s, 
+11:01:28 line: BIN=new N=8 LOSS=0 VARIANTS=xc16,gr,xb2 REP=2 (5212: gr)
+11:02:02 done xc16-new-N8-L0-r2: game dl p50/p99 736.3/1110.4 ms, udp p99 1153.4, dl 42.77 Mbit/s, quiet 1, moved 1
+11:02:34 done gr-new-N8-L0-r2: game dl p50/p99 408.3/690.6 ms, udp p99 692.7, dl 43.3 Mbit/s, quiet 1, moved 1
+11:03:06 done xb2-new-N8-L0-r2: game dl p50/p99 73.3/78.7 ms, udp p99 75.2, dl 40.75 Mbit/s, quiet 3, moved 1
+11:03:09 done

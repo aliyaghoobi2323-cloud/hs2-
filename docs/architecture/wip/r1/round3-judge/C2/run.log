@@ -1,0 +1,26 @@
+09:26:49 plan /root/r3j/C2/plan.txt: 12 runs
+09:26:50 start a0318ff0-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 2.04 waited 0s
+09:27:25 done a0318ff0-j3-1 ok=1 
+09:27:25 start a0318ff0-j3nm-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nm) load 3.16 waited 0s
+09:28:00 done a0318ff0-j3nm-1 ok=1 
+09:28:01 start a0318ff0-j3nm-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nm) load 2.91 waited 0s
+09:28:36 done a0318ff0-j3nm-2 ok=1 
+09:28:37 start a0318ff0-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 3.19 waited 0s
+09:29:12 done a0318ff0-j3-2 ok=1 
+09:29:12 start 5f52d2fc-j3-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 2.23 waited 0s
+09:29:48 done 5f52d2fc-j3-1 ok=1 
+09:29:49 start 5f52d2fc-j3nm-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nm) load 3.36 waited 0s
+09:30:24 done 5f52d2fc-j3nm-1 ok=1 
+09:30:25 start 5f52d2fc-j3nm-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nm) load 2.59 waited 0s
+09:31:01 done 5f52d2fc-j3nm-2 ok=1 
+09:31:01 start 5f52d2fc-j3-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 2.39 waited 0s
+09:31:37 done 5f52d2fc-j3-2 ok=1 
+09:31:38 start 3305f1f0-j3-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 2.46 waited 0s
+09:32:07 done 3305f1f0-j3-1 ok=1 
+09:32:08 start 3305f1f0-j3-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 1.93 waited 0s
+09:32:37 done 3305f1f0-j3-2 ok=1 
+09:32:38 start 9d97f0c2-j3-1 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 1.87 waited 0s
+09:33:08 done 9d97f0c2-j3-1 ok=1 
+09:33:09 start 9d97f0c2-j3-2 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 2.90 waited 0s
+09:33:39 done 9d97f0c2-j3-2 ok=1 
+09:33:39 done /root/r3j/C2/plan.txt

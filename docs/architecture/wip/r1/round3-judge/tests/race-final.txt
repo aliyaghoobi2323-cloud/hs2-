@@ -1,0 +1,8 @@
+68fd0bf R1 دور 3 داوری: دادهٔ بلوک‌های F3 تا F7، G1 تا G3، X2، DPI و آزمون‌ها (گردآوری میانی)
+== gofmt -l engine/owd.go engine/judge3_test.go cmd/hs2/main.go
+== go vet ./engine ./cmd/...
+== -race engine (OWD, Budget, Hint, Moved, Quiet)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	58.576s
+exit 0
+== -race cmd
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	7.353s

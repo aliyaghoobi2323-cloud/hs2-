@@ -1,0 +1,5 @@
+taken
+13:11:03 lock taken after 0s (pid 1604843), plan /root/r3j/F7/plan.txt, REPS 2, limit 1440s
+13:18:37 pass 1: 0 runs busy (>75%) or failed, 986s left
+13:18:37 done after 454s of rig time
+13:18:37 lock released after 454s

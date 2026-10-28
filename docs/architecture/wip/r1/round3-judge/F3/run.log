@@ -1,0 +1,84 @@
+11:48:02 plan /root/r3j/F3/plan.txt: 40 runs
+11:48:03 start 05500279-old-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.60 waited 0s
+11:48:32 done 05500279-old-1 ok=1 
+11:48:33 start 05500279-prod-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=prod) load 1.20 waited 0s
+11:49:02 done 05500279-prod-1 ok=1 
+11:49:03 start 05500279-g2e-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=g2e) load 1.38 waited 0s
+11:49:32 done 05500279-g2e-1 ok=1 
+11:49:33 start 05500279-j3-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3) load 1.57 waited 0s
+11:50:02 done 05500279-j3-1 ok=1 
+11:50:03 start 05500279-j3-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3) load 1.16 waited 0s
+11:50:32 done 05500279-j3-2 ok=1 
+11:50:33 start 05500279-g2e-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=g2e) load 1.06 waited 0s
+11:51:03 done 05500279-g2e-2 ok=1 
+11:51:03 start 05500279-prod-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=prod) load 1.42 waited 0s
+11:51:33 done 05500279-prod-2 ok=1 
+11:51:34 start 05500279-old-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.27 waited 0s
+11:52:03 done 05500279-old-2 ok=1 
+11:52:04 start 2d23c440-old-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=old) load 1.33 waited 0s
+11:52:33 done 2d23c440-old-1 ok=1 
+11:52:34 start 2d23c440-prod-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=prod) load 1.27 waited 0s
+11:53:03 done 2d23c440-prod-1 ok=1 
+11:53:04 start 2d23c440-g2e-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=g2e) load 1.78 waited 0s
+11:53:33 done 2d23c440-g2e-1 ok=1 
+11:53:34 start 2d23c440-j3-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=j3) load 1.31 waited 0s
+11:54:04 done 2d23c440-j3-1 ok=1 
+11:54:04 start 2d23c440-j3-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=j3) load 1.39 waited 0s
+11:54:34 done 2d23c440-j3-2 ok=1 
+11:54:35 start 2d23c440-g2e-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=g2e) load 1.24 waited 0s
+11:55:04 done 2d23c440-g2e-2 ok=1 
+11:55:05 start 2d23c440-prod-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=prod) load 0.97 waited 0s
+11:55:34 done 2d23c440-prod-2 ok=1 
+11:55:35 start 2d23c440-old-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=old) load 0.93 waited 0s
+11:56:04 done 2d23c440-old-2 ok=1 
+11:56:05 start cb51e9b2-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 1.81 waited 0s
+11:56:34 done cb51e9b2-old-1 ok=1 
+11:56:35 start cb51e9b2-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=prod) load 1.89 waited 0s
+11:57:05 done cb51e9b2-prod-1 ok=1 
+11:57:05 start cb51e9b2-g2e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=g2e) load 1.51 waited 0s
+11:57:35 done cb51e9b2-g2e-1 ok=1 
+11:57:36 start cb51e9b2-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3) load 1.58 waited 0s
+11:58:05 done cb51e9b2-j3-1 ok=1 
+11:58:06 start cb51e9b2-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3) load 1.32 waited 0s
+11:58:35 done cb51e9b2-j3-2 ok=1 
+11:58:36 start cb51e9b2-g2e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=g2e) load 1.07 waited 0s
+11:59:05 done cb51e9b2-g2e-2 ok=1 
+11:59:06 start cb51e9b2-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=prod) load 1.31 waited 0s
+11:59:35 done cb51e9b2-prod-2 ok=1 
+11:59:36 start cb51e9b2-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old) load 1.46 waited 0s
+12:00:06 done cb51e9b2-old-2 ok=1 
+12:00:06 start c841daea-old-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 1.79 waited 0s
+12:00:36 done c841daea-old-1 ok=1 
+12:00:37 start c841daea-prod-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=prod) load 1.53 waited 0s
+12:01:06 done c841daea-prod-1 ok=1 
+12:01:07 start c841daea-g2e-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=g2e) load 1.71 waited 0s
+12:01:36 done c841daea-g2e-1 ok=1 
+12:01:37 start c841daea-j3-1 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3) load 1.52 waited 0s
+12:02:06 done c841daea-j3-1 ok=1 
+12:02:07 start c841daea-j3-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3) load 1.69 waited 0s
+12:02:36 done c841daea-j3-2 ok=1 
+12:02:37 start c841daea-g2e-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=g2e) load 2.07 waited 0s
+12:03:07 done c841daea-g2e-2 ok=1 
+12:03:07 start c841daea-prod-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=prod) load 2.06 waited 0s
+12:03:37 done c841daea-prod-2 ok=1 
+12:03:38 start c841daea-old-2 (N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old) load 2.54 waited 0s
+12:04:07 done c841daea-old-2 ok=1 
+12:04:08 start 4fe96b96-old-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 1.54 waited 0s
+12:04:37 done 4fe96b96-old-1 ok=1 
+12:04:38 start 4fe96b96-prod-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=prod) load 1.50 waited 0s
+12:05:07 done 4fe96b96-prod-1 ok=1 
+12:05:08 start 4fe96b96-g2e-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g2e) load 1.74 waited 0s
+12:05:38 done 4fe96b96-g2e-1 ok=1 
+12:05:38 start 4fe96b96-j3-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=j3) load 2.34 waited 0s
+12:06:08 done 4fe96b96-j3-1 ok=1 
+12:06:09 start 4fe96b96-j3-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=j3) load 3.48 waited 0s
+12:06:38 done 4fe96b96-j3-2 ok=1 
+12:06:39 start 4fe96b96-g2e-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g2e) load 3.33 waited 0s
+12:07:08 done 4fe96b96-g2e-2 ok=1 
+12:07:09 start 4fe96b96-prod-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=prod) load 2.23 waited 0s
+12:07:38 done 4fe96b96-prod-2 ok=1 
+12:07:39 start 4fe96b96-old-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=old) load 2.73 waited 0s
+12:08:09 done 4fe96b96-old-2 ok=1 
+12:08:09 done /root/r3j/F3/plan.txt
+12:15:18 plan /root/r3j/F3/plan.txt: 40 runs
+12:15:18 done /root/r3j/F3/plan.txt
