@@ -322,7 +322,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			scl.core.alpha = bulkLink && !AlphaOff() && lb == nil
 			scl.budget = lb
 			if meter != nil {
-				meter.owd.sys = sys // a message's stamp: when it leaves the host
+				meter.owd.sys = sys         // a message's stamp: when it leaves the host
 				meter.owd.quiet = quietLink // the guard of its readings (owd.go)
 			}
 			if bulkLink && meter != nil {

@@ -229,13 +229,13 @@ type quietSet struct {
 
 	// the group streams not moved yet (the mover's), by id too (the exit's
 	// move hints, hint.go), and the tallies
-	gmu      sync.Mutex
-	groups   []*groupStream
-	byID     map[uint32]*groupStream
-	hinted   atomic.Int64 // hints heard for a group not moved yet
+	gmu    sync.Mutex
+	groups []*groupStream
+	byID   map[uint32]*groupStream
+	hinted atomic.Int64 // hints heard for a group not moved yet
 	// hintOn: the QUIET links whose kindHint stream is up (hint.go), under
 	// mu: their groups move for a download on the exit's word alone
-	hintOn map[*mtcpLink]int
+	hintOn   map[*mtcpLink]int
 	opened   atomic.Int64 // group connections opened on a QUIET link
 	fallback atomic.Int64 // user connections opened on a BULK link (no QUIET link up)
 	moved    atomic.Int64 // group connections moved to a BULK link
