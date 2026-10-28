@@ -1,7 +1,8 @@
 #!/bin/bash
 # arm7.sh — R1 step 5: arm7 (GOARCH=arm GOARM=7). One command:
 #   docs/architecture/wip/r1/merge-prep/step5/arm7.sh [engine tlscarrier core cmd-hs2 smux]
-# (no argument: all five; one at a time fits a short gap of the rig lock)
+# (no argument: all five; one at a time fits a short gap of the rig lock;
+# pkg@regex runs that package's tests matching regex, e.g. smux@^Test[A-O])
 # 1. the static binary (CGO_ENABLED=0, BUILD.md's flags), its sha256;
 # 2. the test binaries of the packages R1 changed, built for arm7;
 # 3. with qemu-user (qemu-arm or qemu-arm-static), each run under it with
@@ -55,17 +56,20 @@ run() {
 		awk '/^    [^ ].*\.go:[0-9]+: /{r=$0; sub(/^ +[^:]+:[0-9]+: /,"",r)} /^--- SKIP: /{print "   skip " $3 ": " r; r=""} /^=== RUN/{r=""}' "$1" | head -80
 	}
 	fail=0
-	for t in $PKGS; do
+	for arg in $PKGS; do
+		t=${arg%%@*}; filt=; [ "$t" != "$arg" ] && filt=${arg#*@}
 		dir=$t; [ $t = cmd-hs2 ] && dir=cmd/hs2; [ $t = smux ] && dir=third_party/smux
 		args="-test.short -test.count=1 -test.timeout=40m -test.v"
 		[ $t = engine ] && args="$args -test.run $ARM7_RUN"
+		[ -n "$filt" ] && args="$args -test.run $filt"
 		kt=$(ktests "$dir")
 		[ -n "$kt" ] && args="$args -test.skip ^($kt)\$"
 		echo "-- $t: $args"
 		t0=$(date +%s)
-		(cd "$SRC/$dir" && "$QEMU" "$BIN/$t.test" $args > "$BIN/$t.log" 2>&1) || fail=1
-		summary "$BIN/$t.log"
-		echo "   $(tail -1 "$BIN/$t.log"); $(( $(date +%s) - t0 )) s"
+		log=$BIN/$t${filt:+-part}.log
+		(cd "$SRC/$dir" && "$QEMU" "$BIN/$t.test" $args > "$log" 2>&1) || fail=1
+		summary "$log"
+		echo "   $(tail -1 "$log"); $(( $(date +%s) - t0 )) s"
 		if [ -n "$kt" ]; then
 			echo "-- $t, the kernel-facing tests and those qemu-user cannot serve, under emulation (not counted): ^($kt)\$"
 			(cd "$SRC/$dir" && "$QEMU" "$BIN/$t.test" -test.count=1 -test.v -test.run "^($kt)\$" > "$BIN/$t-kernel.log" 2>&1)
