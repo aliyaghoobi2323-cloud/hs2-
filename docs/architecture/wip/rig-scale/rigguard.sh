@@ -66,6 +66,15 @@ done
 glog "cgroup ${CG:-none}"
 
 aborted=""; hi=0; sockhi=0; n=0; peak=""; ev=""
+# stop: every process of the scope (TERM, then KILL 5 s later) and the rig's
+# namespaces; also when the guard itself is told to stop (a block's timeout)
+stopscope() {
+  systemctl kill --signal=TERM "$UNIT.scope" 2>/dev/null
+  for _ in $(seq 1 50); do kill -0 $SR 2>/dev/null || break; sleep 0.1; done
+  systemctl kill --signal=KILL "$UNIT.scope" 2>/dev/null
+  RIG_ID=${RIG_ID:-} "$D/rig.sh" down >> "$GL" 2>&1
+}
+trap 'glog "stopped by a signal: stopping $UNIT.scope"; stopscope; wait $SR; exit 143' TERM INT
 while kill -0 $SR 2>/dev/null; do
   m=$(tcpmem); p=$(pressures)
   sock=0; cur=0
@@ -85,10 +94,7 @@ while kill -0 $SR 2>/dev/null; do
   fi
   if [ -n "$aborted" ]; then
     glog "ABORT: $aborted; stopping $UNIT.scope"
-    systemctl kill --signal=TERM "$UNIT.scope" 2>/dev/null
-    for _ in $(seq 1 50); do kill -0 $SR 2>/dev/null || break; sleep 0.1; done
-    systemctl kill --signal=KILL "$UNIT.scope" 2>/dev/null
-    RIG_ID=${RIG_ID:-} "$D/rig.sh" down >> "$GL" 2>&1
+    stopscope
     break
   fi
   sleep "$EVERY"
