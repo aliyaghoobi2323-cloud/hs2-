@@ -43,7 +43,7 @@ exit $rc
 RUN
 	chmod +x "$B/run.sh"
 	for p in engine tlscarrier tun; do
-		names=$(cd "$SRC/$p" && grep -ho '^func Test[A-Za-z0-9_]*' *_linux_test.go 2>/dev/null | sed 's/func //' | sort -u | paste -sd'|')
+		names=$(cd "$SRC/$p" && grep -ho '^func Test[A-Za-z0-9_]*' *_linux_test.go 2>/dev/null | sed 's/func //' | grep -vx TestMain | sort -u | paste -sd'|')
 		[ -n "$names" ] || continue
 		(cd "$SRC" && CGO_ENABLED=0 go test -c -o "$B/$p.test" "./$p") || exit 1
 		echo "^($names)\$" > "$B/$p.run"
