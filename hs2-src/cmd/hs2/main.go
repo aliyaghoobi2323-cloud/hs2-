@@ -441,6 +441,7 @@ func runCmd(args []string) {
 		engine.SmuxWindowPool = tune.WindowPoolMiB(ramMB) << 20 // what the auto ceiling counted on
 	}
 	applyTuning()
+	labProfile() // (lab: HS2_PROFILE=DIR)
 	setMemoryLimit()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
