@@ -249,7 +249,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	cfg := newSmuxConfig()
 	var flows *linkFlows
 	if sched {
-		flows = &linkFlows{bulk: bulkLink}
+		flows = &linkFlows{}
 		cfg.Sched = newSchedAdapter
 		cfg.FlowInfo = flows.info
 		cfg.BulkFrame = BulkFrameSize
@@ -263,6 +263,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	quietLink, bulkLink := classOf(caps)
 	if meter != nil {
 		meter.quietLink = quietLink
+	}
+	if flows != nil {
+		flows.bulkLink = bulkLink // its moved connections stay bulk (MovedBulk)
 	}
 	if sched && caps&tlscarrier.CapMoveBack != 0 {
 		cfg.GroupMoves = moveBackMax // a group may move back and on (moveback.go)
