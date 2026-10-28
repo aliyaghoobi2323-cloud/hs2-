@@ -533,8 +533,8 @@ func (c *sendCap) decide() (rate uint64, apply, lift bool) {
 	want := uint64(0)
 	if c.on {
 		want = c.own
-		if c.limit > 0 && (want == 0 || c.limit < want) {
-			want = c.limit
+		if c.limit > 0 && (want == 0 || c.limit < want || BudgetC4 == 0) {
+			want = c.limit // (BudgetC4 0: the budget's pace alone)
 		}
 	}
 	if c.pn > 0 && (want == 0 || c.pn < want) {

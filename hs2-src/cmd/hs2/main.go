@@ -360,6 +360,7 @@ func applyTuning() {
 	num("HS2_TUNE_OWD_GUARD", &engine.TuneOWDGuard)
 	num("HS2_TUNE_PANEL_RCVBUF", &engine.TunePanelRcvbuf)
 	num("HS2_TUNE_PANEL_MSS", &engine.TunePanelMSS)
+	num("HS2_TUNE_BUDGET_C4", &engine.BudgetC4) // a budget link's pacing cap: the budget's alone (0) or the lesser with C4-lite's
 	num("HS2_TUNE_MOVED_BULK", &engine.MovedBulk) // a moved connection stays bulk on its BULK link (0: C1's rule)
 	// gamma1's coalescing hold on QUIET links (µs; 0: none), jittered
 	num("HS2_TUNE_QUIET_COAL", &engine.QuietCoalesce)

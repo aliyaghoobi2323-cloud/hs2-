@@ -132,6 +132,16 @@ func budgetLinkOWD() bool { return BudgetLinkOWD != 0 && !BudgetOff() && !OWDOff
 // turn each reading (M1).
 var BudgetPaceK = 125
 
+// BudgetC4 0 (HS2_TUNE_BUDGET_C4=0): on a link with an in-flight budget
+// the pacing cap is the budget's alone (BudgetPaceK of its rate at the
+// target), not the lesser of it and C4-lite's 1.25 × the 2 s delivery
+// maximum. The R1 round-3 judge's diagnosis (D3 on the rig): 400
+// connections moved onto one BULK link held it at 9 Mbit/s of 100 in five
+// runs of six: C4-lite's cap, a step ahead of a delivery it held itself,
+// kept the link's flight under B, so the gate never held a frame and B
+// never grew (gate waits 0), while with C4-lite off the link took 73.
+var BudgetC4 = 1
+
 // BudgetInflight 0 (HS2_TUNE_BUDGET_INFLIGHT=0, lab): the budget counts a
 // socket's SIOCOUTQ (all not acknowledged, the bytes past a hole the peer
 // has too) in place of what Linux counts in flight and its unsent bytes
