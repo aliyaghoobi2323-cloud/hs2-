@@ -13,7 +13,10 @@ OUT=$(step5_out arm7)
 BIN=${OUT%.txt}-bin # a new directory each run
 mkdir -p "$BIN"
 ARM7_RUN=${ARM7_RUN:-'Sched|Class|Lane|HostQ|Lowat|Gate|HostWait|SendCap|Budget|OWD|Hint|Events|QuietRecords|QuietCounts|FlowKey|Tun|Proxy|Syn|UserTag|Wire|Pin|Shape|Coalesce|Moved|MoveRule|UDPLate|Panel|LinkSndbuf'}
-QEMU=${QEMU_ARM:-$(command -v qemu-arm-static || command -v qemu-arm || true)}
+# qemu-user: QEMU_ARM, else on PATH, else the official Ubuntu package's
+# static binary unpacked (not installed: no binfmt, no system change) as
+#   cd /root/rprep/tools && apt-get download qemu-user-static && dpkg -x qemu-user-static_*.deb qemu
+QEMU=${QEMU_ARM:-$(command -v qemu-arm-static || command -v qemu-arm || ls /root/rprep/tools/qemu/usr/bin/qemu-arm-static 2>/dev/null || true)}
 run() {
 	set -o pipefail
 	cd "$SRC" || exit 1
@@ -29,7 +32,7 @@ run() {
 	ls -l "$BIN"/*.test
 	if [ -z "$QEMU" ]; then
 		echo "== 3. NOT RUN: no qemu-user (qemu-arm or qemu-arm-static) on this host."
-		echo "   Ubuntu: apt-get install qemu-user-static (14.7 MB download, 133 MB installed): needs the owner's approval."
+		echo "   the package qemu-user-static (Ubuntu 24.04, 14.7 MB) unpacked under /root/rprep/tools/qemu (see above), or QEMU_ARM=<path>"
 		exit 2
 	fi
 	echo "== 3. under $QEMU ($($QEMU --version | head -1))"
@@ -40,8 +43,13 @@ run() {
 		[ $t = engine ] && args="$args -test.run $ARM7_RUN"
 		echo "-- $t $args"
 		t0=$(date +%s)
-		(cd "$dir" && "$QEMU" "$BIN/$t.test" $args 2>&1 | tail -15) || fail=1
-		echo "-- $t: $(( $(date +%s) - t0 )) s"
+		log=$BIN/$t.log
+		(cd "$dir" && "$QEMU" "$BIN/$t.test" $args -test.v > "$log" 2>&1) || fail=1
+		echo "   pass $(grep -c '^--- PASS' "$log"), fail $(grep -c '^--- FAIL' "$log"), skip $(grep -c '^--- SKIP' "$log") (top level); $(( $(date +%s) - t0 )) s"
+		grep -A3 '^--- FAIL' "$log" | head -40 | sed 's/^/   /'
+		# the skipped ones and why (-short: the emulated-link and real-time tests)
+		grep -A1 '^--- SKIP' "$log" | grep -v '^--$' | paste - - | sed -E 's/^--- SKIP: ([^ ]+).*\t +[^:]+:[0-9]+: /   skip \1: /' | head -80
+		tail -2 "$log" | sed 's/^/   /'
 	done
 	exit $fail
 }
