@@ -1,0 +1,4 @@
+rec-c3-j3g.json: QUIET 59311, 5056 records, 4441 bursts; gap ms p10 1.58 p25 2.93 p50 4.85 p75 6.75 p90 8.81; mode bin 3.25-3.50 ms 4.1% of gaps; best 1 ms window 14.3%
+rec-c4-c4.json: QUIET 58963, 5181 records, 4611 bursts; gap ms p10 1.43 p25 2.89 p50 4.84 p75 6.64 p90 8.47; mode bin 5.50-5.75 ms 3.9% of gaps; best 1 ms window 15.3%
+rec-c5-j3g.json: QUIET 21691, 19847 records, 8362 bursts; gap ms p10 0.55 p25 1.46 p50 1.98 p75 2.72 p90 4.81; mode bin 1.75-2.00 ms 14.7% of gaps; best 1 ms window 44.8%
+rec-c6-c4.json: QUIET 30075, 13117 records, 6139 bursts; gap ms p10 0.78 p25 1.37 p50 2.98 p75 4.01 p90 6.87; mode bin 0.75-1.00 ms 9.9% of gaps; best 1 ms window 29.5%

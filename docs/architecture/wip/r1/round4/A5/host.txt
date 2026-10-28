@@ -1,0 +1,32 @@
+== start 2026-10-28T17:06:18+00:00
+ 17:06:18 up 1 day,  6:01,  7 users,  load average: 0.97, 2.20, 2.57
+TCP: inuse 1559 orphan 1 tw 648 alloc 2574 mem 0
+top - 17:06:19 up 1 day,  6:01,  7 users,  load average: 0.97, 2.20, 2.57
+Tasks: 260 total,   1 running, 259 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.6 us,  4.4 sy,  0.0 ni, 91.1 id,  0.0 wa,  0.0 hi,  1.8 si,  0.0 st 
+MiB Mem :  23456.9 total,  11838.1 free,   1480.3 used,  10555.0 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21976.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1888903 root      20   0 1635796 342116  29744 S  52.0   1.4  25:52.42 xray-linux-amd6
+    992 root      20   0 1477144 213768  10500 S  44.0   0.9      8,39 hs2
+    958 root      20   0 1407120 111620  47200 S   6.0   0.5  35:53.13 x-ui
+2017726 root      20   0   11908   6024   3868 R   2.0   0.0   0:00.02 top
+      1 root      20   0   22656  14176   9776 S   0.0   0.1   2:14.52 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.19 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+== end 2026-10-28T17:12:33+00:00
+ 17:12:33 up 1 day,  6:07, 10 users,  load average: 4.61, 3.63, 3.11
+TCP: inuse 1515 orphan 1 tw 424 alloc 2476 mem 0
+top - 17:12:34 up 1 day,  6:07,  9 users,  load average: 4.61, 3.63, 3.11
+Tasks: 281 total,   1 running, 280 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  9.5 us,  3.8 sy,  0.0 ni, 83.8 id,  0.1 wa,  0.0 hi,  2.8 si,  0.0 st 
+MiB Mem :  23456.9 total,  11793.4 free,   1393.9 used,  10686.1 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22063.0 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2030940 root      20   0    3428   2056   1396 S  78.8   0.0   0:02.27 gzip
+2019586 root      20   0 1567492 257324  29316 S  38.5   1.1   2:03.51 xray-linux-amd6
+    992 root      20   0 1477144 178116  10500 S  32.7   0.7      8,41 hs2
+2030938 root      20   0    8588   4780   2956 S   5.8   0.0   0:00.38 tar
+2031265 root      20   0   11908   6028   3868 R   3.8   0.0   0:00.04 top
+      1 root      20   0   22656  14176   9776 S   1.9   0.1   2:15.03 systemd
+    904 message+  20   0    9832   5760   4776 S   1.9   0.0   1:29.27 dbus-daemon

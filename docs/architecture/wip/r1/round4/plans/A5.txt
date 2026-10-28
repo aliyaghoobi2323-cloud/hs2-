@@ -1,0 +1,5 @@
+# A5 (screening, 2 reps): the game upload p99 next to the calls now kept on QUIET (c4: +21 to +30 ms TCP, +22 to +80 UDP, against +6 for j3g) with four QUIET links (lab) or a QUIET gate of 4 segments (lab)
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4q4
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4hq4

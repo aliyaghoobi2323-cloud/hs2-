@@ -1,0 +1,32 @@
+== start 2026-10-28T15:52:54+00:00
+ 15:52:54 up 1 day,  4:47,  5 users,  load average: 0.64, 1.79, 1.87
+TCP: inuse 1159 orphan 0 tw 300 alloc 1891 mem 0
+top - 15:52:55 up 1 day,  4:47,  5 users,  load average: 0.64, 1.79, 1.87
+Tasks: 258 total,   1 running, 257 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  0.9 us,  2.3 sy,  0.0 ni, 96.4 id,  0.0 wa,  0.0 hi,  0.4 si,  0.0 st 
+MiB Mem :  23456.9 total,  12415.3 free,   1368.5 used,  10089.5 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22088.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+    992 root      20   0 1477144 163740  10500 S  11.5   0.7      8,14 hs2
+1757557 root      20   0 1569212 288896  29488 S  11.5   1.2  16:57.06 xray-linux-amd6
+    958 root      20   0 1407124 119456  47200 S   5.8   0.5  34:36.06 x-ui
+1846309 root      20   0   11908   6036   3884 R   3.8   0.0   0:00.04 top
+   8033 caddy     20   0 1313512  49116  37664 S   1.9   0.2   0:11.07 caddy
+      1 root      20   0   22656  14176   9776 S   0.0   0.1   2:10.51 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.18 kthreadd
+== end 2026-10-28T15:53:46+00:00
+ 15:53:46 up 1 day,  4:48,  5 users,  load average: 1.41, 1.80, 1.87
+TCP: inuse 1057 orphan 3 tw 339 alloc 1799 mem 1341
+top - 15:53:47 up 1 day,  4:48,  5 users,  load average: 1.41, 1.80, 1.87
+Tasks: 260 total,   2 running, 258 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.2 us,  4.1 sy,  0.0 ni, 91.2 id,  0.0 wa,  0.0 hi,  1.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  12382.0 free,   1392.8 used,  10098.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22064.1 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1757557 root      20   0 1569212 274836  29488 S  45.1   1.1  17:14.41 xray-linux-amd6
+    992 root      20   0 1477144 162684  10500 S  37.3   0.7      8,14 hs2
+1849693 root      20   0   11908   6028   3868 R   3.9   0.0   0:00.04 top
+  15116 root      20   0 2265796  45656  31860 S   2.0   0.2   2:11.76 containerd
+1849379 root      20   0    7344   2556   2252 S   2.0   0.0   0:00.02 memsnap.sh
+1849718 root      20   0   10280   3992   3248 R   2.0   0.0   0:00.01 pgrep
+      1 root      20   0   22656  14176   9776 S   0.0   0.1   2:10.58 systemd

@@ -1,0 +1,3 @@
+15:37:13 unit rigguard-guard-20261028T153712-1818969.scope MemoryMax 1100M; tcp_mem 279672 372896 559344; abort at 274078 pages; host TCP 0 pages, TCPMemoryPressures 0 at start; RIG_ID '4'; cmd: /root/r4/rig/run.sh /root/r4/A1/plan.txt /root/r4/raw-A1
+15:37:13 cgroup /sys/fs/cgroup/system.slice/rigguard-guard-20261028T153712-1818969.scope
+15:48:04 end: status 130; 1241 samples; host TCP max 195342 pages (start 0, abort 274078); scope socket max 799866880 bytes; memory.peak 1153482752; memory.events low 0 high 0 max 778 oom 19 oom_kill 1 oom_group_kill 0 ; TCPMemoryPressures 0

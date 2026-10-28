@@ -1,0 +1,2 @@
+18:51:15 mode log (record only); tcp_mem 279672 372896 559344; host TCP 186 pages, TCPMemoryPressures 0 at start; RIG_ID '4'; cmd: /root/r4/rig/run.sh /root/r4/R2a/plan.txt /root/r4/raw-R2a
+19:05:05 end: mode log, status 0; 1604 samples; host TCP max 38761 pages (start 186; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0

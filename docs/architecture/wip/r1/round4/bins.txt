@@ -1,0 +1,33 @@
+prod /root/r4/bins/hs2-prod
+j3g /root/r4/bins/hs2-j3g
+base /root/r4/bins/hs2-base
+b2nx /root/r4/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1
+r4 /root/r4/bins/hs2-r4b
+xs /root/r4/bins/hs2-r4b HS2_TUNE_XSHARE=1
+pl /root/r4/bins/hs2-r4b HS2_TUNE_PLACE_USERS=1
+xp /root/r4/bins/hs2-r4b HS2_TUNE_XSHARE=1 HS2_TUNE_PLACE_USERS=1
+qc /root/r4/bins/hs2-r4b HS2_TUNE_QUIET_CAP=65536
+rt /root/r4/bins/hs2-r4b HS2_TUNE_RT=1
+qr /root/r4/bins/hs2-r4b HS2_TUNE_QUIET_CAP=65536 HS2_TUNE_RT=1
+tw /root/r4/bins/hs2-r4b HS2_TUNE_TWOWAY=1
+twqc /root/r4/bins/hs2-r4b HS2_TUNE_TWOWAY=1 HS2_TUNE_QUIET_CAP=65536
+twrt /root/r4/bins/hs2-r4b HS2_TUNE_TWOWAY=1 HS2_TUNE_RT=1
+twqr /root/r4/bins/hs2-r4b HS2_TUNE_TWOWAY=1 HS2_TUNE_QUIET_CAP=65536 HS2_TUNE_RT=1
+pl2 /root/r4/bins/hs2-r4c HS2_TUNE_PLACE_USERS=2
+tw3 /root/r4/bins/hs2-r4c HS2_TUNE_TWOWAY=1
+twqr3 /root/r4/bins/hs2-r4c HS2_TUNE_TWOWAY=1 HS2_TUNE_QUIET_CAP=65536 HS2_TUNE_RT=1
+twrt3 /root/r4/bins/hs2-r4c HS2_TUNE_TWOWAY=1 HS2_TUNE_RT=1
+ca /root/r4/bins/hs2-r4c HS2_TUNE_PLACE_USERS=2 HS2_TUNE_TWOWAY=1 HS2_TUNE_QUIET_CAP=65536 HS2_TUNE_RT=1
+c4 /root/r4/bins/hs2-c4f
+c4nort /root/r4/bins/hs2-c4 HS2_TUNE_RT=0
+c4nopl /root/r4/bins/hs2-c4f HS2_TUNE_PLACE_USERS=0
+c4notw /root/r4/bins/hs2-c4 HS2_TUNE_TWOWAY=0 HS2_TUNE_RT=0
+c4q4 /root/r4/bins/hs2-c4 HS2_TUNE_QUIET_N=4
+c4hq4 /root/r4/bins/hs2-c4 HS2_TUNE_HQG_QUIET_SEGS=4
+c4p3 /root/r4/bins/hs2-r4e HS2_TUNE_PLACE_USERS=3
+c4p3q4 /root/r4/bins/hs2-r4e HS2_TUNE_PLACE_USERS=3 HS2_TUNE_QUIET_N=4
+c4p0 /root/r4/bins/hs2-r4e HS2_TUNE_PLACE_USERS=0
+c4e /root/r4/bins/hs2-r4e
+c4qn2 /root/r4/bins/hs2-c4f HS2_TUNE_QUIET_N=2
+c4m6 /root/r4/bins/hs2-c4f HS2_TUNE_QUIET_MANY=6
+c4m2 /root/r4/bins/hs2-c4f HS2_TUNE_QUIET_MANY=2
