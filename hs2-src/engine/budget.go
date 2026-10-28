@@ -132,6 +132,12 @@ func budgetLinkOWD() bool { return BudgetLinkOWD != 0 && !BudgetOff() && !OWDOff
 // turn each reading (M1).
 var BudgetPaceK = 125
 
+// BudgetQuietCheck 0 (HS2_TUNE_BUDGET_QCHECK=0): the budget takes the
+// QUIET link's one-way queues whatever its own round trip says. 1, the
+// default (R1 round 3, the judge): only while they are within the link's
+// own srtt − min_rtt and the target (step).
+var BudgetQuietCheck = 1
+
 // BudgetC4 0 (HS2_TUNE_BUDGET_C4=0): on a link with an in-flight budget
 // the pacing cap is the budget's alone (BudgetPaceK of its rate at the
 // target), not the lesser of it and C4-lite's 1.25 × the 2 s delivery
@@ -286,11 +292,18 @@ func (c *budgetCore) step(in budgetIn) float64 {
 	case two:
 		qRev = min(S/2, T)
 	}
-	if in.QInOK {
+	// the QUIET link's one-way queues count only while the link's own
+	// round trip holds them (BudgetQuietCheck): a one-way queue of the path
+	// this link shares (a FIFO) is within its srtt − min_rtt; one past it
+	// waits where this link does not — the QUIET link's own resends or
+	// backlog (under 1% loss 7 to 19 ms of it, on a link of 1 to 2: the
+	// judge's smoke C4)
+	qOK := func(q time.Duration) bool { return BudgetQuietCheck == 0 || q <= S+T }
+	if in.QInOK && qOK(in.QIn) {
 		qRev = max(qRev, in.QIn)
 	}
 	qFwd := max(S-qRev, 0)
-	if in.QOutOK {
+	if in.QOutOK && qOK(in.QOut) {
 		qFwd = max(qFwd, in.QOut)
 	}
 	two = two && !own // the guess (min(S/2, T)) and its room rule

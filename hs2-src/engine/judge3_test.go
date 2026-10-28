@@ -229,3 +229,32 @@ func TestLinkSndbuf(t *testing.T) {
 		t.Fatalf("send buffer %d after setting %d (before %d)", after, TuneLinkSndbuf, before)
 	}
 }
+
+// The budget takes the QUIET link's one-way queue of its direction only
+// while its own round trip holds it: under 1% loss the QUIET link read 7 to
+// 19 ms of its own resends on a BULK link whose srtt − min_rtt was 1 to 2
+// ms (smoke C4), and the budget cut a link with no queue.
+func TestBudgetQuietCheck(t *testing.T) {
+	r := 72 * time.Millisecond
+	defer func(v int) { BudgetQuietCheck = v }(BudgetQuietCheck)
+	run := func() float64 {
+		var c budgetCore
+		in := budgetIn{On: true, Delivery: 90 * bMbit, MinRTT: r, SRTT: r + 1500*time.Microsecond, TxRate: 90 * bMbit,
+			Blocked: true, MSS: 1448, DlvMax: 90 * bMbit, QOutOK: true, QOut: 19 * time.Millisecond}
+		for i := 0; i < 30; i++ {
+			c.step(in)
+		}
+		return c.b
+	}
+	BudgetQuietCheck = 1
+	on := run()
+	BudgetQuietCheck = 0
+	off := run()
+	want := 90 * bMbit * (r + budgetTarget()).Seconds()
+	if on < 0.95*want {
+		t.Fatalf("with the check: B %.0f KiB, want at least %.0f (no cut for a queue the link does not see)", on/1024, 0.95*want/1024)
+	}
+	if off >= on {
+		t.Fatalf("without the check B %.0f KiB, with it %.0f: the QUIET reading made no cut", off/1024, on/1024)
+	}
+}
