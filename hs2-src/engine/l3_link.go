@@ -390,6 +390,7 @@ func (s *l3Set) linkForPkt(h uint32, size int, echo bool) *l3Link {
 				if b := s.pickFlowClass(h, l3Bulk); b != nil {
 					p.l, p.moved = b, true
 					s.moves.Add(1)
+					tunMoved.Add(1) // (events.go)
 				}
 			}
 		}
