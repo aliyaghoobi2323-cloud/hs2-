@@ -14,7 +14,7 @@ import (
 func TestMoveBackLight(t *testing.T) {
 	angleCores(t)
 	if testing.Short() {
-		t.Skip("emulated links, ~5 s")
+		t.Skip("emulated links, ~11 s")
 	}
 	for _, on := range []bool{true, false} {
 		t.Run(map[bool]string{true: "on", false: "off"}[on], func(t *testing.T) {
@@ -28,7 +28,10 @@ func TestMoveBackLight(t *testing.T) {
 			t.Cleanup(func() { TuneMoveBack, moveBackLight, moveBackHold = v, l, h })
 			TuneMoveBack = map[bool]int{true: 1, false: 0}[on]
 			moveBackLight, moveBackHold = 800*time.Millisecond, 1500*time.Millisecond
-			r := hintRig(t, 4*angleRateBps, 10*time.Millisecond)
+			// 10 Mbit/s: the 3 MiB download lasts ~2.5 s, past the exit's
+			// hint and the mover's tick even under -race and a loaded host
+			// (at 40 Mbit/s it once ended in 0.67 s, never moved)
+			r := hintRig(t, angleRateBps, 10*time.Millisecond)
 			st := r.open(8, qpPhase)
 			b := make([]byte, 32<<10)
 			var off int64
