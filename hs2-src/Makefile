@@ -14,8 +14,9 @@
 #                  scheduler, groups and coalescing
 #   make test386   the packages R1 changed, GOARCH=386, -short: 64-bit
 #                  atomics on a 32-bit platform (REDESIGN §5.10 step 5)
-#   make release   static binaries (CGO_ENABLED=0) for linux amd64, 386 and
-#                  arm64 in DIST, and their SHA256SUMS
+#   make release   static binaries (CGO_ENABLED=0, -trimpath, -s -w: as
+#                  BUILD.md's release build) for linux amd64, 386 and arm64
+#                  in DIST, and their SHA256SUMS
 
 GO           ?= go
 GOFMT        ?= gofmt
@@ -54,5 +55,5 @@ test386:
 
 release:
 	mkdir -p $(DIST)
-	for a in $(ARCHES); do CGO_ENABLED=0 GOOS=linux GOARCH=$$a $(GO) build -trimpath -o $(DIST)/hs2-linux-$$a ./cmd/hs2 || exit 1; done
+	for a in $(ARCHES); do CGO_ENABLED=0 GOOS=linux GOARCH=$$a $(GO) build -trimpath -ldflags="-s -w" -o $(DIST)/hs2-linux-$$a ./cmd/hs2 || exit 1; done
 	cd $(DIST) && sha256sum hs2-linux-* > SHA256SUMS && cat SHA256SUMS

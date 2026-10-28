@@ -117,7 +117,14 @@ func newQuietRig(t *testing.T, rate float64, delay time.Duration, fifo bool) *qu
 	r.q = r.lm.enableQuiet()
 	r.q.place(r.quiet.edge, "")
 	addManaged(r.lm, r.bulk.edge)
-	go r.q.runMover(r.ctx)
+	// the mover ends before the test's own cleanups (they run last in, first
+	// out) restore what it reads (TestMoveBackLight's switches: -race)
+	moverDone := make(chan struct{})
+	go func() {
+		defer close(moverDone)
+		r.q.runMover(r.ctx)
+	}()
+	t.Cleanup(func() { r.cancel(); <-moverDone })
 	for _, p := range []*classPair{r.quiet, r.bulk} {
 		go r.serve(p)
 	}

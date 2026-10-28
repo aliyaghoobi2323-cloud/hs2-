@@ -224,10 +224,10 @@ func TestLabBursty26(t *testing.T) {
 	// loss (without FEC it is the wire loss itself). The bursts are drawn in
 	// real time (netsim.TimeGE: the packets' timing picks the draws), so the
 	// residual varies from run to run: over 24 runs on the R1 merge-prep
-	// branch (udpcarrier unchanged since the base) it was 0.31-0.46 of the
-	// wire loss (mean 0.37) and 7.8-13.9% absolute, the wire 23-31%. The
-	// bars of 0.4 and 14% sat inside that spread and failed about one run in
-	// eight, on the base too (docs/architecture/wip/r1/flaky.fa.md); half the
+	// branch (udpcarrier unchanged since the base) it was 0.29-0.46 of the
+	// wire loss (mean 0.35) and 7.1-13.9% absolute, the wire 22-31%. The
+	// bars of 0.4 and 14% sat inside that spread and failed 3 runs of 24, on
+	// the base too about one in eight (docs/architecture/wip/r1/flaky.fa.md); half the
 	// wire loss and 16% stay past every run seen, and still fail an FEC that
 	// rebuilds less than half of what the bursts take. (The pre-2026-09
 	// controller left ~30% of this path idle and landed at 4-10%, which made
