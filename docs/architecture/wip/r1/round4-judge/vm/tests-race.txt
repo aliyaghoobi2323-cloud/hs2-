@@ -1,0 +1,3 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	202.432s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.308s
+rc=0

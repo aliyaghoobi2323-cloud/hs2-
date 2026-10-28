@@ -1,0 +1,151 @@
+cell A-prod-edge_new-exit N=8 edge=hs2-prod [] exit=hs2-vm []
+download (bytes, B/s, http, curl rc): 0 0 000 rc=56
+edge place: 
+edge links:  links: 0 up / target 8 (steady, range 8–8)| links: 0 up / target 8 (steady, range 8–8)|
+exit links:  links: 0 up / target 8 (following, range 8–12)| ceiling: at most 8 links — this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 128 below 4 cores); the Iran server's ceilin
+edge QUIET up lines: 0, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit:  1 .235761 mtcp: tlscarrier: the other server answered as a plain website, not as the tunnel: its shared_key differs from this one (paste the CURRENT link from it — running its setup again makes a new key), or it runs an older hs2 (protocol v2 or earlier: upgrade both servers) — dialing it again
+
+cell B-new-edge_prod-exit N=8 edge=hs2-vm [] exit=hs2-prod []
+download (bytes, B/s, http, curl rc): 0 0 000 rc=56
+edge place: cores:      place: waiting for the first link; quiet 0 of 4 links, bulk 0 links; opened on quiet 0, on bulk (no quiet up) 1; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 0; moved back 0; tw
+edge links:  links: 0 up / target 8 (steady, range 8–8)| links: 0 up / target 8 (steady, range 8–8)|
+exit links:  links: 0 up / target 8 (following, range 8–8)| ceiling: at most 8 links — this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 128 below 4 cores); the Iran server's ceiling
+edge QUIET up lines: 0, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge:  1 .547097 peer runs protocol v2; upgrade both servers|
+               exit: 
+
+cell C-j3g-edge_new-exit N=8 edge=hs2-j3g [] exit=hs2-vm []
+download (bytes, B/s, http, curl rc): 30000000 78195661 200 rc=0
+edge place: cores:      place: on; quiet 2 of 2 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 0; moved back 0
+edge links:  links: 8 up (steady, range 8–8)| why: sized for current demand: 0 active of 0 open connections, 0 of 8 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 10 up (following, range 8–12)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 2, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell D-new-edge_j3g-exit N=8 edge=hs2-vm [] exit=hs2-j3g []
+download (bytes, B/s, http, curl rc): 30000000 78120727 200 rc=0
+edge place: cores:      place: on; quiet 2 of 2 (this build 4: the other server's ceiling) links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 
+edge links:  links: 8 up (steady, range 8–8)| why: sized for current demand: 0 active of 1 open connections, 0 of 8 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 10 up (following, range 8–10)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 4, QUIET closed (follow): 2
+edge follow lines: .501296 mtcp: the Kharej server holds at most 10 links (its max_links and its own QUIET count): this server keeps 2 QUIET links next to its 8 BULK ones, not 4 (HS2_TUNE_QUIET_FOLLOW)|
+refusal lines: edge: 
+               exit: 
+
+cell E-c4-edge_new-exit N=8 edge=hs2-c4f [] exit=hs2-vm []
+download (bytes, B/s, http, curl rc): 30000000 75022694 200 rc=0
+edge place: cores:      place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 1; moved back 0; two-way kept 0; placed by 
+edge links:  links: 8 up (steady, range 8–8)| why: sized for current demand: 0 active of 0 open connections, 0 of 8 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 12 up (following, range 8–12)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 4, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell F-new-edge_c4-exit N=8 edge=hs2-vm [] exit=hs2-c4f []
+download (bytes, B/s, http, curl rc): 30000000 77557657 200 rc=0
+edge place: cores:      place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by 
+edge links:  links: 8 up (steady, range 8–8)| why: sized for current demand: 0 active of 1 open connections, 0 of 8 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 12 up (following, range 8–12)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 4, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell G-new-edge-many2_new-exit N=8 edge=hs2-vm [HS2_TUNE_QUIET_MANY=2] exit=hs2-vm []
+download (bytes, B/s, http, curl rc): 30000000 85957176 200 rc=0
+edge place: cores:      place: on; quiet 2 of 2 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by 
+edge links:  links: 8 up (steady, range 8–8)| why: sized for current demand: 0 active of 0 open connections, 0 of 8 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 10 up (following, range 8–12)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 2, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell H-new-edge_new-exit-many2 N=8 edge=hs2-vm [] exit=hs2-vm [HS2_TUNE_QUIET_MANY=2]
+download (bytes, B/s, http, curl rc): 30000000 75223602 200 rc=0
+edge place: cores:      place: on; quiet 2 of 2 (this build 4: the other server's ceiling) links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 
+edge links:  links: 8 up (steady, range 8–8)| why: sized for current demand: 0 active of 0 open connections, 0 of 8 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 10 up (following, range 8–10)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 4, QUIET closed (follow): 2
+edge follow lines: .988550 mtcp: the Kharej server holds at most 10 links (its max_links and its own QUIET count): this server keeps 2 QUIET links next to its 8 BULK ones, not 4 (HS2_TUNE_QUIET_FOLLOW)|
+refusal lines: edge: 
+               exit: 
+
+cell I-new_new N=8 edge=hs2-vm [] exit=hs2-vm []
+download (bytes, B/s, http, curl rc): 30000000 83957651 200 rc=0
+edge place: cores:      place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 1; moved back 0; two-way kept 0; placed by 
+edge links:  links: 8 up (steady, range 8–8)| why: sized for current demand: 0 active of 1 open connections, 0 of 8 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 12 up (following, range 8–12)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 4, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell J-before-c4-edge_j3g-exit N=8 edge=hs2-c4f [] exit=hs2-j3g []
+download (bytes, B/s, http, curl rc): 30000000 76935899 200 rc=0
+edge place: cores:      place: on; quiet 4 of 4 links, bulk 6 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by 
+edge links:  links: 6 up / target 8 (steady, range 8–8)| why: sized for current demand: 0 active of 0 open connections, 0 of 6 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 10 up (following, range 8–10)| ceiling: 8 links — limited by this server (reverse: the lower of the two applies); this server: 8 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at mos
+edge QUIET up lines: 4, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell K-new-edge-n2_c4-exit N=1 edge=hs2-vm [HS2_TUNE_QUIET_N=2] exit=hs2-c4f []
+download (bytes, B/s, http, curl rc): 30000000 78439780 200 rc=0
+edge place: cores:      place: on; quiet 1 of 1 (this build 2: the other server's ceiling) links, bulk 1 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 
+edge links:  links: 1 up (steady, range 1–1)| why: sized for current demand: 0 active of 1 open connections, 0 of 1 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 2 up (following, range 1–2)| ceiling: 1 links — limited by this server (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 
+edge QUIET up lines: 2, QUIET closed (follow): 1
+edge follow lines: .931100 mtcp: the Kharej server holds at most 2 links (its max_links and its own QUIET count): this server keeps 1 QUIET links next to its 1 BULK ones, not 2 (HS2_TUNE_QUIET_FOLLOW)|
+refusal lines: edge: 
+               exit: 
+
+cell L-new-edge-n2_new-exit N=1 edge=hs2-vm [HS2_TUNE_QUIET_N=2] exit=hs2-vm []
+download (bytes, B/s, http, curl rc): 30000000 80538858 200 rc=0
+edge place: cores:      place: on; quiet 1 of 1 (this build 2: the other server's ceiling) links, bulk 1 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 
+edge links:  links: 1 up (steady, range 1–1)| why: sized for current demand: 0 active of 0 open connections, 0 of 1 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 2 up (following, range 1–2)| ceiling: 1 links — limited by this server (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 
+edge QUIET up lines: 2, QUIET closed (follow): 1
+edge follow lines: .543332 mtcp: the Kharej server holds at most 2 links (its max_links and its own QUIET count): this server keeps 1 QUIET links next to its 1 BULK ones, not 2 (HS2_TUNE_QUIET_FOLLOW)|
+refusal lines: edge: 
+               exit: 
+
+cell M-before-c4-edge-n2_c4-exit N=1 edge=hs2-c4f [HS2_TUNE_QUIET_N=2] exit=hs2-c4f []
+download (bytes, B/s, http, curl rc): 30000000 72577543 200 rc=0
+edge place: cores:      place: on; quiet 2 of 2 links, bulk 0 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 1); exit hints 1; moved back 0; two-way kept 0; placed by 
+edge links:  links: 0 up / target 1 (steady, range 1–1)| links: 0 up / target 1 (steady, range 1–1)|
+exit links:  links: 2 up (following, range 1–2)| ceiling: 1 links — limited by this server (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 
+edge QUIET up lines: 2, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell N-new-edge_new-exit-n2 N=1 edge=hs2-vm [] exit=hs2-vm [HS2_TUNE_QUIET_N=2]
+download (bytes, B/s, http, curl rc): 30000000 67173302 200 rc=0
+edge place: cores:      place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 1; moved back 0; two-way kept 0; placed by 
+edge links:  links: 1 up (steady, range 1–1)| why: sized for current demand: 0 active of 1 open connections, 0 of 1 serving links at their limit, peak 0.0 Mbit/s|
+exit links:  links: 2 up (following, range 1–3)| ceiling: 1 links — limited by this server (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 
+edge QUIET up lines: 1, QUIET closed (follow): 0
+edge follow lines: 
+refusal lines: edge: 
+               exit: 
+
+cell O-switchoff-new-edge-n2_c4-exit N=1 edge=hs2-vm [HS2_TUNE_QUIET_N=2 HS2_TUNE_QUIET_FOLLOW=0] exit=hs2-c4f []
+download (bytes, B/s, http, curl rc): 30000000 75076578 200 rc=0
+edge place: cores:      place: on; quiet 2 of 2 links, bulk 0 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 1); exit hints 1; moved back 0; two-way kept 0; placed by 
+edge links:  links: 0 up / target 1 (steady, range 1–1)| links: 0 up / target 1 (steady, range 1–1)|
+exit links:  links: 2 up (following, range 1–2)| ceiling: 1 links — limited by this server (reverse: the lower of the two applies); this server: 1 (fixed by max_links; 22.9 GB RAM, 2 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 
+edge QUIET up lines: 2, QUIET closed (follow): 0
+edge follow lines: .437293 tuning: HS2_TUNE_QUIET_FOLLOW=0|
+refusal lines: edge: 
+               exit: 
+
+ALLDONE
