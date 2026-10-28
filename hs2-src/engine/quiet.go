@@ -269,13 +269,18 @@ func (m *LinkManager) enableQuiet() *quietSet {
 func (q *quietSet) active() bool { return q != nil && q.state.Load() >= 0 && !QuietOff() }
 
 // noteCaps learns from a new link's caps whether the other server has
-// group streams; a link without them turns the QUIET links off.
+// group streams; a link without them turns the QUIET links off, and a link
+// with them on again (the other server was upgraded and restarted: every
+// link of its older build ended with it; the R1 red team).
 func (q *quietSet) noteCaps(caps uint32) {
 	if q == nil {
 		return
 	}
 	if caps&tlscarrier.CapGroup != 0 {
-		q.state.CompareAndSwap(0, 1)
+		if q.state.Swap(1) == -1 {
+			q.m.log("mtcp: the other server has group streams again (upgraded): QUIET links back on")
+			q.m.notifyCtl()
+		}
 		return
 	}
 	if q.state.Swap(-1) != -1 {

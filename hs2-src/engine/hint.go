@@ -188,6 +188,10 @@ func (s *exitHintSet) remove(c *hintChan) {
 
 // send tells the edge that group id is backlogged, on the stream of the
 // link it is on (mtr) or else any (the ids are the edge's, one per edge).
+// A stream whose writer is busy — a write of an earlier hint waiting on a
+// stalled link — is passed over for the next; only when every one is busy
+// does the hint wait its turn (the R1 red team: hints queued behind one
+// stalled QUIET link while another was healthy).
 func (s *exitHintSet) send(id uint32, mtr *linkMeter) bool {
 	s.mu.Lock()
 	cs := make([]*hintChan, 0, len(s.chans))
@@ -201,19 +205,47 @@ func (s *exitHintSet) send(id uint32, mtr *linkMeter) bool {
 	s.mu.Unlock()
 	var b [hintMsgLen]byte
 	hintEncode(b[:], id)
-	for _, c := range cs {
-		c.wmu.Lock()
+	write := func(c *hintChan) bool { // c.wmu held
 		if d, ok := c.st.(interface{ SetWriteDeadline(time.Time) error }); ok {
 			d.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 		}
 		_, err := c.st.Write(b[:])
 		c.wmu.Unlock()
-		if err == nil {
-			return true
+		return err == nil
+	}
+	tried, left := make([]bool, len(cs)), len(cs)
+	for round := 0; round < hintFreeRounds && left > 0; round++ {
+		if round > 0 {
+			time.Sleep(time.Millisecond) // a healthy stream's write takes µs
+		}
+		for i, c := range cs {
+			if !tried[i] && c.wmu.TryLock() {
+				tried[i], left = true, left-1
+				if write(c) {
+					return true
+				}
+			}
+		}
+	}
+	for i, c := range cs {
+		if !tried[i] {
+			c.wmu.Lock()
+			if write(c) {
+				return true
+			}
 		}
 	}
 	return false
 }
+
+// hintFreeRounds: the looks (1 ms apart) for a stream whose writer is free
+// before a hint waits on a busy one.
+const hintFreeRounds = 20
+
+// hintSending bounds the hints being written at once: each goes in a
+// goroutine of its own, so the exit's judging loop never waits on a
+// stream (a stalled one held it 200 ms a hint).
+var hintSending = make(chan struct{}, 256)
 
 // serveHint is the exit's end of a kindHint stream the edge opened (its
 // kind byte read): it is the link's hint channel until it ends.
@@ -270,15 +302,25 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 		if r.sentAt != 0 && time.Duration(now-r.sentAt) < hintResend {
 			continue
 		}
-		if exitHints.send(eg.ID(), eg.mtr.Load()) {
-			if r.sentAt != 0 {
+		select {
+		case hintSending <- struct{}{}:
+		default:
+			exitHints.fail.Add(1) // as many on their way already: the next tick
+			continue
+		}
+		again := r.sentAt != 0
+		r.sentAt = now // one that no stream takes goes again after hintResend
+		go func(id uint32, mtr *linkMeter) {
+			defer func() { <-hintSending }()
+			if !exitHints.send(id, mtr) {
+				exitHints.fail.Add(1)
+				return
+			}
+			if again {
 				exitHints.again.Add(1)
 			}
-			r.sentAt = now
 			exitHints.sent.Add(1)
-		} else {
-			exitHints.fail.Add(1)
-		}
+		}(eg.ID(), eg.mtr.Load())
 	}
 	for eg := range rules {
 		if !seen[eg] {

@@ -161,19 +161,26 @@ func TestRedHintTickNeverWaits(t *testing.T) {
 	}
 	rules := map[*exitGroup]*hintRule{}
 	var took time.Duration
+	var due time.Time
 	for k := 0; k <= hintRun; k++ {
 		t0 := time.Now()
 		exitHintTick(rules, now+int64(k)*int64(moveTick))
 		took = max(took, time.Since(t0))
+		due = t0
 	}
 	waitQuiet(t, "every hint on the healthy stream", func() bool {
 		got := 0
 		good.ids.Range(func(any, any) bool { got++; return true })
 		return got == n
 	})
-	t.Logf("longest tick %v; writes on the stalled stream %d", took, stalled.writes.Load())
+	all := time.Since(due)
+	t.Logf("longest tick %v; every hint on the healthy stream %v after it was due; writes on the stalled stream %d",
+		took, all, stalled.writes.Load())
 	if took > 50*time.Millisecond {
 		t.Fatalf("a tick took %v with one hint stream stalled (%d hints due)", took, n)
+	}
+	if all > time.Second {
+		t.Fatalf("the hints reached the healthy stream %v after they were due (one stream stalled)", all)
 	}
 }
 
