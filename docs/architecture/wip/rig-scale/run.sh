@@ -39,11 +39,12 @@ set -u
 D=$(cd "$(dirname "$0")" && pwd)
 PLAN=${1:?usage: run.sh PLAN OUT}; OUT=${2:?usage: run.sh PLAN OUT}
 mkdir -p "$OUT/raw"; OUT=$(cd "$OUT" && pwd)
-# the memory guard (R1 round 4, rigguard.sh): the whole block runs in a
-# cgroup scope under a memory cap, and is aborted when the host's TCP memory
-# nears its pressure mark, so the rig never squeezes the production hs2 and
-# panel on this host; RIG_GUARD=0 runs without it
-if [ "${RIG_GUARD:-1}" != 0 ] && [ -z "${RIG_GUARDED:-}" ]; then
+# the host's TCP memory (R1 round 4, rigguard.sh): by default (RIG_GUARD=log)
+# the block is recorded only (tcp_mem, the TCP memory and the pressure
+# counter before, during and after it), nothing capped or cut (the owner's
+# decision); RIG_GUARD=cap (opt-in) runs it in a cgroup scope under a memory
+# cap and aborts it near the pressure mark; RIG_GUARD=0 runs without either
+if [ "${RIG_GUARD:-log}" != 0 ] && [ -z "${RIG_GUARDED:-}" ]; then
   RIG_GUARDED=1 exec "$D/rigguard.sh" "$OUT/guard-$(date +%Y%m%dT%H%M%S)" "$D/run.sh" "$PLAN" "$OUT"
 fi
 RES=$OUT/res.jsonl; LOG=$OUT/run.log; touch "$RES"
@@ -127,12 +128,17 @@ sssnap() {
   head -1 /proc/stat > "$r/stat-$tag.txt"
 }
 
-# this process's cgroup (v2), and a counter of its memory.events (0: none)
+# this process's cgroup (v2), and a counter of its memory.events (0: none;
+# RIG_GUARD=cap's)
 memcg_dir() { echo "/sys/fs/cgroup$(awk -F: '$1 == "0" {print $3}' /proc/self/cgroup)"; }
 memcg_ev() {
   local f; f="$(memcg_dir)/memory.events"
   if [ -r "$f" ]; then awk -v k="$1" '$1 == k {v = $2} END {print v + 0}' "$f"; else echo 0; fi
 }
+# the host's TCP memory (pages, /proc/net/sockstat) and the root namespace's
+# TcpExtTCPMemoryPressures (/proc/net/netstat)
+host_tcpmem() { awk '/^TCP:/{for (i = 1; i <= NF; i++) if ($i == "mem") print $(i + 1)}' /proc/net/sockstat; }
+host_pressures() { awk '/^TcpExt:/{if (!h) {for (i = 2; i <= NF; i++) n[i] = $i; h = 1} else {for (i = 2; i <= NF; i++) if (n[i] == "TCPMemoryPressures") print $i + 0}}' /proc/net/netstat; }
 
 run_one() {
   local id=$1 bin=$2 order=$3 rep=$4 cell=$5
@@ -142,9 +148,10 @@ run_one() {
   local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF
   WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=
   # the rigload server's (the panel's) send buffer a connection, bytes (R1
-  # round 4: autotuned it held ~5 MB a connection on loopback, 1.2 GB for 400
-  # downloads: rigguard.sh; 0: autotuned, as before)
-  PANEL_SNDBUF=262144
+  # round 4, opt-in: autotuned, the default 0, it holds ~5 MB a connection
+  # on loopback, 1.2 GB for 400 downloads; a bound changes what the
+  # many-connections cells measure)
+  PANEL_SNDBUF=0
   for tok in $cell; do
     k=${tok%%=*}; v=${tok#*=}
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
@@ -165,12 +172,32 @@ run_one() {
   htop=$(top -bn2 -d0.5 -w 200 2>/dev/null | awk '/^top -/{f++} f==2 && /^ *[0-9]+ /{print $9" "$12}' | head -5 | paste -sd';' | tr -d '"\\')
   echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"panel_sndbuf\":${PANEL_SNDBUF:-0},\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
-  local mx0 ok0
+  local mx0 ok0 hp0 hm0 hsp
   mx0=$(memcg_ev max); ok0=$(memcg_ev oom_kill)
+  # the host's TCP memory through the run (each 0.5 s, the most and the
+  # samples past tcp_mem[0] and tcp_mem[1]) and the pressure counter: the
+  # tables mark a run that saw pressure
+  hp0=$(host_pressures); hm0=$(host_tcpmem)
+  ( read -r a b c < /proc/sys/net/ipv4/tcp_mem; hi=0; n0=0; n1=0
+    trap 'echo "$hi $n0 $n1" > "$r/hostmem.max"; exit 0' TERM
+    while :; do
+      m=$(host_tcpmem); m=${m:-0}
+      [ "$m" -gt "$hi" ] && hi=$m
+      [ "$m" -ge "$a" ] && n0=$((n0 + 1))
+      [ "$m" -ge "$b" ] && n1=$((n1 + 1))
+      echo "$hi $n0 $n1" > "$r/hostmem.max"
+      sleep 0.5
+    done ) &
+  hsp=$!; PIDS+=($hsp)
   run_steps || ok=0
-  # the guard's cap during this run: "max" events (the cap held the rig's
-  # memory back: this run was limited by it), OOM kills, the scope's peak so far
-  echo "{\"max_events\":$(( $(memcg_ev max) - mx0 )),\"oom_kills\":$(( $(memcg_ev oom_kill) - ok0 )),\"peak\":$(cat "$(memcg_dir)/memory.peak" 2>/dev/null || echo 0),\"cap\":\"${RIG_MEM_MAX:-}\",\"guarded\":${RIG_GUARDED:-0}}" > "$r/memcg.json"
+  kill "$hsp" 2>/dev/null; wait "$hsp" 2>/dev/null
+  read -r hhi hn0 hn1 < "$r/hostmem.max" 2>/dev/null
+  echo "{\"tcp_mem\":\"$(tr '\t' ' ' < /proc/sys/net/ipv4/tcp_mem)\",\"start_pages\":${hm0:-0},\"max_pages\":${hhi:-0},\"samples_past_tcp_mem0\":${hn0:-0},\"samples_past_tcp_mem1\":${hn1:-0},\"pressures\":$(( $(host_pressures) - ${hp0:-0} ))}" > "$r/hostmem.json"
+  if [ "${RIG_GUARD_MODE:-}" = cap ]; then
+    # the opt-in cap during this run: "max" events (the cap held the rig's
+    # memory back: this run was limited by it), OOM kills, the scope's peak
+    echo "{\"max_events\":$(( $(memcg_ev max) - mx0 )),\"oom_kills\":$(( $(memcg_ev oom_kill) - ok0 )),\"peak\":$(cat "$(memcg_dir)/memory.peak" 2>/dev/null || echo 0),\"cap\":\"${RIG_MEM_MAX:-}\"}" > "$r/memcg.json"
+  fi
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev me > "$r/tc-dn.txt" 2>&1
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev mx > "$r/tc-up.txt" 2>&1
   cleanup

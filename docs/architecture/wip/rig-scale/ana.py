@@ -547,8 +547,16 @@ def compose(r, ok, why):
         except (OSError, ValueError, IndexError):
             pass
     rec["mem"] = mem
-    # the memory guard's cap (rigguard.sh): max_events > 0 means the cap held
-    # this run's memory back, so its numbers are the capped rig's
+    # the host's TCP memory through the run (run.sh, R1 round 4): a run that
+    # saw pressure (the counter grew, or the memory passed tcp_mem[1]) is
+    # marked host_pressure
+    hm = readj(r + "/hostmem.json")
+    if hm is not None:
+        rec["hostmem"] = hm
+        rec["host_pressure"] = bool(hm.get("pressures") or hm.get("samples_past_tcp_mem1"))
+    # the opt-in memory cap (rigguard.sh, RIG_GUARD=cap): max_events > 0
+    # means the cap held this run's memory back, so its numbers are the
+    # capped rig's
     mg = readj(r + "/memcg.json")
     if mg is not None:
         rec["memcg"] = mg

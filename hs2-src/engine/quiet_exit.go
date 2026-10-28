@@ -74,6 +74,7 @@ func (s *exitGroupSet) add(st *smux.Stream, mtr *linkMeter) *exitGroup {
 	}
 	eg := &exitGroup{Group: g}
 	eg.mtr.Store(mtr)
+	eg.twoWay.Store(TwoWay != 0) // pending until the hint loop's first tick (twoway.go)
 	s.m[g.ID()] = eg
 	return eg
 }

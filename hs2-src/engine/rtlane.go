@@ -31,7 +31,7 @@ package engine
 // moves it as before. Each end judges what it sends; nothing on the wire.
 
 // TuneRT: 1 on (HS2_TUNE_RT), 0 off.
-var TuneRT = 0
+var TuneRT = 1 // the default since R1 round 4 (round4/REPORT.fa.md)
 
 // RTMax: a steady flow's most, and each user's realtime credit rate, bit/s
 // (HS2_TUNE_RT_MAX).
@@ -59,14 +59,19 @@ func rtAllowance(c *flowClassifier, confirmed bool) int64 {
 	}
 	tok, tmean, tmx := rtSteady(&c.d[0])
 	if tok {
-		return int64(min(max(2*tmean, tmx+tmean), rtAllowMax))
+		// (never rtLightAllow itself: that value marks a light flow)
+		return int64(max(min(max(2*tmean, tmx+tmean), rtAllowMax), rtLightAllow+1))
 	}
 	// TwoWay: the other way is the user's steady stream (a call) and what
 	// this end sends stays under RTMax, whatever its own pattern (a call
 	// held back on a full QUIET link reads as bursts: twoway.go)
 	if TwoWay != 0 {
-		if rok, rmean, rmx := rtSteady(&c.d[1]); rok && float64(c.d[0].sum) <= rtWindowMax() {
-			return int64(min(max(2*rmean, rmx+rmean, 2*tmean), rtAllowMax))
+		// a call held back keeps a backlog of its own (seconds of frames at
+		// the start of a busy link, the round-4 rig): it may take the most
+		// a tick, so it drains it, its user's realtime credit (RTMax) the
+		// bound
+		if rok, _, _ := rtSteady(&c.d[1]); rok && float64(c.d[0].sum) <= rtWindowMax() {
+			return rtAllowMax
 		}
 	}
 	return 0
@@ -92,12 +97,19 @@ func rtSteady(d *classDir) (ok bool, mean, mx int) {
 	return ok, sum / classSlots, mx
 }
 
-// rtLane says whether e's next frame goes in the realtime lane: its
-// allowance since its latest tick is not used up.
-func (e *flowEnt) rtLane() bool {
+// rtLane is the realtime lane e's next frame goes in (LaneRT for a light
+// flow, LaneRTSteady for a steady one; 0: none): its allowance since its
+// latest tick is not used up.
+func (e *flowEnt) rtLane() Lane {
 	if TuneRT == 0 || e.moved {
-		return false
+		return 0
 	}
 	a := e.rtAllow.Load()
-	return a > 0 && int64(e.stats.tx.Load())-e.rtBase.Load() < a
+	if a <= 0 || int64(e.stats.tx.Load())-e.rtBase.Load() >= a {
+		return 0
+	}
+	if a == rtLightAllow {
+		return LaneRT
+	}
+	return LaneRTSteady
 }

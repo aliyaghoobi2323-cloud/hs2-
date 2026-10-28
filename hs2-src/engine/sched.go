@@ -48,10 +48,11 @@ const (
 	LaneCtrl Lane = iota
 	LaneLatency
 	LaneBulk
-	// LaneRT (R1 round 4, TuneRT, rtlane.go): steady flows (a call) and
-	// confirmed light ones, ahead of the latency lane's new flows, under
-	// each user's realtime credit
+	// LaneRT and LaneRTSteady (R1 round 4, TuneRT, rtlane.go): confirmed
+	// light flows (a game), then steady ones (a call), both ahead of the
+	// latency lane's new flows, under each user's realtime credit
 	LaneRT
+	LaneRTSteady
 )
 
 // LaneFrameMax: a latency-lane frame is at most this; the writer splits a
@@ -160,8 +161,9 @@ type schedFlow[T any] struct {
 	id           uint64
 	u            *schedUser[T]
 	q            schedFIFO[T]
-	lat          int // its items in the latency lane
-	rt           int // its items in the realtime lane
+	lat          int  // its items in the latency lane
+	rt           int  // its items in the realtime lanes
+	rtSteady     bool // ... in LaneRTSteady's FIFO (else LaneRT's)
 	uPrev, uNext *schedFlow[T]
 	gPrev, gNext *schedFlow[T]
 	gDef         int // its surplus deficit, bytes
@@ -202,7 +204,7 @@ type schedUser[T any] struct {
 // Sched is a link's scheduler.
 type Sched[T any] struct {
 	ctrl, lat schedFIFO[T]
-	rt        schedFIFO[T] // LaneRT
+	rt, rtS   schedFIFO[T] // LaneRT, LaneRTSteady
 	users     map[uint32]*schedUser[T]
 	flows     map[uint64]*schedFlow[T]
 	all       *schedUser[T]
@@ -273,14 +275,22 @@ func (s *Sched[T]) Push(it T, user uint32, flow uint64, lane Lane, size int) {
 	f := s.flowOf(user, flow)
 	n.f = f
 	u := f.u
-	if lane == LaneRT {
+	if lane == LaneRT || lane == LaneRTSteady {
 		// ahead of the latency lane, while the flow has nothing queued in
 		// it or in bulk (its order) and its user has realtime credit; else
-		// as a latency-lane item
+		// as a latency-lane item. A flow's realtime items stay in one of
+		// the two FIFOs while any is queued (its order again).
 		if size <= rtFrameMax && f.q.n == 0 && f.lat == 0 && u.rtBucket >= float64(size) {
 			u.rtBucket -= float64(size)
+			if f.rt == 0 {
+				f.rtSteady = lane == LaneRTSteady
+			}
 			f.rt++
-			s.rt.push(n)
+			if f.rtSteady {
+				s.rtS.push(n)
+			} else {
+				s.rt.push(n)
+			}
 			return
 		}
 		lane = LaneLatency
@@ -316,12 +326,14 @@ func (s *Sched[T]) NextUrgent() (it T, ok bool) {
 	if n := s.ctrl.pop(); n != nil {
 		return s.take(n, LaneCtrl), true
 	}
-	if n := s.rt.pop(); n != nil {
-		f := n.f
-		f.rt--
-		it = s.take(n, LaneRT)
-		s.maybeIdle(f)
-		return it, true
+	for _, q := range [2]*schedFIFO[T]{&s.rt, &s.rtS} {
+		if n := q.pop(); n != nil {
+			f := n.f
+			f.rt--
+			it = s.take(n, LaneRT)
+			s.maybeIdle(f)
+			return it, true
+		}
 	}
 	if n := s.lat.pop(); n != nil {
 		f := n.f
@@ -468,7 +480,7 @@ func (s *Sched[T]) Tick(now time.Duration, linkRate float64) {
 // Stats says what the scheduler holds and did (O(users)).
 func (s *Sched[T]) Stats() SchedStats {
 	st := SchedStats{Users: len(s.users), Active: s.active, Flows: len(s.flows),
-		Pending: [4]int{s.ctrl.n, s.lat.n, s.bulkN, s.rt.n}, Served: s.servedLane, Demoted: s.demoted,
+		Pending: [4]int{s.ctrl.n, s.lat.n, s.bulkN, s.rt.n + s.rtS.n}, Served: s.servedLane, Demoted: s.demoted,
 		FloorUsers: s.nFloor, Quantum: s.quantum, Rate: s.rate}
 	for u := s.all; u != nil; u = u.aNext {
 		if u.items > st.MaxUserItems {

@@ -142,8 +142,8 @@ func (t *linkFlows) info(st *smux.Stream) (uint32, uint8) {
 		e = t.add(st)
 	}
 	e.stats.tx.Store(st.TxBytes())
-	if e.rtLane() {
-		return e.tag, uint8(LaneRT) // rtlane.go
+	if l := e.rtLane(); l != 0 {
+		return e.tag, uint8(l) // rtlane.go
 	}
 	return e.tag, laneOf(queueClass(Class(e.class.Load()), &e.stats))
 }
@@ -199,7 +199,7 @@ func (t *linkFlows) tick(now time.Duration) {
 			e.rtAllow.Store(a)
 			if a > 0 && !e.moved {
 				rt++
-				if a != rtLightAllow || !confirmed {
+				if a != rtLightAllow {
 					rtSteady++
 				}
 			}

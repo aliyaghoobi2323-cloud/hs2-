@@ -29,15 +29,26 @@ import (
 //
 // PlaceUsers 1 (HS2_TUNE_PLACE_USERS=1) turns it on (the edge's alone: the
 // exit takes a move stream on whichever link it comes).
+//
+// PlaceUsers 2: only heavy users are held to m links, U counting the heavy
+// ones: a user with placeHeavy connections moved or moving at once (the
+// rig's measure: with every user held, a browser's six connections of a
+// page went onto one link and its page load p95 rose 1.25 times). Every
+// other user's connection goes to the link with the fewest other users.
 
-// PlaceUsers: 1 on (HS2_TUNE_PLACE_USERS), 0 the pool's pick.
-var PlaceUsers = 0
+// PlaceUsers: 1 every user held, 2 heavy users held (HS2_TUNE_PLACE_USERS),
+// 0 the pool's pick.
+var PlaceUsers = 2 // the default since R1 round 4 (round4/REPORT.fa.md)
+
+// placeHeavy: a user with this many connections moved (or moving at the
+// same tick) is heavy (PlaceUsers 2).
+const placeHeavy = 8
 
 // placeBook is the edge's moved connections by BULK link and user.
 type placeBook struct {
 	mu  sync.Mutex
 	by  map[*mtcpLink]map[uint32]int
-	due map[uint32]bool // users due to move at the mover's tick now
+	due map[uint32]int // connections due to move at the mover's tick now, by user
 }
 
 func (b *placeBook) add(l *mtcpLink, tag uint32) {
@@ -94,8 +105,9 @@ func (b *placeBook) line() string {
 	return fmt.Sprintf("placed by users: %d users moved, %d to %d users a bulk link", len(all), lo, hi)
 }
 
-// setDue sets the users due to move at the mover's tick (nil: none).
-func (b *placeBook) setDue(due map[uint32]bool) {
+// setDue sets the connections due to move at the mover's tick, by user
+// (nil: none).
+func (b *placeBook) setDue(due map[uint32]int) {
 	b.mu.Lock()
 	b.due = due
 	b.mu.Unlock()
@@ -117,13 +129,22 @@ func (b *placeBook) choose(cands []*placeCand, tag uint32) *placeCand {
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	users := map[uint32]bool{tag: true}
-	for u := range b.due {
-		users[u] = true
+	// each user's connections moved and moving now
+	conns := map[uint32]int{tag: 1}
+	for u, n := range b.due {
+		conns[u] += n
 	}
 	for _, us := range b.by {
-		for u := range us {
-			users[u] = true
+		for u, n := range us {
+			conns[u] += n
+		}
+	}
+	heavyOnly := PlaceUsers == 2
+	held := !heavyOnly || conns[tag] >= placeHeavy
+	users := 0
+	for _, n := range conns {
+		if !heavyOnly || n >= placeHeavy {
+			users++
 		}
 	}
 	for _, c := range cands {
@@ -132,7 +153,7 @@ func (b *placeBook) choose(cands []*placeCand, tag uint32) *placeCand {
 			c.conns += n
 		}
 	}
-	m := (len(cands) + len(users) - 1) / len(users)
+	m := (len(cands) + max(users, 1) - 1) / max(users, 1)
 	var own []*placeCand
 	for _, c := range cands {
 		if c.users[tag] > 0 {
@@ -140,7 +161,7 @@ func (b *placeBook) choose(cands []*placeCand, tag uint32) *placeCand {
 		}
 	}
 	pool := cands
-	if len(own) >= max(m, 1) {
+	if held && len(own) >= max(m, 1) {
 		pool = own
 	}
 	var best *placeCand
