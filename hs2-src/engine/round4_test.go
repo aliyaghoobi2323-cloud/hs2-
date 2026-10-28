@@ -49,8 +49,8 @@ func linksOf(b *placeBook, cands []*placeCand, tag uint32) int {
 // link each; a viewer then goes where one user is; in one_vs_16 the heavy
 // user keeps off the one-connection user's link.
 func TestPlaceUsers(t *testing.T) {
-	defer func(v int) { PlaceUsers = v }(PlaceUsers)
-	PlaceUsers = 1 // every user held (the browser's case below sets its own)
+	defer func(v int) { PlaceUsers.Set(v) }(PlaceUsers.Get())
+	PlaceUsers.Set(1) // every user held (the browser's case below sets its own)
 	t.Run("lone", func(t *testing.T) {
 		var b placeBook
 		cands := placeLinks(8)
@@ -112,8 +112,8 @@ func TestPlaceUsers(t *testing.T) {
 	// over the links with the fewest users with only heavy users held (2)
 	for _, mode := range []int{1, 2} {
 		t.Run(fmt.Sprintf("browser, mode %d", mode), func(t *testing.T) {
-			defer func(v int) { PlaceUsers = v }(PlaceUsers)
-			PlaceUsers = mode // (restored to 1 for the cases after)
+			defer func(v int) { PlaceUsers.Set(v) }(PlaceUsers.Get())
+			PlaceUsers.Set(mode) // (restored to 1 for the cases after)
 			var b placeBook
 			cands := placeLinks(8)
 			due := map[uint32]int{}
@@ -177,8 +177,8 @@ func TestPlaceUsers(t *testing.T) {
 // TestCapWindow: the cap fires once, past QuietCap within quietCapWin, and
 // not with QuietCap 0.
 func TestCapWindow(t *testing.T) {
-	defer func(v int) { QuietCap = v }(QuietCap)
-	QuietCap = 64 << 10
+	defer func(v int) { QuietCap.Set(v) }(QuietCap.Get())
+	QuietCap.Set(64 << 10)
 	ms := int64(time.Millisecond)
 	var w capWindow
 	if w.add(32<<10, 0) || w.add(32<<10, 100*ms) {
@@ -194,7 +194,7 @@ func TestCapWindow(t *testing.T) {
 	if w.add(64<<10, 950*ms) {
 		t.Fatal("fired twice")
 	}
-	QuietCap = 0
+	QuietCap.Set(0)
 	var z capWindow
 	if z.add(1<<20, 0) {
 		t.Fatal("fired with QuietCap 0")
@@ -225,12 +225,14 @@ func TestHoldFor(t *testing.T) {
 // measure; with TwoWay a new group is pending for its first tick).
 func capRig(t *testing.T) *quietRig {
 	t.Helper()
-	old, otw := QuietCap, TwoWay
-	QuietCap, TwoWay = 64<<10, 0
+	old, otw := QuietCap.Get(), TwoWay.Get()
+	QuietCap.Set(64 << 10)
+	TwoWay.Set(0)
 	r := hintRig(t, 4*angleRateBps, 10*time.Millisecond)
 	t.Cleanup(func() {
 		quiesce(r) // (first: the rig's loops read the switches)
-		QuietCap, TwoWay = old, otw
+		QuietCap.Set(old)
+		TwoWay.Set(otw)
 	})
 	return r
 }
@@ -409,15 +411,15 @@ func TestTwoWayState(t *testing.T) {
 // twoWayRig is hintRig with TwoWay set to on.
 func twoWayRig(t *testing.T, on bool) *quietRig {
 	t.Helper()
-	old := TwoWay
-	TwoWay = 0
+	old := TwoWay.Get()
+	TwoWay.Set(0)
 	if on {
-		TwoWay = 1
+		TwoWay.Set(1)
 	}
 	r := hintRig(t, 4*angleRateBps, 10*time.Millisecond)
 	t.Cleanup(func() {
 		quiesce(r)
-		TwoWay = old
+		TwoWay.Set(old)
 	})
 	return r
 }

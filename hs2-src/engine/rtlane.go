@@ -31,7 +31,7 @@ package engine
 // moves it as before. Each end judges what it sends; nothing on the wire.
 
 // TuneRT: 1 on (HS2_TUNE_RT), 0 off.
-var TuneRT = 1 // the default since R1 round 4 (round4/REPORT.fa.md)
+var TuneRT = newTuneInt(1) // the default since R1 round 4 (round4/REPORT.fa.md)
 
 // RTMax: a steady flow's most, and each user's realtime credit rate, bit/s
 // (HS2_TUNE_RT_MAX).
@@ -65,7 +65,7 @@ func rtAllowance(c *flowClassifier, confirmed bool) int64 {
 	// TwoWay: the other way is the user's steady stream (a call) and what
 	// this end sends stays under RTMax, whatever its own pattern (a call
 	// held back on a full QUIET link reads as bursts: twoway.go)
-	if TwoWay != 0 {
+	if TwoWay.Get() != 0 {
 		// a call held back keeps a backlog of its own (seconds of frames at
 		// the start of a busy link, the round-4 rig): it may take the most
 		// a tick, so it drains it, its user's realtime credit (RTMax) the
@@ -101,7 +101,7 @@ func rtSteady(d *classDir) (ok bool, mean, mx int) {
 // flow, LaneRTSteady for a steady one; 0: none): its allowance since its
 // latest tick is not used up.
 func (e *flowEnt) rtLane() Lane {
-	if TuneRT == 0 || e.moved {
+	if TuneRT.Get() == 0 || e.moved {
 		return 0
 	}
 	a := e.rtAllow.Load()

@@ -43,7 +43,7 @@ import (
 //
 // PlaceUsers: 1 every user held, 2 heavy users held, 3 heavy users held and
 // the rest by the pool's pick (HS2_TUNE_PLACE_USERS), 0 the pool's pick.
-var PlaceUsers = 2 // the default since R1 round 4 (round4/REPORT.fa.md)
+var PlaceUsers = newTuneInt(2) // the default since R1 round 4 (round4/REPORT.fa.md)
 
 // placeHeavy: a user with this many connections moved (or moving at the
 // same tick) is heavy (PlaceUsers 2).
@@ -155,7 +155,7 @@ func (b *placeBook) choose(cands []*placeCand, tag uint32) *placeCand {
 			conns[u] += n
 		}
 	}
-	heavyOnly := PlaceUsers >= 2
+	heavyOnly := PlaceUsers.Get() >= 2
 	held := !heavyOnly || conns[tag] >= placeHeavy
 	users := 0
 	for _, n := range conns {

@@ -39,7 +39,7 @@ import (
 
 // QuietCap: the bytes of big writes within quietCapWin that move a group
 // connection off QUIET at once (HS2_TUNE_QUIET_CAP; 0: off).
-var QuietCap = 0
+var QuietCap = newTuneInt(0)
 
 // QuietHoldMs: the longest a write waits for the move (HS2_TUNE_QUIET_HOLD).
 var QuietHoldMs = 500
@@ -60,14 +60,14 @@ type capWindow struct {
 func (w *capWindow) add(n int, now int64) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if w.fired || QuietCap <= 0 {
+	if w.fired || QuietCap.Get() <= 0 {
 		return false
 	}
 	if now-w.start > int64(quietCapWin) {
 		w.start, w.n = now, 0
 	}
 	w.n += n
-	if w.n > QuietCap {
+	if w.n > QuietCap.Get() {
 		w.fired = true
 		return true
 	}

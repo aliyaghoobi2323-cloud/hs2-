@@ -186,14 +186,14 @@ func (t *linkFlows) tick(now time.Duration) {
 		keep = append(keep, e)
 		tx := e.st.TxBytes()
 		e.stats.tx.Store(tx)
-		if TuneRT != 0 && TwoWay != 0 {
+		if TuneRT.Get() != 0 && TwoWay.Get() != 0 {
 			e.stats.rx.Store(e.st.RxBytes()) // the other way (rtlane.go)
 		}
 		c, _, confirmed := e.cls.Tick(&e.stats, now)
 		if e.moved {
 			c = ClassBulk // moved for its backlog: bulk here (MovedBulk)
 		}
-		if TuneRT != 0 {
+		if TuneRT.Get() != 0 {
 			a := rtAllowance(&e.cls, confirmed) // rtlane.go
 			e.rtBase.Store(int64(tx))
 			e.rtAllow.Store(a)
@@ -240,7 +240,7 @@ func (t *linkFlows) line(now time.Duration) string {
 	}
 	t.toBulk, t.toLight, t.lineAt = 0, 0, now
 	s := classLine(t.light, t.bulk, t.unknown, b, l)
-	if TuneRT != 0 {
+	if TuneRT.Get() != 0 {
 		s += fmt.Sprintf("; realtime %d (steady %d)", t.rt, t.rtSteady)
 	}
 	return s

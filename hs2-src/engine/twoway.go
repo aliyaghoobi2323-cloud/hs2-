@@ -39,7 +39,7 @@ import "sync/atomic"
 // a call held back on QUIET does not lose its lane.
 
 // TwoWay: 1 on (HS2_TUNE_TWOWAY), 0 off.
-var TwoWay = 1 // the default since R1 round 4 (round4/REPORT.fa.md)
+var TwoWay = newTuneInt(1) // the default since R1 round 4 (round4/REPORT.fa.md)
 
 const (
 	twoWayWin   = 10      // move ticks (1 s)
