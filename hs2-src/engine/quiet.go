@@ -694,7 +694,7 @@ func (gs *groupStream) Read(p []byte) (int, error) {
 }
 
 func (gs *groupStream) Write(p []byte) (int, error) {
-	if QuietCap > 0 && len(p) >= hintWriteMin {
+	if QuietCap.Get() > 0 && len(p) >= hintWriteMin {
 		gs.capEdge(len(p)) // quietcap.go
 	}
 	n, err := gs.g.Write(p)
@@ -874,7 +874,7 @@ func (q *quietSet) moverTick(now int64) {
 		if !due && s.capAt.Load() != 0 {
 			due, dir = true, "up" // the upload cap (quietcap.go)
 		}
-		if due && TwoWay != 0 {
+		if due && TwoWay.Get() != 0 {
 			// the other direction a steady stream of its user: a call, kept
 			// on QUIET; too early to say: the move waits (twoway.go)
 			switch s.rule.twoWay() {
@@ -893,7 +893,7 @@ func (q *quietSet) moverTick(now int64) {
 		}
 		keep = append(keep, s)
 	}
-	if PlaceUsers != 0 && len(dues) > 0 {
+	if PlaceUsers.Get() != 0 && len(dues) > 0 {
 		// the users moving now count for each other's spread (place.go)
 		du := make(map[uint32]int, len(dues))
 		for _, d := range dues {
@@ -906,7 +906,7 @@ func (q *quietSet) moverTick(now int64) {
 			keep = append(keep, d.s)
 		}
 	}
-	if PlaceUsers != 0 && len(dues) > 0 {
+	if PlaceUsers.Get() != 0 && len(dues) > 0 {
 		q.book.setDue(nil)
 	}
 	back := q.backTick(now) // the moved ones that are light again (moveback.go)
@@ -969,7 +969,7 @@ func (q *quietSet) noteHint(id uint32) {
 	}
 	if gs.hintAt.CompareAndSwap(0, ctrlNow()) {
 		q.hinted.Add(1)
-		if QuietCap > 0 {
+		if QuietCap.Get() > 0 {
 			q.kickNow() // move it now, not at the next tick (quietcap.go)
 		}
 	}
@@ -984,7 +984,7 @@ func (q *quietSet) move(gs *groupStream, dir string) bool {
 	var link Link
 	var rel func()
 	ok := false
-	if PlaceUsers != 0 && (PlaceUsers != 3 || q.book.heavy(gs.tag)) {
+	if PlaceUsers.Get() != 0 && (PlaceUsers.Get() != 3 || q.book.heavy(gs.tag)) {
 		var ml *mtcpLink
 		if ml, rel, ok = q.pickBulk(gs.tag); ok { // place.go
 			link = ml
@@ -1018,7 +1018,7 @@ func (q *quietSet) move(gs *groupStream, dir string) bool {
 	gs.mu.Lock()
 	gs.bcs, gs.brel = ml.track(s1), rel
 	qcs, qrel, closed := gs.qcs, gs.qrel, gs.closed
-	if PlaceUsers != 0 && !closed {
+	if PlaceUsers.Get() != 0 && !closed {
 		q.book.add(ml, gs.tag)
 		gs.blink = ml
 	}
@@ -1052,13 +1052,13 @@ func (q *quietSet) line() string {
 		st = "off (the other server has no group streams)"
 	}
 	more := ""
-	if QuietCap > 0 {
+	if QuietCap.Get() > 0 {
 		more += fmt.Sprintf("; capped %d (moved %d, held to the end %d)", capStats.capped.Load(), capStats.moved.Load(), capStats.timeout.Load())
 	}
-	if TwoWay != 0 {
+	if TwoWay.Get() != 0 {
 		more += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
 	}
-	if PlaceUsers != 0 {
+	if PlaceUsers.Get() != 0 {
 		more += "; " + q.book.line()
 	}
 	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d; moved back %d%s",

@@ -31,7 +31,7 @@ type exitGroup struct {
 // Write is the group's, with its big writes timed (the move hint) and,
 // with QuietCap, capped on a QUIET link.
 func (g *exitGroup) Write(p []byte) (int, error) {
-	if QuietCap > 0 && len(p) >= hintWriteMin {
+	if QuietCap.Get() > 0 && len(p) >= hintWriteMin {
 		g.capExit(len(p))
 	}
 	return g.big.write(p, g.Group.Write)
@@ -74,7 +74,7 @@ func (s *exitGroupSet) add(st *smux.Stream, mtr *linkMeter) *exitGroup {
 	}
 	eg := &exitGroup{Group: g}
 	eg.mtr.Store(mtr)
-	eg.twoWay.Store(TwoWay != 0) // pending until the hint loop's first tick (twoway.go)
+	eg.twoWay.Store(TwoWay.Get() != 0) // pending until the hint loop's first tick (twoway.go)
 	s.m[g.ID()] = eg
 	return eg
 }

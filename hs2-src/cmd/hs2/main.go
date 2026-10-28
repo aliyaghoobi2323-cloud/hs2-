@@ -377,13 +377,19 @@ func applyTuning() {
 	// links it is active on; the edge's placement by users) and the call
 	// (a new connection off QUIET past this many bytes of big writes, its
 	// write held at most this many ms; the realtime lane and its rate)
+	// (switches the package's loops read while its tests set them: engine.TuneInt)
+	numT := func(name string, dst *engine.TuneInt) {
+		v := dst.Get()
+		num(name, &v)
+		dst.Set(v)
+	}
 	num("HS2_TUNE_XSHARE", &engine.XShare)
-	num("HS2_TUNE_PLACE_USERS", &engine.PlaceUsers)
-	num("HS2_TUNE_QUIET_CAP", &engine.QuietCap)
+	numT("HS2_TUNE_PLACE_USERS", engine.PlaceUsers)
+	numT("HS2_TUNE_QUIET_CAP", engine.QuietCap)
 	num("HS2_TUNE_QUIET_HOLD", &engine.QuietHoldMs)
-	num("HS2_TUNE_RT", &engine.TuneRT)
+	numT("HS2_TUNE_RT", engine.TuneRT)
 	num("HS2_TUNE_RT_MAX", &engine.RTMax)
-	num("HS2_TUNE_TWOWAY", &engine.TwoWay)        // a connection whose user sends steadily stays on QUIET
+	numT("HS2_TUNE_TWOWAY", engine.TwoWay)        // a connection whose user sends steadily stays on QUIET
 	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany) // QUIET links past 5 links (both ends alike)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)

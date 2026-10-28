@@ -268,7 +268,7 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 			rules[eg] = r
 		}
 		tw := twoWayNo
-		if TwoWay != 0 {
+		if TwoWay.Get() != 0 {
 			// the user sends steadily on it (or may: too early to say): a
 			// call, not a download (twoway.go)
 			r.rx.tick(eg.RxBytes(), now)
@@ -311,10 +311,10 @@ func (s *exitHintSet) line() string {
 	n := len(s.chans)
 	s.mu.Unlock()
 	cap := ""
-	if QuietCap > 0 {
+	if QuietCap.Get() > 0 {
 		cap = fmt.Sprintf("; capped %d (moved %d, held to the end %d)", capStats.capped.Load(), capStats.moved.Load(), capStats.timeout.Load())
 	}
-	if TwoWay != 0 {
+	if TwoWay.Get() != 0 {
 		cap += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
 	}
 	return fmt.Sprintf("move hints: %d streams; sent %d (again %d), none took %d%s", n, s.sent.Load(), s.again.Load(), s.fail.Load(), cap)
