@@ -47,8 +47,7 @@ run() {
 	# binfmt here by design)
 	ktests() {
 		(cd "$SRC/$1" && { grep -ho '^func Test[A-Za-z0-9_]*' *_linux_test.go 2>/dev/null | sed 's/func //'
-			[ "$1" = cmd/hs2 ] && printf '%s
-' TestCPUMeter TestLinkNoNetworkNoLog; } | grep -vx TestMain | sort -u | paste -sd'|')
+			[ "$1" = cmd/hs2 ] && printf '%s\n' TestCPUMeter TestLinkNoNetworkNoLog; } | grep -vx TestMain | sort -u | paste -sd'|')
 	}
 	summary() {
 		echo "   pass $(grep -c '^--- PASS' "$1"), fail $(grep -c '^--- FAIL' "$1"), skip $(grep -c '^--- SKIP' "$1") (top level)"
