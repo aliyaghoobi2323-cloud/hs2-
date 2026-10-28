@@ -141,6 +141,59 @@ type rescuable struct {
 	timer  *time.Timer
 	closed bool
 	moved  chan struct{} // closed when the connection moves (move)
+	// deadMu: one move at a time for a link that died (rescueDead: its
+	// reader and its writer may both see the death)
+	deadMu sync.Mutex
+}
+
+// RescueDead (HS2_TUNE_RESCUE_DEAD; the R1 round-4 judge, the red team's
+// C4): 1 moves a connection whose link dies under it while it may still
+// move — its app has had no byte from the exit, and sent nothing or one TLS
+// hello (kept: the watch above) — to another link at once and sends those
+// bytes again there, as the watch does for a link gone quiet; the exit's
+// answer, if one came, never reached the app, so it does not keep it (a
+// TLS server only answers a hello; nothing else was sent). 0 (the default
+// until measured): it ends with its link, as before. What a death costs a
+// connection that got its answer is not this: R2's group-level resend.
+var RescueDead = newTuneInt(0)
+
+// rescueDead moves the connection off on, whose link died (RescueDead), and
+// reports whether it is on another stream now (it moved, here or meanwhile).
+func (r *rescuable) rescueDead(on *streamOn) bool {
+	if RescueDead.Get() == 0 || r.lm == nil || on.link == nil {
+		return false
+	}
+	r.deadMu.Lock()
+	defer r.deadMu.Unlock()
+	if r.cur.Load() != on {
+		return true // it moved meanwhile
+	}
+	if r.settled.Load() || !linkGone(on.link) || !r.lm.rescue.take(time.Now()) {
+		return false
+	}
+	st, link, release, ok := openStreamOn(r.ctx, r.lm, false, r.port, on.link)
+	if !ok {
+		return false
+	}
+	if r.moveTo(on, &streamOn{st: st, link: link, release: release}, true) {
+		r.lm.noteRescueDead()
+		return true
+	}
+	release()
+	go st.Close()
+	return false
+}
+
+// linkGone reports whether l is dead, allowing its session a moment to say
+// so after one of its streams failed (the stream may learn first).
+func linkGone(l Link) bool {
+	for i := 0; i < 5; i++ {
+		if !l.Alive() {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
 }
 
 // newRescuable wraps the stream st just opened on link for a user connection
@@ -179,6 +232,9 @@ func (r *rescuable) Read(p []byte) (int, error) {
 			r.settleLocked() // the app has its answer: it stays
 		}
 		r.mu.Unlock()
+		if err != nil && n == 0 && r.rescueDead(on) {
+			continue // its link died: it moved (RescueDead)
+		}
 		return n, err
 	}
 }
@@ -230,8 +286,8 @@ func (r *rescuable) writeKept(on *streamOn, p []byte) (int, error) {
 	}()
 	select {
 	case res := <-done:
-		if res.err != nil && r.cur.Load() != on {
-			return len(p), nil
+		if res.err != nil && (r.cur.Load() != on || r.rescueDead(on)) {
+			return len(p), nil // p went out on the new stream with the rest
 		}
 		return res.n, res.err
 	case <-r.moved:
@@ -351,10 +407,15 @@ func linkQuiet(l Link) bool {
 // sent so far, and reports whether it did — it does not when the old stream
 // was answered meanwhile, the app sent what cannot be sent again or the
 // connection ended (all of which settle it), or nw failed.
-func (r *rescuable) move(old, nw *streamOn) bool {
+func (r *rescuable) move(old, nw *streamOn) bool { return r.moveTo(old, nw, false) }
+
+// moveTo is move; dead: old's link died, and the exit's answer, if one came,
+// never reached the app (it would have settled the connection), so the
+// answer does not keep it (RescueDead).
+func (r *rescuable) moveTo(old, nw *streamOn, dead bool) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.closed || r.settled.Load() || r.cur.Load() != old || answered(old.st) {
+	if r.closed || r.settled.Load() || r.cur.Load() != old || !dead && answered(old.st) {
 		return false
 	}
 	if len(r.kept) > 0 {
@@ -422,6 +483,11 @@ type rescueState struct {
 	moved  int // since the last line
 	logAt  time.Time
 	moves  atomic.Int64 // in all
+	// dead: the moves off a link that died (RescueDead), since the last
+	// line and in all
+	dead      int
+	deadLogAt time.Time
+	deadMoves atomic.Int64
 }
 
 // take spends one move from the rate limit, if one is left.
@@ -456,4 +522,22 @@ func (m *LinkManager) noteRescue() {
 	s.logAt, s.moved = now, 0
 	s.mu.Unlock()
 	m.log("mtcp: %d new connection(s) got no answer from the exit on a link that went quiet: moved to another link (their app had sent nothing yet, or a TLS hello, sent again there)", mv)
+}
+
+// noteRescueDead counts a connection moved off a link that died
+// (RescueDead) and logs, throttled.
+func (m *LinkManager) noteRescueDead() {
+	s := &m.rescue
+	s.deadMoves.Add(1)
+	now := m.now()
+	s.mu.Lock()
+	s.dead++
+	if !s.deadLogAt.IsZero() && now.Sub(s.deadLogAt) < rescueLogEvery {
+		s.mu.Unlock()
+		return
+	}
+	mv := s.dead
+	s.deadLogAt, s.dead = now, 0
+	s.mu.Unlock()
+	m.log("mtcp: %d new connection(s) whose link died before any of the exit's bytes reached their app: moved to another link (their app had sent nothing yet, or a TLS hello, sent again there; HS2_TUNE_RESCUE_DEAD)", mv)
 }

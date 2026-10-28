@@ -327,5 +327,70 @@ class ClassVerdicts(unittest.TestCase):
         self.assertIn("game PASS (1/1; floor over the path: dn +100 ms)", s)
 
 
+class KillAndFrozen(unittest.TestCase):
+    """the R1 round-4 judge's kill cell (KILLQ) and frozen downloads (MIX frozen)"""
+
+    def test_kill_summary(self):
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "kill.json"), "w") as f:
+            json.dump({"what": "quiet", "class": "quiet", "peer": "10.202.0.1:5", "n_quiet": 2, "n_bulk": 8,
+                       "killed": 1, "t_rel": 10.02, "clock": "12:00:10.020000"}, f)
+        with open(os.path.join(d, "edge.log"), "w") as f:
+            f.write("12:00:01.000000 mtcp: QUIET link q0 up from 10.202.0.1 (now 1 QUIET)\n"
+                    "12:00:10.030000 mtcp: QUIET link q1 down: reset (now 1 QUIET)\n"
+                    "12:00:11.520000 mtcp: QUIET link q2 up from 10.202.0.1 (now 2 QUIET)\n")
+        su = [{"role": "game"}, {"role": "call"}, {"role": "web"}, {"role": "heavy"}]
+        cl = {"kill_s": 10, "conns": [
+            {"u": 1, "k": "game", "o": 1, "c": 10.05, "x": 10.05},  # cut
+            {"u": 1, "k": "game", "o": 10.3, "c": 40, "x": -1},     # its new one
+            {"u": 2, "k": "call", "o": 1, "c": 40, "x": -1},        # spared
+            {"u": 3, "k": "web", "o": 9.5, "c": 10.1, "x": 10.1},   # cut
+            {"u": 3, "k": "web", "o": 2, "c": 3, "x": -1},          # not live
+            {"u": 4, "k": "dn", "o": 1, "c": 40, "x": -1},          # moved: spared
+            {"u": 4, "k": "dn", "o": 1, "c": 25, "x": 25}],         # cut later: not the kill
+            "recov": [{"u": 1, "k": "game", "cut": 10.05, "back": 0.4},
+                      {"u": 3, "k": "web", "cut": 10.1, "back": -1}],
+            "outage": [{"u": 1, "k": "game", "dir": "dn", "gap_ms": 450, "at": 10},
+                       {"u": 2, "k": "call", "dir": "dn", "gap_ms": 40, "at": 9}]}
+        k = ana.kill_summary(d, cl, su)
+        self.assertEqual((k["live"], k["cut"], k["users_live"], k["users_hit"]), (5, 2, 4, 2))
+        self.assertEqual(k["by_kind"], {"game": [1, 1], "call": [1, 0], "web": [1, 1], "dn": [2, 0]})
+        self.assertEqual(k["by_role"]["heavy"], [1, 0])
+        self.assertEqual((k["recov_n"], k["never"], k["recov_p50"]), (2, 1, 0.4))
+        self.assertAlmostEqual(k["edge_down_s"], 0.01, places=3)
+        self.assertAlmostEqual(k["replace_s"], 1.5, places=3)
+        self.assertEqual(k["outage_ms"]["game_dn"]["max"], 450)
+        m = {}
+        ana.kill_metrics({"kill": k}, m)
+        self.assertAlmostEqual(m["kill_share"], 0.4)
+        self.assertAlmostEqual(m["kill_users_share"], 0.5)
+        self.assertAlmostEqual(m["kill_share_game"], 1.0)
+        self.assertEqual(m["kill_out_game_dn_max"], 450)
+
+    def test_frozen(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "edge.log")
+        with open(p, "w") as f:
+            f.write("12:00:20.000000 mtcp: reset 7 connection(s) on 1 link(s) whose app had taken nothing for 4s"
+                    " while the link's receive buffer was full - x\n"
+                    "12:00:21.000000 mtcp: 1 user(s) held more than 1024 KiB unread on QUIET links (an app not reading): y\n")
+        fl = ana.frozen_log(p)
+        self.assertEqual(fl, {"wedge_reset": 7, "stopped_lines": 0, "held_users": 1})
+        m = {}
+        ana.kill_metrics({"frozen": {"conns": 64, "frozen": 64, "mbytes": 12.5, "edge_log": fl,
+                                     "probe_gap_ms": {"max": 2400, "p50": 210, "probe_p99": 95.0}}}, m)
+        self.assertEqual((m["frz_gap_max"], m["frz_wedge_reset"], m["frz_held_users"]), (2400, 7, 1))
+
+    def test_frozen_spec_and_kill_key(self):
+        d = tempfile.mkdtemp()
+        p = os.path.join(d, "s.json")
+        with redirect_stdout(io.StringIO()):
+            ana.spec("N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=frozen FROZEN=7 FWAVE=4 FROZENU=2 KILLQ=12.5", p)
+        s = json.load(open(p))
+        self.assertEqual(s["kill_s"], 12.5)
+        fz = [u for u in s["users"] if u["role"] == "frozen"]
+        self.assertEqual([f["n"] for u in fz for f in u["flows"]], [4, 3])
+        self.assertEqual(sum(1 for u in s["users"] if u["flows"][0]["kind"] == "probe"), 8)
+
 if __name__ == "__main__":
     unittest.main()

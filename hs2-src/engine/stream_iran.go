@@ -431,7 +431,7 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoi
 			if len(live) > 0 && len(tried) < maxTried && !anyOpened(live) {
 				// an older try still waits for its SYN: the next link now,
 				// not a whole openTimeout later
-				if link, release, ok := pickOpenExcept(lm, tried, !udp); ok {
+				if link, release, ok := pickOpenExcept(lm, tried, !udp, tag); ok {
 					start(link, release)
 				}
 			}
@@ -443,7 +443,7 @@ func openStreamOn(ctx context.Context, lm *LinkManager, udp bool, port int, avoi
 				}
 			}
 			if len(tried) < maxTried && !anyOpened(live) {
-				if link, release, ok := pickOpenExcept(lm, tried, !udp); ok {
+				if link, release, ok := pickOpenExcept(lm, tried, !udp, tag); ok {
 					start(link, release)
 				}
 			}

@@ -173,6 +173,9 @@ func TestClassesLoopback(t *testing.T) {
 	if len(out.Errs) > 0 {
 		t.Fatalf("errors: %v", out.Errs)
 	}
+	if out.KillS != 0 || out.Conns != nil || out.Recov != nil || out.Outage != nil || out.Frozen != nil {
+		t.Fatal("a kill cell's or frozen output without either (cuts.go, frozen.go)")
+	}
 	for _, k := range []string{"game", "gameudp", "call"} {
 		rc, ok := out.Classes[k].(*RTClass)
 		if !ok {
