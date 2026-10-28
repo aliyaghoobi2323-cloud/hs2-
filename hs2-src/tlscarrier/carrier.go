@@ -253,6 +253,13 @@ func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, erro
 // keeps a dial's SYNs close together (the kernel spaces a hanging connect's
 // retransmits 1, 2, 4 s apart), for a caller that retries anyway.
 func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration) (*Carrier, error) {
+	return DialFromTimeoutCaps(addr, sni, sharedKey, bindIP, connect, 0)
+}
+
+// DialFromTimeoutCaps is DialFromTimeout offering extra caps besides this
+// binary's own: the link's class (RoleCaps: the edge one of them, the exit
+// both).
+func DialFromTimeoutCaps(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, extra uint32) (*Carrier, error) {
 	d := net.Dialer{Timeout: connect}
 	if bindIP != "" {
 		ip := net.ParseIP(bindIP)
@@ -291,6 +298,7 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 		return nil, err
 	}
 	h := LocalAuthHdr()
+	h.Caps |= extra & RoleCaps
 	rec, nonce := makeClientAuth(sharedKey, ekm, h)
 	if _, err := u.Write(rec); err != nil {
 		raw.Close()
@@ -307,7 +315,7 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 		return nil, err
 	}
 	raw.SetDeadline(time.Time{})
-	caps := p.Caps & h.Caps // never more than this side has
+	caps := levelCaps(p.Level, p.Caps&h.Caps) // never more than this side has
 	proto.linked(p.Level, caps)
 	return &Carrier{conn: u, level: p.Level, caps: caps}, nil
 }

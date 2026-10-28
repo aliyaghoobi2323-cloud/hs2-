@@ -184,14 +184,26 @@ func (t *exitTraffic) fill(st *PoolStats) {
 	}
 }
 
+// exitStream is a user connection at the exit: a stream, or a group
+// (exitGroup, quiet.go's other end).
+type exitStream interface {
+	io.ReadWriteCloser
+	GetDieCh() <-chan struct{}
+}
+
+var (
+	_ exitStream = (*smux.Stream)(nil)
+	_ exitStream = (*exitGroup)(nil)
+)
+
 // exitCountedStream counts a relayed user connection's bytes.
 type exitCountedStream struct {
-	*smux.Stream
+	exitStream
 	c *exitConn
 }
 
 func (s exitCountedStream) Read(p []byte) (int, error) {
-	n, err := s.Stream.Read(p)
+	n, err := s.exitStream.Read(p)
 	if n > 0 {
 		s.c.bytes.Add(uint64(n))
 	}
@@ -199,11 +211,20 @@ func (s exitCountedStream) Read(p []byte) (int, error) {
 }
 
 func (s exitCountedStream) Write(p []byte) (int, error) {
-	n, err := s.Stream.Write(p)
+	n, err := s.exitStream.Write(p)
 	if n > 0 {
 		s.c.bytes.Add(uint64(n))
 	}
 	return n, err
+}
+
+// guard is the wedge guard of the link a group connection is on now (nil:
+// a stream's, which relayStream was given).
+func (s exitCountedStream) guard() *sessGuard {
+	if g, ok := s.exitStream.(*exitGroup); ok {
+		return g.guard()
+	}
+	return nil
 }
 
 var _ io.ReadWriteCloser = exitCountedStream{}

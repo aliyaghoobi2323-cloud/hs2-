@@ -221,10 +221,20 @@ func TestPeerInfoDirectBothServers(t *testing.T) {
 }
 
 // End to end, REVERSE: the edge sees the exit's applied max, the exit the edge's.
+// With the QUIET links (beta2) both pools hold QuietTotal of their max_links:
+// with QUIET outside max_links (QuietExtra, the default since R1 round 3)
+// one or two links more than max_links.
 func TestPeerInfoReverseBothServers(t *testing.T) {
 	r := startV2(t, v2Opts{min: 2, max: 6, perLink: 8, exitLinks: 2, exitMin: 2, exitMax: 4})
-	r.waitFor("edge learns the exit's 4", 10*time.Second, func() bool { return r.lm.Stats().PeerMax == 4 })
-	r.waitFor("exit learns the edge's 6", 10*time.Second, func() bool { return r.exitView().PeerMax == 6 })
+	exitWant, edgeWant := 4, 6
+	if !QuietOff() {
+		exitWant = QuietTotal(4)
+	}
+	if r.lm.quiet != nil {
+		edgeWant = QuietTotal(6)
+	}
+	r.waitFor(fmt.Sprintf("edge learns the exit's %d", exitWant), 10*time.Second, func() bool { return r.lm.Stats().PeerMax == exitWant })
+	r.waitFor(fmt.Sprintf("exit learns the edge's %d", edgeWant), 10*time.Second, func() bool { return r.exitView().PeerMax == edgeWant })
 }
 
 // Mixed versions: an older exit or an older edge leaves the other side's

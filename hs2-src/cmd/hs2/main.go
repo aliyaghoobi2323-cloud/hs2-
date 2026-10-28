@@ -320,8 +320,50 @@ func applyTuning() {
 	num("HS2_TUNE_SCHED", &engine.TuneSched)     // C2, the scheduler: the old heap and FIFO
 	num("HS2_TUNE_HQG", &engine.TuneHQG)         // C3, the host-queue guard: the fixed mark and sendGate
 	num("HS2_TUNE_SENDCAP", &engine.TuneSendCap) // C4-lite, the pacing cap: the pacing net alone, exit only
+	// R1 round 2 (β2): QUIET/BULK links with the one-time move and α's cap
+	// on BULK links (0: every link as before, level 1's wire), and a
+	// stream's next frame queued once the one before is copied (0: written)
+	num("HS2_TUNE_QUIET", &engine.TuneQuiet)
+	num("HS2_TUNE_EARLYDONE", &engine.TuneEarlyDone)
+	num("HS2_TUNE_ALPHA", &engine.TuneAlpha) // α's cap on BULK links (0: C4-lite's there too)
+	// the judge's fixes to α: C4-lite's cap till the first queue of its
+	// own (0: β2's slow start), and the QUIET link's one-way delay as its
+	// queue (0: srtt − min_rtt)
+	num("HS2_TUNE_ALPHA_START", &engine.TuneAlphaStart)
+	num("HS2_TUNE_OWD", &engine.TuneOWD)
+	num("HS2_TUNE_OWD_QUIET", &engine.TuneOWDQuiet)
+	num("HS2_TUNE_ALPHA_HALF", &engine.AlphaHalf)
+	num("HS2_TUNE_ALPHA_PLATEAU", &engine.AlphaPlateau)
+	num("HS2_TUNE_ALPHA_FREE", &engine.AlphaFree)
+	num("HS2_TUNE_QUIET_REC", &engine.QuietRec)     // lab: QUIET's interactive record sizes
+	num("HS2_TUNE_QUIET_EXTRA", &engine.QuietExtra) // QUIET links next to max_links BULK ones (0: within)
+	// R1 round 3 (γ2): the BULK links' in-flight budget in place of α (0:
+	// α), its queue target a direction (µs) and its share of the way back
+	// on a two-way link (0: the QUIET link's one-way delay alone); the QUIET
+	// links of a pool (0: one, outside max_links), and a QUIET record taking
+	// every frame queued (0, lab: a record a frame)
+	num("HS2_TUNE_BUDGET", &engine.TuneBudget)
+	num("HS2_TUNE_BUDGET_US", &engine.BudgetTargetUs)
+	num("HS2_TUNE_BUDGET_TWOWAY", &engine.BudgetTwoWay)
+	num("HS2_TUNE_BUDGET_LINKOWD", &engine.BudgetLinkOWD)   // a two-way BULK link's own one-way delays (0: the guess)
+	num("HS2_TUNE_BUDGET_PACE", &engine.BudgetPaceK)        // its pacing cap, % of its rate at the target (0: C4-lite's)
+	num("HS2_TUNE_BUDGET_INFLIGHT", &engine.BudgetInflight) // in flight as Linux counts it (0: SIOCOUTQ)
+	num("HS2_TUNE_QUIET_N", &engine.QuietN)
+	num("HS2_TUNE_QUIET_BATCH", &engine.QuietBatch)
+	num("HS2_TUNE_QUIET_LAZY", &engine.QuietLazy) // a QUIET record waits for the socket's unsent bytes (0: none)
+	num("HS2_TUNE_QUIET_THIN", &engine.QuietThin) // TCP_THIN_LINEAR_TIMEOUTS on QUIET sockets (0: none)
+	// C3's gate variants for the judge (decision T12), and C4-lite reading
+	// the writer's waits as not app-limited (lab)
+	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
+	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
+	num("HS2_TUNE_HQG_QUIET_SEGS", &engine.HQGQuietSegs)
+	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
+	}
+	if v, ok := os.LookupEnv("HS2_TUNE_QUIET_CC"); ok {
+		engine.QuietCC = v
+		log.Printf("tuning: HS2_TUNE_QUIET_CC=%q", v)
 	}
 	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
 		tlscarrier.CongestionControl = v
@@ -619,11 +661,17 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		}
 		cfg.RevMin, cfg.RevMax = min, max
 		cfg.RevLinks = engine.WarmSize(min, max)
+		// β2: the edge (the TLS server here) chooses each link's class; the
+		// exit offers both classes on every link it dials
+		var class uint32
+		if !engine.QuietOff() {
+			class = tlscarrier.RoleCaps
+		}
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+			return tlscarrier.DialFromTimeoutCaps(fc.Addr, fc.SNI, key, fc.BindLocalIP, 8*time.Second, class)
 		}
 		cfg.RevDialScout = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialFromTimeout(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second)
+			return tlscarrier.DialFromTimeoutCaps(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second, class)
 		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
 		must(engine.RunKharej(ctx, cfg))

@@ -104,6 +104,63 @@ type Config struct {
 	// NeedStreamBuffer. Nil: the excess is bounded by MaxStreamBuffer alone,
 	// in a session buffer of MaxReceiveBuffer.
 	WindowPool *WindowPool
+
+	// Sched, when set, gives each session a frame scheduler of its own
+	// (hs2's link scheduler, C2) in place of the shaper: every frame goes to
+	// it, control frames in LaneCtrl, and the session's writer takes them
+	// one at a time (sched.go). Nil (the default): the shaper's heap.
+	Sched func() FrameSched
+
+	// FlowInfo, with Sched: the user and the lane of the stream's next data
+	// frame, asked as its writer cuts it. Nil: the user tag of the stream's
+	// SYN, in LaneBulk.
+	FlowInfo func(st *Stream) (tag uint32, lane uint8)
+
+	// BulkFrame, with Sched: the most a bulk data frame carries on a link
+	// that wrote rate bytes/s over the last second (within MaxFrameSize).
+	// Nil: MaxFrameSize.
+	BulkFrame func(rate float64) int
+
+	// LaneFrame, with Sched: the most a latency-lane data frame carries
+	// (within MaxFrameSize). 0: as a bulk one.
+	LaneFrame int
+
+	// UserFrames, with Sched: the most data frames of one user's streams
+	// queued at once; the writer of one more waits in that user's FIFO,
+	// the writers of other users do not. 0: no bound.
+	UserFrames int
+
+	// EarlyDone, with Sched: a stream's writer may queue its next data
+	// frame as soon as the session's writer has copied the one before (its
+	// place among the session's frames is then fixed), not once that one
+	// is written: a stream has one frame queued while one is written, so a
+	// user of one stream still has a frame queued each time the writer
+	// takes the next (P10 (b)). False: the writer waits for the write.
+	EarlyDone bool
+
+	// UserMem, with Sched: the account of a user's queued bytes, asked once
+	// per user as its first frame is queued. The session calls it with the
+	// bytes of each data frame it queues (n > 0) and takes (n < 0): for a
+	// frame it may refuse (false; force: the user has nothing else queued in
+	// the session, it must take it), and the frame's writer waits as for
+	// UserFrames. Nil: no account.
+	UserMem func(tag uint32) func(n int, force bool) bool
+
+	// BulkGate, with Sched: the session's writer asks it before it writes a
+	// bulk-lane data frame of size bytes (hs2's in-flight budget of a BULK
+	// link, R1 round 3 γ2): 0 or less, write it now; more, ask again within
+	// that long. While a bulk frame waits so, the writer still writes the
+	// control and latency lanes' frames (a FrameSched that is an
+	// UrgentSched) as they come, and the frame keeps its place: no other
+	// bulk frame goes before it. Nil: bulk frames go as they are taken.
+	BulkGate func(size int) time.Duration
+
+	// FlushEach, with Sched (lab, the γ2 batching's measure): the writer
+	// flushes a conn that holds back a tail (hs2's shaper) after each frame
+	// that is not bulk, even with more frames queued: no record carries two
+	// of them. False (the default): it flushes once it runs out of frames,
+	// so a record takes everything queued by then (no wait for more).
+	FlushEach bool
 }
 
 // DefaultConfig is used to return a default configuration
@@ -181,6 +238,13 @@ func VerifyConfig(config *Config) error {
 		}
 	} else if config.WindowPool != nil {
 		return errors.New("window pool requires need stream buffer")
+	}
+	if config.LaneFrame < 0 || config.UserFrames < 0 {
+		return errors.New("lane frame and user frames must not be negative")
+	}
+	if config.Sched == nil && (config.FlowInfo != nil || config.BulkFrame != nil || config.LaneFrame != 0 ||
+		config.UserFrames != 0 || config.UserMem != nil || config.BulkGate != nil || config.FlushEach) {
+		return errors.New("flow info, bulk frame, lane frame, user frames, user mem, bulk gate and flush each require a frame scheduler")
 	}
 	return nil
 }

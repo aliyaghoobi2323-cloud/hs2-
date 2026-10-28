@@ -185,7 +185,11 @@ func TestSendGateEndsOnClose(t *testing.T) {
 // A link session over a slow socket finds the link slow from its own writes
 // (meteredConn) and gates its socket: what the socket holds unsent stays near
 // half TCP_NOTSENT_LOWAT, and the bulk stream still moves at the link's rate.
+// (sendGate is the link's with C3 off, HS2_TUNE_HQG=0; C3 has its own,
+// hostq_test.go.)
 func TestSessionGatesASlowLink(t *testing.T) {
+	defer func(v int) { TuneHQG = v }(TuneHQG)
+	TuneHQG = 0
 	const rate = 1 << 20
 	tc := slowSink(t, rate)
 	mtr := &linkMeter{statsPoll: make(chan struct{}, 1)}

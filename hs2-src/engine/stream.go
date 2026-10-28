@@ -127,6 +127,20 @@ func (w *watchConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// Flush flushes what the conns under it hold back (the shaper's tail): smux's
+// writer, as it runs out of frames (C2).
+func (w *watchConn) Flush() error {
+	f, ok := w.Conn.(interface{ Flush() error })
+	if !ok {
+		return nil
+	}
+	err := f.Flush()
+	if err != nil {
+		w.fail("write", err)
+	}
+	return err
+}
+
 // reasonPeerClosed is describeNetErr's words for a clean close by the peer: EOF
 // at a TLS record boundary — after its close_notify (how the edge ends a link it
 // retires), or after a bare TCP FIN (crypto/tls reports both as io.EOF, so they
@@ -175,16 +189,57 @@ func describeNetErr(err error) string {
 // Every session is watched by the wedge guard (wedge.go); its guard is left in
 // meter.guard for the relays on the link. A session that can grow windows
 // past NeedStreamBuffer gets a window core (wcore_run.go), left in meter.wc.
+// The link has every R1 core this binary has (newSessionCaps).
 func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter) (*smux.Session, func() string, error) {
+	return newSessionCaps(conn, server, sampler, meter, tlscarrier.LocalAuthHdr().Caps)
+}
+
+// newSessionCaps is newSession for a link whose ends both have caps (the
+// carrier's, as negotiated): a core runs on it only when its bit is there
+// and its kill switch is not set. C2 (linksched.go): smux's frame scheduler
+// in place of its shaper, the shaper's tail carried from frame to frame;
+// C3: the host-queue guard under the shaper in place of sendGate; C4-lite:
+// the pacing cap of the link socket. The cores' runner steps the link.
+func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *linkMeter, caps uint32) (*smux.Session, func() string, error) {
 	var sp atomic.Pointer[smux.Session]
-	gate := newSendGate(conn)
-	var c net.Conn = newShapedConn(gate, sampler)
+	sched := !SchedOff() && caps&tlscarrier.CapSched != 0
+	guardOn := !HostQOff() && caps&tlscarrier.CapHostQ != 0
+	capOn := !SendCapOff() && caps&tlscarrier.CapSendCap != 0
+	tc := tcpUnder(conn)
+	var bottom net.Conn
+	var gate *sendGate
+	var hq *hostQ
+	if guardOn {
+		hc := &hostQConn{Conn: conn, tcp: tc}
+		sys, ok := conn.(hostSys) // (a test's emulated socket)
+		if !ok {
+			sys = newHostSys(conn)
+		}
+		if sys != nil {
+			sys = gateSys{sys, hc}
+		}
+		hq = newHostQ(conn, sys)
+		if quiet, _ := classOf(caps); quiet && HQGQuietSegs >= 0 {
+			hq.gate.segs = HQGQuietSegs // (lab: a QUIET link's own gate variant)
+		}
+		hc.h = hq
+		bottom = hc
+	} else {
+		gate = newSendGate(conn)
+		bottom = gate
+	}
+	if q, _ := classOf(caps); q && QuietRec != 0 {
+		sampler = obfs.NewInteractiveLengthSampler() // (lab: QUIET's records, quiet.go)
+	}
+	shaped := newShapedConn(bottom, sampler)
+	shaped.carry = sched
+	var c net.Conn = shaped
 	if meter != nil {
-		c = &meteredConn{Conn: c, m: meter, gate: gate}
+		c = &meteredConn{Conn: c, m: meter, gate: gate, hq: hq}
 	}
 	w := &watchConn{Conn: c}
 	w.onErr = func() {
-		gate.Close() // conn's Close, ending a write waiting at the gate
+		bottom.Close() // conn's Close, ending a write waiting at the gate
 		if s := sp.Load(); s != nil {
 			s.Close()
 		}
@@ -192,6 +247,46 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 	var sess *smux.Session
 	var err error
 	cfg := newSmuxConfig()
+	var flows *linkFlows
+	if sched {
+		flows = &linkFlows{}
+		cfg.Sched = newSchedAdapter
+		cfg.FlowInfo = flows.info
+		cfg.BulkFrame = BulkFrameSize
+		cfg.LaneFrame = laneData
+		cfg.UserFrames = schedUserFrames
+		cfg.UserMem = userMems.handle
+		cfg.EarlyDone = !EarlyDoneOff() // P10 (b): a stream's next frame queued while one is written
+	}
+	// β2 (quiet.go): a BULK link's sockets get α's cap in place of
+	// C4-lite's; QUIET ones, and links of no class, keep C4-lite
+	quietLink, bulkLink := classOf(caps)
+	// γ2 (budget.go): a BULK link's in-flight budget at its writer's bulk
+	// lane, in place of α's rate cap (C4-lite's stays, the outer one)
+	var lb *linkBudget
+	if sched && bulkLink && capOn && !BudgetOff() {
+		if lb = newLinkBudget(newOutQ(tc)); lb != nil {
+			cfg.BulkGate = lb.gate
+		}
+	}
+	if sched && quietLink && QuietBatch == 0 {
+		cfg.FlushEach = true // (lab: γ2's batching measured against none)
+	}
+	if quietLink {
+		shaped.count = true // the QUIET records' tallies (the status line)
+		if sched && QuietBatch != 0 && QuietLazy != 0 && hq != nil && hq.sys != nil && hq.fb.Load() == nil {
+			shaped.lazy = hq.sys.notsent // a tail waits for the socket's unsent bytes (shape.go)
+		}
+	}
+	if quietLink && QuietThin != 0 {
+		setThinTimeouts(tc) // (best effort: a kernel without it keeps its back-off)
+	}
+	if quietLink && QuietCC != "" {
+		// a QUIET link carries light traffic only: BBR's PROBE_RTT (its
+		// window at 4 segments for 200 ms each 10 s) would hold every
+		// user's probe that moment, 198 of them a padded record each
+		tlscarrier.SetCongestion(tc, QuietCC)
+	}
 	if server {
 		sess, err = smux.Server(w, cfg)
 	} else {
@@ -207,8 +302,41 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 		meter.guard = g
 	}
 	guards.add(g)
-	if wc := wcores.add(sess, cfg, gate.tcp, meter, server, conn.RemoteAddr()); wc != nil && meter != nil {
+	wc := wcores.add(sess, cfg, tc, meter, server, conn.RemoteAddr())
+	if wc != nil && meter != nil {
 		meter.wc = wc
+	}
+	// C4-lite on every link socket at both ends, and C3's readings of it
+	var scl *sendCapLink
+	if capOn || hq != nil {
+		if sys := newCapSys(tc); sys != nil {
+			scl = newSendCapLink(sys, hq)
+			scl.core.linked, scl.core.off = true, !capOn
+			scl.core.alpha = bulkLink && !AlphaOff() && lb == nil
+			scl.budget = lb
+			if meter != nil {
+				meter.owd.sys = sys // a message's stamp: when it leaves the host
+			}
+			if bulkLink && meter != nil {
+				scl.owd = &meter.owd // α's one-way delays (owd.go)
+			}
+			if meter != nil && SendCapBlocked != 0 {
+				scl.blocked = meter.blockedNs
+			}
+			if wc != nil && capOn {
+				wc.sc.Store(scl) // the pacing net hands its cap here: the lesser holds
+			}
+		} else if hq != nil {
+			scl = newSendCapLink(nil, hq) // C3 on the link's written rate alone
+		}
+	}
+	// (a budget whose socket no runner reads keeps its gate open: B 0)
+	if scl != nil || flows != nil {
+		cl := &coreLink{sess: sess, mtr: meter, sc: scl, hq: hq, flows: flows}
+		if quietLink {
+			cl.shp = shaped
+		}
+		coreLinks.add(cl)
 	}
 	return sess, w.reason, nil
 }
