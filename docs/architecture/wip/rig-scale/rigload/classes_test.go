@@ -144,14 +144,26 @@ func TestWebOf(t *testing.T) {
 // package, every kind for a few seconds
 func TestClassesLoopback(t *testing.T) {
 	dir := t.TempDir()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	pc, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		t.Fatal(err)
+	// one port for TCP and UDP: the kernel's free TCP port may be taken on
+	// UDP by another program (the CI saw EADDRINUSE), so try a few
+	var (
+		ln   net.Listener
+		pc   net.PacketConn
+		addr string
+		err  error
+	)
+	for try := 0; ; try++ {
+		if ln, err = net.Listen("tcp", "127.0.0.1:0"); err != nil {
+			t.Fatal(err)
+		}
+		addr = ln.Addr().String()
+		if pc, err = net.ListenPacket("udp", addr); err == nil {
+			break
+		}
+		ln.Close()
+		if try == 20 {
+			t.Fatalf("no port free on both TCP and UDP in 20 tries: %v", err)
+		}
 	}
 	defer ln.Close()
 	defer pc.Close()
