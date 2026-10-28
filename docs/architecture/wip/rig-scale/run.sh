@@ -139,14 +139,18 @@ run_one() {
   local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
-  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP
+  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF
   WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=
+  # the rigload server's (the panel's) send buffer a connection, bytes (R1
+  # round 4: autotuned it held ~5 MB a connection on loopback, 1.2 GB for 400
+  # downloads: rigguard.sh; 0: autotuned, as before)
+  PANEL_SNDBUF=262144
   for tok in $cell; do
     k=${tok%%=*}; v=${tok#*=}
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
     case "$k" in
       HS2_*) hs2env="$hs2env $k=$v" ;;
-      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP) printf -v "$k" '%s' "$v" ;;
+      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF) printf -v "$k" '%s' "$v" ;;
     esac
   done
   bp=$(binpath "$bin")
@@ -159,7 +163,7 @@ run_one() {
   # (%CPU over 0.5 s, command name only)
   hup=$(uptime | sed 's/^ *//' | tr -d '"\\')
   htop=$(top -bn2 -d0.5 -w 200 2>/dev/null | awk '/^top -/{f++} f==2 && /^ *[0-9]+ /{print $9" "$12}' | head -5 | paste -sd';' | tr -d '"\\')
-  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
+  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"panel_sndbuf\":${PANEL_SNDBUF:-0},\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
   local mx0 ok0
   mx0=$(memcg_ev max); ok0=$(memcg_ev oom_kill)
@@ -191,7 +195,7 @@ run_steps() {
   udp=0; grep -q '"kind": "gameudp"' "$r/spec.json" && udp=1
   mkconf "$w" "$N" $udp || { why="hs2 config"; return 1; }
   # the server keeps each game and call flow's record in srv/ (the client reads it)
-  ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 -report "$r/srv" > "$r/rigload-server.log" 2>&1 &
+  ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 -report "$r/srv" -sndbuf "$PANEL_SNDBUF" > "$r/rigload-server.log" 2>&1 &
   PIDS+=($!)
   ip netns exec $E $te env HS2_NO_TUNE=1 $hs2env "$bp" run -c "$w/edge.json" > "$r/edge.log" 2>&1 &
   pe=$!; PIDS+=($pe)
