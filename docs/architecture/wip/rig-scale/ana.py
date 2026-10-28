@@ -78,7 +78,11 @@ F_REC = 0.9743  # T17: hs2's record framing, (991.4 - 4) / (991.4 + 22)
 LOST_MAX = 0.01  # more lost probes or pings than this: p99 over all sent is infinite
 REQ = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX", "BIN"]
 CLASS_MIXES = ["home", "gamer_vs_dl", "stream_vs_dl"]
-MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping"] + CLASS_MIXES
+MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping", "frozen"] + CLASS_MIXES
+# a kill cell (KILLQ=T, run.sh: one link of the edge reset T s after the
+# client starts) counts a connection as cut by it when it ended within this
+# many s after the kill
+KILL_WIN = 5.0
 ORDER = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX"]
 # the class mixes: users in this order, repeated (USERS need not be a multiple)
 CLASS_TEMPLATE = {
@@ -166,6 +170,10 @@ def schedule(plan, reps):
             die("%s:%d: V6=%d is a TUN user (TUN=%d takes the first users); the IPv6 port user must be a port user" % (plan, ln, v6, k))
         if d["MIX"] == "tunping" and k < 1:
             die("%s:%d: tunping needs TUN >= 1" % (plan, ln))
+        if "KILLQ" in d and not re.match(r"^\d+(\.\d+)?$", d["KILLQ"]):
+            die("%s:%d: KILLQ %s (seconds after the client starts)" % (plan, ln, d["KILLQ"]))
+        if d.get("KILLWHAT", "quiet") not in ("quiet", "bulk", "any"):
+            die("%s:%d: KILLWHAT %s (quiet, bulk, any)" % (plan, ln, d["KILLWHAT"]))
         c = cell_str(d)
         if c not in cells:
             cells[c] = []
@@ -278,6 +286,24 @@ def spec(cellstr, path):
         users[0]["flows"].append({"kind": d.get("TUNDIR", "dn"), "n": num(d, "TDN", 4), "start_s": 0})
         users[0]["flows"].append(ping())
         light = list(range(1, U))
+    elif mix == "frozen":
+        # the red team's C5 (R1 round-4 judge; rigload frozen.go): FROZENU (1)
+        # users whose app stops reading, FROZEN (64) downloads between them,
+        # FWAVE (32) a second from WARM on, each read for FREAD s (1) with a
+        # FRCVBUF B (16384) receive buffer, then held unread; the other users
+        # probe
+        fu = num(d, "FROZENU", 1)
+        need(fu + 1)
+        nf, wave = num(d, "FROZEN", 64), num(d, "FWAVE", 32)
+        fread, frcv = float(d.get("FREAD", "1")), num(d, "FRCVBUF", 16384)
+        if nf < 1 or wave < 1 or fread <= 0 or frcv < 1024:
+            die("FROZEN, FWAVE >= 1, FREAD > 0, FRCVBUF >= 1024")
+        for j in range(fu):
+            n = nf // fu + (1 if j < nf % fu else 0)
+            users[j]["role"] = "frozen"
+            users[j]["flows"].append({"kind": "frozen", "n": n, "start_s": warm, "wave": max(1, wave // fu),
+                                      "read_s": fread, "rcvbuf": frcv})
+        light = list(range(fu, U))
     elif mix in CLASS_MIXES:
         # the user classes (rigload classes.go), CLASS_TEMPLATE repeated over
         # USERS: GAME=tcp|udp|both (both: the players alternate, TCP first),
@@ -354,6 +380,10 @@ def spec(cellstr, path):
          "tun_ping": "10.77.0.2", "tun_ping6": "fd00:77::2",
          "probe_ms": 200, "probe_bytes": 32, "ping_ms": 200,
          "users": users, "windows": windows}
+    if "KILLQ" in d:
+        # a kill cell: run.sh resets one link at KILLQ s; the client logs the
+        # connections and opens cut ones again (rigload cuts.go)
+        s["kill_s"] = float(d["KILLQ"])
     if n4 > 500 or nt > 500:
         die("%d IPv4 port users, %d TUN users (at most 500 each)" % (n4, nt))
     with open(path, "w") as f:
@@ -469,6 +499,97 @@ def status_lines(path):
         return []
 
 
+def pctl(v, p):
+    """the p-quantile of v (nearest rank); None when v is empty"""
+    if not v:
+        return None
+    v = sorted(v)
+    return v[max(0, int(math.ceil(p * len(v))) - 1)]
+
+
+def log_lines(path, pat):
+    """(seconds of the day, text) of the hs2 log lines (HH:MM:SS.ffffff first)
+    whose text matches pat"""
+    out = []
+    try:
+        for l in open(path, errors="replace"):
+            mt = re.match(r"^(\d\d):(\d\d):(\d\d(?:\.\d+)?) (.*)$", l.rstrip("\n"))
+            if mt and re.search(pat, mt.group(4)):
+                out.append((int(mt.group(1)) * 3600 + int(mt.group(2)) * 60 + float(mt.group(3)), mt.group(4)))
+    except OSError:
+        pass
+    return out
+
+
+def day_s(clock):
+    """seconds of the day of HH:MM:SS.fff (None: not one)"""
+    mt = re.match(r"^(\d\d):(\d\d):(\d\d(?:\.\d+)?)$", clock or "")
+    return int(mt.group(1)) * 3600 + int(mt.group(2)) * 60 + float(mt.group(3)) if mt else None
+
+
+def kill_summary(r, cl, su):
+    """a kill cell (run.sh KILLQ; rigload cuts.go): what one link's reset at
+    the edge cut. A connection is live at the kill when it opened before and
+    ended after it; cut by it when it ended cut (before its flow's stop)
+    within KILL_WIN s. Users: those with a live connection, and those that
+    lost one. Recovery: each cut flow's time to carry data again (-1 never).
+    Outage: each game, call and probe flow's longest gap between two
+    messages from 2 s before the kill (per direction). The edge's log gives
+    when it saw the link end and when a link of the same class came up
+    again (QUIET: "QUIET link qN up"; else "link N up")."""
+    kj = readj(r + "/kill.json", {})
+    t = kj.get("t_rel", cl["kill_s"])
+    out = {k: kj.get(k) for k in ("what", "class", "peer", "n_quiet", "n_bulk", "killed", "clock")}
+    out.update({"planned_s": cl["kill_s"], "at_s": t})
+    roles = {i + 1: (u.get("role") or "?") for i, u in enumerate(su)}
+    conns = cl.get("conns") or []
+    live = [c for c in conns if c["o"] <= t < c["c"]]
+    cut = [c for c in live if c["x"] >= 0 and t - 0.05 <= c["x"] <= t + KILL_WIN]
+    cut_ids = {id(c) for c in cut}
+    by_kind, by_role = {}, {}
+    for c in live:
+        b = by_kind.setdefault(c["k"], [0, 0])
+        b[0] += 1
+        b[1] += id(c) in cut_ids
+    ul, uh = {c["u"] for c in live}, {c["u"] for c in cut}
+    for u in ul:
+        b = by_role.setdefault(roles.get(u, "?"), [0, 0])
+        b[0] += 1
+        b[1] += u in uh
+    rc = [x for x in cl.get("recov") or [] if t - 0.05 <= x["cut"] <= t + KILL_WIN]
+    back = [x["back"] for x in rc if x["back"] >= 0]
+    out.update({"live": len(live), "cut": len(cut), "share": round(len(cut) / len(live), 4) if live else None,
+                "users_live": len(ul), "users_hit": len(uh),
+                "users_share": round(len(uh) / len(ul), 4) if ul else None,
+                "by_kind": by_kind, "by_role": by_role,
+                "recov_n": len(rc), "never": len(rc) - len(back),
+                "recov_p50": pctl(back, 0.5), "recov_p95": pctl(back, 0.95), "recov_max": max(back) if back else None})
+    og = {}
+    for o in cl.get("outage") or []:
+        og.setdefault("%s_%s" % (o["k"], o["dir"]), []).append(o["gap_ms"])
+    out["outage_ms"] = {k: {"p50": pctl(v, 0.5), "max": max(v), "n": len(v),
+                            "over_1s": sum(1 for x in v if x > 1000)} for k, v in og.items()}
+    k0 = day_s(kj.get("clock"))
+    if k0 is not None:
+        after = lambda pat: next(((s - k0) % 86400 for s, _ in log_lines(r + "/edge.log", pat)
+                                  if 0 <= (s - k0) % 86400 < 600), None)
+        quiet = kj.get("class") == "quiet"
+        out["edge_down_s"] = after(r"QUIET link q\d+ down" if quiet else r"(reverse )?link \d+ (from \S+ )?down")
+        out["replace_s"] = after(r"QUIET link q\d+ up" if quiet else r"(reverse )?link \d+ up")
+    return out
+
+
+def frozen_log(path):
+    """the edge's wedge guard and QUIET hold lines in a frozen cell: the
+    connections it reset, the links that stopped reading, the users held"""
+    reset = sum(int(m.group(1)) for _, x in log_lines(path, r"^mtcp: reset \d+ connection")
+                for m in [re.match(r"^mtcp: reset (\d+)", x)] if m)
+    stopped = len(log_lines(path, r"stopped reading for several seconds"))
+    held = sum(int(m.group(1)) for _, x in log_lines(path, r"user\(s\) held more than")
+               for m in [re.match(r"^mtcp: (\d+) user", x)] if m)
+    return {"wedge_reset": reset, "stopped_lines": stopped, "held_users": held}
+
+
 def compose(r, ok, why):
     meta = readj(r + "/meta.json", {})
     cell = parse_cell(meta.get("cell", ""))
@@ -536,6 +657,10 @@ def compose(r, ok, why):
             rec["client_notes"] = cl["notes"]
         if cl.get("errs"):
             rec["client_errs"] = cl["errs"]
+        if cl.get("kill_s"):
+            rec["kill"] = kill_summary(r, cl, su)
+        if cl.get("frozen"):
+            rec["frozen"] = dict(cl["frozen"], edge_log=frozen_log(r + "/edge.log"))
     rec["cpu"] = pidstat(r + "/pidstat.txt", {"edge": links.get("pid_edge"), "exit": links.get("pid_exit")})
     rec["retrans"] = rt
     mem = {}
@@ -756,7 +881,43 @@ def host_metrics(rec, m):
     m["rt_edge"] = rec.get("retrans", {}).get("edge", {}).get("pct")
     m["links"] = rec.get("links", {}).get("end")
     m["busy"] = rec.get("host_busy_pct")
+    kill_metrics(rec, m)
     return m
+
+
+def kill_metrics(rec, m):
+    """a kill cell's and a frozen cell's numbers, for the median of the repeats"""
+    k = rec.get("kill")
+    if k and k.get("live"):
+        m["kill_live"] = k["live"]
+        m["kill_share"] = k["share"]
+        m["kill_users_share"] = k["users_share"]
+        m["kill_users_hit"] = k["users_hit"]
+        m["kill_users_live"] = k["users_live"]
+        m["kill_never"] = k["never"]
+        for q in ("recov_p50", "recov_p95", "recov_max", "replace_s", "edge_down_s"):
+            if k.get(q) is not None:
+                m["kill_" + q] = k[q]
+        for kind, (lv, ct) in k.get("by_kind", {}).items():
+            m["kill_share_" + kind] = ct / lv if lv else 0
+        for role, (lv, ht) in k.get("by_role", {}).items():
+            m["kill_users_" + role] = ht / lv if lv else 0
+        for key, o in k.get("outage_ms", {}).items():
+            m["kill_out_%s_p50" % key] = o["p50"]
+            m["kill_out_%s_max" % key] = o["max"]
+    f = rec.get("frozen")
+    if f:
+        g = f.get("probe_gap_ms", {})
+        for a, b in (("max", "frz_gap_max"), ("p50", "frz_gap_p50"), ("probe_p99", "frz_probe_p99"),
+                     ("probe_max", "frz_probe_max"), ("probe_lost", "frz_probe_lost")):
+            if a in g:
+                m[b] = g[a]
+        m["frz_conns"] = f.get("conns")
+        m["frz_frozen"] = f.get("frozen")
+        m["frz_mbytes"] = f.get("mbytes")
+        el = f.get("edge_log", {})
+        m["frz_wedge_reset"] = el.get("wedge_reset", 0)
+        m["frz_held_users"] = el.get("held_users", 0)
 
 
 def stream_fair(rec, cap10):
@@ -967,6 +1128,30 @@ def analyze(path, as_json=False):
             print("   of which TUN users (inner goodput) dn %s  up %s Mbit/s" % (fmt(md["tun_dn"], 2), fmt(md.get("tun_up"), 2)))
         print("   CPU %% (one core = 100): edge %s  exit %s   retrans %%: exit %s  edge %s" % (
             fmt(md.get("cpu_edge")), fmt(md.get("cpu_exit")), fmt(md.get("rt_exit"), 3), fmt(md.get("rt_edge"), 3)))
+        if "kill_share" in md:
+            f_ = lambda k, p=2, pct=False: fmt(md.get(k), p, pct)
+            print("   kill: connections cut %s of %s live (%s), users hit %s of %s (%s); recovery p50 %s p95 %s max %s s, never %s; "
+                  "edge saw the end after %s s, a replacement up after %s s" % (
+                      f_("kill_share", 3), f_("kill_live", 0), f_("kill_share", pct=True), f_("kill_users_hit", 0),
+                      f_("kill_users_live", 0), f_("kill_users_share", pct=True), f_("kill_recov_p50"), f_("kill_recov_p95"),
+                      f_("kill_recov_max"), f_("kill_never", 0), f_("kill_edge_down_s"), f_("kill_replace_s")))
+            ks = sorted(k[11:] for k in md if k.startswith("kill_share_"))
+            if ks:
+                print("      cut by kind: " + "  ".join("%s %s" % (k, f_("kill_share_" + k, pct=True)) for k in ks))
+            kr = sorted(k[11:] for k in md if k.startswith("kill_users_") and k[11:] not in ("hit", "live", "share"))
+            if kr:
+                print("      users hit by role: " + "  ".join("%s %s" % (k, f_("kill_users_" + k, pct=True)) for k in kr))
+            ko = sorted(k[9:-4] for k in md if k.startswith("kill_out_") and k.endswith("_max"))
+            if ko:
+                print("      longest gap ms (p50 / max over flows): " + "  ".join(
+                    "%s %s / %s" % (k, f_("kill_out_%s_p50" % k, 0), f_("kill_out_%s_max" % k, 0)) for k in ko))
+        if "frz_conns" in md:
+            f_ = lambda k, p=1: fmt(md.get(k), p)
+            print("   frozen: %s downloads (%s frozen, %s MB read before), the probes' longest gap max %s p50 %s ms, "
+                  "probe p99 %s max %s ms lost %s; the edge's wedge guard reset %s, users held %s" % (
+                      f_("frz_conns", 0), f_("frz_frozen", 0), f_("frz_mbytes"), f_("frz_gap_max", 0), f_("frz_gap_p50", 0),
+                      f_("frz_probe_p99"), f_("frz_probe_max"), f_("frz_probe_lost", 0), f_("frz_wedge_reset", 0),
+                      f_("frz_held_users", 0)))
         if "util_dn" in md:
             print_classes(s, md)
         if s.get("verdict"):

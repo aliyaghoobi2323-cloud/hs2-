@@ -23,6 +23,11 @@
 #          addresses and hs0 in IPv6), WARM, DUR, SETTLE (s), AGGQ_MS,
 #          POLICE_BURST_MS, and any HS2_*=V, passed to both hs2 processes (the
 #          R1 kill switches, for example).
+#          KILLQ=T, KILLWHAT=quiet|bulk|any (R1 round-4 judge): one link of
+#          the edge is reset T s after the client starts (killlink; the
+#          client logs its connections and opens cut ones again, ana.py
+#          "kill"); MIX frozen (FROZEN, FWAVE, FREAD, FRCVBUF, FROZENU):
+#          downloads whose app stops reading next to probes.
 #
 # Lines that differ only in BIN form one cell; the cell runs in the order
 # ABBABA (A = old) for REPS (3) repeats each; a cell with one BIN runs REPS
@@ -128,6 +133,41 @@ sssnap() {
   head -1 /proc/stat > "$r/stat-$tag.txt"
 }
 
+# killlink R WHAT C0 (KILLQ, R1 round-4 judge): reset one link socket of the
+# edge with ss -K (SOCK_DESTROY: the edge's socket fails, the exit gets a
+# reset, as from a DPI box) — the busiest one (bytes acked + received) of
+# class WHAT: quiet (the QUIET links' sockets run cubic) or bulk (bbr); any:
+# the busiest of all; a pool without QUIET links (production) falls back to
+# any. kill.json: what, the link's class and peer, the classes' counts, how
+# many sockets ss killed, and when (s after the client's start C0, and the
+# hs2 log's clock).
+killlink() {
+  local r=$1 what=$2 c0=$3 t clk pick cls nq nb killed
+  t=$(date +%s.%N); clk=$(date +%H:%M:%S.%N | cut -c1-15)
+  ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-kill.txt" 2>/dev/null
+  read -r pick cls nq nb < <(awk -v want="$what" '
+    /^[0-9]/ { peer = $4; next }
+    peer != "" {
+      cc = ($0 ~ / cubic /) ? "quiet" : "bulk"
+      b = 0
+      if (match($0, /bytes_acked:[0-9]+/)) b += substr($0, RSTART + 12, RLENGTH - 12)
+      if (match($0, /bytes_received:[0-9]+/)) b += substr($0, RSTART + 15, RLENGTH - 15)
+      n[cc]++
+      if ((want == "any" || cc == want) && (bp == "" || b > best)) { best = b; bp = peer; bc = cc }
+      if (ap == "" || b > anyb) { anyb = b; ap = peer; ac = cc }
+      peer = ""
+    }
+    END {
+      if (bp == "") { bp = ap; bc = ac }
+      printf "%s %s %d %d\n", (bp == "" ? "none" : bp), (bc == "" ? "none" : bc), n["quiet"], n["bulk"]
+    }' "$r/ss-edge-kill.txt")
+  killed=0
+  if [ "$pick" != none ]; then
+    killed=$(ip netns exec $E ss -K -tnH state established "( sport = :2096 and dst $pick )" 2>&1 | grep -c '^[0-9]')
+  fi
+  echo "{\"what\":\"$what\",\"class\":\"$cls\",\"peer\":\"$pick\",\"n_quiet\":${nq:-0},\"n_bulk\":${nb:-0},\"killed\":${killed:-0},\"t_rel\":$(awk -v a="$c0" -v b="$t" 'BEGIN{printf "%.3f", b - a}'),\"clock\":\"$clk\"}" > "$r/kill.json"
+}
+
 # this process's cgroup (v2), and a counter of its memory.events (0: none;
 # RIG_GUARD=cap's)
 memcg_dir() { echo "/sys/fs/cgroup$(awk -F: '$1 == "0" {print $3}' /proc/self/cgroup)"; }
@@ -145,8 +185,8 @@ run_one() {
   local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
-  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF
-  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=
+  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF KILLQ KILLWHAT
+  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=; KILLQ=; KILLWHAT=quiet
   # the rigload server's (the panel's) send buffer a connection, bytes (R1
   # round 4, opt-in: autotuned, the default 0, it holds ~5 MB a connection
   # on loopback, 1.2 GB for 400 downloads; a bound changes what the
@@ -157,7 +197,7 @@ run_one() {
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
     case "$k" in
       HS2_*) hs2env="$hs2env $k=$v" ;;
-      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF) printf -v "$k" '%s' "$v" ;;
+      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF|KILLQ|KILLWHAT) printf -v "$k" '%s' "$v" ;;
     esac
   done
   bp=$(binpath "$bin")
@@ -257,6 +297,13 @@ run_steps() {
   pc=$!; PIDS+=($pc)
   c0=$(date +%s.%N)
   echo "$c0" > "$r/client-t0.txt"
+  # KILLQ=T (R1 round-4 judge, the red team's C4): one link of the edge is
+  # reset T s after the client starts (killlink)
+  if [ -n "$KILLQ" ]; then
+    ( sleep "$(awk -v c="$c0" -v k="$KILLQ" -v n="$(date +%s.%N)" 'BEGIN{s = c + k - n; if (s < 0) s = 0; printf "%.3f", s}')"
+      killlink "$r" "$KILLWHAT" "$c0" ) > "$r/kill.log" 2>&1 &
+    PIDS+=($!)
+  fi
   sleep "$WARM"
   sssnap start "$r"
   LC_ALL=C pidstat -u -p "$pe,$px" 1 $(awk -v t="$total" -v w="$WARM" 'BEGIN{printf "%d", t - w - 1}') > "$r/pidstat.txt" 2>&1 &
