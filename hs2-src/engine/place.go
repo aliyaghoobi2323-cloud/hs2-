@@ -38,7 +38,7 @@ import (
 
 // PlaceUsers: 1 every user held, 2 heavy users held (HS2_TUNE_PLACE_USERS),
 // 0 the pool's pick.
-var PlaceUsers = 0
+var PlaceUsers = 2 // the default since R1 round 4 (round4/REPORT.fa.md)
 
 // placeHeavy: a user with this many connections moved (or moving at the
 // same tick) is heavy (PlaceUsers 2).

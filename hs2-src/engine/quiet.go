@@ -867,7 +867,7 @@ func (q *quietSet) moverTick(now int64) {
 		if due && TwoWay != 0 {
 			// the other direction a steady stream of its user: a call, kept
 			// on QUIET; too early to say: the move waits (twoway.go)
-			switch s.rule.twoWay(dir) {
+			switch s.rule.twoWay() {
 			case twoWayYes:
 				due = false
 				s.hintAt.Store(0)

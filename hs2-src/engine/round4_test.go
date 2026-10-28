@@ -49,6 +49,8 @@ func linksOf(b *placeBook, cands []*placeCand, tag uint32) int {
 // link each; a viewer then goes where one user is; in one_vs_16 the heavy
 // user keeps off the one-connection user's link.
 func TestPlaceUsers(t *testing.T) {
+	defer func(v int) { PlaceUsers = v }(PlaceUsers)
+	PlaceUsers = 1 // every user held (the browser's case below sets its own)
 	t.Run("lone", func(t *testing.T) {
 		var b placeBook
 		cands := placeLinks(8)
@@ -111,7 +113,7 @@ func TestPlaceUsers(t *testing.T) {
 	for _, mode := range []int{1, 2} {
 		t.Run(fmt.Sprintf("browser, mode %d", mode), func(t *testing.T) {
 			defer func(v int) { PlaceUsers = v }(PlaceUsers)
-			PlaceUsers = mode
+			PlaceUsers = mode // (restored to 1 for the cases after)
 			var b placeBook
 			cands := placeLinks(8)
 			due := map[uint32]int{}
@@ -202,12 +204,13 @@ func TestHoldFor(t *testing.T) {
 	}
 }
 
-// capRig is hintRig with QuietCap at 64 KiB.
+// capRig is hintRig with QuietCap at 64 KiB (and TwoWay off: the cap's own
+// measure; with TwoWay a new group is pending for its first tick).
 func capRig(t *testing.T) *quietRig {
 	t.Helper()
-	old := QuietCap
-	QuietCap = 64 << 10
-	t.Cleanup(func() { QuietCap = old })
+	old, otw := QuietCap, TwoWay
+	QuietCap, TwoWay = 64<<10, 0
+	t.Cleanup(func() { QuietCap, TwoWay = old, otw })
 	return hintRig(t, 4*angleRateBps, 10*time.Millisecond)
 }
 
@@ -337,27 +340,40 @@ func TestQuietCapCallStays(t *testing.T) {
 func TestTwoWayState(t *testing.T) {
 	ring := func(v ...uint32) []uint32 { return v }
 	call := ring(18750, 18750, 18750, 18750, 18750, 18750, 18750, 18750, 18750, 18750)
+	bursts := ring(0, 0, 40000, 0, 0, 0, 0, 60000, 0, 0) // a call's frames held back
+	none := make([]uint32, 10)
 	cases := []struct {
-		name string
-		r    []uint32
-		seen int
-		want int
+		name        string
+		user, other []uint32
+		seen        int
+		want        int
 	}{
-		{"call 0.3 s", call, 3, twoWayPending},
-		{"call 1 s", call, 10, twoWayYes},
-		{"call, two ticks missed", ring(18750, 0, 18750, 18750, 18750, 18750, 18750, 18750, 0, 18750), 10, twoWayYes},
-		{"call held back, four ticks missed", ring(0, 0, 37500, 18750, 0, 18750, 56250, 0, 18750, 18750), 10, twoWayYes},
-		{"call held back 0.4 s in", ring(0, 0, 0, 0, 0, 0, 0, 37500, 0, 18750), 4, twoWayPending},
-		{"request", ring(300, 0, 0, 0, 0, 0, 0, 0, 0, 0), 3, twoWayNo},
-		{"request, later", ring(0, 0, 0, 0, 0, 0, 0, 0, 0, 300), 10, twoWayNo},
-		{"every other tick", ring(4000, 0, 4000, 0, 4000, 0, 4000, 0, 4000, 0), 10, twoWayNo},
-		{"past RTMax", ring(60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000), 10, twoWayNo},
-		{"nothing seen", call, 0, twoWayPending},
+		{"call 0.3 s", call, call, 3, twoWayPending},
+		{"call 1 s", call, call, 10, twoWayYes},
+		{"call 1 s, its download held back", call, bursts, 10, twoWayYes},
+		{"call, two ticks missed", ring(18750, 0, 18750, 18750, 18750, 18750, 18750, 18750, 0, 18750), call, 10, twoWayYes},
+		{"call held back, four ticks missed", ring(0, 0, 37500, 18750, 0, 18750, 56250, 0, 18750, 18750), call, 10, twoWayYes},
+		{"call held back 0.4 s in", ring(0, 0, 0, 0, 0, 0, 0, 37500, 0, 18750), none, 4, twoWayPending},
+		{"request", ring(300, 0, 0, 0, 0, 0, 0, 0, 0, 0), call, 3, twoWayNo},
+		{"request, later", ring(0, 0, 0, 0, 0, 0, 0, 0, 0, 300), call, 10, twoWayNo},
+		{"every other tick", ring(4000, 0, 4000, 0, 4000, 0, 4000, 0, 4000, 0), call, 10, twoWayNo},
+		{"past RTMax: an upload", ring(60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000), none, 10, twoWayNo},
+		{"past RTMax 0.3 s in", ring(0, 0, 0, 0, 0, 0, 0, 60000, 60000, 60000), none, 3, twoWayNo},
+		{"a slow upload, nothing back", call, none, 10, twoWayNo},
+		{"nothing seen", call, call, 0, twoWayPending},
 	}
 	for _, c := range cases {
-		if got := twoWayState(c.r, len(c.r)-1, c.seen); got != c.want {
+		if got := twoWayState(c.user, c.other, len(c.user)-1, c.seen); got != c.want {
 			t.Fatalf("%s: %d, want %d", c.name, got, c.want)
 		}
+	}
+	// rings of their own lengths (the edge's are moveSlots long)
+	long := make([]uint32, moveSlots)
+	for i := range long {
+		long[i] = 18750
+	}
+	if got := twoWayState(long, long, 3, 20); got != twoWayYes {
+		t.Fatalf("a call on the edge's rings: %d", got)
 	}
 }
 

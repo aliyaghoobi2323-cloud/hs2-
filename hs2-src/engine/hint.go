@@ -124,9 +124,9 @@ type hintRule struct {
 	lastAt int64
 	run    int
 	sentAt int64 // when it was last hinted (0: never)
-	// rx: what it received each tick, the user's own sending (TwoWay,
-	// twoway.go)
-	rx rxRing
+	// rx, tx: what it received each tick (the user's own sending) and sent
+	// (TwoWay, twoway.go)
+	rx, tx byteRing
 }
 
 // tick takes the big-write time so far (busy, ns) at now and says whether
@@ -272,7 +272,8 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 			// the user sends steadily on it (or may: too early to say): a
 			// call, not a download (twoway.go)
 			r.rx.tick(eg.RxBytes(), now)
-			tw = r.rx.state()
+			r.tx.tick(eg.TxBytes(), now)
+			tw = twoWayExit(&r.rx, &r.tx)
 		}
 		eg.twoWay.Store(tw != twoWayNo)
 		if !r.tick(eg.big.total(now), now) {

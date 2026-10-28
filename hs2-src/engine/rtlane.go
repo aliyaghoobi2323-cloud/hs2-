@@ -31,7 +31,7 @@ package engine
 // moves it as before. Each end judges what it sends; nothing on the wire.
 
 // TuneRT: 1 on (HS2_TUNE_RT), 0 off.
-var TuneRT = 0
+var TuneRT = 1 // the default since R1 round 4 (round4/REPORT.fa.md)
 
 // RTMax: a steady flow's most, and each user's realtime credit rate, bit/s
 // (HS2_TUNE_RT_MAX).
