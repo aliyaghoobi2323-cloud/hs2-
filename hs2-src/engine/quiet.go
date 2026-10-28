@@ -754,6 +754,7 @@ type moveRule struct {
 	busyRun, rxRun     int
 	lastDir            string
 	firstBulkAt, dueAt int64
+	seen               int // ticks observed (to moveSlots; TwoWay)
 }
 
 // tick takes the connection's counters at now (ctrlNow) and says whether it
@@ -783,6 +784,7 @@ func (r *moveRule) tick(tx, rx uint64, busy time.Duration, now int64, txBusy, rx
 		r.sumRx -= uint64(r.rx[r.pos])
 		r.tx[r.pos], r.rx[r.pos] = 0, 0
 	}
+	r.seen = min(r.seen+int(steps), moveSlots)
 	r.tx[r.pos] = uint32(min(dtx, 1<<31))
 	r.rx[r.pos] = uint32(min(drx, 1<<31))
 	r.sumTx += uint64(r.tx[r.pos])
@@ -861,6 +863,19 @@ func (q *quietSet) moverTick(now int64) {
 		}
 		if !due && s.capAt.Load() != 0 {
 			due, dir = true, "up" // the upload cap (quietcap.go)
+		}
+		if due && TwoWay != 0 {
+			// the other direction a steady stream of its user: a call, kept
+			// on QUIET; too early to say: the move waits (twoway.go)
+			switch s.rule.twoWay(dir) {
+			case twoWayYes:
+				due = false
+				s.hintAt.Store(0)
+				s.capAt.Store(0)
+				twoWayKept.Add(1)
+			case twoWayPending:
+				due = false
+			}
 		}
 		if due {
 			dues = append(dues, dueMove{s, dir})
@@ -1029,6 +1044,9 @@ func (q *quietSet) line() string {
 	more := ""
 	if QuietCap > 0 {
 		more += fmt.Sprintf("; capped %d (moved %d, held to the end %d)", capStats.capped.Load(), capStats.moved.Load(), capStats.timeout.Load())
+	}
+	if TwoWay != 0 {
+		more += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
 	}
 	if PlaceUsers != 0 {
 		more += "; " + q.book.line()

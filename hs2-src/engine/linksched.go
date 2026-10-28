@@ -186,6 +186,9 @@ func (t *linkFlows) tick(now time.Duration) {
 		keep = append(keep, e)
 		tx := e.st.TxBytes()
 		e.stats.tx.Store(tx)
+		if TuneRT != 0 && TwoWay != 0 {
+			e.stats.rx.Store(e.st.RxBytes()) // the other way (rtlane.go)
+		}
 		c, _, confirmed := e.cls.Tick(&e.stats, now)
 		if e.moved {
 			c = ClassBulk // moved for its backlog: bulk here (MovedBulk)

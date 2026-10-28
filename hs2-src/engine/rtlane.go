@@ -54,11 +54,33 @@ const (
 // classifier just ticked (confirmed: its two light verdicts in a row): 0
 // when it is neither confirmed light nor steady.
 func rtAllowance(c *flowClassifier, confirmed bool) int64 {
-	d := &c.d[0]
-	if confirmed && d.cls == ClassLight {
+	if confirmed && c.d[0].cls == ClassLight {
 		return rtLightAllow
 	}
-	nz, mx := 0, 0
+	tok, tmean, tmx := rtSteady(&c.d[0])
+	if tok {
+		return int64(min(max(2*tmean, tmx+tmean), rtAllowMax))
+	}
+	// TwoWay: the other way is the user's steady stream (a call) and what
+	// this end sends stays under RTMax, whatever its own pattern (a call
+	// held back on a full QUIET link reads as bursts: twoway.go)
+	if TwoWay != 0 {
+		if rok, rmean, rmx := rtSteady(&c.d[1]); rok && float64(c.d[0].sum) <= rtWindowMax() {
+			return int64(min(max(2*rmean, rmx+rmean, 2*tmean), rtAllowMax))
+		}
+	}
+	return 0
+}
+
+// rtWindowMax is RTMax over C1's 2 s window, bytes.
+func rtWindowMax() float64 { return float64(RTMax) / 8 * classSlots * classTick.Seconds() }
+
+// rtSteady says whether one direction of a flow is steady over C1's window
+// (rtSlotsMin ticks of 20 with bytes, more than classLightSpan in all, at
+// most RTMax, no tick at the slot's ceiling), with its mean and largest
+// tick.
+func rtSteady(d *classDir) (ok bool, mean, mx int) {
+	nz := 0
 	for _, v := range d.slots {
 		if v > 0 {
 			nz++
@@ -66,11 +88,8 @@ func rtAllowance(c *flowClassifier, confirmed bool) int64 {
 		mx = max(mx, int(v))
 	}
 	sum := int(d.sum)
-	if nz < rtSlotsMin || sum <= classLightSpan || float64(sum) > float64(RTMax)/8*classSlots*float64(classTick)/1e9 || mx >= classSlotMax {
-		return 0
-	}
-	mean := sum / classSlots
-	return int64(min(max(2*mean, mx+mean), rtAllowMax))
+	ok = nz >= rtSlotsMin && sum > classLightSpan && float64(sum) <= rtWindowMax() && mx < classSlotMax
+	return ok, sum / classSlots, mx
 }
 
 // rtLane says whether e's next frame goes in the realtime lane: its

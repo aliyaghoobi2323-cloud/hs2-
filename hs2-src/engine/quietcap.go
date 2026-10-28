@@ -99,7 +99,7 @@ func holdFor(sw, done <-chan struct{}) bool {
 // it the hint goes now and the write waits for the move.
 func (eg *exitGroup) capExit(n int) {
 	m := eg.mtr.Load()
-	if m == nil || !m.quietLink || MoveHintOff() || !eg.cap.add(n, ctrlNow()) {
+	if m == nil || !m.quietLink || MoveHintOff() || eg.twoWay.Load() || !eg.cap.add(n, ctrlNow()) {
 		return
 	}
 	sw := eg.SwitchCh() // taken before the hint: the move closes it

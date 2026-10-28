@@ -293,6 +293,111 @@ func TestQuietCapCallStays(t *testing.T) {
 	}
 }
 
+// ---- the two-way rule ----
+
+// TestTwoWayState: a call's steady other way is pending in its first second
+// and steady after it; a download's request (a few hundred bytes) and a
+// stream that misses ticks are not; past RTMax neither.
+func TestTwoWayState(t *testing.T) {
+	ring := func(v ...uint32) []uint32 { return v }
+	call := ring(18750, 18750, 18750, 18750, 18750, 18750, 18750, 18750, 18750, 18750)
+	cases := []struct {
+		name string
+		r    []uint32
+		seen int
+		want int
+	}{
+		{"call 0.3 s", call, 3, twoWayPending},
+		{"call 1 s", call, 10, twoWayYes},
+		{"call, two ticks missed", ring(18750, 0, 18750, 18750, 18750, 18750, 18750, 18750, 0, 18750), 10, twoWayYes},
+		{"request", ring(300, 0, 0, 0, 0, 0, 0, 0, 0, 0), 3, twoWayNo},
+		{"request, later", ring(0, 0, 0, 0, 0, 0, 0, 0, 0, 300), 10, twoWayNo},
+		{"every other tick", ring(4000, 0, 4000, 0, 4000, 0, 4000, 0, 4000, 0), 10, twoWayNo},
+		{"past RTMax", ring(60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000, 60000), 10, twoWayNo},
+		{"nothing seen", call, 0, twoWayPending},
+	}
+	for _, c := range cases {
+		if got := twoWayState(c.r, len(c.r)-1, c.seen); got != c.want {
+			t.Fatalf("%s: %d, want %d", c.name, got, c.want)
+		}
+	}
+}
+
+// twoWayRig is hintRig with TwoWay set to on.
+func twoWayRig(t *testing.T, on bool) *quietRig {
+	t.Helper()
+	old := TwoWay
+	TwoWay = 0
+	if on {
+		TwoWay = 1
+	}
+	t.Cleanup(func() { TwoWay = old })
+	return hintRig(t, 4*angleRateBps, 10*time.Millisecond)
+}
+
+// callOn sends a 1.5 Mbit/s call (3750 B each 20 ms, a 19 KB key frame each
+// 2 s) on st for d.
+func callOn(t *testing.T, st stream, d time.Duration) {
+	t.Helper()
+	stop := time.After(d)
+	tk := time.NewTicker(20 * time.Millisecond)
+	defer tk.Stop()
+	frame := make([]byte, 3750)
+	key := make([]byte, 5*3750)
+	for i := 0; ; i++ {
+		select {
+		case <-stop:
+			return
+		case <-tk.C:
+		}
+		p := frame
+		if i%100 == 0 {
+			p = key
+		}
+		if _, err := st.Write(p); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestTwoWayKeepsCall: a connection whose download direction is backlogged
+// (the exit writes for good: a call held back on a full QUIET link looks
+// so) while its user sends a steady call stream: the exit's hint moves it
+// within 3 s; with TwoWay it stays on QUIET; and a plain download still
+// moves with TwoWay on.
+func TestTwoWayKeepsCall(t *testing.T) {
+	angleCores(t)
+	if testing.Short() {
+		t.Skip("emulated links, 9 s")
+	}
+	for _, on := range []bool{false, true} {
+		r := twoWayRig(t, on)
+		k0 := twoWayKept.Load()
+		st := r.open(10, qpDuplex)
+		go io.Copy(io.Discard, st)
+		callOn(t, st, 3*time.Second)
+		moved, kept := r.q.moved.Load(), twoWayKept.Load()-k0
+		t.Logf("TwoWay %v: moved %d, kept %d", on, moved, kept)
+		switch {
+		case !on && moved != 1:
+			t.Fatalf("TwoWay off: the backlogged connection moved %d times", moved)
+		case on && (moved != 0 || kept == 0):
+			t.Fatalf("TwoWay on: moved %d, kept %d", moved, kept)
+		}
+		st.Close()
+		r.cancel()
+	}
+	r := twoWayRig(t, true)
+	st := r.open(11, qpDown)
+	go io.Copy(io.Discard, st)
+	t0 := time.Now()
+	waitQuiet(t, "a download with TwoWay on", func() bool { return r.q.moved.Load() == 1 })
+	if d := time.Since(t0); d > 2*time.Second {
+		t.Fatalf("a download moved after %v with TwoWay on", d)
+	}
+	st.Close()
+}
+
 // ---- the realtime lane ----
 
 // rtClassifier is a flow classifier ticked with per-tick bytes.
