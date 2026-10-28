@@ -52,6 +52,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 )
 
@@ -228,6 +229,11 @@ type Flow struct {
 	StopS  float64 `json:"stop_s"`            // 0: the end of the run
 	Rate   float64 `json:"rate,omitempty"`    // stream: bitrate; call: each way (Mbit/s)
 	Every  float64 `json:"every_s,omitempty"` // web: one page every this many s
+	// frozen (frozen.go): connection k opens at StartS + k/Wave s, reads for
+	// ReadS s, then stops reading; Rcvbuf: its socket's receive buffer
+	Wave   int     `json:"wave,omitempty"`
+	ReadS  float64 `json:"read_s,omitempty"`
+	Rcvbuf int     `json:"rcvbuf,omitempty"`
 }
 
 type User struct {
@@ -260,6 +266,10 @@ type Spec struct {
 	PingMs     int      `json:"ping_ms"`
 	Users      []User   `json:"users"`
 	Windows    []Window `json:"windows"`
+	// KillS: a kill cell (run.sh KILLQ): one hs2 link is cut this many s
+	// after t0; the connections are logged and cut ones opened again
+	// (cuts.go)
+	KillS float64 `json:"kill_s,omitempty"`
 }
 
 func (s *Spec) check() error {
@@ -269,7 +279,7 @@ func (s *Spec) check() error {
 		}
 		for _, f := range u.Flows {
 			switch f.Kind {
-			case "dn", "up", "probe", "game", "gameudp", "call", "stream", "web":
+			case "dn", "up", "probe", "game", "gameudp", "call", "stream", "web", "frozen":
 			case "ping":
 				if u.Path != "tun" {
 					return fmt.Errorf("user %s: ping on the port path (ICMP does not cross user ports)", u.ID)
@@ -415,6 +425,11 @@ type client struct {
 	users  []*ustate
 	srvdir string    // the server's records (game, call)
 	rts    []*rtFlow // game and call flows
+	// a kill cell's connection log and recoveries (cuts.go), under mu
+	conns []*connRec
+	recov []Recov
+	// the frozen downloads (frozen.go)
+	frz frozenStats
 }
 
 func (c *client) err(f string, a ...any) {
@@ -474,8 +489,12 @@ func (c *client) target(us *ustate, probe bool) string {
 	return s.Bulk
 }
 
-func (c *client) dial(us *ustate, addr string) (net.Conn, error) {
-	d := net.Dialer{Timeout: dialWait}
+func (c *client) dial(us *ustate, addr string) (net.Conn, error) { return c.dialWith(us, addr, nil) }
+
+// dialWith is dial with a control function for the socket before it
+// connects (nil: none; frozen.go).
+func (c *client) dialWith(us *ustate, addr string, ctl func(network, address string, rc syscall.RawConn) error) (net.Conn, error) {
+	d := net.Dialer{Timeout: dialWait, Control: ctl}
 	switch {
 	case us.u.Src != "":
 		d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(us.u.Src)}
@@ -504,6 +523,8 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 	stop := c.stopOf(f)
 	addr := c.target(us, false)
 	sleepUntil(c.at(f.StartS))
+	var fc flowCut // (cuts.go)
+	defer c.flowEnd(us, f.Kind, &fc)
 	for time.Until(stop) > 100*time.Millisecond {
 		conn, err := c.dial(us, addr)
 		if err != nil {
@@ -513,6 +534,7 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 			continue
 		}
 		us.conns.Add(1)
+		rec := c.opened(us, f.Kind)
 		conn.SetDeadline(stop)
 		cmd := byte('D')
 		if f.Kind == "up" {
@@ -521,6 +543,8 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 		if _, err := conn.Write(header(cmd, us.idx, fi)); err != nil {
 			conn.Close()
 			c.err("header %s: %v", f.Kind, err)
+			c.closed(rec, true)
+			fc.cut(c)
 			continue
 		}
 		if f.Kind == "dn" {
@@ -528,6 +552,9 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 			for {
 				n, err := conn.Read(buf)
 				us.dn.add(c.off(), n)
+				if n > 0 {
+					c.recovered(us, f.Kind, &fc)
+				}
 				if err != nil {
 					break
 				}
@@ -551,13 +578,19 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 				wall := int64(binary.BigEndian.Uint64(rep[0:]))
 				cum := int64(binary.BigEndian.Uint64(rep[8:]))
 				us.up.add(time.Duration(wall-t0), int(cum-last))
+				if cum > last {
+					c.recovered(us, f.Kind, &fc)
+				}
 				last = cum
 			}
 		}
 		conn.Close()
-		if time.Until(stop) > 200*time.Millisecond {
+		cut := time.Until(stop) > 200*time.Millisecond
+		c.closed(rec, cut)
+		if cut {
 			us.shortEnds.Add(1)
 			c.err("%s connection ended %.1fs before its stop", f.Kind, time.Until(stop).Seconds())
+			fc.cut(c)
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
@@ -579,25 +612,52 @@ func (c *client) probe(us *ustate, fi int, f Flow) {
 		size = 8
 	}
 	sleepUntil(c.at(f.StartS).Add(phase(every)))
-	conn, err := c.dial(us, addr)
-	if err != nil {
-		us.dialErrs.Add(1)
-		c.err("dial probe %s: %v", addr, err)
-		return
-	}
-	us.conns.Add(1)
-	defer conn.Close()
-	if _, err := conn.Write(header('E', us.idx, fi)); err != nil {
-		c.err("probe header: %v", err)
-		return
-	}
+	var fc flowCut // (cuts.go)
+	defer c.flowEnd(us, "probe", &fc)
 	var mu sync.Mutex
 	sentAt := map[uint32]time.Duration{}
+	var seq uint32
+	for j := 0; ; j++ {
+		conn, err := c.dial(us, addr)
+		if err != nil {
+			us.dialErrs.Add(1)
+			c.err("dial probe %s: %v", addr, err)
+			if j == 0 || time.Until(stop) < rtRedial+100*time.Millisecond {
+				return
+			}
+			time.Sleep(rtRedial)
+			continue
+		}
+		us.conns.Add(1)
+		rec := c.opened(us, "probe")
+		cut := c.probeConn(us, fi, conn, stop, every, size, &mu, sentAt, &seq, &fc)
+		conn.Close()
+		c.closed(rec, cut)
+		// in a kill cell (cuts.go) a cut probe connection is opened again
+		// rtRedial later, as an app would (the probes due meanwhile are
+		// not sent: the outage is the gap in its echoes)
+		if !cut || !c.track() || time.Until(stop) < rtRedial+100*time.Millisecond {
+			return
+		}
+		fc.cut(c)
+		time.Sleep(rtRedial)
+	}
+}
+
+// probeConn runs a probe on one connection until the stop, or until the
+// connection ends (cut: before the stop) in a kill cell
+func (c *client) probeConn(us *ustate, fi int, conn net.Conn, stop time.Time, every time.Duration, size int,
+	mu *sync.Mutex, sentAt map[uint32]time.Duration, seqp *uint32, fc *flowCut) (cut bool) {
+	if _, err := conn.Write(header('E', us.idx, fi)); err != nil {
+		c.err("probe header: %v", err)
+		return time.Until(stop) > 200*time.Millisecond
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
 		conn.SetReadDeadline(stop.Add(grace))
 		b := make([]byte, size)
+		first := true
 		for {
 			if _, err := io.ReadFull(conn, b); err != nil {
 				return
@@ -610,28 +670,49 @@ func (c *client) probe(us *ustate, fi int, f Flow) {
 			mu.Unlock()
 			if ok {
 				us.probe.got(s.Seconds(), float64(now-s)/1e6)
+				if first {
+					first = false
+					c.recovered(us, "probe", fc)
+				}
 			}
 		}
 	}()
 	b := make([]byte, size)
 	t := time.NewTicker(every)
 	defer t.Stop()
-	for seq := uint32(0); time.Now().Before(stop); seq++ {
-		binary.BigEndian.PutUint32(b, seq)
+	var ended <-chan struct{}
+	if c.track() {
+		ended = done // a kill cell: the reader's early end is the cut
+	}
+loop:
+	for ; time.Now().Before(stop); *seqp++ {
+		binary.BigEndian.PutUint32(b, *seqp)
 		s := c.off()
 		mu.Lock()
-		sentAt[seq] = s
+		sentAt[*seqp] = s
 		mu.Unlock()
 		us.probe.sent(s.Seconds())
 		conn.SetWriteDeadline(stop.Add(grace))
 		if _, err := conn.Write(b); err != nil {
 			us.probeErrs.Add(1)
 			c.err("probe write: %v", err)
+			cut = time.Until(stop) > 200*time.Millisecond
+			if c.track() {
+				*seqp++
+				conn.Close() // the reader ends too
+			}
 			break
 		}
-		<-t.C
+		select {
+		case <-t.C:
+		case <-ended:
+			*seqp++
+			cut = time.Until(stop) > 200*time.Millisecond
+			break loop
+		}
 	}
 	<-done
+	return cut
 }
 
 func csum(b []byte) uint16 {
@@ -761,6 +842,14 @@ type Out struct {
 	Classes  map[string]any     `json:"classes,omitempty"` // game, gameudp, call, stream, web
 	Errs     map[string]int     `json:"errs,omitempty"`
 	Notes    map[string]int     `json:"notes,omitempty"` // observations, not errors
+	// a kill cell (cuts.go): the connection log, the cut flows' recoveries,
+	// each game/call/probe flow's longest gap around the kill
+	KillS  float64    `json:"kill_s,omitempty"`
+	Conns  []*connRec `json:"conns,omitempty"`
+	Recov  []Recov    `json:"recov,omitempty"`
+	Outage []Outage   `json:"outage,omitempty"`
+	// frozen downloads (frozen.go), and the light users' probe gaps then
+	Frozen *FrozenOut `json:"frozen,omitempty"`
 }
 
 func runClient(s *Spec, srvdir string) *Out {
@@ -806,6 +895,8 @@ func runClient(s *Spec, srvdir string) *Out {
 						c.stream(us, fi*1000+k, f)
 					case "web":
 						c.web(us, fi*1000+k, f)
+					case "frozen":
+						c.frozen(us, fi*1000+k, k, f)
 					}
 				}()
 			}
@@ -822,6 +913,8 @@ func runClient(s *Spec, srvdir string) *Out {
 	if len(c.notes) > 0 {
 		out.Notes = c.notes
 	}
+	c.cutsOut(out)   // a kill cell (cuts.go)
+	c.frozenOut(out) // frozen downloads (frozen.go)
 	lat := func(r []*rtts, w Window, m *map[string]*Lat) {
 		if l := latOf(r, w.From, w.To); l != nil {
 			if *m == nil {

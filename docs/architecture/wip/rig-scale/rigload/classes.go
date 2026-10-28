@@ -76,6 +76,9 @@ type GenSpec struct {
 	Var      float64 `json:"var,omitempty"`       // call: sizes x U(1-Var, 1+Var)
 	KeyEvery int     `json:"key_every,omitempty"` // call: frame 0, KeyEvery, 2 KeyEvery ... are keyframes
 	KeyMult  float64 `json:"key_mult,omitempty"`
+	// Seq0: the first message's number (a flow's later connection after a
+	// cut, cuts.go: each connection's numbers apart); 0 before
+	Seq0 uint32 `json:"seq0,omitempty"`
 }
 
 func gameUp(stop int64) GenSpec { return GenSpec{StopNs: stop, Hz: 64, Min: 60, Max: 120} }
@@ -110,6 +113,12 @@ func monoAt(ns int64) time.Time { return time.Now().Add(time.Duration(ns - clock
 // gen makes g's messages from start until g.StopNs: message k is due at
 // start + k periods (the schedule does not drift) and stamped when made.
 func gen(g GenSpec, start time.Time, out func(seq uint32, made int64, size int)) {
+	genQ(g, start, nil, out)
+}
+
+// genQ is gen that also ends when quit closes (its connection was cut:
+// cuts.go); message k is numbered g.Seq0 + k.
+func genQ(g GenSpec, start time.Time, quit <-chan struct{}, out func(seq uint32, made int64, size int)) {
 	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	per := g.period()
 	stop := monoAt(g.StopNs)
@@ -118,8 +127,21 @@ func gen(g GenSpec, start time.Time, out func(seq uint32, made int64, size int))
 		if !due.Before(stop) {
 			return
 		}
-		sleepUntil(due)
-		out(uint32(k), clockMono(), g.size(k, r))
+		if quit == nil {
+			sleepUntil(due)
+		} else if d := time.Until(due); d > 0 {
+			select {
+			case <-quit:
+				return
+			case <-time.After(d):
+			}
+		}
+		select {
+		case <-quit:
+			return
+		default:
+		}
+		out(g.Seq0+uint32(k), clockMono(), g.size(k, r))
 	}
 }
 
@@ -219,9 +241,13 @@ func serveRT(c net.Conn, h []byte, report string) {
 	rec := &rtRecord{}
 	q := make(chan []byte, rtQueue)
 	made := make(chan struct{})
+	// quit: the connection ended before the flow's stop (cut): no more
+	// messages for it (the client opens another: cuts.go). At the stop the
+	// maker has ended already.
+	quit := make(chan struct{})
 	go func() {
 		defer close(made)
-		gen(g, time.Now().Add(phase(g.period())), func(seq uint32, at int64, size int) {
+		genQ(g, time.Now().Add(phase(g.period())), quit, func(seq uint32, at int64, size int) {
 			mu.Lock()
 			rec.Tx = append(rec.Tx, [3]int64{int64(seq), at, int64(size)})
 			mu.Unlock()
@@ -240,6 +266,7 @@ func serveRT(c net.Conn, h []byte, report string) {
 		rec.Rx = append(rec.Rx, [2]int64{int64(seq), at})
 		mu.Unlock()
 	})
+	close(quit)
 	<-made
 	<-sent
 	mu.Lock()
@@ -340,12 +367,24 @@ type rtFlow struct {
 	tx   [][3]int64       // what the client made: seq, made, size
 	rx   map[uint32]int64 // what it got from the server: seq -> arrival
 	srv  *rtRecord        // the server's record (nil: none)
+	// nconn: its connections (more than one after a cut, cuts.go); next:
+	// the number its next message takes
+	nconn int
+	next  uint32
 }
 
 func (fl *rtFlow) sent(seq uint32, made int64, size int) {
 	fl.mu.Lock()
 	fl.tx = append(fl.tx, [3]int64{int64(seq), made, int64(size)})
+	fl.next = max(fl.next, seq+1)
 	fl.mu.Unlock()
+}
+
+// nextSeq is the number the flow's next message takes.
+func (fl *rtFlow) nextSeq() uint32 {
+	fl.mu.Lock()
+	defer fl.mu.Unlock()
+	return fl.next
 }
 
 func (fl *rtFlow) got(seq uint32, at int64) {
@@ -387,69 +426,139 @@ func (c *client) rt(us *ustate, fid int, f Flow) {
 		return
 	}
 	until := monoAt(stopNs).Add(grace + rtReadMore + rtFileWait)
-	p := recordPath(c.srvdir, uint32(us.idx), uint32(fid))
-	for {
-		if b, err := os.ReadFile(p); err == nil {
-			var r rtRecord
-			if json.Unmarshal(b, &r) == nil {
-				fl.srv = &r
-				return
+	// one record per connection of the flow (more than one after a cut:
+	// cuts.go), merged
+	for j := 0; j < max(fl.nconn, 1); j++ {
+		p := recordPath(c.srvdir, uint32(us.idx), uint32(fid+rtConnFlow*j))
+		for {
+			if b, err := os.ReadFile(p); err == nil {
+				var r rtRecord
+				if json.Unmarshal(b, &r) == nil {
+					if fl.srv == nil {
+						fl.srv = &r
+					} else {
+						fl.srv.Tx = append(fl.srv.Tx, r.Tx...)
+						fl.srv.Rx = append(fl.srv.Rx, r.Rx...)
+					}
+					break
+				}
 			}
+			if time.Now().After(until) {
+				c.err("%s: no server record %s", f.Kind, filepath.Base(p))
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
 		}
-		if time.Now().After(until) {
-			c.err("%s: no server record %s", f.Kind, filepath.Base(p))
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
+// rtConnFlow: a game or call flow's j-th connection (after j cuts) is flow
+// fid + j·rtConnFlow at the server (its own record), and its server's
+// messages are numbered from j·rtConnSeq (cuts.go)
+const (
+	rtConnFlow = 100000
+	rtConnSeq  = 1 << 24
+)
+
+// rtTCP runs a game or call flow on one connection; in a kill cell
+// (cuts.go) a connection cut before the stop is opened again rtRedial
+// later, as an app would, its messages numbered on.
 func (c *client) rtTCP(fl *rtFlow, us *ustate, fid int, up, dn GenSpec) {
+	var fc flowCut
+	stopT := monoAt(up.StopNs)
+	for j := 0; ; j++ {
+		cut := c.rtConn(fl, us, fid, j, up, dn, &fc)
+		if !cut || !c.track() || time.Until(stopT) < rtRedial+200*time.Millisecond {
+			break
+		}
+		time.Sleep(rtRedial)
+		up.Seq0 = fl.nextSeq()
+	}
+	c.flowEnd(us, fl.kind, &fc)
+}
+
+// rtConn is connection j of a game or call flow; cut: it ended before the
+// flow's stop
+func (c *client) rtConn(fl *rtFlow, us *ustate, fid, j int, up, dn GenSpec, fc *flowCut) (cut bool) {
 	addr := c.target(us, false)
 	conn, err := c.dial(us, addr)
 	if err != nil {
 		us.dialErrs.Add(1)
 		c.err("dial %s %s: %v", fl.kind, addr, err)
-		return
+		return j > 0 // after a cut: try again; the first: as before
 	}
 	us.conns.Add(1)
+	fl.nconn = j + 1
+	rec := c.opened(us, fl.kind)
 	defer conn.Close()
 	cmd := byte('G')
 	if fl.kind == "call" {
 		cmd = 'V'
 	}
+	dn.Seq0 = uint32(j) * rtConnSeq
 	p, _ := json.Marshal(dn)
-	hello := append(header(cmd, us.idx, fid), byte(len(p)>>8), byte(len(p)))
+	hello := append(header(cmd, us.idx, fid+rtConnFlow*j), byte(len(p)>>8), byte(len(p)))
 	hello = append(hello, p...)
 	conn.SetWriteDeadline(time.Now().Add(dialWait))
 	if _, err := conn.Write(hello); err != nil {
 		c.err("%s header: %v", fl.kind, err)
-		return
+		c.closed(rec, j > 0)
+		return j > 0
 	}
 	stopT := monoAt(up.StopNs)
 	done := make(chan struct{})
+	var quit chan struct{}
+	var quitOnce sync.Once
+	if c.track() {
+		quit = make(chan struct{})
+	}
+	stopGen := func() {
+		if quit != nil {
+			quitOnce.Do(func() { close(quit) })
+		}
+	}
+	var rerr error
 	go func() {
 		defer close(done)
-		err := rtRecv(conn, stopT.Add(grace+rtReadMore), func(seq uint32, _, at int64, size int) {
+		first := true
+		rerr = rtRecv(conn, stopT.Add(grace+rtReadMore), func(seq uint32, _, at int64, size int) {
 			fl.got(seq, at)
 			us.dn.add(c.off(), size)
+			if first {
+				first = false
+				c.recovered(us, fl.kind, fc)
+			}
 		})
-		if !quietErr(err) {
-			c.err("%s read: %v", fl.kind, err)
+		if !quietErr(rerr) {
+			c.err("%s read: %v", fl.kind, rerr)
+		}
+		if time.Until(stopT) > 200*time.Millisecond {
+			stopGen() // cut: no more messages for this connection
 		}
 	}()
 	q := make(chan []byte, rtQueue)
 	go func() {
-		gen(up, time.Now(), func(seq uint32, made int64, size int) {
+		genQ(up, time.Now(), quit, func(seq uint32, made int64, size int) {
 			fl.sent(seq, made, size)
 			q <- rtMsg(seq, made, size)
 		})
 		close(q)
 	}()
-	if err := rtSend(conn, q, stopT.Add(grace)); !quietErr(err) {
-		c.err("%s write: %v", fl.kind, err)
+	werr := rtSend(conn, q, stopT.Add(grace))
+	if !quietErr(werr) {
+		c.err("%s write: %v", fl.kind, werr)
+	}
+	if werr != nil && c.track() && time.Until(stopT) > 200*time.Millisecond {
+		stopGen()
+		conn.Close() // the reader ends too
 	}
 	<-done
+	cut = time.Until(stopT) > 200*time.Millisecond
+	if cut {
+		fc.cut(c)
+	}
+	c.closed(rec, cut)
+	return cut
 }
 
 // rtUDP: gameudp. The socket is not connected: the edge answers from a
@@ -620,6 +729,9 @@ func (c *client) stream(us *ustate, fid int, f Flow) {
 	p := newPlayer(rate, now())
 	o := &StreamOut{BitrateMbit: mbit}
 	var conn net.Conn
+	var rec *connRec // (cuts.go)
+	var fc flowCut
+	fresh := false // conn is new: its first byte may end a cut's outage
 	var segBytes, segTime, rateSum float64
 	buf := make([]byte, 64<<10)
 	var rq [8]byte
@@ -646,6 +758,7 @@ func (c *client) stream(us *ustate, fid int, f Flow) {
 				continue
 			}
 			conn = cn
+			rec, fresh = c.opened(us, "stream"), true
 		}
 		ts := time.Now()
 		left := seg
@@ -656,6 +769,10 @@ func (c *client) stream(us *ustate, fid int, f Flow) {
 					left -= n
 					p.recv(now(), n)
 					us.dn.add(c.off(), n)
+					if fresh {
+						fresh = false
+						c.recovered(us, "stream", &fc)
+					}
 				}
 				if err != nil {
 					break
@@ -665,10 +782,13 @@ func (c *client) stream(us *ustate, fid int, f Flow) {
 		if left > 0 {
 			conn.Close()
 			conn = nil
-			if time.Until(stop) > 200*time.Millisecond {
+			cut := time.Until(stop) > 200*time.Millisecond
+			if cut {
 				o.Reconnects++
 				c.err("stream connection ended %.1fs before its stop", time.Until(stop).Seconds())
+				fc.cut(c)
 			}
+			c.closed(rec, cut)
 			continue
 		}
 		dt := time.Since(ts).Seconds()
@@ -679,7 +799,9 @@ func (c *client) stream(us *ustate, fid int, f Flow) {
 	}
 	if conn != nil {
 		conn.Close()
+		c.closed(rec, false)
 	}
+	c.flowEnd(us, "stream", &fc)
 	end := stop.Sub(c.t0).Seconds()
 	p.end(end)
 	o.SessionS = round3(end - p.t0)
@@ -723,9 +845,13 @@ func (c *client) web(us *ustate, fid int, f Flow) {
 	hard := stop.Add(grace)
 	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	next := c.at(f.StartS).Add(phase(every))
+	var fc flowCut // (cuts.go) a page whose connection was cut fails; the next page is the app's retry
 	for next.Before(stop) {
 		sleepUntil(next)
-		pg := c.page(us, fid, hard, webObjects(r, webObjs))
+		pg := c.page(us, fid, hard, webObjects(r, webObjs), &fc)
+		if pg.Load >= 0 {
+			c.recovered(us, "web", &fc) // a whole page again after a cut
+		}
 		us.mu.Lock()
 		us.pages = append(us.pages, pg)
 		us.mu.Unlock()
@@ -733,13 +859,36 @@ func (c *client) web(us *ustate, fid int, f Flow) {
 			next = next.Add(every)
 		}
 	}
+	c.flowEnd(us, "web", &fc)
 }
 
-func (c *client) page(us *ustate, fid int, hard time.Time, sizes []int) pageRec {
+func (c *client) page(us *ustate, fid int, hard time.Time, sizes []int, fc *flowCut) pageRec {
 	t0 := time.Now()
 	pg := pageRec{S: c.off().Seconds(), Fb: -1, Load: -1}
 	ms := func() float64 { return math.Round(float64(time.Since(t0))/1e4) / 100 }
 	addr := c.target(us, false)
+	// the page's connections in a kill cell (cuts.go): cut when a fetch
+	// fails before the deadline; all end with the page
+	var rmu sync.Mutex
+	recs := map[net.Conn]*connRec{}
+	defer func() {
+		rmu.Lock()
+		for _, rec := range recs {
+			c.closed(rec, rec.X >= 0)
+		}
+		rmu.Unlock()
+	}()
+	cutOf := func(cn net.Conn) {
+		if time.Until(hard) <= 200*time.Millisecond {
+			return
+		}
+		rmu.Lock()
+		if rec := recs[cn]; rec != nil && rec.X < 0 {
+			rec.X = c.off().Seconds()
+		}
+		rmu.Unlock()
+		fc.cut(c)
+	}
 	open := func() net.Conn {
 		cn, err := c.dial(us, addr)
 		if err != nil {
@@ -748,9 +897,15 @@ func (c *client) page(us *ustate, fid int, hard time.Time, sizes []int) pageRec 
 			return nil
 		}
 		us.conns.Add(1)
+		if rec := c.opened(us, "web"); rec != nil {
+			rmu.Lock()
+			recs[cn] = rec
+			rmu.Unlock()
+		}
 		cn.SetDeadline(hard)
 		if _, err := cn.Write(header('Q', us.idx, fid)); err != nil {
 			cn.Close()
+			cutOf(cn)
 			return nil
 		}
 		return cn
@@ -759,6 +914,7 @@ func (c *client) page(us *ustate, fid int, hard time.Time, sizes []int) pageRec 
 		var rq [8]byte
 		binary.BigEndian.PutUint64(rq[:], uint64(n))
 		if _, err := cn.Write(rq[:]); err != nil {
+			cutOf(cn)
 			return false
 		}
 		buf := make([]byte, 64<<10)
@@ -773,6 +929,7 @@ func (c *client) page(us *ustate, fid int, hard time.Time, sizes []int) pageRec 
 				us.dn.add(c.off(), k)
 			}
 			if err != nil && n > 0 {
+				cutOf(cn)
 				return false
 			}
 		}
