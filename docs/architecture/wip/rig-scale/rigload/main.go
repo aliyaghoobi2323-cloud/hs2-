@@ -74,6 +74,7 @@ func main() {
 		fs := flag.NewFlagSet("server", flag.ExitOnError)
 		listen := fs.String("listen", "127.0.0.1:5211,127.0.0.1:5212", "addresses to serve, comma separated")
 		report := fs.String("report", "", "directory for the game and call flows' records")
+		fs.IntVar(&panelSndbuf, "sndbuf", 0, "SO_SNDBUF of each accepted TCP connection, bytes (0: the kernel's autotuning)")
 		fs.Parse(os.Args[2:])
 		if *report != "" {
 			if err := os.MkdirAll(*report, 0o755); err != nil {
@@ -138,6 +139,13 @@ func server(addrs []string, report string) {
 	wg.Wait()
 }
 
+// panelSndbuf: the server's send buffer on each connection (-sndbuf; 0:
+// autotuned). Autotuned on loopback it grows to ~5 MB a connection at once:
+// in R1 round 4, 136 downloads of the home mix held 461 MB within 1.5 s of
+// their start and the 400 of stream_vs_dl 1.2 GB, past this host's
+// tcp_mem[0] (rigguard.sh aborted); run.sh gives 256 KiB (PANEL_SNDBUF).
+var panelSndbuf int
+
 func acceptLoop(ln net.Listener, report string) {
 	for {
 		c, err := ln.Accept()
@@ -148,6 +156,9 @@ func acceptLoop(ln net.Listener, report string) {
 			log.Printf("accept %s: %v", ln.Addr(), err)
 			time.Sleep(100 * time.Millisecond)
 			continue
+		}
+		if tc, ok := c.(*net.TCPConn); ok && panelSndbuf > 0 {
+			tc.SetWriteBuffer(panelSndbuf)
 		}
 		go serveConn(c, report)
 	}
