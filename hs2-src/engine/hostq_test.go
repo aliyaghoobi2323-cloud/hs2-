@@ -278,16 +278,20 @@ func TestHostWaitBound(t *testing.T) {
 	}
 }
 
-// TestHostWaitSegs8Cost pins C3's known cost, an OPEN item for the round-4
-// judge (decision T12's price; the R1 red team's finding C3, pass 1): with
-// the judge's default of 8 segments a light frame waits on the host ~95 ms
-// at 1 Mbit/s, past §3.3's 36 ms, on a QUIET link too (HQGQuietSegs -1: a
-// QUIET link's gate is every link's, while SEGS=8's reason, BBR held in
-// STARTUP, is a BULK link's: QUIET links run cubic and carry light
-// traffic; HS2_TUNE_HQG_QUIET_SEGS=0 exists and was never measured on the
-// rig). Not a pass mark: the test holds the number the documents give, so
-// a change that removes the cost fails it here, and the documents (and
-// TestHostWaitBound's bound for the default) are brought along with it.
+// TestHostWaitSegs8Cost pins C3's known cost (decision T12's price; the R1
+// red team's finding C3, pass 1): with the default of 8 segments a light
+// frame waits on the host ~95 ms at 1 Mbit/s, past §3.3's 36 ms, on a QUIET
+// link too. The round-4 judge measured both options on the rig
+// (round4-judge.fa.md, block S4: a 1 and 2 Mbit/s policer on each
+// connection, gamer_vs_dl at N=1 and N=8, two runs each) and kept SEGS=8:
+// the floor bounded in time (HS2_TUNE_HQG_SEGS_MS=30) put BBR back in
+// T12's trap (22 % resent at 1 Mbit/s, against 3 to 5 %), and the
+// document's gate on QUIET links only (HS2_TUNE_HQG_QUIET_SEGS=0) cut the
+// game's p99 at N=1 (353 to 165 ms at 1 Mbit/s, 67 to 2 at 2) but not at
+// N=8 (33 to 93 at 1 Mbit/s, and 0.85 of the throughput at 2). The chosen
+// bound is the one asserted here: the cap and the frame in progress (93 ms
+// and a frame at 1 Mbit/s); a change that removes the cost fails it, and
+// the documents (and TestHostWaitBound's bound) come along with it.
 func TestHostWaitSegs8Cost(t *testing.T) {
 	hqgVariants[0].with(func() {
 		r := 1 * mbit
@@ -308,7 +312,7 @@ func TestHostWaitSegs8Cost(t *testing.T) {
 				continue
 			}
 			worst, on := hostWait(r, 0)
-			t.Logf("OPEN (round-4 judge): %s link, SEGS=%d, 1 Mbit/s: gate %v, a light frame waits up to %v on the host, §3.3's bound %v (the cap and the frame in progress: %v)",
+			t.Logf("kept by the round-4 judge (S4): %s link, SEGS=%d, 1 Mbit/s: gate %v, a light frame waits up to %v on the host, §3.3's bound %v (the cap and the frame in progress: %v)",
 				l.name, l.segs, on, worst, r1, most)
 			if worst <= r1 || worst > most {
 				t.Fatalf("%s link: the host wait at 1 Mbit/s is %v, no longer the known cost (past §3.3's %v, at most %v): update the documents (merge-prep REPORT, flaky.fa.md) and TestHostWaitBound",
