@@ -11,7 +11,7 @@ D=${1:-/root/hs2-wt/r1-r3j/docs/architecture/wip/r1/round3-judge}
 S=/root/r3j
 mkdir -p "$D"
 cd "$S"
-for b in P1 D1 D2 P2a C1 C2 C3 D3 D4 D5 D6 C4 C5 F1 F2 F3 F4 F5 F6 F2b; do
+for b in P1 D1 D2 P2a C1 C2 C3 D3 D4 D5 D6 C4 C5 F1 F2 F3 G1 F7 F4 F5 F6 F2b; do
   [ -d "$b" ] || continue
   mkdir -p "$D/$b"
   for f in plan.txt schedule.tsv orch.log run.log host.txt res.dropped.jsonl; do
@@ -38,10 +38,10 @@ done
 if [ -d DPI ]; then
   mkdir -p "$D/dpi"
   for f in DPI/*; do
-    case "$f" in *.json) gzip -9c "$f" > "$D/dpi/$(basename "$f").gz" ;; *) cp "$f" "$D/dpi/" ;; esac
+    case "$f" in *.json) ;; *) cp "$f" "$D/dpi/" ;; esac  # the record lists (13 to 27 MB) stay out
   done
 fi
-[ -d D1 ] && [ -f D1/gdump.txt ] && cp D1/gdump.txt "$D/D1/"
+for b in D1 D5; do cp $b/gdump-*.txt "$D/$b/" 2>/dev/null; done
 for t in tests-*; do [ -d "$t" ] && mkdir -p "$D/tests" && cp "$t"/*.txt "$D/tests/"; done
 mkdir -p "$D/plans" "$D/tools"
 cp plans/*.txt "$D/plans/"

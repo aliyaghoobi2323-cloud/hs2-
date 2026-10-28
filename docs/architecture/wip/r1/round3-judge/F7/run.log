@@ -1,0 +1,26 @@
+13:11:04 plan /root/r3j/F7/plan.txt: 12 runs
+13:11:05 start ae0cf9da-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3g) load 0.35 waited 0s
+13:11:44 done ae0cf9da-j3g-1 ok=1 
+13:11:45 start ae0cf9da-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3g) load 0.78 waited 0s
+13:12:24 done ae0cf9da-j3g-2 ok=1 
+13:12:25 start 340c98ae-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 1.55 waited 0s
+13:13:04 done 340c98ae-j3g-1 ok=1 
+13:13:05 start 340c98ae-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 2.17 waited 0s
+13:13:45 done 340c98ae-j3g-2 ok=1 
+13:13:45 start bded2768-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 2.70 waited 0s
+13:14:40 done bded2768-j3g-1 ok=1 
+13:14:41 start bded2768-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 2.11 waited 0s
+13:15:35 done bded2768-j3g-2 ok=1 
+13:15:36 start 05500279-j3g-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g) load 2.29 waited 0s
+13:16:05 done 05500279-j3g-1 ok=1 
+13:16:06 start 05500279-j3g-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g) load 1.60 waited 0s
+13:16:35 done 05500279-j3g-2 ok=1 
+13:16:36 start 2d23c440-j3g-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=j3g) load 1.30 waited 0s
+13:17:05 done 2d23c440-j3g-1 ok=1 
+13:17:06 start 2d23c440-j3g-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=j3g) load 1.09 waited 0s
+13:17:35 done 2d23c440-j3g-2 ok=1 
+13:17:36 start 4fe96b96-j3g-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=j3g) load 1.02 waited 0s
+13:18:06 done 4fe96b96-j3g-1 ok=1 
+13:18:06 start 4fe96b96-j3g-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=j3g) load 1.48 waited 0s
+13:18:36 done 4fe96b96-j3g-2 ok=1 
+13:18:36 done /root/r3j/F7/plan.txt

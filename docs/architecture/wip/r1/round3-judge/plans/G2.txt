@@ -1,0 +1,13 @@
+# G2 (report, an option for the lead): the in-flight budget's queue target T at 5 ms (HS2_TUNE_BUDGET_US=5000, CoDel's own target) against 2.5 ms (j3g, gamma2's), where the final candidate is under 0.97 of the base: s5 at 25 Mbit/s with and without 0.1% loss, the download beside an upload; and P10's one_vs_16 for the cost in delay
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3gt5
+N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=old
+N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g
+N=1 RATE=25 RTT=72 LOSS=0.1 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3gt5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=old
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3g
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1 BIN=j3gt5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=old
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3gt5

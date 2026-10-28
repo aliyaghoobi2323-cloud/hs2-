@@ -1,15 +1,30 @@
-== start 2026-10-28T11:48:01+00:00
- 11:48:01 up 1 day, 42 min,  5 users,  load average: 1.60, 1.46, 1.89
-top - 11:48:02 up 1 day, 42 min,  5 users,  load average: 1.60, 1.46, 1.89
-Tasks: 240 total,   1 running, 239 sleeping,   0 stopped,   0 zombie
-%Cpu(s):  1.6 us,  2.6 sy,  0.0 ni, 94.6 id,  0.0 wa,  0.0 hi,  1.1 si,  0.0 st 
-MiB Mem :  23456.9 total,  13389.3 free,   1313.6 used,   9170.5 buff/cache     
-MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22143.4 avail Mem 
+== start 2026-10-28T12:15:17+00:00
+ 12:15:17 up 1 day,  1:10,  2 users,  load average: 2.32, 2.04, 1.86
+top - 12:15:18 up 1 day,  1:10,  3 users,  load average: 2.32, 2.04, 1.86
+Tasks: 232 total,   1 running, 231 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  4.9 us,  7.0 sy,  0.0 ni, 84.3 id,  0.0 wa,  0.0 hi,  3.8 si,  0.0 st 
+MiB Mem :  23456.9 total,  13254.0 free,   1253.3 used,   9366.0 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22203.6 avail Mem 
     PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-1510307 root      20   0 1567804 263304  29360 S  32.7   1.1  17:37.42 xray-linux-amd6
-    992 root      20   0 1477144 151572  10500 S  26.9   0.6      6,56 hs2
-1539419 root      20   0   11908   6024   3868 R   1.9   0.0   0:00.03 top
-      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:54.68 systemd
-      2 root      20   0       0      0      0 S   0.0   0.0   0:00.15 kthreadd
-      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
-      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_g
+1558413 root      20   0 1501060 244340  29360 S  86.3   1.0   3:13.60 xray-linux-amd6
+    992 root      20   0 1477144 153116  10500 S  68.6   0.6      7,05 hs2
+1565871 root      20   0   11908   6036   3884 R   3.9   0.0   0:00.04 top
+      1 root      20   0   22656  14164   9776 S   2.0   0.1   1:56.78 systemd
+  13056 root      19  -1  222516 166784 165512 S   2.0   0.7   1:12.21 systemd-journal
+1562556 root      20   0       0      0      0 I   2.0   0.0   0:00.14 kworker/u24:3-events_power_efficient
+1565851 root      20   0   14844  10476   8792 S   2.0   0.0   0:00.02 sshd
+== end 2026-10-28T12:15:18+00:00
+ 12:15:18 up 1 day,  1:10,  3 users,  load average: 2.14, 2.01, 1.85
+top - 12:15:19 up 1 day,  1:10,  2 users,  load average: 2.14, 2.01, 1.85
+Tasks: 231 total,   1 running, 230 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  4.1 us,  4.1 sy,  0.0 ni, 89.3 id,  0.0 wa,  0.0 hi,  2.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  13230.0 free,   1277.3 used,   9366.0 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22179.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1558413 root      20   0 1501060 244384  29360 S  71.2   1.0   3:14.86 xray-linux-amd6
+    992 root      20   0 1477144 153116  10500 S  55.8   0.6      7,05 hs2
+    916 root      20   0 1085416 113484  90552 S   1.9   0.5   2:49.06 fail2ban-server
+  13068 systemd+  20   0   22672  14612  11144 S   1.9   0.1   6:34.81 systemd-resolve
+1547130 root      20   0       0      0      0 I   1.9   0.0   0:00.14 kworker/10:0-events
+1566003 root      20   0   11908   6092   3944 R   1.9   0.0   0:00.03 top
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:56.78 systemd

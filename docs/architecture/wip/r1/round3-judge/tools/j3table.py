@@ -14,8 +14,8 @@ import ana  # noqa: E402
 
 LABEL = {"prod": "تولید (1c23629)", "old": "پایه (r1-judge)", "b2nx": "نهایی دور ۲ (b2nx)", "g1e": "γ۱ (g1e)",
          "g2e": "γ۲ (g2e)", "j3": "نامزد داور (j3)", "j3nh": "j3 بی اشارهٔ خروجی", "j3np": "j3 بی بافر کوچک پنل",
-         "j3ng": "j3 بی نگهبان OWD", "j3nc": "j3 بی پنجرهٔ جمع‌کردن"}
-BINORD = ["prod", "old", "b2nx", "g1e", "g2e", "j3", "j3nh", "j3np", "j3ng", "j3nc", "j3nm", "j3nb", "j3hq", "j3bp", "j3bo", "j3sc", "j3c4", "j3hg", "j3c4hg", "oldhq", "oldsc", "prodfix"]
+         "j3ng": "j3 بی نگهبان OWD", "j3nc": "j3 بی پنجرهٔ جمع‌کردن", "j3g": "نامزد پایانی (j3g)", "j3g0": "j3g بی نگهبان BULK", "j3g2": "j3g با نگهبان صف BULK (مانند j3)", "j3gt5": "j3g با هدف صف ۵ms", "j3gq4": "j3g با ۴ لینک QUIET", "j3gnb": "j3g بی حجیم ماندن جابه‌جاشده"}
+BINORD = ["prod", "old", "b2nx", "g1e", "g2e", "j3", "j3nh", "j3np", "j3ng", "j3nc", "j3nm", "j3nb", "j3hq", "j3bp", "j3bo", "j3sc", "j3c4", "j3hg", "j3c4hg", "oldhq", "oldsc", "prodfix", "j3ns", "j3prof", "j3g", "j3g0", "j3g2", "j3gt5", "j3gq4", "j3gnb"]
 
 
 def label(b):

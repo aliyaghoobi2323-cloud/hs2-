@@ -1,0 +1,12 @@
+  440 [select] smux.(*Session).frameWritten < smux.(*Session).writeFrameInternal < smux.(*Stream).writeV2
+  424 [select] smux.(*Stream).waitRead < smux.(*Stream).Read < engine.exitCountedStream.Read
+  413 [select] engine.relayStream < engine.serveStream < engine.serveReverseLink.gowrap2
+   12 [GC worker (idle)] runtime.gopark < runtime.gcBgMarkWorker
+    8 [select] smux.(*Session).shaperLoop < smux.newSession.gowrap1
+    8 [select] smux.(*Session).AcceptStream < engine.serveReverseLink < engine.runKharejReverse.func3
+    8 [IO wait] engine.(*sendGate).Write < engine.(*shapedConn).Write < engine.(*meteredConn).Write
+    8 [select] smux.(*Session).keepalive < smux.newSession.gowrap4
+    8 [select] engine.serveReverseLink.func1
+    8 [select] smux.(*Stream).waitRead < smux.(*Stream).Read < engine.(*streamPkt).ReadFrameReuse
+    8 [select] smux.(*Stream).waitRead < smux.(*Stream).Read < engine.servePoolCtl
+    8 [select] engine.(*l3Link).watchSession < engine.newStreamL3Link.gowrap1

@@ -1,0 +1,7 @@
+# G4 (report, priorities 3 and 7): the moved connection kept bulk on its BULK link (HS2_TUNE_MOVED_BULK, the judge's fix for the 25 x 16 cell) against C1's own judging (j3gnb): the video viewers (rebuffers 58 to 70 at N=8, against 12 to 21 for b2nx) and the calls of the home mix, and the 25 x 16 cell the switch was made for
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3gnb
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 DUR=20 BIN=j3g
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 DUR=20 BIN=j3gnb
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3g
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3gnb

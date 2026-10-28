@@ -22,3 +22,9 @@ j3c4hg /root/r3j/bins/hs2-j3 HS2_TUNE_BUDGET_C4=0 HS2_TUNE_HQG_GATE=0
 prodfix /root/r3j/bins/hs2-prodfix
 j3prof /root/r3j/bins/hs2-j3 HS2_PROFILE=prof
 j3ns /root/r3j/bins/hs2-j3 HS2_TUNE_LINK_SNDBUF=0
+j3g /root/r3j/bins/hs2-j3g
+j3g0 /root/r3j/bins/hs2-j3g HS2_TUNE_OWD_GUARD_BULK=0
+j3g2 /root/r3j/bins/hs2-j3g HS2_TUNE_OWD_GUARD_BULK=2
+j3gt5 /root/r3j/bins/hs2-j3g HS2_TUNE_BUDGET_US=5000
+j3gq4 /root/r3j/bins/hs2-j3g HS2_TUNE_QUIET_N=4
+j3gnb /root/r3j/bins/hs2-j3g HS2_TUNE_MOVED_BULK=0

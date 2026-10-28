@@ -1,0 +1,2 @@
+DPI/rec-c3-g1e.json: QUIET 51163, 6428 records, 4964 bursts; gap ms p10 1.17 p25 2.61 p50 4.54 p75 5.87 p90 7.80; mode bin 4.25-4.50 ms 8.8% of gaps; best 1 ms window 28.3%
+DPI/rec-c4-j3.json: QUIET 15161, 5174 records, 4552 bursts; gap ms p10 1.50 p25 2.78 p50 4.76 p75 6.68 p90 8.64; mode bin 2.00-2.25 ms 4.2% of gaps; best 1 ms window 13.9%

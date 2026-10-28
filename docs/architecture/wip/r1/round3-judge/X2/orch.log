@@ -1,0 +1,4 @@
+taken
+14:30:48 lock taken: plan plans/X.txt, old /root/r3j/bins/hs2-prod, new /root/r3j/bins/hs2-prodfix
+14:44:17 done
+14:44:17 lock released after 809s
