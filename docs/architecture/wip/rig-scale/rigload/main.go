@@ -143,7 +143,8 @@ func server(addrs []string, report string) {
 // autotuned). Autotuned on loopback it grows to ~5 MB a connection at once:
 // in R1 round 4, 136 downloads of the home mix held 461 MB within 1.5 s of
 // their start and the 400 of stream_vs_dl 1.2 GB, past this host's
-// tcp_mem[0] (rigguard.sh aborted); run.sh gives 256 KiB (PANEL_SNDBUF).
+// tcp_mem[0]; run.sh passes PANEL_SNDBUF (opt-in; 0, autotuned, by default:
+// a bound changes what the many-connections cells measure).
 var panelSndbuf int
 
 func acceptLoop(ln net.Listener, report string) {
