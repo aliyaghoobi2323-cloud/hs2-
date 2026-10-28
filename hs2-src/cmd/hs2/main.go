@@ -383,7 +383,8 @@ func applyTuning() {
 	num("HS2_TUNE_QUIET_HOLD", &engine.QuietHoldMs)
 	num("HS2_TUNE_RT", &engine.TuneRT)
 	num("HS2_TUNE_RT_MAX", &engine.RTMax)
-	num("HS2_TUNE_TWOWAY", &engine.TwoWay) // a connection whose user sends steadily stays on QUIET
+	num("HS2_TUNE_TWOWAY", &engine.TwoWay)        // a connection whose user sends steadily stays on QUIET
+	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany) // QUIET links past 5 links (both ends alike)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
