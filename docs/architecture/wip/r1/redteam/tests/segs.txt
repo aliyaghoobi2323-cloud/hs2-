@@ -1,0 +1,38 @@
+== try 1 2026-10-28T18:05:54Z
+### RED_HQG_SEGS=0
+    hostq_linux_test.go:88: the socket's mark 25000 → 1448 B 150ms after the drop
+--- PASS: TestLowatAdaptsLinux (0.00s)
+    hostq_linux_test.go:157: wrote 620544 B in 1.5 s (the reader took 620544), unsent at most 2048 B, gate waits 1.489723693s
+--- PASS: TestHostQLinuxSocket (1.56s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 30.367ms, bound 36ms
+    hostq_test.go:233:    5 Mbit/s (from   0): gate true  worst wait 7.6812ms, bound 20ms
+    hostq_test.go:233:   10 Mbit/s (from   0): gate true  worst wait 7.2564ms, bound 20ms
+    hostq_test.go:233:   25 Mbit/s (from   0): gate true  worst wait 7.09816ms, bound 20ms
+    hostq_test.go:233:   25 Mbit/s (from 100): gate false worst wait 8.89244ms, bound 20ms
+    hostq_test.go:233:  100 Mbit/s (from   0): gate false worst wait 5.21016ms, bound 20ms
+    hostq_test.go:233: 1000 Mbit/s (from   0): gate false worst wait 2.178648ms, bound 20ms
+--- PASS: TestHostWaitBound (0.01s)
+    hostq_test.go:304: 100 → 10 Mbit/s: the mark, gate and cap followed within 499ms (worst of 14 phases)
+    hostq_test.go:304: 1000 → 100 Mbit/s: the mark, gate and cap followed within 499ms (worst of 14 phases)
+--- PASS: TestLowatAdapts (0.00s)
+    hostq_test.go:398: hostq link 3: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 4095 B, blocked ratio 0.00
+--- PASS: TestHostQStatusLine (0.00s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	1.583s
+### RED_HQG_SEGS=8
+    hostq_linux_test.go:88: the socket's mark 25000 → 1448 B -1ns after the drop
+    hostq_linux_test.go:90: the socket's mark was 11584 after the drop (want 1448 within 600 ms; at -1ns)
+--- FAIL: TestLowatAdaptsLinux (0.00s)
+    hostq_linux_test.go:139: gate true cap 11584
+--- FAIL: TestHostQLinuxSocket (0.00s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 95.487ms, bound 36ms
+    hostq_test.go:235: 1 Mbit/s (from 0): a light frame waited 95.487ms on the host, more than 36ms
+--- FAIL: TestHostWaitBound (0.00s)
+    hostq_test.go:295: 100 → 10 Mbit/s at 2.1s: the mark, gate and cap followed -1ns after (want ≤ 600 ms; -1: never)
+--- FAIL: TestLowatAdapts (0.00s)
+    hostq_test.go:396: "hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.00"
+--- FAIL: TestHostQStatusLine (0.00s)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	0.010s
+FAIL
+== rc 0 2026-10-28T18:06:02Z

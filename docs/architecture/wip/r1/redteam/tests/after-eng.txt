@@ -1,0 +1,72 @@
+== try 1 2026-10-28T17:30:19Z
+=== RUN   TestHintCodec
+--- PASS: TestHintCodec (0.00s)
+=== RUN   TestHintRule
+--- PASS: TestHintRule (0.00s)
+=== RUN   TestMoveRuleNoRxWithHint
+--- PASS: TestMoveRuleNoRxWithHint (0.00s)
+=== RUN   TestHintMovesDownload
+--- PASS: TestHintMovesDownload (1.00s)
+=== RUN   TestHintCallStays
+--- PASS: TestHintCallStays (4.01s)
+=== RUN   TestMovedStaysBulk
+--- PASS: TestMovedStaysBulk (0.00s)
+=== RUN   TestMoveBackLight
+=== RUN   TestMoveBackLight/on
+=== RUN   TestMoveBackLight/off
+--- PASS: TestMoveBackLight (7.20s)
+=== RUN   TestMoveRuleAppLimitedCall
+--- PASS: TestMoveRuleAppLimitedCall (0.00s)
+=== RUN   TestQuietCountsExtra
+--- PASS: TestQuietCountsExtra (0.00s)
+=== RUN   TestQuietDefaultsRound3
+--- PASS: TestQuietDefaultsRound3 (0.00s)
+=== RUN   TestQuietPoolClasses
+=== RUN   TestQuietPoolClasses/direct/1
+=== RUN   TestQuietPoolClasses/direct/4
+=== RUN   TestQuietPoolClasses/reverse/1
+=== RUN   TestQuietPoolClasses/reverse/4
+--- PASS: TestQuietPoolClasses (17.31s)
+=== RUN   TestQuietProbeOnQuietLink
+=== RUN   TestQuietProbeOnQuietLink/fifo
+--- PASS: TestQuietProbeOnQuietLink (22.88s)
+=== RUN   TestQuietMoveOnceInOrder
+--- PASS: TestQuietMoveOnceInOrder (1.17s)
+=== RUN   TestMoveRule
+--- PASS: TestMoveRule (0.00s)
+=== RUN   TestQuietCounts
+--- PASS: TestQuietCounts (0.00s)
+=== RUN   TestQuietTunPlacement
+--- PASS: TestQuietTunPlacement (2.22s)
+=== RUN   TestQuietMovedWindowGrows
+--- PASS: TestQuietMovedWindowGrows (8.41s)
+=== RUN   TestQuietDialWithoutClass
+--- PASS: TestQuietDialWithoutClass (0.00s)
+=== RUN   TestQuietThinTimeouts
+--- PASS: TestQuietThinTimeouts (0.00s)
+=== RUN   TestRed2OldExitRealStatsNoCeiling
+--- PASS: TestRed2OldExitRealStatsNoCeiling (8.06s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.26s)
+=== RUN   TestRedQuietBackAfterPeerUpgrade
+--- PASS: TestRedQuietBackAfterPeerUpgrade (0.00s)
+=== RUN   TestRedHintTickNeverWaits
+    red_r1_test.go:174: longest tick 45.62µs; writes on the stalled stream 11
+--- PASS: TestRedHintTickNeverWaits (2.25s)
+=== RUN   TestRedMoveBeforeMainSyn
+    red_r1_test.go:218: read at the exit 1048576 of 1048576; move streams refused 0
+--- PASS: TestRedMoveBeforeMainSyn (0.80s)
+=== RUN   TestRedWcoreHostileInputs
+--- PASS: TestRedWcoreHostileInputs (0.12s)
+=== RUN   TestRedFrozenFastAppThenGuard
+--- PASS: TestRedFrozenFastAppThenGuard (4.12s)
+=== RUN   TestRedBurstyDownloadNoFalseDrain
+--- PASS: TestRedBurstyDownloadNoFalseDrain (12.09s)
+=== RUN   FuzzHintDecode
+=== RUN   FuzzHintDecode/seed#0
+=== RUN   FuzzHintDecode/seed#1
+=== RUN   FuzzHintDecode/seed#2
+--- PASS: FuzzHintDecode (0.00s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	92.937s
+== rc 0 2026-10-28T17:31:58Z

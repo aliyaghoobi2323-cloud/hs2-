@@ -1,0 +1,9 @@
+== try 1 2026-10-28T18:05:52Z
+=== RUN   TestRedOWDClockSlew
+    red_r1_test.go:289: estimator, 50 ms within a second (chrony, a paused VM): false queue up to 50ms, past alphaLow (5ms) for 29.7s of 60 s
+    red_r1_test.go:289: estimator, 500 ppm from 10 s (timesyncd): false queue up to 14.875ms, past alphaLow (5ms) for 39.75s of 60 s
+    red_r1_test.go:323: alpha through 30 s of a false 50 ms queue: delivered 0.968 of the path, cap down to 90.0 Mbit/s (50 cuts)
+--- PASS: TestRedOWDClockSlew (0.00s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	0.009s
+== rc 0 2026-10-28T18:05:58Z

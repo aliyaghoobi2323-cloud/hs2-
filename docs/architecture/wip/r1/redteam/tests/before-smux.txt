@@ -1,0 +1,23 @@
+== try 1 2026-10-28T17:27:13Z
+=== RUN   TestRedGroupSeqWrap
+--- PASS: TestRedGroupSeqWrap (2.13s)
+=== RUN   TestRedGroupLinkDiesAroundMove
+=== RUN   TestRedGroupLinkDiesAroundMove/new_link_dies
+    red_r1_test.go:160: exit reader: io: read/write on closed pipe (read up 1188751, down 1197945)
+    red_r1_test.go:160: exit writer: io: read/write on closed pipe (read up 1188751, down 1197945)
+    red_r1_test.go:160: edge reader: io: read/write on closed pipe (read up 1188751, down 1197945)
+    red_r1_test.go:160: edge writer: io: read/write on closed pipe (read up 1188751, down 1197945)
+=== RUN   TestRedGroupLinkDiesAroundMove/old_link_dies
+    red_r1_test.go:160: exit reader: smux: a group stream ended before the frames the other one waits for (read up 499738, down 1197945)
+    red_r1_test.go:160: edge writer: io: read/write on closed pipe (read up 499738, down 1197945)
+    red_r1_test.go:160: edge reader: io: read/write on closed pipe (read up 499738, down 1197945)
+    red_r1_test.go:160: exit writer: io: read/write on closed pipe (read up 499738, down 1197945)
+--- PASS: TestRedGroupLinkDiesAroundMove (0.73s)
+    --- PASS: TestRedGroupLinkDiesAroundMove/new_link_dies (0.37s)
+    --- PASS: TestRedGroupLinkDiesAroundMove/old_link_dies (0.37s)
+=== RUN   TestRedBadSynFINsWait
+    red_r1_test.go:208: 2000 bad SYNs from a peer that reads nothing: 1998 goroutines wait to send their FINs
+--- PASS: TestRedBadSynFINsWait (0.06s)
+PASS
+ok  	github.com/xtaci/smux	2.936s
+== rc 0 2026-10-28T17:27:18Z
