@@ -1282,7 +1282,8 @@ func (m *LinkManager) runAccept(ctx context.Context) {
 			return
 		case <-tick.C:
 			if m.quiet != nil {
-				m.quiet.reap() // the exit redials a QUIET link that died
+				m.quiet.reap()       // the exit redials a QUIET link that died
+				m.quiet.followTick() // the QUIET count fitted to the exit's ceiling (quietfollow.go)
 			}
 			m.sampleHealth()
 			m.reconcile(ctx, m.decideTarget())

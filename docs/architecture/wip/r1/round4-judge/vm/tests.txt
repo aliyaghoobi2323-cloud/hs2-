@@ -1,0 +1,43 @@
+--- PASS: TestQuietCountsExtra (0.00s)
+--- PASS: TestQuietDefaultsRound3 (0.00s)
+--- PASS: TestQuietFollowMath (0.00s)
+    quiet_follow_test.go:118: settled in 1.142s, links taken 12: place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 2.002s, links taken 12: place: on; quiet 2 of 2 (this build 4: the other server's ceiling) links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 1.19s, links taken 10: place: on; quiet 2 of 2 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 1.233s, links taken 12: place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 2.811s, links taken 12: place: on; quiet 2 of 2 (this build 4: the other server's ceiling) links, bulk 8 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 760ms, links taken 10: place: on; quiet 4 of 4 links, bulk 6 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 2.015s, links taken 3: place: on; quiet 1 of 1 (this build 2: the other server's ceiling) links, bulk 1 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 62ms, links taken 2: place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 0 users moved, 0 to 0 users a bulk link
+    quiet_follow_test.go:118: settled in 2.997s, links taken 3: place: on; quiet 1 of 1 (this build 2: the other server's ceiling) links, bulk 1 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 184ms, links taken 3: place: on; quiet 2 of 2 links, bulk 1 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+    quiet_follow_test.go:118: settled in 144ms, links taken 2: place: on; quiet 2 of 2 links, bulk 0 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 0 (not yet 1, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 0 users moved, 0 to 0 users a bulk link
+--- PASS: TestQuietFollowMixed (94.64s)
+    --- PASS: TestQuietFollowMixed/8/edge4-exit4 (8.49s)
+    --- PASS: TestQuietFollowMixed/8/edge4-exit2 (9.43s)
+    --- PASS: TestQuietFollowMixed/8/edge2-exit4 (8.68s)
+    --- PASS: TestQuietFollowMixed/8/olderedge4-exit2 (8.62s)
+    --- PASS: TestQuietFollowMixed/8/edge4-olderexit2 (10.20s)
+    --- PASS: TestQuietFollowMixed/8/before-edge4-exit2 (8.13s)
+    --- PASS: TestQuietFollowMixed/1/edge2-exit1 (9.45s)
+    --- PASS: TestQuietFollowMixed/1/edge1-exit2 (7.44s)
+    --- PASS: TestQuietFollowMixed/1/edge2-olderexit1 (10.40s)
+    --- PASS: TestQuietFollowMixed/1/olderedge2-exit1 (7.59s)
+    --- PASS: TestQuietFollowMixed/1/before-edge2-exit1 (6.20s)
+    quiet_follow_test.go:137: place: on; quiet 3 of 3 links, bulk 2 links; opened on quiet 1, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+--- PASS: TestQuietFollowDirect (5.44s)
+    quiet_rig_test.go:233: place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 3, on bulk (no quiet up) 0; moved to bulk 1 (not yet 1, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 0 users moved, 0 to 0 users a bulk link
+    quiet_rig_test.go:233: place: on; quiet 1 of 1 links, bulk 2 links; opened on quiet 3, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 0 users moved, 0 to 0 users a bulk link
+    quiet_rig_test.go:233: place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 3, on bulk (no quiet up) 0; moved to bulk 1 (not yet 1, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 0 users moved, 0 to 0 users a bulk link
+    quiet_rig_test.go:233: place: on; quiet 1 of 1 links, bulk 4 links; opened on quiet 3, on bulk (no quiet up) 0; moved to bulk 1 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 0 users moved, 0 to 0 users a bulk link
+--- PASS: TestQuietPoolClasses (17.31s)
+    --- PASS: TestQuietPoolClasses/direct/1 (4.10s)
+    --- PASS: TestQuietPoolClasses/direct/4 (6.15s)
+    --- PASS: TestQuietPoolClasses/reverse/1 (2.89s)
+    --- PASS: TestQuietPoolClasses/reverse/4 (4.17s)
+--- PASS: TestQuietDialWithoutClass (0.00s)
+--- PASS: TestRedQuietBackAfterPeerUpgrade (0.00s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	117.434s
+c=0
+rc=0
