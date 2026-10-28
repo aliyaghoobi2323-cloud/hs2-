@@ -54,6 +54,11 @@ type KharejConfig struct {
 	// peers is the set of live links; each stores the ceiling its edge reported
 	// (set up by RunKharej; nil in tests that call serveStream directly).
 	peers *linkPeers
+	// quietOwn, quietNoRoom (tests): a reverse exit of another build — its
+	// own QUIET count (0: QuietCount), and no room for an edge's QUIET links
+	// past it (an exit of before QuietFollow; quietfollow.go)
+	quietOwn    int
+	quietNoRoom bool
 	// noRoute rate-limits the "no target for user port P" log line.
 	noRoute *noRouteLog
 	// traffic counts this exit's own user connections and throughput.
@@ -236,7 +241,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	case kindInfo:
 		myMax := cfg.MaxLinks
 		if pool != nil {
-			myMax = pool.max // what the reverse exit actually clamps to
+			myMax = pool.reported() // the ceiling the reverse exit applies (its own QUIET count: quietfollow.go)
 		}
 		serveInfo(st, cfg.info(myMax), func(pi peerInfo) {
 			if mtr != nil { // per link: read back only while this link is up

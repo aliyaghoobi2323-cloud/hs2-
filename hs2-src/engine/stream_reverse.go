@@ -126,20 +126,28 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	if max < min {
 		max = min
 	}
+	report := max
 	if !QuietOff() {
 		// β2: the edge's QUIET links count toward max_links, but a pool
-		// of one link still has a BULK one (QuietTotal)
-		max = QuietTotal(max)
+		// of one link still has a BULK one (QuietTotal); the exit reports
+		// its own count and, with QuietFollow, dials up to quietPeerMax
+		// QUIET links for an edge that asks for more (quietfollow.go)
+		own := QuietCount(max)
+		if cfg.quietOwn > 0 {
+			own = cfg.quietOwn
+		}
+		report, max = exitRevCeilings(max, own, QuietFollow.Get() != 0 && !cfg.quietNoRoom)
 	}
 	initial := cfg.RevLinks
 	if initial < min {
 		initial = min
 	}
-	if initial > max {
-		initial = max
+	if initial > report {
+		initial = report
 	}
 	dial := func() (dialedLink, error) { return cfg.RevDial() }
 	pool := newExitPool(ctx, min, max, dial, logf)
+	pool.report = report
 	if cfg.RevDialScout != nil {
 		pool.scoutDial = func() (dialedLink, error) { return cfg.RevDialScout() }
 	}

@@ -77,8 +77,12 @@ type exitPool struct {
 	serve func(ctx context.Context, car dialedLink) string
 	min   int
 	max   int
-	log   func(string, ...any)
-	gate  *dialGate
+	// report: the ceiling told to the edge (kindInfo) and shown, when it is
+	// below max (0: max): max leaves room for an edge's QUIET links past
+	// this exit's own count (QuietFollow, quietfollow.go)
+	report int
+	log    func(string, ...any)
+	gate   *dialGate
 
 	mu      sync.Mutex
 	slots   []*exitSlot
@@ -160,6 +164,14 @@ func newExitPool(ctx context.Context, min, max int, dial func() (dialedLink, err
 	p.upLog = newBurstLog("mtcp: ", "exit links up", logp)
 	p.downLog = newBurstLog("mtcp: ", "exit link ends", logp)
 	return p
+}
+
+// reported is the ceiling the exit tells the edge (report, else max).
+func (p *exitPool) reported() int {
+	if p.report > 0 {
+		return p.report
+	}
+	return p.max
 }
 
 // bounds is the pool's [min,max], lowered to the edge's own ceiling when the
@@ -496,7 +508,7 @@ func (p *exitPool) incLive(d int) int {
 // relays (exitstats.go).
 func (p *exitPool) stats() PoolStats {
 	p.mu.Lock()
-	st := PoolStats{Links: p.live, Target: p.want, Min: p.min, Max: p.max, Phase: "following"}
+	st := PoolStats{Links: p.live, Target: p.want, Min: p.min, Max: p.reported(), Phase: "following"}
 	p.mu.Unlock()
 	st.PeerMax = p.peers.max() // reported by the links up NOW (never a gone link's value)
 	st.Routes = p.peers.edgeRoutes()
