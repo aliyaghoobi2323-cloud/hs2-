@@ -450,7 +450,7 @@ func (sc *schedState) takeUrgent() *schedFrame {
 func (sc *schedState) took(sf *schedFrame, now int64) *schedFrame {
 	sf.state = sfTaken
 	sc.queued--
-	if sf.lane == LaneLatency {
+	if sf.lane == LaneLatency || sf.lane > LaneBulk { // (hs2's realtime lanes: light frames too)
 		sc.lat[sc.latN%schedLatKeep] = uint32((now - sf.at) / int64(time.Microsecond))
 		sc.latN++
 	}

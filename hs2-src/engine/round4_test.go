@@ -49,6 +49,8 @@ func linksOf(b *placeBook, cands []*placeCand, tag uint32) int {
 // link each; a viewer then goes where one user is; in one_vs_16 the heavy
 // user keeps off the one-connection user's link.
 func TestPlaceUsers(t *testing.T) {
+	defer func(v int) { PlaceUsers = v }(PlaceUsers)
+	PlaceUsers = 1 // every user held (the browser's case below sets its own)
 	t.Run("lone", func(t *testing.T) {
 		var b placeBook
 		cands := placeLinks(8)
@@ -111,7 +113,7 @@ func TestPlaceUsers(t *testing.T) {
 	for _, mode := range []int{1, 2} {
 		t.Run(fmt.Sprintf("browser, mode %d", mode), func(t *testing.T) {
 			defer func(v int) { PlaceUsers = v }(PlaceUsers)
-			PlaceUsers = mode
+			PlaceUsers = mode // (restored to 1 for the cases after)
 			var b placeBook
 			cands := placeLinks(8)
 			due := map[uint32]int{}
@@ -202,12 +204,13 @@ func TestHoldFor(t *testing.T) {
 	}
 }
 
-// capRig is hintRig with QuietCap at 64 KiB.
+// capRig is hintRig with QuietCap at 64 KiB (and TwoWay off: the cap's own
+// measure; with TwoWay a new group is pending for its first tick).
 func capRig(t *testing.T) *quietRig {
 	t.Helper()
-	old := QuietCap
-	QuietCap = 64 << 10
-	t.Cleanup(func() { QuietCap = old })
+	old, otw := QuietCap, TwoWay
+	QuietCap, TwoWay = 64<<10, 0
+	t.Cleanup(func() { QuietCap, TwoWay = old, otw })
 	return hintRig(t, 4*angleRateBps, 10*time.Millisecond)
 }
 
