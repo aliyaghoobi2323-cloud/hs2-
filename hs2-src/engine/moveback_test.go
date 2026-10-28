@@ -21,7 +21,11 @@ func TestMoveBackLight(t *testing.T) {
 			if on {
 				t.Setenv("HS2_TUNE_MOVE_BACK", "1")
 			}
-			defer func(v int, l, h time.Duration) { TuneMoveBack, moveBackLight, moveBackHold = v, l, h }(TuneMoveBack, moveBackLight, moveBackHold)
+			// restored once the rig's mover ended (a cleanup registered
+			// before the rig's runs after them): a defer ran while the mover
+			// could still read them (a race -race saw in the off case)
+			v, l, h := TuneMoveBack, moveBackLight, moveBackHold
+			t.Cleanup(func() { TuneMoveBack, moveBackLight, moveBackHold = v, l, h })
 			TuneMoveBack = map[bool]int{true: 1, false: 0}[on]
 			moveBackLight, moveBackHold = 800*time.Millisecond, 1500*time.Millisecond
 			r := hintRig(t, 4*angleRateBps, 10*time.Millisecond)
