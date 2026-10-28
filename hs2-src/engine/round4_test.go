@@ -142,6 +142,23 @@ func TestPlaceUsers(t *testing.T) {
 			}
 		})
 	}
+	// mode 3's word: heavy from placeHeavy connections, moved or moving
+	t.Run("heavy", func(t *testing.T) {
+		var b placeBook
+		cands := placeLinks(2)
+		for range 6 {
+			b.add(cands[0].link, 5)
+		}
+		b.add(cands[1].link, 6)
+		b.setDue(map[uint32]int{5: 2})
+		if !b.heavy(5) || b.heavy(6) {
+			t.Fatalf("heavy: user 5 (6 moved, 2 moving) %v, user 6 (1) %v", b.heavy(5), b.heavy(6))
+		}
+		b.setDue(nil)
+		if b.heavy(5) {
+			t.Fatal("user 5 heavy with 6 connections")
+		}
+	})
 	t.Run("drop", func(t *testing.T) {
 		var b placeBook
 		cands := placeLinks(2)

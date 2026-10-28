@@ -36,8 +36,13 @@ import (
 // page went onto one link and its page load p95 rose 1.25 times). Every
 // other user's connection goes to the link with the fewest other users.
 
-// PlaceUsers: 1 every user held, 2 heavy users held (HS2_TUNE_PLACE_USERS),
-// 0 the pool's pick.
+// PlaceUsers 3: heavy users as with 2; every other user's connection takes
+// the pool's pick, as without the placement (the rig: with 2, a browser's
+// page loads were 1.1 to 1.9 times slower; the heavy users held a link
+// each is what spares the viewers).
+//
+// PlaceUsers: 1 every user held, 2 heavy users held, 3 heavy users held and
+// the rest by the pool's pick (HS2_TUNE_PLACE_USERS), 0 the pool's pick.
 var PlaceUsers = 2 // the default since R1 round 4 (round4/REPORT.fa.md)
 
 // placeHeavy: a user with this many connections moved (or moving at the
@@ -105,6 +110,17 @@ func (b *placeBook) line() string {
 	return fmt.Sprintf("placed by users: %d users moved, %d to %d users a bulk link", len(all), lo, hi)
 }
 
+// heavy says whether tag has placeHeavy connections moved or moving now.
+func (b *placeBook) heavy(tag uint32) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := b.due[tag]
+	for _, us := range b.by {
+		n += us[tag]
+	}
+	return n >= placeHeavy
+}
+
 // setDue sets the connections due to move at the mover's tick, by user
 // (nil: none).
 func (b *placeBook) setDue(due map[uint32]int) {
@@ -139,7 +155,7 @@ func (b *placeBook) choose(cands []*placeCand, tag uint32) *placeCand {
 			conns[u] += n
 		}
 	}
-	heavyOnly := PlaceUsers == 2
+	heavyOnly := PlaceUsers >= 2
 	held := !heavyOnly || conns[tag] >= placeHeavy
 	users := 0
 	for _, n := range conns {

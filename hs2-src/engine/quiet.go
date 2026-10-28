@@ -974,7 +974,7 @@ func (q *quietSet) move(gs *groupStream, dir string) bool {
 	var link Link
 	var rel func()
 	ok := false
-	if PlaceUsers != 0 {
+	if PlaceUsers != 0 && (PlaceUsers != 3 || q.book.heavy(gs.tag)) {
 		var ml *mtcpLink
 		if ml, rel, ok = q.pickBulk(gs.tag); ok { // place.go
 			link = ml
