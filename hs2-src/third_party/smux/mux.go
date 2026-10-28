@@ -179,6 +179,15 @@ type Config struct {
 	// 4.26 ms apart at the median on the rig (gamma1's capture), a timing
 	// mark of its own.
 	CoalesceJitter bool
+
+	// GroupMoves, with Sched: how many times one group may move (Move,
+	// Attach, group.go): 0 or 1, once (C5's one-time move, as before); n >
+	// 1, up to n times, each further move once this end let go of the
+	// stream before the one it writes on (the group retired it): hs2's
+	// move back from a BULK link to a QUIET one and on again (R1 round 3,
+	// the judge). Both ends must allow it: a move this end does not allow
+	// is refused (ErrNoMove).
+	GroupMoves int
 }
 
 // DefaultConfig is used to return a default configuration
@@ -266,6 +275,9 @@ func VerifyConfig(config *Config) error {
 	}
 	if config.Coalesce < 0 || config.CoalesceMin < 0 {
 		return errors.New("coalesce and coalesce min must not be negative")
+	}
+	if config.GroupMoves < 0 {
+		return errors.New("group moves must not be negative")
 	}
 	return nil
 }

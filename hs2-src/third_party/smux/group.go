@@ -25,6 +25,15 @@ import (
 // window bounds (no memory of its own: the reorder buffer is the stream
 // window, §3.5).
 //
+// A further move (Config.GroupMoves past 1; R1 round 3, the judge: hs2's
+// move back to a QUIET link) goes the same way once the stream before is
+// let go at this end (Retired): the move stream becomes the group's main
+// one (shift), and the next move stream follows it as the first followed
+// the main one. Since the opener lets a stream go only after the
+// attacher's FIN on it, which the attacher sends once it let it go, the
+// attacher has shifted, or shifts as it attaches, by the time the next move
+// stream reaches it.
+//
 // The main stream is let go once neither end needs it: the attacher closes
 // it once it writes on the move stream and has read every frame before the
 // move stream's base; the opener once it writes on the move stream and has
@@ -71,6 +80,10 @@ type Group struct {
 	retired bool // the main stream is let go
 	closeCh chan struct{}
 	movedAt time.Time
+	moves   int // the moves done (GroupMoves)
+	// txBase, rxBase: the data bytes of the streams let go before the main
+	// one now (a shift), so TxBytes and RxBytes keep counting up
+	txBase, rxBase uint64
 
 	wmu, rmu      sync.Mutex
 	readDeadline  atomic.Value
@@ -155,7 +168,7 @@ func (g *Group) Move(sess *Session, userTag uint32) (*Stream, error) {
 		return nil, ErrNoSched
 	}
 	g.mu.Lock()
-	if !g.opener || g.closed || g.subs[1] != nil {
+	if !g.opener || g.closed || !g.mayMoveLocked(sess.config) {
 		g.mu.Unlock()
 		return nil, ErrNoMove
 	}
@@ -165,10 +178,42 @@ func (g *Group) Move(sess *Session, userTag uint32) (*Stream, error) {
 		g.mu.Unlock()
 		return nil, err
 	}
+	g.shiftLocked()
 	g.switchLocked(s1, base)
 	g.mu.Unlock()
 	g.checkRetire()
 	return s1, nil
+}
+
+// mayMoveLocked says whether the group may move (or take a move stream)
+// now under cfg's GroupMoves: never moved; or moved fewer than GroupMoves
+// times, the stream before let go at this end.
+func (g *Group) mayMoveLocked(cfg *Config) bool {
+	if g.subs[1] == nil {
+		return true
+	}
+	return cfg.GroupMoves > 1 && g.moves < cfg.GroupMoves && g.retired
+}
+
+// shiftLocked makes the move stream the group's main one before a further
+// move (its stream before is let go): nothing when it never moved.
+func (g *Group) shiftLocked() {
+	if g.subs[1] == nil {
+		return
+	}
+	g.txBase += g.subs[0].TxBytes()
+	g.rxBase += g.subs[0].RxBytes()
+	g.subs[0], g.subs[1] = g.subs[1], nil
+	g.base1, g.cur = 0, 0
+	g.txLeft, g.retired = false, false
+	g.attach = make(chan struct{})
+}
+
+// Moves is how many times the group moved.
+func (g *Group) Moves() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.moves
 }
 
 // Attach takes the move stream st of the group (accepted on another
@@ -180,10 +225,11 @@ func (g *Group) Attach(st *Stream) error {
 		return ErrNoMove
 	}
 	g.mu.Lock()
-	if g.opener || g.closed || g.subs[1] != nil || st.grp != nil {
+	if g.opener || g.closed || st.grp != nil || !g.mayMoveLocked(st.sess.config) {
 		g.mu.Unlock()
 		return ErrNoMove
 	}
+	g.shiftLocked()
 	g.switchLocked(st, base)
 	g.mu.Unlock()
 	g.checkRetire()
@@ -195,6 +241,7 @@ func (g *Group) switchLocked(s1 *Stream, base uint32) {
 	s1.grp = g
 	g.subs[1], g.base1, g.cur = s1, base, 1
 	g.movedAt = time.Now()
+	g.moves++
 	close(g.sw)
 	g.sw = make(chan struct{})
 	close(g.attach)
@@ -507,9 +554,9 @@ func (g *Group) WriteBusy() time.Duration {
 // and received.
 func (g *Group) TxBytes() uint64 {
 	g.mu.Lock()
-	s0, s1 := g.subs[0], g.subs[1]
+	s0, s1, n := g.subs[0], g.subs[1], g.txBase
 	g.mu.Unlock()
-	n := s0.TxBytes()
+	n += s0.TxBytes()
 	if s1 != nil {
 		n += s1.TxBytes()
 	}
@@ -518,9 +565,9 @@ func (g *Group) TxBytes() uint64 {
 
 func (g *Group) RxBytes() uint64 {
 	g.mu.Lock()
-	s0, s1 := g.subs[0], g.subs[1]
+	s0, s1, n := g.subs[0], g.subs[1], g.rxBase
 	g.mu.Unlock()
-	n := s0.RxBytes()
+	n += s0.RxBytes()
 	if s1 != nil {
 		n += s1.RxBytes()
 	}

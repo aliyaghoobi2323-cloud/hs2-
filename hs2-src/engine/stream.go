@@ -249,7 +249,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	cfg := newSmuxConfig()
 	var flows *linkFlows
 	if sched {
-		flows = &linkFlows{}
+		flows = &linkFlows{bulk: bulkLink}
 		cfg.Sched = newSchedAdapter
 		cfg.FlowInfo = flows.info
 		cfg.BulkFrame = BulkFrameSize
@@ -261,6 +261,12 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	// β2 (quiet.go): a BULK link's sockets get α's cap in place of
 	// C4-lite's; QUIET ones, and links of no class, keep C4-lite
 	quietLink, bulkLink := classOf(caps)
+	if meter != nil {
+		meter.quietLink = quietLink
+	}
+	if sched && caps&tlscarrier.CapMoveBack != 0 {
+		cfg.GroupMoves = moveBackMax // a group may move back and on (moveback.go)
+	}
 	// γ2 (budget.go): a BULK link's in-flight budget at its writer's bulk
 	// lane, in place of α's rate cap (C4-lite's stays, the outer one)
 	var lb *linkBudget

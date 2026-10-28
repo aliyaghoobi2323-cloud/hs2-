@@ -255,8 +255,8 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 	seen := make(map[*exitGroup]bool, len(live))
 	for _, eg := range live {
 		seen[eg] = true
-		if eg.Moved() != nil {
-			delete(rules, eg)
+		if m := eg.mtr.Load(); eg.Moved() != nil && (m == nil || !m.quietLink) {
+			delete(rules, eg) // on a BULK link now (moved back: judged again)
 			continue
 		}
 		r := rules[eg]

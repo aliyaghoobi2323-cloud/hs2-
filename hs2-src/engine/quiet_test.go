@@ -68,7 +68,14 @@ const (
 	qpEcho  = 3 // the exit echoes
 	qpUp2   = 4 // as qpUp, another counter
 	qpTotal = 5
+	qpPhase = 7 // the exit writes qpPhaseBytes of a pattern, then echoes
 )
+
+// qpPhaseBytes: qpPhase's download, before it echoes.
+const qpPhaseBytes = 3 << 20
+
+// phaseByte is byte i of qpPhase's download.
+func phaseByte(i int64) byte { return byte(i*11 + i>>9) }
 
 func classCaps(class uint32) uint32 {
 	return tlscarrier.LocalAuthHdr().Caps | class
@@ -170,6 +177,16 @@ func (r *quietRig) serve(p *classPair) {
 					}
 				}
 			case qpEcho:
+				io.Copy(conn, conn)
+			case qpPhase:
+				for off := int64(0); off < qpPhaseBytes; off += int64(len(b)) {
+					for i := range b {
+						b[i] = phaseByte(off + int64(i))
+					}
+					if _, err := conn.Write(b); err != nil {
+						return
+					}
+				}
 				io.Copy(conn, conn)
 			}
 		}()

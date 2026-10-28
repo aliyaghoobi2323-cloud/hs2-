@@ -130,7 +130,10 @@ const (
 // retransmits and the measured round-trip time.
 type linkMeter struct {
 	// owd: the link's one-way queue delays (a BULK link's, owd.go)
-	owd     owdLink
+	owd owdLink
+	// quietLink: the link is a QUIET one (set as it comes up): the exit's
+	// move hint judges the group connections on one (hint.go)
+	quietLink bool
 	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
 	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
 	stalls  atomic.Uint64 // write errors / timeouts

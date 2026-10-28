@@ -233,6 +233,9 @@ type quietSet struct {
 	groups []*groupStream
 	byID   map[uint32]*groupStream
 	hinted atomic.Int64 // hints heard for a group not moved yet
+	// onBulk: the moved groups the move-back rule watches (moveback.go)
+	onBulk    []*groupStream
+	movedBack atomic.Int64
 	// hintOn: the QUIET links whose kindHint stream is up (hint.go), under
 	// mu: their groups move for a download on the exit's word alone
 	hintOn   map[*mtcpLink]int
@@ -617,6 +620,10 @@ type groupStream struct {
 	rule moveRule // the mover's
 	// noMove: it will not move (the group refused: it ended, or moved)
 	noMove bool
+	// back: its move-back rule while it is on a BULK link (moveback.go);
+	// qown: qrel is a slot it took moving back (Close gives it back)
+	back moveBackRule
+	qown bool
 	// ql: the QUIET link it opened on; while that link's kindHint stream is
 	// up (quietSet.hintOn) it moves for a download on the exit's word, not
 	// on data arriving (hint.go); hintAt: when the exit's hint came
@@ -681,7 +688,7 @@ func (gs *groupStream) Close() error {
 	gs.mu.Lock()
 	first := !gs.closed
 	gs.closed = true
-	qcs, bcs, brel := gs.qcs, gs.bcs, gs.brel
+	qcs, bcs, brel, qrel, qown := gs.qcs, gs.bcs, gs.brel, gs.qrel, gs.qown
 	gs.mu.Unlock()
 	err := gs.g.Close()
 	if first {
@@ -691,6 +698,9 @@ func (gs *groupStream) Close() error {
 		}
 		if brel != nil {
 			brel()
+		}
+		if qown && qrel != nil {
+			qrel() // a slot taken moving back (the relay's own is the first)
 		}
 		edgeGroupIDs.Delete(gs.g.ID())
 	}
@@ -815,7 +825,10 @@ func (q *quietSet) moverTick(now int64) {
 		if gone {
 			continue
 		}
-		if s.g.Moved() != nil {
+		s.mu.Lock()
+		onBulk := s.bcs != nil
+		s.mu.Unlock()
+		if onBulk {
 			continue
 		}
 		due, dir := s.rule.tick(s.g.TxBytes(), s.g.RxBytes(), s.g.WriteBusy(), now, true, !q.hinting(s.ql))
@@ -827,8 +840,15 @@ func (q *quietSet) moverTick(now int64) {
 		}
 		keep = append(keep, s)
 	}
+	back := q.backTick(now) // the moved ones that are light again (moveback.go)
 	q.gmu.Lock()
-	q.groups = append(keep, q.groups[len(gs):]...) // with those opened meanwhile
+	q.groups = append(append(keep, q.groups[len(gs):]...), back...) // with those opened meanwhile
+	for _, s := range back {
+		if q.byID == nil {
+			q.byID = map[uint32]*groupStream{}
+		}
+		q.byID[s.g.ID()] = s // the exit's hints find it again
+	}
 	if len(q.byID) > len(q.groups) {
 		// forget the ids of the groups the mover is done with
 		live := make(map[uint32]*groupStream, len(q.groups))
@@ -927,6 +947,7 @@ func (q *quietSet) move(gs *groupStream, dir string) bool {
 	}
 	gs.rule.lastDir = dir
 	q.moved.Add(1)
+	q.watchBack(gs, ml)
 	return true
 }
 
@@ -943,8 +964,8 @@ func (q *quietSet) line() string {
 	case -1:
 		st = "off (the other server has no group streams)"
 	}
-	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d",
-		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load())
+	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d; moved back %d",
+		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load(), q.movedBack.Load())
 }
 
 // placeLine is the status line of the process's placement (nil: none).

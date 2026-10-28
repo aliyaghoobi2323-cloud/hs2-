@@ -110,6 +110,7 @@ var MovedBulk = 1
 // runner's tick.
 type linkFlows struct {
 	mu   sync.Mutex
+	bulk bool // a BULK link's (MovedBulk: its moved connections stay bulk)
 	ents []*flowEnt
 	// the status line's (the runner's, read under mu): flows by class at the
 	// latest tick, flips since the latest line and when that was
@@ -142,7 +143,7 @@ func (t *linkFlows) add(st *smux.Stream) *flowEnt {
 		// from its first frame, until it is quiet (C1's rule)
 		e.cls.d[0].cls = ClassBulk
 		e.class.Store(uint32(ClassBulk))
-		e.moved = MovedBulk != 0
+		e.moved = MovedBulk != 0 && t.bulk
 	}
 	st.SetFlowCtx(e)
 	t.ents = append(t.ents, e)

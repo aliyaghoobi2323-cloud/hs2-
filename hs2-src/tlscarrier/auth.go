@@ -111,13 +111,18 @@ const (
 	// connections whose send backlog persists, and the edge moves those
 	// (R1 round 3, the judge; HS2_TUNE_MOVE_HINT). Needs CapGroup.
 	CapHint
+	// CapMoveBack (level 2, opt-in: HS2_TUNE_MOVE_BACK=1 at both ends): a
+	// group connection may move more than once (smux Config.GroupMoves),
+	// back from a BULK link to a QUIET one once it is light again, and on
+	// (engine moveback.go; R1 round 3, the judge). Needs CapGroup.
+	CapMoveBack
 )
 
 // RoleCaps are the link-class bits.
 const RoleCaps = CapQuiet | CapBulk
 
 // level2Caps: the caps of level 2, never in force on a level 1 link.
-const level2Caps = CapGroup | RoleCaps | CapHint
+const level2Caps = CapGroup | RoleCaps | CapHint | CapMoveBack
 
 // AuthHdr is the header of the client's record (7 B on the wire).
 type AuthHdr struct {
@@ -222,6 +227,9 @@ func localCaps() uint32 {
 		if os.Getenv(k.env) == "0" {
 			caps &^= k.bit
 		}
+	}
+	if os.Getenv("HS2_TUNE_MOVE_BACK") == "1" && caps&CapGroup != 0 {
+		caps |= CapMoveBack // opt-in (lab)
 	}
 	return caps
 }

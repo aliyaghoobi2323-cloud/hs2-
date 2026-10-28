@@ -669,3 +669,86 @@ func (r *reasm) push(s *Stream, seq uint32, from, n int) {
 	atomic.AddInt32(&s.sess.bucket, -int32(n))
 	s.pushSeq(head, seq)
 }
+
+// A group moves A → B → A → B (Config.GroupMoves 4: hs2's move back to a
+// QUIET link and on again), each further move once the edge let go of the
+// stream before, in the middle of a transfer both ways: each side reads
+// every byte in order and the end; a move before the stream before is let
+// go, or past GroupMoves, is refused; with GroupMoves 0 a second move is.
+func TestGroupMovesBackAndForth(t *testing.T) {
+	cfg := func() *Config { c := groupConfig(); c.GroupMoves = 4; return c }
+	a := newGlink(t, 10*time.Millisecond, 3*time.Millisecond, 11, cfg)
+	b := newGlink(t, 4*time.Millisecond, 0, 13, cfg)
+	x := serveExit(t, a.exit, b.exit)
+	g, err := a.edge.OpenGroup(0xBEEF, 0, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var xg *Group
+	select {
+	case xg = <-x.got:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the exit never accepted the group")
+	}
+	const total = 6 << 20
+	var upN, dnN, wrote atomic.Int64
+	pumps := make(chan error, 2)
+	upEnd, dnEnd := make(chan error, 1), make(chan error, 1)
+	go func() {
+		pumps <- pump(g, 'u', total, rand.New(rand.NewSource(21)), func(off int64) { wrote.Store(off) })
+	}()
+	go func() { pumps <- pump(xg, 'd', total, rand.New(rand.NewSource(22)), nil) }()
+	go func() { upEnd <- drain(xg, 'u', &upN) }()
+	go func() { dnEnd <- drain(g, 'd', &dnN) }()
+	waitFor(t, "1 MiB written", func() bool { return wrote.Load() >= 1<<20 })
+	for i, to := range []*Session{b.edge, a.edge, b.edge} {
+		if i > 0 {
+			if _, err := g.Move(to, 0xBEEF); err != ErrNoMove && !g.Retired() {
+				t.Fatalf("move %d before the stream before was let go: %v, want ErrNoMove", i+1, err)
+			}
+			waitFor(t, "the stream before let go", g.Retired)
+		}
+		if _, err := g.Move(to, 0xBEEF); err != nil {
+			t.Fatalf("move %d: %v", i+1, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-pumps:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(60 * time.Second):
+			t.Fatalf("stuck: read up %d, down %d of %d", upN.Load(), dnN.Load(), total)
+		}
+	}
+	waitFor(t, "every byte read", func() bool { return upN.Load() == total && dnN.Load() == total })
+	if g.Moves() != 3 || x.moves.Load() != 3 {
+		t.Fatalf("moves: edge %d, exit %d, attached %d; want 3", g.Moves(), xg.Moves(), x.moves.Load())
+	}
+	// a fourth move (GroupMoves 4) goes, a fifth is refused
+	waitFor(t, "the stream before let go", g.Retired)
+	if _, err := g.Move(a.edge, 0xBEEF); err != nil {
+		t.Fatalf("move 4: %v", err)
+	}
+	waitFor(t, "the stream before let go", g.Retired)
+	if _, err := g.Move(b.edge, 0xBEEF); err != ErrNoMove {
+		t.Fatalf("move 5 past GroupMoves 4: %v, want ErrNoMove", err)
+	}
+	g.Close()
+	select {
+	case err := <-upEnd:
+		if err != nil {
+			t.Fatalf("exit's reader: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the exit never read the end")
+	}
+	xg.Close()
+	if err := <-dnEnd; err != nil && err != io.ErrClosedPipe {
+		t.Fatalf("edge's reader: %v", err)
+	}
+	waitFor(t, "every stream closed", func() bool {
+		return a.edge.NumStreams() == 0 && a.exit.NumStreams() == 0 && b.edge.NumStreams() == 0 && b.exit.NumStreams() == 0
+	})
+}
