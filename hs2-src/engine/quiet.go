@@ -94,7 +94,7 @@ func QuietCount(maxLinks int) int {
 	case QuietN > 0:
 		return QuietN
 	case QuietExtra != 0 && maxLinks <= quietOneMax:
-		return 1
+		return max(QuietFew, 1)
 	case QuietExtra != 0:
 		return max(QuietMany, 1)
 	case maxLinks >= 4:
@@ -105,6 +105,15 @@ func QuietCount(maxLinks int) int {
 
 // quietOneMax: the most links a pool of one QUIET link has (QuietExtra).
 const quietOneMax = 5
+
+// QuietFew (HS2_TUNE_QUIET_FEW): the QUIET links of a pool of up to
+// quietOneMax links (1 until the R1 round-4 judge). Two at N=1 give the
+// home mix's web pages a second QUIET flow at the bottleneck next to the
+// calls kept on QUIET (round 4's A7: p95 page 4648 ms against 6341 for
+// j3g and 8026 for c4) and halve what a QUIET link's death cuts (the red
+// team's C4), for one connection more (N+2 at N <= 5). The two ends need
+// not agree (QuietFollow, quietfollow.go).
+var QuietFew = 1
 
 // QuietMany (HS2_TUNE_QUIET_MANY; with QuietFollow, the default, the two
 // ends need not set it alike: they run the smaller count; quietfollow.go): the QUIET

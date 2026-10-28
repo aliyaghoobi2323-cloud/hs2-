@@ -392,6 +392,17 @@ func applyTuning() {
 	numT("HS2_TUNE_TWOWAY", engine.TwoWay)            // a connection whose user sends steadily stays on QUIET
 	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany)     // QUIET links past 5 links
 	numT("HS2_TUNE_QUIET_FOLLOW", engine.QuietFollow) // reverse: both ends run the smaller QUIET count (0: both must match)
+	// the R1 round-4 judge: QUIET links at <= 5 links; a call's realtime
+	// lane held while it stays loosely steady; the steady lane's bytes in a
+	// row while the latency lane waits; the latency lane by user; a BULK
+	// link's drain against BBR's PROBE_RTT; C3's floor bounded in time
+	num("HS2_TUNE_QUIET_FEW", &engine.QuietFew)
+	numT("HS2_TUNE_RT_HOLD", engine.RTHold)
+	numT("HS2_TUNE_RT_SHARE", engine.RTShare)
+	numT("HS2_TUNE_LAT_RR", engine.LatRR)
+	num("HS2_TUNE_BUDGET_DRAIN", &engine.BudgetDrainMs)
+	num("HS2_TUNE_BUDGET_DRAIN_K", &engine.BudgetDrainK)
+	num("HS2_TUNE_HQG_SEGS_MS", &engine.HQGSegsMs)
 	// the R1 round-4 judge (the red team's C4 and C5): a user's connections
 	// on one QUIET link; a user holding more than this many bytes unread on
 	// QUIET links moves off them; a connection whose link died before its
