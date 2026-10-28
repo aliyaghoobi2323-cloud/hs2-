@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/xtaci/smux"
 )
@@ -87,13 +88,35 @@ func (s *exitGroupSet) remove(eg *exitGroup) {
 	s.mu.Unlock()
 }
 
-// attach joins st, a move stream, to its live group (false: none, or it
-// moved already: the caller refuses st).
+// attachWait: a move stream that finds no live group waits this long for
+// its main stream, which comes on another link (§4.5: a sub-stream whose
+// group is not made within 2 s is refused). Refused at once, a move stream
+// that beat its main stream (held by an RTO on the QUIET link, or by the
+// exit's reader of that link parked on a full buffer) left the connection
+// wedged: the exit read the main stream up to the move and waited for the
+// rest for good (the R1 red team).
+var attachWait = 2 * time.Second
+
+// attach joins st, a move stream, to its live group (false: none within
+// attachWait, or it moved already: the caller refuses st).
 func (s *exitGroupSet) attach(st *smux.Stream, mtr *linkMeter) bool {
 	id, _, _ := st.GroupInfo()
-	s.mu.Lock()
-	eg := s.m[id]
-	s.mu.Unlock()
+	until := time.Now().Add(attachWait)
+	var eg *exitGroup
+	for {
+		s.mu.Lock()
+		eg = s.m[id]
+		s.mu.Unlock()
+		if eg != nil || !time.Now().Before(until) {
+			break
+		}
+		select {
+		case <-st.GetDieCh():
+			s.refused.Add(1)
+			return false // its link died meanwhile
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 	if eg == nil || eg.Attach(st) != nil {
 		s.refused.Add(1)
 		return false
