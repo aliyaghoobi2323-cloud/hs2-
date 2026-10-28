@@ -61,7 +61,7 @@ const (
 // 3 of 8 calls at 2 to 12 s, the exit's status: 5 steady). The user's
 // realtime credit (RTMax) still bounds it; a download (its request one
 // tick) or an upload (past RTMax) is never loosely steady.
-var RTHold = newTuneInt(0)
+var RTHold = newTuneInt(20) // since the R1 round-4 judge (item 3)
 
 const (
 	// rtLooseOwn, rtLooseOther: a held flow's ticks of 20 with bytes, what
