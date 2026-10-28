@@ -23,3 +23,16 @@ func sockRcvbuf(c net.Conn) (int, bool) {
 	}
 	return n, true
 }
+
+// sockSndbuf is a TCP socket's SO_SNDBUF.
+func sockSndbuf(c *net.TCPConn) (int, bool) {
+	rc, err := c.SyscallConn()
+	if err != nil {
+		return 0, false
+	}
+	n, gerr := 0, error(nil)
+	if err := rc.Control(func(fd uintptr) { n, gerr = syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF) }); err != nil || gerr != nil {
+		return 0, false
+	}
+	return n, true
+}

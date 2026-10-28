@@ -285,6 +285,9 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		cfg.CoalesceMin = float64(QuietCoalesceMin)
 		cfg.CoalesceJitter = QuietCoalJitter != 0
 	}
+	if bulkLink {
+		setLinkSndbuf(tc) // a fixed send buffer: no growth to wait for (linkbuf.go)
+	}
 	if quietLink && QuietThin != 0 {
 		setThinTimeouts(tc) // (best effort: a kernel without it keeps its back-off)
 	}

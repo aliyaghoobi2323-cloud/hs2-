@@ -12,3 +12,11 @@ func setRcvBuf(fd uintptr, n int) {
 	}
 	_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, n)
 }
+
+// setSndBuf sets a socket's send buffer to n bytes (best effort).
+func setSndBuf(fd uintptr, n int) {
+	if n <= 0 {
+		return
+	}
+	_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, n)
+}

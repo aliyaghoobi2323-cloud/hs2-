@@ -17,3 +17,15 @@ func setRcvBuf(fd uintptr, n int) {
 	}
 	_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, n)
 }
+
+// setSndBuf sets (and so locks) a socket's send buffer to n bytes, past
+// net.core.wmem_max with SO_SNDBUFFORCE when the process may (best effort).
+func setSndBuf(fd uintptr, n int) {
+	if n <= 0 {
+		return
+	}
+	if syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUFFORCE, n) == nil {
+		return
+	}
+	_ = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, n)
+}

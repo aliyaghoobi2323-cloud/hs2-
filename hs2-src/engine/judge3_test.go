@@ -198,3 +198,34 @@ func TestMovedStaysBulk(t *testing.T) {
 		dn.close()
 	}
 }
+
+// A BULK link's socket gets a fixed send buffer (linkbuf.go): no growth to
+// wait for, whatever the host's TCP memory.
+func TestLinkSndbuf(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			defer c.Close()
+			time.Sleep(time.Second)
+		}
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	tc := c.(*net.TCPConn)
+	before, ok := sockSndbuf(tc)
+	if !ok {
+		t.Skip("no SO_SNDBUF read here")
+	}
+	setLinkSndbuf(tc)
+	after, _ := sockSndbuf(tc)
+	if after < TuneLinkSndbuf {
+		t.Fatalf("send buffer %d after setting %d (before %d)", after, TuneLinkSndbuf, before)
+	}
+}
