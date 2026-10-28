@@ -276,6 +276,7 @@ func (m *LinkManager) enableQuiet() *quietSet {
 	m.ap.T = min(m.ap.T, bm)
 	f := q.line
 	placeLine.Store(&f)
+	placeSet.Store(q) // its moves and hints, R1's event tallies (events.go)
 	return q
 }
 

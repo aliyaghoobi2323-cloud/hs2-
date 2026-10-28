@@ -220,21 +220,102 @@ func hostWait(r, rate0 float64) (worst time.Duration, on bool) {
 	return worst, h.on.Load()
 }
 
+// hqgVariant is one of C3's gate variants (decision T12), as HQGSegs and
+// HQGGate say when a guard is made.
+type hqgVariant struct {
+	name       string
+	segs, gate int
+}
+
+// hqgVariants: the judge's default (SEGS=8: the cap at least 8 segments,
+// the mark the cap; R1 task 17, T12) and the document's gate
+// (HS2_TUNE_HQG_SEGS=0: cap max(2 ms, 2 segments), mark half of it). The
+// C3 tests assert both, whatever the environment sets (TestMain).
+var hqgVariants = []hqgVariant{{"segs8", 8, 1}, {"document", 0, 1}}
+
+// with runs f with the variant's switches, the ones before back after.
+func (v hqgVariant) with(f func()) {
+	defer func(s, g int) { HQGSegs, HQGGate = s, g }(HQGSegs, HQGGate)
+	HQGSegs, HQGGate = v.segs, v.gate
+	f()
+}
+
 // TestHostWaitBound: a light frame waits on the host (the frame in
 // progress and what the socket holds unsent, by the skb rule) no more than
-// max(20 ms, 3·1500 B/R), the bound of R1's criterion, from 1 Mbit/s to
-// 1 Gbit/s; at 25 Mbit/s with the gate on (from below) and off (from
-// above).
+// max(20 ms, 3·1500 B/R), the bound of R1's criterion (§3.3), from 1 Mbit/s
+// to 1 Gbit/s; at 25 Mbit/s with the gate on (from below) and off (from
+// above). That bound holds at every rate with the document's gate, and
+// from 10 Mbit/s up with the judge's default (SEGS=8). Below 10 Mbit/s the
+// default's 8 segments are more than the bound's bytes (T12's cost, the
+// judge's measure: BBR left STARTUP only with it): there a frame waits no
+// more than the frame in progress and the cap (101 ms at 1 Mbit/s, 24 at
+// 5). Since T16 a light frame is not behind a BULK link's socket: what
+// moved bulk rides that one, light frames a QUIET link's, behind its own
+// backlog alone (TestAngleSameLinkProbe, TestAngleTunPingAheadOfBulk).
 func TestHostWaitBound(t *testing.T) {
-	for _, c := range []struct{ mbit, from float64 }{{1, 0}, {5, 0}, {10, 0}, {25, 0}, {25, 100}, {100, 0}, {1000, 0}} {
-		r := c.mbit * mbit
-		bound := max(20*time.Millisecond, time.Duration(3*1500/r*float64(time.Second)))
-		worst, on := hostWait(r, c.from*mbit)
-		t.Logf("%4.0f Mbit/s (from %3.0f): gate %-5v worst wait %v, bound %v", c.mbit, c.from, on, worst, bound)
-		if worst > bound {
-			t.Fatalf("%.0f Mbit/s (from %.0f): a light frame waited %v on the host, more than %v", c.mbit, c.from, worst, bound)
-		}
+	for _, v := range hqgVariants {
+		v.with(func() {
+			for _, c := range []struct{ mbit, from float64 }{{1, 0}, {5, 0}, {10, 0}, {25, 0}, {25, 100}, {100, 0}, {1000, 0}} {
+				r := c.mbit * mbit
+				r1 := max(20*time.Millisecond, time.Duration(3*1500/r*float64(time.Second)))
+				bound := r1
+				g := newHostGate()
+				g.Update(c.from*mbit, 1448)
+				if on, cp, _ := g.Update(r, 1448); on && g.segs > 0 {
+					// the cap and the frame in progress, at the link's rate
+					bound = max(bound, time.Duration(float64(cp+BulkFrameSize(r))/r*float64(time.Second)))
+				}
+				worst, on := hostWait(r, c.from*mbit)
+				t.Logf("%-8s %4.0f Mbit/s (from %3.0f): gate %-5v worst wait %v, bound %v (§3.3's %v)", v.name, c.mbit, c.from, on, worst, bound, r1)
+				if worst > bound {
+					t.Fatalf("%s, %.0f Mbit/s (from %.0f): a light frame waited %v on the host, more than %v", v.name, c.mbit, c.from, worst, bound)
+				}
+				if c.mbit >= 10 && worst > r1 {
+					t.Fatalf("%s, %.0f Mbit/s (from %.0f): a light frame waited %v on the host, past §3.3's %v", v.name, c.mbit, c.from, worst, r1)
+				}
+			}
+		})
 	}
+}
+
+// TestHostWaitSegs8Cost pins C3's known cost, an OPEN item for the round-4
+// judge (decision T12's price; the R1 red team's finding C3, pass 1): with
+// the judge's default of 8 segments a light frame waits on the host ~95 ms
+// at 1 Mbit/s, past §3.3's 36 ms, on a QUIET link too (HQGQuietSegs -1: a
+// QUIET link's gate is every link's, while SEGS=8's reason, BBR held in
+// STARTUP, is a BULK link's: QUIET links run cubic and carry light
+// traffic; HS2_TUNE_HQG_QUIET_SEGS=0 exists and was never measured on the
+// rig). Not a pass mark: the test holds the number the documents give, so
+// a change that removes the cost fails it here, and the documents (and
+// TestHostWaitBound's bound for the default) are brought along with it.
+func TestHostWaitSegs8Cost(t *testing.T) {
+	hqgVariants[0].with(func() {
+		r := 1 * mbit
+		r1 := time.Duration(3 * 1500 / r * float64(time.Second))
+		g := newHostGate()
+		_, cp, _ := g.Update(r, 1448)
+		most := time.Duration(float64(cp+BulkFrameSize(r)) / r * float64(time.Second))
+		links := []struct {
+			name string
+			segs int
+		}{{"BULK", HQGSegs}, {"QUIET", HQGSegs}}
+		if HQGQuietSegs >= 0 {
+			links[1].segs = HQGQuietSegs
+		}
+		for _, l := range links {
+			if l.segs != HQGSegs {
+				t.Logf("%s link: its own variant (HS2_TUNE_HQG_QUIET_SEGS=%d), not pinned here", l.name, l.segs)
+				continue
+			}
+			worst, on := hostWait(r, 0)
+			t.Logf("OPEN (round-4 judge): %s link, SEGS=%d, 1 Mbit/s: gate %v, a light frame waits up to %v on the host, §3.3's bound %v (the cap and the frame in progress: %v)",
+				l.name, l.segs, on, worst, r1, most)
+			if worst <= r1 || worst > most {
+				t.Fatalf("%s link: the host wait at 1 Mbit/s is %v, no longer the known cost (past §3.3's %v, at most %v): update the documents (merge-prep REPORT, flaky.fa.md) and TestHostWaitBound",
+					l.name, worst, r1, most)
+			}
+		}
+	})
 }
 
 // adaptRun runs a link's runner end to end on synthetic TCP_INFO readings
@@ -247,7 +328,7 @@ func adaptRun(s *skbSock, from, to float64, drop time.Duration) (at time.Duratio
 	sys := &fakeCapSys{ok: true, st: tcpStat{dlvOK: true, sndMSS: 1448, rtt: 50000}}
 	h := newHostQ(s, s)
 	l := newSendCapLink(sys, h)
-	var g hostGate
+	g := newHostGate() // the guard's own variant (T12)
 	g.Update(from*mbit, 1448)
 	on, cp, lw := g.Update(to*mbit, 1448)
 	at = -1
@@ -283,25 +364,34 @@ func adaptRun(s *skbSock, from, to float64, drop time.Duration) (at time.Duratio
 // the mark, the gate and the cap follow within 600 ms whatever the drop's
 // phase against the 100 ms readings and the 500 ms updates (decision T2),
 // while C4-lite's cap keeps the largest of 2 s and comes down after them.
+// Both gate variants (T12): the default's mark at 10 Mbit/s is its cap (8
+// segments), the document's half its cap.
 func TestLowatAdapts(t *testing.T) {
-	for _, c := range []struct{ from, to float64 }{{100, 10}, {1000, 100}} {
-		worst := time.Duration(0)
-		// (C3 moves at 100 ms, then each 500 ms: 2100 and 2600 ms; the drops
-		// span that period, the worst just past an update)
-		for _, ms := range []int{2100, 2101, 2150, 2199, 2200, 2250, 2300, 2350, 2399, 2401, 2450, 2499, 2550, 2599} {
-			drop := time.Duration(ms) * time.Millisecond
-			at, held, after := adaptRun(newSkbSock(c.from*mbit, 1448, 1), c.from, c.to, drop)
-			if at < 0 || at > 600*time.Millisecond {
-				t.Fatalf("%.0f → %.0f Mbit/s at %v: the mark, gate and cap followed %v after (want ≤ 600 ms; -1: never)", c.from, c.to, drop, at)
+	for _, v := range hqgVariants {
+		v.with(func() {
+			for _, c := range []struct{ from, to float64 }{{100, 10}, {1000, 100}} {
+				worst := time.Duration(0)
+				// (C3 moves at 100 ms, then each 500 ms: 2100 and 2600 ms; the
+				// drops span that period, the worst just past an update)
+				for _, ms := range []int{2100, 2101, 2150, 2199, 2200, 2250, 2300, 2350, 2399, 2401, 2450, 2499, 2550, 2599} {
+					drop := time.Duration(ms) * time.Millisecond
+					at, held, after := adaptRun(newSkbSock(c.from*mbit, 1448, 1), c.from, c.to, drop)
+					if at < 0 || at > 600*time.Millisecond {
+						t.Fatalf("%s, %.0f → %.0f Mbit/s at %v: the mark, gate and cap followed %v after (want ≤ 600 ms; -1: never)", v.name, c.from, c.to, drop, at)
+					}
+					worst = max(worst, at)
+					old, cur := uint64(1.25*c.from*mbit), uint64(math.Max(1.25*c.to*mbit, 1<<20))
+					if held != old || after != cur {
+						t.Fatalf("%s, %.0f → %.0f Mbit/s at %v: C4-lite's cap %d 1.9 s on (want the old %d), %d 2.2 s on (want %d)",
+							v.name, c.from, c.to, drop, held, old, after, cur)
+					}
+				}
+				g := newHostGate()
+				g.Update(c.from*mbit, 1448)
+				on, cp, lw := g.Update(c.to*mbit, 1448)
+				t.Logf("%s, %.0f → %.0f Mbit/s: the mark (%d B), gate (%v) and cap (%d B) followed within %v (worst of 14 phases)", v.name, c.from, c.to, lw, on, cp, worst)
 			}
-			worst = max(worst, at)
-			old, cur := uint64(1.25*c.from*mbit), uint64(math.Max(1.25*c.to*mbit, 1<<20))
-			if held != old || after != cur {
-				t.Fatalf("%.0f → %.0f Mbit/s at %v: C4-lite's cap %d 1.9 s on (want the old %d), %d 2.2 s on (want %d)",
-					c.from, c.to, drop, held, old, after, cur)
-			}
-		}
-		t.Logf("%.0f → %.0f Mbit/s: the mark, gate and cap followed within %v (worst of 14 phases)", c.from, c.to, worst)
+		})
 	}
 }
 
@@ -383,17 +473,26 @@ func TestHostQOffSwitch(t *testing.T) {
 	}
 }
 
-// TestHostQStatusLine: the document's line (§3.3).
+// TestHostQStatusLine: the document's line (§3.3), at 10 Mbit/s with the
+// judge's default (SEGS=8: mark and cap 8 segments) and the document's gate.
 func TestHostQStatusLine(t *testing.T) {
-	s := newSkbSock(10*mbit, 1448, 1)
-	h := newHostQ(s, s)
-	h.Update(10*mbit, 1448)
-	for range 200 {
-		h.Write(make([]byte, 6250))
+	want := map[string]string{
+		"segs8":    "hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 ",
+		"document": "hostq link 3: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 ",
 	}
-	l := h.line(3, time.Second)
-	if !strings.HasPrefix(l, "hostq link 3: lowat 1.4 KiB, gate on (cap 2896 B), notsent p95 ") || !strings.Contains(l, " B, blocked ratio ") {
-		t.Fatalf("%q", l)
+	for _, v := range hqgVariants {
+		v.with(func() {
+			s := newSkbSock(10*mbit, 1448, 1)
+			h := newHostQ(s, s)
+			h.Update(10*mbit, 1448)
+			for range 200 {
+				h.Write(make([]byte, 6250))
+			}
+			l := h.line(3, time.Second)
+			if !strings.HasPrefix(l, want[v.name]) || !strings.Contains(l, " B, blocked ratio ") {
+				t.Fatalf("%s: %q, want it to start %q", v.name, l, want[v.name])
+			}
+			t.Logf("%s: %s", v.name, l)
+		})
 	}
-	t.Log(l)
 }

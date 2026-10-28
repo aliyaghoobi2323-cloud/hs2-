@@ -405,6 +405,10 @@ type coreLink struct {
 	tun   atomic.Pointer[l3Link]
 	// the status lines': when the hostq line was last made
 	hqAt time.Duration
+	// the runner's: the link's own event counters at its wake before
+	// (noteEvents, events.go)
+	seenDirty                        int64
+	seenCuts, seenWrites, seenJoined uint64
 }
 
 // coreSet is the process's links with R1 cores; one goroutine steps them.
@@ -472,6 +476,9 @@ func (cs *coreSet) wake(now time.Duration) {
 	if cs.tick++; cs.tick%100 == 0 {
 		userMems.sweep(int64(now))
 	}
+	if cs.tick%eventsEvery == 0 {
+		r1ev.logMinute(coreLogf) // R1's events of the minute, one line (events.go)
+	}
 }
 
 // step: C4-lite's reading of the link socket and C3's guard, and C1's tick.
@@ -494,6 +501,7 @@ func (l *coreLink) step(now time.Duration) {
 	if l.flows != nil {
 		l.flows.tick(now)
 	}
+	l.noteEvents(&r1ev)
 }
 
 // schedLine is the link's scheduler line (§3.2) since the previous one.
@@ -535,6 +543,7 @@ func CoreLines() []string {
 	if hints || exitHints.sent.Load() > 0 {
 		out = append(out, exitHints.line())
 	}
+	out = append(out, r1ev.line()) // R1's events since start (events.go)
 	for i, l := range links {
 		if i == coreLinesMax {
 			out = append(out, fmt.Sprintf("... and %d more link(s)", len(links)-coreLinesMax))
@@ -555,7 +564,11 @@ func CoreLines() []string {
 			out = append(out, l.hq.line(l.id, el))
 		}
 		if l.sc != nil && l.sc.sys != nil {
-			out = append(out, l.sc.line(l.id))
+			s := l.sc.line(l.id)
+			if l.mtr != nil {
+				s += fmt.Sprintf("; owd guard dirty %d", l.mtr.owd.dirties.Load())
+			}
+			out = append(out, s)
 			if s := l.sc.budgetLine(l.id); s != "" {
 				out = append(out, s)
 			}

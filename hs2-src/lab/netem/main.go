@@ -116,10 +116,10 @@ type pkt struct {
 // first even when jitter made a later-enqueued packet due sooner (reordering).
 type pktHeap []pkt
 
-func (h pktHeap) Len() int            { return len(h) }
-func (h pktHeap) Less(i, j int) bool  { return h[i].at.Before(h[j].at) }
-func (h pktHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *pktHeap) Push(x any)         { *h = append(*h, x.(pkt)) }
+func (h pktHeap) Len() int           { return len(h) }
+func (h pktHeap) Less(i, j int) bool { return h[i].at.Before(h[j].at) }
+func (h pktHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *pktHeap) Push(x any)        { *h = append(*h, x.(pkt)) }
 func (h *pktHeap) Pop() any {
 	old := *h
 	n := len(old)

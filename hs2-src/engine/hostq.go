@@ -69,9 +69,12 @@ var (
 	// most cells on retransmits (11 of 16 against the base + 1 point) and
 	// throughput (15 of 16 at 0.97 x the base), with the lowest probe p99;
 	// the document's gate kept BBR in STARTUP (25-44 % resent) and SEGS=4
-	// cut the upload at 25 Mbit/s to 0.38-0.58 x the base. At 1 Mbit/s its
-	// cap (8 segments, 93 ms) is past the host-wait model's 36 ms
-	// (TestHostWaitBound): an open item for the red team.
+	// cut the upload at 25 Mbit/s to 0.38-0.58 x the base. Its cost: below
+	// ~10 Mbit/s the cap (8 segments: 93 ms at 1 Mbit/s, 19 ms at 5) is past
+	// §3.3's host bound, so a frame may wait up to the cap and the frame in
+	// progress on a link socket (TestHostWaitBound asserts both variants'
+	// bounds); since T16 a light frame is not behind a BULK link's socket
+	// but on a QUIET link (TestAngleSameLinkProbe, TestQuietProbeOnQuietLink).
 	HQGSegs = 8
 	// HQGGate 0 (HS2_TUNE_HQG_GATE=0): no write gate; the dynamic low-water
 	// mark (Lowat) alone, at every rate.
@@ -122,6 +125,10 @@ type hostGate struct {
 	segs  int
 	never bool
 }
+
+// newHostGate is the gate of a guard made now: the variant HQGSegs and
+// HQGGate say (T12; the judge's default, SEGS=8, unless set otherwise).
+func newHostGate() hostGate { return hostGate{segs: HQGSegs, never: HQGGate == 0} }
 
 // Update takes the link's rate (bytes/s; 0: unknown) and segment, and says
 // whether the gate is on, its cap (the most the socket may hold unsent)
@@ -204,7 +211,7 @@ type hostQ struct {
 // newHostQ guards c, the link's conn, through sys (nil: none, as off Linux:
 // today's send gate). The gate is on at its floor until the first Update.
 func newHostQ(c net.Conn, sys hostSys) *hostQ {
-	h := &hostQ{conn: c, sys: sys, gate: hostGate{segs: HQGSegs, never: HQGGate == 0}}
+	h := &hostQ{conn: c, sys: sys, gate: newHostGate()}
 	if sys == nil {
 		h.fallback(nil)
 		return h

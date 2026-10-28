@@ -17,8 +17,15 @@ import (
 // tcpInfoRead, as a busy socket's: 100 then 10 Mbit/s, no sample
 // app-limited), C4-lite's reading of it, C3, and the socket's own
 // TCP_NOTSENT_LOWAT read back with getsockopt: the new mark is on the
-// socket within 600 ms of the drop.
+// socket within 600 ms of the drop. Both gate variants (T12): the new mark
+// is the judge's default's cap (8 segments), or the document's half cap.
 func TestLowatAdaptsLinux(t *testing.T) {
+	for _, v := range hqgVariants {
+		v.with(func() { lowatAdaptsLinux(t, v.name) })
+	}
+}
+
+func lowatAdaptsLinux(t *testing.T, variant string) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -63,7 +70,7 @@ func TestLowatAdaptsLinux(t *testing.T) {
 	}
 	h := newHostQ(tc, newHostSys(tc))
 	l := newSendCapLink(newCapSys(tc), h)
-	var g hostGate
+	g := newHostGate() // the guard's own variant (T12)
 	g.Update(100*mbit, 1448)
 	_, _, want := g.Update(10*mbit, 1448)
 	drop, at := 2450*time.Millisecond, time.Duration(-1)
@@ -85,17 +92,27 @@ func TestLowatAdaptsLinux(t *testing.T) {
 			at = now - drop
 		}
 	}
-	t.Logf("the socket's mark %d → %d B %v after the drop", Lowat(100*mbit, 1448), want, at)
+	t.Logf("%s: the socket's mark %d → %d B %v after the drop", variant, Lowat(100*mbit, 1448), want, at)
 	if at < 0 || at > 600*time.Millisecond {
-		t.Fatalf("the socket's mark was %d after the drop (want %d within 600 ms; at %v)", mark(), want, at)
+		t.Fatalf("%s: the socket's mark was %d after the drop (want %d within 600 ms; at %v)", variant, mark(), want, at)
 	}
 }
 
 // TestHostQLinuxSocket: the guard on a real loopback socket whose reader
-// takes 400 KB/s: the gate (2 Mbit/s: cap 2896 B) keeps the socket's unsent
-// bytes under the cap, and its waits in the netpoller always wake (no lost
-// wakeup: the writer keeps up with the reader).
+// takes 400 KB/s: the gate at 2 Mbit/s (cap 11584 B, 8 segments, with the
+// judge's default; 2896 B with the document's gate, T12) keeps the
+// socket's unsent bytes under the cap, and its waits in the netpoller
+// always wake (no lost wakeup: the writer keeps up with the reader).
 func TestHostQLinuxSocket(t *testing.T) {
+	for _, v := range []struct {
+		hqgVariant
+		cap int
+	}{{hqgVariants[0], 8 * 1448}, {hqgVariants[1], 2 * 1448}} {
+		v.with(func() { hostQLinuxSocket(t, v.name, v.cap) })
+	}
+}
+
+func hostQLinuxSocket(t *testing.T, variant string, wantCap int) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -135,8 +152,8 @@ func TestHostQLinuxSocket(t *testing.T) {
 		t.Fatal("the guard fell back on this kernel")
 	}
 	h.Update(2*mbit, 1448)
-	if !h.on.Load() || h.cap.Load() != 2896 {
-		t.Fatalf("gate %v cap %d", h.on.Load(), h.cap.Load())
+	if !h.on.Load() || h.cap.Load() != int64(wantCap) {
+		t.Fatalf("%s: gate %v cap %d, want on, %d", variant, h.on.Load(), h.cap.Load(), wantCap)
 	}
 	frame := make([]byte, 1<<10)
 	worst, wrote := 0, 0
@@ -154,11 +171,11 @@ func TestHostQLinuxSocket(t *testing.T) {
 	}
 	c.Close()
 	got := <-read
-	t.Logf("wrote %d B in 1.5 s (the reader took %d), unsent at most %d B, gate waits %v", wrote, got, worst, time.Duration(h.blocked.Load()))
-	if worst > 2896 {
-		t.Fatalf("%d B unsent, past the cap", worst)
+	t.Logf("%s: wrote %d B in 1.5 s (the reader took %d), unsent at most %d B (cap %d), gate waits %v", variant, wrote, got, worst, wantCap, time.Duration(h.blocked.Load()))
+	if worst > wantCap {
+		t.Fatalf("%s: %d B unsent, past the cap %d", variant, worst, wantCap)
 	}
 	if wrote < 300<<10 {
-		t.Fatalf("only %d B written in 1.5 s against a 400 KB/s reader: a wait that did not wake", wrote)
+		t.Fatalf("%s: only %d B written in 1.5 s against a 400 KB/s reader: a wait that did not wake", variant, wrote)
 	}
 }

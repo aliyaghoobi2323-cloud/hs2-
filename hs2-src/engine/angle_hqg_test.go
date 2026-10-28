@@ -19,10 +19,10 @@ func (m *markSys) all() []int            { return m.marks }
 func TestAngleHQGVariants(t *testing.T) {
 	const mss, r10 = 1448, 10e6 / 8
 	for _, c := range []struct {
-		name         string
-		segs, gate   int
-		on           bool
-		cap, lowat   int
+		name       string
+		segs, gate int
+		on         bool
+		cap, lowat int
 	}{
 		{"document", 0, 1, true, 2 * mss, mss},
 		{"segs4", 4, 1, true, 4 * mss, 4 * mss},
