@@ -69,6 +69,9 @@ const (
 	qpUp2   = 4 // as qpUp, another counter
 	qpTotal = 5
 	qpPhase = 7 // the exit writes qpPhaseBytes of a pattern, then echoes
+	// qpDuplex (round 4): the exit writes for good and reads what comes
+	// (a call's other way next to a backlogged download in one connection)
+	qpDuplex = 8
 )
 
 // qpPhaseBytes: qpPhase's download, before it echoes.
@@ -162,6 +165,13 @@ func (r *quietRig) serve(p *classPair) {
 			b := make([]byte, 32<<10)
 			switch port {
 			case qpDown:
+				for {
+					if _, err := conn.Write(b); err != nil {
+						return
+					}
+				}
+			case qpDuplex:
+				go io.Copy(io.Discard, conn)
 				for {
 					if _, err := conn.Write(b); err != nil {
 						return

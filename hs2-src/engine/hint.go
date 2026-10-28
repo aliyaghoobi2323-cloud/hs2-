@@ -124,6 +124,9 @@ type hintRule struct {
 	lastAt int64
 	run    int
 	sentAt int64 // when it was last hinted (0: never)
+	// rx: what it received each tick, the user's own sending (TwoWay,
+	// twoway.go)
+	rx rxRing
 }
 
 // tick takes the big-write time so far (busy, ns) at now and says whether
@@ -264,7 +267,21 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 			r = &hintRule{}
 			rules[eg] = r
 		}
+		tw := twoWayNo
+		if TwoWay != 0 {
+			// the user sends steadily on it (or may: too early to say): a
+			// call, not a download (twoway.go)
+			r.rx.tick(eg.RxBytes(), now)
+			tw = r.rx.state()
+		}
+		eg.twoWay.Store(tw != twoWayNo)
 		if !r.tick(eg.big.total(now), now) {
+			continue
+		}
+		if tw != twoWayNo {
+			if tw == twoWayYes {
+				twoWayKept.Add(1)
+			}
 			continue
 		}
 		if r.sentAt != 0 && time.Duration(now-r.sentAt) < hintResend {
@@ -295,6 +312,9 @@ func (s *exitHintSet) line() string {
 	cap := ""
 	if QuietCap > 0 {
 		cap = fmt.Sprintf("; capped %d (moved %d, held to the end %d)", capStats.capped.Load(), capStats.moved.Load(), capStats.timeout.Load())
+	}
+	if TwoWay != 0 {
+		cap += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
 	}
 	return fmt.Sprintf("move hints: %d streams; sent %d (again %d), none took %d%s", n, s.sent.Load(), s.again.Load(), s.fail.Load(), cap)
 }

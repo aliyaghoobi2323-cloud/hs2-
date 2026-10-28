@@ -23,6 +23,9 @@ type exitGroup struct {
 	big bigWrites
 	// cap: its big writes on a QUIET link (QuietCap, quietcap.go)
 	cap capWindow
+	// twoWay: its user sends steadily on it (TwoWay, twoway.go: the hint
+	// loop's word): no cap
+	twoWay atomic.Bool
 }
 
 // Write is the group's, with its big writes timed (the move hint) and,
