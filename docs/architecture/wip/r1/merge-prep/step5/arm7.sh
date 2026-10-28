@@ -41,7 +41,15 @@ run() {
 	# ...) run apart: qemu-user hands a 32-bit guest 4 bytes of TCP_INFO and
 	# no SIOCOUTQNSD, so there they meet the code's fallbacks, not the
 	# kernel's calls (kernel.sh runs them natively); reported, not counted
-	ktests() { (cd "$SRC/$1" && grep -ho '^func Test[A-Za-z0-9_]*' *_linux_test.go 2>/dev/null | sed 's/func //' | grep -vx TestMain | sort -u | paste -sd'|'); }
+	# and those that need what qemu-user does not give a guest: TestCPUMeter
+	# reads its CPU time from /proc/self/stat, which qemu-user fakes (times
+	# 0); TestLinkNoNetworkNoLog runs its own binary again (an ARM one, and no
+	# binfmt here by design)
+	ktests() {
+		(cd "$SRC/$1" && { grep -ho '^func Test[A-Za-z0-9_]*' *_linux_test.go 2>/dev/null | sed 's/func //'
+			[ "$1" = cmd/hs2 ] && printf '%s
+' TestCPUMeter TestLinkNoNetworkNoLog; } | grep -vx TestMain | sort -u | paste -sd'|')
+	}
 	summary() {
 		echo "   pass $(grep -c '^--- PASS' "$1"), fail $(grep -c '^--- FAIL' "$1"), skip $(grep -c '^--- SKIP' "$1") (top level)"
 		awk '/^=== RUN/{buf=""; next} /^--- FAIL: /{print "   FAIL " $3; printf "%s", buf; buf=""; next} {buf=buf "      " $0 "\n"}' "$1" | head -60
@@ -60,7 +68,7 @@ run() {
 		summary "$BIN/$t.log"
 		echo "   $(tail -1 "$BIN/$t.log"); $(( $(date +%s) - t0 )) s"
 		if [ -n "$kt" ]; then
-			echo "-- $t, the kernel-facing tests, under emulation (not counted): ^($kt)\$"
+			echo "-- $t, the kernel-facing tests and those qemu-user cannot serve, under emulation (not counted): ^($kt)\$"
 			(cd "$SRC/$dir" && "$QEMU" "$BIN/$t.test" -test.count=1 -test.v -test.run "^($kt)\$" > "$BIN/$t-kernel.log" 2>&1)
 			summary "$BIN/$t-kernel.log"
 		fi
