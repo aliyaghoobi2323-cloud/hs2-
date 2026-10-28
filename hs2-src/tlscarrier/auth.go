@@ -106,13 +106,18 @@ const (
 	// classes (every link as before).
 	CapQuiet
 	CapBulk
+	// CapHint (level 2): the exit's move hint (engine hint.go): the edge
+	// opens a stream on each QUIET link on which the exit names the group
+	// connections whose send backlog persists, and the edge moves those
+	// (R1 round 3, the judge; HS2_TUNE_MOVE_HINT). Needs CapGroup.
+	CapHint
 )
 
 // RoleCaps are the link-class bits.
 const RoleCaps = CapQuiet | CapBulk
 
 // level2Caps: the caps of level 2, never in force on a level 1 link.
-const level2Caps = CapGroup | RoleCaps
+const level2Caps = CapGroup | RoleCaps | CapHint
 
 // AuthHdr is the header of the client's record (7 B on the wire).
 type AuthHdr struct {
@@ -208,12 +213,12 @@ func (p ProofHdr) bytes() []byte {
 // set (CapQuiet is a link's class, offered per link: OfferCaps, the dial's
 // extra caps).
 func localCaps() uint32 {
-	caps := CapClass | CapSched | CapHostQ | CapSendCap | CapGroup
+	caps := CapClass | CapSched | CapHostQ | CapSendCap | CapGroup | CapHint
 	for _, k := range []struct {
 		env string
 		bit uint32
-	}{{"HS2_TUNE_CLASS", CapClass}, {"HS2_TUNE_SCHED", CapSched | CapGroup}, {"HS2_TUNE_HQG", CapHostQ},
-		{"HS2_TUNE_SENDCAP", CapSendCap}, {"HS2_TUNE_QUIET", CapGroup}} {
+	}{{"HS2_TUNE_CLASS", CapClass}, {"HS2_TUNE_SCHED", CapSched | CapGroup | CapHint}, {"HS2_TUNE_HQG", CapHostQ},
+		{"HS2_TUNE_SENDCAP", CapSendCap}, {"HS2_TUNE_QUIET", CapGroup | CapHint}, {"HS2_TUNE_MOVE_HINT", CapHint}} {
 		if os.Getenv(k.env) == "0" {
 			caps &^= k.bit
 		}

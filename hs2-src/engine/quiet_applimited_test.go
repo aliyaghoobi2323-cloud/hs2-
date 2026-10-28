@@ -25,7 +25,7 @@ func TestMoveRuleAppLimitedCall(t *testing.T) {
 			tx += per
 			rx += per
 			busy += time.Millisecond
-			if due, dir := r.tick(tx, rx, busy, now, true); due {
+			if due, dir := r.tick(tx, rx, busy, now, true, true); due {
 				return i, dir
 			}
 		}

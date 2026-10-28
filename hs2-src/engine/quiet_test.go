@@ -141,7 +141,14 @@ func (r *quietRig) serve(p *classPair) {
 			}
 			defer conn.Close()
 			var h [3]byte
-			if _, err := io.ReadFull(conn, h[:]); err != nil || h[0] != kindTCPPort {
+			if _, err := io.ReadFull(conn, h[:1]); err != nil {
+				return
+			}
+			if h[0] == kindHint && conn == exitStream(st) {
+				serveHint(st, p.xmtr) // the edge's move hints (hint.go)
+				return
+			}
+			if _, err := io.ReadFull(conn, h[1:]); err != nil || h[0] != kindTCPPort {
 				return
 			}
 			port := int(h[1])<<8 | int(h[2])
@@ -417,13 +424,13 @@ func TestMoveRule(t *testing.T) {
 		var cTx, cRx uint64
 		var cBusy time.Duration
 		now := int64(time.Hour)
-		r.tick(0, 0, 0, now, txBusy)
+		r.tick(0, 0, 0, now, txBusy, true)
 		for i := range tx {
 			now += tick
 			cTx += tx[i]
 			cRx += rx[i]
 			cBusy += time.Duration(busy[i] * float64(moveTick))
-			if due, _ := r.tick(cTx, cRx, cBusy, now, txBusy); due {
+			if due, _ := r.tick(cTx, cRx, cBusy, now, txBusy, true); due {
 				return true, i
 			}
 		}

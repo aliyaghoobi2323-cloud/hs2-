@@ -102,6 +102,28 @@ func owdShared(own *owdLink) *owdLink {
 	return quietOWD.Load()
 }
 
+// TuneOWDGuard 0 (HS2_TUNE_OWD_GUARD=0): a QUIET link's one-way delays of
+// this end's sending direction count whatever its own socket did. 1, the
+// default (R1 round 3, the judge): while this end's QUIET socket resends or
+// holds a backlog of its own (owdDirtyWait past its pacing), the queue the
+// other end reads for this direction is not the path's: the messages wait
+// behind a resent hole (head of line) or in this end's own send queue. Under
+// 1% loss a QUIET link read 11 to 77 ms that way and α and the in-flight
+// budget cut every BULK link to 3-9 Mbit/s (round 3, γ1 and γ2: 6.0 and 5.6
+// against 88 for the base). So the reading of this direction (queue) is
+// none from such a beat until owdDirtyHold after it.
+var TuneOWDGuard = 1
+
+const (
+	// owdDirtyWait: a local wait (unsent bytes at the pacing rate) past this
+	// is a backlog of the socket's own
+	owdDirtyWait = 10 * time.Millisecond
+	// owdDirtyLook: past the latest dirty beat, the readings stay none this
+	// many owdLook and two round trips (the other end's least of owdLook,
+	// and its report on the way back)
+	owdDirtyLook = 2
+)
+
 // OWDOff says whether α's one-way delay is off.
 func OWDOff() bool { return TuneOWD == 0 }
 
@@ -203,6 +225,30 @@ type owdLink struct {
 	own    bool
 	acked0 uint64
 	at0    int64
+	// quiet: a QUIET link's (set before the loop starts): TuneOWDGuard's;
+	// retr0: the socket's resent segments at the beat before; dirtyUntil:
+	// this end's direction reads none till then (ctrlNow; 0: never)
+	quiet      bool
+	retr0      uint64
+	dirtyUntil atomic.Int64
+	dirties    atomic.Int64 // beats that found the socket dirty
+}
+
+// noteSocket takes the socket's TCP_INFO at a beat of a QUIET link (the
+// guard): a resend since the beat before, or a backlog of its own, makes
+// this end's direction read none for a while.
+func (o *owdLink) noteSocket(ts tcpStat, now int64) {
+	if !o.quiet || TuneOWDGuard == 0 {
+		return
+	}
+	resent := o.retr0 != 0 && ts.retrans > o.retr0
+	o.retr0 = max(ts.retrans, 1)
+	if !resent && owdLocalWait(ts) <= int64(owdDirtyWait) {
+		return
+	}
+	hold := owdDirtyLook*int64(owdLook) + 2*int64(usDur(uint64(ts.rtt)))
+	o.dirtyUntil.Store(now + hold)
+	o.dirties.Add(1)
 }
 
 const (
@@ -294,8 +340,12 @@ func (o *owdLink) queue() (time.Duration, bool) {
 		return 0, false
 	}
 	at := o.qOutAt.Load()
-	if at == 0 || time.Duration(ctrlNow()-at) > owdFresh {
+	now := ctrlNow()
+	if at == 0 || time.Duration(now-at) > owdFresh {
 		return 0, false
+	}
+	if d := o.dirtyUntil.Load(); d != 0 && now < d {
+		return 0, false // the guard: this end's own resends or backlog
 	}
 	return time.Duration(o.qOut.Load()), true
 }
@@ -365,6 +415,9 @@ func owdDecode(b []byte) (stamp int64, qOut time.Duration, have, ok bool) {
 // written or read) until it fails or ctx ends; both ends run it.
 func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 	defer st.Close()
+	if u, ok := st.(interface{ SetUrgent(bool) }); ok {
+		u.SetUrgent(true) // no coalescing hold after a message (a hold would read as queue)
+	}
 	var once sync.Once
 	stop := make(chan struct{})
 	end := func() { once.Do(func() { close(stop); st.Close() }) }
@@ -397,6 +450,9 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 		tsOK := false
 		if o.sys != nil {
 			ts, tsOK = o.sys.info()
+		}
+		if tsOK {
+			o.noteSocket(ts, ctrlNow())
 		}
 		if o.own && !o.busy(ts, tsOK) {
 			continue // no data of this end to ride: none (γ2's own beat)

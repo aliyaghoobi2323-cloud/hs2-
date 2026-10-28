@@ -278,6 +278,13 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			shaped.lazy = hq.sys.notsent // a tail waits for the socket's unsent bytes (shape.go)
 		}
 	}
+	if quietLink && sched && QuietCoalesce > 0 {
+		// a busy QUIET link's light frames share their padded records
+		// within a short jittered hold (quiet.go, QuietCoalesce)
+		cfg.Coalesce = time.Duration(QuietCoalesce) * time.Microsecond
+		cfg.CoalesceMin = float64(QuietCoalesceMin)
+		cfg.CoalesceJitter = QuietCoalJitter != 0
+	}
 	if quietLink && QuietThin != 0 {
 		setThinTimeouts(tc) // (best effort: a kernel without it keeps its back-off)
 	}
@@ -316,6 +323,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			scl.budget = lb
 			if meter != nil {
 				meter.owd.sys = sys // a message's stamp: when it leaves the host
+				meter.owd.quiet = quietLink // the guard of its readings (owd.go)
 			}
 			if bulkLink && meter != nil {
 				scl.owd = &meter.owd // α's one-way delays (owd.go)

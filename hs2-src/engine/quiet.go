@@ -136,6 +136,32 @@ var QuietLazy = 1
 // of them; a light user waits one RTO for a lost probe, not seconds.
 var QuietThin = 1
 
+// QuietCoalesce (HS2_TUNE_QUIET_COAL, µs; 0: none): a busy QUIET link's
+// writer holds the tail of its light frames this long (a uniform draw in
+// [0.5, 1.5) of it with QuietCoalJitter) from the first of them for more to
+// share its padded record (smux Config.Coalesce), while it wrote at least
+// QuietCoalesceMin light frames over the last second. Candidate gamma1 of
+// round 3 measured it: 4 ms took the QUIET records 3.5 times fewer (41069
+// to 11738 in 23 s with 200 users) and P10 (a) from 0.879 to 0.957-0.962,
+// for +4 to +6 ms on the probe (the bound +20); gamma2's batching without a
+// hold took 10-17 % fewer. The judge merged it onto gamma2 with a jittered
+// hold: gamma1's fixed one spaced the QUIET packets 4.26 ms apart at the
+// median (its DPI capture), a timing mark of its own. The one-way delay
+// messages and the TUN's frames are urgent (no hold after them).
+var QuietCoalesce = 4000
+
+// QuietCoalesceMin: the light frames a second of a QUIET link's writer past
+// which it holds (fewer: a padded record costs little, the wait all).
+var QuietCoalesceMin = 200
+
+// QuietCoalJitter 0 (HS2_TUNE_QUIET_COAL_JITTER=0, lab): the hold is
+// QuietCoalesce itself (gamma1's).
+var QuietCoalJitter = 1
+
+// QuietCoalTun 0 (HS2_TUNE_QUIET_COAL_TUN=0, lab): a TUN frame does not end
+// the hold (its ping then waits it too).
+var QuietCoalTun = 1
+
 // QuietExtra 1 (HS2_TUNE_QUIET_EXTRA; the R1 round-2 judge, the default
 // since round 3 by decision T19): the QUIET links come next to max_links
 // BULK ones, not within max_links. Within them, a pool of N links under a
@@ -201,9 +227,15 @@ type quietSet struct {
 	offers  []int64 // reverse: CapQuiet offered at these ctrlNow, not yet arrived
 	logAt   time.Time
 
-	// the group streams not moved yet (the mover's), and the tallies
+	// the group streams not moved yet (the mover's), by id too (the exit's
+	// move hints, hint.go), and the tallies
 	gmu      sync.Mutex
 	groups   []*groupStream
+	byID     map[uint32]*groupStream
+	hinted   atomic.Int64 // hints heard for a group not moved yet
+	// hintOn: the QUIET links whose kindHint stream is up (hint.go), under
+	// mu: their groups move for a download on the exit's word alone
+	hintOn map[*mtcpLink]int
 	opened   atomic.Int64 // group connections opened on a QUIET link
 	fallback atomic.Int64 // user connections opened on a BULK link (no QUIET link up)
 	moved    atomic.Int64 // group connections moved to a BULK link
@@ -585,6 +617,12 @@ type groupStream struct {
 	rule moveRule // the mover's
 	// noMove: it will not move (the group refused: it ended, or moved)
 	noMove bool
+	// ql: the QUIET link it opened on; while that link's kindHint stream is
+	// up (quietSet.hintOn) it moves for a download on the exit's word, not
+	// on data arriving (hint.go); hintAt: when the exit's hint came
+	// (ctrlNow; 0: none)
+	ql     *mtcpLink
+	hintAt atomic.Int64
 }
 
 // openGroupStream opens a user connection of user tag on the QUIET link l
@@ -596,11 +634,15 @@ func openGroupStream(q *quietSet, l *mtcpLink, tag uint32, rel func()) (stream, 
 		edgeGroupIDs.Delete(id)
 		return nil, err
 	}
-	gs := &groupStream{g: g, tag: tag, q: q, qrel: rel, qcs: l.track(g.Main())}
+	gs := &groupStream{g: g, tag: tag, q: q, qrel: rel, qcs: l.track(g.Main()), ql: l}
 	if q != nil {
 		q.opened.Add(1)
 		q.gmu.Lock()
 		q.groups = append(q.groups, gs)
+		if q.byID == nil {
+			q.byID = map[uint32]*groupStream{}
+		}
+		q.byID[id] = gs
 		q.gmu.Unlock()
 	}
 	return gs, nil
@@ -691,8 +733,9 @@ type moveRule struct {
 // is due to move, and in which direction it showed bulk behaviour. txBusy:
 // busy is its writer's time inside Write (a stream); else (a TUN flow, no
 // writer to watch) its sending direction goes by the bytes rule, as the
-// receiving one.
-func (r *moveRule) tick(tx, rx uint64, busy time.Duration, now int64, txBusy bool) (due bool, dir string) {
+// receiving one. rxRule false: the receiving direction does not move it
+// (the exit's move hint does, hint.go).
+func (r *moveRule) tick(tx, rx uint64, busy time.Duration, now int64, txBusy, rxRule bool) (due bool, dir string) {
 	k := now / int64(moveTick)
 	if !r.ticked {
 		r.ticked, r.at, r.lastTx, r.lastRx, r.lastBusy, r.lastAt = true, k, tx, rx, busy, now
@@ -738,7 +781,7 @@ func (r *moveRule) tick(tx, rx uint64, busy time.Duration, now int64, txBusy boo
 	switch {
 	case r.sumTx >= moveBytes && r.busyRun >= txRun:
 		return true, "up"
-	case r.sumRx >= moveBytes && r.rxRun >= moveRxRun:
+	case rxRule && r.sumRx >= moveBytes && r.rxRun >= moveRxRun:
 		return true, "down"
 	}
 	return false, ""
@@ -775,7 +818,10 @@ func (q *quietSet) moverTick(now int64) {
 		if s.g.Moved() != nil {
 			continue
 		}
-		due, dir := s.rule.tick(s.g.TxBytes(), s.g.RxBytes(), s.g.WriteBusy(), now, true)
+		due, dir := s.rule.tick(s.g.TxBytes(), s.g.RxBytes(), s.g.WriteBusy(), now, true, !q.hinting(s.ql))
+		if !due && s.hintAt.Load() != 0 {
+			due, dir = true, "down" // the exit's word: a send backlog there (hint.go)
+		}
 		if due && q.move(s, dir) {
 			continue
 		}
@@ -783,7 +829,58 @@ func (q *quietSet) moverTick(now int64) {
 	}
 	q.gmu.Lock()
 	q.groups = append(keep, q.groups[len(gs):]...) // with those opened meanwhile
+	if len(q.byID) > len(q.groups) {
+		// forget the ids of the groups the mover is done with
+		live := make(map[uint32]*groupStream, len(q.groups))
+		for _, s := range q.groups {
+			live[s.g.ID()] = s
+		}
+		q.byID = live
+	}
 	q.gmu.Unlock()
+}
+
+// hintUp and hintDown: link's kindHint stream came up, ended (hint.go).
+func (q *quietSet) hintUp(l *mtcpLink) {
+	q.mu.Lock()
+	if q.hintOn == nil {
+		q.hintOn = map[*mtcpLink]int{}
+	}
+	q.hintOn[l]++
+	q.mu.Unlock()
+}
+
+func (q *quietSet) hintDown(l *mtcpLink) {
+	q.mu.Lock()
+	if q.hintOn[l]--; q.hintOn[l] <= 0 {
+		delete(q.hintOn, l)
+	}
+	q.mu.Unlock()
+}
+
+// hinting says whether the exit's move hints come over link's stream now.
+func (q *quietSet) hinting(l *mtcpLink) bool {
+	if l == nil {
+		return false
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.hintOn[l] > 0
+}
+
+// noteHint takes the exit's move hint for group id (hint.go): the mover
+// moves it at its next tick (an id it does not know, or one done with, is
+// let go).
+func (q *quietSet) noteHint(id uint32) {
+	q.gmu.Lock()
+	gs := q.byID[id]
+	q.gmu.Unlock()
+	if gs == nil {
+		return
+	}
+	if gs.hintAt.CompareAndSwap(0, ctrlNow()) {
+		q.hinted.Add(1)
+	}
 }
 
 // move moves gs to a BULK link the pool picks: the group's move stream
@@ -846,8 +943,8 @@ func (q *quietSet) line() string {
 	case -1:
 		st = "off (the other server has no group streams)"
 	}
-	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d)",
-		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load())
+	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d",
+		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load())
 }
 
 // placeLine is the status line of the process's placement (nil: none).

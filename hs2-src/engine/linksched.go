@@ -468,8 +468,14 @@ func CoreLines() []string {
 	if f := placeLine.Load(); f != nil {
 		out = append(out, (*f)()) // the edge's QUIET and BULK links (β2)
 	}
-	if exitGroups.attached.Load()+exitGroups.refused.Load() > 0 {
+	exitHints.mu.Lock()
+	hints := len(exitHints.chans) > 0
+	exitHints.mu.Unlock()
+	if hints || exitGroups.attached.Load()+exitGroups.refused.Load() > 0 {
 		out = append(out, exitGroups.line())
+	}
+	if hints || exitHints.sent.Load() > 0 {
+		out = append(out, exitHints.line())
 	}
 	for i, l := range links {
 		if i == coreLinesMax {

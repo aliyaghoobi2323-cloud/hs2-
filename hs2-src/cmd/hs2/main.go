@@ -352,6 +352,20 @@ func applyTuning() {
 	num("HS2_TUNE_QUIET_BATCH", &engine.QuietBatch)
 	num("HS2_TUNE_QUIET_LAZY", &engine.QuietLazy) // a QUIET record waits for the socket's unsent bytes (0: none)
 	num("HS2_TUNE_QUIET_THIN", &engine.QuietThin) // TCP_THIN_LINEAR_TIMEOUTS on QUIET sockets (0: none)
+	// R1 round 3, the judge: the exit's move hint (0: downloads move on data
+	// arriving, round 2's stand-in; its caps bit is tlscarrier's, same name)
+	num("HS2_TUNE_MOVE_HINT", &engine.TuneMoveHint)
+	// ... the guard of a QUIET link's one-way delays (0: off), and the exit's
+	// receive buffer to a local panel (bytes; 0: the kernel's autotuning)
+	num("HS2_TUNE_OWD_GUARD", &engine.TuneOWDGuard)
+	num("HS2_TUNE_PANEL_RCVBUF", &engine.TunePanelRcvbuf)
+	// gamma1's coalescing hold on QUIET links (µs; 0: none), jittered
+	num("HS2_TUNE_QUIET_COAL", &engine.QuietCoalesce)
+	num("HS2_TUNE_QUIET_COAL_MIN", &engine.QuietCoalesceMin)
+	num("HS2_TUNE_QUIET_COAL_JITTER", &engine.QuietCoalJitter)
+	num("HS2_TUNE_QUIET_COAL_TUN", &engine.QuietCoalTun)
+	// a user's UDP datagram older than this at the edge is dropped (ms; 0: none)
+	num("HS2_TUNE_UDP_LATE", &engine.UDPLateMs)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)

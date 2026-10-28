@@ -94,6 +94,9 @@ type Frame struct {
 	// ahead of data (seqLen bytes, counted in the frame's length)
 	seq    uint32
 	hasSeq bool
+	// urgent: a data frame of an urgent stream (Stream.SetUrgent), for the
+	// frame scheduler's writer; not on the wire
+	urgent bool
 }
 
 // wireLen is the frame's length field: its data, and its sequence number.

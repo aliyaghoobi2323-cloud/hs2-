@@ -121,6 +121,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, logf)
 		go openOWD(ctx, l) // a BULK link: α's one-way delays (owd.go)
+		go openHint(ctx, l, quiet) // a QUIET link: the exit's move hints (hint.go)
 		go openStats(ctx, l, logf)
 		go func() { // tell the exit our ceiling and user ports, learn its own
 			mtr := linkMeterOf(l)
@@ -583,7 +584,7 @@ func relayUser(ctx context.Context, user net.Conn, lm *LinkManager, port int, st
 // Mbit/s over a 2 Mbit/s link left the others 34% of their datagrams, 430 ms
 // late. A full queue drops the datagram, as a full UDP socket would.
 type udpFlow struct {
-	q     chan []byte
+	q     chan udpDgram
 	qb    atomic.Int64 // bytes waiting in q
 	last  time.Time    // under the port's mu
 	st    stream       // nil until the flow's stream is open (under mu)
@@ -598,6 +599,29 @@ const (
 	udpFlowQueue = 256       // datagrams waiting for a flow's link
 	udpFlowBytes = 512 << 10 // ... and their bytes at most
 )
+
+// udpDgram is a user's datagram waiting in its flow's queue, with when it
+// came (ctrlNow).
+type udpDgram struct {
+	p  []byte
+	at int64
+}
+
+// UDPLateMs (HS2_TUNE_UDP_LATE, ms; 0: none, as before): a user's datagram
+// that waited longer than this in its flow's queue at the edge is dropped,
+// not sent (R1 round 3, decision T20 and the UDP report's item 3). A game
+// or a call takes a late datagram as lost anyway, and it would hold the
+// fresh ones behind it on the flow's ordered stream: the queue holds up to
+// 256 datagrams, 4 s of a 64 Hz game, with no age limit before.
+var UDPLateMs = 150
+
+// udpLateDrops counts the datagrams dropped for their age.
+var udpLateDrops atomic.Int64
+
+// udpLate says whether a datagram that came at at is too old at now.
+func udpLate(at, now int64) bool {
+	return UDPLateMs > 0 && now-at > int64(UDPLateMs)*int64(time.Millisecond)
+}
 
 // end stops the flow (idle, or its stream failed). Caller holds the port's mu.
 func (f *udpFlow) end() {
@@ -686,9 +710,13 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 		}()
 		for {
 			select {
-			case p := <-f.q:
-				f.qb.Add(-int64(len(p)))
-				if writeDatagram(st, p) != nil {
+			case d := <-f.q:
+				f.qb.Add(-int64(len(d.p)))
+				if udpLate(d.at, ctrlNow()) {
+					udpLateDrops.Add(1) // stale: the game takes it as lost anyway
+					continue
+				}
+				if writeDatagram(st, d.p) != nil {
 					gone()
 				}
 				continue
@@ -728,7 +756,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 		mu.Lock()
 		f := flows[key]
 		if f == nil {
-			f = &udpFlow{q: make(chan []byte, udpFlowQueue), stop: make(chan struct{})}
+			f = &udpFlow{q: make(chan udpDgram, udpFlowQueue), stop: make(chan struct{})}
 			flows[key] = f
 			go run(key, addr, f)
 		}
@@ -742,7 +770,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 		}
 		p := append([]byte(nil), buf[:n]...)
 		select {
-		case f.q <- p:
+		case f.q <- udpDgram{p: p, at: ctrlNow()}:
 			f.qb.Add(int64(n))
 		default: // drop
 		}

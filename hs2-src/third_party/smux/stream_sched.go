@@ -48,6 +48,7 @@ func (s *Stream) writeFrames(b []byte, window bool, deadline <-chan time.Time, g
 	sess := s.sess
 	sent := 0
 	frame := newFrame(byte(sess.config.Version), cmdPSH, s.id)
+	frame.urgent = s.urgent.Load()
 	for {
 		var bts []byte
 		if !window {
@@ -147,6 +148,12 @@ func (s *Stream) flowInfo() (uint32, uint8) {
 	return tag, LaneBulk
 }
 
+// SetUrgent marks the stream's data frames urgent (Config.Coalesce): the
+// session's writer holds no tail of light frames for more once one of them
+// is written, it goes out as soon as the writer runs dry (hs2's one-way
+// delay messages: a hold would be read as queue; its TUN frames).
+func (s *Stream) SetUrgent(v bool) { s.urgent.Store(v) }
+
 // TxBytes is how many data bytes the stream has queued to send so far, with
 // a frame scheduler (Config.Sched; 0 without one).
 func (s *Stream) TxBytes() uint64 { return s.txBytes.Load() }
@@ -197,7 +204,7 @@ func (s *Stream) WriteFlowAsync(p []byte, tag uint32, flow uint64, lane uint8, d
 	}
 	frame := newFrame(byte(sess.config.Version), cmdPSH, s.id)
 	frame.data = p
-	sf := &schedFrame{tag: tag, flow: flow, lane: lane, size: headerSize + len(p), done: done}
+	sf := &schedFrame{tag: tag, flow: flow, lane: lane, size: headerSize + len(p), done: done, urgent: s.urgent.Load()}
 	sf.req = writeRequest{class: CLSDATA, frame: frame}
 	// counted before it can go out: the peer's update for it never finds
 	// more consumed than written

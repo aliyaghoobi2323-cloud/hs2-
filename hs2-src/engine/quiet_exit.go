@@ -19,7 +19,12 @@ import (
 type exitGroup struct {
 	*smux.Group
 	mtr atomic.Pointer[linkMeter]
+	// big: its writer's time inside big writes (the move hint, hint.go)
+	big bigWrites
 }
+
+// Write is the group's, with its big writes timed (the move hint).
+func (g *exitGroup) Write(p []byte) (int, error) { return g.big.write(p, g.Group.Write) }
 
 func (g *exitGroup) guard() *sessGuard {
 	if m := g.mtr.Load(); m != nil {
@@ -60,6 +65,17 @@ func (s *exitGroupSet) add(st *smux.Stream, mtr *linkMeter) *exitGroup {
 	eg.mtr.Store(mtr)
 	s.m[g.ID()] = eg
 	return eg
+}
+
+// live is the group connections open now.
+func (s *exitGroupSet) live() []*exitGroup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*exitGroup, 0, len(s.m))
+	for _, eg := range s.m {
+		out = append(out, eg)
+	}
+	return out
 }
 
 // remove forgets eg once its connection ended.

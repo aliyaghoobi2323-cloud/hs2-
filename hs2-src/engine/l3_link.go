@@ -386,7 +386,7 @@ func (s *l3Set) linkForPkt(h uint32, size int, echo bool) *l3Link {
 		p.at = now
 		if !s.toUser && !p.moved && !p.echo && p.l.class == l3Quiet {
 			p.tx += uint64(size)
-			if due, _ := p.rule.tick(p.tx, p.rx.Load(), 0, now, false); due {
+			if due, _ := p.rule.tick(p.tx, p.rx.Load(), 0, now, false, true); due {
 				if b := s.pickFlowClass(h, l3Bulk); b != nil {
 					p.l, p.moved = b, true
 					s.moves.Add(1)

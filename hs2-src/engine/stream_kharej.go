@@ -102,6 +102,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		cfg.traffic = newExitTraffic(cfg.peers)
 		go cfg.traffic.run(ctx.Done())
 	}
+	go runExitHints(ctx) // the move hint: backlogged group connections (hint.go)
 	if cfg.RevDial != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
@@ -226,6 +227,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			}
 		}
 		owdLoop(ctx, st, &mtr.owd) // α's one-way delays (owd.go)
+	case kindHint:
+		serveHint(st, mtr) // the edge's move hints of this link (hint.go)
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
 	case kindStats:
@@ -265,7 +268,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			return
 		}
 		if udp {
-			up, err := net.Dial("udp", target)
+			up, err := panelDial(ctx, "udp", target, 5*time.Second) // a small receive buffer (panelbuf.go)
 			if err != nil {
 				conn.Close()
 				return
@@ -275,7 +278,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			relayUDPConn(exitCountedStream{conn, c}, up)
 			return
 		}
-		up, err := net.DialTimeout("tcp", target, 5*time.Second)
+		up, err := panelDial(ctx, "tcp", target, 5*time.Second) // a local panel's: a small receive buffer (panelbuf.go)
 		if err != nil {
 			conn.Close()
 			return
