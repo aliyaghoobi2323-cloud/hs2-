@@ -187,13 +187,19 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		}()
 		msg := "tcp"
 		if cfg.UDP {
-			pc, err := net.ListenPacket("udp", bind)
-			if err != nil {
-				return err
+			if pc, err := net.ListenPacket("udp", bind); err == nil {
+				go func() { <-ctx.Done(); pc.Close() }()
+				go serveUserUDP(ctx, pc, lm, port, logf)
+				msg = "tcp+udp"
+			} else {
+				// UDP on the user ports is an addition: a port whose UDP
+				// another program holds must not take the tunnel down
+				// (hs2 run exits on RunIran's error, and systemd restarted
+				// it every 3 s with the TCP port never serving).
+				logf("user port %s: UDP is NOT forwarded: %v — another program holds UDP %s on this server (ss -lunp shows which); TCP on it works, and UDP is forwarded once the port is free", p, err, p)
+				go retryUserUDP(ctx, bind, p, lm, port, logf)
+				msg = "tcp; udp waits for the port"
 			}
-			go func() { <-ctx.Done(); pc.Close() }()
-			go serveUserUDP(ctx, pc, lm, port, logf)
-			msg = "tcp+udp"
 		}
 		if proxied {
 			msg += "; tcp behind a proxy: a PROXY protocol header first"
@@ -202,6 +208,35 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	}
 	<-ctx.Done()
 	return nil
+}
+
+// userUDPRetry is how long the edge waits before it tries a user port's UDP
+// socket again (retryUserUDP), doubling up to userUDPRetryMax.
+var (
+	userUDPRetry    = time.Second
+	userUDPRetryMax = 30 * time.Second
+)
+
+// retryUserUDP opens the user port's UDP socket once another program lets it
+// go, and serves it from then on.
+func retryUserUDP(ctx context.Context, bind, p string, lm *LinkManager, port int, logf func(string, ...any)) {
+	wait := userUDPRetry
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(wait):
+		}
+		pc, err := net.ListenPacket("udp", bind)
+		if err != nil {
+			wait = min(2*wait, userUDPRetryMax)
+			continue
+		}
+		go func() { <-ctx.Done(); pc.Close() }()
+		logf("user port %s: UDP forwarded now (the port is free)", p)
+		serveUserUDP(ctx, pc, lm, port, logf)
+		return
+	}
 }
 
 // pickWait returns a link, waiting up to a few seconds for one to come up.
@@ -554,6 +589,9 @@ type udpFlow struct {
 	st    stream       // nil until the flow's stream is open (under mu)
 	stop  chan struct{}
 	ended bool // stop is closed (under mu)
+	// dst: the address the user sent to, on a port bound to every address
+	// (replyPin): its replies leave from it (under mu)
+	dst netip.Addr
 }
 
 const (
@@ -577,6 +615,7 @@ func (f *udpFlow) end() {
 func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port int, logf func(string, ...any)) {
 	var mu sync.Mutex
 	flows := map[string]*udpFlow{}
+	pin := pinReplies(pc) // a port on every address: answer from the address used
 	go func() {
 		t := time.NewTicker(30 * time.Second)
 		defer t.Stop()
@@ -631,7 +670,14 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 				if err != nil {
 					break
 				}
-				pc.WriteTo(p, addr)
+				if ua, ok := addr.(*net.UDPAddr); pin != nil && ok {
+					mu.Lock()
+					src := f.dst
+					mu.Unlock()
+					pin.writeTo(p, ua, src)
+				} else {
+					pc.WriteTo(p, addr)
+				}
 				mu.Lock()
 				f.last = time.Now()
 				mu.Unlock()
@@ -654,9 +700,21 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 		}
 		<-done // the stream is closed: the reader ends, then the slot is released
 	}
-	buf := make([]byte, maxDatagram)
+	buf, oob := make([]byte, maxDatagram), make([]byte, replyPinOOB)
 	for {
-		n, addr, err := pc.ReadFrom(buf)
+		var (
+			n    int
+			addr net.Addr
+			dst  netip.Addr
+			err  error
+		)
+		if pin != nil {
+			var ua *net.UDPAddr
+			n, ua, dst, err = pin.readFrom(buf, oob)
+			addr = ua
+		} else {
+			n, addr, err = pc.ReadFrom(buf)
+		}
 		if err != nil {
 			mu.Lock()
 			for k, f := range flows {
@@ -675,6 +733,9 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			go run(key, addr, f)
 		}
 		f.last = time.Now()
+		if dst.IsValid() {
+			f.dst = dst
+		}
 		mu.Unlock()
 		if f.qb.Load()+int64(n) > udpFlowBytes {
 			continue // the flow's link is behind: drop
