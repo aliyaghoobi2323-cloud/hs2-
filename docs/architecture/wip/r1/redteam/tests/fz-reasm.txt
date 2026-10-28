@@ -1,0 +1,6 @@
+fuzz: elapsed: 15s, execs: 95719 (0/sec), new interesting: 8 (total: 88)
+fuzz: elapsed: 1m0s, execs: 1370065 (22121/sec), new interesting: 15 (total: 95)
+fuzz: elapsed: 1m0s, execs: 1370065 (0/sec), new interesting: 15 (total: 95)
+PASS
+ok  	github.com/xtaci/smux	60.136s
+== rc 0 2026-10-28T17:43:56Z

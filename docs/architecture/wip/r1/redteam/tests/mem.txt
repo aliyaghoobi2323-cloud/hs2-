@@ -1,0 +1,10 @@
+== try 1 2026-10-28T18:28:57Z
+FAIL	./third_party/smux [setup failed]
+FAIL
+PASS
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:01.05
+	Maximum resident set size (kbytes): 16896
+PASS
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:02.94
+	Maximum resident set size (kbytes): 26156
+== rc 0 2026-10-28T18:29:04Z

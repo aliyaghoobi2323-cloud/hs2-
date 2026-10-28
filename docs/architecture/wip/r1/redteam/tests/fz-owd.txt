@@ -1,0 +1,6 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/7 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 7/7 completed, now fuzzing with 4 workers
+fuzz: elapsed: 30s, execs: 753920 (0/sec), new interesting: 0 (total: 7)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	30.106s
+== rc 0 2026-10-28T17:46:44Z

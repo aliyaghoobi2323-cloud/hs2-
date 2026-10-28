@@ -1,0 +1,17 @@
+== try 1 2026-10-28T17:28:21Z
+=== RUN   TestRedQuietBackAfterPeerUpgrade
+    red_r1_test.go:52: the exit upgraded and restarted: QUIET links still off (place: off (the other server has no group streams); quiet 0 of 1 links, bulk 0 links; opened on quiet 0, on bulk (no quiet up) 0; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 0; moved back 0)
+--- FAIL: TestRedQuietBackAfterPeerUpgrade (0.00s)
+=== RUN   TestRedHintTickNeverWaits
+    red_r1_test.go:174: longest tick 4.007272791s; writes on the stalled stream 20
+    red_r1_test.go:176: a tick took 4.007272791s with one hint stream stalled (20 hints due)
+--- FAIL: TestRedHintTickNeverWaits (4.05s)
+=== RUN   TestRedMoveBeforeMainSyn
+    linkmanager.go:436: mtcp: QUIET link q0 up (now 1 QUIET)
+    red_r1_test.go:218: read at the exit 0 of 1048576; move streams refused 1
+    red_r1_test.go:220: the exit read 0 of 1048576 bytes: the connection is wedged (move streams refused 1)
+--- FAIL: TestRedMoveBeforeMainSyn (10.01s)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	14.062s
+FAIL
+== rc 1 2026-10-28T17:28:42Z

@@ -1,0 +1,6 @@
+fuzz: elapsed: 42s, execs: 215290 (0/sec), new interesting: 0 (total: 22)
+fuzz: elapsed: 45s, execs: 215290 (0/sec), new interesting: 0 (total: 22)
+fuzz: elapsed: 46s, execs: 215290 (0/sec), new interesting: 0 (total: 22)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	46.068s
+== rc 0 2026-10-28T17:46:12Z

@@ -1,0 +1,89 @@
+## m1
+phase1 hs2-j3g <- hs2-base: 69019590 200 rc=0
+phase2 hs2-j3g <- hs2-j3g: 56010861 200 rc=0
+phase2 started 1793212149
+done
+-- edge:
+18:28:59.384488 mtcp: the other server has no group streams (an older hs2, or HS2_TUNE_QUIET=0 there): no QUIET links, every link carries everything as before
+18:29:01.378759 mtcp: dialed 4 link(s) — 4 up, 4 of 4 serving
+18:29:11.378267 mtcp: dialed 1 link(s) — 1 up, 1 of 4 serving
+18:29:13.379024 mtcp: dialed 1 link(s) — 2 up, 2 of 4 serving
+18:29:15.378434 mtcp: dialed 1 link(s) — 3 up, 3 of 4 serving
+18:29:17.378945 mtcp: dialed 1 link(s) — 4 up, 4 of 4 serving
+-- exit kh1:
+18:28:59.384422 link up from 192.168.77.1:43540 (now 1)
+18:28:59.456561 link up from 192.168.77.1:43554 (now 2)
+18:28:59.534199 link up from 192.168.77.1:43556 (now 3)
+18:28:59.609312 link up from 192.168.77.1:43566 (now 4)
+-- exit kh2:
+18:29:09.385687 link up from 192.168.77.1:60698 (now 1)
+18:29:11.384822 link up from 192.168.77.1:60712 (now 2)
+18:29:13.383180 link up from 192.168.77.1:60720 (now 3)
+18:29:15.385185 link up from 192.168.77.1:60732 (now 4)
+
+## m2
+phase1 hs2-red <- hs2-base: 79250857 200 rc=0
+phase2 hs2-red <- hs2-red: 49985704 200 rc=0
+phase2 started 1793212182
+done
+-- edge:
+18:29:33.222120 mtcp: the other server has no group streams (an older hs2, or HS2_TUNE_QUIET=0 there): no QUIET links, every link carries everything as before
+18:29:35.217189 mtcp: dialed 4 link(s) — 4 up, 4 of 4 serving
+18:29:43.220237 mtcp: the other server has group streams again (upgraded): QUIET links back on
+18:29:45.217527 mtcp: dialed 1 link(s) — 1 up, 1 of 4 serving
+18:29:45.221456 mtcp: QUIET link q0 up (now 1 QUIET)
+18:29:47.217117 mtcp: dialed 1 link(s) — 2 up, 2 of 4 serving
+18:29:49.217454 mtcp: dialed 1 link(s) — 3 up, 3 of 4 serving
+18:29:51.217918 mtcp: dialed 1 link(s) — 4 up, 4 of 4 serving
+-- exit kh1:
+18:29:33.222065 link up from 192.168.77.1:59066 (now 1)
+18:29:33.272987 link up from 192.168.77.1:59068 (now 2)
+18:29:33.373105 link up from 192.168.77.1:59082 (now 3)
+18:29:33.449742 link up from 192.168.77.1:59086 (now 4)
+-- exit kh2:
+18:29:43.220271 link up from 192.168.77.1:55606 (now 1)
+18:29:45.221400 link up from 192.168.77.1:55608 (now 2)
+18:29:45.317783 link up from 192.168.77.1:55620 (now 3)
+18:29:47.223784 link up from 192.168.77.1:55636 (now 4)
+18:29:49.220248 link up from 192.168.77.1:51694 (now 5)
+
+## m3
+phase1 hs2-prod <- hs2-j3g: 0 000 rc=56
+done
+-- edge:
+18:30:09.044827 mtcp: want 4 serving links, only 0 up — dials failing (peer down or path blocked): tlscarrier: reading server proof: EOF
+-- exit kh1:
+18:30:07.051933 peer runs protocol v2; upgrade both servers
+
+## m4
+phase1 hs2-red <- hs2-prod: 0 000 rc=56
+phase2 hs2-red <- hs2-red: 62212732 200 rc=0
+phase2 started 1793212239
+done
+-- edge:
+18:30:24.282817 mtcp: tlscarrier: the other server answered as a plain website, not as the tunnel: its shared_key differs from this one (paste the CURRENT link from it — running its setup again makes a new key), or it runs an older hs2 (p
+18:30:24.541210 mtcp: a QUIET link's dial failed: tlscarrier: the other server answered as a plain website, not as the tunnel: its shared_key differs from this one (paste the CURRENT link from it — running its setup again makes a new key)
+18:30:36.212902 mtcp: want 4 serving links, only 0 up — dials failing (peer down or path blocked): tlscarrier: reading server proof: read tcp 192.168.77.1:49656->192.168.77.2:2096: i/o timeout
+18:30:54.278622 mtcp: QUIET link q0 up (now 1 QUIET)
+18:30:56.213064 mtcp: dialed 1 link(s) — 1 up, 1 of 4 serving
+18:30:58.213436 mtcp: dialed 1 link(s) — 2 up, 2 of 4 serving
+18:31:00.213515 mtcp: dialed 1 link(s) — 3 up, 3 of 4 serving
+-- exit kh1:
+-- exit kh2:
+18:30:54.218943 link up from 192.168.77.1:53750 (now 1)
+18:30:54.278579 link up from 192.168.77.1:53754 (now 2)
+18:30:56.220093 link up from 192.168.77.1:53770 (now 3)
+18:30:58.217911 link up from 192.168.77.1:51348 (now 4)
+18:31:00.218077 link up from 192.168.77.1:51354 (now 5)
+
+## m5
+phase1 hs2-base <- hs2-red: 46182081 200 rc=0
+done
+-- edge:
+18:31:05.276011 mtcp: dialed 4 link(s) — 4 up, 4 of 4 serving
+-- exit kh1:
+18:31:03.282187 link up from 192.168.77.1:51360 (now 1)
+18:31:03.328678 link up from 192.168.77.1:51364 (now 2)
+18:31:03.413783 link up from 192.168.77.1:51376 (now 3)
+18:31:03.552906 link up from 192.168.77.1:51378 (now 4)
+
