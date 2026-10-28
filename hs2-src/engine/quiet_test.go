@@ -60,6 +60,9 @@ type quietRig struct {
 	upRx   sync.Map // test port -> *atomic.Uint64 (what the exit read of uploads)
 	cancel context.CancelFunc
 	ctx    context.Context
+	// onL3, when set, serves a TUN side channel (kindL3) that reaches the
+	// exit on link p, as serveStream does (set before one is opened)
+	onL3 func(p *classPair, st *smux.Stream)
 }
 
 const (
@@ -153,6 +156,10 @@ func (r *quietRig) serve(p *classPair) {
 			}
 			if h[0] == kindHint && conn == exitStream(st) {
 				serveHint(st, p.xmtr) // the edge's move hints (hint.go)
+				return
+			}
+			if h[0] == kindL3 && conn == exitStream(st) && r.onL3 != nil {
+				r.onL3(p, st) // the TUN's side channel of this link
 				return
 			}
 			if _, err := io.ReadFull(conn, h[1:]); err != nil || h[0] != kindTCPPort {

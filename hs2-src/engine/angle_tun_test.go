@@ -250,36 +250,195 @@ func (p *paceTun) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// A ping on the TUN goes in the latency lane of the link's scheduler: next
-// to a TUN bulk flow past the link's rate and two user uploads on the same
-// link, its one-way delay stays within the path's and 10 ms (§5.1), while
-// the bulk flow loses what does not fit.
+// A ping on the TUN is light: next to a TUN bulk flow past the link's rate
+// and two user uploads on the same link, its one-way delay stays within
+// the path's and 10 ms (§5.1), while the bulk flow loses what does not
+// fit. Since T16 an hs2 link is a QUIET and a BULK connection, so
+// "quiet_bulk" is the gate: the TUN's flows and the uploads open on the
+// QUIET connection, the bulk flow and the uploads move once to the BULK
+// one, the ping stays (an echo never moves), the bottleneck as fq_codel
+// serves a sparse flow next to backlogged ones. "one_session" keeps one
+// smux session (a peer without QUIET links: level 1, or HS2_TUNE_QUIET=0):
+// the ping goes in the latency lane of the link's scheduler ahead of the
+// bulk flow, but waits besides behind the edge socket's unsent bytes,
+// which C3 holds to its cap (T12's default: 9.3 ms at 10 Mbit/s), so its
+// bound is the path's, 10 ms and that cap.
 func TestAngleTunPingAheadOfBulk(t *testing.T) {
 	angleCores(t)
 	if testing.Short() {
-		t.Skip("emulated link")
+		t.Skip("emulated links")
 	}
+	t.Run("quiet_bulk", quietTunPing)
+	t.Run("one_session", oneSessionTunPing)
+}
+
+// tunPingRx is the exit's TUN of tunPing: the pings' one-way delays, the
+// bulk flow's bytes, and what of each came over a BULK connection.
+type tunPingRx struct {
+	mu                 sync.Mutex
+	oneWay             []time.Duration
+	bulkIn, bulkOnBulk atomic.Uint64
+	pings, pingsOnBulk atomic.Uint64
+}
+
+// dev is a TUN device for the exit's link of class bulk (or not).
+func (x *tunPingRx) dev(bulk bool) *paceTun {
+	return &paceTun{in: make(chan []byte), got: func(b []byte) {
+		if len(b) >= 36 && b[9] == 1 {
+			d := time.Duration(time.Now().UnixNano() - int64(binary.BigEndian.Uint64(b[28:])))
+			x.mu.Lock()
+			x.oneWay = append(x.oneWay, d)
+			x.mu.Unlock()
+			x.pings.Add(1)
+			if bulk {
+				x.pingsOnBulk.Add(1)
+			}
+			return
+		}
+		x.bulkIn.Add(uint64(len(b)))
+		if bulk {
+			x.bulkOnBulk.Add(uint64(len(b)))
+		}
+	}}
+}
+
+// reset starts the pings' count anew.
+func (x *tunPingRx) reset() {
+	x.mu.Lock()
+	x.oneWay = nil
+	x.mu.Unlock()
+	x.pings.Store(0)
+	x.pingsOnBulk.Store(0)
+}
+
+// p99 is the pings' 99th percentile one-way delay so far, its median and
+// their count.
+func (x *tunPingRx) p99() (p99, p50 time.Duration, n int) {
+	x.mu.Lock()
+	r := append([]time.Duration(nil), x.oneWay...)
+	x.mu.Unlock()
+	if len(r) == 0 {
+		return 0, 0, 0
+	}
+	sort.Slice(r, func(i, j int) bool { return r[i] < r[j] })
+	return r[(len(r)*99+99)/100-1], r[len(r)/2], len(r)
+}
+
+// tunPingLoad feeds the edge's TUN the bulk flow (1400 B packets at ~12
+// Mbit/s, past the link's 10) until ctx ends.
+func tunPingLoad(ctx context.Context, edgeTun *paceTun) {
+	tk := time.NewTicker(time.Millisecond)
+	defer tk.Stop()
+	for ctx.Err() == nil {
+		<-tk.C
+		select {
+		case edgeTun.in <- udpPacketN(31, 9000, 1400):
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+// tunPings sends tunPingN pings, one each 20 ms, from the edge's TUN (200:
+// the p99 is the second worst, not the worst, so one hiccup of the host
+// under the emulated links is not the verdict).
+func tunPings(edgeTun *paceTun) {
+	for i := 0; i < tunPingN; i++ {
+		edgeTun.in <- echoPacket(32, uint16(i))
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+const tunPingN = 200
+
+func quietTunPing(t *testing.T) {
+	r := newQuietRig(t, angleRateBps, angleDelay, false)
+	x := &tunPingRx{}
+	exitSet := &l3Set{toUser: true}
+	r.onL3 = func(p *classPair, st *smux.Stream) {
+		pl := newStreamL3Link(st, func() bool { return false }, nil)
+		pl.class = l3ClassOf(p == r.quiet, p == r.bulk) // as serveStream: replies by arrival
+		exitSet.add(pl)
+		exitSet.serveLink(r.ctx, pl, x.dev(p == r.bulk))
+		exitSet.remove(pl)
+	}
+	edgeSet := &l3Set{}
+	edgeTun := &paceTun{in: make(chan []byte, 1024)}
+	openL3(r.ctx, r.quiet.edge, edgeSet, edgeTun, t.Logf) // as RunIran: one per link
+	openL3(r.ctx, r.bulk.edge, edgeSet, edgeTun, t.Logf)
+	edgeSet.mu.RLock()
+	n := len(edgeSet.links)
+	var bulkLink *l3Link
+	for _, l := range edgeSet.links {
+		if l.class == l3Bulk {
+			bulkLink = l
+		}
+	}
+	edgeSet.mu.RUnlock()
+	if n != 2 || bulkLink == nil || bulkLink.sq == nil {
+		t.Fatalf("the edge's TUN links: %d, a BULK one with per-flow queues %v", n, bulkLink != nil && bulkLink.sq != nil)
+	}
+	go edgeSet.pumpTun(r.ctx, edgeTun)
+	for i := 0; i < 2; i++ {
+		st := r.open(31, qpUp)
+		go func() {
+			defer st.Close()
+			b := make([]byte, 32<<10)
+			for r.ctx.Err() == nil {
+				if _, err := st.Write(b); err != nil {
+					return
+				}
+			}
+		}()
+	}
+	go tunPingLoad(r.ctx, edgeTun)
+	deadline := time.Now().Add(5 * time.Second)
+	for (edgeSet.moves.Load() < 1 || r.q.moved.Load() < 2) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if m := edgeSet.moves.Load(); m != 1 {
+		t.Fatalf("%d TUN flows moved to the BULK link, want the bulk one", m)
+	}
+	if m := r.q.moved.Load(); m != 2 {
+		t.Fatalf("%d of the 2 uploads moved to the BULK link (%s)", m, r.q.line())
+	}
+	time.Sleep(time.Second) // the moves settle (the QUIET link's backlog drains)
+	bulk0, onBulk0 := x.bulkIn.Load(), x.bulkOnBulk.Load()
+	x.reset()
+	tunPings(edgeTun)
+	p99, p50, k := x.p99()
+	bulkIn, onBulk := x.bulkIn.Load()-bulk0, x.bulkOnBulk.Load()-onBulk0
+	ld, bd := bulkLink.sq.dropsLine()
+	bound := angleDelay + 10*time.Millisecond
+	t.Logf("ping one-way p50 %v p99 %v (%d, %d over BULK); TUN bulk in %.2f Mbit/s (%.0f%% over BULK); BULK drops light/bulk %d/%d; bound %v; %s",
+		p50, p99, k, x.pingsOnBulk.Load(), float64(bulkIn)*8/1e6/4, 100*float64(onBulk)/float64(max(bulkIn, 1)), ld, bd, bound, r.q.line())
+	if k < tunPingN*9/10 {
+		t.Fatalf("only %d of %d pings arrived", k, tunPingN)
+	}
+	if x.pingsOnBulk.Load() != 0 {
+		t.Fatalf("%d pings came over the BULK link", x.pingsOnBulk.Load())
+	}
+	if p99 > bound {
+		t.Fatalf("ping p99 one-way %v, want <= %v", p99, bound)
+	}
+	if onBulk < bulkIn*9/10 {
+		t.Fatalf("the bulk flow's packets came %d of %d B over the BULK link", onBulk, bulkIn)
+	}
+	if bd == 0 {
+		t.Fatal("the bulk flow past the link's rate lost nothing on the BULK link")
+	}
+}
+
+func oneSessionTunPing(t *testing.T) {
 	l := newAngleLink(t, angleRateBps, angleDelay)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	var mu sync.Mutex
-	var oneWay []time.Duration
-	var bulkIn atomic.Uint64
-	exitTun := &paceTun{in: make(chan []byte), got: func(b []byte) {
-		if len(b) >= 36 && b[9] == 1 {
-			d := time.Duration(time.Now().UnixNano() - int64(binary.BigEndian.Uint64(b[28:])))
-			mu.Lock()
-			oneWay = append(oneWay, d)
-			mu.Unlock()
-		} else {
-			bulkIn.Add(uint64(len(b)))
-		}
-	}}
+	x := &tunPingRx{}
 	exitSet := &l3Set{toUser: true}
 	l.onL3 = func(st *smux.Stream) {
 		pl := newStreamL3Link(st, func() bool { return false }, nil)
 		exitSet.add(pl)
-		exitSet.serveLink(ctx, pl, exitTun)
+		exitSet.serveLink(ctx, pl, x.dev(false))
 	}
 	st, err := l.edge.OpenStream()
 	if err != nil {
@@ -298,36 +457,21 @@ func TestAngleTunPingAheadOfBulk(t *testing.T) {
 	go edgeSet.serveLink(ctx, pl, edgeTun)
 	go edgeSet.pumpTun(ctx, edgeTun)
 	l.upload(ctx, 31, 2)
-	// the bulk flow: 1400 B packets at ~12 Mbit/s; the ping every 50 ms
-	go func() {
-		tk := time.NewTicker(time.Millisecond)
-		defer tk.Stop()
-		for ctx.Err() == nil {
-			<-tk.C
-			edgeTun.in <- udpPacketN(31, 9000, 1400)
-		}
-	}()
+	go tunPingLoad(ctx, edgeTun)
 	time.Sleep(2 * time.Second)
-	mu.Lock()
-	oneWay = nil
-	mu.Unlock()
-	for i := 0; i < 80; i++ {
-		edgeTun.in <- echoPacket(32, uint16(i))
-		time.Sleep(50 * time.Millisecond)
-	}
-	mu.Lock()
-	r := append([]time.Duration(nil), oneWay...)
-	mu.Unlock()
-	if len(r) < 70 {
-		t.Fatalf("only %d of 80 pings arrived", len(r))
-	}
-	sort.Slice(r, func(i, j int) bool { return r[i] < r[j] })
-	p99 := r[(len(r)*99+99)/100-1]
+	x.reset()
+	bulk0 := x.bulkIn.Load()
+	tunPings(edgeTun)
+	p99, p50, k := x.p99()
 	ld, bd := pl.sq.dropsLine()
-	t.Logf("ping one-way p50 %v p99 %v (%d); TUN bulk in %.2f Mbit/s; drops light/bulk %d/%d",
-		r[len(r)/2], p99, len(r), float64(bulkIn.Load())*8/1e6/6, ld, bd)
-	if p99 > angleDelay+10*time.Millisecond {
-		t.Fatalf("ping p99 one-way %v, want <= %v", p99, angleDelay+10*time.Millisecond)
+	bound := angleDelay + 10*time.Millisecond + angleHostQ()
+	t.Logf("ping one-way p50 %v p99 %v (%d); TUN bulk in %.2f Mbit/s; drops light/bulk %d/%d; bound %v",
+		p50, p99, k, float64(x.bulkIn.Load()-bulk0)*8/1e6/4, ld, bd, bound)
+	if k < tunPingN*9/10 {
+		t.Fatalf("only %d of %d pings arrived", k, tunPingN)
+	}
+	if p99 > bound {
+		t.Fatalf("ping p99 one-way %v, want <= %v (the path's, 10 ms and C3's cap %v)", p99, bound, angleHostQ())
 	}
 	if bd == 0 {
 		t.Fatal("the bulk flow past the link's rate lost nothing")
