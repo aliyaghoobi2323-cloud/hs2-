@@ -89,7 +89,22 @@ type flowEnt struct {
 	class atomic.Uint32  // class_tx at the latest tick
 	// the flips counted into the link's tallies so far (the runner's)
 	toBulk, toLight uint32
+	// moved: a group connection's move stream (it came here for its bulk
+	// behaviour): with MovedBulk its class stays bulk
+	moved bool
 }
+
+// MovedBulk 0 (HS2_TUNE_MOVED_BULK=0): a connection that moved to a BULK
+// link is bulk until it is quiet (C1's rule, round 2). 1, the default (R1
+// round 3, the judge): it stays bulk there. 400 connections moved to one
+// BULK link each carried 22 kbit/s, under C1's quiet mark (8 KiB in 2 s),
+// so each was light again, its frames went in the latency lane, which the
+// in-flight budget never holds: the budget never grew, its pacing cap (1.25
+// of B over its round trip) held the link at 10 Mbit/s of 100, and each
+// connection stayed slow, and light (the judge's smoke C2, 25 users of 16
+// connections on one link). A connection on a BULK link is there for its
+// backlog; its frames are bulk.
+var MovedBulk = 1
 
 // linkFlows is a link's streams as C1 sees them: smux's FlowInfo, and the
 // runner's tick.
@@ -127,6 +142,7 @@ func (t *linkFlows) add(st *smux.Stream) *flowEnt {
 		// from its first frame, until it is quiet (C1's rule)
 		e.cls.d[0].cls = ClassBulk
 		e.class.Store(uint32(ClassBulk))
+		e.moved = MovedBulk != 0
 	}
 	st.SetFlowCtx(e)
 	t.ents = append(t.ents, e)
@@ -151,6 +167,9 @@ func (t *linkFlows) tick(now time.Duration) {
 		keep = append(keep, e)
 		e.stats.tx.Store(e.st.TxBytes())
 		c, _, _ := e.cls.Tick(&e.stats, now)
+		if e.moved {
+			c = ClassBulk // moved for its backlog: bulk here (MovedBulk)
+		}
 		e.class.Store(uint32(c))
 		switch c {
 		case ClassLight:

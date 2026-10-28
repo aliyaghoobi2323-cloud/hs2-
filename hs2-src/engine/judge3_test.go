@@ -5,6 +5,9 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
+	"github.com/xtaci/smux"
 )
 
 // The R1 round-3 judge's other fixes: the guard of a QUIET link's one-way
@@ -157,5 +160,41 @@ func TestUDPLate(t *testing.T) {
 	UDPLateMs = 0
 	if udpLate(now-int64(time.Hour), now) {
 		t.Fatal("0: none dropped")
+	}
+}
+
+// A connection that moved to a BULK link stays bulk there (MovedBulk),
+// however little it moves: C1's quiet rule made 400 slow moved connections
+// light, their frames bypassed the in-flight budget, and the link stayed at
+// a tenth of the path (smoke C2). With the switch off, C1's rule holds.
+func TestMovedStaysBulk(t *testing.T) {
+	if QuietOff() || SchedOff() {
+		t.Skip("β2 off")
+	}
+	defer func(v int) { MovedBulk = v }(MovedBulk)
+	for _, on := range []int{1, 0} {
+		MovedBulk = on
+		up, dn := newAngleWire(angleRateBps, angleDelay), newAngleWire(angleRateBps, angleDelay)
+		p := newClassPair(t, up, dn, classCaps(tlscarrier.CapBulk))
+		st, err := p.edge.sess.OpenStreamSyn(smux.EncodeSynGroup(7, 2, smux.RoleMove, 99, 0))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lf linkFlows
+		e := lf.add(st)
+		if Class(e.class.Load()) != ClassBulk {
+			t.Fatalf("on %d: a move stream starts %v", on, Class(e.class.Load()))
+		}
+		now := time.Duration(time.Hour)
+		for i := 0; i < 40; i++ { // 4 s with nothing sent: quiet by C1's rule
+			now += classTick
+			lf.tick(now)
+		}
+		got := Class(e.class.Load())
+		if on == 1 && got != ClassBulk || on == 0 && got != ClassLight {
+			t.Fatalf("MovedBulk %d: a quiet moved stream is %v", on, got)
+		}
+		up.close()
+		dn.close()
 	}
 }
