@@ -142,7 +142,6 @@ type holdState struct {
 	mostKiB atomic.Int64 // the most one user held unread on QUIET links
 }
 
-
 // held says whether user tag is past QuietHoldCap now.
 func (q *quietSet) held(tag uint32) bool {
 	if q == nil || tag == 0 || QuietHoldCap.Get() <= 0 {
