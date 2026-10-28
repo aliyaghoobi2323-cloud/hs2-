@@ -339,13 +339,17 @@ func tunPingLoad(ctx context.Context, edgeTun *paceTun) {
 	}
 }
 
-// tunPings sends 80 pings, one each 50 ms, from the edge's TUN.
+// tunPings sends tunPingN pings, one each 20 ms, from the edge's TUN (200:
+// the p99 is the second worst, not the worst, so one hiccup of the host
+// under the emulated links is not the verdict).
 func tunPings(edgeTun *paceTun) {
-	for i := 0; i < 80; i++ {
+	for i := 0; i < tunPingN; i++ {
 		edgeTun.in <- echoPacket(32, uint16(i))
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+const tunPingN = 200
 
 func quietTunPing(t *testing.T) {
 	r := newQuietRig(t, angleRateBps, angleDelay, false)
@@ -408,8 +412,8 @@ func quietTunPing(t *testing.T) {
 	bound := angleDelay + 10*time.Millisecond
 	t.Logf("ping one-way p50 %v p99 %v (%d, %d over BULK); TUN bulk in %.2f Mbit/s (%.0f%% over BULK); BULK drops light/bulk %d/%d; bound %v; %s",
 		p50, p99, k, x.pingsOnBulk.Load(), float64(bulkIn)*8/1e6/4, 100*float64(onBulk)/float64(max(bulkIn, 1)), ld, bd, bound, r.q.line())
-	if k < 70 {
-		t.Fatalf("only %d of 80 pings arrived", k)
+	if k < tunPingN*9/10 {
+		t.Fatalf("only %d of %d pings arrived", k, tunPingN)
 	}
 	if x.pingsOnBulk.Load() != 0 {
 		t.Fatalf("%d pings came over the BULK link", x.pingsOnBulk.Load())
@@ -463,8 +467,8 @@ func oneSessionTunPing(t *testing.T) {
 	bound := angleDelay + 10*time.Millisecond + angleHostQ()
 	t.Logf("ping one-way p50 %v p99 %v (%d); TUN bulk in %.2f Mbit/s; drops light/bulk %d/%d; bound %v",
 		p50, p99, k, float64(x.bulkIn.Load()-bulk0)*8/1e6/4, ld, bd, bound)
-	if k < 70 {
-		t.Fatalf("only %d of 80 pings arrived", k)
+	if k < tunPingN*9/10 {
+		t.Fatalf("only %d of %d pings arrived", k, tunPingN)
 	}
 	if p99 > bound {
 		t.Fatalf("ping p99 one-way %v, want <= %v (the path's, 10 ms and C3's cap %v)", p99, bound, angleHostQ())

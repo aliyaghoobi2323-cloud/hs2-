@@ -51,8 +51,13 @@ type shapedConn struct {
 	tgt   int // the target of the record the tail fills (0: none sampled)
 	// count: the records are tallied (a QUIET link's, for its status line
 	// and γ2's batching measure): records written, their data and pad bytes
-	count              bool
-	recs, dataB, padB  atomic.Uint64
+	count             bool
+	recs, dataB, padB atomic.Uint64
+	// writes: the writes (smux's frames) counted; joined: those that came
+	// while a tail was held, so their first bytes rode a record already
+	// started: a record each saved against a record a frame (the batching's
+	// and the coalescing hold's, events.go)
+	writes, joined     atomic.Uint64
 	lineRecs, lineData uint64 // the tallies at the status line before (the runner's)
 	linePad            uint64
 	lineAt             time.Duration
@@ -146,6 +151,12 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 // held tail first; what is left short of a record is held (under wmu).
 func (c *shapedConn) writeCarry(p []byte) (int, error) {
 	n := len(p)
+	if c.count {
+		c.writes.Add(1)
+		if len(c.tail) > 0 {
+			c.joined.Add(1)
+		}
+	}
 	for len(p) > 0 {
 		if c.tgt == 0 {
 			c.tgt = c.sampler.Sample()
@@ -282,8 +293,8 @@ func (c *shapedConn) recLine(n int, now time.Duration) string {
 	if dd+dp > 0 {
 		padShare = 100 * float64(dp) / float64(dd+dp)
 	}
-	return fmt.Sprintf("quiet records link %d: %.0f/s, data %.0f B a record, pad %.1f%% (all: %d records, %d B data, %d B pad, %d tails held)",
-		n, rate, per, padShare, r, d, p, c.holds.Load())
+	return fmt.Sprintf("quiet records link %d: %.0f/s, data %.0f B a record, pad %.1f%% (all: %d records, %d B data, %d B pad, %d tails held; %d writes, %d on a record already started)",
+		n, rate, per, padShare, r, d, p, c.holds.Load(), c.writes.Load(), c.joined.Load())
 }
 
 // Read reassembles the original byte stream: it returns buffered decoded data
