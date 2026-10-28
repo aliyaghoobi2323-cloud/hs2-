@@ -258,10 +258,10 @@ func FuzzRedSessionFrames(f *testing.F) {
 					mu.Lock()
 					groups[id] = g
 					mu.Unlock()
-					g.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+					g.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
 					rd = g
 				default:
-					st.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+					st.SetReadDeadline(time.Now().Add(30 * time.Millisecond))
 				}
 				wg.Add(1)
 				go func() {

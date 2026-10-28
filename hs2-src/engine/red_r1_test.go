@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"sync"
@@ -236,4 +237,93 @@ func TestRedMoveBeforeMainSyn(t *testing.T) {
 		t.Fatal("the writer is stuck")
 	}
 	st.Close()
+}
+
+// The one-way delays (owd.go) are the receiver's monotonic clock less the
+// sender's stamp: the two clocks' offset rides in every reading, and the
+// base (the least of 30 s) takes it out only while it stays put. NTP moves
+// CLOCK_MONOTONIC's rate while it slews an offset (systemd-timesyncd, the
+// Kharej server's: up to 500 ppm, 0.5 ms each second; chrony up to 8.3 %),
+// a VM that is paused or migrated comes back with its clock behind, and a
+// server that lost its NTP servers for hours (Iran's shutdowns) slews what
+// it drifted once they are back. Each makes the sending end's stamps fall
+// behind the path: the receiver reads the shift as a queue of that
+// direction until the base ages past it (30 s).
+//
+// TestRedOWDClockSlew measures the estimator (a 50 ms shift slewed within a
+// second: the reading and how long it lasts; a 500 ppm slew: the queue it
+// reads) and what α (sendcap.go), which takes the QUIET link's one-way
+// queue of its direction as its own (version 5) with no cross-check, makes
+// of it on a 100 Mbit/s path with no real queue: the cap must keep the path
+// (>= 0.9 of it) through the false queue, as srtt − min_rtt (no clock in it)
+// says there is none.
+func TestRedOWDClockSlew(t *testing.T) {
+	const ms = time.Millisecond
+	// the estimator: a message each 50 ms, a path of 36 ms
+	for _, c := range []struct {
+		name  string
+		shift func(t time.Duration) time.Duration // how far the sender's clock fell behind at t
+	}{
+		{"50 ms within a second (chrony, a paused VM)", func(t time.Duration) time.Duration {
+			return min(max(t-10*time.Second, 0), 600*ms) * 50 / 600
+		}},
+		{"500 ppm from 10 s (timesyncd)", func(t time.Duration) time.Duration {
+			return max(t-10*time.Second, 0) / 2000
+		}},
+	} {
+		var o owdLink
+		var worst time.Duration
+		var falseFor time.Duration
+		for at := time.Duration(0); at < 60*time.Second; at += 50 * ms {
+			now := int64(time.Hour + at)
+			stamp := now - int64(36*ms) - int64(c.shift(at))
+			var b [owdMsgLen]byte
+			owdEncode(b[:], stamp, 0, false)
+			o.recv(now, b[:])
+			q := time.Duration(o.qIn.Load())
+			worst = max(worst, q)
+			if q > alphaLow {
+				falseFor += 50 * ms
+			}
+		}
+		t.Logf("estimator, %s: false queue up to %v, past alphaLow (%v) for %v of 60 s", c.name, worst, alphaLow, falseFor)
+	}
+	// α on a 100 Mbit/s path with no queue of its own, reading the false one
+	// (the shape the estimator gave: 50 ms for 30 s from 10 s)
+	path := 100e6 / 8
+	c := &sendCap{linked: true, alpha: true}
+	at, acked := time.Hour, uint64(0)
+	capNow := path * 1.25
+	qOwn := time.Duration(0)
+	var sum, minCap float64
+	minCap = math.Inf(1)
+	n := 0
+	for i := 0; i < 600; i++ { // 60 s
+		dlv := math.Min(capNow, path)
+		qOwn += time.Duration((capNow - path) / path * float64(100*ms))
+		qOwn = max(qOwn, 0)
+		at += 100 * ms
+		acked += uint64(dlv / 10)
+		fake := time.Duration(0)
+		if i >= 100 && i < 400 {
+			fake = 50 * ms
+		}
+		c.Update(capSample{Now: at, Delivery: dlv, Acked: acked, Written: acked, Segs: uint32(acked / 1000),
+			SRTT: 72*ms + qOwn, MinRTT: 72 * ms, OWD: qOwn + fake, OWDok: true})
+		if c.own > 0 {
+			capNow = float64(c.own)
+		}
+		if i >= 100 && i < 400 {
+			sum += dlv
+			n++
+			minCap = math.Min(minCap, capNow)
+		}
+	}
+	mean := sum / float64(n) / path
+	t.Logf("alpha through 30 s of a false 50 ms queue: delivered %.3f of the path, cap down to %.1f Mbit/s (%d cuts)",
+		mean, minCap*8/1e6, c.aCuts)
+	if mean < 0.9 {
+		t.Fatalf("a clock slew cut a 100 Mbit/s path with no queue to %.3f of it for 30 s (cap down to %.1f Mbit/s)",
+			mean, minCap*8/1e6)
+	}
 }
