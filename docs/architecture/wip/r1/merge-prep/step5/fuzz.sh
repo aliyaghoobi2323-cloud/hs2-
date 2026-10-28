@@ -39,8 +39,9 @@ run() {
 	git -C "$SRC" status --short -- '*testdata/fuzz*' | sed 's/^/   new corpus entry (a failing input): /'
 	[ ! -s "$FAILS" ]
 }
-FAILS=$(mktemp)
 OUT=$(step5_out fuzz)
+FAILS=${OUT%.txt}-failed.txt # (kept beside the result: nothing is deleted)
+: > "$FAILS"
 {
 	step5_head "fuzz, $FUZZTIME a target, -parallel $PAR"
 	step5_guard bash -c "$(declare -f run); TARGETS='$TARGETS' want='$want' SRC='$SRC' FUZZTIME='$FUZZTIME' PAR='$PAR' FAILS='$FAILS' run"
@@ -48,5 +49,4 @@ OUT=$(step5_out fuzz)
 	[ -s "$FAILS" ] && echo "== failed: $(tr '\n' ' ' < "$FAILS")"
 	echo "== exit $rc"
 } > "$OUT" 2>&1
-rm -f "$FAILS"
 echo "$OUT"; tail -3 "$OUT"; exit $rc

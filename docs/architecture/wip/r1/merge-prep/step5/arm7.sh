@@ -10,7 +10,7 @@
 # run for lack of qemu-user, 3 the rig lock).
 source "$(dirname "$0")/lib.sh"
 OUT=$(step5_out arm7)
-BIN=$OUTDIR/arm7-$SHA
+BIN=${OUT%.txt}-bin # a new directory each run
 mkdir -p "$BIN"
 ARM7_RUN=${ARM7_RUN:-'Sched|Class|Lane|HostQ|Lowat|Gate|HostWait|SendCap|Budget|OWD|Hint|Events|QuietRecords|QuietCounts|FlowKey|Tun|Proxy|Syn|UserTag|Wire|Pin|Shape|Coalesce|Moved|MoveRule|UDPLate|Panel|LinkSndbuf'}
 QEMU=${QEMU_ARM:-$(command -v qemu-arm-static || command -v qemu-arm || true)}

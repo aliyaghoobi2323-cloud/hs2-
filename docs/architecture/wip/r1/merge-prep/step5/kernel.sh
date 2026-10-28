@@ -10,7 +10,7 @@
 #    has it and the code's fallback without it (exit 1 if one is missing);
 # 2. the tests that call the kernel (every Test in *_linux_test.go of
 #    engine, tlscarrier, tun), run here;
-# 3. a bundle in $STEP5_OUT/kernel-bundle-<sha>/ (kprobe, the test binaries,
+# 3. a bundle in $STEP5_OUT/kernel-<sha>-<time>-bundle/ (kprobe, the test binaries,
 #    run.sh) that runs 1 and 2 with one command on any other Linux of the
 #    same architecture — a 5.10 host (Debian 11), or a VM once approved.
 # With KERNEL_VM_CMD set (a command that runs its argument on a 5.10 guest
@@ -19,10 +19,10 @@
 # the rig lock).
 source "$(dirname "$0")/lib.sh"
 OUT=$(step5_out kernel)
-B=$OUTDIR/kernel-bundle-$SHA
+B=${OUT%.txt}-bundle # a new directory each run: nothing is deleted
 run() {
 	set -o pipefail
-	rm -rf "$B" && mkdir -p "$B" || exit 1
+	mkdir -p "$B" || exit 1
 	echo "== 1. kprobe"
 	(cd "$STEP5_DIR/kprobe" && CGO_ENABLED=0 go build -o "$B/kprobe" main.go) || exit 1
 	"$B/kprobe"; k=$?
