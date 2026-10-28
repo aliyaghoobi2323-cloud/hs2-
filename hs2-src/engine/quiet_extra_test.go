@@ -23,15 +23,20 @@ func TestQuietCountsExtra(t *testing.T) {
 			}
 		}
 	}
-	check([]struct{ max, q, total int }{{1, 1, 2}, {2, 1, 3}, {3, 1, 4}, {4, 1, 5}, {5, 1, 6}, {6, 2, 8}, {8, 2, 10}, {64, 2, 66}, {300, 2, 302}})
+	check([]struct{ max, q, total int }{{1, 1, 2}, {2, 1, 3}, {3, 1, 4}, {4, 1, 5}, {5, 1, 6}, {6, 4, 10}, {8, 4, 12}, {64, 4, 68}, {300, 4, 304}})
+	// round 3's two past five links (HS2_TUNE_QUIET_MANY=2)
+	defer func(m int) { QuietMany = m }(QuietMany)
+	QuietMany = 2
+	check([]struct{ max, q, total int }{{5, 1, 6}, {6, 2, 8}, {8, 2, 10}, {300, 2, 302}})
+	QuietMany = 4
 	QuietN = 2
 	check([]struct{ max, q, total int }{{1, 2, 3}, {4, 2, 6}, {300, 2, 302}})
 }
 
-// The defaults of round 3: QUIET outside max_links, one QUIET link up to
-// five links, two past.
+// The defaults (round 3; round 4 four QUIET links past five): QUIET
+// outside max_links, one QUIET link up to five links, four past.
 func TestQuietDefaultsRound3(t *testing.T) {
-	if QuietExtra != 1 || QuietN != 0 || QuietBatch != 1 || QuietCount(5) != 1 || QuietCount(6) != 2 {
-		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(5) %d, (6) %d; want 1 0 1 1 2", QuietExtra, QuietN, QuietBatch, QuietCount(5), QuietCount(6))
+	if QuietExtra != 1 || QuietN != 0 || QuietBatch != 1 || QuietCount(5) != 1 || QuietCount(6) != 4 {
+		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(5) %d, (6) %d; want 1 0 1 1 4", QuietExtra, QuietN, QuietBatch, QuietCount(5), QuietCount(6))
 	}
 }

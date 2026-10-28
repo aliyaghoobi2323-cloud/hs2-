@@ -227,8 +227,20 @@ func capRig(t *testing.T) *quietRig {
 	t.Helper()
 	old, otw := QuietCap, TwoWay
 	QuietCap, TwoWay = 64<<10, 0
-	t.Cleanup(func() { QuietCap, TwoWay = old, otw })
-	return hintRig(t, 4*angleRateBps, 10*time.Millisecond)
+	r := hintRig(t, 4*angleRateBps, 10*time.Millisecond)
+	t.Cleanup(func() {
+		quiesce(r) // (first: the rig's loops read the switches)
+		QuietCap, TwoWay = old, otw
+	})
+	return r
+}
+
+// quiesce ends a rig's context and waits for its loops (the mover, the
+// exit's hint loop: a move tick each) to see it, so a test may set the
+// package's switches again without a race.
+func quiesce(r *quietRig) {
+	r.cancel()
+	time.Sleep(3 * moveTick)
 }
 
 // TestQuietCapMovesDownload: with the cap a download leaves the QUIET link
@@ -402,8 +414,12 @@ func twoWayRig(t *testing.T, on bool) *quietRig {
 	if on {
 		TwoWay = 1
 	}
-	t.Cleanup(func() { TwoWay = old })
-	return hintRig(t, 4*angleRateBps, 10*time.Millisecond)
+	r := hintRig(t, 4*angleRateBps, 10*time.Millisecond)
+	t.Cleanup(func() {
+		quiesce(r)
+		TwoWay = old
+	})
+	return r
 }
 
 // callOn sends a 1.5 Mbit/s call (3750 B each 20 ms, a 19 KB key frame each
@@ -456,7 +472,7 @@ func TestTwoWayKeepsCall(t *testing.T) {
 			t.Fatalf("TwoWay on: moved %d, kept %d", moved, kept)
 		}
 		st.Close()
-		r.cancel()
+		quiesce(r)
 	}
 	r := twoWayRig(t, true)
 	st := r.open(11, qpDown)

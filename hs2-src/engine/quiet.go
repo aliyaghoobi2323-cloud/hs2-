@@ -96,7 +96,7 @@ func QuietCount(maxLinks int) int {
 	case QuietExtra != 0 && maxLinks <= quietOneMax:
 		return 1
 	case QuietExtra != 0:
-		return 2
+		return max(QuietMany, 1)
 	case maxLinks >= 4:
 		return 2
 	}
@@ -105,6 +105,16 @@ func QuietCount(maxLinks int) int {
 
 // quietOneMax: the most links a pool of one QUIET link has (QuietExtra).
 const quietOneMax = 5
+
+// QuietMany (HS2_TUNE_QUIET_MANY; both ends alike, as QuietN): the QUIET
+// links of a pool past quietOneMax links. 2 until R1 round 4; 4 since: with
+// the calls kept on QUIET (TwoWay) a home mix of 64 users on 8 links carries
+// 12 Mbit/s of calls there besides every connection's start, and two QUIET
+// links, two flows of ten at the fq_codel bottleneck, held the browsers'
+// pages at 1.25 times j3g's median load time and the games' upload p99 at
+// +21 to +82 ms; with four, the median page 0.9 times and the games +7 to
+// +12 (round4/REPORT.fa.md, blocks A5 and A6).
+var QuietMany = 4
 
 // QuietN (HS2_TUNE_QUIET_N, lab): the QUIET links of every pool, when
 // above 0. Both ends must set it alike (the exit dials the reverse pool's
