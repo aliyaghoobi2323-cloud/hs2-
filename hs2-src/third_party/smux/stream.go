@@ -149,6 +149,13 @@ func (s *Stream) GroupInfo() (group uint32, role uint8, seqBase uint32) {
 // RxBytes is how many data bytes the stream has received so far.
 func (s *Stream) RxBytes() uint64 { return s.rxBytes.Load() }
 
+// Unread is how many received data bytes wait in the stream for its reader.
+func (s *Stream) Unread() int {
+	s.bufferLock.Lock()
+	defer s.bufferLock.Unlock()
+	return s.unread
+}
+
 // popLocked drops the head buffer (all of it read) and its sequence
 // number. Caller holds bufferLock.
 func (s *Stream) popLocked() {

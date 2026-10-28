@@ -220,6 +220,9 @@ type quietLink struct {
 	id    int
 	born  time.Time
 	users atomic.Int32
+	// nusers: the users whose connections stick to this link (QuietByUser,
+	// quietuser.go), under the set's mu
+	nusers int
 }
 
 // quietSet is the edge's QUIET links, and the mover of its group streams.
@@ -257,6 +260,11 @@ type quietSet struct {
 	// place.go); kick: wakes the mover at once (QuietCap, quietcap.go)
 	book placeBook
 	kick chan struct{}
+	// byUser: each user's QUIET link (QuietByUser), under mu; hold: the
+	// users past their share of a QUIET link's buffer (QuietHoldCap), both
+	// quietuser.go
+	byUser map[uint32]*userQuiet
+	hold   holdState
 }
 
 // enableQuiet gives the pool its QUIET links (the edge, β2 on): maxLinks is
@@ -527,12 +535,16 @@ func (q *quietSet) arrived() {
 	q.mu.Unlock()
 }
 
-// pick chooses a QUIET link for a new connection (never one in avoid): one
-// that is not lagging first, then the fewest connections. release gives
-// its slot back (once).
-func (q *quietSet) pick(avoid []Link) (*quietLink, func(), bool) {
+// pick chooses a QUIET link for a new connection of user tag (never one in
+// avoid): one that is not lagging first, then the fewest connections; with
+// QuietByUser the user's own link (quietuser.go). release gives its slot
+// back (once).
+func (q *quietSet) pick(avoid []Link, tag uint32) (*quietLink, func(), bool) {
 	if !q.active() {
 		return nil, nil, false
+	}
+	if QuietByUser.Get() != 0 && tag != 0 {
+		return q.pickByUser(avoid, tag)
 	}
 	now := ctrlNow()
 	q.mu.Lock()
@@ -585,7 +597,14 @@ func meterLagging(mtr *linkMeter, now int64) bool {
 // the pool keeps them (never one in tried), else the pool's pick, which may
 // wait for a link (pickWait).
 func pickOpen(ctx context.Context, lm *LinkManager, hold bool, tried ...Link) (Link, func(), bool) {
-	if ql, rel, ok := lm.quiet.pick(tried); ok {
+	tag := userTagOf(ctx)
+	if lm.quiet.held(tag) {
+		// past its share of a QUIET link's buffer: on a BULK link
+		// (QuietHoldCap, quietuser.go)
+		lm.quiet.hold.opened.Add(1)
+		return pickWait(ctx, lm, hold, tried...)
+	}
+	if ql, rel, ok := lm.quiet.pick(tried, tag); ok {
 		return ql.link, rel, true
 	}
 	if lm.quiet.active() {
@@ -594,9 +613,14 @@ func pickOpen(ctx context.Context, lm *LinkManager, hold bool, tried ...Link) (L
 	return pickWait(ctx, lm, hold, tried...)
 }
 
-// pickOpenExcept is pickOpen that never waits (pickExcept).
-func pickOpenExcept(lm *LinkManager, tried []Link, hold bool) (Link, func(), bool) {
-	if ql, rel, ok := lm.quiet.pick(tried); ok {
+// pickOpenExcept is pickOpen that never waits (pickExcept); tag is the
+// connection's user.
+func pickOpenExcept(lm *LinkManager, tried []Link, hold bool, tag uint32) (Link, func(), bool) {
+	if lm.quiet.held(tag) {
+		lm.quiet.hold.opened.Add(1)
+		return lm.pickExcept(tried, hold)
+	}
+	if ql, rel, ok := lm.quiet.pick(tried, tag); ok {
 		return ql.link, rel, true
 	}
 	return lm.pickExcept(tried, hold)
@@ -855,10 +879,14 @@ func (q *quietSet) moverTick(now int64) {
 	q.gmu.Unlock()
 	keep := gs[:0:0]
 	type dueMove struct {
-		s   *groupStream
-		dir string
+		s    *groupStream
+		dir  string
+		held bool
 	}
 	var dues []dueMove
+	// the users past their share of a QUIET link's buffer: every connection
+	// of theirs moves now (QuietHoldCap, quietuser.go)
+	held := q.holdTick(gs)
 	for _, s := range gs {
 		s.mu.Lock()
 		gone := s.closed || s.noMove
@@ -873,6 +901,10 @@ func (q *quietSet) moverTick(now int64) {
 			continue
 		}
 		due, dir := s.rule.tick(s.g.TxBytes(), s.g.RxBytes(), s.g.WriteBusy(), now, true, !q.hinting(s.ql))
+		if held[s.tag] {
+			dues = append(dues, dueMove{s, "down", true})
+			continue
+		}
 		if !due && s.hintAt.Load() != 0 {
 			due, dir = true, "down" // the exit's word: a send backlog there (hint.go)
 		}
@@ -893,7 +925,7 @@ func (q *quietSet) moverTick(now int64) {
 			}
 		}
 		if due {
-			dues = append(dues, dueMove{s, dir})
+			dues = append(dues, dueMove{s, dir, false})
 			continue
 		}
 		keep = append(keep, s)
@@ -909,6 +941,8 @@ func (q *quietSet) moverTick(now int64) {
 	for _, d := range dues {
 		if !q.move(d.s, d.dir) {
 			keep = append(keep, d.s)
+		} else if d.held {
+			q.hold.movedN.Add(1)
 		}
 	}
 	if PlaceUsers.Get() != 0 && len(dues) > 0 {
@@ -1040,6 +1074,7 @@ func (q *quietSet) move(gs *groupStream, dir string) bool {
 	gs.rule.lastDir = dir
 	q.moved.Add(1)
 	q.watchBack(gs, ml)
+	q.holdMoved(gs) // its QUIET bytes still count toward its user's share (quietuser.go)
 	return true
 }
 
@@ -1066,6 +1101,7 @@ func (q *quietSet) line() string {
 	if PlaceUsers.Get() != 0 {
 		more += "; " + q.book.line()
 	}
+	more += q.userLine() // QuietByUser, QuietHoldCap (quietuser.go)
 	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d; moved back %d%s",
 		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load(), q.movedBack.Load(), more)
 }

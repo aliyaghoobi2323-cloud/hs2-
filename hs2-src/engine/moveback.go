@@ -122,7 +122,10 @@ func (q *quietSet) backTick(now int64) []*groupStream {
 // when it moved (the mover's list takes it again), false when no QUIET link
 // took it now or its group refused (tried again at a later tick).
 func (q *quietSet) moveBack(gs *groupStream) bool {
-	ql, rel, ok := q.pick(nil)
+	if q.held(gs.tag) {
+		return false // past its share of a QUIET link's buffer (quietuser.go)
+	}
+	ql, rel, ok := q.pick(nil, gs.tag)
 	if !ok {
 		return false
 	}
