@@ -473,8 +473,8 @@ func TestAngleSameLinkProbe(t *testing.T) {
 // 0.9 of its floor. One smux session: since T16 the light user's probe of
 // an hs2 link rides its QUIET connection (TestAngleSameLinkProbe); here it
 // is bounded with C3's cap (T12), once settled, and with the new user's
-// lane burst in its first second (r1-prep: the flake of flaky.fa.md was a
-// probe in that burst, or a hiccup of the 2 ms that SEGS=8 left).
+// lane burst in its first second (the flake flaky.fa.md records: a probe
+// in that burst, or a hiccup within the 2 ms that SEGS=8 had left).
 func TestAngleP10(t *testing.T) {
 	angleCores(t)
 	if testing.Short() {
