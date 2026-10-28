@@ -78,7 +78,7 @@ F_REC = 0.9743  # T17: hs2's record framing, (991.4 - 4) / (991.4 + 22)
 LOST_MAX = 0.01  # more lost probes or pings than this: p99 over all sent is infinite
 REQ = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX", "BIN"]
 CLASS_MIXES = ["home", "gamer_vs_dl", "stream_vs_dl"]
-MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping", "frozen"] + CLASS_MIXES
+MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping", "frozen", "idle"] + CLASS_MIXES
 # a kill cell (KILLQ=T, run.sh: one link of the edge reset T s after the
 # client starts) counts a connection as cut by it when it ended within this
 # many s after the kill
@@ -304,6 +304,14 @@ def spec(cellstr, path):
             users[j]["flows"].append({"kind": "frozen", "n": n, "start_s": warm, "wave": max(1, wave // fu),
                                       "read_s": fread, "rcvbuf": frcv})
         light = list(range(fu, U))
+    elif mix == "idle":
+        # an idle tunnel (the red team's Z10, the R1 round-4 judge's DPI
+        # capture): no user sends anything until one probe in the last 2 s,
+        # which keeps the client running the whole span
+        for u in users:
+            u["role"] = "idle"
+        users[0]["flows"].append({"kind": "probe", "n": 1, "start_s": max(total - 2, 0)})
+        light = []
     elif mix in CLASS_MIXES:
         # the user classes (rigload classes.go), CLASS_TEMPLATE repeated over
         # USERS: GAME=tcp|udp|both (both: the players alternate, TCP first),
@@ -351,7 +359,7 @@ def spec(cellstr, path):
     # their own delays and no probe)
     for i in light:
         users[i]["flows"].append(light_flow(users[i]))
-    if not light and mix != "tunping" and mix not in CLASS_MIXES:
+    if not light and mix not in ("tunping", "idle") and mix not in CLASS_MIXES:
         users[0]["flows"].append(light_flow(users[0]))
     if mix == "s5":
         # S5's TUN ping, from hs0's own address (not one of the USERS)

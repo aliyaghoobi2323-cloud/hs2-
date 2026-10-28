@@ -51,10 +51,10 @@ const (
 )
 
 // RTHold (HS2_TUNE_RT_HOLD, classTicks; 0: none): a flow that got a
-// steady (or two-way) realtime allowance keeps it this many ticks past its
-// last such verdict, and as long as it stays loosely steady (rtLoose: both
-// ways active in rtLooseTicks of C1's 20 ticks, what this end sends under
-// rtHoldK × RTMax): a call that fell behind at the start of a busy link
+// steady (or two-way) realtime allowance while both its ways were active
+// keeps it as long as it stays loosely so (rtLoose: what this end sends in
+// rtLooseOwn of C1's 20 ticks and under rtHoldK × RTMax, the other way in
+// rtLooseOther), and this many ticks more: a call that fell behind at the start of a busy link
 // reads as bursts (its frames come in clumps, ticks at the window's
 // ceiling), lost the lane and sat in the QUIET link's bulk lane at its floor
 // (~1 Mbit/s of its 1.5), its delay growing for the whole run (round 4, R6:
@@ -64,25 +64,30 @@ const (
 var RTHold = newTuneInt(0)
 
 const (
-	// rtLooseTicks: a held flow's ticks of 20 with bytes, each way
-	rtLooseTicks = 6
+	// rtLooseOwn, rtLooseOther: a held flow's ticks of 20 with bytes, what
+	// this end sends (a call held back comes in clumps) and the other way
+	// (its user's sending, or the call's other half: a sign of life)
+	rtLooseOwn   = 4
+	rtLooseOther = 6
 	// rtHoldK: a held flow sends at most this times RTMax over the window
 	rtHoldK = 1.5
 )
 
-// rtLoose says whether a held flow still looks like a call.
+// rtLoose says whether a flow looks like a call, loosely: both ways
+// active and under rtHoldK × RTMax. A download (its request one tick) never
+// is.
 func rtLoose(c *flowClassifier) bool {
 	if float64(c.d[0].sum) > rtHoldK*rtWindowMax() {
 		return false
 	}
-	for j := range c.d {
+	for j, least := range [2]int{rtLooseOwn, rtLooseOther} {
 		nz := 0
 		for _, v := range c.d[j].slots {
 			if v > 0 {
 				nz++
 			}
 		}
-		if nz < rtLooseTicks {
+		if nz < least {
 			return false
 		}
 	}
@@ -100,7 +105,9 @@ func rtAllowance(c *flowClassifier, confirmed bool) int64 {
 		c.rtHold = 0
 	case a == rtLightAllow:
 	case a > 0:
-		c.rtHold = uint16(min(h, 1<<15))
+		if rtLoose(c) {
+			c.rtHold = uint16(min(h, 1<<15)) // a call's verdict: held from here
+		}
 	case c.rtHold > 0 && rtLoose(c):
 		c.rtHold = uint16(min(h, 1<<15)) // still a call: the hold goes on
 		return rtAllowMax

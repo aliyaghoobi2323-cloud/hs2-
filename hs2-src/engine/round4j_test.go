@@ -96,24 +96,33 @@ func TestRTHoldKeepsCall(t *testing.T) {
 		case hold > 0 && zero != 0:
 			t.Fatalf("with the hold the clumped call lost its lane %d ticks of %d", zero, len(b))
 		}
-		// a download (the exit sends 64 KiB a tick after a request) and an
-		// upload (the exit gets 100 KB a tick, sends 50 B acks)
-		for _, k := range []struct {
-			name string
-			v    [2]int
-		}{{"download", [2]int{60 << 10, 0}}, {"upload", [2]int{50, 100000}}} {
+	}
+	// a download (the exit sends 60 KiB a tick after a request: steady to
+	// the old rule while under RTMax) and an upload (the exit gets 100 KB a
+	// tick, sends 50 B acks): the hold gives neither a tick more
+	for _, k := range []struct {
+		name string
+		v    [2]int
+	}{{"download", [2]int{60 << 10, 0}}, {"upload", [2]int{50, 100000}}} {
+		var n [2]int
+		for i, hold := range []int{0, 20} {
+			withTune(t, RTHold, hold)
 			var c flowClassifier
 			var f flowStats
 			var at time.Duration
 			ticks := [][2]int{{0, 500}}
-			for range 50 {
+			for range 60 {
 				ticks = append(ticks, k.v)
 			}
-			for i, v := range classRun(&c, &f, &at, ticks) {
+			for _, v := range classRun(&c, &f, &at, ticks) {
 				if v > rtLightAllow {
-					t.Fatalf("hold %d: the %s got a realtime allowance %d at tick %d", hold, k.name, v, i)
+					n[i]++
 				}
 			}
+		}
+		t.Logf("the %s: %d ticks of 61 with a realtime allowance, %d with the hold", k.name, n[0], n[1])
+		if n[1] != n[0] {
+			t.Fatalf("the hold gave the %s %d ticks of realtime, %d without", k.name, n[1], n[0])
 		}
 	}
 }
