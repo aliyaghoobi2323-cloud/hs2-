@@ -273,6 +273,10 @@ func applyTuning() {
 	num("HS2_TUNE_SMUX_MINSTREAMBUF", &engine.SmuxMinStreamBuffer)
 	num("HS2_TUNE_SMUX_LAGTARGET", &engine.SmuxStreamLagTarget)
 	num("HS2_TUNE_SENDGATE", &engine.SendGateRate)
+	// the exit's socket to a local panel: the receive buffer (bytes) and the
+	// segment it announces (0: the kernel's, as before; panelbuf.go)
+	num("HS2_TUNE_PANEL_RCVBUF", &engine.TunePanelRcvbuf)
+	num("HS2_TUNE_PANEL_MSS", &engine.TunePanelMSS)
 	// The window core (engine/wcore_run.go): 0 turns it off (the field safety
 	// switch); the queue targets in ms; stage 2; and, lab only, the exit's
 	// core for uploads (off until step 3), a trace file and fixed windows in

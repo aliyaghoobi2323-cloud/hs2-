@@ -222,7 +222,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			return
 		}
 		if udp {
-			up, err := net.Dial("udp", target)
+			up, err := panelDial(ctx, "udp", target, 5*time.Second) // a small receive buffer (panelbuf.go)
 			if err != nil {
 				st.Close()
 				return
@@ -232,7 +232,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			relayUDPConn(exitCountedStream{st, c}, up)
 			return
 		}
-		up, err := net.DialTimeout("tcp", target, 5*time.Second)
+		up, err := panelDial(ctx, "tcp", target, 5*time.Second) // a local panel: its segment and our receive buffer (panelbuf.go)
 		if err != nil {
 			st.Close()
 			return
