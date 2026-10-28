@@ -547,6 +547,13 @@ def compose(r, ok, why):
         except (OSError, ValueError, IndexError):
             pass
     rec["mem"] = mem
+    # the memory guard's cap (rigguard.sh): max_events > 0 means the cap held
+    # this run's memory back, so its numbers are the capped rig's
+    mg = readj(r + "/memcg.json")
+    if mg is not None:
+        rec["memcg"] = mg
+        if mg.get("max_events") or mg.get("oom_kills"):
+            errs.append("memory cap reached (max events %s, OOM kills %s): a capped run" % (mg.get("max_events"), mg.get("oom_kills")))
     rec["bottleneck"] = {"dn": tc_parse(r + "/tc-dn.txt"), "up": tc_parse(r + "/tc-up.txt")}
     keep = ("links", "target", "users", "mbit", "phase", "flowing", "peak_mbit", "pressed", "cap_mbit")
     rec["status"] = {s: {k: st[s].get(k) for k in keep if k in st[s]} for s in st}

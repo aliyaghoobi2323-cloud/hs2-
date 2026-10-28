@@ -39,6 +39,13 @@ set -u
 D=$(cd "$(dirname "$0")" && pwd)
 PLAN=${1:?usage: run.sh PLAN OUT}; OUT=${2:?usage: run.sh PLAN OUT}
 mkdir -p "$OUT/raw"; OUT=$(cd "$OUT" && pwd)
+# the memory guard (R1 round 4, rigguard.sh): the whole block runs in a
+# cgroup scope under a memory cap, and is aborted when the host's TCP memory
+# nears its pressure mark, so the rig never squeezes the production hs2 and
+# panel on this host; RIG_GUARD=0 runs without it
+if [ "${RIG_GUARD:-1}" != 0 ] && [ -z "${RIG_GUARDED:-}" ]; then
+  RIG_GUARDED=1 exec "$D/rigguard.sh" "$OUT/guard-$(date +%Y%m%dT%H%M%S)" "$D/run.sh" "$PLAN" "$OUT"
+fi
 RES=$OUT/res.jsonl; LOG=$OUT/run.log; touch "$RES"
 REPS=${REPS:-3}; LOAD_MAX=${LOAD_MAX:-8}; LOAD_WAIT=${LOAD_WAIT:-120}
 OLD_BIN=${OLD_BIN:-/root/r1-bins/hs2-old}; NEW_BIN=${NEW_BIN:-}
@@ -120,6 +127,13 @@ sssnap() {
   head -1 /proc/stat > "$r/stat-$tag.txt"
 }
 
+# this process's cgroup (v2), and a counter of its memory.events (0: none)
+memcg_dir() { echo "/sys/fs/cgroup$(awk -F: '$1 == "0" {print $3}' /proc/self/cgroup)"; }
+memcg_ev() {
+  local f; f="$(memcg_dir)/memory.events"
+  if [ -r "$f" ]; then awk -v k="$1" '$1 == k {v = $2} END {print v + 0}' "$f"; else echo 0; fi
+}
+
 run_one() {
   local id=$1 bin=$2 order=$3 rep=$4 cell=$5
   local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
@@ -147,7 +161,12 @@ run_one() {
   htop=$(top -bn2 -d0.5 -w 200 2>/dev/null | awk '/^top -/{f++} f==2 && /^ *[0-9]+ /{print $9" "$12}' | head -5 | paste -sd';' | tr -d '"\\')
   echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
+  local mx0 ok0
+  mx0=$(memcg_ev max); ok0=$(memcg_ev oom_kill)
   run_steps || ok=0
+  # the guard's cap during this run: "max" events (the cap held the rig's
+  # memory back: this run was limited by it), OOM kills, the scope's peak so far
+  echo "{\"max_events\":$(( $(memcg_ev max) - mx0 )),\"oom_kills\":$(( $(memcg_ev oom_kill) - ok0 )),\"peak\":$(cat "$(memcg_dir)/memory.peak" 2>/dev/null || echo 0),\"cap\":\"${RIG_MEM_MAX:-}\",\"guarded\":${RIG_GUARDED:-0}}" > "$r/memcg.json"
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev me > "$r/tc-dn.txt" 2>&1
   ip netns exec r-mid$RIG_ID tc -s qdisc show dev mx > "$r/tc-up.txt" 2>&1
   cleanup
