@@ -155,14 +155,17 @@ func TestNegotiate(t *testing.T) {
 
 // R1 round 2 speaks levels 1 and 2 (group streams at 2); each kill switch
 // takes its core's bit out of caps, HS2_TUNE_SCHED the group's with it (it
-// needs the scheduler). The link class (CapQuiet) is never a local cap.
+// needs the scheduler). The link class (CapQuiet) is never a local cap. The
+// exit's move hint (CapHint, R1 round 3) rides the groups: HS2_TUNE_SCHED
+// and HS2_TUNE_QUIET take it out with them, HS2_TUNE_MOVE_HINT alone.
 func TestLocalAuthHdrKillSwitches(t *testing.T) {
-	all := CapClass | CapSched | CapHostQ | CapSendCap | CapGroup
+	all := CapClass | CapSched | CapHostQ | CapSendCap | CapGroup | CapHint
 	if h := LocalAuthHdr(); h != (AuthHdr{Ver: 3, MinLevel: 1, MaxLevel: 2, Caps: all}) {
 		t.Fatalf("local header %+v", h)
 	}
-	for env, bit := range map[string]uint32{"HS2_TUNE_CLASS": CapClass, "HS2_TUNE_SCHED": CapSched | CapGroup,
-		"HS2_TUNE_HQG": CapHostQ, "HS2_TUNE_SENDCAP": CapSendCap, "HS2_TUNE_QUIET": CapGroup} {
+	for env, bit := range map[string]uint32{"HS2_TUNE_CLASS": CapClass, "HS2_TUNE_SCHED": CapSched | CapGroup | CapHint,
+		"HS2_TUNE_HQG": CapHostQ, "HS2_TUNE_SENDCAP": CapSendCap, "HS2_TUNE_QUIET": CapGroup | CapHint,
+		"HS2_TUNE_MOVE_HINT": CapHint} {
 		t.Run(env, func(t *testing.T) {
 			t.Setenv(env, "0")
 			if c := LocalAuthHdr().Caps; c != all&^bit {
@@ -354,7 +357,7 @@ func TestCarrierNegotiatedLevel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer car.Close()
-	want := CapClass | CapSched | CapSendCap | CapGroup
+	want := CapClass | CapSched | CapSendCap | CapGroup | CapHint
 	if car.Level() != 2 || car.Caps() != want {
 		t.Fatalf("client carrier: level %d caps %#x", car.Level(), car.Caps())
 	}
@@ -367,7 +370,7 @@ func TestCarrierNegotiatedLevel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no tunnel")
 	}
-	if l := ProtocolLine(); l != "protocol: v3 level 2 (peer levels 1-2, caps 0x1B); refused v2 peers: 0, refused peers (level): 0" {
+	if l := ProtocolLine(); l != "protocol: v3 level 2 (peer levels 1-2, caps 0x9B); refused v2 peers: 0, refused peers (level): 0" {
 		t.Fatalf("status line %q", l)
 	}
 }
