@@ -180,7 +180,7 @@ func TestMovedStaysBulk(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var lf linkFlows
+		lf := linkFlows{bulkLink: true}
 		e := lf.add(st)
 		if Class(e.class.Load()) != ClassBulk {
 			t.Fatalf("on %d: a move stream starts %v", on, Class(e.class.Load()))

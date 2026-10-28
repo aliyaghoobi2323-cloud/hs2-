@@ -109,9 +109,9 @@ var MovedBulk = 1
 // linkFlows is a link's streams as C1 sees them: smux's FlowInfo, and the
 // runner's tick.
 type linkFlows struct {
-	mu   sync.Mutex
+	mu       sync.Mutex
 	bulkLink bool // a BULK link's (MovedBulk: its moved connections stay bulk)
-	ents []*flowEnt
+	ents     []*flowEnt
 	// the status line's (the runner's, read under mu): flows by class at the
 	// latest tick, flips since the latest line and when that was
 	light, bulk, unknown int
