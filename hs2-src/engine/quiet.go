@@ -107,13 +107,13 @@ func QuietCount(maxLinks int) int {
 const quietOneMax = 5
 
 // QuietFew (HS2_TUNE_QUIET_FEW): the QUIET links of a pool of up to
-// quietOneMax links (1 until the R1 round-4 judge). Two at N=1 give the
+// quietOneMax links (1 until the R1 round-4 judge, 2 since). Two at N=1 give the
 // home mix's web pages a second QUIET flow at the bottleneck next to the
 // calls kept on QUIET (round 4's A7: p95 page 4648 ms against 6341 for
 // j3g and 8026 for c4) and halve what a QUIET link's death cuts (the red
 // team's C4), for one connection more (N+2 at N <= 5). The two ends need
 // not agree (QuietFollow, quietfollow.go).
-var QuietFew = 1
+var QuietFew = 2 // since the R1 round-4 judge (item 1: S1, S7, G9)
 
 // QuietMany (HS2_TUNE_QUIET_MANY; with QuietFollow, the default, the two
 // ends need not set it alike: they run the smaller count; quietfollow.go): the QUIET
@@ -171,8 +171,15 @@ var QuietThin = 1
 var QuietCoalesce = 4000
 
 // QuietCoalesceMin: the light frames a second of a QUIET link's writer past
-// which it holds (fewer: a padded record costs little, the wait all).
-var QuietCoalesceMin = 200
+// which it holds (fewer: a padded record costs little, the wait all). 200
+// until the R1 round-4 judge, 50 since: with four QUIET links (past five
+// links) the light frames split four ways, each link stayed under 200 a
+// second and every message went in a padded record of its own (25 gamers
+// next to 25 heavy users on 8 links: 891 records a second, 14.3 MB of
+// padding against 480 and 4.3 MB with two links), and the 25 x 16 cell
+// lost 3.5 % (85.6 against 88.7 Mbit/s for j3g); with 50, 87.6 (S2,
+// round4-judge.fa.md, item 6).
+var QuietCoalesceMin = 50
 
 // QuietCoalJitter 0 (HS2_TUNE_QUIET_COAL_JITTER=0, lab): the hold is
 // QuietCoalesce itself (gamma1's).
