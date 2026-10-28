@@ -135,9 +135,12 @@ func (q *quietSet) moveBack(gs *groupStream) bool {
 	bcs, brel := gs.bcs, gs.brel
 	gs.qcs, gs.qrel, gs.qown, gs.ql = ql.link.track(s1), rel, true, ql.link
 	gs.bcs, gs.brel = nil, nil
+	blink := gs.blink
+	gs.blink = nil
 	closed := gs.closed
 	qcs := gs.qcs
 	gs.mu.Unlock()
+	q.book.drop(blink, gs.tag) // (PlaceUsers' book; nil: none)
 	if closed {
 		qcs.untrack()
 		rel()

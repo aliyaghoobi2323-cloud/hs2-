@@ -373,6 +373,16 @@ func applyTuning() {
 	num("HS2_TUNE_QUIET_COAL_TUN", &engine.QuietCoalTun)
 	// a user's UDP datagram older than this at the edge is dropped (ms; 0: none)
 	num("HS2_TUNE_UDP_LATE", &engine.UDPLateMs)
+	// R1 round 4: video over several links (a user's floor weighed by the
+	// links it is active on; the edge's placement by users) and the call
+	// (a new connection off QUIET past this many bytes of big writes, its
+	// write held at most this many ms; the realtime lane and its rate)
+	num("HS2_TUNE_XSHARE", &engine.XShare)
+	num("HS2_TUNE_PLACE_USERS", &engine.PlaceUsers)
+	num("HS2_TUNE_QUIET_CAP", &engine.QuietCap)
+	num("HS2_TUNE_QUIET_HOLD", &engine.QuietHoldMs)
+	num("HS2_TUNE_RT", &engine.TuneRT)
+	num("HS2_TUNE_RT_MAX", &engine.RTMax)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)

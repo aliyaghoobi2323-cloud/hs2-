@@ -65,6 +65,8 @@ type schedSim struct {
 	served []simServe
 	// ctrlNext: each Next while a control item waits must take it
 	ctrlQ int
+	// onTick, when set, runs before each Tick (round 4: other links' users)
+	onTick func(now time.Duration)
 }
 
 func newSchedSim(t *testing.T, rateMbit float64, seed uint64) *schedSim {
@@ -143,6 +145,9 @@ func (m *schedSim) run(end time.Duration) {
 			}
 		}
 		if now >= nextTick {
+			if m.onTick != nil {
+				m.onTick(now)
+			}
 			m.s.Tick(now, m.r)
 			nextTick += schedTick
 		}

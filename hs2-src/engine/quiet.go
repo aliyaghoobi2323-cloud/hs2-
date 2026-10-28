@@ -243,6 +243,10 @@ type quietSet struct {
 	fallback atomic.Int64 // user connections opened on a BULK link (no QUIET link up)
 	moved    atomic.Int64 // group connections moved to a BULK link
 	moveFail atomic.Int64 // moves that found no BULK link (tried again later)
+	// book: the moved connections by BULK link and user (PlaceUsers,
+	// place.go); kick: wakes the mover at once (QuietCap, quietcap.go)
+	book placeBook
+	kick chan struct{}
 }
 
 // enableQuiet gives the pool its QUIET links (the edge, β2 on): maxLinks is
@@ -251,7 +255,7 @@ func (m *LinkManager) enableQuiet() *quietSet {
 	if QuietOff() {
 		return nil
 	}
-	q := &quietSet{m: m, want: QuietCount(m.max)}
+	q := &quietSet{m: m, want: QuietCount(m.max), kick: make(chan struct{}, 1)}
 	m.quiet = q
 	if cd, ok := m.dialer.(classDialer); ok {
 		m.dialer = bulkDialer{cd} // the pool's own links are BULK
@@ -630,6 +634,12 @@ type groupStream struct {
 	// (ctrlNow; 0: none)
 	ql     *mtcpLink
 	hintAt atomic.Int64
+	// blink: the BULK link it moved to, in the placement's book (PlaceUsers;
+	// nil: not booked); capAt: the upload cap's word to move now (QuietCap,
+	// ctrlNow; 0: none); cap: its big writes on the QUIET link (quietcap.go)
+	blink *mtcpLink
+	capAt atomic.Int64
+	cap   capWindow
 }
 
 // openGroupStream opens a user connection of user tag on the QUIET link l
@@ -674,6 +684,9 @@ func (gs *groupStream) Read(p []byte) (int, error) {
 }
 
 func (gs *groupStream) Write(p []byte) (int, error) {
+	if QuietCap > 0 && len(p) >= hintWriteMin {
+		gs.capEdge(len(p)) // quietcap.go
+	}
 	n, err := gs.g.Write(p)
 	if n > 0 {
 		gs.cur().bytes.Add(uint64(n))
@@ -688,9 +701,13 @@ func (gs *groupStream) Close() error {
 	gs.mu.Lock()
 	first := !gs.closed
 	gs.closed = true
-	qcs, bcs, brel, qrel, qown := gs.qcs, gs.bcs, gs.brel, gs.qrel, gs.qown
+	qcs, bcs, brel, qrel, qown, blink := gs.qcs, gs.bcs, gs.brel, gs.qrel, gs.qown, gs.blink
+	gs.blink = nil
 	gs.mu.Unlock()
 	err := gs.g.Close()
+	if blink != nil && gs.q != nil {
+		gs.q.book.drop(blink, gs.tag)
+	}
 	if first {
 		qcs.untrack()
 		if bcs != nil {
@@ -807,6 +824,8 @@ func (q *quietSet) runMover(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		case <-q.kickCh():
+			// the exit's hint or the upload cap: move now (quietcap.go)
 		}
 		q.moverTick(ctrlNow())
 	}
@@ -818,6 +837,11 @@ func (q *quietSet) moverTick(now int64) {
 	gs := q.groups
 	q.gmu.Unlock()
 	keep := gs[:0:0]
+	type dueMove struct {
+		s   *groupStream
+		dir string
+	}
+	var dues []dueMove
 	for _, s := range gs {
 		s.mu.Lock()
 		gone := s.closed || s.noMove
@@ -835,10 +859,30 @@ func (q *quietSet) moverTick(now int64) {
 		if !due && s.hintAt.Load() != 0 {
 			due, dir = true, "down" // the exit's word: a send backlog there (hint.go)
 		}
-		if due && q.move(s, dir) {
+		if !due && s.capAt.Load() != 0 {
+			due, dir = true, "up" // the upload cap (quietcap.go)
+		}
+		if due {
+			dues = append(dues, dueMove{s, dir})
 			continue
 		}
 		keep = append(keep, s)
+	}
+	if PlaceUsers != 0 && len(dues) > 0 {
+		// the users moving now count for each other's spread (place.go)
+		du := make(map[uint32]bool, len(dues))
+		for _, d := range dues {
+			du[d.s.tag] = true
+		}
+		q.book.setDue(du)
+	}
+	for _, d := range dues {
+		if !q.move(d.s, d.dir) {
+			keep = append(keep, d.s)
+		}
+	}
+	if PlaceUsers != 0 && len(dues) > 0 {
+		q.book.setDue(nil)
 	}
 	back := q.backTick(now) // the moved ones that are light again (moveback.go)
 	q.gmu.Lock()
@@ -900,6 +944,9 @@ func (q *quietSet) noteHint(id uint32) {
 	}
 	if gs.hintAt.CompareAndSwap(0, ctrlNow()) {
 		q.hinted.Add(1)
+		if QuietCap > 0 {
+			q.kickNow() // move it now, not at the next tick (quietcap.go)
+		}
 	}
 }
 
@@ -909,7 +956,18 @@ func (q *quietSet) noteHint(id uint32) {
 // moved already); false: no BULK link took it now (tried again at the
 // mover's next tick).
 func (q *quietSet) move(gs *groupStream, dir string) bool {
-	link, rel, ok := q.m.pickExcept(nil, false)
+	var link Link
+	var rel func()
+	ok := false
+	if PlaceUsers != 0 {
+		var ml *mtcpLink
+		if ml, rel, ok = q.pickBulk(gs.tag); ok { // place.go
+			link = ml
+		}
+	}
+	if !ok {
+		link, rel, ok = q.m.pickExcept(nil, false)
+	}
 	if !ok {
 		q.moveFail.Add(1)
 		return false
@@ -935,6 +993,10 @@ func (q *quietSet) move(gs *groupStream, dir string) bool {
 	gs.mu.Lock()
 	gs.bcs, gs.brel = ml.track(s1), rel
 	qcs, qrel, closed := gs.qcs, gs.qrel, gs.closed
+	if PlaceUsers != 0 && !closed {
+		q.book.add(ml, gs.tag)
+		gs.blink = ml
+	}
 	gs.mu.Unlock()
 	if closed {
 		// ended while it moved: Close missed the BULK slot and count
@@ -964,8 +1026,15 @@ func (q *quietSet) line() string {
 	case -1:
 		st = "off (the other server has no group streams)"
 	}
-	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d; moved back %d",
-		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load(), q.movedBack.Load())
+	more := ""
+	if QuietCap > 0 {
+		more += fmt.Sprintf("; capped %d (moved %d, held to the end %d)", capStats.capped.Load(), capStats.moved.Load(), capStats.timeout.Load())
+	}
+	if PlaceUsers != 0 {
+		more += "; " + q.book.line()
+	}
+	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d; moved back %d%s",
+		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load(), q.movedBack.Load(), more)
 }
 
 // placeLine is the status line of the process's placement (nil: none).

@@ -292,7 +292,11 @@ func (s *exitHintSet) line() string {
 	s.mu.Lock()
 	n := len(s.chans)
 	s.mu.Unlock()
-	return fmt.Sprintf("move hints: %d streams; sent %d (again %d), none took %d", n, s.sent.Load(), s.again.Load(), s.fail.Load())
+	cap := ""
+	if QuietCap > 0 {
+		cap = fmt.Sprintf("; capped %d (moved %d, held to the end %d)", capStats.capped.Load(), capStats.moved.Load(), capStats.timeout.Load())
+	}
+	return fmt.Sprintf("move hints: %d streams; sent %d (again %d), none took %d%s", n, s.sent.Load(), s.again.Load(), s.fail.Load(), cap)
 }
 
 // ---- the edge's end ----

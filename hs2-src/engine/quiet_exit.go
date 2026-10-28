@@ -21,10 +21,18 @@ type exitGroup struct {
 	mtr atomic.Pointer[linkMeter]
 	// big: its writer's time inside big writes (the move hint, hint.go)
 	big bigWrites
+	// cap: its big writes on a QUIET link (QuietCap, quietcap.go)
+	cap capWindow
 }
 
-// Write is the group's, with its big writes timed (the move hint).
-func (g *exitGroup) Write(p []byte) (int, error) { return g.big.write(p, g.Group.Write) }
+// Write is the group's, with its big writes timed (the move hint) and,
+// with QuietCap, capped on a QUIET link.
+func (g *exitGroup) Write(p []byte) (int, error) {
+	if QuietCap > 0 && len(p) >= hintWriteMin {
+		g.capExit(len(p))
+	}
+	return g.big.write(p, g.Group.Write)
+}
 
 func (g *exitGroup) guard() *sessGuard {
 	if m := g.mtr.Load(); m != nil {

@@ -56,7 +56,16 @@ const laneData = LaneFrameMax - smux.FrameHeaderSize
 // schedAdapter is a link's Sched as smux's FrameSched.
 type schedAdapter struct{ s *Sched[any] }
 
-func newSchedAdapter() smux.FrameSched { return &schedAdapter{s: NewSched[any]()} }
+// schedLinkSeq numbers the links' schedulers (XShare's link ids).
+var schedLinkSeq atomic.Int64
+
+func newSchedAdapter() smux.FrameSched {
+	s := NewSched[any]()
+	if XShare != 0 {
+		s.setXShare(&xshares, int(schedLinkSeq.Add(1))) // xshare.go
+	}
+	return &schedAdapter{s: s}
+}
 
 func (a *schedAdapter) Push(it any, user uint32, flow uint64, lane uint8, size int) {
 	a.s.Push(it, user, flow, Lane(lane), size)
@@ -92,6 +101,9 @@ type flowEnt struct {
 	// moved: a group connection's move stream (it came here for its bulk
 	// behaviour): with MovedBulk its class stays bulk
 	moved bool
+	// rtAllow, rtBase: its realtime bytes a tick and its tx at the latest
+	// tick (TuneRT, rtlane.go)
+	rtAllow, rtBase atomic.Int64
 }
 
 // MovedBulk 0 (HS2_TUNE_MOVED_BULK=0): a connection that moved to a BULK
@@ -117,6 +129,9 @@ type linkFlows struct {
 	light, bulk, unknown int
 	toBulk, toLight      uint64
 	lineAt               time.Duration
+	// rt, rtSteady: flows with a realtime allowance at the latest tick, and
+	// those of them steady, not light (TuneRT)
+	rt, rtSteady int
 }
 
 // info is smux's FlowInfo: the stream's user tag (its SYN's) and the lane of
@@ -127,6 +142,9 @@ func (t *linkFlows) info(st *smux.Stream) (uint32, uint8) {
 		e = t.add(st)
 	}
 	e.stats.tx.Store(st.TxBytes())
+	if e.rtLane() {
+		return e.tag, uint8(LaneRT) // rtlane.go
+	}
 	return e.tag, laneOf(queueClass(Class(e.class.Load()), &e.stats))
 }
 
@@ -157,7 +175,7 @@ func (t *linkFlows) tick(now time.Duration) {
 	ents := t.ents
 	t.mu.Unlock()
 	keep := ents[:0:0]
-	light, bulk, unknown := 0, 0, 0
+	light, bulk, unknown, rt, rtSteady := 0, 0, 0, 0, 0
 	var toBulk, toLight uint64
 	for _, e := range ents {
 		select {
@@ -166,10 +184,22 @@ func (t *linkFlows) tick(now time.Duration) {
 		default:
 		}
 		keep = append(keep, e)
-		e.stats.tx.Store(e.st.TxBytes())
-		c, _, _ := e.cls.Tick(&e.stats, now)
+		tx := e.st.TxBytes()
+		e.stats.tx.Store(tx)
+		c, _, confirmed := e.cls.Tick(&e.stats, now)
 		if e.moved {
 			c = ClassBulk // moved for its backlog: bulk here (MovedBulk)
+		}
+		if TuneRT != 0 {
+			a := rtAllowance(&e.cls, confirmed) // rtlane.go
+			e.rtBase.Store(int64(tx))
+			e.rtAllow.Store(a)
+			if a > 0 && !e.moved {
+				rt++
+				if a != rtLightAllow || !confirmed {
+					rtSteady++
+				}
+			}
 		}
 		e.class.Store(uint32(c))
 		switch c {
@@ -187,6 +217,7 @@ func (t *linkFlows) tick(now time.Duration) {
 	t.mu.Lock()
 	t.ents = append(keep, t.ents[len(ents):]...) // with those added meanwhile
 	t.light, t.bulk, t.unknown = light, bulk, unknown
+	t.rt, t.rtSteady = rt, rtSteady
 	t.toBulk += toBulk
 	t.toLight += toLight
 	t.mu.Unlock()
@@ -205,7 +236,11 @@ func (t *linkFlows) line(now time.Duration) string {
 		b, l = float64(t.toBulk)/mins, float64(t.toLight)/mins
 	}
 	t.toBulk, t.toLight, t.lineAt = 0, 0, now
-	return classLine(t.light, t.bulk, t.unknown, b, l)
+	s := classLine(t.light, t.bulk, t.unknown, b, l)
+	if TuneRT != 0 {
+		s += fmt.Sprintf("; realtime %d (steady %d)", t.rt, t.rtSteady)
+	}
+	return s
 }
 
 // ---- user_mem_share ----

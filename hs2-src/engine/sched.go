@@ -48,6 +48,10 @@ const (
 	LaneCtrl Lane = iota
 	LaneLatency
 	LaneBulk
+	// LaneRT (R1 round 4, TuneRT, rtlane.go): steady flows (a call) and
+	// confirmed light ones, ahead of the latency lane's new flows, under
+	// each user's realtime credit
+	LaneRT
 )
 
 // LaneFrameMax: a latency-lane frame is at most this; the writer splits a
@@ -99,8 +103,8 @@ func BulkFrameSize(rate float64) int {
 // SchedStats is what a scheduler holds and did.
 type SchedStats struct {
 	Users, Active, Flows int       // user and flow records; users with bulk demand at the latest tick
-	Pending              [3]int    // items queued per lane
-	Served               [3]uint64 // bytes taken per lane
+	Pending              [4]int    // items queued per lane
+	Served               [4]uint64 // bytes taken per lane
 	// Demoted: latency-lane items queued as bulk (out of credit, behind
 	// bulk of their own flow, or past LaneFrameMax).
 	Demoted uint64
@@ -157,6 +161,7 @@ type schedFlow[T any] struct {
 	u            *schedUser[T]
 	q            schedFIFO[T]
 	lat          int // its items in the latency lane
+	rt           int // its items in the realtime lane
 	uPrev, uNext *schedFlow[T]
 	gPrev, gNext *schedFlow[T]
 	gDef         int // its surplus deficit, bytes
@@ -180,6 +185,7 @@ type schedUser[T any] struct {
 	floor        float64 // F_u at the latest tick, bytes/s
 	floorLeft    float64 // what it may still take at its floor this tick, bytes
 	bucket       float64 // latency-lane credit, bytes
+	rtBucket     float64 // realtime-lane credit, bytes (LaneRT)
 	// the demand's window: bulk bytes pushed, and the bytes the link served
 	// while it had bulk queued, the tick before and this one; readyAt is
 	// the clock when its bulk queue last became non-empty
@@ -187,11 +193,16 @@ type schedUser[T any] struct {
 	ready        [2]uint64
 	readyAt      uint64
 	aPrev, aNext *schedUser[T] // all users
+	// w: its weight at the latest tick (1, or 1/k with XShare: k the links
+	// it is active on; 0 inactive); xe: its XShare entry
+	w  float64
+	xe *xshareEnt
 }
 
 // Sched is a link's scheduler.
 type Sched[T any] struct {
 	ctrl, lat schedFIFO[T]
+	rt        schedFIFO[T] // LaneRT
 	users     map[uint32]*schedUser[T]
 	flows     map[uint64]*schedFlow[T]
 	all       *schedUser[T]
@@ -216,11 +227,33 @@ type Sched[T any] struct {
 	ticked     bool
 	rate       float64
 	active     int
-	servedLane [3]uint64
+	servedLane [4]uint64
 	demoted    uint64
 	freeNode   *schedNode[T]
 	freeFlow   *schedFlow[T]
 	freeUser   *schedUser[T]
+	// xs, xsLink: XShare's users and this link's id in it (nil: off)
+	xs     *xshareSet
+	xsLink int
+}
+
+// setXShare weighs each active user's floor by the links it is active on
+// (xshare.go), this scheduler being link in set.
+func (s *Sched[T]) setXShare(set *xshareSet, link int) { s.xs, s.xsLink = set, link }
+
+// xsNote counts u active on this link at now and says on how many links it
+// is (at least 1).
+func (s *Sched[T]) xsNote(u *schedUser[T], now time.Duration) int {
+	for range 2 {
+		if u.xe == nil {
+			u.xe = s.xs.ent(u.tag, int64(now))
+		}
+		if k := u.xe.note(s.xsLink, int64(now)); k > 0 {
+			return k
+		}
+		u.xe = nil // swept meanwhile: the tag's entry again
+	}
+	return 1
 }
 
 // NewSched makes a link's scheduler.
@@ -240,6 +273,18 @@ func (s *Sched[T]) Push(it T, user uint32, flow uint64, lane Lane, size int) {
 	f := s.flowOf(user, flow)
 	n.f = f
 	u := f.u
+	if lane == LaneRT {
+		// ahead of the latency lane, while the flow has nothing queued in
+		// it or in bulk (its order) and its user has realtime credit; else
+		// as a latency-lane item
+		if size <= rtFrameMax && f.q.n == 0 && f.lat == 0 && u.rtBucket >= float64(size) {
+			u.rtBucket -= float64(size)
+			f.rt++
+			s.rt.push(n)
+			return
+		}
+		lane = LaneLatency
+	}
 	if lane == LaneLatency {
 		if size <= LaneFrameMax && f.q.n == 0 && u.bucket >= float64(size) {
 			u.bucket -= float64(size)
@@ -270,6 +315,13 @@ func (s *Sched[T]) Push(it T, user uint32, flow uint64, lane Lane, size int) {
 func (s *Sched[T]) NextUrgent() (it T, ok bool) {
 	if n := s.ctrl.pop(); n != nil {
 		return s.take(n, LaneCtrl), true
+	}
+	if n := s.rt.pop(); n != nil {
+		f := n.f
+		f.rt--
+		it = s.take(n, LaneRT)
+		s.maybeIdle(f)
+		return it, true
 	}
 	if n := s.lat.pop(); n != nil {
 		f := n.f
@@ -348,7 +400,9 @@ func (s *Sched[T]) Tick(now time.Duration, linkRate float64) {
 	}
 	s.rate, s.quantum = c, BulkFrameSize(c)
 	refill := schedLaneRate * dt.Seconds()
+	rtRefill := float64(RTMax) / 8 * dt.Seconds()
 	n := 0
+	wsum := 0.0
 	for u, next := s.all, (*schedUser[T])(nil); u != nil; u = next {
 		next = u.aNext
 		if u.items > 0 {
@@ -363,8 +417,14 @@ func (s *Sched[T]) Tick(now time.Duration, linkRate float64) {
 			d = max(d, float64(u.ready[0]+u.ready[1])/took*c)
 		}
 		u.demand = d
+		u.w = 0
 		if d > 0 || u.items > 0 {
 			n++
+			u.w = 1
+			if s.xs != nil {
+				u.w = 1 / float64(s.xsNote(u, now))
+			}
+			wsum += u.w
 		} else if u.flows == 0 {
 			// no flow left (freed below a tick before) and no demand
 			s.dropUser(u)
@@ -373,17 +433,19 @@ func (s *Sched[T]) Tick(now time.Duration, linkRate float64) {
 		u.pushed = [2]float64{u.pushed[1], 0}
 		u.ready = [2]uint64{u.ready[1], 0}
 		u.bucket = min(u.bucket+refill, schedLaneBurst)
+		u.rtBucket = min(u.rtBucket+rtRefill, rtBurst)
 	}
 	s.active = n
-	share := 0.0
-	if n > 0 {
-		share = c / float64(n)
-	}
-	// the floor list keeps its order, its turn and its deficits from tick
+	// each active user's share is C·w/Σw: C/N with every weight 1 (XShare
+	// off, or every user on this link alone). The floor list keeps its order, its turn and its deficits from tick
 	// to tick (rebuilt in a fixed order, the same user went first each tick
 	// and the one after lost the frame that fell past it: 45% where 50% was
 	// due, TestSchedNewHeavyUser at 10 Mbit/s); users that come in join last
 	for u := s.all; u != nil; u = u.aNext {
+		share := 0.0
+		if wsum > 0 {
+			share = c * u.w / wsum
+		}
 		u.floor = min(u.demand, share)
 		u.floorLeft = u.floor * schedTick.Seconds()
 		if u.items > 0 && u.floorLeft > 0 {
@@ -406,7 +468,7 @@ func (s *Sched[T]) Tick(now time.Duration, linkRate float64) {
 // Stats says what the scheduler holds and did (O(users)).
 func (s *Sched[T]) Stats() SchedStats {
 	st := SchedStats{Users: len(s.users), Active: s.active, Flows: len(s.flows),
-		Pending: [3]int{s.ctrl.n, s.lat.n, s.bulkN}, Served: s.servedLane, Demoted: s.demoted,
+		Pending: [4]int{s.ctrl.n, s.lat.n, s.bulkN, s.rt.n}, Served: s.servedLane, Demoted: s.demoted,
 		FloorUsers: s.nFloor, Quantum: s.quantum, Rate: s.rate}
 	for u := s.all; u != nil; u = u.aNext {
 		if u.items > st.MaxUserItems {
@@ -497,7 +559,7 @@ func (s *Sched[T]) userOf(tag uint32) *schedUser[T] {
 	} else {
 		s.freeUser = u.aNext
 	}
-	*u = schedUser[T]{tag: tag, bucket: schedLaneBurst, aNext: s.all}
+	*u = schedUser[T]{tag: tag, bucket: schedLaneBurst, rtBucket: rtBurst, aNext: s.all}
 	if s.all != nil {
 		s.all.aPrev = u
 	}
@@ -596,7 +658,7 @@ func (s *Sched[T]) floorOut(u *schedUser[T]) {
 
 // maybeIdle puts f in the idle list once nothing of it is queued.
 func (s *Sched[T]) maybeIdle(f *schedFlow[T]) {
-	if f.q.n != 0 || f.lat != 0 || f.inIdle {
+	if f.q.n != 0 || f.lat != 0 || f.rt != 0 || f.inIdle {
 		return
 	}
 	f.inIdle, f.idleAt, f.idleNext, f.idlePrev = true, s.tick, nil, s.idleTail

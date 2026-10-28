@@ -250,6 +250,17 @@ func (g *Group) switchLocked(s1 *Stream, base uint32) {
 	}
 }
 
+// SwitchCh is closed when this end's next frame goes on another stream (a
+// move, or the move stream's arrival), after the call: the next switch.
+func (g *Group) SwitchCh() <-chan struct{} {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.sw
+}
+
+// CloseCh is closed once the group is closed.
+func (g *Group) CloseCh() <-chan struct{} { return g.closeCh }
+
 // MovedAt is when the group moved (zero: it has not).
 func (g *Group) MovedAt() time.Time {
 	g.mu.Lock()
