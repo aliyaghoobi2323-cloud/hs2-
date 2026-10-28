@@ -1,0 +1,34 @@
+16:52:14 plan /root/r4/A4/plan.txt: 16 runs
+16:52:15 start f4fb6861-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 1.39 waited 0s
+16:53:01 done f4fb6861-j3g-1 ok=1 
+16:53:02 start f4fb6861-c4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4) load 3.04 waited 0s
+16:53:48 done f4fb6861-c4-1 ok=1 
+16:53:49 start f4fb6861-c4nort-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4nort) load 2.76 waited 0s
+16:54:34 done f4fb6861-c4nort-1 ok=1 
+16:54:35 start f4fb6861-c4nort-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4nort) load 3.32 waited 0s
+16:55:21 done f4fb6861-c4nort-2 ok=1 
+16:55:22 start f4fb6861-c4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4) load 3.41 waited 0s
+16:56:08 done f4fb6861-c4-2 ok=1 
+16:56:08 start f4fb6861-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 3.81 waited 0s
+16:56:54 done f4fb6861-j3g-2 ok=1 
+16:56:55 start 11690259-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 4.26 waited 0s
+16:57:40 done 11690259-j3g-1 ok=1 
+16:57:41 start 11690259-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4) load 3.18 waited 0s
+16:58:25 done 11690259-c4-1 ok=1 
+16:58:26 start 11690259-c4nort-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4nort) load 4.28 waited 0s
+16:59:11 done 11690259-c4nort-1 ok=1 
+16:59:12 start 11690259-c4nort-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4nort) load 3.99 waited 0s
+16:59:57 done 11690259-c4nort-2 ok=1 
+16:59:58 start 11690259-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c4) load 3.04 waited 0s
+17:00:43 done 11690259-c4-2 ok=1 
+17:00:44 start 11690259-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 3.70 waited 0s
+17:01:29 done 11690259-j3g-2 ok=1 
+17:01:30 start cab6c0da-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 3.69 waited 0s
+17:02:03 done cab6c0da-j3g-1 ok=1 
+17:02:04 start cab6c0da-c4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=c4) load 3.76 waited 0s
+17:02:37 done cab6c0da-c4-1 ok=1 
+17:02:38 start cab6c0da-c4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=c4) load 2.90 waited 0s
+17:03:11 done cab6c0da-c4-2 ok=1 
+17:03:12 start cab6c0da-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 2.59 waited 0s
+17:03:45 done cab6c0da-j3g-2 ok=1 
+17:03:45 done /root/r4/A4/plan.txt

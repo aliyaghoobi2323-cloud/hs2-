@@ -1,0 +1,4 @@
+15:52:55 plan /root/r4/D1/plan.txt: 3 runs
+15:52:56 start f4fb6861-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 0.59 waited 0s
+15:53:41 done f4fb6861-j3g-1 ok=1 
+15:53:42 start cab6c0da-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 1.28 waited 0s

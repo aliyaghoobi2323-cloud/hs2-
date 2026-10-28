@@ -1,0 +1,8 @@
+taken
+15:52:54 lock taken after 0s (pid 1846283), plan /root/r4/D1/plan.txt, REPS 1, limit 1440s
+15:53:46 run.sh status 3
+15:53:46 pass 1: 0 runs busy (>75%) or failed, 1388s left
+15:53:45 ABORT: host TCP memory 302277 pages >= 274078; stopping rigguard-guard-20261028T155255-1846321.scope
+15:53:46 end: status 130; 96 samples; host TCP max 302277 pages (start 0, abort 274078); scope socket max 1233174528 bytes; memory.peak 1327513600; memory.events low 0 high 0 max 0 oom 0 oom_kill 0 oom_group_kill 0 ; TCPMemoryPressures 0
+15:53:47 done after 53s of rig time
+15:53:47 lock released after 53s

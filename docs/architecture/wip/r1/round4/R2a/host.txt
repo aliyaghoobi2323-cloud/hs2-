@@ -1,0 +1,32 @@
+== start 2026-10-28T18:51:15+00:00
+ 18:51:15 up 1 day,  7:46,  8 users,  load average: 2.46, 2.37, 2.68
+TCP: inuse 1559 orphan 1 tw 1049 alloc 2591 mem 698
+top - 18:51:15 up 1 day,  7:46,  8 users,  load average: 2.46, 2.37, 2.68
+Tasks: 272 total,   1 running, 271 sleeping,   0 stopped,   0 zombie
+%Cpu(s): 13.2 us,  4.5 sy,  0.0 ni, 80.3 id,  0.0 wa,  0.0 hi,  1.9 si,  0.0 st 
+MiB Mem :  23456.9 total,  10146.5 free,   1582.1 used,  12144.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21874.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2296002 root      20   0 2313992  35480  16448 S 117.6   0.1   0:12.20 engine-c1.test
+2188448 root      20   0 1635468 327724  29452 S  33.3   1.4  22:30.76 xray-linux-amd6
+    992 root      20   0 1477144 195900  10500 S  31.4   0.8      9,21 hs2
+2295414 root      20   0 2379600  38004  15864 S  19.6   0.2   0:05.28 engine-c1.test
+  13068 systemd+  20   0   22800  14704  11144 S   2.0   0.1   8:32.88 systemd-resolve
+2297393 root      20   0   11908   6040   3884 R   2.0   0.0   0:00.04 top
+      1 root      20   0   22656  14176   9776 S   0.0   0.1   2:24.24 systemd
+== end 2026-10-28T19:05:05+00:00
+ 19:05:05 up 1 day,  8:00,  7 users,  load average: 2.29, 2.29, 2.45
+TCP: inuse 1433 orphan 0 tw 466 alloc 2284 mem 4444
+top - 19:05:06 up 1 day,  8:00,  7 users,  load average: 2.29, 2.29, 2.45
+Tasks: 258 total,   1 running, 257 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.8 us,  3.7 sy,  0.0 ni, 91.9 id,  0.0 wa,  0.0 hi,  1.7 si,  0.0 st 
+MiB Mem :  23456.9 total,  10238.7 free,   1473.7 used,  12161.0 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21983.3 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2188448 root      20   0 1635468 315940  29452 S  51.0   1.3  28:53.75 xray-linux-amd6
+    992 root      20   0 1477144 167076  10500 S  43.1   0.7      9,26 hs2
+2333843 root      20   0   11908   6040   3884 R   3.9   0.0   0:00.04 top
+    916 root      20   0 1083944  93924  70904 S   2.0   0.4   3:29.80 fail2ban-server
+      1 root      20   0   22656  14176   9776 S   0.0   0.1   2:26.13 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.20 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release

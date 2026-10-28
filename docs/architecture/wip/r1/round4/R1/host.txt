@@ -1,0 +1,32 @@
+== start 2026-10-28T18:08:21+00:00
+ 18:08:21 up 1 day,  7:03,  8 users,  load average: 4.26, 3.86, 3.63
+TCP: inuse 864 orphan 2 tw 2302 alloc 1410 mem 593
+top - 18:08:21 up 1 day,  7:03,  8 users,  load average: 4.26, 3.86, 3.63
+Tasks: 264 total,   1 running, 263 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.2 us,  4.7 sy,  0.0 ni, 90.2 id,  0.0 wa,  0.0 hi,  1.9 si,  0.0 st 
+MiB Mem :  23456.9 total,  10562.8 free,   1342.3 used,  11968.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22114.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2188448 root      20   0 1433468 155396  29324 S  58.8   0.6   0:22.27 xray-linux-amd6
+    992 root      20   0 1477144 208256  10500 S  43.1   0.9      9,03 hs2
+2189383 root      20   0 2165984  24188  13376 S  11.8   0.1   0:03.42 engine-c1.test
+2190078 root      20   0   11908   6020   3868 R   5.9   0.0   0:00.05 top
+2172895 root      20   0       0      0      0 I   3.9   0.0   0:00.10 kworker/u24:0-netns
+      1 root      20   0   22656  14176   9776 S   2.0   0.1   2:19.05 systemd
+  13056 root      19  -1  181624 132572 131244 S   2.0   0.6   1:26.43 systemd-journal
+== end 2026-10-28T18:28:53+00:00
+ 18:28:53 up 1 day,  7:23, 17 users,  load average: 4.13, 3.38, 3.22
+TCP: inuse 1619 orphan 1 tw 359 alloc 2751 mem 3016
+top - 18:28:53 up 1 day,  7:23, 16 users,  load average: 4.13, 3.38, 3.22
+Tasks: 283 total,   1 running, 282 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.0 us,  3.4 sy,  0.0 ni, 91.6 id,  0.0 wa,  0.0 hi,  1.9 si,  0.0 st 
+MiB Mem :  23456.9 total,  10388.8 free,   1499.4 used,  11985.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21957.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2188448 root      20   0 1635444 329828  29452 S  48.0   1.4  11:24.00 xray-linux-amd6
+    992 root      20   0 1477144 215292  10500 S  44.0   0.9      9,12 hs2
+2237805 root      20   0   11908   6036   3876 R   4.0   0.0   0:00.04 top
+2237811 sshd      20   0   12156   6232   5092 S   4.0   0.0   0:00.02 sshd
+      1 root      20   0   22656  14176   9776 S   2.0   0.1   2:21.20 systemd
+  13056 root      19  -1  181624 134548 133216 S   2.0   0.6   1:27.67 systemd-journal
+  13068 systemd+  20   0   22800  14704  11144 S   2.0   0.1   8:25.42 systemd-resolve

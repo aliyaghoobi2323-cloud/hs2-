@@ -1,0 +1,33 @@
+== +500ms 15:53:44.063 host TCP 1508 pages
+  r-edge4 TCP: inuse 4 orphan 2 tw 0 alloc 1833 mem 1508
+    hs2-j3g    ESTAB           0.0 MB     3 socks, max 0.01 MB
+    hs2-j3g    LISTEN          0.0 MB     4 socks, max 0.00 MB
+  r-exit4 TCP: inuse 6 orphan 2 tw 0 alloc 1833 mem 1508
+    hs2-j3g    ESTAB           0.0 MB     4 socks, max 0.01 MB
+    rigload    LISTEN          0.0 MB     3 socks, max 0.00 MB
+== +1000ms 15:53:44.718 host TCP 1251 pages
+  r-edge4 TCP: inuse 10 orphan 2 tw 0 alloc 1840 mem 1251
+    hs2-j3g    ESTAB           0.0 MB     8 socks, max 0.01 MB
+    hs2-j3g    LISTEN          0.0 MB     4 socks, max 0.00 MB
+  r-exit4 TCP: inuse 11 orphan 2 tw 0 alloc 1842 mem 1251
+    hs2-j3g    ESTAB           0.0 MB     9 socks, max 0.00 MB
+    rigload    LISTEN          0.0 MB     3 socks, max 0.00 MB
+== +1500ms 15:53:45.339 host TCP 302021 pages
+  r-edge4 TCP: inuse 412 orphan 3 tw 0 alloc 3436 mem 302021
+    hs2-j3g    ESTAB           0.1 MB   410 socks, max 0.03 MB
+    hs2-j3g    LISTEN          0.0 MB     4 socks, max 0.00 MB
+    rigload    ESTAB           0.0 MB   400 socks, max 0.00 MB
+  r-exit4 TCP: inuse 812 orphan 2 tw 0 alloc 3434 mem 302021
+    rigload    ESTAB         291.9 MB   101 socks, max 4.89 MB
+    (none)     FIN-WAIT-1     80.1 MB    50 socks, max 3.64 MB
+    hs2-j3g    ESTAB          75.3 MB   150 socks, max 0.52 MB
+    rigload    LISTEN          0.0 MB     2 socks, max 0.00 MB
+== +2000ms 15:53:46.009 host TCP 2109 pages
+  r-edge4 TCP: inuse 0 orphan 2 tw 400 alloc 1807 mem 2109
+  r-exit4 
+== +2500ms 15:53:46.579 host TCP 1853 pages
+  r-edge4 
+  r-exit4 
+== +3000ms 15:53:47.185 host TCP 1341 pages
+  r-edge4 
+  r-exit4 

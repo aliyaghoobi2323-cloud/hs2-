@@ -1,0 +1,4 @@
+# D1 (diagnosis, one run each): where the rig socket memory goes (memsnap.sh): home on 8 links, stream_vs_dl on 8 links (25 x 16 connections), gamer_vs_dl on 1 link
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 DUR=20 BIN=j3g
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3g

@@ -1,0 +1,6 @@
+-rw-r--r-- 1 tcpdump tcpdump 129452805 Oct 28 20:14 cap-c1-j3g.pcap
+-rw-r--r-- 1 tcpdump tcpdump 127425767 Oct 28 20:15 cap-c2-c4.pcap
+-rw-r--r-- 1 tcpdump tcpdump 272331553 Oct 28 20:15 cap-c3-j3g.pcap
+-rw-r--r-- 1 tcpdump tcpdump 272635649 Oct 28 20:16 cap-c4-c4.pcap
+-rw-r--r-- 1 tcpdump tcpdump 525688902 Oct 28 20:16 cap-c5-j3g.pcap
+-rw-r--r-- 1 tcpdump tcpdump 535387546 Oct 28 20:17 cap-c6-c4.pcap

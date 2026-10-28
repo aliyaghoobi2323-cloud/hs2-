@@ -1,0 +1,11 @@
+2026-10-28T17:29:47Z start 5a50136 R1 دور 4: چهار لینک QUIET از شش لینک به بالا (HS2_TUNE_QUIET_MANY)؛ حالت ۳ جای‌گذاری
+vet 0
+vet smux 0
+test rest 1
+test engine 1
+test smux 0
+test rigload 0
+race engine 1
+race smux 0
+race cmd 0
+2026-10-28T17:46:51Z end

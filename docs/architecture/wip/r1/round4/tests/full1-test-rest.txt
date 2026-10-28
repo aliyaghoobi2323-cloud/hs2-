@@ -1,0 +1,22 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.573s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/core	0.089s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/encap	29.163s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/fec	1.443s
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/dglab	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netem	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netsim	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/probe	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/mmsg	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs	[no test files]
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/reality	0.347s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	2.763s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	0.112s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tune	0.013s
+--- FAIL: TestLabBursty26 (8.32s)
+    lab_test.go:218:   enc: data=6038 parity=8694 groups=771 depth-derived  dec: data=1554 parity=5883 recovered=3688 lost=577 dups=2458 invalid=0
+    lab_test.go:218:   rate: btlBw=20.16 Mbit/s rtProp=51.936799ms loss=0ppm  relay qdrops=0 (0.0% offered)
+    lab_test.go:219: [bursty-26] goodput=7.69 Mbit/s  wire-loss=32.8%  residual-loss=13.183%  FEC-overhead=144%  latency p50=90.7 p95=195.2 p99=233.3 max=267.1 ms  jitter(p95-p50)=104.5 ms  (sent=6038 delivered=5242)
+    lab_test.go:228: FEC recovered too little: residual 13.18% vs wire 32.8%
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier	71.973s
+FAIL

@@ -1,0 +1,56 @@
+19:24:13 plan /root/r4/R4/plan.txt: 27 runs
+19:24:14 start 2b77e8aa-prod-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 2.02 waited 0s
+19:24:54 done 2b77e8aa-prod-1 ok=1 
+19:24:54 start 2b77e8aa-j3g-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 2.05 waited 0s
+19:25:34 done 2b77e8aa-j3g-1 ok=1 
+19:25:35 start 2b77e8aa-c4-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 1.55 waited 0s
+19:26:15 done 2b77e8aa-c4-1 ok=1 
+19:26:16 start 2b77e8aa-c4-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 2.10 waited 0s
+19:26:55 done 2b77e8aa-c4-2 ok=1 
+19:26:56 start 2b77e8aa-j3g-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 1.99 waited 0s
+19:27:36 done 2b77e8aa-j3g-2 ok=1 
+19:27:37 start 2b77e8aa-prod-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 2.63 waited 0s
+19:28:17 done 2b77e8aa-prod-2 ok=1 
+19:28:17 start 2b77e8aa-c4-3 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 2.25 waited 0s
+19:28:57 done 2b77e8aa-c4-3 ok=1 
+19:28:58 start 2b77e8aa-j3g-3 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 2.42 waited 0s
+19:29:38 done 2b77e8aa-j3g-3 ok=1 
+19:29:39 start 2b77e8aa-prod-3 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 2.79 waited 0s
+19:30:19 done 2b77e8aa-prod-3 ok=1 
+19:30:19 start 5c170184-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 2.68 waited 0s
+19:31:00 done 5c170184-prod-1 ok=1 
+19:31:01 start 5c170184-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=j3g) load 3.03 waited 0s
+19:31:41 done 5c170184-j3g-1 ok=1 
+19:31:42 start 5c170184-c4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=c4) load 4.14 waited 0s
+19:32:22 done 5c170184-c4-1 ok=1 
+19:32:23 start 5c170184-c4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=c4) load 2.81 waited 0s
+19:33:04 done 5c170184-c4-2 ok=1 
+19:33:04 start 5c170184-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=j3g) load 2.27 waited 0s
+19:33:45 done 5c170184-j3g-2 ok=1 
+19:33:46 start 5c170184-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 2.22 waited 0s
+19:34:26 done 5c170184-prod-2 ok=1 
+19:34:27 start 5c170184-c4-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=c4) load 2.49 waited 0s
+19:35:07 done 5c170184-c4-3 ok=1 
+19:35:08 start 5c170184-j3g-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=j3g) load 2.90 waited 0s
+19:35:48 done 5c170184-j3g-3 ok=1 
+19:35:49 start 5c170184-prod-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 3.02 waited 0s
+19:36:29 done 5c170184-prod-3 ok=1 
+19:36:30 start 2d23c440-prod-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=prod) load 3.03 waited 0s
+19:37:00 done 2d23c440-prod-1 ok=1 
+19:37:00 start 2d23c440-j3g-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=j3g) load 2.92 waited 0s
+19:37:30 done 2d23c440-j3g-1 ok=1 
+19:37:31 start 2d23c440-c4-1 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=c4) load 2.24 waited 0s
+19:38:01 done 2d23c440-c4-1 ok=1 
+19:38:01 start 2d23c440-c4-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=c4) load 2.91 waited 0s
+19:38:31 done 2d23c440-c4-2 ok=1 
+19:38:32 start 2d23c440-j3g-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=j3g) load 2.05 waited 0s
+19:39:02 done 2d23c440-j3g-2 ok=1 
+19:39:02 start 2d23c440-prod-2 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=prod) load 2.38 waited 0s
+19:39:32 done 2d23c440-prod-2 ok=1 
+19:39:33 start 2d23c440-c4-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=c4) load 2.47 waited 0s
+19:40:03 done 2d23c440-c4-3 ok=1 
+19:40:03 start 2d23c440-j3g-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=j3g) load 1.89 waited 0s
+19:40:33 done 2d23c440-j3g-3 ok=1 
+19:40:34 start 2d23c440-prod-3 (N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20 BIN=prod) load 1.35 waited 0s
+19:41:04 done 2d23c440-prod-3 ok=1 
+19:41:04 done /root/r4/R4/plan.txt

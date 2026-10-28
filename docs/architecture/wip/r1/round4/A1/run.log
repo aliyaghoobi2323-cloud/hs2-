@@ -1,0 +1,30 @@
+15:37:13 plan /root/r4/A1/plan.txt: 30 runs
+15:37:13 start f4fb6861-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 0.83 waited 0s
+15:37:59 done f4fb6861-j3g-1 ok=1 
+15:38:00 start f4fb6861-r4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r4) load 1.67 waited 0s
+15:38:45 done f4fb6861-r4-1 ok=1 
+15:38:46 start f4fb6861-xs-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=xs) load 2.85 waited 0s
+15:39:31 done f4fb6861-xs-1 ok=1 
+15:39:32 start f4fb6861-pl-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=pl) load 4.61 waited 0s
+15:40:17 done f4fb6861-pl-1 ok=1 
+15:40:18 start f4fb6861-qc-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=qc) load 3.69 waited 0s
+15:41:03 done f4fb6861-qc-1 ok=1 
+15:41:04 start f4fb6861-rt-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=rt) load 2.90 waited 0s
+15:41:50 done f4fb6861-rt-1 ok=1 
+15:41:50 start f4fb6861-qr-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=qr) load 3.71 waited 0s
+15:42:36 done f4fb6861-qr-1 ok=1 
+15:42:37 start f4fb6861-qr-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=qr) load 2.96 waited 0s
+15:43:22 done f4fb6861-qr-2 ok=1 
+15:43:23 start f4fb6861-rt-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=rt) load 2.51 waited 0s
+15:44:08 done f4fb6861-rt-2 ok=1 
+15:44:09 start f4fb6861-qc-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=qc) load 2.88 waited 0s
+15:44:55 done f4fb6861-qc-2 ok=1 
+15:44:55 start f4fb6861-pl-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=pl) load 3.64 waited 0s
+15:45:41 done f4fb6861-pl-2 ok=1 
+15:45:42 start f4fb6861-xs-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=xs) load 3.48 waited 0s
+15:46:27 done f4fb6861-xs-2 ok=1 
+15:46:28 start f4fb6861-r4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r4) load 3.57 waited 0s
+15:47:13 done f4fb6861-r4-2 ok=1 
+15:47:14 start f4fb6861-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 3.06 waited 0s
+15:47:59 done f4fb6861-j3g-2 ok=1 
+15:48:00 start cab6c0da-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 2.91 waited 0s
