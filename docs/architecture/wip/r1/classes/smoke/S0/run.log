@@ -1,0 +1,6 @@
+18:37:38 plan /root/rmix/plans/S0.txt: 2 runs
+18:37:39 start 8433a45b-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=home DUR=10 SBR=1.2 BIN=old) load 3.17 waited 0s
+18:38:03 done 8433a45b-old-1 ok=1 
+18:38:04 start 8433a45b-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=home DUR=10 SBR=1.2 BIN=b2nx) load 2.35 waited 0s
+18:38:29 done 8433a45b-b2nx-1 ok=1 
+18:38:29 done /root/rmix/plans/S0.txt

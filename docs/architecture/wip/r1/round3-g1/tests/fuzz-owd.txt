@@ -1,0 +1,26 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/6 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 6/6 completed, now fuzzing with 12 workers
+fuzz: elapsed: 3s, execs: 3471 (1157/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 6s, execs: 7267 (1266/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 9s, execs: 11064 (1265/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 12s, execs: 14835 (1257/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 15s, execs: 18528 (1231/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 18s, execs: 22219 (1230/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 21s, execs: 25865 (1216/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 24s, execs: 29543 (1226/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 27s, execs: 33246 (1234/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 30s, execs: 36884 (1213/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 33s, execs: 40630 (1249/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 36s, execs: 44273 (1214/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 39s, execs: 47829 (1185/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 42s, execs: 51579 (1250/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 45s, execs: 55176 (1199/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 48s, execs: 58903 (1243/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 51s, execs: 62559 (1218/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 54s, execs: 66250 (1231/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 57s, execs: 70034 (1261/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 1m0s, execs: 73887 (1284/sec), new interesting: 0 (total: 6)
+fuzz: elapsed: 1m0s, execs: 73887 (0/sec), new interesting: 0 (total: 6)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.130s
+exit 0

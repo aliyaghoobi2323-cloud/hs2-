@@ -1,0 +1,30 @@
+== start 2026-10-27T17:20:49+00:00
+ 17:20:49 up  6:15,  5 users,  load average: 1.36, 1.81, 1.45
+top - 17:20:50 up  6:15,  5 users,  load average: 1.25, 1.78, 1.45
+Tasks: 252 total,   1 running, 251 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.5 us,  3.6 sy,  0.0 ni, 92.4 id,  0.0 wa,  0.0 hi,  1.5 si,  0.0 st 
+MiB Mem :  23456.9 total,  17786.5 free,   1265.7 used,   4821.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22191.2 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 441391 root      20   0 1501316 247548  28664 S  44.2   1.0   5:23.97 xray-linux-amd6
+    992 root      20   0 1475712 146208  10420 S  42.3   0.6  97:04.33 hs2
+  13068 systemd+  20   0   22612  14516  11144 S   1.9   0.1   1:42.75 systemd-resolve
+ 467802 root      20   0   11908   6032   3880 R   1.9   0.0   0:00.03 top
+      1 root      20   0   22656  14156   9776 S   0.0   0.1   0:30.52 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.04 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+== end 2026-10-27T17:30:34+00:00
+ 17:30:34 up  6:25,  6 users,  load average: 2.66, 2.49, 1.95
+top - 17:30:35 up  6:25,  7 users,  load average: 2.45, 2.45, 1.94
+Tasks: 263 total,   1 running, 262 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.3 us,  3.7 sy,  0.0 ni, 93.1 id,  0.0 wa,  0.0 hi,  0.9 si,  0.0 st 
+MiB Mem :  23456.9 total,  17759.8 free,   1264.8 used,   4848.7 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22192.1 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+ 441391 root      20   0 1567188 268876  28664 S  37.3   1.1   9:12.72 xray-linux-amd6
+    992 root      20   0 1475712 156444  10420 S  31.4   0.7 100:17.11 hs2
+ 482461 root      20   0   11908   6040   3884 R   3.9   0.0   0:00.04 top
+    948 root      20   0   19260  10148   7836 S   2.0   0.0   0:13.95 systemd-logind
+  15528 root      20   0   12028   8460   7312 S   2.0   0.0   0:04.28 sshd
+ 482403 root      20   0   14844  10448   8780 S   2.0   0.0   0:00.02 sshd
+      1 root      20   0   22656  14156   9776 S   0.0   0.1   0:31.24 systemd

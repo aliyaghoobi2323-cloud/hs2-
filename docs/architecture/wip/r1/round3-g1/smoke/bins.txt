@@ -1,0 +1,18 @@
+b2nx /root/r3a/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1
+g1a /root/r3a/bins/hs2-g1a
+g1anc /root/r3a/bins/hs2-g1a HS2_TUNE_QUIET_COAL=0
+g1ano /root/r3a/bins/hs2-g1a HS2_TUNE_ALPHA_OWN=0
+g1b /root/r3a/bins/hs2-g1b
+g1bnc /root/r3a/bins/hs2-g1b HS2_TUNE_QUIET_COAL=0
+g1 /root/r3a/bins/hs2-g1c
+g1z /root/r3a/bins/hs2-g1c
+g1w /root/r3a/bins/hs2-g1c HS2_TUNE_QUIET_COAL=4000 HS2_TUNE_QUIET_COAL_TUN=1
+g1wz /root/r3a/bins/hs2-g1c HS2_TUNE_QUIET_COAL=4000 HS2_TUNE_QUIET_COAL_TUN=1
+g1d /root/r3a/bins/hs2-g1d
+g1dz /root/r3a/bins/hs2-g1d
+g1dy /root/r3a/bins/hs2-g1d
+g1dt /root/r3a/bins/hs2-g1d HS2_TUNE_QUIET_THIN=1
+g1e /root/r3a/bins/hs2-g1e
+g1ez /root/r3a/bins/hs2-g1e
+g1ey /root/r3a/bins/hs2-g1e
+g1et /root/r3a/bins/hs2-g1e HS2_TUNE_QUIET_THIN=1

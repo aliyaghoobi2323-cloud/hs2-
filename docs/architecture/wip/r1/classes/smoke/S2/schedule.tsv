@@ -1,0 +1,16 @@
+f4fb6861-old-1	old	A	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2
+f4fb6861-b2nx-1	b2nx	B	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2
+f4fb6861-b2nx-2	b2nx	B	2	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2
+f4fb6861-old-2	old	A	2	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2
+5a68daea-old-1	old	A	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2
+5a68daea-b2nx-1	b2nx	B	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2
+5a68daea-b2nx-2	b2nx	B	2	N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2
+5a68daea-old-2	old	A	2	N=8 RATE=100 RTT=72 LOSS=0 MODE=pfifo:600 USERS=64 MIX=home SBR=1.2
+554e12bf-old-1	old	A	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=4
+554e12bf-b2nx-1	b2nx	B	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=4
+2c1d1bb6-old-1	old	A	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl CONNS=4 SBR=1.2
+2c1d1bb6-b2nx-1	b2nx	B	1	N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl CONNS=4 SBR=1.2
+3d09e1d2-old-1	old	A	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl
+3d09e1d2-b2nx-1	b2nx	B	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl
+ad37b68a-old-1	old	A	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2
+ad37b68a-b2nx-1	b2nx	B	1	N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2

@@ -1,0 +1,67 @@
+{
+ "variant": "gr",
+ "tcp_conns": 1,
+ "udp_tuples": 0,
+ "proxied_flows": 8,
+ "mapped": 8,
+ "access_entries": 8,
+ "max_flows_on_one_conn": 8,
+ "pairs": {
+  "G1+D1": true,
+  "U1+D1": false,
+  "G1+U1": false,
+  "G2+D2": false,
+  "D1+D2": false,
+  "W2.0+D1": false,
+  "W1.0+G1": true
+ },
+ "lat": {
+  "G1": {
+   "idle_p50": 214.6,
+   "idle_p99": 382.2,
+   "dl_p50": 357.9,
+   "dl_p99": 627.9,
+   "dl_max": 627.9,
+   "sent": 250,
+   "lost": 0
+  }
+ },
+ "dl": {
+  "D1": {
+   "MB": 14.94,
+   "ttfb_ms": 382.3,
+   "mbit": 8.3
+  }
+ },
+ "web": {
+  "W1": {
+   "ttfb_ms_med": 432.6,
+   "ttfb_ms_max": 472.4,
+   "errs": 0
+  }
+ },
+ "conns": [
+  {
+   "proto": "tcp",
+   "cport": 53762,
+   "sport": 4449,
+   "open": 0.0,
+   "close": 438.558,
+   "closer": "client",
+   "last_pkt": 438.63,
+   "life_s": 438.6,
+   "up_kB": 38.3,
+   "down_kB": 16111.1,
+   "flows": [
+    "G1",
+    "W1.0",
+    "W1.1",
+    "W1.2",
+    "W1.3",
+    "W1.4",
+    "W1.5",
+    "D1"
+   ]
+  }
+ ]
+}

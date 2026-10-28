@@ -1,0 +1,2 @@
+ok  	github.com/xtaci/smux	71.275s
+exit 0

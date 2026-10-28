@@ -1,0 +1,30 @@
+== xa: TCP 6, UDP 0, flows 8 (mapped 8), most flows on one conn 2
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c59098 open   0.01 close 306.16  by rst    life  306.2s up     37.9k down      34.2k  G1
+   tcp c59112 open   1.00 close 305.762 by rst    life  304.8s up      8.6k down     364.9k  W1.4,W1.5
+   tcp c59126 open   1.00 close 303.291 by rst    life  302.3s up      5.1k down     183.1k  W1.1
+   tcp c59142 open   1.00 close 303.38  by rst    life  302.4s up      5.3k down     183.0k  W1.0
+   tcp c59152 open   1.00 close 303.376 by rst    life  302.4s up      6.0k down     183.1k  W1.3
+   tcp c59168 open   1.01 close 307.013 by rst    life  306.0s up     14.6k down    1437.4k  W1.2,D1
+   G1 rtt idle p50 72.9 p99 291.1 | during D1 p50 72.9 p99 73.1 max 73.1 (sent 250 lost 0)
+   D1 1.25 MB 1.7 Mbit/s ttfb 291.3 ms
+   W1 ttfb med 461.5 max 596.6 errs 0
+== xb1: TCP 8, UDP 0, flows 8 (mapped 8), most flows on one conn 1
+   shares: G1+D1=no, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=no
+   tcp c37980 open   0.00 close 306.087 by client life  306.1s up     34.5k down      32.6k  G1
+   tcp c37992 open   1.00 close 303.166 by client life  302.2s up      6.0k down     182.8k  W1.0
+   tcp c38008 open   1.00 close 303.176 by client life  302.2s up      5.3k down     182.8k  W1.1
+   tcp c38024 open   1.00 close 303.429 by client life  302.4s up      5.7k down     183.5k  W1.3
+   tcp c38034 open   1.00 close 303.433 by client life  302.4s up      5.5k down     183.5k  W1.4
+   tcp c38046 open   1.00 close 303.427 by client life  302.4s up      5.7k down     183.0k  W1.2
+   tcp c38062 open   1.01 close 303.43  by client life  302.4s up      5.4k down     183.5k  W1.5
+   tcp c38070 open   2.00 close 325.387 by client life  323.4s up    159.2k down   26580.6k  D1
+   G1 rtt idle p50 72.9 p99 273.9 | during D1 p50 73.3 p99 73.9 max 73.9 (sent 250 lost 0)
+   D1 26.41 MB 8.7 Mbit/s ttfb 431.4 ms
+   W1 ttfb med 463.2 max 466.6 errs 0
+== gr: TCP 1, UDP 0, flows 8 (mapped 8), most flows on one conn 8
+   shares: G1+D1=yes, U1+D1=no, G1+U1=no, G2+D2=no, D1+D2=no, W2.0+D1=no, W1.0+G1=yes
+   tcp c53762 open   0.00 close 438.558 by client life  438.6s up     38.3k down   16111.1k  G1,W1.0,W1.1,W1.2,W1.3,W1.4,W1.5,D1
+   G1 rtt idle p50 214.6 p99 382.2 | during D1 p50 357.9 p99 627.9 max 627.9 (sent 250 lost 0)
+   D1 14.94 MB 8.3 Mbit/s ttfb 382.3 ms
+   W1 ttfb med 432.6 max 472.4 errs 0

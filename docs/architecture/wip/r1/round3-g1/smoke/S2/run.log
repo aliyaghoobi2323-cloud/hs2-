@@ -1,0 +1,38 @@
+17:33:23 plan plans/S2.txt: 18 runs
+17:33:24 start 340c98ae-g1b-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1b) load 0.73 waited 0s
+17:34:03 done 340c98ae-g1b-1 ok=1 
+17:34:04 start 340c98ae-g1b-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1b) load 1.02 waited 0s
+17:34:43 done 340c98ae-g1b-2 ok=1 
+17:34:44 start ae0cf9da-g1b-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1b) load 1.20 waited 0s
+17:35:23 done ae0cf9da-g1b-1 ok=1 
+17:35:24 start ae0cf9da-g1b-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g1b) load 2.09 waited 0s
+17:36:03 done ae0cf9da-g1b-2 ok=1 
+17:36:04 start e9a34d17-b2nx-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 3.08 waited 0s
+17:36:50 done e9a34d17-b2nx-1 ok=1 
+17:36:51 start e9a34d17-g1b-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1b) load 3.01 waited 0s
+17:37:36 done e9a34d17-g1b-1 ok=1 
+17:37:37 start e9a34d17-g1b-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=g1b) load 2.81 waited 0s
+17:38:22 done e9a34d17-g1b-2 ok=1 
+17:38:23 start e9a34d17-b2nx-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=b2nx) load 2.65 waited 0s
+17:39:08 done e9a34d17-b2nx-2 ok=1 
+17:39:09 start 4fe96b96-b2nx-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2nx) load 3.14 waited 0s
+17:39:38 done 4fe96b96-b2nx-1 ok=1 
+17:39:39 start 4fe96b96-g1b-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g1b) load 2.81 waited 0s
+17:40:08 done 4fe96b96-g1b-1 ok=1 
+17:40:09 start 4fe96b96-g1b-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g1b) load 3.14 waited 0s
+17:40:38 done 4fe96b96-g1b-2 ok=1 
+17:40:39 start 4fe96b96-b2nx-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=b2nx) load 3.09 waited 0s
+17:41:08 done 4fe96b96-b2nx-2 ok=1 
+17:41:09 start cd018225-g1b-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g1b) load 2.84 waited 0s
+17:41:45 done cd018225-g1b-1 ok=1 
+17:41:46 start cd018225-g1b-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20 BIN=g1b) load 2.40 waited 0s
+17:42:21 done cd018225-g1b-2 ok=1 
+17:42:22 start 5c170184-g1b-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=g1b) load 2.75 waited 0s
+17:43:02 done 5c170184-g1b-1 ok=1 
+17:43:03 start 5c170184-g1bnc-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=g1bnc) load 2.86 waited 0s
+17:43:43 done 5c170184-g1bnc-1 ok=1 
+17:43:44 start 5c170184-g1bnc-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=g1bnc) load 2.92 waited 0s
+17:44:24 done 5c170184-g1bnc-2 ok=1 
+17:44:24 start 5c170184-g1b-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=g1b) load 2.85 waited 0s
+17:45:04 done 5c170184-g1b-2 ok=1 
+17:45:04 done plans/S2.txt

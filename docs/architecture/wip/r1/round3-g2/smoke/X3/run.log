@@ -1,0 +1,14 @@
+23:05:56 plan /root/r3b/X3/plan.txt: 6 runs
+23:05:57 start 6d29a912-old-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 1.36 waited 0s
+23:06:38 done 6d29a912-old-1 ok=1 
+23:06:39 start 6d29a912-b2nx-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2nx) load 1.60 waited 0s
+23:07:21 done 6d29a912-b2nx-1 ok=1 
+23:07:21 start 6d29a912-g2e-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g2e) load 2.25 waited 0s
+23:08:03 done 6d29a912-g2e-1 ok=1 
+23:08:04 start 6d29a912-g2e-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=g2e) load 2.14 waited 0s
+23:08:45 done 6d29a912-g2e-2 ok=1 
+23:08:46 start 6d29a912-b2nx-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=b2nx) load 3.81 waited 0s
+23:09:28 done 6d29a912-b2nx-2 ok=1 
+23:09:28 start 6d29a912-old-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=old) load 3.06 waited 0s
+23:10:10 done 6d29a912-old-2 ok=1 
+23:10:10 done /root/r3b/X3/plan.txt

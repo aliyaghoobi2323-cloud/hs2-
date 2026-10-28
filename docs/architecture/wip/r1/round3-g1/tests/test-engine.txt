@@ -1,0 +1,128 @@
+== chunk 0 (21:59:19)
+--- FAIL: TestAngleSameLinkProbe (14.01s)
+    angle_test.go:426: probe p50 65.769421ms p99 70.674894ms (59 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 11584/11584 B
+    angle_test.go:432: probe p99 70.674894ms, want <= 60ms (RTT 40ms + 20 ms)
+--- FAIL: TestAngleTunPingAheadOfBulk (6.04s)
+    angle_tun_test.go:327: ping one-way p50 32.682575ms p99 36.02953ms (80); TUN bulk in 4.75 Mbit/s; drops light/bulk 0/2965
+    angle_tun_test.go:330: ping p99 one-way 36.02953ms, want <= 30ms
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	71.577s
+FAIL
+exit 1
+== chunk 25 (22:00:32)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	5.958s
+exit 0
+== chunk 50 (22:00:38)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	54.918s
+exit 0
+== chunk 75 (22:01:34)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	3.277s
+exit 0
+== chunk 100 (22:01:38)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	8.307s
+exit 0
+== chunk 125 (22:01:47)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	11.281s
+exit 0
+== chunk 150 (22:01:59)
+--- FAIL: TestLowatAdaptsLinux (0.00s)
+    hostq_linux_test.go:88: the socket's mark 25000 → 1448 B -1ns after the drop
+    hostq_linux_test.go:90: the socket's mark was 11584 after the drop (want 1448 within 600 ms; at -1ns)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	50.276s
+FAIL
+exit 1
+== chunk 175 (22:24:42)
+--- FAIL: TestHostQLinuxSocket (0.00s)
+    hostq_linux_test.go:139: gate true cap 11584
+--- FAIL: TestHostWaitBound (0.00s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 95.487ms, bound 36ms
+    hostq_test.go:235: 1 Mbit/s (from 0): a light frame waited 95.487ms on the host, more than 36ms
+--- FAIL: TestLowatAdapts (0.00s)
+    hostq_test.go:295: 100 → 10 Mbit/s at 2.1s: the mark, gate and cap followed -1ns after (want ≤ 600 ms; -1: never)
+--- FAIL: TestHostQStatusLine (0.00s)
+    hostq_test.go:396: "hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.00"
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	2.347s
+FAIL
+exit 1
+== chunk 200 (22:24:45)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	1.848s
+exit 0
+== chunk 225 (22:24:48)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	5.053s
+exit 0
+== chunk 250 (22:24:54)
+--- FAIL: TestPeerInfoReverseBothServers (10.06s)
+    peerinfo_test.go:226: timed out after 10s: edge learns the exit's 4 (edge {Links:5 Target:6 Min:2 Max:6 Users:0 MbitPerS:0.00023201601873395743 FastConns:0 FastWinMiB:0 PoolMiB:32 PoolUsedMiB:0 PoolWinMiB:0 Counted:true Phase:steady Saturated:false Serving:5 Retiring:0 HeldBy:0 HeldActive:0 Flowing:0 Pressed:0 CapMbit:0 PeakMbit:0.0008279044688687244 Reason:demand needs ~2; stepping down after a steady minute — 0 active of 0 open connections, 0 of 5 serving links at their limit, peak 0.0 Mbit/s Refill: NextProbeS:0 ExitStats:ok PeerMax:5 Routes:0x2df659336420 Datagram:false LossPct:0 MaxLossPct:0 ParityPct:0 FECAtCeiling:0 FECRecovered:0 FECLost:0 RxDropped:0 TunDrops:0 TunRead:0 SentPkts:0 RecvPkts:0 TunWritten:0 DropNoCarrier:0 DropQueueFull:0 DropAged:0 MuteClosed:0 TunOffload:false TunMode: TunReads:0 TunSegs:0 TunWrites:0 TunPkts:0 TunBad:0 TunRefused:0 Carriers: ReorderHeld:0 ReorderFilled:0 ReorderTimedOut:0 Policed:false PoliceConfirm:false PoliceCapMbit:0 ShareMbit:0 BusyQueueMs:0 SendMbit:0 SendHeldPct:0 FQWaitMs:0 WriteUs:0 PerWrite:0}; exit {Links:5 Target:5 Min:2 Max:5 Users:0 MbitPerS:0.00017600034936069347 FastConns:0 FastWinMiB:0 PoolMiB:32 PoolUsedMiB:0 PoolWinMiB:0 Counted:true Phase:following Saturated:false Serving:0 Retiring:0 HeldBy:0 HeldActive:0 Flowing:0 Pressed:0 CapMbit:0 PeakMbit:0.0008279995441206811 Reason: Refill: NextProbeS:0 ExitStats: PeerMax:6 Routes:0x2df659336450 Datagram:false LossPct:0 MaxLossPct:0 ParityPct:0 FECAtCeiling:0 FECRecovered:0 FECLost:0 RxDropped:0 TunDrops:0 TunRead:0 SentPkts:0 RecvPkts:0 TunWritten:0 DropNoCarrier:0 DropQueueFull:0 DropAged:0 MuteClosed:0 TunOffload:false TunMode: TunReads:0 TunSegs:0 TunWrites:0 TunPkts:0 TunBad:0 TunRefused:0 Carriers: ReorderHeld:0 ReorderFilled:0 ReorderTimedOut:0 Policed:false PoliceConfirm:false PoliceCapMbit:0 ShareMbit:0 BusyQueueMs:0 SendMbit:0 SendHeldPct:0 FQWaitMs:0 WriteUs:0 PerWrite:0})
+    stream_v2_test.go:147: edge stats at the end: {Links:5 Target:6 Min:2 Max:6 Users:0 MbitPerS:0.0001759971349426403 FastConns:0 FastWinMiB:0 PoolMiB:32 PoolUsedMiB:0 PoolWinMiB:0 Counted:true Phase:steady Saturated:false Serving:5 Retiring:0 HeldBy:0 HeldActive:0 Flowing:0 Pressed:0 CapMbit:0 PeakMbit:0.0008279044688687244 Reason:demand needs ~2; stepping down after a steady minute — 0 active of 0 open connections, 0 of 5 serving links at their limit, peak 0.0 Mbit/s Refill: NextProbeS:0 ExitStats:ok PeerMax:5 Routes:0x2df6593364e0 Datagram:false LossPct:0 MaxLossPct:0 ParityPct:0 FECAtCeiling:0 FECRecovered:0 FECLost:0 RxDropped:0 TunDrops:0 TunRead:0 SentPkts:0 RecvPkts:0 TunWritten:0 DropNoCarrier:0 DropQueueFull:0 DropAged:0 MuteClosed:0 TunOffload:false TunMode: TunReads:0 TunSegs:0 TunWrites:0 TunPkts:0 TunBad:0 TunRefused:0 Carriers: ReorderHeld:0 ReorderFilled:0 ReorderTimedOut:0 Policed:false PoliceConfirm:false PoliceCapMbit:0 ShareMbit:0 BusyQueueMs:0 SendMbit:0 SendHeldPct:0 FQWaitMs:0 WriteUs:0 PerWrite:0}
+        links: [{id:0 serving:true retiring:false open:0 flowing:0 recent:0 users:0} {id:1 serving:true retiring:false open:0 flowing:0 recent:0 users:0} {id:2 serving:true retiring:false open:0 flowing:0 recent:0 users:0} {id:3 serving:true retiring:false open:0 flowing:0 recent:0 users:0} {id:4 serving:true retiring:false open:0 flowing:0 recent:0 users:0}]
+    stream_v2_test.go:149: edge log:
+        mtcp: reverse link 0 up from 127.0.0.1 (now 1)
+        mtcp: reverse link 1 up from 127.0.0.1 (now 2)
+        mtcp: reverse link 2 up from 127.0.0.1 (now 3)
+        mtcp: reverse link 3 up from 127.0.0.1 (now 4)
+        mtcp: reverse link 4 up from 127.0.0.1 (now 5)
+    stream_v2_test.go:150: exit log:
+        mtcp: exit pool starting 2 links (the edge sets the count once it is connected)
+        mtcp: exit link up to edge (slot 1; now 1)
+        mtcp: exit pool target 5 links (edge asked; was 2, 1 up)
+        mtcp: exit link up to edge (slot 0; now 2)
+        mtcp: exit link up to edge (slot 4; now 3)
+        mtcp: exit link up to edge (slot 2; now 4)
+        mtcp: exit link up to edge (slot 3; now 5)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	23.133s
+FAIL
+exit 1
+== chunk 275 (22:25:17)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	1.971s
+exit 0
+== chunk 300 (22:25:20)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	3.069s
+exit 0
+== chunk 325 (22:25:24)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	95.761s
+exit 0
+== chunk 350 (22:27:01)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	12.416s
+exit 0
+== chunk 375 (22:27:14)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	22.259s
+exit 0
+== chunk 400 (22:27:37)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	12.823s
+exit 0
+== chunk 425 (22:57:01)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	18.655s
+exit 0
+== chunk 450 (22:57:24)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	166.872s
+exit 0
+== chunk 475 (23:00:12)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.994s
+exit 0
+== chunk 500 (23:01:13)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	7.685s
+exit 0
+== chunk 525 (23:01:22)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	3.185s
+exit 0
+== chunk 550 (23:01:26)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	27.684s
+exit 0
+== chunk 575 (23:03:11)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	1.200s
+exit 0
+== chunk 600 (23:03:13)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	9.283s
+exit 0
+== chunk 625 (23:03:23)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	19.968s
+exit 0
+== chunk 650 (23:03:43)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	4.336s
+exit 0
+== chunk 675 (23:03:48)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	37.175s
+exit 0

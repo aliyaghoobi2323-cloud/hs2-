@@ -1,0 +1,3 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	4.447s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	7.203s
+exit 0

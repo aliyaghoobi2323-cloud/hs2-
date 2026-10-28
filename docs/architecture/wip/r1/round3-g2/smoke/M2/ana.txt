@@ -1,0 +1,55 @@
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20  BIN=g2b  runs 1 (ok 1)
+   capacity 23.91 Mbit/s (cap_P10 23.30)   links 2   host busy 13%
+   total dn 19.34  up 20.70 Mbit/s   (c) 83% of cap_P10 (raw 81%)
+   (b) worst bulk user 82% of its floor in cap_P10 (raw 80%)
+   probe p50 72.9  p99 73.8  max 73.9 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   TUN ping p50 73.0  p99 73.7 ms  lost 0   floor 72.5  bound 82.5
+   CPU % (one core = 100): edge 27.0  exit 28.8   retrans %: exit 0.003  edge 0.010
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)  tun PASS (1/1)
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DN=4 DUR=20 RATE_UP=20 UP=1  BIN=g2b  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   up capacity 19.13   links 2   host busy 17%
+   total dn 55.02  up 16.20 Mbit/s   (c) 59% of cap_P10 (raw 58%)
+   (b) worst bulk user 58% of its floor in cap_P10 (raw 57%)
+   probe p50 72.9  p99 73.6  max 78.2 ms  lost 0   RTT_floor 72.5  bound (d) 92.5
+   TUN ping p50 72.9  p99 73.5 ms  lost 0   floor 72.5  bound 82.5
+   CPU % (one core = 100): edge 33.0  exit 35.5   retrans %: exit 0.001  edge 0.006
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)  tun PASS (1/1)
+== N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=s5 DUR=20  BIN=g2b  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 3   host busy 27%
+   total dn 75.87  up 76.78 Mbit/s   (c) 81% of cap_P10 (raw 79%)
+   (b) worst bulk user 55% of its floor in cap_P10 (raw 54%)
+   probe p50 72.9  p99 74.9  max 77.6 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   TUN ping p50 73.2  p99 74.1 ms  lost 0   floor 72.5  bound 82.5
+   CPU % (one core = 100): edge 80.2  exit 83.9   retrans %: exit 0.002  edge 0.004
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)  tun PASS (1/1)
+== N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30  BIN=g2b  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 66   host busy 24%
+   total dn 81.36  up 0.00 Mbit/s   (c) 87% of cap_P10 (raw 85%)
+   1-connection user 4.87 Mbit/s
+   (b) worst bulk user 10% of its floor in cap_P10 (raw 10%)
+   probe p50 72.7  p99 76.7  max 81.1 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   CPU % (one core = 100): edge 82.9  exit 61.3   retrans %: exit 0.004  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30  BIN=g2b  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 2   host busy 22%
+   total dn 83.15  up 0.00 Mbit/s   (c) 89% of cap_P10 (raw 87%)
+   (a) lone user 89% of cap_P10 (raw 87%)
+   probe p50 72.9  p99 74.7  max 76.6 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   CPU % (one core = 100): edge 73.9  exit 55.0   retrans %: exit 0.000  edge 0.000
+   verdict: a FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30  BIN=g2b  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 2   host busy 23%
+   total dn 84.82  up 0.00 Mbit/s   (c) 91% of cap_P10 (raw 89%)
+   1-connection user 41.13 Mbit/s
+   (b) worst bulk user 88% of its floor in cap_P10 (raw 86%)
+   probe p50 72.8  p99 74.2  max 75.3 ms  lost 0   RTT_floor 72.4  bound (d) 92.4
+   CPU % (one core = 100): edge 69.7  exit 54.3   retrans %: exit 0.000  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)
+== N=1 RATE=25 RTT=72 LOSS=0 MODE=pfifo:600 USERS=7 MIX=s5 DUR=20  BIN=g2b  runs 1 (ok 1)
+   capacity 23.91 Mbit/s (cap_P10 23.30)   links 2   host busy 16%
+   total dn 18.96  up 20.91 Mbit/s   (c) 81% of cap_P10 (raw 79%)
+   (b) worst bulk user 80% of its floor in cap_P10 (raw 78%)
+   probe p50 75.0  p99 86.0  max 87.0 ms  lost 0   RTT_floor 72.5  bound (d) 92.5
+   TUN ping p50 75.5  p99 87.5 ms  lost 0   floor 72.4  bound 82.4
+   CPU % (one core = 100): edge 27.1  exit 30.1   retrans %: exit 0.000  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)  tun FAIL (0/1)

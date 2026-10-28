@@ -1,0 +1,1 @@
+b2nx /root/r2j/bins/hs2-b2n HS2_TUNE_QUIET_EXTRA=1

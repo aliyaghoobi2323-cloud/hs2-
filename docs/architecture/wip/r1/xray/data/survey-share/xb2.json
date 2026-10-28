@@ -1,0 +1,423 @@
+{
+ "variant": "xb2",
+ "tcp_conns": 23,
+ "udp_tuples": 0,
+ "proxied_flows": 23,
+ "mapped": 23,
+ "access_entries": 23,
+ "max_flows_on_one_conn": 1,
+ "pairs": {
+  "G1+D1": false,
+  "U1+D1": false,
+  "G1+U1": false,
+  "G2+D2": false,
+  "D1+D2": false,
+  "W2.0+D1": false,
+  "W1.0+G1": false
+ },
+ "lat": {
+  "G1": {
+   "idle_p50": 72.8,
+   "idle_p99": 290.2,
+   "dl_p50": 73.4,
+   "dl_p99": 74.3,
+   "dl_max": 75.2,
+   "sent": 2250,
+   "lost": 0
+  },
+  "U1": {
+   "idle_p50": 72.9,
+   "idle_p99": 288.3,
+   "dl_p50": 73.5,
+   "dl_p99": 85.6,
+   "dl_max": 125.2,
+   "sent": 2250,
+   "lost": 0
+  },
+  "G2": {
+   "idle_p50": null,
+   "idle_p99": null,
+   "dl_p50": 73.3,
+   "dl_p99": 144.8,
+   "dl_max": 224.7,
+   "sent": 500,
+   "lost": 0
+  }
+ },
+ "dl": {
+  "D1": {
+   "MB": 26.08,
+   "ttfb_ms": 428.5,
+   "mbit": 5.8
+  },
+  "D2": {
+   "MB": 17.47,
+   "ttfb_ms": 436.6,
+   "mbit": 5.3
+  }
+ },
+ "web": {
+  "W1": {
+   "ttfb_ms_med": 466.7,
+   "ttfb_ms_max": 468.5,
+   "errs": 0
+  },
+  "W2": {
+   "ttfb_ms_med": 473.4,
+   "ttfb_ms_max": 475.2,
+   "errs": 0
+  },
+  "W3": {
+   "ttfb_ms_med": 473.7,
+   "ttfb_ms_max": 475.7,
+   "errs": 0
+  }
+ },
+ "conns": [
+  {
+   "proto": "tcp",
+   "cport": 49750,
+   "sport": 4443,
+   "open": 0.01,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 67.8,
+   "up_kB": 268.3,
+   "down_kB": 270.7,
+   "flows": [
+    "G1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 49752,
+   "sport": 4443,
+   "open": 0.01,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 67.8,
+   "up_kB": 305.1,
+   "down_kB": 422.4,
+   "flows": [
+    "U1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37280,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 64.8,
+   "up_kB": 5.3,
+   "down_kB": 183.4,
+   "flows": [
+    "W1.0"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37296,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 64.8,
+   "up_kB": 5.3,
+   "down_kB": 183.2,
+   "flows": [
+    "W1.1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37302,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 64.8,
+   "up_kB": 5.4,
+   "down_kB": 182.8,
+   "flows": [
+    "W1.3"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37316,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 64.8,
+   "up_kB": 5.1,
+   "down_kB": 183.1,
+   "flows": [
+    "W1.5"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37326,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 64.8,
+   "up_kB": 5.2,
+   "down_kB": 182.8,
+   "flows": [
+    "W1.2"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37332,
+   "sport": 4443,
+   "open": 3.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 64.8,
+   "up_kB": 5.6,
+   "down_kB": 182.6,
+   "flows": [
+    "W1.4"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37348,
+   "sport": 4443,
+   "open": 6.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 61.8,
+   "up_kB": 157.2,
+   "down_kB": 26250.9,
+   "flows": [
+    "D1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37362,
+   "sport": 4443,
+   "open": 9.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 58.8,
+   "up_kB": 5.3,
+   "down_kB": 183.0,
+   "flows": [
+    "W2.0"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37374,
+   "sport": 4443,
+   "open": 9.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 58.8,
+   "up_kB": 5.0,
+   "down_kB": 183.4,
+   "flows": [
+    "W2.2"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37380,
+   "sport": 4443,
+   "open": 9.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 58.8,
+   "up_kB": 5.6,
+   "down_kB": 183.3,
+   "flows": [
+    "W2.3"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37394,
+   "sport": 4443,
+   "open": 9.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 58.8,
+   "up_kB": 5.4,
+   "down_kB": 182.7,
+   "flows": [
+    "W2.1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37384,
+   "sport": 4443,
+   "open": 9.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 58.8,
+   "up_kB": 5.0,
+   "down_kB": 183.0,
+   "flows": [
+    "W2.4"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 37402,
+   "sport": 4443,
+   "open": 9.01,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 58.8,
+   "up_kB": 5.2,
+   "down_kB": 183.4,
+   "flows": [
+    "W2.5"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 60232,
+   "sport": 4443,
+   "open": 18.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 49.8,
+   "up_kB": 5.7,
+   "down_kB": 182.8,
+   "flows": [
+    "W3.0"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 60240,
+   "sport": 4443,
+   "open": 18.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 49.8,
+   "up_kB": 5.7,
+   "down_kB": 183.4,
+   "flows": [
+    "W3.1"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 60248,
+   "sport": 4443,
+   "open": 18.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 49.8,
+   "up_kB": 5.4,
+   "down_kB": 182.7,
+   "flows": [
+    "W3.5"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 60254,
+   "sport": 4443,
+   "open": 18.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 49.8,
+   "up_kB": 5.5,
+   "down_kB": 183.0,
+   "flows": [
+    "W3.4"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 60256,
+   "sport": 4443,
+   "open": 18.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 49.8,
+   "up_kB": 5.9,
+   "down_kB": 183.1,
+   "flows": [
+    "W3.2"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 60266,
+   "sport": 4443,
+   "open": 18.0,
+   "close": 67.8,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 49.8,
+   "up_kB": 5.5,
+   "down_kB": 182.8,
+   "flows": [
+    "W3.3"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 36298,
+   "sport": 4443,
+   "open": 21.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 46.8,
+   "up_kB": 106.5,
+   "down_kB": 17578.4,
+   "flows": [
+    "D2"
+   ]
+  },
+  {
+   "proto": "tcp",
+   "cport": 36310,
+   "sport": 4443,
+   "open": 24.0,
+   "close": 67.801,
+   "closer": "client",
+   "last_pkt": 67.87,
+   "life_s": 43.8,
+   "up_kB": 62.7,
+   "down_kB": 59.8,
+   "flows": [
+    "G2"
+   ]
+  }
+ ]
+}

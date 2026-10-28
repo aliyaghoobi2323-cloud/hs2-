@@ -1,0 +1,4 @@
+17:46:19 lock taken after 60s (pid 505913), plan /root/r3b/M2/plan.txt, REPS 1, limit 1440s
+17:50:27 pass 1: 0 runs busy (>75%) or failed, 1192s left
+17:50:27 done after 248s of rig time
+17:50:27 lock released after 248s

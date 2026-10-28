@@ -48,6 +48,22 @@ Definitions (REDESIGN.fa.md section 5.1 and 6):
   thr new/old total >= 0.97 (when a cell has both binaries)
 Verdicts are taken on the median of the repeats; "k/n" says in how many runs
 the criterion held on its own.
+
+User classes (R1 round 3, wip/r1/classes; MIX home, gamer_vs_dl,
+stream_vs_dl): per class, what its users feel, in the main window. One-way
+delays are per direction (up = user to server, dn = back) over the class's
+floor in that direction (the least one-way delay of the run, window "all");
+"path" is the same over the path's own RTT/2 (a floor more than FLOOR_WARN
+over the path, a standing queue the floor hides, is flagged on the verdict
+line). Proposed verdicts, REPORT ONLY (not gates; the lead decides):
+  game  p99 <= floor + 10 ms and late (> floor + 100 ms) + lost <= 0.1 %,
+        each direction (game over TCP and gameudp each)
+  call  p99 <= floor + 30 ms, each direction
+  stream  no rebuffer, every viewer started, startup <= 2 s; only when the
+        bitrate (SBR) <= the viewers' fair share (max-min of cap_P10 in the
+        download direction, the other users' measured download first);
+        otherwise n/a
+  web   p95 page load <= 1.05 x the base's (old) in the same cell
 """
 import hashlib
 import json
@@ -61,8 +77,23 @@ EFF = 1448 / 1514
 F_REC = 0.9743  # T17: hs2's record framing, (991.4 - 4) / (991.4 + 22)
 LOST_MAX = 0.01  # more lost probes or pings than this: p99 over all sent is infinite
 REQ = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX", "BIN"]
-MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping"]
+CLASS_MIXES = ["home", "gamer_vs_dl", "stream_vs_dl"]
+MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping"] + CLASS_MIXES
 ORDER = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX"]
+# the class mixes: users in this order, repeated (USERS need not be a multiple)
+CLASS_TEMPLATE = {
+    "home": ["game", "call", "stream", "web", "heavy", "stream", "web", "uploader"],
+    "gamer_vs_dl": ["game", "heavy"],
+    "stream_vs_dl": ["stream", "heavy"],
+}
+# the classes' proposed verdicts (report only)
+GAME_P99 = 10.0     # ms over the floor, each direction
+GAME_LATE = 0.001   # late (> floor + 100 ms) and lost, of the sent
+CALL_P99 = 30.0     # ms over the floor, each direction
+STREAM_STARTUP = 2.0  # s
+WEB_TOL = 1.05      # p95 page load against the base's
+FLOOR_WARN = 5.0    # ms: a class's floor this far over RTT/2 is flagged (a standing queue)
+INF = 1e9           # "never": a percentile that falls on a lost message or a failed page
 
 
 def die(msg):
@@ -247,11 +278,54 @@ def spec(cellstr, path):
         users[0]["flows"].append({"kind": d.get("TUNDIR", "dn"), "n": num(d, "TDN", 4), "start_s": 0})
         users[0]["flows"].append(ping())
         light = list(range(1, U))
+    elif mix in CLASS_MIXES:
+        # the user classes (rigload classes.go), CLASS_TEMPLATE repeated over
+        # USERS: GAME=tcp|udp|both (both: the players alternate, TCP first),
+        # SBR stream bitrate (5 Mbit/s), CALLR call rate each way (1.5),
+        # PAGE s between a browser's pages (5), CONNS the heavy user's
+        # connections (16) in DIR, UPN the uploader's (1), TAIL s after the
+        # main window that every flow still runs (5), so a message, page or
+        # segment begun at the window's end still meets the same load
+        tmpl = CLASS_TEMPLATE[mix]
+        need(len(tmpl))
+        game = d.get("GAME", "both")
+        if game not in ("tcp", "udp", "both"):
+            die("GAME %s (tcp, udp, both)" % game)
+        sbr, callr, page = float(d.get("SBR", "5")), float(d.get("CALLR", "1.5")), float(d.get("PAGE", "5"))
+        if sbr <= 0 or callr <= 0 or page <= 0:
+            die("SBR, CALLR and PAGE must be > 0")
+        upn, tail = num(d, "UPN", 1), num(d, "TAIL", 5)
+        total = warm + dur + tail
+        roles = [tmpl[i % len(tmpl)] for i in range(U)]
+        nst = roles.count("stream")
+        ng = js = 0
+        for i, role in enumerate(roles):
+            if role == "game":
+                role = "game" if game == "tcp" or (game == "both" and ng % 2 == 0) else "gameudp"
+                ng += 1
+                f = {"kind": role, "n": 1, "start_s": 0}
+            elif role == "call":
+                f = {"kind": "call", "n": 1, "start_s": 0, "rate": callr}
+            elif role == "stream":
+                # a viewer starts after the warm-up, the viewers spread over one
+                # segment (4 s), so the startup meets the bulk users' steady load
+                f = {"kind": "stream", "n": 1, "start_s": round(warm + 4.0 * js / nst, 3), "rate": sbr}
+                js += 1
+            elif role == "web":
+                f = {"kind": "web", "n": 1, "start_s": 0, "every_s": page}
+            elif role == "heavy":
+                f = {"kind": dirn, "n": conns, "start_s": 0}
+            else:
+                f = {"kind": "up", "n": upn, "start_s": 0}
+            users[i]["role"] = role
+            users[i]["flows"].append(f)
+        light = []
     # light users: one probe each (a ping on the TUN); if the mix leaves none,
-    # user 1 carries it (tunping's user 1 already pings)
+    # user 1 carries it (tunping's user 1 already pings; the class mixes have
+    # their own delays and no probe)
     for i in light:
         users[i]["flows"].append(light_flow(users[i]))
-    if not light and mix != "tunping":
+    if not light and mix != "tunping" and mix not in CLASS_MIXES:
         users[0]["flows"].append(light_flow(users[0]))
     if mix == "s5":
         # S5's TUN ping, from hs0's own address (not one of the USERS)
@@ -447,12 +521,19 @@ def compose(r, ok, why):
             for k in ("probe", "ping"):
                 if u.get(k):
                     x[k + "_p99"] = {w: l["p99"] for w, l in u[k].items() if l}
+            for k in ("rt", "stream", "web"):  # the classes, main window
+                if u.get(k):
+                    x[k] = u[k]
             users.append(x)
         rec.update({"total_s": cl.get("total_s"), "windows": cl.get("windows"), "users": users,
                     "dn_sum_mbit": cl.get("dn_sum_mbit"), "up_sum_mbit": cl.get("up_sum_mbit"),
                     "tun_dn_sum_mbit": cl.get("tun_dn_sum_mbit"), "tun_up_sum_mbit": cl.get("tun_up_sum_mbit"),
                     "probe": cl.get("probe_all"), "probe_tun": cl.get("probe_tun"), "ping_tun": cl.get("ping_tun"),
                     "dn_1s": cl.get("dn_1s"), "up_1s": cl.get("up_1s")})
+        if cl.get("classes"):
+            rec["classes"] = cl["classes"]
+        if cl.get("notes"):
+            rec["client_notes"] = cl["notes"]
         if cl.get("errs"):
             rec["client_errs"] = cl["errs"]
     rec["cpu"] = pidstat(r + "/pidstat.txt", {"edge": links.get("pid_edge"), "exit": links.get("pid_exit")})
@@ -573,6 +654,12 @@ def derive(rec):
         m["t50"], m["t99"], m["tlost"] = tm["p50"], tm["p99"], tm["lost"]
         m["tlost_frac"] = lost_frac(tm)
         m["tun"] = tm["p99"] <= m["t_bound"] and m["tlost_frac"] <= LOST_MAX
+    if mix in CLASS_MIXES:
+        # every user's bytes (the classes' too) against cap_P10, per direction
+        m["util_dn"] = m["dn"] / caps10["dn"]
+        m["util_up"] = m["up"] / caps10["up"]
+        derive_classes(rec, m, caps10["dn"])
+        return host_metrics(rec, m)
     win = "after_settled" if mix == "newheavy" else "main"
 
     def thr(u, d, w=win):
@@ -643,6 +730,10 @@ def derive(rec):
             m["e"] = pa2["p99"] <= m["d_bound"] and m["plost_after_frac"] <= LOST_MAX and m["e_bulk_ratio"] >= 0.9
         m["b_ratio"] = m["e_bulk_ratio"]
         m["b_raw"] = m["e_bulk_raw"]
+    return host_metrics(rec, m)
+
+
+def host_metrics(rec, m):
     c = rec.get("cpu", {})
     m["cpu_edge"] = c.get("edge", {}).get("mean")
     m["cpu_exit"] = c.get("exit", {}).get("mean")
@@ -653,17 +744,102 @@ def derive(rec):
     return m
 
 
+def stream_fair(rec, cap10):
+    """the viewers' fair share of the download direction: max-min of cap_P10,
+    the viewers and the users with bulk downloads unlimited, every other
+    user's measured download (main window) first"""
+    users = rec["users"]
+    dem = []
+    for u in users:
+        greedy = u["role"] == "stream" or any(f.startswith("dn") for f in u["flows"].split(","))
+        dem.append(None if greedy else u["dn_mbit"].get("main", 0.0))
+    sh = fair_floor(cap10, dem)
+    st = [s for u, s in zip(users, sh) if u["role"] == "stream"]
+    return min(st) if st else None
+
+
+def derive_classes(rec, m, cap10):
+    """the classes' numbers (main window) and their proposed verdicts v_*
+    (report only)"""
+    cl = rec.get("classes") or {}
+    half = float(rec["RTT"]) / 2
+    m["path_owd"] = half
+    for k in ("game", "gameudp", "call"):
+        c = cl.get(k)
+        if not c:
+            continue
+        ok = True
+        for d in ("up", "dn"):
+            o = (c.get(d) or {}).get("main")
+            fl = (c.get("floor_ms") or {}).get(d, -1)
+            if not o or fl is None or fl < 0 or not o.get("sent"):
+                ok = False
+                continue
+            p = "%s_%s_" % (k, d)
+            m[p + "floor"] = fl
+            m[p + "floor_path"] = fl - half
+            for q in ("p50", "p99", "p999"):
+                m[p + q] = o[q] - fl if o.get(q, -1) >= 0 else INF
+            m[p + "p99_path"] = o["p99"] - half if o.get("p99", -1) >= 0 else INF
+            m[p + "jit99"] = o.get("jit_p99") if o.get("jit_p99", -1) >= 0 else None
+            m[p + "late"] = (o.get("late", 0) + o.get("lost", 0)) / o["sent"]
+            m[p + "lost"] = o.get("lost", 0)
+            if o.get("offered_mbit"):
+                m[p + "deliv"] = o.get("delivered_mbit", 0) / o["offered_mbit"]
+            if k == "call":
+                ok = ok and m[p + "p99"] <= CALL_P99
+            else:
+                ok = ok and m[p + "p99"] <= GAME_P99 and m[p + "late"] <= GAME_LATE
+        m["v_" + k] = ok
+        if c.get("no_record"):
+            m[k + "_norec"] = c["no_record"]
+    st = cl.get("stream")
+    if st:
+        m["stream_users"] = st["users"]
+        m["stream_sbr"] = st["bitrate_mbit"]
+        m["stream_notstarted"] = st["not_started"]
+        m["stream_startup_p50"] = st["startup_p50_s"] if st["startup_p50_s"] >= 0 else INF
+        m["stream_startup_max"] = st["startup_max_s"] if st["startup_max_s"] >= 0 and not st["not_started"] else INF
+        m["stream_rebuf"] = st["rebuffers"]
+        m["stream_rebuf_s"] = st["rebuffer_s"]
+        m["stream_rebuf_users"] = st["rebuffer_users"]
+        m["stream_seg_mbit"] = st["seg_mbit_mean"]
+        fair = stream_fair(rec, cap10)
+        if fair is not None:
+            m["stream_fair"] = fair
+            if st["bitrate_mbit"] <= fair:
+                m["v_stream"] = (st["not_started"] == 0 and st["rebuffers"] == 0
+                                 and m["stream_startup_max"] <= STREAM_STARTUP)
+    w = (cl.get("web") or {}).get("main")
+    if w:
+        m["web_pages"] = w["pages"]
+        m["web_failed"] = w["failed"]
+        for k, f in (("web_p50", "load_p50_ms"), ("web_p95", "load_p95_ms"),
+                     ("web_fb50", "fb_p50_ms"), ("web_fb95", "fb_p95_ms")):
+            m[k] = w[f] if w[f] >= 0 else INF
+    heavy = [u for u in rec["users"] if u["role"] == "heavy"]
+    if heavy:
+        hv = sorted(sum(u[x].get("main", 0.0) for x in ("dn_mbit", "up_mbit")) for u in heavy)
+        m["heavy_mean"] = sum(hv) / len(hv)
+        m["heavy_min"] = hv[0]
+    return m
+
+
 def agg(vals):
-    v = [x for x in vals if x is not None]
+    v = sorted(x for x in vals if x is not None)
     if not v:
         return None
-    return (statistics.median(v), min(v), max(v))
+    med = statistics.median(v)
+    if len(v) % 2 == 0 and v[len(v) // 2] >= INF:
+        med = INF  # an even count with "never" in the middle: never, not a mean of the two
+    return (med, v[0], v[-1])
 
 
 def fmt(t, p=1, pct=False):
     if t is None:
         return "-"
-    f = (lambda x: "%.0f%%" % (100 * x)) if pct else (lambda x: ("%%.%df" % p) % x)
+    f0 = (lambda x: "%.0f%%" % (100 * x)) if pct else (lambda x: ("%%.%df" % p) % x)
+    f = lambda x: "inf" if x >= INF else f0(x)
     if t[1] == t[2]:
         return f(t[0])
     return "%s [%s..%s]" % (f(t[0]), f(t[1]), f(t[2]))
@@ -709,6 +885,8 @@ def analyze(path, as_json=False):
             else:
                 v = med["t99"][0] <= med["t_bound"][0] and med["tlost_frac"][0] <= LOST_MAX
             s.setdefault("verdict", {})[flag] = {"pass": v, "runs": "%d/%d" % (sum(got), len(got))}
+        if parse_cell(k[0] or "").get("MIX") in CLASS_MIXES:
+            class_verdicts(s, ms)
         summary.append(s)
     # new against old, per cell
     by_cell = {}
@@ -728,6 +906,16 @@ def analyze(path, as_json=False):
             if vo:
                 b[nb].setdefault("verdict", {})["thr"] = {"pass": all(x >= 0.97 for x in vo.values()),
                                                           "runs": " ".join("%s %.3f" % i for i in vo.items())}
+            # web (report only): p95 page load against the base's
+            o, n = b["old"]["med"].get("web_p95"), b[nb]["med"].get("web_p95")
+            if o and n:
+                if o[0] >= INF:
+                    r = 1.0 if n[0] >= INF else 0.0
+                else:
+                    r = INF if n[0] >= INF else n[0] / o[0]
+                b[nb]["web_vs_old"] = round(r, 3)
+                b[nb].setdefault("class_verdict", {})["web"] = {
+                    "pass": r <= WEB_TOL, "runs": "p95 %s / old %s ms" % (fmt(n, 0), fmt(o, 0))}
     if as_json:
         print(json.dumps(summary, indent=1))
         return
@@ -764,9 +952,88 @@ def analyze(path, as_json=False):
             print("   of which TUN users (inner goodput) dn %s  up %s Mbit/s" % (fmt(md["tun_dn"], 2), fmt(md.get("tun_up"), 2)))
         print("   CPU %% (one core = 100): edge %s  exit %s   retrans %%: exit %s  edge %s" % (
             fmt(md.get("cpu_edge")), fmt(md.get("cpu_exit")), fmt(md.get("rt_exit"), 3), fmt(md.get("rt_edge"), 3)))
+        if "util_dn" in md:
+            print_classes(s, md)
         if s.get("verdict"):
             print("   verdict: " + "  ".join("%s %s (%s)" % (f, "PASS" if v["pass"] else "FAIL", v["runs"])
                                          for f, v in s["verdict"].items()))
+        if s.get("class_verdict"):
+            print("   class verdict (report only): " + "  ".join(
+                "%s %s (%s)" % (f, {True: "PASS", False: "FAIL", None: "n/a"}[v["pass"]], v["runs"])
+                for f, v in s["class_verdict"].items()))
+
+
+def class_verdicts(s, ms):
+    """the classes' proposed verdicts (report only) on the median of the repeats"""
+    med = s["med"]
+    cv = {}
+    g = lambda k: med.get(k, (INF,))[0]
+    for k in ("game", "gameudp", "call"):
+        got = [m["v_" + k] for m in ms if "v_" + k in m]
+        if not got:
+            continue
+        if k == "call":
+            v = all(g("call_%s_p99" % d) <= CALL_P99 for d in ("up", "dn"))
+        else:
+            v = all(g("%s_%s_p99" % (k, d)) <= GAME_P99 and g("%s_%s_late" % (k, d)) <= GAME_LATE
+                    for d in ("up", "dn"))
+        runs = "%d/%d" % (sum(got), len(got))
+        # a floor well above the path's RTT/2 is a standing queue the verdict does not see
+        sq = ["%s +%.0f ms" % (d, med["%s_%s_floor_path" % (k, d)][0]) for d in ("up", "dn")
+              if med.get("%s_%s_floor_path" % (k, d)) and med["%s_%s_floor_path" % (k, d)][0] > FLOOR_WARN]
+        if sq:
+            runs += "; floor over the path: " + ", ".join(sq)
+        cv[k] = {"pass": v, "runs": runs}
+    if "stream_users" in med:
+        got = [m["v_stream"] for m in ms if "v_stream" in m]
+        if got:
+            v = g("stream_notstarted") == 0 and g("stream_rebuf") == 0 and g("stream_startup_max") <= STREAM_STARTUP
+            cv["stream"] = {"pass": v, "runs": "%d/%d" % (sum(got), len(got))}
+        else:
+            cv["stream"] = {"pass": None, "runs": "SBR %s > fair share %s Mbit/s" % (
+                fmt(med.get("stream_sbr"), 2), fmt(med.get("stream_fair"), 2))}
+    if cv:
+        s["class_verdict"] = cv
+
+
+def print_classes(s, md):
+    """the class lines of one cell and binary"""
+    f = lambda k, p=1, pct=False: fmt(md.get(k), p, pct)
+    print("   all users against cap_P10: dn %s  up %s   heavy users mean %s min %s Mbit/s" % (
+        f("util_dn", pct=True), f("util_up", pct=True), f("heavy_mean", 2), f("heavy_min", 2)))
+    names = {"game": "game (TCP)", "gameudp": "game (UDP)", "call": "call"}
+    for k in ("game", "gameudp", "call"):
+        if "%s_up_floor" % k not in md and "%s_dn_floor" % k not in md:
+            continue
+        parts = []
+        for d in ("up", "dn"):
+            p = "%s_%s_" % (k, d)
+            if p + "floor" not in md:
+                parts.append("%s: no data" % d)
+                continue
+            x = "%s: p50 %s p99 %s p99.9 %s  jitter %s  late+lost %%: %s (lost %s)" % (
+                d, f(p + "p50"), f(p + "p99"), f(p + "p999"), f(p + "jit99"),
+                fmt(tuple(100 * v for v in md[p + "late"]), 2), f(p + "lost", 0))
+            if p + "deliv" in md:
+                x += "  delivered %s" % f(p + "deliv", pct=True)
+            parts.append(x)
+        print("   %s, one-way ms over the floor:" % names[k])
+        for x in parts:
+            print("      " + x)
+        print("      floor up %s dn %s ms (path RTT/2 %s; p99 over the path: up %s dn %s)%s" % (
+            f(k + "_up_floor"), f(k + "_dn_floor"), f("path_owd"), f(k + "_up_p99_path"), f(k + "_dn_p99_path"),
+            ("   flows without a server record %s" % f(k + "_norec", 0)) if k + "_norec" in md else ""))
+    if "stream_users" in md:
+        print("   stream: %s viewers at %s Mbit/s (fair share %s): startup p50 %s max %s s, not started %s; "
+              "rebuffers %s (viewers %s, %s s); segment rate %s Mbit/s" % (
+                  f("stream_users", 0), f("stream_sbr", 2), f("stream_fair", 2), f("stream_startup_p50", 2),
+                  f("stream_startup_max", 2), f("stream_notstarted", 0), f("stream_rebuf", 0),
+                  f("stream_rebuf_users", 0), f("stream_rebuf_s"), f("stream_seg_mbit", 2)))
+    if "web_pages" in md:
+        print("   web: page load p50 %s p95 %s ms, first byte p50 %s p95 %s ms; pages %s, failed %s%s" % (
+            f("web_p50", 0), f("web_p95", 0), f("web_fb50", 0), f("web_fb95", 0), f("web_pages", 0),
+            f("web_failed", 0), ("   p95 new/old %s" % ("inf" if s["web_vs_old"] >= INF else "%.3f" % s["web_vs_old"]))
+            if "web_vs_old" in s else ""))
 
 
 def main():
