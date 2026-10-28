@@ -392,6 +392,13 @@ func applyTuning() {
 	numT("HS2_TUNE_TWOWAY", engine.TwoWay)            // a connection whose user sends steadily stays on QUIET
 	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany)     // QUIET links past 5 links
 	numT("HS2_TUNE_QUIET_FOLLOW", engine.QuietFollow) // reverse: both ends run the smaller QUIET count (0: both must match)
+	// the R1 round-4 judge (the red team's C4 and C5): a user's connections
+	// on one QUIET link; a user holding more than this many bytes unread on
+	// QUIET links moves off them; a connection whose link died before its
+	// app had a byte moves to another link (each end its own; edge only)
+	numT("HS2_TUNE_QUIET_BYUSER", engine.QuietByUser)
+	numT("HS2_TUNE_QUIET_HOLDCAP", engine.QuietHoldCap)
+	numT("HS2_TUNE_RESCUE_DEAD", engine.RescueDead)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
