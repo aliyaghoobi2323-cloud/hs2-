@@ -82,7 +82,16 @@ var (
 	// HQGQuietSegs (HS2_TUNE_HQG_QUIET_SEGS, lab, β2): a QUIET link's gate
 	// variant when >= 0 (0: the document's), else HQGSegs as every link.
 	HQGQuietSegs = -1
+	// HQGSegsMs (HS2_TUNE_HQG_SEGS_MS; 0: none): HQGSegs's floor is at
+	// most this many ms of the link's rate, and at least hqgSegsLow
+	// segments: at 1 Mbit/s 8 segments are 93 ms of host queue in front of
+	// a light frame (§3.3's bound 36: the red team's C3), at 10 Mbit/s and
+	// up the floor is HQGSegs as before.
+	HQGSegsMs = 0
 )
+
+// hqgSegsLow: the time-bounded floor's least segments (HQGSegsMs).
+const hqgSegsLow = 3
 
 const (
 	// hostqTick: the mark and the gate follow the rate this often.
@@ -121,14 +130,16 @@ func Lowat(rate float64, mss int) int {
 type hostGate struct {
 	off   bool // past hostqGateOff, not yet back under hostqGateOn
 	limit int  // the latest cap
-	// segs, never: HQGSegs and HQGGate 0 as the guard was made (T12)
-	segs  int
-	never bool
+	// segs, never: HQGSegs and HQGGate 0 as the guard was made (T12);
+	// segsMs: HQGSegsMs as made
+	segs   int
+	never  bool
+	segsMs int
 }
 
 // newHostGate is the gate of a guard made now: the variant HQGSegs and
 // HQGGate say (T12; the judge's default, SEGS=8, unless set otherwise).
-func newHostGate() hostGate { return hostGate{segs: HQGSegs, never: HQGGate == 0} }
+func newHostGate() hostGate { return hostGate{segs: HQGSegs, never: HQGGate == 0, segsMs: HQGSegsMs} }
 
 // Update takes the link's rate (bytes/s; 0: unknown) and segment, and says
 // whether the gate is on, its cap (the most the socket may hold unsent)
@@ -145,7 +156,11 @@ func (g *hostGate) Update(rate float64, mss int) (on bool, cap, lowat int) {
 	}
 	cap = max(int(rate/float64(time.Second/hostqTime)), 2*mss)
 	if g.segs > 0 {
-		cap = max(cap, g.segs*mss)
+		segs := g.segs
+		if g.segsMs > 0 && rate > 0 {
+			segs = min(segs, max(int(rate*float64(g.segsMs)/1000/float64(mss)), hqgSegsLow))
+		}
+		cap = max(cap, segs*mss)
 	}
 	g.limit = cap
 	switch {

@@ -156,6 +156,8 @@ type flowClassifier struct {
 	ticked bool
 	// class_tx's flips (the status line)
 	toBulk, toLight uint32
+	// rtHold: the realtime hold's ticks left (RTHold, rtlane.go)
+	rtHold uint16
 }
 
 // Tick judges the flow at now (each classTick; a tick may skip an idle

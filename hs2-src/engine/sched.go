@@ -188,6 +188,11 @@ type schedUser[T any] struct {
 	floorLeft    float64 // what it may still take at its floor this tick, bytes
 	bucket       float64 // latency-lane credit, bytes
 	rtBucket     float64 // realtime-lane credit, bytes (LaneRT)
+	// latQ, lPrev/lNext, inLat: its own latency-lane FIFO and its place in
+	// the link's ring of users with latency items (LatRR)
+	latQ         schedFIFO[T]
+	lPrev, lNext *schedUser[T]
+	inLat        bool
 	// the demand's window: bulk bytes pushed, and the bytes the link served
 	// while it had bulk queued, the tick before and this one; readyAt is
 	// the clock when its bulk queue last became non-empty
@@ -237,6 +242,15 @@ type Sched[T any] struct {
 	// xs, xsLink: XShare's users and this link's id in it (nil: off)
 	xs     *xshareSet
 	xsLink int
+	// latRR: the latency lane by user (LatRR, as the scheduler was made);
+	// latCur the ring's next user, latN its items; rtShare, rtRun: RTShare
+	// as made, and the steady realtime bytes taken while the latency lane
+	// waited
+	latRR   bool
+	latCur  *schedUser[T]
+	latN    int
+	rtShare int
+	rtRun   int
 }
 
 // setXShare weighs each active user's floor by the links it is active on
@@ -260,7 +274,8 @@ func (s *Sched[T]) xsNote(u *schedUser[T], now time.Duration) int {
 
 // NewSched makes a link's scheduler.
 func NewSched[T any]() *Sched[T] {
-	return &Sched[T]{users: map[uint32]*schedUser[T]{}, flows: map[uint64]*schedFlow[T]{}, quantum: bulkFrameMin}
+	return &Sched[T]{users: map[uint32]*schedUser[T]{}, flows: map[uint64]*schedFlow[T]{}, quantum: bulkFrameMin,
+		latRR: LatRR.Get() != 0, rtShare: max(RTShare.Get(), 0)}
 }
 
 // Push queues it (size bytes) of a flow of a user in lane; a flow keeps its
@@ -299,7 +314,11 @@ func (s *Sched[T]) Push(it T, user uint32, flow uint64, lane Lane, size int) {
 		if size <= LaneFrameMax && f.q.n == 0 && u.bucket >= float64(size) {
 			u.bucket -= float64(size)
 			f.lat++
-			s.lat.push(n)
+			if s.latRR {
+				s.latPush(u, n)
+			} else {
+				s.lat.push(n)
+			}
 			return
 		}
 		s.demoted++
@@ -326,16 +345,33 @@ func (s *Sched[T]) NextUrgent() (it T, ok bool) {
 	if n := s.ctrl.pop(); n != nil {
 		return s.take(n, LaneCtrl), true
 	}
-	for _, q := range [2]*schedFIFO[T]{&s.rt, &s.rtS} {
-		if n := q.pop(); n != nil {
-			f := n.f
-			f.rt--
-			it = s.take(n, LaneRT)
-			s.maybeIdle(f)
-			return it, true
-		}
+	if n := s.rt.pop(); n != nil {
+		f := n.f
+		f.rt--
+		it = s.take(n, LaneRT)
+		s.maybeIdle(f)
+		return it, true
 	}
-	if n := s.lat.pop(); n != nil {
+	latWaits := s.lat.n > 0 || s.latN > 0
+	if s.rtS.n > 0 && !(s.rtShare > 0 && latWaits && s.rtRun >= s.rtShare) {
+		n := s.rtS.pop()
+		f := n.f
+		f.rt--
+		if latWaits {
+			s.rtRun += n.size
+		}
+		it = s.take(n, LaneRT)
+		s.maybeIdle(f)
+		return it, true
+	}
+	s.rtRun = 0
+	var n *schedNode[T]
+	if s.latRR {
+		n = s.latPop()
+	} else {
+		n = s.lat.pop()
+	}
+	if n != nil {
 		f := n.f
 		f.lat--
 		it = s.take(n, LaneLatency)
@@ -343,6 +379,49 @@ func (s *Sched[T]) NextUrgent() (it T, ok bool) {
 		return it, true
 	}
 	return it, false
+}
+
+// latPush queues n in u's own latency FIFO, u last in the ring if new there
+// (LatRR).
+func (s *Sched[T]) latPush(u *schedUser[T], n *schedNode[T]) {
+	u.latQ.push(n)
+	s.latN++
+	if u.inLat {
+		return
+	}
+	u.inLat = true
+	if s.latCur == nil {
+		u.lPrev, u.lNext = u, u
+		s.latCur = u
+		return
+	}
+	last := s.latCur.lPrev
+	u.lPrev, u.lNext = last, s.latCur
+	last.lNext = u
+	s.latCur.lPrev = u
+}
+
+// latPop takes the ring's next user's oldest latency item, and the turn
+// goes to the next user (LatRR).
+func (s *Sched[T]) latPop() *schedNode[T] {
+	u := s.latCur
+	if u == nil {
+		return nil
+	}
+	n := u.latQ.pop()
+	s.latN--
+	next := u.lNext
+	if u.latQ.n == 0 {
+		u.inLat = false
+		if next == u {
+			next = nil
+		} else {
+			u.lPrev.lNext, u.lNext.lPrev = u.lNext, u.lPrev
+		}
+		u.lPrev, u.lNext = nil, nil
+	}
+	s.latCur = next
+	return n
 }
 
 // Next takes the next item to write: control, then the latency lane, then
@@ -480,7 +559,7 @@ func (s *Sched[T]) Tick(now time.Duration, linkRate float64) {
 // Stats says what the scheduler holds and did (O(users)).
 func (s *Sched[T]) Stats() SchedStats {
 	st := SchedStats{Users: len(s.users), Active: s.active, Flows: len(s.flows),
-		Pending: [4]int{s.ctrl.n, s.lat.n, s.bulkN, s.rt.n + s.rtS.n}, Served: s.servedLane, Demoted: s.demoted,
+		Pending: [4]int{s.ctrl.n, s.lat.n + s.latN, s.bulkN, s.rt.n + s.rtS.n}, Served: s.servedLane, Demoted: s.demoted,
 		FloorUsers: s.nFloor, Quantum: s.quantum, Rate: s.rate}
 	for u := s.all; u != nil; u = u.aNext {
 		if u.items > st.MaxUserItems {

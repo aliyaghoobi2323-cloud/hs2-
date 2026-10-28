@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"sync/atomic"
 	"time"
 )
@@ -148,6 +149,21 @@ var BudgetQuietCheck = 1
 // never grew (gate waits 0), while with C4-lite off the link took 73.
 var BudgetC4 = 1
 
+// BudgetDrainMs (HS2_TUNE_BUDGET_DRAIN, ms; 0: none): about this often
+// (a uniform draw in [0.75, 1.25) of it) a budget-limited BULK link holds
+// its in-flight at BudgetDrainK of its delivery rate times min_rtt for two
+// min_rtt: its queue at the bottleneck empties, so its own BBR sees the
+// path's round trip again and refreshes min_rtt before its 10 s filter
+// expires. Without it BBR's PROBE_RTT (4 segments for 200 ms) came every
+// 10 to 13 s on a lone BULK link (N=1), a second at 59-75 of ~91 Mbit/s
+// each time, ~2 % of P10 (c) (round 4's cdip: (c) 0.960-0.965, 0.970-0.980
+// without the dips); the drain's cost is its 8 % for ~150 ms each time.
+var BudgetDrainMs = 0
+
+// BudgetDrainK (HS2_TUNE_BUDGET_DRAIN_K, ×100): the drain's in-flight, of
+// the delivery rate times min_rtt.
+var BudgetDrainK = 92
+
 // BudgetInflight 0 (HS2_TUNE_BUDGET_INFLIGHT=0, lab): the budget counts a
 // socket's SIOCOUTQ (all not acknowledged, the bytes past a hole the peer
 // has too) in place of what Linux counts in flight and its unsent bytes
@@ -233,6 +249,10 @@ type budgetCore struct {
 	two, own         bool
 	cuts, grows      uint64
 	rooms            uint64 // two-way growth for room of its own
+	// drainAt, drainEnd: the next drain's time and the current one's end
+	// (BudgetDrainMs); drains: how many
+	drainAt, drainEnd time.Duration
+	drains            uint64
 }
 
 // longMax notes the acked rate of the reading and is the most of the last
@@ -258,10 +278,36 @@ func (c *budgetCore) longMax(now time.Duration, r float64) float64 {
 	return mx
 }
 
-// step takes a reading and says B (bytes; 0: no budget).
+// step takes a reading and says B (bytes; 0: no budget), lowered while a
+// drain runs (BudgetDrainMs).
 func (c *budgetCore) step(in budgetIn) float64 {
+	b := c.step0(in)
+	if BudgetDrainMs <= 0 || b <= 0 || c.mode != budgetRun || in.MinRTT <= 0 || c.d <= 0 {
+		c.drainAt, c.drainEnd = 0, 0
+		return b
+	}
+	period := time.Duration(BudgetDrainMs) * time.Millisecond
+	switch {
+	case c.drainAt == 0:
+		c.drainAt = in.Now + time.Duration(float64(period)*(0.75+0.5*rand.Float64()))
+	case in.Now < c.drainEnd:
+	case in.Now >= c.drainAt && in.Blocked:
+		c.drainEnd = in.Now + 2*in.MinRTT
+		c.drainAt = in.Now + time.Duration(float64(period)*(0.75+0.5*rand.Float64()))
+		c.drains++
+	default:
+		return b
+	}
+	if in.Now >= c.drainEnd {
+		return b
+	}
+	return math.Min(b, math.Max(float64(BudgetDrainK)/100*c.d*in.MinRTT.Seconds(), float64(budgetMinSegs*max(in.MSS, 536))))
+}
+
+// step0 is step without the drain.
+func (c *budgetCore) step0(in budgetIn) float64 {
 	if !in.On {
-		*c = budgetCore{cuts: c.cuts, grows: c.grows, rooms: c.rooms}
+		*c = budgetCore{cuts: c.cuts, grows: c.grows, rooms: c.rooms, drains: c.drains}
 		return 0
 	}
 	T := budgetTarget()
@@ -513,5 +559,13 @@ func (lb *linkBudget) line(n int) string {
 	}
 	return fmt.Sprintf("budget link %d: %s %s, B %.0f KiB (in flight at most %.0f KiB), queue %.1f ms (srtt-min %.1f, way back %.1f, target %.1f), delivery %.1f Mbit/s, cuts %d, grows %d, room %d, gate waits %d (%.0f ms)",
 		n, c.mode, way, float64(lb.b.Load())/1024, float64(lb.outqMax.Swap(0))/1024, msOf(c.q), msOf(c.s), msOf(c.qRev),
-		msOf(budgetTarget()), c.d*8/1e6, c.cuts, c.grows, c.rooms, lb.held.Swap(0), float64(lb.waitNs.Swap(0))/1e6)
+		msOf(budgetTarget()), c.d*8/1e6, c.cuts, c.grows, c.rooms, lb.held.Swap(0), float64(lb.waitNs.Swap(0))/1e6) + drainNote(c)
+}
+
+// drainNote is the budget line's drains (BudgetDrainMs), else nothing.
+func drainNote(c *budgetCore) string {
+	if BudgetDrainMs <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(", drains %d", c.drains)
 }
