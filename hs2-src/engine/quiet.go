@@ -106,7 +106,8 @@ func QuietCount(maxLinks int) int {
 // quietOneMax: the most links a pool of one QUIET link has (QuietExtra).
 const quietOneMax = 5
 
-// QuietMany (HS2_TUNE_QUIET_MANY; both ends alike, as QuietN): the QUIET
+// QuietMany (HS2_TUNE_QUIET_MANY; with QuietFollow, the default, the two
+// ends need not set it alike: they run the smaller count; quietfollow.go): the QUIET
 // links of a pool past quietOneMax links. 2 until R1 round 4; 4 since: with
 // the calls kept on QUIET (TwoWay) a home mix of 64 users on 8 links carries
 // 12 Mbit/s of calls there besides every connection's start, and two QUIET
@@ -117,8 +118,8 @@ const quietOneMax = 5
 var QuietMany = 4
 
 // QuietN (HS2_TUNE_QUIET_N, lab): the QUIET links of every pool, when
-// above 0. Both ends must set it alike (the exit dials the reverse pool's
-// links: QuietTotal).
+// above 0. With QuietFollow off both ends must set it alike (the exit dials
+// the reverse pool's links: QuietTotal); with it, the smaller holds.
 var QuietN = 0
 
 // QuietBatch 0 (HS2_TUNE_QUIET_BATCH=0, lab: the measure of γ2's batching):
@@ -220,12 +221,21 @@ type quietLink struct {
 	id    int
 	born  time.Time
 	users atomic.Int32
+	// retiring: past the count the reverse edge keeps now (QuietFollow,
+	// quietfollow.go): no new connection opens on it, and it is closed
+	// once its connections ended
+	retiring atomic.Bool
 }
 
 // quietSet is the edge's QUIET links, and the mover of its group streams.
 type quietSet struct {
 	m    *LinkManager
-	want int
+	want int // this build's count (QuietCount)
+	// follow: the reverse edge fits its QUIET links to the other server's
+	// ceiling (QuietFollow); eff is the count it keeps now (0: want, no
+	// ceiling heard yet)
+	follow bool
+	eff    atomic.Int32
 	// state: 0 not known yet, 1 on (a link has CapGroup), -1 off (a link
 	// without it: a level 1 peer, or the other server's switch)
 	state atomic.Int32
@@ -266,6 +276,10 @@ func (m *LinkManager) enableQuiet() *quietSet {
 		return nil
 	}
 	q := &quietSet{m: m, want: QuietCount(m.max), kick: make(chan struct{}, 1)}
+	// only the reverse edge: there the exit dials, and holds no more links
+	// than its ceiling; a direct edge dials its QUIET links itself, and the
+	// exit takes them all (quietfollow.go)
+	q.follow = QuietFollow.Get() != 0 && QuietExtra != 0 && m.accept
 	m.quiet = q
 	if cd, ok := m.dialer.(classDialer); ok {
 		m.dialer = bulkDialer{cd} // the pool's own links are BULK
@@ -315,7 +329,7 @@ func (m *LinkManager) bulkMax() int {
 // quietWant is how many QUIET links the pool keeps now (0: none).
 func (m *LinkManager) quietWant() int {
 	if m.quiet.active() {
-		return m.quiet.want
+		return m.quiet.wantNow()
 	}
 	return 0
 }
@@ -424,7 +438,7 @@ func (q *quietSet) tick(ctx context.Context) {
 		return
 	}
 	q.mu.Lock()
-	need := q.want - q.aliveLocked() - q.dialing
+	need := q.wantNow() - q.aliveLocked() - q.dialing
 	if need > 0 {
 		q.dialing++
 	}
@@ -511,7 +525,7 @@ func (q *quietSet) offer() uint32 {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	q.offers = slices.DeleteFunc(q.offers, func(at int64) bool { return now-at > int64(quietOfferHold) })
-	if q.aliveLocked()+len(q.offers) >= q.want {
+	if q.aliveLocked()+len(q.offers) >= q.wantNow() {
 		return tlscarrier.CapBulk
 	}
 	q.offers = append(q.offers, now)
@@ -540,7 +554,7 @@ func (q *quietSet) pick(avoid []Link) (*quietLink, func(), bool) {
 	var best *quietLink
 	bestLag := true
 	for _, ql := range q.links {
-		if !ql.link.Alive() || slices.Contains(avoid, Link(ql.link)) {
+		if !ql.link.Alive() || ql.retiring.Load() || slices.Contains(avoid, Link(ql.link)) {
 			continue
 		}
 		lag := meterLagging(ql.link.mtr, now)
@@ -1066,8 +1080,12 @@ func (q *quietSet) line() string {
 	if PlaceUsers.Get() != 0 {
 		more += "; " + q.book.line()
 	}
-	return fmt.Sprintf("place: %s; quiet %d of %d links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d; moved back %d%s",
-		st, q.count(), q.want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load(), q.movedBack.Load(), more)
+	want := fmt.Sprint(q.wantNow())
+	if w := q.wantNow(); w != q.want {
+		want = fmt.Sprintf("%d (this build %d: the other server's ceiling)", w, q.want)
+	}
+	return fmt.Sprintf("place: %s; quiet %d of %s links, bulk %d links; opened on quiet %d, on bulk (no quiet up) %d; moved to bulk %d (not yet %d, no bulk link %d); exit hints %d; moved back %d%s",
+		st, q.count(), want, q.m.count(), q.opened.Load(), q.fallback.Load(), q.moved.Load(), waiting, q.moveFail.Load(), q.hinted.Load(), q.movedBack.Load(), more)
 }
 
 // placeLine is the status line of the process's placement (nil: none).

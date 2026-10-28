@@ -23,7 +23,21 @@ type quietPool struct {
 	exit     *logSink
 }
 
+// quietMix makes the two ends of startQuietPoolMix of different builds
+// (QuietFollow, quietfollow.go); the zero value: both this build.
+type quietMix struct {
+	edgeWant     int  // the edge's own QUIET count (0: QuietCount)
+	edgeNoFollow bool // an edge of before QuietFollow
+	exitOwn      int  // the reverse exit's own count (0: QuietCount)
+	exitNoRoom   bool // a reverse exit of before QuietFollow
+}
+
 func startQuietPool(t *testing.T, direct bool, maxLinks int) *quietPool {
+	t.Helper()
+	return startQuietPoolMix(t, direct, maxLinks, quietMix{})
+}
+
+func startQuietPoolMix(t *testing.T, direct bool, maxLinks int, mix quietMix) *quietPool {
 	t.Helper()
 	if QuietOff() || SchedOff() {
 		t.Skip("β2 off (HS2_TUNE_QUIET=0 or HS2_TUNE_SCHED=0)")
@@ -55,6 +69,13 @@ func startQuietPool(t *testing.T, direct bool, maxLinks int) *quietPool {
 	p.lm = lm
 	p.q = lm.enableQuiet()
 	mine := peerInfo{MaxLinks: QuietTotal(maxLinks), Caps: capPortTags}
+	if mix.edgeWant > 0 {
+		p.q.want = mix.edgeWant
+		mine.MaxLinks = maxLinks + mix.edgeWant // QuietTotal with its count (QuietExtra)
+	}
+	if mix.edgeNoFollow {
+		p.q.follow = false
+	}
 	lm.OnLink = func(l Link) {
 		go openControl(ctx, l, p.edge.logf)
 		go openStats(ctx, l, p.edge.logf)
@@ -71,7 +92,7 @@ func startQuietPool(t *testing.T, direct bool, maxLinks int) *quietPool {
 			return tlscarrier.DialFromTimeoutCaps(addr, "lab.example.com", key, "", 8*time.Second, tlscarrier.RoleCaps)
 		}
 		go RunKharej(ctx, KharejConfig{Panel: panel, RevLinks: maxLinks, RevMin: maxLinks, RevMax: maxLinks,
-			RevDial: dial, Log: p.exit.logf})
+			RevDial: dial, Log: p.exit.logf, quietOwn: mix.exitOwn, quietNoRoom: mix.exitNoRoom})
 	}
 	uln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
