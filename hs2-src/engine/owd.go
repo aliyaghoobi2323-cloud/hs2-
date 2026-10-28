@@ -111,7 +111,10 @@ func owdShared(own *owdLink) *owdLink {
 // 1% loss a QUIET link read 11 to 77 ms that way and α and the in-flight
 // budget cut every BULK link to 3-9 Mbit/s (round 3, γ1 and γ2: 6.0 and 5.6
 // against 88 for the base). So the reading of this direction (queue) is
-// none from such a beat until owdDirtyHold after it.
+// none from such a beat until owdDirtyHold after it. The same holds for a
+// BULK link's own messages (the in-flight budget's, budget.go): under 1%
+// loss they rode a resending link and read 8 to 13 ms each way (the judge's
+// first smoke, C1), and the budget cut a link that had no queue.
 var TuneOWDGuard = 1
 
 const (
@@ -234,11 +237,11 @@ type owdLink struct {
 	dirties    atomic.Int64 // beats that found the socket dirty
 }
 
-// noteSocket takes the socket's TCP_INFO at a beat of a QUIET link (the
-// guard): a resend since the beat before, or a backlog of its own, makes
-// this end's direction read none for a while.
+// noteSocket takes the socket's TCP_INFO at a beat of a QUIET link, or of
+// a BULK link's own messages (the guard): a resend since the beat before, or
+// a backlog of its own, makes this end's direction read none for a while.
 func (o *owdLink) noteSocket(ts tcpStat, now int64) {
-	if !o.quiet || TuneOWDGuard == 0 {
+	if !o.quiet && !o.own || TuneOWDGuard == 0 {
 		return
 	}
 	resent := o.retr0 != 0 && ts.retrans > o.retr0

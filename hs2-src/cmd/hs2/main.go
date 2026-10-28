@@ -359,6 +359,7 @@ func applyTuning() {
 	// receive buffer to a local panel (bytes; 0: the kernel's autotuning)
 	num("HS2_TUNE_OWD_GUARD", &engine.TuneOWDGuard)
 	num("HS2_TUNE_PANEL_RCVBUF", &engine.TunePanelRcvbuf)
+	num("HS2_TUNE_PANEL_MSS", &engine.TunePanelMSS)
 	// gamma1's coalescing hold on QUIET links (µs; 0: none), jittered
 	num("HS2_TUNE_QUIET_COAL", &engine.QuietCoalesce)
 	num("HS2_TUNE_QUIET_COAL_MIN", &engine.QuietCoalesceMin)

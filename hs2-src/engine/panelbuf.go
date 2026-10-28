@@ -29,13 +29,23 @@ import (
 //     gRPC) holds the game's frames behind ~3.7 MB of these buffers, ~730
 //     ms at 45 Mbit/s.
 //
-// So the exit sets the receive buffer of a socket to a panel on this host
-// (a loopback address, or one of the host's own) to TunePanelRcvbuf before
-// it connects: the window the panel's socket sees is then about that much,
-// its congestion window and send buffer stay in proportion, and a local
-// panel needs no more (256 KiB is 40 Gbit/s at a loopback round trip of 50
-// µs). A panel elsewhere keeps the autotuning (its round trip needs the
-// window). A UDP socket to the panel gets the same buffer whatever the
+// Most of it is the panel's send buffer, which hs2 cannot set: Linux sizes
+// a new socket's send buffer from its segment, and on loopback the segment
+// is 64 KiB (the rig's panel sockets held 3.5-3.9 MB unsent each, the
+// exit's receive buffer at 256 KiB or not). So before it connects to a panel
+// on this host (a loopback address, or one of the host's own) the exit
+// sets two things on its socket:
+//
+//   - TCP_MAXSEG to TunePanelMSS (1460: the panel then sends in Ethernet's
+//     segments, whose send buffer starts 45 times smaller; loopback's GSO
+//     still carries 64 KiB a packet, so the CPU cost is the same);
+//   - its receive buffer to TunePanelRcvbuf: the window the panel's socket
+//     sees is then about that much, its congestion window and send buffer
+//     stay in proportion, and a local panel needs no more (256 KiB is 40
+//     Gbit/s at a loopback round trip of 50 µs).
+//
+// A panel elsewhere keeps both as they are (its round trip needs the
+// window, its path its segment). A UDP socket to the panel gets the same buffer whatever the
 // address: what waits there past it is a stale datagram (the host's
 // rmem_default is 16 MiB on the Kharej server).
 
@@ -43,16 +53,26 @@ import (
 // as before): the receive buffer of the exit's sockets to a local panel.
 var TunePanelRcvbuf = 256 << 10
 
+// TunePanelMSS (HS2_TUNE_PANEL_MSS, bytes; 0: the route's, as before): the
+// segment the exit's TCP sockets to a local panel announce.
+var TunePanelMSS = 1460
+
 // panelDial dials the panel (network tcp or udp) with the receive buffer
 // above.
 func panelDial(ctx context.Context, network, target string, timeout time.Duration) (net.Conn, error) {
 	d := &net.Dialer{Timeout: timeout}
-	if n := TunePanelRcvbuf; n > 0 {
+	if n, mss := TunePanelRcvbuf, TunePanelMSS; n > 0 || mss > 0 {
 		d.Control = func(netw, address string, c syscall.RawConn) error {
-			if strings.HasPrefix(netw, "tcp") && !localTarget(address) {
+			tcp := strings.HasPrefix(netw, "tcp")
+			if tcp && !localTarget(address) {
 				return nil
 			}
-			return c.Control(func(fd uintptr) { setRcvBuf(fd, n) })
+			return c.Control(func(fd uintptr) {
+				setRcvBuf(fd, n)
+				if tcp {
+					setMaxSeg(fd, mss)
+				}
+			})
 		}
 	}
 	return d.DialContext(ctx, network, target)

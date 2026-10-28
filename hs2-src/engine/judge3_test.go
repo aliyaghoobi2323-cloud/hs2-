@@ -50,14 +50,24 @@ func TestOWDGuard(t *testing.T) {
 	if _, ok := o.queue(); ok {
 		t.Fatal("a backlog: still read")
 	}
-	// a BULK link's (not quiet), or the guard off: no guard
+	// a BULK link's own messages (the budget's) are guarded alike; a link
+	// that trades none (α's version 4 aside) is not
+	var o2 owdLink
+	o2.own = true
+	o2.qOut.Store(1)
+	o2.qOutAt.Store(ctrlNow())
+	o2.noteSocket(tcpStat{retrans: 1}, ctrlNow())
+	o2.noteSocket(tcpStat{retrans: 5}, ctrlNow())
+	if _, ok := o2.queue(); ok {
+		t.Fatal("a BULK link's own reading on a resending socket: still read")
+	}
 	var b owdLink
 	b.qOut.Store(1)
 	b.qOutAt.Store(ctrlNow())
 	b.noteSocket(tcpStat{retrans: 1}, ctrlNow())
 	b.noteSocket(tcpStat{retrans: 5, notsent: 1 << 20, pacingRate: 1}, ctrlNow())
 	if _, ok := b.queue(); !ok {
-		t.Fatal("a BULK link's reading guarded")
+		t.Fatal("a link of neither kind guarded")
 	}
 	defer func(v int) { TuneOWDGuard = v }(TuneOWDGuard)
 	TuneOWDGuard = 0
