@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -63,9 +64,9 @@ func TestPlaceUsers(t *testing.T) {
 	t.Run("eight", func(t *testing.T) {
 		var b placeBook
 		cands := placeLinks(8)
-		due := map[uint32]bool{}
+		due := map[uint32]int{}
 		for u := uint32(1); u <= 8; u++ {
-			due[u] = true
+			due[u] = 16
 		}
 		b.setDue(due)
 		for range 16 { // interleaved, as the mover meets them
@@ -104,6 +105,41 @@ func TestPlaceUsers(t *testing.T) {
 			t.Fatalf("the heavy user on %d links, ceil(8/2) = 4 due", n)
 		}
 	})
+	// a browser's six connections next to eight heavy users held a link
+	// each: held to one link with every user held (PlaceUsers 1), spread
+	// over the links with the fewest users with only heavy users held (2)
+	for _, mode := range []int{1, 2} {
+		t.Run(fmt.Sprintf("browser, mode %d", mode), func(t *testing.T) {
+			defer func(v int) { PlaceUsers = v }(PlaceUsers)
+			PlaceUsers = mode
+			var b placeBook
+			cands := placeLinks(8)
+			due := map[uint32]int{}
+			for u := uint32(1); u <= 8; u++ {
+				due[u] = 16
+			}
+			b.setDue(due)
+			for range 16 {
+				for u := uint32(1); u <= 8; u++ {
+					placeOne(t, &b, cands, u)
+				}
+			}
+			b.setDue(nil)
+			for range 6 {
+				placeOne(t, &b, cands, 50)
+			}
+			n := linksOf(&b, cands, 50)
+			t.Logf("the browser on %d links", n)
+			if mode == 1 && n != 1 || mode == 2 && n < 4 {
+				t.Fatalf("mode %d: the browser's 6 connections on %d links", mode, n)
+			}
+			for u := uint32(1); u <= 8; u++ {
+				if linksOf(&b, cands, u) != 1 {
+					t.Fatalf("mode %d: heavy user %d on %d links", mode, u, linksOf(&b, cands, u))
+				}
+			}
+		})
+	}
 	t.Run("drop", func(t *testing.T) {
 		var b placeBook
 		cands := placeLinks(2)
@@ -310,6 +346,8 @@ func TestTwoWayState(t *testing.T) {
 		{"call 0.3 s", call, 3, twoWayPending},
 		{"call 1 s", call, 10, twoWayYes},
 		{"call, two ticks missed", ring(18750, 0, 18750, 18750, 18750, 18750, 18750, 18750, 0, 18750), 10, twoWayYes},
+		{"call held back, four ticks missed", ring(0, 0, 37500, 18750, 0, 18750, 56250, 0, 18750, 18750), 10, twoWayYes},
+		{"call held back 0.4 s in", ring(0, 0, 0, 0, 0, 0, 0, 37500, 0, 18750), 4, twoWayPending},
 		{"request", ring(300, 0, 0, 0, 0, 0, 0, 0, 0, 0), 3, twoWayNo},
 		{"request, later", ring(0, 0, 0, 0, 0, 0, 0, 0, 0, 300), 10, twoWayNo},
 		{"every other tick", ring(4000, 0, 4000, 0, 4000, 0, 4000, 0, 4000, 0), 10, twoWayNo},
@@ -470,25 +508,31 @@ func TestSchedRTLane(t *testing.T) {
 	for u := uint32(10); u < 30; u++ { // twenty new flows' first bytes
 		m.add(simFlow{user: u, kind: simRandom, lane: LaneLatency, size: 2000, gap: 60 * time.Millisecond})
 	}
-	call := m.add(simFlow{user: 2, kind: simPaced, lane: LaneRT, size: 3750, rate: 1.5e6 / 8})
+	call := m.add(simFlow{user: 2, kind: simPaced, lane: LaneRTSteady, size: 3750, rate: 1.5e6 / 8})
+	game := m.add(simFlow{user: 3, kind: simPaced, lane: LaneRT, size: 300, rate: 30 * 300})
 	m.run(5 * time.Second)
-	var worst time.Duration
-	n := 0
+	worst := map[*simFlow]time.Duration{}
+	n := map[*simFlow]int{}
 	for _, s := range m.served {
-		if s.f == call && s.at > time.Second {
-			worst = max(worst, s.wait)
-			n++
+		if (s.f == call || s.f == game) && s.at > time.Second {
+			worst[s.f] = max(worst[s.f], s.wait)
+			n[s.f]++
 		}
 	}
 	bound := m.dur(BulkFrameSize(m.r)) + m.dur(2000)
-	t.Logf("call frames %d, worst wait %v (a bulk frame and a lane frame %v)", n, worst, bound)
-	if n == 0 || worst > bound {
-		t.Fatalf("the realtime lane: %d frames, worst wait %v", n, worst)
+	t.Logf("call frames %d, worst wait %v; game frames %d, worst wait %v (a bulk frame and a lane frame %v)", n[call], worst[call], n[game], worst[game], bound)
+	if n[call] == 0 || worst[call] > bound {
+		t.Fatalf("the steady realtime lane: %d frames, worst wait %v", n[call], worst[call])
+	}
+	// the light realtime lane is ahead of the steady one: a game frame
+	// waits for the frame in progress, never behind a call frame queued
+	if n[game] == 0 || worst[game] > m.dur(max(BulkFrameSize(m.r), 3750)) {
+		t.Fatalf("the light realtime lane: %d frames, worst wait %v", n[game], worst[game])
 	}
 	// the credit: a user pushing realtime at twice RTMax
 	m2 := newSchedSim(t, 100, 6)
 	m2.add(simFlow{user: 3, kind: simBacklog, lane: LaneBulk})
-	m2.add(simFlow{user: 4, kind: simPaced, lane: LaneRT, size: 4000, rate: 2 * float64(RTMax) / 8})
+	m2.add(simFlow{user: 4, kind: simPaced, lane: LaneRTSteady, size: 4000, rate: 2 * float64(RTMax) / 8})
 	m2.run(5 * time.Second)
 	before := m2.s.Stats().Served[LaneRT]
 	rate := float64(before) / 5

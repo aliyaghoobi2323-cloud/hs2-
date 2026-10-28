@@ -23,10 +23,11 @@ import "sync/atomic"
 // neither hinted nor capped at the exit (its received bytes are the user's)
 // nor moved at the edge (its sent bytes are), on a download hint or on the
 // upload rule. A connection younger than twoWayWin ticks whose user sent
-// twoWayMin in every tick so far but one is pending: its move waits until
-// the window says (a call is hinted 300 ms in, before a second of its own
-// sending is seen); one whose user sent less moves as before (a download's
-// request is a few hundred bytes). And with TuneRT the realtime lane takes
+// twoWayMin in half its ticks so far or more is pending: its move waits
+// until the window says (a call is hinted 300 ms in, before a second of its
+// own sending is seen; the exit takes a new group as pending until its
+// first tick); one whose user sent less moves as before (a download's
+// request is a few hundred bytes, in one tick). And with TuneRT the realtime lane takes
 // the frames of a flow whose received direction is steady while what it
 // sends stays under RTMax (rtlane.go), so a call held back on QUIET does not
 // lose its lane.
@@ -36,7 +37,7 @@ var TwoWay = 0
 
 const (
 	twoWayWin   = 10      // move ticks (1 s)
-	twoWayTicks = 8       // of them with at least ...
+	twoWayTicks = 6       // of them with at least ...
 	twoWayMin   = 1 << 10 // ... this many bytes
 )
 
@@ -65,7 +66,11 @@ func twoWayState(ring []uint32, pos, seen int) int {
 		}
 	}
 	if w < twoWayWin {
-		if n >= 1 && n >= w-1 {
+		// at least half the ticks so far: a call whose own sending is held
+		// back at the start of a busy link still is (round 4's rig: with
+		// "all but one tick" the calls of the home mix moved in two runs of
+		// three); a download's request is one tick
+		if n >= 1 && 2*n >= w {
 			return twoWayPending
 		}
 		return twoWayNo

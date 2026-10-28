@@ -885,9 +885,9 @@ func (q *quietSet) moverTick(now int64) {
 	}
 	if PlaceUsers != 0 && len(dues) > 0 {
 		// the users moving now count for each other's spread (place.go)
-		du := make(map[uint32]bool, len(dues))
+		du := make(map[uint32]int, len(dues))
 		for _, d := range dues {
-			du[d.s.tag] = true
+			du[d.s.tag]++
 		}
 		q.book.setDue(du)
 	}
