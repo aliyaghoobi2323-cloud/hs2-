@@ -2768,6 +2768,45 @@ Open:
   `TestPortRoutesEndToEnd`, `TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo`
   and udpcarrier's `TestLabBursty26` — for Z8.
 
+## Phase R1 — merge preparation (switches, status counters, the full suite)
+
+R1's full entry comes with its release (method step 9). Ahead of it, on the
+merge-prep branch:
+
+- **Switches.** Every R1 core keeps an environment kill switch, set in a
+  systemd drop-in; the README's *R1 switches* table lists them with their
+  defaults (`HS2_TUNE_CLASS`, `_SCHED`, `_HQG`, `_HQG_SEGS` = 8, `_SENDCAP`,
+  `_QUIET`, `_QUIET_EXTRA`, `_BUDGET`, `_MOVE_HINT`, `_OWD_GUARD`,
+  `_UDP_LATE` = 150 ms, `_PANEL_RCVBUF`/`_PANEL_MSS`, `_LINK_SNDBUF`,
+  `_QUIET_COAL`, `_MOVE_BACK`, `_EARLYDONE`).
+- **Status counters** (the round-3 judge's open item 9): `hs2 status` has a
+  line of totals since start — UDP datagrams dropped for their age, OWD guard
+  beats that found a socket dirty, BULK budget cuts, QUIET writes and the
+  records the batching saved, moves to BULK and back, TUN flows moved, moves
+  attached at the exit, move hints heard and sent — and each link's `sendcap`
+  line ends with its `owd guard dirty` count; the QUIET records line counts
+  writes and those on a record already started. The log gets one line a
+  minute with what moved, none when nothing did.
+- **Tests.** The seven known red engine tests are closed (R1 decision T19):
+  the two one-connection probe gates (`TestAngleSameLinkProbe`,
+  `TestAngleTunPingAheadOfBulk`) now hold on a QUIET/BULK link and keep a
+  one-session case for a peer without QUIET links, its bound with C3's cap;
+  the five C3 tests assert the judge's default (`HS2_TUNE_HQG_SEGS=8`) and the
+  document's gate. `TestAngleP10` no longer flakes (its light probe is judged
+  once settled, and the new heavy user's latency-lane burst has its own bound).
+  Two flaky tests of the base are fixed (a test port free for TCP but not for
+  UDP; `TestLabBursty26`'s bars, set from 24 runs), and two of
+  `TestMoveBackLight` that `-race` found (the test restored its switches while
+  the rig's mover still read them; a download that could end before its move).
+  The C3 cost at 1 Mbit/s with 8 segments (~95 ms of host queue against the
+  bound's 36, a QUIET link too) is pinned by `TestHostWaitSegs8Cost` as an open
+  item, not hidden.
+  `hs2-src/Makefile`: `make check` runs vet, gofmt and both modules' suites
+  with a timeout that fits the engine package (~13 minutes, past `go test`'s
+  default 10); `make race`, `make test386`, `make release` (static linux
+  amd64, 386 and arm64, `-trimpath -ldflags="-s -w"` as BUILD.md's release
+  build, with `SHA256SUMS`).
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

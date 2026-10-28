@@ -826,6 +826,54 @@ journalctl -u hs2 -f
   on both servers to confirm they run the same build (the `hs2-menu` banner
   shows it too).
 
+## R1 switches (the link scheduler and QUIET/BULK links)
+
+R1 (the redesign's first phase; on its branch, not yet on `main`) changes how
+each server sends on its links: a per-user scheduler with a latency lane
+(C2), a classifier of light and bulk flows (C1), a bound on each link
+socket's unsent bytes (C3), a pacing cap (C4-lite) and, when the other server
+runs R1 too (wire level 2), two kinds of connection: **QUIET** links for
+control and light traffic, **BULK** links for the connections that turn bulk
+(each moves once, in order). With an older peer every link carries everything,
+as before. Every part has an environment switch. Set it in a systemd drop-in,
+never in the unit file itself, on the server(s) the table names:
+
+```bash
+mkdir -p /etc/systemd/system/hs2.service.d
+printf '[Service]
+Environment=HS2_TUNE_QUIET=0
+' > /etc/systemd/system/hs2.service.d/r1.conf
+systemctl daemon-reload && systemctl restart hs2
+```
+
+| switch | default | what changing it does | where |
+|---|---|---|---|
+| `HS2_TUNE_CLASS=0` | on | C1 off: every flow counts as bulk (an empty latency lane) | either end |
+| `HS2_TUNE_SCHED=0` | on | C2 off: smux's old heap and shaper, the TUN's old FIFO | either end (the link falls back) |
+| `HS2_TUNE_HQG=0` | on | C3 off: the fixed 32 KiB unsent mark and the old send gate | either end |
+| `HS2_TUNE_HQG_SEGS=N` | 8 | C3's cap is at least N segments (0: 2 segments, the design document's gate) | either end |
+| `HS2_TUNE_SENDCAP=0` | on | C4-lite off: the exit's pacing net alone, as before | either end |
+| `HS2_TUNE_QUIET=0` | on | no QUIET links: one connection per link carries everything (level 1's behaviour) | either end |
+| `HS2_TUNE_QUIET_EXTRA=0` | 1 | QUIET links within `max_links` instead of next to it (by default a pool holds `max_links` + 1 connections, + 2 past 5 links) | both ends alike |
+| `HS2_TUNE_BUDGET=0` | on | BULK links keep a rate cap instead of the in-flight budget | either end |
+| `HS2_TUNE_MOVE_HINT=0` | on | the exit no longer hints which download to move; the edge moves by data arriving | either end |
+| `HS2_TUNE_OWD_GUARD=0` | on | one-way delay readings are no longer ignored after a resend | either end |
+| `HS2_TUNE_UDP_LATE=ms` | 150 | a user's UDP datagram older than this at the edge is dropped (0: never) | Iran |
+| `HS2_TUNE_PANEL_RCVBUF=bytes`, `HS2_TUNE_PANEL_MSS=bytes` | 262144, 1460 | the exit's sockets to a local panel (0: the kernel's, as before) | Kharej |
+| `HS2_TUNE_LINK_SNDBUF=bytes` | 8 MiB | a BULK link socket's send buffer (0: Linux's autotuning) | either end |
+| `HS2_TUNE_QUIET_COAL=µs` | 4000 | how long a busy QUIET link holds small messages to share a record (0: none) | either end |
+| `HS2_TUNE_MOVE_BACK=1` | off | a connection light again moves back from BULK to QUIET (lab) | both ends |
+| `HS2_TUNE_EARLYDONE=0` | on | a stream's writer waits for each frame to be written | either end |
+
+The rest of the `HS2_TUNE_*` names in `cmd/hs2/main.go` (`applyTuning`) are
+lab switches for measurements. `hs2 status` shows each link's lines (`sched`,
+`classes`, `hostq`, `sendcap`, `budget`, `quiet records`) and one line of
+totals since start: `events since start: udp late drops …; owd dirty …; budget
+cuts …; quiet writes …, … of them on a record already started (records saved);
+moved to bulk … (back to quiet …), tun flows …, attached at the exit …; move
+hints heard …, sent …`. The log gets one `events in the last minute: …` line
+a minute when any of them moved, never a line per event.
+
 ## The three ports (they are different things)
 
 | where | what | example |
