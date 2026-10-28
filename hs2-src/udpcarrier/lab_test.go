@@ -221,13 +221,21 @@ func TestLabBursty26(t *testing.T) {
 		t.Fatalf("expected a substantially lossy path, got %.1f%%", res.wireLossPct)
 	}
 	// FEC should recover most of the burst loss: residual well below the wire
-	// loss. The absolute residual on this profile lands around 6-9% with the
-	// path kept full (the pre-2026-09 controller left ~30% of this path idle
-	// and landed at 4-10%, which made a 7% bar flaky).
-	if res.residualPct > res.wireLossPct*0.4 {
+	// loss (without FEC it is the wire loss itself). The bursts are drawn in
+	// real time (netsim.TimeGE: the packets' timing picks the draws), so the
+	// residual varies from run to run: over 24 runs on the R1 merge-prep
+	// branch (udpcarrier unchanged since the base) it was 0.29-0.46 of the
+	// wire loss (mean 0.35) and 7.1-13.9% absolute, the wire 22-31%. The
+	// bars of 0.4 and 14% sat inside that spread and failed 3 runs of 24, on
+	// the base too about one in eight (docs/architecture/wip/r1/flaky.fa.md); half the
+	// wire loss and 16% stay past every run seen, and still fail an FEC that
+	// rebuilds less than half of what the bursts take. (The pre-2026-09
+	// controller left ~30% of this path idle and landed at 4-10%, which made
+	// a 7% bar flaky.)
+	if res.residualPct > res.wireLossPct*0.5 {
 		t.Fatalf("FEC recovered too little: residual %.2f%% vs wire %.1f%%", res.residualPct, res.wireLossPct)
 	}
-	if res.residualPct > 14 {
+	if res.residualPct > 16 {
 		t.Fatalf("residual loss too high: %.2f%%", res.residualPct)
 	}
 	// The rate controller keeps the 20 Mbit/s bottleneck full: with ~140%
