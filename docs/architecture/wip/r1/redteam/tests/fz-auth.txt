@@ -1,0 +1,6 @@
+fuzz: elapsed: 0s, gathering baseline coverage: 0/8 completed
+fuzz: elapsed: 0s, gathering baseline coverage: 8/8 completed, now fuzzing with 4 workers
+fuzz: elapsed: 45s, execs: 1605468 (0/sec), new interesting: 1 (total: 9)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	45.074s
+== rc 0 2026-10-28T17:44:42Z

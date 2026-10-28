@@ -1,0 +1,13 @@
+== try 1 2026-10-28T17:33:04Z
+--- PASS: TestHintMovesDownload (1.00s)
+    red_r1_test.go:177: longest tick 40.04µs; every hint on the healthy stream 205.8328ms after it was due; writes on the stalled stream 1
+--- PASS: TestRedHintTickNeverWaits (0.24s)
+--- PASS: TestHintMovesDownload (1.00s)
+    red_r1_test.go:177: longest tick 27.1µs; every hint on the healthy stream 205.289928ms after it was due; writes on the stalled stream 1
+--- PASS: TestRedHintTickNeverWaits (0.24s)
+--- PASS: TestHintMovesDownload (1.01s)
+    red_r1_test.go:177: longest tick 30.75µs; every hint on the healthy stream 206.283342ms after it was due; writes on the stalled stream 1
+--- PASS: TestRedHintTickNeverWaits (0.25s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	3.782s
+== rc 0 2026-10-28T17:33:14Z
