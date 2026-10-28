@@ -509,4 +509,675 @@ func runCmd(args []string) {
 	defer stop()
 	// Hard guarantee of prompt shutdown: when a signal cancels ctx, exit within
 	// a short grace period no matter what a goroutine is doing. Without this a
-	// single stuck read makes systemctl stop w
+	// single stuck read makes systemctl stop wait for the kill timeout.
+	go func() {
+		<-ctx.Done()
+		time.Sleep(3 * time.Second)
+		encap.ReleaseAllEchoGuards() // os.Exit skips defers
+		os.Exit(0)
+	}()
+
+	// SIGHUP hot-reloads the TLS certificate (the renewal deploy-hook sends it via
+	// `systemctl reload`), so a Let's Encrypt renewal swaps the cert without
+	// dropping the tunnel. A background watcher also picks up an on-disk change
+	// and warns as expiry nears.
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hup:
+				reloadAllCerts("SIGHUP")
+			}
+		}
+	}()
+	go watchCerts(ctx)
+
+	// Tell systemd the daemon is up (a no-op under today's Type=simple, which
+	// sets no NOTIFY_SOCKET): a unit or a rollback (hs2-safe-apply) that ever
+	// waits for READY=1 works with every binary from R1 on.
+	if err := sdNotifyReady(); err != nil {
+		log.Printf("systemd notify: %v (ignored)", err)
+	}
+
+	switch fc.Carrier {
+	case "reality":
+		runReality(ctx, eng, fc)
+	case "mtcp": // link pool, no TUN
+		runStream(ctx, fc, false, 0)
+	case "l3mtcp", "l3": // link pool + hs0 side channel
+		runStream(ctx, fc, true, 0)
+	case "tls": // one link + hs0 side channel
+		runStream(ctx, fc, true, 1)
+	case "noise", "":
+		runNoise(ctx, eng, fc)
+	case "udp": // Noise + adaptive FEC over UDP (udp-only transport)
+		runUDP(ctx, eng, fc, false)
+	case "auto": // probe UDP, else fall back to TCP (default transport)
+		runUDP(ctx, eng, fc, true)
+	case "dgtun": // routed TUN over a POOL of datagram carriers (any encap) + autopilot
+		runDgTun(ctx, fc)
+	default:
+		log.Fatalf("unknown carrier %q", fc.Carrier)
+	}
+}
+
+// sdNotifyReady sends one "READY=1" datagram to $NOTIFY_SOCKET — an absolute
+// path, or "@name" for the abstract namespace (Go maps the '@') — the
+// sd_notify(3) protocol without a dependency. Without NOTIFY_SOCKET it does
+// nothing; an error is for the log only and never stops the tunnel.
+func sdNotifyReady() error {
+	sock := os.Getenv("NOTIFY_SOCKET")
+	if sock == "" {
+		return nil
+	}
+	if sock[0] != '/' && sock[0] != '@' {
+		return fmt.Errorf("NOTIFY_SOCKET %q is not a unix socket path", sock)
+	}
+	c, err := net.DialUnix("unixgram", nil, &net.UnixAddr{Name: sock, Net: "unixgram"})
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+	_, err = c.Write([]byte("READY=1"))
+	return err
+}
+
+// dialing reports whether this side initiates the connection. mode is the fixed
+// role ("dial"=edge/iran, "listen"=exit/kharej); Reverse flips who dials. So the
+// edge dials in direct and listens in reverse, and vice versa for the exit.
+func dialing(fc fileConfig) bool { return (fc.Mode == "dial") != fc.Reverse }
+
+func runReality(ctx context.Context, eng *engine.Engine, fc fileConfig) {
+	key := unhex(fc.SharedKey)
+	if dialing(fc) {
+		d := engine.NewRealityDialer(fc.Addr, fc.SNI, key)
+		must(eng.RunDial(ctx, d))
+		return
+	}
+	cert, err := tls.LoadX509KeyPair(fc.CertFile, fc.KeyFile)
+	must(err)
+	ln, err := engine.NewRealityListener(fc.Addr, fc.CoverAddr, key, cert)
+	must(err)
+	must(eng.RunListen(ctx, ln))
+}
+
+// runStream runs any TLS carrier in stream mode (see engine/stream.go). User
+// TCP (and optionally UDP) always rides smux streams; withTUN adds hs0 as a
+// side channel for other traffic; links > 0 pins the pool size.
+//
+// The role is the config mode: "dial" = edge (iran, user ports), "listen" =
+// exit (kharej, panel). fc.Reverse flips WHO dials the TLS carrier without
+// changing those roles: in reverse the edge LISTENS and the exit DIALS.
+func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
+	key := unhex(fc.SharedKey)
+	logf := func(f string, a ...any) { log.Printf(f, a...) }
+	var dev *tun.Device
+	if withTUN {
+		mtu := fc.MTU
+		if mtu == 0 {
+			mtu = 1380
+		}
+		d, err := tun.Open(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu)
+		must(err)
+		defer d.Close()
+		dev = d
+		logf("tun %s up: %s peer %s (side channel)", d.Name(), fc.LocalCIDR, fc.PeerIP)
+	}
+	edge := fc.Mode == "dial"
+
+	if edge {
+		min, max, per := linkEnvelope(fc)
+		if links > 0 { // tls carrier: pin to a single link
+			min, max = links, links
+		}
+		cfg := engine.IranConfig{
+			Min: min, Max: max, PerLink: per, DrainIdle: drainIdle(fc),
+			ListenIP: fc.UserListenIP,
+			Ports:    splitComma(fc.ForwardPorts),
+			UDP:      fc.UDP,
+			Log:      logf,
+			OnStart:  func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) },
+		}
+		if links == 0 {
+			cfg.WarmLinks = warmLinks(logf, min, max)
+		}
+		proxyPorts, err := engine.ParsePortFlags(fc.PortMap) // the user ports behind a proxy
+		must(err)
+		proxyFrom, err := engine.ParseProxyFrom(fc.ProxyFrom)
+		must(err)
+		cfg.ProxyPorts, cfg.ProxyFrom = proxyPorts, proxyFrom
+		if dev != nil {
+			cfg.TUN = dev
+		}
+		if fc.Reverse {
+			// Reverse edge: the iran side LISTENS for links the kharej dials in.
+			// It needs a cert (it is the TLS server now) and a probe backend.
+			cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
+			must(err)
+			ln, err := engine.ListenReuse(fc.Addr)
+			must(err)
+			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+			cfg.RevListener = ln
+			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
+		} else {
+			cfg.Dialer = engine.NewMTCPDialer(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+		}
+		must(engine.RunIran(ctx, cfg))
+		return
+	}
+
+	// exit (kharej): has the panel. MaxLinks is this server's resolved ceiling,
+	// told to the edge so both servers can show the effective ceiling exactly
+	// (in direct mode the exit reports it but does not apply it).
+	_, exitMax, _ := linkEnvelope(fc)
+	if links > 0 {
+		exitMax = links
+	}
+	routes, err := engine.ParsePortMap(fc.PortMap)
+	must(err)
+	cfg := engine.KharejConfig{Panel: fc.Expose, Routes: routes, Log: logf, MaxLinks: exitMax,
+		OnStart: func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) }}
+	if dev != nil {
+		cfg.TUN = dev
+	}
+	if fc.Reverse {
+		// Reverse exit: the kharej DIALS the iran edge (a TLS server) and runs a
+		// DYNAMIC pool of links. No cert here; it is the TLS client now. The edge
+		// drives the count over the pool-control channel between RevMin and RevMax;
+		// RevLinks is only the size held until the edge first speaks.
+		min, max, _ := linkEnvelope(fc)
+		if links > 0 { // tls carrier: single link
+			min, max = links, links
+		}
+		cfg.RevMin, cfg.RevMax = min, max
+		cfg.RevLinks = engine.WarmSize(min, max)
+		// β2: the edge (the TLS server here) chooses each link's class; the
+		// exit offers both classes on every link it dials
+		var class uint32
+		if !engine.QuietOff() {
+			class = tlscarrier.RoleCaps
+		}
+		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
+			return tlscarrier.DialFromTimeoutCaps(fc.Addr, fc.SNI, key, fc.BindLocalIP, 8*time.Second, class)
+		}
+		cfg.RevDialScout = func() (*tlscarrier.Carrier, error) {
+			return tlscarrier.DialFromTimeoutCaps(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second, class)
+		}
+		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
+		must(engine.RunKharej(ctx, cfg))
+		return
+	}
+	cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
+	must(err)
+	ln, err := engine.ListenReuse(fc.Addr)
+	must(err)
+	cfg.Listener = ln
+	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+	must(engine.RunKharej(ctx, cfg))
+}
+
+// buildTunePlan turns the config's tuning section (or the auto default) plus the
+// detected hardware into a tuning Plan.
+func buildTunePlan(fc fileConfig) *tune.Plan {
+	var cfg tune.Config
+	if fc.Tuning != nil {
+		cfg = *fc.Tuning
+	}
+	ramMB, cpus := tune.Detect()
+	return tune.Build(cfg, ramMB, cpus, tune.AvailableCC, tune.AvailableQdisc)
+}
+
+func tuneSkipReason() string {
+	if os.Geteuid() != 0 {
+		return "not root"
+	}
+	return "HS2_NO_TUNE set"
+}
+
+// tuneCmd implements `hs2 tune -c config [--apply]`: print the tuning plan for
+// this server and config, and optionally apply it. It lets the operator see
+// exactly what auto-tuning chose, and try manual overrides, without starting the
+// tunnel.
+func tuneCmd(args []string) {
+	fs := flag.NewFlagSet("tune", flag.ExitOnError)
+	cfgPath := fs.String("c", "", "config file (JSON); optional — without it, shows the auto plan for this server")
+	apply := fs.Bool("apply", false, "apply the plan now (needs root)")
+	fs.Parse(args)
+	var fc fileConfig
+	if *cfgPath != "" {
+		if raw, err := os.ReadFile(*cfgPath); err == nil {
+			json.Unmarshal(raw, &fc)
+		}
+	}
+	plan := buildTunePlan(fc)
+	fmt.Print(plan.Report())
+	if *apply {
+		if os.Geteuid() != 0 {
+			fmt.Println("(need root to apply)")
+			os.Exit(1)
+		}
+		plan.Apply(func(f string, a ...any) { fmt.Printf(f+"\n", a...) })
+	}
+}
+
+// recommendLinksCmd implements `hs2 recommend-links [--why]`: print the adaptive
+// link-pool ceiling this server's RAM and cores justify. The installer calls the
+// bare form and writes the number straight into the config, so the ceiling is
+// chosen once, from the hardware, and is then visible and fixed in the file (not
+// a hidden default). --why adds the detected hardware and the rule that gave
+// the number, for the human-facing menu (the number stays the first field). It is read-only and needs no config or root.
+//
+// -c cfg names the tunnel the menu asks about: its auto ceiling is the
+// hardware's for every carrier but the tun over icmp, whose is icmpMaxLinks
+// (see linkCeiling). An unreadable config gives the hardware's.
+func recommendLinksCmd(args []string) {
+	fs := flag.NewFlagSet("recommend-links", flag.ExitOnError)
+	why := fs.Bool("why", false, "also print the detected hardware and the rule")
+	cfgPath := fs.String("c", "", "config: its carrier's auto ceiling (the tun over icmp has its own)")
+	fs.Parse(args)
+	ramMB, cpus := detectHW()
+	maxLinks := tune.RecommendedMaxLinks(ramMB, cpus)
+	reason := tune.MaxLinksReason(ramMB, cpus)
+	if *cfgPath != "" {
+		var fc fileConfig
+		if raw, err := os.ReadFile(*cfgPath); err == nil && json.Unmarshal(raw, &fc) == nil && isICMPTun(fc) {
+			reason = fmt.Sprintf("tun over icmp: one echo id per carrier between the same two IPs, so more add no bandwidth; the hardware alone would allow %d: %s", maxLinks, reason)
+			maxLinks = icmpMaxLinks
+		}
+	}
+	if !*why {
+		fmt.Println(maxLinks)
+		return
+	}
+	fmt.Printf("%d  (%s)\n", maxLinks, reason)
+}
+
+// ramStr prints a RAM size in MB the way the tune report does (GB past 1024).
+func ramStr(mb int) string {
+	if mb <= 0 {
+		return "unknown"
+	}
+	if mb >= 1024 {
+		return fmt.Sprintf("%.1f GB", float64(mb)/1024)
+	}
+	return fmt.Sprintf("%d MB", mb)
+}
+
+// linkEnvelope resolves the adaptive link-pool bounds from the config, applying
+// the defaults: the pattern lives anywhere between min_links (default 2) and the
+// ceiling (max_links, or the hardware-derived auto ceiling — see linkCeiling),
+// with at least one link for every per_link (default 8) connections that are
+// actively moving data. The pool is never fixed at these numbers — the autopilot
+// moves it continuously inside the envelope from the measured traffic, up and
+// back down (see engine/autopilot.go).
+func linkEnvelope(fc fileConfig) (min, max, per int) {
+	min, per = fc.MinLinks, fc.PerLink
+	if min <= 0 {
+		min = 2
+	}
+	max, _, _ = linkCeiling(fc)
+	if max < min {
+		max = min
+	}
+	if per <= 0 {
+		per = 8
+	}
+	return min, max, per
+}
+
+// detectHW is tune.Detect (RAM MB, cores); a variable so tests can pin the
+// hardware and get deterministic ceilings.
+var detectHW = tune.Detect
+
+// The three ways a config sets the link-pool ceiling (see linkCeiling).
+const (
+	ceilAuto    = "auto"    // max_links 0: follows this server's hardware
+	ceilFixed   = "fixed"   // max_links > 0: the operator's number
+	ceilDefault = "default" // max_links absent: the historical fixed 32
+	ceilICMP    = "icmp"    // tun over icmp, max_links 0 or absent: icmpMaxLinks
+)
+
+// icmpMaxLinks is the ceiling of a tun over icmp unless max_links fixes one.
+// Every carrier there is one echo identifier between the same two IPs: they
+// share one path and one policer (an ICMP rate limit sees their sum — the
+// pool's governor caps them together), so carriers past a handful add no
+// bandwidth — only a ping-unlike pattern (hundreds of echo ids to one host)
+// and feedback traffic (each carrier reports 10 times a second each way).
+// Eight still spread the work over the cores and the flows over carriers.
+const icmpMaxLinks = 8
+
+// isICMPTun reports whether the config runs the datagram tun over icmp.
+func isICMPTun(fc fileConfig) bool {
+	return carrierName(fc) == "dgtun" && strings.EqualFold(strings.TrimSpace(fc.Encap), "icmp")
+}
+
+// legacyMaxLinks is the ceiling a config without max_links has always had.
+const legacyMaxLinks = 32
+
+// linkCeiling resolves the adaptive pool's ceiling (max_links) and says how:
+//
+//   - max_links 0 is AUTO: the ceiling follows THIS server's hardware
+//     (tune.RecommendedMaxLinks — the same RAM/core profile that sizes the
+//     kernel buffers: low 32, medium 48, high 64), resolved at every start. A
+//     server resized up or down therefore gets the matching ceiling on its next
+//     start (a VPS resize needs a reboot anyway) without anyone editing the
+//     config — the same "0 = leave it to the profile" rule the tuning section
+//     already follows. New installs write 0.
+//
+//   - a POSITIVE max_links is the operator's fixed choice, used as is and
+//     never changed automatically;
+//
+//   - ABSENT keeps the historical fixed 32, so every config written before
+//     the auto ceiling existed (installer-made or by hand) behaves exactly as
+//     it always did after the binary is upgraded.
+//
+//   - a tun over icmp with max_links 0 or absent gets icmpMaxLinks (mode
+//     "icmp"): past a handful, carriers there add no bandwidth (see
+//     icmpMaxLinks). A positive max_links still fixes the number.
+//
+// An older binary reads 0 as its fixed default 32, so rolling the binary back
+// still runs the tunnel. The returned profile is for display.
+func linkCeiling(fc fileConfig) (max int, mode, profile string) {
+	ram, cpus := detectHW()
+	profile = tune.ProfileFor(ram, cpus)
+	switch {
+	case fc.MaxLinks > 0:
+		return fc.MaxLinks, ceilFixed, profile
+	case isICMPTun(fc):
+		return icmpMaxLinks, ceilICMP, profile
+	case fc.maxLinksSet:
+		return tune.RecommendedMaxLinks(ram, cpus), ceilAuto, profile
+	default:
+		return legacyMaxLinks, ceilDefault, profile
+	}
+}
+
+// ceilingLogLine is the one startup line saying which link-pool ceiling this
+// run uses and why — auto (from the hardware, re-derived at every start), the
+// operator's fixed max_links, or the historical default when it is not set.
+func ceilingLogLine(fc fileConfig) string {
+	_, max, _ := linkEnvelope(fc)
+	ceil, mode, _ := linkCeiling(fc)
+	ram, cpus := detectHW()
+	why := tune.MaxLinksReason(ram, cpus)
+	var how string
+	switch mode {
+	case ceilAuto:
+		how = fmt.Sprintf("auto from this server's hardware (%s); re-derived at every start", why)
+	case ceilFixed:
+		how = fmt.Sprintf("fixed by max_links in the config (auto would give %d here: %s)", tune.RecommendedMaxLinks(ram, cpus), why)
+		if isICMPTun(fc) && ceil > icmpMaxLinks {
+			how += fmt.Sprintf("; over icmp more than %d add no bandwidth — every carrier is one echo id between the same two IPs (one path, one policer) — only a ping-unlike pattern", icmpMaxLinks)
+		}
+	case ceilICMP:
+		how = fmt.Sprintf("tun over icmp: every carrier is one echo id between the same two IPs, so more than %d add no bandwidth (one path, one policer), only a ping-unlike pattern and feedback traffic; a positive max_links overrides it (this hardware alone would allow %d)", icmpMaxLinks, tune.RecommendedMaxLinks(ram, cpus))
+	default:
+		how = fmt.Sprintf("the default (max_links is not set in the config; 0 = auto would give %d here: %s)", tune.RecommendedMaxLinks(ram, cpus), why)
+	}
+	s := fmt.Sprintf("link pool: ceiling %d links — %s", max, how)
+	if max != ceil { // min_links above the ceiling lifts it
+		s += fmt.Sprintf(" (raised from %d to min_links)", ceil)
+	}
+	return s
+}
+
+// hasLinkPool reports whether the config's carrier runs an adaptive link pool
+// (the only carriers max_links applies to). tls is pinned to one link; the
+// single-session carriers have no pool.
+func hasLinkPool(fc fileConfig) bool {
+	switch carrierName(fc) {
+	case "mtcp", "l3mtcp", "l3", "dgtun":
+		return true
+	}
+	return false
+}
+
+// drainIdle maps drain_idle_sec to the engine's setting: unset → 0 (the
+// engine default), 0 → never (negative), n → n seconds.
+func drainIdle(fc fileConfig) time.Duration {
+	switch {
+	case fc.DrainIdleSec == nil:
+		return 0
+	case *fc.DrainIdleSec <= 0:
+		return -1
+	default:
+		return time.Duration(*fc.DrainIdleSec) * time.Second
+	}
+}
+
+// streamBackend returns the probe-forwarding backend for a TLS-server side,
+// starting the built-in boring website when none is configured.
+func streamBackend(fc fileConfig) string {
+	backend := fc.BackendAddr
+	if backend == "" || backend == "builtin" {
+		addr, err := startBuiltinBackend(fc.CoverSeed)
+		must(err)
+		backend = addr
+	}
+	return backend
+}
+
+// runUDP runs the UDP transport (Noise + adaptive FEC). With auto=true the
+// dialer probes UDP and silently falls back to the TCP noise carrier when UDP
+// is unreachable or too lossy; the listener serves both. Keys are derived from
+// shared_key, so no static keypair config is needed.
+func runUDP(ctx context.Context, eng *engine.Engine, fc fileConfig, auto bool) {
+	shared := unhex(fc.SharedKey)
+	mtu := fc.MTU
+	if mtu == 0 {
+		mtu = 1280
+	}
+	logf := func(f string, a ...any) { log.Printf(f, a...) }
+	if dialing(fc) {
+		var d engine.CarrierDialer
+		if auto {
+			d = engine.NewAutoDialer(fc.Addr, fc.BindLocalIP, shared, mtu, logf)
+		} else {
+			d = engine.NewUDPDialer(fc.Addr, fc.BindLocalIP, shared, mtu)
+		}
+		must(eng.RunDial(ctx, d))
+		return
+	}
+	var ln engine.CarrierListener
+	var err error
+	if auto {
+		ln, err = engine.NewAutoListener(fc.Addr, shared, mtu)
+	} else {
+		ln, err = engine.NewUDPListener(fc.Addr, shared, mtu)
+	}
+	must(err)
+	must(eng.RunListen(ctx, ln))
+}
+
+// runDgTun runs the gen-2 datagram TUN: a routed interface carried over a POOL
+// of datagram carriers (udpcarrier over the configured encapsulation), sized by
+// the same autopilot as the stream pool, with an optional userspace port
+// forwarder so user ports on the edge reach the panel over the tun. There is no
+// TCP inside the carrier — user connections ride as ordinary IP packets, so no
+// TCP-in-TCP.
+func runDgTun(ctx context.Context, fc fileConfig) {
+	shared := unhex(fc.SharedKey)
+	mtu := fc.MTU
+	if mtu == 0 {
+		mtu = 1280
+	}
+	logf := func(f string, a ...any) { log.Printf(f, a...) }
+	// TCP offloads both ways (tun/offload.go): the kernel hands over and takes
+	// 64 KB TCP packets, so a download costs a few reads and writes instead of
+	// one per segment. HS2_TUN_OFFLOAD=0 turns them off; a kernel that refuses
+	// them gets plain packets.
+	wantOffload := os.Getenv("HS2_TUN_OFFLOAD") != "0"
+	dev, err := tun.OpenWith(fc.Iface, fc.LocalCIDR, fc.PeerIP, mtu, tun.Options{Offload: wantOffload})
+	must(err)
+	defer dev.Close()
+	off := "TCP offload on"
+	switch {
+	case !wantOffload:
+		off = "TCP offload off (HS2_TUN_OFFLOAD=0)"
+	case !dev.Offloaded():
+		off = "TCP offload off — the kernel refused it; plain packets"
+	}
+	logf("tun %s up: %s peer %s mtu %d (datagram pool, encap %s, %s)", dev.Name(), fc.LocalCIDR, fc.PeerIP, mtu, encapName(fc), off)
+
+	ec := engine.EncapConfig{Kind: fc.Encap, BindIP: fc.BindLocalIP, Proto: fc.Proto}
+	min, max, per := linkEnvelope(fc)
+	edge := fc.Mode == "dial" // iran = edge (users), kharej = exit (panel)
+
+	// User-port forwarder (Backhaul-style [ports]): the edge opens forward_ports
+	// and carries each one over the tun to the exit, saying which port it is
+	// when the exit routes by port; the exit hands each to its target (port_map,
+	// else expose). Started before the pool so the status writer has its
+	// report of the other server's routing table from the first tick.
+	pc := engine.DgPortsConfig{Edge: edge, UDP: fc.UDP, Log: logf}
+	if edge {
+		pc.Ports, pc.UserListenIP, pc.PeerTunIP = splitComma(fc.ForwardPorts), fc.UserListenIP, fc.PeerIP
+	} else {
+		routes, err := engine.ParsePortMap(fc.PortMap)
+		must(err)
+		pc.LocalTunIP, pc.Default, pc.Routes = ipOfCIDR(fc.LocalCIDR), fc.Expose, routes
+	}
+	peerRoutes, err := engine.StartDgPorts(ctx, pc)
+	must(err)
+
+	cfg := engine.DgConfig{Dev: dev, Min: min, Max: max, PerLink: per, Reverse: fc.Reverse, Log: logf,
+		OnStart: func(s engine.StatsFn) {
+			startStatusWriter(ctx, fc, configPath, func() engine.PoolStats {
+				st := s()
+				st.Routes = peerRoutes()
+				st.TunOffload, st.TunMode = dev.Offloaded(), off
+				c := dev.OffloadStats()
+				st.TunReads, st.TunSegs, st.TunWrites, st.TunPkts = c.Reads, c.Segs, c.Writes, c.Pkts
+				st.TunBad, st.TunRefused = c.Dropped, c.RefusedMerges
+				return st
+			})
+		}}
+	if fc.Mode == "dial" { // the edge sizes the pool
+		cfg.WarmLinks = warmLinks(logf, min, max)
+	}
+
+	// Who dials the carriers: direct = edge dials; reverse = exit dials.
+	if engineDialsTransport(fc) {
+		cfg.Dialer = engine.NewDgDialer(fc.Addr, ec, shared, mtu)
+	} else {
+		ln, err := engine.NewDgListener(fc.Addr, ec, shared, mtu)
+		must(err)
+		cfg.Listener = ln
+	}
+
+	if edge {
+		must(engine.RunDgEdge(ctx, cfg))
+	} else {
+		must(engine.RunDgExit(ctx, cfg))
+	}
+}
+
+// engineDialsTransport reports whether THIS side dials the datagram carriers.
+// Direct: the edge (mode=dial) dials. Reverse: the exit (mode=listen) dials.
+func engineDialsTransport(fc fileConfig) bool { return (fc.Mode == "dial") != fc.Reverse }
+
+// encapName is the encapsulation label for logs ("udp" when unset).
+func encapName(fc fileConfig) string {
+	if fc.Encap == "" {
+		return "udp"
+	}
+	return fc.Encap
+}
+
+// ipOfCIDR returns the IP part of a CIDR ("10.77.0.2/30" -> "10.77.0.2").
+func ipOfCIDR(cidr string) string {
+	if i := strings.IndexByte(cidr, '/'); i >= 0 {
+		return cidr[:i]
+	}
+	return cidr
+}
+
+func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {
+	local := core.StaticKey{Public: unhex(fc.LocalPub), Private: unhex(fc.LocalPriv)}
+	if dialing(fc) {
+		d := engine.NewNoiseDialer(fc.Addr, fc.BindLocalIP, local, unhex(fc.RemoteStatic), unhex(fc.PSK))
+		must(eng.RunDial(ctx, d))
+		return
+	}
+	ln, err := engine.NewNoiseListener(fc.Addr, local, unhex(fc.PSK))
+	must(err)
+	must(eng.RunListen(ctx, ln))
+}
+
+// startBuiltinBackend serves an ordinary-looking static site on loopback. Probes
+// that fail tunnel auth are proxied here (already TLS-decrypted), so they get a
+// plain, boring web page from a real HTTP server instead of a tunnel error.
+//
+// The page is per-install: buildCover turns the config's cover_seed into a page
+// whose brand, copy, colours, layout and size vary, so a bulk scanner cannot
+// find every hs2 server by one known sha256 (see cover.go). An empty seed (an
+// old or hand-written config) yields the fixed legacy page, unchanged.
+func startBuiltinBackend(seed string) (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	// The page is fully self-contained: no external fonts, scripts or images —
+	// each of those would be its own request, fingerprint or dependency — with
+	// an inline data-URI favicon, system fonts, light/dark and no JavaScript.
+	// Last-Modified is a seed-derived span in the past, computed at startup from
+	// THIS host's clock and truncated to the hour: relative (not a frozen
+	// absolute date) so it is always earlier than the auto Date header — no
+	// "modified in the future" even on a lagging clock — and the per-install
+	// offset means the "last modified N days ago" distance is not a constant.
+	page, offDays := buildCover(seed, time.Now())
+	modtime := time.Now().Add(-time.Duration(offDays) * 24 * time.Hour).Truncate(time.Hour)
+	// ETag, when set, is SALTED with the seed — NOT a plain hash of the body. A
+	// bare sha256(body) ETag is a single-probe fingerprint: anyone can fetch the
+	// page, hash it, and confirm the server uses hs2's exact rule. Salting keeps
+	// the cache semantics (stable per seed+content, changes when content does)
+	// while making it unpredictable from the body alone, like a real server's
+	// mtime/inode ETag. The seedless legacy page sets NO ETag at all, exactly as
+	// the pre-per-install binary did (un-migrated installs stay byte-for-byte).
+	var etag string
+	if seed != "" {
+		h := sha256.Sum256(append([]byte("hs2-cover-etag\x00"+seed+"\x00"), page...))
+		etag = fmt.Sprintf("%q", hex.EncodeToString(h[:16]))
+	}
+	handler := func(w http.ResponseWriter, r *http.Request) {
+		// Everything but "/" is a plain Go 404, like any static file server. No
+		// Server header is sent: our TLS terminator is Go's, so a stray "nginx"
+		// claim only contradicted that at the TLS layer (Caddy omits it too).
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "max-age=3600")
+		if etag != "" {
+			w.Header().Set("ETag", etag)
+		}
+		// ServeContent gives genuine static-server behaviour for free:
+		// Last-Modified, If-Modified-Since / If-None-Match (304), Content-Length
+		// and range requests.
+		http.ServeContent(w, r, "", modtime, bytes.NewReader(page))
+	}
+	srv := &http.Server{Handler: http.HandlerFunc(handler), ReadHeaderTimeout: 10 * time.Second}
+	go srv.Serve(ln)
+	return ln.Addr().String(), nil
+}
+
+func splitComma(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func unhex(s string) []byte { b, _ := hex.DecodeString(s); return b }
+func must(err error) {
+	if err != nil {
+		encap.ReleaseAllEchoGuards() // log.Fatal exits without running defers
+		log.Fatal(err)
+	}
+}

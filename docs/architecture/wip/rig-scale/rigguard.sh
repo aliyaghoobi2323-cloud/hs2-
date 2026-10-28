@@ -52,7 +52,7 @@ if [ "${m0:-0}" -ge "$ABORT" ]; then
 fi
 
 export RIG_MEM_MAX=$MAX
-systemd-run --scope --quiet --collect --unit="$UNIT" -p MemoryMax="$MAX" -p MemorySwapMax=0 -- "$@" &
+systemd-run --scope --quiet --collect --unit="$UNIT" -p MemoryMax="$MAX" -p MemorySwapMax=0 -p OOMPolicy=continue -- "$@" &
 SR=$!
 # the scope's cgroup (it exists once systemd-run has started CMD)
 CG=""
