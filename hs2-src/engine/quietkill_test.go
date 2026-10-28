@@ -84,8 +84,8 @@ func (k *killRig) busiest() *classPair {
 	return best
 }
 
-// echoOnce sends 8 bytes on st and reads them back within d.
-func echoOnce(st stream, d time.Duration) error {
+// killEcho sends 8 bytes on st and reads them back within d.
+func killEcho(st stream, d time.Duration) error {
 	if dl, ok := st.(interface{ SetDeadline(time.Time) error }); ok {
 		dl.SetDeadline(time.Now().Add(d))
 		defer dl.SetDeadline(time.Time{})
@@ -125,7 +125,7 @@ func killShare(t *testing.T, nq int) (cut, light, hit, users int, downsOK bool) 
 		tag := uint32(1000 + u)
 		for i := 0; i < per; i++ {
 			st := k.open(tag, qpEcho)
-			if err := echoOnce(st, 3*time.Second); err != nil {
+			if err := killEcho(st, 3*time.Second); err != nil {
 				t.Fatalf("user %d light %d: %v", u, i, err)
 			}
 			lights = append(lights, conn{u, st})
@@ -151,7 +151,7 @@ func killShare(t *testing.T, nq int) (cut, light, hit, users int, downsOK bool) 
 	time.Sleep(200 * time.Millisecond)
 	lost := map[int]bool{}
 	for _, c := range lights {
-		if err := echoOnce(c.st, 2*time.Second); err != nil {
+		if err := killEcho(c.st, 2*time.Second); err != nil {
 			cut++
 			lost[c.user] = true
 		}
@@ -193,8 +193,14 @@ func TestQuietKillShare(t *testing.T) {
 					t.Errorf("a moved download stopped with the QUIET link")
 				}
 				// what one death may cut: all of it with one link; with Q
-				// links ~1/Q of the connections (spread evenly: ±1 a link)
-				if want := light / nq; cut < want-per(nq) || cut > want+per(nq) {
+				// links ~1/Q of the connections: by user ±1 user a link; by
+				// count the busiest link (the one cut) may hold up to half
+				// a share more (the moved downloads' slots come free)
+				slack := per(nq)
+				if by == 0 && nq > 1 {
+					slack += light / (2 * nq)
+				}
+				if want := light / nq; cut < want-per(nq) || cut > want+slack {
 					t.Errorf("cut %d of %d light connections, want about %d", cut, light, want)
 				}
 				switch {
@@ -228,8 +234,19 @@ func TestQuietByUserSticky(t *testing.T) {
 	t.Cleanup(func() { QuietByUser.Set(0) })
 	k := newKillRig(t, 2, 4*angleRateBps, 5*time.Millisecond)
 	linkOf := func(st stream) *mtcpLink { return st.(*groupStream).ql }
-	a1, a2, a3 := k.open(1, qpEcho), k.open(1, qpEcho), k.open(1, qpEcho)
-	b1 := k.open(2, qpEcho)
+	var rels []func()
+	open := func(tag uint32) stream {
+		// as a user connection: its slot is given back when it ends
+		ctx := context.WithValue(k.ctx, userTagKey{}, tag)
+		st, _, rel, ok := openStreamOn(ctx, k.lm, false, qpEcho)
+		if !ok {
+			t.Fatal("no stream opened")
+		}
+		rels = append(rels, rel)
+		return st
+	}
+	a1, a2, a3 := open(1), open(1), open(1)
+	b1 := open(2)
 	if linkOf(a1) != linkOf(a2) || linkOf(a1) != linkOf(a3) {
 		t.Fatalf("user 1's connections on more than one QUIET link")
 	}
@@ -250,16 +267,19 @@ func TestQuietByUserSticky(t *testing.T) {
 		}
 	}
 	k.kill(dead)
-	a4 := k.open(1, qpEcho)
-	a5 := k.open(1, qpEcho)
+	a4 := open(1)
+	a5 := open(1)
 	if linkOf(a4) == dead.edge || linkOf(a5) != linkOf(a4) {
 		t.Fatalf("after its link died, user 1 is not on one live link")
 	}
-	if err := echoOnce(a4, 3*time.Second); err != nil {
+	if err := killEcho(a4, 3*time.Second); err != nil {
 		t.Fatal(err)
 	}
 	for _, st := range []stream{a1, a2, a3, b1, a4, a5} {
 		st.Close()
+	}
+	for _, rel := range rels {
+		rel()
 	}
 	waitQuiet(t, "the users let go", func() bool {
 		k.q.mu.Lock()
@@ -356,7 +376,7 @@ func TestQuietHoldCap(t *testing.T) {
 			t.Cleanup(func() { QuietHoldCap.Set(0) })
 			r := newQuietRig(t, 12.5e6, 5*time.Millisecond, false)
 			echo := r.open(9, qpEcho)
-			if err := echoOnce(echo, 3*time.Second); err != nil {
+			if err := killEcho(echo, 3*time.Second); err != nil {
 				t.Fatal(err)
 			}
 			var mu sync.Mutex
@@ -373,7 +393,7 @@ func TestQuietHoldCap(t *testing.T) {
 					case <-time.After(20 * time.Millisecond):
 					}
 					t0 := time.Now()
-					err := echoOnce(echo, 2*time.Second)
+					err := killEcho(echo, 2*time.Second)
 					d := time.Since(t0)
 					mu.Lock()
 					worst = max(worst, d)
