@@ -278,6 +278,46 @@ func TestHostWaitBound(t *testing.T) {
 	}
 }
 
+// TestHostWaitSegs8Cost pins C3's known cost, an OPEN item for the round-4
+// judge (decision T12's price; the R1 red team's finding C3, pass 1): with
+// the judge's default of 8 segments a light frame waits on the host ~95 ms
+// at 1 Mbit/s, past §3.3's 36 ms, on a QUIET link too (HQGQuietSegs -1: a
+// QUIET link's gate is every link's, while SEGS=8's reason, BBR held in
+// STARTUP, is a BULK link's: QUIET links run cubic and carry light
+// traffic; HS2_TUNE_HQG_QUIET_SEGS=0 exists and was never measured on the
+// rig). Not a pass mark: the test holds the number the documents give, so
+// a change that removes the cost fails it here, and the documents (and
+// TestHostWaitBound's bound for the default) are brought along with it.
+func TestHostWaitSegs8Cost(t *testing.T) {
+	hqgVariants[0].with(func() {
+		r := 1 * mbit
+		r1 := time.Duration(3 * 1500 / r * float64(time.Second))
+		g := newHostGate()
+		_, cp, _ := g.Update(r, 1448)
+		most := time.Duration(float64(cp+BulkFrameSize(r)) / r * float64(time.Second))
+		links := []struct {
+			name string
+			segs int
+		}{{"BULK", HQGSegs}, {"QUIET", HQGSegs}}
+		if HQGQuietSegs >= 0 {
+			links[1].segs = HQGQuietSegs
+		}
+		for _, l := range links {
+			if l.segs != HQGSegs {
+				t.Logf("%s link: its own variant (HS2_TUNE_HQG_QUIET_SEGS=%d), not pinned here", l.name, l.segs)
+				continue
+			}
+			worst, on := hostWait(r, 0)
+			t.Logf("OPEN (round-4 judge): %s link, SEGS=%d, 1 Mbit/s: gate %v, a light frame waits up to %v on the host, §3.3's bound %v (the cap and the frame in progress: %v)",
+				l.name, l.segs, on, worst, r1, most)
+			if worst <= r1 || worst > most {
+				t.Fatalf("%s link: the host wait at 1 Mbit/s is %v, no longer the known cost (past §3.3's %v, at most %v): update the documents (merge-prep REPORT, flaky.fa.md) and TestHostWaitBound",
+					l.name, worst, r1, most)
+			}
+		}
+	})
+}
+
 // adaptRun runs a link's runner end to end on synthetic TCP_INFO readings
 // each 100 ms (a busy socket delivering from Mbit/s, to Mbit/s from drop
 // on, no sample app-limited): C4-lite's reading (sendCapLink.step) moves
