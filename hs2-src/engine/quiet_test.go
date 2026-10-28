@@ -538,7 +538,7 @@ func TestQuietCounts(t *testing.T) {
 		if lm.bulkMax() != c.max || lm.quietWant() != 0 || lm.ctlTarget() != lm.Target() {
 			t.Fatalf("max_links %d with a level 1 peer: BULK max %d, QUIET %d", c.max, lm.bulkMax(), lm.quietWant())
 		}
-		if _, _, ok := q.pick(nil); ok {
+		if _, _, ok := q.pick(nil, 0); ok {
 			t.Fatal("a QUIET pick with a level 1 peer")
 		}
 	}
