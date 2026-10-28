@@ -11,7 +11,7 @@ D=${1:-/root/hs2-wt/r1-r3j/docs/architecture/wip/r1/round3-judge}
 S=/root/r3j
 mkdir -p "$D"
 cd "$S"
-for b in P1 D1 D2 P2a C1 C2 C3 D3 D4 D5 D6 C4 C5 F1 F2 F3 G1 F7 F4 F5 F6 F2b; do
+for b in P1 D1 D2 P2a C1 C2 C3 D3 D4 D5 D6 C4 C5 F1 F2 F3 G1 F7 F4 G2 F5 F6 F2b G3 G4; do
   [ -d "$b" ] || continue
   mkdir -p "$D/$b"
   for f in plan.txt schedule.tsv orch.log run.log host.txt res.dropped.jsonl; do

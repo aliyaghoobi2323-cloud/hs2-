@@ -1,0 +1,10 @@
+14:25:12 plan /root/r3j/G3/plan.txt: 4 runs
+14:25:12 start f4fb6861-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 1.01 waited 0s
+14:25:58 done f4fb6861-j3g-1 ok=1 
+14:25:59 start f4fb6861-j3gq4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3gq4) load 2.28 waited 0s
+14:26:44 done f4fb6861-j3gq4-1 ok=1 
+14:26:45 start f4fb6861-j3gq4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3gq4) load 2.68 waited 0s
+14:27:30 done f4fb6861-j3gq4-2 ok=1 
+14:27:31 start f4fb6861-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 2.65 waited 0s
+14:28:16 done f4fb6861-j3g-2 ok=1 
+14:28:16 done /root/r3j/G3/plan.txt
