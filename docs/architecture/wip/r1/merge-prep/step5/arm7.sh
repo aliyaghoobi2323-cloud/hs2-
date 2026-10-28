@@ -1,6 +1,7 @@
 #!/bin/bash
 # arm7.sh — R1 step 5: arm7 (GOARCH=arm GOARM=7). One command:
-#   docs/architecture/wip/r1/merge-prep/step5/arm7.sh
+#   docs/architecture/wip/r1/merge-prep/step5/arm7.sh [engine tlscarrier core cmd-hs2 smux]
+# (no argument: all five; one at a time fits a short gap of the rig lock)
 # 1. the static binary (CGO_ENABLED=0, BUILD.md's flags), its sha256;
 # 2. the test binaries of the packages R1 changed, built for arm7;
 # 3. with qemu-user (qemu-arm or qemu-arm-static), each run under it with
@@ -47,7 +48,7 @@ run() {
 		awk '/^    [^ ].*\.go:[0-9]+: /{r=$0; sub(/^ +[^:]+:[0-9]+: /,"",r)} /^--- SKIP: /{print "   skip " $3 ": " r; r=""} /^=== RUN/{r=""}' "$1" | head -80
 	}
 	fail=0
-	for t in engine tlscarrier core cmd-hs2 smux; do
+	for t in $PKGS; do
 		dir=$t; [ $t = cmd-hs2 ] && dir=cmd/hs2; [ $t = smux ] && dir=third_party/smux
 		args="-test.short -test.count=1 -test.timeout=40m -test.v"
 		[ $t = engine ] && args="$args -test.run $ARM7_RUN"
@@ -67,8 +68,8 @@ run() {
 	exit $fail
 }
 {
-	step5_head "arm7 (GOARCH=arm GOARM=7)"
-	step5_guard bash -c "$(declare -f run); BIN='$BIN' QEMU='$QEMU' ARM7_RUN='$ARM7_RUN' SRC='$SRC' run"
+	step5_head "arm7 (GOARCH=arm GOARM=7): ${*:-engine tlscarrier core cmd-hs2 smux}"
+	step5_guard bash -c "$(declare -f run); BIN='$BIN' QEMU='$QEMU' ARM7_RUN='$ARM7_RUN' SRC='$SRC' PKGS='${*:-engine tlscarrier core cmd-hs2 smux}' run"
 	rc=$?
 	echo "== exit $rc"
 } > "$OUT" 2>&1
