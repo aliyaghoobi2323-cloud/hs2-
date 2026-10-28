@@ -221,7 +221,12 @@ func TestSchedCoalesceJitter(t *testing.T) {
 			t.Fatalf("hold %d: %d flushes", i, len(fl))
 		}
 		d := fl[0].Sub(t0)
-		lo, hi = min(lo, d), max(hi, d)
+		if d < lo {
+			lo = d
+		}
+		if d > hi {
+			hi = d
+		}
 		if d < win/2-5*time.Millisecond || d > win*3/2+30*time.Millisecond {
 			t.Fatalf("hold %d: %v, want within [%v, %v)", i, d, win/2, win*3/2)
 		}

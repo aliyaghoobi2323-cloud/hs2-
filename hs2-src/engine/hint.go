@@ -55,10 +55,10 @@ var TuneMoveHint = 1
 func MoveHintOff() bool { return TuneMoveHint == 0 || QuietOff() }
 
 const (
-	kindHint   byte = 11
-	hintMsgLen      = 8
-	hintVer         = 1
-	hintBacklog     = 1
+	kindHint    byte = 11
+	hintMsgLen       = 8
+	hintVer          = 1
+	hintBacklog      = 1
 	// hintWriteMin: a write this big is a chunk of a backlog (the relay's
 	// buffer is 32 KiB; an app-limited flow's writes are its own frames)
 	hintWriteMin = 8 << 10
