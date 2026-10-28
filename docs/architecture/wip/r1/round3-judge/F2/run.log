@@ -1,0 +1,26 @@
+11:05:41 plan /root/r3j/F2/plan.txt: 12 runs
+11:05:42 start bded2768-old-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=old) load 0.94 waited 0s
+11:06:36 done bded2768-old-1 ok=1 
+11:06:37 start bded2768-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 2.02 waited 0s
+11:07:31 done bded2768-prod-1 ok=1 
+11:07:32 start bded2768-b2nx-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=b2nx) load 2.39 waited 0s
+11:08:27 done bded2768-b2nx-1 ok=1 
+11:08:27 start bded2768-g1e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=g1e) load 2.98 waited 0s
+11:09:22 done bded2768-g1e-1 ok=1 
+11:09:23 start bded2768-g2e-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=g2e) load 2.12 waited 0s
+11:10:17 done bded2768-g2e-1 ok=1 
+11:10:18 start bded2768-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3) load 2.37 waited 0s
+11:11:12 done bded2768-j3-1 ok=1 
+11:11:13 start bded2768-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3) load 3.01 waited 0s
+11:12:07 done bded2768-j3-2 ok=1 
+11:12:08 start bded2768-g2e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=g2e) load 3.34 waited 0s
+11:13:03 done bded2768-g2e-2 ok=1 
+11:13:03 start bded2768-g1e-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=g1e) load 3.06 waited 0s
+11:13:58 done bded2768-g1e-2 ok=1 
+11:13:59 start bded2768-b2nx-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=b2nx) load 2.07 waited 0s
+11:14:53 done bded2768-b2nx-2 ok=1 
+11:14:54 start bded2768-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 2.21 waited 0s
+11:15:48 done bded2768-prod-2 ok=1 
+11:15:49 start bded2768-old-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=old) load 3.56 waited 0s
+11:16:44 done bded2768-old-2 ok=1 
+11:16:44 done /root/r3j/F2/plan.txt

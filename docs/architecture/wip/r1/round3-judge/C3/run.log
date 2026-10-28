@@ -1,0 +1,22 @@
+09:37:54 plan /root/r3j/C3/plan.txt: 10 runs
+09:37:55 start a0318ff0-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 1.20 waited 0s
+09:38:30 done a0318ff0-j3-1 ok=1 
+09:38:30 start a0318ff0-j3nb-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nb) load 1.25 waited 0s
+09:39:05 done a0318ff0-j3nb-1 ok=1 
+09:39:06 start a0318ff0-j3nb-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nb) load 1.25 waited 0s
+09:39:41 done a0318ff0-j3nb-2 ok=1 
+09:39:42 start a0318ff0-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 2.33 waited 0s
+09:40:17 done a0318ff0-j3-2 ok=1 
+09:40:17 start 5f52d2fc-j3-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 2.06 waited 0s
+09:40:53 done 5f52d2fc-j3-1 ok=1 
+09:40:54 start 5f52d2fc-j3nb-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nb) load 2.99 waited 0s
+09:41:29 done 5f52d2fc-j3nb-1 ok=1 
+09:41:30 start 5f52d2fc-j3nb-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3nb) load 2.64 waited 0s
+09:42:05 done 5f52d2fc-j3nb-2 ok=1 
+09:42:06 start 5f52d2fc-j3-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 2.64 waited 0s
+09:42:42 done 5f52d2fc-j3-2 ok=1 
+09:42:43 start 3305f1f0-j3-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 3.00 waited 0s
+09:43:12 done 3305f1f0-j3-1 ok=1 
+09:43:13 start 3305f1f0-j3-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 2.43 waited 0s
+09:43:42 done 3305f1f0-j3-2 ok=1 
+09:43:42 done /root/r3j/C3/plan.txt

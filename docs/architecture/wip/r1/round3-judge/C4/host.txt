@@ -1,0 +1,30 @@
+== start 2026-10-28T10:13:47+00:00
+ 10:13:47 up 23:08,  4 users,  load average: 0.87, 1.53, 1.81
+top - 10:13:48 up 23:08,  4 users,  load average: 0.87, 1.53, 1.81
+Tasks: 247 total,   1 running, 246 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.9 us,  4.5 sy,  0.0 ni, 89.4 id,  0.0 wa,  0.0 hi,  2.2 si,  0.0 st 
+MiB Mem :  23456.9 total,  13759.7 free,   1367.7 used,   8745.9 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22089.2 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1436689 root      20   0 1501692 266720  29296 S  62.7   1.1   2:40.85 xray-linux-amd6
+    992 root      20   0 1476816 173740  10500 S  56.9   0.7      6,18 hs2
+1441598 root      20   0 2453596  36484  15608 S  25.5   0.2   0:17.28 engine.test
+1442472 root      20   0   11908   6036   3884 R   5.9   0.0   0:00.04 top
+  13068 systemd+  20   0   22736  14672  11144 S   2.0   0.1   5:56.32 systemd-resolve
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:48.59 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.14 kthreadd
+== end 2026-10-28T10:18:24+00:00
+ 10:18:24 up 23:13,  4 users,  load average: 2.31, 2.43, 2.15
+top - 10:18:24 up 23:13,  3 users,  load average: 2.31, 2.43, 2.15
+Tasks: 242 total,   1 running, 241 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  5.7 us,  5.7 sy,  0.0 ni, 84.8 id,  0.0 wa,  0.0 hi,  3.8 si,  0.0 st 
+MiB Mem :  23456.9 total,  13784.5 free,   1364.5 used,   8724.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22092.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1436689 root      20   0 1568268 290236  29296 S  98.0   1.2   4:48.36 xray-linux-amd6
+    992 root      20   0 1476816 186764  10500 S  78.4   0.8      6,20 hs2
+    916 root      20   0 1083464 101916  79044 S   2.0   0.4   2:36.76 fail2ban-server
+  13068 systemd+  20   0   22736  14672  11144 S   2.0   0.1   5:57.56 systemd-resolve
+1459554 root      20   0   11908   6032   3880 R   2.0   0.0   0:00.03 top
+      1 root      20   0   22656  14164   9776 S   0.0   0.1   1:49.02 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.14 kthreadd

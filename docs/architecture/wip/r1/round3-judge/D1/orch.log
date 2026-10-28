@@ -1,0 +1,6 @@
+taken
+08:44:00 lock taken, plan /root/r3j/D1/plan.txt, SIGQUIT at 22s
+08:44:24 SIGQUIT edge 1340905 exit 1340935 (/tmp/rig-scaleq/a0318ff0-old-1)
+08:45:00 SIGQUIT edge 1341627 exit 1341697 (/tmp/rig-scaleq/a0318ff0-prod-1)
+08:45:35 SIGQUIT edge 1342438 exit 1342463 (/tmp/rig-scaleq/5f52d2fc-prod-1)
+08:47:28 lock released after 208s

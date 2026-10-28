@@ -1,0 +1,34 @@
+09:53:33 plan /root/r3j/D4/plan.txt: 16 runs
+09:53:34 start a0318ff0-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 3.02 waited 0s
+09:54:08 done a0318ff0-j3-1 ok=1 
+09:54:09 start a0318ff0-j3c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3c4) load 2.43 waited 0s
+09:54:44 done a0318ff0-j3c4-1 ok=1 
+09:54:45 start a0318ff0-j3hg-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3hg) load 1.95 waited 0s
+09:55:20 done a0318ff0-j3hg-1 ok=1 
+09:55:20 start a0318ff0-j3c4hg-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3c4hg) load 1.90 waited 0s
+09:55:55 done a0318ff0-j3c4hg-1 ok=1 
+09:55:56 start a0318ff0-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 2.32 waited 0s
+09:56:31 done a0318ff0-prod-1 ok=1 
+09:56:32 start a0318ff0-prodfix-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prodfix) load 1.51 waited 0s
+09:57:06 done a0318ff0-prodfix-1 ok=1 
+09:57:07 start a0318ff0-prodfix-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prodfix) load 1.96 waited 0s
+09:57:42 done a0318ff0-prodfix-2 ok=1 
+09:57:43 start a0318ff0-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 3.04 waited 0s
+09:58:23 done a0318ff0-prod-2 ok=1 
+09:58:23 start a0318ff0-j3c4hg-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3c4hg) load 2.36 waited 0s
+09:58:58 done a0318ff0-j3c4hg-2 ok=1 
+09:58:59 start a0318ff0-j3hg-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3hg) load 1.68 waited 0s
+09:59:34 done a0318ff0-j3hg-2 ok=1 
+09:59:35 start a0318ff0-j3c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3c4) load 2.06 waited 0s
+10:00:10 done a0318ff0-j3c4-2 ok=1 
+10:00:10 start a0318ff0-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3) load 2.24 waited 0s
+10:00:45 done a0318ff0-j3-2 ok=1 
+10:00:46 start 5f52d2fc-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 1.72 waited 0s
+10:01:21 done 5f52d2fc-prod-1 ok=1 
+10:01:22 start 5f52d2fc-prodfix-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prodfix) load 1.67 waited 0s
+10:01:58 done 5f52d2fc-prodfix-1 ok=1 
+10:01:58 start 5f52d2fc-prodfix-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prodfix) load 2.47 waited 0s
+10:02:34 done 5f52d2fc-prodfix-2 ok=1 
+10:02:35 start 5f52d2fc-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 2.32 waited 0s
+10:03:10 done 5f52d2fc-prod-2 ok=1 
+10:03:10 done /root/r3j/D4/plan.txt

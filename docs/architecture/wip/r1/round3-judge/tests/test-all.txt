@@ -1,0 +1,2657 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.445s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/core	0.053s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/encap	29.446s
+--- FAIL: TestAngleSameLinkProbe (14.01s)
+    angle_test.go:426: probe p50 64.878599ms p99 70.375431ms (60 samples); down 9.94 up 9.94 Mbit/s; most unsent at a write down/up 11584/11584 B
+    angle_test.go:432: probe p99 70.375431ms, want <= 60ms (RTT 40ms + 20 ms)
+--- FAIL: TestAngleTunPingAheadOfBulk (6.04s)
+    angle_tun_test.go:327: ping one-way p50 32.690606ms p99 36.27633ms (80); TUN bulk in 4.74 Mbit/s; drops light/bulk 0/2995
+    angle_tun_test.go:330: ping p99 one-way 36.27633ms, want <= 30ms
+--- FAIL: TestLowatAdaptsLinux (0.00s)
+    hostq_linux_test.go:88: the socket's mark 25000 → 1448 B -1ns after the drop
+    hostq_linux_test.go:90: the socket's mark was 11584 after the drop (want 1448 within 600 ms; at -1ns)
+--- FAIL: TestHostQLinuxSocket (0.00s)
+    hostq_linux_test.go:139: gate true cap 11584
+--- FAIL: TestHostWaitBound (0.00s)
+    hostq_test.go:233:    1 Mbit/s (from   0): gate true  worst wait 95.487ms, bound 36ms
+    hostq_test.go:235: 1 Mbit/s (from 0): a light frame waited 95.487ms on the host, more than 36ms
+--- FAIL: TestLowatAdapts (0.00s)
+    hostq_test.go:295: 100 → 10 Mbit/s at 2.1s: the mark, gate and cap followed -1ns after (want ≤ 600 ms; -1: never)
+--- FAIL: TestHostQStatusLine (0.00s)
+    hostq_test.go:396: "hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.00"
+panic: test timed out after 10m0s
+	running tests:
+		TestControlKeepsWaitingOnAStuckWriter (23s)
+
+goroutine 14189 [running]:
+testing.(*M).startAlarm.func1()
+	/usr/local/go/src/testing/testing.go:2961 +0x34a
+created by time.goFunc
+	/usr/local/go/src/time/sleep.go:182 +0x2d
+
+goroutine 1 [chan receive]:
+testing.(*T).Run(0x18408150c248, {0xc3fb8c?, 0x184081505950?}, 0x13752c8)
+	/usr/local/go/src/testing/testing.go:2268 +0x4f2
+testing.runTests.func1(0x18408150c248)
+	/usr/local/go/src/testing/testing.go:2744 +0x37
+testing.tRunner(0x18408150c248, 0x184081505a78)
+	/usr/local/go/src/testing/testing.go:2195 +0xea
+testing.runTests({0xc4c285, 0x2e}, {0xc53326, 0x35}, 0x18408141e1b0, {0x14101d0, 0x2c7, 0x2c7}, {0xc2b094e11000ffcd, 0x8bb2e997cc, ...})
+	/usr/local/go/src/testing/testing.go:2742 +0x510
+testing.(*M).Run(0x1840814d8320)
+	/usr/local/go/src/testing/testing.go:2602 +0x6af
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestMain(0x1840814d8320)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/main_test.go:27 +0x174
+main.main()
+	_testmain.go:1490 +0xa5
+
+goroutine 21 [chan receive]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*guardSet).run(0x1416860)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/wedge.go:222 +0x9f
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*guardSet).add.func1 in goroutine 9
+	/root/hs2-wt/r1-r3j/hs2-src/engine/wedge.go:210 +0x5f
+
+goroutine 22 [chan receive]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*wcSet).run(0x1417800)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/wcore_run.go:434 +0x94
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*wcSet).add.func2 in goroutine 9
+	/root/hs2-wt/r1-r3j/hs2-src/engine/wcore_run.go:326 +0x5f
+
+goroutine 23 [chan receive]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*coreSet).run(0x1415f80)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/linksched.go:424 +0xac
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*coreSet).add.func1 in goroutine 9
+	/root/hs2-wt/r1-r3j/hs2-src/engine/linksched.go:395 +0x5f
+
+goroutine 1026 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x18408150c6c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1003 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840818026c8, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1092 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d2008, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1035 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150d448, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1600 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817c4008, 0x184081d64338, 0x184081d64360, 0x184081d64448, 0x184081d64428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 765
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 823 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2afc8, 0x184084e865b8, 0x184084e865e0, 0x184084e866c8, 0x184084e866a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1684 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081d64288, {0x1372e20, 0x184081d7a410}, 0x184081729448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 766
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1030 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x18408150cd88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1093 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840817d2008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1024 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084f71188?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x18408150c488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 858 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084df8508?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8508, {0x1372e20, 0x184084dac0a0}, 0x184084db2d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1045 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2a248, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 987 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd7688, 0x184084e860b8, 0x184084e860e0, 0x184084e861c8, 0x184084e861a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 831 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2b8c8, 0x184084e865b8, 0x184084e865e0, 0x184084e866c8, 0x184084e866a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1183 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081622248, 0x184084f71738, 0x184084f71760, 0x184084f71848, 0x184084f71828)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 983 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd7208, 0x184084e860b8, 0x184084e860e0, 0x184084e861c8, 0x184084e861a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1033 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150d208, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1379 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081622d88, 0x1840817de5b8, 0x1840817de5e0, 0x1840817de6c8, 0x1840817de6a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1186 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71408, {0x1372e20, 0x184084a0d040}, 0x184081622488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1047 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2a488, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 829 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2b688, 0x184084e86838, 0x184084e86860, 0x184084e86948, 0x184084e86928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 988 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86008, {0x1372e20, 0x184084a0c050}, 0x184085fd7688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1164 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x18408197e0b8?, {0x184081a82000, 0x5f8, 0x184084ed8d88?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x18408197e008, {0x1372e20, 0x184081517270})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgExit in goroutine 1163
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2250 +0x1a8
+
+goroutine 991 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd7b08, 0x184084e860b8, 0x184084e860e0, 0x184084e861c8, 0x184084e861a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1177 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed9208, 0x184084f714b8, 0x184084f714e0, 0x184084f715c8, 0x184084f715a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 979 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd6d88, 0x184084e860b8, 0x184084e860e0, 0x184084e861c8, 0x184084e861a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1187 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840816226c8, 0x184084f71738, 0x184084f71760, 0x184084f71848, 0x184084f71828)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 781 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150c908, 0x184084e87238, 0x184084e87260, 0x184084e87348, 0x184084e87328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 897
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 865 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db3688, 0x184084df85b8, 0x184084df85e0, 0x184084df86c8, 0x184084df86a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 854 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084df8508?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8508, {0x1372e20, 0x184084dac0a0}, 0x184084db2908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1031 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150cfc8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 827 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2b448, 0x184084e865b8, 0x184084e865e0, 0x184084e866c8, 0x184084e866a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1686 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081d64288, {0x1372e20, 0x184081d7a410}, 0x184081729688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 767
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1180 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71688, {0x1372e20, 0x184084a0d040}, 0x184085fd6908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 855 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db2b48, 0x184084df8338, 0x184084df8360, 0x184084df8448, 0x184084df8428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 857 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db2d88, 0x184084df85b8, 0x184084df85e0, 0x184084df86c8, 0x184084df86a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1036 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x18408150d448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 856 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8288, {0x1372e20, 0x184084dac0a0}, 0x184084db2b48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1046 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084a2a248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1032 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x18408150cfc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1028 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084f71188?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x18408150cb48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 859 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db2fc8, 0x184084df8338, 0x184084df8360, 0x184084df8448, 0x184084df8428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 833 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2bb08, 0x184084e86838, 0x184084e86860, 0x184084e86948, 0x184084e86928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1176 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71688, {0x1372e20, 0x184084a0d040}, 0x184084ed8fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1185 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081622488, 0x184084f714b8, 0x184084f714e0, 0x184084f715c8, 0x184084f715a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1043 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2a008, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 869 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db3b08, 0x184084df85b8, 0x184084df85e0, 0x184084df86c8, 0x184084df86a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 866 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084df8508?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8508, {0x1372e20, 0x184084dac0a0}, 0x184084db3688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1002 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081802488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 851 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db26c8, 0x184084df8338, 0x184084df8360, 0x184084df8448, 0x184084df8428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1000 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081802248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1037 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150d688, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 14203 [select]:
+github.com/xtaci/smux.(*Stream).waitRead(0x184089ec2dc8)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/stream.go:671 +0x1b2
+github.com/xtaci/smux.(*Stream).Read(0x184089ec2dc8, {0x1840894448f0, 0x10, 0x10})
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/stream.go:169 +0x85
+io.ReadAtLeast({0x136e378, 0x184089ec2dc8}, {0x1840894448f0, 0x10, 0x10}, 0x10)
+	/usr/local/go/src/io/io.go:335 +0x83
+io.ReadFull(...)
+	/usr/local/go/src/io/io.go:354
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestControlKeepsWaitingOnAStuckWriter.func1()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stuck_test.go:668 +0xce
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestControlKeepsWaitingOnAStuckWriter in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stuck_test.go:659 +0x376
+
+goroutine 943 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70788, {0x1372e20, 0x184084d102d0}, 0x184085fd6248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 921
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1034 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x18408150d208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1027 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150cb48, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1040 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x18408150d8c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 864 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8288, {0x1372e20, 0x184084dac0a0}, 0x184084db3448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 830 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084e86788?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86788, {0x1372e20, 0x184084a0c3c0}, 0x184084a2b688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1017 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084e1d8c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 990 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86288, {0x1372e20, 0x184084a0c050}, 0x184085fd78c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 931 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70788, {0x1372e20, 0x184084d102d0}, 0x184084d1b448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 921
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1044 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084a2a008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 993 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd7d48, 0x184084e86338, 0x184084e86360, 0x184084e86448, 0x184084e86428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1038 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x18408150d688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1042 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x18408150db08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 867 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db38c8, 0x184084df8338, 0x184084df8360, 0x184084df8448, 0x184084df8428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 989 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd78c8, 0x184084e86338, 0x184084e86360, 0x184084e86448, 0x184084e86428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 824 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86508, {0x1372e20, 0x184084a0c3c0}, 0x184084a2afc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1382 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x1840817de788?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817de788, {0x1372e20, 0x184081517310}, 0x184081622fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1019 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084e1db08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 980 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86008, {0x1372e20, 0x184084a0c050}, 0x184085fd6d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1655 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x18408374c6c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1647
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 828 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86508, {0x1372e20, 0x184084a0c3c0}, 0x184084a2b448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 994 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86288, {0x1372e20, 0x184084a0c050}, 0x184085fd7d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1059 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed9448, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1060 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084ed9448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 832 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86508, {0x1372e20, 0x184084a0c3c0}, 0x184084a2b8c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 971 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e1cb48, 0x184084f70d38, 0x184084f70d60, 0x184084f70e48, 0x184084f70e28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 966
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1188 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71688, {0x1372e20, 0x184084a0d040}, 0x1840816226c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 861 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db3208, 0x184084df85b8, 0x184084df85e0, 0x184084df86c8, 0x184084df86a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 826 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084e86788?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86788, {0x1372e20, 0x184084a0c3c0}, 0x184084a2b208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1039 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150d8c8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 863 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db3448, 0x184084df8338, 0x184084df8360, 0x184084df8448, 0x184084df8428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1041 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150db08, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 981 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd6fc8, 0x184084e86338, 0x184084e86360, 0x184084e86448, 0x184084e86428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1178 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71408, {0x1372e20, 0x184084a0d040}, 0x184084ed9208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1018 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e1db08, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 769 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081729208, 0x184081d64338, 0x184081d64360, 0x184081d64448, 0x184081d64428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 768
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 930 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084d1b448, 0x184084f70838, 0x184084f70860, 0x184084f70948, 0x184084f70928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 921
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 862 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084df8508?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8508, {0x1372e20, 0x184084dac0a0}, 0x184084db3208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1520 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081683208, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1643
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 992 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86008, {0x1372e20, 0x184084a0c050}, 0x184085fd7b08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 986 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86288, {0x1372e20, 0x184084a0c050}, 0x184085fd7448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 999 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081802248, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1025 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150c6c8, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1006 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081802908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1029 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150cd88, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 985 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd7448, 0x184084e86338, 0x184084e86360, 0x184084e86448, 0x184084e86428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 683 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197e508, {0x1372e20, 0x18408161e050}, 0x1840817a0908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 860 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8288, {0x1372e20, 0x184084dac0a0}, 0x184084db2fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1175 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed8fc8, 0x184084f71738, 0x184084f71760, 0x184084f71848, 0x184084f71828)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 996 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840817d2248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1380 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817de508, {0x1372e20, 0x184081517310}, 0x184081622d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 928 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084d1b208, 0x184084f705b8, 0x184084f705e0, 0x184084f706c8, 0x184084f706a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 921
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 950 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x1840817de008?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817de008, {0x1372e20, 0x184084dac640}, 0x1840817a0248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestDgEchoDirectEdgePullsRequests in goroutine 949
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgecho_test.go:114 +0x351
+
+goroutine 1682 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081d64288, {0x1372e20, 0x184081d7a410}, 0x184081729208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 768
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1203 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184084df94b8?, {0x184081746000, 0x5f8, 0x184081d800e0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184084df9408, {0x1372e20, 0x184084a0d720})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgExit in goroutine 1202
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2250 +0x1a8
+
+goroutine 984 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86008, {0x1372e20, 0x184084a0c050}, 0x184085fd7208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 982 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084e86288?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86288, {0x1372e20, 0x184084a0c050}, 0x184085fd6fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 704
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1090 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081688fc8, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1530 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x1840816919b8?, {0x1840817b3000, 0x5f8, 0x184084dfc050?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184081691908, {0x1372e20, 0x184082c84870})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgExit in goroutine 1529
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2250 +0x1a8
+
+goroutine 852 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8288, {0x1372e20, 0x184084dac0a0}, 0x184084db26c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 759 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081728488, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1649
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 825 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2b208, 0x184084e86838, 0x184084e86860, 0x184084e86948, 0x184084e86928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 761 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081728d88, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1650
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1182 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71408, {0x1372e20, 0x184084a0d040}, 0x184081622008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1683 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081729448, 0x184081d64338, 0x184081d64360, 0x184081d64448, 0x184081d64428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 766
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1181 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081622008, 0x184084f714b8, 0x184084f714e0, 0x184084f715c8, 0x184084f715a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1381 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081622fc8, 0x1840817de838, 0x1840817de860, 0x1840817de948, 0x1840817de928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1198 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084df9188?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df9188, {0x1372e20, 0x184084a0d630}, 0x18408171eb48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestDgEchoReverseEdgeReplyPerRequest in goroutine 1197
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgecho_test.go:77 +0x34e
+
+goroutine 1184 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71688, {0x1372e20, 0x184084a0d040}, 0x184081622248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1091 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081688fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 942 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd6248, 0x184084f70838, 0x184084f70860, 0x184084f70948, 0x184084f70928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 921
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 868 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8288, {0x1372e20, 0x184084dac0a0}, 0x184084db38c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1179 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184085fd6908, 0x184084f71738, 0x184084f71760, 0x184084f71848, 0x184084f71828)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1170
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1426 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8a248, 0x1840817df4b8, 0x1840817df4e0, 0x1840817df5c8, 0x1840817df5a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1423
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 682 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a0908, 0x18408197e5b8, 0x18408197e5e0, 0x18408197e6c8, 0x18408197e6a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1023 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408150c488, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 929 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084f70508?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70508, {0x1372e20, 0x184084d102d0}, 0x184084d1b208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 921
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1016 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e1d8c8, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1022 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084e1dd48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 782 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e87188, {0x1372e20, 0x184084a0cb40}, 0x18408150c908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 897
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1021 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e1dd48, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 853 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db2908, 0x184084df85b8, 0x184084df85e0, 0x184084df86c8, 0x184084df86a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1004 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840818026c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 972 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70c88, {0x1372e20, 0x1840815161e0}, 0x184084e1cb48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 966
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 997 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081802008, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 998 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081802008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 760 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x184081728488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1649
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1685 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081729688, 0x184081d64338, 0x184081d64360, 0x184081d64448, 0x184081d64428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 767
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1001 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081802488, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 762 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x184081728d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1650
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1698 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817c46c8, 0x184081d64338, 0x184081d64360, 0x184081d64448, 0x184081d64428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1615
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 834 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86788, {0x1372e20, 0x184084a0c3c0}, 0x184084a2bb08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 835 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2bd48, 0x184084e865b8, 0x184084e865e0, 0x184084e866c8, 0x184084e866a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 836 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86508, {0x1372e20, 0x184084a0c3c0}, 0x184084a2bd48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 837 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e8e008, 0x184084e86838, 0x184084e86860, 0x184084e86948, 0x184084e86928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 838 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86788, {0x1372e20, 0x184084a0c3c0}, 0x184084e8e008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 820
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 870 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8508, {0x1372e20, 0x184084dac0a0}, 0x184084db3b08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 871 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db3d48, 0x184084df8338, 0x184084df8360, 0x184084df8448, 0x184084df8428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 872 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8288, {0x1372e20, 0x184084dac0a0}, 0x184084db3d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 873 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e1c008, 0x184084df85b8, 0x184084df85e0, 0x184084df86c8, 0x184084df86a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 874 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8508, {0x1372e20, 0x184084dac0a0}, 0x184084e1c008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 875 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e1c248, 0x184084df8338, 0x184084df8360, 0x184084df8448, 0x184084df8428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 876 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8288, {0x1372e20, 0x184084dac0a0}, 0x184084e1c248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 877 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e1c488, 0x184084df85b8, 0x184084df85e0, 0x184084df86c8, 0x184084df86a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 878 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x184084df8508?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df8508, {0x1372e20, 0x184084dac0a0}, 0x184084e1c488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 496
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1300 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817de508, {0x1372e20, 0x184081517310}, 0x184081688908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 914 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70008, {0x1372e20, 0x184084d100a0}, 0x184084d1a248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 844 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e8e6c8, 0x184084e86d38, 0x184084e86d60, 0x184084e86e48, 0x184084e86e28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 845 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86c88, {0x1372e20, 0x184084a0c730}, 0x184084e8e6c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 913 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084d1a008, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 848 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e8eb48, 0x184084e86d38, 0x184084e86d60, 0x184084e86e48, 0x184084e86e28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 849 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86c88, {0x1372e20, 0x184084a0c730}, 0x184084e8eb48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 884 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e8efc8, 0x184084e86d38, 0x184084e86d60, 0x184084e86e48, 0x184084e86e28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 885 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86c88, {0x1372e20, 0x184084a0c730}, 0x184084e8efc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 886 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e8f208, 0x184084e86ab8, 0x184084e86ae0, 0x184084e86bc8, 0x184084e86ba8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 887 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86a08, {0x1372e20, 0x184084a0c730}, 0x184084e8f208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 888 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084e8f448, 0x184084e86d38, 0x184084e86d60, 0x184084e86e48, 0x184084e86e28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 889 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86c88, {0x1372e20, 0x184084a0c730}, 0x184084e8f448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 839
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1058 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084d1a008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1301 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081689448, 0x1840817de838, 0x1840817de860, 0x1840817de948, 0x1840817de928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 801 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084d1a248, 0x184084f700b8, 0x184084f700e0, 0x184084f701c8, 0x184084f701a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1299 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081688908, 0x1840817de5b8, 0x1840817de5e0, 0x1840817de6c8, 0x1840817de6a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1302 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817de788, {0x1372e20, 0x184081517310}, 0x184081689448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 995 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d2248, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 900 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed8008, 0x184084e87238, 0x184084e87260, 0x184084e87348, 0x184084e87328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 901 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e87188, {0x1372e20, 0x184084a0cb40}, 0x184084ed8008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 904 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed8488, 0x184084e87238, 0x184084e87260, 0x184084e87348, 0x184084e87328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 905 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e87188, {0x1372e20, 0x184084a0cb40}, 0x184084ed8488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1061 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed9688, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 908 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed8908, 0x184084e87238, 0x184084e87260, 0x184084e87348, 0x184084e87328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 909 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e87188, {0x1372e20, 0x184084a0cb40}, 0x184084ed8908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 894
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1062 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084ed9688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 911 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed8b48, 0x184084e86fb8, 0x184084e86fe0, 0x184084e870c8, 0x184084e870a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 910
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 912 [select, 8 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084e86f08, {0x1372e20, 0x184084a0cb40}, 0x184084ed8b48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 910
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 14196 [sleep]:
+time.Sleep(0x6fc23ac00)
+	/usr/local/go/src/runtime/time.go:368 +0x165
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestControlKeepsWaitingOnAStuckWriter(0x184089e8e6c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stuck_test.go:693 +0x589
+testing.tRunner(0x184089e8e6c8, 0x13752c8)
+	/usr/local/go/src/testing/testing.go:2195 +0xea
+created by testing.(*T).Run in goroutine 1
+	/usr/local/go/src/testing/testing.go:2260 +0x4d4
+
+goroutine 1619 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df9b88, {0x1372e20, 0x18408161ec30}, 0x184081728008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1501
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1598 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817c5d48, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1648
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1005 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081802908, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1048 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084a2a488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1049 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2a6c8, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1050 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084a2a6c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1051 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2a908, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1052 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084a2a908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1053 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084a2ab48, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1054 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084a2ab48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1055 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084db2008, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1056 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084db2008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1063 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed98c8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1064 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084ed98c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1065 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed9b08, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1066 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184084ed9b08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1067 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184084ed9d48, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1068 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184084ed9d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1069 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081688008, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1070 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081688008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1071 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081688248, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1072 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081688248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1073 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081688488, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1074 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081688488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1075 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840816886c8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1076 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840816886c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1077 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081688b48, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1078 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081688b48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1079 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081688d88, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1080 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081688d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1007 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081802b48, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1008 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081802b48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1009 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081689208, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1106 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081689208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1057 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081802d88, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1122 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081802d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1123 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081802fc8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1124 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081802fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1125 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081803208, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1126 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081803208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1127 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081803448, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1128 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081803448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1129 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081803688, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1130 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081803688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1131 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840818038c8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1132 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840818038c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1133 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081803b08, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1134 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x184081803b08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1135 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081803d48, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1136 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x184081803d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1137 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d2488, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1138 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840817d2488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1139 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d26c8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1140 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840817d26c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1141 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d2908, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1142 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840817d2908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1143 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d2b48, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1144 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840817d2b48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1145 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d2d88, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1146 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840817d2d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1147 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d2fc8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1148 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840817d2fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1149 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d3208, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1150 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840817d3208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1151 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d3448, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1152 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840817d3448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1153 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d3688, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1154 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840817d3688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1155 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d38c8, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1156 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840817d38c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1157 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d3b08, 0x184084f70fb8, 0x184084f70fe0, 0x184084f710c8, 0x184084f710a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1158 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f70f08, {0x1372e20, 0x1840815164b0}, 0x1840817d3b08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1159 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817d3d48, 0x184084f71238, 0x184084f71260, 0x184084f71348, 0x184084f71328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1160 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084f71188, {0x1372e20, 0x1840815164b0}, 0x1840817d3d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1013
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 951 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x1840817de338?, {0x1840814fb000, 0x5f8, 0x0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x1840817de288, {0x1372e20, 0x184084a0d720})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgEdge in goroutine 1201
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2213 +0x294
+
+goroutine 1168 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x18408197e338?, {0x184081d7e000, 0x5f8, 0x184086502048?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x18408197e288, {0x1372e20, 0x184081517270})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgEdge in goroutine 1162
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2213 +0x294
+
+goroutine 3921 [select]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).runRefill(0x184083e2f608, {0x1372988, 0x1439760}, 0x184084535f48?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:237 +0xc5
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked.func1()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:119 +0x5c
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked in goroutine 3913
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:117 +0x2bc
+
+goroutine 764 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeAccepter).Accept(0x10000000045c2cc?, {0x1372988, 0x1439760})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:101 +0x7e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestDgReverseExitLeavesRetiringToEdge.func1()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:449 +0x31
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestDgReverseExitLeavesRetiringToEdge in goroutine 763
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:447 +0x1bf
+
+goroutine 1652 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408374c488, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1642
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1620 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081728248, 0x184084df9c38, 0x184084df9c60, 0x184084df9d48, 0x184084df9d28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1500
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1654 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408374c6c8, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1647
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1422 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817df188, {0x1372e20, 0x184081517630}, 0x184081623d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1416
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1931 [select]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).runRefill(0x18408257e008, {0x1372988, 0x1439760}, 0x184081dd67d0?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:237 +0xc5
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked.func1()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:119 +0x5c
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked in goroutine 2122
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:117 +0x2bc
+
+goroutine 1421 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081623d48, 0x1840817df238, 0x1840817df260, 0x1840817df348, 0x1840817df328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1416
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1239 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184084df80b8?, {0x184081a82800, 0x5f8, 0x1840821c7f90?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184084df8008, {0x1372e20, 0x184081517ae0})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgEdge in goroutine 1438
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2213 +0x294
+
+goroutine 1606 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x18408197f4b8?, {0x18408157a800, 0x5f8, 0x6?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x18408197f408, {0x1372e20, 0x184081d7a2d0})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgEdge in goroutine 1627
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2213 +0x294
+
+goroutine 1334 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8b8c8, 0x184081690ab8, 0x184081690ae0, 0x184081690bc8, 0x184081690ba8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1321 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8ad88, 0x1840816905b8, 0x1840816905e0, 0x1840816906c8, 0x1840816906a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1322 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690508, {0x1372e20, 0x184082c840a0}, 0x184082c8ad88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1323 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8afc8, 0x184081690838, 0x184081690860, 0x184081690948, 0x184081690928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1324 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690788, {0x1372e20, 0x184082c840a0}, 0x184082c8afc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1325 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8b208, 0x1840816905b8, 0x1840816905e0, 0x1840816906c8, 0x1840816906a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1326 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690508, {0x1372e20, 0x184082c840a0}, 0x184082c8b208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1327 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8b448, 0x184081690838, 0x184081690860, 0x184081690948, 0x184081690928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1328 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690788, {0x1372e20, 0x184082c840a0}, 0x184082c8b448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1314
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1335 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690a08, {0x1372e20, 0x184082c843c0}, 0x184082c8b8c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 686 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a0d88, 0x18408197e5b8, 0x18408197e5e0, 0x18408197e6c8, 0x18408197e6a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 687 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197e508, {0x1372e20, 0x18408161e050}, 0x1840817a0d88)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 688 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a0fc8, 0x18408197e838, 0x18408197e860, 0x18408197e948, 0x18408197e928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 689 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197e788, {0x1372e20, 0x18408161e050}, 0x1840817a0fc8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1346 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a1208, 0x18408197e5b8, 0x18408197e5e0, 0x18408197e6c8, 0x18408197e6a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1347 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197e508, {0x1372e20, 0x18408161e050}, 0x1840817a1208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1348 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a1448, 0x18408197e838, 0x18408197e860, 0x18408197e948, 0x18408197e928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1349 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197e788, {0x1372e20, 0x18408161e050}, 0x1840817a1448)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 679
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1355 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a18c8, 0x18408197eab8, 0x18408197eae0, 0x18408197ebc8, 0x18408197eba8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1356 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197ea08, {0x1372e20, 0x18408161e3c0}, 0x1840817a18c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1357 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a1b08, 0x18408197ed38, 0x18408197ed60, 0x18408197ee48, 0x18408197ee28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1358 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x18408197ec88?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197ec88, {0x1372e20, 0x18408161e3c0}, 0x1840817a1b08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1359 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817a1d48, 0x18408197eab8, 0x18408197eae0, 0x18408197ebc8, 0x18408197eba8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1360 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197ea08, {0x1372e20, 0x18408161e3c0}, 0x1840817a1d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1361 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081d78488, 0x18408197ed38, 0x18408197ed60, 0x18408197ee48, 0x18408197ee28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1362 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197ec88, {0x1372e20, 0x18408161e3c0}, 0x184081d78488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1352
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1336 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8bb08, 0x184081690d38, 0x184081690d60, 0x184081690e48, 0x184081690e28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1337 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690c88, {0x1372e20, 0x184082c843c0}, 0x184082c8bb08)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1338 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8bd48, 0x184081690ab8, 0x184081690ae0, 0x184081690bc8, 0x184081690ba8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1339 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690a08, {0x1372e20, 0x184082c843c0}, 0x184082c8bd48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1340 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408171e008, 0x184081690d38, 0x184081690d60, 0x184081690e48, 0x184081690e28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1341 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081690c88, {0x1372e20, 0x184082c843c0}, 0x18408171e008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1331
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1342 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081689688, 0x1840817de5b8, 0x1840817de5e0, 0x1840817de6c8, 0x1840817de6a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1343 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817de508, {0x1372e20, 0x184081517310}, 0x184081689688)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1344 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x18408171e248, 0x1840817de838, 0x1840817de860, 0x1840817de948, 0x1840817de928)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1345 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817de788, {0x1372e20, 0x184081517310}, 0x18408171e248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 304
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1618 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081728008, 0x184084df9c38, 0x184084df9c60, 0x184084df9d48, 0x184084df9d28)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1501
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 3977 [select]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).runRefill(0x184083c59708, {0x1372988, 0x1439760}, 0x184083d235c8?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:237 +0xc5
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked.func1()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:119 +0x5c
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked in goroutine 3489
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:117 +0x2bc
+
+goroutine 1402 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081d786c8, 0x18408197efb8, 0x18408197efe0, 0x18408197f0c8, 0x18408197f0a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1395
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1403 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197ef08, {0x1372e20, 0x184084d10be0}, 0x184081d786c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1395
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1404 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081d78908, 0x18408197f238, 0x18408197f260, 0x18408197f348, 0x18408197f328)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1395
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1405 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x18408197f188, {0x1372e20, 0x184084d10be0}, 0x184081d78908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1395
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1427 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817df408, {0x1372e20, 0x1840815177c0}, 0x184082c8a248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1423
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1428 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c8a6c8, 0x1840817df738, 0x1840817df760, 0x1840817df848, 0x1840817df828)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1423
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1429 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817df688, {0x1372e20, 0x1840815177c0}, 0x184082c8a6c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1423
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1430 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840839e0008, 0x1840817df4b8, 0x1840817df4e0, 0x1840817df5c8, 0x1840817df5a8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1423
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1431 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x1840817df408, {0x1372e20, 0x1840815177c0}, 0x1840839e0008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1423
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1599 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x1840817c5d48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1648
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1557 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184084df9738?, {0x184081747000, 0x5f8, 0x184084dfac80?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184084df9688, {0x1372e20, 0x18408161e870})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgExit in goroutine 1556
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2250 +0x1a8
+
+goroutine 1440 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184081d64d38?, {0x1840814fa800, 0x5f8, 0x18408140e1d0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184081d64c88, {0x1372e20, 0x184081517ae0})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgExit in goroutine 1439
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2250 +0x1a8
+
+goroutine 1457 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184081d654b8?, {0x184081746800, 0x5f8, 0x0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184081d65408, {0x1372e20, 0x184081517d60})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgEdge in goroutine 1451
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2213 +0x294
+
+goroutine 1653 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x18408374c488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1642
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1669 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081728b48, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1645
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1579 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Write(0x1840817a23e0, {0x1840818faa80?, 0x1ac, 0x48b901?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:39 +0xfb
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*tunBatch).add(0x18408161e9b0, {0x1840818faa80?, 0x1840816d6d18?, 0x465870?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tunbatch.go:29 +0x12f
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*reorderer).Push(0x1840817caf50, {0x1840818faa80, 0x1ac, 0x1c0})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/reorder.go:214 +0x5ad
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).onFrame(0x184084df9688, 0x1840817c4488, 0x88?, {0x1840818faa80, 0x1ac, 0x1c0})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:785 +0x16c
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df9688, {0x1372e20, 0x18408161e870}, 0x1840817c4488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:744 +0x17d
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1561
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1453 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184081d65238?, {0x184081d7e800, 0x5f8, 0x0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184081d65188, {0x1372e20, 0x184081517d60})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgExit in goroutine 1452
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2250 +0x1a8
+
+goroutine 1621 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184084df9b88, {0x1372e20, 0x18408161ec30}, 0x184081728248)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1500
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1667 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184081728908, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1646
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1641 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeAccepter).Accept(0x45c2cc?, {0x1372988, 0x1439760})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:101 +0x7e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestDgDialsInFlightCount.func1()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:418 +0x31
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestDgDialsInFlightCount in goroutine 1640
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:416 +0x1d6
+
+goroutine 1536 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184081691c38?, {0x1840817b2800, 0x5f8, 0x0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184081691b88, {0x1372e20, 0x184082c84870})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgEdge in goroutine 1528
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2213 +0x294
+
+goroutine 1601 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081d64288, {0x1372e20, 0x184081d7a410}, 0x1840817c4008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 765
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1521 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x184081683208)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1643
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1629 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*fakeTUN).Read(0x184081d659b8?, {0x184083750000, 0x5f8, 0x0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/tun_mode_test.go:30 +0x79
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).pumpTun(0x184081d65908, {0x1372e20, 0x184081d7a2d0})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:939 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.RunDgExit in goroutine 1628
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:2250 +0x1a8
+
+goroutine 1699 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081d64288, {0x1372e20, 0x184081d7a410}, 0x1840817c46c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1615
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1633 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x1840817286c8, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1644
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1666 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x1840817286c8)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1644
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1668 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x184081728908)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1646
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1670 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x184081728b48)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1645
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1613 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c6e488, 0x184083472338, 0x184083472360, 0x184083472448, 0x184083472428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1651
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1614 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184083472288, {0x1372e20, 0x184082c84a50}, 0x184082c6e488)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1651
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 1617 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgLink).writeLoop(0x184082c6e008, 0x184081d64338, 0x184081d64360, 0x184081d64448, 0x184081d64428)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:423 +0x2ca
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1616
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:705 +0x87f
+
+goroutine 1714 [select, 7 minutes]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgFakeCarrier).ReadFrame(0x13fca50?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool_test.go:60 +0x6e
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).readLoop(0x184081d64288, {0x1372e20, 0x184081d7a410}, 0x184082c6e008)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:735 +0x143
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*dgPool).add in goroutine 1616
+	/root/hs2-wt/r1-r3j/hs2-src/engine/dgpool.go:706 +0x907
+
+goroutine 14198 [select]:
+net.(*pipe).read(0x184083ed8280, {0x1840886d6d78, 0x4, 0x18408147b808?})
+	/usr/local/go/src/net/pipe.go:159 +0x145
+net.(*pipe).Read(0x46fe0a?, {0x1840886d6d78?, 0x1840849cbcb0?, 0x490609?})
+	/usr/local/go/src/net/pipe.go:142 +0x1c
+io.ReadAtLeast({0x7355fa320158, 0x184089e863c0}, {0x1840886d6d78, 0x4, 0x4}, 0x4)
+	/usr/local/go/src/io/io.go:335 +0x83
+io.ReadFull(...)
+	/usr/local/go/src/io/io.go:354
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*shapedConn).Read(0x1840886d6c60, {0x184089a0c290, 0x8, 0x482cc0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/shape.go:295 +0x1e6
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*meteredConn).Read(0x184089e863f0, {0x184089a0c290?, 0x1840849cbe40?, 0x922857?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/health.go:283 +0x29
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*watchConn).Read(0x1840845f2340, {0x184089a0c290?, 0x41a9fa?, 0x1840857c40c0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stream.go:114 +0x42
+io.ReadAtLeast({0x7355fa320138, 0x1840845f2340}, {0x184089a0c290, 0x8, 0x8}, 0x8)
+	/usr/local/go/src/io/io.go:335 +0x83
+io.ReadFull(...)
+	/usr/local/go/src/io/io.go:354
+github.com/xtaci/smux.(*Session).recvLoop(0x1840857d8000)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:482 +0x19b
+created by github.com/xtaci/smux.newSession in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:187 +0x436
+
+goroutine 3942 [select]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).runRefill(0x18408499eb08, {0x1372988, 0x1439760}, 0x184081741fd0?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:237 +0xc5
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked.func1()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:119 +0x5c
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*LinkManager).noteArrivalLocked in goroutine 3902
+	/root/hs2-wt/r1-r3j/hs2-src/engine/refill.go:117 +0x2bc
+
+goroutine 14197 [select]:
+net.(*pipe).write(0x184083ed8280, {0x184089541180, 0x96, 0x578})
+	/usr/local/go/src/net/pipe.go:194 +0x2db
+net.(*pipe).Write(0x184089be8000?, {0x184089541180?, 0x1840851e6b60?, 0x18?})
+	/usr/local/go/src/net/pipe.go:174 +0x1c
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*sendGate).Write(0x0?, {0x184089541180?, 0x0?, 0x184088863b90?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/sendgate.go:103 +0x93
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*hostQ).Write(0x184088863b01?, {0x184089541180?, 0x184088863d10?, 0x92723a?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/hostq.go:240 +0x207
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*hostQConn).Write(0x184089a0c2c0?, {0x184089541180?, 0x10?, 0x0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/linksched.go:326 +0x1c
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*shapedConn).record(0x1840886d6c60, {0x1840814343a8?, 0x18, 0x184088863c78?}, 0x4b53fa?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/shape.go:249 +0x1c3
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*shapedConn).flushLocked(0x1840886d6c60)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/shape.go:192 +0x28
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*shapedConn).Flush(0x1840886d6c60)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/shape.go:187 +0x131
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*meteredConn).Flush(0x184089e863f0)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/health.go:250 +0x92
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*watchConn).Flush(0x1840845f2340)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stream.go:137 +0x46
+github.com/xtaci/smux.(*Session).sendLoopSched(0x1840857d8000)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/sched.go:731 +0x5b5
+created by github.com/xtaci/smux.newSession in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:182 +0x35a
+
+goroutine 14205 [select]:
+github.com/xtaci/smux.(*Session).frameWritten(0x1840857d8000, {0x1, {0x2, 0x2, 0x3, {0x184089a0c2d0, 0x10, 0x10}, 0x0, 0x0, ...}, ...}, ...)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:781 +0xb9
+github.com/xtaci/smux.(*Stream).writeFrames(0x184088c2a588, {0x184089a0c2d0, 0x10, 0x10}, 0x1, 0x1840898d4070, 0x0, 0x0)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/stream_sched.go:93 +0x509
+github.com/xtaci/smux.(*Stream).writeSched(0x184088c2a588, {0x184089a0c2d0, 0x10, 0x10}, 0x1)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/stream_sched.go:35 +0x1e5
+github.com/xtaci/smux.(*Stream).Write(0x184088c2a620?, {0x184089a0c2d0?, 0x184089a35b90?, 0xb2d05e00?})
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/stream.go:700 +0x27f
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.openControl({0x1372e20, 0x18408161ef00}, {0x1372a30, 0x18408161ef50}, 0x184084a0d4a0?)
+	/root/hs2-wt/r1-r3j/hs2-src/engine/control.go:157 +0x765
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestControlKeepsWaitingOnAStuckWriter.func3()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stuck_test.go:687 +0xa5
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestControlKeepsWaitingOnAStuckWriter in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stuck_test.go:687 +0x4c5
+
+goroutine 14202 [select]:
+github.com/xtaci/smux.(*Session).keepalive(0x1840857d8180)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:597 +0x118
+created by github.com/xtaci/smux.newSession in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:189 +0x488
+
+goroutine 14200 [select]:
+github.com/xtaci/smux.(*Session).sendLoopSched(0x1840857d8180)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/sched.go:736 +0x62f
+created by github.com/xtaci/smux.newSession in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:182 +0x35a
+
+goroutine 14201 [chan receive]:
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*stuckConn).Read(0x18408990e520, {0x184089541700, 0x92, 0x574})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/pool_v2_test.go:1598 +0x39
+io.ReadAtLeast({0x7355fa320158, 0x184089e867b0}, {0x184089541700, 0x92, 0x574}, 0x92)
+	/usr/local/go/src/io/io.go:335 +0x83
+io.ReadFull(...)
+	/usr/local/go/src/io/io.go:354
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*shapedConn).Read(0x1840886d6ea0, {0x184089d00290, 0x8, 0x482cc0?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/shape.go:308 +0x37c
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*meteredConn).Read(0x184089e867e0, {0x184089d00290?, 0x184088c22e40?, 0x922857?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/health.go:283 +0x29
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*watchConn).Read(0x1840845f23c0, {0x184089d00290?, 0x41a9fa?, 0x1840896bb490?})
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stream.go:114 +0x42
+io.ReadAtLeast({0x7355fa320138, 0x1840845f23c0}, {0x184089d00290, 0x8, 0x8}, 0x8)
+	/usr/local/go/src/io/io.go:335 +0x83
+io.ReadFull(...)
+	/usr/local/go/src/io/io.go:354
+github.com/xtaci/smux.(*Session).recvLoop(0x1840857d8180)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:482 +0x19b
+created by github.com/xtaci/smux.newSession in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:187 +0x436
+
+goroutine 14199 [select]:
+github.com/xtaci/smux.(*Session).frameWritten(0x1840857d8000, {0x0, {0x2, 0x3, 0x0, {0x0, 0x0, 0x0}, 0x0, 0x0, ...}, ...}, ...)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:781 +0xb9
+github.com/xtaci/smux.(*Session).writeFrameInternal(0x1840857d8000, {0x2, 0x3, 0x0, {0x0, 0x0, 0x0}, 0x0, 0x0, 0x0}, ...)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:744 +0x12a
+github.com/xtaci/smux.(*Session).keepalive(0x1840857d8000)
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:599 +0x1a5
+created by github.com/xtaci/smux.newSession in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/third_party/smux/session.go:189 +0x488
+
+goroutine 14204 [sleep]:
+time.Sleep(0x5f5e100)
+	/usr/local/go/src/runtime/time.go:368 +0x165
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestControlKeepsWaitingOnAStuckWriter.func2()
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stuck_test.go:683 +0x48
+created by github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.TestControlKeepsWaitingOnAStuckWriter in goroutine 14196
+	/root/hs2-wt/r1-r3j/hs2-src/engine/stuck_test.go:680 +0x410
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	600.080s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/fec	1.478s
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/dglab	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netem	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netsim	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/probe	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/mmsg	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs	[no test files]
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/reality	0.154s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	2.666s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	0.096s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tune	0.012s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier	78.412s
+FAIL
+exit 1

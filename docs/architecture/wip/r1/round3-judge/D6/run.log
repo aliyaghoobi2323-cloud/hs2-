@@ -1,0 +1,4 @@
+10:09:53 plan /root/r3j/D6/plan.txt: 1 runs
+10:09:54 start a0318ff0-j3prof-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3prof) load 1.24 waited 0s
+10:10:28 done a0318ff0-j3prof-1 ok=1 
+10:10:28 done /root/r3j/D6/plan.txt

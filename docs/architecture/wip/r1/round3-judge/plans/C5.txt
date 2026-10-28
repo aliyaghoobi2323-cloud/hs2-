@@ -1,0 +1,7 @@
+# smoke 5 of j3: loss 0.5 / 1 / 2 % at N=1 (and 1 % at N=8) with the budget's QUIET check, and the P10 cells at N=1 once
+N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3
+N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3
+N=1 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3
+N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3

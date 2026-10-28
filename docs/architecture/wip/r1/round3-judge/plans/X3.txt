@@ -1,0 +1,5 @@
+# a game inside one shared xray connection beside a download: the candidate with its default panel buffer (old = j3f) and with a 32 KiB one (new = j3f, HS2_TUNE_PANEL_RCVBUF=32768), N=1, RATE 50, RTT 72
+BIN=old N=1 LOSS=0 VARIANTS=xc16,gr REP=1
+BIN=new N=1 LOSS=0 VARIANTS=gr,xc16 REP=1
+BIN=new N=1 LOSS=0 VARIANTS=xc16,gr REP=2
+BIN=old N=1 LOSS=0 VARIANTS=gr,xc16 REP=2

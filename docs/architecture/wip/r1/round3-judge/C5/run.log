@@ -1,0 +1,26 @@
+10:20:56 plan /root/r3j/C5/plan.txt: 12 runs
+10:20:56 start 3305f1f0-j3-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 0.99 waited 0s
+10:21:27 done 3305f1f0-j3-1 ok=1 
+10:21:28 start 3305f1f0-j3-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 2.48 waited 0s
+10:21:57 done 3305f1f0-j3-2 ok=1 
+10:21:58 start 2795d07b-j3-1 (N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 3.49 waited 0s
+10:22:27 done 2795d07b-j3-1 ok=1 
+10:22:28 start 2795d07b-j3-2 (N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 3.60 waited 0s
+10:22:57 done 2795d07b-j3-2 ok=1 
+10:22:58 start 9a699916-j3-1 (N=1 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 3.09 waited 0s
+10:23:28 done 9a699916-j3-1 ok=1 
+10:23:28 start 9a699916-j3-2 (N=1 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 2.73 waited 0s
+10:23:58 done 9a699916-j3-2 ok=1 
+10:23:59 start 9d97f0c2-j3-1 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 2.67 waited 0s
+10:24:29 done 9d97f0c2-j3-1 ok=1 
+10:24:30 start 9d97f0c2-j3-2 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3) load 2.83 waited 0s
+10:25:00 done 9d97f0c2-j3-2 ok=1 
+10:25:01 start ae0cf9da-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3) load 3.80 waited 0s
+10:25:40 done ae0cf9da-j3-1 ok=1 
+10:25:41 start ae0cf9da-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3) load 3.17 waited 0s
+10:26:20 done ae0cf9da-j3-2 ok=1 
+10:26:21 start 340c98ae-j3-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3) load 3.20 waited 0s
+10:27:01 done 340c98ae-j3-1 ok=1 
+10:27:01 start 340c98ae-j3-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3) load 3.57 waited 0s
+10:27:41 done 340c98ae-j3-2 ok=1 
+10:27:41 done /root/r3j/C5/plan.txt
