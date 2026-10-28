@@ -205,31 +205,42 @@ func (s *exitHintSet) send(id uint32, mtr *linkMeter) bool {
 	s.mu.Unlock()
 	var b [hintMsgLen]byte
 	hintEncode(b[:], id)
-	tried := make([]bool, len(cs))
-	for pass := 0; pass < 2; pass++ {
+	write := func(c *hintChan) bool { // c.wmu held
+		if d, ok := c.st.(interface{ SetWriteDeadline(time.Time) error }); ok {
+			d.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
+		}
+		_, err := c.st.Write(b[:])
+		c.wmu.Unlock()
+		return err == nil
+	}
+	tried, left := make([]bool, len(cs)), len(cs)
+	for round := 0; round < hintFreeRounds && left > 0; round++ {
+		if round > 0 {
+			time.Sleep(time.Millisecond) // a healthy stream's write takes µs
+		}
 		for i, c := range cs {
-			if tried[i] {
-				continue
+			if !tried[i] && c.wmu.TryLock() {
+				tried[i], left = true, left-1
+				if write(c) {
+					return true
+				}
 			}
-			if pass == 0 && !c.wmu.TryLock() {
-				continue
-			}
-			if pass == 1 {
-				c.wmu.Lock()
-			}
-			tried[i] = true
-			if d, ok := c.st.(interface{ SetWriteDeadline(time.Time) error }); ok {
-				d.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
-			}
-			_, err := c.st.Write(b[:])
-			c.wmu.Unlock()
-			if err == nil {
+		}
+	}
+	for i, c := range cs {
+		if !tried[i] {
+			c.wmu.Lock()
+			if write(c) {
 				return true
 			}
 		}
 	}
 	return false
 }
+
+// hintFreeRounds: the looks (1 ms apart) for a stream whose writer is free
+// before a hint waits on a busy one.
+const hintFreeRounds = 20
 
 // hintSending bounds the hints being written at once: each goes in a
 // goroutine of its own, so the exit's judging loop never waits on a
