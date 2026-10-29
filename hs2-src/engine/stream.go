@@ -269,6 +269,8 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	}
 	if sched && caps&tlscarrier.CapMoveBack != 0 {
 		cfg.GroupMoves = moveBackMax // a group may move back and on (moveback.go)
+	} else if sched && caps&tlscarrier.CapLight != 0 {
+		cfg.GroupMoves = lightMoves // to the light QUIET link and on (quietlight.go)
 	}
 	// γ2 (budget.go): a BULK link's in-flight budget at its writer's bulk
 	// lane, in place of α's rate cap (C4-lite's stays, the outer one)
