@@ -19,7 +19,8 @@
 # Before the command runs, every point above is checked from inside; if one
 # fails, the command does not run (exit 97). After it, from outside: no file of
 # the real install changed (names, modes, sizes, times — the live status files
-# the running tunnels rewrite every few seconds only by name) and no hs2 unit's
+# the running tunnels rewrite every few seconds only by name, a lab hs2's on the
+# same host not at all) and no hs2 unit's
 # MainPID, NRestarts or state moved; the evidence is printed, and a difference
 # fails the run (exit 98). The command sees HS2_SANDBOX=proven.
 #
