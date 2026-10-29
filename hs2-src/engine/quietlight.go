@@ -69,6 +69,9 @@ const (
 	// lightGap: the least time between two moves of one group between the
 	// QUIET links
 	lightGap = 5 * time.Second
+	// lightOff: how long a connection on the light link is not light
+	// before it moves back to a general one
+	lightOff = 2 * time.Second
 	// lightMoves: the moves a group may make with CapLight (to the light
 	// link, back, on to BULK, and one spare)
 	lightMoves = 4
@@ -247,20 +250,41 @@ func (q *quietSet) lightTick(gs *groupStream, now int64) bool {
 		return false
 	}
 	gs.mu.Lock()
-	onLight, at, ql := gs.onLight, gs.lightAt, gs.ql
+	at, ql := gs.lightAt, gs.ql
 	gs.mu.Unlock()
-	if at != 0 && time.Duration(now-at) < lightGap {
-		return false
-	}
 	if ql == nil || ql.caps&tlscarrier.CapLight == 0 {
 		return false
 	}
+	onLight := q.isLight(ql) // (it may have opened there: no general link was up)
 	light := gs.rule.lightRule()
+	switch {
+	case light || !onLight || gs.rule.seen < moveSlots:
+		gs.offLight = 0
+	case gs.offLight == 0:
+		gs.offLight = now
+	}
+	if at != 0 && time.Duration(now-at) < lightGap {
+		return false
+	}
 	switch {
 	case !onLight && light:
 		return q.moveQuiet(gs, true, now)
-	case onLight && !light && gs.rule.seen >= moveSlots:
+	case onLight && gs.offLight != 0 && time.Duration(now-gs.offLight) >= lightOff:
+		// not light for lightOff, and not bulk (that one moves on to a BULK
+		// link within a few hundred ms: the hint, the edge's rule)
 		return q.moveQuiet(gs, false, now)
+	}
+	return false
+}
+
+// isLight says whether l is a light QUIET link of the set.
+func (q *quietSet) isLight(l *mtcpLink) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, ql := range q.links {
+		if ql.link == l {
+			return ql.light.Load()
+		}
 	}
 	return false
 }
@@ -300,7 +324,8 @@ func (q *quietSet) moveQuiet(gs *groupStream, toLight bool, now int64) bool {
 	gs.mu.Lock()
 	oldCS, oldRel := gs.qcs, gs.qrel
 	gs.qcs, gs.qrel, gs.qown, gs.ql = ql.link.track(s1), rel, true, ql.link
-	gs.onLight, gs.lightAt = toLight, now
+	gs.lightAt = now
+	gs.offLight = 0
 	closed := gs.closed
 	qcs := gs.qcs
 	gs.mu.Unlock()

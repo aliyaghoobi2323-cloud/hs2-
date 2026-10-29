@@ -769,10 +769,11 @@ type groupStream struct {
 	blink *mtcpLink
 	capAt atomic.Int64
 	cap   capWindow
-	// onLight: it moved to the light QUIET link; lightAt: its latest move
-	// between the QUIET links (ctrlNow; QuietLight, quietlight.go)
-	onLight bool
-	lightAt int64
+	// lightAt: its latest move between the QUIET links (ctrlNow; under mu);
+	// offLight: since when it has not been light on the light link (the
+	// mover's own; QuietLight, quietlight.go)
+	lightAt  int64
+	offLight int64
 }
 
 // openGroupStream opens a user connection of user tag on the QUIET link l
