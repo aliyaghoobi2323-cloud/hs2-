@@ -1,0 +1,7 @@
+taken
+12:46:07 lock taken after 1381s (pid 527747), plan /root/rred2/B5/plan.txt, REPS 1, limit 1440s
+13:02:18 run.sh status 0
+13:02:18 pass 1: 0 runs busy (>75%) or failed, 469s left
+13:02:18 end: mode log, status 0; 1887 samples; host TCP max 213810 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0
+13:02:19 done after 972s of rig time
+13:02:19 lock released after 972s
