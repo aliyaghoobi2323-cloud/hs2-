@@ -1,0 +1,6 @@
+# B4b (Z10 and the stale-rate beat, the fix measured by traffic): idle tunnel at N=1 and N=8, and idle after a 10 s download at N=8 and N=1; fin2 against r2 (OWD_IDLE on traffic)
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=70 IDLEDL=10 BIN=r2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=70 IDLEDL=10 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=70 IDLEDL=10 BIN=r2

@@ -596,6 +596,7 @@ type sendCapLink struct {
 	owd  *owdLink
 	rx0  uint64
 	rxAt time.Duration
+	tr0  uint64 // acked and received at the reading before (OWDIdle's traffic)
 	// budget: a BULK link's in-flight budget (γ2, budget.go; nil: none, α's
 	// cap or C4-lite's), stepped with each reading
 	budget *linkBudget
@@ -654,6 +655,12 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 			l.rx0, l.rxAt = ts.bytesReceived, now
 			src := owdShared(l.owd)
 			src.noteRate(max(l.core.maxDlv(), rx))
+			if tr := ts.bytesAcked + ts.bytesReceived; l.tr0 != 0 && tr > l.tr0 {
+				src.noteTraffic(tr - l.tr0) // OWDIdle (owd.go)
+				l.tr0 = tr
+			} else {
+				l.tr0 = max(tr, 1)
+			}
 			if l.budget != nil && src != l.owd {
 				l.owd.noteRate(max(l.core.maxDlv(), rx)) // its own beat (γ2)
 			}

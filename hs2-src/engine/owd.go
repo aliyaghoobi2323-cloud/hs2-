@@ -90,9 +90,13 @@ var TuneOWD = 1
 var TuneOWDQuiet = 1
 
 // OWDIdle (HS2_TUNE_OWD_IDLE; 0: off): a QUIET link's one-way delay
-// messages stop while the BULK links that read them are idle — no rate of
-// owdIdleRate or more noted (noteRate) for owdIdleAfter — and start again,
-// one at once, at the first such rate. Without it an idle QUIET link sent
+// messages stop while the BULK links that read them are idle — less than
+// owdIdleRate bytes acknowledged and received on them in each second
+// (noteTraffic) for owdIdleAfter — and start again, one at once, in the
+// first second that has as much. (Not the rate the beat takes, noteRate:
+// its received rate is read over one sendcap step, and one keepalive
+// record in a step of a few ms reads as 100 KB/s: on the rig the idle loop
+// never parked, the R1 red team's second pass, B4.) Without it an idle QUIET link sent
 // one message (a padded record, ~1 KB) each way every 0.5 to 1.5 s: with
 // the control pings and NOPs 1.4 to 1.8 records a second each way, gaps
 // p50 0.56 s, where an idle BULK link (and production's link) has 0.3 to
@@ -273,17 +277,58 @@ type owdLink struct {
 	retr0      uint64
 	dirtyUntil atomic.Int64
 	dirties    atomic.Int64 // beats that found the socket dirty
-	// OWDIdle's: when a rate of owdIdleRate or more was last noted
-	// (ctrlNow; 0: never), whether the loop is parked for an idle pool, and
-	// the channel that wakes it (set by the loop)
+	// OWDIdle's: the BULK links' bytes in the second under way (from
+	// trAt, ctrlNow), when a second last had owdIdleRate or more (ctrlNow;
+	// 0: never), whether the loop is parked for an idle pool, and the
+	// channel that wakes it (set by the loop)
+	trMu   sync.Mutex
+	trAt   int64
+	trN    uint64
+	trLast atomic.Int64 // bytes/s of the second before (ctrlNow of its end in trEnd)
+	trEnd  atomic.Int64
 	busyAt atomic.Int64
 	parked atomic.Bool
 	kick   atomic.Pointer[chan struct{}]
 	parks  atomic.Int64 // times the loop parked
 }
 
-// idle says whether no rate of owdIdleRate or more was noted for
-// owdIdleAfter (OWDIdle).
+// noteTraffic adds n bytes acknowledged and received on a BULK link (its
+// sendcap step's) to the second under way: a second with owdIdleRate or
+// more marks the pool busy, and wakes a parked loop (OWDIdle).
+func (o *owdLink) noteTraffic(n uint64) {
+	if o == nil || n == 0 {
+		return
+	}
+	now := ctrlNow()
+	o.trMu.Lock()
+	if d := time.Duration(now - o.trAt); d > time.Second {
+		if o.trAt != 0 && d < 2*time.Second {
+			o.trLast.Store(int64(float64(o.trN) / d.Seconds()))
+		} else {
+			o.trLast.Store(0)
+		}
+		o.trEnd.Store(now)
+		o.trAt, o.trN = now, 0
+	}
+	o.trN += n
+	busy := o.trN >= owdIdleRate
+	o.trMu.Unlock()
+	if !busy {
+		return
+	}
+	o.busyAt.Store(now)
+	if o.parked.CompareAndSwap(true, false) {
+		if k := o.kick.Load(); k != nil {
+			select {
+			case *k <- struct{}{}:
+			default:
+			}
+		}
+	}
+}
+
+// idle says whether no second had owdIdleRate or more for owdIdleAfter
+// (OWDIdle).
 func (o *owdLink) idle(now int64) bool {
 	at := o.busyAt.Load()
 	return at == 0 || time.Duration(now-at) > owdIdleAfter
@@ -350,17 +395,6 @@ func (o *owdLink) noteRate(r float64) {
 		return
 	}
 	now := ctrlNow()
-	if r >= owdIdleRate {
-		o.busyAt.Store(now)
-		if o.parked.CompareAndSwap(true, false) {
-			if k := o.kick.Load(); k != nil {
-				select {
-				case *k <- struct{}{}:
-				default:
-				}
-			}
-		}
-	}
 	if at := o.rateAt.Load(); at != 0 && time.Duration(now-at) < time.Second && math.Float64frombits(uint64(o.rate.Load())) > r {
 		return
 	}
@@ -373,7 +407,28 @@ func (o *owdLink) tick() time.Duration {
 	if at := o.rateAt.Load(); at == 0 || time.Duration(ctrlNow()-at) > owdFresh {
 		return owdTickMax
 	}
-	t := owdTickOf(math.Float64frombits(uint64(o.rate.Load())))
+	r := math.Float64frombits(uint64(o.rate.Load()))
+	if o.quiet && OWDIdle.Get() != 0 {
+		// the traffic of the BULK links (noteTraffic): a delivery rate
+		// Linux keeps from the last download (an app-limited sample never
+		// lowers it) held a QUIET link's beat at 25 ms after the download
+		// ended — 35 to 40 records a second from the exit for good (the
+		// red team's second pass, B4)
+		now := ctrlNow()
+		tr := 0.0
+		if at := o.trEnd.Load(); at != 0 && time.Duration(now-at) <= 2*time.Second {
+			tr = float64(o.trLast.Load())
+		}
+		// and the second under way, once it is 50 ms old: a load that just
+		// started takes the fast beat at once, not a second later
+		o.trMu.Lock()
+		if el := time.Duration(now - o.trAt); o.trAt != 0 && el >= 50*time.Millisecond && el <= time.Second {
+			tr = max(tr, float64(o.trN)/el.Seconds())
+		}
+		o.trMu.Unlock()
+		r = min(r, tr)
+	}
+	t := owdTickOf(r)
 	if o.own {
 		t = max(t, owdOwnTickMin)
 	}
