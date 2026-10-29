@@ -48,7 +48,8 @@ func TestRTLooseCall(t *testing.T) {
 			t.Fatalf("with RTLoose the clumped call went %d ticks without its lane", zero)
 		}
 	}
-	withTune(t, RTLoose, 1)
+	// RTLoose gives none of these a realtime tick more than the rules
+	// before it (TwoWay, the steady rule) do
 	for _, k := range []struct {
 		name string
 		v    [2]int
@@ -58,21 +59,24 @@ func TestRTLooseCall(t *testing.T) {
 		{"upload", [2]int{50, 100000}},
 		{"download", [2]int{60 << 10, 0}},
 	} {
-		var c flowClassifier
-		var f flowStats
-		var at time.Duration
-		ticks := make([][2]int, 60)
-		for i := range ticks {
-			ticks[i] = k.v
-		}
-		got := 0
-		for _, v := range classRun(&c, &f, &at, ticks) {
-			if v == rtAllowMax {
-				got++
+		var n [2]int
+		for i, loose := range []int{0, 1} {
+			withTune(t, RTLoose, loose)
+			var c flowClassifier
+			var f flowStats
+			var at time.Duration
+			ticks := make([][2]int, 60)
+			for j := range ticks {
+				ticks[j] = k.v
+			}
+			for _, v := range classRun(&c, &f, &at, ticks) {
+				if v > 0 {
+					n[i]++
+				}
 			}
 		}
-		if got != 0 {
-			t.Errorf("%s: %d ticks of the steady allowance", k.name, got)
+		if n[1] != n[0] {
+			t.Errorf("%s: %d realtime ticks with RTLoose, %d without", k.name, n[1], n[0])
 		}
 	}
 }
