@@ -1,4 +1,4 @@
-# B9 (2 reps, fin2 / r2): the judge gate cells for the red team switches on by default (TWOWAY_RATIO, OWD_IDLE: every run starts idle; UDP caps; FOLLOW grace): P10 at N=1 (a)(b)(c)(d)(e), loss 1 % at N=1, latency on fq_codel at N=8 and N=64, 25 x 16 at N=8
+# B9 (2 reps, fin2 / r2): the judge gate cells for the red team switches on by default (TWOWAY_RATIO, OWD_IDLE: every run starts idle; UDP caps; FOLLOW grace): P10 at N=1 (a)(b)(c)(d)(e), loss 1 % at N=1, 25 x 16 at N=8, home at N=8 (the calls held back)
 N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 BIN=fin2
 N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 BIN=r2
 N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 BIN=fin2
@@ -9,5 +9,5 @@ N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2
 N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2
 N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2
 N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=r2
-N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2
-N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2

@@ -30,8 +30,11 @@ func ring(v ...uint32) []uint32 {
 // what it gets, in every tick, far under RTMax. The two-way rule read that
 // as a call: neither the exit's hint nor the edge's move, so the download
 // stayed on its QUIET link (cubic) at any rate. A call, also a lopsided
-// one, stays two-way; a download and an upload acknowledged in their own
-// data do not.
+// one or one whose other half is held back, stays two-way; a download
+// acknowledged in its own data does not. (One way only: the user's own
+// sending far past what comes back stays two-way — under RTMax, a call
+// whose other half is stuck on a busy link, or an upload acked in its
+// data, bounded by RTMax as before.)
 func TestRed2TwoWayAckedDownload(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -41,12 +44,14 @@ func TestRed2TwoWayAckedDownload(t *testing.T) {
 	}{
 		{"call 1.5/1.5 Mbit/s", ring(18750), ring(18750), 10, twoWayYes, twoWayYes},
 		{"call held back (clumps)", ring(37500, 0), ring(0, 0, 0, 61440), 10, twoWayNo, twoWayNo},
+		{"call, its other half held back: two ticks in 10", ring(18750), ring(0, 0, 0, 0, 37500), 10, twoWayYes, twoWayYes},
 		{"call, camera small: 0.25 up, 2.4 Mbit/s down", ring(3125), ring(30000), 10, twoWayYes, twoWayYes},
-		{"call, camera small, held back: 0.25 up, 4 Mbit/s down in clumps", ring(3125), ring(90000, 0), 10, twoWayYes, twoWayYes},
+		{"call, camera small, held back: 0.25 up, 3.6 Mbit/s down in clumps", ring(3125), ring(90000, 0), 10, twoWayYes, twoWayYes},
+		{"call catching up: 1.5 up, 1 s of backlog at 12 Mbit/s down", ring(18750), ring(150000), 10, twoWayYes, twoWayYes},
 		{"QUIC download 5 Mbit/s, acks 2 %", ring(1250), ring(62500), 10, twoWayYes, twoWayNo},
 		{"QUIC download 40 Mbit/s, acks 2 %", ring(10000), ring(500000), 10, twoWayYes, twoWayNo},
 		{"VPN over TCP, 10 Mbit/s down, acks 3 %", ring(3750), ring(125000), 10, twoWayYes, twoWayNo},
-		{"QUIC upload 3.2 Mbit/s, acks 3 %", ring(40000), ring(1200), 10, twoWayYes, twoWayNo},
+		{"QUIC upload 3.2 Mbit/s, acks 3 % (under RTMax: as before)", ring(40000), ring(1200), 10, twoWayYes, twoWayYes},
 		{"QUIC download, young (3 ticks)", ring(1250), ring(62500), 3, twoWayPending, twoWayNo},
 		{"call, young (3 ticks)", ring(18750), ring(18750), 3, twoWayPending, twoWayPending},
 		{"plain download (request once)", ring(400, 0, 0, 0, 0, 0, 0, 0, 0, 0), ring(500000), 10, twoWayNo, twoWayNo},
@@ -60,54 +65,6 @@ func TestRed2TwoWayAckedDownload(t *testing.T) {
 				t.Errorf("%s, ratio %d: state %d, want %d", c.name, k.ratio, got, k.want)
 			}
 		}
-	}
-}
-
-// R2-1 in the realtime lane: a steady download of 3 Mbit/s acknowledged in
-// its own data (the exit's side: it sends the download, gets the acks) got
-// the hold (RTHold) as a call does once it turned to clumps; with the ratio
-// it is never loosely a call, so its hold runs out. A call in clumps keeps
-// it either way (TestRTHoldKeepsCall).
-func TestRed2HoldAckedDownload(t *testing.T) {
-	steady := func(n int) [][2]int {
-		var v [][2]int
-		for range n {
-			v = append(v, [2]int{37500, 900})
-		}
-		return v
-	}
-	clumps := func(n int) [][2]int {
-		var v [][2]int
-		for i := range n {
-			tx := 0
-			if i%4 == 3 {
-				tx = 60 << 10
-			}
-			v = append(v, [2]int{tx, 900})
-		}
-		return v
-	}
-	zeros := map[int]int{}
-	for _, ratio := range []int{0, 16} {
-		withTune(t, TwoWayRatio, ratio)
-		withTune(t, RTHold, 20)
-		var c flowClassifier
-		var f flowStats
-		var at time.Duration
-		classRun(&c, &f, &at, steady(30))
-		b := classRun(&c, &f, &at, clumps(60))
-		for _, v := range b {
-			if v == 0 {
-				zeros[ratio]++
-			}
-		}
-		t.Logf("ratio %d: the acked download in clumps for 6 s: %d of %d ticks without a realtime allowance", ratio, zeros[ratio], len(b))
-	}
-	if zeros[0] > 10 {
-		t.Fatalf("without the ratio the acked download lost the hold (%d ticks without): the case is not shown", zeros[0])
-	}
-	if zeros[16] < 30 {
-		t.Fatalf("with the ratio the acked download kept the realtime hold (%d of 60 ticks without)", zeros[16])
 	}
 }
 

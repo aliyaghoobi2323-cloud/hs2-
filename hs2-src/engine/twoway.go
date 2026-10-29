@@ -41,27 +41,26 @@ import "sync/atomic"
 // TwoWay: 1 on (HS2_TUNE_TWOWAY), 0 off.
 var TwoWay = newTuneInt(1) // the default since R1 round 4 (round4/REPORT.fa.md)
 
-// TwoWayRatio (HS2_TUNE_TWOWAY_RATIO; 0: none): over the window neither way
-// of a two-way connection carries more than this many times the other. A
-// call sends about what it gets (a gallery view, a webinar with the
-// camera on: a few times as much one way); a download whose app
-// acknowledges in its own data — QUIC or any UDP inside a proxy
-// connection (VLESS/xray), a VPN over TCP inside one — sends 1 to 3 % of
-// what it gets, in every tick, under RTMax: it read as a call, so neither
-// the exit hinted it nor did the edge move it, and it stayed on its QUIET
-// link (cubic) at whatever rate, the light flows of every user behind it
-// (the R1 red team's second pass, R2-1). Each end judges its own bytes;
-// nothing on the wire.
+// TwoWayRatio (HS2_TUNE_TWOWAY_RATIO; 0: none): over the window the way to
+// the user (the download direction) of a two-way connection carries at
+// most this many times what its user sent. A call gets about what it sends
+// (a gallery view, a webinar with the camera on: a few times as much); a
+// download whose app acknowledges in its own data — QUIC or any UDP inside
+// a proxy connection (VLESS/xray), a VPN over TCP inside one — sends 1 to
+// 3 % of what it gets, in every tick, under RTMax: it read as a call, so
+// neither the exit hinted it nor did the edge move it, and it stayed on
+// its QUIET link (cubic) at whatever rate, the light flows of every user
+// behind it (the R1 red team's second pass, R2-1). One way only: a call
+// held back on a busy QUIET link gets its other half in clumps or not at
+// all for a while, and must stay two-way (RT_HOLD's case). Each end judges
+// its own bytes; nothing on the wire.
 var TwoWayRatio = newTuneInt(16)
 
-// twoWayLopsided says whether one way carried more than TwoWayRatio times
-// the other over the window (a and b: the two ways' sums).
-func twoWayLopsided(a, b uint64) bool {
+// twoWayLopsided says whether the way to the user (down) carried more than
+// TwoWayRatio times what the user sent (up) over the window.
+func twoWayLopsided(up, down uint64) bool {
 	r := uint64(max(TwoWayRatio.Get(), 0))
-	if r == 0 {
-		return false
-	}
-	return a > r*b || b > r*a
+	return r > 0 && down > r*up
 }
 
 const (
@@ -105,7 +104,7 @@ func twoWayState(user, other []uint32, pos, seen int) int {
 		return twoWayNo // past a call's rate: an upload
 	}
 	if n >= 1 && twoWayLopsided(sum, osum) {
-		return twoWayNo // a download (or an upload) acknowledged in its own data: no call
+		return twoWayNo // a download acknowledged in its own data: no call
 	}
 	if w < twoWayWin {
 		// at least half the ticks so far: a call whose sending is held back
