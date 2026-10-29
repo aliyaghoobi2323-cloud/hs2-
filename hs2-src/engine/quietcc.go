@@ -97,22 +97,27 @@ func setQuietCC(tc *net.TCPConn, list string) string {
 var QuietCCLoss = ""
 
 // QuietLossPpm (HS2_TUNE_QUIET_LOSS_PPM): the share of retransmitted
-// segments, per million sent over quietLossWin, that is random loss (200:
-// 0.02%, under the field's 0.03%).
-var QuietLossPpm = 200
+// segments, per million sent over quietLossWin, that is random loss (150:
+// 0.015%, half the field's 0.03%).
+var QuietLossPpm = 150
 
 const (
 	// quietLossWin: the readings (one a second) the share is taken over:
 	// a QUIET link of 1500 segments a second at the field's 0.03% resends
 	// 4.5 in 10 s
 	quietLossWin = 10
-	// quietLossMin: the least retransmits in the window that count
-	quietLossMin = 3
+	// quietLossMin: the least retransmits in the window that count (round 5's
+	// screen S3: with 3, a QUIET link of ~1000 segments a second at 0.03%
+	// switched 2 to 24 s after its start, and a call that fell behind
+	// meanwhile lost its realtime lane for good)
+	quietLossMin = 2
 	// quietLossQueue: the socket's mean srtt − min_rtt under which a loss
 	// is the path's (CoDel drops a flow queue past 5 ms of sojourn)
 	quietLossQueue = 4 * time.Millisecond
-	// quietCalm: how long without random loss before the switch back
-	quietCalm = 30 * time.Second
+	// quietCalm: how long without random loss before the switch back (a
+	// path that loses at random now and then keeps the switch: each switch
+	// costs the calls a few seconds behind a cubic window)
+	quietCalm = 2 * time.Minute
 	// quietCCEvery: the watcher reads its socket each this many core ticks
 	quietCCEvery = 10
 )
