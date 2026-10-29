@@ -35,6 +35,14 @@
 #          (procstat-edge.tsv, procstat-exit.tsv in the raw dir); with
 #          HS2_GOSTAT=1 each hs2 also logs its goroutines and heap a second.
 #
+# PROC_TRACE=S (environment, R1 merge step 5): every S s from the links being
+# up to the end of the run, both hs2 processes' open fds, VmRSS (kB),
+# threads and goroutines (HS2_PPROF on loopback inside each namespace) go to
+# raw/ID/proc-edge.tsv and proc-exit.tsv ("epoch fds rss_kb threads
+# goroutines"); the run then stays up POST_IDLE s (20) after the client ends,
+# so what the users' connections held can be seen to go (a leak stays), and
+# status-*-idle.txt/json are taken at its end.
+#
 # Lines that differ only in BIN form one cell; the cell runs in the order
 # ABBABA (A = old) for REPS (3) repeats each; a cell with one BIN runs REPS
 # times. Each run: fresh namespaces (rig.sh up), fresh cert and shared key (in
@@ -50,6 +58,48 @@ set -u
 D=$(cd "$(dirname "$0")" && pwd)
 PLAN=${1:?usage: run.sh PLAN OUT}; OUT=${2:?usage: run.sh PLAN OUT}
 mkdir -p "$OUT/raw"; OUT=$(cd "$OUT" && pwd)
+# RIG_CPUS=0-5 (R1 speed, opt-in; docs/architecture/wip/r1/cpu/): the whole
+# block runs pinned to these CPUs with taskset — this script, rigguard.sh,
+# rig.sh and its ip/tc/ss, both hs2 processes, the rigload server and client,
+# pidstat (the affinity is inherited; no cgroup changes, nothing outside the
+# block is touched). Tests, builds and fuzzing then run on the other cores
+# through /root/r1-cpu.sh. The kernel's softirq work (veth, netem, the
+# qdiscs' timers) is not pinned by this: it runs mostly where its sender
+# runs, and the A/B in docs/architecture/wip/r1/cpu/ measured what is left.
+# With RIG_CPUS, the wait before each run looks at these CPUs' busy share
+# over 1 s (RIG_BUSY_MAX %, 30) instead of the host's load average, which
+# the other cores' work would hold up. EDGE_CPUS/EXIT_CPUS must lie inside.
+cpulist() {
+  python3 -c 'import sys
+s = set()
+for p in sys.argv[1].split(","):
+    a, _, b = p.partition("-"); s.update(range(int(a), int(b or a) + 1))
+print(" ".join(map(str, sorted(s))))' "$1" 2>/dev/null
+}
+if [ -n "${RIG_CPUS:-}" ]; then
+  RIG_CPU_IDS=$(cpulist "$RIG_CPUS")
+  [ -n "$RIG_CPU_IDS" ] && taskset -c "$RIG_CPUS" true 2>/dev/null || { echo "RIG_CPUS: bad CPU list '$RIG_CPUS'" >&2; exit 2; }
+  for v in EDGE_CPUS EXIT_CPUS; do
+    [ -n "${!v:-}" ] || continue
+    for c in $(cpulist "${!v}"); do
+      case " $RIG_CPU_IDS " in *" $c "*) ;; *) echo "$v=${!v} is not inside RIG_CPUS=$RIG_CPUS" >&2; exit 2 ;; esac
+    done
+  done
+  if [ -z "${RIG_PINNED:-}" ]; then
+    RIG_PINNED=1 exec taskset -c "$RIG_CPUS" "$D/run.sh" "$PLAN" "$OUT"
+  fi
+fi
+# cpus_busy "0 1 2": the busy share (%) of these CPUs over 1 s (/proc/stat)
+cpus_busy() {
+  local a b
+  a=$(grep '^cpu[0-9]' /proc/stat); sleep 1; b=$(grep '^cpu[0-9]' /proc/stat)
+  printf '%s\n--\n%s\n' "$a" "$b" | awk -v ids=" $1 " '
+    $1 == "--" { p = 1; next }
+    { c = substr($1, 4); if (index(ids, " " c " ") == 0) next
+      t = 0; for (i = 2; i <= 9; i++) t += $i; id = $5 + $6
+      if (!p) { t0 += t; i0 += id } else { t1 += t; i1 += id } }
+    END { d = t1 - t0; v = 0; if (d > 0) v = 100 * (1 - (i1 - i0) / d); printf "%d\n", v }'
+}
 # the host's TCP memory (R1 round 4, rigguard.sh): by default (RIG_GUARD=log)
 # the block is recorded only (tcp_mem, the TCP memory and the pressure
 # counter before, during and after it), nothing capped or cut (the owner's
@@ -137,6 +187,22 @@ sssnap() {
   ip netns exec $X ss -tinH state established '( dport = :2096 )' > "$r/ss-exit-$tag.txt" 2>/dev/null
   ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-$tag.txt" 2>/dev/null
   head -1 /proc/stat > "$r/stat-$tag.txt"
+  grep '^cpu[0-9]' /proc/stat > "$r/cpus-$tag.txt"
+}
+
+# proctrace R: the PROC_TRACE sampler (runs in the background; it uses
+# run_one's pe and px)
+proctrace() {
+  local r=$1 side p ns g
+  while :; do
+    for side in edge exit; do
+      if [ $side = edge ]; then p=$pe; ns=$E; else p=$px; ns=$X; fi
+      [ -r "/proc/$p/status" ] || continue
+      g=$(ip netns exec $ns curl -s -m 2 "http://127.0.0.1:6061/debug/pprof/goroutine?debug=1" 2>/dev/null | awk '/^goroutine profile: total/{print $NF; exit}')
+      echo "$(date +%s.%N) $(ls "/proc/$p/fd" 2>/dev/null | wc -l) $(awk '/^VmRSS:/{print $2}' "/proc/$p/status") $(awk '/^Threads:/{print $2}' "/proc/$p/status") ${g:-NA}" >> "$r/proc-$side.tsv"
+    done
+    sleep "$PROC_TRACE"
+  done
 }
 
 # killlink R WHAT C0 (KILLQ, R1 round-4 judge): reset one link socket of the
@@ -217,13 +283,17 @@ run_one() {
   benv=$(binenv "$bin")
   hs2env="$hs2env$benv"
   rm -rf "$r"; mkdir -p "$r" "$w"; CUR=$w
-  # quiet host
-  while [ $wait -lt "$LOAD_WAIT" ] && awk -v m="$LOAD_MAX" '{exit !($1 > m)}' /proc/loadavg; do sleep 10; wait=$((wait + 10)); done
+  # quiet host (with RIG_CPUS: quiet rig CPUs)
+  if [ -n "${RIG_CPUS:-}" ]; then
+    while [ $wait -lt "$LOAD_WAIT" ] && [ "$(cpus_busy "$RIG_CPU_IDS")" -gt "${RIG_BUSY_MAX:-30}" ]; do sleep 9; wait=$((wait + 10)); done
+  else
+    while [ $wait -lt "$LOAD_WAIT" ] && awk -v m="$LOAD_MAX" '{exit !($1 > m)}' /proc/loadavg; do sleep 10; wait=$((wait + 10)); done
+  fi
   # the host at the start of the run: uptime and the five busiest processes
   # (%CPU over 0.5 s, command name only)
   hup=$(uptime | sed 's/^ *//' | tr -d '"\\')
   htop=$(top -bn2 -d0.5 -w 200 2>/dev/null | awk '/^top -/{f++} f==2 && /^ *[0-9]+ /{print $9" "$12}' | head -5 | paste -sd';' | tr -d '"\\')
-  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"panel_sndbuf\":${PANEL_SNDBUF:-0},\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
+  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"rig_cpus\":\"${RIG_CPUS:-}\",\"panel_sndbuf\":${PANEL_SNDBUF:-0},\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
   local mx0 ok0 hp0 hm0 hsp
   mx0=$(memcg_ev max); ok0=$(memcg_ev oom_kill)
@@ -274,6 +344,8 @@ run_steps() {
   # gameudp in the cell: UDP on the edge's user ports ("udp": true)
   udp=0; grep -qE '"kind": "(gameudp|udpflood)"' "$r/spec.json" && udp=1
   mkconf "$w" "$N" $udp || { why="hs2 config"; return 1; }
+  # PROC_TRACE: goroutines through Go's pprof, on loopback in each namespace
+  [ "${PROC_TRACE:-0}" != 0 ] && hs2env="$hs2env HS2_PPROF=127.0.0.1:6061"
   # the server keeps each game and call flow's record in srv/ (the client reads it)
   ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 -report "$r/srv" -sndbuf "$PANEL_SNDBUF" > "$r/rigload-server.log" 2>&1 &
   PIDS+=($!)
@@ -288,6 +360,10 @@ run_steps() {
   echo "{\"links_wait_s\":$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f", b - a}'),\"links_at_start\":${n:-0},\"pid_edge\":$pe,\"pid_exit\":$px}" > "$r/links.json"
   [ "${n:-0}" -ge "$N" ] || { why="only ${n:-0} of $N links up after $lw s"; return 1; }
   "$D/rig.sh" tun-up 2> "$r/tun-up.err" || { why="tun-up: $(tail -1 "$r/tun-up.err")"; return 1; }
+  if [ "${PROC_TRACE:-0}" != 0 ]; then
+    proctrace "$r" &
+    PIDS+=($!)
+  fi
   case "$MODE" in
     *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
                PIDS+=($!); sleep 1.5 ;;
@@ -344,7 +420,19 @@ run_steps() {
   sssnap end "$r"
   grep -E "^Vm(RSS|HWM):" /proc/$pe/status > "$r/mem-edge.txt" 2>/dev/null
   grep -E "^Vm(RSS|HWM):" /proc/$px/status > "$r/mem-exit.txt" 2>/dev/null
-  wait "$pc" || { why="client exit status $? ($(tail -1 "$r/client.err"))"; return 1; }
+  local cst=0
+  wait "$pc" || cst=$?
+  date +%s.%N > "$r/client-end.txt"
+  [ "$cst" = 0 ] || { why="client exit status $cst ($(tail -1 "$r/client.err"))"; return 1; }
+  if [ "${PROC_TRACE:-0}" != 0 ]; then
+    # the users' connections are gone: what they held must go too
+    sleep "${POST_IDLE:-20}"
+    "$bp" status -c "$w/edge.json" > "$r/status-edge-idle.txt" 2>&1
+    "$bp" status -c "$w/exit.json" > "$r/status-exit-idle.txt" 2>&1
+    cp "/run/hs2/$(echo "${w#/}" | tr / -)-edge.json.status.json" "$r/status-edge-idle.json" 2>/dev/null
+    cp "/run/hs2/$(echo "${w#/}" | tr / -)-exit.json.status.json" "$r/status-exit-idle.json" 2>/dev/null
+    ip netns exec $E ss -tinH state established "( sport = :2096 )" > "$r/ss-edge-idle.txt" 2>/dev/null
+  fi
   kill -0 "$pe" 2>/dev/null || { why="edge hs2 exited during the run"; return 1; }
   kill -0 "$px" 2>/dev/null || { why="exit hs2 exited during the run"; return 1; }
   return 0
