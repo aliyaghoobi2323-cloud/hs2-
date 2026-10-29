@@ -19,7 +19,8 @@
 #                  minute (systemd's NRestarts 1): Kharej reverts, Iran stays —
 #                  then the runbook's rule: Iran is put back as well (its
 #                  safe-apply with FROM_BIN), timed from the moment Kharej's
-#                  result says REVERTED
+#                  log says REVERTING
+#   xflapn:GAP     xflap without the rule: nobody puts Iran back
 #   erefuse:GAP    as e-first, but Iran's safe-apply refuses (its stage holds a
 #                  config hs2 check fails): Kharej goes alone
 # HS2_SAFE_PEER_WAIT is the runbook's 120 s (PW to change it).
@@ -78,7 +79,7 @@ for u in e x; do
 done
 cp "$FROM" $W/stage-eback/hs2
 case "$ORDER" in
-xflap) : > $UGSD/hs2-ugx/flap ;;
+xflap | xflapn) : > $UGSD/hs2-ugx/flap ;;
 erefuse) sed 's/"mode":"dial"/"mode":"BAD"/' $W/edge.json > $W/stage-e/config.json ;;
 esac
 ln -s "$T/fakesd.sh" $W/shim/systemctl
@@ -111,7 +112,7 @@ sa() { # sa UNIT NS STAGE TAG: hs2-safe-apply, detached, as the runbook runs it
 done_tag() { grep -qE '^(OK|REVERTED|REFUSED)' $OUT/safe-apply-$1.last 2>/dev/null; }
 t0=$(date +%s.%N)
 case "$ORDER" in
-e-first | xflap | erefuse) sa hs2-uge $E $W/stage-e e; sleep "$GAP"; sa hs2-ugx $X $W/stage-x x ;;
+e-first | xflap | xflapn | erefuse) sa hs2-uge $E $W/stage-e e; sleep "$GAP"; sa hs2-ugx $X $W/stage-x x ;;
 x-first) sa hs2-ugx $X $W/stage-x x; sleep "$GAP"; sa hs2-uge $E $W/stage-e e ;;
 both) sa hs2-ugx $X $W/stage-x x; sa hs2-uge $E $W/stage-e e ;;
 *) echo "unknown scenario $SCEN" >&2; exit 2 ;;

@@ -13,6 +13,7 @@
 #   peer-late   the peer answers after 200 s, HS2_SAFE_PEER_WAIT=400 → stays
 #               (and after 350 s: back with the default 300, stays with 400)
 #   bad-config  `hs2 check` refuses the staged config     → nothing applied
+#   no-backup   the backup cannot be made                  → nothing applied
 #   binary-only the new binary's `hs2 check` refuses the live config that the
 #               running one passes → nothing applied; a config both refuse → applied
 #   dropins     <unit>.service.d/ after a revert is exactly what it was (or absent)
@@ -185,6 +186,15 @@ out=$(run FAKE_PEER=0)
 check "bad-config: REFUSED, nothing applied, nothing restarted" \
   'last | grep -q "^REFUSED config-check" && [ "$(state)" = "$before" ] && [ "$(restarts)" = 0 ] && ! grep -q daemon-reload "$W/sd/calls"'
 check "bad-config: the staged binary checks the staged config" 'grep -q "ERROR: bad (NEWBIN)" "$W/log"'
+
+# ---- no backup, no change ------------------------------------------------------------
+# (R1 review C: the backup's cp went unchecked — disk full, and a later revert
+# would have put back nothing while removing the drop-ins.)
+world nobackup; before=$(state)
+: > "$W/notadir"
+out=$(run FAKE_PEER=never HS2_SAFE_PEER_WAIT=10 HS2_SAFE_BACKUPS="$W/notadir/bk")
+check "backup: no backup can be made → REFUSED backup, nothing applied, nothing restarted" \
+  'last | grep -q "^REFUSED backup" && [ "$(state)" = "$before" ] && [ "$(restarts)" = 0 ]'
 
 # ---- a new binary alone: the live config, checked with it ---------------------------
 # (R1 review C: a config the running binary runs and the new one refuses — e.g.
