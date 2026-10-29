@@ -1,0 +1,11 @@
+# B7 (2 reps): R2-1 where it triggers: 5 downloads acknowledged in their own data at ~18 Mbit/s each (2 %, QUIC inside VLESS) next to 5 players; 25 at ~3.5 Mbit/s with 3.5 % (VPN over TCP inside a proxy connection) next to 25 players; and C3 (the SEGS=8 floor) in home under a per-connection policer of 2 Mbit/s, fin2 against the QUIET floor of two segments (q2s)
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=r2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=1 ACKF=0.035 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=1 ACKF=0.035 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=16 MIX=home SBR=0.6 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=16 MIX=home SBR=0.6 BIN=q2s
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=8 MIX=home SBR=0.6 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=8 MIX=home SBR=0.6 BIN=q2s
