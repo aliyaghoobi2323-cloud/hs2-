@@ -414,10 +414,18 @@ func (o *owdLink) tick() time.Duration {
 		// lowers it) held a QUIET link's beat at 25 ms after the download
 		// ended — 35 to 40 records a second from the exit for good (the
 		// red team's second pass, B4)
+		now := ctrlNow()
 		tr := 0.0
-		if at := o.trEnd.Load(); at != 0 && time.Duration(ctrlNow()-at) <= 2*time.Second {
+		if at := o.trEnd.Load(); at != 0 && time.Duration(now-at) <= 2*time.Second {
 			tr = float64(o.trLast.Load())
 		}
+		// and the second under way, once it is 50 ms old: a load that just
+		// started takes the fast beat at once, not a second later
+		o.trMu.Lock()
+		if el := time.Duration(now - o.trAt); o.trAt != 0 && el >= 50*time.Millisecond && el <= time.Second {
+			tr = max(tr, float64(o.trN)/el.Seconds())
+		}
+		o.trMu.Unlock()
 		r = min(r, tr)
 	}
 	t := owdTickOf(r)

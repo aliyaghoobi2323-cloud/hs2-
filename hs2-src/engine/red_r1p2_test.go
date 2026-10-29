@@ -68,6 +68,7 @@ func TestRed2TwoWayAckedDownload(t *testing.T) {
 	}
 }
 
+
 // Z10 and B4: an idle QUIET link's one-way delay loop sends nothing while
 // the BULK links carry under owdIdleRate a second (OWDIdle), sends at once
 // when one second has as much, and parks again owdIdleAfter after the
@@ -133,6 +134,12 @@ func TestRed2OWDIdleParks(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 		first := time.Since(t0)
+		// busy 3 s: after its first second the beat follows the traffic
+		// (owdTickOf of 1 MB/s: ~100 ms a message each end)
+		for range 100 {
+			busy()
+			time.Sleep(10 * time.Millisecond)
+		}
 		n0 := a.msgs.Load() + b.msgs.Load()
 		for range 200 {
 			busy()
@@ -144,10 +151,10 @@ func TestRed2OWDIdleParks(t *testing.T) {
 		n1 := a.msgs.Load() + b.msgs.Load()
 		staleIdle(a, b, 2*time.Second)
 		n2 := a.msgs.Load() + b.msgs.Load()
-		t.Logf("first message both ways %v after the traffic; %d messages in 2 s busy; %d in the 2 s after parking (parks %d, %d)",
+		t.Logf("first message both ways %v after the traffic; %d messages in the last 2 s of 3 s busy; %d in the 2 s after parking (parks %d, %d)",
 			first.Round(time.Millisecond), nb, n2-n1, a.parks.Load(), b.parks.Load())
-		if nb < 20 {
-			t.Fatalf("busy: %d messages in 2 s at 1 MB/s (the beat owdTickOf: ~100 ms)", nb)
+		if nb < 25 {
+			t.Fatalf("busy: %d messages in 2 s at 1 MB/s past the first second (the beat owdTickOf: ~100 ms)", nb)
 		}
 		if n2 != n1 {
 			t.Fatalf("idle again: %d messages after parking", n2-n1)
