@@ -854,7 +854,20 @@ systemctl daemon-reload && systemctl restart hs2
 | `HS2_TUNE_HQG_SEGS=N` | 8 | C3's cap is at least N segments (0: 2 segments, the design document's gate) | either end |
 | `HS2_TUNE_SENDCAP=0` | on | C4-lite off: the exit's pacing net alone, as before | either end |
 | `HS2_TUNE_QUIET=0` | on | no QUIET links: one connection per link carries everything (level 1's behaviour) | either end |
-| `HS2_TUNE_QUIET_EXTRA=0` | 1 | QUIET links within `max_links` instead of next to it (by default a pool holds `max_links` + 1 connections, + 2 past 5 links) | both ends alike |
+| `HS2_TUNE_QUIET_EXTRA=0` | 1 | QUIET links within `max_links` instead of next to it (by default a pool holds `max_links` + 1 connections up to 5 links, and `max_links` + 4 from 6 links: `HS2_TUNE_QUIET_FEW` and `HS2_TUNE_QUIET_MANY`) | both ends alike |
+| `HS2_TUNE_QUIET_FEW=N` | 1 | the QUIET links of a pool of up to 5 links | either end (with `HS2_TUNE_QUIET_FOLLOW` both run the smaller count) |
+| `HS2_TUNE_QUIET_MANY=N` | 4 | the QUIET links of a pool of 6 links or more | either end (as above) |
+| `HS2_TUNE_QUIET_FOLLOW=0` | on | the two ends of a reverse pool must run the same QUIET count (by default both run the smaller one) | both ends |
+| `HS2_TUNE_QUIET_FOLLOW_GRACE=ms` | 5000 | a retiring QUIET link closes this long after its last connection left | either end |
+| `HS2_TUNE_QUIET_COAL_MIN=N` | 50 | light frames a second past which a QUIET link shares records (`HS2_TUNE_QUIET_COAL`) | either end |
+| `HS2_TUNE_PLACE_USERS=N` | 2 | where a user's connections go: 0 the pool's pick; 1 every user held to its links; 2 heavy users held, every other user's connection to the link with the fewest other users; 3 heavy users held, the rest by the pool's pick | Iran |
+| `HS2_TUNE_TWOWAY=0` | on | a connection whose user sends steadily (a call) is moved off QUIET like a download | either end |
+| `HS2_TUNE_TWOWAY_RATIO=N` | 16 | ... unless what reaches the user is more than N times what it sent (a download acknowledged in its own data: QUIC or a VPN inside a proxy connection); 0: no such limit | either end |
+| `HS2_TUNE_RT=0` | on | no realtime lane for calls | either end |
+| `HS2_TUNE_RT_HOLD=ticks` | 20 | how long (100 ms ticks) a call keeps its realtime lane while it stays loosely steady | either end |
+| `HS2_TUNE_OWD_IDLE=0` | on | an idle pool's QUIET links keep sending one-way delay messages | either end |
+| `HS2_TUNE_OWD_IDLE_POOL=0` | on | with several QUIET links, the BULK links' budget and α read only the latest QUIET link's one-way delay | either end |
+| `HS2_TUNE_UDP_FLOWS=N`, `HS2_TUNE_UDP_USER_FLOWS=N` | 4096, 256 | the most UDP flows of a user port, and of one user (0: no limit) | Iran |
 | `HS2_TUNE_BUDGET=0` | on | BULK links keep a rate cap instead of the in-flight budget | either end |
 | `HS2_TUNE_MOVE_HINT=0` | on | the exit no longer hints which download to move; the edge moves by data arriving | either end |
 | `HS2_TUNE_OWD_GUARD=0` | on | one-way delay readings are no longer ignored after a resend | either end |
