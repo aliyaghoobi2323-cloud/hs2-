@@ -1,19 +1,19 @@
 #!/bin/bash
 # block.sh NAME PLAN [REPS]: one locked rig block of the R1 round 5
 # (branch r1-r5), rig namespaces with RIG_ID 5, at most LIMIT s (1440) of
-# rig time. From round 4's block.sh, with the judge's paths:
-#   - waits until GAP s (150) have passed since this agent's previous block,
+# rig time. From the red team pass 2 block.sh (redteam2/tools), with RIG_CPUS (the cpu report):
+#   - waits until GAP s (130) have passed since this agent's previous block,
 #     then takes the shared lock /root/r1-quiet.lock only through the fair
 #     FIFO script /root/r1-quiet.take.sh, and removes it right after;
 #   - runs the plan with run.sh (memory guard: log only, the owner's T21),
 #     REPS each in the ABBABA-style rotation; reruns the runs that failed or
 #     whose host was busier than 75 % while time is left;
 #   - raw files to /root/r5/raw-NAME (not in the repo), results to
-#     /root/r4j/NAME, the locked time to /root/r5/locktime.log.
+#     /root/r5/NAME, the locked time to /root/r5/locktime.log.
 # Nothing is built under the lock: rigload is copied in from RLBIN.
 set -u
 NAME=${1:?}; PLAN=${2:?}; REPS=${3:-2}
-RS=${RS:-/root/hs2-wt/r1-r5/docs/architecture/wip/rig-scale}; RLBIN=${RLBIN:-/root/r5/raw-bins/rigload}
+RS=${RS:-/root/hs2-wt/r1-r5/docs/architecture/wip/rig-scale}; RLBIN=${RLBIN:-/root/r5/bins/rigload}
 O=/root/r5/$NAME; R=/root/r5/raw-$NAME
 LOCK=/root/r1-quiet.lock
 LIMIT=${LIMIT:-1440}; GAP=${GAP:-130}
