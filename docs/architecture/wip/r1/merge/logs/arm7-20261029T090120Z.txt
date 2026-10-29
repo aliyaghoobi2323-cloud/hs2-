@@ -1,0 +1,11 @@
+== arm7: R1 merge step 5: arm7 + flaky; lock after 931 s; 2026-10-29T09:01:20Z; limit 1500 s
+== arm7 on fd1e0af (R1 ادغام: ادغام r1-red2 6a2628d (گذر دوم تیم قرمز: نسبت دوس�) 2026-10-29T09:01:20Z
+go version go1.27.3 linux/amd64
+/root/rmerge/step5/arm7-fd1e0af-20261029T090120Z.txt
+   skip TestRed2ChaosMoreSeeds: HS2_RED2_SEEDS not set
+   PASS; 86 s
+== exit 0
+-- arm7.sh rc 0
+-- flaky-red2pool rc 0 39 s: TOTAL top-level: 30 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+== done arm7 2026-10-29T09:06:47Z
+== end rc=0 2026-10-29T09:06:47Z, 327 s

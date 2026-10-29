@@ -1,0 +1,5 @@
+== go test -race -count=1 -timeout 30m -run Hint|MoveBack|MoveRule|QuietCounts|QuietMove|QuietTunPlacement|OWD|Budget|Panel|LinkSndbuf|Moved|UDPLate|LocalTarget|Group|Coalesce|Events|QuietRecords|HostQ|Lowat|Gate|HostWait|Quiet|Follow|RTHold|RTShare|LatRR|RTLane|SchedRT|Sched|Budget|HostGate|HostWait|Kill|ByUser|HoldCap|Rescue|TwoWay|Place|Hint|Red|AngleTunPing ./engine (in hs2-src): rc 0, 408 s
+== race-engine
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   pass    397.0  175/0/23               60/0/0                
+TOTAL top-level: 175 pass, 0 fail, 23 skip; subtests: 60 pass, 0 fail, 0 skip; packages 1 (0 not pass)

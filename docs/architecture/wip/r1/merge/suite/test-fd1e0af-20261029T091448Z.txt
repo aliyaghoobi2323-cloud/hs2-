@@ -1,0 +1,20 @@
+== go test -count=1 -timeout 25m ./... (in hs2-src): rc 0, 941 s
+== test
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2  pass      3.5  102/0/0                214/0/0               
+github.com/hosseintaghipoursori-alt/hs2-tunnel/core     pass      0.1  15/0/0                 0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/encap    pass     29.3  54/0/0                 58/0/0                
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   pass    939.2  729/0/28               188/0/0               
+github.com/hosseintaghipoursori-alt/hs2-tunnel/fec      pass      1.6  12/0/2                 2/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/dglab skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netem skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netsim skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/probe skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/mmsg     skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs     skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/reality  pass      0.2  7/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier pass      3.2  29/0/0                 24/0/0                
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tun      pass      0.1  8/0/0                  1/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tune     pass      0.0  12/0/0                 0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier pass     78.9  80/0/0                 38/0/0                
+TOTAL top-level: 1048 pass, 0 fail, 30 skip; subtests: 525 pass, 0 fail, 0 skip; packages 16 (0 not pass)

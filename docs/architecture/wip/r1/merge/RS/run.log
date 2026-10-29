@@ -1,0 +1,14 @@
+07:17:15 plan /root/rmerge/RS/plan.txt: 6 runs
+07:17:16 start 3fc575cc-m-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.42 waited 0s
+07:18:46 done 3fc575cc-m-1 ok=1 
+07:18:46 start 4197d254-m-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 1.58 waited 0s
+07:20:16 done 4197d254-m-1 ok=1 
+07:20:17 start 486f15db-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.37 waited 0s
+07:21:47 done 486f15db-m-1 ok=1 
+07:21:48 start 7bb9c0af-m-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 1.76 waited 0s
+07:23:24 done 7bb9c0af-m-1 ok=1 
+07:23:25 start a1e195a2-m-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.45 waited 0s
+07:25:24 done a1e195a2-m-1 ok=1 
+07:25:25 start af562cf3-m-1 (N=600 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.24 waited 0s
+07:27:55 done af562cf3-m-1 ok=1 
+07:27:55 done /root/rmerge/RS/plan.txt

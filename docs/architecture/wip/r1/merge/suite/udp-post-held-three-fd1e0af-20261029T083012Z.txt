@@ -1,0 +1,31 @@
+=== RUN   TestReverseStreamTCPAndUDP
+--- PASS: TestReverseStreamTCPAndUDP (0.39s)
+=== RUN   TestStreamTCPAndUDP
+--- PASS: TestStreamTCPAndUDP (0.61s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.17s)
+=== RUN   TestReverseStreamTCPAndUDP
+--- PASS: TestReverseStreamTCPAndUDP (0.60s)
+=== RUN   TestStreamTCPAndUDP
+--- PASS: TestStreamTCPAndUDP (0.70s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.18s)
+=== RUN   TestReverseStreamTCPAndUDP
+--- PASS: TestReverseStreamTCPAndUDP (0.60s)
+=== RUN   TestStreamTCPAndUDP
+--- PASS: TestStreamTCPAndUDP (0.43s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.17s)
+=== RUN   TestReverseStreamTCPAndUDP
+--- PASS: TestReverseStreamTCPAndUDP (0.41s)
+=== RUN   TestStreamTCPAndUDP
+--- PASS: TestStreamTCPAndUDP (0.64s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.18s)
+=== RUN   TestReverseStreamTCPAndUDP
+--- PASS: TestReverseStreamTCPAndUDP (0.46s)
+=== RUN   TestStreamTCPAndUDP
+--- PASS: TestStreamTCPAndUDP (0.83s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.16s)
+PASS

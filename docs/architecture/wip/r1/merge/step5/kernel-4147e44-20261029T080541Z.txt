@@ -1,0 +1,38 @@
+== kernel matrix — 2026-10-29T08:05:41Z, 4147e44 R1 ادغام: درگاه آزاد آزمون‌ها برای TCP و UDP هر دو؛ سرخ CI در TestUDPUserPortRepliesFromTheAddressUsed
+== host: Linux 6.8.0-147-generic x86_64, go version go1.27.3 linux/amd64
+== 1. kprobe
+kernel 6.8.0-147-generic
+ok      TCP_NOTSENT_LOWAT                    since 3.12    | 11584 <nil> | without: C3 falls back to the fixed mark and the old send gate (TestHostQNoSyscalls)
+ok      SIOCOUTQNSD                          since 3.x     | 0 errno 0 | without: C3 falls back as above
+ok      SIOCOUTQ                             since 2.x     | 0 errno 0 | without: the BULK in-flight budget is off (newLinkBudget nil)
+ok      TCP_INFO up to tcpi_rcv_ooopack      since 5.4     | length 248, need 228 | without: fields past the kernel's length read 0 (C4-lite: no delivery rate below 4.9, TestSendCapNoDeliveryRate)
+ok      SO_MAX_PACING_RATE                   since 3.13    | <nil> | without: no pacing cap (C4-lite, the BULK budget's pace)
+ok      TCP_THIN_LINEAR_TIMEOUTS             since 2.6.34  | <nil> | without: a QUIET link keeps the exponential RTO back-off (best effort)
+ok      TCP_USER_TIMEOUT                     since 2.6.37  | <nil> | without: link death found later
+ok      TCP_CONGESTION cubic (QUIET links)   since 2.6.13  | <nil> | without: a QUIET link keeps the default
+ok      TCP_MAXSEG (panel socket)            since 2.x     | <nil> | without: the route's segment
+ok      SO_SNDBUFFORCE (BULK send buffer)    since 2.6.14  | SO_SNDBUF 16777216 <nil> | without: SO_SNDBUF within wmem_max
+ok      BBR available                        since 4.9     | reno cubic bbr (bbr is loaded on first use: see tcp_allowed_congestion_control) | without: links use the kernel's default
+ok      default qdisc                        since -       | fq_codel | without: -
+== 2. the tests that call the kernel
+   == kernel 6.8.0-147-generic
+   kernel 6.8.0-147-generic
+   ok      TCP_NOTSENT_LOWAT                    since 3.12    | 11584 <nil> | without: C3 falls back to the fixed mark and the old send gate (TestHostQNoSyscalls)
+   ok      SIOCOUTQNSD                          since 3.x     | 0 errno 0 | without: C3 falls back as above
+   ok      SIOCOUTQ                             since 2.x     | 0 errno 0 | without: the BULK in-flight budget is off (newLinkBudget nil)
+   ok      TCP_INFO up to tcpi_rcv_ooopack      since 5.4     | length 248, need 228 | without: fields past the kernel's length read 0 (C4-lite: no delivery rate below 4.9, TestSendCapNoDeliveryRate)
+   ok      SO_MAX_PACING_RATE                   since 3.13    | <nil> | without: no pacing cap (C4-lite, the BULK budget's pace)
+   ok      TCP_THIN_LINEAR_TIMEOUTS             since 2.6.34  | <nil> | without: a QUIET link keeps the exponential RTO back-off (best effort)
+   ok      TCP_USER_TIMEOUT                     since 2.6.37  | <nil> | without: link death found later
+   ok      TCP_CONGESTION cubic (QUIET links)   since 2.6.13  | <nil> | without: a QUIET link keeps the default
+   ok      TCP_MAXSEG (panel socket)            since 2.x     | <nil> | without: the route's segment
+   ok      SO_SNDBUFFORCE (BULK send buffer)    since 2.6.14  | SO_SNDBUF 16777216 <nil> | without: SO_SNDBUF within wmem_max
+   ok      BBR available                        since 4.9     | reno cubic bbr (bbr is loaded on first use: see tcp_allowed_congestion_control) | without: links use the kernel's default
+   ok      default qdisc                        since -       | fq_codel | without: -
+   -- engine: ^(TestAngleSendCapBothEnds|TestBudgetInflight|TestExitMeterBlockedBehindSlowReaderTCP|TestHostQLinuxSocket|TestListenersArePlainTCP|TestLowatAdaptsLinux|TestModuleDefaultIsPlainTCP|TestPaceNetIdleLinksReads|TestPaceNetRegistration|TestPaceNetRunner|TestPaceNetSetsSocket|TestQuietThinTimeouts|TestReplyPinBothFamilies|TestSendCapLinuxTCPInfo|TestServeStatsExtendedFromSocket|TestUDPUserPortRepliesFromTheAddressUsed|TestWcoreFixOooSupportByLength)$
+   PASS
+   -- tun: ^(TestOffloadDeviceUDP)$
+   PASS
+== 3. bundle: /root/rmerge/step5/kernel-4147e44-20261029T080541Z-bundle (37M); on a 5.10 host: copy the directory and run ./run.sh
+== 4. no 5.10 guest here (KERNEL_VM_CMD unset): see README.fa.md
+== exit 0

@@ -1,0 +1,33 @@
+== race386: R1 merge step 5: race + 386; lock after 1031 s; 2026-10-29T07:47:40Z; limit 1500 s
+== race386 on 4147e44 (R1 ادغام: درگاه آزاد آزمون‌ها برای TCP و UDP هر دو؛ سر�) 2026-10-29T07:47:40Z
+go version go1.27.3 linux/amd64
+== udp on 4147e44 (R1 ادغام: درگاه آزاد آزمون‌ها برای TCP و UDP هر دو؛ سر�) 2026-10-29T07:47:40Z
+go version go1.27.3 linux/amd64
+-- udp pre-alone: pass 20, fail 0, 6 s; 
+-- udp post-alone: pass 20, fail 0, 6 s; 
+holding 6979 UDP ports on 127.0.0.1 (every 4 of 32768-60999) for 600 s
+-- udp pre-held: pass 20, fail 0, 10 s; 
+holding 6986 UDP ports on 127.0.0.1 (every 4 of 32768-60999) for 600 s
+-- udp post-held: pass 20, fail 0, 9 s; 
+holding 6990 UDP ports on 127.0.0.1 (every 4 of 32768-60999) for 600 s
+-- udp post-held-three: pass 15, fail 0, 9 s; 
+== done udp 2026-10-29T07:48:30Z
+-- race-engine rc 0 408 s: TOTAL top-level: 175 pass, 0 fail, 23 skip; subtests: 60 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- race-pkgs rc 0 13 s: TOTAL top-level: 146 pass, 0 fail, 0 skip; subtests: 238 pass, 0 fail, 0 skip; packages 3 (0 not pass)
+-- race-smux rc 0 81 s: TOTAL top-level: 136 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- race-rigload rc 0 21 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- t386 rc 0 441 s: TOTAL top-level: 834 pass, 0 fail, 64 skip; subtests: 410 pass, 0 fail, 1 skip; packages 4 (0 not pass)
+-- t386-smux rc 0 67 s: TOTAL top-level: 136 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+/root/hs2-step5/fuzz-4147e44-20261029T080541Z.txt
+== host: Linux 6.8.0-147-generic x86_64, go version go1.27.3 linux/amd64
+NOT RUN: the rig lock is held: r1-merge R1 merge step 5: race + 386, pid 3943969, 2026-10-29T07:47:40Z
+== exit 3
+-- fuzz.sh rc 3
+/root/rmerge/step5/kernel-4147e44-20261029T080541Z.txt
+== 3. bundle: /root/rmerge/step5/kernel-4147e44-20261029T080541Z-bundle (37M); on a 5.10 host: copy the directory and run ./run.sh
+== 4. no 5.10 guest here (KERNEL_VM_CMD unset): see README.fa.md
+== exit 0
+-- kernel.sh rc 0
+/root/rmerge/tools/blocks.sh: line 99: syntax error near unexpected token `;;'
+/root/rmerge/tools/blocks.sh: line 99: `  ;;'
+== end rc=2 2026-10-29T08:06:01Z, 1101 s

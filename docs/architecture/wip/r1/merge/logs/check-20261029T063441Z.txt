@@ -1,0 +1,17 @@
+== check: R1 merge step 5: build + make check; lock after 401 s; 2026-10-29T06:34:41Z; limit 1500 s
+== build on 3fcc588 (R1 ادغام: نمونه‌بردار پردازه در چیدمان (PROC_TRACE) برا�) 2026-10-29T06:34:41Z
+go version go1.27.3 linux/amd64
+-- built /root/rmerge/bins/hs2-m-3fcc588
+-- built rigload-3fcc588
+e409a66fe80865c3c367ee238428925e720bda643a9765f521fcb951d7c45275  hs2-m-3fcc588
+d7a99299ffb11fbd7e5b9151b19cceb46a027737f837a370c70f8f4515b13d9e  rigload-3fcc588
+== done build 2026-10-29T06:34:44Z
+== check on 3fcc588 (R1 ادغام: نمونه‌بردار پردازه در چیدمان (PROC_TRACE) برا�) 2026-10-29T06:34:44Z
+go version go1.27.3 linux/amd64
+-- vet/fmt: 2 of 2 make targets rc 0; rigload vet rc 0
+-- test rc 0 909 s: TOTAL top-level: 1043 pass, 0 fail, 30 skip; subtests: 523 pass, 0 fail, 0 skip; packages 16 (0 not pass)
+-- smux rc 0 66 s: TOTAL top-level: 136 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- rigload rc 0 19 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- ana_test.py rc 0: OK
+== done check 2026-10-29T06:51:21Z
+== end rc=0 2026-10-29T06:51:21Z, 1000 s

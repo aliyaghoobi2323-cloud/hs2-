@@ -1,0 +1,22 @@
+== race386b: R1 merge step 5: race + 386 (final head); lock after 340 s; 2026-10-29T09:40:14Z; limit 1500 s
+== race386 on fd1e0af (R1 ادغام: ادغام r1-red2 6a2628d (گذر دوم تیم قرمز: نسبت دوس�) 2026-10-29T09:40:14Z
+go version go1.27.3 linux/amd64
+== udp on fd1e0af (R1 ادغام: ادغام r1-red2 6a2628d (گذر دوم تیم قرمز: نسبت دوس�) 2026-10-29T09:40:14Z
+go version go1.27.3 linux/amd64
+-- udp pre-alone: pass 20, fail 0, 6 s; 
+-- udp post-alone: pass 20, fail 0, 6 s; 
+holding 6990 UDP ports on 127.0.0.1 (p % 4 == 1 in 32768-60999) for 600 s
+-- udp pre-held: pass 6, fail 14, 147 s;     udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+holding 7042 UDP ports on 127.0.0.1 (p % 4 == 1 in 32768-60999) for 600 s
+-- udp post-held: pass 20, fail 0, 9 s; 
+holding 7044 UDP ports on 127.0.0.1 (p % 4 == 1 in 32768-60999) for 600 s
+-- udp post-held-three: pass 15, fail 0, 9 s; 
+== done udp 2026-10-29T09:43:12Z
+-- race-engine rc 0 442 s: TOTAL top-level: 180 pass, 0 fail, 23 skip; subtests: 62 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- race-pkgs rc 0 13 s: TOTAL top-level: 146 pass, 0 fail, 0 skip; subtests: 238 pass, 0 fail, 0 skip; packages 3 (0 not pass)
+-- race-smux rc 0 81 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- race-rigload rc 0 21 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- t386 rc 0 476 s: TOTAL top-level: 839 pass, 0 fail, 64 skip; subtests: 412 pass, 0 fail, 1 skip; packages 4 (0 not pass)
+-- t386-smux rc 0 66 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+== done race386 2026-10-29T10:01:31Z
+== end rc=0 2026-10-29T10:01:31Z, 1277 s

@@ -1,0 +1,26 @@
+== fuzzkernel: R1 merge step 5: fuzz + kernel; lock after 1301 s; 2026-10-29T08:30:12Z; limit 1500 s
+== fuzzkernel on fd1e0af (R1 ادغام: ادغام r1-red2 6a2628d (گذر دوم تیم قرمز: نسبت دوس�) 2026-10-29T08:30:12Z
+go version go1.27.3 linux/amd64
+== udp on fd1e0af (R1 ادغام: ادغام r1-red2 6a2628d (گذر دوم تیم قرمز: نسبت دوس�) 2026-10-29T08:30:12Z
+go version go1.27.3 linux/amd64
+-- udp pre-alone: pass 19, fail 1, 25 s;     udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+-- udp post-alone: pass 20, fail 0, 6 s; 
+holding 6999 UDP ports on 127.0.0.1 (p % 4 == 1 in 32768-60999) for 600 s
+-- udp pre-held: pass 13, fail 7, 78 s;     udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+holding 7023 UDP ports on 127.0.0.1 (p % 4 == 1 in 32768-60999) for 600 s
+-- udp post-held: pass 20, fail 0, 9 s; 
+holding 7026 UDP ports on 127.0.0.1 (p % 4 == 1 in 32768-60999) for 600 s
+-- udp post-held-three: pass 15, fail 0, 10 s; 
+== done udp 2026-10-29T08:32:26Z
+/root/rmerge/step5/fuzz-fd1e0af-20261029T083226Z.txt
+   ok  	github.com/xtaci/smux	60.116s
+   FuzzGroupReassembly: rc 0, 61 s
+== exit 0
+-- fuzz.sh rc 0
+/root/rmerge/step5/kernel-fd1e0af-20261029T084259Z.txt
+== 3. bundle: /root/rmerge/step5/kernel-fd1e0af-20261029T084259Z-bundle (37M); on a 5.10 host: copy the directory and run ./run.sh
+== 4. no 5.10 guest here (KERNEL_VM_CMD unset): see README.fa.md
+== exit 0
+-- kernel.sh rc 0
+== done fuzzkernel 2026-10-29T08:43:19Z
+== end rc=0 2026-10-29T08:43:19Z, 787 s

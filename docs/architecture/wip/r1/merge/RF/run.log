@@ -1,0 +1,22 @@
+10:07:24 plan /root/rmerge/RF/plan.txt: 10 runs
+10:07:25 start 3fc575cc-m-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.24 waited 0s
+10:08:54 done 3fc575cc-m-1 ok=1 
+10:08:55 start 4197d254-m-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.16 waited 0s
+10:10:25 done 4197d254-m-1 ok=1 
+10:10:25 start 486f15db-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.01 waited 0s
+10:11:55 done 486f15db-m-1 ok=1 
+10:11:56 start 7bb9c0af-m-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.18 waited 0s
+10:13:32 done 7bb9c0af-m-1 ok=1 
+10:13:33 start a1e195a2-m-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.38 waited 0s
+10:15:32 done a1e195a2-m-1 ok=1 
+10:15:33 start af562cf3-m-1 (N=600 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 3.12 waited 0s
+10:18:01 done af562cf3-m-1 ok=1 
+10:18:01 start 11690259-m-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 3.03 waited 0s
+10:19:07 done 11690259-m-1 ok=1 
+10:19:08 start f4fb6861-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 3.79 waited 0s
+10:20:13 done f4fb6861-m-1 ok=1 
+10:20:14 start a0318ff0-m-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=m) load 2.84 waited 0s
+10:21:09 done a0318ff0-m-1 ok=1 
+10:21:10 start 5f52d2fc-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=m) load 1.72 waited 0s
+10:22:05 done 5f52d2fc-m-1 ok=1 
+10:22:05 done /root/rmerge/RF/plan.txt

@@ -1,0 +1,56 @@
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.15s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.19s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.25s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.24s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.38s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.23s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.21s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.29s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.45s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.16s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.18s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+2026/10/29 08:31:52 events in the last minute: udp late drops 0, owd dirty 0, budget cuts 0, quiet records saved 102 of 2271 writes, moved to bulk 0 (back 0), tun flows 0, attached at the exit 0, move hints heard 0 sent 0
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.18s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.21s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.40s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.32s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.31s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.19s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.35s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.20s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (10.33s)
+FAIL

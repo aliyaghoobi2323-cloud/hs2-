@@ -1,0 +1,43 @@
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.13s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.19s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.34s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.23s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.17s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.48s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.1 got 0 of 10 echoes: the replies do not come from the address it sent to
+    udp_replysrc_linux_test.go:65: a connected user of 127.0.0.2 got 0 of 10 echoes: the replies do not come from the address it sent to
+--- FAIL: TestUDPUserPortRepliesFromTheAddressUsed (20.19s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.29s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.50s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.16s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.16s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.32s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.35s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.31s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.47s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.22s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.38s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.25s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.27s)
+=== RUN   TestUDPUserPortRepliesFromTheAddressUsed
+--- PASS: TestUDPUserPortRepliesFromTheAddressUsed (0.23s)
+FAIL
