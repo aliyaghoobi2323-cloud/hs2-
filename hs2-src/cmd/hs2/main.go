@@ -392,6 +392,7 @@ func applyTuning() {
 	numT("HS2_TUNE_TWOWAY", engine.TwoWay)                         // a connection whose user sends steadily stays on QUIET
 	numT("HS2_TUNE_TWOWAY_RATIO", engine.TwoWayRatio)              // ... unless one way carries more than this many times the other (0: none)
 	numT("HS2_TUNE_OWD_IDLE", engine.OWDIdle)                      // an idle pool's QUIET link sends no one-way delay messages
+	numT("HS2_TUNE_OWD_IDLE_POOL", engine.OWDIdlePool)             // ... and a busy pool wakes every QUIET link's (0: quietOWD's alone)
 	numT("HS2_TUNE_UDP_FLOWS", engine.UDPFlowsMax)                 // a UDP user port's flows at most (0: none)
 	numT("HS2_TUNE_UDP_USER_FLOWS", engine.UDPFlowsPerUser)        // ... and one user's (0: none)
 	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany)                  // QUIET links past 5 links
