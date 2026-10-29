@@ -107,7 +107,8 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		cfg.traffic = newExitTraffic(cfg.peers)
 		go cfg.traffic.run(ctx.Done())
 	}
-	go runExitHints(ctx) // the move hint: backlogged group connections (hint.go)
+	go runExitHints(ctx)                       // the move hint: backlogged group connections (hint.go)
+	notePoolMax(max(cfg.RevMax, cfg.MaxLinks)) // the QUIET links' congestion control by the pool's size (quietcc.go)
 	if cfg.RevDial != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}

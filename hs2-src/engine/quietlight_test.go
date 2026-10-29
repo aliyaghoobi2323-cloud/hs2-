@@ -33,7 +33,7 @@ func TestQuietCountLight(t *testing.T) {
 	QuietExtra, QuietN, QuietFew, QuietMany = 1, 0, 1, 4
 	for _, light := range []int{0, 1} {
 		setLight(t, light, 0)
-		for _, c := range []struct{ max, q int }{{1, 1 + light}, {5, 1 + light}, {6, 4}, {8, 4}, {300, 4}} {
+		for _, c := range []struct{ max, q int }{{1, 1 + light}, {4, 1 + light}, {5, 1}, {6, 4}, {8, 4}, {300, 4}} {
 			if got := QuietCount(c.max); got != c.q {
 				t.Fatalf("light %d, max_links %d: QUIET %d, want %d", light, c.max, got, c.q)
 			}

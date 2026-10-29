@@ -60,8 +60,11 @@ var QuietWaitMs = newTuneInt(0)
 
 const (
 	// quietLightMax: the most links of a pool that keeps a light QUIET link
-	// (past it, QuietMany QUIET links share the load four ways)
-	quietLightMax = quietOneMax
+	// more: max_links + 2 connections stay within the population of
+	// dpi_eval2's model (1 to 6, decision T19), so 4; a pool of 5 keeps its
+	// one QUIET link, and past quietOneMax one of the QuietMany is the light
+	// one (QuietLight 2)
+	quietLightMax = quietOneMax - 1
 	// lightTicks: the ticks of moveSlots in which each way sent at least a
 	// byte, for a light verdict (a probe every 200 ms: 10; a game: 20)
 	lightTicks = 8

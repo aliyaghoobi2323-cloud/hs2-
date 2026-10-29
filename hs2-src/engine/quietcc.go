@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -92,27 +93,60 @@ func setQuietCC(tc *net.TCPConn, list string) string {
 	return got
 }
 
+// QuietCCFew (HS2_TUNE_QUIET_CC_FEW; "": QuietCC's): the list for the QUIET
+// links of a pool of up to quietOneMax links (one general QUIET link, which
+// carries every light class at once: ~45 Mbit/s down in the home mix at
+// N=1, the most a link of its own must hold under the path's random loss).
+// Past that the pool has QuietMany QUIET links, four flows at a fq_codel
+// bottleneck among the BULK ones, each a quarter of the load: Illinois,
+// which cuts by an eighth at the losses CoDel makes for its flow queue,
+// held its queue there and the games' and calls' downward p99 doubled
+// without any loss (round 5, S2: +159 and +172 ms against +86 and +93), so
+// they keep cubic (QuietCC).
+var QuietCCFew = ""
+
+// quietPoolMax is this process's link pool ceiling (max_links; 0: not
+// known), noted where the pool is made (RunIran, RunKharej).
+var quietPoolMax atomic.Int32
+
+// notePoolMax notes the pool's ceiling for quietCCList.
+func notePoolMax(n int) { quietPoolMax.Store(int32(max(n, 0))) }
+
+// quietCCList is the congestion control list of this process's QUIET
+// links: QuietCCFew in a pool of up to quietOneMax links, else QuietCC.
+func quietCCList() string {
+	if m := quietPoolMax.Load(); QuietCCFew != "" && m > 0 && m <= quietOneMax {
+		return QuietCCFew
+	}
+	return QuietCC
+}
+
 // QuietCCLoss (HS2_TUNE_QUIET_CC_LOSS; "": off): the congestion control a
 // QUIET socket switches to while it sees random loss (above).
 var QuietCCLoss = ""
 
 // QuietLossPpm (HS2_TUNE_QUIET_LOSS_PPM): the share of retransmitted
-// segments, per million sent over quietLossWin, that is random loss (200:
-// 0.02%, under the field's 0.03%).
-var QuietLossPpm = 200
+// segments, per million sent over quietLossWin, that is random loss (150:
+// 0.015%, half the field's 0.03%).
+var QuietLossPpm = 150
 
 const (
 	// quietLossWin: the readings (one a second) the share is taken over:
 	// a QUIET link of 1500 segments a second at the field's 0.03% resends
 	// 4.5 in 10 s
 	quietLossWin = 10
-	// quietLossMin: the least retransmits in the window that count
-	quietLossMin = 3
+	// quietLossMin: the least retransmits in the window that count (round 5's
+	// screen S3: with 3, a QUIET link of ~1000 segments a second at 0.03%
+	// switched 2 to 24 s after its start, and a call that fell behind
+	// meanwhile lost its realtime lane for good)
+	quietLossMin = 2
 	// quietLossQueue: the socket's mean srtt − min_rtt under which a loss
 	// is the path's (CoDel drops a flow queue past 5 ms of sojourn)
 	quietLossQueue = 4 * time.Millisecond
-	// quietCalm: how long without random loss before the switch back
-	quietCalm = 30 * time.Second
+	// quietCalm: how long without random loss before the switch back (a
+	// path that loses at random now and then keeps the switch: each switch
+	// costs the calls a few seconds behind a cubic window)
+	quietCalm = 2 * time.Minute
 	// quietCCEvery: the watcher reads its socket each this many core ticks
 	quietCCEvery = 10
 )

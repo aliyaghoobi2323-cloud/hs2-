@@ -55,6 +55,28 @@ func TestQuietCCList(t *testing.T) {
 	}
 }
 
+// TestQuietCCFew: a pool of up to five links runs QuietCCFew on its QUIET
+// links, a larger one (or one whose size is not known) QuietCC.
+func TestQuietCCFew(t *testing.T) {
+	prevFew, prevCC, prevMax := QuietCCFew, QuietCC, quietPoolMax.Load()
+	t.Cleanup(func() { QuietCCFew, QuietCC = prevFew, prevCC; quietPoolMax.Store(prevMax) })
+	QuietCCFew, QuietCC = "illinois,cubic", "cubic"
+	for _, c := range []struct {
+		max  int
+		want string
+	}{{0, "cubic"}, {1, "illinois,cubic"}, {5, "illinois,cubic"}, {6, "cubic"}, {300, "cubic"}} {
+		notePoolMax(c.max)
+		if got := quietCCList(); got != c.want {
+			t.Errorf("max_links %d: %q, want %q", c.max, got, c.want)
+		}
+	}
+	QuietCCFew = ""
+	notePoolMax(1)
+	if got := quietCCList(); got != "cubic" {
+		t.Errorf("QuietCCFew empty: %q", got)
+	}
+}
+
 // ccFeed gives the watcher n readings a second apart: each second segs
 // sent and resent of them, at queue q.
 func ccFeed(w *quietCCWatch, st *tcpStat, now *time.Duration, n int, segs, resent uint32, q time.Duration) {

@@ -432,6 +432,10 @@ func applyTuning() {
 	}
 	// R1 round 5: a QUIET socket switches to this congestion control while
 	// it sees random loss (at least this many resent per million sent)
+	if v, ok := os.LookupEnv("HS2_TUNE_QUIET_CC_FEW"); ok {
+		engine.QuietCCFew = v // a pool of up to 5 links (one QUIET link): its list
+		log.Printf("tuning: HS2_TUNE_QUIET_CC_FEW=%q", v)
+	}
 	if v, ok := os.LookupEnv("HS2_TUNE_QUIET_CC_LOSS"); ok {
 		engine.QuietCCLoss = v
 		log.Printf("tuning: HS2_TUNE_QUIET_CC_LOSS=%q", v)

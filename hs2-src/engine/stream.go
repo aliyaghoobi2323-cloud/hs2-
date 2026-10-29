@@ -309,7 +309,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		// user's probe that moment, 198 of them a padded record each; the
 		// first of the list the kernel takes (quietcc.go: Illinois keeps
 		// its window on a path that loses packets at random)
-		quietCC = setQuietCC(tc, QuietCC)
+		quietCC = setQuietCC(tc, quietCCList())
 	}
 	if server {
 		sess, err = smux.Server(w, cfg)
@@ -360,7 +360,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		cl := &coreLink{sess: sess, mtr: meter, sc: scl, hq: hq, flows: flows}
 		if quietLink {
 			cl.shp = shaped
-			if QuietCCLoss != "" && tc != nil {
+			if QuietCCLoss != "" && tc != nil && quietCC != QuietCCLoss {
 				// the switch to QuietCCLoss under random loss (quietcc.go)
 				cl.qcc = newQuietCCWatch(tc, quietCC, QuietCCLoss)
 			}
