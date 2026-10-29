@@ -87,10 +87,11 @@ if [ -z "$PEER" ]; then
 	[ -n "$PEER" ] || refuse no-peer-ip "the config has no peer_ip to ping: set HS2_SAFE_PEER"
 fi
 
-mkdir -p "$BK"
-cp -a "$BIN" "$BK/hs2"
-cp -a "$CFG" "$BK/config.json"
-[ -d "$DDIR" ] && cp -a "$DDIR" "$BK/dropins"
+# No change without a backup to put back: a revert from a missing one would
+# leave the new binary in place and the drop-ins gone.
+{ mkdir -p "$BK" && cp -a "$BIN" "$BK/hs2" && cp -a "$CFG" "$BK/config.json"; } ||
+	refuse backup "cannot back up $BIN and $CFG into $BK (disk full?)"
+if [ -d "$DDIR" ]; then cp -a "$DDIR" "$BK/dropins" || refuse backup "cannot back up $DDIR into $BK"; fi
 log "stage $STAGE; unit $UNIT; config $CFG; peer $PEER (wait ${PEERWAIT} s); backup in $BK"
 
 CHECK=$BIN
