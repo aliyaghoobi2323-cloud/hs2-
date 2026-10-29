@@ -402,6 +402,7 @@ type coreLink struct {
 	hq    *hostQ       // nil: C3 off
 	flows *linkFlows   // nil: C2 off
 	shp   *shapedConn  // a QUIET link's shaper (its records' tallies; nil: not one)
+	qcc   *quietCCWatch // a QUIET link's switch under random loss (QuietCCLoss; nil: off)
 	tun   atomic.Pointer[l3Link]
 	// the status lines': when the hostq line was last made
 	hqAt time.Duration
@@ -501,6 +502,11 @@ func (l *coreLink) step(now time.Duration) {
 	if l.flows != nil {
 		l.flows.tick(now)
 	}
+	if w := l.qcc; w != nil && w.due() {
+		if st, ok := tcpStats(w.tc); ok {
+			w.step(now, st)
+		}
+	}
 	l.noteEvents(&r1ev)
 }
 
@@ -575,6 +581,9 @@ func CoreLines() []string {
 		}
 		if l.shp != nil {
 			out = append(out, l.shp.recLine(l.id, now))
+		}
+		if l.qcc != nil {
+			out = append(out, l.qcc.line(l.id))
 		}
 	}
 	return out
