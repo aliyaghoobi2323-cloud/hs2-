@@ -1,0 +1,171 @@
+package tlscarrier
+
+import (
+	"bytes"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"testing"
+	"time"
+
+	utls "github.com/refraction-networking/utls"
+)
+
+// The R1 independent review, part A (wire protocol and security):
+// docs/architecture/wip/r1/review/A-wire-security.fa.md. Tests named
+// TestReviewA*; the ones that prove a finding left open fail by design and
+// run only with HS2_REVIEW_RED=1 (reviewRed).
+
+// reviewRed skips a proof of an open finding unless HS2_REVIEW_RED=1.
+func reviewRed(t *testing.T) {
+	t.Helper()
+	if os.Getenv("HS2_REVIEW_RED") != "1" {
+		t.Skip("proof of an open review finding (HS2_REVIEW_RED=1 runs it)")
+	}
+}
+
+// noEMSHello is a TLS 1.2 ClientHello without the extended_master_secret
+// extension: a probe any DPI box can send (curl/OpenSSL with an old build,
+// a scanner, or one made to find this). Go's server takes the handshake, but
+// the session has no channel-binding secret (RFC 7627: Go refuses
+// ExportKeyingMaterial there).
+func noEMSHello() *utls.ClientHelloSpec {
+	return &utls.ClientHelloSpec{
+		TLSVersMin: utls.VersionTLS12,
+		TLSVersMax: utls.VersionTLS12,
+		CipherSuites: []uint16{
+			utls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			utls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			utls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+		},
+		CompressionMethods: []byte{0},
+		Extensions: []utls.TLSExtension{
+			&utls.SNIExtension{},
+			&utls.SupportedCurvesExtension{Curves: []utls.CurveID{utls.X25519, utls.CurveP256}},
+			&utls.SupportedPointsExtension{SupportedPoints: []byte{0}},
+			&utls.SignatureAlgorithmsExtension{SupportedSignatureAlgorithms: []utls.SignatureScheme{
+				utls.PSSWithSHA256, utls.PKCS1WithSHA256, utls.ECDSAWithP256AndSHA256}},
+			&utls.RenegotiationInfoExtension{Renegotiation: utls.RenegotiateOnceAsClient},
+			&utls.ALPNExtension{AlpnProtocols: []string{"http/1.1"}},
+		},
+	}
+}
+
+// A probe whose TLS 1.2 session has no channel-binding secret must be served
+// the website like every other probe. Production (and R1) closed it right
+// after the handshake, before reading a byte: a real web server answers its
+// request, so the close told hs2 apart (review A, finding A1).
+func TestReviewANoEMSProbeServed(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa1}, 32)
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { t.Error("a probe reached the tunnel"); c.Close() })
+	defer stop()
+
+	raw, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	u := utls.UClient(raw, &utls.Config{ServerName: "vpn.example.com", InsecureSkipVerify: true}, utls.HelloCustom)
+	if err := u.ApplyPreset(noEMSHello()); err != nil {
+		t.Fatal(err)
+	}
+	raw.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := u.Handshake(); err != nil {
+		t.Skipf("the server refused the TLS 1.2 handshake without EMS (%v): nothing to tell apart", err)
+	}
+	if v := u.ConnectionState().Version; v != utls.VersionTLS12 {
+		t.Fatalf("negotiated %x, want TLS 1.2", v)
+	}
+	if _, err := u.Write([]byte("GET / HTTP/1.1\r\nHost: vpn.example.com\r\n\r\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	out, _ := io.ReadAll(u)
+	if !bytes.Contains(out, []byte("real-backend")) {
+		t.Fatalf("a TLS 1.2 probe without the extended master secret got %q, not the website: the server closed it after the handshake", out)
+	}
+}
+
+// With HS2_TUNE_PROBE_NOEKM=0 (ProbeNoEKM 0) the server closes such a
+// session as before.
+func TestReviewANoEMSProbeSwitchOff(t *testing.T) {
+	old := ProbeNoEKM
+	ProbeNoEKM = 0
+	defer func() { ProbeNoEKM = old }()
+	key := bytes.Repeat([]byte{0xa2}, 32)
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { c.Close() })
+	defer stop()
+	raw, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	u := utls.UClient(raw, &utls.Config{ServerName: "vpn.example.com", InsecureSkipVerify: true}, utls.HelloCustom)
+	if err := u.ApplyPreset(noEMSHello()); err != nil {
+		t.Fatal(err)
+	}
+	raw.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := u.Handshake(); err != nil {
+		t.Skipf("handshake refused: %v", err)
+	}
+	u.Write([]byte("GET / HTTP/1.1\r\nHost: vpn.example.com\r\n\r\n"))
+	out, _ := io.ReadAll(u)
+	if len(out) != 0 {
+		t.Fatalf("switch off: got %q, want the old close", out)
+	}
+}
+
+// A tunnel client still links, and a TLS 1.3 probe still gets the website,
+// with the fix on (the paths it does not touch).
+func TestReviewANoEMSFixKeepsTunnel(t *testing.T) {
+	key := bytes.Repeat([]byte{0xa3}, 32)
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	got := make(chan struct{}, 1)
+	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { got <- struct{}{}; c.Close() })
+	defer stop()
+	car, err := Dial(addr, "vpn.example.com", key)
+	if err != nil {
+		t.Fatalf("tunnel dial: %v", err)
+	}
+	car.Close()
+	select {
+	case <-got:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no tunnel")
+	}
+}
+
+// A relay that terminates TLS with a certificate of its own (any TLS
+// interceptor: the dialer checks no certificate until R8's pin) makes the
+// dialer read the real server's website answer to the relayed auth record
+// as "the other server is v2 or has another key" (ErrOldServer), which R1
+// made a refusal (PeerRefused): the pool's dials then wait 8 s doubling to
+// 60 s, and the log sends the operator to re-paste links or upgrade. The
+// answer is unauthenticated, so an interceptor can always fake it; the
+// proof only shows the classification (review A, finding A4).
+func TestReviewAInterceptorReadsAsRefusal(t *testing.T) {
+	reviewRed(t)
+	key := bytes.Repeat([]byte{0xa4}, 32)
+	cert := testCert(t, "vpn.example.com")
+	be, stopB := backend(t)
+	defer stopB()
+	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { c.Close() })
+	defer stop()
+	maddr, stopM := mitm(t, addr)
+	defer stopM()
+	_, err := Dial(maddr, "vpn.example.com", key)
+	if err == nil {
+		t.Fatal("dial through the interceptor succeeded")
+	}
+	if errors.Is(err, ErrOldServer) || PeerRefused(err) {
+		t.Fatalf("an interceptor's relay reads as a refusal (backoff 8-60 s, 'upgrade / re-paste the link'): %v", err)
+	}
+}

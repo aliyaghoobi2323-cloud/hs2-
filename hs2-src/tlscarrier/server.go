@@ -52,6 +52,11 @@ const firstReadTimeout = 30 * time.Second
 // Iran↔foreign path. (A per-connection probe shield is deferred.)
 const handshakeTimeout = 10 * time.Second
 
+// ProbeNoEKM (HS2_TUNE_PROBE_NOEKM; 0: off, as before): a session with no
+// channel-binding secret (TLS 1.2 without the extended master secret) is
+// served the website like any probe, not closed after its handshake.
+var ProbeNoEKM = 1
+
 // httpToHTTPS400 is the exact response Go's own HTTPS server sends when it gets
 // a plain-HTTP request on a TLS port. We reproduce it byte-for-byte (pinned by a
 // test against net/http) so a plain-HTTP probe sees what a real Go HTTPS server
@@ -109,8 +114,18 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	cs := tconn.ConnectionState()
 	ekm, err := exportEKM(&cs)
 	if err != nil {
-		raw.Close()
-		return
+		if ProbeNoEKM == 0 {
+			raw.Close()
+			return
+		}
+		// No channel-binding secret on this session: TLS 1.2 without the
+		// extended master secret (RFC 7627; crypto/tls refuses to export
+		// one then). No hs2 dialer is here (it speaks TLS 1.3 only), so
+		// it is a browser or a probe, and the website answers it like any
+		// other: closed at once, after a finished handshake and before a
+		// byte was read, it told hs2 apart from a web server (the R1
+		// review, part A, A1).
+		ekm = nil
 	}
 
 	// The first TLS record is either our auth record (always sent in one
@@ -123,6 +138,11 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	first := buf[:n]
 	if n == 0 {
 		tconn.Close()
+		return
+	}
+	if ekm == nil {
+		tconn.SetDeadline(time.Time{})
+		s.forward(ctx, tconn, first)
 		return
 	}
 	nonce, hdr, more, v2, ok := parseClientAuth(s.SharedKey, ekm, first)
