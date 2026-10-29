@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -66,7 +67,20 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 	}
-	os.Exit(m.Run())
+	// A network namespace does not isolate the filesystem: the echo guard's
+	// markers (echoguard_linux.go, /run/hs2/icmp-echo-ignore on a server) go
+	// to a folder of this run, so no test writes into the host's /run/hs2
+	// (the installer's sandbox tests watch that folder; a concurrent
+	// go test ./... made install_link_test.sh see it change).
+	dir, err := os.MkdirTemp("", "hs2-encap-echomark-")
+	if err != nil {
+		os.Stderr.WriteString("encap tests: a folder for the echo-guard markers: " + err.Error() + "\n")
+		os.Exit(1)
+	}
+	echoMarkDir = filepath.Join(dir, "icmp-echo-ignore")
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 // inPrivateNetns reports whether this process runs in the private namespace
