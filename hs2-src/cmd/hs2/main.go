@@ -488,6 +488,7 @@ func runCmd(args []string) {
 	}
 	applyTuning()
 	labProfile() // (lab: HS2_PROFILE=DIR)
+	labGoStat()  // (lab: HS2_GOSTAT=1)
 	setMemoryLimit()
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
