@@ -1,0 +1,32 @@
+== start 2026-10-29T10:43:31+00:00
+ 10:43:31 up 1 day, 23:38, 16 users,  load average: 13.55, 18.51, 15.31
+TCP: inuse 1290 orphan 1 tw 1525 alloc 1949 mem 109
+top - 10:43:32 up 1 day, 23:38, 12 users,  load average: 13.55, 18.51, 15.31
+Tasks: 270 total,   1 running, 269 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.9 us,  4.3 sy,  0.0 ni, 89.4 id,  0.0 wa,  0.0 hi,  2.5 si,  0.0 st 
+MiB Mem :  23456.9 total,   5818.4 free,   1475.1 used,  16607.9 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21981.8 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+  40851 root      20   0 1568196 285376  29488 S  60.8   1.2  11:36.20 xray-linux-amd6
+    992 root      20   0 1477216 146836  10496 S  52.9   0.6     13,46 hs2
+ 226498 root      20   0   11908   6044   3884 R   3.9   0.0   0:00.04 top
+      1 root      20   0   22656  14180   9776 S   2.0   0.1   4:05.38 systemd
+     54 root      20   0       0      0      0 S   2.0   0.0   5:52.33 ksoftirqd/6
+  13068 systemd+  20   0   22880  14808  11144 S   2.0   0.1  12:10.00 systemd-resolve
+  15116 root      20   0 2265804  45732  31860 S   2.0   0.2   3:31.67 containerd
+== end 2026-10-29T11:02:57+00:00
+ 11:02:57 up 1 day, 23:57, 14 users,  load average: 2.90, 3.13, 6.38
+TCP: inuse 1388 orphan 1 tw 1063 alloc 2305 mem 511
+top - 11:02:57 up 1 day, 23:57, 14 users,  load average: 2.90, 3.13, 6.38
+Tasks: 272 total,   1 running, 271 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.8 us,  3.9 sy,  0.0 ni, 91.9 id,  0.0 wa,  0.0 hi,  1.5 si,  0.0 st 
+MiB Mem :  23456.9 total,   5759.2 free,   1500.0 used,  16642.3 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21957.0 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+  40851 root      20   0 1568212 289368  29488 S  52.9   1.2  20:40.20 xray-linux-amd6
+    992 root      20   0 1477216 163968  10496 S  49.0   0.7     13,53 hs2
+ 273948 root      20   0   11908   6044   3888 R   3.9   0.0   0:00.04 top
+     29 root      rt   0       0      0      0 S   2.0   0.0   0:01.45 migration/2
+     83 root      rt   0       0      0      0 S   2.0   0.0   0:01.43 migration/11
+      1 root      20   0   22656  14180   9776 S   0.0   0.1   4:07.34 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.31 kthreadd

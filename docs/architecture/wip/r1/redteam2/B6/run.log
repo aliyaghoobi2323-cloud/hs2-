@@ -1,0 +1,16 @@
+10:01:32 plan /root/rred2/B6/plan.txt: 7 runs
+10:01:33 start e4a42ac0-r2gs-1 (N=600 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 PROCSTAT=1 BIN=r2gs) load 1.99 waited 0s
+10:03:02 done e4a42ac0-r2gs-1 ok=1 
+10:03:03 start 8ab58db8-r2gs-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=exhaust CHURN=64 DUR=30 HOLD=2000 HOLDW=200 PROCSTAT=1 BIN=r2gs) load 2.56 waited 0s
+10:04:11 done 8ab58db8-r2gs-1 ok=1 
+10:04:12 start cd859cf5-r2gs-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=exhaust CHURN=64 DUR=30 HOLD=2000 HOLDW=200 PROCSTAT=1 BIN=r2gs) load 3.21 waited 0s
+10:04:52 done cd859cf5-r2gs-1 ok=1 
+10:04:53 start cd859cf5-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=exhaust CHURN=64 DUR=30 HOLD=2000 HOLDW=200 PROCSTAT=1 BIN=prod) load 2.66 waited 0s
+10:05:33 done cd859cf5-prod-1 ok=1 
+10:05:34 start 633df363-r2nocap-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=60 MIX=exhaust CHURN=0 DUR=20 GAMEU=8 HOLD=0 PROCSTAT=1 UDPF=500 BIN=r2nocap) load 2.88 waited 0s
+10:06:05 done 633df363-r2nocap-1 ok=1 
+10:06:06 start 633df363-r2g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=60 MIX=exhaust CHURN=0 DUR=20 GAMEU=8 HOLD=0 PROCSTAT=1 UDPF=500 BIN=r2g) load 2.54 waited 0s
+10:06:36 done 633df363-r2g-1 ok=1 
+10:06:37 start 87616e4b-r2gs-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FREAD=0.1 FROZEN=256 PROCSTAT=1 BIN=r2gs) load 2.13 waited 0s
+10:07:17 done 87616e4b-r2gs-1 ok=1 
+10:07:17 done /root/rred2/B6/plan.txt

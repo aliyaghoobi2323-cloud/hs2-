@@ -1,0 +1,6 @@
+up on hs2-fin2 after 4.0 s
+first failed probe 0.1 s after the first safe-apply
+outage 32.3 s (first failed probe to the first passing one after the last safe-apply); back 2.4 s after the last safe-apply
+longest run of failed probes 32.3 s; probes after the switch: 631 ok, 36 failed
+hs2-uge safe-apply: OK <w>/backups/apply-20261029-114707-453
+hs2-ugx safe-apply: OK <w>/backups/apply-20261029-114637-353

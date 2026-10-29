@@ -1,0 +1,32 @@
+== start 2026-10-29T10:01:31+00:00
+ 10:01:31 up 1 day, 22:56,  9 users,  load average: 1.99, 1.81, 1.69
+TCP: inuse 1035 orphan 0 tw 909 alloc 1694 mem 78
+top - 10:01:32 up 1 day, 22:56,  9 users,  load average: 1.99, 1.81, 1.69
+Tasks: 261 total,   1 running, 260 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.3 us,  3.1 sy,  0.0 ni, 93.2 id,  0.0 wa,  0.0 hi,  1.4 si,  0.0 st 
+MiB Mem :  23456.9 total,   2156.0 free,   1461.5 used,  20263.9 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21995.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+4133947 root      20   0 1568452 279056  29424 S  42.3   1.2  22:42.94 xray-linux-amd6
+    992 root      20   0 1477216 180792  10496 S  38.5   0.8     13,35 hs2
+  19127 root      20   0   11908   6048   3888 R   3.8   0.0   0:00.04 top
+     17 root      20   0       0      0      0 I   1.9   0.0   4:13.15 rcu_preempt
+      1 root      20   0   22656  14180   9776 S   0.0   0.1   4:00.71 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.30 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+== end 2026-10-29T10:07:18+00:00
+ 10:07:18 up 1 day, 23:02,  9 users,  load average: 2.47, 2.27, 1.94
+TCP: inuse 817 orphan 1 tw 1063 alloc 1285 mem 95
+top - 10:07:19 up 1 day, 23:02,  8 users,  load average: 2.35, 2.25, 1.94
+Tasks: 260 total,   1 running, 259 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.8 us,  5.2 sy,  0.1 ni, 89.8 id,  0.4 wa,  0.0 hi,  1.7 si,  0.0 st 
+MiB Mem :  23456.9 total,   2057.1 free,   1385.4 used,  20438.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22071.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+4133947 root      20   0 1568460 240280  29424 S  48.1   1.0  24:33.77 xray-linux-amd6
+    992 root      20   0 1477216 125812  10496 S  36.5   0.5     13,37 hs2
+    958 root      20   0 1407112 112176  47332 S  11.5   0.5  55:46.51 x-ui
+   7531 root      20   0       0      0      0 I   7.7   0.0   0:00.39 kworker/u24:4-writeback
+  37508 root      39  19 1712920  18732  12480 S   3.8   0.1   0:00.14 engine.test
+      1 root      20   0   22656  14180   9776 S   1.9   0.1   4:01.37 systemd
+    365 root      20   0       0      0      0 S   1.9   0.0   0:14.29 jbd2/sda1-8

@@ -68,7 +68,6 @@ func TestRed2TwoWayAckedDownload(t *testing.T) {
 	}
 }
 
-
 // Z10 and B4: an idle QUIET link's one-way delay loop sends nothing while
 // the BULK links carry under owdIdleRate a second (OWDIdle), sends at once
 // when one second has as much, and parks again owdIdleAfter after the

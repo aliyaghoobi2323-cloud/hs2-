@@ -1,0 +1,6 @@
+up on hs2-prod after 3.5 s
+first failed probe 0.2 s after the first safe-apply
+outage 90.1 s (first failed probe to the first passing one after the last safe-apply); back 90.3 s after the last safe-apply
+longest run of failed probes 90.1 s; probes after the switch: 70 ok, 90 failed
+hs2-uge safe-apply: 
+hs2-ugx safe-apply: REVERTED tunnel-not-back-in-90s <w>/backups/apply-20261029-114451-339

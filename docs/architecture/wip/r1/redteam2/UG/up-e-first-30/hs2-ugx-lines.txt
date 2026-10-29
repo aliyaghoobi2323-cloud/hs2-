@@ -1,0 +1,31 @@
+11:41:47.968266 link pool: ceiling 8 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+11:41:47.994326 mtcp: exit pool starting 8 links (the edge sets the count once it is connected)
+11:41:48.298835 mtcp: exit link up to edge (slot 0; now 1)
+11:41:48.299529 mtcp: exit link up to edge (slot 7; now 2)
+11:41:48.325568 mtcp: exit link up to edge (slot 3; now 3)
+11:41:48.418398 mtcp: exit link up to edge (slot 1; now 4)
+11:41:48.513813 mtcp: exit link up to edge (slot 6; now 5)
+11:41:48.614467 mtcp: exit link up to edge (slot 4; now 6)
+11:41:48.706718 mtcp: exit link up to edge (slot 2; now 7)
+11:41:48.846168 mtcp: exit link up to edge (slot 5; now 8)
+11:41:54.691969 mtcp: exit link down (slot 6: read: closed by the other server; now 7); redial
+11:41:54.692155 mtcp: exit link down (slot 4: read: closed by the other server; now 5); redial
+11:41:54.692152 mtcp: exit link down (slot 7: read: closed by the other server; now 6); redial
+11:41:54.692199 mtcp: exit link down (slot 3: read: closed by the other server; now 4); redial
+11:41:54.692303 mtcp: exit link down (slot 5: read: closed by the other server; now 3); redial
+11:41:54.692945 mtcp: exit link down (slot 1: read: closed by the other server; now 2); redial
+11:41:54.693017 mtcp: exit link down (slot 0: read: closed by the other server; now 1); redial
+11:41:54.694395 mtcp: exit link down (slot 2: read: closed by the other server; now 0); redial
+11:41:55.466835 mtcp: no link up to the edge — dials fail (tlscarrier: reading server proof: EOF); one slot keeps trying (every ≤2s), the other 7 wait for it
+11:42:24.878885 link pool: ceiling 8 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+11:42:24.902750 mtcp: exit pool starting 8 links (the edge sets the count once it is connected)
+11:42:25.131870 mtcp: exit link up to edge (slot 7; now 1)
+11:42:25.132979 mtcp: exit pool target 12 links (edge asked; was 8, 1 up)
+11:42:25.242960 mtcp: exit link up to edge (slot 2; now 2)
+11:42:25.317135 mtcp: exit link up to edge (slot 6; now 3)
+11:42:25.360107 mtcp: exit link up to edge (slot 3; now 4)
+11:42:25.494774 mtcp: exit link up to edge (slot 0; now 5)
+11:42:25.558790 mtcp: exit link up to edge (slot 1; now 6)
+11:42:25.646238 mtcp: exit link up to edge (slot 4; now 7)
+11:42:25.766314 mtcp: exit link up to edge (slot 5; now 8)
+11:42:35.132851 mtcp: +4 more exit links up in the last 10s (latest: exit link up to edge (slot 8; now 12))

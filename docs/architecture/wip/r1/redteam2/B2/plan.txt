@@ -1,0 +1,9 @@
+# B2 (2 reps, fin2 / r2): R2-1 shown (25 downloads acknowledged in their own data, one connection each, as QUIC inside VLESS, next to 25 players) and the gate cells of the new switches (home: calls, video, web, games)
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=r2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl CONNS=1 ACKF=0.02 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2
