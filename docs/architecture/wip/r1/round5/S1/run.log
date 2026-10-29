@@ -1,0 +1,42 @@
+15:21:21 plan /root/r5/S1/plan.txt: 20 runs
+15:21:23 start a1577723-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 1.41 waited 0s
+15:22:08 done a1577723-fin2-1 ok=1 
+15:22:10 start a1577723-ill-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 1.75 waited 0s
+15:22:55 done a1577723-ill-1 ok=1 
+15:22:57 start a1577723-ww-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ww) load 2.75 waited 0s
+15:23:42 done a1577723-ww-1 ok=1 
+15:23:44 start a1577723-veno-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=veno) load 2.07 waited 0s
+15:24:29 done a1577723-veno-1 ok=1 
+15:24:31 start a1577723-yeah-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=yeah) load 2.64 waited 0s
+15:25:16 done a1577723-yeah-1 ok=1 
+15:25:18 start a1577723-yeah-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=yeah) load 3.11 waited 0s
+15:26:03 done a1577723-yeah-2 ok=1 
+15:26:05 start a1577723-veno-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=veno) load 3.19 waited 0s
+15:26:50 done a1577723-veno-2 ok=1 
+15:26:52 start a1577723-ww-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ww) load 4.27 waited 0s
+15:27:37 done a1577723-ww-2 ok=1 
+15:27:39 start a1577723-ill-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 4.61 waited 0s
+15:28:24 done a1577723-ill-2 ok=1 
+15:28:26 start a1577723-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 5.24 waited 0s
+15:29:11 done a1577723-fin2-2 ok=1 
+15:29:12 start 6d18d417-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 5.58 waited 0s
+15:29:57 done 6d18d417-fin2-1 ok=1 
+15:29:59 start 6d18d417-ill-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 4.25 waited 0s
+15:30:44 done 6d18d417-ill-1 ok=1 
+15:30:46 start 6d18d417-ww-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ww) load 2.95 waited 0s
+15:31:31 done 6d18d417-ww-1 ok=1 
+15:31:33 start 6d18d417-veno-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=veno) load 2.79 waited 0s
+15:32:18 done 6d18d417-veno-1 ok=1 
+15:32:20 start 6d18d417-yeah-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=yeah) load 3.73 waited 0s
+15:33:05 done 6d18d417-yeah-1 ok=1 
+15:33:07 start 6d18d417-yeah-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=yeah) load 4.56 waited 0s
+15:33:52 done 6d18d417-yeah-2 ok=1 
+15:33:54 start 6d18d417-veno-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=veno) load 4.91 waited 0s
+15:34:39 done 6d18d417-veno-2 ok=1 
+15:34:41 start 6d18d417-ww-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ww) load 4.71 waited 0s
+15:35:26 done 6d18d417-ww-2 ok=1 
+15:35:28 start 6d18d417-ill-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 4.06 waited 0s
+15:36:13 done 6d18d417-ill-2 ok=1 
+15:36:15 start 6d18d417-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 5.36 waited 0s
+15:37:00 done 6d18d417-fin2-2 ok=1 
+15:37:00 done /root/r5/S1/plan.txt

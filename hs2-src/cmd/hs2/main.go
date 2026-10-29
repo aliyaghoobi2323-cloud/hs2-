@@ -436,6 +436,11 @@ func applyTuning() {
 		log.Printf("tuning: HS2_TUNE_QUIET_CC_LOSS=%q", v)
 	}
 	num("HS2_TUNE_QUIET_LOSS_PPM", &engine.QuietLossPpm)
+	// R1 round 5: a light QUIET link (games, probes) next to the general one
+	// at <= 5 links (both ends alike), and a new connection's wait for a
+	// QUIET link that was up a moment ago, ms
+	numT("HS2_TUNE_QUIET_LIGHT", engine.QuietLight)
+	numT("HS2_TUNE_QUIET_WAIT", engine.QuietWaitMs)
 	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
 		tlscarrier.CongestionControl = v
 		log.Printf("tuning: HS2_TUNE_CC=%q", v)
