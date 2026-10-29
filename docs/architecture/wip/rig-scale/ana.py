@@ -341,6 +341,11 @@ def spec(cellstr, path):
         for u in users:
             u["role"] = "idle"
         users[0]["flows"].append({"kind": "probe", "n": 1, "start_s": max(total - 2, 0)})
+        # IDLEDL=S (the R1 red team's second pass): user 1 downloads on 4
+        # connections for the first S s, then the tunnel is idle (an idle
+        # tunnel after use, not from its start)
+        if num(d, "IDLEDL", 0) > 0:
+            users[0]["flows"].append({"kind": "dn", "n": 4, "start_s": 0, "stop_s": num(d, "IDLEDL", 0)})
         light = []
     elif mix in CLASS_MIXES:
         # the user classes (rigload classes.go), CLASS_TEMPLATE repeated over
