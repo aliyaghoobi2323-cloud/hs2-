@@ -400,6 +400,7 @@ func applyTuning() {
 	numT("HS2_TUNE_RT_HOLD", engine.RTHold)
 	numT("HS2_TUNE_RT_SHARE", engine.RTShare)
 	numT("HS2_TUNE_LAT_RR", engine.LatRR)
+	numT("HS2_TUNE_QUIET_PACK", engine.QuietPack) // two QUIET links (<= 5 links): new connections on the oldest while it does not lag
 	num("HS2_TUNE_BUDGET_DRAIN", &engine.BudgetDrainMs)
 	num("HS2_TUNE_BUDGET_DRAIN_K", &engine.BudgetDrainK)
 	num("HS2_TUNE_HQG_SEGS_MS", &engine.HQGSegsMs)

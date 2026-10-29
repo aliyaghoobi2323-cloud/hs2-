@@ -107,13 +107,17 @@ func QuietCount(maxLinks int) int {
 const quietOneMax = 5
 
 // QuietFew (HS2_TUNE_QUIET_FEW): the QUIET links of a pool of up to
-// quietOneMax links (1 until the R1 round-4 judge, 2 since). Two at N=1 give the
-// home mix's web pages a second QUIET flow at the bottleneck next to the
-// calls kept on QUIET (round 4's A7: p95 page 4648 ms against 6341 for
-// j3g and 8026 for c4) and halve what a QUIET link's death cuts (the red
-// team's C4), for one connection more (N+2 at N <= 5). The two ends need
-// not agree (QuietFollow, quietfollow.go).
-var QuietFew = 2 // since the R1 round-4 judge (item 1: S1, S7, G9)
+// quietOneMax links (1). Two at N=1 give the home mix's web pages a second
+// QUIET flow at the bottleneck next to the calls kept on QUIET (the R1
+// round-4 judge: p95 page 0.83 times j3g over nine runs, against 1.3 for
+// c4) and cut less when a QUIET link dies (19 % of the users against 31),
+// for one connection more (N+2 at N <= 5); but each QUIET link pads its own
+// records, the light users' messages split two ways, and P10 lost (a) and
+// (e) at N=1 (0.94 and 0.89; G1b). Packed (QuietPack) P10 holds and the web
+// page and the cut go back to c4's. So 1 stays the default; R2's
+// class-separated QUIET links are the way (round4-judge.fa.md). The two
+// ends need not agree (QuietFollow, quietfollow.go).
+var QuietFew = 1 // the R1 round-4 judge measured 2 (round4-judge.fa.md, item 1): P10 (a) and (e) fail at N=1
 
 // QuietMany (HS2_TUNE_QUIET_MANY; with QuietFollow, the default, the two
 // ends need not set it alike: they run the smaller count; quietfollow.go): the QUIET
@@ -566,8 +570,22 @@ func (q *quietSet) arrived() {
 	q.mu.Unlock()
 }
 
+// QuietPack (HS2_TUNE_QUIET_PACK): 1 packs a pool's new connections on its
+// oldest QUIET link while that one does not lag, and spills them to the
+// next only while it does, in a pool of up to quietOneMax links (two QUIET
+// links, QuietFew). Spread over both (0, by the fewest connections), the
+// light users' messages split two ways, each link padded its own records
+// and P10 lost its edge at N=1 (the R1 round-4 judge: (a) 0.94, (e) under
+// 0.9 in G1b, against 0.96 and 0.92 with one QUIET link); packed, the
+// light users' messages share one link's records as with one QUIET link,
+// and the second takes what the first cannot carry at once (a busy home
+// mix: the web pages' starts next to the calls). A link's death cuts on
+// average the same share of connections either way (1/Q of them).
+var QuietPack = newTuneInt(0)
+
 // pick chooses a QUIET link for a new connection of user tag (never one in
-// avoid): one that is not lagging first, then the fewest connections; with
+// avoid): one that is not lagging first, then the fewest connections (with
+// QuietPack in a small pool: the oldest that does not lag); with
 // QuietByUser the user's own link (quietuser.go). release gives its slot
 // back (once).
 func (q *quietSet) pick(avoid []Link, tag uint32) (*quietLink, func(), bool) {
@@ -582,12 +600,17 @@ func (q *quietSet) pick(avoid []Link, tag uint32) (*quietLink, func(), bool) {
 	defer q.mu.Unlock()
 	var best *quietLink
 	bestLag := true
+	pack := QuietPack.Get() != 0 && q.m.max <= quietOneMax
 	for _, ql := range q.links {
 		if !ql.link.Alive() || ql.retiring.Load() || slices.Contains(avoid, Link(ql.link)) {
 			continue
 		}
 		lag := meterLagging(ql.link.mtr, now)
-		if best == nil || bestLag && !lag || lag == bestLag && ql.users.Load() < best.users.Load() {
+		fewer := best == nil || ql.users.Load() < best.users.Load()
+		if pack && !lag {
+			fewer = best == nil || ql.id < best.id // the oldest link that does not lag
+		}
+		if best == nil || bestLag && !lag || lag == bestLag && fewer {
 			best, bestLag = ql, lag
 		}
 	}
