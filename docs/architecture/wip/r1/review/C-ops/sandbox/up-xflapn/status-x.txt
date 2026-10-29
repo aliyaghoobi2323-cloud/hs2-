@@ -1,0 +1,9 @@
+hs2 — Kharej side · reverse · tun (L3 over mtcp)
+  connects to 192.168.81.1:2096
+  links:      0 up / target 6 (following, range 6–6)
+  ceiling:    at most 6 links — this server: 6 (fixed by max_links; 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); the Iran server's ceiling is not known yet (no link is up) — the lower of the two applies
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 6 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  ports:      the Iran server's user ports: not known yet (no link is up)
+                every port → 127.0.0.1:5299 (default panel, expose)
+  traffic:    0 connections (0 active) · 0.0 Mbit/s
+  cpu:        hs2 0% of one core (6 core(s)) · server 32% busy across 12 core(s) (softirq 8%), tasks waited for a core 10% of the last 10 s

@@ -1,0 +1,14 @@
+hs2 — Iran side · reverse · tun (L3 over mtcp)
+  listens on 192.168.81.1:2096
+  links:      0 up / target 6 (steady, range 6–6)
+  ceiling:    at most 6 links — this server: 6 (fixed by max_links; 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); the Kharej server's ceiling is not known yet (no link is up) — the lower of the two applies
+  ceiling:    note — this server could use up to 300 (22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300); max_links is fixed at 6 — set it to 0 (auto) to follow the hardware (menu → Link pool)
+  why:        no link is up — waiting for links
+  ports:      8443 (tcp) — where each one goes is set on the Kharej server
+                where each goes: not known yet (no link is up)
+  protocol: v3 level 2 (peer levels 1-2, caps 0xDF); refused v2 peers: 81, refused peers (level): 0 (last 1 s ago)
+  cores:      place: on; quiet 0 of 4 links, bulk 0 links; opened on quiet 594, on bulk (no quiet up) 128; moved to bulk 0 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 0 users moved, 0 to 0 users a bulk link
+  cores:      events since start: udp late drops 0; owd dirty 0; budget cuts 0; quiet writes 3160, 379 of them on a record already started (records saved); moved to bulk 0 (back to quiet 0), tun flows 0, attached at the exit 0; move hints heard 0, sent 0
+  cpu:        hs2 1% of one core (6 core(s)) · server 28% busy across 12 core(s) (softirq 7%), tasks waited for a core 10% of the last 10 s
+  certificate: valid for 1 more day(s)  (renew it now — see 'hs2 doctor' (cert renewal); a renewed cert hot-reloads, no restart)
+  link:       needs transport, endpoint, domain, unit (run: hs2 link -c <w>/edge.json)

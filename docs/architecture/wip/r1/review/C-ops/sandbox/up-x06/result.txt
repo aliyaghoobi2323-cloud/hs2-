@@ -1,0 +1,9 @@
+scenario x-first:0.6; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 0.8 s (first failed probe to the first passing one after the last safe-apply); back 0.3 s after the last safe-apply
+longest run of failed probes 0.8 s; probes after the switch: 654 ok, 4 failed
+safe-apply e: OK <w>/backups/apply-20261029-155907-2453
+safe-apply x: OK <w>/backups/apply-20261029-155906-2348
+hs2-uge log: 34 lines (without tuning:) in 75 s
+hs2-ugx log: 31 lines (without tuning:) in 75 s
