@@ -1,0 +1,1 @@
+LISTEN 0      65536  127.0.0.1:6060 0.0.0.0:* users:(("smux-after.test",pid=1015689,fd=3))

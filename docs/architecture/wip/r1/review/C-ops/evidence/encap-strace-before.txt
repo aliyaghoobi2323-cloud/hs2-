@@ -1,0 +1,8 @@
+975205 openat(AT_FDCWD, "/run/hs2/icmp-echo-ignore", O_RDONLY|O_CLOEXEC|O_DIRECTORY) = 4
+975207 openat(AT_FDCWD, "/run/hs2/icmp-echo-ignore", O_RDONLY|O_CLOEXEC|O_DIRECTORY) = 4
+975301 openat(AT_FDCWD, "/run/hs2/icmp-echo-ignore", O_RDONLY|O_CLOEXEC|O_DIRECTORY) = 4
+975301 openat(AT_FDCWD, "/run/hs2/icmp-echo-ignore/975205.4026532768", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4
+975301 openat(AT_FDCWD, "/run/hs2/icmp-echo-ignore/975205.4026532768", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 8
+975301 unlinkat(AT_FDCWD, "/run/hs2/icmp-echo-ignore/975205.4026532768", 0) = 0
+975205 unlinkat(AT_FDCWD, "/run/hs2/icmp-echo-ignore/975205.4026532768", 0) = -1 ENOENT (No such file or directory)
+975205 unlinkat(AT_FDCWD, "/run/hs2/icmp-echo-ignore/975205.4026532768", AT_REMOVEDIR) = -1 ENOENT (No such file or directory)

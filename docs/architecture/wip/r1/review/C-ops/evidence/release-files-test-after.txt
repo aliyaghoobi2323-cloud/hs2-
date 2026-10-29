@@ -1,0 +1,12 @@
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+PASS root install.sh is identical to hs2-src/install/install.sh
+PASS hs2-linux-amd64.sha256 exists
+PASS hs2-linux-amd64.sha256 matches the binary
+PASS install.sh.sha256 exists
+PASS install.sh.sha256 matches install.sh
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 249 files of the real install, and every hs2 unit's MainPID/NRestarts/state
