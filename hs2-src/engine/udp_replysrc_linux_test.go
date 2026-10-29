@@ -45,6 +45,16 @@ func TestUDPUserPortRepliesFromTheAddressUsed(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	n, _ := strconv.Atoi(port)
+	// the port's UDP must serve before the reply source is judged: a port
+	// whose UDP another program holds gets no reply on any address (the
+	// edge keeps TCP and waits for the UDP port), which is not this bug
+	deadline = time.Now().Add(5 * time.Second)
+	for !udpEchoOnce(t, "127.0.0.1:"+port) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the user port's UDP never answered on 127.0.0.1 (another program holds UDP %s?)", port)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	for _, dst := range []string{"127.0.0.1", "127.0.0.2"} {
 		c, err := net.DialUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")}, &net.UDPAddr{IP: net.ParseIP(dst), Port: n})
 		if err != nil {
@@ -65,4 +75,20 @@ func TestUDPUserPortRepliesFromTheAddressUsed(t *testing.T) {
 			t.Errorf("a connected user of %s got %d of 10 echoes: the replies do not come from the address it sent to", dst, got)
 		}
 	}
+}
+
+// udpEchoOnce sends one datagram to addr and waits up to 500 ms for its echo.
+func udpEchoOnce(t *testing.T, addr string) bool {
+	t.Helper()
+	c, err := net.Dial("udp4", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	msg := []byte("up?")
+	c.Write(msg)
+	c.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	b := make([]byte, 64)
+	k, err := c.Read(b)
+	return err == nil && string(b[:k]) == string(msg)
 }

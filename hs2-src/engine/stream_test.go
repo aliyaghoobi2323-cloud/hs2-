@@ -26,13 +26,18 @@ func testCert(t *testing.T) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}
 }
 
+// freePort returns a port free for both TCP and UDP on every address
+// (freePortOn ""). It used to ask the kernel for a free TCP port on
+// 127.0.0.1 only, but the tests that forward UDP too bind the same number
+// for UDP, on 127.0.0.1 or on every address (user_listen_ip ""); when
+// another program held that UDP port the edge kept TCP and left UDP
+// waiting (stream_iran.go), and the test got no UDP reply at all. On the
+// Kharej server xray alone holds ~270 UDP ports of the ephemeral range, so
+// about 1 run in 100 drew one (CI on r1-merge: TestUDPUserPortRepliesFrom-
+// TheAddressUsed, 0 of 10 echoes on both addresses).
 func freePort(t *testing.T) string {
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer l.Close()
-	return strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+	t.Helper()
+	return freePortOn(t, "")
 }
 
 // echoPanel echoes TCP and UDP on the same address.
