@@ -44,9 +44,18 @@ realstate(){
     | xargs -0 -r stat -c '%n %a %s %Y' 2>/dev/null | sort
   for f in $PROTECT_FILES; do [ -e "$f" ] && stat -c '%n %a %s %Y' "$f"; done
   # /run/hs2: the live status/warm files of running tunnels change by the second:
-  # their names only; anything else in full.
+  # their names only; anything else in full. Every running hs2 writes one there,
+  # named after its config's path: the install's tunnels (configs in /etc/hs2:
+  # etc-hs2-*) by name; those of a lab or rig hs2 on the same host (tmp-*,
+  # root-*: configs elsewhere) are not the install's and come and go with each
+  # lab run — counted, a lab beside the test failed it (exit 98) with nothing of
+  # the install moved.
   find /run/hs2 -mindepth 1 -maxdepth 2 2>/dev/null | sort | while read -r f; do
-    case "$f" in /run/hs2/etc-hs2-*) echo "$f" ;; *) stat -c '%n %a %s %Y' "$f" ;; esac
+    case "$f" in
+      /run/hs2/etc-hs2-*) echo "$f" ;;
+      /run/hs2/*.status.json | /run/hs2/*.warm) ;;
+      *) stat -c '%n %a %s %Y' "$f" ;;
+    esac
   done
   return 0
 }

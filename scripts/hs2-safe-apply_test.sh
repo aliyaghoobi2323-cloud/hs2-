@@ -13,6 +13,8 @@
 #   peer-late   the peer answers after 200 s, HS2_SAFE_PEER_WAIT=400 → stays
 #               (and after 350 s: back with the default 300, stays with 400)
 #   bad-config  `hs2 check` refuses the staged config     → nothing applied
+#   binary-only the new binary's `hs2 check` refuses the live config that the
+#               running one passes → nothing applied; a config both refuse → applied
 #   dropins     <unit>.service.d/ after a revert is exactly what it was (or absent)
 #   the config is the one the unit's ExecStart runs; the ping goes to its peer_ip;
 #   a tunnel without a tun (mtcp) is refused unless HS2_SAFE_PEER is given;
@@ -98,8 +100,9 @@ exit 0
 EOF
 chmod 755 "$T/fake/"*
 
-# a stand-in hs2: `version`, and `check` that refuses a config holding BAD
-mkbin(){ printf '#!/bin/bash\n# %s\ncase "$1" in version) echo "hs2 v3 (stand-in %s)" ;; check) grep -q BAD "$3" && { echo "ERROR: bad (%s)"; exit 1; }; echo "config OK (%s)" ;; esac\n' "$1" "$1" "$1" "$1" > "$2"; chmod 755 "$2"; }
+# a stand-in hs2: `version`, and `check` that refuses a config holding BAD (every
+# stand-in) or NEWONLY (the new binary only: a config the old one passes)
+mkbin(){ printf '#!/bin/bash\n# %s\ncase "$1" in version) echo "hs2 v3 (stand-in %s)" ;; check) grep -q BAD "$3" && { echo "ERROR: bad (%s)"; exit 1; }; [ %s = NEWBIN ] && grep -q NEWONLY "$3" && { echo "ERROR: new only (%s)"; exit 1; }; echo "config OK (%s)" ;; esac\n' "$1" "$1" "$1" "$1" "$1" "$1" > "$2"; chmod 755 "$2"; }
 cfgjson(){ printf '{\n  "mode": "listen", "carrier": "%s", "reverse": true, "addr": "192.0.2.1:2096",\n  "local_cidr": "10.77.9.2/30", "peer_ip": "%s", "shared_key": "%s"%s\n}\n' "$1" "$2" "$(printf 'ab%.0s' $(seq 32))" "${3:-}"; }
 
 # world NAME: a fresh unit "hs2-safetest" with a binary, a config at a
@@ -182,6 +185,25 @@ out=$(run FAKE_PEER=0)
 check "bad-config: REFUSED, nothing applied, nothing restarted" \
   'last | grep -q "^REFUSED config-check" && [ "$(state)" = "$before" ] && [ "$(restarts)" = 0 ] && ! grep -q daemon-reload "$W/sd/calls"'
 check "bad-config: the staged binary checks the staged config" 'grep -q "ERROR: bad (NEWBIN)" "$W/log"'
+
+# ---- a new binary alone: the live config, checked with it ---------------------------
+# (R1 review C: a config the running binary runs and the new one refuses — e.g.
+# a port_map an older Iran server ignored — would crash-loop the new binary and
+# cost the 60 s of HS2_SAFE_UPWAIT and a revert; refused before anything moves.)
+world newonly; rm -f "$W/stage/config.json" "$W/stage/dropin.conf"
+cfgjson l3mtcp 10.77.9.1 ', "NEWONLY": 1' > "$W/etc/tunnel-a.json"; chmod 600 "$W/etc/tunnel-a.json"; before=$(state)
+out=$(run FAKE_PEER=0)
+check "binary only: a live config the running binary passes and the new one fails → REFUSED, nothing applied, nothing restarted" \
+  'last | grep -q "^REFUSED config-check-new" && [ "$(state)" = "$before" ] && [ "$(restarts)" = 0 ] && grep -q "ERROR: new only (NEWBIN)" "$W/log"'
+world bothfail; rm -f "$W/stage/config.json" "$W/stage/dropin.conf"
+cfgjson l3mtcp 10.77.9.1 ', "BAD": 1' > "$W/etc/tunnel-a.json"; chmod 600 "$W/etc/tunnel-a.json"
+out=$(run FAKE_PEER=0)
+check "binary only: a live config both binaries fail (it runs so today) → applied as before" \
+  'last | grep -q "^OK " && grep -q NEWBIN "$W/bin/hs2" && grep -q "running binary too" "$W/log"'
+world binonly; rm -f "$W/stage/config.json" "$W/stage/dropin.conf"
+out=$(run FAKE_PEER=0)
+check "binary only: the new binary checks the live config, and it goes on" \
+  'last | grep -q "^OK " && grep -q NEWBIN "$W/bin/hs2" && grep -q "config OK (NEWBIN)" "$W/log"'
 
 # ---- dropins -------------------------------------------------------------------------
 world dropins; before=$(state)
