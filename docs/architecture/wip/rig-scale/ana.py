@@ -487,6 +487,29 @@ def host_busy(r):
     return round(100 * (1 - (d[3] + d[4]) / tot), 1) if tot > 0 else None
 
 
+def cpus_split(r):
+    """each CPU's busy, softirq and steal share (%) in the measuring window
+    (cpus-start/end.txt, R1 speed): what ran on the rig's CPUs and on the
+    others while the run measured"""
+    try:
+        a = {l.split()[0]: [int(x) for x in l.split()[1:]] for l in open(r + "/cpus-start.txt") if l.strip()}
+        b = {l.split()[0]: [int(x) for x in l.split()[1:]] for l in open(r + "/cpus-end.txt") if l.strip()}
+    except (OSError, ValueError):
+        return None
+    res = {"busy": [], "softirq": [], "steal": []}
+    for c in sorted(a, key=lambda k: int(k[3:])):
+        if c not in b:
+            continue
+        d = [y - x for x, y in zip(a[c], b[c])]
+        tot = sum(d[:8])
+        if tot <= 0:
+            continue
+        res["busy"].append(round(100 * (1 - (d[3] + d[4]) / tot), 1))
+        res["softirq"].append(round(100 * d[6] / tot, 1))
+        res["steal"].append(round(100 * d[7] / tot, 1))
+    return res
+
+
 def ss_parse(path):
     socks = {}
     key = None
@@ -661,9 +684,12 @@ def compose(r, ok, why):
     rec["extra"] = {k: v for k, v in cell.items() if k not in ORDER}
     rec.update({"start": meta.get("start"), "load0": meta.get("load0"), "waited_s": meta.get("waited_s"),
                 "host_busy_pct": host_busy(r)})
-    for k in ("edge_cpus", "exit_cpus", "uptime", "top", "panel_sndbuf"):
+    for k in ("edge_cpus", "exit_cpus", "rig_cpus", "uptime", "top", "panel_sndbuf"):
         if meta.get(k):
             rec[k] = meta[k]
+    cs = cpus_split(r)
+    if cs:
+        rec["cpus"] = cs
     st = {s: readj("%s/status-%s.json" % (r, s), {}) for s in ("edge", "exit")}
     policed = 0
     try:
