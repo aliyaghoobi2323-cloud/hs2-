@@ -234,12 +234,22 @@ wait_links() {
 # now (its socket's congestion control is not bbr), both directions, at
 # r-mid's ingress — a DPI box that throttles the flows it flagged, by
 # five-tuple; a connection that comes up later is not policed (R1 round 5:
-# the engine review's B2, a QUIET link alive but slow). Prints each one.
+# the engine review's B2, a QUIET link alive but slow). A pool without QUIET
+# links (production) gets it on its busiest link (bytes acked + received).
+# Prints each one.
 qpolice() {
-  local pr=${1:?} burst p
+  local pr=${1:?} burst p ports
   burst=$(awk -v r="$pr" -v m="${POLICE_BURST_MS:-20}" 'BEGIN{b=r*1e6/8*m/1000; if(b<16000)b=16000; printf "%d", b}')
   for d in me mx; do nsx $M tc qdisc add dev $d clsact 2>/dev/null; done
-  for p in $(nsx $X ss -HtinO state established '( dport = :2096 )' 2>/dev/null | awk '$0 !~ / bbr / {split($4,a,":"); print a[length(a)]}'); do
+  ports=$(nsx $X ss -HtinO state established '( dport = :2096 )' 2>/dev/null | awk '$0 !~ / bbr / {split($4,a,":"); print a[length(a)]}')
+  if [ -z "$ports" ]; then
+    ports=$(nsx $X ss -HtinO state established '( dport = :2096 )' 2>/dev/null | awk '{
+      split($4,a,":"); b = 0
+      if (match($0, /bytes_acked:[0-9]+/)) b += substr($0, RSTART + 12, RLENGTH - 12)
+      if (match($0, /bytes_received:[0-9]+/)) b += substr($0, RSTART + 15, RLENGTH - 15)
+      if (b >= best) { best = b; bp = a[length(a)] } } END { if (bp != "") print bp }')
+  fi
+  for p in $ports; do
     nsx $M tc filter add dev mx ingress protocol ip prio 9 flower ip_proto tcp \
       src_ip 10.202.0.1 src_port $p dst_port 2096 \
       action police rate ${pr}mbit burst $burst conform-exceed drop/ok >/dev/null 2>&1 &&
