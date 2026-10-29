@@ -143,6 +143,35 @@ func TestReviewANoEMSFixKeepsTunnel(t *testing.T) {
 	}
 }
 
+// The caps a binary offers follow its kill switches as the engine reads
+// them (an integer, cmd/hs2 applyTuning): "00" or "+0" turn the core off
+// there, so its bit must go too; MOVE_BACK is on for any value but 0, as
+// engine.MoveBackOn reads it; a value that is no integer is the default at
+// both (review A, finding A5; the red team's Z6).
+func TestReviewACapsFollowEngineSwitches(t *testing.T) {
+	all := CapClass | CapSched | CapHostQ | CapSendCap | CapGroup | CapHint
+	for _, c := range []struct {
+		env, val string
+		want     uint32
+	}{
+		{"HS2_TUNE_SCHED", "00", all &^ (CapSched | CapGroup | CapHint)},
+		{"HS2_TUNE_SCHED", "+0", all &^ (CapSched | CapGroup | CapHint)},
+		{"HS2_TUNE_QUIET", "-0", all &^ (CapGroup | CapHint)},
+		{"HS2_TUNE_SCHED", "off", all}, // no integer: the engine keeps it on
+		{"HS2_TUNE_SCHED", "1", all},
+		{"HS2_TUNE_MOVE_BACK", "2", all | CapMoveBack},
+		{"HS2_TUNE_MOVE_BACK", "01", all | CapMoveBack},
+		{"HS2_TUNE_MOVE_BACK", "yes", all},
+	} {
+		t.Run(c.env+"="+c.val, func(t *testing.T) {
+			t.Setenv(c.env, c.val)
+			if got := LocalAuthHdr().Caps; got != c.want {
+				t.Fatalf("%s=%q: caps %#x, want %#x", c.env, c.val, got, c.want)
+			}
+		})
+	}
+}
+
 // A relay that terminates TLS with a certificate of its own (any TLS
 // interceptor: the dialer checks no certificate until R8's pin) makes the
 // dialer read the real server's website answer to the relayed auth record
