@@ -1,0 +1,9 @@
+taken
+07:35:11 lock taken after 931s (pid 3912839), plan /root/rred2/B2/plan.txt, REPS 2, limit 1440s
+07:35:12 pre: /root/hs2-wt/r1-red2/docs/architecture/wip/r1/redteam2/tools/build.sh
+07:35:14 pre done
+07:47:35 run.sh status 0
+07:47:36 pass 1: 0 runs busy (>75%) or failed, 695s left
+07:47:35 end: mode log, status 0; 1438 samples; host TCP max 165892 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0
+07:47:36 done after 745s of rig time
+07:47:36 lock released after 745s

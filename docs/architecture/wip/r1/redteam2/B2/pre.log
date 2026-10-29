@@ -1,0 +1,13 @@
+# github.com/xtaci/smux
+third_party/smux/sched.go:800:7: built-in min requires go1.21 or later (-lang was set to go1.13; check go.mod)
+sha256sum: /root/rred2/raw-bins/hs2-r2: No such file or directory
+hs2-r2 32baad3+dirty 
+rigload a301618d0acaf4a6
+# github.com/xtaci/smux
+third_party/smux/sched.go:800:7: built-in min requires go1.21 or later (-lang was set to go1.13; check go.mod)
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine [build failed]
+FAIL
+# github.com/xtaci/smux [github.com/xtaci/smux.test]
+./sched.go:800:7: built-in min requires go1.21 or later (-lang was set to go1.13; check go.mod)
+FAIL	github.com/xtaci/smux [build failed]
+FAIL
