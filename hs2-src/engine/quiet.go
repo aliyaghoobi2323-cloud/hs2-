@@ -1116,6 +1116,16 @@ func (q *quietSet) noteHint(id uint32) {
 // moved already); false: no BULK link took it now (tried again at the
 // mover's next tick).
 func (q *quietSet) move(gs *groupStream, dir string) bool {
+	gs.mu.Lock()
+	onBulk := gs.bcs != nil
+	if onBulk {
+		gs.noMove = true // on a BULK link already: done with it (a group
+		// that may move a few times, CapLight, still moves to BULK once)
+	}
+	gs.mu.Unlock()
+	if onBulk {
+		return true
+	}
 	if gs.g.Moves() > 0 && !gs.g.Retired() {
 		// it moved between the QUIET links (quietlight.go) or back from a
 		// BULK one, and the stream before is not let go yet: its group
