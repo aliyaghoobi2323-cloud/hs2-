@@ -340,3 +340,23 @@ func TestRed2FollowCloseGrace(t *testing.T) {
 		t.Fatal("grace 0: closed at once, as before")
 	}
 }
+
+// Item 2: what the other server reports as its ceiling (kindInfo's u16
+// MaxLinks, the largest over the live links) never takes the edge's QUIET
+// count to 0 or past its own: 0 is "none heard" (its own count), anything
+// else lands in [1, want] — a peer can lower it to one, no further.
+func TestRed2FollowWantBounds(t *testing.T) {
+	for want := 1; want <= 8; want++ {
+		for _, bulk := range []int{0, 1, 5, 8, 300, 600} {
+			for _, pm := range []int{-1, 0, 1, 2, bulk, bulk + 1, bulk + want, bulk + want + 5, 65535} {
+				got := followWant(want, bulk, pm)
+				if pm <= 0 && got != want {
+					t.Fatalf("want %d bulk %d ceiling %d: %d, want its own count", want, bulk, pm, got)
+				}
+				if got < 1 || got > want {
+					t.Fatalf("want %d bulk %d ceiling %d: %d QUIET links, outside [1, %d]", want, bulk, pm, got, want)
+				}
+			}
+		}
+	}
+}
