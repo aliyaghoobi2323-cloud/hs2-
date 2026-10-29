@@ -172,8 +172,8 @@ def schedule(plan, reps):
             die("%s:%d: tunping needs TUN >= 1" % (plan, ln))
         if "KILLQ" in d and not re.match(r"^\d+(\.\d+)?$", d["KILLQ"]):
             die("%s:%d: KILLQ %s (seconds after the client starts)" % (plan, ln, d["KILLQ"]))
-        if d.get("KILLWHAT", "quiet") not in ("quiet", "bulk", "any"):
-            die("%s:%d: KILLWHAT %s (quiet, bulk, any)" % (plan, ln, d["KILLWHAT"]))
+        if d.get("KILLWHAT", "quiet") not in ("quiet", "bulk", "any", "all"):
+            die("%s:%d: KILLWHAT %s (quiet, bulk, any, all)" % (plan, ln, d["KILLWHAT"]))
         c = cell_str(d)
         if c not in cells:
             cells[c] = []
