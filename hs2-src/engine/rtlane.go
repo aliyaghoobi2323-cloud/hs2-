@@ -136,7 +136,8 @@ func rtAllowance0(c *flowClassifier, confirmed bool) int64 {
 		// the start of a busy link, the round-4 rig): it may take the most
 		// a tick, so it drains it, its user's realtime credit (RTMax) the
 		// bound
-		if rok, _, _ := rtSteady(&c.d[1]); rok && float64(c.d[0].sum) <= rtWindowMax() {
+		if rok, _, _ := rtSteady(&c.d[1]); rok && float64(c.d[0].sum) <= rtWindowMax() &&
+			!twoWayLopsided(uint64(c.d[0].sum), uint64(c.d[1].sum)) {
 			return rtAllowMax
 		}
 	}
