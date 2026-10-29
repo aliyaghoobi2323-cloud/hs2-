@@ -1,0 +1,10 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.392s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/core	0.067s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/encap	29.170s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/fec	1.527s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/reality	0.387s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	2.924s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	0.098s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tune	0.013s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier	70.958s
+rc=0
