@@ -300,11 +300,14 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 	if quietLink && QuietThin != 0 {
 		setThinTimeouts(tc) // (best effort: a kernel without it keeps its back-off)
 	}
+	quietCC := ""
 	if quietLink && QuietCC != "" {
 		// a QUIET link carries light traffic only: BBR's PROBE_RTT (its
 		// window at 4 segments for 200 ms each 10 s) would hold every
-		// user's probe that moment, 198 of them a padded record each
-		tlscarrier.SetCongestion(tc, QuietCC)
+		// user's probe that moment, 198 of them a padded record each; the
+		// first of the list the kernel takes (quietcc.go: Illinois keeps
+		// its window on a path that loses packets at random)
+		quietCC = setQuietCC(tc, QuietCC)
 	}
 	if server {
 		sess, err = smux.Server(w, cfg)
@@ -355,6 +358,10 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		cl := &coreLink{sess: sess, mtr: meter, sc: scl, hq: hq, flows: flows}
 		if quietLink {
 			cl.shp = shaped
+			if QuietCCLoss != "" && tc != nil {
+				// the switch to QuietCCLoss under random loss (quietcc.go)
+				cl.qcc = newQuietCCWatch(tc, quietCC, QuietCCLoss)
+			}
 		}
 		coreLinks.add(cl)
 	}
