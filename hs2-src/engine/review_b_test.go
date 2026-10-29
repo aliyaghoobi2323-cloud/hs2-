@@ -2,10 +2,14 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // R1 independent review, part B (engine logic and concurrency; method step
@@ -72,6 +76,66 @@ func TestReviewBOWDTwoQuietLatest(t *testing.T) {
 	}
 	if got := run(1, 1); got != all {
 		t.Fatalf("OWDIdlePool 1: a busy pool lost its QUIET one-way queues: (edge out, in; exit out, in) %v, want all", got)
+	}
+}
+
+// reviewBDialer is a classDialer whose dials only count (none comes up).
+type reviewBDialer struct{ quiet, bulk atomic.Int64 }
+
+func (d *reviewBDialer) DialLink(ctx context.Context) (Link, error) {
+	d.bulk.Add(1)
+	return nil, errors.New("review B: no link")
+}
+
+func (d *reviewBDialer) DialClass(ctx context.Context, class uint32) (Link, error) {
+	if class == tlscarrier.CapQuiet {
+		d.quiet.Add(1)
+	} else {
+		d.bulk.Add(1)
+	}
+	return nil, errors.New("review B: no link")
+}
+
+// B2 (measured as it stands: an open item, not a fix): a QUIET link that
+// is alive but lags — its control ping unanswered for 30 s, as on a
+// connection a DPI box throttles alone (its 5-tuple), or one stuck in
+// resends — is never replaced. The BULK pool's soft-bad links are degraded
+// and replaced make-before-break (heal); the QUIET set replaces a link only
+// once it is dead (quietSet.tick: reap, then dial while short). With one
+// QUIET link (max_links <= 5) pick still gives it every new connection,
+// the latency lane of every user and every new TUN flow; in production's
+// pool (no classes) heal would have moved them to a fresh link.
+func TestReviewBQuietLaggingKept(t *testing.T) {
+	if QuietOff() {
+		t.Skip("HS2_TUNE_QUIET=0")
+	}
+	d := &reviewBDialer{}
+	lm := NewLinkManager(d, 1, 4, 8, nil)
+	q := lm.enableQuiet()
+	up, dn := newAngleWire(angleRateBps, time.Millisecond), newAngleWire(angleRateBps, time.Millisecond)
+	t.Cleanup(func() { up.close(); dn.close() })
+	p := newClassPair(t, up, dn, classCaps(tlscarrier.CapQuiet))
+	if !q.place(p.edge, "") || q.count() != 1 || q.wantNow() != 1 {
+		t.Fatalf("one QUIET link up: placed %d of %d", q.count(), q.wantNow())
+	}
+	// its oldest control ping has waited 30 s for the pong
+	p.edge.mtr.ctrlWait.Store(ctrlNow() - int64(30*time.Second))
+	if !meterLagging(p.edge.mtr, ctrlNow()) {
+		t.Fatal("the QUIET link does not read as lagging (the case is not shown)")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	for range 5 { // five pool ticks (healthTick each: 10 s)
+		q.tick(ctx)
+		lm.dialWG.Wait()
+	}
+	ql, rel, ok := q.pick(nil, 1)
+	if ok {
+		rel()
+	}
+	t.Logf("a QUIET link lagging 30 s: QUIET dials %d, BULK dials %d; a new connection opens on it: %v", d.quiet.Load(), d.bulk.Load(), ok && ql.link == p.edge)
+	if d.quiet.Load() != 0 || !ok || ql.link != p.edge {
+		t.Fatalf("a lagging QUIET link was replaced (dials %d) or passed over (%v): B2 is fixed, update this test and the review's report", d.quiet.Load(), ok && ql.link == p.edge)
 	}
 }
 
