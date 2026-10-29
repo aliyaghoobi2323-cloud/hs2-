@@ -182,6 +182,7 @@ for u in hs2-uge hs2-ugx; do
 done
 sed -i "s#$W#<w>#g" $OUT/status-e.txt $OUT/status-x.txt 2>/dev/null
 sed "s#$W#<w>#g" $W/events > $OUT/events.txt
-gzip -c $W/probe.log > $OUT/probe.log.gz
+cp $W/probe.log $W/probe.snap # (the prober still writes until cleanup)
+gzip -c $W/probe.snap > $OUT/probe.log.gz
 rm -rf "${W:?}"
 cat $OUT/result.txt
