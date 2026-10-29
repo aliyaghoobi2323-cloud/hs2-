@@ -1,0 +1,5 @@
+# r1-red2 after the fix
+--- PASS: TestRed2AttachNoSched (0.00s)
+--- PASS: TestRed2GroupFrameMax (0.01s)
+PASS
+ok  	github.com/xtaci/smux	0.015s
