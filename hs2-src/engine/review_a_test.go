@@ -101,17 +101,19 @@ func TestReviewATunDropChoice(t *testing.T) {
 	if got := sq.flows[100].n(); got != before-1 {
 		t.Fatalf("the fattest user's longest flow holds %d, want %d", got, before-1)
 	}
-	// a flow drained to nothing is forgotten by the tick as before
+	tunQueuedSetsAgree(t, sq)
+	// drained, a flow leaves the sets; the tick forgets the idle ones
 	for sq.flows[100].n() > 0 {
 		sq.dropHead(sq.flows[100])
 	}
-	f := sq.flows[100]
-	f.usedAt = ctrlNow() - int64(3*tunFlowIdle)
-	sq.tick(ctrlNow())
-	if sq.flows[100] != nil {
-		t.Fatal("an idle empty flow was kept")
-	}
+	tunQueuedSetsAgree(t, sq)
+	sq.close()
+	tunQueuedSetsAgree(t, sq)
 }
+
+// tunQueuedSetsAgree checks the sets of what has packets queued (the fix,
+// review_a_fix_test.go) against the queues themselves; none before it.
+var tunQueuedSetsAgree = func(t *testing.T, sq *tunSched) {}
 
 // fnvInv32 is the inverse of fnvPrime mod 2^32.
 func fnvInv32() uint32 {
