@@ -360,8 +360,8 @@ type owdLink struct {
 	// (OWDGuardIn)
 	ooo0         uint32
 	inDirtyUntil atomic.Int64
-	dirties    atomic.Int64 // beats that found the socket dirty
-	inDirties  atomic.Int64 // ... and a hole in what it received (OWDGuardIn)
+	dirties      atomic.Int64 // beats that found the socket dirty
+	inDirties    atomic.Int64 // ... and a hole in what it received (OWDGuardIn)
 	// OWDIdle's: the BULK links' bytes in the second under way (from
 	// trAt, ctrlNow), when a second last had owdIdleRate or more (ctrlNow;
 	// 0: never), whether the loop is parked for an idle pool, and the
