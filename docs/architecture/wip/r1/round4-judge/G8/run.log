@@ -1,0 +1,26 @@
+04:37:07 plan /root/r4j/G8/plan.txt: 12 runs
+04:37:08 start d8fe8919-prod-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 0.48 waited 0s
+04:38:18 done d8fe8919-prod-1 ok=1 
+04:38:19 start d8fe8919-j3g-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 1.02 waited 0s
+04:39:27 done d8fe8919-j3g-1 ok=1 
+04:39:28 start d8fe8919-c4-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 2.07 waited 0s
+04:40:38 done d8fe8919-c4-1 ok=1 
+04:40:38 start d8fe8919-fin-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin) load 2.22 waited 0s
+04:41:48 done d8fe8919-fin-1 ok=1 
+04:41:49 start d8fe8919-fin-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin) load 2.45 waited 0s
+04:42:58 done d8fe8919-fin-2 ok=1 
+04:42:59 start d8fe8919-c4-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 1.82 waited 0s
+04:44:08 done d8fe8919-c4-2 ok=1 
+04:44:09 start d8fe8919-j3g-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 1.51 waited 0s
+04:45:18 done d8fe8919-j3g-2 ok=1 
+04:45:19 start d8fe8919-prod-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 2.23 waited 0s
+04:46:28 done d8fe8919-prod-2 ok=1 
+04:46:29 start d8fe8919-fin-3 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin) load 1.76 waited 0s
+04:47:38 done d8fe8919-fin-3 ok=1 
+04:47:38 start d8fe8919-c4-3 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 1.56 waited 0s
+04:48:47 done d8fe8919-c4-3 ok=1 
+04:48:48 start d8fe8919-j3g-3 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j3g) load 2.82 waited 0s
+04:49:58 done d8fe8919-j3g-3 ok=1 
+04:49:59 start d8fe8919-prod-3 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 2.59 waited 0s
+04:51:09 done d8fe8919-prod-3 ok=1 
+04:51:09 done /root/r4j/G8/plan.txt

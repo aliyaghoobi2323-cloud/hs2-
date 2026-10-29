@@ -1,0 +1,32 @@
+prod /root/r4j/bins/hs2-prod
+j3g /root/r4j/bins/hs2-j3g
+c4 /root/r4j/bins/hs2-c4f
+j /root/r4j/bins/hs2-j1
+jh /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20
+jhf2 /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20 HS2_TUNE_QUIET_FEW=2
+jhsh /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20 HS2_TUNE_RT_SHARE=8192 HS2_TUNE_LAT_RR=1
+jf2 /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_FEW=2
+jsh /root/r4j/bins/hs2-j1 HS2_TUNE_RT_SHARE=8192 HS2_TUNE_LAT_RR=1
+jcm /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_COAL_MIN=50
+jqr /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_REC=1
+jm2 /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_MANY=2
+jdr /root/r4j/bins/hs2-j1 HS2_TUNE_BUDGET_DRAIN=3000
+jbu /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_BYUSER=1
+jf2bu /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_FEW=2 HS2_TUNE_QUIET_BYUSER=1
+jhc /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_HOLDCAP=2097152
+jq0 /root/r4j/bins/hs2-j1 HS2_TUNE_HQG_QUIET_SEGS=0
+jsm /root/r4j/bins/hs2-j1 HS2_TUNE_HQG_SEGS_MS=30
+jhs /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20 HS2_TUNE_RT_SHARE=8192
+jhf2s /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20 HS2_TUNE_QUIET_FEW=2 HS2_TUNE_RT_SHARE=8192
+jhf2c /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20 HS2_TUNE_QUIET_FEW=2 HS2_TUNE_QUIET_COAL_MIN=50
+jhc4 /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20 HS2_TUNE_QUIET_COAL_MIN=50
+jx /root/r4j/bins/hs2-j1 HS2_TUNE_RT_HOLD=20 HS2_TUNE_QUIET_FEW=2 HS2_TUNE_QUIET_BYUSER=1 HS2_TUNE_QUIET_COAL_MIN=50
+jhc5 /root/r4j/bins/hs2-j1 HS2_TUNE_QUIET_HOLDCAP=524288
+fin /root/r4j/bins/hs2-fin
+finc6 /root/r4j/bins/hs2-fin HS2_TUNE_QUIET_COAL=6000
+finf1 /root/r4j/bins/hs2-fin HS2_TUNE_QUIET_FEW=1
+finqr /root/r4j/bins/hs2-fin HS2_TUNE_QUIET_REC=1
+fp /root/r4j/bins/hs2-j2 HS2_TUNE_QUIET_PACK=1
+f1 /root/r4j/bins/hs2-j2 HS2_TUNE_QUIET_FEW=1
+fin2 /root/r4j/bins/hs2-fin2
+fin2bbr /root/r4j/bins/hs2-fin2 HS2_TUNE_QUIET_CC=bbr

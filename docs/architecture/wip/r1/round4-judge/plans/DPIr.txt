@@ -1,0 +1,12 @@
+# DPI captures (R1 round-4 judge): record lengths against j3g and c4 (s5, 25 Mbit/s, 7 users), the QUIET links with 200 users (one_vs_16) and the home mix on 8 links; the idle tunnel (the red team Z10) at N=1 and N=8 against production and j3g
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=j3g
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=fin2
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=c4
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 DUR=20 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=j3g
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=j3g
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=fin2

@@ -1,0 +1,30 @@
+22:40:34 plan /root/r4j/S3/plan.txt: 14 runs
+22:40:35 start ff722c82-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 2.14 waited 0s
+22:41:20 done ff722c82-prod-1 ok=1 
+22:41:21 start ff722c82-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.99 waited 0s
+22:42:06 done ff722c82-c4-1 ok=1 
+22:42:07 start ff722c82-jf2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=jf2) load 3.90 waited 0s
+22:42:52 done ff722c82-jf2-1 ok=1 
+22:42:53 start ff722c82-jf2bu-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=jf2bu) load 3.66 waited 0s
+22:43:38 done ff722c82-jf2bu-1 ok=1 
+22:43:39 start ff722c82-jf2bu-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=jf2bu) load 3.06 waited 0s
+22:44:24 done ff722c82-jf2bu-2 ok=1 
+22:44:25 start ff722c82-jf2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=jf2) load 3.26 waited 0s
+22:45:10 done ff722c82-jf2-2 ok=1 
+22:45:10 start ff722c82-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.37 waited 0s
+22:45:55 done ff722c82-c4-2 ok=1 
+22:45:56 start ff722c82-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 3.69 waited 0s
+22:46:41 done ff722c82-prod-2 ok=1 
+22:46:42 start 04e76e01-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 3.45 waited 0s
+22:47:28 done 04e76e01-prod-1 ok=1 
+22:47:29 start 04e76e01-c4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 3.32 waited 0s
+22:48:15 done 04e76e01-c4-1 ok=1 
+22:48:15 start 04e76e01-jbu-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=jbu) load 4.37 waited 0s
+22:49:01 done 04e76e01-jbu-1 ok=1 
+22:49:02 start 04e76e01-jbu-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=jbu) load 3.86 waited 0s
+22:49:48 done 04e76e01-jbu-2 ok=1 
+22:49:49 start 04e76e01-c4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.93 waited 0s
+22:50:34 done 04e76e01-c4-2 ok=1 
+22:50:35 start 04e76e01-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 3.87 waited 0s
+22:51:21 done 04e76e01-prod-2 ok=1 
+22:51:21 done /root/r4j/S3/plan.txt

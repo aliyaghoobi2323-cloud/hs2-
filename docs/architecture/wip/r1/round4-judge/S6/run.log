@@ -1,0 +1,34 @@
+05:16:17 plan /root/r4j/S6/plan.txt: 16 runs
+05:16:18 start 9d97f0c2-j3g-1 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3g) load 1.72 waited 0s
+05:16:49 done 9d97f0c2-j3g-1 ok=1 
+05:16:50 start 9d97f0c2-fin2-1 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2) load 1.86 waited 0s
+05:17:20 done 9d97f0c2-fin2-1 ok=1 
+05:17:21 start 9d97f0c2-fin2-2 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2) load 2.50 waited 0s
+05:17:51 done 9d97f0c2-fin2-2 ok=1 
+05:17:52 start 9d97f0c2-j3g-2 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3g) load 2.69 waited 0s
+05:18:23 done 9d97f0c2-j3g-2 ok=1 
+05:18:24 start 279b664e-j3g-1 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3g) load 1.94 waited 0s
+05:18:54 done 279b664e-j3g-1 ok=1 
+05:18:55 start 279b664e-fin2-1 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2) load 2.79 waited 0s
+05:19:26 done 279b664e-fin2-1 ok=1 
+05:19:27 start 279b664e-fin2-2 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2) load 2.17 waited 0s
+05:19:57 done 279b664e-fin2-2 ok=1 
+05:19:58 start 279b664e-j3g-2 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=j3g) load 2.34 waited 0s
+05:20:28 done 279b664e-j3g-2 ok=1 
+05:20:29 start 0e7c768c-j3g-1 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 1.88 waited 0s
+05:21:14 done 0e7c768c-j3g-1 ok=1 
+05:21:15 start 0e7c768c-fin2-1 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.35 waited 0s
+05:22:01 done 0e7c768c-fin2-1 ok=1 
+05:22:02 start 0e7c768c-fin2-2 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.67 waited 0s
+05:22:48 done 0e7c768c-fin2-2 ok=1 
+05:22:49 start 0e7c768c-j3g-2 (N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 3.14 waited 0s
+05:23:35 done 0e7c768c-j3g-2 ok=1 
+05:23:35 start 4401fe4a-j3g-1 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 3.13 waited 0s
+05:24:21 done 4401fe4a-j3g-1 ok=1 
+05:24:22 start 4401fe4a-fin2-1 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.51 waited 0s
+05:25:08 done 4401fe4a-fin2-1 ok=1 
+05:25:09 start 4401fe4a-fin2-2 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.24 waited 0s
+05:25:55 done 4401fe4a-fin2-2 ok=1 
+05:25:56 start 4401fe4a-j3g-2 (N=8 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=j3g) load 2.51 waited 0s
+05:26:42 done 4401fe4a-j3g-2 ok=1 
+05:26:42 done /root/r4j/S6/plan.txt

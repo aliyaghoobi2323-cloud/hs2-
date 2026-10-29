@@ -1,0 +1,50 @@
+00:59:15 plan /root/r4j/G2/plan.txt: 24 runs
+00:59:16 start bded2768-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 0.65 waited 0s
+01:00:10 done bded2768-prod-1 ok=1 
+01:00:11 start bded2768-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 0.90 waited 0s
+01:01:06 done bded2768-j3g-1 ok=1 
+01:01:06 start bded2768-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=c4) load 1.62 waited 0s
+01:02:01 done bded2768-c4-1 ok=1 
+01:02:02 start bded2768-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 2.51 waited 0s
+01:02:57 done bded2768-fin-1 ok=1 
+01:02:57 start bded2768-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 2.56 waited 0s
+01:03:52 done bded2768-fin-2 ok=1 
+01:03:53 start bded2768-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=c4) load 2.43 waited 0s
+01:04:47 done bded2768-c4-2 ok=1 
+01:04:48 start bded2768-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 2.77 waited 0s
+01:05:43 done bded2768-j3g-2 ok=1 
+01:05:44 start bded2768-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 2.68 waited 0s
+01:06:38 done bded2768-prod-2 ok=1 
+01:06:39 start bded2768-fin-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 2.44 waited 0s
+01:07:34 done bded2768-fin-3 ok=1 
+01:07:35 start bded2768-c4-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=c4) load 2.15 waited 0s
+01:08:29 done bded2768-c4-3 ok=1 
+01:08:30 start bded2768-j3g-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 1.86 waited 0s
+01:09:25 done bded2768-j3g-3 ok=1 
+01:09:26 start bded2768-prod-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 1.98 waited 0s
+01:10:20 done bded2768-prod-3 ok=1 
+01:10:21 start cab6c0da-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=prod) load 1.81 waited 0s
+01:10:54 done cab6c0da-prod-1 ok=1 
+01:10:55 start cab6c0da-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 1.13 waited 0s
+01:11:28 done cab6c0da-j3g-1 ok=1 
+01:11:29 start cab6c0da-c4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=c4) load 1.29 waited 0s
+01:12:02 done cab6c0da-c4-1 ok=1 
+01:12:03 start cab6c0da-fin-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=fin) load 1.33 waited 0s
+01:12:37 done cab6c0da-fin-1 ok=1 
+01:12:37 start cab6c0da-fin-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=fin) load 1.09 waited 0s
+01:13:11 done cab6c0da-fin-2 ok=1 
+01:13:11 start cab6c0da-c4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=c4) load 1.52 waited 0s
+01:13:45 done cab6c0da-c4-2 ok=1 
+01:13:46 start cab6c0da-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 1.58 waited 0s
+01:14:19 done cab6c0da-j3g-2 ok=1 
+01:14:20 start cab6c0da-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=prod) load 2.58 waited 0s
+01:14:53 done cab6c0da-prod-2 ok=1 
+01:14:54 start cab6c0da-fin-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=fin) load 2.27 waited 0s
+01:15:27 done cab6c0da-fin-3 ok=1 
+01:15:28 start cab6c0da-c4-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=c4) load 2.00 waited 0s
+01:16:01 done cab6c0da-c4-3 ok=1 
+01:16:02 start cab6c0da-j3g-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=j3g) load 2.12 waited 0s
+01:16:35 done cab6c0da-j3g-3 ok=1 
+01:16:36 start cab6c0da-prod-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl DUR=20 SBR=1.2 BIN=prod) load 2.24 waited 0s
+01:17:09 done cab6c0da-prod-3 ok=1 
+01:17:09 done /root/r4j/G2/plan.txt

@@ -1,0 +1,2 @@
+rec-c4-fin2.json: QUIET 31039, 5229 records, 4587 bursts; gap ms p10 1.49 p25 2.85 p50 4.77 p75 6.58 p90 8.58; mode bin 5.25-5.50 ms 3.9% of gaps; best 1 ms window 14.7%
+rec-c5-fin2.json: QUIET 55145, 14867 records, 6715 bursts; gap ms p10 0.65 p25 1.28 p50 2.44 p75 3.80 p90 5.91; mode bin 0.50-0.75 ms 11.1% of gaps; best 1 ms window 32.4%

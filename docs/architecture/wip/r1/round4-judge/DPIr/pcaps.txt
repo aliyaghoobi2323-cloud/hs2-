@@ -1,0 +1,11 @@
+-rw-r--r-- 1 tcpdump tcpdump   1235216 Oct 29 05:02 cap-c10-j3g.pcap
+-rw-r--r-- 1 tcpdump tcpdump   1833800 Oct 29 05:03 cap-c11-fin2.pcap
+-rw-r--r-- 1 tcpdump tcpdump 126902518 Oct 29 04:54 cap-c1-j3g.pcap
+-rw-r--r-- 1 tcpdump tcpdump 130867810 Oct 29 04:54 cap-c2-fin2.pcap
+-rw-r--r-- 1 tcpdump tcpdump 128921773 Oct 29 04:55 cap-c3-c4.pcap
+-rw-r--r-- 1 tcpdump tcpdump 250567099 Oct 29 04:55 cap-c4-fin2.pcap
+-rw-r--r-- 1 tcpdump tcpdump 531133190 Oct 29 04:56 cap-c5-fin2.pcap
+-rw-r--r-- 1 tcpdump tcpdump    155850 Oct 29 04:57 cap-c6-prod.pcap
+-rw-r--r-- 1 tcpdump tcpdump    379796 Oct 29 04:58 cap-c7-j3g.pcap
+-rw-r--r-- 1 tcpdump tcpdump    396180 Oct 29 04:59 cap-c8-fin2.pcap
+-rw-r--r-- 1 tcpdump tcpdump    804649 Oct 29 05:01 cap-c9-prod.pcap

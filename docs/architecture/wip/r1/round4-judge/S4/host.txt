@@ -1,0 +1,32 @@
+== start 2026-10-28T23:32:21+00:00
+ 23:32:21 up 1 day, 12:27,  6 users,  load average: 0.88, 1.55, 2.40
+TCP: inuse 857 orphan 0 tw 381 alloc 1418 mem 0
+top - 23:32:21 up 1 day, 12:27,  6 users,  load average: 0.81, 1.52, 2.39
+Tasks: 246 total,   1 running, 245 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.2 us,  1.6 sy,  0.0 ni, 96.3 id,  0.0 wa,  0.0 hi,  0.8 si,  0.0 st 
+MiB Mem :  23456.9 total,   5702.6 free,   1290.5 used,  16880.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22166.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2912625 root      20   0 1501236 210736  29468 S  25.5   0.9  10:09.17 xray-linux-amd6
+    992 root      20   0 1477152 130760  10496 S  23.5   0.5     11,02 hs2
+2971340 root      20   0   11908   6036   3888 R   2.0   0.0   0:00.02 top
+      1 root      20   0   22656  14180   9776 S   0.0   0.1   2:54.39 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.23 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_g
+== end 2026-10-28T23:47:30+00:00
+ 23:47:30 up 1 day, 12:42,  5 users,  load average: 2.42, 2.29, 2.21
+TCP: inuse 1063 orphan 4 tw 175 alloc 1682 mem 277
+top - 23:47:31 up 1 day, 12:42,  5 users,  load average: 2.42, 2.29, 2.21
+Tasks: 245 total,   1 running, 244 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.9 us,  2.6 sy,  0.0 ni, 94.7 id,  0.0 wa,  0.0 hi,  0.8 si,  0.0 st 
+MiB Mem :  23456.9 total,   5651.7 free,   1320.7 used,  16901.1 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22136.3 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2912625 root      20   0 1501236 234748  29468 S  30.8   1.0  15:57.13 xray-linux-amd6
+    992 root      20   0 1477152 138772  10496 S  25.0   0.6     11,07 hs2
+    958 root      20   0 1407116 116084  47200 S   9.6   0.5  43:54.15 x-ui
+3016747 root      20   0   11908   6020   3872 R   3.8   0.0   0:00.04 top
+  15116 root      20   0 2265804  45700  31860 S   1.9   0.2   2:43.88 containerd
+      1 root      20   0   22656  14180   9776 S   0.0   0.1   2:56.52 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.23 kthreadd

@@ -1,0 +1,4 @@
+head 98ddec1 2026-10-29T05:29:17Z
+vet ok
+smux vet ok
+rigload vet ok

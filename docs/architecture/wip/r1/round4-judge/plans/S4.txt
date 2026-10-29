@@ -1,0 +1,13 @@
+# S4 (2 reps): the red team C3 cell and the merge-prep open item (a): a 1 and 2 Mbit/s policer on each connection, gamer_vs_dl (5 players, 5 heavy users) at N=1 and N=8; C3 default SEGS=8, the document gate on QUIET links only, the floor bounded to 30 ms
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0
+N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0
+N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm

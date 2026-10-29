@@ -1,0 +1,7 @@
+# DPI, the red team Z10: an idle tunnel for 60 s at N=1 and N=8 (production, j3g, the judge build)
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=j3g
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=j
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=j3g
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=j

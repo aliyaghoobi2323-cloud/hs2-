@@ -1,0 +1,7 @@
+taken
+00:59:14 lock taken after 0s (pid 3179709), plan /root/r4j/G2/plan.txt, REPS 3, limit 1440s
+01:17:10 run.sh status 0
+01:17:10 pass 1: 0 runs busy (>75%) or failed, 364s left
+01:17:10 end: mode log, status 0; 2078 samples; host TCP max 391326 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 690, past tcp_mem[1] (pressure) 174); TCPMemoryPressures 0 -> 0
+01:17:11 done after 1077s of rig time
+01:17:11 lock released after 1077s

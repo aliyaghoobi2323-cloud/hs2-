@@ -1,0 +1,5 @@
+# S11 (2 reps, information for R2): the calls kept on QUIET collapse under 1 and 2 % loss at N=8 (S6: delivered 0.38); QUIET links run cubic. The same with BBR on the QUIET links, and its price for the probes of P10 at N=1 without loss
+N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2bbr
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2bbr

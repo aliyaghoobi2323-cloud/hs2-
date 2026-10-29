@@ -1,0 +1,2 @@
+00:59:15 mode log (record only); tcp_mem 279672 372896 559344; host TCP 0 pages, TCPMemoryPressures 0 at start; RIG_ID '7'; cmd: /root/hs2-wt/r1-r4j/docs/architecture/wip/rig-scale/run.sh /root/r4j/G2/plan.txt /root/r4j/raw-G2
+01:17:10 end: mode log, status 0; 2078 samples; host TCP max 391326 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 690, past tcp_mem[1] (pressure) 174); TCPMemoryPressures 0 -> 0

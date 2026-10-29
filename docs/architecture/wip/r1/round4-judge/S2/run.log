@@ -1,0 +1,42 @@
+22:24:57 plan /root/r4j/S2/plan.txt: 20 runs
+22:24:57 start 5f52d2fc-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3g) load 1.05 waited 0s
+22:25:33 done 5f52d2fc-j3g-1 ok=1 
+22:25:33 start 5f52d2fc-j-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j) load 2.12 waited 0s
+22:26:09 done 5f52d2fc-j-1 ok=1 
+22:26:10 start 5f52d2fc-jcm-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=jcm) load 1.93 waited 0s
+22:26:46 done 5f52d2fc-jcm-1 ok=1 
+22:26:47 start 5f52d2fc-jqr-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=jqr) load 2.64 waited 0s
+22:27:22 done 5f52d2fc-jqr-1 ok=1 
+22:27:23 start 5f52d2fc-jm2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=jm2) load 3.04 waited 0s
+22:27:59 done 5f52d2fc-jm2-1 ok=1 
+22:28:00 start 5f52d2fc-jm2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=jm2) load 3.52 waited 0s
+22:28:35 done 5f52d2fc-jm2-2 ok=1 
+22:28:36 start 5f52d2fc-jqr-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=jqr) load 2.89 waited 0s
+22:29:13 done 5f52d2fc-jqr-2 ok=1 
+22:29:13 start 5f52d2fc-jcm-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=jcm) load 3.68 waited 0s
+22:29:50 done 5f52d2fc-jcm-2 ok=1 
+22:29:50 start 5f52d2fc-j-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j) load 3.93 waited 0s
+22:30:26 done 5f52d2fc-j-2 ok=1 
+22:30:27 start 5f52d2fc-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=j3g) load 4.92 waited 0s
+22:31:03 done 5f52d2fc-j3g-2 ok=1 
+22:31:04 start 340c98ae-j-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j) load 4.28 waited 0s
+22:31:43 done 340c98ae-j-1 ok=1 
+22:31:44 start 340c98ae-jdr-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=jdr) load 3.13 waited 0s
+22:32:24 done 340c98ae-jdr-1 ok=1 
+22:32:25 start 340c98ae-jdr-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=jdr) load 2.42 waited 0s
+22:33:05 done 340c98ae-jdr-2 ok=1 
+22:33:06 start 340c98ae-j-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=j) load 2.61 waited 0s
+22:33:46 done 340c98ae-j-2 ok=1 
+22:33:46 start ae0cf9da-j-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j) load 1.80 waited 0s
+22:34:26 done ae0cf9da-j-1 ok=1 
+22:34:27 start ae0cf9da-jdr-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=jdr) load 2.39 waited 0s
+22:35:07 done ae0cf9da-jdr-1 ok=1 
+22:35:08 start ae0cf9da-jdr-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=jdr) load 2.70 waited 0s
+22:35:48 done ae0cf9da-jdr-2 ok=1 
+22:35:49 start ae0cf9da-j-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j) load 2.39 waited 0s
+22:36:28 done ae0cf9da-j-2 ok=1 
+22:36:29 start 76d1b867-j-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home CALLR=0.1 SBR=1.2 BIN=j) load 2.21 waited 0s
+22:37:15 done 76d1b867-j-1 ok=1 
+22:37:16 start 76d1b867-j-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home CALLR=0.1 SBR=1.2 BIN=j) load 2.59 waited 0s
+22:38:02 done 76d1b867-j-2 ok=1 
+22:38:02 done /root/r4j/S2/plan.txt

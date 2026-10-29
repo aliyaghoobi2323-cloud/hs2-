@@ -1,0 +1,38 @@
+01:39:39 plan /root/r4j/G1b/plan.txt: 18 runs
+01:39:40 start ae0cf9da-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3g) load 0.56 waited 0s
+01:40:20 done ae0cf9da-j3g-1 ok=1 
+01:40:21 start ae0cf9da-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=c4) load 1.06 waited 0s
+01:41:01 done ae0cf9da-c4-1 ok=1 
+01:41:02 start ae0cf9da-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin) load 2.01 waited 0s
+01:41:41 done ae0cf9da-fin-1 ok=1 
+01:41:42 start ae0cf9da-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin) load 2.18 waited 0s
+01:42:22 done ae0cf9da-fin-2 ok=1 
+01:42:23 start ae0cf9da-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=c4) load 1.79 waited 0s
+01:43:03 done ae0cf9da-c4-2 ok=1 
+01:43:04 start ae0cf9da-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3g) load 1.87 waited 0s
+01:43:43 done ae0cf9da-j3g-2 ok=1 
+01:43:44 start ae0cf9da-fin-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin) load 1.55 waited 0s
+01:44:24 done ae0cf9da-fin-3 ok=1 
+01:44:25 start ae0cf9da-c4-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=c4) load 1.60 waited 0s
+01:45:05 done ae0cf9da-c4-3 ok=1 
+01:45:06 start ae0cf9da-j3g-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=j3g) load 1.60 waited 0s
+01:45:46 done ae0cf9da-j3g-3 ok=1 
+01:45:46 start bded2768-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 1.18 waited 0s
+01:46:41 done bded2768-j3g-1 ok=1 
+01:46:42 start bded2768-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=c4) load 1.65 waited 0s
+01:47:36 done bded2768-c4-1 ok=1 
+01:47:37 start bded2768-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 1.44 waited 0s
+01:48:32 done bded2768-fin-1 ok=1 
+01:48:33 start bded2768-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 1.50 waited 0s
+01:49:27 done bded2768-fin-2 ok=1 
+01:49:28 start bded2768-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=c4) load 1.60 waited 0s
+01:50:23 done bded2768-c4-2 ok=1 
+01:50:24 start bded2768-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 1.48 waited 0s
+01:51:18 done bded2768-j3g-2 ok=1 
+01:51:19 start bded2768-fin-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 1.68 waited 0s
+01:52:14 done bded2768-fin-3 ok=1 
+01:52:14 start bded2768-c4-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=c4) load 1.62 waited 0s
+01:53:09 done bded2768-c4-3 ok=1 
+01:53:10 start bded2768-j3g-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=j3g) load 1.93 waited 0s
+01:54:04 done bded2768-j3g-3 ok=1 
+01:54:04 done /root/r4j/G1b/plan.txt

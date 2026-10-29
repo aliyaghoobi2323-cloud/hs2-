@@ -1,0 +1,38 @@
+03:48:36 plan /root/r4j/H5/plan.txt: 18 runs
+03:48:37 start 5c170184-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 0.25 waited 0s
+03:49:17 done 5c170184-prod-1 ok=1 
+03:49:18 start 5c170184-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=j3g) load 1.66 waited 0s
+03:49:59 done 5c170184-j3g-1 ok=1 
+03:49:59 start 5c170184-c4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=c4) load 1.88 waited 0s
+03:50:40 done 5c170184-c4-1 ok=1 
+03:50:41 start 5c170184-fin-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=fin) load 2.41 waited 0s
+03:51:21 done 5c170184-fin-1 ok=1 
+03:51:22 start 5c170184-fin-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=fin) load 2.07 waited 0s
+03:52:02 done 5c170184-fin-2 ok=1 
+03:52:03 start 5c170184-c4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=c4) load 2.46 waited 0s
+03:52:43 done 5c170184-c4-2 ok=1 
+03:52:44 start 5c170184-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=j3g) load 2.17 waited 0s
+03:53:24 done 5c170184-j3g-2 ok=1 
+03:53:25 start 5c170184-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 2.25 waited 0s
+03:54:05 done 5c170184-prod-2 ok=1 
+03:54:06 start 5c170184-fin-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=fin) load 2.67 waited 0s
+03:54:47 done 5c170184-fin-3 ok=1 
+03:54:47 start 5c170184-c4-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=c4) load 2.91 waited 0s
+03:55:28 done 5c170184-c4-3 ok=1 
+03:55:28 start 5c170184-j3g-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=j3g) load 2.71 waited 0s
+03:56:09 done 5c170184-j3g-3 ok=1 
+03:56:10 start 5c170184-prod-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 3.02 waited 0s
+03:56:50 done 5c170184-prod-3 ok=1 
+03:56:51 start ff722c82-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 3.67 waited 0s
+03:57:36 done ff722c82-c4-1 ok=1 
+03:57:36 start ff722c82-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin2) load 2.82 waited 0s
+03:58:21 done ff722c82-fin2-1 ok=1 
+03:58:22 start ff722c82-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin2) load 2.47 waited 0s
+03:59:08 done ff722c82-fin2-2 ok=1 
+03:59:08 start ff722c82-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.81 waited 0s
+03:59:53 done ff722c82-c4-2 ok=1 
+03:59:54 start ff722c82-fin2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin2) load 2.32 waited 0s
+04:00:39 done ff722c82-fin2-3 ok=1 
+04:00:40 start ff722c82-c4-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.54 waited 0s
+04:01:25 done ff722c82-c4-3 ok=1 
+04:01:25 done /root/r4j/H5/plan.txt

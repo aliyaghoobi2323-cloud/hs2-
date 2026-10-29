@@ -1,0 +1,13 @@
+02:19:46
+10c6064d3e98b31f416209910f1929ecaa1ecfddfcca858302c06387a2c974ac  /root/r4j/bins/hs2-j2
+vet-ok
+--- PASS: TestQuietCountsExtra (0.00s)
+--- PASS: TestQuietDefaultsRound3 (0.00s)
+--- PASS: TestQuietKillShare (13.12s)
+    quietkill_test.go:257: pack 0: six connections over the QUIET links map[0x33f780a462d0:3 0x33f780a46460:3]
+    quietkill_test.go:257: pack 1: six connections over the QUIET links map[0x33f780aae280:6]
+--- PASS: TestQuietPack (0.00s)
+--- PASS: TestQuietByUserSticky (0.03s)
+--- PASS: TestQuietFewCount (0.00s)
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	13.182s
+02:20:09

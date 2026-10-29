@@ -1,0 +1,3 @@
+j1 a9b0cf3 46fc8bc4c8e8ad1dfe4f050afb1ee38d2a08325774fba3f31760c4f2fed00c6c  /root/r4j/bins/hs2-j1
+fin 85fe23b b525447eb15b0993e1e3152b7ab180d2fc60a4fe4a8f1223b27f9b79b3c62a31  /root/r4j/bins/hs2-fin
+fin2 98ddec1 e9c0dae90ed55ed401e4936c8abb992145c4a9520c2fb7f8c6a49440f5c47628  /root/r4j/bins/hs2-fin2

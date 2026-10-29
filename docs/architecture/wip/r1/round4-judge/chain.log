@@ -1,0 +1,58 @@
+22:05:11 S1 start
+22:17:35 S1 done (0)
+22:17:35 S2 start
+22:19:33 S3 start
+22:38:03 S2 done (0)
+22:51:23 S3 done (0)
+22:51:23 S5 start
+23:04:43 S5 done (0)
+23:04:52 S7 start
+23:25:00 S7 done (0)
+23:25:00 S4 start
+23:47:31 S4 done (0)
+23:51:15 G9 start (1)
+00:09:46 G9 done (0)
+00:09:46 G10 start (1)
+00:32:57 G10 done (0)
+00:32:57 G1 start (1)
+00:56:44 G1 done (0)
+00:56:44 G2 start (1)
+01:17:11 G2 done (0)
+01:17:11 G5 start (1)
+01:18:09 gchain stopped by the judge before G5 (P10 (e) at N=1 with two QUIET links)
+01:18:26 S9 start
+01:37:06 S9 done (0)
+01:37:28 G1b start (1)
+01:54:06 G1b done (0)
+01:54:06 G5 start (1)
+01:56:31 gchain2 stopped by the judge (G5 runs; pack screen S10 next)
+02:20:09 S10 start
+02:36:27 S10 done (0)
+02:38:02 H1 start (1)
+02:47:07 H1 done (0)
+02:47:07 H2 start (1)
+03:08:25 H2 done (0)
+03:08:25 H3 start (1)
+03:29:19 H3 done (0)
+03:29:19 H4 start (1)
+03:46:05 H4 done (0)
+03:46:05 H5 start (1)
+04:01:27 H5 done (0)
+04:01:27 G4 start (1)
+04:22:43 G4 done (0)
+04:22:43 G7 start (1)
+04:34:36 G7 done (0)
+04:34:36 G8 start (1)
+04:51:10 G8 done (0)
+04:51:10 DPIr start
+05:16:16 DPIr done (0)
+05:16:16 S6 start
+05:26:43 S6 done (0)
+05:26:51 test window full start
+05:46:56 test window full done (0)
+05:46:56 test window race start
+05:57:38 test window race done (0)
+05:57:38 test window mix start
+06:02:59 test window mix done (0)
+06:02:59 S11 start
+06:11:21 S11 done (0)

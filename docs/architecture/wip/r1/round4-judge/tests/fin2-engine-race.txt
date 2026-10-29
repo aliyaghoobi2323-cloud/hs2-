@@ -1,0 +1,47 @@
+==================
+WARNING: DATA RACE
+Write at 0x00c000488028 by goroutine 91:
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*l3Set).arrive()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/l3_link.go:466 +0x234
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*l3Set).linkToTun()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/l3_link.go:676 +0x238
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*l3Set).serveLink()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/l3_link.go:604 +0x23d
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.quietTunPing.func1()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/angle_tun_test.go:380 +0x284
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*quietRig).serve.func1()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/quiet_test.go:172 +0x621
+
+Previous read at 0x00c000488028 by goroutine 90:
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*l3Set).arrive()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/l3_link.go:454 +0x107
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*l3Set).linkToTun()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/l3_link.go:676 +0x238
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*l3Set).serveLink()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/l3_link.go:604 +0x23d
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.quietTunPing.func1()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/angle_tun_test.go:380 +0x284
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*quietRig).serve.func1()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/quiet_test.go:172 +0x621
+
+Goroutine 91 (running) created at:
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*quietRig).serve()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/quiet_test.go:145 +0x30
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.newQuietRig.gowrap1()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/quiet_test.go:132 +0x38
+
+Goroutine 90 (running) created at:
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.(*quietRig).serve()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/quiet_test.go:145 +0x30
+  github.com/hosseintaghipoursori-alt/hs2-tunnel/engine.newQuietRig.gowrap1()
+      /root/hs2-wt/r1-r4j/hs2-src/engine/quiet_test.go:132 +0x38
+==================
+--- FAIL: TestAngleTunPingAheadOfBulk (18.06s)
+    --- FAIL: TestAngleTunPingAheadOfBulk/quiet_bulk (5.82s)
+        linkmanager.go:436: mtcp: QUIET link q0 up (now 1 QUIET)
+        angle_tun_test.go:431: ping one-way p50 21.59472ms p99 23.568458ms (199, 0 over BULK); TUN bulk in 4.91 Mbit/s (100% over BULK); BULK drops light/bulk 0/2719; bound 30ms; place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 2, on bulk (no quiet up) 0; moved to bulk 2 (not yet 0, no bulk link 0); exit hints 0; moved back 0; two-way kept 0; placed by users: 1 users moved, 1 to 1 users a bulk link
+        testing.go:1867: race detected during execution of test
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	379.726s
+FAIL
+rc 1 2026-10-29T05:55:56Z

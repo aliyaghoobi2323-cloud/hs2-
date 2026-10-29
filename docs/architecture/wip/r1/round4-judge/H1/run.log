@@ -1,0 +1,26 @@
+02:38:58 plan /root/r4j/H1/plan.txt: 12 runs
+02:38:59 start ae0cf9da-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=c4) load 0.49 waited 0s
+02:39:39 done ae0cf9da-c4-1 ok=1 
+02:39:40 start ae0cf9da-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin2) load 1.43 waited 0s
+02:40:20 done ae0cf9da-fin2-1 ok=1 
+02:40:20 start ae0cf9da-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin2) load 1.62 waited 0s
+02:41:00 done ae0cf9da-fin2-2 ok=1 
+02:41:01 start ae0cf9da-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=c4) load 1.65 waited 0s
+02:41:41 done ae0cf9da-c4-2 ok=1 
+02:41:42 start ae0cf9da-fin2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin2) load 1.40 waited 0s
+02:42:22 done ae0cf9da-fin2-3 ok=1 
+02:42:22 start ae0cf9da-c4-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=c4) load 1.73 waited 0s
+02:43:02 done ae0cf9da-c4-3 ok=1 
+02:43:03 start 340c98ae-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 1.78 waited 0s
+02:43:43 done 340c98ae-c4-1 ok=1 
+02:43:44 start 340c98ae-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 2.32 waited 0s
+02:44:23 done 340c98ae-fin2-1 ok=1 
+02:44:24 start 340c98ae-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 2.15 waited 0s
+02:45:04 done 340c98ae-fin2-2 ok=1 
+02:45:05 start 340c98ae-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 2.19 waited 0s
+02:45:44 done 340c98ae-c4-2 ok=1 
+02:45:45 start 340c98ae-fin2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 1.62 waited 0s
+02:46:25 done 340c98ae-fin2-3 ok=1 
+02:46:26 start 340c98ae-c4-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=c4) load 1.48 waited 0s
+02:47:05 done 340c98ae-c4-3 ok=1 
+02:47:05 done /root/r4j/H1/plan.txt

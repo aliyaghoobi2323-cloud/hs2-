@@ -1,0 +1,8 @@
+# S3 (screening, 2 reps): item 2, one QUIET link of the edge reset 15 s into the home mix (KILLQ; production: its busiest link): the share of user connections cut, the users hit, the recovery; N=1 with two QUIET links and by user, N=8 by user
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=15 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=15 BIN=c4
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=15 BIN=jf2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=15 BIN=jf2bu
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=15 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=15 BIN=c4
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=15 BIN=jbu

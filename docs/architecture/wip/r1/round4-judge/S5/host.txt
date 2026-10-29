@@ -1,0 +1,32 @@
+== start 2026-10-28T22:53:53+00:00
+ 22:53:53 up 1 day, 11:48,  6 users,  load average: 2.81, 3.27, 3.06
+TCP: inuse 1262 orphan 3 tw 676 alloc 1956 mem 0
+top - 22:53:54 up 1 day, 11:48,  7 users,  load average: 2.81, 3.27, 3.06
+Tasks: 250 total,   2 running, 248 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  9.8 us,  7.0 sy,  0.0 ni, 78.5 id,  0.1 wa,  0.0 hi,  4.5 si,  0.0 st 
+MiB Mem :  23456.9 total,   6066.4 free,   1415.5 used,  16391.5 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22041.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2782066 root      20   0 1568948 294860  29360 S  76.9   1.2  18:02.24 xray-linux-amd6
+    992 root      20   0 1477152 153496  10496 S  65.4   0.6     10,48 hs2
+2884262 root      20   0   14848  10708   8780 S   3.8   0.0   0:00.03 sshd
+    958 root      20   0 1407120 118396  47200 S   1.9   0.5  42:52.13 x-ui
+  13068 systemd+  20   0   23004  14908  11144 S   1.9   0.1   9:42.56 systemd-resolve
+2884283 root      20   0   11908   6044   3888 R   1.9   0.0   0:00.03 top
+      1 root      20   0   22656  14180   9776 S   0.0   0.1   2:50.38 systemd
+== end 2026-10-28T23:04:43+00:00
+ 23:04:43 up 1 day, 11:59,  6 users,  load average: 2.06, 1.96, 2.46
+TCP: inuse 1015 orphan 0 tw 506 alloc 1616 mem 0
+top - 23:04:43 up 1 day, 11:59,  8 users,  load average: 2.06, 1.96, 2.46
+Tasks: 245 total,   1 running, 244 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  9.2 us,  7.5 sy,  0.0 ni, 81.2 id,  0.0 wa,  0.0 hi,  2.1 si,  0.0 st 
+MiB Mem :  23456.9 total,   6103.0 free,   1369.6 used,  16400.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22087.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2782066 root      20   0 1568956 284524  29360 S  50.0   1.2  23:38.09 xray-linux-amd6
+    992 root      20   0 1477152 137528  10496 S  42.3   0.6     10,52 hs2
+2907307 root      20   0   14844  10700   8776 S   3.8   0.0   0:00.02 sshd
+      1 root      20   0   22656  14180   9776 S   1.9   0.1   2:51.48 systemd
+     42 root      20   0       0      0      0 S   1.9   0.0   2:52.89 ksoftirqd/4
+     60 root      20   0       0      0      0 S   1.9   0.0   4:57.73 ksoftirqd/7
+  13068 systemd+  20   0   23124  14952  11144 S   1.9   0.1   9:44.93 systemd-resolve

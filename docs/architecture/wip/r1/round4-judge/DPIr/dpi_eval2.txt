@@ -1,0 +1,174 @@
+== rec-c1-j3g.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.534  INDISTINGUISHABLE
+== rec-c2-fin2.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.585  INDISTINGUISHABLE
+== rec-c3-c4.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.561  INDISTINGUISHABLE
+== sizes-c10-j3g-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.587  INDISTINGUISHABLE
+== sizes-c10-j3g-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.609  hard-to-tell
+== sizes-c10-j3g-c2.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.659  hard-to-tell
+== sizes-c10-j3g-c3.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.710  hard-to-tell
+== sizes-c10-j3g-c4.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.806  DETECTABLE
+== sizes-c10-j3g-c5.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.661  hard-to-tell
+== sizes-c10-j3g-c6.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.751  DETECTABLE
+== sizes-c10-j3g-c7.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.709  hard-to-tell
+== sizes-c10-j3g-c8.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.870  DETECTABLE
+== sizes-c10-j3g-c9.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.716  hard-to-tell
+== sizes-c11-fin2-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.612  hard-to-tell
+== sizes-c11-fin2-c10.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.673  hard-to-tell
+== sizes-c11-fin2-c11.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.832  DETECTABLE
+== sizes-c11-fin2-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.685  hard-to-tell
+== sizes-c11-fin2-c2.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.622  hard-to-tell
+== sizes-c11-fin2-c3.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.626  hard-to-tell
+== sizes-c11-fin2-c4.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.656  hard-to-tell
+== sizes-c11-fin2-c5.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.777  DETECTABLE
+== sizes-c11-fin2-c6.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.678  hard-to-tell
+== sizes-c11-fin2-c7.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.681  hard-to-tell
+== sizes-c11-fin2-c8.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.801  DETECTABLE
+== sizes-c11-fin2-c9.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.742  hard-to-tell
+== sizes-c1-j3g-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.526  INDISTINGUISHABLE
+== sizes-c1-j3g-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.517  INDISTINGUISHABLE
+== sizes-c2-fin2-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.515  INDISTINGUISHABLE
+== sizes-c2-fin2-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.593  INDISTINGUISHABLE
+== sizes-c3-c4-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.550  INDISTINGUISHABLE
+== sizes-c3-c4-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.477  INDISTINGUISHABLE
+== sizes-c4-fin2-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.575  INDISTINGUISHABLE
+== sizes-c4-fin2-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.584  INDISTINGUISHABLE
+== sizes-c5-fin2-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.525  INDISTINGUISHABLE
+== sizes-c5-fin2-c10.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.563  INDISTINGUISHABLE
+== sizes-c5-fin2-c11.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.555  INDISTINGUISHABLE
+== sizes-c5-fin2-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.609  hard-to-tell
+== sizes-c5-fin2-c2.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.582  INDISTINGUISHABLE
+== sizes-c5-fin2-c3.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.463  INDISTINGUISHABLE
+== sizes-c5-fin2-c4.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.505  INDISTINGUISHABLE
+== sizes-c5-fin2-c5.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.619  hard-to-tell
+== sizes-c5-fin2-c6.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.580  INDISTINGUISHABLE
+== sizes-c5-fin2-c7.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.561  INDISTINGUISHABLE
+== sizes-c5-fin2-c8.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.559  INDISTINGUISHABLE
+== sizes-c5-fin2-c9.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.582  INDISTINGUISHABLE
+== sizes-c6-prod-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.695  hard-to-tell
+== sizes-c7-j3g-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.663  hard-to-tell
+== sizes-c7-j3g-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.781  DETECTABLE
+== sizes-c8-fin2-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.640  hard-to-tell
+== sizes-c8-fin2-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.672  hard-to-tell
+== sizes-c9-prod-c0.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.781  DETECTABLE
+== sizes-c9-prod-c1.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.737  hard-to-tell
+== sizes-c9-prod-c2.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.660  hard-to-tell
+== sizes-c9-prod-c3.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.703  hard-to-tell
+== sizes-c9-prod-c4.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.807  DETECTABLE
+== sizes-c9-prod-c5.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.710  hard-to-tell
+== sizes-c9-prod-c6.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.738  hard-to-tell
+== sizes-c9-prod-c7.real_sizes.txt
+
+A) per-flow  size+entropy (shaped mtcp vs bulk HTTPS)   AUC=0.760  DETECTABLE

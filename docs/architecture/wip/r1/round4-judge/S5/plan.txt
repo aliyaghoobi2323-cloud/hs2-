@@ -1,0 +1,9 @@
+# S5 (screening, 2 reps): item 7, frozen downloads (a user who stops reading) next to 20 probe users at N=1: 64 and 256 frozen, read 1 s or 0.1 s; the QUIET hold cap
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=256 FREAD=0.1 BIN=j3g
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=256 FREAD=0.1 BIN=c4
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=256 FREAD=0.1 BIN=jhc
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=256 BIN=c4
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=256 BIN=jhc
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=64 FREAD=0.1 BIN=c4
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=64 FREAD=0.1 BIN=jhc
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FROZEN=256 FREAD=0.1 BIN=prod

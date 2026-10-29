@@ -1,0 +1,46 @@
+01:19:42 plan /root/r4j/S9/plan.txt: 22 runs
+01:19:42 start 340c98ae-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin) load 0.45 waited 0s
+01:20:22 done 340c98ae-fin-1 ok=1 
+01:20:23 start 340c98ae-finqr-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=finqr) load 1.37 waited 0s
+01:21:03 done 340c98ae-finqr-1 ok=1 
+01:21:04 start 340c98ae-finc6-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=finc6) load 1.47 waited 0s
+01:21:44 done 340c98ae-finc6-1 ok=1 
+01:21:44 start 340c98ae-finf1-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=finf1) load 1.23 waited 0s
+01:22:24 done 340c98ae-finf1-1 ok=1 
+01:22:25 start 340c98ae-finf1-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=finf1) load 2.00 waited 0s
+01:23:05 done 340c98ae-finf1-2 ok=1 
+01:23:06 start 340c98ae-finc6-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=finc6) load 1.43 waited 0s
+01:23:46 done 340c98ae-finc6-2 ok=1 
+01:23:46 start 340c98ae-finqr-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=finqr) load 0.95 waited 0s
+01:24:26 done 340c98ae-finqr-2 ok=1 
+01:24:27 start 340c98ae-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin) load 1.49 waited 0s
+01:25:07 done 340c98ae-fin-2 ok=1 
+01:25:08 start bded2768-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 1.92 waited 0s
+01:26:02 done bded2768-fin-1 ok=1 
+01:26:03 start bded2768-finqr-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=finqr) load 2.25 waited 0s
+01:26:58 done bded2768-finqr-1 ok=1 
+01:26:59 start bded2768-finc6-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=finc6) load 1.76 waited 0s
+01:27:53 done bded2768-finc6-1 ok=1 
+01:27:54 start bded2768-finf1-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=finf1) load 1.59 waited 0s
+01:28:49 done bded2768-finf1-1 ok=1 
+01:28:49 start bded2768-finf1-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=finf1) load 1.81 waited 0s
+01:29:44 done bded2768-finf1-2 ok=1 
+01:29:45 start bded2768-finc6-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=finc6) load 2.43 waited 0s
+01:30:39 done bded2768-finc6-2 ok=1 
+01:30:40 start bded2768-finqr-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=finqr) load 2.62 waited 0s
+01:31:35 done bded2768-finqr-2 ok=1 
+01:31:36 start bded2768-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 2.11 waited 0s
+01:32:30 done bded2768-fin-2 ok=1 
+01:32:31 start 11690259-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin) load 2.45 waited 0s
+01:33:16 done 11690259-fin-1 ok=1 
+01:33:17 start 11690259-finqr-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=finqr) load 2.63 waited 0s
+01:34:02 done 11690259-finqr-1 ok=1 
+01:34:02 start 11690259-finc6-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=finc6) load 2.58 waited 0s
+01:34:47 done 11690259-finc6-1 ok=1 
+01:34:48 start 11690259-finc6-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=finc6) load 2.47 waited 0s
+01:35:33 done 11690259-finc6-2 ok=1 
+01:35:34 start 11690259-finqr-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=finqr) load 2.18 waited 0s
+01:36:19 done 11690259-finqr-2 ok=1 
+01:36:20 start 11690259-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin) load 2.68 waited 0s
+01:37:04 done 11690259-fin-2 ok=1 
+01:37:04 done /root/r4j/S9/plan.txt

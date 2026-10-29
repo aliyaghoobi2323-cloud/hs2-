@@ -1,0 +1,38 @@
+02:22:15 plan /root/r4j/S10/plan.txt: 18 runs
+02:22:16 start ae0cf9da-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin) load 0.45 waited 0s
+02:22:56 done ae0cf9da-fin-1 ok=1 
+02:22:56 start ae0cf9da-fp-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fp) load 1.19 waited 0s
+02:23:36 done ae0cf9da-fp-1 ok=1 
+02:23:37 start ae0cf9da-f1-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=f1) load 2.24 waited 0s
+02:24:17 done ae0cf9da-f1-1 ok=1 
+02:24:18 start ae0cf9da-f1-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=f1) load 2.12 waited 0s
+02:24:57 done ae0cf9da-f1-2 ok=1 
+02:24:58 start ae0cf9da-fp-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fp) load 3.77 waited 0s
+02:25:38 done ae0cf9da-fp-2 ok=1 
+02:25:39 start ae0cf9da-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin) load 2.21 waited 0s
+02:26:18 done ae0cf9da-fin-2 ok=1 
+02:26:19 start bded2768-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 2.34 waited 0s
+02:27:14 done bded2768-fin-1 ok=1 
+02:27:15 start bded2768-fp-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fp) load 2.42 waited 0s
+02:28:09 done bded2768-fp-1 ok=1 
+02:28:10 start bded2768-f1-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=f1) load 2.33 waited 0s
+02:29:05 done bded2768-f1-1 ok=1 
+02:29:06 start bded2768-f1-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=f1) load 1.65 waited 0s
+02:30:00 done bded2768-f1-2 ok=1 
+02:30:01 start bded2768-fp-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fp) load 1.80 waited 0s
+02:30:56 done bded2768-fp-2 ok=1 
+02:30:56 start bded2768-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin) load 1.83 waited 0s
+02:31:51 done bded2768-fin-2 ok=1 
+02:31:52 start 11690259-fp-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fp) load 2.11 waited 0s
+02:32:37 done 11690259-fp-1 ok=1 
+02:32:38 start 11690259-f1-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=f1) load 2.87 waited 0s
+02:33:23 done 11690259-f1-1 ok=1 
+02:33:24 start 11690259-f1-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=f1) load 2.07 waited 0s
+02:34:09 done 11690259-f1-2 ok=1 
+02:34:09 start 11690259-fp-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fp) load 2.65 waited 0s
+02:34:54 done 11690259-fp-2 ok=1 
+02:34:55 start ff722c82-fp-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fp) load 2.64 waited 0s
+02:35:40 done ff722c82-fp-1 ok=1 
+02:35:41 start ff722c82-fp-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fp) load 2.19 waited 0s
+02:36:26 done ff722c82-fp-2 ok=1 
+02:36:26 done /root/r4j/S10/plan.txt

@@ -1,0 +1,50 @@
+00:14:27 plan /root/r4j/G10/plan.txt: 24 runs
+00:14:28 start ff722c82-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 1.59 waited 0s
+00:15:13 done ff722c82-prod-1 ok=1 
+00:15:14 start ff722c82-j3g-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=j3g) load 1.64 waited 0s
+00:15:59 done ff722c82-j3g-1 ok=1 
+00:15:59 start ff722c82-c4-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.18 waited 0s
+00:16:44 done ff722c82-c4-1 ok=1 
+00:16:45 start ff722c82-fin-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin) load 3.60 waited 0s
+00:17:30 done ff722c82-fin-1 ok=1 
+00:17:31 start ff722c82-fin-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin) load 3.61 waited 0s
+00:18:16 done ff722c82-fin-2 ok=1 
+00:18:17 start ff722c82-c4-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.73 waited 0s
+00:19:02 done ff722c82-c4-2 ok=1 
+00:19:02 start ff722c82-j3g-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=j3g) load 2.74 waited 0s
+00:19:47 done ff722c82-j3g-2 ok=1 
+00:19:48 start ff722c82-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 2.18 waited 0s
+00:20:33 done ff722c82-prod-2 ok=1 
+00:20:34 start ff722c82-fin-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin) load 2.20 waited 0s
+00:21:19 done ff722c82-fin-3 ok=1 
+00:21:20 start ff722c82-c4-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.74 waited 0s
+00:22:05 done ff722c82-c4-3 ok=1 
+00:22:06 start ff722c82-j3g-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=j3g) load 2.76 waited 0s
+00:22:50 done ff722c82-j3g-3 ok=1 
+00:22:51 start ff722c82-prod-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 2.45 waited 0s
+00:23:36 done ff722c82-prod-3 ok=1 
+00:23:37 start 04e76e01-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 2.59 waited 0s
+00:24:23 done 04e76e01-prod-1 ok=1 
+00:24:24 start 04e76e01-j3g-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=j3g) load 2.87 waited 0s
+00:25:10 done 04e76e01-j3g-1 ok=1 
+00:25:11 start 04e76e01-c4-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 2.92 waited 0s
+00:25:56 done 04e76e01-c4-1 ok=1 
+00:25:57 start 04e76e01-fin-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin) load 4.27 waited 0s
+00:26:43 done 04e76e01-fin-1 ok=1 
+00:26:44 start 04e76e01-fin-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin) load 3.87 waited 0s
+00:27:30 done 04e76e01-fin-2 ok=1 
+00:27:30 start 04e76e01-c4-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 4.14 waited 0s
+00:28:16 done 04e76e01-c4-2 ok=1 
+00:28:17 start 04e76e01-j3g-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=j3g) load 3.93 waited 0s
+00:29:03 done 04e76e01-j3g-2 ok=1 
+00:29:04 start 04e76e01-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 4.51 waited 0s
+00:29:50 done 04e76e01-prod-2 ok=1 
+00:29:50 start 04e76e01-fin-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=fin) load 2.80 waited 0s
+00:30:36 done 04e76e01-fin-3 ok=1 
+00:30:37 start 04e76e01-c4-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=c4) load 3.16 waited 0s
+00:31:22 done 04e76e01-c4-3 ok=1 
+00:31:23 start 04e76e01-j3g-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=j3g) load 3.14 waited 0s
+00:32:09 done 04e76e01-j3g-3 ok=1 
+00:32:10 start 04e76e01-prod-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home KILLQ=15 SBR=1.2 BIN=prod) load 3.33 waited 0s
+00:32:55 done 04e76e01-prod-3 ok=1 
+00:32:55 done /root/r4j/G10/plan.txt

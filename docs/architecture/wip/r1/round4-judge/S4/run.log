@@ -1,0 +1,50 @@
+23:32:21 plan /root/r4j/S4/plan.txt: 24 runs
+23:32:22 start 62d055b7-j-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 0.81 waited 0s
+23:32:59 done 62d055b7-j-1 ok=1 
+23:32:59 start 62d055b7-jq0-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 1.20 waited 0s
+23:33:36 done 62d055b7-jq0-1 ok=1 
+23:33:37 start 62d055b7-jsm-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 1.25 waited 0s
+23:34:14 done 62d055b7-jsm-1 ok=1 
+23:34:15 start 62d055b7-jsm-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 1.20 waited 0s
+23:34:51 done 62d055b7-jsm-2 ok=1 
+23:34:52 start 62d055b7-jq0-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 1.11 waited 0s
+23:35:29 done 62d055b7-jq0-2 ok=1 
+23:35:29 start 62d055b7-j-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 1.12 waited 0s
+23:36:06 done 62d055b7-j-2 ok=1 
+23:36:06 start 6e04797f-j-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 1.60 waited 0s
+23:36:43 done 6e04797f-j-1 ok=1 
+23:36:44 start 6e04797f-jq0-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 1.49 waited 0s
+23:37:20 done 6e04797f-jq0-1 ok=1 
+23:37:21 start 6e04797f-jsm-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 1.88 waited 0s
+23:37:58 done 6e04797f-jsm-1 ok=1 
+23:37:59 start 6e04797f-jsm-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 1.28 waited 0s
+23:38:36 done 6e04797f-jsm-2 ok=1 
+23:38:36 start 6e04797f-jq0-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 0.85 waited 0s
+23:39:13 done 6e04797f-jq0-2 ok=1 
+23:39:14 start 6e04797f-j-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 1.03 waited 0s
+23:39:51 done 6e04797f-j-2 ok=1 
+23:39:52 start fd1b250d-j-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 2.07 waited 0s
+23:40:29 done fd1b250d-j-1 ok=1 
+23:40:30 start fd1b250d-jq0-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 1.70 waited 0s
+23:41:07 done fd1b250d-jq0-1 ok=1 
+23:41:08 start fd1b250d-jsm-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 1.66 waited 0s
+23:41:45 done fd1b250d-jsm-1 ok=1 
+23:41:46 start fd1b250d-jsm-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 1.79 waited 0s
+23:42:24 done fd1b250d-jsm-2 ok=1 
+23:42:24 start fd1b250d-jq0-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 2.49 waited 0s
+23:43:02 done fd1b250d-jq0-2 ok=1 
+23:43:03 start fd1b250d-j-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:1+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 2.76 waited 0s
+23:43:40 done fd1b250d-j-2 ok=1 
+23:43:41 start c541d180-j-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 2.61 waited 0s
+23:44:18 done c541d180-j-1 ok=1 
+23:44:19 start c541d180-jq0-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 3.18 waited 0s
+23:44:56 done c541d180-jq0-1 ok=1 
+23:44:57 start c541d180-jsm-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 2.71 waited 0s
+23:45:34 done c541d180-jsm-1 ok=1 
+23:45:35 start c541d180-jsm-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jsm) load 2.71 waited 0s
+23:46:13 done c541d180-jsm-2 ok=1 
+23:46:13 start c541d180-jq0-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=jq0) load 2.20 waited 0s
+23:46:51 done c541d180-jq0-2 ok=1 
+23:46:52 start c541d180-j-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2+fqcodel USERS=10 MIX=gamer_vs_dl DUR=20 BIN=j) load 2.41 waited 0s
+23:47:29 done c541d180-j-2 ok=1 
+23:47:29 done /root/r4j/S4/plan.txt

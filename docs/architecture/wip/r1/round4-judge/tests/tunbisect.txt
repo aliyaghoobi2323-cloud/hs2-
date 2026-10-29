@@ -1,0 +1,13 @@
+22:38:05
+    angle_tun_test.go:468: ping one-way p50 32.921957ms p99 74.061822ms (197); TUN bulk in 4.65 Mbit/s; drops light/bulk 2/3181; bound 39.2672ms
+--- FAIL: TestZZJudgeTunBase (6.11s)
+    angle_tun_test.go:468: ping one-way p50 32.859897ms p99 36.277923ms (199); TUN bulk in 4.88 Mbit/s; drops light/bulk 0/2986; bound 39.2672ms
+--- PASS: TestZZJudgeTunRT0 (6.10s)
+    angle_tun_test.go:468: ping one-way p50 33.189279ms p99 66.754239ms (199); TUN bulk in 4.66 Mbit/s; drops light/bulk 0/3160; bound 39.2672ms
+--- FAIL: TestZZJudgeTunTW0 (6.10s)
+    angle_tun_test.go:468: ping one-way p50 32.857167ms p99 70.826998ms (198); TUN bulk in 4.66 Mbit/s; drops light/bulk 1/3156; bound 39.2672ms
+--- FAIL: TestZZJudgeTunPU0 (6.10s)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	24.416s
+FAIL
+22:38:34
