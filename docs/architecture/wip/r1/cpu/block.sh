@@ -21,7 +21,10 @@ release() {
 }
 trap 'release; exit 130' INT TERM
 LD=/root/rcpu/raw-load-$(date +%Y%m%dT%H%M%S)
-R1CPU_UNIT=r1cpu-load SRC=/root/hs2-wt/r1-cpu/hs2-src /root/r1-cpu.sh /root/rcpu/load.sh "$LD" > "$OUT/load-scope.log" 2>&1 &
+# LOAD_CPUS / LOAD_WEIGHT: the load's cores and CPU weight (r1-cpu.sh's
+# TEST_CPUS and CPU_WEIGHT; 6-11 and 20)
+TEST_CPUS=${LOAD_CPUS:-6-11} CPU_WEIGHT=${LOAD_WEIGHT:-20} R1CPU_UNIT=r1cpu-load SRC=/root/hs2-wt/r1-cpu/hs2-src \
+  /root/r1-cpu.sh /root/rcpu/load.sh "$LD" > "$OUT/load-scope.log" 2>&1 &
 sleep 5
 echo "$(date +%T) load: $(systemctl show r1cpu-load.scope -p ActiveState -p AllowedCPUs -p CPUWeight --value | paste -sd' ') logs $LD" >> "$B"
 DEADLINE=$((t0 + MIN * 60 - 30)) /root/rcpu/ab.sh "$CELLS" "$OUT" "$@"
