@@ -1,0 +1,8 @@
+# 32baad3 (fin2 code) + the red-team tests, before the fix
+    red_r1p2_test.go:65: a move stream on a session without a scheduler was attached; the group's next write: panic: runtime error: invalid memory address or nil pointer dereference
+--- FAIL: TestRed2AttachNoSched (0.00s)
+    red_r1p2_test.go:117: read 0 of 196622 bytes (timeout), first wrong byte at 0
+--- FAIL: TestRed2GroupFrameMax (10.05s)
+FAIL
+FAIL	github.com/xtaci/smux	10.053s
+FAIL

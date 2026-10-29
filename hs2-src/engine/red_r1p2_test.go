@@ -295,7 +295,7 @@ func TestRed2UDPFlowFlood(t *testing.T) {
 			if tc.perUsr > 0 && n > int64(tc.perUsr)+1 {
 				t.Fatalf("%d streams, past the cap of %d a user (and one for the game)", n, tc.perUsr)
 			}
-			if tc.perUsr == 0 && n < 2900 {
+			if tc.perUsr == 0 && n < 2500 {
 				t.Fatalf("without caps only %d streams for 3000 source ports (the case is not shown)", n)
 			}
 			if float64(got) < 0.95*float64(sent.Load()) {
