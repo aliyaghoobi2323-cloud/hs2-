@@ -249,16 +249,22 @@ func (r *moveRule) lightRule() bool {
 // light, back to a general one when it is on the light link and not; true
 // when it moved.
 func (q *quietSet) lightTick(gs *groupStream, now int64) bool {
-	if !q.quietLightOn() {
-		return false
-	}
 	gs.mu.Lock()
 	at, ql := gs.lightAt, gs.ql
 	gs.mu.Unlock()
 	if ql == nil || ql.caps&tlscarrier.CapLight == 0 {
 		return false
 	}
-	onLight := q.isLight(ql) // (it may have opened there: no general link was up)
+	onLight, replaced := q.roleOf(ql)
+	if replaced {
+		// its link is slow and being replaced (QuietReplace,
+		// quietreplace.go): to a QUIET link of its role that is not, once
+		// one is up
+		return q.moveQuiet(gs, onLight && gs.rule.lightRule(), now)
+	}
+	if !q.quietLightOn() {
+		return false
+	}
 	light := gs.rule.lightRule()
 	switch {
 	case light || !onLight || gs.rule.seen < moveSlots:
@@ -280,16 +286,17 @@ func (q *quietSet) lightTick(gs *groupStream, now int64) bool {
 	return false
 }
 
-// isLight says whether l is a light QUIET link of the set.
-func (q *quietSet) isLight(l *mtcpLink) bool {
+// roleOf says whether l is a light QUIET link of the set, and whether it is
+// being replaced for being slow (QuietReplace).
+func (q *quietSet) roleOf(l *mtcpLink) (light, replaced bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for _, ql := range q.links {
 		if ql.link == l {
-			return ql.light.Load()
+			return ql.light.Load(), ql.replaced.Load()
 		}
 	}
-	return false
+	return false, false
 }
 
 // moveQuiet moves gs between the QUIET links: to the light one (toLight),

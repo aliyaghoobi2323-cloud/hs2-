@@ -254,6 +254,9 @@ type quietLink struct {
 	// light: the light QUIET link (QuietLight, quietlight.go): no
 	// connection opens on it; the light and steady ones move to it
 	light atomic.Bool
+	// replaced: retired for being slow, its replacement wanted (QuietReplace,
+	// quietreplace.go)
+	replaced atomic.Bool
 }
 
 // quietSet is the edge's QUIET links, and the mover of its group streams.
@@ -308,6 +311,10 @@ type quietSet struct {
 	generalAt                      time.Time
 	lightOpened, movedLight        atomic.Int64
 	movedGeneral, waited, waitedOK atomic.Int64
+	// the slow links being replaced, and the judge (QuietReplace,
+	// quietreplace.go)
+	replacing atomic.Int32
+	repl      replSet
 }
 
 // enableQuiet gives the pool its QUIET links (the edge, β2 on): maxLinks is
@@ -439,6 +446,7 @@ func (q *quietSet) drop(l Link) {
 			if !ql.light.Load() {
 				q.generalAt = time.Now() // (QuietWaitMs: up till now)
 			}
+			q.replacedGoneLocked(ql) // (QuietReplace: its replacement's count)
 			return true
 		}
 		return false
@@ -461,6 +469,7 @@ func (q *quietSet) reap() {
 			if !ql.light.Load() {
 				q.generalAt = time.Now() // (QuietWaitMs: up till now)
 			}
+			q.replacedGoneLocked(ql) // (QuietReplace: its replacement's count)
 			return true
 		}
 		return false
@@ -484,6 +493,7 @@ func (q *quietSet) tickIf(ctx context.Context) {
 // at a time through the pool's gate while fewer than want are up.
 func (q *quietSet) tick(ctx context.Context) {
 	q.reap()
+	q.replaceTick(time.Now()) // a slow QUIET link replaced (QuietReplace, quietreplace.go)
 	if !q.active() || q.m.dialer == nil || q.m.refuse.holding(q.m.now()) > 0 {
 		return
 	}
@@ -1225,6 +1235,9 @@ func (q *quietSet) line() string {
 		q.mu.Unlock()
 		more += fmt.Sprintf("; light quiet %d (moved to it %d, back %d, opened on it %d); waited for quiet %d (got one %d)",
 			nl, q.movedLight.Load(), q.movedGeneral.Load(), q.lightOpened.Load(), q.waited.Load(), q.waitedOK.Load())
+	}
+	if QuietReplace.Get() != 0 {
+		more += fmt.Sprintf("; slow quiet replaced %d (now %d)", q.repl.replaced.Load(), q.replacing.Load())
 	}
 	want := fmt.Sprint(q.wantNow())
 	if w := q.wantNow(); w != q.want {
