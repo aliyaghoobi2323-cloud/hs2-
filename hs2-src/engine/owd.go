@@ -597,6 +597,14 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 				return
 			case <-t.C:
 			}
+			if o.quiet && OWDIdle.Get() != 0 && o.idle(ctrlNow()) {
+				// the pool went idle while this beat waited (up to 1.5 s,
+				// owdJitter): no message, parked at once (the next turn).
+				// Sent, it came up to 1.5 s past owdIdleAfter, and
+				// TestRed2OWDIdleParks counted it after parking about one
+				// run in five (the R1 review, part A)
+				continue
+			}
 		}
 		var ts tcpStat
 		tsOK := false
