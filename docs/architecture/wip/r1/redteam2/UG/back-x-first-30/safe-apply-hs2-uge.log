@@ -1,0 +1,5 @@
+2026-10-29T11:47:08.005 stage <w>/stage-e; unit hs2-uge; config <w>/edge.json; peer 10.81.9.2 (wait 300 s); backup in <w>/backups/apply-20261029-114707-453
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build 1c23629533c9 2026-10-26]
+2026-10-29T11:47:08.063 applied; restarting hs2-uge (build 1c23629533c9; env: )
+2026-10-29T11:48:08.339 tunnel back: 10.81.9.2 answers 60 s after the restart
+2026-10-29T11:48:08.343 OK

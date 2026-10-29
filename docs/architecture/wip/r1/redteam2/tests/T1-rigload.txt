@@ -1,0 +1,2 @@
+ok  	rigload	18.817s
+rc=0

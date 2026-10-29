@@ -1,0 +1,109 @@
+== up-x-first-30 11:37:19 /root/r4j/bins/hs2-prod /root/r4j/bins/hs2-fin2 x-first 30
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+up on hs2-prod after 3.5 s
+first failed probe 0.2 s after the first safe-apply
+outage 35.2 s (first failed probe to the first passing one after the last safe-apply); back 5.4 s after the last safe-apply
+longest run of failed probes 35.2 s; probes after the switch: 603 ok, 37 failed
+hs2-uge safe-apply: OK <w>/backups/apply-20261029-113757-439
+hs2-ugx safe-apply: OK <w>/backups/apply-20261029-113727-338
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  CHANGED:
+    248c248
+    < /run/hs2/icmp-echo-ignore 755 40 1793265295
+    ---
+    > /run/hs2/icmp-echo-ignore 755 40 1793273941
+== up-x-first-30 rc=98 11:39:03
+== up-x-first-90 11:39:03 /root/r4j/bins/hs2-prod /root/r4j/bins/hs2-fin2 x-first 90
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 111.2 s (first failed probe to the first passing one after the last safe-apply); back 21.3 s after the last safe-apply
+longest run of failed probes 111.2 s; probes after the switch: 443 ok, 114 failed
+hs2-uge safe-apply: OK <w>/backups/apply-20261029-114041-463
+hs2-ugx safe-apply: OK <w>/backups/apply-20261029-113911-336
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 249 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== up-x-first-90 rc=0 11:41:46
+== up-e-first-30 11:41:46 /root/r4j/bins/hs2-prod /root/r4j/bins/hs2-fin2 e-first 30
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 30.3 s (first failed probe to the first passing one after the last safe-apply); back 0.4 s after the last safe-apply
+longest run of failed probes 30.3 s; probes after the switch: 646 ok, 33 failed
+hs2-uge safe-apply: OK <w>/backups/apply-20261029-114154-336
+hs2-ugx safe-apply: OK <w>/backups/apply-20261029-114224-439
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 249 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== up-e-first-30 rc=0 11:43:30
+== up-both 11:43:30 /root/r4j/bins/hs2-prod /root/r4j/bins/hs2-fin2 both 0
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 0.3 s (first failed probe to the first passing one after the last safe-apply); back 0.4 s after the last safe-apply
+longest run of failed probes 0.3 s; probes after the switch: 647 ok, 3 failed
+hs2-uge safe-apply: OK <w>/backups/apply-20261029-114338-341
+hs2-ugx safe-apply: OK <w>/backups/apply-20261029-114338-338
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 249 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== up-both rc=0 11:44:43
+== up-x-only 11:44:43 /root/r4j/bins/hs2-prod /root/r4j/bins/hs2-fin2 x-only 0 90
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+up on hs2-prod after 3.5 s
+first failed probe 0.2 s after the first safe-apply
+outage 90.1 s (first failed probe to the first passing one after the last safe-apply); back 90.3 s after the last safe-apply
+longest run of failed probes 90.1 s; probes after the switch: 70 ok, 90 failed
+hs2-uge safe-apply: 
+hs2-ugx safe-apply: REVERTED tunnel-not-back-in-90s <w>/backups/apply-20261029-114451-339
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 249 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== up-x-only rc=0 11:46:29
+== back-x-first-30 11:46:29 /root/r4j/bins/hs2-fin2 /root/r4j/bins/hs2-prod x-first 30
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+up on hs2-fin2 after 4.0 s
+first failed probe 0.1 s after the first safe-apply
+outage 32.3 s (first failed probe to the first passing one after the last safe-apply); back 2.4 s after the last safe-apply
+longest run of failed probes 32.3 s; probes after the switch: 631 ok, 36 failed
+hs2-uge safe-apply: OK <w>/backups/apply-20261029-114707-453
+hs2-ugx safe-apply: OK <w>/backups/apply-20261029-114637-353
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 249 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== back-x-first-30 rc=0 11:48:13
+== back-both 11:48:13 /root/r4j/bins/hs2-fin2 /root/r4j/bins/hs2-prod both 0
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+up on hs2-fin2 after 4.0 s
+first failed probe 0.1 s after the first safe-apply
+outage 0.3 s (first failed probe to the first passing one after the last safe-apply); back 0.4 s after the last safe-apply
+longest run of failed probes 0.3 s; probes after the switch: 649 ok, 3 failed
+hs2-uge safe-apply: OK <w>/backups/apply-20261029-114821-353
+hs2-ugx safe-apply: OK <w>/backups/apply-20261029-114821-350
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 249 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== back-both rc=0 11:49:27

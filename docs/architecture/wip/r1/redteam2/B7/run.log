@@ -1,0 +1,50 @@
+10:43:32 plan /root/rred2/B7/plan.txt: 24 runs
+10:44:13 start 8b808adf-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=fin2) load 7.19 waited 40s
+10:44:58 done 8b808adf-fin2-1 ok=1 
+10:44:59 start 8b808adf-r2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=r2) load 5.87 waited 0s
+10:45:45 done 8b808adf-r2-1 ok=1 
+10:45:46 start 8b808adf-r2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=r2) load 3.92 waited 0s
+10:46:31 done 8b808adf-r2-2 ok=1 
+10:46:32 start 8b808adf-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=fin2) load 3.27 waited 0s
+10:47:18 done 8b808adf-fin2-2 ok=1 
+10:47:19 start e7857b9f-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=fin2) load 3.17 waited 0s
+10:48:04 done e7857b9f-fin2-1 ok=1 
+10:48:04 start e7857b9f-r2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=r2) load 2.64 waited 0s
+10:48:49 done e7857b9f-r2-1 ok=1 
+10:48:50 start e7857b9f-r2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=r2) load 2.84 waited 0s
+10:49:35 done e7857b9f-r2-2 ok=1 
+10:49:36 start e7857b9f-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=10 MIX=gamer_vs_dl ACKF=0.02 CONNS=1 BIN=fin2) load 2.31 waited 0s
+10:50:21 done e7857b9f-fin2-2 ok=1 
+10:50:22 start fb51c5cd-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl ACKF=0.035 CONNS=1 BIN=fin2) load 3.14 waited 0s
+10:51:08 done fb51c5cd-fin2-1 ok=1 
+10:51:09 start fb51c5cd-r2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl ACKF=0.035 CONNS=1 BIN=r2) load 3.22 waited 0s
+10:51:54 done fb51c5cd-r2-1 ok=1 
+10:51:55 start fb51c5cd-r2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl ACKF=0.035 CONNS=1 BIN=r2) load 4.52 waited 0s
+10:52:41 done fb51c5cd-r2-2 ok=1 
+10:52:42 start fb51c5cd-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl ACKF=0.035 CONNS=1 BIN=fin2) load 3.62 waited 0s
+10:53:28 done fb51c5cd-fin2-2 ok=1 
+10:53:29 start f0f4ed63-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=16 MIX=home SBR=0.6 BIN=fin2) load 4.04 waited 0s
+10:54:16 done f0f4ed63-fin2-1 ok=1 
+10:54:16 start f0f4ed63-q2s-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=16 MIX=home SBR=0.6 BIN=q2s) load 3.27 waited 0s
+10:55:03 done f0f4ed63-q2s-1 ok=1 
+10:55:04 start f0f4ed63-q2s-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=16 MIX=home SBR=0.6 BIN=q2s) load 3.41 waited 0s
+10:55:52 done f0f4ed63-q2s-2 ok=1 
+10:55:53 start f0f4ed63-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=16 MIX=home SBR=0.6 BIN=fin2) load 2.87 waited 0s
+10:56:39 done f0f4ed63-fin2-2 ok=1 
+10:56:40 start 50faeea2-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=8 MIX=home SBR=0.6 BIN=fin2) load 2.54 waited 0s
+10:57:27 done 50faeea2-fin2-1 ok=1 
+10:57:28 start 50faeea2-q2s-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=8 MIX=home SBR=0.6 BIN=q2s) load 1.92 waited 0s
+10:58:14 done 50faeea2-q2s-1 ok=1 
+10:58:15 start 50faeea2-q2s-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=8 MIX=home SBR=0.6 BIN=q2s) load 1.73 waited 0s
+10:59:01 done 50faeea2-q2s-2 ok=1 
+10:59:02 start 50faeea2-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=police:2 USERS=8 MIX=home SBR=0.6 BIN=fin2) load 1.69 waited 0s
+10:59:49 done 50faeea2-fin2-2 ok=1 
+10:59:50 start f4fb6861-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 1.59 waited 0s
+11:00:35 done f4fb6861-fin2-1 ok=1 
+11:00:36 start f4fb6861-r2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2) load 2.67 waited 0s
+11:01:22 done f4fb6861-r2-1 ok=1 
+11:01:23 start f4fb6861-r2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2) load 3.29 waited 0s
+11:02:09 done f4fb6861-r2-2 ok=1 
+11:02:10 start f4fb6861-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.60 waited 0s
+11:02:55 done f4fb6861-fin2-2 ok=1 
+11:02:55 done /root/rred2/B7/plan.txt

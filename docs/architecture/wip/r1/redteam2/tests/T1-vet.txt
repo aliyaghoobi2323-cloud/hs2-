@@ -1,0 +1,4 @@
+gofmt done
+vet rc=0
+vet smux rc=0
+vet rigload rc=0
