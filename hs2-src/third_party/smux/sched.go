@@ -797,7 +797,10 @@ func (s *Session) frameFor(lane uint8) int {
 	// length is 16 bits: MaxFrameSize may be 65535 (VerifyConfig), so a
 	// full group frame wrapped and the peer read user bytes as frame
 	// headers (the R1 red team's second pass, R2-5)
-	n := min(s.config.MaxFrameSize, 0xFFFF-seqLen)
+	n := s.config.MaxFrameSize
+	if n > 0xFFFF-seqLen {
+		n = 0xFFFF - seqLen
+	}
 	lim := int(s.sch.bulk.Load())
 	if lane == LaneLatency && s.config.LaneFrame > 0 {
 		lim = s.config.LaneFrame
