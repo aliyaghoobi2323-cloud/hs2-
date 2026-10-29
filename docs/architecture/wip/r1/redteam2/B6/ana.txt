@@ -1,0 +1,45 @@
+== N=600 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 PROCSTAT=1  BIN=r2gs  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 604   host busy 30%
+   total dn 83.35  up 0.00 Mbit/s   (c) 89% of cap_P10 (raw 87%)
+   1-connection user 8.31 Mbit/s
+   (b) worst bulk user 18% of its floor in cap_P10 (raw 17%)
+   probe p50 79.8  p99 84.5  max 88.6 ms  lost 0   RTT_floor 74.0  bound (d) 94.0
+   CPU % (one core = 100): edge 98.2  exit 69.3   retrans %: exit 0.002  edge 0.000
+   verdict: b FAIL (0/1)  c FAIL (0/1)  d PASS (1/1)
+== N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=exhaust CHURN=64 DUR=30 HOLD=2000 HOLDW=200 PROCSTAT=1  BIN=r2gs  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 304   host busy 28%
+   total dn 83.79  up 0.00 Mbit/s   (c) 90% of cap_P10 (raw 88%)
+   probe p50 79.2  p99 84.3  max 92.6 ms  lost 0   RTT_floor 73.5  bound (d) 93.5
+   CPU % (one core = 100): edge 109.7  exit 86.4   retrans %: exit 0.007  edge 0.000
+   verdict: c FAIL (0/1)  d PASS (1/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=exhaust CHURN=64 DUR=30 HOLD=2000 HOLDW=200 PROCSTAT=1  BIN=r2gs  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 12   host busy 28%
+   total dn 85.57  up 0.00 Mbit/s   (c) 92% of cap_P10 (raw 89%)
+   probe p50 79.1  p99 84.2  max 90.7 ms  lost 0   RTT_floor 73.5  bound (d) 93.5
+   CPU % (one core = 100): edge 99.5  exit 83.9   retrans %: exit 0.007  edge 0.000
+   verdict: c FAIL (0/1)  d PASS (1/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=exhaust CHURN=64 DUR=30 HOLD=2000 HOLDW=200 PROCSTAT=1  BIN=prod  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 8   host busy 22%
+   total dn 71.52  up 0.00 Mbit/s   (c) 77% of cap_P10 (raw 75%)
+   probe p50 150.1  p99 746.7  max 1150.6 ms  lost 0   RTT_floor 88.8  bound (d) 108.8
+   CPU % (one core = 100): edge 61.6  exit 66.9   retrans %: exit 2.399  edge 0.000
+   verdict: c FAIL (0/1)  d FAIL (0/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=60 MIX=exhaust CHURN=0 DUR=20 GAMEU=8 HOLD=0 PROCSTAT=1 UDPF=500  BIN=r2nocap  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 12   host busy 23%
+   total dn 86.47  up 0.37 Mbit/s   (c) 92% of cap_P10 (raw 90%)
+   probe p50 79.2  p99 84.3  max 86.6 ms  lost 0   RTT_floor 73.9  bound (d) 93.9
+   CPU % (one core = 100): edge 85.8  exit 74.5   retrans %: exit 0.008  edge 0.000
+   verdict: c FAIL (0/1)  d PASS (1/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=60 MIX=exhaust CHURN=0 DUR=20 GAMEU=8 HOLD=0 PROCSTAT=1 UDPF=500  BIN=r2g  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 12   host busy 21%
+   total dn 87.64  up 0.37 Mbit/s   (c) 93% of cap_P10 (raw 91%)
+   probe p50 79.9  p99 84.4  max 86.0 ms  lost 0   RTT_floor 74.5  bound (d) 94.5
+   CPU % (one core = 100): edge 75.7  exit 61.0   retrans %: exit 0.005  edge 0.000
+   verdict: c FAIL (0/1)  d PASS (1/1)
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=21 MIX=frozen FREAD=0.1 FROZEN=256 PROCSTAT=1  BIN=r2gs  runs 1 (ok 1)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 12   host busy 16%
+   total dn 0.28  up 0.00 Mbit/s   (c) - of cap_P10 (raw -)
+   probe p50 73.0  p99 253.0  max 363.6 ms  lost 0   RTT_floor 72.5  bound (d) 92.5
+   CPU % (one core = 100): edge 24.4  exit 26.4   retrans %: exit 0.142  edge 0.000
+   frozen: 256 downloads (256 frozen, 1.1 MB read before), the probes' longest gap max 482 p50 456 ms, probe p99 253.0 max 363.6 ms lost 0; the edge's wedge guard reset 0, users held 0
+   verdict: d FAIL (0/1)

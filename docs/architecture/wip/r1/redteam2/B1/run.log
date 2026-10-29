@@ -1,0 +1,50 @@
+06:58:35 plan /root/rred2/B1/plan.txt: 24 runs
+06:58:36 start 26bd72f7-prod-1 (N=8 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 1.36 waited 0s
+06:59:22 done 26bd72f7-prod-1 ok=1 
+06:59:23 start 26bd72f7-fin2-1 (N=8 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.61 waited 0s
+07:00:09 done 26bd72f7-fin2-1 ok=1 
+07:00:10 start 26bd72f7-fin2-2 (N=8 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.81 waited 0s
+07:00:55 done 26bd72f7-fin2-2 ok=1 
+07:00:56 start 26bd72f7-prod-2 (N=8 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.54 waited 0s
+07:01:42 done 26bd72f7-prod-2 ok=1 
+07:01:43 start dba78618-prod-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.19 waited 0s
+07:02:29 done dba78618-prod-1 ok=1 
+07:02:30 start dba78618-fin2-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.42 waited 0s
+07:03:15 done dba78618-fin2-1 ok=1 
+07:03:16 start dba78618-fin2-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.62 waited 0s
+07:04:02 done dba78618-fin2-2 ok=1 
+07:04:03 start dba78618-prod-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.77 waited 0s
+07:04:49 done dba78618-prod-2 ok=1 
+07:04:50 start 318d3760-prod-1 (N=8 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.34 waited 0s
+07:05:35 done 318d3760-prod-1 ok=1 
+07:05:36 start 318d3760-fin2-1 (N=8 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.48 waited 0s
+07:06:22 done 318d3760-fin2-1 ok=1 
+07:06:22 start 318d3760-fin2-2 (N=8 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.62 waited 0s
+07:07:08 done 318d3760-fin2-2 ok=1 
+07:07:09 start 318d3760-prod-2 (N=8 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 4.67 waited 0s
+07:07:55 done 318d3760-prod-2 ok=1 
+07:07:55 start 6d18d417-prod-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 4.23 waited 0s
+07:08:40 done 6d18d417-prod-1 ok=1 
+07:08:41 start 6d18d417-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.73 waited 0s
+07:09:26 done 6d18d417-fin2-1 ok=1 
+07:09:27 start 6d18d417-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.46 waited 0s
+07:10:12 done 6d18d417-fin2-2 ok=1 
+07:10:12 start 6d18d417-prod-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 2.58 waited 0s
+07:10:57 done 6d18d417-prod-2 ok=1 
+07:10:58 start a1577723-prod-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 2.08 waited 0s
+07:11:43 done a1577723-prod-1 ok=1 
+07:11:44 start a1577723-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.04 waited 0s
+07:12:29 done a1577723-fin2-1 ok=1 
+07:12:30 start a1577723-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.65 waited 0s
+07:13:15 done a1577723-fin2-2 ok=1 
+07:13:16 start a1577723-prod-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 2.44 waited 0s
+07:14:01 done a1577723-prod-2 ok=1 
+07:14:02 start 2da27b2f-prod-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.00 waited 0s
+07:14:46 done 2da27b2f-prod-1 ok=1 
+07:14:47 start 2da27b2f-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.51 waited 0s
+07:15:32 done 2da27b2f-fin2-1 ok=1 
+07:15:33 start 2da27b2f-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.05 waited 0s
+07:16:18 done 2da27b2f-fin2-2 ok=1 
+07:16:19 start 2da27b2f-prod-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 2.13 waited 0s
+07:17:04 done 2da27b2f-prod-2 ok=1 
+07:17:04 done /root/rred2/B1/plan.txt
