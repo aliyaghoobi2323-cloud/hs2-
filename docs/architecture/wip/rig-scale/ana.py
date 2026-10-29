@@ -78,7 +78,7 @@ F_REC = 0.9743  # T17: hs2's record framing, (991.4 - 4) / (991.4 + 22)
 LOST_MAX = 0.01  # more lost probes or pings than this: p99 over all sent is infinite
 REQ = ["N", "RATE", "RTT", "LOSS", "MODE", "USERS", "MIX", "BIN"]
 CLASS_MIXES = ["home", "gamer_vs_dl", "stream_vs_dl"]
-MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping", "frozen", "idle"] + CLASS_MIXES
+MIXES = ["s5", "lone16", "one_vs_16", "newheavy", "tunping", "frozen", "idle", "exhaust"] + CLASS_MIXES
 # a kill cell (KILLQ=T, run.sh: one link of the edge reset T s after the
 # client starts) counts a connection as cut by it when it ended within this
 # many s after the kill
@@ -304,6 +304,36 @@ def spec(cellstr, path):
             users[j]["flows"].append({"kind": "frozen", "n": n, "start_s": warm, "wave": max(1, wave // fu),
                                       "read_s": fread, "rcvbuf": frcv})
         light = list(range(fu, U))
+    elif mix == "exhaust":
+        # the R1 red team's second pass (item 5; rigload red2.go): user 1
+        # holds HOLD (2000) connections that never send (slow loris), HOLDW
+        # (200) opened a second from WARM on; user 2 runs CHURN (64) workers
+        # that open, echo 32 bytes and close connections without pause;
+        # user 3 downloads with CONNS (16) connections; the rest probe
+        need(4)
+        nh, hw, nc = num(d, "HOLD", 2000), num(d, "HOLDW", 200), num(d, "CHURN", 64)
+        users[0]["role"] = "hold"
+        if nh > 0:
+            users[0]["flows"].append({"kind": "hold", "n": nh, "start_s": warm, "wave": max(1, hw)})
+        users[1]["role"] = "churn"
+        if nc > 0:
+            users[1]["flows"].append({"kind": "churn", "n": nc, "start_s": warm})
+        users[2]["role"] = "bulk"
+        users[2]["flows"].append({"kind": dirn, "n": conns, "start_s": 0})
+        # UDPF (0): user 4 sends this many datagrams a second to the user
+        # port's UDP side from WARM on, each from a new source port; GAMEU
+        # (0) players (UDP) among the light users
+        udpf, gu = float(d.get("UDPF", "0")), num(d, "GAMEU", 0)
+        light = list(range(3, U))
+        if udpf > 0:
+            need(5)
+            users[3]["role"] = "udpflood"
+            users[3]["flows"].append({"kind": "udpflood", "n": 1, "start_s": warm, "rate": udpf})
+            light = list(range(4, U))
+        for j in light[:gu]:
+            users[j]["role"] = "gameudp"
+            users[j]["flows"].append({"kind": "gameudp", "n": 1, "start_s": 0})
+        light = light[gu:]
     elif mix == "idle":
         # an idle tunnel (the red team's Z10, the R1 round-4 judge's DPI
         # capture): no user sends anything until one probe in the last 2 s,
@@ -311,6 +341,11 @@ def spec(cellstr, path):
         for u in users:
             u["role"] = "idle"
         users[0]["flows"].append({"kind": "probe", "n": 1, "start_s": max(total - 2, 0)})
+        # IDLEDL=S (the R1 red team's second pass): user 1 downloads on 4
+        # connections for the first S s, then the tunnel is idle (an idle
+        # tunnel after use, not from its start)
+        if num(d, "IDLEDL", 0) > 0:
+            users[0]["flows"].append({"kind": "dn", "n": 4, "start_s": 0, "stop_s": num(d, "IDLEDL", 0)})
         light = []
     elif mix in CLASS_MIXES:
         # the user classes (rigload classes.go), CLASS_TEMPLATE repeated over
@@ -329,6 +364,7 @@ def spec(cellstr, path):
         if sbr <= 0 or callr <= 0 or page <= 0:
             die("SBR, CALLR and PAGE must be > 0")
         upn, tail = num(d, "UPN", 1), num(d, "TAIL", 5)
+        ackf = float(d.get("ACKF", "0"))
         total = warm + dur + tail
         roles = [tmpl[i % len(tmpl)] for i in range(U)]
         nst = roles.count("stream")
@@ -349,6 +385,12 @@ def spec(cellstr, path):
                 f = {"kind": "web", "n": 1, "start_s": 0, "every_s": page}
             elif role == "heavy":
                 f = {"kind": dirn, "n": conns, "start_s": 0}
+                if ackf > 0 and dirn == "dn":
+                    # ACKF (the R1 red team's second pass, R2-1): the heavy
+                    # user's downloads acknowledge in their own data (QUIC
+                    # inside a proxy connection), this fraction of what
+                    # they get
+                    f = {"kind": "ackdn", "n": conns, "start_s": 0, "rate": ackf}
             else:
                 f = {"kind": "up", "n": upn, "start_s": 0}
             users[i]["role"] = role
@@ -935,7 +977,7 @@ def stream_fair(rec, cap10):
     users = rec["users"]
     dem = []
     for u in users:
-        greedy = u["role"] == "stream" or any(f.startswith("dn") for f in u["flows"].split(","))
+        greedy = u["role"] == "stream" or any(f.startswith("dn") or f.startswith("ackdn") for f in u["flows"].split(","))
         dem.append(None if greedy else u["dn_mbit"].get("main", 0.0))
     sh = fair_floor(cap10, dem)
     st = [s for u, s in zip(users, sh) if u["role"] == "stream"]

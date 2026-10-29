@@ -41,6 +41,29 @@ import "sync/atomic"
 // TwoWay: 1 on (HS2_TUNE_TWOWAY), 0 off.
 var TwoWay = newTuneInt(1) // the default since R1 round 4 (round4/REPORT.fa.md)
 
+// TwoWayRatio (HS2_TUNE_TWOWAY_RATIO; 0: none): over the window neither way
+// of a two-way connection carries more than this many times the other. A
+// call sends about what it gets (a gallery view, a webinar with the
+// camera on: a few times as much one way); a download whose app
+// acknowledges in its own data — QUIC or any UDP inside a proxy
+// connection (VLESS/xray), a VPN over TCP inside one — sends 1 to 3 % of
+// what it gets, in every tick, under RTMax: it read as a call, so neither
+// the exit hinted it nor did the edge move it, and it stayed on its QUIET
+// link (cubic) at whatever rate, the light flows of every user behind it
+// (the R1 red team's second pass, R2-1). Each end judges its own bytes;
+// nothing on the wire.
+var TwoWayRatio = newTuneInt(16)
+
+// twoWayLopsided says whether one way carried more than TwoWayRatio times
+// the other over the window (a and b: the two ways' sums).
+func twoWayLopsided(a, b uint64) bool {
+	r := uint64(max(TwoWayRatio.Get(), 0))
+	if r == 0 {
+		return false
+	}
+	return a > r*b || b > r*a
+}
+
 const (
 	twoWayWin   = 10      // move ticks (1 s)
 	twoWayTicks = 6       // of them the user sent at least ...
@@ -65,19 +88,24 @@ func twoWayState(user, other []uint32, pos, seen int) int {
 	if w <= 0 {
 		return twoWayPending
 	}
-	n, no, sum := 0, 0, uint64(0)
+	n, no, sum, osum := 0, 0, uint64(0), uint64(0)
 	for i := 0; i < w; i++ {
 		v := user[((pos-i)%len(user)+len(user))%len(user)]
 		sum += uint64(v)
 		if v >= twoWayMin {
 			n++
 		}
-		if other[((pos-i)%len(other)+len(other))%len(other)] >= twoWayMin {
+		o := other[((pos-i)%len(other)+len(other))%len(other)]
+		osum += uint64(o)
+		if o >= twoWayMin {
 			no++
 		}
 	}
 	if float64(sum) > float64(RTMax)/8*float64(w)*moveTick.Seconds() {
 		return twoWayNo // past a call's rate: an upload
+	}
+	if n >= 1 && twoWayLopsided(sum, osum) {
+		return twoWayNo // a download (or an upload) acknowledged in its own data: no call
 	}
 	if w < twoWayWin {
 		// at least half the ticks so far: a call whose sending is held back

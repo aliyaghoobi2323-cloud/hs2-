@@ -224,6 +224,14 @@ func (g *Group) Attach(st *Stream) error {
 	if id != g.id || role != RoleMove {
 		return ErrNoMove
 	}
+	if st.sess.sch == nil {
+		// a move stream on a session without a frame scheduler (its link
+		// was offered no CapSched): the group's frames there would take
+		// the scheduler's frame size (frameFor) and the process would die
+		// on a nil pointer at the first write — AcceptGroup and Move
+		// refuse such a session too (the R1 red team's second pass, R2-4)
+		return ErrNoMove
+	}
 	g.mu.Lock()
 	if g.opener || g.closed || st.grp != nil || !g.mayMoveLocked(st.sess.config) {
 		g.mu.Unlock()

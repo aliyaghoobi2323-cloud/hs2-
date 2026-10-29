@@ -11,6 +11,25 @@ import (
 	"time"
 )
 
+// labGoStat (HS2_GOSTAT=1, lab only; the R1 red team's second pass): one
+// log line a second with the goroutines, the heap in use and from the
+// system, and the GCs so far — goroutine and memory growth under link
+// flapping and churn, read from the log. Off (unset) nothing changes.
+func labGoStat() {
+	if os.Getenv("HS2_GOSTAT") != "1" {
+		return
+	}
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		var ms runtime.MemStats
+		for range t.C {
+			runtime.ReadMemStats(&ms)
+			log.Printf("gostat: goroutines %d heap %d sys %d gc %d", runtime.NumGoroutine(), ms.HeapAlloc, ms.Sys, ms.NumGC)
+		}
+	}()
+}
+
 // labProfile (HS2_PROFILE=DIR, lab only; the R1 round-3 judge's diagnosis
 // of a link held at a tenth of the path): the process records blocking and
 // lock contention from its start, a CPU profile of the HS2_PROFILE_SECS (5)

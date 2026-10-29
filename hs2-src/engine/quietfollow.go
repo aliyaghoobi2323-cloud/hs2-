@@ -2,6 +2,7 @@ package engine
 
 import (
 	"slices"
+	"time"
 )
 
 // Two ends of different QUIET counts (R1 round-4 judge, item 4).
@@ -102,6 +103,36 @@ func (q *quietSet) peerMax() int {
 	return best
 }
 
+// QuietFollowGraceMs (HS2_TUNE_QUIET_FOLLOW_GRACE, ms; 0: none): a retiring
+// QUIET link is closed only after it had no connection for this long. A
+// connection's slot on its QUIET link is let go the moment it moves to a
+// BULK link (quietSet.move), but its main stream still takes the frames the
+// exit sent before it switched (a round trip, more behind a resend): a
+// link closed at once cut them, the group's numbers had a hole
+// (ErrGroupHole) and the user's connection ended — on the very start of a
+// reverse edge next to an exit with fewer QUIET links, when the downloads
+// of the first second move (the R1 red team's second pass, R2-3).
+var QuietFollowGraceMs = newTuneInt(5000)
+
+// followCloseNow says whether a retiring QUIET link with users connections
+// may be closed at now (ctrlNow), noting when it was first found empty.
+func followCloseNow(ql *quietLink, users int32, now int64) bool {
+	if users > 0 {
+		ql.emptySince.Store(0)
+		return false
+	}
+	g := int64(max(QuietFollowGraceMs.Get(), 0)) * int64(time.Millisecond)
+	if g == 0 {
+		return true
+	}
+	at := ql.emptySince.Load()
+	if at == 0 {
+		ql.emptySince.Store(now)
+		return false
+	}
+	return now-at >= g
+}
+
 // followTick is the reverse edge's tick of QuietFollow: it fits the count to
 // the ceiling the exit reports (logging each change, and telling the exit
 // the new count at once), marks the QUIET links past it as retiring (the
@@ -162,8 +193,9 @@ func (q *quietSet) followTick() {
 		ret = ret[n:]
 	}
 	var closing []*quietLink
+	now := ctrlNow()
 	for _, ql := range ret {
-		if ql.retiring.Load() && ql.users.Load() == 0 {
+		if ql.retiring.Load() && followCloseNow(ql, ql.users.Load(), now) {
 			closing = append(closing, ql)
 		}
 	}

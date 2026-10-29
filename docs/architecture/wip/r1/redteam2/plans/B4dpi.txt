@@ -1,0 +1,9 @@
+# B4 (Z10, the idle QUIET heartbeat): idle tunnel 60 s at N=1 and N=8 (prod, fin2, r2 = OWD_IDLE on), and idle after a 10 s download at N=8 (fin2, r2)
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=r2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=70 IDLEDL=10 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=70 IDLEDL=10 BIN=r2

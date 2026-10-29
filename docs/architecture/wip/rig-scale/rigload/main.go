@@ -22,6 +22,11 @@
 //
 //	dn     bulk download: the server writes 32 KiB buffers until the connection
 //	       ends; counted where it arrives (the client)
+//	ackdn  the same download whose app acknowledges in its own data (QUIC or
+//	       any UDP inside a proxy connection, a VPN over TCP inside one):
+//	       every 10 ms the client writes Rate (a fraction, 0.02) of what it
+//	       got since, at least 48 bytes when it got any; the server reads
+//	       and drops it (the R1 red team's second pass, R2-1)
 //	up     bulk upload: the client writes 32 KiB buffers; the server counts what
 //	       it reads and every 100 ms sends back (its wall clock, bytes so far),
 //	       so an upload is also counted where it arrives
@@ -175,7 +180,10 @@ func serveConn(c net.Conn, report string) {
 	}
 	c.SetReadDeadline(time.Time{})
 	switch h[2] {
-	case 'D':
+	case 'D', 'A':
+		if h[2] == 'A' {
+			go io.Copy(io.Discard, c) // ackdn: the client's acks
+		}
 		buf := make([]byte, bulkBuf)
 		for {
 			if _, err := c.Write(buf); err != nil {
@@ -223,11 +231,11 @@ func serveConn(c net.Conn, report string) {
 // ---------------------------------------------------------------- client
 
 type Flow struct {
-	Kind   string  `json:"kind"` // dn | up | probe | ping | game | gameudp | call | stream | web
+	Kind   string  `json:"kind"` // dn | ackdn | up | probe | ping | game | gameudp | call | stream | web
 	N      int     `json:"n"`
 	StartS float64 `json:"start_s"`
 	StopS  float64 `json:"stop_s"`            // 0: the end of the run
-	Rate   float64 `json:"rate,omitempty"`    // stream: bitrate; call: each way (Mbit/s)
+	Rate   float64 `json:"rate,omitempty"`    // stream: bitrate; call: each way (Mbit/s); ackdn: the acks' fraction
 	Every  float64 `json:"every_s,omitempty"` // web: one page every this many s
 	// frozen (frozen.go): connection k opens at StartS + k/Wave s, reads for
 	// ReadS s, then stops reading; Rcvbuf: its socket's receive buffer
@@ -279,7 +287,7 @@ func (s *Spec) check() error {
 		}
 		for _, f := range u.Flows {
 			switch f.Kind {
-			case "dn", "up", "probe", "game", "gameudp", "call", "stream", "web", "frozen":
+			case "dn", "ackdn", "up", "probe", "game", "gameudp", "call", "stream", "web", "frozen", "hold", "churn", "udpflood":
 			case "ping":
 				if u.Path != "tun" {
 					return fmt.Errorf("user %s: ping on the port path (ICMP does not cross user ports)", u.ID)
@@ -537,8 +545,11 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 		rec := c.opened(us, f.Kind)
 		conn.SetDeadline(stop)
 		cmd := byte('D')
-		if f.Kind == "up" {
+		switch f.Kind {
+		case "up":
 			cmd = 'U'
+		case "ackdn":
+			cmd = 'A'
 		}
 		if _, err := conn.Write(header(cmd, us.idx, fi)); err != nil {
 			conn.Close()
@@ -547,11 +558,17 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 			fc.cut(c)
 			continue
 		}
-		if f.Kind == "dn" {
+		if f.Kind == "dn" || f.Kind == "ackdn" {
+			var got atomic.Int64
+			ackEnd := make(chan struct{})
+			if f.Kind == "ackdn" {
+				go ackWriter(conn, &got, f.Rate, ackEnd)
+			}
 			buf := make([]byte, 64<<10)
 			for {
 				n, err := conn.Read(buf)
 				us.dn.add(c.off(), n)
+				got.Add(int64(n))
 				if n > 0 {
 					c.recovered(us, f.Kind, &fc)
 				}
@@ -559,6 +576,7 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 					break
 				}
 			}
+			close(ackEnd)
 		} else {
 			go func() {
 				buf := make([]byte, bulkBuf)
@@ -592,6 +610,35 @@ func (c *client) bulk(us *ustate, fi int, f Flow) {
 			c.err("%s connection ended %.1fs before its stop", f.Kind, time.Until(stop).Seconds())
 			fc.cut(c)
 			time.Sleep(200 * time.Millisecond)
+		}
+	}
+}
+
+// ackWriter is an ackdn connection's acks: every 10 ms frac of what the
+// download got since (got), at least 48 bytes when it got any, until end.
+func ackWriter(conn net.Conn, got *atomic.Int64, frac float64, end <-chan struct{}) {
+	if frac <= 0 {
+		frac = 0.02
+	}
+	t := time.NewTicker(10 * time.Millisecond)
+	defer t.Stop()
+	var last int64
+	buf := make([]byte, 64<<10)
+	for {
+		select {
+		case <-end:
+			return
+		case <-t.C:
+		}
+		g := got.Load()
+		if g == last {
+			continue
+		}
+		n := int(float64(g-last) * frac)
+		last = g
+		n = min(max(n, 48), len(buf))
+		if _, err := conn.Write(buf[:n]); err != nil {
+			return
 		}
 	}
 }
@@ -883,7 +930,7 @@ func runClient(s *Spec, srvdir string) *Out {
 				go func() {
 					defer wg.Done()
 					switch f.Kind {
-					case "dn", "up":
+					case "dn", "ackdn", "up":
 						c.bulk(us, fi*1000+k, f)
 					case "probe":
 						c.probe(us, fi*1000+k, f)
@@ -897,6 +944,12 @@ func runClient(s *Spec, srvdir string) *Out {
 						c.web(us, fi*1000+k, f)
 					case "frozen":
 						c.frozen(us, fi*1000+k, k, f)
+					case "hold":
+						c.hold(us, k, f) // red2.go
+					case "churn":
+						c.churn(us, fi*1000+k, f) // red2.go
+					case "udpflood":
+						c.udpflood(us, f) // red2.go
 					}
 				}()
 			}
@@ -936,7 +989,7 @@ func runClient(s *Spec, srvdir string) *Out {
 			o.Src = "hs0"
 		}
 		for _, f := range us.u.Flows {
-			if f.Kind != "dn" && f.Kind != "up" {
+			if f.Kind != "dn" && f.Kind != "ackdn" && f.Kind != "up" {
 				continue
 			}
 			for sec := 0; float64(sec) < s.TotalS; sec++ {
