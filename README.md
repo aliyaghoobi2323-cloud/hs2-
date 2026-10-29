@@ -879,6 +879,8 @@ systemctl daemon-reload && systemctl restart hs2
 | `HS2_TUNE_TWOWAY=0` | on | a connection whose user sends steadily (a call) is moved off QUIET like a download | either end |
 | `HS2_TUNE_RT=0` | on | no realtime lane for calls | either end |
 | `HS2_TUNE_RT_HOLD=ticks` | 20 | how long (100 ms ticks) a call keeps its realtime lane while it stays loosely steady | either end |
+| `HS2_TUNE_TAG_KEY=0` | on | the user tag each stream's SYN carries goes back to an unkeyed hash of the user's address, which the other server can read the address back from (the R1 review, A3); on, it is a keyed hash under a random key each process makes and never sends | either end |
+| `HS2_TUNE_PROBE_NOEKM=0` | on | a TLS 1.2 client without extended master secret (an active prober) gets a finished handshake and an instant close instead of the cover website, as before (the R1 review, A1) | the end that listens (Iran in a reverse tunnel) |
 
 The rest of the `HS2_TUNE_*` names in `cmd/hs2/main.go` (`applyTuning`) are
 lab switches for measurements. `hs2 status` shows each link's lines (`sched`,
