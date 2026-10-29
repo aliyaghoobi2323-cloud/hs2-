@@ -572,7 +572,7 @@ func CoreLines() []string {
 		if l.sc != nil && l.sc.sys != nil {
 			s := l.sc.line(l.id)
 			if l.mtr != nil {
-				s += fmt.Sprintf("; owd guard dirty %d", l.mtr.owd.dirties.Load())
+				s += fmt.Sprintf("; owd guard dirty %d (in %d)", l.mtr.owd.dirties.Load(), l.mtr.owd.inDirties.Load())
 			}
 			out = append(out, s)
 			if s := l.sc.budgetLine(l.id); s != "" {

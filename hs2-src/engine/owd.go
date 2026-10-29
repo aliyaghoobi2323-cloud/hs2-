@@ -223,6 +223,21 @@ var TuneOWDGuard = 1
 // (F3: the budget's "two-way" without "own delays" in both runs).
 var OWDGuardBulk = 1
 
+// OWDGuardIn (HS2_TUNE_OWD_GUARD_IN; 0: off; R1 round 5): the guard of the
+// other direction's reading (queueIn) too: a QUIET link socket that
+// received segments out of order since the beat before (tcpi_rcv_ooopack:
+// a hole in what the other end sends) makes the reading of the other
+// end's direction none until owdDirtyHold after it, as its own resends make
+// this end's (TuneOWDGuard). The other end's guard cannot tell this end:
+// its resends hold the messages it sends, and this end reads them as that
+// direction's queue. Under the path's random loss (0.3 %) the edge read
+// 7.9 ms "of the way back" on the QUIET link of the home mix at N=1, and
+// with it the queue its upload made (one BULK link both ways) as the
+// download's: it never cut the upload, the downloads' acks waited behind it
+// in the uplink, and the exit read that as its own queue and cut the
+// downloads to 16 to 19 Mbit/s (round 5's screen S4; production 78).
+var OWDGuardIn = newTuneInt(0)
+
 const (
 	// owdDirtyWait: a local wait (unsent bytes at the pacing rate) past this
 	// is a backlog of the socket's own
@@ -340,7 +355,13 @@ type owdLink struct {
 	quiet      bool
 	retr0      uint64
 	dirtyUntil atomic.Int64
+	// ooo0: the socket's segments received out of order at the beat
+	// before; inDirtyUntil: the other end's direction reads none till then
+	// (OWDGuardIn)
+	ooo0         uint32
+	inDirtyUntil atomic.Int64
 	dirties    atomic.Int64 // beats that found the socket dirty
+	inDirties  atomic.Int64 // ... and a hole in what it received (OWDGuardIn)
 	// OWDIdle's: the BULK links' bytes in the second under way (from
 	// trAt, ctrlNow), when a second last had owdIdleRate or more (ctrlNow;
 	// 0: never), whether the loop is parked for an idle pool, and the
@@ -404,6 +425,14 @@ func (o *owdLink) idle(now int64) bool {
 func (o *owdLink) noteSocket(ts tcpStat, now int64) {
 	if !o.quiet && (!o.own || OWDGuardBulk == 0) || TuneOWDGuard == 0 {
 		return
+	}
+	if o.quiet && OWDGuardIn.Get() != 0 && ts.oooOK {
+		// a hole in what the other end sends: its messages waited behind it
+		if o.ooo0 != 0 && ts.rcvOOO != o.ooo0 {
+			o.inDirtyUntil.Store(now + owdDirtyLook*int64(owdLook) + 2*int64(usDur(uint64(ts.rtt))))
+			o.inDirties.Add(1)
+		}
+		o.ooo0 = max(ts.rcvOOO, 1)
 	}
 	resent := o.retr0 != 0 && ts.retrans > o.retr0
 	o.retr0 = max(ts.retrans, 1)
@@ -543,8 +572,12 @@ func (o *owdLink) queueIn() (time.Duration, bool) {
 		return 0, false
 	}
 	at := o.qInAt.Load()
-	if at == 0 || time.Duration(ctrlNow()-at) > owdFresh {
+	now := ctrlNow()
+	if at == 0 || time.Duration(now-at) > owdFresh {
 		return 0, false
+	}
+	if d := o.inDirtyUntil.Load(); d != 0 && now < d {
+		return 0, false // OWDGuardIn: the other end's messages came behind a hole
 	}
 	return time.Duration(o.qIn.Load()), true
 }
