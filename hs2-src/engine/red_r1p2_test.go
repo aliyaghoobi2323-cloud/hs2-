@@ -2,7 +2,12 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
+	"fmt"
+	"io"
 	"net"
+	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -167,4 +172,144 @@ func TestRed2OWDIdleParks(t *testing.T) {
 			t.Fatalf("idle again: %d messages after parking", n1-n0)
 		}
 	})
+}
+
+// countLink is rateLink (udp_hol_test.go) at loopback speed whose exit
+// counts the UDP streams it accepted, and the datagrams by client id.
+func countLink(t *testing.T, ctx context.Context, streams *atomic.Int64, seen *udpSeen) *mtcpLink {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	acc := make(chan net.Conn, 1)
+	go func() { c, _ := ln.Accept(); acc <- c }()
+	cc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := <-acc
+	cli, _, err := newSession(cc, false, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _, err := newSession(sc, true, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { <-ctx.Done(); cli.Close(); srv.Close(); cc.Close(); sc.Close() }()
+	go func() {
+		for {
+			st, err := srv.AcceptStream()
+			if err != nil {
+				return
+			}
+			go func() {
+				var k [3]byte
+				if _, err := io.ReadFull(st, k[:]); err != nil || k[0] != kindUDPPort {
+					io.Copy(io.Discard, st)
+					return
+				}
+				streams.Add(1)
+				buf := make([]byte, maxDatagram)
+				for {
+					p, err := readDatagram(st, buf)
+					if err != nil {
+						return
+					}
+					if len(p) >= 12 {
+						seen.add(binary.BigEndian.Uint32(p), 0)
+					}
+				}
+			}()
+		}
+	}()
+	return &mtcpLink{sess: cli}
+}
+
+// Item 7: one client sends single datagrams from 3000 source ports (no
+// spoofing: a new socket each) to a UDP user port. Each made a flow, a
+// stream to the exit and a UDP socket there for udpIdle; with the caps the
+// client gets UDPFlowsPerUser flows and another user's game still gets
+// through.
+func TestRed2UDPFlowFlood(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		total, perUsr int
+	}{{"no caps (as before)", 0, 0}, {"caps 4096 / 256", 4096, 256}} {
+		t.Run(tc.name, func(t *testing.T) {
+			withTune(t, UDPFlowsMax, tc.total)
+			withTune(t, UDPFlowsPerUser, tc.perUsr)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var streams atomic.Int64
+			seen := &udpSeen{lats: map[uint32][]time.Duration{}}
+			lm := NewLinkManager(nil, 1, 4, 8, nil)
+			addManaged(lm, countLink(t, ctx, &streams, seen))
+			pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer pc.Close()
+			logs := make(chan string, 16)
+			go serveUserUDP(ctx, pc, lm, 0, func(f string, a ...any) {
+				select {
+				case logs <- fmt.Sprintf(f, a...):
+				default:
+				}
+			})
+			addr := pc.LocalAddr().String()
+			b := make([]byte, 16)
+			binary.BigEndian.PutUint32(b, 9)
+			for range 3000 {
+				c, err := net.Dial("udp", addr)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c.Write(b)
+				c.Close()
+			}
+			// another user (127.0.0.2): a game's 100 datagrams
+			var sent atomic.Int64
+			_, port, _ := net.SplitHostPort(addr)
+			game := func() {
+				c, err := net.DialUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.2")}, &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: atoiT(t, port)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer c.Close()
+				g := make([]byte, 64)
+				binary.BigEndian.PutUint32(g, 7)
+				for range 100 {
+					c.Write(g)
+					sent.Add(1)
+					time.Sleep(5 * time.Millisecond)
+				}
+			}
+			game()
+			time.Sleep(500 * time.Millisecond)
+			n, got := streams.Load(), len(seen.get(7))
+			t.Logf("%s: %d UDP streams at the exit for 3000 source ports; the other user's game %d of %d datagrams; cap drops %d",
+				tc.name, n, got, sent.Load(), udpCapDrops.Load())
+			if tc.perUsr > 0 && n > int64(tc.perUsr)+1 {
+				t.Fatalf("%d streams, past the cap of %d a user (and one for the game)", n, tc.perUsr)
+			}
+			if tc.perUsr == 0 && n < 2900 {
+				t.Fatalf("without caps only %d streams for 3000 source ports (the case is not shown)", n)
+			}
+			if float64(got) < 0.95*float64(sent.Load()) {
+				t.Fatalf("the other user's game got %d of %d datagrams", got, sent.Load())
+			}
+		})
+	}
+}
+
+func atoiT(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
 }

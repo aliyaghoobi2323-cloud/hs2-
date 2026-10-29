@@ -593,7 +593,28 @@ type udpFlow struct {
 	// dst: the address the user sent to, on a port bound to every address
 	// (replyPin): its replies leave from it (under mu)
 	dst netip.Addr
+	// tag: its user's (connUserTag), for UDPFlowsPerUser
+	tag uint32
 }
+
+// UDPFlowsMax (HS2_TUNE_UDP_FLOWS; 0: none) is the most UDP flows a user
+// port keeps at once, UDPFlowsPerUser (HS2_TUNE_UDP_USER_FLOWS; 0: none)
+// the most of one user (its tag: the IPv4 address, or the IPv6 /64). A
+// datagram that would start a flow past either is dropped. A flow is a
+// client address and port: each new source port of one client made a
+// flow, two goroutines and a 64 KiB buffer here, a stream on a link, and a
+// UDP socket and two more 64 KiB buffers at the exit, each kept for
+// udpIdle (2 min) — any client of an open UDP port could fill both
+// servers' memory with datagrams from changing source ports, no spoofing
+// needed (the R1 red team's second pass, item 7). A game or a call uses
+// one to a few flows; a home behind one address a few dozen.
+var (
+	UDPFlowsMax     = newTuneInt(4096)
+	UDPFlowsPerUser = newTuneInt(256)
+)
+
+// udpCapDrops counts the datagrams dropped for the flow caps.
+var udpCapDrops atomic.Int64
 
 const (
 	udpFlowQueue = 256       // datagrams waiting for a flow's link
@@ -639,6 +660,15 @@ func (f *udpFlow) end() {
 func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port int, logf func(string, ...any)) {
 	var mu sync.Mutex
 	flows := map[string]*udpFlow{}
+	perUser := map[uint32]int{} // flows by user tag (UDPFlowsPerUser)
+	capped := int64(0)          // datagrams dropped for the caps (under mu), since the line before
+	// forget drops flow k from flows (caller holds mu)
+	forget := func(k string, f *udpFlow) {
+		delete(flows, k)
+		if perUser[f.tag]--; perUser[f.tag] <= 0 {
+			delete(perUser, f.tag)
+		}
+	}
 	pin := pinReplies(pc) // a port on every address: answer from the address used
 	go func() {
 		t := time.NewTicker(30 * time.Second)
@@ -653,10 +683,16 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			for k, f := range flows {
 				if time.Since(f.last) > udpIdle {
 					f.end()
-					delete(flows, k)
+					forget(k, f)
 				}
 			}
+			n, nf := capped, len(flows)
+			capped = 0
 			mu.Unlock()
+			if n > 0 {
+				logf("udp port %d: %d datagrams that would start a flow dropped in the last 30 s: %d flows (at most %d, %d of one user: HS2_TUNE_UDP_FLOWS, HS2_TUNE_UDP_USER_FLOWS)",
+					port, n, nf, UDPFlowsMax.Get(), UDPFlowsPerUser.Get())
+			}
 		}
 	}()
 	// run is one flow: it opens the flow's stream (the read loop does not
@@ -667,7 +703,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			mu.Lock()
 			f.end()
 			if flows[key] == f {
-				delete(flows, key)
+				forget(key, f)
 			}
 			mu.Unlock()
 		}
@@ -747,7 +783,7 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 			mu.Lock()
 			for k, f := range flows {
 				f.end()
-				delete(flows, k)
+				forget(k, f)
 			}
 			mu.Unlock()
 			return
@@ -756,8 +792,22 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 		mu.Lock()
 		f := flows[key]
 		if f == nil {
-			f = &udpFlow{q: make(chan udpDgram, udpFlowQueue), stop: make(chan struct{})}
+			tag := connUserTag(addr)
+			if m := UDPFlowsMax.Get(); m > 0 && len(flows) >= m {
+				capped++
+				udpCapDrops.Add(1)
+				mu.Unlock()
+				continue
+			}
+			if m := UDPFlowsPerUser.Get(); m > 0 && perUser[tag] >= m {
+				capped++
+				udpCapDrops.Add(1)
+				mu.Unlock()
+				continue
+			}
+			f = &udpFlow{q: make(chan udpDgram, udpFlowQueue), stop: make(chan struct{}), tag: tag}
 			flows[key] = f
+			perUser[tag]++
 			go run(key, addr, f)
 		}
 		f.last = time.Now()
