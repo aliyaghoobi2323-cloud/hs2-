@@ -82,6 +82,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	} else {
 		lm = NewLinkManager(cfg.Dialer, cfg.Min, cfg.Max, cfg.PerLink, logf)
 	}
+	notePoolMax(lm.max) // the QUIET links' congestion control by the pool's size (quietcc.go)
 	if cfg.DrainIdle != 0 {
 		lm.SetDrainIdle(cfg.DrainIdle)
 	}

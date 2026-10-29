@@ -5,6 +5,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -90,6 +91,34 @@ func setQuietCC(tc *net.TCPConn, list string) string {
 		}
 	}
 	return got
+}
+
+// QuietCCFew (HS2_TUNE_QUIET_CC_FEW; "": QuietCC's): the list for the QUIET
+// links of a pool of up to quietOneMax links (one general QUIET link, which
+// carries every light class at once: ~45 Mbit/s down in the home mix at
+// N=1, the most a link of its own must hold under the path's random loss).
+// Past that the pool has QuietMany QUIET links, four flows at a fq_codel
+// bottleneck among the BULK ones, each a quarter of the load: Illinois,
+// which cuts by an eighth at the losses CoDel makes for its flow queue,
+// held its queue there and the games' and calls' downward p99 doubled
+// without any loss (round 5, S2: +159 and +172 ms against +86 and +93), so
+// they keep cubic (QuietCC).
+var QuietCCFew = ""
+
+// quietPoolMax is this process's link pool ceiling (max_links; 0: not
+// known), noted where the pool is made (RunIran, RunKharej).
+var quietPoolMax atomic.Int32
+
+// notePoolMax notes the pool's ceiling for quietCCList.
+func notePoolMax(n int) { quietPoolMax.Store(int32(max(n, 0))) }
+
+// quietCCList is the congestion control list of this process's QUIET
+// links: QuietCCFew in a pool of up to quietOneMax links, else QuietCC.
+func quietCCList() string {
+	if m := quietPoolMax.Load(); QuietCCFew != "" && m > 0 && m <= quietOneMax {
+		return QuietCCFew
+	}
+	return QuietCC
 }
 
 // QuietCCLoss (HS2_TUNE_QUIET_CC_LOSS; "": off): the congestion control a
