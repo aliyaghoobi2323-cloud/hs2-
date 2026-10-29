@@ -656,7 +656,7 @@ func (l *sendCapLink) step(now time.Duration, written uint64) {
 			src := owdShared(l.owd)
 			src.noteRate(max(l.core.maxDlv(), rx))
 			if tr := ts.bytesAcked + ts.bytesReceived; l.tr0 != 0 && tr > l.tr0 {
-				src.noteTraffic(tr - l.tr0) // OWDIdle (owd.go)
+				owdNoteTraffic(src, tr-l.tr0) // OWDIdle, every QUIET link's with OWDIdlePool (owd.go)
 				l.tr0 = tr
 			} else {
 				l.tr0 = max(tr, 1)

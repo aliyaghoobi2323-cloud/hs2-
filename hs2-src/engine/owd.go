@@ -106,6 +106,70 @@ var TuneOWDQuiet = 1
 // carries data.
 var OWDIdle = newTuneInt(1)
 
+// OWDIdlePool (HS2_TUNE_OWD_IDLE_POOL; 0: off, as the red team's second
+// pass had OWDIdle): with OWDIdle, the BULK links' traffic wakes every QUIET
+// link's loop of the process, not only the one quietOWD points to, and a
+// QUIET link whose loop ends hands quietOWD on to the latest live one (the
+// R1 review, part B, B1). Each end's BULK links note their traffic on their
+// own end's latest QUIET link alone (owdShared), and the two ends' latest
+// need not be the same link (four QUIET links past five links; the reverse
+// exit's slots bring them up within a handshake of each other): with each
+// end's other QUIET loops parked for good, neither end heard the other on
+// its latest, and the BULK links' budget and α lost the QUIET one-way queues
+// for the process's life. A latest QUIET link that died, or that QuietFollow
+// closed (the newest first), left quietOWD on its dead delays (the red
+// team's Z12) for good once no QUIET link is dialed again. The other QUIET
+// links beat at owdTickMax while the pool is busy (their rate is not noted),
+// as every one did in fin2; an idle pool still parks them all.
+var OWDIdlePool = newTuneInt(1)
+
+// owdQuiets is the process's QUIET links whose loops run, in the order they
+// started (OWDIdlePool).
+var owdQuiets struct {
+	mu  sync.Mutex
+	all []*owdLink
+}
+
+// owdQuietUp: o's loop (a QUIET link's) starts.
+func owdQuietUp(o *owdLink) {
+	owdQuiets.mu.Lock()
+	owdQuiets.all = append(owdQuiets.all, o)
+	owdQuiets.mu.Unlock()
+}
+
+// owdQuietDown: o's loop ended; with OWDIdlePool, quietOWD at o moves to the
+// latest QUIET link whose loop still runs (none left: it stays).
+func owdQuietDown(o *owdLink) {
+	owdQuiets.mu.Lock()
+	owdQuiets.all = slices.DeleteFunc(owdQuiets.all, func(x *owdLink) bool { return x == o })
+	var next *owdLink
+	if n := len(owdQuiets.all); n > 0 {
+		next = owdQuiets.all[n-1]
+	}
+	owdQuiets.mu.Unlock()
+	if next != nil && OWDIdlePool.Get() != 0 {
+		quietOWD.CompareAndSwap(o, next)
+	}
+}
+
+// owdNoteTraffic notes n bytes a BULK link acknowledged and received on o,
+// its end's QUIET delays (owdShared; nil: none), and with OWDIdlePool on
+// every other QUIET link whose loop runs here too: the pool is busy for all
+// of them (OWDIdle).
+func owdNoteTraffic(o *owdLink, n uint64) {
+	o.noteTraffic(n)
+	if n == 0 || OWDIdlePool.Get() == 0 {
+		return
+	}
+	owdQuiets.mu.Lock()
+	defer owdQuiets.mu.Unlock()
+	for _, x := range owdQuiets.all {
+		if x != o {
+			x.noteTraffic(n) // (its own lock only, and a kick that never waits)
+		}
+	}
+}
+
 const (
 	// owdIdleRate: a noted rate (bytes/s) under this is an idle pool's (a
 	// keepalive's acks, a probe's echo)
@@ -536,6 +600,10 @@ func owdDecode(b []byte) (stamp int64, qOut time.Duration, have, ok bool) {
 // written or read) until it fails or ctx ends; both ends run it.
 func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 	defer st.Close()
+	if o.quiet {
+		owdQuietUp(o) // OWDIdlePool
+		defer owdQuietDown(o)
+	}
 	if u, ok := st.(interface{ SetUrgent(bool) }); ok {
 		u.SetUrgent(true) // no coalescing hold after a message (a hold would read as queue)
 	}
