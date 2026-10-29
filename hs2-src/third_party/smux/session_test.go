@@ -19,7 +19,8 @@ import (
 
 func init() {
 	go func() {
-		log.Println(http.ListenAndServe("0.0.0.0:6060", nil))
+		// loopback only: a test never opens a port on the host's public addresses
+		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
 }
 
