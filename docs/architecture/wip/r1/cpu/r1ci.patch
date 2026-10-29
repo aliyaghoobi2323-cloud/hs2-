@@ -1,0 +1,192 @@
+--- r1ci.py (/root/r1-tracker, 2026-10-29)
++++ r1ci.py (R1 speed: no rig lock, r1-cpu.sh, two classes)
+@@ -9,7 +9,11 @@
+ # tests.json: {"go": ["TestX", "FuzzY", "BenchmarkZ", ...], "sh": ["scripts/x_test.sh", ...]}
+ # Results are per commit (cache key = branch HEAD sha): a test is green only for committed code.
+ # A result is {"r": pass|fail|skip|exists, "t": seconds, "out": last lines when it failed}.
+-# A run holds /root/r1-quiet.lock, taken through its fair queue (rig or field measurements need a quiet host).
++# A run no longer takes /root/r1-quiet.lock (R1 speed, docs/architecture/wip/r1/cpu/REPORT.fa.md): every go
++# test runs on the test cores 6-11 through /root/r1-cpu.sh (low weight, nice 19), beside the rig blocks on 0-5;
++# the A/B there showed the rig's numbers unchanged. Runs of the suite serialize among themselves on
++# TESTS_LOCK (flock): some tests bind fixed loopback addresses (engine Dg*, cmd/hs2 pprof) and two runs at
++# once would collide.
+ import fcntl, glob, json, os, re, subprocess, sys, time
+ 
+ REPO = "/root/hs2-repo"
+@@ -21,6 +25,14 @@
+ RERUNS = 5  # how often a failed test runs again alone, to tell a flaky test from a real failure
+ TAKE = "/root/r1-quiet.take.sh"  # waits in the lock's fair queue, prints "taken" once the lock is held
+ GO = "/usr/local/go/bin/go"
++CPU = "/root/r1-cpu.sh"  # the test cores (6-11), CPUWeight 20, nice 19 (R1 speed)
++TESTS_LOCK = "/root/r1-tests.lock"  # flock: one suite run at a time host-wide (fixed loopback addresses)
++# class (b), the timing-sensitive tests: "package test seconds" lines (docs/architecture/wip/r1/cpu/slow-tests.txt
++# of the branch, else this copy); they run serially in SHARDS processes at once, each on its own two cores;
++# every other test (class (a)) runs first, -p 6 on all six test cores
++SLOW_REL = "docs/architecture/wip/r1/cpu/slow-tests.txt"
++SLOW_FALLBACK = "/root/r1-tracker/slow-tests.txt"
++SHARDS = ["6-7", "8-9", "10-11"]
+ BASE = "b780b63"  # R1's base commit: tests already there are not "added by R1"
+ os.makedirs(STATE, exist_ok=True)
+ 
+@@ -161,6 +173,77 @@
+                       "now": int(time.time())}, ensure_ascii=False))
+ 
+ 
++def slow_tests():
++    """class (b): test name -> seconds, from the checked-out branch's slow-tests.txt, else the fallback copy"""
++    for p in (os.path.join(CI_WT, SLOW_REL), SLOW_FALLBACK):
++        try:
++            return {w[1]: float(w[2]) for w in (l.split() for l in open(p)) if len(w) >= 3}
++        except (OSError, ValueError):
++            continue
++    return {}
++
++
++def parse_events(stdout, lines, out):
++    """go test -json events into out["results"] (a subtest's lines go to its test's tail)"""
++    for line in stdout.splitlines():
++        try:
++            ev = json.loads(line)
++        except ValueError:
++            continue
++        t = ev.get("Test")
++        if not t:
++            continue
++        if "/" in t:  # a subtest's lines go to its test's tail (TestAngleP10/newheavy)
++            if ev.get("Action") == "output":
++                lines.setdefault(t.split("/")[0], []).append(ev.get("Output", "").rstrip())
++            continue
++        if ev.get("Action") == "output":
++            lines.setdefault(t, []).append(ev.get("Output", "").rstrip())
++        elif ev.get("Action") in ("pass", "fail", "skip"):
++            res = {"r": ev["Action"], "t": round(ev.get("Elapsed", 0), 2)}
++            if ev["Action"] == "fail":
++                res["out"] = "\n".join(l for l in lines.get(t, []) if l and not l.startswith("==="))[-600:]
++            out["results"][t] = res
++
++
++def run_go(mod, pkgs, names, slow, lines, out):
++    """Two stages (R1 speed): class (a), every test of names not in slow (slow-tests.txt), alone with -p 6 on
++    the six test cores; then class (b), the timing-sensitive ones, in len(SHARDS) processes at once, each
++    serial (-p 1) on its own two cores, longest first onto the lightest shard. 25m: the engine package's
++    class (b) is ~930 s in all, ~350 s a shard. pkgs: package dir (relative to mod) -> its tests."""
++    def pk_of(ts):
++        return " ".join("./" + p for p in pkgs if any(t in pkgs[p] for t in ts))
++
++    fast = [t for t in names if t not in slow]
++    parts = [[] for _ in SHARDS]
++    load = [0.0] * len(SHARDS)
++    for t in sorted((t for t in names if t in slow), key=lambda t: -slow[t]):
++        i = load.index(min(load))
++        parts[i].append(t)
++        load[i] += slow[t]
++    stages = [[("6-11", "-p 6", fast)]] if fast else []
++    stages.append([(c, "-p 1", ts) for c, ts in zip(SHARDS, parts) if ts])
++    for stage in stages:
++        procs = []
++        for cpus, par, ts in stage:
++            cmd = (f"TEST_CPUS={cpus} {CPU} {GO} test -json -count=1 {par} -timeout 25m "
++                   f"-run '^({'|'.join(ts)})$' {pk_of(ts)}")
++            procs.append((subprocess.Popen(cmd, cwd=mod, shell=True, stdout=subprocess.PIPE,
++                                           stderr=subprocess.PIPE, text=True), ts))
++        for p, ts in procs:
++            try:
++                so, se = p.communicate(timeout=1800)
++            except subprocess.TimeoutExpired:
++                p.kill()
++                so, se = p.communicate()
++                for t in ts:
++                    out["results"].setdefault(t, {"r": "fail", "out": "timeout (30 min)"})
++            parse_events(so, lines, out)
++            if p.returncode != 0:
++                for t in ts:  # a build failure leaves no per-test event
++                    out["results"].setdefault(t, {"r": "fail", "out": (so + se)[-600:]})
++
++
+ def run_branch(b, sha, want):
+     if not os.path.isdir(CI_WT):
+         sh(f"git worktree add -q --detach {CI_WT} {sha}", REPO)
+@@ -180,43 +263,19 @@
+         while mod != CI_WT and not os.path.exists(os.path.join(mod, "go.mod")):
+             mod = os.path.dirname(mod)
+         groups.setdefault(mod, {}).setdefault(os.path.relpath(d, mod), []).append(t)
++    slow = slow_tests()
+     for mod, pkgs in groups.items():
+         names = sorted({t for ts in pkgs.values() for t in ts})
+-        pat = "^(" + "|".join(names) + ")$"
+-        pk = " ".join("./" + p for p in pkgs)
+         lines = {}
+         try:
+-            # -p 1: one package at a time (engine's and udpcarrier's emulated links are real-time; side
+-            # by side they share the CPU); 25m: the engine package alone runs ~13 min (merge-prep's numbers)
+-            r = sh(f"{GO} test -json -count=1 -p 1 -timeout 25m -run '{pat}' {pk}", mod, timeout=1800)
+-            for line in r.stdout.splitlines():
+-                try:
+-                    ev = json.loads(line)
+-                except ValueError:
+-                    continue
+-                t = ev.get("Test")
+-                if not t:
+-                    continue
+-                if "/" in t:  # a subtest's lines go to its test's tail (TestAngleP10/newheavy)
+-                    if ev.get("Action") == "output":
+-                        lines.setdefault(t.split("/")[0], []).append(ev.get("Output", "").rstrip())
+-                    continue
+-                if ev.get("Action") == "output":
+-                    lines.setdefault(t, []).append(ev.get("Output", "").rstrip())
+-                elif ev.get("Action") in ("pass", "fail", "skip"):
+-                    res = {"r": ev["Action"], "t": round(ev.get("Elapsed", 0), 2)}
+-                    if ev["Action"] == "fail":
+-                        res["out"] = "\n".join(l for l in lines.get(t, []) if l and not l.startswith("==="))[-600:]
+-                    out["results"][t] = res
+-            if r.returncode != 0:
+-                for t in names:  # a build failure leaves no per-test event
+-                    out["results"].setdefault(t, {"r": "fail", "out": (r.stdout + r.stderr)[-600:]})
++            run_go(mod, pkgs, names, slow, lines, out)
+             # Flaky or real? Each test that failed (with a run of its own, not a build break) runs again
+             # RERUNS times alone. Passing every time marks it flaky — a test-design bug to fix, not a code
+             # regression — so nobody chases a ghost; failing again marks it a real failure.
+             failed = [t for t in names if (out["results"].get(t) or {}).get("r") == "fail" and t in lines]
+             for t in failed[:8]:
+-                rr = sh(f"{GO} test -json -count={RERUNS} -p 1 -timeout 10m -run '^{t}$' ./{os.path.relpath(f[t], mod)}",
++                rr = sh(f"TEST_CPUS={SHARDS[0] if t in slow else '6-11'} {CPU} "
++                        f"{GO} test -json -count={RERUNS} -p 1 -timeout 10m -run '^{t}$' ./{os.path.relpath(f[t], mod)}",
+                         mod, timeout=900)
+                 ok = sum(1 for l in rr.stdout.splitlines() if f'"Test":"{t}"' in l and '"Action":"pass"' in l)
+                 res = out["results"][t]
+@@ -232,7 +291,7 @@
+         if os.path.exists(p) and not s.endswith("rig_test.sh"):  # the rig self-test is heavy: not in CI
+             t0 = time.time()
+             try:
+-                r = sh(f"bash {s}", CI_WT, timeout=900)
++                r = sh(f"{CPU} bash {s}", CI_WT, timeout=900)
+                 res = {"r": "pass" if r.returncode == 0 else "fail", "t": round(time.time() - t0, 1)}
+                 if r.returncode:
+                     res["out"] = (r.stdout + r.stderr)[-600:]
+@@ -264,19 +323,18 @@
+         todo = [b for b in order if br.get(b) and (cache.get(br[b]) or {}).get("v") != 2]
+         if not todo:
+             return
+-        # Take the shared rig lock in its fair queue (r1-quiet.take.sh, first come first served): back-to-back
+-        # rig blocks left CI only a minute or two between them, and a CI run that a block started in the
+-        # middle of disturbed that block's measurement. Holding the lock fixes both. It is taken per branch
+-        # head and released after it, so a waiting rig block gets its turn between heads.
++        # No rig lock any more (R1 speed): the tests run on the test cores beside the rig blocks. Suite runs
++        # serialize among themselves on TESTS_LOCK (fixed loopback addresses in some tests).
+         for b in todo:
+             sha = br.get(b)
+-            if sh(f"{TAKE} r1-ci 'CI tests {b}'").stdout.strip() != "taken":
+-                return
++            tl = open(TESTS_LOCK, "w")
++            fcntl.flock(tl, fcntl.LOCK_EX)
+             try:
+                 run_branch(b, sha, want)
+             finally:
+-                release()
+-                try:  # waiting in the lock queue for the next head is not "running"
++                fcntl.flock(tl, fcntl.LOCK_UN)
++                tl.close()
++                try:
+                     os.remove(RUNNING)
+                 except OSError:
+                     pass
