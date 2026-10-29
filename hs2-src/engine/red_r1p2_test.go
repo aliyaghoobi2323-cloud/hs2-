@@ -79,6 +79,11 @@ func TestRed2TwoWayAckedDownload(t *testing.T) {
 func TestRed2OWDIdleParks(t *testing.T) {
 	run := func(idle int, steps func(a, b *owdLink)) {
 		withTune(t, OWDIdle, idle)
+		// one pair alone: the BULK traffic another test left running would
+		// wake these loops through the pool (OWDIdlePool, the engine
+		// review's B1; R1 round 5 saw one message after parking in a full
+		// run). The pool's wake has its own tests (review_b_test.go).
+		withTune(t, OWDIdlePool, 0)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		c1, c2 := net.Pipe()
