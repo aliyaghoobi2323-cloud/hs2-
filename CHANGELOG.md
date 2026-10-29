@@ -2822,7 +2822,8 @@ merge-prep branch:
   `max_links` + 4 connections, not + 2).
 - **hs2-safe-apply** checks a staged binary on the live config first: a config
   the running binary passes and the new one fails is refused before anything
-  moves (`REFUSED config-check-new`).
+  moves (`REFUSED config-check-new`); and nothing changes without a full
+  backup to put back (`REFUSED backup`).
 
 ## Verification, every phase
 
