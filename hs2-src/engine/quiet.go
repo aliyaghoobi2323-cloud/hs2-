@@ -96,7 +96,7 @@ func QuietCount(maxLinks int) int {
 	case QuietExtra != 0 && maxLinks <= quietOneMax:
 		return max(QuietFew, 1) + lightCount(maxLinks) // (QuietLight: the light one, quietlight.go)
 	case QuietExtra != 0:
-		return max(QuietMany, 1)
+		return max(QuietMany, 1) + lightCount(maxLinks)
 	case maxLinks >= 4:
 		return 2
 	}
