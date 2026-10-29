@@ -49,9 +49,12 @@ import (
 
 // QuietLight (HS2_TUNE_QUIET_LIGHT; 0: off): 1, a pool of up to
 // quietLightMax links keeps one QUIET link more, the light one; 2, besides,
-// a larger pool makes one of its QuietMany QUIET links the light one (no
-// link more: past quietLightMax the pool has more connections than the DPI
-// model's population already, and four QUIET flows at the bottleneck).
+// a pool past quietOneMax keeps one more too, next to its QuietMany (past
+// quietOneMax the pool has more connections than the DPI model's
+// population already). Round 5's screen S5 made one of the four the light
+// one instead: the games went from +91 to +6 ms, but the web's p95 at N=8
+// from 8140 to 11023 ms (three QUIET flows at the fq_codel bottleneck for
+// the calls, the web and every start, not four).
 var QuietLight = newTuneInt(0)
 
 // QuietWaitMs (HS2_TUNE_QUIET_WAIT, ms; 0: none): how long a new connection
@@ -94,7 +97,8 @@ func (q *quietSet) quietLightOn() bool {
 
 // lightCount is the light QUIET links QuietCount adds to a pool of maxLinks.
 func lightCount(maxLinks int) int {
-	if QuietLight.Get() > 0 && maxLinks <= quietLightMax {
+	switch l := QuietLight.Get(); {
+	case l > 0 && maxLinks <= quietLightMax, l >= 2 && maxLinks > quietOneMax:
 		return 1
 	}
 	return 0
