@@ -151,7 +151,13 @@ func TestRed2OWDIdleParks(t *testing.T) {
 		}
 		nb := a.msgs.Load() + b.msgs.Load() - n0
 		// idle again, the stale rate still noted: parked after owdIdleAfter
-		staleIdle(a, b, owdIdleAfter+1500*time.Millisecond)
+		// (waited for, not timed: on loaded test cores a loop parked a beat
+		// late and one message fell in the window below; R1 round 5)
+		staleIdle(a, b, owdIdleAfter)
+		for end := time.Now().Add(3 * time.Second); !(a.parked.Load() && b.parked.Load()) && time.Now().Before(end); {
+			staleIdle(a, b, 100*time.Millisecond)
+		}
+		staleIdle(a, b, 200*time.Millisecond)
 		n1 := a.msgs.Load() + b.msgs.Load()
 		staleIdle(a, b, 2*time.Second)
 		n2 := a.msgs.Load() + b.msgs.Load()
