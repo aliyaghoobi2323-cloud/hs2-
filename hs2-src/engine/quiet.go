@@ -566,8 +566,22 @@ func (q *quietSet) arrived() {
 	q.mu.Unlock()
 }
 
+// QuietPack (HS2_TUNE_QUIET_PACK): 1 packs a pool's new connections on its
+// oldest QUIET link while that one does not lag, and spills them to the
+// next only while it does, in a pool of up to quietOneMax links (two QUIET
+// links, QuietFew). Spread over both (0, by the fewest connections), the
+// light users' messages split two ways, each link padded its own records
+// and P10 lost its edge at N=1 (the R1 round-4 judge: (a) 0.94, (e) under
+// 0.9 in G1b, against 0.96 and 0.92 with one QUIET link); packed, the
+// light users' messages share one link's records as with one QUIET link,
+// and the second takes what the first cannot carry at once (a busy home
+// mix: the web pages' starts next to the calls). A link's death cuts on
+// average the same share of connections either way (1/Q of them).
+var QuietPack = newTuneInt(0)
+
 // pick chooses a QUIET link for a new connection of user tag (never one in
-// avoid): one that is not lagging first, then the fewest connections; with
+// avoid): one that is not lagging first, then the fewest connections (with
+// QuietPack in a small pool: the oldest that does not lag); with
 // QuietByUser the user's own link (quietuser.go). release gives its slot
 // back (once).
 func (q *quietSet) pick(avoid []Link, tag uint32) (*quietLink, func(), bool) {
@@ -582,12 +596,17 @@ func (q *quietSet) pick(avoid []Link, tag uint32) (*quietLink, func(), bool) {
 	defer q.mu.Unlock()
 	var best *quietLink
 	bestLag := true
+	pack := QuietPack.Get() != 0 && q.m.max <= quietOneMax
 	for _, ql := range q.links {
 		if !ql.link.Alive() || ql.retiring.Load() || slices.Contains(avoid, Link(ql.link)) {
 			continue
 		}
 		lag := meterLagging(ql.link.mtr, now)
-		if best == nil || bestLag && !lag || lag == bestLag && ql.users.Load() < best.users.Load() {
+		fewer := best == nil || ql.users.Load() < best.users.Load()
+		if pack && !lag {
+			fewer = best == nil || ql.id < best.id // the oldest link that does not lag
+		}
+		if best == nil || bestLag && !lag || lag == bestLag && fewer {
 			best, bestLag = ql, lag
 		}
 	}

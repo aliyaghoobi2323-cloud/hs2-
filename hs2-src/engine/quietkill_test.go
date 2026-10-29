@@ -228,6 +228,52 @@ func per(nq int) int {
 // TestQuietByUserSticky: with QuietByUser a user's connections stay on its
 // link while it is up (and only lagging sends one elsewhere), new users go
 // to the link with the fewest users, and a user whose link died gets another.
+// TestQuietPack: with QuietPack a small pool's new connections go to its
+// oldest QUIET link while that one does not lag, and to the next while it
+// does; without it, by the fewest connections.
+func TestQuietPack(t *testing.T) {
+	angleCores(t)
+	defer QuietPack.Set(QuietPack.Get())
+	for _, pack := range []int{0, 1} {
+		QuietPack.Set(pack)
+		k := newKillRig(t, 2, 4*angleRateBps, 5*time.Millisecond)
+		var rels []func()
+		on := map[*mtcpLink]int{}
+		open := func(tag uint32) *mtcpLink {
+			ctx := context.WithValue(k.ctx, userTagKey{}, tag)
+			st, _, rel, ok := openStreamOn(ctx, k.lm, false, qpEcho)
+			if !ok {
+				t.Fatal("no stream opened")
+			}
+			rels = append(rels, rel)
+			l := st.(*groupStream).ql
+			on[l]++
+			return l
+		}
+		first := open(1)
+		for u := uint32(2); u <= 6; u++ {
+			open(u)
+		}
+		t.Logf("pack %d: six connections over the QUIET links %v", pack, on)
+		switch {
+		case pack == 1 && on[first] != 6:
+			t.Fatalf("pack: %d of 6 on the oldest QUIET link", on[first])
+		case pack == 0 && (on[first] != 3 || len(on) != 2):
+			t.Fatalf("spread: %v", on)
+		}
+		if pack == 1 {
+			first.mtr.ctrlSlow.Store(true) // the oldest lags: the next one spills
+			if l := open(7); l == first {
+				t.Fatal("pack: a connection on the lagging link while the other did not lag")
+			}
+			first.mtr.ctrlSlow.Store(false)
+		}
+		for _, r := range rels {
+			r()
+		}
+	}
+}
+
 func TestQuietByUserSticky(t *testing.T) {
 	angleCores(t)
 	QuietByUser.Set(1)
