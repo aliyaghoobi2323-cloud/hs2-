@@ -13,6 +13,9 @@ SRC=${SRC:-/root/hs2-wt/r1-cpu/hs2-src}
 command -v go >/dev/null || export PATH=$PATH:/usr/local/go/bin
 mkdir -p "$L"
 ( while :; do echo "race start $(date +%T)"; (cd "$SRC" && go test -race -count=1 -timeout 30m ./engine/ 2>&1 | tail -3); done ) > "$L/race.log" 2>&1 &
-( while :; do echo "fuzz start $(date +%T)"; (cd "$SRC/third_party/smux" && go test -run '^$' -fuzz '^FuzzSessionRecv$' -fuzztime 120s . 2>&1 | tail -2); done ) > "$L/fuzz.log" 2>&1 &
+# (a freeze longer than ~10 s makes the fuzz coordinator call its worker hung
+# and write the input under testdata/fuzz/ as a failure: 3 such files in the
+# A/B's first block, all passing when replayed — an artifact of the freeze)
+( while :; do echo "fuzz start $(date +%T)"; (cd "$SRC/third_party/smux" && go test -run '^$' -fuzz '^FuzzSessionRecv$' -fuzztime 120s . 2>&1 | grep -v '^fuzz: elapsed' | tail -12); done ) > "$L/fuzz.log" 2>&1 &
 ( while :; do echo "build start $(date +%T)"; (cd "$SRC" && GOCACHE="$L/gocache" go build -a -o "$L/hs2-load" ./cmd/hs2 2>&1 | tail -2); done ) > "$L/build.log" 2>&1 &
 wait
