@@ -1,0 +1,34 @@
+13:23:44 plan /root/rred2/B10/plan.txt: 16 runs
+13:23:45 start f4fb6861-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 1.53 waited 0s
+13:24:30 done f4fb6861-fin2-1 ok=1 
+13:24:31 start f4fb6861-r2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2) load 2.41 waited 0s
+13:25:17 done f4fb6861-r2-1 ok=1 
+13:25:18 start f4fb6861-r2tw0-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2tw0) load 3.61 waited 0s
+13:26:04 done f4fb6861-r2tw0-1 ok=1 
+13:26:04 start f4fb6861-r2ow0-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2ow0) load 3.18 waited 0s
+13:26:50 done f4fb6861-r2ow0-1 ok=1 
+13:26:51 start f4fb6861-r2ow0-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2ow0) load 2.84 waited 0s
+13:27:37 done f4fb6861-r2ow0-2 ok=1 
+13:27:38 start f4fb6861-r2tw0-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2tw0) load 3.18 waited 0s
+13:28:23 done f4fb6861-r2tw0-2 ok=1 
+13:28:24 start f4fb6861-r2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r2) load 3.30 waited 0s
+13:29:10 done f4fb6861-r2-2 ok=1 
+13:29:11 start f4fb6861-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.52 waited 0s
+13:29:56 done f4fb6861-fin2-2 ok=1 
+13:29:57 start 3305f1f0-fin2-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2) load 2.90 waited 0s
+13:30:27 done 3305f1f0-fin2-1 ok=1 
+13:30:28 start 3305f1f0-r2-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2) load 2.55 waited 0s
+13:30:58 done 3305f1f0-r2-1 ok=1 
+13:30:58 start 3305f1f0-r2tw0-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2tw0) load 2.45 waited 0s
+13:31:28 done 3305f1f0-r2tw0-1 ok=1 
+13:31:29 start 3305f1f0-r2ow0-1 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2ow0) load 2.22 waited 0s
+13:31:59 done 3305f1f0-r2ow0-1 ok=1 
+13:31:59 start 3305f1f0-r2ow0-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2ow0) load 2.39 waited 0s
+13:32:29 done 3305f1f0-r2ow0-2 ok=1 
+13:32:30 start 3305f1f0-r2tw0-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2tw0) load 2.19 waited 0s
+13:33:00 done 3305f1f0-r2tw0-2 ok=1 
+13:33:00 start 3305f1f0-r2-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r2) load 1.45 waited 0s
+13:33:30 done 3305f1f0-r2-2 ok=1 
+13:33:31 start 3305f1f0-fin2-2 (N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2) load 1.76 waited 0s
+13:34:01 done 3305f1f0-fin2-2 ok=1 
+13:34:01 done /root/rred2/B10/plan.txt
