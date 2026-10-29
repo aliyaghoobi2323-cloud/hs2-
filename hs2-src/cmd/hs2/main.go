@@ -389,13 +389,14 @@ func applyTuning() {
 	num("HS2_TUNE_QUIET_HOLD", &engine.QuietHoldMs)
 	numT("HS2_TUNE_RT", engine.TuneRT)
 	num("HS2_TUNE_RT_MAX", &engine.RTMax)
-	numT("HS2_TUNE_TWOWAY", engine.TwoWay)                  // a connection whose user sends steadily stays on QUIET
-	numT("HS2_TUNE_TWOWAY_RATIO", engine.TwoWayRatio)       // ... unless one way carries more than this many times the other (0: none)
-	numT("HS2_TUNE_OWD_IDLE", engine.OWDIdle)               // an idle pool's QUIET link sends no one-way delay messages
-	numT("HS2_TUNE_UDP_FLOWS", engine.UDPFlowsMax)          // a UDP user port's flows at most (0: none)
-	numT("HS2_TUNE_UDP_USER_FLOWS", engine.UDPFlowsPerUser) // ... and one user's (0: none)
-	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany)           // QUIET links past 5 links
-	numT("HS2_TUNE_QUIET_FOLLOW", engine.QuietFollow)       // reverse: both ends run the smaller QUIET count (0: both must match)
+	numT("HS2_TUNE_TWOWAY", engine.TwoWay)                         // a connection whose user sends steadily stays on QUIET
+	numT("HS2_TUNE_TWOWAY_RATIO", engine.TwoWayRatio)              // ... unless one way carries more than this many times the other (0: none)
+	numT("HS2_TUNE_OWD_IDLE", engine.OWDIdle)                      // an idle pool's QUIET link sends no one-way delay messages
+	numT("HS2_TUNE_UDP_FLOWS", engine.UDPFlowsMax)                 // a UDP user port's flows at most (0: none)
+	numT("HS2_TUNE_UDP_USER_FLOWS", engine.UDPFlowsPerUser)        // ... and one user's (0: none)
+	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany)                  // QUIET links past 5 links
+	numT("HS2_TUNE_QUIET_FOLLOW", engine.QuietFollow)              // reverse: both ends run the smaller QUIET count (0: both must match)
+	numT("HS2_TUNE_QUIET_FOLLOW_GRACE", engine.QuietFollowGraceMs) // ... a retiring QUIET link closes after this long without a connection
 	// the R1 round-4 judge: QUIET links at <= 5 links; a call's realtime
 	// lane held while it stays loosely steady; the steady lane's bytes in a
 	// row while the latency lane waits; the latency lane by user; a BULK

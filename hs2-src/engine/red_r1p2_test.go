@@ -313,3 +313,30 @@ func atoiT(t *testing.T, s string) int {
 	}
 	return n
 }
+
+// R2-3: a retiring QUIET link (QuietFollow) is closed only after it had no
+// connection for QuietFollowGraceMs: a connection that just moved to BULK
+// let its slot go, but its main stream still takes the exit's frames sent
+// before the switch; closed at once, the group read a hole and ended.
+func TestRed2FollowCloseGrace(t *testing.T) {
+	const s = int64(time.Second)
+	withTune(t, QuietFollowGraceMs, 5000)
+	ql := &quietLink{}
+	t0 := int64(1000 * s)
+	if followCloseNow(ql, 2, t0) {
+		t.Fatal("closed with connections on it")
+	}
+	if followCloseNow(ql, 0, t0) || followCloseNow(ql, 0, t0+4*s) {
+		t.Fatal("closed within the grace after its last connection moved")
+	}
+	if followCloseNow(ql, 1, t0+4*s) || followCloseNow(ql, 0, t0+6*s) {
+		t.Fatal("a connection came back: the grace starts again")
+	}
+	if !followCloseNow(ql, 0, t0+11*s+1) {
+		t.Fatal("not closed after the grace")
+	}
+	withTune(t, QuietFollowGraceMs, 0)
+	if !followCloseNow(&quietLink{}, 0, t0) {
+		t.Fatal("grace 0: closed at once, as before")
+	}
+}
