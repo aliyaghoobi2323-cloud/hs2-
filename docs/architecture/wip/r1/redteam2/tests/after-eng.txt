@@ -1,0 +1,20 @@
+    red2_wcore_test.go:110: 76 records of 64 bytes, 15 MiB downloaded, 18 evaluations, core OFF throughout, no ceiling, no window past 262144
+--- PASS: TestRed2OldExitRealStatsNoCeiling (8.05s)
+    red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.26s)
+--- PASS: TestRed2TwoWayAckedDownload (0.00s)
+    red_r1p2_test.go:104: ratio 0: the acked download in clumps for 6 s: 0 of 60 ticks without a realtime allowance
+    red_r1p2_test.go:104: ratio 16: the acked download in clumps for 6 s: 55 of 60 ticks without a realtime allowance
+--- PASS: TestRed2HoldAckedDownload (0.00s)
+    red_r1p2_test.go:137: OWDIdle 0, idle 3.5 s: 3 + 3 messages
+    red_r1p2_test.go:166: first message both ways 5ms after the rate; 47 messages in 2 s busy; 0 in the 2 s after parking (parks 2, 2)
+--- PASS: TestRed2OWDIdleParks (13.43s)
+    red_r1p2_test.go:293: no caps (as before): 2838 UDP streams at the exit for 3000 source ports; the other user's game 100 of 100 datagrams; cap drops 0
+    red_r1p2_test.go:293: caps 4096 / 256: 257 UDP streams at the exit for 3000 source ports; the other user's game 100 of 100 datagrams; cap drops 2725
+--- PASS: TestRed2UDPFlowFlood (2.31s)
+    --- PASS: TestRed2UDPFlowFlood/no_caps_(as_before) (1.13s)
+    --- PASS: TestRed2UDPFlowFlood/caps_4096_/_256 (1.18s)
+--- PASS: TestRed2FollowCloseGrace (0.00s)
+--- PASS: TestRed2FollowWantBounds (0.00s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	25.079s

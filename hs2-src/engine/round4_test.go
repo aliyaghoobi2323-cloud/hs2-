@@ -459,6 +459,14 @@ func TestTwoWayKeepsCall(t *testing.T) {
 	if testing.Short() {
 		t.Skip("emulated links, 9 s")
 	}
+	// The held-back call here is a download at the link's full rate next to
+	// a steady 1.5 Mbit/s call stream from its user: in bytes, a download
+	// acknowledged in its own data (QUIC inside a proxy connection), which
+	// TwoWayRatio (the R1 red team's second pass, R2-1) moves. The rule
+	// TwoWay itself is checked without the ratio; the ratio's verdict on
+	// the same connection after the loop. A real held-back call delivers
+	// about its own rate (the rig's home mix: calls delivered 1.00).
+	withTune(t, TwoWayRatio, 0)
 	for _, on := range []bool{false, true} {
 		r := twoWayRig(t, on)
 		k0 := twoWayKept.Load()
@@ -472,6 +480,19 @@ func TestTwoWayKeepsCall(t *testing.T) {
 			t.Fatalf("TwoWay off: the backlogged connection moved %d times", moved)
 		case on && (moved != 0 || kept == 0):
 			t.Fatalf("TwoWay on: moved %d, kept %d", moved, kept)
+		}
+		st.Close()
+		quiesce(r)
+	}
+	// the ratio: the full-rate download next to the steady stream moves
+	TwoWayRatio.Set(16)
+	{
+		r := twoWayRig(t, true)
+		st := r.open(10, qpDuplex)
+		go io.Copy(io.Discard, st)
+		callOn(t, st, 3*time.Second)
+		if moved := r.q.moved.Load(); moved != 1 {
+			t.Fatalf("TwoWay on, ratio 16: a full-rate download next to a steady upload moved %d times, want 1 (R2-1)", moved)
 		}
 		st.Close()
 		quiesce(r)
