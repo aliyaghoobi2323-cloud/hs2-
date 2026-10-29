@@ -176,10 +176,16 @@ func (q *quietSet) replaceTick(now time.Time) {
 
 	q.mu.Lock()
 	links := slices.Clone(q.links)
+	up := 0 // QUIET links up that are not retiring: a replacement there
+	for _, ql := range links {
+		if ql.link.Alive() && !ql.retiring.Load() {
+			up++
+		}
+	}
 	q.mu.Unlock()
 	seen := map[*quietLink]bool{}
 	var slow *quietLink
-	var closing []*quietLink
+	var closing, kept []*quietLink
 	for _, ql := range links {
 		seen[ql] = true
 		s := r.links[ql]
@@ -188,10 +194,13 @@ func (q *quietSet) replaceTick(now time.Time) {
 			r.links[ql] = s
 		}
 		if ql.replaced.Load() {
-			if !ql.link.Alive() {
-				continue
-			}
-			if followCloseNow(ql, ql.users.Load(), ctrl) || now.Sub(s.at) >= replMaxHold {
+			switch {
+			case !ql.link.Alive():
+			case up == 0 && now.Sub(s.at) >= replMaxHold:
+				kept = append(kept, ql) // no replacement came: it stays
+			case up == 0:
+				// make before break: it serves until one is up
+			case followCloseNow(ql, ql.users.Load(), ctrl) || now.Sub(s.at) >= replMaxHold:
 				closing = append(closing, ql)
 			}
 			continue
@@ -232,6 +241,13 @@ func (q *quietSet) replaceTick(now time.Time) {
 	for _, ql := range closing {
 		q.m.log("mtcp: QUIET link q%d closed: replaced for being slow (%d connections left on it)", ql.id, ql.users.Load())
 		ql.link.Close()
+	}
+	for _, ql := range kept {
+		q.mu.Lock()
+		ql.retiring.Store(false)
+		q.replacedGoneLocked(ql)
+		q.mu.Unlock()
+		q.m.log("mtcp: QUIET link q%d stays: no QUIET link came up to replace it within %s", ql.id, replMaxHold)
 	}
 	if slow == nil || q.replacing.Load() > 0 {
 		return

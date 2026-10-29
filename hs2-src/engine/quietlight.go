@@ -260,7 +260,16 @@ func (q *quietSet) lightTick(gs *groupStream, now int64) bool {
 		// its link is slow and being replaced (QuietReplace,
 		// quietreplace.go): to a QUIET link of its role that is not, once
 		// one is up
-		return q.moveQuiet(gs, onLight && gs.rule.lightRule(), now)
+		toLight := onLight && gs.rule.lightRule()
+		if toLight {
+			if ql, rel, ok := q.pickLight(nil); ok {
+				rel()
+				_ = ql
+			} else {
+				toLight = false // no light one up (yet): a general one
+			}
+		}
+		return q.moveQuiet(gs, toLight, now)
 	}
 	if !q.quietLightOn() {
 		return false
