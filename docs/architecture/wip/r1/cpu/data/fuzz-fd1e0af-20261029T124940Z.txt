@@ -1,0 +1,59 @@
+== fuzz, 60s a target, -parallel 2, 3 target(s) at once — 2026-10-29T12:49:40Z, fd1e0af R1 ادغام: ادغام r1-red2 6a2628d (گذر دوم تیم قرمز: نسبت دوسویه فقط در جهت رو به کاربر، rtlane.go همان fin2)
+== host: Linux 6.8.0-147-generic x86_64, go version go1.27.3 linux/amd64
+== dirty:  M docs/architecture/wip/r1/merge-prep/step5/fuzz.sh
+== dirty:  M docs/architecture/wip/rig-scale/ana.py
+== dirty:  M docs/architecture/wip/rig-scale/run.sh
+== dirty: ?? docs/architecture/wip/r1/cpu/
+== dirty: ?? hs2-src/third_party/smux/testdata/
+-- FuzzOWDDecode (. ./engine)
+   fuzz: elapsed: 1m0s, execs: 643753 (10980/sec), new interesting: 0 (total: 7)
+   fuzz: elapsed: 1m0s, execs: 643753 (0/sec), new interesting: 0 (total: 7)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.069s
+   FuzzOWDDecode: rc 0, 61 s
+-- FuzzFlowKey (. ./engine)
+   fuzz: elapsed: 1m0s, execs: 647463 (11006/sec), new interesting: 0 (total: 23)
+   fuzz: elapsed: 1m0s, execs: 647463 (0/sec), new interesting: 0 (total: 23)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.118s
+   FuzzFlowKey: rc 0, 61 s
+-- FuzzFlowKeyRev (. ./engine)
+   fuzz: elapsed: 1m0s, execs: 643299 (11356/sec), new interesting: 0 (total: 19)
+   fuzz: elapsed: 1m0s, execs: 643299 (0/sec), new interesting: 0 (total: 19)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.106s
+   FuzzFlowKeyRev: rc 0, 61 s
+-- FuzzParseClientAuth (. ./tlscarrier)
+   fuzz: elapsed: 1m0s, execs: 997389 (15639/sec), new interesting: 1 (total: 14)
+   fuzz: elapsed: 1m0s, execs: 997389 (0/sec), new interesting: 1 (total: 14)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	60.056s
+   FuzzParseClientAuth: rc 0, 61 s
+-- FuzzHintDecode (. ./engine)
+   fuzz: elapsed: 1m0s, execs: 649685 (10658/sec), new interesting: 0 (total: 4)
+   fuzz: elapsed: 1m0s, execs: 649685 (0/sec), new interesting: 0 (total: 4)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.051s
+   FuzzHintDecode: rc 0, 61 s
+-- FuzzProxyHeader (. ./engine)
+   fuzz: elapsed: 1m0s, execs: 313059 (0/sec), new interesting: 0 (total: 23)
+   fuzz: elapsed: 1m1s, execs: 313059 (0/sec), new interesting: 0 (total: 23)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	61.075s
+   FuzzProxyHeader: rc 0, 62 s
+-- FuzzParseTunDesc (. ./tlscarrier)
+   fuzz: elapsed: 1m0s, execs: 1135636 (19127/sec), new interesting: 0 (total: 6)
+   fuzz: elapsed: 1m0s, execs: 1135636 (0/sec), new interesting: 0 (total: 6)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	60.124s
+   FuzzParseTunDesc: rc 0, 60 s
+-- FuzzDecodeLink (. ./cmd/hs2)
+   fuzz: elapsed: 1m0s, execs: 950604 (16156/sec), new interesting: 0 (total: 232)
+   fuzz: elapsed: 1m0s, execs: 950604 (0/sec), new interesting: 0 (total: 232)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	60.140s
+   FuzzDecodeLink: rc 0, 61 s
+-- FuzzSessionRecv (third_party/smux .)
+   fuzz: elapsed: 1m0s, execs: 931933 (16273/sec), new interesting: 14 (total: 462)
+   fuzz: elapsed: 1m0s, execs: 931933 (0/sec), new interesting: 14 (total: 462)
+   ok  	github.com/xtaci/smux	60.100s
+   FuzzSessionRecv: rc 0, 60 s
+-- FuzzGroupReassembly (third_party/smux .)
+   fuzz: elapsed: 1m0s, execs: 510069 (8163/sec), new interesting: 9 (total: 164)
+   fuzz: elapsed: 1m1s, execs: 510069 (0/sec), new interesting: 9 (total: 164)
+   ok  	github.com/xtaci/smux	61.048s
+   FuzzGroupReassembly: rc 0, 62 s
+   new corpus entry (a failing input): ?? third_party/smux/testdata/fuzz/
+== exit 0

@@ -1,0 +1,10 @@
+10:05:12 waiting for the lock: CPU split A/B block 1 (quiet vs pinned+load)
+10:22:13 lock taken
+10:22:18 load: 20 6-11 active logs /root/rcpu/raw-load-20261029T102213
+10:43:30 load stopped, lock released (1277 s)
+10:46:13 waiting for the lock: CPU split A/B block 2 (rep 3 + pinned-quiet D)
+11:17:35 lock taken
+11:17:40 load: 20 6-11 active logs /root/rcpu/raw-load-20261029T111735
+11:17:40 step: /root/rcpu/cells.txt rep 3 conds A B C D
+11:31:54 step: /root/rcpu/cells-sub.txt rep 4 conds A B C D
+11:37:13 load stopped, lock released (1178 s)

@@ -58,6 +58,48 @@ set -u
 D=$(cd "$(dirname "$0")" && pwd)
 PLAN=${1:?usage: run.sh PLAN OUT}; OUT=${2:?usage: run.sh PLAN OUT}
 mkdir -p "$OUT/raw"; OUT=$(cd "$OUT" && pwd)
+# RIG_CPUS=0-5 (R1 speed, opt-in; docs/architecture/wip/r1/cpu/): the whole
+# block runs pinned to these CPUs with taskset — this script, rigguard.sh,
+# rig.sh and its ip/tc/ss, both hs2 processes, the rigload server and client,
+# pidstat (the affinity is inherited; no cgroup changes, nothing outside the
+# block is touched). Tests, builds and fuzzing then run on the other cores
+# through /root/r1-cpu.sh. The kernel's softirq work (veth, netem, the
+# qdiscs' timers) is not pinned by this: it runs mostly where its sender
+# runs, and the A/B in docs/architecture/wip/r1/cpu/ measured what is left.
+# With RIG_CPUS, the wait before each run looks at these CPUs' busy share
+# over 1 s (RIG_BUSY_MAX %, 30) instead of the host's load average, which
+# the other cores' work would hold up. EDGE_CPUS/EXIT_CPUS must lie inside.
+cpulist() {
+  python3 -c 'import sys
+s = set()
+for p in sys.argv[1].split(","):
+    a, _, b = p.partition("-"); s.update(range(int(a), int(b or a) + 1))
+print(" ".join(map(str, sorted(s))))' "$1" 2>/dev/null
+}
+if [ -n "${RIG_CPUS:-}" ]; then
+  RIG_CPU_IDS=$(cpulist "$RIG_CPUS")
+  [ -n "$RIG_CPU_IDS" ] && taskset -c "$RIG_CPUS" true 2>/dev/null || { echo "RIG_CPUS: bad CPU list '$RIG_CPUS'" >&2; exit 2; }
+  for v in EDGE_CPUS EXIT_CPUS; do
+    [ -n "${!v:-}" ] || continue
+    for c in $(cpulist "${!v}"); do
+      case " $RIG_CPU_IDS " in *" $c "*) ;; *) echo "$v=${!v} is not inside RIG_CPUS=$RIG_CPUS" >&2; exit 2 ;; esac
+    done
+  done
+  if [ -z "${RIG_PINNED:-}" ]; then
+    RIG_PINNED=1 exec taskset -c "$RIG_CPUS" "$D/run.sh" "$PLAN" "$OUT"
+  fi
+fi
+# cpus_busy "0 1 2": the busy share (%) of these CPUs over 1 s (/proc/stat)
+cpus_busy() {
+  local a b
+  a=$(grep '^cpu[0-9]' /proc/stat); sleep 1; b=$(grep '^cpu[0-9]' /proc/stat)
+  printf '%s\n--\n%s\n' "$a" "$b" | awk -v ids=" $1 " '
+    $1 == "--" { p = 1; next }
+    { c = substr($1, 4); if (index(ids, " " c " ") == 0) next
+      t = 0; for (i = 2; i <= 9; i++) t += $i; id = $5 + $6
+      if (!p) { t0 += t; i0 += id } else { t1 += t; i1 += id } }
+    END { d = t1 - t0; v = 0; if (d > 0) v = 100 * (1 - (i1 - i0) / d); printf "%d\n", v }'
+}
 # the host's TCP memory (R1 round 4, rigguard.sh): by default (RIG_GUARD=log)
 # the block is recorded only (tcp_mem, the TCP memory and the pressure
 # counter before, during and after it), nothing capped or cut (the owner's
@@ -145,6 +187,7 @@ sssnap() {
   ip netns exec $X ss -tinH state established '( dport = :2096 )' > "$r/ss-exit-$tag.txt" 2>/dev/null
   ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-$tag.txt" 2>/dev/null
   head -1 /proc/stat > "$r/stat-$tag.txt"
+  grep '^cpu[0-9]' /proc/stat > "$r/cpus-$tag.txt"
 }
 
 # proctrace R: the PROC_TRACE sampler (runs in the background; it uses
@@ -240,13 +283,17 @@ run_one() {
   benv=$(binenv "$bin")
   hs2env="$hs2env$benv"
   rm -rf "$r"; mkdir -p "$r" "$w"; CUR=$w
-  # quiet host
-  while [ $wait -lt "$LOAD_WAIT" ] && awk -v m="$LOAD_MAX" '{exit !($1 > m)}' /proc/loadavg; do sleep 10; wait=$((wait + 10)); done
+  # quiet host (with RIG_CPUS: quiet rig CPUs)
+  if [ -n "${RIG_CPUS:-}" ]; then
+    while [ $wait -lt "$LOAD_WAIT" ] && [ "$(cpus_busy "$RIG_CPU_IDS")" -gt "${RIG_BUSY_MAX:-30}" ]; do sleep 9; wait=$((wait + 10)); done
+  else
+    while [ $wait -lt "$LOAD_WAIT" ] && awk -v m="$LOAD_MAX" '{exit !($1 > m)}' /proc/loadavg; do sleep 10; wait=$((wait + 10)); done
+  fi
   # the host at the start of the run: uptime and the five busiest processes
   # (%CPU over 0.5 s, command name only)
   hup=$(uptime | sed 's/^ *//' | tr -d '"\\')
   htop=$(top -bn2 -d0.5 -w 200 2>/dev/null | awk '/^top -/{f++} f==2 && /^ *[0-9]+ /{print $9" "$12}' | head -5 | paste -sd';' | tr -d '"\\')
-  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"panel_sndbuf\":${PANEL_SNDBUF:-0},\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
+  echo "{\"id\":\"$id\",\"bin\":\"$bin\",\"bin_path\":\"$bp\",\"bin_sha\":\"$( [ -f "$bp" ] && sha256sum "$bp" | cut -c1-12)\",\"bin_env\":\"${benv# }\",\"order\":\"$order\",\"rep\":$rep,\"cell\":\"$cell\",\"load0\":$(cut -d' ' -f1 /proc/loadavg),\"waited_s\":$wait,\"start\":\"$(date -Is)\",\"edge_cpus\":\"${EDGE_CPUS:-}\",\"exit_cpus\":\"${EXIT_CPUS:-}\",\"rig_cpus\":\"${RIG_CPUS:-}\",\"panel_sndbuf\":${PANEL_SNDBUF:-0},\"uptime\":\"$hup\",\"top\":\"$htop\"}" > "$r/meta.json"
   log "start $id ($cell BIN=$bin) load $(cut -d' ' -f1 /proc/loadavg) waited ${wait}s"
   local mx0 ok0 hp0 hm0 hsp
   mx0=$(memcg_ev max); ok0=$(memcg_ev oom_kill)

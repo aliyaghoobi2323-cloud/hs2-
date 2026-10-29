@@ -1,0 +1,27 @@
+run            mode       wall s   engine rc                  pass  fail  skip  b0-5   b6-11  lock holders
+p1-r1          p1         1064.0    934.7 1                   1047     1    30  10.2   13.6   r1-ci,r1-red2
+    FAIL engine TestDgPortsTCPFollowsExitTableAtOnce (0.0 s):     dgports_test.go:507: listen tcp 127.0.0.40:28443: bind: address already in use
+p4-r1          p4          943.6    942.7 0                   1048     0    30  21.1   23.2   r1-ci,r1-merge,r1-red2
+p8-r1          p8          939.6    938.8 0                   1048     0    30  16.2   18.9   r1-merge,r1-red2
+split-3-r1     split:3     362.5    329.2 a:0 b0:0 b1:0 b2:1  1047     1    30  9.3    16.1   r1-merge
+    FAIL engine TestServeReverseLinkReportsWhyItEnded (24.1 s):     exit_reason_test.go:93: reason = "read: reset by the network or the other server", want "no data from the edge for 24s (keepalive timeout — path stalled)"
+split-6-r1     split:6     189.2    172.9 a:1 b0:0 b1:0 b2:0 b3:0 b4:0 b5:0  1047     1    30  20.1   28.4   r1-ci,r1-merge
+    FAIL engine TestDgPortsTCPFollowsExitTableAtOnce (0.0 s):     dgports_test.go:507: listen tcp 127.0.0.40:28443: bind: address already in use
+fuzz-serial-r1 fuzz:serial   628.8     None 0                      0     0     0  17.5   74.4   r1-ci,r1-red2
+fuzz-par-r1    fuzz:par    244.5     None 0                      0     0     0  27.3   88.9   r1-red2
+split-3-r2     split:3     359.5    327.7 a:0 b0:0 b1:0 b2:0  1048     0    30  21.0   26.3   r1-red2
+p1-r2          p1         1053.6    938.8 0                   1048     0    30  19.4   21.9   r1-ci,r1-merge,r1-red2
+p4-r2          p4          949.7    948.8 0                   1048     0    30  17.5   20.0   r1-ci,r1-red2
+split-6-r2     split:6     186.2    171.3 a:0 b0:0 b1:1 b2:0 b3:0 b4:1 b5:0  1046     2    30  11.0   20.6   r1-merge
+    FAIL engine TestAngleP10 (28.1 s): test.go:492: lone user, 16 streams: 9.95 Mbit/s of 10 |     angle_test.go:506: 1 stream 4.94, 16 streams 5.00, total 9.94 Mbit/s |     angle_test.go:536: existing bulk in the new user's first second: 3.77 Mbit/s (0.754 of its floor) |     angle_test.go:538: the existing bulk user got 0.754 of its floor in the new user's first second, want >= 0.9 of what the new user's latency credit leaves (0.758)
+    FAIL engine TestSessionGatesASlowLink (0.8 s):     sendgate_test.go:218: unsent at most 45056 B, 516273 B written in 0.5 s |     sendgate_test.go:220: the session's socket held 45056 B unsent, want under 16 KiB and a burst
+p8-r2          p8          945.7    944.8 0                   1048     0    30  14.7   17.1   r1-ci,r1-merge
+fuzz-par-r2    fuzz:par    244.6     None 0                      0     0     0  18.1   87.5   r1-ci
+p8-r3          p8          935.6    934.7 0                   1048     0    30  18.5   21.1   r1-ci,r1-merge,r1-red2
+p4-r3          p4          939.5    938.8 0                   1048     0    30  14.0   16.6   r1-ci,r1-merge,r1-red2
+split-3-r3     split:3     359.9    328.5 a:0 b0:0 b1:0 b2:0  1048     0    30  10.4   16.9   r1-red2
+p1-r3          p1         1045.3    940.7 0                   1048     0    30  11.6   13.8   r1-merge,r1-red2
+split-6-r3     split:6     187.7    173.2 a:0 b0:0 b1:1 b2:0 b3:0 b4:1 b5:0  1046     2    30  18.7   27.2   r1-merge
+    FAIL engine TestAngleP10 (28.1 s): test.go:492: lone user, 16 streams: 9.95 Mbit/s of 10 |     angle_test.go:506: 1 stream 4.94, 16 streams 5.00, total 9.94 Mbit/s |     angle_test.go:536: existing bulk in the new user's first second: 3.25 Mbit/s (0.649 of its floor) |     angle_test.go:538: the existing bulk user got 0.649 of its floor in the new user's first second, want >= 0.9 of what the new user's latency credit leaves (0.758)
+    FAIL engine TestSessionGatesASlowLink (0.8 s):     sendgate_test.go:218: unsent at most 45056 B, 464941 B written in 0.5 s |     sendgate_test.go:220: the session's socket held 45056 B unsent, want under 16 KiB and a burst
+== median wall by mode (s):  p1 1054 [1045..1064] n=3  p4 944 [940..950] n=3  p8 940 [936..946] n=3  split:3 360 [360..362] n=3  split:6 188 [186..189] n=3  fuzz:serial 629 [629..629] n=1  fuzz:par 245 [244..245] n=2

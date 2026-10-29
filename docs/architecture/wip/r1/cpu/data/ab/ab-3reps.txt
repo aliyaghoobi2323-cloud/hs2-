@@ -1,0 +1,27 @@
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 DUR=30
+   lone user               A   89.44 [89.29..90.15]  B   89.84 [89.41..90.14]  C   89.51 [89.33..90.42]  D   89.44 [89.44..89.44]  dB +0.40 (tol 0.89) ok  dC +0.06 (tol 1.09) ok  dD +0.00 (tol 0.89) ok
+   probe p99-floor         A   11.00 [11.00..11.00]  B   11.00 [10.90..11.00]  C   10.80 [10.80..10.90]  D   10.90 [10.90..10.90]  dB +0.00 (tol 1.00) ok  dC -0.20 (tol 1.00) ok  dD -0.10 (tol 1.00) ok
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30
+   1-conn user             A   42.82 [42.74..42.84]  B   42.71 [42.63..43.07]  C   42.87 [42.41..42.90]  D   42.93 [42.53..43.32]  dB -0.11 (tol 0.44) ok  dC +0.06 (tol 0.49) ok  dD +0.11 (tol 0.78) ok
+   total dn                A   89.45 [89.42..89.51]  B   89.52 [89.45..90.38]  C   90.30 [89.48..90.36]  D   89.79 [89.21..90.37]  dB +0.06 (tol 0.92) ok  dC +0.85 (tol 0.89) ok  dD +0.34 (tol 1.16) ok
+   probe p99-floor         A   10.90 [10.90..10.90]  B   11.00 [11.00..11.00]  C   10.90 [10.80..11.00]  D   10.95 [10.90..11.00]  dB +0.10 (tol 1.00) ok  dC +0.00 (tol 1.00) ok  dD +0.05 (tol 1.00) ok
+== N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30
+   TUN dn                  A   78.27 [76.69..79.31]  B   78.14 [78.10..78.45]  C   78.32 [77.92..78.77]  D   78.99 [78.99..78.99]  dB -0.13 (tol 2.62) ok  dC +0.05 (tol 2.62) ok  dD +0.72 (tol 2.62) ok
+   TUN ping p99-floor      A    0.90 [0.80..0.90]  B    1.30 [0.70..1.70]  C    1.00 [1.00..1.20]  D    1.30 [1.30..1.30]  dB +0.40 (tol 1.00) ok  dC +0.10 (tol 1.00) ok  dD +0.40 (tol 1.00) ok
+   probe p99-floor         A   10.50 [10.50..10.60]  B   10.50 [10.50..10.50]  C   10.60 [10.50..10.60]  D   10.40 [10.40..10.40]  dB +0.00 (tol 1.00) ok  dC +0.10 (tol 1.00) ok  dD -0.10 (tol 1.00) ok
+== N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30
+   1-conn user             A    2.25 [2.23..8.21]  B    1.96 [1.55..6.77]  C    1.73 [1.51..9.20]  D    1.70 [1.70..1.70]  dB -0.30 (tol 5.98) ok  dC -0.53 (tol 7.69) ok  dD -0.55 (tol 5.98) ok
+   total dn                A   83.94 [77.27..85.53]  B   85.10 [80.66..85.13]  C   85.43 [76.78..85.48]  D   85.17 [85.17..85.17]  dB +1.16 (tol 8.26) ok  dC +1.49 (tol 8.70) ok  dD +1.23 (tol 8.26) ok
+   probe p99-floor         A   10.60 [10.60..10.60]  B   10.60 [10.40..10.60]  C   10.50 [10.40..10.60]  D   10.50 [10.50..10.50]  dB +0.00 (tol 1.00) ok  dC -0.10 (tol 1.00) ok  dD -0.10 (tol 1.00) ok
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20
+   heavy mean              A    3.48 [3.46..3.52]  B    3.53 [3.53..3.53]  C    3.52 [3.48..3.53]  D    3.47 [3.46..3.49]  dB +0.05 (tol 0.06) ok  dC +0.04 (tol 0.06) ok  dD -0.01 (tol 0.06) ok
+   game dn p99-floor       A    6.03 [5.97..6.24]  B    5.72 [5.62..6.06]  C    6.06 [5.81..6.19]  D    6.11 [5.97..6.26]  dB -0.31 (tol 1.00) ok  dC +0.03 (tol 1.00) ok  dD +0.08 (tol 1.00) ok
+   game up p99-floor       A    5.83 [4.84..5.97]  B    5.96 [5.95..5.98]  C    5.98 [5.93..6.00]  D    6.05 [6.04..6.07]  dB +0.13 (tol 1.13) ok  dC +0.15 (tol 1.13) ok  dD +0.22 (tol 1.13) ok
+   gameudp dn p99-floor    A    5.87 [5.83..6.19]  B    5.88 [5.85..6.09]  C    5.96 [5.79..5.97]  D    5.73 [5.60..5.85]  dB +0.01 (tol 1.00) ok  dC +0.09 (tol 1.00) ok  dD -0.14 (tol 1.00) ok
+   gameudp up p99-floor    A    5.77 [5.70..5.99]  B    5.97 [5.81..6.01]  C    5.89 [5.75..5.97]  D    5.88 [5.71..6.06]  dB +0.20 (tol 1.00) ok  dC +0.12 (tol 1.00) ok  dD +0.11 (tol 1.00) ok
+== CPU in the measuring window (mean of runs, %): busy rig CPUs / other CPUs, softirq rig / other, steal, host
+   A  rig 22.7  other 22.4  softirq 6.5 / 5.7  steal 0.00  host 22.6  (15 runs)
+   B  rig 30.8  other 99.1  softirq 7.4 / 1.1  steal 0.00  host 66.4  (15 runs)
+   C  rig 30.9  other 99.4  softirq 7.5 / 1.1  steal 0.00  host 66.5  (15 runs)
+   D  rig 26.8  other 12.6  softirq 7.4 / 3.2  steal 0.00  host 19.6  (7 runs)
+== verdict: B vs A: PASS  C vs A: PASS  D vs A: PASS
