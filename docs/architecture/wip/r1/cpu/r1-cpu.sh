@@ -13,18 +13,18 @@
 #   nice 19, I/O class idle
 # Nothing outside the scope changes. The rig blocks run on the other cores
 # (run.sh RIG_CPUS=0-5). Environment, working directory and exit status are
-# the command's own. R1CPU_UNIT=NAME names the scope NAME.scope (systemctl
-# freeze/thaw/stop NAME.scope acts on exactly these processes). Without
-# systemd (R1CPU_NOSCOPE=1, or systemd-run failing its probe) it falls back
-# to taskset + nice + ionice (no weight).
+# the command's own. The scope is named r1cpu-PID.scope (R1CPU_UNIT=NAME:
+# NAME.scope), so every test job on the host can be paused at once, e.g. for
+# a field measurement, and let go after it:
+#   systemctl freeze 'r1cpu-*.scope'   ...   systemctl thaw 'r1cpu-*.scope'
+# Without systemd (R1CPU_NOSCOPE=1, or systemd-run failing its probe) it
+# falls back to taskset + nice + ionice (no weight, no scope).
 set -u
 [ $# -gt 0 ] || { echo "usage: r1-cpu.sh CMD [ARGS...]" >&2; exit 2; }
 CPUS=${TEST_CPUS:-6-11}
 W=${CPU_WEIGHT:-20}
 props=(-p "AllowedCPUs=$CPUS" -p "CPUWeight=$W" -p IOWeight=10)
 if [ -z "${R1CPU_NOSCOPE:-}" ] && systemd-run --scope --quiet --collect "${props[@]}" true 2>/dev/null; then
-  unit=()
-  [ -n "${R1CPU_UNIT:-}" ] && unit=(--unit="$R1CPU_UNIT")
-  exec systemd-run --scope --quiet --collect "${unit[@]}" "${props[@]}" --nice=19 -- ionice -c3 "$@"
+  exec systemd-run --scope --quiet --collect --unit="${R1CPU_UNIT:-r1cpu-$$}" "${props[@]}" --nice=19 -- ionice -c3 "$@"
 fi
 exec taskset -c "$CPUS" nice -n 19 ionice -c3 "$@"
