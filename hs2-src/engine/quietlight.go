@@ -47,8 +47,11 @@ import (
 // for good; on the light link at once if that one is up (it moves to a
 // general one once one is back).
 
-// QuietLight (HS2_TUNE_QUIET_LIGHT; 0: off): the light QUIET links of a
-// pool of up to quietLightMax links (1).
+// QuietLight (HS2_TUNE_QUIET_LIGHT; 0: off): 1, a pool of up to
+// quietLightMax links keeps one QUIET link more, the light one; 2, besides,
+// a larger pool makes one of its QuietMany QUIET links the light one (no
+// link more: past quietLightMax the pool has more connections than the DPI
+// model's population already, and four QUIET flows at the bottleneck).
 var QuietLight = newTuneInt(0)
 
 // QuietWaitMs (HS2_TUNE_QUIET_WAIT, ms; 0: none): how long a new connection
@@ -83,7 +86,7 @@ const (
 
 // quietLightOn says whether the pool keeps a light QUIET link.
 func (q *quietSet) quietLightOn() bool {
-	return q != nil && QuietLight.Get() > 0 && q.m.max <= quietLightMax && !QuietOff()
+	return q != nil && !QuietOff() && (QuietLight.Get() == 1 && q.m.max <= quietLightMax || QuietLight.Get() >= 2)
 }
 
 // lightCount is the light QUIET links QuietCount adds to a pool of maxLinks.
