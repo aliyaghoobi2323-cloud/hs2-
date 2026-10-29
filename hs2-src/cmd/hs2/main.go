@@ -422,6 +422,9 @@ func applyTuning() {
 	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
 	num("HS2_TUNE_HQG_QUIET_SEGS", &engine.HQGQuietSegs)
 	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
+	// the R1 review, part A: a TLS 1.2 session without the extended master
+	// secret (no channel binding) gets the website, not a close (0: closed)
+	num("HS2_TUNE_PROBE_NOEKM", &tlscarrier.ProbeNoEKM)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}
