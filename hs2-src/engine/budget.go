@@ -465,6 +465,76 @@ type linkBudget struct {
 	// the runner's: acked and received at the reading before
 	ack0, rx0 uint64
 	at0       time.Duration
+	// loss: the socket's random-loss record (BudgetLossPpm)
+	loss budgetLoss
+}
+
+// BudgetLossPpm (HS2_TUNE_BUDGET_LOSS, resent per million sent; 0: off; R1
+// round 5): while a BULK link socket resends at least this share of what
+// it sends (over budgetLossWin), the path loses packets at random and the
+// budget is lifted (its gate open, no pacing of its own; C4-lite's cap
+// stays). On a fq_codel bottleneck a BULK link held at its target (2.5 ms,
+// under CoDel's 5) sees no drop of its own, so its resends are the path's.
+// Under random loss the budget read the reverse direction's queue as its
+// own: in the home mix at N=1 one BULK link carries the downloads and the
+// uploads both ways, and the downloads' acks wait in the uplink behind the
+// uploads; S (srtt − min_rtt) 8 to 9 ms against the guess's 2.5 for the way
+// back, so the exit cut its downloads to 16 to 19 Mbit/s at 0.3 % random
+// loss (35 to 78 at 0.1 %), where production's one link carried 78 (round
+// 5's screen S4; with the budget off, 86).
+var BudgetLossPpm = 0
+
+const (
+	budgetLossWin  = 10 // readings of a second the share is over
+	budgetLossMin  = 3  // resends in the window, at least
+	budgetLossCalm = 30 * time.Second
+)
+
+// budgetLoss is a BULK socket's random-loss record (one reading a second).
+type budgetLoss struct {
+	at        time.Duration
+	retr      [budgetLossWin + 1]uint64
+	segs      [budgetLossWin + 1]uint32
+	n, i      int
+	on        bool
+	lossyAt   time.Duration
+	ons, offs uint64
+}
+
+// note takes the socket's counters at now and says whether the path is
+// lossy (BudgetLossPpm).
+func (l *budgetLoss) note(now time.Duration, ts tcpStat) bool {
+	if BudgetLossPpm <= 0 {
+		l.on = false
+		return false
+	}
+	if l.n > 0 && now-l.at < time.Second {
+		return l.on
+	}
+	l.at = now
+	l.i = (l.i + 1) % len(l.retr)
+	l.retr[l.i], l.segs[l.i] = ts.retrans, ts.segsOut
+	if l.n < len(l.retr) {
+		l.n++
+	}
+	if l.n < 2 {
+		return l.on
+	}
+	old := (l.i + len(l.retr) - (l.n - 1)) % len(l.retr)
+	dr := l.retr[l.i] - min(l.retr[l.i], l.retr[old])
+	ds := uint64(l.segs[l.i] - l.segs[old])
+	lossy := ds > 0 && dr >= budgetLossMin && dr*1_000_000 >= uint64(BudgetLossPpm)*ds
+	switch {
+	case lossy:
+		if !l.on {
+			l.ons++
+		}
+		l.on, l.lossyAt = true, now
+	case l.on && now-l.lossyAt >= budgetLossCalm:
+		l.on = false
+		l.offs++
+	}
+	return l.on
 }
 
 // newLinkBudget is the budget of a socket read by outq (nil: none).
@@ -520,6 +590,9 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 		}
 	}
 	lb.ack0, lb.rx0, lb.at0 = ts.bytesAcked, ts.bytesReceived, now
+	if lb.loss.note(now, ts) {
+		on = false // random loss on the path: the budget lifted (BudgetLossPpm)
+	}
 	in := budgetIn{Now: now, On: on, Delivery: float64(ts.deliveryRate), SRTT: usDur(uint64(ts.rtt)),
 		MinRTT: usDur(uint64(ts.minRTT)), TxRate: tx, RxRate: rx, Blocked: lb.blocked.Swap(false),
 		MSS: int(ts.sndMSS), Frame: BulkFrameSize(dlvMax), DlvMax: dlvMax}
@@ -559,7 +632,19 @@ func (lb *linkBudget) line(n int) string {
 	}
 	return fmt.Sprintf("budget link %d: %s %s, B %.0f KiB (in flight at most %.0f KiB), queue %.1f ms (srtt-min %.1f, way back %.1f, target %.1f), delivery %.1f Mbit/s, cuts %d, grows %d, room %d, gate waits %d (%.0f ms)",
 		n, c.mode, way, float64(lb.b.Load())/1024, float64(lb.outqMax.Swap(0))/1024, msOf(c.q), msOf(c.s), msOf(c.qRev),
-		msOf(budgetTarget()), c.d*8/1e6, c.cuts, c.grows, c.rooms, lb.held.Swap(0), float64(lb.waitNs.Swap(0))/1e6) + drainNote(c)
+		msOf(budgetTarget()), c.d*8/1e6, c.cuts, c.grows, c.rooms, lb.held.Swap(0), float64(lb.waitNs.Swap(0))/1e6) + drainNote(c) + budgetLossNote(&lb.loss)
+}
+
+// budgetLossNote is the budget line's word on random loss (BudgetLossPpm).
+func budgetLossNote(l *budgetLoss) string {
+	if BudgetLossPpm <= 0 {
+		return ""
+	}
+	st := "off"
+	if l.on {
+		st = "on: lifted"
+	}
+	return fmt.Sprintf("; random loss %s (lifted %d times, back %d)", st, l.ons, l.offs)
 }
 
 // drainNote is the budget line's drains (BudgetDrainMs), else nothing.
