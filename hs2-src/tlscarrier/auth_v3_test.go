@@ -372,7 +372,7 @@ func TestCarrierNegotiatedLevel(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("no tunnel")
 	}
-	if l := ProtocolLine(); l != "protocol: v3 level 2 (peer levels 1-2, caps 0x9B); refused v2 peers: 0, refused peers (level): 0" {
+	if l := ProtocolLine(); l != "protocol: v3 level 2 (peer levels 1-2, caps 0x29B); refused v2 peers: 0, refused peers (level): 0" {
 		t.Fatalf("status line %q", l)
 	}
 }
