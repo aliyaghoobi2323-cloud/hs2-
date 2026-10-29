@@ -1,0 +1,9 @@
+scenario erefuse:0.7; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.8 s after the first safe-apply
+outage 122.7 s (first failed probe to the first passing one after the last safe-apply); back 122.8 s after the last safe-apply
+longest run of failed probes 122.7 s; probes after the switch: 75 ok, 123 failed
+safe-apply e: REFUSED config-check <w>/backups/apply-20261029-155244-10036
+safe-apply x: REVERTED tunnel-not-back-in-120s <w>/backups/apply-20261029-155245-10089
+hs2-uge log: 27 lines (without tuning:) in 139 s
+hs2-ugx log: 34 lines (without tuning:) in 139 s

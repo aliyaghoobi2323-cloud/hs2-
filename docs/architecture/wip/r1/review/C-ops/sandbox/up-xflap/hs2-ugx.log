@@ -1,0 +1,53 @@
+15:50:21.074749 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:50:21.076850 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:50:21.077045 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:50:21.112025 tun ug0 up: 10.81.9.2/30 peer 10.81.9.1 (side channel)
+15:50:21.112300 stream exit (reverse): dynamic link pool 6–6 to edge 192.168.81.1:2096 (edge drives the count)
+15:50:21.112700 mtcp: exit pool starting 6 links (the edge sets the count once it is connected)
+15:50:21.416257 mtcp: exit link up to edge (slot 5; now 1)
+15:50:21.499352 mtcp: exit link up to edge (slot 0; now 2)
+15:50:21.566049 mtcp: exit link up to edge (slot 1; now 3)
+15:50:21.667059 mtcp: exit link up to edge (slot 2; now 4)
+15:50:21.755955 mtcp: exit link up to edge (slot 3; now 5)
+15:50:21.906454 mtcp: exit link up to edge (slot 4; now 6)
+15:50:25.113473 cpu: the server is saturated — 51% busy across 12 core(s) (softirq 2%), tasks waited for a core 44% of the last 10 s; hs2 itself uses 1% of one core. Every carrier now sends late however good the path is: other programs on this server (another tunnel?) or a bigger VPS are the fix, not the tunnel's settings
+15:50:27.787686 mtcp: exit link down (slot 0: read: closed by the other server; now 5); redial
+15:50:27.788069 mtcp: exit link down (slot 5: read: closed by the other server; now 4); redial
+15:50:27.788294 mtcp: exit link down (slot 1: read: closed by the other server; now 3); redial
+15:50:27.788396 mtcp: exit link down (slot 4: read: closed by the other server; now 2); redial
+15:50:27.788690 mtcp: exit link down (slot 3: read: closed by the other server; now 1); redial
+15:50:27.789404 mtcp: exit link down (slot 2: read: closed by the other server; now 0); redial
+15:50:28.596468 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:50:28.597055 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:50:28.597276 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:50:28.615359 tun ug0 up: 10.81.9.2/30 peer 10.81.9.1 (side channel)
+15:50:28.615571 stream exit (reverse): dynamic link pool 6–6 to edge 192.168.81.1:2096 (edge drives the count)
+15:50:28.616004 mtcp: exit pool starting 6 links (the edge sets the count once it is connected)
+15:50:28.843973 mtcp: exit link up to edge (slot 0; now 1)
+15:50:28.845357 mtcp: exit pool target 10 links (edge asked; was 6, 1 up)
+15:50:28.920845 mtcp: exit link up to edge (slot 4; now 2)
+15:50:28.962410 mtcp: exit link up to edge (slot 5; now 3)
+15:50:29.082923 mtcp: exit link up to edge (slot 1; now 4)
+15:50:29.210563 mtcp: exit link up to edge (slot 2; now 5)
+15:50:29.327719 mtcp: exit link up to edge (slot 3; now 6)
+15:50:29.461269 mtcp: exit link up to edge (slot 9; now 7)
+15:50:29.501786 mtcp: exit link up to edge (slot 6; now 8)
+15:50:32.617098 cpu: the server is saturated — 61% busy across 12 core(s) (softirq 3%), tasks waited for a core 46% of the last 10 s; hs2 itself uses 3% of one core. Every carrier now sends late however good the path is: other programs on this server (another tunnel?) or a bigger VPS are the fix, not the tunnel's settings
+15:50:38.844738 mtcp: +2 more exit links up in the last 10s (latest: exit link up to edge (slot 8; now 10))
+15:50:58.616147 l3: dropped 1 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected
+15:51:16.617627 cpu: the server has room again — 22% busy across 12 core(s) (softirq 3%), tasks waited for a core 11% of the last 10 s
+15:51:28.777220 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:51:28.777815 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:51:28.778053 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:51:28.791683 tun ug0 up: 10.81.9.2/30 peer 10.81.9.1 (side channel)
+15:51:28.791954 stream exit (reverse): dynamic link pool 6–6 to edge 192.168.81.1:2096 (edge drives the count)
+15:51:28.792367 mtcp: exit pool starting 6 links (the edge sets the count once it is connected)
+15:51:28.867722 mtcp: no link up to the edge — dials fail (dial tcp 192.168.81.1:2096: connect: connection refused); one slot keeps trying (every ≤2s), the other 5 wait for it
+15:51:29.231917 mtcp: a link to the edge is back after 364ms with none up (2 dial(s) failed meanwhile); the other slots redial now
+15:51:29.231939 mtcp: exit link up to edge (slot 3; now 1)
+15:51:29.358535 mtcp: exit link up to edge (slot 1; now 2)
+15:51:29.517164 mtcp: exit link up to edge (slot 0; now 3)
+15:51:29.643935 mtcp: exit link up to edge (slot 4; now 4)
+15:51:29.749886 mtcp: exit link up to edge (slot 5; now 5)
+15:51:29.847406 mtcp: exit link up to edge (slot 2; now 6)
+15:51:58.792777 l3: dropped 1 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected

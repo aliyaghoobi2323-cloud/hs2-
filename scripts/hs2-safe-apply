@@ -9,7 +9,9 @@
 #     --setenv=HS2_SAFE_UNIT=hs2 /usr/local/sbin/hs2-safe-apply STAGE
 #
 # STAGE (a directory) may hold any of:
-#   hs2          a new binary (installed as the hs2 binary once it runs `version`)
+#   hs2          a new binary (installed as the hs2 binary once it runs `version`;
+#                without a staged config, refused when its `hs2 check` fails the
+#                live config that the running binary passes)
 #   config.json  a new config for the tunnel (refused unless `hs2 check` passes it,
 #                run by the staged binary when there is one)
 #   dropin.conf  the test drop-in, <unit>.service.d/zz-test.conf; an empty file
@@ -85,10 +87,11 @@ if [ -z "$PEER" ]; then
 	[ -n "$PEER" ] || refuse no-peer-ip "the config has no peer_ip to ping: set HS2_SAFE_PEER"
 fi
 
-mkdir -p "$BK"
-cp -a "$BIN" "$BK/hs2"
-cp -a "$CFG" "$BK/config.json"
-[ -d "$DDIR" ] && cp -a "$DDIR" "$BK/dropins"
+# No change without a backup to put back: a revert from a missing one would
+# leave the new binary in place and the drop-ins gone.
+{ mkdir -p "$BK" && cp -a "$BIN" "$BK/hs2" && cp -a "$CFG" "$BK/config.json"; } ||
+	refuse backup "cannot back up $BIN and $CFG into $BK (disk full?)"
+if [ -d "$DDIR" ]; then cp -a "$DDIR" "$BK/dropins" || refuse backup "cannot back up $DDIR into $BK"; fi
 log "stage $STAGE; unit $UNIT; config $CFG; peer $PEER (wait ${PEERWAIT} s); backup in $BK"
 
 CHECK=$BIN
@@ -98,6 +101,14 @@ if [ -f "$STAGE/hs2" ]; then
 fi
 if [ -f "$STAGE/config.json" ]; then
 	"$CHECK" check -c "$STAGE/config.json" >>"$LOG" 2>&1 || refuse config-check "the staged config fails hs2 check"
+elif [ -f "$STAGE/hs2" ] && ! "$STAGE/hs2" check -c "$CFG" >>"$LOG" 2>&1; then
+	# A new binary on the live config: a config the running binary passes and
+	# the new one fails would not start, or would run without what the new
+	# one refuses — so nothing is applied. A config both fail is the one that
+	# runs today: go on.
+	"$BIN" check -c "$CFG" >/dev/null 2>&1 &&
+		refuse config-check-new "the staged binary's hs2 check fails the live config $CFG, which the running binary passes"
+	log "the live config fails hs2 check with the running binary too (it runs so today): going on"
 fi
 
 [ -f "$STAGE/hs2" ] && install -m 755 "$STAGE/hs2" "$BIN.new" && mv -f "$BIN.new" "$BIN"

@@ -1,0 +1,6 @@
+2026-10-29T15:50:28.371 stage <w>/stage-x; unit hs2-ugx; config <w>/exit.json; peer 10.81.9.1 (wait 120 s); backup in <w>/backups/apply-20261029-155028-6460
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build c0111e0c9bb3 2026-10-29]
+config OK
+2026-10-29T15:50:28.416 applied; restarting hs2-ugx (build c0111e0c9bb3; env: )
+2026-10-29T15:51:28.609 REVERTING: hs2-not-up(state=active,restarts=1-was-0) (60 s after the restart)
+2026-10-29T15:51:30.871 after revert: tunnel back in 2 s

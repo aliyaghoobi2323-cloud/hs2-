@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -67,20 +68,26 @@ func TestMain(m *testing.M) {
 			os.Exit(1)
 		}
 	}
-	// A network namespace does not isolate the filesystem: the echo guard's
-	// markers (echoguard_linux.go, /run/hs2/icmp-echo-ignore on a server) go
-	// to a folder of this run, so no test writes into the host's /run/hs2
-	// (the installer's sandbox tests watch that folder; a concurrent
-	// go test ./... made install_link_test.sh see it change).
-	dir, err := os.MkdirTemp("", "hs2-encap-echomark-")
+	// Only the network namespace is private: the files are the host's. The
+	// markers of the global ping fallback (echoMarkDir, /run/hs2/icmp-echo-ignore,
+	// where a production tunnel keeps its own) stay in a temp directory of the
+	// tests' (the R1 review, part C: the tests made and changed the host's).
+	markDir, err := os.MkdirTemp("", "hs2-echomark-")
 	if err != nil {
-		os.Stderr.WriteString("encap tests: a folder for the echo-guard markers: " + err.Error() + "\n")
+		os.Stderr.WriteString("encap tests: a temp dir for the echo markers: " + err.Error() + "\n")
 		os.Exit(1)
 	}
-	echoMarkDir = filepath.Join(dir, "icmp-echo-ignore")
+	echoMarkDir = markDir
 	code := m.Run()
-	os.RemoveAll(dir)
+	os.RemoveAll(markDir)
 	os.Exit(code)
+}
+
+// The tests never keep echo markers in the host's /run/hs2 (TestMain).
+func TestEchoMarkersOffTheHost(t *testing.T) {
+	if strings.HasPrefix(filepath.Clean(echoMarkDir), "/run/hs2") {
+		t.Fatalf("echoMarkDir %q is the host's: a test would make and remove markers there", echoMarkDir)
+	}
 }
 
 // inPrivateNetns reports whether this process runs in the private namespace

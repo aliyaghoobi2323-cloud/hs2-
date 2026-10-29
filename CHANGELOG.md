@@ -2806,6 +2806,24 @@ merge-prep branch:
   default 10); `make race`, `make test386`, `make release` (static linux
   amd64, 386 and arm64, `-trimpath -ldflags="-s -w"` as BUILD.md's release
   build, with `SHA256SUMS`).
+- **Wire, and the upgrade (the R1 review, part C).** R1 speaks wire v3 (level
+  2); the build before it (production, `1c23629533c9`) speaks v2, and the two
+  refuse each other — one `hs2 v3 (…)` version line for both, told apart by
+  the build stamp. Both servers switch in one window, the listening side first
+  and the dialing side right after it (a refused dialer waits 8 s, doubling to
+  60 s): for a reverse tunnel Iran, then Kharej. The red team's second pass
+  measured Kharej first, Iran 30 s later: 35 s down; the review's sandbox run
+  of the runbook (`docs/architecture/wip/r1/review/RUNBOOK.fa.md`), Iran first
+  and Kharej 0.7 s later: about a second. The README's *R1 switches* has it,
+  and the switches the red team's second pass added (`_TWOWAY_RATIO` = 16,
+  `_OWD_IDLE`, `_UDP_FLOWS` = 4096, `_UDP_USER_FLOWS` = 256,
+  `_QUIET_FOLLOW_GRACE` = 5 s) and the field's (`_QUIET_FOLLOW`, `_QUIET_CC`,
+  `_QUIET_FEW` = 1, `_QUIET_MANY` = 4: a pool past 5 links holds
+  `max_links` + 4 connections, not + 2).
+- **hs2-safe-apply** checks a staged binary on the live config first: a config
+  the running binary passes and the new one fails is refused before anything
+  moves (`REFUSED config-check-new`); and nothing changes without a full
+  backup to put back (`REFUSED backup`).
 
 ## Verification, every phase
 

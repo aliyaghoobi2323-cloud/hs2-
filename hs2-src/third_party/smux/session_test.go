@@ -17,9 +17,11 @@ import (
 	"time"
 )
 
+// The profiles of a test run, on loopback only: the tests run on the
+// tunnel's own servers, where 0.0.0.0 put an open pprof port on the public
+// address for the whole run (the R1 review, part C).
 func init() {
 	go func() {
-		// loopback only: a test never opens a port on the host's public addresses
 		log.Println(http.ListenAndServe("127.0.0.1:6060", nil))
 	}()
 }
