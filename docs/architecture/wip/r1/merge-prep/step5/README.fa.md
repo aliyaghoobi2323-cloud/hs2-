@@ -82,8 +82,39 @@ cd /root/rprep/tools && apt-get download qemu-user-static && dpkg -x qemu-user-s
 
 | بند | نتیجه |
 |---|---|
-| **arm7** | خروج **۲**: ساخته شد، ولی اجرا نشد. باینری ایستای `hs2-linux-armv7` ۱۲٫۵ MB است (sha256 در `e1a1f1e`: `79e7cb49086832e949b17e0d8a51261719a4a835f70512a4a56f5928a073e1f4`). پنج باینری آزمون arm7 ساخته شد (engine ۲۱ MB، tlscarrier، core، cmd/hs2، smux). اجرای زیر qemu-user انجام نشد، چون qemu-user نیست (بالا). |
+| **arm7** | با qemu-arm-static 8.2.2 سبز (بخش «نتیجهٔ arm7» پایین). پیش‌تر، بی qemu، خروج ۲ بود. ساخت باینری ایستای `hs2-linux-armv7` و پنج باینری آزمون arm7 سبز بود. |
 | **fuzz** | خروج **۰**: هر ده هدف ۶۰ ثانیه، همه سبز، بی هیچ ورودی شکست‌دار. شمار اجراها در ۶۰ ثانیه: `FuzzSessionRecv` ۱٫۸۶ میلیون، `FuzzFlowKey` ۱٫۳۱ میلیون، `FuzzFlowKeyRev` ۱٫۳۱ میلیون، `FuzzOWDDecode` ۱٫۳۵ میلیون، `FuzzHintDecode` ۵۱ هزار، `FuzzProxyHeader` ۶۷۹ هزار، `FuzzParseClientAuth` ۱٫۹۸ میلیون، `FuzzParseTunDesc` ۲٫۲۸ میلیون، `FuzzDecodeLink` ۱٫۹۹ میلیون، `FuzzGroupReassembly` ۱٫۲۵ و ۱٫۱۹ میلیون (دو اجرا). اجرای کل اسکریپت با `FUZZTIME=5s` روی هر ده هدف هم سبز بود. |
 | **هسته** | خروج **۰**: روی 6.8، `kprobe` همه را دارد (`TCP_INFO` ۲۴۸ بایت، نیاز ۲۲۸). ۱۷ آزمون هسته‌ای engine و یکی در tun سبزند. بستهٔ ۳۷ MB برای هستهٔ ۵٫۱۰ آماده است. مهمان ۵٫۱۰ نبود. |
 
-**مانده برای اجرای کامل در ادغام نهایی:** فقط دریافت بستهٔ `qemu-user-static` (بالا، ۱۴٫۷ MB)، با تأیید صاحب پروژه، برای مرحلهٔ ۳ arm7. تا آن موقع `arm7.sh` با خروج ۲ تمام می‌شود و همین را در پروندهٔ نتیجه می‌نویسد. ماتریس هسته با تصمیم بالا بسته است.
+**بسته شد:** سرپرست، با تأیید صاحب پروژه در گفت‌وگوی خودش، بستهٔ `qemu-user-static` را دریافت کرد (۱۴٬۷۰۹٬۸۵۸ بایت، sha256 `5bb397f66063efa349f6fd5cb3b68cd96f29edd0994e4ba5115cf0859a716bf0`). بسته فقط با `dpkg -x` در `/root/rprep/tools/qemu` باز شد: نه نصبی، نه ثبت binfmt. ماتریس هسته هم با تصمیم بالا بسته است.
+
+## نتیجهٔ arm7 زیر qemu-arm-static (`60d67e9`، ۲۸ اکتبر، فاصله‌های قفل)
+
+کد آزمون‌شده همان `60d67e9` است، با `GOARCH=arm GOARM=7` و `-test.short`. فاصله‌های بلوک‌های داور دور ۴ ~۲٫۵ دقیقه بود، پس بسته‌ها یکی‌یکی اجرا شدند و smux در دو نیمه. هر اجرای بریده‌شده با قفل دوباره انجام شد. پرونده‌های نتیجه: `/root/rprep/step5/arm7-60d67e9-*.txt`.
+
+| بسته | سبز | سرخ | کنار رفته | جدا اجرا شد (محدودیت qemu-user، شمرده نشد) |
+|---|---|---|---|---|
+| engine (هسته‌های R1، `ARM7_RUN`) | ۱۴۶ | ۰ | ۶ | ۱۷ آزمون هسته‌ای: ۱۱ سبز، ۶ سرخ به علت qemu-user |
+| tlscarrier | ۲۹ | ۰ | ۰ | — |
+| core | ۱۵ | ۰ | ۰ | — |
+| cmd/hs2 | ۱۰۰ | ۰ | ۰ | ۲: `TestCPUMeter` و `TestLinkNoNetworkNoLog` |
+| smux (دو نیمه) | ۱۳۲ | ۰ | ۱ | — |
+
+**علت کنار رفتن‌ها:** همه علت خود آزمون است، و بومی هم همین‌طور است.
+- engine با `-short`:
+  - لینک شبیه‌سازی‌شده: `TestAngleClassesAndStatusLines`، `TestAngleTunPingAheadOfBulk`، `TestHintCallStays`، `TestQuietMovedWindowGrows`؛
+  - آهنگ زمان واقعی: `TestControlPingCadence`، `TestControlWaitShowsUnansweredPing`.
+- smux: `TestRed2ChaosMoreSeeds` فقط با `HS2_RED2_SEEDS` اجرا می‌شود.
+
+**چرا آزمون‌های جدا زیر qemu-user شکست می‌خورند:** این آزمون‌ها با هسته یا خود پردازه سروکار دارند. qemu-user این‌ها را به مهمان ۳۲ بیتی نمی‌دهد:
+- از `TCP_INFO` فقط بخش کوتاهی را برمی‌گرداند:
+  - `TestSendCapLinuxTCPInfo`: «dlvOK false mss 0»؛
+  - `TestWcoreFixOooSupportByLength`: «short of rcv_ooopack»؛
+  - `TestServeStatsExtendedFromSocket`: رکورد صفر؛
+  - `TestLowatAdaptsLinux`: بی نرخ تحویل، کم‌آب یک تیک دیرتر (۶۵۰ در برابر ۶۰۰ms).
+- `SIOCOUTQNSD` را ندارد: `TestHostQLinuxSocket`، «inappropriate ioctl for device».
+- `SO_MAX_PACING_RATE` را ۴۲۹۴۹۶۷۲۹۵ برمی‌گرداند: `TestPaceNetSetsSocket`.
+- `/proc/self/stat` را ساختگی و با زمان پردازندهٔ صفر می‌دهد: `TestCPUMeter`.
+- `TestLinkNoNetworkNoLog` باینری خودش را دوباره اجرا می‌کند. این باینری ARM است و اینجا عمداً binfmt ثبت نشده است.
+
+همهٔ این‌ها بومی سبزند (`kernel.sh` و آزمون کامل روی 6.8). در خود این اجرا هم پیداست که کد درست به راه جایگزینش رفت: نگهبان C3 خط «the kernel lacks … SIOCOUTQNSD» را نوشت و به کم‌آب ثابت و دروازهٔ قدیم برگشت. C4-lite هم خط «lacks tcpi_delivery_rate» را نوشت و سقف نگذاشت. **هیچ شکست واقعی‌ای در arm7 نیست.**
