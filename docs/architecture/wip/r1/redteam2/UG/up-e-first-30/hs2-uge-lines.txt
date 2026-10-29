@@ -1,0 +1,22 @@
+11:41:47.405731 link pool: ceiling 8 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+11:41:47.421990 stream edge (reverse): listening for kharej links on 192.168.81.1:2096
+11:41:48.261354 mtcp: reverse link 0 up from 192.168.81.2 (now 1)
+11:41:48.261882 mtcp: reverse link 1 up from 192.168.81.2 (now 2)
+11:41:48.287892 mtcp: reverse link 2 up from 192.168.81.2 (now 3)
+11:41:48.380767 mtcp: reverse link 3 up from 192.168.81.2 (now 4)
+11:41:48.476311 mtcp: reverse link 4 up from 192.168.81.2 (now 5)
+11:41:48.576887 mtcp: reverse link 5 up from 192.168.81.2 (now 6)
+11:41:48.669172 mtcp: reverse link 6 up from 192.168.81.2 (now 7)
+11:41:48.808573 mtcp: reverse link 7 up from 192.168.81.2 (now 8)
+11:41:54.829136 link pool: ceiling 8 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 12 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+11:41:54.856412 stream edge (reverse): listening for kharej links on 192.168.81.1:2096
+11:41:55.428992 peer runs protocol v2; upgrade both servers
+11:42:25.094322 mtcp: QUIET link q0 up from 192.168.81.2 (now 1 QUIET)
+11:42:25.205499 mtcp: QUIET link q1 up from 192.168.81.2 (now 2 QUIET)
+11:42:25.279495 mtcp: QUIET link q2 up from 192.168.81.2 (now 3 QUIET)
+11:42:25.322602 mtcp: QUIET link q3 up from 192.168.81.2 (now 4 QUIET)
+11:42:25.457245 mtcp: reverse link 0 up from 192.168.81.2 (now 1)
+11:42:25.521206 mtcp: reverse link 1 up from 192.168.81.2 (now 2)
+11:42:25.608689 mtcp: reverse link 2 up from 192.168.81.2 (now 3)
+11:42:25.729101 mtcp: reverse link 3 up from 192.168.81.2 (now 4)
+11:42:35.095134 mtcp: +4 more links up in the last 10s (latest: reverse link 7 up from 192.168.81.2 (now 8))
