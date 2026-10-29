@@ -1,0 +1,25 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.622s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/core	0.078s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/encap	29.104s
+2026/10/29 17:17:42 events in the last minute: udp late drops 0, owd dirty 0, budget cuts 0, quiet records saved 321 of 443 writes, moved to bulk 6 (back 0), tun flows 0, attached at the exit 6, move hints heard 0 sent 0
+2026/10/29 17:18:42 events in the last minute: udp late drops 0, owd dirty 0, budget cuts 0, quiet records saved 184 of 394 writes, moved to bulk -4 (back 0), tun flows 1, attached at the exit 2, move hints heard 0 sent 0
+2026/10/29 17:19:42 events in the last minute: udp late drops 5, owd dirty 0, budget cuts 0, quiet records saved 0 of 0 writes, moved to bulk 0 (back 0), tun flows 2, attached at the exit 1, move hints heard 0 sent 7
+--- FAIL: TestRed2OWDIdleParks (17.64s)
+    red_r1p2_test.go:111: OWDIdle 0: idle 3.5 s, 7 messages; 2 s with the stale rate of an ended download, 151
+    red_r1p2_test.go:153: first message both ways 31ms after the traffic; 39 messages in the last 2 s of 3 s busy; 1 in the 2 s after parking (parks 2, 2)
+    red_r1p2_test.go:159: idle again: 1 messages after parking
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	964.760s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/fec	1.382s
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/dglab	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netem	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netsim	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/probe	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/mmsg	[no test files]
+?   	github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs	[no test files]
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/reality	0.335s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	2.593s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	0.134s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tune	0.012s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier	68.781s
+FAIL
