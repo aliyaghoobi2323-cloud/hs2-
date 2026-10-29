@@ -1,0 +1,119 @@
+10:22:18 rep 1 cell 1 cond A load frozen start
+10:23:00 rep 1 cell 1 cond A done rc 0
+10:23:00 rep 1 cell 1 cond B load running start
+10:23:42 rep 1 cell 1 cond B done rc 0
+10:23:42 rep 1 cell 1 cond C load running start
+10:24:24 rep 1 cell 1 cond C done rc 0
+10:24:24 rep 1 cell 2 cond A load frozen start
+10:25:06 rep 1 cell 2 cond A done rc 0
+10:25:06 rep 1 cell 2 cond B load running start
+10:25:48 rep 1 cell 2 cond B done rc 0
+10:25:48 rep 1 cell 2 cond C load running start
+10:26:30 rep 1 cell 2 cond C done rc 0
+10:26:30 rep 1 cell 3 cond A load frozen start
+10:27:12 rep 1 cell 3 cond A done rc 0
+10:27:12 rep 1 cell 3 cond B load running start
+10:27:55 rep 1 cell 3 cond B done rc 0
+10:27:55 rep 1 cell 3 cond C load running start
+10:28:37 rep 1 cell 3 cond C done rc 0
+10:28:37 rep 1 cell 4 cond A load frozen start
+10:29:25 rep 1 cell 4 cond A done rc 0
+10:29:25 rep 1 cell 4 cond B load running start
+10:30:13 rep 1 cell 4 cond B done rc 0
+10:30:13 rep 1 cell 4 cond C load running start
+10:31:01 rep 1 cell 4 cond C done rc 0
+10:31:01 rep 1 cell 5 cond A load frozen start
+10:31:38 rep 1 cell 5 cond A done rc 0
+10:31:38 rep 1 cell 5 cond B load running start
+10:32:16 rep 1 cell 5 cond B done rc 0
+10:32:16 rep 1 cell 5 cond C load running start
+10:32:53 rep 1 cell 5 cond C done rc 0
+10:32:53 rep 2 cell 1 cond B load running start
+10:33:36 rep 2 cell 1 cond B done rc 0
+10:33:36 rep 2 cell 1 cond C load running start
+10:34:18 rep 2 cell 1 cond C done rc 0
+10:34:18 rep 2 cell 1 cond A load frozen start
+10:34:59 rep 2 cell 1 cond A done rc 0
+10:34:59 rep 2 cell 2 cond B load running start
+10:35:42 rep 2 cell 2 cond B done rc 0
+10:35:42 rep 2 cell 2 cond C load running start
+10:36:24 rep 2 cell 2 cond C done rc 0
+10:36:24 rep 2 cell 2 cond A load frozen start
+10:37:05 rep 2 cell 2 cond A done rc 0
+10:37:05 rep 2 cell 3 cond B load running start
+10:37:49 rep 2 cell 3 cond B done rc 0
+10:37:49 rep 2 cell 3 cond C load running start
+10:38:31 rep 2 cell 3 cond C done rc 0
+10:38:31 rep 2 cell 3 cond A load frozen start
+10:39:13 rep 2 cell 3 cond A done rc 0
+10:39:13 rep 2 cell 4 cond B load running start
+10:40:02 rep 2 cell 4 cond B done rc 0
+10:40:02 rep 2 cell 4 cond C load running start
+10:40:50 rep 2 cell 4 cond C done rc 0
+10:40:50 rep 2 cell 4 cond A load frozen start
+10:41:38 rep 2 cell 4 cond A done rc 0
+10:41:38 rep 2 cell 5 cond B load running start
+10:42:16 rep 2 cell 5 cond B done rc 0
+10:42:16 rep 2 cell 5 cond C load running start
+10:42:53 rep 2 cell 5 cond C done rc 0
+10:42:53 rep 2 cell 5 cond A load frozen start
+10:43:29 rep 2 cell 5 cond A done rc 0
+10:43:29 end (load frozen)
+11:17:40 rep 3 cell a61cae17 cond C load running run 3 start
+11:18:22 rep 3 cell a61cae17 cond C done rc 0
+11:18:22 rep 3 cell a61cae17 cond D load frozen run 1 start
+11:19:05 rep 3 cell a61cae17 cond D done rc 0
+11:19:05 rep 3 cell a61cae17 cond A load frozen run 3 start
+11:19:46 rep 3 cell a61cae17 cond A done rc 0
+11:19:46 rep 3 cell a61cae17 cond B load running run 3 start
+11:20:29 rep 3 cell a61cae17 cond B done rc 0
+11:20:29 rep 3 cell cda8e133 cond C load running run 3 start
+11:21:11 rep 3 cell cda8e133 cond C done rc 0
+11:21:11 rep 3 cell cda8e133 cond D load frozen run 1 start
+11:21:54 rep 3 cell cda8e133 cond D done rc 0
+11:21:54 rep 3 cell cda8e133 cond A load frozen run 3 start
+11:22:35 rep 3 cell cda8e133 cond A done rc 0
+11:22:35 rep 3 cell cda8e133 cond B load running run 3 start
+11:23:18 rep 3 cell cda8e133 cond B done rc 0
+11:23:18 rep 3 cell 492381ce cond C load running run 3 start
+11:24:00 rep 3 cell 492381ce cond C done rc 0
+11:24:00 rep 3 cell 492381ce cond D load frozen run 1 start
+11:24:43 rep 3 cell 492381ce cond D done rc 0
+11:24:43 rep 3 cell 492381ce cond A load frozen run 3 start
+11:25:25 rep 3 cell 492381ce cond A done rc 0
+11:25:25 rep 3 cell 492381ce cond B load running run 3 start
+11:26:09 rep 3 cell 492381ce cond B done rc 0
+11:26:09 rep 3 cell b6c9aaca cond C load running run 3 start
+11:26:57 rep 3 cell b6c9aaca cond C done rc 0
+11:26:57 rep 3 cell b6c9aaca cond D load frozen run 1 start
+11:27:46 rep 3 cell b6c9aaca cond D done rc 0
+11:27:46 rep 3 cell b6c9aaca cond A load frozen run 3 start
+11:28:34 rep 3 cell b6c9aaca cond A done rc 0
+11:28:34 rep 3 cell b6c9aaca cond B load running run 3 start
+11:29:23 rep 3 cell b6c9aaca cond B done rc 0
+11:29:23 rep 3 cell 8ac1bf9d cond C load running run 3 start
+11:30:00 rep 3 cell 8ac1bf9d cond C done rc 0
+11:30:00 rep 3 cell 8ac1bf9d cond D load frozen run 1 start
+11:30:38 rep 3 cell 8ac1bf9d cond D done rc 0
+11:30:38 rep 3 cell 8ac1bf9d cond A load frozen run 3 start
+11:31:16 rep 3 cell 8ac1bf9d cond A done rc 0
+11:31:16 rep 3 cell 8ac1bf9d cond B load running run 3 start
+11:31:54 rep 3 cell 8ac1bf9d cond B done rc 0
+11:31:54 end (load frozen)
+11:31:54 rep 4 cell cda8e133 cond D load frozen run 2 start
+11:32:37 rep 4 cell cda8e133 cond D done rc 0
+11:32:37 rep 4 cell cda8e133 cond A load frozen run 4 start
+11:33:18 rep 4 cell cda8e133 cond A done rc 0
+11:33:18 rep 4 cell cda8e133 cond B load running run 4 start
+11:34:01 rep 4 cell cda8e133 cond B done rc 0
+11:34:01 rep 4 cell cda8e133 cond C load running run 4 start
+11:34:42 rep 4 cell cda8e133 cond C done rc 0
+11:34:42 rep 4 cell 8ac1bf9d cond D load frozen run 2 start
+11:35:21 rep 4 cell 8ac1bf9d cond D done rc 0
+11:35:21 rep 4 cell 8ac1bf9d cond A load frozen run 4 start
+11:35:58 rep 4 cell 8ac1bf9d cond A done rc 0
+11:35:58 rep 4 cell 8ac1bf9d cond B load running run 4 start
+11:36:36 rep 4 cell 8ac1bf9d cond B done rc 0
+11:36:36 rep 4 cell 8ac1bf9d cond C load running run 4 start
+11:37:13 rep 4 cell 8ac1bf9d cond C done rc 0
+11:37:13 end (load frozen)

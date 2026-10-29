@@ -525,7 +525,7 @@ func TestAngleP10(t *testing.T) {
 		// each new stream's first 32 KiB goes as light (unknown), charged to
 		// its user's latency-lane credit (T14), so ahead of the floors the
 		// new user takes at most that credit, a burst and a second of it
-		first := angleRate(time.Second, &h1)
+		first := angleRate(time.Second, &h1, &h2)
 		// and a probe of the light user that comes as the new streams start
 		// may wait behind that burst in the latency lane (FIFO, §3.2): 26 ms
 		// at 10 Mbit/s; the light user's (d) is judged once settled
@@ -533,10 +533,19 @@ func TestAngleP10(t *testing.T) {
 		p.on()
 		r := angleRate(8*time.Second, &h1, &h2)
 		credit := float64(schedLaneBurst + schedLaneRate)
-		t.Logf("existing bulk in the new user's first second: %.2f Mbit/s (%.3f of its floor)", first[0]*8/1e6, first[0]/(c/2))
-		if first[0] < 0.9*(c-credit)/2 {
-			t.Fatalf("the existing bulk user got %.3f of its floor in the new user's first second, want >= 0.9 of what the new user's latency credit leaves (%.3f)",
-				first[0]/(c/2), 0.9*(c-credit)/c)
+		// the share is judged against what the emulated link delivered in
+		// that second, not against its nominal rate: the link is goroutines
+		// on the host, and in the second 16 streams start a CPU-starved host
+		// (the CI's 2-core slices: 0.737 against 0.758 once; 1-core slices
+		// 0.649 and 0.754) delivers less in all, which is not the
+		// scheduler's split; a split the new user wins past its credit
+		// still fails, whatever the link delivered
+		got := min(first[0]+first[1], c)
+		t.Logf("existing bulk in the new user's first second: %.2f Mbit/s (%.3f of its floor), the link delivered %.2f of %.2f Mbit/s",
+			first[0]*8/1e6, first[0]/(c/2), (first[0]+first[1])*8/1e6, c*8/1e6)
+		if first[0] < 0.9*(got-credit)/2 {
+			t.Fatalf("the existing bulk user got %.3f of its floor in the new user's first second, want >= 0.9 of what the new user's latency credit leaves of what the link delivered (%.3f)",
+				first[0]/(c/2), 0.9*(got-credit)/c)
 		}
 		// one session (as TestAngleSameLinkProbe's one_session): the probe's
 		// echo waits besides behind the exit's unsent download bytes, C3's
