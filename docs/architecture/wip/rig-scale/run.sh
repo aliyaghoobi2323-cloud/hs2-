@@ -208,7 +208,7 @@ proctrace() {
 # killlink R WHAT C0 (KILLQ, R1 round-4 judge): reset one link socket of the
 # edge with ss -K (SOCK_DESTROY: the edge's socket fails, the exit gets a
 # reset, as from a DPI box) — the busiest one (bytes acked + received) of
-# class WHAT: quiet (the QUIET links' sockets run cubic) or bulk (bbr); any:
+# class WHAT: quiet (the QUIET links' sockets run any but bbr: cubic, illinois) or bulk (bbr); any:
 # the busiest of all; a pool without QUIET links (production) falls back to
 # any. kill.json: what, the link's class and peer, the classes' counts, how
 # many sockets ss killed, and when (s after the client's start C0, and the
@@ -219,7 +219,7 @@ killlink() {
   t=$(date +%s.%N); clk=$(date +%H:%M:%S.%N | cut -c1-15)
   ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-kill$sfx.txt" 2>/dev/null
   if [ "$what" = all ]; then
-    read -r nq nb < <(awk '/^[0-9]/ {next} {if ($0 ~ / cubic /) q++; else b++} END {printf "%d %d\n", q, b}' "$r/ss-edge-kill$sfx.txt")
+    read -r nq nb < <(awk '/^[0-9]/ {next} {if ($0 !~ / bbr /) q++; else b++} END {printf "%d %d\n", q, b}' "$r/ss-edge-kill$sfx.txt")
     killed=$(ip netns exec $E ss -K -tnH state established '( sport = :2096 )' 2>&1 | grep -c '^[0-9]')
     echo "{\"what\":\"all\",\"class\":\"all\",\"peer\":\"all\",\"n_quiet\":${nq:-0},\"n_bulk\":${nb:-0},\"killed\":${killed:-0},\"k\":$k,\"t_rel\":$(awk -v a="$c0" -v b="$t" 'BEGIN{printf "%.3f", b - a}'),\"clock\":\"$clk\"}" > "$r/kill$sfx.json"
     return
@@ -227,7 +227,7 @@ killlink() {
   read -r pick cls nq nb < <(awk -v want="$what" '
     /^[0-9]/ { peer = $4; next }
     peer != "" {
-      cc = ($0 ~ / cubic /) ? "quiet" : "bulk"
+      cc = ($0 ~ / bbr /) ? "bulk" : "quiet"
       b = 0
       if (match($0, /bytes_acked:[0-9]+/)) b += substr($0, RSTART + 12, RLENGTH - 12)
       if (match($0, /bytes_received:[0-9]+/)) b += substr($0, RSTART + 15, RLENGTH - 15)
@@ -264,8 +264,8 @@ run_one() {
   local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
-  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF KILLQ KILLWHAT KILLREP KILLGAP PROCSTAT
-  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=; KILLQ=; KILLWHAT=quiet; KILLREP=1; KILLGAP=5; PROCSTAT=0
+  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF KILLQ KILLWHAT KILLREP KILLGAP PROCSTAT QPOL QPOL_AT
+  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=; KILLQ=; KILLWHAT=quiet; KILLREP=1; KILLGAP=5; PROCSTAT=0; QPOL=; QPOL_AT=10
   # the rigload server's (the panel's) send buffer a connection, bytes (R1
   # round 4, opt-in: autotuned, the default 0, it holds ~5 MB a connection
   # on loopback, 1.2 GB for 400 downloads; a bound changes what the
@@ -276,7 +276,7 @@ run_one() {
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
     case "$k" in
       HS2_*) hs2env="$hs2env $k=$v" ;;
-      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF|KILLQ|KILLWHAT|KILLREP|KILLGAP|PROCSTAT) printf -v "$k" '%s' "$v" ;;
+      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF|KILLQ|KILLWHAT|KILLREP|KILLGAP|PROCSTAT|QPOL|QPOL_AT) printf -v "$k" '%s' "$v" ;;
     esac
   done
   bp=$(binpath "$bin")
@@ -394,6 +394,14 @@ run_steps() {
         sleep "$(awk -v c="$c0" -v k="$KILLQ" -v g="$KILLGAP" -v i="$kk" -v n="$(date +%s.%N)" 'BEGIN{s = c + k + (i - 1) * g - n; if (s < 0) s = 0; printf "%.3f", s}')"
         killlink "$r" "$KILLWHAT" "$c0" "$kk"
       done ) > "$r/kill.log" 2>&1 &
+    PIDS+=($!)
+  fi
+  # QPOL=PR (R1 round 5, the engine review's B2): QPOL_AT s (10) after the
+  # client starts, a policer of PR Mbit/s on each QUIET link connection up
+  # then, alone (rig.sh qpolice): a DPI box that throttles one connection
+  if [ -n "$QPOL" ]; then
+    ( sleep "$(awk -v c="$c0" -v k="$QPOL_AT" -v n="$(date +%s.%N)" 'BEGIN{s = c + k - n; if (s < 0) s = 0; printf "%.3f", s}')"
+      "$D/rig.sh" qpolice "$QPOL" ) > "$r/qpolice.log" 2>&1 &
     PIDS+=($!)
   fi
   # PROCSTAT=1: each hs2's RSS (kB), threads and open files every second

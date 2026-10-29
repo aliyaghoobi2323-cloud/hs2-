@@ -47,8 +47,11 @@ import (
 // for good; on the light link at once if that one is up (it moves to a
 // general one once one is back).
 
-// QuietLight (HS2_TUNE_QUIET_LIGHT; 0: off): the light QUIET links of a
-// pool of up to quietLightMax links (1).
+// QuietLight (HS2_TUNE_QUIET_LIGHT; 0: off): 1, a pool of up to
+// quietLightMax links keeps one QUIET link more, the light one; 2, besides,
+// a larger pool makes one of its QuietMany QUIET links the light one (no
+// link more: past quietLightMax the pool has more connections than the DPI
+// model's population already, and four QUIET flows at the bottleneck).
 var QuietLight = newTuneInt(0)
 
 // QuietWaitMs (HS2_TUNE_QUIET_WAIT, ms; 0: none): how long a new connection
@@ -83,7 +86,7 @@ const (
 
 // quietLightOn says whether the pool keeps a light QUIET link.
 func (q *quietSet) quietLightOn() bool {
-	return q != nil && QuietLight.Get() > 0 && q.m.max <= quietLightMax && !QuietOff()
+	return q != nil && !QuietOff() && (QuietLight.Get() == 1 && q.m.max <= quietLightMax || QuietLight.Get() >= 2)
 }
 
 // lightCount is the light QUIET links QuietCount adds to a pool of maxLinks.
@@ -246,16 +249,31 @@ func (r *moveRule) lightRule() bool {
 // light, back to a general one when it is on the light link and not; true
 // when it moved.
 func (q *quietSet) lightTick(gs *groupStream, now int64) bool {
-	if !q.quietLightOn() {
-		return false
-	}
 	gs.mu.Lock()
 	at, ql := gs.lightAt, gs.ql
 	gs.mu.Unlock()
 	if ql == nil || ql.caps&tlscarrier.CapLight == 0 {
 		return false
 	}
-	onLight := q.isLight(ql) // (it may have opened there: no general link was up)
+	onLight, replaced := q.roleOf(ql)
+	if replaced {
+		// its link is slow and being replaced (QuietReplace,
+		// quietreplace.go): to a QUIET link of its role that is not, once
+		// one is up
+		toLight := onLight && gs.rule.lightRule()
+		if toLight {
+			if ql, rel, ok := q.pickLight(nil); ok {
+				rel()
+				_ = ql
+			} else {
+				toLight = false // no light one up (yet): a general one
+			}
+		}
+		return q.moveQuiet(gs, toLight, now)
+	}
+	if !q.quietLightOn() {
+		return false
+	}
 	light := gs.rule.lightRule()
 	switch {
 	case light || !onLight || gs.rule.seen < moveSlots:
@@ -277,16 +295,17 @@ func (q *quietSet) lightTick(gs *groupStream, now int64) bool {
 	return false
 }
 
-// isLight says whether l is a light QUIET link of the set.
-func (q *quietSet) isLight(l *mtcpLink) bool {
+// roleOf says whether l is a light QUIET link of the set, and whether it is
+// being replaced for being slow (QuietReplace).
+func (q *quietSet) roleOf(l *mtcpLink) (light, replaced bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	for _, ql := range q.links {
 		if ql.link == l {
-			return ql.light.Load()
+			return ql.light.Load(), ql.replaced.Load()
 		}
 	}
-	return false
+	return false, false
 }
 
 // moveQuiet moves gs between the QUIET links: to the light one (toLight),

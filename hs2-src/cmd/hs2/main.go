@@ -442,6 +442,9 @@ func applyTuning() {
 	// QUIET link that was up a moment ago, ms
 	numT("HS2_TUNE_QUIET_LIGHT", engine.QuietLight)
 	numT("HS2_TUNE_QUIET_WAIT", engine.QuietWaitMs)
+	// R1 round 5 (the engine review's B2): a QUIET link slow next to the
+	// BULK links is replaced, make before break
+	numT("HS2_TUNE_QUIET_REPLACE", engine.QuietReplace)
 	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
 		tlscarrier.CongestionControl = v
 		log.Printf("tuning: HS2_TUNE_CC=%q", v)
