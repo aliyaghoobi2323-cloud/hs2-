@@ -60,9 +60,9 @@ func wmRedUpload(t *testing.T) {
 	if os.Getenv("HS2_WCORE_RED_UPLOAD") != "1" {
 		return
 	}
-	up := WcoreUpload
-	WcoreUpload = 1
-	t.Cleanup(func() { WcoreUpload = up })
+	up := WcoreUpload.Get()
+	WcoreUpload.Set(1)
+	t.Cleanup(func() { WcoreUpload.Set(up) })
 }
 
 func wmLossNote(r wmResult) string {
@@ -193,9 +193,9 @@ func TestWcoreRedTrace(t *testing.T) {
 	}
 	if exit == 1 {
 		// (the exit's core runs only with the lab knob)
-		up := WcoreUpload
-		WcoreUpload = 1
-		t.Cleanup(func() { WcoreUpload = up })
+		up := WcoreUpload.Get()
+		WcoreUpload.Set(1)
+		t.Cleanup(func() { WcoreUpload.Set(up) })
 	}
 	c := wmPath(rate, time.Duration(rtt)*time.Millisecond, time.Duration(q)*time.Millisecond)
 	c.loss, c.seed, c.exit, c.policer, c.trace, c.dur = loss/100, uint64(seed), exit == 1, pol*wmMbit, true, 40*time.Second
@@ -320,8 +320,8 @@ func wmDrainedByCore(b, k wmResult) bool {
 // only with the lab knob (WcoreUpload, set here for its cases) and an edge
 // with an old exit stays OFF: its cases are base.
 func TestWcoreRedBlindHoley(t *testing.T) {
-	up := WcoreUpload
-	t.Cleanup(func() { WcoreUpload = up })
+	up := WcoreUpload.Get()
+	t.Cleanup(func() { WcoreUpload.Set(up) })
 	cases := []struct {
 		rate      float64
 		rtt, q    int
@@ -340,9 +340,9 @@ func TestWcoreRedBlindHoley(t *testing.T) {
 	for _, x := range cases {
 		c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
 		c.loss, c.seed, c.exit, c.oldExit, c.dur = x.loss, x.seed, x.exit, x.old, 40*time.Second
-		WcoreUpload = 0
+		WcoreUpload.Set(0)
 		if x.exit {
-			WcoreUpload = 1
+			WcoreUpload.Set(1)
 		}
 		b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
 		side := map[bool]string{true: "up", false: "dn-old"}[x.exit]

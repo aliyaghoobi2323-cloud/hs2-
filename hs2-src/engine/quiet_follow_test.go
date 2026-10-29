@@ -9,8 +9,8 @@ import (
 // QUIET count alike.
 
 func TestQuietFollowMath(t *testing.T) {
-	defer func(x int) { QuietExtra = x }(QuietExtra)
-	QuietExtra = 1
+	defer func(x int) { QuietExtra.Set(x) }(QuietExtra.Get())
+	QuietExtra.Set(1)
 	for _, c := range []struct{ want, bulk, peer, out int }{
 		{4, 8, 0, 4},  // no ceiling heard yet: its own
 		{4, 8, 12, 4}, // an exit of the same count
@@ -44,7 +44,7 @@ func TestQuietFollowMath(t *testing.T) {
 			t.Errorf("exitRevCeilings(%d, %d, %v) = %d %d, want %d %d", c.max, c.own, c.follow, r, h, c.report, c.hi)
 		}
 	}
-	QuietExtra = 0 // within max_links (lab): no room
+	QuietExtra.Set(0) // within max_links (lab): no room
 	if r, h := exitRevCeilings(8, 2, true); r != 8 || h != 8 {
 		t.Errorf("QuietExtra 0: %d %d, want 8 8", r, h)
 	}
@@ -67,7 +67,7 @@ func (p *quietPool) linkSeqs() int {
 // the QUIET links both can hold, settles (no churn), and carries a bulk
 // connection that moves. "before" is the failure the switch closes.
 func TestQuietFollowMixed(t *testing.T) {
-	if QuietExtra == 0 {
+	if QuietExtra.Get() == 0 {
 		t.Skip("QuietExtra 0 (lab)")
 	}
 	type tc struct {
@@ -123,7 +123,7 @@ func TestQuietFollowMixed(t *testing.T) {
 // Direct: the edge dials its QUIET links and the exit takes every one, so
 // the edge's own count holds whatever the exit's build counts.
 func TestQuietFollowDirect(t *testing.T) {
-	if QuietExtra == 0 {
+	if QuietExtra.Get() == 0 {
 		t.Skip("QuietExtra 0 (lab)")
 	}
 	p := startQuietPoolMix(t, true, 2, quietMix{edgeWant: 3})

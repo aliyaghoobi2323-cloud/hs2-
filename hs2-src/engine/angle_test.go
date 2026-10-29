@@ -533,19 +533,24 @@ func TestAngleP10(t *testing.T) {
 		p.on()
 		r := angleRate(8*time.Second, &h1, &h2)
 		credit := float64(schedLaneBurst + schedLaneRate)
-		// the share is judged against what the emulated link delivered in
-		// that second, not against its nominal rate: the link is goroutines
-		// on the host, and in the second 16 streams start a CPU-starved host
-		// (the CI's 2-core slices: 0.737 against 0.758 once; 1-core slices
-		// 0.649 and 0.754) delivers less in all, which is not the
-		// scheduler's split; a split the new user wins past its credit
-		// still fails, whatever the link delivered
-		got := min(first[0]+first[1], c)
+		// and the floor guards a user only while it has bulk queued, on a
+		// demand measured over the last 200 ms (sched.go): until the
+		// floors have caught up with the new user, what the existing one
+		// leaves unqueued goes by flows, 16 of the new user's against its
+		// 4. Sampled every 100 ms (8 runs), the new user takes ~80% from
+		// about 0.2 s to 0.7 s and the existing one then ~85% for the rest
+		// of the second; that second ends at 0.79 to 0.94 of the floor in
+		// 28 runs (alone on the six test cores and in three 2-core slices
+		// at once), and the CI once saw 0.737 against a bound of 0.758
+		// that left this out. The bound takes one demand window of it: the
+		// flows' split past half of the link for 200 ms. The settled share
+		// (below, the rig's (e)) is unchanged.
+		ramp := c * (2 * schedTick).Seconds() * float64(16-4) / float64(16+4)
 		t.Logf("existing bulk in the new user's first second: %.2f Mbit/s (%.3f of its floor), the link delivered %.2f of %.2f Mbit/s",
 			first[0]*8/1e6, first[0]/(c/2), (first[0]+first[1])*8/1e6, c*8/1e6)
-		if first[0] < 0.9*(got-credit)/2 {
-			t.Fatalf("the existing bulk user got %.3f of its floor in the new user's first second, want >= 0.9 of what the new user's latency credit leaves of what the link delivered (%.3f)",
-				first[0]/(c/2), 0.9*(got-credit)/c)
+		if first[0] < 0.9*(c-credit-ramp)/2 {
+			t.Fatalf("the existing bulk user got %.3f of its floor in the new user's first second, want >= 0.9 of what the new user's latency credit and the floors' ramp leave (%.3f)",
+				first[0]/(c/2), 0.9*(c-credit-ramp)/c)
 		}
 		// one session (as TestAngleSameLinkProbe's one_session): the probe's
 		// echo waits besides behind the exit's unsent download bytes, C3's

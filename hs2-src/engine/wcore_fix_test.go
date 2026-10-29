@@ -445,8 +445,8 @@ func TestWcoreFixLongRTTGrowsOnRecord(t *testing.T) {
 // drained or resent past base + 3 points. (The exit's case runs its core,
 // which only the lab knob WcoreUpload gives it since step 1's decision.)
 func TestWcoreFixLongRTTModel(t *testing.T) {
-	up := WcoreUpload
-	t.Cleanup(func() { WcoreUpload = up })
+	up := WcoreUpload.Get()
+	t.Cleanup(func() { WcoreUpload.Set(up) })
 	for _, x := range []struct {
 		rate   float64
 		rtt, q int
@@ -455,9 +455,9 @@ func TestWcoreFixLongRTTModel(t *testing.T) {
 	}{{100, 600, 50, 2, false}, {50, 600, 50, 2, false}, {300, 800, 50, 1, false}, {50, 500, 100, 1, false}, {100, 600, 50, 2, true}} {
 		c := wmPath(x.rate, wmMS(x.rtt), wmMS(x.q))
 		c.seed, c.dur, c.warm, c.exit = x.seed, 90*time.Second, 20*time.Second, x.exit
-		WcoreUpload = 0
+		WcoreUpload.Set(0)
 		if x.exit {
-			WcoreUpload = 1
+			WcoreUpload.Set(1)
 		}
 		b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))
 		msg := fmt.Sprintf("%s s%d exit %v: base %.1f Mbit resent %.2f%% | core %.1f Mbit resent %.2f%% [%s] drains %v", c.name, x.seed, x.exit,
