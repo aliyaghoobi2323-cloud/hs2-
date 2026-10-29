@@ -35,7 +35,19 @@ func TestMoveBackLight(t *testing.T) {
 			st := r.open(8, qpPhase)
 			b := make([]byte, 32<<10)
 			var off int64
+			// the move is deterministic: the exit hints a persistent send
+			// backlog (hint.go: its writer inside big writes 3 ticks in a
+			// row), and on a slow shared host (a 2-core CI slice) the
+			// download once ended before the hint loop had judged it
+			// («never moved (0 moves)», then 5 of 5 alone). So after its
+			// first part the reader holds until the move: the exit's writer
+			// then waits inside a big write, the very backlog the hint is
+			// for, however fast or slow the host is
+			const holdAt = 256 << 10
 			for off < qpPhaseBytes {
+				if off >= holdAt && r.q.moved.Load() == 0 {
+					waitQuiet(t, "the download moved on the exit's hint (its reader holding)", func() bool { return r.q.moved.Load() == 1 })
+				}
 				n, err := st.Read(b)
 				for i := 0; i < n; i++ {
 					if b[i] != phaseByte(off+int64(i)) {
