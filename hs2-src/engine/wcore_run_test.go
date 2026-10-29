@@ -481,9 +481,9 @@ func wcRegistered(s *smux.Session) bool {
 // WcoreUpload); a closed session is dropped, and its sessions' goroutines
 // end with it.
 func TestWcoreRunnerRegistry(t *testing.T) {
-	up := WcoreUpload
-	WcoreUpload = 1
-	t.Cleanup(func() { WcoreUpload = up })
+	up := WcoreUpload.Get()
+	WcoreUpload.Set(1)
+	t.Cleanup(func() { WcoreUpload.Set(up) })
 	a, b := net.Pipe()
 	ma, mb := &linkMeter{}, &linkMeter{}
 	cli, _, err := newSession(a, false, nil, ma)
@@ -678,9 +678,9 @@ func TestWcoreRunnerRace(t *testing.T) {
 func wcLogLink(name string, side wcSide) *wcLink {
 	cfg := wcTestConfig()
 	cfg.MaxStreamBuffer = 16 << 20
-	up := WcoreUpload
-	WcoreUpload = 1
-	defer func() { WcoreUpload = up }()
+	up := WcoreUpload.Get()
+	WcoreUpload.Set(1)
+	defer func() { WcoreUpload.Set(up) }()
 	l := newWcLink(nil, cfg, nil, nil, side == wcExit, nil)
 	l.setName(name)
 	return l
@@ -1106,10 +1106,10 @@ func TestWcoreRunnerEdgeInputs(t *testing.T) {
 	}
 
 	// the exit's end of a link (it has a core only with the lab knob)
-	up := WcoreUpload
-	WcoreUpload = 1
+	up := WcoreUpload.Get()
+	WcoreUpload.Set(1)
 	x := newWcLink(cli, cfg, nil, mtr, true, nil)
-	WcoreUpload = up
+	WcoreUpload.Set(up)
 	if s := x.snap(time.Now()); len(s.pongs) != 0 || s.ctrlMin != 0 || !s.sndAt.IsZero() || s.apProbing {
 		t.Fatalf("the exit took the edge's inputs: %+v", s)
 	}
@@ -1158,12 +1158,14 @@ func TestWcoreRunnerSetsRef(t *testing.T) {
 // (WcoreUpload).
 func TestWcoreKnobs(t *testing.T) {
 	q, p, qx, px := wcQTarget, wcProbeQ, wcQTargetExit, wcProbeQExit
-	kq, kp, ks, kf, ku := WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin, WcoreUpload
+	kq, kp, ks, kf, ku := WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin, WcoreUpload.Get()
 	t.Cleanup(func() {
 		wcQTarget, wcProbeQ, wcQTargetExit, wcProbeQExit = q, p, qx, px
-		WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin, WcoreUpload = kq, kp, ks, kf, ku
+		WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin = kq, kp, ks, kf
+		WcoreUpload.Set(ku)
 	})
-	WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin, WcoreUpload = 12, 18, 2, 64<<20, 1
+	WcoreQTarget, WcoreProbeQ, WcoreStage, WcoreFixedWin = 12, 18, 2, 64<<20
+	WcoreUpload.Set(1)
 	wcApplyKnobs()
 	if wcQTarget != 12*time.Millisecond || wcQTargetExit != 12*time.Millisecond || wcProbeQ != 18*time.Millisecond || wcProbeQExit != 18*time.Millisecond {
 		t.Fatalf("queue targets %v %v %v %v", wcQTarget, wcQTargetExit, wcProbeQ, wcProbeQExit)

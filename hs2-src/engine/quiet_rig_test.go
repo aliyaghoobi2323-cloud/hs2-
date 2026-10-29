@@ -192,7 +192,7 @@ func TestQuietPoolClasses(t *testing.T) {
 			t.Run(name+"/"+string(rune('0'+mx)), func(t *testing.T) {
 				p := startQuietPool(t, direct, mx)
 				wantQ, wantB := QuietCount(mx), mx // QUIET outside max_links (QuietExtra)
-				if QuietExtra == 0 {
+				if QuietExtra.Get() == 0 {
 					wantB = max(1, mx-QuietCount(mx))
 				}
 				p.waitFor("the classes up", 20*time.Second, func() bool {

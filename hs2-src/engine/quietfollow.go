@@ -56,13 +56,13 @@ const quietPeerMax = 4
 // up to quietPeerMax QUIET links; the edge's own ceiling lowers it further,
 // exitPool.bounds).
 func exitRevCeilings(maxLinks, own int, follow bool) (report, hi int) {
-	if QuietExtra != 0 {
+	if QuietExtra.Get() != 0 {
 		report = maxLinks + own
 	} else {
 		report = max(maxLinks, 1+own)
 	}
 	hi = report
-	if follow && QuietExtra != 0 {
+	if follow && QuietExtra.Get() != 0 {
 		hi = max(report, maxLinks+quietPeerMax)
 	}
 	return report, hi

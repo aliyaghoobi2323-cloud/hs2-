@@ -49,13 +49,14 @@ func TestStatusWindowsLine(t *testing.T) {
 // The window core's lab knobs reach the engine.
 func TestApplyTuningWcoreKnobs(t *testing.T) {
 	on, q, p, stage, fixed, trace := engine.Wcore, engine.WcoreQTarget, engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace
-	pace, burst, upload := engine.WcorePaceCap, engine.WcoreBurstShare, engine.WcoreUpload
+	pace, burst, upload := engine.WcorePaceCap, engine.WcoreBurstShare, engine.WcoreUpload.Get()
 	t.Cleanup(func() {
 		engine.Wcore, engine.WcoreQTarget, engine.WcoreProbeQ, engine.WcoreStage, engine.WcoreFixedWin, engine.WcoreTrace = on, q, p, stage, fixed, trace
-		engine.WcorePaceCap, engine.WcoreBurstShare, engine.WcoreUpload = pace, burst, upload
+		engine.WcorePaceCap, engine.WcoreBurstShare = pace, burst
+		engine.WcoreUpload.Set(upload)
 	})
-	if engine.WcoreUpload != 0 {
-		t.Fatalf("the exit's core for uploads is on by default (WcoreUpload %d): off until step 3", engine.WcoreUpload)
+	if engine.WcoreUpload.Get() != 0 {
+		t.Fatalf("the exit's core for uploads is on by default (WcoreUpload %d): off until step 3", engine.WcoreUpload.Get())
 	}
 	t.Setenv("HS2_TUNE_WCORE", "0")
 	t.Setenv("HS2_TUNE_WCORE_UPLOAD", "1")
@@ -67,8 +68,8 @@ func TestApplyTuningWcoreKnobs(t *testing.T) {
 	t.Setenv("HS2_TUNE_WCORE_PACECAP", "1.25")
 	t.Setenv("HS2_TUNE_WCORE_BURST", "0.55")
 	applyTuning()
-	if engine.WcorePaceCap != 1.25 || engine.WcoreBurstShare != 0.55 || engine.WcoreUpload != 1 {
-		t.Fatalf("lab experiments: pacing cap %g, burst share %g, the exit's core %d", engine.WcorePaceCap, engine.WcoreBurstShare, engine.WcoreUpload)
+	if engine.WcorePaceCap != 1.25 || engine.WcoreBurstShare != 0.55 || engine.WcoreUpload.Get() != 1 {
+		t.Fatalf("lab experiments: pacing cap %g, burst share %g, the exit's core %d", engine.WcorePaceCap, engine.WcoreBurstShare, engine.WcoreUpload.Get())
 	}
 	if engine.Wcore != 0 || engine.WcoreQTarget != 12 || engine.WcoreProbeQ != 18 || engine.WcoreStage != 2 ||
 		engine.WcoreFixedWin != 3<<20 || engine.WcoreTrace != "/tmp/wcore.jsonl" {

@@ -537,8 +537,9 @@ func TestQuietCounts(t *testing.T) {
 	if QuietOff() {
 		t.Skip("HS2_TUNE_QUIET=0")
 	}
-	defer func(x, n int) { QuietExtra, QuietN = x, n }(QuietExtra, QuietN)
-	QuietExtra, QuietN = 0, 0
+	defer func(x, n int) { QuietExtra.Set(x); QuietN.Set(n) }(QuietExtra.Get(), QuietN.Get())
+	QuietExtra.Set(0)
+	QuietN.Set(0)
 	for _, c := range []struct{ max, q, bulk, total int }{
 		{1, 1, 1, 2}, {2, 1, 1, 2}, {3, 1, 2, 3}, {4, 2, 2, 4}, {8, 2, 6, 8}, {300, 2, 298, 300},
 	} {

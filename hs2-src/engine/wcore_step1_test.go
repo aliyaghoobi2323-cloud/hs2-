@@ -29,8 +29,8 @@ import (
 // the lab knob they are, for their uploads; with the pacing cap's lab
 // experiment alone, for the cap only (no core).
 func TestWcoreStep1ExitNotRegistered(t *testing.T) {
-	up, pc := WcoreUpload, WcorePaceCap
-	t.Cleanup(func() { WcoreUpload, WcorePaceCap = up, pc })
+	up, pc := WcoreUpload.Get(), WcorePaceCap
+	t.Cleanup(func() { WcoreUpload.Set(up); WcorePaceCap = pc })
 	pair := func() (cli, srv *smux.Session, ma, mb *linkMeter) {
 		t.Helper()
 		a, b := net.Pipe()
@@ -47,7 +47,8 @@ func TestWcoreStep1ExitNotRegistered(t *testing.T) {
 		return cli, srv, ma, mb
 	}
 
-	WcoreUpload, WcorePaceCap = 0, 0
+	WcoreUpload.Set(0)
+	WcorePaceCap = 0
 	cli, srv, ma, mb := pair()
 	if ma.wc == nil || ma.wc.side != wcEdge || ma.wc.off || !wcRegistered(cli) {
 		t.Fatalf("the edge's session: core %+v registered %v, want the edge's core", ma.wc, wcRegistered(cli))
@@ -66,7 +67,7 @@ func TestWcoreStep1ExitNotRegistered(t *testing.T) {
 	}
 	WcorePaceCap = 0
 
-	WcoreUpload = 1
+	WcoreUpload.Set(1)
 	_, srv, _, mb = pair()
 	if mb.wc == nil || mb.wc.side != wcExit || mb.wc.off || !wcRegistered(srv) {
 		t.Fatalf("the exit's session with WcoreUpload: core %+v registered %v, want the exit's core", mb.wc, wcRegistered(srv))
@@ -283,9 +284,9 @@ func TestWcoreStep1ModelBlindSidesAreBase(t *testing.T) {
 	}
 	// the lab knob: the exit's core runs (it grows the windows past Need and
 	// the uploads past base on a clean 300/150: 90.5 to 115.4 Mbit/s)
-	up := WcoreUpload
-	WcoreUpload = 1
-	t.Cleanup(func() { WcoreUpload = up })
+	up := WcoreUpload.Get()
+	WcoreUpload.Set(1)
+	t.Cleanup(func() { WcoreUpload.Set(up) })
 	c := wmPath(300, wmMS(150), wmMS(50))
 	c.exit, c.seed, c.dur = true, 1, 40*time.Second
 	b, k := wmRun(c.with(wmBase)), wmRun(c.with(wmCore))

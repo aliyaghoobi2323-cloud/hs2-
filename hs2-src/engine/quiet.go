@@ -91,12 +91,12 @@ var QuietRec = 0
 // the first did not.
 func QuietCount(maxLinks int) int {
 	switch {
-	case QuietN > 0:
-		return QuietN
-	case QuietExtra != 0 && maxLinks <= quietOneMax:
-		return max(QuietFew, 1)
-	case QuietExtra != 0:
-		return max(QuietMany, 1)
+	case QuietN.Get() > 0:
+		return QuietN.Get()
+	case QuietExtra.Get() != 0 && maxLinks <= quietOneMax:
+		return max(QuietFew.Get(), 1)
+	case QuietExtra.Get() != 0:
+		return max(QuietMany.Get(), 1)
 	case maxLinks >= 4:
 		return 2
 	}
@@ -117,7 +117,7 @@ const quietOneMax = 5
 // page and the cut go back to c4's. So 1 stays the default; R2's
 // class-separated QUIET links are the way (round4-judge.fa.md). The two
 // ends need not agree (QuietFollow, quietfollow.go).
-var QuietFew = 1 // the R1 round-4 judge measured 2 (round4-judge.fa.md, item 1): P10 (a) and (e) fail at N=1
+var QuietFew = newTuneInt(1) // the R1 round-4 judge measured 2 (round4-judge.fa.md, item 1): P10 (a) and (e) fail at N=1
 
 // QuietMany (HS2_TUNE_QUIET_MANY; with QuietFollow, the default, the two
 // ends need not set it alike: they run the smaller count; quietfollow.go): the QUIET
@@ -128,12 +128,12 @@ var QuietFew = 1 // the R1 round-4 judge measured 2 (round4-judge.fa.md, item 1)
 // pages at 1.25 times j3g's median load time and the games' upload p99 at
 // +21 to +82 ms; with four, the median page 0.9 times and the games +7 to
 // +12 (round4/REPORT.fa.md, blocks A5 and A6).
-var QuietMany = 4
+var QuietMany = newTuneInt(4)
 
 // QuietN (HS2_TUNE_QUIET_N, lab): the QUIET links of every pool, when
 // above 0. With QuietFollow off both ends must set it alike (the exit dials
 // the reverse pool's links: QuietTotal); with it, the smaller holds.
-var QuietN = 0
+var QuietN = newTuneInt(0)
 
 // QuietBatch 0 (HS2_TUNE_QUIET_BATCH=0, lab: the measure of γ2's batching):
 // a QUIET link's writer flushes the shaper after each frame (smux
@@ -203,13 +203,13 @@ var QuietCoalTun = 1
 // the QUIET links outside, 73.1. The cost is one connection more than
 // max_links (QuietCount). Both ends set it alike (the exit dials the
 // reverse pool's links: QuietTotal); 0: within max_links, as β2.
-var QuietExtra = 1
+var QuietExtra = newTuneInt(1)
 
 // QuietTotal is the most links a pool of maxLinks holds with its QUIET ones
 // (they count toward max_links, but a pool of one link still has a BULK
 // one: one more then; QuietExtra: maxLinks BULK ones and the QUIET ones).
 func QuietTotal(maxLinks int) int {
-	if QuietExtra != 0 {
+	if QuietExtra.Get() != 0 {
 		return maxLinks + QuietCount(maxLinks)
 	}
 	return max(maxLinks, 1+QuietCount(maxLinks))
@@ -310,7 +310,7 @@ func (m *LinkManager) enableQuiet() *quietSet {
 	// only the reverse edge: there the exit dials, and holds no more links
 	// than its ceiling; a direct edge dials its QUIET links itself, and the
 	// exit takes them all (quietfollow.go)
-	q.follow = QuietFollow.Get() != 0 && QuietExtra != 0 && m.accept
+	q.follow = QuietFollow.Get() != 0 && QuietExtra.Get() != 0 && m.accept
 	m.quiet = q
 	if cd, ok := m.dialer.(classDialer); ok {
 		m.dialer = bulkDialer{cd} // the pool's own links are BULK
@@ -352,7 +352,7 @@ func (q *quietSet) noteCaps(caps uint32) {
 // bulkMax is the most BULK links the pool runs: max_links less its QUIET
 // links, at least one.
 func (m *LinkManager) bulkMax() int {
-	if m.quiet.active() && QuietExtra == 0 {
+	if m.quiet.active() && QuietExtra.Get() == 0 {
 		return max(1, m.max-m.quiet.want)
 	}
 	return m.max

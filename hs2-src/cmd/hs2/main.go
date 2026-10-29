@@ -271,6 +271,12 @@ func applyTuning() {
 			}
 		}
 	}
+	// (switches the package's loops read while its tests set them: engine.TuneInt)
+	numT := func(name string, dst *engine.TuneInt) {
+		v := dst.Get()
+		num(name, &v)
+		dst.Set(v)
+	}
 	num("HS2_TUNE_NOTSENT", &tlscarrier.NotSentLowat)
 	num("HS2_TUNE_SMUX_FRAME", &engine.SmuxFrameSize)
 	num("HS2_TUNE_SMUX_STREAMBUF", &engine.SmuxStreamBuffer)
@@ -285,7 +291,7 @@ func applyTuning() {
 	// core for uploads (off until step 3), a trace file and fixed windows in
 	// place of the controller.
 	num("HS2_TUNE_WCORE", &engine.Wcore)
-	num("HS2_TUNE_WCORE_UPLOAD", &engine.WcoreUpload)
+	numT("HS2_TUNE_WCORE_UPLOAD", engine.WcoreUpload)
 	num("HS2_TUNE_WCORE_QTARGET", &engine.WcoreQTarget)
 	num("HS2_TUNE_WCORE_PROBEQ", &engine.WcoreProbeQ)
 	num("HS2_TUNE_WCORE_STAGE", &engine.WcoreStage)
@@ -336,7 +342,7 @@ func applyTuning() {
 	num("HS2_TUNE_ALPHA_PLATEAU", &engine.AlphaPlateau)
 	num("HS2_TUNE_ALPHA_FREE", &engine.AlphaFree)
 	num("HS2_TUNE_QUIET_REC", &engine.QuietRec)     // lab: QUIET's interactive record sizes
-	num("HS2_TUNE_QUIET_EXTRA", &engine.QuietExtra) // QUIET links next to max_links BULK ones (0: within)
+	numT("HS2_TUNE_QUIET_EXTRA", engine.QuietExtra) // QUIET links next to max_links BULK ones (0: within)
 	// R1 round 3 (γ2): the BULK links' in-flight budget in place of α (0:
 	// α), its queue target a direction (µs) and its share of the way back
 	// on a two-way link (0: the QUIET link's one-way delay alone); the QUIET
@@ -348,7 +354,7 @@ func applyTuning() {
 	num("HS2_TUNE_BUDGET_LINKOWD", &engine.BudgetLinkOWD)   // a two-way BULK link's own one-way delays (0: the guess)
 	num("HS2_TUNE_BUDGET_PACE", &engine.BudgetPaceK)        // its pacing cap, % of its rate at the target (0: C4-lite's)
 	num("HS2_TUNE_BUDGET_INFLIGHT", &engine.BudgetInflight) // in flight as Linux counts it (0: SIOCOUTQ)
-	num("HS2_TUNE_QUIET_N", &engine.QuietN)
+	numT("HS2_TUNE_QUIET_N", engine.QuietN)
 	num("HS2_TUNE_QUIET_BATCH", &engine.QuietBatch)
 	num("HS2_TUNE_QUIET_LAZY", &engine.QuietLazy) // a QUIET record waits for the socket's unsent bytes (0: none)
 	num("HS2_TUNE_QUIET_THIN", &engine.QuietThin) // TCP_THIN_LINEAR_TIMEOUTS on QUIET sockets (0: none)
@@ -377,12 +383,6 @@ func applyTuning() {
 	// links it is active on; the edge's placement by users) and the call
 	// (a new connection off QUIET past this many bytes of big writes, its
 	// write held at most this many ms; the realtime lane and its rate)
-	// (switches the package's loops read while its tests set them: engine.TuneInt)
-	numT := func(name string, dst *engine.TuneInt) {
-		v := dst.Get()
-		num(name, &v)
-		dst.Set(v)
-	}
 	num("HS2_TUNE_XSHARE", &engine.XShare)
 	numT("HS2_TUNE_PLACE_USERS", engine.PlaceUsers)
 	numT("HS2_TUNE_QUIET_CAP", engine.QuietCap)
@@ -395,14 +395,14 @@ func applyTuning() {
 	numT("HS2_TUNE_OWD_IDLE_POOL", engine.OWDIdlePool)             // ... and a busy pool wakes every QUIET link's (0: quietOWD's alone)
 	numT("HS2_TUNE_UDP_FLOWS", engine.UDPFlowsMax)                 // a UDP user port's flows at most (0: none)
 	numT("HS2_TUNE_UDP_USER_FLOWS", engine.UDPFlowsPerUser)        // ... and one user's (0: none)
-	num("HS2_TUNE_QUIET_MANY", &engine.QuietMany)                  // QUIET links past 5 links
+	numT("HS2_TUNE_QUIET_MANY", engine.QuietMany)                  // QUIET links past 5 links
 	numT("HS2_TUNE_QUIET_FOLLOW", engine.QuietFollow)              // reverse: both ends run the smaller QUIET count (0: both must match)
 	numT("HS2_TUNE_QUIET_FOLLOW_GRACE", engine.QuietFollowGraceMs) // ... a retiring QUIET link closes after this long without a connection
 	// the R1 round-4 judge: QUIET links at <= 5 links; a call's realtime
 	// lane held while it stays loosely steady; the steady lane's bytes in a
 	// row while the latency lane waits; the latency lane by user; a BULK
 	// link's drain against BBR's PROBE_RTT; C3's floor bounded in time
-	num("HS2_TUNE_QUIET_FEW", &engine.QuietFew)
+	numT("HS2_TUNE_QUIET_FEW", engine.QuietFew)
 	numT("HS2_TUNE_RT_HOLD", engine.RTHold)
 	numT("HS2_TUNE_RT_SHARE", engine.RTShare)
 	numT("HS2_TUNE_LAT_RR", engine.LatRR)

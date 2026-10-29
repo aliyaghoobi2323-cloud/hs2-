@@ -11,8 +11,10 @@ func TestQuietCountsExtra(t *testing.T) {
 	if QuietOff() {
 		t.Skip("HS2_TUNE_QUIET=0")
 	}
-	defer func(x, n, f int) { QuietExtra, QuietN, QuietFew = x, n, f }(QuietExtra, QuietN, QuietFew)
-	QuietExtra, QuietN, QuietFew = 1, 0, 1
+	defer func(x, n, f int) { QuietExtra.Set(x); QuietN.Set(n); QuietFew.Set(f) }(QuietExtra.Get(), QuietN.Get(), QuietFew.Get())
+	QuietExtra.Set(1)
+	QuietN.Set(0)
+	QuietFew.Set(1)
 	check := func(cases []struct{ max, q, total int }) {
 		t.Helper()
 		for _, c := range cases {
@@ -20,21 +22,20 @@ func TestQuietCountsExtra(t *testing.T) {
 			q := lm.enableQuiet()
 			if q.want != c.q || lm.bulkMax() != c.max || QuietTotal(c.max) != c.total || lm.ctlTarget()-lm.Target() != c.q {
 				t.Fatalf("QuietN %d, max_links %d: QUIET %d, BULK max %d, total %d, asked of the exit past the target %d; want %d %d %d",
-					QuietN, c.max, q.want, lm.bulkMax(), QuietTotal(c.max), lm.ctlTarget()-lm.Target(), c.q, c.max, c.total)
+					QuietN.Get(), c.max, q.want, lm.bulkMax(), QuietTotal(c.max), lm.ctlTarget()-lm.Target(), c.q, c.max, c.total)
 			}
 		}
 	}
 	check([]struct{ max, q, total int }{{1, 1, 2}, {2, 1, 3}, {3, 1, 4}, {4, 1, 5}, {5, 1, 6}, {6, 4, 10}, {8, 4, 12}, {64, 4, 68}, {300, 4, 304}})
 	// the round-4 judge's two up to five links (HS2_TUNE_QUIET_FEW=2)
-	QuietFew = 2
+	QuietFew.Set(2)
 	check([]struct{ max, q, total int }{{1, 2, 3}, {5, 2, 7}, {6, 4, 10}})
-	QuietFew = 1
-	// round 3's two past five links (HS2_TUNE_QUIET_MANY=2)
-	defer func(m int) { QuietMany = m }(QuietMany)
-	QuietMany = 2
+	QuietFew.Set(1) // round 3's two past five links (HS2_TUNE_QUIET_MANY=2)
+	defer func(m int) { QuietMany.Set(m) }(QuietMany.Get())
+	QuietMany.Set(2)
 	check([]struct{ max, q, total int }{{5, 1, 6}, {6, 2, 8}, {8, 2, 10}, {300, 2, 302}})
-	QuietMany = 4
-	QuietN = 2
+	QuietMany.Set(4)
+	QuietN.Set(2)
 	check([]struct{ max, q, total int }{{1, 2, 3}, {4, 2, 6}, {300, 2, 302}})
 }
 
@@ -42,7 +43,7 @@ func TestQuietCountsExtra(t *testing.T) {
 // judge kept one up to five): QUIET outside max_links, one QUIET link up
 // to five links, four past.
 func TestQuietDefaultsRound3(t *testing.T) {
-	if QuietExtra != 1 || QuietN != 0 || QuietBatch != 1 || QuietCount(5) != 1 || QuietCount(6) != 4 {
-		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(5) %d, (6) %d; want 1 0 1 1 4", QuietExtra, QuietN, QuietBatch, QuietCount(5), QuietCount(6))
+	if QuietExtra.Get() != 1 || QuietN.Get() != 0 || QuietBatch != 1 || QuietCount(5) != 1 || QuietCount(6) != 4 {
+		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(5) %d, (6) %d; want 1 0 1 1 4", QuietExtra.Get(), QuietN.Get(), QuietBatch, QuietCount(5), QuietCount(6))
 	}
 }

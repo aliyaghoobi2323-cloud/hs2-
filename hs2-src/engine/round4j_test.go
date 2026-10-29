@@ -19,12 +19,14 @@ func withTune(t *testing.T, ti *TuneInt, v int) {
 // TestQuietFewCount: QuietFew is the QUIET count up to quietOneMax links,
 // QuietMany past it, and the pool's total holds them next to max_links.
 func TestQuietFewCount(t *testing.T) {
-	defer func(f, m, n, x int) { QuietFew, QuietMany, QuietN, QuietExtra = f, m, n, x }(QuietFew, QuietMany, QuietN, QuietExtra)
-	QuietN, QuietExtra, QuietMany = 0, 1, 4
+	defer func(f, m, n, x int) { QuietFew.Set(f); QuietMany.Set(m); QuietN.Set(n); QuietExtra.Set(x) }(QuietFew.Get(), QuietMany.Get(), QuietN.Get(), QuietExtra.Get())
+	QuietN.Set(0)
+	QuietExtra.Set(1)
+	QuietMany.Set(4)
 	for _, c := range []struct{ few, links, want, total int }{
 		{1, 1, 1, 2}, {1, 5, 1, 6}, {1, 6, 4, 10}, {2, 1, 2, 3}, {2, 5, 2, 7}, {2, 6, 4, 10}, {2, 300, 4, 304}, {0, 1, 1, 2},
 	} {
-		QuietFew = c.few
+		QuietFew.Set(c.few)
 		if got, tot := QuietCount(c.links), QuietTotal(c.links); got != c.want || tot != c.total {
 			t.Fatalf("QuietFew %d, %d links: %d QUIET of %d in all, want %d of %d", c.few, c.links, got, tot, c.want, c.total)
 		}

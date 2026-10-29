@@ -64,7 +64,7 @@ var (
 	// BBR pacing past the policer for good (app-limited samples never lower
 	// BBR's max-bw filter): behind a policer at 60% of the path 8 of 96 of
 	// the red team's model runs drained the link (WINDOW_CORE §2.2, §8.1).
-	WcoreUpload = 0
+	WcoreUpload = newTuneInt(0)
 	// WcoreStage 2 lets ceilings go below NeedStreamBuffer once the core
 	// found the path full (§4.4).
 	WcoreStage = 1
@@ -355,7 +355,7 @@ func (ws *wcSet) put(l *wcLink) {
 // cap's registration): the window core is on and, on the exit's end
 // (server: it receives uploads), WcoreUpload too.
 func wcCoreOn(server bool) bool {
-	return Wcore != 0 && (!server || WcoreUpload != 0)
+	return Wcore != 0 && (!server || WcoreUpload.Get() != 0)
 }
 
 // wcNetOn says whether the exit's link sockets get the pacing net: PaceNet,
