@@ -72,16 +72,24 @@ def main():
     as_json = "--json" in sys.argv
     out = a[0]
     rig = cpulist(a[1] if len(a) > 1 else "0-5")
-    conds = [c for c in ("A", "B", "C") if os.path.exists(os.path.join(out, c, "res.jsonl"))]
+    conds = [c for c in ("A", "B", "C", "D") if os.path.exists(os.path.join(out, c, "res.jsonl"))]
     data = {}   # cell -> cond -> metric -> [values]
     kinds = {}
     cpu = {}    # cond -> lists
     fails = {}
+    first = None  # --first=N: only each cell's first N ok runs a condition (the 3-repeat verdict)
+    for x in sys.argv[1:]:
+        if x.startswith("--first="):
+            first = int(x.split("=")[1])
     for c in conds:
-        for rec in load(os.path.join(out, c, "res.jsonl")):
+        seen = {}
+        for rec in sorted(load(os.path.join(out, c, "res.jsonl")), key=lambda r: r.get("start") or ""):
             cell = " ".join(t for t in rec.get("cell", "").split() if not t.startswith("BIN="))
             if not rec.get("ok"):
                 fails.setdefault(c, []).append("%s: %s" % (rec.get("id"), "; ".join(rec.get("errs", []))))
+                continue
+            seen[cell] = seen.get(cell, 0) + 1
+            if first and seen[cell] > first:
                 continue
             m = ana.derive(rec)
             for name, kind, v in metrics(rec, m):
