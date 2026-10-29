@@ -29,6 +29,14 @@
 #          "kill"); MIX frozen (FROZEN, FWAVE, FREAD, FRCVBUF, FROZENU):
 #          downloads whose app stops reading next to probes.
 #
+# PROC_TRACE=S (environment, R1 merge step 5): every S s from the links being
+# up to the end of the run, both hs2 processes' open fds, VmRSS (kB),
+# threads and goroutines (HS2_PPROF on loopback inside each namespace) go to
+# raw/ID/proc-edge.tsv and proc-exit.tsv ("epoch fds rss_kb threads
+# goroutines"); the run then stays up POST_IDLE s (20) after the client ends,
+# so what the users' connections held can be seen to go (a leak stays), and
+# status-*-idle.txt/json are taken at its end.
+#
 # Lines that differ only in BIN form one cell; the cell runs in the order
 # ABBABA (A = old) for REPS (3) repeats each; a cell with one BIN runs REPS
 # times. Each run: fresh namespaces (rig.sh up), fresh cert and shared key (in
@@ -131,6 +139,21 @@ sssnap() {
   ip netns exec $X ss -tinH state established '( dport = :2096 )' > "$r/ss-exit-$tag.txt" 2>/dev/null
   ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-$tag.txt" 2>/dev/null
   head -1 /proc/stat > "$r/stat-$tag.txt"
+}
+
+# proctrace R: the PROC_TRACE sampler (runs in the background; it uses
+# run_one's pe and px)
+proctrace() {
+  local r=$1 side p ns g
+  while :; do
+    for side in edge exit; do
+      if [ $side = edge ]; then p=$pe; ns=$E; else p=$px; ns=$X; fi
+      [ -r "/proc/$p/status" ] || continue
+      g=$(ip netns exec $ns curl -s -m 2 "http://127.0.0.1:6061/debug/pprof/goroutine?debug=1" 2>/dev/null | awk '/^goroutine profile: total/{print $NF; exit}')
+      echo "$(date +%s.%N) $(ls "/proc/$p/fd" 2>/dev/null | wc -l) $(awk '/^VmRSS:/{print $2}' "/proc/$p/status") $(awk '/^Threads:/{print $2}' "/proc/$p/status") ${g:-NA}" >> "$r/proc-$side.tsv"
+    done
+    sleep "$PROC_TRACE"
+  done
 }
 
 # killlink R WHAT C0 (KILLQ, R1 round-4 judge): reset one link socket of the
@@ -261,6 +284,8 @@ run_steps() {
   # gameudp in the cell: UDP on the edge's user ports ("udp": true)
   udp=0; grep -q '"kind": "gameudp"' "$r/spec.json" && udp=1
   mkconf "$w" "$N" $udp || { why="hs2 config"; return 1; }
+  # PROC_TRACE: goroutines through Go's pprof, on loopback in each namespace
+  [ "${PROC_TRACE:-0}" != 0 ] && hs2env="$hs2env HS2_PPROF=127.0.0.1:6061"
   # the server keeps each game and call flow's record in srv/ (the client reads it)
   ip netns exec $X "$RL" server -listen 127.0.0.1:5211,127.0.0.1:5212,:5213 -report "$r/srv" -sndbuf "$PANEL_SNDBUF" > "$r/rigload-server.log" 2>&1 &
   PIDS+=($!)
@@ -275,6 +300,10 @@ run_steps() {
   echo "{\"links_wait_s\":$(awk -v a="$t0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.2f", b - a}'),\"links_at_start\":${n:-0},\"pid_edge\":$pe,\"pid_exit\":$px}" > "$r/links.json"
   [ "${n:-0}" -ge "$N" ] || { why="only ${n:-0} of $N links up after $lw s"; return 1; }
   "$D/rig.sh" tun-up 2> "$r/tun-up.err" || { why="tun-up: $(tail -1 "$r/tun-up.err")"; return 1; }
+  if [ "${PROC_TRACE:-0}" != 0 ]; then
+    proctrace "$r" &
+    PIDS+=($!)
+  fi
   case "$MODE" in
     *police:*) MODE=$MODE POLICE_BURST_MS=$POLICE_BURST_MS "$D/rig.sh" police > "$r/police.log" 2>&1 &
                PIDS+=($!); sleep 1.5 ;;
@@ -316,7 +345,19 @@ run_steps() {
   sssnap end "$r"
   grep -E "^Vm(RSS|HWM):" /proc/$pe/status > "$r/mem-edge.txt" 2>/dev/null
   grep -E "^Vm(RSS|HWM):" /proc/$px/status > "$r/mem-exit.txt" 2>/dev/null
-  wait "$pc" || { why="client exit status $? ($(tail -1 "$r/client.err"))"; return 1; }
+  local cst=0
+  wait "$pc" || cst=$?
+  date +%s.%N > "$r/client-end.txt"
+  [ "$cst" = 0 ] || { why="client exit status $cst ($(tail -1 "$r/client.err"))"; return 1; }
+  if [ "${PROC_TRACE:-0}" != 0 ]; then
+    # the users' connections are gone: what they held must go too
+    sleep "${POST_IDLE:-20}"
+    "$bp" status -c "$w/edge.json" > "$r/status-edge-idle.txt" 2>&1
+    "$bp" status -c "$w/exit.json" > "$r/status-exit-idle.txt" 2>&1
+    cp "/run/hs2/$(echo "${w#/}" | tr / -)-edge.json.status.json" "$r/status-edge-idle.json" 2>/dev/null
+    cp "/run/hs2/$(echo "${w#/}" | tr / -)-exit.json.status.json" "$r/status-exit-idle.json" 2>/dev/null
+    ip netns exec $E ss -tinH state established "( sport = :2096 )" > "$r/ss-edge-idle.txt" 2>/dev/null
+  fi
   kill -0 "$pe" 2>/dev/null || { why="edge hs2 exited during the run"; return 1; }
   kill -0 "$px" 2>/dev/null || { why="exit hs2 exited during the run"; return 1; }
   return 0
