@@ -1,0 +1,28 @@
+15:52:37.683038 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:52:37.683916 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:52:37.684286 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:52:37.711583 tun ug0 up: 10.81.9.1/30 peer 10.81.9.2 (side channel)
+15:52:37.712620 stream edge (reverse): listening for kharej links on 192.168.81.1:2096
+15:52:37.713541 user port 8443 open (tcp), carried over the link pool
+15:52:38.542403 mtcp: reverse link 0 up from 192.168.81.2 (now 1)
+15:52:38.570174 mtcp: reverse link 1 up from 192.168.81.2 (now 2)
+15:52:38.702276 mtcp: reverse link 2 up from 192.168.81.2 (now 3)
+15:52:38.744923 mtcp: reverse link 3 up from 192.168.81.2 (now 4)
+15:52:38.814483 mtcp: reverse link 4 up from 192.168.81.2 (now 5)
+15:52:38.868835 mtcp: reverse link 5 up from 192.168.81.2 (now 6)
+15:52:45.650189 mtcp: reverse link 2 from 192.168.81.2 down: read: closed by the other server (now 5)
+15:52:45.650202 mtcp: reverse link 1 from 192.168.81.2 down: read: closed by the other server (now 4)
+15:52:45.650260 mtcp: reverse link 4 from 192.168.81.2 down: read: closed by the other server (now 3)
+15:52:45.650297 mtcp: reverse link 0 from 192.168.81.2 down: read: closed by the other server (now 2)
+15:52:45.650429 mtcp: reverse link 3 from 192.168.81.2 down: read: closed by the other server (now 1)
+15:52:45.650485 mtcp: reverse link 5 from 192.168.81.2 down: read: closed by the other server (now 0)
+15:53:07.713384 l3: dropped 3 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected
+15:53:37.685716 cert: <w>/cert.pem expires in 1 day(s) — renew it now; 'hs2 doctor' (cert renewal) shows whether and how it renews
+15:53:37.713258 l3: dropped 1 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected
+15:54:37.713695 l3: dropped 1 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected
+15:54:48.340777 mtcp: reverse link 6 up from 192.168.81.2 (now 1)
+15:54:48.493755 mtcp: reverse link 7 up from 192.168.81.2 (now 2)
+15:54:48.553236 mtcp: reverse link 8 up from 192.168.81.2 (now 3)
+15:54:48.642761 mtcp: reverse link 9 up from 192.168.81.2 (now 4)
+15:54:48.708262 mtcp: reverse link 10 up from 192.168.81.2 (now 5)
+15:54:48.789022 mtcp: reverse link 11 up from 192.168.81.2 (now 6)

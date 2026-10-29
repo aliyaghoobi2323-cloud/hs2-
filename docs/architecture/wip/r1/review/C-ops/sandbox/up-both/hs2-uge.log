@@ -1,0 +1,31 @@
+15:49:03.883418 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:49:03.883925 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:49:03.884109 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:49:03.899605 tun ug0 up: 10.81.9.1/30 peer 10.81.9.2 (side channel)
+15:49:03.900163 stream edge (reverse): listening for kharej links on 192.168.81.1:2096
+15:49:03.901127 user port 8443 open (tcp), carried over the link pool
+15:49:04.699395 mtcp: reverse link 0 up from 192.168.81.2 (now 1)
+15:49:04.699772 mtcp: reverse link 1 up from 192.168.81.2 (now 2)
+15:49:04.779002 mtcp: reverse link 2 up from 192.168.81.2 (now 3)
+15:49:04.843145 mtcp: reverse link 3 up from 192.168.81.2 (now 4)
+15:49:04.892873 mtcp: reverse link 4 up from 192.168.81.2 (now 5)
+15:49:05.037823 mtcp: reverse link 5 up from 192.168.81.2 (now 6)
+15:49:11.278357 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:49:11.278756 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:49:11.278961 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:49:11.295482 tun ug0 up: 10.81.9.1/30 peer 10.81.9.2 (side channel)
+15:49:11.296025 stream edge (reverse): listening for kharej links on 192.168.81.1:2096
+15:49:11.296493 user port 8443 open (tcp), carried over the link pool
+15:49:11.474461 mtcp: QUIET link q0 up from 192.168.81.2 (now 1 QUIET)
+15:49:11.558693 mtcp: QUIET link q1 up from 192.168.81.2 (now 2 QUIET)
+15:49:11.682957 mtcp: QUIET link q2 up from 192.168.81.2 (now 3 QUIET)
+15:49:11.815557 mtcp: QUIET link q3 up from 192.168.81.2 (now 4 QUIET)
+15:49:11.930735 mtcp: reverse link 0 up from 192.168.81.2 (now 1)
+15:49:12.023900 mtcp: reverse link 1 up from 192.168.81.2 (now 2)
+15:49:12.084690 mtcp: reverse link 2 up from 192.168.81.2 (now 3)
+15:49:12.201320 mtcp: reverse link 3 up from 192.168.81.2 (now 4)
+15:49:21.475266 mtcp: +2 more links up in the last 10s (latest: reverse link 5 up from 192.168.81.2 (now 6))
+15:49:25.297031 cpu: the server is saturated — 63% busy across 12 core(s) (softirq 4%), tasks waited for a core 41% of the last 10 s; hs2 itself uses 3% of one core. Every carrier now sends late however good the path is: other programs on this server (another tunnel?) or a bigger VPS are the fix, not the tunnel's settings
+15:49:41.296867 l3: dropped 1 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected
+15:50:11.280909 cert: <w>/cert.pem expires in 1 day(s) — renew it now; 'hs2 doctor' (cert renewal) shows whether and how it renews
+15:50:11.475179 events in the last minute: udp late drops 0, owd dirty 0, budget cuts 0, quiet records saved 358 of 3161 writes, moved to bulk 0 (back 0), tun flows 0, attached at the exit 0, move hints heard 0 sent 0

@@ -1,0 +1,36 @@
+15:47:47.014193 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:47:47.014855 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:47:47.015054 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:47:47.040219 tun ug0 up: 10.81.9.1/30 peer 10.81.9.2 (side channel)
+15:47:47.040914 stream edge (reverse): listening for kharej links on 192.168.81.1:2096
+15:47:47.041372 user port 8443 open (tcp), carried over the link pool
+15:47:47.826623 mtcp: reverse link 0 up from 192.168.81.2 (now 1)
+15:47:47.896962 mtcp: reverse link 1 up from 192.168.81.2 (now 2)
+15:47:48.012290 mtcp: reverse link 2 up from 192.168.81.2 (now 3)
+15:47:48.052961 mtcp: reverse link 3 up from 192.168.81.2 (now 4)
+15:47:48.136301 mtcp: reverse link 4 up from 192.168.81.2 (now 5)
+15:47:48.239116 mtcp: reverse link 5 up from 192.168.81.2 (now 6)
+15:47:54.211004 mtcp: reverse link 0 from 192.168.81.2 down: read: closed by the other server (now 5)
+15:47:54.211121 mtcp: reverse link 1 from 192.168.81.2 down: read: closed by the other server (now 4)
+15:47:54.211201 mtcp: reverse link 3 from 192.168.81.2 down: read: closed by the other server (now 3)
+15:47:54.213895 mtcp: reverse link 5 from 192.168.81.2 down: read: closed by the other server (now 2)
+15:47:54.214427 mtcp: reverse link 4 from 192.168.81.2 down: read: closed by the other server (now 0)
+15:47:54.214427 mtcp: reverse link 2 from 192.168.81.2 down: read: closed by the other server (now 0)
+15:47:54.616131 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:47:54.616625 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:47:54.616899 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:47:54.631232 tun ug0 up: 10.81.9.1/30 peer 10.81.9.2 (side channel)
+15:47:54.631816 stream edge (reverse): listening for kharej links on 192.168.81.1:2096
+15:47:54.632235 user port 8443 open (tcp), carried over the link pool
+15:47:54.796243 mtcp: QUIET link q0 up from 192.168.81.2 (now 1 QUIET)
+15:47:54.839715 mtcp: QUIET link q1 up from 192.168.81.2 (now 2 QUIET)
+15:47:54.936050 mtcp: QUIET link q2 up from 192.168.81.2 (now 3 QUIET)
+15:47:54.998703 mtcp: QUIET link q3 up from 192.168.81.2 (now 4 QUIET)
+15:47:55.040032 mtcp: reverse link 0 up from 192.168.81.2 (now 1)
+15:47:55.190325 mtcp: reverse link 1 up from 192.168.81.2 (now 2)
+15:47:55.278854 mtcp: reverse link 2 up from 192.168.81.2 (now 3)
+15:47:55.332243 mtcp: reverse link 3 up from 192.168.81.2 (now 4)
+15:48:04.796654 mtcp: +2 more links up in the last 10s (latest: reverse link 5 up from 192.168.81.2 (now 6))
+15:48:24.632416 l3: dropped 1 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected
+15:48:54.618055 cert: <w>/cert.pem expires in 1 day(s) — renew it now; 'hs2 doctor' (cert renewal) shows whether and how it renews
+15:48:54.797430 events in the last minute: udp late drops 0, owd dirty 0, budget cuts 0, quiet records saved 386 of 3175 writes, moved to bulk 0 (back 0), tun flows 0, attached at the exit 0, move hints heard 0 sent 0

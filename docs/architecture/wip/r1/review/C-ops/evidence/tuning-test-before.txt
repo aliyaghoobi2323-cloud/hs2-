@@ -1,0 +1,10 @@
+--- FAIL: TestApplyTuningSaysWhatItIgnores (0.00s)
+    tuning_env_test.go:47: log lacks "tuning: HS2_TUNE_QUIET=\"off\" ignored":
+        2026/10/29 15:50:38 tuning: HS2_TUNE_EARLYDONE=0
+    tuning_env_test.go:47: log lacks "tuning: HS2_TUNE_PACENET_K=\"x1.5\" ignored":
+        2026/10/29 15:50:38 tuning: HS2_TUNE_EARLYDONE=0
+    tuning_env_test.go:47: log lacks "tuning: HS2_TUNE_TWOWAY_RATIO=\"16x\" ignored":
+        2026/10/29 15:50:38 tuning: HS2_TUNE_EARLYDONE=0
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	0.010s
+FAIL

@@ -1,0 +1,6 @@
+lines touching /run/hs2/icmp-echo-ignore: 0
+1010455 mkdirat(AT_FDCWD, "/tmp/hs2-echomark-1428726953", 0700) = 0
+1010455 openat(AT_FDCWD, "/tmp/hs2-echomark-1428726953", O_RDONLY|O_CLOEXEC|O_DIRECTORY) = 4
+1010457 openat(AT_FDCWD, "/tmp/hs2-echomark-1428726953", O_RDONLY|O_CLOEXEC|O_DIRECTORY) = 4
+1010457 openat(AT_FDCWD, "/tmp/hs2-echomark-1428726953", O_RDONLY|O_CLOEXEC|O_DIRECTORY) = 4
+1010459 openat(AT_FDCWD, "/tmp/hs2-echomark-1428726953/1010455.4026532767", O_WRONLY|O_CREAT|O_TRUNC|O_CLOEXEC, 0644) = 4

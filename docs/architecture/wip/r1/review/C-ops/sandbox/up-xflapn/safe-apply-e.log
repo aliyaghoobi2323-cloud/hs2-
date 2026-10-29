@@ -1,0 +1,8 @@
+2026-10-29T16:03:00.469 stage <w>/stage-e; unit hs2-uge; config <w>/edge.json; peer 10.81.9.2 (wait 120 s); backup in <w>/backups/apply-20261029-160300-8113
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build c0111e0c9bb3 2026-10-29]
+WARN:  certificate expires in 1 days (2026-10-31)
+ERROR: "addr": 192.168.81.1 is not an IP of this server, so it cannot listen on it (use one of this server's IPs, or 0.0.0.0)
+2026-10-29T16:03:00.496 the live config fails hs2 check with the running binary too (it runs so today): going on
+2026-10-29T16:03:00.534 applied; restarting hs2-uge (build c0111e0c9bb3; env: )
+2026-10-29T16:04:00.774 tunnel back: 10.81.9.2 answers 60 s after the restart
+2026-10-29T16:04:00.776 OK

@@ -1,0 +1,7 @@
+--- PASS: TestICMPEchoGuardKeepsHostPing (2.87s)
+--- PASS: TestICMPEchoGuardRefcount (0.10s)
+--- PASS: TestSweepStaleEchoGuards (0.59s)
+--- PASS: TestSweepRestoresGlobalEchoIgnore (0.14s)
+--- PASS: TestICMPEchoRestoredOnClose (0.01s)
+--- PASS: TestICMPEchoLeftAloneWhenPreSet (0.01s)
+PASS

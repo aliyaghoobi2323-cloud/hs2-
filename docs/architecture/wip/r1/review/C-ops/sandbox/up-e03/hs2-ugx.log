@@ -1,0 +1,36 @@
+15:57:43.234728 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:57:43.235193 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:57:43.235403 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:57:43.261170 tun ug0 up: 10.81.9.2/30 peer 10.81.9.1 (side channel)
+15:57:43.261719 stream exit (reverse): dynamic link pool 6–6 to edge 192.168.81.1:2096 (edge drives the count)
+15:57:43.262511 mtcp: exit pool starting 6 links (the edge sets the count once it is connected)
+15:57:43.565351 mtcp: exit link up to edge (slot 5; now 1)
+15:57:43.638878 mtcp: exit link up to edge (slot 3; now 2)
+15:57:43.792797 mtcp: exit link up to edge (slot 1; now 3)
+15:57:43.861507 mtcp: exit link up to edge (slot 0; now 4)
+15:57:43.988689 mtcp: exit link up to edge (slot 2; now 5)
+15:57:44.035554 mtcp: exit link up to edge (slot 4; now 6)
+15:57:49.928914 mtcp: exit link down (slot 5: read: closed by the other server; now 5); redial
+15:57:49.928985 mtcp: exit link down (slot 4: read: closed by the other server; now 3); redial
+15:57:49.928969 mtcp: exit link down (slot 2: read: closed by the other server; now 4); redial
+15:57:49.929009 mtcp: exit link down (slot 3: read: closed by the other server; now 1); redial
+15:57:49.929008 mtcp: exit link down (slot 1: read: closed by the other server; now 2); redial
+15:57:49.930073 mtcp: exit link down (slot 0: read: closed by the other server; now 0); redial
+15:57:50.328179 memory: Go soft limit 11728 MB (half of 23456 MB RAM; set GOMEMLIMIT to override)
+15:57:50.328609 tuning: profile high (RAM 22.9 GB, 6 cpu) — bbr + fq_codel, 16 sysctls (not applied: HS2_NO_TUNE set)
+15:57:50.328918 link pool: ceiling 6 links — fixed by max_links in the config (auto would give 300 here: 22.9 GB RAM, 6 cores: one link per 48 MB of RAM after 768 MB for the window pool, at most 300)
+15:57:50.345914 tun ug0 up: 10.81.9.2/30 peer 10.81.9.1 (side channel)
+15:57:50.346439 stream exit (reverse): dynamic link pool 6–6 to edge 192.168.81.1:2096 (edge drives the count)
+15:57:50.347495 mtcp: exit pool starting 6 links (the edge sets the count once it is connected)
+15:57:50.575708 mtcp: exit link up to edge (slot 0; now 1)
+15:57:50.576331 mtcp: exit pool target 10 links (edge asked; was 6, 1 up)
+15:57:50.647115 mtcp: exit link up to edge (slot 2; now 2)
+15:57:50.727775 mtcp: exit link up to edge (slot 5; now 3)
+15:57:50.835425 mtcp: exit link up to edge (slot 3; now 4)
+15:57:50.891523 mtcp: exit link up to edge (slot 4; now 5)
+15:57:50.991433 mtcp: exit link up to edge (slot 1; now 6)
+15:57:51.121519 mtcp: exit link up to edge (slot 7; now 7)
+15:57:51.257333 mtcp: exit link up to edge (slot 6; now 8)
+15:58:00.575788 mtcp: +2 more exit links up in the last 10s (latest: exit link up to edge (slot 9; now 10))
+15:58:20.347246 l3: dropped 1 packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected
+15:58:50.577060 events in the last minute: udp late drops 0, owd dirty 0, budget cuts 0, quiet records saved 15 of 1922 writes, moved to bulk 0 (back 0), tun flows 0, attached at the exit 0, move hints heard 0 sent 0

@@ -1,0 +1,1 @@
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.299s
