@@ -68,9 +68,14 @@ func TestRed2TwoWayAckedDownload(t *testing.T) {
 	}
 }
 
-// Z10: an idle QUIET link's one-way delay loop sends nothing while no BULK
-// rate is noted (OWDIdle), sends at once when one is, and parks again
-// owdIdleAfter after the last; with OWDIdle 0 it beats every 0.5 to 1.5 s.
+// Z10 and B4: an idle QUIET link's one-way delay loop sends nothing while
+// the BULK links carry under owdIdleRate a second (OWDIdle), sends at once
+// when one second has as much, and parks again owdIdleAfter after the
+// last; its beat follows that traffic, not a delivery rate Linux keeps from
+// the last download (app-limited samples never lower tcpi_delivery_rate:
+// on the rig the exit's QUIET link went on at 25 ms, 35 to 40 records a
+// second, after a 10 s download ended). With OWDIdle 0, the beat of the
+// noted rate: 1 s idle, 25 ms with a stale 1 MB/s.
 func TestRed2OWDIdleParks(t *testing.T) {
 	run := func(idle int, steps func(a, b *owdLink)) {
 		withTune(t, OWDIdle, idle)
@@ -86,47 +91,66 @@ func TestRed2OWDIdleParks(t *testing.T) {
 		<-done
 		<-done
 	}
+	// both ends: the stale delivery rate of a download that ended (noteRate
+	// each 10 ms) and what really moves: keepalive-sized bits (a 1 KB record
+	// each 100 ms on the BULK links)
+	staleIdle := func(a, b *owdLink, d time.Duration) {
+		for end := time.Now().Add(d); time.Now().Before(end); {
+			for _, o := range []*owdLink{a, b} {
+				o.noteRate(12.5e6) // 100 Mbit/s, kept by Linux
+				o.noteTraffic(100)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
 	run(0, func(a, b *owdLink) {
 		time.Sleep(3500 * time.Millisecond)
-		if n := a.msgs.Load() + b.msgs.Load(); n < 3 {
-			t.Fatalf("OWDIdle 0: %d messages in 3.5 s, want the 1 s beat", n)
+		n := a.msgs.Load() + b.msgs.Load()
+		staleIdle(a, b, 2*time.Second)
+		n2 := a.msgs.Load() + b.msgs.Load() - n
+		t.Logf("OWDIdle 0: idle 3.5 s, %d messages; 2 s with the stale rate of an ended download, %d", n, n2)
+		if n < 3 || n2 < 60 {
+			t.Fatalf("OWDIdle 0: %d and %d messages, want the 1 s beat and the 25 ms one (the case is not shown)", n, n2)
 		}
-		t.Logf("OWDIdle 0, idle 3.5 s: %d + %d messages", a.msgs.Load(), b.msgs.Load())
 	})
 	run(1, func(a, b *owdLink) {
-		time.Sleep(2500 * time.Millisecond)
+		staleIdle(a, b, 2500*time.Millisecond)
 		if n := a.msgs.Load() + b.msgs.Load(); n != 0 {
-			t.Fatalf("idle pool: %d messages in 2.5 s, want none", n)
+			t.Fatalf("idle pool (stale rate, keepalive traffic): %d messages in 2.5 s, want none", n)
 		}
 		t0 := time.Now()
-		a.noteRate(1e6)
-		b.noteRate(1e6)
-		for a.msgs.Load() == 0 || b.msgs.Load() == 0 {
-			if time.Since(t0) > 300*time.Millisecond {
-				t.Fatalf("a busy pool: no message both ways 300 ms after the rate (%d, %d)", a.msgs.Load(), b.msgs.Load())
+		busy := func() {
+			for _, o := range []*owdLink{a, b} {
+				o.noteRate(1e6)
+				o.noteTraffic(10 << 10) // 1 MB/s at 10 ms steps
 			}
-			time.Sleep(5 * time.Millisecond)
+		}
+		for a.msgs.Load() == 0 || b.msgs.Load() == 0 {
+			busy()
+			if time.Since(t0) > 300*time.Millisecond {
+				t.Fatalf("a busy pool: no message both ways 300 ms after the traffic (%d, %d)", a.msgs.Load(), b.msgs.Load())
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 		first := time.Since(t0)
-		// busy for 2 s: the beat follows the rate (owdTickOf)
-		for range 40 {
-			a.noteRate(1e6)
-			b.noteRate(1e6)
-			time.Sleep(50 * time.Millisecond)
-		}
-		busy := a.msgs.Load() + b.msgs.Load()
-		// idle again: parked after owdIdleAfter and a beat
-		time.Sleep(owdIdleAfter + 400*time.Millisecond)
 		n0 := a.msgs.Load() + b.msgs.Load()
-		time.Sleep(2 * time.Second)
-		n1 := a.msgs.Load() + b.msgs.Load()
-		t.Logf("first message both ways %v after the rate; %d messages in 2 s busy; %d in the 2 s after parking (parks %d, %d)",
-			first.Round(time.Millisecond), busy, n1-n0, a.parks.Load(), b.parks.Load())
-		if busy < 20 {
-			t.Fatalf("busy: %d messages in 2 s at 1 MB/s (the beat owdTickOf: ~100 ms)", busy)
+		for range 200 {
+			busy()
+			time.Sleep(10 * time.Millisecond)
 		}
-		if n1 != n0 {
-			t.Fatalf("idle again: %d messages after parking", n1-n0)
+		nb := a.msgs.Load() + b.msgs.Load() - n0
+		// idle again, the stale rate still noted: parked after owdIdleAfter
+		staleIdle(a, b, owdIdleAfter+1500*time.Millisecond)
+		n1 := a.msgs.Load() + b.msgs.Load()
+		staleIdle(a, b, 2*time.Second)
+		n2 := a.msgs.Load() + b.msgs.Load()
+		t.Logf("first message both ways %v after the traffic; %d messages in 2 s busy; %d in the 2 s after parking (parks %d, %d)",
+			first.Round(time.Millisecond), nb, n2-n1, a.parks.Load(), b.parks.Load())
+		if nb < 20 {
+			t.Fatalf("busy: %d messages in 2 s at 1 MB/s (the beat owdTickOf: ~100 ms)", nb)
+		}
+		if n2 != n1 {
+			t.Fatalf("idle again: %d messages after parking", n2-n1)
 		}
 	})
 }
