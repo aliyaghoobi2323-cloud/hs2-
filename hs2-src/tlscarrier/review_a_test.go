@@ -2,6 +2,7 @@ package tlscarrier
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -61,8 +62,9 @@ func TestReviewANoEMSProbeServed(t *testing.T) {
 	cert := testCert(t, "vpn.example.com")
 	be, stopB := backend(t)
 	defer stopB()
-	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { t.Error("a probe reached the tunnel"); c.Close() })
-	defer stop()
+	addr, wait := serveOne(t, &Server{SharedKey: key, Cert: cert, BackendAddr: be},
+		func(c *Carrier) { t.Error("a probe reached the tunnel"); c.Close() })
+	defer wait()
 
 	raw, err := net.Dial("tcp", addr)
 	if err != nil {
@@ -94,13 +96,15 @@ func TestReviewANoEMSProbeServed(t *testing.T) {
 func TestReviewANoEMSProbeSwitchOff(t *testing.T) {
 	old := ProbeNoEKM
 	ProbeNoEKM = 0
-	defer func() { ProbeNoEKM = old }()
 	key := bytes.Repeat([]byte{0xa2}, 32)
 	cert := testCert(t, "vpn.example.com")
 	be, stopB := backend(t)
 	defer stopB()
-	addr, stop := startServer(t, key, cert, be, func(c *Carrier) { c.Close() })
-	defer stop()
+	addr, wait := serveOne(t, &Server{SharedKey: key, Cert: cert, BackendAddr: be}, func(c *Carrier) { c.Close() })
+	defer func() {
+		wait() // (its read of the switch before the switch is set back)
+		ProbeNoEKM = old
+	}()
 	raw, err := net.Dial("tcp", addr)
 	if err != nil {
 		t.Fatal(err)
@@ -119,6 +123,25 @@ func TestReviewANoEMSProbeSwitchOff(t *testing.T) {
 	if len(out) != 0 {
 		t.Fatalf("switch off: got %q, want the old close", out)
 	}
+}
+
+// serveOne serves one connection on a listener of its own. wait, deferred
+// before the test dials (so the test's own conn closes first), closes the
+// listener and returns once Handle has: ProbeNoEKM, which these tests set,
+// is read there, and the process sets it once, before any server runs.
+func serveOne(t *testing.T, srv *Server, onTunnel func(*Carrier)) (addr string, wait func()) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan struct{})
+	go func() {
+		defer close(served)
+		if c, err := ln.Accept(); err == nil {
+			srv.Handle(context.Background(), c, onTunnel)
+		}
+	}()
+	return ln.Addr().String(), func() { ln.Close(); <-served }
 }
 
 // A tunnel client still links, and a TLS 1.3 probe still gets the website,

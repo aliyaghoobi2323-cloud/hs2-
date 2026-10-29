@@ -53,6 +53,7 @@ func TestReviewATunFloodCost(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			sq := newTunSched(nil)
+			defer sq.close() // (its bytes leave the users' accounts, userMems)
 			// fill to the bounds, then time pushes with few idle flows and
 			// with many (as a burst of 64k new flows within 2 s leaves)
 			tunPushCost(sq, 0, 4096, c.tag)
