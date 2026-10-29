@@ -64,7 +64,8 @@ P
     for i in $(seq 0 $((K - 1))); do
       c0=$((first + i * per)); c1=$((c0 + per - 1))
       f=$OUT/$L-shard$i.txt
-      pk=$(awk '{print $1}' "$f" | sort -u | sed 's|^github.com/[^/]*/[^/]*/|./|; s|^github.com/[^/]*/[^/]*$|.|' | paste -sd' ')
+      # packages as import paths (go test -json) or relative to hs2-src (slow-tests.txt)
+      pk=$(awk '{print $1}' "$f" | sort -u | sed 's|^github.com/[^/]*/[^/]*/||; s|^github.com/[^/]*/[^/]*$|.|; s|^[^.]|./&|' | paste -sd' ')
       re="^($(awk '{print $2}' "$f" | sort -u | paste -sd'|'))\$"
       TEST_CPUS=$c0-$c1 R1CPU_UNIT= "$CPU" go test -json -count=1 -p 1 -timeout 30m -run "$re" $pk > "$OUT/$L-b$i.json" 2> "$OUT/$L-b$i.err" &
       pids+=($!)
