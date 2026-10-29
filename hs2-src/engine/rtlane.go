@@ -80,6 +80,9 @@ func rtLoose(c *flowClassifier) bool {
 	if float64(c.d[0].sum) > rtHoldK*rtWindowMax() {
 		return false
 	}
+	if twoWayLopsided(uint64(c.d[0].sum), uint64(c.d[1].sum)) {
+		return false // a download acknowledged in its own data (TwoWayRatio)
+	}
 	for j, least := range [2]int{rtLooseOwn, rtLooseOther} {
 		nz := 0
 		for _, v := range c.d[j].slots {

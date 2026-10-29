@@ -793,7 +793,11 @@ func (s *Session) queueSched(f Frame, class CLASSID, tag uint32, lane uint8) (wr
 
 // frameFor is the most a data frame in lane carries now.
 func (s *Session) frameFor(lane uint8) int {
-	n := s.config.MaxFrameSize
+	// a group's frame carries seqLen more on the wire, and the header's
+	// length is 16 bits: MaxFrameSize may be 65535 (VerifyConfig), so a
+	// full group frame wrapped and the peer read user bytes as frame
+	// headers (the R1 red team's second pass, R2-5)
+	n := min(s.config.MaxFrameSize, 0xFFFF-seqLen)
 	lim := int(s.sch.bulk.Load())
 	if lane == LaneLatency && s.config.LaneFrame > 0 {
 		lim = s.config.LaneFrame

@@ -89,6 +89,27 @@ var TuneOWD = 1
 // α is C4-lite; on a shared FIFO it sees what each direction's bulk makes.
 var TuneOWDQuiet = 1
 
+// OWDIdle (HS2_TUNE_OWD_IDLE; 0: off): a QUIET link's one-way delay
+// messages stop while the BULK links that read them are idle — no rate of
+// owdIdleRate or more noted (noteRate) for owdIdleAfter — and start again,
+// one at once, at the first such rate. Without it an idle QUIET link sent
+// one message (a padded record, ~1 KB) each way every 0.5 to 1.5 s: with
+// the control pings and NOPs 1.4 to 1.8 records a second each way, gaps
+// p50 0.56 s, where an idle BULK link (and production's link) has 0.3 to
+// 0.9 a second, gaps p50 1.2 to 3 s (the R1 round-4 judge's idle capture,
+// the red team's Z10): a connection of its own with a heartbeat. Only the
+// in-flight budget and α read these delays, and only while a BULK link
+// carries data.
+var OWDIdle = newTuneInt(1)
+
+const (
+	// owdIdleRate: a noted rate (bytes/s) under this is an idle pool's (a
+	// keepalive's acks, a probe's echo)
+	owdIdleRate = 32 << 10
+	// owdIdleAfter: how long under owdIdleRate before the messages stop
+	owdIdleAfter = 3 * time.Second
+)
+
 // quietOWD is the process's QUIET link one-way delays (version 5; nil:
 // none up yet), the latest QUIET link's.
 var quietOWD atomic.Pointer[owdLink]
@@ -252,6 +273,20 @@ type owdLink struct {
 	retr0      uint64
 	dirtyUntil atomic.Int64
 	dirties    atomic.Int64 // beats that found the socket dirty
+	// OWDIdle's: when a rate of owdIdleRate or more was last noted
+	// (ctrlNow; 0: never), whether the loop is parked for an idle pool, and
+	// the channel that wakes it (set by the loop)
+	busyAt atomic.Int64
+	parked atomic.Bool
+	kick   atomic.Pointer[chan struct{}]
+	parks  atomic.Int64 // times the loop parked
+}
+
+// idle says whether no rate of owdIdleRate or more was noted for
+// owdIdleAfter (OWDIdle).
+func (o *owdLink) idle(now int64) bool {
+	at := o.busyAt.Load()
+	return at == 0 || time.Duration(now-at) > owdIdleAfter
 }
 
 // noteSocket takes the socket's TCP_INFO at a beat of a QUIET link, or of
@@ -315,6 +350,17 @@ func (o *owdLink) noteRate(r float64) {
 		return
 	}
 	now := ctrlNow()
+	if r >= owdIdleRate {
+		o.busyAt.Store(now)
+		if o.parked.CompareAndSwap(true, false) {
+			if k := o.kick.Load(); k != nil {
+				select {
+				case *k <- struct{}{}:
+				default:
+				}
+			}
+		}
+	}
 	if at := o.rateAt.Load(); at != 0 && time.Duration(now-at) < time.Second && math.Float64frombits(uint64(o.rate.Load())) > r {
 		return
 	}
@@ -454,17 +500,48 @@ func owdLoop(ctx context.Context, st io.ReadWriteCloser, o *owdLink) {
 		}
 	}()
 	var b [owdMsgLen]byte
+	kick := make(chan struct{}, 1)
+	o.kick.Store(&kick)
 	for {
-		t := time.NewTimer(owdJitter(o.tick()))
-		select {
-		case <-ctx.Done():
-			t.Stop()
-			end()
-			return
-		case <-stop:
-			t.Stop()
-			return
-		case <-t.C:
+		woke := false
+		if o.quiet && OWDIdle.Get() != 0 && o.idle(ctrlNow()) {
+			// an idle pool: no message until a BULK link's rate is noted
+			// again (noteRate kicks), then one at once; parked is set
+			// before the second look, so a rate noted in between is never
+			// missed
+			o.parked.Store(true)
+			if o.idle(ctrlNow()) {
+				o.parks.Add(1)
+				select {
+				case <-ctx.Done():
+					o.parked.Store(false)
+					end()
+					return
+				case <-stop:
+					o.parked.Store(false)
+					return
+				case <-kick:
+					woke = true
+				}
+			}
+			o.parked.Store(false)
+			select {
+			case <-kick:
+			default:
+			}
+		}
+		if !woke {
+			t := time.NewTimer(owdJitter(o.tick()))
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				end()
+				return
+			case <-stop:
+				t.Stop()
+				return
+			case <-t.C:
+			}
 		}
 		var ts tcpStat
 		tsOK := false
