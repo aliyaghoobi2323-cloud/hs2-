@@ -263,11 +263,16 @@ var configPath string
 // applyTuning lets the test lab override data-path tuning without a rebuild.
 // Production runs use the built-in defaults; these are not config options.
 func applyTuning() {
+	// A value that does not parse is said, never silently dropped: the R1
+	// switches are the field's way back (a drop-in), and HS2_TUNE_QUIET=off
+	// in place of =0 must not leave the operator believing QUIET is off.
 	num := func(name string, dst *int) {
 		if v := os.Getenv(name); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
 				*dst = n
 				log.Printf("tuning: %s=%d", name, n)
+			} else {
+				log.Printf("tuning: %s=%q ignored — not a whole number; it stays %d", name, v, *dst)
 			}
 		}
 	}
@@ -303,6 +308,8 @@ func applyTuning() {
 			if f, err := strconv.ParseFloat(v, 64); err == nil {
 				*dst = f
 				log.Printf("tuning: %s=%g", name, f)
+			} else {
+				log.Printf("tuning: %s=%q ignored — not a number; it stays %g", name, v, *dst)
 			}
 		}
 	}

@@ -32,10 +32,12 @@ the binary's embedded Git metadata (`vcs.revision` / `vcs.time` / `vcs.modified`
 `-trimpath` keeps them), so **no extra build flag is needed** to carry it. Build
 from a clean, committed tree for a clean stamp; a dirty tree is marked with a
 trailing `+`. An optional human label can be added with
-`-ldflags "-X main.buildTag=v3.1"`. The stamp is metadata only: two binaries
-with different stamps are fully wire-compatible, so it never gates a connection —
-it only lets an operator confirm both ends of a tunnel (and the server vs. the
-published build) run the same code.
+`-ldflags "-X main.buildTag=v3.1"`. The stamp is metadata only: it never gates
+a connection — it only lets an operator confirm both ends of a tunnel (and the
+server vs. the published build) run the same code. Whether two builds talk to
+each other is their wire protocol's, not the stamp's: an R1 build and a build
+from before R1 do not, though both print `hs2 v3 (…)` (the root README, *R1
+switches*: upgrading).
 
 Run tests (the race detector is worth the extra time; it needs cgo, so run it
 with the default `CGO_ENABLED=1` rather than the release flag above):

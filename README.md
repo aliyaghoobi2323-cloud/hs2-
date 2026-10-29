@@ -834,9 +834,11 @@ each server sends on its links: a per-user scheduler with a latency lane
 socket's unsent bytes (C3), a pacing cap (C4-lite) and, when the other server
 runs R1 too (wire level 2), two kinds of connection: **QUIET** links for
 control and light traffic, **BULK** links for the connections that turn bulk
-(each moves once, in order). With an older peer every link carries everything,
-as before. Every part has an environment switch. Set it in a systemd drop-in,
-never in the unit file itself, on the server(s) the table names:
+(each moves once, in order). With a peer at wire level 1 (an R1 build with
+`HS2_TUNE_QUIET=0`) every link carries everything, as before; a build from
+before R1 does not connect at all (next paragraph). Every part has an
+environment switch. Set it in a systemd drop-in, never in the unit file
+itself, on the server(s) the table names:
 
 ```bash
 mkdir -p /etc/systemd/system/hs2.service.d
@@ -854,7 +856,7 @@ systemctl daemon-reload && systemctl restart hs2
 | `HS2_TUNE_HQG_SEGS=N` | 8 | C3's cap is at least N segments (0: 2 segments, the design document's gate) | either end |
 | `HS2_TUNE_SENDCAP=0` | on | C4-lite off: the exit's pacing net alone, as before | either end |
 | `HS2_TUNE_QUIET=0` | on | no QUIET links: one connection per link carries everything (level 1's behaviour) | either end |
-| `HS2_TUNE_QUIET_EXTRA=0` | 1 | QUIET links within `max_links` instead of next to it (by default a pool holds `max_links` + 1 connections, + 2 past 5 links) | both ends alike |
+| `HS2_TUNE_QUIET_EXTRA=0` | 1 | QUIET links within `max_links` instead of next to it (by default a pool holds `max_links` + 1 connections, + 4 past 5 links: `QUIET_FEW`, `QUIET_MANY` below) | both ends alike |
 | `HS2_TUNE_BUDGET=0` | on | BULK links keep a rate cap instead of the in-flight budget | either end |
 | `HS2_TUNE_MOVE_HINT=0` | on | the exit no longer hints which download to move; the edge moves by data arriving | either end |
 | `HS2_TUNE_OWD_GUARD=0` | on | one-way delay readings are no longer ignored after a resend | either end |
@@ -864,6 +866,13 @@ systemctl daemon-reload && systemctl restart hs2
 | `HS2_TUNE_QUIET_COAL=µs` | 4000 | how long a busy QUIET link holds small messages to share a record (0: none) | either end |
 | `HS2_TUNE_MOVE_BACK=1` | off | a connection light again moves back from BULK to QUIET (lab) | both ends |
 | `HS2_TUNE_EARLYDONE=0` | on | a stream's writer waits for each frame to be written | either end |
+| `HS2_TUNE_QUIET_FEW=N`, `HS2_TUNE_QUIET_MANY=N` | 1, 4 | the QUIET links of a pool of up to 5 links, and past 5 | both ends alike (in reverse, with `QUIET_FOLLOW`, the smaller count holds) |
+| `HS2_TUNE_QUIET_FOLLOW=0` | on | reverse: both ends must set the QUIET count alike (on: the Iran server keeps the smaller of the two) | both ends alike |
+| `HS2_TUNE_QUIET_FOLLOW_GRACE=ms` | 5000 | a QUIET link past that count closes only after this long without a connection (0: at once) | Iran (reverse) |
+| `HS2_TUNE_QUIET_CC=name` | cubic | the QUIET links' congestion control; `bbr` kept calls and web pages up under random path loss in the lab, at +100 to +400 ms of game p99 (`docs/architecture/wip/r1/redteam2/REPORT.fa.md`, §4) | both ends |
+| `HS2_TUNE_TWOWAY_RATIO=N` | 16 | a connection whose way to the user carries more than N times what its user sent is a download, not a call, and leaves its QUIET link (0: no ratio) | either end |
+| `HS2_TUNE_OWD_IDLE=0` | on | an idle pool's QUIET link keeps sending its one-way-delay messages (~1.5 records a second each way, up to 40 a second after a download) | either end |
+| `HS2_TUNE_UDP_FLOWS=N`, `HS2_TUNE_UDP_USER_FLOWS=N` | 4096, 256 | the most UDP flows one user port keeps, and one user's (an IPv4 address or an IPv6 /64); a datagram that would start one more is dropped, logged once in 30 s (0: no cap) | Iran |
 
 The rest of the `HS2_TUNE_*` names in `cmd/hs2/main.go` (`applyTuning`) are
 lab switches for measurements. `hs2 status` shows each link's lines (`sched`,
@@ -873,6 +882,21 @@ cuts …; quiet writes …, … of them on a record already started (records sav
 moved to bulk … (back to quiet …), tun flows …, attached at the exit …; move
 hints heard …, sent …`. The log gets one `events in the last minute: …` line
 a minute when any of them moved, never a line per event.
+
+**Upgrading to R1 (and back).** R1 and the builds before it do not talk to
+each other: R1 speaks wire v3 (`hs2 status`: `protocol: v3 level 2 …`), the
+build before it v2 — though both print `hs2 v3 (…)` in `hs2 version`, so
+compare the `[build …]` stamps. A tunnel is down from the moment the first of
+its two servers runs R1 until the second one does. Switch both in one window
+(`hs2-safe-apply` on each, `HS2_SAFE_PEER_WAIT=120`), the **listening side
+first and the dialing side right after it**: a dialer the other server refuses
+waits 8 s, doubling up to 60 s, before it dials again (`engine/refusal.go`),
+while a dialer that starts after the listener reaches it at once. So for a
+reverse tunnel Iran first, then Kharej (in a sandbox, 0.7 s apart: down
+1.2 s; Kharej first and Iran 30 s later: down 35 s); for a direct tunnel
+Kharej first, then Iran. The same holds for going back. `hs2-menu` → Upgrade
+installs `main`'s binary: until R1 is on `main`, do not use it on a server
+that runs R1.
 
 ## The three ports (they are different things)
 
