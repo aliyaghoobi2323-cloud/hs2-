@@ -10,6 +10,11 @@
 #   up-xflap=up:xflap:0.7     Kharej's new binary dies once: Kharej reverts, then Iran by the runbook's rule
 #   up-erefuse=up:erefuse:0.7 Iran's safe-apply refuses, Kharej goes alone
 #   back-e07=back:e-first:0.7 the runbook's rollback: R1 to production, Iran first
+# and the review's second batch, given on the command line:
+#   up-e03=up:e-first:0.3 up-x06=up:x-first:0.6 up-x10=up:x-first:1.0
+#   up-x20=up:x-first:2.0 up-xflapn=up:xflapn:0.3
+# Then tools/gap.py OUT: each run's service gap (first restart to the first
+# new connection served after both).
 set -u
 [ "${HS2_SANDBOX:-}" = proven ] || { echo "runall.sh: run me inside sandbox.sh" >&2; exit 2; }
 OUT=$1; P=$2; R=$3; shift 3
