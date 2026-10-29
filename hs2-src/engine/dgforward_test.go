@@ -29,11 +29,15 @@ func TestDgTunPortIsPrivate(t *testing.T) {
 // use) when it listened on the user port. It is given the user port list the
 // way older installers wrote it, and must ignore it: it listens only on
 // DgTunPort on the tun address. The edge is simulated by dialing that port.
+// The test's panel holds the user port on 127.0.0.1, not on 0.0.0.0: a test
+// never opens a port on the host's public addresses (it runs on the
+// production servers too), and a listen on the user port, on 127.0.0.1 or on
+// every address, fails against it just the same.
 func TestDgExitForwarderSurvivesPanelOnWildcard(t *testing.T) {
-	const userPort = "18443" // stands in for the user/panel port (e.g. 8443)
-	panelWild, err := net.Listen("tcp", "0.0.0.0:"+userPort)
+	userPort := freePortOn(t, "127.0.0.1") // stands in for the user/panel port (e.g. 8443)
+	panelWild, err := net.Listen("tcp", "127.0.0.1:"+userPort)
 	if err != nil {
-		t.Skipf("cannot bind 0.0.0.0:%s for the test: %v", userPort, err)
+		t.Fatalf("cannot bind 127.0.0.1:%s for the test: %v", userPort, err)
 	}
 	defer panelWild.Close()
 	go echoAccept(panelWild)

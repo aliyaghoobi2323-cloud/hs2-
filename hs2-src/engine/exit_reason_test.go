@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -98,6 +99,11 @@ func TestServeReverseLinkReportsWhyItEnded(t *testing.T) {
 			case <-time.After(40 * time.Second):
 				t.Fatal("serveReverseLink did not return after the link ended")
 			}
+			// the edge's carrier lives to here: unreferenced after c.end, a GC
+			// in the stall case's 24 s ran its socket's finalizer, whose close
+			// (the exit's keepalives unread on it) sent an RST — «reset» instead
+			// of the keepalive timeout
+			runtime.KeepAlive(edge)
 		})
 	}
 }

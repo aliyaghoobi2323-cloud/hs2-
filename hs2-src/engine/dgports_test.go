@@ -496,12 +496,24 @@ func TestDgPortsTCPFollowsExitTableAtOnce(t *testing.T) {
 	}
 	dgWait(t, "probe", func() bool { return edge().Known })
 	stop1() // the kharej server restarts with port_map {p1: A}
+	// every socket of the old exit gone: each listener (DgTagPort and
+	// DgTunPort, TCP and UDP) is closed by a goroutine of its own after the
+	// context ends, so DgTagPort refusing does not mean DgTunPort is free yet
+	// (the new exit failed with «bind: address already in use» on it)
 	dgWait(t, "old exit gone", func() bool {
-		c, err := net.DialTimeout("tcp", net.JoinHostPort(exitIP, DgTagPort), 100*time.Millisecond)
-		if err == nil {
-			c.Close()
+		for _, p := range []string{DgTagPort, DgTunPort} {
+			addr := net.JoinHostPort(exitIP, p)
+			if c, err := net.DialTimeout("tcp", addr, 100*time.Millisecond); err == nil {
+				c.Close()
+				return false
+			}
+			pc, err := net.ListenPacket("udp", addr)
+			if err != nil {
+				return false
+			}
+			pc.Close()
 		}
-		return err != nil
+		return true
 	})
 	if _, err := StartDgPorts(ctx, DgPortsConfig{LocalTunIP: exitIP, Default: def, Routes: map[int]string{n1: a}}); err != nil {
 		t.Fatal(err)
