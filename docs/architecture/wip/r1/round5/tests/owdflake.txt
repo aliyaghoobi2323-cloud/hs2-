@@ -1,0 +1,18 @@
+== run 1 done
+    red_r1p2_test.go:116: OWDIdle 0: idle 3.5 s, 6 messages; 2 s with the stale rate of an ended download, 138
+    red_r1p2_test.go:158: first message both ways 31ms after the traffic; 36 messages in the last 2 s of 3 s busy; 1 in the 2 s after parking (parks 2, 2)
+    red_r1p2_test.go:164: idle again: 1 messages after parking
+--- FAIL: TestRed2OWDIdleParks (17.62s)
+=== RUN   TestReviewBOWDTwoQuietLatest
+    review_b_test.go:73: OWDIdle 1, OWDIdlePool 0, the ends' latest QUIET links differ: readings (edge out, in; exit out, in) [false false false false]
+--- PASS: TestReviewBOWDTwoQuietLatest (12.01s)
+=== RUN   TestReviewBOWDQuietHandOver
+--- PASS: TestReviewBOWDQuietHandOver (2.11s)
+FAIL
+FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	31.826s
+FAIL
+== run 2 done
+== run 3 done
+== run 4 done
+== run 5 done
+== run 6 done
