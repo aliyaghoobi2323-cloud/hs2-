@@ -397,11 +397,11 @@ func (g gateSys) waitBelow(n int) error {
 type coreLink struct {
 	id    int
 	sess  *smux.Session
-	mtr   *linkMeter   // nil: none
-	sc    *sendCapLink // C4-lite's and C3's readings (nil: neither)
-	hq    *hostQ       // nil: C3 off
-	flows *linkFlows   // nil: C2 off
-	shp   *shapedConn  // a QUIET link's shaper (its records' tallies; nil: not one)
+	mtr   *linkMeter    // nil: none
+	sc    *sendCapLink  // C4-lite's and C3's readings (nil: neither)
+	hq    *hostQ        // nil: C3 off
+	flows *linkFlows    // nil: C2 off
+	shp   *shapedConn   // a QUIET link's shaper (its records' tallies; nil: not one)
 	qcc   *quietCCWatch // a QUIET link's switch under random loss (QuietCCLoss; nil: off)
 	tun   atomic.Pointer[l3Link]
 	// the status lines': when the hostq line was last made

@@ -169,11 +169,20 @@ func (w *quietCCWatch) step(now time.Duration, st tcpStat) {
 		dr = 0
 	}
 	ds := uint64(b.segs - a.segs) // wraps with the kernel's u32
+	// the queue of the seconds that resent: a burst's CoDel drops come
+	// with its queue, the path's random ones at any queue
 	var qs time.Duration
-	for _, r := range w.hist[1:] {
-		qs += r.q
+	n := 0
+	for i := 1; i < len(w.hist); i++ {
+		if w.hist[i].retrans > w.hist[i-1].retrans {
+			qs += w.hist[i].q
+			n++
+		}
 	}
-	w.queue = qs / time.Duration(len(w.hist)-1)
+	w.queue = 0
+	if n > 0 {
+		w.queue = qs / time.Duration(n)
+	}
 	w.ppm = 0
 	if ds > 0 {
 		w.ppm = dr * 1_000_000 / ds
