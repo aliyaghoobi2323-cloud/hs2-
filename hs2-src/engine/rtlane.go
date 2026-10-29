@@ -73,6 +73,31 @@ const (
 	rtHoldK = 1.5
 )
 
+// RTLoose (HS2_TUNE_RT_LOOSE; 0: off; R1 round 5): a flow that is loosely a
+// call — both ways active (rtLoose) and neither way more than TwoWayRatio
+// times the other over C1's window (rtLooseCall) — gets the steady
+// realtime allowance and RTHold's hold although it never read as steady. A
+// call that opened while its QUIET link was held back (a loss episode on a
+// cubic window) came in clumps both ways from its first tick: neither end
+// ever read either way as steady, the two-way rule (each end's allowance
+// hangs on the other way's steadiness, which hangs on the other end's
+// allowance) never fired, and it sat at its floor in the bulk lane, seconds
+// behind, for the rest of its life (round 5's screen S3: 2 to 6 calls of 8
+// at p50 8 to 9 s after a cubic window under 0.1 % loss). A download whose
+// app acknowledges in its own data (2 to 3.5 % back) is past the ratio, as
+// for TwoWay's (R2-1); a web connection's responses too.
+var RTLoose = newTuneInt(0)
+
+// rtLooseCall says whether a flow is loosely a call (RTLoose).
+func rtLooseCall(c *flowClassifier) bool {
+	if !rtLoose(c) {
+		return false
+	}
+	r := uint64(max(TwoWayRatio.Get(), 0))
+	a, b := uint64(c.d[0].sum), uint64(c.d[1].sum)
+	return r == 0 || a <= r*b && b <= r*a
+}
+
 // rtLoose says whether a flow looks like a call, loosely: both ways
 // active and under rtHoldK × RTMax. A download (its request one tick) never
 // is.
@@ -108,6 +133,9 @@ func rtAllowance(c *flowClassifier, confirmed bool) int64 {
 		if rtLoose(c) {
 			c.rtHold = uint16(min(h, 1<<15)) // a call's verdict: held from here
 		}
+	case c.rtHold == 0 && RTLoose.Get() != 0 && rtLooseCall(c):
+		c.rtHold = uint16(min(h, 1<<15)) // a call held back from its start (RTLoose)
+		return rtAllowMax
 	case c.rtHold > 0 && rtLoose(c):
 		c.rtHold = uint16(min(h, 1<<15)) // still a call: the hold goes on
 		return rtAllowMax
