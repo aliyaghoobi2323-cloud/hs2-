@@ -28,6 +28,12 @@
 #          client logs its connections and opens cut ones again, ana.py
 #          "kill"); MIX frozen (FROZEN, FWAVE, FREAD, FRCVBUF, FROZENU):
 #          downloads whose app stops reading next to probes.
+#          KILLREP=K, KILLGAP=S (R1 red team, second pass): K kills, one
+#          every S s from KILLQ on (kill-K.json each; kill.json the first);
+#          KILLWHAT=all resets every link socket of the edge at once.
+#          PROCSTAT=1: each hs2's RSS, threads and open files every second
+#          (procstat-edge.tsv, procstat-exit.tsv in the raw dir); with
+#          HS2_GOSTAT=1 each hs2 also logs its goroutines and heap a second.
 #
 # PROC_TRACE=S (environment, R1 merge step 5): every S s from the links being
 # up to the end of the run, both hs2 processes' open fds, VmRSS (kB),
@@ -165,9 +171,16 @@ proctrace() {
 # many sockets ss killed, and when (s after the client's start C0, and the
 # hs2 log's clock).
 killlink() {
-  local r=$1 what=$2 c0=$3 t clk pick cls nq nb killed
+  local r=$1 what=$2 c0=$3 k=${4:-1} t clk pick cls nq nb killed sfx=""
+  [ "$k" -gt 1 ] && sfx="-$k"
   t=$(date +%s.%N); clk=$(date +%H:%M:%S.%N | cut -c1-15)
-  ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-kill.txt" 2>/dev/null
+  ip netns exec $E ss -tinH state established '( sport = :2096 )' > "$r/ss-edge-kill$sfx.txt" 2>/dev/null
+  if [ "$what" = all ]; then
+    read -r nq nb < <(awk '/^[0-9]/ {next} {if ($0 ~ / cubic /) q++; else b++} END {printf "%d %d\n", q, b}' "$r/ss-edge-kill$sfx.txt")
+    killed=$(ip netns exec $E ss -K -tnH state established '( sport = :2096 )' 2>&1 | grep -c '^[0-9]')
+    echo "{\"what\":\"all\",\"class\":\"all\",\"peer\":\"all\",\"n_quiet\":${nq:-0},\"n_bulk\":${nb:-0},\"killed\":${killed:-0},\"k\":$k,\"t_rel\":$(awk -v a="$c0" -v b="$t" 'BEGIN{printf "%.3f", b - a}'),\"clock\":\"$clk\"}" > "$r/kill$sfx.json"
+    return
+  fi
   read -r pick cls nq nb < <(awk -v want="$what" '
     /^[0-9]/ { peer = $4; next }
     peer != "" {
@@ -183,12 +196,12 @@ killlink() {
     END {
       if (bp == "") { bp = ap; bc = ac }
       printf "%s %s %d %d\n", (bp == "" ? "none" : bp), (bc == "" ? "none" : bc), n["quiet"], n["bulk"]
-    }' "$r/ss-edge-kill.txt")
+    }' "$r/ss-edge-kill$sfx.txt")
   killed=0
   if [ "$pick" != none ]; then
     killed=$(ip netns exec $E ss -K -tnH state established "( sport = :2096 and dst $pick )" 2>&1 | grep -c '^[0-9]')
   fi
-  echo "{\"what\":\"$what\",\"class\":\"$cls\",\"peer\":\"$pick\",\"n_quiet\":${nq:-0},\"n_bulk\":${nb:-0},\"killed\":${killed:-0},\"t_rel\":$(awk -v a="$c0" -v b="$t" 'BEGIN{printf "%.3f", b - a}'),\"clock\":\"$clk\"}" > "$r/kill.json"
+  echo "{\"what\":\"$what\",\"class\":\"$cls\",\"peer\":\"$pick\",\"n_quiet\":${nq:-0},\"n_bulk\":${nb:-0},\"killed\":${killed:-0},\"k\":$k,\"t_rel\":$(awk -v a="$c0" -v b="$t" 'BEGIN{printf "%.3f", b - a}'),\"clock\":\"$clk\"}" > "$r/kill$sfx.json"
 }
 
 # this process's cgroup (v2), and a counter of its memory.events (0: none;
@@ -208,8 +221,8 @@ run_one() {
   local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
-  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF KILLQ KILLWHAT
-  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=; KILLQ=; KILLWHAT=quiet
+  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF KILLQ KILLWHAT KILLREP KILLGAP PROCSTAT
+  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=; KILLQ=; KILLWHAT=quiet; KILLREP=1; KILLGAP=5; PROCSTAT=0
   # the rigload server's (the panel's) send buffer a connection, bytes (R1
   # round 4, opt-in: autotuned, the default 0, it holds ~5 MB a connection
   # on loopback, 1.2 GB for 400 downloads; a bound changes what the
@@ -220,7 +233,7 @@ run_one() {
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
     case "$k" in
       HS2_*) hs2env="$hs2env $k=$v" ;;
-      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF|KILLQ|KILLWHAT) printf -v "$k" '%s' "$v" ;;
+      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF|KILLQ|KILLWHAT|KILLREP|KILLGAP|PROCSTAT) printf -v "$k" '%s' "$v" ;;
     esac
   done
   bp=$(binpath "$bin")
@@ -282,7 +295,7 @@ run_steps() {
   RATE=$RATE RATE_UP=${RATE_UP:-$RATE} RTT=$RTT LOSS=$LOSS MODE=$MODE NUSERS=$nusers NTUN=$ntun V6=$V6 AGGQ_MS=$AGGQ_MS \
     "$D/rig.sh" up 2> "$r/rig.err" || { why="rig up: $(tail -1 "$r/rig.err")"; return 1; }
   # gameudp in the cell: UDP on the edge's user ports ("udp": true)
-  udp=0; grep -q '"kind": "gameudp"' "$r/spec.json" && udp=1
+  udp=0; grep -qE '"kind": "(gameudp|udpflood)"' "$r/spec.json" && udp=1
   mkconf "$w" "$N" $udp || { why="hs2 config"; return 1; }
   # PROC_TRACE: goroutines through Go's pprof, on loopback in each namespace
   [ "${PROC_TRACE:-0}" != 0 ] && hs2env="$hs2env HS2_PPROF=127.0.0.1:6061"
@@ -329,8 +342,23 @@ run_steps() {
   # KILLQ=T (R1 round-4 judge, the red team's C4): one link of the edge is
   # reset T s after the client starts (killlink)
   if [ -n "$KILLQ" ]; then
-    ( sleep "$(awk -v c="$c0" -v k="$KILLQ" -v n="$(date +%s.%N)" 'BEGIN{s = c + k - n; if (s < 0) s = 0; printf "%.3f", s}')"
-      killlink "$r" "$KILLWHAT" "$c0" ) > "$r/kill.log" 2>&1 &
+    # KILLREP kills, KILLGAP s apart (the red team's second pass: flapping)
+    ( for kk in $(seq 1 "$KILLREP"); do
+        sleep "$(awk -v c="$c0" -v k="$KILLQ" -v g="$KILLGAP" -v i="$kk" -v n="$(date +%s.%N)" 'BEGIN{s = c + k + (i - 1) * g - n; if (s < 0) s = 0; printf "%.3f", s}')"
+        killlink "$r" "$KILLWHAT" "$c0" "$kk"
+      done ) > "$r/kill.log" 2>&1 &
+    PIDS+=($!)
+  fi
+  # PROCSTAT=1: each hs2's RSS (kB), threads and open files every second
+  if [ "$PROCSTAT" = 1 ]; then
+    ( while :; do
+        for pp in "edge $pe" "exit $px"; do
+          set -- $pp
+          [ -r "/proc/$2/status" ] || continue
+          echo "$(date +%s.%N | cut -c1-14) $(awk '/^VmRSS:/{r=$2} /^Threads:/{t=$2} END{printf "%d %d", r, t}' /proc/$2/status) $(ls /proc/$2/fd 2>/dev/null | wc -l)" >> "$r/procstat-$1.tsv"
+        done
+        sleep 1
+      done ) &
     PIDS+=($!)
   fi
   sleep "$WARM"

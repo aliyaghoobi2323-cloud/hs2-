@@ -245,6 +245,9 @@ type quietLink struct {
 	// quietfollow.go): no new connection opens on it, and it is closed
 	// once its connections ended
 	retiring atomic.Bool
+	// emptySince: when followTick first found the retiring link without a
+	// connection (ctrlNow; 0: it has one), for QuietFollowGraceMs
+	emptySince atomic.Int64
 	// nusers: the users whose connections stick to this link (QuietByUser,
 	// quietuser.go), under the set's mu
 	nusers int
