@@ -1,0 +1,59 @@
+== fuzz, 60s a target, -parallel 4, 1 target(s) at once — 2026-10-29T12:38:51Z, fd1e0af R1 ادغام: ادغام r1-red2 6a2628d (گذر دوم تیم قرمز: نسبت دوسویه فقط در جهت رو به کاربر، rtlane.go همان fin2)
+== host: Linux 6.8.0-147-generic x86_64, go version go1.27.3 linux/amd64
+== dirty:  M docs/architecture/wip/r1/merge-prep/step5/fuzz.sh
+== dirty:  M docs/architecture/wip/rig-scale/ana.py
+== dirty:  M docs/architecture/wip/rig-scale/run.sh
+== dirty: ?? docs/architecture/wip/r1/cpu/
+== dirty: ?? hs2-src/third_party/smux/testdata/
+-- FuzzFlowKey (. ./engine): the TUN packet flow key: IPv4/IPv6 5-tuple, bounded extension headers (§4.3)
+   fuzz: elapsed: 1m0s, execs: 1510268 (25510/sec), new interesting: 2 (total: 23)
+   fuzz: elapsed: 1m0s, execs: 1510268 (0/sec), new interesting: 2 (total: 23)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.112s
+   FuzzFlowKey: rc 0, 74 s
+-- FuzzFlowKeyRev (. ./engine): the reverse flow key of a reply (pin by arrival, β2)
+   fuzz: elapsed: 1m0s, execs: 1507503 (26169/sec), new interesting: 0 (total: 19)
+   fuzz: elapsed: 1m0s, execs: 1507503 (0/sec), new interesting: 0 (total: 19)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.063s
+   FuzzFlowKeyRev: rc 0, 61 s
+-- FuzzOWDDecode (. ./engine): the kindOWD one-way delay messages (owd.go)
+   fuzz: elapsed: 1m0s, execs: 1509907 (24904/sec), new interesting: 0 (total: 7)
+   fuzz: elapsed: 1m0s, execs: 1509907 (0/sec), new interesting: 0 (total: 7)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.135s
+   FuzzOWDDecode: rc 0, 60 s
+-- FuzzHintDecode (. ./engine): the kindHint move hints from the exit (hint.go)
+   fuzz: elapsed: 1m0s, execs: 51719 (874/sec), new interesting: 0 (total: 4)
+   fuzz: elapsed: 1m0s, execs: 51719 (0/sec), new interesting: 0 (total: 4)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.068s
+   FuzzHintDecode: rc 0, 61 s
+-- FuzzProxyHeader (. ./engine): the PROXY protocol v1/v2 header (proxyproto.go)
+   fuzz: elapsed: 1m0s, execs: 564801 (0/sec), new interesting: 0 (total: 23)
+   fuzz: elapsed: 1m1s, execs: 564801 (0/sec), new interesting: 0 (total: 23)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	61.087s
+   FuzzProxyHeader: rc 0, 62 s
+-- FuzzParseClientAuth (. ./tlscarrier): the v3 auth record: header under the MAC, level, caps (§4.1)
+   fuzz: elapsed: 1m0s, execs: 2170231 (36003/sec), new interesting: 1 (total: 13)
+   fuzz: elapsed: 1m0s, execs: 2170231 (0/sec), new interesting: 1 (total: 13)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	60.093s
+   FuzzParseClientAuth: rc 0, 61 s
+-- FuzzParseTunDesc (. ./tlscarrier): the 15-byte TUN descriptor (§4.3)
+   fuzz: elapsed: 1m0s, execs: 2487430 (43165/sec), new interesting: 0 (total: 6)
+   fuzz: elapsed: 1m0s, execs: 2487430 (0/sec), new interesting: 0 (total: 6)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	60.101s
+   FuzzParseTunDesc: rc 0, 61 s
+-- FuzzDecodeLink (. ./cmd/hs2): the hs2:// link decoder (C15)
+   fuzz: elapsed: 1m0s, execs: 2148148 (44340/sec), new interesting: 8 (total: 232)
+   fuzz: elapsed: 1m0s, execs: 2148148 (0/sec), new interesting: 8 (total: 232)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	60.129s
+   FuzzDecodeLink: rc 0, 67 s
+-- FuzzSessionRecv (third_party/smux .): the frames a peer sends: SYN payload (§4.2), group seq numbers, UPD
+   fuzz: elapsed: 1m0s, execs: 2021120 (33655/sec), new interesting: 12 (total: 448)
+   fuzz: elapsed: 1m0s, execs: 2021120 (0/sec), new interesting: 12 (total: 448)
+   ok  	github.com/xtaci/smux	60.100s
+   FuzzSessionRecv: rc 0, 60 s
+-- FuzzGroupReassembly (third_party/smux .): a group connection reassembled across its move (§4.7)
+   fuzz: elapsed: 1m0s, execs: 1209394 (17731/sec), new interesting: 8 (total: 155)
+   fuzz: elapsed: 1m1s, execs: 1209394 (0/sec), new interesting: 8 (total: 155)
+   ok  	github.com/xtaci/smux	61.084s
+   FuzzGroupReassembly: rc 0, 62 s
+   new corpus entry (a failing input): ?? third_party/smux/testdata/fuzz/
+== exit 0

@@ -1,0 +1,41 @@
+11:38:48 start p1-r1
+11:56:32 done p1-r1 wall 1064.0 rc 1 head
+11:56:52 start p4-r1
+12:12:35 done p4-r1 wall 943.6 rc 0 head
+12:12:55 start p8-r1
+12:28:35 done p8-r1 wall 939.6 rc 0 head
+12:28:55 round 1 end
+12:29:00 start split-3-r1
+12:35:02 done split-3-r1 wall 362.5 rc a:0 b0:0 b1:0 b2:1 head
+12:35:22 start split-6-r1
+12:38:31 done split-6-r1 wall 189.2 rc a:1 b0:0 b1:0 b2:0 b3:0 b4:0 b5:0 head
+12:38:51 start fuzz-serial-r1
+12:49:20 done fuzz-serial-r1 wall 628.8 rc 0 head
+12:49:40 start fuzz-par-r1
+12:53:45 done fuzz-par-r1 wall 244.5 rc 0 head
+12:54:05 round 1 end
+12:54:06 start split-3-r2
+13:00:06 done split-3-r2 wall 359.5 rc a:0 b0:0 b1:0 b2:0 head
+13:00:26 start p1-r2
+13:18:00 done p1-r2 wall 1053.6 rc 0 head
+13:18:20 start p4-r2
+13:34:09 done p4-r2 wall 949.7 rc 0 head
+13:34:29 round 2 end
+13:34:29 start split-6-r2
+13:37:36 done split-6-r2 wall 186.2 rc a:0 b0:0 b1:1 b2:0 b3:0 b4:1 b5:0 head
+13:37:56 start p8-r2
+13:53:41 done p8-r2 wall 945.7 rc 0 head
+13:54:01 start fuzz-par-r2
+13:58:06 done fuzz-par-r2 wall 244.6 rc 0 head
+13:58:26 round 2 end
+13:58:26 start p8-r3
+14:14:01 done p8-r3 wall 935.6 rc 0 head
+14:14:21 start p4-r3
+14:30:01 done p4-r3 wall 939.5 rc 0 head
+14:30:21 start split-3-r3
+14:36:21 done split-3-r3 wall 359.9 rc a:0 b0:0 b1:0 b2:0 head
+14:36:41 round 3 end
+14:36:41 start p1-r3
+14:54:06 done p1-r3 wall 1045.3 rc 0 head
+14:54:26 start split-6-r3
+14:57:34 done split-6-r3 wall 187.7 rc a:0 b0:0 b1:1 b2:0 b3:0 b4:1 b5:0 head
