@@ -8,7 +8,7 @@
 set -u
 OUT=${1:?usage: speed.sh OUTDIR ROUND MODE...}; R=$2; shift 2
 mkdir -p "$OUT"
-export SLOW_LIST=${SLOW_LIST:-/root/rcpu/slow-ref.txt}
+export SLOW_LIST=${SLOW_LIST:-/root/rcpu/slow-tests.txt}
 FZ=/root/hs2-wt/r1-cpu/docs/architecture/wip/r1/merge-prep/step5/fuzz.sh
 for m in "$@"; do
   l=$(echo "$m-r$R" | tr ':' '-')
