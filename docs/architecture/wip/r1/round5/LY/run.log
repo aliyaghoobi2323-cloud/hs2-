@@ -1,0 +1,38 @@
+10:03:30 plan /root/r5/LY/plan.txt: 18 runs
+10:03:32 start 89c5269d-prod-1 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 1.44 waited 0s
+10:04:23 done 89c5269d-prod-1 ok=1 
+10:04:25 start 89c5269d-fin2-1 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.45 waited 0s
+10:05:16 done 89c5269d-fin2-1 ok=1 
+10:05:18 start 89c5269d-r5-1 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 7.50 waited 0s
+10:06:09 done 89c5269d-r5-1 ok=1 
+10:06:10 start 89c5269d-r5-2 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 8.06 waited 0s
+10:07:02 done 89c5269d-r5-2 ok=1 
+10:07:04 start 89c5269d-fin2-2 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 10.22 waited 0s
+10:07:55 done 89c5269d-fin2-2 ok=1 
+10:07:57 start 89c5269d-prod-2 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 10.47 waited 0s
+10:08:48 done 89c5269d-prod-2 ok=1 
+10:08:50 start 89c5269d-r5-3 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 8.93 waited 0s
+10:09:41 done 89c5269d-r5-3 ok=1 
+10:09:43 start 89c5269d-fin2-3 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 9.07 waited 0s
+10:10:34 done 89c5269d-fin2-3 ok=1 
+10:10:36 start 89c5269d-prod-3 (N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 10.41 waited 0s
+10:11:27 done 89c5269d-prod-3 ok=1 
+10:11:29 start 80effa4c-prod-1 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 8.55 waited 0s
+10:12:44 done 80effa4c-prod-1 ok=1 
+10:12:45 start 80effa4c-fin2-1 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 10.22 waited 0s
+10:14:00 done 80effa4c-fin2-1 ok=1 
+10:14:01 start 80effa4c-r5-1 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 11.83 waited 0s
+10:15:16 done 80effa4c-r5-1 ok=1 
+10:15:18 start 80effa4c-r5-2 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 8.17 waited 0s
+10:16:33 done 80effa4c-r5-2 ok=1 
+10:16:35 start 80effa4c-fin2-2 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 10.66 waited 0s
+10:17:51 done 80effa4c-fin2-2 ok=1 
+10:17:52 start 80effa4c-prod-2 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 6.93 waited 0s
+10:19:07 done 80effa4c-prod-2 ok=1 
+10:19:09 start 80effa4c-r5-3 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.96 waited 0s
+10:20:23 done 80effa4c-r5-3 ok=1 
+10:20:25 start 80effa4c-fin2-3 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.80 waited 0s
+10:21:39 done 80effa4c-fin2-3 ok=1 
+10:21:41 start 80effa4c-prod-3 (N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 4.49 waited 0s
+10:22:55 done 80effa4c-prod-3 ok=1 
+10:22:55 done /root/r5/LY/plan.txt
