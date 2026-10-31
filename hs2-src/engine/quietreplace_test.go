@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"io"
+	"net"
 	"testing"
 	"time"
 
@@ -191,4 +193,75 @@ func TestL3Avoid(t *testing.T) {
 			t.Fatalf("flow %d stayed on the avoided link", h)
 		}
 	}
+}
+
+// TestQuietReplaceReverse: the reverse pool over real TLS on the loopback, as
+// the field runs it. The one QUIET link lags (its control ping waits, as on
+// a connection a DPI box holds): the edge asks the exit for one link more,
+// that link comes up QUIET next to the slow one, the connection on the slow
+// one moves there and goes on, in order, and the slow one closes; the pool
+// settles at one QUIET and one BULK again, the BULK untouched.
+func TestQuietReplaceReverse(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real links, ~15 s")
+	}
+	withTune(t, QuietReplace, 1)
+	withTune(t, QuietFollowGraceMs, 200)
+	prevAge := replMinAge
+	replMinAge = time.Second
+	t.Cleanup(func() { replMinAge = prevAge })
+	p := startQuietPoolMix(t, false, 1, quietMix{})
+	p.waitFor("one QUIET and one BULK", 30*time.Second, func() bool { return p.q.count() == 1 && p.serving() == 1 })
+	c, err := net.Dial("tcp", p.userAddr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	echo := func(off int) int {
+		t.Helper()
+		b := make([]byte, 2000)
+		for i := range b {
+			b[i] = byte((off + i) * 7)
+		}
+		if _, err := c.Write(b); err != nil {
+			t.Fatal(err)
+		}
+		g := make([]byte, len(b))
+		c.SetReadDeadline(time.Now().Add(20 * time.Second))
+		if _, err := io.ReadFull(c, g); err != nil {
+			t.Fatalf("echo at %d: %v", off, err)
+		}
+		for i := range g {
+			if g[i] != b[i] {
+				t.Fatalf("echo byte %d out of order", off+i)
+			}
+		}
+		return off + len(b)
+	}
+	off := echo(0)
+	slow := p.q.quietLinks()[0]
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() { // its oldest control ping has waited 30 s
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+				slow.link.mtr.ctrlWait.Store(ctrlNow() - int64(30*time.Second))
+			}
+		}
+	}()
+	p.waitFor("a QUIET link replaced", 30*time.Second, func() bool { return p.q.repl.replaced.Load() == 1 })
+	p.waitFor("the new QUIET link up, the connection on it, the slow one closed", 30*time.Second, func() bool {
+		off = echo(off)
+		return !slow.link.Alive() && p.q.count() == 1 && p.q.movedGeneral.Load() == 1
+	})
+	if nl := p.q.quietLinks()[0]; nl == slow || nl.link == slow.link {
+		t.Fatal("the QUIET link left is the slow one")
+	}
+	p.waitFor("the count back", 10*time.Second, func() bool { return p.q.replacing.Load() == 0 && p.q.wantNow() == 1 && p.serving() == 1 })
+	off = echo(off)
+	p.echoBulk(1 << 20) // a new connection opens on the new QUIET link and moves
+	t.Logf("%d echoed in order across the replacement: %s", off, p.q.line())
 }

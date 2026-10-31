@@ -347,7 +347,6 @@ func applyTuning() {
 	num("HS2_TUNE_BUDGET_TWOWAY", &engine.BudgetTwoWay)
 	num("HS2_TUNE_BUDGET_LINKOWD", &engine.BudgetLinkOWD)   // a two-way BULK link's own one-way delays (0: the guess)
 	num("HS2_TUNE_BUDGET_SPLIT", &engine.BudgetSplitRate)   // R1 round 5: a two-way link without its own delays splits S by the rates
-	num("HS2_TUNE_BUDGET_LOSS", &engine.BudgetLossPpm)      // R1 round 5: resent per million that lifts a BULK link's budget (0: never)
 	num("HS2_TUNE_BUDGET_PACE", &engine.BudgetPaceK)        // its pacing cap, % of its rate at the target (0: C4-lite's)
 	num("HS2_TUNE_BUDGET_INFLIGHT", &engine.BudgetInflight) // in flight as Linux counts it (0: SIOCOUTQ)
 	num("HS2_TUNE_QUIET_N", &engine.QuietN)
@@ -407,8 +406,9 @@ func applyTuning() {
 	// link's drain against BBR's PROBE_RTT; C3's floor bounded in time
 	num("HS2_TUNE_QUIET_FEW", &engine.QuietFew)
 	numT("HS2_TUNE_RT_HOLD", engine.RTHold)
-	numT("HS2_TUNE_QUIET_BUDGET", engine.QuietBudget) // R1 round 5: the in-flight budget on a QUIET link bulk lane too
-	numT("HS2_TUNE_RT_LOOSE", engine.RTLoose)         // R1 round 5: a call held back from its start gets the realtime lane
+	numT("HS2_TUNE_QUIET_BUDGET", engine.QuietBudget)  // R1 round 5: the in-flight budget on a QUIET link bulk lane too
+	numT("HS2_TUNE_OWD_NOT_LIGHT", engine.OWDNotLight) // R1 round 5: no one-way delays on the light QUIET link
+	numT("HS2_TUNE_RT_LOOSE", engine.RTLoose)          // R1 round 5: a call held back from its start gets the realtime lane
 	numT("HS2_TUNE_RT_SHARE", engine.RTShare)
 	numT("HS2_TUNE_LAT_RR", engine.LatRR)
 	numT("HS2_TUNE_QUIET_PACK", engine.QuietPack) // two QUIET links (<= 5 links): new connections on the oldest while it does not lag
@@ -437,10 +437,6 @@ func applyTuning() {
 	}
 	// R1 round 5: a QUIET socket switches to this congestion control while
 	// it sees random loss (at least this many resent per million sent)
-	if v, ok := os.LookupEnv("HS2_TUNE_QUIET_CC_FEW"); ok {
-		engine.QuietCCFew = v // a pool of up to 5 links (one QUIET link): its list
-		log.Printf("tuning: HS2_TUNE_QUIET_CC_FEW=%q", v)
-	}
 	if v, ok := os.LookupEnv("HS2_TUNE_QUIET_CC_LOSS"); ok {
 		engine.QuietCCLoss = v
 		log.Printf("tuning: HS2_TUNE_QUIET_CC_LOSS=%q", v)

@@ -65,7 +65,7 @@ func EarlyDoneOff() bool { return TuneEarlyDone == 0 }
 // and BBR's PROBE_RTT, its window at 4 segments for 200 ms each 10 s, held
 // the probes of a QUIET link with 198 probe users (each a padded record
 // each 200 ms) for hundreds of ms on the rig.
-var QuietCC = "cubic"
+var QuietCC = "illinois,cubic" // Illinois since R1 round 5 (quietcc.go); a kernel without it: cubic
 
 // QuietRec 1 (HS2_TUNE_QUIET_REC=1, lab; the R1 round-2 judge): a QUIET
 // link's records follow an interactive HTTPS connection's sizes

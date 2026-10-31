@@ -1,0 +1,7 @@
+# RH1 (3 reps): the engine review's B2: a 1 Mbit/s policer on the QUIET link connection(s) alone, both ways, 5 s after the client starts (production: its busiest link), home at N=1 and N=4 (RTT 72), the classes measured from s 30 on; production, fin2, r5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=r5
+N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=prod
+N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=fin2
+N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=r5

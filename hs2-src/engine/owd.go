@@ -221,7 +221,22 @@ var TuneOWDGuard = 1
 // in one run of two (F3, cb51e9b2-j3-1: budget B 50 KiB, C4-lite cap 7
 // Mbit/s), 84.5 in the other. Resends at 0.1% loss made the same fallback
 // (F3: the budget's "two-way" without "own delays" in both runs).
-var OWDGuardBulk = 1
+//
+// Since R1 round 5 the default is 0: the budget uses these messages only to
+// split S (the ratio of the two directions), never as a queue of their own,
+// so a resend that delays both ways' messages alike no longer matters, while
+// the fallback to the guess cost the home mix at N=1 its downloads under the
+// path's random loss: 16 to 19 Mbit/s at 0.3 % (the exit took the uplink's
+// queue for its own; production 78), 81 to 84 with the own delays read under
+// resends (round5/REPORT.fa.md, S7 and S9).
+var OWDGuardBulk = 0
+
+// OWDNotLight (HS2_TUNE_OWD_NOT_LIGHT; 0: off; R1 round 5): no one-way delay
+// messages on the light QUIET link (quietlight.go): the BULK links' budgets
+// read the general QUIET link's queue, the one they should yield to; a light
+// link has none, whatever the general one holds. The edge opens the stream,
+// so the exit reads the same links' (its quietOWD follows kindOWD).
+var OWDNotLight = newTuneInt(0)
 
 // OWDGuardIn (HS2_TUNE_OWD_GUARD_IN; 0: off; R1 round 5): the guard of the
 // other direction's reading (queueIn) too: a QUIET link socket that
@@ -736,6 +751,8 @@ func openOWD(ctx context.Context, l Link) {
 		if !ml.bulk {
 			return
 		}
+	case ml.quiet && ml.l3avoid.Load() && OWDNotLight.Get() != 0:
+		return // the light QUIET link: its queue is no one else's (OWDNotLight)
 	case ml.quiet:
 		quietOWD.Store(&ml.mtr.owd)
 	case ml.bulk && budgetLinkOWD():
