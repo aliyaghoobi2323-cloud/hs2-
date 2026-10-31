@@ -1,0 +1,56 @@
+10:25:08 plan /root/r5/RD/plan.txt: 27 runs
+10:25:10 start a0318ff0-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 2.60 waited 0s
+10:25:45 done a0318ff0-prod-1 ok=1 
+10:25:47 start a0318ff0-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 2.73 waited 0s
+10:26:22 done a0318ff0-fin2-1 ok=1 
+10:26:24 start a0318ff0-r5-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=r5) load 2.60 waited 0s
+10:26:59 done a0318ff0-r5-1 ok=1 
+10:27:01 start a0318ff0-r5-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=r5) load 4.22 waited 0s
+10:27:36 done a0318ff0-r5-2 ok=1 
+10:27:38 start a0318ff0-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 4.96 waited 0s
+10:28:13 done a0318ff0-fin2-2 ok=1 
+10:28:14 start a0318ff0-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 3.21 waited 0s
+10:28:50 done a0318ff0-prod-2 ok=1 
+10:28:52 start a0318ff0-r5-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=r5) load 2.69 waited 0s
+10:29:27 done a0318ff0-r5-3 ok=1 
+10:29:29 start a0318ff0-fin2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 4.80 waited 0s
+10:30:04 done a0318ff0-fin2-3 ok=1 
+10:30:06 start a0318ff0-prod-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 4.77 waited 0s
+10:30:40 done a0318ff0-prod-3 ok=1 
+10:30:42 start 5f52d2fc-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 3.83 waited 0s
+10:31:18 done 5f52d2fc-prod-1 ok=1 
+10:31:20 start 5f52d2fc-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 3.66 waited 0s
+10:31:56 done 5f52d2fc-fin2-1 ok=1 
+10:31:58 start 5f52d2fc-r5-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=r5) load 3.14 waited 0s
+10:32:33 done 5f52d2fc-r5-1 ok=1 
+10:32:35 start 5f52d2fc-r5-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=r5) load 3.47 waited 0s
+10:33:11 done 5f52d2fc-r5-2 ok=1 
+10:33:13 start 5f52d2fc-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 3.41 waited 0s
+10:33:48 done 5f52d2fc-fin2-2 ok=1 
+10:33:50 start 5f52d2fc-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 2.88 waited 0s
+10:34:26 done 5f52d2fc-prod-2 ok=1 
+10:34:28 start 5f52d2fc-r5-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=r5) load 2.98 waited 0s
+10:35:03 done 5f52d2fc-r5-3 ok=1 
+10:35:05 start 5f52d2fc-fin2-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 2.44 waited 0s
+10:35:41 done 5f52d2fc-fin2-3 ok=1 
+10:35:43 start 5f52d2fc-prod-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=prod) load 3.99 waited 0s
+10:36:19 done 5f52d2fc-prod-3 ok=1 
+10:36:21 start 6d29a912-prod-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=prod) load 6.67 waited 0s
+10:37:02 done 6d29a912-prod-1 ok=1 
+10:37:04 start 6d29a912-fin2-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin2) load 8.74 waited 0s
+10:37:46 done 6d29a912-fin2-1 ok=1 
+10:37:48 start 6d29a912-r5-1 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=r5) load 10.30 waited 0s
+10:38:30 done 6d29a912-r5-1 ok=1 
+10:38:31 start 6d29a912-r5-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=r5) load 8.77 waited 0s
+10:39:14 done 6d29a912-r5-2 ok=1 
+10:39:15 start 6d29a912-fin2-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin2) load 8.95 waited 0s
+10:39:57 done 6d29a912-fin2-2 ok=1 
+10:39:59 start 6d29a912-prod-2 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=prod) load 9.26 waited 0s
+10:40:41 done 6d29a912-prod-2 ok=1 
+10:40:43 start 6d29a912-r5-3 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=r5) load 10.14 waited 0s
+10:41:24 done 6d29a912-r5-3 ok=1 
+10:41:26 start 6d29a912-fin2-3 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=fin2) load 10.54 waited 0s
+10:42:08 done 6d29a912-fin2-3 ok=1 
+10:42:10 start 6d29a912-prod-3 (N=8 RATE=200 RTT=72 LOSS=0 MODE=police:10+fqcodel USERS=200 MIX=lone16 DUR=30 BIN=prod) load 10.20 waited 0s
+10:42:52 done 6d29a912-prod-3 ok=1 
+10:42:52 done /root/r5/RD/plan.txt

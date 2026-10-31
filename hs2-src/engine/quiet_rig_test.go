@@ -68,7 +68,7 @@ func startQuietPoolMix(t *testing.T, direct bool, maxLinks int, mix quietMix) *q
 	}
 	p.lm = lm
 	p.q = lm.enableQuiet()
-	mine := peerInfo{MaxLinks: QuietTotal(maxLinks), Caps: capPortTags}
+	mine := peerInfo{MaxLinks: QuietTotal(maxLinks) + replaceRoom(), Caps: capPortTags}
 	if mix.edgeWant > 0 {
 		p.q.want = mix.edgeWant
 		mine.MaxLinks = maxLinks + mix.edgeWant // QuietTotal with its count (QuietExtra)

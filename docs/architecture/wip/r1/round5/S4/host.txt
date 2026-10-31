@@ -1,0 +1,32 @@
+== start 2026-10-29T17:10:23+00:00
+ 17:10:23 up 2 days,  6:05, 17 users,  load average: 1.66, 2.29, 3.19
+TCP: inuse 869 orphan 4 tw 574 alloc 1390 mem 937
+top - 17:10:24 up 2 days,  6:05, 17 users,  load average: 1.66, 2.29, 3.19
+Tasks: 280 total,   1 running, 279 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.4 us,  2.6 sy,  9.9 ni, 83.4 id,  0.0 wa,  0.0 hi,  1.8 si,  0.0 st 
+MiB Mem :  23456.9 total,   3001.3 free,   1520.5 used,  19351.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21936.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1389274 root      39  19 2681308 130632  16864 S 113.5   0.5   1:39.85 engine.test
+1421357 root      20   0 1433916 169764  29184 S  26.9   0.7   0:28.65 xray-linux-amd6
+    992 root      20   0 1477216 169552  10496 S  23.1   0.7     15,54 hs2
+    958 root      20   0 1407152 115012  47336 S   3.8   0.5  63:47.01 x-ui
+1425640 sshd      20   0   12156   6168   5032 S   3.8   0.0   0:00.02 sshd
+1425641 sshd      20   0   12156   6152   5012 S   3.8   0.0   0:00.02 sshd
+  15528 root      20   0   12028   8460   7312 S   1.9   0.0   0:52.72 sshd
+== end 2026-10-29T17:22:53+00:00
+ 17:22:53 up 2 days,  6:17, 11 users,  load average: 2.42, 2.34, 2.77
+TCP: inuse 1181 orphan 5 tw 570 alloc 1877 mem 330
+top - 17:22:54 up 2 days,  6:17, 11 users,  load average: 2.42, 2.34, 2.77
+Tasks: 261 total,   1 running, 260 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.2 us,  1.8 sy,  0.0 ni, 96.3 id,  0.0 wa,  0.0 hi,  0.7 si,  0.0 st 
+MiB Mem :  23456.9 total,   2803.5 free,   1552.5 used,  19517.4 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21904.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1421357 root      20   0 1567684 264940  29248 S  19.2   1.1   4:20.42 xray-linux-amd6
+    992 root      20   0 1477216 163612  10496 S  13.5   0.7     15,57 hs2
+    958 root      20   0 1407112 121592  47336 S   1.9   0.5  64:00.37 x-ui
+  13068 systemd+  20   0   22880  14808  11144 S   1.9   0.1  14:30.43 systemd-resolve
+1456240 root      39  19 2077196 112268  16536 S   1.9   0.5   0:37.27 engine.test
+      1 root      20   0   22796  14232   9776 S   0.0   0.1   4:53.75 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.35 kthreadd

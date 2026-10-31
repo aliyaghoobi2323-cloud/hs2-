@@ -1,0 +1,38 @@
+18:12:04 plan /root/r5/S6/plan.txt: 18 runs
+18:12:06 start 2da27b2f-prod-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 2.18 waited 0s
+18:12:51 done 2da27b2f-prod-1 ok=1 
+18:12:53 start 2da27b2f-fwltr-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltr) load 2.42 waited 0s
+18:13:38 done 2da27b2f-fwltr-1 ok=1 
+18:13:40 start 2da27b2f-fwltrg-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltrg) load 4.20 waited 0s
+18:14:25 done 2da27b2f-fwltrg-1 ok=1 
+18:14:27 start 2da27b2f-fwltrg-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltrg) load 4.34 waited 0s
+18:15:12 done 2da27b2f-fwltrg-2 ok=1 
+18:15:14 start 2da27b2f-fwltr-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltr) load 2.50 waited 0s
+18:15:58 done 2da27b2f-fwltr-2 ok=1 
+18:16:00 start 2da27b2f-prod-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 1.72 waited 0s
+18:16:47 done 2da27b2f-prod-2 ok=1 
+18:16:48 start a1577723-fwltr-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltr) load 2.01 waited 0s
+18:17:34 done a1577723-fwltr-1 ok=1 
+18:17:36 start a1577723-fwltrg-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltrg) load 1.54 waited 0s
+18:18:20 done a1577723-fwltrg-1 ok=1 
+18:18:22 start a1577723-fwltrg-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltrg) load 2.18 waited 0s
+18:19:07 done a1577723-fwltrg-2 ok=1 
+18:19:09 start a1577723-fwltr-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltr) load 2.06 waited 0s
+18:19:54 done a1577723-fwltr-2 ok=1 
+18:19:56 start 11690259-fwltr-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltr) load 2.66 waited 0s
+18:20:41 done 11690259-fwltr-1 ok=1 
+18:20:43 start 11690259-fwltrg-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltrg) load 3.08 waited 0s
+18:21:28 done 11690259-fwltrg-1 ok=1 
+18:21:30 start 11690259-fwltrg-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltrg) load 3.31 waited 0s
+18:22:15 done 11690259-fwltrg-2 ok=1 
+18:22:17 start 11690259-fwltr-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwltr) load 3.36 waited 0s
+18:23:02 done 11690259-fwltr-2 ok=1 
+18:23:04 start 340c98ae-fwltr-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fwltr) load 2.85 waited 0s
+18:23:44 done 340c98ae-fwltr-1 ok=1 
+18:23:46 start 340c98ae-fwltrg-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fwltrg) load 3.94 waited 0s
+18:24:26 done 340c98ae-fwltrg-1 ok=1 
+18:24:27 start 340c98ae-fwltrg-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fwltrg) load 3.72 waited 0s
+18:25:07 done 340c98ae-fwltrg-2 ok=1 
+18:25:09 start 340c98ae-fwltr-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fwltr) load 3.57 waited 0s
+18:25:49 done 340c98ae-fwltr-2 ok=1 
+18:25:49 done /root/r5/S6/plan.txt

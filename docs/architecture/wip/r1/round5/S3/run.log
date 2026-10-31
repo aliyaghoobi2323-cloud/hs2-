@@ -1,0 +1,50 @@
+16:37:28 plan /root/r5/S3/plan.txt: 24 runs
+16:37:29 start 6d18d417-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 6.52 waited 0s
+16:38:15 done 6d18d417-fin2-1 ok=1 
+16:38:16 start 6d18d417-ad-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 6.36 waited 0s
+16:39:01 done 6d18d417-ad-1 ok=1 
+16:39:03 start 6d18d417-ltad-1 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 4.53 waited 0s
+16:39:48 done 6d18d417-ltad-1 ok=1 
+16:39:50 start 6d18d417-ltad-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 2.53 waited 0s
+16:40:35 done 6d18d417-ltad-2 ok=1 
+16:40:37 start 6d18d417-ad-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 2.25 waited 0s
+16:41:22 done 6d18d417-ad-2 ok=1 
+16:41:24 start 6d18d417-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.22 waited 0s
+16:42:09 done 6d18d417-fin2-2 ok=1 
+16:42:11 start a1577723-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.95 waited 0s
+16:42:55 done a1577723-fin2-1 ok=1 
+16:42:57 start a1577723-ad-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 2.62 waited 0s
+16:43:42 done a1577723-ad-1 ok=1 
+16:43:44 start a1577723-ltad-1 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 3.40 waited 0s
+16:44:29 done a1577723-ltad-1 ok=1 
+16:44:31 start a1577723-ltad-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 3.66 waited 0s
+16:45:16 done a1577723-ltad-2 ok=1 
+16:45:18 start a1577723-ad-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 2.66 waited 0s
+16:46:03 done a1577723-ad-2 ok=1 
+16:46:05 start a1577723-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.69 waited 0s
+16:46:50 done a1577723-fin2-2 ok=1 
+16:46:52 start f4fb6861-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.52 waited 0s
+16:47:38 done f4fb6861-fin2-1 ok=1 
+16:47:40 start f4fb6861-ad-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 2.70 waited 0s
+16:48:25 done f4fb6861-ad-1 ok=1 
+16:48:27 start f4fb6861-ltad-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 3.04 waited 0s
+16:49:13 done f4fb6861-ltad-1 ok=1 
+16:49:15 start f4fb6861-ltad-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 5.06 waited 0s
+16:50:00 done f4fb6861-ltad-2 ok=1 
+16:50:02 start f4fb6861-ad-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 4.76 waited 0s
+16:50:48 done f4fb6861-ad-2 ok=1 
+16:50:50 start f4fb6861-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.34 waited 0s
+16:51:35 done f4fb6861-fin2-2 ok=1 
+16:51:37 start dba78618-fin2-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 5.27 waited 0s
+16:52:23 done dba78618-fin2-1 ok=1 
+16:52:25 start dba78618-ad-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 4.62 waited 0s
+16:53:10 done dba78618-ad-1 ok=1 
+16:53:12 start dba78618-ltad-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 5.63 waited 0s
+16:53:58 done dba78618-ltad-1 ok=1 
+16:54:00 start dba78618-ltad-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ltad) load 5.65 waited 0s
+16:54:45 done dba78618-ltad-2 ok=1 
+16:54:47 start dba78618-ad-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad) load 5.67 waited 0s
+16:55:33 done dba78618-ad-2 ok=1 
+16:55:35 start dba78618-fin2-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.11 waited 0s
+16:56:20 done dba78618-fin2-2 ok=1 
+16:56:20 done /root/r5/S3/plan.txt

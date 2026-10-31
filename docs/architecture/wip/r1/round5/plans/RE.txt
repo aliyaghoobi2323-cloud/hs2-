@@ -1,0 +1,10 @@
+# RE (3 reps, regression): loss 0.5 / 1 / 2 % throughput at N=1 (one_vs_16, 200 users); production, fin2, r5
+N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0.5 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r5
+N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=1 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r5
+N=1 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=2 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=20 BIN=r5

@@ -337,6 +337,11 @@ func (c *budgetCore) step0(in budgetIn) float64 {
 		}
 	case two:
 		qRev = min(S/2, T)
+		if BudgetSplitRate != 0 && in.RxRate > in.TxRate {
+			// the heavier way holds the queue: S by the two rates, at least
+			// the guess (BudgetSplitRate)
+			qRev = max(qRev, time.Duration(float64(S)*in.RxRate/(in.RxRate+in.TxRate)))
+		}
 	}
 	// the QUIET link's one-way queues count only while the link's own
 	// round trip holds them (BudgetQuietCheck): a one-way queue of the path
@@ -373,6 +378,9 @@ func (c *budgetCore) step0(in budgetIn) float64 {
 	}
 	floor := math.Max(float64(budgetMinSegs*max(in.MSS, 536)), float64(2*in.Frame))
 	floor = math.Max(floor, budgetKMin*long*minRTT.Seconds())
+	if k := BudgetDFloor.Get(); k > 0 {
+		floor = math.Max(floor, float64(k)/100*d*minRTT.Seconds())
+	}
 	want := d * (base + T).Seconds() // in flight at the target, at this delivery rate
 	switch c.mode {
 	case budgetIdle:
@@ -465,7 +473,45 @@ type linkBudget struct {
 	// the runner's: acked and received at the reading before
 	ack0, rx0 uint64
 	at0       time.Duration
+	// quiet: a QUIET link's (QuietBudget): no pacing of its own, its light
+	// and realtime frames go past the gate at the socket's pace
+	quiet bool
 }
+
+// QuietBudget (HS2_TUNE_QUIET_BUDGET; 0: off; R1 round 5): the in-flight
+// budget on a QUIET link's bulk lane too (web responses and every download's
+// start, what is past a connection's first bytes), not only on BULK links.
+// A QUIET link holding a window of web responses in flight and in its flow
+// queue at the bottleneck holds a call's next frame behind them, in the
+// socket and in fq_codel's queue for that flow: the realtime lanes only
+// order the frames not yet written (round 4's item 3: a call's downward p99
+// +74 to +103 ms; Illinois, which CoDel's drops cut by an eighth, doubled it
+// at N=4 and N=8). With the budget the bulk lane waits in the scheduler past
+// the target queue, and the lanes go first (round-4 judge's open item).
+var QuietBudget = newTuneInt(1) // the default since R1 round 5 (round5/REPORT.fa.md)
+
+// BudgetDFloor (HS2_TUNE_BUDGET_DFLOOR, ×100; 0: off; R1 round 5): B stays at
+// this share of the delivery rate × min_rtt. A socket whose flight is under
+// its rate × its round trip holds no queue of its own, whatever srtt says, and
+// a cut below it only slows the link under what it delivers. Without it a
+// one-way link with few users fell into a spiral (round 5's LX: home at N=16,
+// 0.03 %): the budget cut, the flight fell to a few segments, the peer's
+// delayed acks (up to 40 ms on an odd last segment) lifted srtt 11 to 16 ms
+// over min_rtt, which read as its own queue and cut again, down to B 5 to 8
+// KiB, 0.6 Mbit/s, on a link that delivered 4 to 6: its users' pages took 13
+// to 28 s or never loaded (5 to 8 failed a run, production none).
+var BudgetDFloor = newTuneInt(100) // the default since R1 round 5
+
+// BudgetSplitRate (HS2_TUNE_BUDGET_SPLIT; 0: off; R1 round 5): a two-way
+// link without its own one-way delays (dirty while it resends: OWDGuardBulk)
+// splits S by what each way carries when the other way carries more,
+// instead of holding the way back to the guess min(S/2, T). In the home mix
+// at N=1 one BULK link carries the downloads and ~90 Mbit/s of uploads; under
+// random loss its own delays read none, and the exit took S (8 to 12 ms, most
+// of it the uplink's queue, where the downloads' acks wait behind the uploads
+// in one flow queue) for its own less 2.5 ms: it cut the downloads to 16 to 19
+// Mbit/s at 0.3 % (round 5's screen S4; production 78).
+var BudgetSplitRate = 0
 
 // newLinkBudget is the budget of a socket read by outq (nil: none).
 func newLinkBudget(outq func() (int, error)) *linkBudget {
@@ -538,7 +584,7 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 	if lb.core.base > 0 && b > 0 {
 		at := b / (lb.core.base + budgetTarget()).Seconds() // its rate at the target
 		r = math.Max(r, at)
-		if BudgetPaceK > 0 {
+		if BudgetPaceK > 0 && !lb.quiet {
 			pace = uint64(float64(BudgetPaceK) / 100 * at)
 		}
 	}

@@ -1,0 +1,38 @@
+10:45:04 plan /root/r5/S14/plan.txt: 18 runs
+10:45:06 start 87b36f41-r5-1 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 1.91 waited 0s
+10:45:53 done 87b36f41-r5-1 ok=1 
+10:45:55 start 87b36f41-dfl-1 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl) load 2.93 waited 0s
+10:46:42 done 87b36f41-dfl-1 ok=1 
+10:46:43 start 87b36f41-dfl-2 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl) load 3.56 waited 0s
+10:47:30 done 87b36f41-dfl-2 ok=1 
+10:47:32 start 87b36f41-r5-2 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.41 waited 0s
+10:48:19 done 87b36f41-r5-2 ok=1 
+10:48:20 start 87b36f41-dfl-3 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl) load 3.73 waited 0s
+10:49:07 done 87b36f41-dfl-3 ok=1 
+10:49:09 start 87b36f41-r5-3 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.48 waited 0s
+10:49:55 done 87b36f41-r5-3 ok=1 
+10:49:57 start 11ccea64-r5-1 (N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 2.72 waited 0s
+10:50:43 done 11ccea64-r5-1 ok=1 
+10:50:45 start 11ccea64-dfl-1 (N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl) load 3.62 waited 0s
+10:51:32 done 11ccea64-dfl-1 ok=1 
+10:51:34 start 11ccea64-dfl-2 (N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl) load 3.86 waited 0s
+10:52:20 done 11ccea64-dfl-2 ok=1 
+10:52:22 start 11ccea64-r5-2 (N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.22 waited 0s
+10:53:08 done 11ccea64-r5-2 ok=1 
+10:53:10 start 11ccea64-dfl-3 (N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl) load 3.94 waited 0s
+10:53:57 done 11ccea64-dfl-3 ok=1 
+10:53:59 start 11ccea64-r5-3 (N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.51 waited 0s
+10:54:45 done 11ccea64-r5-3 ok=1 
+10:54:47 start 96064888-r5-1 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.01 waited 0s
+10:55:32 done 96064888-r5-1 ok=1 
+10:55:34 start 96064888-dfl3-1 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl3) load 2.39 waited 0s
+10:56:20 done 96064888-dfl3-1 ok=1 
+10:56:21 start 96064888-dfl3-2 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl3) load 2.11 waited 0s
+10:57:07 done 96064888-dfl3-2 ok=1 
+10:57:08 start 96064888-r5-2 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 2.72 waited 0s
+10:57:54 done 96064888-r5-2 ok=1 
+10:57:56 start 96064888-dfl3-3 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl3) load 2.86 waited 0s
+10:58:41 done 96064888-dfl3-3 ok=1 
+10:58:43 start 96064888-r5-3 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 2.78 waited 0s
+10:59:28 done 96064888-r5-3 ok=1 
+10:59:28 done /root/r5/S14/plan.txt

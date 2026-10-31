@@ -1,0 +1,56 @@
+09:39:55 plan /root/r5/LX/plan.txt: 27 runs
+09:39:57 start c0017ae8-prod-1 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 1.34 waited 0s
+09:40:42 done c0017ae8-prod-1 ok=1 
+09:40:44 start c0017ae8-fin2-1 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 1.53 waited 0s
+09:41:29 done c0017ae8-fin2-1 ok=1 
+09:41:31 start c0017ae8-r5-1 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 2.63 waited 0s
+09:42:16 done c0017ae8-r5-1 ok=1 
+09:42:18 start c0017ae8-r5-2 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.52 waited 0s
+09:43:03 done c0017ae8-r5-2 ok=1 
+09:43:05 start c0017ae8-fin2-2 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.00 waited 0s
+09:43:50 done c0017ae8-fin2-2 ok=1 
+09:43:52 start c0017ae8-prod-2 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.83 waited 0s
+09:44:37 done c0017ae8-prod-2 ok=1 
+09:44:38 start c0017ae8-r5-3 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.27 waited 0s
+09:45:24 done c0017ae8-r5-3 ok=1 
+09:45:25 start c0017ae8-fin2-3 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.57 waited 0s
+09:46:11 done c0017ae8-fin2-3 ok=1 
+09:46:13 start c0017ae8-prod-3 (N=2 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.72 waited 0s
+09:46:57 done c0017ae8-prod-3 ok=1 
+09:46:59 start 96064888-prod-1 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.47 waited 0s
+09:47:45 done 96064888-prod-1 ok=1 
+09:47:46 start 96064888-fin2-1 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.12 waited 0s
+09:48:32 done 96064888-fin2-1 ok=1 
+09:48:33 start 96064888-r5-1 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.92 waited 0s
+09:49:19 done 96064888-r5-1 ok=1 
+09:49:21 start 96064888-r5-2 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.97 waited 0s
+09:50:06 done 96064888-r5-2 ok=1 
+09:50:08 start 96064888-fin2-2 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.89 waited 0s
+09:50:53 done 96064888-fin2-2 ok=1 
+09:50:55 start 96064888-prod-2 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.21 waited 0s
+09:51:40 done 96064888-prod-2 ok=1 
+09:51:42 start 96064888-r5-3 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.20 waited 0s
+09:52:27 done 96064888-r5-3 ok=1 
+09:52:29 start 96064888-fin2-3 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.57 waited 0s
+09:53:14 done 96064888-fin2-3 ok=1 
+09:53:16 start 96064888-prod-3 (N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 2.94 waited 0s
+09:54:01 done 96064888-prod-3 ok=1 
+09:54:03 start 87b36f41-prod-1 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 2.00 waited 0s
+09:54:49 done 87b36f41-prod-1 ok=1 
+09:54:51 start 87b36f41-fin2-1 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.07 waited 0s
+09:55:38 done 87b36f41-fin2-1 ok=1 
+09:55:40 start 87b36f41-r5-1 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.02 waited 0s
+09:56:27 done 87b36f41-r5-1 ok=1 
+09:56:28 start 87b36f41-r5-2 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.25 waited 0s
+09:57:15 done 87b36f41-r5-2 ok=1 
+09:57:17 start 87b36f41-fin2-2 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.85 waited 0s
+09:58:04 done 87b36f41-fin2-2 ok=1 
+09:58:06 start 87b36f41-prod-2 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 4.27 waited 0s
+09:58:52 done 87b36f41-prod-2 ok=1 
+09:58:54 start 87b36f41-r5-3 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 4.41 waited 0s
+09:59:40 done 87b36f41-r5-3 ok=1 
+09:59:42 start 87b36f41-fin2-3 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.34 waited 0s
+10:00:29 done 87b36f41-fin2-3 ok=1 
+10:00:31 start 87b36f41-prod-3 (N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 3.10 waited 0s
+10:01:17 done 87b36f41-prod-3 ok=1 
+10:01:17 done /root/r5/LX/plan.txt

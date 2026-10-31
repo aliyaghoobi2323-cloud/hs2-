@@ -27,6 +27,7 @@ func TestQuietFollowMath(t *testing.T) {
 			t.Errorf("followWant(%d, %d, %d) = %d, want %d", c.want, c.bulk, c.peer, got, c.out)
 		}
 	}
+	withTune(t, QuietReplace, 0) // (its room: TestQuietReplaceRoom)
 	for _, c := range []struct {
 		max, own   int
 		follow     bool
@@ -95,6 +96,9 @@ func TestQuietFollowMixed(t *testing.T) {
 			ask := c.ask
 			if ask == 0 {
 				ask = c.wantQ + c.wantB
+			}
+			if c.mix.edgeNoFollow && c.mix.exitNoRoom {
+				withTune(t, QuietReplace, 0) // ends of before it: no room for a replacement either
 			}
 			p := startQuietPoolMix(t, false, c.max, c.mix)
 			t0 := time.Now()

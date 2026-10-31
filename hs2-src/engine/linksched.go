@@ -397,11 +397,12 @@ func (g gateSys) waitBelow(n int) error {
 type coreLink struct {
 	id    int
 	sess  *smux.Session
-	mtr   *linkMeter   // nil: none
-	sc    *sendCapLink // C4-lite's and C3's readings (nil: neither)
-	hq    *hostQ       // nil: C3 off
-	flows *linkFlows   // nil: C2 off
-	shp   *shapedConn  // a QUIET link's shaper (its records' tallies; nil: not one)
+	mtr   *linkMeter    // nil: none
+	sc    *sendCapLink  // C4-lite's and C3's readings (nil: neither)
+	hq    *hostQ        // nil: C3 off
+	flows *linkFlows    // nil: C2 off
+	shp   *shapedConn   // a QUIET link's shaper (its records' tallies; nil: not one)
+	qcc   *quietCCWatch // a QUIET link's switch under random loss (QuietCCLoss; nil: off)
 	tun   atomic.Pointer[l3Link]
 	// the status lines': when the hostq line was last made
 	hqAt time.Duration
@@ -501,6 +502,11 @@ func (l *coreLink) step(now time.Duration) {
 	if l.flows != nil {
 		l.flows.tick(now)
 	}
+	if w := l.qcc; w != nil && w.due() {
+		if st, ok := tcpStats(w.tc); ok {
+			w.step(now, st)
+		}
+	}
 	l.noteEvents(&r1ev)
 }
 
@@ -566,7 +572,7 @@ func CoreLines() []string {
 		if l.sc != nil && l.sc.sys != nil {
 			s := l.sc.line(l.id)
 			if l.mtr != nil {
-				s += fmt.Sprintf("; owd guard dirty %d", l.mtr.owd.dirties.Load())
+				s += fmt.Sprintf("; owd guard dirty %d (in %d)", l.mtr.owd.dirties.Load(), l.mtr.owd.inDirties.Load())
 			}
 			out = append(out, s)
 			if s := l.sc.budgetLine(l.id); s != "" {
@@ -575,6 +581,9 @@ func CoreLines() []string {
 		}
 		if l.shp != nil {
 			out = append(out, l.shp.recLine(l.id, now))
+		}
+		if l.qcc != nil {
+			out = append(out, l.qcc.line(l.id))
 		}
 	}
 	return out

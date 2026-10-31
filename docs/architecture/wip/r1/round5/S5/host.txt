@@ -1,0 +1,32 @@
+== start 2026-10-29T17:41:05+00:00
+ 17:41:05 up 2 days,  6:36, 11 users,  load average: 2.11, 2.88, 2.97
+TCP: inuse 2062 orphan 0 tw 530 alloc 3326 mem 0
+top - 17:41:06 up 2 days,  6:36, 11 users,  load average: 2.11, 2.88, 2.97
+Tasks: 264 total,   1 running, 263 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.1 us,  5.9 sy,  0.1 ni, 88.4 id,  0.0 wa,  0.0 hi,  2.5 si,  0.0 st 
+MiB Mem :  23456.9 total,   2737.9 free,   1657.4 used,  19478.1 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21799.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1421357 root      20   0 1702016 402424  29312 S  55.8   1.7  11:25.11 xray-linux-amd6
+    992 root      20   0 1477216 215440  10504 S  50.0   0.9     16,03 hs2
+1533736 root      39  19 2069580  12684   6056 S  21.2   0.1   0:00.14 flowcap.test
+1533731 root      20   0   11908   6048   3884 R   3.8   0.0   0:00.04 top
+     17 root      20   0       0      0      0 I   1.9   0.0   5:10.08 rcu_preempt
+      1 root      20   0   22796  14236   9776 S   0.0   0.1   4:56.14 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.36 kthreadd
+== end 2026-10-29T17:56:51+00:00
+ 17:56:51 up 2 days,  6:51, 12 users,  load average: 4.61, 4.00, 3.56
+TCP: inuse 2233 orphan 1 tw 640 alloc 3670 mem 2
+top - 17:56:52 up 2 days,  6:51, 13 users,  load average: 4.61, 4.00, 3.56
+Tasks: 272 total,   1 running, 271 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.6 us,  3.1 sy,  0.5 ni, 93.9 id,  0.0 wa,  0.0 hi,  0.8 si,  0.0 st 
+MiB Mem :  23456.9 total,   2360.4 free,   1834.4 used,  19690.7 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21622.5 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+    992 root      20   0 1543152 253708  10504 S  21.6   1.1     16,09 hs2
+1421357 root      20   0 1702248 406896  29440 S  21.6   1.7  18:09.07 xray-linux-amd6
+1548652 root      39  19 2606956 122124  16804 S   5.9   0.5   1:37.91 engine.test
+     17 root      20   0       0      0      0 I   2.0   0.0   5:12.75 rcu_preempt
+    916 root      20   0 1089360  74208  50780 S   2.0   0.3   5:57.63 fail2ban-server
+  13054 polkitd   20   0  308180   8240   7296 S   2.0   0.0   1:36.10 polkitd
+  13061 root      20   0   80720   4304   4028 S   2.0   0.0   2:11.62 qemu-ga

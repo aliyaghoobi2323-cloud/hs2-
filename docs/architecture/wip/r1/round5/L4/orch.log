@@ -1,0 +1,7 @@
+taken
+08:36:33 lock taken after 0s (pid 2566288), plan /root/r5/L4/plan.txt, REPS 3, limit 1440s
+08:57:48 run.sh status 0
+08:57:49 pass 1: 0 runs busy (>75%) or failed, 164s left
+08:57:48 end: mode log, status 0; 2482 samples; host TCP max 237709 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0
+08:57:49 done after 1276s of rig time
+08:57:49 lock released after 1276s

@@ -1,0 +1,120 @@
+== N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2  BIN=r5  runs 3 (ok 3)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 6   host busy 24 [22..30]%
+   total dn 86.22 [85.69..86.57]  up 84.86 [84.35..85.23] Mbit/s   (c) - of cap_P10 (raw -)
+   CPU % (one core = 100): edge 54.0 [53.5..55.0]  exit 53.0 [52.4..53.6]   retrans %: exit 0.475 [0.472..0.488]  edge 0.424 [0.417..0.460]
+   all users against cap_P10: dn 93% [92%..93%]  up 91% [91%..91%]   heavy users mean 3.40 [3.16..3.48] min 2.63 [2.44..2.88] Mbit/s
+   game (TCP), one-way ms over the floor:
+      up: p50 2.7 [2.6..3.2] p99 78.6 [75.8..80.1] p99.9 98.4 [92.1..99.4]  jitter 18.0 [16.3..75.3]  late+lost %: 0.07 [0.00..0.08] (lost 0)
+      dn: p50 3.4 [3.4..3.8] p99 85.9 [80.6..92.1] p99.9 102.3 [95.5..143.2]  jitter 78.2 [76.5..86.9]  late+lost %: 0.25 [0.00..0.28] (lost 0)
+      floor up 37.6 [37.6..37.6] dn 37.6 [37.6..37.7] ms (path RTT/2 37.5; p99 over the path: up 78.8 [76.0..80.2] dn 86.0 [80.7..92.2])
+   game (UDP), one-way ms over the floor:
+      up: p50 3.3 [3.2..3.5] p99 79.5 [75.7..80.6] p99.9 98.1 [93.2..100.1]  jitter 16.7 [16.3..76.1]  late+lost %: 0.04 [0.00..0.10] (lost 0)
+      dn: p50 3.1 [2.8..3.1] p99 90.2 [81.6..93.1] p99.9 100.9 [96.4..155.0]  jitter 81.2 [76.9..89.2]  late+lost %: 0.22 [0.00..0.22] (lost 0)
+      floor up 37.6 dn 37.6 [37.6..37.6] ms (path RTT/2 37.5; p99 over the path: up 79.7 [75.8..80.7] dn 90.3 [81.7..93.3])
+   call, one-way ms over the floor:
+      up: p50 5.6 [5.0..10.3] p99 103.5 [101.4..459.4] p99.9 140.6 [134.1..570.2]  jitter 94.1 [94.0..94.1]  late+lost %: 0.06 [0.03..4.47] (lost 0)  delivered 100%
+      dn: p50 16.7 [13.6..20.1] p99 116.9 [99.3..331.2] p99.9 174.9 [124.9..538.3]  jitter 77.4 [77.1..80.7]  late+lost %: 0.36 [0.00..3.79] (lost 0)  delivered 100%
+      floor up 38.0 [37.9..38.0] dn 38.0 [37.9..38.1] ms (path RTT/2 37.5; p99 over the path: up 103.9 [101.9..459.9] dn 117.3 [99.9..331.7])
+   stream: 16 viewers at 1.20 Mbit/s (fair share 2.38 [2.37..2.48]): startup p50 2.14 [1.70..2.24] max 2.64 [2.09..3.49] s, not started 0; rebuffers 0 (viewers 0, 0.0 s); segment rate 1.64 [1.53..1.64] Mbit/s
+   web: page load p50 6850 [6790..7133] p95 10226 [9408..10950] ms, first byte p50 253 [203..337] p95 1140 [581..1833] ms; pages 48 [43..53], failed 0
+   class verdict (report only): game FAIL (0/3)  gameudp FAIL (0/3)  call FAIL (0/3)  stream FAIL (0/3)
+== N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2  BIN=sp2  runs 3 (ok 3)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 6   host busy 25 [20..28]%
+   total dn 86.52 [86.10..87.60]  up 84.82 [83.19..85.50] Mbit/s   (c) - of cap_P10 (raw -)
+   CPU % (one core = 100): edge 54.0 [51.5..54.3]  exit 51.5 [50.0..54.4]   retrans %: exit 0.527 [0.445..0.805]  edge 0.466 [0.414..0.498]
+   all users against cap_P10: dn 93% [92%..94%]  up 91% [89%..92%]   heavy users mean 2.97 [2.55..3.23] min 2.27 [1.45..3.03] Mbit/s
+   game (TCP), one-way ms over the floor:
+      up: p50 3.4 [2.6..3.5] p99 77.7 [76.0..83.7] p99.9 98.0 [96.9..98.9]  jitter 16.4 [16.2..76.5]  late+lost %: 0.03 [0.03..0.05] (lost 0)
+      dn: p50 3.3 [3.3..3.4] p99 79.4 [77.8..84.7] p99.9 138.8 [98.3..155.7]  jitter 76.9 [67.2..79.0]  late+lost %: 0.25 [0.00..0.25] (lost 0)
+      floor up 37.6 [37.6..37.6] dn 37.7 [37.6..37.7] ms (path RTT/2 37.5; p99 over the path: up 77.8 [76.2..83.9] dn 79.6 [78.0..84.9])
+   game (UDP), one-way ms over the floor:
+      up: p50 3.0 [2.6..3.1] p99 78.0 [70.5..81.2] p99.9 97.5 [94.8..98.2]  jitter 16.4 [16.2..76.6]  late+lost %: 0.04 [0.00..0.04] (lost 0)
+      dn: p50 3.4 [3.1..3.4] p99 80.5 [78.5..85.9] p99.9 140.5 [98.2..155.7]  jitter 77.3 [67.7..78.0]  late+lost %: 0.22 [0.00..0.28] (lost 0)
+      floor up 37.6 [37.6..37.6] dn 37.7 [37.6..37.7] ms (path RTT/2 37.5; p99 over the path: up 78.1 [70.7..81.3] dn 80.7 [78.7..86.0])
+   call, one-way ms over the floor:
+      up: p50 21.8 [6.4..27.0] p99 231.2 [137.1..242.3] p99.9 307.9 [277.7..308.1]  jitter 103.8 [94.8..108.2]  late+lost %: 2.66 [0.73..4.38] (lost 0)  delivered 100%
+      dn: p50 128.9 [26.6..265.6] p99 1584.7 [440.0..5943.9] p99.9 1676.5 [514.0..6055.0]  jitter 116.3 [94.3..141.1]  late+lost %: 45.44 [12.97..66.61] (lost 0)  delivered 100%
+      floor up 38.2 [38.0..38.8] dn 38.7 [38.3..39.6] ms (path RTT/2 37.5; p99 over the path: up 232.5 [137.5..243.0] dn 1586.8 [441.2..5944.7])
+   stream: 16 viewers at 1.20 Mbit/s (fair share 2.17 [2.15..2.40]): startup p50 1.55 [1.19..2.37] max 2.13 [1.59..4.31] s, not started 0; rebuffers 0 (viewers 0, 0.0 s); segment rate 1.60 [1.47..1.68] Mbit/s
+   web: page load p50 4568 [4535..6595] p95 8046 [7590..9601] ms, first byte p50 148 [145..250] p95 379 [224..1806] ms; pages 63 [46..64], failed 0
+   class verdict (report only): game FAIL (0/3)  gameudp FAIL (0/3)  call FAIL (0/3)  stream FAIL (1/3)
+== N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2  BIN=sp4  runs 3 (ok 3)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 6   host busy 22 [21..23]%
+   total dn 86.16 [84.70..87.47]  up 85.65 [84.18..86.60] Mbit/s   (c) - of cap_P10 (raw -)
+   CPU % (one core = 100): edge 55.4 [51.6..55.5]  exit 53.2 [52.1..54.4]   retrans %: exit 0.470 [0.424..0.955]  edge 0.538 [0.431..0.667]
+   all users against cap_P10: dn 92% [91%..94%]  up 92% [90%..93%]   heavy users mean 3.21 [3.06..8.75] min 2.20 [2.15..6.42] Mbit/s
+   game (TCP), one-way ms over the floor:
+      up: p50 2.6 [2.5..3.6] p99 81.8 [74.2..84.2] p99.9 96.1 [95.1..100.9]  jitter 17.9 [16.2..79.9]  late+lost %: 0.05 [0.01..0.16] (lost 0)
+      dn: p50 3.0 [2.3..3.3] p99 80.0 [73.5..86.0] p99.9 99.5 [92.9..100.1]  jitter 75.3 [71.1..84.8]  late+lost %: 0.06 [0.03..0.14] (lost 0)
+      floor up 37.7 [37.6..37.7] dn 37.6 [37.6..37.6] ms (path RTT/2 37.5; p99 over the path: up 81.9 [74.3..84.3] dn 80.2 [73.6..86.2])
+   game (UDP), one-way ms over the floor:
+      up: p50 3.0 [2.4..3.5] p99 80.0 [74.0..84.4] p99.9 96.7 [95.0..97.1]  jitter 16.7 [16.2..79.8]  late+lost %: 0.03 [0.00..0.09] (lost 0)
+      dn: p50 3.2 [2.9..3.2] p99 77.8 [74.6..86.4] p99.9 96.4 [95.5..97.4]  jitter 74.8 [71.0..83.4]  late+lost %: 0.00 [0.00..0.03] (lost 0)
+      floor up 37.6 [37.6..37.7] dn 37.7 ms (path RTT/2 37.5; p99 over the path: up 80.2 [74.2..84.6] dn 77.9 [74.8..86.5])
+   call, one-way ms over the floor:
+      up: p50 12.5 [9.4..2196.5] p99 181.9 [149.9..5853.1] p99.9 281.9 [264.8..5937.5]  jitter 97.3 [96.0..98.4]  late+lost %: 1.55 [1.00..98.82] (lost 0)  delivered 100%
+      dn: p50 50.7 [11.8..68.8] p99 1135.9 [283.2..2020.4] p99.9 1390.2 [346.7..2209.8]  jitter 112.3 [94.5..116.8]  late+lost %: 28.96 [8.45..40.05] (lost 0)  delivered 100%
+      floor up 38.0 [38.0..413.1] dn 37.9 [37.9..38.1] ms (path RTT/2 37.5; p99 over the path: up 182.5 [150.4..6228.7] dn 1136.6 [283.7..2020.7])
+   stream: 16 viewers at 1.20 Mbit/s (fair share 2.35 [2.31..3.27]): startup p50 1.83 [1.17..inf] max 2.23 [1.99..inf] s, not started 0 [0..16]; rebuffers 0 (viewers 0, 0.0 s); segment rate 1.62 [0.00..1.63] Mbit/s
+   web: page load p50 6581 [6412..inf] p95 9569 [9127..inf] ms, first byte p50 192 [188..inf] p95 432 [405..inf] ms; pages 52 [6..54], failed 0 [0..6]
+   class verdict (report only): game FAIL (0/3)  gameudp FAIL (0/3)  call FAIL (0/3)  stream FAIL (1/3)
+== N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2  BIN=r5  runs 3 (ok 3)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 3   host busy 23 [18..25]%
+   total dn 82.62 [81.58..87.03]  up 82.68 [79.47..83.33] Mbit/s   (c) - of cap_P10 (raw -)
+   CPU % (one core = 100): edge 44.1 [42.8..47.1]  exit 42.3 [42.2..43.0]   retrans %: exit 0.392 [0.390..0.471]  edge 0.389 [0.384..0.400]
+   all users against cap_P10: dn 89% [88%..93%]  up 89% [85%..89%]   heavy users mean 2.28 [2.13..2.61] min 2.25 [2.09..2.55] Mbit/s
+   game (TCP), one-way ms over the floor:
+      up: p50 3.1 [2.7..3.3] p99 80.0 [69.9..83.7] p99.9 97.3 [94.1..100.3]  jitter 19.2 [16.1..24.2]  late+lost %: 0.05 [0.04..0.14] (lost 0)
+      dn: p50 3.3 [3.0..3.6] p99 77.8 [76.4..80.5] p99.9 95.5 [93.1..96.5]  jitter 73.6 [66.5..77.2]  late+lost %: 0.00 (lost 0)
+      floor up 37.6 [37.6..37.7] dn 37.6 [37.6..37.7] ms (path RTT/2 37.5; p99 over the path: up 80.1 [70.0..83.9] dn 77.9 [76.6..80.6])
+   game (UDP), one-way ms over the floor:
+      up: p50 3.0 [2.8..3.1] p99 79.5 [69.4..84.5] p99.9 97.1 [96.3..100.1]  jitter 17.0 [16.0..24.2]  late+lost %: 0.05 [0.04..0.14] (lost 0)
+      dn: p50 3.0 [2.5..3.5] p99 75.4 [73.4..79.3] p99.9 92.7 [92.7..97.6]  jitter 71.6 [70.9..76.0]  late+lost %: 0.00 [0.00..0.03] (lost 0)
+      floor up 37.6 [37.6..37.6] dn 37.7 [37.6..37.7] ms (path RTT/2 37.5; p99 over the path: up 79.6 [69.5..84.6] dn 75.6 [73.5..79.4])
+   call, one-way ms over the floor:
+      up: p50 48.1 [31.9..51.1] p99 246.2 [226.7..451.9] p99.9 379.4 [361.6..497.4]  jitter 94.7 [91.3..98.2]  late+lost %: 2.25 [1.87..18.26] (lost 0)  delivered 100%
+      dn: p50 154.1 [12.1..208.6] p99 953.6 [119.7..3255.4] p99.9 1087.4 [182.8..3352.1]  jitter 129.6 [93.6..138.5]  late+lost %: 50.84 [0.39..56.99] (lost 0)  delivered 100%
+      floor up 38.1 [38.0..38.2] dn 37.8 [37.7..38.0] ms (path RTT/2 37.5; p99 over the path: up 246.8 [227.4..452.4] dn 953.8 [119.9..3255.9])
+   stream: 16 viewers at 1.20 Mbit/s (fair share 2.29 [2.27..2.40]): startup p50 0.62 [0.50..1.24] max 2.04 [1.91..4.09] s, not started 0; rebuffers 0 (viewers 0, 0.0 s); segment rate 1.80 [1.66..2.06] Mbit/s
+   web: page load p50 5803 [5135..6291] p95 8999 [7706..11975] ms, first byte p50 162 [160..231] p95 263 [255..4273] ms; pages 51 [49..60], failed 0
+   class verdict (report only): game FAIL (0/3)  gameudp FAIL (0/3)  call FAIL (0/3)  stream FAIL (1/3)
+== N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2  BIN=sp2  runs 3 (ok 3)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 3   host busy 24 [23..25]%
+   total dn 84.70 [83.14..88.56]  up 69.06 [58.55..79.05] Mbit/s   (c) - of cap_P10 (raw -)
+   CPU % (one core = 100): edge 44.1 [42.3..44.5]  exit 42.4 [41.5..44.2]   retrans %: exit 0.386 [0.382..2.442]  edge 0.368 [0.367..0.398]
+   all users against cap_P10: dn 91% [89%..95%]  up 74% [63%..85%]   heavy users mean 2.56 [2.24..2.89] min 2.52 [2.20..2.82] Mbit/s
+   game (TCP), one-way ms over the floor:
+      up: p50 3.0 [3.0..3.1] p99 78.4 [71.2..80.2] p99.9 97.2 [96.7..98.0]  jitter 16.4 [16.3..16.7]  late+lost %: 0.03 [0.03..0.07] (lost 0)
+      dn: p50 3.3 [3.1..3.3] p99 72.8 [66.5..77.6] p99.9 98.1 [95.3..99.8]  jitter 69.2 [56.8..73.0]  late+lost %: 0.03 [0.00..0.08] (lost 0)
+      floor up 37.7 [37.6..37.7] dn 37.6 [37.6..37.6] ms (path RTT/2 37.5; p99 over the path: up 78.5 [71.3..80.4] dn 72.9 [66.7..77.7])
+   game (UDP), one-way ms over the floor:
+      up: p50 3.5 [3.1..3.6] p99 78.2 [70.6..81.1] p99.9 96.9 [96.6..98.1]  jitter 16.5 [16.3..16.7]  late+lost %: 0.05 [0.01..0.07] (lost 0)
+      dn: p50 3.2 [2.9..3.3] p99 69.1 [66.0..78.9] p99.9 96.9 [96.1..99.2]  jitter 62.0 [55.8..74.6]  late+lost %: 0.03 [0.00..0.06] (lost 0)
+      floor up 37.6 [37.6..37.6] dn 37.7 [37.7..37.7] ms (path RTT/2 37.5; p99 over the path: up 78.3 [70.7..81.3] dn 69.3 [66.2..79.1])
+   call, one-way ms over the floor:
+      up: p50 21.8 [14.8..35.6] p99 213.7 [197.1..228.1] p99.9 376.5 [305.5..397.3]  jitter 103.2 [94.5..104.0]  late+lost %: 1.92 [1.38..2.48] (lost 0)  delivered 100%
+      dn: p50 91.0 [80.3..122.3] p99 1081.2 [550.9..1485.0] p99.9 1498.8 [748.9..1839.9]  jitter 119.3 [119.3..124.8]  late+lost %: 39.90 [34.88..42.16] (lost 0)  delivered 100%
+      floor up 38.0 [38.0..38.0] dn 38.0 [37.9..38.2] ms (path RTT/2 37.5; p99 over the path: up 214.2 [197.6..228.6] dn 1081.6 [551.6..1485.5])
+   stream: 16 viewers at 1.20 Mbit/s (fair share 2.35 [2.30..2.52]): startup p50 1.11 [1.10..1.58] max 1.92 [1.90..2.35] s, not started 0; rebuffers 0 (viewers 0, 0.0 s); segment rate 1.96 [1.91..1.99] Mbit/s
+   web: page load p50 6355 [6336..7749] p95 8470 [8193..12013] ms, first byte p50 181 [161..311] p95 313 [259..4167] ms; pages 50 [41..53], failed 0
+   class verdict (report only): game FAIL (0/3)  gameudp FAIL (0/3)  call FAIL (0/3)  stream PASS (2/3)
+== N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2  BIN=sp4  runs 3 (ok 3)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 3   host busy 20 [19..22]%
+   total dn 84.90 [82.48..88.04]  up 62.17 [57.41..84.24] Mbit/s   (c) - of cap_P10 (raw -)
+   CPU % (one core = 100): edge 43.2 [42.5..49.7]  exit 42.9 [42.5..48.1]   retrans %: exit 0.419 [0.393..2.763]  edge 0.390 [0.351..0.414]
+   all users against cap_P10: dn 91% [89%..94%]  up 67% [62%..90%]   heavy users mean 2.45 [2.36..2.51] min 2.40 [2.31..2.46] Mbit/s
+   game (TCP), one-way ms over the floor:
+      up: p50 3.3 [2.6..3.5] p99 82.3 [77.2..85.5] p99.9 96.6 [92.3..151.2]  jitter 16.6 [16.5..78.7]  late+lost %: 0.05 [0.00..0.27] (lost 0)
+      dn: p50 2.9 [2.6..3.6] p99 78.1 [74.0..81.0] p99.9 98.2 [94.6..99.7]  jitter 76.3 [72.9..76.8]  late+lost %: 0.06 [0.03..0.08] (lost 0)
+      floor up 37.6 [37.6..37.7] dn 37.7 [37.6..37.7] ms (path RTT/2 37.5; p99 over the path: up 82.4 [77.4..85.7] dn 78.3 [74.1..81.1])
+   game (UDP), one-way ms over the floor:
+      up: p50 3.7 [3.4..3.7] p99 83.8 [79.1..85.6] p99.9 95.5 [95.2..153.5]  jitter 16.6 [16.6..78.7]  late+lost %: 0.03 [0.01..0.27] (lost 0)
+      dn: p50 3.3 [2.6..3.3] p99 79.2 [75.3..83.9] p99.9 99.1 [94.3..100.0]  jitter 75.4 [70.5..79.2]  late+lost %: 0.08 [0.00..0.08] (lost 0)
+      floor up 37.6 [37.6..37.7] dn 37.6 [37.6..37.7] ms (path RTT/2 37.5; p99 over the path: up 83.9 [79.2..85.7] dn 79.4 [75.5..84.0])
+   call, one-way ms over the floor:
+      up: p50 14.8 [5.8..37.2] p99 225.6 [131.6..271.4] p99.9 326.8 [234.8..342.9]  jitter 96.4 [93.9..105.6]  late+lost %: 2.00 [0.66..5.58] (lost 0)  delivered 100%
+      dn: p50 13.7 [12.8..125.8] p99 900.4 [811.8..1387.5] p99.9 1093.1 [1007.2..1877.0]  jitter 100.7 [98.1..122.5]  late+lost %: 12.45 [9.38..42.70] (lost 0)  delivered 100%
+      floor up 38.0 [37.9..38.0] dn 37.8 [37.8..38.2] ms (path RTT/2 37.5; p99 over the path: up 226.0 [132.0..271.9] dn 900.7 [812.1..1388.2])
+   stream: 16 viewers at 1.20 Mbit/s (fair share 2.38 [2.34..2.40]): startup p50 0.99 [0.61..1.25] max 2.08 [1.90..2.51] s, not started 0; rebuffers 0 (viewers 0, 0.0 s); segment rate 1.94 [1.87..2.05] Mbit/s
+   web: page load p50 6321 [6314..6574] p95 9020 [8468..9306] ms, first byte p50 212 [171..223] p95 344 [279..1679] ms; pages 47 [44..50], failed 0
+   class verdict (report only): game FAIL (0/3)  gameudp FAIL (0/3)  call FAIL (0/3)  stream FAIL (1/3)
