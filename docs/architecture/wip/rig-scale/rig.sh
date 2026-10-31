@@ -260,13 +260,42 @@ qpolice() {
   done
 }
 
+# qdelay MS: once, MS ms more on each QUIET link connection up now, each way
+# (its socket's congestion control is not bbr): a DPI box that holds the
+# flows it flagged. The hosts' egress (x0, e0) becomes a prio with netem on
+# the band those five-tuples go to, the host's qdisc on the other. A pool
+# without QUIET links gets it on its busiest link, as qpolice.
+qdelay() {
+  local ms=${1:?} p ports
+  ports=$(nsx $X ss -HtinO state established '( dport = :2096 )' 2>/dev/null | awk '$0 !~ / bbr / {split($4,a,":"); print a[length(a)]}')
+  if [ -z "$ports" ]; then
+    ports=$(nsx $X ss -HtinO state established '( dport = :2096 )' 2>/dev/null | awk '{
+      split($4,a,":"); b = 0
+      if (match($0, /bytes_acked:[0-9]+/)) b += substr($0, RSTART + 12, RLENGTH - 12)
+      if (match($0, /bytes_received:[0-9]+/)) b += substr($0, RSTART + 15, RLENGTH - 15)
+      if (b >= best) { best = b; bp = a[length(a)] } } END { if (bp != "") print bp }')
+  fi
+  nsx $X tc qdisc replace dev x0 root handle 1: prio bands 3 priomap 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 || die "prio x0"
+  nsx $X tc qdisc add dev x0 parent 1:1 netem delay ${ms}ms limit 100000 || die "netem x0"
+  nsx $X tc qdisc add dev x0 parent 1:2 fq_codel || die "fq_codel x0"
+  nsx $E tc qdisc replace dev e0 root handle 1: prio bands 3 priomap 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 || die "prio e0"
+  nsx $E tc qdisc add dev e0 parent 1:1 netem delay ${ms}ms limit 100000 || die "netem e0"
+  nsx $E tc qdisc add dev e0 parent 1:2 fq || die "fq e0"
+  for p in $ports; do
+    nsx $X tc filter add dev x0 parent 1: protocol ip prio 1 flower ip_proto tcp src_ip 10.202.0.1 src_port $p dst_port 2096 flowid 1:1 &&
+    nsx $E tc filter add dev e0 parent 1: protocol ip prio 1 flower ip_proto tcp dst_ip 10.202.0.1 dst_port $p src_port 2096 flowid 1:1 &&
+      echo "$(date +%s.%N) delayed QUIET $p by ${ms} ms each way"
+  done
+}
+
 case "$cmd" in
   up) up ;;
   qpolice) qpolice "$2" ;;
+  qdelay) qdelay "$2" ;;
   tun-up) tun_up ;;
   down) down ;;
   police) police ;;
   show) show ;;
   wait-links) wait_links "$2" "$3" ;;
-  *) echo "usage: rig.sh up|tun-up|down|police|qpolice PR|show|wait-links N S" >&2; exit 2 ;;
+  *) echo "usage: rig.sh up|tun-up|down|police|qpolice PR|qdelay MS|show|wait-links N S" >&2; exit 2 ;;
 esac
