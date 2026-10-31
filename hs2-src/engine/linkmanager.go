@@ -89,7 +89,9 @@ const (
 	// drainIdle): those that are not flowing are closed (FIN; the app
 	// reconnects onto a serving link), so a pool that grew to hundreds of
 	// links for a peak really comes back down in quiet hours. Flowing
-	// connections are never closed.
+	// connections are never closed. Off while ReclaimIdleOnly is on (the
+	// default): "not flowing" is a rate below 16 kbit/s, and a connection
+	// still moving data slowly is not idle.
 	retireForce = 20 * time.Minute
 
 	heldLogFirst = 15 * time.Minute // "retiring link held by N" first log
@@ -1225,13 +1227,33 @@ func (m *LinkManager) retiringLocked() int {
 	return n
 }
 
+// ReclaimIdleOnly (HS2_TUNE_RECLAIM_IDLE_ONLY; 0: the old rule) closes on a
+// retiring link only the connections that have not moved a byte for
+// drainIdle. Without it, a link retiring for retireForce also lost its
+// connections that were "not flowing": under 16 kbit/s (rate EWMA, τ 10 s)
+// and not moving >= 256 B/s on each of the last 3 ticks. That is a rate, not
+// idleness: a chat or SSH session, a game's slow beat, a download throttled
+// by its server or a reader that sends bursts every few seconds all read as
+// not flowing, and the check that spares a connection which moved meanwhile
+// covers only the few milliseconds between choosing and closing it. On the
+// main server, the pool shrinking every minute or so left links retiring
+// past retireForce and "closed N connection(s) on retiring links" cut such
+// live connections. The cost of the rule kept: a retiring link held by a
+// connection that keeps trickling stays up (it takes no new connections and
+// is the first brought back when the pool grows).
+var ReclaimIdleOnly = newTuneInt(1)
+
 // reclaimIdle closes, with FIN, the connections on a retiring link that have
-// not moved a byte for drainIdle — and, once the link has been retiring for
-// retireForce (force), those that are not flowing either. A connection that
+// not moved a byte for drainIdle — and, without ReclaimIdleOnly, once the
+// link has been retiring for retireForce (force), those that are not flowing
+// either. A connection that
 // moves anything between being chosen and being closed is spared. Closing a
 // stream can block, so this runs in its own goroutine, one per link at a time.
 func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Duration, force bool) {
 	defer ml.reclaiming.Store(false)
+	if ReclaimIdleOnly.Get() != 0 {
+		force = false
+	}
 	ir, ok := ml.link.(idleReclaimer)
 	if !ok {
 		return

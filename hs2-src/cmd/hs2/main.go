@@ -425,6 +425,12 @@ func applyTuning() {
 	numT("HS2_TUNE_QUIET_BYUSER", engine.QuietByUser)
 	numT("HS2_TUNE_QUIET_HOLDCAP", engine.QuietHoldCap)
 	numT("HS2_TUNE_RESCUE_DEAD", engine.RescueDead)
+	// the pool on the main server: a shrink at most a fifth of the links, 5 min
+	// after the last change (0: every 30 s, half the gap); on a retiring link
+	// only connections idle for drain_idle are closed (0: also the slow ones
+	// on a link retiring 20 min+)
+	numT("HS2_TUNE_SLOW_SHRINK", engine.SlowShrink)
+	numT("HS2_TUNE_RECLAIM_IDLE_ONLY", engine.ReclaimIdleOnly)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)
