@@ -526,7 +526,10 @@ const coreLinesMax = 8
 
 // CoreLines is the R1 cores' status lines of this process's links (§3.1 to
 // §3.4): per link its scheduler, classes, host-queue guard and pacing cap,
-// for the first coreLinesMax links.
+// for the first coreLinesMax links; then the budgets' cuts of all links and
+// the budget lines of the coreLinesMax links with the most cuts, wherever
+// they are in the pool (R1 fix 2: on the main server 99 % of the cuts were
+// on links past the first eight, which the status never showed).
 func CoreLines() []string {
 	links := coreLinks.links()
 	now := time.Duration(ctrlNow())
@@ -569,13 +572,51 @@ func CoreLines() []string {
 				s += fmt.Sprintf("; owd guard dirty %d", l.mtr.owd.dirties.Load())
 			}
 			out = append(out, s)
-			if s := l.sc.budgetLine(l.id); s != "" {
-				out = append(out, s)
-			}
 		}
 		if l.shp != nil {
 			out = append(out, l.shp.recLine(l.id, now))
 		}
 	}
+	var rows []budgetRow
+	for _, l := range links {
+		if l.sc == nil || l.sc.sys == nil {
+			continue
+		}
+		if n, ok := l.sc.budgetCuts(); ok {
+			rows = append(rows, budgetRow{id: l.id, cuts: n, sc: l.sc})
+		}
+	}
+	if len(rows) == 0 {
+		return out
+	}
+	top, total := topBudgetRows(rows, coreLinesMax)
+	out = append(out, fmt.Sprintf("budget cuts %d in all on %d budget link(s); the %d with the most:", total, len(rows), len(top)))
+	for _, r := range top {
+		if s := r.sc.budgetLine(r.id); s != "" {
+			out = append(out, s)
+		}
+	}
 	return out
+}
+
+// budgetRow is a link's budget cuts, for the status's budget lines.
+type budgetRow struct {
+	id   int
+	cuts uint64
+	sc   *sendCapLink
+}
+
+// topBudgetRows is the n rows with the most cuts (the more, the earlier; a
+// tie in the pool's order) and the cuts of all.
+func topBudgetRows(rows []budgetRow, n int) ([]budgetRow, uint64) {
+	total := uint64(0)
+	for _, r := range rows {
+		total += r.cuts
+	}
+	top := append([]budgetRow(nil), rows...)
+	sort.SliceStable(top, func(i, j int) bool { return top[i].cuts > top[j].cuts })
+	if len(top) > n {
+		top = top[:n]
+	}
+	return top, total
 }

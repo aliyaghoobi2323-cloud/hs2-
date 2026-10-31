@@ -373,6 +373,9 @@ func (c *budgetCore) step0(in budgetIn) float64 {
 	}
 	floor := math.Max(float64(budgetMinSegs*max(in.MSS, 536)), float64(2*in.Frame))
 	floor = math.Max(floor, budgetKMin*long*minRTT.Seconds())
+	if k := BudgetDFloor.Get(); k > 0 {
+		floor = math.Max(floor, float64(k)/100*d*minRTT.Seconds())
+	}
 	want := d * (base + T).Seconds() // in flight at the target, at this delivery rate
 	switch c.mode {
 	case budgetIdle:
@@ -466,6 +469,32 @@ type linkBudget struct {
 	ack0, rx0 uint64
 	at0       time.Duration
 }
+
+// BudgetDFloor (HS2_TUNE_BUDGET_DFLOOR, ×100; 0: off; R1 round 5): B stays at
+// this share of the delivery rate × min_rtt. A socket whose flight is under
+// its rate × its round trip holds no queue of its own, whatever srtt says, and
+// a cut below it only slows the link under what it delivers. Without it a
+// one-way link with few users fell into a spiral (round 5's LX: home at N=16,
+// 0.03 %): the budget cut, the flight fell to a few segments, the peer's
+// delayed acks (up to 40 ms on an odd last segment) lifted srtt 11 to 16 ms
+// over min_rtt, which read as its own queue and cut again, down to B 5 to 8
+// KiB, 0.6 Mbit/s, on a link that delivered 4 to 6: its users' pages took 13
+// to 28 s or never loaded (5 to 8 failed a run, production none).
+//
+// The main server (R1 fix 2) showed the same spiral on BULK links next to
+// links that took 72 Mbit/s: B at the floor of two segments (3 KiB), 0.8
+// Mbit/s, srtt − min_rtt 11 ms against the target's 2.5, and nearly every cut
+// of the tunnel on those links. Every other floor follows the link's own held
+// rate (two segments, two frames, half the 10 s most acked × min_rtt), so a
+// queue the link does not make (delayed acks of its small flight, the way
+// back, other flows' backlog) cuts it at each reading down to two segments,
+// and nothing there grows it again. This one recovers it: its delivery
+// follows the budget's own pacing cap (BudgetPaceK × B / (base + T)), so
+// delivery × min_rtt stands over B by BudgetPaceK × min_rtt / (base + T) and
+// the floor lifts B a reading at a time, until the path, not the budget, sets
+// the delivery; a queue of its own past the floor is cut to it as before
+// (TestBudgetSpiralRecovers).
+var BudgetDFloor = newTuneInt(100) // the default since R1 round 5
 
 // newLinkBudget is the budget of a socket read by outq (nil: none).
 func newLinkBudget(outq func() (int, error)) *linkBudget {

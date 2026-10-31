@@ -376,6 +376,7 @@ func applyTuning() {
 	num("HS2_TUNE_PANEL_MSS", &engine.TunePanelMSS)
 	num("HS2_TUNE_BUDGET_QCHECK", &engine.BudgetQuietCheck) // the QUIET queues only within the link's own round trip (0: always)
 	num("HS2_TUNE_BUDGET_C4", &engine.BudgetC4)             // a budget link's pacing cap: the budget's alone (0) or the lesser with C4-lite's
+	numT("HS2_TUNE_BUDGET_DFLOOR", engine.BudgetDFloor)     // R1 round 5: B stays at this share (×100) of delivery × min_rtt
 	num("HS2_TUNE_LINK_SNDBUF", &engine.TuneLinkSndbuf)     // a BULK link socket's send buffer (bytes; 0: autotuning)
 	num("HS2_TUNE_MOVE_BACK", &engine.TuneMoveBack)         // (lab, both ends) back to a QUIET link when light again; its caps bit is tlscarrier's
 	num("HS2_TUNE_MOVED_BULK", &engine.MovedBulk)           // a moved connection stays bulk on its BULK link (0: C1's rule)
