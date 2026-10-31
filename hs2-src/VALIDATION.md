@@ -521,7 +521,19 @@ V16 also: the six runs' Mbit/s and the interactive p50/p99 with the core on
 and off, the round trip between the servers (`ping`), the Iran server's
 `windows:` line, and the Kharej side's `pacing held` lines with timestamps.
 
-Release: binary build `e8a84ccb17fa` (source commit `e8a84cc`, static,
+Release: binary build `3111114bc65f` (source commit `3111114`, static,
+`CGO_ENABLED=0`; `hs2 version` shows `build 3111114bc65f`).
+
+This release: R1 as above plus the four fixes found on the owner's main servers
+with real traffic on 2026-10-31 (QUIET flows counted in the pool's demand;
+downloads moved off QUIET by link load, HS2_TUNE_MOVE_LOAD; the in-flight
+budget floor, HS2_TUNE_BUDGET_DFLOOR; paced pool shrinking and no closing of
+live slow connections on retiring links, HS2_TUNE_SLOW_SHRINK and
+HS2_TUNE_RECLAIM_IDLE_ONLY). Installed there on both ends at 13:42Z; five
+minutes later QUIET carried 11% of the download instead of 44-75%. Rollback:
+`e8a84ccb17fa`, then `1c23629533c9`.
+
+Previous release: binary build `e8a84ccb17fa` (source commit `e8a84cc`, static,
 `CGO_ENABLED=0`; `hs2 version` shows `build e8a84ccb17fa`).
 
 This release: the redesign's phase R1 (candidate fin2 with the red-team and
