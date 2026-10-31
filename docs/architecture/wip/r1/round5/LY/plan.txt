@@ -1,0 +1,7 @@
+# LY (3 reps): the field loss 0.03 % and 0.1 % on the big pools: home at N=64 and N=300 (RTT 75); production, fin2, r5
+N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5

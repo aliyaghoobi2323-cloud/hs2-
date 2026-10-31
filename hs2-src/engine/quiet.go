@@ -65,7 +65,7 @@ func EarlyDoneOff() bool { return TuneEarlyDone == 0 }
 // and BBR's PROBE_RTT, its window at 4 segments for 200 ms each 10 s, held
 // the probes of a QUIET link with 198 probe users (each a padded record
 // each 200 ms) for hundreds of ms on the rig.
-var QuietCC = "cubic"
+var QuietCC = "illinois,cubic" // Illinois since R1 round 5 (quietcc.go); a kernel without it: cubic
 
 // QuietRec 1 (HS2_TUNE_QUIET_REC=1, lab; the R1 round-2 judge): a QUIET
 // link's records follow an interactive HTTPS connection's sizes
@@ -94,9 +94,9 @@ func QuietCount(maxLinks int) int {
 	case QuietN.Get() > 0:
 		return QuietN.Get()
 	case QuietExtra.Get() != 0 && maxLinks <= quietOneMax:
-		return max(QuietFew.Get(), 1)
+		return max(QuietFew.Get(), 1) + lightCount(maxLinks) // (QuietLight: the light one, quietlight.go)
 	case QuietExtra.Get() != 0:
-		return max(QuietMany.Get(), 1)
+		return max(QuietMany.Get(), 1) + lightCount(maxLinks)
 	case maxLinks >= 4:
 		return 2
 	}
@@ -255,6 +255,12 @@ type quietLink struct {
 	// sampler's goroutine only)
 	prevRd, prevWr uint64
 	sampled        bool
+	// light: the light QUIET link (QuietLight, quietlight.go): no
+	// connection opens on it; the light and steady ones move to it
+	light atomic.Bool
+	// replaced: retired for being slow, its replacement wanted (QuietReplace,
+	// quietreplace.go)
+	replaced atomic.Bool
 }
 
 // quietSet is the edge's QUIET links, and the mover of its group streams.
@@ -302,6 +308,17 @@ type quietSet struct {
 	// quietuser.go
 	byUser map[uint32]*userQuiet
 	hold   holdState
+	// the light QUIET link's (QuietLight) and the wait's (QuietWaitMs;
+	// quietlight.go): when a general QUIET link was last up (under mu),
+	// connections opened on the light link, moved to it and back to a
+	// general one, and the waits (and those a QUIET link ended)
+	generalAt                      time.Time
+	lightOpened, movedLight        atomic.Int64
+	movedGeneral, waited, waitedOK atomic.Int64
+	// the slow links being replaced, and the judge (QuietReplace,
+	// quietreplace.go)
+	replacing atomic.Int32
+	repl      replSet
 }
 
 // enableQuiet gives the pool its QUIET links (the edge, β2 on): maxLinks is
@@ -406,12 +423,18 @@ func (q *quietSet) add(l *mtcpLink, from string) {
 	ql := &quietLink{link: l, id: q.seq, born: q.m.now()}
 	q.seq++
 	q.links = append(q.links, ql)
+	q.roleLocked(ql) // the light one (QuietLight, quietlight.go)
 	n := q.aliveLocked()
+	q.generalUpLocked(time.Now())
 	q.mu.Unlock()
+	role := ""
+	if ql.light.Load() {
+		role = " as the light one"
+	}
 	if l.mtr != nil && l.mtr.wc != nil {
 		l.mtr.wc.setName(fmt.Sprintf("quiet link %d", ql.id))
 	}
-	q.m.upLog.log("mtcp: QUIET link q%d up%s (now %d QUIET)", ql.id, from, n)
+	q.m.upLog.log("mtcp: QUIET link q%d up%s%s (now %d QUIET)", ql.id, from, role, n)
 	if q.m.OnLink != nil {
 		go q.m.OnLink(l)
 	}
@@ -424,6 +447,10 @@ func (q *quietSet) drop(l Link) {
 	q.links = slices.DeleteFunc(q.links, func(ql *quietLink) bool {
 		if Link(ql.link) == l {
 			id = ql.id
+			if !ql.light.Load() {
+				q.generalAt = time.Now() // (QuietWaitMs: up till now)
+			}
+			q.replacedGoneLocked(ql) // (QuietReplace: its replacement's count)
 			return true
 		}
 		return false
@@ -443,6 +470,10 @@ func (q *quietSet) reap() {
 	q.links = slices.DeleteFunc(q.links, func(ql *quietLink) bool {
 		if !ql.link.Alive() {
 			dead = append(dead, ql)
+			if !ql.light.Load() {
+				q.generalAt = time.Now() // (QuietWaitMs: up till now)
+			}
+			q.replacedGoneLocked(ql) // (QuietReplace: its replacement's count)
 			return true
 		}
 		return false
@@ -466,6 +497,7 @@ func (q *quietSet) tickIf(ctx context.Context) {
 // at a time through the pool's gate while fewer than want are up.
 func (q *quietSet) tick(ctx context.Context) {
 	q.reap()
+	q.replaceTick(time.Now()) // a slow QUIET link replaced (QuietReplace, quietreplace.go)
 	if !q.active() || q.m.dialer == nil || q.m.refuse.holding(q.m.now()) > 0 {
 		return
 	}
@@ -609,8 +641,8 @@ func (q *quietSet) pick(avoid []Link, tag uint32) (*quietLink, func(), bool) {
 	bestLag := true
 	pack := QuietPack.Get() != 0 && q.m.max <= quietOneMax
 	for _, ql := range q.links {
-		if !ql.link.Alive() || ql.retiring.Load() || slices.Contains(avoid, Link(ql.link)) {
-			continue
+		if !ql.link.Alive() || ql.retiring.Load() || ql.light.Load() || slices.Contains(avoid, Link(ql.link)) {
+			continue // (the light link takes moves only: quietlight.go)
 		}
 		lag := meterLagging(ql.link.mtr, now)
 		fewer := best == nil || ql.users.Load() < best.users.Load()
@@ -669,6 +701,11 @@ func pickOpen(ctx context.Context, lm *LinkManager, hold bool, tried ...Link) (L
 		return ql.link, rel, true
 	}
 	if lm.quiet.active() {
+		// no general QUIET link up: the light one, or a wait for one that
+		// was up a moment ago (QuietLight, QuietWaitMs: quietlight.go)
+		if l, rel, ok := openWaitQuiet(ctx, lm, tag, tried); ok {
+			return l, rel, true
+		}
 		lm.quiet.fallback.Add(1)
 	}
 	return pickWait(ctx, lm, hold, tried...)
@@ -683,6 +720,12 @@ func pickOpenExcept(lm *LinkManager, tried []Link, hold bool, tag uint32) (Link,
 	}
 	if ql, rel, ok := lm.quiet.pick(tried, tag); ok {
 		return ql.link, rel, true
+	}
+	if lm.quiet.active() {
+		if ql, rel, ok := lm.quiet.pickLight(tried); ok {
+			lm.quiet.lightOpened.Add(1)
+			return ql.link, rel, true // no general one up (quietlight.go)
+		}
 	}
 	return lm.pickExcept(tried, hold)
 }
@@ -740,6 +783,11 @@ type groupStream struct {
 	blink *mtcpLink
 	capAt atomic.Int64
 	cap   capWindow
+	// lightAt: its latest move between the QUIET links (ctrlNow; under mu);
+	// offLight: since when it has not been light on the light link (the
+	// mover's own; QuietLight, quietlight.go)
+	lightAt  int64
+	offLight int64
 }
 
 // openGroupStream opens a user connection of user tag on the QUIET link l
@@ -989,6 +1037,7 @@ func (q *quietSet) moverTick(now int64) {
 			dues = append(dues, dueMove{s, dir, false})
 			continue
 		}
+		q.lightTick(s, now) // to the light QUIET link, or back (quietlight.go)
 		keep = append(keep, s)
 	}
 	if PlaceUsers.Get() != 0 && len(dues) > 0 {
@@ -1081,6 +1130,22 @@ func (q *quietSet) noteHint(id uint32) {
 // moved already); false: no BULK link took it now (tried again at the
 // mover's next tick).
 func (q *quietSet) move(gs *groupStream, dir string) bool {
+	gs.mu.Lock()
+	onBulk := gs.bcs != nil
+	if onBulk {
+		gs.noMove = true // on a BULK link already: done with it (a group
+		// that may move a few times, CapLight, still moves to BULK once)
+	}
+	gs.mu.Unlock()
+	if onBulk {
+		return true
+	}
+	if gs.g.Moves() > 0 && !gs.g.Retired() {
+		// it moved between the QUIET links (quietlight.go) or back from a
+		// BULK one, and the stream before is not let go yet: its group
+		// may move again only then (smux mayMoveLocked), so a later tick
+		return false
+	}
 	var link Link
 	var rel func()
 	ok := false
@@ -1163,6 +1228,21 @@ func (q *quietSet) line() string {
 		more += "; " + q.book.line()
 	}
 	more += q.userLine() // QuietByUser, QuietHoldCap (quietuser.go)
+	if q.quietLightOn() || QuietWaitMs.Get() > 0 {
+		q.mu.Lock()
+		nl := 0
+		for _, ql := range q.links {
+			if ql.light.Load() && ql.link.Alive() {
+				nl++
+			}
+		}
+		q.mu.Unlock()
+		more += fmt.Sprintf("; light quiet %d (moved to it %d, back %d, opened on it %d); waited for quiet %d (got one %d)",
+			nl, q.movedLight.Load(), q.movedGeneral.Load(), q.lightOpened.Load(), q.waited.Load(), q.waitedOK.Load())
+	}
+	if QuietReplace.Get() != 0 {
+		more += fmt.Sprintf("; slow quiet replaced %d (now %d)", q.repl.replaced.Load(), q.replacing.Load())
+	}
 	want := fmt.Sprint(q.wantNow())
 	if w := q.wantNow(); w != q.want {
 		want = fmt.Sprintf("%d (this build %d: the other server's ceiling)", w, q.want)

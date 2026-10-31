@@ -359,6 +359,7 @@ func applyTuning() {
 	num("HS2_TUNE_BUDGET_US", &engine.BudgetTargetUs)
 	num("HS2_TUNE_BUDGET_TWOWAY", &engine.BudgetTwoWay)
 	num("HS2_TUNE_BUDGET_LINKOWD", &engine.BudgetLinkOWD)   // a two-way BULK link's own one-way delays (0: the guess)
+	num("HS2_TUNE_BUDGET_SPLIT", &engine.BudgetSplitRate)   // R1 round 5: a two-way link without its own delays splits S by the rates
 	num("HS2_TUNE_BUDGET_PACE", &engine.BudgetPaceK)        // its pacing cap, % of its rate at the target (0: C4-lite's)
 	num("HS2_TUNE_BUDGET_INFLIGHT", &engine.BudgetInflight) // in flight as Linux counts it (0: SIOCOUTQ)
 	numT("HS2_TUNE_QUIET_N", engine.QuietN)
@@ -399,6 +400,7 @@ func applyTuning() {
 	numT("HS2_TUNE_TWOWAY", engine.TwoWay)                         // a connection whose user sends steadily stays on QUIET
 	numT("HS2_TUNE_TWOWAY_RATIO", engine.TwoWayRatio)              // ... unless one way carries more than this many times the other (0: none)
 	numT("HS2_TUNE_OWD_IDLE", engine.OWDIdle)                      // an idle pool's QUIET link sends no one-way delay messages
+	numT("HS2_TUNE_OWD_GUARD_IN", engine.OWDGuardIn)               // R1 round 5: a hole in what the other end sends makes its direction read none
 	numT("HS2_TUNE_OWD_IDLE_POOL", engine.OWDIdlePool)             // ... and a busy pool wakes every QUIET link's (0: quietOWD's alone)
 	numT("HS2_TUNE_TAG_KEY", engine.TuneTagKey)                    // the user tag a keyed hash (0: the unkeyed FNV-1a, which reveals the address)
 	numT("HS2_TUNE_UDP_FLOWS", engine.UDPFlowsMax)                 // a UDP user port's flows at most (0: none)
@@ -412,6 +414,11 @@ func applyTuning() {
 	// link's drain against BBR's PROBE_RTT; C3's floor bounded in time
 	numT("HS2_TUNE_QUIET_FEW", engine.QuietFew)
 	numT("HS2_TUNE_RT_HOLD", engine.RTHold)
+	numT("HS2_TUNE_QUIET_BUDGET", engine.QuietBudget)   // R1 round 5: the in-flight budget on a QUIET link bulk lane too
+	numT("HS2_TUNE_OWD_NOT_LIGHT", engine.OWDNotLight)  // R1 round 5: no one-way delays on the light QUIET link
+	numT("HS2_TUNE_BUDGET_DFLOOR", engine.BudgetDFloor) // R1 round 5: B stays at this share (×100) of delivery × min_rtt
+	numT("HS2_TUNE_PLACE_FAIR", engine.PlaceFair)       // R1 round 5: the links the heavy users spread over at most
+	numT("HS2_TUNE_RT_LOOSE", engine.RTLoose)           // R1 round 5: a call held back from its start gets the realtime lane
 	numT("HS2_TUNE_RT_SHARE", engine.RTShare)
 	numT("HS2_TUNE_LAT_RR", engine.LatRR)
 	numT("HS2_TUNE_QUIET_PACK", engine.QuietPack) // two QUIET links (<= 5 links): new connections on the oldest while it does not lag
@@ -441,6 +448,21 @@ func applyTuning() {
 		engine.QuietCC = v
 		log.Printf("tuning: HS2_TUNE_QUIET_CC=%q", v)
 	}
+	// R1 round 5: a QUIET socket switches to this congestion control while
+	// it sees random loss (at least this many resent per million sent)
+	if v, ok := os.LookupEnv("HS2_TUNE_QUIET_CC_LOSS"); ok {
+		engine.QuietCCLoss = v
+		log.Printf("tuning: HS2_TUNE_QUIET_CC_LOSS=%q", v)
+	}
+	num("HS2_TUNE_QUIET_LOSS_PPM", &engine.QuietLossPpm)
+	// R1 round 5: a light QUIET link (games, probes) next to the general one
+	// at <= 5 links (both ends alike), and a new connection's wait for a
+	// QUIET link that was up a moment ago, ms
+	numT("HS2_TUNE_QUIET_LIGHT", engine.QuietLight)
+	numT("HS2_TUNE_QUIET_WAIT", engine.QuietWaitMs)
+	// R1 round 5 (the engine review's B2): a QUIET link slow next to the
+	// BULK links is replaced, make before break
+	numT("HS2_TUNE_QUIET_REPLACE", engine.QuietReplace)
 	if v, ok := os.LookupEnv("HS2_TUNE_CC"); ok {
 		tlscarrier.CongestionControl = v
 		log.Printf("tuning: HS2_TUNE_CC=%q", v)

@@ -1,0 +1,13 @@
+# S7 (screen, 2 reps, TRACE_SS=1): after finding S5 and S6 ran cubic (run.sh dropped the comma's HS2_TUNE_QUIET_CC_FEW): home at N=1, RTT 75, random loss 0.1 and 0.3 %: fw = Illinois on the QUIET links up to 5 links; fwl = fw + the light QUIET link and the wait; fwlb = BBR on the QUIET links + the light link; fwg0 = fw + OWD_GUARD_BULK=0 (the BULK link own delays read under resends); fwgi = fw + OWD_GUARD_IN=1; fwsp = fwgi + BUDGET_SPLIT=1
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlb
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwg0
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwgi
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwsp
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlb
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwg0
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwgi
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwsp

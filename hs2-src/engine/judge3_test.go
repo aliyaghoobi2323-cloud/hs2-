@@ -53,8 +53,10 @@ func TestOWDGuard(t *testing.T) {
 	if _, ok := o.queue(); ok {
 		t.Fatal("a backlog: still read")
 	}
-	// a BULK link's own messages (the budget's) are guarded alike; a link
-	// that trades none (α's version 4 aside) is not
+	// with OWDGuardBulk 1 (the default till R1 round 5) a BULK link's own
+	// messages (the budget's) are guarded alike; a link that trades none
+	// (α's version 4 aside) is not
+	withTuneInt(t, &OWDGuardBulk, 1)
 	var o2 owdLink
 	o2.own = true
 	o2.qOut.Store(1)
@@ -64,8 +66,8 @@ func TestOWDGuard(t *testing.T) {
 	if _, ok := o2.queue(); ok {
 		t.Fatal("a BULK link's own reading on a resending socket: still read")
 	}
-	// OWDGuardBulk: 0 a BULK link's own messages are never none, 1 (the
-	// default) for its resends, 2 also for its backlog: C3's mark at a low
+	// OWDGuardBulk: 0 (the default since R1 round 5) a BULK link's own
+	// messages are never none, 1 for its resends, 2 also for its backlog: C3's mark at a low
 	// pacing rate, 11.3 KiB at 7 Mbit/s, is 13 ms past owdDirtyWait (F3)
 	for _, gb := range []int{0, 1, 2} {
 		func() {

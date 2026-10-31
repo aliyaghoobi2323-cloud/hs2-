@@ -117,13 +117,18 @@ const (
 	// back from a BULK link to a QUIET one once it is light again, and on
 	// (engine moveback.go; R1 round 3, the judge). Needs CapGroup.
 	CapMoveBack
+	// CapLight (level 2, R1 round 5; HS2_TUNE_QUIET_LIGHT=0 takes it
+	// out): a group connection may move a few times (smux
+	// Config.GroupMoves): to the edge's light QUIET link and back, and on to
+	// a BULK one (engine quietlight.go). Needs CapGroup.
+	CapLight
 )
 
 // RoleCaps are the link-class bits.
 const RoleCaps = CapQuiet | CapBulk
 
 // level2Caps: the caps of level 2, never in force on a level 1 link.
-const level2Caps = CapGroup | RoleCaps | CapHint | CapMoveBack
+const level2Caps = CapGroup | RoleCaps | CapHint | CapMoveBack | CapLight
 
 // AuthHdr is the header of the client's record (7 B on the wire).
 type AuthHdr struct {
@@ -231,6 +236,11 @@ func localCaps() uint32 {
 	}
 	if envSwitch("HS2_TUNE_MOVE_BACK", 0) != 0 && caps&CapGroup != 0 {
 		caps |= CapMoveBack // opt-in (lab)
+	}
+	if os.Getenv("HS2_TUNE_QUIET_LIGHT") != "0" && caps&CapGroup != 0 {
+		// the moves the light QUIET link needs (R1 round 5): only an edge
+		// that keeps one makes them, so the bit alone changes nothing
+		caps |= CapLight
 	}
 	return caps
 }

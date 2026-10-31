@@ -1,0 +1,11 @@
+# S5 (screen, 2 reps, TRACE_SS=1): the candidates after S3: fw = Illinois on the QUIET links of a pool of up to 5 links (HS2_TUNE_QUIET_CC_FEW), cubic past it; fwlt = fw with the light QUIET link (HS2_TUNE_QUIET_LIGHT=2: one more up to 4 links, one of four past 5) and the wait for a QUIET link (1500 ms); home at N=1 without loss (RTT 72), N=4 at 0.1 % (RTT 75), N=8 without loss and at 0.1 %
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlt
+N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlt
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlt
+N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlt

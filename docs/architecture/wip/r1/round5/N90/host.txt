@@ -1,0 +1,32 @@
+== start 2026-10-31T11:19:32+00:00
+ 11:19:32 up 4 days, 14 min,  5 users,  load average: 0.77, 2.47, 3.25
+TCP: inuse 494 orphan 0 tw 327 alloc 719 mem 7663
+top - 11:19:33 up 4 days, 14 min,  5 users,  load average: 0.77, 2.47, 3.25
+Tasks: 261 total,   1 running, 260 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.4 us,  3.0 sy,  0.7 ni, 94.0 id,  0.0 wa,  0.0 hi,  1.0 si,  0.0 st 
+MiB Mem :  23456.9 total,   2919.0 free,   1285.0 used,  19669.4 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22171.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+3015492 root      39  19 1943964  33828  15488 S  37.3   0.1   0:03.17 engine.test
+2946809 root      20   0 1343724  60788  11848 S  31.4   0.3   4:12.73 hs2
+2988694 root      20   0 1434092 116944  29552 S  13.7   0.5   1:30.92 xray-linux-amd6
+    958 root      20   0 1407360 114900  47436 S   7.8   0.5 115:10.55 x-ui
+     24 root      20   0       0      0      0 S   2.0   0.0  10:14.22 ksoftirqd/1
+3015857 root      20   0   11908   6104   3952 R   2.0   0.0   0:00.03 top
+      1 root      20   0   22796  14244   9776 S   0.0   0.1   5:40.18 systemd
+== end 2026-10-31T11:27:54+00:00
+ 11:27:54 up 4 days, 22 min,  7 users,  load average: 2.77, 3.45, 3.44
+TCP: inuse 867 orphan 1 tw 730 alloc 1416 mem 5749
+top - 11:27:54 up 4 days, 22 min,  7 users,  load average: 2.55, 3.40, 3.42
+Tasks: 257 total,   1 running, 256 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.6 us,  1.9 sy,  0.0 ni, 95.6 id,  0.0 wa,  0.0 hi,  0.8 si,  0.0 st 
+MiB Mem :  23456.9 total,   2671.5 free,   1522.9 used,  19679.0 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21934.0 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2946809 root      20   0 1343980 121488  11848 S  33.3   0.5   6:32.04 hs2
+2988694 root      20   0 1434476 197492  29616 S  23.5   0.8   2:59.09 xray-linux-amd6
+3022808 root      39  19 2011620  80528  16320 S   3.9   0.3   0:33.91 engine.test
+3030963 root      20   0   11908   6032   3872 R   3.9   0.0   0:00.04 top
+      1 root      20   0   22796  14244   9776 S   0.0   0.1   5:40.61 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.45 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release

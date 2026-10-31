@@ -1,0 +1,10 @@
+# L1 (3 reps): the loss curve at N=1 (one QUIET link): home, RTT 75, random loss 0.03 / 0.1 / 0.3 % each way; production, fin2 (c0111e0) and the round-5 final (r5)
+N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5

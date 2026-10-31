@@ -79,6 +79,11 @@ func TestRed2TwoWayAckedDownload(t *testing.T) {
 func TestRed2OWDIdleParks(t *testing.T) {
 	run := func(idle int, steps func(a, b *owdLink)) {
 		withTune(t, OWDIdle, idle)
+		// one pair alone: the BULK traffic another test left running would
+		// wake these loops through the pool (OWDIdlePool, the engine
+		// review's B1; R1 round 5 saw one message after parking in a full
+		// run). The pool's wake has its own tests (review_b_test.go).
+		withTune(t, OWDIdlePool, 0)
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		c1, c2 := net.Pipe()
@@ -146,7 +151,13 @@ func TestRed2OWDIdleParks(t *testing.T) {
 		}
 		nb := a.msgs.Load() + b.msgs.Load() - n0
 		// idle again, the stale rate still noted: parked after owdIdleAfter
-		staleIdle(a, b, owdIdleAfter+1500*time.Millisecond)
+		// (waited for, not timed: on loaded test cores a loop parked a beat
+		// late and one message fell in the window below; R1 round 5)
+		staleIdle(a, b, owdIdleAfter)
+		for end := time.Now().Add(3 * time.Second); !(a.parked.Load() && b.parked.Load()) && time.Now().Before(end); {
+			staleIdle(a, b, 100*time.Millisecond)
+		}
+		staleIdle(a, b, 200*time.Millisecond)
 		n1 := a.msgs.Load() + b.msgs.Load()
 		staleIdle(a, b, 2*time.Second)
 		n2 := a.msgs.Load() + b.msgs.Load()

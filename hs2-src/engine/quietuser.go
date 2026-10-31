@@ -70,7 +70,7 @@ func (q *quietSet) pickByUser(avoid []Link, tag uint32) (*quietLink, func(), boo
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	usable := func(ql *quietLink) bool {
-		return ql.link.Alive() && !ql.retiring.Load() && !slices.Contains(avoid, Link(ql.link))
+		return ql.link.Alive() && !ql.retiring.Load() && !ql.light.Load() && !slices.Contains(avoid, Link(ql.link))
 	}
 	u := q.byUser[tag]
 	var best *quietLink

@@ -1,0 +1,9 @@
+# S4 (screen, 2 reps, TRACE_SS=1): why downloads fall at N=1 under 0.1 to 0.3 % random loss (S2: 27 Mbit/s against production 75) - the BULK link in-flight budget (gamma2), the alpha rate cap, or C4-lite: ad (QUIET_CC_LOSS=illinois) against ad with the budget off (adb0: alpha cap), ad with both off (adb0a0: C4-lite alone), and production; home at N=1, RTT 75
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=adb0
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=adb0a0
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ad
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=adb0
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=adb0a0

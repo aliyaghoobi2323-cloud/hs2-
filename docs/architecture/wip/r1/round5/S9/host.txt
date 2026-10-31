@@ -1,0 +1,32 @@
+== start 2026-10-31T04:58:36+00:00
+ 04:58:36 up 3 days, 17:53, 12 users,  load average: 8.50, 8.62, 7.89
+TCP: inuse 675 orphan 0 tw 315 alloc 1054 mem 53
+top - 04:58:36 up 3 days, 17:53, 12 users,  load average: 8.50, 8.62, 7.89
+Tasks: 268 total,   7 running, 261 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.3 us,  1.6 sy, 50.1 ni, 45.7 id,  0.0 wa,  0.0 hi,  1.2 si,  0.0 st 
+MiB Mem :  23456.9 total,   2487.4 free,   1520.3 used,  19865.7 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21936.6 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1948675 root      39  19    2804    908    808 R 100.0   0.0  30:13.82 sh
+1948678 root      39  19    2804    908    808 R 100.0   0.0  30:22.19 sh
+1948680 root      39  19    2804    908    808 R 100.0   0.0  30:23.16 sh
+1948677 root      39  19    2804    904    804 R  98.1   0.0  30:11.08 sh
+1948679 root      39  19    2804    908    808 R  98.1   0.0  30:19.82 sh
+1948676 root      39  19    2804    908    808 R  96.2   0.0  30:18.58 sh
+1885546 root      20   0 1434852 169272  29424 S  23.1   0.7   8:00.08 xray-linux-amd6
+== end 2026-10-31T05:19:48+00:00
+ 05:19:48 up 3 days, 18:14, 13 users,  load average: 9.73, 8.68, 8.02
+TCP: inuse 543 orphan 2 tw 676 alloc 866 mem 737
+top - 05:19:49 up 3 days, 18:14, 13 users,  load average: 9.73, 8.68, 8.02
+Tasks: 268 total,   7 running, 261 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.9 us,  3.1 sy, 50.0 ni, 43.4 id,  0.0 wa,  0.0 hi,  1.6 si,  0.0 st 
+MiB Mem :  23456.9 total,   2480.6 free,   1487.3 used,  19961.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21969.7 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2037761 root      39  19    2804    908    808 R 100.0   0.0  15:08.92 sh
+2037763 root      39  19    2804    908    808 R 100.0   0.0  15:11.14 sh
+2037759 root      39  19    2804    908    808 R 100.0   0.0  15:05.65 sh
+2037762 root      39  19    2804    908    808 R 100.0   0.0  15:11.88 sh
+2037764 root      39  19    2804    908    808 R 100.0   0.0  15:11.09 sh
+2037760 root      39  19    2804    908    808 R  98.0   0.0  15:08.48 sh
+    992 root      20   0 1543536  92692  10588 S  35.3   0.4     26,58 hs2

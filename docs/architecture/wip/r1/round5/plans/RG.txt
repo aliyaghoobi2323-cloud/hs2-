@@ -1,0 +1,10 @@
+# RG (3 reps, regression): video (stream_vs_dl, N=8), and the classes without loss: home at N=8 and N=1 (RTT 72); production, fin2, r5
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 DUR=20 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 DUR=20 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=stream_vs_dl SBR=1.2 DUR=20 BIN=r5
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5

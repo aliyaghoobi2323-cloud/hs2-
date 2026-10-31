@@ -1,0 +1,50 @@
+15:55:08 plan /root/r5/S2/plan.txt: 24 runs
+15:55:10 start cad96280-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 BIN=fin2) load 2.75 waited 0s
+15:55:50 done cad96280-fin2-1 ok=1 
+15:55:52 start cad96280-ill-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 BIN=ill) load 2.94 waited 0s
+15:56:31 done cad96280-ill-1 ok=1 
+15:56:33 start cad96280-ill-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 BIN=ill) load 3.35 waited 0s
+15:57:13 done cad96280-ill-2 ok=1 
+15:57:15 start cad96280-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 BIN=fin2) load 4.07 waited 0s
+15:57:54 done cad96280-fin2-2 ok=1 
+15:57:56 start aab895a5-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 BIN=fin2) load 3.73 waited 0s
+15:58:36 done aab895a5-fin2-1 ok=1 
+15:58:38 start aab895a5-ill-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 BIN=ill) load 4.65 waited 0s
+15:59:17 done aab895a5-ill-1 ok=1 
+15:59:19 start aab895a5-ill-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 BIN=ill) load 4.17 waited 0s
+15:59:59 done aab895a5-ill-2 ok=1 
+16:00:01 start aab895a5-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=lone16 BIN=fin2) load 3.87 waited 0s
+16:00:40 done aab895a5-fin2-2 ok=1 
+16:00:42 start a0318ff0-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 2.85 waited 0s
+16:01:17 done a0318ff0-fin2-1 ok=1 
+16:01:19 start a0318ff0-ill-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=ill) load 2.74 waited 0s
+16:01:54 done a0318ff0-ill-1 ok=1 
+16:01:56 start a0318ff0-ill-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=ill) load 3.34 waited 0s
+16:02:31 done a0318ff0-ill-2 ok=1 
+16:02:33 start a0318ff0-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=fin2) load 3.72 waited 0s
+16:03:08 done a0318ff0-fin2-2 ok=1 
+16:03:10 start f4fb6861-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.98 waited 0s
+16:03:56 done f4fb6861-fin2-1 ok=1 
+16:03:58 start f4fb6861-ill-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 4.82 waited 0s
+16:04:43 done f4fb6861-ill-1 ok=1 
+16:04:45 start f4fb6861-ill-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 5.61 waited 0s
+16:05:31 done f4fb6861-ill-2 ok=1 
+16:05:33 start f4fb6861-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.65 waited 0s
+16:06:18 done f4fb6861-fin2-2 ok=1 
+16:06:20 start dba78618-fin2-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.44 waited 0s
+16:07:06 done dba78618-fin2-1 ok=1 
+16:07:08 start dba78618-ill-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 4.34 waited 0s
+16:07:53 done dba78618-ill-1 ok=1 
+16:07:55 start dba78618-ill-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 3.17 waited 0s
+16:08:41 done dba78618-ill-2 ok=1 
+16:08:43 start dba78618-fin2-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.80 waited 0s
+16:09:28 done dba78618-fin2-2 ok=1 
+16:09:30 start 2da27b2f-fin2-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.94 waited 0s
+16:10:15 done 2da27b2f-fin2-1 ok=1 
+16:10:17 start 2da27b2f-ill-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 3.55 waited 0s
+16:11:02 done 2da27b2f-ill-1 ok=1 
+16:11:04 start 2da27b2f-ill-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=ill) load 3.71 waited 0s
+16:11:49 done 2da27b2f-ill-2 ok=1 
+16:11:51 start 2da27b2f-fin2-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.96 waited 0s
+16:12:36 done 2da27b2f-fin2-2 ok=1 
+16:12:36 done /root/r5/S2/plan.txt

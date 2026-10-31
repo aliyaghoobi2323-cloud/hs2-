@@ -1,0 +1,6 @@
+# S15 (screen, 3 reps, TRACE_SS=1): the big pools (LY: home at N=64 and 0.03 %: calls 0.13 delivered and 30 s late, video rebuffering, the 8 heavy users on all 64 links): c6 = c5 + DFLOOR 100 + light link at every N; c6f16, c6f8 = c6 + HS2_TUNE_PLACE_FAIR 16, 8 (the heavy users spread over at most that many links); home, RTT 75, N=64 and N=300
+N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6
+N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6f16
+N=64 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6f8
+N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6f16
+N=300 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6f8

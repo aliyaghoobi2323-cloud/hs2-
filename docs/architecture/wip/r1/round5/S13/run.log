@@ -1,0 +1,38 @@
+09:23:36 plan /root/r5/S13/plan.txt: 18 runs
+09:23:38 start dd4df3ff-r5-1 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 1.18 waited 0s
+09:24:23 done dd4df3ff-r5-1 ok=1 
+09:24:25 start dd4df3ff-sp2-1 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2) load 2.23 waited 0s
+09:25:10 done dd4df3ff-sp2-1 ok=1 
+09:25:12 start dd4df3ff-sp4-1 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4) load 2.78 waited 0s
+09:25:57 done dd4df3ff-sp4-1 ok=1 
+09:25:59 start dd4df3ff-sp4-2 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4) load 3.40 waited 0s
+09:26:44 done dd4df3ff-sp4-2 ok=1 
+09:26:46 start dd4df3ff-sp2-2 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2) load 3.07 waited 0s
+09:27:31 done dd4df3ff-sp2-2 ok=1 
+09:27:33 start dd4df3ff-r5-2 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.75 waited 0s
+09:28:18 done dd4df3ff-r5-2 ok=1 
+09:28:20 start dd4df3ff-sp4-3 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4) load 3.52 waited 0s
+09:29:06 done dd4df3ff-sp4-3 ok=1 
+09:29:07 start dd4df3ff-sp2-3 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2) load 2.70 waited 0s
+09:29:53 done dd4df3ff-sp2-3 ok=1 
+09:29:54 start dd4df3ff-r5-3 (N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 2.65 waited 0s
+09:30:40 done dd4df3ff-r5-3 ok=1 
+09:30:42 start 2da27b2f-r5-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.94 waited 0s
+09:31:27 done 2da27b2f-r5-1 ok=1 
+09:31:29 start 2da27b2f-sp2-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2) load 2.39 waited 0s
+09:32:14 done 2da27b2f-sp2-1 ok=1 
+09:32:16 start 2da27b2f-sp4-1 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4) load 2.68 waited 0s
+09:33:01 done 2da27b2f-sp4-1 ok=1 
+09:33:03 start 2da27b2f-sp4-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4) load 2.59 waited 0s
+09:33:47 done 2da27b2f-sp4-2 ok=1 
+09:33:49 start 2da27b2f-sp2-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2) load 2.58 waited 0s
+09:34:35 done 2da27b2f-sp2-2 ok=1 
+09:34:36 start 2da27b2f-r5-2 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 2.52 waited 0s
+09:35:22 done 2da27b2f-r5-2 ok=1 
+09:35:23 start 2da27b2f-sp4-3 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4) load 1.89 waited 0s
+09:36:09 done 2da27b2f-sp4-3 ok=1 
+09:36:11 start 2da27b2f-sp2-3 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2) load 2.25 waited 0s
+09:36:55 done 2da27b2f-sp2-3 ok=1 
+09:36:57 start 2da27b2f-r5-3 (N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5) load 3.19 waited 0s
+09:37:43 done 2da27b2f-r5-3 ok=1 
+09:37:43 done /root/r5/S13/plan.txt

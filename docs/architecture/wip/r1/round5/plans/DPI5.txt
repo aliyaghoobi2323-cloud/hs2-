@@ -1,0 +1,11 @@
+# DPI (R1 round 5): record lengths against fin2 (s5, 25 Mbit/s, 7 users), the home mix at N=1 (the light QUIET link: one connection more) and N=8, and the idle tunnel at N=1 and N=8 against production and fin2
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=fin2
+N=1 RATE=25 RTT=72 LOSS=0 MODE=fqcodel USERS=7 MIX=s5 DUR=20 BIN=r5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 DUR=20 BIN=r5
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 DUR=20 BIN=r5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=r5
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=1 MIX=idle DUR=60 BIN=r5

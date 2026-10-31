@@ -1,0 +1,7 @@
+# S13 (screen, 3 reps, TRACE_SS=1): the calls stuck at 0.3 % (L4, L1: 8 calls, 12 Mbit/s, on a general QUIET window of 68 segments, 10 Mbit/s: every call 5 s late for the rest of the run): the valve HS2_TUNE_CALL_SPILL (a call whose exit writer stays backlogged this long moves to a BULK link): r5 against sp2 (2 s) and sp4 (4 s); home, RTT 75, 0.3 %, N=4 and N=1
+N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2
+N=4 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp2
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=sp4

@@ -1,0 +1,38 @@
+07:15:15 plan /root/r5/RC/plan.txt: 18 runs
+07:15:17 start e9a34d17-prod-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 9.26 waited 0s
+07:16:03 done e9a34d17-prod-1 ok=1 
+07:16:05 start e9a34d17-fin2-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 9.51 waited 0s
+07:16:51 done e9a34d17-fin2-1 ok=1 
+07:16:53 start e9a34d17-r5-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=r5) load 8.21 waited 0s
+07:17:39 done e9a34d17-r5-1 ok=1 
+07:17:41 start e9a34d17-r5-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=r5) load 5.32 waited 0s
+07:18:26 done e9a34d17-r5-2 ok=1 
+07:18:28 start e9a34d17-fin2-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 7.67 waited 0s
+07:19:13 done e9a34d17-fin2-2 ok=1 
+07:19:15 start e9a34d17-prod-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 9.00 waited 0s
+07:20:01 done e9a34d17-prod-2 ok=1 
+07:20:03 start e9a34d17-r5-3 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=r5) load 7.81 waited 0s
+07:20:48 done e9a34d17-r5-3 ok=1 
+07:20:50 start e9a34d17-fin2-3 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 5.30 waited 0s
+07:21:36 done e9a34d17-fin2-3 ok=1 
+07:21:37 start e9a34d17-prod-3 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 3.31 waited 0s
+07:22:24 done e9a34d17-prod-3 ok=1 
+07:22:26 start d8fe8919-prod-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 3.28 waited 0s
+07:23:35 done d8fe8919-prod-1 ok=1 
+07:23:37 start d8fe8919-fin2-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 2.66 waited 0s
+07:24:46 done d8fe8919-fin2-1 ok=1 
+07:24:48 start d8fe8919-r5-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=r5) load 2.91 waited 0s
+07:25:58 done d8fe8919-r5-1 ok=1 
+07:26:00 start d8fe8919-r5-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=r5) load 2.83 waited 0s
+07:27:08 done d8fe8919-r5-2 ok=1 
+07:27:10 start d8fe8919-fin2-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 1.74 waited 0s
+07:28:19 done d8fe8919-fin2-2 ok=1 
+07:28:21 start d8fe8919-prod-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 2.39 waited 0s
+07:29:31 done d8fe8919-prod-2 ok=1 
+07:29:33 start d8fe8919-r5-3 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=r5) load 2.26 waited 0s
+07:30:41 done d8fe8919-r5-3 ok=1 
+07:30:43 start d8fe8919-fin2-3 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=fin2) load 2.43 waited 0s
+07:31:53 done d8fe8919-fin2-3 ok=1 
+07:31:55 start d8fe8919-prod-3 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=30 BIN=prod) load 3.06 waited 0s
+07:33:04 done d8fe8919-prod-3 ok=1 
+07:33:04 done /root/r5/RC/plan.txt

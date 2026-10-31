@@ -61,9 +61,9 @@ func exitRevCeilings(maxLinks, own int, follow bool) (report, hi int) {
 	} else {
 		report = max(maxLinks, 1+own)
 	}
-	hi = report
+	hi = report + replaceRoom()
 	if follow && QuietExtra.Get() != 0 {
-		hi = max(report, maxLinks+quietPeerMax)
+		hi = max(hi, maxLinks+quietPeerMax)
 	}
 	return report, hi
 }
@@ -81,6 +81,11 @@ func followWant(want, bulkMax, peerMax int) int {
 
 // wantNow is the QUIET links the edge keeps now.
 func (q *quietSet) wantNow() int {
+	return q.wantBase() + int(q.replacing.Load()) // (one more for each slow one being replaced: quietreplace.go)
+}
+
+// wantBase is the QUIET links the edge keeps now, less those being replaced.
+func (q *quietSet) wantBase() int {
 	if q.follow {
 		if e := q.eff.Load(); e > 0 {
 			return int(e)
@@ -158,12 +163,12 @@ func (q *quietSet) followTick() {
 			q.m.notifyCtl()
 		}
 	}
-	keep := q.wantNow()
+	keep := q.wantBase()
 	q.mu.Lock()
 	var kept, ret []*quietLink
 	for _, ql := range q.links {
-		if !ql.link.Alive() {
-			continue
+		if !ql.link.Alive() || ql.replaced.Load() {
+			continue // (a slow one being replaced is replaceTick's: quietreplace.go)
 		}
 		if ql.retiring.Load() {
 			ret = append(ret, ql)

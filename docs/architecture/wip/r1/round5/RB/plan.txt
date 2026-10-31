@@ -1,0 +1,7 @@
+# RB (3 reps, regression): P10 (e) newheavy at N=1, and the probe and TUN ping at N=8 (tunping); production, fin2, r5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=r5
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=r5

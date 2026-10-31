@@ -96,7 +96,8 @@ func (d *reviewBDialer) DialClass(ctx context.Context, class uint32) (Link, erro
 	return nil, errors.New("review B: no link")
 }
 
-// B2 (measured as it stands: an open item, not a fix): a QUIET link that
+// B2 with its fix off (QuietReplace 0, the case TestQuietReplaceSlow and
+// TestQuietReplaceReverse show fixed; R1 round 5): a QUIET link that
 // is alive but lags — its control ping unanswered for 30 s, as on a
 // connection a DPI box throttles alone (its 5-tuple), or one stuck in
 // resends — is never replaced. The BULK pool's soft-bad links are degraded
@@ -109,6 +110,8 @@ func TestReviewBQuietLaggingKept(t *testing.T) {
 	if QuietOff() {
 		t.Skip("HS2_TUNE_QUIET=0")
 	}
+	withTune(t, QuietReplace, 0)
+	withTune(t, QuietLight, 0)
 	d := &reviewBDialer{}
 	lm := NewLinkManager(d, 1, 4, 8, nil)
 	q := lm.enableQuiet()
@@ -135,7 +138,7 @@ func TestReviewBQuietLaggingKept(t *testing.T) {
 	}
 	t.Logf("a QUIET link lagging 30 s: QUIET dials %d, BULK dials %d; a new connection opens on it: %v", d.quiet.Load(), d.bulk.Load(), ok && ql.link == p.edge)
 	if d.quiet.Load() != 0 || !ok || ql.link != p.edge {
-		t.Fatalf("a lagging QUIET link was replaced (dials %d) or passed over (%v): B2 is fixed, update this test and the review's report", d.quiet.Load(), ok && ql.link == p.edge)
+		t.Fatalf("a lagging QUIET link was replaced (dials %d) or passed over (%v): with QuietReplace 0", d.quiet.Load(), ok && ql.link == p.edge)
 	}
 }
 

@@ -1,0 +1,32 @@
+== start 2026-10-31T10:45:03+00:00
+ 10:45:03 up 3 days, 23:39,  9 users,  load average: 1.99, 5.54, 5.61
+TCP: inuse 1384 orphan 1 tw 749 alloc 2242 mem 219
+top - 10:45:04 up 3 days, 23:39,  9 users,  load average: 1.91, 5.46, 5.58
+Tasks: 262 total,   1 running, 261 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  2.7 us,  3.8 sy,  2.1 ni, 89.1 id,  0.0 wa,  0.0 hi,  2.4 si,  0.0 st 
+MiB Mem :  23456.9 total,   2464.9 free,   1864.5 used,  19882.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21592.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2777513 root      20   0 1568308 284852  29428 S  66.7   1.2  10:51.67 xray-linux-amd6
+    992 root      20   0 1543536 166900  10588 S  43.1   0.7     28,25 hs2
+2907214 root      39  19 1943628  22796  14588 S  37.3   0.1   0:04.71 engine.test
+2907265 root      20   0   11908   6040   3884 R   2.0   0.0   0:00.03 top
+      1 root      20   0   22796  14244   9776 S   0.0   0.1   5:36.83 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.45 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+== end 2026-10-31T10:59:29+00:00
+ 10:59:29 up 3 days, 23:54,  8 users,  load average: 3.57, 3.22, 4.13
+TCP: inuse 1054 orphan 2 tw 876 alloc 1738 mem 10588
+top - 10:59:29 up 3 days, 23:54,  8 users,  load average: 3.29, 3.17, 4.10
+Tasks: 258 total,   1 running, 257 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.2 us,  1.2 sy,  0.0 ni, 97.1 id,  0.0 wa,  0.0 hi,  0.4 si,  0.0 st 
+MiB Mem :  23456.9 total,   2390.8 free,   1872.1 used,  19948.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21584.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2922910 root      20   0 1409428 140148  11844 S  27.5   0.6   1:56.03 hs2
+2777513 root      20   0 1568764 254544  29428 S  17.6   1.1  14:37.08 xray-linux-amd6
+2940704 root      20   0   11908   6036   3880 R   2.0   0.0   0:00.04 top
+      1 root      20   0   22796  14244   9776 S   0.0   0.1   5:38.02 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.45 kthreadd
+      3 root      20   0       0      0      0 S   0.0   0.0   0:00.00 pool_workqueue_release
+      4 root       0 -20       0      0      0 I   0.0   0.0   0:00.00 kworker/R-rcu_g

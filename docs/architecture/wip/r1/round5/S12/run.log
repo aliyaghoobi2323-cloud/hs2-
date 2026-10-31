@@ -1,0 +1,54 @@
+06:42:32 plan /root/r5/S12/plan.txt: 26 runs
+06:42:34 start f4fb6861-illg-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illg) load 1.79 waited 0s
+06:43:20 done f4fb6861-illg-1 ok=1 
+06:43:22 start f4fb6861-illgb2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgb2) load 1.53 waited 0s
+06:44:07 done f4fb6861-illgb2-1 ok=1 
+06:44:09 start f4fb6861-illgbo-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgbo) load 1.87 waited 0s
+06:44:55 done f4fb6861-illgbo-1 ok=1 
+06:44:57 start f4fb6861-illgbo-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgbo) load 2.42 waited 0s
+06:45:43 done f4fb6861-illgbo-2 ok=1 
+06:45:45 start f4fb6861-illgb2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgb2) load 3.13 waited 0s
+06:46:31 done f4fb6861-illgb2-2 ok=1 
+06:46:33 start f4fb6861-illg-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illg) load 3.44 waited 0s
+06:47:19 done f4fb6861-illg-2 ok=1 
+06:47:20 start dba78618-illg-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illg) load 4.16 waited 0s
+06:48:07 done dba78618-illg-1 ok=1 
+06:48:09 start dba78618-illgb2-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgb2) load 4.03 waited 0s
+06:48:54 done dba78618-illgb2-1 ok=1 
+06:48:56 start dba78618-illgbo-1 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgbo) load 3.57 waited 0s
+06:49:42 done dba78618-illgbo-1 ok=1 
+06:49:44 start dba78618-illgbo-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgbo) load 4.83 waited 0s
+06:50:29 done dba78618-illgbo-2 ok=1 
+06:50:31 start dba78618-illgb2-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgb2) load 5.26 waited 0s
+06:51:17 done dba78618-illgb2-2 ok=1 
+06:51:19 start dba78618-illg-2 (N=8 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illg) load 4.99 waited 0s
+06:52:04 done dba78618-illg-2 ok=1 
+06:52:06 start ff7db091-fin2-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 5.44 waited 0s
+06:52:51 done ff7db091-fin2-1 ok=1 
+06:52:53 start ff7db091-illg-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illg) load 4.85 waited 0s
+06:53:38 done ff7db091-illg-1 ok=1 
+06:53:40 start ff7db091-illgo-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgo) load 4.01 waited 0s
+06:54:25 done ff7db091-illgo-1 ok=1 
+06:54:27 start ff7db091-illgb2-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgb2) load 4.37 waited 0s
+06:55:12 done ff7db091-illgb2-1 ok=1 
+06:55:14 start ff7db091-illgbo-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgbo) load 3.40 waited 0s
+06:55:59 done ff7db091-illgbo-1 ok=1 
+06:56:01 start ff7db091-illgbo-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgbo) load 3.55 waited 0s
+06:56:47 done ff7db091-illgbo-2 ok=1 
+06:56:48 start ff7db091-illgb2-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgb2) load 2.25 waited 0s
+06:57:34 done ff7db091-illgb2-2 ok=1 
+06:57:35 start ff7db091-illgo-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgo) load 1.93 waited 0s
+06:58:21 done ff7db091-illgo-2 ok=1 
+06:58:22 start ff7db091-illg-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illg) load 3.17 waited 0s
+06:59:08 done ff7db091-illg-2 ok=1 
+06:59:10 start ff7db091-fin2-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 3.17 waited 0s
+06:59:55 done ff7db091-fin2-2 ok=1 
+06:59:57 start 350634b8-fin2-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.96 waited 0s
+07:00:42 done 350634b8-fin2-1 ok=1 
+07:00:44 start 350634b8-illgo-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgo) load 3.48 waited 0s
+07:01:29 done 350634b8-illgo-1 ok=1 
+07:01:31 start 350634b8-illgo-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=illgo) load 4.50 waited 0s
+07:02:15 done 350634b8-illgo-2 ok=1 
+07:02:17 start 350634b8-fin2-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 5.12 waited 0s
+07:03:02 done 350634b8-fin2-2 ok=1 
+07:03:02 done /root/r5/S12/plan.txt

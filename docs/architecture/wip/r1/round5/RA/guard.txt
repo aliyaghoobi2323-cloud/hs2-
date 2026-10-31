@@ -1,0 +1,1 @@
+07:54:03 end: mode log, status 0; 2181 samples; host TCP max 51914 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0

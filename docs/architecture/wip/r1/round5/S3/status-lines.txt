@@ -1,0 +1,880 @@
+== 6d18d417-ad-1
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 570, on bulk (no quiet up) 0; moved to bulk 551 (not yet 16, no bulk link 0); exit hints 543; moved back 0; two-way kept 151; placed by users: 46 users moved, 46 to 46 users a bulk link
+classes: light 14 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 22 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.23
+quiet records link 1: 1660/s, data 943 B a record, pad 5.5% (all: 62377 records, 58902770 B data, 2752472 B pad, 1760 tails held; 38575 writes, 34892 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.024% at a 0.4 ms queue over 10s; switches 1)
+classes: light 5 / bulk 91 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 570; realtime 5 (steady 0)
+hostq link 2: lowat 19.8 KiB, gate off (cap 20299 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way (own delays), B 942 KiB (in flight at most 941 KiB), queue 2.2 ms (srtt-min 7.5, way back 5.3, target 2.5), delivery 90.1 Mbit/s, cuts 183, grows 47, room 106, gate waits 939 (4653 ms)
+classes: light 12 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 20 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.14
+quiet records link 1: 1720/s, data 951 B a record, pad 4.4% (all: 87004 records, 85392479 B data, 680315 B pad, 761 tails held; 31132 writes, 30028 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.027% at a 1.7 ms queue over 10s; switches 1)
+classes: light 3 / bulk 223 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 30; realtime 3 (steady 0)
+hostq link 2: lowat 4.9 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way (own delays), B 719 KiB (in flight at most 1143 KiB), queue 0.5 ms (srtt-min 2.7, way back 2.2, target 2.5), delivery 92.4 Mbit/s, cuts 169, grows 94, room 93, gate waits 773 (3644 ms)
+== 6d18d417-ad-2
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 529, on bulk (no quiet up) 0; moved to bulk 466 (not yet 32, no bulk link 0); exit hints 462; moved back 0; two-way kept 85; placed by users: 47 users moved, 47 to 47 users a bulk link
+classes: light 38 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 41 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.07
+quiet records link 1: 1658/s, data 936 B a record, pad 5.8% (all: 63357 records, 58841689 B data, 3708223 B pad, 1862 tails held; 38523 writes, 33083 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.059% at a 0.7 ms queue over 10s; switches 1)
+classes: light 5 / bulk 62 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 1050; realtime 5 (steady 0)
+hostq link 2: lowat 17.1 KiB, gate off (cap 19838 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way (own delays), B 820 KiB (in flight at most 939 KiB), queue 1.1 ms (srtt-min 7.5, way back 6.4, target 2.5), delivery 89.4 Mbit/s, cuts 166, grows 22, room 136, gate waits 826 (4125 ms)
+classes: light 20 / bulk 13 / unknown 0 per link; flips/min: light→bulk 420, bulk→light 0; realtime 23 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.98
+quiet records link 1: 2085/s, data 989 B a record, pad 0.0% (all: 81754 records, 80461292 B data, 142412 B pad, 185 tails held; 27398 writes, 27159 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.024% at a 1.3 ms queue over 10s; switches 1)
+classes: light 3 / bulk 227 / unknown 0 per link; flips/min: light→bulk 300, bulk→light 510; realtime 3 (steady 0)
+hostq link 2: lowat 15.6 KiB, gate off (cap 16006 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 791 KiB (in flight at most 878 KiB), queue 4.7 ms (srtt-min 7.2, way back 2.5, target 2.5), delivery 88.7 Mbit/s, cuts 173, grows 95, room 89, gate waits 1006 (5015 ms)
+== 6d18d417-fin2-1
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 262, on bulk (no quiet up) 6; moved to bulk 193 (not yet 40, no bulk link 0); exit hints 185; moved back 0; two-way kept 2761; placed by users: 16 users moved, 16 to 16 users a bulk link
+classes: light 37 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 45 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 1500/s, data 978 B a record, pad 0.0% (all: 46427 records, 45641711 B data, 140671 B pad, 85 tails held; 29857 writes, 29626 on a record already started)
+classes: light 5 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 2: lowat 19.0 KiB, gate off (cap 20941 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 897 KiB (in flight at most 976 KiB), queue 8.6 ms (srtt-min 11.1, way back 2.5, target 2.5), delivery 88.9 Mbit/s, cuts 163, grows 46, room 123, gate waits 807 (4012 ms)
+classes: light 12 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 20 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.12
+quiet records link 1: 1721/s, data 932 B a record, pad 5.3% (all: 65162 records, 63270207 B data, 857945 B pad, 655 tails held; 21950 writes, 20623 on a record already started)
+classes: light 3 / bulk 136 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 2: lowat 19.9 KiB, gate off (cap 18413 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way (own delays), B 767 KiB (in flight at most 894 KiB), queue 0.5 ms (srtt-min 7.0, way back 6.7, target 2.5), delivery 85.6 Mbit/s, cuts 176, grows 76, room 81, gate waits 841 (4174 ms)
+== 6d18d417-fin2-2
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 257, on bulk (no quiet up) 4; moved to bulk 200 (not yet 39, no bulk link 0); exit hints 192; moved back 0; two-way kept 2686; placed by users: 18 users moved, 18 to 18 users a bulk link
+classes: light 39 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 46 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 1048/s, data 999 B a record, pad 0.0% (all: 48542 records, 47830050 B data, 210032 B pad, 145 tails held; 30096 writes, 29767 on a record already started)
+classes: light 5 / bulk 10 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 2: lowat 19.9 KiB, gate off (cap 19364 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 955 KiB (in flight at most 987 KiB), queue 6.8 ms (srtt-min 9.3, way back 2.5, target 2.5), delivery 95.5 Mbit/s, cuts 192, grows 25, room 120, gate waits 820 (4100 ms)
+classes: light 16 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 24 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.98
+quiet records link 1: 1810/s, data 986 B a record, pad 0.0% (all: 67418 records, 66634373 B data, 10055 B pad, 10 tails held; 21071 writes, 21039 on a record already started)
+classes: light 3 / bulk 138 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.53
+budget link 2: run two-way, B 593 KiB (in flight at most 780 KiB), queue 11.3 ms (srtt-min 13.8, way back 2.5, target 2.5), delivery 98.3 Mbit/s, cuts 194, grows 79, room 81, gate waits 373 (1663 ms)
+== 6d18d417-ltad-1
+place: on; quiet 2 of 2 links, bulk 1 links; opened on quiet 696, on bulk (no quiet up) 0; moved to bulk 510 (not yet 31, no bulk link 0); exit hints 513; moved back 0; two-way kept 60; placed by users: 42 users moved, 42 to 42 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0)
+classes: light 27 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 24 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 1: 475/s, data 796 B a record, pad 19.2% (all: 21497 records, 18291724 B data, 2858028 B pad, 107 tails held; 15856 writes, 11697 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.022% at a 1.2 ms queue over 10s; switches 1)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 230/s, data 234 B a record, pad 76.0% (all: 8030 records, 1873155 B data, 6059135 B pad, 22 tails held; 19340 writes, 12751 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.044% at a 3.2 ms queue over 10s; switches 1)
+classes: light 5 / bulk 37 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 390; realtime 5 (steady 0)
+hostq link 3: lowat 21.0 KiB, gate off (cap 22124 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way, B 900 KiB (in flight at most 1006 KiB), queue 0.1 ms (srtt-min 0.2, way back 0.1, target 2.5), delivery 95.4 Mbit/s, cuts 216, grows 20, room 95, gate waits 1003 (5001 ms)
+classes: light 15 / bulk 18 / unknown 0 per link; flips/min: light→bulk 780, bulk→light 0; realtime 6 (steady 2)
+hostq link 1: lowat 9.1 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 1: 4893/s, data 983 B a record, pad 0.0% (all: 107250 records, 105685647 B data, 159573 B pad, 215 tails held; 19547 writes, 19301 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.018% at a 1.2 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 210/s, data 412 B a record, pad 57.4% (all: 7270 records, 3093478 B data, 4078722 B pad, 24 tails held; 10275 writes, 5101 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 3 / bulk 164 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 3 (steady 0)
+hostq link 3: lowat 11.3 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way, B 556 KiB (in flight at most 594 KiB), queue 8.3 ms (srtt-min 10.8, way back 2.5, target 2.5), delivery 91.4 Mbit/s, cuts 210, grows 56, room 90, gate waits 1123 (4351 ms)
+== 6d18d417-ltad-2
+place: on; quiet 2 of 2 links, bulk 1 links; opened on quiet 679, on bulk (no quiet up) 0; moved to bulk 566 (not yet 33, no bulk link 0); exit hints 560; moved back 0; two-way kept 49; placed by users: 39 users moved, 39 to 39 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0)
+classes: light 29 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 37 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.08
+quiet records link 1: 1604/s, data 943 B a record, pad 5.3% (all: 60691 records, 56832628 B data, 3290758 B pad, 1123 tails held; 21097 writes, 15987 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.073% at a 0.7 ms queue over 10s; switches 1)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 208/s, data 259 B a record, pad 74.1% (all: 7044 records, 1874821 B data, 5075783 B pad, 17 tails held; 19306 writes, 13565 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.049% at a 2.8 ms queue over 10s; switches 0)
+classes: light 5 / bulk 45 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 270; realtime 5 (steady 0)
+hostq link 3: lowat 20.0 KiB, gate off (cap 20112 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way, B 905 KiB (in flight at most 933 KiB), queue 3.6 ms (srtt-min 6.1, way back 2.5, target 2.5), delivery 81.4 Mbit/s, cuts 164, grows 61, room 109, gate waits 777 (3880 ms)
+classes: light 5 / bulk 19 / unknown 0 per link; flips/min: light→bulk 1020, bulk→light 0; realtime 13 (steady 8)
+hostq link 1: lowat 6.2 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 1: 4024/s, data 993 B a record, pad 0.0% (all: 142999 records, 140797348 B data, 257096 B pad, 302 tails held; 27617 writes, 27209 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.026% at a 1.1 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 235/s, data 377 B a record, pad 60.9% (all: 8120 records, 3136064 B data, 4836746 B pad, 11 tails held; 10312 writes, 4195 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.088% at a 2.5 ms queue over 10s; switches 0)
+classes: light 3 / bulk 190 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 150; realtime 3 (steady 0)
+hostq link 3: lowat 13.2 KiB, gate off (cap 13490 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way, B 558 KiB (in flight at most 698 KiB), queue 4.8 ms (srtt-min 7.3, way back 2.5, target 2.5), delivery 83.8 Mbit/s, cuts 197, grows 70, room 72, gate waits 1008 (4513 ms)
+== a1577723-ad-1
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 464, on bulk (no quiet up) 0; moved to bulk 439 (not yet 25, no bulk link 0); exit hints 431; moved back 0; two-way kept 96; placed by users: 49 users moved, 49 to 49 users a bulk link
+classes: light 29 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 30 (steady 6)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.08
+quiet records link 1: 1323/s, data 901 B a record, pad 8.6% (all: 51378 records, 46725822 B data, 3925006 B pad, 1244 tails held; 34782 writes, 29128 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.095% at a 0.7 ms queue over 10s; switches 1)
+classes: light 5 / bulk 71 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 570; realtime 5 (steady 0)
+hostq link 2: lowat 19.9 KiB, gate off (cap 20338 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 936 KiB (in flight at most 1013 KiB), queue 6.2 ms (srtt-min 8.7, way back 2.5, target 2.5), delivery 95.4 Mbit/s, cuts 193, grows 4, room 144, gate waits 1056 (5279 ms)
+classes: light 25 / bulk 15 / unknown 0 per link; flips/min: light→bulk 750, bulk→light 0; realtime 31 (steady 6)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.98
+quiet records link 1: 1803/s, data 978 B a record, pad 0.0% (all: 61387 records, 59984382 B data, 615820 B pad, 664 tails held; 25830 writes, 24901 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.094% at a 1.3 ms queue over 10s; switches 1)
+classes: light 3 / bulk 222 / unknown 0 per link; flips/min: light→bulk 360, bulk→light 420; realtime 3 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate off (cap 14152 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 635 KiB (in flight at most 677 KiB), queue 4.8 ms (srtt-min 7.3, way back 2.5, target 2.5), delivery 66.6 Mbit/s, cuts 194, grows 67, room 96, gate waits 818 (4087 ms)
+== a1577723-ad-2
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 450, on bulk (no quiet up) 0; moved to bulk 430 (not yet 18, no bulk link 0); exit hints 422; moved back 0; two-way kept 288; placed by users: 44 users moved, 44 to 44 users a bulk link
+classes: light 16 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 24 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.06
+quiet records link 1: 1737/s, data 907 B a record, pad 6.5% (all: 63323 records, 58692863 B data, 3801345 B pad, 1321 tails held; 37564 writes, 32127 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.123% at a 0.5 ms queue over 10s; switches 1)
+classes: light 5 / bulk 75 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 510; realtime 5 (steady 0)
+hostq link 2: lowat 19.7 KiB, gate off (cap 19991 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 903 KiB (in flight at most 941 KiB), queue 4.3 ms (srtt-min 6.8, way back 2.5, target 2.5), delivery 86.1 Mbit/s, cuts 169, grows 8, room 155, gate waits 900 (4498 ms)
+classes: light 13 / bulk 15 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 21 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.52
+quiet records link 1: 2728/s, data 985 B a record, pad 1.5% (all: 80634 records, 79139461 B data, 481963 B pad, 728 tails held; 29123 writes, 28333 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.086% at a 0.9 ms queue over 10s; switches 1)
+classes: light 3 / bulk 213 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 0; realtime 3 (steady 0)
+hostq link 2: lowat 12.6 KiB, gate off (cap 12925 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 464 KiB (in flight at most 564 KiB), queue 5.7 ms (srtt-min 8.2, way back 2.5, target 2.5), delivery 48.8 Mbit/s, cuts 180, grows 57, room 116, gate waits 780 (3890 ms)
+== a1577723-fin2-1
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 468, on bulk (no quiet up) 0; moved to bulk 450 (not yet 17, no bulk link 0); exit hints 437; moved back 0; two-way kept 636; placed by users: 50 users moved, 50 to 50 users a bulk link
+classes: light 30 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 33 (steady 3)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.32
+quiet records link 1: 679/s, data 918 B a record, pad 7.0% (all: 27684 records, 26302839 B data, 977865 B pad, 1011 tails held; 31479 writes, 30019 on a record already started)
+classes: light 5 / bulk 56 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 210; realtime 5 (steady 0)
+hostq link 2: lowat 19.8 KiB, gate off (cap 20553 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 995 KiB (in flight at most 1103 KiB), queue 0.0 ms (srtt-min 2.0, way back 4.3, target 2.5), delivery 100.4 Mbit/s, cuts 176, grows 11, room 148, gate waits 995 (4942 ms)
+classes: light 29 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 31 (steady 3)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 554/s, data 998 B a record, pad 0.0% (all: 45864 records, 45014109 B data, 287765 B pad, 394 tails held; 22169 writes, 21732 on a record already started)
+classes: light 3 / bulk 185 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 30; realtime 3 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 729 KiB (in flight at most 895 KiB), queue 7.4 ms (srtt-min 11.0, way back 3.6, target 2.5), delivery 96.5 Mbit/s, cuts 178, grows 54, room 120, gate waits 699 (3324 ms)
+== a1577723-fin2-2
+place: on; quiet 1 of 1 links, bulk 1 links; opened on quiet 269, on bulk (no quiet up) 12; moved to bulk 190 (not yet 38, no bulk link 0); exit hints 182; moved back 0; two-way kept 2684; placed by users: 18 users moved, 18 to 18 users a bulk link
+classes: light 45 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 52 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 664/s, data 992 B a record, pad 0.0% (all: 34802 records, 34098424 B data, 253798 B pad, 99 tails held; 29483 writes, 29101 on a record already started)
+classes: light 5 / bulk 10 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 2: lowat 18.2 KiB, gate off (cap 22579 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 1016 KiB (in flight at most 1055 KiB), queue 1.2 ms (srtt-min 4.1, way back 2.8, target 2.5), delivery 94.7 Mbit/s, cuts 164, grows 8, room 132, gate waits 681 (3405 ms)
+classes: light 22 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 30 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 888/s, data 979 B a record, pad 0.0% (all: 36631 records, 36211299 B data, 5247 B pad, 9 tails held; 19182 writes, 19144 on a record already started)
+classes: light 3 / bulk 138 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate off (cap 13321 B), notsent p95 0 B, blocked ratio 0.00
+budget link 2: run two-way, B 717 KiB (in flight at most 700 KiB), queue 1.4 ms (srtt-min 7.2, way back 5.8, target 2.5), delivery 64.5 Mbit/s, cuts 162, grows 44, room 137, gate waits 701 (3505 ms)
+== a1577723-ltad-1
+place: on; quiet 2 of 2 links, bulk 1 links; opened on quiet 559, on bulk (no quiet up) 0; moved to bulk 449 (not yet 24, no bulk link 0); exit hints 452; moved back 0; two-way kept 81; placed by users: 44 users moved, 44 to 44 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0)
+classes: light 20 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 16 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.00
+quiet records link 1: 466/s, data 807 B a record, pad 17.2% (all: 20321 records, 17385387 B data, 2486929 B pad, 195 tails held; 14300 writes, 10585 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.090% at a 0.7 ms queue over 10s; switches 1)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 199/s, data 268 B a record, pad 73.8% (all: 6929 records, 1883413 B data, 5006781 B pad, 32 tails held; 19405 writes, 13657 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.102% at a 1.5 ms queue over 10s; switches 1)
+classes: light 5 / bulk 44 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 270; realtime 5 (steady 0)
+hostq link 3: lowat 19.6 KiB, gate off (cap 20029 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way (own delays), B 768 KiB (in flight at most 807 KiB), queue 0.0 ms (srtt-min 11.2, way back 11.2, target 2.5), delivery 87.0 Mbit/s, cuts 202, grows 7, room 130, gate waits 1139 (5570 ms)
+classes: light 4 / bulk 19 / unknown 0 per link; flips/min: light→bulk 690, bulk→light 0; realtime 6 (steady 2)
+hostq link 1: lowat 6.9 KiB, gate off (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 1: 3305/s, data 995 B a record, pad 0.1% (all: 81653 records, 80040828 B data, 564250 B pad, 275 tails held; 16719 writes, 15805 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.072% at a 0.8 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 188/s, data 476 B a record, pad 52.6% (all: 6947 records, 3113714 B data, 3798778 B pad, 53 tails held; 10245 writes, 5202 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.052% at a 3.5 ms queue over 10s; switches 0)
+classes: light 3 / bulk 169 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 150; realtime 3 (steady 0)
+hostq link 3: lowat 11.3 KiB, gate off (cap 13826 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way, B 759 KiB (in flight at most 810 KiB), queue 7.8 ms (srtt-min 10.3, way back 2.5, target 2.5), delivery 73.9 Mbit/s, cuts 205, grows 63, room 83, gate waits 813 (4064 ms)
+== a1577723-ltad-2
+place: on; quiet 2 of 2 links, bulk 1 links; opened on quiet 382, on bulk (no quiet up) 0; moved to bulk 363 (not yet 18, no bulk link 0); exit hints 355; moved back 0; two-way kept 794; placed by users: 46 users moved, 46 to 46 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0
+classes: light 22 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 30 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.08
+quiet records link 1: 1584/s, data 955 B a record, pad 2.9% (all: 58418 records, 56670052 B data, 1069386 B pad, 1553 tails held; 17040 writes, 15388 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.107% at a 0.8 ms queue over 10s; switches 1)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 159/s, data 338 B a record, pad 64.8% (all: 5351 records, 1879400 B data, 3393176 B pad, 4 tails held; 19361 writes, 15108 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 5 / bulk 24 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 3: lowat 18.6 KiB, gate off (cap 19060 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way, B 937 KiB (in flight at most 938 KiB), queue 2.5 ms (srtt-min 5.0, way back 2.5, target 2.5), delivery 89.1 Mbit/s, cuts 190, grows 2, room 153, gate waits 808 (4038 ms)
+classes: light 20 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 28 (steady 8)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 1493/s, data 982 B a record, pad 0.0% (all: 63454 records, 61981809 B data, 690945 B pad, 638 tails held; 14763 writes, 13614 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.096% at a 1.7 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 215/s, data 418 B a record, pad 58.5% (all: 7647 records, 3134395 B data, 4385407 B pad, 67 tails held; 10164 writes, 4620 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.094% at a 2.6 ms queue over 10s; switches 1)
+classes: light 3 / bulk 152 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 3: lowat 19.9 KiB, gate off (cap 17137 B), notsent p95 0 B, blocked ratio 0.00
+budget link 3: run two-way, B 795 KiB (in flight at most 875 KiB), queue 7.5 ms (srtt-min 10.0, way back 2.5, target 2.5), delivery 78.8 Mbit/s, cuts 171, grows 48, room 119, gate waits 493 (2465 ms)
+== dba78618-ad-1
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 756, on bulk (no quiet up) 0; moved to bulk 650 (not yet 36, no bulk link 0); exit hints 652; moved back 0; two-way kept 517; placed by users: 47 users moved, 7 to 8 users a bulk link
+classes: light 18 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 16 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 511 B, blocked ratio 0.00
+quiet records link 1: 287/s, data 711 B a record, pad 28.7% (all: 11194 records, 7827401 B data, 3228173 B pad, 133 tails held; 14494 writes, 10487 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.109% at a 1.4 ms queue over 10s; switches 1)
+classes: light 12 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 17 (steady 5)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.03
+quiet records link 2: 1057/s, data 893 B a record, pad 9.1% (all: 40217 records, 37240730 B data, 2471172 B pad, 933 tails held; 15708 writes, 11901 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.127% at a 13.0 ms queue over 10s; switches 1)
+classes: light 14 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 1)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.00
+quiet records link 3: 310/s, data 649 B a record, pad 32.9% (all: 13238 records, 8675930 B data, 4341118 B pad, 304 tails held; 16879 writes, 11742 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.130% at a 9.8 ms queue over 10s; switches 1)
+classes: light 14 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 1)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 4: 303/s, data 672 B a record, pad 32.6% (all: 11839 records, 8285687 B data, 3458987 B pad, 219 tails held; 13336 writes, 9148 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.211% at a 3.4 ms queue over 10s; switches 1)
+classes: light 5 / bulk 10 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 150; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 5: run two-way, B 173 KiB (in flight at most 178 KiB), queue 0.1 ms (srtt-min 4.7, way back 5.5, target 2.5), delivery 16.8 Mbit/s, cuts 135, grows 56, room 178, gate waits 799 (3993 ms)
+classes: light 5 / bulk 13 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 240; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 6: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 150; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.04
+budget link 7: run two-way, B 152 KiB (in flight at most 180 KiB), queue 5.9 ms (srtt-min 11.4, way back 5.5, target 2.5), delivery 16.5 Mbit/s, cuts 163, grows 35, room 162, gate waits 582 (2909 ms)
+classes: light 5 / bulk 10 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 150; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.08
+budget link 8: run two-way, B 147 KiB (in flight at most 169 KiB), queue 1.1 ms (srtt-min 6.6, way back 5.5, target 2.5), delivery 16.1 Mbit/s, cuts 127, grows 53, room 177, gate waits 542 (2697 ms)
+classes: light 6 / bulk 5 / unknown 0 per link; flips/min: light→bulk 420, bulk→light 0; realtime 7 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 1148/s, data 982 B a record, pad 0.0% (all: 36335 records, 35452787 B data, 303853 B pad, 333 tails held; 13591 writes, 13165 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.628% at a 9.7 ms queue over 10s; switches 1)
+classes: light 6 / bulk 5 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 11 (steady 5)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.95
+quiet records link 2: 1101/s, data 982 B a record, pad 0.1% (all: 43530 records, 42685077 B data, 393523 B pad, 823 tails held; 13903 writes, 13288 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.583% at a 12.0 ms queue over 10s; switches 1)
+classes: light 7 / bulk 5 / unknown 0 per link; flips/min: light→bulk 180, bulk→light 0; realtime 8 (steady 1)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.81
+quiet records link 3: 1160/s, data 988 B a record, pad 1.0% (all: 41799 records, 40654930 B data, 693534 B pad, 538 tails held; 14453 writes, 13498 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.837% at a 13.3 ms queue over 10s; switches 1)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 420, bulk→light 0; realtime 6 (steady 1)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.96
+quiet records link 4: 1113/s, data 989 B a record, pad 0.2% (all: 37966 records, 37002562 B data, 297284 B pad, 385 tails held; 13715 writes, 13304 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.487% at a 4.9 ms queue over 10s; switches 1)
+classes: light 3 / bulk 25 / unknown 0 per link; flips/min: light→bulk 120, bulk→light 150; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.04
+budget link 5: run two-way (own delays), B 70 KiB (in flight at most 71 KiB), queue 1.1 ms (srtt-min 14.8, way back 13.7, target 2.5), delivery 6.7 Mbit/s, cuts 162, grows 137, room 70, gate waits 788 (3822 ms)
+classes: light 3 / bulk 28 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 90; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 6: run one-way, B 85 KiB (in flight at most 87 KiB), queue 2.3 ms (srtt-min 2.4, way back 0.1, target 2.5), delivery 11.1 Mbit/s, cuts 156, grows 210, room 1, gate waits 839 (4055 ms)
+classes: light 3 / bulk 25 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 30; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.05
+budget link 7: run two-way (own delays), B 91 KiB (in flight at most 96 KiB), queue 4.6 ms (srtt-min 8.3, way back 3.7, target 2.5), delivery 8.8 Mbit/s, cuts 173, grows 146, room 51, gate waits 786 (3872 ms)
+classes: light 3 / bulk 40 / unknown 0 per link; flips/min: light→bulk 150, bulk→light 240; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.02
+budget link 8: run two-way (own delays), B 87 KiB (in flight at most 89 KiB), queue 4.8 ms (srtt-min 13.2, way back 8.4, target 2.5), delivery 11.1 Mbit/s, cuts 175, grows 139, room 57, gate waits 799 (3861 ms)
+== dba78618-ad-2
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 739, on bulk (no quiet up) 0; moved to bulk 618 (not yet 29, no bulk link 0); exit hints 624; moved back 0; two-way kept 51; placed by users: 38 users moved, 5 to 7 users a bulk link
+classes: light 12 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 1: 332/s, data 647 B a record, pad 35.6% (all: 12998 records, 8333074 B data, 4545774 B pad, 205 tails held; 16974 writes, 11619 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.095% at a 15.5 ms queue over 10s; switches 1)
+classes: light 12 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 15 (steady 3)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.04
+quiet records link 2: 658/s, data 868 B a record, pad 13.2% (all: 26667 records, 23161959 B data, 3159993 B pad, 501 tails held; 15192 writes, 10574 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.079% at a 23.4 ms queue over 10s; switches 1)
+classes: light 16 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 17 (steady 1)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.00
+quiet records link 3: 281/s, data 731 B a record, pad 26.1% (all: 12306 records, 9070378 B data, 2992818 B pad, 161 tails held; 16958 writes, 13129 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.071% at a 22.3 ms queue over 10s; switches 1)
+classes: light 10 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 3)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.05
+quiet records link 4: 663/s, data 862 B a record, pad 12.6% (all: 26314 records, 23064114 B data, 2858960 B pad, 1119 tails held; 15639 writes, 12047 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.144% at a 4.8 ms queue over 10s; switches 1)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.05
+budget link 5: run two-way, B 131 KiB (in flight at most 162 KiB), queue 0.0 ms (srtt-min 1.4, way back 3.4, target 2.5), delivery 12.7 Mbit/s, cuts 132, grows 65, room 172, gate waits 744 (3700 ms)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 90; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 6: run two-way, B 142 KiB (in flight at most 157 KiB), queue 6.5 ms (srtt-min 9.9, way back 3.4, target 2.5), delivery 17.3 Mbit/s, cuts 134, grows 52, room 180, gate waits 662 (3261 ms)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 90; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 7: run two-way, B 153 KiB (in flight at most 156 KiB), queue 0.0 ms (srtt-min 3.4, way back 3.4, target 2.5), delivery 15.4 Mbit/s, cuts 136, grows 40, room 184, gate waits 608 (3033 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 8: run two-way, B 146 KiB (in flight at most 159 KiB), queue 1.3 ms (srtt-min 4.7, way back 3.4, target 2.5), delivery 18.3 Mbit/s, cuts 126, grows 61, room 175, gate waits 653 (3208 ms)
+classes: light 8 / bulk 4 / unknown 0 per link; flips/min: light→bulk 150, bulk→light 0; realtime 8 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.82
+quiet records link 1: 1206/s, data 980 B a record, pad 1.1% (all: 36446 records, 35570084 B data, 394152 B pad, 461 tails held; 13842 writes, 13260 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.486% at a 11.1 ms queue over 10s; switches 1)
+classes: light 6 / bulk 6 / unknown 0 per link; flips/min: light→bulk 150, bulk→light 0; realtime 8 (steady 3)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.93
+quiet records link 2: 1210/s, data 964 B a record, pad 0.4% (all: 44968 records, 43751594 B data, 519544 B pad, 515 tails held; 13135 writes, 12321 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.551% at a 11.4 ms queue over 10s; switches 1)
+classes: light 7 / bulk 5 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 0; realtime 8 (steady 1)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.73
+quiet records link 3: 1175/s, data 983 B a record, pad 1.6% (all: 35404 records, 34443669 B data, 543845 B pad, 550 tails held; 13599 writes, 12837 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.446% at a 10.4 ms queue over 10s; switches 1)
+classes: light 8 / bulk 4 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 0; realtime 10 (steady 3)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.82
+quiet records link 4: 1176/s, data 974 B a record, pad 0.8% (all: 38029 records, 37219533 B data, 321281 B pad, 547 tails held; 13125 writes, 12659 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.203% at a 4.0 ms queue over 10s; switches 1)
+classes: light 3 / bulk 15 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 5: run two-way (own delays), B 55 KiB (in flight at most 66 KiB), queue 1.2 ms (srtt-min 9.0, way back 7.8, target 2.5), delivery 6.3 Mbit/s, cuts 162, grows 146, room 49, gate waits 801 (3823 ms)
+classes: light 3 / bulk 38 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 150; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 6: run two-way (own delays), B 71 KiB (in flight at most 74 KiB), queue 1.7 ms (srtt-min 20.8, way back 19.1, target 2.5), delivery 11.4 Mbit/s, cuts 153, grows 143, room 61, gate waits 831 (3599 ms)
+classes: light 3 / bulk 16 / unknown 0 per link; flips/min: light→bulk 120, bulk→light 60; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.18
+budget link 7: run two-way (own delays), B 98 KiB (in flight at most 99 KiB), queue 1.3 ms (srtt-min 15.0, way back 13.7, target 2.5), delivery 9.6 Mbit/s, cuts 149, grows 145, room 58, gate waits 666 (3324 ms)
+classes: light 3 / bulk 19 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 30; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.04
+budget link 8: run two-way, B 64 KiB (in flight at most 87 KiB), queue 12.8 ms (srtt-min 15.3, way back 2.5, target 2.5), delivery 8.1 Mbit/s, cuts 156, grows 128, room 72, gate waits 782 (3897 ms)
+== dba78618-fin2-1
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 612, on bulk (no quiet up) 0; moved to bulk 548 (not yet 34, no bulk link 0); exit hints 547; moved back 0; two-way kept 1149; placed by users: 44 users moved, 6 to 8 users a bulk link
+classes: light 13 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 15 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+quiet records link 1: 479/s, data 825 B a record, pad 15.0% (all: 19464 records, 16504103 B data, 2739031 B pad, 504 tails held; 18043 writes, 14462 on a record already started)
+classes: light 15 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 15 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 120/s, data 170 B a record, pad 82.6% (all: 6144 records, 2432086 B data, 3542488 B pad, 40 tails held; 9580 writes, 5813 on a record already started)
+classes: light 12 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.05
+quiet records link 3: 439/s, data 883 B a record, pad 10.0% (all: 18601 records, 15926894 B data, 2455652 B pad, 1092 tails held; 13538 writes, 10246 on a record already started)
+classes: light 11 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 15 (steady 4)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 4: 872/s, data 979 B a record, pad 0.0% (all: 28351 records, 27181809 B data, 865427 B pad, 304 tails held; 12860 writes, 11625 on a record already started)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 5: run two-way, B 123 KiB (in flight at most 133 KiB), queue 0.7 ms (srtt-min 6.0, way back 5.3, target 2.5), delivery 15.2 Mbit/s, cuts 140, grows 111, room 113, gate waits 583 (2812 ms)
+classes: light 5 / bulk 7 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.22
+budget link 6: run two-way, B 141 KiB (in flight at most 140 KiB), queue 2.7 ms (srtt-min 8.1, way back 5.3, target 2.5), delivery 13.3 Mbit/s, cuts 146, grows 52, room 164, gate waits 448 (2193 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.06
+budget link 7: run two-way (own delays), B 134 KiB (in flight at most 161 KiB), queue 2.6 ms (srtt-min 7.9, way back 5.3, target 2.5), delivery 12.9 Mbit/s, cuts 138, grows 84, room 140, gate waits 552 (2745 ms)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.05
+budget link 8: run two-way, B 130 KiB (in flight at most 147 KiB), queue 0.3 ms (srtt-min 5.6, way back 5.3, target 2.5), delivery 13.6 Mbit/s, cuts 154, grows 87, room 123, gate waits 555 (2774 ms)
+classes: light 6 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 8 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.36
+quiet records link 1: 715/s, data 930 B a record, pad 5.1% (all: 28838 records, 27808827 B data, 575951 B pad, 810 tails held; 13544 writes, 12650 on a record already started)
+classes: light 6 / bulk 3 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 0; realtime 6 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.66
+quiet records link 2: 539/s, data 960 B a record, pad 2.9% (all: 26568 records, 25776030 B data, 430238 B pad, 482 tails held; 12237 writes, 11642 on a record already started)
+classes: light 4 / bulk 5 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 0; realtime 6 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.65
+quiet records link 3: 697/s, data 985 B a record, pad 2.5% (all: 25054 records, 24592692 B data, 244772 B pad, 405 tails held; 11117 writes, 10762 on a record already started)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 9 (steady 4)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.56
+quiet records link 4: 746/s, data 931 B a record, pad 4.2% (all: 32689 records, 31970090 B data, 226884 B pad, 420 tails held; 11317 writes, 10961 on a record already started)
+classes: light 3 / bulk 16 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.08
+budget link 5: run two-way, B 101 KiB (in flight at most 125 KiB), queue 1.0 ms (srtt-min 2.0, way back 1.0, target 2.5), delivery 10.1 Mbit/s, cuts 152, grows 86, room 115, gate waits 740 (3686 ms)
+classes: light 3 / bulk 30 / unknown 0 per link; flips/min: light→bulk 120, bulk→light 0; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.19
+budget link 6: run two-way, B 88 KiB (in flight at most 156 KiB), queue 1.2 ms (srtt-min 2.4, way back 1.2, target 2.5), delivery 10.2 Mbit/s, cuts 152, grows 113, room 88, gate waits 643 (3139 ms)
+classes: light 3 / bulk 18 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 90; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.16
+budget link 7: run two-way, B 100 KiB (in flight at most 143 KiB), queue 1.4 ms (srtt-min 2.9, way back 1.4, target 2.5), delivery 10.1 Mbit/s, cuts 150, grows 109, room 96, gate waits 666 (3317 ms)
+classes: light 3 / bulk 14 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 30; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.19
+budget link 8: run two-way, B 85 KiB (in flight at most 186 KiB), queue 1.5 ms (srtt-min 3.0, way back 1.5, target 2.5), delivery 10.2 Mbit/s, cuts 144, grows 107, room 102, gate waits 622 (3026 ms)
+== dba78618-fin2-2
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 530, on bulk (no quiet up) 0; moved to bulk 489 (not yet 25, no bulk link 0); exit hints 484; moved back 0; two-way kept 1418; placed by users: 44 users moved, 6 to 7 users a bulk link
+classes: light 14 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 18 (steady 4)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 1.00
+quiet records link 1: 607/s, data 981 B a record, pad 0.0% (all: 25204 records, 24877429 B data, 9115 B pad, 9 tails held; 10738 writes, 10714 on a record already started)
+classes: light 11 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 2)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+quiet records link 2: 470/s, data 823 B a record, pad 16.9% (all: 18898 records, 15652962 B data, 3157866 B pad, 504 tails held; 15546 writes, 11045 on a record already started)
+classes: light 10 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.01
+quiet records link 3: 401/s, data 919 B a record, pad 9.8% (all: 16667 records, 15021675 B data, 1437257 B pad, 523 tails held; 11026 writes, 8910 on a record already started)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 4: 155/s, data 214 B a record, pad 77.9% (all: 5867 records, 1304622 B data, 4492750 B pad, 44 tails held; 14210 writes, 9324 on a record already started)
+classes: light 5 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 120; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.15
+budget link 5: run two-way, B 151 KiB (in flight at most 177 KiB), queue 2.5 ms (srtt-min 4.9, way back 2.5, target 2.5), delivery 15.3 Mbit/s, cuts 151, grows 78, room 127, gate waits 523 (2612 ms)
+classes: light 5 / bulk 7 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 150; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 6: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.04
+budget link 7: run two-way, B 173 KiB (in flight at most 177 KiB), queue 1.2 ms (srtt-min 2.5, way back 1.2, target 2.5), delivery 20.1 Mbit/s, cuts 150, grows 63, room 150, gate waits 636 (3112 ms)
+classes: light 5 / bulk 11 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 180; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.07
+budget link 8: run two-way, B 174 KiB (in flight at most 191 KiB), queue 1.0 ms (srtt-min 1.9, way back 1.0, target 2.5), delivery 18.1 Mbit/s, cuts 156, grows 82, room 130, gate waits 619 (3092 ms)
+classes: light 7 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 11 (steady 4)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 1: 795/s, data 985 B a record, pad 0.0% (all: 25195 records, 24629802 B data, 241928 B pad, 157 tails held; 10151 writes, 9769 on a record already started)
+classes: light 6 / bulk 3 / unknown 0 per link; flips/min: light→bulk 210, bulk→light 0; realtime 8 (steady 2)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 2: 375/s, data 1002 B a record, pad 0.0% (all: 24922 records, 24180894 B data, 624078 B pad, 746 tails held; 12354 writes, 11452 on a record already started)
+classes: light 7 / bulk 4 / unknown 0 per link; flips/min: light→bulk 180, bulk→light 0; realtime 9 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 1.00
+quiet records link 3: 519/s, data 997 B a record, pad 0.0% (all: 23732 records, 23054469 B data, 362063 B pad, 298 tails held; 10010 writes, 9446 on a record already started)
+classes: light 9 / bulk 3 / unknown 0 per link; flips/min: light→bulk 120, bulk→light 0; realtime 9 (steady 0)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.94
+quiet records link 4: 623/s, data 964 B a record, pad 0.3% (all: 15953 records, 14396950 B data, 1297688 B pad, 639 tails held; 12203 writes, 10541 on a record already started)
+classes: light 3 / bulk 27 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 150; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.03
+budget link 5: run two-way, B 98 KiB (in flight at most 133 KiB), queue 18.5 ms (srtt-min 21.0, way back 2.5, target 2.5), delivery 14.8 Mbit/s, cuts 161, grows 125, room 68, gate waits 805 (3811 ms)
+classes: light 3 / bulk 23 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 120; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 6: run one-way, B 107 KiB (in flight at most 110 KiB), queue 2.9 ms (srtt-min 2.9, way back 0.0, target 2.5), delivery 18.6 Mbit/s, cuts 139, grows 215, room 1, gate waits 928 (3848 ms)
+classes: light 3 / bulk 22 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 30; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.07
+budget link 7: run two-way, B 101 KiB (in flight at most 122 KiB), queue 2.4 ms (srtt-min 4.8, way back 2.4, target 2.5), delivery 14.0 Mbit/s, cuts 163, grows 111, room 81, gate waits 739 (3522 ms)
+classes: light 3 / bulk 15 / unknown 0 per link; flips/min: light→bulk 120, bulk→light 180; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.05
+budget link 8: run two-way, B 106 KiB (in flight at most 128 KiB), queue 4.3 ms (srtt-min 6.8, way back 2.5, target 2.5), delivery 11.7 Mbit/s, cuts 158, grows 133, room 67, gate waits 769 (3812 ms)
+== dba78618-ltad-1
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 571, on bulk (no quiet up) 0; moved to bulk 425 (not yet 25, no bulk link 0); exit hints 423; moved back 0; two-way kept 220; placed by users: 45 users moved, 6 to 7 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0);
+classes: light 13 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 0)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 1: 30/s, data 23 B a record, pad 97.8% (all: 3043 records, 1692525 B data, 1267893 B pad, 69 tails held; 3240 writes, 1909 on a record already started)
+quiet cc link 1: cubic (loss switch to illinois; resent 0.323% at a 3.4 ms queue over 10s; switches 0)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 196/s, data 273 B a record, pad 72.0% (all: 7103 records, 1924468 B data, 5076300 B pad, 18 tails held; 18748 writes, 13099 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.153% at a 2.7 ms queue over 10s; switches 1)
+classes: light 19 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 25 (steady 6)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.17
+quiet records link 3: 1174/s, data 963 B a record, pad 3.7% (all: 46535 records, 44223379 B data, 1647661 B pad, 1776 tails held; 12875 writes, 10287 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.114% at a 3.5 ms queue over 10s; switches 1)
+classes: light 11 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 11 (steady 0)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 4: 40/s, data 30 B a record, pad 97.0% (all: 3199 records, 1328876 B data, 1842998 B pad, 42 tails held; 3895 writes, 2004 on a record already started)
+quiet cc link 4: cubic (loss switch to illinois; resent 0.222% at a 4.6 ms queue over 10s; switches 0)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.04
+budget link 5: run two-way, B 153 KiB (in flight at most 163 KiB), queue 1.3 ms (srtt-min 4.4, way back 3.1, target 2.5), delivery 17.7 Mbit/s, cuts 151, grows 39, room 170, gate waits 646 (3159 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.03
+budget link 6: run two-way (own delays), B 131 KiB (in flight at most 160 KiB), queue 3.3 ms (srtt-min 6.4, way back 3.1, target 2.5), delivery 15.6 Mbit/s, cuts 139, grows 63, room 162, gate waits 585 (2903 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 7: run two-way (own delays), B 149 KiB (in flight at most 166 KiB), queue 1.3 ms (srtt-min 4.4, way back 3.1, target 2.5), delivery 15.7 Mbit/s, cuts 141, grows 61, room 162, gate waits 604 (3005 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.04
+budget link 8: run two-way, B 161 KiB (in flight at most 171 KiB), queue 0.4 ms (srtt-min 3.5, way back 3.1, target 2.5), delivery 16.1 Mbit/s, cuts 133, grows 62, room 163, gate waits 595 (2931 ms)
+classes: light 6 / bulk 1 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 0; realtime 6 (steady 0)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.32
+quiet records link 1: 617/s, data 963 B a record, pad 1.7% (all: 46761 records, 45916980 B data, 200646 B pad, 497 tails held; 11382 writes, 11087 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.504% at a 5.7 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 201/s, data 434 B a record, pad 56.7% (all: 7217 records, 3050282 B data, 4038770 B pad, 35 tails held; 8635 writes, 3367 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.050% at a 2.7 ms queue over 10s; switches 1)
+classes: light 18 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 24 (steady 6)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.99
+quiet records link 3: 1251/s, data 990 B a record, pad 0.0% (all: 43418 records, 42688191 B data, 47667 B pad, 58 tails held; 9501 writes, 9417 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.208% at a 3.7 ms queue over 10s; switches 1)
+classes: light 4 / bulk 3 / unknown 0 per link; flips/min: light→bulk 150, bulk→light 0; realtime 4 (steady 0)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.61
+quiet records link 4: 850/s, data 958 B a record, pad 2.1% (all: 39248 records, 38512134 B data, 339074 B pad, 417 tails held; 12033 writes, 11634 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.334% at a 8.3 ms queue over 10s; switches 1)
+classes: light 3 / bulk 20 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.04
+budget link 5: run two-way (own delays), B 87 KiB (in flight at most 90 KiB), queue 0.2 ms (srtt-min 2.1, way back 1.9, target 2.5), delivery 8.6 Mbit/s, cuts 147, grows 139, room 67, gate waits 777 (3876 ms)
+classes: light 3 / bulk 25 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.07
+budget link 6: run two-way (own delays), B 119 KiB (in flight at most 118 KiB), queue 0.6 ms (srtt-min 9.8, way back 9.2, target 2.5), delivery 13.8 Mbit/s, cuts 151, grows 162, room 40, gate waits 762 (3618 ms)
+classes: light 3 / bulk 23 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.10
+budget link 7: run two-way, B 114 KiB (in flight at most 129 KiB), queue 3.8 ms (srtt-min 6.3, way back 2.5, target 2.5), delivery 13.1 Mbit/s, cuts 147, grows 150, room 56, gate waits 715 (3540 ms)
+classes: light 3 / bulk 12 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 8: run two-way (own delays), B 76 KiB (in flight at most 83 KiB), queue 1.6 ms (srtt-min 3.4, way back 1.8, target 2.5), delivery 7.8 Mbit/s, cuts 150, grows 138, room 67, gate waits 765 (3801 ms)
+== dba78618-ltad-2
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 680, on bulk (no quiet up) 0; moved to bulk 601 (not yet 37, no bulk link 0); exit hints 595; moved back 0; two-way kept 114; placed by users: 39 users moved, 5 to 6 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0);
+classes: light 16 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.00
+quiet records link 1: 238/s, data 792 B a record, pad 18.4% (all: 9561 records, 7769469 B data, 1665197 B pad, 138 tails held; 10356 writes, 7985 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.132% at a 11.8 ms queue over 10s; switches 1)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 118/s, data 448 B a record, pad 56.2% (all: 4319 records, 1904715 B data, 2335239 B pad, 9 tails held; 18604 writes, 15395 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.169% at a 4.0 ms queue over 10s; switches 0)
+classes: light 12 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 4)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.04
+quiet records link 3: 838/s, data 920 B a record, pad 5.8% (all: 31600 records, 29604860 B data, 1600470 B pad, 1199 tails held; 12934 writes, 10551 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.129% at a 4.7 ms queue over 10s; switches 1)
+classes: light 13 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 3)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.01
+quiet records link 4: 635/s, data 882 B a record, pad 11.1% (all: 25816 records, 22872023 B data, 2508033 B pad, 756 tails held; 14099 writes, 10637 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.138% at a 2.9 ms queue over 10s; switches 1)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.03
+budget link 5: run two-way, B 157 KiB (in flight at most 171 KiB), queue 5.2 ms (srtt-min 7.8, way back 2.6, target 2.5), delivery 17.6 Mbit/s, cuts 145, grows 88, room 124, gate waits 600 (2949 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 120; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.11
+budget link 6: run two-way (own delays), B 154 KiB (in flight at most 178 KiB), queue 9.9 ms (srtt-min 12.5, way back 2.6, target 2.5), delivery 14.6 Mbit/s, cuts 132, grows 54, room 171, gate waits 539 (2674 ms)
+classes: light 5 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.08
+budget link 7: run two-way, B 145 KiB (in flight at most 199 KiB), queue 14.6 ms (srtt-min 17.2, way back 2.6, target 2.5), delivery 18.6 Mbit/s, cuts 159, grows 85, room 113, gate waits 726 (3625 ms)
+classes: light 5 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 8: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 11 / unknown 0 per link; flips/min: light→bulk 420, bulk→light 0; realtime 6 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.79
+quiet records link 1: 1099/s, data 977 B a record, pad 0.7% (all: 44912 records, 44023228 B data, 278114 B pad, 325 tails held; 12412 writes, 11986 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.577% at a 17.7 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 169/s, data 514 B a record, pad 49.2% (all: 6270 records, 3211111 B data, 2962629 B pad, 65 tails held; 9095 writes, 4821 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.060% at a 2.9 ms queue over 10s; switches 1)
+classes: light 7 / bulk 9 / unknown 0 per link; flips/min: light→bulk 210, bulk→light 0; realtime 11 (steady 4)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.89
+quiet records link 3: 1170/s, data 992 B a record, pad 0.2% (all: 42127 records, 41251956 B data, 334296 B pad, 788 tails held; 12521 writes, 12015 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.344% at a 6.0 ms queue over 10s; switches 1)
+classes: light 8 / bulk 8 / unknown 0 per link; flips/min: light→bulk 300, bulk→light 0; realtime 11 (steady 3)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.94
+quiet records link 4: 1109/s, data 984 B a record, pad 0.2% (all: 41439 records, 40358778 B data, 739586 B pad, 640 tails held; 13588 writes, 12522 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.344% at a 6.1 ms queue over 10s; switches 1)
+classes: light 3 / bulk 24 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 120; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.14
+budget link 5: run one-way, B 104 KiB (in flight at most 117 KiB), queue 7.0 ms (srtt-min 7.0, way back 0.0, target 2.5), delivery 9.9 Mbit/s, cuts 160, grows 133, room 77, gate waits 684 (3398 ms)
+classes: light 3 / bulk 22 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 60; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.13
+budget link 6: run two-way (own delays), B 90 KiB (in flight at most 123 KiB), queue 3.0 ms (srtt-min 4.4, way back 1.4, target 2.5), delivery 11.4 Mbit/s, cuts 166, grows 131, room 74, gate waits 688 (3405 ms)
+classes: light 3 / bulk 13 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.09
+budget link 7: run two-way, B 82 KiB (in flight at most 124 KiB), queue 24.3 ms (srtt-min 26.8, way back 2.5, target 2.5), delivery 12.1 Mbit/s, cuts 184, grows 95, room 91, gate waits 742 (3698 ms)
+classes: light 3 / bulk 23 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 30; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.18
+budget link 8: run one-way, B 95 KiB (in flight at most 105 KiB), queue 3.8 ms (srtt-min 3.8, way back 0.0, target 2.5), delivery 12.0 Mbit/s, cuts 138, grows 227, room 2, gate waits 720 (3533 ms)
+== f4fb6861-ad-1
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 733, on bulk (no quiet up) 0; moved to bulk 583 (not yet 31, no bulk link 0); exit hints 588; moved back 0; two-way kept 7; placed by users: 40 users moved, 5 to 7 users a bulk link
+classes: light 14 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.01
+quiet records link 1: 463/s, data 830 B a record, pad 17.1% (all: 19146 records, 15978346 B data, 2921330 B pad, 266 tails held; 14087 writes, 10444 on a record already started)
+quiet cc link 1: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 14 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 1)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 2: 289/s, data 683 B a record, pad 28.4% (all: 11261 records, 8042456 B data, 3058870 B pad, 81 tails held; 14618 writes, 10820 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 14 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 1)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 511 B, blocked ratio 0.00
+quiet records link 3: 325/s, data 639 B a record, pad 32.6% (all: 12571 records, 8310603 B data, 3934923 B pad, 73 tails held; 16657 writes, 11926 on a record already started)
+quiet cc link 3: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 11 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 15 (steady 4)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.01
+quiet records link 4: 894/s, data 873 B a record, pad 12.7% (all: 34555 records, 29907275 B data, 4081925 B pad, 888 tails held; 17953 writes, 12711 on a record already started)
+quiet cc link 4: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.03
+budget link 5: run two-way, B 159 KiB (in flight at most 208 KiB), queue 0.9 ms (srtt-min 6.5, way back 5.6, target 2.5), delivery 18.1 Mbit/s, cuts 131, grows 128, room 97, gate waits 598 (2967 ms)
+classes: light 5 / bulk 9 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 6: run two-way (own delays), B 169 KiB (in flight at most 200 KiB), queue 1.5 ms (srtt-min 7.1, way back 5.6, target 2.5), delivery 19.6 Mbit/s, cuts 142, grows 103, room 111, gate waits 648 (3209 ms)
+classes: light 5 / bulk 9 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 180; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.06
+budget link 7: run two-way (own delays), B 126 KiB (in flight at most 191 KiB), queue 6.2 ms (srtt-min 11.8, way back 5.6, target 2.5), delivery 18.5 Mbit/s, cuts 144, grows 160, room 63, gate waits 749 (3578 ms)
+classes: light 5 / bulk 7 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 180; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 8: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 9 / unknown 0 per link; flips/min: light→bulk 360, bulk→light 0; realtime 7 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.95
+quiet records link 1: 1269/s, data 990 B a record, pad 0.1% (all: 45879 records, 44749297 B data, 395097 B pad, 421 tails held; 13780 writes, 13160 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.469% at a 6.9 ms queue over 10s; switches 1)
+classes: light 6 / bulk 7 / unknown 0 per link; flips/min: light→bulk 360, bulk→light 0; realtime 7 (steady 1)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.95
+quiet records link 2: 1192/s, data 1003 B a record, pad 0.2% (all: 42075 records, 41217886 B data, 591574 B pad, 514 tails held; 13983 writes, 13161 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.561% at a 8.3 ms queue over 10s; switches 1)
+classes: light 7 / bulk 5 / unknown 0 per link; flips/min: light→bulk 300, bulk→light 0; realtime 8 (steady 1)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.97
+quiet records link 3: 1157/s, data 977 B a record, pad 0.0% (all: 36767 records, 35620578 B data, 667424 B pad, 571 tails held; 14411 writes, 13460 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.235% at a 8.4 ms queue over 10s; switches 1)
+classes: light 6 / bulk 7 / unknown 0 per link; flips/min: light→bulk 240, bulk→light 0; realtime 10 (steady 4)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.85
+quiet records link 4: 1215/s, data 970 B a record, pad 0.8% (all: 42763 records, 40976761 B data, 1302467 B pad, 958 tails held; 15155 writes, 13262 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.275% at a 10.6 ms queue over 10s; switches 1)
+classes: light 3 / bulk 24 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 5: run two-way (own delays), B 60 KiB (in flight at most 70 KiB), queue 1.4 ms (srtt-min 10.0, way back 8.6, target 2.5), delivery 12.6 Mbit/s, cuts 155, grows 205, room 13, gate waits 970 (3423 ms)
+classes: light 3 / bulk 23 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 6: run two-way (own delays), B 44 KiB (in flight at most 49 KiB), queue 1.9 ms (srtt-min 9.6, way back 7.6, target 2.5), delivery 5.6 Mbit/s, cuts 163, grows 203, room 6, gate waits 815 (3999 ms)
+classes: light 3 / bulk 26 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 210; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.05
+budget link 7: run two-way (own delays), B 75 KiB (in flight at most 96 KiB), queue 4.1 ms (srtt-min 14.6, way back 10.6, target 2.5), delivery 11.0 Mbit/s, cuts 175, grows 181, room 19, gate waits 781 (3789 ms)
+classes: light 3 / bulk 34 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 210; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 8: run one-way, B 86 KiB (in flight at most 89 KiB), queue 0.0 ms (srtt-min 0.9, way back 1.5, target 2.5), delivery 12.6 Mbit/s, cuts 136, grows 238, room 0, gate waits 839 (3946 ms)
+== f4fb6861-ad-2
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 715, on bulk (no quiet up) 0; moved to bulk 601 (not yet 26, no bulk link 0); exit hints 610; moved back 0; two-way kept 10; placed by users: 41 users moved, 6 to 7 users a bulk link
+classes: light 13 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 0)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 1: 109/s, data 127 B a record, pad 87.3% (all: 4297 records, 742276 B data, 3443966 B pad, 20 tails held; 7166 writes, 3565 on a record already started)
+quiet cc link 1: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 8 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 4)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.01
+quiet records link 2: 876/s, data 872 B a record, pad 11.8% (all: 33898 records, 29900992 B data, 3607526 B pad, 292 tails held; 15069 writes, 9674 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 12 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.01
+quiet records link 3: 487/s, data 804 B a record, pad 18.5% (all: 19065 records, 15300297 B data, 3358793 B pad, 206 tails held; 15906 writes, 11652 on a record already started)
+quiet cc link 3: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 12 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 2)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.00
+quiet records link 4: 498/s, data 780 B a record, pad 22.4% (all: 21252 records, 16550793 B data, 4290439 B pad, 283 tails held; 19101 writes, 13814 on a record already started)
+quiet cc link 4: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 5: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 90; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 6: run two-way (own delays), B 157 KiB (in flight at most 165 KiB), queue 0.9 ms (srtt-min 1.2, way back 0.3, target 2.5), delivery 19.2 Mbit/s, cuts 144, grows 138, room 79, gate waits 633 (3090 ms)
+classes: light 5 / bulk 8 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 7: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.10
+budget link 8: run two-way (own delays), B 144 KiB (in flight at most 155 KiB), queue 2.0 ms (srtt-min 3.9, way back 1.9, target 2.5), delivery 20.8 Mbit/s, cuts 157, grows 110, room 106, gate waits 718 (3357 ms)
+classes: light 6 / bulk 5 / unknown 0 per link; flips/min: light→bulk 120, bulk→light 0; realtime 6 (steady 0)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.92
+quiet records link 1: 1230/s, data 973 B a record, pad 0.4% (all: 42102 records, 41352190 B data, 229882 B pad, 339 tails held; 13291 writes, 12998 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.459% at a 5.2 ms queue over 10s; switches 1)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 150, bulk→light 0; realtime 9 (steady 4)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.68
+quiet records link 2: 1237/s, data 956 B a record, pad 1.9% (all: 41408 records, 40310954 B data, 496514 B pad, 485 tails held; 12735 writes, 11953 on a record already started)
+quiet cc link 2: illinois (loss switch to illinois; resent 0.354% at a 13.2 ms queue over 10s; switches 1)
+classes: light 6 / bulk 6 / unknown 0 per link; flips/min: light→bulk 180, bulk→light 0; realtime 8 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.77
+quiet records link 3: 1122/s, data 981 B a record, pad 1.3% (all: 41981 records, 41055382 B data, 504204 B pad, 601 tails held; 13434 writes, 12717 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.578% at a 15.5 ms queue over 10s; switches 1)
+classes: light 7 / bulk 3 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 0; realtime 9 (steady 2)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.57
+quiet records link 4: 1034/s, data 951 B a record, pad 3.2% (all: 36670 records, 35337579 B data, 876691 B pad, 823 tails held; 14602 writes, 13368 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.312% at a 6.9 ms queue over 10s; switches 1)
+classes: light 3 / bulk 18 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 5: run one-way, B 77 KiB (in flight at most 81 KiB), queue 2.5 ms (srtt-min 2.5, way back 0.0, target 2.5), delivery 8.5 Mbit/s, cuts 140, grows 215, room 0, gate waits 785 (3915 ms)
+classes: light 3 / bulk 29 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 30; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 6: run two-way (own delays), B 80 KiB (in flight at most 82 KiB), queue 3.3 ms (srtt-min 7.7, way back 4.4, target 2.5), delivery 11.8 Mbit/s, cuts 167, grows 181, room 9, gate waits 819 (3755 ms)
+classes: light 3 / bulk 20 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 180; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 7: run one-way, B 89 KiB (in flight at most 99 KiB), queue 3.2 ms (srtt-min 3.3, way back 0.0, target 2.5), delivery 13.4 Mbit/s, cuts 178, grows 176, room 1, gate waits 846 (3995 ms)
+classes: light 3 / bulk 17 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 60; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.06
+budget link 8: run two-way (own delays), B 90 KiB (in flight at most 99 KiB), queue 2.2 ms (srtt-min 3.3, way back 1.1, target 2.5), delivery 11.4 Mbit/s, cuts 171, grows 178, room 4, gate waits 768 (3745 ms)
+== f4fb6861-fin2-1
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 782, on bulk (no quiet up) 0; moved to bulk 624 (not yet 33, no bulk link 0); exit hints 635; moved back 0; two-way kept 2; placed by users: 41 users moved, 6 to 7 users a bulk link
+classes: light 15 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 17 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 1: 521/s, data 762 B a record, pad 23.5% (all: 21556 records, 16772927 B data, 4545319 B pad, 114 tails held; 20587 writes, 14657 on a record already started)
+classes: light 15 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 17 (steady 2)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 511 B, blocked ratio 0.00
+quiet records link 2: 509/s, data 776 B a record, pad 19.8% (all: 19824 records, 15543591 B data, 4035663 B pad, 145 tails held; 18186 writes, 12707 on a record already started)
+classes: light 12 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 15 (steady 3)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.00
+quiet records link 3: 648/s, data 870 B a record, pad 10.9% (all: 25670 records, 22755776 B data, 2630014 B pad, 176 tails held; 13062 writes, 9007 on a record already started)
+classes: light 12 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 13 (steady 1)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 511 B, blocked ratio 0.00
+quiet records link 4: 302/s, data 648 B a record, pad 34.4% (all: 12147 records, 8449031 B data, 3625441 B pad, 88 tails held; 13556 writes, 9207 on a record already started)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 5: run two-way, B 152 KiB (in flight at most 150 KiB), queue 0.0 ms (srtt-min 2.4, way back 4.6, target 2.5), delivery 16.5 Mbit/s, cuts 154, grows 99, room 109, gate waits 625 (3076 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 6: run two-way, B 150 KiB (in flight at most 153 KiB), queue 0.9 ms (srtt-min 1.8, way back 0.9, target 2.5), delivery 19.2 Mbit/s, cuts 157, grows 98, room 111, gate waits 648 (3099 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 7: run two-way, B 133 KiB (in flight at most 147 KiB), queue 0.8 ms (srtt-min 1.6, way back 0.8, target 2.5), delivery 17.1 Mbit/s, cuts 151, grows 95, room 118, gate waits 631 (3090 ms)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 90; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 8: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 7 / bulk 4 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 9 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.52
+quiet records link 1: 1324/s, data 960 B a record, pad 3.2% (all: 41185 records, 39576277 B data, 1134573 B pad, 682 tails held; 15195 writes, 13535 on a record already started)
+classes: light 6 / bulk 5 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 0; realtime 9 (steady 3)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.64
+quiet records link 2: 1238/s, data 966 B a record, pad 2.3% (all: 43108 records, 41989653 B data, 766455 B pad, 616 tails held; 14397 writes, 13257 on a record already started)
+classes: light 3 / bulk 7 / unknown 0 per link; flips/min: light→bulk 420, bulk→light 0; realtime 6 (steady 3)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.94
+quiet records link 3: 1153/s, data 987 B a record, pad 0.2% (all: 44459 records, 43828086 B data, 199468 B pad, 351 tails held; 12446 writes, 12104 on a record already started)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 330, bulk→light 0; realtime 6 (steady 1)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.92
+quiet records link 4: 1510/s, data 984 B a record, pad 0.3% (all: 45439 records, 44625957 B data, 261627 B pad, 380 tails held; 13650 writes, 13294 on a record already started)
+classes: light 3 / bulk 17 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 30; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 5: run two-way (own delays), B 68 KiB (in flight at most 71 KiB), queue 2.0 ms (srtt-min 8.3, way back 6.3, target 2.5), delivery 14.3 Mbit/s, cuts 173, grows 168, room 11, gate waits 971 (3444 ms)
+classes: light 3 / bulk 35 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 150; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.00
+budget link 6: run two-way (own delays), B 46 KiB (in flight at most 51 KiB), queue 1.0 ms (srtt-min 4.1, way back 3.1, target 2.5), delivery 12.9 Mbit/s, cuts 194, grows 152, room 7, gate waits 1154 (3079 ms)
+classes: light 3 / bulk 18 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.03
+budget link 7: run two-way (own delays), B 75 KiB (in flight at most 77 KiB), queue 0.7 ms (srtt-min 6.4, way back 5.7, target 2.5), delivery 11.2 Mbit/s, cuts 178, grows 173, room 3, gate waits 795 (3678 ms)
+classes: light 3 / bulk 29 / unknown 0 per link; flips/min: light→bulk 180, bulk→light 150; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 8: run one-way, B 106 KiB (in flight at most 107 KiB), queue 2.2 ms (srtt-min 2.3, way back 0.1, target 2.5), delivery 17.5 Mbit/s, cuts 133, grows 220, room 4, gate waits 894 (3829 ms)
+== f4fb6861-fin2-2
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 732, on bulk (no quiet up) 0; moved to bulk 646 (not yet 23, no bulk link 0); exit hints 645; moved back 0; two-way kept 4; placed by users: 39 users moved, 5 to 7 users a bulk link
+classes: light 11 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 1: 304/s, data 673 B a record, pad 30.6% (all: 12439 records, 9077194 B data, 3268240 B pad, 77 tails held; 14974 writes, 10958 on a record already started)
+classes: light 9 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 11 (steady 2)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 2: 443/s, data 840 B a record, pad 15.3% (all: 18509 records, 15606989 B data, 2584235 B pad, 117 tails held; 11857 writes, 7912 on a record already started)
+classes: light 8 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 4)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.01
+quiet records link 3: 868/s, data 875 B a record, pad 11.1% (all: 34534 records, 30078375 B data, 3775579 B pad, 280 tails held; 17002 writes, 11695 on a record already started)
+classes: light 11 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 1)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 4: 375/s, data 587 B a record, pad 38.7% (all: 13788 records, 8574669 B data, 5165949 B pad, 114 tails held; 19631 writes, 13587 on a record already started)
+classes: light 5 / bulk 9 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 90; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 5: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 210; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+budget link 6: idle one-way, B 0 KiB (in flight at most 0 KiB), queue 0.0 ms (srtt-min 0.0, way back 0.0, target 2.5), delivery 0.0 Mbit/s, cuts 0, grows 0, room 0, gate waits 0 (0 ms)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.05
+budget link 7: run two-way (own delays), B 157 KiB (in flight at most 171 KiB), queue 5.6 ms (srtt-min 9.7, way back 4.1, target 2.5), delivery 18.7 Mbit/s, cuts 155, grows 121, room 91, gate waits 762 (3712 ms)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.04
+budget link 8: run two-way, B 172 KiB (in flight at most 187 KiB), queue 8.5 ms (srtt-min 11.0, way back 2.5, target 2.5), delivery 18.6 Mbit/s, cuts 159, grows 128, room 71, gate waits 604 (2971 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 150, bulk→light 0; realtime 6 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.85
+quiet records link 1: 1027/s, data 977 B a record, pad 0.5% (all: 39032 records, 38211870 B data, 238692 B pad, 383 tails held; 13051 writes, 12684 on a record already started)
+classes: light 4 / bulk 5 / unknown 0 per link; flips/min: light→bulk 240, bulk→light 0; realtime 6 (steady 3)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.83
+quiet records link 2: 1049/s, data 971 B a record, pad 0.7% (all: 39683 records, 39073320 B data, 101088 B pad, 268 tails held; 11786 writes, 11619 on a record already started)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 9 (steady 4)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.21
+quiet records link 3: 863/s, data 940 B a record, pad 6.2% (all: 37277 records, 36195948 B data, 716554 B pad, 959 tails held; 13021 writes, 11873 on a record already started)
+classes: light 8 / bulk 2 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 9 (steady 1)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.11
+quiet records link 4: 489/s, data 804 B a record, pad 18.6% (all: 31320 records, 29573460 B data, 1343340 B pad, 814 tails held; 14879 writes, 13119 on a record already started)
+classes: light 3 / bulk 28 / unknown 0 per link; flips/min: light→bulk 150, bulk→light 60; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 5: run one-way, B 89 KiB (in flight at most 94 KiB), queue 6.2 ms (srtt-min 6.3, way back 0.0, target 2.5), delivery 17.2 Mbit/s, cuts 129, grows 221, room 4, gate waits 922 (3671 ms)
+classes: light 3 / bulk 29 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 30; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.03
+budget link 6: run one-way, B 94 KiB (in flight at most 128 KiB), queue 7.6 ms (srtt-min 7.7, way back 0.0, target 2.5), delivery 12.3 Mbit/s, cuts 137, grows 218, room 2, gate waits 791 (3916 ms)
+classes: light 3 / bulk 21 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.09
+budget link 7: run two-way (own delays), B 92 KiB (in flight at most 102 KiB), queue 1.5 ms (srtt-min 3.8, way back 2.3, target 2.5), delivery 10.5 Mbit/s, cuts 157, grows 175, room 22, gate waits 755 (3744 ms)
+classes: light 3 / bulk 26 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.22
+budget link 8: run two-way, B 87 KiB (in flight at most 122 KiB), queue 1.6 ms (srtt-min 3.3, way back 1.6, target 2.5), delivery 12.6 Mbit/s, cuts 147, grows 180, room 28, gate waits 624 (3035 ms)
+== f4fb6861-ltad-1
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 703, on bulk (no quiet up) 0; moved to bulk 626 (not yet 26, no bulk link 0); exit hints 625; moved back 0; two-way kept 313; placed by users: 43 users moved, 6 to 7 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0);
+classes: light 14 / bulk 1 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 15 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 1023 B, blocked ratio 0.00
+quiet records link 1: 245/s, data 773 B a record, pad 20.3% (all: 10860 records, 8682266 B data, 1917634 B pad, 39 tails held; 11021 writes, 8393 on a record already started)
+quiet cc link 1: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 177/s, data 295 B a record, pad 69.9% (all: 6464 records, 1923345 B data, 4507209 B pad, 7 tails held; 18755 writes, 13618 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 16 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 17 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.00
+quiet records link 3: 428/s, data 870 B a record, pad 12.8% (all: 16816 records, 14763611 B data, 1974695 B pad, 198 tails held; 12072 writes, 9196 on a record already started)
+quiet cc link 3: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 14 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 19 (steady 5)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.12
+quiet records link 4: 1010/s, data 920 B a record, pad 6.1% (all: 39246 records, 36804067 B data, 2078239 B pad, 976 tails held; 12380 writes, 9242 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.106% at a 5.2 ms queue over 10s; switches 1)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 5: run two-way, B 114 KiB (in flight at most 139 KiB), queue 12.5 ms (srtt-min 15.0, way back 2.5, target 2.5), delivery 14.8 Mbit/s, cuts 169, grows 116, room 81, gate waits 583 (2882 ms)
+classes: light 5 / bulk 6 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.00
+budget link 6: run two-way (own delays), B 127 KiB (in flight at most 130 KiB), queue 1.8 ms (srtt-min 4.0, way back 2.2, target 2.5), delivery 14.0 Mbit/s, cuts 166, grows 145, room 59, gate waits 615 (3051 ms)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 7: run two-way (own delays), B 126 KiB (in flight at most 141 KiB), queue 6.1 ms (srtt-min 8.6, way back 2.6, target 2.5), delivery 16.7 Mbit/s, cuts 158, grows 117, room 83, gate waits 628 (2993 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 8: run two-way (own delays), B 118 KiB (in flight at most 142 KiB), queue 0.3 ms (srtt-min 2.5, way back 2.2, target 2.5), delivery 14.6 Mbit/s, cuts 151, grows 124, room 92, gate waits 619 (3049 ms)
+classes: light 4 / bulk 7 / unknown 0 per link; flips/min: light→bulk 240, bulk→light 0; realtime 5 (steady 1)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.82
+quiet records link 1: 1213/s, data 1012 B a record, pad 0.5% (all: 42891 records, 42299888 B data, 190138 B pad, 189 tails held; 12151 writes, 11856 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.591% at a 11.8 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 165/s, data 526 B a record, pad 48.6% (all: 6299 records, 3049760 B data, 3142004 B pad, 26 tails held; 8673 writes, 4368 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 4 / bulk 7 / unknown 0 per link; flips/min: light→bulk 240, bulk→light 0; realtime 6 (steady 2)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.87
+quiet records link 3: 1273/s, data 977 B a record, pad 0.6% (all: 46640 records, 45633015 B data, 366275 B pad, 300 tails held; 12294 writes, 11691 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 1.331% at a 19.2 ms queue over 10s; switches 1)
+classes: light 4 / bulk 5 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 0; realtime 9 (steady 5)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.57
+quiet records link 4: 1142/s, data 956 B a record, pad 3.2% (all: 42769 records, 41998408 B data, 324326 B pad, 421 tails held; 12251 writes, 11745 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.274% at a 9.1 ms queue over 10s; switches 1)
+classes: light 3 / bulk 19 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.05
+budget link 5: run two-way (own delays), B 88 KiB (in flight at most 103 KiB), queue 2.1 ms (srtt-min 7.7, way back 5.7, target 2.5), delivery 10.8 Mbit/s, cuts 185, grows 169, room 2, gate waits 756 (3737 ms)
+classes: light 3 / bulk 16 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 90; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.07
+budget link 6: run two-way (own delays), B 94 KiB (in flight at most 108 KiB), queue 1.6 ms (srtt-min 4.5, way back 3.1, target 2.5), delivery 12.5 Mbit/s, cuts 177, grows 165, room 12, gate waits 752 (3593 ms)
+classes: light 3 / bulk 20 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 90; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.03
+budget link 7: run two-way (own delays), B 86 KiB (in flight at most 90 KiB), queue 1.8 ms (srtt-min 13.5, way back 11.7, target 2.5), delivery 12.1 Mbit/s, cuts 182, grows 163, room 9, gate waits 806 (3757 ms)
+classes: light 3 / bulk 28 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.01
+budget link 8: run two-way (own delays), B 62 KiB (in flight at most 64 KiB), queue 1.9 ms (srtt-min 13.4, way back 11.5, target 2.5), delivery 12.0 Mbit/s, cuts 182, grows 155, room 14, gate waits 998 (3530 ms)
+== f4fb6861-ltad-2
+place: on; quiet 4 of 4 links, bulk 8 links; opened on quiet 690, on bulk (no quiet up) 0; moved to bulk 614 (not yet 19, no bulk link 0); exit hints 612; moved back 0; two-way kept 3; placed by users: 37 users moved, 4 to 8 users a bulk link; light quiet 1 (moved to it 8, back 0, opened on it 0); w
+classes: light 8 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 10 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.00
+quiet records link 1: 435/s, data 865 B a record, pad 11.0% (all: 16791 records, 14850369 B data, 1823007 B pad, 138 tails held; 12056 writes, 9484 on a record already started)
+quiet cc link 1: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 14 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 14 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 212/s, data 249 B a record, pad 73.4% (all: 7290 records, 1922369 B data, 5265921 B pad, 9 tails held; 18744 writes, 12926 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 8 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 11 (steady 3)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 2047 B, blocked ratio 0.01
+quiet records link 3: 643/s, data 873 B a record, pad 10.6% (all: 26167 records, 23071874 B data, 2694688 B pad, 214 tails held; 13299 writes, 9236 on a record already started)
+quiet cc link 3: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 8 / bulk 3 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 11 (steady 3)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 4095 B, blocked ratio 0.01
+quiet records link 4: 651/s, data 870 B a record, pad 11.9% (all: 26260 records, 22906030 B data, 2958350 B pad, 157 tails held; 13836 writes, 9498 on a record already started)
+quiet cc link 4: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 5 / bulk 5 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 30; realtime 5 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 5: run two-way (own delays), B 119 KiB (in flight at most 153 KiB), queue 0.4 ms (srtt-min 0.8, way back 0.4, target 2.5), delivery 13.1 Mbit/s, cuts 150, grows 118, room 96, gate waits 617 (3080 ms)
+classes: light 5 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.00
+budget link 6: run two-way, B 119 KiB (in flight at most 131 KiB), queue 0.5 ms (srtt-min 1.1, way back 0.5, target 2.5), delivery 14.1 Mbit/s, cuts 145, grows 126, room 93, gate waits 621 (3085 ms)
+classes: light 5 / bulk 2 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 60; realtime 5 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.08
+budget link 7: run two-way, B 106 KiB (in flight at most 139 KiB), queue 2.0 ms (srtt-min 4.0, way back 2.0, target 2.5), delivery 13.6 Mbit/s, cuts 151, grows 142, room 71, gate waits 555 (2756 ms)
+classes: light 5 / bulk 4 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 5 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.01
+budget link 8: run two-way, B 106 KiB (in flight at most 139 KiB), queue 0.4 ms (srtt-min 0.9, way back 0.4, target 2.5), delivery 15.3 Mbit/s, cuts 162, grows 121, room 83, gate waits 624 (3058 ms)
+classes: light 4 / bulk 5 / unknown 0 per link; flips/min: light→bulk 180, bulk→light 0; realtime 6 (steady 2)
+hostq link 1: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.70
+quiet records link 1: 1298/s, data 983 B a record, pad 1.3% (all: 43052 records, 42214255 B data, 262207 B pad, 295 tails held; 12212 writes, 11774 on a record already started)
+quiet cc link 1: illinois (loss switch to illinois; resent 0.406% at a 7.5 ms queue over 10s; switches 1)
+classes: light 12 / bulk 0 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 12 (steady 0)
+hostq link 2: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 0 B, blocked ratio 0.00
+quiet records link 2: 206/s, data 423 B a record, pad 56.4% (all: 7175 records, 3029765 B data, 4168785 B pad, 16 tails held; 8663 writes, 3323 on a record already started)
+quiet cc link 2: cubic (loss switch to illinois; resent 0.000% at a 0.0 ms queue over 10s; switches 0)
+classes: light 4 / bulk 5 / unknown 0 per link; flips/min: light→bulk 60, bulk→light 0; realtime 7 (steady 3)
+hostq link 3: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.58
+quiet records link 3: 1279/s, data 960 B a record, pad 2.1% (all: 43574 records, 42888816 B data, 307078 B pad, 352 tails held; 12354 writes, 11868 on a record already started)
+quiet cc link 3: illinois (loss switch to illinois; resent 0.586% at a 13.8 ms queue over 10s; switches 1)
+classes: light 4 / bulk 5 / unknown 0 per link; flips/min: light→bulk 90, bulk→light 0; realtime 7 (steady 3)
+hostq link 4: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.52
+quiet records link 4: 1276/s, data 967 B a record, pad 2.4% (all: 44546 records, 43688580 B data, 311426 B pad, 482 tails held; 12847 writes, 12397 on a record already started)
+quiet cc link 4: illinois (loss switch to illinois; resent 0.378% at a 11.5 ms queue over 10s; switches 1)
+classes: light 3 / bulk 30 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 5: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 8191 B, blocked ratio 0.02
+budget link 5: run two-way (own delays), B 83 KiB (in flight at most 95 KiB), queue 0.7 ms (srtt-min 3.1, way back 2.4, target 2.5), delivery 10.5 Mbit/s, cuts 158, grows 180, room 17, gate waits 823 (3996 ms)
+classes: light 3 / bulk 26 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 3 (steady 0)
+hostq link 6: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.16
+budget link 6: run two-way (own delays), B 79 KiB (in flight at most 79 KiB), queue 0.8 ms (srtt-min 4.2, way back 3.4, target 2.5), delivery 14.1 Mbit/s, cuts 160, grows 178, room 12, gate waits 903 (2944 ms)
+classes: light 3 / bulk 30 / unknown 0 per link; flips/min: light→bulk 0, bulk→light 0; realtime 3 (steady 0)
+hostq link 7: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.08
+budget link 7: run two-way (own delays), B 89 KiB (in flight at most 105 KiB), queue 0.4 ms (srtt-min 3.1, way back 2.7, target 2.5), delivery 11.8 Mbit/s, cuts 166, grows 177, room 12, gate waits 737 (3627 ms)
+classes: light 3 / bulk 14 / unknown 0 per link; flips/min: light→bulk 30, bulk→light 0; realtime 3 (steady 0)
+hostq link 8: lowat 11.3 KiB, gate on (cap 11584 B), notsent p95 16383 B, blocked ratio 0.04
+budget link 8: run two-way (own delays), B 97 KiB (in flight at most 101 KiB), queue 0.8 ms (srtt-min 2.8, way back 2.0, target 2.5), delivery 11.2 Mbit/s, cuts 158, grows 172, room 23, gate waits 762 (3777 ms)

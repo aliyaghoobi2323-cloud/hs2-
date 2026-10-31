@@ -1,0 +1,10 @@
+# S9 (3 reps, TRACE_SS=1): at N=1 under random loss 0.03 / 0.1 / 0.3 % (home, RTT 75): fwl (Illinois + light QUIET + wait) against fwlg (+ OWD_GUARD_BULK=0: a BULK link's own delays read under resends; S7: the downloads 81 to 84 Mbit/s where the budget cut them to 35 to 81) and fwlgr (+ RT_LOOSE=1)
+N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlg
+N=1 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlgr
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlg
+N=1 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlgr
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlg
+N=1 RATE=100 RTT=75 LOSS=0.3 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwlgr
