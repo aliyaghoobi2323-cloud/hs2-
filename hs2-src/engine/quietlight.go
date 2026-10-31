@@ -55,11 +55,11 @@ import (
 // one instead: the games went from +91 to +6 ms, but the web's p95 at N=8
 // from 8140 to 11023 ms (three QUIET flows at the fq_codel bottleneck for
 // the calls, the web and every start, not four).
-var QuietLight = newTuneInt(0)
+var QuietLight = newTuneInt(2) // the default since R1 round 5
 
 // QuietWaitMs (HS2_TUNE_QUIET_WAIT, ms; 0: none): how long a new connection
 // waits for a QUIET link that was up within quietWaitRecent.
-var QuietWaitMs = newTuneInt(0)
+var QuietWaitMs = newTuneInt(1500) // the default since R1 round 5
 
 const (
 	// quietLightMax: the most links of a pool that keeps a light QUIET link

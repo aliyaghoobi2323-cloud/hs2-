@@ -1,0 +1,6 @@
+# RH2 (3 reps): B2 at N=8: the policer on every QUIET link connection (production: its busiest link); R2-12: the QUIET link reset 11 times, 5 s apart from s 5, N=1, classes after (fin2, r5)
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=prod
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 QPOL=1 QPOL_AT=5 WARM=30 DUR=20 BIN=r5
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=5 KILLREP=11 KILLGAP=5 WARM=60 DUR=20 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 KILLQ=5 KILLREP=11 KILLGAP=5 WARM=60 DUR=20 BIN=r5

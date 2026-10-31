@@ -46,7 +46,7 @@ import (
 // one) is the path's, not a link's, and the set keeps what it has.
 
 // QuietReplace (HS2_TUNE_QUIET_REPLACE; 0: off): replace a slow QUIET link.
-var QuietReplace = newTuneInt(0)
+var QuietReplace = newTuneInt(1) // the default since R1 round 5
 
 const (
 	quietSlowTicks = 3                // pool ticks in a row (healthTick each: 6 s)

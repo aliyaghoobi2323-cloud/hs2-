@@ -316,7 +316,7 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 		// user's probe that moment, 198 of them a padded record each; the
 		// first of the list the kernel takes (quietcc.go: Illinois keeps
 		// its window on a path that loses packets at random)
-		quietCC = setQuietCC(tc, quietCCList())
+		quietCC = setQuietCC(tc, QuietCC)
 	}
 	if server {
 		sess, err = smux.Server(w, cfg)
