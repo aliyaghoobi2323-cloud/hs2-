@@ -1,0 +1,5 @@
+== go test -race -count=5 -timeout 20m -run ^(TestProxy.*|TestQuietCountsExtra|TestUDPUserPortRepliesFromTheAddressUsed|TestWcoreFix.*)$ ./engine (in hs2-src): rc 0, 38 s
+== flaky-race
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   pass     37.6  110/0/0                0/0/0                 
+TOTAL top-level: 110 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)

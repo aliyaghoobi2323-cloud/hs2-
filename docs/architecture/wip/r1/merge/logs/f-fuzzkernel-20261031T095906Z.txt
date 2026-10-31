@@ -1,0 +1,15 @@
+== f-fuzzkernel: /root/rmerge/tools/blocks.sh fuzzkernel (2026-10-31T09:59:06Z)
+== fuzzkernel on e4783fe (R1 ادغام: TestUserTagNoAlloc زیر -race اجرا نمی‌شود) 2026-10-31T10:03:44Z
+go version go1.27.3 linux/amd64
+/root/rmerge/step5/fuzz-e4783fe-20261031T100344Z.txt
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	61.049s
+   FuzzSplitTCP: rc 0, 61 s
+== exit 0
+-- fuzz.sh rc 0
+/root/rmerge/step5/kernel-e4783fe-20261031T101709Z.txt
+== 3. bundle: /root/rmerge/step5/kernel-e4783fe-20261031T101709Z-bundle (37M); on a 5.10 host: copy the directory and run ./run.sh
+== 4. no 5.10 guest here (KERNEL_VM_CMD unset): see README.fa.md
+== exit 0
+-- kernel.sh rc 0
+== done fuzzkernel 2026-10-31T10:17:29Z
+== end rc=0 2026-10-31T10:17:29Z, 1103 s

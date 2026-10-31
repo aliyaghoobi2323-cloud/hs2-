@@ -1,0 +1,34 @@
+== start 2026-10-29T16:12:41+00:00
+ 16:12:41 up 2 days,  5:07, 11 users,  load average: 2.57, 3.49, 4.54
+TCP: inuse 1485 orphan 1 tw 1036 alloc 2382 mem 0
+TCPMemoryPressures 0
+top - 16:12:42 up 2 days,  5:07, 11 users,  load average: 2.57, 3.49, 4.54
+Tasks: 288 total,   1 running, 286 sleeping,   0 stopped,   1 zombie
+%Cpu(s):  2.6 us,  6.5 sy,  1.2 ni, 87.8 id,  0.0 wa,  0.0 hi,  1.8 si,  0.0 st 
+MiB Mem :  23456.9 total,   3102.7 free,   1807.1 used,  18963.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21649.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1152917 root      20   0 1567300 261576  29360 S  51.9   1.1   1:37.26 xray-linux-amd6
+    992 root      20   0 1477216 207528  10496 S  44.2   0.9     15,36 hs2
+1172148 root      39  19       0      0      0 Z   5.8   0.0   0:00.03 bash
+1171950 root      20   0   11908   6040   3884 R   3.8   0.0   0:00.03 top
+     54 root      20   0       0      0      0 S   1.9   0.0   6:30.09 ksoftirqd/6
+    205 root       0 -20       0      0      0 I   1.9   0.0   0:01.44 kworker/2:1H-kblockd
+1161615 root      39  19 2318032 142440  19788 S   1.9   0.6   0:09.58 engine.test
+== end 2026-10-29T16:16:47+00:00
+ 16:16:47 up 2 days,  5:11, 13 users,  load average: 3.99, 3.87, 4.45
+TCP: inuse 1434 orphan 2 tw 786 alloc 2294 mem 0
+TCPMemoryPressures 0
+top - 16:16:47 up 2 days,  5:11, 13 users,  load average: 3.99, 3.87, 4.45
+Tasks: 294 total,   2 running, 292 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  5.3 us,  7.8 sy,  4.9 ni, 79.5 id,  0.0 wa,  0.0 hi,  2.6 si,  0.0 st 
+MiB Mem :  23456.9 total,   3595.8 free,   1611.7 used,  18666.0 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21845.3 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1152917 root      20   0 1567900 277988  29360 S  69.2   1.2   3:20.65 xray-linux-amd6
+    992 root      20   0 1477216 178300  10496 S  55.8   0.7     15,37 hs2
+1203407 root      39  19 1863112  18032  10816 S  40.4   0.1   0:01.21 tlscarrier.test
+1193387 root      39  19 1943304  19412  12672 S   5.8   0.1   0:02.10 engine.test
+1203656 root      20   0   11908   6048   3888 R   5.8   0.0   0:00.05 top
+1203790 root      39  19   10636   7052   3508 R   3.8   0.0   0:00.02 bash
+     17 root      20   0       0      0      0 I   1.9   0.0   4:57.66 rcu_preempt

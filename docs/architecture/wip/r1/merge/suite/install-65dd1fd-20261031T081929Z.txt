@@ -1,0 +1,258 @@
+== install-cert_test.sh-65dd1fd-20261031T081929Z.txt
+PASS standalone, test: certbot renew --dry-run on the lineage
+PASS standalone, renew now: certbot renew --force-renewal
+PASS standalone, port 80 taken: warned, and the dry run (the real test) still runs
+PASS standalone, port 80 taken, Renew now, answer N: certbot NOT run
+PASS standalone, port 80 taken, Renew now, answer y: certbot runs
+PASS port 80 taken but a pre_hook frees it: the dry run DOES run
+PASS manual WITH a hook: offers the automatic test (dry run), not a by-hand renewal
+PASS own certificate: explains how to replace it, runs no certbot
+PASS dial side: no c) entry, c is just an invalid choice
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-cover_seed_test.sh-65dd1fd-20261031T081929Z.txt
+PASS migrate: second run leaves the seed unchanged
+PASS migrate(no-comma): a hand-written builtin (last field) gets a seed
+PASS migrate(no-comma): result is valid JSON
+PASS migrate(no-comma): success message printed only because it worked
+PASS migrate(no-comma): idempotent (no second seed, no re-print)
+PASS migrate: a custom backend_addr gets NO cover_seed
+PASS migrate: a 'builtin.example.com' host is NOT treated as the builtin cover
+PASS migrate: an existing seed is not duplicated
+PASS migrate: an existing seed is unchanged
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-dgtun_wildcard_test.sh-65dd1fd-20261031T081929Z.txt
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+PASS exit started despite a panel on 0.0.0.0:8443 (no bind conflict)
+PASS iran:8443 accepts user connections
+PASS a user on iran:8443 reaches the panel through dgtun ("mbps":1388.7318954995646)
+OK: dgtun wildcard-panel regression passed
+hs2-src/install/tests/dgtun_wildcard_test.sh: line 28:   189 Killed                  ip netns exec $KH "$PROBE" -server -listen 0.0.0.0:$PORT > "$W/panel.log" 2>&1
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-helpers_test.sh-65dd1fd-20261031T081929Z.txt
+PASS prune_backups: says what it removed
+PASS prune_backups: other files in the folder are not touched
+PASS prune_backups: HS2_KEEP_BACKUPS=0 disables pruning
+PASS prune_backups: no backup folder is fine under set -e
+PASS the warm record of /etc/hs2/config.json is /run/hs2/etc-hs2-config.json.warm
+PASS remove_tunnel deletes the tunnel's warm record with its status file
+PASS uninstall clears /run/hs2 (warm records, status files, the ping-guard folder)
+PASS remove_tunnel deletes the unit's systemd drop-in folder (a real-server report: an empty hs2.service.d stayed)
+PASS uninstall asks before removing the program and hs2-menu (default: keep)
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-hs2-safe-apply_test.sh-65dd1fd-20261031T081929Z.txt
+PASS dropins: after a revert the drop-in directory is exactly what it was (files, modes, times, contents)
+PASS dropins: a unit that had none has none again after a revert
+PASS dropins: an empty staged dropin.conf removes the test drop-in (the others stay)
+PASS mtcp (no tun): REFUSED unless HS2_SAFE_PEER says what to ping; nothing applied
+PASS HS2_SAFE_PEER: pinged instead of peer_ip
+PASS a staged config's peer_ip is the one pinged
+PASS a unit that is not an hs2 tunnel is refused
+PASS install.sh carries scripts/hs2-safe-apply byte for byte
+PASS install.sh installs it (mode 755) with the menu
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-install_link_test.sh-65dd1fd-20261031T081929Z.txt
+PASS tunnel menu l: the link
+PASS tunnel menu l: not saved when declined (config untouched, no .prev)
+PASS main menu: 9) Show a tunnel's hs2:// link → the link
+PASS menu: a stored address no longer on this server — the link, and a warning about it
+PASS menu, older binary: says to upgrade, no link
+PASS no root: the installer says so
+PASS no root: the link screen refuses with a clear message, no link
+PASS no root: hs2 link exits 4 and says root is needed
+40 setups
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-kharej_stats_test.sh-65dd1fd-20261031T081929Z.txt
+PASS pattern, Iran: unchanged
+PASS monitor, Kharej (new): users line
+PASS monitor, Kharej (new): speed and peak
+PASS monitor, Kharej (older hs2): counted on the Iran server
+PASS monitor, Kharej (older hs2): no 0 users / 0 speed
+PASS monitor, Iran: users line
+PASS monitor, Iran: refill line
+PASS monitor, Iran: no refill line when there is none
+OK: kharej stats views
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-link_ceiling_test.sh-65dd1fd-20261031T081929Z.txt
+PASS fixed 32 on a 64 box: told, offered auto
+PASS typing auto writes 0
+PASS min 40 + auto from fixed 32: max set FIRST (binary accepts every step)
+PASS a number is still a fixed ceiling
+PASS garbage max refused, nothing written
+PASS min above a fixed max refused
+PASS running tunnel: the daemon's exact ceiling line is shown
+PASS direct Kharej: still shows the live ceiling, writes nothing
+PASS a stale status file is not shown as live
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-migrate_test.sh-65dd1fd-20261031T081929Z.txt
+PASS fixed 8/16/8 pool migrated to 2/32/8
+PASS config is still valid JSON
+PASS renew_hook reloads every hs2 tunnel (in place)
+PASS renew_before_expiry is top-level (before [renewalparams])
+PASS the panel's own lineage is left untouched
+PASS old static sysctl file removed
+PASS second run succeeds and is a no-op
+PASS old 7-day renewal window moved to 30 days in place
+PASS no certbot lineages at all: still continues
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-multi_ip_test.sh-65dd1fd-20261031T081929Z.txt
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+PASS first_public_ip succeeds on a 6-IP server (no SIGPIPE abort)
+PASS first_public_ip returns the first address
+PASS local_ips lists all six public IPs
+PASS local_ips excludes lo
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-multi_tunnel_test.py-65dd1fd-20261031T081929Z.txt
+PASS 10 status shows every tunnel
+PASS 10 status says which tunnels really reach the other server (dead ones NOT connected)
+PASS 10 uninstall (ir): no icmp reply rule left in the kernel
+PASS 10 uninstall (ir): every tunnel removed, no process, no tun interface
+PASS 10 uninstall (kh): no icmp reply rule left in the kernel
+PASS 10 uninstall (kh): every tunnel removed, no process, no tun interface
+PASS 11 an older 11-field link still parses: default name hs2 on 10.77.0.0/30
+
+OK: 0 failure(s)
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-ports_menu_test.sh-65dd1fd-20261031T081929Z.txt
+PASS setup: port_map written as entered, and the binary accepts the config
+PASS setup: says where every other port goes
+PASS setup: re-asks on a bad port, a duplicate and a bad target
+PASS setup: targets the binary would refuse are re-asked at the prompt
+PASS setup: only commas = none (never an empty port_map)
+PASS setup: Enter = none (expose only, exactly as before)
+PASS setup: an older binary is not asked, and says why
+PASS every kharej template writes the port_map fragment (6)
+PASS every kharej panel question asks the targets too (6)
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-release_files_test.sh-65dd1fd-20261031T081929Z.txt
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+PASS root install.sh is identical to hs2-src/install/install.sh
+PASS hs2-linux-amd64.sha256 exists
+PASS hs2-linux-amd64.sha256 matches the binary
+PASS install.sh.sha256 exists
+PASS install.sh.sha256 matches install.sh
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-tm_edit_test.sh-65dd1fd-20261031T081929Z.txt
+PASS EDITOR='*' is never glob-expanded into a command (even where it would match 'vi')
+PASS leading space: label is the editor that actually opens
+PASS startup sweep removes a dead session's edit dir and an old-style file
+PASS startup sweep leaves a LIVE session's edit dir alone
+PASS startup sweep removes a leftover whose PID was reused by a newer process
+PASS …and sweeps the live one once that session is gone
+PASS real vim (:wq): change applied, no swap/backup left
+PASS real vim (:cq): change NOT applied, nothing left
+PASS real vim killed + session dropped mid-edit: config intact, no swap/copy left
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-tm_tune_links_test.sh-65dd1fd-20261031T081929Z.txt
+PASS dgtun, Kharej reverse: told it only enforces limits; values written
+PASS dgtun, Kharej direct: NO effect here, nothing written
+PASS tls: always ONE link, nothing written
+PASS udp: single session, nothing written
+PASS auto: single session, nothing written
+PASS noise: single session, nothing written
+PASS reality: single session, nothing written
+PASS icmp auto: names the icmp ceiling, no 300-carrier note
+PASS icmp fixed 40: told auto gives 8 over icmp
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-tun_ports_test.py-65dd1fd-20261031T081929Z.txt
+[1;33m!  · its tunnel port is open in its firewall / provider panel, and the dial-out IP here is not filtered.[0m
+[1;34m→ hs2 stays installed and keeps retrying — if the path opens later it connects by itself.[0m
+[1;34m→ Last log:[0m
+[0;36m────────────────────────────────────────────[0m
+PASS blocked gre: once the path passes GRE the running service connects by itself  - VERIFY_RC=0
+[1;34m→ Checking that the tunnel really reaches the other server (up to 30 s)…[0m
+[1;32m✓ Tunnel is UP — the other server answered through it.[0m
+
+OK: 0 failure(s)
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+== install-udp_ports_test.sh-65dd1fd-20261031T081929Z.txt
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+PASS a free UDP port is not named
+PASS a UDP port another program holds is named
+PASS only the held one of two is named, and setup goes on (set -e)
+PASS all four Iran branches that write "udp" check the user ports' UDP (found 4)
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state

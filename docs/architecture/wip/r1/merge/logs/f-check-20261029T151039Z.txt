@@ -1,0 +1,12 @@
+== f-check: /root/rmerge/tools/blocks.sh check (2026-10-29T15:10:39Z)
+== check on 2b37e5b (R1 ادغام: چهار اصلاح آزمون به خواست سرپرست — درگاه ) 2026-10-29T15:10:39Z
+go version go1.27.3 linux/amd64
+-- vet/fmt: 2 of 2 make targets rc 0; rigload vet rc 0
+-- /run/hs2/icmp-echo-ignore before: 2026-10-29 14:54:27.896420338 +0000
+-- test rc 1 950 s: TOTAL top-level: 1047 pass, 1 fail, 30 skip; subtests: 524 pass, 1 fail, 0 skip; packages 16 (1 not pass)
+-- /run/hs2/icmp-echo-ignore after: 2026-10-29 14:54:27.896420338 +0000
+-- smux rc 0 63 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- rigload rc 0 19 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- ana_test.py rc 0: OK
+== done check 2026-10-29T15:27:52Z
+== end rc=0 2026-10-29T15:27:52Z, 1033 s

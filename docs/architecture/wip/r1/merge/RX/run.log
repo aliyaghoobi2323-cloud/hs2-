@@ -1,0 +1,6 @@
+11:11:03 plan /root/rmerge/RX/plan.txt: 2 runs
+11:11:04 start a0318ff0-m-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=50 MIX=gamer_vs_dl DUR=20 BIN=m) load 2.72 waited 0s
+11:14:09 done a0318ff0-m-1 ok=1 
+11:14:10 start f4fb6861-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 1.22 waited 0s
+11:17:26 done f4fb6861-m-1 ok=1 
+11:17:26 done /root/rmerge/RX/plan.txt

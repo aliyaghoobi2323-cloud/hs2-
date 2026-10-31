@@ -1,0 +1,13 @@
+== f-flakes: /root/rmerge/tools/blocks.sh flakes (2026-10-31T10:42:44Z)
+== flakes on e4783fe (R1 ادغام: TestUserTagNoAlloc زیر -race اجرا نمی‌شود) 2026-10-31T10:42:44Z
+go version go1.27.3 linux/amd64
+-- flaky-dgports rc 0 1 s: TOTAL top-level: 30 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-exitreason rc 0 124 s: TOTAL top-level: 5 pass, 0 fail, 0 skip; subtests: 20 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-wildcard rc 0 1 s: TOTAL top-level: 10 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-routes rc 0 16 s: TOTAL top-level: 20 pass, 0 fail, 0 skip; subtests: 40 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-udpreply rc 0 7 s: TOTAL top-level: 20 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-moveback rc 0 111 s: TOTAL top-level: 10 pass, 0 fail, 0 skip; subtests: 20 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-p10 rc 0 241 s: TOTAL top-level: 6 pass, 0 fail, 0 skip; subtests: 24 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-race rc 0 37 s: TOTAL top-level: 110 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+== done flakes 2026-10-31T10:51:42Z
+== end rc=0 2026-10-31T10:51:42Z, 538 s

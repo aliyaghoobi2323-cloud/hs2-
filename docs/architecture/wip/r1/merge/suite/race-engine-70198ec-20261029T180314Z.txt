@@ -1,0 +1,5 @@
+== go test -race -count=1 -timeout 60m ./engine (in hs2-src): rc 0, 1358 s
+== race-engine
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   pass   1357.0  738/0/29               190/0/0               
+TOTAL top-level: 738 pass, 0 fail, 29 skip; subtests: 190 pass, 0 fail, 0 skip; packages 1 (0 not pass)

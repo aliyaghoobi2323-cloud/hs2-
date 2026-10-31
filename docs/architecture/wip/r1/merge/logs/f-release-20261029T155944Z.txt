@@ -1,0 +1,33 @@
+== f-release: /root/rmerge/tools/blocks.sh release (2026-10-29T15:59:44Z)
+== release on 4133690 (R1 ادغام: دو لرزان CI قطعی شد — TestMoveBackLight/off و ثانیهٔ ) 2026-10-29T16:13:04Z
+go version go1.27.3 linux/amd64
+mkdir -p /root/rmerge/raw-dist-4133690
+for a in amd64 386 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags="-s -w" -o /root/rmerge/raw-dist-4133690/hs2-linux-$a ./cmd/hs2 || exit 1; done
+cd /root/rmerge/raw-dist-4133690 && sha256sum hs2-linux-* > SHA256SUMS && cat SHA256SUMS
+84c9a44465bacb7cf3a59a137caa376a0d8c10ce673176b312e8c2f797d845b2  hs2-linux-386
+db77c1a070bc238975e5e261037c004ebdac19a6c8a9b7e82bbc75077f2f6653  hs2-linux-amd64
+0522e682b2a5b4d9009c00be1d16c74ab5013272d98486159f100c5fd2fafa65  hs2-linux-arm64
+-rwxr-xr-x 1 root root 12570784 Oct 29 16:13 hs2-linux-386
+-rwxr-xr-x 1 root root 14237856 Oct 29 16:13 hs2-linux-amd64
+-rwxr-xr-x 1 root root 12124320 Oct 29 16:13 hs2-linux-arm64
+== hs2-linux-386
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=386
+	build	vcs.revision=413369066d7c7f35f6f09db50255988868756aa9
+	build	vcs.modified=false
+== hs2-linux-amd64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	vcs.revision=413369066d7c7f35f6f09db50255988868756aa9
+	build	vcs.modified=false
+== hs2-linux-arm64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	vcs.revision=413369066d7c7f35f6f09db50255988868756aa9
+	build	vcs.modified=false
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build 413369066d7c 2026-10-29]
+== done release 2026-10-29T16:13:06Z
+== end rc=0 2026-10-29T16:13:06Z, 802 s

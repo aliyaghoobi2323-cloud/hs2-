@@ -1,0 +1,3 @@
+fin2 /root/r4j/bins/hs2-fin2
+mr0 /root/rmerge/raw-bins/hs2-m-87cee6c HS2_TUNE_TWOWAY_RATIO=0
+mo0 /root/rmerge/raw-bins/hs2-m-87cee6c HS2_TUNE_OWD_IDLE=0

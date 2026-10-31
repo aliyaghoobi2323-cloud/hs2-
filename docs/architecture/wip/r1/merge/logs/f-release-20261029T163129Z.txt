@@ -1,0 +1,33 @@
+== f-release: /root/rmerge/tools/blocks.sh release (2026-10-29T16:31:29Z)
+== release on 93bfdbb (R1 ادغام: جدول کلیدهای اپراتور در README.md و SWITCHES.fa.md (ب) 2026-10-29T16:33:35Z
+go version go1.27.3 linux/amd64
+mkdir -p /root/rmerge/raw-dist-93bfdbb
+for a in amd64 386 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags="-s -w" -o /root/rmerge/raw-dist-93bfdbb/hs2-linux-$a ./cmd/hs2 || exit 1; done
+cd /root/rmerge/raw-dist-93bfdbb && sha256sum hs2-linux-* > SHA256SUMS && cat SHA256SUMS
+f36437159f705e723fce1d5ca544c3630c249c940d2264f7451251d02f2b9e05  hs2-linux-386
+4287fab362c63cc8bfe3c56596a7bd6b5ad519b480afc671cac6e072edb110b5  hs2-linux-amd64
+8c82b8d9eb757fe36dc1d800fc05fe7de5a407abd652541e8a76e6b7fa2c37fd  hs2-linux-arm64
+-rwxr-xr-x 1 root root 12570784 Oct 29 16:33 hs2-linux-386
+-rwxr-xr-x 1 root root 14246048 Oct 29 16:33 hs2-linux-amd64
+-rwxr-xr-x 1 root root 12124320 Oct 29 16:33 hs2-linux-arm64
+== hs2-linux-386
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=386
+	build	vcs.revision=93bfdbb674b9bc396d54f5044b6c1a8c959885ac
+	build	vcs.modified=false
+== hs2-linux-amd64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	vcs.revision=93bfdbb674b9bc396d54f5044b6c1a8c959885ac
+	build	vcs.modified=false
+== hs2-linux-arm64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	vcs.revision=93bfdbb674b9bc396d54f5044b6c1a8c959885ac
+	build	vcs.modified=false
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build 93bfdbb674b9 2026-10-29]
+== done release 2026-10-29T16:33:42Z
+== end rc=0 2026-10-29T16:33:42Z, 133 s

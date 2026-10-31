@@ -1,0 +1,23 @@
+== f-install: /root/rmerge/tools/blocks.sh install (2026-10-31T08:00:46Z)
+== install on 65dd1fd (R1 ادغام: توضیح angleNewHeavy با سنجهٔ RQ درست شد (فقط توضی�) 2026-10-31T08:19:29Z
+go version go1.27.3 linux/amd64
+-- install cert_test.sh: rc 0, 9 s; 40 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install cover_seed_test.sh: rc 0, 1 s; 17 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install dgtun_wildcard_test.sh: rc 0, 13 s; 3 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install helpers_test.sh: rc 0, 2 s; 19 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install kharej_stats_test.sh: rc 0, 6 s; 10 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install link_ceiling_test.sh: rc 0, 6 s; 34 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install migrate_test.sh: rc 0, 0 s; 10 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install multi_ip_test.sh: rc 0, 1 s; 4 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install ports_menu_test.sh: rc 0, 14 s; 38 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install release_files_test.sh: rc 0, 0 s; 5 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install tm_edit_test.sh: rc 0, 5 s; 27 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install tm_tune_links_test.sh: rc 0, 6 s; 19 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install udp_ports_test.sh: rc 0, 0 s; 4 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install multi_tunnel_test.py: rc 0, 565 s; 54 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install tun_ports_test.py: rc 0, 181 s; 137 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install hs2-safe-apply_test.sh: rc 0, 12 s; 31 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install install_link_test.sh: rc 0, 33 s; 227 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install: 17 pass, 0 fail
+== done install 2026-10-31T08:33:43Z
+== end rc=0 2026-10-31T08:33:43Z, 1977 s

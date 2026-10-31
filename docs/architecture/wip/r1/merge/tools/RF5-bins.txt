@@ -1,0 +1,1 @@
+fin2 /root/r4j/bins/hs2-fin2

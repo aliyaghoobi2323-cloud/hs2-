@@ -1,0 +1,8 @@
+04:53:47 plan /root/rmerge/RL/plan.txt: 3 runs
+04:53:49 start 0a819aa3-m-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 DUR=30 UP=0 BIN=m) load 8.22 waited 0s
+04:54:55 done 0a819aa3-m-1 ok=1 
+04:54:57 start 3c28078d-m-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 DUR=30 UP=0 BIN=m) load 7.91 waited 0s
+04:56:25 done 3c28078d-m-1 ok=1 
+04:56:27 start a076048b-m-1 (N=600 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=500 MIX=s5 DN=499 DUR=30 PANEL_SNDBUF=1048576 UP=0 BIN=m) load 8.64 waited 0s
+04:58:26 done a076048b-m-1 ok=1 
+04:58:26 done /root/rmerge/RL/plan.txt

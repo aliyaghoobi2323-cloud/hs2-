@@ -1,0 +1,11 @@
+== f-arm7: /root/rmerge/tools/blocks.sh arm7 (2026-10-29T19:10:26Z)
+== arm7 on 70198ec (R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حر�) 2026-10-29T19:14:34Z
+go version go1.27.3 linux/amd64
+/root/rmerge/step5/arm7-70198ec-20261029T191434Z.txt
+   skip TestRed2ChaosMoreSeeds: HS2_RED2_SEEDS not set
+   PASS; 80 s
+== exit 0
+-- arm7.sh rc 0
+-- flaky-red2pool rc 0 38 s: TOTAL top-level: 30 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+== done arm7 2026-10-29T19:20:53Z
+== end rc=0 2026-10-29T19:20:53Z, 627 s

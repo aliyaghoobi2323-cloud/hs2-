@@ -1,0 +1,2 @@
+mq0 /root/rmerge/raw-bins/hs2-m-70198ec HS2_TUNE_QUIET=0
+mq0r0 /root/rmerge/raw-bins/hs2-m-70198ec HS2_TUNE_QUIET=0 HS2_TUNE_RT=0

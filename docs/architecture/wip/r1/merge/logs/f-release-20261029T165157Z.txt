@@ -1,0 +1,33 @@
+== f-release: /root/rmerge/tools/blocks.sh release (2026-10-29T16:51:57Z)
+== release on 3c0c2ec (R1 ادغام: ادغام r1-review-ops b937058 (بازبینی مستقل نصب و عم�) 2026-10-29T17:11:55Z
+go version go1.27.3 linux/amd64
+mkdir -p /root/rmerge/raw-dist-3c0c2ec
+for a in amd64 386 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags="-s -w" -o /root/rmerge/raw-dist-3c0c2ec/hs2-linux-$a ./cmd/hs2 || exit 1; done
+cd /root/rmerge/raw-dist-3c0c2ec && sha256sum hs2-linux-* > SHA256SUMS && cat SHA256SUMS
+4b6f810d595cbd6faedb01281d187bdb5fa9bceb37a3e096e39981837edceb3f  hs2-linux-386
+6a2b67ec04558c0e06ab6e65d55719f9f645fa87fe3a8702de39e18a350ced8e  hs2-linux-amd64
+b497a29d8434832b800a53d1725849ae3aad67dc2b594194b0f0f675951479bb  hs2-linux-arm64
+-rwxr-xr-x 1 root root 12574880 Oct 29 17:11 hs2-linux-386
+-rwxr-xr-x 1 root root 14250144 Oct 29 17:11 hs2-linux-amd64
+-rwxr-xr-x 1 root root 12124320 Oct 29 17:11 hs2-linux-arm64
+== hs2-linux-386
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=386
+	build	vcs.revision=3c0c2ec8109fa399967c7c665b8cb9f47437e477
+	build	vcs.modified=false
+== hs2-linux-amd64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	vcs.revision=3c0c2ec8109fa399967c7c665b8cb9f47437e477
+	build	vcs.modified=false
+== hs2-linux-arm64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	vcs.revision=3c0c2ec8109fa399967c7c665b8cb9f47437e477
+	build	vcs.modified=false
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build 3c0c2ec8109f 2026-10-29]
+== done release 2026-10-29T17:11:58Z
+== end rc=0 2026-10-29T17:11:58Z, 1201 s

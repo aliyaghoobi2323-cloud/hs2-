@@ -1,0 +1,12 @@
+== f-check: /root/rmerge/tools/blocks.sh check (2026-10-29T17:38:05Z)
+== check on 70198ec (R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حر�) 2026-10-29T17:42:09Z
+go version go1.27.3 linux/amd64
+-- vet/fmt: 2 of 2 make targets rc 0; rigload vet rc 0
+-- /run/hs2/icmp-echo-ignore before: 2026-10-29 17:16:15.433456815 +0000
+-- test rc 0 962 s: TOTAL top-level: 1063 pass, 0 fail, 32 skip; subtests: 535 pass, 0 fail, 0 skip; packages 16 (0 not pass)
+-- /run/hs2/icmp-echo-ignore after: 2026-10-29 17:16:15.433456815 +0000
+-- smux rc 0 64 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- rigload rc 0 19 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- ana_test.py rc 0: OK
+== done check 2026-10-29T17:59:36Z
+== end rc=0 2026-10-29T17:59:36Z, 1291 s

@@ -1,0 +1,5 @@
+== go test -count=10 -timeout 5m -run ^TestDgExitForwarderSurvivesPanelOnWildcard$ ./engine (in hs2-src): rc 0, 1 s
+== flaky-wildcard
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   pass      0.0  10/0/0                 0/0/0                 
+TOTAL top-level: 10 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)

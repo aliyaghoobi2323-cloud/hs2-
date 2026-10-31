@@ -1,0 +1,15 @@
+== f-fuzzkernel: /root/rmerge/tools/blocks.sh fuzzkernel (2026-10-29T18:37:15Z)
+== fuzzkernel on 70198ec (R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حر�) 2026-10-29T18:59:33Z
+go version go1.27.3 linux/amd64
+/root/rmerge/step5/fuzz-70198ec-20261029T185933Z.txt
+   ok  	github.com/xtaci/smux	61.105s
+   FuzzGroupReassembly: rc 0, 62 s
+== exit 0
+-- fuzz.sh rc 0
+/root/rmerge/step5/kernel-70198ec-20261029T191006Z.txt
+== 3. bundle: /root/rmerge/step5/kernel-70198ec-20261029T191006Z-bundle (37M); on a 5.10 host: copy the directory and run ./run.sh
+== 4. no 5.10 guest here (KERNEL_VM_CMD unset): see README.fa.md
+== exit 0
+-- kernel.sh rc 0
+== done fuzzkernel 2026-10-29T19:10:26Z
+== end rc=0 2026-10-29T19:10:26Z, 1991 s
