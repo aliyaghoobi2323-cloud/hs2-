@@ -1,0 +1,50 @@
+04:34:54 plan /root/r5/S8/plan.txt: 24 runs
+04:34:56 start 350634b8-fin2-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 7.80 waited 0s
+04:35:42 done 350634b8-fin2-1 ok=1 
+04:35:43 start 350634b8-fw-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 8.62 waited 0s
+04:36:29 done 350634b8-fw-1 ok=1 
+04:36:30 start 350634b8-fwl-1 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 7.78 waited 0s
+04:37:16 done 350634b8-fwl-1 ok=1 
+04:37:17 start 350634b8-fwl-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 8.66 waited 0s
+04:38:03 done 350634b8-fwl-2 ok=1 
+04:38:04 start 350634b8-fw-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 7.96 waited 0s
+04:38:50 done 350634b8-fw-2 ok=1 
+04:38:51 start 350634b8-fin2-2 (N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 8.36 waited 0s
+04:39:37 done 350634b8-fin2-2 ok=1 
+04:39:38 start ff7db091-fin2-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 8.61 waited 0s
+04:40:24 done ff7db091-fin2-1 ok=1 
+04:40:25 start ff7db091-fw-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 8.14 waited 0s
+04:41:11 done ff7db091-fw-1 ok=1 
+04:41:12 start ff7db091-fwl-1 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 9.00 waited 0s
+04:41:58 done ff7db091-fwl-1 ok=1 
+04:41:59 start ff7db091-fwl-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 8.05 waited 0s
+04:42:45 done ff7db091-fwl-2 ok=1 
+04:42:46 start ff7db091-fw-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 7.69 waited 0s
+04:43:32 done ff7db091-fw-2 ok=1 
+04:43:33 start ff7db091-fin2-2 (N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 8.53 waited 0s
+04:44:19 done ff7db091-fin2-2 ok=1 
+04:44:20 start 1523353a-fin2-1 (N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 8.84 waited 0s
+04:45:06 done 1523353a-fin2-1 ok=1 
+04:45:08 start 1523353a-fw-1 (N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 8.34 waited 0s
+04:45:53 done 1523353a-fw-1 ok=1 
+04:45:55 start 1523353a-fwl-1 (N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 9.06 waited 0s
+04:46:40 done 1523353a-fwl-1 ok=1 
+04:46:42 start 1523353a-fwl-2 (N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 8.22 waited 0s
+04:47:27 done 1523353a-fwl-2 ok=1 
+04:47:29 start 1523353a-fw-2 (N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 8.17 waited 0s
+04:48:14 done 1523353a-fw-2 ok=1 
+04:48:16 start 1523353a-fin2-2 (N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 8.75 waited 0s
+04:49:01 done 1523353a-fin2-2 ok=1 
+04:49:03 start 2739af6e-fin2-1 (N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 8.79 waited 0s
+04:49:48 done 2739af6e-fin2-1 ok=1 
+04:49:50 start 2739af6e-fw-1 (N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 8.36 waited 0s
+04:50:36 done 2739af6e-fw-1 ok=1 
+04:50:37 start 2739af6e-fwl-1 (N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 8.47 waited 0s
+04:51:23 done 2739af6e-fwl-1 ok=1 
+04:51:24 start 2739af6e-fwl-2 (N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl) load 9.41 waited 0s
+04:52:10 done 2739af6e-fwl-2 ok=1 
+04:52:12 start 2739af6e-fw-2 (N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw) load 9.09 waited 0s
+04:52:57 done 2739af6e-fw-2 ok=1 
+04:52:59 start 2739af6e-fin2-2 (N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 9.55 waited 0s
+04:53:44 done 2739af6e-fin2-2 ok=1 
+04:53:44 done /root/r5/S8/plan.txt

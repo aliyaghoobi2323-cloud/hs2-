@@ -1,0 +1,7 @@
+taken
+04:06:42 lock taken after 0s (pid 1874313), plan /root/r5/S7/plan.txt, REPS 2, limit 1440s
+04:25:32 run.sh status 0
+04:25:32 pass 1: 0 runs busy (>75%) or failed, 310s left
+04:25:32 end: mode log, status 0; 2193 samples; host TCP max 174223 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0
+04:25:33 done after 1131s of rig time
+04:25:33 lock released after 1131s

@@ -1,0 +1,13 @@
+# S8 (screen, 2 reps, TRACE_SS=1): Illinois on the one QUIET link (fw) and with the light link (fwl) at N=2 and N=4 without loss (RTT 72: is the fq_codel share of 1/(N+1) the N=8 regression of S2?) and at N=4 with 0.03 and 0.1 % (RTT 75), against fin2
+N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=2 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=4 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=4 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
+N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fw
+N=4 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fwl
