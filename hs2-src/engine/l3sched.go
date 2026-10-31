@@ -92,15 +92,26 @@ type tunUser struct {
 	tag   uint32
 	pkts  int
 	flows map[*tunFlow]struct{}
-	acct  *userMemAcct
+	// busy: its flows with packets queued (longest looks at these alone:
+	// tunUserPkts of them at most, where flows holds every flow it had in
+	// the last tunFlowIdle)
+	busy map[*tunFlow]struct{}
+	acct *userMemAcct
 }
 
-// longest is the user's flow with the most queued.
+// longest is the user's flow with the most queued (nil: none queued). Only
+// the flows with packets queued are looked at: over every flow of the last
+// tunFlowIdle, a burst of new flows (a scan, packets with changing ports)
+// made each packet cost a pass over tens of thousands of them, 1.4 ms a
+// packet at 70k, on the TUN's one reader (the R1 review, part A, A2).
 func (u *tunUser) longest() *tunFlow {
 	var best *tunFlow
-	for f := range u.flows {
+	for f := range u.busy {
 		if best == nil || f.n() > best.n() {
 			best = f
+			if f.n() >= tunFlowPkts {
+				break // none holds more
+			}
 		}
 	}
 	return best
@@ -114,6 +125,7 @@ type tunSched struct {
 	setDrops   *atomic.Uint64 // the set's drop count (logDrops)
 	flows      map[uint32]*tunFlow
 	users      map[uint32]*tunUser
+	busyU      map[*tunUser]struct{} // users with packets queued (fattest's)
 	pkts       int
 	head, tail *tunFlow // flows ready for a frame, in turn
 	closed     bool
@@ -130,8 +142,8 @@ func newTunSched(st *smux.Stream) *tunSched {
 	if QuietCoalTun != 0 && st != nil {
 		st.SetUrgent(true) // no coalescing hold after a TUN frame (quiet.go)
 	}
-	return &tunSched{st: st, flows: map[uint32]*tunFlow{}, users: map[uint32]*tunUser{}, kick: make(chan struct{}, 1),
-		pool: &sync.Pool{}, setDrops: new(atomic.Uint64)}
+	return &tunSched{st: st, flows: map[uint32]*tunFlow{}, users: map[uint32]*tunUser{}, busyU: map[*tunUser]struct{}{},
+		kick: make(chan struct{}, 1), pool: &sync.Pool{}, setDrops: new(atomic.Uint64)}
 }
 
 // attach takes the set's packet pool and drop count (l3Set.add).
@@ -163,7 +175,7 @@ func (sq *tunSched) push(bp *[]byte, tag, key uint32, echo bool) {
 	if f == nil {
 		u := sq.users[tag]
 		if u == nil {
-			u = &tunUser{tag: tag, flows: map[*tunFlow]struct{}{}, acct: userMems.acct(tag)}
+			u = &tunUser{tag: tag, flows: map[*tunFlow]struct{}{}, busy: map[*tunFlow]struct{}{}, acct: userMems.acct(tag)}
 			sq.users[tag] = u
 		}
 		f = &tunFlow{key: key, u: u, sq: sq}
@@ -186,7 +198,9 @@ func (sq *tunSched) push(bp *[]byte, tag, key uint32, echo bool) {
 	case u.pkts >= tunUserPkts:
 		sq.dropHead(u.longest())
 	case sq.pkts >= tunLinkPkts:
-		sq.dropHead(sq.fattest().longest())
+		if fu := sq.fattest(); fu != nil {
+			sq.dropHead(fu.longest())
+		}
 	}
 	if f.head > 0 && f.head == len(f.q) {
 		f.q, f.head = f.q[:0], 0
@@ -194,6 +208,12 @@ func (sq *tunSched) push(bp *[]byte, tag, key uint32, echo bool) {
 	f.q = append(f.q, tunPkt{bp, now})
 	u.pkts++
 	sq.pkts++
+	if f.n() == 1 {
+		u.busy[f] = struct{}{}
+	}
+	if u.pkts == 1 {
+		sq.busyU[u] = struct{}{}
+	}
 	f.stats.tx.Add(uint64(n))
 	k := false
 	if !f.busy && !f.ready {
@@ -206,12 +226,17 @@ func (sq *tunSched) push(bp *[]byte, tag, key uint32, echo bool) {
 	}
 }
 
-// fattest is the user with the most queued on the link (under mu).
+// fattest is the user with the most queued on the link (under mu; nil:
+// none queued). Only the users with packets queued are looked at
+// (longest's reason).
 func (sq *tunSched) fattest() *tunUser {
 	var best *tunUser
-	for _, u := range sq.users {
+	for u := range sq.busyU {
 		if best == nil || u.pkts > best.pkts {
 			best = u
+			if u.pkts >= tunUserPkts {
+				break // none holds more
+			}
 		}
 	}
 	return best
@@ -240,8 +265,14 @@ func (sq *tunSched) pop(f *tunFlow) tunPkt {
 		clear(f.q[k:])
 		f.q, f.head = f.q[:k], 0
 	}
+	if f.n() == 0 {
+		delete(f.u.busy, f)
+	}
 	f.u.pkts--
 	sq.pkts--
+	if f.u.pkts == 0 {
+		delete(sq.busyU, f.u)
+	}
 	f.u.acct.take(-len(*p.b), false)
 	return p
 }

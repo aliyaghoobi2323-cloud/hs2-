@@ -1,0 +1,125 @@
+=== up-e07 (up e-first:0.7) 15:46:29
+scenario e-first:0.7; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.0 s after the first safe-apply
+outage 1.3 s (first failed probe to the first passing one after the last safe-apply); back 0.6 s after the last safe-apply
+longest run of failed probes 1.3 s; probes after the switch: 656 ok, 4 failed
+safe-apply e: OK <w>/backups/apply-20261029-154636-341
+safe-apply x: OK <w>/backups/apply-20261029-154637-452
+hs2-uge log: 28 lines (without tuning:) in 75 s
+hs2-ugx log: 34 lines (without tuning:) in 75 s
+rc=0
+=== up-x03 (up x-first:0.3) 15:47:46
+scenario x-first:0.3; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 0.5 s (first failed probe to the first passing one after the last safe-apply); back 0.3 s after the last safe-apply
+longest run of failed probes 0.5 s; probes after the switch: 656 ok, 4 failed
+safe-apply e: OK <w>/backups/apply-20261029-154754-2453
+safe-apply x: OK <w>/backups/apply-20261029-154754-2351
+hs2-uge log: 34 lines (without tuning:) in 75 s
+hs2-ugx log: 30 lines (without tuning:) in 75 s
+rc=0
+=== up-both (up both) 15:49:03
+scenario both; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 0.3 s (first failed probe to the first passing one after the last safe-apply); back 0.4 s after the last safe-apply
+longest run of failed probes 0.3 s; probes after the switch: 653 ok, 3 failed
+safe-apply e: OK <w>/backups/apply-20261029-154910-4356
+safe-apply x: OK <w>/backups/apply-20261029-154910-4353
+hs2-uge log: 29 lines (without tuning:) in 74 s
+hs2-ugx log: 29 lines (without tuning:) in 74 s
+rc=0
+=== up-xflap (up xflap:0.7) 15:50:20
+scenario xflap:0.7; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 61.3 s (first failed probe to the first passing one after the last safe-apply and the rescue); back 60.7 s after the last safe-apply
+rescue (Iran put back) 61.1 s after the first safe-apply; tunnel back 0.3 s after the rescue
+longest run of failed probes 1.3 s; probes after the switch: 1247 ok, 8 failed
+safe-apply e: OK <w>/backups/apply-20261029-155027-6348
+safe-apply x: REVERTED hs2-not-up(state=active,restarts=1-was-0) <w>/backups/apply-20261029-155028-6460
+safe-apply eback: OK <w>/backups/apply-20261029-155128-7995
+hs2-uge log: 52 lines (without tuning:) in 135 s
+hs2-ugx log: 50 lines (without tuning:) in 135 s
+rc=0
+=== up-erefuse (up erefuse:0.7) 15:52:37
+scenario erefuse:0.7; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.8 s after the first safe-apply
+outage 122.7 s (first failed probe to the first passing one after the last safe-apply); back 122.8 s after the last safe-apply
+longest run of failed probes 122.7 s; probes after the switch: 75 ok, 123 failed
+safe-apply e: REFUSED config-check <w>/backups/apply-20261029-155244-10036
+safe-apply x: REVERTED tunnel-not-back-in-120s <w>/backups/apply-20261029-155245-10089
+hs2-uge log: 27 lines (without tuning:) in 139 s
+hs2-ugx log: 34 lines (without tuning:) in 139 s
+rc=0
+=== back-e07 (back e-first:0.7) 15:54:58
+scenario e-first:0.7; HS2_SAFE_PEER_WAIT=120; from hs2-r1 to hs2-prod
+up on hs2-r1 after 4.0 s
+first failed probe 0.1 s after the first safe-apply
+outage 1.3 s (first failed probe to the first passing one after the last safe-apply); back 0.7 s after the last safe-apply
+longest run of failed probes 1.3 s; probes after the switch: 656 ok, 4 failed
+safe-apply e: OK <w>/backups/apply-20261029-155506-11170
+safe-apply x: OK <w>/backups/apply-20261029-155506-11284
+hs2-uge log: 26 lines (without tuning:) in 75 s
+hs2-ugx log: 34 lines (without tuning:) in 75 s
+rc=0
+=== done 15:56:16
+=== up-e03 (up e-first:0.3) 15:57:42
+scenario e-first:0.3; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 1.2 s (first failed probe to the first passing one after the last safe-apply); back 1.0 s after the last safe-apply
+longest run of failed probes 0.2 s; probes after the switch: 654 ok, 2 failed
+safe-apply e: OK <w>/backups/apply-20261029-155749-340
+safe-apply x: OK <w>/backups/apply-20261029-155750-455
+hs2-uge log: 28 lines (without tuning:) in 75 s
+hs2-ugx log: 34 lines (without tuning:) in 75 s
+rc=0
+=== up-x06 (up x-first:0.6) 15:58:59
+scenario x-first:0.6; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 0.8 s (first failed probe to the first passing one after the last safe-apply); back 0.3 s after the last safe-apply
+longest run of failed probes 0.8 s; probes after the switch: 654 ok, 4 failed
+safe-apply e: OK <w>/backups/apply-20261029-155907-2453
+safe-apply x: OK <w>/backups/apply-20261029-155906-2348
+hs2-uge log: 34 lines (without tuning:) in 75 s
+hs2-ugx log: 31 lines (without tuning:) in 75 s
+rc=0
+=== up-x10 (up x-first:1.0) 16:00:16
+scenario x-first:1.0; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 9.3 s (first failed probe to the first passing one after the last safe-apply); back 8.4 s after the last safe-apply
+longest run of failed probes 9.3 s; probes after the switch: 579 ok, 12 failed
+safe-apply e: OK <w>/backups/apply-20261029-160025-4453
+safe-apply x: OK <w>/backups/apply-20261029-160024-4348
+hs2-uge log: 33 lines (without tuning:) in 75 s
+hs2-ugx log: 30 lines (without tuning:) in 75 s
+rc=0
+=== up-x20 (up x-first:2.0) 16:01:34
+scenario x-first:2.0; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 8.3 s (first failed probe to the first passing one after the last safe-apply); back 6.4 s after the last safe-apply
+longest run of failed probes 8.3 s; probes after the switch: 600 ok, 11 failed
+safe-apply e: OK <w>/backups/apply-20261029-160143-6316
+safe-apply x: OK <w>/backups/apply-20261029-160141-6212
+hs2-uge log: 34 lines (without tuning:) in 76 s
+hs2-ugx log: 31 lines (without tuning:) in 76 s
+rc=0
+=== up-xflapn (up xflapn:0.3) 16:02:53
+scenario xflapn:0.3; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 1.2 s (first failed probe to the first passing one after the last safe-apply); back 1.0 s after the last safe-apply
+longest run of failed probes 126.7 s; probes after the switch: 595 ok, 130 failed
+safe-apply e: OK <w>/backups/apply-20261029-160300-8113
+safe-apply x: REVERTED hs2-not-up(state=active,restarts=1-was-0) <w>/backups/apply-20261029-160300-8227
+hs2-uge log: 41 lines (without tuning:) in 196 s
+hs2-ugx log: 47 lines (without tuning:) in 196 s
+rc=0
+=== done 16:06:11

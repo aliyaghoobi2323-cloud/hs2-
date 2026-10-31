@@ -1,10 +1,16 @@
 package engine
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"hash"
 	"net/netip"
+	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/crypto/blake2s"
 )
 
 // C1, the flow classifier and the user tag (REDESIGN §3.1): each flow (a
@@ -93,18 +99,28 @@ const (
 	classSlotMax = 1<<16 - 1
 )
 
-// UserTag is a user's tag: FNV-1a (flowHash's) of its IPv4 address, or of
-// the v6Prefix bits of its IPv6 address (≤ 0 or past 128: /64). A
-// v4-mapped address is its IPv4 one; a zone is dropped. 0 is no tag: an
-// invalid address, never a valid one. The tag only means something inside
-// the tunnel, so it needs no key.
+// UserTag is a user's tag: a keyed hash of its IPv4 address, or of the
+// v6Prefix bits of its IPv6 address (<= 0 or past 128: /64). A v4-mapped
+// address is its IPv4 one; a zone is dropped. 0 is no tag: an invalid
+// address, never a valid one.
+//
+// The key (userTagSecret) is 16 random bytes made once per process and never
+// sent: the tag goes to the other server in each stream's SYN (§3.1), and
+// the unkeyed FNV-1a of round 1 let the exit read every user's IPv4 address
+// back from it in milliseconds (the R1 review, part A, finding A3). The exit
+// needs the tags only to tell users apart, and makes the tags of its own TUN
+// packets from their inner addresses itself (l3_link.go): no tag is compared
+// between the two ends, so a key of each process's own is enough, and the
+// per-user fairness is the same. TuneTagKey 0 (HS2_TUNE_TAG_KEY=0) goes back
+// to the unkeyed hash.
 func UserTag(ip netip.Addr, v6Prefix int) uint32 {
 	ip = ip.Unmap().WithZone("")
-	var h uint32
+	var a [16]byte
+	var b []byte
 	switch {
 	case ip.Is4():
-		b := ip.As4()
-		h = fnvAdd(fnvOffset, b[:])
+		a4 := ip.As4()
+		b = append(a[:0], a4[:]...)
 	case ip.Is6():
 		if v6Prefix <= 0 || v6Prefix > 128 {
 			v6Prefix = classV6Prefix
@@ -113,15 +129,81 @@ func UserTag(ip netip.Addr, v6Prefix int) uint32 {
 		if err != nil {
 			return 0
 		}
-		b := p.Addr().As16()
-		h = fnvAdd(fnvOffset, b[:])
+		a = p.Addr().As16()
+		b = a[:]
 	default:
 		return 0
+	}
+	var h uint32
+	if TuneTagKey.Get() != 0 {
+		h = keyedTag(b)
+	} else {
+		h = fnvAdd(fnvOffset, b)
 	}
 	if h == 0 {
 		h = 1
 	}
 	return h
+}
+
+// TuneTagKey 1 (the default; HS2_TUNE_TAG_KEY): the user tag is keyed
+// (UserTag); 0: the unkeyed FNV-1a of round 1, which reveals the address.
+var TuneTagKey = newTuneInt(1)
+
+// userTagSecret is the process's key of the user tags (never sent, never
+// logged); userTagHash keeps keyed BLAKE2s-128 states of it (a TUN packet
+// takes one per packet: no allocation on that path).
+var (
+	userTagMu     sync.RWMutex
+	userTagSecret = newUserTagKey()
+	userTagHash   = &sync.Pool{New: newUserTagHash}
+)
+
+func newUserTagKey() []byte {
+	k := make([]byte, 16)
+	rand.Read(k) // crypto/rand: never fails on Linux (Go 1.24+ panics rather than return short)
+	return k
+}
+
+func newUserTagHash() any {
+	userTagMu.RLock()
+	defer userTagMu.RUnlock()
+	h, err := blake2s.New128(userTagSecret)
+	if err != nil {
+		panic(err) // a 16-byte key is always valid
+	}
+	return &userTagState{h: h, key: userTagSecret}
+}
+
+type userTagState struct {
+	h   hash.Hash
+	key []byte // the key h was made with (a test's setUserTagKey drops stale ones)
+	sum [blake2s.Size128]byte
+	in  [16]byte // the input, copied here: through h's interface b would escape
+}
+
+// keyedTag is the first 32 bits of BLAKE2s-128 of b under the process's key.
+func keyedTag(b []byte) uint32 {
+	st := userTagHash.Get().(*userTagState)
+	userTagMu.RLock()
+	stale := &st.key[0] != &userTagSecret[0]
+	userTagMu.RUnlock()
+	if stale {
+		st = newUserTagHash().(*userTagState)
+	}
+	st.h.Reset()
+	st.h.Write(st.in[:copy(st.in[:], b)])
+	st.h.Sum(st.sum[:0])
+	v := binary.BigEndian.Uint32(st.sum[:4])
+	userTagHash.Put(st)
+	return v
+}
+
+// setUserTagKey replaces the process's key (tests: a tag under another key).
+func setUserTagKey(k []byte) {
+	userTagMu.Lock()
+	userTagSecret = append([]byte(nil), k...)
+	userTagMu.Unlock()
 }
 
 // flowStats is a flow's payload bytes each way, cumulative: the hot path's

@@ -1,0 +1,27 @@
+it-cert_test.sh: PASS 40, FAIL 0, SKIP 0; unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+it-dgtun_wildcard_test.sh: PASS 3, FAIL 0, SKIP 0; unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+it-helpers_test.sh: PASS 19, FAIL 0, SKIP 0; unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+it-multi_tunnel_test.py: PASS 54, FAIL 0, SKIP 0; unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+it-ports_menu_test.sh: PASS 38, FAIL 0, SKIP 0; unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+it-tun_ports_test.py: PASS 137, FAIL 0, SKIP 0; unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+
+first pass (without go in PATH: the four that build hs2 fail or skip):
+=== hs2-src/install/tests/cert_test.sh	4
+=== hs2-src/install/tests/cover_seed_test.sh	3
+=== hs2-src/install/tests/dgtun_wildcard_test.sh	4
+=== hs2-src/install/tests/helpers_test.sh	4
+=== hs2-src/install/tests/kharej_stats_test.sh	3
+=== hs2-src/install/tests/link_ceiling_test.sh	3
+=== hs2-src/install/tests/migrate_test.sh	3
+=== hs2-src/install/tests/multi_ip_test.sh	3
+=== hs2-src/install/tests/ports_menu_test.sh	4
+=== hs2-src/install/tests/release_files_test.sh	3
+=== hs2-src/install/tests/tm_edit_test.sh	3
+=== hs2-src/install/tests/tm_tune_links_test.sh	3
+=== hs2-src/install/tests/udp_ports_test.sh	3
+=== scripts/hs2-safe-apply_test.sh	3
+=== scripts/install_link_test.sh	3
+=== hs2-src/install/tests/multi_tunnel_test.py	  after:  unit hs2 ActiveState=active MainPID=992 NRe
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 	  unchanged: 246 files of the rea
+=== hs2-src/install/tests/tun_ports_test.py	  after:  unit hs2 ActiveState=active MainPID=992 NResta
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 	  unchanged: 246 files of the rea

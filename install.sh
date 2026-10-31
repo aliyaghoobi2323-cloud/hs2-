@@ -168,6 +168,18 @@ done 2>/dev/null || true
 # ---------- helpers ----------------------------------------------------------
 port_free(){ ! ss -Hltn "sport = :$1" 2>/dev/null | grep -q .; }
 udp_port_free(){ ! ss -Hlun "sport = :$1" 2>/dev/null | grep -q .; }
+# udp_ports_note PORTS: with UDP on the user ports, port_free (TCP) is not the
+# whole story — a port whose UDP another program holds (a UDP/QUIC inbound, a
+# VPN, another tunnel) gets no UDP forwarding. hs2 still starts and serves TCP
+# on it (it logs the port and retries its UDP in the background); say it now.
+udp_ports_note(){ # ports (comma-separated)
+  local p busy=""
+  for p in ${1//,/ }; do udp_port_free "$p" || busy="${busy:+$busy,}$p"; done
+  [ -n "$busy" ] || return 0
+  warn "UDP on user port(s) $busy is already taken on this server by another program (ss -lunp shows which)."
+  warn "The tunnel and TCP on $busy work; their UDP is forwarded by itself once the port is free."
+  return 0
+}
 
 # transport_to_carrier maps the transport choice to the binary's carrier value.
 # tcp keeps the chosen TLS mode; udp and auto are the datagram carriers.
@@ -2154,6 +2166,7 @@ iran_dialer(){
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
     done
+    if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
@@ -2184,6 +2197,7 @@ EOF
       valid_uint "$p" 1 65535 || die "user port '$p' must be a whole number 1-65535"
       port_free "$p" || die "port $p is already in use on Iran (Backhaul or panel?). Pick another."
     done
+    if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     write_cfg_checked <<EOF
 {
   "mode": "dial", "carrier": "$CARRIER", "reverse": false, "udp": $UDP,
@@ -2289,6 +2303,7 @@ iran_listener(){
     case "${M:-1}" in 1) CARRIER=mtcp ;; 2) CARRIER=l3mtcp ;; 3) CARRIER=tls ;; *) die "invalid mode" ;; esac
     read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
     case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
+    if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     # Reverse: THIS iran server is the TLS server, so the cert is obtained HERE
     # (in direct it would be on the kharej). The kharej dials in and validates
     # this domain as the TLS name, so it must match the cert.
@@ -2329,6 +2344,7 @@ EOF
     if [ -n "$PORTS" ]; then
       read -rp "Also forward UDP on the user ports? [y/N]: " U </dev/tty
       case "$U" in y|Y|yes) UDP=true ;; *) UDP=false ;; esac
+      if [ "$UDP" = true ]; then udp_ports_note "$PORTS"; fi
     fi
     local certpair CERT KEY
     certpair=$(get_cert "$DOMAIN" "$PUBIP"); CERT=${certpair%%|*}; KEY=${certpair##*|}
@@ -4127,7 +4143,9 @@ install_safe_apply(){
 #     --setenv=HS2_SAFE_UNIT=hs2 /usr/local/sbin/hs2-safe-apply STAGE
 #
 # STAGE (a directory) may hold any of:
-#   hs2          a new binary (installed as the hs2 binary once it runs `version`)
+#   hs2          a new binary (installed as the hs2 binary once it runs `version`;
+#                without a staged config, refused when its `hs2 check` fails the
+#                live config that the running binary passes)
 #   config.json  a new config for the tunnel (refused unless `hs2 check` passes it,
 #                run by the staged binary when there is one)
 #   dropin.conf  the test drop-in, <unit>.service.d/zz-test.conf; an empty file
@@ -4203,10 +4221,11 @@ if [ -z "$PEER" ]; then
 	[ -n "$PEER" ] || refuse no-peer-ip "the config has no peer_ip to ping: set HS2_SAFE_PEER"
 fi
 
-mkdir -p "$BK"
-cp -a "$BIN" "$BK/hs2"
-cp -a "$CFG" "$BK/config.json"
-[ -d "$DDIR" ] && cp -a "$DDIR" "$BK/dropins"
+# No change without a backup to put back: a revert from a missing one would
+# leave the new binary in place and the drop-ins gone.
+{ mkdir -p "$BK" && cp -a "$BIN" "$BK/hs2" && cp -a "$CFG" "$BK/config.json"; } ||
+	refuse backup "cannot back up $BIN and $CFG into $BK (disk full?)"
+if [ -d "$DDIR" ]; then cp -a "$DDIR" "$BK/dropins" || refuse backup "cannot back up $DDIR into $BK"; fi
 log "stage $STAGE; unit $UNIT; config $CFG; peer $PEER (wait ${PEERWAIT} s); backup in $BK"
 
 CHECK=$BIN
@@ -4216,6 +4235,14 @@ if [ -f "$STAGE/hs2" ]; then
 fi
 if [ -f "$STAGE/config.json" ]; then
 	"$CHECK" check -c "$STAGE/config.json" >>"$LOG" 2>&1 || refuse config-check "the staged config fails hs2 check"
+elif [ -f "$STAGE/hs2" ] && ! "$STAGE/hs2" check -c "$CFG" >>"$LOG" 2>&1; then
+	# A new binary on the live config: a config the running binary passes and
+	# the new one fails would not start, or would run without what the new
+	# one refuses — so nothing is applied. A config both fail is the one that
+	# runs today: go on.
+	"$BIN" check -c "$CFG" >/dev/null 2>&1 &&
+		refuse config-check-new "the staged binary's hs2 check fails the live config $CFG, which the running binary passes"
+	log "the live config fails hs2 check with the running binary too (it runs so today): going on"
 fi
 
 [ -f "$STAGE/hs2" ] && install -m 755 "$STAGE/hs2" "$BIN.new" && mv -f "$BIN.new" "$BIN"

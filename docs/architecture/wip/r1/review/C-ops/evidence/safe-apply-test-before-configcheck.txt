@@ -1,0 +1,43 @@
+sandbox: proven — PID namespace (no outside process visible or reachable), /etc and /usr read-only, the install's paths are empty temp dirs, systemctl cannot reach systemd
+PASS ok: the result is OK
+PASS ok: the new binary, config and drop-in are in place
+PASS ok: the config is the one ExecStart runs, still 0600
+PASS ok: the ping goes to the config's peer_ip
+PASS ok: a backup of all three was made
+PASS ok: only the named unit is ever touched
+PASS not-up: REVERTED, hs2 not up
+PASS not-up: binary, config and drop-ins are exactly what they were
+PASS not-up: restarted again on the old state
+PASS not-up (restarted meanwhile): REVERTED, everything back
+PASS no-peer: REVERTED after 300 s without an answer
+PASS no-peer: everything back
+PASS no-peer: it waited the whole 300 s before reverting
+PASS peer-late: the peer answers after 200 s, HS2_SAFE_PEER_WAIT=400 → OK, the change stays
+PASS peer-late: after 350 s with the default 300 → REVERTED
+PASS peer-late: after 350 s with HS2_SAFE_PEER_WAIT=400 → OK
+PASS bad-config: REFUSED, nothing applied, nothing restarted
+PASS bad-config: the staged binary checks the staged config
+FAIL binary only: a live config the running binary passes and the new one fails → REFUSED, nothing applied, nothing restarted
+      got: 2026-10-29T15:36:21.924 stage <t>/newonly/stage; unit hs2-safetest; config <t>/newonly/etc/tunnel-a.json; peer 10.77.9.1 (wait 300 s); backup in <t>/newonly/bk/apply-20261029-153621-4016 2026-10-29T15:36:21.946 applied; restarting hs2-safetest (; env: ) 2026-10-29T15:36:21.986 tunnel back: 10.77.9.1 answers 60 s after the restart 2026-10-29T15:36:21.992 OK
+FAIL binary only: a live config both binaries fail (it runs so today) → applied as before
+      got: 2026-10-29T15:36:22.086 stage <t>/bothfail/stage; unit hs2-safetest; config <t>/bothfail/etc/tunnel-a.json; peer 10.77.9.1 (wait 300 s); backup in <t>/bothfail/bk/apply-20261029-153622-4104 2026-10-29T15:36:22.105 applied; restarting hs2-safetest (; env: ) 2026-10-29T15:36:22.136 tunnel back: 10.77.9.1 answers 60 s after the restart 2026-10-29T15:36:22.141 OK
+FAIL binary only: the new binary checks the live config, and it goes on
+      got: 2026-10-29T15:36:22.228 stage <t>/binonly/stage; unit hs2-safetest; config <t>/binonly/etc/tunnel-a.json; peer 10.77.9.1 (wait 300 s); backup in <t>/binonly/bk/apply-20261029-153622-4191 2026-10-29T15:36:22.247 applied; restarting hs2-safetest (; env: ) 2026-10-29T15:36:22.275 tunnel back: 10.77.9.1 answers 60 s after the restart 2026-10-29T15:36:22.279 OK
+PASS dropins: after a revert the drop-in directory is exactly what it was (files, modes, times, contents)
+PASS dropins: a unit that had none has none again after a revert
+PASS dropins: an empty staged dropin.conf removes the test drop-in (the others stay)
+PASS mtcp (no tun): REFUSED unless HS2_SAFE_PEER says what to ping; nothing applied
+PASS HS2_SAFE_PEER: pinged instead of peer_ip
+PASS a staged config's peer_ip is the one pinged
+PASS a unit that is not an hs2 tunnel is refused
+PASS install.sh carries scripts/hs2-safe-apply byte for byte
+PASS install.sh installs it (mode 755) with the menu
+sandbox evidence (real install, before → after):
+  before: unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  before: unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  after:  unit hs2 ActiveState=active MainPID=992 NRestarts=0 
+  after:  unit hs2-mon ActiveState=inactive MainPID=0 NRestarts=0 
+  CHANGED:
+    251a252,253
+    > /run/hs2/tmp-rig-scale5-6d18d417-fin2-2-edge.json.status.json 644 3216 1793288182
+    > /run/hs2/tmp-rig-scale5-6d18d417-fin2-2-exit.json.status.json 644 2904 1793288182

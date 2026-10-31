@@ -1,0 +1,11 @@
+scenario xflap:0.7; HS2_SAFE_PEER_WAIT=120; from hs2-prod to hs2-r1
+up on hs2-prod after 3.5 s
+first failed probe 0.1 s after the first safe-apply
+outage 61.3 s (first failed probe to the first passing one after the last safe-apply and the rescue); back 60.7 s after the last safe-apply
+rescue (Iran put back) 61.1 s after the first safe-apply; tunnel back 0.3 s after the rescue
+longest run of failed probes 1.3 s; probes after the switch: 1247 ok, 8 failed
+safe-apply e: OK <w>/backups/apply-20261029-155027-6348
+safe-apply x: REVERTED hs2-not-up(state=active,restarts=1-was-0) <w>/backups/apply-20261029-155028-6460
+safe-apply eback: OK <w>/backups/apply-20261029-155128-7995
+hs2-uge log: 52 lines (without tuning:) in 135 s
+hs2-ugx log: 50 lines (without tuning:) in 135 s

@@ -47,7 +47,7 @@ cd /root/rprep/tools && apt-get download qemu-user-static && dpkg -x qemu-user-s
 | `FuzzGroupReassembly` | سرهم‌کردن اتصال گروه در دو سوی جابه‌جایی (§۴.۷) |
 
 - شکست، ورودی‌اش را در `testdata/fuzz/<هدف>/` همان بسته می‌گذارد، و پروندهٔ نتیجه نامش را می‌برد.
-- `FuzzDecode` (fec) و `FuzzSplitTCP` (tun) از پیش از R1 بودند و در این فهرست نیستند.
+- در گام ۵ سه هدف دیگر به `fuzz.sh` افزوده شد، تا هر هدف fuzz مخزن اجرا شود: `FuzzRedSessionFrames` (smux، نشست کامل، از گذر نخست تیم قرمز)، و `FuzzDecode` (fec) و `FuzzSplitTCP` (tun) که از پیش از R1 بودند. پس روی هم ۱۳ هدف.
 - سرآیند سه‌بایتی جریان کاربر و پیام‌های `kindPool`، `kindStats` و `kindInfo` تجزیه‌گر تازه‌ای در R1 ندارند.
 
 ## ۳. ماتریس هسته (`kernel.sh`)

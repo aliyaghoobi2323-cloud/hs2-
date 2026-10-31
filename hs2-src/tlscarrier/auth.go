@@ -11,6 +11,7 @@ import (
 	"io"
 	"math/big"
 	"os"
+	"strconv"
 	"time"
 
 	"golang.org/x/crypto/blake2s"
@@ -224,14 +225,28 @@ func localCaps() uint32 {
 		bit uint32
 	}{{"HS2_TUNE_CLASS", CapClass}, {"HS2_TUNE_SCHED", CapSched | CapGroup | CapHint}, {"HS2_TUNE_HQG", CapHostQ},
 		{"HS2_TUNE_SENDCAP", CapSendCap}, {"HS2_TUNE_QUIET", CapGroup | CapHint}, {"HS2_TUNE_MOVE_HINT", CapHint}} {
-		if os.Getenv(k.env) == "0" {
+		if envSwitch(k.env, 1) == 0 {
 			caps &^= k.bit
 		}
 	}
-	if os.Getenv("HS2_TUNE_MOVE_BACK") == "1" && caps&CapGroup != 0 {
+	if envSwitch("HS2_TUNE_MOVE_BACK", 0) != 0 && caps&CapGroup != 0 {
 		caps |= CapMoveBack // opt-in (lab)
 	}
 	return caps
+}
+
+// envSwitch is the value of the switch name as the engine reads it (cmd/hs2
+// applyTuning: an integer; anything else, or none, leaves def). The caps
+// must say what the cores do: read as a string ("0" off, "1" on), a value
+// such as "00" or "+0" turned a core off while its bit was still offered,
+// so the other server opened group streams on a link whose end here has no
+// scheduler and every user connection on it was refused (the R1 red team's
+// Z6; the R1 review, part A, A5).
+func envSwitch(name string, def int) int {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil {
+		return v
+	}
+	return def
 }
 
 // LocalAuthHdr is the header this binary sends: its levels and its caps.

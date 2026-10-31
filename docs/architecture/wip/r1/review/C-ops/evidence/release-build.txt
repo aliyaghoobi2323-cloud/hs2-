@@ -1,0 +1,39 @@
+mkdir -p dist
+for a in amd64 386 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags="-s -w" -o dist/hs2-linux-$a ./cmd/hs2 || exit 1; done
+cd dist && sha256sum hs2-linux-* > SHA256SUMS && cat SHA256SUMS
+78148ed31c5335863bb47e24a962db15cd03c42222ad74b05326cc7a23b9478d  hs2-linux-386
+9856c2f916544ecff9b514492f2a6ec84bf45cf320b1f2f6708e13c496e9105c  hs2-linux-amd64
+190373921309639effdaf1f94d7dded15cf7eea4207a5a18bb32eee2681f0f8a  hs2-linux-arm64
+--- second build (DIST elsewhere):
+78148ed31c5335863bb47e24a962db15cd03c42222ad74b05326cc7a23b9478d  hs2-linux-386
+9856c2f916544ecff9b514492f2a6ec84bf45cf320b1f2f6708e13c496e9105c  hs2-linux-amd64
+190373921309639effdaf1f94d7dded15cf7eea4207a5a18bb32eee2681f0f8a  hs2-linux-arm64
+--- go version -m (amd64):
+/root/hs2-wt/r1-review-ops/hs2-src/dist/hs2-linux-amd64: go1.27.3
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-trimpath=true
+	build	DefaultGODEBUG=multipathtcp=0
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1
+	build	vcs=git
+	build	vcs.revision=c0111e0c9bb372de2054fc06ce0cca196ee94af7
+	build	vcs.time=2026-10-29T14:54:48Z
+	build	vcs.modified=false
+--- production binary:
+/usr/local/bin/hs2: go1.27.3
+	build	-buildmode=exe
+	build	-compiler=gc
+	build	-trimpath=true
+	build	DefaultGODEBUG=multipathtcp=0
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	GOOS=linux
+	build	GOAMD64=v1
+	build	vcs=git
+	build	vcs.revision=1c23629533c95f9c98cf93faaece4d591473479a
+	build	vcs.time=2026-10-26T09:28:21Z
+	build	vcs.modified=false
+	not a dynamic executable

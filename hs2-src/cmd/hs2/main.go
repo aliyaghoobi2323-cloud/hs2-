@@ -263,11 +263,16 @@ var configPath string
 // applyTuning lets the test lab override data-path tuning without a rebuild.
 // Production runs use the built-in defaults; these are not config options.
 func applyTuning() {
+	// A value that does not parse is said, never silently dropped: the R1
+	// switches are the field's way back (a drop-in), and HS2_TUNE_QUIET=off
+	// in place of =0 must not leave the operator believing QUIET is off.
 	num := func(name string, dst *int) {
 		if v := os.Getenv(name); v != "" {
 			if n, err := strconv.Atoi(v); err == nil {
 				*dst = n
 				log.Printf("tuning: %s=%d", name, n)
+			} else {
+				log.Printf("tuning: %s=%q ignored — not a whole number; it stays %d", name, v, *dst)
 			}
 		}
 	}
@@ -309,6 +314,8 @@ func applyTuning() {
 			if f, err := strconv.ParseFloat(v, 64); err == nil {
 				*dst = f
 				log.Printf("tuning: %s=%g", name, f)
+			} else {
+				log.Printf("tuning: %s=%q ignored — not a number; it stays %g", name, v, *dst)
 			}
 		}
 	}
@@ -393,6 +400,7 @@ func applyTuning() {
 	numT("HS2_TUNE_TWOWAY_RATIO", engine.TwoWayRatio)              // ... unless one way carries more than this many times the other (0: none)
 	numT("HS2_TUNE_OWD_IDLE", engine.OWDIdle)                      // an idle pool's QUIET link sends no one-way delay messages
 	numT("HS2_TUNE_OWD_IDLE_POOL", engine.OWDIdlePool)             // ... and a busy pool wakes every QUIET link's (0: quietOWD's alone)
+	numT("HS2_TUNE_TAG_KEY", engine.TuneTagKey)                    // the user tag a keyed hash (0: the unkeyed FNV-1a, which reveals the address)
 	numT("HS2_TUNE_UDP_FLOWS", engine.UDPFlowsMax)                 // a UDP user port's flows at most (0: none)
 	numT("HS2_TUNE_UDP_USER_FLOWS", engine.UDPFlowsPerUser)        // ... and one user's (0: none)
 	numT("HS2_TUNE_QUIET_MANY", engine.QuietMany)                  // QUIET links past 5 links
@@ -423,6 +431,9 @@ func applyTuning() {
 	num("HS2_TUNE_HQG_GATE", &engine.HQGGate)
 	num("HS2_TUNE_HQG_QUIET_SEGS", &engine.HQGQuietSegs)
 	num("HS2_TUNE_SENDCAP_BLOCKED", &engine.SendCapBlocked)
+	// the R1 review, part A: a TLS 1.2 session without the extended master
+	// secret (no channel binding) gets the website, not a close (0: closed)
+	num("HS2_TUNE_PROBE_NOEKM", &tlscarrier.ProbeNoEKM)
 	for _, n := range engine.SmuxTuningNotes() {
 		log.Printf("tuning: %s", n)
 	}

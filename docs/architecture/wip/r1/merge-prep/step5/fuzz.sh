@@ -21,6 +21,9 @@ TARGETS='
 . ./cmd/hs2 FuzzDecodeLink the hs2:// link decoder (C15)
 third_party/smux . FuzzSessionRecv the frames a peer sends: SYN payload (§4.2), group seq numbers, UPD
 third_party/smux . FuzzGroupReassembly a group connection reassembled across its move (§4.7)
+third_party/smux . FuzzRedSessionFrames a session with a frame scheduler fed whatever an authenticated peer could send (the red team, pass 1)
+. ./fec FuzzDecode the FEC decoder (from before R1)
+. ./tun FuzzSplitTCP the TUN offload splitter (from before R1)
 '
 want=" $* "
 # FUZZ_JOBS=K (R1 speed, docs/architecture/wip/r1/cpu/): K targets at once,

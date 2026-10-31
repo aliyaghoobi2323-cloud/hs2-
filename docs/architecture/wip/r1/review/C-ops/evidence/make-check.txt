@@ -1,0 +1,16 @@
+go vet ./...
+cd third_party/smux && go vet ./...
+go test -count=1 -timeout 25m ./...
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	3.439s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/core	0.081s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/encap	28.998s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	941.104s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/fec	0.853s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/reality	0.110s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	2.346s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	0.082s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tune	0.008s
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier	68.828s
+cd third_party/smux && go test -count=1 -timeout 25m ./...
+ok  	github.com/xtaci/smux	62.831s
+rc=0
