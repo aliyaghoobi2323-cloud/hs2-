@@ -36,7 +36,7 @@ func productionTraffic(s *sim) {
 func TestSimProductionReplay(t *testing.T) {
 	t.Run("capped video", func(t *testing.T) {
 		s := newSim(t, simCfg{min: 2, max: 32, reverse: true, exitDials: true, statsOK: true,
-			linkCap: 2.4 * mbit, pathCap: 100 * mbit, seed: 1})
+			linkCap: 2.4 * mbit, pathCap: 100 * mbit, seed: 1, tun: (*apTunables).fastShrink})
 		productionTraffic(s)
 		s.at(3 * time.Minute)
 		if s.a.T > 5 {
@@ -63,13 +63,40 @@ func TestSimProductionReplay(t *testing.T) {
 			t.Fatalf("maxT=%d probes=%d T=%d; want <=8, 0, <=5\n%s", s.maxT, s.probes, s.a.T, s.dump())
 		}
 	})
+	// SlowShrink (the default; the subtests above time the old pace): at
+	// most a fifth every 5 min, the same end state by 30 min.
+	t.Run("capped video, SlowShrink", func(t *testing.T) {
+		s := newSim(t, simCfg{min: 2, max: 32, reverse: true, exitDials: true, statsOK: true,
+			linkCap: 2.4 * mbit, pathCap: 100 * mbit, seed: 1})
+		productionTraffic(s)
+		s.at(30 * time.Minute)
+		if s.a.T > 5 || s.serving() > 5 || len(s.links) > 6 {
+			t.Fatalf("at 30 min: T=%d, %d serving, %d up; want <= 5, <= 5, <= 6\n%s", s.a.T, s.serving(), len(s.links), s.dump())
+		}
+		if s.maxT > 8 || s.probes != 0 || s.emptyReason != 0 || s.cuts != 0 {
+			t.Fatalf("maxT=%d probes=%d emptyReason=%d cuts=%d; want <=8, 0, 0, 0\n%s", s.maxT, s.probes, s.emptyReason, s.cuts, s.dump())
+		}
+	})
 }
 
 // 2. An edge upgraded while stuck at 32 comes down, and no connection that is
 // still moving data is ever closed.
 func TestSimProductionReplayFromStuck32(t *testing.T) {
+	t.Run("SlowShrink", func(t *testing.T) {
+		// At most a fifth every 5 min: 32 → 26 → 21 → 17 → 14 → 12 → 10 →
+		// 8 → 7 → 6 in about 45 min.
+		s := newSim(t, simCfg{min: 2, max: 32, reverse: true, exitDials: true, statsOK: true,
+			linkCap: 2.4 * mbit, pathCap: 100 * mbit, seed: 3, startT: 32})
+		productionTraffic(s)
+		s.at(50 * time.Minute)
+		if s.a.T > 6 || len(s.links) > 7 || s.shrinks > 11 || s.cuts != 0 {
+			t.Fatalf("at 50 min: T=%d, %d links, %d shrinks, %d cut; want <= 6, <= 7, <= 11, 0\n%s",
+				s.a.T, len(s.links), s.shrinks, s.cuts, s.dump())
+		}
+	})
+	// The old pace (SlowShrink 0).
 	s := newSim(t, simCfg{min: 2, max: 32, reverse: true, exitDials: true, statsOK: true,
-		linkCap: 2.4 * mbit, pathCap: 100 * mbit, seed: 3, startT: 32})
+		linkCap: 2.4 * mbit, pathCap: 100 * mbit, seed: 3, startT: 32, tun: (*apTunables).fastShrink})
 	productionTraffic(s)
 	s.at(4 * time.Minute)
 	if s.a.T > 6 { // bursts reach ~9.5 Mbit/s at 2.4 Mbit/s per link
@@ -114,7 +141,7 @@ func TestSimTracksUpAndDown(t *testing.T) {
 			var sumPct float64
 			for seed := uint64(1); seed <= 5; seed++ {
 				s := newSim(t, simCfg{min: 2, max: 32, reverse: true, exitDials: true, statsOK: stats,
-					linkCap: 2 * mbit, pathCap: 100 * mbit, seed: seed})
+					linkCap: 2 * mbit, pathCap: 100 * mbit, seed: seed, tun: (*apTunables).fastShrink}) // the old pace's descent deadlines
 				s.gens = append(s.gens, tracksTraffic(stepDemand(6, 25, 5*time.Minute, 15*time.Minute)), genIdlePool(60))
 				var dem, car float64
 				s.onTick = func(s *sim) {
@@ -452,7 +479,7 @@ func TestSimPropertyIdleSettlesAtMin(t *testing.T) {
 		for c := range s.conns {
 			c.until, c.bulk, c.remain, c.hb = s.now, false, -1, 0
 		}
-		s.run(10*time.Minute + s.cfg.idleClose)
+		s.run(80*time.Minute + s.cfg.idleClose) // SlowShrink: 32 → 1 in 14 steps 5 min apart
 		if s.a.T != cfg.min || len(s.links) != cfg.min {
 			t.Fatalf("history %d (%+v): T=%d links=%d conns=%d, want %d\n%s",
 				i, cfg, s.a.T, len(s.links), len(s.conns), cfg.min, s.dump())
@@ -549,7 +576,7 @@ func TestSimEnvelope(t *testing.T) {
 		t.Fatalf("maxT=%d maxPhys=%d, want <= 12\n%s", s.maxT, s.maxPhys, s.dump())
 	}
 	s.gens = nil
-	s.run(20 * time.Minute)
+	s.run(45 * time.Minute) // SlowShrink: 12 → 3 in 7 steps 5 min apart
 	if s.a.T != 3 || len(s.links) != 3 {
 		t.Fatalf("idle: T=%d links=%d, want 3\n%s", s.a.T, len(s.links), s.dump())
 	}
