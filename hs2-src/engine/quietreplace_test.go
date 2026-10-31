@@ -169,3 +169,26 @@ func TestQuietReplaceRoom(t *testing.T) {
 		}
 	}
 }
+
+// TestL3Avoid: no flow of the TUN lands on a QUIET link marked avoid (the
+// light one, a slow one), and a flow pinned on one that gets the mark moves
+// at its next packet.
+func TestL3Avoid(t *testing.T) {
+	q1, q2 := &l3Link{id: 1, class: l3Quiet}, &l3Link{id: 2, class: l3Quiet}
+	var edge l3Set
+	edge.add(q1)
+	edge.add(q2)
+	q1.avoid.Store(true)
+	for h := uint32(1); h < 2000; h++ {
+		if l := edge.linkForPkt(h, 100, false); l != q2 {
+			t.Fatalf("flow %d on the avoided link", h)
+		}
+	}
+	q1.avoid.Store(false)
+	q2.avoid.Store(true)
+	for h := uint32(1); h < 2000; h++ {
+		if l := edge.linkForPkt(h, 100, false); l != q1 {
+			t.Fatalf("flow %d stayed on the avoided link", h)
+		}
+	}
+}

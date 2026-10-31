@@ -257,6 +257,12 @@ func (q *quietSet) replaceTick(now time.Time) {
 		ql.retiring.Store(false)
 		q.replacedGoneLocked(ql)
 		q.mu.Unlock()
+		ql.link.l3avoid.Store(ql.light.Load())
+		if cl := coreLinks.of(ql.link.sess); cl != nil {
+			if t := cl.tun.Load(); t != nil {
+				t.avoid.Store(ql.light.Load())
+			}
+		}
 		q.m.log("mtcp: QUIET link q%d stays: no QUIET link came up to replace it within %s", ql.id, replMaxHold)
 	}
 	if slow == nil || q.replacing.Load() > 0 {
@@ -279,6 +285,12 @@ func (q *quietSet) replaceTick(now time.Time) {
 	r.replaced.Add(1)
 	slow.replaced.Store(true)
 	slow.retiring.Store(true)
+	slow.link.l3avoid.Store(true) // the TUN's flows leave it now (l3Link.avoid)
+	if cl := coreLinks.of(slow.link.sess); cl != nil {
+		if t := cl.tun.Load(); t != nil {
+			t.avoid.Store(true)
+		}
+	}
 	q.replacing.Add(1)
 	q.m.log("mtcp: QUIET link q%d is slow next to the BULK links (%s): a new QUIET link comes up, its connections move there, then it goes", slow.id, s.why)
 	q.m.notifyCtl() // the exit dials one link more now (ctlTarget)

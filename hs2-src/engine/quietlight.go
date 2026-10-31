@@ -123,6 +123,7 @@ func (q *quietSet) roleLocked(ql *quietLink) {
 	}
 	if general >= 1 && light == 0 {
 		ql.light.Store(true)
+		ql.link.l3avoid.Store(true) // no flow of the TUN here (l3Link.avoid)
 	}
 }
 

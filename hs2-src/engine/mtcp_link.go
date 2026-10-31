@@ -21,6 +21,10 @@ import (
 // them. smux multiplexes user connections onto the one TLS session so a link
 // with many users still looks like a single HTTPS connection on the wire.
 type mtcpLink struct {
+	// l3avoid: no new flow of the TUN on this link (the edge's light QUIET
+	// link, a slow one being replaced: l3Link.avoid)
+	l3avoid atomic.Bool
+
 	tls     *tlscarrier.Carrier
 	sess    *smux.Session
 	active  atomic.Int32

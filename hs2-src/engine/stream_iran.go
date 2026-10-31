@@ -845,6 +845,7 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)))
 	if ml, ok := l.(*mtcpLink); ok {
 		pl.class = l3ClassOf(ml.quiet, ml.bulk) // β2: new flows on QUIET
+		pl.avoid.Store(ml.l3avoid.Load())       // (the light QUIET link, a slow one being replaced)
 	}
 	set.add(pl)
 	go func() {
