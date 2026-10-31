@@ -36,9 +36,12 @@ import (
 //     max(floor, what recent pressure needs, what the recent peak throughput
 //     needs at 70% of the measured per-link capacity), capped by the links the
 //     active flows can actually use. If a shrink immediately causes a shortage,
-//     it is undone at once (the retiring links are still up) and held.
+//     it is undone at once (the retiring links are still up) and held. Steps
+//     are paced (SlowShrink): at least 5 min after the last shrink or growth,
+//     at most a fifth of T each.
 //
-// Nothing that keeps T up is latched: every input forgets within 60 s (the
+// Nothing that keeps T up is latched: every input forgets within 60 s, the
+// shrink's pace within 5 min (the
 // capacity estimate only scales how many links a given throughput needs, and
 // the hold expires and is void once demand drops), so when traffic falls the
 // pool comes down — the defect of the first version, which ratcheted to 32.
@@ -110,7 +113,8 @@ type apTunables struct {
 	util              float64 // links run at <= this share of capacity at the recent peak
 	minBWForNeed      float64 // below this peak, bandwidth does not justify extra links
 	shrinkDwell       time.Duration
-	shrinkStep        time.Duration
+	shrinkStep        time.Duration // no shrink sooner than this after the last one
+	shrinkMaxFrac     float64       // a shrink step takes at most this share of T (0: half the gap)
 	noShrinkAfterGrow time.Duration
 	overshootWin      time.Duration
 	holdBase          time.Duration
@@ -125,7 +129,7 @@ type apTunables struct {
 }
 
 func defaultTunables() apTunables {
-	return apTunables{
+	t := apTunables{
 		tick:              healthTick,
 		histTicks:         30,
 		shortWin:          5,
@@ -165,6 +169,43 @@ func defaultTunables() apTunables {
 		confirmWin:        60 * time.Second,
 		ceilTTL:           time.Hour,
 	}
+	if SlowShrink.Get() != 0 {
+		t.slowShrink()
+	}
+	return t
+}
+
+// SlowShrink (HS2_TUNE_SLOW_SHRINK; 0: the old pace) paces the pool's shrink.
+// Seen on the main server with real traffic (150–350 Mbit/s, 300–700 active
+// connections): the pattern changed about every 50 s — every minute's dip
+// in demand took links away (a step every 30 s, half the gap each) and the
+// next rise brought them back, each change retiring links whose slow
+// connections then had to drain. With it, a shrink is at least
+// slowShrinkGap after the last shrink AND after the last growth, and takes at
+// most a fifth of the pattern: a demand that swings within minutes keeps the
+// size its peaks need, and a real drop still comes down (300 → 10 links in
+// about 80 min, 100 → 50 in about 17). Growth is untouched: the floor, the
+// probes and an undone shrink act at once as before.
+var SlowShrink = newTuneInt(1)
+
+const (
+	slowShrinkGap  = 5 * time.Minute
+	slowShrinkFrac = 0.2
+)
+
+// slowShrink sets SlowShrink's pace.
+func (t *apTunables) slowShrink() {
+	t.shrinkStep = slowShrinkGap
+	t.noShrinkAfterGrow = slowShrinkGap
+	t.shrinkMaxFrac = slowShrinkFrac
+}
+
+// fastShrink sets the old pace (SlowShrink 0): a step every 30 s, half the
+// gap to what demand needs, a minute after growth.
+func (t *apTunables) fastShrink() {
+	t.shrinkStep = 30 * time.Second
+	t.noShrinkAfterGrow = 60 * time.Second
+	t.shrinkMaxFrac = 0
 }
 
 type apPhase int
@@ -612,6 +653,11 @@ func (a *autopilot) decide(s apSample) apDecision {
 		now.Sub(a.lastShrinkAt) >= t.shrinkStep && now.Sub(a.lastGrowAt) >= t.noShrinkAfterGrow {
 		old := a.T
 		step := (a.T - H + 1) / 2
+		if t.shrinkMaxFrac > 0 {
+			// SlowShrink: steps minutes apart go the whole way to what demand
+			// needs, but never more than a fifth of the pattern at once.
+			step = min(a.T-H, int(t.shrinkMaxFrac*float64(a.T)))
+		}
 		if step < 1 {
 			step = 1
 		}
@@ -632,6 +678,10 @@ func (a *autopilot) decide(s apSample) apDecision {
 	r := "sized for current demand: " + why
 	if H < a.T {
 		r = fmt.Sprintf("demand needs ~%d; stepping down after a steady minute — %s", H, why)
+		if t.shrinkMaxFrac > 0 {
+			r = fmt.Sprintf("demand needs ~%d; stepping down after a steady minute, at most %.0f%% of the links every %s after the last change — %s",
+				H, 100*t.shrinkMaxFrac, fmtDur(t.shrinkStep), why)
+		}
 	}
 	return a.out(s, S, R, apSteady, r, "")
 }
