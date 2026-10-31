@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -23,6 +24,7 @@ func replRig(t *testing.T, quietRTT, bulkRTT uint64) (*LinkManager, *quietSet, *
 	}
 	withTune(t, QuietReplace, 1)
 	withTune(t, QuietFollowGraceMs, 0)
+	withTune(t, QuietLight, 0) // one QUIET link: the light one's case is TestQuietReplaceReverseLight
 	d := &reviewBDialer{}
 	lm := NewLinkManager(d, 1, 4, 8, t.Logf)
 	q := lm.enableQuiet()
@@ -207,6 +209,7 @@ func TestQuietReplaceReverse(t *testing.T) {
 	}
 	withTune(t, QuietReplace, 1)
 	withTune(t, QuietFollowGraceMs, 200)
+	withTune(t, QuietLight, 0)
 	prevAge := replMinAge
 	replMinAge = time.Second
 	t.Cleanup(func() { replMinAge = prevAge })
@@ -264,4 +267,103 @@ func TestQuietReplaceReverse(t *testing.T) {
 	off = echo(off)
 	p.echoBulk(1 << 20) // a new connection opens on the new QUIET link and moves
 	t.Logf("%d echoed in order across the replacement: %s", off, p.q.line())
+}
+
+// TestQuietReplaceReverseLight: the default at max_links 1, the general QUIET
+// link and the light one, over real TLS. Whichever lags is replaced by a link
+// of its own role, the other stays what it was; the connection on the general
+// one goes on, in order, and the pool settles at its count.
+func TestQuietReplaceReverseLight(t *testing.T) {
+	if testing.Short() {
+		t.Skip("real links, ~15 s each")
+	}
+	for _, slowLight := range []bool{false, true} {
+		t.Run(fmt.Sprintf("light%v", slowLight), func(t *testing.T) {
+			withTune(t, QuietReplace, 1)
+			withTune(t, QuietLight, 2)
+			withTune(t, QuietFollowGraceMs, 200)
+			prevAge := replMinAge
+			replMinAge = time.Second
+			t.Cleanup(func() { replMinAge = prevAge })
+			p := startQuietPoolMix(t, false, 1, quietMix{})
+			roles := func() (general, light *quietLink) {
+				for _, ql := range p.q.quietLinks() {
+					if ql.light.Load() {
+						light = ql
+					} else {
+						general = ql
+					}
+				}
+				return
+			}
+			p.waitFor("two QUIET, one of them light, and one BULK", 30*time.Second, func() bool {
+				g, l := roles()
+				return p.q.count() == 2 && g != nil && l != nil && p.serving() == 1
+			})
+			c, err := net.Dial("tcp", p.userAddr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer c.Close()
+			off := 0
+			echo := func() {
+				t.Helper()
+				b := make([]byte, 2000)
+				for i := range b {
+					b[i] = byte((off + i) * 7)
+				}
+				if _, err := c.Write(b); err != nil {
+					t.Fatal(err)
+				}
+				g := make([]byte, len(b))
+				c.SetReadDeadline(time.Now().Add(20 * time.Second))
+				if _, err := io.ReadFull(c, g); err != nil {
+					t.Fatalf("echo at %d: %v", off, err)
+				}
+				for i := range g {
+					if g[i] != b[i] {
+						t.Fatalf("echo byte %d out of order", off+i)
+					}
+				}
+				off += len(b)
+			}
+			echo()
+			g0, l0 := roles()
+			slow, other := g0, l0
+			if slowLight {
+				slow, other = l0, g0
+			}
+			stop := make(chan struct{})
+			defer close(stop)
+			go func() { // its oldest control ping has waited 30 s
+				for {
+					select {
+					case <-stop:
+						return
+					case <-time.After(5 * time.Millisecond):
+						slow.link.mtr.ctrlWait.Store(ctrlNow() - int64(30*time.Second))
+					}
+				}
+			}()
+			p.waitFor("a QUIET link replaced", 30*time.Second, func() bool { return p.q.repl.replaced.Load() == 1 })
+			if !slow.replaced.Load() || other.replaced.Load() {
+				t.Fatalf("replaced: the slow one %v, the other %v", slow.replaced.Load(), other.replaced.Load())
+			}
+			p.waitFor("the new QUIET link up, the slow one closed", 30*time.Second, func() bool {
+				echo()
+				return !slow.link.Alive() && p.q.count() == 2
+			})
+			g1, l1 := roles()
+			if g1 == nil || l1 == nil {
+				t.Fatalf("the roles after it: general %v, light %v", g1, l1)
+			}
+			if slowLight && (g1 != g0 || l1 == l0) || !slowLight && (l1 != l0 || g1 == g0) {
+				t.Fatalf("a link of the other role replaced (light %v was slow)", slowLight)
+			}
+			p.waitFor("the count back", 10*time.Second, func() bool { return p.q.replacing.Load() == 0 && p.q.wantNow() == 2 && p.serving() == 1 })
+			echo()
+			p.echoBulk(1 << 20)
+			t.Logf("%d echoed in order across the replacement: %s", off, p.q.line())
+		})
+	}
 }

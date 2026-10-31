@@ -97,6 +97,9 @@ func TestQuietFollowMixed(t *testing.T) {
 			if ask == 0 {
 				ask = c.wantQ + c.wantB
 			}
+			if c.mix.edgeNoFollow && c.mix.exitNoRoom {
+				withTune(t, QuietReplace, 0) // ends of before it: no room for a replacement either
+			}
 			p := startQuietPoolMix(t, false, c.max, c.mix)
 			t0 := time.Now()
 			p.waitFor("the classes settle", 30*time.Second, func() bool {
