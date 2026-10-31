@@ -1,0 +1,38 @@
+07:56:16 plan /root/r5/RB/plan.txt: 18 runs
+07:56:18 start bded2768-prod-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 2.21 waited 0s
+07:57:12 done bded2768-prod-1 ok=1 
+07:57:14 start bded2768-fin2-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin2) load 2.17 waited 0s
+07:58:09 done bded2768-fin2-1 ok=1 
+07:58:10 start bded2768-r5-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=r5) load 3.11 waited 0s
+07:59:05 done bded2768-r5-1 ok=1 
+07:59:07 start bded2768-r5-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=r5) load 3.77 waited 0s
+08:00:01 done bded2768-r5-2 ok=1 
+08:00:03 start bded2768-fin2-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin2) load 4.05 waited 0s
+08:00:57 done bded2768-fin2-2 ok=1 
+08:00:59 start bded2768-prod-2 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 3.42 waited 0s
+08:01:54 done bded2768-prod-2 ok=1 
+08:01:56 start bded2768-r5-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=r5) load 3.68 waited 0s
+08:02:50 done bded2768-r5-3 ok=1 
+08:02:52 start bded2768-fin2-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=fin2) load 3.30 waited 0s
+08:03:46 done bded2768-fin2-3 ok=1 
+08:03:48 start bded2768-prod-3 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=prod) load 2.77 waited 0s
+08:04:43 done bded2768-prod-3 ok=1 
+08:04:45 start 5c170184-prod-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 2.57 waited 0s
+08:05:25 done 5c170184-prod-1 ok=1 
+08:05:27 start 5c170184-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=fin2) load 3.12 waited 0s
+08:06:07 done 5c170184-fin2-1 ok=1 
+08:06:09 start 5c170184-r5-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=r5) load 2.80 waited 0s
+08:06:49 done 5c170184-r5-1 ok=1 
+08:06:51 start 5c170184-r5-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=r5) load 2.88 waited 0s
+08:07:31 done 5c170184-r5-2 ok=1 
+08:07:33 start 5c170184-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=fin2) load 2.37 waited 0s
+08:08:13 done 5c170184-fin2-2 ok=1 
+08:08:15 start 5c170184-prod-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 2.53 waited 0s
+08:08:55 done 5c170184-prod-2 ok=1 
+08:08:57 start 5c170184-r5-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=r5) load 2.92 waited 0s
+08:09:37 done 5c170184-r5-3 ok=1 
+08:09:39 start 5c170184-fin2-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=fin2) load 2.42 waited 0s
+08:10:19 done 5c170184-fin2-3 ok=1 
+08:10:21 start 5c170184-prod-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=tunping DUR=30 BIN=prod) load 2.18 waited 0s
+08:11:01 done 5c170184-prod-3 ok=1 
+08:11:01 done /root/r5/RB/plan.txt
