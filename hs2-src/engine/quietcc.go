@@ -1,10 +1,12 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -37,8 +39,12 @@ import (
 // QUIET link at its fq_codel flow queue, whose losses there are CoDel's
 // (a queue), behaves as cubic did, and on a lossy path it keeps its window.
 // Its kernel module loads on the first socket that asks for it (the server
-// runs as root); a kernel without it takes the next (cubic) and the log says
-// so once.
+// runs as root: CAP_NET_ADMIN lets the kernel load tcp_illinois itself,
+// even when it is not yet in net.ipv4.tcp_available_congestion_control); a
+// kernel without it, or a process that may not load it, takes the next
+// (cubic), and the log says so once with the kernel's reason ("quiet: QUIET
+// links run cubic (illinois not available: ...)"; modprobe tcp_illinois as
+// root brings it).
 //
 // QuietCCLoss (round 5's second approach, measured against the first): the
 // socket runs QuietCC and switches, at each end on its own sending, to
@@ -47,8 +53,20 @@ import (
 // (srtt − min_rtt) under quietLossQueue: a loss with no queue is the path's,
 // not the bottleneck's — and back once quietCalm went by without it.
 
-// setCongestion is tlscarrier.SetCongestion (a var for the tests).
-var setCongestion = tlscarrier.SetCongestion
+// setCongestion is tlscarrier.SetCongestionErr (a var for the tests): nil,
+// the socket runs cc; else the kernel's refusal.
+var setCongestion = tlscarrier.SetCongestionErr
+
+// ccWhy is the kernel's refusal of a congestion control, for the log.
+func ccWhy(cc string, err error) string {
+	switch {
+	case errors.Is(err, syscall.ENOENT):
+		return fmt.Sprintf("%v: not loaded and not loadable here; modprobe tcp_%s as root", err, cc)
+	case errors.Is(err, syscall.EPERM):
+		return fmt.Sprintf("%v: not in net.ipv4.tcp_allowed_congestion_control and no CAP_NET_ADMIN", err)
+	}
+	return err.Error()
+}
 
 // quietCCSeen: the congestion control the latest QUIET socket got, for the
 // one log line a change makes.
@@ -66,15 +84,18 @@ var quietCCLogf = coreLogf
 // the links' own, BBR).
 func setQuietCC(tc *net.TCPConn, list string) string {
 	got := ""
+	var why []string // the ones before got: the kernel's refusals
 	for _, cc := range strings.Split(list, ",") {
 		cc = strings.TrimSpace(cc)
 		if cc == "" {
 			continue
 		}
-		if setCongestion(tc, cc) {
+		err := setCongestion(tc, cc)
+		if err == nil {
 			got = cc
 			break
 		}
+		why = append(why, fmt.Sprintf("%s not available: %s", cc, ccWhy(cc, err)))
 	}
 	if tc != nil && list != "" {
 		quietCCSeen.mu.Lock()
@@ -84,9 +105,9 @@ func setQuietCC(tc *net.TCPConn, list string) string {
 		if changed {
 			switch {
 			case got == "":
-				quietCCLogf("quiet: the kernel took none of %q for the QUIET links; they keep the links' own congestion control", list)
-			case !strings.HasPrefix(list, got):
-				quietCCLogf("quiet: QUIET links run %s (%q: the ones before it are not in this kernel)", got, list)
+				quietCCLogf("quiet: the kernel took none of %q for the QUIET links; they keep the links' own congestion control (%s)", list, strings.Join(why, "; "))
+			case len(why) > 0:
+				quietCCLogf("quiet: QUIET links run %s (%s)", got, strings.Join(why, "; "))
 			default:
 				quietCCLogf("quiet: QUIET links run %s", got)
 			}
@@ -198,7 +219,7 @@ func (w *quietCCWatch) step(now time.Duration, st tcpStat) {
 	lossy := dr >= quietLossMin && ds > 0 && w.ppm >= uint64(QuietLossPpm)
 	switch {
 	case !w.on && lossy && w.queue < quietLossQueue && !w.failed:
-		if setCongestion(w.tc, w.loss) {
+		if setCongestion(w.tc, w.loss) == nil {
 			w.on, w.lossyAt = true, now
 			w.switches++
 			quietCCLogf("quiet: a QUIET link sees random loss (%.3f%% resent at a %.1f ms queue): %s until %s without it", float64(w.ppm)/1e4, msOf(w.queue), w.loss, quietCalm)
@@ -209,7 +230,7 @@ func (w *quietCCWatch) step(now time.Duration, st tcpStat) {
 	case w.on && dr >= 1 && w.ppm >= uint64(QuietLossPpm)/2:
 		w.lossyAt = now
 	case w.on && now-w.lossyAt >= quietCalm:
-		if w.base == "" || setCongestion(w.tc, w.base) {
+		if w.base == "" || setCongestion(w.tc, w.base) == nil {
 			w.on = false
 			w.switches++
 			quietCCLogf("quiet: a QUIET link has seen no random loss for %s: back to %s", quietCalm, w.base)

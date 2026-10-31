@@ -2,7 +2,10 @@
 
 package tlscarrier
 
-import "net"
+import (
+	"errors"
+	"net"
+)
 
 // Linux-only socket tuning knobs; present so callers build everywhere.
 var (
@@ -19,3 +22,8 @@ func tuneTCP(c net.Conn) {
 
 // SetCongestion is Linux's only.
 func SetCongestion(tc *net.TCPConn, cc string) bool { return false }
+
+// SetCongestionErr is Linux's only.
+func SetCongestionErr(tc *net.TCPConn, cc string) error {
+	return errors.New("congestion control is set on Linux only")
+}

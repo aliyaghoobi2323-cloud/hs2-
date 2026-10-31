@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -14,14 +15,14 @@ func stubCC(t *testing.T, ok ...string) *[]string {
 	t.Helper()
 	var sets []string
 	prev, prevLog := setCongestion, quietCCLogf
-	setCongestion = func(tc *net.TCPConn, cc string) bool {
+	setCongestion = func(tc *net.TCPConn, cc string) error {
 		for _, o := range ok {
 			if o == cc {
 				sets = append(sets, cc)
-				return true
+				return nil
 			}
 		}
-		return false
+		return syscall.ENOENT // the kernel's refusal of a name it has not
 	}
 	quietCCLogf = func(string, ...any) {}
 	t.Cleanup(func() { setCongestion, quietCCLogf = prev, prevLog })
@@ -50,7 +51,14 @@ func TestQuietCCList(t *testing.T) {
 	quietCCSeen.got = "?"
 	setQuietCC(tc, "illinois,cubic")
 	setQuietCC(tc, "illinois,cubic") // the same: no second line
-	if len(logs) != 1 || !strings.Contains(logs[0], "run cubic") || !strings.Contains(logs[0], "not in this kernel") {
+	if len(logs) != 1 || !strings.HasPrefix(logs[0], "quiet: QUIET links run cubic (illinois not available: ") ||
+		!strings.Contains(logs[0], "modprobe tcp_illinois") {
+		t.Fatalf("log lines %q", logs)
+	}
+	logs = nil
+	quietCCSeen.got = "?"
+	setQuietCC(tc, "cubic") // the first of the list: no reason to give
+	if len(logs) != 1 || logs[0] != "quiet: QUIET links run cubic" {
 		t.Fatalf("log lines %q", logs)
 	}
 }
