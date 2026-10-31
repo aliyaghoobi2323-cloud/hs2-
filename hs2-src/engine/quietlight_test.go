@@ -293,3 +293,16 @@ func TestQuietWaitOpen(t *testing.T) {
 		r.cancel()
 	}
 }
+
+// TestQuietLightEveryCount: QuietLight 3 is one light link at every count.
+func TestQuietLightEveryCount(t *testing.T) {
+	withTune(t, QuietLight, 3)
+	for _, n := range []int{1, 4, 5, 6, 90, 300} {
+		if got := lightCount(n); got != 1 {
+			t.Errorf("max_links %d: %d light links, want 1", n, got)
+		}
+	}
+	if got := QuietCount(5); got != 2 {
+		t.Errorf("QuietCount(5) %d, want 2", got)
+	}
+}
