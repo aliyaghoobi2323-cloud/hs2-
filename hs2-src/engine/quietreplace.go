@@ -50,7 +50,6 @@ var QuietReplace = newTuneInt(0)
 
 const (
 	quietSlowTicks = 3                // pool ticks in a row (healthTick each: 6 s)
-	replMinAge     = 10 * time.Second // a link younger than this is not judged
 	replGap        = time.Minute      // the least time between two replacements
 	replWindow     = 10 * time.Minute // ... and at most replBudget of them in this long
 	replBudget     = 3
@@ -67,6 +66,9 @@ func replaceRoom() int {
 	}
 	return 0
 }
+
+// replMinAge: a link younger than this is not judged (a var for the tests).
+var replMinAge = 10 * time.Second
 
 // replState is a QUIET link's record for the judge (the pool goroutine's).
 type replState struct {
