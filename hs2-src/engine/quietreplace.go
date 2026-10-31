@@ -50,13 +50,23 @@ var QuietReplace = newTuneInt(0)
 
 const (
 	quietSlowTicks = 3                // pool ticks in a row (healthTick each: 6 s)
-	replMinAge     = 20 * time.Second // a link younger than this is not judged
+	replMinAge     = 10 * time.Second // a link younger than this is not judged
 	replGap        = time.Minute      // the least time between two replacements
 	replWindow     = 10 * time.Minute // ... and at most replBudget of them in this long
 	replBudget     = 3
 	replMaxHold    = time.Minute // a retired link is closed this long after at the latest
 	replLossTau    = 20 * time.Second
 )
+
+// replaceRoom is the links a reverse pool may hold past its count for a slow
+// QUIET link's replacement (make before break): the exit dials it next to
+// the slow one, and the edge's ceiling must allow it (stream_iran.go).
+func replaceRoom() int {
+	if QuietReplace.Get() != 0 {
+		return 1
+	}
+	return 0
+}
 
 // replState is a QUIET link's record for the judge (the pool goroutine's).
 type replState struct {
@@ -247,6 +257,12 @@ func (q *quietSet) replaceTick(now time.Time) {
 		ql.retiring.Store(false)
 		q.replacedGoneLocked(ql)
 		q.mu.Unlock()
+		ql.link.l3avoid.Store(ql.light.Load())
+		if cl := coreLinks.of(ql.link.sess); cl != nil {
+			if t := cl.tun.Load(); t != nil {
+				t.avoid.Store(ql.light.Load())
+			}
+		}
 		q.m.log("mtcp: QUIET link q%d stays: no QUIET link came up to replace it within %s", ql.id, replMaxHold)
 	}
 	if slow == nil || q.replacing.Load() > 0 {
@@ -269,6 +285,12 @@ func (q *quietSet) replaceTick(now time.Time) {
 	r.replaced.Add(1)
 	slow.replaced.Store(true)
 	slow.retiring.Store(true)
+	slow.link.l3avoid.Store(true) // the TUN's flows leave it now (l3Link.avoid)
+	if cl := coreLinks.of(slow.link.sess); cl != nil {
+		if t := cl.tun.Load(); t != nil {
+			t.avoid.Store(true)
+		}
+	}
 	q.replacing.Add(1)
 	q.m.log("mtcp: QUIET link q%d is slow next to the BULK links (%s): a new QUIET link comes up, its connections move there, then it goes", slow.id, s.why)
 	q.m.notifyCtl() // the exit dials one link more now (ctlTarget)

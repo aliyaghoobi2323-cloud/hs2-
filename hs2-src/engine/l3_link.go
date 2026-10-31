@@ -114,6 +114,10 @@ type l3Link struct {
 	// class: its link's (β2, quiet.go): new flows go to a QUIET one, the
 	// edge's flows that turn bulk move once to a BULK one (l3Any: no class)
 	class uint8
+	// avoid: no new flow here, and a flow pinned here moves at its next
+	// packet (the edge's light QUIET link, quietlight.go; a slow QUIET link
+	// being replaced, quietreplace.go)
+	avoid atomic.Bool
 }
 
 // The TUN links' classes (β2).
@@ -382,7 +386,7 @@ func (s *l3Set) linkForPkt(h uint32, size int, echo bool) *l3Link {
 		s.sweepPins(now, l3PinIdle)
 	}
 	p := s.pins[h]
-	if p != nil && p.l.Alive() {
+	if p != nil && p.l.Alive() && !p.l.avoid.Load() {
 		p.at = now
 		if !s.toUser && !p.moved && !p.echo && p.l.class == l3Quiet {
 			p.tx += uint64(size)
@@ -585,7 +589,7 @@ func (s *l3Set) pickFlowClass(h uint32, c uint8) *l3Link {
 	var best *l3Link
 	var bestW uint32
 	for _, l := range s.links {
-		if !l.Alive() || c != l3Any && l.class != c {
+		if !l.Alive() || c != l3Any && l.class != c || l.avoid.Load() {
 			continue
 		}
 		if w := mix32(h ^ l.id); best == nil || w > bestW {
