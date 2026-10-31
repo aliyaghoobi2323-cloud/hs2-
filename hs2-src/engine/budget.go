@@ -337,6 +337,11 @@ func (c *budgetCore) step0(in budgetIn) float64 {
 		}
 	case two:
 		qRev = min(S/2, T)
+		if BudgetSplitRate != 0 && in.RxRate > in.TxRate {
+			// the heavier way holds the queue: S by the two rates, at least
+			// the guess (BudgetSplitRate)
+			qRev = max(qRev, time.Duration(float64(S)*in.RxRate/(in.RxRate+in.TxRate)))
+		}
 	}
 	// the QUIET link's one-way queues count only while the link's own
 	// round trip holds them (BudgetQuietCheck): a one-way queue of the path
@@ -468,6 +473,17 @@ type linkBudget struct {
 	// loss: the socket's random-loss record (BudgetLossPpm)
 	loss budgetLoss
 }
+
+// BudgetSplitRate (HS2_TUNE_BUDGET_SPLIT; 0: off; R1 round 5): a two-way
+// link without its own one-way delays (dirty while it resends: OWDGuardBulk)
+// splits S by what each way carries when the other way carries more,
+// instead of holding the way back to the guess min(S/2, T). In the home mix
+// at N=1 one BULK link carries the downloads and ~90 Mbit/s of uploads; under
+// random loss its own delays read none, and the exit took S (8 to 12 ms, most
+// of it the uplink's queue, where the downloads' acks wait behind the uploads
+// in one flow queue) for its own less 2.5 ms: it cut the downloads to 16 to 19
+// Mbit/s at 0.3 % (round 5's screen S4; production 78).
+var BudgetSplitRate = 0
 
 // BudgetLossPpm (HS2_TUNE_BUDGET_LOSS, resent per million sent; 0: off; R1
 // round 5): while a BULK link socket resends at least this share of what
