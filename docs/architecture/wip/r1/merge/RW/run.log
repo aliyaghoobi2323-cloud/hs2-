@@ -1,0 +1,26 @@
+14:07:13 plan /root/rmerge/RW/plan.txt: 12 runs
+14:07:14 start f4fb6861-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 0.81 waited 0s
+14:08:20 done f4fb6861-fin2-1 ok=1 
+14:08:20 start f4fb6861-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 3.06 waited 0s
+14:09:26 done f4fb6861-m-1 ok=1 
+14:09:27 start f4fb6861-moff2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=moff2) load 3.40 waited 0s
+14:10:32 done f4fb6861-moff2-1 ok=1 
+14:10:33 start f4fb6861-moff2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=moff2) load 3.89 waited 0s
+14:11:39 done f4fb6861-moff2-2 ok=1 
+14:11:39 start f4fb6861-m-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 3.73 waited 0s
+14:12:45 done f4fb6861-m-2 ok=1 
+14:12:46 start f4fb6861-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.23 waited 0s
+14:13:52 done f4fb6861-fin2-2 ok=1 
+14:13:53 start f4fb6861-moff2-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=moff2) load 4.56 waited 0s
+14:14:58 done f4fb6861-moff2-3 ok=1 
+14:14:59 start f4fb6861-m-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 3.78 waited 0s
+14:16:05 done f4fb6861-m-3 ok=1 
+14:16:06 start f4fb6861-fin2-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.95 waited 0s
+14:17:11 done f4fb6861-fin2-3 ok=1 
+14:17:12 start f4fb6861-moff2-4 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=moff2) load 2.07 waited 0s
+14:18:18 done f4fb6861-moff2-4 ok=1 
+14:18:19 start f4fb6861-m-4 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 2.44 waited 0s
+14:19:24 done f4fb6861-m-4 ok=1 
+14:19:25 start f4fb6861-fin2-4 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.99 waited 0s
+14:20:31 done f4fb6861-fin2-4 ok=1 
+14:20:31 done /root/rmerge/RW/plan.txt

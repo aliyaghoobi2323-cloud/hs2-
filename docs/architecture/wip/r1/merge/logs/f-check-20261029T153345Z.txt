@@ -1,0 +1,5 @@
+== f-check: /root/rmerge/tools/blocks.sh check (2026-10-29T15:33:45Z)
+== check on 87cee6c (R1 ادغام: ادغام r1-cpu e1373b6 (قاعدهٔ هسته‌ها: چیدمان رو�) 2026-10-29T15:38:21Z
+go version go1.27.3 linux/amd64
+-- vet/fmt: 2 of 2 make targets rc 0; rigload vet rc 0
+-- /run/hs2/icmp-echo-ignore before: 2026-10-29 15:35:37.133735151 +0000

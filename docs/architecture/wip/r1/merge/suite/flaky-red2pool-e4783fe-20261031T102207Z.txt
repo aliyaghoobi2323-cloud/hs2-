@@ -1,0 +1,31 @@
+== go test -count=30 -timeout 15m -run ^TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo$ ./engine (in hs2-src): rc 1, 37 s
+== flaky-red2pool
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   fail     37.2  29/1/0                 0/0/0                 
+TOTAL top-level: 29 pass, 1 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (1 not pass)
+
+-- package github.com/hosseintaghipoursori-alt/hs2-tunnel/engine: fail
+   FAIL
+   FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	37.196s
+
+-- FAIL github.com/hosseintaghipoursori-alt/hs2-tunnel/engine TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+       red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+   --- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.31s)
+   === RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+       red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+   --- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.31s)
+   === RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+       red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+   --- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.26s)
+   === RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+       red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+   --- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.26s)
+   === RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+       red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+   --- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.36s)
+   === RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+       red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+   --- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.31s)
+   === RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+       red2_wcore_test.go:160: borrowed 3072 KiB; held with the data after the death, whole 1s after it (relayDieGrace 1s)
+   --- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.26s)

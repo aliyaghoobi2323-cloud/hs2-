@@ -1,0 +1,13 @@
+| run | N | MIX | ok | links up at start (wait s) | edge serving / exit links (end) | same after idle | link sockets; re-dialed; silent | down / up Mbit/s | host TCP pressures; max pages; samples past tcp_mem[1] | CPU edge / exit % (mean) | panic / fatal / race in logs |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| a0318ff0-m-1 | 1 | gamer_vs_dl | True | 1 (0.31) | 1 / 2 | 1 / 2 | 2; 0; 0 | 90.4 / 1.1 | 0; 288848; 0 | 72 / 52 | 0 / 0 / 0 |
+| f4fb6861-m-1 | 8 | home | True | 9 (0.9) | 8 / 12 | 8 / 12 | 12; 0; 0 | 85.7 / 84.1 | 0; 167154; 0 | 100 / 97 | 0 / 0 / 0 |
+
+Process samples (PROC_TRACE, every 5 s): before the users (first sample, the tunnel up) / peak / end of the users' window / after POST_IDLE (20 s after the client ended); growth = the change over the users' last 20 s (to 3 s before their end), % (a leak grows there; a heap that reached its working size is flat).
+
+| run | side | fds | goroutines | RSS MB | threads | growth fds / gor / RSS % |
+|---|---|---|---|---|---|---|
+| a0318ff0-m-1 | edge | 172 / 429 / 29 / 16 | 198 / 1324 / 124 / 61 | 23.6 / 62.0 / 62.0 / 23.4 | 18 / 19 / 19 / 19 | 0.0 / 0.0 / 23.9 |
+| a0318ff0-m-1 | exit | 99 / 435 / 35 / 10 | 128 / 1308 / 612 / 45 | 21.8 / 75.7 / 75.7 / 67.2 | 27 / 27 / 27 / 27 | 0.0 / 0.0 / 30.9 |
+| f4fb6861-m-1 | edge | 82 / 269 / 95 / 26 | 168 / 944 / 422 / 207 | 21.0 / 54.5 / 54.5 / 52.4 | 17 / 18 / 18 / 18 | -0.4 / -0.4 / 6.0 |
+| f4fb6861-m-1 | exit | 37 / 268 / 93 / 20 | 158 / 924 / 497 / 178 | 20.0 / 61.5 / 60.8 / 56.3 | 17 / 18 / 18 / 18 | -0.4 / -0.4 / 6.3 |

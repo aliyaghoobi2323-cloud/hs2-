@@ -1,0 +1,60 @@
+== arm7 (GOARCH=arm GOARM=7): engine tlscarrier core cmd-hs2 smux — 2026-10-29T19:14:34Z, 70198ec R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حریم خصوصی)، پشت HS2_TUNE_TAG_KEY=1
+== host: Linux 6.8.0-147-generic x86_64, go version go1.27.3 linux/amd64
+== 1. static binary
+14f55c7497739c17f0d6490704b76aab51b5a3265ef1681d9e7f6e5cafbb42c1  hs2-linux-armv7
+-rwxr-xr-x 1 root root 12648608 Oct 29 19:14 hs2-linux-armv7
+== 2. test binaries for arm7
+-rwxr-xr-x 1 root root 15125124 Oct 29 19:14 /root/rmerge/step5/arm7-70198ec-20261029T191434Z-bin/cmd-hs2.test
+-rwxr-xr-x 1 root root  4978297 Oct 29 19:14 /root/rmerge/step5/arm7-70198ec-20261029T191434Z-bin/core.test
+-rwxr-xr-x 1 root root 21855089 Oct 29 19:14 /root/rmerge/step5/arm7-70198ec-20261029T191434Z-bin/engine.test
+-rwxr-xr-x 1 root root 12781982 Oct 29 19:14 /root/rmerge/step5/arm7-70198ec-20261029T191434Z-bin/smux.test
+-rwxr-xr-x 1 root root 14408294 Oct 29 19:14 /root/rmerge/step5/arm7-70198ec-20261029T191434Z-bin/tlscarrier.test
+== 3. under /root/rprep/tools/qemu/usr/bin/qemu-arm-static (qemu-arm version 8.2.2 (Debian 1:8.2.2+ds-0ubuntu1.18))
+-- engine: -test.short -test.count=1 -test.timeout=40m -test.v -test.run Sched|Class|Lane|HostQ|Lowat|Gate|HostWait|SendCap|Budget|OWD|Hint|Events|QuietRecords|QuietCounts|FlowKey|Tun|Proxy|Syn|UserTag|Wire|Pin|Shape|Coalesce|Moved|MoveRule|UDPLate|Panel|LinkSndbuf -test.skip ^(TestAngleSendCapBothEnds|TestBudgetInflight|TestExitMeterBlockedBehindSlowReaderTCP|TestHostQLinuxSocket|TestListenersArePlainTCP|TestLowatAdaptsLinux|TestModuleDefaultIsPlainTCP|TestPaceNetIdleLinksReads|TestPaceNetRegistration|TestPaceNetRunner|TestPaceNetSetsSocket|TestQuietThinTimeouts|TestReplyPinBothFamilies|TestSendCapLinuxTCPInfo|TestServeStatsExtendedFromSocket|TestUDPUserPortRepliesFromTheAddressUsed|TestWcoreFixOooSupportByLength)$
+   pass 163, fail 0, skip 7 (top level)
+   skip TestAngleClassesAndStatusLines: emulated link
+   skip TestAngleTunPingAheadOfBulk: emulated links
+   skip TestControlPingCadence: real-time cadence
+   skip TestHintCallStays: emulated links, 4 s
+   skip TestQuietMovedWindowGrows: emulated links, 12 s
+   skip TestReviewAUserTagRevealsAddress: proof of an open review finding (HS2_REVIEW_RED=1 runs it)
+   skip TestControlWaitShowsUnansweredPing: real-time cadence
+   PASS; 173 s
+-- engine, the kernel-facing tests and those qemu-user cannot serve, under emulation (not counted): ^(TestAngleSendCapBothEnds|TestBudgetInflight|TestExitMeterBlockedBehindSlowReaderTCP|TestHostQLinuxSocket|TestListenersArePlainTCP|TestLowatAdaptsLinux|TestModuleDefaultIsPlainTCP|TestPaceNetIdleLinksReads|TestPaceNetRegistration|TestPaceNetRunner|TestPaceNetSetsSocket|TestQuietThinTimeouts|TestReplyPinBothFamilies|TestSendCapLinuxTCPInfo|TestServeStatsExtendedFromSocket|TestUDPUserPortRepliesFromTheAddressUsed|TestWcoreFixOooSupportByLength)$
+   pass 11, fail 6, skip 0 (top level)
+   FAIL TestLowatAdaptsLinux
+      2026/10/29 19:17:40 sendcap: the kernel lacks tcpi_delivery_rate: no pacing cap of C4-lite on the link sockets (the pacing net's alone, as before)
+          hostq_linux_test.go:95: segs8: the socket's mark 25000 → 11584 B 650ms after the drop
+          hostq_linux_test.go:97: segs8: the socket's mark was 11584 after the drop (want 11584 within 600 ms; at 650ms)
+   FAIL TestHostQLinuxSocket
+      2026/10/29 19:17:40 hostq: the kernel lacks TCP_NOTSENT_LOWAT or SIOCOUTQNSD (inappropriate ioctl for device): link sockets keep the fixed low-water mark (32768 B) and the old send gate
+          hostq_linux_test.go:168: inappropriate ioctl for device
+   FAIL TestPaceNetSetsSocket
+          pacenet_linux_test.go:25: cap 30 MB/s: reads 4294967295
+   FAIL TestSendCapLinuxTCPInfo
+          sendcap_linux_test.go:50: TCP_INFO: ok true dlvOK false mss 0
+   FAIL TestServeStatsExtendedFromSocket
+          stats_ext_linux_test.go:56: record {seq:1 flags:2 mono:6407142602 tx:0 txBlocked:0 busy:0 rwnd:0 sndbuf:0 delivery:0 srtt:0 minRTT:0 rttVar:0 retrans:0 segsOut:0 at:{wall:0 ext:0 loc:<nil>}} next to the socket's {retrans:0 busyUs:0 rwndUs:0 sndbufUs:0 deliveryRate:0 notsent:0 rtt:0 rttVar:0 minRTT:0 chronoValid:false segsOut:0 segsIn:0 rcvOOO:0 oooOK:false bytesReceived:0 bytesAcked:0 pacingRate:0 dlvOK:false appLimited:false sndMSS:0}
+   FAIL TestWcoreFixOooSupportByLength
+          wcore_fix_linux_test.go:59: a TCP_INFO short of rcv_ooopack: ok true oooOK false segsIn 0, want the rest read and oooOK false
+-- tlscarrier: -test.short -test.count=1 -test.timeout=40m -test.v
+   pass 33, fail 0, skip 1 (top level)
+   skip TestReviewAInterceptorReadsAsRefusal: proof of an open review finding (HS2_REVIEW_RED=1 runs it)
+   PASS; 56 s
+-- core: -test.short -test.count=1 -test.timeout=40m -test.v
+   pass 15, fail 0, skip 0 (top level)
+   PASS; 2 s
+-- cmd-hs2: -test.short -test.count=1 -test.timeout=40m -test.v -test.skip ^(TestCPUMeter|TestLinkNoNetworkNoLog)$
+   pass 101, fail 0, skip 0 (top level)
+   PASS; 4 s
+-- cmd-hs2, the kernel-facing tests and those qemu-user cannot serve, under emulation (not counted): ^(TestCPUMeter|TestLinkNoNetworkNoLog)$
+   pass 0, fail 2, skip 0 (top level)
+   FAIL TestCPUMeter
+          cpu_test.go:42: busy goroutines on every core measured as 0% of one core (6 cores)
+   FAIL TestLinkNoNetworkNoLog
+          link_test.go:996: in an empty network namespace: exit status 2, stderr="/root/rmerge/step5/arm7-70198ec-20261029T191434Z-bin/cmd-hs2.test: 1: Syntax error: word unexpected (expecting \")\")\n"
+-- smux: -test.short -test.count=1 -test.timeout=40m -test.v
+   pass 138, fail 0, skip 1 (top level)
+   skip TestRed2ChaosMoreSeeds: HS2_RED2_SEEDS not set
+   PASS; 80 s
+== exit 0

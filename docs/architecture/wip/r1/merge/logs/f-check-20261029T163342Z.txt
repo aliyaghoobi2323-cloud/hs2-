@@ -1,0 +1,5 @@
+== f-check: /root/rmerge/tools/blocks.sh check (2026-10-29T16:33:42Z)
+== check on 93bfdbb (R1 ادغام: جدول کلیدهای اپراتور در README.md و SWITCHES.fa.md (ب) 2026-10-29T16:33:42Z
+go version go1.27.3 linux/amd64
+-- vet/fmt: 2 of 2 make targets rc 0; rigload vet rc 0
+-- /run/hs2/icmp-echo-ignore before: 2026-10-29 15:52:29.710075934 +0000

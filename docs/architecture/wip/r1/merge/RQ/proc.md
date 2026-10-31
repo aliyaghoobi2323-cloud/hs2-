@@ -1,0 +1,25 @@
+| run | N | MIX | ok | links up at start (wait s) | edge serving / exit links (end) | same after idle | link sockets; re-dialed; silent | down / up Mbit/s | host TCP pressures; max pages; samples past tcp_mem[1] | CPU edge / exit % (mean) | panic / fatal / race in logs |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| bded2768-m-1 | 1 | newheavy | True | 1 (0.33) | 1 / 2 | 1 / 2 | 2; 0; 0 | - / - | 0; 42137; 0 | 55 / 36 | 0 / 0 / 0 |
+| bded2768-m-2 | 1 | newheavy | True | 1 (0.31) | 1 / 2 | 1 / 2 | 2; 0; 0 | - / - | 0; 28274; 0 | 60 / 38 | 0 / 0 / 0 |
+| bded2768-mq0-1 | 1 | newheavy | True | 1 (0.33) | 1 / 1 | 1 / 1 | 1; 0; 0 | - / - | 0; 38851; 0 | 44 / 34 | 0 / 0 / 0 |
+| bded2768-mq0-2 | 1 | newheavy | True | 1 (0.34) | 1 / 1 | 1 / 1 | 1; 0; 0 | - / - | 0; 29004; 0 | 47 / 34 | 0 / 0 / 0 |
+| bded2768-mq0r0-1 | 1 | newheavy | True | 1 (0.31) | 1 / 1 | 1 / 1 | 1; 0; 0 | - / - | 0; 37747; 0 | 30 / 38 | 0 / 0 / 0 |
+| bded2768-mq0r0-2 | 1 | newheavy | True | 1 (0.32) | 1 / 1 | 1 / 1 | 1; 0; 0 | - / - | 0; 26004; 0 | 44 / 34 | 0 / 0 / 0 |
+
+Process samples (PROC_TRACE, every 5 s): before the users (first sample, the tunnel up) / peak / end of the users' window / after POST_IDLE (20 s after the client ended); growth = the change over the users' last 20 s (to 3 s before their end), % (a leak grows there; a heap that reached its working size is flat).
+
+| run | side | fds | goroutines | RSS MB | threads | growth fds / gor / RSS % |
+|---|---|---|---|---|---|---|
+| bded2768-m-1 | edge | 18 / 229 / 212 / 14 | 55 / 700 / 649 / 55 | 15.4 / 40.9 / 40.9 / 41.0 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 3.8 |
+| bded2768-m-1 | exit | 11 / 225 / 208 / 10 | 45 / 690 / 639 / 45 | 15.3 / 41.1 / 41.1 / 41.4 | 11 / 13 / 13 / 13 | 0.0 / 0.0 / 7.3 |
+| bded2768-m-2 | edge | 22 / 229 / 212 / 14 | 45 / 700 / 649 / 55 | 16.6 / 40.4 / 40.4 / 40.5 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 4.2 |
+| bded2768-m-2 | exit | 12 / 225 / 208 / 10 | 38 / 690 / 639 / 45 | 16.4 / 40.4 / 40.4 / 40.6 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 6.2 |
+| bded2768-mq0-1 | edge | 24 / 228 / 211 / 13 | 39 / 681 / 630 / 36 | 16.0 / 39.8 / 39.8 / 39.9 | 12 / 14 / 14 / 14 | 0.0 / 0.0 / 4.8 |
+| bded2768-mq0-1 | exit | 10 / 224 / 207 / 9 | 29 / 673 / 622 / 28 | 15.2 / 39.5 / 39.5 / 39.5 | 11 / 13 / 13 / 13 | 0.0 / 0.0 / 5.6 |
+| bded2768-mq0-2 | edge | 39 / 228 / 211 / 13 | 62 / 681 / 630 / 36 | 17.2 / 38.3 / 38.3 / 38.3 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 8.7 |
+| bded2768-mq0-2 | exit | 14 / 224 / 207 / 9 | 37 / 673 / 622 / 28 | 15.2 / 39.1 / 39.1 / 39.2 | 11 / 13 / 13 / 13 | 0.0 / 0.0 / 4.8 |
+| bded2768-mq0r0-1 | edge | 35 / 228 / 211 / 13 | 39 / 681 / 630 / 36 | 16.5 / 41.1 / 41.1 / 41.2 | 12 / 15 / 15 / 15 | 0.0 / 0.0 / 4.3 |
+| bded2768-mq0r0-1 | exit | 15 / 224 / 207 / 9 | 36 / 673 / 622 / 28 | 15.4 / 38.9 / 38.9 / 38.9 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 5.5 |
+| bded2768-mq0r0-2 | edge | 33 / 228 / 211 / 13 | 36 / 681 / 630 / 36 | 16.1 / 38.2 / 38.2 / 38.2 | 12 / 14 / 14 / 14 | 0.0 / 0.0 / 3.4 |
+| bded2768-mq0r0-2 | exit | 10 / 224 / 207 / 9 | 28 / 673 / 622 / 28 | 15.0 / 39.4 / 39.4 / 39.4 | 10 / 13 / 13 / 13 | 0.0 / 0.0 / 6.2 |

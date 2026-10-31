@@ -1,0 +1,5 @@
+== go test -count=1 -timeout 25m ./... (in hs2-src/third_party/smux): rc 0, 62 s
+== smux
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/xtaci/smux                                   pass     61.5  138/0/1                26/0/0                
+TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)

@@ -1,0 +1,2 @@
+old round 1: rc 0, 376 s, pass 300, fail 0
+    300 borrowed 3072 KiB; held

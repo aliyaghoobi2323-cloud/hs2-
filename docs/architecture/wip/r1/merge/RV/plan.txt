@@ -1,0 +1,5 @@
+# RV (R1 merge step 5, final head, rig pinned to CPUs 0-5): home on 1 and on 8 links, the merged head (m, the release build) against fin2 (98ddec1), 4 reps ABBABA each — whether the merged head changed the classes (RF2: home N=1 game down 89 ms, fin2 54 in H2; N=8: RY, RZ, RW)
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m

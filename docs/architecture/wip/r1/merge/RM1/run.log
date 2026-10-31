@@ -1,0 +1,26 @@
+06:26:25 plan /root/rmerge/RM1/plan.txt: 12 runs
+06:26:27 start 0a819aa3-prod-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 DUR=30 UP=0 BIN=prod) load 3.25 waited 0s
+06:27:33 done 0a819aa3-prod-1 ok=1 
+06:27:35 start 0a819aa3-fin2-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 DUR=30 UP=0 BIN=fin2) load 2.22 waited 0s
+06:28:41 done 0a819aa3-fin2-1 ok=1 
+06:28:43 start 0a819aa3-m-1 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 DUR=30 UP=0 BIN=m) load 2.32 waited 0s
+06:29:49 done 0a819aa3-m-1 ok=1 
+06:29:51 start 0a819aa3-m-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 DUR=30 UP=0 BIN=m) load 3.03 waited 0s
+06:30:56 done 0a819aa3-m-2 ok=1 
+06:30:58 start 0a819aa3-fin2-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 DUR=30 UP=0 BIN=fin2) load 2.66 waited 0s
+06:32:04 done 0a819aa3-fin2-2 ok=1 
+06:32:06 start 0a819aa3-prod-2 (N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 DUR=30 UP=0 BIN=prod) load 1.86 waited 0s
+06:33:12 done 0a819aa3-prod-2 ok=1 
+06:33:14 start 3c28078d-prod-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 DUR=30 UP=0 BIN=prod) load 1.35 waited 0s
+06:34:43 done 3c28078d-prod-1 ok=1 
+06:34:45 start 3c28078d-fin2-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 DUR=30 UP=0 BIN=fin2) load 1.71 waited 0s
+06:36:15 done 3c28078d-fin2-1 ok=1 
+06:36:17 start 3c28078d-m-1 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 DUR=30 UP=0 BIN=m) load 1.38 waited 0s
+06:37:45 done 3c28078d-m-1 ok=1 
+06:37:47 start 3c28078d-m-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 DUR=30 UP=0 BIN=m) load 2.82 waited 0s
+06:39:18 done 3c28078d-m-2 ok=1 
+06:39:20 start 3c28078d-fin2-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 DUR=30 UP=0 BIN=fin2) load 2.82 waited 0s
+06:40:49 done 3c28078d-fin2-2 ok=1 
+06:40:51 start 3c28078d-prod-2 (N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 DUR=30 UP=0 BIN=prod) load 2.90 waited 0s
+06:42:20 done 3c28078d-prod-2 ok=1 
+06:42:20 done /root/rmerge/RM1/plan.txt

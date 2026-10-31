@@ -1,0 +1,7 @@
+== make vet
+go vet ./...
+cd third_party/smux && go vet ./...
+rc 0
+== make fmt (gofmt -l .)
+rc 0
+rigload vet rc 0

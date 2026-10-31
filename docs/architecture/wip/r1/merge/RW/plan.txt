@@ -1,0 +1,4 @@
+# RW (R1 merge step 5): home on 8 links, 4 more reps: RY and RZ saw call and game tails in the merged head (m) that fin2 did not show (call down p99 over 150 ms in 2 of 6 runs of m, 0 of 6 of fin2; call up 928 ms once); m against fin2 and against m with the red team pass-2 behaviour switches off (moff2: TWOWAY_RATIO=0, OWD_IDLE=0)
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=moff2

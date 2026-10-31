@@ -127,21 +127,34 @@ func TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo(t *testing.T) {
 	free := windowPool().Free()
 	r := newWedgeRig(t, true)
 	stuck := r.openFrozen(40) // 256 KiB each: 10 MiB, past SmuxSessionBuffer
+	// The link borrows a grain at a time, ahead of the data (smux borrowShare),
+	// and at its death gives back what no data fills yet (returnSpare): only
+	// the rest is the data this test is about. So one grain tests nothing: it
+	// may cover a few KiB, and a pause in the pushers made two looks in a row
+	// see 1024 KiB while the pool rightly held 16 or 448 of it. The second
+	// grain comes only when the first is full, so from there at least half of
+	// what is borrowed covers data.
+	grain := SmuxSessionBuffer / 8
 	var borrowed int
-	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(50 * time.Millisecond) {
-		if b := free - windowPool().Free(); b > 0 && b == borrowed {
+	steady := time.Now()
+	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(10 * time.Millisecond) {
+		if b := free - windowPool().Free(); b != borrowed {
+			borrowed, steady = b, time.Now()
+		}
+		if borrowed >= 2*grain && time.Since(steady) >= 250*time.Millisecond {
 			break
-		} else {
-			borrowed = b
 		}
 	}
-	if borrowed < 1<<20 || r.edge.Borrows() == 0 {
+	if borrowed < 2*grain || r.edge.Borrows() == 0 {
 		t.Fatalf("the frozen apps made the link borrow %d (borrows %d): the rig tested nothing", borrowed, r.edge.Borrows())
 	}
 	r.edge.Close() // the link dies
 	closedAt := time.Now()
 	time.Sleep(100 * time.Millisecond)
-	if held := free - windowPool().Free(); held < borrowed/2 {
+	held := free - windowPool().Free()
+	if late := time.Since(closedAt); late >= time.Second {
+		t.Logf("a pause of %v went past relayDieGrace: the hold is not judged this time", late.Round(time.Millisecond)) // the relays may be gone
+	} else if held < borrowed/2 {
 		t.Fatalf("the link died holding %d KiB borrowed, its relays still holding the data: the pool holds %d KiB for it", borrowed>>10, held>>10)
 	}
 	for _, u := range stuck {
@@ -157,6 +170,6 @@ func TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Logf("borrowed %d KiB; held with the data after the death, whole %v after it (relayDieGrace %v)", borrowed>>10,
+	t.Logf("borrowed %d KiB, %d held with the data after the death, whole %v after it (relayDieGrace %v)", borrowed>>10, held>>10,
 		time.Since(closedAt).Round(10*time.Millisecond), time.Second)
 }

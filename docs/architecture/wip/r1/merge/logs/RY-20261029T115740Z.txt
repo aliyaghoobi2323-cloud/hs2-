@@ -1,0 +1,32 @@
+== RY: R1 merge step 5: rig home N=8 merged head vs fin2; lock after 2262 s; 2026-10-29T11:57:40Z; limit 1500 s
+== RY head 9948c15, binary 62b4e93dfedf, plan 2 cells, REPS 3
+-- run.sh status 0 (999 s left)
+-- 0 runs failed
+-- guard: 12:04:21 end: mode log, status 0; 777 samples; host TCP max 163834 pages (start 0; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0
+| run | N | MIX | ok | links up at start (wait s) | edge serving / exit links (end) | same after idle | link sockets; re-dialed; silent | down / up Mbit/s | host TCP pressures; max pages; samples past tcp_mem[1] | CPU edge / exit % (mean) | panic / fatal / race in logs |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| f4fb6861-fin2-1 | 8 | home | True | 8 (0.86) | 8 / 12 | 8 / 12 | 12; 0; 0 | 84.2 / 85.0 | 0; 163578; 0 | 91 / 90 | 0 / 0 / 0 |
+| f4fb6861-fin2-2 | 8 | home | True | 10 (0.9) | 8 / 12 | 8 / 12 | 12; 0; 0 | 85.5 / 84.5 | 0; 159322; 0 | 99 / 96 | 0 / 0 / 0 |
+| f4fb6861-fin2-3 | 8 | home | True | 8 (0.88) | 8 / 12 | 8 / 12 | 12; 0; 0 | 81.5 / 85.3 | 0; 160201; 0 | 95 / 93 | 0 / 0 / 0 |
+| f4fb6861-m-1 | 8 | home | True | 8 (1.19) | 8 / 12 | 8 / 12 | 12; 0; 0 | 85.0 / 85.1 | 0; 157406; 0 | 96 / 95 | 0 / 0 / 0 |
+| f4fb6861-m-2 | 8 | home | True | 8 (0.89) | 8 / 12 | 8 / 12 | 12; 0; 0 | 86.0 / 84.6 | 0; 162746; 0 | 98 / 94 | 0 / 0 / 0 |
+| f4fb6861-m-3 | 8 | home | True | 8 (0.88) | 8 / 12 | 8 / 12 | 12; 0; 0 | 85.2 / 84.5 | 0; 159312; 0 | 94 / 94 | 0 / 0 / 0 |
+
+Process samples (PROC_TRACE, every 5 s): before the users (first sample, the tunnel up) / peak / end of the users' window / after POST_IDLE (20 s after the client ended); growth = the change over the users' last 20 s (to 3 s before their end), % (a leak grows there; a heap that reached its working size is flat).
+
+| run | side | fds | goroutines | RSS MB | threads | growth fds / gor / RSS % |
+|---|---|---|---|---|---|---|
+| f4fb6861-fin2-1 | edge | 99 / 267 / 60 / 26 | 153 / 938 / 317 / 215 | 21.5 / 54.7 / 54.7 / 51.1 | 17 / 18 / 18 / 18 | 21.4 / 17.8 / 9.9 |
+| f4fb6861-fin2-1 | exit | 27 / 265 / 58 / 24 | 130 / 909 / 426 / 186 | 19.1 / 61.7 / 61.7 / 61.7 | 17 / 19 / 19 / 19 | 24.7 / 20.8 / 5.4 |
+| f4fb6861-fin2-2 | edge | 142 / 249 / 76 / 26 | 249 / 887 / 368 / 215 | 22.0 / 53.9 / 53.9 / 49.4 | 18 / 18 / 18 / 18 | -3.6 / -3.4 / 4.1 |
+| f4fb6861-fin2-2 | exit | 63 / 248 / 75 / 24 | 290 / 858 / 402 / 186 | 22.0 / 60.8 / 60.8 / 60.9 | 18 / 18 / 18 / 18 | -4.0 / -3.4 / 1.9 |
+| f4fb6861-fin2-3 | edge | 81 / 265 / 71 / 26 | 153 / 932 / 350 / 215 | 20.3 / 53.7 / 49.9 / 50.0 | 18 / 18 / 18 / 18 | -9.4 / -7.9 / 4.5 |
+| f4fb6861-fin2-3 | exit | 18 / 263 / 69 / 24 | 130 / 906 / 499 / 186 | 18.2 / 59.2 / 55.1 / 55.2 | 15 / 18 / 18 / 18 | -9.5 / -8.3 / 2.7 |
+| f4fb6861-m-1 | edge | 142 / 263 / 79 / 26 | 306 / 929 / 374 / 215 | 22.4 / 53.9 / 53.9 / 54.0 | 17 / 18 / 18 / 18 | -5.3 / -4.8 / 2.8 |
+| f4fb6861-m-1 | exit | 77 / 262 / 77 / 24 | 224 / 900 / 427 / 186 | 22.7 / 60.6 / 60.6 / 60.9 | 18 / 19 / 19 / 19 | -5.7 / -5.0 / 3.6 |
+| f4fb6861-m-2 | edge | 141 / 269 / 79 / 26 | 203 / 944 / 380 / 215 | 22.0 / 53.7 / 53.0 / 53.1 | 17 / 18 / 18 / 18 | 6.4 / 5.4 / 2.1 |
+| f4fb6861-m-2 | exit | 62 / 268 / 77 / 24 | 209 / 918 / 380 / 186 | 21.2 / 60.8 / 60.8 / 58.5 | 17 / 19 / 19 / 19 | 6.9 / 5.9 / 0.5 |
+| f4fb6861-m-3 | edge | 143 / 256 / 75 / 26 | 222 / 905 / 362 / 215 | 21.6 / 53.7 / 51.9 / 51.9 | 18 / 18 / 18 / 18 | 4.3 / 3.6 / 2.0 |
+| f4fb6861-m-3 | exit | 53 / 255 / 73 / 24 | 198 / 880 / 441 / 186 | 21.0 / 59.8 / 59.8 / 54.3 | 16 / 19 / 19 / 19 | 4.3 / 3.4 / 1.1 |
+== RY done after 402 s
+== end rc=0 2026-10-29T12:04:22Z, 402 s
