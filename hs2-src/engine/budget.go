@@ -472,7 +472,22 @@ type linkBudget struct {
 	at0       time.Duration
 	// loss: the socket's random-loss record (BudgetLossPpm)
 	loss budgetLoss
+	// quiet: a QUIET link's (QuietBudget): no pacing of its own, its light
+	// and realtime frames go past the gate at the socket's pace
+	quiet bool
 }
+
+// QuietBudget (HS2_TUNE_QUIET_BUDGET; 0: off; R1 round 5): the in-flight
+// budget on a QUIET link's bulk lane too (web responses and every download's
+// start, what is past a connection's first bytes), not only on BULK links.
+// A QUIET link holding a window of web responses in flight and in its flow
+// queue at the bottleneck holds a call's next frame behind them, in the
+// socket and in fq_codel's queue for that flow: the realtime lanes only
+// order the frames not yet written (round 4's item 3: a call's downward p99
+// +74 to +103 ms; Illinois, which CoDel's drops cut by an eighth, doubled it
+// at N=4 and N=8). With the budget the bulk lane waits in the scheduler past
+// the target queue, and the lanes go first (round-4 judge's open item).
+var QuietBudget = newTuneInt(0)
 
 // BudgetSplitRate (HS2_TUNE_BUDGET_SPLIT; 0: off; R1 round 5): a two-way
 // link without its own one-way delays (dirty while it resends: OWDGuardBulk)
@@ -627,7 +642,7 @@ func (lb *linkBudget) step(now time.Duration, on bool, ts tcpStat, dlvMax float6
 	if lb.core.base > 0 && b > 0 {
 		at := b / (lb.core.base + budgetTarget()).Seconds() // its rate at the target
 		r = math.Max(r, at)
-		if BudgetPaceK > 0 {
+		if BudgetPaceK > 0 && !lb.quiet {
 			pace = uint64(float64(BudgetPaceK) / 100 * at)
 		}
 	}
