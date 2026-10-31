@@ -378,6 +378,9 @@ func (c *budgetCore) step0(in budgetIn) float64 {
 	}
 	floor := math.Max(float64(budgetMinSegs*max(in.MSS, 536)), float64(2*in.Frame))
 	floor = math.Max(floor, budgetKMin*long*minRTT.Seconds())
+	if k := BudgetDFloor.Get(); k > 0 {
+		floor = math.Max(floor, float64(k)/100*d*minRTT.Seconds())
+	}
 	want := d * (base + T).Seconds() // in flight at the target, at this delivery rate
 	switch c.mode {
 	case budgetIdle:
@@ -486,6 +489,18 @@ type linkBudget struct {
 // at N=4 and N=8). With the budget the bulk lane waits in the scheduler past
 // the target queue, and the lanes go first (round-4 judge's open item).
 var QuietBudget = newTuneInt(1) // the default since R1 round 5 (round5/REPORT.fa.md)
+
+// BudgetDFloor (HS2_TUNE_BUDGET_DFLOOR, ×100; 0: off; R1 round 5): B stays at
+// this share of the delivery rate × min_rtt. A socket whose flight is under
+// its rate × its round trip holds no queue of its own, whatever srtt says, and
+// a cut below it only slows the link under what it delivers. Without it a
+// one-way link with few users fell into a spiral (round 5's LX: home at N=16,
+// 0.03 %): the budget cut, the flight fell to a few segments, the peer's
+// delayed acks (up to 40 ms on an odd last segment) lifted srtt 11 to 16 ms
+// over min_rtt, which read as its own queue and cut again, down to B 5 to 8
+// KiB, 0.6 Mbit/s, on a link that delivered 4 to 6: its users' pages took 13
+// to 28 s or never loaded (5 to 8 failed a run, production none).
+var BudgetDFloor = newTuneInt(100) // the default since R1 round 5
 
 // BudgetSplitRate (HS2_TUNE_BUDGET_SPLIT; 0: off; R1 round 5): a two-way
 // link without its own one-way delays (dirty while it resends: OWDGuardBulk)

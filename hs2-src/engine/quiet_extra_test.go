@@ -41,11 +41,10 @@ func TestQuietCountsExtra(t *testing.T) {
 
 // The defaults (round 3; round 4 four QUIET links past five; the round-4
 // judge kept one up to five; round 5 one light link more, but at five):
-// QUIET outside max_links, two QUIET links up to four links, one at five,
-// five past.
+// QUIET outside max_links, two QUIET links up to five links, five past.
 func TestQuietDefaultsRound3(t *testing.T) {
-	if QuietExtra != 1 || QuietN != 0 || QuietBatch != 1 || QuietCount(4) != 2 || QuietCount(5) != 1 || QuietCount(6) != 5 {
-		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(4) %d, (5) %d, (6) %d; want 1 0 1 2 1 5", QuietExtra, QuietN, QuietBatch, QuietCount(4), QuietCount(5), QuietCount(6))
+	if QuietExtra != 1 || QuietN != 0 || QuietBatch != 1 || QuietCount(4) != 2 || QuietCount(5) != 2 || QuietCount(6) != 5 {
+		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(4) %d, (5) %d, (6) %d; want 1 0 1 2 2 5", QuietExtra, QuietN, QuietBatch, QuietCount(4), QuietCount(5), QuietCount(6))
 	}
 }
 
@@ -59,7 +58,9 @@ func TestDefaultsRound5(t *testing.T) {
 		got  int
 		want int
 	}{
-		{"HS2_TUNE_QUIET_LIGHT", QuietLight.Get(), 2},
+		{"HS2_TUNE_QUIET_LIGHT", QuietLight.Get(), 3},
+		{"HS2_TUNE_BUDGET_DFLOOR", BudgetDFloor.Get(), 100},
+		{"HS2_TUNE_PLACE_FAIR", PlaceFair.Get(), 8},
 		{"HS2_TUNE_QUIET_WAIT", QuietWaitMs.Get(), 1500},
 		{"HS2_TUNE_QUIET_REPLACE", QuietReplace.Get(), 1},
 		{"HS2_TUNE_QUIET_BUDGET", QuietBudget.Get(), 1},

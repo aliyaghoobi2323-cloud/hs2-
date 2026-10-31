@@ -1,0 +1,4 @@
+# N90 (3 reps): the cell before the main server (about 90 links): home, N=90, RTT 75, 0.03 %, RATE 100, USERS 64; production, fin2 (c0111e0), the candidate c6 (its defaults: c5 + DFLOOR 100 + the light link at every N + PLACE_FAIR 8)
+N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod
+N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6

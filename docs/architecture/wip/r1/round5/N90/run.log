@@ -1,0 +1,20 @@
+11:19:33 plan /root/r5/N90/plan.txt: 9 runs
+11:19:35 start 20c5a0a5-prod-1 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 0.87 waited 0s
+11:20:29 done 20c5a0a5-prod-1 ok=1 
+11:20:31 start 20c5a0a5-fin2-1 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 1.44 waited 0s
+11:21:24 done 20c5a0a5-fin2-1 ok=1 
+11:21:26 start 20c5a0a5-c6-1 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6) load 2.96 waited 0s
+11:22:20 done 20c5a0a5-c6-1 ok=1 
+11:22:22 start 20c5a0a5-c6-2 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6) load 3.84 waited 0s
+11:23:16 done 20c5a0a5-c6-2 ok=1 
+11:23:17 start 20c5a0a5-fin2-2 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 4.15 waited 0s
+11:24:11 done 20c5a0a5-fin2-2 ok=1 
+11:24:12 start 20c5a0a5-prod-2 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 4.40 waited 0s
+11:25:06 done 20c5a0a5-prod-2 ok=1 
+11:25:08 start 20c5a0a5-c6-3 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=c6) load 3.69 waited 0s
+11:26:01 done 20c5a0a5-c6-3 ok=1 
+11:26:03 start 20c5a0a5-fin2-3 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 5.42 waited 0s
+11:26:57 done 20c5a0a5-fin2-3 ok=1 
+11:26:59 start 20c5a0a5-prod-3 (N=90 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=prod) load 4.04 waited 0s
+11:27:52 done 20c5a0a5-prod-3 ok=1 
+11:27:52 done /root/r5/N90/plan.txt
