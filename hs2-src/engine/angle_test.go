@@ -540,10 +540,12 @@ func TestAngleP10(t *testing.T) {
 // user's floor, with the new user's bound past it the whole run (3.6 to 4.1
 // of the floor's 5 Mbit/s). That is what the CI's 0.737 against 0.758 was,
 // not the host: the link delivers 9.9 of 10 Mbit/s in that second, and the
-// spread is the same alone on six cores and in 2-core slices. It costs only
-// one session (a level 1 peer, or HS2_TUNE_QUIET=0): with QUIET links a bulk
-// flow moves to BULK, and a moved connection never takes the lane (rtlane.go;
-// the rig's cells with and without: RQ in merge/REPORT.fa.md).
+// spread is the same alone on six cores and in 2-core slices. It needs one
+// session (a level 1 peer, or HS2_TUNE_QUIET=0: with QUIET links a bulk flow
+// moves to BULK, and a moved connection never takes the lane, rtlane.go) and
+// a path not far above RTMax: this link is 10 Mbit/s, RTMax 4. On the rig's
+// 100 Mbit/s the same one session splits about evenly (RQ in
+// merge/REPORT.fa.md: existing 42 to 43, new 47 to 48 Mbit/s).
 func angleNewHeavy(t *testing.T, rtShare float64) {
 	const c = angleRateBps
 	l := newAngleLink(t, c, angleDelay)
