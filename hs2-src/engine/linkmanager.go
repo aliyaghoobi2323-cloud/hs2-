@@ -1989,6 +1989,9 @@ func (m *LinkManager) sampleHealth() {
 	secs := dt.Seconds()
 	perTick := func(b uint64) float64 { return float64(b) * healthTick.Seconds() / secs }
 	s := apSample{now: now, open: int(m.users.Load())}
+	if m.quiet.active() {
+		s.flowing, s.quietG = m.quiet.demand(now, dt, recentWin)
+	}
 	nOK, nOld, poolOK, aged := 0, 0, 0, 0
 	var stuckCand []stuckObs
 	var lossCand []lossObs
@@ -2642,8 +2645,8 @@ func (m *LinkManager) publishStats() {
 	now := m.now()
 	st := PoolStats{
 		Min: m.min, Max: m.max,
-		MbitPerS: mbitps(m.sample.G), Phase: m.dec.phase.String(), Reason: m.dec.reason,
-		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(max(m.ap.gShown, m.sample.G)),
+		MbitPerS: mbitps(m.sample.G + m.sample.quietG), Phase: m.dec.phase.String(), Reason: m.dec.reason,
+		Flowing: m.sample.flowing, CapMbit: mbitps(m.ap.cCap), PeakMbit: mbitps(max(m.ap.gShown, m.sample.G+m.sample.quietG)),
 		ExitStats: m.exitStats,
 	}
 	wcores.fillStats(&st)

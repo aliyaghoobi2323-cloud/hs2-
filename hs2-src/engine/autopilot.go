@@ -224,7 +224,8 @@ type apSample struct {
 	links    []apLink
 	G        float64 // aggregate bytes/s over every live link
 	grown    float64 // of G, what windows past NeedStreamBuffer carry (grownRate): no reason for more links
-	flowing  int     // flowing user streams over every link
+	quietG   float64 // bytes/s on the QUIET links, outside G: shown, not what the pool is sized by
+	flowing  int     // flowing user streams over every link, the QUIET ones too
 	open     int     // open user connections
 	growable bool    // false: the peer cannot add links (reverse exit without pool control)
 }
@@ -239,6 +240,7 @@ type apDecision struct {
 
 type apTick struct {
 	g       float64
+	q       float64 // quietG
 	gn      float64 // g less grown: what the pool is sized by
 	flowing int
 	p, s    int
@@ -381,7 +383,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 		}
 	}
 	shortTick := P >= 1 && S-P < spare(P)
-	a.hist = append(a.hist, apTick{g: s.G, gn: max(s.G-s.grown, 0), flowing: s.flowing, p: P, s: S, short: shortTick})
+	a.hist = append(a.hist, apTick{g: s.G, q: s.quietG, gn: max(s.G-s.grown, 0), flowing: s.flowing, p: P, s: S, short: shortTick})
 	if len(a.hist) > t.histTicks {
 		a.hist = a.hist[len(a.hist)-t.histTicks:]
 	}
@@ -421,11 +423,11 @@ func (a *autopilot) decide(s apSample) apDecision {
 			gPeak = g
 		}
 		prevG = h.gn
-		g = h.g
+		g = h.g + h.q
 		if prevShown >= 0 {
-			g = (h.g + prevShown) / 2
+			g = (h.g + h.q + prevShown) / 2
 		}
-		gShown, prevShown = max(gShown, g), h.g
+		gShown, prevShown = max(gShown, g), h.g+h.q
 	}
 	fGrow := ceilDiv(fl5, a.perLink)
 	fHold := ceilDiv(fl60, a.perLink)
@@ -481,7 +483,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 
 	why := fmt.Sprintf("%d active of %d open connections, %d of %d serving links at their limit, peak %.1f Mbit/s",
-		s.flowing, s.open, P, S, mbitps(gPeak))
+		s.flowing, s.open, P, S, mbitps(gShown))
 	if cCap > 0 {
 		why += fmt.Sprintf(" (one link carries ~%.1f Mbit/s)", mbitps(cCap))
 	}

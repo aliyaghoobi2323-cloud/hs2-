@@ -251,6 +251,10 @@ type quietLink struct {
 	// nusers: the users whose connections stick to this link (QuietByUser,
 	// quietuser.go), under the set's mu
 	nusers int
+	// prevRd, prevWr, sampled: the meter at the pool's last tick (demand; the
+	// sampler's goroutine only)
+	prevRd, prevWr uint64
+	sampled        bool
 }
 
 // quietSet is the edge's QUIET links, and the mover of its group streams.
@@ -1169,6 +1173,31 @@ func (q *quietSet) line() string {
 
 // placeLine is the status line of the process's placement (nil: none).
 var placeLine atomic.Pointer[func() string]
+
+// demand is what the QUIET links carry at this pool tick: their flowing
+// connections and bytes/s. They are not among the pool's links, and on real
+// traffic most connections stay on them until the exit has a backlog, so a
+// pool that counted only its own links took hundreds of flowing connections
+// for a handful and shrank to 3 links for 150 Mbit/s (main servers, first hour
+// of R1). The sampler's goroutine only, as flowStats.
+func (q *quietSet) demand(now time.Time, dt, recent time.Duration) (flowing int, rate float64) {
+	for _, ql := range q.quietLinks() {
+		if !ql.link.Alive() {
+			continue
+		}
+		flowing += ql.link.flowStats(now, dt, recent).flowing
+		mtr := ql.link.mtr
+		if mtr == nil {
+			continue
+		}
+		rd, wr := mtr.rdBytes.Load(), mtr.wrBytes.Load()
+		if ql.sampled {
+			rate += float64(rd-ql.prevRd+wr-ql.prevWr) / dt.Seconds()
+		}
+		ql.prevRd, ql.prevWr, ql.sampled = rd, wr, true
+	}
+	return flowing, rate
+}
 
 // quietLinksOf is the QUIET links, by id (tests, status).
 func (q *quietSet) quietLinks() []*quietLink {
