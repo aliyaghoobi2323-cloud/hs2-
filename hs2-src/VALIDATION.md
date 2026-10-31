@@ -484,7 +484,18 @@ V16 also: the six runs' Mbit/s and the interactive p50/p99 with the core on
 and off, the round trip between the servers (`ping`), the Iran server's
 `windows:` line, and the Kharej side's `pacing held` lines with timestamps.
 
-Release: binary build `1c23629533c9` (source commit `1c23629`, static,
+Release: binary build `e8a84ccb17fa` (source commit `e8a84cc`, static,
+`CGO_ENABLED=0`; `hs2 version` shows `build e8a84ccb17fa`).
+
+This release: the redesign's phase R1 (candidate fin2 with the red-team and
+independent-review fixes). Put on `main` at the owner's request on 2026-10-31,
+before any field comparison: the remaining measurements run on his main servers
+with real traffic. Rig evidence only; both ends of a tunnel must run this build.
+Round 5 (latency lane under real-path loss at few links) is not in this build.
+Rollback targets: `1c23629533c9` (Phase Z5 step 2; commit `6dd5a06`), and the
+previous `main` at `ec701bf` (build `a372b1301121`).
+
+Previous release: binary build `1c23629533c9` (source commit `1c23629`, static,
 `CGO_ENABLED=0`; `hs2 version` shows `build 1c23629533c9`).
 
 This release: Phase Z5 step 2 (the window core on the real path: reordering
