@@ -2825,6 +2825,65 @@ merge-prep branch:
   moves (`REFUSED config-check-new`); and nothing changes without a full
   backup to put back (`REFUSED backup`).
 
+## Phase R1 — release on `main` (method step 9)
+
+Build `e8a84ccb17fa` (source `e8a84cc`; `main` at `9fc90f1`): the round-4
+judge's final candidate `fin2`, plus both red-team passes and the independent
+review's fixes. By the owner's decision R1's remaining tests were closed and the
+old-against-new field comparison was dropped: the build went straight to his
+main servers, and what is left is measured and fixed there (R1 status in
+`docs/architecture/ROADMAP.fa.md`). **Every number below is from the lab (the rig
+and the test suite), none from the field.** `N` is the link count.
+
+- **Rig, `fin2` against the production build `1c23629`** (three repeats; round-4
+  judge):
+  - Latency on `fq_codel`, probe minus floor: +10.5 to +11.0 ms at `N` = 1, 2, 8,
+    64 and 300 (bound +20); production +230 to +354.
+  - 25 users of 16 connections next to 25 players: 88.1 Mbit/s at `N=8`, 90.4 at
+    `N=1`; production 5.4 to 5.5, collapsed.
+  - The busiest QUIET link dies (`home`): at `N=1` 13% of live connections and
+    30% of users are hit, production 100% and 100%; at `N=8` 4% and 14%,
+    production 12% and 33%.
+  - Web p95 page load (`home`, `N=8`): 9212 ms, production 11181 to 12145; still
+    1.34× the R1 base `j3g` (6892), and open.
+  - DPI: record lengths match `j3g` (KS D ≤ 0.0044, AUC 0.48 to 0.53).
+- **Scale, the released code (`bcfb37d`)**, `one_vs_16` with 200 users, one run
+  per `N`, so smoke and not a verdict: 1 to 600 links (600 by hand, the auto
+  ceiling is 300) download 89.3 to 83.7 Mbit/s, probe +10.4 to +11.0 ms, every
+  link up, no panic, no TCP memory pressure. Only 17 BULK links carry user data
+  in that cell; the all-links case is under *Open*.
+- **Test suite on `e4783fe`** (pass / fail / skip): `go test ./...` 1064 / 0 / 32,
+  `-race` on all of engine 738 / 0 / 29, 386 854 / 0 / 66, arm7 green, fuzz 13 of
+  13, kernel green, install 17 of 17, no data race. The one red, 1 of 30 repeats
+  of `TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo`, was the test's own wait:
+  fixed in `e22c2fe` (30 of 30, `-race` 10 of 10). That commit is not in this
+  build, and the full suite was not repeated on it.
+- **Independent review** (three parts, candidate `c0111e0`): nothing critical.
+  Serious: A1 (a TLS 1.2 probe without EMS got a full handshake, not the cover
+  site) fixed; B2 (a live but slow QUIET link is never replaced) left to round 5;
+  C1 to C3 (one-sided revert, the operator's SSH riding the tunnel, a stale
+  installed `hs2-safe-apply`) covered by the runbook
+  (`docs/architecture/wip/r1/review/RUNBOOK.fa.md`). A3 (the user tag revealed the
+  address) fixed with a keyed hash. A4 (a TLS interceptor) waits for R8.
+- **Upgrading.** Both ends must run this build. The menu's Upgrade now installs
+  R1, so one end alone cuts a tunnel whose other end is older; the runbook also
+  has the rules for several tunnels sharing one binary.
+- **Open:**
+  - Calls under random loss (`home`, `N=8`, 1% and 2%): delivered 0.38 and 0.39,
+    p99 ~30 s; `j3g` 0.89 and 0.75, and failing too. The judge's condition before
+    the field; not closed.
+  - The call tail (`home`, `N=8`): downlink p99 over 150 ms in 6 of 26 runs (`fin2`
+    3 of 26; medians 101.5 and 97.5 ms), against a target of +30. Not shown to
+    be a regression of the merge.
+  - Every link carrying data, `N ≥ 300`: the +20 bound holds for no binary. At
+    `N=300` this code +34 to +698 ms, production +1689 and +4565; at `N=600` this
+    code +443 to +740, production +56 and +60.
+  - Fairness at 64 links, every link carrying data: median user 0.31 to 0.36
+    Mbit/s, top 10.3 to 16.0; production 0.70 to 0.75, top 0.77 to 1.36, at +347
+    and +617 ms on the probe.
+  - Not in this build: the edge undercounting QUIET demand (fixed on `r1-fix1`),
+    and round 5 (`r1-r5`, `docs/architecture/wip/r1/round5/REPORT.fa.md`).
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.
