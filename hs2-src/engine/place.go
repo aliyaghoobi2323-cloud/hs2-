@@ -45,6 +45,19 @@ import (
 // the rest by the pool's pick (HS2_TUNE_PLACE_USERS), 0 the pool's pick.
 var PlaceUsers = newTuneInt(2) // the default since R1 round 4 (round4/REPORT.fa.md)
 
+// PlaceFair (HS2_TUNE_PLACE_FAIR; 0: off; R1 round 5): the links the heavy
+// users spread over at most, in place of every serving one: m = ceil(min(L,
+// PlaceFair) / U). A bottleneck that shares by flow (fq_codel) gives each
+// link C / (active links), so on a big pool m = ceil(L / U) let eight heavy
+// users take all 64 links, each active, and everything else — the QUIET
+// links with the calls and the web's starts, a viewer's one link — had 1/69
+// of the path (round 5's LY: home at N=64 and 0.03 %: calls 0.13 delivered,
+// 30 s late; production 0.30, the same; N=8 had +112 ms). With it a pool of 64
+// carries its heavy users as a pool of PlaceFair does; a lone heavy user keeps
+// PlaceFair links, its 16 connections one each at 16 (a per-connection policer
+// gets as many flows as production gave it).
+var PlaceFair = newTuneInt(0)
+
 // placeHeavy: a user with this many connections moved (or moving at the
 // same tick) is heavy (PlaceUsers 2).
 const placeHeavy = 8
@@ -169,7 +182,11 @@ func (b *placeBook) choose(cands []*placeCand, tag uint32) *placeCand {
 			c.conns += n
 		}
 	}
-	m := (len(cands) + max(users, 1) - 1) / max(users, 1)
+	spread := len(cands)
+	if f := PlaceFair.Get(); f > 0 {
+		spread = min(spread, f)
+	}
+	m := (spread + max(users, 1) - 1) / max(users, 1)
 	var own []*placeCand
 	for _, c := range cands {
 		if c.users[tag] > 0 {
