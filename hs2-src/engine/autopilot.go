@@ -40,10 +40,10 @@ import (
 //     are paced (SlowShrink): at least 5 min after the last shrink or growth,
 //     at most a fifth of T each.
 //
-// Nothing that keeps T up is latched: every input forgets within 60 s, the
-// shrink's pace within 5 min (the
-// capacity estimate only scales how many links a given throughput needs, and
-// the hold expires and is void once demand drops), so when traffic falls the
+// Nothing that keeps T up is latched: every input forgets within 60 s, and
+// the shrink's pace delays a step by at most 5 min (the capacity estimate
+// only scales how many links a given throughput needs, and the hold expires
+// and is void once demand drops), so when traffic falls the
 // pool comes down — the defect of the first version, which ratcheted to 32.
 type autopilot struct {
 	min, max, perLink int
