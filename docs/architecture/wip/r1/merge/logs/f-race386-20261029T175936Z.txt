@@ -1,0 +1,11 @@
+== f-race386: /root/rmerge/tools/blocks.sh race386 (2026-10-29T17:59:36Z)
+== race386 on 70198ec (R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حر�) 2026-10-29T18:03:14Z
+go version go1.27.3 linux/amd64
+-- race-engine rc 0 1358 s: TOTAL top-level: 738 pass, 0 fail, 29 skip; subtests: 190 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- race-pkgs rc 0 12 s: TOTAL top-level: 151 pass, 0 fail, 1 skip; subtests: 246 pass, 0 fail, 0 skip; packages 3 (0 not pass)
+-- race-smux rc 0 80 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- race-rigload rc 0 20 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- t386 rc 0 505 s: TOTAL top-level: 853 pass, 0 fail, 66 skip; subtests: 422 pass, 0 fail, 1 skip; packages 4 (0 not pass)
+-- t386-smux rc 0 66 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+== done race386 2026-10-29T18:37:15Z
+== end rc=0 2026-10-29T18:37:15Z, 2259 s

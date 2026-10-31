@@ -1,0 +1,37 @@
+== go test -count=1 -timeout 25m ./... (in hs2-src): rc 1, 950 s
+== test
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2  pass      3.7  102/0/0                214/0/0               
+github.com/hosseintaghipoursori-alt/hs2-tunnel/core     pass      0.1  15/0/0                 0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/encap    pass     29.2  54/0/0                 58/0/0                
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   fail    944.7  728/1/28               187/1/0               
+github.com/hosseintaghipoursori-alt/hs2-tunnel/fec      pass      0.8  12/0/2                 2/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/dglab skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netem skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/netsim skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/lab/probe skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/mmsg     skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs     skip      0.0  0/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/reality  pass      0.3  7/0/0                  0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier pass      2.4  29/0/0                 24/0/0                
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tun      pass      0.1  8/0/0                  1/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tune     pass      0.0  12/0/0                 0/0/0                 
+github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier pass     69.8  80/0/0                 38/0/0                
+TOTAL top-level: 1047 pass, 1 fail, 30 skip; subtests: 524 pass, 1 fail, 0 skip; packages 16 (1 not pass)
+
+-- package github.com/hosseintaghipoursori-alt/hs2-tunnel/engine: fail
+   FAIL
+   FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	944.737s
+
+-- FAIL github.com/hosseintaghipoursori-alt/hs2-tunnel/engine TestPortRoutesEndToEnd/direct
+   === RUN   TestPortRoutesEndToEnd/direct
+       routes_test.go:260: listen udp 127.0.0.1:34257: bind: address already in use
+       stream_v2_test.go:147: edge stats at the end: {Links:0 Target:4 Min:2 Max:4 Users:0 MbitPerS:0 FastConns:0 FastWinMiB:0 PoolMiB:0 PoolUsedMiB:0 PoolWinMiB:0 Counted:true Phase:steady Saturated:false Serving:0 Retiring:0 HeldBy:0 HeldActive:0 Flowing:0 Pressed:0 CapMbit:0 PeakMbit:0 Reason:starting — bringing up the first 4 links Refill: NextProbeS:0 ExitStats: PeerMax:0 Routes:0xc9422b16ea0 Datagram:false LossPct:0 MaxLossPct:0 ParityPct:0 FECAtCeiling:0 FECRecovered:0 FECLost:0 RxDropped:0 TunDrops:0 TunRead:0 SentPkts:0 RecvPkts:0 TunWritten:0 DropNoCarrier:0 DropQueueFull:0 DropAged:0 MuteClosed:0 TunOffload:false TunMode: TunReads:0 TunSegs:0 TunWrites:0 TunPkts:0 TunBad:0 TunRefused:0 Carriers: ReorderHeld:0 ReorderFilled:0 ReorderTimedOut:0 Policed:false PoliceConfirm:false PoliceCapMbit:0 ShareMbit:0 BusyQueueMs:0 SendMbit:0 SendHeldPct:0 FQWaitMs:0 WriteUs:0 PerWrite:0}
+           links: []
+       stream_v2_test.go:149: edge log:
+       stream_v2_test.go:150: exit log:
+   --- FAIL: TestPortRoutesEndToEnd/direct (0.11s)
+
+-- FAIL github.com/hosseintaghipoursori-alt/hs2-tunnel/engine TestPortRoutesEndToEnd
+   === RUN   TestPortRoutesEndToEnd
+   --- FAIL: TestPortRoutesEndToEnd (0.76s)

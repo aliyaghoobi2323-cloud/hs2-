@@ -1,0 +1,8 @@
+== go test -short -count=1 -timeout 25m ./engine ./tlscarrier ./cmd/hs2 ./core (in hs2-src): rc 0, 496 s
+== t386
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   pass    491.3  703/0/65               176/0/1               
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier pass     12.1  33/0/1                 32/0/0                
+github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2  pass      3.6  103/0/0                214/0/0               
+github.com/hosseintaghipoursori-alt/hs2-tunnel/core     pass      0.3  15/0/0                 0/0/0                 
+TOTAL top-level: 854 pass, 0 fail, 66 skip; subtests: 422 pass, 0 fail, 1 skip; packages 4 (0 not pass)

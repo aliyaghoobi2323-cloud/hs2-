@@ -1,0 +1,13 @@
+== f-flakes: /root/rmerge/tools/blocks.sh flakes (2026-10-29T19:35:16Z)
+== flakes on 70198ec (R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حر�) 2026-10-29T19:35:16Z
+go version go1.27.3 linux/amd64
+-- flaky-dgports rc 0 2 s: TOTAL top-level: 30 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-exitreason rc 0 124 s: TOTAL top-level: 5 pass, 0 fail, 0 skip; subtests: 20 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-wildcard rc 0 1 s: TOTAL top-level: 10 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-routes rc 0 17 s: TOTAL top-level: 20 pass, 0 fail, 0 skip; subtests: 40 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-udpreply rc 0 7 s: TOTAL top-level: 20 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-moveback rc 0 110 s: TOTAL top-level: 10 pass, 0 fail, 0 skip; subtests: 20 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-p10 rc 0 169 s: TOTAL top-level: 6 pass, 0 fail, 0 skip; subtests: 18 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- flaky-race rc 0 38 s: TOTAL top-level: 110 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+== done flakes 2026-10-29T19:43:04Z
+== end rc=0 2026-10-29T19:43:04Z, 468 s

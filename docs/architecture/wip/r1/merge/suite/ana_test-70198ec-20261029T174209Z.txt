@@ -1,0 +1,29 @@
+/root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana.py:1104: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmphgo1qgoj.jsonl' mode='r' encoding='UTF-8'>
+  recs = [json.loads(l) for l in open(path) if l.strip()]
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+........./root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana.py:1104: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmptgsqvmlq.jsonl' mode='r' encoding='UTF-8'>
+  recs = [json.loads(l) for l in open(path) if l.strip()]
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana.py:1104: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpy844c1j7.jsonl' mode='r' encoding='UTF-8'>
+  recs = [json.loads(l) for l in open(path) if l.strip()]
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+../root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana.py:1104: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp8btj07cj.jsonl' mode='r' encoding='UTF-8'>
+  recs = [json.loads(l) for l in open(path) if l.strip()]
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana.py:1104: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp93uyfa5u.jsonl' mode='r' encoding='UTF-8'>
+  recs = [json.loads(l) for l in open(path) if l.strip()]
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana.py:588: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp0q786cnw/edge.log' mode='r' encoding='UTF-8'>
+  for l in open(path, errors="replace"):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana_test.py:389: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmpgmj1mmhp/s.json' mode='r' encoding='UTF-8'>
+  s = json.load(open(p))
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+./root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/ana.py:588: ResourceWarning: unclosed file <_io.TextIOWrapper name='/tmp/tmp50ks6s4_/edge.log' mode='r' encoding='UTF-8'>
+  for l in open(path, errors="replace"):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.......
+----------------------------------------------------------------------
+Ran 24 tests in 0.016s
+
+OK

@@ -1,0 +1,43 @@
+== check3: R1 merge step 5: make check + release (head with red2 1acf5ba); lock after 821 s; 2026-10-29T12:20:34Z; limit 1500 s
+== check on 902c244 (R1 ادغام: آزمون‌های encap دیگر در /run/hs2 میزبان نمی‌نو) 2026-10-29T12:20:34Z
+go version go1.27.3 linux/amd64
+-- vet/fmt: 2 of 2 make targets rc 0; rigload vet rc 0
+-- /run/hs2/icmp-echo-ignore before: 2026-10-29 12:12:59.757579335 +0000
+-- test rc 0 957 s: TOTAL top-level: 1048 pass, 0 fail, 30 skip; subtests: 525 pass, 0 fail, 0 skip; packages 16 (0 not pass)
+-- /run/hs2/icmp-echo-ignore after: 2026-10-29 12:35:23.741050516 +0000
+-- smux rc 0 64 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- rigload rc 0 20 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- ana_test.py rc 0: OK
+== done check 2026-10-29T12:37:57Z
+== release on 902c244 (R1 ادغام: آزمون‌های encap دیگر در /run/hs2 میزبان نمی‌نو) 2026-10-29T12:37:57Z
+go version go1.27.3 linux/amd64
+mkdir -p /root/rmerge/raw-dist-902c244
+for a in amd64 386 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags="-s -w" -o /root/rmerge/raw-dist-902c244/hs2-linux-$a ./cmd/hs2 || exit 1; done
+cd /root/rmerge/raw-dist-902c244 && sha256sum hs2-linux-* > SHA256SUMS && cat SHA256SUMS
+494f8cd8cd4548b51727d05031597a443ef10e2d20a9cd29d5111f7961a6721e  hs2-linux-386
+991776b16a475486dfac2c8b55d77ff3ff0a107a23a394892c98cf7652d383e0  hs2-linux-amd64
+ee841793c680363529bae8a9f864ef9db5ff398fccfa8f8ab6a831f4922c9cf3  hs2-linux-arm64
+-rwxr-xr-x 1 root root 12570784 Oct 29 12:38 hs2-linux-386
+-rwxr-xr-x 1 root root 14237856 Oct 29 12:37 hs2-linux-amd64
+-rwxr-xr-x 1 root root 12124320 Oct 29 12:38 hs2-linux-arm64
+== hs2-linux-386
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=386
+	build	vcs.revision=902c244e29273b65bf568042442140180fde4fa1
+	build	vcs.modified=false
+== hs2-linux-amd64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	vcs.revision=902c244e29273b65bf568042442140180fde4fa1
+	build	vcs.modified=false
+== hs2-linux-arm64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	vcs.revision=902c244e29273b65bf568042442140180fde4fa1
+	build	vcs.modified=false
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build 902c244e2927 2026-10-29]
+== done release 2026-10-29T12:38:03Z
+== end rc=0 2026-10-29T12:38:03Z, 1049 s

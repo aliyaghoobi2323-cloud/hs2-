@@ -1,0 +1,33 @@
+== f-release: /root/rmerge/tools/blocks.sh release (2026-10-31T05:57:23Z)
+== release on 65dd1fd (R1 ادغام: توضیح angleNewHeavy با سنجهٔ RQ درست شد (فقط توضی�) 2026-10-31T06:01:34Z
+go version go1.27.3 linux/amd64
+mkdir -p /root/rmerge/raw-dist-65dd1fd
+for a in amd64 386 arm64; do CGO_ENABLED=0 GOOS=linux GOARCH=$a go build -trimpath -ldflags="-s -w" -o /root/rmerge/raw-dist-65dd1fd/hs2-linux-$a ./cmd/hs2 || exit 1; done
+cd /root/rmerge/raw-dist-65dd1fd && sha256sum hs2-linux-* > SHA256SUMS && cat SHA256SUMS
+194115398517822354940757e480fecfb345b3cecdd76046881dd7afae360810  hs2-linux-386
+c09b1c372b72a3fbfba7e6f3b2c8956654a0c4f93c8190aa4a7170882fa8b96b  hs2-linux-amd64
+9b0787c276a2b1bbdd7f6484026490b524664d3c2927046fc3863ccd26f4ecf1  hs2-linux-arm64
+-rwxr-xr-x 1 root root 12578976 Oct 31 06:01 hs2-linux-386
+-rwxr-xr-x 1 root root 14250144 Oct 31 06:01 hs2-linux-amd64
+-rwxr-xr-x 1 root root 12124320 Oct 31 06:01 hs2-linux-arm64
+== hs2-linux-386
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=386
+	build	vcs.revision=65dd1fd088bb4aedb375b570fae3e1ef116be378
+	build	vcs.modified=false
+== hs2-linux-amd64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=amd64
+	build	vcs.revision=65dd1fd088bb4aedb375b570fae3e1ef116be378
+	build	vcs.modified=false
+== hs2-linux-arm64
+	build	-trimpath=true
+	build	CGO_ENABLED=0
+	build	GOARCH=arm64
+	build	vcs.revision=65dd1fd088bb4aedb375b570fae3e1ef116be378
+	build	vcs.modified=false
+hs2 v3 (stream core; carriers: mtcp, l3mtcp, tls, udp, auto, dgtun; tun encaps: udp/icmp/gre/ipip/ipx; auth: tls-exporter bound, mutual)  [build 65dd1fd088bb 2026-10-31]
+== done release 2026-10-31T06:01:40Z
+== end rc=0 2026-10-31T06:01:40Z, 257 s

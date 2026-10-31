@@ -1,0 +1,23 @@
+== f-install: /root/rmerge/tools/blocks.sh install (2026-10-29T19:20:53Z)
+== install on 70198ec (R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حر�) 2026-10-29T19:20:53Z
+go version go1.27.3 linux/amd64
+-- install cert_test.sh: rc 0, 11 s; 40 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install cover_seed_test.sh: rc 0, 1 s; 17 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install dgtun_wildcard_test.sh: rc 0, 13 s; 3 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install helpers_test.sh: rc 0, 2 s; 19 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install kharej_stats_test.sh: rc 0, 6 s; 10 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install link_ceiling_test.sh: rc 0, 6 s; 34 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install migrate_test.sh: rc 0, 1 s; 10 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install multi_ip_test.sh: rc 0, 0 s; 4 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install ports_menu_test.sh: rc 0, 14 s; 38 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install release_files_test.sh: rc 0, 1 s; 5 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install tm_edit_test.sh: rc 0, 4 s; 27 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install tm_tune_links_test.sh: rc 0, 6 s; 19 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install udp_ports_test.sh: rc 0, 1 s; 4 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install multi_tunnel_test.py: rc 0, 569 s; 54 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install tun_ports_test.py: rc 0, 180 s; 137 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install hs2-safe-apply_test.sh: rc 0, 11 s; 31 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install install_link_test.sh: rc 0, 35 s; 227 ok lines;   unchanged: 246 files of the real install, and every hs2 unit's MainPID/NRestarts/state
+-- install: 17 pass, 0 fail
+== done install 2026-10-29T19:35:16Z
+== end rc=0 2026-10-29T19:35:16Z, 863 s

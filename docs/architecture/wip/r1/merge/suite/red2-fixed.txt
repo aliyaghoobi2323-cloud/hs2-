@@ -1,0 +1,92 @@
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.42s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.43s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (2.08s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.43s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.46s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.42s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.43s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.40s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.46s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.46s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.43s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (2.08s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (2.48s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.44s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.42s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.45s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.43s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.66s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.43s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.45s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.45s)
+=== RUN   TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo
+    red2_wcore_test.go:173: borrowed 3072 KiB, 2048 held with the data after the death, whole 1s after it (relayDieGrace 1s)
+--- PASS: TestRed2DeadLinkKeepsBorrowedPoolUntilRelaysLetGo (1.45s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	45.760s

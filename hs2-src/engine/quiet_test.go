@@ -202,6 +202,8 @@ func (r *quietRig) serve(p *classPair) {
 				}
 			case qpEcho:
 				io.Copy(conn, conn)
+			case qpSized:
+				sizedServe(conn) // moveload_test.go
 			case qpPhase:
 				for off := int64(0); off < qpPhaseBytes; off += int64(len(b)) {
 					for i := range b {

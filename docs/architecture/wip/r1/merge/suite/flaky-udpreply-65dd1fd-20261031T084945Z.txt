@@ -1,0 +1,5 @@
+== go test -count=20 -timeout 15m -run ^TestUDPUserPortRepliesFromTheAddressUsed$ ./engine (in hs2-src): rc 0, 6 s
+== flaky-udpreply
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   pass      6.2  20/0/0                 0/0/0                 
+TOTAL top-level: 20 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)

@@ -1,0 +1,4 @@
+# RQ (R1 merge step 5, the release binary, CPUs 0-5): the realtime lane on one session, the kill switch HS2_TUNE_QUIET=0: does a new heavy user stay under its floor on the real stack as in TestAngleP10? 2 reps
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=m
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=mq0
+N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40 BIN=mq0r0

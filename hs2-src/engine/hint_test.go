@@ -188,6 +188,7 @@ func hintRig(t *testing.T, rate float64, delay time.Duration) *quietRig {
 // second, and the bytes arrive whole and in order.
 func TestHintMovesDownload(t *testing.T) {
 	angleCores(t)
+	withTune(t, MoveLoad, 0) // the hint alone (the load rule moves it first: moveload.go)
 	r := hintRig(t, 4*angleRateBps, 10*time.Millisecond)
 	st := r.open(5, qpDown)
 	var got atomic.Int64
