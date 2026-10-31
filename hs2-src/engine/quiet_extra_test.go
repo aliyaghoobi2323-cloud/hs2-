@@ -13,6 +13,7 @@ func TestQuietCountsExtra(t *testing.T) {
 	}
 	defer func(x, n, f int) { QuietExtra, QuietN, QuietFew = x, n, f }(QuietExtra, QuietN, QuietFew)
 	QuietExtra, QuietN, QuietFew = 1, 0, 1
+	withTune(t, QuietLight, 0) // the light link's count: TestQuietCountLight
 	check := func(cases []struct{ max, q, total int }) {
 		t.Helper()
 		for _, c := range cases {
@@ -39,10 +40,37 @@ func TestQuietCountsExtra(t *testing.T) {
 }
 
 // The defaults (round 3; round 4 four QUIET links past five; the round-4
-// judge kept one up to five): QUIET outside max_links, one QUIET link up
-// to five links, four past.
+// judge kept one up to five; round 5 one light link more, but at five):
+// QUIET outside max_links, two QUIET links up to four links, one at five,
+// five past.
 func TestQuietDefaultsRound3(t *testing.T) {
-	if QuietExtra != 1 || QuietN != 0 || QuietBatch != 1 || QuietCount(5) != 1 || QuietCount(6) != 4 {
-		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(5) %d, (6) %d; want 1 0 1 1 4", QuietExtra, QuietN, QuietBatch, QuietCount(5), QuietCount(6))
+	if QuietExtra != 1 || QuietN != 0 || QuietBatch != 1 || QuietCount(4) != 2 || QuietCount(5) != 1 || QuietCount(6) != 5 {
+		t.Fatalf("QuietExtra %d, QuietN %d, QuietBatch %d, QuietCount(4) %d, (5) %d, (6) %d; want 1 0 1 2 1 5", QuietExtra, QuietN, QuietBatch, QuietCount(4), QuietCount(5), QuietCount(6))
+	}
+}
+
+// The rest of round 5's defaults (round5/REPORT.fa.md): what was measured.
+func TestDefaultsRound5(t *testing.T) {
+	if QuietCC != "illinois,cubic" || QuietCCLoss != "" {
+		t.Errorf("QuietCC %q, QuietCCLoss %q; want illinois,cubic and none", QuietCC, QuietCCLoss)
+	}
+	for _, c := range []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"HS2_TUNE_QUIET_LIGHT", QuietLight.Get(), 2},
+		{"HS2_TUNE_QUIET_WAIT", QuietWaitMs.Get(), 1500},
+		{"HS2_TUNE_QUIET_REPLACE", QuietReplace.Get(), 1},
+		{"HS2_TUNE_QUIET_BUDGET", QuietBudget.Get(), 1},
+		{"HS2_TUNE_OWD_GUARD_BULK", OWDGuardBulk, 0},
+		{"HS2_TUNE_RT_LOOSE", RTLoose.Get(), 0},
+		{"HS2_TUNE_OWD_GUARD_IN", OWDGuardIn.Get(), 0},
+		{"HS2_TUNE_OWD_NOT_LIGHT", OWDNotLight.Get(), 0},
+		{"HS2_TUNE_BUDGET_SPLIT", BudgetSplitRate, 0},
+	} {
+		if c.got != c.want {
+			t.Errorf("%s %d, want %d", c.name, c.got, c.want)
+		}
 	}
 }

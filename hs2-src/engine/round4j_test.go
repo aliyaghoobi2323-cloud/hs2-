@@ -16,11 +16,20 @@ func withTune(t *testing.T, ti *TuneInt, v int) {
 	t.Cleanup(func() { ti.Set(old) })
 }
 
+// withTuneInt is withTune for a switch that is a plain int.
+func withTuneInt(t *testing.T, p *int, v int) {
+	t.Helper()
+	old := *p
+	*p = v
+	t.Cleanup(func() { *p = old })
+}
+
 // TestQuietFewCount: QuietFew is the QUIET count up to quietOneMax links,
 // QuietMany past it, and the pool's total holds them next to max_links.
 func TestQuietFewCount(t *testing.T) {
 	defer func(f, m, n, x int) { QuietFew, QuietMany, QuietN, QuietExtra = f, m, n, x }(QuietFew, QuietMany, QuietN, QuietExtra)
 	QuietN, QuietExtra, QuietMany = 0, 1, 4
+	withTune(t, QuietLight, 0) // the light link's count: TestQuietCountLight
 	for _, c := range []struct{ few, links, want, total int }{
 		{1, 1, 1, 2}, {1, 5, 1, 6}, {1, 6, 4, 10}, {2, 1, 2, 3}, {2, 5, 2, 7}, {2, 6, 4, 10}, {2, 300, 4, 304}, {0, 1, 1, 2},
 	} {

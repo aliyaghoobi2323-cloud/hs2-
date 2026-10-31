@@ -181,6 +181,7 @@ func killShare(t *testing.T, nq int) (cut, light, hit, users int, downsOK bool) 
 // The downloads that moved to the BULK link run on in both.
 func TestQuietKillShare(t *testing.T) {
 	angleCores(t)
+	withTune(t, QuietLight, 0) // the links as the general ones: TestQuietKillShareLight has the light one
 	for _, nq := range []int{1, 2, 4} {
 		for _, by := range []int{0, 1} {
 			t.Run(fmt.Sprintf("Q%d/byuser%d", nq, by), func(t *testing.T) {
@@ -216,6 +217,36 @@ func TestQuietKillShare(t *testing.T) {
 	}
 }
 
+// TestQuietKillShareLight: the default past five links, four general QUIET
+// links and the light one (R1 round 5): one death cuts what it cut with
+// four, a share of the connections (no one opens on the light link, so the
+// other four hold them all); the light link adds none to the kill.
+func TestQuietKillShareLight(t *testing.T) {
+	angleCores(t)
+	withTune(t, QuietLight, 2)
+	for _, by := range []int{0, 1} {
+		t.Run(fmt.Sprintf("byuser%d", by), func(t *testing.T) {
+			QuietByUser.Set(by)
+			t.Cleanup(func() { QuietByUser.Set(0) })
+			cut, light, hit, users, downsOK := killShare(t, 5)
+			t.Logf("four general and the light one, by user %d: light connections cut %d of %d, users hit %d of %d, moved downloads run on %v", by, cut, light, hit, users, downsOK)
+			if !downsOK {
+				t.Errorf("a moved download stopped with the QUIET link")
+			}
+			slack := per(4)
+			if by == 0 {
+				slack += light / 8
+			}
+			if want := light / 4; cut < want-per(4) || cut > want+slack {
+				t.Errorf("cut %d of %d light connections, want about %d", cut, light, want)
+			}
+			if by == 1 && hit > (users+3)/4 {
+				t.Errorf("by user: %d of %d users hit, want at most %d", hit, users, (users+3)/4)
+			}
+		})
+	}
+}
+
 // per is the slack of an even spread over nq links: a link's share may be
 // one user (3 connections) off.
 func per(nq int) int {
@@ -233,6 +264,7 @@ func per(nq int) int {
 // does; without it, by the fewest connections.
 func TestQuietPack(t *testing.T) {
 	angleCores(t)
+	withTune(t, QuietLight, 0)
 	defer QuietPack.Set(QuietPack.Get())
 	for _, pack := range []int{0, 1} {
 		QuietPack.Set(pack)
@@ -276,6 +308,7 @@ func TestQuietPack(t *testing.T) {
 
 func TestQuietByUserSticky(t *testing.T) {
 	angleCores(t)
+	withTune(t, QuietLight, 0)
 	QuietByUser.Set(1)
 	t.Cleanup(func() { QuietByUser.Set(0) })
 	k := newKillRig(t, 2, 4*angleRateBps, 5*time.Millisecond)
