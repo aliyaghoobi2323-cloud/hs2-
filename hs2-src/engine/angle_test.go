@@ -511,71 +511,97 @@ func TestAngleP10(t *testing.T) {
 			t.Fatalf("the two took %.3f of the link, want >= 0.97", (r[0]+r[1])/c)
 		}
 	})
+	// The floors and the latency credit alone, the scheduler these bounds
+	// were set for. "newheavy_rt" is the same with the realtime lane (the
+	// default since round 4), which the bounds must count too: see
+	// angleNewHeavy.
 	t.Run("newheavy", func(t *testing.T) {
-		l := newAngleLink(t, c, angleDelay)
-		ctx, cancel := context.WithCancel(context.Background())
-		defer cancel()
-		var h1, h2 atomic.Uint64
-		p := l.probe(ctx, 3) // the light user
-		l.download(ctx, 1, 4, &h1)
-		time.Sleep(3 * time.Second)
-		p.on()
-		l.download(ctx, 2, 16, &h2) // the new heavy user
-		// its first second (the rig's (e) is judged once settled, below):
-		// each new stream's first 32 KiB goes as light (unknown), charged to
-		// its user's latency-lane credit (T14), so ahead of the floors the
-		// new user takes at most that credit, a burst and a second of it
-		first := angleRate(time.Second, &h1, &h2)
-		// and a probe of the light user that comes as the new streams start
-		// may wait behind that burst in the latency lane (FIFO, §3.2): 26 ms
-		// at 10 Mbit/s; the light user's (d) is judged once settled
-		worstFirst, nFirst := p.pct(1)
-		p.on()
-		r := angleRate(8*time.Second, &h1, &h2)
-		credit := float64(schedLaneBurst + schedLaneRate)
-		// and the floor guards a user only while it has bulk queued, on a
-		// demand measured over the last 200 ms (sched.go): until the
-		// floors have caught up with the new user, what the existing one
-		// leaves unqueued goes by flows, 16 of the new user's against its
-		// 4. Sampled every 100 ms (8 runs), the new user takes ~80% from
-		// about 0.2 s to 0.7 s and the existing one then ~85% for the rest
-		// of the second; that second ends at 0.79 to 0.94 of the floor in
-		// 28 runs (alone on the six test cores and in three 2-core slices
-		// at once), and the CI once saw 0.737 against a bound of 0.758
-		// that left this out. The bound takes one demand window of it: the
-		// flows' split past half of the link for 200 ms. The settled share
-		// (below, the rig's (e)) is unchanged.
-		ramp := c * (2 * schedTick).Seconds() * float64(16-4) / float64(16+4)
-		t.Logf("existing bulk in the new user's first second: %.2f Mbit/s (%.3f of its floor), the link delivered %.2f of %.2f Mbit/s",
-			first[0]*8/1e6, first[0]/(c/2), (first[0]+first[1])*8/1e6, c*8/1e6)
-		if first[0] < 0.9*(c-credit-ramp)/2 {
-			t.Fatalf("the existing bulk user got %.3f of its floor in the new user's first second, want >= 0.9 of what the new user's latency credit and the floors' ramp leave (%.3f)",
-				first[0]/(c/2), 0.9*(c-credit-ramp)/c)
-		}
-		// one session (as TestAngleSameLinkProbe's one_session): the probe's
-		// echo waits besides behind the exit's unsent download bytes, C3's
-		// cap (T12); in the first second the new user's lane burst besides
-		bound := angleBound + angleHostQ()
-		burst := time.Duration(float64(schedLaneBurst) / c * float64(time.Second))
-		p99, n := p.pct(0.99)
-		t.Logf("existing bulk %.2f, new heavy %.2f Mbit/s; light probe p99 %v (%d) settled, bound %v; worst %v (%d) in the new user's first second, bound %v",
-			r[0]*8/1e6, r[1]*8/1e6, p99, n, bound, worstFirst, nFirst, bound+burst)
-		if r[0] < 0.9*c/2 {
-			t.Fatalf("the existing bulk user got %.3f of its floor, want >= 0.9", r[0]/(c/2))
-		}
-		if n < 30 {
-			t.Fatalf("only %d probes", n)
-		}
-		if p99 > bound {
-			t.Fatalf("the light user's p99 %v, want <= %v (RTT + 20 ms + C3's cap %v)", p99, bound, angleHostQ())
-		}
-		if worstFirst > bound+burst {
-			t.Fatalf("the light user's worst probe in the new user's first second %v, want <= %v (and the new user's lane burst, %v)", worstFirst, bound+burst, burst)
-		}
-		if r[0]+r[1] < 0.97*c {
-			t.Fatalf("total %.3f of the link, want >= 0.97", (r[0]+r[1])/c)
-		}
+		defer func(v int) { TuneRT.Set(v) }(TuneRT.Get())
+		TuneRT.Set(0)
+		angleNewHeavy(t, 0)
 	})
+	t.Run("newheavy_rt", func(t *testing.T) {
+		defer func(v int) { TuneRT.Set(v) }(TuneRT.Get())
+		TuneRT.Set(1)
+		angleNewHeavy(t, float64(RTMax)/8)
+	})
+}
+
+// angleNewHeavy is TestAngleP10's new heavy user, rtShare the bytes a second
+// a user's realtime credit may take ahead of the floors.
+//
+// The realtime lane comes before the floors, and on one session it reads
+// bulk flows as steady (the scheduler's accounting over the first two
+// seconds, per 100 ms: while its streams are unknown the new user takes ~50
+// KB a tick of realtime, its whole credit, on top of the 31 KB of its floor;
+// from ~0.8 s the existing user's four downloads do, and keep it, ~85 KiB a
+// tick against the new user's ~36, both users queued and both floors C/2 all
+// the time). So the first second lands at 0.74 to 0.94 of the existing
+// user's floor, with the new user's bound past it the whole run (3.6 to 4.1
+// of the floor's 5 Mbit/s). That is what the CI's 0.737 against 0.758 was,
+// not the host: the link delivers 9.9 of 10 Mbit/s in that second, and the
+// spread is the same alone on six cores and in 2-core slices. It costs only
+// one session (a level 1 peer, or HS2_TUNE_QUIET=0): with QUIET links a bulk
+// flow moves to BULK, and a moved connection never takes the lane (rtlane.go;
+// the rig's cells with and without: RQ in merge/REPORT.fa.md).
+func angleNewHeavy(t *testing.T, rtShare float64) {
+	const c = angleRateBps
+	l := newAngleLink(t, c, angleDelay)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var h1, h2 atomic.Uint64
+	p := l.probe(ctx, 3) // the light user
+	l.download(ctx, 1, 4, &h1)
+	time.Sleep(3 * time.Second)
+	p.on()
+	l.download(ctx, 2, 16, &h2) // the new heavy user
+	// its first second (the rig's (e) is judged once settled, below):
+	// each new stream's first 32 KiB goes as light (unknown), charged to
+	// its user's latency-lane credit (T14), so ahead of the floors the
+	// new user takes at most that credit, a burst and a second of it (and
+	// rtShare of realtime)
+	first := angleRate(time.Second, &h1, &h2)
+	// and a probe of the light user that comes as the new streams start
+	// may wait behind that burst in the latency lane (FIFO, §3.2): 26 ms
+	// at 10 Mbit/s; the light user's (d) is judged once settled
+	worstFirst, nFirst := p.pct(1)
+	p.on()
+	r := angleRate(8*time.Second, &h1, &h2)
+	credit := float64(schedLaneBurst+schedLaneRate) + rtShare
+	t.Logf("existing bulk in the new user's first second: %.2f Mbit/s (%.3f of its floor), the link delivered %.2f of %.2f Mbit/s",
+		first[0]*8/1e6, first[0]/(c/2), (first[0]+first[1])*8/1e6, c*8/1e6)
+	if first[0] < 0.9*(c-credit)/2 {
+		t.Fatalf("the existing bulk user got %.3f of its floor in the new user's first second, want >= 0.9 of what the new user's credit leaves (%.3f)",
+			first[0]/(c/2), 0.9*(c-credit)/c)
+	}
+	// one session (as TestAngleSameLinkProbe's one_session): the probe's
+	// echo waits besides behind the exit's unsent download bytes, C3's
+	// cap (T12); in the first second the new user's lane burst besides
+	bound := angleBound + angleHostQ()
+	burst := time.Duration(float64(schedLaneBurst) / c * float64(time.Second))
+	p99, n := p.pct(0.99)
+	t.Logf("existing bulk %.2f, new heavy %.2f Mbit/s; light probe p99 %v (%d) settled, bound %v; worst %v (%d) in the new user's first second, bound %v",
+		r[0]*8/1e6, r[1]*8/1e6, p99, n, bound, worstFirst, nFirst, bound+burst)
+	if r[0] < 0.9*c/2 {
+		t.Fatalf("the existing bulk user got %.3f of its floor, want >= 0.9", r[0]/(c/2))
+	}
+	// and the new user has its own floor (what the other user's realtime
+	// credit leaves of it)
+	if r[1] < 0.9*(c-rtShare)/2 {
+		t.Fatalf("the new heavy user got %.2f Mbit/s, want >= 0.9 of the %.2f its floor leaves", r[1]*8/1e6, (c-rtShare)/2*8/1e6)
+	}
+	if n < 30 {
+		t.Fatalf("only %d probes", n)
+	}
+	if p99 > bound {
+		t.Fatalf("the light user's p99 %v, want <= %v (RTT + 20 ms + C3's cap %v)", p99, bound, angleHostQ())
+	}
+	if worstFirst > bound+burst {
+		t.Fatalf("the light user's worst probe in the new user's first second %v, want <= %v (and the new user's lane burst, %v)", worstFirst, bound+burst, burst)
+	}
+	if r[0]+r[1] < 0.97*c {
+		t.Fatalf("total %.3f of the link, want >= 0.97", (r[0]+r[1])/c)
+	}
 }
 
 // C1 on the link's streams, as the runner ticks it: the exit's downloads are

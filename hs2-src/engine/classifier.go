@@ -179,6 +179,7 @@ type userTagState struct {
 	h   hash.Hash
 	key []byte // the key h was made with (a test's setUserTagKey drops stale ones)
 	sum [blake2s.Size128]byte
+	in  [16]byte // the input, copied here: through h's interface b would escape
 }
 
 // keyedTag is the first 32 bits of BLAKE2s-128 of b under the process's key.
@@ -191,7 +192,7 @@ func keyedTag(b []byte) uint32 {
 		st = newUserTagHash().(*userTagState)
 	}
 	st.h.Reset()
-	st.h.Write(b)
+	st.h.Write(st.in[:copy(st.in[:], b)])
 	st.h.Sum(st.sum[:0])
 	v := binary.BigEndian.Uint32(st.sum[:4])
 	userTagHash.Put(st)
