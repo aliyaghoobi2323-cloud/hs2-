@@ -376,6 +376,7 @@ func applyTuning() {
 	num("HS2_TUNE_PANEL_MSS", &engine.TunePanelMSS)
 	num("HS2_TUNE_BUDGET_QCHECK", &engine.BudgetQuietCheck) // the QUIET queues only within the link's own round trip (0: always)
 	num("HS2_TUNE_BUDGET_C4", &engine.BudgetC4)             // a budget link's pacing cap: the budget's alone (0) or the lesser with C4-lite's
+	numT("HS2_TUNE_BUDGET_DFLOOR", engine.BudgetDFloor)     // R1 round 5: B stays at this share (×100) of delivery × min_rtt
 	num("HS2_TUNE_LINK_SNDBUF", &engine.TuneLinkSndbuf)     // a BULK link socket's send buffer (bytes; 0: autotuning)
 	num("HS2_TUNE_MOVE_BACK", &engine.TuneMoveBack)         // (lab, both ends) back to a QUIET link when light again; its caps bit is tlscarrier's
 	num("HS2_TUNE_MOVED_BULK", &engine.MovedBulk)           // a moved connection stays bulk on its BULK link (0: C1's rule)
@@ -398,6 +399,9 @@ func applyTuning() {
 	num("HS2_TUNE_RT_MAX", &engine.RTMax)
 	numT("HS2_TUNE_TWOWAY", engine.TwoWay)                         // a connection whose user sends steadily stays on QUIET
 	numT("HS2_TUNE_TWOWAY_RATIO", engine.TwoWayRatio)              // ... unless one way carries more than this many times the other (0: none)
+	numT("HS2_TUNE_MOVE_LOAD", engine.MoveLoad)                    // R1 fix 1: a connection on a loaded QUIET link moves on its bytes alone
+	numT("HS2_TUNE_MOVE_LOAD_MBPS", engine.MoveLoadMbps)           // ... loaded: this many Mbit/s a direction over the last second
+	numT("HS2_TUNE_MOVE_LOAD_KIB", engine.MoveLoadKiB)             // ... moves past this many KiB over the last second
 	numT("HS2_TUNE_OWD_IDLE", engine.OWDIdle)                      // an idle pool's QUIET link sends no one-way delay messages
 	numT("HS2_TUNE_OWD_IDLE_POOL", engine.OWDIdlePool)             // ... and a busy pool wakes every QUIET link's (0: quietOWD's alone)
 	numT("HS2_TUNE_TAG_KEY", engine.TuneTagKey)                    // the user tag a keyed hash (0: the unkeyed FNV-1a, which reveals the address)
@@ -425,6 +429,12 @@ func applyTuning() {
 	numT("HS2_TUNE_QUIET_BYUSER", engine.QuietByUser)
 	numT("HS2_TUNE_QUIET_HOLDCAP", engine.QuietHoldCap)
 	numT("HS2_TUNE_RESCUE_DEAD", engine.RescueDead)
+	// the pool on the main server: a shrink at most a fifth of the links, 5 min
+	// after the last change (0: every 30 s, half the gap); on a retiring link
+	// only connections idle for drain_idle are closed (0: also the slow ones
+	// on a link retiring 20 min+)
+	numT("HS2_TUNE_SLOW_SHRINK", engine.SlowShrink)
+	numT("HS2_TUNE_RECLAIM_IDLE_ONLY", engine.ReclaimIdleOnly)
 	// C3's gate variants for the judge (decision T12), and C4-lite reading
 	// the writer's waits as not app-limited (lab)
 	num("HS2_TUNE_HQG_SEGS", &engine.HQGSegs)

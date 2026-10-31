@@ -255,6 +255,9 @@ type quietLink struct {
 	// sampler's goroutine only)
 	prevRd, prevWr uint64
 	sampled        bool
+	// load: its load as the mover reads it (MoveLoad, moveload.go; the
+	// mover goroutine only)
+	load quietLoad
 }
 
 // quietSet is the edge's QUIET links, and the mover of its group streams.
@@ -943,7 +946,9 @@ func (q *quietSet) moverTick(now int64) {
 		s    *groupStream
 		dir  string
 		held bool
+		load bool // by the QUIET link's load (MoveLoad)
 	}
+	loads := q.loadTick(now) // moveload.go
 	var dues []dueMove
 	// the users past their share of a QUIET link's buffer: every connection
 	// of theirs moves now (QuietHoldCap, quietuser.go)
@@ -963,7 +968,7 @@ func (q *quietSet) moverTick(now int64) {
 		}
 		due, dir := s.rule.tick(s.g.TxBytes(), s.g.RxBytes(), s.g.WriteBusy(), now, true, !q.hinting(s.ql))
 		if held[s.tag] {
-			dues = append(dues, dueMove{s, "down", true})
+			dues = append(dues, dueMove{s, "down", true, false})
 			continue
 		}
 		if !due && s.hintAt.Load() != 0 {
@@ -971,6 +976,12 @@ func (q *quietSet) moverTick(now int64) {
 		}
 		if !due && s.capAt.Load() != 0 {
 			due, dir = true, "up" // the upload cap (quietcap.go)
+		}
+		byLoad := false
+		if f := loads[s.ql]; !due && f != 0 {
+			// its QUIET link is loaded: no backlog run (moveload.go)
+			due, dir = s.rule.loadDue(f&loadUp != 0, f&loadDown != 0)
+			byLoad = due
 		}
 		if due && TwoWay.Get() != 0 {
 			// the other direction a steady stream of its user: a call, kept
@@ -986,7 +997,7 @@ func (q *quietSet) moverTick(now int64) {
 			}
 		}
 		if due {
-			dues = append(dues, dueMove{s, dir, false})
+			dues = append(dues, dueMove{s, dir, false, byLoad})
 			continue
 		}
 		keep = append(keep, s)
@@ -1004,6 +1015,8 @@ func (q *quietSet) moverTick(now int64) {
 			keep = append(keep, d.s)
 		} else if d.held {
 			q.hold.movedN.Add(1)
+		} else if d.load {
+			loadMoved.Add(1)
 		}
 	}
 	if PlaceUsers.Get() != 0 && len(dues) > 0 {
@@ -1158,6 +1171,9 @@ func (q *quietSet) line() string {
 	}
 	if TwoWay.Get() != 0 {
 		more += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
+	}
+	if MoveLoad.Get() != 0 {
+		more += fmt.Sprintf("; by load %d", loadMoved.Load())
 	}
 	if PlaceUsers.Get() != 0 {
 		more += "; " + q.book.line()
