@@ -168,6 +168,7 @@ type exitHintSet struct {
 	sent  atomic.Int64 // hints sent
 	again atomic.Int64 // ... of them sent again
 	fail  atomic.Int64 // hints no stream took
+	load  atomic.Int64 // ... of the sent, by the QUIET link's load (MoveLoad)
 }
 
 var exitHints exitHintSet
@@ -300,15 +301,21 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 			rules[eg] = r
 		}
 		tw := twoWayNo
+		if TwoWay.Get() != 0 || MoveLoad.Get() != 0 {
+			r.rx.tick(eg.RxBytes(), now)
+			r.tx.tick(eg.TxBytes(), now)
+		}
 		if TwoWay.Get() != 0 {
 			// the user sends steadily on it (or may: too early to say): a
 			// call, not a download (twoway.go)
-			r.rx.tick(eg.RxBytes(), now)
-			r.tx.tick(eg.TxBytes(), now)
 			tw = twoWayExit(&r.rx, &r.tx)
 		}
 		eg.twoWay.Store(tw != twoWayNo)
-		if !r.tick(eg.big.total(now), now) {
+		backlog := r.tick(eg.big.total(now), now)
+		// or its QUIET link is loaded and it carries a light span a second
+		// (MoveLoad, moveload.go): no backlog run
+		byLoad := !backlog && tw == twoWayNo && exitLoadDue(eg.mtr.Load(), &r.tx, now)
+		if !backlog && !byLoad {
 			continue
 		}
 		if tw != twoWayNo {
@@ -337,6 +344,9 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 			if again {
 				exitHints.again.Add(1)
 			}
+			if byLoad {
+				exitHints.load.Add(1)
+			}
 			exitHints.sent.Add(1)
 		}(eg.ID(), eg.mtr.Load())
 	}
@@ -358,6 +368,9 @@ func (s *exitHintSet) line() string {
 	}
 	if TwoWay.Get() != 0 {
 		cap += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
+	}
+	if MoveLoad.Get() != 0 {
+		cap += fmt.Sprintf("; by load %d", s.load.Load())
 	}
 	return fmt.Sprintf("move hints: %d streams; sent %d (again %d), none took %d%s", n, s.sent.Load(), s.again.Load(), s.fail.Load(), cap)
 }

@@ -612,6 +612,17 @@ func (l *sendCapLink) budgetLine(n int) string {
 	return l.budget.line(n)
 }
 
+// budgetCuts is the cuts of the link's budget since it began (ok false: it
+// has none).
+func (l *sendCapLink) budgetCuts() (uint64, bool) {
+	if l.budget == nil {
+		return 0, false
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.budget.core.cuts, true
+}
+
 // newSendCapLink: the C4-lite of a link socket (sys), and the C3 its
 // readings move (hq; nil: none).
 func newSendCapLink(sys capSys, hq *hostQ) *sendCapLink { return &sendCapLink{sys: sys, hq: hq} }

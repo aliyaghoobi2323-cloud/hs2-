@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -77,9 +78,21 @@ func TestClosesPerTickScales(t *testing.T) {
 	}
 }
 
-// A link retiring for retireForce is no longer held by trickling connections
-// (app keepalives under drainIdle): those are closed; a flowing one is not.
+// Without ReclaimIdleOnly (the old rule), a link retiring for retireForce is
+// no longer held by trickling connections (app keepalives under drainIdle):
+// those are closed; a flowing one is not. With it (the default), neither is:
+// the trickling one moved a byte just now.
 func TestReclaimForcedClosesTricklingNotFlowing(t *testing.T) {
+	for _, only := range []int{0, 1} {
+		t.Run(fmt.Sprintf("ReclaimIdleOnly=%d", only), func(t *testing.T) {
+			defer ReclaimIdleOnly.Set(ReclaimIdleOnly.Get())
+			ReclaimIdleOnly.Set(only)
+			reclaimForced(t, only == 0)
+		})
+	}
+}
+
+func reclaimForced(t *testing.T, oldRule bool) {
 	m, _, _ := newV2Manager(nil, 1, 8, false)
 	pl := newV2PipeLink(t)
 	trickle, flowing := pl.open(t), pl.open(t)
@@ -97,11 +110,17 @@ func TestReclaimForcedClosesTricklingNotFlowing(t *testing.T) {
 	}
 	ml.reclaiming.Store(true)
 	m.reclaimIdle(ml, time.Now(), drainIdleDefault, true)
-	if !trickle.done.Load() {
-		t.Fatal("the trickling connection still holds the link after retireForce")
-	}
 	if flowing.done.Load() {
 		t.Fatal("closed a flowing connection")
+	}
+	if !oldRule {
+		if trickle.done.Load() || m.forced.Load() != 0 {
+			t.Fatalf("closed a connection that moved a byte just now (forced=%d)", m.forced.Load())
+		}
+		return
+	}
+	if !trickle.done.Load() {
+		t.Fatal("the trickling connection still holds the link after retireForce")
 	}
 	if m.forced.Load() != 1 {
 		t.Fatalf("forced=%d, want 1", m.forced.Load())
