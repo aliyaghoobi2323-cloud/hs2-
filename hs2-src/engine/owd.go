@@ -223,6 +223,13 @@ var TuneOWDGuard = 1
 // (F3: the budget's "two-way" without "own delays" in both runs).
 var OWDGuardBulk = 1
 
+// OWDNotLight (HS2_TUNE_OWD_NOT_LIGHT; 0: off; R1 round 5): no one-way delay
+// messages on the light QUIET link (quietlight.go): the BULK links' budgets
+// read the general QUIET link's queue, the one they should yield to; a light
+// link has none, whatever the general one holds. The edge opens the stream,
+// so the exit reads the same links' (its quietOWD follows kindOWD).
+var OWDNotLight = newTuneInt(0)
+
 // OWDGuardIn (HS2_TUNE_OWD_GUARD_IN; 0: off; R1 round 5): the guard of the
 // other direction's reading (queueIn) too: a QUIET link socket that
 // received segments out of order since the beat before (tcpi_rcv_ooopack:
@@ -736,6 +743,8 @@ func openOWD(ctx context.Context, l Link) {
 		if !ml.bulk {
 			return
 		}
+	case ml.quiet && ml.l3avoid.Load() && OWDNotLight.Get() != 0:
+		return // the light QUIET link: its queue is no one else's (OWDNotLight)
 	case ml.quiet:
 		quietOWD.Store(&ml.mtr.owd)
 	case ml.bulk && budgetLinkOWD():

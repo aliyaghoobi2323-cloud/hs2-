@@ -407,8 +407,9 @@ func applyTuning() {
 	// link's drain against BBR's PROBE_RTT; C3's floor bounded in time
 	num("HS2_TUNE_QUIET_FEW", &engine.QuietFew)
 	numT("HS2_TUNE_RT_HOLD", engine.RTHold)
-	numT("HS2_TUNE_QUIET_BUDGET", engine.QuietBudget) // R1 round 5: the in-flight budget on a QUIET link bulk lane too
-	numT("HS2_TUNE_RT_LOOSE", engine.RTLoose)         // R1 round 5: a call held back from its start gets the realtime lane
+	numT("HS2_TUNE_QUIET_BUDGET", engine.QuietBudget)  // R1 round 5: the in-flight budget on a QUIET link bulk lane too
+	numT("HS2_TUNE_OWD_NOT_LIGHT", engine.OWDNotLight) // R1 round 5: no one-way delays on the light QUIET link
+	numT("HS2_TUNE_RT_LOOSE", engine.RTLoose)          // R1 round 5: a call held back from its start gets the realtime lane
 	numT("HS2_TUNE_RT_SHARE", engine.RTShare)
 	numT("HS2_TUNE_LAT_RR", engine.LatRR)
 	numT("HS2_TUNE_QUIET_PACK", engine.QuietPack) // two QUIET links (<= 5 links): new connections on the oldest while it does not lag
