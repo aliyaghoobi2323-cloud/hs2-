@@ -281,10 +281,11 @@ type quietSet struct {
 
 	// the group streams not moved yet (the mover's), by id too (the exit's
 	// move hints, hint.go), and the tallies
-	gmu    sync.Mutex
-	groups []*groupStream
-	byID   map[uint32]*groupStream
-	hinted atomic.Int64 // hints heard for a group not moved yet
+	gmu     sync.Mutex
+	groups  []*groupStream
+	byID    map[uint32]*groupStream
+	hinted  atomic.Int64 // hints heard for a group not moved yet
+	spilled atomic.Int64 // calls the exit told to leave their QUIET link (CallSpillMs)
 	// onBulk: the moved groups the move-back rule watches (moveback.go)
 	onBulk    []*groupStream
 	movedBack atomic.Int64
@@ -770,6 +771,7 @@ type groupStream struct {
 	// ql: the QUIET link it opened on; while that link's kindHint stream is
 	// up (quietSet.hintOn) it moves for a download on the exit's word, not
 	// on data arriving (hint.go); hintAt: when the exit's hint came
+	spillAt atomic.Int64 // when the exit said the call must leave its QUIET link (CallSpillMs; 0: not)
 	// (ctrlNow; 0: none)
 	ql     *mtcpLink
 	hintAt atomic.Int64
@@ -1010,13 +1012,14 @@ func (q *quietSet) moverTick(now int64) {
 			dues = append(dues, dueMove{s, "down", true})
 			continue
 		}
-		if !due && s.hintAt.Load() != 0 {
+		spill := s.spillAt.Load() != 0 // the exit's word: a call its QUIET link cannot carry (CallSpillMs)
+		if !due && (spill || s.hintAt.Load() != 0) {
 			due, dir = true, "down" // the exit's word: a send backlog there (hint.go)
 		}
 		if !due && s.capAt.Load() != 0 {
 			due, dir = true, "up" // the upload cap (quietcap.go)
 		}
-		if due && TwoWay.Get() != 0 {
+		if due && TwoWay.Get() != 0 && !spill {
 			// the other direction a steady stream of its user: a call, kept
 			// on QUIET; too early to say: the move waits (twoway.go)
 			switch s.rule.twoWay() {
@@ -1120,6 +1123,17 @@ func (q *quietSet) noteHint(id uint32) {
 	}
 }
 
+// noteSpill takes the exit's word that the call id's QUIET link cannot carry
+// it (CallSpillMs, hint.go): it moves to a BULK link, TwoWay or not.
+func (q *quietSet) noteSpill(id uint32) {
+	q.gmu.Lock()
+	gs := q.byID[id]
+	q.gmu.Unlock()
+	if gs != nil && gs.spillAt.CompareAndSwap(0, ctrlNow()) {
+		q.spilled.Add(1)
+	}
+}
+
 // move moves gs to a BULK link the pool picks: the group's move stream
 // there, the connection counted there, its QUIET slot given back. True: the
 // mover is done with gs (it moved, or its group cannot move: it ended or
@@ -1219,6 +1233,9 @@ func (q *quietSet) line() string {
 	}
 	if TwoWay.Get() != 0 {
 		more += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
+		if n := q.spilled.Load(); n > 0 {
+			more += fmt.Sprintf("; calls spilled %d", n)
+		}
 	}
 	if PlaceUsers.Get() != 0 {
 		more += "; " + q.book.line()

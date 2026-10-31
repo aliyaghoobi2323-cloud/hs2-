@@ -408,6 +408,7 @@ func applyTuning() {
 	numT("HS2_TUNE_RT_HOLD", engine.RTHold)
 	numT("HS2_TUNE_QUIET_BUDGET", engine.QuietBudget)  // R1 round 5: the in-flight budget on a QUIET link bulk lane too
 	numT("HS2_TUNE_OWD_NOT_LIGHT", engine.OWDNotLight) // R1 round 5: no one-way delays on the light QUIET link
+	numT("HS2_TUNE_CALL_SPILL", engine.CallSpillMs) // R1 round 5: a call its QUIET link cannot carry moves after this many ms
 	numT("HS2_TUNE_RT_LOOSE", engine.RTLoose)          // R1 round 5: a call held back from its start gets the realtime lane
 	numT("HS2_TUNE_RT_SHARE", engine.RTShare)
 	numT("HS2_TUNE_LAT_RR", engine.LatRR)

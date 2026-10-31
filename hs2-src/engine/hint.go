@@ -59,6 +59,7 @@ const (
 	hintMsgLen       = 8
 	hintVer          = 1
 	hintBacklog      = 1
+	hintSpill        = 2 // a call its QUIET link cannot carry (CallSpillMs); an older edge ignores it
 	// hintWriteMin: a write this big is a chunk of a backlog (the relay's
 	// buffer is 32 KiB; an app-limited flow's writes are its own frames)
 	hintWriteMin = 8 << 10
@@ -71,19 +72,27 @@ const (
 	hintResend = time.Second
 )
 
-func hintEncode(b []byte, id uint32) {
-	b[0], b[1], b[2], b[3] = hintVer, hintBacklog, 0, 0
+func hintEncode(b []byte, id uint32) { hintEncodeKind(b, id, hintBacklog) }
+
+func hintEncodeKind(b []byte, id uint32, kind byte) {
+	b[0], b[1], b[2], b[3] = hintVer, kind, 0, 0
 	binary.BigEndian.PutUint32(b[4:8], id)
 }
 
 // hintDecode reads one message: the group id it names (ok false: not a
 // message this end knows, or no id).
 func hintDecode(b []byte) (id uint32, ok bool) {
-	if len(b) < hintMsgLen || b[0] != hintVer || b[1] != hintBacklog {
-		return 0, false
+	id, kind, ok := hintDecodeKind(b)
+	return id, ok && kind == hintBacklog
+}
+
+// hintDecodeKind is hintDecode for any message this end knows, with its type.
+func hintDecodeKind(b []byte) (id uint32, kind byte, ok bool) {
+	if len(b) < hintMsgLen || b[0] != hintVer || (b[1] != hintBacklog && b[1] != hintSpill) {
+		return 0, 0, false
 	}
 	id = binary.BigEndian.Uint32(b[4:8])
-	return id, id != 0
+	return id, b[1], id != 0
 }
 
 // bigWrites is what a writer spent inside writes of at least hintWriteMin
@@ -124,6 +133,10 @@ type hintRule struct {
 	lastAt int64
 	run    int
 	sentAt int64 // when it was last hinted (0: never)
+	// kept: the ticks in a row it was backlogged and kept for being a call;
+	// spillAt: when it was last told to spill (CallSpillMs)
+	kept    int
+	spillAt int64
 	// rx, tx: what it received each tick (the user's own sending) and sent
 	// (TwoWay, twoway.go)
 	rx, tx byteRing
@@ -196,6 +209,10 @@ func (s *exitHintSet) remove(c *hintChan) {
 // does the hint wait its turn (the R1 red team: hints queued behind one
 // stalled QUIET link while another was healthy).
 func (s *exitHintSet) send(id uint32, mtr *linkMeter) bool {
+	return s.sendKind(id, mtr, hintBacklog)
+}
+
+func (s *exitHintSet) sendKind(id uint32, mtr *linkMeter, kind byte) bool {
 	s.mu.Lock()
 	cs := make([]*hintChan, 0, len(s.chans))
 	for _, c := range s.chans {
@@ -207,7 +224,7 @@ func (s *exitHintSet) send(id uint32, mtr *linkMeter) bool {
 	}
 	s.mu.Unlock()
 	var b [hintMsgLen]byte
-	hintEncode(b[:], id)
+	hintEncodeKind(b[:], id, kind)
 	write := func(c *hintChan) bool { // c.wmu held
 		if d, ok := c.st.(interface{ SetWriteDeadline(time.Time) error }); ok {
 			d.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
@@ -309,14 +326,18 @@ func exitHintTick(rules map[*exitGroup]*hintRule, now int64) {
 		}
 		eg.twoWay.Store(tw != twoWayNo)
 		if !r.tick(eg.big.total(now), now) {
+			r.kept = 0
 			continue
 		}
 		if tw != twoWayNo {
 			if tw == twoWayYes {
 				twoWayKept.Add(1)
+				r.kept++
+				spillTick(eg, r, now)
 			}
 			continue
 		}
+		r.kept = 0
 		if r.sentAt != 0 && time.Duration(now-r.sentAt) < hintResend {
 			continue
 		}
@@ -358,6 +379,9 @@ func (s *exitHintSet) line() string {
 	}
 	if TwoWay.Get() != 0 {
 		cap += fmt.Sprintf("; two-way kept %d", twoWayKept.Load())
+		if n := exitSpillSent.Load(); n > 0 {
+			cap += fmt.Sprintf("; calls spilled %d", n)
+		}
 	}
 	return fmt.Sprintf("move hints: %d streams; sent %d (again %d), none took %d%s", n, s.sent.Load(), s.again.Load(), s.fail.Load(), cap)
 }
@@ -396,8 +420,65 @@ func openHint(ctx context.Context, l Link, q *quietSet) {
 		if _, err := io.ReadFull(st, b[:]); err != nil {
 			return
 		}
-		if id, ok := hintDecode(b[:]); ok {
-			q.noteHint(id)
+		if id, kind, ok := hintDecodeKind(b[:]); ok {
+			if kind == hintSpill {
+				q.noteSpill(id)
+			} else {
+				q.noteHint(id)
+			}
 		}
 	}
+}
+
+// CallSpillMs (HS2_TUNE_CALL_SPILL, ms; 0: off; R1 round 5): the valve for a
+// call its QUIET link cannot carry. TwoWay keeps a call on its QUIET link
+// whatever its backlog, for a call on a BULK link used to starve; but when
+// the QUIET link's window is smaller than the calls on it (random loss: the
+// home mix at max_links 4 and 0.3 % held 8 calls, 12 Mbit/s, on a window of
+// 68 segments, 10 Mbit/s) the backlog never drains: every call some 5 s late
+// for the rest of the run, and the web behind them. A call whose exit writer
+// stayed backlogged this long moves to a BULK link all the same: one at a
+// time, callSpillGap apart, since moving a few gives the rest room.
+var CallSpillMs = newTuneInt(0)
+
+// callSpillGap: the least time between two spills of one exit.
+const callSpillGap = time.Second
+
+var (
+	exitSpillAt   atomic.Int64
+	exitSpillSent atomic.Int64
+)
+
+// spillTick sends the call eg its spill word when it has been backlogged for
+// CallSpillMs (r.kept move ticks in a row).
+func spillTick(eg *exitGroup, r *hintRule, now int64) {
+	ms := CallSpillMs.Get()
+	if ms <= 0 || time.Duration(r.kept)*moveTick < time.Duration(ms)*time.Millisecond {
+		return
+	}
+	if r.spillAt != 0 && time.Duration(now-r.spillAt) < hintResend {
+		return
+	}
+	last := exitSpillAt.Load()
+	if last != 0 && time.Duration(now-last) < callSpillGap {
+		return
+	}
+	if !exitSpillAt.CompareAndSwap(last, now) {
+		return
+	}
+	select {
+	case hintSending <- struct{}{}:
+	default:
+		exitHints.fail.Add(1)
+		return
+	}
+	r.spillAt = now
+	go func(id uint32, mtr *linkMeter) {
+		defer func() { <-hintSending }()
+		if exitHints.sendKind(id, mtr, hintSpill) {
+			exitSpillSent.Add(1)
+		} else {
+			exitHints.fail.Add(1)
+		}
+	}(eg.ID(), eg.mtr.Load())
 }
