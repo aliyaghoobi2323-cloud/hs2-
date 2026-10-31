@@ -264,8 +264,8 @@ run_one() {
   local r=$OUT/raw/$id w=$WORK/$id bp benv tok k v hs2env="" wait=0 ok=1 why=""
   local total="" nusers="" ntun="" pe="" px="" hup="" htop=""
   # the cell's variables (validated: KEY=VAL, nothing a shell would expand)
-  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF KILLQ KILLWHAT KILLREP KILLGAP PROCSTAT QPOL QPOL_AT
-  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=; KILLQ=; KILLWHAT=quiet; KILLREP=1; KILLGAP=5; PROCSTAT=0; QPOL=; QPOL_AT=10
+  local N RATE RTT LOSS MODE USERS MIX WARM DUR SETTLE AGGQ_MS POLICE_BURST_MS V6 RATE_UP PANEL_SNDBUF KILLQ KILLWHAT KILLREP KILLGAP PROCSTAT QPOL QPOL_AT QDELAY
+  WARM=5; DUR=30; SETTLE=5; V6=0; AGGQ_MS=50; POLICE_BURST_MS=20; RATE_UP=; KILLQ=; KILLWHAT=quiet; KILLREP=1; KILLGAP=5; PROCSTAT=0; QPOL=; QPOL_AT=10; QDELAY=
   # the rigload server's (the panel's) send buffer a connection, bytes (R1
   # round 4, opt-in: autotuned, the default 0, it holds ~5 MB a connection
   # on loopback, 1.2 GB for 400 downloads; a bound changes what the
@@ -276,7 +276,7 @@ run_one() {
     [[ "$k" =~ ^[A-Z][A-Z0-9_]*$ && "$v" =~ ^[A-Za-z0-9_.:+-]*$ ]] || { log "bad token $tok"; return 1; }
     case "$k" in
       HS2_*) hs2env="$hs2env $k=$v" ;;
-      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF|KILLQ|KILLWHAT|KILLREP|KILLGAP|PROCSTAT|QPOL|QPOL_AT) printf -v "$k" '%s' "$v" ;;
+      N|RATE|RTT|LOSS|MODE|USERS|MIX|WARM|DUR|SETTLE|AGGQ_MS|POLICE_BURST_MS|V6|RATE_UP|PANEL_SNDBUF|KILLQ|KILLWHAT|KILLREP|KILLGAP|PROCSTAT|QPOL|QPOL_AT|QDELAY) printf -v "$k" '%s' "$v" ;;
     esac
   done
   bp=$(binpath "$bin")
@@ -402,6 +402,12 @@ run_steps() {
   if [ -n "$QPOL" ]; then
     ( sleep "$(awk -v c="$c0" -v k="$QPOL_AT" -v n="$(date +%s.%N)" 'BEGIN{s = c + k - n; if (s < 0) s = 0; printf "%.3f", s}')"
       "$D/rig.sh" qpolice "$QPOL" ) > "$r/qpolice.log" 2>&1 &
+    PIDS+=($!)
+  fi
+  # QDELAY=MS: the same moment, MS ms more each way on those connections alone
+  if [ -n "$QDELAY" ]; then
+    ( sleep "$(awk -v c="$c0" -v k="$QPOL_AT" -v n="$(date +%s.%N)" 'BEGIN{s = c + k - n; if (s < 0) s = 0; printf "%.3f", s}')"
+      "$D/rig.sh" qdelay "$QDELAY" ) > "$r/qdelay.log" 2>&1 &
     PIDS+=($!)
   fi
   # PROCSTAT=1: each hs2's RSS (kB), threads and open files every second
