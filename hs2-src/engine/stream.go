@@ -280,6 +280,13 @@ func newSessionCaps(conn net.Conn, server bool, sampler *obfs.LengthSampler, met
 			cfg.BulkGate = lb.gate
 		}
 	}
+	if sched && quietLink && capOn && !BudgetOff() && QuietBudget.Get() != 0 {
+		// R1 round 5: a QUIET link's bulk lane too (budget.go, QuietBudget)
+		if lb = newLinkBudget(newOutQ(tc)); lb != nil {
+			lb.quiet = true
+			cfg.BulkGate = lb.gate
+		}
+	}
 	if sched && quietLink && QuietBatch == 0 {
 		cfg.FlushEach = true // (lab: γ2's batching measured against none)
 	}
