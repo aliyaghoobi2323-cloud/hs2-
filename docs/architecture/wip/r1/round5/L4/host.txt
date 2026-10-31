@@ -1,0 +1,32 @@
+== start 2026-10-31T08:36:33+00:00
+ 08:36:33 up 3 days, 21:31,  9 users,  load average: 1.65, 2.95, 3.00
+TCP: inuse 1193 orphan 0 tw 471 alloc 2011 mem 0
+top - 08:36:34 up 3 days, 21:31,  9 users,  load average: 1.65, 2.95, 3.00
+Tasks: 266 total,   1 running, 265 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.8 us,  3.2 sy,  3.2 ni, 90.7 id,  0.0 wa,  0.0 hi,  1.1 si,  0.0 st 
+MiB Mem :  23456.9 total,   3453.5 free,   1526.3 used,  18893.7 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21930.7 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2479613 root      20   0 1501236 231120  29424 S  38.0   1.0   8:30.72 xray-linux-amd6
+2566717 root      39  19 1715180  30860  15608 S  32.0   0.1   0:05.75 engine.test
+    992 root      20   0 1543536 146304  10588 S  30.0   0.6     27,50 hs2
+2566808 root      39  19 1648484  28792  15480 S  16.0   0.1   0:11.33 engine.test
+    958 root      20   0 1407108 112064  47368 S   4.0   0.5 112:19.02 x-ui
+2567903 root      20   0   11908   6044   3888 R   4.0   0.0   0:00.03 top
+  13068 systemd+  20   0   22880  14808  11144 S   2.0   0.1  24:29.99 systemd-resolve
+== end 2026-10-31T08:57:49+00:00
+ 08:57:49 up 3 days, 21:52, 10 users,  load average: 2.83, 2.66, 2.70
+TCP: inuse 700 orphan 0 tw 320 alloc 1103 mem 0
+top - 08:57:49 up 3 days, 21:52, 10 users,  load average: 2.83, 2.66, 2.70
+Tasks: 257 total,   1 running, 256 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  3.5 us,  5.4 sy,  0.4 ni, 88.2 id,  0.0 wa,  0.0 hi,  2.5 si,  0.0 st 
+MiB Mem :  23456.9 total,   3591.5 free,   1361.7 used,  18920.2 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  22095.2 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+2479613 root      20   0 1501748 197060  29488 S  63.5   0.8  15:20.23 xray-linux-amd6
+    992 root      20   0 1543536 102584  10588 S  53.8   0.4     27,56 hs2
+2608699 root      39  19 2009236  22776  12796 S  13.5   0.1   0:27.12 engine.test
+2614119 root      20   0   11908   6028   3872 R   3.8   0.0   0:00.03 top
+     60 root      20   0       0      0      0 S   1.9   0.0  10:18.18 ksoftirqd/7
+    916 root      20   0 1088780  72236  48132 S   1.9   0.3   9:47.76 fail2ban-server
+      1 root      20   0   22796  14244   9776 S   0.0   0.1   5:29.62 systemd
