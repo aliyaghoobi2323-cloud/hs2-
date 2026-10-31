@@ -20,7 +20,7 @@ systemctl daemon-reload && systemctl restart hs2
 | `HS2_TUNE_HQG_SEGS=N` | 8 | سقف دروازهٔ C3 دست‌کم N قطعه است. با 0 همان دروازهٔ سند است (دو قطعه). پیش‌فرض ۸ انتخاب داور است (ت۱۲) | هر سر |
 | `HS2_TUNE_SENDCAP=0` | روشن | C4-lite خاموش: فقط تور pacing خروجی، مانند پیش | هر سر |
 | `HS2_TUNE_QUIET=0` | روشن | بی لینک QUIET: هر لینک یک اتصال است و همه چیز را می‌برد (رفتار سطح ۱) | هر سر |
-| `HS2_TUNE_QUIET_EXTRA=0` | ۱ | لینک‌های QUIET درون `max_links` می‌روند، نه کنار آن. با پیش‌فرض، استخر `max_links` + ۱ اتصال دارد، و از ۶ لینک به بالا `max_links` + ۲ | هر دو سر یکسان |
+| `HS2_TUNE_QUIET_EXTRA=0` | ۱ | لینک‌های QUIET درون `max_links` می‌روند، نه کنار آن. با پیش‌فرض، استخر تا ۴ لینک `max_links` + ۲ اتصال دارد (QUIET عمومی و QUIET سبک)، در ۵ لینک `max_links` + ۱، و از ۶ لینک به بالا `max_links` + ۵ (چهار QUIET عمومی و QUIET سبک) | هر دو سر یکسان |
 | `HS2_TUNE_BUDGET=0` | روشن | لینک BULK به جای بودجهٔ درون‌پرواز (γ۲) سقف نرخ α را می‌گیرد | هر سر |
 | `HS2_TUNE_MOVE_HINT=0` | روشن | خروجی دیگر اشارهٔ جابه‌جایی دانلود نمی‌فرستد، و لبه با رسیدن داده جابه‌جا می‌کند | هر سر |
 | `HS2_TUNE_OWD_GUARD=0` | روشن | نگهبان OWD خاموش: خواندن تأخیر یک‌طرفه پس از بازارسال کنار گذاشته نمی‌شود | هر سر |
@@ -30,6 +30,13 @@ systemctl daemon-reload && systemctl restart hs2
 | `HS2_TUNE_QUIET_COAL=µs` | 4000 | مدت نگه داشتن پیام‌های کوچک در لینک QUIET شلوغ، تا یک رکورد را با هم ببرند. با 0 هیچ | هر سر |
 | `HS2_TUNE_MOVE_BACK=1` | خاموش | اتصالی که دوباره سبک شده از BULK به QUIET برمی‌گردد (آزمایشگاهی) | هر دو سر |
 | `HS2_TUNE_EARLYDONE=0` | روشن | نویسندهٔ هر جریان تا نوشته شدن هر فریم صبر می‌کند (اصلاح (ب) P10 خاموش) | هر سر |
+| `HS2_TUNE_QUIET_CC=لیست` | `illinois,cubic` | الگوریتم ازدحام سوکت‌های QUIET: نخستین نامی که هسته بپذیرد. نام پذیرفته‌شده یک بار در لاگ می‌آید (`quiet: QUIET links run …`). `cubic` همان رفتار پیش از دور ۵ است | هر سر |
+| `HS2_TUNE_QUIET_LIGHT=N` | 2 | لینک QUIET سبک. با 0 هیچ؛ با 1 یک QUIET بیشتر فقط تا ۴ لینک؛ با 2 هم تا ۴ لینک و هم از ۶ لینک به بالا. در ۵ لینک هیچ‌وقت نیست. بازی و کاوشگر به آن می‌روند و زیر بار وب و تماس نمی‌مانند | هر دو سر |
+| `HS2_TUNE_QUIET_BUDGET=0` | روشن | لاین حجیم لینک QUIET بودجهٔ درون‌پرواز ندارد | هر سر |
+| `HS2_TUNE_OWD_GUARD_BULK=N` | 0 | نگهبان تأخیر یک‌طرفهٔ لینک BULK. با 1 زیر بازارسال و با 2 زیر صف خودش هم خوانده نمی‌شود (رفتار پیش از دور ۵: دانلود در `N=1` زیر اتلاف می‌افتد) | هر سر |
+| `HS2_TUNE_QUIET_WAIT=ms` | 1500 | اتصال تازه وقتی QUIET تازه افتاده تا این مدت منتظر برگشتنش می‌ماند، تا برای همیشه روی BULK باز نشود. با 0 هیچ | ایران |
+| `HS2_TUNE_QUIET_REPLACE=0` | روشن | لینک QUIET زندهٔ کند (در مقایسه با لینک‌های BULK همان مسیر) جایگزین نمی‌شود | ایران |
+| `HS2_TUNE_QUIET_CC_LOSS`، `HS2_TUNE_QUIET_LOSS_PPM`، `HS2_TUNE_RT_LOOSE`، `HS2_TUNE_OWD_GUARD_IN`، `HS2_TUNE_OWD_NOT_LIGHT`، `HS2_TUNE_BUDGET_SPLIT` | خاموش | آزمایشگاهی دور ۵. روی ریگ برنده نشدند (`round5/REPORT.fa.md`) | هر سر |
 
 بقیهٔ نام‌های `HS2_TUNE_*` در `cmd/hs2/main.go` (تابع `applyTuning`) کلیدهای آزمایشگاهی سنجش‌اند.
 
@@ -37,4 +44,5 @@ systemctl daemon-reload && systemctl restart hs2
 
 - `hs2 status` برای هر لینک این سطرها را دارد: `sched`، `classes`، `hostq`، `sendcap` (حالا با `owd guard dirty N` در پایانش)، `budget` و `quiet records` (حالا با شمار نوشتن‌ها و آن‌هایی که روی رکورد آغازشده رفتند).
 - یک سطر جمع از آغاز پردازه، تازه در این شاخه: `events since start: udp late drops …; owd dirty …; budget cuts …; quiet writes …, … of them on a record already started (records saved); moved to bulk … (back to quiet …), tun flows …, attached at the exit …; move hints heard …, sent …`.
+- خط `place` در `hs2 status` شمارنده‌های دور ۵ را هم دارد: اتصال‌های رفته به لینک سبک و برگشته از آن، انتظار برای QUIET و جایگزینی QUIET کند.
 - لاگ در هر دقیقه‌ای که چیزی از این‌ها جابه‌جا شده باشد یک سطر `events in the last minute: …` می‌گیرد، و هرگز یک سطر برای هر رخداد.
