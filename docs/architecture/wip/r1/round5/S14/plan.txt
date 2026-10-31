@@ -1,0 +1,7 @@
+# S14 (screen, 3 reps, TRACE_SS=1): LX: at N=16 and 0.03 % web pages fail (5 to 8 a run, production none): one-way BULK links whose budget spiralled to 5-8 KiB, on delayed acks of a small flight read as their own queue; dfl = HS2_TUNE_BUDGET_DFLOOR=100 (B at least delivery x min_rtt); at N=5 and 0.03 % the games +125 ms without a light QUIET link: dfl3 = dfl + HS2_TUNE_QUIET_LIGHT=3 (a light link at N=5 too); home, RTT 75
+N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=16 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl
+N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=16 RATE=100 RTT=75 LOSS=0.1 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl
+N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=r5
+N=5 RATE=100 RTT=75 LOSS=0.03 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=dfl3
