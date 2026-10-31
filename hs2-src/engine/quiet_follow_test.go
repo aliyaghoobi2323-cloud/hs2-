@@ -27,6 +27,7 @@ func TestQuietFollowMath(t *testing.T) {
 			t.Errorf("followWant(%d, %d, %d) = %d, want %d", c.want, c.bulk, c.peer, got, c.out)
 		}
 	}
+	withTune(t, QuietReplace, 0) // (its room: TestQuietReplaceRoom)
 	for _, c := range []struct {
 		max, own   int
 		follow     bool

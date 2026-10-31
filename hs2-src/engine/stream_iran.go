@@ -95,7 +95,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	lm.showRoutes = true
 	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet}
 	if quiet != nil {
-		mine.MaxLinks = QuietTotal(lm.max)
+		mine.MaxLinks = QuietTotal(lm.max) + replaceRoom()
 		if reverse {
 			cfg.RevServer.OfferCaps = quiet.offer
 		}

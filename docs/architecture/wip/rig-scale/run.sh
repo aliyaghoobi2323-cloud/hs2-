@@ -155,7 +155,7 @@ binpath() {
   esac
 }
 binenv() {
-  [ -n "$BINS" ] && awk -v l="$1" '$1 == l {for (i = 3; i <= NF; i++) if ($i ~ /^HS2_[A-Z0-9_]+=[A-Za-z0-9_.:+-]*$/) printf " %s", $i; exit}' "$BINS"
+  [ -n "$BINS" ] && awk -v l="$1" '$1 == l {for (i = 3; i <= NF; i++) if ($i ~ /^HS2_[A-Z0-9_]+=[A-Za-z0-9_.:,+-]*$/) printf " %s", $i; else printf "binenv: %s dropped\n", $i > "/dev/stderr"; exit}' "$BINS"
 }
 
 # hs2 config: edge (mode dial, reverse: listens) and exit (mode listen, reverse:

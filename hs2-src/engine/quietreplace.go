@@ -50,13 +50,23 @@ var QuietReplace = newTuneInt(0)
 
 const (
 	quietSlowTicks = 3                // pool ticks in a row (healthTick each: 6 s)
-	replMinAge     = 20 * time.Second // a link younger than this is not judged
+	replMinAge     = 10 * time.Second // a link younger than this is not judged
 	replGap        = time.Minute      // the least time between two replacements
 	replWindow     = 10 * time.Minute // ... and at most replBudget of them in this long
 	replBudget     = 3
 	replMaxHold    = time.Minute // a retired link is closed this long after at the latest
 	replLossTau    = 20 * time.Second
 )
+
+// replaceRoom is the links a reverse pool may hold past its count for a slow
+// QUIET link's replacement (make before break): the exit dials it next to
+// the slow one, and the edge's ceiling must allow it (stream_iran.go).
+func replaceRoom() int {
+	if QuietReplace.Get() != 0 {
+		return 1
+	}
+	return 0
+}
 
 // replState is a QUIET link's record for the judge (the pool goroutine's).
 type replState struct {

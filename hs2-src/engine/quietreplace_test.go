@@ -144,3 +144,28 @@ func TestQuietReplaceLoss(t *testing.T) {
 		t.Fatalf("past the budget: replacing %d, held %v", q.replacing.Load(), q.repl.held)
 	}
 }
+
+// TestQuietReplaceRoom: with the switch on a reverse exit may hold one link
+// past its count for a replacement, even with its own count above
+// quietPeerMax's room (5 QUIET links past 5 with the light one); what it
+// reports to the edge does not change.
+func TestQuietReplaceRoom(t *testing.T) {
+	defer func(x int) { QuietExtra = x }(QuietExtra)
+	QuietExtra = 1
+	for _, c := range []struct {
+		replace, max, own int
+		follow            bool
+		report, hi        int
+	}{
+		{0, 8, 5, true, 13, 13},
+		{1, 8, 5, true, 13, 14},
+		{1, 1, 2, true, 3, 5},
+		{1, 8, 4, false, 12, 13},
+		{0, 8, 4, false, 12, 12},
+	} {
+		withTune(t, QuietReplace, c.replace)
+		if r, h := exitRevCeilings(c.max, c.own, c.follow); r != c.report || h != c.hi {
+			t.Errorf("replace %d, exitRevCeilings(%d, %d, %v) = %d %d, want %d %d", c.replace, c.max, c.own, c.follow, r, h, c.report, c.hi)
+		}
+	}
+}

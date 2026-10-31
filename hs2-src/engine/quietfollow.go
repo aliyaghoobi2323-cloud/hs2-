@@ -61,9 +61,9 @@ func exitRevCeilings(maxLinks, own int, follow bool) (report, hi int) {
 	} else {
 		report = max(maxLinks, 1+own)
 	}
-	hi = report
+	hi = report + replaceRoom()
 	if follow && QuietExtra != 0 {
-		hi = max(report, maxLinks+quietPeerMax)
+		hi = max(hi, maxLinks+quietPeerMax)
 	}
 	return report, hi
 }
