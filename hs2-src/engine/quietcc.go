@@ -26,6 +26,9 @@ import (
 // direction, C3's gate shut 88% of the time, and the calls' steady lane
 // lost (1 of 8 calls still steady).
 //
+// The final design: Illinois on every QUIET link at every link count (QuietCC
+// below), the watcher QuietCCLoss a lab switch, off.
+//
 // QuietCC is now a list: the first congestion control the kernel takes.
 // The round-5 measure picked Illinois (tcp_illinois, in Linux since 2.6.22):
 // a loss-based window like cubic's that reads the round trip's queueing

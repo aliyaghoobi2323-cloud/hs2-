@@ -60,7 +60,7 @@ import (
 // sat at +125 ms where N=4 had +6): at every link count, a pool of five too
 // (seven connections, one past the DPI model's population, as every pool past
 // five is well past it).
-var QuietLight = newTuneInt(2) // the default since R1 round 5
+var QuietLight = newTuneInt(3) // the default since R1 round 5 (S14)
 
 // QuietWaitMs (HS2_TUNE_QUIET_WAIT, ms; 0: none): how long a new connection
 // waits for a QUIET link that was up within quietWaitRecent.

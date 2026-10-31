@@ -500,7 +500,7 @@ var QuietBudget = newTuneInt(1) // the default since R1 round 5 (round5/REPORT.f
 // over min_rtt, which read as its own queue and cut again, down to B 5 to 8
 // KiB, 0.6 Mbit/s, on a link that delivered 4 to 6: its users' pages took 13
 // to 28 s or never loaded (5 to 8 failed a run, production none).
-var BudgetDFloor = newTuneInt(0)
+var BudgetDFloor = newTuneInt(100) // the default since R1 round 5
 
 // BudgetSplitRate (HS2_TUNE_BUDGET_SPLIT; 0: off; R1 round 5): a two-way
 // link without its own one-way delays (dirty while it resends: OWDGuardBulk)

@@ -56,7 +56,7 @@ var PlaceUsers = newTuneInt(2) // the default since R1 round 4 (round4/REPORT.fa
 // carries its heavy users as a pool of PlaceFair does; a lone heavy user keeps
 // PlaceFair links, its 16 connections one each at 16 (a per-connection policer
 // gets as many flows as production gave it).
-var PlaceFair = newTuneInt(0)
+var PlaceFair = newTuneInt(8) // the default since R1 round 5 (S15)
 
 // placeHeavy: a user with this many connections moved (or moving at the
 // same tick) is heavy (PlaceUsers 2).
