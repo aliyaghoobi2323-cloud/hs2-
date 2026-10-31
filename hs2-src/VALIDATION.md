@@ -1,4 +1,4 @@
-# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X), the user-port path (Z, Z2, Z3), one fast connection (Z5 step 1)
+# Real-server validation — stuck links and the loss rule (Q7, Q8), tun over icmp (V), CPU and the shared bottleneck (W, X), the user-port path (Z, Z2, Z3), one fast connection (Z5 step 1), the redesign's phase R1
 
 This is the checklist for validating the releases from Q7 on (see CHANGELOG:
 "Q7 — stuck links", "Q8 — the health rules at high bandwidth", Phases V, W,
@@ -475,6 +475,43 @@ instead of stalling); to rule that out too, add
 `Environment=HS2_TUNE_SMUX_POOL=0` on both servers (with `HS2_TUNE_WCORE=0`
 on the Iran server). If a problem stays with all of them off, roll back the
 binary (above).
+
+## Phase R1: lab numbers only
+
+Build `e8a84ccb17fa` went to `main` and to the main servers by the owner's
+decision, with the old-against-new field comparison dropped (the "Release" line
+below). So R1 has no field table here: **every number in this section is from the
+lab** (the rig and the test suite). CHANGELOG, "Phase R1 — release", has the rest;
+sources: `docs/architecture/wip/r1/merge/REPORT.fa.md`,
+`docs/architecture/wip/r1/round4-judge.fa.md` and
+`docs/architecture/wip/r1/review/SUMMARY.fa.md`. `N` is the link count.
+
+| Lab result | R1 | Production `1c23629` |
+|---|---|---|
+| Probe minus floor on `fq_codel`, `N` = 1 to 300 (bound +20) | +10.5 to +11.0 ms | +230 to +354 ms |
+| 25 users of 16 connections next to 25 players, `N=8` | 88.1 Mbit/s | 5.4 to 5.5 Mbit/s |
+| Busiest QUIET link dies, `home`, `N=1`: connections / users hit | 13% / 30% | 100% / 100% |
+| Scale, one run per `N`, `N` = 1 to 600: download | 89.3 to 83.7 Mbit/s | not in that table |
+
+The test suite on `e4783fe` was green (`go test ./...` 1064 / 0 / 32, `-race` on
+all of engine 738 / 0 / 29, fuzz 13 of 13, install 17 of 17), apart from one test's
+own wait, fixed in `e22c2fe`, which is not in this build. The independent review
+found nothing critical.
+
+What the lab left open, so watch for it on real servers:
+
+- calls next to heavy traffic: `home` at `N=8` has downlink p99 over 150 ms in 6
+  of 26 runs, and under 1 to 2% random loss only 0.38 to 0.39 of a call arrives,
+  p99 ~30 s;
+- fairness at 64 links with every link carrying data: median user 0.31 to 0.36
+  Mbit/s, top 10.3 to 16.0;
+- latency at `N ≥ 300` with every link carrying data: the +20 bound holds for no
+  binary (`N=300` +34 to +698 ms, `N=600` +443 to +740 ms).
+
+Not in this build: the fix for the edge undercounting QUIET demand (`r1-fix1`) and
+round 5 (`r1-r5`). Both ends must run the same build, so never use the menu's
+Upgrade on one end alone, and a server with several tunnels restarts them together
+(`docs/architecture/wip/r1/review/RUNBOOK.fa.md`).
 
 ## What to send back
 

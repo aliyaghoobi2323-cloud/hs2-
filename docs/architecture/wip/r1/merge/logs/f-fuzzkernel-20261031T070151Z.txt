@@ -1,0 +1,15 @@
+== f-fuzzkernel: /root/rmerge/tools/blocks.sh fuzzkernel (2026-10-31T07:01:51Z)
+== fuzzkernel on 65dd1fd (R1 ادغام: توضیح angleNewHeavy با سنجهٔ RQ درست شد (فقط توضی�) 2026-10-31T07:06:13Z
+go version go1.27.3 linux/amd64
+/root/rmerge/step5/fuzz-65dd1fd-20261031T070613Z.txt
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tun	61.053s
+   FuzzSplitTCP: rc 0, 62 s
+== exit 0
+-- fuzz.sh rc 0
+/root/rmerge/step5/kernel-65dd1fd-20261031T071946Z.txt
+== 3. bundle: /root/rmerge/step5/kernel-65dd1fd-20261031T071946Z-bundle (37M); on a 5.10 host: copy the directory and run ./run.sh
+== 4. no 5.10 guest here (KERNEL_VM_CMD unset): see README.fa.md
+== exit 0
+-- kernel.sh rc 0
+== done fuzzkernel 2026-10-31T07:20:04Z
+== end rc=0 2026-10-31T07:20:04Z, 1093 s

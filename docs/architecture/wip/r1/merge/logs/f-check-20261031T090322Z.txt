@@ -1,0 +1,12 @@
+== f-check: /root/rmerge/tools/blocks.sh check (2026-10-31T09:03:22Z)
+== check on e4783fe (R1 ادغام: TestUserTagNoAlloc زیر -race اجرا نمی‌شود) 2026-10-31T09:03:22Z
+go version go1.27.3 linux/amd64
+-- vet/fmt: 2 of 2 make targets rc 0; rigload vet rc 0
+-- /run/hs2/icmp-echo-ignore before: 2026-10-31 08:00:53.857062498 +0000
+-- test rc 0 971 s: TOTAL top-level: 1064 pass, 0 fail, 32 skip; subtests: 536 pass, 0 fail, 0 skip; packages 16 (0 not pass)
+-- /run/hs2/icmp-echo-ignore after: 2026-10-31 08:00:53.857062498 +0000
+-- smux rc 0 62 s: TOTAL top-level: 138 pass, 0 fail, 1 skip; subtests: 26 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- rigload rc 0 20 s: TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)
+-- ana_test.py rc 0: OK
+== done check 2026-10-31T09:20:56Z
+== end rc=0 2026-10-31T09:20:56Z, 1054 s

@@ -1,0 +1,4 @@
+# RL (R1 merge step 5, the release binary, CPUs 0-5): one user a download, so that links beyond the 17 connections of one_vs_16 carry user data: does every link serve? 128 users on 64 links, 400 on 300, 499 on 600 (the rig server bounded by PANEL_SNDBUF there: 499 of its autotuned buffers alone would pass tcp_mem[1])
+N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 UP=0 DUR=30 BIN=m
+N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 UP=0 DUR=30 BIN=m
+N=600 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=500 MIX=s5 DN=499 UP=0 DUR=30 PANEL_SNDBUF=1048576 BIN=m

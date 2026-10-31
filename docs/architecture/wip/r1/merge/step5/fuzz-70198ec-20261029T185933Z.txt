@@ -1,0 +1,83 @@
+== fuzz, 60s a target, -parallel 4, 1 target(s) at once — 2026-10-29T18:59:33Z, 70198ec R1 ادغام: برچسب کاربر هش کلیددار است (A3 بازبینی، حریم خصوصی)، پشت HS2_TUNE_TAG_KEY=1
+== host: Linux 6.8.0-147-generic x86_64, go version go1.27.3 linux/amd64
+-- FuzzFlowKey (. ./engine): the TUN packet flow key: IPv4/IPv6 5-tuple, bounded extension headers (§4.3)
+   fuzz: elapsed: 51s, execs: 1245921 (23881/sec), new interesting: 0 (total: 23)
+   fuzz: elapsed: 54s, execs: 1324464 (26176/sec), new interesting: 0 (total: 23)
+   fuzz: elapsed: 57s, execs: 1402863 (26135/sec), new interesting: 0 (total: 23)
+   fuzz: elapsed: 1m0s, execs: 1478565 (25236/sec), new interesting: 0 (total: 23)
+   fuzz: elapsed: 1m0s, execs: 1478565 (0/sec), new interesting: 0 (total: 23)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.112s
+   FuzzFlowKey: rc 0, 73 s
+-- FuzzFlowKeyRev (. ./engine): the reverse flow key of a reply (pin by arrival, β2)
+   fuzz: elapsed: 51s, execs: 1300153 (25632/sec), new interesting: 0 (total: 19)
+   fuzz: elapsed: 54s, execs: 1373955 (24600/sec), new interesting: 0 (total: 19)
+   fuzz: elapsed: 57s, execs: 1448781 (24938/sec), new interesting: 0 (total: 19)
+   fuzz: elapsed: 1m0s, execs: 1526541 (25922/sec), new interesting: 0 (total: 19)
+   fuzz: elapsed: 1m0s, execs: 1526541 (0/sec), new interesting: 0 (total: 19)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.100s
+   FuzzFlowKeyRev: rc 0, 61 s
+-- FuzzOWDDecode (. ./engine): the kindOWD one-way delay messages (owd.go)
+   fuzz: elapsed: 51s, execs: 1304927 (24062/sec), new interesting: 0 (total: 7)
+   fuzz: elapsed: 54s, execs: 1381021 (25371/sec), new interesting: 0 (total: 7)
+   fuzz: elapsed: 57s, execs: 1459710 (26229/sec), new interesting: 0 (total: 7)
+   fuzz: elapsed: 1m0s, execs: 1534275 (24853/sec), new interesting: 0 (total: 7)
+   fuzz: elapsed: 1m0s, execs: 1534275 (0/sec), new interesting: 0 (total: 7)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.134s
+   FuzzOWDDecode: rc 0, 61 s
+-- FuzzHintDecode (. ./engine): the kindHint move hints from the exit (hint.go)
+   fuzz: elapsed: 51s, execs: 43584 (826/sec), new interesting: 0 (total: 4)
+   fuzz: elapsed: 54s, execs: 46218 (878/sec), new interesting: 0 (total: 4)
+   fuzz: elapsed: 57s, execs: 48746 (843/sec), new interesting: 0 (total: 4)
+   fuzz: elapsed: 1m0s, execs: 51326 (860/sec), new interesting: 0 (total: 4)
+   fuzz: elapsed: 1m0s, execs: 51326 (0/sec), new interesting: 0 (total: 4)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	60.076s
+   FuzzHintDecode: rc 0, 60 s
+-- FuzzProxyHeader (. ./engine): the PROXY protocol v1/v2 header (proxyproto.go)
+   fuzz: elapsed: 51s, execs: 802483 (13040/sec), new interesting: 0 (total: 24)
+   fuzz: elapsed: 54s, execs: 835834 (11117/sec), new interesting: 0 (total: 24)
+   fuzz: elapsed: 57s, execs: 855304 (6489/sec), new interesting: 0 (total: 24)
+   fuzz: elapsed: 1m0s, execs: 874715 (6471/sec), new interesting: 0 (total: 24)
+   fuzz: elapsed: 1m1s, execs: 874715 (0/sec), new interesting: 0 (total: 24)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	61.061s
+   FuzzProxyHeader: rc 0, 62 s
+-- FuzzParseClientAuth (. ./tlscarrier): the v3 auth record: header under the MAC, level, caps (§4.1)
+   fuzz: elapsed: 51s, execs: 1819620 (34012/sec), new interesting: 1 (total: 17)
+   fuzz: elapsed: 54s, execs: 1927346 (35916/sec), new interesting: 1 (total: 17)
+   fuzz: elapsed: 57s, execs: 2038617 (37078/sec), new interesting: 1 (total: 17)
+   fuzz: elapsed: 1m0s, execs: 2144635 (35344/sec), new interesting: 1 (total: 17)
+   fuzz: elapsed: 1m0s, execs: 2144635 (0/sec), new interesting: 1 (total: 17)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	60.124s
+   FuzzParseClientAuth: rc 0, 61 s
+-- FuzzParseTunDesc (. ./tlscarrier): the 15-byte TUN descriptor (§4.3)
+   fuzz: elapsed: 51s, execs: 2117370 (41249/sec), new interesting: 0 (total: 6)
+   fuzz: elapsed: 54s, execs: 2242765 (41797/sec), new interesting: 0 (total: 6)
+   fuzz: elapsed: 57s, execs: 2364719 (40648/sec), new interesting: 0 (total: 6)
+   fuzz: elapsed: 1m0s, execs: 2486965 (40723/sec), new interesting: 0 (total: 6)
+   fuzz: elapsed: 1m0s, execs: 2486965 (0/sec), new interesting: 0 (total: 6)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier	60.105s
+   FuzzParseTunDesc: rc 0, 61 s
+-- FuzzDecodeLink (. ./cmd/hs2): the hs2:// link decoder (C15)
+   fuzz: elapsed: 51s, execs: 1715226 (22967/sec), new interesting: 1 (total: 235)
+   fuzz: elapsed: 54s, execs: 1770494 (18419/sec), new interesting: 1 (total: 235)
+   fuzz: elapsed: 57s, execs: 1823766 (17749/sec), new interesting: 1 (total: 235)
+   fuzz: elapsed: 1m0s, execs: 1875624 (17299/sec), new interesting: 1 (total: 235)
+   fuzz: elapsed: 1m1s, execs: 1875624 (0/sec), new interesting: 1 (total: 235)
+   ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2	61.070s
+   FuzzDecodeLink: rc 0, 68 s
+-- FuzzSessionRecv (third_party/smux .): the frames a peer sends: SYN payload (§4.2), group seq numbers, UPD
+   fuzz: elapsed: 51s, execs: 1751123 (35539/sec), new interesting: 13 (total: 491)
+   fuzz: elapsed: 54s, execs: 1864219 (37716/sec), new interesting: 13 (total: 491)
+   fuzz: elapsed: 57s, execs: 1969727 (35140/sec), new interesting: 13 (total: 491)
+   fuzz: elapsed: 1m0s, execs: 2085693 (38672/sec), new interesting: 13 (total: 491)
+   fuzz: elapsed: 1m0s, execs: 2085693 (0/sec), new interesting: 13 (total: 491)
+   ok  	github.com/xtaci/smux	60.181s
+   FuzzSessionRecv: rc 0, 62 s
+-- FuzzGroupReassembly (third_party/smux .): a group connection reassembled across its move (§4.7)
+   fuzz: elapsed: 51s, execs: 1131853 (21575/sec), new interesting: 11 (total: 192)
+   fuzz: elapsed: 54s, execs: 1185773 (17977/sec), new interesting: 11 (total: 192)
+   fuzz: elapsed: 57s, execs: 1237241 (17154/sec), new interesting: 11 (total: 192)
+   fuzz: elapsed: 1m0s, execs: 1288926 (17232/sec), new interesting: 12 (total: 193)
+   fuzz: elapsed: 1m1s, execs: 1288926 (0/sec), new interesting: 12 (total: 193)
+   ok  	github.com/xtaci/smux	61.105s
+   FuzzGroupReassembly: rc 0, 62 s
+== exit 0

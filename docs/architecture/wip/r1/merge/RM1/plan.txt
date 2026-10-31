@@ -1,0 +1,7 @@
+# RM1 (R1 merge step 5, CPUs 0-5): RL saw at many active links on a 100 Mbit/s path a probe p99 of 500 to 770 ms, 7 to 14 % resends, a dip at N=64, and two links closed as stuck at N=600. Is that the merge, or the same in fin2 and production? 2 reps
+N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 UP=0 DUR=30 BIN=prod
+N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 UP=0 DUR=30 BIN=fin2
+N=64 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=129 MIX=s5 DN=128 UP=0 DUR=30 BIN=m
+N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 UP=0 DUR=30 BIN=prod
+N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 UP=0 DUR=30 BIN=fin2
+N=300 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=401 MIX=s5 DN=400 UP=0 DUR=30 BIN=m

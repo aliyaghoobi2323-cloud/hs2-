@@ -1,0 +1,34 @@
+== start 2026-10-31T04:25:42+00:00
+ 04:25:42 up 3 days, 17:20, 11 users,  load average: 2.41, 4.04, 3.12
+TCP: inuse 806 orphan 1 tw 219 alloc 1351 mem 0
+TCPMemoryPressures 0
+top - 04:25:42 up 3 days, 17:20, 11 users,  load average: 2.41, 4.04, 3.12
+Tasks: 277 total,   2 running, 275 sleeping,   0 stopped,   0 zombie
+%Cpu(s): 12.8 us, 11.0 sy,  1.1 ni, 72.6 id,  0.0 wa,  0.0 hi,  2.6 si,  0.0 st 
+MiB Mem :  23456.9 total,   2052.9 free,   1656.8 used,  20191.7 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21800.2 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1885546 root      20   0 1434348 177352  29424 S  47.1   0.7   3:14.92 xray-linux-amd6
+    992 root      20   0 1543536 119508  10588 S  37.3   0.5     26,51 hs2
+1928564 root      39  19 1781100 129644  15484 S  27.5   0.5   0:15.33 engine.test
+1928390 root      39  19 1715300  29548  15352 S   3.9   0.1   0:07.58 engine.test
+1932600 root      20   0    7464   3896   3588 R   3.9   0.0   0:00.03 assemble.sh
+1932663 root      20   0   11908   6040   3884 R   3.9   0.0   0:00.04 top
+1195729 root      20   0    7344   3800   3540 S   2.0   0.0   0:24.24 bash
+== end 2026-10-31T04:34:43+00:00
+ 04:34:43 up 3 days, 17:29, 11 users,  load average: 8.21, 7.62, 5.25
+TCP: inuse 806 orphan 4 tw 233 alloc 1376 mem 0
+TCPMemoryPressures 0
+top - 04:34:44 up 3 days, 17:29, 11 users,  load average: 8.21, 7.62, 5.25
+Tasks: 269 total,   7 running, 262 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.2 us,  2.0 sy, 49.8 ni, 45.8 id,  0.1 wa,  0.0 hi,  1.1 si,  0.0 st 
+MiB Mem :  23456.9 total,   2367.4 free,   1475.5 used,  20030.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21981.4 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1948676 root      39  19    2804    908    808 R 100.0   0.0   6:58.26 sh
+1948675 root      39  19    2804    908    808 R  98.1   0.0   6:58.25 sh
+1948677 root      39  19    2804    904    804 R  98.1   0.0   6:57.37 sh
+1948678 root      39  19    2804    908    808 R  98.1   0.0   7:02.16 sh
+1948680 root      39  19    2804    908    808 R  98.1   0.0   7:03.19 sh
+1948679 root      39  19    2804    908    808 R  90.4   0.0   7:00.70 sh
+    992 root      20   0 1543536 117376  10588 S  19.2   0.5     26,52 hs2

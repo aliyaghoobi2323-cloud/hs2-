@@ -1,0 +1,3 @@
+# RY (R1 merge step 5): home on 8 links, the merged head (m, with the red team pass-2 fixes) against the judge fin2 (98ddec1), 3 reps ABBABA: the call upload p99 63 ms in RF (fin2 +21 in G9)
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m

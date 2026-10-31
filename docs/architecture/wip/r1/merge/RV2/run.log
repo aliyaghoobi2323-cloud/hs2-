@@ -1,0 +1,6 @@
+16:12:42 plan /root/rmerge/RV2/plan.txt: 2 runs
+16:12:44 start 3fc575cc-m-1 (N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 2.52 waited 0s
+16:14:14 done 3fc575cc-m-1 ok=1 
+16:14:16 start af562cf3-m-1 (N=600 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=one_vs_16 DUR=60 BIN=m) load 3.56 waited 0s
+16:16:46 done af562cf3-m-1 ok=1 
+16:16:46 done /root/rmerge/RV2/plan.txt

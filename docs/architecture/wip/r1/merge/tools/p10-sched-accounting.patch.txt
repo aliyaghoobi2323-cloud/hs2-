@@ -1,0 +1,82 @@
+diff --git a/hs2-src/engine/sched.go b/hs2-src/engine/sched.go
+index 4271ad4..0318ed1 100644
+--- a/hs2-src/engine/sched.go
++++ b/hs2-src/engine/sched.go
+@@ -1,9 +1,21 @@
+ package engine
+ 
+ import (
++	"fmt"
++	"sort"
++	"strings"
++	"sync"
++	"sync/atomic"
+ 	"time"
+ )
+ 
++var schedDbg atomic.Bool
++var dbgMu sync.Mutex
++var dbgB = map[string]uint64{}
++func dbgAdd(k string, n int) { if schedDbg.Load() { dbgMu.Lock(); dbgB[k]+=uint64(n); dbgMu.Unlock() } }
++var schedDbgLog = func(string) {}
++
++
+ // C2, the link scheduler's pure core (REDESIGN §3.2): one per link and end,
+ // generic over what it queues (smux frames, TUN packets), so either place
+ // it is wired into can use it. Three lanes:
+@@ -446,6 +458,7 @@ func (s *Sched[T]) Next() (it T, ok bool) {
+ 			u.fDef += max(s.quantum, f.q.head.size)
+ 		}
+ 		size := f.q.head.size
++		dbgAdd(fmt.Sprintf("u%d.FLOOR", u.tag), size)
+ 		u.fDef -= size
+ 		u.floorLeft -= float64(size)
+ 		u.cur = f.uNext // its flows take turns
+@@ -465,6 +478,7 @@ func (s *Sched[T]) Next() (it T, ok bool) {
+ 			s.gCur = f
+ 			f.gDef += max(s.quantum, f.q.head.size)
+ 		}
++		dbgAdd(fmt.Sprintf("u%d.SURP", f.u.tag), f.q.head.size)
+ 		f.gDef -= f.q.head.size
+ 		return s.takeBulk(f), true
+ 	}
+@@ -545,6 +559,28 @@ func (s *Sched[T]) Tick(now time.Duration, linkRate float64) {
+ 			s.floorOut(u)
+ 		}
+ 	}
++	if schedDbg.Load() {
++		var sb strings.Builder
++		fmt.Fprintf(&sb, "SCHED %p t=%dms c=%.0f n=%d lat=%d bulk=%d", s, now.Milliseconds(), c, n, s.lat.n+s.latN, s.bulkN)
++		for u := s.all; u != nil; u = u.aNext {
++			fmt.Fprintf(&sb, " | u%d d=%.0fK f=%.0fK items=%d flows=%d bucket=%.0f", u.tag, u.demand/1000, u.floor/1000, u.items, u.flows, u.bucket)
++		}
++		if s.bulkN > 0 {
++			dbgMu.Lock()
++			ks := make([]string, 0, len(dbgB))
++			for k := range dbgB {
++				ks = append(ks, k)
++			}
++			sort.Strings(ks)
++			fmt.Fprintf(&sb, " ||")
++			for _, k := range ks {
++				fmt.Fprintf(&sb, " %s=%d", k, dbgB[k])
++			}
++			dbgB = map[string]uint64{}
++			dbgMu.Unlock()
++		}
++		schedDbgLog(sb.String())
++	}
+ 	// free the flows idle since the tick before (their users go at the
+ 	// next tick, once without demand)
+ 	for f := s.idleHead; f != nil && f.idleAt < s.tick-1; f = s.idleHead {
+@@ -584,6 +620,10 @@ func (s *Sched[T]) node(it T, size int) *schedNode[T] {
+ 
+ // take hands an item out and recycles its node.
+ func (s *Sched[T]) take(n *schedNode[T], lane Lane) T {
++	if n.f != nil {
++		dbgAdd(fmt.Sprintf("u%d.l%d.B", n.f.u.tag, lane), n.size)
++		dbgAdd(fmt.Sprintf("u%d.l%d.n", n.f.u.tag, lane), 1)
++	}
+ 	s.clock += uint64(n.size)
+ 	s.servedLane[lane] += uint64(n.size)
+ 	it := n.it

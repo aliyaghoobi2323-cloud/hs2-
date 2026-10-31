@@ -1,0 +1,7 @@
+== go test -race -count=1 -timeout 30m ./tlscarrier ./cmd/... ./core (in hs2-src): rc 0, 8 s
+== race-pkgs
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier pass      4.9  33/0/1                 32/0/0                
+github.com/hosseintaghipoursori-alt/hs2-tunnel/cmd/hs2  pass      6.8  103/0/0                214/0/0               
+github.com/hosseintaghipoursori-alt/hs2-tunnel/core     pass      1.5  15/0/0                 0/0/0                 
+TOTAL top-level: 151 pass, 0 fail, 1 skip; subtests: 246 pass, 0 fail, 0 skip; packages 3 (0 not pass)

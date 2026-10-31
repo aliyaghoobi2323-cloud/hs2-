@@ -1,0 +1,182 @@
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=131ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.14s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=159ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.17s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=154ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.16s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=201ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.20s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=127ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.13s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=164ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.17s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=182ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.19s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=201ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.21s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=151ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.16s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=181ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.19s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=199ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.21s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=251ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=122ms borrowed=1024 spareBefore=1024 bucket=1019 held=4 borrowed-bucket=4 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.13s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=165ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.17s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=155ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.16s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=251ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=157ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.17s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=127ms borrowed=2048 spareBefore=2048 bucket=1015 held=1032 borrowed-bucket=1032 ok
+--- PASS: TestZZProbeTwoGrains (1.13s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=162ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.17s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=250ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=103ms borrowed=1024 spareBefore=1024 bucket=1015 held=8 borrowed-bucket=8 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.11s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=159ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.16s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=156ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.16s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=201ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.21s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=148ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.15s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=182ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.19s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=349ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.36s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=250ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=94ms borrowed=1024 spareBefore=1024 bucket=1021 held=2 borrowed-bucket=2 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.10s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=147ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.15s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=143ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.15s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=504ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.51s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=102ms borrowed=1024 spareBefore=1024 bucket=1019 held=4 borrowed-bucket=4 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.11s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=106ms borrowed=2048 spareBefore=2048 bucket=1021 held=1026 borrowed-bucket=1026 ok
+--- PASS: TestZZProbeTwoGrains (1.11s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=150ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.16s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=201ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.21s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=136ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.14s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=159ms borrowed=2048 spareBefore=2048 bucket=1019 held=1028 borrowed-bucket=1028 ok
+--- PASS: TestZZProbeTwoGrains (1.17s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=171ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.18s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=251ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=149ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.16s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=157ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.16s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=172ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.18s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=251ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=151ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.16s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=115ms borrowed=2048 spareBefore=2048 bucket=1019 held=1028 borrowed-bucket=1028 ok
+--- PASS: TestZZProbeTwoGrains (1.12s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=118ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.12s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=250ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=138ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.15s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=134ms borrowed=2048 spareBefore=2048 bucket=1023 held=1024 borrowed-bucket=1024 ok
+--- PASS: TestZZProbeTwoGrains (1.14s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=133ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.14s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=250ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=138ms borrowed=1024 spareBefore=1024 bucket=1023 held=0 borrowed-bucket=0 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.14s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=122ms borrowed=2048 spareBefore=2048 bucket=989 held=1058 borrowed-bucket=1058 ok
+--- PASS: TestZZProbeTwoGrains (1.13s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=167ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.17s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=250ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.26s)
+=== RUN   TestZZProbeOneGrain
+    zz_probe_test.go:45: PROBE stop=1024 waited=116ms borrowed=1024 spareBefore=1024 bucket=1018 held=5 borrowed-bucket=5 WOULD-FAIL
+--- PASS: TestZZProbeOneGrain (1.12s)
+=== RUN   TestZZProbeTwoGrains
+    zz_probe_test.go:45: PROBE stop=2048 waited=156ms borrowed=2048 spareBefore=2048 bucket=1007 held=1040 borrowed-bucket=1040 ok
+--- PASS: TestZZProbeTwoGrains (1.16s)
+=== RUN   TestZZProbeThreeGrains
+    zz_probe_test.go:45: PROBE stop=3072 waited=138ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeThreeGrains (1.15s)
+=== RUN   TestZZProbeOwnWait
+    zz_probe_test.go:45: PROBE stop=0 waited=200ms borrowed=3072 spareBefore=3072 bucket=1024 held=2048 borrowed-bucket=2048 ok
+--- PASS: TestZZProbeOwnWait (1.20s)
+PASS
+ok  	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	70.932s

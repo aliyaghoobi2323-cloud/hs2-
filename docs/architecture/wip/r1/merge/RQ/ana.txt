@@ -1,0 +1,24 @@
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40  BIN=m  runs 2 (ok 2)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 2   host busy 66 [66..67]%
+   total dn 89.14 [88.35..89.93]  up 0.00 Mbit/s   (c) 96% [95%..97%] of cap_P10 (raw 93% [92%..94%])
+   (b) worst bulk user 91% [89%..92%] of its floor in cap_P10 (raw 88% [87%..90%])
+   newheavy: existing bulk before 89.93 [89.90..89.95], after 42.20 [41.52..42.88], heavy after 46.94 [46.83..47.05] Mbit/s; probe p99 before 84.2, after 84.3 ms
+   probe p50 78.6  p99 84.3  max 87.2 [87.0..87.4] ms  lost 0   RTT_floor 73.3  bound (d) 93.3
+   CPU % (one core = 100): edge 57.5 [54.8..60.1]  exit 36.9 [36.1..37.6]   retrans %: exit 0.001 [0.000..0.001]  edge 0.000
+   verdict: c FAIL (0/2)  d PASS (2/2)  e PASS (1/2)
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40  BIN=mq0  runs 2 (ok 2)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 1   host busy 65 [65..66]%
+   total dn 90.11 [90.05..90.16]  up 0.00 Mbit/s   (c) 97% [97%..97%] of cap_P10 (raw 94% [94%..94%])
+   (b) worst bulk user 91% [91%..91%] of its floor in cap_P10 (raw 89% [88%..89%])
+   newheavy: existing bulk before 81.98 [80.59..83.38], after 42.34 [42.24..42.43], heavy after 47.77 [47.73..47.81] Mbit/s; probe p99 before 277.7 [271.9..283.5], after 294.4 [266.2..322.7] ms
+   probe p50 82.9 [82.6..83.3]  p99 294.4 [266.2..322.7]  max 414.2 [376.1..452.3] ms  lost 0   RTT_floor 73.8 [72.9..74.8]  bound (d) 93.8 [92.9..94.8]
+   CPU % (one core = 100): edge 45.4 [44.0..46.7]  exit 34.1 [33.9..34.4]   retrans %: exit 0.073 [0.067..0.079]  edge 0.000
+   verdict: c FAIL (0/2)  d FAIL (0/2)  e FAIL (0/2)
+== N=1 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=200 MIX=newheavy DUR=40  BIN=mq0r0  runs 2 (ok 2)
+   capacity 95.64 Mbit/s (cap_P10 93.18)   links 1   host busy 65 [64..65]%
+   total dn 88.82 [87.10..90.54]  up 0.00 Mbit/s   (c) 95% [93%..97%] of cap_P10 (raw 93% [91%..95%])
+   (b) worst bulk user 64% [37%..91%] of its floor in cap_P10 (raw 63% [36%..89%])
+   newheavy: existing bulk before 78.31 [72.49..84.12], after 29.93 [17.30..42.57], heavy after 58.88 [47.97..69.80] Mbit/s; probe p99 before 266.6 [255.0..278.1], after 652.8 [313.2..992.3] ms
+   probe p50 349.6 [86.4..612.9]  p99 652.8 [313.2..992.3]  max 744.8 [444.1..1045.4] ms  lost 0   RTT_floor 73.1 [72.9..73.3]  bound (d) 93.1 [92.9..93.3]
+   CPU % (one core = 100): edge 36.9 [29.8..44.0]  exit 36.0 [34.5..37.6]   retrans %: exit 1.811 [0.107..3.515]  edge 0.000
+   verdict: c FAIL (1/2)  d FAIL (0/2)  e FAIL (0/2)
