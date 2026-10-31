@@ -1,0 +1,5 @@
+# RU (R1 merge step 5, rig pinned to CPUs 0-5): home on 8 links, which red team pass-2 switch brings the call tail (m: 5 of 14 runs over 150 ms in RY, RZ, RW and RV, fin2 0 of 14; both switches off 0 of 4): m, fin2, m with HS2_TUNE_TWOWAY_RATIO=0 (mr0), m with HS2_TUNE_OWD_IDLE=0 (mo0), 4 reps
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=mr0
+N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=mo0

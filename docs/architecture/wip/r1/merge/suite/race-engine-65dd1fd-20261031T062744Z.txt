@@ -1,0 +1,14 @@
+== go test -race -count=1 -timeout 60m ./engine (in hs2-src): rc 1, 1376 s
+== race-engine
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+github.com/hosseintaghipoursori-alt/hs2-tunnel/engine   fail   1366.0  738/1/29               191/0/0               
+TOTAL top-level: 738 pass, 1 fail, 29 skip; subtests: 191 pass, 0 fail, 0 skip; packages 1 (1 not pass)
+
+-- package github.com/hosseintaghipoursori-alt/hs2-tunnel/engine: fail
+   FAIL
+   FAIL	github.com/hosseintaghipoursori-alt/hs2-tunnel/engine	1366.036s
+
+-- FAIL github.com/hosseintaghipoursori-alt/hs2-tunnel/engine TestUserTagNoAlloc
+   === RUN   TestUserTagNoAlloc
+       usertag_bench_test.go:16: 1.0 allocations a run, want 0
+   --- FAIL: TestUserTagNoAlloc (0.01s)

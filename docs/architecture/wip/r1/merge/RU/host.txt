@@ -1,0 +1,34 @@
+== start 2026-10-29T16:19:22+00:00
+ 16:19:22 up 2 days,  5:14, 12 users,  load average: 1.61, 2.81, 3.95
+TCP: inuse 1601 orphan 1 tw 544 alloc 2606 mem 171
+TCPMemoryPressures 0
+top - 16:19:23 up 2 days,  5:14, 12 users,  load average: 1.61, 2.81, 3.95
+Tasks: 282 total,   1 running, 281 sleeping,   0 stopped,   0 zombie
+%Cpu(s): 10.9 us,  5.0 sy,  0.3 ni, 79.3 id,  0.0 wa,  0.0 hi,  4.5 si,  0.0 st 
+MiB Mem :  23456.9 total,   3831.2 free,   1672.7 used,  18369.6 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21784.3 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1213225 root      20   0    3428   2052   1396 S  94.2   0.0   0:04.68 gzip
+    992 root      20   0 1477216 190160  10496 S  46.2   0.8     15,38 hs2
+1152917 root      20   0 1567900 291660  29360 S  44.2   1.2   4:37.55 xray-linux-amd6
+1212935 root      39  19 1934948  20068  13224 S   5.8   0.1   0:01.50 engine.test
+1213223 root      20   0   10252   5892   3760 S   5.8   0.0   0:00.52 tar
+1213446 root      20   0   11908   6044   3888 R   3.8   0.0   0:00.04 top
+  13061 root      20   0   80720   4304   4028 S   1.9   0.0   2:08.24 qemu-ga
+== end 2026-10-29T16:37:23+00:00
+ 16:37:23 up 2 days,  5:32, 11 users,  load average: 5.71, 6.44, 5.82
+TCP: inuse 1289 orphan 2 tw 438 alloc 2110 mem 3359
+TCPMemoryPressures 0
+top - 16:37:24 up 2 days,  5:32, 11 users,  load average: 5.25, 6.33, 5.79
+Tasks: 286 total,   1 running, 285 sleeping,   0 stopped,   0 zombie
+%Cpu(s):  1.9 us,  2.6 sy,  0.4 ni, 93.9 id,  0.0 wa,  0.0 hi,  1.2 si,  0.0 st 
+MiB Mem :  23456.9 total,   3406.6 free,   1639.0 used,  18827.8 buff/cache     
+MiB Swap:      0.0 total,      0.0 free,      0.0 used.  21817.9 avail Mem 
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+1152917 root      20   0 1635204 300600  29552 S  29.4   1.3  10:30.21 xray-linux-amd6
+    992 root      20   0 1477216 189244  10496 S  27.5   0.8     15,44 hs2
+1315709 root      39  19 1274084  16844  11548 S   7.8   0.1   0:00.46 hs2
+1315742 root      39  19 1273684  15900  11612 S   7.8   0.1   0:00.43 hs2
+    958 root      20   0 1407112 113128  47332 S   3.9   0.5  63:10.93 x-ui
+1316339 root      20   0   11908   6020   3864 R   3.9   0.0   0:00.05 top
+ 882127 root      20   0       0      0      0 I   2.0   0.0   0:00.37 kworker/8:0-mm_percpu_wq

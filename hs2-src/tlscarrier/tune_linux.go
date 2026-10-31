@@ -3,6 +3,7 @@
 package tlscarrier
 
 import (
+	"errors"
 	"net"
 
 	"golang.org/x/sys/unix"
@@ -58,16 +59,27 @@ func tuneTCP(c net.Conn) {
 // (a QUIET link's: engine.QuietCC); false: the kernel refused it (the
 // socket keeps its own).
 func SetCongestion(tc *net.TCPConn, cc string) bool {
+	return SetCongestionErr(tc, cc) == nil
+}
+
+// SetCongestionErr is SetCongestion with the kernel's refusal (nil: set).
+// A name the kernel has not loaded is ENOENT unless the process may load
+// its module (CAP_NET_ADMIN: the kernel then loads tcp_NAME itself); one
+// outside net.ipv4.tcp_allowed_congestion_control without CAP_NET_ADMIN is
+// EPERM.
+func SetCongestionErr(tc *net.TCPConn, cc string) error {
 	if tc == nil || cc == "" {
-		return false
+		return errors.New("no socket or no name")
 	}
 	rc, err := tc.SyscallConn()
 	if err != nil {
-		return false
+		return err
 	}
-	ok := false
-	rc.Control(func(fd uintptr) {
-		ok = unix.SetsockoptString(int(fd), unix.IPPROTO_TCP, unix.TCP_CONGESTION, cc) == nil
-	})
-	return ok
+	var serr error
+	if err := rc.Control(func(fd uintptr) {
+		serr = unix.SetsockoptString(int(fd), unix.IPPROTO_TCP, unix.TCP_CONGESTION, cc)
+	}); err != nil {
+		return err
+	}
+	return serr
 }

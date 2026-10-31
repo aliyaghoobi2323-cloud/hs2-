@@ -1,0 +1,5 @@
+== go test -count=1 -timeout 5m ./... (in docs/architecture/wip/rig-scale/rigload): rc 0, 19 s
+== rigload
+package                                                 res         s  top pass/fail/skip     sub pass/fail/skip    
+rigload                                                 pass     18.7  11/0/0                 0/0/0                 
+TOTAL top-level: 11 pass, 0 fail, 0 skip; subtests: 0 pass, 0 fail, 0 skip; packages 1 (0 not pass)

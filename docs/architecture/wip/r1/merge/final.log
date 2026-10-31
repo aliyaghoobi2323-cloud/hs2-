@@ -1,0 +1,43 @@
+start 2026-10-29T15:10:36Z head 2b37e5b
+f-release rc=0 3 s /root/rmerge/logs/f-release-20261029T151036Z.txt
+f-check rc=0 1033 s /root/rmerge/logs/f-check-20261029T151039Z.txt
+aborted after f-check (red in startV2), relaunch on the fixed head 2026-10-29T15:29:50Z
+start 2026-10-29T15:31:24Z head 87cee6c
+f-release rc=0 141 s /root/rmerge/logs/f-release-20261029T153124Z.txt
+aborted during f-check on 87cee6c: two more test fixes asked by the lead (TestMoveBackLight, TestAngleP10) 2026-10-29T15:46:12Z
+start 2026-10-29T15:59:44Z head 4133690
+f-release rc=0 802 s /root/rmerge/logs/f-release-20261029T155944Z.txt
+aborted while waiting for the test lock on 4133690: merge of r1-review-engine and the -race fixes first 2026-10-29T16:22:26Z
+start 2026-10-29T16:31:29Z head 93bfdbb
+f-release rc=0 133 s /root/rmerge/logs/f-release-20261029T163129Z.txt
+aborted during f-check on 93bfdbb: merge of r1-review-ops first 2026-10-29T16:48:22Z
+start 2026-10-29T16:51:57Z head 3c0c2ec
+f-release rc=0 1201 s /root/rmerge/logs/f-release-20261029T165157Z.txt
+aborted before f-check on 3c0c2ec: merge of r1-review-wire and A3 first 2026-10-29T17:23:30Z
+start 2026-10-29T17:31:20Z head 70198ec
+f-release rc=0 405 s /root/rmerge/logs/f-release-20261029T173120Z.txt
+f-check rc=0 1291 s /root/rmerge/logs/f-check-20261029T173805Z.txt
+f-race386 rc=0 2259 s /root/rmerge/logs/f-race386-20261029T175936Z.txt
+f-fuzzkernel rc=0 1991 s /root/rmerge/logs/f-fuzzkernel-20261029T183715Z.txt
+f-arm7 rc=0 627 s /root/rmerge/logs/f-arm7-20261029T191026Z.txt
+f-install rc=0 863 s /root/rmerge/logs/f-install-20261029T192053Z.txt
+f-flakes rc=0 468 s /root/rmerge/logs/f-flakes-20261029T193516Z.txt
+end 2026-10-29T19:43:04Z
+start 2026-10-31T05:57:23Z head 65dd1fd
+f-release rc=0 257 s /root/rmerge/logs/f-release-20261031T055723Z.txt
+f-check rc=0 1303 s /root/rmerge/logs/f-check-20261031T060140Z.txt
+f-race386 rc=0 2308 s /root/rmerge/logs/f-race386-20261031T062323Z.txt
+f-fuzzkernel rc=0 1093 s /root/rmerge/logs/f-fuzzkernel-20261031T070151Z.txt
+f-arm7 rc=0 2442 s /root/rmerge/logs/f-arm7-20261031T072004Z.txt
+f-install rc=0 1977 s /root/rmerge/logs/f-install-20261031T080046Z.txt
+f-flakes rc=0 1501 s /root/rmerge/logs/f-flakes-20261031T083343Z.txt
+end 2026-10-31T08:58:44Z
+start 2026-10-31T09:00:21Z head e4783fe
+f-release rc=0 181 s /root/rmerge/logs/f-release-20261031T090021Z.txt
+f-check rc=0 1054 s /root/rmerge/logs/f-check-20261031T090322Z.txt
+f-race386 rc=0 2290 s /root/rmerge/logs/f-race386-20261031T092056Z.txt
+f-fuzzkernel rc=0 1103 s /root/rmerge/logs/f-fuzzkernel-20261031T095906Z.txt
+f-arm7 rc=0 659 s /root/rmerge/logs/f-arm7-20261031T101729Z.txt
+f-install rc=0 856 s /root/rmerge/logs/f-install-20261031T102828Z.txt
+f-flakes rc=0 538 s /root/rmerge/logs/f-flakes-20261031T104244Z.txt
+end 2026-10-31T10:51:42Z

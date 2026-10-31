@@ -1,0 +1,13 @@
+| run | N | MIX | ok | links up at start (wait s) | edge serving / exit links (end) | same after idle | link sockets; re-dialed; silent | down / up Mbit/s | host TCP pressures; max pages; samples past tcp_mem[1] | CPU edge / exit % (mean) | panic / fatal / race in logs |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 3fc575cc-m-1 | 1 | one_vs_16 | True | 1 (0.31) | 1 / 2 | 1 / 2 | 2; 0; 0 | 89.5 / 0.0 | 0; 33875; 0 | 53 / 32 | 0 / 0 / 0 |
+| af562cf3-m-1 | 600 | one_vs_16 | True | 601 (61.07) | 600 / 604 | 600 / 604 | 604; 0; 0 | 83.7 / 0.0 | 0; 35205; 0 | 74 / 51 | 0 / 0 / 0 |
+
+Process samples (PROC_TRACE, every 5 s): before the users (first sample, the tunnel up) / peak / end of the users' window / after POST_IDLE (20 s after the client ended); growth = the change over the users' last 20 s (to 3 s before their end), % (a leak grows there; a heap that reached its working size is flat).
+
+| run | side | fds | goroutines | RSS MB | threads | growth fds / gor / RSS % |
+|---|---|---|---|---|---|---|
+| 3fc575cc-m-1 | edge | 33 / 229 / 212 / 14 | 55 / 700 / 649 / 55 | 17.0 / 41.1 / 41.1 / 41.1 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 1.1 |
+| 3fc575cc-m-1 | exit | 16 / 225 / 208 / 10 | 45 / 690 / 639 / 45 | 16.9 / 41.7 / 41.7 / 41.8 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 0.4 |
+| af562cf3-m-1 | edge | 646 / 831 / 814 / 616 | 8447 / 9134 / 9083 / 8489 | 156.4 / 252.9 / 252.9 / 258.1 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 0.1 |
+| af562cf3-m-1 | exit | 640 / 827 / 810 / 612 | 7838 / 8519 / 8468 / 7874 | 147.2 / 271.8 / 271.8 / 272.5 | 12 / 13 / 13 / 13 | 0.0 / 0.0 / 0.2 |

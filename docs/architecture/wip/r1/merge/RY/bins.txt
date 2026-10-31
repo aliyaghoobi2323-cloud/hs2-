@@ -1,0 +1,2 @@
+m /root/rmerge/raw-bins/hs2-m-9948c15
+fin2 /root/r4j/bins/hs2-fin2

@@ -9,7 +9,7 @@ D=/root/hs2-wt/r1-merge/docs/architecture/wip/r1/merge
 mkdir -p "$D/suite" "$D/step5" "$D/tools" "$D/logs"
 cp /root/rmerge/suite/*.txt "$D/suite/" 2>/dev/null
 for f in /root/rmerge/step5/*.txt; do [ -f "$f" ] && cp "$f" "$D/step5/"; done
-for b in RS RC RF; do
+for b in RS RF RX RY RZ RW RF2 RV RV2 RU RF3 RV3 RF4 RF5 RL RQ RF6 RM1 RM2; do
   s=/root/rmerge/$b; [ -d "$s" ] || continue
   o=$D/$b; mkdir -p "$o"
   for f in plan.txt schedule.tsv run.log host.txt bins.txt bins-sha256.txt proc.md table.md class.md ana.txt; do [ -f "$s/$f" ] && cp "$s/$f" "$o/"; done

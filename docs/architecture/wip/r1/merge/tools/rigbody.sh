@@ -18,7 +18,7 @@ B=/root/rmerge/raw-bins/hs2-m-$H; RLB=/root/rmerge/raw-bins/rigload-$H
 # built for the commit it equals there (the same bytes as the release build)
 for c in $(git -C "$W" rev-list --first-parent -30 HEAD); do
   cs=$(git -C "$W" rev-parse --short "$c")
-  [ -x "$B" ] || { [ -x "/root/rmerge/raw-bins/hs2-m-$cs" ] && git -C "$W" diff --quiet "$c" HEAD -- hs2-src && B=/root/rmerge/raw-bins/hs2-m-$cs; }
+  [ -x "$B" ] || { [ -x "/root/rmerge/raw-bins/hs2-m-$cs" ] && git -C "$W" diff --quiet "$c" HEAD -- hs2-src ":!*_test.go" && B=/root/rmerge/raw-bins/hs2-m-$cs; }
   [ -x "$RLB" ] || { [ -x "/root/rmerge/raw-bins/rigload-$cs" ] && git -C "$W" diff --quiet "$c" HEAD -- docs/architecture/wip/rig-scale/rigload && RLB=/root/rmerge/raw-bins/rigload-$cs; }
 done
 [ -x "$B" ] || (cd "$W/hs2-src" && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$B" ./cmd/hs2) || exit 1

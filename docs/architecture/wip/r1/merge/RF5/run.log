@@ -1,0 +1,18 @@
+04:25:42 plan /root/rmerge/RF5/plan.txt: 8 runs
+04:25:44 start f4fb6861-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.21 waited 0s
+04:26:50 done f4fb6861-fin2-1 ok=1 
+04:26:52 start f4fb6861-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 2.46 waited 0s
+04:27:58 done f4fb6861-m-1 ok=1 
+04:27:59 start f4fb6861-m-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 5.24 waited 0s
+04:29:05 done f4fb6861-m-2 ok=1 
+04:29:07 start f4fb6861-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 6.79 waited 0s
+04:30:13 done f4fb6861-fin2-2 ok=1 
+04:30:15 start f4fb6861-m-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 8.01 waited 0s
+04:31:20 done f4fb6861-m-3 ok=1 
+04:31:22 start f4fb6861-fin2-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 8.12 waited 0s
+04:32:27 done f4fb6861-fin2-3 ok=1 
+04:32:29 start f4fb6861-m-4 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 8.47 waited 0s
+04:33:35 done f4fb6861-m-4 ok=1 
+04:33:37 start f4fb6861-fin2-4 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 9.42 waited 0s
+04:34:42 done f4fb6861-fin2-4 ok=1 
+04:34:42 done /root/rmerge/RF5/plan.txt

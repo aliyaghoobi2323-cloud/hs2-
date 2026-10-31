@@ -1,0 +1,14 @@
+11:57:41 plan /root/rmerge/RY/plan.txt: 6 runs
+11:57:42 start f4fb6861-fin2-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.53 waited 0s
+11:58:47 done f4fb6861-fin2-1 ok=1 
+11:58:48 start f4fb6861-m-1 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 3.28 waited 0s
+11:59:54 done f4fb6861-m-1 ok=1 
+11:59:55 start f4fb6861-m-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 2.80 waited 0s
+12:01:01 done f4fb6861-m-2 ok=1 
+12:01:02 start f4fb6861-fin2-2 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 1.49 waited 0s
+12:02:07 done f4fb6861-fin2-2 ok=1 
+12:02:08 start f4fb6861-m-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=m) load 2.05 waited 0s
+12:03:14 done f4fb6861-m-3 ok=1 
+12:03:15 start f4fb6861-fin2-3 (N=8 RATE=100 RTT=72 LOSS=0 MODE=fqcodel USERS=64 MIX=home SBR=1.2 BIN=fin2) load 2.73 waited 0s
+12:04:20 done f4fb6861-fin2-3 ok=1 
+12:04:20 done /root/rmerge/RY/plan.txt

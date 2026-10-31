@@ -1,0 +1,2 @@
+16:19:23 mode log (record only); tcp_mem 279672 372896 559344; host TCP 691 pages, TCPMemoryPressures 0 at start; RIG_ID '8'; cmd: /root/hs2-wt/r1-merge/docs/architecture/wip/rig-scale/run.sh /root/rmerge/RU/plan.txt /root/rmerge/raw-RU
+16:37:23 end: mode log, status 0; 2107 samples; host TCP max 170818 pages (start 691; tcp_mem 279672 372896 559344; samples at or past tcp_mem[0] 0, past tcp_mem[1] (pressure) 0); TCPMemoryPressures 0 -> 0
