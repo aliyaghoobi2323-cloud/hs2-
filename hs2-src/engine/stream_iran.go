@@ -240,20 +240,24 @@ func userStreamHeader(l Link, udp bool, port int, pool *peerInfo) []byte {
 // port `port` (0: unknown — never tagged).
 func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (stream, func(), bool) {
 	// A link can die between Pick and OpenStream; try another one.
+	t0 := time.Now()
 	for try := 0; try < 3; try++ {
 		link, release, ok := pickWait(ctx, lm, !udp)
 		if !ok {
+			obs.openErr.Add(1)
 			return nil, nil, false
 		}
 		st, err := link.OpenStream()
 		if err == nil {
 			if _, err = st.Write(userStreamHeader(link, udp, port, lm.exitInfo.Load())); err == nil {
+				obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
 				return st, release, true
 			}
 			st.Close()
 		}
 		release()
 	}
+	obs.openErr.Add(1)
 	return nil, nil, false
 }
 
@@ -404,13 +408,15 @@ func serveUserUDP(ctx context.Context, pc net.PacketConn, lm *LinkManager, port 
 		f.last = time.Now()
 		mu.Unlock()
 		if f.qb.Load()+int64(n) > udpFlowBytes {
+			obs.udpDrops.Add(1)
 			continue // the flow's link is behind: drop
 		}
 		p := append([]byte(nil), buf[:n]...)
 		select {
 		case f.q <- p:
-			f.qb.Add(int64(n))
+			obs.udpQueued.observe(uint64(f.qb.Add(int64(n))))
 		default: // drop
+			obs.udpDrops.Add(1)
 		}
 	}
 }

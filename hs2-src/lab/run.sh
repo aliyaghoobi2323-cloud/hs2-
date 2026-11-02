@@ -11,6 +11,7 @@
 #   MIN_LINKS [4]  MAX_LINKS [16]
 #   IRAN_EXTRA / KHAREJ_EXTRA: extra JSON fields, e.g. '"per_link":4,'
 #   KEEP=1 leaves the namespaces and logs in place.
+#   NETEM_EXTRA: extra emulator flags, e.g. "-burstloss 0.3 -badms 30 -goodms 2000" (bursty loss).
 #   PROBE_EXTRA: extra probe flags, e.g. "-seg 4000000" (reconnect per 4 MB download).
 #   LAB_ID=n runs in namespaces irn/khn/midn so experiments can run in parallel.
 #   HS2_TUNE_* variables are passed through to hs2 (see cmd/hs2 applyTuning).
@@ -53,7 +54,7 @@ for x in "$IR $VI" "$KH $VK" "$MID $MA" "$MID $MB"; do
   ip -n $1 link set dev $2 up
 done
 ip netns exec $MID "$W/netem" -a $MA -b $MB -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
-  -loss "$LOSS" -flowrate "$FLOWRATE" 2>"$W/netem.log" & echo $! >> "$W/pids"
+  -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} 2>"$W/netem.log" & echo $! >> "$W/pids"
 
 KEY=$(printf 'ab%.0s' {1..32})
 cat > "$W/kh.json" <<J

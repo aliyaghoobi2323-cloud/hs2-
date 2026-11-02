@@ -165,6 +165,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			sent := int64(binary.BigEndian.Uint64(pong[8:]))
 			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
 				mtr.rttMicros.Store(uint64(rtt / 1000))
+				obs.ctrlRTT.observe(uint64(rtt / 1000))
 			}
 			rt := binary.BigEndian.Uint64(pong[16:])
 			mtr.peerRetrans.Store(rt)
