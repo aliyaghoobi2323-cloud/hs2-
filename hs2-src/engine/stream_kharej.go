@@ -231,6 +231,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			return
 		}
 		up, err := net.DialTimeout("tcp", target, 5*time.Second)
+		noteExitDial(err)
 		if err != nil {
 			st.Close()
 			return

@@ -174,6 +174,91 @@ type liveStatus struct {
 	PSICPU60        *float64 `json:"psi_cpu60,omitempty"`
 	HostSaturated   bool     `json:"host_saturated,omitempty"`
 	HostOutDiscards uint64   `json:"host_out_discards,omitempty"`
+
+	// Measurements over the last minute (engine.Observed; see obsWindow).
+	// They describe what the tunnel does and change nothing in it. Absent: no
+	// such event in the window.
+	//   shaper: TLS records per write and the bytes it adds (header and
+	//   padding) as % of the data; ctrl RTT: the links' control ping, which
+	//   waits behind their traffic; open: a user connection's wait for its
+	//   stream; udp queue: bytes waiting on a UDP user flow when a datagram
+	//   joins it; exit dials: this server's dials to its targets and, since
+	//   start, the failures by cause.
+	ObsShapeRecPerWrite float64 `json:"obs_shape_rec_per_write,omitempty"`
+	ObsShapeAddPct      float64 `json:"obs_shape_add_pct,omitempty"`
+	ObsCtrlRTTP50       float64 `json:"obs_ctrl_rtt_p50_ms,omitempty"`
+	ObsCtrlRTTP99       float64 `json:"obs_ctrl_rtt_p99_ms,omitempty"`
+	ObsOpenP50          float64 `json:"obs_open_p50_ms,omitempty"`
+	ObsOpenP99          float64 `json:"obs_open_p99_ms,omitempty"`
+	ObsOpenErr          uint64  `json:"obs_open_err,omitempty"`
+	ObsUDPQueueP99KB    float64 `json:"obs_udp_queue_p99_kb,omitempty"`
+	ObsUDPDrops         uint64  `json:"obs_udp_drops,omitempty"`
+	ObsExitDials        uint64  `json:"obs_exit_dials,omitempty"`
+	ObsExitNoAddr       uint64  `json:"obs_exit_noaddr,omitempty"`
+	ObsExitRefused      uint64  `json:"obs_exit_refused,omitempty"`
+	ObsExitTimeout      uint64  `json:"obs_exit_timeout,omitempty"`
+	ObsExitOther        uint64  `json:"obs_exit_other,omitempty"`
+}
+
+// obsWindow turns the engine's ever-growing counters into the last minute's
+// figures: it keeps one snapshot per status write and compares the newest
+// with the oldest.
+type obsWindow struct{ ring []engine.ObsSnap }
+
+const obsWindowLen = int(time.Minute/statusInterval) + 1
+
+func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
+	w.ring = append(w.ring, now)
+	if len(w.ring) > obsWindowLen {
+		w.ring = w.ring[len(w.ring)-obsWindowLen:]
+	}
+	d := now.Sub(w.ring[0])
+	ls.ObsShapeRecPerWrite, ls.ObsShapeAddPct, ls.ObsUDPQueueP99KB = 0, 0, 0
+	if d.ShapeWrites > 0 && d.ShapeData > 0 {
+		ls.ObsShapeRecPerWrite = round1(float64(d.ShapeRecords) / float64(d.ShapeWrites))
+		ls.ObsShapeAddPct = round1(float64(d.ShapePad) / float64(d.ShapeData) * 100)
+	}
+	ms := func(h engine.ObsHistSnap, q float64) float64 {
+		v, ok := h.Quantile(q)
+		if !ok {
+			return 0
+		}
+		return round1(float64(v) / 1000)
+	}
+	ls.ObsCtrlRTTP50, ls.ObsCtrlRTTP99 = ms(d.CtrlRTT, 0.5), ms(d.CtrlRTT, 0.99)
+	ls.ObsOpenP50, ls.ObsOpenP99 = ms(d.OpenLat, 0.5), ms(d.OpenLat, 0.99)
+	ls.ObsOpenErr = d.OpenErr
+	if v, ok := d.UDPQueued.Quantile(0.99); ok {
+		ls.ObsUDPQueueP99KB = round1(float64(v) / 1024)
+	}
+	ls.ObsUDPDrops = d.UDPDrops
+	ls.ObsExitDials = d.ExitDials
+	ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther = now.ExitNoAddr, now.ExitRefused, now.ExitTimeout, now.ExitOther
+}
+
+// obsLines renders the measurements for `hs2 status` (nil: nothing measured).
+func obsLines(ls liveStatus) []string {
+	var out []string
+	if ls.ObsShapeRecPerWrite > 0 {
+		out = append(out, fmt.Sprintf("shaper %.1f TLS record(s) per write, +%.1f%% bytes (header and padding)", ls.ObsShapeRecPerWrite, ls.ObsShapeAddPct))
+	}
+	if ls.ObsCtrlRTTP50 > 0 {
+		out = append(out, fmt.Sprintf("link round trip (control ping, behind the link's traffic) p50 %.0f ms · p99 %.0f ms", ls.ObsCtrlRTTP50, ls.ObsCtrlRTTP99))
+	}
+	if ls.ObsOpenP50 > 0 || ls.ObsOpenErr > 0 {
+		out = append(out, fmt.Sprintf("new connection waits for its stream p50 %.0f ms · p99 %.0f ms · %d not opened", ls.ObsOpenP50, ls.ObsOpenP99, ls.ObsOpenErr))
+	}
+	if ls.ObsUDPQueueP99KB > 0 || ls.ObsUDPDrops > 0 {
+		out = append(out, fmt.Sprintf("udp flows: p99 %.1f KB queued behind their link · %d datagram(s) dropped (queue full)", ls.ObsUDPQueueP99KB, ls.ObsUDPDrops))
+	}
+	if fails := ls.ObsExitNoAddr + ls.ObsExitRefused + ls.ObsExitTimeout + ls.ObsExitOther; ls.ObsExitDials > 0 || fails > 0 {
+		s := fmt.Sprintf("exit dials %d in the last minute", ls.ObsExitDials)
+		if fails > 0 {
+			s += fmt.Sprintf(" · failed since start: %d no free local port (EADDRNOTAVAIL), %d refused, %d timed out, %d other", ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther)
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // statusPath maps a config path to its live status file. It is deterministic
@@ -276,6 +361,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 	}
 	warm := &warmWriter{path: warmPath(cfgPath), start: time.Now(), after: warmAfter}
 	tcpMem := &tcpMemWatch{proc: "/proc", logf: log.Printf}
+	ow := &obsWindow{}
 	write := func() {
 		tcpMem.check()
 		s := stats()
@@ -328,6 +414,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		// pacer then catches up after the scheduler puts it aside (pacerSatCredit),
 		// instead of sending under its rate on an asymmetrically loaded box.
 		udpcarrier.SetHostSaturated(hs.Saturated)
+		ow.fill(&ls, engine.Observed())
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
@@ -526,6 +613,13 @@ func printStatus(path string) {
 	}
 	if ls.CPUCores > 0 {
 		fmt.Printf("  cpu:        %s\n", cpuLine(ls))
+	}
+	for i, l := range obsLines(ls) {
+		if i == 0 {
+			fmt.Printf("  measured:   %s (last minute)\n", l)
+		} else {
+			fmt.Printf("              %s\n", l)
+		}
 	}
 	if ls.HostOutDiscards > 0 {
 		fmt.Printf("  net:        %d outgoing IP packet(s) discarded on this server since hs2 started (Ip OutDiscards, every program: a full interface queue, a firewall's drop — and on an icmp listener the kernel's own reply to each tunnel packet, which the tunnel suppresses; this tunnel's own queue drops over icmp are in drops: \"refused by the kernel\")\n", ls.HostOutDiscards)

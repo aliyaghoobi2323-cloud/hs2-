@@ -66,7 +66,8 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	written := 0
+	written, records, padded := 0, 0, 0
+	defer func() { noteShapeWrite(records, written, padded) }()
 	for len(p) > 0 {
 		target := c.sampler.Sample()
 		maxData := target - shapeHdrLen
@@ -97,6 +98,8 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 			return written, err
 		}
 		written += len(d)
+		records++
+		padded += shapeHdrLen + pad
 		p = p[len(d):]
 	}
 	return written, nil

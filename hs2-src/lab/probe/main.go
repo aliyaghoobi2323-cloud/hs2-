@@ -88,6 +88,8 @@ type result struct {
 	UDPLost    int     `json:"udp_lost,omitempty"`
 	UDPP50     float64 `json:"udp_p50_ms,omitempty"`
 	UDPP95     float64 `json:"udp_p95_ms,omitempty"`
+	UDPP99     float64 `json:"udp_p99_ms,omitempty"`
+	UDPMax     float64 `json:"udp_max_ms,omitempty"`
 	BulkErrors int     `json:"bulk_errors"`
 }
 
@@ -337,6 +339,7 @@ func main() {
 	r.ConnN, r.ConnP50, r.ConnP95 = len(conn), pct(conn, .5), pct(conn, .95)
 	if *udp {
 		r.UDPN, r.UDPP50, r.UDPP95 = len(udpRTT), pct(udpRTT, .5), pct(udpRTT, .95)
+		r.UDPP99, r.UDPMax = pct(udpRTT, .99), pct(udpRTT, 1)
 	}
 	json.NewEncoder(os.Stdout).Encode(r)
 }
