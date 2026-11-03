@@ -198,6 +198,7 @@ type liveStatus struct {
 	ObsExitRefused      uint64  `json:"obs_exit_refused,omitempty"`
 	ObsExitTimeout      uint64  `json:"obs_exit_timeout,omitempty"`
 	ObsExitOther        uint64  `json:"obs_exit_other,omitempty"`
+	ObsExitRotated      uint64  `json:"obs_exit_rotated,omitempty"` // since start: dials that needed another 127.0.0.x (HS2_EXIT_SRC_ROTATE)
 }
 
 // obsWindow turns the engine's ever-growing counters into the last minute's
@@ -234,6 +235,7 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsUDPDrops = d.UDPDrops
 	ls.ObsExitDials = d.ExitDials
 	ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther = now.ExitNoAddr, now.ExitRefused, now.ExitTimeout, now.ExitOther
+	ls.ObsExitRotated = now.ExitRotated
 }
 
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
@@ -255,6 +257,11 @@ func obsLines(ls liveStatus) []string {
 		s := fmt.Sprintf("exit dials %d in the last minute", ls.ObsExitDials)
 		if fails > 0 {
 			s += fmt.Sprintf(" · failed since start: %d no free local port (EADDRNOTAVAIL), %d refused, %d timed out, %d other", ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther)
+		}
+		if ls.ObsExitRotated > 0 {
+			s += fmt.Sprintf(" · %d got through from another 127.0.0.x after the ports ran out", ls.ObsExitRotated)
+		} else if ls.ObsExitNoAddr > 0 {
+			s += " — the local ports to the target ran out: HS2_EXIT_SRC_ROTATE=1 lets these dial from another 127.0.0.x"
 		}
 		out = append(out, s)
 	}

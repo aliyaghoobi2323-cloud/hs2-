@@ -101,6 +101,7 @@ var obs struct {
 	udpDrops  atomic.Uint64
 
 	exitDials, exitNoAddr, exitRefused, exitTimeout, exitOther atomic.Uint64
+	exitRotated                                                atomic.Uint64 // dials that got through from another 127.0.0.x (exitdial.go)
 }
 
 // noteShapeWrite records one shapedConn.Write: its records, data and padding.
@@ -141,6 +142,7 @@ type ObsSnap struct {
 	OpenErr, UDPDrops           uint64
 
 	ExitDials, ExitNoAddr, ExitRefused, ExitTimeout, ExitOther uint64
+	ExitRotated                                                uint64
 }
 
 // Observed returns the counters now.
@@ -151,7 +153,7 @@ func Observed() ObsSnap {
 		CtrlRTT: obs.ctrlRTT.snapshot(), OpenLat: obs.openLat.snapshot(), UDPQueued: obs.udpQueued.snapshot(),
 		OpenErr: obs.openErr.Load(), UDPDrops: obs.udpDrops.Load(),
 		ExitDials: obs.exitDials.Load(), ExitNoAddr: obs.exitNoAddr.Load(), ExitRefused: obs.exitRefused.Load(),
-		ExitTimeout: obs.exitTimeout.Load(), ExitOther: obs.exitOther.Load(),
+		ExitTimeout: obs.exitTimeout.Load(), ExitOther: obs.exitOther.Load(), ExitRotated: obs.exitRotated.Load(),
 	}
 }
 
@@ -163,6 +165,6 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		CtrlRTT: s.CtrlRTT.Sub(old.CtrlRTT), OpenLat: s.OpenLat.Sub(old.OpenLat), UDPQueued: s.UDPQueued.Sub(old.UDPQueued),
 		OpenErr: s.OpenErr - old.OpenErr, UDPDrops: s.UDPDrops - old.UDPDrops,
 		ExitDials: s.ExitDials - old.ExitDials, ExitNoAddr: s.ExitNoAddr - old.ExitNoAddr, ExitRefused: s.ExitRefused - old.ExitRefused,
-		ExitTimeout: s.ExitTimeout - old.ExitTimeout, ExitOther: s.ExitOther - old.ExitOther,
+		ExitTimeout: s.ExitTimeout - old.ExitTimeout, ExitOther: s.ExitOther - old.ExitOther, ExitRotated: s.ExitRotated - old.ExitRotated,
 	}
 }
