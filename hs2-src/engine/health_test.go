@@ -265,3 +265,41 @@ func TestNoDegradeHealthy(t *testing.T) {
 		t.Fatal("healthy active link wrongly degraded")
 	}
 }
+
+// heal brings back a retiring link only if it can serve: a suspect one (it has
+// heard nothing for suspectAfter) does not count as serving, so bringing it
+// back would leave the degraded link's slot empty until the next reconcile.
+// With no retiring link that can serve, a replacement is dialed instead.
+func TestHealSkipsSuspectRetiring(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		healthy   bool // a retiring link that can serve is there too
+		wantDials int32
+	}{{"suspect and healthy retiring", true, 0}, {"only a suspect retiring", false, 1}} {
+		t.Run(tc.name, func(t *testing.T) {
+			d := &fakeDialer{}
+			m := NewLinkManager(d, 2, 8, 50, nil)
+			m.gate = instantGate()
+			bad := &managedLink{link: &fakeLink{alive: true}, id: 0, degraded: true}
+			sus := &managedLink{link: &fakeLink{alive: true}, id: 1, retiring: true, suspect: true}
+			sus.open = 9 // the most connections: heal used to pick it first
+			m.links = []*managedLink{bad, sus}
+			var ok *managedLink
+			if tc.healthy {
+				ok = &managedLink{link: &fakeLink{alive: true}, id: 2, retiring: true}
+				m.links = append(m.links, ok)
+			}
+			m.heal(context.Background())
+			settle(m)
+			if !sus.retiring {
+				t.Fatal("a suspect retiring link was brought back into service")
+			}
+			if ok != nil && ok.retiring {
+				t.Fatal("the retiring link that can serve was not brought back")
+			}
+			if got := d.dials.Load(); got != tc.wantDials {
+				t.Fatalf("dials %d, want %d", got, tc.wantDials)
+			}
+		})
+	}
+}

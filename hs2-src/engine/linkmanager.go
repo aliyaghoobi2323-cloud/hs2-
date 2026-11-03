@@ -2102,7 +2102,7 @@ func (m *LinkManager) heal(ctx context.Context) {
 	for need > 0 {
 		var best *managedLink
 		for _, ml := range m.links {
-			if ml.retiring && ml.link.Alive() && !ml.degraded && (best == nil || ml.open > best.open) {
+			if ml.retiring && ml.link.Alive() && !ml.degraded && !ml.suspect && (best == nil || ml.open > best.open) {
 				best = ml
 			}
 		}
