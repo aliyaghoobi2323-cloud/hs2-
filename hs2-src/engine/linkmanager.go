@@ -6,7 +6,9 @@ import (
 	"math"
 	"math/bits"
 	"math/rand/v2"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -278,6 +280,7 @@ type managedLink struct {
 	rate10       float64 // mean rate over the last 5 ticks
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
 	flowing      int     // user streams really moving data
+	heavy        int     // ... of which at a download's rate (HS2_PICK_CLASS)
 	open         int     // user streams open
 	recent       int     // user streams that moved a byte within drainIdle
 	lastByte     time.Time
@@ -1467,15 +1470,73 @@ func (s *shortLivedLinks) note(life time.Duration) string {
 // in one tick still spreads); then the fewest open connections, which spreads
 // idle ones and limits how many one link's death resets. A fresh link has key
 // zero and takes the next flows. The simulator uses the same ordering.
+//
+// With HS2_PICK_CLASS=1 an unpressed link that carries no heavy stream (a
+// download: heavyRate) comes before one that does. A connection cannot move
+// once placed, and whether it will be a download or a game is not known when
+// it opens; but a loss on a link stalls every stream on it until TCP's
+// retransmit arrives, so an interactive flow next to a download inherits the
+// download's loss stalls (in the lab: echo p50 ~177 ms on a link of its own,
+// ~320 ms beside a download, 1% loss). Keeping new connections off the links
+// that already carry downloads halves the time interactive flows spend next
+// to one in a placement simulation (32.7% → 16.7% of their time, 8 links;
+// 21% → 7.8%, 32 links) and spreads the downloads more evenly as well (the
+// most on one link 1.53 → 1.07). Predicting a new connection's kind from its
+// client IP did worse at a realistic accuracy (CGNAT) and piled the
+// downloads onto few links.
 type pickKey struct {
 	pressed bool
+	heavy   bool
 	load    int
 	users   int
+}
+
+// pickClass: HS2_PICK_CLASS=1 (see pickKey); on with the lane too.
+var pickClass = os.Getenv("HS2_PICK_CLASS") == "1" || pickLane > 0
+
+// pickLane: HS2_PICK_LANE — while downloads run, the autopilot keeps this
+// many serving links free of them (autopilot.decide), and pickKey sends new
+// connections there first. On its own the ordering cannot help: the pool is
+// sized to ~per_link active flows a link, so every link carries a download
+// and none is free (in the lab, 12 of 12 runs with 1% loss put a game that
+// started beside running downloads at ~300 ms). With a few free links: 0 of
+// 8, echo p50 ~176 ms, p95 halved, download throughput the same.
+// "on" (or any other word) is laneDefault, a number is used up to laneMax;
+// unset, "", "0" or "off" is off.
+var pickLane = parseLane(os.Getenv("HS2_PICK_LANE"))
+
+// laneDefault is what the lab measured best. Two free links gave the whole
+// gain (a game starting 8 s into 8 downloads at 1% loss: echo p50 299 →
+// 176 ms, p95 413 → 199 ms; often with no extra link at all), and with 64
+// downloads on every link no worse than none. Eight gave the same gain, six
+// more links, and with 64 downloads a higher echo p50 (171 → 204 ms, p=0.05):
+// every extra link is one more BBR flow filling the path's queue.
+const laneDefault = 2
+
+// laneMax caps a configured lane.
+const laneMax = 8
+
+func parseLane(v string) int {
+	switch v = strings.TrimSpace(v); v {
+	case "", "0", "off":
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	switch {
+	case err != nil || n < 0:
+		return laneDefault
+	case n > laneMax:
+		return laneMax
+	}
+	return n
 }
 
 func (a pickKey) less(b pickKey) bool {
 	if a.pressed != b.pressed {
 		return !a.pressed
+	}
+	if a.heavy != b.heavy {
+		return !a.heavy
 	}
 	if a.load != b.load {
 		return a.load < b.load
@@ -1568,6 +1629,7 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 				}
 			}
 			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
+			k.heavy = pickClass && ml.heavy > 0
 			switch {
 			case chosen == nil || k.less(best):
 				chosen, best, ties = ml, k, 1
@@ -1714,7 +1776,7 @@ func (m *LinkManager) sampleHealth() {
 		}
 		copy(ml.pickHist[1:], ml.pickHist[:len(ml.pickHist)-1])
 		ml.pickHist[0], ml.picks = ml.picks, 0
-		ml.flowing, ml.open, ml.recent = o.fs.flowing, o.fs.open, o.fs.recent
+		ml.flowing, ml.open, ml.recent, ml.heavy = o.fs.flowing, o.fs.open, o.fs.recent, o.fs.heavy
 		if o.fs.last.After(ml.lastByte) {
 			ml.lastByte = o.fs.last
 		}
@@ -2068,7 +2130,7 @@ func (ml *managedLink) apLink() apLink {
 		id: ml.id, serving: ml.serving(), retiring: ml.retiring && ml.link.Alive(),
 		servingSince: ml.servingSince, pressed: ml.pressed,
 		rate: ml.rate, rate10: ml.rate10, sustained: ml.sustained,
-		flowing: ml.flowing, open: ml.open,
+		flowing: ml.flowing, open: ml.open, heavy: ml.heavy,
 	}
 }
 

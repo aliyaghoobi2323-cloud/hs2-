@@ -44,6 +44,7 @@ import (
 // pool comes down — the defect of the first version, which ratcheted to 32.
 type autopilot struct {
 	min, max, perLink int
+	lane              int // links kept free of downloads (HS2_PICK_LANE), 0 = none
 	tun               apTunables
 	rnd               func() float64
 
@@ -203,6 +204,7 @@ type apLink struct {
 	sustained    float64 // min over 3 ticks of the dominant direction's rate
 	flowing      int     // user streams really moving data
 	open         int     // user streams open
+	heavy        int     // ... of which at a download's rate (heavyRate)
 }
 
 // apSample is one health tick's measurements.
@@ -228,6 +230,7 @@ type apTick struct {
 	flowing int
 	p, s    int
 	short   bool
+	hv      int // serving links carrying a heavy stream (the lane, HS2_PICK_LANE)
 }
 
 type apCap struct {
@@ -272,7 +275,7 @@ func newAutopilot(min, max, perLink int) *autopilot {
 	if tun.capMax < 4*max {
 		tun.capMax = 4 * max
 	}
-	return &autopilot{min: min, max: max, perLink: perLink, tun: tun,
+	return &autopilot{min: min, max: max, perLink: perLink, lane: pickLane, tun: tun,
 		rnd: rand.Float64, T: warmSize(min, max)}
 }
 
@@ -350,11 +353,14 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 
 	// ---- measurements for this tick -------------------------------------
-	S, R, P := 0, 0, 0
+	S, R, P, HV := 0, 0, 0, 0
 	for _, l := range s.links {
 		switch {
 		case l.serving:
 			S++
+			if l.heavy > 0 {
+				HV++
+			}
 			if l.pressed {
 				P++
 				if l.sustained > 0 {
@@ -366,7 +372,7 @@ func (a *autopilot) decide(s apSample) apDecision {
 		}
 	}
 	shortTick := P >= 1 && S-P < spare(P)
-	a.hist = append(a.hist, apTick{g: s.G, flowing: s.flowing, p: P, s: S, short: shortTick})
+	a.hist = append(a.hist, apTick{g: s.G, flowing: s.flowing, p: P, s: S, short: shortTick, hv: HV})
 	if len(a.hist) > t.histTicks {
 		a.hist = a.hist[len(a.hist)-t.histTicks:]
 	}
@@ -409,6 +415,31 @@ func (a *autopilot) decide(s apSample) apDecision {
 	}
 	fGrow := ceilDiv(fl5, a.perLink)
 	fHold := ceilDiv(fl60, a.perLink)
+	// The low-latency lane (HS2_PICK_LANE): while downloads run, keep `lane`
+	// serving links that carry none, so a game or a call that starts now has
+	// a link of its own instead of one where a download's loss stalls it
+	// (pickKey). Grown on the last 2 ticks' fewest download links — a game that
+	// starts a few seconds into a download should find its link ready — and
+	// held on the last minute's most, so a pause does not shrink it; no
+	// downloads, no extra links.
+	laneGrow := 0
+	if a.lane > 0 {
+		hv2, hv60 := math.MaxInt, 0
+		for _, h := range a.last(2) {
+			hv2 = min(hv2, h.hv)
+		}
+		for _, h := range a.hist {
+			hv60 = max(hv60, h.hv)
+		}
+		if hv2 > 0 {
+			laneGrow = hv2 + a.lane
+		}
+		if hv60 > 0 {
+			fHold = max(fHold, hv60+a.lane)
+		}
+	}
+	laneFloor := laneGrow > fGrow
+	fGrow = max(fGrow, laneGrow)
 	// Links the active flows can use (connections are pinned): one each plus
 	// two for arrivals, and never fewer than the pressed links plus their
 	// spares (a pressed link carries at least one active flow even when its
@@ -509,6 +540,10 @@ func (a *autopilot) decide(s apSample) apDecision {
 		a.pr = nil
 		a.T = floor
 		a.lastGrowAt = now
+		if laneFloor {
+			return a.out(s, S, R, apScaling, fmt.Sprintf("%d link(s) carry downloads; %d more are kept free of them for interactive traffic (lane)", laneGrow-a.lane, a.lane),
+				fmt.Sprintf("pattern %d → %d links: %d carry downloads, %d kept free of them for games and calls (HS2_PICK_LANE)", old, a.T, laneGrow-a.lane, a.lane))
+		}
 		return a.out(s, S, R, apScaling, fmt.Sprintf("%d active connections need %d links (per_link %d)", fl5, a.T, a.perLink),
 			fmt.Sprintf("pattern %d → %d links: %d active connections (per_link %d)", old, a.T, fl5, a.perLink))
 	}

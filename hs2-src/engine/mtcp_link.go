@@ -76,6 +76,7 @@ func (l *mtcpLink) OpenStream() (stream, error) {
 type flowSnap struct {
 	open    int       // user streams open on the link
 	flowing int       // streams whose rate EWMA is >= flowingRate (real traffic)
+	heavy   int       // ... of which at a download's rate (heavyRate)
 	recent  int       // streams that moved a byte within the recent window
 	last    time.Time // most recent byte on any stream
 }
@@ -116,6 +117,9 @@ func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 		fs.open++
 		if float64(cs.ewma) >= flowingRate && now.Sub(cs.lastActive) <= flowRecent || cs.steady == 7 {
 			fs.flowing++
+		}
+		if float64(cs.ewma) >= heavyRate && now.Sub(cs.lastActive) <= flowRecent {
+			fs.heavy++
 		}
 		if now.Sub(cs.lastActive) <= recent {
 			fs.recent++
