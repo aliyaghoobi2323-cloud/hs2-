@@ -58,8 +58,11 @@ func NewHTTPSLengthSampler() *LengthSampler {
 // Sample returns a target on-wire size. A payload is padded up to (or split to)
 // this size by the carrier. Sizes never exceed the path MTU on UDP; the carrier
 // clamps.
-func (s *LengthSampler) Sample() int {
-	u := randFloat()
+func (s *LengthSampler) Sample() int { return s.At(randFloat()) }
+
+// At is the size for a uniform draw u in [0,1]: Sample with the caller's own
+// random source (the link shaper keeps one per link).
+func (s *LengthSampler) At(u float64) int {
 	for i, c := range s.cum {
 		if u <= c {
 			return s.sizes[i]
