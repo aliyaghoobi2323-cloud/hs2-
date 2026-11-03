@@ -46,6 +46,11 @@ const (
 	// severely throttled link each get very little, but they never pause,
 	// unlike a handshake (one sample) or a keepalive (one every half minute).
 	flowSteadyRate = 256 // bytes/s
+	// heavyRate: a user stream whose rate EWMA is at least this while it is
+	// still moving data is "heavy" — a download, a video stream — for link
+	// placement (HS2_PICK_CLASS). Interactive traffic (a game, a call's audio,
+	// browsing between page loads) stays well below it.
+	heavyRate = 128 << 10 // bytes/s (1 Mbit/s)
 	// blockedMin: a Write shorter than this is CPU work (copying/encrypting a
 	// 16 KiB frame takes microseconds), not a wait for the network; only longer
 	// waits count as the link being path-limited. Without this filter a writer

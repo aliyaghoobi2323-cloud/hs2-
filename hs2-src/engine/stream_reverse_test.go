@@ -398,6 +398,10 @@ func TestReverseShrinkUnderIdleConnsKeepsDownloads(t *testing.T) {
 	if testing.Short() {
 		t.Skip("real-time pool resizing (~25s)")
 	}
+	// The shrink itself is under test: with the low-latency lane (HS2_PICK_LANE)
+	// the two downloads would hold two links free of them on purpose
+	// (TestAutopilotLane covers that and the shrink after them).
+	defer withLane(0)()
 	const (
 		drainIdle = 5 * time.Second
 		rate      = 256 << 10 // per download, bytes/s

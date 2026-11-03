@@ -89,6 +89,8 @@ OUT=$(ip netns exec $IR "$W/probe" -addr 127.0.0.1:8443 -bulk "$BULK" -up "$UP" 
 PING=$(awk -F'= ' '/rtt/{split($2,a,"/"); print a[2]"/"a[3]}' "$PINGF")
 PLOSS=$(grep -o '[0-9.]*% packet loss' "$PINGF" | cut -d% -f1)
 REAPS=$(grep -cE 'reap:|rebuilt|link down' "$W/ir.log")
+SF=/run/hs2/$(echo "$W/ir.json" | sed "s|^/||; s|/|-|g").status.json
+LINKS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(\"links\",0))" "$SF" 2>/dev/null || echo 0)
 [ "${KEEP:-0}" = 1 ] || cleanup
-printf '{"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s","link_churn":%s,"probe":%s}\n' \
-  "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "$REAPS" "${OUT:-null}"
+printf '{"links_end":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s","link_churn":%s,"probe":%s}\n' \
+  "${LINKS:-0}" "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "$REAPS" "${OUT:-null}"

@@ -115,6 +115,7 @@ func main() {
 	every := flag.Duration("every", 100*time.Millisecond, "echo interval")
 	warm := flag.Duration("warm", 3*time.Second, "warm-up excluded from stats")
 	udp := flag.Bool("udp", false, "also run a UDP echo probe")
+	echoDelay := flag.Duration("echodelay", 0, "open the echo connection this long after the downloads (a game started while they run)")
 	seg := flag.Int64("seg", 0, "bytes per download connection before it reconnects (0 = one connection for the whole run)")
 	flag.Parse()
 	if *srv {
@@ -219,6 +220,11 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		select {
+		case <-stop:
+			return
+		case <-time.After(*echoDelay):
+		}
 		c, err := net.DialTimeout("tcp", *addr, 10*time.Second)
 		if err != nil {
 			return
