@@ -230,8 +230,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			relayUDPConn(exitCountedStream{st, c}, up)
 			return
 		}
-		up, err := net.DialTimeout("tcp", target, 5*time.Second)
-		noteExitDial(err)
+		up, err := dialExitTCP(target)
 		if err != nil {
 			st.Close()
 			return

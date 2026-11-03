@@ -368,7 +368,95 @@ func Build(cfg Config, ramMB, cpus int, availCC, availQ func(string) bool) *Plan
 	// local IP gets return packets strict rp_filter would drop.
 	add("net.ipv4.conf.all.rp_filter", "2")
 	add("net.ipv4.conf.default.rp_filter", "2")
+	// The connection-tracking table, when netfilter tracks connections at all
+	// (a firewall loaded nf_conntrack): every user connection takes an entry
+	// or two (the tunnel side, the exit's dial to its panel), and a full table
+	// drops every new connection on the server — "nf_conntrack: table full".
+	// Sized from RAM and only ever raised (RaiseOnly); absent module: skipped.
+	add(conntrackKey, itoa(conntrackMaxFor(ramMB)))
 	return p
+}
+
+// conntrackKey is the size of netfilter's connection-tracking table.
+const conntrackKey = "net.netfilter.nf_conntrack_max"
+
+// conntrackMaxFor sizes the conntrack table: 32 entries per MB of RAM
+// (~300 B each, so ~1% of RAM when full), between 65536 and 1048576.
+func conntrackMaxFor(ramMB int) int {
+	return min(max(ramMB*32, 65536), 1<<20)
+}
+
+// raiseOnlyKeys are capacities — buffer ceilings and queue lengths — where a
+// larger live value is never worse for the tunnel: in auto mode hs2 raises
+// them to its plan and keeps a larger value the kernel or the operator set
+// (it used to lower them, e.g. somaxconn 4096 → 1024 on a small server, for
+// every program on it). Manual mode writes what it was given.
+var raiseOnlyKeys = map[string]bool{
+	"net.core.rmem_max":            true,
+	"net.core.wmem_max":            true,
+	"net.ipv4.tcp_rmem":            true,
+	"net.ipv4.tcp_wmem":            true,
+	"net.core.netdev_max_backlog":  true,
+	"net.core.somaxconn":           true,
+	"net.ipv4.tcp_max_syn_backlog": true,
+}
+
+// RaiseOnly reports whether the plan only raises key: a live value at least
+// as large in every field is kept (see Merge). The conntrack table is never
+// lowered in any mode, since no config setting names it.
+func (p *Plan) RaiseOnly(key string) bool {
+	return key == conntrackKey || (p.Mode == ModeAuto && raiseOnlyKeys[key])
+}
+
+// Merge returns want raised to have, field by field ("4096 131072 33554432"
+// against "4096 87380 6291456" gives "4096 131072 33554432"). Values that are
+// not the same count of integers return want unchanged.
+func Merge(have, want string) string {
+	hf, wf := strings.Fields(have), strings.Fields(want)
+	if len(hf) != len(wf) {
+		return want
+	}
+	out := make([]string, len(wf))
+	for i := range wf {
+		h, err1 := strconv.Atoi(hf[i])
+		w, err2 := strconv.Atoi(wf[i])
+		if err1 != nil || err2 != nil {
+			return want
+		}
+		out[i] = itoa(max(h, w))
+	}
+	return strings.Join(out, " ")
+}
+
+const (
+	actWrite = iota // write the returned value
+	actKeep         // the live value already meets the plan: leave it
+	actSkip         // nothing to set here (no conntrack module)
+)
+
+// resolve decides what Apply does with one entry, given the live value
+// (read is injected for tests): a raise-only key keeps a live value that
+// covers the plan, or is raised field by field to it.
+func (p *Plan) resolve(kv KV, read func(string) (string, bool)) (string, int) {
+	if !p.RaiseOnly(kv.Key) {
+		return kv.Val, actWrite
+	}
+	have, ok := read(kv.Key)
+	switch {
+	case !ok && kv.Key == conntrackKey:
+		return kv.Val, actSkip
+	case !ok:
+		return kv.Val, actWrite
+	case Covers(have, kv.Val):
+		return strings.Join(strings.Fields(have), " "), actKeep
+	}
+	return Merge(have, kv.Val), actWrite
+}
+
+// Covers reports whether a live value already meets want for a raise-only
+// key: every field at least as large.
+func Covers(have, want string) bool {
+	return Merge(have, want) == strings.Join(strings.Fields(have), " ")
 }
 
 // pick returns want if avail(want), else the first candidate that is available,
@@ -431,7 +519,16 @@ func (p *Plan) Apply(logf func(string, ...any)) {
 			}
 			continue
 		}
-		if writeSysctl(kv.Key, kv.Val) {
+		val, act := p.resolve(kv, readSysctl)
+		p.Sysctls[i].Val = val
+		switch act {
+		case actSkip:
+			continue
+		case actKeep:
+			applied++
+			continue
+		}
+		if writeSysctl(kv.Key, val) {
 			applied++
 		} else {
 			failed++

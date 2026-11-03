@@ -278,3 +278,73 @@ func TestCgroupMemLimit(t *testing.T) {
 		t.Fatalf("unreadable: %d", got)
 	}
 }
+
+// Auto mode raises capacities to its plan but never lowers a larger value the
+// kernel or the operator set; manual mode writes what it was given; the
+// conntrack table is only ever raised, and skipped where netfilter does not
+// track connections.
+func TestRaiseOnly(t *testing.T) {
+	live := map[string]string{
+		"net.core.somaxconn":             "4096",                // kernel default above the low profile's 1024
+		"net.core.rmem_max":              "212992",              // kernel default below the plan
+		"net.ipv4.tcp_rmem":              "4096 87380 67108864", // operator's larger max, smaller default
+		"net.netfilter.nf_conntrack_max": "262144",              // above what 1 GB of RAM plans
+		"net.ipv4.tcp_tw_reuse":          "2",                   // not a capacity: always written
+	}
+	read := func(k string) (string, bool) { v, ok := live[k]; return v, ok }
+	find := func(p *Plan, k string) KV {
+		for _, kv := range p.Sysctls {
+			if kv.Key == k {
+				return kv
+			}
+		}
+		t.Fatalf("plan has no %s", k)
+		return KV{}
+	}
+	p := Build(Config{}, 1024, 1, nil, nil) // low profile
+	for _, c := range []struct {
+		key, val string
+		act      int
+	}{
+		{"net.core.somaxconn", "4096", actKeep},
+		{"net.core.rmem_max", "8388608", actWrite},
+		{"net.ipv4.tcp_rmem", "4096 131072 67108864", actWrite},
+		{"net.netfilter.nf_conntrack_max", "262144", actKeep},
+		{"net.ipv4.tcp_tw_reuse", "1", actWrite},
+	} {
+		val, act := p.resolve(find(p, c.key), read)
+		if val != c.val || act != c.act {
+			t.Errorf("auto %s: got %q act %d, want %q act %d", c.key, val, act, c.val, c.act)
+		}
+	}
+	delete(live, "net.netfilter.nf_conntrack_max")
+	if _, act := p.resolve(find(p, conntrackKey), read); act != actSkip {
+		t.Errorf("no conntrack module: act %d, want skip", act)
+	}
+
+	m := Build(Config{Mode: ModeManual, Somaxconn: 512}, 1024, 1, nil, nil)
+	if val, act := m.resolve(find(m, "net.core.somaxconn"), read); val != "512" || act != actWrite {
+		t.Errorf("manual somaxconn: got %q act %d, want 512 written as given", val, act)
+	}
+	if !m.RaiseOnly(conntrackKey) || m.RaiseOnly("net.core.rmem_max") {
+		t.Error("manual: conntrack stays raise-only, the configured capacities do not")
+	}
+}
+
+func TestConntrackSizing(t *testing.T) {
+	for ram, want := range map[int]int{512: 65536, 2048: 65536, 4096: 131072, 20480: 655360, 65536: 1 << 20} {
+		if got := conntrackMaxFor(ram); got != want {
+			t.Errorf("conntrackMaxFor(%d MB) = %d, want %d", ram, got, want)
+		}
+	}
+	for have, want := range map[[2]string]bool{
+		{"4096", "1024"}: true, {"1024", "4096"}: false,
+		{"4096 131072 33554432", "4096 131072 8388608"}: true,
+		{"4096 87380 33554432", "4096 131072 8388608"}:  false,
+		{"cubic", "bbr"}: false, {"bbr", "bbr"}: true,
+	} {
+		if got := Covers(have[0], have[1]); got != want {
+			t.Errorf("Covers(%q, %q) = %v, want %v", have[0], have[1], got, want)
+		}
+	}
+}

@@ -285,7 +285,11 @@ func checkTuning(d *doctorReport, fc fileConfig) {
 			continue // not readable here (e.g. a restricted container) — not a mismatch
 		}
 		checked++
-		if have, want := normalizeWS(string(b)), normalizeWS(kv.Val); have != want {
+		have, want := normalizeWS(string(b)), normalizeWS(kv.Val)
+		if plan.RaiseOnly(kv.Key) && tune.Covers(have, want) {
+			continue // a capacity at or above the plan is kept as it is (tune.RaiseOnly)
+		}
+		if have != want {
 			mism = append(mism, fmt.Sprintf("%s want %q have %q", kv.Key, want, have))
 		}
 	}
