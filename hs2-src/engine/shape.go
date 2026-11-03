@@ -1,11 +1,15 @@
 package engine
 
 import (
+	crand "crypto/rand"
 	"io"
+	mrand "math/rand/v2"
 	"net"
+	"os"
 	"sync"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // shapedConn reshapes the on-wire TLS-record size distribution of a smux link.
@@ -33,6 +37,8 @@ import (
 type shapedConn struct {
 	net.Conn
 	sampler *obfs.LengthSampler
+	rng     *mrand.Rand        // per-link size draws (HS2_SHAPE_FAST), under wmu
+	batch   tlscarrier.Batcher // the link socket's batching (HS2_SHAPE_FAST), or nil
 
 	wmu  sync.Mutex
 	wbuf []byte // reused frame-build scratch (write side)
@@ -50,17 +56,39 @@ const (
 	shapeMaxFrame = 32 << 10
 )
 
+// HS2_SHAPE_FAST=1 (tlscarrier.Batch) gives each link its own size generator
+// and buffers its reads: measured on a CPU-bound sender and receiver, more
+// Mbit/s per core with the same ping. Gathering a write's records into one
+// system call (Cork/Flush) is HS2_SHAPE_CORK=1 on top, an experiment only: it
+// cut CPU too, but at 1 Gbit/s it raised the ping of an interactive flow
+// beside bulk ones (p99 74 → 143 ms, p=0.01 over 10 runs each), so it is off.
+var shapeCork = os.Getenv("HS2_SHAPE_CORK") == "1"
+
 func newShapedConn(c net.Conn, s *obfs.LengthSampler) *shapedConn {
 	if s == nil {
 		s = obfs.NewHTTPSLengthSampler()
 	}
-	return &shapedConn{Conn: c, sampler: s}
+	sc := &shapedConn{Conn: c, sampler: s}
+	if tlscarrier.Batch {
+		// The tunnel's session starts here, on an authenticated link: from
+		// now on its reads come in batches.
+		if b := tlscarrier.BatcherOf(c); b != nil {
+			b.BufferReads()
+			if shapeCork {
+				sc.batch = b
+			}
+		}
+		var seed [32]byte
+		crand.Read(seed[:])
+		sc.rng = mrand.New(mrand.NewChaCha8(seed))
+	}
+	return sc
 }
 
 // Write splits p into sampler-sized frames and writes each as ONE conn write, so
 // each becomes one TLS record of the sampled size. The final short chunk is
 // padded up to its target. It returns len(p) on success (all bytes accepted).
-func (c *shapedConn) Write(p []byte) (int, error) {
+func (c *shapedConn) Write(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil
 	}
@@ -68,8 +96,20 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 	defer c.wmu.Unlock()
 	written, records, padded := 0, 0, 0
 	defer func() { noteShapeWrite(records, written, padded) }()
+	if c.batch != nil {
+		// The records of this write leave together, in one system call (see
+		// tlscarrier.batchConn); they are the same records either way. Until
+		// the flush nothing has reached the socket, so a failed flush fails
+		// the whole write.
+		c.batch.Cork()
+		defer func() {
+			if ferr := c.batch.Flush(); ferr != nil && err == nil {
+				n, err = 0, ferr
+			}
+		}()
+	}
 	for len(p) > 0 {
-		target := c.sampler.Sample()
+		target := c.sample()
 		maxData := target - shapeHdrLen
 		if maxData < 1 {
 			maxData = 1
@@ -103,6 +143,19 @@ func (c *shapedConn) Write(p []byte) (int, error) {
 		p = p[len(d):]
 	}
 	return written, nil
+}
+
+// sample draws the next record size: from the link's own fast generator
+// when it has one (HS2_SHAPE_FAST), else from the shared sampler's
+// crypto/rand — one getrandom(2) system call per record on kernels before
+// 6.11, measured at ~14% of a busy sender's CPU. The sizes follow the same
+// distribution either way; ChaCha8 is a cryptographic generator, seeded
+// once per link from crypto/rand.
+func (c *shapedConn) sample() int {
+	if c.rng != nil {
+		return c.sampler.At(c.rng.Float64())
+	}
+	return c.sampler.Sample()
 }
 
 // Read reassembles the original byte stream: it returns buffered decoded data

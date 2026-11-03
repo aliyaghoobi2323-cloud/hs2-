@@ -189,7 +189,7 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 	}
 	tuneTCP(raw)
 	cfg := &utls.Config{ServerName: sni, InsecureSkipVerify: true}
-	u := utls.UClient(raw, cfg, utls.HelloChrome_133)
+	u := utls.UClient(wrapBatch(raw), cfg, utls.HelloChrome_133)
 	raw.SetDeadline(time.Now().Add(authTimeout))
 	if err := u.Handshake(); err != nil {
 		raw.Close()

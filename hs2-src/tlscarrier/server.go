@@ -82,7 +82,7 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	} else {
 		tcfg.Certificates = []tls.Certificate{s.Cert}
 	}
-	tconn := tls.Server(raw, tcfg)
+	tconn := tls.Server(wrapBatch(raw), tcfg)
 	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := tconn.Handshake(); err != nil {
 		// Probe handling is Go's OWN, not an imitation of it: TLS reads the
