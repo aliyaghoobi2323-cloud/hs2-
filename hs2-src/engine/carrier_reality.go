@@ -34,12 +34,13 @@ func (c *realityCarrier) SendFrame(ftype byte, payload []byte) error {
 	hdr[1] = byte(len(payload) >> 16)
 	hdr[2] = byte(len(payload) >> 8)
 	hdr[3] = byte(len(payload))
-	if err := setWrite(c.conn); err == nil {
-		if _, err := c.conn.Write(append(hdr, payload...)); err != nil {
-			return err
-		}
+	// A conn whose deadline cannot be set is closed: report it, so the caller
+	// does not count a frame that never left as sent.
+	if err := setWrite(c.conn); err != nil {
+		return err
 	}
-	return nil
+	_, err := c.conn.Write(append(hdr, payload...))
+	return err
 }
 
 func (c *realityCarrier) ReadFrame() (byte, []byte, error) {
