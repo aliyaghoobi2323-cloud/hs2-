@@ -64,6 +64,13 @@ const (
 // beside bulk ones (p99 74 → 143 ms, p=0.01 over 10 runs each), so it is off.
 var shapeCork = os.Getenv("HS2_SHAPE_CORK") == "1"
 
+// shapeSmall (HS2_SHAPE_SMALL=1) pads a small write to a small record
+// (obfs.SmallTarget) instead of a bulk-sized one: the upload side of a
+// download — window updates, keepalives — and interactive traffic stop
+// costing ~1 KiB a message. Only the sender changes; the decoder takes any
+// size, so one side may run it alone.
+var shapeSmall = os.Getenv("HS2_SHAPE_SMALL") == "1"
+
 func newShapedConn(c net.Conn, s *obfs.LengthSampler) *shapedConn {
 	if s == nil {
 		s = obfs.NewHTTPSLengthSampler()
@@ -108,8 +115,17 @@ func (c *shapedConn) Write(p []byte) (n int, err error) {
 			}
 		}()
 	}
+	// A write that fits one small record (a window update, a keepalive, a
+	// stream header, a game datagram) is padded to a small size with
+	// HS2_SHAPE_SMALL, not to a bulk-sized one.
+	small := shapeSmall && len(p)+shapeHdrLen <= obfs.SmallMax
 	for len(p) > 0 {
-		target := c.sample()
+		var target int
+		if small {
+			target = obfs.SmallTarget(len(p)+shapeHdrLen, c.uniform(), c.uniform())
+		} else {
+			target = c.sample()
+		}
 		maxData := target - shapeHdrLen
 		if maxData < 1 {
 			maxData = 1
@@ -185,4 +201,12 @@ func (c *shapedConn) Read(p []byte) (int, error) {
 	n := copy(p, c.rem)
 	c.rem = c.rem[n:]
 	return n, nil
+}
+
+// uniform is one draw in [0,1) from the link's generator, or crypto/rand.
+func (c *shapedConn) uniform() float64 {
+	if c.rng != nil {
+		return c.rng.Float64()
+	}
+	return obfs.RandFloat()
 }

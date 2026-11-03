@@ -109,3 +109,48 @@ func TestShapeFastBatchesRecords(t *testing.T) {
 		t.Fatalf("a failed flush returned %d, %v", n, err)
 	}
 }
+
+// With HS2_SHAPE_SMALL a tiny write is one small record of a varying size
+// (no size of its own on the wire), larger writes keep the bulk shape, and
+// the stream decodes as before.
+func TestShapeSmallRecords(t *testing.T) {
+	old := shapeSmall
+	shapeSmall = true
+	defer func() { shapeSmall = old }()
+	rb := &recBatcher{}
+	sc := newShapedConn(rb, nil)
+	var want []byte
+	for i := 0; i < 400; i++ {
+		p := []byte{byte(i), 1, 2, 3, 4, 5, 6, 7} // an smux NOP / window update: 8 bytes
+		want = append(want, p...)
+		if n, err := sc.Write(p); n != 8 || err != nil {
+			t.Fatal(n, err)
+		}
+	}
+	sizes := map[int]bool{}
+	for _, r := range rb.records {
+		if len(r) < 12 || len(r) > obfs.SmallMax {
+			t.Fatalf("small write became a %d-byte record", len(r))
+		}
+		sizes[len(r)] = true
+	}
+	if len(rb.records) != 400 || len(sizes) < 100 {
+		t.Fatalf("%d records in %d sizes: want one each, sizes spread", len(rb.records), len(sizes))
+	}
+	big := bytes.Repeat([]byte{9}, 4000)
+	want = append(want, big...)
+	before := len(rb.records)
+	sc.Write(big)
+	bulkSizes := map[int]bool{1400: true, 1200: true, 900: true, 600: true, 400: true, 250: true, 150: true, 80: true, 40: true}
+	for _, r := range rb.records[before:] {
+		if !bulkSizes[len(r)] {
+			t.Fatalf("a 4000-byte write produced a %d-byte record, not one of the bulk sizes", len(r))
+		}
+	}
+	a, b := net.Pipe()
+	go func() { a.Write(bytes.Join(rb.records, nil)); a.Close() }()
+	out, _ := io.ReadAll(newShapedConn(b, nil))
+	if !bytes.Equal(out, want) {
+		t.Fatal("the stream does not decode to what was written")
+	}
+}

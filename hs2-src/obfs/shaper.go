@@ -151,3 +151,46 @@ func randInt(n int) int {
 	rand.Read(b[:])
 	return int(binary.BigEndian.Uint32(b[:]) % uint32(n))
 }
+
+// Small writes — a window update, a keepalive, a stream header, a game's
+// datagram — are padded to a size drawn from smallRanges instead of the bulk
+// distribution (whose draws are ~1 KiB on average: a few-byte control
+// message used to cost a full-size record). The ranges are what a browser's
+// HTTP/2 connection sends while it receives: control frames of 9–17 bytes
+// (SETTINGS ack, WINDOW_UPDATE, PING) and small HEADERS/requests, so a tiny
+// write keeps no size of its own on the wire either. Sizes are of the
+// shaped frame inside TLS; TLS 1.3 adds 22 bytes to each.
+var smallRanges = []struct {
+	lo, hi int
+	cum    float64
+}{
+	{13, 40, 0.5},
+	{40, 120, 0.8},
+	{120, SmallMax, 1},
+}
+
+// SmallMax is the largest write SmallTarget pads; larger ones keep the
+// bulk distribution.
+const SmallMax = 250
+
+// SmallTarget returns the padded size for a small write that needs `need`
+// bytes (its data and frame header), from two uniform draws u, v in [0,1):
+// a range from smallRanges, then a size in it — or, when the range lies
+// below need, a size between need and SmallMax.
+func SmallTarget(need int, u, v float64) int {
+	lo, hi := smallRanges[len(smallRanges)-1].lo, SmallMax
+	for _, r := range smallRanges {
+		if u <= r.cum {
+			lo, hi = r.lo, r.hi
+			break
+		}
+	}
+	if hi < need {
+		lo, hi = need, max(need, SmallMax)
+	}
+	lo = max(lo, need)
+	return min(hi, lo+int(v*float64(hi-lo+1)))
+}
+
+// RandFloat is a uniform draw in [0,1] from crypto/rand.
+func RandFloat() float64 { return randFloat() }
