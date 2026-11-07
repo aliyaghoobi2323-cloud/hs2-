@@ -20,6 +20,7 @@ import (
 
 func withMConn(t *testing.T, on bool) {
 	t.Helper()
+	setLite(t, false)
 	old := mconnOn.Load()
 	mconnOn.Store(on)
 	t.Cleanup(func() { mconnOn.Store(old) })
@@ -269,6 +270,7 @@ func TestMConnPickPlane(t *testing.T) {
 
 // Every sub the opener places counts as a user on its link until it closes.
 func TestMConnOpenerCountsSubs(t *testing.T) {
+	setLite(t, false) // v3 placement (lite puts the first sub with pickWait)
 	m, ls := pickLinks([]int{0, 0, 1}, []bool{false, false, false})
 	e := &mconnEdge{ctx: context.Background(), lm: m, port: 443, id: 7}
 	a, ka, err := e.open(planeLight, nil)

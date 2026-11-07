@@ -48,10 +48,15 @@ import (
 //
 // UDP and the TUN side channel are not touched.
 
-// mconnOn: HS2_MCONN=1 (atomic so tests can switch it).
-var mconnOn atomic.Bool
+// mconnOn: HS2_MCONN=1 or HS2_MCONN=lite (atomic so tests can switch it).
+// mconnLite: HS2_MCONN=lite, the adaptive-redundancy mode (mconn.go, "lite").
+var mconnOn, mconnLite atomic.Bool
 
-func init() { mconnOn.Store(os.Getenv("HS2_MCONN") == "1") }
+func init() {
+	v := os.Getenv("HS2_MCONN")
+	mconnOn.Store(v == "1" || v == "lite")
+	mconnLite.Store(v == "lite")
+}
 
 // mconnCap is the capMConn bit this server announces (0 with the key off, so
 // its kindInfo bytes stay as before).
@@ -291,7 +296,17 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 	}
 	deadline := time.Now().Add(wait)
 	for tries := 0; !e.ended && tries < 3; {
-		l, rel, ok := e.lm.pickPlane(p, avoid)
+		var l Link
+		var rel func()
+		var ok bool
+		if !e.first && mconnLite.Load() {
+			// lite: the first sub sits exactly where the one stream of the
+			// old path would (pickWait), so the connection's placement is
+			// unchanged; only a link whose exit reads kindMConn will do.
+			l, rel, ok = e.pickFirstLite()
+		} else {
+			l, rel, ok = e.lm.pickPlane(p, avoid)
+		}
 		if !ok {
 			if time.Now().After(deadline) || !sleepCtx(e.ctx, mconnPickGap) {
 				break
@@ -322,6 +337,27 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 		rel()
 	}
 	return nil, nil, errMConnNoLink
+}
+
+// pickFirstLite places a lite connection's first sub with the old path's own
+// choice (pickWait); false when that link's exit does not read kindMConn
+// (the caller then falls back to the one stream, as with the key off).
+func (e *mconnEdge) pickFirstLite() (Link, func(), bool) {
+	l, rel, ok := pickWait(e.ctx, e.lm, true)
+	if !ok {
+		return nil, nil, false
+	}
+	pi := e.lm.exitInfo.Load()
+	if mtr := linkMeterOf(l); mtr != nil {
+		if lpi := mtr.peerInfo.Load(); lpi != nil || mtr.infoRefused.Load() {
+			pi = lpi
+		}
+	}
+	if !pi.mconn() {
+		rel()
+		return nil, nil, false
+	}
+	return l, rel, true
 }
 
 // end closes every sub the connection opened (releasing their places) and

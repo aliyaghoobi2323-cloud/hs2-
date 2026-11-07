@@ -185,7 +185,59 @@ const (
 
 	// mDeadKeys: recently dead light links avoided by a replacement open.
 	mDeadKeys = 4
+
+	// lite (HS2_MCONN=lite, adaptive redundancy): a connection starts on one
+	// sub (where the old path would put its one stream) and gets a second,
+	// duplicating, sub only once it is mLiteAfter old and both directions
+	// moved at most mDupMaxRate in the last window (sampled every mLitePoll
+	// by the Iran manager); above mDupMaxRate it sends on the first sub only
+	// and never moves to bulk. A second sub idle (no chunk queued on it) for
+	// mLiteIdle is closed by Iran. New upgrades stop while the duplicated
+	// bytes of the last mLiteCapWindow seconds exceed mLiteCapPct of all
+	// bytes the process's mconn connections sent.
+	mLiteAfter     = time.Second
+	mLitePoll      = time.Second
+	mLiteIdle      = 10 * time.Second
+	mLiteCapPct    = 5
+	mLiteCapWindow = 5
 )
+
+// liteBudget is the process-wide duplication budget of lite connections: per
+// second buckets (by unix second, 8 slots) of all bytes sent and of the
+// duplicate copies among them. Lock-free; a bucket's reset on rollover may
+// drop a few bytes of a concurrent adder, which the 5% rule tolerates.
+type liteBudget struct {
+	slots [8]struct {
+		sec      atomic.Int64
+		all, dup atomic.Uint64
+	}
+}
+
+var liteBud liteBudget
+
+func (b *liteBudget) add(now int64, all, dup int) {
+	s := &b.slots[now&7]
+	if old := s.sec.Load(); old != now && s.sec.CompareAndSwap(old, now) {
+		s.all.Store(0)
+		s.dup.Store(0)
+	}
+	s.all.Add(uint64(all))
+	s.dup.Add(uint64(dup))
+}
+
+// capped: duplicates exceed mLiteCapPct of all bytes over the last
+// mLiteCapWindow seconds (an idle process is never capped).
+func (b *liteBudget) capped(now int64) bool {
+	var all, dup uint64
+	for i := range b.slots {
+		s := &b.slots[i]
+		if sec := s.sec.Load(); sec > now-mLiteCapWindow && sec <= now {
+			all += s.all.Load()
+			dup += s.dup.Load()
+		}
+	}
+	return all > 0 && dup*100 > all*mLiteCapPct
+}
 
 var (
 	errMConnReset    = errors.New("mconn: reset by peer")
@@ -269,6 +321,7 @@ type msub struct {
 	retired    bool // closed on purpose (a light sub after the switch)
 	closeAfter bool // close once the queue (an RST) is written
 	lastHole   time.Time
+	lastPush   time.Time // lite: when a chunk was last queued on it (idle rule)
 
 	kick      chan struct{}
 	done      chan struct{}
@@ -386,6 +439,15 @@ type mConn struct {
 
 	primary atomic.Pointer[msub] // the first light sub (for the "saved" counter)
 
+	// lite (HS2_MCONN=lite): the mode, whether the connection counts as dual
+	// in the gauge now, and the Iran manager's last rate sample (when, and
+	// the send and receive offsets then) for the upgrade rule.
+	lite       bool
+	liteDual   bool
+	liteSample time.Time
+	liteSent   uint64
+	liteRecvd  uint64
+
 	tr    *mtrace // HS2_MCONN_TRACE (nil when off)
 	nsubs int
 
@@ -405,7 +467,48 @@ func newMConn(id uint64, iran bool, open mOpener) *mConn {
 	m.tr = newMTrace(id, iran)
 	obs.mconnOpen.Add(1)
 	obs.mconnDual.Add(1) // m.state
+	if mconnLite.Load() {
+		m.lite = true
+		m.liteSample = m.r.lastProgress
+		obs.mconnLiteOpen.Add(1)
+	}
 	return m
+}
+
+// refreshLiteDualLocked keeps the lite "dual now" gauge: two live light subs.
+func (m *mConn) refreshLiteDualLocked() {
+	if !m.lite {
+		return
+	}
+	n := 0
+	for _, s := range m.subs {
+		if !s.retired {
+			n++
+		}
+	}
+	dual := n >= 2 && !m.ended
+	if dual != m.liteDual {
+		m.liteDual = dual
+		if dual {
+			obs.mconnLiteDual.Add(1)
+		} else {
+			obs.mconnLiteDual.Add(-1)
+		}
+	}
+}
+
+// liteWantDualLocked (Iran, lite, one sub): samples both directions' rates
+// every mLitePoll; true once the connection is mLiteAfter old and the last
+// window moved at most mDupMaxRate each way. recvd is the receive offset now.
+func (m *mConn) liteWantDualLocked(now time.Time, recvd uint64) bool {
+	w := now.Sub(m.liteSample)
+	if w < mLiteAfter {
+		return false
+	}
+	sent, got := m.sendOff-m.liteSent, recvd-m.liteRecvd
+	m.liteSample, m.liteSent, m.liteRecvd = now, m.sendOff, recvd
+	lim := uint64(mDupMaxRate) * uint64(w) / uint64(time.Second)
+	return sent <= lim && got <= lim
 }
 
 // setStateLocked moves the connection between the obs gauges.
@@ -437,8 +540,9 @@ func (m *mConn) refreshStateLocked() {
 	}
 }
 
-// newMConnIran: Iran side; opens its first two light subs with open (the
-// first before returning, the second right after, in the background).
+// newMConnIran: Iran side; opens its first light sub with open before
+// returning and the second right after, in the background (lite: only once
+// the connection proves light, see tick).
 func newMConnIran(id uint64, open mOpener) (*mConn, error) {
 	sub, key, err := open(planeLight, nil)
 	if err != nil {
@@ -484,14 +588,17 @@ func (m *mConn) GetDieCh() <-chan struct{} { return m.die }
 func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	s := &msub{m: m, rw: rw, key: key, kick: make(chan struct{}, 1), done: make(chan struct{})}
 	s.bulk.Store(bulk)
-	s.lastRecv.Store(time.Now().UnixNano())
+	now := time.Now()
+	s.lastRecv.Store(now.UnixNano())
+	s.lastPush = now
 	if m.sendOff > 0 && !bulk {
-		s.lastHole = time.Now() // it lacks what was sent before it joined
+		s.lastHole = now // it lacks what was sent before it joined
 	}
 	s.idx = m.nsubs
 	m.nsubs++
 	m.subs = append(m.subs, s)
 	m.setPrimaryLocked()
+	m.refreshLiteDualLocked()
 	m.tr.ev("sub+ %d bulk=%v key=%v sendOff=%d subs=%d", s.idx, bulk, key, m.sendOff, len(m.subs))
 	return s
 }
@@ -501,6 +608,7 @@ func (m *mConn) removeSubLocked(s *msub) {
 		m.subs = slices.Delete(m.subs, i, i+1)
 	}
 	m.setPrimaryLocked()
+	m.refreshLiteDualLocked()
 }
 
 func (m *mConn) setPrimaryLocked() {
@@ -615,8 +723,11 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			// carry half a download unseen). A full primary queue makes Write
 			// wait (backpressure); the other sub misses the copy (lastHole).
 			// A primary whose link is stuck is swapped for the other light
-			// sub first (maybeSwitchPrimaryLocked).
-			m.maybeSwitchPrimaryLocked()
+			// sub first (maybeSwitchPrimaryLocked; not in lite, where the
+			// connection stays on its first link).
+			if !m.lite {
+				m.maybeSwitchPrimaryLocked()
+			}
 			p := m.primary.Load()
 			if p == nil || !p.fits(c.n) {
 				m.sendCond.Wait()
@@ -633,6 +744,13 @@ func (m *mConn) sendLocked(c *mchunk) error {
 					}
 					s.lastHole = now
 				}
+			}
+			if m.lite {
+				if now.IsZero() {
+					now = time.Now()
+				}
+				p.lastPush = now
+				liteBud.add(now.Unix(), c.n, 0)
 			}
 			m.noteQueueLocked()
 			return nil
@@ -669,6 +787,17 @@ func (m *mConn) sendLocked(c *mchunk) error {
 		}
 		if fit > 1 {
 			obs.mconnDupBytes.Add(uint64(c.n * (fit - 1)))
+		}
+		if m.lite {
+			if now.IsZero() {
+				now = time.Now()
+			}
+			for _, s := range m.subs {
+				if !s.retired && s.lastHole != now {
+					s.lastPush = now // it took this chunk (a miss stamped lastHole with now)
+				}
+			}
+			liteBud.add(now.Unix(), c.n, c.n*(fit-1))
 		}
 		m.noteQueueLocked()
 		return nil
@@ -754,7 +883,7 @@ func (s *msub) queueLocked() int {
 // cheap moment: after a chunk was queued or one was written. The clock is
 // read only while the queue is high.
 func (m *mConn) noteQueueLocked() {
-	if m.heavy || m.mode != planeLight {
+	if m.heavy || m.mode != planeLight || m.lite {
 		return
 	}
 	if m.sendQueueLocked() <= mHeavyQueue {
@@ -830,6 +959,9 @@ func (m *mConn) noteWriteLocked(n int) {
 		return
 	}
 	m.refreshStateLocked() // dual or single
+	if m.lite {
+		return // lite: never heavy, no bulk, no fast start
+	}
 	if now.Sub(m.hvStart) > mHeavyWindow {
 		m.hvStart, m.hvBytes = now, 0
 	}
@@ -1337,8 +1469,12 @@ func (m *mConn) onWantBulk() {
 		return
 	}
 	m.mu.Lock()
-	want := m.mode == planeLight && !m.wantBulk
+	want := m.mode == planeLight && !m.wantBulk && !m.lite
 	m.tr.ev("recv WANTBULK (new=%v)", want)
+	if m.lite { // lite never moves to bulk
+		m.mu.Unlock()
+		return
+	}
 	m.wantBulk = true
 	m.mu.Unlock()
 	if want {
@@ -1409,15 +1545,26 @@ func (m *mConn) subDied(s *msub, cause error) {
 	m.kickMgr()
 }
 
-// holeRecentLocked: a live sub missed a copy within mHoleSafe.
+// holeRecentLocked: every live sub missed a copy (or joined) within mHoleSafe,
+// so none of them is trusted to hold what the dead sub may have lost in
+// flight. One live sub without a recent hole took every copy the dead one
+// did, and the connection goes on. (Checking "any" live sub reset a healthy
+// connection whenever a replacement sub, which joins with a hole by
+// definition, was attached by the peer before it saw the dead sub's EOF:
+// TestMConnSubDeath failed on that race.)
 func (m *mConn) holeRecentLocked() bool {
 	now := time.Now()
+	live := 0
 	for _, s := range m.subs {
-		if !s.lastHole.IsZero() && now.Sub(s.lastHole) < mHoleSafe {
-			return true
+		if s.retired {
+			continue
+		}
+		live++
+		if s.lastHole.IsZero() || now.Sub(s.lastHole) >= mHoleSafe {
+			return false
 		}
 	}
-	return false
+	return live > 0
 }
 
 // end finishes the connection once: subs are closed (after an RST when rst),
@@ -1432,6 +1579,10 @@ func (m *mConn) end(err error, rst bool) {
 	m.ended, m.err = true, err
 	m.tr.ev("end err=%v rst=%v sent=%d", err, rst, m.sendOff)
 	m.setStateLocked(mStateEnded)
+	if m.lite {
+		m.refreshLiteDualLocked()
+		obs.mconnLiteOpen.Add(-1)
+	}
 	var closeNow []*msub
 	for _, s := range m.subs {
 		if !rst || s.dead {
@@ -1540,7 +1691,60 @@ func (m *mConn) tick(now time.Time) time.Duration {
 		return wake
 	}
 	var retire []*msub
-	if m.iran {
+	if m.iran && m.lite {
+		// lite: one sub until the connection proves light (then a second,
+		// duplicating one on another link); a second sub idle for mLiteIdle
+		// is closed again. Nothing else: no bulk, no replacement by itself.
+		live := make([]*msub, 0, 2)
+		for _, s := range m.subs {
+			if !s.retired {
+				live = append(live, s)
+			}
+		}
+		switch {
+		case m.peerFin || m.wclosed:
+		case len(live) == 1 && !m.lightOpening:
+			r := &m.r
+			r.mu.Lock()
+			recvd := r.next
+			r.mu.Unlock()
+			if m.liteWantDualLocked(now, recvd) {
+				if liteBud.capped(now.Unix()) {
+					obs.mconnLiteCapped.Add(1)
+					m.tr.ev("lite: upgrade refused (duplication cap)")
+				} else if now.Before(m.lightRetryAt) {
+					at(m.lightRetryAt.Sub(now))
+				} else {
+					m.lightOpening = true
+					obs.mconnLiteUpgrade.Add(1)
+					m.tr.ev("lite: upgrade to dual")
+					avoid := make([]any, 0, 1+len(m.deadKeys))
+					avoid = append(avoid, live[0].key)
+					avoid = append(avoid, m.deadKeys...)
+					go m.openLight(avoid)
+				}
+			}
+			at(mLitePoll)
+		case len(live) >= 2:
+			p := m.primary.Load()
+			for _, s := range live {
+				if s == p || len(s.q) > 0 || s.cur != nil {
+					continue
+				}
+				if idle := now.Sub(s.lastPush); idle >= mLiteIdle {
+					s.retired = true
+					retire = append(retire, s)
+					m.tr.ev("lite: close idle second sub %d (idle %v)", s.idx, idle.Round(time.Second))
+				} else {
+					at(mLiteIdle - idle)
+				}
+			}
+			if len(retire) > 0 {
+				m.setPrimaryLocked()
+				m.refreshLiteDualLocked()
+			}
+		}
+	} else if m.iran {
 		if m.mode == planeLight {
 			if m.wantBulk && !m.bulkOpening {
 				if now.Before(m.bulkRetryAt) {

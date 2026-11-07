@@ -120,6 +120,10 @@ var obs struct {
 	mconnDual, mconnSingle, mconnHeavy         atomic.Int64
 	mconnHeavyQueue, mconnHeavyRate            atomic.Uint64
 	mconnHeavyFast, mconnPrimarySwitch         atomic.Uint64
+	// HS2_MCONN=lite: lite connections open, those on two subs now, the
+	// upgrades to two subs, and the upgrades refused by the duplication cap.
+	mconnLiteOpen, mconnLiteDual      atomic.Int64
+	mconnLiteUpgrade, mconnLiteCapped atomic.Uint64
 }
 
 // noteShapeWrite records one shapedConn.Write: its records, data and padding.
@@ -169,6 +173,8 @@ type ObsSnap struct {
 	MConnDual, MConnSingle, MConnHeavy         int64 // levels
 	MConnHeavyQueue, MConnHeavyRate            uint64
 	MConnHeavyFast, MConnPrimarySwitch         uint64
+	MConnLiteOpen, MConnLiteDual               int64 // levels
+	MConnLiteUpgrade, MConnLiteCapped          uint64
 }
 
 // Observed returns the counters now.
@@ -187,6 +193,8 @@ func Observed() ObsSnap {
 		MConnDual: obs.mconnDual.Load(), MConnSingle: obs.mconnSingle.Load(), MConnHeavy: obs.mconnHeavy.Load(),
 		MConnHeavyQueue: obs.mconnHeavyQueue.Load(), MConnHeavyRate: obs.mconnHeavyRate.Load(),
 		MConnHeavyFast: obs.mconnHeavyFast.Load(), MConnPrimarySwitch: obs.mconnPrimarySwitch.Load(),
+		MConnLiteOpen: obs.mconnLiteOpen.Load(), MConnLiteDual: obs.mconnLiteDual.Load(),
+		MConnLiteUpgrade: obs.mconnLiteUpgrade.Load(), MConnLiteCapped: obs.mconnLiteCapped.Load(),
 	}
 }
 
@@ -206,5 +214,7 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		MConnDual: s.MConnDual, MConnSingle: s.MConnSingle, MConnHeavy: s.MConnHeavy,
 		MConnHeavyQueue: s.MConnHeavyQueue - old.MConnHeavyQueue, MConnHeavyRate: s.MConnHeavyRate - old.MConnHeavyRate,
 		MConnHeavyFast: s.MConnHeavyFast - old.MConnHeavyFast, MConnPrimarySwitch: s.MConnPrimarySwitch - old.MConnPrimarySwitch,
+		MConnLiteOpen: s.MConnLiteOpen, MConnLiteDual: s.MConnLiteDual,
+		MConnLiteUpgrade: s.MConnLiteUpgrade - old.MConnLiteUpgrade, MConnLiteCapped: s.MConnLiteCapped - old.MConnLiteCapped,
 	}
 }

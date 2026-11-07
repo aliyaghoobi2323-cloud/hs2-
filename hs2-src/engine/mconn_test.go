@@ -147,6 +147,7 @@ func lightOnly(m *mConn) {
 // newTPair returns a connected Iran/exit pair with both light subs up.
 func newTPair(t *testing.T, light bool) (*tNet, *mConn, *mConn) {
 	t.Helper()
+	setLite(t, false) // v3 behaviour whatever HS2_MCONN says
 	n := &tNet{exit: newMConnExit(7)}
 	iran, err := newMConnIran(7, n.open)
 	if err != nil {

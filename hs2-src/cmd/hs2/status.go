@@ -219,6 +219,12 @@ type liveStatus struct {
 	ObsMConnHeavyRate     uint64 `json:"obs_mconn_heavy_rate,omitempty"`
 	ObsMConnHeavyFast     uint64 `json:"obs_mconn_heavy_fast,omitempty"`
 	ObsMConnPrimarySwitch uint64 `json:"obs_mconn_primary_switch,omitempty"`
+	// HS2_MCONN=lite: lite connections open and on two subs now; upgrades to
+	// two subs and upgrades refused by the duplication cap, last minute.
+	MConnLiteOpen       int64  `json:"mconn_lite_open,omitempty"`
+	MConnLiteDual       int64  `json:"mconn_lite_dual,omitempty"`
+	ObsMConnLiteUpgrade uint64 `json:"obs_mconn_lite_upgrade,omitempty"`
+	ObsMConnLiteCapped  uint64 `json:"obs_mconn_lite_capped,omitempty"`
 }
 
 // fillMConn copies the multi-link connection counters (HS2_MCONN).
@@ -265,6 +271,8 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.MConnDual, ls.MConnSingle, ls.MConnHeavy = now.MConnDual, now.MConnSingle, now.MConnHeavy
 	ls.ObsMConnHeavyQueue, ls.ObsMConnHeavyRate = d.MConnHeavyQueue, d.MConnHeavyRate
 	ls.ObsMConnHeavyFast, ls.ObsMConnPrimarySwitch = d.MConnHeavyFast, d.MConnPrimarySwitch
+	ls.MConnLiteOpen, ls.MConnLiteDual = now.MConnLiteOpen, now.MConnLiteDual
+	ls.ObsMConnLiteUpgrade, ls.ObsMConnLiteCapped = d.MConnLiteUpgrade, d.MConnLiteCapped
 }
 
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
@@ -292,6 +300,9 @@ func obsLines(ls liveStatus) []string {
 		}
 		if ls.MConnSubsExit > 0 {
 			s += fmt.Sprintf(" · %d sub-streams", ls.MConnSubsExit)
+		}
+		if ls.MConnLiteOpen > 0 || ls.ObsMConnLiteUpgrade > 0 || ls.ObsMConnLiteCapped > 0 {
+			s += fmt.Sprintf(" · lite: %d open, %d on two subs, last minute %d upgrade(s), %d refused by the cap", ls.MConnLiteOpen, ls.MConnLiteDual, ls.ObsMConnLiteUpgrade, ls.ObsMConnLiteCapped)
 		}
 		out = append(out, s)
 	}
