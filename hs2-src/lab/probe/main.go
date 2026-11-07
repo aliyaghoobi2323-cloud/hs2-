@@ -16,6 +16,8 @@
 //	-late 5s      start the echo, call and game this long after the downloads
 //	-crowd 300    light connections, a small request every ~-crowdevery ("crowd")
 //	-web          page loads: 4 parallel 50-500 KB fetches every 2-3 s ("web", web.go)
+//	-journey 20   N virtual users: reels, video call, big download, app ping,
+//	              game, in turn ("journey", journey.go; -journeyscale shrinks it)
 //
 // Output is one JSON line so sweeps can aggregate it.
 package main
@@ -107,6 +109,8 @@ type result struct {
 	Game  *streamResult `json:"game,omitempty"`
 	Crowd *crowdResult  `json:"crowd,omitempty"`
 	Web   *webResult    `json:"web,omitempty"`
+	// the user-journey scenario (journey.go)
+	Journey *journeyResult `json:"journey,omitempty"`
 }
 
 func pct(v []float64, p float64) float64 {
@@ -146,6 +150,26 @@ func main() {
 	webConns := flag.Int("webconns", 4, "web: connections per page")
 	webMin := flag.Int("webmin", 50000, "web: smallest fetch, bytes")
 	webMax := flag.Int("webmax", 500000, "web: largest fetch, bytes")
+	journey := flag.Int("journey", 0, "virtual users going through reels, call, download, ping, game in turn (journey.go)")
+	jScale := flag.Float64("journeyscale", 1, "journey: multiply sizes and rates by this (0.5 for a slow link)")
+	jSpread := flag.Duration("jspread", 10*time.Second, "journey: users start spread over this long")
+	jReels := flag.Int("jreels", 4, "journey: reels per round")
+	jReelMin := flag.Int("jreelmin", 2000000, "journey: smallest reel, bytes")
+	jReelMax := flag.Int("jreelmax", 8000000, "journey: largest reel, bytes")
+	jTTF := flag.Int("jttf", 1000000, "journey: bytes whose arrival is the reel's TTFMB")
+	jGapMin := flag.Duration("jreelgapmin", 2*time.Second, "journey: shortest pause between reels")
+	jGapMax := flag.Duration("jreelgapmax", 6*time.Second, "journey: longest pause between reels")
+	jCallMin := flag.String("jcallmin", "1.5mbit", "journey: lowest call rate")
+	jCallMax := flag.String("jcallmax", "2.5mbit", "journey: highest call rate")
+	jCallSize := flag.Int("jcallsize", 1000, "journey: call frame size, bytes")
+	jCallTMin := flag.Duration("jcalltmin", 20*time.Second, "journey: shortest call")
+	jCallTMax := flag.Duration("jcalltmax", 40*time.Second, "journey: longest call")
+	jBulkTMin := flag.Duration("jbulktmin", 20*time.Second, "journey: shortest download")
+	jBulkTMax := flag.Duration("jbulktmax", 60*time.Second, "journey: longest download")
+	jPings := flag.Int("jpings", 5, "journey: app pings after the download")
+	jGameTMin := flag.Duration("jgametmin", 20*time.Second, "journey: shortest game")
+	jGameTMax := flag.Duration("jgametmax", 40*time.Second, "journey: longest game")
+	jRotate := flag.Bool("jrotate", true, "journey: user i starts its first round at phase i%4 so a short run samples every phase")
 	flag.Parse()
 	if *late > 0 && *echoDelay == 0 {
 		*echoDelay = *late
@@ -411,6 +435,35 @@ func main() {
 				maxB: max(*webMax, *webMin, 1)}, stop)
 			mu.Lock()
 			r.Web = res
+			mu.Unlock()
+		}()
+	}
+	if *journey > 0 {
+		cmin, err := parseRate(*jCallMin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		cmax, err := parseRate(*jCallMax)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		jsp := journeySpec{addr: *addr, users: *journey, scale: *jScale, spread: *jSpread,
+			reels: *jReels, reelMin: *jReelMin, reelMax: max(*jReelMax, *jReelMin), ttf: *jTTF,
+			reelGapMin: *jGapMin, gapMax: *jGapMax, callMin: cmin, callMax: max(cmax, cmin),
+			callSize: *jCallSize, callTMin: *jCallTMin, callTMax: *jCallTMax,
+			bulkTMin: *jBulkTMin, bulkTMax: *jBulkTMax, pings: *jPings,
+			gameTMin: *jGameTMin, gameTMax: *jGameTMax, lateMs: *lateMs, rotate: *jRotate}
+		if jsp.scale <= 0 {
+			jsp.scale = 1
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res := runJourney(jsp, stop)
+			mu.Lock()
+			r.Journey = res
 			mu.Unlock()
 		}()
 	}

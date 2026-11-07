@@ -26,6 +26,10 @@
 #     forwarded port 127.0.0.1:8443 (needs a TUN mode, e.g. l3mtcp). The JSON then also has "via",
 #     "tun_route" (`ip route get` in the Iran namespace) and the Iran hs0 byte counters over the
 #     probe run (tun_rx_mb / tun_tx_mb).
+#   JOURNEY [0] e.g. 20: virtual users (probe -journey) each doing reels -> video call -> big
+#     download -> app pings -> game in turn, starts spread over 10 s; JSON "journey" aggregates
+#     every phase over all users. JOURNEY_EXTRA: its flags, e.g. "-journeyscale 0.5 -jreels 3".
+#     Combines with BULK (set BULK=0 for the journey alone), CROWD, CALL, GAME, WEB.
 #   LAB_ID=n runs in namespaces irn/khn/midn so experiments can run in parallel.
 #   HS2_TUNE_* variables are passed through to hs2 (see cmd/hs2 applyTuning).
 set -u
@@ -41,6 +45,7 @@ RATE=${RATE:-50mbit}; DELAY=${DELAY:-40ms}; QUEUE=${QUEUE:-500ms}; LOSS=${LOSS:-
 FLOWRATE=${FLOWRATE:-0}; BULK=${BULK:-8}; UP=${UP:-0}; T=${T:-20s}; UDP=${UDP:-0}
 IRAN_EXTRA=${IRAN_EXTRA:-}; KHAREJ_EXTRA=${KHAREJ_EXTRA:-}
 VIA=${VIA:-}; WEB=${WEB:-0}
+JOURNEY=${JOURNEY:-0}; JOURNEY_EXTRA=${JOURNEY_EXTRA:-}
 CALL=${CALL:-}; GAME=${GAME:-0}; LATE=${LATE:-0}; CROWD=${CROWD:-0}; CROWD_EVERY=${CROWD_EVERY:-700ms}
 
 cleanup(){
@@ -130,6 +135,7 @@ PX=""
 [ "$WEB" = 1 ] && PX="$PX -web"
 [ "$LATE" != 0 ] && PX="$PX -late $LATE"
 [ "$CROWD" != 0 ] && PX="$PX -crowd $CROWD -crowdevery $CROWD_EVERY"
+[ "$JOURNEY" != 0 ] && PX="$PX -journey $JOURNEY $JOURNEY_EXTRA"
 [ "$VIA" = tun ] && { RX0=$(tunb rx_bytes); TX0=$(tunb tx_bytes); }
 OUT=$(ip netns exec $IR "$W/probe" -addr $PADDR -bulk "$BULK" -up "$UP" -t "$T" $UFLAG $PX ${PROBE_EXTRA:-})
 if [ "$VIA" = tun ]; then
