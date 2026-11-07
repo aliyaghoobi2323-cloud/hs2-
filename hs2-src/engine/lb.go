@@ -60,6 +60,13 @@ type LBPathStat struct {
 	FailsAll uint64  `json:"fails_total"`
 	State    string  `json:"state"` // ok | cooling | probing | no-peer
 	Primary  bool    `json:"primary,omitempty"`
+	// Mode auto (lb_auto.go): the effective weight (configured × a quality
+	// factor in [0.5, 1.5]) and the quality the factor came from.
+	EffWeight float64 `json:"eff_weight,omitempty"`
+	EffPct    float64 `json:"eff_pct,omitempty"`
+	LossPct   float64 `json:"loss_pct,omitempty"` // retransmitted share of segments sent
+	QueueMs   float64 `json:"queue_ms,omitempty"` // median srtt − minrtt of busy links
+	Rebal     uint64  `json:"rebalanced,omitempty"`
 }
 
 // Tunables (vars for tests).
@@ -78,7 +85,15 @@ type LB struct {
 	until   []time.Time // cooling until (zero = not cooled)
 	probing []bool      // the one probe dial after a cooldown is in flight
 	held    map[any]int // live link -> path index
-	peerLB  bool        // sticky: the peer advertised capLB
+	hooks   map[any]lbHooks
+	auto    bool      // mode auto: weights follow path quality (lb_auto.go)
+	mult    []float64 // per path quality factor in [lbMultMin, lbMultMax] (1 in fixed)
+	qual    []lbQual
+	qprev   map[any]qPrev // a link's TCP_INFO counters at the last quality tick
+	dials   []int         // dials started on each path since the last quality tick
+	dfails  []int         // ... of which failed
+	rebal   []uint64      // idle links retired from each path to rebalance
+	peerLB  bool          // sticky: the peer advertised capLB
 	// peerState reports what the peer's live links say about capLB: known is
 	// false while no live link carries a kindInfo answer (nil = always ok).
 	peerState func() (known, has bool)
@@ -103,7 +118,9 @@ func NewLB(paths []LBPath, logf func(string, ...any)) (*LB, error) {
 	n := len(paths)
 	return &LB{paths: append([]LBPath(nil), paths...), links: make([]int, n), fails: make([]int, n),
 		total: make([]uint64, n), until: make([]time.Time, n), probing: make([]bool, n),
-		held: map[any]int{}, now: time.Now, log: logf}, nil
+		held: map[any]int{}, hooks: map[any]lbHooks{}, mult: ones(n), qual: make([]lbQual, n),
+		qprev: map[any]qPrev{}, dials: make([]int, n), dfails: make([]int, n), rebal: make([]uint64, n),
+		now: time.Now, log: logf}, nil
 }
 
 // Paths returns the configured paths.
@@ -155,35 +172,62 @@ func (b *LB) acquire() (i int, probe bool) {
 			(peerOK || b.paths[j].Remote == b.paths[prim].Remote) {
 			b.probing[j] = true
 			b.links[j]++
+			b.dials[j]++
 			return j, true
 		}
 	}
-	i = pickLargestRemainder(b.paths, b.links, func(j int) bool { return b.eligibleLocked(j, peerOK, now) }, prim)
+	ok := func(j int) bool { return b.eligibleLocked(j, peerOK, now) }
+	i = -1
+	if b.auto {
+		i = b.minTwoLocked(ok)
+	}
+	if i < 0 {
+		i = pickLargestRemainder(b.effWeightsLocked(), b.links, ok, prim)
+	}
 	b.links[i]++
+	b.dials[i]++
 	return i, false
+}
+
+// effWeightsLocked is each path's effective weight: configured × quality
+// factor, scaled ×100 so a factor of 1 keeps the configured proportions.
+func (b *LB) effWeightsLocked() []int {
+	w := make([]int, len(b.paths))
+	for j, p := range b.paths {
+		w[j] = int(float64(p.Weight)*100*b.mult[j] + 0.5)
+	}
+	return w
+}
+
+func ones(n int) []float64 {
+	m := make([]float64, n)
+	for i := range m {
+		m[i] = 1
+	}
+	return m
 }
 
 // pickLargestRemainder returns the eligible path furthest below its share of
 // (current eligible links + 1); ties go to the larger weight, then the lower
 // index. With no eligible weight it returns fallback.
-func pickLargestRemainder(paths []LBPath, links []int, ok func(int) bool, fallback int) int {
+func pickLargestRemainder(weights []int, links []int, ok func(int) bool, fallback int) int {
 	n, w := 1, 0
-	for j := range paths {
+	for j := range weights {
 		if ok(j) {
 			n += links[j]
-			w += paths[j].Weight
+			w += weights[j]
 		}
 	}
 	if w == 0 {
 		return fallback
 	}
 	best, bestDef := -1, 0
-	for j, p := range paths {
-		if !ok(j) || p.Weight == 0 {
+	for j, pw := range weights {
+		if !ok(j) || pw == 0 {
 			continue
 		}
-		def := p.Weight*n - links[j]*w // (share − links) × w, exact in integers
-		if best < 0 || def > bestDef || (def == bestDef && p.Weight > paths[best].Weight) {
+		def := pw*n - links[j]*w // (share − links) × w, exact in integers
+		if best < 0 || def > bestDef || (def == bestDef && pw > weights[best]) {
 			best, bestDef = j, def
 		}
 	}
@@ -203,11 +247,13 @@ func (b *LB) result(i int, probe bool, link any, err error) {
 		b.links[i]--
 		b.fails[i]++
 		b.total[i]++
+		b.dfails[i]++
 		if !p.Primary && (probe || b.fails[i] >= lbFailMax) {
 			wasCool := !b.until[i].IsZero()
-			b.until[i] = b.now().Add(lbCooldown)
+			cd := b.cooldownLocked()
+			b.until[i] = b.now().Add(cd)
 			if !wasCool {
-				b.log("lb: path %s cooled for %s after %d failed dial(s): %v — its share goes to the other paths", p.Name(), fmtDur(lbCooldown), b.fails[i], err)
+				b.log("lb: path %s cooled for %s after %d failed dial(s): %v — its share goes to the other paths", p.Name(), fmtDur(cd), b.fails[i], err)
 			}
 		}
 		return
@@ -228,6 +274,8 @@ func (b *LB) release(link any) {
 	defer b.mu.Unlock()
 	if i, ok := b.held[link]; ok {
 		delete(b.held, link)
+		delete(b.hooks, link)
+		delete(b.qprev, link)
 		b.links[i]--
 	}
 }
@@ -239,12 +287,14 @@ func (b *LB) Stats() []LBPathStat {
 	now := b.now()
 	peerOK := b.peerLB || b.peerState == nil
 	prim := b.primary()
-	total, wAll, wOK := 0, 0, 0
+	eff := b.effWeightsLocked()
+	total, wAll, wOK, effAll := 0, 0, 0, 0
 	for j, p := range b.paths {
 		total += b.links[j]
 		wAll += p.Weight
+		effAll += eff[j]
 		if b.eligibleLocked(j, peerOK, now) {
-			wOK += p.Weight
+			wOK += eff[j]
 		}
 	}
 	out := make([]LBPathStat, len(b.paths))
@@ -262,7 +312,16 @@ func (b *LB) Stats() []LBPathStat {
 			s.State = "cooling"
 		}
 		if b.eligibleLocked(j, peerOK, now) && wOK > 0 {
-			s.Target = (p.Weight*total + wOK/2) / wOK
+			s.Target = (eff[j]*total + wOK/2) / wOK
+		}
+		s.Rebal = b.rebal[j]
+		if b.auto {
+			s.EffWeight = round1pct(float64(p.Weight) * b.mult[j])
+			if effAll > 0 {
+				s.EffPct = round1pct(100 * float64(eff[j]) / float64(effAll))
+			}
+			s.LossPct = round1pct(100 * b.qual[j].loss)
+			s.QueueMs = round1pct(b.qual[j].queueMs)
 		}
 		out[j] = s
 	}
@@ -279,6 +338,9 @@ func LBLine(st []LBPathStat) string {
 			s += ", "
 		}
 		s += fmt.Sprintf("%s %d/%d", p.Path, p.Links, p.Target)
+		if p.EffPct > 0 {
+			s += fmt.Sprintf(" w%.0f%% loss %.1f%% q %.0fms", p.EffPct, p.LossPct, p.QueueMs)
+		}
 		if p.State != "ok" {
 			s += " " + p.State
 		}
@@ -358,6 +420,16 @@ func (d *lbLinkDialer) DialLink(ctx context.Context) (Link, error) {
 		return nil, err
 	}
 	l := v.(Link)
+	d.lb.attach(l, lbHooks{
+		stats: func() (tcpStat, bool) { return linkTCPStatsOf(l) },
+		retire: func() bool {
+			if l.Active() != 0 {
+				return false
+			}
+			l.Close()
+			return true
+		},
+	})
 	if c, ok := l.(interface{ closed() <-chan struct{} }); ok {
 		go func() { <-c.closed(); d.lb.release(l) }()
 	}

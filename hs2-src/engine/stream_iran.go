@@ -93,6 +93,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 			}
 			return false, false
 		})
+		go lb.Run(ctx)
 	}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {

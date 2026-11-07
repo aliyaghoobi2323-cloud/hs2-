@@ -121,9 +121,8 @@ func validateLB(fc fileConfig) error {
 	switch fc.LB.Mode {
 	case "", "fixed":
 	case "auto":
-		return fmt.Errorf(`"lb.mode" "auto" is not available yet (stage 2); use "fixed"`)
 	default:
-		return fmt.Errorf(`"lb.mode" %q: must be "fixed"`, fc.LB.Mode)
+		return fmt.Errorf(`"lb.mode" %q: must be "fixed" or "auto"`, fc.LB.Mode)
 	}
 	if fc.Carrier != "mtcp" && fc.Carrier != "l3mtcp" && fc.Carrier != "l3" {
 		return fmt.Errorf(`"lb" works with the mtcp/l3mtcp carriers only (this config: %q)`, fc.Carrier)
@@ -225,4 +224,12 @@ func lbSummary(paths []engine.LBPath) string {
 		}
 	}
 	return b.String()
+}
+
+// lbModeName is the lb mode for messages ("fixed" when unset).
+func lbModeName(fc fileConfig) string {
+	if fc.LB != nil && fc.LB.Mode == "auto" {
+		return "auto"
+	}
+	return "fixed"
 }

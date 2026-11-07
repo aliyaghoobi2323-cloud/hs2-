@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
@@ -129,6 +130,9 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	}
 	pool := newExitPool(ctx, min, max, dial, logf)
 	if lb != nil {
+		go lb.Run(ctx)
+	}
+	if lb != nil {
 		pool.scoutDial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, true) }
 	} else if cfg.RevDialScout != nil {
 		pool.scoutDial = func() (dialedLink, error) { return cfg.RevDialScout() }
@@ -166,6 +170,20 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		return "session setup failed: " + describeNetErr(err)
 	}
 	cfg.peers.add(mtr) // the edge's ceiling this link reports counts only while it is up
+	var lbRetired atomic.Bool
+	if cfg.RevLB != nil {
+		cfg.RevLB.attach(car, lbHooks{
+			stats: func() (tcpStat, bool) { return tcpStats(tcpConnOf(car)) },
+			retire: func() bool {
+				if mtr.users.Load() != 0 {
+					return false
+				}
+				lbRetired.Store(true)
+				car.Close()
+				return true
+			},
+		})
+	}
 	defer exitQueue.track(car)()
 	defer cfg.peers.remove(mtr)
 	// Close the session when ctx ends, so AcceptStream unblocks and this returns
@@ -189,6 +207,9 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 	}
 	close(closed)
 	sess.Close()
+	if lbRetired.Load() {
+		return "retired by the lb rebalance (idle link moved to a path under its share)"
+	}
 	if ctx.Err() == nil {
 		// Nothing here closed this link on purpose, yet it ended without a
 		// socket error from the edge: smux's keepalive gave up after

@@ -37,7 +37,7 @@ func TestLBValidation(t *testing.T) {
 		{strings.Replace(lbKharejRev, `"10.1.0.2"`, `"nope"`, 1), "not a valid IP"},
 		// primary not listed: it joins with an equal share (50), the rest must be 50
 		{strings.Replace(lbKharejRev, `{"ip":"10.1.0.1","weight":70},`, ``, 1), "need 50"},
-		{strings.Replace(lbKharejRev, `"enabled":true`, `"enabled":true,"mode":"auto"`, 1), "stage 2"},
+		{strings.Replace(lbKharejRev, `"enabled":true`, `"enabled":true,"mode":"bogus"`, 1), `must be "fixed" or "auto"`},
 		{strings.Replace(lbKharejRev, `"carrier":"mtcp"`, `"carrier":"udp"`, 1), "mtcp/l3mtcp"},
 	}
 	for _, c := range cases {
@@ -45,6 +45,9 @@ func TestLBValidation(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("want %q, got %v", c.want, err)
 		}
+	}
+	if err := validateLB(lbFC(t, strings.Replace(lbKharejRev, `"enabled":true`, `"enabled":true,"mode":"auto"`, 1))); err != nil {
+		t.Fatalf("mode auto: %v", err)
 	}
 	// primary not listed, the rest leaving its equal share: ok
 	ok := strings.Replace(lbKharejRev, `{"ip":"10.1.0.1","weight":70},{"ip":"10.1.0.2","weight":30}`, `{"ip":"10.1.0.2","weight":50}`, 1)

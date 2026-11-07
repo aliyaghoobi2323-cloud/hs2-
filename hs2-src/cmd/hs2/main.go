@@ -1043,6 +1043,11 @@ func newLB(fc fileConfig, logf func(string, ...any)) *engine.LB {
 	}
 	lb, err := engine.NewLB(paths, logf)
 	must(err)
+	if fc.LB.Mode == "auto" {
+		lb.SetAuto(true)
+		logf("lb: %d paths, auto weights (configured × quality factor 0.5–1.5): %s", len(paths), lbSummary(paths))
+		return lb
+	}
 	logf("lb: %d paths, fixed weights: %s", len(paths), lbSummary(paths))
 	return lb
 }

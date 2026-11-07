@@ -75,6 +75,9 @@ func (t *exitTraffic) add(c *exitConn) *exitConn {
 	if t == nil {
 		return c
 	}
+	if c.mtr != nil {
+		c.mtr.users.Add(1)
+	}
 	t.mu.Lock()
 	t.conns[c] = struct{}{}
 	t.mu.Unlock()
@@ -93,8 +96,12 @@ func (t *exitTraffic) done(c *exitConn) {
 		return
 	}
 	t.mu.Lock()
+	_, ok := t.conns[c]
 	delete(t.conns, c)
 	t.mu.Unlock()
+	if ok && c.mtr != nil {
+		c.mtr.users.Add(-1)
+	}
 }
 
 // run samples every healthTick until ctx ends.

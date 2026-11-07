@@ -203,7 +203,7 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		}
 		if dials {
 			if paths, err := lbPaths(fc); err == nil {
-				warn("lb on: %d paths, fixed weights: %s", len(paths), lbSummary(paths))
+				warn("lb on (%s): %d paths, configured weights: %s", lbModeName(fc), len(paths), lbSummary(paths))
 			}
 		}
 	}

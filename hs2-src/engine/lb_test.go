@@ -187,7 +187,7 @@ func TestLBLargestRemainderPrefix(t *testing.T) {
 	paths := []LBPath{{Weight: 50, Primary: true, Remote: "a"}, {Weight: 30, Remote: "b"}, {Weight: 20, Remote: "c"}}
 	links := make([]int, 3)
 	for n := 1; n <= 100; n++ {
-		i := pickLargestRemainder(paths, links, func(int) bool { return true }, 0)
+		i := pickLargestRemainder([]int{50, 30, 20}, links, func(int) bool { return true }, 0)
 		links[i]++
 		for j, p := range paths {
 			share := float64(p.Weight*n) / 100

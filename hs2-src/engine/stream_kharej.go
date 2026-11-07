@@ -265,6 +265,10 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			st.Close() // this side runs without a TUN
 			return
 		}
+		if mtr != nil {
+			mtr.users.Add(1)
+			defer mtr.users.Add(-1)
+		}
 		pl := newStreamL3Link(st, peerL3Quiet(mtr), sessReadsOf(mtr))
 		pl.heavy = heavyOf(mtr)
 		pl.dupOK = peerL3Dup(mtr)

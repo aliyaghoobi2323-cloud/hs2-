@@ -49,6 +49,10 @@ VIA=${VIA:-}; WEB=${WEB:-0}
 # (PATH_A_NETEM / PATH_B_NETEM: extra netem flags per path), and the tunnel in
 # reverse with multipath lb on; LB_WEIGHTS="A,B" are the Iran IPs' weights.
 PATHS=${PATHS:-1}; PATH_A_NETEM=${PATH_A_NETEM:-}; PATH_B_NETEM=${PATH_B_NETEM:-}; LB_WEIGHTS=${LB_WEIGHTS:-50,50}
+# LB_MODE=fixed|auto is lb.mode; auto runs with HS2_LB_FAST=1 (quality tick
+# 5 s, rebalance 10 s instead of 30 s / 60 s) so a 60 s run sees it adapt.
+LB_MODE=${LB_MODE:-fixed}
+if [ "$LB_MODE" = auto ]; then export HS2_LB_FAST=${HS2_LB_FAST:-1}; fi
 JOURNEY=${JOURNEY:-0}; JOURNEY_EXTRA=${JOURNEY_EXTRA:-}
 CALL=${CALL:-}; GAME=${GAME:-0}; LATE=${LATE:-0}; CROWD=${CROWD:-0}; CROWD_EVERY=${CROWD_EVERY:-700ms}
 
@@ -97,7 +101,7 @@ if [ "$PATHS" = 2 ]; then
   ip netns exec $MID "$W/netem" -a ${MA}b -b ${MB}b -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
     -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} $PATH_B_NETEM 2>"$W/netem-b.log" & echo $! >> "$W/pids"
   WA=${LB_WEIGHTS%,*}; WB=${LB_WEIGHTS#*,}
-  LBJ='"lb":{"enabled":true,"iran":[{"ip":"192.168.50.1","weight":'$WA'},{"ip":"192.168.51.1","weight":'$WB'}],"kharej":[{"ip":"192.168.50.2","weight":100}]},'
+  LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","iran":[{"ip":"192.168.50.1","weight":'$WA'},{"ip":"192.168.51.1","weight":'$WB'}],"kharej":[{"ip":"192.168.50.2","weight":100}]},'
   KHAREJ_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","bind_local_ip":"192.168.50.2","sni":"lab.example.com",'"$LBJ$KHAREJ_EXTRA"
   IRAN_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","backend_addr":"builtin","cert_file":"'$W'/cert.pem","key_file":"'$W'/key.pem",'"$LBJ$IRAN_EXTRA"
 fi
@@ -206,7 +210,9 @@ try:
 except Exception:
     end, text = (rows[-1] if rows else []), ''
 mx = [max(r[i] for r in rows if len(r) > i) for i in range(len(end))] if rows else []
-print('"lb_paths_end":%s,"lb_paths_max":%s,"lb_text":"%s",' % (json.dumps(end), json.dumps(mx), text))
+half = rows[len(rows)//2:]
+avg = [round(sum(r[i] for r in half if len(r) > i) / max(1, len(half)), 1) for i in range(len(end))]
+print('"lb_paths_end":%s,"lb_paths_max":%s,"lb_paths_avg2h":%s,"lb_text":"%s",' % (json.dumps(end), json.dumps(mx), json.dumps(avg), text))
 PY
 )
 fi
