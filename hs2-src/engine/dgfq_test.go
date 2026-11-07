@@ -362,7 +362,6 @@ func TestDgWriterKeepsAFlowsOrderAcrossLanes(t *testing.T) {
 	l := newDgLink(car, time.Now())
 	l.fq.off = false
 	p := newDgPool(newFakeTUN(1400), 2, 8, 8, func(string, ...any) {})
-	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	defer l.markDead()
 	next := func() bool {
 		t.Helper()
@@ -380,8 +379,14 @@ func TestDgWriterKeepsAFlowsOrderAcrossLanes(t *testing.T) {
 			t.Fatal("enqueue refused")
 		}
 	}
+	// Both are queued before the writer starts: the flow's first quantum
+	// (1500) is urgent and the 100 after it, past the quantum, ordinary. With
+	// the writer already running, a fast writer could empty the flow between
+	// the two sends, and the 100 would then rightly start a new sparse turn
+	// (urgent) — a timing race in the test, not a fault (flaked ~1%).
 	send(1500)
 	send(100)
+	go l.writeLoop(&p.pool, &p.drops, &p.dropAged, &p.sentPkts)
 	if !next() || next() {
 		t.Fatal("want the quantum urgent, then the rest ordinary")
 	}

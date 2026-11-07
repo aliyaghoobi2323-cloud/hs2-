@@ -503,8 +503,19 @@ func TestDgPortsTCPFollowsExitTableAtOnce(t *testing.T) {
 		}
 		return err != nil
 	})
-	if _, err := StartDgPorts(ctx, DgPortsConfig{LocalTunIP: exitIP, Default: def, Routes: map[int]string{n1: a}}); err != nil {
-		t.Fatal(err)
+	// The old exit's listener can still hold its port for a moment after it
+	// stops accepting (its close runs once its accept loop returns); a real
+	// restart is a new process, whose port the kernel has already freed. So
+	// retry a bind that is still in use, briefly (flaked ~3% under -count).
+	var err2 error
+	for end := time.Now().Add(3 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		_, err2 = StartDgPorts(ctx, DgPortsConfig{LocalTunIP: exitIP, Default: def, Routes: map[int]string{n1: a}})
+		if err2 == nil || !strings.Contains(err2.Error(), "address already in use") || time.Now().After(end) {
+			break
+		}
+	}
+	if err2 != nil {
+		t.Fatal(err2)
 	}
 	if got := tcpReaches(net.JoinHostPort(edgeIP, p1)); got != "A" {
 		t.Fatalf("newly mapped port reached %q, want A without waiting for a probe", got)
