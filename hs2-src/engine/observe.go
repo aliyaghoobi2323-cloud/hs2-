@@ -111,13 +111,15 @@ var obs struct {
 	// second light sub; chunks whose copy on a non-first light sub arrived
 	// first; switches to a bulk sub; light sub deaths the connection
 	// survived; copies a full sub queue missed; connections that failed.
-	// Gauges by sending state: two copies, one sub, heavy; and the moves
-	// to heavy by rule (a standing queue, or the rate).
+	// Gauges by sending state: two copies, one sub, heavy; the moves to
+	// heavy by rule (a standing queue, the rate, or a fast start); and the
+	// primary switches of a light connection whose primary sub was stuck.
 	mconnOpen                                  atomic.Int64
 	mconnDupBytes, mconnSaved, mconnBulk       atomic.Uint64
 	mconnSubSurvived, mconnMissed, mconnFailed atomic.Uint64
 	mconnDual, mconnSingle, mconnHeavy         atomic.Int64
 	mconnHeavyQueue, mconnHeavyRate            atomic.Uint64
+	mconnHeavyFast, mconnPrimarySwitch         atomic.Uint64
 }
 
 // noteShapeWrite records one shapedConn.Write: its records, data and padding.
@@ -166,6 +168,7 @@ type ObsSnap struct {
 	MConnSubSurvived, MConnMissed, MConnFailed uint64
 	MConnDual, MConnSingle, MConnHeavy         int64 // levels
 	MConnHeavyQueue, MConnHeavyRate            uint64
+	MConnHeavyFast, MConnPrimarySwitch         uint64
 }
 
 // Observed returns the counters now.
@@ -183,6 +186,7 @@ func Observed() ObsSnap {
 		MConnMissed: obs.mconnMissed.Load(), MConnFailed: obs.mconnFailed.Load(),
 		MConnDual: obs.mconnDual.Load(), MConnSingle: obs.mconnSingle.Load(), MConnHeavy: obs.mconnHeavy.Load(),
 		MConnHeavyQueue: obs.mconnHeavyQueue.Load(), MConnHeavyRate: obs.mconnHeavyRate.Load(),
+		MConnHeavyFast: obs.mconnHeavyFast.Load(), MConnPrimarySwitch: obs.mconnPrimarySwitch.Load(),
 	}
 }
 
@@ -201,5 +205,6 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		MConnMissed: s.MConnMissed - old.MConnMissed, MConnFailed: s.MConnFailed - old.MConnFailed,
 		MConnDual: s.MConnDual, MConnSingle: s.MConnSingle, MConnHeavy: s.MConnHeavy,
 		MConnHeavyQueue: s.MConnHeavyQueue - old.MConnHeavyQueue, MConnHeavyRate: s.MConnHeavyRate - old.MConnHeavyRate,
+		MConnHeavyFast: s.MConnHeavyFast - old.MConnHeavyFast, MConnPrimarySwitch: s.MConnPrimarySwitch - old.MConnPrimarySwitch,
 	}
 }

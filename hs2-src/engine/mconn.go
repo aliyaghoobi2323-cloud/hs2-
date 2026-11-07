@@ -124,6 +124,27 @@ const (
 	mHeavyQueueFor = time.Second
 	mHeavyRate     = 1_000_000   // or more than this many bytes (8 Mbit/s)
 	mHeavyWindow   = time.Second // ... within this window
+	// Fast start: a direction that has already sent mFastStartBytes within
+	// mFastStartWindow of its first write is a download (or a reel) from its
+	// first moment, and is heavy at once — it skips the mHeavyQueueFor wait
+	// of the queue rule and the light-mode start of a connection that will
+	// move anyway (the move itself is cheapest while little is queued). A
+	// steady 2 Mbit/s call sends ~75 KB in the window; a 3 Mbit/s one ~115.
+	mFastStartBytes  = 256 << 10
+	mFastStartWindow = 300 * time.Millisecond
+	// Primary switch (light mode, one copy): when the primary sub's queue has
+	// stayed above mSwitchQueue for mSwitchQueueFor with no record written on
+	// it meanwhile (its link is stuck in loss recovery, not merely slow) and
+	// another light sub has at most mSwitchOtherMax queued, that sub becomes
+	// the primary: the next chunks go on it, and what the stuck sub holds is
+	// sent on it too (the receiver delivers in offset order, so a gap left
+	// on the stuck link would hold everything after it; the stuck sub still
+	// writes its copies when released, dropped as duplicates). At most one
+	// switch per mSwitchMinGap, so the subs never flip-flop.
+	mSwitchQueue    = 16 << 10
+	mSwitchQueueFor = 150 * time.Millisecond
+	mSwitchOtherMax = 8 << 10
+	mSwitchMinGap   = time.Second
 	// mDupMaxRate: a light connection is sent on two subs only while it moves
 	// at most this many bytes a window (384 kbit/s): pings, games, requests,
 	// chat. Above it (a call, a stream) it stays on the light links with one
@@ -336,6 +357,17 @@ type mConn struct {
 	qHighSince time.Time
 	heavy      bool
 	state      mSendState // what the obs gauges count this connection as
+	// fast start: the first write's moment and the bytes written since,
+	// until mFastStartWindow has passed (startDone)
+	startAt    time.Time
+	startBytes int
+	startDone  bool
+	// primary switch: the sub chosen over the join order (nil: the first
+	// light sub), since when the primary's queue has been high with nothing
+	// written, and the last switch
+	prefPrimary *msub
+	pStuckSince time.Time
+	lastPSwitch time.Time
 	// duplication gate (this side's sending direction): bytes in the current
 	// window, and whether this direction is over mDupMaxRate (one copy then)
 	dupStart time.Time
@@ -472,6 +504,13 @@ func (m *mConn) removeSubLocked(s *msub) {
 }
 
 func (m *mConn) setPrimaryLocked() {
+	if pp := m.prefPrimary; pp != nil {
+		if !pp.retired && !pp.bulk.Load() && slices.Contains(m.subs, pp) {
+			m.primary.Store(pp)
+			return
+		}
+		m.prefPrimary = nil
+	}
 	for _, s := range m.subs {
 		if !s.bulk.Load() && !s.retired {
 			m.primary.Store(s)
@@ -575,6 +614,9 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			// chunk, and the idle second sub — copyOnly on its link — would
 			// carry half a download unseen). A full primary queue makes Write
 			// wait (backpressure); the other sub misses the copy (lastHole).
+			// A primary whose link is stuck is swapped for the other light
+			// sub first (maybeSwitchPrimaryLocked).
+			m.maybeSwitchPrimaryLocked()
 			p := m.primary.Load()
 			if p == nil || !p.fits(c.n) {
 				m.sendCond.Wait()
@@ -633,6 +675,50 @@ func (m *mConn) sendLocked(c *mchunk) error {
 	}
 }
 
+// maybeSwitchPrimaryLocked runs the primary switch rule (mSwitchQueue) before
+// a one-copy chunk is queued. The clock is read only while the queue is high.
+func (m *mConn) maybeSwitchPrimaryLocked() {
+	p := m.primary.Load()
+	if p == nil || p.queueLocked() <= mSwitchQueue {
+		m.pStuckSince = time.Time{}
+		return
+	}
+	now := time.Now()
+	if m.pStuckSince.IsZero() {
+		m.pStuckSince = now
+		return
+	}
+	if now.Sub(m.pStuckSince) < mSwitchQueueFor || now.Sub(m.lastPSwitch) < mSwitchMinGap {
+		return
+	}
+	for _, s := range m.subs {
+		if s == p || s.retired || s.bulk.Load() || s.queueLocked() > mSwitchOtherMax {
+			continue
+		}
+		m.tr.ev("primary switch %d -> %d: sub %d stuck with %d queued for %v, sub %d has %d",
+			p.idx, s.idx, p.idx, p.queueLocked(), now.Sub(m.pStuckSince).Round(time.Millisecond), s.idx, s.queueLocked())
+		m.prefPrimary = s
+		m.setPrimaryLocked()
+		moved := 0
+		if c := p.cur; c != nil && c.seq() {
+			s.push(c)
+			moved += c.n
+		}
+		for _, c := range p.q {
+			if c.seq() {
+				s.push(c)
+				moved += c.n
+			}
+		}
+		obs.mconnDupBytes.Add(uint64(moved))
+		m.lastPSwitch = now
+		m.pStuckSince = time.Time{}
+		m.qHighSince = time.Time{} // the queue rule now watches the new primary
+		obs.mconnPrimarySwitch.Add(1)
+		return
+	}
+}
+
 // sendQueueLocked: the bytes waiting on, or being written to, the sub this
 // direction rides on — the primary while one copy is sent, else the least
 // loaded of the duplicating subs (a stalled sub's full queue only means it
@@ -682,19 +768,15 @@ func (m *mConn) noteQueueLocked() {
 	}
 	if now.Sub(m.qHighSince) >= mHeavyQueueFor {
 		m.tr.ev("heavy by queue: sendq=%d high for %v subq=[%s]", m.sendQueueLocked(), now.Sub(m.qHighSince).Round(time.Millisecond), m.traceSubsLocked())
-		m.goHeavyLocked(true)
+		m.goHeavyLocked(&obs.mconnHeavyQueue)
 	}
 }
 
-// goHeavyLocked marks this side's sending direction heavy (byQueue: the queue
-// rule, else the rate rule) and starts the move to a bulk sub.
-func (m *mConn) goHeavyLocked(byQueue bool) {
+// goHeavyLocked marks this side's sending direction heavy (rule: the counter
+// of the rule that fired) and starts the move to a bulk sub.
+func (m *mConn) goHeavyLocked(rule *atomic.Uint64) {
 	m.heavy = true
-	if byQueue {
-		obs.mconnHeavyQueue.Add(1)
-	} else {
-		obs.mconnHeavyRate.Add(1)
-	}
+	rule.Add(1)
 	m.refreshStateLocked()
 	if m.iran {
 		m.wantBulk = true
@@ -754,7 +836,24 @@ func (m *mConn) noteWriteLocked(n int) {
 	m.hvBytes += n
 	if m.hvBytes > mHeavyRate {
 		m.tr.ev("heavy by rate: %d bytes in %v", m.hvBytes, now.Sub(m.hvStart).Round(time.Millisecond))
-		m.goHeavyLocked(false)
+		m.goHeavyLocked(&obs.mconnHeavyRate)
+		return
+	}
+	if m.startDone {
+		return
+	}
+	if m.startAt.IsZero() {
+		m.startAt = now
+	}
+	if now.Sub(m.startAt) > mFastStartWindow {
+		m.startDone = true
+		return
+	}
+	m.startBytes += n
+	if m.startBytes > mFastStartBytes {
+		m.startDone = true
+		m.tr.ev("heavy by fast start: %d bytes in %v", m.startBytes, now.Sub(m.startAt).Round(time.Millisecond))
+		m.goHeavyLocked(&obs.mconnHeavyFast)
 	}
 }
 
@@ -843,6 +942,9 @@ func (s *msub) writeLoop() {
 
 		m.mu.Lock()
 		s.cur = nil
+		if s == m.primary.Load() {
+			m.pStuckSince = time.Time{} // a record got through: not stuck
+		}
 		m.noteQueueLocked() // the queue fell: the rule's "without a break"
 		idle := len(s.q) == 0 && m.closing
 		m.mu.Unlock()

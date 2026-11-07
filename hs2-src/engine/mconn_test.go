@@ -274,10 +274,11 @@ func TestMConnTransferLight(t *testing.T) {
 
 // Queue rule: a sender that outruns slow light links (3.2 Mbit/s each, under
 // mHeavyRate) builds a standing queue and goes heavy — by the queue, not the
-// rate — and moves to a bulk sub.
+// rate — and moves to a bulk sub. The source is paced at ~4.3 Mbit/s (under
+// mFastStartBytes a window too) so neither of the other rules fires first.
 func TestMConnHeavyByQueue(t *testing.T) {
 	before := runtime.NumGoroutine()
-	byQueue, byRate := obs.mconnHeavyQueue.Load(), obs.mconnHeavyRate.Load()
+	byQueue, byRate, byFast := obs.mconnHeavyQueue.Load(), obs.mconnHeavyRate.Load(), obs.mconnHeavyFast.Load()
 	n, iran, exit := newTPair(t, false)
 	n.link(0).iran.rate.Store(400 << 10)
 	n.link(1).iran.rate.Store(400 << 10)
@@ -292,6 +293,9 @@ func TestMConnHeavyByQueue(t *testing.T) {
 				return
 			}
 			d = d[k:]
+			if modeOf(iran) == planeLight {
+				time.Sleep(30 * time.Millisecond)
+			}
 		}
 		errs <- iran.CloseWrite()
 	}()
@@ -307,9 +311,9 @@ func TestMConnHeavyByQueue(t *testing.T) {
 			t.Fatal("transfer timed out")
 		}
 	}
-	if obs.mconnHeavyQueue.Load()-byQueue != 1 || obs.mconnHeavyRate.Load() != byRate {
-		t.Fatalf("heavy by queue +%d, by rate +%d; want 1 and 0",
-			obs.mconnHeavyQueue.Load()-byQueue, obs.mconnHeavyRate.Load()-byRate)
+	if obs.mconnHeavyQueue.Load()-byQueue != 1 || obs.mconnHeavyRate.Load() != byRate || obs.mconnHeavyFast.Load() != byFast {
+		t.Fatalf("heavy by queue +%d, by rate +%d, by fast start +%d; want 1, 0, 0",
+			obs.mconnHeavyQueue.Load()-byQueue, obs.mconnHeavyRate.Load()-byRate, obs.mconnHeavyFast.Load()-byFast)
 	}
 	closeAndWait(t, iran, exit)
 	noLeak(t, before)
@@ -319,7 +323,8 @@ func TestMConnHeavyByQueue(t *testing.T) {
 // over mDupMaxRate every chunk rides one sub, the primary.
 func TestMConnSteadyStreamOneSub(t *testing.T) {
 	before := runtime.NumGoroutine()
-	heavies := obs.mconnHeavyQueue.Load() + obs.mconnHeavyRate.Load()
+	heavies := obs.mconnHeavyQueue.Load() + obs.mconnHeavyRate.Load() + obs.mconnHeavyFast.Load()
+	switches := obs.mconnPrimarySwitch.Load()
 	n, iran, exit := newTPair(t, false)
 	const writes, piece = 24, 16 << 10 // 16 KiB every 64 ms: 2 Mbit/s
 	data := randBytes(writes*piece, 12)
@@ -340,8 +345,11 @@ func TestMConnSteadyStreamOneSub(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if modeOf(iran) == planeBulk || obs.mconnHeavyQueue.Load()+obs.mconnHeavyRate.Load() != heavies {
+	if modeOf(iran) == planeBulk || obs.mconnHeavyQueue.Load()+obs.mconnHeavyRate.Load()+obs.mconnHeavyFast.Load() != heavies {
 		t.Fatal("a 2 Mbit/s stream went heavy")
+	}
+	if obs.mconnPrimarySwitch.Load() != switches {
+		t.Fatal("a 2 Mbit/s stream on healthy subs switched its primary")
 	}
 	a, b := n.link(0).iran.wrote.Load(), n.link(1).iran.wrote.Load()
 	// the first writes (up to mDupMaxRate, at Write granularity) go on both;
@@ -794,4 +802,126 @@ func TestMConnReassembly(t *testing.T) {
 		t.Fatalf("out-of-order left: %d entries, %d bytes", len(m.r.ooo), m.r.oooBytes)
 	}
 	m.end(errMConnClosed, false)
+}
+
+// Fast start: a connection that pulls data at full speed from its first
+// moment is heavy at once (mFastStartBytes within mFastStartWindow), not
+// after mHeavyQueueFor of standing queue; every byte still arrives.
+func TestMConnFastStartHeavy(t *testing.T) {
+	before := runtime.NumGoroutine()
+	fast := obs.mconnHeavyFast.Load()
+	n, iran, exit := newTPair(t, false)
+	t0 := time.Now()
+	data := randBytes(4<<20, 21)
+	errs := make(chan error, 2)
+	go func() {
+		d := data
+		for len(d) > 0 {
+			k := min(len(d), 32<<10)
+			if _, err := exit.Write(d[:k]); err != nil {
+				errs <- err
+				return
+			}
+			d = d[k:]
+		}
+		errs <- exit.CloseWrite()
+	}()
+	go func() { errs <- readAllCheck(iran, data) }()
+	mWaitFor(t, "bulk mode", 2*time.Second, func() bool { return modeOf(exit) == planeBulk && modeOf(iran) == planeBulk })
+	if d := time.Since(t0); d > 400*time.Millisecond {
+		t.Fatalf("bulk after %v, want under 400 ms", d)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("transfer timed out")
+		}
+	}
+	if obs.mconnHeavyFast.Load()-fast != 1 {
+		t.Fatalf("heavy by fast start +%d, want 1", obs.mconnHeavyFast.Load()-fast)
+	}
+	if n.count(planeBulk) != 1 {
+		t.Fatalf("%d bulk opens", n.count(planeBulk))
+	}
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+// Primary switch: a 2 Mbit/s call rides one sub (over mDupMaxRate); when that
+// sub's link gets stuck (writes held 500 ms) and the other light sub is
+// idle, the call moves to the other sub within ~mSwitchQueueFor, and what
+// the stuck sub held is sent again on it: no chunk waits for the stuck link.
+func TestMConnStuckPrimarySwitch(t *testing.T) {
+	before := runtime.NumGoroutine()
+	switches := obs.mconnPrimarySwitch.Load()
+	n, iran, exit := newTPair(t, true)
+	const piece, every, count = 8 << 10, 32 * time.Millisecond, 60 // 2 Mbit/s, ~1.9 s
+	data := randBytes(count*piece, 22)
+	var maxLat, maxLatStall atomic.Int64
+	stallAt := time.Now().Add(400 * time.Millisecond) // once over mDupMaxRate
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		stalled := false
+		for i := 0; i < count; i++ {
+			if !stalled && !time.Now().Before(stallAt) {
+				n.link(0).iran.stall(500 * time.Millisecond)
+				stalled = true
+			}
+			p := data[i*piece : (i+1)*piece]
+			binary.BigEndian.PutUint64(p[0:], uint64(time.Now().UnixNano()))
+			binary.BigEndian.PutUint64(p[8:], uint64(i))
+			if _, err := iran.Write(p); err != nil {
+				t.Error(err)
+				return
+			}
+			time.Sleep(every)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		p := make([]byte, piece)
+		for i := 0; i < count; i++ {
+			if _, err := io.ReadFull(exit, p); err != nil {
+				t.Error(err)
+				return
+			}
+			sent := int64(binary.BigEndian.Uint64(p[0:]))
+			lat := time.Now().UnixNano() - sent
+			if seq := binary.BigEndian.Uint64(p[8:]); seq != uint64(i) {
+				t.Errorf("chunk %d arrived as %d", i, seq)
+				return
+			}
+			if !bytes.Equal(p[16:], data[i*piece+16:(i+1)*piece]) {
+				t.Errorf("chunk %d differs", i)
+				return
+			}
+			if lat > maxLat.Load() {
+				maxLat.Store(lat)
+			}
+			if sent >= stallAt.UnixNano() && lat > maxLatStall.Load() {
+				maxLatStall.Store(lat)
+			}
+		}
+	}()
+	wg.Wait()
+	t.Logf("delay max %v (from the stall on: %v)", time.Duration(maxLat.Load()), time.Duration(maxLatStall.Load()))
+	if obs.mconnPrimarySwitch.Load()-switches != 1 {
+		t.Fatalf("primary switches +%d, want 1", obs.mconnPrimarySwitch.Load()-switches)
+	}
+	// the rule's worst case: ~mSwitchQueue of chunks (64 ms at 2 Mbit/s) plus
+	// mSwitchQueueFor, re-sent on the other sub; slack for the race detector
+	if d := time.Duration(maxLat.Load()); d > 300*time.Millisecond {
+		t.Fatalf("a call chunk waited %v behind the stuck primary", d)
+	}
+	if modeOf(iran) != planeLight {
+		t.Fatal("left light mode")
+	}
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
 }
