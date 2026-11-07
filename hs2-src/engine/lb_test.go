@@ -151,33 +151,56 @@ func TestLBAllExtrasDeadFallBackToPrimary(t *testing.T) {
 	}
 }
 
-// Without the peer's capLB only the primary remote IP is dialed (local
-// source IPs are this side's own choice); once it is seen, the rest too.
-func TestLBPeerCapabilityGate(t *testing.T) {
+// The initial links spread by weight from the first dial, before the peer's
+// capLB is known (dialing it is not gated on capLB): waiting put every initial
+// link on the primary and the extra path could stay empty for good.
+func TestLBInitialSpreadBeforePeerCap(t *testing.T) {
 	paths := []LBPath{
 		{Local: "", Remote: "10.1.0.1", Weight: 50, Primary: true},
 		{Local: "", Remote: "10.1.0.2", Weight: 50},
 	}
 	lb, _ := NewLB(paths, nil)
-	var known, has atomic.Bool
-	lb.setPeerState(func() (bool, bool) { return known.Load(), has.Load() })
-	for i := 0; i < 6; i++ {
-		lb.dialVia(func(p LBPath) (any, error) { return new(int), nil })
+	lb.setPeerState(func() (bool, bool) { return false, false }) // no kindInfo answer yet
+	for i := 0; i < 8; i++ {
+		if _, err := lb.dialVia(func(p LBPath) (any, error) { return new(int), nil }); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if st := lb.Stats(); st[1].Links != 0 || st[1].State != "no-peer" {
-		t.Fatalf("old peer got %d links on an extra IP (%s)", st[1].Links, st[1].State)
+	if st := lb.Stats(); st[0].Links != 4 || st[1].Links != 4 {
+		t.Fatalf("initial links %d/%d, want 4/4", st[0].Links, st[1].Links)
 	}
-	known.Store(true) // a peer without the bit: still nothing new
-	lb.dialVia(func(p LBPath) (any, error) { return new(int), nil })
-	if st := lb.Stats(); st[1].Links != 0 {
-		t.Fatal("peer without capLB was dialed on an extra IP")
+}
+
+// An older peer does not listen on the extra IP: the dials there fail, the
+// path is cooled after lbFailMax failures, and every link stays on the
+// primary; the status says why.
+func TestLBOldPeerExtraPathCooled(t *testing.T) {
+	paths := []LBPath{
+		{Local: "", Remote: "10.1.0.1", Weight: 50, Primary: true},
+		{Local: "", Remote: "10.1.0.2", Weight: 50},
 	}
-	has.Store(true)
-	for i := 0; i < 7; i++ {
-		lb.dialVia(func(p LBPath) (any, error) { return new(int), nil })
+	lb, _ := NewLB(paths, nil)
+	lb.setPeerState(func() (bool, bool) { return true, false }) // an old peer: no capLB
+	refused := errors.New("connection refused")
+	extra := 0
+	for i := 0; i < 20; i++ {
+		lb.dialVia(func(p LBPath) (any, error) {
+			if p.Remote != "10.1.0.1" {
+				extra++
+				return nil, refused
+			}
+			return new(int), nil
+		})
 	}
-	if st := lb.Stats(); st[1].Links != 7 { // 7 primary + 7 new: the extra catches up
-		t.Fatalf("capable peer: extra path has %d links, want 7", st[1].Links)
+	st := lb.Stats()
+	if extra != lbFailMax {
+		t.Fatalf("%d dials to the extra IP, want %d then cooled", extra, lbFailMax)
+	}
+	if st[0].Links != 20-lbFailMax || st[1].Links != 0 {
+		t.Fatalf("links %d/%d", st[0].Links, st[1].Links)
+	}
+	if st[1].State != "no-peer" || st[1].Target != 0 {
+		t.Fatalf("extra path state %q target %d", st[1].State, st[1].Target)
 	}
 }
 

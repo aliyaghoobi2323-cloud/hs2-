@@ -235,11 +235,10 @@ func (b *LB) adapt() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
-	peerOK := b.peerOKLocked()
 	var gs []float64
 	idx := []int{}
 	for j := range b.paths {
-		if b.qual[j].have && b.eligibleLocked(j, peerOK, now) && b.paths[j].Weight > 0 {
+		if b.qual[j].have && b.eligibleLocked(j, now) && b.paths[j].Weight > 0 {
 			gs = append(gs, lbGoodness(b.qual[j]))
 			idx = append(idx, j)
 		}
@@ -325,11 +324,10 @@ func lbLimitStep(paths []LBPath, cur, target []float64, maxPct float64) []float6
 func (b *LB) rebalance() bool {
 	b.mu.Lock()
 	now := b.now()
-	peerOK := b.peerOKLocked()
 	eff := b.effWeightsLocked()
 	total, w := 0, 0
 	for j := range b.paths {
-		if b.eligibleLocked(j, peerOK, now) {
+		if b.eligibleLocked(j, now) {
 			w += eff[j]
 		}
 		total += b.links[j]
@@ -342,14 +340,14 @@ func (b *LB) rebalance() bool {
 	var overBy, underBy float64
 	for j := range b.paths {
 		share := 0.0
-		if b.eligibleLocked(j, peerOK, now) {
+		if b.eligibleLocked(j, now) {
 			share = float64(total) * float64(eff[j]) / float64(w)
 		}
 		d := float64(b.links[j]) - share
 		if over < 0 || d > overBy {
 			over, overBy = j, d
 		}
-		if b.eligibleLocked(j, peerOK, now) && eff[j] > 0 && (under < 0 || -d > underBy) {
+		if b.eligibleLocked(j, now) && eff[j] > 0 && (under < 0 || -d > underBy) {
 			under, underBy = j, -d
 		}
 	}
@@ -357,7 +355,7 @@ func (b *LB) rebalance() bool {
 		b.mu.Unlock()
 		return false
 	}
-	if b.auto && b.links[over] <= 2 && b.eligibleLocked(over, peerOK, now) {
+	if b.auto && b.links[over] <= 2 && b.eligibleLocked(over, now) {
 		b.mu.Unlock()
 		return false // keep two links on every live path
 	}

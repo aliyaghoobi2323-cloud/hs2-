@@ -21,10 +21,15 @@ import (
 // with every extra path dead all links go to the primary and the tunnel never
 // depends on an extra.
 //
-// Paths to a remote IP other than the primary are used only once the peer has
-// advertised capLB (kindInfo): an older peer is never sent anything new. The
-// local source IPs are this side's own choice (like bind_local_ip) and need no
-// capability.
+// Every path is dialed from the start, by weight, whether or not the peer has
+// advertised capLB yet. Waiting for it put every initial link on the primary
+// (the first links are dialed before any kindInfo answer), and as the
+// rebalance moves only idle links an extra path could stay empty for good
+// (reverse lab: 8/0 instead of 4/4). Dialing an extra remote IP sends an
+// older peer nothing new: nothing listens there, the dials fail, and after
+// lbFailMax failures the path is cooled like any dead path, its share going
+// to the others (one probe per cooldown after that). capLB stays in kindInfo
+// for status ("no-peer": a cooled path to a peer known to lack it).
 
 // capLB: this side runs multipath LB (it listens on, or dials, extra IPs).
 // Advertised only when lb is enabled, so with lb absent the kindInfo bytes are
@@ -93,7 +98,8 @@ type LB struct {
 	dials   []int         // dials started on each path since the last quality tick
 	dfails  []int         // ... of which failed
 	rebal   []uint64      // idle links retired from each path to rebalance
-	peerLB  bool          // sticky: the peer advertised capLB
+	peerLB  bool          // the peer's latest kindInfo answer has capLB (status)
+	peerKnw bool          // a kindInfo answer has been seen (peerLB is real)
 	// peerState reports what the peer's live links say about capLB: known is
 	// false while no live link carries a kindInfo answer (nil = always ok).
 	peerState func() (known, has bool)
@@ -135,25 +141,20 @@ func (b *LB) primary() int {
 	return 0
 }
 
-// peerOKLocked refreshes and returns whether extra remote IPs may be dialed.
-func (b *LB) peerOKLocked() bool {
+// refreshPeerLocked reads the peer's capLB from live links (status only).
+func (b *LB) refreshPeerLocked() {
 	if b.peerState == nil {
-		return true
+		return
 	}
 	if known, has := b.peerState(); known {
-		b.peerLB = has
+		b.peerKnw, b.peerLB = true, has
 	}
-	return b.peerLB
 }
 
 // eligibleLocked reports whether path i may take a normal (non-probe) link.
-func (b *LB) eligibleLocked(i int, peerOK bool, now time.Time) bool {
-	p := b.paths[i]
-	if p.Primary {
+func (b *LB) eligibleLocked(i int, now time.Time) bool {
+	if b.paths[i].Primary {
 		return true
-	}
-	if !peerOK && p.Remote != b.paths[b.primary()].Remote {
-		return false
 	}
 	return b.until[i].IsZero()
 }
@@ -164,19 +165,18 @@ func (b *LB) acquire() (i int, probe bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
-	peerOK := b.peerOKLocked()
+	b.refreshPeerLocked()
 	prim := b.primary()
 	// A cooled path whose cooldown is over gets one probe dial first.
 	for j := range b.paths {
-		if !b.until[j].IsZero() && !now.Before(b.until[j]) && !b.probing[j] &&
-			(peerOK || b.paths[j].Remote == b.paths[prim].Remote) {
+		if !b.until[j].IsZero() && !now.Before(b.until[j]) && !b.probing[j] {
 			b.probing[j] = true
 			b.links[j]++
 			b.dials[j]++
 			return j, true
 		}
 	}
-	ok := func(j int) bool { return b.eligibleLocked(j, peerOK, now) }
+	ok := func(j int) bool { return b.eligibleLocked(j, now) }
 	i = -1
 	if b.auto {
 		i = b.minTwoLocked(ok)
@@ -285,7 +285,7 @@ func (b *LB) Stats() []LBPathStat {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	now := b.now()
-	peerOK := b.peerLB || b.peerState == nil
+	noPeer := b.peerKnw && !b.peerLB
 	prim := b.primary()
 	eff := b.effWeightsLocked()
 	total, wAll, wOK, effAll := 0, 0, 0, 0
@@ -293,7 +293,7 @@ func (b *LB) Stats() []LBPathStat {
 		total += b.links[j]
 		wAll += p.Weight
 		effAll += eff[j]
-		if b.eligibleLocked(j, peerOK, now) {
+		if b.eligibleLocked(j, now) {
 			wOK += eff[j]
 		}
 	}
@@ -304,14 +304,14 @@ func (b *LB) Stats() []LBPathStat {
 			s.SharePct = round1pct(100 * float64(p.Weight) / float64(wAll))
 		}
 		switch {
-		case !peerOK && p.Remote != b.paths[prim].Remote:
-			s.State = "no-peer"
+		case noPeer && !b.until[j].IsZero() && p.Remote != b.paths[prim].Remote:
+			s.State = "no-peer" // cooled, and the peer does not run lb
 		case b.probing[j]:
 			s.State = "probing"
 		case !b.until[j].IsZero():
 			s.State = "cooling"
 		}
-		if b.eligibleLocked(j, peerOK, now) && wOK > 0 {
+		if b.eligibleLocked(j, now) && wOK > 0 {
 			s.Target = (eff[j]*total + wOK/2) / wOK
 		}
 		s.Rebal = b.rebal[j]
