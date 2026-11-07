@@ -214,6 +214,10 @@ type tcpStat struct {
 	// retrans is — per segment on the wire, whatever the frame sizes and
 	// padding (payload bytes / mss misread a link of small frames, up to 10×).
 	segsOut, segsIn uint32
+	// Smoothed and lowest round trip (µs) and bytes the peer acknowledged:
+	// the queue controller's view of the path (queuectl.go).
+	rttUs, minRttUs uint32
+	bytesAcked      uint64
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its
