@@ -408,6 +408,7 @@ func runCmd(args []string) {
 				return
 			case <-hup:
 				reloadAllCerts("SIGHUP")
+				reloadLB("SIGHUP")
 			}
 		}
 	}()
@@ -506,6 +507,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			ln, err := listenLB(fc, logf)
 			must(err)
 			cfg.LB = lbOn(fc)
+			cfg.Advert = setupLB(fc, nil, ln, logf)
 			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 			cfg.RevServer.BackendFor = coverBackends(fc, logf)
 			cfg.RevListener = ln
@@ -515,9 +517,10 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			if lbOn(fc) {
 				lb := newLB(fc, logf)
 				cfg.Dialer = engine.NewLBLinkDialer(lb, func(p engine.LBPath) engine.LinkDialer {
-					return engine.NewMTCPDialer(p.Addr, lbSNIFor(fc, p.Remote), key, p.Local)
+					return engine.NewMTCPDialer(p.Addr, lbSNIFor(lbCur(fc), p.Remote), key, p.Local)
 				})
 				cfg.LB = true
+				cfg.Advert = setupLB(fc, lb, nil, logf)
 			}
 		}
 		must(engine.RunIran(ctx, cfg))
@@ -558,8 +561,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		if lbOn(fc) {
 			cfg.LB = true
 			cfg.RevLB = newLB(fc, logf)
+			cfg.Advert = setupLB(fc, cfg.RevLB, nil, logf)
 			cfg.RevDialPath = func(p engine.LBPath, scout bool) (*tlscarrier.Carrier, error) {
-				sni := lbSNIFor(fc, p.Remote)
+				sni := lbSNIFor(lbCur(fc), p.Remote)
 				if scout {
 					return tlscarrier.DialFromTimeout(p.Addr, sni, key, p.Local, 2*time.Second)
 				}
@@ -576,6 +580,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	must(err)
 	cfg.Listener = ln
 	cfg.LB = lbOn(fc)
+	cfg.Advert = setupLB(fc, nil, ln, logf)
 	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 	cfg.Server.BackendFor = coverBackends(fc, logf)
 	must(engine.RunKharej(ctx, cfg))
@@ -1055,7 +1060,7 @@ func must(err error) {
 
 // newLB builds the dialing side's balancer from the lb config (validated).
 func newLB(fc fileConfig, logf func(string, ...any)) *engine.LB {
-	paths, err := lbPaths(fc)
+	paths, err := lbPathsAdvert(fc, nil) // Source: local
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
@@ -1078,7 +1083,7 @@ func listenLB(fc fileConfig, logf func(string, ...any)) (net.Listener, error) {
 		return nil, err
 	}
 	extra := lbListenIPs(fc)
-	if len(extra) == 0 {
+	if !lbOn(fc) {
 		return ln, nil
 	}
 	_, port, _ := net.SplitHostPort(fc.Addr)
@@ -1093,6 +1098,8 @@ func listenLB(fc fileConfig, logf func(string, ...any)) (net.Listener, error) {
 		}
 		lns = append(lns, x)
 	}
-	logf("lb: also listening on %s (port %s)", strings.Join(extra, ", "), port)
+	if len(extra) > 0 {
+		logf("lb: also listening on %s (port %s)", strings.Join(extra, ", "), port)
+	}
 	return engine.MergeListeners(lns...), nil
 }

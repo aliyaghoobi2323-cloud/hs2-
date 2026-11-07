@@ -52,6 +52,14 @@ PATHS=${PATHS:-1}; PATH_A_NETEM=${PATH_A_NETEM:-}; PATH_B_NETEM=${PATH_B_NETEM:-
 # LB_MODE=fixed|auto is lb.mode; auto runs with HS2_LB_FAST=1 (quality tick
 # 5 s, rebalance 10 s instead of 30 s / 60 s) so a 60 s run sees it adapt.
 LB_MODE=${LB_MODE:-fixed}
+# LB_DIRECT=1 (with PATHS=2): the tunnel in DIRECT mode — kharej listens on
+# 192.168.50.2 and 192.168.51.2 (LB_WEIGHTS), iran dials from 192.168.50.1.
+# LB_INIT=one: the listening side starts with its primary address only.
+# LB_EVENTS="SEC:SPEC ..." (stage 6): at SEC seconds into the probe, rewrite
+# the LISTENING side's own lb list and send it SIGHUP (no restart); SPEC is
+# w=A,B (both addresses, these weights) or one (the primary only). The
+# dialing side learns the change from the listening side's announcement.
+LB_DIRECT=${LB_DIRECT:-0}; LB_INIT=${LB_INIT:-}; LB_EVENTS=${LB_EVENTS:-}
 if [ "$LB_MODE" = auto ]; then export HS2_LB_FAST=${HS2_LB_FAST:-1}; fi
 JOURNEY=${JOURNEY:-0}; JOURNEY_EXTRA=${JOURNEY_EXTRA:-}
 CALL=${CALL:-}; GAME=${GAME:-0}; LATE=${LATE:-0}; CROWD=${CROWD:-0}; CROWD_EVERY=${CROWD_EVERY:-700ms}
@@ -95,15 +103,34 @@ if [ "$PATHS" = 2 ]; then
     ip netns exec $1 ethtool -K $2 tso off gso off gro off tx off rx off >/dev/null 2>&1
     ip -n $1 link set dev $2 up
   done
-  # replies from the second Iran IP go back over path B
-  ip -n $IR rule add from 192.168.51.1 table 151
-  ip -n $IR route add 192.168.50.2/32 dev ${VI}b src 192.168.51.1 table 151
+  if [ "$LB_DIRECT" = 1 ]; then
+    # replies from the second kharej IP go back over path B
+    ip -n $KH rule add from 192.168.51.2 table 152
+    ip -n $KH route add 192.168.50.1/32 dev ${VK}b src 192.168.51.2 table 152
+  else
+    # replies from the second Iran IP go back over path B
+    ip -n $IR rule add from 192.168.51.1 table 151
+    ip -n $IR route add 192.168.50.2/32 dev ${VI}b src 192.168.51.1 table 151
+  fi
   ip netns exec $MID "$W/netem" -a ${MA}b -b ${MB}b -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
     -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} $PATH_B_NETEM 2>"$W/netem-b.log" & echo $! >> "$W/pids"
   WA=${LB_WEIGHTS%,*}; WB=${LB_WEIGHTS#*,}
-  LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","iran":[{"ip":"192.168.50.1","weight":'$WA'},{"ip":"192.168.51.1","weight":'$WB'}],"kharej":[{"ip":"192.168.50.2","weight":100}]},'
+  if [ "$LB_DIRECT" = 1 ]; then
+    LSIDE=kharej; LIP1=192.168.50.2; LIP2=192.168.51.2
+  else
+    LSIDE=iran; LIP1=192.168.50.1; LIP2=192.168.51.1
+  fi
+  LL='[{"ip":"'$LIP1'","weight":'$WA'},{"ip":"'$LIP2'","weight":'$WB'}]'
+  [ "$LB_INIT" = one ] && LL='[{"ip":"'$LIP1'","weight":100}]'
+  if [ "$LB_DIRECT" = 1 ]; then
+    LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","kharej":'$LL',"iran":[{"ip":"192.168.50.1","weight":100}]},'
+    KHAREJ_EXTRA="$LBJ$KHAREJ_EXTRA"
+    IRAN_EXTRA='"bind_local_ip":"192.168.50.1",'"$LBJ$IRAN_EXTRA"
+  else
+  LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","iran":'$LL',"kharej":[{"ip":"192.168.50.2","weight":100}]},'
   KHAREJ_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","bind_local_ip":"192.168.50.2","sni":"lab.example.com",'"$LBJ$KHAREJ_EXTRA"
   IRAN_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","backend_addr":"builtin","cert_file":"'$W'/cert.pem","key_file":"'$W'/key.pem",'"$LBJ$IRAN_EXTRA"
+  fi
 fi
 
 KEY=$(printf 'ab%.0s' {1..32})
@@ -122,9 +149,9 @@ J
 # once hs2 has made hs0, so it listens on all addresses
 PLISTEN=127.0.0.1:5201; [ "$VIA" = tun ] && PLISTEN=0.0.0.0:5201
 ip netns exec $KH "$W/probe" -server -listen $PLISTEN & echo $! >> "$W/pids"
-ip netns exec $KH env HS2_NO_TUNE=1 "$W/hs2kh" run -c "$W/kh.json" >"$W/kh.log" 2>&1 & echo $! >> "$W/pids"
+ip netns exec $KH env HS2_NO_TUNE=1 "$W/hs2kh" run -c "$W/kh.json" >"$W/kh.log" 2>&1 & KHPID=$!; echo $KHPID >> "$W/pids"
 sleep 1
-ip netns exec $IR env HS2_NO_TUNE=1 "$W/hs2" run -c "$W/ir.json" >"$W/ir.log" 2>&1 & echo $! >> "$W/pids"
+ip netns exec $IR env HS2_NO_TUNE=1 "$W/hs2" run -c "$W/ir.json" >"$W/ir.log" 2>&1 & IRPID=$!; echo $IRPID >> "$W/pids"
 # wait until the forwarded port answers (max ~15s)
 for i in $(seq 1 60); do
   ip netns exec $IR bash -c 'exec 3<>/dev/tcp/127.0.0.1/8443' 2>/dev/null && break
@@ -157,8 +184,33 @@ SF=/run/hs2/$(echo "$W/ir.json" | sed "s|^/||; s|/|-|g").status.json
 (while :; do python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('links',0))" "$SF" 2>/dev/null; sleep 1; done) > "$W/links.txt" &
 LP=$!; echo $LP >> "$W/pids"
 SFK=/run/hs2/$(echo "$W/kh.json" | sed "s|^/||; s|/|-|g").status.json
+SFD=$SFK; [ "$LB_DIRECT" = 1 ] && SFD=$SF   # the dialing side's status
 if [ "$PATHS" = 2 ]; then
-  (while :; do python3 -c "import json,sys; print(' '.join(str(p['links']) for p in json.load(open(sys.argv[1])).get('lb',[])))" "$SFK" 2>/dev/null; sleep 1; done) > "$W/lbpaths.txt" &
+  # per second: "t path=links/target(src) ..." on the dialing side
+  (t0=$(date +%s); while :; do python3 -c "import json,sys; print(sys.argv[2], ' '.join('%s=%d/%d%s' % (p['path'], p['links'], p['target'], '' if p.get('state','ok')=='ok' else ':'+p['state']) for p in json.load(open(sys.argv[1])).get('lb',[])))" "$SFD" $(( $(date +%s) - t0 )) 2>/dev/null; sleep 1; done) > "$W/lbtime.txt" &
+  echo $! >> "$W/pids"
+  (while :; do python3 -c "import json,sys; print(' '.join(str(p['links']) for p in json.load(open(sys.argv[1])).get('lb',[])))" "$SFD" 2>/dev/null; sleep 1; done) > "$W/lbpaths.txt" &
+  echo $! >> "$W/pids"
+fi
+if [ -n "$LB_EVENTS" ] && [ "$PATHS" = 2 ]; then
+  if [ "$LB_DIRECT" = 1 ]; then LCFG=$W/kh.json; LPID=$KHPID; else LCFG=$W/ir.json; LPID=$IRPID; fi
+  (t0=$(date +%s)
+   for ev in $LB_EVENTS; do
+     at=${ev%%:*}; spec=${ev#*:}
+     while [ $(( $(date +%s) - t0 )) -lt "$at" ]; do sleep 0.2; done
+     python3 - "$LCFG" "$LSIDE" "$LIP1" "$LIP2" "$spec" <<'PY'
+import json, sys
+f, side, a, b, spec = sys.argv[1:]
+c = json.load(open(f))
+if spec == 'one':
+    c['lb'][side] = [{'ip': a, 'weight': 100}]
+else:
+    wa, wb = spec[2:].split(',')
+    c['lb'][side] = [{'ip': a, 'weight': int(wa)}, {'ip': b, 'weight': int(wb)}]
+json.dump(c, open(f, 'w'))
+PY
+     kill -HUP "$LPID"; echo "$at $spec" >> "$W/lbevents.txt"
+   done) &
   echo $! >> "$W/pids"
 fi
 UFLAG=""; [ "$UDP" = 1 ] && UFLAG="-udp"
@@ -201,7 +253,7 @@ QREL=$(grep -c "not the tunnel's own" "$W/kh.log" 2>/dev/null)
 LBX=""
 if [ "$PATHS" = 2 ]; then
   # per-path link counts on the dialing (kharej) side: at the end, and the max
-  LBX=$(python3 - "$W/lbpaths.txt" "$SFK" <<'PY'
+  LBX=$(python3 - "$W/lbpaths.txt" "$SFD" <<'PY'
 import json, sys
 rows = [list(map(int, l.split())) for l in open(sys.argv[1]) if l.split()]
 try:

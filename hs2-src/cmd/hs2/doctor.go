@@ -59,6 +59,7 @@ func doctorCmd(args []string) {
 				checkCertRenewal(d, fc, leaf, hostRenewEnv())
 			}
 			checkLBCerts(d, fc)
+			checkLBAdvert(d, *cfgPath)
 			checkACME(d, fc)
 			checkTun(d, fc)
 			checkTuning(d, fc)

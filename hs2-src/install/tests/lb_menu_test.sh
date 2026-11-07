@@ -13,7 +13,12 @@
 #   - on / off and fixed / auto;
 #   - a certificate for an address via cert_get_webroot (certbot --webroot),
 #     and the offer to turn acme_webroot on when hs2 holds port 80;
-#   - live status shows lb_text and returns on Enter.
+#   - live status shows lb_text and returns on Enter;
+#   - stage 6, both modes and both roles: apply reloads (SIGHUP) instead of
+#     restarting when the running hs2 says lb_reload; the "same change on the
+#     other server" note only when the other server does not read
+#     announcements; an older hs2 or turning lb off restarts; a reload not
+#     taken puts .prev back.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"; SRC=$(cd "$HERE/../.." && pwd)
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
@@ -74,11 +79,20 @@ restart_unit(){
   return 0
 }
 status_path(){ echo "$T/st.json"; }
+reload_unit(){ # stage 6: SIGHUP; the fake daemon takes it unless NORELOAD
+  echo "RELOAD $1"
+  [ -n "${NORELOAD:-}" ] && return 0
+  python3 - "$T/st.json" <<'PY'
+import json, sys, time
+m = json.load(open(sys.argv[1])); m["lb_loaded_at"] = int(time.time()); m["updated"] = int(time.time())
+json.dump(m, open(sys.argv[1], "w"))
+PY
+}
 BIN="$T/bin/hs2"
 tm_lb hs2-x "$T/c.json"
 echo "RETURNED"
 INNER
-run(){ printf "$1" | script -qec "T='$T' FAILON='${FAILON:-}' SS80='${SS80:-}' SSBUSY='${SSBUSY:-}' bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'; }
+run(){ printf "$1" | script -qec "T='$T' FAILON='${FAILON:-}' SS80='${SS80:-}' SSBUSY='${SSBUSY:-}' NORELOAD='${NORELOAD:-}' bash '$T/inner.sh'" /dev/null 2>&1 | tr -d '\r'; }
 js(){ python3 -c "import json,sys; m=json.load(open('$T/c.json')); print(eval(sys.argv[1]))" "$1"; }
 
 # 1. initial screen: primary listed, Kharej primary unknown in Iran reverse.
@@ -165,4 +179,70 @@ check "live status shows lb_text" 'echo "$out" | grep -q "1.2.3.4>K 50%/48% loss
 printf '{"mode":"dial","carrier":"tls","addr":"1.2.3.4:2096"}\n' > "$T/c.json"
 out=$(run '\n')
 check "tls: refused with the reason" 'echo "$out" | grep -q "mtcp / l3mtcp / l3) only"'
+
+# 15. stage 6. st PEER: a running stage-6 hs2 (lb_reload) whose peer does / does not read announcements.
+st(){ printf '{"updated": %s, "lb_reload": true, "lb_loaded_at": 1, "lb_peer_advert": %s}
+' "$(date +%s)" "$1" > "$T/st.json"; }
+LBON='"lb": {"enabled": true, "mode": "fixed", "iran": [{"ip": "1.2.3.4", "weight": 50}, {"ip": "1.2.3.5", "weight": 50}], "kharej": []}'
+# reverse, Iran listens: reload, no restart, nothing to repeat on the other server
+iran ", $LBON"; st true
+out=$(run '2
+8
+0
+')
+check "reverse iran (listens): reload, no restart" 'echo "$out" | grep -q "RELOAD hs2-x" && ! echo "$out" | grep -q "RESTART hs2-x" && echo "$out" | grep -q "Applied without a restart" && echo "$out" | grep -q "nothing to repeat there" && ! echo "$out" | grep -q "Make the SAME change" && [ "$(js "m[\"lb\"][\"mode\"]")" = auto ]'
+# the other server is older (no announcements): the copy note stays
+iran ", $LBON"; st false
+out=$(run '2
+8
+0
+')
+check "reverse iran, older peer: reload + same-change note" 'echo "$out" | grep -q "RELOAD hs2-x" && echo "$out" | grep -q "Make the SAME change"'
+# direct, Kharej listens
+KLB='"lb": {"enabled": true, "mode": "fixed", "kharej": [{"ip": "1.2.3.4", "weight": 50}, {"ip": "1.2.3.5", "weight": 50}], "iran": []}'
+printf '{"mode":"listen","carrier":"mtcp","addr":"1.2.3.4:2096","shared_key":"%s","cert_file":"%s","key_file":"%s","expose":"127.0.0.1:443",%s}
+' "$KEY" "$T/c.pem" "$T/k.pem" "$KLB" > "$T/c.json"; st true
+out=$(run '2
+8
+0
+')
+check "direct kharej (listens): roles shown, reload, no restart" 'echo "$out" | grep -q "Kharej addresses (this server) — listens" && echo "$out" | grep -q "RELOAD hs2-x" && ! echo "$out" | grep -q "RESTART hs2-x" && echo "$out" | grep -q "nothing to repeat there"'
+# direct, Iran dials (its source addresses)
+printf '{"mode":"dial","carrier":"mtcp","addr":"9.9.9.1:2096","bind_local_ip":"1.2.3.4","sni":"t.example","shared_key":"%s","forward_ports":"443","lb":{"enabled":true,"mode":"fixed","iran":[{"ip":"1.2.3.4","weight":50},{"ip":"1.2.3.5","weight":50}],"kharej":[{"ip":"9.9.9.1","weight":100}]}}
+' "$KEY" > "$T/c.json"; st true
+out=$(run '2
+8
+0
+')
+check "direct iran (dials): roles shown, reload" 'echo "$out" | grep -q "Iran addresses (this server) — dials" && echo "$out" | grep -q "RELOAD hs2-x" && ! echo "$out" | grep -q "RESTART hs2-x"'
+# reverse, Kharej dials
+printf '{"mode":"listen","reverse":true,"carrier":"mtcp","addr":"9.9.9.1:2096","bind_local_ip":"1.2.3.4","sni":"t.example","shared_key":"%s","expose":"127.0.0.1:443","lb":{"enabled":true,"mode":"fixed","kharej":[{"ip":"1.2.3.4","weight":50},{"ip":"1.2.3.5","weight":50}],"iran":[{"ip":"9.9.9.1","weight":100}]}}
+' "$KEY" > "$T/c.json"; st true
+out=$(run '2
+8
+0
+')
+check "reverse kharej (dials): roles shown, reload" 'echo "$out" | grep -q "Kharej addresses (this server) — dials" && echo "$out" | grep -q "RELOAD hs2-x" && ! echo "$out" | grep -q "RESTART hs2-x"'
+# an older hs2 (no lb_reload in its status): restart as before
+iran ", $LBON"; printf '{"updated": %s}
+' "$(date +%s)" > "$T/st.json"
+out=$(run '2
+8
+0
+')
+check "older hs2: restart" 'echo "$out" | grep -q "RESTART hs2-x" && ! echo "$out" | grep -q "RELOAD hs2-x"'
+# turning lb off needs the restart
+iran ", $LBON"; st true
+out=$(run '1
+8
+0
+')
+check "lb off: restart, not reload" 'echo "$out" | grep -q "RESTART hs2-x" && ! echo "$out" | grep -q "RELOAD hs2-x"'
+# the daemon does not take the reload: .prev back
+iran ", $LBON"; st true
+out=$(NORELOAD=1 run '2
+8
+0
+')
+check "reload not taken: .prev restored" 'echo "$out" | grep -q "did not take the change" && [ "$(js "m[\"lb\"][\"mode\"]")" = fixed ]'
 exit "$fail"

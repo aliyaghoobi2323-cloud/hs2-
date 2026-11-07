@@ -46,6 +46,8 @@ type KharejConfig struct {
 	RevDialPath func(p LBPath, scout bool) (*tlscarrier.Carrier, error)
 	// LB advertises capLB to the edge (lb enabled on this side).
 	LB bool
+	// Advert (lb on): answers the edge's kindLBAdvert (lb_advert.go).
+	Advert *LBAdvert
 
 	// OnStart, if set, is called once with a function that returns a live
 	// snapshot of the link pattern, for monitoring.
@@ -82,6 +84,9 @@ func (cfg KharejConfig) info(myMax int) peerInfo {
 	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap(), Ports: t.MappedPorts()}
 	if cfg.LB {
 		pi.Caps |= capLB
+	}
+	if cfg.Advert != nil {
+		pi.Caps |= capLBAdvert
 	}
 	if t.Default != "" {
 		pi.Flags |= flagDefault
@@ -212,6 +217,12 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 				mtr.peerInfo.Store(&pi)
 			}
 		})
+	case kindLBAdvert:
+		if cfg.Advert == nil {
+			st.Close()
+			return
+		}
+		cfg.Advert.serve(st)
 	case kindTCP, kindTCPPort, kindUDP, kindUDPPort:
 		udp := kind[0] == kindUDP || kind[0] == kindUDPPort
 		port := 0

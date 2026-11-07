@@ -4096,10 +4096,47 @@ lb_check(){
   return 0
 }
 
-# lb_apply UNIT CFG: check, back up as .prev, write, restart this tunnel; if it
-# does not come up, put .prev back. Then: the other server needs the same.
+# lb_can_reload CFG: the running hs2 reloads its lb section on SIGHUP (stage 6:
+# its status says lb_reload) and lb stays on (turning it on or off, or an older
+# hs2, needs the restart).
+lb_can_reload(){
+  local sf; sf=$(status_path "$1")
+  [ "$LB_EN" = true ] || return 1
+  status_fresh "$sf" || return 1
+  [ "$(jraw "$sf" lb_reload)" = true ]
+}
+
+# reload_unit UNIT: SIGHUP to the tunnel — `systemctl reload` when the unit
+# has ExecReload, else kill -HUP to its main process.
+reload_unit(){
+  local u="$1" pid
+  if systemctl show -p ExecReload "$u" 2>/dev/null | grep -q 'path='; then
+    systemctl reload "$u" 2>/dev/null && return 0
+  fi
+  pid=$(tm_prop "$u" MainPID)
+  [ "${pid:-0}" != 0 ] || return 1
+  kill -HUP "$pid" 2>/dev/null
+}
+
+# lb_reloaded CFG SINCE: the daemon took the new lb section (its status shows
+# a load at or after SINCE, unix seconds) within ~8 s.
+lb_reloaded(){
+  local sf i at; sf=$(status_path "$1")
+  for i in $(seq 1 16); do
+    at=$(jraw "$sf" lb_loaded_at)
+    [ -n "$at" ] && [ "$at" -ge "$2" ] 2>/dev/null && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
+# lb_apply UNIT CFG: check, back up as .prev, write, then reload this tunnel
+# (SIGHUP: no restart, no link closed) when the running hs2 can, else restart
+# it; if it does not take the change, put .prev back. Then: the other server
+# needs the same only when it does not read announcements (older hs2).
 lb_apply(){
-  local u="$1" cfg="$2" new since
+  local u="$1" cfg="$2" new since reload=0 t0 sf
+  lb_can_reload "$cfg" && reload=1
   new=$(mktemp "$CFG_DIR/.hs2-lb.XXXXXX"); chmod 600 "$new"
   if ! lb_write "$cfg" "$new"; then rm -f "$new"; err "Could not write the new config."; return 1; fi
   say ""; info "Checking the change before applying it…"
@@ -4110,6 +4147,20 @@ lb_apply(){
   cat "$new" > "$cfg"; rm -f "$new"
   ok "Saved. The previous version is kept as $cfg.prev"
   since=$(date '+%Y-%m-%d %H:%M:%S')
+  if [ "$reload" = 1 ]; then
+    t0=$(date +%s)
+    info "Reloading $u (no restart — links stay up; shares move as links are replaced)…"
+    if reload_unit "$u" && lb_reloaded "$cfg" "$t0"; then
+      ok "Applied without a restart — $u is running with the new load-balancing settings."
+    else
+      err "$u did not take the change. Restoring the previous config."
+      tm_log_since "$u" "$since"
+      cat "$cfg.prev" > "$cfg"
+      reload_unit "$u" || true
+      lb_load "$cfg" >/dev/null 2>&1 || true
+      return 1
+    fi
+  else
   info "Restarting $u to apply the change…"
   if ! restart_unit "$u"; then
     err "$u did not come up with the change. Restoring the previous config."
@@ -4121,7 +4172,13 @@ lb_apply(){
     return 1
   fi
   ok "Applied — $u is running with the new load-balancing settings."
+  fi
   LB_DIRTY=0
+  sf=$(status_path "$cfg")
+  if status_fresh "$sf" && [ "$(jraw "$sf" lb_peer_advert)" = true ]; then
+    info "The other server reads this server's announcement: nothing to repeat there. (Its own addresses are changed on that server.)"
+    return 0
+  fi
   echo >&2; hr
   warn "Make the SAME change on the OTHER server of this tunnel, or the paths will not match."
   info "Open this tunnel there → l) Load balancing, or put this section in its config:"
@@ -4295,7 +4352,7 @@ tm_lb(){ # unit cfg
     say "  5) Edit an address (share, subdomain)"
     say "  6) Split equally (both sides)"
     say "  7) Get a certificate for an address (Let's Encrypt, its own subdomain)"
-    say "  8) Check & apply (backup, restart this tunnel, rollback on failure)"
+    say "  8) Check & apply (backup, reload this tunnel — restart only for an older hs2 or on/off — rollback on failure)"
     say "  9) Live status (per-path shares, loss, links — every 5 s)"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0

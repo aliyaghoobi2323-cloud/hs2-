@@ -37,6 +37,9 @@ type IranConfig struct {
 	// or dials, extra IPs). A Dialer built by NewLBLinkDialer reports its
 	// per-path state in the stats.
 	LB bool
+	// Advert (lb on): this side's own address list, announced to the exit, and
+	// the exit's, taken by the dialing side (lb_advert.go). Sets capLBAdvert.
+	Advert *LBAdvert
 
 	// DrainIdle: a connection on a retiring link that has moved nothing for
 	// this long is closed so the link can finish. 0 = the default (310 s, above
@@ -89,6 +92,10 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	if cfg.LB {
 		mine.Caps |= capLB
 	}
+	if cfg.Advert != nil {
+		mine.Caps |= capLBAdvert
+		go cfg.Advert.runEdge(ctx)
+	}
 	if lb := lbOf(cfg.Dialer); lb != nil && !reverse {
 		lb.setPeerState(func() (bool, bool) {
 			if pi := lm.exitInfo.Load(); pi != nil && pi.V2 {
@@ -133,6 +140,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 				}
 				if v := mtr.peerInfo.Load(); v != nil {
 					lm.exitInfo.Store(v) // what links whose own answer is late go by
+					if cfg.Advert != nil && v.V2 && v.Caps&capLBAdvert != 0 {
+						cfg.Advert.addLink(l)
+					}
 					return
 				}
 				// No answer in all of openInfo's tries (a congested link): the

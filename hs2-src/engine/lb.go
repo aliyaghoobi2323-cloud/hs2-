@@ -43,6 +43,10 @@ type LBPath struct {
 	Addr    string // Remote joined with the tunnel port: the dial target
 	Weight  int    // share weight (local% × remote%); 0 = fallback only
 	Primary bool   // the addr path: never cooled, needs no peer capability
+	// Source: where its remote address came from — "advert" (the listening
+	// side announced it, lb_advert.go) or "local" (this side's config).
+	Source string
+	Gone   bool // removed by a reload: takes no new link, dropped once empty
 }
 
 // Name is the path's display name, "local>remote".
@@ -65,6 +69,7 @@ type LBPathStat struct {
 	FailsAll uint64  `json:"fails_total"`
 	State    string  `json:"state"` // ok | cooling | probing | no-peer
 	Primary  bool    `json:"primary,omitempty"`
+	Source   string  `json:"source,omitempty"` // advert | local
 	// Mode auto (lb_auto.go): the effective weight (configured × a quality
 	// factor in [0.5, 1.5]) and the quality the factor came from.
 	EffWeight float64 `json:"eff_weight,omitempty"`
@@ -130,7 +135,11 @@ func NewLB(paths []LBPath, logf func(string, ...any)) (*LB, error) {
 }
 
 // Paths returns the configured paths.
-func (b *LB) Paths() []LBPath { return append([]LBPath(nil), b.paths...) }
+func (b *LB) Paths() []LBPath {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]LBPath(nil), b.paths...)
+}
 
 func (b *LB) primary() int {
 	for i, p := range b.paths {
@@ -156,7 +165,7 @@ func (b *LB) eligibleLocked(i int, now time.Time) bool {
 	if b.paths[i].Primary {
 		return true
 	}
-	return b.until[i].IsZero()
+	return !b.paths[i].Gone && b.until[i].IsZero()
 }
 
 // acquire picks the path for the next dial and reserves a link on it.
@@ -164,6 +173,10 @@ func (b *LB) eligibleLocked(i int, now time.Time) bool {
 func (b *LB) acquire() (i int, probe bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.acquireLocked()
+}
+
+func (b *LB) acquireLocked() (i int, probe bool) {
 	now := b.now()
 	b.refreshPeerLocked()
 	prim := b.primary()
@@ -239,7 +252,12 @@ func pickLargestRemainder(weights []int, links []int, ok func(int) bool, fallbac
 func (b *LB) result(i int, probe bool, link any, err error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.resultLocked(i, probe, link, err)
+}
+
+func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 	p := b.paths[i]
+	defer b.dropDrainedLocked()
 	if probe {
 		b.probing[i] = false
 	}
@@ -277,6 +295,7 @@ func (b *LB) release(link any) {
 		delete(b.hooks, link)
 		delete(b.qprev, link)
 		b.links[i]--
+		b.dropDrainedLocked()
 	}
 }
 
@@ -299,11 +318,13 @@ func (b *LB) Stats() []LBPathStat {
 	}
 	out := make([]LBPathStat, len(b.paths))
 	for j, p := range b.paths {
-		s := LBPathStat{Path: p.Name(), Weight: p.Weight, Links: b.links[j], Fails: b.fails[j], FailsAll: b.total[j], Primary: p.Primary, State: "ok"}
+		s := LBPathStat{Path: p.Name(), Weight: p.Weight, Links: b.links[j], Fails: b.fails[j], FailsAll: b.total[j], Primary: p.Primary, State: "ok", Source: p.Source}
 		if wAll > 0 {
 			s.SharePct = round1pct(100 * float64(p.Weight) / float64(wAll))
 		}
 		switch {
+		case p.Gone:
+			s.State = "draining" // removed by a reload; its links end naturally
 		case noPeer && !b.until[j].IsZero() && p.Remote != b.paths[prim].Remote:
 			s.State = "no-peer" // cooled, and the peer does not run lb
 		case b.probing[j]:
@@ -352,15 +373,24 @@ func LBLine(st []LBPathStat) string {
 }
 
 // dialVia dials one link through the balancer: dial gets the chosen path.
+// The paths may change (SetPaths) while the dial runs: the result is matched
+// to the path by name (a path with a dial in flight is never dropped).
 func (b *LB) dialVia(dial func(LBPath) (any, error)) (any, error) {
-	i, probe := b.acquire()
-	link, err := dial(b.paths[i])
+	b.mu.Lock()
+	i, probe := b.acquireLocked()
+	p := b.paths[i]
+	b.mu.Unlock()
+	link, err := dial(p)
 	if err == nil && link == nil {
 		err = errors.New("lb: dial returned no link")
 	}
-	b.result(i, probe, link, err)
+	b.mu.Lock()
+	if j := b.indexLocked(p.Name()); j >= 0 {
+		b.resultLocked(j, probe, link, err)
+	}
+	b.mu.Unlock()
 	if err != nil {
-		return nil, fmt.Errorf("path %s: %w", b.paths[i].Name(), err)
+		return nil, fmt.Errorf("path %s: %w", p.Name(), err)
 	}
 	return link, nil
 }
@@ -395,14 +425,16 @@ func (p *linkPeers) capState(c uint8) (known, has bool) {
 // dialer per path; a link is released from its path when it closes.
 type lbLinkDialer struct {
 	lb    *LB
-	inner map[string]LinkDialer // by LBPath.Name()
+	mk    func(LBPath) LinkDialer
+	mu    sync.Mutex
+	inner map[string]LinkDialer // by LBPath.Name(); built on first use
 }
 
 // NewLBLinkDialer builds a LinkDialer that places each link on a path of lb;
 // mk builds the inner dialer for one path.
 func NewLBLinkDialer(lb *LB, mk func(LBPath) LinkDialer) LinkDialer {
-	d := &lbLinkDialer{lb: lb, inner: map[string]LinkDialer{}}
-	for _, p := range lb.paths {
+	d := &lbLinkDialer{lb: lb, mk: mk, inner: map[string]LinkDialer{}}
+	for _, p := range lb.Paths() {
 		d.inner[p.Name()] = mk(p)
 	}
 	return d
@@ -410,7 +442,14 @@ func NewLBLinkDialer(lb *LB, mk func(LBPath) LinkDialer) LinkDialer {
 
 func (d *lbLinkDialer) DialLink(ctx context.Context) (Link, error) {
 	v, err := d.lb.dialVia(func(p LBPath) (any, error) {
-		l, err := d.inner[p.Name()].DialLink(ctx)
+		d.mu.Lock()
+		in, ok := d.inner[p.Name()]
+		if !ok { // a path added by a reload
+			in = d.mk(p)
+			d.inner[p.Name()] = in
+		}
+		d.mu.Unlock()
+		l, err := in.DialLink(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -445,29 +484,12 @@ func lbOf(d LinkDialer) *LB {
 }
 
 // MergeListeners accepts from every listener as one. Close closes them all.
-// Used to listen on extra LB IPs without touching the accept loops.
+// Used to listen on extra LB IPs without touching the accept loops. The result
+// is a ListenerSet: a reload adds or removes members (lb_advert.go).
 func MergeListeners(lns ...net.Listener) net.Listener {
-	if len(lns) == 1 {
-		return lns[0]
-	}
-	m := &mergedListener{lns: lns, ch: make(chan acceptRes), done: make(chan struct{})}
+	m := &mergedListener{ch: make(chan acceptRes), done: make(chan struct{}), stop: map[net.Listener]chan struct{}{}}
 	for _, ln := range lns {
-		go func(ln net.Listener) {
-			for {
-				c, err := ln.Accept()
-				select {
-				case m.ch <- acceptRes{c, err}:
-				case <-m.done:
-					if c != nil {
-						c.Close()
-					}
-					return
-				}
-				if err != nil && errors.Is(err, net.ErrClosed) {
-					return
-				}
-			}
-		}(ln)
+		m.AddListener(ln)
 	}
 	return m
 }
@@ -478,10 +500,88 @@ type acceptRes struct {
 }
 
 type mergedListener struct {
+	mu   sync.Mutex
 	lns  []net.Listener
+	stop map[net.Listener]chan struct{} // closed when the member is removed
 	ch   chan acceptRes
 	once sync.Once
 	done chan struct{}
+}
+
+func (m *mergedListener) AddListener(ln net.Listener) {
+	stop := make(chan struct{})
+	m.mu.Lock()
+	m.lns = append(m.lns, ln)
+	m.stop[ln] = stop
+	m.mu.Unlock()
+	select {
+	case <-m.done:
+		ln.Close()
+		return
+	default:
+	}
+	go func() {
+		for {
+			c, err := ln.Accept()
+			select {
+			case <-stop: // removed: its own close, not an error to report
+				if c != nil {
+					c.Close()
+				}
+				return
+			default:
+			}
+			select {
+			case m.ch <- acceptRes{c, err}:
+			case <-stop:
+				if c != nil {
+					c.Close()
+				}
+				return
+			case <-m.done:
+				if c != nil {
+					c.Close()
+				}
+				return
+			}
+			if err != nil && errors.Is(err, net.ErrClosed) {
+				return
+			}
+		}
+	}()
+}
+
+func (m *mergedListener) RemoveListener(ip string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i, ln := range m.lns {
+		if lnIP(ln) == ip {
+			close(m.stop[ln])
+			delete(m.stop, ln)
+			m.lns = append(m.lns[:i:i], m.lns[i+1:]...)
+			ln.Close()
+			return true
+		}
+	}
+	return false
+}
+
+func (m *mergedListener) ListenIPs() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []string
+	for _, ln := range m.lns {
+		out = append(out, lnIP(ln))
+	}
+	return out
+}
+
+func lnIP(ln net.Listener) string {
+	if a, ok := ln.Addr().(*net.TCPAddr); ok {
+		return a.IP.String()
+	}
+	h, _, _ := net.SplitHostPort(ln.Addr().String())
+	return h
 }
 
 func (m *mergedListener) Accept() (net.Conn, error) {
@@ -505,11 +605,17 @@ func (m *mergedListener) Accept() (net.Conn, error) {
 func (m *mergedListener) Close() error {
 	m.once.Do(func() {
 		close(m.done)
+		m.mu.Lock()
 		for _, ln := range m.lns {
 			ln.Close()
 		}
+		m.mu.Unlock()
 	})
 	return nil
 }
 
-func (m *mergedListener) Addr() net.Addr { return m.lns[0].Addr() }
+func (m *mergedListener) Addr() net.Addr {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.lns[0].Addr()
+}

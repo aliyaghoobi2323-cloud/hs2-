@@ -99,6 +99,9 @@ type liveStatus struct {
 	// the same as one text line.
 	LB     []engine.LBPathStat `json:"lb,omitempty"`
 	LBText string              `json:"lb_text,omitempty"`
+	// Stage 6 (lbreload.go): where the paths' addresses come from, the last
+	// (re)load, and whether the other server reads announcements.
+	lbStatus
 
 	// Per-port routing (carriers with user ports; see ports.go): the OTHER
 	// server's half of the table as it reported it over a live link.
@@ -447,6 +450,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		if len(s.LB) > 0 {
 			ls.LB, ls.LBText = s.LB, engine.LBLine(s.LB)
 		}
+		ls.lbStatus = lbStatusNow()
 		if ls.CfgMax > 0 {
 			ls.PeerMax = s.PeerMax
 			ls.EffMax, ls.LimitBy = effectiveCeiling(fc.Mode == "dial", fc.Reverse, ls.CfgMax, ls.PeerMax)
@@ -641,6 +645,9 @@ func printStatus(path string) {
 	}
 	if ls.LBText != "" {
 		fmt.Printf("  paths:      %s\n", ls.LBText)
+	}
+	if t := lbStatusLine(ls.lbStatus); t != "" {
+		fmt.Printf("  lb source:  %s\n", t)
 	}
 	for i, l := range ls.PortsLines {
 		if i == 0 {
