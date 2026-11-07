@@ -202,6 +202,34 @@ type liveStatus struct {
 	ObsL3DupSent        uint64  `json:"obs_l3_dup_sent,omitempty"`    // last minute: TUN packets sent over two links (HS2_L3_DUP)
 	ObsL3DupDropped     uint64  `json:"obs_l3_dup_dropped,omitempty"` // last minute: second copies dropped
 	ObsL3DupSaved       uint64  `json:"obs_l3_dup_saved,omitempty"`   // last minute: packets whose second copy came first
+
+	// Multi-link connections (HS2_MCONN), now: open connections and their
+	// sub-streams by plane (edge; the exit sees only the total).
+	MConnOpen      int64 `json:"mconn_open,omitempty"`
+	MConnSubsLight int64 `json:"mconn_subs_light,omitempty"`
+	MConnSubsBulk  int64 `json:"mconn_subs_bulk,omitempty"`
+	MConnSubsExit  int64 `json:"mconn_subs_exit,omitempty"`
+	// ... by sending state now (two copies, one sub, heavy), and the moves to
+	// heavy in the last minute by rule (standing queue / rate / fast start),
+	// and the primary switches of light connections whose primary was stuck.
+	MConnDual             int64  `json:"mconn_dual,omitempty"`
+	MConnSingle           int64  `json:"mconn_single,omitempty"`
+	MConnHeavy            int64  `json:"mconn_heavy,omitempty"`
+	ObsMConnHeavyQueue    uint64 `json:"obs_mconn_heavy_queue,omitempty"`
+	ObsMConnHeavyRate     uint64 `json:"obs_mconn_heavy_rate,omitempty"`
+	ObsMConnHeavyFast     uint64 `json:"obs_mconn_heavy_fast,omitempty"`
+	ObsMConnPrimarySwitch uint64 `json:"obs_mconn_primary_switch,omitempty"`
+	// HS2_MCONN=lite: lite connections open and on two subs now; upgrades to
+	// two subs and upgrades refused by the duplication cap, last minute.
+	MConnLiteOpen       int64  `json:"mconn_lite_open,omitempty"`
+	MConnLiteDual       int64  `json:"mconn_lite_dual,omitempty"`
+	ObsMConnLiteUpgrade uint64 `json:"obs_mconn_lite_upgrade,omitempty"`
+	ObsMConnLiteCapped  uint64 `json:"obs_mconn_lite_capped,omitempty"`
+}
+
+// fillMConn copies the multi-link connection counters (HS2_MCONN).
+func fillMConn(ls *liveStatus, m engine.MConnSnap) {
+	ls.MConnOpen, ls.MConnSubsLight, ls.MConnSubsBulk, ls.MConnSubsExit = m.Open, m.SubsLight, m.SubsBulk, m.SubsExit
 }
 
 // obsWindow turns the engine's ever-growing counters into the last minute's
@@ -240,6 +268,11 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther = now.ExitNoAddr, now.ExitRefused, now.ExitTimeout, now.ExitOther
 	ls.ObsExitRotated = now.ExitRotated
 	ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved = d.L3DupSent, d.L3DupDropped, d.L3DupSaved
+	ls.MConnDual, ls.MConnSingle, ls.MConnHeavy = now.MConnDual, now.MConnSingle, now.MConnHeavy
+	ls.ObsMConnHeavyQueue, ls.ObsMConnHeavyRate = d.MConnHeavyQueue, d.MConnHeavyRate
+	ls.ObsMConnHeavyFast, ls.ObsMConnPrimarySwitch = d.MConnHeavyFast, d.MConnPrimarySwitch
+	ls.MConnLiteOpen, ls.MConnLiteDual = now.MConnLiteOpen, now.MConnLiteDual
+	ls.ObsMConnLiteUpgrade, ls.ObsMConnLiteCapped = d.MConnLiteUpgrade, d.MConnLiteCapped
 }
 
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
@@ -259,6 +292,19 @@ func obsLines(ls liveStatus) []string {
 	}
 	if ls.ObsL3DupSent > 0 || ls.ObsL3DupDropped > 0 {
 		out = append(out, fmt.Sprintf("tun dup (HS2_L3_DUP), last minute: %d packet(s) sent over two links · %d second copies dropped · %d saved by the second link (it came first)", ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved))
+	}
+	if ls.MConnOpen > 0 || ls.MConnSubsLight+ls.MConnSubsBulk+ls.MConnSubsExit > 0 {
+		s := fmt.Sprintf("multi-link connections (HS2_MCONN): %d open", ls.MConnOpen)
+		if ls.MConnSubsLight+ls.MConnSubsBulk > 0 {
+			s += fmt.Sprintf(" · sub-streams %d on light links, %d on bulk links", ls.MConnSubsLight, ls.MConnSubsBulk)
+		}
+		if ls.MConnSubsExit > 0 {
+			s += fmt.Sprintf(" · %d sub-streams", ls.MConnSubsExit)
+		}
+		if ls.MConnLiteOpen > 0 || ls.ObsMConnLiteUpgrade > 0 || ls.ObsMConnLiteCapped > 0 {
+			s += fmt.Sprintf(" · lite: %d open, %d on two subs, last minute %d upgrade(s), %d refused by the cap", ls.MConnLiteOpen, ls.MConnLiteDual, ls.ObsMConnLiteUpgrade, ls.ObsMConnLiteCapped)
+		}
+		out = append(out, s)
 	}
 	if fails := ls.ObsExitNoAddr + ls.ObsExitRefused + ls.ObsExitTimeout + ls.ObsExitOther; ls.ObsExitDials > 0 || fails > 0 {
 		s := fmt.Sprintf("exit dials %d in the last minute", ls.ObsExitDials)
@@ -429,6 +475,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		// instead of sending under its rate on an asymmetrically loaded box.
 		udpcarrier.SetHostSaturated(hs.Saturated)
 		ow.fill(&ls, engine.Observed())
+		fillMConn(&ls, engine.MConnObserved())
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)

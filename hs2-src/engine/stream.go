@@ -45,6 +45,11 @@ const (
 	// them; an older exit gets the untagged kindTCP / kindUDP.
 	kindTCPPort byte = 8
 	kindUDPPort byte = 9
+
+	// One sub-stream of a multi-link user connection (HS2_MCONN, mconn_link.go):
+	// [kind][port u16][conn id u64][role u8]. Sent only to an exit that
+	// announced capMConn.
+	kindMConn byte = 10
 )
 
 // kindTimeout bounds how long the kharej side waits for a new stream's kind.

@@ -56,6 +56,8 @@ const (
 	capPortTags  = 1 << 0
 	capL3Quiet   = 1 << 1
 	capL3Dup     = 1 << 2
+	capMConn     = 1 << 3 // reads kindMConn sub-streams (HS2_MCONN, mconn_link.go)
+	capMConnRaw  = 1 << 4 // reads a raw first kindMConn sub (mconnRoleFirstRaw, mconn_raw.go)
 	flagUDP      = 1 << 0 // edge
 	flagDefault  = 1 << 0 // exit
 	flagCut      = 1 << 1
@@ -84,6 +86,12 @@ func peerL3Quiet(m *linkMeter) func() bool {
 
 // l3Dup reports whether the other server reads TypeDataDup frames.
 func (pi *peerInfo) l3Dup() bool { return pi != nil && pi.V2 && pi.Caps&capL3Dup != 0 }
+
+// mconn reports whether the other server reads kindMConn sub-streams.
+func (pi *peerInfo) mconn() bool { return pi != nil && pi.V2 && pi.Caps&capMConn != 0 }
+
+// mconnRaw reports whether the other server reads a raw first sub.
+func (pi *peerInfo) mconnRaw() bool { return pi.mconn() && pi.Caps&capMConnRaw != 0 }
 
 // peerL3Dup reads it from a link's meter (false until the info arrives).
 func peerL3Dup(m *linkMeter) func() bool {

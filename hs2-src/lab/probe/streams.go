@@ -30,17 +30,18 @@ import (
 
 // streamResult is the JSON summary of one call or game stream.
 type streamResult struct {
-	Sent    int     `json:"sent"`           // frames scheduled after warm-up
-	N       int     `json:"n"`              // of them, echoed back before the end
-	Lost    int     `json:"lost"`           // never came back (counted as late too)
-	P50     float64 `json:"p50_ms"`         // round-trip time
-	P95     float64 `json:"p95_ms"`         //
-	P99     float64 `json:"p99_ms"`         //
-	Max     float64 `json:"max_ms"`         //
-	Jitter  float64 `json:"jitter_ms"`      // mean |rtt[i] - rtt[i-1]|, in arrival order
-	LatePct float64 `json:"late_pct"`       // share of Sent with rtt > -latems, or lost
-	Mbps    float64 `json:"mbps,omitempty"` // offered rate, one direction (call)
-	Error   string  `json:"error,omitempty"`
+	Sent    int       `json:"sent"`           // frames scheduled after warm-up
+	N       int       `json:"n"`              // of them, echoed back before the end
+	Lost    int       `json:"lost"`           // never came back (counted as late too)
+	P50     float64   `json:"p50_ms"`         // round-trip time
+	P95     float64   `json:"p95_ms"`         //
+	P99     float64   `json:"p99_ms"`         //
+	Max     float64   `json:"max_ms"`         //
+	Jitter  float64   `json:"jitter_ms"`      // mean |rtt[i] - rtt[i-1]|, in arrival order
+	LatePct float64   `json:"late_pct"`       // share of Sent with rtt > -latems, or lost
+	Mbps    float64   `json:"mbps,omitempty"` // offered rate, one direction (call)
+	Error   string    `json:"error,omitempty"`
+	rtts    []float64 // the samples, for callers that aggregate several streams
 }
 
 // crowdResult is the JSON summary of the crowd load.
@@ -205,6 +206,7 @@ loop:
 	<-readerDone
 	res.Sent = int(sent.Load())
 	res.N = len(rtts)
+	res.rtts = rtts
 	res.Lost = max(res.Sent-res.N, 0)
 	res.P50, res.P95, res.P99, res.Max = pct(rtts, .5), pct(rtts, .95), pct(rtts, .99), pct(rtts, 1)
 	if jn > 0 {
