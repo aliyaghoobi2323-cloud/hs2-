@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 )
@@ -56,11 +57,17 @@ var (
 	refillTick  = 100 * time.Millisecond
 	refillRearm = time.Minute
 	refillKeep  = 5 * time.Minute // the last episode's summary stays in the status this long
+	// refillPartialMax: an episode after a partial loss holds connections no
+	// longer than this — links are still up, so a long wait is a cost of its
+	// own (the simulation: 280 of 300 links lost, the busiest link 96 → 21 at
+	// a 10 s limit, every reconnect waiting up to ~10 s).
+	refillPartialMax = 4 * time.Second
 )
 
 // refillHold is the episode state, under LinkManager.mu.
 type refillHold struct {
 	on        bool
+	partial   bool // started by a partial loss (refillPartialMax)
 	start     time.Time
 	lastLink  time.Time // the latest link arrival in this episode
 	quietTill time.Time // no new episode before this (after a time-limited one)
@@ -97,10 +104,40 @@ func (m *LinkManager) noteArrivalLocked(now time.Time) {
 		h.lastLink = now
 		return
 	}
-	if m.aliveLocked() > 0 || now.Before(h.quietTill) || m.target.Load() < 2 {
+	if m.aliveLocked() > 0 {
 		return
 	}
-	h.on, h.start, h.lastLink = true, now, now
+	m.startRefillLocked(now, false)
+}
+
+// partialRefill: HS2_PARTIAL_REFILL=1 also starts an episode when most links
+// die at once with some still up (notePartialLossLocked).
+var partialRefill = os.Getenv("HS2_PARTIAL_REFILL") == "1"
+
+// notePartialLossLocked is called by reap with the links it found dead and the
+// ones still alive: losing most of the pool at once — 280 of 300 on a path
+// that cut them, the commonest outage on the Iran border — sends every one of
+// their users back at the same moment, and with links still up no episode
+// started, so all of them piled onto the few survivors and stayed there after
+// the pool refilled: the pile-up the hold exists to prevent. An episode
+// starts when at least a quarter of the target died in one sweep and under
+// half of it is left. Caller holds m.mu.
+func (m *LinkManager) notePartialLossLocked(now time.Time, dead, alive int) {
+	T := int(m.target.Load())
+	if !partialRefill || m.hold.on || alive == 0 || dead < max(2, T/4) || 2*alive >= T {
+		return
+	}
+	m.startRefillLocked(now, true)
+}
+
+// startRefillLocked starts an episode — unless one runs, the last one ran out
+// under refillRearm, or the pool wants a single link. Caller holds m.mu.
+func (m *LinkManager) startRefillLocked(now time.Time, partial bool) {
+	h := &m.hold
+	if h.on || now.Before(h.quietTill) || m.target.Load() < 2 {
+		return
+	}
+	h.on, h.start, h.lastLink, h.partial = true, now, now, partial
 	h.held, h.longest, h.topCap, h.announce = 0, 0, 0, false
 	ctx := m.scaleCtx
 	if ctx == nil {
@@ -181,7 +218,7 @@ func (m *LinkManager) pickHeld() (l Link, release func(), ok bool, w *holdWaiter
 		m.hold.topCap = max(m.hold.topCap, c)
 		T, _ := m.refillTargetLocked()
 		m.log("refill: %d of %d links up — new connections wait (%s at most) for a link with room, so they spread over the links still opening instead of piling onto the first ones: at most %d open connections per link (the fair share) until the pool is up",
-			S, T, fmtDur(refillHoldMax), c)
+			S, T, fmtDur(m.hold.limit()), c)
 	}
 	return nil, nil, false, w
 }
@@ -257,7 +294,7 @@ func (m *LinkManager) refillStep(now time.Time) bool {
 		return true
 	case S >= T:
 		why = "complete"
-	case e >= refillHoldMax:
+	case e >= m.hold.limit():
 		why = "limit"
 	case S > 0 && now.Sub(m.hold.lastLink) >= refillStall:
 		why = "stalled"
@@ -336,10 +373,10 @@ func (m *LinkManager) endRefill(now time.Time, why string) {
 			fmtDur(refillStall), S, T, secs(took), late, most, h.topCap)
 	case late > 0 && most > h.topCap:
 		line = fmt.Sprintf("refill: hold ended at its %s limit with only %d of %d links up (%s) — the %d connection(s) still waiting went onto the existing links, none refused: up to %d open connections on one link, above the hold's %d, until more links come (new links take the new connections)",
-			fmtDur(refillHoldMax), S, T, refillWhySlow(S, T, took), late, most, h.topCap)
+			fmtDur(h.limit()), S, T, refillWhySlow(S, T, took), late, most, h.topCap)
 	default:
 		line = fmt.Sprintf("refill: hold ended at its %s limit with %d of %d links up — %d connection(s) waited (longest %s); at most %d open connections on one link (the hold allowed %d)",
-			fmtDur(refillHoldMax), S, T, h.held, secs(h.longest), most, h.topCap)
+			fmtDur(h.limit()), S, T, h.held, secs(h.longest), most, h.topCap)
 	}
 	if line != "" {
 		h.last, h.lastAt = line[len("refill: "):], now
@@ -360,7 +397,7 @@ func (m *LinkManager) refillNoteLocked(now time.Time) string {
 		}
 		S, _ := m.countsLocked()
 		return fmt.Sprintf("refilling after a start or a total loss: %d of %d links up; %d new connection(s) waiting for a link with room (at most %d open per link for now); the hold ends within %s",
-			S, m.target.Load(), len(h.queue), m.refillCapLocked(), secs(max(0, refillHoldMax-now.Sub(h.start))))
+			S, m.target.Load(), len(h.queue), m.refillCapLocked(), secs(max(0, h.limit()-now.Sub(h.start))))
 	}
 	if h.last != "" && now.Sub(h.lastAt) < refillKeep {
 		return fmt.Sprintf("last refill (%s ago): %s", fmtDur(now.Sub(h.lastAt)), h.last)
@@ -370,3 +407,11 @@ func (m *LinkManager) refillNoteLocked(now time.Time) string {
 
 // secs renders a short duration to a tenth of a second ("3.4s").
 func secs(d time.Duration) string { return fmt.Sprintf("%.1fs", d.Seconds()) }
+
+// limit is this episode's time limit.
+func (h *refillHold) limit() time.Duration {
+	if h.partial {
+		return refillPartialMax
+	}
+	return refillHoldMax
+}
