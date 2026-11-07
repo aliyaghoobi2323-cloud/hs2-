@@ -8,6 +8,14 @@
 // sends a 1-byte echo every -every and times the reply. It also opens a fresh
 // connection every second and times connect+first-byte (what a page load or a
 // new app request feels like). With -udp it also runs a UDP echo probe.
+//
+// Extra loads (streams.go), each reported as its own JSON object:
+//
+//	-call 2mbit   a two-way constant-rate stream like a video call ("call")
+//	-game         small frames every 20-50 ms, echoed back ("game")
+//	-late 5s      start the echo, call and game this long after the downloads
+//	-crowd 300    light connections, a small request every ~-crowdevery ("crowd")
+//
 // Output is one JSON line so sweeps can aggregate it.
 package main
 
@@ -66,6 +74,8 @@ func server(listen string) {
 			case 'E': // echo
 				c.Write(m[:])
 				io.Copy(c, c)
+			case 'R': // crowd: small requests, replies of the asked size
+				serveRequests(c, blob)
 			}
 		}(c)
 	}
@@ -91,6 +101,10 @@ type result struct {
 	UDPP99     float64 `json:"udp_p99_ms,omitempty"`
 	UDPMax     float64 `json:"udp_max_ms,omitempty"`
 	BulkErrors int     `json:"bulk_errors"`
+	// optional loads; absent unless asked for
+	Call  *streamResult `json:"call,omitempty"`
+	Game  *streamResult `json:"game,omitempty"`
+	Crowd *crowdResult  `json:"crowd,omitempty"`
 }
 
 func pct(v []float64, p float64) float64 {
@@ -117,7 +131,18 @@ func main() {
 	udp := flag.Bool("udp", false, "also run a UDP echo probe")
 	echoDelay := flag.Duration("echodelay", 0, "open the echo connection this long after the downloads (a game started while they run)")
 	seg := flag.Int64("seg", 0, "bytes per download connection before it reconnects (0 = one connection for the whole run)")
+	call := flag.String("call", "", "also run a two-way video-call-like stream at this rate, e.g. 2mbit")
+	callSize := flag.Int("callsize", 1000, "call frame size, bytes")
+	game := flag.Bool("game", false, "also run a game-like stream: 60-200 byte frames every 20-50 ms")
+	late := flag.Duration("late", 0, "start the echo, call and game this long after the downloads (sets -echodelay if that is 0)")
+	lateMs := flag.Float64("latems", 150, "call/game: a round trip above this many ms counts as late")
+	crowd := flag.Int("crowd", 0, "light connections, each sending a small request every ~-crowdevery")
+	crowdEvery := flag.Duration("crowdevery", 700*time.Millisecond, "crowd: mean interval between requests per connection (uniform 0.5x-1.5x)")
+	crowdMax := flag.Int("crowdmax", 4096, "crowd: largest reply, bytes (uniform from 600)")
 	flag.Parse()
+	if *late > 0 && *echoDelay == 0 {
+		*echoDelay = *late
+	}
 	if *srv {
 		server(*listen)
 		return
@@ -331,6 +356,43 @@ func main() {
 				}
 				mu.Unlock()
 			}
+		}()
+	}
+	var callBps float64
+	if *call != "" {
+		var err error
+		if callBps, err = parseRate(*call); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
+	stream := func(dst **streamResult, gap func() time.Duration, size func() int, mbps float64) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res := runStream(streamSpec{addr: *addr, delay: *late, gap: gap, size: size,
+				start: start, warm: max(*warm, *late), lateMs: *lateMs, mbps: mbps}, stop)
+			mu.Lock()
+			*dst = res
+			mu.Unlock()
+		}()
+	}
+	if callBps > 0 {
+		gap, size := callSpec(callBps, *callSize)
+		stream(&r.Call, gap, size, callBps/1e6)
+	}
+	if *game {
+		gap, size := gameSpec()
+		stream(&r.Game, gap, size, 0)
+	}
+	if *crowd > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res := runCrowd(*addr, *crowd, *crowdEvery, *crowdMax, measuring, stop)
+			mu.Lock()
+			r.Crowd = res
+			mu.Unlock()
 		}()
 	}
 	time.Sleep(*dur)
