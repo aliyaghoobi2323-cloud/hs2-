@@ -152,6 +152,7 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		return "session setup failed: " + describeNetErr(err)
 	}
 	cfg.peers.add(mtr) // the edge's ceiling this link reports counts only while it is up
+	defer exitQueue.track(car)()
 	defer cfg.peers.remove(mtr)
 	// Close the session when ctx ends, so AcceptStream unblocks and this returns
 	// instead of hanging on a link the edge keeps alive with keepalives.

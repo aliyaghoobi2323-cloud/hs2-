@@ -11,6 +11,7 @@
 #   MIN_LINKS [4]  MAX_LINKS [16]
 #   IRAN_EXTRA / KHAREJ_EXTRA: extra JSON fields, e.g. '"per_link":4,'
 #   KEEP=1 leaves the namespaces and logs in place.
+#   KH_QDISC / IR_QDISC: a qdisc on the Kharej / Iran side's link into the path, e.g. "cake bandwidth 92mbit".
 #   NETEM_EXTRA: extra emulator flags, e.g. "-burstloss 0.3 -badms 30 -goodms 2000" (bursty loss).
 #   PROBE_EXTRA: extra probe flags, e.g. "-seg 4000000" (reconnect per 4 MB download).
 #   LAB_ID=n runs in namespaces irn/khn/midn so experiments can run in parallel.
@@ -53,6 +54,8 @@ for x in "$IR $VI" "$KH $VK" "$MID $MA" "$MID $MB"; do
   ip netns exec $1 ethtool -K $2 tso off gso off gro off tx off rx off >/dev/null 2>&1
   ip -n $1 link set dev $2 up
 done
+[ -n "${KH_QDISC:-}" ] && ip netns exec $KH tc qdisc replace dev $VK root ${KH_QDISC}
+[ -n "${IR_QDISC:-}" ] && ip netns exec $IR tc qdisc replace dev $VI root ${IR_QDISC}
 ip netns exec $MID "$W/netem" -a $MA -b $MB -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
   -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} 2>"$W/netem.log" & echo $! >> "$W/pids"
 
@@ -91,6 +94,8 @@ PLOSS=$(grep -o '[0-9.]*% packet loss' "$PINGF" | cut -d% -f1)
 REAPS=$(grep -cE 'reap:|rebuilt|link down' "$W/ir.log")
 SF=/run/hs2/$(echo "$W/ir.json" | sed "s|^/||; s|/|-|g").status.json
 LINKS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get(\"links\",0))" "$SF" 2>/dev/null || echo 0)
+QCAPS=$(grep -c "tunnel egress capped" "$W/kh.log" 2>/dev/null)
+QREL=$(grep -c "not the tunnel's own" "$W/kh.log" 2>/dev/null)
 [ "${KEEP:-0}" = 1 ] || cleanup
-printf '{"links_end":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s","link_churn":%s,"probe":%s}\n' \
-  "${LINKS:-0}" "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "$REAPS" "${OUT:-null}"
+printf '{"qcaps":%s,"qrel":%s,"links_end":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s","link_churn":%s,"probe":%s}\n' \
+  "${QCAPS:-0}" "${QREL:-0}" "${LINKS:-0}" "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "$REAPS" "${OUT:-null}"

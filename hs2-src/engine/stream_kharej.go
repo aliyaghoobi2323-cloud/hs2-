@@ -100,6 +100,9 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		cfg.traffic = newExitTraffic(cfg.peers)
 		go cfg.traffic.run(ctx.Done())
 	}
+	if queueCtlOn {
+		go exitQueue.run(ctx, logf)
+	}
 	if cfg.RevDial != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
@@ -138,6 +141,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 				}
 			}()
 			cfg.peers.add(mtr)
+			defer exitQueue.track(car)()
 			defer cfg.peers.remove(mtr)
 			logf("link up from %s (now %d)", conn.RemoteAddr(), links.Add(1))
 			var downErr error

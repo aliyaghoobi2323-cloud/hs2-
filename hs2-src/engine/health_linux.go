@@ -39,6 +39,9 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			chronoValid:  info.Busy_time > 0,
 			segsOut:      info.Data_segs_out,
 			segsIn:       info.Data_segs_in,
+			rttUs:        info.Rtt,
+			minRttUs:     info.Min_rtt,
+			bytesAcked:   info.Bytes_acked,
 		}
 		ok = true
 	})
