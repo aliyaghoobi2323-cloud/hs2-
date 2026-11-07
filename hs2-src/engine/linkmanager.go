@@ -256,6 +256,7 @@ type managedLink struct {
 	prevPeer         peerLossRec // the pong that opened the current download-loss window
 	lossFrac         float64     // the last judged loss fraction (the worse direction)
 	stuckStreak      int         // consecutive samples its traffic waited stuckWait+ (stuck.go)
+	healStreak       int         // draining, consecutive samples it looked right again (probation)
 	stuck            bool        // degraded because it is stuck: drained without the maxDrain wait
 	sampled          bool        // prev* are valid (skips the first delta)
 	degraded         bool        // soft-bad: excluded from new-user routing
@@ -1505,6 +1506,13 @@ var pickClass = os.Getenv("HS2_PICK_CLASS") == "1" || pickLane > 0
 // unset, "", "0" or "off" is off.
 var pickLane = parseLane(os.Getenv("HS2_PICK_LANE"))
 
+// linkProbation: HS2_LINK_PROBATION=1 lets a degraded link that comes right
+// stop draining (sampleHealth) instead of cutting its users at maxDrain.
+var linkProbation = os.Getenv("HS2_LINK_PROBATION") == "1"
+
+// probationTicks: samples running a draining link must look right again.
+const probationTicks = 5
+
 // laneDefault is what the lab measured best. Two free links gave the whole
 // gain (a game starting 8 s into 8 downloads at 1% loss: echo p50 299 →
 // 176 ms, p95 413 → 199 ms; often with no extra link at all), and with 64
@@ -1959,6 +1967,44 @@ func (m *LinkManager) sampleHealth() {
 				answering = append(answering, rtt)
 				answeringMoved = append(answeringMoved, moved)
 				lastAns = max(lastAns, o.ctrlAns)
+			}
+		}
+		// Probation (HS2_LINK_PROBATION): a draining link is still judged, and
+		// one that has come right — its loss back under the rule's bar, or a
+		// stuck one answering promptly again, for probationTicks running on
+		// a calm path — stops draining before its users are cut. Degraded
+		// used to be for good: a link hit by a momentary loss burst cut its
+		// idle connections at maxDrain and its active ones — a call, a game —
+		// at maxDrainActive, however soon it recovered. It retires instead:
+		// no new connections, its own stay, and heal or the autopilot can put
+		// it back into service; its replacement is already up.
+		if linkProbation && ml.draining && ml.degraded && ml.link.Alive() && now.Sub(ml.drainSince) < maxDrainActive {
+			up := judgeUpLoss(o.tsOK, dWr, dUp, dSegsOut, secs)
+			dn, _ := ml.judgeDownLoss(o.peerLoss)
+			var good, bad bool
+			if ml.stuck {
+				good = busy && o.ctrlAns != 0 && o.ctrlWait < stuckPrompt
+				bad = o.ctrlWait >= stuckWait
+			} else {
+				good = (up.judged || dn.judged) && !up.bad() && !dn.bad()
+				bad = up.bad() || dn.bad()
+			}
+			switch {
+			case !calm || bad:
+				ml.healStreak = 0
+			case good:
+				ml.healStreak++
+			}
+			if ml.healStreak >= probationTicks {
+				why := "its loss is back under the bar"
+				if ml.stuck {
+					why = "it answers promptly again"
+				}
+				logs = append(logs, fmt.Sprintf("link %d recovered: %s for %s — draining stopped after %s; its %d connection(s) stay, it takes no new ones (retiring)",
+					ml.id, why, fmtDur(probationTicks*healthTick), fmtDur(now.Sub(ml.drainSince)), ml.users.Load()))
+				ml.degraded, ml.draining, ml.stuck, ml.drainNoted, ml.drainReplace = false, false, false, false, false
+				ml.retiring, ml.healStreak = true, 0
+				ml.upStreak, ml.dnStreak, ml.lowStreak, ml.stuckStreak = 0, 0, 0, 0
 			}
 		}
 		s.G += ml.rate
