@@ -209,6 +209,13 @@ type liveStatus struct {
 	MConnSubsLight int64 `json:"mconn_subs_light,omitempty"`
 	MConnSubsBulk  int64 `json:"mconn_subs_bulk,omitempty"`
 	MConnSubsExit  int64 `json:"mconn_subs_exit,omitempty"`
+	// ... by sending state now (two copies, one sub, heavy), and the moves to
+	// heavy in the last minute by rule (standing queue / rate).
+	MConnDual          int64  `json:"mconn_dual,omitempty"`
+	MConnSingle        int64  `json:"mconn_single,omitempty"`
+	MConnHeavy         int64  `json:"mconn_heavy,omitempty"`
+	ObsMConnHeavyQueue uint64 `json:"obs_mconn_heavy_queue,omitempty"`
+	ObsMConnHeavyRate  uint64 `json:"obs_mconn_heavy_rate,omitempty"`
 }
 
 // fillMConn copies the multi-link connection counters (HS2_MCONN).
@@ -252,6 +259,8 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther = now.ExitNoAddr, now.ExitRefused, now.ExitTimeout, now.ExitOther
 	ls.ObsExitRotated = now.ExitRotated
 	ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved = d.L3DupSent, d.L3DupDropped, d.L3DupSaved
+	ls.MConnDual, ls.MConnSingle, ls.MConnHeavy = now.MConnDual, now.MConnSingle, now.MConnHeavy
+	ls.ObsMConnHeavyQueue, ls.ObsMConnHeavyRate = d.MConnHeavyQueue, d.MConnHeavyRate
 }
 
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).

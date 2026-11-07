@@ -20,6 +20,7 @@ import (
 type tSub struct {
 	net.Conn
 	gate   atomic.Pointer[chan struct{}]
+	rate   atomic.Int64 // bytes/s this end's writes are held to (0: none)
 	wrote  atomic.Int64
 	closed atomic.Bool
 	dead   chan struct{}
@@ -35,6 +36,9 @@ func (t *tSub) Write(p []byte) (int, error) {
 		case <-t.dead:
 			return 0, io.ErrClosedPipe
 		}
+	}
+	if r := t.rate.Load(); r > 0 {
+		time.Sleep(time.Duration(int64(len(p)) * int64(time.Second) / r))
 	}
 	n, err := t.Conn.Write(p)
 	t.wrote.Add(int64(n))
@@ -251,12 +255,124 @@ func TestMConnTransferLight(t *testing.T) {
 	if modeOf(iran) != planeLight || modeOf(exit) != planeLight || n.count(planeBulk) != 0 {
 		t.Fatal("left light mode")
 	}
-	// A fast transfer is over mDupMaxRate: one copy of each chunk, spread
-	// over both light subs by queue length (the stall test checks the copies
-	// of a slow one). Both subs carry part, and together all of it.
+	// A fast transfer is over mDupMaxRate: one copy of each chunk, all on the
+	// primary sub (never spread over two links); the other sub carries only
+	// the first chunks, duplicated before the rate was known (the stall test
+	// checks the copies of a slow one).
+	for _, end := range []string{"iran", "exit"} {
+		a, b := n.link(0).iran.wrote.Load(), n.link(1).iran.wrote.Load()
+		if end == "exit" {
+			a, b = n.link(0).exit.wrote.Load(), n.link(1).exit.wrote.Load()
+		}
+		if max(a, b) < 3<<20 || min(a, b) > 256<<10 {
+			t.Fatalf("%s light subs carried %d and %d bytes; want one sub with all of it", end, a, b)
+		}
+	}
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+// Queue rule: a sender that outruns slow light links (3.2 Mbit/s each, under
+// mHeavyRate) builds a standing queue and goes heavy — by the queue, not the
+// rate — and moves to a bulk sub.
+func TestMConnHeavyByQueue(t *testing.T) {
+	before := runtime.NumGoroutine()
+	byQueue, byRate := obs.mconnHeavyQueue.Load(), obs.mconnHeavyRate.Load()
+	n, iran, exit := newTPair(t, false)
+	n.link(0).iran.rate.Store(400 << 10)
+	n.link(1).iran.rate.Store(400 << 10)
+	data := randBytes(3<<20, 11)
+	errs := make(chan error, 2)
+	go func() {
+		d := data
+		for len(d) > 0 {
+			k := min(len(d), 16<<10)
+			if _, err := iran.Write(d[:k]); err != nil {
+				errs <- err
+				return
+			}
+			d = d[k:]
+		}
+		errs <- iran.CloseWrite()
+	}()
+	go func() { errs <- readAllCheck(exit, data) }()
+	mWaitFor(t, "bulk mode", 5*time.Second, func() bool { return modeOf(iran) == planeBulk })
+	for i := 0; i < 2; i++ {
+		select {
+		case err := <-errs:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatal("transfer timed out")
+		}
+	}
+	if obs.mconnHeavyQueue.Load()-byQueue != 1 || obs.mconnHeavyRate.Load() != byRate {
+		t.Fatalf("heavy by queue +%d, by rate +%d; want 1 and 0",
+			obs.mconnHeavyQueue.Load()-byQueue, obs.mconnHeavyRate.Load()-byRate)
+	}
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+// A steady 2 Mbit/s stream on fast subs (a call) never goes heavy, and once
+// over mDupMaxRate every chunk rides one sub, the primary.
+func TestMConnSteadyStreamOneSub(t *testing.T) {
+	before := runtime.NumGoroutine()
+	heavies := obs.mconnHeavyQueue.Load() + obs.mconnHeavyRate.Load()
+	n, iran, exit := newTPair(t, false)
+	const writes, piece = 24, 16 << 10 // 16 KiB every 64 ms: 2 Mbit/s
+	data := randBytes(writes*piece, 12)
+	errs := make(chan error, 2)
+	go func() {
+		for i := 0; i < writes; i++ {
+			if _, err := iran.Write(data[i*piece : (i+1)*piece]); err != nil {
+				errs <- err
+				return
+			}
+			time.Sleep(64 * time.Millisecond)
+		}
+		errs <- iran.CloseWrite()
+	}()
+	go func() { errs <- readAllCheck(exit, data) }()
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if modeOf(iran) == planeBulk || obs.mconnHeavyQueue.Load()+obs.mconnHeavyRate.Load() != heavies {
+		t.Fatal("a 2 Mbit/s stream went heavy")
+	}
 	a, b := n.link(0).iran.wrote.Load(), n.link(1).iran.wrote.Load()
-	if a < 256<<10 || b < 256<<10 || a+b < 3<<20 {
-		t.Fatalf("light subs carried %d and %d bytes; want both well used", a, b)
+	// the first writes (up to mDupMaxRate, at Write granularity) go on both;
+	// after that only the primary carries the stream
+	if a < writes*piece || b > 2*mDupMaxRate+2*piece {
+		t.Fatalf("light subs carried %d and %d bytes; want all on the primary", a, b)
+	}
+	iran.mu.Lock()
+	st := iran.state
+	iran.mu.Unlock()
+	if st != mStateSingle {
+		t.Fatalf("state %d, want single (%d)", st, mStateSingle)
+	}
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+// Pings (far under mDupMaxRate) ride both subs, in full.
+func TestMConnPingsOnBothSubs(t *testing.T) {
+	before := runtime.NumGoroutine()
+	n, iran, exit := newTPair(t, false)
+	var w, l atomic.Int64
+	var wg sync.WaitGroup
+	pingPong(t, iran, exit, 40, &w, &l, &wg)
+	wg.Wait()
+	mWaitFor(t, "both copies", 2*time.Second, func() bool {
+		a, b := n.link(0).iran.wrote.Load(), n.link(1).iran.wrote.Load()
+		return a == b && a >= 40*(64+mDataHdr)
+	})
+	if modeOf(iran) != planeLight {
+		t.Fatal("pings left light mode")
 	}
 	closeAndWait(t, iran, exit)
 	noLeak(t, before)

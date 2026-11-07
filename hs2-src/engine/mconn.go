@@ -53,6 +53,29 @@ const (
 // mSub is one sub-stream (a smux stream with the header already written).
 type mSub interface{ io.ReadWriteCloser }
 
+// mSendState is what a connection's sending direction does right now, for
+// the obs gauges (one connection is in exactly one state until it ends).
+type mSendState uint8
+
+const (
+	mStateDual   mSendState = iota // light mode, every chunk on two subs
+	mStateSingle                   // light mode over mDupMaxRate: one sub only
+	mStateHeavy                    // heavy: on a bulk sub, or waiting for one
+	mStateEnded
+)
+
+func (st mSendState) gauge() *atomic.Int64 {
+	switch st {
+	case mStateDual:
+		return &obs.mconnDual
+	case mStateSingle:
+		return &obs.mconnSingle
+	case mStateHeavy:
+		return &obs.mconnHeavy
+	}
+	return nil
+}
+
 // mOpener opens a new sub on a link of the given plane, not on any of the
 // links in `avoid` (opaque link keys from earlier calls). Iran side only.
 type mOpener func(p mPlane, avoid []any) (sub mSub, linkKey any, err error)
@@ -86,20 +109,20 @@ const (
 	// it the subs' readers stop reading (backpressure into smux).
 	mRecvBuf = 4 << 20
 
-	// Heavy detection, per sending direction. A relay reads up to 32 KiB
-	// only when data is waiting in its socket, so several big writes close
-	// together mean the source is ahead of us — a bulk transfer, not a
-	// request/response exchange. A sustained rate caps what duplication
-	// costs the light links.
-	mHeavyBigWrite  = 16 << 10    // a write at least this big counts as "big"
-	mHeavyBigWrites = 3           // this many big writes within mHeavyWindow
-	mHeavyRate      = 1_000_000   // or more than this many bytes (8 Mbit/s)
-	mHeavyWindow    = time.Second // ... within this window
-	// mHeavyBigMin: the big writes count only with at least this many bytes
-	// in the window (4 Mbit/s): a call or a game that fell behind for a
-	// moment also reads a few big chunks, and moving it to a bulk link puts
-	// it behind the very downloads it was kept away from.
-	mHeavyBigMin = 512 << 10
+	// Heavy detection, per sending direction. A direction is heavy when its
+	// source keeps getting ahead of the link: the send queue of the sub
+	// carrying it (bytes waiting plus the record being written) stays above
+	// mHeavyQueue for mHeavyQueueFor without a break. A relay only has bytes
+	// to queue when its socket had them, so a standing queue means the
+	// source outruns the light link — a download at any rate (a 3 Mbit/s one
+	// on a loaded link too), while a call's or a game's queue drains between
+	// frames even when it reads a few big chunks after a hiccup. A sustained
+	// rate (more than mHeavyRate a window) is the second way: a source a fast
+	// link still keeps up with, but that would load it.
+	mHeavyQueue    = 64 << 10 // queue above this ...
+	mHeavyQueueFor = 200 * time.Millisecond
+	mHeavyRate     = 1_000_000   // or more than this many bytes (8 Mbit/s)
+	mHeavyWindow   = time.Second // ... within this window
 	// mDupMaxRate: a light connection is sent on two subs only while it moves
 	// at most this many bytes a window (384 kbit/s): pings, games, requests,
 	// chat. Above it (a call, a stream) it stays on the light links with one
@@ -304,11 +327,13 @@ type mConn struct {
 	err     error
 	peerFin bool
 
-	// heavy detection (this side's sending direction)
-	hvStart time.Time
-	hvBig   int
-	hvBytes int
-	heavy   bool
+	// heavy detection (this side's sending direction): the rate window, and
+	// since when the carrying sub's queue has been above mHeavyQueue
+	hvStart    time.Time
+	hvBytes    int
+	qHighSince time.Time
+	heavy      bool
+	state      mSendState // what the obs gauges count this connection as
 	// duplication gate (this side's sending direction): bytes in the current
 	// window, and whether this direction is over mDupMaxRate (one copy then)
 	dupStart time.Time
@@ -341,7 +366,37 @@ func newMConn(id uint64, iran bool, open mOpener) *mConn {
 	m.r.cond.L = &m.r.mu
 	m.r.lastProgress = time.Now()
 	obs.mconnOpen.Add(1)
+	obs.mconnDual.Add(1) // m.state
 	return m
+}
+
+// setStateLocked moves the connection between the obs gauges.
+func (m *mConn) setStateLocked(st mSendState) {
+	if st == m.state {
+		return
+	}
+	if g := m.state.gauge(); g != nil {
+		g.Add(-1)
+	}
+	if g := st.gauge(); g != nil {
+		g.Add(1)
+	}
+	m.state = st
+}
+
+// refreshStateLocked derives the gauge state from heavy and dupOff.
+func (m *mConn) refreshStateLocked() {
+	if m.state == mStateEnded {
+		return
+	}
+	switch {
+	case m.heavy:
+		m.setStateLocked(mStateHeavy)
+	case m.dupOff:
+		m.setStateLocked(mStateSingle)
+	default:
+		m.setStateLocked(mStateDual)
+	}
 }
 
 // newMConnIran: Iran side; opens its first two light subs with open (the
@@ -490,6 +545,33 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			m.sendCond.Wait()
 			continue
 		}
+		if m.dupOff {
+			// One copy when this direction is over mDupMaxRate, and always on
+			// the primary sub: a connection rides one link, never two (spread
+			// over two, the receiver waits for the slower link on every other
+			// chunk, and the idle second sub — copyOnly on its link — would
+			// carry half a download unseen). A full primary queue makes Write
+			// wait (backpressure); the other sub misses the copy (lastHole).
+			p := m.primary.Load()
+			if p == nil || !p.fits(c.n) {
+				m.sendCond.Wait()
+				continue
+			}
+			c.setOff(m.sendOff)
+			m.sendOff += uint64(c.n)
+			p.push(c)
+			var now time.Time
+			for _, s := range m.subs {
+				if s != p && !s.retired {
+					if now.IsZero() {
+						now = time.Now()
+					}
+					s.lastHole = now
+				}
+			}
+			m.noteQueueLocked()
+			return nil
+		}
 		fit := 0
 		for _, s := range m.subs {
 			if s.retired {
@@ -505,36 +587,100 @@ func (m *mConn) sendLocked(c *mchunk) error {
 		}
 		c.setOff(m.sendOff)
 		m.sendOff += uint64(c.n)
-		// one copy when this direction is over mDupMaxRate: on the sub with
-		// the shortest queue; the others miss it (lastHole, as a full queue)
-		var one *msub
-		if m.dupOff {
-			for _, s := range m.subs {
-				if !s.retired && s.fits(c.n) && (one == nil || s.qBytes < one.qBytes) {
-					one = s
-				}
-			}
-			fit = 1
-		}
 		var now time.Time
 		for _, s := range m.subs {
 			if s.retired {
 				continue
 			}
-			if s.fits(c.n) && (one == nil || s == one) {
+			if s.fits(c.n) {
 				s.push(c)
 				continue
 			}
 			if now.IsZero() {
 				now = time.Now()
 			}
-			s.lastHole = now
+			s.lastHole = now // a full queue misses this copy
 			obs.mconnMissed.Add(1)
 		}
 		if fit > 1 {
 			obs.mconnDupBytes.Add(uint64(c.n * (fit - 1)))
 		}
+		m.noteQueueLocked()
 		return nil
+	}
+}
+
+// sendQueueLocked: the bytes waiting on, or being written to, the sub this
+// direction rides on — the primary while one copy is sent, else the least
+// loaded of the duplicating subs (a stalled sub's full queue only means it
+// misses copies; it is not the source getting ahead of the connection).
+func (m *mConn) sendQueueLocked() int {
+	if m.dupOff {
+		if p := m.primary.Load(); p != nil {
+			return p.queueLocked()
+		}
+		return 0
+	}
+	q := -1
+	for _, s := range m.subs {
+		if s.retired {
+			continue
+		}
+		if n := s.queueLocked(); q < 0 || n < q {
+			q = n
+		}
+	}
+	return max(q, 0)
+}
+
+// queueLocked: bytes waiting on s plus the record being written (under m.mu).
+func (s *msub) queueLocked() int {
+	if c := s.cur; c != nil {
+		return s.qBytes + c.qsize()
+	}
+	return s.qBytes
+}
+
+// noteQueueLocked runs the queue rule of heavy detection (mHeavyQueue) at a
+// cheap moment: after a chunk was queued or one was written. The clock is
+// read only while the queue is high.
+func (m *mConn) noteQueueLocked() {
+	if m.heavy || m.mode != planeLight {
+		return
+	}
+	if m.sendQueueLocked() <= mHeavyQueue {
+		m.qHighSince = time.Time{}
+		return
+	}
+	now := time.Now()
+	if m.qHighSince.IsZero() {
+		m.qHighSince = now
+		return
+	}
+	if now.Sub(m.qHighSince) >= mHeavyQueueFor {
+		m.goHeavyLocked(true)
+	}
+}
+
+// goHeavyLocked marks this side's sending direction heavy (byQueue: the queue
+// rule, else the rate rule) and starts the move to a bulk sub.
+func (m *mConn) goHeavyLocked(byQueue bool) {
+	m.heavy = true
+	if byQueue {
+		obs.mconnHeavyQueue.Add(1)
+	} else {
+		obs.mconnHeavyRate.Add(1)
+	}
+	m.refreshStateLocked()
+	if m.iran {
+		m.wantBulk = true
+		m.kickMgr()
+		return
+	}
+	// Kharej cannot open subs: ask Iran for a bulk sub.
+	c := getChunk(mRecWantBulk)
+	if m.pushAllLocked(c) == 0 {
+		putChunk(c)
 	}
 }
 
@@ -571,26 +717,13 @@ func (m *mConn) noteWriteLocked(n int) {
 	if m.heavy || m.mode != planeLight {
 		return
 	}
+	m.refreshStateLocked() // dual or single
 	if now.Sub(m.hvStart) > mHeavyWindow {
-		m.hvStart, m.hvBig, m.hvBytes = now, 0, 0
+		m.hvStart, m.hvBytes = now, 0
 	}
 	m.hvBytes += n
-	if n >= mHeavyBigWrite {
-		m.hvBig++
-	}
-	if (m.hvBig < mHeavyBigWrites || m.hvBytes < mHeavyBigMin) && m.hvBytes <= mHeavyRate {
-		return
-	}
-	m.heavy = true
-	if m.iran {
-		m.wantBulk = true
-		m.kickMgr()
-		return
-	}
-	// Kharej cannot open subs: ask Iran for a bulk sub.
-	c := getChunk(mRecWantBulk)
-	if m.pushAllLocked(c) == 0 {
-		putChunk(c)
+	if m.hvBytes > mHeavyRate {
+		m.goHeavyLocked(false)
 	}
 }
 
@@ -679,6 +812,7 @@ func (s *msub) writeLoop() {
 
 		m.mu.Lock()
 		s.cur = nil
+		m.noteQueueLocked() // the queue fell: the rule's "without a break"
 		idle := len(s.q) == 0 && m.closing
 		m.mu.Unlock()
 		c.unref()
@@ -1132,6 +1266,7 @@ func (m *mConn) end(err error, rst bool) {
 		return
 	}
 	m.ended, m.err = true, err
+	m.setStateLocked(mStateEnded)
 	var closeNow []*msub
 	for _, s := range m.subs {
 		if !rst || s.dead {
