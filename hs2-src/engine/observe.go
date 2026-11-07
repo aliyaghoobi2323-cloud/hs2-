@@ -106,6 +106,14 @@ var obs struct {
 	// HS2_L3_DUP (l3_dup.go): packets sent over two links, second copies
 	// dropped by the receiver, and packets whose second copy came first.
 	l3DupSent, l3DupDropped, l3DupSaved atomic.Uint64
+
+	// HS2_MCONN (mconn.go): connections open now; payload bytes sent on a
+	// second light sub; chunks whose copy on a non-first light sub arrived
+	// first; switches to a bulk sub; light sub deaths the connection
+	// survived; copies a full sub queue missed; connections that failed.
+	mconnOpen                                  atomic.Int64
+	mconnDupBytes, mconnSaved, mconnBulk       atomic.Uint64
+	mconnSubSurvived, mconnMissed, mconnFailed atomic.Uint64
 }
 
 // noteShapeWrite records one shapedConn.Write: its records, data and padding.
@@ -148,6 +156,10 @@ type ObsSnap struct {
 	ExitDials, ExitNoAddr, ExitRefused, ExitTimeout, ExitOther uint64
 	ExitRotated                                                uint64
 	L3DupSent, L3DupDropped, L3DupSaved                        uint64
+
+	MConnOpen                                  int64 // a level, not a count (Sub keeps the newer)
+	MConnDupBytes, MConnSaved, MConnBulk       uint64
+	MConnSubSurvived, MConnMissed, MConnFailed uint64
 }
 
 // Observed returns the counters now.
@@ -160,6 +172,9 @@ func Observed() ObsSnap {
 		ExitDials: obs.exitDials.Load(), ExitNoAddr: obs.exitNoAddr.Load(), ExitRefused: obs.exitRefused.Load(),
 		ExitTimeout: obs.exitTimeout.Load(), ExitOther: obs.exitOther.Load(), ExitRotated: obs.exitRotated.Load(),
 		L3DupSent: obs.l3DupSent.Load(), L3DupDropped: obs.l3DupDropped.Load(), L3DupSaved: obs.l3DupSaved.Load(),
+		MConnOpen: obs.mconnOpen.Load(), MConnDupBytes: obs.mconnDupBytes.Load(), MConnSaved: obs.mconnSaved.Load(),
+		MConnBulk: obs.mconnBulk.Load(), MConnSubSurvived: obs.mconnSubSurvived.Load(),
+		MConnMissed: obs.mconnMissed.Load(), MConnFailed: obs.mconnFailed.Load(),
 	}
 }
 
@@ -173,5 +188,8 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		ExitDials: s.ExitDials - old.ExitDials, ExitNoAddr: s.ExitNoAddr - old.ExitNoAddr, ExitRefused: s.ExitRefused - old.ExitRefused,
 		ExitTimeout: s.ExitTimeout - old.ExitTimeout, ExitOther: s.ExitOther - old.ExitOther, ExitRotated: s.ExitRotated - old.ExitRotated,
 		L3DupSent: s.L3DupSent - old.L3DupSent, L3DupDropped: s.L3DupDropped - old.L3DupDropped, L3DupSaved: s.L3DupSaved - old.L3DupSaved,
+		MConnOpen: s.MConnOpen, MConnDupBytes: s.MConnDupBytes - old.MConnDupBytes, MConnSaved: s.MConnSaved - old.MConnSaved,
+		MConnBulk: s.MConnBulk - old.MConnBulk, MConnSubSurvived: s.MConnSubSurvived - old.MConnSubSurvived,
+		MConnMissed: s.MConnMissed - old.MConnMissed, MConnFailed: s.MConnFailed - old.MConnFailed,
 	}
 }
