@@ -110,6 +110,10 @@ const (
 )
 
 type LinkManager struct {
+	// pathCooled (nil: never) reports whether the balancer cooled a link's
+	// path (direct edge with lb); HS2_DUP_PATHS keeps second subs off it.
+	pathCooled func(Link) bool
+
 	dialer  LinkDialer
 	accept  bool // reverse edge: links are injected via AddLink, never dialed
 	min     int

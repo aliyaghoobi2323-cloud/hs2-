@@ -103,9 +103,12 @@ type l3Link struct {
 	// dupOK (nil: no) reports whether the other server reads TypeDataDup
 	// frames (capL3Dup); HS2_L3_DUP sends them only over such links.
 	dupOK func() bool
-	dead  atomic.Bool
-	once  sync.Once
-	done  chan struct{}
+	// path is the key of the path the link's TCP connection rides ("" not
+	// known); HS2_DUP_PATHS puts a second copy on another path (dup_paths.go).
+	path string
+	dead atomic.Bool
+	once sync.Once
+	done chan struct{}
 }
 
 // qpkt is a queued packet and when it was queued.
@@ -343,6 +346,9 @@ func (s *l3Set) pickDup(pkt []byte) (first, second *l3Link) {
 		if l, ok := s.lane.pick(s.links, pkt, h); ok {
 			if s.dup && l != nil && l.canDup() {
 				second = dupSecond(s.links, h, l)
+				if dupPathsOn && second != nil && l.path != "" {
+					countDupPath(second.path != l.path, true)
+				}
 			}
 			return l, second
 		}

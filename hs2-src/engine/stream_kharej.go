@@ -272,6 +272,9 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		pl := newStreamL3Link(st, peerL3Quiet(mtr), sessReadsOf(mtr))
 		pl.heavy = heavyOf(mtr)
 		pl.dupOK = peerL3Dup(mtr)
+		if mtr != nil {
+			pl.path = mtr.path
+		}
 		l3.add(pl)
 		l3.serveLink(ctx, pl, cfg.TUN)
 		l3.remove(pl)

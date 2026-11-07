@@ -97,6 +97,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 			return false, false
 		})
 		go lb.Run(ctx)
+		lm.pathCooled = func(l Link) bool { return lb.cooledLink(l) }
 	}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
@@ -470,6 +471,9 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)))
 	pl.heavy = heavyOf(linkMeterOf(l))
 	pl.dupOK = peerL3Dup(linkMeterOf(l))
+	if mtr := linkMeterOf(l); mtr != nil {
+		pl.path = mtr.path
+	}
 	set.add(pl)
 	go func() {
 		set.serveLink(ctx, pl, dev)

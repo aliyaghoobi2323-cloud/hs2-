@@ -218,6 +218,33 @@ func (m *LinkManager) pickPlane(p mPlane, avoid []any) (Link, func(), bool) {
 }
 
 func (m *LinkManager) pickPlaneLocked(p mPlane, avoid []any, pool *peerInfo) *managedLink {
+	if p != planeLight {
+		return m.pickPlaneTiers(p, avoid, pool, nil)
+	}
+	// HS2_DUP_PATHS (dup_paths.go): a light sub placed beside live ones goes
+	// to another healthy path first.
+	skip, healthy := m.dupPathsLocked(avoid)
+	if skip == nil {
+		return m.pickPlaneTiers(p, avoid, pool, nil)
+	}
+	if healthy != nil {
+		if ml := m.pickPlaneTiers(p, avoid, pool, func(ml *managedLink) bool {
+			return healthy[mlPath(ml)] && !ml.degraded && !ml.draining && !ml.suspect && !m.pathCooledLocked(ml)
+		}); ml != nil {
+			countDupPath(true, false)
+			return ml
+		}
+	}
+	ml := m.pickPlaneTiers(p, avoid, pool, nil)
+	if ml != nil {
+		countDupPath(!skip[mlPath(ml)], false)
+	}
+	return ml
+}
+
+// pickPlaneTiers is pickPlaneLocked's search over the links ok accepts (nil:
+// all); in the first pass (tier 0) ok only narrows the usual candidates.
+func (m *LinkManager) pickPlaneTiers(p mPlane, avoid []any, pool *peerInfo, ok func(*managedLink) bool) *managedLink {
 	for tier := 0; tier < 3; tier++ {
 		var chosen *managedLink
 		var best planeKey
@@ -226,7 +253,7 @@ func (m *LinkManager) pickPlaneLocked(p mPlane, avoid []any, pool *peerInfo) *ma
 			if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
 				continue
 			}
-			if !linkMConn(ml, pool) || avoided(ml.link, avoid) {
+			if !linkMConn(ml, pool) || avoided(ml.link, avoid) || ok != nil && !ok(ml) {
 				continue
 			}
 			switch tier {

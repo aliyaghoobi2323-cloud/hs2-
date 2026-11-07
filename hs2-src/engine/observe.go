@@ -107,6 +107,10 @@ var obs struct {
 	// dropped by the receiver, and packets whose second copy came first.
 	l3DupSent, l3DupDropped, l3DupSaved atomic.Uint64
 
+	// HS2_DUP_PATHS (dup_paths.go): second copies (TUN packets; mconn light
+	// subs) placed on another path than the first copy, or on the same one.
+	l3DupPathOther, l3DupPathSame, mconnPathOther, mconnPathSame atomic.Uint64
+
 	// HS2_MCONN (mconn.go): connections open now; payload bytes sent on a
 	// second light sub; chunks whose copy on a non-first light sub arrived
 	// first; switches to a bulk sub; light sub deaths the connection
@@ -163,9 +167,10 @@ type ObsSnap struct {
 	CtrlRTT, OpenLat, UDPQueued ObsHistSnap
 	OpenErr, UDPDrops           uint64
 
-	ExitDials, ExitNoAddr, ExitRefused, ExitTimeout, ExitOther uint64
-	ExitRotated                                                uint64
-	L3DupSent, L3DupDropped, L3DupSaved                        uint64
+	ExitDials, ExitNoAddr, ExitRefused, ExitTimeout, ExitOther   uint64
+	ExitRotated                                                  uint64
+	L3DupSent, L3DupDropped, L3DupSaved                          uint64
+	L3DupPathOther, L3DupPathSame, MConnPathOther, MConnPathSame uint64
 
 	MConnOpen                                  int64 // a level, not a count (Sub keeps the newer)
 	MConnDupBytes, MConnSaved, MConnBulk       uint64
@@ -187,6 +192,8 @@ func Observed() ObsSnap {
 		ExitDials: obs.exitDials.Load(), ExitNoAddr: obs.exitNoAddr.Load(), ExitRefused: obs.exitRefused.Load(),
 		ExitTimeout: obs.exitTimeout.Load(), ExitOther: obs.exitOther.Load(), ExitRotated: obs.exitRotated.Load(),
 		L3DupSent: obs.l3DupSent.Load(), L3DupDropped: obs.l3DupDropped.Load(), L3DupSaved: obs.l3DupSaved.Load(),
+		L3DupPathOther: obs.l3DupPathOther.Load(), L3DupPathSame: obs.l3DupPathSame.Load(),
+		MConnPathOther: obs.mconnPathOther.Load(), MConnPathSame: obs.mconnPathSame.Load(),
 		MConnOpen: obs.mconnOpen.Load(), MConnDupBytes: obs.mconnDupBytes.Load(), MConnSaved: obs.mconnSaved.Load(),
 		MConnBulk: obs.mconnBulk.Load(), MConnSubSurvived: obs.mconnSubSurvived.Load(),
 		MConnMissed: obs.mconnMissed.Load(), MConnFailed: obs.mconnFailed.Load(),
@@ -208,6 +215,8 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		ExitDials: s.ExitDials - old.ExitDials, ExitNoAddr: s.ExitNoAddr - old.ExitNoAddr, ExitRefused: s.ExitRefused - old.ExitRefused,
 		ExitTimeout: s.ExitTimeout - old.ExitTimeout, ExitOther: s.ExitOther - old.ExitOther, ExitRotated: s.ExitRotated - old.ExitRotated,
 		L3DupSent: s.L3DupSent - old.L3DupSent, L3DupDropped: s.L3DupDropped - old.L3DupDropped, L3DupSaved: s.L3DupSaved - old.L3DupSaved,
+		L3DupPathOther: s.L3DupPathOther - old.L3DupPathOther, L3DupPathSame: s.L3DupPathSame - old.L3DupPathSame,
+		MConnPathOther: s.MConnPathOther - old.MConnPathOther, MConnPathSame: s.MConnPathSame - old.MConnPathSame,
 		MConnOpen: s.MConnOpen, MConnDupBytes: s.MConnDupBytes - old.MConnDupBytes, MConnSaved: s.MConnSaved - old.MConnSaved,
 		MConnBulk: s.MConnBulk - old.MConnBulk, MConnSubSurvived: s.MConnSubSurvived - old.MConnSubSurvived,
 		MConnMissed: s.MConnMissed - old.MConnMissed, MConnFailed: s.MConnFailed - old.MConnFailed,

@@ -207,6 +207,12 @@ type liveStatus struct {
 	ObsL3DupSent        uint64  `json:"obs_l3_dup_sent,omitempty"`    // last minute: TUN packets sent over two links (HS2_L3_DUP)
 	ObsL3DupDropped     uint64  `json:"obs_l3_dup_dropped,omitempty"` // last minute: second copies dropped
 	ObsL3DupSaved       uint64  `json:"obs_l3_dup_saved,omitempty"`   // last minute: packets whose second copy came first
+	// HS2_DUP_PATHS, last minute: second copies (TUN packets; mconn light
+	// subs) on another path than the first copy, or on the same one.
+	ObsL3DupPathOther uint64 `json:"obs_l3_dup_path_other,omitempty"`
+	ObsL3DupPathSame  uint64 `json:"obs_l3_dup_path_same,omitempty"`
+	ObsMConnPathOther uint64 `json:"obs_mconn_path_other,omitempty"`
+	ObsMConnPathSame  uint64 `json:"obs_mconn_path_same,omitempty"`
 
 	// Multi-link connections (HS2_MCONN), now: open connections and their
 	// sub-streams by plane (edge; the exit sees only the total).
@@ -273,6 +279,8 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther = now.ExitNoAddr, now.ExitRefused, now.ExitTimeout, now.ExitOther
 	ls.ObsExitRotated = now.ExitRotated
 	ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved = d.L3DupSent, d.L3DupDropped, d.L3DupSaved
+	ls.ObsL3DupPathOther, ls.ObsL3DupPathSame = d.L3DupPathOther, d.L3DupPathSame
+	ls.ObsMConnPathOther, ls.ObsMConnPathSame = d.MConnPathOther, d.MConnPathSame
 	ls.MConnDual, ls.MConnSingle, ls.MConnHeavy = now.MConnDual, now.MConnSingle, now.MConnHeavy
 	ls.ObsMConnHeavyQueue, ls.ObsMConnHeavyRate = d.MConnHeavyQueue, d.MConnHeavyRate
 	ls.ObsMConnHeavyFast, ls.ObsMConnPrimarySwitch = d.MConnHeavyFast, d.MConnPrimarySwitch
@@ -297,6 +305,10 @@ func obsLines(ls liveStatus) []string {
 	}
 	if ls.ObsL3DupSent > 0 || ls.ObsL3DupDropped > 0 {
 		out = append(out, fmt.Sprintf("tun dup (HS2_L3_DUP), last minute: %d packet(s) sent over two links · %d second copies dropped · %d saved by the second link (it came first)", ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved))
+	}
+	if ls.ObsL3DupPathOther+ls.ObsL3DupPathSame+ls.ObsMConnPathOther+ls.ObsMConnPathSame > 0 {
+		out = append(out, fmt.Sprintf("second copies by path (HS2_DUP_PATHS), last minute: tun %d on another path · %d on the same · mconn subs %d on another path · %d on the same",
+			ls.ObsL3DupPathOther, ls.ObsL3DupPathSame, ls.ObsMConnPathOther, ls.ObsMConnPathSame))
 	}
 	if ls.MConnOpen > 0 || ls.MConnSubsLight+ls.MConnSubsBulk+ls.MConnSubsExit > 0 {
 		s := fmt.Sprintf("multi-link connections (HS2_MCONN): %d open", ls.MConnOpen)

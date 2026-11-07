@@ -178,6 +178,7 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 	var sp atomic.Pointer[smux.Session]
 	var c net.Conn = newShapedConn(conn, sampler)
 	if meter != nil {
+		meter.path = connPathKey(conn) // before the link is shared: no race
 		c = &meteredConn{Conn: c, m: meter}
 	}
 	w := &watchConn{Conn: c}
