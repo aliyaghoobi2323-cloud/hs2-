@@ -170,6 +170,7 @@ func main() {
 	jGameTMin := flag.Duration("jgametmin", 20*time.Second, "journey: shortest game")
 	jGameTMax := flag.Duration("jgametmax", 40*time.Second, "journey: longest game")
 	jRotate := flag.Bool("jrotate", true, "journey: user i starts its first round at phase i%4 so a short run samples every phase")
+	jSeed := flag.Uint64("jseed", 0, "journey: nonzero = the same phase plan (sizes, gaps, durations) every run with this seed, for A/B pairs")
 	flag.Parse()
 	if *late > 0 && *echoDelay == 0 {
 		*echoDelay = *late
@@ -454,7 +455,7 @@ func main() {
 			reelGapMin: *jGapMin, gapMax: *jGapMax, callMin: cmin, callMax: max(cmax, cmin),
 			callSize: *jCallSize, callTMin: *jCallTMin, callTMax: *jCallTMax,
 			bulkTMin: *jBulkTMin, bulkTMax: *jBulkTMax, pings: *jPings,
-			gameTMin: *jGameTMin, gameTMax: *jGameTMax, lateMs: *lateMs, rotate: *jRotate}
+			gameTMin: *jGameTMin, gameTMax: *jGameTMax, lateMs: *lateMs, rotate: *jRotate, seed: *jSeed}
 		if jsp.scale <= 0 {
 			jsp.scale = 1
 		}

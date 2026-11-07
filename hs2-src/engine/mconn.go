@@ -1795,7 +1795,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				} else {
 					m.lightOpening = true
 					obs.mconnLiteUpgrade.Add(1)
-					m.tr.ev("lite: upgrade to dual")
+					m.tr.ev("lite: upgrade to dual (sent=%d recvd=%d)", m.sendOff, recvd)
 					avoid := make([]any, 0, 1+len(m.deadKeys))
 					avoid = append(avoid, live[0].key)
 					avoid = append(avoid, m.deadKeys...)

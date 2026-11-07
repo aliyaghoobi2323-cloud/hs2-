@@ -33,6 +33,7 @@ package main
 // short by the end of the run still reports what it measured.
 
 import (
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -84,6 +85,11 @@ type jBulk struct {
 	MbpsMin    float64 `json:"mbps_min"`
 	MbpsMax    float64 `json:"mbps_max"`
 	SecAvg     float64 `json:"sec_avg"`
+	// Short: downloads that ended (EOF or error) before their planned time
+	// with the run still going; ShortSec: the planned seconds they lost.
+	Short    int     `json:"short"`
+	ShortSec float64 `json:"short_sec"`
+	ShortErr string  `json:"short_err,omitempty"` // the first such error
 }
 
 type jPing struct {
@@ -100,6 +106,10 @@ type journeyResult struct {
 	Bulk   jBulk   `json:"bulk"`
 	Ping   jPing   `json:"ping"`
 	Game   jStream `json:"game"`
+	// PhaseSec: seconds all users spent in each phase (reels with their
+	// gaps, call, bulk with its dial, ping, game, the gap between rounds,
+	// the start spread) — where the run's time went.
+	PhaseSec map[string]float64 `json:"phase_sec"`
 }
 
 type journeySpec struct {
@@ -119,20 +129,25 @@ type journeySpec struct {
 	gameTMin, gameTMax time.Duration
 	lateMs             float64
 	rotate             bool // user i starts at phase i%4 (see user)
+	// seed != 0: each user's phase plan (start, sizes, gaps, durations, call
+	// rate) comes from its own generator seeded with (seed, user id), so two
+	// runs with the same seed (e.g. with and without a feature) get the same
+	// workload; 0: random each run.
+	seed uint64
 }
 
-func randDur(a, b time.Duration) time.Duration {
+func randDur(r *rand.Rand, a, b time.Duration) time.Duration {
 	if b <= a {
 		return a
 	}
-	return a + time.Duration(rand.Int64N(int64(b-a)+1))
+	return a + time.Duration(r.Int64N(int64(b-a)+1))
 }
 
-func randInt(a, b int) int {
+func randInt(r *rand.Rand, a, b int) int {
 	if b <= a {
 		return a
 	}
-	return a + rand.IntN(b-a+1)
+	return a + r.IntN(b-a+1)
 }
 
 // journeyAgg collects the samples of all users.
@@ -276,16 +291,25 @@ func (a *journeyAgg) bulkPhase(sp journeySpec, d time.Duration, stop <-chan stru
 	c.Write([]byte{'B'})
 	buf := make([]byte, 64<<10)
 	var got int64
+	var rerr error
 	for {
 		k, err := c.Read(buf)
 		got += int64(k)
 		if err != nil {
+			rerr = err
 			break
 		}
 	}
 	el := time.Since(s)
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if !stopped(stop) && el < d-time.Second {
+		a.res.Bulk.Short++
+		a.res.Bulk.ShortSec += (d - el).Seconds()
+		if a.res.Bulk.ShortErr == "" {
+			a.res.Bulk.ShortErr = fmt.Sprintf("%v after %.1fs of %.1fs, %d bytes", rerr, el.Seconds(), d.Seconds(), got)
+		}
+	}
 	if stopped(stop) && el < d {
 		a.res.Bulk.Unfinished++
 	}
@@ -356,9 +380,29 @@ func (a *journeyAgg) streamPhase(sp journeySpec, dst *jStream, rtts *[]float64, 
 	*mbps += bps / 1e6
 }
 
+// phase adds the time since *t0 to phase name and restarts *t0.
+func (a *journeyAgg) phase(name string, t0 *time.Time) {
+	now := time.Now()
+	a.mu.Lock()
+	if a.res.PhaseSec == nil {
+		a.res.PhaseSec = map[string]float64{}
+	}
+	a.res.PhaseSec[name] += now.Sub(*t0).Seconds()
+	a.mu.Unlock()
+	*t0 = now
+}
+
 // user runs one virtual user's journey until stop.
 func (a *journeyAgg) user(sp journeySpec, id int, stop <-chan struct{}) {
-	if !waitOr(time.Duration(rand.Int64N(int64(sp.spread)+1)), stop) {
+	seed := sp.seed
+	if seed == 0 {
+		seed = rand.Uint64()
+	}
+	rng := rand.New(rand.NewPCG(seed, uint64(id)))
+	t0 := time.Now()
+	ok := waitOr(time.Duration(rng.Int64N(int64(sp.spread)+1)), stop)
+	a.phase("spread", &t0)
+	if !ok {
 		return
 	}
 	sc := func(n int) int { return max(int(float64(n)*sp.scale), 1) }
@@ -372,31 +416,36 @@ func (a *journeyAgg) user(sp journeySpec, id int, stop <-chan struct{}) {
 	for !stopped(stop) {
 		// 1. reels
 		for i := 0; first == 0 && i < sp.reels && !stopped(stop); i++ {
-			a.reel(sp, sc(randInt(sp.reelMin, sp.reelMax)), stop)
-			if i+1 < sp.reels && !waitOr(randDur(sp.reelGapMin, sp.gapMax), stop) {
+			a.reel(sp, sc(randInt(rng, sp.reelMin, sp.reelMax)), stop)
+			if i+1 < sp.reels && !waitOr(randDur(rng, sp.reelGapMin, sp.gapMax), stop) {
+				a.phase("reels", &t0)
 				return
 			}
 		}
+		a.phase("reels", &t0)
 		if stopped(stop) {
 			return
 		}
 		// 2. call
-		bps := (sp.callMin + rand.Float64()*(sp.callMax-sp.callMin)) * sp.scale
+		bps := (sp.callMin + rng.Float64()*(sp.callMax-sp.callMin)) * sp.scale
 		gap, size := callSpec(bps, sp.callSize)
 		if first <= 1 {
 			a.streamPhase(sp, &a.res.Call, &a.callRTT, &a.callLate, &a.callMbps, gap, size, bps,
-				randDur(sp.callTMin, sp.callTMax), stop)
+				randDur(rng, sp.callTMin, sp.callTMax), stop)
 		}
+		a.phase("call", &t0)
 		if stopped(stop) {
 			return
 		}
 		// 3. bulk, 4. ping right after it
 		if first <= 2 {
-			a.bulkPhase(sp, randDur(sp.bulkTMin, sp.bulkTMax), stop)
+			a.bulkPhase(sp, randDur(rng, sp.bulkTMin, sp.bulkTMax), stop)
+			a.phase("bulk", &t0)
 			if stopped(stop) {
 				return
 			}
 			a.pingPhase(sp, stop)
+			a.phase("ping", &t0)
 		}
 		if stopped(stop) {
 			return
@@ -405,7 +454,8 @@ func (a *journeyAgg) user(sp journeySpec, id int, stop <-chan struct{}) {
 		gap, size = gameSpec()
 		var none float64
 		a.streamPhase(sp, &a.res.Game, &a.gameRTT, &a.gameLate, &none, gap, size, 0,
-			randDur(sp.gameTMin, sp.gameTMax), stop)
+			randDur(rng, sp.gameTMin, sp.gameTMax), stop)
+		a.phase("game", &t0)
 		if stopped(stop) {
 			return
 		}
@@ -415,7 +465,9 @@ func (a *journeyAgg) user(sp journeySpec, id int, stop <-chan struct{}) {
 			a.mu.Unlock()
 		}
 		first = 0
-		if !waitOr(randDur(sp.reelGapMin, sp.gapMax), stop) {
+		ok := waitOr(randDur(rng, sp.reelGapMin, sp.gapMax), stop)
+		a.phase("roundgap", &t0)
+		if !ok {
 			return
 		}
 	}

@@ -239,6 +239,13 @@ type liveStatus struct {
 	MConnLiteDual       int64  `json:"mconn_lite_dual,omitempty"`
 	ObsMConnLiteUpgrade uint64 `json:"obs_mconn_lite_upgrade,omitempty"`
 	ObsMConnLiteCapped  uint64 `json:"obs_mconn_lite_capped,omitempty"`
+	// MConnDupBytes: bytes this side sent as second copies, since start.
+	MConnDupBytes uint64 `json:"mconn_dup_bytes,omitempty"`
+	// Link health, since start: loss candidates kept by HS2_LOSS_RELATIVE
+	// (near the path's median), and second probations refused by
+	// HS2_PROBATION_ONCE.
+	ObsLossRelKept         uint64 `json:"obs_loss_rel_kept,omitempty"`
+	ObsProbationOnceDenied uint64 `json:"obs_probation_once_denied,omitempty"`
 }
 
 // fillMConn copies the multi-link connection counters (HS2_MCONN).
@@ -289,6 +296,8 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsMConnHeavyFast, ls.ObsMConnPrimarySwitch = d.MConnHeavyFast, d.MConnPrimarySwitch
 	ls.MConnLiteOpen, ls.MConnLiteDual = now.MConnLiteOpen, now.MConnLiteDual
 	ls.ObsMConnLiteUpgrade, ls.ObsMConnLiteCapped = d.MConnLiteUpgrade, d.MConnLiteCapped
+	ls.MConnDupBytes = now.MConnDupBytes
+	ls.ObsLossRelKept, ls.ObsProbationOnceDenied = now.LossRelKept, now.ProbationOnceDenied
 }
 
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
@@ -305,6 +314,9 @@ func obsLines(ls liveStatus) []string {
 	}
 	if ls.ObsUDPQueueP99KB > 0 || ls.ObsUDPDrops > 0 {
 		out = append(out, fmt.Sprintf("udp flows: p99 %.1f KB queued behind their link · %d datagram(s) dropped (queue full)", ls.ObsUDPQueueP99KB, ls.ObsUDPDrops))
+	}
+	if ls.ObsLossRelKept > 0 || ls.ObsProbationOnceDenied > 0 {
+		out = append(out, fmt.Sprintf("link health, since start: %d loss verdict(s) withheld near the path's median (HS2_LOSS_RELATIVE) · %d second probation(s) refused (HS2_PROBATION_ONCE)", ls.ObsLossRelKept, ls.ObsProbationOnceDenied))
 	}
 	if ls.ObsL3DupSent > 0 || ls.ObsL3DupDropped > 0 {
 		out = append(out, fmt.Sprintf("tun dup (HS2_L3_DUP), last minute: %d packet(s) sent over two links · %d second copies dropped · %d saved by the second link (it came first)", ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved))

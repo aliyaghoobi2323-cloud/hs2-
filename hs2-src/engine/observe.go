@@ -128,6 +128,11 @@ var obs struct {
 	// upgrades to two subs, and the upgrades refused by the duplication cap.
 	mconnLiteOpen, mconnLiteDual      atomic.Int64
 	mconnLiteUpgrade, mconnLiteCapped atomic.Uint64
+
+	// Link health: loss candidates kept by HS2_LOSS_RELATIVE (within
+	// lossMargin of the judged links' median), and degraded links refused a
+	// second probation by HS2_PROBATION_ONCE.
+	lossRelKept, probationOnceDenied atomic.Uint64
 }
 
 // noteShapeWrite records one shapedConn.Write: its records, data and padding.
@@ -137,6 +142,10 @@ func noteShapeWrite(records, data, pad int) {
 	obs.shapeData.Add(uint64(data))
 	obs.shapePad.Add(uint64(pad))
 }
+
+// noteProbationOnceDenied counts a degraded link refused a second probation
+// (HS2_PROBATION_ONCE; sampleHealth, where obs is a local name).
+func noteProbationOnceDenied() { obs.probationOnceDenied.Add(1) }
 
 // noteExitDial records one dial of the exit to its target and, if it failed,
 // why: no local address/port left (EADDRNOTAVAIL — the ephemeral ports to that
@@ -180,6 +189,7 @@ type ObsSnap struct {
 	MConnHeavyFast, MConnPrimarySwitch         uint64
 	MConnLiteOpen, MConnLiteDual               int64 // levels
 	MConnLiteUpgrade, MConnLiteCapped          uint64
+	LossRelKept, ProbationOnceDenied           uint64
 }
 
 // Observed returns the counters now.
@@ -202,6 +212,7 @@ func Observed() ObsSnap {
 		MConnHeavyFast: obs.mconnHeavyFast.Load(), MConnPrimarySwitch: obs.mconnPrimarySwitch.Load(),
 		MConnLiteOpen: obs.mconnLiteOpen.Load(), MConnLiteDual: obs.mconnLiteDual.Load(),
 		MConnLiteUpgrade: obs.mconnLiteUpgrade.Load(), MConnLiteCapped: obs.mconnLiteCapped.Load(),
+		LossRelKept: obs.lossRelKept.Load(), ProbationOnceDenied: obs.probationOnceDenied.Load(),
 	}
 }
 
@@ -225,5 +236,6 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		MConnHeavyFast: s.MConnHeavyFast - old.MConnHeavyFast, MConnPrimarySwitch: s.MConnPrimarySwitch - old.MConnPrimarySwitch,
 		MConnLiteOpen: s.MConnLiteOpen, MConnLiteDual: s.MConnLiteDual,
 		MConnLiteUpgrade: s.MConnLiteUpgrade - old.MConnLiteUpgrade, MConnLiteCapped: s.MConnLiteCapped - old.MConnLiteCapped,
+		LossRelKept: s.LossRelKept - old.LossRelKept, ProbationOnceDenied: s.ProbationOnceDenied - old.ProbationOnceDenied,
 	}
 }

@@ -2,9 +2,21 @@ package engine
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"time"
 )
+
+// lossRelative: HS2_LOSS_RELATIVE=1 — a loss candidate is degraded only when
+// it resends more than lossMargin above the median judged link (and more than
+// lossFrac), not merely more than lossFrac. On a path that loses 8-11% end to
+// end (the main tunnel at peak), each link's own sampling noise carried it
+// over 12% three samples running now and then: links were drained one by
+// one, their replacements met the same path and went the same way within
+// minutes (half the degraded links lived under 5 min; 785 of 1432 verdicts
+// were 12-15%, a few points over the path's median), while the path-wide
+// guard (most judged links over lossFrac) fired 3 times.
+var lossRelative = os.Getenv("HS2_LOSS_RELATIVE") == "1"
 
 // The loss rule: a link resending a large share of what it sends while it
 // moves data (activeBytes) is degraded and drained like a stuck one. Two
@@ -65,6 +77,17 @@ const (
 	// lossKeepShare: a lossy link moving at least this share of the median
 	// pressed link's rate is kept (when lossPathMin or more are pressed).
 	lossKeepShare = 0.5
+	// lossMargin (HS2_LOSS_RELATIVE): how far, in loss fraction points, a
+	// link must resend above the median judged link to be degraded. Additive
+	// on purpose: a margin that scales with the median (a link "twice the
+	// median") hid really lossy links among throttled ones (see above), and
+	// widens with the path's loss; a fixed 8 points sits above the per-sample
+	// noise of a busy link on an 8-11% path (12-15% readings) and still
+	// catches a link at 20-25% there. The median is over the judged links
+	// that do not move the path's rate (those are not lossy in any sense
+	// that matters, see lossKeepShare), and only with lossPathMin or more
+	// of them; fewer, and lossFrac alone decides as before.
+	lossMargin = 0.08
 )
 
 // lossDir is one direction's loss reading for a tick.
@@ -205,11 +228,17 @@ func (m *LinkManager) lossVerdicts(now time.Time, cand []lossObs, judged []lossJ
 			return nil
 		}
 	}
+	bar := lossBar(judged, atRate)
 	sort.Slice(cand, func(i, j int) bool { return cand[i].frac() > cand[j].frac() })
 	room := drainHeadroom(m.max) - degradedNow
 	var logs []string
 	for _, c := range cand {
 		if atRate(c.rate()) || room <= 0 {
+			continue
+		}
+		if lossRelative && c.frac() <= bar {
+			// within lossMargin of the path's median: its noise, not the link
+			obs.lossRelKept.Add(1)
 			continue
 		}
 		room--
@@ -222,4 +251,28 @@ func (m *LinkManager) lossVerdicts(now time.Time, cand []lossObs, judged []lossJ
 			c.ml.id, c.up, c.dn, path, c.ml.mtr.rttMicros.Load()/1000))
 	}
 	return logs
+}
+
+// lossBar is the loss fraction a candidate must exceed to be degraded:
+// lossFrac, or with HS2_LOSS_RELATIVE max(lossFrac, median + lossMargin) over
+// the judged links not at the path's rate (atRate), when lossPathMin or more.
+func lossBar(judged []lossJudged, atRate func(float64) bool) float64 {
+	if !lossRelative {
+		return lossFrac
+	}
+	fr := make([]float64, 0, len(judged))
+	for _, j := range judged {
+		if !atRate(j.rate) {
+			fr = append(fr, j.frac)
+		}
+	}
+	if len(fr) < lossPathMin {
+		return lossFrac
+	}
+	sort.Float64s(fr)
+	med := fr[len(fr)/2]
+	if len(fr)%2 == 0 {
+		med = (fr[len(fr)/2-1] + fr[len(fr)/2]) / 2
+	}
+	return max(lossFrac, med+lossMargin)
 }
