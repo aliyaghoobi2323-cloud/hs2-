@@ -189,6 +189,24 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			warn(`"bind_local_ip" has no effect here: this side listens (set the listen IP in "addr")`)
 		}
 	}
+	if err := validateLB(fc); err != nil {
+		bad("%v", err)
+	} else if lbOn(fc) {
+		own := fc.LB.Kharej
+		if fc.Mode == "dial" {
+			own = fc.LB.Iran
+		}
+		for _, e := range own {
+			if ip := net.ParseIP(e.IP); ip != nil && !localIP(ip) {
+				bad(`"lb": %s is not an IP of this server — it cannot listen on or dial from it`, e.IP)
+			}
+		}
+		if dials {
+			if paths, err := lbPaths(fc); err == nil {
+				warn("lb on: %d paths, fixed weights: %s", len(paths), lbSummary(paths))
+			}
+		}
+	}
 	if fc.UserListenIP != "" {
 		ip := net.ParseIP(fc.UserListenIP)
 		if ip == nil {

@@ -45,6 +45,10 @@ RATE=${RATE:-50mbit}; DELAY=${DELAY:-40ms}; QUEUE=${QUEUE:-500ms}; LOSS=${LOSS:-
 FLOWRATE=${FLOWRATE:-0}; BULK=${BULK:-8}; UP=${UP:-0}; T=${T:-20s}; UDP=${UDP:-0}
 IRAN_EXTRA=${IRAN_EXTRA:-}; KHAREJ_EXTRA=${KHAREJ_EXTRA:-}
 VIA=${VIA:-}; WEB=${WEB:-0}
+# PATHS=2: a second Iran<->kharej IP pair (192.168.51.0/24) with its own netem
+# (PATH_A_NETEM / PATH_B_NETEM: extra netem flags per path), and the tunnel in
+# reverse with multipath lb on; LB_WEIGHTS="A,B" are the Iran IPs' weights.
+PATHS=${PATHS:-1}; PATH_A_NETEM=${PATH_A_NETEM:-}; PATH_B_NETEM=${PATH_B_NETEM:-}; LB_WEIGHTS=${LB_WEIGHTS:-50,50}
 JOURNEY=${JOURNEY:-0}; JOURNEY_EXTRA=${JOURNEY_EXTRA:-}
 CALL=${CALL:-}; GAME=${GAME:-0}; LATE=${LATE:-0}; CROWD=${CROWD:-0}; CROWD_EVERY=${CROWD_EVERY:-700ms}
 
@@ -76,7 +80,27 @@ done
 [ -n "${KH_QDISC:-}" ] && ip netns exec $KH tc qdisc replace dev $VK root ${KH_QDISC}
 [ -n "${IR_QDISC:-}" ] && ip netns exec $IR tc qdisc replace dev $VI root ${IR_QDISC}
 ip netns exec $MID "$W/netem" -a $MA -b $MB -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
-  -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} 2>"$W/netem.log" & echo $! >> "$W/pids"
+  -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} $PATH_A_NETEM 2>"$W/netem.log" & echo $! >> "$W/pids"
+if [ "$PATHS" = 2 ]; then
+  ip link add ${VI}b netns $IR type veth peer name ${MA}b netns $MID
+  ip link add ${VK}b netns $KH type veth peer name ${MB}b netns $MID
+  ip -n $IR addr add 192.168.51.1/24 dev ${VI}b
+  ip -n $KH addr add 192.168.51.2/24 dev ${VK}b
+  for x in "$IR ${VI}b" "$KH ${VK}b" "$MID ${MA}b" "$MID ${MB}b"; do
+    set -- $x
+    ip netns exec $1 ethtool -K $2 tso off gso off gro off tx off rx off >/dev/null 2>&1
+    ip -n $1 link set dev $2 up
+  done
+  # replies from the second Iran IP go back over path B
+  ip -n $IR rule add from 192.168.51.1 table 151
+  ip -n $IR route add 192.168.50.2/32 dev ${VI}b src 192.168.51.1 table 151
+  ip netns exec $MID "$W/netem" -a ${MA}b -b ${MB}b -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
+    -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} $PATH_B_NETEM 2>"$W/netem-b.log" & echo $! >> "$W/pids"
+  WA=${LB_WEIGHTS%,*}; WB=${LB_WEIGHTS#*,}
+  LBJ='"lb":{"enabled":true,"iran":[{"ip":"192.168.50.1","weight":'$WA'},{"ip":"192.168.51.1","weight":'$WB'}],"kharej":[{"ip":"192.168.50.2","weight":100}]},'
+  KHAREJ_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","bind_local_ip":"192.168.50.2","sni":"lab.example.com",'"$LBJ$KHAREJ_EXTRA"
+  IRAN_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","backend_addr":"builtin","cert_file":"'$W'/cert.pem","key_file":"'$W'/key.pem",'"$LBJ$IRAN_EXTRA"
+fi
 
 KEY=$(printf 'ab%.0s' {1..32})
 cat > "$W/kh.json" <<J
@@ -128,6 +152,11 @@ SF=/run/hs2/$(echo "$W/ir.json" | sed "s|^/||; s|/|-|g").status.json
 # the pool's link count once a second while the probe runs (links_max)
 (while :; do python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('links',0))" "$SF" 2>/dev/null; sleep 1; done) > "$W/links.txt" &
 LP=$!; echo $LP >> "$W/pids"
+SFK=/run/hs2/$(echo "$W/kh.json" | sed "s|^/||; s|/|-|g").status.json
+if [ "$PATHS" = 2 ]; then
+  (while :; do python3 -c "import json,sys; print(' '.join(str(p['links']) for p in json.load(open(sys.argv[1])).get('lb',[])))" "$SFK" 2>/dev/null; sleep 1; done) > "$W/lbpaths.txt" &
+  echo $! >> "$W/pids"
+fi
 UFLAG=""; [ "$UDP" = 1 ] && UFLAG="-udp"
 PX=""
 [ -n "$CALL" ] && PX="$PX -call $CALL"
@@ -165,6 +194,22 @@ LINKS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get
 [ "${LINKS:-0}" -gt "${LMAX:-0}" ] 2>/dev/null && LMAX=$LINKS
 QCAPS=$(grep -c "tunnel egress capped" "$W/kh.log" 2>/dev/null)
 QREL=$(grep -c "not the tunnel's own" "$W/kh.log" 2>/dev/null)
+LBX=""
+if [ "$PATHS" = 2 ]; then
+  # per-path link counts on the dialing (kharej) side: at the end, and the max
+  LBX=$(python3 - "$W/lbpaths.txt" "$SFK" <<'PY'
+import json, sys
+rows = [list(map(int, l.split())) for l in open(sys.argv[1]) if l.split()]
+try:
+    st = json.load(open(sys.argv[2]))
+    end = [p['links'] for p in st.get('lb', [])]; text = st.get('lb_text', '')
+except Exception:
+    end, text = (rows[-1] if rows else []), ''
+mx = [max(r[i] for r in rows if len(r) > i) for i in range(len(end))] if rows else []
+print('"lb_paths_end":%s,"lb_paths_max":%s,"lb_text":"%s",' % (json.dumps(end), json.dumps(mx), text))
+PY
+)
+fi
 [ "${KEEP:-0}" = 1 ] || cleanup
-printf '{"qcaps":%s,"qrel":%s,"links_end":%s,"links_max":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s",%s%s"link_churn":%s,"probe":%s}\n' \
-  "${QCAPS:-0}" "${QREL:-0}" "${LINKS:-0}" "${LMAX:-0}" "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "${PSTAT:-}" "$TUNX" "$REAPS" "${OUT:-null}"
+printf '{"qcaps":%s,"qrel":%s,"links_end":%s,"links_max":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s",%s%s"link_churn":%s,%s"probe":%s}\n' \
+  "${QCAPS:-0}" "${QREL:-0}" "${LINKS:-0}" "${LMAX:-0}" "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "${PSTAT:-}" "$TUNX" "$REAPS" "$LBX" "${OUT:-null}"

@@ -95,6 +95,11 @@ type liveStatus struct {
 	LimitBy     string `json:"limit_by,omitempty"` // iran | kharej | both
 	CeilingText string `json:"ceiling_text,omitempty"`
 
+	// Multipath LB (dialing side): each path's links, target, failures; and
+	// the same as one text line.
+	LB     []engine.LBPathStat `json:"lb,omitempty"`
+	LBText string              `json:"lb_text,omitempty"`
+
 	// Per-port routing (carriers with user ports; see ports.go): the OTHER
 	// server's half of the table as it reported it over a live link.
 	// PeerRoutes: "" not reported (yet), "known", "older" (the Kharej server
@@ -427,6 +432,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		s := stats()
 		ls := base
 		ls.Links, ls.Target, ls.Min, ls.Max = s.Links, s.Target, s.Min, s.Max
+		if len(s.LB) > 0 {
+			ls.LB, ls.LBText = s.LB, engine.LBLine(s.LB)
+		}
 		if ls.CfgMax > 0 {
 			ls.PeerMax = s.PeerMax
 			ls.EffMax, ls.LimitBy = effectiveCeiling(fc.Mode == "dial", fc.Reverse, ls.CfgMax, ls.PeerMax)
@@ -618,6 +626,9 @@ func printStatus(path string) {
 	}
 	if ls.Refill != "" {
 		fmt.Printf("  refill:     %s\n", ls.Refill)
+	}
+	if ls.LBText != "" {
+		fmt.Printf("  paths:      %s\n", ls.LBText)
 	}
 	for i, l := range ls.PortsLines {
 		if i == 0 {

@@ -40,6 +40,12 @@ type KharejConfig struct {
 	RevLinks     int
 	RevMin       int
 	RevMax       int
+	// RevLB (reverse, optional): place the dialed links on several paths by
+	// weight (lb.go). RevDialPath dials one path (scout: short timeout).
+	RevLB       *LB
+	RevDialPath func(p LBPath, scout bool) (*tlscarrier.Carrier, error)
+	// LB advertises capLB to the edge (lb enabled on this side).
+	LB bool
 
 	// OnStart, if set, is called once with a function that returns a live
 	// snapshot of the link pattern, for monitoring.
@@ -74,6 +80,9 @@ func (cfg KharejConfig) routeTable() RouteTable {
 func (cfg KharejConfig) info(myMax int) peerInfo {
 	t := cfg.routeTable()
 	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap(), Ports: t.MappedPorts()}
+	if cfg.LB {
+		pi.Caps |= capLB
+	}
 	if t.Default != "" {
 		pi.Flags |= flagDefault
 	}
@@ -106,7 +115,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	if queueCtlOn {
 		go exitQueue.run(ctx, logf)
 	}
-	if cfg.RevDial != nil {
+	if cfg.RevDial != nil || cfg.RevLB != nil {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
 	var links atomic.Int32

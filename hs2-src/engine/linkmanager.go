@@ -2364,6 +2364,8 @@ type PoolStats struct {
 	// Routes is what the other server reported about per-port routing (nil =
 	// this pool does not carry it). Display only.
 	Routes *PeerRoutes
+	// LB is each multipath path's state (nil = lb off; dialing side only).
+	LB []LBPathStat
 
 	// Datagram pools (dgtun): what this side's carriers see on what they SEND
 	// (the peer reports its loss) and what they receive.

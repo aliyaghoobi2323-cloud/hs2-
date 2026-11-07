@@ -30,6 +30,10 @@ type IranConfig struct {
 	// dials in.
 	RevServer   *tlscarrier.Server
 	RevListener net.Listener
+	// LB advertises capLB to the exit (lb enabled on this side: it listens on,
+	// or dials, extra IPs). A Dialer built by NewLBLinkDialer reports its
+	// per-path state in the stats.
+	LB bool
 
 	// DrainIdle: a connection on a retiring link that has moved nothing for
 	// this long is closed so the link can finish. 0 = the default (310 s, above
@@ -79,6 +83,17 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// so each one knows whether the exit routes port tags (routes.go).
 	lm.gateInfo = true
 	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap()}
+	if cfg.LB {
+		mine.Caps |= capLB
+	}
+	if lb := lbOf(cfg.Dialer); lb != nil && !reverse {
+		lb.setPeerState(func() (bool, bool) {
+			if pi := lm.exitInfo.Load(); pi != nil && pi.V2 {
+				return true, pi.Caps&capLB != 0
+			}
+			return false, false
+		})
+	}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
 			mine.Ports = append(mine.Ports, n)
@@ -128,7 +143,11 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		}
 	}
 	if cfg.OnStart != nil {
-		cfg.OnStart(lm.Stats)
+		if lb := lbOf(cfg.Dialer); lb != nil && !reverse {
+			cfg.OnStart(func() PoolStats { st := lm.Stats(); st.LB = lb.Stats(); return st })
+		} else {
+			cfg.OnStart(lm.Stats)
+		}
 	}
 	go lm.Run(ctx)
 	if reverse {

@@ -122,8 +122,15 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 		initial = max
 	}
 	dial := func() (dialedLink, error) { return cfg.RevDial() }
+	lb := cfg.RevLB
+	if lb != nil {
+		lb.setPeerState(func() (bool, bool) { return cfg.peers.capState(capLB) })
+		dial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, false) }
+	}
 	pool := newExitPool(ctx, min, max, dial, logf)
-	if cfg.RevDialScout != nil {
+	if lb != nil {
+		pool.scoutDial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, true) }
+	} else if cfg.RevDialScout != nil {
 		pool.scoutDial = func() (dialedLink, error) { return cfg.RevDialScout() }
 	}
 	pool.peers = cfg.peers     // the live links; each carries the edge's ceiling (kindInfo)
@@ -131,10 +138,17 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	// serve captures the pool so a link's pool-control stream can resize it; set
 	// before any slot starts, then start the pool at its initial size.
 	pool.serve = func(ctx context.Context, car dialedLink) string {
+		if lb != nil {
+			defer lb.release(car)
+		}
 		return serveReverseLink(ctx, car.(*tlscarrier.Carrier), cfg, l3, pool)
 	}
 	if cfg.OnStart != nil {
-		cfg.OnStart(pool.stats)
+		stats := pool.stats
+		if lb != nil {
+			stats = func() PoolStats { st := pool.stats(); st.LB = lb.Stats(); return st }
+		}
+		cfg.OnStart(stats)
 	}
 	pool.setTarget(initial)
 	<-ctx.Done()
@@ -190,4 +204,19 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		}
 	}
 	return sessionEndReason(why, downErr)
+}
+
+// lbDialCarrier dials one reverse link on the path lb picks.
+func lbDialCarrier(lb *LB, dial func(LBPath, bool) (*tlscarrier.Carrier, error), scout bool) (dialedLink, error) {
+	v, err := lb.dialVia(func(p LBPath) (any, error) {
+		c, err := dial(p, scout)
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(*tlscarrier.Carrier), nil
 }

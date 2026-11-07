@@ -100,6 +100,9 @@ type fileConfig struct {
 	RemoteStatic string `json:"remote_static"`
 	PSK          string `json:"psk"`
 
+	// multipath load balancing (lb.go). Absent = off.
+	LB *lbConfig `json:"lb,omitempty"`
+
 	// kernel tuning (RAM/CPU-aware; applied at every start). Omitted = auto.
 	Tuning *tune.Config `json:"tuning"`
 }
@@ -339,8 +342,11 @@ func runCmd(args []string) {
 	if fc.BindLocalIP != "" && net.ParseIP(fc.BindLocalIP) == nil {
 		log.Fatalf("config: bind_local_ip %q is not a valid IP address", fc.BindLocalIP)
 	}
-	if fc.BindLocalIP != "" {
+	if fc.BindLocalIP != "" && !lbOn(fc) {
 		log.Printf("egress: all tunnel connections will leave from %s", fc.BindLocalIP)
+	}
+	if err := validateLB(fc); err != nil {
+		log.Fatalf("config: %v", err)
 	}
 
 	// Apply RAM/CPU-aware kernel tuning at every start, so it always matches the
@@ -491,13 +497,21 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			// It needs a cert (it is the TLS server now) and a probe backend.
 			cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
 			must(err)
-			ln, err := engine.ListenReuse(fc.Addr)
+			ln, err := listenLB(fc, logf)
 			must(err)
+			cfg.LB = lbOn(fc)
 			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 			cfg.RevListener = ln
 			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
 		} else {
 			cfg.Dialer = engine.NewMTCPDialer(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+			if lbOn(fc) {
+				lb := newLB(fc, logf)
+				cfg.Dialer = engine.NewLBLinkDialer(lb, func(p engine.LBPath) engine.LinkDialer {
+					return engine.NewMTCPDialer(p.Addr, fc.SNI, key, p.Local)
+				})
+				cfg.LB = true
+			}
 		}
 		must(engine.RunIran(ctx, cfg))
 		return
@@ -534,15 +548,26 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		cfg.RevDialScout = func() (*tlscarrier.Carrier, error) {
 			return tlscarrier.DialFromTimeout(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second)
 		}
+		if lbOn(fc) {
+			cfg.LB = true
+			cfg.RevLB = newLB(fc, logf)
+			cfg.RevDialPath = func(p engine.LBPath, scout bool) (*tlscarrier.Carrier, error) {
+				if scout {
+					return tlscarrier.DialFromTimeout(p.Addr, fc.SNI, key, p.Local, 2*time.Second)
+				}
+				return tlscarrier.DialFrom(p.Addr, fc.SNI, key, p.Local)
+			}
+		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
 		must(engine.RunKharej(ctx, cfg))
 		return
 	}
 	cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
 	must(err)
-	ln, err := engine.ListenReuse(fc.Addr)
+	ln, err := listenLB(fc, logf)
 	must(err)
 	cfg.Listener = ln
+	cfg.LB = lbOn(fc)
 	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 	must(engine.RunKharej(ctx, cfg))
 }
@@ -1008,4 +1033,43 @@ func must(err error) {
 		encap.ReleaseAllEchoGuards() // log.Fatal exits without running defers
 		log.Fatal(err)
 	}
+}
+
+// newLB builds the dialing side's balancer from the lb config (validated).
+func newLB(fc fileConfig, logf func(string, ...any)) *engine.LB {
+	paths, err := lbPaths(fc)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	lb, err := engine.NewLB(paths, logf)
+	must(err)
+	logf("lb: %d paths, fixed weights: %s", len(paths), lbSummary(paths))
+	return lb
+}
+
+// listenLB listens on addr and, with lb on, on every extra IP of this side's
+// list (same port), as one listener.
+func listenLB(fc fileConfig, logf func(string, ...any)) (net.Listener, error) {
+	ln, err := engine.ListenReuse(fc.Addr)
+	if err != nil {
+		return nil, err
+	}
+	extra := lbListenIPs(fc)
+	if len(extra) == 0 {
+		return ln, nil
+	}
+	_, port, _ := net.SplitHostPort(fc.Addr)
+	lns := []net.Listener{ln}
+	for _, ip := range extra {
+		x, err := engine.ListenReuse(net.JoinHostPort(ip, port))
+		if err != nil {
+			for _, l := range lns {
+				l.Close()
+			}
+			return nil, fmt.Errorf("lb: listen on %s: %v", ip, err)
+		}
+		lns = append(lns, x)
+	}
+	logf("lb: also listening on %s (port %s)", strings.Join(extra, ", "), port)
+	return engine.MergeListeners(lns...), nil
 }
