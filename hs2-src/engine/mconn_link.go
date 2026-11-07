@@ -173,13 +173,21 @@ func (m *LinkManager) planeKeyLocked(p mPlane, ml *managedLink) planeKey {
 	k := planeKey{pk: newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)}
 	switch p {
 	case planeBulk:
-		if !(ml.heavy > 0 && !ml.pressed) {
-			k.class = 1
-		}
+		// The pool's usual spread (pressed last, then least loaded): packing
+		// the bulk subs onto the links that already carry downloads put 32
+		// downloads on a few links, and under the path's loss one TCP link
+		// carries only so much — 10% less throughput, and whatever shared
+		// those links waited seconds (lab, 300 light + 32 bulk, 1% loss).
+		// Light subs keep off downloads by their own order (pk.heavy).
 	default:
-		if ml.heavy > 0 {
-			k.class = 1
-		}
+		// The pool's own order (pickLocked with pickClass): a link that is
+		// not pressed (nor took a burst of placements) first, then one with
+		// no heavy stream, then the least loaded. "No heavy" must not come
+		// before "not pressed": then every light sub piled onto the few
+		// links without a download (300 light connections on 2–3 links in
+		// the lab: a game's p50 81 → 381 ms and up to 7 s, 10% less
+		// throughput).
+		k.pk.heavy = ml.heavy > 0
 	}
 	return k
 }
@@ -298,6 +306,11 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 				role = mconnRoleFirst
 			}
 			if _, err = st.Write(mconnHeader(e.port, e.id, role)); err == nil {
+				if role == mconnRoleJoin && p == planeLight {
+					if cs, ok := st.(*countedStream); ok {
+						cs.copyOnly.Store(true) // a copy of the first sub's bytes: not demand
+					}
+				}
 				e.first = true
 				s := &mconnSub{stream: st, plane: p, release: rel}
 				mconnPlaneGauge(p).Add(1)

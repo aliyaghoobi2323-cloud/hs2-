@@ -95,6 +95,17 @@ const (
 	mHeavyBigWrites = 3           // this many big writes within mHeavyWindow
 	mHeavyRate      = 1_000_000   // or more than this many bytes (8 Mbit/s)
 	mHeavyWindow    = time.Second // ... within this window
+	// mHeavyBigMin: the big writes count only with at least this many bytes
+	// in the window (4 Mbit/s): a call or a game that fell behind for a
+	// moment also reads a few big chunks, and moving it to a bulk link puts
+	// it behind the very downloads it was kept away from.
+	mHeavyBigMin = 512 << 10
+	// mDupMaxRate: a light connection is sent on two subs only while it moves
+	// at most this many bytes a window (384 kbit/s): pings, games, requests,
+	// chat. Above it (a call, a stream) it stays on the light links with one
+	// copy, so duplication never loads them (in the lab, duplicating every
+	// light connection took a 2 Mbit/s call from ~135 ms to ~1 s).
+	mDupMaxRate = 48 << 10
 
 	// mRetireAfter: Iran closes the light subs once the peer's BULK echo is
 	// this old and no record arrived on them for this long (records the peer
@@ -298,6 +309,11 @@ type mConn struct {
 	hvBig   int
 	hvBytes int
 	heavy   bool
+	// duplication gate (this side's sending direction): bytes in the current
+	// window, and whether this direction is over mDupMaxRate (one copy then)
+	dupStart time.Time
+	dupBytes int
+	dupOff   bool
 
 	wantBulk     bool // Iran: switch to bulk (own heavy, or WANTBULK)
 	bulkOpening  bool
@@ -489,12 +505,23 @@ func (m *mConn) sendLocked(c *mchunk) error {
 		}
 		c.setOff(m.sendOff)
 		m.sendOff += uint64(c.n)
+		// one copy when this direction is over mDupMaxRate: on the sub with
+		// the shortest queue; the others miss it (lastHole, as a full queue)
+		var one *msub
+		if m.dupOff {
+			for _, s := range m.subs {
+				if !s.retired && s.fits(c.n) && (one == nil || s.qBytes < one.qBytes) {
+					one = s
+				}
+			}
+			fit = 1
+		}
 		var now time.Time
 		for _, s := range m.subs {
 			if s.retired {
 				continue
 			}
-			if s.fits(c.n) {
+			if s.fits(c.n) && (one == nil || s == one) {
 				s.push(c)
 				continue
 			}
@@ -530,10 +557,20 @@ func (m *mConn) pushAllLocked(c *mchunk) int {
 
 // noteWriteLocked runs heavy detection for this side's sending direction.
 func (m *mConn) noteWriteLocked(n int) {
+	now := time.Now()
+	if w := now.Sub(m.dupStart); w > mHeavyWindow {
+		// the window that just ended decides the next one (a gap of more
+		// than two windows is a quiet connection: duplicate again)
+		m.dupOff = m.dupBytes > mDupMaxRate && w < 2*mHeavyWindow
+		m.dupStart, m.dupBytes = now, 0
+	}
+	m.dupBytes += n
+	if m.dupBytes > mDupMaxRate {
+		m.dupOff = true
+	}
 	if m.heavy || m.mode != planeLight {
 		return
 	}
-	now := time.Now()
 	if now.Sub(m.hvStart) > mHeavyWindow {
 		m.hvStart, m.hvBig, m.hvBytes = now, 0, 0
 	}
@@ -541,7 +578,7 @@ func (m *mConn) noteWriteLocked(n int) {
 	if n >= mHeavyBigWrite {
 		m.hvBig++
 	}
-	if m.hvBig < mHeavyBigWrites && m.hvBytes <= mHeavyRate {
+	if (m.hvBig < mHeavyBigWrites || m.hvBytes < mHeavyBigMin) && m.hvBytes <= mHeavyRate {
 		return
 	}
 	m.heavy = true

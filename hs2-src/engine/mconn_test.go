@@ -251,10 +251,11 @@ func TestMConnTransferLight(t *testing.T) {
 	if modeOf(iran) != planeLight || modeOf(exit) != planeLight || n.count(planeBulk) != 0 {
 		t.Fatal("left light mode")
 	}
-	// Records went on both subs (a sub whose queue was full when a burst
-	// came may have missed some copies; the stall test checks exact copies).
+	// A fast transfer is over mDupMaxRate: one copy of each chunk, spread
+	// over both light subs by queue length (the stall test checks the copies
+	// of a slow one). Both subs carry part, and together all of it.
 	a, b := n.link(0).iran.wrote.Load(), n.link(1).iran.wrote.Load()
-	if a < 1<<20 || b < 1<<20 || a+b < 4<<20 {
+	if a < 256<<10 || b < 256<<10 || a+b < 3<<20 {
 		t.Fatalf("light subs carried %d and %d bytes; want both well used", a, b)
 	}
 	closeAndWait(t, iran, exit)
@@ -347,15 +348,19 @@ func TestMConnSubDeath(t *testing.T) {
 	before := runtime.NumGoroutine()
 	survived := obs.mconnSubSurvived.Load()
 	n, iran, exit := newTPair(t, true)
-	up, down := randBytes(512<<10, 5), randBytes(512<<10, 6)
+	// under mDupMaxRate (~25 KB/s), so every chunk goes on both subs
+	// (the second light sub joins after the first bytes went out on the
+	// first alone, which counts as a hole for mHoleSafe; the link dies once
+	// that is past, as a link would mid-session)
+	up, down := randBytes(200<<10, 5), randBytes(200<<10, 6)
 	slowWrite := func(m *mConn, data []byte) error {
 		for len(data) > 0 {
-			k := min(len(data), 2<<10)
+			k := min(len(data), 256)
 			if _, err := m.Write(data[:k]); err != nil {
 				return err
 			}
 			data = data[k:]
-			time.Sleep(2 * time.Millisecond)
+			time.Sleep(10 * time.Millisecond)
 		}
 		return m.CloseWrite()
 	}
@@ -364,7 +369,7 @@ func TestMConnSubDeath(t *testing.T) {
 	go func() { errs <- slowWrite(exit, down) }()
 	go func() { errs <- readAllCheck(exit, up) }()
 	go func() { errs <- readAllCheck(iran, down) }()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(mHoleSafe + 500*time.Millisecond)
 	l0 := n.link(0)
 	l0.iran.Close()
 	l0.exit.Close()

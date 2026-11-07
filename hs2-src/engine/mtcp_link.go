@@ -102,6 +102,11 @@ func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 	defer l.flowMu.Unlock()
 	for cs := range l.flows {
 		b := cs.bytes.Load()
+		if cs.copyOnly.Load() {
+			cs.prevBytes = b
+			fs.open++
+			continue
+		}
 		steady := false
 		if b != cs.prevBytes {
 			if dt > 0 {
@@ -239,6 +244,11 @@ type countedStream struct {
 	// backlog: the part of bytes moved in backlog chunks (backlogChunk),
 	// either way; read only with HS2_HEAVY_BACKLOG.
 	backlog atomic.Uint64
+	// copyOnly: an mconn's second light sub (HS2_MCONN). It carries copies
+	// of what the connection's first sub carries, so it is not counted as
+	// demand (flowing/heavy/recent): counting it doubled the users the
+	// autopilot saw and the links it built (42 → 80 in the lab).
+	copyOnly atomic.Bool
 
 	// sampler-only bookkeeping (see mtcpLink.flowStats)
 	prevBytes  uint64
