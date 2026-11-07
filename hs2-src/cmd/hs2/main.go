@@ -60,6 +60,11 @@ type fileConfig struct {
 	BindLocalIP  string `json:"bind_local_ip"`  // iran: source IP to dial from
 	UserListenIP string `json:"user_listen_ip"` // iran: IP the user ports listen on
 	UDP          bool   `json:"udp"`            // also forward UDP on forward_ports
+	// ACMEWebroot (iran user ports): answer ACME HTTP-01 challenges on the
+	// user ports in ACMEPorts (default "80") from this directory, so certbot
+	// --webroot works while the tunnel holds port 80 (acme.go). "" = off.
+	ACMEWebroot string `json:"acme_webroot,omitempty"`
+	ACMEPorts   string `json:"acme_ports,omitempty"`
 
 	// mtcp (multi-link) settings
 	MinLinks int `json:"min_links"`
@@ -483,6 +488,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			ListenIP: fc.UserListenIP,
 			Ports:    splitComma(fc.ForwardPorts),
 			UDP:      fc.UDP,
+			ACME:     acmeResponder(fc, logf),
 			Log:      logf,
 			OnStart:  func(s engine.StatsFn) { startStatusWriter(ctx, fc, configPath, s) },
 		}
@@ -495,12 +501,13 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		if fc.Reverse {
 			// Reverse edge: the iran side LISTENS for links the kharej dials in.
 			// It needs a cert (it is the TLS server now) and a probe backend.
-			cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
+			cs, err := newCertSelector(fc, logf)
 			must(err)
 			ln, err := listenLB(fc, logf)
 			must(err)
 			cfg.LB = lbOn(fc)
-			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+			cfg.RevServer.BackendFor = coverBackends(fc, logf)
 			cfg.RevListener = ln
 			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
 		} else {
@@ -508,7 +515,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			if lbOn(fc) {
 				lb := newLB(fc, logf)
 				cfg.Dialer = engine.NewLBLinkDialer(lb, func(p engine.LBPath) engine.LinkDialer {
-					return engine.NewMTCPDialer(p.Addr, fc.SNI, key, p.Local)
+					return engine.NewMTCPDialer(p.Addr, lbSNIFor(fc, p.Remote), key, p.Local)
 				})
 				cfg.LB = true
 			}
@@ -552,23 +559,25 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			cfg.LB = true
 			cfg.RevLB = newLB(fc, logf)
 			cfg.RevDialPath = func(p engine.LBPath, scout bool) (*tlscarrier.Carrier, error) {
+				sni := lbSNIFor(fc, p.Remote)
 				if scout {
-					return tlscarrier.DialFromTimeout(p.Addr, fc.SNI, key, p.Local, 2*time.Second)
+					return tlscarrier.DialFromTimeout(p.Addr, sni, key, p.Local, 2*time.Second)
 				}
-				return tlscarrier.DialFrom(p.Addr, fc.SNI, key, p.Local)
+				return tlscarrier.DialFrom(p.Addr, sni, key, p.Local)
 			}
 		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
 		must(engine.RunKharej(ctx, cfg))
 		return
 	}
-	cr, err := newCertReloader(fc.CertFile, fc.KeyFile)
+	cs, err := newCertSelector(fc, logf)
 	must(err)
 	ln, err := listenLB(fc, logf)
 	must(err)
 	cfg.Listener = ln
 	cfg.LB = lbOn(fc)
-	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cr.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+	cfg.Server.BackendFor = coverBackends(fc, logf)
 	must(engine.RunKharej(ctx, cfg))
 }
 
@@ -887,6 +896,7 @@ func runDgTun(ctx context.Context, fc fileConfig) {
 	pc := engine.DgPortsConfig{Edge: edge, UDP: fc.UDP, Log: logf}
 	if edge {
 		pc.Ports, pc.UserListenIP, pc.PeerTunIP = splitComma(fc.ForwardPorts), fc.UserListenIP, fc.PeerIP
+		pc.ACME = acmeResponder(fc, logf)
 	} else {
 		routes, err := engine.ParsePortMap(fc.PortMap)
 		must(err)
@@ -968,6 +978,14 @@ func runNoise(ctx context.Context, eng *engine.Engine, fc fileConfig) {
 // find every hs2 server by one known sha256 (see cover.go). An empty seed (an
 // old or hand-written config) yields the fixed legacy page, unchanged.
 func startBuiltinBackend(seed string) (string, error) {
+	return startBuiltinBackendLabel(seed, "")
+}
+
+// startBuiltinBackendLabel serves the cover for one address/subdomain: label
+// "" is the install's own page (unchanged, see the stability contract in
+// cover.go); a non-empty label gets a distinct page seeded from seed+label.
+func startBuiltinBackendLabel(seed, label string) (string, error) {
+	seed = coverSeedFor(seed, label)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", err

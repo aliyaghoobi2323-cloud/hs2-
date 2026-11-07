@@ -24,6 +24,9 @@ type IranConfig struct {
 	UDP      bool      // also forward UDP on Ports
 	TUN      tunWriter // non-nil: carry hs0 packets as a side channel
 	Log      func(string, ...any)
+	// ACME, if set, answers HTTP-01 challenge requests on its ports (acme.go);
+	// nil = every user connection is forwarded exactly as before.
+	ACME *ACMEResponder
 
 	// Reverse edge: accept links from the kharej instead of dialing. When set,
 	// Dialer/Min/Max are ignored and the pool grows/shrinks with what the peer
@@ -176,6 +179,10 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 					continue
 				}
 				bo.ok()
+				if cfg.ACME.On(port) {
+					go acmeServeUser(cfg.ACME, c, port, func(c net.Conn) { serveUserTCP(ctx, c, lm, port) })
+					continue
+				}
 				go serveUserTCP(ctx, c, lm, port)
 			}
 		}()

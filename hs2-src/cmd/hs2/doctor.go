@@ -58,6 +58,8 @@ func doctorCmd(args []string) {
 			if leaf := checkCert(d, fc); leaf != nil {
 				checkCertRenewal(d, fc, leaf, hostRenewEnv())
 			}
+			checkLBCerts(d, fc)
+			checkACME(d, fc)
 			checkTun(d, fc)
 			checkTuning(d, fc)
 			checkLinkPool(d, fc, *cfgPath)

@@ -1158,6 +1158,117 @@ cert_dns01(){ # domain
   printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
 }
 
+# ---------- ACME HTTP-01 through hs2 itself (acme_webroot) -------------------
+# With "acme_webroot" on, the tunnel answers ACME HTTP-01 challenges on its own
+# user port 80 from this directory (engine/acme.go), so certbot --webroot works
+# while hs2 holds port 80 on every address — standalone cannot bind it there,
+# neither for a new (lb) address nor for the renewal of the current one.
+ACME_WEBROOT=/var/lib/hs2/acme
+
+# cfg_acme_webroot CFG: the webroot the tunnel config answers from, or empty
+# when acme_webroot is off/absent (same rules as hs2's acmeWebrootOf).
+cfg_acme_webroot(){
+  local v
+  v=$(sed -n 's/.*"acme_webroot"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1" 2>/dev/null | head -n1)
+  case "$(printf '%s' "$v" | tr 'A-Z' 'a-z')" in
+    ''|off|false|no) return 0 ;;
+    on|true|yes|default) printf '%s' "$ACME_WEBROOT" ;;
+    /*) printf '%s' "${v%/}" ;;
+  esac
+  return 0
+}
+
+# cert_get_webroot CFG DOMAIN: a certificate for DOMAIN (e.g. an lb address's
+# own subdomain, whose A record points at that address) through hs2's ACME
+# responder when CFG has acme_webroot on — no port to free; otherwise the
+# classic standalone path. Prints "certfile|keyfile" like cert_standalone.
+cert_get_webroot(){
+  local cfg="$1" domain="$2" root
+  root=$(cfg_acme_webroot "$cfg")
+  if [ -z "$root" ]; then
+    cert_standalone "$domain"
+    return
+  fi
+  ensure_certbot
+  mkdir -p "$root/.well-known/acme-challenge"
+  chmod 755 "$root" "$root/.well-known" "$root/.well-known/acme-challenge" 2>/dev/null || true
+  info "Getting Let's Encrypt certificate for $domain (HTTP-01 answered by hs2 from $root)…"
+  if certbot certonly --webroot -w "$root" -d "$domain" --non-interactive --agree-tos \
+       --register-unsafely-without-email --deploy-hook "$CERT_HOOK" >/dev/null 2>&1; then
+    ok "Certificate obtained for $domain."
+  else
+    err "certbot HTTP-01 (webroot) failed for $domain."
+    warn "Check: the A record of $domain points at the address it is for, the tunnel"
+    warn "is running with \"acme_webroot\" on and user port 80, and inbound 80 is reachable."
+    die  "certificate not obtained."
+  fi
+  configure_renewal "$domain"
+  printf '/etc/letsencrypt/live/%s/fullchain.pem|/etc/letsencrypt/live/%s/privkey.pem' "$domain" "$domain"
+}
+
+# cert_renewal_to_webroot CONF ROOT: switch one certbot renewal config from
+# standalone to webroot ROOT (backup in CONF.hs2-standalone). Only a
+# standalone config is changed; returns 1 otherwise (so a second run is a
+# no-op).
+cert_renewal_to_webroot(){
+  local conf="$1" root="$2" name cert d tmp
+  [ -f "$conf" ] || return 1
+  [ "$(cert_conf_get "$conf" authenticator)" = standalone ] || return 1
+  name=$(basename "$conf" .conf)
+  cert="$LE_DIR/live/$name/cert.pem"
+  [ -f "$cert" ] || cert="$LE_DIR/live/$name/fullchain.pem"
+  cp -p "$conf" "$conf.hs2-standalone"
+  tmp=$(mktemp)
+  # authenticator -> webroot; drop the standalone-only keys and any old map.
+  awk -v root="$root" '
+    /^\[\[webroot_map\]\]/ { skip=1; next }
+    /^\[/ { skip=0 }
+    skip { next }
+    /^authenticator[[:space:]]*=/ { print "authenticator = webroot"; print "webroot_path = " root ","; next }
+    /^(http01_port|http01_address|webroot_path)[[:space:]]*=/ { next }
+    { print }' "$conf" > "$tmp"
+  {
+    printf '[[webroot_map]]\n'
+    while IFS= read -r d; do
+      case "$d" in ''|\**) continue ;; esac
+      printf '%s = %s\n' "$d" "$root"
+    done < <(cert_domains "$cert" | tr ' ' '\n')
+  } >> "$tmp"
+  cat "$tmp" > "$conf"; rm -f "$tmp"
+  mkdir -p "$root/.well-known/acme-challenge"
+  return 0
+}
+
+# cert_offer_webroot_switch CFG: for every certbot certificate still renewed
+# by standalone, ask (y/N, default no) and switch it to hs2's webroot. Only
+# when CFG has acme_webroot on. Reads the answers from stdin. (The full menu
+# entry is lb stage 4; this is the building block.)
+cert_offer_webroot_switch(){
+  local cfg="$1" root conf name a n=0
+  root=$(cfg_acme_webroot "$cfg")
+  if [ -z "$root" ]; then
+    warn "acme_webroot is off in $cfg: standalone renewals are left as they are."
+    return 0
+  fi
+  for conf in "$LE_DIR"/renewal/*.conf; do
+    [ -f "$conf" ] || continue
+    [ "$(cert_conf_get "$conf" authenticator)" = standalone ] || continue
+    name=$(basename "$conf" .conf)
+    printf '%s renews with standalone (needs port 80 free). Switch it to hs2 webroot %s? [y/N] ' "$name" "$root" >&2
+    a=""; read -r a || true
+    case "$a" in
+      y|Y|yes|YES)
+        if cert_renewal_to_webroot "$conf" "$root"; then
+          ok "$name: renewal now uses webroot $root (backup: $conf.hs2-standalone). Test: certbot renew --dry-run --cert-name $name"
+          n=$((n+1))
+        fi ;;
+      *) info "$name: left as standalone." ;;
+    esac
+  done
+  [ "$n" -gt 0 ] || info "No renewal changed."
+  return 0
+}
+
 # CERT_HOOK runs after every renewal: SIGHUP to every running hs2 tunnel, which
 # hot-swaps the certificate of those that have one and is ignored by the rest.
 # One hook for all tunnels, so adding or deleting a tunnel never leaves a

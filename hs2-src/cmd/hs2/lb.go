@@ -19,7 +19,9 @@ import (
 type lbIP struct {
 	IP     string `json:"ip"`
 	Weight int    `json:"weight"`
-	// stage 3 (per-IP cert/SNI): accepted, not used yet.
+	// stage 3 (per-IP cert/SNI, certsel.go): the listening side serves
+	// cert_file/key_file on this IP (and for this sni); the dialing side sends
+	// sni on paths to this IP. Unset: the top-level sni/cert.
 	SNI      string `json:"sni,omitempty"`
 	CertFile string `json:"cert_file,omitempty"`
 	KeyFile  string `json:"key_file,omitempty"`

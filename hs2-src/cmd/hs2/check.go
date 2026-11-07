@@ -309,6 +309,26 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		}
 	}
 
+	// lb stage 3: per-address certificates and their sni; the ACME responder.
+	if issues, _ := lbCertIssues(fc, now); len(issues) > 0 {
+		for _, is := range issues {
+			if is.fatal {
+				bad("lb %s: %s", is.ip, is.msg)
+			} else {
+				warn("lb %s: %s", is.ip, is.msg)
+			}
+		}
+	}
+	if (stream || dgtun) && fc.Mode == "dial" || acmeWebrootOf(fc) != "" {
+		b, w := acmeIssues(fc)
+		for _, m := range b {
+			bad("%s", m)
+		}
+		for _, m := range w {
+			warn("%s", m)
+		}
+	}
+
 	// Datagram tun (carrier "dgtun"): a routed TUN over a pool of datagram
 	// carriers. Validate the encapsulation, the pool envelope, and — when the
 	// userspace port forwarder is used — the ports and the panel.

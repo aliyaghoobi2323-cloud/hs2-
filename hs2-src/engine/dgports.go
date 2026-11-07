@@ -76,6 +76,7 @@ type DgPortsConfig struct {
 	// Edge: the user ports it opens, the IP they listen on, and the peer's tun IP.
 	Ports        []string
 	UserListenIP string
+	ACME         *ACMEResponder // edge: answer ACME HTTP-01 on its ports (nil = off)
 	PeerTunIP    string
 	// Exit: its tun IP and its table (Default = expose, Routes = port_map).
 	LocalTunIP string
@@ -676,6 +677,10 @@ func (e *dgEdge) listen(ctx context.Context, p string, port int) error {
 				continue
 			}
 			bo.ok()
+			if e.cfg.ACME.On(port) {
+				go acmeServeUser(e.cfg.ACME, c, port, func(c net.Conn) { e.serveTCP(ctx, c, port) })
+				continue
+			}
 			go e.serveTCP(ctx, c, port)
 		}
 	}()

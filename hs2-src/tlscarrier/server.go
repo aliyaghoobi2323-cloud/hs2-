@@ -22,6 +22,10 @@ type Server struct {
 	// pick up the fresh cert, existing ones are undisturbed.
 	GetCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 	BackendAddr    string // a real local web server; probes are proxied here
+	// BackendFor, if set, picks the backend per connection from the local
+	// address it arrived on and the SNI it asked for (a distinct cover site per
+	// address/subdomain); "" falls back to BackendAddr.
+	BackendFor func(local net.Addr, sni string) string
 	// Logf, if set, receives rare diagnostic messages (e.g. an old client).
 	Logf    func(string, ...any)
 	replay  *replayMem
@@ -125,7 +129,13 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 			s.logRare("tls: refused a pre-v2 client (no channel binding) from %s: upgrade the Iran server", raw.RemoteAddr())
 		}
 		tconn.SetDeadline(time.Time{})
-		s.forward(ctx, tconn, first)
+		backend := s.BackendAddr
+		if s.BackendFor != nil {
+			if b := s.BackendFor(raw.LocalAddr(), cs.ServerName); b != "" {
+				backend = b
+			}
+		}
+		s.forward(ctx, tconn, first, backend)
 		return
 	}
 	tconn.SetDeadline(time.Now().Add(authTimeout))
@@ -161,9 +171,9 @@ func (s *Server) logRare(f string, a ...any) {
 
 // forward proxies the TLS-decrypted stream to the real backend, replaying the
 // bytes already read, so a probe receives a genuine response from a real site.
-func (s *Server) forward(ctx context.Context, tconn *tls.Conn, already []byte) {
+func (s *Server) forward(ctx context.Context, tconn *tls.Conn, already []byte, backend string) {
 	defer tconn.Close()
-	up, err := net.DialTimeout("tcp", s.BackendAddr, 8*time.Second)
+	up, err := net.DialTimeout("tcp", backend, 8*time.Second)
 	if err != nil {
 		return
 	}

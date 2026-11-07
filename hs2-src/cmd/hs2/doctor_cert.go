@@ -287,7 +287,13 @@ func checkCertRenewal(d *doctorReport, fc fileConfig, leaf *x509.Certificate, en
 				// frees the port itself, so a busy port now is expected.
 				portNote = fmt.Sprintf(" (port %d is in use now; %s is expected to free it at renewal — confirm with: certbot renew --dry-run)", port, hook)
 			} else {
-				d.warn(name, fmt.Sprintf("standalone HTTP-01 needs port %d at each renewal, but another program is listening on it now and no certbot pre-hook frees it — the next renewal will likely fail (who: ss -ltnp 'sport = :%d'; test: certbot renew --dry-run); free it, or re-issue the certificate with DNS-01", port, port))
+				msg := fmt.Sprintf("standalone HTTP-01 needs port %d at each renewal, but another program is listening on it now and no certbot pre-hook frees it — the next renewal will likely fail (who: ss -ltnp 'sport = :%d'; test: certbot renew --dry-run); free it, or re-issue the certificate with DNS-01", port, port)
+				if port == 80 && acmeWebrootOf(fc) != "" {
+					msg += "; hs2 answers HTTP-01 itself here (acme_webroot on): switch this renewal to webroot (authenticator = webroot, webroot_path = " + acmeWebrootOf(fc) + "; the installer can do it)"
+				} else if port == 80 && fc.Mode == "dial" {
+					msg += `; if it is hs2's own user port 80, set "acme_webroot": "on" and switch the renewal to webroot`
+				}
+				d.warn(name, msg)
 				problems++
 			}
 		} else if known {

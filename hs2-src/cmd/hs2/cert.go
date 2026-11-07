@@ -22,6 +22,7 @@ type certReloader struct {
 	mu                sync.Mutex
 	lastMod           time.Time
 	notAfter          atomic.Int64 // unix seconds of leaf expiry (0 = unknown)
+	warned            bool         // expiry warning logged (watchCerts only)
 }
 
 // certRegistry lets one SIGHUP reload every server's certificate.
@@ -118,7 +119,6 @@ func reloadAllCerts(reason string) {
 func watchCerts(ctx context.Context) {
 	t := time.NewTicker(time.Minute)
 	defer t.Stop()
-	warned := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -131,11 +131,13 @@ func watchCerts(ctx context.Context) {
 		for _, r := range rs {
 			if r.changedOnDisk() {
 				r.reload("file changed on disk")
-				warned = false
+				r.warned = false
 			}
-			if d := r.daysLeft(); d >= 0 && d <= 7 && !warned {
+			// Per certificate (lb: one per address), so a second cert nearing
+			// expiry is not hidden by the first one's warning.
+			if d := r.daysLeft(); d >= 0 && d <= 7 && !r.warned {
 				log.Printf("cert: %s expires in %d day(s) — renew it now; 'hs2 doctor' (cert renewal) shows whether and how it renews", r.certFile, d)
-				warned = true
+				r.warned = true
 			}
 		}
 	}
