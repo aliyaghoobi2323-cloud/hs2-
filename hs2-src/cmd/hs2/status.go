@@ -225,6 +225,8 @@ type liveStatus struct {
 	MConnLiteDual       int64  `json:"mconn_lite_dual,omitempty"`
 	ObsMConnLiteUpgrade uint64 `json:"obs_mconn_lite_upgrade,omitempty"`
 	ObsMConnLiteCapped  uint64 `json:"obs_mconn_lite_capped,omitempty"`
+	// MConnDupBytes: bytes this side sent as second copies, since start.
+	MConnDupBytes uint64 `json:"mconn_dup_bytes,omitempty"`
 	// Link health, since start: loss candidates kept by HS2_LOSS_RELATIVE
 	// (near the path's median), and second probations refused by
 	// HS2_PROBATION_ONCE.
@@ -278,6 +280,7 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsMConnHeavyFast, ls.ObsMConnPrimarySwitch = d.MConnHeavyFast, d.MConnPrimarySwitch
 	ls.MConnLiteOpen, ls.MConnLiteDual = now.MConnLiteOpen, now.MConnLiteDual
 	ls.ObsMConnLiteUpgrade, ls.ObsMConnLiteCapped = d.MConnLiteUpgrade, d.MConnLiteCapped
+	ls.MConnDupBytes = now.MConnDupBytes
 	ls.ObsLossRelKept, ls.ObsProbationOnceDenied = now.LossRelKept, now.ProbationOnceDenied
 }
 

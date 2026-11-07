@@ -342,7 +342,7 @@ func (m *mConn) upgradeRaw(avoid []any) {
 	m.handshaking = true
 	m.rawW.Store(false)
 	m.setStateLocked(mStateDual)
-	m.tr.ev("raw: upgrade, UPGRADE(%d) on sub %d", bi, s2.idx)
+	m.tr.ev("raw: upgrade, UPGRADE(%d) on sub %d (recvd=%d)", bi, s2.idx, m.rawRecvd.Load())
 	m.mu.Unlock()
 	m.wmu.Unlock()
 	go m.raw1.writeLoop()
