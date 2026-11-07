@@ -76,7 +76,7 @@ func (l *mtcpLink) OpenStream() (stream, error) {
 type flowSnap struct {
 	open    int       // user streams open on the link
 	flowing int       // streams whose rate EWMA is >= flowingRate (real traffic)
-	heavy   int       // ... of which at a download's rate (heavyRate)
+	heavy   int       // ... of which at a download's rate (heavyRate; HS2_HEAVY_BACKLOG: queue-building)
 	recent  int       // streams that moved a byte within the recent window
 	last    time.Time // most recent byte on any stream
 }
@@ -114,11 +114,19 @@ func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 			cs.ewma -= float32(alpha * float64(cs.ewma))
 		}
 		cs.steady = (cs.steady<<1 | b2u(steady)) & 7
+		if heavyBacklog {
+			bl := cs.backlog.Load()
+			if dt > 0 {
+				rate := float64(bl-cs.prevBacklog) / dt.Seconds()
+				cs.backlogEwma += float32(alpha * (rate - float64(cs.backlogEwma)))
+			}
+			cs.prevBacklog = bl
+		}
 		fs.open++
 		if float64(cs.ewma) >= flowingRate && now.Sub(cs.lastActive) <= flowRecent || cs.steady == 7 {
 			fs.flowing++
 		}
-		if float64(cs.ewma) >= heavyRate && now.Sub(cs.lastActive) <= flowRecent {
+		if cs.heavy(now) {
 			fs.heavy++
 		}
 		if now.Sub(cs.lastActive) <= recent {
@@ -129,6 +137,20 @@ func (l *mtcpLink) flowStats(now time.Time, dt, recent time.Duration) flowSnap {
 		}
 	}
 	return fs
+}
+
+// heavy reports whether the stream counts as heavy at this sample: still
+// moving data and fast (heavyRate), or with HS2_HEAVY_BACKLOG queue-building
+// (backlogChunk): most of what it moves, and backlogFloorRate at least, went
+// in backlog chunks. Sampler only, after the stream's EWMAs were updated.
+func (cs *countedStream) heavy(now time.Time) bool {
+	if now.Sub(cs.lastActive) > flowRecent {
+		return false
+	}
+	if !heavyBacklog {
+		return float64(cs.ewma) >= heavyRate
+	}
+	return float64(cs.backlogEwma) >= backlogFloorRate && cs.backlogEwma >= backlogShare*cs.ewma
 }
 
 // idleCand is a user stream that has been silent for the reclaim window,
@@ -214,27 +236,44 @@ type countedStream struct {
 	link  *mtcpLink
 	done  atomic.Bool
 	bytes atomic.Uint64 // payload bytes moved either way (data path: atomic add only)
+	// backlog: the part of bytes moved in backlog chunks (backlogChunk),
+	// either way; read only with HS2_HEAVY_BACKLOG.
+	backlog atomic.Uint64
 
 	// sampler-only bookkeeping (see mtcpLink.flowStats)
 	prevBytes  uint64
 	lastActive time.Time
 	ewma       float32 // bytes/s, time constant flowTau
 	steady     uint8   // last 3 samples: moved at least flowSteadyRate
+	// HS2_HEAVY_BACKLOG: the backlog counter at the last sample and its rate
+	// EWMA (bytes/s, flowTau)
+	prevBacklog uint64
+	backlogEwma float32
+}
+
+// moved counts n payload bytes of one Read or Write. A chunk of backlogChunk
+// or more (one smux frame at most when read) was waiting at its sender: the
+// data path's only extra cost is that compare and, for such a chunk, one
+// atomic add.
+func (c *countedStream) moved(n int) {
+	if n <= 0 {
+		return
+	}
+	c.bytes.Add(uint64(n))
+	if n >= backlogChunk || n >= SmuxFrameSize {
+		c.backlog.Add(uint64(n))
+	}
 }
 
 func (c *countedStream) Read(p []byte) (int, error) {
 	n, err := c.Stream.Read(p)
-	if n > 0 {
-		c.bytes.Add(uint64(n))
-	}
+	c.moved(n)
 	return n, err
 }
 
 func (c *countedStream) Write(p []byte) (int, error) {
 	n, err := c.Stream.Write(p)
-	if n > 0 {
-		c.bytes.Add(uint64(n))
-	}
+	c.moved(n)
 	return n, err
 }
 

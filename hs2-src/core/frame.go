@@ -35,6 +35,11 @@ const (
 	TypePing      = 3
 	TypePong      = 4
 	TypeClose     = 5
+
+	// TypeDataDup is an IP packet the L3 stream side channel sends twice,
+	// over two links (engine/l3_dup.go): payload [id u32][packet]. It is
+	// sent only to a peer that announced it understands it (capL3Dup).
+	TypeDataDup = 16
 )
 
 var (

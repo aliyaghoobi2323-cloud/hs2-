@@ -198,7 +198,10 @@ type liveStatus struct {
 	ObsExitRefused      uint64  `json:"obs_exit_refused,omitempty"`
 	ObsExitTimeout      uint64  `json:"obs_exit_timeout,omitempty"`
 	ObsExitOther        uint64  `json:"obs_exit_other,omitempty"`
-	ObsExitRotated      uint64  `json:"obs_exit_rotated,omitempty"` // since start: dials that needed another 127.0.0.x (HS2_EXIT_SRC_ROTATE)
+	ObsExitRotated      uint64  `json:"obs_exit_rotated,omitempty"`   // since start: dials that needed another 127.0.0.x (HS2_EXIT_SRC_ROTATE)
+	ObsL3DupSent        uint64  `json:"obs_l3_dup_sent,omitempty"`    // last minute: TUN packets sent over two links (HS2_L3_DUP)
+	ObsL3DupDropped     uint64  `json:"obs_l3_dup_dropped,omitempty"` // last minute: second copies dropped
+	ObsL3DupSaved       uint64  `json:"obs_l3_dup_saved,omitempty"`   // last minute: packets whose second copy came first
 }
 
 // obsWindow turns the engine's ever-growing counters into the last minute's
@@ -236,6 +239,7 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsExitDials = d.ExitDials
 	ls.ObsExitNoAddr, ls.ObsExitRefused, ls.ObsExitTimeout, ls.ObsExitOther = now.ExitNoAddr, now.ExitRefused, now.ExitTimeout, now.ExitOther
 	ls.ObsExitRotated = now.ExitRotated
+	ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved = d.L3DupSent, d.L3DupDropped, d.L3DupSaved
 }
 
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
@@ -252,6 +256,9 @@ func obsLines(ls liveStatus) []string {
 	}
 	if ls.ObsUDPQueueP99KB > 0 || ls.ObsUDPDrops > 0 {
 		out = append(out, fmt.Sprintf("udp flows: p99 %.1f KB queued behind their link · %d datagram(s) dropped (queue full)", ls.ObsUDPQueueP99KB, ls.ObsUDPDrops))
+	}
+	if ls.ObsL3DupSent > 0 || ls.ObsL3DupDropped > 0 {
+		out = append(out, fmt.Sprintf("tun dup (HS2_L3_DUP), last minute: %d packet(s) sent over two links · %d second copies dropped · %d saved by the second link (it came first)", ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved))
 	}
 	if fails := ls.ObsExitNoAddr + ls.ObsExitRefused + ls.ObsExitTimeout + ls.ObsExitOther; ls.ObsExitDials > 0 || fails > 0 {
 		s := fmt.Sprintf("exit dials %d in the last minute", ls.ObsExitDials)

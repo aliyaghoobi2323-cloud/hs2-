@@ -364,7 +364,7 @@ const (
 // be this one (ok false) or another flow's (displaced, for the caller to
 // recycle and count) — and records pressure.
 func (l *dgLink) enqueue(b *[]byte, flow uint32, now time.Time) (ok bool, displaced *[]byte) {
-	if d := l.fq.push(qpkt{b, now}, flow); d != nil {
+	if d := l.fq.push(qpkt{b: b, t: now}, flow); d != nil {
 		l.droppedAt.Store(now.UnixNano())
 		l.noteQueueDrop()
 		if d.b == b {

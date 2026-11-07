@@ -21,6 +21,7 @@ import (
 // exitConn is one user connection relayed by the exit.
 type exitConn struct {
 	bytes atomic.Uint64 // payload moved either way (data path: one atomic add)
+	mtr   *linkMeter    // the link it rides (nil: unknown); gets its heavyN
 
 	// sampler-only
 	prev       uint64
@@ -37,9 +38,11 @@ type exitTraffic struct {
 	conns map[*exitConn]struct{}
 
 	// sampler state
-	lastAt time.Time
-	prevB  map[*linkMeter]uint64
-	hist   []float64 // bytes/s per tick, newest last (peakTicks)
+	lastAt    time.Time
+	prevB     map[*linkMeter]uint64
+	heavy     map[*linkMeter]int32 // heavy connections per link this tick (reused)
+	heavyPrev map[*linkMeter]int32 // ... last tick
+	hist      []float64            // bytes/s per tick, newest last (peakTicks)
 
 	snap atomic.Pointer[exitSnap]
 }
@@ -54,12 +57,14 @@ type exitSnap struct {
 const peakTicks = 30
 
 func newExitTraffic(peers *linkPeers) *exitTraffic {
-	return &exitTraffic{peers: peers, conns: map[*exitConn]struct{}{}, prevB: map[*linkMeter]uint64{}}
+	return &exitTraffic{peers: peers, conns: map[*exitConn]struct{}{}, prevB: map[*linkMeter]uint64{},
+		heavy: map[*linkMeter]int32{}, heavyPrev: map[*linkMeter]int32{}}
 }
 
-// open registers a relayed user connection; close it with done.
-func (t *exitTraffic) open() *exitConn {
-	c := &exitConn{lastActive: time.Now()}
+// open registers a relayed user connection riding the link metered by mtr
+// (nil: unknown); close it with done.
+func (t *exitTraffic) open(mtr *linkMeter) *exitConn {
+	c := &exitConn{lastActive: time.Now(), mtr: mtr}
 	if t == nil {
 		return c
 	}
@@ -120,8 +125,13 @@ func (t *exitTraffic) sample(now time.Time) {
 		if float64(c.ewma) >= flowingRate && now.Sub(c.lastActive) <= flowRecent || c.steady == 7 {
 			s.flowing++
 		}
+		// the edge's rule (mtcpLink.flowStats), per link, for the TUN lane
+		if c.mtr != nil && float64(c.ewma) >= heavyRate && now.Sub(c.lastActive) <= flowRecent {
+			t.heavy[c.mtr]++
+		}
 	}
 	t.mu.Unlock()
+	t.storeHeavy()
 
 	// Throughput over every live link, as the edge measures it (the bytes its
 	// meters saw, both directions, this tick).
@@ -153,6 +163,22 @@ func (t *exitTraffic) sample(now time.Time) {
 	}
 	s.peakBps = max(peakOf(t.hist), s.bps) // never below what moves now
 	t.snap.Store(&s)
+}
+
+// storeHeavy publishes this tick's heavy count of every link to its meter
+// (zero for a link whose heavy connections stopped or closed since the last
+// tick) and keeps the counts as the next tick's previous ones.
+func (t *exitTraffic) storeHeavy() {
+	for m, n := range t.heavy {
+		m.heavyN.Store(n)
+	}
+	for m := range t.heavyPrev {
+		if _, ok := t.heavy[m]; !ok {
+			m.heavyN.Store(0)
+		}
+	}
+	clear(t.heavyPrev)
+	t.heavy, t.heavyPrev = t.heavyPrev, t.heavy
 }
 
 // peakOf is the highest two-tick average in h (a single-tick spike is not a
