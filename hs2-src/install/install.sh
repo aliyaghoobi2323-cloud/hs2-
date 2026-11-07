@@ -275,16 +275,31 @@ ask_user_ip(){
   done
 }
 
+# apt_q ARGS…: apt-get, quiet, never interactive, never hanging. On a server
+# whose mirrors are filtered or unreachable (an Iran server) apt can otherwise
+# hang for many minutes on each mirror: each fetch gives up after 15 s (one
+# retry) and the whole call after HS2_APT_TIMEOUT seconds (default 300). The
+# packages are usually there already. Never fails the caller.
+apt_q(){
+  local t="${HS2_APT_TIMEOUT:-300}"
+  set -- -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15 -o Acquire::Retries=1 -o DPkg::Lock::Timeout=60 "$@"
+  if command -v timeout >/dev/null 2>&1; then
+    DEBIAN_FRONTEND=noninteractive timeout -k 10 "$t" apt-get "$@" </dev/null >/dev/null 2>&1 || true
+  else
+    DEBIAN_FRONTEND=noninteractive apt-get "$@" </dev/null >/dev/null 2>&1 || true
+  fi
+}
+
 install_prereqs(){
   info "Installing prerequisites…"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -q </dev/null >/dev/null 2>&1 || true
-  apt-get install -y -q iproute2 iptables curl ca-certificates </dev/null >/dev/null 2>&1 || true
+  apt_q update -q
+  apt_q install -y -q iproute2 iptables curl ca-certificates
   # nftables: the icmp tunnel drops only the kernel's replies to ITS OWN packets
   # with an nft rule (iptables u32 as a fallback), so the server keeps answering
   # normal ping. ping: the installer proves the tunnel carries packets. Asked
   # separately so a missing package name can never block the ones above.
-  apt-get install -y -q nftables iputils-ping </dev/null >/dev/null 2>&1 || true
+  apt_q install -y -q nftables iputils-ping
   # tun module
   modprobe tun 2>/dev/null || true
   tune_kernel
@@ -324,6 +339,26 @@ tune_kernel(){
 # that alters the binary and then drops the .sha256 to pass it off as "no hash"
 # is therefore caught, not waved through. The only way to install on a 2 is to
 # set HS2_ALLOW_UNVERIFIED=1 (an older repo that genuinely ships no hash).
+# verify_local FILE HASHFILE — the offline path (GitHub unreachable, a binary
+# copied by hand). A hash copied along with it must match: a truncated or
+# altered copy fails (status 1). Without a usable one it passes, printing the
+# full hash to compare with the kharej server's — refusing would block the
+# usual Iran-server install, where only the binary is copied.
+verify_local(){
+  local want got
+  got=$(sha256sum "$1" | cut -d' ' -f1)
+  if [ -f "$2" ]; then
+    want=$(grep -oiE '[0-9a-f]{64}' "$2" 2>/dev/null | head -1 | tr 'A-F' 'a-f' || true)
+    if [ -n "$want" ]; then
+      if [ "$got" = "$want" ]; then ok "sha256 matches $2."; return 0; fi
+      err "sha256 mismatch: $2 says $want, the copy is $got"
+      return 1
+    fi
+  fi
+  warn "No usable $2 beside it — compare this hash with 'sha256sum $BIN' on the kharej server: $got"
+  return 0
+}
+
 # hs2_is_v3 FILE — true if FILE is an hs2 v3 binary. Anchored so a future
 # "hs2 v30" can never be accepted as "hs2 v3".
 hs2_is_v3(){ "$1" version 2>/dev/null | grep -qE 'hs2 v3([^0-9]|$)'; }
@@ -427,6 +462,9 @@ install_binary(){ # [force]
     local f="$d/hs2-linux-amd64"; [ -f "$f" ] || f="./hs2-linux-amd64"
     warn "GitHub unreachable — using local $f (make sure it is the NEW one)."
     cp "$f" "$tmp"
+    if ! verify_local "$tmp" "$f.sha256"; then
+      rm -f "$tmp"; die "$f does not match $f.sha256 (the copy is truncated or altered) — NOT installed. Copy both files again."
+    fi
   elif [ -x "$BIN" ] && hs2_is_v3 "$BIN"; then
     # Re-running setup (e.g. from hs2-menu) on a server that cannot reach
     # GitHub: the binary already installed is good enough to build a tunnel.
@@ -3987,7 +4025,18 @@ restore(){
     tar -xzf "$f" -C / --exclude=hs2-backup-info.txt || die "extract failed"
   fi
   systemctl daemon-reload
-  [ -f /etc/sysctl.d/99-hs2.conf ] && sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
+  # An old backup can carry the static /etc/sysctl.d/99-hs2.conf. With a binary
+  # that tunes the kernel itself at every start (`hs2 tune`) that file is a
+  # stale second source that wins at boot — tune_kernel removes it on install,
+  # so a restore must not bring it back. Only a binary without `tune` needs it.
+  if [ -f /etc/sysctl.d/99-hs2.conf ]; then
+    if "$BIN" tune -h >/dev/null 2>&1; then
+      rm -f /etc/sysctl.d/99-hs2.conf
+      info "Old static kernel-tuning file not restored: this hs2 tunes the kernel itself at start."
+    else
+      sysctl -p /etc/sysctl.d/99-hs2.conf >/dev/null 2>&1 || true
+    fi
+  fi
   for u in $units; do
     use_unit "$u"
     if [ ! -f "$SVC" ] && [ -f "$CFG" ]; then   # a very old backup without the unit
