@@ -111,6 +111,7 @@ func TestLBPathDeathAndReturn(t *testing.T) {
 		t.Fatalf("dead path state %q", st[1].State)
 	}
 	l.down[1].Store(false) // healthy again
+	time.Sleep(lbCooldown) // the next dial after the cooldown is its probe
 	l.setTarget(16)        // growth after recovery goes to the path below its share
 	if !waitFor(t, 20*time.Second, func() bool { a, b := l.counts(); return l.liveCount() == 16 && near(a, 8) && near(b, 8) }) {
 		a, b := l.counts()
