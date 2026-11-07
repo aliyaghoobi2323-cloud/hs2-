@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"math/rand/v2"
 	"os"
 	"sync/atomic"
 	"time"
@@ -71,8 +72,12 @@ func newL3Lane() *l3Lane { return &l3Lane{now: ctrlNow} }
 // newL3Set is the TUN side channel's link set, with the lane when it is on.
 func newL3Set() *l3Set {
 	s := &l3Set{}
-	if l3LaneOn {
+	if l3LaneOn || l3DupOn { // the dup sends what the lane calls interactive
 		s.lane = newL3Lane()
+	}
+	if l3DupOn {
+		s.dup = true
+		s.dupSeq = rand.Uint32()
 	}
 	return s
 }

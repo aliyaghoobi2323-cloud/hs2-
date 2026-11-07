@@ -100,6 +100,9 @@ type l3Link struct {
 	// at a download's rate, as its sampler last stored it (linkMeter.heavyN);
 	// the lane (HS2_L3_LANE) keeps interactive flows off links where it is > 0.
 	heavy *atomic.Int32
+	// dupOK (nil: no) reports whether the other server reads TypeDataDup
+	// frames (capL3Dup); HS2_L3_DUP sends them only over such links.
+	dupOK func() bool
 	dead  atomic.Bool
 	once  sync.Once
 	done  chan struct{}
@@ -107,8 +110,10 @@ type l3Link struct {
 
 // qpkt is a queued packet and when it was queued.
 type qpkt struct {
-	b *[]byte
-	t time.Time
+	b   *[]byte
+	t   time.Time
+	id  uint32 // dup: the TypeDataDup id (l3_dup.go)
+	dup bool   // send as TypeDataDup, not TypeData
 }
 
 func newL3Link(car pktConn) *l3Link {
@@ -195,7 +200,7 @@ func (l *l3Link) markDead() {
 // enqueue hands a packet to the link without ever blocking.
 func (l *l3Link) enqueue(b *[]byte) bool {
 	select {
-	case l.q <- qpkt{b, time.Now()}:
+	case l.q <- qpkt{b: b, t: time.Now()}:
 		return true
 	default:
 		return false
@@ -210,6 +215,8 @@ func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 	add := func(p qpkt, now time.Time) {
 		if now.Sub(p.t) > l3MaxSojourn {
 			drops.Add(1)
+		} else if p.dup {
+			batch = appendDupFrame(batch, p.id, *p.b)
 		} else {
 			batch = tlscarrier.AppendFrame(batch, core.TypeData, *p.b)
 		}
@@ -254,6 +261,12 @@ type l3Set struct {
 	pool  sync.Pool     // *[]byte packet buffers
 	drops atomic.Uint64 // no link, queue full, or waited too long
 	lane  *l3Lane       // HS2_L3_LANE state (nil: off); see l3_lane.go
+	// HS2_L3_DUP (l3_dup.go): dup sends interactive packets over two links,
+	// dupSeq is the next TypeDataDup id (pumpTun only), rx drops the second
+	// copy of what the other server sends twice.
+	dup    bool
+	dupSeq uint32
+	rx     l3Dedup
 }
 
 func (s *l3Set) add(l *l3Link) {
@@ -315,15 +328,26 @@ func (s *l3Set) closeAll() {
 // rendezvous over the links carrying no download instead. pumpTun is pick's
 // only caller: the lane's flow table is not locked.
 func (s *l3Set) pick(pkt []byte) *l3Link {
+	l, _ := s.pickDup(pkt)
+	return l
+}
+
+// pickDup is pick plus, with HS2_L3_DUP on and an interactive flow whose
+// link's peer reads TypeDataDup, the second link to send it over (nil: send
+// once).
+func (s *l3Set) pickDup(pkt []byte) (first, second *l3Link) {
 	h := flowHash(pkt)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.lane != nil {
 		if l, ok := s.lane.pick(s.links, pkt, h); ok {
-			return l
+			if s.dup && l != nil && l.canDup() {
+				second = dupSecond(s.links, h, l)
+			}
+			return l, second
 		}
 	}
-	return rendezvous(s.links, h, false)
+	return rendezvous(s.links, h, false), nil
 }
 
 // rendezvous is the live link (lightOnly: and carrying no download) with the
@@ -369,7 +393,12 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 			continue
 		}
 		*bp = b[:n]
-		if l := s.pick(*bp); l == nil || !l.enqueue(bp) {
+		l, l2 := s.pickDup(*bp)
+		if l2 != nil {
+			s.sendDup(bp, l, l2)
+			continue
+		}
+		if l == nil || !l.enqueue(bp) {
 			s.pool.Put(bp)
 			s.drops.Add(1)
 		}
@@ -390,8 +419,13 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 		if err != nil {
 			return
 		}
-		if ft == core.TypeData {
+		switch ft {
+		case core.TypeData:
 			dev.Write(payload)
+		case core.TypeDataDup:
+			if p := s.rx.accept(payload); p != nil {
+				dev.Write(p)
+			}
 		}
 	}
 }

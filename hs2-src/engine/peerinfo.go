@@ -30,6 +30,8 @@ import (
 //	        routes tagged ones (kindTCPPort / kindUDPPort)
 //	        bit1: quiet L3 — its TUN side-channel reader allows 30 s without
 //	        a frame, so the other side may send idle keepalives every ~10 s
+//	        bit2: L3 dup — it reads TypeDataDup frames (an interactive TUN
+//	        packet sent over two links, l3_dup.go); set only with HS2_L3_DUP=1
 //	  flags bit0: edge: it forwards UDP too · exit: it has a default panel
 //	        (expose)
 //	        bit1: the port list was cut to fit
@@ -53,6 +55,7 @@ const (
 
 	capPortTags  = 1 << 0
 	capL3Quiet   = 1 << 1
+	capL3Dup     = 1 << 2
 	flagUDP      = 1 << 0 // edge
 	flagDefault  = 1 << 0 // exit
 	flagCut      = 1 << 1
@@ -77,6 +80,14 @@ func (pi *peerInfo) l3Quiet() bool { return pi != nil && pi.V2 && pi.Caps&capL3Q
 // peerL3Quiet reads it from a link's meter (false until the info arrives).
 func peerL3Quiet(m *linkMeter) func() bool {
 	return func() bool { return m != nil && m.peerInfo.Load().l3Quiet() }
+}
+
+// l3Dup reports whether the other server reads TypeDataDup frames.
+func (pi *peerInfo) l3Dup() bool { return pi != nil && pi.V2 && pi.Caps&capL3Dup != 0 }
+
+// peerL3Dup reads it from a link's meter (false until the info arrives).
+func peerL3Dup(m *linkMeter) func() bool {
+	return func() bool { return m != nil && m.peerInfo.Load().l3Dup() }
 }
 
 // infoRetry / infoTries: a reply that did not come in time (a congested link)

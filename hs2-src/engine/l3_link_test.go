@@ -172,8 +172,8 @@ func TestWriteLoopDropsStalePackets(t *testing.T) {
 	l := newL3Link(tlscarrier.NewCarrier(a))
 	stale := tcpPacket(1, 1)
 	fresh := tcpPacket(2, 1)
-	l.q <- qpkt{&stale, time.Now().Add(-time.Second)}
-	l.q <- qpkt{&fresh, time.Now()}
+	l.q <- qpkt{b: &stale, t: time.Now().Add(-time.Second)}
+	l.q <- qpkt{b: &fresh, t: time.Now()}
 	var pool sync.Pool
 	var drops atomic.Uint64
 	go l.writeLoop(&pool, &drops)
