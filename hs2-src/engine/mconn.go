@@ -1067,6 +1067,12 @@ func (s *msub) writeLoop() {
 			select {
 			case <-s.kick:
 			case <-s.done:
+				// Closed (a retired idle sub, or a dead one) with nothing
+				// queued: done stays closed, so waiting again would return at
+				// once and spin, taking m.mu each turn. In production that
+				// was ~6 cores of busy loops once lite started retiring idle
+				// second subs.
+				return
 			}
 			m.mu.Lock()
 		}
