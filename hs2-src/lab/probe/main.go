@@ -15,6 +15,7 @@
 //	-game         small frames every 20-50 ms, echoed back ("game")
 //	-late 5s      start the echo, call and game this long after the downloads
 //	-crowd 300    light connections, a small request every ~-crowdevery ("crowd")
+//	-web          page loads: 4 parallel 50-500 KB fetches every 2-3 s ("web", web.go)
 //
 // Output is one JSON line so sweeps can aggregate it.
 package main
@@ -105,6 +106,7 @@ type result struct {
 	Call  *streamResult `json:"call,omitempty"`
 	Game  *streamResult `json:"game,omitempty"`
 	Crowd *crowdResult  `json:"crowd,omitempty"`
+	Web   *webResult    `json:"web,omitempty"`
 }
 
 func pct(v []float64, p float64) float64 {
@@ -139,6 +141,11 @@ func main() {
 	crowd := flag.Int("crowd", 0, "light connections, each sending a small request every ~-crowdevery")
 	crowdEvery := flag.Duration("crowdevery", 700*time.Millisecond, "crowd: mean interval between requests per connection (uniform 0.5x-1.5x)")
 	crowdMax := flag.Int("crowdmax", 4096, "crowd: largest reply, bytes (uniform from 600)")
+	web := flag.Bool("web", false, "also load \"pages\": every ~-webevery, -webconns parallel short connections of -webmin..-webmax bytes")
+	webEvery := flag.Duration("webevery", 2500*time.Millisecond, "web: mean interval between page starts (uniform 0.8x-1.2x)")
+	webConns := flag.Int("webconns", 4, "web: connections per page")
+	webMin := flag.Int("webmin", 50000, "web: smallest fetch, bytes")
+	webMax := flag.Int("webmax", 500000, "web: largest fetch, bytes")
 	flag.Parse()
 	if *late > 0 && *echoDelay == 0 {
 		*echoDelay = *late
@@ -392,6 +399,18 @@ func main() {
 			res := runCrowd(*addr, *crowd, *crowdEvery, *crowdMax, measuring, stop)
 			mu.Lock()
 			r.Crowd = res
+			mu.Unlock()
+		}()
+	}
+	if *web {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res := runWeb(webSpec{addr: *addr, delay: *late, warm: max(*warm, *late), start: start,
+				every: *webEvery, conns: max(*webConns, 1), minB: max(*webMin, 1),
+				maxB: max(*webMax, *webMin, 1)}, stop)
+			mu.Lock()
+			r.Web = res
 			mu.Unlock()
 		}()
 	}
