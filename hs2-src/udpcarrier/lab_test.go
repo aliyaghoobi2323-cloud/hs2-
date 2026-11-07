@@ -224,10 +224,16 @@ func TestLabBursty26(t *testing.T) {
 	// loss. The absolute residual on this profile lands around 6-9% with the
 	// path kept full (the pre-2026-09 controller left ~30% of this path idle
 	// and landed at 4-10%, which made a 7% bar flaky).
-	if res.residualPct > res.wireLossPct*0.4 {
+	// The ratio residual/wire measured 0.27-0.43 over 12 runs (2026-11-07),
+	// higher when the random bursts land heavier (31% wire); 0.4 sat inside
+	// that spread and failed ~1 run in 4. A broken FEC gives a ratio near 1,
+	// so 0.5 still catches it with room for the profile's own variance.
+	if res.residualPct > res.wireLossPct*0.5 {
 		t.Fatalf("FEC recovered too little: residual %.2f%% vs wire %.1f%%", res.residualPct, res.wireLossPct)
 	}
-	if res.residualPct > 14 {
+	// Absolute residual: 6.4-14.1% over 52 runs (2026-11-07); 14 failed the
+	// heaviest draws (~1 in 40). 16 still fails a FEC that recovers little.
+	if res.residualPct > 16 {
 		t.Fatalf("residual loss too high: %.2f%%", res.residualPct)
 	}
 	// The rate controller keeps the 20 Mbit/s bottleneck full: with ~140%
