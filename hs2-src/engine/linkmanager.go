@@ -257,6 +257,8 @@ type managedLink struct {
 	lossFrac         float64     // the last judged loss fraction (the worse direction)
 	stuckStreak      int         // consecutive samples its traffic waited stuckWait+ (stuck.go)
 	healStreak       int         // draining, consecutive samples it looked right again (probation)
+	recovered        bool        // it came off a drain by probation once (HS2_PROBATION_ONCE)
+	probationDenied  bool        // degraded again after that: counted once (obs.probationOnceDenied)
 	stuck            bool        // degraded because it is stuck: drained without the maxDrain wait
 	sampled          bool        // prev* are valid (skips the first delta)
 	degraded         bool        // soft-bad: excluded from new-user routing
@@ -1518,6 +1520,14 @@ var heavyBacklog = os.Getenv("HS2_HEAVY_BACKLOG") == "1"
 // stop draining (sampleHealth) instead of cutting its users at maxDrain.
 var linkProbation = os.Getenv("HS2_LINK_PROBATION") == "1"
 
+// probationOnce: HS2_PROBATION_ONCE=1 — a link gets probation once: one that
+// recovered and is degraded again drains as without probation. On the main
+// tunnel at peak 27% of the verdicts were repeats on the same link (recovered,
+// then degraded again) and 26% of the connections cut were on such links: a
+// link on a lossy path that comes right for 10 s is not a link that stays
+// right.
+var probationOnce = os.Getenv("HS2_PROBATION_ONCE") == "1"
+
 // probationTicks: samples running a draining link must look right again.
 const probationTicks = 5
 
@@ -1987,7 +1997,12 @@ func (m *LinkManager) sampleHealth() {
 		// at maxDrainActive, however soon it recovered. It retires instead:
 		// no new connections, its own stay, and heal or the autopilot can put
 		// it back into service; its replacement is already up.
-		if linkProbation && ml.draining && ml.degraded && ml.link.Alive() && now.Sub(ml.drainSince) < maxDrainActive {
+		once := probationOnce && ml.recovered
+		if once && linkProbation && ml.draining && ml.degraded && !ml.probationDenied {
+			ml.probationDenied = true // a second drain: no second probation
+			noteProbationOnceDenied()
+		}
+		if linkProbation && !once && ml.draining && ml.degraded && ml.link.Alive() && now.Sub(ml.drainSince) < maxDrainActive {
 			up := judgeUpLoss(o.tsOK, dWr, dUp, dSegsOut, secs)
 			dn, _ := ml.judgeDownLoss(o.peerLoss)
 			var good, bad bool
@@ -2012,7 +2027,7 @@ func (m *LinkManager) sampleHealth() {
 				logs = append(logs, fmt.Sprintf("link %d recovered: %s for %s — draining stopped after %s; its %d connection(s) stay, it takes no new ones (retiring)",
 					ml.id, why, fmtDur(probationTicks*healthTick), fmtDur(now.Sub(ml.drainSince)), ml.users.Load()))
 				ml.degraded, ml.draining, ml.stuck, ml.drainNoted, ml.drainReplace = false, false, false, false, false
-				ml.retiring, ml.healStreak = true, 0
+				ml.retiring, ml.healStreak, ml.recovered = true, 0, true
 				ml.upStreak, ml.dnStreak, ml.lowStreak, ml.stuckStreak = 0, 0, 0, 0
 			}
 		}
