@@ -1509,6 +1509,11 @@ var pickClass = os.Getenv("HS2_PICK_CLASS") == "1" || pickLane > 0
 // unset, "", "0" or "off" is off.
 var pickLane = parseLane(os.Getenv("HS2_PICK_LANE"))
 
+// heavyBacklog: HS2_HEAVY_BACKLOG=1 — a stream is heavy (pickKey, the lane,
+// the autopilot's lane floor) while it builds a queue (backlogChunk), not
+// merely while it is fast: a steady call that never waits stays in the lane.
+var heavyBacklog = os.Getenv("HS2_HEAVY_BACKLOG") == "1"
+
 // linkProbation: HS2_LINK_PROBATION=1 lets a degraded link that comes right
 // stop draining (sampleHealth) instead of cutting its users at maxDrain.
 var linkProbation = os.Getenv("HS2_LINK_PROBATION") == "1"

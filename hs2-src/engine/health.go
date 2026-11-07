@@ -51,6 +51,21 @@ const (
 	// placement (HS2_PICK_CLASS). Interactive traffic (a game, a call's audio,
 	// browsing between page loads) stays well below it.
 	heavyRate = 128 << 10 // bytes/s (1 Mbit/s)
+	// With HS2_HEAVY_BACKLOG=1 "heavy" means queue-building instead of fast
+	// (heavyBacklog, mtcpLink.flowStats): a stream is heavy while at least
+	// backlogShare of what it moves, and at least backlogFloorRate, goes in
+	// backlog chunks — single reads/writes of backlogChunk or more. Both
+	// relay copiers read their source with a 32 KiB buffer and write what
+	// they got as one stream Write, so a chunk that large only forms when
+	// that much was already waiting at the sender: its previous Write sat on
+	// a full smux window or a busy link writer. Upload chunks are the edge's
+	// own Writes; download chunks are the edge's Reads, one smux frame each,
+	// as large as the exit's Write was (up to SmuxFrameSize). A 3 Mbit/s call
+	// on a link with room gathers ~4 KB between two reads; a download that
+	// fills the link writes full buffers.
+	backlogChunk     = 16 << 10 // bytes (capped at SmuxFrameSize)
+	backlogFloorRate = 32 << 10 // bytes/s (256 kbit/s): a small stream that waited is not heavy
+	backlogShare     = 0.5
 	// blockedMin: a Write shorter than this is CPU work (copying/encrypting a
 	// 16 KiB frame takes microseconds), not a wait for the network; only longer
 	// waits count as the link being path-limited. Without this filter a writer
