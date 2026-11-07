@@ -1421,6 +1421,9 @@ func (m *LinkManager) reap() {
 		}
 	}
 	m.links = alive
+	if len(dead) > 0 {
+		m.notePartialLossLocked(m.now(), len(dead), len(alive))
+	}
 	if len(alive) == 0 {
 		// No link left: the exit that answered may have restarted with
 		// another table, so links whose own answer is late must not go by it.

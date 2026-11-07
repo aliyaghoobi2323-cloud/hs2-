@@ -474,3 +474,117 @@ func TestRefillHoldEndsWhenLinksStopComing(t *testing.T) {
 		t.Fatalf("the stall line is missing:\n%s", lg)
 	}
 }
+
+// With HS2_PARTIAL_REFILL, losing most of the pool at once starts an episode
+// though some links are still up; losing a few, or without the key, does not.
+func TestRefillHoldOnPartialLoss(t *testing.T) {
+	run := func(key bool, die int) bool {
+		old := partialRefill
+		partialRefill = key
+		defer func() { partialRefill = old }()
+		r := newRefillRig(t, 8, 8)
+		for len(r.links) < 8 {
+			r.addLink()
+		}
+		r.step() // the start's episode ends: the pool has its links
+		if r.episode() {
+			t.Fatal("the start's episode did not end")
+		}
+		for _, l := range r.links[:die] {
+			l.alive = false
+		}
+		r.m.reap()
+		return r.episode()
+	}
+	if !run(true, 6) {
+		t.Fatal("6 of 8 links died at once with the key: no episode")
+	}
+	if run(true, 1) {
+		t.Fatal("one link of 8 died: an episode started")
+	}
+	if run(true, 3) {
+		t.Fatal("3 of 8 died, 5 left (over half): an episode started")
+	}
+	if run(false, 6) {
+		t.Fatal("without the key a partial loss started an episode")
+	}
+}
+
+// The commonest Iran-border outage: 280 of 300 links die at once, 2,240 of
+// 2,400 users reconnect within a second, and links come back at the gate's
+// ~10 a second. Without an episode every one of them lands on the 20
+// survivors and stays there; with HS2_PARTIAL_REFILL they wait (refillPartialMax,
+// 4 s) for the new links, and none is refused.
+func TestRefillHoldSpreadsAfterPartialLoss(t *testing.T) {
+	run := func(key bool) refillResult {
+		old := partialRefill
+		partialRefill = key
+		defer func() { partialRefill = old }()
+		r := newRefillRig(t, 300, 8)
+		for len(r.links) < 300 {
+			r.addLink()
+		}
+		r.step() // the start's episode ends
+		rel := map[Link][]func(){}
+		for i := 0; i < 2400; i++ {
+			l, release, ok := r.m.Pick()
+			if !ok {
+				t.Fatal("no link")
+			}
+			rel[l] = append(rel[l], release)
+		}
+		for _, l := range r.links[:280] {
+			l.alive = false
+			for _, f := range rel[l] {
+				f() // their users' connections end with the link
+			}
+		}
+		r.m.reap()
+		r.links = r.links[280:]
+		res, _ := simRefillOn(t, r, 2240, time.Second, 500*time.Millisecond, 100*time.Millisecond, 280, true)
+		return res
+	}
+	old, got := run(false), run(true)
+	t.Logf("without: busiest link %d, top-15 share %.0f%%", old.most, 100*old.top15)
+	t.Logf("with:    busiest link %d, top-15 share %.0f%%, longest wait %s, refused %d", got.most, 100*got.top15, got.longest, got.refused)
+	if got.refused != 0 || got.placed != 2240 {
+		t.Fatalf("placed %d, refused %d of 2240", got.placed, got.refused)
+	}
+	if old.most < 2*got.most { // a 4 s limit: 96 → 43 in this run (TestRefillPartialLimitSweep)
+		t.Fatalf("busiest link %d without, %d with: the hold did not spread the reconnects", old.most, got.most)
+	}
+}
+
+// The partial-loss episode's time limit, swept: the busiest link against the
+// longest wait (a lab table, not a check).
+func TestRefillPartialLimitSweep(t *testing.T) {
+	if testing.Short() {
+		t.Skip("sweep")
+	}
+	old, oldP := refillPartialMax, partialRefill
+	defer func() { refillPartialMax, partialRefill = old, oldP }()
+	partialRefill = true
+	for _, lim := range []time.Duration{2 * time.Second, 3 * time.Second, 4 * time.Second, 6 * time.Second, 10 * time.Second} {
+		refillPartialMax = lim
+		r := newRefillRig(t, 300, 8)
+		for len(r.links) < 300 {
+			r.addLink()
+		}
+		r.step()
+		rel := map[Link][]func(){}
+		for i := 0; i < 2400; i++ {
+			l, release, _ := r.m.Pick()
+			rel[l] = append(rel[l], release)
+		}
+		for _, l := range r.links[:280] {
+			l.alive = false
+			for _, f := range rel[l] {
+				f()
+			}
+		}
+		r.m.reap()
+		r.links = r.links[280:]
+		res, _ := simRefillOn(t, r, 2240, time.Second, 500*time.Millisecond, 100*time.Millisecond, 280, true)
+		t.Logf("limit %-4s busiest link %3d  top-15 %3.0f%%  longest wait %s", lim, res.most, 100*res.top15, res.longest.Round(10*time.Millisecond))
+	}
+}
