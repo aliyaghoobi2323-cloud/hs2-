@@ -1729,6 +1729,7 @@ func (m *LinkManager) sampleHealth() {
 			o.statsState = ml.mtr.statsState.Load()
 			o.ctrlWait = ctrlWaitOf(ml.mtr)
 			o.ctrlAns = ml.mtr.ctrlAnsweredSent.Load()
+			ml.mtr.heavyN.Store(int32(o.fs.heavy)) // for the TUN lane (HS2_L3_LANE)
 			if g := ml.mtr.guard; g != nil {
 				if p := g.parkedAt.Load(); p != 0 && ctrlNow()-p < int64(stuckWait) {
 					o.wedged = true

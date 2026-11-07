@@ -89,7 +89,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	}
 	var l3 *l3Set
 	if cfg.TUN != nil {
-		l3 = &l3Set{}
+		l3 = newL3Set()
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}
@@ -436,6 +436,7 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 		return
 	}
 	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)))
+	pl.heavy = heavyOf(linkMeterOf(l))
 	set.add(pl)
 	go func() {
 		set.serveLink(ctx, pl, dev)

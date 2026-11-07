@@ -118,6 +118,12 @@ type linkMeter struct {
 	// on the loopback: unlimited path 0%, a 2 MB/s bottleneck 99.8%.
 	wrBlocked atomic.Int64 // nanoseconds
 
+	// heavyN is how many of the link's user streams ran at a download's rate
+	// (heavyRate) at the last sample: the edge's sampleHealth and the exit's
+	// exitTraffic.sample store it, the TUN side channel's lane (HS2_L3_LANE)
+	// reads it with one atomic load.
+	heavyN atomic.Int32
+
 	// Exit-side download stats (edge only; see stats.go). statsPoll carries the
 	// sampler's "poll now" (cap 1); statsState is statsPending/OK/Unsupported;
 	// peer holds the latest record received from the exit.

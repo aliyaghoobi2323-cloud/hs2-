@@ -86,7 +86,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 	setGuardLog(cfg.Log)
 	var l3 *l3Set
 	if cfg.TUN != nil {
-		l3 = &l3Set{}
+		l3 = newL3Set()
 		go l3.pumpTun(ctx, cfg.TUN)
 		go l3.logDrops(ctx, logf)
 	}
@@ -229,7 +229,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 				st.Close()
 				return
 			}
-			c := cfg.traffic.open()
+			c := cfg.traffic.open(mtr)
 			defer cfg.traffic.done(c)
 			relayUDPConn(exitCountedStream{st, c}, up)
 			return
@@ -243,7 +243,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		if mtr != nil {
 			g = mtr.guard
 		}
-		c := cfg.traffic.open()
+		c := cfg.traffic.open(mtr)
 		defer cfg.traffic.done(c)
 		relayStream(up, exitCountedStream{st, c}, g)
 	case kindL3:
@@ -252,6 +252,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			return
 		}
 		pl := newStreamL3Link(st, peerL3Quiet(mtr), sessReadsOf(mtr))
+		pl.heavy = heavyOf(mtr)
 		l3.add(pl)
 		l3.serveLink(ctx, pl, cfg.TUN)
 		l3.remove(pl)

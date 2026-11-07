@@ -96,9 +96,13 @@ type l3Link struct {
 	// supports); deadAfter, when set, replaces l3DeadAfter for the reader.
 	kaFn      func() time.Duration
 	deadAfter time.Duration
-	dead      atomic.Bool
-	once      sync.Once
-	done      chan struct{}
+	// heavy (nil: unknown, counted light) is the link's count of user streams
+	// at a download's rate, as its sampler last stored it (linkMeter.heavyN);
+	// the lane (HS2_L3_LANE) keeps interactive flows off links where it is > 0.
+	heavy *atomic.Int32
+	dead  atomic.Bool
+	once  sync.Once
+	done  chan struct{}
 }
 
 // qpkt is a queued packet and when it was queued.
@@ -249,6 +253,7 @@ type l3Set struct {
 	links []*l3Link
 	pool  sync.Pool     // *[]byte packet buffers
 	drops atomic.Uint64 // no link, queue full, or waited too long
+	lane  *l3Lane       // HS2_L3_LANE state (nil: off); see l3_lane.go
 }
 
 func (s *l3Set) add(l *l3Link) {
@@ -305,14 +310,29 @@ func (s *l3Set) closeAll() {
 // pick maps a packet to a live link by rendezvous (highest-random-weight)
 // hashing on its flow: a flow keeps its link for as long as that link lives,
 // and a dying link only moves its own flows.
+//
+// With the lane on (HS2_L3_LANE, l3_lane.go) an interactive flow goes by
+// rendezvous over the links carrying no download instead. pumpTun is pick's
+// only caller: the lane's flow table is not locked.
 func (s *l3Set) pick(pkt []byte) *l3Link {
 	h := flowHash(pkt)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.lane != nil {
+		if l, ok := s.lane.pick(s.links, pkt, h); ok {
+			return l
+		}
+	}
+	return rendezvous(s.links, h, false)
+}
+
+// rendezvous is the live link (lightOnly: and carrying no download) with the
+// highest weight for flow hash h; nil if there is none.
+func rendezvous(links []*l3Link, h uint32, lightOnly bool) *l3Link {
 	var best *l3Link
 	var bestW uint32
-	for _, l := range s.links {
-		if !l.Alive() {
+	for _, l := range links {
+		if !l.Alive() || lightOnly && l.isHeavy() {
 			continue
 		}
 		if w := mix32(h ^ l.id); best == nil || w > bestW {
