@@ -78,7 +78,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// A link carries user connections only once its kindInfo exchange is over,
 	// so each one knows whether the exit routes port tags (routes.go).
 	lm.gateInfo = true
-	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap()}
+	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap()}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
 			mine.Ports = append(mine.Ports, n)
@@ -262,6 +262,11 @@ func openStream(ctx context.Context, lm *LinkManager, udp bool, port int) (strea
 }
 
 func serveUserTCP(ctx context.Context, user net.Conn, lm *LinkManager, port int) {
+	// HS2_MCONN: one connection over several links (mconn_link.go), when the
+	// exit reads it; otherwise, or when no sub could be opened, the one stream.
+	if mconnOn.Load() && lm.exitInfo.Load().mconn() && serveUserMConn(ctx, user, lm, port) {
+		return
+	}
 	st, release, ok := openStream(ctx, lm, false, port)
 	if !ok {
 		user.Close()

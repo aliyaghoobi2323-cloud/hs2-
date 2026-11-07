@@ -22,6 +22,10 @@ import (
 type exitConn struct {
 	bytes atomic.Uint64 // payload moved either way (data path: one atomic add)
 	mtr   *linkMeter    // the link it rides (nil: unknown); gets its heavyN
+	// sub: one sub-stream of a multi-link connection (HS2_MCONN). It counts
+	// toward its link's heavy streams only; the connection itself is counted
+	// once, by its own exitConn (no link).
+	sub bool
 
 	// sampler-only
 	prev       uint64
@@ -64,7 +68,10 @@ func newExitTraffic(peers *linkPeers) *exitTraffic {
 // open registers a relayed user connection riding the link metered by mtr
 // (nil: unknown); close it with done.
 func (t *exitTraffic) open(mtr *linkMeter) *exitConn {
-	c := &exitConn{lastActive: time.Now(), mtr: mtr}
+	return t.add(&exitConn{lastActive: time.Now(), mtr: mtr})
+}
+
+func (t *exitTraffic) add(c *exitConn) *exitConn {
 	if t == nil {
 		return c
 	}
@@ -72,6 +79,13 @@ func (t *exitTraffic) open(mtr *linkMeter) *exitConn {
 	t.conns[c] = struct{}{}
 	t.mu.Unlock()
 	return c
+}
+
+// openSub registers one sub-stream of a multi-link connection on the link
+// metered by mtr: it counts toward the link's heavy streams, not as a user
+// connection. Close it with done.
+func (t *exitTraffic) openSub(mtr *linkMeter) *exitConn {
+	return t.add(&exitConn{lastActive: time.Now(), mtr: mtr, sub: true})
 }
 
 func (t *exitTraffic) done(c *exitConn) {
@@ -121,9 +135,11 @@ func (t *exitTraffic) sample(now time.Time) {
 			c.ewma -= float32(alpha * float64(c.ewma))
 		}
 		c.steady = (c.steady<<1 | b2u(steady)) & 7
-		s.open++
-		if float64(c.ewma) >= flowingRate && now.Sub(c.lastActive) <= flowRecent || c.steady == 7 {
-			s.flowing++
+		if !c.sub {
+			s.open++
+			if float64(c.ewma) >= flowingRate && now.Sub(c.lastActive) <= flowRecent || c.steady == 7 {
+				s.flowing++
+			}
 		}
 		// the edge's rule (mtcpLink.flowStats), per link, for the TUN lane
 		if c.mtr != nil && float64(c.ewma) >= heavyRate && now.Sub(c.lastActive) <= flowRecent {

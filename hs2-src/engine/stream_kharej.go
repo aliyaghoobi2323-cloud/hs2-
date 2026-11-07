@@ -58,6 +58,9 @@ type KharejConfig struct {
 	noRoute *noRouteLog
 	// traffic counts this exit's own user connections and throughput.
 	traffic *exitTraffic
+	// mconns is the exit's table of multi-link connections by id
+	// (mconn_link.go; nil: the process-wide one).
+	mconns *mconnTable
 }
 
 // routeTable is the exit's routing table: Routes, then Panel.
@@ -70,7 +73,7 @@ func (cfg KharejConfig) routeTable() RouteTable {
 // the ports with their own target.
 func (cfg KharejConfig) info(myMax int) peerInfo {
 	t := cfg.routeTable()
-	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap(), Ports: t.MappedPorts()}
+	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap(), Ports: t.MappedPorts()}
 	if t.Default != "" {
 		pi.Flags |= flagDefault
 	}
@@ -246,6 +249,8 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		c := cfg.traffic.open(mtr)
 		defer cfg.traffic.done(c)
 		relayStream(up, exitCountedStream{st, c}, g)
+	case kindMConn:
+		serveMConnSub(ctx, st, cfg, mtr)
 	case kindL3:
 		if l3 == nil {
 			st.Close() // this side runs without a TUN
