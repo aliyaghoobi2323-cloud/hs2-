@@ -33,6 +33,8 @@ import (
 //	BULK     0x03     "send to me only on this sub" (Iran); echoed by Kharej
 //	WANTBULK 0x04     Kharej asks Iran to open a bulk sub
 //	RST      0x05     abort the connection
+//	UPGRADE  0x06 | off u64   raw first sub: my raw bytes on it end at off (mconn_raw.go)
+//	UPACK    0x07     raw first sub: Iran knows the peer's boundary
 //
 // There is no retransmission layer: a byte lives on as long as one live sub
 // still holds (or has written) a copy. When a sub dies holding the only copy
@@ -88,6 +90,8 @@ const (
 	mRecBulk     = 0x03
 	mRecWantBulk = 0x04
 	mRecRst      = 0x05
+	mRecUpgrade  = 0x06 // raw first sub (lite): see mconn_raw.go
+	mRecUpAck    = 0x07
 
 	mDataHdr = 1 + 8 + 2 // kind, offset, length
 	mFinLen  = 1 + 8     // kind, offset
@@ -237,7 +241,7 @@ func (b *liteBudget) capped(now int64) bool {
 	var all, dup uint64
 	for i := range b.slots {
 		s := &b.slots[i]
-		if sec := s.sec.Load(); sec > now-mLiteCapWindow && sec <= now {
+		if sec := s.sec.Load(); sec > now-int64(mLiteCapWindow) && sec <= now {
 			all += s.all.Load()
 			dup += s.dup.Load()
 		}
@@ -303,7 +307,7 @@ func (c *mchunk) wire() []byte {
 	switch c.kind {
 	case mRecData:
 		return c.buf[:mDataHdr+c.n]
-	case mRecFin:
+	case mRecFin, mRecUpgrade:
 		return c.buf[:mFinLen]
 	}
 	return c.buf[:1]
@@ -328,10 +332,12 @@ type msub struct {
 	closeAfter bool // close once the queue (an RST) is written
 	lastHole   time.Time
 	lastPush   time.Time // lite: when a chunk was last queued on it (idle rule)
+	gated      bool      // raw upgrade: queue but do not write yet (mconn_raw.go)
 
 	kick      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
+	onClose   func() // after close (Kharej's raw first sub: its link counters)
 
 	hdr [mDataHdr]byte // reader only
 }
@@ -340,6 +346,9 @@ func (s *msub) close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
 		s.rw.Close()
+		if s.onClose != nil {
+			s.onClose()
+		}
 	})
 }
 
@@ -463,6 +472,8 @@ type mConn struct {
 	tr    *mtrace // HS2_MCONN_TRACE (nil when off)
 	nsubs int
 
+	rawState // lite with capMConnRaw: the first sub carries raw bytes until an upgrade
+
 	r mrecv
 
 	kick      chan struct{} // wakes the manager
@@ -560,6 +571,9 @@ func newMConnIran(id uint64, open mOpener) (*mConn, error) {
 	if err != nil {
 		return nil, err
 	}
+	if r, ok := sub.(mconnRawSub); ok && r.mconnRaw() && rawCapable(sub) {
+		return newMConnIranRaw(id, open, sub, key), nil
+	}
 	m := newMConn(id, true, open)
 	m.mu.Lock()
 	s := m.addSubLocked(sub, key, false)
@@ -581,7 +595,10 @@ func newMConnExit(id uint64) *mConn {
 // first, 1: join) matters only to the caller; a sub is a light sub until a
 // BULK record arrives on it.
 func (m *mConn) attach(sub mSub, role byte) {
-	_ = role
+	if role == mconnRoleFirstRaw {
+		m.attachRaw(sub, nil)
+		return
+	}
 	m.mu.Lock()
 	if m.ended || m.closing {
 		m.mu.Unlock()
@@ -670,6 +687,11 @@ func (m *mConn) writeErrLocked() error {
 // Write queues p; it returns once every chunk of p is queued on at least one
 // sending sub.
 func (m *mConn) Write(p []byte) (int, error) {
+	if m.rawW.Load() {
+		if n, err, done := m.writeRaw(p); done {
+			return n, err
+		}
+	}
 	m.mu.Lock()
 	if err := m.writeErrLocked(); err != nil {
 		m.mu.Unlock()
@@ -1006,6 +1028,9 @@ func (m *mConn) noteWriteLocked(n int) {
 func (m *mConn) CloseWrite() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.rawW.Load() {
+		return errors.ErrUnsupported // a raw stream has no half-close (relayStream never asks)
+	}
 	if m.ended {
 		return m.writeErrLocked()
 	}
@@ -1030,6 +1055,7 @@ func (m *mConn) finLocked() {
 // sent (for up to mCloseLinger), the peer's bytes are no longer read.
 func (m *mConn) Close() error {
 	m.closeOnce.Do(func() {
+		m.rawClose()
 		m.mu.Lock()
 		if !m.ended {
 			m.closing = true
@@ -1056,8 +1082,8 @@ func (s *msub) writeLoop() {
 	m := s.m
 	for {
 		m.mu.Lock()
-		for len(s.q) == 0 && !s.dead {
-			if s.closeAfter {
+		for (len(s.q) == 0 || s.gated) && !s.dead {
+			if s.closeAfter && len(s.q) == 0 {
 				m.mu.Unlock()
 				s.close()
 				m.subDied(s, nil)
@@ -1209,6 +1235,17 @@ loop:
 			m.onBulk(s)
 		case mRecWantBulk:
 			m.onWantBulk()
+		case mRecUpgrade:
+			if _, err = io.ReadFull(s.rw, s.hdr[1:mFinLen]); err != nil {
+				break loop
+			}
+			if !m.onUpgrade(s, binary.BigEndian.Uint64(s.hdr[1:9])) {
+				err = errMConnProto
+				m.end(err, true)
+				break loop
+			}
+		case mRecUpAck:
+			m.onUpAck()
 		case mRecRst:
 			err = errMConnReset
 			m.end(err, false)
@@ -1266,6 +1303,9 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 				r.cond.Wait() // the app is behind: hold the sub
 				continue
 			}
+			if m.lite {
+				liteBud.add(time.Now().Unix(), int(end-r.next), 0)
+			}
 			r.appendReadyLocked(rchunk{c: c, off: r.next, b: c.buf[r.next-off : n]})
 			r.pullLocked()
 			r.lastProgress = time.Now()
@@ -1282,6 +1322,9 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 		wasEmpty := len(r.ooo) == 0
 		if wasEmpty {
 			r.lastProgress = time.Now()
+		}
+		if m.lite {
+			liteBud.add(time.Now().Unix(), n, 0)
 		}
 		r.insertLocked(rchunk{c: c, off: off, b: c.buf[:n]})
 		m.traceRecvLocked(s, n)
@@ -1423,6 +1466,11 @@ func (m *mConn) recvFin(off uint64) {
 
 // Read returns the peer's bytes in order; io.EOF after its FIN.
 func (m *mConn) Read(p []byte) (int, error) {
+	if m.rawR.Load() {
+		if n, err, done := m.readRaw(p); done {
+			return n, err
+		}
+	}
 	r := &m.r
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -1533,6 +1581,14 @@ func (m *mConn) subDied(s *msub, cause error) {
 		m.mu.Unlock()
 		return
 	}
+	if m.handshaking {
+		// A sub died before both sides agreed on the raw boundaries: neither
+		// side can tell what the other reads on the first sub now. End like
+		// the old path's stream on a dead link (no RST: it might be read raw).
+		m.mu.Unlock()
+		m.end(errMConnSubsDied, false)
+		return
+	}
 	var endErr error
 	rst := false
 	switch {
@@ -1603,7 +1659,10 @@ func (m *mConn) end(err error, rst bool) {
 	}
 	var closeNow []*msub
 	for _, s := range m.subs {
-		if !rst || s.dead {
+		if s == m.raw1 && m.rawR.Load() {
+			continue // the raw reader still drains it (closed by Close or the reader)
+		}
+		if !rst || s.dead || s.gated {
 			closeNow = append(closeNow, s)
 			continue
 		}
@@ -1631,6 +1690,7 @@ func (m *mConn) end(err error, rst bool) {
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	close(m.die)
+	m.rawEnded()
 	obs.mconnOpen.Add(-1)
 	if err != errMConnClosed && !finished {
 		obs.mconnFailed.Add(1)

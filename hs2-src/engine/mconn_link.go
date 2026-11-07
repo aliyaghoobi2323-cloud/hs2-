@@ -29,7 +29,8 @@ import (
 //     Sub header: [kindMConn][port u16][conn id u64][role u8]; role 0 is the
 //     first sub (the exit creates the connection and dials the target), role
 //     1 a join (the exit attaches it, holding it up to mconnJoinWait if it
-//     came before role 0).
+//     came before role 0). Role 2 (lite, the exit announced capMConnRaw) is a
+//     first sub whose bytes are raw until an upgrade (mconn_raw.go).
 //   - Edge: the opener places every sub with the pool's own bookkeeping (a
 //     sub counts as one user connection on its link and is released when it
 //     closes). planeLight: a link that carries no heavy stream (the pool's
@@ -62,7 +63,7 @@ func init() {
 // its kindInfo bytes stay as before).
 func mconnCap() uint8 {
 	if mconnOn.Load() {
-		return capMConn
+		return capMConn | capMConnRaw
 	}
 	return 0
 }
@@ -70,7 +71,10 @@ func mconnCap() uint8 {
 const (
 	mconnRoleFirst byte = 0
 	mconnRoleJoin  byte = 1
-	mconnHdrLen         = 1 + 2 + 8 + 1
+	// mconnRoleFirstRaw: a lite first sub that carries the user's bytes raw
+	// until an upgrade (mconn_raw.go); only to an exit announcing capMConnRaw.
+	mconnRoleFirstRaw byte = 2
+	mconnHdrLen            = 1 + 2 + 8 + 1
 
 	// mconnFirstWait: how long the first sub waits for a link (as pickWait).
 	// mconnNextWait: a later sub (a second light one, a bulk one) waits less;
@@ -259,9 +263,21 @@ func (m *LinkManager) pickPlaneLocked(p mPlane, avoid []any, pool *peerInfo) *ma
 // the link (once).
 type mconnSub struct {
 	stream
+	raw     bool // a raw first sub (mconnRoleFirstRaw)
 	plane   mPlane
 	once    sync.Once
 	release func()
+}
+
+func (s *mconnSub) mconnRaw() bool { return s.raw }
+
+// SetReadDeadline wakes a blocked raw read (mconn_raw.go). Only a raw first
+// sub uses it, and only on a stream that has it (rawCapable).
+func (s *mconnSub) SetReadDeadline(t time.Time) error {
+	if d, ok := s.stream.(readDeadliner); ok {
+		return d.SetReadDeadline(t)
+	}
+	return errors.ErrUnsupported
 }
 
 func (s *mconnSub) Close() error {
@@ -298,12 +314,12 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 	for tries := 0; !e.ended && tries < 3; {
 		var l Link
 		var rel func()
-		var ok bool
+		var ok, raw bool
 		if !e.first && mconnLite.Load() {
 			// lite: the first sub sits exactly where the one stream of the
 			// old path would (pickWait), so the connection's placement is
 			// unchanged; only a link whose exit reads kindMConn will do.
-			l, rel, ok = e.pickFirstLite()
+			l, rel, raw, ok = e.pickFirstLite()
 		} else {
 			l, rel, ok = e.lm.pickPlane(p, avoid)
 		}
@@ -319,6 +335,9 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 			role := mconnRoleJoin
 			if !e.first {
 				role = mconnRoleFirst
+				if raw && rawCapable(st) {
+					role = mconnRoleFirstRaw
+				}
 			}
 			if _, err = st.Write(mconnHeader(e.port, e.id, role)); err == nil {
 				if role == mconnRoleJoin && p == planeLight {
@@ -327,7 +346,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 					}
 				}
 				e.first = true
-				s := &mconnSub{stream: st, plane: p, release: rel}
+				s := &mconnSub{stream: st, plane: p, release: rel, raw: role == mconnRoleFirstRaw}
 				mconnPlaneGauge(p).Add(1)
 				e.subs = append(e.subs, s)
 				return s, l, nil
@@ -342,10 +361,10 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 // pickFirstLite places a lite connection's first sub with the old path's own
 // choice (pickWait); false when that link's exit does not read kindMConn
 // (the caller then falls back to the one stream, as with the key off).
-func (e *mconnEdge) pickFirstLite() (Link, func(), bool) {
+func (e *mconnEdge) pickFirstLite() (Link, func(), bool, bool) {
 	l, rel, ok := pickWait(e.ctx, e.lm, true)
 	if !ok {
-		return nil, nil, false
+		return nil, nil, false, false
 	}
 	pi := e.lm.exitInfo.Load()
 	if mtr := linkMeterOf(l); mtr != nil {
@@ -355,9 +374,9 @@ func (e *mconnEdge) pickFirstLite() (Link, func(), bool) {
 	}
 	if !pi.mconn() {
 		rel()
-		return nil, nil, false
+		return nil, nil, false, false
 	}
-	return l, rel, true
+	return l, rel, pi.mconnRaw(), true
 }
 
 // end closes every sub the connection opened (releasing their places) and
@@ -524,14 +543,19 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 		tbl = exitMConns
 	}
 	switch role {
-	case mconnRoleFirst:
+	case mconnRoleFirst, mconnRoleFirstRaw:
 		target, ok := cfg.routeTable().Target(port)
 		if !ok {
 			cfg.noRoute.note(port, "tcp", cfg.Log)
 			st.Close()
 			return
 		}
-		mc := newMConnExit(id)
+		var mc *mConn
+		if role == mconnRoleFirstRaw {
+			mc = newMConnExitRaw(id)
+		} else {
+			mc = newMConnExit(id)
+		}
 		mc.tr.setPort(port)
 		if !tbl.create(id, mc) {
 			st.Close()
@@ -541,7 +565,17 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 		mconnStat.total.Add(1)
 		mconnStat.open.Add(1)
 		defer mconnStat.open.Add(-1)
-		attachExitSub(st, mc, role, cfg.traffic, mtr)
+		if role == mconnRoleFirstRaw {
+			// no watcher goroutine: the sub is closed by the connection
+			c := cfg.traffic.openSub(mtr)
+			mconnStat.exitSubs.Add(1)
+			mc.attachRaw(exitCountedStream{st, c}, func() {
+				cfg.traffic.done(c)
+				mconnStat.exitSubs.Add(-1)
+			})
+		} else {
+			attachExitSub(st, mc, role, cfg.traffic, mtr)
+		}
 		up, err := dialExitTCP(target)
 		if err != nil {
 			mc.Close()

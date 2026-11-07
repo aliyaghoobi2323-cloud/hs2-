@@ -22,12 +22,15 @@ type tSub struct {
 	gate   atomic.Pointer[chan struct{}]
 	rate   atomic.Int64 // bytes/s this end's writes are held to (0: none)
 	wrote  atomic.Int64
+	raw    bool // the first sub of a raw pair (mconnRaw)
 	closed atomic.Bool
 	dead   chan struct{}
 	once   sync.Once
 }
 
 func newTSub(c net.Conn) *tSub { return &tSub{Conn: c, dead: make(chan struct{})} }
+
+func (t *tSub) mconnRaw() bool { return t.raw }
 
 func (t *tSub) Write(p []byte) (int, error) {
 	if g := t.gate.Load(); g != nil {
@@ -74,20 +77,33 @@ type tLink struct {
 // whose far end is attached to the exit.
 type tNet struct {
 	exit  *mConn
+	raw   bool         // the first sub is raw (mconn_raw.go)
+	fail  atomic.Bool  // later opens fail
+	hook  func(*tLink) // called on each new link before the exit sees it
 	mu    sync.Mutex
 	links []*tLink
 }
 
 func (n *tNet) open(p mPlane, avoid []any) (mSub, any, error) {
+	if n.fail.Load() {
+		return nil, nil, errMConnNoLink
+	}
 	a, b := net.Pipe()
 	l := &tLink{plane: p, avoid: append([]any(nil), avoid...), iran: newTSub(a), exit: newTSub(b)}
 	n.mu.Lock()
 	l.key = len(n.links)
 	n.links = append(n.links, l)
 	n.mu.Unlock()
+	if n.hook != nil {
+		n.hook(l)
+	}
 	role := byte(1)
 	if l.key == 0 {
 		role = 0
+		if n.raw {
+			role = mconnRoleFirstRaw
+			l.iran.raw = true
+		}
 	}
 	n.exit.attach(l.exit, role)
 	return l.iran, l.key, nil
