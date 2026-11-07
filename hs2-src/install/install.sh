@@ -1242,7 +1242,7 @@ cert_renewal_to_webroot(){
 # cert_offer_webroot_switch CFG: for every certbot certificate still renewed
 # by standalone, ask (y/N, default no) and switch it to hs2's webroot. Only
 # when CFG has acme_webroot on. Reads the answers from stdin. (The full menu
-# entry is lb stage 4; this is the building block.)
+# entry is the Load balancing screen, tm_lb → 7.)
 cert_offer_webroot_switch(){
   local cfg="$1" root conf name a n=0
   root=$(cfg_acme_webroot "$cfg")
@@ -3904,6 +3904,429 @@ tm_cert(){ # unit cfg
   pause
 }
 
+# ---------- Load balancing (lb) menu -----------------------------------------
+# The "lb" section spreads a tunnel's links over several (Iran IP, Kharej IP)
+# paths by weight (see lb-spec.md). This screen edits it as a pending copy
+# (LB_EN, LB_MODE, LB_ROWS), checks it, then applies it with a .prev backup
+# and a rollback if the tunnel does not come up. The primary address of each
+# side (from addr / bind_local_ip, as the binary derives it) is always a
+# member and cannot be removed. JSON is read and written with python3; the
+# binary's `hs2 check` has the last word on the result.
+#
+# LB_ROWS entries: side|ip|weight|sni|cert_file|key_file (side: iran|kharej).
+LB_EN=false; LB_MODE=fixed; LB_ROWS=(); LB_PRIM_IR=""; LB_PRIM_KH=""; LB_DIRTY=0; LB_NUM=(); LB_PICK=""
+
+lb_supported(){ case "$(jget "$1" carrier)" in mtcp|l3mtcp|l3) return 0 ;; esac; return 1; }
+lb_is_ip4(){
+  local o IFS=.; local -a p
+  [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+  read -ra p <<< "$1"
+  for o in "${p[@]}"; do [ "$((10#$o))" -le 255 ] || return 1; done
+  [ "$1" != 0.0.0.0 ]
+}
+# lb_own_side CFG: the side this server is (Iran = mode dial).
+lb_own_side(){ if cfg_is_dial "$1"; then echo iran; else echo kharej; fi; }
+# lb_listen_side CFG: the side that LISTENS (and so serves per-address certs):
+# Iran in reverse, Kharej in direct.
+lb_listen_side(){ if cfg_is_reverse "$1"; then echo iran; else echo kharej; fi; }
+lb_side_label(){ if [ "$1" = iran ]; then echo Iran; else echo Kharej; fi; }
+
+# lb_prims CFG: the primary IP of each side, the same rule as the binary's
+# lbPrimaries: addr's host is the listening side's address (or the address
+# dialed), bind_local_ip the dialer's source. "" = not a fixed IP (default
+# route / wildcard listen): it is then an unlisted member with an equal share.
+lb_prims(){
+  local cfg="$1" a host bind
+  a=$(jget "$cfg" addr); host=${a%:*}; host=${host#[}; host=${host%]}
+  lb_is_ip4 "$host" || host=""
+  bind=$(jget "$cfg" bind_local_ip); lb_is_ip4 "$bind" || bind=""
+  if cfg_is_dial "$cfg"; then
+    if cfg_is_reverse "$cfg"; then LB_PRIM_IR=$host; LB_PRIM_KH=""
+    else LB_PRIM_IR=$bind; LB_PRIM_KH=$host; fi
+  else
+    if cfg_is_reverse "$cfg"; then LB_PRIM_IR=$host; LB_PRIM_KH=$bind
+    else LB_PRIM_IR=""; LB_PRIM_KH=$host; fi
+  fi
+}
+lb_prim_of(){ if [ "$1" = iran ]; then echo "$LB_PRIM_IR"; else echo "$LB_PRIM_KH"; fi; }
+
+lb_field(){ # row field(1..6)
+  local IFS='|'; local -a f; read -ra f <<< "$1|"; printf '%s' "${f[$(( $2 - 1 ))]:-}"
+}
+lb_row_set(){ # index field value
+  local IFS='|'; local -a f; read -ra f <<< "${LB_ROWS[$1]}|"
+  while [ "${#f[@]}" -lt 6 ]; do f+=(""); done
+  f[$(( $2 - 1 ))]="$3"
+  LB_ROWS[$1]="${f[0]}|${f[1]}|${f[2]}|${f[3]}|${f[4]}|${f[5]}"
+}
+# lb_side_idx SIDE: the LB_ROWS indexes of one side, in order.
+lb_side_idx(){ local i; for i in "${!LB_ROWS[@]}"; do [ "$(lb_field "${LB_ROWS[$i]}" 1)" = "$1" ] && echo "$i"; done; return 0; }
+lb_count(){ lb_side_idx "$1" | grep -c . || true; }
+lb_find(){ # side ip -> index (or nothing)
+  local i; for i in $(lb_side_idx "$1"); do [ "$(lb_field "${LB_ROWS[$i]}" 2)" = "$2" ] && { echo "$i"; return 0; }; done; return 0
+}
+# lb_pseudo SIDE: the equal share the side's unknown primary ("") joins with,
+# or nothing when the side's primary is a listed IP.
+lb_pseudo(){ [ -z "$(lb_prim_of "$1")" ] && echo $(( 100 / ($(lb_count "$1") + 1) )); return 0; }
+lb_sum(){
+  local s=0 i p
+  for i in $(lb_side_idx "$1"); do s=$(( s + $(lb_field "${LB_ROWS[$i]}" 3) )); done
+  p=$(lb_pseudo "$1"); echo $(( s + ${p:-0} ))
+}
+
+# lb_load CFG: read the lb section into the pending copy and make each known
+# primary a listed member (with the share the binary would give it).
+lb_load(){
+  local cfg="$1" out line side ip n p
+  out=$(python3 - "$cfg" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+lb = m.get("lb") or {}
+print(("true" if lb.get("enabled") else "false") + "|" + (lb.get("mode") or "fixed"))
+for side in ("iran", "kharej"):
+    for e in lb.get(side) or []:
+        print("|".join([side, str(e.get("ip", "")), str(int(e.get("weight", 0) or 0)),
+                        e.get("sni", "") or "", e.get("cert_file", "") or "", e.get("key_file", "") or ""]))
+PY
+) || { err "Cannot read $cfg as JSON."; return 1; }
+  LB_ROWS=()
+  line=${out%%$'\n'*}; LB_EN=${line%%|*}; LB_MODE=${line#*|}
+  while IFS= read -r line; do [ -n "$line" ] && LB_ROWS+=("$line"); done < <(printf '%s\n' "$out" | tail -n +2)
+  lb_prims "$cfg"
+  for side in iran kharej; do
+    p=$(lb_prim_of "$side"); [ -n "$p" ] || continue
+    [ -n "$(lb_find "$side" "$p")" ] && continue
+    n=$(lb_count "$side")
+    LB_ROWS=("$side|$p|$(( 100 / (n + 1) ))|||" "${LB_ROWS[@]}")
+  done
+  LB_DIRTY=0
+  return 0
+}
+
+# lb_write CFG OUT: CFG with its lb section replaced by the pending copy (lb
+# goes last, so the installer's grep readers keep finding the top-level keys).
+lb_write(){
+  local rows; rows=$(printf '%s\n' "${LB_ROWS[@]}")
+  LB_ROWS_TXT="$rows" python3 - "$1" "$2" "$LB_EN" "$LB_MODE" <<'PY'
+import json, os, sys
+src, out, en, mode = sys.argv[1:5]
+m = json.load(open(src))
+m.pop("lb", None)
+lb = {"enabled": en == "true", "mode": mode, "iran": [], "kharej": []}
+for line in os.environ.get("LB_ROWS_TXT", "").splitlines():
+    if not line:
+        continue
+    side, ip, w, sni, cf, kf = (line.split("|") + [""] * 6)[:6]
+    e = {"ip": ip, "weight": int(w or 0)}
+    if sni: e["sni"] = sni
+    if cf: e["cert_file"] = cf
+    if kf: e["key_file"] = kf
+    lb[side].append(e)
+m["lb"] = lb
+with open(out, "w") as f:
+    json.dump(m, f, indent=2)
+    f.write("\n")
+PY
+}
+# lb_block CFG: the lb section of CFG as JSON, to copy to the other server.
+lb_block(){ python3 -c 'import json,sys; print("\"lb\": " + json.dumps(json.load(open(sys.argv[1])).get("lb"), indent=2))' "$1"; }
+
+# lb_split SIDE: equal shares (the remainder to the first addresses); an
+# unknown primary keeps the share the binary gives it.
+lb_split(){
+  local side="$1" n p base r i k=0
+  n=$(lb_count "$side"); [ "$n" -gt 0 ] || return 0
+  p=$(lb_pseudo "$side"); p=${p:-0}
+  base=$(( (100 - p) / n )); r=$(( 100 - p - base * n ))
+  for i in $(lb_side_idx "$side"); do
+    if [ "$k" -lt "$r" ]; then lb_row_set "$i" 3 $(( base + 1 )); else lb_row_set "$i" 3 "$base"; fi
+    k=$(( k + 1 ))
+  done
+  LB_DIRTY=1
+}
+
+lb_local_ips(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1; }
+# lb_port_busy IP PORT: something other than hs2 listens on IP:PORT (or on the
+# wildcard of PORT). hs2 itself (this tunnel, already on lb) is fine.
+lb_port_busy(){
+  ss -Hltnp "sport = :$2" 2>/dev/null | awk -v a="$1:$2" -v p="$2" \
+    '($4==a || $4=="0.0.0.0:"p || $4=="*:"p || $4=="[::]:"p) && $0 !~ /"hs2/ {f=1} END{exit !f}'
+}
+lb_hs2_on80(){ ss -Hltnp "sport = :80" 2>/dev/null | grep -q '"hs2'; }
+
+# lb_check CFG NEWCFG: everything that must hold before the change is applied.
+# Prints each problem; returns 1 if any.
+lb_check(){
+  local cfg="$1" new="$2" bad=0 side s i row ip cf kf secs own lis port locals
+  if [ "$LB_EN" = true ]; then
+    for side in iran kharej; do
+      s=$(lb_sum "$side")
+      [ "$s" = 100 ] || { say "  ${C_R}✗ $(lb_side_label "$side") shares add up to $s%, must be 100% (use 'Split equally').${C_0}"; bad=1; }
+    done
+    own=$(lb_own_side "$cfg"); lis=$(lb_listen_side "$cfg")
+    locals=$(lb_local_ips)
+    port=$(jget "$cfg" addr); port=${port##*:}
+    for i in $(lb_side_idx "$own"); do
+      row=${LB_ROWS[$i]}; ip=$(lb_field "$row" 2)
+      if ! printf '%s\n' "$locals" | grep -qxF "$ip"; then
+        say "  ${C_R}✗ $ip is not an address of this server (ip -4 addr) — add it to the network interface first.${C_0}"; bad=1; continue
+      fi
+      if [ "$own" = "$lis" ] && [ "$ip" != "$(lb_prim_of "$own")" ] && lb_port_busy "$ip" "$port"; then
+        say "  ${C_R}✗ Port $port on $ip is already in use by another program:${C_0}"
+        ss -Hltnp "sport = :$port" 2>/dev/null | sed 's/^/      /' >&2 || true
+        bad=1
+      fi
+    done
+    if [ "$own" = "$lis" ]; then
+      for i in $(lb_side_idx "$own"); do
+        row=${LB_ROWS[$i]}; ip=$(lb_field "$row" 2); cf=$(lb_field "$row" 5); kf=$(lb_field "$row" 6)
+        [ -n "$cf$kf" ] || continue
+        if [ ! -f "$cf" ] || [ ! -f "$kf" ]; then
+          say "  ${C_R}✗ $ip: certificate or key file missing ($cf, $kf).${C_0}"; bad=1; continue
+        fi
+        secs=$(cert_secs_left "$cf")
+        if [ -z "$secs" ]; then say "  ${C_R}✗ $ip: $cf is not a readable certificate.${C_0}"; bad=1
+        elif [ "$secs" -le 0 ]; then say "  ${C_R}✗ $ip: certificate $cf has EXPIRED — get a new one (option 7).${C_0}"; bad=1; fi
+      done
+    fi
+  fi
+  [ "$bad" = 0 ] || return 1
+  info "Checking the new config with hs2 check…"
+  tm_validate "$new" || return 1
+  return 0
+}
+
+# lb_apply UNIT CFG: check, back up as .prev, write, restart this tunnel; if it
+# does not come up, put .prev back. Then: the other server needs the same.
+lb_apply(){
+  local u="$1" cfg="$2" new since
+  new=$(mktemp "$CFG_DIR/.hs2-lb.XXXXXX"); chmod 600 "$new"
+  if ! lb_write "$cfg" "$new"; then rm -f "$new"; err "Could not write the new config."; return 1; fi
+  say ""; info "Checking the change before applying it…"
+  if ! lb_check "$cfg" "$new"; then
+    rm -f "$new"; warn "Not applied — fix the problems above. $u is untouched."; return 1
+  fi
+  tm_ports_backup "$cfg" || { rm -f "$new"; return 1; }
+  cat "$new" > "$cfg"; rm -f "$new"
+  ok "Saved. The previous version is kept as $cfg.prev"
+  since=$(date '+%Y-%m-%d %H:%M:%S')
+  info "Restarting $u to apply the change…"
+  if ! restart_unit "$u"; then
+    err "$u did not come up with the change. Restoring the previous config."
+    tm_log_since "$u" "$since"
+    cat "$cfg.prev" > "$cfg"
+    if restart_unit "$u"; then ok "Previous config restored — $u is running again."
+    else err "$u is still not running with the previous config. Check the log."; fi
+    lb_load "$cfg" >/dev/null 2>&1 || true
+    return 1
+  fi
+  ok "Applied — $u is running with the new load-balancing settings."
+  LB_DIRTY=0
+  echo >&2; hr
+  warn "Make the SAME change on the OTHER server of this tunnel, or the paths will not match."
+  info "Open this tunnel there → l) Load balancing, or put this section in its config:"
+  hr
+  lb_block "$cfg" >&2
+  hr
+  return 0
+}
+
+# lb_get_cert UNIT CFG INDEX: a certificate for one address's subdomain (its A
+# record must point at that address), via hs2's own ACME responder when
+# acme_webroot is on. Offers to turn acme_webroot on when hs2 holds port 80.
+lb_get_cert(){
+  local u="$1" cfg="$2" i="$3" row ip sni a out cf kf
+  row=${LB_ROWS[$i]}; ip=$(lb_field "$row" 2); sni=$(lb_field "$row" 4)
+  if [ -z "$sni" ]; then
+    read -rp "  Subdomain for $ip (its A record must point at $ip): " sni </dev/tty || return 0
+    [ -n "$sni" ] || return 0
+    lb_row_set "$i" 4 "$sni"; LB_DIRTY=1
+  fi
+  if [ -z "$(cfg_acme_webroot "$cfg")" ] && lb_hs2_on80; then
+    warn "Port 80 is held by hs2 (a user port), so certbot cannot use it directly."
+    info "hs2 can answer the certificate check itself (\"acme_webroot\")."
+    read -rp "  Turn acme_webroot on now? This restarts $u. [Y/n]: " a </dev/tty || a=n
+    case "${a:-y}" in
+      n|N|no) warn "No certificate requested."; return 0 ;;
+    esac
+    tm_ports_backup "$cfg" || return 0
+    if ! python3 -c 'import json,sys; m=json.load(open(sys.argv[1])); m["acme_webroot"]="on"; open(sys.argv[1],"w").write(json.dumps(m, indent=2)+"\n")' "$cfg"; then
+      err "Could not write acme_webroot."; return 0
+    fi
+    if ! tm_validate "$cfg"; then cat "$cfg.prev" > "$cfg"; warn "Not changed."; return 0; fi
+    if ! restart_unit "$u"; then
+      err "$u did not come up with acme_webroot on. Restoring the previous config."
+      cat "$cfg.prev" > "$cfg"; restart_unit "$u" || true; return 0
+    fi
+    ok "acme_webroot is on — $u answers certificate checks on port 80."
+    cert_offer_webroot_switch "$cfg" </dev/tty || true
+  fi
+  # cert_get_webroot dies on failure: run it in a subshell so the menu stays.
+  out=$(cert_get_webroot "$cfg" "$sni") || { err "No certificate for $sni."; return 0; }
+  out=$(printf '%s' "$out" | tail -n1)
+  cf=${out%%|*}; kf=${out#*|}
+  lb_row_set "$i" 5 "$cf"; lb_row_set "$i" 6 "$kf"; LB_DIRTY=1
+  ok "$ip now uses $cf (apply with 8 to put it into use)."
+}
+
+# lb_live UNIT CFG: the per-path line of `hs2 status` (lb_text), refreshed
+# every 5 s until Enter.
+lb_live(){
+  local cfg="$2" sf txt rc
+  sf=$(status_path "$cfg")
+  while :; do
+    printf '\033[2J\033[H' >&2
+    say " ${C_B}Load balancing — live${C_0} ($1) · refreshes every 5 s · Enter to go back"; hr
+    if status_fresh "$sf"; then
+      txt=$(jget "$sf" lb_text)
+      if [ -n "$txt" ]; then say "  $txt"
+      else say "  (load balancing is not active in the running tunnel)"; fi
+    else
+      say "  (the tunnel is not running, or this hs2 is too old to report it)"
+    fi
+    # Enter returns; a timeout (status > 128) refreshes; EOF also returns.
+    rc=0; read -rst 5 _ </dev/tty || rc=$?
+    [ "$rc" -gt 128 ] || return 0
+  done
+}
+
+lb_show(){ # cfg
+  local cfg="$1" side i row ip w sni cf secs extra n=0 p own lis
+  own=$(lb_own_side "$cfg"); lis=$(lb_listen_side "$cfg")
+  LB_NUM=()
+  for side in iran kharej; do
+    say "  $(lb_side_label "$side") addresses$([ "$side" = "$own" ] && echo " (this server)")$([ "$side" = "$lis" ] && echo " — listens" || echo " — dials"):"
+    p=$(lb_pseudo "$side")
+    [ -n "$p" ] && say "        (default address)  ${p}%  primary — always used"
+    for i in $(lb_side_idx "$side"); do
+      row=${LB_ROWS[$i]}; ip=$(lb_field "$row" 2); w=$(lb_field "$row" 3); sni=$(lb_field "$row" 4); cf=$(lb_field "$row" 5)
+      n=$(( n + 1 )); LB_NUM[$n]=$i
+      extra=""
+      [ "$ip" = "$(lb_prim_of "$side")" ] && extra=" primary — always used"
+      [ -n "$sni" ] && extra="$extra · sni $sni"
+      if [ -n "$cf" ]; then
+        secs=""; [ -f "$cf" ] && secs=$(cert_secs_left "$cf")
+        if [ -z "$secs" ]; then extra="$extra · ${C_Y}cert not readable here${C_0}"
+        elif [ "$secs" -le 0 ]; then extra="$extra · ${C_R}cert EXPIRED${C_0}"
+        else extra="$extra · cert $(( secs / 86400 )) days"; fi
+      fi
+      say "    $(printf '%2d) %-16s %3s%%' "$n" "$ip" "$w")$extra"
+    done
+    say "        total: $(lb_sum "$side")%"
+  done
+}
+
+lb_pick(){ # prompt -> LB_PICK=index (empty if none)
+  local c; LB_PICK=""
+  read -rp "  $1 (number): " c </dev/tty || return 0
+  case "$c" in ''|*[!0-9]*) warn "Invalid choice."; return 0 ;; esac
+  [ -n "${LB_NUM[$c]:-}" ] || { warn "There is no address $c."; return 0; }
+  LB_PICK=${LB_NUM[$c]}
+}
+
+lb_add(){ # cfg
+  local cfg="$1" s side ip w sni
+  read -rp "  Which side? i) Iran  k) Kharej: " s </dev/tty || return 0
+  case "$s" in i|I) side=iran ;; k|K) side=kharej ;; *) warn "Invalid choice."; return 0 ;; esac
+  read -rp "  $(lb_side_label "$side") address (IPv4): " ip </dev/tty || return 0
+  lb_is_ip4 "$ip" || { warn "Not a valid IPv4 address: $ip"; return 0; }
+  [ -z "$(lb_find "$side" "$ip")" ] || { warn "$ip is already in the list."; return 0; }
+  if [ "$side" = "$(lb_own_side "$cfg")" ] && ! lb_local_ips | grep -qxF "$ip"; then
+    warn "$ip is not on this server (ip -4 addr) — it must be added to the interface before applying."
+  fi
+  sni=""
+  if [ "$side" = "$(lb_listen_side "$cfg")" ]; then
+    read -rp "  Subdomain (sni) for $ip — Enter = the tunnel's own sni: " sni </dev/tty || sni=""
+  fi
+  read -rp "  Share for $ip in % (Enter = split $(lb_side_label "$side") equally): " w </dev/tty || w=""
+  if [ -n "$w" ] && ! valid_uint "$w" 0 100; then warn "A share is a whole number 0-100."; return 0; fi
+  LB_ROWS+=("$side|$ip|${w:-0}|$sni||")
+  LB_DIRTY=1
+  [ -n "$w" ] || lb_split "$side"
+  ok "Added $ip ($(lb_side_label "$side")). Shares now total $(lb_sum "$side")%."
+}
+
+lb_remove(){ # cfg
+  local i side ip a
+  lb_pick "Remove address"; i=$LB_PICK; [ -n "$i" ] || return 0
+  side=$(lb_field "${LB_ROWS[$i]}" 1); ip=$(lb_field "${LB_ROWS[$i]}" 2)
+  if [ "$ip" = "$(lb_prim_of "$side")" ]; then warn "$ip is the primary address (addr) — it is always used and cannot be removed."; return 0; fi
+  unset "LB_ROWS[$i]"; LB_ROWS=("${LB_ROWS[@]}"); LB_DIRTY=1
+  read -rp "  Removed $ip. Split the $(lb_side_label "$side") shares equally again? [Y/n]: " a </dev/tty || a=y
+  case "${a:-y}" in n|N|no) ;; *) lb_split "$side" ;; esac
+  ok "Shares now total $(lb_sum "$side")%."
+}
+
+lb_edit_row(){ # cfg
+  local cfg="$1" i side ip w sni
+  lb_pick "Edit address"; i=$LB_PICK; [ -n "$i" ] || return 0
+  side=$(lb_field "${LB_ROWS[$i]}" 1); ip=$(lb_field "${LB_ROWS[$i]}" 2)
+  read -rp "  Share for $ip in % [$(lb_field "${LB_ROWS[$i]}" 3)]: " w </dev/tty || return 0
+  if [ -n "$w" ]; then valid_uint "$w" 0 100 || { warn "A share is a whole number 0-100."; return 0; }; lb_row_set "$i" 3 "$w"; LB_DIRTY=1; fi
+  if [ "$side" = "$(lb_listen_side "$cfg")" ] && [ "$ip" != "$(lb_prim_of "$side")" ]; then
+    read -rp "  Subdomain (sni) [$(lb_field "${LB_ROWS[$i]}" 4)] ('-' = none): " sni </dev/tty || sni=""
+    case "$sni" in '') ;; -) lb_row_set "$i" 4 ""; LB_DIRTY=1 ;; *) lb_row_set "$i" 4 "$sni"; LB_DIRTY=1 ;; esac
+  fi
+  ok "Shares now total $(lb_sum "$side")%."
+}
+
+tm_lb(){ # unit cfg
+  local u="$1" cfg="$2" c i side a
+  if ! lb_supported "$cfg"; then
+    say "  ${C_Y}Load balancing works with the tcp transports (mtcp / l3mtcp / l3) only — not with $(tm_transport "$cfg").${C_0}"
+    pause; return 0
+  fi
+  command -v python3 >/dev/null 2>&1 || { err "python3 is needed for this screen (apt install python3)."; pause; return 0; }
+  lb_load "$cfg" || { pause; return 0; }
+  while :; do
+    echo >&2; hr; say " ${C_B}Load balancing${C_0} — $u"; hr
+    if [ "$LB_EN" = true ]; then say "  State: ${C_G}ON${C_0} · mode: $LB_MODE$([ "$LB_MODE" = auto ] && echo " (shares follow path quality around the set values)" || echo " (fixed shares)")"
+    else say "  State: OFF (the tunnel uses only its primary address)"; fi
+    [ "$LB_DIRTY" = 1 ] && say "  ${C_Y}Unsaved changes — apply them with 8.${C_0}"
+    if cfg_is_reverse "$cfg"; then say "  Reverse: Iran listens on every Iran address; Kharej dials them from every Kharej address."
+    else say "  Direct: Kharej listens on every Kharej address; Iran dials them from every Iran address."; fi
+    lb_show "$cfg"
+    hr
+    if [ "$LB_EN" = true ]; then say "  1) Turn load balancing OFF"; else say "  1) Turn load balancing ON"; fi
+    if [ "$LB_MODE" = auto ]; then say "  2) Mode: switch to fixed (shares exactly as set)"
+    else say "  2) Mode: switch to auto (shares follow path quality)"; fi
+    say "  3) Add an address"
+    say "  4) Remove an address"
+    say "  5) Edit an address (share, subdomain)"
+    say "  6) Split equally (both sides)"
+    say "  7) Get a certificate for an address (Let's Encrypt, its own subdomain)"
+    say "  8) Check & apply (backup, restart this tunnel, rollback on failure)"
+    say "  9) Live status (per-path shares, loss, links — every 5 s)"
+    say "  0) Back"
+    read -rp "Choose: " c </dev/tty || return 0
+    case "$c" in
+      1) if [ "$LB_EN" = true ]; then LB_EN=false; else LB_EN=true; fi; LB_DIRTY=1 ;;
+      2) if [ "$LB_MODE" = auto ]; then LB_MODE=fixed; else LB_MODE=auto; fi; LB_DIRTY=1 ;;
+      3) lb_add "$cfg" ;;
+      4) lb_remove "$cfg" ;;
+      5) lb_edit_row "$cfg" ;;
+      6) lb_split iran; lb_split kharej; ok "Shares split equally." ;;
+      7) lb_pick "Certificate for address"; i=$LB_PICK
+         if [ -n "$i" ]; then
+           side=$(lb_field "${LB_ROWS[$i]}" 1)
+           if [ "$side" != "$(lb_listen_side "$cfg")" ]; then warn "$(lb_side_label "$side") addresses dial out — they need no certificate."
+           elif [ "$side" != "$(lb_own_side "$cfg")" ]; then warn "That address belongs to the other server — get its certificate there."
+           elif [ "$(lb_field "${LB_ROWS[$i]}" 2)" = "$(lb_prim_of "$side")" ]; then warn "The primary address uses the tunnel's own certificate (c) in the tunnel menu)."
+           else lb_get_cert "$u" "$cfg" "$i"; fi
+         fi ;;
+      8) lb_apply "$u" "$cfg" || true; pause ;;
+      9) lb_live "$u" "$cfg" ;;
+      0|b|B|"")
+         if [ "$LB_DIRTY" = 1 ]; then
+           read -rp "  Leave without applying your changes? [y/N]: " a </dev/tty || a=y
+           case "$a" in y|Y|yes) ;; *) continue ;; esac
+         fi
+         return 0 ;;
+      *) warn "Invalid choice." ;;
+    esac
+  done
+}
+
 tm_tunnel_menu(){
   local u="$1" cfg c
   cfg=$(tm_cfg "$u")
@@ -3918,6 +4341,7 @@ tm_tunnel_menu(){
     if tm_autostart "$u"; then say "  7) Turn autostart OFF"; else say "  7) Turn autostart ON"; fi
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
     if tm_has_ports "$cfg"; then say "  p) Ports — user ports and where each one goes"; fi
+    if lb_supported "$cfg"; then say "  l) Load balancing — several addresses per side, share of each, certificates"; fi
     say "  d) Diagnose (health check — config, endpoint, certificate, tuning)"
     if tm_cert_side "$cfg"; then say "  c) Certificate — expiry, renewal check, renew now"; fi
     say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
@@ -3934,6 +4358,7 @@ tm_tunnel_menu(){
       7) tm_toggle_autostart "$u" ;;
       8) tm_tune "$u" "$cfg" ;;
       p|P) tm_ports "$u" "$cfg" ;;
+      l|L) tm_lb "$u" "$cfg" ;;
       d|D) tm_doctor "$u" "$cfg" ;;
       c|C) tm_cert "$u" "$cfg" ;;
       u|U) upgrade "$u"; pause ;;
