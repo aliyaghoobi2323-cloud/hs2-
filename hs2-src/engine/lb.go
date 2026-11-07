@@ -33,8 +33,10 @@ import (
 
 // capLB: this side runs multipath LB (it listens on, or dials, extra IPs).
 // Advertised only when lb is enabled, so with lb absent the kindInfo bytes are
-// exactly as before.
-const capLB = 1 << 4
+// exactly as before. Bit 6: bit 4 is capMConnRaw (both were written on
+// separate branches as 1<<4; a peer with lb but no raw mconn would have been
+// taken for a raw-mconn reader). TestCapsDistinct guards this.
+const capLB = 1 << 6
 
 // LBPath is one path of a multipath tunnel, as seen from the dialing side.
 type LBPath struct {
