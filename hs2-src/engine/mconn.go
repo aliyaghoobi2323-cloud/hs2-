@@ -103,8 +103,14 @@ const (
 const (
 	// mSubQueue bounds the bytes waiting in one sub's send queue. A stalled
 	// sub fills it (and then misses copies) instead of blocking Write; when
-	// every sending sub is full, Write blocks (backpressure).
+	// every sending sub is full, Write blocks (backpressure). v3's queue
+	// rules (heavy by queue, stuck primary) are tuned to this size.
 	mSubQueue = 256 << 10
+	// mSubQueueLite: lite (HS2_MCONN=lite) keeps two chunks. smux's stream
+	// window already pipelines a link; anything queued here is extra delay
+	// in front of it — 256 KiB was ~1 s for a 2 Mbit/s call on a slowed link
+	// (the call regression in every lab run).
+	mSubQueueLite = 32 << 10
 	// mRecvBuf bounds the receiver: the in-order bytes Read has not taken
 	// yet, and separately the out-of-order bytes waiting for a gap. Beyond
 	// it the subs' readers stop reading (backpressure into smux).
@@ -352,7 +358,13 @@ func (s *msub) push(c *mchunk) {
 }
 
 // fits: s has room for n more bytes (under m.mu).
-func (s *msub) fits(n int) bool { return s.qBytes == 0 || s.qBytes+n <= mSubQueue }
+func (s *msub) fits(n int) bool {
+	max := mSubQueue
+	if s.m.lite {
+		max = mSubQueueLite
+	}
+	return s.qBytes == 0 || s.qBytes+n <= max
+}
 
 // rchunk is a received payload slice b at offset off (of b[0]).
 type rchunk struct {
