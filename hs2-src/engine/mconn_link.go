@@ -354,6 +354,7 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 		return true
 	}
 	obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
+	mc.tr.setPort(port)
 	mconnStat.total.Add(1)
 	mconnStat.open.Add(1)
 	defer mconnStat.open.Add(-1)
@@ -495,6 +496,7 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 			return
 		}
 		mc := newMConnExit(id)
+		mc.tr.setPort(port)
 		if !tbl.create(id, mc) {
 			st.Close()
 			return

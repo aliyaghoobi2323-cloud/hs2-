@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"slices"
 	"sort"
@@ -120,7 +121,7 @@ const (
 	// rate (more than mHeavyRate a window) is the second way: a source a fast
 	// link still keeps up with, but that would load it.
 	mHeavyQueue    = 64 << 10 // queue above this ...
-	mHeavyQueueFor = 200 * time.Millisecond
+	mHeavyQueueFor = time.Second
 	mHeavyRate     = 1_000_000   // or more than this many bytes (8 Mbit/s)
 	mHeavyWindow   = time.Second // ... within this window
 	// mDupMaxRate: a light connection is sent on two subs only while it moves
@@ -234,6 +235,7 @@ type msub struct {
 	m   *mConn
 	rw  mSub
 	key any
+	idx int // join order, for the trace
 
 	bulk     atomic.Bool  // this is the connection's bulk sub
 	lastRecv atomic.Int64 // UnixNano of the last record read from it
@@ -352,6 +354,9 @@ type mConn struct {
 
 	primary atomic.Pointer[msub] // the first light sub (for the "saved" counter)
 
+	tr    *mtrace // HS2_MCONN_TRACE (nil when off)
+	nsubs int
+
 	r mrecv
 
 	kick      chan struct{} // wakes the manager
@@ -365,6 +370,7 @@ func newMConn(id uint64, iran bool, open mOpener) *mConn {
 	m.sendCond.L = &m.mu
 	m.r.cond.L = &m.r.mu
 	m.r.lastProgress = time.Now()
+	m.tr = newMTrace(id, iran)
 	obs.mconnOpen.Add(1)
 	obs.mconnDual.Add(1) // m.state
 	return m
@@ -450,8 +456,11 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	if m.sendOff > 0 && !bulk {
 		s.lastHole = time.Now() // it lacks what was sent before it joined
 	}
+	s.idx = m.nsubs
+	m.nsubs++
 	m.subs = append(m.subs, s)
 	m.setPrimaryLocked()
+	m.tr.ev("sub+ %d bulk=%v key=%v sendOff=%d subs=%d", s.idx, bulk, key, m.sendOff, len(m.subs))
 	return s
 }
 
@@ -515,15 +524,29 @@ func (m *mConn) Write(p []byte) (int, error) {
 		n := copy(c.buf[mDataHdr:], p)
 		c.n = n
 		binary.BigEndian.PutUint16(c.buf[9:11], uint16(n))
+		var t0 time.Time
+		if m.tr != nil {
+			t0 = time.Now()
+		}
 		m.mu.Lock()
 		err := m.sendLocked(c)
 		m.mu.Unlock()
+		if m.tr != nil {
+			m.tr.noteWait(time.Since(t0))
+		}
 		if err != nil {
 			putChunk(c) // never queued
 			return written, err
 		}
 		written += n
 		p = p[n:]
+	}
+	if m.tr != nil {
+		m.tr.sent.Add(int64(written))
+		m.mu.Lock()
+		q, subs := m.sendQueueLocked(), m.traceSubsLocked()
+		m.mu.Unlock()
+		m.tr.report(q, subs)
 	}
 	return written, nil
 }
@@ -658,6 +681,7 @@ func (m *mConn) noteQueueLocked() {
 		return
 	}
 	if now.Sub(m.qHighSince) >= mHeavyQueueFor {
+		m.tr.ev("heavy by queue: sendq=%d high for %v subq=[%s]", m.sendQueueLocked(), now.Sub(m.qHighSince).Round(time.Millisecond), m.traceSubsLocked())
 		m.goHeavyLocked(true)
 	}
 }
@@ -678,6 +702,7 @@ func (m *mConn) goHeavyLocked(byQueue bool) {
 		return
 	}
 	// Kharej cannot open subs: ask Iran for a bulk sub.
+	m.tr.ev("send WANTBULK")
 	c := getChunk(mRecWantBulk)
 	if m.pushAllLocked(c) == 0 {
 		putChunk(c)
@@ -707,12 +732,17 @@ func (m *mConn) noteWriteLocked(n int) {
 	if w := now.Sub(m.dupStart); w > mHeavyWindow {
 		// the window that just ended decides the next one (a gap of more
 		// than two windows is a quiet connection: duplicate again)
+		was := m.dupOff
 		m.dupOff = m.dupBytes > mDupMaxRate && w < 2*mHeavyWindow
+		if was != m.dupOff && m.tr != nil {
+			m.tr.ev("dup %v -> %v (window %v, %d bytes)", !was, !m.dupOff, w.Round(time.Millisecond), m.dupBytes)
+		}
 		m.dupStart, m.dupBytes = now, 0
 	}
 	m.dupBytes += n
-	if m.dupBytes > mDupMaxRate {
+	if m.dupBytes > mDupMaxRate && !m.dupOff {
 		m.dupOff = true
+		m.tr.ev("dup on -> off (%d bytes in %v)", m.dupBytes, now.Sub(m.dupStart).Round(time.Millisecond))
 	}
 	if m.heavy || m.mode != planeLight {
 		return
@@ -723,6 +753,7 @@ func (m *mConn) noteWriteLocked(n int) {
 	}
 	m.hvBytes += n
 	if m.hvBytes > mHeavyRate {
+		m.tr.ev("heavy by rate: %d bytes in %v", m.hvBytes, now.Sub(m.hvStart).Round(time.Millisecond))
 		m.goHeavyLocked(false)
 	}
 }
@@ -881,6 +912,7 @@ func (m *mConn) switchLocked(b *msub) {
 	default:
 	}
 	b.bulk.Store(true)
+	m.tr.ev("switch to bulk sub %d: BULK + %d requeued bytes (%d records)", b.idx, qb, len(q)-len(ctrl)-1)
 	m.mode, m.bulk = planeBulk, b
 	m.setPrimaryLocked()
 	m.sendCond.Broadcast()
@@ -986,6 +1018,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			r.pullLocked()
 			r.lastProgress = time.Now()
 			r.cond.Broadcast()
+			m.traceRecvLocked(s, n)
 			r.mu.Unlock()
 			m.noteSaved(s)
 			return
@@ -999,6 +1032,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			r.lastProgress = time.Now()
 		}
 		r.insertLocked(rchunk{c: c, off: off, b: c.buf[:n]})
+		m.traceRecvLocked(s, n)
 		r.mu.Unlock()
 		m.noteSaved(s)
 		if wasEmpty {
@@ -1006,6 +1040,31 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 		}
 		return
 	}
+}
+
+// traceRecvLocked (under m.r.mu, trace on): counts delivered bytes, follows
+// the reassembly gap's age and writes the periodic report.
+func (m *mConn) traceRecvLocked(s *msub, n int) {
+	t := m.tr
+	if t == nil {
+		return
+	}
+	r := &m.r
+	t.recvd.Add(int64(n))
+	now := time.Now()
+	if len(r.ooo) == 0 {
+		if !t.gapSince.IsZero() {
+			if age := now.Sub(t.gapSince); age > mTraceSlow {
+				t.ev("gap filled after %v by sub %d (next=%d ready=%d)", age.Round(time.Millisecond), s.idx, r.next, r.readyBytes)
+			}
+			t.gapSince = time.Time{}
+		}
+	} else if t.gapSince.IsZero() {
+		t.gapSince = now
+	} else {
+		t.noteGap(now.Sub(t.gapSince))
+	}
+	t.report(-1, fmt.Sprintf("recv next=%d ooo=%d/%d ready=%d", r.next, len(r.ooo), r.oooBytes, r.readyBytes))
 }
 
 // noteSaved counts a chunk that arrived first on a light sub other than the
@@ -1152,6 +1211,7 @@ func (m *mConn) onBulk(s *msub) {
 		m.mu.Unlock()
 		return
 	}
+	m.tr.ev("recv BULK on sub %d (mode bulk=%v)", s.idx, m.mode == planeBulk)
 	if m.iran {
 		if s == m.bulk && m.echoAt.IsZero() {
 			m.echoAt = time.Now() // both sides send only on the bulk sub now
@@ -1176,6 +1236,7 @@ func (m *mConn) onWantBulk() {
 	}
 	m.mu.Lock()
 	want := m.mode == planeLight && !m.wantBulk
+	m.tr.ev("recv WANTBULK (new=%v)", want)
 	m.wantBulk = true
 	m.mu.Unlock()
 	if want {
@@ -1211,6 +1272,7 @@ func (m *mConn) subDied(s *msub, cause error) {
 		}
 	}
 	m.sendCond.Broadcast()
+	m.tr.ev("sub- %d cause=%v retired=%v bulk=%v lost=%v subs=%d", s.idx, cause, s.retired, s.bulk.Load(), lost, len(m.subs))
 	if m.ended || s.retired {
 		m.mu.Unlock()
 		return
@@ -1266,6 +1328,7 @@ func (m *mConn) end(err error, rst bool) {
 		return
 	}
 	m.ended, m.err = true, err
+	m.tr.ev("end err=%v rst=%v sent=%d", err, rst, m.sendOff)
 	m.setStateLocked(mStateEnded)
 	var closeNow []*msub
 	for _, s := range m.subs {
@@ -1405,6 +1468,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					if s != m.bulk {
 						s.retired = true
 						retire = append(retire, s)
+						m.tr.ev("retire light sub %d", s.idx)
 					}
 				}
 				m.setPrimaryLocked()
