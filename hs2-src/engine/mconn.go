@@ -330,7 +330,9 @@ type msub struct {
 	// under m.mu
 	q          []*mchunk
 	qBytes     int
-	cur        *mchunk // being written now
+	cur        *mchunk   // being written now
+	curMore    []*mchunk // HS2_MCONN_BATCH: the records written with cur in one batch
+	batch      []byte    // HS2_MCONN_BATCH: the batch buffer (writer only)
 	dead       bool
 	retired    bool // closed on purpose (a light sub after the switch)
 	closeAfter bool // close once the queue (an RST) is written
@@ -929,10 +931,14 @@ func (m *mConn) sendQueueLocked() int {
 
 // queueLocked: bytes waiting on s plus the record being written (under m.mu).
 func (s *msub) queueLocked() int {
+	n := s.qBytes
 	if c := s.cur; c != nil {
-		return s.qBytes + c.qsize()
+		n += c.qsize()
 	}
-	return s.qBytes
+	for _, c := range s.curMore {
+		n += c.qsize()
+	}
+	return n
 }
 
 // noteQueueLocked runs the queue rule of heavy detection (mHeavyQueue) at a
@@ -1133,13 +1139,19 @@ func (s *msub) writeLoop() {
 		s.q = s.q[1:]
 		s.qBytes -= c.qsize()
 		s.cur = c
+		wire := c.wire()
+		if mconnBatch.Load() && m.lite && len(s.q) > 0 {
+			wire = s.batchLocked(wire)
+		}
 		m.sendCond.Broadcast()
 		m.mu.Unlock()
 
-		_, err := s.rw.Write(c.wire())
+		_, err := s.rw.Write(wire)
 
 		m.mu.Lock()
 		s.cur = nil
+		more := s.curMore
+		s.curMore = nil
 		if s == m.primary.Load() {
 			m.pStuckSince = time.Time{} // a record got through: not stuck
 		}
@@ -1147,6 +1159,9 @@ func (s *msub) writeLoop() {
 		idle := len(s.q) == 0 && m.closing
 		m.mu.Unlock()
 		c.unref()
+		for _, x := range more {
+			x.unref()
+		}
 		if idle {
 			m.kickMgr()
 		}
@@ -1595,6 +1610,13 @@ func (m *mConn) subDied(s *msub, cause error) {
 	if c := s.cur; c != nil && c.seq() {
 		if c.copies--; c.copies <= 0 {
 			lost = true // the writer still owns its reference
+		}
+	}
+	for _, c := range s.curMore { // a batch in flight (HS2_MCONN_BATCH): the writer owns them too
+		if c.seq() {
+			if c.copies--; c.copies <= 0 {
+				lost = true
+			}
 		}
 	}
 	m.sendCond.Broadcast()

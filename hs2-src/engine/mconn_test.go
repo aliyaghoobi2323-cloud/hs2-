@@ -21,6 +21,7 @@ type tSub struct {
 	net.Conn
 	gate   atomic.Pointer[chan struct{}]
 	rate   atomic.Int64 // bytes/s this end's writes are held to (0: none)
+	turn   atomic.Int64 // ns every write waits first (a smux turn behind other streams)
 	wrote  atomic.Int64
 	raw    bool // the first sub of a raw pair (mconnRaw)
 	closed atomic.Bool
@@ -39,6 +40,9 @@ func (t *tSub) Write(p []byte) (int, error) {
 		case <-t.dead:
 			return 0, io.ErrClosedPipe
 		}
+	}
+	if d := t.turn.Load(); d > 0 {
+		time.Sleep(time.Duration(d))
 	}
 	if r := t.rate.Load(); r > 0 {
 		time.Sleep(time.Duration(int64(len(p)) * int64(time.Second) / r))
