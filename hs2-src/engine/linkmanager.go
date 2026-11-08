@@ -1700,7 +1700,7 @@ func (m *LinkManager) releaseFor(ml *managedLink) func() {
 func (m *LinkManager) pickLocked(limit int) *managedLink {
 	// HS2_LB_STEER: the path this connection should take (lb_auto2.go).
 	drawn := m.steerDrawLocked(false, func(ml *managedLink) bool {
-		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit)
+		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit) && !stripeOn(ml)
 	})
 	for tier := 0; tier < 3; tier++ {
 		var chosen *managedLink
@@ -1726,6 +1726,9 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
 			k.heavy = pickClass && (ml.heavy > 0 || stripeOn(ml))
 			k.path = m.steerRankLocked(ml, drawn)
+			if stripeOn(ml) {
+				k.path = stripeSteerRank // HS2_MCONN_STRIPE: after every path's other links
+			}
 			switch {
 			case chosen == nil || k.less(best):
 				chosen, best, ties = ml, k, 1

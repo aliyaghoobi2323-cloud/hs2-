@@ -18,6 +18,11 @@ import "time"
 //     has set aside and still wants (stripeExtra), up to max_links: the light
 //     users keep the pool they would have without the stripe.
 
+// stripeSteerRank: a stripe link's place for HS2_LB_STEER (pickKey.path):
+// after every path's other links, the cut and turned-off ones included —
+// the light-path preference never sends a user onto a stripe.
+const stripeSteerRank = 4
+
 const (
 	stripeWantFor = 10 * time.Second // a request lapses unless renewed
 	stripeResFor  = 10 * time.Second // a set-aside link nobody took goes back

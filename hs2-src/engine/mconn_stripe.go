@@ -188,8 +188,8 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	}
 	moved := max(sent-m.stSent, recvd-m.stRecvd)
 	m.stSample, m.stSent, m.stRecvd = now, sent, recvd
-	if m.stOpening || m.handshaking || m.lightOpening || now.Before(m.stRetryAt) {
-		return false
+	if m.stOpening || m.handshaking || m.lightOpening || now.Before(m.stRetryAt) || m.callOn || m.callUp {
+		return false // a call (HS2_MCONN_CALL) is copied, never striped
 	}
 	n := 1 + m.liveStripeLocked()
 	if n >= m.stK {

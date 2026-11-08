@@ -502,7 +502,7 @@ func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) 
 	pool := m.exitInfo.Load()
 	m.mu.Lock()
 	ml := m.pickPlaneTiers(p, avoid, pool, func(ml *managedLink) bool {
-		return ml.heavy == 0 && !ml.degraded && !ml.draining && !ml.suspect && linkCopies(ml.link) == 0
+		return ml.heavy == 0 && !stripeOn(ml) && !ml.degraded && !ml.draining && !ml.suspect && linkCopies(ml.link) == 0
 	})
 	if ml != nil {
 		callStat.avoided.Add(1)
