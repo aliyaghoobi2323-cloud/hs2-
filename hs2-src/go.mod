@@ -20,3 +20,8 @@ require (
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 )
+
+// smux v1.5.24 with one small hs2 addition (an adaptive per-stream receive
+// window, HS2_SMUX_AUTOWIN; see third_party/smux/autowin.go). With the switch
+// off it is the upstream code, the same bytes on the wire.
+replace github.com/xtaci/smux => ./third_party/smux
