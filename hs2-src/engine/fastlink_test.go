@@ -13,6 +13,35 @@ func withFastLink(t *testing.T, on bool) {
 	t.Cleanup(func() { fastLink = old })
 }
 
+// Each sub-key turns only its own part off.
+func TestFastLinkSubKeys(t *testing.T) {
+	withFastLink(t, true)
+	old := [3]bool{fastPauseOn, fastGateOn, fastInfoOn}
+	t.Cleanup(func() { fastPauseOn, fastGateOn, fastInfoOn = old[0], old[1], old[2] })
+	fastPauseOn, fastGateOn, fastInfoOn = false, true, true
+	b := slotBackoffMin
+	if d := slotRedialPause(time.Minute, &b); d == 0 {
+		t.Fatal("PAUSE=0: a stable link must wait as without the key")
+	}
+	if !fastGate() || !fastInfo() {
+		t.Fatal("PAUSE=0 turned another part off")
+	}
+	fastPauseOn, fastGateOn = true, false
+	for i := 0; i < 200; i++ {
+		if g := jitterGap(); g < 40*time.Millisecond {
+			t.Fatalf("GATE=0: gap %v, want the default 40–160 ms", g)
+		}
+	}
+	fastGateOn, fastInfoOn = true, false
+	m, _, _ := newV2Manager(nil, 1, 4, false)
+	m.gateInfo = true
+	addManaged(m, newMeteredFake())
+	m.exitInfo.Store(&peerInfo{V2: true})
+	if _, _, ok := m.Pick(); ok {
+		t.Fatal("INFO=0: a link with its own answer pending was picked")
+	}
+}
+
 // Off: the redial pause is the old one — a link that lived 30 s resets the
 // backoff to its floor and waits jitter(0.5 s); a shorter-lived one doubles it.
 func TestSlotRedialPauseDefault(t *testing.T) {

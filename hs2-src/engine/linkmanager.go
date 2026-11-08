@@ -406,7 +406,7 @@ func (m *LinkManager) now() time.Time {
 // detector, but not so long that the spread itself becomes anomalous versus a
 // real page load opening its parallel connections.
 func jitterGap() time.Duration {
-	if fastLink { // 20–80 ms (fastlink.go)
+	if fastGate() { // 20–80 ms (fastlink.go)
 		return 20*time.Millisecond + time.Duration(rand.IntN(60))*time.Millisecond
 	}
 	return 40*time.Millisecond + time.Duration(rand.IntN(120))*time.Millisecond

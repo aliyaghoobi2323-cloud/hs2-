@@ -45,6 +45,18 @@ import (
 // or without the key against any older peer.
 var fastLink = os.Getenv("HS2_FAST_LINK") == "1"
 
+// Sub-keys, for telling the three parts apart in the lab: with HS2_FAST_LINK=1,
+// HS2_FAST_LINK_PAUSE=0 / _GATE=0 / _INFO=0 turns that one part back off.
+var (
+	fastPauseOn = os.Getenv("HS2_FAST_LINK_PAUSE") != "0"
+	fastGateOn  = os.Getenv("HS2_FAST_LINK_GATE") != "0"
+	fastInfoOn  = os.Getenv("HS2_FAST_LINK_INFO") != "0"
+)
+
+func fastPause() bool { return fastLink && fastPauseOn }
+func fastGate() bool  { return fastLink && fastGateOn }
+func fastInfo() bool  { return fastLink && fastInfoOn }
+
 // fastStableAfter: with HS2_FAST_LINK, a link that lived this long is
 // redialed without a pause and resets its slot's backoff.
 const fastStableAfter = 5 * time.Second
@@ -52,11 +64,11 @@ const fastStableAfter = 5 * time.Second
 // slotRedialPause is how long an exit slot waits before it redials after its
 // link ended, having lived `lived`, and updates the slot's backoff.
 func slotRedialPause(lived time.Duration, backoff *time.Duration) time.Duration {
-	if fastLink && lived >= fastStableAfter {
+	if fastPause() && lived >= fastStableAfter {
 		*backoff = slotBackoffMin
 		return 0
 	}
-	if !fastLink && lived >= slotStableAfter {
+	if !fastPause() && lived >= slotStableAfter {
 		*backoff = slotBackoffMin
 	} else if *backoff < slotBackoffMax {
 		*backoff *= 2
@@ -70,5 +82,5 @@ func (m *LinkManager) infoReadyLocked(ml *managedLink) bool {
 	if !m.gateInfo || ml.mtr == nil || ml.mtr.infoDone.Load() {
 		return true
 	}
-	return fastLink && m.exitInfo.Load() != nil
+	return fastInfo() && m.exitInfo.Load() != nil
 }

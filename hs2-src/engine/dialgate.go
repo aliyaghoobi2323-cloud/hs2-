@@ -20,11 +20,11 @@ import (
 // ~10 a second), so 300 links come up in about half a minute, never as one
 // burst, and a dead peer costs a handful of attempts rather than hundreds.
 // HS2_FAST_LINK (fastlink.go) doubles both: 16 at a time, 20–80 ms apart.
-var gateInflight = pickInt(fastLink, 16, 8)
+var gateInflight = pickInt(fastGate(), 16, 8)
 
 // gatePerSec is the gate's nominal pace (jitterGap averages 100 ms, 50 ms
 // with HS2_FAST_LINK), for the words the logs use about it.
-var gatePerSec = pickInt(fastLink, 20, 10)
+var gatePerSec = pickInt(fastGate(), 20, 10)
 
 func pickInt(c bool, a, b int) int {
 	if c {
