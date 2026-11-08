@@ -330,6 +330,14 @@ func (m *mConn) rawTick() {
 		return
 	}
 	m.sendOff = uint64(m.rawSent.Load())
+	if m.stK > 0 && m.stripeTickLocked(now, m.sendOff, uint64(m.rawRecvd.Load())) {
+		// HS2_MCONN_STRIPE: the upgrade's new sub is the first stripe sub
+		m.lightOpening = true
+		avoid := append([]any{m.raw1.key}, m.deadKeys...)
+		m.mu.Unlock()
+		m.openStripe(avoid, true) // in the timer's own goroutine
+		return
+	}
 	if m.liteWantDualLocked(now, uint64(m.rawRecvd.Load())) {
 		switch {
 		case m.upgradeCappedLocked(now):
@@ -350,8 +358,12 @@ func (m *mConn) rawTick() {
 }
 
 // upgradeRaw (Iran): step 1.
-func (m *mConn) upgradeRaw(avoid []any) {
-	sub, key, err := m.open(planeLight, avoid)
+func (m *mConn) upgradeRaw(avoid []any) { m.upgradeRawPlane(planeLight, avoid) }
+
+// upgradeRawPlane: step 1 with a sub of plane p (planeStripe: the first
+// stripe sub, mconn_stripe.go).
+func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) {
+	sub, key, err := m.open(p, avoid)
 	if err != nil {
 		m.mu.Lock()
 		m.lightOpening = false
@@ -378,6 +390,9 @@ func (m *mConn) upgradeRaw(avoid []any) {
 	c := getChunk(mRecUpgrade)
 	c.setOff(bi)
 	s2.push(c)
+	if p == planeStripe {
+		m.stripeJoinLocked(s2) // STRIPE after UPGRADE
+	}
 	m.raw1.gated = true
 	m.handshaking = true
 	m.rawW.Store(false)

@@ -345,6 +345,7 @@ type msub struct {
 	closeHS    bool      // in the close handshake (mconn_closehs.go)
 	closeDone  bool      // the handshake is over (Iran: ACK read; Kharej: DONE read)
 	txEnd      uint64    // end offset of the last byte placed on it (CLOSE-ACK)
+	stripe     bool      // carries the stripe (HS2_MCONN_STRIPE, mconn_stripe.go)
 
 	kick      chan struct{}
 	done      chan struct{}
@@ -415,6 +416,7 @@ type mrecv struct {
 	readyBytes int
 	ooo        []rchunk // out-of-order, sorted by off, non-overlapping, all > next
 	oooBytes   int
+	oooMax     int // out-of-order bound (0: mRecvBuf; a stripe raises it, mconn_stripe.go)
 
 	fin    bool
 	finOff uint64
@@ -496,6 +498,8 @@ type mConn struct {
 
 	rawState  // lite with capMConnRaw: the first sub carries raw bytes until an upgrade
 	callState // HS2_MCONN_CALL (mconn_call.go)
+
+	stripeState // HS2_MCONN_STRIPE (mconn_stripe.go)
 
 	r mrecv
 
@@ -774,6 +778,15 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			}
 			m.sendCond.Wait()
 			continue
+		}
+		if m.stripeN() {
+			switch m.stripeSendLocked(c) {
+			case stripeSent:
+				return nil
+			case stripeWait:
+				m.sendCond.Wait()
+				continue
+			}
 		}
 		if m.dupOff {
 			// One copy when this direction is over mDupMaxRate, and always on
@@ -1336,6 +1349,8 @@ loop:
 				m.end(err, true)
 				break loop
 			}
+		case mRecStripe:
+			m.onStripe(s)
 		case mRecRst:
 			err = errMConnReset
 			m.end(err, false)
@@ -1405,7 +1420,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			m.noteSaved(s)
 			return
 		}
-		if r.oooBytes >= mRecvBuf {
+		if r.oooBytes >= max(r.oooMax, mRecvBuf) {
 			r.cond.Wait() // too far ahead of the gap: hold this sub
 			continue
 		}
@@ -1695,7 +1710,7 @@ func (m *mConn) subDied(s *msub, cause error) {
 		endErr = errMConnSubsDied
 	case m.mode == planeBulk:
 		// a light sub of a switched connection: nothing rides on it now
-	case lost || m.holeRecentLocked():
+	case lost || m.holeRecentLocked() && !m.stripeQuietLocked(s):
 		endErr, rst = errMConnLost, true
 	default:
 		if !m.peerFin && !m.closing {
@@ -1788,6 +1803,7 @@ func (m *mConn) end(err error, rst bool) {
 	r.mu.Unlock()
 	close(m.die)
 	m.rawEnded()
+	m.stripeEnded()
 	obs.mconnOpen.Add(-1)
 	if err != errMConnClosed && !finished {
 		obs.mconnFailed.Add(1)
@@ -1876,9 +1892,22 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				live = append(live, s)
 			}
 		}
+		if m.stK > 0 {
+			r := &m.r
+			r.mu.Lock()
+			recvd := r.next
+			r.mu.Unlock()
+			if m.stripeTickLocked(now, m.sendOff, recvd) {
+				go m.openStripe(m.stripeAvoidLocked(), false)
+			}
+			m.stripeIdleLocked()
+			if !m.peerFin && !m.wclosed {
+				at(mLitePoll)
+			}
+		}
 		switch {
 		case m.peerFin || m.wclosed:
-		case len(live) == 1 && !m.lightOpening:
+		case len(live) == 1 && !m.lightOpening && !m.stOpening:
 			r := &m.r
 			r.mu.Lock()
 			recvd := r.next

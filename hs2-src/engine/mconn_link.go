@@ -63,7 +63,7 @@ func init() {
 // its kindInfo bytes stay as before).
 func mconnCap() uint8 {
 	if mconnOn.Load() {
-		return capMConn | capMConnRaw
+		return capMConn | capMConnRaw | stripeCap()
 	}
 	return 0
 }
@@ -133,7 +133,7 @@ func MConnObserved() MConnSnap {
 }
 
 func mconnPlaneGauge(p mPlane) *atomic.Int64 {
-	if p == planeBulk {
+	if p != planeLight { // bulk, stripe
 		return &mconnStat.bulk
 	}
 	return &mconnStat.light
@@ -196,7 +196,7 @@ func (m *LinkManager) planeKeyLocked(p mPlane, ml *managedLink) planeKey {
 		// links without a download (300 light connections on 2–3 links in
 		// the lab: a game's p50 81 → 381 ms and up to 7 s, 10% less
 		// throughput).
-		k.pk.heavy = ml.heavy > 0
+		k.pk.heavy = ml.heavy > 0 || stripeOn(ml)
 	}
 	return k
 }
@@ -357,6 +357,9 @@ type mconnEdge struct {
 
 // open is the connection's mOpener.
 func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
+	if p == planeStripe {
+		return e.openStripe(avoid) // mconn_stripe.go
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	wait := mconnNextWait
@@ -463,6 +466,9 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 	}
 	obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
 	mc.tr.setPort(port)
+	if k := int(stripeK.Load()); k > 0 && mconnLite.Load() && lm.exitInfo.Load().mconnStripe() {
+		mc.setStripe(k) // HS2_MCONN_STRIPE (mconn_stripe.go)
+	}
 	mconnStat.total.Add(1)
 	mconnStat.open.Add(1)
 	defer mconnStat.open.Add(-1)

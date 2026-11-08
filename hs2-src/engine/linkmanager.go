@@ -1704,7 +1704,7 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 				}
 			}
 			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
-			k.heavy = pickClass && ml.heavy > 0
+			k.heavy = pickClass && (ml.heavy > 0 || stripeOn(ml))
 			k.path = m.steerRankLocked(ml, drawn)
 			switch {
 			case chosen == nil || k.less(best):
