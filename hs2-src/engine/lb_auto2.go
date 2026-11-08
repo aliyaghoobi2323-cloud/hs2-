@@ -294,17 +294,30 @@ func q2Goodness(q *q2Path) float64 {
 
 // targets sets every path's target factor and reason from the judged state.
 func (j *q2Judge) targets() {
+	// "All paths lossy" is relative like the cut: every path over lb2CutLoss
+	// AND over the bar the best path sets (2× its loss + 1 point), or cut
+	// while no path is better. One path clearly better than the rest (IPv6 at
+	// 2.3% beside IPv4 at 4.5–14%) is not "all lossy": it is preferred.
+	bestE := math.Inf(1)
+	for _, q := range j.p {
+		if q.have {
+			bestE = math.Min(bestE, q.ewma)
+		}
+	}
+	bar := math.Max(lb2CutLoss, 2*bestE+0.01)
 	gmax, nHave, nBad := 0.0, 0, 0
 	for _, q := range j.p {
 		if !q.have {
 			continue
 		}
 		nHave++
-		if q.cut || q.ewma > lb2CutLoss {
+		if q.ewma > lb2CutLoss && (q.cut || q.ewma > bar) {
 			nBad++
 			continue
 		}
-		gmax = math.Max(gmax, q2Goodness(q))
+		if !q.cut {
+			gmax = math.Max(gmax, q2Goodness(q))
+		}
 	}
 	j.allBad = nHave >= 1 && nBad == nHave
 	for _, q := range j.p {
@@ -656,7 +669,13 @@ type lbSteerState struct {
 	active                     bool      // ≥2 paths known and some weight under 1
 	rep                        *LBReport // the dialing side's latest report
 	repUsed                    time.Time
-	logs                       []string
+	// the fresh report by edge path key (steerTickLocked): effective share %,
+	// factor, cut, sender loss (fraction). Empty: no fresh report.
+	repShare  map[string]float64
+	repFactor map[string]float64
+	repCut    map[string]bool
+	repLoss   map[string]float64
+	logs      []string
 }
 
 func newSteerState() *lbSteerState {
@@ -801,17 +820,22 @@ func (m *LinkManager) steerTickLocked(now time.Time, dt time.Duration) {
 		}
 	}
 	st.judge.stepEdge()
+	// One source of truth: new connections follow the shares the dialing side
+	// reports (lbReportFresh); without a fresh report the usual spread.
 	st.active = false
-	if len(alive) >= 2 {
-		for _, q := range st.judge.p {
-			if q.factor < 0.999 {
-				st.active = true
+	st.repShare, st.repFactor, st.repCut, st.repLoss = map[string]float64{}, map[string]float64{}, map[string]bool{}, map[string]float64{}
+	if r := st.rep; r != nil && r.Auto && now.Sub(r.At) <= lbReportFresh && len(alive) >= 2 {
+		for _, p := range r.Paths {
+			if p.Local == "" {
+				continue
 			}
+			k := p.Remote + ">" + p.Local
+			st.repShare[k], st.repFactor[k], st.repCut[k], st.repLoss[k] = p.EffPct, p.Factor, p.Cut, p.LossPct/100
 		}
+		st.active = len(st.repShare) >= 2
 	}
 	for p, ls := range byPath {
-		q := st.judge.p[p]
-		cut := st.active && q != nil && q.cut
+		cut := st.active && st.repCut[p]
 		// The keepers: the lb2Keep serving links that take new connections on
 		// a cut path — those kept before first (stable), then the ones with
 		// the most users (they take longest to empty), then the oldest.
@@ -848,11 +872,17 @@ func (m *LinkManager) steerWeightLocked(ml *managedLink) float64 {
 	return 1
 }
 
-// steerDrawLocked draws the path a new connection should go to, in proportion
-// to weight × candidate links (light: among the best paths only); "" when
-// steering is off or not needed. cand says which links may take it.
+// steerDrawLocked draws the path a new connection should go to — in
+// proportion to the effective share the dialing side reports for it (one
+// source of truth: the edge does not judge the paths by itself), no path over
+// lb2ShareMax while another is mediocre at worst; light ones to the best
+// paths (report factor ≥ 0.9 of the best) unless that would put them all on
+// one path while a mediocre one exists. "" when steering is off (no fresh
+// report: the usual spread, by the links the configured shares made). cand
+// says which links may take it.
 func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) string {
-	if m.steer == nil || !m.steer.active {
+	st := m.steer
+	if st == nil || !st.active {
 		return ""
 	}
 	cnt := map[string]int{}
@@ -864,56 +894,68 @@ func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) 
 	if len(cnt) < 2 {
 		return ""
 	}
-	best := 0.0
-	for p := range cnt {
-		best = math.Max(best, m.steerFactor(p))
-	}
 	keys := make([]string, 0, len(cnt))
 	for p := range cnt {
 		keys = append(keys, p)
 	}
 	sort.Strings(keys)
-	tot := 0.0
-	ws := make([]float64, len(keys))
-	for i, p := range keys {
-		f := m.steerFactor(p)
-		if light && f < 0.9*best {
-			continue
-		}
-		ws[i] = f * float64(cnt[p])
+	best := 0.0
+	for _, p := range keys {
+		best = math.Max(best, m.steerFactor(p))
 	}
-	// No path over lb2ShareMax of the new connections while another is
-	// mediocre at worst (lb2Mediocre); light ones too: then the mediocre
-	// paths take the rest.
-	alt := m.steer.judge.mediocreAlt(keys, func(n string) bool {
-		q := m.steer.judge.p[n]
-		return q.factor >= 0.9*q.target
-	})
+	mean := 0.0
+	for _, v := range st.repShare {
+		mean += v
+	}
+	if len(st.repShare) > 0 {
+		mean /= float64(len(st.repShare))
+	}
+	ws := make([]float64, len(keys))
 	caps := make([]float64, len(keys))
+	mediocre := make([]bool, len(keys))
+	for i, p := range keys {
+		w, ok := st.repShare[p]
+		if !ok {
+			w = mean // not in the report yet (a path just added): an average path
+		}
+		ws[i] = math.Max(w, 0.01)
+		mediocre[i] = ok && !st.repCut[p] && st.repLoss[p] <= lb2Mediocre
+	}
 	for i := range keys {
 		caps[i] = 1
-		if alt[i] {
-			caps[i] = lb2ShareMax
+		for k := range keys {
+			if k != i && mediocre[k] {
+				caps[i] = lb2ShareMax
+				break
+			}
 		}
 	}
 	if light {
+		var lw []float64
 		n := 0
-		for _, w := range ws {
-			if w > 0 {
+		for i, p := range keys {
+			if m.steerFactor(p) >= 0.9*best {
+				lw = append(lw, ws[i])
 				n++
+			} else if mediocre[i] {
+				lw = append(lw, -ws[i]) // kept aside: used only if the best are one path
+			} else {
+				lw = append(lw, 0)
 			}
 		}
-		if n == 1 {
-			for i, p := range keys {
-				if ws[i] == 0 && alt[i] {
-					if q := m.steer.judge.p[p]; q != nil && q.have && !q.cut && q.ewma <= lb2Mediocre {
-						ws[i] = m.steerFactor(p) * float64(cnt[p])
-					}
+		for i := range lw {
+			if lw[i] < 0 {
+				if n == 1 {
+					lw[i] = -lw[i]
+				} else {
+					lw[i] = 0
 				}
 			}
 		}
+		ws = lw
 	}
 	ws = capWeights(ws, caps)
+	tot := 0.0
 	for _, w := range ws {
 		tot += w
 	}
@@ -930,9 +972,11 @@ func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) 
 	return keys[len(keys)-1]
 }
 
+// steerFactor is path p's quality factor as the dialing side reports it (1:
+// not reported, or no fresh report).
 func (m *LinkManager) steerFactor(p string) float64 {
-	if q := m.steer.judge.p[p]; q != nil {
-		return q.factor
+	if f, ok := m.steer.repFactor[p]; ok && m.steer.active {
+		return f
 	}
 	return 1
 }
@@ -967,11 +1011,12 @@ func (m *LinkManager) steerRows() (map[string]float64, map[string]string, []stri
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	f, r := map[string]float64{}, map[string]string{}
-	for p, q := range m.steer.judge.p {
-		f[p] = round2(q.factor)
-		r[p] = q.reason
+	for p := range m.steer.judge.p {
+		// called when there is no fresh report: no steering, shares as set
+		f[p] = 1
+		r[p] = "report stale"
 	}
-	return f, r, m.steer.judge.verdictList()
+	return f, r, nil
 }
 
 // SteerReport hands the edge the dialing side's latest report.

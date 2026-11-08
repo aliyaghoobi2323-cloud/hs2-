@@ -386,3 +386,102 @@ func TestKeepPathMin(t *testing.T) {
 		t.Fatalf("drop %v: a keeps 2, b keeps both", drop)
 	}
 }
+
+// Peak hour on the main tunnel: the six IPv4 Iran IPs at 4.5–14%, IPv6 at
+// 2.3%. The kharej cut the IPv4 paths while the edge, judging by itself, fell
+// back to "all paths lossy: shares as set" and sent 4% of the new
+// connections to IPv6. Now: not "all lossy" (IPv6 is clearly better), the
+// edge steers by the dialer's report (one source of truth), and IPv6 gets
+// more than its configured share but at most lb2ShareMax.
+func TestLB2PeakBothSidesAgree(t *testing.T) {
+	withAuto2(t)
+	kh := []string{"116.202.5.113", "91.107.167.67"}
+	iran := []string{"81.12.35.149", "37.32.47.180", "5.160.110.230", "5.57.38.162", "85.133.195.138", "85.133.250.165"}
+	loss := map[string]float64{"81.12.35.149": 0.14, "37.32.47.180": 0.12, "5.160.110.230": 0.10,
+		"5.57.38.162": 0.08, "85.133.195.138": 0.06, "85.133.250.165": 0.045}
+	var ps []LBPath
+	for _, ir := range iran {
+		for _, k := range kh {
+			ps = append(ps, LBPath{Local: k, Remote: ir, Addr: ir + ":2082", Weight: 50, Primary: len(ps) == 0})
+		}
+	}
+	v6 := LBPath{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2", Addr: "[x]:2082", Weight: 100}
+	ps = append(ps, v6)
+	b, _ := NewLB(ps, nil)
+	b.SetAuto(true)
+	b.SetSides("Kharej", "Iran")
+	now := time.Unix(1000, 0)
+	b.now = func() time.Time { return now }
+	for i := 0; i < 60; i++ {
+		now = now.Add(5 * time.Second)
+		rs := map[int]q2Reading{}
+		for j, p := range b.paths {
+			if p.Name() == v6.Name() {
+				rs[j] = q2Reading{loss: 0.023}
+			} else {
+				rs[j] = q2Reading{loss: loss[p.Remote]}
+			}
+		}
+		b.adapt2(rs)
+	}
+	cfgV6 := 100.0 / float64(12*50+100) * 100 // its configured share, %
+	sh := lbShares(b.paths, b.mult)
+	v6Share := sh[len(sh)-1]
+	for _, s := range b.Stats() {
+		if strings.HasPrefix(s.AutoReason, "all paths lossy") {
+			t.Fatalf("%s: %q — IPv6 at 2.3%% is clearly better", s.Path, s.AutoReason)
+		}
+	}
+	if v6Share <= cfgV6 || v6Share > 100*lb2ShareMax+0.5 {
+		t.Fatalf("kharej: IPv6 share %.1f%%, want over its configured %.1f%% and at most %.0f%%", v6Share, cfgV6, 100*lb2ShareMax)
+	}
+	seen := map[string]bool{}
+	for _, v := range b.Verdicts() {
+		if seen[v] || strings.HasPrefix(v, "Kharej IP") {
+			t.Fatalf("verdicts %q: duplicated or confounded", b.Verdicts())
+		}
+		seen[v] = true
+	}
+	// The edge: two links on every path, keyed as the edge sees them
+	// (Iran IP > kharej IP), the dialer's report fresh.
+	var keys []string
+	for _, p := range b.paths {
+		k := p.Remote + ">" + p.Local
+		keys = append(keys, k, k)
+	}
+	m, ls := pathLinks(keys...)
+	m.steer = newSteerState()
+	rep := b.report()
+	rep.At = time.Now()
+	m.SteerReport(rep)
+	m.mu.Lock()
+	m.steerTickLocked(time.Now(), 2*time.Second)
+	if !m.steer.active {
+		m.mu.Unlock()
+		t.Fatal("edge not steering with a fresh report")
+	}
+	cnt := map[string]int{}
+	const n = 20000
+	for i := 0; i < n; i++ {
+		cnt[m.steerDrawLocked(false, func(*managedLink) bool { return true })]++
+	}
+	m.mu.Unlock()
+	_ = ls
+	edgeV6 := 100 * float64(cnt[v6.Remote+">"+v6.Local]) / n
+	if math.Abs(edgeV6-v6Share) > 3 {
+		t.Fatalf("the sides disagree: kharej gives IPv6 %.1f%%, the edge sends it %.1f%% of new connections", v6Share, edgeV6)
+	}
+	t.Logf("IPv6: configured %.1f%%, kharej %.1f%%, edge new connections %.1f%%; verdicts %q", cfgV6, v6Share, edgeV6, b.Verdicts())
+	// Stale report: no steering (the configured spread), shown as such.
+	m.mu.Lock()
+	m.steer.rep.At = time.Now().Add(-time.Minute)
+	m.steerTickLocked(time.Now(), 2*time.Second)
+	active := m.steer.active
+	m.mu.Unlock()
+	if active {
+		t.Fatal("still steering by a stale report")
+	}
+	if _, r, _ := m.steerRows(); r[keys[0]] != "report stale" {
+		t.Fatalf("stale report shown as %q", r[keys[0]])
+	}
+}

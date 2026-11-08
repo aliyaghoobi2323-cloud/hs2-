@@ -430,4 +430,6 @@ func markLossSrc(rows []LBPathView, exit bool) {
 	}
 }
 
-const lbReportFresh = 60 * time.Second // a report older than this is not shown
+// lbReportFresh: a report older than this is stale — not shown, and the edge
+// stops steering by it (the usual spread: the configured shares).
+const lbReportFresh = 15 * time.Second

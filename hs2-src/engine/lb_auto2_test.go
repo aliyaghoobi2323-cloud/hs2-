@@ -96,7 +96,7 @@ func TestQ2AllBadKeepsShares(t *testing.T) {
 	now := time.Unix(1000, 0)
 	q2feed(j, &now, 4, map[string]float64{"k>a": 0.07, "k>b": 0.06})
 	for k, q := range j.p {
-		if q.target != 1 || !strings.HasPrefix(q.reason, "all paths lossy") {
+		if q.target != 1 { // 7% beside 6%: neither is clearly worse, the shares stay as set
 			t.Fatalf("%s: target %.2f reason %q", k, q.target, q.reason)
 		}
 	}
@@ -290,13 +290,8 @@ func TestSteerPicksAvoidCutPath(t *testing.T) {
 	m, ls := pathLinks("a>x", "a>x", "a>x", "a>x", "b>x", "b>x", "b>x", "b>x")
 	m.steer = newSteerState()
 	now := time.Unix(1000, 0)
-	m.mu.Lock()
-	q2feed(m.steer.judge, &now, 3, map[string]float64{"a>x": 0.003, "b>x": 0.07})
-	m.steer.judge.stepEdge()
-	m.mu.Unlock()
-	if !m.steer.judge.p["b>x"].cut {
-		t.Fatal("b not cut")
-	}
+	// The dialing side reports b cut (the edge steers by that report only).
+	edgeReport(m, map[string]repPath{"a>x": {95, 1, 0.003, false}, "b>x": {5, 0.1, 0.07, true}})
 	m.mu.Lock()
 	// a tick with no new readings: marks the keepers
 	m.steerTickLocked(now, 2*time.Second)
@@ -352,9 +347,12 @@ func TestSteerLightBestPath(t *testing.T) {
 		m, ls := pathLinks("a>x", "a>x", "b>x", "b>x")
 		m.steer = newSteerState()
 		now := time.Unix(1000, 0)
+		if lossB > lb2Mediocre {
+			edgeReport(m, map[string]repPath{"a>x": {95, 1, 0.003, false}, "b>x": {5, 0.1, lossB, true}})
+		} else {
+			edgeReport(m, map[string]repPath{"a>x": {75, 1, 0.003, false}, "b>x": {25, 0.33, lossB, false}})
+		}
 		m.mu.Lock()
-		q2feed(m.steer.judge, &now, 3, map[string]float64{"a>x": 0.003, "b>x": lossB})
-		m.steer.judge.stepEdge()
 		m.steerTickLocked(now, 2*time.Second)
 		m.mu.Unlock()
 		for i := 0; i < 400; i++ {
@@ -380,4 +378,25 @@ func TestSteerLightBestPath(t *testing.T) {
 	if a := pick(0.02); a < 160 || a > 240 {
 		t.Fatalf("b mediocre at 2%%: %d of 400 light subs on a, want about half (cap %.0f%%)", a, 100*lb2ShareMax)
 	}
+}
+
+// repPath is one path of a test report: effective share %, factor, sender
+// loss (fraction), cut.
+type repPath struct {
+	eff, factor, loss float64
+	cut               bool
+}
+
+// edgeReport hands the edge a dialing-side report (at time.Unix(1000, 0)) for
+// paths keyed as the edge sees them ("iran>kharej").
+func edgeReport(m *LinkManager, ps map[string]repPath) {
+	r := LBReport{Auto: true, Auto2: true}
+	for k, p := range ps {
+		ir, kh := pathIPs(k)
+		r.Paths = append(r.Paths, LBPeerPath{Local: kh, Remote: ir, EffPct: p.eff, Factor: p.factor, LossPct: 100 * p.loss, Cut: p.cut})
+	}
+	m.SteerReport(r)
+	m.mu.Lock()
+	m.steer.rep.At = time.Unix(1000, 0)
+	m.mu.Unlock()
 }
