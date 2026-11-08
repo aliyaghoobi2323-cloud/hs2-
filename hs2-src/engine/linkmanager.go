@@ -226,6 +226,8 @@ type LinkManager struct {
 	// mconn_stripe_pool.go). Under mu.
 	stripeWant      int
 	stripeWantUntil time.Time
+	stripeExtraHi   int       // the extra the target holds (stripeExtraHold)
+	stripeExtraAt   time.Time // ... since
 }
 
 // EnableSteer turns on the edge's path steering (HS2_LB_STEER; multipath LB
