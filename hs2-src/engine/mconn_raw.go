@@ -200,7 +200,19 @@ func (m *mConn) switchRead(lim uint64) {
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	m.mu.Lock()
-	m.rawR.Store(false)
+	if !m.rawR.Swap(false) {
+		// rawStop (Close) took the reader off raw first: Read goes on with
+		// reassembly; the sub is closed by Close/end as with any stop
+		m.mu.Unlock()
+		return
+	}
+	// The raw reader may reach the boundary on bytes that were already
+	// waiting, so its Read never timed out and the deadline set to wake it
+	// (setReadLimit) is still on the stream: the record reader would then
+	// fail the first time the stream has nothing buffered, and the sub
+	// would die (a reset connection). Every wake (interruptRead) is set
+	// under m.mu while rawR is true, so none can come after this.
+	m.clearReadDeadline()
 	start := !m.ended && !m.raw1.dead
 	m.mu.Unlock()
 	m.tr.ev("raw: reader switched at %d", lim)
@@ -218,26 +230,38 @@ func (m *mConn) rawStop() bool {
 	m.mu.Lock()
 	was := m.rawR.Swap(false)
 	ended := m.ended
-	m.mu.Unlock()
 	if was {
 		m.interruptRead()
-		if ended {
-			m.raw1.close()
-		}
+	}
+	m.mu.Unlock()
+	if was && ended {
+		m.raw1.close()
 	}
 	return was
 }
 
+// interruptRead wakes a blocked raw read (under m.mu, while rawR is true:
+// switchRead clears the deadline under m.mu after taking rawR down).
 func (m *mConn) interruptRead() {
 	if d, ok := m.raw1.rw.(readDeadliner); ok {
 		d.SetReadDeadline(time.Unix(1, 0))
 	}
 }
 
+func (m *mConn) clearReadDeadline() {
+	if d, ok := m.raw1.rw.(readDeadliner); ok {
+		d.SetReadDeadline(time.Time{})
+	}
+}
+
 // setReadLimit: the peer's raw bytes on the first sub end at off.
 func (m *mConn) setReadLimit(off uint64) {
+	m.mu.Lock()
 	m.rLimit.Store(int64(off))
-	m.interruptRead()
+	if m.rawR.Load() {
+		m.interruptRead()
+	}
+	m.mu.Unlock()
 }
 
 // rawClose (Close): raw both ways is closing the stream, as on the old path;
