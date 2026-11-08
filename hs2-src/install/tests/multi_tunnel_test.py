@@ -536,18 +536,32 @@ def scenarios(w):
     res("10 status shows every tunnel", all(u in out for u in w.units(ir)), out[-300:])
     res("10 status says which tunnels really reach the other server (dead ones NOT connected)", got == want,
         "got %s" % got)
-    for s in (ir, kh):
+    # After the tunnels are gone, uninstall asks whether to remove the hs2
+    # program and hs2-menu too: iran keeps them (Enter), kharej removes them (y).
+    for s, drop in ((ir, ""), (kh, "y")):
         units = w.units(s)
         cfgs = [w.cfg(s, u) for u in units]
+        binp = os.path.join(w.root(s), "usr/local/bin/hs2")
+        menup = os.path.join(w.root(s), "usr/local/bin/hs2-menu")
+        open(menup, "w").close()
         # wiping every tunnel needs the phrase typed, not a single 'y' (U14)
-        rc, out = w.run(s, "uninstall", [(r"Type REMOVE ALL to wipe every tunnel", "REMOVE ALL")], timeout=200)
-        left = sh("pgrep -af '%s'" % os.path.join(w.root(s), "usr/local/bin/hs2")).stdout.strip()
+        rc, out = w.run(s, "uninstall", [(r"Type REMOVE ALL to wipe every tunnel", "REMOVE ALL"),
+                                         (r"Also remove the hs2 program and the hs2-menu command\?[^\n]*\[y/N\]: ", drop)],
+                        timeout=200)
+        left = sh("pgrep -af '%s'" % binp).stdout.strip()
         ifs = [c["iface"] for c in cfgs if c and c.get("carrier") != "mtcp"]
         guards = sh("ip netns exec %s nft list tables 2>/dev/null | grep hs2_icmp" % NS[s]).stdout.strip()
         res("10 uninstall (%s): no icmp reply rule left in the kernel" % s, guards == "", guards)
         res("10 uninstall (%s): every tunnel removed, no process, no tun interface" % s,
             rc == 0 and w.units(s) == [] and not left and not any(w.iface_up(s, i) for i in ifs)
-            and not os.listdir(os.path.join(w.root(s), "etc/hs2")), (out[-300:] + " left=" + left))
+            and not os.listdir(os.path.join(w.root(s), "etc/hs2")),
+            "rc=%s left=%s\n%s" % (rc, left, out[-300:]))
+        if drop:
+            res("10 uninstall (%s): answered y → hs2 program and hs2-menu removed" % s,
+                not os.path.exists(binp) and not os.path.exists(menup) and "Removed " in out, out[-200:])
+        else:
+            res("10 uninstall (%s): Enter → hs2 program and hs2-menu kept for a later setup" % s,
+                os.path.exists(binp) and os.path.exists(menup) and "Kept " in out, out[-200:])
 
     # ---- 11. an older link without name/subnet -------------------------------
     raw = "1.2.3.4:2096|-|%s|127.0.0.1:8443|dgtun|false|tun|direct|1280|udp|" % ("ab" * 32)
@@ -585,7 +599,20 @@ def main():
     if os.geteuid() != 0 or shutil.which("ip") is None:
         print("SKIP multi-tunnel test (needs root and iproute2)")
         return 0
-    sb = tempfile.mkdtemp(prefix="hs2multi_")
+    # uninstall / restore / tuning write and wipe fixed host paths (/run/hs2
+    # status + warm files, /etc/sysctl.d/99-hs2.conf, /etc/modules-load.d) that
+    # are not under the sandbox root. Run in a private mount namespace with
+    # those as empty tmpfs, so a real hs2 on this host is never touched.
+    if os.environ.get("HS2_MT_PRIVATE") != "1":
+        if shutil.which("unshare") is None:
+            print("SKIP multi-tunnel test (needs unshare to keep /run/hs2 and /etc/sysctl.d private)")
+            return 0
+        mounts = "; ".join("mkdir -p %s && mount -t tmpfs tmpfs %s" % (d, d)
+                           for d in ("/run/hs2", "/etc/sysctl.d", "/etc/modules-load.d"))
+        return subprocess.run(["unshare", "-m", "--propagation", "private", "bash", "-c",
+                               mounts + ' && exec "$0" "$@"', sys.executable] + sys.argv,
+                              env=dict(os.environ, HS2_MT_PRIVATE="1")).returncode
+    sb =tempfile.mkdtemp(prefix="hs2multi_")
     panel = None
     try:
         hs2, probe = build(sb)
