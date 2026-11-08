@@ -43,6 +43,9 @@ type lbHooks struct {
 	// retire closes the link if it carries no user connection; it reports
 	// whether it did.
 	retire func() bool
+	// mtr (may be nil) is the link's meter: bytes and users for the per-path
+	// status view (lbview.go).
+	mtr *linkMeter
 }
 
 // lbQual is one path's latest quality reading.

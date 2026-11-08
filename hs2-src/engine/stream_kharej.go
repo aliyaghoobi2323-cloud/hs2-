@@ -124,11 +124,24 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		return runKharejReverse(ctx, cfg, l3, logf)
 	}
 	var links atomic.Int32
+	var view *pathView
+	if cfg.LB {
+		view = newPathView(true)
+	}
 	if cfg.OnStart != nil {
 		cfg.OnStart(func() PoolStats {
 			// the edge's ceiling and user ports as reported by the links up NOW
 			st := PoolStats{Links: int(links.Load()), Phase: "listening", PeerMax: cfg.peers.max(), Routes: cfg.peers.edgeRoutes()}
 			cfg.traffic.fill(&st) // this exit's own user connections and throughput
+			if view != nil {      // lb on: a row per address the edge reaches us on
+				ms := cfg.peers.meters()
+				var mine []LBAdvertIP
+				if cfg.Advert != nil {
+					mine = cfg.Advert.Mine()
+				}
+				st.Paths, st.PathTotal = view.build(listenDefs(mine, len(ms)), meterLinks(ms, func(m *linkMeter) string { return listenKey(m.path) }))
+				st.PathSide = "listen"
+			}
 			return st
 		})
 	}
@@ -144,7 +157,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 		}
 		bo.ok()
 		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
-			mtr := &linkMeter{} // download-side counters, reported over kindStats
+			mtr := &linkMeter{tcp: tcpConnOf(car)} // download-side counters, reported over kindStats
 			sess, why, err := newSession(car.RawConn(), true, nil, mtr)
 			if err != nil {
 				car.Close()

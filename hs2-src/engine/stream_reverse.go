@@ -150,7 +150,14 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	if cfg.OnStart != nil {
 		stats := pool.stats
 		if lb != nil {
-			stats = func() PoolStats { st := pool.stats(); st.LB = lb.Stats(); return st }
+			view := newPathView(true)
+			stats = func() PoolStats {
+				st := pool.stats()
+				st.LB = lb.Stats()
+				st.Paths, st.PathTotal = view.build(lb.viewDefs(), lb.viewLinks())
+				st.PathSide = "dial"
+				return st
+			}
 		}
 		cfg.OnStart(stats)
 	}
@@ -164,7 +171,7 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 // why it ended, in operator words (the first socket error if there was one).
 // pool (may be nil) lets the link's pool-control stream resize the exit pool.
 func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejConfig, l3 *l3Set, pool *exitPool) string {
-	mtr := &linkMeter{}                                         // download-side counters, reported over kindStats
+	mtr := &linkMeter{tcp: tcpConnOf(car)}                      // download-side counters, reported over kindStats
 	sess, why, err := newSession(car.RawConn(), true, nil, mtr) // smux server
 	if err != nil {
 		return "session setup failed: " + describeNetErr(err)
@@ -174,6 +181,7 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 	if cfg.RevLB != nil {
 		cfg.RevLB.attach(car, lbHooks{
 			stats: func() (tcpStat, bool) { return tcpStats(tcpConnOf(car)) },
+			mtr:   mtr,
 			retire: func() bool {
 				if !lbRetirable(mtr) {
 					return false

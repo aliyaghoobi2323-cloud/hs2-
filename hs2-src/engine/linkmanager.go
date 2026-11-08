@@ -2404,6 +2404,11 @@ type PoolStats struct {
 	Routes *PeerRoutes
 	// LB is each multipath path's state (nil = lb off; dialing side only).
 	LB []LBPathStat
+	// Paths is the per-path live view, on both sides (nil = lb off;
+	// lbview.go), PathTotal its totals row and PathSide "dial" or "listen".
+	Paths     []LBPathView
+	PathTotal *LBPathView
+	PathSide  string
 
 	// Datagram pools (dgtun): what this side's carriers see on what they SEND
 	// (the peer reports its loss) and what they receive.

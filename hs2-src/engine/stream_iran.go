@@ -175,7 +175,36 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	}
 	if cfg.OnStart != nil {
 		if lb := lbOf(cfg.Dialer); lb != nil && !reverse {
-			cfg.OnStart(func() PoolStats { st := lm.Stats(); st.LB = lb.Stats(); return st })
+			view := newPathView(false)
+			keyOf := func(ml *managedLink) string { return lb.pathOf(ml.link) }
+			cfg.OnStart(func() PoolStats {
+				st := lm.Stats()
+				st.LB = lb.Stats()
+				st.Paths, st.PathTotal = view.build(lb.viewDefs(), lm.viewLinks(keyOf))
+				st.PathSide = "dial"
+				return st
+			})
+		} else if reverse && cfg.LB {
+			// The reverse edge holds no balancer: a row per address it is
+			// reached on, its share from this side's announced list.
+			view := newPathView(false)
+			keyOf := func(ml *managedLink) string {
+				if ml.mtr == nil {
+					return ""
+				}
+				return listenKey(ml.mtr.path)
+			}
+			cfg.OnStart(func() PoolStats {
+				st := lm.Stats()
+				links := lm.viewLinks(keyOf)
+				var mine []LBAdvertIP
+				if cfg.Advert != nil {
+					mine = cfg.Advert.Mine()
+				}
+				st.Paths, st.PathTotal = view.build(listenDefs(mine, len(links)), links)
+				st.PathSide = "listen"
+				return st
+			})
 		} else {
 			cfg.OnStart(lm.Stats)
 		}

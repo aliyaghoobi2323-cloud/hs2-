@@ -99,6 +99,14 @@ type liveStatus struct {
 	// the same as one text line.
 	LB     []engine.LBPathStat `json:"lb,omitempty"`
 	LBText string              `json:"lb_text,omitempty"`
+	// The per-path live view, on both sides (engine lbview.go): a row per
+	// path (dialing side) or per address this side is reached on
+	// (listening side), its totals, which of the two this side is, and the
+	// lb mode (fixed | auto). Absent: lb off, or an older hs2.
+	LBPaths []engine.LBPathView `json:"lb_paths,omitempty"`
+	LBTotal *engine.LBPathView  `json:"lb_total,omitempty"`
+	LBSide  string              `json:"lb_side,omitempty"`
+	LBMode  string              `json:"lb_mode,omitempty"`
 	// Stage 6 (lbreload.go): where the paths' addresses come from, the last
 	// (re)load, and whether the other server reads announcements.
 	lbStatus
@@ -463,6 +471,10 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.LB, ls.LBText = s.LB, engine.LBLine(s.LB)
 		}
 		ls.lbStatus = lbStatusNow()
+		if len(s.Paths) > 0 {
+			ls.LBPaths, ls.LBTotal, ls.LBSide = s.Paths, s.PathTotal, s.PathSide
+			ls.LBMode = lbModeName(lbCur(fc))
+		}
 		if ls.CfgMax > 0 {
 			ls.PeerMax = s.PeerMax
 			ls.EffMax, ls.LimitBy = effectiveCeiling(fc.Mode == "dial", fc.Reverse, ls.CfgMax, ls.PeerMax)
@@ -655,7 +667,15 @@ func printStatus(path string) {
 	if ls.Refill != "" {
 		fmt.Printf("  refill:     %s\n", ls.Refill)
 	}
-	if ls.LBText != "" {
+	if pl := lbPathLines(ls); len(pl) > 0 {
+		for i, l := range pl {
+			if i == 0 {
+				fmt.Printf("  paths:      %s\n", l)
+			} else {
+				fmt.Printf("              %s\n", l)
+			}
+		}
+	} else if ls.LBText != "" {
 		fmt.Printf("  paths:      %s\n", ls.LBText)
 	}
 	if t := lbStatusLine(ls.lbStatus); t != "" {

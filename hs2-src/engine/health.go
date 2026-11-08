@@ -123,7 +123,10 @@ const (
 type linkMeter struct {
 	// path is the link's path key (connPathKey: "local>remote" IPs), set
 	// once in newSession before the link is used (HS2_DUP_PATHS).
-	path    string
+	path string
+	// tcp is the link's kernel socket on the exit (set before it is shared;
+	// nil elsewhere): the per-path status view reads its TCP_INFO (lbview.go).
+	tcp     *net.TCPConn
 	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
 	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
 	stalls  atomic.Uint64 // write errors / timeouts
