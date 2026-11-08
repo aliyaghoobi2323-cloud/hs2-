@@ -7,6 +7,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -139,6 +140,11 @@ type LB struct {
 	drainFloor int
 	drainAt    time.Time
 	judgeAt    time.Time // the last fast-auto reading
+	// spare (lb_spare.go): the pool's spare-dial request (nil: none); spareLog
+	// the last such line (unix ns).
+	spare       func(n int)
+	spareLog    atomic.Int64
+	spareGapLog atomic.Int64
 	// peerState reports what the peer's live links say about capLB: known is
 	// false while no live link carries a kindInfo answer (nil = always ok).
 	peerState func() (known, has bool)
@@ -387,6 +393,9 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 		b.upAt = b.now()
 	}
 	if link != nil {
+		if b.auto2On() && b.links[i] == 1 { // the path's first link (a new path, or one that emptied)
+			b.log("lb: path %s — its first link is up", p.Name())
+		}
 		b.held[link] = i
 	}
 }

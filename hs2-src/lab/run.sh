@@ -154,6 +154,14 @@ if [ "$PATHS" -ge 2 ]; then
   [ "$LB_INIT" = one ] && LL='[{"ip":"'$LIP1'","weight":100}]'
   KHL='[{"ip":"192.168.50.2","weight":100}]'
   [ "${LB_V6:-0}" = 1 ] && KHL='[{"ip":"192.168.50.2","weight":50},{"ip":"fd00:51::2","weight":50}]'
+  # LB_V6_LATE=SEC (with LB_V6=1): the IPv6 pair is not in either side's lb
+  # list at the start; SEC seconds into the probe both sides get it (Iran
+  # first, then kharej, each with SIGHUP) — a path added at runtime.
+  if [ -n "${LB_V6_LATE:-}" ] && [ "${LB_V6:-0}" = 1 ]; then
+    LL_FULL=$LL; KHL_FULL=$KHL
+    LL=$(python3 -c 'import json,sys; l=[e for e in json.loads(sys.argv[1]) if ":" not in e["ip"]]; n=len(l); [e.update(weight=100//n + (1 if i < 100%n else 0)) for i,e in enumerate(l)]; print(json.dumps(l))' "$LL")
+    KHL='[{"ip":"192.168.50.2","weight":100}]'
+  fi
   if [ "$LB_DIRECT" = 1 ]; then
     LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","kharej":'$LL',"iran":[{"ip":"192.168.50.1","weight":100}]},'
     KHAREJ_EXTRA="$LBJ$KHAREJ_EXTRA"
@@ -254,6 +262,23 @@ fi
 # K (0 = a, 1 = b, ...) changes its random loss to LOSS each way ("-" = back to
 # LOSS / its netem flags). LB_SAMPLE=1: once a second, both sides' per-path
 # status as one JSON line in $W/lbsamp.jsonl (LOGDIR: RUNTAG-lbsamp.jsonl).
+if [ -n "${LB_V6_LATE:-}" ] && [ "${LB_V6:-0}" = 1 ] && [ -n "${LL_FULL:-}" ]; then
+  (t0=$(date +%s)
+   while [ $(( $(date +%s) - t0 )) -lt "$LB_V6_LATE" ]; do sleep 0.2; done
+   python3 - "$W/ir.json" iran "$LL_FULL" <<'PY'
+import json, sys
+f, side, l = sys.argv[1:]
+c = json.load(open(f)); c['lb'][side] = json.loads(l); json.dump(c, open(f, 'w'))
+PY
+   kill -HUP "$IRPID"; sleep 2
+   python3 - "$W/kh.json" kharej "$KHL_FULL" <<'PY'
+import json, sys
+f, side, l = sys.argv[1:]
+c = json.load(open(f)); c['lb'][side] = json.loads(l); json.dump(c, open(f, 'w'))
+PY
+   kill -HUP "$KHPID"; echo "$LB_V6_LATE v6-added" >> "$W/lbevents.txt") &
+  echo $! >> "$W/pids"
+fi
 if [ -n "${LOSS_EVENTS:-}" ] && [ "$PATHS" -ge 2 ]; then
   (t0=$(date +%s)
    for ev in $LOSS_EVENTS; do

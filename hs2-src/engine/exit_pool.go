@@ -114,6 +114,9 @@ type exitPool struct {
 type exitSlot struct {
 	id     int
 	cancel context.CancelFunc
+	// spare: started beyond the target for the balancer (addSpares) and not
+	// dialed yet: it does not retire for being over the target. Under p.mu.
+	spare bool
 }
 
 // newExitPool builds a pool but starts no slots; the caller sets p.serve and
@@ -190,7 +193,7 @@ func (p *exitPool) setTarget(n int) {
 func (p *exitPool) retireIfOver(s *exitSlot) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if len(p.slots) <= p.want {
+	if len(p.slots) <= p.want || s.spare {
 		return false
 	}
 	for i, x := range p.slots {
@@ -356,6 +359,9 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 		}
 		car, err := dial()
 		release()
+		p.mu.Lock()
+		s.spare = false // dialed once: an ordinary slot from now on
+		p.mu.Unlock()
 		if err != nil {
 			wait := p.dialFailed(s, err, &backoff)
 			if !sleepCtx(ctx, wait) {
@@ -577,4 +583,27 @@ func servePoolCtl(ctx context.Context, st io.ReadWriteCloser, pool *exitPool) {
 		}
 		pool.setTarget(int(binary.BigEndian.Uint16(buf)))
 	}
+}
+
+// addSpares makes sure n spare slots are pending: started beyond the edge's
+// target for the balancer (lb_spare.go), each dialing once on the path the
+// balancer places it on. At most lb2SpareMax slots over the target, none
+// during an outage. It returns how many it started.
+func (p *exitPool) addSpares(n int) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	pending := 0
+	for _, s := range p.slots {
+		if s.spare {
+			pending++
+		}
+	}
+	started := 0
+	for pending < n && len(p.slots) < p.want+lb2SpareMax && !p.outage && p.want > 0 {
+		p.startSlotLocked()
+		p.slots[len(p.slots)-1].spare = true
+		pending++
+		started++
+	}
+	return started
 }

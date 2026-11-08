@@ -629,6 +629,9 @@ func (b *LB) rebalance2() int {
 		b.mu.Unlock()
 		b.log("lb auto2: rebalance — retired %d idle link(s) on %s so their replacements go to the paths under their share", n, strings.Join(names, ", "))
 	}
+	if n == 0 {
+		b.spareForGap(now)
+	}
 	return n
 }
 

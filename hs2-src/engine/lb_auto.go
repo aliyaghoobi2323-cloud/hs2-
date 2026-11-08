@@ -137,6 +137,7 @@ func (b *LB) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-q.C:
+			b.fillMin() // HS2_LB_AUTO2: every live path two links (lb_spare.go)
 			if b.isAuto() {
 				if rs := b.measure(qe); b.isAuto2() {
 					b.adapt2(rs)

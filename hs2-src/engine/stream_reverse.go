@@ -130,6 +130,7 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	}
 	pool := newExitPool(ctx, min, max, dial, logf)
 	if lb != nil {
+		lb.setSpare(func(n int) { pool.addSpares(n) }) // HS2_LB_AUTO2 spare dials (lb_spare.go)
 		go lb.Run(ctx)
 	}
 	if lb != nil && cfg.Advert != nil { // the path report after each advert answer (lb_report.go)
