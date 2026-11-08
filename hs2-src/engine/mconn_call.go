@@ -2,6 +2,7 @@ package engine
 
 import (
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"sync/atomic"
@@ -89,6 +90,12 @@ type callState struct {
 	txRecvd  uint64 // receive offset at the window start
 
 	callPairAt int // paired copies: the next chunk's first sub (HS2_MCONN_CALL_SUBS)
+
+	// HS2_MCONN_CALL_PICK: the subs' link scores, read at scoreAt
+	scoreAt  time.Time
+	scoreN   int
+	scoreSub [mCallSubsMax + 2]*msub
+	score    [mCallSubsMax + 2]int64
 }
 
 // callBud: the process's call copies (dup) and the call bytes sent while
@@ -303,10 +310,14 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 	}
 	var pick [2]*msub
 	k := 0
-	for i := 0; i < n && k < 2; i++ {
-		if s := live[(m.callPairAt+i)%n]; s.fits(c.n) {
-			pick[k] = s
-			k++
+	if mconnCallPick {
+		pick, k = m.callPickLocked(live[:n], n, c.n)
+	} else {
+		for i := 0; i < n && k < 2; i++ {
+			if s := live[(m.callPairAt+i)%n]; s.fits(c.n) {
+				pick[k] = s
+				k++
+			}
 		}
 	}
 	if k == 0 {
@@ -358,13 +369,85 @@ func (m *mConn) callMoreSubsLocked(live []*msub) time.Duration {
 	return 200 * time.Millisecond
 }
 
-// openExitSub registers an exit sub on its link: a join sub with the key on
-// carries copies (the edge marks its end copyOnly), so it is not one of the
-// link's heavy streams — a call copied onto a light link must not make that
-// link look like a download's to the TUN lane and the FEC (HS2_L3_FEC).
-func openExitSub(t *exitTraffic, mtr *linkMeter, role byte) *exitConn {
-	if role == mconnRoleJoin && mconnCall.Load() {
-		return t.add(&exitConn{lastActive: time.Now(), mtr: mtr, sub: true, copyOnly: true})
+// ---- picking the two subs (HS2_MCONN_CALL_PICK=1) -------------------------
+//
+// With three subs or more, each chunk goes on the two whose links are best
+// placed right now, by their sockets' TCP_INFO (read at most every
+// mCallPickEvery per connection): not in loss recovery first, then the
+// fewest bytes held unsent; ties in turn. A link that is repairing a loss
+// holds back everything written after the hole, so a copy put there now
+// arrives an RTT late; the other copies avoid it.
+
+var mconnCallPick = os.Getenv("HS2_MCONN_CALL_PICK") == "1"
+
+const (
+	mCallStalled   = 1 << 40
+	mCallPickEvery = 5 * time.Millisecond
+)
+
+// subTCP: the kernel socket of the link s rides (nil: unknown).
+func subTCP(s *msub) *net.TCPConn {
+	switch r := s.rw.(type) {
+	case *mconnSub:
+		if cs, ok := r.stream.(*countedStream); ok && cs.link != nil {
+			return tcpConnOf(cs.link.tls)
+		}
+	case exitCountedStream:
+		if r.c != nil && r.c.mtr != nil {
+			return r.c.mtr.tcp
+		}
 	}
-	return t.openSub(mtr)
+	return nil
+}
+
+// callScoresLocked refreshes the scores of live (in that order).
+func (m *mConn) callScoresLocked(live []*msub) {
+	now := time.Now()
+	same := len(live) == m.scoreN
+	for i := 0; same && i < len(live); i++ {
+		same = m.scoreSub[i] == live[i]
+	}
+	if same && now.Sub(m.scoreAt) < mCallPickEvery {
+		return
+	}
+	m.scoreAt, m.scoreN = now, len(live)
+	for i, s := range live {
+		m.scoreSub[i] = s
+		m.score[i] = 0
+		if tc := subTCP(s); tc != nil {
+			if v, ok := tcpBusy(tc); ok {
+				m.score[i] = v
+			}
+		}
+	}
+}
+
+// callPickLocked chooses up to two fitting subs of live by score (ties from
+// start, in turn).
+func (m *mConn) callPickLocked(live []*msub, n, size int) ([2]*msub, int) {
+	m.callScoresLocked(live)
+	var pick [2]*msub
+	var ps [2]int64
+	k := 0
+	for j := 0; j < n; j++ {
+		i := (m.callPairAt + j) % n
+		s := live[i]
+		if !s.fits(size) {
+			continue
+		}
+		v := m.score[i]
+		switch {
+		case k < 2:
+			pick[k], ps[k] = s, v
+			k++
+		case v < ps[1]:
+			pick[1], ps[1] = s, v
+		default:
+			continue
+		}
+		if k == 2 && ps[1] < ps[0] {
+			pick[0], pick[1], ps[0], ps[1] = pick[1], pick[0], ps[1], ps[0]
+		}
+	}
+	return pick, k
 }

@@ -654,7 +654,7 @@ func serveMConnSub(ctx context.Context, st *smux.Stream, cfg KharejConfig, mtr *
 // attachExitSub hands a sub to its connection, counted on its link (heavy
 // streams) until it or the connection ends.
 func attachExitSub(st *smux.Stream, mc *mConn, role byte, traffic *exitTraffic, mtr *linkMeter) {
-	c := openExitSub(traffic, mtr, role) // HS2_MCONN_CALL: copies are not heavy (mconn_call.go)
+	c := traffic.openSub(mtr)
 	mconnStat.exitSubs.Add(1)
 	go func() {
 		select {

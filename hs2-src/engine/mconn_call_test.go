@@ -275,30 +275,37 @@ func TestMConnCallOneWayStaysSingle(t *testing.T) {
 	noLeak(t, before)
 }
 
-// On the exit, a join sub carrying a call's copies at a download's rate is
-// not a heavy stream of its link with the key on; a first sub still is, and
-// with the key off a join sub is too (as before).
-func TestMConnCallExitCopyNotHeavy(t *testing.T) {
-	run := func(key string, role byte) int32 {
-		setCall(t, key)
-		tr := newExitTraffic(nil)
-		var mtr linkMeter
-		c := openExitSub(tr, &mtr, role)
-		now := time.Now()
-		for i := 1; i <= 6; i++ { // 2 s ticks at 500 KB/s
-			c.bytes.Add(1 << 20)
-			tr.sample(now.Add(time.Duration(i) * healthTick))
+
+// HS2_MCONN_CALL_PICK: the two subs whose links are not repairing a loss
+// and hold the least unsent come first; ties go in turn.
+func TestMConnCallPickScores(t *testing.T) {
+	m := newMConn(1, true, nil)
+	m.lite = true
+	defer m.end(errMConnClosed, false)
+	var live []*msub
+	for i := 0; i < 4; i++ {
+		live = append(live, &msub{m: m, idx: i})
+	}
+	set := func(sc ...int64) {
+		m.scoreAt, m.scoreN = time.Now(), len(live)
+		for i := range live {
+			m.scoreSub[i], m.score[i] = live[i], sc[i]
 		}
-		tr.done(c)
-		return mtr.heavyN.Load()
 	}
-	if n := run("1", mconnRoleJoin); n != 0 {
-		t.Fatalf("key on: a copy sub counted heavy (%d)", n)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	set(mCallStalled, 500, mCallStalled+10, 0)
+	if p, k := m.callPickLocked(live, 4, 1000); k != 2 || p[0] != live[3] || p[1] != live[1] {
+		t.Fatalf("picked %v/%v, want subs 3 and 1", p[0].idx, p[1].idx)
 	}
-	if n := run("1", mconnRoleFirst); n != 1 {
-		t.Fatalf("key on: a first sub not counted heavy (%d)", n)
+	set(0, 0, 0, 0)
+	m.callPairAt = 2
+	if p, k := m.callPickLocked(live, 4, 1000); k != 2 || p[0] != live[2] || p[1] != live[3] {
+		t.Fatalf("ties: picked %v/%v, want 2 and 3", p[0].idx, p[1].idx)
 	}
-	if n := run("", mconnRoleJoin); n != 1 {
-		t.Fatalf("key off: a join sub not counted heavy (%d)", n)
+	live[3].qBytes = mSubQueueLite // full
+	set(mCallStalled, mCallStalled, mCallStalled, 0)
+	if p, k := m.callPickLocked(live, 4, 1000); k != 2 || p[0] == live[3] || p[1] == live[3] {
+		t.Fatal("picked a full sub")
 	}
 }

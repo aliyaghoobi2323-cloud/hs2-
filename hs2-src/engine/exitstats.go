@@ -26,10 +26,6 @@ type exitConn struct {
 	// toward its link's heavy streams only; the connection itself is counted
 	// once, by its own exitConn (no link).
 	sub bool
-	// copyOnly: a join sub of a lite connection with HS2_MCONN_CALL on
-	// (mconn_call.go): it carries copies, as the edge's copyOnly streams do,
-	// and is not counted as a heavy stream of its link.
-	copyOnly bool
 
 	// sampler-only
 	prev       uint64
@@ -153,7 +149,7 @@ func (t *exitTraffic) sample(now time.Time) {
 			}
 		}
 		// the edge's rule (mtcpLink.flowStats), per link, for the TUN lane
-		if c.mtr != nil && !c.copyOnly && float64(c.ewma) >= heavyRate && now.Sub(c.lastActive) <= flowRecent {
+		if c.mtr != nil && float64(c.ewma) >= heavyRate && now.Sub(c.lastActive) <= flowRecent {
 			t.heavy[c.mtr]++
 		}
 	}
