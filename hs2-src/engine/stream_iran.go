@@ -125,6 +125,15 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		// remote% is that address's share of the links, whatever the exit's
 		// sources), keyed by the address a link arrived on.
 		lm.shrinkShares = func(ms []*managedLink) ([]string, map[string]int) {
+			// HS2_LB_AUTO2: the shares the dialing side uses now (its report),
+			// not the configured ones — with lossy addresses cut, the good
+			// ones are over their configured share on purpose, and keeping
+			// to it here retired exactly the links the exit had moved there.
+			if lbAuto2 {
+				if rep, ok := cfg.Advert.PeerReport(); ok && time.Since(rep.At) <= lbReportFresh && rep.Auto {
+					return revShrinkKeys(ms, reportShares(rep))
+				}
+			}
 			return revShrinkKeys(ms, cfg.Advert.Mine())
 		}
 	}

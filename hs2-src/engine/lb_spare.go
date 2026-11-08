@@ -136,3 +136,68 @@ func (b *LB) spareForGap(now time.Time) bool {
 	}
 	return true
 }
+
+// arrivalWantedLocked (reverse edge, HS2_LB_AUTO2): a link that arrives while
+// the pool has its target is born retiring — except one the balancer dialed
+// as a spare for a path under its share: its path has fewer than lb2Keep
+// serving links, or its address is under its share (the dialing side's, from
+// its report — shrinkShares). It then serves, and the pool, over its target,
+// retires a link from the path most over its share instead (reconcile), once
+// that one is empty. Without this the spare was closed and its path stayed
+// empty. Caller holds m.mu.
+func (m *LinkManager) arrivalWantedLocked(ml *managedLink) bool {
+	path := mlPath(ml)
+	if !lbAuto2 || m.shrinkShares == nil || path == "" {
+		return false
+	}
+	var ms []*managedLink
+	np := 0
+	for _, x := range m.links {
+		if x.serving() {
+			ms = append(ms, x)
+			if mlPath(x) == path {
+				np++
+			}
+		}
+	}
+	if np < lb2Keep {
+		return true
+	}
+	ms = append(ms, ml)
+	keys, w := m.shrinkShares(ms)
+	k := keys[len(keys)-1]
+	W := 0
+	for _, x := range w {
+		if x > 0 {
+			W += x
+		}
+	}
+	if k == "" || W == 0 || w[k] <= 0 {
+		return false
+	}
+	c := 0
+	for _, kk := range keys {
+		if kk == k {
+			c++
+		}
+	}
+	return float64(c) <= float64(len(ms))*float64(w[k])/float64(W)+0.5
+}
+
+// reportShares is the dialing side's effective share of each of this side's
+// addresses (its paths summed by remote IP), as weights for revShrinkKeys.
+func reportShares(rep LBReport) []LBAdvertIP {
+	sum := map[string]float64{}
+	var order []string
+	for _, p := range rep.Paths {
+		if _, ok := sum[p.Remote]; !ok {
+			order = append(order, p.Remote)
+		}
+		sum[p.Remote] += p.EffPct
+	}
+	out := make([]LBAdvertIP, 0, len(order))
+	for _, ip := range order {
+		out = append(out, LBAdvertIP{IP: ip, Weight: int(sum[ip]*10 + 0.5)})
+	}
+	return out
+}

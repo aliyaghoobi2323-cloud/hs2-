@@ -174,3 +174,33 @@ func spareWait(t *testing.T, ok func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// The reverse edge keeps a spare the balancer dialed for a path short of two
+// links, or for an address under its share, instead of closing it as surplus.
+func TestEdgeKeepsWantedArrival(t *testing.T) {
+	withAuto2(t)
+	m, _ := pathLinks("a>x", "a>x", "a>x", "a>x", "b>x", "a>x", "b>x")
+	m.shrinkShares = func(ms []*managedLink) ([]string, map[string]int) {
+		return revShrinkKeys(ms, reportShares(LBReport{Auto: true, Paths: []LBPeerPath{
+			{Local: "x", Remote: "a", EffPct: 50}, {Local: "x", Remote: "b", EffPct: 50}}}))
+	}
+	all := m.links
+	m.links = all[:4] // 4 on a, none on b
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.arrivalWantedLocked(all[4]) {
+		t.Fatal("a link for an empty path was not wanted")
+	}
+	if m.arrivalWantedLocked(all[5]) {
+		t.Fatal("a fifth link on a path over its share was wanted")
+	}
+	m.links = append(all[:4:4], all[4]) // a:4, b:1 — b's second link
+	if !m.arrivalWantedLocked(all[6]) {
+		t.Fatal("b's second link was not wanted")
+	}
+	// Key off: never (born spare as before).
+	lbAuto2 = false
+	if m.arrivalWantedLocked(all[6]) {
+		t.Fatal("wanted with the key off")
+	}
+}

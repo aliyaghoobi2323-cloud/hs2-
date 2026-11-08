@@ -444,7 +444,7 @@ func (m *LinkManager) AddLink(l Link, from string) int {
 	m.linkSeq++
 	ml := m.newManaged(l, id, now)
 	m.noteArrivalLocked(now)
-	if S, _ := m.countsLocked(); S >= int(m.target.Load()) {
+	if S, _ := m.countsLocked(); S >= int(m.target.Load()) && !m.arrivalWantedLocked(ml) {
 		ml.retiring, ml.retireSince, ml.bornSpare = true, now, true
 	}
 	spare := ml.retiring
