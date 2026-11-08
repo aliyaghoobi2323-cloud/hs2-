@@ -34,10 +34,10 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"io"
 	"math/rand/v2"
 	"net"
+	"os"
 	"sync"
 	"time"
 )
