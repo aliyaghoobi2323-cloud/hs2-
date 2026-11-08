@@ -472,6 +472,9 @@ func stripeHold(ml *managedLink, d int) {
 	if stripeHeld.n[ml] += d; stripeHeld.n[ml] <= 0 {
 		delete(stripeHeld.n, ml)
 	}
+	if ml.mtr != nil {
+		ml.mtr.stripeN.Add(int32(d)) // the TUN lane leaves the link at once (l3_lane.go)
+	}
 	stripeHeld.mu.Unlock()
 }
 

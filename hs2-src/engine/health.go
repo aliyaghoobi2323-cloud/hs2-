@@ -156,8 +156,9 @@ type linkMeter struct {
 	// (exit, HS2_MCONN_STRIPE, mconn_stripe_scav.go).
 	stQUs atomic.Int64
 	stQAt atomic.Int64
-	// stripeN: stripe subs riding this link (exit, HS2_MCONN_STRIPE): the
-	// TUN lane counts the link heavy while there is one, used or not.
+	// stripeN: stripe subs riding this link (exit) or holds on it (Iran),
+	// HS2_MCONN_STRIPE: the TUN lane counts the link heavy while there is
+	// one, used or not, and leaves it at once.
 	stripeN atomic.Int32
 
 	// Exit-side download stats (edge only; see stats.go). statsPoll carries the

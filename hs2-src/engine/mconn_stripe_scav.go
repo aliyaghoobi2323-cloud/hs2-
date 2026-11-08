@@ -30,9 +30,13 @@ import (
 //     signal (~1 ms) let the raw path's p95 reach +11 ms.
 //   - width (LEDBAT-like): the number of stripe subs the sender may put
 //     chunks on besides the primary. Above stripeQTarget it halves at once
-//     (at most once per stripeQEvery); under half the target it grows by one
-//     sub every stripeQGrow (500 ms). Width 0 is the connection without the stripe
-//     (everything on the primary, as lite's one-copy state).
+//     (at most once per stripeQEvery) and no stripe of the process grows for
+//     stripeCutHold; under half the target it grows by one sub, and the whole
+//     process by one sub every stripeQGrow (stripeGlobal). Width 0 is the
+//     connection without the stripe (everything on the primary, as lite's
+//     one-copy state). The target (3 ms) holds the others' queue near the
+//     no-stripe level (busy lab: median 1.2 ms, p95 1.6 ms); 5 ms doubled
+//     the busy download but put the TUN ping's p90 7 ms up.
 //   - the Iran side needs no change: a sub the sender stops using carries no
 //     rate, so Iran's growth rule (rate per sub) stops opening more, and
 //     lite's idle rule closes the cold ones, which frees their links.
@@ -45,7 +49,7 @@ var stripeAlone = os.Getenv("HS2_MCONN_STRIPE_ALONE") != "0"
 // second per connection, the sender's width (diagnostics).
 var stripeLog = os.Getenv("HS2_MCONN_STRIPE_LOG") == "1"
 
-// stripeQTarget: HS2_MCONN_STRIPE_QMS (ms, default 5; 0: no gate). The busy
+// stripeQTarget: HS2_MCONN_STRIPE_QMS (ms, default 3; 0: no gate). The busy
 // lab without a stripe: the median 1.2 ms, its p95 1.6 ms.
 var stripeQTarget atomic.Int64
 
@@ -55,7 +59,7 @@ const (
 )
 
 func init() {
-	ms := 5.0
+	ms := 3.0
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_QMS")), 64); err == nil && v >= 0 {
 		ms = v
 	}
@@ -126,7 +130,8 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 			m.tr.ev("stripe: queue %v > %v, width -> %d", q, target, m.stW)
 		}
 		m.stGrowAt = now
-	case q < target/2 && now.Sub(m.stGrowAt) >= stripeQGrow && m.stW < live:
+		stripeCut(now)
+	case q < target/2 && now.Sub(m.stGrowAt) >= stripeQGrow && m.stW < live && stripeGrowToken(now):
 		m.stW++
 		m.stGrowAt = now
 	}
@@ -136,6 +141,40 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 		log.Printf("stripe gate %x: q=%v w=%d live=%d", m.id&0xffffff, q.Round(100*time.Microsecond), m.stW, live)
 	}
 	return m.stW
+}
+
+// stripeGlobal: the growth of every stripe of the process together. Each
+// connection's own controller would add a sub every stripeQGrow, so N
+// stripes (a busy server: several long downloads) grew N times as fast and
+// overshot the path's room before the queue showed; and after one queue,
+// another stripe's growth refilled it. So: one sub more per stripeQGrow for
+// the whole process, none for stripeCutHold after any cut.
+var stripeGlobal struct {
+	mu            sync.Mutex
+	growAt, cutAt time.Time
+}
+
+// stripeCutHold: no stripe grows for this long after a queue.
+const stripeCutHold = 2 * time.Second
+
+// stripeGrowToken: whether a stripe may take one more sub now (and takes it).
+func stripeGrowToken(now time.Time) bool {
+	g := &stripeGlobal
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if now.Sub(g.cutAt) < stripeCutHold || now.Sub(g.growAt) < stripeQGrow {
+		return false
+	}
+	g.growAt = now
+	return true
+}
+
+// stripeCut notes a queue: no stripe grows for stripeCutHold.
+func stripeCut(now time.Time) {
+	g := &stripeGlobal
+	g.mu.Lock()
+	g.cutAt = now
+	g.mu.Unlock()
 }
 
 // diagnostics (HS2_MCONN_STRIPE_LOG=1): where light placements land.
@@ -206,8 +245,12 @@ func stripeTrack(mtr *linkMeter) func() {
 }
 
 // stripeBusyBytes: a link that had this much acknowledged since the last
-// look counts (an idle link's smoothed RTT is stale).
-const stripeBusyBytes = 8 << 10
+// look (stripeQEvery: ~5 Mbit/s) counts — a download's link. An idle link's
+// smoothed RTT is stale, and a call's or a game's (a few hundred kbit/s to
+// 2 Mbit/s) sits 1-2 ms over its lowest with no queue on the path at all
+// (delayed ACKs): counted, it held a stripe alone on the path at 80 Mbit/s
+// with a 2 ms target.
+const stripeBusyBytes = 64 << 10
 
 // delay: the median queueing delay of the busy links not in own, measured
 // at most every stripeQEvery (callers share the measurement); 0 when no

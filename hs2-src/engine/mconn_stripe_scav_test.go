@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,11 +16,20 @@ func fixPathQ(t *testing.T, q time.Duration) {
 	p.mu.Lock()
 	p.fixed, p.q = true, q
 	p.mu.Unlock()
+	resetStripeGlobal()
+	t.Cleanup(resetStripeGlobal)
 	t.Cleanup(func() {
 		p.mu.Lock()
 		p.fixed, p.q = false, 0
 		p.mu.Unlock()
 	})
+}
+
+func resetStripeGlobal() {
+	g := &stripeGlobal
+	g.mu.Lock()
+	g.growAt, g.cutAt = time.Time{}, time.Time{}
+	g.mu.Unlock()
 }
 
 func setPathQ(q time.Duration) {
@@ -75,6 +85,30 @@ func TestStripeGateWidth(t *testing.T) {
 	now = now.Add(5 * stripeQGrow)
 	if w := m.stripeWidthLocked(p, now); w != 1 {
 		t.Fatalf("width %d in the hold band, want 1", w)
+	}
+	// after a cut no stripe of the process grows for stripeCutHold, and the
+	// process grows by one sub per stripeQGrow however many stripes there are
+	setPathQ(12 * time.Millisecond)
+	now = now.Add(stripeQEvery)
+	m.stripeWidthLocked(p, now) // 1 -> 0
+	setPathQ(time.Millisecond)
+	m2, p2 := gateConn(6)
+	m2.stripeWidthLocked(p2, now)
+	for i := 0; i < int(stripeCutHold/stripeQGrow)-1; i++ {
+		now = now.Add(stripeQGrow)
+		m.stripeWidthLocked(p, now)
+		m2.stripeWidthLocked(p2, now)
+	}
+	if m.stW != 0 || m2.stW != 0 {
+		t.Fatalf("widths %d %d inside the hold after a cut, want 0 0", m.stW, m2.stW)
+	}
+	for i := 0; i < 4; i++ {
+		now = now.Add(stripeQGrow)
+		m.stripeWidthLocked(p, now)
+		m2.stripeWidthLocked(p2, now)
+	}
+	if m.stW+m2.stW != 4 {
+		t.Fatalf("widths %d+%d after 4 growth steps, want 4 in all", m.stW, m2.stW)
 	}
 	// the rank: only the first w stripe subs (in join order) may take chunks
 	if r := m.stripeRankLocked(m.subs[1], p); r != 0 {
@@ -278,5 +312,34 @@ func TestStripePathQOthers(t *testing.T) {
 	}
 	if _, ok := (&stripeQ{links: map[*linkMeter]*stripeLinkQ{}}).delay(time.Now(), nil); ok {
 		t.Fatal("measured with no link tracked")
+	}
+}
+
+// The TUN lane leaves a link a stripe takes at once, even inside
+// l3LaneMoveGap (a stripe fills the link); a download alone still waits.
+func TestL3LaneLeavesStripeLinkAtOnce(t *testing.T) {
+	a, b := laneLink(1, 0), laneLink(2, 0)
+	a.stripe, b.stripe = new(atomic.Int32), new(atomic.Int32)
+	var clock int64 = 1
+	s := laneSet(&clock, a)
+	p := flowPreferring(t, []*l3Link{a, b}, b)
+	if s.pick(p) != a {
+		t.Fatal("first pick not on the only link")
+	}
+	s.add(b)
+	// b turns heavy and the flow moves there (a is light again later)
+	clock += int64(10 * time.Second)
+	a.heavy.Store(1)
+	if s.pick(p) != b {
+		t.Fatal("did not leave a heavy link")
+	}
+	a.heavy.Store(0)
+	b.heavy.Store(1) // a download: stays inside the gap
+	if s.pick(p) != b {
+		t.Fatal("left a download's link inside the gap")
+	}
+	b.stripe.Store(1) // a stripe: leaves now
+	if s.pick(p) != a {
+		t.Fatal("stayed on a stripe link inside the gap")
 	}
 }

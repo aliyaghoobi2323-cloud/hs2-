@@ -572,6 +572,7 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 	}
 	pl := newStreamL3LinkQ(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)), quietOf(linkMeterOf(l)))
 	pl.heavy = heavyOf(linkMeterOf(l))
+	pl.stripe = stripeNOf(linkMeterOf(l)) // HS2_MCONN_STRIPE (l3_lane.go)
 	pl.dupOK = peerL3Dup(linkMeterOf(l))
 	if mtr := linkMeterOf(l); mtr != nil {
 		pl.path = mtr.path

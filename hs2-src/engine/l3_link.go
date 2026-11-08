@@ -101,6 +101,10 @@ type l3Link struct {
 	// at a download's rate, as its sampler last stored it (linkMeter.heavyN);
 	// the lane (HS2_L3_LANE) keeps interactive flows off links where it is > 0.
 	heavy *atomic.Int32
+	// stripe (nil: unknown) counts the stripe subs (exit) or stripe holds
+	// (Iran) on the link (linkMeter.stripeN, HS2_MCONN_STRIPE): the lane
+	// moves an interactive flow off such a link at once.
+	stripe *atomic.Int32
 	// dupOK (nil: no) reports whether the other server reads TypeDataDup
 	// frames (capL3Dup); HS2_L3_DUP sends them only over such links.
 	dupOK func() bool

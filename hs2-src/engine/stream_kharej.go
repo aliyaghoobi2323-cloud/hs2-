@@ -299,6 +299,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 		}
 		pl := newStreamL3LinkQ(st, peerL3Quiet(mtr), sessReadsOf(mtr), quietOf(mtr))
 		pl.heavy = heavyOf(mtr)
+		pl.stripe = stripeNOf(mtr) // HS2_MCONN_STRIPE (l3_lane.go)
 		pl.dupOK = peerL3Dup(mtr)
 		if mtr != nil {
 			pl.path = mtr.path

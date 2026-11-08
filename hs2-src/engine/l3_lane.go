@@ -104,6 +104,18 @@ func heavyOf(m *linkMeter) *atomic.Int32 {
 	return &m.heavyN
 }
 
+// stripeNOf is a link meter's stripe count for an l3Link (nil: no meter).
+func stripeNOf(m *linkMeter) *atomic.Int32 {
+	if m == nil {
+		return nil
+	}
+	return &m.stripeN
+}
+
+// onStripe: a stripe sub rides the link, or it is held for one
+// (HS2_MCONN_STRIPE; never with the key off).
+func (l *l3Link) onStripe() bool { return l.stripe != nil && l.stripe.Load() > 0 }
+
 // isHeavy: the link's sampler counted a download on it at its last tick.
 func (l *l3Link) isHeavy() bool { return l.heavy != nil && l.heavy.Load() > 0 }
 
@@ -145,7 +157,9 @@ func (ln *l3Lane) pick(links []*l3Link, pkt []byte, h uint32) (*l3Link, bool) {
 	}
 	cur := e.link
 	now := ln.now()
-	if cur != nil && cur.Alive() && (!cur.isHeavy() || now-e.moved < int64(l3LaneMoveGap)) {
+	// a stripe link (HS2_MCONN_STRIPE) is left at once: it is a download
+	// spread to fill the link, taken while the flow was there
+	if cur != nil && cur.Alive() && (!cur.isHeavy() || now-e.moved < int64(l3LaneMoveGap) && !cur.onStripe()) {
 		return cur, true
 	}
 	best := rendezvous(links, h, true)
