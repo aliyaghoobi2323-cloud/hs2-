@@ -87,6 +87,12 @@ type sessGuard struct {
 	// squeezed counts the relays ended for memory pressure, not a full
 	// bucket (for the log line).
 	squeezed atomic.Int64
+
+	// The post-release watch (wedge_watch.go): the link's kernel socket (nil:
+	// none), its number on the edge + 1 (0: unknown), and whether a watch runs.
+	tcp      *net.TCPConn
+	linkID   atomic.Int32
+	watching atomic.Bool
 }
 
 // relayWatch is one relay's local-write state as the guard sees it.
@@ -177,6 +183,9 @@ func (g *sessGuard) lookAt(now time.Time) (killed int, wedgedEmpty bool) {
 	}
 	for _, rw := range stuck {
 		go rw.kill() // a close can block briefly; never stall the guard
+	}
+	if len(stuck) > 0 {
+		g.noteRelease() // counts it and watches the link (wedge_watch.go)
 	}
 	return len(stuck), len(stuck) == 0
 }

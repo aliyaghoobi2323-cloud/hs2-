@@ -133,6 +133,12 @@ var obs struct {
 	// lossMargin of the judged links' median), and degraded links refused a
 	// second probation by HS2_PROBATION_ONCE.
 	lossRelKept, probationOnceDenied atomic.Uint64
+
+	// Wedge guard (wedge.go, wedge_watch.go): releases of a link's stalled
+	// relays, those after which nothing arrived from the other side for
+	// releaseStallMin or more, and the longest such wait (ms).
+	wedgeReleases, postReleaseStall atomic.Uint64
+	postReleaseStallMaxMs           atomic.Int64
 }
 
 // noteShapeWrite records one shapedConn.Write: its records, data and padding.
@@ -190,6 +196,8 @@ type ObsSnap struct {
 	MConnLiteOpen, MConnLiteDual               int64 // levels
 	MConnLiteUpgrade, MConnLiteCapped          uint64
 	LossRelKept, ProbationOnceDenied           uint64
+	WedgeReleases, PostReleaseStall            uint64
+	PostReleaseStallMaxMs                      int64 // a maximum, not a count (Sub keeps the newer)
 }
 
 // Observed returns the counters now.
@@ -213,6 +221,8 @@ func Observed() ObsSnap {
 		MConnLiteOpen: obs.mconnLiteOpen.Load(), MConnLiteDual: obs.mconnLiteDual.Load(),
 		MConnLiteUpgrade: obs.mconnLiteUpgrade.Load(), MConnLiteCapped: obs.mconnLiteCapped.Load(),
 		LossRelKept: obs.lossRelKept.Load(), ProbationOnceDenied: obs.probationOnceDenied.Load(),
+		WedgeReleases: obs.wedgeReleases.Load(), PostReleaseStall: obs.postReleaseStall.Load(),
+		PostReleaseStallMaxMs: obs.postReleaseStallMaxMs.Load(),
 	}
 }
 
@@ -237,5 +247,7 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 		MConnLiteOpen: s.MConnLiteOpen, MConnLiteDual: s.MConnLiteDual,
 		MConnLiteUpgrade: s.MConnLiteUpgrade - old.MConnLiteUpgrade, MConnLiteCapped: s.MConnLiteCapped - old.MConnLiteCapped,
 		LossRelKept: s.LossRelKept - old.LossRelKept, ProbationOnceDenied: s.ProbationOnceDenied - old.ProbationOnceDenied,
+		WedgeReleases: s.WedgeReleases - old.WedgeReleases, PostReleaseStall: s.PostReleaseStall - old.PostReleaseStall,
+		PostReleaseStallMaxMs: s.PostReleaseStallMaxMs,
 	}
 }

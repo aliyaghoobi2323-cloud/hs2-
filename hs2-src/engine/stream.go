@@ -223,7 +223,7 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 	if q != nil {
 		go q.watch(sess, w)
 	}
-	g := &sessGuard{w: w}
+	g := &sessGuard{w: w, tcp: tcpOfConn(conn)}
 	g.sess.Store(sess)
 	if meter != nil {
 		meter.guard = g

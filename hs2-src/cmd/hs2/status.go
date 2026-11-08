@@ -264,6 +264,11 @@ type liveStatus struct {
 	// HS2_PROBATION_ONCE.
 	ObsLossRelKept         uint64 `json:"obs_loss_rel_kept,omitempty"`
 	ObsProbationOnceDenied uint64 `json:"obs_probation_once_denied,omitempty"`
+	// Since start: the wedge guard's releases of a link's stalled relays, those
+	// after which the link received nothing for >= 1 s, and the longest wait.
+	ObsWedgeReleases         uint64 `json:"obs_wedge_releases,omitempty"`
+	ObsPostReleaseStall      uint64 `json:"obs_post_release_stall,omitempty"`
+	ObsPostReleaseStallMaxMs int64  `json:"obs_post_release_stall_max_ms,omitempty"`
 }
 
 // fillMConn copies the multi-link connection counters (HS2_MCONN).
@@ -316,6 +321,7 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsMConnLiteUpgrade, ls.ObsMConnLiteCapped = d.MConnLiteUpgrade, d.MConnLiteCapped
 	ls.MConnDupBytes = now.MConnDupBytes
 	ls.ObsLossRelKept, ls.ObsProbationOnceDenied = now.LossRelKept, now.ProbationOnceDenied
+	ls.ObsWedgeReleases, ls.ObsPostReleaseStall, ls.ObsPostReleaseStallMaxMs = now.WedgeReleases, now.PostReleaseStall, now.PostReleaseStallMaxMs
 }
 
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
@@ -335,6 +341,9 @@ func obsLines(ls liveStatus) []string {
 	}
 	if ls.ObsLossRelKept > 0 || ls.ObsProbationOnceDenied > 0 {
 		out = append(out, fmt.Sprintf("link health, since start: %d loss verdict(s) withheld near the path's median (HS2_LOSS_RELATIVE) · %d second probation(s) refused (HS2_PROBATION_ONCE)", ls.ObsLossRelKept, ls.ObsProbationOnceDenied))
+	}
+	if ls.ObsWedgeReleases > 0 || ls.ObsPostReleaseStall > 0 {
+		out = append(out, fmt.Sprintf("wedge guard, since start: %d release(s) of a link's stalled relays · %d followed by >= 1 s with nothing received on the link (longest %d ms)", ls.ObsWedgeReleases, ls.ObsPostReleaseStall, ls.ObsPostReleaseStallMaxMs))
 	}
 	if ls.ObsL3DupSent > 0 || ls.ObsL3DupDropped > 0 {
 		out = append(out, fmt.Sprintf("tun dup (HS2_L3_DUP), last minute: %d packet(s) sent over two links · %d second copies dropped · %d saved by the second link (it came first)", ls.ObsL3DupSent, ls.ObsL3DupDropped, ls.ObsL3DupSaved))

@@ -355,7 +355,9 @@ const suspectAfter = 12 * time.Second
 
 // newManaged wraps a Link with a managed entry, capturing its meter (if any).
 func (m *LinkManager) newManaged(l Link, id int, now time.Time) *managedLink {
-	ml := &managedLink{link: l, id: id, born: now, servingSince: now, mtr: linkMeterOf(l)}
+	mtr := linkMeterOf(l)
+	setGuardLinkID(mtr, id) // names the link in the post-release stall line
+	ml := &managedLink{link: l, id: id, born: now, servingSince: now, mtr: mtr}
 	m.stripeAdoptLocked(ml, now) // HS2_MCONN_STRIPE (mconn_stripe_pool.go); nothing when off
 	return ml
 }

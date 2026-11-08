@@ -264,6 +264,11 @@ type tcpStat struct {
 	// the queue controller's view of the path (queuectl.go).
 	rttUs, minRttUs uint32
 	bytesAcked      uint64
+	// For the post-release watch (wedge_watch.go): bytes received from the
+	// peer, the retransmission backoff and congestion state, and the rto (µs).
+	bytesRcvd        uint64
+	backoff, caState uint8
+	rtoUs            uint32
 }
 
 // metered is implemented by a link that carries a linkMeter and can read its

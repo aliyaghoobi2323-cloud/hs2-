@@ -42,6 +42,10 @@ func tcpStats(tc *net.TCPConn) (tcpStat, bool) {
 			rttUs:        info.Rtt,
 			minRttUs:     info.Min_rtt,
 			bytesAcked:   info.Bytes_acked,
+			bytesRcvd:    info.Bytes_received,
+			backoff:      info.Backoff,
+			caState:      info.Ca_state,
+			rtoUs:        info.Rto,
 		}
 		ok = true
 	})
