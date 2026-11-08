@@ -91,6 +91,7 @@ func (cfg KharejConfig) info(myMax int) peerInfo {
 	if t.Default != "" {
 		pi.Flags |= flagDefault
 	}
+	pi.Flags |= closeHSFlag()
 	return pi
 }
 

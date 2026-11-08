@@ -308,12 +308,15 @@ func (m *LinkManager) pickPlaneTiers(p mPlane, avoid []any, pool *peerInfo, ok f
 type mconnSub struct {
 	stream
 	raw     bool // a raw first sub (mconnRoleFirstRaw)
+	closeHS bool // its exit reads CLOSE-REQ (flagMConnCloseHS, mconn_closehs.go)
 	plane   mPlane
 	once    sync.Once
 	release func()
 }
 
 func (s *mconnSub) mconnRaw() bool { return s.raw }
+
+func (s *mconnSub) mconnCloseHS() bool { return s.closeHS }
 
 // SetReadDeadline wakes a blocked raw read (mconn_raw.go). Only a raw first
 // sub uses it, and only on a stream that has it (rawCapable).
@@ -390,7 +393,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 					}
 				}
 				e.first = true
-				s := &mconnSub{stream: st, plane: p, release: rel, raw: role == mconnRoleFirstRaw}
+				s := &mconnSub{stream: st, plane: p, release: rel, raw: role == mconnRoleFirstRaw, closeHS: peerCloseHS(l)}
 				mconnPlaneGauge(p).Add(1)
 				e.subs = append(e.subs, s)
 				return s, l, nil

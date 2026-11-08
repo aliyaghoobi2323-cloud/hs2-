@@ -35,6 +35,9 @@ import (
 //	RST      0x05     abort the connection
 //	UPGRADE  0x06 | off u64   raw first sub: my raw bytes on it end at off (mconn_raw.go)
 //	UPACK    0x07     raw first sub: Iran knows the peer's boundary
+//	CLOSE-REQ  0x0a             lite: Iran wants to close this idle sub (mconn_closehs.go)
+//	CLOSE-ACK  0x0b | end u64   Kharej: my bytes on this sub end at end; nothing more on it
+//	CLOSE-DONE 0x0c             Iran: all read, the sub closes
 //
 // There is no retransmission layer: a byte lives on as long as one live sub
 // still holds (or has written) a copy. When a sub dies holding the only copy
@@ -311,7 +314,7 @@ func (c *mchunk) wire() []byte {
 	switch c.kind {
 	case mRecData:
 		return c.buf[:mDataHdr+c.n]
-	case mRecFin, mRecUpgrade:
+	case mRecFin, mRecUpgrade, mRecCloseAck:
 		return c.buf[:mFinLen]
 	}
 	return c.buf[:1]
@@ -339,13 +342,17 @@ type msub struct {
 	lastHole   time.Time
 	lastPush   time.Time // lite: when a chunk was last queued on it (idle rule)
 	gated      bool      // raw upgrade: queue but do not write yet (mconn_raw.go)
+	closeHS    bool      // in the close handshake (mconn_closehs.go)
+	closeDone  bool      // the handshake is over (Iran: ACK read; Kharej: DONE read)
+	txEnd      uint64    // end offset of the last byte placed on it (CLOSE-ACK)
 
 	kick      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
 	onClose   func() // after close (Kharej's raw first sub: its link counters)
 
-	hdr [mDataHdr]byte // reader only
+	hdr   [mDataHdr]byte // reader only
+	rxEnd uint64         // reader (then under m.mu): end offset of the last byte read on it
 }
 
 func (s *msub) close() {
@@ -363,6 +370,9 @@ func (s *msub) push(c *mchunk) {
 	c.refs.Add(1)
 	if c.seq() {
 		c.copies++
+		if e := c.off + uint64(c.n); e > s.txEnd {
+			s.txEnd = e
+		}
 	}
 	s.q = append(s.q, c)
 	s.qBytes += c.qsize()
@@ -1236,6 +1246,14 @@ func (m *mConn) switchLocked(b *msub) {
 
 // ---- receive side ----
 
+// noteRx (reader): bytes up to end were read on s (CLOSE-ACK's check is made
+// by the same reader).
+func (s *msub) noteRx(end uint64) {
+	if end > s.rxEnd {
+		s.rxEnd = end
+	}
+}
+
 func (s *msub) readLoop() {
 	m := s.m
 	var err error
@@ -1262,11 +1280,13 @@ loop:
 				putChunk(c)
 				break loop
 			}
+			s.noteRx(off + uint64(n))
 			m.deliver(s, off, c, n)
 		case mRecFin:
 			if _, err = io.ReadFull(s.rw, s.hdr[1:mFinLen]); err != nil {
 				break loop
 			}
+			s.noteRx(binary.BigEndian.Uint64(s.hdr[1:9]))
 			m.recvFin(binary.BigEndian.Uint64(s.hdr[1:9]))
 		case mRecBulk:
 			m.onBulk(s)
@@ -1283,6 +1303,27 @@ loop:
 			}
 		case mRecUpAck:
 			m.onUpAck()
+		case mRecCloseReq:
+			if !m.onCloseReq(s) {
+				err = errMConnProto
+				m.end(err, true)
+				break loop
+			}
+		case mRecCloseAck:
+			if _, err = io.ReadFull(s.rw, s.hdr[1:mFinLen]); err != nil {
+				break loop
+			}
+			if !m.onCloseAck(s, binary.BigEndian.Uint64(s.hdr[1:9])) {
+				err = errMConnProto
+				m.end(err, true)
+				break loop
+			}
+		case mRecCloseDone:
+			if !m.onCloseDone(s) {
+				err = errMConnProto
+				m.end(err, true)
+				break loop
+			}
 		case mRecRst:
 			err = errMConnReset
 			m.end(err, false)
@@ -1621,7 +1662,7 @@ func (m *mConn) subDied(s *msub, cause error) {
 	}
 	m.sendCond.Broadcast()
 	m.tr.ev("sub- %d cause=%v retired=%v bulk=%v lost=%v subs=%d", s.idx, cause, s.retired, s.bulk.Load(), lost, len(m.subs))
-	if m.ended || s.retired {
+	if m.ended || m.closedCleanLocked(s) {
 		m.mu.Unlock()
 		return
 	}
@@ -1638,7 +1679,7 @@ func (m *mConn) subDied(s *msub, cause error) {
 	switch {
 	case m.mode == planeBulk && s == m.bulk:
 		endErr, rst = errMConnBulkDied, true
-	case len(m.subs) == 0:
+	case len(m.subs) == 0 || m.onlyClosingLocked():
 		endErr = errMConnSubsDied
 	case m.mode == planeBulk:
 		// a light sub of a switched connection: nothing rides on it now
@@ -1849,6 +1890,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			at(mLitePoll)
 		case len(live) >= 2:
 			p := m.primary.Load()
+			hs := false
 			for _, s := range live {
 				if s == p || len(s.q) > 0 || s.cur != nil {
 					continue
@@ -1865,6 +1907,11 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					last = r
 				}
 				if idle := now.Sub(last); idle >= mLiteIdle {
+					if mconnCloseHS.Load() && subCloseHS(s.rw) {
+						m.closeReqLocked(s) // closed once the peer's CLOSE-ACK is read
+						hs = true
+						continue
+					}
 					s.retired = true
 					retire = append(retire, s)
 					m.tr.ev("lite: close idle second sub %d (idle %v)", s.idx, idle.Round(time.Second))
@@ -1872,7 +1919,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					at(mLiteIdle - idle)
 				}
 			}
-			if len(retire) > 0 {
+			if len(retire) > 0 || hs {
 				m.setPrimaryLocked()
 				m.refreshLiteDualLocked()
 			}
