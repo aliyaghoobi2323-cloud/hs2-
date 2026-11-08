@@ -62,10 +62,19 @@ func (l *l3Link) canDup() bool { return l.dupOK != nil && l.dupOK() }
 // dupSecond is the second link for flow hash h after first: the best
 // rendezvous link other than first whose peer reads TypeDataDup, carrying no
 // download if there is one; nil if there is no other such live link. With
-// HS2_DUP_PATHS on, a link on another path than first's comes first
-// (dup_paths.go).
+// HS2_DUP_PATHS on: a light link on another path than first's, then a light
+// one on any path, then another path, then any (dup_paths.go) — a copy behind
+// a download waits in its queue, which costs more than sharing a path.
 func dupSecond(links []*l3Link, h uint32, first *l3Link) *l3Link {
-	if dupPathsOn {
+	if dupPathsOn && first.path != "" {
+		other := func(l *l3Link) bool { return l.path != "" && l.path != first.path }
+		light := func(l *l3Link) bool { return !l.isHeavy() }
+		if l := dupSecondWhere(links, h, first, func(l *l3Link) bool { return other(l) && light(l) }); l != nil {
+			return l
+		}
+		if l := dupSecondWhere(links, h, first, light); l != nil {
+			return l
+		}
 		if l := dupSecondOtherPath(links, h, first); l != nil {
 			return l
 		}

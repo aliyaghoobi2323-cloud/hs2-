@@ -227,10 +227,27 @@ func (m *LinkManager) pickPlaneLocked(p mPlane, avoid []any, pool *peerInfo) *ma
 	if skip == nil {
 		return m.pickPlaneTiers(p, avoid, pool, nil)
 	}
+	// Order: a link carrying no download on another path; then one carrying
+	// no download on any path; then another path; then the usual pick. A
+	// light copy behind a download waits in that download's queue, which
+	// costs it more than sharing a path (lab: games did not improve while
+	// the other path came first).
+	otherPath := func(ml *managedLink) bool {
+		return healthy[mlPath(ml)] && !ml.degraded && !ml.draining && !ml.suspect && !m.pathCooledLocked(ml)
+	}
+	noDownload := func(ml *managedLink) bool { return ml.heavy == 0 && !ml.degraded && !ml.draining && !ml.suspect }
 	if healthy != nil {
-		if ml := m.pickPlaneTiers(p, avoid, pool, func(ml *managedLink) bool {
-			return healthy[mlPath(ml)] && !ml.degraded && !ml.draining && !ml.suspect && !m.pathCooledLocked(ml)
-		}); ml != nil {
+		if ml := m.pickPlaneTiers(p, avoid, pool, func(ml *managedLink) bool { return otherPath(ml) && noDownload(ml) }); ml != nil {
+			countDupPath(true, false)
+			return ml
+		}
+	}
+	if ml := m.pickPlaneTiers(p, avoid, pool, noDownload); ml != nil {
+		countDupPath(!skip[mlPath(ml)], false)
+		return ml
+	}
+	if healthy != nil {
+		if ml := m.pickPlaneTiers(p, avoid, pool, otherPath); ml != nil {
 			countDupPath(true, false)
 			return ml
 		}

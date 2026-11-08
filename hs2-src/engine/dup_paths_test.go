@@ -140,11 +140,28 @@ func TestDupPathsL3Second(t *testing.T) {
 	links := []*l3Link{first, sameLight, otherHeavy}
 
 	withDupPaths(t, true)
+	// A link carrying no download beats another path behind a download.
 	for h := uint32(0); h < 200; h++ {
-		if got := dupSecond(links, h*2654435761, first); got != otherHeavy {
-			t.Fatalf("h=%d: second on %v, want the other path", h, got.path)
+		if got := dupSecond(links, h*2654435761, first); got != sameLight {
+			t.Fatalf("h=%d: second on %v (heavy %v), want the light same-path link", h, got.path, got.isHeavy())
 		}
 	}
+	// A light link on another path beats both.
+	otherLight := pathDupLink(4, 0, "b>y")
+	withOther := append(append([]*l3Link(nil), links...), otherLight)
+	for h := uint32(0); h < 200; h++ {
+		if got := dupSecond(withOther, h*2654435761, first); got != otherLight {
+			t.Fatalf("h=%d: second on %v, want the light other-path link", h, got.path)
+		}
+	}
+	// Only a heavy link on each side of first: the other path first.
+	sameLight.dead.Store(true)
+	for h := uint32(0); h < 50; h++ {
+		if got := dupSecond(links, h*2654435761, first); got != otherHeavy {
+			t.Fatalf("h=%d: no light link: second on %v, want the other path", h, got.path)
+		}
+	}
+	sameLight.dead.Store(false)
 	// No capable live link on another path: as before.
 	otherHeavy.dupOK = no
 	for h := uint32(0); h < 50; h++ {
