@@ -2,6 +2,7 @@ package engine
 
 import (
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -201,6 +202,15 @@ func (m *mConn) switchRead(lim uint64) {
 	r.mu.Unlock()
 	m.mu.Lock()
 	m.rawR.Store(false)
+	if mconnDeadlineFix.Load() {
+		// The raw reader may reach the boundary on bytes already waiting, so
+		// its Read never timed out and the wake deadline (setReadLimit, or
+		// rawStop from a racing Close) is still on the stream: readLoop would
+		// fail the first time the stream has nothing buffered and the sub
+		// would die. With the fix every wake is set under m.mu while rawR is
+		// true, so none can come after this.
+		m.clearReadDeadline()
+	}
 	start := !m.ended && !m.raw1.dead
 	m.mu.Unlock()
 	m.tr.ev("raw: reader switched at %d", lim)
@@ -218,9 +228,15 @@ func (m *mConn) rawStop() bool {
 	m.mu.Lock()
 	was := m.rawR.Swap(false)
 	ended := m.ended
+	fix := mconnDeadlineFix.Load()
+	if was && fix {
+		m.interruptRead() // under m.mu: switchRead's clear cannot precede it
+	}
 	m.mu.Unlock()
 	if was {
-		m.interruptRead()
+		if !fix {
+			m.interruptRead()
+		}
 		if ended {
 			m.raw1.close()
 		}
@@ -236,9 +252,33 @@ func (m *mConn) interruptRead() {
 
 // setReadLimit: the peer's raw bytes on the first sub end at off.
 func (m *mConn) setReadLimit(off uint64) {
+	if !mconnDeadlineFix.Load() {
+		m.rLimit.Store(int64(off))
+		m.interruptRead()
+		return
+	}
+	m.mu.Lock()
 	m.rLimit.Store(int64(off))
-	m.interruptRead()
+	if m.rawR.Load() { // after the switch no reader needs waking
+		m.interruptRead()
+	}
+	m.mu.Unlock()
 }
+
+func (m *mConn) clearReadDeadline() {
+	if d, ok := m.raw1.rw.(readDeadliner); ok {
+		d.SetReadDeadline(time.Time{})
+	}
+}
+
+// HS2_MCONN_DEADLINE_FIX=1 (off by default): no read deadline set to wake the
+// raw reader outlives the switch to records on the first sub (switchRead,
+// rawStop, setReadLimit). Without it a stale deadline could kill the first
+// sub after the switch, sometimes while it held the only copy of some bytes
+// (errMConnLost: a reset connection at 2% loss).
+var mconnDeadlineFix atomic.Bool
+
+func init() { mconnDeadlineFix.Store(os.Getenv("HS2_MCONN_DEADLINE_FIX") == "1") }
 
 // rawClose (Close): raw both ways is closing the stream, as on the old path;
 // otherwise the reader leaves raw and Close goes on as usual.
