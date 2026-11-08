@@ -342,7 +342,6 @@ func TestSteerPicksAvoidCutPath(t *testing.T) {
 	}
 }
 
-
 // Light subs: the best path only when the others are clearly bad; with a
 // mediocre path beside it (≤ lb2Mediocre), no path takes more than
 // lb2ShareMax of them (one path carrying most users is one hiccup away from
