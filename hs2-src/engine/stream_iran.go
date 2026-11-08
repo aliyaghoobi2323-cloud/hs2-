@@ -142,6 +142,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// link also carries the pool-control stream that tells the exit the desired
 	// link count.
 	lm.OnLink = func(l Link) {
+		trackEdgeLink(ctx, l) // HS2_QUEUE_CTL_UP (a no-op without it)
 		go openControl(ctx, l, logf)
 		go openStats(ctx, l, logf)
 		go func() { // tell the exit our ceiling and user ports, learn its own
@@ -208,6 +209,9 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		} else {
 			cfg.OnStart(lm.Stats)
 		}
+	}
+	if edgeQueue.on {
+		go edgeQueue.run(ctx, logf)
 	}
 	go lm.Run(ctx)
 	if reverse {

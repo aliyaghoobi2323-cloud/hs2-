@@ -5,6 +5,7 @@ package engine
 import (
 	"fmt"
 	"math"
+	"net"
 	"net/netip"
 	"os/exec"
 	"slices"
@@ -24,6 +25,7 @@ import (
 // replaced: the controller is told it cannot shape and stops trying.
 type qShaper struct {
 	logf      func(string, ...any)
+	want      string // the interface to shape; "": the one the route to the first peer leaves by
 	dev       string
 	peers     []netip.Addr
 	rate      float64
@@ -32,6 +34,11 @@ type qShaper struct {
 }
 
 func newQShaper(logf func(string, ...any)) *qShaper { return &qShaper{logf: logf} }
+
+// newQShaperOn shapes dev ("": the route's interface, as newQShaper).
+func newQShaperOn(dev string, logf func(string, ...any)) *qShaper {
+	return &qShaper{logf: logf, want: dev}
+}
 
 const qHandle = "1fe1"
 
@@ -75,7 +82,10 @@ func (s *qShaper) apply(rate float64, peers []netip.Addr) bool {
 		return false
 	}
 	if !s.installed {
-		dev := qRouteDev(peers[0])
+		dev := s.want
+		if dev == "" {
+			dev = qRouteDev(peers[0])
+		}
 		if dev == "" {
 			return s.refuse("no route to %s found", peers[0])
 		}
@@ -154,4 +164,29 @@ func (s *qShaper) remove() {
 		s.logf("queue: shaper on %s removed", s.dev)
 	}
 	s.installed, s.peers, s.rate = false, nil, 0
+}
+
+// qLinkDev is the interface a link's packets leave by: the route to its peer
+// from its own local address (an edge's lb addresses can each have a route of
+// their own); "" when not known.
+func qLinkDev(tc *net.TCPConn) string {
+	if tc == nil {
+		return ""
+	}
+	r, err1 := netip.ParseAddrPort(tc.RemoteAddr().String())
+	l, err2 := netip.ParseAddrPort(tc.LocalAddr().String())
+	if err1 != nil || err2 != nil {
+		return ""
+	}
+	out, err := exec.Command("ip", "route", "get", r.Addr().Unmap().String(), "from", l.Addr().Unmap().String()).Output()
+	if err != nil {
+		return qRouteDev(r.Addr().Unmap())
+	}
+	f := strings.Fields(string(out))
+	for i := 0; i+1 < len(f); i++ {
+		if f[i] == "dev" {
+			return f[i+1]
+		}
+	}
+	return ""
 }
