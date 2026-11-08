@@ -4180,8 +4180,22 @@ lb_apply(){
     return 0
   fi
   echo >&2; hr
-  warn "Make the SAME change on the OTHER server of this tunnel, or the paths will not match."
-  info "Open this tunnel there → l) Load balancing, or put this section in its config:"
+  if [ "$(lb_own_side "$cfg")" = "$(lb_listen_side "$cfg")" ] && [ -n "$(lb_prim_of "$(lb_listen_side "$cfg")")" ]; then
+    # This server listens (on a fixed primary IP) and announces its
+    # addresses: the dialing server takes them from that announcement and
+    # needs no address of its own. (A wildcard listen announces nothing.)
+    if [ "$LB_EN" = true ]; then
+      warn "On the OTHER server of this tunnel, load balancing only needs to be ON:"
+      info "there: open this tunnel → l) Load balancing → 1 (turn ON) → 8 (apply). If it is already ON, nothing to do."
+      info "No addresses to add there — it reads this server's announcement and dials the addresses listed here."
+    else
+      info "Load balancing is OFF here; the other server goes back to the primary address by itself."
+    fi
+    say "  ${C_D}(Only if that server runs an hs2 too old to read announcements: put this section in its config instead.)${C_0}"
+  else
+    warn "Make the SAME change on the OTHER server of this tunnel, or the paths will not match."
+    info "Open this tunnel there → l) Load balancing, or put this section in its config:"
+  fi
   hr
   lb_block "$cfg" >&2
   hr
@@ -4226,23 +4240,165 @@ lb_get_cert(){
   ok "$ip now uses $cf (apply with 8 to put it into use)."
 }
 
-# lb_live UNIT CFG: the per-path line of `hs2 status` (lb_text), refreshed
-# every 5 s until Enter.
+# lb_live_render UNIT STATUSFILE: one screen of the per-path live view from
+# the status file (lb_paths / lb_total, see cmd/hs2/status.go), parsed with
+# python3's json, so no JSON escape (>) reaches the screen. An older hs2
+# without lb_paths gets its one-line summary and a note.
+lb_live_render(){
+  C_R="$C_R" C_Y="$C_Y" C_G="$C_G" C_B="$C_B" C_D="$C_D" C_0="$C_0" python3 - "$1" "$2" <<'PY' >&2
+import json, os, sys, time
+unit, path = sys.argv[1], sys.argv[2]
+R, Y, G, B, D, Z = (os.environ.get(k, "") for k in ("C_R", "C_Y", "C_G", "C_B", "C_D", "C_0"))
+try:
+    st = json.load(open(path))
+except Exception:
+    print("  (the status file is unreadable right now)")
+    sys.exit(0)
+paths, tot = st.get("lb_paths") or [], st.get("lb_total")
+side = st.get("lb_side", "")
+
+def ago(t):
+    d = max(0, int(time.time()) - int(t))
+    if d < 60: return "%ds ago" % d
+    if d < 3600: return "%dm ago" % (d // 60)
+    if d < 86400: return "%dh %dm ago" % (d // 3600, d % 3600 // 60)
+    return "%dd ago" % (d // 86400)
+
+src = {"advert": "the other server's announcement", "local": "this config",
+       "announces": "this config (announced to the other server)"}.get(st.get("lb_source", ""), "")
+sidetxt = {"dial": "dials the paths", "listen": "listens on the addresses"}.get(side, "")
+head = [st.get("role") or "?", st.get("dir") or "?"]
+if sidetxt: head.append(sidetxt)
+print("  Tunnel:     %s%s%s · %s" % (B, unit, Z, " · ".join(head)))
+if st.get("lb_mode"):
+    print("  Mode:       " + st["lb_mode"] + (" (shares follow path quality)" if st["lb_mode"] == "auto" else " (shares as set)"))
+if src:
+    print("  Addresses:  from " + src)
+if st.get("lb_reload"):
+    print("  Peer:       " + ("reads this tunnel's announcements" if st.get("lb_peer_advert") else "announcement support not known yet"))
+if st.get("lb_loaded_at"):
+    print("  Last load:  " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["lb_loaded_at"])) + " (" + ago(st["lb_loaded_at"]) + ")")
+if st.get("lb_note"):
+    print("  %sNote: %s%s" % (Y, st["lb_note"], Z))
+if st.get("lb_rejected"):
+    print("  %sThe other server's announcement was rejected: %s%s" % (R, st["lb_rejected"], Z))
+print()
+if not paths:
+    txt = st.get("lb_text", "")
+    if txt:
+        print("  " + txt)
+        print("  %s(this hs2 reports only this summary: update hs2 for the per-path table)%s" % (D, Z))
+    elif st.get("lb_reload") or st.get("lb_source"):
+        print("  Load balancing is on, but the running hs2 is too old to report each path.")
+        print("  %sUpdate hs2 on this server to see links, users, traffic, loss and RTT per path here.%s" % (D, Z))
+    else:
+        print("  (load balancing is not active in the running tunnel)")
+    sys.exit(0)
+
+def mbit(x):
+    return "%.1f" % x if x < 1000 else "%.0f" % x
+def size(mb):
+    if mb >= 1e6: return "%.1fT" % (mb / 1e6)
+    if mb >= 1e3: return "%.1fG" % (mb / 1e3)
+    return "%.0fM" % mb
+def loss(p):
+    d, u = p.get("loss_down_pct"), p.get("loss_up_pct")
+    if d is None and u is None: return "-", False
+    f = lambda v: "-" if v is None else ("%.1f" % v)
+    return f(d) + "/" + f(u) + "%", (d or 0) > 5 or (u or 0) > 5
+def rtt(p):
+    if not p.get("rtt_p50_ms"): return "-"
+    return "%.0f/%.0f" % (p["rtt_p50_ms"], p.get("rtt_p99_ms", 0))
+def state(p):
+    s, col = [], ""
+    stt = p.get("state", "ok")
+    if stt == "cooling":
+        s.append("cooled %ds" % p.get("cooled_s", 0)); col = R
+    elif stt == "no-peer":
+        s.append("cooled, other server lacks lb"); col = R
+    elif stt == "probing":
+        s.append("probing"); col = Y
+    elif stt == "draining":
+        s.append("removed, draining"); col = Y
+    for k in ("degraded", "draining", "suspect"):
+        if p.get(k):
+            s.append("%s %d" % (k, p[k])); col = col or Y
+    if p.get("fails"):
+        s.append("%d failed dial%s" % (p["fails"], "" if p["fails"] == 1 else "s")); col = col or Y
+    if p.get("primary"):
+        s.append("primary")
+    if not s or s == ["primary"]:
+        s.insert(0, "ok"); col = col or G
+    return ", ".join(s), col
+
+W = (15, 15, 5, 8, 4, 5, 7, 7, 10, 8, 11)
+def cells_of(p, total):
+    links, target = p.get("links", 0), p.get("target", 0)
+    lo, hi = ("total", "") if total else (p.get("local", ""), p.get("remote", ""))
+    if len(hi) > 15: hi = hi[:14] + "~"
+    share = p.get("eff_pct") or p.get("share_pct", 0)
+    now = ("%.0f%%" % (100.0 * links / nlinks)) if (nlinks and not total) else ""
+    l, lbad = loss(p)
+    return [lo, hi, "%.0f%%" % share, "%d/%d" % (links, target), now, str(p.get("users", 0)),
+            mbit(p.get("down_mbit", 0)), mbit(p.get("up_mbit", 0)), l, rtt(p),
+            size(p.get("down_mb", 0)) + "/" + size(p.get("up_mb", 0))], lbad
+
+def pad(cells):
+    out = []
+    for i, c in enumerate(cells):
+        out.append(c.ljust(W[i]) if i < 2 else c.rjust(W[i]))
+    return out
+
+nlinks = sum(p.get("links", 0) for p in paths)
+hdr = pad(["THIS SERVER", "OTHER SERVER", "SHARE", "LINKS", "NOW", "USERS", "DOWN", "UP", "LOSS D/U", "RTT ms", "TOTAL D/U"])
+print("  " + B + " ".join(hdr) + "  STATE" + Z)
+print("  " + D + " ".join(pad(["", "", "set", "live/tgt", "", "", "Mbit/s", "Mbit/s", "", "p50/p99", "bytes"])) + Z)
+for p in paths:
+    c, lbad = cells_of(p, False)
+    c = pad(c)
+    links, target, share = p.get("links", 0), p.get("target", 0), p.get("share_pct", 0)
+    off = (target > 0 and abs(links - target) > max(1, round(0.1 * target))) or (target == 0 and links > 0 and share > 0)
+    if off:
+        c[3], c[4] = Y + c[3], c[4] + Z
+    if lbad:
+        c[8] = R + c[8] + Z
+    stt, scol = state(p)
+    print("  " + " ".join(c) + "  " + scol + stt + Z)
+if tot:
+    c, lbad = cells_of(tot, True)
+    c = pad(c)
+    if lbad:
+        c[8] = R + c[8] + Z
+    extra = []
+    for k in ("degraded", "draining", "suspect"):
+        if tot.get(k): extra.append("%s %d" % (k, tot[k]))
+    print("  " + D + "-" * (sum(W) + len(W) - 1) + Z)
+    print("  " + B + c[0] + Z + " " + " ".join(c[1:]) + "  " + ", ".join(extra))
+print()
+print("  " + D + "DOWN = Kharej to Iran, UP = Iran to Kharej (last 10 s) · LOSS = share of data resent" + Z)
+print("  " + D + "SHARE = set share" + (" (auto: the effective one)" if st.get("lb_mode") == "auto" else "") +
+      " · LINKS = live/target · NOW = its actual share of the links · TOTAL = since hs2 started" + Z)
+if side == "listen":
+    print("  " + D + "Rows are the addresses this server is reached on; targets split the live links by its shares." + Z)
+print("  " + R + "red" + Z + D + ": loss over 5% or a cooled path · " + Z + Y + "yellow" + Z + D + ": links off target, or links being replaced" + Z)
+PY
+}
+
+# lb_live UNIT CFG: the per-path view, refreshed every 3 s until Enter.
 lb_live(){
-  local cfg="$2" sf txt rc
+  local cfg="$2" sf rc
   sf=$(status_path "$cfg")
   while :; do
     printf '\033[2J\033[H' >&2
-    say " ${C_B}Load balancing — live${C_0} ($1) · refreshes every 5 s · Enter to go back"; hr
+    say " ${C_B}Load balancing — live status${C_0} · refreshes every 3 s · Enter to go back"; hr
     if status_fresh "$sf"; then
-      txt=$(jget "$sf" lb_text)
-      if [ -n "$txt" ]; then say "  $txt"
-      else say "  (load balancing is not active in the running tunnel)"; fi
+      lb_live_render "$1" "$sf" || say "  (could not read the status)"
     else
       say "  (the tunnel is not running, or this hs2 is too old to report it)"
     fi
+    hr
     # Enter returns; a timeout (status > 128) refreshes; EOF also returns.
-    rc=0; read -rst 5 _ </dev/tty || rc=$?
+    rc=0; read -rst 3 _ </dev/tty || rc=$?
     [ "$rc" -gt 128 ] || return 0
   done
 }
@@ -4273,10 +4429,17 @@ lb_show(){ # cfg
   done
 }
 
-lb_pick(){ # prompt -> LB_PICK=index (empty if none)
-  local c; LB_PICK=""
-  read -rp "  $1 (number): " c </dev/tty || return 0
-  case "$c" in ''|*[!0-9]*) warn "Invalid choice."; return 0 ;; esac
+lb_pick(){ # prompt -> LB_PICK=index (empty if none); a row number or the IP itself
+  local c n; LB_PICK=""
+  read -rp "  $1 (number or IP): " c </dev/tty || return 0
+  c=${c//[[:space:]]/}
+  if lb_is_ip4 "$c"; then
+    for n in "${!LB_NUM[@]}"; do
+      [ "$(lb_field "${LB_ROWS[${LB_NUM[$n]}]}" 2)" = "$c" ] && { LB_PICK=${LB_NUM[$n]}; return 0; }
+    done
+    warn "$c is not in the list."; return 0
+  fi
+  case "$c" in ''|*[!0-9]*) warn "Invalid choice — type the row number or the IP."; return 0 ;; esac
   [ -n "${LB_NUM[$c]:-}" ] || { warn "There is no address $c."; return 0; }
   LB_PICK=${LB_NUM[$c]}
 }
@@ -4353,7 +4516,7 @@ tm_lb(){ # unit cfg
     say "  6) Split equally (both sides)"
     say "  7) Get a certificate for an address (Let's Encrypt, its own subdomain)"
     say "  8) Check & apply (backup, reload this tunnel — restart only for an older hs2 or on/off — rollback on failure)"
-    say "  9) Live status (per-path shares, loss, links — every 5 s)"
+    say "  9) Live status (per path: links, users, traffic, loss, RTT — every 3 s)"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
     case "$c" in

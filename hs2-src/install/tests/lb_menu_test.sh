@@ -13,7 +13,9 @@
 #   - on / off and fixed / auto;
 #   - a certificate for an address via cert_get_webroot (certbot --webroot),
 #     and the offer to turn acme_webroot on when hs2 holds port 80;
-#   - live status shows lb_text and returns on Enter;
+#   - live status: the per-path table from lb_paths (header, rows, totals,
+#     colours), an older hs2's lb_text decoded, returns on Enter;
+#   - a row is picked by its number or its IP;
 #   - stage 6, both modes and both roles: apply reloads (SIGHUP) instead of
 #     restarting when the running hs2 says lb_reload; the "same change on the
 #     other server" note only when the other server does not read
@@ -104,7 +106,8 @@ iran; out=$(run '1\n3\ni\n1.2.3.5\nt2.example\n\n8\n0\n')
 check "add + split 50/50" 'echo "$out" | grep -q " 2) 1.2.3.5 *50% · sni t2.example" && echo "$out" | grep -q " 1) 1.2.3.4 *50% primary"'
 check "apply: checked, written, restarted" 'echo "$out" | grep -q "config OK" && echo "$out" | grep -q "RESTART hs2-x" && [ "$(js "m[\"lb\"][\"enabled\"]")" = True ] && [ "$(js "[(e[\"ip\"],e[\"weight\"]) for e in m[\"lb\"][\"iran\"]]")" = "[('"'"'1.2.3.4'"'"', 50), ('"'"'1.2.3.5'"'"', 50)]" ]'
 check "apply: .prev is the old config (no lb)" '[ -f "$T/c.json.prev" ] && ! grep -q "\"lb\"" "$T/c.json.prev"'
-check "apply: reminder + block for the other server" 'echo "$out" | grep -q "SAME change on the OTHER server" && echo "$out" | grep -q "\"lb\": {" && echo "$out" | grep -q "\"sni\": \"t2.example\""'
+check "apply (reverse, Iran listens): the other server only turns lb ON" 'echo "$out" | grep -q "load balancing only needs to be ON" && echo "$out" | grep -q "1 (turn ON) → 8 (apply)" && echo "$out" | grep -q "No addresses to add there" && ! echo "$out" | grep -q "SAME change on the OTHER server"'
+check "apply: block kept for an hs2 too old to read announcements" 'echo "$out" | grep -q "too old to read announcements" && echo "$out" | grep -q "\"lb\": {" && echo "$out" | grep -q "\"sni\": \"t2.example\""'
 check "lb is the last key (grep readers keep top-level sni)" '[ "$(jget "$T/c.json" sni 2>/dev/null || grep -o "\"sni\": \"[^\"]*\"" "$T/c.json" | head -1)" != "" ] && [ "$(python3 -c "import json; print(list(json.load(open(\"$T/c.json\")))[-1])")" = lb ]'
 
 # 3. the primary cannot be removed; an extra can (re-split to 100).
@@ -170,10 +173,34 @@ printf '{"mode":"listen","carrier":"mtcp","addr":"1.2.3.4:2096","shared_key":"%s
 out=$(run '1\n3\ni\n5.5.5.5\n\n0\ny\n')
 check "kharej direct: own=Kharej listens, Iran dials, no sni asked for Iran" 'echo "$out" | grep -q "Kharej addresses (this server) — listens" && echo "$out" | grep -q "Iran addresses — dials" && ! echo "$out" | grep -q "Subdomain (sni) for 5.5.5.5" && ! echo "$out" | grep -q "5.5.5.5 is not on this server"'
 
-# 13. live status: lb_text, Enter returns.
-printf '{"updated": %s, "lb_text": "1.2.3.4>K 50%%/48%% loss 1.0%% q 3ms 4 links"}\n' "$(date +%s)" > "$T/st.json"
+# 13. live status: lb_text (an older hs2, escaped as Go writes it), Enter returns.
+printf '{"updated": %s, "lb_text": "1.2.3.4\\u003eK 50%%/48%% loss 1.0%% q 3ms 4 links"}\n' "$(date +%s)" > "$T/st.json"
 out=$(run '9\n\n0\n')
-check "live status shows lb_text" 'echo "$out" | grep -q "1.2.3.4>K 50%/48% loss 1.0% q 3ms 4 links" && echo "$out" | grep -q RETURNED'
+check "live status (older hs2): lb_text decoded + note" 'echo "$out" | grep -q "1.2.3.4>K 50%/48% loss 1.0% q 3ms 4 links" && ! echo "$out" | grep -q "u003e" && echo "$out" | grep -q "update hs2 for the per-path table" && echo "$out" | grep -q RETURNED'
+printf '{"updated": %s, "lb_reload": true, "lb_source": "announces"}\n' "$(date +%s)" > "$T/st.json"
+out=$(run '9\n\n0\n')
+check "live status: lb on, no per-path data: a plain note" 'echo "$out" | grep -q "too old to report each path" && ! echo "$out" | grep -q "not active"'
+# the per-path table (lb_paths)
+cat > "$T/st.json" <<JS
+{"updated": $(date +%s), "role": "Iran side", "dir": "reverse", "lb_side": "listen", "lb_mode": "fixed",
+ "lb_reload": true, "lb_source": "announces", "lb_loaded_at": $(( $(date +%s) - 125 )), "lb_peer_advert": true,
+ "lb_text": "x\\u003ey",
+ "lb_paths": [
+  {"local": "1.2.3.4", "remote": "9.9.9.1", "primary": true, "share_pct": 50, "target": 46, "links": 46, "serving": 46, "users": 12,
+   "down_mbit": 123.45, "up_mbit": 5.6, "down_mb": 2345.6, "up_mb": 120, "loss_down_pct": 0.4, "loss_up_pct": 0.1,
+   "rtt_p50_ms": 42.1, "rtt_p99_ms": 80.2, "min_rtt_ms": 30, "state": "ok"},
+  {"local": "1.2.3.5", "remote": "9.9.9.1", "share_pct": 50, "target": 46, "links": 30, "serving": 28, "users": 3,
+   "down_mbit": 10, "up_mbit": 1, "down_mb": 100, "up_mb": 10, "loss_down_pct": 7.5,
+   "rtt_p50_ms": 50, "rtt_p99_ms": 300, "degraded": 2, "state": "cooling", "cooled_s": 42}],
+ "lb_total": {"local": "", "remote": "", "share_pct": 100, "target": 92, "links": 76, "serving": 74, "users": 15,
+   "down_mbit": 133.45, "up_mbit": 6.6, "down_mb": 2445.6, "up_mb": 130, "loss_down_pct": 1.2, "loss_up_pct": 0.1,
+   "rtt_p50_ms": 45, "rtt_p99_ms": 290, "degraded": 2, "state": "ok"}}
+JS
+out=$(run '9\n\n0\n')
+check "live table: header (side, mode, source, peer, last load)" 'echo "$out" | grep -q "Tunnel: .*hs2-x.* · Iran side · reverse · listens on the addresses" && echo "$out" | grep -q "Mode: *fixed" && echo "$out" | grep -q "Addresses: *from this config (announced to the other server)" && echo "$out" | grep -q "reads this tunnel.s announcements" && echo "$out" | grep -q "(2m ago)"'
+check "live table: one aligned row per path + totals" 'echo "$out" | grep -q "1.2.3.4  *9.9.9.1  *50%  *46/46  *61%  *12  *123.5  *5.6  *0.4/0.1%  *42/80  *2.3G/120M  .*ok, primary" && echo "$out" | grep -q "1.2.3.5  *9.9.9.1  *50%.*30/46.*39%.* 3  *10.0  *1.0.*7.5/-%.*50/300.*cooled 42s, degraded 2" && echo "$out" | grep -q "total.*76/92 .* 15  *133.5  *6.6  *1.2/0.1%"'
+R=$(printf '\033[1;31m'); Y=$(printf '\033[1;33m')
+check "live table: no raw JSON escape; red loss, yellow off-target" '! echo "$out" | grep -q "u003e" && echo "$out" | grep -qF "$R    7.5/-%" && echo "$out" | grep -qF "${Y}   30/46"'
 
 # 14. not offered for a transport without lb.
 printf '{"mode":"dial","carrier":"tls","addr":"1.2.3.4:2096"}\n' > "$T/c.json"
@@ -197,7 +224,22 @@ out=$(run '2
 8
 0
 ')
-check "reverse iran, older peer: reload + same-change note" 'echo "$out" | grep -q "RELOAD hs2-x" && echo "$out" | grep -q "Make the SAME change"'
+check "reverse iran, peer not known: reload + turn-ON note, not same-change" 'echo "$out" | grep -q "RELOAD hs2-x" && echo "$out" | grep -q "load balancing only needs to be ON" && ! echo "$out" | grep -q "Make the SAME change"'
+# a row picked by its IP as well as by its number
+iran ", $LBON"; st true
+out=$(run '5
+1.2.3.5
+70
+
+0
+y
+')
+check "lb_pick: the IP picks the row" 'echo "$out" | grep -q "Share for 1.2.3.5 in % \[50\]" && echo "$out" | grep -q "Shares now total 120%" && ! echo "$out" | grep -q "Invalid choice"'
+out=$(run '5
+7.7.7.7
+0
+')
+check "lb_pick: an IP not in the list" 'echo "$out" | grep -q "7.7.7.7 is not in the list"'
 # direct, Kharej listens
 KLB='"lb": {"enabled": true, "mode": "fixed", "kharej": [{"ip": "1.2.3.4", "weight": 50}, {"ip": "1.2.3.5", "weight": 50}], "iran": []}'
 printf '{"mode":"listen","carrier":"mtcp","addr":"1.2.3.4:2096","shared_key":"%s","cert_file":"%s","key_file":"%s","expose":"127.0.0.1:443",%s}
