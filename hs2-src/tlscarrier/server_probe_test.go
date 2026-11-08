@@ -20,6 +20,7 @@ import (
 // A plain-HTTP request on the TLS port must get the exact response a real Go
 // HTTPS server sends — not the old silent close that stood out as a fingerprint.
 func TestPlainHTTPGetsGoNative400(t *testing.T) {
+	goNative(t) // the default reply, whatever HS2_COVER_NGINX says
 	key := bytes.Repeat([]byte{0x44}, 32)
 	cert := testCert(t, "vpn.example.com")
 	be, stopB := backend(t)
@@ -178,6 +179,7 @@ func probeOutcome(t *testing.T, addr string, probe []byte, halfClose bool) strin
 // Go's is a FIN — a live-observed tell. Large probes RST on both (Go's first
 // read does not consume them either), and that must match too.
 func TestProbeCloseMatchesStdlib(t *testing.T) {
+	goNative(t) // the default reply, whatever HS2_COVER_NGINX says
 	cert := testCert(t, "vpn.example.com")
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")

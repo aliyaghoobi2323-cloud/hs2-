@@ -13,6 +13,7 @@ import (
 // "Server: nginx" header (our TLS terminator is Go's, so claiming nginx only
 // contradicts it; a Go server like Caddy omits the header).
 func TestBuiltinBackendServesCover(t *testing.T) {
+	goCover(t) // the default (Go-native) cover, whatever HS2_COVER_NGINX says
 	addr, err := startBuiltinBackend("")
 	if err != nil {
 		t.Fatal(err)
@@ -64,6 +65,7 @@ func TestBuiltinBackendConditional304(t *testing.T) {
 
 // A non-root path returns a plain Go 404, like a default static server.
 func TestBuiltinBackend404(t *testing.T) {
+	goCover(t) // the default (Go-native) cover, whatever HS2_COVER_NGINX says
 	addr, err := startBuiltinBackend("")
 	if err != nil {
 		t.Fatal(err)

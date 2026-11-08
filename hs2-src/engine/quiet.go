@@ -208,31 +208,45 @@ func (c *quietConn) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// watch is the session watchdog (smux's keepalive timeout, see above): it
-// closes the session when the socket reader has waited for data for the
-// limit. A reader not in a read (smux parked on a full receive buffer) is
-// not silence, as in smux.
+// watch is the session watchdog. It is smux's keepalive timeout, rule for
+// rule: time is cut into windows of the limit from the session's start, and
+// the session closes at the end of a window in which nothing was read — so
+// silence is caught after one to two limits, as smux does (24–48 s on a busy
+// link). A reader not in a read (smux parked on a full receive buffer) is
+// not silence, as in smux. Only the window length differs: quietSilent while
+// the link is quiet-idle, and a switch back to busy starts a fresh window.
 func (q *quietState) watch(sess *smux.Session, w *watchConn) {
 	t := time.NewTicker(quietWatchTick)
 	defer t.Stop()
-	last, lastAt := w.rdCalls.Load(), time.Now()
-	var qw quietWatch
+	last := w.rdCalls.Load()
+	winStart, seen, wasLax := time.Now(), false, false
+	who := "the exit"
+	if !q.edge {
+		who = "the edge"
+	}
 	for {
 		select {
 		case <-sess.CloseChan():
 			return
 		case now := <-t.C:
 			if n := w.rdCalls.Load(); n != last || !w.inRead.Load() {
-				last, lastAt = n, now
+				last, seen = n, true
 			}
 			lax := q.lenient()
+			if wasLax && !lax { // busy again: a whole busy window from now
+				winStart, seen = now, false
+			}
+			wasLax = lax
 			limit := quietSessTimeout
 			if lax {
 				limit = quietSilent
 			}
-			if ref := qw.ref(lax, lastAt, now); now.Sub(ref) >= limit {
-				w.expire(fmt.Sprintf("no data from the other server for %s (keepalive timeout — path stalled)", limit))
-				return
+			if now.Sub(winStart) >= limit {
+				if !seen {
+					w.expire(fmt.Sprintf("no data from %s for %s (keepalive timeout — path stalled)", who, limit))
+					return
+				}
+				winStart, seen = now, false
 			}
 		}
 	}

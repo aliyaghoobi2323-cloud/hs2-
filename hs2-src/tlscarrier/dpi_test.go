@@ -333,3 +333,10 @@ func TestNginxPages(t *testing.T) {
 		t.Fatal("nginx plain-HTTP reply missing")
 	}
 }
+
+// goNative runs a test with the default (Go-native) plain-HTTP reply.
+func goNative(t *testing.T) {
+	old := CoverNginx
+	CoverNginx = false
+	t.Cleanup(func() { CoverNginx = old })
+}

@@ -119,3 +119,10 @@ func TestNginxCover(t *testing.T) {
 		t.Fatalf("garbage: %q", all)
 	}
 }
+
+// goCover runs a test with the built-in cover in its default (Go-native) form.
+func goCover(t *testing.T) {
+	old := coverNginx
+	coverNginx = false
+	t.Cleanup(func() { coverNginx = old })
+}

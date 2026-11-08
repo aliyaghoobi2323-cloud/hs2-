@@ -113,6 +113,7 @@ func TestCoverStructuralInvariants(t *testing.T) {
 // 200 with the right content-type and an ETag, a conditional 304, and a plain
 // 404 off the root — the same contract tested for the fixed page.
 func TestCoverServedHeaders(t *testing.T) {
+	goCover(t) // the default (Go-native) cover, whatever HS2_COVER_NGINX says
 	addr, err := startBuiltinBackend("deadbeefcafe0001deadbeefcafe0002")
 	if err != nil {
 		t.Fatal(err)
@@ -160,6 +161,7 @@ func TestCoverServedHeaders(t *testing.T) {
 // it is salted with the seed — present, but not equal to sha256(body)[:16]. The
 // seedless legacy page sets NO ETag, exactly as the pre-per-install binary did.
 func TestCoverETagSaltedAndLegacyNone(t *testing.T) {
+	goCover(t) // the default (Go-native) cover, whatever HS2_COVER_NGINX says
 	get := func(seed string) *http.Response {
 		addr, err := startBuiltinBackend(seed)
 		if err != nil {
