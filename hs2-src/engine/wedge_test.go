@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"io"
 	"net"
 	"sync/atomic"
@@ -13,9 +14,19 @@ import (
 // guardedPair is a real smux session pair over loopback TCP built by
 // newSession, as on a link: the edge (client) side carries a meter, so its
 // guard is reachable through edgeMtr.guard.
+//
+// Both ends use an internet path's segment size (wedgeMSS), not loopback's
+// ~64 KiB: these tests stall the edge's reader for seconds on purpose, and
+// on loopback the full receive queue then drops whole 64 KiB segments (6.8
+// kernel: ss showed d7 on the edge socket) and the exit's TCP sits in RTO
+// backoff (backoff 5, rto 6.7 s, 2.3 MB unsent) for seconds after the
+// guard has released the link — a stall of the rig, not of the guard. With
+// HS2_SHAPE_BULK's 16 KiB writes it hit about one run in fifteen; with the
+// segment size of a real link, 0 in 30 with the key on and off.
 func guardedPair(t *testing.T) (edge, exit *smux.Session, edgeMtr *linkMeter) {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	lc := net.ListenConfig{Control: wedgeMSS}
+	ln, err := lc.Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +36,7 @@ func guardedPair(t *testing.T) (edge, exit *smux.Session, edgeMtr *linkMeter) {
 		c, _ := ln.Accept()
 		acc <- c
 	}()
-	a, err := net.Dial("tcp", ln.Addr().String())
+	a, err := (&net.Dialer{Control: wedgeMSS}).Dial("tcp", ln.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
