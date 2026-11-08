@@ -261,7 +261,7 @@ if [ -n "${LOSS_EVENTS:-}" ] && [ "$PATHS" -ge 2 ]; then
    done) &
   echo $! >> "$W/pids"
 fi
-rm -f "$W/lbsamp.jsonl"
+rm -f "$W/lbsamp.jsonl" "$W/lossevents.txt"
 if [ "${LB_SAMPLE:-0}" = 1 ] && [ "$PATHS" -ge 2 ]; then
   (t0=$(date +%s.%N); while :; do python3 - "$SF" "$SFK" "$t0" <<'PY' 2>/dev/null; sleep 1; done) >> "$W/lbsamp.jsonl" &
 import json, sys, time
