@@ -102,6 +102,10 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	t := time.NewTicker(controlInterval)
 	defer t.Stop()
 	skip := 0
+	// HS2_QUIET_IDLE (quiet.go): q is nil without the key. sentIdle is what
+	// the last ping told the exit; a change is told at once.
+	q := mtr.quiet
+	sentIdle := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -112,13 +116,17 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 		active := now-moved >= ctrlBusyBytes
 		heavy := now-moved >= activeBytes
 		moved = now
-		if !active && skip > 0 && pending.empty() {
+		idle := q.sendQuiet()
+		if !active && skip > 0 && pending.empty() && idle == sentIdle {
 			skip--
 			continue
 		}
-		if active {
+		switch {
+		case active:
 			skip = 0
-		} else {
+		case idle: // an idle link: one ping every 20–40 s
+			skip = int(between(quietPingMin, quietPingMax)/controlInterval) - 1
+		default:
 			skip = 2 + rand.IntN(3) // the next 2–4 ticks stay quiet
 		}
 		if active && !heavy {
@@ -136,7 +144,12 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			// pointing at the caller's buffer, so one buffer reused for the
 			// next ping would rewrite the queued one.
 			ping := make([]byte, ctrlPingLen)
-			binary.BigEndian.PutUint64(ping[0:], seq)
+			wire := seq
+			if idle {
+				wire |= ctrlIdleBit // an older exit only echoes it
+			}
+			sentIdle = idle
+			binary.BigEndian.PutUint64(ping[0:], wire)
 			binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
 			st.SetWriteDeadline(time.Now().Add(controlInterval))
 			if _, err := st.Write(ping); err != nil && !isTimeout(err) {
@@ -158,7 +171,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				}
 				break // no answer in time: try again next tick
 			}
-			if at, ok := pending.answer(binary.BigEndian.Uint64(pong[0:])); ok {
+			if at, ok := pending.answer(binary.BigEndian.Uint64(pong[0:]) &^ ctrlIdleBit); ok {
 				mtr.ctrlAnsweredSent.Store(at) // a whole round trip, and when it started (stuck.go)
 			}
 			publish() // at once: a later ping may still be on its way (one 7 s wait is not three samples)
@@ -233,7 +246,11 @@ func isTimeout(err error) bool {
 // serveControl runs the exit side: it answers each ping with a pong carrying the
 // exit's TCP retransmit counter for this link's socket, so the edge can see the
 // download-direction loss. car provides that socket.
-func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carrier) {
+func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Carrier, mtr *linkMeter) {
+	var q *quietState // HS2_QUIET_IDLE: the ping's top bit says the edge is idle
+	if mtr != nil {
+		q = mtr.quiet
+	}
 	defer st.Close()
 	tcp := func() uint64 {
 		if car == nil {
@@ -247,6 +264,9 @@ func serveControl(ctx context.Context, st io.ReadWriteCloser, car *tlscarrier.Ca
 	for ctx.Err() == nil {
 		if _, err := io.ReadFull(st, ping); err != nil {
 			return
+		}
+		if q != nil {
+			q.peerIdle.Store(binary.BigEndian.Uint64(ping[0:])&ctrlIdleBit != 0)
 		}
 		copy(pong[0:], ping[0:16]) // echo seq + edgeNanos
 		binary.BigEndian.PutUint64(pong[16:], tcp())

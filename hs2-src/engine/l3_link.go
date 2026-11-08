@@ -106,6 +106,8 @@ type l3Link struct {
 	// path is the key of the path the link's TCP connection rides ("" not
 	// known); HS2_DUP_PATHS puts a second copy on another path (dup_paths.go).
 	path string
+	// qs is the link's HS2_QUIET_IDLE state (nil: off; quiet.go).
+	qs   *quietState
 	dead atomic.Bool
 	once sync.Once
 	done chan struct{}
@@ -135,12 +137,24 @@ func newL3Link(car pktConn) *l3Link {
 // it does not move for l3SessionSilent the whole link is silent and the side
 // channel is dropped (watchSession).
 func newStreamL3Link(st *smux.Stream, quiet func() bool, sessReads func() uint64) *l3Link {
+	return newStreamL3LinkQ(st, quiet, sessReads, nil)
+}
+
+// newStreamL3LinkQ is newStreamL3Link on a link with HS2_QUIET_IDLE state qs
+// (nil: without the key, exactly newStreamL3Link): the link's TUN packets
+// keep it busy, an idle link sends its TUN keepalive every 45–65 s, and its
+// silence limits loosen while it is idle (quiet.go).
+func newStreamL3LinkQ(st *smux.Stream, quiet func() bool, sessReads func() uint64, qs *quietState) *l3Link {
 	l := newL3Link(newStreamPkt(st))
+	l.qs = qs
 	if sessReads != nil {
 		go l.watchSession(sessReads)
 	}
 	l.deadAfter = l3StreamDeadAfter
 	l.kaFn = func() time.Duration {
+		if qs.sendQuiet() {
+			return between(quietL3Min, quietL3Max)
+		}
 		if quiet() {
 			return jitterAround(l3QuietKeepalive)
 		}
@@ -149,22 +163,43 @@ func newStreamL3Link(st *smux.Stream, quiet func() bool, sessReads func() uint64
 	return l
 }
 
+// readDeadAfter is the reader's limit without a frame: with a peer that may
+// go quiet (HS2_QUIET_IDLE both sides) it allows the quiet TUN keepalive.
+func (l *l3Link) readDeadAfter() time.Duration {
+	if l.qs != nil && l.qs.peerQuiet() {
+		return quietL3ReadDead
+	}
+	if l.deadAfter > 0 {
+		return l.deadAfter
+	}
+	return l3DeadAfter
+}
+
 // watchSession drops the link once its session has received nothing for
 // l3SessionSilent (it runs beside the reader, so a frame is never cut by a
-// read deadline).
+// read deadline). With HS2_QUIET_IDLE, quietSilent while the link is idle.
 func (l *l3Link) watchSession(reads func() uint64) {
 	every := min(2*time.Second, l3SessionSilent/4)
 	t := time.NewTicker(every)
 	defer t.Stop()
 	last, since := reads(), time.Now()
+	var qw quietWatch
 	for {
 		select {
 		case <-l.done:
 			return
 		case now := <-t.C:
+			limit, ref := l3SessionSilent, since
+			if l.qs != nil {
+				lax := l.qs.lenient()
+				ref = qw.ref(lax, since, now)
+				if lax {
+					limit = quietSilent
+				}
+			}
 			if n := reads(); n != last {
 				last, since = n, now
-			} else if now.Sub(since) >= l3SessionSilent {
+			} else if now.Sub(ref) >= limit {
 				l.markDead()
 				return
 			}
@@ -245,6 +280,7 @@ func (l *l3Link) writeLoop(pool *sync.Pool, drops *atomic.Uint64) {
 			if len(batch) == 0 {
 				continue // everything was stale
 			}
+			l.qs.markL3()
 		case <-idle.C:
 			batch = tlscarrier.AppendFrame(batch, core.TypePing, make([]byte, core.KeepalivePad()))
 		}
@@ -416,19 +452,17 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 	defer l.markDead()
 	for ctx.Err() == nil {
-		dead := l3DeadAfter
-		if l.deadAfter > 0 {
-			dead = l.deadAfter
-		}
-		l.car.SetReadDeadline(time.Now().Add(dead))
+		l.car.SetReadDeadline(time.Now().Add(l.readDeadAfter()))
 		ft, payload, err := l.car.ReadFrameReuse()
 		if err != nil {
 			return
 		}
 		switch ft {
 		case core.TypeData:
+			l.qs.markL3()
 			dev.Write(payload)
 		case core.TypeDataDup:
+			l.qs.markL3()
 			if p := s.rx.accept(payload); p != nil {
 				dev.Write(p)
 			}

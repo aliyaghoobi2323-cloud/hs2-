@@ -305,6 +305,7 @@ type managedLink struct {
 	bornSpare    bool        // reverse: arrived while the pool already had its target
 	lastRx       time.Time   // when the link last received anything (keepalives included)
 	rxSeen       bool        // it has received something at all
+	quietW       quietWatch  // HS2_QUIET_IDLE: the suspect check's idle/busy view
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
 }
@@ -1849,7 +1850,15 @@ func (m *LinkManager) sampleHealth() {
 				ml.lastRx, ml.rxSeen = now, true
 			}
 			wasSuspect := ml.suspect
-			ml.suspect = ml.rxSeen && now.Sub(ml.lastRx) >= suspectAfter
+			after, ref := suspectAfter, ml.lastRx
+			if q := ml.mtr.quiet; q != nil { // HS2_QUIET_IDLE: an idle link may be quiet
+				lax := q.lenient()
+				ref = ml.quietW.ref(lax, ml.lastRx, now)
+				if lax {
+					after = quietSilent
+				}
+			}
+			ml.suspect = ml.rxSeen && now.Sub(ref) >= after
 			if ml.suspect && !wasSuspect {
 				logs = append(logs, fmt.Sprintf("link %d: nothing received for %s — not used for new connections until it answers", ml.id, fmtDur(now.Sub(ml.lastRx))))
 			}

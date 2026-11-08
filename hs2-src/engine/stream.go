@@ -100,6 +100,15 @@ func (w *watchConn) fail(op string, err error) {
 	})
 }
 
+// expire ends the connection for a keepalive timeout (the HS2_QUIET_IDLE
+// session watchdog), recording why as a socket error would be.
+func (w *watchConn) expire(why string) {
+	w.once.Do(func() {
+		w.why.Store(&why)
+		go w.onErr()
+	})
+}
+
 // reason returns why the connection failed, or "" if it has not.
 func (w *watchConn) reason() string {
 	if s := w.why.Load(); s != nil {
@@ -188,17 +197,32 @@ func newSession(conn net.Conn, server bool, sampler *obfs.LengthSampler, meter *
 			s.Close()
 		}
 	}
+	// HS2_QUIET_IDLE (quiet.go): smux writes through the NOP filter, and the
+	// session watchdog stands in for smux's keepalive timeout.
+	var top net.Conn = w
+	var q *quietState
+	if quietIdle && meter != nil {
+		q = newQuietState(meter, !server)
+		if server { // the exit: its user connections (exitTraffic)
+			q.setUsers(func() bool { return meter.users.Load() > 0 })
+		}
+		meter.quiet = q
+		top = &quietConn{Conn: w, q: q}
+	}
 	var sess *smux.Session
 	var err error
 	if server {
-		sess, err = smux.Server(w, newSmuxConfig())
+		sess, err = smux.Server(top, newSmuxConfig())
 	} else {
-		sess, err = smux.Client(w, newSmuxConfig())
+		sess, err = smux.Client(top, newSmuxConfig())
 	}
 	if err != nil {
 		return nil, nil, err
 	}
 	sp.Store(sess)
+	if q != nil {
+		go q.watch(sess, w)
+	}
 	g := &sessGuard{w: w}
 	g.sess.Store(sess)
 	if meter != nil {

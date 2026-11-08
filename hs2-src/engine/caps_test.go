@@ -7,13 +7,14 @@ import "testing"
 // so a peer advertising one was read as supporting the other.
 func TestCapsDistinct(t *testing.T) {
 	caps := map[string]int{
-		"capPortTags": capPortTags,
-		"capL3Quiet":  capL3Quiet,
-		"capL3Dup":    capL3Dup,
-		"capMConn":    capMConn,
-		"capMConnRaw": capMConnRaw,
-		"capLBAdvert": capLBAdvert,
-		"capLB":       capLB,
+		"capPortTags":  capPortTags,
+		"capL3Quiet":   capL3Quiet,
+		"capL3Dup":     capL3Dup,
+		"capMConn":     capMConn,
+		"capMConnRaw":  capMConnRaw,
+		"capLBAdvert":  capLBAdvert,
+		"capLB":        capLB,
+		"capQuietIdle": capQuietIdle,
 	}
 	seen := map[int]string{}
 	for name, v := range caps {

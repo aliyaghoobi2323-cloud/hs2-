@@ -175,6 +175,9 @@ type linkMeter struct {
 	// guard watches the link's smux session for a reader stuck on a full
 	// receive buffer (wedge.go); set once by newSession, before any stream.
 	guard *sessGuard
+	// quiet is the link's HS2_QUIET_IDLE state (quiet.go); nil without the
+	// key. Set once by newSession, before any stream.
+	quiet *quietState
 
 	peerRetrans atomic.Uint64 // exit-side cumulative TCP retransmits (download loss)
 	// peerLoss is what the last pong said and what this side had received

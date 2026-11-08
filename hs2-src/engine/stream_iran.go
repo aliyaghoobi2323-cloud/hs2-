@@ -88,7 +88,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// A link carries user connections only once its kindInfo exchange is over,
 	// so each one knows whether the exit routes port tags (routes.go).
 	lm.gateInfo = true
-	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap()}
+	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap()}
 	if cfg.LB {
 		mine.Caps |= capLB
 	}
@@ -527,7 +527,7 @@ func openL3(ctx context.Context, l Link, set *l3Set, dev tunWriter, logf func(st
 		st.Close()
 		return
 	}
-	pl := newStreamL3Link(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)))
+	pl := newStreamL3LinkQ(st, peerL3Quiet(linkMeterOf(l)), sessReadsOf(linkMeterOf(l)), quietOf(linkMeterOf(l)))
 	pl.heavy = heavyOf(linkMeterOf(l))
 	pl.dupOK = peerL3Dup(linkMeterOf(l))
 	if mtr := linkMeterOf(l); mtr != nil {

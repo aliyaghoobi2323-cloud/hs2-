@@ -333,6 +333,11 @@ func newSmuxConfig() *smux.Config {
 	// falsely kill a link.
 	c.KeepAliveInterval = time.Duration(4000+rand.IntN(4000)) * time.Millisecond // 4–8s
 	c.KeepAliveTimeout = 24 * time.Second
+	if quietIdle {
+		// The session watchdog (quiet.go) times the link out instead: 24 s as
+		// here while it is busy, longer only while it is quiet-idle.
+		c.KeepAliveTimeout = quietSmuxBackstop
+	}
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer
@@ -359,7 +364,11 @@ func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLin
 		car.Close()
 		return nil, err
 	}
-	return &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}, nil
+	l := &mtcpLink{tls: car, sess: sess, sampler: sampler, mtr: mtr, why: why}
+	if mtr.quiet != nil {
+		mtr.quiet.setUsers(func() bool { return l.Active() > 0 })
+	}
+	return l, nil
 }
 
 // closed reports when the link's smux session ends, so a reverse-edge accept

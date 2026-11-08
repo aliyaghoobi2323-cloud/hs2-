@@ -780,7 +780,7 @@ func serveOldStream(ctx context.Context, st *smux.Stream, panel string, car *tls
 	st.SetReadDeadline(time.Time{})
 	switch kind[0] {
 	case kindCtrl:
-		serveControl(ctx, st, car)
+		serveControl(ctx, st, car, nil)
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
 	case kindTCP:

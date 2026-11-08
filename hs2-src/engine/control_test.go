@@ -55,7 +55,7 @@ func TestControlChannelRoundTrip(t *testing.T) {
 			st.Close()
 			return
 		}
-		serveControl(ctx, st, nil) // nil carrier -> retransmits report (0,false)
+		serveControl(ctx, st, nil, nil) // nil carrier -> retransmits report (0,false)
 	}()
 
 	l := &ctrlFakeLink{sess: cli, m: &linkMeter{}}

@@ -229,7 +229,7 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		// stalled path; say so instead of "closed locally".
 		w := why()
 		if w == "read: "+reasonLocalClosed || (w == "" && errors.Is(downErr, io.ErrClosedPipe)) {
-			return "no data from the edge for " + newSmuxConfig().KeepAliveTimeout.String() + " (keepalive timeout — path stalled)"
+			return "no data from the edge for " + keepaliveTimeoutWords() + " (keepalive timeout — path stalled)"
 		}
 	}
 	return sessionEndReason(why, downErr)

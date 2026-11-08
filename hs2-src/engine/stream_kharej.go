@@ -81,7 +81,7 @@ func (cfg KharejConfig) routeTable() RouteTable {
 // the ports with their own target.
 func (cfg KharejConfig) info(myMax int) peerInfo {
 	t := cfg.routeTable()
-	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap(), Ports: t.MappedPorts()}
+	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ports: t.MappedPorts()}
 	if cfg.LB {
 		pi.Caps |= capLB
 	}
@@ -214,7 +214,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	st.SetReadDeadline(time.Time{})
 	switch kind[0] {
 	case kindCtrl:
-		serveControl(ctx, st, car)
+		serveControl(ctx, st, car, mtr)
 	case kindPool:
 		servePoolCtl(ctx, st, pool)
 	case kindStats:
@@ -295,7 +295,7 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			mtr.l3s.Add(1)
 			defer mtr.l3s.Add(-1)
 		}
-		pl := newStreamL3Link(st, peerL3Quiet(mtr), sessReadsOf(mtr))
+		pl := newStreamL3LinkQ(st, peerL3Quiet(mtr), sessReadsOf(mtr), quietOf(mtr))
 		pl.heavy = heavyOf(mtr)
 		pl.dupOK = peerL3Dup(mtr)
 		if mtr != nil {
