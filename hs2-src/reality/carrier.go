@@ -78,7 +78,7 @@ func ClientDialTLS(addr, sni string, sharedKey []byte) (*utls.UConn, error) {
 	uconn := utls.UClient(conn, &utls.Config{
 		ServerName:         sni,
 		InsecureSkipVerify: true, // cover cert won't chain; we authenticate via the signal
-	}, utls.HelloChrome_120)
+	}, realityHello)
 	if err := uconn.BuildHandshakeState(); err != nil {
 		conn.Close()
 		return nil, err

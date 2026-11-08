@@ -45,7 +45,9 @@ func (d *Dispatcher) Handle(ctx context.Context, conn net.Conn) {
 	// Read the first TLS record (the ClientHello). One short deadline; a peer
 	// that stalls is forwarded like any slow client — no distinctive hang.
 	conn.SetReadDeadline(time.Now().Add(peekWait))
-	buf := make([]byte, 2048)
+	// One whole record: a Chrome 131+ ClientHello (ML-KEM key share) can pass
+	// 2 KiB, and a cut one would not parse (the client taken for a browser).
+	buf := make([]byte, 5+16384)
 	n, err := readClientHelloBytes(conn, buf)
 	conn.SetReadDeadline(time.Time{})
 	if err != nil || n == 0 {

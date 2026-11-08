@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	utls "github.com/refraction-networking/utls"
 )
 
@@ -26,7 +27,7 @@ func DialSignalled(addr, sni string, sharedKey []byte) (net.Conn, []byte, error)
 	// Build a Chrome ClientHello with uTLS, but override the session-id with our
 	// signal. We first let uTLS generate its client_random, then compute the
 	// session-id bound to that random.
-	uconn := utls.UClient(conn, &utls.Config{ServerName: sni, InsecureSkipVerify: true}, utls.HelloChrome_120)
+	uconn := utls.UClient(conn, &utls.Config{ServerName: sni, InsecureSkipVerify: true}, realityHello)
 	if err := uconn.BuildHandshakeState(); err != nil {
 		conn.Close()
 		return nil, nil, err
@@ -61,3 +62,12 @@ func DialSignalled(addr, sni string, sharedKey []byte) (net.Conn, []byte, error)
 	}
 	return conn, cr, nil
 }
+
+// realityHello is the reality client's ClientHello preset: today's Chrome 120
+// unless HS2_UTLS_HELLO names another ("auto" = uTLS's newest Chrome, 133 with
+// X25519MLKEM768 in the vendored v1.8.0). It stays the default because a
+// reality server older than this release reads only the first 2 KiB of the
+// ClientHello, and Chrome 131+ hellos (an ML-KEM key share) can be larger:
+// such a server would take the client for a browser. Upgrade the server,
+// then set the key on the client; unset it to roll back.
+var realityHello = tlscarrier.HelloFromEnv(utls.HelloChrome_120)

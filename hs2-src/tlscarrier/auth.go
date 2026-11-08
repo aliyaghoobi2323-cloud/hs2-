@@ -62,6 +62,16 @@ const (
 	clientPadMin, clientPadMax = 280, 720 // a typical HTTP/1.1 GET
 	serverPadMin, serverPadMax = 120, 480 // typical response headers
 
+	// HS2_AUTH_PAD=1: a request with cookies or a small form body, and
+	// response headers plus a body (log-uniform, most small). No new wire
+	// format: both records already carry their pad length (u16) and every
+	// parser — this one and all older ones — skips that many bytes, so either
+	// side may turn it on alone. The client record stays far below one TLS
+	// record (16 KiB), which an older server reads in a single Read.
+	padReqMin, padReqMax   = 420, 1450
+	padHdrMin, padHdrMax   = 180, 420
+	padBodyMin, padBodyMax = 300, 6000
+
 	legacyRecordLen = 32 // v1 clients: nonce + tag, no binding
 )
 
@@ -119,7 +129,25 @@ func randRange(lo, hi int) int {
 
 // padded appends a 2-byte length and that many random bytes to head.
 func padded(head []byte, lo, hi int) []byte {
-	pad := randRange(lo, hi)
+	return paddedN(head, randRange(lo, hi))
+}
+
+// clientPad / serverPad are the auth records' pad sizes (AuthPad: dpi.go).
+func clientPad() int {
+	if AuthPad {
+		return randRange(padReqMin, padReqMax)
+	}
+	return randRange(clientPadMin, clientPadMax)
+}
+
+func serverPad() int {
+	if AuthPad {
+		return randRange(padHdrMin, padHdrMax) + logUniform(padBodyMin, padBodyMax)
+	}
+	return randRange(serverPadMin, serverPadMax)
+}
+
+func paddedN(head []byte, pad int) []byte {
 	out := make([]byte, len(head)+2+pad)
 	copy(out, head)
 	binary.BigEndian.PutUint16(out[len(head):], uint16(pad))
@@ -132,7 +160,7 @@ func makeClientAuth(key, ekm []byte) (rec, nonce []byte) {
 	nonce = make([]byte, authNonceLen)
 	rand.Read(nonce)
 	head := append(append([]byte{}, nonce...), clientTag(key, nonce, ekm, minuteBucket())...)
-	return padded(head, clientPadMin, clientPadMax), nonce
+	return paddedN(head, clientPad()), nonce
 }
 
 // parseClientAuth checks the head of the client's first record. On success it
@@ -180,7 +208,7 @@ func isLegacyAuth(key, first []byte) bool {
 
 // makeServerProof builds the server's answer for an authenticated client.
 func makeServerProof(key, nonce, ekm []byte) []byte {
-	return padded(serverTag(key, nonce, ekm), serverPadMin, serverPadMax)
+	return paddedN(serverTag(key, nonce, ekm), serverPad())
 }
 
 // readServerProof reads and verifies the server's answer.

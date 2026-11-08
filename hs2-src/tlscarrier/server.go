@@ -31,9 +31,35 @@ type Server struct {
 	replay  *replayMem
 	once    sync.Once
 	lastLog atomic.Int64
+	// shared is the one tls.Config of every connection with Resume on, so
+	// they share Go's (in-memory, auto-rotated) ticket keys and a ticket one
+	// connection issued can resume another (resume.go).
+	shared *tls.Config
 }
 
-func (s *Server) init() { s.once.Do(func() { s.replay = newReplayMem() }) }
+func (s *Server) init() {
+	s.once.Do(func() {
+		s.replay = newReplayMem()
+		if Resume {
+			s.shared = s.newTLSConfig()
+		}
+	})
+}
+
+// newTLSConfig is a connection's TLS config: built per connection as before,
+// or the one shared config with Resume on.
+func (s *Server) newTLSConfig() *tls.Config {
+	tcfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"http/1.1"},
+	}
+	if s.GetCertificate != nil {
+		tcfg.GetCertificate = s.GetCertificate
+	} else {
+		tcfg.Certificates = []tls.Certificate{s.Cert}
+	}
+	return tcfg
+}
 
 // firstReadTimeout is how long a connection may stay silent after the TLS
 // handshake. A real client sends its auth record at once; this only bounds idle
@@ -62,6 +88,16 @@ const httpToHTTPS400 = "HTTP/1.0 400 Bad Request\r\n\r\nClient sent an HTTP requ
 // start — including other HTTP methods like DELETE — is not; a real Go HTTPS
 // server lets those fail at the TLS layer, and so do we. Matching Go's exact
 // set is what keeps us coherent.
+// plainHTTPReply is the answer to a plain-HTTP request on the TLS port: Go's
+// (httpToHTTPS400), or with HS2_COVER_NGINX the reply nginx sends there, so
+// the port answers like the nginx-style cover it fronts.
+func plainHTTPReply(now time.Time) string {
+	if !CoverNginx {
+		return httpToHTTPS400
+	}
+	return NginxError(400, "The plain HTTP request was sent to HTTPS port", now, true)
+}
+
 func tlsRecordHeaderLooksLikeHTTP(h [5]byte) bool {
 	switch string(h[:]) {
 	case "GET /", "HEAD ", "POST ", "PUT /", "OPTIO":
@@ -76,15 +112,16 @@ func tlsRecordHeaderLooksLikeHTTP(h [5]byte) bool {
 func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrier)) {
 	s.init()
 	tuneTCP(raw)
-
-	tcfg := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		NextProtos: []string{"http/1.1"},
+	if QuietIdle { // Chrome's 45 s instead of the listener's 15 s (dpi.go)
+		if tc, ok := raw.(*net.TCPConn); ok {
+			tc.SetKeepAlive(true)
+			tc.SetKeepAlivePeriod(quietKeepAlive)
+		}
 	}
-	if s.GetCertificate != nil {
-		tcfg.GetCertificate = s.GetCertificate
-	} else {
-		tcfg.Certificates = []tls.Certificate{s.Cert}
+
+	tcfg := s.shared
+	if tcfg == nil {
+		tcfg = s.newTLSConfig()
 	}
 	tconn := tls.Server(wrapBatch(raw), tcfg)
 	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
@@ -97,7 +134,7 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 		// plain-HTTP request. Same check, same bytes, same close as net/http.
 		var re tls.RecordHeaderError
 		if errors.As(err, &re) && re.Conn != nil && tlsRecordHeaderLooksLikeHTTP(re.RecordHeader) {
-			io.WriteString(re.Conn, httpToHTTPS400)
+			io.WriteString(re.Conn, plainHTTPReply(time.Now()))
 			re.Conn.Close()
 			return
 		}

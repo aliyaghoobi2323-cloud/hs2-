@@ -183,13 +183,19 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 	// Aggressive TCP keepalive so the kernel detects a black-holed link (packets
 	// dropped, no RST) and fails reads, which lets smux/health-probe declare the
 	// link dead and the manager rebuild it.
+	// (HS2_QUIET_IDLE: 45 s like Chrome; TCP_USER_TIMEOUT still fails a link
+	// whose data goes unacknowledged, see dpi.go.)
 	if tc, ok := raw.(*net.TCPConn); ok {
 		tc.SetKeepAlive(true)
-		tc.SetKeepAlivePeriod(3 * time.Second)
+		tc.SetKeepAlivePeriod(dialKeepAlive())
 	}
 	tuneTCP(raw)
 	cfg := &utls.Config{ServerName: sni, InsecureSkipVerify: true}
-	u := utls.UClient(wrapBatch(raw), cfg, utls.HelloChrome_133)
+	u, err := newClientConn(wrapBatch(raw), cfg, addr, clientHello)
+	if err != nil {
+		raw.Close()
+		return nil, err
+	}
 	raw.SetDeadline(time.Now().Add(authTimeout))
 	if err := u.Handshake(); err != nil {
 		raw.Close()
