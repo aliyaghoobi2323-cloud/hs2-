@@ -469,7 +469,10 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 	}
 	obs.openLat.observe(uint64(time.Since(t0).Microseconds()))
 	mc.tr.setPort(port)
-	if k := int(stripeK.Load()); k > 0 && mconnLite.Load() && lm.exitInfo.Load().mconnStripe() {
+	// HS2_MCONN_STRIPE needs HS2_MCONN_DEADLINE_FIX: it upgrades raw
+	// connections at full rate, where the stale wake deadline reset 4 of ~30
+	// striped downloads in the lab without the fix
+	if k := int(stripeK.Load()); k > 0 && mconnLite.Load() && mconnDeadlineFix.Load() && lm.exitInfo.Load().mconnStripe() {
 		mc.setStripe(k) // HS2_MCONN_STRIPE (mconn_stripe.go)
 	}
 	mconnStat.total.Add(1)

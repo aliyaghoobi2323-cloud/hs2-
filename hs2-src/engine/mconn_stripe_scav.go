@@ -293,3 +293,6 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 	slices.Sort(ds)
 	return ds[len(ds)/2], true
 }
+
+// stripeLogf logs a diagnostic line (callers check stripeLog).
+func stripeLogf(format string, args ...any) { log.Printf(format, args...) }

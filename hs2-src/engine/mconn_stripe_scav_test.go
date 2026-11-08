@@ -343,3 +343,46 @@ func TestL3LaneLeavesStripeLinkAtOnce(t *testing.T) {
 		t.Fatal("stayed on a stripe link inside the gap")
 	}
 }
+
+// A raw connection striped while the gate holds the width at 0 (a queue on
+// the path), and then while it opens and closes: every byte arrives both
+// ways, nothing resets.
+func TestMConnStripeGatedFromRaw(t *testing.T) {
+	for _, flap := range []bool{false, true} {
+		t.Run(map[bool]string{false: "held", true: "flapping"}[flap], func(t *testing.T) {
+			setStripeRate(t, 200<<10)
+			old := stripeQTarget.Load()
+			t.Cleanup(func() { stripeQTarget.Store(old) })
+			stripeQTarget.Store(int64(3 * time.Millisecond))
+			fixPathQ(t, 50*time.Millisecond)
+			n, iran, exit := newRawPair(t)
+			n.hook = func(l *tLink) { l.exit.rate.Store(1 << 20) }
+			n.link(0).exit.rate.Store(1 << 20)
+			iran.setStripe(4)
+			stop := make(chan struct{})
+			defer close(stop)
+			if flap {
+				go func() {
+					q := time.Duration(0)
+					for {
+						select {
+						case <-stop:
+							return
+						case <-time.After(150 * time.Millisecond):
+						}
+						q = 50*time.Millisecond - q
+						setPathQ(q)
+					}
+				}()
+			}
+			down, up := randBytes(6<<20, 51), randBytes(256<<10, 52)
+			both(t,
+				func() error { return xfer(exit, down, 32<<10, 0) },
+				func() error { return readN(iran, down) },
+				func() error { return xfer(iran, up, 4<<10, 10*time.Millisecond) },
+				func() error { return readN(exit, up) },
+			)
+			closeAndWait(t, iran, exit)
+		})
+	}
+}

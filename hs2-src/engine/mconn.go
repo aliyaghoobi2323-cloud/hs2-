@@ -1696,6 +1696,9 @@ func (m *mConn) subDied(s *msub, cause error) {
 	}
 	m.sendCond.Broadcast()
 	m.tr.ev("sub- %d cause=%v retired=%v bulk=%v lost=%v subs=%d", s.idx, cause, s.retired, s.bulk.Load(), lost, len(m.subs))
+	if stripeLog && m.stN > 0 {
+		stripeLogf("stripe %x: sub- %d stripe=%v cause=%v retired=%v lost=%v holeRecent=%v quiet=%v iran=%v subs=%d", m.id&0xffffff, s.idx, s.stripe, cause, s.retired, lost, m.holeRecentLocked(), m.stripeQuietLocked(s), m.iran, len(m.subs))
+	}
 	if m.ended || m.closedCleanLocked(s) {
 		m.mu.Unlock()
 		return
@@ -1771,6 +1774,9 @@ func (m *mConn) end(err error, rst bool) {
 	}
 	m.ended, m.err = true, err
 	m.tr.ev("end err=%v rst=%v sent=%d", err, rst, m.sendOff)
+	if stripeLog && m.stN > 0 && err != errMConnClosed {
+		stripeLogf("stripe %x: end err=%v rst=%v iran=%v sent=%d subs=%d", m.id&0xffffff, err, rst, m.iran, m.sendOff, len(m.subs))
+	}
 	m.setStateLocked(mStateEnded)
 	if m.lite {
 		m.refreshLiteDualLocked()

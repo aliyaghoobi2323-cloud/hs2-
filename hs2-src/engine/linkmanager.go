@@ -845,6 +845,12 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 		sort.Slice(serving, func(i, j int) bool {
 			a, b := serving[i], serving[j]
 			switch {
+			case stripeOn(a) != stripeOn(b):
+				// a stripe's link (or one set aside for it) goes last: an idle
+				// stripe sub is not "flowing", and closing it under a sender
+				// that just put a chunk on it resets the download
+				// (HS2_MCONN_STRIPE; never true with the key off)
+				return stripeOn(b)
 			case a.flowing != b.flowing:
 				return a.flowing < b.flowing
 			case a.recent != b.recent:
