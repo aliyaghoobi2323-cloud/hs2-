@@ -201,16 +201,20 @@ const (
 	// duplicating, sub only once it is mLiteAfter old and both directions
 	// moved at most mDupMaxRate in the last window (sampled every mLitePoll
 	// by the Iran manager); above mDupMaxRate it sends on the first sub only
-	// and never moves to bulk. A second sub idle (no chunk queued on it) for
-	// mLiteIdle is closed by Iran. New upgrades stop while the duplicated
+	// and never moves to bulk. A second sub idle both ways (no chunk queued
+	// on it, none received on it) for mLiteIdle is closed by Iran. New upgrades stop while the duplicated
 	// bytes of the last mLiteCapWindow seconds exceed mLiteCapPct of all
 	// bytes the process's mconn connections sent.
 	mLiteAfter     = time.Second
 	mLitePoll      = time.Second
-	mLiteIdle      = 10 * time.Second
 	mLiteCapPct    = 5
 	mLiteCapWindow = 5
 )
+
+// mLiteIdle: see the lite constants above (a variable so tests can shorten
+// it). It must stay over mHoleSafe: by then the sub left has had time to
+// take a copy of everything, and its death costs the peer nothing.
+var mLiteIdle = 10 * time.Second
 
 // liteBudget is the process-wide duplication budget of lite connections: per
 // second buckets (by unix second, 8 slots) of all bytes sent and of the
@@ -367,6 +371,12 @@ func (s *msub) push(c *mchunk) {
 }
 
 // fits: s has room for n more bytes (under m.mu).
+// coldLocked (lite): nothing queued on s and nothing received on it since
+// before t — Iran's idle rule (mLiteIdle, both ways) may close it soon.
+func (s *msub) coldLocked(t time.Time) bool {
+	return s.qBytes == 0 && s.cur == nil && s.lastPush.Before(t) && s.lastRecv.Load() < t.UnixNano()
+}
+
 func (s *msub) fits(n int) bool {
 	max := mSubQueue
 	if s.m.lite {
@@ -789,17 +799,29 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			m.noteQueueLocked()
 			return nil
 		}
-		fit := 0
+		fit, warm := 0, 0
+		var cold time.Time // lite: a sub idle both ways since before this is cold
+		if m.lite {
+			cold = time.Now().Add(-mLiteIdle / 2)
+		}
+		p := m.primary.Load()
 		for _, s := range m.subs {
 			if s.retired {
 				continue
 			}
 			if s.fits(c.n) {
 				fit++
+				if s == p || !m.lite || !s.coldLocked(cold) {
+					warm++
+				}
 			}
 		}
-		if fit == 0 {
-			m.sendCond.Wait() // all full, or no sub yet (Kharej before attach)
+		if fit == 0 || warm == 0 {
+			// all full, or no sub yet (Kharej before attach); lite: never
+			// the only copy on a cold second sub — Iran may be closing it
+			// as idle this very moment (it decides alone, by mLiteIdle),
+			// and the copy would be lost with it: wait for a warm one
+			m.sendCond.Wait()
 			continue
 		}
 		c.setOff(m.sendOff)
@@ -1809,7 +1831,18 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				if s == p || len(s.q) > 0 || s.cur != nil {
 					continue
 				}
-				if idle := now.Sub(s.lastPush); idle >= mLiteIdle {
+				// Idle both ways: the peer decides alone what it sends on
+				// this sub (one copy only when its other sub's queue is
+				// full, or after its own primary switch), so a sub idle
+				// only by our pushes may hold the peer's only copy of some
+				// bytes. Closing it then lost them: the peer reset the
+				// connection (lab, 2% loss: downloads cut ~11 s in, at
+				// mLiteIdle after the upgrade).
+				last := s.lastPush
+				if r := time.Unix(0, s.lastRecv.Load()); r.After(last) {
+					last = r
+				}
+				if idle := now.Sub(last); idle >= mLiteIdle {
 					s.retired = true
 					retire = append(retire, s)
 					m.tr.ev("lite: close idle second sub %d (idle %v)", s.idx, idle.Round(time.Second))

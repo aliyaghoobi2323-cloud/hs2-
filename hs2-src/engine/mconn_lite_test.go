@@ -199,3 +199,49 @@ func TestMConnLiteCapStopsUpgrade(t *testing.T) {
 	closeAndWait(t, iran, exit)
 	noLeak(t, before)
 }
+
+// The exit must not put its only copy of some bytes on a second sub that
+// Iran may be closing as idle (Iran decides alone, after mLiteIdle): with
+// its first sub's queue full on a lossy link, a burst after a quiet spell
+// went to the second sub alone, Iran closed that sub a moment later, the
+// first sub had just missed copies, and the exit reset the connection (lab,
+// 2% loss: reels cut ~11 s in, at mLiteIdle after the upgrade). Iran, for
+// its part, counts a sub that still receives as busy.
+func TestMConnLiteIdleCloseNoLoss(t *testing.T) {
+	// shorter than in production, still over mHoleSafe (the exit resets a
+	// connection whose surviving sub missed a copy within mHoleSafe)
+	old := mLiteIdle
+	mLiteIdle = mHoleSafe + 2*time.Second
+	t.Cleanup(func() { mLiteIdle = old })
+	before := runtime.NumGoroutine()
+	n, iran, exit := newLitePair(t)
+	req := randBytes(600, 101)
+	both(t, func() error { return xfer(iran, req, 600, 0) }, func() error { return readN(exit, req) })
+	mWaitFor(t, "two subs", mLiteAfter+2*time.Second, func() bool { return liveSubs(iran) == 2 && liveSubs(exit) == 2 })
+	// quiet until just before Iran's idle rule closes the second sub; then
+	// a burst down while the first sub is stalled (loss recovery)
+	time.Sleep(mLiteIdle - 700*time.Millisecond)
+	n.link(0).exit.stall(400 * time.Millisecond)
+	down := randBytes(96<<10, 102)
+	both(t,
+		func() error { return xfer(exit, down, 8<<10, 0) },
+		func() error { return readN(iran, down) },
+	)
+	time.Sleep(time.Second) // past the moment the old rule closed the sub
+	more := randBytes(64<<10, 103)
+	both(t,
+		func() error { return xfer(exit, more, 8<<10, 0) },
+		func() error { return readN(iran, more) },
+	)
+	select {
+	case <-iran.GetDieCh():
+		t.Fatalf("Iran ended: %v", iran.err)
+	case <-exit.GetDieCh():
+		t.Fatalf("exit ended: %v", exit.err)
+	default:
+	}
+	// quiet both ways now: the second sub is closed after mLiteIdle
+	mWaitFor(t, "idle second sub closed", mLiteIdle+2*time.Second, func() bool { return liveSubs(iran) == 1 })
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
