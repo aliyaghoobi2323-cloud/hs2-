@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"os"
 	"sort"
@@ -210,6 +211,7 @@ func qUpLog(dev string, logf func(string, ...any)) func(string, ...any) {
 		tag += " " + dev
 	}
 	return func(f string, a ...any) {
+		f = fmt.Sprintf(f, a...) // the controller's notes come as ("%s", note)
 		f = strings.Replace(f, "(HS2_QUEUE_CTL)", "(HS2_QUEUE_CTL_UP)", 1)
 		f = strings.Replace(f, "egress to the edge", "egress to the exit", 1)
 		switch {
@@ -218,7 +220,7 @@ func qUpLog(dev string, logf func(string, ...any)) func(string, ...any) {
 		case strings.HasPrefix(f, "queue: "):
 			f = tag + ": " + f[len("queue: "):]
 		}
-		logf(f, a...)
+		logf("%s", f)
 	}
 }
 

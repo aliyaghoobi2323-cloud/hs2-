@@ -20,10 +20,12 @@ func TestQUpLog(t *testing.T) {
 	up("queue: shaper on %s (tc htb + cake), tunnel egress to the edge at %.1f Mbit/s", "eth1", 90.0)
 	up("queue: x capped (HS2_QUEUE_CTL)")
 	up("queue-dbg delay=1ms")
+	up("%s", "queue: the path loses 2.3% of what the links send — cap removed")
 	want := []string{
 		"queue-up eth1: shaper on eth1 (tc htb + cake), tunnel egress to the exit at 90.0 Mbit/s",
 		"queue-up eth1: x capped (HS2_QUEUE_CTL_UP)",
 		"queue-up eth1-dbg delay=1ms",
+		"queue-up eth1: the path loses 2.3% of what the links send — cap removed",
 	}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("got %q\nwant %q", got, want)
