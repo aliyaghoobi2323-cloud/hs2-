@@ -1895,7 +1895,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					m.tr.ev("lite: upgrade to dual (sent=%d recvd=%d)", m.sendOff, recvd)
 					avoid := make([]any, 0, 1+len(m.deadKeys))
 					avoid = append(avoid, live[0].key)
-					avoid = append(avoid, m.deadKeys...)
+					avoid = m.callAvoidLocked(append(avoid, m.deadKeys...)) // HS2_MCONN_CALL_AVOID
 					go m.openLight(avoid)
 				}
 			}

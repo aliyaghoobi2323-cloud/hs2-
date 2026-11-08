@@ -309,3 +309,50 @@ func TestMConnCallPickScores(t *testing.T) {
 		t.Fatal("picked a full sub")
 	}
 }
+
+// HS2_MCONN_CALL_DIR=down: Kharej copies the download direction, Iran does
+// not copy the upload one.
+func TestMConnCallDownOnly(t *testing.T) {
+	setCall(t, "1")
+	mconnCallDown = true
+	t.Cleanup(func() { mconnCallDown = false })
+	before := runtime.NumGoroutine()
+	n, iran, exit := newLitePair(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var lat atomic.Int64
+	callStream(iran, exit, 2500, stop, &wg, &lat)
+	mWaitFor(t, "exit copies", mLiteAfter+8*time.Second, func() bool {
+		exit.mu.Lock()
+		defer exit.mu.Unlock()
+		return exit.callOn
+	})
+	w1i, w1e := n.link(1).iran.wrote.Load(), n.link(1).exit.wrote.Load()
+	time.Sleep(time.Second)
+	iran.mu.Lock()
+	on := iran.callOn
+	iran.mu.Unlock()
+	di, de := n.link(1).iran.wrote.Load()-w1i, n.link(1).exit.wrote.Load()-w1e
+	if on || di > 60_000 || de < 150_000 {
+		t.Fatalf("down only: iran copies=%v, second sub carried %d up / %d down in 1 s", on, di, de)
+	}
+	close(stop)
+	wg.Wait()
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+// The avoid mark is stripped from the list and changes nothing with the key off.
+func TestCallAvoidMark(t *testing.T) {
+	m := &mConn{}
+	m.callUp = true
+	if got := m.callAvoidLocked([]any{1}); len(got) != 1 {
+		t.Fatal("mark added with the key off")
+	}
+	mconnCallAvoid = true
+	t.Cleanup(func() { mconnCallAvoid = false })
+	got := m.callAvoidLocked([]any{1})
+	if _, ok := got[len(got)-1].(callAvoidMark); !ok || len(got) != 2 {
+		t.Fatal("no mark with the key on")
+	}
+}

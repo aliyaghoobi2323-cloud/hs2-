@@ -374,7 +374,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 			// unchanged; only a link whose exit reads kindMConn will do.
 			l, rel, raw, ok = e.pickFirstLite()
 		} else {
-			l, rel, ok = e.lm.pickPlane(p, avoid)
+			l, rel, ok = e.lm.pickPlaneCall(p, avoid) // HS2_MCONN_CALL_AVOID (mconn_call.go)
 		}
 		if !ok {
 			if time.Now().After(deadline) || !sleepCtx(e.ctx, mconnPickGap) {

@@ -36,7 +36,7 @@ import (
 //     copy above mDupMaxRate, as before, and reads both copies as before.
 //   - Budget (strict, process-wide): the call copies of the last
 //     mCallBudgetWin seconds stay under mconnCallBudget bytes a second
-//     (HS2_MCONN_CALL=1: 2 MB/s = 16 Mbit/s, about eight 2 Mbit/s calls;
+//     (HS2_MCONN_CALL=1: 1 MB/s = 8 Mbit/s, about four 2 Mbit/s calls;
 //     HS2_MCONN_CALL=N with N > 1: N Mbit/s). Over it, new upgrades are
 //     refused and duplicating calls fall back to one copy at their next
 //     window. Heavy links never get a copy (the join sub avoids links with a
@@ -71,7 +71,7 @@ const (
 	mCallMinRate   = 3_000   // bytes/s, the quieter direction (24 kbit/s)
 	mCallSteady    = 2.5     // busier direction vs. the previous sample
 	mCallStreak    = 2       // call-like samples in a row
-	mCallBudgetDef = 2_000_000
+	mCallBudgetDef = 1_000_000
 	mCallBudgetWin = 5 // seconds (callBud's slots)
 	mCallLogEvery  = 10 * time.Second
 )
@@ -104,7 +104,7 @@ var callBud liteBudget
 
 // callStat: totals for the 10 s log line.
 var callStat struct {
-	upgrades, refused, dup, all atomic.Uint64
+	upgrades, refused, dup, all, avoided atomic.Uint64
 	last                        atomic.Int64
 	prevUp, prevDup, prevAll    atomic.Uint64
 }
@@ -206,7 +206,7 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 	m.txRecvd = next
 	like := w < 2*mHeavyWindow && callLikeSample(uint64(sent), got, w, &m.txPrev, &m.txStreak)
 	was := m.callOn
-	m.callOn = like && dupOff && m.liveSubsLocked() >= 2 && !callCapped(now.Unix())
+	m.callOn = like && dupOff && !m.callCopyOff() && m.liveSubsLocked() >= 2 && !callCapped(now.Unix())
 	if m.callOn != was {
 		m.tr.ev("call: copy %v (sent=%d got=%d in %v)", m.callOn, sent, got, w.Round(time.Millisecond))
 		if m.callOn && m.iran && mconnCallSubs > 2 {
@@ -257,8 +257,8 @@ func callLog(now time.Time) {
 	if up == pu && dup == pd {
 		return
 	}
-	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget)",
-		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load())
+	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget) · %d call subs placed away from other copies",
+		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load(), callStat.avoided.Load())
 }
 
 // ---- paired copies over more subs (HS2_MCONN_CALL_SUBS=3..6) ------------
@@ -363,7 +363,7 @@ func (m *mConn) callMoreSubsLocked(live []*msub) time.Duration {
 	for _, s := range live {
 		avoid = append(avoid, s.key)
 	}
-	avoid = append(avoid, m.deadKeys...)
+	avoid = m.callAvoidLocked(append(avoid, m.deadKeys...))
 	m.tr.ev("call: open pair sub %d", len(live)+1)
 	go m.openLight(avoid)
 	return 200 * time.Millisecond
@@ -450,4 +450,83 @@ func (m *mConn) callPickLocked(live []*msub, n, size int) ([2]*msub, int) {
 		}
 	}
 	return pick, k
+}
+
+// ---- not costing light users (HS2_MCONN_CALL_DIR, HS2_MCONN_CALL_AVOID) ----
+//
+// A copy adds a call's packets to a light link; at 3% loss that link stalls
+// more often, and the light flows riding it (pings, games, lite's own small
+// copies) wait with it. Two ways to spend less of the light links:
+//
+//   - HS2_MCONN_CALL_DIR=down: Iran does not copy its own direction (the
+//     upload, Iran -> Kharej); Kharej still copies the download direction.
+//     Half the copy bytes, on the links Kharej writes.
+//   - HS2_MCONN_CALL_AVOID=1: the call's second sub goes to a link with no
+//     download AND no other connection's copy sub (lite's second subs of
+//     pings, games, echoes), the least loaded of those; only when there is
+//     none, the usual light pick.
+
+var (
+	mconnCallDown  = os.Getenv("HS2_MCONN_CALL_DIR") == "down"
+	mconnCallAvoid = os.Getenv("HS2_MCONN_CALL_AVOID") == "1"
+)
+
+// callAvoidMark in an avoid list asks the opener for HS2_MCONN_CALL_AVOID's
+// placement (an mOpener has no other way to tell a call's sub).
+type callAvoidMark struct{}
+
+// callCopyOff: this side's direction is never copied (HS2_MCONN_CALL_DIR).
+func (m *mConn) callCopyOff() bool { return mconnCallDown && m.iran }
+
+// callAvoidLocked adds the mark for a call's upgrade or pair sub.
+func (m *mConn) callAvoidLocked(avoid []any) []any {
+	if mconnCallAvoid && (m.callUp || m.callOn) {
+		return append(avoid, callAvoidMark{})
+	}
+	return avoid
+}
+
+// pickPlaneCall is pickPlane, or with the mark the call placement.
+func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) {
+	mark := false
+	for i, a := range avoid {
+		if _, ok := a.(callAvoidMark); ok {
+			mark = true
+			avoid = append(avoid[:i:i], avoid[i+1:]...)
+			break
+		}
+	}
+	if !mark || p != planeLight {
+		return m.pickPlane(p, avoid)
+	}
+	pool := m.exitInfo.Load()
+	m.mu.Lock()
+	ml := m.pickPlaneTiers(p, avoid, pool, func(ml *managedLink) bool {
+		return ml.heavy == 0 && !ml.degraded && !ml.draining && !ml.suspect && linkCopies(ml.link) == 0
+	})
+	if ml != nil {
+		callStat.avoided.Add(1)
+		m.placeLocked(ml)
+		m.mu.Unlock()
+		return ml.link, m.releaseFor(ml), true
+	}
+	m.mu.Unlock()
+	return m.pickPlane(p, avoid)
+}
+
+// linkCopies: the copy-only streams (lite's second subs) open on l.
+func linkCopies(l Link) int {
+	ml, ok := l.(*mtcpLink)
+	if !ok {
+		return 0
+	}
+	n := 0
+	ml.flowMu.Lock()
+	for cs := range ml.flows {
+		if cs.copyOnly.Load() {
+			n++
+		}
+	}
+	ml.flowMu.Unlock()
+	return n
 }
