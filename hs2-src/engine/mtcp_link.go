@@ -341,6 +341,7 @@ func newSmuxConfig() *smux.Config {
 	c.MaxFrameSize = SmuxFrameSize
 	c.MaxReceiveBuffer = SmuxSessionBuffer
 	c.MaxStreamBuffer = SmuxStreamBuffer
+	c.AutoWindow = smuxAutoWin // HS2_SMUX_AUTOWIN (smux_autowin.go); nil: off
 	return c
 }
 

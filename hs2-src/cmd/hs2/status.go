@@ -269,6 +269,16 @@ type liveStatus struct {
 	ObsWedgeReleases         uint64 `json:"obs_wedge_releases,omitempty"`
 	ObsPostReleaseStall      uint64 `json:"obs_post_release_stall,omitempty"`
 	ObsPostReleaseStallMaxMs int64  `json:"obs_post_release_stall_max_ms,omitempty"`
+	// HS2_SMUX_AUTOWIN: the adaptive smux windows' budget (MiB) — out now, the
+	// most ever out, its size — streams holding a grown window now, and since
+	// start the doublings, those the budget refused, and the halvings.
+	SmuxWinMiB        float64 `json:"smux_win_mib,omitempty"`
+	SmuxWinPeakMiB    float64 `json:"smux_win_peak_mib,omitempty"`
+	SmuxWinBudgetMiB  float64 `json:"smux_win_budget_mib,omitempty"`
+	SmuxWinStreams    int     `json:"smux_win_streams,omitempty"`
+	ObsSmuxWinGrows   uint64  `json:"obs_smux_win_grows,omitempty"`
+	ObsSmuxWinDenied  uint64  `json:"obs_smux_win_denied,omitempty"`
+	ObsSmuxWinShrinks uint64  `json:"obs_smux_win_shrinks,omitempty"`
 }
 
 // fillMConn copies the multi-link connection counters (HS2_MCONN).
@@ -324,6 +334,18 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 	ls.ObsWedgeReleases, ls.ObsPostReleaseStall, ls.ObsPostReleaseStallMaxMs = now.WedgeReleases, now.PostReleaseStall, now.PostReleaseStallMaxMs
 }
 
+// fillSmuxWin copies the adaptive smux window budget (HS2_SMUX_AUTOWIN).
+func fillSmuxWin(ls *liveStatus) {
+	st, ok := engine.SmuxAutoWinStats()
+	if !ok {
+		return
+	}
+	mib := func(b int64) float64 { return round1(float64(b) / (1 << 20)) }
+	ls.SmuxWinMiB, ls.SmuxWinPeakMiB, ls.SmuxWinBudgetMiB = mib(st.Used), mib(st.Peak), mib(st.Limit)
+	ls.SmuxWinStreams = st.Streams
+	ls.ObsSmuxWinGrows, ls.ObsSmuxWinDenied, ls.ObsSmuxWinShrinks = st.Grows, st.Denied, st.Shrinks
+}
+
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
 func obsLines(ls liveStatus) []string {
 	var out []string
@@ -341,6 +363,9 @@ func obsLines(ls liveStatus) []string {
 	}
 	if ls.ObsLossRelKept > 0 || ls.ObsProbationOnceDenied > 0 {
 		out = append(out, fmt.Sprintf("link health, since start: %d loss verdict(s) withheld near the path's median (HS2_LOSS_RELATIVE) · %d second probation(s) refused (HS2_PROBATION_ONCE)", ls.ObsLossRelKept, ls.ObsProbationOnceDenied))
+	}
+	if ls.SmuxWinBudgetMiB > 0 {
+		out = append(out, fmt.Sprintf("adaptive smux windows (HS2_SMUX_AUTOWIN): %.1f MiB of %.0f MiB granted now (peak %.1f) to %d stream(s) · since start %d doubling(s), %d refused by the budget, %d halving(s)", ls.SmuxWinMiB, ls.SmuxWinBudgetMiB, ls.SmuxWinPeakMiB, ls.SmuxWinStreams, ls.ObsSmuxWinGrows, ls.ObsSmuxWinDenied, ls.ObsSmuxWinShrinks))
 	}
 	if ls.ObsWedgeReleases > 0 || ls.ObsPostReleaseStall > 0 {
 		out = append(out, fmt.Sprintf("wedge guard, since start: %d release(s) of a link's stalled relays · %d followed by >= 1 s with nothing received on the link (longest %d ms)", ls.ObsWedgeReleases, ls.ObsPostReleaseStall, ls.ObsPostReleaseStallMaxMs))
@@ -552,6 +577,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		udpcarrier.SetHostSaturated(hs.Saturated)
 		ow.fill(&ls, engine.Observed())
 		fillMConn(&ls, engine.MConnObserved())
+		fillSmuxWin(&ls)
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)

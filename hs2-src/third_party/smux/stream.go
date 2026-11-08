@@ -44,6 +44,9 @@ type Stream struct {
 	peerConsumed uint32        // num of bytes the peer has consumed
 	peerWindow   uint32        // peer window, initialized to 256KB, updated by peer
 	chUpdate     chan struct{} // notify of remote data consuming and window update
+
+	// hs2: adaptive receive window (Config.AutoWindow, v2 only; nil = upstream)
+	aw *streamAW
 }
 
 // newStream initiates a Stream struct
@@ -57,6 +60,9 @@ func newStream(id uint32, frameSize int, sess *Session) *Stream {
 	s.die = make(chan struct{})
 	s.chFinEvent = make(chan struct{})
 	s.peerWindow = initialPeerWindow // set to initial window size
+	if sess.config.Version == 2 && sess.config.AutoWindow != nil {
+		s.aw = newStreamAW(sess.config.AutoWindow, sess.config.MaxStreamBuffer)
+	}
 	return s
 }
 
@@ -121,7 +127,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	var notifyConsumed uint32
+	var notifyConsumed, notifyWin uint32
 	s.bufferLock.Lock()
 	if len(s.buffers) > 0 {
 		n = copy(b, s.buffers[0])
@@ -143,7 +149,9 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 	// s.numRead == n also notify window at the first read
 	s.numRead += uint32(n)
 	s.incr += uint32(n)
-	if s.incr >= uint32(s.sess.config.MaxStreamBuffer/2) || s.numRead == uint32(n) {
+	if s.aw != nil {
+		notifyConsumed, notifyWin = s.awConsumed(uint32(n))
+	} else if s.incr >= uint32(s.sess.config.MaxStreamBuffer/2) || s.numRead == uint32(n) {
 		notifyConsumed = s.numRead
 		s.incr = 0
 	}
@@ -152,7 +160,7 @@ func (s *Stream) tryReadv2(b []byte) (n int, err error) {
 	if n > 0 {
 		s.sess.returnTokens(n)
 		if notifyConsumed > 0 {
-			err := s.sendWindowUpdate(notifyConsumed)
+			err := s.sendWindowUpdate(notifyConsumed, notifyWin)
 			return n, err
 		} else {
 			return n, nil
@@ -202,7 +210,7 @@ func (s *Stream) WriteTo(w io.Writer) (n int64, err error) {
 
 func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 	for {
-		var notifyConsumed uint32
+		var notifyConsumed, notifyWin uint32
 		var buf []byte
 		s.bufferLock.Lock()
 		if len(s.buffers) > 0 {
@@ -212,7 +220,9 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 		}
 		s.numRead += uint32(len(buf))
 		s.incr += uint32(len(buf))
-		if s.incr >= uint32(s.sess.config.MaxStreamBuffer/2) || s.numRead == uint32(len(buf)) {
+		if s.aw != nil {
+			notifyConsumed, notifyWin = s.awConsumed(uint32(len(buf)))
+		} else if s.incr >= uint32(s.sess.config.MaxStreamBuffer/2) || s.numRead == uint32(len(buf)) {
 			notifyConsumed = s.numRead
 			s.incr = 0
 		}
@@ -231,7 +241,7 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 			}
 
 			if notifyConsumed > 0 {
-				if err := s.sendWindowUpdate(notifyConsumed); err != nil {
+				if err := s.sendWindowUpdate(notifyConsumed, notifyWin); err != nil {
 					return n, err
 				}
 			}
@@ -241,7 +251,11 @@ func (s *Stream) writeTov2(w io.Writer) (n int64, err error) {
 	}
 }
 
-func (s *Stream) sendWindowUpdate(consumed uint32) error {
+// window 0: the configured MaxStreamBuffer (upstream); AutoWindow passes its own.
+func (s *Stream) sendWindowUpdate(consumed, window uint32) error {
+	if window == 0 {
+		window = uint32(s.sess.config.MaxStreamBuffer)
+	}
 	var timer *time.Timer
 	var deadline <-chan time.Time
 	if d, ok := s.readDeadline.Load().(time.Time); ok && !d.IsZero() {
@@ -253,7 +267,7 @@ func (s *Stream) sendWindowUpdate(consumed uint32) error {
 	frame := newFrame(byte(s.sess.config.Version), cmdUPD, s.id)
 	var hdr updHeader
 	binary.LittleEndian.PutUint32(hdr[:], consumed)
-	binary.LittleEndian.PutUint32(hdr[4:], uint32(s.sess.config.MaxStreamBuffer))
+	binary.LittleEndian.PutUint32(hdr[4:], window)
 	frame.data = hdr[:]
 	_, err := s.sess.writeFrameInternal(frame, deadline, CLSDATA)
 	return err
@@ -506,6 +520,9 @@ func (s *Stream) pushBytes(buf []byte) (written int, err error) {
 	s.bufferLock.Lock()
 	s.buffers = append(s.buffers, buf)
 	s.heads = append(s.heads, buf)
+	if s.aw != nil {
+		s.awPushed(uint32(len(buf)))
+	}
 	s.bufferLock.Unlock()
 	return
 }

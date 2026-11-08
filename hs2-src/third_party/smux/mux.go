@@ -38,6 +38,10 @@ type Config struct {
 	// MaxStreamBuffer is used to control the maximum
 	// number of data per stream
 	MaxStreamBuffer int
+
+	// AutoWindow (hs2 addition, version 2 only): grow a stream's window past
+	// MaxStreamBuffer while it is window-bound (autowin.go). nil: upstream.
+	AutoWindow *AutoWindow
 }
 
 // DefaultConfig is used to return a default configuration
@@ -82,6 +86,14 @@ func VerifyConfig(config *Config) error {
 	}
 	if config.MaxStreamBuffer > math.MaxInt32 {
 		return errors.New("max stream buffer cannot be larger than 2147483647")
+	}
+	if a := config.AutoWindow; a != nil {
+		if a.Budget == nil {
+			return errors.New("auto window needs a budget")
+		}
+		if a.Max > math.MaxInt32/2 {
+			return errors.New("auto window max too large")
+		}
 	}
 	return nil
 }

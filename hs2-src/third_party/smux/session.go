@@ -86,6 +86,8 @@ type Session struct {
 	requestID uint32            // write request monotonic increasing
 	shaper    chan writeRequest // a shaper for writing
 	writes    chan writeRequest
+
+	aw sessAW // hs2: loop-RTT minimum for Config.AutoWindow
 }
 
 func newSession(config *Config, conn io.ReadWriteCloser, client bool) *Session {
@@ -207,6 +209,7 @@ func (s *Session) Close() error {
 		s.streamLock.Lock()
 		for k := range s.streams {
 			s.streams[k].sessionClose()
+			s.streams[k].awRelease()
 		}
 		s.streamLock.Unlock()
 		return s.conn.Close()
@@ -305,6 +308,7 @@ func (s *Session) streamClosed(sid uint32) {
 			s.notifyBucket()
 		}
 	}
+	s.streams[sid].awRelease()
 	delete(s.streams, sid)
 	s.streamLock.Unlock()
 }
