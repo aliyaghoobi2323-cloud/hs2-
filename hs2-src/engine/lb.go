@@ -17,8 +17,9 @@ import (
 // Every new link — initial fill, autopilot growth, replacement after a death —
 // is placed on the path furthest below its share (largest remainder on the
 // current link counts, dials in flight included). A path whose dials fail
-// lbFailMax times in a row is cooled down (weight 0) for lbCooldown, then gets
-// one probe dial; the primary path (addr, bind_local_ip) is never cooled, so
+// lbFailMax times in a row (past the startup grace, lbStartGrace) is cooled
+// down (weight 0) for lbCooldown, then gets one probe dial; the primary path
+// (addr, bind_local_ip) is never cooled, so
 // with every extra path dead all links go to the primary and the tunnel never
 // depends on an extra.
 //
@@ -28,7 +29,7 @@ import (
 // rebalance moves only idle links an extra path could stay empty for good
 // (reverse lab: 8/0 instead of 4/4). Dialing an extra remote IP sends an
 // older peer nothing new: nothing listens there, the dials fail, and after
-// lbFailMax failures the path is cooled like any dead path, its share going
+// lbFailMax failures past the startup grace the path is cooled like any dead path, its share going
 // to the others (one probe per cooldown after that). capLB stays in kindInfo
 // for status ("no-peer": a cooled path to a peer known to lack it).
 
@@ -86,7 +87,23 @@ type LBPathStat struct {
 var (
 	lbFailMax  = 3
 	lbCooldown = 60 * time.Second
+	// lbStartGrace: failed dials cool a path only once the peer has been
+	// reachable (a dial succeeded, on any path) for this long. At startup —
+	// both sides starting, or this side dialing before the peer listens on
+	// every address — an extra address may refuse for a moment while the
+	// primary already works; cooling it then put the reverse lab's 50/50 at
+	// 7/2 for a whole cooldown. Until then its failed dials only back off
+	// (the slot's backoff) and are retried on it. A path that is really dead
+	// (an older peer that never listens there) is cooled lbFailMax failures
+	// after the grace, as before.
+	lbStartGrace = 30 * time.Second
 )
+
+// startedLocked reports whether failed dials may cool a path: the peer has
+// been reachable for lbStartGrace (see lbStartGrace).
+func (b *LB) startedLocked() bool {
+	return !b.upAt.IsZero() && b.now().Sub(b.upAt) >= lbStartGrace
+}
 
 // LB places links on paths. It is safe for concurrent use.
 type LB struct {
@@ -108,6 +125,7 @@ type LB struct {
 	rebal   []uint64      // idle links retired from each path to rebalance
 	peerLB  bool          // the peer's latest kindInfo answer has capLB (status)
 	peerKnw bool          // a kindInfo answer has been seen (peerLB is real)
+	upAt    time.Time     // the first dial that succeeded, on any path (startedLocked)
 	// peerState reports what the peer's live links say about capLB: known is
 	// false while no live link carries a kindInfo answer (nil = always ok).
 	peerState func() (known, has bool)
@@ -337,7 +355,7 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 		b.fails[i]++
 		b.total[i]++
 		b.dfails[i]++
-		if !p.Primary && (probe || b.fails[i] >= lbFailMax) {
+		if !p.Primary && (probe || b.fails[i] >= lbFailMax && b.startedLocked()) {
 			wasCool := !b.until[i].IsZero()
 			cd := b.cooldownLocked()
 			b.until[i] = b.now().Add(cd)
@@ -352,6 +370,9 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 	}
 	b.fails[i] = 0
 	b.until[i] = time.Time{}
+	if b.upAt.IsZero() {
+		b.upAt = b.now()
+	}
 	if link != nil {
 		b.held[link] = i
 	}

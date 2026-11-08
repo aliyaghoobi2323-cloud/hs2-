@@ -96,8 +96,8 @@ func TestLBWeightedFillAndGrowth(t *testing.T) {
 // A path whose dials fail is cooled: its share goes to the other path, the
 // tunnel never goes down, and after the cooldown a probe brings it back.
 func TestLBPathDeathAndReturn(t *testing.T) {
-	defer func(c time.Duration) { lbCooldown = c }(lbCooldown)
-	lbCooldown = 4 * time.Second
+	defer func(c, g time.Duration) { lbCooldown, lbStartGrace = c, g }(lbCooldown, lbStartGrace)
+	lbCooldown, lbStartGrace = 4*time.Second, 0 // a death, not a startup race
 	l := newLBTestPool(t, twoPaths(50, 50), 1, 64)
 	l.down[1].Store(true) // the extra path is dead from the start
 	l.setTarget(8)
@@ -121,6 +121,8 @@ func TestLBPathDeathAndReturn(t *testing.T) {
 
 // With every extra path dead all links go to the primary.
 func TestLBAllExtrasDeadFallBackToPrimary(t *testing.T) {
+	defer func(g time.Duration) { lbStartGrace = g }(lbStartGrace)
+	lbStartGrace = 0 // dead, not a startup race
 	paths := append(twoPaths(40, 30), LBPath{Local: "10.0.0.3", Remote: "10.1.0.1", Addr: "10.1.0.1:443", Weight: 30})
 	lb, _ := NewLB(paths, nil)
 	var held []any
@@ -172,35 +174,83 @@ func TestLBInitialSpreadBeforePeerCap(t *testing.T) {
 }
 
 // An older peer does not listen on the extra IP: the dials there fail, the
-// path is cooled after lbFailMax failures, and every link stays on the
-// primary; the status says why.
+// path is cooled after lbFailMax failures past the startup grace, and every
+// link then stays on the primary; the status says why.
 func TestLBOldPeerExtraPathCooled(t *testing.T) {
 	paths := []LBPath{
 		{Local: "", Remote: "10.1.0.1", Weight: 50, Primary: true},
 		{Local: "", Remote: "10.1.0.2", Weight: 50},
 	}
 	lb, _ := NewLB(paths, nil)
+	clock := time.Unix(1e9, 0)
+	lb.now = func() time.Time { return clock }
 	lb.setPeerState(func() (bool, bool) { return true, false }) // an old peer: no capLB
 	refused := errors.New("connection refused")
 	extra := 0
-	for i := 0; i < 20; i++ {
-		lb.dialVia(func(p LBPath) (any, error) {
-			if p.Remote != "10.1.0.1" {
-				extra++
-				return nil, refused
-			}
-			return new(int), nil
-		})
+	dial := func(n int) {
+		for i := 0; i < n; i++ {
+			lb.dialVia(func(p LBPath) (any, error) {
+				if p.Remote != "10.1.0.1" {
+					extra++
+					return nil, refused
+				}
+				return new(int), nil
+			})
+		}
 	}
+	dial(10) // within the grace: retried, never cooled
+	if st := lb.Stats(); st[1].State != "ok" || st[1].Fails < lbFailMax || st[0].Links != 10-extra {
+		t.Fatalf("within the grace: extra path %q after %d fails, links %d/%d", st[1].State, st[1].Fails, st[0].Links, st[1].Links)
+	}
+	clock = clock.Add(lbStartGrace)
+	extra = 0
+	dial(20)
 	st := lb.Stats()
-	if extra != lbFailMax {
-		t.Fatalf("%d dials to the extra IP, want %d then cooled", extra, lbFailMax)
+	if extra != 1 { // its failures so far count now: the next one cools it
+		t.Fatalf("%d dials to the extra IP past the grace, want 1 then cooled", extra)
 	}
-	if st[0].Links != 20-lbFailMax || st[1].Links != 0 {
+	if st[1].Links != 0 {
 		t.Fatalf("links %d/%d", st[0].Links, st[1].Links)
 	}
 	if st[1].State != "no-peer" || st[1].Target != 0 {
 		t.Fatalf("extra path state %q target %d", st[1].State, st[1].Target)
+	}
+}
+
+// Reverse startup race: the extra address refuses its first dials (the peer
+// is not listening on it yet) while the primary already works. It must not be
+// cooled for that — a 50/50 pair fills 5/5, not 10/0 (the lab's 7/2) — and
+// before any dial has succeeded (the peer down) no path is cooled either.
+func TestLBStartupRaceNoCooling(t *testing.T) {
+	lb, _ := NewLB(twoPaths(50, 50), nil)
+	clock := time.Unix(1e9, 0)
+	lb.now = func() time.Time { return clock }
+	refused := errors.New("connection refused")
+	peerDown, extraDown := 4, 6 // failed dials: everything, then the extra address only
+	held := 0
+	for tries := 0; held < 10 && tries < 100; tries++ {
+		clock = clock.Add(500 * time.Millisecond) // the slots' backoff; well inside the grace
+		_, err := lb.dialVia(func(p LBPath) (any, error) {
+			switch {
+			case peerDown > 0:
+				peerDown--
+				return nil, refused
+			case !p.Primary && extraDown > 0:
+				extraDown--
+				return nil, refused
+			}
+			return new(int), nil
+		})
+		if err == nil {
+			held++
+		}
+	}
+	st := lb.Stats()
+	if st[0].Links != 5 || st[1].Links != 5 {
+		t.Fatalf("startup race: %d/%d links (extra path %s, %d fails in all), want 5/5", st[0].Links, st[1].Links, st[1].State, st[1].FailsAll)
+	}
+	if st[1].State != "ok" || st[1].FailsAll < uint64(lbFailMax) {
+		t.Fatalf("extra path %q, %d fails in all", st[1].State, st[1].FailsAll)
 	}
 }
 
