@@ -277,8 +277,10 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 			return
 		}
 		if mtr != nil {
-			mtr.users.Add(1)
-			defer mtr.users.Add(-1)
+			// Not a user: the TUN rides every link, so counting it kept
+			// every reverse link busy and the LB rebalance never moved one.
+			mtr.l3s.Add(1)
+			defer mtr.l3s.Add(-1)
 		}
 		pl := newStreamL3Link(st, peerL3Quiet(mtr), sessReadsOf(mtr))
 		pl.heavy = heavyOf(mtr)

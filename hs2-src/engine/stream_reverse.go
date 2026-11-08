@@ -175,7 +175,7 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 		cfg.RevLB.attach(car, lbHooks{
 			stats: func() (tcpStat, bool) { return tcpStats(tcpConnOf(car)) },
 			retire: func() bool {
-				if mtr.users.Load() != 0 {
+				if !lbRetirable(mtr) {
 					return false
 				}
 				lbRetired.Store(true)
@@ -241,3 +241,7 @@ func lbDialCarrier(lb *LB, dial func(LBPath, bool) (*tlscarrier.Carrier, error),
 	}
 	return v.(*tlscarrier.Carrier), nil
 }
+
+// lbRetirable: the LB rebalance may close this reverse link — no user
+// connection rides it (L3 streams do not count, linkMeter.l3s).
+func lbRetirable(mtr *linkMeter) bool { return mtr.users.Load() == 0 }

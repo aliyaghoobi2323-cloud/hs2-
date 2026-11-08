@@ -138,3 +138,18 @@ func TestLBUpdateQual(t *testing.T) {
 		t.Fatalf("goodness %v %v", g1, g8)
 	}
 }
+
+// A reverse link carrying only the TUN stream is retirable; a user is not.
+// (l3mtcp: every link has an L3 stream, so counting it as a user kept the
+// reverse rebalance from ever moving a link.)
+func TestLBRetirableIgnoresL3(t *testing.T) {
+	m := &linkMeter{}
+	m.l3s.Add(1)
+	if !lbRetirable(m) {
+		t.Fatal("a link with only the TUN stream is held against the rebalance")
+	}
+	m.users.Add(1)
+	if lbRetirable(m) {
+		t.Fatal("a link with a user connection was retirable")
+	}
+}

@@ -127,9 +127,13 @@ type linkMeter struct {
 	rdBytes atomic.Uint64 // payload bytes read (download, from the peer)
 	wrBytes atomic.Uint64 // payload bytes written (upload, to the peer)
 	stalls  atomic.Uint64 // write errors / timeouts
-	// users: user connections (and L3 streams) riding this link on the exit;
-	// the LB rebalance retires only a link with none (lb_auto.go).
+	// users: user connections riding this link on the exit; the LB
+	// rebalance retires only a link with none (lb_auto.go, lbRetirable).
 	users atomic.Int32
+	// l3s: L3 (TUN) streams on this link. Not users: the TUN rides every
+	// link (l3mtcp), and a retired link only moves its flows to another
+	// (l3Set), so they do not hold a link against the rebalance.
+	l3s atomic.Int32
 	// wrBlocked is the cumulative time the link's single smux writer spent
 	// waiting for the socket to accept data (only waits > blockedMin count).
 	// Divided by elapsed time it is the fraction of time the PATH, not the
