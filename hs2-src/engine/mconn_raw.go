@@ -400,11 +400,18 @@ func (m *mConn) upgradeRawPlane(p mPlane, avoid []any) {
 	m.rawW.Store(false)
 	m.setStateLocked(mStateDual)
 	m.tr.ev("raw: upgrade, UPGRADE(%d) on sub %d (recvd=%d)", bi, s2.idx, m.rawRecvd.Load())
+	stUp := m.stUp
 	m.mu.Unlock()
 	m.wmu.Unlock()
 	go m.raw1.writeLoop()
 	m.startSub(s2)
 	go m.manage()
+	if stUp {
+		// HS2_MCONN_STRIPE_UP: the manager's first tick, which arms its
+		// growth sampling; a download kicks it with its first gap, an upload
+		// receives nothing that would (mconn_stripe_up.go)
+		m.kickMgr()
+	}
 }
 
 // onUpgrade: an UPGRADE record on s (false: a protocol error).

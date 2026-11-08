@@ -53,7 +53,7 @@ func (m *LinkManager) stripeAdoptLocked(ml *managedLink, now time.Time) {
 
 // stripeAskLocked (under m.mu): the stripe found no link; ask for one.
 func (m *LinkManager) stripeAskLocked(now time.Time) {
-	m.stripeWant = min(m.stripeWant+1, stripeWantMax)
+	m.stripeWant = min(m.stripeWant+1, stripeWantCap())
 	m.stripeWantUntil = now.Add(stripeWantFor)
 }
 

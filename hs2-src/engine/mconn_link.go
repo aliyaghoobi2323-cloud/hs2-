@@ -487,6 +487,9 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 	// striped downloads in the lab without the fix
 	if k := int(stripeK.Load()); k > 0 && mconnLite.Load() && mconnDeadlineFix.Load() && lm.exitInfo.Load().mconnStripe() {
 		mc.setStripe(k) // HS2_MCONN_STRIPE (mconn_stripe.go)
+		if stripeUp.Load() && lm.exitInfo.Load().mconnStripeUp() {
+			mc.setStripeUp() // HS2_MCONN_STRIPE_UP (mconn_stripe_up.go)
+		}
 	}
 	mconnStat.total.Add(1)
 	mconnStat.open.Add(1)
