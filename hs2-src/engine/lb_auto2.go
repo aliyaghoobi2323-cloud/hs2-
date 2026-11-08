@@ -80,7 +80,7 @@ var (
 	lb2HoldMax     = 5 * time.Minute
 	lb2FlapWin     = 10 * time.Minute
 	lb2Quiet       = 30 * time.Second
-	lb2Dead        = 0.85 // goodness ratio at or above which a path is as good as the best
+	lb2Dead        = 0.75 // goodness ratio at or above which a path is as good as the best (0.9% vs 0.4% loss: 0.83 — the load moved onto a path raises its loss a little; that must not push it back)
 	lb2CapX        = 3.0
 	lb2RiseStep    = 0.1 // edge: weight a reading may rise
 	lb2DrainBatch  = 2
