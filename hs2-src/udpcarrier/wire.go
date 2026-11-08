@@ -105,9 +105,19 @@ func decodeFeedback(b []byte) (feedback, bool) {
 // datagrams. It buys no data compromise: the payload's AEAD rejects any tamper,
 // and the rate is backstopped by the delivered-byte count inside the SEALED
 // feedback frame (deliveryCap in rate.go), which the attacker cannot inflate
-// without actually delivering that many bytes. An off-path attacker cannot even
-// place a datagram: the keyed framing magic (raw encaps) or the connected
-// socket (udp) drops it first. The stamp is a relative tick, not a timestamp
+// without actually delivering that many bytes. The keyed framing magic (raw
+// encaps) stops an off-path attacker from placing a datagram. Plain udp has no
+// such key: the dialer's connected socket and the listener's per-address demux
+// filter only on the source address, which a blind attacker who guesses the
+// peer's ip:port can spoof. Such a datagram reaches the decode loop, so the
+// header and the FEC shard header (also cleartext, decoded before the AEAD)
+// are treated as hostile: trackWire bounds what a forged wireSeq can do (no
+// unbounded work, no unbounded loss booking), the decoder's state is bounded
+// (maxGroups, buffer free list), and the AEAD drops any forged payload. What
+// remains is denial of service of that one carrier (a forged shard can
+// occupy a real one's slot) — the same as the spoofer flooding it. Closing it
+// needs a per-shard MAC, a versioned wire change not made while production
+// does not use this mode. The stamp is a relative tick, not a timestamp
 // string, so it is not a fixed fingerprint, though its ~125 µs cadence is a
 // distinguisher a future obfuscation layer may want to mask.
 //

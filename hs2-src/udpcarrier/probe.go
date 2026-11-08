@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"hash"
 	"net"
+	"sync"
 	"time"
 
 	"crypto/hmac"
@@ -198,16 +199,84 @@ func minMedian(d []time.Duration) (min, median time.Duration) {
 // ProbeResponder answers probe packets on a shared UDP socket. The listener
 // runs one so the same port serves both carriers and probes; a standalone one
 // can also be created for tests. readFrom/writeTo are the socket operations.
+//
+// An authentic probe is echoed at most once, and only while its sendNanos is
+// within probeWindow of our clock. Without that, one captured probe could be
+// replayed forever from any (spoofed) source — an unlimited reflector, and an
+// active-probing oracle (replay an observed probe, get an echo: an hs2 server).
+// The client side is unchanged (it always stamped sendNanos with its wall clock
+// and never repeats a nonce/seq), so this needs no wire change; the window is
+// the handshake's own clock tolerance (core tsWindow), so a client whose clock
+// is too far off to complete a handshake anyway is the only one refused.
 type probeResponder struct {
 	shared []byte
+
+	mu        sync.Mutex
+	cur, prev map[probeKey]struct{} // two generations, each kept >= probeMemTTL
+	rotated   time.Time
 }
 
-// handle echoes p if it is a valid probe; returns true if it consumed the
-// packet (so the caller does not treat it as a handshake).
+type probeKey [probeNonceLen + 4]byte // nonce || seq
+
+const (
+	probeWindow = 90 * time.Second // |our clock - sendNanos| accepted
+	probeMemTTL = 2 * probeWindow  // a probe is remembered at least this long
+	probeMemCap = 1 << 16          // entries across both generations
+)
+
+func newProbeResponder(shared []byte) *probeResponder {
+	return &probeResponder{shared: shared, cur: map[probeKey]struct{}{}, prev: map[probeKey]struct{}{}}
+}
+
+// handle echoes p if it is a valid, fresh, first-seen probe; returns true if
+// p is an authentic probe at all (consumed, echoed or not), so the caller does
+// not treat it as a handshake.
 func (pr *probeResponder) handle(p []byte, echo func([]byte)) bool {
 	if !validProbe(pr.shared, p) {
 		return false
 	}
-	echo(append([]byte(nil), p...))
+	if pr.fresh(p, time.Now()) {
+		echo(append([]byte(nil), p...))
+	}
 	return true
+}
+
+// fresh reports whether an authentic probe is inside the time window and seen
+// for the first time, and records it. A full memory refuses (fails closed):
+// only key holders can add entries, at a few dozen per dial.
+func (pr *probeResponder) fresh(p []byte, now time.Time) bool {
+	sent := int64(binary.BigEndian.Uint64(p[probeMagicLen+probeNonceLen+4:]))
+	if d := now.UnixNano() - sent; d > int64(probeWindow) || d < -int64(probeWindow) {
+		return false
+	}
+	var k probeKey
+	copy(k[:], p[probeMagicLen:probeHdrLen-8])
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	if pr.cur == nil {
+		pr.cur, pr.prev = map[probeKey]struct{}{}, map[probeKey]struct{}{}
+	}
+	if pr.rotated.IsZero() {
+		pr.rotated = now
+	} else if now.Sub(pr.rotated) >= probeMemTTL {
+		pr.prev, pr.cur = pr.cur, make(map[probeKey]struct{}, len(pr.cur))
+		pr.rotated = now
+	}
+	if _, ok := pr.cur[k]; ok {
+		return false
+	}
+	if _, ok := pr.prev[k]; ok {
+		return false
+	}
+	if len(pr.cur)+len(pr.prev) >= probeMemCap {
+		return false
+	}
+	pr.cur[k] = struct{}{}
+	return true
+}
+
+func (pr *probeResponder) size() int {
+	pr.mu.Lock()
+	defer pr.mu.Unlock()
+	return len(pr.cur) + len(pr.prev)
 }

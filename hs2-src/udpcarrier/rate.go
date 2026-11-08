@@ -123,6 +123,7 @@ type rateControl struct {
 
 	lastRxBytes uint64
 	lastRxAt    time.Time
+	lastFbAt    time.Time // last peer report (zero: none yet); see fbStaleRate
 	haveRx      bool
 	lastSent    uint64
 
@@ -452,6 +453,9 @@ func (r *rateControl) onFeedback(now time.Time, rxDataBytes uint64, rttSampleSec
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	if now.After(r.lastFbAt) {
+		r.lastFbAt = now
+	}
 	r.lastLossPPM = lossPPM
 	fresh := echoNanos != 0 && echoNanos != r.lastEcho
 	if fresh {
@@ -857,10 +861,43 @@ func (r *rateControl) clampRateLocked() {
 	}
 }
 
+// fbStaleAfter is how long the peer's reports may stop before the pacer stops
+// trusting the rate they set. The peer reports every feedbackEvery (100 ms;
+// under icmp camouflage at most ~0.85 s when idle), so this is many reports
+// lost in a row, not a burst.
+const fbStaleAfter = 1500 * time.Millisecond
+
+// fbStaleRate backs the pacing rate off while the peer's reports have stopped
+// (return path dead, peer gone, its address reassigned): every report is the
+// only thing that steers the rate, and without this a carrier kept sending at
+// its last rate — up to maxRate — until the 15 s liveness timeout, an
+// unresponsive flow (RFC 8085 §3.1). The rate halves per fbStaleAfter of
+// silence past the first, down to minRate, and is restored by the next report.
+// Before the first report there is nothing to distrust (startup's own rate is
+// small). r.mu held.
+func (r *rateControl) fbStaleRate(now time.Time, rate float64) float64 {
+	if r.lastFbAt.IsZero() {
+		return rate
+	}
+	thr := fbStaleAfter
+	if s := time.Duration(4 * r.srtt * float64(time.Second)); s > thr {
+		thr = s
+	}
+	idle := now.Sub(r.lastFbAt)
+	if idle <= thr {
+		return rate
+	}
+	return math.Max(r.minRate, rate*math.Exp2(-float64(idle)/float64(thr)))
+}
+
 // pacingRate returns the current send rate in bytes/sec.
 func (r *rateControl) pacingRate(now time.Time) float64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.fbStaleRate(now, r.pacingRateLocked(now))
+}
+
+func (r *rateControl) pacingRateLocked(now time.Time) float64 {
 	if now.Before(r.probeEnd) {
 		// Probe at a fraction of the DELIVERED rate, not the pacing rate: if
 		// the rate has run away above a policer (which drops the excess

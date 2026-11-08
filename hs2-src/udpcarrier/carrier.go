@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"math/bits"
 	"math/rand/v2"
 	"os"
 	"sync"
@@ -223,6 +224,9 @@ const (
 const (
 	wireConfirmWin = 64
 	wireReorderWin = 256
+	// wireJumpMax bounds how far the cleartext wireSeq may jump and still be
+	// taken as the real sequence (see trackWire).
+	wireJumpMax = 4096
 )
 
 // SendFrame is the engine's send path. TypeData rides FEC and the pacer;
@@ -644,11 +648,36 @@ func (c *Conn) trackWire(seq uint32) {
 		c.wireRecv.Add(1)
 		return
 	}
-	if int32(seq-c.wireMax) > 0 {
+	// wireSeq is cleartext and forgeable (see the threat model in wire.go). A
+	// jump no real path produces — further than wireJumpMax ahead of the
+	// highest seq, or behind the window by as much — restarts the window at
+	// this seq and books nothing: a forged datagram can then neither book
+	// billions of losses nor stall this loop, and the real sequence that
+	// follows a forged one re-primes it back. A genuine outage that long is
+	// not FEC-repairable loss anyway, so not booking it loses nothing.
+	if d := int32(seq - c.wireMax); d > wireJumpMax || int32(seq-c.wireBase) < -wireJumpMax {
+		c.wireSeen = [wireReorderWin / 64]uint64{}
+		c.wireBase, c.wireMax = seq, seq
+		c.wireSetSeen(seq)
+		c.wireRecv.Add(1)
+		return
+	} else if d > 0 {
 		c.wireMax = seq
 	}
 	// Slide the window forward: every seq it now passes is resolved — received
 	// if its bit is set (it arrived earlier, reordered), otherwise lost.
+	if n := int32(c.wireMax-c.wireBase) - wireConfirmWin + 1; n >= wireReorderWin {
+		// A slide past the whole bitmap: every recorded arrival lies in
+		// [wireBase, wireBase+wireConfirmWin), so all of them are resolved at
+		// once — O(bitmap), not O(gap).
+		seen := 0
+		for _, w := range c.wireSeen {
+			seen += bits.OnesCount64(w)
+		}
+		c.wireLost.Add(uint64(int(n) - seen))
+		c.wireSeen = [wireReorderWin / 64]uint64{}
+		c.wireBase += uint32(n)
+	}
 	for int32(c.wireMax-c.wireBase) >= wireConfirmWin {
 		if !c.wireTestSeen(c.wireBase) {
 			c.wireLost.Add(1)

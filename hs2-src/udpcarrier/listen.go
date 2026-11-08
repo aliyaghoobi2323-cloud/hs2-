@@ -28,7 +28,7 @@ type Listener struct {
 	cliStatic core.StaticKey
 	resp      *core.Responder
 
-	probe probeResponder
+	probe *probeResponder
 
 	mu     sync.Mutex
 	conns  map[string]*peerLink
@@ -44,10 +44,18 @@ type Listener struct {
 // message 2 resent, so the replay-protected handshake is never re-run and there
 // is always exactly one session per address.
 type peerLink struct {
-	c      *Conn
-	m1, m2 []byte
-	local  net.IP // the local address this peer targeted; replies leave from it (udp pktinfo)
+	c       *Conn
+	m1, m2  []byte
+	local   net.IP // the local address this peer targeted; replies leave from it (udp pktinfo)
+	resends int    // cached message 2 resent so far (guarded by Listener.mu)
 }
+
+// maxM2Resends bounds how often a cached message 2 is resent for a
+// retransmitted message 1. dialHandshake makes at most 12 attempts, so a real
+// initiator never needs more; without a bound, anyone who once saw message 1
+// could make the server send message 2 to that address for the carrier's
+// whole life.
+const maxM2Resends = 12
 
 // Listen binds a UDP socket and serves carriers derived from the shared secret.
 func Listen(addr string, shared []byte, innerMTU int) (*Listener, error) {
@@ -77,7 +85,7 @@ func ListenCfg(addr string, ec EncapConfig, shared []byte, innerMTU int) (*Liste
 		kind:      ec.Kind,
 		cliStatic: client,
 		resp:      core.NewResponder(server, shared),
-		probe:     probeResponder{shared: shared},
+		probe:     newProbeResponder(shared),
 		conns:     make(map[string]*peerLink),
 		accept:    make(chan *Conn, 8),
 		done:      make(chan struct{}),
@@ -138,9 +146,18 @@ func (l *Listener) handle(b []byte, addr net.Addr, dst net.IP) {
 	pkt := append([]byte(nil), b...)
 	if pl != nil {
 		// A retransmitted first message (message 2 was lost) is answered
-		// from cache; everything else is carrier traffic.
+		// from cache, a bounded number of times; everything else is
+		// carrier traffic.
 		if bytes.Equal(pkt, pl.m1) {
-			l.send(pl.m2, addr, pl.local)
+			l.mu.Lock()
+			ok := pl.resends < maxM2Resends
+			if ok {
+				pl.resends++
+			}
+			l.mu.Unlock()
+			if ok {
+				l.send(pl.m2, addr, pl.local)
+			}
 		} else {
 			pl.c.tryFeed(pkt)
 		}
