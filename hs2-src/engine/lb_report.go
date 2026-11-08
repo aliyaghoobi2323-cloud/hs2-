@@ -363,7 +363,11 @@ func applyReport(rows []LBPathView, rep LBReport, keyOf func(LBPeerPath) string)
 		a.fsum += p.Factor
 		a.n++
 		w := float64(max(p.Links, 1))
-		a.loss += w * p.LossPct
+		l := p.LossPct // smoothed; the latest reading when there is one (what the dialing side shows)
+		if p.raw {
+			l = p.RawPct
+		}
+		a.loss += w * l
 		a.lw += w
 		if rep.Auto2 {
 			a.addReason(p.Reason)
