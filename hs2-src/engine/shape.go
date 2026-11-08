@@ -43,6 +43,8 @@ type shapedConn struct {
 	wmu  sync.Mutex
 	wbuf []byte // reused frame-build scratch (write side)
 
+	bulkState // HS2_SHAPE_BULK only, under wmu
+
 	rmu  sync.Mutex
 	rbuf []byte // reused frame-read scratch (read side)
 	rem  []byte // decoded data not yet handed to smux (slice into rbuf)
@@ -119,6 +121,16 @@ func (c *shapedConn) Write(p []byte) (n int, err error) {
 	// stream header, a game datagram) is padded to a small size with
 	// HS2_SHAPE_SMALL, not to a bulk-sized one.
 	small := shapeSmall && len(p)+shapeHdrLen <= obfs.SmallMax
+	if shapeBulk {
+		// HS2_SHAPE_BULK (shape_bulk.go): full-size records like a web
+		// server's. A small write takes the small path below, unless bytes
+		// a bulk write left waiting go out with it in one record.
+		if !small || len(c.pend) > 0 {
+			n, err = c.writeBulk(p, &records, &padded)
+			written = n
+			return n, err
+		}
+	}
 	for len(p) > 0 {
 		var target int
 		if small {
