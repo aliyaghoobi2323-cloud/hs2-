@@ -212,57 +212,11 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			q.bad = 0
 		}
 	}
-	// IP verdicts: every path of one IP over the bar in this reading, while
-	// some path read this tick is not.
+	// IP verdicts (j.ipVerdicts): every path of one IP bad in this reading,
+	// relative to the best IP, and not confounded by its partners.
 	ipBad := map[string]string{}
-	anyGood := false
-	for _, r := range rs {
-		if !isBad(r.loss) {
-			anyGood = true
-		}
-	}
-	if anyGood {
-		type grp struct{ n, bad int }
-		loc, rem := map[string]*grp{}, map[string]*grp{}
-		for k, r := range rs {
-			l, re := pathIPs(k)
-			for _, x := range []struct {
-				m  map[string]*grp
-				ip string
-			}{{loc, l}, {rem, re}} {
-				g := x.m[x.ip]
-				if g == nil {
-					g = &grp{}
-					x.m[x.ip] = g
-				}
-				g.n++
-				if isBad(r.loss) {
-					g.bad++
-				}
-			}
-		}
-		// Only IPs whose every known path was read (a path not read this
-		// tick could be the good one).
-		known := func(ip string, local bool) int {
-			n := 0
-			for k := range j.p {
-				l, re := pathIPs(k)
-				if local && l == ip || !local && re == ip {
-					n++
-				}
-			}
-			return n
-		}
-		for ip, g := range loc {
-			if g.n >= 2 && g.bad == g.n && known(ip, true) == g.n {
-				ipBad[ip] = fmt.Sprintf("%s IP %s lossy on every %s IP", j.localN, ip, j.remN)
-			}
-		}
-		for ip, g := range rem {
-			if g.n >= 2 && g.bad == g.n && known(ip, false) == g.n {
-				ipBad[ip] = fmt.Sprintf("%s IP %s lossy on every %s IP", j.remN, ip, j.localN)
-			}
-		}
+	if anyNotBad(rs, isBad) {
+		ipBad = j.ipVerdicts(rs, isBad)
 	}
 	for ip, s := range ipBad {
 		if j.verdicts[ip] == "" {
@@ -271,6 +225,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		j.verdicts[ip] = s
 	}
 	// Cuts and recoveries.
+	okBar := j.okBar()
 	for k, q := range j.p {
 		if !q.have {
 			continue
@@ -293,13 +248,13 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			} else {
 				q.hold = lb2Hold
 			}
-			j.log("lb auto2: path %s cut (%s); recovery after %s under %.1f%%", k, why, fmtDur(q.hold), 100*lb2OKLoss)
+			j.log("lb auto2: path %s cut (%s); recovery after %s under %.1f%%", k, why, fmtDur(q.hold), 100*okBar)
 			continue
 		}
 		if !q.cut {
 			continue
 		}
-		if q.ewma < lb2OKLoss && q.lastRead.Equal(now) {
+		if q.ewma < okBar && q.lastRead.Equal(now) {
 			if q.okSince.IsZero() {
 				q.okSince = now
 			}
@@ -309,7 +264,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		quiet := now.Sub(q.lastRead) >= lb2Quiet && now.Sub(q.cutAt) >= q.hold
 		if (!q.okSince.IsZero() && now.Sub(q.okSince) >= q.hold) || quiet {
 			q.cut, q.uncutAt, q.bad = false, now, 0
-			what := "loss back under " + ftoa1(100*lb2OKLoss) + "%"
+			what := "loss back under " + ftoa1(100*okBar) + "%"
 			if quiet {
 				what = "no reading for " + fmtDur(now.Sub(q.lastRead)) + ": probing"
 			}
@@ -449,6 +404,39 @@ func (b *LB) adapt2(rs map[int]q2Reading) {
 		}
 	}
 	target = lb2Cap(b.paths, target, keep)
+	// No path over lb2ShareMax of the links while another is mediocre at
+	// worst (lb2Mediocre): the cap on the effective weights.
+	{
+		var names []string
+		var idx []int
+		for jj, p := range b.paths {
+			if keep[p.Name()] {
+				names = append(names, p.Name())
+				idx = append(idx, jj)
+			}
+		}
+		// (a path still climbing back after a cut does not count yet: the
+		// cap would hand it its share at once, not step by step)
+		settled := map[string]bool{}
+		for _, jj := range idx {
+			settled[b.paths[jj].Name()] = b.mult[jj] >= 0.9*target[jj]
+		}
+		alt := b.judge.mediocreAlt(names, func(n string) bool { return settled[n] })
+		ws, caps := make([]float64, len(idx)), make([]float64, len(idx))
+		for k, jj := range idx {
+			ws[k] = float64(b.paths[jj].Weight) * target[jj]
+			caps[k] = 1
+			if alt[k] {
+				caps[k] = lb2ShareMax
+			}
+		}
+		capped := capWeights(ws, caps)
+		for k, jj := range idx {
+			if ws[k] > 0 && capped[k] < ws[k] {
+				target[jj] *= capped[k] / ws[k]
+			}
+		}
+	}
 	// Down at once, up by lbMaxStepPct share points a reading.
 	down := append([]float64(nil), b.mult...)
 	for j := range down {
@@ -673,7 +661,7 @@ type lbSteerState struct {
 
 func newSteerState() *lbSteerState {
 	st := &lbSteerState{}
-	st.judge = newQ2Judge(lb2SteerFloor, "Iran", "kharej", func(f string, a ...any) {
+	st.judge = newQ2Judge(lb2SteerFloor, "Iran", "Kharej", func(f string, a ...any) {
 		st.logs = append(st.logs, fmt.Sprintf(f, a...))
 	})
 	return st
@@ -893,7 +881,41 @@ func (m *LinkManager) steerDrawLocked(light bool, cand func(*managedLink) bool) 
 			continue
 		}
 		ws[i] = f * float64(cnt[p])
-		tot += ws[i]
+	}
+	// No path over lb2ShareMax of the new connections while another is
+	// mediocre at worst (lb2Mediocre); light ones too: then the mediocre
+	// paths take the rest.
+	alt := m.steer.judge.mediocreAlt(keys, func(n string) bool {
+		q := m.steer.judge.p[n]
+		return q.factor >= 0.9*q.target
+	})
+	caps := make([]float64, len(keys))
+	for i := range keys {
+		caps[i] = 1
+		if alt[i] {
+			caps[i] = lb2ShareMax
+		}
+	}
+	if light {
+		n := 0
+		for _, w := range ws {
+			if w > 0 {
+				n++
+			}
+		}
+		if n == 1 {
+			for i, p := range keys {
+				if ws[i] == 0 && alt[i] {
+					if q := m.steer.judge.p[p]; q != nil && q.have && !q.cut && q.ewma <= lb2Mediocre {
+						ws[i] = m.steerFactor(p) * float64(cnt[p])
+					}
+				}
+			}
+		}
+	}
+	ws = capWeights(ws, caps)
+	for _, w := range ws {
+		tot += w
 	}
 	if tot <= 0 {
 		return ""
@@ -986,3 +1008,187 @@ func (j *q2Judge) forceCut(k, why string, now time.Time) {
 	j.targets()
 }
 func LBAuto2On() bool { return lbAuto2 } // HS2_LB_AUTO2 is set
+
+func anyNotBad(rs map[string]q2Reading, isBad func(float64) bool) bool {
+	for _, r := range rs {
+		if !isBad(r.loss) {
+			return true
+		}
+	}
+	return false
+}
+
+// ipVerdicts finds the IPs (local or remote) whose every path is bad in this
+// reading (rs, isBad: the path rule), with three guards against a false
+// verdict:
+//
+//   - the IP's mean loss over its paths is over the IP bar: lb2CutLoss and
+//     twice the best IP's mean + 1 point, the best taken over the IPs of the
+//     same side (with a 2% IPv6 address beside them, 3.5% IPv4 addresses are
+//     mediocre, not lossy);
+//   - it has two paths or more, all read this tick (a path not read could be
+//     the good one);
+//   - not confounded: at least two of its paths go to a partner IP that is
+//     good elsewhere — some other path of that partner, read this tick, is
+//     not bad. A kharej IP whose every Iran IP is lossy everywhere says
+//     nothing about the kharej IP (the main tunnel: both kharej IPs "lossy on
+//     every Iran IP" because every IPv4 Iran IP was).
+func (j *q2Judge) ipVerdicts(rs map[string]q2Reading, isBad func(float64) bool) map[string]string {
+	type agg struct {
+		sum      float64
+		n, bad   int
+		partners []string
+	}
+	sides := [2]map[string]*agg{{}, {}} // 0: local IPs, 1: remote IPs
+	for k, r := range rs {
+		l, re := pathIPs(k)
+		for s, ip := range [2]string{l, re} {
+			a := sides[s][ip]
+			if a == nil {
+				a = &agg{}
+				sides[s][ip] = a
+			}
+			a.sum += r.loss
+			a.n++
+			if isBad(r.loss) {
+				a.bad++
+			}
+			if s == 0 {
+				a.partners = append(a.partners, re)
+			} else {
+				a.partners = append(a.partners, l)
+			}
+		}
+	}
+	known := func(ip string, s int) int {
+		n := 0
+		for k := range j.p {
+			l, re := pathIPs(k)
+			if s == 0 && l == ip || s == 1 && re == ip {
+				n++
+			}
+		}
+		return n
+	}
+	// goodElsewhere: partner p (on side ps) has a path read this tick, not
+	// to ip, that is not bad.
+	goodElsewhere := func(p string, ps int, ip string) bool {
+		for k, r := range rs {
+			l, re := pathIPs(k)
+			mine, other := l, re
+			if ps == 1 {
+				mine, other = re, l
+			}
+			if mine == p && other != ip && !isBad(r.loss) {
+				return true
+			}
+		}
+		return false
+	}
+	out := map[string]string{}
+	names := [2]string{j.localN, j.remN}
+	for s := 0; s < 2; s++ {
+		best := math.Inf(1)
+		for _, a := range sides[s] {
+			best = math.Min(best, a.sum/float64(a.n))
+		}
+		bar := math.Max(lb2CutLoss, 2*best+0.01)
+		for ip, a := range sides[s] {
+			if a.n < 2 || a.bad != a.n || known(ip, s) != a.n || a.sum/float64(a.n) <= bar {
+				continue
+			}
+			good := 0
+			for _, p := range a.partners {
+				if goodElsewhere(p, 1-s, ip) {
+					good++
+				}
+			}
+			if good < 2 {
+				continue // confounded: its partners are lossy everywhere too
+			}
+			out[ip] = fmt.Sprintf("%s IP %s lossy on every %s IP", names[s], ip, names[1-s])
+		}
+	}
+	return out
+}
+
+// okBar is the smoothed loss a cut path must stay under to recover:
+// lb2OKLoss, or ¾ of the cut bar the best path sets (2× its loss + 1
+// point) — relative like the cut, so a path cut at 13% recovers at 3.5% when
+// the best path itself runs at 2%, instead of never.
+func (j *q2Judge) okBar() float64 {
+	best := math.Inf(1)
+	for _, q := range j.p {
+		if q.have && !q.cut {
+			best = math.Min(best, q.ewma)
+		}
+	}
+	if math.IsInf(best, 1) {
+		return lb2OKLoss
+	}
+	return math.Max(lb2OKLoss, 0.75*math.Max(lb2CutLoss, 2*best+0.01))
+}
+
+// lb2Mediocre: a path at or under this smoothed loss (and not cut) is
+// mediocre at worst — it keeps a fair share, and while one exists no other
+// path takes more than lb2ShareMax of the links or of the new connections.
+// One path carrying most users means one hiccup hits most users at once (the
+// main tunnel: a 2% IPv6 path with 70% of them, the 3.5% IPv4 paths cut).
+var (
+	lb2Mediocre = 0.05
+	lb2ShareMax = 0.5
+)
+
+// capWeights lowers the weights over their cap (a share of the sum, caps[i]
+// in (0, 1]) and leaves the others: water-filling, so the result's shares
+// respect every cap the others can absorb.
+func capWeights(ws, caps []float64) []float64 {
+	out := append([]float64(nil), ws...)
+	for it := 0; it < len(out)+1; it++ {
+		tot := 0.0
+		for _, w := range out {
+			tot += w
+		}
+		if tot <= 0 {
+			return out
+		}
+		moved := false
+		for i, w := range out {
+			c := caps[i]
+			if c >= 1 || w <= 0 || w/tot <= c+1e-9 {
+				continue
+			}
+			rest := tot - w
+			if rest <= 0 {
+				continue // nothing else to give it to
+			}
+			out[i] = c * rest / (1 - c)
+			moved = true
+		}
+		if !moved {
+			break
+		}
+	}
+	return out
+}
+
+// mediocreAltLocked reports, per path, whether another path in names is
+// live, not cut and at or under lb2Mediocre (judge j).
+func (j *q2Judge) mediocreAlt(names []string, settled func(string) bool) []bool {
+	ok := map[string]bool{}
+	for _, n := range names {
+		if q := j.p[n]; q != nil && q.have && !q.cut && q.ewma <= lb2Mediocre && (settled == nil || settled(n)) {
+			ok[n] = true
+		}
+	}
+	out := make([]bool, len(names))
+	for i, n := range names {
+		for m := range ok {
+			if m != n {
+				out[i] = true
+				break
+			}
+		}
+	}
+	return out
+}

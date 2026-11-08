@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"math"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -202,5 +204,185 @@ func TestEdgeKeepsWantedArrival(t *testing.T) {
 	lbAuto2 = false
 	if m.arrivalWantedLocked(all[6]) {
 		t.Fatal("wanted with the key off")
+	}
+}
+
+// prodPaths is the main tunnel: 6 Iran IPv4 × 2 kharej IPv4, and one IPv6 pair.
+func prodPaths() (ps []LBPath, bad13, mid35 []string, v6 string) {
+	kh := []string{"116.202.5.113", "91.107.167.67"}
+	bad := []string{"81.12.35.149", "37.32.47.180", "5.160.110.230"}
+	mid := []string{"5.57.38.162", "85.133.195.138", "85.133.250.165"}
+	for _, ir := range append(append([]string(nil), bad...), mid...) {
+		for _, k := range kh {
+			ps = append(ps, LBPath{Local: k, Remote: ir, Addr: ir + ":2082", Weight: 7 * 50, Primary: len(ps) == 0})
+			if hasStr(bad, ir) {
+				bad13 = append(bad13, k+">"+ir)
+			} else {
+				mid35 = append(mid35, k+">"+ir)
+			}
+		}
+	}
+	v6p := LBPath{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2",
+		Addr: "[2a05:9080:0:603:216:3eff:fefe:94d2]:2082", Weight: 7 * 100}
+	return append(ps, v6p), bad13, mid35, v6p.Name()
+}
+
+func prodReadings(b *LB, bad13, mid35 []string, v6 string, lossMid float64) map[int]q2Reading {
+	rs := map[int]q2Reading{}
+	for j, p := range b.paths {
+		switch {
+		case hasStr(bad13, p.Name()):
+			rs[j] = q2Reading{loss: 0.13}
+		case hasStr(mid35, p.Name()):
+			rs[j] = q2Reading{loss: lossMid}
+		case p.Name() == v6:
+			rs[j] = q2Reading{loss: 0.02}
+		}
+	}
+	return rs
+}
+
+// The main tunnel at the time of the report: 3 Iran IPs at 13%, 3 at 3.5%,
+// IPv6 at 2%. Only the 13% IPs are cut (their IP verdict, not the kharej
+// IPs'); the 3.5% ones keep a fair share; IPv6 takes at most half.
+func TestLB2ProdMediocreKeptAndCapped(t *testing.T) {
+	withAuto2(t)
+	ps, bad13, mid35, v6 := prodPaths()
+	b, _ := NewLB(ps, nil)
+	b.SetAuto(true)
+	b.SetSides("Kharej", "Iran")
+	now := time.Unix(1000, 0)
+	b.now = func() time.Time { return now }
+	for i := 0; i < 40; i++ {
+		now = now.Add(5 * time.Second)
+		b.adapt2(prodReadings(b, bad13, mid35, v6, 0.035))
+	}
+	sh := lbShares(b.paths, b.mult)
+	var sBad, sMid, sV6 float64
+	for j, p := range b.paths {
+		q := b.judge.p[p.Name()]
+		switch {
+		case hasStr(bad13, p.Name()):
+			sBad += sh[j]
+			if !q.cut {
+				t.Errorf("%s at 13%% not cut", p.Name())
+			}
+		case hasStr(mid35, p.Name()):
+			sMid += sh[j]
+			if q.cut {
+				t.Errorf("%s at 3.5%% cut (%s)", p.Name(), q.reason)
+			}
+		default:
+			sV6 += sh[j]
+		}
+	}
+	if sV6 > 100*lb2ShareMax+0.5 {
+		t.Errorf("IPv6 takes %.1f%% of the links, cap %.0f%%", sV6, 100*lb2ShareMax)
+	}
+	if sMid < 30 {
+		t.Errorf("the 3.5%% IPs keep only %.1f%%", sMid)
+	}
+	if sBad > 12 { // six cut paths at the floor (0.1 each)
+		t.Errorf("the 13%% IPs keep %.1f%%", sBad)
+	}
+	for _, v := range b.Verdicts() {
+		if strings.HasPrefix(v, "Kharej IP") {
+			t.Errorf("confounded kharej verdict: %q", v)
+		}
+	}
+	if v := b.Verdicts(); len(v) != 3 || !strings.HasPrefix(v[0], "Iran IP ") || !strings.HasSuffix(v[0], "lossy on every Kharej IP") {
+		t.Errorf("verdicts %q, want the three 13%% Iran IPs", v)
+	}
+	t.Logf("shares: 13%% IPs %.1f%%, 3.5%% IPs %.1f%%, IPv6 %.1f%%", sBad, sMid, sV6)
+}
+
+// A path cut at 13% recovers once it runs at 3.5% beside a 2% best path (the
+// recovery bar is relative, like the cut): before, it had to fall under 1.5%
+// and the main tunnel's mediocre IPs stayed cut for good.
+func TestLB2ProdRecoversRelative(t *testing.T) {
+	withAuto2(t)
+	ps, bad13, mid35, v6 := prodPaths()
+	b, _ := NewLB(ps, nil)
+	b.SetAuto(true)
+	now := time.Unix(1000, 0)
+	b.now = func() time.Time { return now }
+	all13 := append(append([]string(nil), bad13...), mid35...)
+	for i := 0; i < 10; i++ { // everything IPv4 at 13%: all cut
+		now = now.Add(5 * time.Second)
+		b.adapt2(prodReadings(b, all13, nil, v6, 0))
+	}
+	if !b.judge.p[mid35[0]].cut {
+		t.Fatal("not cut at 13%")
+	}
+	start := now
+	for i := 0; i < 120 && b.judge.p[mid35[0]].cut; i++ {
+		now = now.Add(5 * time.Second)
+		b.adapt2(prodReadings(b, bad13, mid35, v6, 0.035))
+	}
+	if b.judge.p[mid35[0]].cut {
+		t.Fatalf("a 3.5%% path still cut %s after it came down from 13%%", now.Sub(start))
+	}
+	t.Logf("3.5%% path recovered %s after the drop", now.Sub(start))
+}
+
+// A cut path whose links all ended gets its two probe links back at once.
+func TestLB2CutPathKeepsProbeLinks(t *testing.T) {
+	withAuto2(t)
+	ps, bad13, mid35, v6 := prodPaths()
+	b, _ := NewLB(ps, nil)
+	b.SetAuto(true)
+	for i := 0; i < 60; i++ {
+		dialOne(b)
+	}
+	now := time.Unix(1000, 0)
+	b.now = func() time.Time { return now }
+	for i := 0; i < 10; i++ {
+		now = now.Add(5 * time.Second)
+		b.adapt2(prodReadings(b, bad13, mid35, v6, 0.035))
+	}
+	// the cut path's links end (released)
+	b.mu.Lock()
+	cut := b.indexLocked(bad13[0])
+	var gone []any
+	for k, i := range b.held {
+		if i == cut {
+			gone = append(gone, k)
+		}
+	}
+	b.mu.Unlock()
+	for _, k := range gone {
+		b.release(k)
+	}
+	asked := 0
+	b.setSpare(func(n int) { asked = n })
+	if n := b.fillMin(); n < 2 || asked < 2 {
+		t.Fatalf("cut path at 0 links: %d spares asked", asked)
+	}
+}
+
+func TestCapWeights(t *testing.T) {
+	out := capWeights([]float64{80, 10, 10}, []float64{0.5, 1, 1})
+	tot := out[0] + out[1] + out[2]
+	if math.Abs(out[0]/tot-0.5) > 1e-6 {
+		t.Fatalf("capped share %.3f", out[0]/tot)
+	}
+	out = capWeights([]float64{80, 0}, []float64{0.5, 1}) // nothing to give it to
+	if out[0] != 80 {
+		t.Fatalf("lone path changed: %v", out)
+	}
+}
+
+func TestKeepPathMin(t *testing.T) {
+	_, ls := pathLinks("a>x", "a>x", "a>x", "b>x", "b>x")
+	m, _ := pathLinks()
+	_ = m
+	serving := make([]*managedLink, 0)
+	mm, _ := pathLinks("a>x", "a>x", "a>x", "b>x", "b>x")
+	serving = append(serving, mm.links...)
+	_ = ls
+	drop := []bool{true, true, false, true, true}
+	keepPathMin(serving, drop)
+	if drop[0] && drop[1] || drop[3] || drop[4] {
+		t.Fatalf("drop %v: a keeps 2, b keeps both", drop)
 	}
 }

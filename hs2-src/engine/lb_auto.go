@@ -219,8 +219,11 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 	raw := map[int]q2Reading{}
 	for j := range b.paths {
 		if auto2 {
-			if segs[j] >= lb2MinSegs {
-				r := q2Reading{loss: float64(retr[j]) / float64(segs[j])}
+			// A path with little traffic (a cut path's probe links) adds its
+			// counts up over the ticks until they make a reading (lb_spare.go).
+			sj, rj, ok := b.carryLocked(j, segs[j], retr[j])
+			if ok {
+				r := q2Reading{loss: float64(rj) / float64(sj)}
 				if d := delays[j]; len(d) > 0 {
 					sort.Float64s(d)
 					r.queueMs = d[len(d)/2]

@@ -1070,6 +1070,11 @@ func newLB(fc fileConfig, logf func(string, ...any)) *engine.LB {
 	}
 	lb, err := engine.NewLB(paths, logf)
 	must(err)
+	if fc.Reverse { // the fast auto's IP verdicts name the sides (lb_auto2.go)
+		lb.SetSides("Kharej", "Iran")
+	} else {
+		lb.SetSides("Iran", "Kharej")
+	}
 	if fc.LB.Mode == "auto" {
 		lb.SetAuto(true)
 		logf("lb: %d paths, auto weights (configured × quality factor 0.5–1.5): %s", len(paths), lbSummary(paths))

@@ -342,33 +342,43 @@ func TestSteerPicksAvoidCutPath(t *testing.T) {
 	}
 }
 
-// Light subs go to the best path only.
+
+// Light subs: the best path only when the others are clearly bad; with a
+// mediocre path beside it (≤ lb2Mediocre), no path takes more than
+// lb2ShareMax of them (one path carrying most users is one hiccup away from
+// hitting most of them).
 func TestSteerLightBestPath(t *testing.T) {
 	withAuto2(t)
-	m, ls := pathLinks("a>x", "a>x", "b>x", "b>x")
-	m.steer = newSteerState()
-	now := time.Unix(1000, 0)
-	m.mu.Lock()
-	q2feed(m.steer.judge, &now, 3, map[string]float64{"a>x": 0.003, "b>x": 0.02})
-	m.steer.judge.stepEdge()
-	m.steerTickLocked(now, 2*time.Second)
-	m.mu.Unlock()
-	if f := m.steer.judge.p["b>x"].factor; f >= 0.9 || f <= 0.05 {
-		t.Fatalf("b factor %.2f", f)
-	}
-	for i := 0; i < 200; i++ {
-		l, rel, ok := m.pickPlane(planeLight, nil)
-		if !ok {
-			t.Fatal("no pick")
-		}
+	pick := func(lossB float64) (onA int) {
+		m, ls := pathLinks("a>x", "a>x", "b>x", "b>x")
+		m.steer = newSteerState()
+		now := time.Unix(1000, 0)
 		m.mu.Lock()
-		for _, ml := range m.links {
-			ml.picks, ml.pickHist = 0, [pickWindow - 1]int{}
-		}
+		q2feed(m.steer.judge, &now, 3, map[string]float64{"a>x": 0.003, "b>x": lossB})
+		m.steer.judge.stepEdge()
+		m.steerTickLocked(now, 2*time.Second)
 		m.mu.Unlock()
-		if j := linkIndex(ls, l); j >= 2 {
-			t.Fatalf("light sub on the worse path (link %d)", j)
+		for i := 0; i < 400; i++ {
+			l, rel, ok := m.pickPlane(planeLight, nil)
+			if !ok {
+				t.Fatal("no pick")
+			}
+			m.mu.Lock()
+			for _, ml := range m.links {
+				ml.picks, ml.pickHist = 0, [pickWindow - 1]int{}
+			}
+			m.mu.Unlock()
+			if linkIndex(ls, l) < 2 {
+				onA++
+			}
+			rel()
 		}
-		rel()
+		return onA
+	}
+	if a := pick(0.08); a < 390 {
+		t.Fatalf("b cut at 8%%: %d of 400 light subs on a, want all", a)
+	}
+	if a := pick(0.02); a < 160 || a > 240 {
+		t.Fatalf("b mediocre at 2%%: %d of 400 light subs on a, want about half (cap %.0f%%)", a, 100*lb2ShareMax)
 	}
 }

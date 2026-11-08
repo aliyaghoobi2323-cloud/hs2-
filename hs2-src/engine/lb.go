@@ -145,6 +145,7 @@ type LB struct {
 	spare       func(n int)
 	spareLog    atomic.Int64
 	spareGapLog atomic.Int64
+	acc2        map[string]*lb2Acc // low-traffic paths' counts carried over (lb_spare.go)
 	// peerState reports what the peer's live links say about capLB: known is
 	// false while no live link carries a kindInfo answer (nil = always ok).
 	peerState func() (known, has bool)

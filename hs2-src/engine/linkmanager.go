@@ -844,6 +844,9 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 		if m.shrinkShares != nil {
 			keys, w := m.shrinkShares(serving)
 			drop = shareShrinkPick(keys, w, len(serving)-T)
+			if lbAuto2 {
+				keepPathMin(serving, drop) // lb_spare.go
+			}
 		}
 		kept := make([]*managedLink, 0, T)
 		for i, ml := range serving {

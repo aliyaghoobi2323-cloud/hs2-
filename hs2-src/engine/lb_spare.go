@@ -201,3 +201,61 @@ func reportShares(rep LBReport) []LBAdvertIP {
 	}
 	return out
 }
+
+// keepPathMin un-drops shrink picks that would leave a path (mlPath) with
+// fewer than lb2Keep serving links (HS2_LB_AUTO2): a cut path keeps its two
+// probe links — with few or no users they look like the first to retire, and
+// retiring them left the main tunnel's cut paths at 0 links, never measured
+// again. The pool then stays a link or two over its target.
+func keepPathMin(serving []*managedLink, drop []bool) {
+	left := map[string]int{}
+	for i, ml := range serving {
+		if !drop[i] {
+			left[mlPath(ml)]++
+		}
+	}
+	for i, ml := range serving {
+		p := mlPath(ml)
+		if drop[i] && p != "" && left[p] < lb2Keep {
+			drop[i] = false
+			left[p]++
+		}
+	}
+}
+
+// lb2Carry: a path whose ticks bring fewer than lb2MinSegs segments adds them
+// up for this long (and at least lb2MinSegs/4 of them) before it gives a
+// reading: a cut path's two probe links carry next to no users, and without
+// a reading it could never be seen recovering.
+var lb2Carry = time.Minute
+
+type lb2Acc struct {
+	segs, retr uint64
+	since      time.Time
+}
+
+// carryLocked adds a tick's counts of path j and returns a reading's counts
+// when there are enough. Caller holds b.mu.
+func (b *LB) carryLocked(j int, segs, retr uint64) (uint64, uint64, bool) {
+	if segs >= lb2MinSegs {
+		delete(b.acc2, b.paths[j].Name())
+		return segs, retr, true
+	}
+	if b.acc2 == nil {
+		b.acc2 = map[string]*lb2Acc{}
+	}
+	now := b.now()
+	a := b.acc2[b.paths[j].Name()]
+	if a == nil {
+		a = &lb2Acc{since: now}
+		b.acc2[b.paths[j].Name()] = a
+	}
+	a.segs += segs
+	a.retr += retr
+	if a.segs >= lb2MinSegs || a.segs >= lb2MinSegs/4 && now.Sub(a.since) >= lb2Carry {
+		s, r := a.segs, a.retr
+		delete(b.acc2, b.paths[j].Name())
+		return s, r, true
+	}
+	return 0, 0, false
+}
