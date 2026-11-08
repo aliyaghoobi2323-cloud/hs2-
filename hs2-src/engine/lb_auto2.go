@@ -173,6 +173,16 @@ func q2Alpha(perSec float64, dt time.Duration) float64 {
 // update folds one tick's readings (paths absent: no reading) and sets every
 // known path's target factor and reason.
 func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Reading) {
+	// A reading is "bad" over lb2CutLoss AND well above the best path read
+	// this tick (2× + 1 point): loss every path shares (a full queue, the
+	// whole border) is not one path's fault, and moving users would not help.
+	best := math.Inf(1)
+	for _, r := range rs {
+		best = math.Min(best, r.loss)
+	}
+	isBad := func(l float64) bool {
+		return l > lb2CutLoss && (len(rs) < 2 || l > 2*best+0.01)
+	}
 	for k, r := range rs {
 		q := j.path(k)
 		q.raw = r.loss
@@ -196,7 +206,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		}
 		q.fail = r.fail
 		q.have, q.lastRead = true, now
-		if r.loss > lb2CutLoss {
+		if isBad(r.loss) {
 			q.bad++
 		} else {
 			q.bad = 0
@@ -207,7 +217,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 	ipBad := map[string]string{}
 	anyGood := false
 	for _, r := range rs {
-		if r.loss <= lb2CutLoss {
+		if !isBad(r.loss) {
 			anyGood = true
 		}
 	}
@@ -226,7 +236,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 					x.m[x.ip] = g
 				}
 				g.n++
-				if r.loss > lb2CutLoss {
+				if isBad(r.loss) {
 					g.bad++
 				}
 			}

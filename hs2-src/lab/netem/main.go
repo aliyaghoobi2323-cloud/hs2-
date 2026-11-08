@@ -86,7 +86,6 @@ type geState struct {
 	until time.Time
 }
 
-
 // lossOverride (-lossfile, SIGUSR1): a random loss that replaces -loss on
 // both directions while set (NaN bits: none). The lab flips a path from good
 // to bad and back mid-run with it.
@@ -100,6 +99,7 @@ func curLoss(def float64) float64 {
 	}
 	return def
 }
+
 // drop decides whether a frame is lost under the direction's loss model.
 func (c *dirCfg) drop(g *geState, now time.Time) bool {
 	if c.burstBadMs <= 0 {
@@ -133,10 +133,10 @@ type pkt struct {
 // first even when jitter made a later-enqueued packet due sooner (reordering).
 type pktHeap []pkt
 
-func (h pktHeap) Len() int            { return len(h) }
-func (h pktHeap) Less(i, j int) bool  { return h[i].at.Before(h[j].at) }
-func (h pktHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
-func (h *pktHeap) Push(x any)         { *h = append(*h, x.(pkt)) }
+func (h pktHeap) Len() int           { return len(h) }
+func (h pktHeap) Less(i, j int) bool { return h[i].at.Before(h[j].at) }
+func (h pktHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h *pktHeap) Push(x any)        { *h = append(*h, x.(pkt)) }
 func (h *pktHeap) Pop() any {
 	old := *h
 	n := len(old)
