@@ -193,7 +193,7 @@ cat > "$T/st.json" <<JS
    "down_mbit": 10, "up_mbit": 1, "down_mb": 100, "up_mb": 10, "loss_down_pct": 7.5,
    "rtt_p50_ms": 50, "rtt_p99_ms": 300, "degraded": 2, "state": "cooling", "cooled_s": 42}],
  "lb_total": {"local": "", "remote": "", "share_pct": 100, "target": 92, "links": 76, "serving": 74, "users": 15,
-   "down_mbit": 133.45, "up_mbit": 6.6, "down_mb": 2445.6, "up_mb": 130, "loss_down_pct": 1.2, "loss_up_pct": 0.1,
+   "down_mbit": 133.5, "up_mbit": 6.6, "down_mb": 2445.6, "up_mb": 130, "loss_down_pct": 1.2, "loss_up_pct": 0.1,
    "rtt_p50_ms": 45, "rtt_p99_ms": 290, "degraded": 2, "state": "ok"}}
 JS
 out=$(run '9\n\n0\n')
