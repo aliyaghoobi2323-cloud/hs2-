@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/binary"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -306,6 +307,10 @@ type l3Set struct {
 	dup    bool
 	dupSeq uint32
 	rx     l3Dedup
+	// HS2_L3_FEC (l3_fec.go): fec is the sending side (nil: off), fecRx the
+	// receiving side (nil until the other server sent a parity packet).
+	fec   *l3Fec
+	fecRx atomic.Pointer[l3FecRx]
 }
 
 func (s *l3Set) add(l *l3Link) {
@@ -375,6 +380,13 @@ func (s *l3Set) pick(pkt []byte) *l3Link {
 // link's peer reads TypeDataDup, the second link to send it over (nil: send
 // once).
 func (s *l3Set) pickDup(pkt []byte) (first, second *l3Link) {
+	first, second, _, _ = s.pickAll(pkt)
+	return first, second
+}
+
+// pickAll is pickDup plus, with HS2_L3_FEC on, the striping plan of a flow
+// the FEC takes (fec true: send by fp, l3_fec.go).
+func (s *l3Set) pickAll(pkt []byte) (first, second *l3Link, fp fecPlan, fec bool) {
 	h := flowHash(pkt)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -386,10 +398,16 @@ func (s *l3Set) pickDup(pkt []byte) (first, second *l3Link) {
 					countDupPath(second.path != l.path, true)
 				}
 			}
-			return l, second
+			return l, second, fp, false
+		}
+		if s.fec != nil {
+			e := &s.lane.flows[h&(l3LaneSlots-1)]
+			if fp, ok := s.fecPlan(e, s.links, pkt, h, s.lane.now()); ok {
+				return nil, nil, fp, true
+			}
 		}
 	}
-	return rendezvous(s.links, h, false), nil
+	return rendezvous(s.links, h, false), nil, fp, false
 }
 
 // rendezvous is the live link (lightOnly: and carrying no download) with the
@@ -435,7 +453,11 @@ func (s *l3Set) pumpTun(ctx context.Context, dev tunWriter) {
 			continue
 		}
 		*bp = b[:n]
-		l, l2 := s.pickDup(*bp)
+		l, l2, fp, fec := s.pickAll(*bp)
+		if fec {
+			s.sendFec(bp, fp)
+			continue
+		}
 		if l2 != nil {
 			s.sendDup(bp, l, l2)
 			continue
@@ -464,7 +486,8 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 		case core.TypeDataDup:
 			l.qs.markL3()
 			if p := s.rx.accept(payload); p != nil {
-				dev.Write(p)
+				// a parity packet, or one the FEC may need (l3_fec.go)
+				s.fecRecv(binary.BigEndian.Uint32(payload)&l3DupIDMask, p, dev)
 			}
 		}
 	}
@@ -474,6 +497,7 @@ func (s *l3Set) linkToTun(ctx context.Context, l *l3Link, dev tunWriter) {
 func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
+	var fc fecCounts
 	for {
 		select {
 		case <-ctx.Done():
@@ -481,6 +505,11 @@ func (s *l3Set) logDrops(ctx context.Context, logf func(string, ...any)) {
 		case <-t.C:
 			if n := s.drops.Swap(0); n > 0 {
 				logf("l3: dropped %d packets in 30s on the tun side channel (queue limit or no link) — in the TLS modes the tun is for ping and light traffic; the user ports carry the bulk, unaffected", n)
+			}
+			if c := s.fecCounts(); c != fc {
+				logf("l3 fec (HS2_L3_FEC), 30s: %d packets striped (%d KB) · %d parity (%d KB) · %d groups over budget · %d rebuilt here · %d parity not needed",
+					c.striped-fc.striped, (c.dataB-fc.dataB)>>10, c.parity-fc.parity, (c.parB-fc.parB)>>10, c.capped-fc.capped, c.recovered-fc.recovered, c.late-fc.late)
+				fc = c
 			}
 		}
 	}

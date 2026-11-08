@@ -106,6 +106,7 @@ type result struct {
 	BulkErrors int     `json:"bulk_errors"`
 	// optional loads; absent unless asked for
 	Call  *streamResult `json:"call,omitempty"`
+	UCall *streamResult `json:"ucall,omitempty"` // UDP call (ucall.go)
 	Game  *streamResult `json:"game,omitempty"`
 	Crowd *crowdResult  `json:"crowd,omitempty"`
 	Web   *webResult    `json:"web,omitempty"`
@@ -139,6 +140,9 @@ func main() {
 	seg := flag.Int64("seg", 0, "bytes per download connection before it reconnects (0 = one connection for the whole run)")
 	call := flag.String("call", "", "also run a two-way video-call-like stream at this rate, e.g. 2mbit")
 	callSize := flag.Int("callsize", 1000, "call frame size, bytes")
+	ucall := flag.String("ucall", "", "also run a two-way UDP video-call-like stream at this rate, e.g. 2mbit (ucall.go)")
+	ucallSize := flag.Int("ucallsize", 1100, "UDP call datagram size, bytes")
+	ucallAddr := flag.String("ucalladdr", "", "UDP call target (default: -addr)")
 	game := flag.Bool("game", false, "also run a game-like stream: 60-200 byte frames every 20-50 ms")
 	late := flag.Duration("late", 0, "start the echo, call and game this long after the downloads (sets -echodelay if that is 0)")
 	lateMs := flag.Float64("latems", 150, "call/game: a round trip above this many ms counts as late")
@@ -412,6 +416,27 @@ func main() {
 	if callBps > 0 {
 		gap, size := callSpec(callBps, *callSize)
 		stream(&r.Call, gap, size, callBps/1e6)
+	}
+	if *ucall != "" {
+		bps, err := parseRate(*ucall)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		ua := *ucallAddr
+		if ua == "" {
+			ua = *addr
+		}
+		gap, size := callSpec(bps, *ucallSize)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			res := runUDPCall(streamSpec{addr: ua, delay: *late, gap: gap, size: size,
+				start: start, warm: max(*warm, *late), lateMs: *lateMs, mbps: bps / 1e6}, stop)
+			mu.Lock()
+			r.UCall = res
+			mu.Unlock()
+		}()
 	}
 	if *game {
 		gap, size := gameSpec()

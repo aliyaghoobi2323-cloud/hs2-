@@ -15,6 +15,8 @@
 #   NETEM_EXTRA: extra emulator flags, e.g. "-burstloss 0.3 -badms 30 -goodms 2000" (bursty loss).
 #   PROBE_EXTRA: extra probe flags, e.g. "-seg 4000000" (reconnect per 4 MB download).
 #   CALL [] e.g. 2mbit: a two-way video-call-like stream (probe -call)   GAME [0] 1 = game-like stream
+#   UCALL [] e.g. 2mbit: a two-way UDP call (probe -ucall, WebRTC-like) through hs0 to the kharej
+#     probe server at 10.77.0.2:5201, while the rest goes as VIA says (needs a TUN mode)
 #   LATE [0] e.g. 5s: echo/call/game and the hs0 ping start this long after the downloads
 #   CROWD [0] e.g. 300: light connections (probe -crowd) so the pool grows to tens of links;
 #     CROWD_EVERY [700ms] mean interval of their requests. Raise MAX_LINKS with it (e.g. 128).
@@ -182,7 +184,7 @@ cat > "$W/ir.json" <<J
 J
 # VIA=tun: the server must also answer on the inner address, which only exists
 # once hs2 has made hs0, so it listens on all addresses
-PLISTEN=127.0.0.1:5201; [ "$VIA" = tun ] && PLISTEN=0.0.0.0:5201
+PLISTEN=127.0.0.1:5201; [ "$VIA" = tun ] || [ -n "${UCALL:-}" ] && PLISTEN=0.0.0.0:5201
 ip netns exec $KH "$W/probe" -server -listen $PLISTEN & echo $! >> "$W/pids"
 ip netns exec $KH env HS2_NO_TUNE=1 "$W/hs2kh" run -c "$W/kh.json" >"$W/kh.log" 2>&1 & KHPID=$!; echo $KHPID >> "$W/pids"
 sleep 1
@@ -281,6 +283,13 @@ fi
 UFLAG=""; [ "$UDP" = 1 ] && UFLAG="-udp"
 PX=""
 [ -n "$CALL" ] && PX="$PX -call $CALL"
+if [ -n "${UCALL:-}" ]; then
+  PX="$PX -ucall $UCALL -ucalladdr 10.77.0.2:5201 ${UCALL_EXTRA:-}"
+  for i in $(seq 1 60); do
+    ip netns exec $IR bash -c 'exec 3<>/dev/tcp/10.77.0.2/5201' 2>/dev/null && break
+    sleep 0.25
+  done
+fi
 [ "$GAME" = 1 ] && PX="$PX -game"
 [ "$WEB" = 1 ] && PX="$PX -web"
 [ "$LATE" != 0 ] && PX="$PX -late $LATE"

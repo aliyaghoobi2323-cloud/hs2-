@@ -59,6 +59,13 @@ type l3Flow struct {
 	avg   uint16  // packet size EWMA, bytes
 	inter bool    // interactive (rides the lane)
 	used  bool
+	// HS2_L3_FEC (l3_fec.go): the flow's bytes this second (from winStart),
+	// its rate over the last whole second, and its striping state (nil: not
+	// striped).
+	winStart int64
+	winBytes uint64
+	rate     uint32
+	fec      *l3FecFlow
 }
 
 // l3Lane is the lane state of one l3Set.
@@ -72,11 +79,18 @@ func newL3Lane() *l3Lane { return &l3Lane{now: ctrlNow} }
 // newL3Set is the TUN side channel's link set, with the lane when it is on.
 func newL3Set() *l3Set {
 	s := &l3Set{}
-	if l3LaneOn || l3DupOn { // the dup sends what the lane calls interactive
+	// the dup sends what the lane calls interactive; the FEC stripes some of
+	// what it does not (l3_fec.go)
+	if l3LaneOn || l3DupOn || l3FecOn {
 		s.lane = newL3Lane()
 	}
 	if l3DupOn {
 		s.dup = true
+	}
+	if l3FecOn {
+		s.fec = &l3Fec{}
+	}
+	if l3DupOn || l3FecOn {
 		s.dupSeq = rand.Uint32()
 	}
 	return s
