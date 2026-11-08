@@ -34,6 +34,7 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -241,6 +242,7 @@ func (a *journeyAgg) reel(sp journeySpec, n int, stop <-chan struct{}) {
 	}
 	buf := make([]byte, 64<<10)
 	got, ttf := 0, -1.0
+	var rerr error
 	thr := min(sp.ttf, n)
 	for got < n {
 		k, err := c.Read(buf[:min(len(buf), n-got)])
@@ -249,6 +251,7 @@ func (a *journeyAgg) reel(sp journeySpec, n int, stop <-chan struct{}) {
 			ttf = ms(time.Since(s))
 		}
 		if err != nil {
+			rerr = err
 			break
 		}
 	}
@@ -263,6 +266,9 @@ func (a *journeyAgg) reel(sp journeySpec, n int, stop <-chan struct{}) {
 			a.res.Reels.Unfinished++
 		} else {
 			a.res.Reels.Fail++
+			if os.Getenv("PROBE_LOG_FAIL") != "" {
+				fmt.Fprintf(os.Stderr, "reel fail: local=%s after %v got %d of %d: %v\n", c.LocalAddr(), el.Round(time.Millisecond), got, n, rerr)
+			}
 		}
 		return
 	}
