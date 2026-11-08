@@ -99,8 +99,13 @@ func TestStripeGateWidth(t *testing.T) {
 // gate (the unit tests' pipes, and the edge).
 func TestStripeGateUnmeasured(t *testing.T) {
 	m, p := gateConn(2)
-	if w := m.stripeWidthLocked(p, time.Now()); w != -1 {
+	now := time.Now()
+	if w := m.stripeWidthLocked(p, now); w != -1 {
 		t.Fatalf("width %d with no link tracked, want -1", w)
+	}
+	// and still between two measurements (a regression: it read 0 there)
+	if w := m.stripeWidthLocked(p, now.Add(stripeQEvery/2)); w != -1 {
+		t.Fatalf("width %d between measurements, want -1", w)
 	}
 }
 

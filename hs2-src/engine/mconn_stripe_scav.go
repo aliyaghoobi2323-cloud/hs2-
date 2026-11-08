@@ -70,6 +70,7 @@ type stripeGate struct {
 	stGrowAt time.Time // the last growth (or the last cut)
 	stQ      time.Duration
 	stLogAt  time.Time
+	stNoGate bool // the last decision found nothing to measure: no gate until the next
 }
 
 // subMeter: the link meter of an exit sub (nil: not known).
@@ -94,6 +95,9 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 		m.stGrowAt = now
 	}
 	if now.Sub(m.stGateAt) < stripeQEvery {
+		if m.stNoGate {
+			return -1
+		}
 		return m.stW
 	}
 	m.stGateAt = now
@@ -104,7 +108,7 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 		}
 	}
 	q, measured := stripePathQ.delay(now, own)
-	if !measured {
+	if m.stNoGate = !measured; m.stNoGate {
 		return -1 // no exit link tracked (nothing to measure the path with)
 	}
 	m.stQ = q
