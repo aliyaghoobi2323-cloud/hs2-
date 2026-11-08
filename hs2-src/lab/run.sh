@@ -30,6 +30,14 @@
 #     download -> app pings -> game in turn, starts spread over 10 s; JSON "journey" aggregates
 #     every phase over all users. JOURNEY_EXTRA: its flags, e.g. "-journeyscale 0.5 -jreels 3".
 #     Combines with BULK (set BULK=0 for the journey alone), CROWD, CALL, GAME, WEB.
+#   KILL_AT [0] e.g. 20: that many seconds into the probe, reset KILL_PCT [75] percent of the
+#     links (lab/killrebuild.py) and time the pool's rebuild; JSON "kill" has the counts, the
+#     seconds to 50/90/100% of the links (rebuild_t*_s) and the count over time.
+#   REVERSE [0] 1 = the tunnel in reverse on the one path (kharej dials iran's 192.168.50.1:2096);
+#     PATHS=2 is always reverse.
+#   NOWARM [0] 1 = delete the Iran side's warm file (last link target) first, so every run
+#     starts from the same pool size.
+#   LOGDIR [] keep both sides' logs there as RUNTAG-ir.log / RUNTAG-kh.log.
 #   LAB_ID=n runs in namespaces irn/khn/midn so experiments can run in parallel.
 #   HS2_TUNE_* variables are passed through to hs2 (see cmd/hs2 applyTuning).
 set -u
@@ -133,6 +141,11 @@ if [ "$PATHS" = 2 ]; then
   fi
 fi
 
+if [ "${REVERSE:-0}" = 1 ] && [ "$PATHS" != 2 ]; then
+  KHAREJ_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","sni":"lab.example.com",'"$KHAREJ_EXTRA"
+  IRAN_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","backend_addr":"builtin","cert_file":"'$W'/cert.pem","key_file":"'$W'/key.pem",'"$IRAN_EXTRA"
+fi
+[ "${NOWARM:-0}" = 1 ] && rm -f "/run/hs2/$(echo "$W/ir.json" | sed "s|^/||; s|/|-|g").warm"
 KEY=$(printf 'ab%.0s' {1..32})
 cat > "$W/kh.json" <<J
 {"mode":"listen","carrier":"$MODE","addr":"192.168.50.2:2096","iface":"hs0",
@@ -222,6 +235,10 @@ PX=""
 [ "$CROWD" != 0 ] && PX="$PX -crowd $CROWD -crowdevery $CROWD_EVERY"
 [ "$JOURNEY" != 0 ] && PX="$PX -journey $JOURNEY $JOURNEY_EXTRA"
 [ "$VIA" = tun ] && { RX0=$(tunb rx_bytes); TX0=$(tunb tx_bytes); }
+KILLP=""; rm -f "$W/kill.json"
+if [ "${KILL_AT:-0}" != 0 ]; then
+  python3 "$D/killrebuild.py" $IR $KH 2096 "${KILL_AT%s}" "${KILL_PCT:-75}" "$W/kill.json" & KILLP=$!
+fi
 OUT=$(ip netns exec $IR "$W/probe" -addr $PADDR -bulk "$BULK" -up "$UP" -t "$T" $UFLAG $PX ${PROBE_EXTRA:-})
 if [ "$VIA" = tun ]; then
   # Iran side hs0: rx = what came back through the TUN (downloads, replies), tx = what went into it
@@ -268,6 +285,14 @@ print('"lb_paths_end":%s,"lb_paths_max":%s,"lb_paths_avg2h":%s,"lb_text":"%s",' 
 PY
 )
 fi
+KILLX=""
+if [ -n "$KILLP" ]; then
+  wait "$KILLP" 2>/dev/null
+  [ -f "$W/kill.json" ] && KILLX='"kill":'$(cat "$W/kill.json")','
+fi
+if [ -n "${LOGDIR:-}" ]; then  # keep both sides' logs: LOGDIR/RUNTAG-ir.log, -kh.log
+  mkdir -p "$LOGDIR"; cp "$W/ir.log" "$LOGDIR/${RUNTAG:-run}-ir.log"; cp "$W/kh.log" "$LOGDIR/${RUNTAG:-run}-kh.log"
+fi
 [ "${KEEP:-0}" = 1 ] || cleanup
-printf '{"qcaps":%s,"qrel":%s,"links_end":%s,"links_max":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s",%s%s"link_churn":%s,%s"probe":%s}\n' \
-  "${QCAPS:-0}" "${QREL:-0}" "${LINKS:-0}" "${LMAX:-0}" "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "${PSTAT:-}" "$TUNX" "$REAPS" "$LBX" "${OUT:-null}"
+printf '{"qcaps":%s,"qrel":%s,"links_end":%s,"links_max":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s",%s%s"link_churn":%s,%s%s"probe":%s}\n' \
+  "${QCAPS:-0}" "${QREL:-0}" "${LINKS:-0}" "${LMAX:-0}" "$MODE" "$RATE" "$DELAY" "$LOSS" "$FLOWRATE" "$BULK" "${PING:-}" "${PLOSS:-}" "${PSTAT:-}" "$TUNX" "$REAPS" "$LBX" "$KILLX" "${OUT:-null}"

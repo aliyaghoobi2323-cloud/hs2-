@@ -406,6 +406,9 @@ func (m *LinkManager) now() time.Time {
 // detector, but not so long that the spread itself becomes anomalous versus a
 // real page load opening its parallel connections.
 func jitterGap() time.Duration {
+	if fastLink { // 20–80 ms (fastlink.go)
+		return 20*time.Millisecond + time.Duration(rand.IntN(60))*time.Millisecond
+	}
 	return 40*time.Millisecond + time.Duration(rand.IntN(120))*time.Millisecond
 }
 
@@ -1658,7 +1661,7 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 		var best pickKey
 		ties := 0
 		for _, ml := range m.links {
-			if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
+			if !ml.link.Alive() || !m.infoReadyLocked(ml) {
 				continue
 			}
 			if limit > 0 && int(ml.users.Load()) >= limit {

@@ -267,7 +267,7 @@ func (m *LinkManager) pickPlaneTiers(p mPlane, avoid []any, pool *peerInfo, ok f
 		var best planeKey
 		ties := 0
 		for _, ml := range m.links {
-			if !ml.link.Alive() || m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() {
+			if !ml.link.Alive() || !m.infoReadyLocked(ml) {
 				continue
 			}
 			if !linkMConn(ml, pool) || avoided(ml.link, avoid) || ok != nil && !ok(ml) {

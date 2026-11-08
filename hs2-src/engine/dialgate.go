@@ -19,11 +19,19 @@ import (
 // handshakes at a time, and successive starts spaced by jitterGap (40–160 ms,
 // ~10 a second), so 300 links come up in about half a minute, never as one
 // burst, and a dead peer costs a handful of attempts rather than hundreds.
-const gateInflight = 8
+// HS2_FAST_LINK (fastlink.go) doubles both: 16 at a time, 20–80 ms apart.
+var gateInflight = pickInt(fastLink, 16, 8)
 
-// gatePerSec is the gate's nominal pace (jitterGap averages 100 ms), for the
-// words the logs use about it.
-const gatePerSec = 10
+// gatePerSec is the gate's nominal pace (jitterGap averages 100 ms, 50 ms
+// with HS2_FAST_LINK), for the words the logs use about it.
+var gatePerSec = pickInt(fastLink, 20, 10)
+
+func pickInt(c bool, a, b int) int {
+	if c {
+		return a
+	}
+	return b
+}
 
 type dialGate struct {
 	sem  chan struct{}

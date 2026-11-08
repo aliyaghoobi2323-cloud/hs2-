@@ -399,14 +399,10 @@ func (p *exitPool) runSlot(ctx context.Context, s *exitSlot) {
 			why = "reason unknown"
 		}
 		p.downLog.log("mtcp: exit link down (slot %d: %s; now %d); redial", s.id, why, n)
-		// A link that lived is redialed after a short jittered pause; one that
-		// died right after coming up backs off like a failed dial.
-		if time.Since(up) >= slotStableAfter {
-			backoff = slotBackoffMin
-		} else if backoff < slotBackoffMax {
-			backoff *= 2
-		}
-		if !sleepCtx(ctx, jitterDur(backoff)) {
+		// A link that lived is redialed after a short jittered pause (at once
+		// with HS2_FAST_LINK); one that died right after coming up backs off
+		// like a failed dial.
+		if !sleepCtx(ctx, slotRedialPause(time.Since(up), &backoff)) {
 			return
 		}
 	}

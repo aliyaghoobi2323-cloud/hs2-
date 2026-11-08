@@ -314,7 +314,7 @@ func (m *LinkManager) refillStep(now time.Time) bool {
 // that would send the operator after a fault that is not there. Only a pool
 // well behind that pace points at the path or the other server.
 func refillWhySlow(up, target int, took time.Duration) string {
-	paced := 1 + int(took.Seconds()*gatePerSec)
+	paced := 1 + int(took.Seconds()*float64(gatePerSec))
 	if up*10 >= paced*6 {
 		return fmt.Sprintf("links open at the dial pace, about %d a second, so %d take about %ds — expected, not a fault", gatePerSec, target, (target+gatePerSec-1)/gatePerSec)
 	}
