@@ -195,7 +195,7 @@ func TestQuietSessionWatchdog(t *testing.T) {
 		}
 		select {
 		case <-sess.CloseChan():
-		case <-time.After(6 * time.Second):
+		case <-time.After(9 * time.Second):
 			sess.Close()
 			return 0, "not closed"
 		}
@@ -206,7 +206,7 @@ func TestQuietSessionWatchdog(t *testing.T) {
 		t.Fatalf("busy link: closed after %v (%q)", d, why)
 	}
 	d, why = run(true)
-	if d < 2500*time.Millisecond || d > 4500*time.Millisecond {
+	if d < 2500*time.Millisecond || d > 2*quietSilent+time.Second { // one to two windows, as smux
 		t.Fatalf("idle link: closed after %v (%q), want ~%v", d, why, quietSilent)
 	}
 }
