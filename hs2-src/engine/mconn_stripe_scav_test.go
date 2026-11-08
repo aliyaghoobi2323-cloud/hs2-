@@ -237,20 +237,14 @@ func TestStripePoolSetAside(t *testing.T) {
 		t.Fatal("second link not set aside")
 	}
 	now = now.Add(stripeResFor + time.Second)
-	if x := m.stripeExtra(); x != 1 || stripeOn(ml2) || !ml2.stripeRes.IsZero() {
-		t.Fatalf("lapsed set-aside: extra %d (want 1, held for stripeExtraHold), held %v", x, stripeOn(ml2))
-	}
-	now = now.Add(stripeExtraHold)
-	if x := m.stripeExtra(); x != 0 {
-		t.Fatalf("extra %d after stripeExtraHold, want 0", x)
+	if x := m.stripeExtra(); x != 0 || stripeOn(ml2) || !ml2.stripeRes.IsZero() {
+		t.Fatalf("lapsed set-aside: extra %d, held %v", x, stripeOn(ml2))
 	}
 	// a request lapses too
 	m.mu.Lock()
 	m.stripeAskLocked(now)
 	m.mu.Unlock()
 	now = now.Add(stripeWantFor + time.Second)
-	m.stripeExtra()
-	now = now.Add(stripeExtraHold)
 	if x := m.stripeExtra(); x != 0 {
 		t.Fatalf("lapsed request still counted: %d", x)
 	}

@@ -27,8 +27,7 @@ const (
 	stripeWantFor = 10 * time.Second // a request lapses unless renewed
 	stripeResFor  = 10 * time.Second // a set-aside link nobody took goes back
 	stripeWantMax = stripeKMax       // links asked for at once (process)
-	// stripeExtraHold: the pool keeps the stripe's highest extra this long
-	stripeExtraHold = time.Minute
+
 )
 
 // stripeAdoptLocked (under m.mu, a new link): set it aside for the stripe
@@ -81,13 +80,11 @@ func (m *LinkManager) stripeExtra() int {
 	if now.After(m.stripeWantUntil) {
 		m.stripeWant = 0
 	}
-	// held for stripeExtraHold: the stripe's links come and go by the second
-	// (its gate, lite's idle rule), and a pool that follows them retires and
-	// redials links under the TUN lane's pings (busy lab, HS2_QUIET_IDLE: the
-	// ping's share over 120 ms 2.9% → 5.6%)
-	x := n + m.stripeWant
-	if x >= m.stripeExtraHi || now.Sub(m.stripeExtraAt) >= stripeExtraHold {
-		m.stripeExtraHi, m.stripeExtraAt = x, now
-	}
-	return m.stripeExtraHi
+	// No hold: a pool kept larger after the stripe let go spread the new
+	// light connections over more, emptier links, where a lost segment has
+	// nothing behind it to trigger a fast retransmit (busy lab, all
+	// production keys, a 60 s hold: the app ping's p95 181 → 242 ms, p99 in
+	// two downloads 225 → 343 ms; without it as lb-ready9). The links a
+	// stripe released are retired first (no users, nothing flowing).
+	return n + m.stripeWant
 }

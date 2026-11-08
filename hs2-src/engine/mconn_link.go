@@ -361,6 +361,10 @@ type mconnEdge struct {
 	first bool       // a role-0 sub went out
 	subs  []*mconnSub
 	ended bool
+
+	// diagnostics (HS2_MCONN_STRIPE_LOG): the first sub's placement
+	pickDur  time.Duration
+	pickLink string
 }
 
 // open is the connection's mOpener.
@@ -426,9 +430,13 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 // choice (pickWait); false when that link's exit does not read kindMConn
 // (the caller then falls back to the one stream, as with the key off).
 func (e *mconnEdge) pickFirstLite() (Link, func(), bool, bool) {
+	tp := time.Now()
 	l, rel, ok := pickWait(e.ctx, e.lm, true)
 	if !ok {
 		return nil, nil, false, false
+	}
+	if stripeLog {
+		e.pickDur, e.pickLink = time.Since(tp), e.lm.stripeDescribe(l)
 	}
 	pi := e.lm.exitInfo.Load()
 	if mtr := linkMeterOf(l); mtr != nil {
@@ -483,9 +491,16 @@ func serveUserMConn(ctx context.Context, user io.ReadWriteCloser, lm *LinkManage
 	mconnStat.total.Add(1)
 	mconnStat.open.Add(1)
 	defer mconnStat.open.Add(-1)
+	tOpen := time.Since(t0)
 	relayStream(user, mc, nil)
 	mc.Close()
 	e.end()
+	if stripeLog {
+		if fr := mc.firstRx.Load(); fr != 0 {
+			stripeLogf("newconn: pick=%v open=%v first=%v link=[%s]", e.pickDur.Round(time.Millisecond), tOpen.Round(time.Millisecond),
+				time.Duration(fr-t0.UnixNano()).Round(time.Millisecond), e.pickLink)
+		}
+	}
 	return true
 }
 

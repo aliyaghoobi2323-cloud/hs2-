@@ -146,6 +146,8 @@ type stripeState struct {
 	stN       int // subs ever marked stripe (0: the stripe rule is never looked at)
 	stHot     int // Iran: consecutive samples at the growth rate
 
+	firstRx atomic.Int64 // diagnostics (HS2_MCONN_STRIPE_LOG): unix ns of the first byte read raw
+
 	stripeGate // sender: the scavenger's width (mconn_stripe_scav.go)
 }
 

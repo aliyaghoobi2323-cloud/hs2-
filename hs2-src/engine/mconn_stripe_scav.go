@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"slices"
@@ -296,3 +297,27 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 
 // stripeLogf logs a diagnostic line (callers check stripeLog).
 func stripeLogf(format string, args ...any) { log.Printf(format, args...) }
+
+// stripeDescribe (diagnostics): l's state in the pool for a log line.
+func (m *LinkManager) stripeDescribe(l Link) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	S, light := 0, 0
+	var me *managedLink
+	for _, ml := range m.links {
+		if ml.serving() {
+			S++
+			if ml.heavy == 0 && !stripeOn(ml) {
+				light++
+			}
+		}
+		if ml.link == l {
+			me = ml
+		}
+	}
+	if me == nil {
+		return "?"
+	}
+	return fmt.Sprintf("id=%d heavy=%d stripe=%v users=%d flowing=%d pressed=%v recent=%d age=%v serving=%d light=%d",
+		me.id, me.heavy, stripeOn(me), me.users.Load(), me.flowing, me.pressed, me.recentPicks(), time.Since(me.born).Round(time.Second), S, light)
+}
