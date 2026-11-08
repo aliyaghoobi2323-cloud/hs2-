@@ -100,48 +100,70 @@ done
 [ -n "${KH_QDISC:-}" ] && ip netns exec $KH tc qdisc replace dev $VK root ${KH_QDISC}
 [ -n "${IR_QDISC:-}" ] && ip netns exec $IR tc qdisc replace dev $VI root ${IR_QDISC}
 ip netns exec $MID "$W/netem" -a $MA -b $MB -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
-  -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} $PATH_A_NETEM 2>"$W/netem.log" & echo $! >> "$W/pids"
-if [ "$PATHS" = 2 ]; then
-  ip link add ${VI}b netns $IR type veth peer name ${MA}b netns $MID
-  ip link add ${VK}b netns $KH type veth peer name ${MB}b netns $MID
-  ip -n $IR addr add 192.168.51.1/24 dev ${VI}b
-  ip -n $KH addr add 192.168.51.2/24 dev ${VK}b
-  for x in "$IR ${VI}b" "$KH ${VK}b" "$MID ${MA}b" "$MID ${MB}b"; do
-    set -- $x
-    ip netns exec $1 ethtool -K $2 tso off gso off gro off tx off rx off >/dev/null 2>&1
-    ip -n $1 link set dev $2 up
+  -loss "$LOSS" -flowrate "$FLOWRATE" -lossfile "$W/loss-0" ${NETEM_EXTRA:-} $PATH_A_NETEM 2>"$W/netem.log" & echo $! > "$W/netem-0.pid"; cat "$W/netem-0.pid" >> "$W/pids"
+if [ "$PATHS" -ge 2 ]; then
+  # Paths 1..PATHS-1 (b, c, d): Iran IP 192.168.5k.1, kharej 192.168.5k.2, each
+  # with its own netem (PATH_<B|C|D>_NETEM) and loss file (LOSS_EVENTS). With
+  # LB_V6=1 path b is IPv6 instead (fd00:51::1 / fd00:51::2) and the kharej
+  # side dials it from its own IPv6 address (same-family pairing).
+  for k in $(seq 1 $((PATHS - 1))); do
+    sx=$(printf "\x$(printf %x $((97 + k)))")   # b, c, d
+    eval "NX=\${PATH_$(echo $sx | tr a-z A-Z)_NETEM:-}"
+    ip link add ${VI}$sx netns $IR type veth peer name ${MA}$sx netns $MID
+    ip link add ${VK}$sx netns $KH type veth peer name ${MB}$sx netns $MID
+    if [ "${LB_V6:-0}" = 1 ] && [ $k = 1 ]; then
+      ip -n $IR -6 addr add fd00:51::1/64 dev ${VI}$sx nodad
+      ip -n $KH -6 addr add fd00:51::2/64 dev ${VK}$sx nodad
+    else
+      ip -n $IR addr add 192.168.5$k.1/24 dev ${VI}$sx
+      ip -n $KH addr add 192.168.5$k.2/24 dev ${VK}$sx
+    fi
+    for x in "$IR ${VI}$sx" "$KH ${VK}$sx" "$MID ${MA}$sx" "$MID ${MB}$sx"; do
+      set -- $x
+      ip netns exec $1 ethtool -K $2 tso off gso off gro off tx off rx off >/dev/null 2>&1
+      ip -n $1 link set dev $2 up
+    done
+    if [ "$LB_DIRECT" = 1 ]; then
+      ip -n $KH rule add from 192.168.5$k.2 table $((150 + k))
+      ip -n $KH route add 192.168.50.1/32 dev ${VK}$sx src 192.168.5$k.2 table $((150 + k))
+    elif ! { [ "${LB_V6:-0}" = 1 ] && [ $k = 1 ]; }; then
+      # replies from this Iran IP go back over its own path
+      ip -n $IR rule add from 192.168.5$k.1 table $((150 + k))
+      ip -n $IR route add 192.168.50.2/32 dev ${VI}$sx src 192.168.5$k.1 table $((150 + k))
+    fi
+    : > "$W/loss-$k"
+    ip netns exec $MID "$W/netem" -a ${MA}$sx -b ${MB}$sx -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
+      -loss "$LOSS" -flowrate "$FLOWRATE" -lossfile "$W/loss-$k" ${NETEM_EXTRA:-} $NX 2>"$W/netem-$sx.log" & echo $! > "$W/netem-$k.pid"; cat "$W/netem-$k.pid" >> "$W/pids"
   done
   if [ "$LB_DIRECT" = 1 ]; then
-    # replies from the second kharej IP go back over path B
-    ip -n $KH rule add from 192.168.51.2 table 152
-    ip -n $KH route add 192.168.50.1/32 dev ${VK}b src 192.168.51.2 table 152
+    LSIDE=kharej; LIPS="192.168.50.2"; for k in $(seq 1 $((PATHS - 1))); do LIPS="$LIPS 192.168.5$k.2"; done
   else
-    # replies from the second Iran IP go back over path B
-    ip -n $IR rule add from 192.168.51.1 table 151
-    ip -n $IR route add 192.168.50.2/32 dev ${VI}b src 192.168.51.1 table 151
+    LSIDE=iran; LIPS="192.168.50.1"
+    for k in $(seq 1 $((PATHS - 1))); do
+      if [ "${LB_V6:-0}" = 1 ] && [ $k = 1 ]; then LIPS="$LIPS fd00:51::1"; else LIPS="$LIPS 192.168.5$k.1"; fi
+    done
   fi
-  ip netns exec $MID "$W/netem" -a ${MA}b -b ${MB}b -rate "$RATE" -delay "$DELAY" -queue "$QUEUE" \
-    -loss "$LOSS" -flowrate "$FLOWRATE" ${NETEM_EXTRA:-} $PATH_B_NETEM 2>"$W/netem-b.log" & echo $! >> "$W/pids"
-  WA=${LB_WEIGHTS%,*}; WB=${LB_WEIGHTS#*,}
-  if [ "$LB_DIRECT" = 1 ]; then
-    LSIDE=kharej; LIP1=192.168.50.2; LIP2=192.168.51.2
-  else
-    LSIDE=iran; LIP1=192.168.50.1; LIP2=192.168.51.1
-  fi
-  LL='[{"ip":"'$LIP1'","weight":'$WA'},{"ip":"'$LIP2'","weight":'$WB'}]'
+  LIP1=192.168.50.1; LIP2=192.168.51.1; [ "$LB_DIRECT" = 1 ] && { LIP1=192.168.50.2; LIP2=192.168.51.2; }
+  # LB_WEIGHTS: one weight per path (comma-separated); fewer: equal shares
+  IFS=, read -ra WS <<< "$LB_WEIGHTS"
+  [ ${#WS[@]} = "$PATHS" ] || { WS=(); for k in $(seq 1 $PATHS); do WS+=($((100 / PATHS + (k <= 100 % PATHS ? 1 : 0)))); done; }
+  LL="["; i=0
+  for ip in $LIPS; do [ $i -gt 0 ] && LL="$LL,"; LL="$LL{\"ip\":\"$ip\",\"weight\":${WS[$i]}}"; i=$((i + 1)); done; LL="$LL]"
   [ "$LB_INIT" = one ] && LL='[{"ip":"'$LIP1'","weight":100}]'
+  KHL='[{"ip":"192.168.50.2","weight":100}]'
+  [ "${LB_V6:-0}" = 1 ] && KHL='[{"ip":"192.168.50.2","weight":50},{"ip":"fd00:51::2","weight":50}]'
   if [ "$LB_DIRECT" = 1 ]; then
     LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","kharej":'$LL',"iran":[{"ip":"192.168.50.1","weight":100}]},'
     KHAREJ_EXTRA="$LBJ$KHAREJ_EXTRA"
     IRAN_EXTRA='"bind_local_ip":"192.168.50.1",'"$LBJ$IRAN_EXTRA"
   else
-  LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","iran":'$LL',"kharej":[{"ip":"192.168.50.2","weight":100}]},'
+  LBJ='"lb":{"enabled":true,"mode":"'$LB_MODE'","iran":'$LL',"kharej":'$KHL'},'
   KHAREJ_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","bind_local_ip":"192.168.50.2","sni":"lab.example.com",'"$LBJ$KHAREJ_EXTRA"
   IRAN_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","backend_addr":"builtin","cert_file":"'$W'/cert.pem","key_file":"'$W'/key.pem",'"$LBJ$IRAN_EXTRA"
   fi
 fi
 
-if [ "${REVERSE:-0}" = 1 ] && [ "$PATHS" != 2 ]; then
+if [ "${REVERSE:-0}" = 1 ] && [ "$PATHS" -lt 2 ]; then
   KHAREJ_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","sni":"lab.example.com",'"$KHAREJ_EXTRA"
   IRAN_EXTRA='"reverse":true,"addr":"192.168.50.1:2096","backend_addr":"builtin","cert_file":"'$W'/cert.pem","key_file":"'$W'/key.pem",'"$IRAN_EXTRA"
 fi
@@ -198,14 +220,14 @@ SF=/run/hs2/$(echo "$W/ir.json" | sed "s|^/||; s|/|-|g").status.json
 LP=$!; echo $LP >> "$W/pids"
 SFK=/run/hs2/$(echo "$W/kh.json" | sed "s|^/||; s|/|-|g").status.json
 SFD=$SFK; [ "$LB_DIRECT" = 1 ] && SFD=$SF   # the dialing side's status
-if [ "$PATHS" = 2 ]; then
+if [ "$PATHS" -ge 2 ]; then
   # per second: "t path=links/target(src) ..." on the dialing side
   (t0=$(date +%s); while :; do python3 -c "import json,sys; print(sys.argv[2], ' '.join('%s=%d/%d%s' % (p['path'], p['links'], p['target'], '' if p.get('state','ok')=='ok' else ':'+p['state']) for p in json.load(open(sys.argv[1])).get('lb',[])))" "$SFD" $(( $(date +%s) - t0 )) 2>/dev/null; sleep 1; done) > "$W/lbtime.txt" &
   echo $! >> "$W/pids"
   (while :; do python3 -c "import json,sys; print(' '.join(str(p['links']) for p in json.load(open(sys.argv[1])).get('lb',[])))" "$SFD" 2>/dev/null; sleep 1; done) > "$W/lbpaths.txt" &
   echo $! >> "$W/pids"
 fi
-if [ -n "$LB_EVENTS" ] && [ "$PATHS" = 2 ]; then
+if [ -n "$LB_EVENTS" ] && [ "$PATHS" -ge 2 ]; then
   if [ "$LB_DIRECT" = 1 ]; then LCFG=$W/kh.json; LPID=$KHPID; else LCFG=$W/ir.json; LPID=$IRPID; fi
   (t0=$(date +%s)
    for ev in $LB_EVENTS; do
@@ -224,6 +246,36 @@ json.dump(c, open(f, 'w'))
 PY
      kill -HUP "$LPID"; echo "$at $spec" >> "$W/lbevents.txt"
    done) &
+  echo $! >> "$W/pids"
+fi
+# LOSS_EVENTS="SEC:K:LOSS ..." (PATHS>=2): at SEC seconds into the probe, path
+# K (0 = a, 1 = b, ...) changes its random loss to LOSS each way ("-" = back to
+# LOSS / its netem flags). LB_SAMPLE=1: once a second, both sides' per-path
+# status as one JSON line in $W/lbsamp.jsonl (LOGDIR: RUNTAG-lbsamp.jsonl).
+if [ -n "${LOSS_EVENTS:-}" ] && [ "$PATHS" -ge 2 ]; then
+  (t0=$(date +%s)
+   for ev in $LOSS_EVENTS; do
+     at=${ev%%:*}; rest=${ev#*:}; k=${rest%%:*}; l=${rest#*:}
+     while [ $(( $(date +%s) - t0 )) -lt "$at" ]; do sleep 0.2; done
+     echo "$l" > "$W/loss-$k"; kill -USR1 "$(cat "$W/netem-$k.pid")"; echo "$at $k $l" >> "$W/lossevents.txt"
+   done) &
+  echo $! >> "$W/pids"
+fi
+rm -f "$W/lbsamp.jsonl"
+if [ "${LB_SAMPLE:-0}" = 1 ] && [ "$PATHS" -ge 2 ]; then
+  (t0=$(date +%s.%N); while :; do python3 - "$SF" "$SFK" "$t0" <<'PY' 2>/dev/null; sleep 1; done) >> "$W/lbsamp.jsonl" &
+import json, sys, time
+def rd(f):
+    try: return json.load(open(f))
+    except Exception: return {}
+ir, kh = rd(sys.argv[1]), rd(sys.argv[2])
+keep = ("local", "remote", "links", "users", "down_mbit", "new_pct", "auto_factor", "auto_reason", "eff_pct", "loss_down_pct", "target")
+row = lambda p: {k: p[k] for k in keep if k in p}
+print(json.dumps({"t": round(time.time() - float(sys.argv[3]), 1),
+                  "ir": [row(p) for p in ir.get("lb_paths") or []], "irp": [row(p) for p in ir.get("lb_pairs") or []],
+                  "kh": [row(p) for p in kh.get("lb_paths") or []], "verd": (ir.get("lb_verdicts") or []) + (kh.get("lb_verdicts") or []),
+                  "links_ir": ir.get("links", 0), "users": ir.get("users", 0)}))
+PY
   echo $! >> "$W/pids"
 fi
 UFLAG=""; [ "$UDP" = 1 ] && UFLAG="-udp"
@@ -268,7 +320,7 @@ LINKS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(d.get
 QCAPS=$(grep -c "tunnel egress capped" "$W/kh.log" 2>/dev/null)
 QREL=$(grep -c "not the tunnel's own" "$W/kh.log" 2>/dev/null)
 LBX=""
-if [ "$PATHS" = 2 ]; then
+if [ "$PATHS" -ge 2 ]; then
   # per-path link counts on the dialing (kharej) side: at the end, and the max
   LBX=$(python3 - "$W/lbpaths.txt" "$SFD" <<'PY'
 import json, sys
@@ -292,6 +344,8 @@ if [ -n "$KILLP" ]; then
 fi
 if [ -n "${LOGDIR:-}" ]; then  # keep both sides' logs: LOGDIR/RUNTAG-ir.log, -kh.log
   mkdir -p "$LOGDIR"; cp "$W/ir.log" "$LOGDIR/${RUNTAG:-run}-ir.log"; cp "$W/kh.log" "$LOGDIR/${RUNTAG:-run}-kh.log"
+  [ -f "$W/lbsamp.jsonl" ] && cp "$W/lbsamp.jsonl" "$LOGDIR/${RUNTAG:-run}-lbsamp.jsonl"
+  [ -f "$W/lossevents.txt" ] && cp "$W/lossevents.txt" "$LOGDIR/${RUNTAG:-run}-lossevents.txt"
 fi
 [ "${KEEP:-0}" = 1 ] || cleanup
 printf '{"qcaps":%s,"qrel":%s,"links_end":%s,"links_max":%s,"mode":"%s","rate":"%s","delay":"%s","loss":"%s","flowrate":"%s","bulk":%s,"ping_avg_max":"%s","ping_loss":"%s",%s%s"link_churn":%s,%s%s"probe":%s}\n' \

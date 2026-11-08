@@ -3924,6 +3924,17 @@ lb_is_ip4(){
   for o in "${p[@]}"; do [ "$((10#$o))" -le 255 ] || return 1; done
   [ "$1" != 0.0.0.0 ]
 }
+# lb_is_ip ADDR: a usable IPv4 or IPv6 address (not unspecified); lb_norm_ip
+# prints it in canonical form (IPv6 compressed, lower case), as hs2 does.
+lb_is_ip(){
+  lb_is_ip4 "$1" && return 0
+  case "$1" in *:*) ;; *) return 1 ;; esac
+  python3 -c 'import ipaddress,sys
+a=ipaddress.ip_address(sys.argv[1]); sys.exit(1 if a.is_unspecified or a.is_multicast or a.version!=6 else 0)' "$1" 2>/dev/null
+}
+lb_norm_ip(){
+  case "$1" in *:*) python3 -c 'import ipaddress,sys; print(ipaddress.ip_address(sys.argv[1]))' "$1" 2>/dev/null || echo "$1" ;; *) echo "$1" ;; esac
+}
 # lb_own_side CFG: the side this server is (Iran = mode dial).
 lb_own_side(){ if cfg_is_dial "$1"; then echo iran; else echo kharej; fi; }
 # lb_listen_side CFG: the side that LISTENS (and so serves per-address certs):
@@ -3938,8 +3949,8 @@ lb_side_label(){ if [ "$1" = iran ]; then echo Iran; else echo Kharej; fi; }
 lb_prims(){
   local cfg="$1" a host bind
   a=$(jget "$cfg" addr); host=${a%:*}; host=${host#[}; host=${host%]}
-  lb_is_ip4 "$host" || host=""
-  bind=$(jget "$cfg" bind_local_ip); lb_is_ip4 "$bind" || bind=""
+  lb_is_ip "$host" && host=$(lb_norm_ip "$host") || host=""
+  bind=$(jget "$cfg" bind_local_ip); lb_is_ip "$bind" && bind=$(lb_norm_ip "$bind") || bind=""
   if cfg_is_dial "$cfg"; then
     if cfg_is_reverse "$cfg"; then LB_PRIM_IR=$host; LB_PRIM_KH=""
     else LB_PRIM_IR=$bind; LB_PRIM_KH=$host; fi
@@ -4045,11 +4056,12 @@ lb_split(){
   LB_DIRTY=1
 }
 
-lb_local_ips(){ ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1; }
+lb_local_ips(){ ip -o addr show 2>/dev/null | awk '$3=="inet" || ($3=="inet6" && $4 !~ /^fe80/) {print $4}' | cut -d/ -f1; }
 # lb_port_busy IP PORT: something other than hs2 listens on IP:PORT (or on the
 # wildcard of PORT). hs2 itself (this tunnel, already on lb) is fine.
 lb_port_busy(){
-  ss -Hltnp "sport = :$2" 2>/dev/null | awk -v a="$1:$2" -v p="$2" \
+  local a="$1:$2"; case "$1" in *:*) a="[$1]:$2" ;; esac
+  ss -Hltnp "sport = :$2" 2>/dev/null | awk -v a="$a" -v p="$2" \
     '($4==a || $4=="0.0.0.0:"p || $4=="*:"p || $4=="[::]:"p) && $0 !~ /"hs2/ {f=1} END{exit !f}'
 }
 lb_hs2_on80(){ ss -Hltnp "sport = :80" 2>/dev/null | grep -q '"hs2'; }
@@ -4069,7 +4081,7 @@ lb_check(){
     for i in $(lb_side_idx "$own"); do
       row=${LB_ROWS[$i]}; ip=$(lb_field "$row" 2)
       if ! printf '%s\n' "$locals" | grep -qxF "$ip"; then
-        say "  ${C_R}✗ $ip is not an address of this server (ip -4 addr) — add it to the network interface first.${C_0}"; bad=1; continue
+        say "  ${C_R}✗ $ip is not an address of this server (ip addr) — add it to the network interface first.${C_0}"; bad=1; continue
       fi
       if [ "$own" = "$lis" ] && [ "$ip" != "$(lb_prim_of "$own")" ] && lb_port_busy "$ip" "$port"; then
         say "  ${C_R}✗ Port $port on $ip is already in use by another program:${C_0}"
@@ -4209,7 +4221,7 @@ lb_get_cert(){
   local u="$1" cfg="$2" i="$3" row ip sni a out cf kf
   row=${LB_ROWS[$i]}; ip=$(lb_field "$row" 2); sni=$(lb_field "$row" 4)
   if [ -z "$sni" ]; then
-    read -rp "  Subdomain for $ip (its A record must point at $ip): " sni </dev/tty || return 0
+    read -rp "  Subdomain for $ip (its A record — AAAA for an IPv6 address — must point at $ip): " sni </dev/tty || return 0
     [ -n "$sni" ] || return 0
     lb_row_set "$i" 4 "$sni"; LB_DIRTY=1
   fi
@@ -4246,7 +4258,7 @@ lb_get_cert(){
 # without lb_paths gets its one-line summary and a note.
 lb_live_render(){
   C_R="$C_R" C_Y="$C_Y" C_G="$C_G" C_B="$C_B" C_D="$C_D" C_0="$C_0" python3 - "$1" "$2" <<'PY' >&2
-import json, os, sys, time
+import json, os, re, sys, time, datetime
 unit, path = sys.argv[1], sys.argv[2]
 R, Y, G, B, D, Z = (os.environ.get(k, "") for k in ("C_R", "C_Y", "C_G", "C_B", "C_D", "C_0"))
 try:
@@ -4256,6 +4268,8 @@ except Exception:
     sys.exit(0)
 paths, tot = st.get("lb_paths") or [], st.get("lb_total")
 side = st.get("lb_side", "")
+iran_side = st.get("role") == "Iran side"
+rep = st.get("lb_report") or {}
 
 def ago(t):
     d = max(0, int(time.time()) - int(t))
@@ -4264,6 +4278,16 @@ def ago(t):
     if d < 86400: return "%dh %dm ago" % (d // 3600, d % 3600 // 60)
     return "%dd ago" % (d // 86400)
 
+def gotime(s):
+    # Go's RFC 3339 with nanoseconds -> unix seconds (None if unparsable)
+    try:
+        m = re.match(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)$", s or "")
+        if not m: return None
+        tz = "+00:00" if m.group(3) == "Z" else m.group(3)
+        return datetime.datetime.fromisoformat(m.group(1) + tz).timestamp()
+    except Exception:
+        return None
+
 src = {"advert": "the other server's announcement", "local": "this config",
        "announces": "this config (announced to the other server)"}.get(st.get("lb_source", ""), "")
 sidetxt = {"dial": "dials the paths", "listen": "listens on the addresses"}.get(side, "")
@@ -4271,17 +4295,33 @@ head = [st.get("role") or "?", st.get("dir") or "?"]
 if sidetxt: head.append(sidetxt)
 print("  Tunnel:     %s%s%s · %s" % (B, unit, Z, " · ".join(head)))
 if st.get("lb_mode"):
-    print("  Mode:       " + st["lb_mode"] + (" (shares follow path quality)" if st["lb_mode"] == "auto" else " (shares as set)"))
+    m = st["lb_mode"]
+    txt = " (shares follow path quality)" if m == "auto" else " (shares as set)"
+    if m == "auto" and st.get("lb_auto2"):
+        txt = " — fast (5 s readings, lossy paths cut at once)"
+    if st.get("lb_mode_from") == "peer":
+        txt += " · as the Kharej server (it dials) reports it"
+    print("  Mode:       " + m + txt)
 if src:
     print("  Addresses:  from " + src)
 if st.get("lb_reload"):
-    print("  Peer:       " + ("reads this tunnel's announcements" if st.get("lb_peer_advert") else "announcement support not known yet"))
+    peer = "announcement support not known yet"
+    if st.get("lb_peer_advert"):
+        peer = "reads this tunnel's announcements"
+    if st.get("lb_peer_at"):
+        peer += " · last exchange " + ago(st["lb_peer_at"])
+    rt = gotime(rep.get("at")) if rep else None
+    if rt:
+        peer += " · path report " + ago(rt)
+    print("  Peer:       " + peer)
 if st.get("lb_loaded_at"):
-    print("  Last load:  " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["lb_loaded_at"])) + " (" + ago(st["lb_loaded_at"]) + ")")
+    print("  Last load:  " + time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(st["lb_loaded_at"])) + " (" + ago(st["lb_loaded_at"]) + ", the config)")
 if st.get("lb_note"):
     print("  %sNote: %s%s" % (Y, st["lb_note"], Z))
 if st.get("lb_rejected"):
     print("  %sThe other server's announcement was rejected: %s%s" % (R, st["lb_rejected"], Z))
+for v in st.get("lb_verdicts") or []:
+    print("  %sVerdict:    %s%s" % (R, v, Z))
 print()
 if not paths:
     txt = st.get("lb_text", "")
@@ -4305,7 +4345,8 @@ def loss(p):
     d, u = p.get("loss_down_pct"), p.get("loss_up_pct")
     if d is None and u is None: return "-", False
     f = lambda v: "-" if v is None else ("%.1f" % v)
-    return f(d) + "/" + f(u) + "%", (d or 0) > 5 or (u or 0) > 5
+    mark = "~" if p.get("loss_down_src") == "receiver" else ""
+    return mark + f(d) + "/" + f(u) + "%", (d or 0) > 5 or (u or 0) > 5
 def rtt(p):
     if not p.get("rtt_p50_ms"): return "-"
     return "%.0f/%.0f" % (p["rtt_p50_ms"], p.get("rtt_p99_ms", 0))
@@ -4320,6 +4361,9 @@ def state(p):
         s.append("probing"); col = Y
     elif stt == "draining":
         s.append("removed, draining"); col = Y
+    why = p.get("auto_reason", "")
+    if why and why != "ok":
+        s.append(why); col = R if why.startswith("cut") else (col or Y)
     for k in ("degraded", "draining", "suspect"):
         if p.get(k):
             s.append("%s %d" % (k, p[k])); col = col or Y
@@ -4330,29 +4374,37 @@ def state(p):
     if not s or s == ["primary"]:
         s.insert(0, "ok"); col = col or G
     return ", ".join(s), col
+def autof(p):
+    f = p.get("auto_factor")
+    return "%.2f" % f if f else "-"
+def newp(p):
+    n = p.get("new_pct")
+    return "-" if n is None else "%.0f%%" % n
 
-W = (15, 15, 5, 8, 4, 5, 7, 7, 10, 8, 11)
+W = (15, 15, 5, 8, 4, 5, 4, 5, 7, 7, 11, 8, 11)
 def cells_of(p, total):
     links, target = p.get("links", 0), p.get("target", 0)
     lo, hi = ("total", "") if total else (p.get("local", ""), p.get("remote", ""))
+    if len(lo) > 15: lo = lo[:14] + "~"
     if len(hi) > 15: hi = hi[:14] + "~"
     share = p.get("eff_pct") or p.get("share_pct", 0)
     now = ("%.0f%%" % (100.0 * links / nlinks)) if (nlinks and not total) else ""
     l, lbad = loss(p)
-    return [lo, hi, "%.0f%%" % share, "%d/%d" % (links, target), now, str(p.get("users", 0)),
+    return [lo, hi, "%.0f%%" % share, "%d/%d" % (links, target), now, "" if total else autof(p),
+            "" if total else newp(p), str(p.get("users", 0)),
             mbit(p.get("down_mbit", 0)), mbit(p.get("up_mbit", 0)), l, rtt(p),
             size(p.get("down_mb", 0)) + "/" + size(p.get("up_mb", 0))], lbad
 
-def pad(cells):
+def pad(cells, w=W):
     out = []
     for i, c in enumerate(cells):
-        out.append(c.ljust(W[i]) if i < 2 else c.rjust(W[i]))
+        out.append(c.ljust(w[i]) if i < 2 else c.rjust(w[i]))
     return out
 
 nlinks = sum(p.get("links", 0) for p in paths)
-hdr = pad(["THIS SERVER", "OTHER SERVER", "SHARE", "LINKS", "NOW", "USERS", "DOWN", "UP", "LOSS D/U", "RTT ms", "TOTAL D/U"])
+hdr = pad(["THIS SERVER", "OTHER SERVER", "SHARE", "LINKS", "NOW", "AUTO", "NEW", "USERS", "DOWN", "UP", "LOSS D/U", "RTT ms", "TOTAL D/U"])
 print("  " + B + " ".join(hdr) + "  STATE" + Z)
-print("  " + D + " ".join(pad(["", "", "set", "live/tgt", "", "", "Mbit/s", "Mbit/s", "", "p50/p99", "bytes"])) + Z)
+print("  " + D + " ".join(pad(["", "", "eff" if st.get("lb_mode") == "auto" else "set", "live/tgt", "", "factor", "conns", "", "Mbit/s", "Mbit/s", "", "p50/p99", "bytes"])) + Z)
 for p in paths:
     c, lbad = cells_of(p, False)
     c = pad(c)
@@ -4360,27 +4412,108 @@ for p in paths:
     off = (target > 0 and abs(links - target) > max(1, round(0.1 * target))) or (target == 0 and links > 0 and share > 0)
     if off:
         c[3], c[4] = Y + c[3], c[4] + Z
+    f = p.get("auto_factor")
+    if f and f < 0.5:
+        c[5] = R + c[5] + Z
     if lbad:
-        c[8] = R + c[8] + Z
+        c[10] = R + c[10] + Z
     stt, scol = state(p)
     print("  " + " ".join(c) + "  " + scol + stt + Z)
 if tot:
     c, lbad = cells_of(tot, True)
     c = pad(c)
     if lbad:
-        c[8] = R + c[8] + Z
+        c[10] = R + c[10] + Z
     extra = []
     for k in ("degraded", "draining", "suspect"):
         if tot.get(k): extra.append("%s %d" % (k, tot[k]))
     print("  " + D + "-" * (sum(W) + len(W) - 1) + Z)
     print("  " + B + c[0] + Z + " " + " ".join(c[1:]) + "  " + ", ".join(extra))
+
+# ---- Iran IP x Kharej IP: per-IP summaries and the matrix -----------------
+pairs = st.get("lb_pairs") or (paths if side == "dial" else [])
+def ik(p):
+    l, r = p.get("local", ""), p.get("remote", "")
+    return (l, r) if iran_side else (r, l)
+ips_i, ips_k, cell = [], [], {}
+for p in pairs:
+    i, k = ik(p)
+    if not i or not k or "," in k or "," in i: continue
+    if i not in ips_i: ips_i.append(i)
+    if k not in ips_k: ips_k.append(k)
+    cell[(i, k)] = p
+def ploss(p):
+    v = p.get("loss_down_pct")
+    return v
+def summary(ips, keyf, label):
+    rows = []
+    for ip in ips:
+        ps = [p for (a, b), p in cell.items() if keyf(a, b) == ip]
+        if not ps: continue
+        links = sum(p.get("links", 0) for p in ps)
+        users = sum(p.get("users", 0) for p in ps)
+        dn = sum(p.get("down_mbit", 0) for p in ps); up = sum(p.get("up_mbit", 0) for p in ps)
+        ls = [(ploss(p), max(p.get("down_mbit", 0), 0.01)) for p in ps if ploss(p) is not None]
+        lo = sum(a * w for a, w in ls) / sum(w for _, w in ls) if ls else None
+        rt = [p["rtt_p50_ms"] for p in ps if p.get("rtt_p50_ms")]
+        fs = [p["auto_factor"] for p in ps if p.get("auto_factor")]
+        eff = sum(p.get("eff_pct") or 0 for p in ps)
+        bad = [p for p in ps if (ploss(p) or 0) > 3]
+        rows.append((ip, links, users, dn, up, lo, (sum(rt) / len(rt)) if rt else None,
+                     (sum(fs) / len(fs)) if fs else None, eff, len(bad), len(ps)))
+    if not rows: return
+    print()
+    w = (39, 6, 6, 8, 8, 7, 6, 6, 6)
+    print("  " + B + "%-39s %6s %6s %8s %8s %7s %6s %6s %6s" % (label, "LINKS", "USERS", "DOWN", "UP", "LOSS D", "RTT", "AUTO", "EFF") + Z)
+    for ip, links, users, dn, up, lo, rt, f, eff, nb, n in rows:
+        col = R if lo is not None and lo > 3 else (Y if lo is not None and lo > 1 else "")
+        print("  %-39s %6d %6d %8s %8s %s%7s%s %6s %6s %6s" % (ip, links, users, mbit(dn), mbit(up), col,
+              "-" if lo is None else "%.1f%%" % lo, Z, "-" if rt is None else "%.0f" % rt,
+              "-" if f is None else "%.2f" % f, ("%.0f%%" % eff) if eff else "-"))
+if len(ips_i) + len(ips_k) > 2:
+    summary(ips_i, lambda a, b: a, "IRAN IP (over every Kharej IP)")
+    summary(ips_k, lambda a, b: b, "KHAREJ IP (over every Iran IP)")
+    # the matrix: loss down % · auto factor
+    print()
+    cw = 13
+    short = lambda s: s if len(s) <= cw else s[:cw - 1] + "~"
+    print("  " + B + "%-39s " % "LOSS D % · AUTO   Iran \\ Kharej" + " ".join(short(k).rjust(cw) for k in ips_k) + Z)
+    def bad(p): return p is not None and (ploss(p) or 0) > 3
+    for i in ips_i:
+        cs = []
+        for k in ips_k:
+            p = cell.get((i, k))
+            if p is None:
+                cs.append("-".rjust(cw)); continue
+            lo, f = ploss(p), p.get("auto_factor")
+            t = ("-" if lo is None else "%.1f" % lo) + ("·%.2f" % f if f else "")
+            col = R if (lo or 0) > 3 or (f and f < 0.5) else (Y if (lo or 0) > 1 or (f and f < 0.9) else G)
+            cs.append(col + t.rjust(cw) + Z)
+        print("  %-39s " % i + " ".join(cs))
+    # verdicts the matrix shows: a whole row or column bad while others are not
+    allp = list(cell.values())
+    if allp and not all(bad(p) for p in allp):
+        for i in ips_i:
+            ps = [cell.get((i, k)) for k in ips_k if cell.get((i, k))]
+            if len(ps) >= 2 and all(bad(p) for p in ps):
+                print("  %s→ Iran IP %s is lossy on every Kharej IP: the Iran IP, not the paths%s" % (R, i, Z))
+        for k in ips_k:
+            ps = [cell.get((i, k)) for i in ips_i if cell.get((i, k))]
+            if len(ps) >= 2 and all(bad(p) for p in ps):
+                print("  %s→ Kharej IP %s is lossy on every Iran IP: the Kharej IP, not the paths%s" % (R, k, Z))
+
 print()
 print("  " + D + "DOWN = Kharej to Iran, UP = Iran to Kharej (last 10 s) · LOSS = share of data resent" + Z)
+src_note = " (~ = this server's receiver estimate; no ~ = the sender's own count)" if any(p.get("loss_down_src") == "receiver" for p in paths) else ""
+if src_note:
+    print("  " + D + "LOSS D" + src_note + Z)
 print("  " + D + "SHARE = set share" + (" (auto: the effective one)" if st.get("lb_mode") == "auto" else "") +
       " · LINKS = live/target · NOW = its actual share of the links · TOTAL = since hs2 started" + Z)
+print("  " + D + "AUTO = quality factor on the share (1 = full; cut paths 0.05–0.1) · NEW = share of new connections placed here" + Z)
 if side == "listen":
-    print("  " + D + "Rows are the addresses this server is reached on; targets split the live links by its shares." + Z)
-print("  " + R + "red" + Z + D + ": loss over 5% or a cooled path · " + Z + Y + "yellow" + Z + D + ": links off target, or links being replaced" + Z)
+    print("  " + D + "Rows are the addresses this server is reached on; " +
+          ("targets and shares as the Kharej server reports them." if rep else "targets split the live links by its shares.") + Z)
+print("  " + R + "red" + Z + D + ": loss over 5% (matrix: 3%), a cut path or a cooled one · " + Z + Y + "yellow" + Z + D + ": links off target, or links being replaced" + Z)
 PY
 }
 
@@ -4408,7 +4541,7 @@ lb_show(){ # cfg
   own=$(lb_own_side "$cfg"); lis=$(lb_listen_side "$cfg")
   LB_NUM=()
   for side in iran kharej; do
-    say "  $(lb_side_label "$side") addresses$([ "$side" = "$own" ] && echo " (this server)")$([ "$side" = "$lis" ] && echo " — listens" || echo " — dials"):"
+    say "  $(lb_side_label "$side") addresses$([ "$side" = "$own" ] && echo " (this server)")$([ "$side" = "$lis" ] && echo " — listens" || echo " — dials")$([ "$side" = "$lis" ] && [ "$own" != "$lis" ] && echo " ${C_D}(this config only — the running tunnel uses the list the other server announces, see below)${C_0}"):"
     p=$(lb_pseudo "$side")
     [ -n "$p" ] && say "        (default address)  ${p}%  primary — always used"
     for i in $(lb_side_idx "$side"); do
@@ -4429,11 +4562,75 @@ lb_show(){ # cfg
   done
 }
 
+# lb_effective CFG: the address lists the RUNNING tunnel uses on both sides,
+# read-only, from its status (each marked with where it comes from): on the
+# dialing side the other server's announced list, on the listening side the
+# Kharej source IPs that actually dial in. Shown under the editable rows.
+lb_effective(){
+  local sf; sf=$(status_path "$1")
+  status_fresh "$sf" || { say "  ${C_D}(effective lists: the tunnel is not running)${C_0}"; return 0; }
+  C_R="$C_R" C_Y="$C_Y" C_G="$C_G" C_B="$C_B" C_D="$C_D" C_0="$C_0" python3 - "$sf" <<'PY' >&2 || true
+import json, os, sys
+R, Y, G, B, D, Z = (os.environ.get(k, "") for k in ("C_R", "C_Y", "C_G", "C_B", "C_D", "C_0"))
+try:
+    st = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(0)
+side, iran = st.get("lb_side", ""), st.get("role") == "Iran side"
+paths = st.get("lb_paths") or []
+pairs = st.get("lb_pairs") or (paths if side == "dial" else [])
+if not paths and not st.get("lb_mine") and not st.get("lb_peer_list"):
+    print("  %s(effective lists: this hs2 does not report them — update it)%s" % (D, Z)); sys.exit(0)
+own, other = ("Iran", "Kharej") if iran else ("Kharej", "Iran")
+def agg(key):
+    out = {}
+    for p in pairs:
+        ip = p.get(key, "")
+        if not ip or "," in ip: continue
+        a = out.setdefault(ip, [0, 0.0, 0])
+        a[0] += p.get("links", 0); a[1] += p.get("eff_pct") or 0; a[2] += p.get("users", 0)
+    return out
+loc, rem = agg("local"), agg("remote")
+print("  %sEffective now%s %s(read-only — what the running tunnel uses)%s" % (B, Z, D, Z))
+def show(label, rows):
+    print("    %s addresses:" % label)
+    if not rows:
+        print("      %s(none known yet)%s" % (D, Z))
+    for ip, w, extra, src in rows:
+        print("      %-39s %5s %s %s[%s]%s" % (ip, w, extra, D, src, Z))
+# this server's own addresses
+mine = st.get("lb_mine") or []
+rows = []
+if side == "listen" and mine:
+    for e in mine:
+        a = loc.get(e["ip"], [0, 0, 0])
+        rows.append((e["ip"], "%d%%" % e["weight"], "links %-4d users %-5d" % (a[0], a[2]) + (" eff %.0f%%" % a[1] if a[1] else ""), "this config, announced"))
+else:
+    for ip, a in loc.items():
+        rows.append((ip, "", "links %-4d users %-5d" % (a[0], a[2]) + (" eff %.0f%%" % a[1] if a[1] else ""), "this config"))
+show(own + " (this server)", rows)
+rows = []
+peer = st.get("lb_peer_list") or []
+if side == "dial" and peer:
+    for e in peer:
+        a = rem.get(e["ip"], [0, 0, 0])
+        rows.append((e["ip"], "%d%%" % e["weight"], "links %-4d users %-5d" % (a[0], a[2]) + (" eff %.0f%%" % a[1] if a[1] else ""), "announced by the other server"))
+elif side == "listen":
+    for ip, a in rem.items():
+        rows.append((ip, "", "links %-4d users %-5d" % (a[0], a[2]) + (" eff %.0f%%" % a[1] if a[1] else ""), "dials in (seen)"))
+else:
+    for ip, a in rem.items():
+        rows.append((ip, "", "links %-4d users %-5d" % (a[0], a[2]) + (" eff %.0f%%" % a[1] if a[1] else ""), "this config"))
+show(other + " (the other server)", rows)
+PY
+}
+
 lb_pick(){ # prompt -> LB_PICK=index (empty if none); a row number or the IP itself
   local c n; LB_PICK=""
   read -rp "  $1 (number or IP): " c </dev/tty || return 0
   c=${c//[[:space:]]/}
-  if lb_is_ip4 "$c"; then
+  if lb_is_ip "$c"; then
+    c=$(lb_norm_ip "$c")
     for n in "${!LB_NUM[@]}"; do
       [ "$(lb_field "${LB_ROWS[${LB_NUM[$n]}]}" 2)" = "$c" ] && { LB_PICK=${LB_NUM[$n]}; return 0; }
     done
@@ -4448,11 +4645,12 @@ lb_add(){ # cfg
   local cfg="$1" s side ip w sni
   read -rp "  Which side? i) Iran  k) Kharej: " s </dev/tty || return 0
   case "$s" in i|I) side=iran ;; k|K) side=kharej ;; *) warn "Invalid choice."; return 0 ;; esac
-  read -rp "  $(lb_side_label "$side") address (IPv4): " ip </dev/tty || return 0
-  lb_is_ip4 "$ip" || { warn "Not a valid IPv4 address: $ip"; return 0; }
+  read -rp "  $(lb_side_label "$side") address (IPv4 or IPv6): " ip </dev/tty || return 0
+  lb_is_ip "$ip" || { warn "Not a valid IPv4 or IPv6 address: $ip"; return 0; }
+  ip=$(lb_norm_ip "$ip")
   [ -z "$(lb_find "$side" "$ip")" ] || { warn "$ip is already in the list."; return 0; }
   if [ "$side" = "$(lb_own_side "$cfg")" ] && ! lb_local_ips | grep -qxF "$ip"; then
-    warn "$ip is not on this server (ip -4 addr) — it must be added to the interface before applying."
+    warn "$ip is not on this server (ip addr) — it must be added to the interface before applying."
   fi
   sni=""
   if [ "$side" = "$(lb_listen_side "$cfg")" ]; then
@@ -4506,6 +4704,8 @@ tm_lb(){ # unit cfg
     if cfg_is_reverse "$cfg"; then say "  Reverse: Iran listens on every Iran address; Kharej dials them from every Kharej address."
     else say "  Direct: Kharej listens on every Kharej address; Iran dials them from every Iran address."; fi
     lb_show "$cfg"
+    say "  ${C_D}── above: the editable config of this server · below: what runs now ──${C_0}"
+    lb_effective "$cfg"
     hr
     if [ "$LB_EN" = true ]; then say "  1) Turn load balancing OFF"; else say "  1) Turn load balancing ON"; fi
     if [ "$LB_MODE" = auto ]; then say "  2) Mode: switch to fixed (shares exactly as set)"

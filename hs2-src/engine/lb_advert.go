@@ -173,6 +173,12 @@ type LBAdvert struct {
 	kick     chan struct{}
 	links    map[Link]struct{} // edge: live links whose exit has capLBAdvert
 	rejected string
+	// The dialing side's path report (lb_report.go): the exit's builder,
+	// the edge's latest one and its listener.
+	report   func() []byte
+	rep      *LBReport
+	onReport func(LBReport)
+	lastAt   time.Time // the last exchange (either side)
 	log      func(string, ...any)
 }
 
@@ -212,6 +218,7 @@ type LBAdvertState struct {
 	Peer     []LBAdvertIP `json:"peer,omitempty"`    // the peer's latest valid list
 	PeerAt   time.Time    `json:"peer_at,omitempty"` // when it changed last
 	Rejected string       `json:"rejected,omitempty"`
+	LastAt   time.Time    `json:"last_at,omitempty"` // the last exchange
 }
 
 // State reports the advert state for status.
@@ -221,12 +228,13 @@ func (a *LBAdvert) State() LBAdvertState {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return LBAdvertState{PeerHas: a.peerHas, Peer: append([]LBAdvertIP(nil), a.peer...), PeerAt: a.peerAt, Rejected: a.rejected}
+	return LBAdvertState{PeerHas: a.peerHas, Peer: append([]LBAdvertIP(nil), a.peer...), PeerAt: a.peerAt, Rejected: a.rejected, LastAt: a.lastAt}
 }
 
 // received handles the peer's list (either side).
 func (a *LBAdvert) received(l []LBAdvertIP) {
 	a.mu.Lock()
+	a.lastAt = time.Now()
 	a.peerHas = true
 	if len(l) == 0 {
 		a.mu.Unlock()
@@ -265,7 +273,14 @@ func (a *LBAdvert) serve(st io.ReadWriteCloser) {
 		return
 	}
 	a.received(l)
-	st.Write(encodeAdvert(a.getMine()))
+	out := encodeAdvert(a.getMine())
+	a.mu.Lock()
+	rf := a.report
+	a.mu.Unlock()
+	if rf != nil {
+		out = append(out, rf()...)
+	}
+	st.Write(out)
 }
 
 // exchange runs the edge side over one link.
@@ -284,6 +299,9 @@ func (a *LBAdvert) exchange(ro rawStreamOpener) error {
 		return err
 	}
 	a.received(l)
+	if r, ok := readReport(st); ok {
+		a.gotReport(r)
+	}
 	return nil
 }
 

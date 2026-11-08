@@ -262,6 +262,11 @@ func (m *LinkManager) pickPlaneLocked(p mPlane, avoid []any, pool *peerInfo) *ma
 // pickPlaneTiers is pickPlaneLocked's search over the links ok accepts (nil:
 // all); in the first pass (tier 0) ok only narrows the usual candidates.
 func (m *LinkManager) pickPlaneTiers(p mPlane, avoid []any, pool *peerInfo, ok func(*managedLink) bool) *managedLink {
+	// HS2_LB_STEER: the path this sub should take (light: the best paths).
+	drawn := m.steerDrawLocked(p == planeLight, func(ml *managedLink) bool {
+		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && linkMConn(ml, pool) &&
+			!avoided(ml.link, avoid) && (ok == nil || ok(ml))
+	})
 	for tier := 0; tier < 3; tier++ {
 		var chosen *managedLink
 		var best planeKey
@@ -284,6 +289,7 @@ func (m *LinkManager) pickPlaneTiers(p mPlane, avoid []any, pool *peerInfo, ok f
 				}
 			}
 			k := m.planeKeyLocked(p, ml)
+			k.pk.path = m.steerRankLocked(ml, drawn)
 			switch {
 			case chosen == nil || k.less(best):
 				chosen, best, ties = ml, k, 1

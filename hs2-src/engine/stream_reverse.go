@@ -132,6 +132,9 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 	if lb != nil {
 		go lb.Run(ctx)
 	}
+	if lb != nil && cfg.Advert != nil { // the path report after each advert answer (lb_report.go)
+		cfg.Advert.SetReport(func() []byte { return encodeReport(lb.report()) })
+	}
 	if lb != nil {
 		pool.scoutDial = func() (dialedLink, error) { return lbDialCarrier(lb, cfg.RevDialPath, true) }
 	} else if cfg.RevDialScout != nil {
@@ -156,6 +159,8 @@ func runKharejReverse(ctx context.Context, cfg KharejConfig, l3 *l3Set, logf fun
 				st.LB = lb.Stats()
 				st.Paths, st.PathTotal = view.build(lb.viewDefs(), lb.viewLinks())
 				st.PathSide = "dial"
+				st.Verdicts = lb.Verdicts()
+				markLossSrc(st.Paths, true)
 				return st
 			}
 		}

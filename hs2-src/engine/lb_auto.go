@@ -124,9 +124,13 @@ func (b *LB) minTwoLocked(ok func(int) bool) int {
 
 // Run drives the quality readings (auto) and the rebalance until ctx ends.
 func (b *LB) Run(ctx context.Context) {
-	q := time.NewTicker(lbQualEvery)
+	qe, re := lbQualEvery, lbRebalEvery
+	if lbAuto2 { // HS2_LB_AUTO2 (lb_auto2.go): the fast auto's periods
+		qe, re = lb2QualEvery, lb2RebalEvery
+	}
+	q := time.NewTicker(qe)
 	defer q.Stop()
-	r := time.NewTicker(lbRebalEvery)
+	r := time.NewTicker(re)
 	defer r.Stop()
 	for {
 		select {
@@ -134,13 +138,26 @@ func (b *LB) Run(ctx context.Context) {
 			return
 		case <-q.C:
 			if b.isAuto() {
-				b.measure(lbQualEvery)
-				b.adapt()
+				if rs := b.measure(qe); b.isAuto2() {
+					b.adapt2(rs)
+				} else {
+					b.adapt()
+				}
 			}
 		case <-r.C:
-			b.rebalance()
+			if b.isAuto2() {
+				b.rebalance2()
+			} else {
+				b.rebalance()
+			}
 		}
 	}
+}
+
+func (b *LB) isAuto2() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.auto2On()
 }
 
 func (b *LB) isAuto() bool {
@@ -149,8 +166,9 @@ func (b *LB) isAuto() bool {
 	return b.auto
 }
 
-// measure reads every live link's TCP_INFO and updates each path's quality.
-func (b *LB) measure(dt time.Duration) {
+// measure reads every live link's TCP_INFO and updates each path's quality;
+// it returns this tick's raw readings (the fast auto judges them itself).
+func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 	b.mu.Lock()
 	type link struct {
 		key  any
@@ -196,10 +214,27 @@ func (b *LB) measure(dt time.Duration) {
 			delays[r.path] = append(delays[r.path], float64(r.st.rttUs-r.st.minRttUs)/1000)
 		}
 	}
+	auto2 := b.auto2On()
+	raw := map[int]q2Reading{}
 	for j := range b.paths {
-		b.qual[j] = lbUpdateQual(b.qual[j], segs[j], retr[j], delays[j], b.dials[j], b.dfails[j])
+		if auto2 {
+			if segs[j] >= lb2MinSegs {
+				r := q2Reading{loss: float64(retr[j]) / float64(segs[j])}
+				if d := delays[j]; len(d) > 0 {
+					sort.Float64s(d)
+					r.queueMs = d[len(d)/2]
+				}
+				if b.dials[j] > 0 {
+					r.fail = float64(b.dfails[j]) / float64(b.dials[j])
+				}
+				raw[j] = r
+			}
+		} else {
+			b.qual[j] = lbUpdateQual(b.qual[j], segs[j], retr[j], delays[j], b.dials[j], b.dfails[j])
+		}
 		b.dials[j], b.dfails[j] = 0, 0
 	}
+	return raw
 }
 
 // lbUpdateQual folds one tick's counts into a path's reading (half-weight

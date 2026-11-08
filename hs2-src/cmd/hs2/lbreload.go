@@ -134,7 +134,7 @@ func lbPathsAdvert(fc fileConfig, adv []engine.LBAdvertIP) ([]engine.LBPath, err
 	var out []engine.LBPath
 	for i, l := range lips {
 		for j, r := range rips {
-			if r == "" {
+			if r == "" || !lbSameFamily(l, r) {
 				continue
 			}
 			src := "advert"
@@ -327,7 +327,12 @@ type lbStatus struct {
 	LoadedAt   int64  `json:"lb_loaded_at,omitempty"`   // last (re)load, unix seconds
 	Note       string `json:"lb_note,omitempty"`        // announced list differs from the local one
 	PeerAdvert *bool  `json:"lb_peer_advert,omitempty"` // the peer runs stage 6 (nil: not known yet)
-	Rejected   string `json:"lb_rejected,omitempty"`
+	// Live advert state: the last exchange with the other server (unix s), this
+	// side's announced list and the other side's (the effective lists).
+	PeerAt   int64               `json:"lb_peer_at,omitempty"`
+	Mine     []engine.LBAdvertIP `json:"lb_mine,omitempty"`
+	PeerList []engine.LBAdvertIP `json:"lb_peer_list,omitempty"`
+	Rejected string              `json:"lb_rejected,omitempty"`
 }
 
 func lbStatusNow() lbStatus {
@@ -338,7 +343,13 @@ func lbStatusNow() lbStatus {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 	st := rt.adv.State()
-	s := lbStatus{Reload: true, LoadedAt: rt.loadedAt.Unix(), Note: rt.note, Rejected: st.Rejected}
+	s := lbStatus{Reload: true, LoadedAt: rt.loadedAt.Unix(), Note: rt.note, Rejected: st.Rejected, PeerList: st.Peer}
+	if !st.LastAt.IsZero() {
+		s.PeerAt = st.LastAt.Unix()
+	}
+	if rt.adv != nil {
+		s.Mine = rt.adv.Mine()
+	}
 	switch {
 	case rt.lb == nil:
 		s.Source = "announces"

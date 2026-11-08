@@ -217,6 +217,18 @@ type LinkManager struct {
 	hold refillHold
 
 	upLog, downLog, closeLog, replLog *burstLog
+
+	// steer (nil: off): HS2_LB_STEER — new connections follow path quality
+	// (lb_auto2.go). Under mu.
+	steer *lbSteerState
+}
+
+// EnableSteer turns on the edge's path steering (HS2_LB_STEER; multipath LB
+// only). Call before Run.
+func (m *LinkManager) EnableSteer() {
+	if lbSteer {
+		m.steer = newSteerState()
+	}
 }
 
 // rawStreamOpener is implemented by links that can open a stream which does
@@ -308,6 +320,7 @@ type managedLink struct {
 	quietW       quietWatch  // HS2_QUIET_IDLE: the suspect check's idle/busy view
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
+	steer        steerLink // HS2_LB_STEER (lb_auto2.go), under LinkManager.mu
 }
 
 // serving reports whether the link takes new users. Caller holds m.mu.
@@ -1516,6 +1529,7 @@ func (s *shortLivedLinks) note(life time.Duration) string {
 // downloads onto few links.
 type pickKey struct {
 	pressed bool
+	path    uint8 // HS2_LB_STEER: steerRankLocked (0 when off)
 	heavy   bool
 	load    int
 	users   int
@@ -1585,6 +1599,9 @@ func (a pickKey) less(b pickKey) bool {
 	if a.pressed != b.pressed {
 		return !a.pressed
 	}
+	if a.path != b.path {
+		return a.path < b.path
+	}
 	if a.heavy != b.heavy {
 		return !a.heavy
 	}
@@ -1637,6 +1654,7 @@ func (m *LinkManager) Pick() (Link, func(), bool) {
 func (m *LinkManager) placeLocked(ml *managedLink) {
 	ml.users.Add(1)
 	ml.picks++
+	ml.steer.picksAll++
 	m.users.Add(1)
 }
 
@@ -1657,6 +1675,10 @@ func (m *LinkManager) releaseFor(ml *managedLink) func() {
 // that many open user connections (the refill hold's cap); 0 = no limit.
 // Caller holds m.mu.
 func (m *LinkManager) pickLocked(limit int) *managedLink {
+	// HS2_LB_STEER: the path this connection should take (lb_auto2.go).
+	drawn := m.steerDrawLocked(false, func(ml *managedLink) bool {
+		return ml.link.Alive() && m.infoReadyLocked(ml) && ml.serving() && (limit <= 0 || int(ml.users.Load()) < limit)
+	})
 	for tier := 0; tier < 3; tier++ {
 		var chosen *managedLink
 		var best pickKey
@@ -1680,6 +1702,7 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 			}
 			k := newPickKey(ml.pressed, ml.flowing, ml.picks, ml.recentPicks(), int(ml.users.Load()), m.perLink)
 			k.heavy = pickClass && ml.heavy > 0
+			k.path = m.steerRankLocked(ml, drawn)
 			switch {
 			case chosen == nil || k.less(best):
 				chosen, best, ties = ml, k, 1
@@ -1824,6 +1847,9 @@ func (m *LinkManager) sampleHealth() {
 		}
 		if !o.alive {
 			continue
+		}
+		if m.steer != nil {
+			m.steer.note(ml, o)
 		}
 		copy(ml.pickHist[1:], ml.pickHist[:len(ml.pickHist)-1])
 		ml.pickHist[0], ml.picks = ml.picks, 0
@@ -2162,6 +2188,10 @@ func (m *LinkManager) sampleHealth() {
 		m.noPoolLogged = true
 	}
 	m.growable = s.growable
+	if m.steer != nil { // HS2_LB_STEER (lb_auto2.go)
+		m.steerTickLocked(now, dt)
+		logs = append(logs, m.steer.takeLogs()...)
+	}
 	m.mu.Unlock()
 	m.sample = s
 
@@ -2413,6 +2443,12 @@ type PoolStats struct {
 	Routes *PeerRoutes
 	// LB is each multipath path's state (nil = lb off; dialing side only).
 	LB []LBPathStat
+	// Pairs (listening side): a row per (this side's IP, the dialer's IP)
+	// pair — lb_paths there merges the dialer's IPs. Verdicts: the fast
+	// auto's IP verdicts. Report: the dialing side's latest path report.
+	Pairs    []LBPathView
+	Verdicts []string
+	Report   *LBReport
 	// Paths is the per-path live view, on both sides (nil = lb off;
 	// lbview.go), PathTotal its totals row and PathSide "dial" or "listen".
 	Paths     []LBPathView

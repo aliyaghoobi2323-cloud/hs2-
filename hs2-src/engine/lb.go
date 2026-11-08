@@ -81,6 +81,9 @@ type LBPathStat struct {
 	LossPct   float64 `json:"loss_pct,omitempty"` // retransmitted share of segments sent
 	QueueMs   float64 `json:"queue_ms,omitempty"` // median srtt − minrtt of busy links
 	Rebal     uint64  `json:"rebalanced,omitempty"`
+	// HS2_LB_AUTO2: the quality factor now applied and why ("cut: loss 7.0%").
+	AutoFactor float64 `json:"auto_factor,omitempty"`
+	AutoReason string  `json:"auto_reason,omitempty"`
 }
 
 // Tunables (vars for tests).
@@ -126,6 +129,16 @@ type LB struct {
 	peerLB  bool          // the peer's latest kindInfo answer has capLB (status)
 	peerKnw bool          // a kindInfo answer has been seen (peerLB is real)
 	upAt    time.Time     // the first dial that succeeded, on any path (startedLocked)
+	// HS2_LB_AUTO2 (lb_auto2.go): the fast judge, the IP names for its
+	// verdicts, and the drain guard (retires in the last minute, the link
+	// count at the last retire and when).
+	judge      *q2Judge
+	localN     string
+	remN       string
+	drained    []time.Time
+	drainFloor int
+	drainAt    time.Time
+	judgeAt    time.Time // the last fast-auto reading
 	// peerState reports what the peer's live links say about capLB: known is
 	// false while no live link carries a kindInfo answer (nil = always ok).
 	peerState func() (known, has bool)
@@ -435,6 +448,9 @@ func (b *LB) Stats() []LBPathStat {
 			}
 			s.LossPct = round1pct(100 * b.qual[j].loss)
 			s.QueueMs = round1pct(b.qual[j].queueMs)
+			if b.auto2On() {
+				b.auto2StatLocked(j, &s)
+			}
 		}
 		out[j] = s
 	}

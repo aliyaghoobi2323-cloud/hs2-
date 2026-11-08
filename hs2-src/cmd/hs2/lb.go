@@ -175,7 +175,7 @@ func lbPaths(fc fileConfig) ([]engine.LBPath, error) {
 	var out []engine.LBPath
 	for i, l := range lips {
 		for j, r := range rips {
-			if r == "" { // cannot happen on the dialing side: addr is an IP
+			if r == "" || !lbSameFamily(l, r) { // r "": cannot happen on the dialing side (addr is an IP)
 				continue
 			}
 			out = append(out, engine.LBPath{Local: l, Remote: r, Addr: net.JoinHostPort(r, port),
@@ -186,21 +186,30 @@ func lbPaths(fc fileConfig) ([]engine.LBPath, error) {
 }
 
 // lbListenIPs: the extra IPs the listening side listens on (its own list
-// minus addr's IP); none when addr is a wildcard (it already covers them).
+// minus addr's IP); none when addr is a wildcard that covers them. An IPv4
+// wildcard (0.0.0.0) does not cover IPv6 addresses: those are listened on
+// one by one ([ip]:port).
 func lbListenIPs(fc fileConfig) []string {
 	if !lbOn(fc) {
 		return nil
 	}
 	host, _, _ := net.SplitHostPort(fc.Addr)
-	if ip := net.ParseIP(host); ip == nil || ip.IsUnspecified() {
+	hip := net.ParseIP(host)
+	if hip == nil && host != "" {
 		return nil
+	}
+	v4wild := host == "" || hip.IsUnspecified() && hip.To4() != nil
+	if host == "" || hip.IsUnspecified() && !v4wild {
+		return nil // "" or [::]: every address, both families
 	}
 	local, _, _, _ := lbLists(fc)
 	var out []string
 	for _, e := range local {
-		if ip := net.ParseIP(e.IP); ip != nil && ip.String() != net.ParseIP(host).String() {
-			out = append(out, ip.String())
+		ip := net.ParseIP(e.IP)
+		if ip == nil || ip.Equal(hip) || v4wild && ip.To4() != nil {
+			continue
 		}
+		out = append(out, ip.String())
 	}
 	return out
 }
@@ -234,4 +243,18 @@ func lbModeName(fc fileConfig) string {
 		return "auto"
 	}
 	return "fixed"
+}
+
+// lbSameFamily: a path pairs a local and a remote IP of the same family
+// (IPv4 with IPv4, IPv6 with IPv6). Local "" (the default route) pairs with
+// either: the kernel picks a source of the destination's family.
+func lbSameFamily(local, remote string) bool {
+	if local == "" {
+		return true
+	}
+	l, r := net.ParseIP(local), net.ParseIP(remote)
+	if l == nil || r == nil {
+		return false
+	}
+	return (l.To4() != nil) == (r.To4() != nil)
 }

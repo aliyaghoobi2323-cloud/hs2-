@@ -85,6 +85,12 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		lm.SetDrainIdle(cfg.DrainIdle)
 	}
 	lm.SetWarm(cfg.WarmLinks)
+	if cfg.LB || lbOf(cfg.Dialer) != nil {
+		lm.EnableSteer() // HS2_LB_STEER (lb_auto2.go); off: nothing changes
+	}
+	if cfg.Advert != nil {
+		cfg.Advert.OnReport(lm.SteerReport) // the dialing side's path report (lb_report.go)
+	}
 	// A link carries user connections only once its kindInfo exchange is over,
 	// so each one knows whether the exit routes port tags (routes.go).
 	lm.gateInfo = true
@@ -183,12 +189,15 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 				st.LB = lb.Stats()
 				st.Paths, st.PathTotal = view.build(lb.viewDefs(), lm.viewLinks(keyOf))
 				st.PathSide = "dial"
+				st.Verdicts = lb.Verdicts()
+				markLossSrc(st.Paths, false)
 				return st
 			})
 		} else if reverse && cfg.LB {
 			// The reverse edge holds no balancer: a row per address it is
 			// reached on, its share from this side's announced list.
 			view := newPathView(false)
+			pairView := newPathView(false)
 			keyOf := func(ml *managedLink) string {
 				if ml.mtr == nil {
 					return ""
@@ -204,6 +213,31 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 				}
 				st.Paths, st.PathTotal = view.build(listenDefs(mine, len(links)), links)
 				st.PathSide = "listen"
+				// Pairs: one row per (Iran IP, kharej IP) path.
+				pl := make([]pathLink, len(links))
+				for i, l := range links {
+					pl[i] = l
+					if l.local != "" && l.remote != "" {
+						pl[i].path = l.local + ">" + l.remote
+					}
+				}
+				st.Pairs, _ = pairView.build(nil, pl)
+				if rep, ok := cfg.Advert.PeerReport(); ok && time.Since(rep.At) <= lbReportFresh {
+					applyReport(st.Paths, rep, func(p LBPeerPath) string { return p.Remote })
+					applyReport(st.Pairs, rep, func(p LBPeerPath) string {
+						if p.Local == "" {
+							return ""
+						}
+						return p.Remote + ">" + p.Local
+					})
+					st.Report, st.Verdicts = &rep, rep.Verdicts
+				} else if f, r, v := lm.steerRows(); f != nil {
+					applySteer(st.Paths, f, r, listenKey)
+					applySteer(st.Pairs, f, r, func(p string) string { return p })
+					st.Verdicts = v
+				}
+				markLossSrc(st.Paths, false)
+				markLossSrc(st.Pairs, false)
 				return st
 			})
 		} else {

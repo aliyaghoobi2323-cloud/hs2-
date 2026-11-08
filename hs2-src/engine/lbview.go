@@ -64,6 +64,21 @@ type LBPathView struct {
 	State    string   `json:"state"`              // ok | cooling | probing | no-peer | draining
 	CooledS  int      `json:"cooled_s,omitempty"` // cooling: seconds until its probe dial
 
+	// Auto (HS2_LB_AUTO2): the quality factor applied to its share and why;
+	// on the listening side as the dialing side reported it (lb_report.go),
+	// else the edge's own steering weight.
+	AutoFactor float64 `json:"auto_factor,omitempty"`
+	AutoReason string  `json:"auto_reason,omitempty"`
+	// NewPct: its share of the new user connections placed over the window
+	// (edge only; absent: none placed).
+	NewPct *float64 `json:"new_pct,omitempty"`
+	// LossSrc: where LossDown comes from — "sender" (the dialing side's own
+	// TCP_INFO, reported) or "receiver" (this side's estimate from the
+	// peer's resends over what came in); LossDownRx keeps that estimate when
+	// the sender's figure replaced it.
+	LossSrc    string   `json:"loss_down_src,omitempty"`
+	LossDownRx *float64 `json:"loss_down_rx_pct,omitempty"`
+
 	key string // the view's path key (not in JSON)
 }
 
@@ -83,9 +98,10 @@ type pathLink struct {
 	draining      bool
 	suspect       bool
 	retiring      bool
+	picks         uint64 // edge: new user connections placed on it, all told
 }
 
-type pathCounters struct{ rx, tx, rt, so, prt, si uint64 }
+type pathCounters struct{ rx, tx, rt, so, prt, si, np uint64 }
 
 func (a *pathCounters) add(b pathCounters) {
 	a.rx += b.rx
@@ -94,6 +110,7 @@ func (a *pathCounters) add(b pathCounters) {
 	a.so += b.so
 	a.prt += b.prt
 	a.si += b.si
+	a.np += b.np
 }
 
 type pathSample struct {
@@ -126,7 +143,7 @@ func newPathView(exit bool) *pathView {
 }
 
 func linkCounters(l pathLink) pathCounters {
-	c := pathCounters{rx: l.rx, tx: l.tx}
+	c := pathCounters{rx: l.rx, tx: l.tx, np: l.picks}
 	if l.tsOK {
 		c.rt, c.so, c.si = l.ts.retrans, uint64(l.ts.segsOut), uint64(l.ts.segsIn)
 	}
@@ -145,7 +162,7 @@ func delta(cur, prev pathCounters) pathCounters {
 		}
 		return a
 	}
-	return pathCounters{d(cur.rx, prev.rx), d(cur.tx, prev.tx), d(cur.rt, prev.rt), d(cur.so, prev.so), d(cur.prt, prev.prt), d(cur.si, prev.si)}
+	return pathCounters{d(cur.rx, prev.rx), d(cur.tx, prev.tx), d(cur.rt, prev.rt), d(cur.so, prev.so), d(cur.prt, prev.prt), d(cur.si, prev.si), d(cur.np, prev.np)}
 }
 
 // push records a sample and returns the window's change and its length.
@@ -256,6 +273,7 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 			delete(v.prev, k)
 		}
 	}
+	var nps []uint64
 	tot := &LBPathView{State: "ok"}
 	for i := range rows {
 		r := &rows[i]
@@ -265,6 +283,7 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 			v.acc[r.key] = a
 		}
 		d, dt := a.push(now)
+		nps = append(nps, d.np)
 		v.fill(r, a.cum, d, dt, ag[i].peer)
 		peerAny = peerAny || ag[i].peer
 		r.RTTp50, r.RTTp99 = pctl(ag[i].rtts, 50), pctl(ag[i].rtts, 99)
@@ -286,6 +305,12 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 	}
 	d, dt := v.tot.push(now)
 	v.fill(tot, v.tot.cum, d, dt, peerAny)
+	if d.np > 0 {
+		for i := range rows {
+			f := round1pct(100 * float64(nps[i]) / float64(d.np))
+			rows[i].NewPct = &f
+		}
+	}
 	tot.SharePct = round1pct(tot.SharePct)
 	tot.RTTp50, tot.RTTp99, tot.MinRTT = pctl(allRTT, 50), pctl(allRTT, 99), round1pct(allMin)
 	return rows, tot
@@ -443,7 +468,8 @@ func (b *LB) viewDefs() []LBPathView {
 			lo = "*"
 		}
 		r := LBPathView{Local: lo, Remote: p.Remote, Primary: s.Primary, Source: s.Source, SharePct: s.SharePct,
-			EffPct: s.EffPct, Target: s.Target, Fails: s.Fails, FailsAll: s.FailsAll, State: s.State, key: s.Path}
+			EffPct: s.EffPct, Target: s.Target, Fails: s.Fails, FailsAll: s.FailsAll, State: s.State, key: s.Path,
+			AutoFactor: s.AutoFactor, AutoReason: s.AutoReason}
 		if u := until[s.Path]; !u.IsZero() && u.After(now) {
 			r.CooledS = int(u.Sub(now).Seconds() + 0.5)
 		}
@@ -507,7 +533,8 @@ func (m *LinkManager) viewLinks(keyOf func(ml *managedLink) string) []pathLink {
 			continue
 		}
 		pl := pathLink{key: ml, users: int(ml.users.Load()), serving: ml.serving(), degraded: ml.degraded,
-			draining: ml.draining, suspect: ml.suspect, retiring: ml.retiring && !ml.degraded && !ml.draining}
+			draining: ml.draining, suspect: ml.suspect, retiring: ml.retiring && !ml.degraded && !ml.draining,
+			picks: ml.steer.picksAll}
 		if ml.mtr != nil {
 			pl.local, pl.remote = pathIPs(ml.mtr.path)
 			pl.path = ml.mtr.path

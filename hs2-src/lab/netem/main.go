@@ -22,6 +22,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"math/rand/v2"
 	"net"
 	"os"
@@ -29,6 +30,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -84,10 +86,25 @@ type geState struct {
 	until time.Time
 }
 
+
+// lossOverride (-lossfile, SIGUSR1): a random loss that replaces -loss on
+// both directions while set (NaN bits: none). The lab flips a path from good
+// to bad and back mid-run with it.
+var lossOverride atomic.Uint64
+
+func init() { lossOverride.Store(math.Float64bits(math.NaN())) }
+
+func curLoss(def float64) float64 {
+	if v := math.Float64frombits(lossOverride.Load()); !math.IsNaN(v) {
+		return v
+	}
+	return def
+}
 // drop decides whether a frame is lost under the direction's loss model.
 func (c *dirCfg) drop(g *geState, now time.Time) bool {
 	if c.burstBadMs <= 0 {
-		return c.loss > 0 && rand.Float64() < c.loss
+		l := curLoss(c.loss)
+		return l > 0 && rand.Float64() < l
 	}
 	if g.until.IsZero() {
 		g.until = now
@@ -402,6 +419,7 @@ func main() {
 	dstPenalty := flag.Duration("dstpenalty", time.Second, "per-destination policer drop episode length")
 	dstPenLoss := flag.Float64("dstpenloss", 0.8, "drop probability during an episode")
 	dstProto := flag.Int("dstproto", 0, "IP protocol the per-destination policer applies to (0 = all, 1 = ICMP)")
+	lossFile := flag.String("lossfile", "", "on SIGUSR1 read a random loss probability from this file (both directions; \"-\" = back to -loss)")
 	flag.Parse()
 	var allow map[int]bool
 	if *allowP != "" {
@@ -430,6 +448,25 @@ func main() {
 	st := &counters{m: map[string]int{}}
 	go run("ab", fa, fb, ib, ab, st)
 	go run("ba", fb, fa, ia, ba, st)
+	if *lossFile != "" {
+		us := make(chan os.Signal, 1)
+		signal.Notify(us, syscall.SIGUSR1)
+		go func() {
+			for range us {
+				b, err := os.ReadFile(*lossFile)
+				s := strings.TrimSpace(string(b))
+				if err != nil || s == "-" {
+					lossOverride.Store(math.Float64bits(math.NaN()))
+					fmt.Fprintln(os.Stderr, "netem: loss back to -loss")
+					continue
+				}
+				if v, err := strconv.ParseFloat(s, 64); err == nil && v >= 0 && v <= 1 {
+					lossOverride.Store(math.Float64bits(v))
+					fmt.Fprintf(os.Stderr, "netem: loss now %g\n", v)
+				}
+			}
+		}()
+	}
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	<-sig

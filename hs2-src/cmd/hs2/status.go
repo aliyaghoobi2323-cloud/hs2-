@@ -107,6 +107,16 @@ type liveStatus struct {
 	LBTotal *engine.LBPathView  `json:"lb_total,omitempty"`
 	LBSide  string              `json:"lb_side,omitempty"`
 	LBMode  string              `json:"lb_mode,omitempty"`
+	// HS2_LB_AUTO2 and the listening side: a row per (this IP, the other
+	// side's IP) pair where lb_paths merges them, the fast auto's IP
+	// verdicts, and the dialing side's path report (its mode and weights,
+	// engine lb_report.go); lb_mode_from "peer" when lb_mode is the one the
+	// dialing side reported.
+	LBPairs    []engine.LBPathView `json:"lb_pairs,omitempty"`
+	LBVerdicts []string            `json:"lb_verdicts,omitempty"`
+	LBReport   *engine.LBReport    `json:"lb_report,omitempty"`
+	LBModeFrom string              `json:"lb_mode_from,omitempty"`
+	LBAuto2    bool                `json:"lb_auto2,omitempty"`
 	// Stage 6 (lbreload.go): where the paths' addresses come from, the last
 	// (re)load, and whether the other server reads announcements.
 	lbStatus
@@ -474,6 +484,15 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		if len(s.Paths) > 0 {
 			ls.LBPaths, ls.LBTotal, ls.LBSide = s.Paths, s.PathTotal, s.PathSide
 			ls.LBMode = lbModeName(lbCur(fc))
+			ls.LBPairs, ls.LBVerdicts, ls.LBReport = s.Pairs, s.Verdicts, s.Report
+			ls.LBAuto2 = engine.LBAuto2On() && ls.LBMode == "auto"
+			if s.Report != nil && s.PathSide == "listen" {
+				ls.LBMode, ls.LBModeFrom = "fixed", "peer"
+				if s.Report.Auto {
+					ls.LBMode = "auto"
+				}
+				ls.LBAuto2 = s.Report.Auto2
+			}
 		}
 		if ls.CfgMax > 0 {
 			ls.PeerMax = s.PeerMax
