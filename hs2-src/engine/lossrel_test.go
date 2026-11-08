@@ -270,3 +270,54 @@ func TestLossRelativeSim(t *testing.T) {
 		})
 	}
 }
+
+// runTwoPaths: multipath LB with a clean path A (10 links at 1-3%) and a
+// lossier path B (10 links at 9-13%) plus extra links on B at the given
+// fractions, 8 samples. Returns the A links, the B links and the extras.
+func runTwoPaths(t *testing.T, extra ...float64) (r *stuckRig, a, b, ext []*managedLink) {
+	r = newStuckRig(t, 0)
+	type lk struct {
+		f    *meteredFakeLink
+		frac float64
+	}
+	var all []lk
+	add := func(path string, frac float64) *managedLink {
+		f, ml := r.add()
+		ml.mtr.path = path
+		all = append(all, lk{f, frac})
+		return ml
+	}
+	for i := 0; i < 10; i++ {
+		a = append(a, add("10.0.0.1>10.0.1.1", 0.01+0.02*float64(i)/9))
+		b = append(b, add("10.0.0.2>10.0.1.2", 0.09+0.04*float64(i)/9))
+	}
+	for _, x := range extra {
+		ext = append(ext, add("10.0.0.2>10.0.1.2", x))
+	}
+	for i := 0; i < 8; i++ {
+		for _, l := range all {
+			downLossy(l.f, 200<<10, l.frac)
+			l.f.pong(int64(healthTick), 0)
+		}
+		r.tick()
+	}
+	return r, a, b, ext
+}
+
+// With LB a link is judged against its own path: a 17% link on a path whose
+// median is ~11% is that path's noise (kept); a 30% one is still drained. One
+// median over both paths (~6%) would drain the 17% one.
+func TestLossRelativePerPath(t *testing.T) {
+	withLossRelative(true, func() {
+		r, a, b, ext := runTwoPaths(t, 0.17, 0.30)
+		if n := degradedCount(a) + degradedCount(b); n != 0 {
+			t.Fatalf("%d ordinary links drained:\n%s", n, r.lg)
+		}
+		if ext[0].degraded {
+			t.Fatalf("the 17%% link on the ~11%% path was drained (judged against both paths):\n%s", r.lg)
+		}
+		if !ext[1].degraded {
+			t.Fatalf("the 30%% link was not drained:\n%s", r.lg)
+		}
+	})
+}

@@ -1944,7 +1944,7 @@ func (m *LinkManager) sampleHealth() {
 			if up.judged || dn.judged {
 				ml.lossFrac = max(up.frac(), dn.frac())
 				w := worse(up, dn)
-				judgedLoss = append(judgedLoss, lossJudged{frac: w.frac(), rate: w.rate})
+				judgedLoss = append(judgedLoss, lossJudged{frac: w.frac(), rate: w.rate, path: mlPath(ml)})
 			}
 			// judged after the loop, if this tick is calm too
 			if (ml.upStreak >= degradeStreak && up.bad()) || (ml.dnStreak >= degradeStreak && dn.bad()) {

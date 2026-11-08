@@ -163,6 +163,7 @@ func (ml *managedLink) judgeDownLoss(r *peerLossRec) (d lossDir, fresh bool) {
 // lossJudged is one link's reading in this tick: its worse direction.
 type lossJudged struct {
 	frac, rate float64
+	path       string // mlPath: "local>remote" IPs ("" unknown)
 }
 
 // worse is the direction that resends more (of those judged).
@@ -212,31 +213,56 @@ func (m *LinkManager) lossVerdicts(now time.Time, cand []lossObs, judged []lossJ
 		keep = lossKeepShare * pathRate
 	}
 	atRate := func(rate float64) bool { return keep > 0 && rate >= keep }
-	if len(judged) >= lossPathMin {
+	// Judged per path (multipath LB: links over several IP pairs). A link is
+	// compared with the links of its own path only: with a 3% and an 8% path,
+	// one median over both would put the bar between them and drain the worse
+	// path's healthy links for being that path. A path that is lossy as a
+	// whole drains none of its links: weighing paths is the LB's job (auto
+	// weights, lb_auto.go). With one path (no LB) this is the rule as before.
+	byPath := map[string][]lossJudged{}
+	for _, j := range judged {
+		byPath[j.path] = append(byPath[j.path], j)
+	}
+	var logs []string
+	lossyPath := map[string]bool{}
+	for path, js := range byPath {
+		if len(js) < lossPathMin {
+			continue
+		}
 		lossy := 0
-		for _, j := range judged {
+		for _, j := range js {
 			if j.frac > lossFrac && !atRate(j.rate) {
 				lossy++
 			}
 		}
-		if lossy*2 > len(judged) {
+		if lossy*2 > len(js) {
+			lossyPath[path] = true
 			if now.Sub(m.lossPathLogAt) >= time.Minute {
 				m.lossPathLogAt = now
-				return []string{fmt.Sprintf("%d of %d busy links resend more than %.0f%% — the path is lossy, not those links: none is drained",
-					lossy, len(judged), lossFrac*100)}
+				where := ""
+				if len(byPath) > 1 && path != "" {
+					where = " on path " + path
+				}
+				logs = append(logs, fmt.Sprintf("%d of %d busy links%s resend more than %.0f%% — the path is lossy, not those links: none is drained",
+					lossy, len(js), where, lossFrac*100))
 			}
-			return nil
 		}
 	}
-	bar := lossBar(judged, atRate)
+	allBar := lossBar(judged, atRate)
+	barOf := func(path string) float64 {
+		if js := byPath[path]; len(byPath) > 1 && len(js) >= lossPathMin {
+			return lossBar(js, atRate)
+		}
+		return allBar
+	}
 	sort.Slice(cand, func(i, j int) bool { return cand[i].frac() > cand[j].frac() })
 	room := drainHeadroom(m.max) - degradedNow
-	var logs []string
 	for _, c := range cand {
-		if atRate(c.rate()) || room <= 0 {
+		cp := mlPath(c.ml)
+		if atRate(c.rate()) || room <= 0 || lossyPath[cp] {
 			continue
 		}
-		if lossRelative && c.frac() <= bar {
+		if lossRelative && c.frac() <= barOf(cp) {
 			// within lossMargin of the path's median: its noise, not the link
 			obs.lossRelKept.Add(1)
 			continue
