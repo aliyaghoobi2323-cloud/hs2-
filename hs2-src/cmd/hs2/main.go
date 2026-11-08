@@ -1012,6 +1012,10 @@ func startBuiltinBackendLabel(seed, label string) (string, error) {
 	// while making it unpredictable from the body alone, like a real server's
 	// mtime/inode ETag. The seedless legacy page sets NO ETag at all, exactly as
 	// the pre-per-install binary did (un-migrated installs stay byte-for-byte).
+	if coverNginx { // HS2_COVER_NGINX: answer like nginx (cover_nginx.go)
+		go serveNginxCover(ln, page, modtime)
+		return ln.Addr().String(), nil
+	}
 	var etag string
 	if seed != "" {
 		h := sha256.Sum256(append([]byte("hs2-cover-etag\x00"+seed+"\x00"), page...))

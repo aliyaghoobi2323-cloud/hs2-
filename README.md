@@ -798,6 +798,56 @@ applies, so either one caps it).
   several pages could still recognise the family). For the strongest cover, set
   `backend_addr` in the config to a real local web server of your own — probes
   are then served your own site and `cover_seed` is ignored.
+- **Best cover: a real nginx behind the tunnel port.** The installer does not
+  set this up for you; it is a manual, optional step on the server that
+  *listens* for links (Kharej in direct mode, Iran in reverse). Install nginx,
+  make it listen on loopback only (so it does not take the public port), give
+  it an ordinary site, and point hs2 at it:
+
+  ```nginx
+  # /etc/nginx/sites-enabled/cover — plain HTTP on loopback; hs2 terminates TLS
+  server {
+      listen 127.0.0.1:8081 default_server;
+      server_tokens off;
+      root /var/www/cover;          # any real static site
+      index index.html;
+      location / { try_files $uri $uri/ =404; }
+  }
+  ```
+
+  then set `"backend_addr": "127.0.0.1:8081"` in `/etc/hs2/config.json` and
+  restart hs2. Every probe that fails the tunnel auth is then answered by
+  that nginx (its headers, error pages, keep-alive and timeouts are the real
+  thing). Keep it on loopback: hs2 already holds the public port, and the
+  backend must not be reachable from outside directly.
+- Without a real backend, `HS2_COVER_NGINX=1` (environment of the hs2
+  service) makes the built-in cover answer like a stock nginx — `Server:
+  nginx`, nginx's header order, its HTML 404/400/405 pages and keep-alive —
+  instead of like Go's net/http. The TLS layer in front is still Go's either
+  way (for example its 7-day session-ticket lifetime), so a real nginx
+  backend remains the stronger cover.
+
+### Optional DPI hardening keys (environment, all off by default)
+
+Set them in the hs2 service's environment (e.g. a systemd drop-in with
+`Environment=HS2_QUIET_IDLE=1`). With all of them off the tunnel's bytes on
+the wire are exactly as before. Set the first three on **both** servers.
+
+- `HS2_QUIET_IDLE=1` — idle links (no users) are nearly silent like a
+  browser's idle connection: TCP keepalive 45 s, one control ping/pong every
+  20–40 s, the rest only if nothing else went. Links with users keep today's
+  cadence and dead-link detection. Goes quiet only towards a peer that runs it
+  too.
+- `HS2_TLS_RESUME=1` — links resume TLS sessions with single-use tickets (as
+  Chrome does) instead of a full handshake each time. The tunnel auth stays
+  bound to each connection, so a ticket or a recorded auth is useless on
+  another connection.
+- `HS2_AUTH_PAD=1` — the first exchange inside TLS is sized like an HTTP
+  request and a response with a body. Wire compatible with older peers.
+- `HS2_UTLS_HELLO=auto|133|131|120` — which Chrome ClientHello to send
+  (default: the link carrier's Chrome 133, the newest in the bundled uTLS;
+  the reality carrier's Chrome 120). Unset it to roll back.
+- `HS2_COVER_NGINX=1` — see above.
 
 ## Managing
 
