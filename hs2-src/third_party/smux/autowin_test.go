@@ -16,6 +16,12 @@ import (
 // delayPair returns two connected net.Conns whose bytes arrive oneWay late
 // in each direction (a loopback TCP pair with a delaying relay between).
 func delayPair(t *testing.T, oneWay time.Duration) (net.Conn, net.Conn) {
+	return ratePair(t, oneWay, 0)
+}
+
+// ratePair: delayPair through a bottleneck of rate bytes/s each way (0: none)
+// with an unbounded queue in front of it.
+func ratePair(t *testing.T, oneWay time.Duration, rate float64) (net.Conn, net.Conn) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -63,11 +69,20 @@ func delayPair(t *testing.T, oneWay time.Duration) (net.Conn, net.Conn) {
 		}()
 		go func() {
 			defer close(q)
+			var free time.Time // when the bottleneck is free again
 			for {
 				buf := make([]byte, 64<<10)
 				n, err := src.Read(buf)
 				if n > 0 {
-					q <- chunk{time.Now().Add(oneWay), buf[:n]}
+					due := time.Now()
+					if rate > 0 {
+						if free.After(due) {
+							due = free
+						}
+						due = due.Add(time.Duration(float64(n) / rate * float64(time.Second)))
+						free = due
+					}
+					q <- chunk{due.Add(oneWay), buf[:n]}
 				}
 				if err != nil {
 					return
@@ -420,4 +435,86 @@ func waitFor(t *testing.T, f func() bool, what string) {
 		time.Sleep(25 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting: %s", what)
+}
+
+// A window that would only fill a bottleneck's queue shrinks: over an 8 MB/s
+// path (BDP ~320 KiB at 40 ms) the window never sits at the 4 MiB maximum,
+// and the queue rule cut it.
+func TestAutoWindowQueueRuleShrinks(t *testing.T) {
+	aw := newAW(64<<20, 4<<20)
+	a, b := ratePair(t, 20*time.Millisecond, 8e6)
+	cli, _ := Client(a, awConfig(nil))
+	srv, _ := Server(b, awConfig(aw))
+	t.Cleanup(func() { cli.Close(); srv.Close() })
+	var peakSeen atomic.Int64
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			case <-time.After(5 * time.Millisecond):
+				if u := aw.Budget.Stats().Used; u > peakSeen.Load() {
+					peakSeen.Store(u)
+				}
+			}
+		}
+	}()
+	transfer(t, cli, srv, 24<<20, false)
+	close(stop)
+	st := aw.Budget.Stats()
+	t.Logf("%+v", st)
+	if st.QueueCuts == 0 {
+		t.Fatal("the queue rule never cut")
+	}
+	if st.Peak >= 4<<20-64<<10 {
+		t.Fatalf("window reached the maximum behind a queue: peak %d", st.Peak)
+	}
+}
+
+// A light user receiving on the same session holds a heavy stream at
+// NeighborMax; background streams do not.
+func TestAutoWindowNeighbourCap(t *testing.T) {
+	for _, bg := range []bool{false, true} {
+		aw := newAW(64<<20, 2<<20)
+		aw.NeighborMax = 256 << 10
+		cli, srv := pair(t, 20*time.Millisecond, awConfig(nil), awConfig(aw))
+		// the light user: a few hundred bytes every 20 ms, server-side reader
+		lightAcc := make(chan *Stream, 1)
+		go func() {
+			st, _ := srv.AcceptStream()
+			if bg {
+				st.SetAutoWindowBackground()
+			}
+			lightAcc <- st
+			io.Copy(io.Discard, st)
+		}()
+		lc, err := cli.OpenStream()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lc.Write([]byte("x"))
+		<-lightAcc
+		stop := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				case <-time.After(20 * time.Millisecond):
+					lc.Write(make([]byte, 300))
+				}
+			}
+		}()
+		transfer(t, cli, srv, 8<<20, false)
+		close(stop)
+		st := aw.Budget.Stats()
+		t.Logf("bg=%v %+v", bg, st)
+		if !bg && st.Peak > 256<<10-64<<10 {
+			t.Fatalf("grew past the neighbour cap: %d", st.Peak)
+		}
+		if bg && st.Peak <= 256<<10-64<<10 {
+			t.Fatalf("a background stream capped the window: %d", st.Peak)
+		}
+	}
 }

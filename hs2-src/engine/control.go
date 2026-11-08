@@ -79,6 +79,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	if err != nil {
 		return
 	}
+	st.SetAutoWindowBackground() // the servers' own traffic: no light neighbour (HS2_SMUX_AUTOWIN)
 	defer st.Close()
 	if _, err := st.Write([]byte{kindCtrl}); err != nil {
 		return

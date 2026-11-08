@@ -488,6 +488,7 @@ func openPoolCtl(ctx context.Context, l Link, src poolCtlSource, logf func(strin
 	if err != nil {
 		return
 	}
+	st.SetAutoWindowBackground() // the servers' own traffic: no light neighbour (HS2_SMUX_AUTOWIN)
 	defer st.Close()
 	if _, err := st.Write([]byte{kindPool}); err != nil {
 		return

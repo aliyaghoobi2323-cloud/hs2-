@@ -215,6 +215,10 @@ func serveStream(ctx context.Context, st *smux.Stream, cfg KharejConfig, l3 *l3S
 	}
 	st.SetReadDeadline(time.Time{})
 	switch kind[0] {
+	case kindCtrl, kindPool, kindStats, kindInfo, kindLBAdvert:
+		st.SetAutoWindowBackground() // no light neighbour (HS2_SMUX_AUTOWIN, smux_autowin.go)
+	}
+	switch kind[0] {
 	case kindCtrl:
 		serveControl(ctx, st, car, mtr)
 	case kindPool:

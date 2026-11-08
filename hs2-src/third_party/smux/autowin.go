@@ -64,6 +64,9 @@ type AutoWindow struct {
 	UpdateDiv int
 	// Budget bounds the growth of all streams together (required).
 	Budget *WindowBudget
+	// NeighborMax caps a stream's window while another user stream on the
+	// same session is receiving (0: no cap).
+	NeighborMax int
 }
 
 // Timings (variables only so tests can shorten them).
@@ -73,7 +76,19 @@ var (
 	holdPressured = 300 * time.Millisecond // ... while the budget is under pressure
 	sweepEvery    = 250 * time.Millisecond
 	rttDefault    = 100 * time.Millisecond // until a session has a sample
+	neighbourFor  = time.Second            // a stream that received within this is a live neighbour
 )
+
+// rateEpoch / lightEpochBytes: a neighbour is light while it received less
+// than lightEpochBytes in its last rateEpoch (8 Mbit/s); a faster one is
+// another heavy stream, which caps nobody.
+const (
+	rateEpoch       = 250 * time.Millisecond
+	lightEpochBytes = 256 << 10
+)
+
+// awRecent: probe samples the queue rule looks at.
+const awRecent = 4
 
 // WindowBudget is the process-wide allowance for window growth beyond each
 // stream's base window, in bytes.
@@ -82,7 +97,8 @@ type WindowBudget struct {
 	used  atomic.Int64
 	peak  atomic.Int64
 
-	grows, denied, shrinks atomic.Uint64
+	grows, denied, shrinks  atomic.Uint64
+	queueCuts, neighborCuts atomic.Uint64
 
 	mu      sync.Mutex
 	streams map[*Stream]struct{}
@@ -100,9 +116,10 @@ func NewWindowBudget(limit int64) *WindowBudget {
 
 // WindowBudgetStats is a snapshot of a budget.
 type WindowBudgetStats struct {
-	Limit, Used, Peak      int64
-	Streams                int // streams holding grown windows
-	Grows, Denied, Shrinks uint64
+	Limit, Used, Peak       int64
+	Streams                 int // streams holding grown windows
+	Grows, Denied, Shrinks  uint64
+	QueueCuts, NeighborCuts uint64 // shrinks by the queue rule / for a light neighbour
 }
 
 // Stats returns the budget's figures now.
@@ -111,7 +128,8 @@ func (b *WindowBudget) Stats() WindowBudgetStats {
 	n := len(b.streams)
 	b.mu.Unlock()
 	return WindowBudgetStats{Limit: b.limit, Used: b.used.Load(), Peak: b.peak.Load(), Streams: n,
-		Grows: b.grows.Load(), Denied: b.denied.Load(), Shrinks: b.shrinks.Load()}
+		Grows: b.grows.Load(), Denied: b.denied.Load(), Shrinks: b.shrinks.Load(),
+		QueueCuts: b.queueCuts.Load(), NeighborCuts: b.neighborCuts.Load()}
 }
 
 func (b *WindowBudget) take(n int64) bool {
@@ -211,6 +229,16 @@ type streamAW struct {
 	tickRead   uint32
 	tickAt     time.Time
 	closed     bool
+
+	recent  [awRecent]time.Duration // the last probe samples (queue rule)
+	nRecent int
+	// read by other streams' neighbour checks
+	bg         atomic.Bool  // the servers' own control traffic
+	grown      atomic.Bool  // extra > 0
+	lastRecv   atomic.Int64 // unix ns of the last data received
+	epochAt    int64        // receive-rate epoch start (unix ns), own bufferLock
+	epochBytes uint32
+	epochRate  atomic.Uint32 // bytes received in the last whole epoch
 }
 
 func newStreamAW(cfg *AutoWindow, base int) *streamAW {
@@ -244,31 +272,76 @@ func (s *Stream) awConsumed(n uint32) (uint32, uint32) {
 	return s.numRead, a.win
 }
 
-// awPushed accounts n received bytes (recvLoop, bufferLock held) and, when
-// they complete a probe, grows the window if the probe shows it bound.
+// awPushed accounts n received bytes (recvLoop: streamLock and bufferLock
+// held) and, when they complete a probe, applies the window rules:
+//
+//   - queue: once the last awRecent probes of a grown window all came back
+//     more than qHigh over the session's minimum, the stream's data is
+//     queueing somewhere on its links (the sender's socket, the path) — data
+//     other users' packets wait behind. The window halves (Vegas-like). One
+//     slow probe (a loss recovery) does not count: all of them must be slow.
+//   - neighbours: while another user stream on the same session (link)
+//     received data in the last neighbourFor, the window is capped at
+//     AutoWindow.NeighborMax, so what it queues on the shared link stays small.
+//   - growth: a probe of the current window that came back within qLow of
+//     the minimum, with the reader keeping up, doubles the window (up to the
+//     cap, if the budget grants it).
 func (s *Stream) awPushed(n uint32) {
 	a := s.aw
 	a.numRecv += n
+	nowNs := time.Now()
+	ns := nowNs.UnixNano()
+	a.lastRecv.Store(ns)
+	if ns-a.epochAt >= int64(rateEpoch) {
+		a.epochRate.Store(a.epochBytes)
+		a.epochAt, a.epochBytes = ns, 0
+	}
+	a.epochBytes += n
 	if !a.probeOn || int32(a.numRecv-a.probeLimit) <= 0 {
 		return
 	}
 	a.probeOn = false
-	now := time.Now()
+	now := nowNs
 	sample := now.Sub(a.probeAt)
 	min, ok := s.sess.awRTT(sample, now)
-	if !ok || a.closed || a.probeWin < a.win || sample > min+min/4+2*time.Millisecond {
+	if !ok || a.closed {
+		return
+	}
+	a.recent[a.nRecent%awRecent] = sample
+	a.nRecent++
+	if a.extra > 0 && a.nRecent >= awRecent {
+		low := a.recent[0]
+		for _, r := range a.recent[1:] {
+			low = minDur(low, r)
+		}
+		if low > min+qHigh(min) {
+			a.cfg.Budget.queueCuts.Add(1)
+			s.awShrinkLocked(max(a.base, a.win/2), now)
+			return
+		}
+	}
+	limit := uint32(a.cfg.Max)
+	if nb := uint32(a.cfg.NeighborMax); nb > 0 && nb < limit && s.sess.awNeighborsLocked(s, now) {
+		limit = max(nb, a.base)
+		if a.win > limit {
+			a.cfg.Budget.neighborCuts.Add(1)
+			s.awShrinkLocked(limit, now)
+			return
+		}
+	}
+	if a.probeWin < a.win || sample > min+qLow(min) {
 		return
 	}
 	if unread := a.numRecv - s.numRead; unread > a.win/4 {
 		return // the reader is behind: the window is doing its job
 	}
 	a.limitedAt = now
-	if a.win >= uint32(a.cfg.Max) {
+	if a.win >= limit {
 		return
 	}
 	nw := a.win * 2
-	if nw > uint32(a.cfg.Max) || nw < a.win {
-		nw = uint32(a.cfg.Max)
+	if nw > limit || nw < a.win {
+		nw = limit
 	}
 	d := nw - a.win
 	if !a.cfg.Budget.take(int64(d)) {
@@ -276,8 +349,71 @@ func (s *Stream) awPushed(n uint32) {
 	}
 	a.cfg.Budget.grows.Add(1)
 	a.win, a.extra, a.pendingUPD = nw, a.extra+d, true
+	a.nRecent = 0 // the next verdicts are about the new window
+	a.grown.Store(true)
 	s.sess.returnTokens(int(d)) // the bucket grows with the window
 	a.cfg.Budget.track(s)
+}
+
+// qLow / qHigh: queueing delay over the minimum loop RTT under which a
+// window may grow, and over which (persistently) it shrinks.
+func qLow(min time.Duration) time.Duration  { return 2*time.Millisecond + min/16 }
+func qHigh(min time.Duration) time.Duration { return 5*time.Millisecond + min/8 }
+
+func minDur(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// awShrinkLocked sets the window to nw (< win) at once and tells the peer
+// (bufferLock held).
+func (s *Stream) awShrinkLocked(nw uint32, now time.Time) {
+	a := s.aw
+	if nw >= a.win {
+		return
+	}
+	d := a.win - nw
+	a.win, a.extra, a.limitedAt, a.usedAt = nw, a.extra-d, now, now
+	a.probeOn, a.pendingUPD, a.nRecent = false, false, 0
+	a.grown.Store(a.extra > 0)
+	consumed := s.numRead
+	a.limit, a.limitWin = consumed+nw, nw
+	s.incr = 0
+	b := a.cfg.Budget
+	b.give(int64(d))
+	b.shrinks.Add(1)
+	atomic.AddInt32(&s.sess.bucket, -int32(d))
+	if consumed > 0 {
+		go s.sendWindowUpdate(consumed, nw) // the peer learns the smaller window now
+	}
+}
+
+// awNeighborsLocked: another user stream of the session received data in
+// the last neighbourFor at a light user's rate (streamLock held). Streams marked background
+// (SetAutoWindowBackground: the servers' own control streams) and grown
+// ones (other heavy streams) do not count.
+func (sess *Session) awNeighborsLocked(self *Stream, now time.Time) bool {
+	since := now.Add(-neighbourFor).UnixNano()
+	for _, t := range sess.streams {
+		if t == self || t.aw == nil || t.aw.bg.Load() || t.aw.grown.Load() {
+			continue
+		}
+		if t.aw.lastRecv.Load() >= since && t.aw.epochRate.Load() < lightEpochBytes {
+			return true
+		}
+	}
+	return false
+}
+
+// SetAutoWindowBackground marks a stream as the servers' own traffic (a
+// control or stats stream): it never caps another stream's window as a
+// light neighbour. A no-op without AutoWindow.
+func (s *Stream) SetAutoWindowBackground() {
+	if s.aw != nil {
+		s.aw.bg.Store(true)
+	}
 }
 
 // awTick is the sweeper's look at one grown stream; true: stop tracking it.
@@ -293,10 +429,12 @@ func (s *Stream) awTick(now time.Time, pressured bool, fair uint32) bool {
 		return true
 	}
 	rtt := s.sess.awRTTNow()
+	s.sess.streamLock.Lock()
+	defer s.sess.streamLock.Unlock()
 	s.bufferLock.Lock()
+	defer s.bufferLock.Unlock()
 	a := s.aw
 	if a.closed || a.extra == 0 {
-		s.bufferLock.Unlock()
 		return true
 	}
 	// usage: bytes read per round trip over the last tick, doubled (the
@@ -313,34 +451,20 @@ func (s *Stream) awTick(now time.Time, pressured bool, fair uint32) bool {
 	if pressured {
 		hold = b.holdP
 	}
+	nw := max(a.win/2, a.base)
 	shrink := now.Sub(a.limitedAt) > hold && now.Sub(a.usedAt) > hold
 	if pressured && a.win > a.base+fair && now.Sub(a.limitedAt) > b.holdP {
 		shrink = true // the largest windows give way first
 	}
-	nw := a.win / 2
-	if nw < a.base {
-		nw = a.base
+	if nb := uint32(a.cfg.NeighborMax); nb > 0 && a.win > max(nb, a.base) && s.sess.awNeighborsLocked(s, now) {
+		shrink, nw = true, max(nb, a.base, a.win/2) // a light user came to this link
+		b.neighborCuts.Add(1)
 	}
 	if !shrink || a.numRecv-s.numRead > nw/2 {
-		s.bufferLock.Unlock()
 		return false
 	}
-	d := a.win - nw
-	a.win, a.extra, a.limitedAt, a.usedAt = nw, a.extra-d, now, now
-	a.probeOn, a.pendingUPD = false, false
-	consumed := s.numRead
-	a.limit, a.limitWin = consumed+nw, nw
-	s.incr = 0
-	done := a.extra == 0
-	s.bufferLock.Unlock()
-
-	b.give(int64(d))
-	b.shrinks.Add(1)
-	atomic.AddInt32(&s.sess.bucket, -int32(d))
-	if consumed > 0 {
-		go s.sendWindowUpdate(consumed, nw) // the peer learns the smaller window now
-	}
-	return done
+	s.awShrinkLocked(nw, now)
+	return a.extra == 0
 }
 
 // awRelease returns a stream's growth (stream or session closing).
@@ -352,6 +476,7 @@ func (s *Stream) awRelease() {
 	a := s.aw
 	d := a.extra
 	a.extra, a.win, a.closed = 0, a.base, true
+	a.grown.Store(false)
 	s.bufferLock.Unlock()
 	if d > 0 {
 		a.cfg.Budget.give(int64(d))

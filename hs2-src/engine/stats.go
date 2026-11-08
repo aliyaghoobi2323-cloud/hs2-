@@ -129,6 +129,7 @@ func runStats(ctx context.Context, l Link, ro rawStreamOpener, mtr *linkMeter, l
 	if err != nil {
 		return true
 	}
+	st.SetAutoWindowBackground() // the servers' own traffic: no light neighbour (HS2_SMUX_AUTOWIN)
 	defer st.Close()
 	if _, err := st.Write([]byte{kindStats, statsVer}); err != nil {
 		return true

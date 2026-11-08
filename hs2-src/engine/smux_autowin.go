@@ -22,6 +22,14 @@ import (
 // update goes out every quarter window (HS2_SMUX_AUTOWIN_DIV). Light streams
 // never get there and keep the 2 MiB window they have today.
 //
+// Light users first: a stream grows only while its probes show no queue on
+// its links (loop RTT within 2 ms + 1/16 of the minimum), halves when its
+// last four probes all show a queue (over 5 ms + 1/8: its in-flight data is
+// waiting in a socket or on the path, where light users' packets would wait
+// behind it), and is held to HS2_SMUX_AUTOWIN_NEIGHBOR_MB (4) while a light
+// user (another stream receiving under 8 Mbit/s) is active on the same link.
+// The receiver measures this itself, so no signal has to cross the tunnel.
+//
 // Compatibility: no capability bit. The window travels in every update frame
 // and an older peer's smux honours whatever it carries, so either side may
 // run the switch alone: on Iran it speeds up downloads (Iran receives), on
@@ -57,7 +65,9 @@ func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 	return &smux.AutoWindow{
 		Max:       num("HS2_SMUX_AUTOWIN_MAX_MB", 32, 1, 256) << 20,
 		UpdateDiv: num("HS2_SMUX_AUTOWIN_DIV", 4, 2, 64),
-		Budget:    smux.NewWindowBudget(int64(budget) << 20),
+		// the cap while a light user receives on the same link (0: none)
+		NeighborMax: num("HS2_SMUX_AUTOWIN_NEIGHBOR_MB", 4, 0, 256) << 20,
+		Budget:      smux.NewWindowBudget(int64(budget) << 20),
 	}
 }
 

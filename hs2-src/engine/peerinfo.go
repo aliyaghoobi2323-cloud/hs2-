@@ -355,6 +355,7 @@ func exchangeInfo(ro rawStreamOpener, mine peerInfo) (peerInfo, error) {
 	if err != nil {
 		return peerInfo{}, err
 	}
+	st.SetAutoWindowBackground() // the servers' own traffic: no light neighbour (HS2_SMUX_AUTOWIN)
 	defer st.Close()
 	st.SetDeadline(time.Now().Add(infoTimeout))
 	if _, err := st.Write(append([]byte{kindInfo}, encodeInfo(mine)...)); err != nil {

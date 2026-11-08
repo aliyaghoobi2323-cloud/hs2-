@@ -289,6 +289,7 @@ func (a *LBAdvert) exchange(ro rawStreamOpener) error {
 	if err != nil {
 		return err
 	}
+	st.SetAutoWindowBackground() // the servers' own traffic: no light neighbour (HS2_SMUX_AUTOWIN)
 	defer st.Close()
 	st.SetDeadline(time.Now().Add(infoTimeout))
 	if _, err := st.Write(append([]byte{kindLBAdvert}, encodeAdvert(a.getMine())...)); err != nil {
