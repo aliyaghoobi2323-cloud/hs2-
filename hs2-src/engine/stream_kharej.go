@@ -81,7 +81,7 @@ func (cfg KharejConfig) routeTable() RouteTable {
 // the ports with their own target.
 func (cfg KharejConfig) info(myMax int) peerInfo {
 	t := cfg.routeTable()
-	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ports: t.MappedPorts()}
+	pi := peerInfo{MaxLinks: myMax, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ext: infoExt(), Ports: t.MappedPorts()}
 	if cfg.LB {
 		pi.Caps |= capLB
 	}
@@ -174,6 +174,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			cfg.peers.add(mtr)
 			defer exitQueue.track(car)()
 			defer cfg.peers.remove(mtr)
+			defer stripeTrack(mtr)() // HS2_MCONN_STRIPE's gate (mconn_stripe_scav.go)
 			logf("link up from %s (now %d)", conn.RemoteAddr(), links.Add(1))
 			var downErr error
 			for {

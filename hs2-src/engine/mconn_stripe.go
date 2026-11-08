@@ -32,7 +32,9 @@ import (
 //     (lite's one-copy state). Below that, lite's rules apply unchanged.
 //     A raw first sub (mconn_raw.go) is upgraded with the same handshake as
 //     lite's upgrade; the new sub carries UPGRADE then STRIPE.
-//   - Capability: capMConnStripe in kindInfo, announced only with the key on;
+//   - Capability: capExtMConnStripe, ext bit 0 of kindInfo (the caps byte is
+//     full; peerinfo.go's optional ext after the ports), announced only with
+//     the key on;
 //     Iran stripes only when the exit announced it. An older peer never sees
 //     a STRIPE record (it would reset the connection on it).
 //   - Links: a stripe sub goes only to a serving link that carries no
@@ -56,8 +58,6 @@ import (
 const (
 	mRecStripe = 0x08 // Iran → peer, on a sub: this sub is part of the stripe
 
-	capMConnStripe = 1 << 7 // reads STRIPE records (HS2_MCONN_STRIPE)
-
 	planeStripe mPlane = 2
 
 	// stripeKMax caps a configured K.
@@ -70,6 +70,13 @@ const (
 	// stripeReorder: Iran's out-of-order bound for a striping connection.
 	stripeReorder = 16 << 20
 )
+
+// stripeHotTicks: samples (mLitePoll) in a row at the growth rate before
+// the first stripe sub (stripeAlone; the first version: 1). A variable for
+// tests.
+var stripeHotTicks atomic.Int32
+
+func init() { stripeHotTicks.Store(4) }
 
 // stripeSubRate: bytes/s each sub must already carry before one more is
 // opened (HS2_MCONN_STRIPE_MBIT, default 5 Mbit/s). A variable for tests.
@@ -103,16 +110,18 @@ func parseStripe(v string) int {
 	return min(n, stripeKMax)
 }
 
-// stripeCap is the capMConnStripe bit this server announces.
-func stripeCap() uint8 {
+// infoExt: the extended caps this server announces in kindInfo (0 with
+// every key off: the message's bytes stay as before).
+func infoExt() uint32 {
+	var e uint32
 	if mconnOn.Load() && mconnLite.Load() && stripeK.Load() > 0 {
-		return capMConnStripe
+		e |= capExtMConnStripe
 	}
-	return 0
+	return e
 }
 
 // mconnStripe reports whether the other server reads STRIPE records.
-func (pi *peerInfo) mconnStripe() bool { return pi.mconnRaw() && pi.Caps&capMConnStripe != 0 }
+func (pi *peerInfo) mconnStripe() bool { return pi.mconnRaw() && pi.Ext&capExtMConnStripe != 0 }
 
 // counters (process-wide)
 var stripeStat struct {
@@ -120,6 +129,7 @@ var stripeStat struct {
 	subs    atomic.Uint64 // stripe subs opened (Iran) / joined (exit)
 	bytes   atomic.Uint64 // payload bytes sent by the stripe rule
 	refused atomic.Uint64 // growth refused: no free link or no slot
+	cuts    atomic.Uint64 // scavenger width cuts (a queue on the path)
 }
 
 // stripeState is an mConn's stripe bookkeeping (under mConn.mu).
@@ -134,6 +144,9 @@ type stripeState struct {
 	stRR      int // sender: round-robin start among equal queues
 	stLogged  int // Iran: the largest stripe logged
 	stN       int // subs ever marked stripe (0: the stripe rule is never looked at)
+	stHot     int // Iran: consecutive samples at the growth rate
+
+	stripeGate // sender: the scavenger's width (mconn_stripe_scav.go)
 }
 
 // stripeN: some sub was ever marked stripe (cheap gate for the send path).
@@ -184,6 +197,20 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	}
 	rate := float64(moved) / w.Seconds()
 	if rate < float64(n)*float64(stripeSubRate.Load()) {
+		m.stHot = 0
+		return false
+	}
+	if m.stHot++; n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) {
+		// only a long download stripes: a reel or a page's burst is over in
+		// a second or two, and each would take (and the pool dial) links
+		return false
+	}
+	if stripeQTarget.Load() > 0 && !m.stripeAllUsedLocked(now) {
+		if stripeLog {
+			log.Printf("stripe %x: no growth, a sub unused (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
+		}
+		// the sender's scavenger gate leaves a sub unused (the path has a
+		// queue): one more would only hold a link light users could take
 		return false
 	}
 	if !m.stActive {
@@ -200,6 +227,18 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	}
 	m.stOpening = true
 	m.tr.ev("stripe: grow %d -> %d (%.1f Mbit/s)", n, n+1, rate*8/1e6)
+	return true
+}
+
+// stripeAllUsedLocked (Iran): every live stripe sub received data in the
+// last mLitePoll (the sender's gate uses them all).
+func (m *mConn) stripeAllUsedLocked(now time.Time) bool {
+	t := now.Add(-mLitePoll).UnixNano()
+	for _, s := range m.subs {
+		if s.stripe && !s.retired && !s.dead && s.lastRecv.Load() < t {
+			return false
+		}
+	}
 	return true
 }
 
@@ -298,6 +337,22 @@ func (m *mConn) onStripe(s *msub) {
 	if !m.ended && !s.stripe {
 		s.stripe = true
 		m.stN++
+		if mtr := subMeter(s); mtr != nil && stripeAlone {
+			// the exit's TUN lane: heavy now and while the sub lives, used
+			// or not (exitTraffic.storeHeavy; released in msub.close)
+			mtr.stripeN.Add(1)
+			s.stMtr.Store(mtr)
+			select {
+			case <-s.done: // closed meanwhile: close missed it
+				if s.stMtr.Swap(nil) != nil {
+					mtr.stripeN.Add(-1)
+				}
+			default:
+			}
+			if mtr.heavyN.Load() < 1 {
+				mtr.heavyN.Store(1)
+			}
+		}
 		stripeStat.subs.Add(1)
 		m.tr.ev("stripe: sub %d joins", s.idx)
 		m.sendCond.Broadcast()
@@ -311,6 +366,21 @@ func (m *mConn) onStripe(s *msub) {
 // "missed" the chunks the stripe gave it (subDied's hole rule).
 func (m *mConn) stripeQuietLocked(s *msub) bool {
 	return s.stripe && time.Since(s.lastPush) >= mHoleSafe
+}
+
+// stripeRankLocked: s's place among the live stripe subs other than p, in
+// the order they joined.
+func (m *mConn) stripeRankLocked(s, p *msub) int {
+	r := 0
+	for _, x := range m.subs {
+		if x == s {
+			return r
+		}
+		if x.stripe && x != p && !x.retired && !x.dead {
+			r++
+		}
+	}
+	return r
 }
 
 // Results of stripeSendLocked.
@@ -331,6 +401,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	var best *msub
 	bestQ, striped := 0, false
 	nsubs := len(m.subs)
+	// the scavenger's width (mconn_stripe_scav.go): only the first w stripe
+	// subs (in the order they joined) may take chunks; -1: all
+	w := m.stripeWidthLocked(p, time.Now())
 	for i := range nsubs {
 		s := m.subs[(m.stRR+i)%nsubs]
 		if s.retired || s.dead || (!s.stripe && s != p) {
@@ -338,6 +411,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 		}
 		if s != p {
 			striped = true
+			if w >= 0 && m.stripeRankLocked(s, p) >= w {
+				continue
+			}
 			if !m.iran {
 				// the peer closes a sub idle both ways for mLiteIdle: never
 				// the only copy on one that has been cold for half of it
@@ -415,9 +491,11 @@ func stripeFree(ml *managedLink) bool {
 	return ml.serving() && ml.heavy == 0 && ml.flowing == 0 && !ml.pressed && !stripeOn(ml)
 }
 
-// pickStripe places a stripe sub (see the file comment): a free link not in
-// avoid, one with no user first, then the fewest users; never the last
-// stripeKeepFree free links.
+// pickStripe places a stripe sub (see the file comment). With stripeAlone
+// (the default): a link set aside for the stripe first (mconn_stripe_pool.go),
+// else a free link no user rides, never one of the last stripeKeepFree free
+// links; none: it asks the pool for a link of its own. Without stripeAlone
+// (the first version): a free link, the fewest users first.
 func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	pool := m.exitInfo.Load()
 	m.mu.Lock()
@@ -425,19 +503,37 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	free := 0
 	var chosen *managedLink
 	var bestUsers, bestRecent int
+	bestRes := false
 	ties := 0
 	for _, ml := range m.links {
-		if m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() || !linkMConn(ml, pool) || !stripeFree(ml) {
+		if m.gateInfo && ml.mtr != nil && !ml.mtr.infoDone.Load() || !linkMConn(ml, pool) {
 			continue
 		}
-		free++
+		res := stripeAlone && !ml.stripeRes.IsZero()
+		if res {
+			// set aside: the stripe's own, unless a download or a user came
+			if !ml.serving() || ml.heavy > 0 || ml.flowing > 0 || ml.users.Load() > 0 {
+				continue
+			}
+		} else if !stripeFree(ml) {
+			continue
+		} else {
+			free++
+		}
 		if avoided(ml.link, avoid) {
 			continue
 		}
 		u, r := int(ml.users.Load()), ml.recent
+		if stripeAlone && u > 0 {
+			// a light user's sub on a stripe link waits behind the stripe's
+			// loss recovery (TCP is one byte stream): every loss on the link
+			// holds the game's packet a round trip. Empty links only.
+			continue
+		}
 		switch {
-		case chosen == nil || u < bestUsers || u == bestUsers && r < bestRecent:
-			chosen, bestUsers, bestRecent, ties = ml, u, r, 1
+		case bestRes && !res:
+		case chosen == nil || res && !bestRes || u < bestUsers || u == bestUsers && r < bestRecent:
+			chosen, bestUsers, bestRecent, bestRes, ties = ml, u, r, res, 1
 		case u == bestUsers && r == bestRecent:
 			ties++
 			if rand.IntN(ties) == 0 {
@@ -445,11 +541,31 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 			}
 		}
 	}
-	if chosen == nil || free-1 < stripeKeepFree {
+	if chosen == nil || !bestRes && free-1 < stripeKeepFree {
+		if stripeAlone {
+			m.stripeAskLocked(m.now())
+		}
+		if stripeLog {
+			log.Printf("stripe pick: none (free=%d chosen=%v) — asked the pool for a link", free, chosen != nil)
+		}
 		return nil, nil, false
 	}
 	m.placeLocked(chosen)
-	stripeHold(chosen, 1)
+	if bestRes {
+		chosen.stripeRes = time.Time{} // its hold passes to the sub
+	} else {
+		stripeHold(chosen, 1)
+	}
+	if chosen.mtr != nil && stripeAlone {
+		// the TUN lane (HS2_L3_LANE) reads heavyN: heavy now, not at the
+		// sampler's next tick (which keeps it while the link is held)
+		if chosen.mtr.heavyN.Load() < 1 {
+			chosen.mtr.heavyN.Store(1)
+		}
+	}
+	if stripeLog {
+		log.Printf("stripe pick: link %d set-aside=%v users=%d recent=%d free=%d", chosen.id, bestRes, bestUsers, bestRecent, free)
+	}
 	rel := m.releaseFor(chosen)
 	var once sync.Once
 	return chosen.link, func() {

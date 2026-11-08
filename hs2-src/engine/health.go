@@ -151,6 +151,14 @@ type linkMeter struct {
 	// exitTraffic.sample store it, the TUN side channel's lane (HS2_L3_LANE)
 	// reads it with one atomic load.
 	heavyN atomic.Int32
+	// stQUs / stQAt: the socket's queueing delay (srtt − minrtt, µs) and
+	// when it was read (unix ns), cached for the stripe's scavenger gate
+	// (exit, HS2_MCONN_STRIPE, mconn_stripe_scav.go).
+	stQUs atomic.Int64
+	stQAt atomic.Int64
+	// stripeN: stripe subs riding this link (exit, HS2_MCONN_STRIPE): the
+	// TUN lane counts the link heavy while there is one, used or not.
+	stripeN atomic.Int32
 
 	// Exit-side download stats (edge only; see stats.go). statsPoll carries the
 	// sampler's "poll now" (cap 1); statsState is statsPending/OK/Unsupported;

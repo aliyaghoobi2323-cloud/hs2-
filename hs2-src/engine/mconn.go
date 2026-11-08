@@ -347,6 +347,10 @@ type msub struct {
 	txEnd      uint64    // end offset of the last byte placed on it (CLOSE-ACK)
 	stripe     bool      // carries the stripe (HS2_MCONN_STRIPE, mconn_stripe.go)
 
+	// stMtr (exit): the link meter whose stripeN this stripe sub raised
+	// (released in close).
+	stMtr atomic.Pointer[linkMeter]
+
 	kick      chan struct{}
 	done      chan struct{}
 	closeOnce sync.Once
@@ -359,6 +363,9 @@ type msub struct {
 func (s *msub) close() {
 	s.closeOnce.Do(func() {
 		close(s.done)
+		if mtr := s.stMtr.Swap(nil); mtr != nil {
+			mtr.stripeN.Add(-1)
+		}
 		s.rw.Close()
 		if s.onClose != nil {
 			s.onClose()

@@ -59,9 +59,10 @@ func TestPeerInfoWire(t *testing.T) {
 	}
 	// A later version appends fields: what this one knows is read, the rest is
 	// skipped, and the stream is left exactly after the message.
-	future := []byte{3, 9, 0, 48, capPortTags, 0, 1, 0x01, 0xbb, 0xcc, 0xdd, 0x99}
+	// (After the ports: the ext [m][m bytes], then whatever comes later.)
+	future := []byte{3, 12, 0, 48, capPortTags, 0, 1, 0x01, 0xbb, 2, 0x01, 0x80, 0xdd, 0xee, 0x99}
 	r := bytes.NewReader(future)
-	if got, err := readInfo(r); err != nil || got.MaxLinks != 48 || !got.tags() || fmt.Sprint(got.Ports) != "[443]" {
+	if got, err := readInfo(r); err != nil || got.MaxLinks != 48 || !got.tags() || fmt.Sprint(got.Ports) != "[443]" || got.Ext != 0x8001 {
 		t.Fatalf("future message: got %+v, %v", got, err)
 	}
 	if r.Len() != 1 {
@@ -82,6 +83,60 @@ func TestPeerInfoWire(t *testing.T) {
 	// A truncated message is an error (EOF), never a half-read value.
 	if _, err := readInfo(bytes.NewReader([]byte{1, 2, 0})); err == nil {
 		t.Fatal("truncated message read without error")
+	}
+}
+
+// TestPeerInfoExt: the extended caps (the caps byte is full) ride an optional
+// ext after the ports. Without one the message is byte for byte the old one;
+// with one, an older reader (ports by count, the rest skipped) reads every
+// field it knows unchanged.
+func TestPeerInfoExt(t *testing.T) {
+	in := peerInfo{MaxLinks: 48, Caps: capPortTags | 1<<7, Flags: flagUDP, Ports: []int{443, 8443}}
+	plain := encodeInfo(in)
+	if len(plain) != 2+infoFixedLen+2*2 {
+		t.Fatalf("no ext: %d bytes, want the old layout's %d", len(plain), 2+infoFixedLen+4)
+	}
+	if got, _ := readInfo(bytes.NewReader(plain)); got.Ext != 0 {
+		t.Fatalf("no ext read as %#x", got.Ext)
+	}
+	in.Ext = capExtMConnStripe | 1<<17
+	b := encodeInfo(in)
+	if !bytes.Equal(b[2:2+infoFixedLen+4], plain[2:2+infoFixedLen+4]) {
+		t.Fatalf("ext changed the old fields: %v vs %v", b, plain)
+	}
+	got, err := readInfo(bytes.NewReader(b))
+	if err != nil || got.Ext != in.Ext || got.Caps != in.Caps || got.MaxLinks != 48 || fmt.Sprint(got.Ports) != "[443 8443]" {
+		t.Fatalf("ext round trip: got %+v, %v", got, err)
+	}
+	// an older reader: [ver][n][maxLinks][caps][flags][count][ports], the
+	// rest of the n bytes skipped, the stream left after the message
+	r := bytes.NewReader(append(b, 0x77))
+	old := func(r *bytes.Reader) (maxL int, caps, flags byte, ports []int) {
+		var h [2]byte
+		r.Read(h[:])
+		p := make([]byte, h[1])
+		r.Read(p)
+		maxL, caps, flags = int(p[0])<<8|int(p[1]), p[2], p[3]
+		for i := 0; i < int(p[4]); i++ {
+			ports = append(ports, int(p[5+2*i])<<8|int(p[6+2*i]))
+		}
+		return
+	}
+	if ml, c, f, ps := old(r); ml != 48 || c != in.Caps || f != flagUDP || fmt.Sprint(ps) != "[443 8443]" || r.Len() != 1 {
+		t.Fatalf("older reader: %d %#x %#x %v, %d left", ml, c, f, ps, r.Len())
+	}
+	// a long port list leaves room for the ext
+	many := make([]int, 300)
+	for i := range many {
+		many[i] = 1000 + i
+	}
+	got, err = readInfo(bytes.NewReader(encodeInfo(peerInfo{Ports: many, Ext: capExtMConnStripe})))
+	if err != nil || got.Ext != capExtMConnStripe || got.Flags&flagCut == 0 || len(got.Ports) != (255-infoFixedLen-1-infoExtMax)/2 {
+		t.Fatalf("long list with ext: %d ports, ext %#x, flags %b, %v", len(got.Ports), got.Ext, got.Flags, err)
+	}
+	// a cut-short ext reads what is there
+	if got, err := readInfo(bytes.NewReader([]byte{2, 7, 0, 1, 0, 0, 0, 3, 0x01})); err != nil || got.Ext != 1 {
+		t.Fatalf("short ext: got %+v, %v", got, err)
 	}
 }
 

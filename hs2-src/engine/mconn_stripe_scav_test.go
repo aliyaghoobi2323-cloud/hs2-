@@ -1,0 +1,277 @@
+package engine
+
+import (
+	"testing"
+	"time"
+)
+
+// Tests of the stripe as a scavenger (mconn_stripe_scav.go) and of its own
+// links (mconn_stripe_pool.go).
+
+// fixPathQ sets the path queue the gate reads, for one test.
+func fixPathQ(t *testing.T, q time.Duration) {
+	t.Helper()
+	p := stripePathQ
+	p.mu.Lock()
+	p.fixed, p.q = true, q
+	p.mu.Unlock()
+	t.Cleanup(func() {
+		p.mu.Lock()
+		p.fixed, p.q = false, 0
+		p.mu.Unlock()
+	})
+}
+
+func setPathQ(q time.Duration) {
+	p := stripePathQ
+	p.mu.Lock()
+	p.q = q
+	p.mu.Unlock()
+}
+
+// gateConn: an exit connection with a primary and n stripe subs (no I/O).
+func gateConn(n int) (*mConn, *msub) {
+	m := &mConn{}
+	p := &msub{m: m, done: make(chan struct{})}
+	m.subs = append(m.subs, p)
+	for i := 0; i < n; i++ {
+		m.subs = append(m.subs, &msub{m: m, stripe: true, idx: i + 1, done: make(chan struct{})})
+	}
+	m.stN = n
+	return m, p
+}
+
+// The width starts at 0 (the primary alone), grows by one sub per
+// stripeQGrow while the path's queue is under half the target, halves at
+// once above it, and never exceeds the live stripe subs.
+func TestStripeGateWidth(t *testing.T) {
+	old := stripeQTarget.Load()
+	t.Cleanup(func() { stripeQTarget.Store(old) })
+	stripeQTarget.Store(int64(10 * time.Millisecond))
+	fixPathQ(t, time.Millisecond)
+	m, p := gateConn(6)
+	now := time.Now()
+	if w := m.stripeWidthLocked(p, now); w != 0 {
+		t.Fatalf("first width %d, want 0", w)
+	}
+	for i := 1; i <= 8; i++ {
+		now = now.Add(stripeQGrow)
+		m.stripeWidthLocked(p, now)
+	}
+	if m.stW != 6 {
+		t.Fatalf("width %d after 8 s of no queue, want 6 (the live subs)", m.stW)
+	}
+	setPathQ(12 * time.Millisecond)
+	now = now.Add(stripeQEvery)
+	if w := m.stripeWidthLocked(p, now); w != 3 {
+		t.Fatalf("width %d after a queue, want 3 (halved)", w)
+	}
+	now = now.Add(stripeQEvery)
+	if w := m.stripeWidthLocked(p, now); w != 1 {
+		t.Fatalf("width %d after a second tick of queue, want 1", w)
+	}
+	// between half the target and the target: held
+	setPathQ(7 * time.Millisecond)
+	now = now.Add(5 * stripeQGrow)
+	if w := m.stripeWidthLocked(p, now); w != 1 {
+		t.Fatalf("width %d in the hold band, want 1", w)
+	}
+	// the rank: only the first w stripe subs (in join order) may take chunks
+	if r := m.stripeRankLocked(m.subs[1], p); r != 0 {
+		t.Fatalf("rank of the first stripe sub %d", r)
+	}
+	if r := m.stripeRankLocked(m.subs[3], p); r != 2 {
+		t.Fatalf("rank of the third stripe sub %d", r)
+	}
+	// Iran and the key at 0: no gate
+	stripeQTarget.Store(0)
+	if w := m.stripeWidthLocked(p, now.Add(time.Second)); w != -1 {
+		t.Fatalf("gate off: width %d, want -1", w)
+	}
+	stripeQTarget.Store(int64(10 * time.Millisecond))
+	m.iran = true
+	if w := m.stripeWidthLocked(p, now.Add(2*time.Second)); w != -1 {
+		t.Fatalf("Iran: width %d, want -1", w)
+	}
+}
+
+// With no exit link tracked there is nothing to measure the path with: no
+// gate (the unit tests' pipes, and the edge).
+func TestStripeGateUnmeasured(t *testing.T) {
+	m, p := gateConn(2)
+	if w := m.stripeWidthLocked(p, time.Now()); w != -1 {
+		t.Fatalf("width %d with no link tracked, want -1", w)
+	}
+}
+
+// Under a queue the sender puts every chunk on the primary: width 0 is the
+// connection without the stripe.
+func TestStripeGateSendsOnPrimary(t *testing.T) {
+	old := stripeQTarget.Load()
+	t.Cleanup(func() { stripeQTarget.Store(old) })
+	stripeQTarget.Store(int64(10 * time.Millisecond))
+	fixPathQ(t, 50*time.Millisecond)
+	m, p := gateConn(3)
+	m.lite = true
+	m.primary.Store(p)
+	for i := 0; i < 20; i++ {
+		c := getChunk(mRecData)
+		c.n = 100
+		if r := m.stripeSendLocked(c); r != stripeSent {
+			t.Fatalf("chunk %d: %d, want sent", i, r)
+		}
+		c.unref()
+	}
+	if len(p.q) != 20 {
+		t.Fatalf("primary has %d chunks, want all 20", len(p.q))
+	}
+	for _, s := range m.subs[1:] {
+		if len(s.q) != 0 {
+			t.Fatalf("stripe sub %d got %d chunks under a queue", s.idx, len(s.q))
+		}
+	}
+}
+
+// A link the stripe asked for is set aside when it comes (held: heavy for
+// light picks and the TUN lane), taken first by the next stripe pick, and
+// goes back if nobody takes it; the pool's target counts the stripe's links
+// on top.
+func TestStripePoolSetAside(t *testing.T) {
+	old := stripeK.Load()
+	t.Cleanup(func() { stripeK.Store(old) })
+	stripeK.Store(4)
+	caps := uint8(capMConn | capMConnRaw)
+	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps)}
+	m := mcManager(ls...)
+	now := time.Now()
+	m.clock = func() time.Time { return now }
+	for _, ml := range m.links {
+		ml.users.Store(1) // every link has a light user
+	}
+	if _, _, ok := m.pickStripe(nil); ok {
+		t.Fatal("stripe took a link a user rides")
+	}
+	if m.stripeWant != 1 {
+		t.Fatalf("want %d, want 1", m.stripeWant)
+	}
+	if x := m.stripeExtra(); x != 1 {
+		t.Fatalf("extra %d, want 1 (the link asked for)", x)
+	}
+	nl := newMCLink(caps)
+	m.mu.Lock()
+	ml := m.newManaged(nl, 9, now)
+	m.links = append(m.links, ml)
+	m.mu.Unlock()
+	if ml.stripeRes.IsZero() || !stripeOn(ml) || nl.mtr.heavyN.Load() < 1 {
+		t.Fatal("the new link was not set aside (held, heavy)")
+	}
+	if m.stripeWant != 0 {
+		t.Fatalf("want %d after the link came, want 0", m.stripeWant)
+	}
+	m.mu.Lock()
+	k := m.planeKeyLocked(planeLight, ml)
+	m.mu.Unlock()
+	if !k.pk.heavy {
+		t.Fatal("a set-aside link is not heavy for light subs")
+	}
+	if x := m.stripeExtra(); x != 1 {
+		t.Fatalf("extra %d, want 1 (the set-aside link)", x)
+	}
+	l, rel, ok := m.pickStripe(nil)
+	if !ok || l != Link(nl) {
+		t.Fatalf("picked %v ok=%v, want the set-aside link", l, ok)
+	}
+	if !ml.stripeRes.IsZero() || !stripeOn(ml) {
+		t.Fatal("the hold did not pass to the sub")
+	}
+	rel()
+	if stripeOn(ml) {
+		t.Fatal("release left the link held")
+	}
+	// a set-aside link nobody takes goes back after stripeResFor
+	m.mu.Lock()
+	m.stripeAskLocked(now)
+	ml2 := m.newManaged(newMCLink(caps), 10, now)
+	m.links = append(m.links, ml2)
+	m.mu.Unlock()
+	if !stripeOn(ml2) {
+		t.Fatal("second link not set aside")
+	}
+	now = now.Add(stripeResFor + time.Second)
+	if x := m.stripeExtra(); x != 0 || stripeOn(ml2) || !ml2.stripeRes.IsZero() {
+		t.Fatalf("lapsed set-aside: extra %d, held %v", x, stripeOn(ml2))
+	}
+	// a request lapses too
+	m.mu.Lock()
+	m.stripeAskLocked(now)
+	m.mu.Unlock()
+	now = now.Add(stripeWantFor + time.Second)
+	if x := m.stripeExtra(); x != 0 {
+		t.Fatalf("lapsed request still counted: %d", x)
+	}
+}
+
+// With the key off nothing is set aside and the target is the autopilot's.
+func TestStripePoolOff(t *testing.T) {
+	old := stripeK.Load()
+	t.Cleanup(func() { stripeK.Store(old) })
+	stripeK.Store(0)
+	m := mcManager(newMCLink(capMConn | capMConnRaw))
+	m.mu.Lock()
+	m.stripeWant, m.stripeWantUntil = 3, time.Now().Add(time.Minute)
+	ml := m.newManaged(newMCLink(capMConn|capMConnRaw), 5, time.Now())
+	m.mu.Unlock()
+	if !ml.stripeRes.IsZero() || stripeOn(ml) {
+		t.Fatal("a link set aside with the key off")
+	}
+	if x := m.stripeExtra(); x != 0 {
+		t.Fatalf("extra %d with the key off", x)
+	}
+}
+
+// The exit keeps a stripe sub's link heavy for its TUN lane while the sub
+// lives, used or not, and lets go when it closes.
+func TestStripeExitLaneHeavy(t *testing.T) {
+	mtr := &linkMeter{}
+	tr := newExitTraffic(nil)
+	mtr.stripeN.Add(1)
+	tr.heavy[mtr] = 0
+	tr.storeHeavy()
+	if mtr.heavyN.Load() != 1 {
+		t.Fatalf("heavyN %d with a stripe sub, want 1", mtr.heavyN.Load())
+	}
+	tr.storeHeavy() // gone from this tick's counts: still the stripe
+	if mtr.heavyN.Load() != 1 {
+		t.Fatalf("heavyN %d after a quiet tick, want 1", mtr.heavyN.Load())
+	}
+	mtr.stripeN.Add(-1)
+	tr.heavy[mtr] = 0
+	tr.storeHeavy()
+	if mtr.heavyN.Load() != 0 {
+		t.Fatalf("heavyN %d after the sub closed, want 0", mtr.heavyN.Load())
+	}
+}
+
+// The path's queue is the median of the busy links that do not carry the
+// asking connection's subs; idle links and its own do not count.
+func TestStripePathQOthers(t *testing.T) {
+	p := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}}
+	own, a, b, c, idle := &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}
+	p.links[own] = &stripeLinkQ{busy: true, q: 50 * time.Millisecond}
+	p.links[a] = &stripeLinkQ{busy: true, q: 2 * time.Millisecond}
+	p.links[b] = &stripeLinkQ{busy: true, q: 4 * time.Millisecond}
+	p.links[c] = &stripeLinkQ{busy: true, q: 9 * time.Millisecond}
+	p.links[idle] = &stripeLinkQ{q: 90 * time.Millisecond}
+	p.at = time.Now() // measured just now: no socket read
+	q, ok := p.delay(p.at, []*linkMeter{own})
+	if !ok || q != 4*time.Millisecond {
+		t.Fatalf("q %v ok=%v, want the others' median 4ms", q, ok)
+	}
+	q, _ = p.delay(p.at, []*linkMeter{own, a, b, c})
+	if q != 0 {
+		t.Fatalf("q %v with no other busy link, want 0 (nobody to yield to)", q)
+	}
+	if _, ok := (&stripeQ{links: map[*linkMeter]*stripeLinkQ{}}).delay(time.Now(), nil); ok {
+		t.Fatal("measured with no link tracked")
+	}
+}

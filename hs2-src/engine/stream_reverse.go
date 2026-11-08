@@ -200,6 +200,7 @@ func serveReverseLink(ctx context.Context, car *tlscarrier.Carrier, cfg KharejCo
 	}
 	defer exitQueue.track(car)()
 	defer cfg.peers.remove(mtr)
+	defer stripeTrack(mtr)() // HS2_MCONN_STRIPE's gate (mconn_stripe_scav.go)
 	// Close the session when ctx ends, so AcceptStream unblocks and this returns
 	// instead of hanging on a link the edge keeps alive with keepalives.
 	closed := make(chan struct{})

@@ -37,6 +37,13 @@ import (
 //	        bit1: the port list was cut to fit
 //	  ports: edge: the user ports it opens · exit: the ports with their own
 //	        target (port_map)
+//	  ext (optional, after the ports): [m u8][m bytes] — the extended caps,
+//	        a bitmap past the caps byte (whose 8 bits are all taken): byte i
+//	        bit j is extended cap 8i+j. Sent only when some extended cap is
+//	        set, so a server without one sends the same bytes as before; an
+//	        older reader skips it with the rest of the payload.
+//	        ext bit0: mconn stripe — it reads STRIPE records
+//	        (HS2_MCONN_STRIPE, mconn_stripe.go)
 //
 // A reader takes the fields it knows from the first n bytes and skips the rest,
 // so the payload can grow compatibly (a v1 reader sees only maxLinks).
@@ -63,6 +70,11 @@ const (
 	flagCut      = 1 << 1
 	infoFixedLen = 5                        // maxLinks, caps, flags, count
 	infoMaxPorts = (255 - infoFixedLen) / 2 // what fits the u8 length
+	// infoExtMax: the extended caps bytes this version sends at most (and
+	// keeps room for when it sends them); a longer ext is read up to this.
+	infoExtMax = 4
+
+	capExtMConnStripe = 1 << 0 // ext bit0: reads STRIPE records (HS2_MCONN_STRIPE)
 )
 
 // peerInfo is one side's kindInfo message.
@@ -71,7 +83,8 @@ type peerInfo struct {
 	Caps     uint8
 	Flags    uint8
 	Ports    []int
-	V2       bool // the message carried the v2 fields (a newer hs2)
+	V2       bool   // the message carried the v2 fields (a newer hs2)
+	Ext      uint32 // the extended caps (the optional ext after the ports; 0: none)
 }
 
 func (pi *peerInfo) tags() bool { return pi != nil && pi.V2 && pi.Caps&capPortTags != 0 }
@@ -226,15 +239,32 @@ func encodeInfo(pi peerInfo) []byte {
 	}
 	ports := pi.Ports
 	flags := pi.Flags
-	if len(ports) > infoMaxPorts {
-		ports, flags = ports[:infoMaxPorts], flags|flagCut
+	var ext []byte
+	for v := pi.Ext; v != 0; v >>= 8 {
+		ext = append(ext, byte(v))
 	}
-	b := make([]byte, 2+infoFixedLen+2*len(ports))
-	b[0], b[1] = infoVer, byte(infoFixedLen+2*len(ports))
+	maxPorts := infoMaxPorts
+	if len(ext) > 0 {
+		maxPorts = (255 - infoFixedLen - 1 - infoExtMax) / 2
+	}
+	if len(ports) > maxPorts {
+		ports, flags = ports[:maxPorts], flags|flagCut
+	}
+	n := infoFixedLen + 2*len(ports)
+	if len(ext) > 0 {
+		n += 1 + len(ext)
+	}
+	b := make([]byte, 2+n)
+	b[0], b[1] = infoVer, byte(n)
 	binary.BigEndian.PutUint16(b[2:], clamp(pi.MaxLinks))
 	b[4], b[5], b[6] = pi.Caps, flags, byte(len(ports))
 	for i, p := range ports {
 		binary.BigEndian.PutUint16(b[7+2*i:], clamp(p))
+	}
+	if len(ext) > 0 {
+		o := 7 + 2*len(ports)
+		b[o] = byte(len(ext))
+		copy(b[o+1:], ext)
 	}
 	return b
 }
@@ -269,6 +299,14 @@ func readInfo(r io.Reader) (peerInfo, error) {
 		for i := 0; i < n; i++ {
 			if v := int(binary.BigEndian.Uint16(p[infoFixedLen+2*i:])); v > 0 {
 				pi.Ports = append(pi.Ports, v)
+			}
+		}
+		// the optional ext: only when the port list was whole (its end is
+		// then known)
+		if o := infoFixedLen + 2*int(p[4]); o < len(p) {
+			m := min(int(p[o]), len(p)-o-1)
+			for i := 0; i < m && i < infoExtMax; i++ {
+				pi.Ext |= uint32(p[o+1+i]) << (8 * i)
 			}
 		}
 	}

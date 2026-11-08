@@ -27,3 +27,21 @@ func TestCapsDistinct(t *testing.T) {
 		seen[v] = name
 	}
 }
+
+// TestCapsExtDistinct: the same for the extended caps (kindInfo's ext after
+// the ports, peerinfo.go), within what this version sends (infoExtMax bytes).
+func TestCapsExtDistinct(t *testing.T) {
+	caps := map[string]uint32{
+		"capExtMConnStripe": capExtMConnStripe,
+	}
+	seen := map[uint32]string{}
+	for name, v := range caps {
+		if v == 0 || v&(v-1) != 0 || uint64(v) >= 1<<(8*infoExtMax) {
+			t.Fatalf("%s = %#x: not a single bit of the ext", name, v)
+		}
+		if other, ok := seen[v]; ok {
+			t.Fatalf("%s and %s share bit %#x", name, other, v)
+		}
+		seen[v] = name
+	}
+}

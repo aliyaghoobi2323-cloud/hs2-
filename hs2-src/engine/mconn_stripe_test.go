@@ -11,9 +11,10 @@ import (
 // setStripeRate sets the per-sub growth rate for a test (restored after it).
 func setStripeRate(t *testing.T, bps int64) {
 	t.Helper()
-	old := stripeSubRate.Load()
+	old, oldHot := stripeSubRate.Load(), stripeHotTicks.Load()
 	stripeSubRate.Store(bps)
-	t.Cleanup(func() { stripeSubRate.Store(old) })
+	stripeHotTicks.Store(1) // grow at the first sample (TestStripeHot checks the wait)
+	t.Cleanup(func() { stripeSubRate.Store(old); stripeHotTicks.Store(oldHot) })
 }
 
 // rateLinks holds every link's exit-side writes (the download direction) to
@@ -208,31 +209,39 @@ func TestParseStripe(t *testing.T) {
 	}
 }
 
-// The capability is announced only with lite and the key on.
+// The capability (ext bit 0) is announced only with lite and the key on, and
+// never in the caps byte.
 func TestStripeCap(t *testing.T) {
 	withMConn(t, true)
 	setLite(t, true)
 	old := stripeK.Load()
 	t.Cleanup(func() { stripeK.Store(old) })
 	stripeK.Store(0)
-	if mconnCap()&capMConnStripe != 0 {
+	if infoExt()&capExtMConnStripe != 0 {
 		t.Fatal("cap announced with the key off")
 	}
 	stripeK.Store(4)
-	if mconnCap()&capMConnStripe == 0 {
+	if infoExt()&capExtMConnStripe == 0 {
 		t.Fatal("cap not announced with the key on")
 	}
+	if mconnCap() != capMConn|capMConnRaw {
+		t.Fatalf("caps byte changed: %#x", mconnCap())
+	}
 	setLite(t, false)
-	if mconnCap()&capMConnStripe != 0 {
+	if infoExt()&capExtMConnStripe != 0 {
 		t.Fatal("cap announced without lite")
 	}
-	pi := &peerInfo{V2: true, Caps: capMConn | capMConnRaw | capMConnStripe}
+	pi := &peerInfo{V2: true, Caps: capMConn | capMConnRaw, Ext: capExtMConnStripe}
 	if !pi.mconnStripe() {
 		t.Fatal("peer cap not read")
 	}
-	pi.Caps = capMConn | capMConnRaw
+	pi.Ext = 0
 	if pi.mconnStripe() {
 		t.Fatal("older peer read as striping")
+	}
+	pi.Caps |= 1 << 7 // bit 7 of the caps byte is another feature's
+	if pi.mconnStripe() {
+		t.Fatal("caps bit 7 read as the stripe")
 	}
 }
 
@@ -243,20 +252,30 @@ func TestPickStripe(t *testing.T) {
 	old := stripeK.Load()
 	t.Cleanup(func() { stripeK.Store(old) })
 	stripeK.Store(4)
-	caps := uint8(capMConn | capMConnRaw | capMConnStripe)
-	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps)}
+	caps := uint8(capMConn | capMConnRaw)
+	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps)}
 	m := mcManager(ls...)
 	m.links[0].heavy = 1   // a download
 	m.links[1].flowing = 1 // a call
 	m.links[2].users.Store(2)
-	// free: 2, 3, 4 → one may go (two stay free); the one with no user first
+	m.links[5].users.Store(1)
+	// free: 2, 3, 4, 5 → two may go (two stay free), and only the links no
+	// user rides (3, 4): a light user's sub never shares a stripe link
 	l, rel, ok := m.pickStripe(nil)
 	if !ok || (l != Link(ls[3]) && l != Link(ls[4])) {
 		t.Fatalf("picked %v ok=%v, want an idle free link", l, ok)
 	}
-	if _, _, ok := m.pickStripe([]any{l}); ok {
-		t.Fatal("took one of the last free links")
+	if hn := ls[3].mtr.heavyN.Load() + ls[4].mtr.heavyN.Load(); hn != 1 {
+		t.Fatalf("the picked link is not heavy for the TUN lane at once (heavyN sum %d)", hn)
 	}
+	l2, rel2, ok := m.pickStripe([]any{l})
+	if !ok || l2 == l || (l2 != Link(ls[3]) && l2 != Link(ls[4])) {
+		t.Fatalf("second pick %v ok=%v, want the other idle link", l2, ok)
+	}
+	if _, _, ok := m.pickStripe([]any{l, l2}); ok {
+		t.Fatal("took a link a user rides, or one of the last free links")
+	}
+	rel2()
 	var held *managedLink
 	for _, ml := range m.links {
 		if ml.link == l {
@@ -275,5 +294,39 @@ func TestPickStripe(t *testing.T) {
 	rel()
 	if stripeOn(held) {
 		t.Fatal("release did not drop the hold")
+	}
+}
+
+// Only a long download stripes: the first stripe sub waits for
+// stripeHotTicks samples in a row at the growth rate; a dip starts over.
+func TestStripeHot(t *testing.T) {
+	old := stripeSubRate.Load()
+	t.Cleanup(func() { stripeSubRate.Store(old) })
+	stripeSubRate.Store(100)
+	m := &mConn{iran: true}
+	m.stK = 4
+	m.stActive = true // no slot bookkeeping here
+	now := time.Now()
+	var sent uint64
+	tick := func(bytes uint64) bool {
+		now = now.Add(mLitePoll)
+		sent += bytes
+		return m.stripeTickLocked(now, sent, 0)
+	}
+	tick(0) // the first sample
+	hot := int(stripeHotTicks.Load())
+	for i := 1; i < hot; i++ {
+		if tick(1000) {
+			t.Fatalf("grew after %d hot samples, want %d", i, hot)
+		}
+	}
+	tick(0) // a dip
+	for i := 1; i < hot; i++ {
+		if tick(1000) {
+			t.Fatalf("grew after a dip and %d hot samples", i)
+		}
+	}
+	if !tick(1000) {
+		t.Fatalf("no growth after %d hot samples", hot)
 	}
 }

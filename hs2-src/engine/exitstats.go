@@ -193,11 +193,11 @@ func (t *exitTraffic) sample(now time.Time) {
 // tick) and keeps the counts as the next tick's previous ones.
 func (t *exitTraffic) storeHeavy() {
 	for m, n := range t.heavy {
-		m.heavyN.Store(n)
+		m.heavyN.Store(max(n, min(m.stripeN.Load(), 1)))
 	}
 	for m := range t.heavyPrev {
 		if _, ok := t.heavy[m]; !ok {
-			m.heavyN.Store(0)
+			m.heavyN.Store(min(m.stripeN.Load(), 1)) // a stripe link stays heavy (HS2_MCONN_STRIPE)
 		}
 	}
 	clear(t.heavyPrev)

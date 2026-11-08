@@ -94,7 +94,7 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 	// A link carries user connections only once its kindInfo exchange is over,
 	// so each one knows whether the exit routes port tags (routes.go).
 	lm.gateInfo = true
-	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap()}
+	mine := peerInfo{MaxLinks: lm.max, Caps: capPortTags | capL3Quiet | l3DupCap() | mconnCap() | quietCap(), Ext: infoExt()}
 	if cfg.LB {
 		mine.Caps |= capLB
 	}

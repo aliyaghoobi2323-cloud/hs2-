@@ -221,6 +221,11 @@ type LinkManager struct {
 	// steer (nil: off): HS2_LB_STEER — new connections follow path quality
 	// (lb_auto2.go). Under mu.
 	steer *lbSteerState
+
+	// stripe: links the stripe asked for (HS2_MCONN_STRIPE,
+	// mconn_stripe_pool.go). Under mu.
+	stripeWant      int
+	stripeWantUntil time.Time
 }
 
 // EnableSteer turns on the edge's path steering (HS2_LB_STEER; multipath LB
@@ -251,6 +256,10 @@ type idleReclaimer interface {
 type managedLink struct {
 	link Link
 	id   int
+	// stripeRes: when this new link was set aside for a stripe sub (zero:
+	// not); HS2_MCONN_STRIPE, mconn_stripe_pool.go. Under the pool lock.
+	stripeRes time.Time
+
 	dead atomic.Bool
 	born time.Time
 	// users is the number of user connections assigned here. It is raised
@@ -346,7 +355,9 @@ const suspectAfter = 12 * time.Second
 
 // newManaged wraps a Link with a managed entry, capturing its meter (if any).
 func (m *LinkManager) newManaged(l Link, id int, now time.Time) *managedLink {
-	return &managedLink{link: l, id: id, born: now, servingSince: now, mtr: linkMeterOf(l)}
+	ml := &managedLink{link: l, id: id, born: now, servingSince: now, mtr: linkMeterOf(l)}
+	m.stripeAdoptLocked(ml, now) // HS2_MCONN_STRIPE (mconn_stripe_pool.go); nothing when off
+	return ml
 }
 
 func NewLinkManager(dialer LinkDialer, min, max, perLink int, logf func(string, ...any)) *LinkManager {
@@ -629,6 +640,9 @@ func (m *LinkManager) decideTarget() int {
 		s = apSample{now: m.now(), growable: true}
 	}
 	d := m.ap.decide(s)
+	if x := m.stripeExtra(); x > 0 { // HS2_MCONN_STRIPE: its links come on top (mconn_stripe_pool.go)
+		d.target = min(d.target+x, m.max)
+	}
 	m.setTarget(d.target)
 	m.dec = d
 	if d.note != "" {
@@ -1717,6 +1731,9 @@ func (m *LinkManager) pickLocked(limit int) *managedLink {
 			}
 		}
 		if chosen != nil {
+			if stripeLog {
+				stripeNoteLight(chosen)
+			}
 			return chosen
 		}
 	}
@@ -1794,7 +1811,11 @@ func (m *LinkManager) sampleHealth() {
 			o.statsState = ml.mtr.statsState.Load()
 			o.ctrlWait = ctrlWaitOf(ml.mtr)
 			o.ctrlAns = ml.mtr.ctrlAnsweredSent.Load()
-			ml.mtr.heavyN.Store(int32(o.fs.heavy)) // for the TUN lane (HS2_L3_LANE)
+			hn := int32(o.fs.heavy)
+			if hn == 0 && stripeOn(ml) {
+				hn = 1 // a stripe link (or one set aside for it) is heavy for the lane, used or not
+			}
+			ml.mtr.heavyN.Store(hn) // for the TUN lane (HS2_L3_LANE)
 			if g := ml.mtr.guard; g != nil {
 				if p := g.parkedAt.Load(); p != 0 && ctrlNow()-p < int64(stuckWait) {
 					o.wedged = true

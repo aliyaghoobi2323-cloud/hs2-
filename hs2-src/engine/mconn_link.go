@@ -63,7 +63,7 @@ func init() {
 // its kindInfo bytes stay as before).
 func mconnCap() uint8 {
 	if mconnOn.Load() {
-		return capMConn | capMConnRaw | stripeCap()
+		return capMConn | capMConnRaw
 	}
 	return 0
 }
@@ -212,6 +212,9 @@ func (m *LinkManager) pickPlane(p mPlane, avoid []any) (Link, func(), bool) {
 	ml := m.pickPlaneLocked(p, avoid, pool)
 	if ml == nil {
 		return nil, nil, false
+	}
+	if stripeLog && p == planeLight {
+		stripeNoteLight(ml)
 	}
 	m.placeLocked(ml)
 	return ml.link, m.releaseFor(ml), true
