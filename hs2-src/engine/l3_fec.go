@@ -48,8 +48,27 @@ import (
 // With the key off nothing here runs on the sending side, and the receiving
 // side does nothing until a parity packet arrives: the bytes are as before.
 
-// l3FecOn: HS2_L3_FEC=1.
-var l3FecOn = os.Getenv("HS2_L3_FEC") == "1" || l3FecLaneOnly
+// l3FecOn: HS2_L3_FEC=1 (or =2, =lane).
+var l3FecOn = os.Getenv("HS2_L3_FEC") == "1" || l3FecAdapt || l3FecLaneOnly
+
+// l3FecAdapt: HS2_L3_FEC=2, k follows the light links there are: k = light
+// links - 1, at most l3FecMaxK, down to 1 — a group of one packet, whose
+// "parity" is a copy of it on another light link. Where light links are
+// scarce (the Kharej side, whose downloads and calls leave two or three of
+// a pool of eight without a download) the flow is still protected, at a
+// higher share of its own bytes (50% at k=2, 100% at k=1, within the same
+// per-set budget); with five or more it is the k=4..5 of =1. The receiver
+// is unchanged: every hs2 with this code rebuilds a k=1 group from its copy.
+var l3FecAdapt = os.Getenv("HS2_L3_FEC") == "2"
+
+// fecMinK: the fewest data packets per group (light links - 1) worth a
+// parity packet.
+func fecMinK() int {
+	if l3FecAdapt {
+		return 1
+	}
+	return l3FecMinK
+}
 
 // l3FecLaneOnly: HS2_L3_FEC=lane, a lab diagnostic: the flows the FEC would
 // stripe go, once, as plain TypeData over the light link the lane would
@@ -185,7 +204,7 @@ func (s *l3Set) fecPlan(e *l3Flow, links []*l3Link, pkt []byte, h uint32, now in
 	if f == nil || f.k == 0 {
 		var ls [l3FecMaxK + 1]*l3Link
 		n := fecLinks(links, h, &ls)
-		if n < l3FecMinK+1 {
+		if n < fecMinK()+1 {
 			e.fec = nil
 			return fecPlan{}, false
 		}

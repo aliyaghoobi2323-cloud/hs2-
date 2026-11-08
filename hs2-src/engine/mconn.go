@@ -494,7 +494,8 @@ type mConn struct {
 	tr    *mtrace // HS2_MCONN_TRACE (nil when off)
 	nsubs int
 
-	rawState // lite with capMConnRaw: the first sub carries raw bytes until an upgrade
+	rawState  // lite with capMConnRaw: the first sub carries raw bytes until an upgrade
+	callState // HS2_MCONN_CALL (mconn_call.go)
 
 	r mrecv
 
@@ -553,7 +554,10 @@ func (m *mConn) liteWantDualLocked(now time.Time, recvd uint64) bool {
 	sent, got := m.sendOff-m.liteSent, recvd-m.liteRecvd
 	m.liteSample, m.liteSent, m.liteRecvd = now, m.sendOff, recvd
 	lim := uint64(mDupMaxRate) * uint64(w) / uint64(time.Second)
-	return sent <= lim && got <= lim
+	if sent <= lim && got <= lim {
+		return m.smallWantLocked()
+	}
+	return m.callWantDualLocked(sent, got, w) // HS2_MCONN_CALL (mconn_call.go)
 }
 
 // setStateLocked moves the connection between the obs gauges.
@@ -811,6 +815,13 @@ func (m *mConn) sendLocked(c *mchunk) error {
 			m.noteQueueLocked()
 			return nil
 		}
+		if ok, wait := m.callPairLocked(c); ok { // HS2_MCONN_CALL (mconn_call.go)
+			m.noteQueueLocked()
+			return nil
+		} else if wait {
+			m.sendCond.Wait()
+			continue
+		}
 		fit, warm := 0, 0
 		var cold time.Time // lite: a sub idle both ways since before this is cold
 		if m.lite {
@@ -865,7 +876,7 @@ func (m *mConn) sendLocked(c *mchunk) error {
 					s.lastPush = now // it took this chunk (a miss stamped lastHole with now)
 				}
 			}
-			liteBud.add(now.Unix(), c.n, c.n*(fit-1))
+			m.budAddLocked(now, c.n, c.n*(fit-1))
 		}
 		m.noteQueueLocked()
 		return nil
@@ -1017,13 +1028,14 @@ func (m *mConn) noteWriteLocked(n int) {
 		// than two windows is a quiet connection: duplicate again)
 		was := m.dupOff
 		m.dupOff = m.dupBytes > mDupMaxRate && w < 2*mHeavyWindow
+		m.dupOff = m.callRollLocked(now, w, m.dupBytes, m.dupOff) // HS2_MCONN_CALL
 		if was != m.dupOff && m.tr != nil {
 			m.tr.ev("dup %v -> %v (window %v, %d bytes)", !was, !m.dupOff, w.Round(time.Millisecond), m.dupBytes)
 		}
 		m.dupStart, m.dupBytes = now, 0
 	}
 	m.dupBytes += n
-	if m.dupBytes > mDupMaxRate && !m.dupOff {
+	if m.dupBytes > m.dupMaxLocked() && !m.dupOff {
 		m.dupOff = true
 		m.tr.ev("dup on -> off (%d bytes in %v)", m.dupBytes, now.Sub(m.dupStart).Round(time.Millisecond))
 	}
@@ -1872,7 +1884,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			recvd := r.next
 			r.mu.Unlock()
 			if m.liteWantDualLocked(now, recvd) {
-				if liteBud.capped(now.Unix()) {
+				if m.upgradeCappedLocked(now) {
 					obs.mconnLiteCapped.Add(1)
 					m.tr.ev("lite: upgrade refused (duplication cap)")
 				} else if now.Before(m.lightRetryAt) {
@@ -1922,6 +1934,9 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			if len(retire) > 0 || hs {
 				m.setPrimaryLocked()
 				m.refreshLiteDualLocked()
+			}
+			if d := m.callMoreSubsLocked(live); d > 0 { // HS2_MCONN_CALL_SUBS (mconn_call.go)
+				at(d)
 			}
 		}
 	} else if m.iran {

@@ -332,7 +332,7 @@ func (m *mConn) rawTick() {
 	m.sendOff = uint64(m.rawSent.Load())
 	if m.liteWantDualLocked(now, uint64(m.rawRecvd.Load())) {
 		switch {
-		case liteBud.capped(now.Unix()):
+		case m.upgradeCappedLocked(now):
 			obs.mconnLiteCapped.Add(1)
 			m.tr.ev("lite: upgrade refused (duplication cap)")
 		case now.Before(m.lightRetryAt):

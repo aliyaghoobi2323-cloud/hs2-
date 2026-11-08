@@ -1,0 +1,370 @@
+package engine
+
+import (
+	"log"
+	"os"
+	"strconv"
+	"sync/atomic"
+	"time"
+)
+
+// Call redundancy for port-forwarded connections (HS2_MCONN_CALL, needs
+// HS2_MCONN=lite; off by default).
+//
+// lite duplicates a connection over two links only while it moves at most
+// mDupMaxRate (384 kbit/s) each way. A video call (0.3–3 Mbit/s each way)
+// is above that, so it rides its one first link — the old path's placement,
+// often a link that also carries downloads — and every loss on that TCP link
+// stalls it for an RTT or more, behind whatever the link has queued. This
+// file lets a CALL-LIKE connection keep a copy on a second light link:
+//
+//   - Call-like (one sample a second, both directions): the busier direction
+//     moves at most mCallMaxRate, the quieter one at least mCallMinRate (a
+//     two-way conversation, not a one-way stream with its small requests),
+//     and the busier one stays within a factor mCallSteady of the previous
+//     sample (steady frames, no bulk bursts); mCallStreak such samples in a
+//     row. A page load or a reel is one or two bursts and never gets there.
+//   - Upgrade (Iran): lite's own (raw first sub, UPGRADE handshake, a join
+//     sub on another path's link with no download: pickPlane, copy-only), now
+//     also for a call-like connection while the call budget allows it.
+//   - Duplication (each side, its own sending direction): lite's dual mode
+//     stops copying above mDupMaxRate; a call-like connection with two live
+//     subs keeps copying up to mCallMaxRate, while the budget allows. Each
+//     side decides alone from what it sees (no new record, no capability
+//     bit): a peer without this code (or with the key off) just sends one
+//     copy above mDupMaxRate, as before, and reads both copies as before.
+//   - Budget (strict, process-wide): the call copies of the last
+//     mCallBudgetWin seconds stay under mconnCallBudget bytes a second
+//     (HS2_MCONN_CALL=1: 2 MB/s = 16 Mbit/s, about eight 2 Mbit/s calls;
+//     HS2_MCONN_CALL=N with N > 1: N Mbit/s). Over it, new upgrades are
+//     refused and duplicating calls fall back to one copy at their next
+//     window. Heavy links never get a copy (the join sub avoids links with a
+//     download), and a connection above mCallMaxRate is never copied.
+//
+// Key off: mconnCall is false, every hook below returns at once, and the
+// lite rules are exactly as before.
+
+// mconnCall: HS2_MCONN_CALL set (and not 0). mconnCallBudget: bytes/s.
+var (
+	mconnCall       atomic.Bool
+	mconnCallBudget atomic.Int64
+)
+
+func init() { setMConnCall(os.Getenv("HS2_MCONN_CALL")) }
+
+func setMConnCall(v string) {
+	if v == "" || v == "0" {
+		mconnCall.Store(false)
+		return
+	}
+	b := int64(mCallBudgetDef)
+	if n, err := strconv.ParseFloat(v, 64); err == nil && n > 1 {
+		b = int64(n * 1e6 / 8)
+	}
+	mconnCallBudget.Store(b)
+	mconnCall.Store(true)
+}
+
+const (
+	mCallMaxRate   = 400_000 // bytes/s, the busier direction (3.2 Mbit/s)
+	mCallMinRate   = 3_000   // bytes/s, the quieter direction (24 kbit/s)
+	mCallSteady    = 2.5     // busier direction vs. the previous sample
+	mCallStreak    = 2       // call-like samples in a row
+	mCallBudgetDef = 2_000_000
+	mCallBudgetWin = 5 // seconds (callBud's slots)
+	mCallLogEvery  = 10 * time.Second
+)
+
+// callState is an mConn's call bookkeeping (under mConn.mu).
+type callState struct {
+	callOn bool // this side's direction is copied as a call now
+	callUp bool // Iran: the upgrade asked for is for a call (callBud)
+
+	// Iran's upgrade sampler (liteWantDualLocked)
+	upStreak int
+	upPrev   float64
+	// the send window (noteWriteLocked)
+	txStreak int
+	txPrev   float64
+	txRecvd  uint64 // receive offset at the window start
+
+	callPairAt int // paired copies: the next chunk's first sub (HS2_MCONN_CALL_SUBS)
+}
+
+// callBud: the process's call copies (dup) and the call bytes sent while
+// copying (all), per second.
+var callBud liteBudget
+
+// callStat: totals for the 10 s log line.
+var callStat struct {
+	upgrades, refused, dup, all atomic.Uint64
+	last                        atomic.Int64
+	prevUp, prevDup, prevAll    atomic.Uint64
+}
+
+// callCapped: the call copies of the last mCallBudgetWin seconds exceed the
+// budget.
+func callCapped(now int64) bool {
+	var dup uint64
+	for i := range callBud.slots {
+		s := &callBud.slots[i]
+		if sec := s.sec.Load(); sec > now-mCallBudgetWin && sec <= now {
+			dup += s.dup.Load()
+		}
+	}
+	return dup > uint64(mconnCallBudget.Load())*mCallBudgetWin
+}
+
+// callLikeSample: one sample of both directions (bytes over w); prev and
+// streak are the sampler's state. True once mCallStreak samples in a row
+// were call-like.
+func callLikeSample(sent, got uint64, w time.Duration, prev *float64, streak *int) bool {
+	sec := w.Seconds()
+	if sec <= 0 {
+		return false
+	}
+	hi, lo := float64(max(sent, got))/sec, float64(min(sent, got))/sec
+	ok := hi <= mCallMaxRate && lo >= mCallMinRate &&
+		(*prev == 0 || hi <= *prev*mCallSteady && hi*mCallSteady >= *prev)
+	*prev = hi
+	if !ok {
+		*streak = 0
+		return false
+	}
+	*streak++
+	return *streak >= mCallStreak
+}
+
+// callWantDualLocked (Iran, lite, one sub; liteWantDualLocked's call rule):
+// the sample was over mDupMaxRate one way; true when the connection is
+// call-like and the budget has room.
+func (m *mConn) callWantDualLocked(sent, got uint64, w time.Duration) bool {
+	m.callUp = false
+	if !mconnCall.Load() {
+		return false
+	}
+	if !callLikeSample(sent, got, w, &m.upPrev, &m.upStreak) {
+		return false
+	}
+	m.callUp = true
+	return true
+}
+
+// smallWantLocked (liteWantDualLocked's small rule result) resets the call
+// sampler: a small connection upgrades by lite's own rule.
+func (m *mConn) smallWantLocked() bool {
+	m.callUp = false
+	return true
+}
+
+// upgradeCappedLocked: the budget that refuses this upgrade (lite's 5% of
+// all bytes for a small connection, the call budget for a call).
+func (m *mConn) upgradeCappedLocked(now time.Time) bool {
+	if m.callUp {
+		if callCapped(now.Unix()) {
+			callStat.refused.Add(1)
+			return true
+		}
+		callStat.upgrades.Add(1)
+		m.tr.ev("call: upgrade to dual")
+		return false
+	}
+	return liteBud.capped(now.Unix())
+}
+
+// dupMaxLocked: the most a window may carry before this direction stops
+// copying (noteWriteLocked).
+func (m *mConn) dupMaxLocked() int {
+	if m.callOn {
+		return mCallMaxRate
+	}
+	return mDupMaxRate
+}
+
+// callRollLocked (noteWriteLocked, at a window's end of w; sent = its bytes):
+// decides whether the next window copies as a call. dupOff is lite's own
+// decision; the result replaces it.
+func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff bool) bool {
+	if !mconnCall.Load() || !m.lite {
+		return dupOff
+	}
+	r := &m.r
+	r.mu.Lock()
+	next := r.next
+	r.mu.Unlock()
+	got := next - m.txRecvd
+	if next < m.txRecvd {
+		got = 0
+	}
+	m.txRecvd = next
+	like := w < 2*mHeavyWindow && callLikeSample(uint64(sent), got, w, &m.txPrev, &m.txStreak)
+	was := m.callOn
+	m.callOn = like && dupOff && m.liveSubsLocked() >= 2 && !callCapped(now.Unix())
+	if m.callOn != was {
+		m.tr.ev("call: copy %v (sent=%d got=%d in %v)", m.callOn, sent, got, w.Round(time.Millisecond))
+		if m.callOn && m.iran && mconnCallSubs > 2 {
+			m.kickMgr() // open the pair subs
+		}
+	}
+	callLog(now)
+	if m.callOn {
+		return false
+	}
+	return dupOff
+}
+
+func (m *mConn) liveSubsLocked() int {
+	n := 0
+	for _, s := range m.subs {
+		if !s.retired && !s.dead {
+			n++
+		}
+	}
+	return n
+}
+
+// budAddLocked counts a queued chunk (all bytes) and its extra copies (dup)
+// in lite's budget, or the copies in the call budget while copying as a call.
+func (m *mConn) budAddLocked(now time.Time, all, dup int) {
+	if m.callOn && dup > 0 {
+		liteBud.add(now.Unix(), all, 0)
+		callBud.add(now.Unix(), all, dup)
+		callStat.dup.Add(uint64(dup))
+		callStat.all.Add(uint64(all))
+		return
+	}
+	liteBud.add(now.Unix(), all, dup)
+}
+
+// callLog writes the 10 s line (only when something was copied).
+func callLog(now time.Time) {
+	last := callStat.last.Load()
+	if now.UnixNano()-last < int64(mCallLogEvery) || !callStat.last.CompareAndSwap(last, now.UnixNano()) {
+		return
+	}
+	if last == 0 {
+		return
+	}
+	up, dup, all := callStat.upgrades.Load(), callStat.dup.Load(), callStat.all.Load()
+	pu, pd, pa := callStat.prevUp.Swap(up), callStat.prevDup.Swap(dup), callStat.prevAll.Swap(all)
+	if up == pu && dup == pd {
+		return
+	}
+	log.Printf("mconn call (HS2_MCONN_CALL), 10s: %d upgrades · %d KB call bytes copied once more (%d KB sent) · %d upgrades refused in all (budget)",
+		up-pu, (dup-pd)>>10, (all-pa)>>10, callStat.refused.Load())
+}
+
+// ---- paired copies over more subs (HS2_MCONN_CALL_SUBS=3..6) ------------
+//
+// A TCP link stalls for about an RTT on each of ITS lost segments, so the
+// share of time a link holds a call back grows with the packets the call
+// puts on it: two full copies at 3% loss are each stalled most of the time.
+// With mconnCallSubs subs (Iran opens the extra ones, each on another light
+// link, while the connection copies as a call), every chunk still goes out
+// twice, but on two of them in turn (sub i and i+1 for chunk i): each link
+// carries 2/n of the call, stalls n/2 times less often, and a chunk is late
+// only when both of its two links stall at once. Same extra bytes as two
+// full copies. The receiver is unchanged (reassembly by offset), and the
+// peer pairs its own direction the same way once it has three subs or
+// more (each side by its own rule; no new record).
+//
+// A sub that misses a chunk on purpose has no hole: the chunk is on two
+// other live subs. A chunk that got one copy only (the other sub full)
+// marks every other sub's hole, as lite's dual mode does, so a sub death
+// within mHoleSafe after it resets the connection rather than leave a gap.
+
+// mconnCallSubs: subs a call connection opens (2: two full copies).
+var mconnCallSubs = 2
+
+func init() {
+	if n, err := strconv.Atoi(os.Getenv("HS2_MCONN_CALL_SUBS")); err == nil && n >= 2 {
+		mconnCallSubs = min(n, mCallSubsMax)
+	}
+}
+
+const mCallSubsMax = 6
+
+// callPairLocked (sendLocked, dual mode) queues c on two subs in turn;
+// ok: done, wait: no room on any sub. Neither: the usual dual mode.
+func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
+	if !mconnCall.Load() || !m.lite {
+		return false, false
+	}
+	var live [mCallSubsMax + 2]*msub
+	n := 0
+	for _, s := range m.subs {
+		if !s.retired && !s.dead && n < len(live) {
+			live[n] = s
+			n++
+		}
+	}
+	if n < 3 {
+		return false, false
+	}
+	var pick [2]*msub
+	k := 0
+	for i := 0; i < n && k < 2; i++ {
+		if s := live[(m.callPairAt+i)%n]; s.fits(c.n) {
+			pick[k] = s
+			k++
+		}
+	}
+	if k == 0 {
+		return false, true
+	}
+	m.callPairAt++
+	c.setOff(m.sendOff)
+	m.sendOff += uint64(c.n)
+	now := time.Now()
+	for _, s := range pick[:k] {
+		s.push(c)
+		s.lastPush = now
+	}
+	if k < 2 {
+		for _, s := range live[:n] {
+			if s != pick[0] {
+				s.lastHole = now
+			}
+		}
+		obs.mconnMissed.Add(1)
+	} else {
+		obs.mconnDupBytes.Add(uint64(c.n))
+	}
+	m.budAddLocked(now, c.n, c.n*(k-1))
+	return true, false
+}
+
+// callMoreSubsLocked (Iran's manager, two live subs or more): while the
+// connection copies as a call, open another sub (on a link none of them
+// uses) until it has mconnCallSubs.
+func (m *mConn) callMoreSubsLocked(live []*msub) time.Duration {
+	if !m.callOn || len(live) >= mconnCallSubs || m.peerFin || m.wclosed {
+		return 0
+	}
+	if m.lightOpening {
+		return 200 * time.Millisecond // look again once it is open
+	}
+	if d := time.Until(m.lightRetryAt); d > 0 {
+		return d
+	}
+	m.lightOpening = true
+	avoid := make([]any, 0, len(live)+len(m.deadKeys))
+	for _, s := range live {
+		avoid = append(avoid, s.key)
+	}
+	avoid = append(avoid, m.deadKeys...)
+	m.tr.ev("call: open pair sub %d", len(live)+1)
+	go m.openLight(avoid)
+	return 200 * time.Millisecond
+}
+
+// openExitSub registers an exit sub on its link: a join sub with the key on
+// carries copies (the edge marks its end copyOnly), so it is not one of the
+// link's heavy streams — a call copied onto a light link must not make that
+// link look like a download's to the TUN lane and the FEC (HS2_L3_FEC).
+func openExitSub(t *exitTraffic, mtr *linkMeter, role byte) *exitConn {
+	if role == mconnRoleJoin && mconnCall.Load() {
+		return t.add(&exitConn{lastActive: time.Now(), mtr: mtr, sub: true, copyOnly: true})
+	}
+	return t.openSub(mtr)
+}

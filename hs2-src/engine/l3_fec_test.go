@@ -328,3 +328,60 @@ func TestL3FecReceiverRepair(t *testing.T) {
 		t.Fatal("late original delivered after its rebuild")
 	}
 }
+
+// (6) HS2_L3_FEC=2: k follows the light links, down to a copy (k=1) over
+// two; the receiver takes the copy when the original is late, and drops the
+// late original.
+func TestL3FecAdaptK(t *testing.T) {
+	defer func(a bool) { l3FecAdapt = a }(l3FecAdapt)
+	l3FecAdapt = true
+	var clock int64 = 1
+	mk := func(light, heavy int) []*l3Link {
+		var ls []*l3Link
+		for i := 1; i <= light+heavy; i++ {
+			h := int32(0)
+			if i > light {
+				h = 1
+			}
+			ls = append(ls, dupLink(uint32(i), h, true))
+		}
+		return ls
+	}
+	for light, wantK := range map[int]int{2: 1, 3: 2, 4: 3, 6: 5} {
+		s := fecSet(&clock, mk(light, 6-light)...)
+		for i := 0; i < wantK; i++ {
+			clock += int64(4 * time.Millisecond)
+			if !pumpFec(s, callPacket(i, 1100)) {
+				t.Fatalf("%d light links: packet %d not striped", light, i)
+			}
+		}
+		if s.fec.parity.Load() != 1 {
+			t.Fatalf("%d light links: %d parity after %d packets, want 1 (k=%d)", light, s.fec.parity.Load(), wantK, wantK)
+		}
+	}
+	s := fecSet(&clock, mk(1, 5)...)
+	if pumpFec(s, callPacket(0, 1100)) {
+		t.Fatal("striped over one light link")
+	}
+	// k=1 at the receiver: the copy first, then the late original
+	rx := &l3Set{}
+	tun := &chanTun{out: make(chan []byte, 4)}
+	pk := callPacket(7, 1000)
+	cp := append([]byte{l3FecMagic, 1}, binary.BigEndian.AppendUint32(nil, 200)...)
+	cp = binary.BigEndian.AppendUint16(cp, uint16(len(pk)))
+	cp = append(cp, pk...)
+	deliver := func(id uint32, p []byte) {
+		f := binary.BigEndian.AppendUint32(nil, id)
+		if q := rx.rx.accept(append(f, p...)); q != nil {
+			rx.fecRecv(id, q, tun)
+		}
+	}
+	deliver(201, cp)
+	if len(tun.out) != 1 || string(<-tun.out) != string(pk) {
+		t.Fatal("k=1 copy not delivered")
+	}
+	deliver(200, pk)
+	if len(tun.out) != 0 {
+		t.Fatal("late original delivered after its copy")
+	}
+}
