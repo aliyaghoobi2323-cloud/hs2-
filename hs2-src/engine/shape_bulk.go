@@ -47,9 +47,11 @@ const (
 	// (2^14), the shaped frame header included.
 	shapeBulkRecord = 16 << 10
 	shapeBulkData   = shapeBulkRecord - shapeHdrLen
-	// shapeBulkHold: how long a held tail waits for the next write.
-	shapeBulkHold = time.Millisecond
 )
+
+// shapeBulkHold: how long a held tail waits for the next write (a variable
+// for tests only).
+var shapeBulkHold = time.Millisecond
 
 // bulkState is the write side's HS2_SHAPE_BULK state, guarded by wmu.
 type bulkState struct {

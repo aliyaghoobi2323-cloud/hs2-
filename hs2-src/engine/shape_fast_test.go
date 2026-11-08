@@ -81,6 +81,7 @@ func (b *recBatcher) BufferReads() {}
 // order, and the stream decodes to what was written; a failed flush fails the
 // write.
 func TestShapeFastBatchesRecords(t *testing.T) {
+	noShapeBulk(t) // these sizes are the default shaper's
 	rb := &recBatcher{}
 	sc := newShapedConn(rb, nil)
 	var seed [32]byte
@@ -114,6 +115,7 @@ func TestShapeFastBatchesRecords(t *testing.T) {
 // (no size of its own on the wire), larger writes keep the bulk shape, and
 // the stream decodes as before.
 func TestShapeSmallRecords(t *testing.T) {
+	noShapeBulk(t) // these sizes are the default shaper's
 	old := shapeSmall
 	shapeSmall = true
 	defer func() { shapeSmall = old }()

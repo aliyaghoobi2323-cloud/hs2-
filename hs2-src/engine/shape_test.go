@@ -70,6 +70,7 @@ func TestShapedConnRoundTrip(t *testing.T) {
 // writes and assert each one's size never exceeds the sampler's max, and that a
 // bulk transfer actually produces a spread of sizes (not one fixed size).
 func TestShapedConnRecordSizes(t *testing.T) {
+	noShapeBulk(t) // these sizes are the default shaper's
 	cap := &captureConn{}
 	w := newShapedConn(cap, obfs.NewHTTPSLengthSampler())
 
@@ -153,6 +154,7 @@ var _ io.Writer = (*captureConn)(nil)
 // the underlying record sizes are shaped — i.e. the shaping is not specific to
 // mtcp but covers any carrier that rides newSession.
 func TestNewSessionShapesAnyStreamCarrier(t *testing.T) {
+	noShapeBulk(t) // these sizes are the default shaper's
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

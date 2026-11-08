@@ -58,6 +58,7 @@ func TestObsHistQuantile(t *testing.T) {
 // The shaper's counters add up to exactly what it put on the conn, and
 // counting changes nothing it writes.
 func TestObsShapeCounters(t *testing.T) {
+	noShapeBulk(t) // these sizes are the default shaper's
 	a, b := net.Pipe()
 	defer a.Close()
 	defer b.Close()

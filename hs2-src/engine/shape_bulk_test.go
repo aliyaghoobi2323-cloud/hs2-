@@ -37,10 +37,23 @@ func (c *recConn) snap() [][]byte {
 	return append([][]byte(nil), c.recs...)
 }
 
-func withShapeBulk(t *testing.T, small bool) {
-	ob, osm := shapeBulk, shapeSmall
-	shapeBulk, shapeSmall = true, small
-	t.Cleanup(func() { shapeBulk, shapeSmall = ob, osm })
+// withShapeBulk turns HS2_SHAPE_BULK on for one test, with this hold. The
+// cleanup lets a pending hold timer fire before the keys change back.
+func withShapeBulk(t *testing.T, small bool, hold time.Duration) {
+	ob, osm, oh := shapeBulk, shapeSmall, shapeBulkHold
+	shapeBulk, shapeSmall, shapeBulkHold = true, small, hold
+	t.Cleanup(func() {
+		time.Sleep(3 * hold)
+		shapeBulk, shapeSmall, shapeBulkHold = ob, osm, oh
+	})
+}
+
+// noShapeBulk pins HS2_SHAPE_BULK off for a test of the default shaper, so
+// the suite also passes with the key on in the environment.
+func noShapeBulk(t *testing.T) {
+	ob := shapeBulk
+	shapeBulk = false
+	t.Cleanup(func() { shapeBulk = ob })
 }
 
 func decodeRecs(t *testing.T, recs [][]byte) []byte {
@@ -58,7 +71,9 @@ func decodeRecs(t *testing.T, recs [][]byte) []byte {
 // becomes a run of full 16 KiB records, the leftover carried across writes,
 // and the last bytes leave on their own within shapeBulkHold.
 func TestShapeBulkFullRecords(t *testing.T) {
-	withShapeBulk(t, true)
+	// a hold long enough that a busy test machine never fires it between
+	// two writes of this loop (in a download they are microseconds apart)
+	withShapeBulk(t, true, 200*time.Millisecond)
 	rc := &recConn{}
 	sc := newShapedConn(rc, nil)
 	var want []byte
@@ -96,7 +111,7 @@ func TestShapeBulkFullRecords(t *testing.T) {
 // at once, in one small record, and is never held itself; a medium write is
 // one record, padded to at least a bulk-distribution size.
 func TestShapeBulkSmallNotHeld(t *testing.T) {
-	withShapeBulk(t, true)
+	withShapeBulk(t, true, 200*time.Millisecond)
 	rc := &recConn{}
 	sc := newShapedConn(rc, nil)
 	big := bytes.Repeat([]byte{1}, 8+16<<10)
@@ -130,7 +145,7 @@ func TestShapeBulkSmallNotHeld(t *testing.T) {
 
 // Writers racing the hold timer lose and duplicate nothing (run with -race).
 func TestShapeBulkConcurrent(t *testing.T) {
-	withShapeBulk(t, false)
+	withShapeBulk(t, false, shapeBulkHold)
 	rc := &recConn{}
 	sc := newShapedConn(rc, nil)
 	var wg sync.WaitGroup
@@ -161,7 +176,7 @@ func TestShapeBulkConcurrent(t *testing.T) {
 
 // A failed timer send fails the next write.
 func TestShapeBulkHeldSendFails(t *testing.T) {
-	withShapeBulk(t, true)
+	withShapeBulk(t, true, shapeBulkHold)
 	rc := &recConn{}
 	sc := newShapedConn(rc, nil)
 	sc.Write(make([]byte, 8+16<<10))
