@@ -105,6 +105,22 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 		})
 		go lb.Run(ctx)
 		lm.pathCooled = func(l Link) bool { return lb.cooledLink(l) }
+		lm.shrinkShares = func(ms []*managedLink) ([]string, map[string]int) {
+			ls := make([]Link, len(ms))
+			for i, ml := range ms {
+				ls[i] = ml.link
+			}
+			return lb.shrinkKeys(ls)
+		}
+	}
+	if reverse && cfg.Advert != nil {
+		// The reverse edge listens on the lb addresses but holds no balancer:
+		// a shrink keeps the shares of this side's own addresses (each
+		// remote% is that address's share of the links, whatever the exit's
+		// sources), keyed by the address a link arrived on.
+		lm.shrinkShares = func(ms []*managedLink) ([]string, map[string]int) {
+			return revShrinkKeys(ms, cfg.Advert.Mine())
+		}
 	}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {

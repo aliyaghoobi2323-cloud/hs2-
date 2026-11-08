@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -247,6 +248,74 @@ func pickLargestRemainder(weights []int, links []int, ok func(int) bool, fallbac
 		}
 	}
 	return best
+}
+
+// shareShrinkPick chooses k links to retire for a shrink, the mirror of
+// pickLargestRemainder: keys holds each candidate's path key in retire
+// preference order (best first), w each path's share weight (absent: 0). Each
+// pick takes the first remaining candidate on the path furthest over its
+// share of the links left after it (ties: the earlier candidate). With no
+// weight, or one path only, it is the first k — the order alone, as without
+// lb. It returns, per candidate, whether it goes.
+func shareShrinkPick(keys []string, w map[string]int, k int) []bool {
+	out := make([]bool, len(keys))
+	W := 0
+	for _, x := range w {
+		if x > 0 {
+			W += x
+		}
+	}
+	if W == 0 {
+		for i := 0; i < k && i < len(keys); i++ {
+			out[i] = true
+		}
+		return out
+	}
+	cnt := map[string]int{}
+	for _, key := range keys {
+		cnt[key]++
+	}
+	n := len(keys)
+	for ; k > 0 && n > 0; k-- {
+		best, bestOver := -1, 0
+		for i, key := range keys {
+			if out[i] {
+				continue
+			}
+			pw := max(w[key], 0)
+			over := cnt[key]*W - pw*(n-1) // (links − share after the pick) × W
+			if best < 0 || over > bestOver {
+				best, bestOver = i, over
+			}
+		}
+		out[best] = true
+		cnt[keys[best]]--
+		n--
+	}
+	return out
+}
+
+// shrinkKeys is the direct edge's LinkManager.shrinkShares: each link's path
+// ("" if the balancer does not hold it) and the effective weight of every path
+// that may take links (a cooled or removed path has no share).
+func (b *LB) shrinkKeys(ls []Link) ([]string, map[string]int) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := b.now()
+	eff := b.effWeightsLocked()
+	w := map[string]int{}
+	for j, p := range b.paths {
+		if b.eligibleLocked(j, now) && eff[j] > 0 {
+			w[p.Name()] = eff[j]
+		}
+	}
+	keys := make([]string, len(ls))
+	for i, l := range ls {
+		if j, ok := b.held[l]; ok {
+			keys[i] = b.paths[j].Name()
+		}
+	}
+	return keys, w
 }
 
 // result records the outcome of a dial on path i; on success link (comparable)
@@ -620,4 +689,23 @@ func (m *mergedListener) Addr() net.Addr {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.lns[0].Addr()
+}
+
+// revShrinkKeys is the reverse edge's LinkManager.shrinkShares: a link's key
+// is the local (listening) IP of its path, the weights this side's announced
+// list. An empty list (a wildcard listen) gives no weight: the usual order.
+func revShrinkKeys(ms []*managedLink, mine []LBAdvertIP) ([]string, map[string]int) {
+	w := map[string]int{}
+	for _, e := range mine {
+		w[e.IP] = e.Weight
+	}
+	keys := make([]string, len(ms))
+	for i, ml := range ms {
+		k := mlPath(ml)
+		if j := strings.IndexByte(k, '>'); j >= 0 {
+			k = k[:j]
+		}
+		keys[i] = k
+	}
+	return keys, w
 }

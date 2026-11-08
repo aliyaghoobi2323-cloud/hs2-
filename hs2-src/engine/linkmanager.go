@@ -113,6 +113,10 @@ type LinkManager struct {
 	// pathCooled (nil: never) reports whether the balancer cooled a link's
 	// path (direct edge with lb); HS2_DUP_PATHS keeps second subs off it.
 	pathCooled func(Link) bool
+	// shrinkShares (nil: lb off) groups links by path for a shrink: each
+	// link's path key ("" unknown) and each path's share weight (absent or 0:
+	// no share). reconcile then retires from the path most over its share.
+	shrinkShares func(ls []*managedLink) (keys []string, w map[string]int)
 
 	dialer  LinkDialer
 	accept  bool // reverse edge: links are injected via AddLink, never dialed
@@ -771,7 +775,9 @@ func (m *LinkManager) autoscale(ctx context.Context) {
 // nothing, and their connections stay put), then — direct mode only — dials the
 // rest, at most a quarter of T per tick. Shrinking marks the surplus retiring,
 // choosing the links that will empty soonest (fewest active, then recently
-// active, then open connections). Marking is free and reversible; a retiring
+// active, then open connections) — with lb, each from the path most over its
+// share of the links left (shareShrinkPick), so a shrink keeps the configured
+// shares as placement does. Marking is free and reversible; a retiring
 // link is closed by drainTick only once it is empty. In reverse the exit dials
 // any shortfall itself when it learns the target.
 func (m *LinkManager) reconcile(ctx context.Context, T int) {
@@ -817,12 +823,22 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 			}
 			return a.rate10 < b.rate10
 		})
-		for _, ml := range serving[:len(serving)-T] {
+		var drop []bool // nil: the first len(serving)-T in that order
+		if m.shrinkShares != nil {
+			keys, w := m.shrinkShares(serving)
+			drop = shareShrinkPick(keys, w, len(serving)-T)
+		}
+		kept := make([]*managedLink, 0, T)
+		for i, ml := range serving {
+			if (drop == nil && i >= len(serving)-T) || (drop != nil && !drop[i]) {
+				kept = append(kept, ml)
+				continue
+			}
 			ml.retiring, ml.retireSince, ml.pressed = true, now, false
 			retiring = append(retiring, ml)
 			gone = append(gone, fmt.Sprint(ml.id))
 		}
-		serving = serving[len(serving)-T:]
+		serving = kept
 	}
 	S, R, up := len(serving), len(retiring), m.aliveLocked()
 	m.mu.Unlock()
