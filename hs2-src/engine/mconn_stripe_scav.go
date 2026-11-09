@@ -347,6 +347,7 @@ type stripeLinkQ struct {
 	// the meter's tcp (the exit's)
 	stat func() (tcpStat, bool)
 	win  qwinMin // HS2_MCONN_STRIPE_QWIN_MS (mconn_stripe_diag.go)
+	lb   linkBase // HS2_MCONN_STRIPE_LINKBASE (mconn_stripe_linkbase.go)
 }
 
 // stripeTrack counts an exit link's meter while it is up (the returned func
@@ -412,6 +413,9 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 			if st.rttUs > lo {
 				l.q = time.Duration(st.rttUs-lo) * time.Microsecond
 			}
+			if stripeLinkBase && !p.light && l.busy {
+				l.lb.note(l.q, p.baseMax())
+			}
 		}
 		if stripeRel {
 			p.noteBaseLocked(p.pickLocked(now, nil, false))
@@ -437,9 +441,20 @@ func (p *stripeQ) busyN() int {
 // measurement; logIt: the diagnostics line may be written.
 func (p *stripeQ) pickLocked(now time.Time, own []*linkMeter, logIt bool) time.Duration {
 	var ds []time.Duration
-	for mtr, l := range p.links {
-		if l.busy && !slices.Contains(own, mtr) {
-			ds = append(ds, l.q)
+	if stripeLinkBase && !p.light {
+		for mtr, l := range p.links {
+			if l.busy && !slices.Contains(own, mtr) {
+				if e, ok := l.lb.excess(l.q); ok {
+					ds = append(ds, e)
+				}
+			}
+		}
+	}
+	if len(ds) == 0 {
+		for mtr, l := range p.links {
+			if l.busy && !slices.Contains(own, mtr) {
+				ds = append(ds, l.q)
+			}
 		}
 	}
 	var lt []time.Duration
