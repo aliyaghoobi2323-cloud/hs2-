@@ -41,14 +41,20 @@ import (
 //   - at most stripeShareK (HS2_MCONN_STRIPE_SHARE_K, default 8; 0: no
 //     bound) shared subs per connection; STRIPE_UP's growth to 32 goes on
 //     only on links of the stripe's own;
-//   - a link the TUN lane sent an interactive packet over (ping, game,
-//     call) in the last stripeLaneQuiet is not shared;
+//   - with HS2_MCONN_STRIPE_SHARE_LANE=1 (off by default): a link the TUN
+//     lane sent an interactive packet over (ping, game, call) in the last
+//     stripeLaneQuiet is not shared. Off because in a crowded pool the
+//     lane's small packets touch nearly every link: the lab's 1 % download
+//     then found one shared link instead of 8 (140 Mbit/s vs 550-700);
 //   - among the rest, the fewest flowing user streams first, then the
 //     lowest rate, then the fewest users.
 //
 // Off (the default): nothing changes. No capability bit: only Iran decides,
 // and the repeated STRIPE record is what every exit with the stripe reads.
 var stripeShare = os.Getenv("HS2_MCONN_STRIPE_SHARE") == "1"
+
+// stripeShareLane: HS2_MCONN_STRIPE_SHARE_LANE=1 (see above).
+var stripeShareLane = os.Getenv("HS2_MCONN_STRIPE_SHARE_LANE") == "1"
 
 // stripeShareK: shared stripe subs per connection (HS2_MCONN_STRIPE_SHARE_K).
 var stripeShareK = func() int {
@@ -92,7 +98,7 @@ func (m *LinkManager) pickStripeSharedLocked(avoid []any, pool *peerInfo) *manag
 		if ml.pressed || avoided(ml.link, avoid) || linkCopies(ml.link) > 0 {
 			continue
 		}
-		if at := laneAtOf(ml); at != 0 && now-at < int64(stripeLaneQuiet) {
+		if stripeShareLane && laneAtOf(ml) != 0 && now-laneAtOf(ml) < int64(stripeLaneQuiet) {
 			continue // the TUN lane's interactive flows ride it
 		}
 		if best == nil || ml.flowing < best.flowing || ml.flowing == best.flowing && (ml.rate10 < best.rate10 || ml.rate10 == best.rate10 && ml.users.Load() < best.users.Load()) {

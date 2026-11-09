@@ -96,10 +96,10 @@ func noStripeShare(t *testing.T) {
 // lately, the fewest flowing streams first, and at most stripeShareK shared
 // subs per connection.
 func TestPickStripeSharedBounds(t *testing.T) {
-	old, oldS, oldK := stripeK.Load(), stripeShare, stripeShareK
-	t.Cleanup(func() { stripeK.Store(old); stripeShare = oldS; stripeShareK = oldK })
+	old, oldS, oldK, oldL := stripeK.Load(), stripeShare, stripeShareK, stripeShareLane
+	t.Cleanup(func() { stripeK.Store(old); stripeShare = oldS; stripeShareK = oldK; stripeShareLane = oldL })
 	stripeK.Store(4)
-	stripeShare, stripeShareK = true, 1
+	stripeShare, stripeShareK, stripeShareLane = true, 1, true
 	caps := uint8(capMConn | capMConnRaw)
 	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps)}
 	m := mcManager(ls...)
