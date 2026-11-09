@@ -19,7 +19,8 @@ import (
 // Mbit/s at 80 ms however fast the links are. With the switch a stream that
 // proves window-bound (its sender waits at the limit while the reader keeps
 // up) doubles its window, up to HS2_SMUX_AUTOWIN_MAX_MB (32), and a window
-// update goes out every quarter window (HS2_SMUX_AUTOWIN_DIV). Light streams
+// update goes out every eighth of the window (HS2_SMUX_AUTOWIN_DIV; upstream:
+// every half), so a sender waits at the limit less per round trip. Light streams
 // never get there and keep the 2 MiB window they have today.
 //
 // Light users first: a stream grows only while its probes show no queue on
@@ -64,7 +65,7 @@ func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 	budget = num("HS2_SMUX_AUTOWIN_BUDGET_MB", budget, 16, 1<<14)
 	return &smux.AutoWindow{
 		Max:       num("HS2_SMUX_AUTOWIN_MAX_MB", 32, 1, 256) << 20,
-		UpdateDiv: num("HS2_SMUX_AUTOWIN_DIV", 4, 2, 64),
+		UpdateDiv: num("HS2_SMUX_AUTOWIN_DIV", 8, 2, 64),
 		// the cap while a light user receives on the same link (0: none)
 		NeighborMax: num("HS2_SMUX_AUTOWIN_NEIGHBOR_MB", 4, 0, 256) << 20,
 		Budget:      smux.NewWindowBudget(int64(budget) << 20),

@@ -71,7 +71,7 @@ type AutoWindow struct {
 
 // Timings (variables only so tests can shorten them).
 var (
-	rttFresh      = 10 * time.Second       // the session's min RTT is re-learnt after this
+	rttFresh      = 10 * time.Second       // a min-RTT period (the minimum spans two)
 	holdFor       = 2 * time.Second        // a grown window idle this long halves
 	holdPressured = 300 * time.Millisecond // ... while the budget is under pressure
 	sweepEvery    = 250 * time.Millisecond
@@ -88,7 +88,7 @@ const (
 )
 
 // awRecent: probe samples the queue rule looks at.
-const awRecent = 4
+const awRecent = 2
 
 // WindowBudget is the process-wide allowance for window growth beyond each
 // stream's base window, in bytes.
@@ -106,6 +106,9 @@ type WindowBudget struct {
 
 	// timings, from the package defaults (tests set them before use)
 	hold, holdP, every time.Duration
+
+	rmu sync.Mutex
+	rtt minFilter // the process-wide loop-RTT minimum
 }
 
 // NewWindowBudget makes a budget of limit bytes.
@@ -276,16 +279,16 @@ func (s *Stream) awConsumed(n uint32) (uint32, uint32) {
 // held) and, when they complete a probe, applies the window rules:
 //
 //   - queue: once the last awRecent probes of a grown window all came back
-//     more than qHigh over the session's minimum, the stream's data is
+//     more than qHigh over the path's minimum, the stream's data is
 //     queueing somewhere on its links (the sender's socket, the path) — data
-//     other users' packets wait behind. The window halves (Vegas-like). One
-//     slow probe (a loss recovery) does not count: all of them must be slow.
+//     other users' packets wait behind. The window loses a quarter
+//     (Vegas-like). One slow probe (a loss recovery) does not count.
 //   - neighbours: while another user stream on the same session (link)
 //     received data in the last neighbourFor, the window is capped at
 //     AutoWindow.NeighborMax, so what it queues on the shared link stays small.
 //   - growth: a probe of the current window that came back within qLow of
-//     the minimum, with the reader keeping up, doubles the window (up to the
-//     cap, if the budget grants it).
+//     the minimum, with the reader keeping up, grows the window (x2 up to 4x
+//     the base, then +25%; up to the cap, if the budget grants it).
 func (s *Stream) awPushed(n uint32) {
 	a := s.aw
 	a.numRecv += n
@@ -309,14 +312,15 @@ func (s *Stream) awPushed(n uint32) {
 	}
 	a.recent[a.nRecent%awRecent] = sample
 	a.nRecent++
+	b := a.cfg.Budget
 	if a.extra > 0 && a.nRecent >= awRecent {
 		low := a.recent[0]
 		for _, r := range a.recent[1:] {
 			low = minDur(low, r)
 		}
 		if low > min+qHigh(min) {
-			a.cfg.Budget.queueCuts.Add(1)
-			s.awShrinkLocked(max(a.base, a.win/2), now)
+			b.queueCuts.Add(1)
+			s.awShrinkLocked(max(a.base, a.win*3/4), now)
 			return
 		}
 	}
@@ -324,7 +328,7 @@ func (s *Stream) awPushed(n uint32) {
 	if nb := uint32(a.cfg.NeighborMax); nb > 0 && nb < limit && s.sess.awNeighborsLocked(s, now) {
 		limit = max(nb, a.base)
 		if a.win > limit {
-			a.cfg.Budget.neighborCuts.Add(1)
+			b.neighborCuts.Add(1)
 			s.awShrinkLocked(limit, now)
 			return
 		}
@@ -339,26 +343,32 @@ func (s *Stream) awPushed(n uint32) {
 	if a.win >= limit {
 		return
 	}
-	nw := a.win * 2
+	// up to 4x the base double per probe (a fast start), then +25%: near the
+	// path's capacity a smaller step overshoots into its queue less
+	nw := a.win + a.win/4
+	if a.win < 4*a.base {
+		nw = a.win * 2
+	}
 	if nw > limit || nw < a.win {
 		nw = limit
 	}
 	d := nw - a.win
-	if !a.cfg.Budget.take(int64(d)) {
+	if !b.take(int64(d)) {
 		return
 	}
-	a.cfg.Budget.grows.Add(1)
+	b.grows.Add(1)
 	a.win, a.extra, a.pendingUPD = nw, a.extra+d, true
 	a.nRecent = 0 // the next verdicts are about the new window
 	a.grown.Store(true)
 	s.sess.returnTokens(int(d)) // the bucket grows with the window
-	a.cfg.Budget.track(s)
+	b.track(s)
 }
 
-// qLow / qHigh: queueing delay over the minimum loop RTT under which a
-// window may grow, and over which (persistently) it shrinks.
-func qLow(min time.Duration) time.Duration  { return 2*time.Millisecond + min/16 }
-func qHigh(min time.Duration) time.Duration { return 5*time.Millisecond + min/8 }
+// qLow / qHigh: queueing delay over the path's minimum loop RTT under which
+// a window may grow, and over which (in each of the last awRecent probes)
+// it shrinks by a quarter.
+func qLow(min time.Duration) time.Duration  { return time.Millisecond + min/32 }
+func qHigh(min time.Duration) time.Duration { return 3*time.Millisecond + min/16 }
 
 func minDur(a, b time.Duration) time.Duration {
 	if a < b {
@@ -485,33 +495,69 @@ func (s *Stream) awRelease() {
 	a.cfg.Budget.untrack(s)
 }
 
-// sessAW is a session's loop-RTT minimum (AutoWindow only).
-type sessAW struct {
-	mu  sync.Mutex
-	min time.Duration
-	at  time.Time
+// minFilter is a windowed minimum: the smallest sample of the current and
+// the previous rttFresh period, so a minimum is re-learnt within two periods
+// when the path changes, but never from one sample taken inside a queue.
+type minFilter struct {
+	cur, prev time.Duration
+	at        time.Time // start of the current period
 }
 
-// awRTT folds a probe sample into the session's minimum. ok is false while
-// the minimum is (re)learnt from this very sample.
+func (f *minFilter) add(d time.Duration, now time.Time) {
+	if f.at.IsZero() || now.Sub(f.at) > rttFresh {
+		f.prev, f.cur, f.at = f.cur, d, now
+		return
+	}
+	if d < f.cur {
+		f.cur = d
+	}
+}
+
+func (f *minFilter) get() time.Duration {
+	if f.prev > 0 && f.prev < f.cur {
+		return f.prev
+	}
+	return f.cur
+}
+
+// sessAW is a session's loop-RTT minimum (AutoWindow only).
+type sessAW struct {
+	mu sync.Mutex
+	f  minFilter
+	n  int // samples seen
+}
+
+// awRTT folds a probe sample into the session's minimum and returns the
+// path's: the smaller of the session's and the whole process's (every link
+// of a tunnel crosses the same path, so a queue one session sits in from its
+// first sample on is still seen against the others' minimum). ok is false
+// for a session's first samples (no minimum to judge them by yet).
 func (s *Session) awRTT(sample time.Duration, now time.Time) (time.Duration, bool) {
+	g := s.config.AutoWindow.Budget.rttMin(sample, now)
 	s.aw.mu.Lock()
 	defer s.aw.mu.Unlock()
-	if s.aw.min == 0 || now.Sub(s.aw.at) > rttFresh {
-		s.aw.min, s.aw.at = sample, now
-		return sample, false
+	s.aw.f.add(sample, now)
+	s.aw.n++
+	m := s.aw.f.get()
+	if g > 0 && g < m {
+		m = g
 	}
-	if sample < s.aw.min {
-		s.aw.min, s.aw.at = sample, now
-	}
-	return s.aw.min, true
+	return m, s.aw.n > 2
 }
 
 func (s *Session) awRTTNow() time.Duration {
 	s.aw.mu.Lock()
 	defer s.aw.mu.Unlock()
-	if s.aw.min == 0 {
-		return rttDefault
+	if m := s.aw.f.get(); m > 0 {
+		return m
 	}
-	return s.aw.min
+	return rttDefault
+}
+
+// rttMin folds a sample into the process-wide minimum and returns it.
+func (b *WindowBudget) rttMin(d time.Duration, now time.Time) time.Duration {
+	b.rmu.Lock()
+	defer b.rmu.Unlock()
+	b.rtt.add(d, now)
+	return b.rtt.get()
 }

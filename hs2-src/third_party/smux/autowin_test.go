@@ -16,12 +16,12 @@ import (
 // delayPair returns two connected net.Conns whose bytes arrive oneWay late
 // in each direction (a loopback TCP pair with a delaying relay between).
 func delayPair(t *testing.T, oneWay time.Duration) (net.Conn, net.Conn) {
-	return ratePair(t, oneWay, 0)
+	return ratePair(t, oneWay, func() float64 { return 0 })
 }
 
 // ratePair: delayPair through a bottleneck of rate bytes/s each way (0: none)
 // with an unbounded queue in front of it.
-func ratePair(t *testing.T, oneWay time.Duration, rate float64) (net.Conn, net.Conn) {
+func ratePair(t *testing.T, oneWay time.Duration, rateOf func() float64) (net.Conn, net.Conn) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -75,7 +75,7 @@ func ratePair(t *testing.T, oneWay time.Duration, rate float64) (net.Conn, net.C
 				n, err := src.Read(buf)
 				if n > 0 {
 					due := time.Now()
-					if rate > 0 {
+					if rate := rateOf(); rate > 0 {
 						if free.After(due) {
 							due = free
 						}
@@ -437,39 +437,48 @@ func waitFor(t *testing.T, f func() bool, what string) {
 	t.Fatalf("timed out waiting: %s", what)
 }
 
-// A window that would only fill a bottleneck's queue shrinks: over an 8 MB/s
-// path (BDP ~320 KiB at 40 ms) the window never sits at the 4 MiB maximum,
-// and the queue rule cut it.
-func TestAutoWindowQueueRuleShrinks(t *testing.T) {
-	aw := newAW(64<<20, 4<<20)
-	a, b := ratePair(t, 20*time.Millisecond, 8e6)
-	cli, _ := Client(a, awConfig(nil))
-	srv, _ := Server(b, awConfig(aw))
-	t.Cleanup(func() { cli.Close(); srv.Close() })
-	var peakSeen atomic.Int64
-	stop := make(chan struct{})
-	go func() {
-		for {
-			select {
-			case <-stop:
-				return
-			case <-time.After(5 * time.Millisecond):
-				if u := aw.Budget.Stats().Used; u > peakSeen.Load() {
-					peakSeen.Store(u)
-				}
-			}
+// The queue rule: a window that would only fill a bottleneck's queue does
+// not grow (over an 8 MB/s path it stays far below the maximum), and a grown
+// window shrinks when the path slows down under it.
+func TestAutoWindowQueueRule(t *testing.T) {
+	t.Run("no-growth-into-a-queue", func(t *testing.T) {
+		aw := newAW(64<<20, 4<<20)
+		a, b := ratePair(t, 20*time.Millisecond, func() float64 { return 8e6 })
+		cli, _ := Client(a, awConfig(nil))
+		srv, _ := Server(b, awConfig(aw))
+		t.Cleanup(func() { cli.Close(); srv.Close() })
+		transfer(t, cli, srv, 16<<20, false)
+		st := aw.Budget.Stats()
+		t.Logf("%+v", st)
+		if st.Peak >= 1<<20 {
+			t.Fatalf("grew into the queue: peak %d (BDP ~320 KiB)", st.Peak)
 		}
-	}()
-	transfer(t, cli, srv, 24<<20, false)
-	close(stop)
-	st := aw.Budget.Stats()
-	t.Logf("%+v", st)
-	if st.QueueCuts == 0 {
-		t.Fatal("the queue rule never cut")
-	}
-	if st.Peak >= 4<<20-64<<10 {
-		t.Fatalf("window reached the maximum behind a queue: peak %d", st.Peak)
-	}
+	})
+	t.Run("shrinks-when-the-path-slows", func(t *testing.T) {
+		aw := newAW(64<<20, 4<<20)
+		var slow atomic.Bool
+		a, b := ratePair(t, 20*time.Millisecond, func() float64 {
+			if slow.Load() {
+				return 4e6
+			}
+			return 0
+		})
+		cli, _ := Client(a, awConfig(nil))
+		srv, _ := Server(b, awConfig(aw))
+		t.Cleanup(func() { cli.Close(); srv.Close() })
+		go func() {
+			for i := 0; i < 1000 && aw.Budget.Stats().Used < 1<<20; i++ {
+				time.Sleep(5 * time.Millisecond)
+			}
+			slow.Store(true)
+		}()
+		transfer(t, cli, srv, 40<<20, false)
+		st := aw.Budget.Stats()
+		t.Logf("%+v", st)
+		if st.QueueCuts == 0 {
+			t.Fatal("the queue rule never cut")
+		}
+	})
 }
 
 // A light user receiving on the same session holds a heavy stream at

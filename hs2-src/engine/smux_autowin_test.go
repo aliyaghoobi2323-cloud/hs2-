@@ -11,7 +11,7 @@ func TestAutoWinFromEnv(t *testing.T) {
 		t.Fatal("0 is off")
 	}
 	aw := autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1"}))
-	if aw == nil || aw.Max != 32<<20 || aw.UpdateDiv != 4 || aw.Budget == nil {
+	if aw == nil || aw.Max != 32<<20 || aw.UpdateDiv != 8 || aw.Budget == nil {
 		t.Fatalf("defaults: %+v", aw)
 	}
 	if l := aw.Budget.Stats().Limit; l > 512<<20 || l < 64<<20 {
@@ -23,7 +23,7 @@ func TestAutoWinFromEnv(t *testing.T) {
 		t.Fatalf("overrides: %+v", aw)
 	}
 	aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_MAX_MB": "x", "HS2_SMUX_AUTOWIN_DIV": "1"}))
-	if aw.Max != 32<<20 || aw.UpdateDiv != 4 {
+	if aw.Max != 32<<20 || aw.UpdateDiv != 8 {
 		t.Fatalf("bad values fall back: %+v", aw)
 	}
 }
