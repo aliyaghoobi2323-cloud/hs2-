@@ -103,6 +103,11 @@ type WindowBudget struct {
 
 	grows, denied, shrinks  atomic.Uint64
 	queueCuts, neighborCuts atomic.Uint64
+	// queueAt: unix ns of the last slow probe of a grown stream (any
+	// session); queueN counts those within the current queueHold
+	queueAt  atomic.Int64
+	queueN   atomic.Int32
+	queueWin atomic.Int64 // start of queueN's window (unix ns)
 
 	mu      sync.Mutex
 	streams map[*Stream]struct{}
@@ -328,12 +333,25 @@ func (s *Stream) awPushed(n uint32) {
 	a.recent[a.nRecent%awRecent] = sample
 	a.nRecent++
 	b := a.cfg.Budget
-	if a.extra > 0 && a.nRecent >= awRecent {
-		low := a.recent[0]
-		for _, r := range a.recent[1:] {
-			low = minDur(low, r)
+	if a.extra > 0 {
+		// The queue rule, process-wide: every link of the tunnel crosses the
+		// same path, so a queue one grown stream sees is the others' too (8
+		// streams each keeping "its" few ms would stack up). A grown stream's
+		// slow probe marks the path queued; while it is (queueHold), no stream
+		// grows, and a grown stream whose own probe is slow too shrinks at
+		// once — alone it needs awRecent slow probes in a row.
+		slow := sample > min+qHigh(min)
+		if slow {
+			b.queueAt.Store(now.UnixNano())
 		}
-		if low > min+qHigh(min) {
+		low := sample
+		if a.nRecent >= awRecent {
+			for _, r := range a.recent {
+				low = minDur(low, r)
+			}
+		}
+		corroborated := slow && b.queuedSince(now, min) > 1
+		if (a.nRecent >= awRecent && low > min+qHigh(min)) || corroborated {
 			b.queueCuts.Add(1)
 			s.awShrinkLocked(max(a.base, a.win*3/4), now)
 			return
@@ -351,6 +369,9 @@ func (s *Stream) awPushed(n uint32) {
 	if a.probeWin < a.win || sample > min+qLow(min) {
 		return
 	}
+	if q := b.queueAt.Load(); q != 0 && now.UnixNano()-q < int64(queueHold(min)) {
+		return // a grown stream saw the path queued a moment ago
+	}
 	if unread := a.numRecv - s.numRead; unread > a.win/4 {
 		return // the reader is behind: the window is doing its job
 	}
@@ -358,9 +379,9 @@ func (s *Stream) awPushed(n uint32) {
 	if a.win >= limit {
 		return
 	}
-	// up to 4x the base double per probe (a fast start), then +25%: near the
-	// path's capacity a smaller step overshoots into its queue less
-	nw := a.win + a.win/4
+	// up to 4x the base double per probe (a fast start), then +12.5%: near
+	// the path's capacity a small step overshoots into its queue less
+	nw := a.win + a.win/8
 	if a.win < 4*a.base {
 		nw = a.win * 2
 	}
@@ -598,4 +619,23 @@ func (s *Stream) SetAutoWindowOff() {
 		atomic.AddInt32(&s.sess.bucket, -int32(d))
 	}
 	a.cfg.Budget.untrack(s)
+}
+
+// queueHold: how long a slow probe of a grown stream holds every stream's
+// growth (a few round trips, at least 300 ms).
+func queueHold(min time.Duration) time.Duration {
+	return max(4*min, 300*time.Millisecond)
+}
+
+// queuedSince counts this slow probe with the others of the last
+// queueHold (process-wide) and returns how many there were, this one
+// included.
+func (b *WindowBudget) queuedSince(now time.Time, min time.Duration) int32 {
+	ns := now.UnixNano()
+	if w := b.queueWin.Load(); ns-w > int64(queueHold(min)) {
+		b.queueWin.Store(ns)
+		b.queueN.Store(1)
+		return 1
+	}
+	return b.queueN.Add(1)
 }
