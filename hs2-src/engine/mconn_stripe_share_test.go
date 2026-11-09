@@ -84,3 +84,10 @@ func TestStripeWarm(t *testing.T) {
 		t.Fatal("kept past the warm window")
 	}
 }
+
+// noStripeShare: the test runs with HS2_MCONN_STRIPE_SHARE off.
+func noStripeShare(t *testing.T) {
+	old := stripeShare
+	t.Cleanup(func() { stripeShare = old })
+	stripeShare = false
+}

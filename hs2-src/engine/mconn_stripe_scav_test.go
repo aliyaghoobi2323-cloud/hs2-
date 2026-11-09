@@ -176,6 +176,7 @@ func TestStripeGateSendsOnPrimary(t *testing.T) {
 // goes back if nobody takes it; the pool's target counts the stripe's links
 // on top.
 func TestStripePoolSetAside(t *testing.T) {
+	noStripeShare(t) // HS2_MCONN_STRIPE_SHARE in the environment would let it take a busy link
 	old := stripeK.Load()
 	t.Cleanup(func() { stripeK.Store(old) })
 	stripeK.Store(4)
