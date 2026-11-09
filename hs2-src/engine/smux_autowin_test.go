@@ -28,6 +28,12 @@ func TestAutoWinFromEnv(t *testing.T) {
 	if aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_QUEUE_PCT": "50"})); aw.QueueScale != 0.5 {
 		t.Fatalf("queue pct: %v", aw.QueueScale)
 	}
+	if aw.Rel || aw.NeighborOne {
+		t.Fatalf("rel / nb1 off by default: %+v", aw)
+	}
+	if aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_REL": "1", "HS2_SMUX_AUTOWIN_NB1": "1"})); !aw.Rel || !aw.NeighborOne {
+		t.Fatalf("rel / nb1: %+v", aw)
+	}
 	aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_MAX_MB": "x", "HS2_SMUX_AUTOWIN_DIV": "1"}))
 	if aw.Max != 32<<20 || aw.UpdateDiv != 8 {
 		t.Fatalf("bad values fall back: %+v", aw)

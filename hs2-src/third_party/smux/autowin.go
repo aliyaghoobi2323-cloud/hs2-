@@ -81,6 +81,9 @@ type AutoWindow struct {
 	// probes show that excess (two in a row over qLow: the window halves),
 	// not merely because a light user is active on the link.
 	Rel bool
+	// NeighborOne (HS2_SMUX_AUTOWIN_NB1, with Rel): one probe over qLow
+	// (not two in a row) is enough for the light-neighbour brake.
+	NeighborOne bool
 }
 
 // relative gate (AutoWindow.Rel)
@@ -451,13 +454,16 @@ func (s *Stream) awPushed(n uint32) {
 		}
 	}
 	limit := uint32(a.cfg.Max)
-	if nb := uint32(a.cfg.NeighborMax); a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && a.nRecent >= awRecent {
+	if nb := uint32(a.cfg.NeighborMax); a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && (a.nRecent >= awRecent || a.cfg.NeighborOne) {
 		// a light neighbour is capped against only while this stream's own
 		// probes (its link) show a queue beyond the jitter: two in a row
-		// over qLow halve the window; no growth then either
+		// (NeighborOne: this one) over qLow halve the window; no growth
+		// then either
 		low := sample
-		for _, r := range a.recent {
-			low = minDur(low, r)
+		if !a.cfg.NeighborOne {
+			for _, r := range a.recent {
+				low = minDur(low, r)
+			}
 		}
 		if low > min+a.cfg.qLow(rawMin) && s.sess.awNeighborsLocked(s, now) {
 			b.neighborCuts.Add(1)

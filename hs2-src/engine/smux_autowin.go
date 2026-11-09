@@ -87,6 +87,9 @@ func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 		// standing jitter, and the light-neighbour cap only while the
 		// stream's own probes show that excess (AutoWindow.Rel)
 		Rel: strings.TrimSpace(get("HS2_SMUX_AUTOWIN_REL")) == "1",
+		// HS2_SMUX_AUTOWIN_NB1=1 (with REL): one probe over qLow is enough
+		// for the light-neighbour brake (default: two in a row).
+		NeighborOne: strings.TrimSpace(get("HS2_SMUX_AUTOWIN_NB1")) == "1",
 	}
 }
 
