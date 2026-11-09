@@ -22,6 +22,12 @@ func TestAutoWinFromEnv(t *testing.T) {
 	if aw.Max != 16<<20 || aw.UpdateDiv != 8 || aw.Budget.Stats().Limit != 100<<20 {
 		t.Fatalf("overrides: %+v", aw)
 	}
+	if aw.QueueScale != 1 {
+		t.Fatalf("queue scale default %v", aw.QueueScale)
+	}
+	if aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_QUEUE_PCT": "30"})); aw.QueueScale != 0.3 {
+		t.Fatalf("queue pct: %v", aw.QueueScale)
+	}
 	aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_MAX_MB": "x", "HS2_SMUX_AUTOWIN_DIV": "1"}))
 	if aw.Max != 32<<20 || aw.UpdateDiv != 8 {
 		t.Fatalf("bad values fall back: %+v", aw)

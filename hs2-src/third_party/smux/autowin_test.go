@@ -531,3 +531,40 @@ func TestAutoWindowNeighbourCap(t *testing.T) {
 		}
 	}
 }
+
+// SetAutoWindowOff then SetAutoWindowOn: the stream grows again (a settled
+// stripe in hs2), and nothing is left in the budget once it closes.
+func TestAutoWindowOffThenOn(t *testing.T) {
+	aw := newAW(64<<20, 2<<20)
+	cli, srv := pair(t, 20*time.Millisecond, awConfig(nil), awConfig(aw))
+	acc := make(chan *Stream, 1)
+	go func() {
+		st, _ := srv.AcceptStream()
+		st.SetAutoWindowOff()
+		acc <- st
+	}()
+	st, err := cli.OpenStream()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.Write([]byte("x"))
+	rs := <-acc
+	done := make(chan struct{})
+	go func() {
+		io.ReadFull(rs, make([]byte, 1+2<<20))
+		rs.SetAutoWindowOn()
+		io.ReadFull(rs, make([]byte, 6<<20))
+		close(done)
+	}()
+	st.Write(make([]byte, 2<<20))
+	if g := aw.Budget.Stats().Grows; g != 0 {
+		t.Fatalf("grew while off: %d", g)
+	}
+	st.Write(make([]byte, 6<<20))
+	<-done
+	if aw.Budget.Stats().Grows == 0 {
+		t.Fatal("never grew after SetAutoWindowOn")
+	}
+	rs.Close()
+	waitFor(t, func() bool { return aw.Budget.Stats().Used == 0 }, "budget returned")
+}
