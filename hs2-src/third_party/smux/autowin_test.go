@@ -112,6 +112,8 @@ func newAW(budget int64, max int) *AutoWindow {
 	return &AutoWindow{Max: max, UpdateDiv: 4, Budget: b}
 }
 
+var transferPair sync.Mutex
+
 // transfer opens a stream on cli, writes n random bytes to the server's
 // accepted stream reader and returns the elapsed time; it checks the bytes.
 func transfer(t *testing.T, cli, srv *Session, n int, useWriteTo bool) time.Duration {
@@ -120,8 +122,13 @@ func transfer(t *testing.T, cli, srv *Session, n int, useWriteTo bool) time.Dura
 	rand.Read(data)
 	want := sha256.Sum256(data)
 	done := make(chan [32]byte, 1)
+	accepted := make(chan struct{})
+	// concurrent transfers: each accept must take the stream its own open
+	// made, so an open and its accept are paired under transferPair
+	transferPair.Lock()
 	go func() {
 		st, err := srv.AcceptStream()
+		close(accepted)
 		if err != nil {
 			done <- [32]byte{}
 			return
@@ -139,8 +146,11 @@ func transfer(t *testing.T, cli, srv *Session, n int, useWriteTo bool) time.Dura
 	}()
 	st, err := cli.OpenStream()
 	if err != nil {
+		transferPair.Unlock()
 		t.Fatal(err)
 	}
+	<-accepted
+	transferPair.Unlock()
 	t0 := time.Now()
 	if _, err := st.Write(data); err != nil {
 		t.Fatal(err)
