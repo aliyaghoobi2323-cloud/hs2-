@@ -29,3 +29,30 @@ func TestAutoWinRelBase(t *testing.T) {
 		t.Fatalf("RelBase %v", b.RelBase())
 	}
 }
+
+// shareCap: Share split among the heavy grown streams (a stream not grown
+// yet counts itself), never below the base; 0 with Share off.
+func TestAutoWinShareCap(t *testing.T) {
+	b := NewWindowBudget(512 << 20)
+	cfg := &AutoWindow{Max: 32 << 20, Budget: b}
+	a := newStreamAW(cfg, 2<<20)
+	if c := a.shareCap(); c != 0 {
+		t.Fatalf("share off: cap %d", c)
+	}
+	cfg.Share = 32 << 20
+	if c := a.shareCap(); c != 32<<20 {
+		t.Fatalf("alone: cap %d, want 32 MiB", c)
+	}
+	b.heavyN.Store(7) // seven others heavy, this one at its base
+	if c := a.shareCap(); c != 4<<20 {
+		t.Fatalf("8 heavy: cap %d, want 4 MiB", c)
+	}
+	a.grown.Store(true) // now counted among the seven
+	if c := a.shareCap(); c != (32<<20)/7 {
+		t.Fatalf("7 heavy: cap %d", c)
+	}
+	b.heavyN.Store(40)
+	if c := a.shareCap(); c != 2<<20 {
+		t.Fatalf("many heavy: cap %d, want the base", c)
+	}
+}

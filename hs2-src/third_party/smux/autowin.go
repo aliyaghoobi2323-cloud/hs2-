@@ -84,6 +84,13 @@ type AutoWindow struct {
 	// NeighborOne (HS2_SMUX_AUTOWIN_NB1, with Rel): one probe over qLow
 	// (not two in a row) is enough for the light-neighbour brake.
 	NeighborOne bool
+	// Share (HS2_SMUX_AUTOWIN_SHARE_MB; 0: off) is the total window the
+	// concurrently heavy streams of the process share: each may grow to at
+	// most max(base, Share/n), n the streams holding a grown window that are
+	// receiving at a heavy rate now (itself counted). One heavy stream alone
+	// keeps Max; eight together hold about Share between them (≈ one BDP of
+	// the path) instead of eight times Max, which only queues on the path.
+	Share int
 }
 
 // relative gate (AutoWindow.Rel)
@@ -123,6 +130,7 @@ type WindowBudget struct {
 
 	grows, denied, shrinks  atomic.Uint64
 	queueCuts, neighborCuts atomic.Uint64
+	shareCuts               atomic.Uint64 // shrinks to the AutoWindow.Share cap
 	// queueAt: unix ns of the last slow probe of a grown stream (any
 	// session); queueN counts those within the current queueHold
 	queueAt  atomic.Int64
@@ -152,7 +160,29 @@ type WindowBudget struct {
 	xbase  time.Duration
 	xbAt   time.Time
 	xbaseN atomic.Int64 // the last base (ns), for the status
+
+	// AutoWindow.Share: grown streams receiving at a heavy rate (the
+	// sweeper's count, raised at once when a stream first grows)
+	heavyN atomic.Int32
 }
+
+// shareCap: the window a stream may hold under AutoWindow.Share (0: no cap).
+func (a *streamAW) shareCap() uint32 {
+	if a.cfg.Share <= 0 {
+		return 0
+	}
+	n := a.cfg.Budget.heavyN.Load()
+	if !a.grown.Load() {
+		n++
+	}
+	if n < 1 {
+		n = 1
+	}
+	return max(uint32(a.cfg.Share)/uint32(n), a.base)
+}
+
+// HeavyN: the heavy grown streams counted for AutoWindow.Share.
+func (b *WindowBudget) HeavyN() int { return int(b.heavyN.Load()) }
 
 type relSample struct {
 	d  time.Duration
@@ -212,6 +242,8 @@ type WindowBudgetStats struct {
 	QueueCuts, NeighborCuts uint64 // shrinks by the queue rule / for a light neighbour
 	Ceil                    int64  // the process-wide growth allowance now (AIMD)
 	CeilCuts                uint64 // its cuts by a path queue
+	ShareCuts               uint64 // shrinks to the AutoWindow.Share cap
+	HeavyN                  int    // heavy grown streams (AutoWindow.Share)
 }
 
 // Stats returns the budget's figures now.
@@ -222,7 +254,8 @@ func (b *WindowBudget) Stats() WindowBudgetStats {
 	return WindowBudgetStats{Limit: b.limit, Used: b.used.Load(), Peak: b.peak.Load(), Streams: n,
 		Grows: b.grows.Load(), Denied: b.denied.Load(), Shrinks: b.shrinks.Load(),
 		QueueCuts: b.queueCuts.Load(), NeighborCuts: b.neighborCuts.Load(),
-		Ceil: b.ceiling(time.Now()), CeilCuts: b.ceilCuts.Load()}
+		Ceil: b.ceiling(time.Now()), CeilCuts: b.ceilCuts.Load(),
+		ShareCuts: b.shareCuts.Load(), HeavyN: int(b.heavyN.Load())}
 }
 
 func (b *WindowBudget) take(n int64) bool {
@@ -275,6 +308,7 @@ func (b *WindowBudget) sweep() {
 		b.mu.Lock()
 		if len(b.streams) == 0 {
 			b.running = false
+			b.heavyN.Store(0)
 			b.mu.Unlock()
 			return
 		}
@@ -293,6 +327,15 @@ func (b *WindowBudget) sweepOnce(list []*Stream, now time.Time) {
 	if pressured && len(list) > 0 {
 		fair = uint32(b.ceiling(now) / int64(len(list)))
 	}
+	// AutoWindow.Share: count the grown streams receiving at a heavy rate
+	since := now.Add(-neighbourFor).UnixNano()
+	var heavy int32
+	for _, s := range list {
+		if a := s.aw; a != nil && a.grown.Load() && a.lastRecv.Load() >= since && a.epochRate.Load() >= lightEpochBytes {
+			heavy++
+		}
+	}
+	b.heavyN.Store(heavy)
 	for _, s := range list {
 		if s.awTick(now, pressured, fair) {
 			b.untrack(s)
@@ -454,6 +497,15 @@ func (s *Stream) awPushed(n uint32) {
 		}
 	}
 	limit := uint32(a.cfg.Max)
+	if sc := a.shareCap(); sc > 0 && sc < limit {
+		limit = sc
+		if a.win > limit {
+			// more heavy streams came: give way to the share at once
+			b.shareCuts.Add(1)
+			s.awShrinkLocked(limit, now)
+			return
+		}
+	}
 	if nb := uint32(a.cfg.NeighborMax); a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && (a.nRecent >= awRecent || a.cfg.NeighborOne) {
 		// a light neighbour is capped against only while this stream's own
 		// probes (its link) show a queue beyond the jitter: two in a row
@@ -505,6 +557,9 @@ func (s *Stream) awPushed(n uint32) {
 		return
 	}
 	b.grows.Add(1)
+	if a.cfg.Share > 0 && !a.grown.Load() {
+		b.heavyN.Add(1) // counted before the next sweep, so streams starting together share
+	}
 	a.win, a.extra, a.pendingUPD = nw, a.extra+d, true
 	a.nRecent = 0 // the next verdicts are about the new window
 	a.grown.Store(true)
@@ -631,6 +686,10 @@ func (s *Stream) awTick(now time.Time, pressured bool, fair uint32) bool {
 	if nb := uint32(a.cfg.NeighborMax); !a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && s.sess.awNeighborsLocked(s, now) {
 		shrink, nw = true, max(nb, a.base) // a light user came to this link: at once
 		b.neighborCuts.Add(1)
+	}
+	if sc := a.shareCap(); sc > 0 && a.win > sc {
+		shrink, nw = true, sc // more heavy streams than when it grew: down to the share
+		b.shareCuts.Add(1)
 	}
 	if !shrink || a.numRecv-s.numRead > nw/2 {
 		return false

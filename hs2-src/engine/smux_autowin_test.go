@@ -34,6 +34,12 @@ func TestAutoWinFromEnv(t *testing.T) {
 	if aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_REL": "1", "HS2_SMUX_AUTOWIN_NB1": "1"})); !aw.Rel || !aw.NeighborOne {
 		t.Fatalf("rel / nb1: %+v", aw)
 	}
+	if aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_SHARE_MB": "32"})); aw.Share != 32<<20 {
+		t.Fatalf("share: %+v", aw)
+	}
+	if aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1"})); aw.Share != 0 {
+		t.Fatalf("share off by default: %+v", aw)
+	}
 	aw = autoWinFromEnv(env(map[string]string{"HS2_SMUX_AUTOWIN": "1", "HS2_SMUX_AUTOWIN_MAX_MB": "x", "HS2_SMUX_AUTOWIN_DIV": "1"}))
 	if aw.Max != 32<<20 || aw.UpdateDiv != 8 {
 		t.Fatalf("bad values fall back: %+v", aw)

@@ -90,6 +90,10 @@ func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 		// HS2_SMUX_AUTOWIN_NB1=1 (with REL): one probe over qLow is enough
 		// for the light-neighbour brake (default: two in a row).
 		NeighborOne: strings.TrimSpace(get("HS2_SMUX_AUTOWIN_NB1")) == "1",
+		// HS2_SMUX_AUTOWIN_SHARE_MB (0: off): the total window the concurrently
+		// heavy streams share — one alone keeps MAX_MB, n together each
+		// max(base, SHARE/n), so 8 uploads hold about one BDP, not 8x MAX
+		Share: num("HS2_SMUX_AUTOWIN_SHARE_MB", 0, 0, 4096) << 20,
 	}
 }
 
