@@ -133,6 +133,9 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 		base = pq.base()
 		q = max(0, q-base)
 	}
+	if stripeStepMax > 0 && !m.iran {
+		q = pq.stepAdjust(now, q, target)
+	}
 	m.stQ = q
 	live := 0
 	for _, s := range m.subs {
@@ -333,6 +336,7 @@ type stripeQ struct {
 	hist  []time.Duration
 	histI int
 	bq    time.Duration
+	step  stepB // HS2_MCONN_STRIPE_STEP (mconn_stripe_linkbase.go)
 }
 
 // stripeLinkQ: one link at the last measurement.

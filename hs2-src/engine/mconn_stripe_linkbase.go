@@ -59,3 +59,54 @@ func (lb *linkBase) excess(q time.Duration) (time.Duration, bool) {
 	}
 	return max(0, q-lb.b), true
 }
+
+// stripeStepMax: HS2_MCONN_STRIPE_STEP (ms، پیش‌فرض ۰: خاموش) — جذب پلهٔ مسیر.
+// شمارنده‌ها نشان داد دروازه با «پلهٔ» تأخیر مسیر (عوض شدن مسیر، +چند ms برای
+// همهٔ لینک‌ها) می‌بندد، نه با صفی که خود stripe ساخته: srtt همهٔ لینک‌ها بالا
+// می‌رود و تا کمینهٔ پنجره (QWIN_MS، ۸ ثانیه) آن را نپذیرد، هر ۱۰۰ms برش و
+// نگه‌داشت ۲ ثانیه‌ای سراسری. قاعده: اگر صف (پس از پایهٔ نسبی) پیوسته
+// stripeStepWait بالای هدف ماند، پهنای stripeها در این مدت بارها نصف شده و صف
+// خودشان باید خالی شده باشد؛ پس آن صف از ما نیست و به‌عنوان پایه پذیرفته
+// می‌شود (تا سقف این کلید). پایه بی‌درنگ با پایین آمدن صف پایین می‌آید، پس
+// پس از برگشت مسیر چیزی بخشیده نمی‌ماند.
+var stripeStepMax = envMsDefault("HS2_MCONN_STRIPE_STEP", 0)
+
+const stripeStepWait = 2 * time.Second
+
+// stepB (زیر stripeQ.mu): پایهٔ پله.
+type stepB struct {
+	b       time.Duration
+	armed   bool
+	armAt   time.Time
+	rebases uint64
+}
+
+// stepAdjust: صف دروازه پس از کم کردن پایهٔ پله (دانلود؛ کلید خاموش: همان q).
+func (p *stripeQ) stepAdjust(now time.Time, q, target time.Duration) time.Duration {
+	if stripeStepMax <= 0 || p.light || p.fixed {
+		return q
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	s := &p.step
+	if q < s.b {
+		s.b = q
+	}
+	qa := q - s.b
+	if qa <= target {
+		s.armed = false
+		return qa
+	}
+	if !s.armed {
+		s.armed, s.armAt = true, now
+		return qa
+	}
+	if now.Sub(s.armAt) >= stripeStepWait {
+		s.b = min(q, stripeStepMax)
+		s.armed = false
+		s.rebases++
+		stripeDiag.stepRebase.Add(1)
+		return max(0, q-s.b)
+	}
+	return qa
+}
