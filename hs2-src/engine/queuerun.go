@@ -71,13 +71,14 @@ func (r *qRunner) track(car *tlscarrier.Carrier) func() {
 const qBusyBytes = 64 << 10
 
 // qGroup is one tick's measurement of the links behind one controller: the
-// median queueing delay of the busy ones (smoothed RTT over the lowest; -1
-// when none is busy), what they all delivered (bytes/s), the share of the
-// segments they sent that were retransmits, and the peers they go to.
+// queueing delay of the busy ones (smoothed RTT over the lowest, their lower
+// quartile — see qDelayOf; -1 when none is busy), what they all delivered
+// (bytes/s), the segments they sent and retransmitted, and the peers (address
+// and port: only the tunnel's own links are shaped) they go to.
 type qGroup struct {
 	in                   qIn
-	peers                []netip.Addr
-	seen                 map[netip.Addr]bool
+	peers                []netip.AddrPort
+	seen                 map[netip.AddrPort]bool
 	delays               []time.Duration
 	acked, segs, retrans uint64
 }
@@ -99,11 +100,11 @@ func (r *qRunner) measure(dt time.Duration) map[string]*qGroup {
 		}
 		g := groups[prev.dev]
 		if g == nil {
-			g = &qGroup{seen: map[netip.Addr]bool{}}
+			g = &qGroup{seen: map[netip.AddrPort]bool{}}
 			groups[prev.dev] = g
 		}
 		if ap, err := netip.ParseAddrPort(tc.RemoteAddr().String()); err == nil {
-			if a := ap.Addr().Unmap(); !g.seen[a] {
+			if a := netip.AddrPortFrom(ap.Addr().Unmap(), ap.Port()); !g.seen[a] {
 				g.seen[a] = true
 				g.peers = append(g.peers, a)
 			}
@@ -122,16 +123,36 @@ func (r *qRunner) measure(dt time.Duration) map[string]*qGroup {
 		}
 	}
 	for _, g := range groups {
-		g.in = qIn{delay: -1, g: float64(g.acked) / dt.Seconds()}
-		if len(g.delays) > 0 {
-			sort.Slice(g.delays, func(i, j int) bool { return g.delays[i] < g.delays[j] })
-			g.in.delay = g.delays[len(g.delays)/2]
-		}
-		if g.segs > 0 {
-			g.in.loss = float64(g.retrans) / float64(g.segs)
-		}
+		g.in = qIn{delay: qDelayOf(g.delays), g: float64(g.acked) / dt.Seconds()}
+		g.in.loss = qLossOf(g.retrans, g.segs, 0)
 	}
 	return groups
+}
+
+// qDelayOf is the queueing delay of a tick's busy links: their lower quartile,
+// -1 when none is busy. A queue at the path's bottleneck holds every link
+// that crosses it; a few links whose own round trip wanders (a busy peer, a
+// path's jitter) must not look like one — the median of a handful of links
+// is one of them.
+func qDelayOf(d []time.Duration) time.Duration {
+	if len(d) == 0 {
+		return -1
+	}
+	sort.Slice(d, func(i, j int) bool { return d[i] < d[j] })
+	return d[len(d)/4]
+}
+
+// qLossOf is the share of the segments sent that the path lost: the
+// retransmits less the drops of the tunnel's own shaper (each a retransmit
+// the cap made, not the path).
+func qLossOf(retrans, segs, shaperDrops uint64) float64 {
+	if segs == 0 {
+		return 0
+	}
+	if shaperDrops >= retrans {
+		return 0
+	}
+	return float64(retrans-shaperDrops) / float64(segs)
 }
 
 // qLane is one controller and the shaper it drives.
@@ -139,6 +160,7 @@ type qLane struct {
 	ctl  qCtl
 	sh   *qShaper
 	logf func(string, ...any)
+	off  bool // the shaper cannot work here: the lane stands aside, quietly
 }
 
 func (r *qRunner) run(ctx context.Context, logf func(string, ...any)) {
@@ -175,9 +197,10 @@ func (r *qRunner) run(ctx context.Context, logf func(string, ...any)) {
 				lane(dev)
 			}
 			for dev, l := range lanes {
-				in, peers := qIn{delay: -1}, []netip.Addr(nil) // no live link there (now)
+				in, peers := qIn{delay: -1}, []netip.AddrPort(nil) // no live link there (now)
 				if g := groups[dev]; g != nil {
 					in, peers = g.in, g.peers
+					in.loss = qLossOf(g.retrans, g.segs, l.sh.drops())
 				}
 				in.now = now
 				l.step(in, peers)
@@ -187,7 +210,10 @@ func (r *qRunner) run(ctx context.Context, logf func(string, ...any)) {
 }
 
 // step runs one tick of a lane: the controller, then its shaper.
-func (l *qLane) step(in qIn, peers []netip.Addr) {
+func (l *qLane) step(in qIn, peers []netip.AddrPort) {
+	if l.off {
+		return
+	}
 	rate, note := l.ctl.step(in)
 	if queueDebug {
 		l.logf("queue-dbg delay=%s got=%.1f loss=%.2f%% cap=%.1f Mbit/s", in.delay.Round(time.Millisecond), mbitps(in.g), 100*in.loss, mbitps(rate))
@@ -197,7 +223,10 @@ func (l *qLane) step(in qIn, peers []netip.Addr) {
 	}
 	if rate > 0 && len(peers) > 0 {
 		if !l.sh.apply(rate, peers) {
-			l.ctl = qCtl{release: in.now.Add(qReleaseMax), releaseFor: qReleaseMax} // cannot shape here: stop trying for a while
+			// Cannot shape here (no tc, an operator's qdisc): the shaper said
+			// so once; the lane stands aside for good — no cap notes that
+			// change nothing.
+			l.ctl, l.off = qCtl{}, true
 		}
 	} else {
 		l.sh.remove()

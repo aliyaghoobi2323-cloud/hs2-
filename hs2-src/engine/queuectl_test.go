@@ -199,7 +199,7 @@ func TestQueueCtlStepsAsideOnLossyPath(t *testing.T) {
 		t.Fatal("no cap on the clean path")
 	}
 	var note string
-	for i := 0; i < qLossTicks; i++ { // then the path starts losing
+	for i := 0; i < qMinCapTicks+qLossTicks && capRate > 0; i++ { // then the path starts losing
 		now = now.Add(healthTick)
 		capRate, note = q.step(qIn{now: now, delay: 5 * time.Millisecond, g: capRate, loss: 0.04})
 	}
@@ -226,8 +226,9 @@ func TestQueueCtlShortDownloadStartsFast(t *testing.T) {
 			tick(qC, 95*time.Millisecond)
 		}
 	}
-	tick(0.5*qC, 95*time.Millisecond) // the ramp's queue, at half the path
-	tick(0.5*qC, 95*time.Millisecond)
+	for i := 0; i < qStartTicks; i++ {
+		tick(0.5*qC, 95*time.Millisecond) // the ramp's queue, at half the path
+	}
 	if capRate == 0 || capRate > 0.6*qC {
 		t.Fatalf("first cap %.1f Mbit/s, want ~0.475 of the path", mbitps(capRate))
 	}
@@ -246,46 +247,10 @@ func TestQueueCtlShortDownloadStartsFast(t *testing.T) {
 	if capRate != 0 {
 		t.Fatal("cap kept after the download ended")
 	}
-	tick(0.5*qC, 95*time.Millisecond) // the next download
-	tick(0.5*qC, 95*time.Millisecond)
+	for i := 0; i < qStartTicks; i++ {
+		tick(0.5*qC, 95*time.Millisecond) // the next download
+	}
 	if capRate < 0.9*qC {
 		t.Fatalf("the next download's cap starts at %.1f Mbit/s; the path's %.1f was seen a minute ago", mbitps(capRate), mbitps(qC))
-	}
-}
-
-// HS2_QUEUE_CTL_LOSSHOLD: a cap removed for loss is not set again at once.
-func TestQCtlLossHold(t *testing.T) {
-	old := qLossHold
-	t.Cleanup(func() { qLossHold = old })
-	for _, hold := range []bool{false, true} {
-		qLossHold = hold
-		var q qCtl
-		now := time.Unix(1000, 0)
-		tick := func(d time.Duration, loss float64) float64 {
-			now = now.Add(2 * time.Second)
-			r, _ := q.step(qIn{now: now, delay: d, g: 20e6, loss: loss})
-			return r
-		}
-		tick(40*time.Millisecond, 0.01)
-		if tick(40*time.Millisecond, 0.01) == 0 {
-			t.Fatal("no cap on a queue")
-		}
-		for i := 0; i < 2; i++ { // grace
-			tick(40*time.Millisecond, 0.10)
-		}
-		for i := 0; i < qLossTicks; i++ {
-			tick(10*time.Millisecond, 0.10)
-		}
-		if q.rate != 0 {
-			t.Fatalf("hold=%v: cap kept under loss", hold)
-		}
-		tick(40*time.Millisecond, 0.01)
-		r := tick(40*time.Millisecond, 0.01)
-		if hold && r != 0 {
-			t.Fatalf("cap set again %v after a loss removal", 4*time.Second)
-		}
-		if !hold && r == 0 {
-			t.Fatal("without the key the cap comes back (old behaviour)")
-		}
 	}
 }

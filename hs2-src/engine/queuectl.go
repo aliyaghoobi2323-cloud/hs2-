@@ -3,7 +3,6 @@ package engine
 import (
 	"fmt"
 	"math"
-	"os"
 	"time"
 )
 
@@ -45,7 +44,20 @@ import (
 //     bottleneck, and holding back only gives them the tunnel's share: no
 //     cap, and none for a while (doubling, up to qReleaseMax);
 //   - a lossy path (retransmits over qMaxLoss of what the links send): no
-//     cap — the loss, not the queue, holds the users there.
+//     cap — the loss, not the queue, holds the users there. The loss counted
+//     is the path's, not the cap's own: while capped, the shaper's own drops
+//     (cake drops what the links send over the cap, and each comes back as a
+//     retransmit) are taken out of the retransmits by the runner (qLossOf).
+//     In production on 2026-11-09 they were not: a cap at 64 Mbit/s "saw"
+//     2–26% loss that the cap itself made, was removed 10–14 s after it was
+//     set, the queue came back, the cap with it: 73 caps in 31 minutes.
+//
+// Against flapping (the same day): a cap is set only after the queue shows
+// on qStartTicks ticks in a row (~10 s — not a burst, not a path's natural
+// jitter: srtt-min_rtt there has a median of ~2 ms, p75 3–4 ms); one is kept
+// at least qMinCapTicks before loss can take it off; and every removal but
+// the idle one (demand gone) keeps it off for a while, doubling while it
+// keeps coming back (qReleaseMin..qReleaseMax).
 type qCtl struct {
 	rate       float64   // the cap, bytes/s; 0 = none
 	high       int       // consecutive ticks with a queue, uncapped
@@ -54,6 +66,7 @@ type qCtl struct {
 	idle       int       // capped ticks with demand well under the cap
 	grace      int       // ticks the first cap gets to drain the queue it found
 	lossy      int       // capped ticks with loss over qMaxLoss
+	age        int       // ticks the current cap has been on
 	path       float64   // the cap at the last overshoot: the path's rate, in the cap's units
 	pathAt     time.Time // ... when it was seen (kept across caps for qPathMemory)
 	good       float64   // the last cap that raised no queue
@@ -72,6 +85,8 @@ const (
 	qPathMemory = 10 * time.Minute
 	qUpSlow     = 1.005 // ... and near it: each overshoot is a queue every user waits
 	qNearPath   = 0.985
+	qStartTicks = 5 // ~10 s of a queue, uncapped, before a cap: not a burst, not jitter
+	qMinCapTicks = 15 // ~30 s a cap is kept at least before loss takes it off
 	qGraceTicks = 2 // ~4 s for the first cap to drain the queue it found
 	qHoldTicks  = 5 // ~10 s after a step down before it rises again
 	qFullFrac   = 0.90
@@ -89,19 +104,6 @@ const (
 	qLossTicks = 3
 )
 
-// qLossHold: HS2_QUEUE_CTL_LOSSHOLD=1 (default off). A cap removed for loss
-// is not set again for releaseFor (doubling from qReleaseMin up to
-// qReleaseMax, as the not-its-own-queue rule). Without it the controller
-// cycles: uncapped, the path's delay (jitter, or a queue that is not the
-// tunnel's) sets a cap; cake's own drops under the cap read as retransmits
-// over qMaxLoss, so ~6 s later the cap goes; ~4 s later the delay sets it
-// again. While capped, cake shares the cap evenly over the ~150 link flows
-// (all one host pair), so one download's link gets 1/N of it: in the
-// production-like lab (crowd 3000, pool 150, 1% loss, delay 30-70 ms) a
-// single-stream download fell from 50-90 to 1-3 Mbit/s for exactly the
-// capped seconds — the occasional slow test.
-var qLossHold = os.Getenv("HS2_QUEUE_CTL_LOSSHOLD") == "1"
-
 // qIn is one tick's measurement.
 type qIn struct {
 	now   time.Time
@@ -118,7 +120,7 @@ func (q *qCtl) step(in qIn) (float64, string) {
 			q.high = 0
 			return 0, ""
 		}
-		if q.high++; q.high < 2 {
+		if q.high++; q.high < qStartTicks {
 			return 0, ""
 		}
 		// A queue forms while the downloads' BBR is still ramping up, so what
@@ -127,7 +129,7 @@ func (q *qCtl) step(in qIn) (float64, string) {
 		// not known yet and the cap rises fast (qUpFirst) to the first
 		// overshoot, which tells it. No hold: in the lab a hold and 2% steps
 		// cost a 20 s download ~9% of its throughput.
-		q.high, q.stuck, q.idle, q.hold, q.grace, q.good = 0, 0, 0, 0, qGraceTicks, 0
+		q.high, q.stuck, q.idle, q.hold, q.grace, q.good, q.lossy, q.age = 0, 0, 0, 0, qGraceTicks, 0, 0, 0
 		start := qStartFrac * in.g
 		if q.path > 0 && in.now.Sub(q.pathAt) < qPathMemory {
 			start = math.Max(start, qBackFrac*q.path)
@@ -138,6 +140,7 @@ func (q *qCtl) step(in qIn) (float64, string) {
 		return q.rate, fmt.Sprintf("queue: the path's queue holds the links %s over their lowest round trip at %.1f Mbit/s — tunnel egress capped at %.1f Mbit/s so it drains (HS2_QUEUE_CTL)",
 			in.delay.Round(time.Millisecond), mbitps(in.g), mbitps(q.rate))
 	}
+	q.age++
 	if q.hold > 0 {
 		q.hold--
 	}
@@ -147,16 +150,10 @@ func (q *qCtl) step(in qIn) (float64, string) {
 	}
 	q.grace = 0
 	if in.loss > qMaxLoss {
-		if q.lossy++; q.lossy >= qLossTicks {
+		if q.lossy++; q.lossy >= qLossTicks && q.age >= qMinCapTicks {
 			q.rate, q.lossy, q.stuck, q.idle = 0, 0, 0, 0
-			if qLossHold {
-				// HS2_QUEUE_CTL_LOSSHOLD: no new cap for a while, as after a
-				// queue that is not the tunnel's own (see qLossHold)
-				q.releaseFor = min(max(2*q.releaseFor, qReleaseMin), qReleaseMax)
-				q.release = in.now.Add(q.releaseFor)
-				return 0, fmt.Sprintf("queue: the path loses %.1f%% of what the links send — it limits them by its loss, not its queue; cap removed for %s", 100*in.loss, q.releaseFor)
-			}
-			return 0, fmt.Sprintf("queue: the path loses %.1f%% of what the links send — it limits them by its loss, not its queue; cap removed", 100*in.loss)
+			q.backOff(in.now)
+			return 0, fmt.Sprintf("queue: the path loses %.1f%% of what the links send — it limits them by its loss, not its queue; cap removed for %s", 100*in.loss, q.releaseFor)
 		}
 	} else {
 		q.lossy = 0
@@ -180,8 +177,7 @@ func (q *qCtl) step(in qIn) (float64, string) {
 		}
 		if q.stuck >= qStuckTicks {
 			q.rate, q.stuck = 0, 0
-			q.releaseFor = min(max(2*q.releaseFor, qReleaseMin), qReleaseMax)
-			q.release = in.now.Add(q.releaseFor)
+			q.backOff(in.now)
 			return 0, fmt.Sprintf("queue: capping did not drain it (still %s at %.1f Mbit/s, all the path delivered) — the queue is not the tunnel's own; cap removed for %s",
 				in.delay.Round(time.Millisecond), mbitps(in.g), q.releaseFor)
 		}
@@ -221,6 +217,14 @@ func (q *qCtl) step(in qIn) (float64, string) {
 		q.idle, q.stuck = 0, 0
 	}
 	return q.rate, ""
+}
+
+// backOff keeps the cap off from now for a while: qReleaseMin, doubling each
+// time it comes back to be removed again, up to qReleaseMax. Only a cap that
+// ended because demand did (idle) starts the doubling over.
+func (q *qCtl) backOff(now time.Time) {
+	q.releaseFor = min(max(2*q.releaseFor, qReleaseMin), qReleaseMax)
+	q.release = now.Add(q.releaseFor)
 }
 
 // floorOf keeps a cap at qMinRate or more.

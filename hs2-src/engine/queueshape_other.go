@@ -14,7 +14,8 @@ func newQShaper(logf func(string, ...any)) *qShaper { return &qShaper{logf: logf
 
 func newQShaperOn(_ string, logf func(string, ...any)) *qShaper { return &qShaper{logf: logf} }
 
-func (s *qShaper) apply(float64, []netip.Addr) bool { return false }
-func (s *qShaper) remove()                          {}
+func (s *qShaper) apply(float64, []netip.AddrPort) bool { return false }
+func (s *qShaper) remove()                              {}
+func (s *qShaper) drops() uint64                        { return 0 }
 
 func qLinkDev(*net.TCPConn) string { return "" }
