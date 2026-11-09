@@ -254,7 +254,7 @@ func (s *qShaper) install(dev string, rate float64) bool {
 		s.removeLocked()
 		return s.refuse("%v", err)
 	}
-	if _, err := qTC("qdisc", "replace", "dev", dev, "parent", cls, "cake", "besteffort", "flows"); err != nil {
+	if _, err := qTC("qdisc", "replace", "dev", dev, "parent", cls, "cake", "besteffort", qCakeFlows); err != nil {
 		if _, err := qTC("qdisc", "replace", "dev", dev, "parent", cls, "fq_codel"); err != nil { // no cake module
 			s.removeLocked()
 			return s.refuse("%v", err)
@@ -356,3 +356,18 @@ func qLinkDev(tc *net.TCPConn) string {
 	}
 	return ""
 }
+
+// qCakeFlows: cake's flow mode under the cap. "flows" (the default) shares
+// the cap evenly over the tunnel's links — every link is one flow of the
+// same host pair, so with ~150 links one download's link gets 1/150 of the
+// cap (production-like lab: a single-stream download 1-3 Mbit/s while
+// capped, 50-90 otherwise). HS2_QUEUE_CTL_FLOWBLIND=1 (default off): one
+// queue under cake's AQM — each link takes what its own TCP asks for, a
+// light link's packets wait at most cake's short standing queue (~5 ms
+// target) instead of none.
+var qCakeFlows = func() string {
+	if os.Getenv("HS2_QUEUE_CTL_FLOWBLIND") == "1" {
+		return "flowblind"
+	}
+	return "flows"
+}()
