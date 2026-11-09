@@ -44,6 +44,9 @@ import (
 //	        older reader skips it with the rest of the payload.
 //	        ext bit0: mconn stripe — it reads STRIPE records
 //	        (HS2_MCONN_STRIPE, mconn_stripe.go)
+//	        ext bit1: taken by the UDP fast path (capExtUDPFast, another branch)
+//	        ext bit2: mconn upload stripe — it takes part in a striped
+//	        upload (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
 //
 // A reader takes the fields it knows from the first n bytes and skips the rest,
 // so the payload can grow compatibly (a v1 reader sees only maxLinks).

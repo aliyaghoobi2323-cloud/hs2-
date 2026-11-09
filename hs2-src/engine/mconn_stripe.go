@@ -116,6 +116,9 @@ func infoExt() uint32 {
 	var e uint32
 	if mconnOn.Load() && mconnLite.Load() && stripeK.Load() > 0 {
 		e |= capExtMConnStripe
+		if stripeUp.Load() {
+			e |= capExtMConnStripeUp // mconn_stripe_up.go
+		}
 	}
 	return e
 }
@@ -130,6 +133,9 @@ var stripeStat struct {
 	bytes   atomic.Uint64 // payload bytes sent by the stripe rule
 	refused atomic.Uint64 // growth refused: no free link or no slot
 	cuts    atomic.Uint64 // scavenger width cuts (a queue on the path)
+	// HS2_MCONN_STRIPE_UP (mconn_stripe_up.go)
+	rxActive    atomic.Int32  // exit receivers holding a stripe slot now
+	reorderGrow atomic.Uint64 // reorder bound growths
 }
 
 // stripeState is an mConn's stripe bookkeeping (under mConn.mu).
@@ -141,10 +147,11 @@ type stripeState struct {
 	stSample  time.Time // Iran: the rate sample
 	stSent    uint64
 	stRecvd   uint64
-	stRR      int // sender: round-robin start among equal queues
-	stLogged  int // Iran: the largest stripe logged
-	stN       int // subs ever marked stripe (0: the stripe rule is never looked at)
-	stHot     int // Iran: consecutive samples at the growth rate
+	stRR      int  // sender: round-robin start among equal queues
+	stLogged  int  // Iran: the largest stripe logged
+	stN       int  // subs ever marked stripe (0: the stripe rule is never looked at)
+	stHot     int  // Iran: consecutive samples at the growth rate
+	stUp      bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
 
 	firstRx atomic.Int64 // diagnostics (HS2_MCONN_STRIPE_LOG): unix ns of the first byte read raw
 
@@ -181,6 +188,9 @@ func (m *mConn) liveStripeLocked() int {
 func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	m.stripeAutoWinLocked(now) // HS2_SMUX_AUTOWIN (smux_autowin.go)
 	if m.stK < 2 || m.ended || m.closing || m.peerFin || m.wclosed {
+		if stripeLog && m.stN > 0 && !m.ended {
+			log.Printf("stripe %x: tick off (closing=%v peerFin=%v wclosed=%v)", m.id&0xffffff, m.closing, m.peerFin, m.wclosed)
+		}
 		return false
 	}
 	if m.stSample.IsZero() {
@@ -192,16 +202,23 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		return false
 	}
 	moved := max(sent-m.stSent, recvd-m.stRecvd)
+	up := sent-m.stSent > recvd-m.stRecvd // the upload is the faster direction
 	m.stSample, m.stSent, m.stRecvd = now, sent, recvd
 	if m.stOpening || m.handshaking || m.lightOpening || now.Before(m.stRetryAt) || m.callOn || m.callUp {
+		if stripeLog && m.stN > 0 {
+			log.Printf("stripe %x: tick held (opening=%v hs=%v light=%v retry=%v call=%v/%v)", m.id&0xffffff, m.stOpening, m.handshaking, m.lightOpening, now.Before(m.stRetryAt), m.callOn, m.callUp)
+		}
 		return false // a call (HS2_MCONN_CALL) is copied, never striped
 	}
 	n := 1 + m.liveStripeLocked()
-	if n >= m.stK {
+	rate := float64(moved) / w.Seconds()
+	if !m.stripeKCapLocked(n, rate) { // n >= stK (past it only with HS2_MCONN_STRIPE_UP)
 		return false
 	}
-	rate := float64(moved) / w.Seconds()
 	if rate < float64(n)*float64(stripeSubRate.Load()) {
+		if stripeLog && m.stN > 0 && rate > 1e6 {
+			log.Printf("stripe %x: under the growth rate (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
+		}
 		m.stHot = 0
 		return false
 	}
@@ -210,7 +227,17 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		// a second or two, and each would take (and the pool dial) links
 		return false
 	}
-	if stripeQTarget.Load() > 0 && !m.stripeAllUsedLocked(now) {
+	used := m.stripeAllUsedLocked
+	if m.stUp && up {
+		used = m.stripeUpAllUsedLocked // an upload: the subs Iran sent on (mconn_stripe_up.go)
+	}
+	if m.stUp && up && n >= 2 && !m.stripeUpRoomLocked() {
+		if stripeLog {
+			log.Printf("stripe %x: no growth, upload path queue %v (%.1f Mbit/s over %d)", m.id&0xffffff, m.stQ, rate*8/1e6, n)
+		}
+		return false // mconn_stripe_up.go: a sub more only while the gate would widen
+	}
+	if stripeQTarget.Load() > 0 && !used(now) {
 		if stripeLog {
 			log.Printf("stripe %x: no growth, a sub unused (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
 		}
@@ -228,6 +255,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		r := &m.r
 		r.mu.Lock()
 		r.oooMax = stripeReorder
+		r.oooGrow = stripeUp.Load() // HS2_MCONN_STRIPE_UP: more on demand
 		r.mu.Unlock()
 	}
 	m.stOpening = true
@@ -267,7 +295,8 @@ func (m *mConn) stripeIdleLocked() {
 		stripeStat.active.Add(-1)
 		r := &m.r
 		r.mu.Lock()
-		r.oooMax = 0
+		r.releaseOOOLocked(0)
+		r.oooGrow = false
 		r.mu.Unlock()
 	}
 }
@@ -359,6 +388,7 @@ func (m *mConn) onStripe(s *msub) {
 			}
 		}
 		stripeStat.subs.Add(1)
+		m.stripeRxJoin() // HS2_MCONN_STRIPE_UP (mconn_stripe_up.go)
 		m.tr.ev("stripe: sub %d joins", s.idx)
 		m.sendCond.Broadcast()
 	}
@@ -409,6 +439,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	// the scavenger's width (mconn_stripe_scav.go): only the first w stripe
 	// subs (in the order they joined) may take chunks; -1: all
 	w := m.stripeWidthLocked(p, time.Now())
+	if w == 0 && m.stUp {
+		w = 1 // HS2_MCONN_STRIPE_UP: never narrower than the ungated pair before it (mconn_stripe_up.go)
+	}
 	for i := range nsubs {
 		s := m.subs[(m.stRR+i)%nsubs]
 		if s.retired || s.dead || (!s.stripe && s != p) {
@@ -454,6 +487,7 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 		}
 	}
 	best.lastPush = now
+	best.stPushed = now
 	liteBud.add(now.Unix(), c.n, 0)
 	stripeStat.bytes.Add(uint64(c.n))
 	m.noteQueueLocked()

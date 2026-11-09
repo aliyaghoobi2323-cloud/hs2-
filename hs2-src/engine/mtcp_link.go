@@ -369,6 +369,7 @@ func newEdgeLink(car *tlscarrier.Carrier, sampler *obfs.LengthSampler) (*mtcpLin
 	if mtr.quiet != nil {
 		mtr.quiet.setUsers(func() bool { return l.Active() > 0 })
 	}
+	trackEdgeLinkUp(l) // HS2_MCONN_STRIPE_UP's gate (mconn_stripe_up.go); nothing when off
 	return l, nil
 }
 

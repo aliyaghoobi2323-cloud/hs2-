@@ -346,6 +346,7 @@ type msub struct {
 	closeDone  bool      // the handshake is over (Iran: ACK read; Kharej: DONE read)
 	txEnd      uint64    // end offset of the last byte placed on it (CLOSE-ACK)
 	stripe     bool      // carries the stripe (HS2_MCONN_STRIPE, mconn_stripe.go)
+	stPushed   time.Time // the stripe rule last put a chunk on it (HS2_MCONN_STRIPE_UP)
 
 	// stMtr (exit): the link meter whose stripeN this stripe sub raised
 	// (released in close).
@@ -424,6 +425,12 @@ type mrecv struct {
 	ooo        []rchunk // out-of-order, sorted by off, non-overlapping, all > next
 	oooBytes   int
 	oooMax     int // out-of-order bound (0: mRecvBuf; a stripe raises it, mconn_stripe.go)
+	// HS2_MCONN_STRIPE_UP (mconn_stripe_up.go): the bound may grow on demand
+	// (oooGrow); oooExtra is the room taken from the process's extra,
+	// oooSlot an exit receiver's stripe slot.
+	oooGrow  bool
+	oooExtra int
+	oooSlot  bool
 
 	fin    bool
 	finOff uint64
@@ -1428,6 +1435,9 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			return
 		}
 		if r.oooBytes >= max(r.oooMax, mRecvBuf) {
+			if r.oooGrow && r.growOOOLocked() { // HS2_MCONN_STRIPE_UP
+				continue
+			}
 			r.cond.Wait() // too far ahead of the gap: hold this sub
 			continue
 		}
@@ -1812,6 +1822,8 @@ func (m *mConn) end(err error, rst bool) {
 	}
 	finished := r.fin
 	r.dropOOOLocked()
+	r.releaseOOOLocked(r.oooMax) // HS2_MCONN_STRIPE_UP: the grown room goes back
+	r.oooGrow = false
 	r.cond.Broadcast()
 	r.mu.Unlock()
 	close(m.die)

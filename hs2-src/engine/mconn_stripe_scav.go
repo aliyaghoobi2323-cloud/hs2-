@@ -90,8 +90,8 @@ func subMeter(s *msub) *linkMeter {
 // path's queue (stripePathQ). -1: no gate (off, or Iran), every stripe sub
 // may be used.
 func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
-	target := time.Duration(stripeQTarget.Load())
-	if target <= 0 || m.iran {
+	target := m.stripeTargetLocked()
+	if target <= 0 || m.iran && !m.stUp { // Iran gates an upload (HS2_MCONN_STRIPE_UP)
 		return -1
 	}
 	if !m.stWInit {
@@ -108,11 +108,15 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	m.stGateAt = now
 	own := make([]*linkMeter, 0, len(m.subs))
 	for _, s := range m.subs {
-		if mtr := subMeter(s); mtr != nil {
+		if mtr := m.subMeterOf(s); mtr != nil {
 			own = append(own, mtr)
 		}
 	}
-	q, measured := stripePathQ.delay(now, own)
+	pq := stripePathQ
+	if m.iran {
+		pq = stripeUpPathQ // the upload direction: Iran's own sockets
+	}
+	q, measured := pq.delay(now, own)
 	if m.stNoGate = !measured; m.stNoGate {
 		return -1 // no exit link tracked (nothing to measure the path with)
 	}
@@ -218,7 +222,9 @@ type stripeQ struct {
 	links map[*linkMeter]*stripeLinkQ
 	at    time.Time // the last measurement
 	fixed bool      // tests: every caller reads q
+	light bool      // also the active light links (lightQ; Iran's upload gate)
 	q     time.Duration
+	logAt time.Time // diagnostics (HS2_MCONN_STRIPE_LOG)
 }
 
 // stripeLinkQ: one link at the last measurement.
@@ -226,6 +232,12 @@ type stripeLinkQ struct {
 	acked uint64
 	q     time.Duration
 	busy  bool // acknowledged stripeBusyBytes since the look before
+	// active: acknowledged something since the look before (a light user's
+	// link too: Iran's upload gate, mconn_stripe_up.go)
+	active bool
+	// stat reads the link's TCP_INFO (Iran's links, stripeUpTrack); nil:
+	// the meter's tcp (the exit's)
+	stat func() (tcpStat, bool)
 }
 
 // stripeTrack counts an exit link's meter while it is up (the returned func
@@ -269,12 +281,19 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 		first := p.at.IsZero()
 		p.at = now
 		for mtr, l := range p.links {
-			st, ok := tcpStats(mtr.tcp)
+			var st tcpStat
+			var ok bool
+			if l.stat != nil {
+				st, ok = l.stat()
+			} else {
+				st, ok = tcpStats(mtr.tcp)
+			}
 			if !ok {
-				l.busy = false
+				l.busy, l.active = false, false
 				continue
 			}
 			l.busy = !first && l.acked != 0 && st.bytesAcked >= l.acked+stripeBusyBytes && st.minRttUs > 0
+			l.active = !first && l.acked != 0 && st.bytesAcked > l.acked && st.minRttUs > 0
 			l.acked = st.bytesAcked
 			l.q = 0
 			if st.rttUs > st.minRttUs {
@@ -288,11 +307,29 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 			ds = append(ds, l.q)
 		}
 	}
-	if len(ds) == 0 {
-		return 0, true
+	var lt []time.Duration
+	if p.light {
+		// Iran's upload (mconn_stripe_up.go): the light users' links too
+		for mtr, l := range p.links {
+			if l.active && !l.busy && !slices.Contains(own, mtr) {
+				lt = append(lt, l.q)
+			}
+		}
+		slices.Sort(lt)
 	}
 	slices.Sort(ds)
-	return ds[len(ds)/2], true
+	if stripeLog && p.light && now.Sub(p.logAt) >= time.Second {
+		p.logAt = now // diagnostics: what Iran's upload gate reads
+		log.Printf("stripe upq: links=%d own=%d busy-others=%v light=%v", len(p.links), len(own), ds, lt)
+	}
+	var q time.Duration
+	if len(ds) > 0 {
+		q = ds[len(ds)/2]
+	}
+	if len(lt) > 0 {
+		q = max(q, lightQ(lt))
+	}
+	return q, true
 }
 
 // stripeLogf logs a diagnostic line (callers check stripeLog).
