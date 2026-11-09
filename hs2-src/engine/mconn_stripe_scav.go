@@ -120,9 +120,11 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	}
 	q, measured := pq.delay(now, own)
 	if m.stNoGate = !measured; m.stNoGate {
+		stripeDiag.noMeas.Add(1)
 		return -1 // no exit link tracked (nothing to measure the path with)
 	}
 	var base time.Duration
+	qRaw := q
 	if stripeRel {
 		if stripeBaseMaxMulti >= 0 && !m.iran {
 			m.stripeNoteActive(now)
@@ -138,8 +140,10 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 			live++
 		}
 	}
+	why := gwFull
 	switch {
 	case q > target:
+		why = gwCut
 		if m.stW > 0 {
 			m.stW /= 2
 			stripeStat.cuts.Add(1)
@@ -153,8 +157,20 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	case q < target/2 && now.Sub(m.stGrowAt) >= stripeQGrow && m.stW < live && m.stripeGrowTokenLocked(now):
 		m.stW++
 		m.stGrowAt = now
+		why = gwGrow
+	default:
+		switch {
+		case m.stW >= live:
+		case q >= target/2:
+			why = gwBand
+		case now.Sub(m.stGrowAt) < stripeQGrow:
+			why = gwHold
+		default:
+			why = gwToken
+		}
 	}
 	m.stW = min(m.stW, live)
+	stripeDiagGate(why, m.stW, live, qRaw, q, base, pq.busyN())
 	if stripeLog && now.Sub(m.stLogAt) >= time.Second {
 		m.stLogAt = now
 		log.Printf("stripe gate %x: q=%v base=%v w=%d live=%d", m.id&0xffffff, q.Round(100*time.Microsecond), base.Round(100*time.Microsecond), m.stW, live)
@@ -330,6 +346,7 @@ type stripeLinkQ struct {
 	// stat reads the link's TCP_INFO (Iran's links, stripeUpTrack); nil:
 	// the meter's tcp (the exit's)
 	stat func() (tcpStat, bool)
+	win  qwinMin // HS2_MCONN_STRIPE_QWIN_MS (mconn_stripe_diag.go)
 }
 
 // stripeTrack counts an exit link's meter while it is up (the returned func
@@ -388,8 +405,12 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 			l.active = !first && l.acked != 0 && st.bytesAcked > l.acked && st.minRttUs > 0
 			l.acked = st.bytesAcked
 			l.q = 0
-			if st.rttUs > st.minRttUs {
-				l.q = time.Duration(st.rttUs-st.minRttUs) * time.Microsecond
+			lo := st.minRttUs
+			if stripeQWin > 0 && st.rttUs > 0 {
+				lo = max(lo, l.win.note(now, st.rttUs))
+			}
+			if st.rttUs > lo {
+				l.q = time.Duration(st.rttUs-lo) * time.Microsecond
 			}
 		}
 		if stripeRel {
@@ -397,6 +418,19 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 		}
 	}
 	return p.pickLocked(now, own, true), true
+}
+
+// busyN (diagnostics): busy links at the last measurement.
+func (p *stripeQ) busyN() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	n := 0
+	for _, l := range p.links {
+		if l.busy {
+			n++
+		}
+	}
+	return n
 }
 
 // pickLocked: the path queue the links not in own show, from the last

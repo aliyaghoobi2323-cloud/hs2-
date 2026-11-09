@@ -288,6 +288,52 @@ type liveStatus struct {
 	ObsSmuxWinShrinks      uint64  `json:"obs_smux_win_shrinks,omitempty"`
 	ObsSmuxWinQueueCuts    uint64  `json:"obs_smux_win_queue_cuts,omitempty"`
 	ObsSmuxWinNeighborCuts uint64  `json:"obs_smux_win_neighbor_cuts,omitempty"`
+	// HS2_MCONN_STRIPE (همیشه، بی‌کلید): اتصال‌های پخش‌شده الان (ایران /
+	// گیرندهٔ خارج)، از آغاز: subها، بایت‌های قاعدهٔ stripe و بایت‌های روی
+	// subهای غیر primary، تصمیم‌های دروازهٔ فرستنده به تفکیک علت (grow رشد،
+	// cut برش برای صف بالای هدف، band صف بین هدف/۲ و هدف، hold نگه‌داشت پس
+	// از برش، token سطل سراسری خالی، full باز کامل)، closed تصمیم‌هایی که
+	// پهنا ۰ ماند با sub زنده، و در بازهٔ گذشته میانگین/بیشینهٔ پهنا، کمینه/
+	// بیشینهٔ صف خام؛ آخرین صف خام، صف پس از کسر پایه، پایه (µs).
+	StripeActive      int32   `json:"stripe_active,omitempty"`
+	StripeRxActive    int32   `json:"stripe_rx_active,omitempty"`
+	StripeSubs        uint64  `json:"stripe_subs,omitempty"`
+	StripeBytes       uint64  `json:"stripe_bytes,omitempty"`
+	StripeSubBytes    uint64  `json:"stripe_sub_bytes,omitempty"`
+	StripeRefused     uint64  `json:"stripe_refused,omitempty"`
+	StripePickNone    uint64  `json:"stripe_pick_none,omitempty"`
+	StripeGrowUnused  uint64  `json:"stripe_grow_unused,omitempty"`
+	StripeGrowRate    uint64  `json:"stripe_grow_under_rate,omitempty"`
+	StripeGateGrow    uint64  `json:"stripe_gate_grow,omitempty"`
+	StripeGateCut     uint64  `json:"stripe_gate_cut,omitempty"`
+	StripeGateBand    uint64  `json:"stripe_gate_band,omitempty"`
+	StripeGateHold    uint64  `json:"stripe_gate_hold,omitempty"`
+	StripeGateToken   uint64  `json:"stripe_gate_token,omitempty"`
+	StripeGateFull    uint64  `json:"stripe_gate_full,omitempty"`
+	StripeGateClosed  uint64  `json:"stripe_gate_closed,omitempty"`
+	StripeGateNoMeas  uint64  `json:"stripe_gate_nomeasure,omitempty"`
+	StripeGateDec     uint64  `json:"stripe_gate_decisions,omitempty"`
+	StripeWidthAvg    float64 `json:"stripe_width_avg,omitempty"`
+	StripeWidthMax    int64   `json:"stripe_width_max,omitempty"`
+	StripeLiveAvg     float64 `json:"stripe_live_avg,omitempty"`
+	StripeQRawUs      int64   `json:"stripe_q_raw_us,omitempty"`
+	StripeQRawMinUs   int64   `json:"stripe_q_raw_min_us,omitempty"`
+	StripeQRawMaxUs   int64   `json:"stripe_q_raw_max_us,omitempty"`
+	StripeQUs         int64   `json:"stripe_q_us,omitempty"`
+	StripeBaseUs      int64   `json:"stripe_base_us,omitempty"`
+	StripeBaseLearnUs int64   `json:"stripe_base_learned_us,omitempty"`
+	StripeBusyLinks   int64   `json:"stripe_busy_links,omitempty"`
+}
+
+// fillStripe copies the stripe's diagnostics (HS2_MCONN_STRIPE).
+func fillStripe(ls *liveStatus, s engine.StripeSnap) {
+	ls.StripeActive, ls.StripeRxActive, ls.StripeSubs, ls.StripeBytes, ls.StripeSubBytes = s.Active, s.RxActive, s.Subs, s.Bytes, s.SubBytes
+	ls.StripeRefused, ls.StripePickNone, ls.StripeGrowUnused, ls.StripeGrowRate = s.Refused, s.PickNone, s.GrowUnused, s.GrowRate
+	ls.StripeGateGrow, ls.StripeGateCut, ls.StripeGateBand, ls.StripeGateHold, ls.StripeGateToken, ls.StripeGateFull = s.Grow, s.Cut, s.Band, s.Hold, s.Token, s.Full
+	ls.StripeGateClosed, ls.StripeGateNoMeas, ls.StripeGateDec = s.Closed, s.NoMeasure, s.Decisions
+	ls.StripeWidthAvg, ls.StripeWidthMax, ls.StripeLiveAvg = s.WAvg, s.WMax, s.LiveAvg
+	ls.StripeQRawUs, ls.StripeQRawMinUs, ls.StripeQRawMaxUs, ls.StripeQUs = s.QRawUs, s.QRawMinUs, s.QRawMax, s.QUs
+	ls.StripeBaseUs, ls.StripeBaseLearnUs, ls.StripeBusyLinks = s.BaseUs, s.BaseLearnedUs, s.BusyLinks
 }
 
 // fillMConn copies the multi-link connection counters (HS2_MCONN).
@@ -608,6 +654,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		ow.fill(&ls, engine.Observed())
 		fillMConn(&ls, engine.MConnObserved())
 		fillSmuxWin(&ls)
+		fillStripe(&ls, engine.StripeObserved())
 		ls.CertDays = firstCertExpiryDays()
 		ls.Updated = time.Now().Unix()
 		writeStatusFile(path, ls)
