@@ -87,6 +87,10 @@ var stripeSubRateHi atomic.Int64
 var stripeUpQTarget atomic.Int64
 
 func init() {
+	stripeUpLightPct.Store(50)
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_UP_LQ"))); err == nil && v >= 1 && v <= 50 {
+		stripeUpLightPct.Store(int32(v))
+	}
 	stripeUp.Store(os.Getenv("HS2_MCONN_STRIPE_UP") == "1")
 	stripeSubRateHi.Store(40e6 / 8)
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_UP_QMS")), 64); err == nil && v > 0 {
@@ -132,14 +136,24 @@ func stripeWantCap() int {
 var stripeUpPathQ = &stripeQ{links: map[*linkMeter]*stripeLinkQ{}, light: true}
 
 // lightQ: the queue the light users' links show (sorted lt, at least one):
-// their lower quartile. A light user rarely moves stripeBusyBytes upward, so
+// their stripeUpLightPct percentile — the median by default, the lower
+// quartile with HS2_MCONN_STRIPE_UP_LQ=25. A light user rarely moves stripeBusyBytes upward, so
 // in the upload direction the busy links alone left the gate blind — the
 // lab's first version (busy links only) put the game's p95 85 → 108 ms. A
 // queue at the bottleneck raises every link's srtt, the lowest ones too;
 // a few sparse links (a stale srtt, a loss recovery) sit 5-15 ms over their
 // lowest with no queue at all and pulled the median to 1.5-3 ms (the kernel
-// lab at 1% loss: most links 0.3-0.5 ms), which held the gate shut.
-func lightQ(lt []time.Duration) time.Duration { return lt[len(lt)/4] }
+// lab at 1% loss: most links 0.3-0.5 ms), which held the gate shut. The
+// quartile opens it (kernel lab, one upload: 0% 202 → 1020 Mbit/s, 1%
+// 146 → 664, 3% 107 → 364) but costs light users at 3% (the game's p95
+// 81.9 → 85.6 ms) and in the userspace lab (the game's p95 +2 ms at 0-1%),
+// so the median stays the default.
+func lightQ(lt []time.Duration) time.Duration {
+	return lt[len(lt)*int(stripeUpLightPct.Load())/100]
+}
+
+// stripeUpLightPct: HS2_MCONN_STRIPE_UP_LQ (1..50, default 50).
+var stripeUpLightPct atomic.Int32
 
 // stripeUpTrack counts an Iran link (its meter and its TCP_INFO reader)
 // while it is up; the returned func forgets it. Nothing with a key off.

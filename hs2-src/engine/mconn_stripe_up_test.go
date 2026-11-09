@@ -341,10 +341,25 @@ func TestMConnStripeUploadFromRaw(t *testing.T) {
 }
 
 // Iran's upload gate reads the light users' links too (active, not busy):
-// with no other busy link their lower quartile is the path's queue; a link that
+// with no other busy link their median (or, with HS2_MCONN_STRIPE_UP_LQ=25,
+// their lower quartile) is the path's queue; a link that
 // acknowledged nothing (idle: a stale srtt) never counts; the exit's gate
 // (light off) is unchanged. A link's socket is read through its stat func.
 func TestStripeUpPathQLight(t *testing.T) {
+	oldPct := stripeUpLightPct.Load()
+	t.Cleanup(func() { stripeUpLightPct.Store(oldPct) })
+	stripeUpLightPct.Store(50)
+	{ // the median (default): 1, 6, 8 ms → 6 ms
+		p := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}, light: true}
+		for _, q := range []time.Duration{time.Millisecond, 6 * time.Millisecond, 8 * time.Millisecond} {
+			p.links[&linkMeter{}] = &stripeLinkQ{active: true, q: q}
+		}
+		p.at = time.Now()
+		if q, _ := p.delay(p.at, nil); q != 6*time.Millisecond {
+			t.Fatalf("q %v, want the light links' median 6ms", q)
+		}
+	}
+	stripeUpLightPct.Store(25) // HS2_MCONN_STRIPE_UP_LQ=25
 	p := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}, light: true}
 	own, a, b, c, idle, busy := &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}
 	p.links[own] = &stripeLinkQ{busy: true, active: true, q: 50 * time.Millisecond}
