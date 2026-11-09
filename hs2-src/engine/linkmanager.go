@@ -834,7 +834,7 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 		}
 	}
 	var back, gone []string
-	serving, cutOut := m.cutDrainLocked(serving, now)
+	serving, cutOut := m.cutDrainLocked(serving, now, T)
 	retiring = append(retiring, cutOut...)
 	if lbCutDrain {
 		r := retiring[:0]

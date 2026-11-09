@@ -47,6 +47,12 @@ var cutDrainForce = 60 * time.Second
 // seconds instead of one burst of handshakes onto the good paths.
 var cutDrainForcePerTick = 3
 
+// cutDrainSlackPct: at the exit's ceiling (no replacement can come) up to
+// this share of the target may still be cut-drained at a time — the good
+// paths' links then carry a little more each, the cut path's users get off
+// its loss. Links closed once empty give their slots to replacements.
+var cutDrainSlackPct = 20
+
 // cutDrainNoRoom is the drain room on a dialing pool (no exit ceiling).
 var cutDrainNoRoom = 1 << 30
 
@@ -98,7 +104,7 @@ func cutKeep(cut map[string]int, path string) (int, bool) {
 // and clears the mark of links whose path is no longer cut. serving is the
 // reconcile's list; it returns what is left serving and the links retired.
 // Caller holds m.mu.
-func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time) ([]*managedLink, []*managedLink) {
+func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time, T int) ([]*managedLink, []*managedLink) {
 	if !lbCutDrain || m.cutPaths == nil {
 		return serving, nil
 	}
@@ -145,13 +151,13 @@ func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time) ([]*
 		serving = append(serving, ml)
 	}
 	// Only as many links are drained as the exit can replace (its ceiling
-	// less the links up): past that, a drained link is a serving slot lost
+	// less the links up) plus cutDrainSlackPct of the target: past that, a drained link is a serving slot lost
 	// and the good paths' links carry more users each (the lab at its cap:
 	// serving 150→117, ICMP p99 up). Replacements free no room, so links
 	// closed (emptied) make the room for the next ones.
 	room := cutDrainNoRoom
 	if m.accept {
-		room = max(0, m.exitCeilingLocked()-m.aliveLocked())
+		room = max(0, m.exitCeilingLocked()-m.aliveLocked()) + T*cutDrainSlackPct/100 - m.cutDrainingLocked()
 	}
 	gone := map[*managedLink]bool{}
 	var out []*managedLink

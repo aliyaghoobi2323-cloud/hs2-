@@ -187,6 +187,9 @@ func TestCutDrainRebalanceKeepsProbes(t *testing.T) {
 // path whose probes the exit retired gets cut-drained links back in service.
 func TestCutDrainRoomAndProbes(t *testing.T) {
 	withCutDrain(t)
+	old := cutDrainSlackPct
+	cutDrainSlackPct = 0
+	t.Cleanup(func() { cutDrainSlackPct = old })
 	m, clk, _ := newV2Manager(nil, 1, 27, true) // ceiling 27: room for 3
 	cut := map[string]int{"i1>k1": 2}
 	m.cutPaths = func() map[string]int { return cut }
