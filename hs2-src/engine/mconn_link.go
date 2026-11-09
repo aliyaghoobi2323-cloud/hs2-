@@ -400,6 +400,7 @@ func (e *mconnEdge) open(p mPlane, avoid []any) (mSub, any, error) {
 		tries++ // a link can die between the pick and the open: try another
 		st, err := l.OpenStream()
 		if err == nil {
+			autoWinOffForStripe(e.lm, st) // HS2_SMUX_AUTOWIN (smux_autowin.go)
 			role := mconnRoleJoin
 			if !e.first {
 				role = mconnRoleFirst

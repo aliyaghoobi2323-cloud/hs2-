@@ -232,6 +232,7 @@ type streamAW struct {
 	tickRead   uint32
 	tickAt     time.Time
 	closed     bool
+	off        bool // SetAutoWindowOff: upstream rules
 
 	recent  [awRecent]time.Duration // the last probe samples (queue rule)
 	nRecent int
@@ -260,6 +261,13 @@ func newStreamAW(cfg *AutoWindow, base int) *streamAW {
 // consumed count and window to send (consumed 0: no UPD now).
 func (s *Stream) awConsumed(n uint32) (uint32, uint32) {
 	a := s.aw
+	if a.off { // upstream, byte for byte
+		if s.incr >= uint32(s.sess.config.MaxStreamBuffer/2) || s.numRead == n {
+			s.incr = 0
+			return s.numRead, 0
+		}
+		return 0, 0
+	}
 	if !(s.incr >= a.win/a.div || s.numRead == n || (a.pendingUPD && n > 0)) {
 		return 0, 0
 	}
@@ -300,6 +308,9 @@ func (s *Stream) awPushed(n uint32) {
 		a.epochAt, a.epochBytes = ns, 0
 	}
 	a.epochBytes += n
+	if a.off {
+		return
+	}
 	if !a.probeOn || int32(a.numRecv-a.probeLimit) <= 0 {
 		return
 	}
@@ -560,4 +571,27 @@ func (b *WindowBudget) rttMin(d time.Duration, now time.Time) time.Duration {
 	defer b.rmu.Unlock()
 	b.rtt.add(d, now)
 	return b.rtt.get()
+}
+
+// SetAutoWindowOff returns a stream to upstream's fixed window and update
+// cadence (what it already grew is given back). For streams whose sender
+// relies on the window as back-pressure, e.g. hs2's striped mconn subs,
+// where a sub that drains faster than its siblings takes every chunk and the
+// stripe never widens. Best called before data flows. No-op without
+// AutoWindow.
+func (s *Stream) SetAutoWindowOff() {
+	if s.aw == nil {
+		return
+	}
+	s.bufferLock.Lock()
+	a := s.aw
+	d := a.extra
+	a.extra, a.win, a.off, a.probeOn, a.pendingUPD = 0, a.base, true, false, false
+	a.grown.Store(false)
+	s.bufferLock.Unlock()
+	if d > 0 {
+		a.cfg.Budget.give(int64(d))
+		atomic.AddInt32(&s.sess.bucket, -int32(d))
+	}
+	a.cfg.Budget.untrack(s)
 }

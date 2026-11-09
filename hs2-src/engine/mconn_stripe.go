@@ -595,6 +595,7 @@ func (e *mconnEdge) openStripe(avoid []any) (mSub, any, error) {
 	}
 	st, err := l.OpenStream()
 	if err == nil {
+		autoWinOffForStripe(e.lm, st) // HS2_SMUX_AUTOWIN (smux_autowin.go)
 		if _, err = st.Write(mconnHeader(e.port, e.id, mconnRoleJoin)); err == nil {
 			s := &mconnSub{stream: st, plane: planeStripe, release: rel}
 			mconnPlaneGauge(planeStripe).Add(1)

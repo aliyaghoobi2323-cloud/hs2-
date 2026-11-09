@@ -79,3 +79,26 @@ func SmuxAutoWinStats() (smux.WindowBudgetStats, bool) {
 	}
 	return smuxAutoWin.Budget.Stats(), true
 }
+
+// Striped connections (HS2_MCONN_STRIPE) keep upstream's window on Iran's
+// side, where they receive the download: the stripe sender puts each chunk on
+// the sub with the shortest queue and widens only while every sub is used,
+// so it needs the fixed window's back-pressure — with faster window updates
+// the first sub drained so fast that it took every chunk and the stripe
+// stayed at 2 subs (3 Gbit/s lab, 1% loss: 72 Mbit/s instead of 420). The
+// stripe already spreads a download over up to K links; the adaptive window
+// is for what is not striped (uploads, plain streams).
+func autoWinOffForStripe(lm *LinkManager, st any) {
+	if smuxAutoWin == nil || !mconnStripeWanted(lm) {
+		return
+	}
+	if o, ok := st.(interface{ SetAutoWindowOff() }); ok {
+		o.SetAutoWindowOff()
+	}
+}
+
+// mconnStripeWanted: Iran's connections to this exit may stripe (the
+// condition serveUserMConn applies).
+func mconnStripeWanted(lm *LinkManager) bool {
+	return stripeK.Load() > 0 && mconnLite.Load() && mconnDeadlineFix.Load() && lm.exitInfo.Load().mconnStripe()
+}

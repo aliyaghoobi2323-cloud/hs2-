@@ -322,9 +322,10 @@ func TestAutoWindowMixedPeers(t *testing.T) {
 // out after half of it was read (upstream's bytes); with it on, the first
 // update still carries the base window.
 func TestAutoWindowOffWireUnchanged(t *testing.T) {
-	for _, on := range []bool{false, true} {
+	for _, mode := range []string{"off", "on", "on-then-SetAutoWindowOff"} {
+		on := mode == "on"
 		var aw *AutoWindow
-		if on {
+		if mode != "off" {
 			aw = newAW(64<<20, 1<<20)
 		}
 		a, b := net.Pipe()
@@ -375,6 +376,9 @@ func TestAutoWindowOffWireUnchanged(t *testing.T) {
 			t.Fatal(err)
 		}
 		buf := make([]byte, 16<<10)
+		if mode == "on-then-SetAutoWindowOff" {
+			st.SetAutoWindowOff()
+		}
 		for i := 0; i < 12; i++ {
 			if _, err := io.ReadFull(st, buf); err != nil {
 				t.Fatal(err)
@@ -405,11 +409,11 @@ func TestAutoWindowOffWireUnchanged(t *testing.T) {
 		want := [][2]uint32{{16 << 10, 64 << 10}, {16<<10 + 32<<10, 64 << 10}, {16<<10 + 64<<10, 64 << 10},
 			{16<<10 + 96<<10, 64 << 10}, {16<<10 + 128<<10, 64 << 10}, {16<<10 + 160<<10, 64 << 10}}
 		if len(upds) != len(want) {
-			t.Fatalf("off: got %v want %v", upds, want)
+			t.Fatalf("%s: got %v want %v", mode, upds, want)
 		}
 		for i := range want {
 			if upds[i] != want[i] {
-				t.Fatalf("off: got %v want %v", upds, want)
+				t.Fatalf("%s: got %v want %v", mode, upds, want)
 			}
 		}
 	}
