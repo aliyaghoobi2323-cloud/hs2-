@@ -478,3 +478,32 @@ func TestStripeBaseMaxCaps(t *testing.T) {
 		t.Fatalf("caps: exit %v (want 4ms), Iran upload %v (want 1.5ms)", down.bq, up.bq)
 	}
 }
+
+// HS2_MCONN_STRIPE_BASE_MAX_MULTI: the download baseline is capped lower only
+// while two or more stripes gate at once.
+func TestStripeBaseMaxMulti(t *testing.T) {
+	oldM := stripeBaseMaxMulti
+	t.Cleanup(func() {
+		stripeBaseMaxMulti = oldM
+		stripeGlobal.mu.Lock()
+		stripeGlobal.awin, stripeGlobal.act, stripeGlobal.actPrior = 0, 0, 0
+		stripeGlobal.mu.Unlock()
+	})
+	stripeBaseMaxMulti = time.Millisecond
+	p := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}, bq: 3 * time.Millisecond}
+	now := time.Now()
+	a, b := &mConn{}, &mConn{}
+	a.stripeNoteActive(now)
+	if got := p.base(); got != 3*time.Millisecond {
+		t.Fatalf("one stripe: base %v, want 3ms", got)
+	}
+	a.stripeNoteActive(now)
+	b.stripeNoteActive(now)
+	if got := p.base(); got != time.Millisecond {
+		t.Fatalf("two stripes: base %v, want the 1ms cap", got)
+	}
+	up := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}, bq: 3 * time.Millisecond, light: true}
+	if got := up.base(); got != 3*time.Millisecond {
+		t.Fatalf("upload gate: base %v, want unchanged", got)
+	}
+}

@@ -77,6 +77,7 @@ type stripeGate struct {
 	stLogAt  time.Time
 	stNoGate bool  // the last decision found nothing to measure: no gate until the next
 	stAskWin int64 // the growth window this connection last asked in (stripeGlobal)
+	stActWin int64 // the window this connection last gated in (stripeNoteActive)
 }
 
 // subMeter: the link meter of an exit sub (nil: not known).
@@ -123,6 +124,9 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	}
 	var base time.Duration
 	if stripeRel {
+		if stripeBaseMaxMulti >= 0 && !m.iran {
+			m.stripeNoteActive(now)
+		}
 		// the relative gate: only the excess over the path's own noise
 		base = pq.base()
 		q = max(0, q-base)
@@ -181,6 +185,10 @@ var stripeGlobal struct {
 	fillAt       time.Time
 	win          int64 // the current asking window (unix seconds)
 	asked, prior int   // stripes that asked in the window, in the one before
+	// stripes that gated (HS2_MCONN_STRIPE_BASE_MAX_MULTI): the window, its
+	// count, the one before's
+	awin          int64
+	act, actPrior int
 }
 
 // stripeCutHold: no stripe grows for this long after a queue.
@@ -493,7 +501,52 @@ func (p *stripeQ) baseMax() time.Duration {
 func (p *stripeQ) base() time.Duration {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if !p.light && stripeBaseMaxMulti >= 0 && stripeActiveN() >= 2 {
+		return min(p.bq, stripeBaseMaxMulti)
+	}
 	return p.bq
+}
+
+// stripeBaseMaxMulti: the download baseline's cap while two or more stripes
+// gate at once (HS2_MCONN_STRIPE_BASE_MAX_MULTI, ms; unset: -1, no change).
+// One stripe forgives the path's noise up to stripeBaseMax (4 ms), and so
+// does each of N: the lab's 4 parallel downloads at 1 % loss (shared links,
+// HS2_MCONN_STRIPE_SHARE) together held the light users' crowd p95 +7-9 ms
+// over production, while a pool budget of shared links (4 or 8 for all)
+// cost half the speed and did not bring it back. A lower forgiveness only
+// when several stripes run leaves a single download as it was.
+var stripeBaseMaxMulti = envMsDefault("HS2_MCONN_STRIPE_BASE_MAX_MULTI", -1)
+
+// stripeNoteActive (sender, under m.mu): m gated in this second.
+func (m *mConn) stripeNoteActive(now time.Time) {
+	g := &stripeGlobal
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if w := now.Unix(); w != g.awin {
+		g.actPrior = 0
+		if w == g.awin+1 {
+			g.actPrior = g.act
+		}
+		g.awin, g.act = w, 0
+	}
+	if m.stActWin != g.awin {
+		m.stActWin = g.awin
+		g.act++
+	}
+}
+
+// stripeActiveN: stripes that gated in this second or the one before.
+func stripeActiveN() int {
+	g := &stripeGlobal
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if w := time.Now().Unix(); w != g.awin {
+		if w == g.awin+1 {
+			return g.act
+		}
+		return 0
+	}
+	return max(g.act, g.actPrior)
 }
 
 // stripeLogf logs a diagnostic line (callers check stripeLog).
