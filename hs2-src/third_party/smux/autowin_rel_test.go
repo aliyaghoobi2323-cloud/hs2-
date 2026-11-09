@@ -16,7 +16,7 @@ func TestAutoWinRelBase(t *testing.T) {
 	if got := b.relBase(0, now.Add(2*time.Second)); got < 900*time.Microsecond || got > 1100*time.Microsecond {
 		t.Fatalf("base %v, want ~1ms (lower decile)", got)
 	}
-	for i := 0; i < 100; i++ {
+	for i := 0; i < relN; i++ { // fills the ring
 		b.relBase(50*time.Millisecond, now.Add(3*time.Second))
 	}
 	if got := b.relBase(50*time.Millisecond, now.Add(5*time.Second)); got != relBaseCap {
