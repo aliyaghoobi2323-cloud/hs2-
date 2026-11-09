@@ -28,6 +28,12 @@ import (
 //     count stays at its target on the good paths (make before break);
 //   - while the path stays cut they never come back into service; once it is
 //     no longer cut they are ordinary retiring links again.
+//
+// Only as many drain as the exit can replace (its ceiling less the links up),
+// trickling connections are closed a few links a tick (cutDrainForcePerTick),
+// and a cut path keeps lb2Keep serving links: cut-drained ones come back when
+// the exit's rebalance retires its idle probes.
+//
 // Nothing happens when every reported path is cut (no good path to move to).
 var lbCutDrain = os.Getenv("HS2_LB_CUT_DRAIN") == "1"
 

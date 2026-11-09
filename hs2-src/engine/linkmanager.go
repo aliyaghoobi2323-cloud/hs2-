@@ -335,7 +335,7 @@ type managedLink struct {
 	quietW       quietWatch  // HS2_QUIET_IDLE: the suspect check's idle/busy view
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
-	cutDrain     bool // retired off a cut path (HS2_LB_CUT_DRAIN): its slot is replaced
+	cutDrain     bool      // retired off a cut path (HS2_LB_CUT_DRAIN): its slot is replaced
 	steer        steerLink // HS2_LB_STEER (lb_auto2.go), under LinkManager.mu
 }
 
