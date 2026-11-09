@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"math"
+	"os"
 	"time"
 )
 
@@ -88,6 +89,19 @@ const (
 	qLossTicks = 3
 )
 
+// qLossHold: HS2_QUEUE_CTL_LOSSHOLD=1 (default off). A cap removed for loss
+// is not set again for releaseFor (doubling from qReleaseMin up to
+// qReleaseMax, as the not-its-own-queue rule). Without it the controller
+// cycles: uncapped, the path's delay (jitter, or a queue that is not the
+// tunnel's) sets a cap; cake's own drops under the cap read as retransmits
+// over qMaxLoss, so ~6 s later the cap goes; ~4 s later the delay sets it
+// again. While capped, cake shares the cap evenly over the ~150 link flows
+// (all one host pair), so one download's link gets 1/N of it: in the
+// production-like lab (crowd 3000, pool 150, 1% loss, delay 30-70 ms) a
+// single-stream download fell from 50-90 to 1-3 Mbit/s for exactly the
+// capped seconds — the occasional slow test.
+var qLossHold = os.Getenv("HS2_QUEUE_CTL_LOSSHOLD") == "1"
+
 // qIn is one tick's measurement.
 type qIn struct {
 	now   time.Time
@@ -135,6 +149,13 @@ func (q *qCtl) step(in qIn) (float64, string) {
 	if in.loss > qMaxLoss {
 		if q.lossy++; q.lossy >= qLossTicks {
 			q.rate, q.lossy, q.stuck, q.idle = 0, 0, 0, 0
+			if qLossHold {
+				// HS2_QUEUE_CTL_LOSSHOLD: no new cap for a while, as after a
+				// queue that is not the tunnel's own (see qLossHold)
+				q.releaseFor = min(max(2*q.releaseFor, qReleaseMin), qReleaseMax)
+				q.release = in.now.Add(q.releaseFor)
+				return 0, fmt.Sprintf("queue: the path loses %.1f%% of what the links send — it limits them by its loss, not its queue; cap removed for %s", 100*in.loss, q.releaseFor)
+			}
 			return 0, fmt.Sprintf("queue: the path loses %.1f%% of what the links send — it limits them by its loss, not its queue; cap removed", 100*in.loss)
 		}
 	} else {

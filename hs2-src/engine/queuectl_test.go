@@ -252,3 +252,40 @@ func TestQueueCtlShortDownloadStartsFast(t *testing.T) {
 		t.Fatalf("the next download's cap starts at %.1f Mbit/s; the path's %.1f was seen a minute ago", mbitps(capRate), mbitps(qC))
 	}
 }
+
+// HS2_QUEUE_CTL_LOSSHOLD: a cap removed for loss is not set again at once.
+func TestQCtlLossHold(t *testing.T) {
+	old := qLossHold
+	t.Cleanup(func() { qLossHold = old })
+	for _, hold := range []bool{false, true} {
+		qLossHold = hold
+		var q qCtl
+		now := time.Unix(1000, 0)
+		tick := func(d time.Duration, loss float64) float64 {
+			now = now.Add(2 * time.Second)
+			r, _ := q.step(qIn{now: now, delay: d, g: 20e6, loss: loss})
+			return r
+		}
+		tick(40*time.Millisecond, 0.01)
+		if tick(40*time.Millisecond, 0.01) == 0 {
+			t.Fatal("no cap on a queue")
+		}
+		for i := 0; i < 2; i++ { // grace
+			tick(40*time.Millisecond, 0.10)
+		}
+		for i := 0; i < qLossTicks; i++ {
+			tick(10*time.Millisecond, 0.10)
+		}
+		if q.rate != 0 {
+			t.Fatalf("hold=%v: cap kept under loss", hold)
+		}
+		tick(40*time.Millisecond, 0.01)
+		r := tick(40*time.Millisecond, 0.01)
+		if hold && r != 0 {
+			t.Fatalf("cap set again %v after a loss removal", 4*time.Second)
+		}
+		if !hold && r == 0 {
+			t.Fatal("without the key the cap comes back (old behaviour)")
+		}
+	}
+}

@@ -673,7 +673,7 @@ func (m *mConn) addSubLocked(rw mSub, key any, bulk bool) *msub {
 	m.subs = append(m.subs, s)
 	m.setPrimaryLocked()
 	m.refreshLiteDualLocked()
-	m.tr.ev("sub+ %d bulk=%v key=%v sendOff=%d subs=%d", s.idx, bulk, key, m.sendOff, len(m.subs))
+	m.tr.ev("sub+ %d bulk=%v key=%p sendOff=%d subs=%d", s.idx, bulk, key, m.sendOff, len(m.subs))
 	return s
 }
 
