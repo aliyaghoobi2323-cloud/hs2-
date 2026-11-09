@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 	"github.com/xtaci/smux"
@@ -107,4 +108,63 @@ func autoWinOffForStripe(lm *LinkManager, st any) {
 // condition serveUserMConn applies).
 func mconnStripeWanted(lm *LinkManager) bool {
 	return stripeK.Load() > 0 && mconnLite.Load() && mconnDeadlineFix.Load() && lm.exitInfo.Load().mconnStripe()
+}
+
+// A stripe that has settled gets the adaptive window back (Iran): once its
+// width reached K, or stayed at 2 or more for stripeAWSettle, every sub of
+// it may grow — the stripe no longer needs the subs to fill evenly to widen,
+// and a striped download is then bound by K fixed windows (the 3 Gbit/s lab:
+// 2 MiB windows held one striped download at 1% loss to ~250-420 Mbit/s,
+// fixed 8 MiB windows reached ~900). When the width changes the subs go back
+// to the fixed window until it settles again. The growth itself is under the
+// same rules as every stream's (the queue rule, the process-wide allowance,
+// the light-neighbour cap).
+const stripeAWSettle = 3 * time.Second
+
+// stripeAW is an mConn's state for this (Iran, under m.mu).
+type stripeAW struct {
+	on    bool
+	width int
+	at    time.Time // when width last changed
+}
+
+// stripeAutoWinLocked runs with the stripe's growth tick (stripeTickLocked).
+func (m *mConn) stripeAutoWinLocked(now time.Time) {
+	if smuxAutoWin == nil || !m.iran || m.stN == 0 {
+		return
+	}
+	a := &m.stAW
+	w := 1 + m.liveStripeLocked()
+	if w != a.width {
+		a.width, a.at = w, now
+		if a.on {
+			a.on = false
+			m.subsAutoWinLocked(false)
+		}
+		return
+	}
+	settled := w >= 2 && (w >= m.stK || now.Sub(a.at) >= stripeAWSettle)
+	if settled && !m.ended {
+		a.on = true
+		m.subsAutoWinLocked(true) // idempotent: also a sub that joined since
+	}
+}
+
+func (m *mConn) subsAutoWinLocked(on bool) {
+	for _, s := range m.subs {
+		if s.retired || s.dead {
+			continue
+		}
+		var st any = s.rw
+		if ms, ok := s.rw.(*mconnSub); ok {
+			st = ms.stream
+		}
+		if on {
+			if o, ok := st.(interface{ SetAutoWindowOn() }); ok {
+				o.SetAutoWindowOn()
+			}
+		} else if o, ok := st.(interface{ SetAutoWindowOff() }); ok {
+			o.SetAutoWindowOff()
+		}
+	}
 }

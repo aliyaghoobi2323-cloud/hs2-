@@ -148,6 +148,8 @@ type stripeState struct {
 
 	firstRx atomic.Int64 // diagnostics (HS2_MCONN_STRIPE_LOG): unix ns of the first byte read raw
 
+	stAW stripeAW // Iran: the adaptive smux window of a settled stripe (smux_autowin.go)
+
 	stripeGate // sender: the scavenger's width (mconn_stripe_scav.go)
 }
 
@@ -177,6 +179,7 @@ func (m *mConn) liveStripeLocked() int {
 // and recvd are both directions' offsets now. true: open one more stripe sub
 // now (stOpening was set).
 func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
+	m.stripeAutoWinLocked(now) // HS2_SMUX_AUTOWIN (smux_autowin.go)
 	if m.stK < 2 || m.ended || m.closing || m.peerFin || m.wclosed {
 		return false
 	}

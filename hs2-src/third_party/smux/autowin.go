@@ -697,3 +697,22 @@ func min64(a, b int64) int64 {
 	}
 	return b
 }
+
+// SetAutoWindowOn undoes SetAutoWindowOff: the stream starts over from its
+// base window under the adaptive rules. Its first probe starts at the next
+// window update, against a limit no lower than the sender's (numRead + base),
+// so the loop-RTT bound still holds. No-op without AutoWindow.
+func (s *Stream) SetAutoWindowOn() {
+	if s.aw == nil {
+		return
+	}
+	s.bufferLock.Lock()
+	a := s.aw
+	if a.off && !a.closed {
+		now := time.Now()
+		a.off, a.probeOn, a.nRecent, a.pendingUPD = false, false, 0, true
+		a.limit, a.limitWin = s.numRead+a.base, a.base
+		a.limitedAt, a.usedAt, a.tickAt, a.tickRead = now, now, now, s.numRead
+	}
+	s.bufferLock.Unlock()
+}
