@@ -2,6 +2,8 @@ package engine
 
 import (
 	"os"
+	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -76,9 +78,20 @@ var stripeUp atomic.Bool
 // tests.
 var stripeSubRateHi atomic.Int64
 
+// stripeUpQTarget: Iran's upload gate target, HS2_MCONN_STRIPE_UP_QMS (ms,
+// default HS2_MCONN_STRIPE_QMS's 3). The light users' links sit 1-2 ms
+// over their lowest with no queue (delayed ACKs, a stale srtt), so their
+// median rarely falls under half of 3 ms: a higher target lets the upload
+// grow, a lower one holds it near one link. 0: HS2_MCONN_STRIPE_QMS's.
+// A variable for tests.
+var stripeUpQTarget atomic.Int64
+
 func init() {
 	stripeUp.Store(os.Getenv("HS2_MCONN_STRIPE_UP") == "1")
 	stripeSubRateHi.Store(40e6 / 8)
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_UP_QMS")), 64); err == nil && v > 0 {
+		stripeUpQTarget.Store(int64(v * float64(time.Millisecond)))
+	}
 }
 
 // mconnStripeUp reports whether the other server takes part in an upload
@@ -229,6 +242,25 @@ func (m *mConn) stripeRxJoin() {
 		r.oooGrow = true
 	}
 	r.mu.Unlock()
+}
+
+// stripeTargetLocked: the gate's queue target for m's sending direction
+// (0: no gate).
+func (m *mConn) stripeTargetLocked() time.Duration {
+	target := time.Duration(stripeQTarget.Load())
+	if up := stripeUpQTarget.Load(); m.iran && target > 0 && up > 0 {
+		target = time.Duration(up) // HS2_MCONN_STRIPE_UP_QMS
+	}
+	return target
+}
+
+// stripeUpRoomLocked (Iran, an upload past its first stripe sub): the last
+// gate measurement would widen (under half the target), or there is nothing
+// to measure. Without it a held width still opened subs that only took
+// links (3% loss in the lab: the pool at its ceiling, the game's p95 +11 ms);
+// the width's floor of 1 (stripeSendLocked) keeps the pair the upload had.
+func (m *mConn) stripeUpRoomLocked() bool {
+	return !m.stWInit || m.stNoGate || m.stQ < m.stripeTargetLocked()/2
 }
 
 // stripeUpAllUsedLocked (Iran, an upload): every live stripe sub took a

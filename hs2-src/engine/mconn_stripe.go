@@ -228,6 +228,12 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	if m.stUp && up {
 		used = m.stripeUpAllUsedLocked // an upload: the subs Iran sent on (mconn_stripe_up.go)
 	}
+	if m.stUp && up && n >= 2 && !m.stripeUpRoomLocked() {
+		if stripeLog {
+			log.Printf("stripe %x: no growth, upload path queue %v (%.1f Mbit/s over %d)", m.id&0xffffff, m.stQ, rate*8/1e6, n)
+		}
+		return false // mconn_stripe_up.go: a sub more only while the gate would widen
+	}
 	if stripeQTarget.Load() > 0 && !used(now) {
 		if stripeLog {
 			log.Printf("stripe %x: no growth, a sub unused (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
@@ -430,6 +436,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	// the scavenger's width (mconn_stripe_scav.go): only the first w stripe
 	// subs (in the order they joined) may take chunks; -1: all
 	w := m.stripeWidthLocked(p, time.Now())
+	if w == 0 && m.stUp {
+		w = 1 // HS2_MCONN_STRIPE_UP: never narrower than the ungated pair before it (mconn_stripe_up.go)
+	}
 	for i := range nsubs {
 		s := m.subs[(m.stRR+i)%nsubs]
 		if s.retired || s.dead || (!s.stripe && s != p) {

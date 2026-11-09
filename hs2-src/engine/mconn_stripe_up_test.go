@@ -124,8 +124,9 @@ func TestMConnStripeUploadOffNarrow(t *testing.T) {
 	closeAndWait(t, iran, exit)
 }
 
-// Under a queue on the upload path Iran's gate keeps the width at 0: the
-// upload stays on its primary, and no stripe sub beyond the first opens.
+// Under a queue on the upload path Iran's gate holds the upload to the pair
+// it had before the key (the primary and one stripe sub: the width's floor)
+// and opens no stripe sub beyond the first.
 func TestMConnStripeUploadGated(t *testing.T) {
 	setStripeUp(t, true)
 	old := stripeQTarget.Load()
@@ -137,14 +138,9 @@ func TestMConnStripeUploadGated(t *testing.T) {
 	if k := stripeSubs(iran); k > 1 {
 		t.Fatalf("%d stripe subs under a queue, want at most 1", k)
 	}
-	n.mu.Lock()
-	for _, l := range n.links {
-		if w := l.iran.wrote.Load(); l.plane == planeStripe && w > 64<<10 {
-			n.mu.Unlock()
-			t.Fatalf("a stripe sub carried %d bytes under a queue", w)
-		}
+	if k := n.count(planeStripe); k > 1 {
+		t.Fatalf("%d stripe opens under a queue, want at most 1", k)
 	}
-	n.mu.Unlock()
 	closeAndWait(t, iran, exit)
 }
 
@@ -387,5 +383,27 @@ func TestStripeUpPathQLight(t *testing.T) {
 	}
 	if q, _ := r.delay(t0.Add(2*stripeQEvery), nil); q != 0 {
 		t.Fatalf("q %v from a link that acknowledged nothing, want 0", q)
+	}
+}
+
+// HS2_MCONN_STRIPE_UP_QMS sets Iran's upload target alone; the exit's
+// download gate keeps HS2_MCONN_STRIPE_QMS's.
+func TestStripeUpQTarget(t *testing.T) {
+	old, oldUp := stripeQTarget.Load(), stripeUpQTarget.Load()
+	t.Cleanup(func() { stripeQTarget.Store(old); stripeUpQTarget.Store(oldUp) })
+	stripeQTarget.Store(int64(3 * time.Millisecond))
+	stripeUpQTarget.Store(int64(8 * time.Millisecond))
+	fixPathQ(t, 5*time.Millisecond)
+	fixUpPathQ(t, 5*time.Millisecond)
+	ir, p := gateConn(2)
+	ir.iran, ir.stUp, ir.stW, ir.stWInit = true, true, 2, true
+	ex, q := gateConn(2)
+	ex.stW, ex.stWInit = 2, true
+	now := time.Now()
+	if w := ir.stripeWidthLocked(p, now); w != 2 {
+		t.Fatalf("Iran width %d under 5 ms with an 8 ms target, want 2 (kept)", w)
+	}
+	if w := ex.stripeWidthLocked(q, now); w != 1 {
+		t.Fatalf("exit width %d under 5 ms with a 3 ms target, want 1 (halved)", w)
 	}
 }

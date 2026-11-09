@@ -90,7 +90,7 @@ func subMeter(s *msub) *linkMeter {
 // path's queue (stripePathQ). -1: no gate (off, or Iran), every stripe sub
 // may be used.
 func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
-	target := time.Duration(stripeQTarget.Load())
+	target := m.stripeTargetLocked()
 	if target <= 0 || m.iran && !m.stUp { // Iran gates an upload (HS2_MCONN_STRIPE_UP)
 		return -1
 	}
