@@ -108,6 +108,11 @@ type WindowBudget struct {
 	queueAt  atomic.Int64
 	queueN   atomic.Int32
 	queueWin atomic.Int64 // start of queueN's window (unix ns)
+	// ceil: the process-wide allowance for growth (AIMD, ceiling below);
+	// 0 until the first queue event (the whole limit)
+	ceil     atomic.Int64
+	ceilAt   atomic.Int64 // unix ns of the last cut or regrowth step
+	ceilCuts atomic.Uint64
 
 	mu      sync.Mutex
 	streams map[*Stream]struct{}
@@ -132,6 +137,8 @@ type WindowBudgetStats struct {
 	Streams                 int // streams holding grown windows
 	Grows, Denied, Shrinks  uint64
 	QueueCuts, NeighborCuts uint64 // shrinks by the queue rule / for a light neighbour
+	Ceil                    int64  // the process-wide growth allowance now (AIMD)
+	CeilCuts                uint64 // its cuts by a path queue
 }
 
 // Stats returns the budget's figures now.
@@ -141,13 +148,15 @@ func (b *WindowBudget) Stats() WindowBudgetStats {
 	b.mu.Unlock()
 	return WindowBudgetStats{Limit: b.limit, Used: b.used.Load(), Peak: b.peak.Load(), Streams: n,
 		Grows: b.grows.Load(), Denied: b.denied.Load(), Shrinks: b.shrinks.Load(),
-		QueueCuts: b.queueCuts.Load(), NeighborCuts: b.neighborCuts.Load()}
+		QueueCuts: b.queueCuts.Load(), NeighborCuts: b.neighborCuts.Load(),
+		Ceil: b.ceiling(time.Now()), CeilCuts: b.ceilCuts.Load()}
 }
 
 func (b *WindowBudget) take(n int64) bool {
+	lim := b.ceiling(time.Now())
 	for {
 		u := b.used.Load()
-		if u+n > b.limit {
+		if u+n > lim {
 			b.denied.Add(1)
 			return false
 		}
@@ -166,7 +175,7 @@ func (b *WindowBudget) take(n int64) bool {
 func (b *WindowBudget) give(n int64) { b.used.Add(-n) }
 
 // pressured: at least 7/8 of the budget is out.
-func (b *WindowBudget) pressured() bool { return b.used.Load()*8 >= b.limit*7 }
+func (b *WindowBudget) pressured() bool { return b.used.Load()*8 >= b.ceiling(time.Now())*7 }
 
 func (b *WindowBudget) track(s *Stream) {
 	b.mu.Lock()
@@ -209,7 +218,7 @@ func (b *WindowBudget) sweepOnce(list []*Stream, now time.Time) {
 	pressured := b.pressured()
 	var fair uint32
 	if pressured && len(list) > 0 {
-		fair = uint32(b.limit / int64(len(list)))
+		fair = uint32(b.ceiling(now) / int64(len(list)))
 	}
 	for _, s := range list {
 		if s.awTick(now, pressured, fair) {
@@ -351,6 +360,9 @@ func (s *Stream) awPushed(n uint32) {
 			}
 		}
 		corroborated := slow && b.queuedSince(now, min) > 1
+		if corroborated {
+			b.cutCeiling(now, min)
+		}
 		if (a.nRecent >= awRecent && low > min+qHigh(min)) || corroborated {
 			b.queueCuts.Add(1)
 			s.awShrinkLocked(max(a.base, a.win*3/4), now)
@@ -638,4 +650,50 @@ func (b *WindowBudget) queuedSince(now time.Time, min time.Duration) int32 {
 		return 1
 	}
 	return b.queueN.Add(1)
+}
+
+// The growth allowance of the whole process, AIMD (the heavy streams of a
+// tunnel share one path, so they are held to it together, not each by its
+// own few ms of queue): a queue that two grown streams' probes saw within
+// queueHold cuts the allowance to 3/4 of what is out now (at most once per
+// queueHold, never below ceilFloor); every clean second gives ceilStep back,
+// up to the budget's limit. Above the allowance nothing grows and the
+// sweeper shrinks the largest windows to their share of it.
+const (
+	ceilFloor = 8 << 20
+	ceilStep  = 4 << 20
+)
+
+func (b *WindowBudget) ceiling(now time.Time) int64 {
+	c := b.ceil.Load()
+	if c == 0 {
+		return b.limit
+	}
+	at := b.ceilAt.Load()
+	if steps := (now.UnixNano() - at) / int64(time.Second); steps > 0 {
+		nc := min(b.limit, c+steps*ceilStep)
+		if b.ceilAt.CompareAndSwap(at, at+steps*int64(time.Second)) {
+			b.ceil.Store(nc)
+		}
+		return nc
+	}
+	return c
+}
+
+func (b *WindowBudget) cutCeiling(now time.Time, min time.Duration) {
+	ns := now.UnixNano()
+	if at := b.ceilAt.Load(); b.ceil.Load() != 0 && ns-at < int64(queueHold(min)) {
+		return
+	}
+	nc := max(int64(ceilFloor), b.used.Load()*3/4)
+	b.ceil.Store(min64(nc, b.limit))
+	b.ceilAt.Store(ns)
+	b.ceilCuts.Add(1)
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
