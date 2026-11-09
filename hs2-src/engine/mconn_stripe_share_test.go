@@ -91,3 +91,43 @@ func noStripeShare(t *testing.T) {
 	t.Cleanup(func() { stripeShare = old })
 	stripeShare = false
 }
+
+// The shared stripe's bounds: no link the TUN lane's interactive flows rode
+// lately, the fewest flowing streams first, and at most stripeShareK shared
+// subs per connection.
+func TestPickStripeSharedBounds(t *testing.T) {
+	old, oldS, oldK := stripeK.Load(), stripeShare, stripeShareK
+	t.Cleanup(func() { stripeK.Store(old); stripeShare = oldS; stripeShareK = oldK })
+	stripeK.Store(4)
+	stripeShare, stripeShareK = true, 1
+	caps := uint8(capMConn | capMConnRaw)
+	ls := []*mcLink{newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps), newMCLink(caps)}
+	m := mcManager(ls...)
+	for i, ml := range m.links {
+		ml.users.Store(10)
+		ml.flowing = 3
+		ml.rate10 = float64(1000 * (i + 1))
+		if ml.mtr == nil {
+			ml.mtr = &linkMeter{}
+		}
+	}
+	m.links[0].mtr.laneAt.Store(ctrlNow()) // a ping rides link 0
+	m.links[4].flowing = 1                 // fewest streams moving data
+	l, rel, ok := m.pickStripe(nil)
+	if !ok || l != Link(ls[4]) {
+		t.Fatalf("picked %v ok=%v, want link 4 (fewest flowing, no lane)", l, ok)
+	}
+	if _, _, ok := m.pickStripe([]any{l}); ok {
+		t.Fatal("a second shared sub past stripeShareK=1")
+	}
+	// another connection (its own avoid list) still gets one, not link 0
+	l2, rel2, ok := m.pickStripe(nil)
+	if !ok || l2 == Link(ls[0]) || l2 == Link(ls[4]) {
+		t.Fatalf("other connection picked %v ok=%v", l2, ok)
+	}
+	rel2()
+	rel()
+	if m.links[4].stShared.Load() != 0 {
+		t.Fatal("release left the shared count")
+	}
+}
