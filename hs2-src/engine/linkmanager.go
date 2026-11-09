@@ -117,6 +117,9 @@ type LinkManager struct {
 	// link's path key ("" unknown) and each path's share weight (absent or 0:
 	// no share). reconcile then retires from the path most over its share.
 	shrinkShares func(ls []*managedLink) (keys []string, w map[string]int)
+	// cutPaths (nil: off) is the dialing side's cut paths and the links each
+	// keeps (HS2_LB_CUT_DRAIN, lb_cutdrain.go).
+	cutPaths func() map[string]int
 
 	dialer  LinkDialer
 	accept  bool // reverse edge: links are injected via AddLink, never dialed
@@ -331,6 +334,7 @@ type managedLink struct {
 	quietW       quietWatch  // HS2_QUIET_IDLE: the suspect check's idle/busy view
 	reclaiming   atomic.Bool // an idle-reclaim goroutine is running for it
 	heldLogAt    time.Time
+	cutDrain     bool // retired off a cut path (HS2_LB_CUT_DRAIN): its slot is replaced
 	steer        steerLink // HS2_LB_STEER (lb_auto2.go), under LinkManager.mu
 }
 
@@ -829,6 +833,17 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 		}
 	}
 	var back, gone []string
+	serving, cutOut := m.cutDrainLocked(serving, now)
+	retiring = append(retiring, cutOut...)
+	if lbCutDrain {
+		r := retiring[:0]
+		for _, ml := range retiring {
+			if !ml.cutDrain { // a cut path's links do not come back while it is cut
+				r = append(r, ml)
+			}
+		}
+		retiring = r
+	}
 	if len(serving) < T && len(retiring) > 0 {
 		sort.Slice(retiring, func(i, j int) bool {
 			a, b := retiring[i], retiring[j]
@@ -893,6 +908,9 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 	}
 	S, R, up := len(serving), len(retiring), m.aliveLocked()
 	m.mu.Unlock()
+	if len(cutOut) > 0 {
+		m.log("%s", cutDrainNote(cutOut))
+	}
 	if len(back) > 0 {
 		m.log("mtcp: link(s) %s back in service (%d up: %d serving, %d retiring)", strings.Join(back, ","), up, S, R)
 	}
@@ -1057,6 +1075,9 @@ func (m *LinkManager) drainTick() {
 			kept = append(kept, ml)
 			continue
 		}
+		if ml.retireSince.IsZero() { // set retiring elsewhere without a time: its age is from now
+			ml.retireSince = now
+		}
 		if guard && len(closing) < maxCloses && ml.users.Load() == 0 && ml.link.Active() == 0 &&
 			(!m.accept || now.Sub(ml.born) >= retireAfterDrop) &&
 			(!ml.bornSpare || now.Sub(ml.born) >= bornSpareGrace) {
@@ -1093,9 +1114,24 @@ func (m *LinkManager) drainTick() {
 			m.retireCloses = append(m.retireCloses, now)
 		}
 	}
+	cutClosed := false
+	for _, ml := range closing {
+		if ml.cutDrain {
+			ml.cutDrain, cutClosed = false, true
+		}
+	}
+	ctlChanged := false
+	if cutClosed && m.accept {
+		d := m.replacingLocked()
+		ctlChanged = d != m.ctlDrain
+		m.ctlDrain = d
+	}
 	up := m.aliveLocked()
 	S, R := m.countsLocked()
 	m.mu.Unlock()
+	if ctlChanged {
+		m.notifyCtl() // before the closes: the exit should not redial a cut-drained link's slot
+	}
 
 	what := "link"
 	if m.accept {
@@ -1111,7 +1147,8 @@ func (m *LinkManager) drainTick() {
 		}(ml.link)
 	}
 	for _, ml := range reclaim {
-		go m.reclaimIdle(ml, now, drainIdle, now.Sub(ml.retireSince) >= retireForce)
+		force := now.Sub(ml.retireSince) >= retireForce || ml.cutDrain && now.Sub(ml.retireSince) >= cutDrainForce
+		go m.reclaimIdle(ml, now, drainIdle, force)
 	}
 	for _, h := range held {
 		m.log("mtcp: %s", h)
@@ -1406,7 +1443,7 @@ func (m *LinkManager) replacingLocked() int {
 			n++
 		}
 	}
-	return n
+	return n + m.cutDrainingLocked()
 }
 
 // ctlTarget is the link count the reverse exit is asked to hold: the serving
@@ -2129,7 +2166,7 @@ func (m *LinkManager) sampleHealth() {
 				logs = append(logs, fmt.Sprintf("link %d recovered: %s for %s — draining stopped after %s; its %d connection(s) stay, it takes no new ones (retiring)",
 					ml.id, why, fmtDur(probationTicks*healthTick), fmtDur(now.Sub(ml.drainSince)), ml.users.Load()))
 				ml.degraded, ml.draining, ml.stuck, ml.drainNoted, ml.drainReplace = false, false, false, false, false
-				ml.retiring, ml.healStreak, ml.recovered = true, 0, true
+				ml.retiring, ml.retireSince, ml.healStreak, ml.recovered = true, now, 0, true
 				ml.upStreak, ml.dnStreak, ml.lowStreak, ml.stuckStreak = 0, 0, 0, 0
 			}
 		}
@@ -2340,7 +2377,7 @@ func (m *LinkManager) heal(ctx context.Context) {
 	for need > 0 {
 		var best *managedLink
 		for _, ml := range m.links {
-			if ml.retiring && ml.link.Alive() && !ml.degraded && !ml.suspect && (best == nil || ml.open > best.open) {
+			if ml.retiring && !ml.cutDrain && ml.link.Alive() && !ml.degraded && !ml.suspect && (best == nil || ml.open > best.open) {
 				best = ml
 			}
 		}

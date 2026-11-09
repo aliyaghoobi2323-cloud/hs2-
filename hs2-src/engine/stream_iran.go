@@ -136,6 +136,15 @@ func RunIran(ctx context.Context, cfg IranConfig) error {
 			}
 			return revShrinkKeys(ms, cfg.Advert.Mine())
 		}
+		if lbAuto2 && lbCutDrain { // lb_cutdrain.go
+			lm.cutPaths = func() map[string]int {
+				rep, ok := cfg.Advert.PeerReport()
+				if !ok || time.Since(rep.At) > lbReportFresh || !rep.Auto {
+					return nil
+				}
+				return cutPathsFromReport(rep)
+			}
+		}
 	}
 	for _, p := range cfg.Ports {
 		if n, err := strconv.Atoi(p); err == nil && n > 0 && n <= 65535 {
