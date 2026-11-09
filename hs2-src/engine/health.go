@@ -160,6 +160,10 @@ type linkMeter struct {
 	// HS2_MCONN_STRIPE: the TUN lane counts the link heavy while there is
 	// one, used or not, and leaves it at once.
 	stripeN atomic.Int32
+	// laneAt: the TUN lane (HS2_L3_LANE) last sent an interactive packet
+	// (ping, game, call) over this link (ctrlNow ns); a shared stripe sub
+	// (HS2_MCONN_STRIPE_SHARE) keeps off such a link.
+	laneAt atomic.Int64
 
 	// Exit-side download stats (edge only; see stats.go). statsPoll carries the
 	// sampler's "poll now" (cap 1); statsState is statsPending/OK/Unsupported;

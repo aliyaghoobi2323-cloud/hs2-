@@ -259,6 +259,8 @@ type managedLink struct {
 	// stripeRes: when this new link was set aside for a stripe sub (zero:
 	// not); HS2_MCONN_STRIPE, mconn_stripe_pool.go. Under the pool lock.
 	stripeRes time.Time
+	// stShared: shared stripe subs on this link (HS2_MCONN_STRIPE_SHARE)
+	stShared atomic.Int32
 
 	dead atomic.Bool
 	born time.Time

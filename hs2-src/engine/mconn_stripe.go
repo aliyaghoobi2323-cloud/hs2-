@@ -611,6 +611,9 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	} else {
 		stripeHold(chosen, 1)
 	}
+	if shared {
+		chosen.stShared.Add(1)
+	}
 	if chosen.mtr != nil && stripeAlone {
 		// the TUN lane (HS2_L3_LANE) reads heavyN: heavy now, not at the
 		// sampler's next tick (which keeps it while the link is held)
@@ -627,6 +630,9 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 		once.Do(func() {
 			rel()
 			stripeHold(chosen, -1)
+			if shared {
+				chosen.stShared.Add(-1)
+			}
 		})
 	}, true
 }

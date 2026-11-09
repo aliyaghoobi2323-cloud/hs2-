@@ -105,6 +105,9 @@ type l3Link struct {
 	// (Iran) on the link (linkMeter.stripeN, HS2_MCONN_STRIPE): the lane
 	// moves an interactive flow off such a link at once.
 	stripe *atomic.Int32
+	// lane (nil: not tracked) is linkMeter.laneAt: stamped when the lane
+	// sends an interactive packet here (HS2_MCONN_STRIPE_SHARE reads it).
+	lane *atomic.Int64
 	// dupOK (nil: no) reports whether the other server reads TypeDataDup
 	// frames (capL3Dup); HS2_L3_DUP sends them only over such links.
 	dupOK func() bool

@@ -2,6 +2,7 @@ package engine
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -33,9 +34,29 @@ import (
 //     a link it may not find. The pool's shrink keeps a stripe link until
 //     its sub is gone (reconcile).
 //
+// The light users on a shared link pay for the stripe (the link's queue and
+// loss recovery), so a shared sub is bounded (the lab with every link
+// crowded: 14-22 subs per connection raised the light users' p99):
+//
+//   - at most stripeShareK (HS2_MCONN_STRIPE_SHARE_K, default 8; 0: no
+//     bound) shared subs per connection; STRIPE_UP's growth to 32 goes on
+//     only on links of the stripe's own;
+//   - a link the TUN lane sent an interactive packet over (ping, game,
+//     call) in the last stripeLaneQuiet is not shared;
+//   - among the rest, the fewest flowing user streams first, then the
+//     lowest rate, then the fewest users.
+//
 // Off (the default): nothing changes. No capability bit: only Iran decides,
 // and the repeated STRIPE record is what every exit with the stripe reads.
 var stripeShare = os.Getenv("HS2_MCONN_STRIPE_SHARE") == "1"
+
+// stripeShareK: shared stripe subs per connection (HS2_MCONN_STRIPE_SHARE_K).
+var stripeShareK = func() int {
+	if v, err := strconv.Atoi(os.Getenv("HS2_MCONN_STRIPE_SHARE_K")); err == nil && v >= 0 {
+		return v
+	}
+	return 8
+}()
 
 const (
 	// stripeWarmRate: the connection's rate (bytes/s, its faster direction)
@@ -43,14 +64,20 @@ const (
 	stripeWarmRate = 20e6 / 8
 	// stripeWarmEvery: a quiet stripe sub gets a STRIPE record this often.
 	stripeWarmEvery = 2 * time.Second
+	// stripeLaneQuiet: a link the TUN lane used this recently is not shared.
+	stripeLaneQuiet = 10 * time.Second
 )
 
 // pickStripeSharedLocked (under m.mu): the least loaded light link for a
 // stripe sub, or nil.
 func (m *LinkManager) pickStripeSharedLocked(avoid []any, pool *peerInfo) *managedLink {
-	serving, busy := 0, 0
+	serving, busy, own := 0, 0, 0
+	now := ctrlNow()
 	var best *managedLink
 	for _, ml := range m.links {
+		if ml.stShared.Load() > 0 && avoided(ml.link, avoid) {
+			own++ // this connection's shared sub (avoid: its links)
+		}
 		if !ml.serving() {
 			continue
 		}
@@ -65,9 +92,15 @@ func (m *LinkManager) pickStripeSharedLocked(avoid []any, pool *peerInfo) *manag
 		if ml.pressed || avoided(ml.link, avoid) || linkCopies(ml.link) > 0 {
 			continue
 		}
-		if best == nil || ml.rate10 < best.rate10 || ml.rate10 == best.rate10 && ml.users.Load() < best.users.Load() {
+		if at := laneAtOf(ml); at != 0 && now-at < int64(stripeLaneQuiet) {
+			continue // the TUN lane's interactive flows ride it
+		}
+		if best == nil || ml.flowing < best.flowing || ml.flowing == best.flowing && (ml.rate10 < best.rate10 || ml.rate10 == best.rate10 && ml.users.Load() < best.users.Load()) {
 			best = ml
 		}
+	}
+	if stripeShareK > 0 && own >= stripeShareK {
+		return nil
 	}
 	if best == nil || 2*(busy+1) > serving {
 		return nil
@@ -105,4 +138,12 @@ func (m *mConn) stripeWarmLocked(now time.Time) {
 		s.lastWarm = now
 		s.push(getChunk(mRecStripe))
 	}
+}
+
+// laneAtOf: the TUN lane's last interactive packet on ml (0: none known).
+func laneAtOf(ml *managedLink) int64 {
+	if ml.mtr == nil {
+		return 0
+	}
+	return ml.mtr.laneAt.Load()
 }

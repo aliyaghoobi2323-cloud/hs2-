@@ -104,6 +104,22 @@ func heavyOf(m *linkMeter) *atomic.Int32 {
 	return &m.heavyN
 }
 
+// laneOf is a link meter's lane stamp for an l3Link (nil: no meter).
+func laneOf(m *linkMeter) *atomic.Int64 {
+	if m == nil {
+		return nil
+	}
+	return &m.laneAt
+}
+
+// stampLane marks l as carrying an interactive flow now (a store at most
+// every 100 ms; HS2_MCONN_STRIPE_SHARE keeps a shared stripe off it).
+func (l *l3Link) stampLane(now int64) {
+	if l.lane != nil && now-l.lane.Load() > int64(100*time.Millisecond) {
+		l.lane.Store(now)
+	}
+}
+
 // stripeNOf is a link meter's stripe count for an l3Link (nil: no meter).
 func stripeNOf(m *linkMeter) *atomic.Int32 {
 	if m == nil {
@@ -160,6 +176,7 @@ func (ln *l3Lane) pick(links []*l3Link, pkt []byte, h uint32) (*l3Link, bool) {
 	// a stripe link (HS2_MCONN_STRIPE) is left at once: it is a download
 	// spread to fill the link, taken while the flow was there
 	if cur != nil && cur.Alive() && (!cur.isHeavy() || now-e.moved < int64(l3LaneMoveGap) && !cur.onStripe()) {
+		cur.stampLane(now)
 		return cur, true
 	}
 	best := rendezvous(links, h, true)
@@ -168,6 +185,9 @@ func (ln *l3Lane) pick(links []*l3Link, pkt []byte, h uint32) (*l3Link, bool) {
 	}
 	if best != cur {
 		e.link, e.moved = best, now
+	}
+	if best != nil {
+		best.stampLane(now)
 	}
 	return best, true
 }
