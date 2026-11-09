@@ -35,6 +35,12 @@ var lbCutDrain = os.Getenv("HS2_LB_CUT_DRAIN") == "1"
 // this long (retireForce for other retiring links).
 var cutDrainForce = 60 * time.Second
 
+// cutDrainForcePerTick: cut-drained links whose trickling connections are
+// force-closed per drain tick (each closes up to idleReclaimMax, spaced by
+// closeJitter), so a cut path's hundreds of users reconnect over tens of
+// seconds instead of one burst of handshakes onto the good paths.
+var cutDrainForcePerTick = 3
+
 // cutPathsFromReport is the cut paths of the dialing side's report, keyed as
 // the edge keys its links ("edge IP>dialer IP", "edge IP>*" for a path from the
 // default route), each with the links it keeps. Nil when none is cut or every

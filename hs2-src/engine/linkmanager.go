@@ -180,6 +180,7 @@ type LinkManager struct {
 	stalled        atomic.Int64  // stalled connections closed on degraded links, not yet logged
 	ctlDrain       int           // reverse: draining links whose slot the exit is asked to replace
 	forced         atomic.Int64  // ... of which trickling ones on links retiring retireForce+
+	forcedCut      atomic.Int64  // ... of which on cut-drained links (cutDrainForce+, lb_cutdrain.go)
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
 	drainIdle atomic.Int64
@@ -1146,8 +1147,15 @@ func (m *LinkManager) drainTick() {
 			l.Close() // DropLink then finds nothing and stays quiet
 		}(ml.link)
 	}
+	cutForced := 0
 	for _, ml := range reclaim {
-		force := now.Sub(ml.retireSince) >= retireForce || ml.cutDrain && now.Sub(ml.retireSince) >= cutDrainForce
+		force := now.Sub(ml.retireSince) >= retireForce
+		if !force && ml.cutDrain && now.Sub(ml.retireSince) >= cutDrainForce && cutForced < cutDrainForcePerTick {
+			force = true // a few cut-drained links a tick: their users reconnect gradually, not as one burst
+			cutForced++
+			go func(ml *managedLink) { m.forcedCut.Add(m.reclaimIdle(ml, now, drainIdle, true)) }(ml)
+			continue
+		}
 		go m.reclaimIdle(ml, now, drainIdle, force)
 	}
 	for _, h := range held {
@@ -1159,10 +1167,18 @@ func (m *LinkManager) drainTick() {
 	if n := m.reclaimed.Load(); n > 0 && now.Sub(m.reclaimLogAt) >= time.Minute {
 		m.reclaimed.Add(-n)
 		f := m.forced.Swap(0)
+		fc := min(m.forcedCut.Swap(0), f)
 		m.reclaimLogAt = now
 		if f > 0 {
-			m.log("mtcp: closed %d connection(s) on retiring links: %d idle for over %s, %d trickling (not flowing) on links retiring %s+ — they reconnect onto serving links",
-				n, n-f, fmtDur(drainIdle), f, fmtDur(retireForce))
+			var parts []string
+			if f > fc {
+				parts = append(parts, fmt.Sprintf("%d on links retiring %s+", f-fc, fmtDur(retireForce)))
+			}
+			if fc > 0 {
+				parts = append(parts, fmt.Sprintf("%d on cut-path links retiring %s+", fc, fmtDur(cutDrainForce)))
+			}
+			m.log("mtcp: closed %d connection(s) on retiring links: %d idle for over %s, %d trickling (not flowing): %s — they reconnect onto serving links",
+				n, n-f, fmtDur(drainIdle), f, strings.Join(parts, ", "))
 		} else {
 			m.log("mtcp: closed %d connection(s) idle for over %s on retiring links", n, fmtDur(drainIdle))
 		}
@@ -1193,11 +1209,11 @@ func (m *LinkManager) retiringLocked() int {
 // retireForce (force), those that are not flowing either. A connection that
 // moves anything between being chosen and being closed is spared. Closing a
 // stream can block, so this runs in its own goroutine, one per link at a time.
-func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Duration, force bool) {
+func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Duration, force bool) (forced int64) {
 	defer ml.reclaiming.Store(false)
 	ir, ok := ml.link.(idleReclaimer)
 	if !ok {
-		return
+		return 0
 	}
 	cands := ir.idleStreams(now, idle, idleReclaimMax)
 	idleN := len(cands)
@@ -1226,8 +1242,10 @@ func (m *LinkManager) reclaimIdle(ml *managedLink, now time.Time, idle time.Dura
 		m.reclaimed.Add(1)
 		if i >= idleN {
 			m.forced.Add(1)
+			forced++
 		}
 	}
+	return forced
 }
 
 // runAccept maintains the reverse-edge pool. It never dials: it runs the same

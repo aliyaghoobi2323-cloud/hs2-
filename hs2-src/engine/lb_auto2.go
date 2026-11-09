@@ -573,6 +573,13 @@ func (b *LB) rebalance2() int {
 			byPath[i] = append(byPath[i], h.retire)
 		}
 	}
+	if lbCutDrain && b.judge != nil { // lb_cutdrain.go: a cut path keeps its idle probe links
+		for j, rs := range byPath {
+			if q := b.judge.p[b.paths[j].Name()]; q != nil && q.cut && len(rs) <= lb2Keep {
+				delete(byPath, j)
+			}
+		}
+	}
 	room := min(lb2DrainBatch, lb2DrainPerMin-len(b.drained))
 	var picks []cand
 	for len(picks) < room {

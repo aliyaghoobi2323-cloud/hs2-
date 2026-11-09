@@ -142,3 +142,42 @@ func TestDrainTickZeroRetireSince(t *testing.T) {
 		t.Fatalf("want a held line without an overflowed age: %s", lg)
 	}
 }
+
+// The exit's rebalance keeps a cut path's last lb2Keep idle links (its probes)
+// with HS2_LB_CUT_DRAIN: in the lab it retired them one by one to zero.
+func TestCutDrainRebalanceKeepsProbes(t *testing.T) {
+	withAuto2(t)
+	old := lbCutDrain
+	t.Cleanup(func() { lbCutDrain = old })
+	for _, tc := range []struct {
+		on        bool
+		idle, ret int
+	}{{true, 2, 0}, {true, 3, 1}, {false, 2, 1}} {
+		lbCutDrain = tc.on
+		b, _ := NewLB(twoPaths(50, 50), nil)
+		b.SetAuto(true)
+		retired := 0
+		for i := 0; i < 8+tc.idle; i++ {
+			j := 0
+			if i >= 8 {
+				j = 1
+			}
+			b.mu.Lock()
+			b.links[j]++ // as acquire would, on the chosen path
+			b.mu.Unlock()
+			k := new(int)
+			b.result(j, false, k, nil)
+			b.attach(k, lbHooks{retire: func() bool { retired++; b.release(k); return true }})
+		}
+		b.mu.Lock()
+		b.links[1] += 6 // busy cut-drained links: counted, never idle
+		b.mult[1] = 0.1
+		b.judge = newQ2Judge(lb2Floor, "local", "remote", b.log)
+		b.judge.p[b.paths[1].Name()] = &q2Path{cut: true}
+		b.mu.Unlock()
+		b.rebalance2()
+		if retired != tc.ret {
+			t.Fatalf("on=%v idle=%d: retired %d, want %d", tc.on, tc.idle, retired, tc.ret)
+		}
+	}
+}
