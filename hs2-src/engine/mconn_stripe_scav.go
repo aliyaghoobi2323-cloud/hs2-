@@ -75,7 +75,8 @@ type stripeGate struct {
 	stGrowAt time.Time // the last growth (or the last cut)
 	stQ      time.Duration
 	stLogAt  time.Time
-	stNoGate bool // the last decision found nothing to measure: no gate until the next
+	stNoGate bool  // the last decision found nothing to measure: no gate until the next
+	stAskWin int64 // the growth window this connection last asked in (stripeGlobal)
 }
 
 // subMeter: the link meter of an exit sub (nil: not known).
@@ -120,6 +121,12 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	if m.stNoGate = !measured; m.stNoGate {
 		return -1 // no exit link tracked (nothing to measure the path with)
 	}
+	var base time.Duration
+	if stripeRel {
+		// the relative gate: only the excess over the path's own noise
+		base = pq.base()
+		q = max(0, q-base)
+	}
 	m.stQ = q
 	live := 0
 	for _, s := range m.subs {
@@ -135,15 +142,18 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 			m.tr.ev("stripe: queue %v > %v, width -> %d", q, target, m.stW)
 		}
 		m.stGrowAt = now
+		if stripeRel {
+			m.stGrowAt = now.Add(stripeCutHold - stripeQGrow) // this connection holds
+		}
 		stripeCut(now)
-	case q < target/2 && now.Sub(m.stGrowAt) >= stripeQGrow && m.stW < live && stripeGrowToken(now):
+	case q < target/2 && now.Sub(m.stGrowAt) >= stripeQGrow && m.stW < live && m.stripeGrowTokenLocked(now):
 		m.stW++
 		m.stGrowAt = now
 	}
 	m.stW = min(m.stW, live)
 	if stripeLog && now.Sub(m.stLogAt) >= time.Second {
 		m.stLogAt = now
-		log.Printf("stripe gate %x: q=%v w=%d live=%d", m.id&0xffffff, q.Round(100*time.Microsecond), m.stW, live)
+		log.Printf("stripe gate %x: q=%v base=%v w=%d live=%d", m.id&0xffffff, q.Round(100*time.Microsecond), base.Round(100*time.Microsecond), m.stW, live)
 	}
 	return m.stW
 }
@@ -154,13 +164,77 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 // overshot the path's room before the queue showed; and after one queue,
 // another stripe's growth refilled it. So: one sub more per stripeQGrow for
 // the whole process, none for stripeCutHold after any cut.
+//
+// With HS2_MCONN_STRIPE_REL=1 (the relative gate) that lock is loosened: in
+// production (Iran-Germany, dozens of heavy users) the path's noise put a
+// cut somewhere almost every hold, and every stripe sat at its first width.
+// A cut holds only the connection that saw it (stGrowAt) and empties the
+// process's growth bucket (about one stripeQGrow of no growth anywhere);
+// the bucket refills with one sub per stripeQGrow per stripeRelPer stripes
+// that asked to grow in the last second (at least one), so N stripes grow
+// about N/stripeRelPer times as fast as one, never N times.
 var stripeGlobal struct {
 	mu            sync.Mutex
 	growAt, cutAt time.Time
+	// the relative gate's bucket (HS2_MCONN_STRIPE_REL)
+	tokens       float64
+	fillAt       time.Time
+	win          int64 // the current asking window (unix seconds)
+	asked, prior int   // stripes that asked in the window, in the one before
 }
 
 // stripeCutHold: no stripe grows for this long after a queue.
 const stripeCutHold = 2 * time.Second
+
+// stripeRel: HS2_MCONN_STRIPE_REL=1, the relative gate (stripeQ.base) and
+// the per-connection cut (stripeGlobal). Default off.
+var stripeRel = os.Getenv("HS2_MCONN_STRIPE_REL") == "1"
+
+// stripeRelPer: stripes per sub of process growth per stripeQGrow
+// (HS2_MCONN_STRIPE_REL_PER, default 4).
+var stripeRelPer = envIntDefault("HS2_MCONN_STRIPE_REL_PER", 4)
+
+func envIntDefault(k string, d int) int {
+	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv(k))); err == nil && v > 0 {
+		return v
+	}
+	return d
+}
+
+// stripeGrowTokenLocked (under m.mu): whether m may take one more sub now
+// (and takes it).
+func (m *mConn) stripeGrowTokenLocked(now time.Time) bool {
+	if !stripeRel {
+		return stripeGrowToken(now)
+	}
+	g := &stripeGlobal
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if w := now.Unix(); w != g.win {
+		g.prior = 0
+		if w == g.win+1 {
+			g.prior = g.asked
+		}
+		g.win, g.asked = w, 0
+	}
+	if m.stAskWin != g.win {
+		m.stAskWin = g.win
+		g.asked++
+	}
+	n := max(g.asked, g.prior)
+	rate := float64(max(1, (n+stripeRelPer-1)/stripeRelPer)) // subs per stripeQGrow
+	if g.fillAt.IsZero() {
+		g.tokens, g.fillAt = 1, now
+	} else if dt := now.Sub(g.fillAt); dt > 0 {
+		g.tokens = min(rate, g.tokens+rate*float64(dt)/float64(stripeQGrow))
+		g.fillAt = now
+	}
+	if g.tokens < 1 {
+		return false
+	}
+	g.tokens--
+	return true
+}
 
 // stripeGrowToken: whether a stripe may take one more sub now (and takes it).
 func stripeGrowToken(now time.Time) bool {
@@ -179,6 +253,10 @@ func stripeCut(now time.Time) {
 	g := &stripeGlobal
 	g.mu.Lock()
 	g.cutAt = now
+	if stripeRel {
+		g.tokens = min(g.tokens, 0)
+		g.fillAt = now
+	}
 	g.mu.Unlock()
 }
 
@@ -225,6 +303,12 @@ type stripeQ struct {
 	light bool      // also the active light links (lightQ; Iran's upload gate)
 	q     time.Duration
 	logAt time.Time // diagnostics (HS2_MCONN_STRIPE_LOG)
+	// the relative gate (HS2_MCONN_STRIPE_REL): the path queue every busy
+	// link shows (none left out), one per measurement over the last
+	// stripeBaseN; bq is their stripeBasePct percentile
+	hist  []time.Duration
+	histI int
+	bq    time.Duration
 }
 
 // stripeLinkQ: one link at the last measurement.
@@ -300,7 +384,16 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 				l.q = time.Duration(st.rttUs-st.minRttUs) * time.Microsecond
 			}
 		}
+		if stripeRel {
+			p.noteBaseLocked(p.pickLocked(now, nil, false))
+		}
 	}
+	return p.pickLocked(now, own, true), true
+}
+
+// pickLocked: the path queue the links not in own show, from the last
+// measurement; logIt: the diagnostics line may be written.
+func (p *stripeQ) pickLocked(now time.Time, own []*linkMeter, logIt bool) time.Duration {
 	var ds []time.Duration
 	for mtr, l := range p.links {
 		if l.busy && !slices.Contains(own, mtr) {
@@ -318,7 +411,7 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 		slices.Sort(lt)
 	}
 	slices.Sort(ds)
-	if stripeLog && p.light && now.Sub(p.logAt) >= time.Second {
+	if logIt && stripeLog && p.light && now.Sub(p.logAt) >= time.Second {
 		p.logAt = now // diagnostics: what Iran's upload gate reads
 		log.Printf("stripe upq: links=%d own=%d busy-others=%v light=%v", len(p.links), len(own), ds, lt)
 	}
@@ -329,7 +422,53 @@ func (p *stripeQ) delay(now time.Time, own []*linkMeter) (time.Duration, bool) {
 	if len(lt) > 0 {
 		q = max(q, lightQ(lt))
 	}
-	return q, true
+	return q
+}
+
+// The relative gate's baseline. Production's Iran-Germany path shows its
+// busy links 1.0 ms (p25), 1.7 ms (median), 3-4 ms (p75) over their lowest
+// RTT with no queue (BBR keeps the real one near zero): route jitter, not a
+// queue. Against the absolute target (grow under 1.5 ms, halve over 3 ms)
+// the stripe almost never grew and was cut over and over. The baseline is
+// the lower decile of the path queue over the last ~30 s: a standing queue
+// the stripes make is cut (over base+target) long before it fills 90% of
+// the window, so it does not become the baseline; it is capped at
+// stripeBaseMax all the same.
+const (
+	stripeBaseN   = 300 // measurements (stripeQEvery each: 30 s)
+	stripeBaseMin = 30  // fewer: no baseline yet (0)
+	stripeBasePct = 10
+)
+
+// stripeBaseMax: HS2_MCONN_STRIPE_BASE_MAX (ms, default 4).
+var stripeBaseMax = time.Duration(envIntDefault("HS2_MCONN_STRIPE_BASE_MAX", 4)) * time.Millisecond
+
+// noteBaseLocked records one measurement's path queue (no busy link: nothing
+// to learn).
+func (p *stripeQ) noteBaseLocked(q time.Duration) {
+	if q <= 0 {
+		return
+	}
+	if len(p.hist) < stripeBaseN {
+		p.hist = append(p.hist, q)
+	} else {
+		p.hist[p.histI] = q
+		p.histI = (p.histI + 1) % stripeBaseN
+	}
+	if len(p.hist) < stripeBaseMin {
+		p.bq = 0
+		return
+	}
+	s := slices.Clone(p.hist)
+	slices.Sort(s)
+	p.bq = min(s[len(s)*stripeBasePct/100], stripeBaseMax)
+}
+
+// base: the path's noise floor (0 until learned).
+func (p *stripeQ) base() time.Duration {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.bq
 }
 
 // stripeLogf logs a diagnostic line (callers check stripeLog).

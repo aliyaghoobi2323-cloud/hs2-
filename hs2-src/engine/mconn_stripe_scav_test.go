@@ -387,3 +387,69 @@ func TestMConnStripeGatedFromRaw(t *testing.T) {
 		})
 	}
 }
+
+// The relative gate (HS2_MCONN_STRIPE_REL): the target is over the path's
+// learned noise floor, and a cut holds only the connection that saw it.
+func TestStripeGateRelative(t *testing.T) {
+	oldRel, oldT := stripeRel, stripeQTarget.Load()
+	t.Cleanup(func() {
+		stripeRel = oldRel
+		stripeQTarget.Store(oldT)
+		p := stripePathQ
+		p.mu.Lock()
+		p.hist, p.histI, p.bq = nil, 0, 0
+		p.mu.Unlock()
+	})
+	stripeRel = true
+	stripeQTarget.Store(int64(3 * time.Millisecond))
+	fixPathQ(t, 3*time.Millisecond)
+	p := stripePathQ
+	// the floor: the lower decile of the path queue, capped
+	p.mu.Lock()
+	for i := 0; i < stripeBaseN; i++ {
+		p.noteBaseLocked(time.Duration(1+i%4) * time.Millisecond) // 1..4 ms noise
+	}
+	if p.bq != time.Millisecond {
+		t.Fatalf("base %v, want 1ms", p.bq)
+	}
+	for i := 0; i < stripeBaseN; i++ {
+		p.noteBaseLocked(50 * time.Millisecond)
+	}
+	if p.bq != stripeBaseMax {
+		t.Fatalf("base %v under a standing queue, want the cap %v", p.bq, stripeBaseMax)
+	}
+	p.bq = 2 * time.Millisecond
+	p.mu.Unlock()
+	// 3 ms over a 2 ms floor: 1 ms of queue, under half the target: grows
+	m, s := gateConn(6)
+	m2, s2 := gateConn(6)
+	now := time.Now()
+	m.stripeWidthLocked(s, now)
+	m2.stripeWidthLocked(s2, now)
+	for i := 0; i < 4; i++ {
+		now = now.Add(stripeQGrow)
+		m.stripeWidthLocked(s, now)
+		m2.stripeWidthLocked(s2, now)
+	}
+	if m.stW+m2.stW < 4 {
+		t.Fatalf("widths %d+%d over the floor's noise, want growth", m.stW, m2.stW)
+	}
+	// 6 ms over a 2 ms floor: a real queue, both halve
+	w1, w2 := m.stW, m2.stW
+	setPathQ(6 * time.Millisecond)
+	now = now.Add(stripeQEvery)
+	m.stripeWidthLocked(s, now)
+	if m.stW != w1/2 {
+		t.Fatalf("width %d after a real queue, want %d", m.stW, w1/2)
+	}
+	// m2 (no cut of its own) grows again once the bucket refills; m holds
+	setPathQ(3 * time.Millisecond)
+	for i := 0; i < 2; i++ {
+		now = now.Add(stripeQGrow)
+		m.stripeWidthLocked(s, now)
+		m2.stripeWidthLocked(s2, now)
+	}
+	if m.stW != w1/2 || m2.stW <= w2 {
+		t.Fatalf("widths %d %d after one cut, want %d (held) and > %d", m.stW, m2.stW, w1/2, w2)
+	}
+}
