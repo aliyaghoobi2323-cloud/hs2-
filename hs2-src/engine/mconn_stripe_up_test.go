@@ -341,24 +341,26 @@ func TestMConnStripeUploadFromRaw(t *testing.T) {
 }
 
 // Iran's upload gate reads the light users' links too (active, not busy):
-// with no other busy link their median queue is the path's; a link that
+// with no other busy link their lower quartile is the path's queue; a link that
 // acknowledged nothing (idle: a stale srtt) never counts; the exit's gate
 // (light off) is unchanged. A link's socket is read through its stat func.
 func TestStripeUpPathQLight(t *testing.T) {
 	p := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}, light: true}
 	own, a, b, c, idle, busy := &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}, &linkMeter{}
 	p.links[own] = &stripeLinkQ{busy: true, active: true, q: 50 * time.Millisecond}
+	d := &linkMeter{}
 	p.links[a] = &stripeLinkQ{active: true, q: 1 * time.Millisecond}
-	p.links[b] = &stripeLinkQ{active: true, q: 6 * time.Millisecond}
-	p.links[c] = &stripeLinkQ{active: true, q: 8 * time.Millisecond}
+	p.links[b] = &stripeLinkQ{active: true, q: 1200 * time.Microsecond}
+	p.links[c] = &stripeLinkQ{active: true, q: 8 * time.Millisecond}  // a sparse link: stale srtt
+	p.links[d] = &stripeLinkQ{active: true, q: 15 * time.Millisecond} // one in loss recovery
 	p.links[idle] = &stripeLinkQ{q: 90 * time.Millisecond}
 	p.at = time.Now()
-	if q, _ := p.delay(p.at, []*linkMeter{own}); q != 6*time.Millisecond {
-		t.Fatalf("q %v, want the light links' median 6ms", q)
+	if q, _ := p.delay(p.at, []*linkMeter{own}); q != 1200*time.Microsecond {
+		t.Fatalf("q %v, want the light links' lower quartile 1.2ms (the noisy ones left out)", q)
 	}
 	p.links[busy] = &stripeLinkQ{busy: true, active: true, q: 20 * time.Millisecond}
 	if q, _ := p.delay(p.at, []*linkMeter{own}); q != 20*time.Millisecond {
-		t.Fatalf("q %v, want the larger of busy (20ms) and light (6ms)", q)
+		t.Fatalf("q %v, want the larger of busy (20ms) and light (1.2ms)", q)
 	}
 	p.light = false
 	if q, _ := p.delay(p.at, []*linkMeter{own, busy}); q != 0 {
