@@ -71,6 +71,8 @@ type AutoWindow struct {
 	// NeighborMax caps a stream's window while another user stream on the
 	// same session is receiving (0: no cap).
 	NeighborMax int
+	// QueueScale scales the queue thresholds (qLow / qHigh; 0: 1).
+	QueueScale float64
 }
 
 // Timings (variables only so tests can shorten them).
@@ -349,7 +351,7 @@ func (s *Stream) awPushed(n uint32) {
 		// slow probe marks the path queued; while it is (queueHold), no stream
 		// grows, and a grown stream whose own probe is slow too shrinks at
 		// once — alone it needs awRecent slow probes in a row.
-		slow := sample > min+qHigh(min)
+		slow := sample > min+a.cfg.qHigh(min)
 		if slow {
 			b.queueAt.Store(now.UnixNano())
 		}
@@ -363,7 +365,7 @@ func (s *Stream) awPushed(n uint32) {
 		if corroborated {
 			b.cutCeiling(now, min)
 		}
-		if (a.nRecent >= awRecent && low > min+qHigh(min)) || corroborated {
+		if (a.nRecent >= awRecent && low > min+a.cfg.qHigh(min)) || corroborated {
 			b.queueCuts.Add(1)
 			s.awShrinkLocked(max(a.base, a.win*3/4), now)
 			return
@@ -378,7 +380,7 @@ func (s *Stream) awPushed(n uint32) {
 			return
 		}
 	}
-	if a.probeWin < a.win || sample > min+qLow(min) {
+	if a.probeWin < a.win || sample > min+a.cfg.qLow(min) {
 		return
 	}
 	if q := b.queueAt.Load(); q != 0 && now.UnixNano()-q < int64(queueHold(min)) {
@@ -415,8 +417,22 @@ func (s *Stream) awPushed(n uint32) {
 // qLow / qHigh: queueing delay over the path's minimum loop RTT under which
 // a window may grow, and over which (in each of the last awRecent probes)
 // it shrinks by a quarter.
-func qLow(min time.Duration) time.Duration  { return time.Millisecond + min/32 }
-func qHigh(min time.Duration) time.Duration { return 3*time.Millisecond + min/16 }
+// QueueScale (AutoWindow) scales both: 1 (or 0) as above, 0.5 half as much
+// queue, and so on.
+func (c *AutoWindow) qLow(min time.Duration) time.Duration {
+	return c.scale(time.Millisecond + min/32)
+}
+
+func (c *AutoWindow) qHigh(min time.Duration) time.Duration {
+	return c.scale(3*time.Millisecond + min/16)
+}
+
+func (c *AutoWindow) scale(d time.Duration) time.Duration {
+	if c.QueueScale > 0 {
+		return time.Duration(float64(d) * c.QueueScale)
+	}
+	return d
+}
 
 func minDur(a, b time.Duration) time.Duration {
 	if a < b {

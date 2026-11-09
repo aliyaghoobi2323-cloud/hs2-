@@ -75,7 +75,9 @@ func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 		UpdateDiv: num("HS2_SMUX_AUTOWIN_DIV", 8, 2, 64),
 		// the cap while a light user receives on the same link (0: none)
 		NeighborMax: num("HS2_SMUX_AUTOWIN_NEIGHBOR_MB", 4, 0, 256) << 20,
-		Budget:      smux.NewWindowBudget(int64(budget) << 20),
+		// HS2_SMUX_AUTOWIN_QUEUE_PCT: the queue thresholds in percent (100)
+		QueueScale: float64(num("HS2_SMUX_AUTOWIN_QUEUE_PCT", 100, 10, 1000)) / 100,
+		Budget:     smux.NewWindowBudget(int64(budget) << 20),
 	}
 }
 
