@@ -54,6 +54,7 @@ package smux
 // only when grown streams' readers all stall.
 
 import (
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,7 +74,21 @@ type AutoWindow struct {
 	NeighborMax int
 	// QueueScale scales the queue thresholds (qLow / qHigh; 0: 1).
 	QueueScale float64
+	// Rel (HS2_SMUX_AUTOWIN_REL): the queue rules judge only the excess over
+	// the path's own standing jitter (relBase: the lower decile of the
+	// probes' excess over the minimum in the last relSpan, at most
+	// relBaseCap), and a light neighbour caps a stream only while its own
+	// probes show that excess (two in a row over qLow: the window halves),
+	// not merely because a light user is active on the link.
+	Rel bool
 }
+
+// relative gate (AutoWindow.Rel)
+const (
+	relSpan    = 30 * time.Second
+	relBaseCap = 4 * time.Millisecond
+	relN       = 512
+)
 
 // Timings (variables only so tests can shorten them).
 var (
@@ -125,7 +140,55 @@ type WindowBudget struct {
 
 	rmu sync.Mutex
 	rtt minFilter // the process-wide loop-RTT minimum
+
+	// AutoWindow.Rel: recent probe excesses over the minimum (ring) and
+	// their lower decile (relBase)
+	xmu    sync.Mutex
+	xs     [relN]relSample
+	xn     int
+	xbase  time.Duration
+	xbAt   time.Time
+	xbaseN atomic.Int64 // the last base (ns), for the status
 }
+
+type relSample struct {
+	d  time.Duration
+	at time.Time
+}
+
+// relBase records one probe's excess over the minimum and returns the
+// path's standing jitter: the lower decile of the excesses of the last
+// relSpan (recomputed at most once a second), at most relBaseCap.
+func (b *WindowBudget) relBase(exc time.Duration, now time.Time) time.Duration {
+	if exc < 0 {
+		exc = 0
+	}
+	b.xmu.Lock()
+	defer b.xmu.Unlock()
+	b.xs[b.xn%relN] = relSample{exc, now}
+	b.xn++
+	if !b.xbAt.IsZero() && now.Sub(b.xbAt) < time.Second {
+		return b.xbase
+	}
+	b.xbAt = now
+	v := make([]time.Duration, 0, relN)
+	for i := 0; i < relN && i < b.xn; i++ {
+		if now.Sub(b.xs[i].at) <= relSpan {
+			v = append(v, b.xs[i].d)
+		}
+	}
+	if len(v) < 8 {
+		b.xbase = 0
+	} else {
+		sort.Slice(v, func(i, j int) bool { return v[i] < v[j] })
+		b.xbase = minDur(v[len(v)/10], relBaseCap)
+	}
+	b.xbaseN.Store(int64(b.xbase))
+	return b.xbase
+}
+
+// RelBase: the relative gate's current base (0 without AutoWindow.Rel).
+func (b *WindowBudget) RelBase() time.Duration { return time.Duration(b.xbaseN.Load()) }
 
 // NewWindowBudget makes a budget of limit bytes.
 func NewWindowBudget(limit int64) *WindowBudget {
@@ -344,6 +407,10 @@ func (s *Stream) awPushed(n uint32) {
 	a.recent[a.nRecent%awRecent] = sample
 	a.nRecent++
 	b := a.cfg.Budget
+	rawMin := min
+	if a.cfg.Rel {
+		min += b.relBase(sample-min, now) // judge only the excess over the path's jitter
+	}
 	if a.extra > 0 {
 		// The queue rule, process-wide: every link of the tunnel crosses the
 		// same path, so a queue one grown stream sees is the others' too (8
@@ -351,7 +418,7 @@ func (s *Stream) awPushed(n uint32) {
 		// slow probe marks the path queued; while it is (queueHold), no stream
 		// grows, and a grown stream whose own probe is slow too shrinks at
 		// once — alone it needs awRecent slow probes in a row.
-		slow := sample > min+a.cfg.qHigh(min)
+		slow := sample > min+a.cfg.qHigh(rawMin)
 		if slow {
 			b.queueAt.Store(now.UnixNano())
 		}
@@ -361,18 +428,31 @@ func (s *Stream) awPushed(n uint32) {
 				low = minDur(low, r)
 			}
 		}
-		corroborated := slow && b.queuedSince(now, min) > 1
+		corroborated := slow && b.queuedSince(now, rawMin) > 1
 		if corroborated {
-			b.cutCeiling(now, min)
+			b.cutCeiling(now, rawMin)
 		}
-		if (a.nRecent >= awRecent && low > min+a.cfg.qHigh(min)) || corroborated {
+		if (a.nRecent >= awRecent && low > min+a.cfg.qHigh(rawMin)) || corroborated {
 			b.queueCuts.Add(1)
 			s.awShrinkLocked(max(a.base, a.win*3/4), now)
 			return
 		}
 	}
 	limit := uint32(a.cfg.Max)
-	if nb := uint32(a.cfg.NeighborMax); nb > 0 && nb < limit && s.sess.awNeighborsLocked(s, now) {
+	if nb := uint32(a.cfg.NeighborMax); a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && a.nRecent >= awRecent {
+		// a light neighbour is capped against only while this stream's own
+		// probes (its link) show a queue beyond the jitter: two in a row
+		// over qLow halve the window; no growth then either
+		low := sample
+		for _, r := range a.recent {
+			low = minDur(low, r)
+		}
+		if low > min+a.cfg.qLow(rawMin) && s.sess.awNeighborsLocked(s, now) {
+			b.neighborCuts.Add(1)
+			s.awShrinkLocked(max(nb, a.base, a.win/2), now)
+			return
+		}
+	} else if nb := uint32(a.cfg.NeighborMax); !a.cfg.Rel && nb > 0 && nb < limit && s.sess.awNeighborsLocked(s, now) {
 		limit = max(nb, a.base)
 		if a.win > limit {
 			b.neighborCuts.Add(1)
@@ -380,10 +460,10 @@ func (s *Stream) awPushed(n uint32) {
 			return
 		}
 	}
-	if a.probeWin < a.win || sample > min+a.cfg.qLow(min) {
+	if a.probeWin < a.win || sample > min+a.cfg.qLow(rawMin) {
 		return
 	}
-	if q := b.queueAt.Load(); q != 0 && now.UnixNano()-q < int64(queueHold(min)) {
+	if q := b.queueAt.Load(); q != 0 && now.UnixNano()-q < int64(queueHold(rawMin)) {
 		return // a grown stream saw the path queued a moment ago
 	}
 	if unread := a.numRecv - s.numRead; unread > a.win/4 {
@@ -530,7 +610,7 @@ func (s *Stream) awTick(now time.Time, pressured bool, fair uint32) bool {
 	if pressured && a.win > a.base+fair && now.Sub(a.limitedAt) > b.holdP {
 		shrink = true // the largest windows give way first
 	}
-	if nb := uint32(a.cfg.NeighborMax); nb > 0 && a.win > max(nb, a.base) && s.sess.awNeighborsLocked(s, now) {
+	if nb := uint32(a.cfg.NeighborMax); !a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && s.sess.awNeighborsLocked(s, now) {
 		shrink, nw = true, max(nb, a.base) // a light user came to this link: at once
 		b.neighborCuts.Add(1)
 	}

@@ -83,6 +83,10 @@ func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 		// 5-25 ms, at 30 the app pings, games and ICMP stayed at the baseline)
 		QueueScale: float64(num("HS2_SMUX_AUTOWIN_QUEUE_PCT", 30, 10, 1000)) / 100,
 		Budget:     smux.NewWindowBudget(int64(budget) << 20),
+		// HS2_SMUX_AUTOWIN_REL=1: queue rules on the excess over the path's
+		// standing jitter, and the light-neighbour cap only while the
+		// stream's own probes show that excess (AutoWindow.Rel)
+		Rel: strings.TrimSpace(get("HS2_SMUX_AUTOWIN_REL")) == "1",
 	}
 }
 
