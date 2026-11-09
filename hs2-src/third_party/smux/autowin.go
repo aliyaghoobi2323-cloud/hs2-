@@ -11,8 +11,9 @@ package smux
 // Mbit/s, whatever the link could carry.
 //
 // What: each stream's window starts at MaxStreamBuffer (light streams stay
-// exactly where they were) and doubles, up to AutoWindow.Max, each time the
-// stream proves that the window — not the link, not the reader — held it back:
+// exactly where they were) and grows (x2 up to 4x the base, then +25%), up
+// to AutoWindow.Max, each time the stream proves that the window — not the
+// link, not the reader — held it back:
 //
 //   - Loop RTT probe. When a UPD moves the limit the sender may write up to,
 //     the old limit and the time are remembered (one probe at a time). The
@@ -20,11 +21,14 @@ package smux
 //     the time until the first byte past the old limit arrives is at least the
 //     loop round trip (UPD out, data back, both links' queues included), and
 //     equal to it when the sender sat at the limit waiting: window-bound.
-//     The session keeps the smallest sample (refreshed every rttFresh).
+//     The path's minimum is a windowed minimum over two rttFresh periods,
+//     the smaller of the session's and the process's (minFilter).
 //   - Grow when a probe of the CURRENT window (the old limit was advertised
-//     with the window the stream has now) comes back within 1.25x the
-//     session's minimum (+2 ms) while the reader keeps up (at most a quarter
-//     window unread). A link-bound stream's probes come back late (its data
+//     with the window the stream has now) comes back within qLow of the
+//     minimum while the reader keeps up (at most a quarter window unread);
+//     shrink by a quarter when the last awRecent probes all exceed qHigh
+//     (its data queues where other users' packets wait), and down to
+//     NeighborMax while a light stream receives on the same session. A link-bound stream's probes come back late (its data
 //     waits in the link's queues), an app-bound one never reaches the limit,
 //     and a slow reader leaves data unread: none of them grows.
 //   - The window may only grow by what the process-wide WindowBudget grants,

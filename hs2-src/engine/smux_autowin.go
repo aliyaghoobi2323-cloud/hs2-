@@ -18,18 +18,24 @@ import (
 // connection, or one mconn sub — moves about 1 MiB per round trip: 100-150
 // Mbit/s at 80 ms however fast the links are. With the switch a stream that
 // proves window-bound (its sender waits at the limit while the reader keeps
-// up) doubles its window, up to HS2_SMUX_AUTOWIN_MAX_MB (32), and a window
+// up) grows its window (x2 up to 8 MiB, then +25%), up to
+// HS2_SMUX_AUTOWIN_MAX_MB (32), and a window
 // update goes out every eighth of the window (HS2_SMUX_AUTOWIN_DIV; upstream:
 // every half), so a sender waits at the limit less per round trip. Light streams
 // never get there and keep the 2 MiB window they have today.
 //
 // Light users first: a stream grows only while its probes show no queue on
-// its links (loop RTT within 2 ms + 1/16 of the minimum), halves when its
-// last four probes all show a queue (over 5 ms + 1/8: its in-flight data is
+// its links (loop RTT within 1 ms + 1/32 of the path's minimum), loses a
+// quarter when its last two probes both show a queue (over 3 ms + 1/16: its
+// in-flight data is
 // waiting in a socket or on the path, where light users' packets would wait
 // behind it), and is held to HS2_SMUX_AUTOWIN_NEIGHBOR_MB (4) while a light
 // user (another stream receiving under 8 Mbit/s) is active on the same link.
 // The receiver measures this itself, so no signal has to cross the tunnel.
+//
+// Striped connections (HS2_MCONN_STRIPE) keep upstream's window on Iran's
+// side (autoWinOffForStripe below): the stripe spreads a download over links,
+// the adaptive window serves what is not striped.
 //
 // Compatibility: no capability bit. The window travels in every update frame
 // and an older peer's smux honours whatever it carries, so either side may
