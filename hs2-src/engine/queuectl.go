@@ -170,16 +170,20 @@ func (q *qCtl) step(in qIn) (float64, string) {
 	case in.delay >= qHigh:
 		q.idle = 0
 		binding := in.g >= qFullFrac*q.rate
-		if binding {
-			q.stuck++
-		} else {
-			q.stuck = 0
-		}
+		// A queue that stays under the cap counts toward "not its own"
+		// whether the cap binds or not: in the lab (2026-11-09) the edge's
+		// links saw the download direction's queue — no cap on the upload
+		// drains that — and following "what they deliver" chased the cap
+		// from 16 down to 2.8 Mbit/s.
+		q.stuck++
 		if q.stuck >= qStuckTicks {
 			q.rate, q.stuck = 0, 0
 			q.backOff(in.now)
-			return 0, fmt.Sprintf("queue: capping did not drain it (still %s at %.1f Mbit/s, all the path delivered) — the queue is not the tunnel's own; cap removed for %s",
+			return 0, fmt.Sprintf("queue: capping did not drain it (still %s at %.1f Mbit/s) — the queue is not the tunnel's own; cap removed for %s",
 				in.delay.Round(time.Millisecond), mbitps(in.g), q.releaseFor)
+		}
+		if !binding && q.hold > 0 {
+			return q.rate, "" // followed down already: wait for it to tell
 		}
 		if binding {
 			// The cap itself just went past the path (a rise found its rate):

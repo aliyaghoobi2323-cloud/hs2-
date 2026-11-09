@@ -186,3 +186,36 @@ func TestQLossOfTakesOutShaperDrops(t *testing.T) {
 		t.Fatalf("no segments: %.3f", l)
 	}
 }
+
+// The edge's links see the other direction's queue (downloads to the users):
+// the delay is there whatever the edge's own egress does, and the links send
+// little. A cap must not chase that queue down to nothing: it comes off
+// within ~qStuckTicks and stays off longer each time.
+func TestQueueCtlReverseQueueNotChased(t *testing.T) {
+	q := &qCtl{}
+	now := time.Unix(1e9, 0)
+	caps, capped, minCap := 0, 0, math.Inf(1)
+	rate := 0.0
+	for i := 0; i < qFlapTicks; i++ {
+		now = now.Add(healthTick)
+		g := 2e6 // 16 Mbit/s: the uploads, under any cap the queue would set
+		if rate > 0 {
+			g = math.Min(g, rate)
+		}
+		prev := rate
+		rate, _ = q.step(qIn{now: now, delay: 110 * time.Millisecond, g: g})
+		if prev == 0 && rate > 0 {
+			caps++
+		}
+		if rate > 0 {
+			capped++
+			minCap = math.Min(minCap, rate)
+		}
+	}
+	if caps > 6 || capped > qFlapTicks/10 {
+		t.Fatalf("31 minutes of the other direction's queue: %d caps, capped %d of %d ticks", caps, capped, qFlapTicks)
+	}
+	if minCap < 0.8*2e6 {
+		t.Fatalf("the cap was chased down to %.1f Mbit/s (the links sent 16)", mbitps(minCap))
+	}
+}
