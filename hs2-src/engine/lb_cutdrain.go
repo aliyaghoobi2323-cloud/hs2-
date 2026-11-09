@@ -41,6 +41,9 @@ var cutDrainForce = 60 * time.Second
 // seconds instead of one burst of handshakes onto the good paths.
 var cutDrainForcePerTick = 3
 
+// cutDrainNoRoom is the drain room on a dialing pool (no exit ceiling).
+var cutDrainNoRoom = 1 << 30
+
 // cutPathsFromReport is the cut paths of the dialing side's report, keyed as
 // the edge keys its links ("edge IP>dialer IP", "edge IP>*" for a path from the
 // default route), each with the links it keeps. Nil when none is cut or every
@@ -111,12 +114,48 @@ func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time) ([]*
 			byPath[p] = append(byPath[p], ml)
 		}
 	}
+	// A cut path keeps lb2Keep serving links (probes: its recovery is seen
+	// through them). The exit's rebalance retires idle links on it, which
+	// are its probes: put cut-drained links (fewest connections first) back.
+	var back []*managedLink
+	for _, ml := range m.links {
+		if !ml.cutDrain || !ml.retiring || ml.draining || ml.degraded || !ml.link.Alive() {
+			continue
+		}
+		p := mlPath(ml)
+		if len(byPath[p]) >= lb2Keep {
+			continue
+		}
+		back = append(back, ml)
+	}
+	sort.Slice(back, func(i, j int) bool { return back[i].open < back[j].open })
+	for _, ml := range back {
+		p := mlPath(ml)
+		if len(byPath[p]) >= lb2Keep {
+			continue
+		}
+		ml.retiring, ml.retireSince, ml.cutDrain = false, time.Time{}, false
+		byPath[p] = append(byPath[p], ml)
+		serving = append(serving, ml)
+	}
+	// Only as many links are drained as the exit can replace (its ceiling
+	// less the links up): past that, a drained link is a serving slot lost
+	// and the good paths' links carry more users each (the lab at its cap:
+	// serving 150→117, ICMP p99 up). Replacements free no room, so links
+	// closed (emptied) make the room for the next ones.
+	room := cutDrainNoRoom
+	if m.accept {
+		room = max(0, m.exitCeilingLocked()-m.aliveLocked())
+	}
 	gone := map[*managedLink]bool{}
 	var out []*managedLink
 	for p, ls := range byPath {
 		keep, _ := cutKeep(cut, p)
-		if len(ls) <= keep {
+		if len(ls) <= keep || room <= 0 {
 			continue
+		}
+		if n := len(ls) - keep; n > room {
+			keep = len(ls) - room
 		}
 		sort.Slice(ls, func(i, j int) bool {
 			a, b := ls[i], ls[j]
@@ -125,6 +164,7 @@ func (m *LinkManager) cutDrainLocked(serving []*managedLink, now time.Time) ([]*
 			}
 			return a.id < b.id
 		})
+		room -= len(ls) - keep
 		for _, ml := range ls[keep:] {
 			ml.retiring, ml.retireSince, ml.pressed, ml.cutDrain = true, now, false, true
 			gone[ml] = true

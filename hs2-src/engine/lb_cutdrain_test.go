@@ -181,3 +181,41 @@ func TestCutDrainRebalanceKeepsProbes(t *testing.T) {
 		}
 	}
 }
+
+// At the exit's ceiling no replacement can come: only as many links drain as
+// there is room for (the lab at max_links lost 33 serving slots), and a cut
+// path whose probes the exit retired gets cut-drained links back in service.
+func TestCutDrainRoomAndProbes(t *testing.T) {
+	withCutDrain(t)
+	m, clk, _ := newV2Manager(nil, 1, 27, true) // ceiling 27: room for 3
+	cut := map[string]int{"i1>k1": 2}
+	m.cutPaths = func() map[string]int { return cut }
+	var bad []*managedLink
+	for i := 0; i < 12; i++ {
+		bad = append(bad, cutLink(m, "i1>k1", 20+i))
+	}
+	for i := 0; i < 12; i++ {
+		cutLink(m, "i2>k1", 5)
+	}
+	ctx := context.Background()
+	clk.Advance(time.Second)
+	m.reconcile(ctx, 24)
+	if S, R := poolCounts(m); S != 21 || R != 3 {
+		t.Fatalf("at the ceiling: %d serving, %d retiring; want 21, 3", S, R)
+	}
+	// The exit retires the two idle probes; two cut-drained links come back.
+	for _, ml := range bad[:9] {
+		ml.link.Close()
+	}
+	clk.Advance(time.Second)
+	m.reconcile(ctx, 24)
+	n := 0
+	for _, ml := range bad[9:] {
+		if !isRetiring(m, ml) {
+			n++
+		}
+	}
+	if n != lb2Keep {
+		t.Fatalf("cut path serving %d after its probes went, want %d", n, lb2Keep)
+	}
+}
