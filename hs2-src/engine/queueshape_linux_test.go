@@ -72,18 +72,14 @@ func TestQShaperOnKernel(t *testing.T) {
 		t.Fatalf("both shapers on class %d", s.minor)
 	}
 	if f := show("filter"); !strings.Contains(f, "flowid "+qClassID(s2.minor)) || !strings.Contains(f, "000020fb/0000ffff") {
-		t.Fatalf("the second shaper's filter is missing:
-%s", f)
+		t.Fatalf("the second shaper's filter is missing: %s", f)
 	}
 	s.remove()
 	if q, c := show("qdisc"), show("class"); !strings.Contains(q, "htb "+qHandle+":") || !strings.Contains(c, qClassID(s2.minor)) || strings.Contains(c, qClassID(s.minor)+" ") {
-		t.Fatalf("the first's removal took the second's shaper:
-qdisc %s
-class %s", q, c)
+		t.Fatalf("the first's removal took the second's shaper: qdisc %s class %s", q, c)
 	}
 	if f := show("filter"); strings.Contains(f, "flowid "+qClassID(s.minor)) {
-		t.Fatalf("the first's filters left behind:
-%s", f)
+		t.Fatalf("the first's filters left behind: %s", f)
 	}
 	s.apply(6.25e6/qWire, []netip.AddrPort{peer}) // back, beside the second
 	if c := show("class"); !strings.Contains(c, qClassID(s.minor)) {
@@ -107,8 +103,7 @@ class %s", q, c)
 		t.Fatal("apply refused beside a stale class")
 	}
 	if c := show("class"); strings.Count(c, "class htb "+qHandle+":") != 2 || s3.minor != stale {
-		t.Fatalf("the stale class %d was not cleaned up (took %d):
-%s", stale, s3.minor, c)
+		t.Fatalf("the stale class %d was not cleaned up (took %d): %s", stale, s3.minor, c)
 	}
 	s3.remove()
 	if q := show("qdisc"); strings.Contains(q, "htb") {

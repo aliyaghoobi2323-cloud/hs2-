@@ -75,26 +75,26 @@ type qCtl struct {
 }
 
 const (
-	qHigh       = 15 * time.Millisecond // a queue
-	qLow        = 8 * time.Millisecond  // no queue (cake's own target is 5 ms)
-	qStartFrac  = 0.95                  // the first cap, of what the links delivered: drains the queue in seconds
-	qBackFrac   = 0.97                  // a later overshoot: what they delivered then is the path's rate
-	qDown       = 0.93
-	qUpFirst    = 1.10 // a rise before any overshoot (the path's rate not known)
-	qUpFast     = 1.02 // a rise well under the last overshoot (the path's rate)
-	qPathMemory = 10 * time.Minute
-	qUpSlow     = 1.005 // ... and near it: each overshoot is a queue every user waits
-	qNearPath   = 0.985
-	qStartTicks = 5 // ~10 s of a queue, uncapped, before a cap: not a burst, not jitter
+	qHigh        = 15 * time.Millisecond // a queue
+	qLow         = 8 * time.Millisecond  // no queue (cake's own target is 5 ms)
+	qStartFrac   = 0.95                  // the first cap, of what the links delivered: drains the queue in seconds
+	qBackFrac    = 0.97                  // a later overshoot: what they delivered then is the path's rate
+	qDown        = 0.93
+	qUpFirst     = 1.10 // a rise before any overshoot (the path's rate not known)
+	qUpFast      = 1.02 // a rise well under the last overshoot (the path's rate)
+	qPathMemory  = 10 * time.Minute
+	qUpSlow      = 1.005 // ... and near it: each overshoot is a queue every user waits
+	qNearPath    = 0.985
+	qStartTicks  = 5  // ~10 s of a queue, uncapped, before a cap: not a burst, not jitter
 	qMinCapTicks = 15 // ~30 s a cap is kept at least before loss takes it off
-	qGraceTicks = 2 // ~4 s for the first cap to drain the queue it found
-	qHoldTicks  = 5 // ~10 s after a step down before it rises again
-	qFullFrac   = 0.90
-	qStuckTicks = 5 // ~10 s of a queue that does not drain under a binding cap
-	qIdleTicks  = 15
-	qMinRate    = 125000 // 1 Mbit/s: below this there is nothing to shape
-	qReleaseMin = time.Minute
-	qReleaseMax = 10 * time.Minute
+	qGraceTicks  = 2  // ~4 s for the first cap to drain the queue it found
+	qHoldTicks   = 5  // ~10 s after a step down before it rises again
+	qFullFrac    = 0.90
+	qStuckTicks  = 5 // ~10 s of a queue that does not drain under a binding cap
+	qIdleTicks   = 15
+	qMinRate     = 125000 // 1 Mbit/s: below this there is nothing to shape
+	qReleaseMin  = time.Minute
+	qReleaseMax  = 10 * time.Minute
 	// qMaxLoss: a path that loses more than this of what the links send
 	// limits them by its loss, not by its queue: capping it cost 8% of the
 	// throughput at 3% loss in the lab, for no significant gain in the median
