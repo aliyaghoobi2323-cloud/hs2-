@@ -70,14 +70,11 @@ func TestCtrlRTTLine(t *testing.T) {
 	}
 	for _, c := range cases {
 		if got := ctrlRTTLine(c.ls); got != c.want {
-			t.Errorf("got %q
-want %q", got, c.want)
+			t.Errorf("got %q\nwant %q", got, c.want)
 		}
 	}
-	l := strings.Join(obsLines(cases[0].ls), "
-")
+	l := strings.Join(obsLines(cases[0].ls), "\n")
 	if !strings.Contains(l, cases[0].want) || strings.Contains(l, "behind the link's traffic") {
-		t.Errorf("status lines:
-%s", l)
+		t.Errorf("status lines:\n%s", l)
 	}
 }
