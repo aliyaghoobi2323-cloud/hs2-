@@ -64,6 +64,18 @@ var stripeShareK = func() int {
 	return 8
 }()
 
+// stripeShareTotal: shared stripe subs of the whole pool, every connection
+// together (HS2_MCONN_STRIPE_SHARE_TOTAL; 0, the default: no bound). The
+// per-connection bound alone let 4 parallel downloads take 4×8 light links
+// (the lab, down4 at 1 % loss: crowd p95 +9 ms, game p99 +21 ms); a pool
+// budget keeps the light users' share the same however many stripes run.
+var stripeShareTotal = func() int {
+	if v, err := strconv.Atoi(os.Getenv("HS2_MCONN_STRIPE_SHARE_TOTAL")); err == nil && v >= 0 {
+		return v
+	}
+	return 0
+}()
+
 const (
 	// stripeWarmRate: the connection's rate (bytes/s, its faster direction)
 	// that keeps its stripe subs (20 Mbit/s).
@@ -77,12 +89,15 @@ const (
 // pickStripeSharedLocked (under m.mu): the least loaded light link for a
 // stripe sub, or nil.
 func (m *LinkManager) pickStripeSharedLocked(avoid []any, pool *peerInfo) *managedLink {
-	serving, busy, own := 0, 0, 0
+	serving, busy, own, total := 0, 0, 0, 0
 	now := ctrlNow()
 	var best *managedLink
 	for _, ml := range m.links {
-		if ml.stShared.Load() > 0 && avoided(ml.link, avoid) {
-			own++ // this connection's shared sub (avoid: its links)
+		if n := ml.stShared.Load(); n > 0 {
+			total += int(n) // every connection's shared subs
+			if avoided(ml.link, avoid) {
+				own++ // this connection's shared sub (avoid: its links)
+			}
 		}
 		if !ml.serving() {
 			continue
@@ -107,6 +122,9 @@ func (m *LinkManager) pickStripeSharedLocked(avoid []any, pool *peerInfo) *manag
 	}
 	if stripeShareK > 0 && own >= stripeShareK {
 		return nil
+	}
+	if stripeShareTotal > 0 && total >= stripeShareTotal {
+		return nil // the pool's budget is spent (several stripes share it)
 	}
 	if best == nil || 2*(busy+1) > serving {
 		return nil

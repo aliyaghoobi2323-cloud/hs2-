@@ -92,6 +92,42 @@ func noStripeShare(t *testing.T) {
 	stripeShare = false
 }
 
+// HS2_MCONN_STRIPE_SHARE_TOTAL: the pool's shared stripe subs, every
+// connection together, stop at the budget; a release frees a place.
+func TestPickStripeSharedTotal(t *testing.T) {
+	old, oldS, oldK, oldT := stripeK.Load(), stripeShare, stripeShareK, stripeShareTotal
+	t.Cleanup(func() { stripeK.Store(old); stripeShare = oldS; stripeShareK = oldK; stripeShareTotal = oldT })
+	stripeK.Store(4)
+	stripeShare, stripeShareK, stripeShareTotal = true, 8, 2
+	caps := uint8(capMConn | capMConnRaw)
+	var ls []*mcLink
+	for i := 0; i < 10; i++ {
+		ls = append(ls, newMCLink(caps))
+	}
+	m := mcManager(ls...)
+	for i, ml := range m.links {
+		ml.users.Store(10)
+		ml.flowing = 2
+		ml.rate10 = float64(1000 * (i + 1))
+	}
+	l1, rel1, ok1 := m.pickStripe(nil) // connection A
+	l2, rel2, ok2 := m.pickStripe(nil) // connection B
+	if !ok1 || !ok2 || l1 == l2 {
+		t.Fatalf("two connections: %v %v ok=%v %v", l1, l2, ok1, ok2)
+	}
+	if _, _, ok := m.pickStripe(nil); ok {
+		t.Fatal("a third shared sub past the pool budget of 2")
+	}
+	rel1()
+	l3, rel3, ok := m.pickStripe(nil)
+	if !ok {
+		t.Fatal("no shared sub after a release freed the budget")
+	}
+	_ = l3
+	rel3()
+	rel2()
+}
+
 // The shared stripe's bounds: no link the TUN lane's interactive flows rode
 // lately, the fewest flowing streams first, and at most stripeShareK shared
 // subs per connection.
