@@ -224,6 +224,9 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 			log.Printf("stripe %x: under the growth rate (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
 		}
 		m.stHot = 0
+		if m.stN > 0 && rate > 1e6 {
+			stripeDiag.growRate.Add(1) // a stripe that slowed (not every idle connection)
+		}
 		return false
 	}
 	if m.stHot++; n == 1 && stripeAlone && m.stHot < int(stripeHotTicks.Load()) {
@@ -245,6 +248,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		if stripeLog {
 			log.Printf("stripe %x: no growth, a sub unused (%.1f Mbit/s over %d)", m.id&0xffffff, rate*8/1e6, n)
 		}
+		stripeDiag.growUnused.Add(1)
 		// the sender's scavenger gate leaves a sub unused (the path has a
 		// queue): one more would only hold a link light users could take
 		return false
@@ -484,6 +488,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	c.setOff(m.sendOff)
 	m.sendOff += uint64(c.n)
 	best.push(c)
+	if best != p {
+		stripeDiag.subB.Add(uint64(c.n))
+	}
 	now := time.Now()
 	for _, s := range m.subs {
 		if s != best && !s.retired {
@@ -597,6 +604,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 		}
 	}
 	if !shared && (chosen == nil || !bestRes && free-1 < stripeKeepFree) {
+		stripeDiag.pickNone.Add(1)
 		if stripeAlone {
 			m.stripeAskLocked(m.now())
 		}
