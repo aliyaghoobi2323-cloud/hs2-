@@ -347,6 +347,7 @@ type msub struct {
 	txEnd      uint64    // end offset of the last byte placed on it (CLOSE-ACK)
 	stripe     bool      // carries the stripe (HS2_MCONN_STRIPE, mconn_stripe.go)
 	stPushed   time.Time // the stripe rule last put a chunk on it (HS2_MCONN_STRIPE_UP)
+	lastWarm   time.Time // Iran: the last keep-warm STRIPE record (HS2_MCONN_STRIPE_SHARE)
 
 	// stMtr (exit): the link meter whose stripeN this stripe sub raised
 	// (released in close).
@@ -1959,6 +1960,9 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			hs := false
 			for _, s := range live {
 				if s == p || len(s.q) > 0 || s.cur != nil {
+					continue
+				}
+				if m.stripeWarmKeepLocked(s, now) { // HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go)
 					continue
 				}
 				// Idle both ways: the peer decides alone what it sends on

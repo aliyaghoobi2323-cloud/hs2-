@@ -153,6 +153,8 @@ type stripeState struct {
 	stHot     int  // Iran: consecutive samples at the growth rate
 	stUp      bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
 
+	stWarmUntil time.Time // Iran: its stripe subs are kept until then (HS2_MCONN_STRIPE_SHARE, mconn_stripe_share.go)
+
 	firstRx atomic.Int64 // diagnostics (HS2_MCONN_STRIPE_LOG): unix ns of the first byte read raw
 
 	stAW stripeAW // Iran: the adaptive smux window of a settled stripe (smux_autowin.go)
@@ -187,6 +189,7 @@ func (m *mConn) liveStripeLocked() int {
 // now (stOpening was set).
 func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	m.stripeAutoWinLocked(now) // HS2_SMUX_AUTOWIN (smux_autowin.go)
+	m.stripeWarmLocked(now)    // HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go)
 	if m.stK < 2 || m.ended || m.closing || m.peerFin || m.wclosed {
 		if stripeLog && m.stN > 0 && !m.ended {
 			log.Printf("stripe %x: tick off (closing=%v peerFin=%v wclosed=%v)", m.id&0xffffff, m.closing, m.peerFin, m.wclosed)
@@ -212,6 +215,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 	}
 	n := 1 + m.liveStripeLocked()
 	rate := float64(moved) / w.Seconds()
+	m.stripeNoteRateLocked(now, rate) // HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go)
 	if !m.stripeKCapLocked(n, rate) { // n >= stK (past it only with HS2_MCONN_STRIPE_UP)
 		return false
 	}
@@ -583,7 +587,16 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 			}
 		}
 	}
-	if chosen == nil || !bestRes && free-1 < stripeKeepFree {
+	shared := false
+	if (chosen == nil || !bestRes && free-1 < stripeKeepFree) && stripeShare {
+		// HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go): a busy pool has no
+		// link without a user — a lightly loaded one instead
+		if ml := m.pickStripeSharedLocked(avoid, pool); ml != nil {
+			chosen, bestRes, shared = ml, false, true
+			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
+		}
+	}
+	if !shared && (chosen == nil || !bestRes && free-1 < stripeKeepFree) {
 		if stripeAlone {
 			m.stripeAskLocked(m.now())
 		}
@@ -606,7 +619,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 		}
 	}
 	if stripeLog {
-		log.Printf("stripe pick: link %d set-aside=%v users=%d recent=%d free=%d", chosen.id, bestRes, bestUsers, bestRecent, free)
+		log.Printf("stripe pick: link %d set-aside=%v shared=%v users=%d recent=%d free=%d", chosen.id, bestRes, shared, bestUsers, bestRecent, free)
 	}
 	rel := m.releaseFor(chosen)
 	var once sync.Once

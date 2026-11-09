@@ -869,6 +869,13 @@ func (m *LinkManager) reconcile(ctx context.Context, T int) {
 			if lbAuto2 {
 				keepPathMin(serving, drop) // lb_spare.go
 			}
+			if stripeShare { // HS2_MCONN_STRIPE_SHARE: a stripe's link stays while its sub does
+				for i, ml := range serving {
+					if drop[i] && stripeOn(ml) {
+						drop[i] = false
+					}
+				}
+			}
 		}
 		kept := make([]*managedLink, 0, T)
 		for i, ml := range serving {
