@@ -460,6 +460,9 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 			if w >= 0 && m.stripeRankLocked(s, p) >= w {
 				continue
 			}
+			if stripeCallFree && callLinkOn(m.subMeterOf(s), time.Now()) {
+				continue // HS2_MCONN_STRIPE_CALLFREE: a call rides this link
+			}
 			if !m.iran {
 				// the peer closes a sub idle both ways for mLiteIdle: never
 				// the only copy on one that has been cold for half of it

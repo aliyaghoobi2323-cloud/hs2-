@@ -214,6 +214,7 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 		}
 	}
 	callLog(now)
+	m.callMarkLocked(now) // HS2_MCONN_STRIPE_CALLFREE (mconn_stripe_callfree.go)
 	if m.callOn {
 		return false
 	}

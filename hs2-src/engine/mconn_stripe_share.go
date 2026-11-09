@@ -113,6 +113,9 @@ func (m *LinkManager) pickStripeSharedLocked(avoid []any, pool *peerInfo) *manag
 		if ml.pressed || avoided(ml.link, avoid) || linkCopies(ml.link) > 0 {
 			continue
 		}
+		if stripeCallFree && callLinkOn(ml.mtr, time.Now()) {
+			continue // HS2_MCONN_STRIPE_CALLFREE: a call rides it
+		}
 		if stripeShareLane && laneAtOf(ml) != 0 && now-laneAtOf(ml) < int64(stripeLaneQuiet) {
 			continue // the TUN lane's interactive flows ride it
 		}
