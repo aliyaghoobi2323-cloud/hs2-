@@ -187,6 +187,11 @@ func (b *WindowBudget) relBase(exc time.Duration, now time.Time) time.Duration {
 	return b.xbase
 }
 
+// relLossGap: a probe this much over the base is a loss recovery (Rel).
+func relLossGap(min time.Duration) time.Duration {
+	return max(10*time.Millisecond, min/4)
+}
+
 // RelBase: the relative gate's current base (0 without AutoWindow.Rel).
 func (b *WindowBudget) RelBase() time.Duration { return time.Duration(b.xbaseN.Load()) }
 
@@ -410,6 +415,13 @@ func (s *Stream) awPushed(n uint32) {
 	rawMin := min
 	if a.cfg.Rel {
 		min += b.relBase(sample-min, now) // judge only the excess over the path's jitter
+		if sample-min > relLossGap(rawMin) {
+			// a loss recovery on the link (a retransmission adds a round
+			// trip at once), not a queue, which builds up through the
+			// smaller excesses first and is cut there: no verdict
+			a.nRecent--
+			return
+		}
 	}
 	if a.extra > 0 {
 		// The queue rule, process-wide: every link of the tunnel crosses the
