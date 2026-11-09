@@ -324,6 +324,7 @@ type liveStatus struct {
 	StripeBaseLearnUs int64   `json:"stripe_base_learned_us,omitempty"`
 	StripeBusyLinks   int64   `json:"stripe_busy_links,omitempty"`
 	StripeStepRebase  uint64  `json:"stripe_step_rebase,omitempty"`
+	StripeJumpHold    uint64  `json:"stripe_jump_hold,omitempty"`
 }
 
 // fillStripe copies the stripe's diagnostics (HS2_MCONN_STRIPE).
@@ -333,6 +334,7 @@ func fillStripe(ls *liveStatus, s engine.StripeSnap) {
 	ls.StripeGateGrow, ls.StripeGateCut, ls.StripeGateBand, ls.StripeGateHold, ls.StripeGateToken, ls.StripeGateFull = s.Grow, s.Cut, s.Band, s.Hold, s.Token, s.Full
 	ls.StripeGateClosed, ls.StripeGateNoMeas, ls.StripeGateDec = s.Closed, s.NoMeasure, s.Decisions
 	ls.StripeStepRebase = s.StepRebase
+	ls.StripeJumpHold = s.JumpHold
 	ls.StripeWidthAvg, ls.StripeWidthMax, ls.StripeLiveAvg = s.WAvg, s.WMax, s.LiveAvg
 	ls.StripeQRawUs, ls.StripeQRawMinUs, ls.StripeQRawMaxUs, ls.StripeQUs = s.QRawUs, s.QRawMinUs, s.QRawMax, s.QUs
 	ls.StripeBaseUs, ls.StripeBaseLearnUs, ls.StripeBusyLinks = s.BaseUs, s.BaseLearnedUs, s.BusyLinks

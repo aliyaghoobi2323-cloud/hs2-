@@ -41,6 +41,7 @@ var stripeDiag struct {
 	// ورودی تصمیم‌های بازه: کمینه و بیشینهٔ صف خام (µs) برای دیدن نوسان
 	iQMin, iQMax atomic.Int64
 	stepRebase   atomic.Uint64 // HS2_MCONN_STRIPE_STEP: پله‌های پذیرفته
+	jumpHold     atomic.Uint64 // HS2_MCONN_STRIPE_JUMP_MS: تصمیم‌های در مهلت پرش
 
 }
 
@@ -99,6 +100,7 @@ type StripeSnap struct {
 	// آخرین تصمیم
 	QRawUs, QUs, BaseUs, BaseLearnedUs int64
 	StepRebase                         uint64 // HS2_MCONN_STRIPE_STEP
+	JumpHold                           uint64 // HS2_MCONN_STRIPE_JUMP_MS
 	BusyLinks                          int64
 }
 
@@ -118,6 +120,7 @@ func StripeObserved() StripeSnap {
 	stripePathQ.mu.Lock()
 	s.BaseLearnedUs = stripePathQ.bq.Microseconds()
 	s.StepRebase = d.stepRebase.Load()
+	s.JumpHold = d.jumpHold.Load()
 	stripePathQ.mu.Unlock()
 	n := d.iDec.Swap(0)
 	w, l := d.iW.Swap(0), d.iLive.Swap(0)

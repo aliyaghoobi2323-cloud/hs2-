@@ -56,3 +56,30 @@ func TestStripeStepAdjust(t *testing.T) {
 		t.Fatalf("capped %v", q)
 	}
 }
+
+// مهلت پرش: پرش یک‌باره تا مهلت برش نمی‌خورد؛ بالا آمدن آرام برش عادی.
+func TestStripeJumpHold(t *testing.T) {
+	old := stripeJump
+	stripeJump = 1500 * time.Millisecond
+	defer func() { stripeJump = old }()
+	p := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}}
+	tg := 3 * time.Millisecond
+	t0 := time.Unix(1000, 0)
+	if p.jumpHold(t0, 0, tg) {
+		t.Fatal("low q held")
+	}
+	if !p.jumpHold(t0.Add(100*time.Millisecond), 9*time.Millisecond, tg) {
+		t.Fatal("jump not held")
+	}
+	if !p.jumpHold(t0.Add(time.Second), 9*time.Millisecond, tg) {
+		t.Fatal("jump not held within grace")
+	}
+	if p.jumpHold(t0.Add(1700*time.Millisecond), 9*time.Millisecond, tg) {
+		t.Fatal("held after grace")
+	}
+	p.jumpHold(t0.Add(2*time.Second), time.Millisecond, tg)
+	p.jumpHold(t0.Add(2100*time.Millisecond), 4*time.Millisecond, tg) // slow rise: under 2x
+	if p.jumpHold(t0.Add(2200*time.Millisecond), 9*time.Millisecond, tg) {
+		t.Fatal("slow rise held")
+	}
+}

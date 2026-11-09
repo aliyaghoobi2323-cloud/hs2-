@@ -79,6 +79,8 @@ type stepB struct {
 	armed   bool
 	armAt   time.Time
 	rebases uint64
+	lastQ   time.Duration // HS2_MCONN_STRIPE_JUMP_MS
+	jumpAt  time.Time
 }
 
 // stepAdjust: صف دروازه پس از کم کردن پایهٔ پله (دانلود؛ کلید خاموش: همان q).
@@ -109,4 +111,41 @@ func (p *stripeQ) stepAdjust(now time.Time, q, target time.Duration) time.Durati
 		return max(0, q-s.b)
 	}
 	return qa
+}
+
+// stripeJump: HS2_MCONN_STRIPE_JUMP_MS (پیش‌فرض ۰: خاموش) — مهلت پرش.
+// شمارنده‌های آزمایشگاه با پلهٔ مسیر (+۴ms هر سو هر ۱۲ ثانیه): صف دروازه در
+// یک اندازهٔ ۱۰۰ms از ~۰ به ۸-۹ms می‌پرد و در کمتر از ۲ ثانیه برمی‌گردد (پنجرهٔ
+// QWIN)، ولی همان یک اندازه پهنا را نصف‌نصف تا ۰ می‌برد، ۲ ثانیه نگه می‌دارد و
+// رشد دوباره یکی‌یکی هر ۵۰۰ms است. صفی که خود stripe بسازد این‌طور یک‌باره
+// نمی‌پرد (رشد یک sub در هر ۵۰۰ms). قاعده: اگر صف از زیر هدف یک‌باره بالای
+// دو برابر هدف رفت، تا این مهلت فقط رشد متوقف می‌شود (نه برش)؛ اگر پس از مهلت
+// هنوز بالای هدف بود، برش عادی.
+var stripeJump = envMsDefault("HS2_MCONN_STRIPE_JUMP_MS", 0)
+
+// jumpHold (زیر stripeQ.mu، فقط دانلود): true یعنی این تصمیم در مهلت پرش است.
+func (p *stripeQ) jumpHold(now time.Time, q, target time.Duration) bool {
+	if stripeJump <= 0 || p.light || p.fixed {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	s := &p.step
+	prev := s.lastQ
+	s.lastQ = q
+	if q <= target {
+		s.jumpAt = time.Time{}
+		return false
+	}
+	if s.jumpAt.IsZero() {
+		if prev > target || q < 2*target {
+			return false // صف آرام بالا آمد: برش عادی
+		}
+		s.jumpAt = now
+	}
+	if now.Sub(s.jumpAt) < stripeJump {
+		stripeDiag.jumpHold.Add(1)
+		return true
+	}
+	return false
 }

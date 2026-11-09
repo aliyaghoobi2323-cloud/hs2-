@@ -136,6 +136,9 @@ func (m *mConn) stripeWidthLocked(p *msub, now time.Time) int {
 	if stripeStepMax > 0 && !m.iran {
 		q = pq.stepAdjust(now, q, target)
 	}
+	if !m.iran && pq.jumpHold(now, q, target) {
+		q = target / 2 // مهلت پرش: نه رشد، نه برش (gwBand)
+	}
 	m.stQ = q
 	live := 0
 	for _, s := range m.subs {
