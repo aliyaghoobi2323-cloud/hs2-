@@ -27,10 +27,11 @@ import (
 //
 // Light users first: a stream grows only while its probes show no queue on
 // its links (loop RTT within 1 ms + 1/32 of the path's minimum), loses a
-// quarter when its last two probes both show a queue (over 3 ms + 1/16: its
+// quarter when its last two probes both show a queue (over 3 ms + 1/16; both
+// thresholds times HS2_SMUX_AUTOWIN_QUEUE_PCT, default 30%: its
 // in-flight data is
 // waiting in a socket or on the path, where light users' packets would wait
-// behind it), and is held to HS2_SMUX_AUTOWIN_NEIGHBOR_MB (4) while a light
+// behind it), and is held to HS2_SMUX_AUTOWIN_NEIGHBOR_MB (2, the base) while a light
 // user (another stream receiving under 8 Mbit/s) is active on the same link.
 // The receiver measures this itself, so no signal has to cross the tunnel.
 //
@@ -73,10 +74,14 @@ func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 	return &smux.AutoWindow{
 		Max:       num("HS2_SMUX_AUTOWIN_MAX_MB", 32, 1, 256) << 20,
 		UpdateDiv: num("HS2_SMUX_AUTOWIN_DIV", 8, 2, 64),
-		// the cap while a light user receives on the same link (0: none)
-		NeighborMax: num("HS2_SMUX_AUTOWIN_NEIGHBOR_MB", 4, 0, 256) << 20,
-		// HS2_SMUX_AUTOWIN_QUEUE_PCT: the queue thresholds in percent (100)
-		QueueScale: float64(num("HS2_SMUX_AUTOWIN_QUEUE_PCT", 100, 10, 1000)) / 100,
+		// the cap while a light user (a call, a game, an app ping) receives on
+		// the same link (0: none). 2 = the base window: no growth beside a light
+		// user — a 4 MiB window queued ~100 ms ahead of a call on its link
+		NeighborMax: num("HS2_SMUX_AUTOWIN_NEIGHBOR_MB", 2, 0, 256) << 20,
+		// HS2_SMUX_AUTOWIN_QUEUE_PCT: the queue thresholds in percent (30: the
+		// 3 Gbit/s lab, 8 uploads at 0% loss: at 100 the light users' p99 rose
+		// 5-25 ms, at 30 the app pings, games and ICMP stayed at the baseline)
+		QueueScale: float64(num("HS2_SMUX_AUTOWIN_QUEUE_PCT", 30, 10, 1000)) / 100,
 		Budget:     smux.NewWindowBudget(int64(budget) << 20),
 	}
 }

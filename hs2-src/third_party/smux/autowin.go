@@ -531,7 +531,7 @@ func (s *Stream) awTick(now time.Time, pressured bool, fair uint32) bool {
 		shrink = true // the largest windows give way first
 	}
 	if nb := uint32(a.cfg.NeighborMax); nb > 0 && a.win > max(nb, a.base) && s.sess.awNeighborsLocked(s, now) {
-		shrink, nw = true, max(nb, a.base, a.win/2) // a light user came to this link
+		shrink, nw = true, max(nb, a.base) // a light user came to this link: at once
 		b.neighborCuts.Add(1)
 	}
 	if !shrink || a.numRecv-s.numRead > nw/2 {
