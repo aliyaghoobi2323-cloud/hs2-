@@ -453,3 +453,28 @@ func TestStripeGateRelative(t *testing.T) {
 		t.Fatalf("widths %d %d after one cut, want %d (held) and > %d", m.stW, m2.stW, w1/2, w2)
 	}
 }
+
+// HS2_MCONN_STRIPE_BASE_MAX takes fractions of a ms; Iran's upload gate has
+// its own cap (HS2_MCONN_STRIPE_UP_BASE_MAX).
+func TestStripeBaseMaxCaps(t *testing.T) {
+	t.Setenv("HS2_X_MS", "2.5")
+	if d := envMsDefault("HS2_X_MS", time.Second); d != 2500*time.Microsecond {
+		t.Fatalf("2.5 ms read as %v", d)
+	}
+	t.Setenv("HS2_X_MS", "junk")
+	if d := envMsDefault("HS2_X_MS", time.Second); d != time.Second {
+		t.Fatalf("junk read as %v, want the default", d)
+	}
+	oldB, oldU := stripeBaseMax, stripeUpBaseMax
+	t.Cleanup(func() { stripeBaseMax, stripeUpBaseMax = oldB, oldU })
+	stripeBaseMax, stripeUpBaseMax = 4*time.Millisecond, 1500*time.Microsecond
+	down := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}}
+	up := &stripeQ{links: map[*linkMeter]*stripeLinkQ{}, light: true}
+	for i := 0; i < stripeBaseN; i++ {
+		down.noteBaseLocked(10 * time.Millisecond)
+		up.noteBaseLocked(10 * time.Millisecond)
+	}
+	if down.bq != 4*time.Millisecond || up.bq != 1500*time.Microsecond {
+		t.Fatalf("caps: exit %v (want 4ms), Iran upload %v (want 1.5ms)", down.bq, up.bq)
+	}
+}

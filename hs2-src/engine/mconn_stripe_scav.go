@@ -440,8 +440,25 @@ const (
 	stripeBasePct = 10
 )
 
-// stripeBaseMax: HS2_MCONN_STRIPE_BASE_MAX (ms, default 4).
-var stripeBaseMax = time.Duration(envIntDefault("HS2_MCONN_STRIPE_BASE_MAX", 4)) * time.Millisecond
+// stripeBaseMax: HS2_MCONN_STRIPE_BASE_MAX (ms, fractions allowed, default 4).
+var stripeBaseMax = envMsDefault("HS2_MCONN_STRIPE_BASE_MAX", 4*time.Millisecond)
+
+// stripeUpBaseMax: the cap of Iran's upload gate (HS2_MCONN_STRIPE_UP_BASE_MAX,
+// ms, default 2). Iran's upload gate also reads the light users' links
+// (lightQ), so the noise it forgives is forgiven to them too. In the jittery
+// lab (300us normal netem, 1% loss, 18 interleaved runs) the 4 ms cap cost
+// game p99 126 -> 137 ms (p=0.01) under one upload; 2 ms kept it at 128 with
+// the same upload speed (468 vs 443 Mbit). The exit (download) keeps 4 ms: there
+// 2 ms cost a quarter of the speed (298 vs 395 Mbit) and no light user gained.
+var stripeUpBaseMax = envMsDefault("HS2_MCONN_STRIPE_UP_BASE_MAX", 2*time.Millisecond)
+
+// envMsDefault: env k in ms (fractions allowed, >= 0), else d.
+func envMsDefault(k string, d time.Duration) time.Duration {
+	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv(k)), 64); err == nil && v >= 0 {
+		return time.Duration(v * float64(time.Millisecond))
+	}
+	return d
+}
 
 // noteBaseLocked records one measurement's path queue (no busy link: nothing
 // to learn).
@@ -461,7 +478,15 @@ func (p *stripeQ) noteBaseLocked(q time.Duration) {
 	}
 	s := slices.Clone(p.hist)
 	slices.Sort(s)
-	p.bq = min(s[len(s)*stripeBasePct/100], stripeBaseMax)
+	p.bq = min(s[len(s)*stripeBasePct/100], p.baseMax())
+}
+
+// baseMax: the baseline's cap (Iran's upload gate: stripeUpBaseMax).
+func (p *stripeQ) baseMax() time.Duration {
+	if p.light {
+		return stripeUpBaseMax
+	}
+	return stripeBaseMax
 }
 
 // base: the path's noise floor (0 until learned).
