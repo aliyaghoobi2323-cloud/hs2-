@@ -48,6 +48,24 @@ func obsBucketMid(i int) uint64 {
 
 func (h *obsHist) observe(v uint64) { h.b[obsBucket(v)].Add(1) }
 
+// ctrlLinkBusy reports a link that carries a download now: a user stream at a
+// download's rate (heavyN, as the sampler last stored it) or a stripe sub
+// (stripeN) — the signals the TUN lane (HS2_L3_LANE) keeps off.
+func ctrlLinkBusy(m *linkMeter) bool {
+	return m != nil && (m.heavyN.Load() > 0 || m.stripeN.Load() > 0)
+}
+
+// observeCtrlRTT records one control round trip (µs): in the whole histogram
+// and in the light or busy one. A measurement only; nothing reads it back.
+func observeCtrlRTT(us uint64, busy bool) {
+	obs.ctrlRTT.observe(us)
+	if busy {
+		obs.ctrlRTTBusy.observe(us)
+	} else {
+		obs.ctrlRTTLight.observe(us)
+	}
+}
+
 func (h *obsHist) snapshot() (s ObsHistSnap) {
 	for i := range h.b {
 		s[i] = h.b[i].Load()
@@ -94,6 +112,10 @@ var obs struct {
 	shapeWrites, shapeRecords, shapeData, shapePad atomic.Uint64
 
 	ctrlRTT obsHist // µs
+	// The same round trips split by the link they ran on (observeCtrlRTT):
+	// light — no download-rate user stream and no stripe sub on it; busy —
+	// one of those, so the pong waits behind the download's data.
+	ctrlRTTLight, ctrlRTTBusy obsHist // µs
 	openLat obsHist // µs
 	openErr atomic.Uint64
 
@@ -180,6 +202,7 @@ type ObsSnap struct {
 	ShapeWrites, ShapeRecords, ShapeData, ShapePad uint64
 
 	CtrlRTT, OpenLat, UDPQueued ObsHistSnap
+	CtrlRTTLight, CtrlRTTBusy   ObsHistSnap // CtrlRTT split (observeCtrlRTT)
 	OpenErr, UDPDrops           uint64
 
 	ExitDials, ExitNoAddr, ExitRefused, ExitTimeout, ExitOther   uint64
@@ -205,6 +228,7 @@ func Observed() ObsSnap {
 	return ObsSnap{
 		ShapeWrites: obs.shapeWrites.Load(), ShapeRecords: obs.shapeRecords.Load(),
 		ShapeData: obs.shapeData.Load(), ShapePad: obs.shapePad.Load(),
+		CtrlRTTLight: obs.ctrlRTTLight.snapshot(), CtrlRTTBusy: obs.ctrlRTTBusy.snapshot(),
 		CtrlRTT: obs.ctrlRTT.snapshot(), OpenLat: obs.openLat.snapshot(), UDPQueued: obs.udpQueued.snapshot(),
 		OpenErr: obs.openErr.Load(), UDPDrops: obs.udpDrops.Load(),
 		ExitDials: obs.exitDials.Load(), ExitNoAddr: obs.exitNoAddr.Load(), ExitRefused: obs.exitRefused.Load(),
@@ -231,6 +255,7 @@ func (s ObsSnap) Sub(old ObsSnap) ObsSnap {
 	return ObsSnap{
 		ShapeWrites: s.ShapeWrites - old.ShapeWrites, ShapeRecords: s.ShapeRecords - old.ShapeRecords,
 		ShapeData: s.ShapeData - old.ShapeData, ShapePad: s.ShapePad - old.ShapePad,
+		CtrlRTTLight: s.CtrlRTTLight.Sub(old.CtrlRTTLight), CtrlRTTBusy: s.CtrlRTTBusy.Sub(old.CtrlRTTBusy),
 		CtrlRTT: s.CtrlRTT.Sub(old.CtrlRTT), OpenLat: s.OpenLat.Sub(old.OpenLat), UDPQueued: s.UDPQueued.Sub(old.UDPQueued),
 		OpenErr: s.OpenErr - old.OpenErr, UDPDrops: s.UDPDrops - old.UDPDrops,
 		ExitDials: s.ExitDials - old.ExitDials, ExitNoAddr: s.ExitNoAddr - old.ExitNoAddr, ExitRefused: s.ExitRefused - old.ExitRefused,

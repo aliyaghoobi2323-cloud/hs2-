@@ -214,6 +214,13 @@ type liveStatus struct {
 	ObsShapeAddPct      float64 `json:"obs_shape_add_pct,omitempty"`
 	ObsCtrlRTTP50       float64 `json:"obs_ctrl_rtt_p50_ms,omitempty"`
 	ObsCtrlRTTP99       float64 `json:"obs_ctrl_rtt_p99_ms,omitempty"`
+	// The same split by link: light — no download-rate user stream and no
+	// stripe sub on it (what a light user's link sees); busy — one of those,
+	// so the pong waits behind the download (heavy p50 too, for scripts).
+	ObsCtrlRTTLightP50 float64 `json:"obs_ctrl_rtt_light_p50_ms,omitempty"`
+	ObsCtrlRTTLightP99 float64 `json:"obs_ctrl_rtt_light_p99_ms,omitempty"`
+	ObsCtrlRTTHeavyP50 float64 `json:"obs_ctrl_rtt_heavy_p50_ms,omitempty"`
+	ObsCtrlRTTHeavyP99 float64 `json:"obs_ctrl_rtt_heavy_p99_ms,omitempty"`
 	ObsOpenP50          float64 `json:"obs_open_p50_ms,omitempty"`
 	ObsOpenP99          float64 `json:"obs_open_p99_ms,omitempty"`
 	ObsOpenErr          uint64  `json:"obs_open_err,omitempty"`
@@ -314,6 +321,8 @@ func (w *obsWindow) fill(ls *liveStatus, now engine.ObsSnap) {
 		return round1(float64(v) / 1000)
 	}
 	ls.ObsCtrlRTTP50, ls.ObsCtrlRTTP99 = ms(d.CtrlRTT, 0.5), ms(d.CtrlRTT, 0.99)
+	ls.ObsCtrlRTTLightP50, ls.ObsCtrlRTTLightP99 = ms(d.CtrlRTTLight, 0.5), ms(d.CtrlRTTLight, 0.99)
+	ls.ObsCtrlRTTHeavyP50, ls.ObsCtrlRTTHeavyP99 = ms(d.CtrlRTTBusy, 0.5), ms(d.CtrlRTTBusy, 0.99)
 	ls.ObsOpenP50, ls.ObsOpenP99 = ms(d.OpenLat, 0.5), ms(d.OpenLat, 0.99)
 	ls.ObsOpenErr = d.OpenErr
 	if v, ok := d.UDPQueued.Quantile(0.99); ok {
@@ -349,14 +358,32 @@ func fillSmuxWin(ls *liveStatus) {
 	ls.ObsSmuxWinQueueCuts, ls.ObsSmuxWinNeighborCuts = st.QueueCuts, st.NeighborCuts
 }
 
+// ctrlRTTLine renders the links' control round trip: light links (what a
+// light user's link sees) first, busy links (the pong behind a download)
+// apart. A status from before the split has only the whole numbers.
+func ctrlRTTLine(ls liveStatus) string {
+	light, busy := ls.ObsCtrlRTTLightP50 > 0, ls.ObsCtrlRTTHeavyP50 > 0
+	switch {
+	case light && busy:
+		return fmt.Sprintf("link round trip: light links p50 %.0f · p99 %.0f ms; busy links p99 %.0f ms", ls.ObsCtrlRTTLightP50, ls.ObsCtrlRTTLightP99, ls.ObsCtrlRTTHeavyP99)
+	case light:
+		return fmt.Sprintf("link round trip: light links p50 %.0f · p99 %.0f ms; no busy link", ls.ObsCtrlRTTLightP50, ls.ObsCtrlRTTLightP99)
+	case busy:
+		return fmt.Sprintf("link round trip: no light link; busy links p50 %.0f · p99 %.0f ms", ls.ObsCtrlRTTHeavyP50, ls.ObsCtrlRTTHeavyP99)
+	case ls.ObsCtrlRTTP50 > 0:
+		return fmt.Sprintf("link round trip (control ping, behind the link's traffic) p50 %.0f ms · p99 %.0f ms", ls.ObsCtrlRTTP50, ls.ObsCtrlRTTP99)
+	}
+	return ""
+}
+
 // obsLines renders the measurements for `hs2 status` (nil: nothing measured).
 func obsLines(ls liveStatus) []string {
 	var out []string
 	if ls.ObsShapeRecPerWrite > 0 {
 		out = append(out, fmt.Sprintf("shaper %.1f TLS record(s) per write, +%.1f%% bytes (header and padding)", ls.ObsShapeRecPerWrite, ls.ObsShapeAddPct))
 	}
-	if ls.ObsCtrlRTTP50 > 0 {
-		out = append(out, fmt.Sprintf("link round trip (control ping, behind the link's traffic) p50 %.0f ms · p99 %.0f ms", ls.ObsCtrlRTTP50, ls.ObsCtrlRTTP99))
+	if l := ctrlRTTLine(ls); l != "" {
+		out = append(out, l)
 	}
 	if ls.ObsOpenP50 > 0 || ls.ObsOpenErr > 0 {
 		out = append(out, fmt.Sprintf("new connection waits for its stream p50 %.0f ms · p99 %.0f ms · %d not opened", ls.ObsOpenP50, ls.ObsOpenP99, ls.ObsOpenErr))

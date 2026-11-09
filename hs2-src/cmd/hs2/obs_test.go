@@ -50,3 +50,34 @@ func TestObsLines(t *testing.T) {
 		}
 	}
 }
+
+// The control round trip line shows light links first and busy ones apart;
+// a status from before the split keeps the old line.
+func TestCtrlRTTLine(t *testing.T) {
+	cases := []struct {
+		ls   liveStatus
+		want string
+	}{
+		{liveStatus{ObsCtrlRTTP50: 90, ObsCtrlRTTP99: 900, ObsCtrlRTTLightP50: 79, ObsCtrlRTTLightP99: 110, ObsCtrlRTTHeavyP50: 300, ObsCtrlRTTHeavyP99: 1700},
+			"link round trip: light links p50 79 · p99 110 ms; busy links p99 1700 ms"},
+		{liveStatus{ObsCtrlRTTP50: 79, ObsCtrlRTTP99: 110, ObsCtrlRTTLightP50: 79, ObsCtrlRTTLightP99: 110},
+			"link round trip: light links p50 79 · p99 110 ms; no busy link"},
+		{liveStatus{ObsCtrlRTTP50: 300, ObsCtrlRTTP99: 1700, ObsCtrlRTTHeavyP50: 300, ObsCtrlRTTHeavyP99: 1700},
+			"link round trip: no light link; busy links p50 300 · p99 1700 ms"},
+		{liveStatus{ObsCtrlRTTP50: 90, ObsCtrlRTTP99: 400},
+			"link round trip (control ping, behind the link's traffic) p50 90 ms · p99 400 ms"},
+		{liveStatus{}, ""},
+	}
+	for _, c := range cases {
+		if got := ctrlRTTLine(c.ls); got != c.want {
+			t.Errorf("got %q
+want %q", got, c.want)
+		}
+	}
+	l := strings.Join(obsLines(cases[0].ls), "
+")
+	if !strings.Contains(l, cases[0].want) || strings.Contains(l, "behind the link's traffic") {
+		t.Errorf("status lines:
+%s", l)
+	}
+}

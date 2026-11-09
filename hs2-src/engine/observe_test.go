@@ -124,3 +124,37 @@ type obsTimeoutErr struct{}
 func (obsTimeoutErr) Error() string   { return "i/o timeout" }
 func (obsTimeoutErr) Timeout() bool   { return true }
 func (obsTimeoutErr) Temporary() bool { return true }
+
+// A control round trip lands in the whole histogram and in the light or the
+// busy one by its link: a download-rate user stream (heavyN) or a stripe sub
+// (stripeN) makes the link busy, and the light split stays free of it.
+func TestObsCtrlRTTSplit(t *testing.T) {
+	var light, heavy, stripe linkMeter
+	heavy.heavyN.Store(2)
+	stripe.stripeN.Store(1)
+	if ctrlLinkBusy(nil) || ctrlLinkBusy(&light) || !ctrlLinkBusy(&heavy) || !ctrlLinkBusy(&stripe) {
+		t.Fatal("busy: only a link with a heavy stream or a stripe sub")
+	}
+	before := Observed()
+	for i := 0; i < 100; i++ {
+		observeCtrlRTT(80_000, ctrlLinkBusy(&light)) // 80 ms on light links
+	}
+	for i := 0; i < 50; i++ {
+		observeCtrlRTT(900_000, ctrlLinkBusy(&heavy)) // 900 ms behind a download
+		observeCtrlRTT(1_500_000, ctrlLinkBusy(&stripe))
+	}
+	d := Observed().Sub(before)
+	if d.CtrlRTT.Count() != 200 || d.CtrlRTTLight.Count() != 100 || d.CtrlRTTBusy.Count() != 100 {
+		t.Fatalf("counts all %d light %d busy %d, want 200/100/100", d.CtrlRTT.Count(), d.CtrlRTTLight.Count(), d.CtrlRTTBusy.Count())
+	}
+	near := func(v uint64, want float64) bool { f := float64(v) / want; return f > 0.88 && f < 1.12 }
+	if v, _ := d.CtrlRTTLight.Quantile(0.99); !near(v, 80e3) {
+		t.Errorf("light p99 %d µs, want ~80 ms: a busy link leaked in", v)
+	}
+	if v, _ := d.CtrlRTTBusy.Quantile(0.5); v < 800e3 {
+		t.Errorf("busy p50 %d µs, want ≥ 900 ms", v)
+	}
+	if v, _ := d.CtrlRTT.Quantile(0.99); v < 1_300e3 {
+		t.Errorf("whole p99 %d µs, want the busy tail (kept for old readers)", v)
+	}
+}

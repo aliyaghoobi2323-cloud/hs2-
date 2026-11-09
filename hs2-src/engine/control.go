@@ -107,6 +107,10 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 	// the last ping told the exit; a change is told at once.
 	q := mtr.quiet
 	sentIdle := false
+	// sentBusy: the link carried a download when the last ping went out
+	// (ctrlLinkBusy); a pong counts as busy if it did then or does now.
+	// Measurement only (observeCtrlRTT).
+	sentBusy := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -150,6 +154,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 				wire |= ctrlIdleBit // an older exit only echoes it
 			}
 			sentIdle = idle
+			sentBusy = ctrlLinkBusy(mtr)
 			binary.BigEndian.PutUint64(ping[0:], wire)
 			binary.BigEndian.PutUint64(ping[8:], uint64(time.Now().UnixNano()))
 			st.SetWriteDeadline(time.Now().Add(controlInterval))
@@ -179,7 +184,7 @@ func openControl(ctx context.Context, l Link, logf func(string, ...any)) {
 			sent := int64(binary.BigEndian.Uint64(pong[8:]))
 			if rtt := time.Now().UnixNano() - sent; rtt > 0 {
 				mtr.rttMicros.Store(uint64(rtt / 1000))
-				obs.ctrlRTT.observe(uint64(rtt / 1000))
+				observeCtrlRTT(uint64(rtt/1000), sentBusy || ctrlLinkBusy(mtr))
 			}
 			rt := binary.BigEndian.Uint64(pong[16:])
 			mtr.peerRetrans.Store(rt)
