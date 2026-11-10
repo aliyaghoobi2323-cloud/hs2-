@@ -139,6 +139,16 @@ func mconnStripeWanted(lm *LinkManager) bool {
 // the light-neighbour cap).
 const stripeAWSettle = 3 * time.Second
 
+// stripeAWSolo: HS2_STRIPE_AW_SOLO=1 (off by default). Iran opens every sub
+// of a stripe-capable connection with the fixed window (autoWinOffForStripe)
+// and gives the adaptive one back only once the stripe has widened. A
+// download whose stripe never widens (production: stripe_bytes flat during a
+// single download) then stays at 2 MiB a round trip: 154-196 Mbit/s down
+// beside 1245 up on the same link. With the key, a connection that stayed at
+// width 1 for stripeAWSettle gets the adaptive window on its sub too; if the
+// stripe widens later the width change turns it off again, as before.
+var stripeAWSolo = os.Getenv("HS2_STRIPE_AW_SOLO") == "1"
+
 // stripeAW is an mConn's state for this (Iran, under m.mu).
 type stripeAW struct {
 	on    bool
@@ -148,7 +158,7 @@ type stripeAW struct {
 
 // stripeAutoWinLocked runs with the stripe's growth tick (stripeTickLocked).
 func (m *mConn) stripeAutoWinLocked(now time.Time) {
-	if smuxAutoWin == nil || !m.iran || m.stN == 0 {
+	if smuxAutoWin == nil || !m.iran || (m.stN == 0 && !stripeAWSolo) {
 		return
 	}
 	a := &m.stAW
@@ -162,6 +172,12 @@ func (m *mConn) stripeAutoWinLocked(now time.Time) {
 		return
 	}
 	settled := w >= 2 && (w >= m.stK || now.Sub(a.at) >= stripeAWSettle)
+	if stripeAWSolo && w == 1 && now.Sub(a.at) >= stripeAWSettle {
+		// HS2_STRIPE_AW_SOLO: a stripe that never widened (its gate held
+		// it: a queued path, a call, the conn cap) is one plain stream —
+		// on a fixed 2 MiB window, ~200 Mbit/s at 80 ms whatever the link
+		settled = true
+	}
 	if settled && !m.ended {
 		a.on = true
 		m.subsAutoWinLocked(true) // idempotent: also a sub that joined since
