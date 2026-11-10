@@ -353,6 +353,7 @@ func runCmd(args []string) {
 	if err := validateLB(fc); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	applyDefaults(fc)
 
 	// Apply RAM/CPU-aware kernel tuning at every start, so it always matches the
 	// current hardware and config (a resized VPS is picked up on restart). The

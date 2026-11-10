@@ -43,7 +43,7 @@ import (
 // not, and in TLS 1.3 resumption saves no round trip anyway), the auth and
 // its channel binding, and the wire: no new cap, so either side may run with
 // or without the key against any older peer.
-var fastLink = os.Getenv("HS2_FAST_LINK") == "1"
+var fastLink bool // loadEnvKeys
 
 // Sub-keys, for telling the three parts apart in the lab: with HS2_FAST_LINK=1,
 // HS2_FAST_LINK_PAUSE=0 / _GATE=0 / _INFO=0 turns that one part back off.

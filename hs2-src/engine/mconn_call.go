@@ -51,8 +51,6 @@ var (
 	mconnCallBudget atomic.Int64
 )
 
-func init() { setMConnCall(os.Getenv("HS2_MCONN_CALL")) }
-
 func setMConnCall(v string) {
 	if v == "" || v == "0" {
 		mconnCall.Store(false)
@@ -469,7 +467,7 @@ func (m *mConn) callPickLocked(live []*msub, n, size int) ([2]*msub, int) {
 
 var (
 	mconnCallDown  = os.Getenv("HS2_MCONN_CALL_DIR") == "down"
-	mconnCallAvoid = os.Getenv("HS2_MCONN_CALL_AVOID") == "1"
+	mconnCallAvoid bool // loadEnvKeys
 )
 
 // callAvoidMark in an avoid list asks the opener for HS2_MCONN_CALL_AVOID's

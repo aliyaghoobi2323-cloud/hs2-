@@ -21,10 +21,12 @@ import (
 // while live + retiring links stay bounded. Only lb2SpareMax spares are ever
 // pending (undialed) at once, and the balancer asks for them at its own rate
 // (lb2DrainPerMin), so the extra links come one shift at a time.
-var lbFillPct = func() int {
-	n, _ := strconv.Atoi(os.Getenv("HS2_LB_FILL_PCT"))
+var lbFillPct int // loadEnvKeys
+
+func fillPctFromEnv(v string) int {
+	n, _ := strconv.Atoi(v)
 	return max(0, min(n, 100))
-}()
+}
 
 // fillLimit is the most slots the pool holds for spare dials with the key on.
 func fillLimit(want int) int {
@@ -42,10 +44,12 @@ var lbTestNoIdle = os.Getenv("HS2_LB_TEST_NO_IDLE") == "1"
 // by, and still counted in lb2DrainPerMin. The pool keeps up to K pending and
 // the FILL_PCT slot cap bounds the total, so a shift refills in a few rounds
 // instead of one link per round while the lossy paths' retiring links hold.
-var lbSparePerRound = func() int {
-	n, _ := strconv.Atoi(os.Getenv("HS2_LB_SPARE_PER_ROUND"))
-	if lbFillPct == 0 {
+var lbSparePerRound int // loadEnvKeys
+
+func sparePerRoundFromEnv(v string, fillPct int) int {
+	n, _ := strconv.Atoi(v)
+	if fillPct == 0 {
 		return 1
 	}
 	return max(1, min(n, 6))
-}()
+}

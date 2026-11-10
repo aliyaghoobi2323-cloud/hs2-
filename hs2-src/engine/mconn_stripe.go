@@ -86,7 +86,6 @@ var stripeSubRate atomic.Int64
 var stripeK atomic.Int32
 
 func init() {
-	stripeK.Store(int32(parseStripe(os.Getenv("HS2_MCONN_STRIPE"))))
 	mbit := 5.0
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_MBIT")), 64); err == nil && v > 0 {
 		mbit = v

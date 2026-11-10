@@ -55,7 +55,7 @@ import (
 // windows, so a grown stream never starves the link's other streams.
 
 // smuxAutoWin is the shared AutoWindow (nil: switch off).
-var smuxAutoWin = autoWinFromEnv(os.Getenv)
+var smuxAutoWin *smux.AutoWindow // loadEnvKeys
 
 func autoWinFromEnv(get func(string) string) *smux.AutoWindow {
 	if strings.TrimSpace(get("HS2_SMUX_AUTOWIN")) != "1" {
@@ -157,7 +157,7 @@ const stripeAWSettle = 3 * time.Second
 // beside 1245 up on the same link. With the key, a connection that stayed at
 // width 1 for stripeAWSettle gets the adaptive window on its sub too; if the
 // stripe widens later the width change turns it off again, as before.
-var stripeAWSolo = os.Getenv("HS2_STRIPE_AW_SOLO") == "1"
+var stripeAWSolo bool // loadEnvKeys
 
 // stripeAWHeavy: HS2_STRIPE_AW_HEAVY=1 (Iran, off by default). Every sub of
 // a stripe-capable connection — the primary and the stripe subs — keeps the
@@ -177,7 +177,7 @@ var stripeAWSolo = os.Getenv("HS2_STRIPE_AW_SOLO") == "1"
 // HS2_SMUX_AUTOWIN_REL: capped only while its own probes show a queue). The
 // lab with 3000 light users over 150 links: every link carries light users,
 // so under =1 the subs hardly grew (4 grows in a down8 run, 3 cut at once).
-var stripeAWHeavy = stripeAWHeavyFromEnv(os.Getenv("HS2_STRIPE_AW_HEAVY"))
+var stripeAWHeavy int // loadEnvKeys
 
 func stripeAWHeavyFromEnv(v string) int {
 	switch strings.TrimSpace(v) {

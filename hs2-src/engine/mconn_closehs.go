@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"sync/atomic"
 )
 
@@ -42,8 +41,6 @@ import (
 // so the flag rides in the exit's flags byte, where an older edge ignores it.
 // An older exit never gets the new records; an older edge never sends them.
 var mconnCloseHS atomic.Bool
-
-func init() { mconnCloseHS.Store(os.Getenv("HS2_MCONN_CLOSE_HS") == "1") }
 
 const (
 	// record types 0x08/0x09 are left to other branches (stripe, FEC)

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"time"
@@ -35,7 +34,7 @@ import (
 // the exit's rebalance retires its idle probes.
 //
 // Nothing happens when every reported path is cut (no good path to move to).
-var lbCutDrain = os.Getenv("HS2_LB_CUT_DRAIN") == "1"
+var lbCutDrain bool // loadEnvKeys
 
 // cutDrainForce: trickling connections on a cut-drained link are closed after
 // this long (retireForce for other retiring links).

@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
@@ -40,7 +39,7 @@ import (
 // (crypto/tls and utls dynamic record sizing), as Google's and Cloudflare's
 // servers do. Only the sender changes: the decoder takes any frame up to
 // shapeMaxFrame, so one side may run it alone. Off, nothing here runs.
-var shapeBulk = os.Getenv("HS2_SHAPE_BULK") == "1"
+var shapeBulk bool // loadEnvKeys
 
 const (
 	// shapeBulkRecord is one full record's plaintext: the TLS maximum

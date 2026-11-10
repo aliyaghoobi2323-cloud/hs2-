@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"strconv"
 	"time"
 )
@@ -17,7 +16,7 @@ import (
 // only while the stored hold is still the first-cut lb2Hold. The reset also
 // applies for lbFastAfter after a recovery, so the path's weight is not held
 // down by the old smoothed loss while its links come back.
-var lbFastRecover = os.Getenv("HS2_LB_FAST_RECOVER") == "1"
+var lbFastRecover bool // loadEnvKeys
 
 var (
 	lbFastOKRuns = 3
@@ -62,10 +61,12 @@ func recoverHold(q *q2Path) time.Duration {
 // HS2_LB_START_GRACE_S=N (off by default; from lb-ready15, alone): for N
 // seconds after the judge's first reading no whole-IP cut verdict ("lossy on
 // every … IP") is given (a restart's own loss is not an IP's fault).
-var lbIPCutGrace = func() time.Duration {
-	n, _ := strconv.Atoi(os.Getenv("HS2_LB_START_GRACE_S"))
+var lbIPCutGrace time.Duration // loadEnvKeys
+
+func graceFromEnv(v string) time.Duration {
+	n, _ := strconv.Atoi(v)
 	if n <= 0 {
 		return 0
 	}
 	return time.Duration(n) * time.Second
-}()
+}

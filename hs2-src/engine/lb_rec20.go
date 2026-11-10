@@ -19,7 +19,7 @@ import (
 // lb2CutLoss, the IP verdicts) is unchanged, so a loaded bad path is cut as
 // before, and a still-bad cut path (readings over the bar in a row) keeps
 // resetting its okSince as before.
-var lbRecConfirm = os.Getenv("HS2_LB_REC_CONFIRM") == "1"
+var lbRecConfirm bool // loadEnvKeys
 
 // HS2_LB_REC_DEBUG=1 (off by default): log every reading of a cut path
 // (raw loss, sample segments, smoothed loss, bar, okSince) — lab diagnosis.

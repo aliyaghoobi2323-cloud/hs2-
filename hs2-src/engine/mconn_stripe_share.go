@@ -51,7 +51,7 @@ import (
 //
 // Off (the default): nothing changes. No capability bit: only Iran decides,
 // and the repeated STRIPE record is what every exit with the stripe reads.
-var stripeShare = os.Getenv("HS2_MCONN_STRIPE_SHARE") == "1"
+var stripeShare bool // loadEnvKeys
 
 // stripeShareLane: HS2_MCONN_STRIPE_SHARE_LANE=1 (see above).
 var stripeShareLane = os.Getenv("HS2_MCONN_STRIPE_SHARE_LANE") == "1"

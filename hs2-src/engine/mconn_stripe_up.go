@@ -91,7 +91,6 @@ func init() {
 	if v, err := strconv.Atoi(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_UP_LQ"))); err == nil && v >= 1 && v <= 50 {
 		stripeUpLightPct.Store(int32(v))
 	}
-	stripeUp.Store(os.Getenv("HS2_MCONN_STRIPE_UP") == "1")
 	stripeSubRateHi.Store(40e6 / 8)
 	if v, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("HS2_MCONN_STRIPE_UP_QMS")), 64); err == nil && v > 0 {
 		stripeUpQTarget.Store(int64(v * float64(time.Millisecond)))

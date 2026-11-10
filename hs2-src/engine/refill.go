@@ -3,7 +3,6 @@ package engine
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 )
@@ -112,7 +111,7 @@ func (m *LinkManager) noteArrivalLocked(now time.Time) {
 
 // partialRefill: HS2_PARTIAL_REFILL=1 also starts an episode when most links
 // die at once with some still up (notePartialLossLocked).
-var partialRefill = os.Getenv("HS2_PARTIAL_REFILL") == "1"
+var partialRefill bool // loadEnvKeys
 
 // notePartialLossLocked is called by reap with the links it found dead and the
 // ones still alive: losing most of the pool at once — 280 of 300 on a path

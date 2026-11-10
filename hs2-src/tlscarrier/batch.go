@@ -2,7 +2,6 @@ package tlscarrier
 
 import (
 	"net"
-	"os"
 	"sync"
 )
 
@@ -40,7 +39,7 @@ type batchConn struct {
 }
 
 // Batch: build links over a batchConn (HS2_SHAPE_FAST=1).
-var Batch = os.Getenv("HS2_SHAPE_FAST") == "1"
+var Batch bool // LoadEnvKeys (dpi.go)
 
 const batchReadBuf = 32 << 10
 

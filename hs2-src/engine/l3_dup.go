@@ -2,7 +2,6 @@ package engine
 
 import (
 	"encoding/binary"
-	"os"
 	"sync"
 	"time"
 
@@ -38,7 +37,7 @@ import (
 // dropped there and its twin is the one that arrives.
 
 // l3DupOn: HS2_L3_DUP=1.
-var l3DupOn = os.Getenv("HS2_L3_DUP") == "1"
+var l3DupOn bool // loadEnvKeys
 
 // l3DupCap is the capL3Dup bit this server announces (0 with the key off, so
 // its kindInfo bytes stay as before).

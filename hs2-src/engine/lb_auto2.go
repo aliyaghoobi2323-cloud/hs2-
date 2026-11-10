@@ -51,10 +51,10 @@ import (
 // configured ones (no path is better to move to).
 
 var (
-	lbAuto2 = os.Getenv("HS2_LB_AUTO2") == "1"
+	lbAuto2 bool // loadEnvKeys
 	// lbSteer: the edge's steering; follows HS2_LB_AUTO2 unless
 	// HS2_LB_STEER says otherwise (lab ablation).
-	lbSteer = envBoolDefault("HS2_LB_STEER", lbAuto2)
+	lbSteer bool // loadEnvKeys
 )
 
 func envBoolDefault(k string, def bool) bool {

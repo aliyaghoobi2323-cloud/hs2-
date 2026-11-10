@@ -1625,7 +1625,7 @@ type pickKey struct {
 }
 
 // pickClass: HS2_PICK_CLASS=1 (see pickKey); on with the lane too.
-var pickClass = os.Getenv("HS2_PICK_CLASS") == "1" || pickLane > 0
+var pickClass bool // HS2_PICK_CLASS=1 or pickLane > 0 (loadEnvKeys)
 
 // pickLane: HS2_PICK_LANE — while downloads run, the autopilot keeps this
 // many serving links free of them (autopilot.decide), and pickKey sends new
@@ -1636,16 +1636,16 @@ var pickClass = os.Getenv("HS2_PICK_CLASS") == "1" || pickLane > 0
 // 8, echo p50 ~176 ms, p95 halved, download throughput the same.
 // "on" (or any other word) is laneDefault, a number is used up to laneMax;
 // unset, "", "0" or "off" is off.
-var pickLane = parseLane(os.Getenv("HS2_PICK_LANE"))
+var pickLane int // loadEnvKeys
 
 // heavyBacklog: HS2_HEAVY_BACKLOG=1 — a stream is heavy (pickKey, the lane,
 // the autopilot's lane floor) while it builds a queue (backlogChunk), not
 // merely while it is fast: a steady call that never waits stays in the lane.
-var heavyBacklog = os.Getenv("HS2_HEAVY_BACKLOG") == "1"
+var heavyBacklog bool // loadEnvKeys
 
 // linkProbation: HS2_LINK_PROBATION=1 lets a degraded link that comes right
 // stop draining (sampleHealth) instead of cutting its users at maxDrain.
-var linkProbation = os.Getenv("HS2_LINK_PROBATION") == "1"
+var linkProbation bool // loadEnvKeys
 
 // probationOnce: HS2_PROBATION_ONCE=1 — a link gets probation once: one that
 // recovered and is degraded again drains as without probation. On the main

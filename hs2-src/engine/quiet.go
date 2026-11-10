@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
-	"os"
 	"sync/atomic"
 	"time"
 
@@ -44,7 +43,7 @@ import (
 // The session watchdog replaces smux's own keepalive timeout (which cannot
 // change during a session): today's 24 s while the link is busy or the peer
 // is older, quietSilent while it is idle.
-var quietIdle = os.Getenv("HS2_QUIET_IDLE") == "1"
+var quietIdle bool // loadEnvKeys
 
 // capQuietIdle (kindInfo caps): this side runs HS2_QUIET_IDLE — its silence
 // limits allow the other side to go quiet on idle links. Only sent with the

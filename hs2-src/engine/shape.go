@@ -71,7 +71,7 @@ var shapeCork = os.Getenv("HS2_SHAPE_CORK") == "1"
 // download — window updates, keepalives — and interactive traffic stop
 // costing ~1 KiB a message. Only the sender changes; the decoder takes any
 // size, so one side may run it alone.
-var shapeSmall = os.Getenv("HS2_SHAPE_SMALL") == "1"
+var shapeSmall bool // HS2_SHAPE_SMALL (loadEnvKeys, defaults22.go)
 
 func newShapedConn(c net.Conn, s *obfs.LengthSampler) *shapedConn {
 	if s == nil {

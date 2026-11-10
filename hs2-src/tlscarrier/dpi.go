@@ -7,6 +7,8 @@ import (
 	"time"
 
 	utls "github.com/refraction-networking/utls"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/envdef"
 )
 
 // Low-cost DPI hardening, each behind its own key (all default off; with every
@@ -28,11 +30,23 @@ import (
 //   - HS2_COVER_NGINX=1: a plain-HTTP request on the TLS port is answered the
 //     way nginx answers it, matching the nginx-style cover (cmd/hs2).
 var (
-	QuietIdle  = os.Getenv("HS2_QUIET_IDLE") == "1"
-	Resume     = os.Getenv("HS2_TLS_RESUME") == "1"
-	AuthPad    = os.Getenv("HS2_AUTH_PAD") == "1"
-	CoverNginx = os.Getenv("HS2_COVER_NGINX") == "1"
+	QuietIdle  bool
+	Resume     bool
+	AuthPad    bool
+	CoverNginx bool
 )
+
+func init() { LoadEnvKeys() }
+
+// LoadEnvKeys (re)reads this package's keys of the default table
+// (envdef; engine.ApplyDefaults calls it once the table is active).
+func LoadEnvKeys() {
+	QuietIdle = envdef.Get("HS2_QUIET_IDLE") == "1"
+	Resume = envdef.Get("HS2_TLS_RESUME") == "1"
+	AuthPad = envdef.Get("HS2_AUTH_PAD") == "1"
+	CoverNginx = envdef.Get("HS2_COVER_NGINX") == "1"
+	Batch = envdef.Get("HS2_SHAPE_FAST") == "1"
+}
 
 // dialKeepAlive is the dialing side's TCP keepalive (see QuietIdle).
 func dialKeepAlive() time.Duration {

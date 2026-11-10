@@ -146,7 +146,7 @@ func StripeObserved() StripeSnap {
 // دروازه را برای همیشه می‌بندد. صفی که خود stripeها بسازند در پنجره‌ای چند
 // ثانیه‌ای کمینه نمی‌شود، چون BBR لینک‌های دیگر هر ۱۰ ثانیه صف را خالی
 // می‌کند (PROBE_RTT) و srtt آن‌ها در آن لحظه به پایهٔ واقعی برمی‌گردد.
-var stripeQWin = envMsDefault("HS2_MCONN_STRIPE_QWIN_MS", 0)
+var stripeQWin time.Duration // HS2_MCONN_STRIPE_QWIN_MS (loadEnvKeys)
 
 // qwinMin: کمینهٔ دو-سطلی srtt یک لینک (هر سطل نیم پنجره).
 type qwinMin struct {

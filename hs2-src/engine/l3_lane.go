@@ -2,7 +2,6 @@ package engine
 
 import (
 	"math/rand/v2"
-	"os"
 	"sync/atomic"
 	"time"
 )
@@ -34,7 +33,7 @@ import (
 // caller).
 
 // l3LaneOn: HS2_L3_LANE=1.
-var l3LaneOn = os.Getenv("HS2_L3_LANE") == "1"
+var l3LaneOn bool // loadEnvKeys
 
 const (
 	// l3SmallEnter / l3SmallLeave: a flow is interactive while its packet

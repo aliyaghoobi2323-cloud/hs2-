@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"math/rand/v2"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -53,8 +52,7 @@ import (
 // mconnLite: HS2_MCONN=lite, the adaptive-redundancy mode (mconn.go, "lite").
 var mconnOn, mconnLite atomic.Bool
 
-func init() {
-	v := os.Getenv("HS2_MCONN")
+func setMConnMode(v string) {
 	mconnOn.Store(v == "1" || v == "lite")
 	mconnLite.Store(v == "lite")
 }

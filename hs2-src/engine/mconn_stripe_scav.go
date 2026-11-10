@@ -218,7 +218,7 @@ const stripeCutHold = 2 * time.Second
 
 // stripeRel: HS2_MCONN_STRIPE_REL=1, the relative gate (stripeQ.base) and
 // the per-connection cut (stripeGlobal). Default off.
-var stripeRel = os.Getenv("HS2_MCONN_STRIPE_REL") == "1"
+var stripeRel bool // loadEnvKeys
 
 // stripeRelPer: stripes per sub of process growth per stripeQGrow
 // (HS2_MCONN_STRIPE_REL_PER, default 4).

@@ -2,7 +2,6 @@ package engine
 
 import (
 	"io"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -279,8 +278,6 @@ func (m *mConn) clearReadDeadline() {
 // sub after the switch, sometimes while it held the only copy of some bytes
 // (errMConnLost: a reset connection at 2% loss).
 var mconnDeadlineFix atomic.Bool
-
-func init() { mconnDeadlineFix.Store(os.Getenv("HS2_MCONN_DEADLINE_FIX") == "1") }
 
 // rawClose (Close): raw both ways is closing the stream, as on the old path;
 // otherwise the reader leaves raw and Close goes on as usual.

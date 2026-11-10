@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"sync/atomic"
 )
 
@@ -20,8 +19,6 @@ import (
 // simply slow. A raw stream does not have this: the relay's read takes what
 // accumulated in one write. With batching, a backlog drains in one turn.
 var mconnBatch atomic.Bool
-
-func init() { mconnBatch.Store(os.Getenv("HS2_MCONN_BATCH") == "1") }
 
 // batchLocked (under m.mu, writer, s.cur just taken from the queue with wire
 // first): moves the records that follow in the queue into s.curMore while
