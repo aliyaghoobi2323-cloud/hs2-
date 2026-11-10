@@ -46,7 +46,7 @@ func TestQ2FastRecover(t *testing.T) {
 	if f1 > 35*time.Second || s1 < 60*time.Second {
 		t.Fatalf("first recovery fast %s slow %s", f1, s1)
 	}
-	if f2 < 2*lb2Hold+lbFastOKRuns*5*time.Second-5*time.Second {
+	if f2 < 2*lb2Hold+time.Duration(lbFastOKRuns)*5*time.Second-5*time.Second {
 		t.Fatalf("after a flap the fast recovery took only %s (hold %s)", f2, 2*lb2Hold)
 	}
 	if jf.p["k>a"].fastResets == 0 {
