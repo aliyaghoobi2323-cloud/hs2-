@@ -593,6 +593,9 @@ func (b *LB) rebalance2() int {
 		}
 	}
 	room := min(lb2DrainBatch, lb2DrainPerMin-len(b.drained))
+	if lbTestNoIdle { // lab only (lb_fill17.go): a busy tunnel has no idle link to retire
+		room = 0
+	}
 	var picks []cand
 	for len(picks) < room {
 		over, under := -1, -1

@@ -30,3 +30,8 @@ var lbFillPct = func() int {
 func fillLimit(want int) int {
 	return max(want+lb2SpareMax, want+want*lbFillPct/100)
 }
+
+// HS2_LB_TEST_NO_IDLE=1 (lab only): the rebalance retires no idle link, as on
+// a busy production tunnel where none is idle, so every shift goes through
+// spareForGap — the path HS2_LB_FILL_PCT is about.
+var lbTestNoIdle = os.Getenv("HS2_LB_TEST_NO_IDLE") == "1"
