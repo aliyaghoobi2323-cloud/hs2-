@@ -35,3 +35,17 @@ func fillLimit(want int) int {
 // a busy production tunnel where none is idle, so every shift goes through
 // spareForGap — the path HS2_LB_FILL_PCT is about.
 var lbTestNoIdle = os.Getenv("HS2_LB_TEST_NO_IDLE") == "1"
+
+// HS2_LB_SPARE_PER_ROUND=K (off by default; needs HS2_LB_FILL_PCT): a
+// rebalance round that finds no idle link to retire asks for up to K spares
+// (not one) for the path furthest under its share — no more than it is under
+// by, and still counted in lb2DrainPerMin. The pool keeps up to K pending and
+// the FILL_PCT slot cap bounds the total, so a shift refills in a few rounds
+// instead of one link per round while the lossy paths' retiring links hold.
+var lbSparePerRound = func() int {
+	n, _ := strconv.Atoi(os.Getenv("HS2_LB_SPARE_PER_ROUND"))
+	if lbFillPct == 0 {
+		return 1
+	}
+	return max(1, min(n, 6))
+}()

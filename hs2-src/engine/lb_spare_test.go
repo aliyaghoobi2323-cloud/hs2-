@@ -560,3 +560,31 @@ func TestLB2PeakBothSidesAgree(t *testing.T) {
 		t.Fatalf("stale report shown as %q", r[keys[0]])
 	}
 }
+
+// HS2_LB_SPARE_PER_ROUND (with FILL_PCT): a rebalance with no idle link asks
+// up to K spares at once, never more than the path is under its share.
+func TestLB2SparePerRound(t *testing.T) {
+	old := lbSparePerRound
+	lbSparePerRound = 3
+	defer func() { lbSparePerRound = old }()
+	v4 := []LBPath{
+		{Local: "91.107.167.67", Remote: "81.12.35.149", Addr: "81.12.35.149:2082", Weight: 50, Primary: true},
+		{Local: "91.107.167.67", Remote: "5.57.38.162", Addr: "5.57.38.162:2082", Weight: 50},
+	}
+	b := busyLB(t, v4, 40)
+	var asked atomic.Int32
+	b.setSpare(func(n int) { asked.Add(int32(n)) })
+	v6 := LBPath{Local: "2a01:4f8:1c17:f987::1", Remote: "2a05:9080:0:603:216:3eff:fefe:94d2",
+		Addr: "[2a05:9080:0:603:216:3eff:fefe:94d2]:2082", Weight: 40}
+	if err := b.SetPaths(append(append([]LBPath(nil), v4...), v6)); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond) // SetPaths' own fillMin ask
+	before := asked.Load()
+	if b.rebalance2() != 0 {
+		t.Fatal("retired a busy link")
+	}
+	if got := asked.Load() - before; got != 3 {
+		t.Fatalf("rebalance asked %d spares, want 3", got)
+	}
+}

@@ -126,10 +126,14 @@ func (b *LB) spareForGap(now time.Time) bool {
 		b.mu.Unlock()
 		return false
 	}
-	b.drained = append(b.drained, now)
+	k := min(lbSparePerRound, int(underBy), lb2DrainPerMin-len(b.drained)) // lb_fill17.go; 1 unless HS2_LB_SPARE_PER_ROUND
+	k = max(k, 1)
+	for i := 0; i < k; i++ {
+		b.drained = append(b.drained, now)
+	}
 	f, uname := b.spare, b.paths[under].Name()
 	b.mu.Unlock()
-	f(1)
+	f(k)
 	if t := b.spareGapLog.Load(); t == 0 || time.Since(time.Unix(0, t)) >= time.Minute {
 		b.spareGapLog.Store(time.Now().UnixNano())
 		b.log("lb auto2: rebalance — no idle link to retire; a spare dial asked for %s (%.1f links under its share; the edge retires the surplus once empty)", uname, underBy)
