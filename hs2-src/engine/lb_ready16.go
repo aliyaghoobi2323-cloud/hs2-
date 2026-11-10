@@ -2,6 +2,7 @@ package engine
 
 import (
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -57,3 +58,14 @@ func recoverHold(q *q2Path) time.Duration {
 	}
 	return q.hold
 }
+
+// HS2_LB_START_GRACE_S=N (off by default; from lb-ready15, alone): for N
+// seconds after the judge's first reading no whole-IP cut verdict ("lossy on
+// every … IP") is given (a restart's own loss is not an IP's fault).
+var lbIPCutGrace = func() time.Duration {
+	n, _ := strconv.Atoi(os.Getenv("HS2_LB_START_GRACE_S"))
+	if n <= 0 {
+		return 0
+	}
+	return time.Duration(n) * time.Second
+}()

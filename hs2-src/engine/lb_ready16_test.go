@@ -66,3 +66,24 @@ func TestQ2FastRecover(t *testing.T) {
 		t.Fatalf("uncut path reset: ewma %.4f (was %.4f) resets %d", j.p["k>a"].ewma, e, j.p["k>a"].fastResets)
 	}
 }
+
+// HS2_LB_START_GRACE_S: no whole-IP cut in the first seconds.
+func TestQ2StartGraceNoIPCut(t *testing.T) {
+	old := lbIPCutGrace
+	lbIPCutGrace = 20 * time.Second
+	defer func() { lbIPCutGrace = old }()
+	j := newQ2Judge(0.1, "Iran", "kharej", nil)
+	now := time.Unix(1000, 0)
+	good := map[string]float64{"a>x": 0.003, "a>y": 0.003, "b>x": 0.003, "b>y": 0.003}
+	bad := map[string]float64{"a>x": 0.07, "a>y": 0.06, "b>x": 0.003, "b>y": 0.002}
+	q2feed(j, &now, 2, good)
+	q2feed(j, &now, 1, bad)
+	if j.p["a>x"].cut || len(j.verdictList()) != 0 {
+		t.Fatal("IP cut inside the start grace")
+	}
+	q2feed(j, &now, 20, good)
+	q2feed(j, &now, 1, bad)
+	if !j.p["a>x"].cut || !j.p["a>y"].cut {
+		t.Fatal("no IP cut after the grace")
+	}
+}

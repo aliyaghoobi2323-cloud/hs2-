@@ -137,6 +137,7 @@ type q2Judge struct {
 	localN string // what the local / remote IPs are, for the verdicts ("Iran", "kharej")
 	remN   string
 	allBad bool
+	start  time.Time // first update (HS2_LB_START_GRACE_S)
 	// verdicts: the IP-level verdicts of the last reading that had one, kept
 	// while their paths stay cut.
 	verdicts map[string]string // IP -> sentence
@@ -221,7 +222,11 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 	// IP verdicts (j.ipVerdicts): every path of one IP bad in this reading,
 	// relative to the best IP, and not confounded by its partners.
 	ipBad := map[string]string{}
-	if anyNotBad(rs, isBad) {
+	if j.start.IsZero() {
+		j.start = now
+	}
+	graceOK := lbIPCutGrace <= 0 || now.Sub(j.start) >= lbIPCutGrace // HS2_LB_START_GRACE_S
+	if graceOK && anyNotBad(rs, isBad) {
 		ipBad = j.ipVerdicts(rs, isBad)
 	}
 	for ip, s := range ipBad {
