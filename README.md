@@ -1154,8 +1154,9 @@ Header: `server · N tunnels · users · Mbit · health · active warnings`. Ite
 camouflage 5) Speed & performance 6) Monitoring & alerts 7) Server doctor
 (`hs2 doctor --deep`) 8) Maintenance (upgrade, backup, restore, **change
 history** = `hs2 config history`, **roll back the last change** =
-`hs2 rollback`, status, uninstall) 9) Menu settings. Items 2–5 still open the
-classic screens (marked "[preview]"). Screens that change a config hold the
+`hs2 rollback`, status, uninstall) 9) Menu settings. Item 2 is the Tunnels
+screen (next section); items 3–5 still open the classic screens (marked
+"[preview]"). Screens that change a config hold the
 admin lock (`hs2 config lock`) while they are open; another admin's lock is
 shown with its owner and can be broken only after a question.
 
@@ -1191,6 +1192,94 @@ by the alert check (`hs2 alert`, every 60 s when alerts are on) and,
 optionally, by `hs2-stats.timer` (every 5 min, `Nice=19`; **9) Menu settings
 → 24 h history sampler**). `hs2 stats show -u <unit>` prints the hours.
 Without either, the dashboard says "no data yet".
+
+### Tunnels: wizard, connection code, edit, renew, clone (new menu → 2)
+
+Every action of the Tunnels screen is an `hs2 tunnel` command (the screen only
+renders its output; a binary without `hs2 tunnel` falls back to the classic
+screens):
+
+```
+hs2 tunnel list [--json|--names] [--lang fa]     # state, role, direction, carrier, address, ports
+hs2 tunnel create [--advanced] [--dry-run]       # interactive wizard
+hs2 tunnel create --from-json spec.json --yes    # non-interactive (same checks)
+hs2 tunnel join '<code>' [--user-ports P] [--expose A] [--cert self|PEM --key PEM] [--yes]
+hs2 tunnel join --update '<code>'                # update an existing tunnel from a newer code (safe apply)
+hs2 tunnel code  -u U [--show]                   # connection code for the other server
+hs2 tunnel clone -u U --to-code                  # code that recreates THIS side on another server
+hs2 tunnel edit  -u U [--section network|transport|security|performance|lb]
+hs2 tunnel edit  -u U --set key=value [--set …] [--confirm-within 5m] [--dry-run]
+hs2 tunnel renew -u U [--pick-ip] [--upgrade-from BIN] [--dry-run]   # backup, binary, rebuild, best IP, safe apply
+hs2 tunnel start|stop|restart -u U [--yes]
+hs2 tunnel logs  -u U [-n 80] [-f]
+hs2 tunnel delete -u U                           # two-step confirm, backup first
+hs2 tunnel preflight --from-json spec.json
+```
+
+**Wizard steps** (`q` cancels at any step; nothing is written before the
+last one): 1) role of this server (Kharej / Iran) 2) direction (direct;
+reverse = Kharej dials in — helps when outgoing connections from Iran are
+filtered or Kharej is behind NAT) 3) carrier (mtcp, tun+mtcp; advanced mode
+also dgtun over udp / icmp) 4) front (TLS; Reality is shown as "coming" and
+not selectable yet) 5) addresses and ports (this server's public IP or the
+peer's IP, tunnel port, user ports on Iran, default target + per-port targets
+on Kharej, domain, certificate: a PEM path, the Let's Encrypt live directory,
+or `self` = a self-signed certificate made at create) 6) "enable 24 h charts?
+(cheap)". Then a summary, the new config as a diff, and **pre-flight
+checks**: ports free (also against the other tunnels on this host), local
+IPs exist, peer ping and a TCP connect to the peer's tunnel port when this
+side dials, the domain's DNS points at this server (TLS listener),
+certificate present, kernel tuning state. A `[FAIL]` stops without changes;
+`[warn]` lines only inform (e.g. no domain: works with a self-signed cover
+certificate; better a domain + ACME HTTP-01 / DNS-01, or the Reality front
+later). Create writes the config (mode 600) and
+`/etc/systemd/system/<name>.service`, starts it and waits 6 s: a unit that
+does not stay up is removed again, so a failed or aborted create leaves
+nothing behind. The first history version is saved
+(`hs2 config history -u <name>`).
+
+`--from-json` takes the same answers: `name`, `role`, `direction`,
+`carrier` (`mtcp` | `l3mtcp`/`tun+mtcp` | `dgtun` + `encap` `udp`|`icmp`),
+`front` (`tls`), `public_ip`, `peer`, `bind_ip`, `tunnel_port`, `domain`,
+`cert`/`key`, `user_ports`, `expose`, `targets`, `subnet`, `iface`, `mtu`,
+`udp`, `shared_key`, `stats`, `lb`. Name, `/30` subnet, interface and shared
+key default to free / fresh values, so several tunnels on one host never
+collide (`hs2`, then `hs2-t2`, …; `hs0`, `hs1`, …).
+
+**Connection code** — `hs2://v2.<base64url JSON>`: version, tunnel name,
+creator's role, direction, carrier/encap, front, the listener's `host:port`
+(IPv6 as `[addr]:port`), SNI, shared key, MTU, `/30` subnet, UDP flag, the
+creator's user ports or default target (informational), LB lists, and
+`"secrets": ["shared_key"]` (treat the code like a password; `code --show`
+prints it decoded with secrets masked). The wizard also prints a short check
+line (`name role→role direction endpoint digest`) to compare both servers
+over the phone — it is not enough to join. `hs2 tunnel join` takes the other
+role with the same direction, so in reverse mode the Iran side is the
+listener and holds the certificate. A code from a newer hs2 is refused with
+"upgrade hs2 on this server"; a classic installer link (`hs2://…`, v1) is
+still read (tcp/tun carriers).
+
+**Edit** shows a section (secrets masked, bilateral fields marked), and
+`--set` goes through the semantic diff + `hs2 apply --confirm-within`
+(health gate, automatic rollback unless `hs2 apply --confirm -u U`). A change
+to a bilateral field prints what the other server must change and a ready
+`hs2 tunnel join --update '<code>'` for it. Restart, stop, edit, renew and
+delete warn when your SSH session arrives on one of the tunnel's user ports or
+is routed through its interface.
+
+**Renew / migrate** backs up the current config to the history, shows the
+binary version (`--upgrade-from /path/to/new/hs2` installs a new binary first:
+it must answer `version`, the old one is kept as `/usr/local/bin/hs2.prev`
+and put back if the tunnel does not stay up after its restart), fills keys newer releases expect (`max_links` auto, a missing
+`cover_seed`), with `--pick-ip` pings the peer from each local public IP and
+picks the lowest RTT as `bind_local_ip` (the current one is kept within
+1 ms), then applies safely. **Clone** prints a code with `"clone": true`:
+joining it on another server recreates this side (same role, ports, targets);
+point the peer at the new server afterwards.
+
+**24 h charts:** the sampler timer stays **off by default** (the alert check
+already samples when alerts are on); the wizard's last step offers it and
+enables `hs2-stats.timer` when the installer has written it (menu settings).
 
 ### Alerts (Telegram, optional)
 

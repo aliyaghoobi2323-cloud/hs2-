@@ -5445,7 +5445,11 @@ nm_dashboard(){
   return 0
 }
 
-nm_tunnels(){
+# Screen 2 "Tunnels" (menu M3). The logic lives in `hs2 tunnel …` (Go); this
+# screen only renders its output and passes the choices through. A binary
+# without `hs2 tunnel` falls back to the classic tunnel manager / setup.
+nm_has_tunnel(){ [ -x "$BIN" ] && "$BIN" tunnel list >/dev/null 2>&1; }
+nm_tunnels_classic(){
   local c
   nm_soon M3
   say "   1) $(nm_t "Tunnel manager (list · start/stop · edit · logs · delete)" "مدیر تونل (فهرست · شروع/توقف · ویرایش · لاگ · حذف)")"
@@ -5459,6 +5463,64 @@ nm_tunnels(){
     3) nm_lock && { setup_iran; exit 0; } ;;
   esac
   return 0
+}
+nm_tun(){ "$BIN" tunnel "$@" --lang "$NM_LANG" </dev/tty || true; }  # never trips set -e
+nm_tunnels(){
+  local c u code
+  if ! nm_has_tunnel; then nm_tunnels_classic; return 0; fi
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "Tunnels" "تونل‌ها")${C_0}"; hr
+    "$BIN" tunnel list --lang "$NM_LANG" >&2 2>/dev/null || true
+    echo >&2
+    say "   n) $(nm_t "New tunnel (wizard)" "تونل جدید (راهنمای گام‌به‌گام)")"
+    [ "$NM_MODE" = advanced ] && say "   a) $(nm_t "New tunnel — advanced (dgtun udp/icmp, name, MTU, source IP)" "تونل جدید — پیشرفته (dgtun udp/icmp، نام، MTU، IP مبدأ)")"
+    say "   j) $(nm_t "Join with a connection code from the other server" "پیوستن با کد اتصال سرور مقابل")"
+    say "   #) $(nm_t "Number of a tunnel: manage it" "شمارهٔ تونل: مدیریت آن")"
+    say "   c) $(nm_t "Classic setup screens" "صفحه‌های راه‌اندازی کلاسیک")"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      0|"") return 0 ;;
+      n|N) nm_lock && { nm_tun create; nm_unlock; nm_pause; } ;;
+      a|A) nm_lock && { nm_tun create --advanced; nm_unlock; nm_pause; } ;;
+      j|J) read -rp "$(nm_t "Paste the hs2:// code: " "کد hs2:// را بچسبانید: ")" code </dev/tty || code=""
+           if [ -n "$code" ]; then nm_lock && { nm_tun join "$code"; nm_unlock; nm_pause; }; fi ;;
+      c|C) nm_tunnels_classic ;;
+      *[!0-9]*) warn "$(nm_t "Unknown choice." "گزینهٔ نامعتبر.")" ;;
+      *) u=$("$BIN" tunnel list --names 2>/dev/null | sed -n "${c}p")
+         if [ -n "$u" ]; then nm_tunnel_actions "$u"; else warn "$(nm_t "No tunnel #$c." "تونل شمارهٔ $c نیست.")"; fi ;;
+    esac
+  done
+}
+nm_tunnel_actions(){ # unit
+  local u="$1" c kv
+  while :; do
+    echo >&2; hr; say " ${C_B}$u${C_0}"; hr
+    say "   1) $(nm_t Start شروع)   2) $(nm_t Stop توقف)   3) $(nm_t Restart ری‌استارت)"
+    say "   4) $(nm_t "Edit (network · transport · security · performance · LB) — safe apply" "ویرایش (شبکه · انتقال · امنیت · کارایی · LB) — اعمال امن")"
+    say "   5) $(nm_t Logs لاگ‌ها)"
+    say "   6) $(nm_t "Connection code for the other server" "کد اتصال برای سرور مقابل")"
+    say "   7) $(nm_t "Clone code (recreate this side on another server)" "کد کلون (ساخت همین سمت روی سرور دیگر)")"
+    say "   8) $(nm_t "Renew / migrate (backup, rebuild config, best local IP)" "تمدید / مهاجرت (پشتیبان، بازسازی پیکربندی، بهترین IP محلی)")"
+    say "   9) $(nm_t "Delete (two-step confirm, backup first)" "حذف (تأیید دومرحله‌ای، اول پشتیبان)")"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      0|"") return 0 ;;
+      1) nm_tun start -u "$u"; nm_pause ;;
+      2) nm_lock && { nm_tun stop -u "$u"; nm_unlock; nm_pause; } ;;
+      3) nm_lock && { nm_tun restart -u "$u"; nm_unlock; nm_pause; } ;;
+      4) nm_tun edit -u "$u"
+         read -rp "$(nm_t "key=value to change (Enter = none): " "کلید=مقدار برای تغییر (Enter = هیچ): ")" kv </dev/tty || kv=""
+         if [ -n "$kv" ]; then nm_lock && { nm_tun edit -u "$u" --set "$kv"; nm_unlock; nm_pause; }; fi ;;
+      5) nm_tun logs -u "$u" -n 60; nm_pause ;;
+      6) nm_tun code -u "$u"; nm_pause ;;
+      7) nm_tun clone -u "$u" --to-code; nm_pause ;;
+      8) nm_lock && { nm_tun renew -u "$u" --pick-ip; nm_unlock; nm_pause; } ;;
+      9) nm_lock && { nm_tun delete -u "$u"; nm_unlock; nm_pause; }
+         "$BIN" tunnel list --names 2>/dev/null | grep -qx "$u" || return 0 ;;
+    esac
+  done
 }
 nm_lb(){
   nm_soon M4

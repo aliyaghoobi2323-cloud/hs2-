@@ -21,6 +21,36 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M3 — Tunnels: wizard, connection code, edit, renew, clone (binary + installer)
+
+- New `hs2 tunnel list|create|join|code|clone|edit|renew|start|stop|restart|logs|delete|preflight`
+  (`cmd/hs2/tunnel.go`, `tunnel_cmd.go`, `tunnel_code.go`). Creation wizard
+  (interactive, `--advanced`, or `--from-json … --yes`) with pre-flight
+  checks; nothing is written before the summary is accepted, and a unit that
+  does not stay up is removed again.
+- Connection code `hs2://v2.<base64url JSON>` (versioned, secrets listed and
+  masked on display, short check line); `join` reads it (and classic v1
+  links), `join --update` updates an existing tunnel through safe apply.
+- Edit per section via semantic diff + `hs2 apply --confirm-within`, with
+  the other server's required change printed as a `join --update` code; SSH
+  over the tunnel is detected (user port / route via the tunnel interface).
+- `renew` (backup, `--upgrade-from` binary with automatic restore, rebuild,
+  `--pick-ip` best local IP by ping) and
+  `clone --to-code`.
+- `install.sh`: new-menu item 2 is the Tunnels screen (list, wizard, join,
+  per-tunnel actions under the admin lock); old binaries fall back to the
+  classic screens. The 24 h sampler timer stays off by default and is offered
+  in the wizard's last step.
+- Tests: `cmd/hs2/tunnel_test.go` (code round trip / versioning / v1 links /
+  secret masking, join mirrors creator for direct, reverse, IPv6 and dgtun,
+  defaults and rejections, multi-tunnel names/ifaces/subnets/ports,
+  pre-flight fixtures, non-interactive create incl. dry run and removal of
+  an unhealthy unit, wizard abort and answers, SSH guard, best local IP),
+  `install/tests/tunnels_menu_test.sh` (16 pty checks).
+- `install/tests/lb_menu_test.sh`: the three "live table" checks were stale
+  since 9a6a42ac (the live view gained AUTO/NEW columns and "(…, the config)"
+  in its last-load line); expectations updated, 38/38 pass with go on PATH.
+
 ## Menu redesign M2 — new main menu + live dashboard (binary + installer)
 
 - New `hs2 dashboard` (live every 3 s / `--once` / `--header` / `--paths`,

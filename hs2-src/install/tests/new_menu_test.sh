@@ -74,7 +74,7 @@ check "8) maintenance → rollback last change (asked, locked)" 'grep -q "^rollb
 out=$(run '8\n5\nn\n\n0\n0\n')
 check "rollback declined: nothing rolled back" '! grep -q "^rollback" "$T/calls"'
 out=$(run '2\n0\n')
-check "2) tunnels: marked as a preview of M3" 'echo "$out" | grep -q "arrives in M3"'
+check "2) tunnels: the M3 Tunnels screen (hs2 tunnel list)" 'grep -q "^tunnel list --lang en" "$T/calls"'
 out=$(run '5\n0\n0\n')
 check "5) speed: marked as a preview of M5" 'echo "$out" | grep -q "arrives in M5"'
 out=$(run 'x\n0\n')

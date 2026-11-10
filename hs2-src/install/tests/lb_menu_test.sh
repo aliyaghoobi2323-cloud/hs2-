@@ -197,10 +197,10 @@ cat > "$T/st.json" <<JS
    "rtt_p50_ms": 45, "rtt_p99_ms": 290, "degraded": 2, "state": "ok"}}
 JS
 out=$(run '9\n\n0\n')
-check "live table: header (side, mode, source, peer, last load)" 'echo "$out" | grep -q "Tunnel: .*hs2-x.* · Iran side · reverse · listens on the addresses" && echo "$out" | grep -q "Mode: *fixed" && echo "$out" | grep -q "Addresses: *from this config (announced to the other server)" && echo "$out" | grep -q "reads this tunnel.s announcements" && echo "$out" | grep -q "(2m ago)"'
-check "live table: one aligned row per path + totals" 'echo "$out" | grep -q "1.2.3.4  *9.9.9.1  *50%  *46/46  *61%  *12  *123.5  *5.6  *0.4/0.1%  *42/80  *2.3G/120M  .*ok, primary" && echo "$out" | grep -q "1.2.3.5  *9.9.9.1  *50%.*30/46.*39%.* 3  *10.0  *1.0.*7.5/-%.*50/300.*cooled 42s, degraded 2" && echo "$out" | grep -q "total.*76/92 .* 15  *133.5  *6.6  *1.2/0.1%"'
+check "live table: header (side, mode, source, peer, last load)" 'echo "$out" | grep -q "Tunnel: .*hs2-x.* · Iran side · reverse · listens on the addresses" && echo "$out" | grep -q "Mode: *fixed" && echo "$out" | grep -q "Addresses: *from this config (announced to the other server)" && echo "$out" | grep -q "reads this tunnel.s announcements" && echo "$out" | grep -q "(2m ago"'
+check "live table: one aligned row per path + totals" 'echo "$out" | grep -q "1.2.3.4  *9.9.9.1  *50%  *46/46  *61%  *-  *-  *12  *123.5  *5.6  *0.4/0.1%  *42/80  *2.3G/120M  .*ok, primary" && echo "$out" | grep -q "1.2.3.5  *9.9.9.1  *50%.*30/46.*39%.* 3  *10.0  *1.0.*7.5/-%.*50/300.*cooled 42s, degraded 2" && echo "$out" | grep -q "total.*76/92 .* 15  *133.5  *6.6  *1.2/0.1%"'
 R=$(printf '\033[1;31m'); Y=$(printf '\033[1;33m')
-check "live table: no raw JSON escape; red loss, yellow off-target" '! echo "$out" | grep -q "u003e" && echo "$out" | grep -qF "$R    7.5/-%" && echo "$out" | grep -qF "${Y}   30/46"'
+check "live table: no raw JSON escape; red loss, yellow off-target" '! echo "$out" | grep -q "u003e" && echo "$out" | tr -s " " | grep -qF "$R 7.5/-%" && echo "$out" | tr -s " " | grep -qF "${Y} 30/46"'
 
 # 14. not offered for a transport without lb.
 printf '{"mode":"dial","carrier":"tls","addr":"1.2.3.4:2096"}\n' > "$T/c.json"

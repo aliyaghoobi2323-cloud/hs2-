@@ -259,6 +259,8 @@ func main() {
 		cleanupCmd(os.Args[2:])
 	case "dashboard":
 		dashboardCmd(os.Args[2:])
+	case "tunnel":
+		tunnelCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
 	default:
