@@ -31,7 +31,7 @@ type IranConfig struct {
 	// Reverse edge: accept links from the kharej instead of dialing. When set,
 	// Dialer/Min/Max are ignored and the pool grows/shrinks with what the peer
 	// dials in.
-	RevServer   *tlscarrier.Server
+	RevServer   tlscarrier.Acceptor // reverse: the listen side of the link front (nil: direct)
 	RevListener net.Listener
 	// LB advertises capLB to the exit (lb enabled on this side: it listens on,
 	// or dials, extra IPs). A Dialer built by NewLBLinkDialer reports its

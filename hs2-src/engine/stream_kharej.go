@@ -18,9 +18,9 @@ import (
 // (RevDial set) and runs the smux server on each.
 type KharejConfig struct {
 	Listener net.Listener
-	Server   *tlscarrier.Server
-	Panel    string    // the default panel (expose): where a stream with no own target goes
-	TUN      tunWriter // non-nil: accept hs0 side-channel streams
+	Server   tlscarrier.Acceptor // the listen side of the link front (tlscarrier/front.go); *tlscarrier.Server is the "tls" front
+	Panel    string              // the default panel (expose): where a stream with no own target goes
+	TUN      tunWriter           // non-nil: accept hs0 side-channel streams
 
 	// Routes (port_map) gives some Iran user ports their own target; a port
 	// not in it goes to Panel, and with no Panel it is refused (routes.go).
@@ -157,7 +157,7 @@ func RunKharej(ctx context.Context, cfg KharejConfig) error {
 			continue
 		}
 		bo.ok()
-		go cfg.Server.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
+		go cfg.Server.AcceptFront(ctx, conn, func(car *tlscarrier.Carrier) {
 			mtr := &linkMeter{tcp: tcpConnOf(car)} // download-side counters, reported over kindStats
 			sess, why, err := newSession(car.RawConn(), true, nil, mtr)
 			if err != nil {

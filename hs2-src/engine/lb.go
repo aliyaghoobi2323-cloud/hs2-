@@ -9,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // Multipath load balancing, stage 1 (fixed weights). See lb-spec.md.
@@ -52,6 +54,9 @@ type LBPath struct {
 	// side announced it, lb_advert.go) or "local" (this side's config).
 	Source string
 	Gone   bool // removed by a reload: takes no new link, dropped once empty
+	// Front: the front the remote address runs (tlscarrier/front.go), from
+	// the listening side's announcement or this side's lb list; nil = tls.
+	Front *tlscarrier.FrontProfile
 }
 
 // Name is the path's display name, "local>remote".

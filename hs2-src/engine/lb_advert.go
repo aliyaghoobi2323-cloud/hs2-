@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // Multipath LB, stage 6: each side announces its OWN listening addresses.
@@ -57,6 +60,9 @@ var lbAdvertEvery = 15 * time.Second
 type LBAdvertIP struct {
 	IP     string `json:"ip"`
 	Weight int    `json:"weight"`
+	// Front: the front this address runs (tlscarrier/front.go); nil = tls.
+	// Announced only when non-default, in the optional ext (front_advert.go).
+	Front *tlscarrier.FrontProfile `json:"front,omitempty"`
 }
 
 // ValidateLBAdvert checks an announced list (see the safety note above).
@@ -93,6 +99,9 @@ func ValidateLBAdvert(l []LBAdvertIP) error {
 
 func encodeAdvert(l []LBAdvertIP) []byte {
 	b := []byte{lbAdvertVer, 0}
+	if advertHasFront(l) {
+		b[0] = lbAdvertVerFront // an ext block ends the message (front_advert.go)
+	}
 	n := 0
 	for _, e := range l {
 		ip := net.ParseIP(e.IP)
@@ -155,7 +164,7 @@ func advertEqual(a, b []LBAdvertIP) bool {
 	s(x)
 	s(y)
 	for i := range x {
-		if x[i] != y[i] {
+		if x[i].IP != y[i].IP || x[i].Weight != y[i].Weight || !frontEqual(x[i].Front, y[i].Front) {
 			return false
 		}
 	}
@@ -268,18 +277,25 @@ func (a *LBAdvert) serve(st io.ReadWriteCloser) {
 	if d, ok := st.(interface{ SetDeadline(time.Time) error }); ok {
 		d.SetDeadline(time.Now().Add(infoTimeout))
 	}
-	l, err := readAdvert(st)
+	l, ver, err := readAdvertVer(st)
 	if err != nil {
 		return
 	}
+	if ver >= lbAdvertVerFront { // the peer's front profiles end its message
+		if m, err := readFrontExt(st); err == nil {
+			attachFronts(l, m)
+		}
+	}
 	a.received(l)
-	out := encodeAdvert(a.getMine())
+	mine := a.getMine()
+	out := encodeAdvert(mine)
 	a.mu.Lock()
 	rf := a.report
 	a.mu.Unlock()
 	if rf != nil {
 		out = append(out, rf()...)
 	}
+	out = append(out, encodeFrontExt(mine)...) // nil unless a non-default front
 	st.Write(out)
 }
 
@@ -292,16 +308,28 @@ func (a *LBAdvert) exchange(ro rawStreamOpener) error {
 	st.SetAutoWindowBackground() // the servers' own traffic: no light neighbour (HS2_SMUX_AUTOWIN)
 	defer st.Close()
 	st.SetDeadline(time.Now().Add(infoTimeout))
-	if _, err := st.Write(append([]byte{kindLBAdvert}, encodeAdvert(a.getMine())...)); err != nil {
+	mine := a.getMine()
+	req := append([]byte{kindLBAdvert}, encodeAdvert(mine)...)
+	req = append(req, encodeFrontExt(mine)...) // nil unless a non-default front
+	if _, err := st.Write(req); err != nil {
 		return err
 	}
-	l, err := readAdvert(st)
+	br := bufio.NewReader(st) // readReport reuses it (bufio.NewReader returns br itself)
+	l, ver, err := readAdvertVer(br)
 	if err != nil {
 		return err
 	}
+	if ver < lbAdvertVerFront { // stage 6 exactly
+		a.received(l)
+		if r, ok := readReport(br); ok {
+			a.gotReport(r)
+		}
+		return nil
+	}
+	rep, gotRep := readFrontTail(br, l)
 	a.received(l)
-	if r, ok := readReport(st); ok {
-		a.gotReport(r)
+	if gotRep {
+		a.gotReport(rep)
 	}
 	return nil
 }

@@ -45,7 +45,7 @@ func reverseAcceptCap(max int) int { return 2*max + reverseAcceptSlack }
 // carriers the kharej dials in, wraps each as an edge (smux-client) link, and
 // feeds it to the pool. Each accepted link is held open for its lifetime so the
 // user-stream pool keeps it.
-func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Server, lm *LinkManager, logf func(string, ...any)) {
+func acceptReverseLinks(ctx context.Context, ln net.Listener, srv tlscarrier.Acceptor, lm *LinkManager, logf func(string, ...any)) {
 	sampler := obfs.NewHTTPSLengthSampler()
 	go func() { <-ctx.Done(); ln.Close() }()
 	var bo acceptBackoff
@@ -62,7 +62,7 @@ func acceptReverseLinks(ctx context.Context, ln net.Listener, srv *tlscarrier.Se
 		if h, _, err := net.SplitHostPort(from); err == nil {
 			from = h
 		}
-		go srv.Handle(ctx, conn, func(car *tlscarrier.Carrier) {
+		go srv.AcceptFront(ctx, conn, func(car *tlscarrier.Carrier) {
 			// This server's ceiling holds in reverse too: an exit that dials
 			// far more (an older one, or its min_links above our max) would
 			// otherwise make a small edge hold hundreds of sessions.

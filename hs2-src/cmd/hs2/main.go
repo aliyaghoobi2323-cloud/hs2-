@@ -511,8 +511,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			must(err)
 			cfg.LB = lbOn(fc)
 			cfg.Advert = setupLB(fc, nil, ln, logf)
-			cfg.RevServer = &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
-			cfg.RevServer.BackendFor = coverBackends(fc, logf)
+			srv := &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+			srv.BackendFor = coverBackends(fc, logf)
+			cfg.RevServer = srv // the "tls" front's listen side (tlscarrier/front.go)
 			cfg.RevListener = ln
 			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
 		} else {
@@ -520,7 +521,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			if lbOn(fc) {
 				lb := newLB(fc, logf)
 				cfg.Dialer = engine.NewLBLinkDialer(lb, func(p engine.LBPath) engine.LinkDialer {
-					return engine.NewMTCPDialer(p.Addr, lbSNIFor(lbCur(fc), p.Remote), key, p.Local)
+					return lbPathDialer(p, lbSNIFor(lbCur(fc), p.Remote), key)
 				})
 				cfg.LB = true
 				cfg.Advert = setupLB(fc, lb, nil, logf)
@@ -555,22 +556,23 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		}
 		cfg.RevMin, cfg.RevMax = min, max
 		cfg.RevLinks = engine.WarmSize(min, max)
+		// The dial side of the link front (tlscarrier/front.go): "tls" today.
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialFrom(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+			return tlscarrier.DialPathFront(ctx, tlscarrier.DialPath{Addr: fc.Addr, SNI: fc.SNI, BindIP: fc.BindLocalIP, Key: key})
 		}
 		cfg.RevDialScout = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialFromTimeout(fc.Addr, fc.SNI, key, fc.BindLocalIP, 2*time.Second)
+			return tlscarrier.DialPathFront(ctx, tlscarrier.DialPath{Addr: fc.Addr, SNI: fc.SNI, BindIP: fc.BindLocalIP, Key: key, Connect: 2 * time.Second})
 		}
 		if lbOn(fc) {
 			cfg.LB = true
 			cfg.RevLB = newLB(fc, logf)
 			cfg.Advert = setupLB(fc, cfg.RevLB, nil, logf)
 			cfg.RevDialPath = func(p engine.LBPath, scout bool) (*tlscarrier.Carrier, error) {
-				sni := lbSNIFor(lbCur(fc), p.Remote)
+				dp := tlscarrier.DialPath{Addr: p.Addr, SNI: lbSNIFor(lbCur(fc), p.Remote), BindIP: p.Local, Key: key, Profile: p.Front}
 				if scout {
-					return tlscarrier.DialFromTimeout(p.Addr, sni, key, p.Local, 2*time.Second)
+					dp.Connect = 2 * time.Second
 				}
-				return tlscarrier.DialFrom(p.Addr, sni, key, p.Local)
+				return tlscarrier.DialPathFront(ctx, dp)
 			}
 		}
 		logf("stream exit (reverse): dynamic link pool %d–%d to edge %s (edge drives the count)", min, max, fc.Addr)
@@ -584,8 +586,9 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	cfg.Listener = ln
 	cfg.LB = lbOn(fc)
 	cfg.Advert = setupLB(fc, nil, ln, logf)
-	cfg.Server = &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
-	cfg.Server.BackendFor = coverBackends(fc, logf)
+	srv := &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
+	srv.BackendFor = coverBackends(fc, logf)
+	cfg.Server = srv // the "tls" front's listen side (tlscarrier/front.go)
 	must(engine.RunKharej(ctx, cfg))
 }
 

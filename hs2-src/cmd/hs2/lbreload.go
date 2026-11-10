@@ -82,7 +82,7 @@ func lbOwnAdvert(fc fileConfig) []engine.LBAdvertIP {
 	}
 	out := make([]engine.LBAdvertIP, 0, len(ips))
 	for i, ip := range ips {
-		out = append(out, engine.LBAdvertIP{IP: ip, Weight: w[i]})
+		out = append(out, engine.LBAdvertIP{IP: ip, Weight: w[i], Front: lbAnnouncedFront(local, ip)})
 	}
 	if engine.ValidateLBAdvert(out) != nil {
 		return nil
@@ -116,10 +116,13 @@ func lbPathsAdvert(fc fileConfig, adv []engine.LBAdvertIP) ([]engine.LBPath, err
 	var rl []lbIP
 	listed := false
 	for _, a := range adv {
-		e := lbIP{IP: a.IP, Weight: a.Weight}
+		e := lbIP{IP: a.IP, Weight: a.Weight, Front: a.Front}
 		for _, x := range remote { // keep this side's per-address sni
 			if ip := net.ParseIP(x.IP); ip != nil && ip.String() == a.IP {
 				e.SNI = x.SNI
+				if e.Front == nil { // the announced front wins; else this side's
+					e.Front = x.Front
+				}
 			}
 		}
 		if a.IP == rp {
@@ -142,7 +145,7 @@ func lbPathsAdvert(fc fileConfig, adv []engine.LBAdvertIP) ([]engine.LBPath, err
 				src = "local"
 			}
 			out = append(out, engine.LBPath{Local: l, Remote: r, Addr: net.JoinHostPort(r, port),
-				Weight: lw[i] * rw[j], Primary: l == lp && r == rp, Source: src})
+				Weight: lw[i] * rw[j], Primary: l == lp && r == rp, Source: src, Front: lbFrontOf(rl, r)})
 		}
 	}
 	return out, nil

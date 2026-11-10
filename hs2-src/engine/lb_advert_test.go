@@ -13,7 +13,7 @@ import (
 )
 
 func TestLBAdvertWireAndValidate(t *testing.T) {
-	in := []LBAdvertIP{{"10.1.0.1", 60}, {"10.1.0.2", 40}, {"2001:db8::1", 0}}
+	in := []LBAdvertIP{{IP: "10.1.0.1", Weight: 60}, {IP: "10.1.0.2", Weight: 40}, {IP: "2001:db8::1", Weight: 0}}
 	out, err := readAdvert(bytes.NewReader(encodeAdvert(in)))
 	if err != nil || !advertEqual(in, out) {
 		t.Fatalf("round trip: %v %v", out, err)
@@ -26,19 +26,19 @@ func TestLBAdvertWireAndValidate(t *testing.T) {
 	}
 	many := make([]LBAdvertIP, lbAdvertMax+1)
 	for i := range many {
-		many[i] = LBAdvertIP{fmt.Sprintf("10.2.0.%d", i+1), 0}
+		many[i] = LBAdvertIP{IP: fmt.Sprintf("10.2.0.%d", i+1), Weight: 0}
 	}
 	many[0].Weight = 100
 	bad := []struct {
 		l    []LBAdvertIP
 		want string
 	}{
-		{[]LBAdvertIP{{"10.1.0.1", 60}, {"10.1.0.1", 40}}, "twice"},
-		{[]LBAdvertIP{{"0.0.0.0", 100}}, "unicast"},
-		{[]LBAdvertIP{{"224.0.0.1", 100}}, "unicast"},
-		{[]LBAdvertIP{{"nope", 100}}, "unicast"},
-		{[]LBAdvertIP{{"10.1.0.1", 60}, {"10.1.0.2", 30}}, "sum to 90"},
-		{[]LBAdvertIP{{"10.1.0.1", 160}, {"10.1.0.2", -60}}, "out of 0..100"},
+		{[]LBAdvertIP{{IP: "10.1.0.1", Weight: 60}, {IP: "10.1.0.1", Weight: 40}}, "twice"},
+		{[]LBAdvertIP{{IP: "0.0.0.0", Weight: 100}}, "unicast"},
+		{[]LBAdvertIP{{IP: "224.0.0.1", Weight: 100}}, "unicast"},
+		{[]LBAdvertIP{{IP: "nope", Weight: 100}}, "unicast"},
+		{[]LBAdvertIP{{IP: "10.1.0.1", Weight: 60}, {IP: "10.1.0.2", Weight: 30}}, "sum to 90"},
+		{[]LBAdvertIP{{IP: "10.1.0.1", Weight: 160}, {IP: "10.1.0.2", Weight: -60}}, "out of 0..100"},
 		{many, "max 32"},
 	}
 	for _, c := range bad {
@@ -94,7 +94,7 @@ func exitServe(ss *smux.Session, adv *LBAdvert) {
 // Reverse: the edge (iran) listens and announces; the exit (kharej) dials
 // and takes the list. Direct: the exit listens and announces; the edge dials.
 func TestLBAdvertExchangeBothModes(t *testing.T) {
-	list := []LBAdvertIP{{"10.1.0.1", 70}, {"10.1.0.2", 30}}
+	list := []LBAdvertIP{{IP: "10.1.0.1", Weight: 70}, {IP: "10.1.0.2", Weight: 30}}
 	for _, mode := range []string{"reverse", "direct"} {
 		t.Run(mode, func(t *testing.T) {
 			got := make(chan []LBAdvertIP, 4)
@@ -124,7 +124,7 @@ func TestLBAdvertExchangeBothModes(t *testing.T) {
 			// the same list again: not re-applied
 			edge.exchange(sessOpener{cs})
 			// a reload on the listening side: the new list reaches the dialer
-			nl := []LBAdvertIP{{"10.1.0.1", 20}, {"10.1.0.2", 30}, {"10.1.0.3", 50}}
+			nl := []LBAdvertIP{{IP: "10.1.0.1", Weight: 20}, {IP: "10.1.0.2", Weight: 30}, {IP: "10.1.0.3", Weight: 50}}
 			if mode == "reverse" {
 				edge.SetMine(nl)
 			} else {
@@ -142,7 +142,7 @@ func TestLBAdvertExchangeBothModes(t *testing.T) {
 				t.Fatal("reloaded advert did not reach the dialing side")
 			}
 			// an invalid list is rejected, the last valid one stays
-			bad := []LBAdvertIP{{"10.1.0.1", 50}, {"10.1.0.1", 50}}
+			bad := []LBAdvertIP{{IP: "10.1.0.1", Weight: 50}, {IP: "10.1.0.1", Weight: 50}}
 			if mode == "reverse" {
 				edge.SetMine(bad)
 			} else {

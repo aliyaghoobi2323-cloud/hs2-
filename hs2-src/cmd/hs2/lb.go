@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // Multipath load balancing config (stage 1, fixed weights). See lb-spec.md.
@@ -25,6 +26,9 @@ type lbIP struct {
 	SNI      string `json:"sni,omitempty"`
 	CertFile string `json:"cert_file,omitempty"`
 	KeyFile  string `json:"key_file,omitempty"`
+	// front (reality phase 1, tlscarrier/front.go): the front this IP runs.
+	// Absent or {"kind":"tls"}: today's front, nothing announced.
+	Front *tlscarrier.FrontProfile `json:"front,omitempty"`
 }
 
 type lbConfig struct {
@@ -56,6 +60,9 @@ func lbSideWeights(name string, list []lbIP, prim string, strict bool) (ips []st
 		seen[k] = true
 		if e.Weight < 0 || e.Weight > 100 {
 			return nil, nil, fmt.Errorf(`"lb.%s": weight %d of %s must be 0..100`, name, e.Weight, k)
+		}
+		if err := e.Front.Validate(); err != nil {
+			return nil, nil, fmt.Errorf(`"lb.%s": %s: %v`, name, k, err)
 		}
 		sum += e.Weight
 		if k == prim {
@@ -179,7 +186,7 @@ func lbPaths(fc fileConfig) ([]engine.LBPath, error) {
 				continue
 			}
 			out = append(out, engine.LBPath{Local: l, Remote: r, Addr: net.JoinHostPort(r, port),
-				Weight: lw[i] * rw[j], Primary: l == lp && r == rp})
+				Weight: lw[i] * rw[j], Primary: l == lp && r == rp, Front: lbFrontOf(remote, r)})
 		}
 	}
 	return out, nil

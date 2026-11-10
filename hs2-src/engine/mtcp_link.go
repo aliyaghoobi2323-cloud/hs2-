@@ -304,6 +304,10 @@ type mtcpDialer struct {
 	sharedKey []byte
 	bindIP    string // optional local source IP
 	sampler   *obfs.LengthSampler
+	// front: the dial side of the link front (tlscarrier/front.go) and this
+	// path's profile (nil: tls, today's front).
+	front   tlscarrier.Dialer
+	profile *tlscarrier.FrontProfile
 }
 
 // smux tuning, shared by both ends of a link.
@@ -346,7 +350,7 @@ func newSmuxConfig() *smux.Config {
 }
 
 func (d *mtcpDialer) DialLink(ctx context.Context) (Link, error) {
-	car, err := tlscarrier.DialFrom(d.addr, d.sni, d.sharedKey, d.bindIP)
+	car, err := d.front.DialFront(ctx, tlscarrier.DialPath{Addr: d.addr, SNI: d.sni, BindIP: d.bindIP, Key: d.sharedKey, Profile: d.profile})
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +384,25 @@ func (l *mtcpLink) closed() <-chan struct{} { return l.sess.CloseChan() }
 // NewMTCPDialer builds a link dialer for the manager. bindIP (optional) is the
 // local source address links are dialled from.
 func NewMTCPDialer(addr, sni string, sharedKey []byte, bindIP string) LinkDialer {
-	return &mtcpDialer{addr: addr, sni: sni, sharedKey: sharedKey, bindIP: bindIP, sampler: obfs.NewHTTPSLengthSampler()}
+	return &mtcpDialer{addr: addr, sni: sni, sharedKey: sharedKey, bindIP: bindIP, sampler: obfs.NewHTTPSLengthSampler(), front: tlscarrier.TLSFront{}}
+}
+
+// NewMTCPDialerFront is NewMTCPDialer over the front its profile names (nil:
+// tls, exactly NewMTCPDialer). An unsupported front fails at construction.
+func NewMTCPDialerFront(addr, sni string, sharedKey []byte, bindIP string, prof *tlscarrier.FrontProfile) (LinkDialer, error) {
+	f, err := tlscarrier.DialerFor(prof)
+	if err != nil {
+		return nil, err
+	}
+	return &mtcpDialer{addr: addr, sni: sni, sharedKey: sharedKey, bindIP: bindIP, sampler: obfs.NewHTTPSLengthSampler(), front: f, profile: prof}, nil
 }
 
 var _ net.Conn = (*net.TCPConn)(nil)
+
+// FailingDialer is a LinkDialer whose every dial fails with err (a path whose
+// front this build does not support).
+func FailingDialer(err error) LinkDialer { return failingDialer{err} }
+
+type failingDialer struct{ err error }
+
+func (f failingDialer) DialLink(context.Context) (Link, error) { return nil, f.err }
