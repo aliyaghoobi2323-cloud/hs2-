@@ -1465,6 +1465,26 @@ each read the queue they all built as its own.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
 
+## Phase AL33 — on-server alerts (`hs2 alert`, Telegram optional)
+
+- New subcommand `hs2 alert -c <config>` (one check, or `--loop 60s`;
+  `--test` sends a test message, `--dry` prints what would be sent). Run by a
+  per-tunnel systemd timer the menu installs. Read-only toward the tunnel;
+  state per tunnel in `/var/lib/hs2/alert-<unit>.json`.
+- Rules: service down / restarted / panic, no serving link with users
+  connected, links below half of the current target, an LB IP fully cut, a
+  path flapping, RTT above its own (hour-of-day) baseline with a single
+  network-wide message when all paths rise together, CPU pressure, and a
+  certificate close to expiry. Each rule carries false-alarm guards for idle
+  servers, small pools, the minutes after a restart, intentional drains and a
+  missing/stale status file (see the README table).
+- Output: journal (`hs2-alert`), `/var/log/hs2-alert.log`, and Telegram when
+  `/etc/hs2/alert.conf` (mode 600) has a token and chat id; HTTP/SOCKS proxy
+  supported; Persian by default (`lang=en` for English). The token never
+  appears in logs or errors. Daily summary at 09:00 by default.
+- Installer: tunnel manager → **a) Alerts (Telegram)** — on/off, token, chat
+  id, proxy, language, summary time, test message, last alerts, check now.
+
 ## Phase P31 — nginx-identical answers to active probes
 
 Front-door fixes for the built-in cover with `HS2_COVER_NGINX` (on by

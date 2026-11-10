@@ -4785,6 +4785,103 @@ tm_lb(){ # unit cfg
   done
 }
 
+# ---- Alerts (Telegram) ------------------------------------------------------
+# `hs2 alert` watches one tunnel (service state, restarts, panics, links, LB
+# paths, RTT, CPU pressure, certificate) every 60 s from a systemd timer
+# (hs2-alert-<unit>.timer) and writes short alerts to the journal, to
+# /var/log/hs2-alert.log and — when a bot token and chat id are set — to
+# Telegram. Settings live in /etc/hs2/alert.conf (mode 600: it holds the bot
+# token), shared by every tunnel on this server. Read-only toward the tunnel.
+ALERT_CONF=/etc/hs2/alert.conf
+ALERT_LOG=/var/log/hs2-alert.log
+alert_get(){ { sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$ALERT_CONF" 2>/dev/null || true; } | tail -1 | sed 's/^"\(.*\)"$/\1/'; }
+alert_set(){
+  local k="$1" v="$2" tmp
+  ( umask 077; mkdir -p "$(dirname "$ALERT_CONF")"; [ -f "$ALERT_CONF" ] || : > "$ALERT_CONF" )
+  tmp=$(umask 077; mktemp "$ALERT_CONF.XXXXXX") || return 1
+  grep -v "^[[:space:]]*$k[[:space:]]*=" "$ALERT_CONF" > "$tmp" 2>/dev/null || true
+  [ -n "$v" ] && printf '%s=%s\n' "$k" "$v" >> "$tmp"
+  chmod 600 "$tmp"; mv -f "$tmp" "$ALERT_CONF"
+}
+alert_timer_on(){ systemctl is-enabled "hs2-alert-$1.timer" >/dev/null 2>&1; }
+alert_enable(){
+  local u="$1" cfg="$2"
+  cat > "$UNIT_DIR/hs2-alert-$u.service" <<EOF
+[Unit]
+Description=hs2 alert check for $u
+After=network-online.target
+
+[Service]
+Type=oneshot
+Nice=10
+ExecStart=$BIN alert -c $cfg -u $u
+EOF
+  cat > "$UNIT_DIR/hs2-alert-$u.timer" <<EOF
+[Unit]
+Description=hs2 alert check for $u every 60 s
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+  systemctl daemon-reload
+  systemctl enable --now "hs2-alert-$u.timer" >/dev/null 2>&1 && ok "Alerts ON for $u (every 60 s)." || err "Could not start hs2-alert-$u.timer"
+}
+alert_disable(){
+  local u="$1"
+  systemctl disable --now "hs2-alert-$u.timer" >/dev/null 2>&1 || true
+  rm -f "$UNIT_DIR/hs2-alert-$u.timer" "$UNIT_DIR/hs2-alert-$u.service"
+  systemctl daemon-reload
+  ok "Alerts OFF for $u."
+}
+tm_alerts(){
+  local u="$1" cfg="$2" c v tok
+  while :; do
+    echo >&2; hr; say " ${C_B}Alerts (Telegram)${C_0} — $u"; hr
+    if alert_timer_on "$u"; then say "  state:    ${C_G}ON${C_0} (hs2-alert-$u.timer, every 60 s)"; else say "  state:    ${C_D}OFF${C_0}"; fi
+    tok=$(alert_get bot_token)
+    if [ -n "$tok" ]; then say "  bot token: set (hidden)"; else say "  bot token: ${C_D}not set — alerts go to the journal and $ALERT_LOG only${C_0}"; fi
+    say "  chat id:   $(alert_get chat_id)"
+    v=$(alert_get proxy); say "  proxy:     ${v:-none (direct)}"
+    v=$(alert_get lang); say "  language:  ${v:-fa}"
+    v=$(alert_get summary_time); say "  daily summary: ${v:-09:00}"
+    say ""
+    if alert_timer_on "$u"; then say "  1) Turn alerts OFF"; else say "  1) Turn alerts ON"; fi
+    say "  2) Set Telegram bot token"
+    say "  3) Set Telegram chat id"
+    say "  4) Set proxy (Iran servers usually cannot reach Telegram: http://… or socks5://…, empty = none)"
+    say "  5) Language (fa / en)"
+    say "  6) Daily summary time (HH:MM, or off)"
+    say "  7) Send a test message"
+    say "  8) Show last alerts"
+    say "  9) Check now (shows what would be sent, changes nothing)"
+    say "  0) Back"
+    read -rp "Choose: " c </dev/tty || return 0
+    case "$c" in
+      1) if alert_timer_on "$u"; then alert_disable "$u"; else alert_enable "$u" "$cfg"; fi; pause ;;
+      2) read -rsp "Bot token (from @BotFather; input hidden, empty = remove): " v </dev/tty || v=""; echo >&2
+         alert_set bot_token "$v"; ok "Saved to $ALERT_CONF (mode 600)." ;;
+      3) read -rp "Chat id (e.g. 123456789 or -100…): " v </dev/tty || v=""
+         case "$v" in ""|-[0-9]*|[0-9]*|@*) alert_set chat_id "$v"; ok "Saved." ;; *) warn "Not a chat id." ;; esac ;;
+      4) read -rp "Proxy URL (empty = none): " v </dev/tty || v=""
+         case "$v" in ""|http://*|https://*|socks5://*|socks5h://*) alert_set proxy "$v"; ok "Saved." ;; *) warn "Use http://host:port or socks5://host:port" ;; esac ;;
+      5) read -rp "Language [fa/en]: " v </dev/tty || v=""
+         case "$v" in fa|en) alert_set lang "$v"; ok "Saved." ;; *) warn "fa or en" ;; esac ;;
+      6) read -rp "Daily summary time (HH:MM or off) [09:00]: " v </dev/tty || v=""
+         case "${v:-09:00}" in off|[01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) alert_set summary_time "${v:-09:00}"; ok "Saved." ;; *) warn "HH:MM or off" ;; esac ;;
+      7) "$BIN" alert -c "$cfg" -u "$u" -test || true; pause ;;
+      8) if [ -f "$ALERT_LOG" ]; then grep -F "/$u]" "$ALERT_LOG" | tail -n 25 >&2 || say "  (no alerts for $u yet)"; else say "  (no alerts yet)"; fi; pause ;;
+      9) "$BIN" alert -c "$cfg" -u "$u" -dry || true; pause ;;
+      0|b|B|"") return 0 ;;
+      *) warn "Invalid choice." ;;
+    esac
+  done
+}
+
 tm_tunnel_menu(){
   local u="$1" cfg c
   cfg=$(tm_cfg "$u")
@@ -4803,6 +4900,7 @@ tm_tunnel_menu(){
     say "  d) Diagnose (health check — config, endpoint, certificate, tuning, and the server: NIC, CPU, paths, xray)"
     if tm_cert_side "$cfg"; then say "  c) Certificate — expiry, renewal check, renew now"; fi
     say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
+    say "  a) Alerts (Telegram) — watch this tunnel, short alerts + daily summary"
     say "  9) Delete this tunnel (service, config and tun interface)"
     say "  0) Back"
     read -rp "Choose: " c </dev/tty || return 0
@@ -4820,6 +4918,7 @@ tm_tunnel_menu(){
       d|D) tm_doctor "$u" "$cfg" ;;
       c|C) tm_cert "$u" "$cfg" ;;
       u|U) upgrade "$u"; pause ;;
+      a|A) tm_alerts "$u" "$cfg" ;;
       9) if tm_delete "$u"; then pause; return 0; fi ;;
       0|b|B|"") return 0 ;;
       *) warn "Invalid choice." ;;

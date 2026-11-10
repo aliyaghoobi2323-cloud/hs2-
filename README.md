@@ -1086,6 +1086,57 @@ journalctl -u hs2 -f
   on both servers to confirm they run the same build (the `hs2-menu` banner
   shows it too).
 
+### Alerts (Telegram, optional)
+
+`hs2 alert -c /etc/hs2/config.json` checks one tunnel and sends short alerts.
+Turn it on from the tunnel manager: **a) Alerts (Telegram)** installs a
+systemd timer (`hs2-alert-<unit>.timer`, one check every 60 s); the same menu
+sets the bot token, chat id, proxy, language and summary time, sends a test
+message and shows the last alerts. It only reads (status file, `systemctl`,
+`journalctl`, `/proc/pressure/cpu`, the cert file); it writes only its own
+state (`/var/lib/hs2/alert-<unit>.json`, one per tunnel) and log.
+
+Every alert goes to the journal (`journalctl -t hs2-alert`) and to
+`/var/log/hs2-alert.log`; to Telegram as well when `/etc/hs2/alert.conf`
+(mode 600 — it holds the token, which is never logged) has a token and chat
+id. Iran servers usually cannot reach `api.telegram.org`: set a `proxy`
+(`http://…` or `socks5://…`) or configure the token on the Kharej server only.
+
+| Rule | Fires when | Guards against false alarms |
+|---|---|---|
+| service down | unit `failed`/`inactive` | `activating` (a restart in progress) must last 2 checks |
+| restarted / panic | MainPID or NRestarts changed; `panic:`/`fatal error:` in the journal | a panic line is reported once; no separate restart line when an outage just resolved |
+| no serving link | users connected and 0 serving links | — (immediate, critical) |
+| links low | serving < 50 % of the autopilot's **current** target, 3 checks | ignored for target ≤ 4, in the 3 min after a (re)start, and while the pool is scaling/probing/shrinking; retiring links do not count |
+| IP fully cut | every LB path using an IP (v4 or v6) is cut, 3 checks | a single cut path of an IP that still has another path, and draining paths, are quiet |
+| path flapping | ≥ 4 cuts of one path within an hour | cuts during the 3 min after a restart are not counted |
+| RTT high | p50 > max(1.6 × baseline, baseline + 30 ms) for 5 checks | baseline = the tunnel's own median for that hour of day (after 2 days), else its 24 h median; needs an hour of history; all paths up together → **one** "network-wide" message |
+| CPU pressure | `some avg60` > 25 %, 3 checks | — |
+| certificate | cert_file expires in < 10 days | a side without a cert file (the dialing side) is "unknown", never an alert |
+
+A missing or stale status file (the daemon restarting) is *unknown*: active
+alerts are neither resolved nor raised. Each alert is sent once, repeated at
+most every 30 min while it lasts, and followed by one "resolved" message.
+A daily summary (default 09:00) lists peak users, peak Mbit/s, the worst RTT
+hour, cuts per IP and restarts.
+
+`/etc/hs2/alert.conf` (key=value):
+
+```
+bot_token=123456:ABC…      # from @BotFather
+chat_id=123456789
+proxy=socks5://127.0.0.1:1080   # optional
+lang=fa                    # fa | en
+summary_time=09:00         # HH:MM | off
+resend_min=30
+rtt_factor=1.6
+rtt_min_add_ms=30
+cpu_pressure_pct=25
+cert_days=10
+flap_cuts=4
+probe=off                  # off | tcp | tls: connect to the tunnel's own listen port
+```
+
 ## The three ports (they are different things)
 
 | where | what | example |
