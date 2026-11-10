@@ -1465,6 +1465,32 @@ each read the queue they all built as its own.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
 
+## Phase P31 — nginx-identical answers to active probes
+
+Front-door fixes for the built-in cover with `HS2_COVER_NGINX` (on by
+default), checked probe by probe against a real nginx 1.24 (certbot's
+default TLS config) in the lab. They only touch connections that have not
+authenticated as a tunnel link; only the listening side (the Iran edge in
+reverse mode) needs the new build.
+
+- **Malformed request line:** parsed byte by byte like nginx; the first
+  invalid byte gets an immediate `400 Bad Request` and a close (random bytes
+  without `\n` used to get no answer; a lowercase method used to get `405`).
+- **Oversized head:** request line > 8 KB → `414 Request-URI Too Large`;
+  header line > 8 KB or head > 32 KB → `400` *"Request Header Or Cookie Too
+  Large"* (used to be served normally).
+- **Timeouts:** a connection that sends nothing is closed after 60 s with
+  `close_notify` (was 30 s); a partial request is closed silently after 60 s
+  with no response (was a `400`), like nginx's `client_header_timeout`.
+- **`/robots.txt` and `/favicon.ico`** are served.
+- **HTTP/2 deliberately not offered:** certbot-configured nginx offers only
+  `http/1.1`, and Go's h2 `SETTINGS` would fingerprint differently.
+- **Lab:** after == nginx on every probe in the battery except the intended
+  ones (cover body/sizes, robots/favicon); tunnel A/B unchanged (links 60/60,
+  no light-user loss, same CPU).
+- **Tests:** `cover_head_test.go` (cmd/hs2), `server_nginx_test.go`
+  (tlscarrier); README table *Answers to active probes, nginx-identical*.
+
 ## Phase R29 — flapping-path penalty on by default; single-queue NIC notes
 
 - **Flapping-path penalty** (`HS2_LB_FLAP_PEN`, lb auto2): a local→remote

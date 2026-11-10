@@ -826,6 +826,48 @@ applies, so either one caps it).
   instead of like Go's net/http. The TLS layer in front is still Go's either
   way (for example its 7-day session-ticket lifetime), so a real nginx
   backend remains the stronger cover.
+- **Answers to active probes, nginx-identical (since P31).** With
+  `HS2_COVER_NGINX` (on by default) the built-in cover also copies how
+  nginx 1.24 treats *malformed* and *stalled* requests, measured side by
+  side against a real nginx with certbot's default TLS config:
+  - the request line is checked as the bytes arrive; the first byte that
+    cannot belong to one (random bytes, a lowercase method, …) gets nginx's
+    `400 Bad Request` at once and the connection is closed — before, random
+    bytes without a `\n` got no answer at all;
+  - a request line over 8 KB → `414 Request-URI Too Large`; a header line
+    over 8 KB or a request head over 32 KB → nginx's `400` *"Request Header
+    Or Cookie Too Large"* (nginx's `large_client_header_buffers 4 8k`);
+  - a connection that completes the handshake and sends nothing is closed
+    after **60 s** with a TLS `close_notify` (was 30 s); a partial request
+    (e.g. `GET / HTT` and then silence) is closed **silently** after 60 s,
+    without a response — nginx's `client_header_timeout`;
+  - `/robots.txt` and `/favicon.ico` are served (an ordinary site has them);
+  - **HTTP/2 is deliberately not offered** (ALPN stays `http/1.1`): nginx
+    with certbot's default config offers only `http/1.1`, and Go's h2
+    `SETTINGS` frame would fingerprint differently from nginx's.
+
+  All of this only affects connections that have **not** authenticated as a
+  tunnel link — an hs2 link sends its auth record first and never reaches
+  the cover — so tunnel traffic and speed are unchanged. Only the side that
+  **listens** for links answers probes (the Iran edge in reverse mode,
+  Kharej in direct mode), so only that side needs the new build; the other
+  side may stay on its current version. With `backend_addr` set, your own
+  backend answers instead, as before.
+
+  | Probe (over TLS) | nginx 1.24 | hs2 before P31 | hs2 P31 |
+  |---|---|---|---|
+  | 300 random bytes, no `\n` | `400`, close | no answer (open) | `400`, close |
+  | lowercase method `get / HTTP/1.1` | `400` | `405` | `400` |
+  | 9 KB URI | `414` | `404`, keep-alive | `414` |
+  | 10 KB header line / 40 KB of headers | `400` too large | `200` | `400` too large |
+  | idle after the handshake | `close_notify` at 60 s | `close_notify` at 30 s | `close_notify` at 60 s |
+  | partial `GET / HTT`, then stall | silent close at 60 s | `400` at 60 s | silent close at 60 s |
+  | ALPN `h2,http/1.1` | `http/1.1` | `http/1.1` | `http/1.1` |
+  | `GET /`, `/nonexistent`, `HEAD`, `OPTIONS`, `FOO`, plain HTTP | same as nginx | same | same |
+
+  The remaining differences are intended: the cover's own page body and
+  sizes, and `/robots.txt`/`/favicon.ico` returning `200` where a bare
+  nginx with no such files returns `404`.
 
 ### Production defaults (on by default for reverse `l3mtcp`)
 
