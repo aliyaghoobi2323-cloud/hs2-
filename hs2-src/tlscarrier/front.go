@@ -23,8 +23,7 @@ import (
 
 // Front kinds.
 const (
-	FrontTLS = "tls" // today's front (also the meaning of "")
-	// Reserved for later phases; not implemented yet.
+	FrontTLS     = "tls" // today's front (also the meaning of "")
 	FrontReality = "reality"
 	FrontBoth    = "both"
 )
@@ -84,7 +83,7 @@ func (p *FrontProfile) Validate() error {
 	case FrontReality:
 		return p.validateReality()
 	case FrontBoth:
-		return fmt.Errorf("front %q is not supported by this build yet", k)
+		return p.validateReality()
 	default:
 		return fmt.Errorf("unknown front kind %q", k)
 	}
@@ -146,6 +145,8 @@ func DialerFor(p *FrontProfile) (Dialer, error) {
 		return TLSFront{}, nil
 	case FrontReality:
 		return RealityFront{}, nil
+	case FrontBoth:
+		return BothFront{Policy: DefaultBothPolicy}, nil
 	}
 	return nil, fmt.Errorf("%w: %q", ErrFrontUnsupported, p.NormKind())
 }

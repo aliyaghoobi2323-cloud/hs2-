@@ -37,6 +37,9 @@ func tunnelFront(fc fileConfig) *tlscarrier.FrontProfile {
 // pathFront: an lb path's own front, else the tunnel's.
 func pathFront(fc fileConfig, p *tlscarrier.FrontProfile) *tlscarrier.FrontProfile {
 	if p != nil && !p.IsDefault() {
+		if p.NormKind() != tlscarrier.FrontTLS && p.PublicKey == "" && p.PrivateKey != "" {
+			return publicFront(p) // a dialer config copied from the listener's
+		}
 		return p
 	}
 	return tunnelFront(fc)
@@ -56,6 +59,9 @@ func validateFront(fc fileConfig) error {
 	}
 	if err := f.Validate(); err != nil {
 		return fmt.Errorf(`"front": %v`, err)
+	}
+	if f.NormKind() == tlscarrier.FrontBoth {
+		return errors.New(`"front": kind "both" is per lb IP ("lb.<side>[].front"); the tunnel's front is "tls" or "reality"`)
 	}
 	if f.NormKind() != tlscarrier.FrontReality {
 		return nil
@@ -110,6 +116,14 @@ func validateRealityTarget(f *tlscarrier.FrontProfile) error {
 // realityAcceptor wraps the tls front's Server as the listen side of the
 // tunnel's front.
 func realityAcceptor(fc fileConfig, srv *tlscarrier.Server, logf func(string, ...any)) tlscarrier.Acceptor {
+	def := tunnelAcceptor(fc, srv, logf)
+	if lbOn(fc) { // per-IP fronts (phase 3), swapped on SIGHUP
+		return newFrontMux(fc, def, srv, logf)
+	}
+	return def
+}
+
+func tunnelAcceptor(fc fileConfig, srv *tlscarrier.Server, logf func(string, ...any)) tlscarrier.Acceptor {
 	f := tunnelFront(fc)
 	if f.NormKind() != tlscarrier.FrontReality {
 		return srv

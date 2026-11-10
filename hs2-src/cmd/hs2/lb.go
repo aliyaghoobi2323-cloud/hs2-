@@ -64,9 +64,6 @@ func lbSideWeights(name string, list []lbIP, prim string, strict bool) (ips []st
 		if err := e.Front.Validate(); err != nil {
 			return nil, nil, fmt.Errorf(`"lb.%s": %s: %v`, name, k, err)
 		}
-		if e.Front.NormKind() != tlscarrier.FrontTLS { // per-IP fronts: phase 3; use the tunnel's "front"
-			return nil, nil, fmt.Errorf(`"lb.%s": %s: front %q per lb IP is not supported by this build yet (set it on the tunnel: "front")`, name, k, e.Front.NormKind())
-		}
 		sum += e.Weight
 		if k == prim {
 			primListed = true
@@ -151,7 +148,48 @@ func validateLB(fc fileConfig) error {
 	if _, _, err := lbSideWeights("kharej", fc.LB.Kharej, kh, dials || (!iranLocal && kh != "")); err != nil {
 		return err
 	}
-	return nil
+	return validateLBFronts(fc)
+}
+
+// validateLBFronts checks the per-IP fronts (reality phase 3): this side's
+// list when it listens (private_key + a single-tenant target per reality /
+// both IP), the other side's list when it dials (public_key).
+func validateLBFronts(fc fileConfig) error {
+	local, remote, _, _ := lbLists(fc)
+	listens := tunnelListens(fc)
+	name := func(remoteList bool) string {
+		if (fc.Mode == "dial") != remoteList {
+			return "iran"
+		}
+		return "kharej"
+	}
+	check := func(list []lbIP, isRemote bool) error {
+		for _, e := range list {
+			k := e.Front.NormKind()
+			if k == tlscarrier.FrontTLS {
+				continue
+			}
+			where := fmt.Sprintf(`"lb.%s": %s: front %s`, name(isRemote), e.IP, k)
+			switch {
+			case !isRemote && listens:
+				if e.Front.PrivateKey == "" {
+					return fmt.Errorf(`%s: this side listens on it and needs "private_key" (hs2 reality keygen)`, where)
+				}
+				if err := validateRealityTarget(e.Front); err != nil {
+					return fmt.Errorf("%s: %v", where, err)
+				}
+			case isRemote && !listens:
+				if e.Front.PublicKey == "" && e.Front.PrivateKey == "" {
+					return fmt.Errorf(`%s: the dialing side needs "public_key" (or leave the front out: the listener announces it)`, where)
+				}
+			}
+		}
+		return nil
+	}
+	if err := check(local, false); err != nil {
+		return err
+	}
+	return check(remote, true)
 }
 
 // lbLists returns this side's (local) and the other side's (remote) lists.

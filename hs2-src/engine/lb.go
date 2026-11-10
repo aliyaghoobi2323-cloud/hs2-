@@ -550,15 +550,17 @@ type lbLinkDialer struct {
 	lb    *LB
 	mk    func(LBPath) LinkDialer
 	mu    sync.Mutex
-	inner map[string]LinkDialer // by LBPath.Name(); built on first use
+	inner map[string]LinkDialer               // by LBPath.Name(); built on first use
+	front map[string]*tlscarrier.FrontProfile // the front each inner was built with
 }
 
 // NewLBLinkDialer builds a LinkDialer that places each link on a path of lb;
 // mk builds the inner dialer for one path.
 func NewLBLinkDialer(lb *LB, mk func(LBPath) LinkDialer) LinkDialer {
-	d := &lbLinkDialer{lb: lb, mk: mk, inner: map[string]LinkDialer{}}
+	d := &lbLinkDialer{lb: lb, mk: mk, inner: map[string]LinkDialer{}, front: map[string]*tlscarrier.FrontProfile{}}
 	for _, p := range lb.Paths() {
 		d.inner[p.Name()] = mk(p)
+		d.front[p.Name()] = p.Front
 	}
 	return d
 }
@@ -567,9 +569,12 @@ func (d *lbLinkDialer) DialLink(ctx context.Context) (Link, error) {
 	v, err := d.lb.dialVia(func(p LBPath) (any, error) {
 		d.mu.Lock()
 		in, ok := d.inner[p.Name()]
-		if !ok { // a path added by a reload
+		// a path added by a reload, or its front changed (new links use the
+		// new front; links already up keep theirs and age out)
+		if !ok || !frontEqual(d.front[p.Name()], p.Front) {
 			in = d.mk(p)
 			d.inner[p.Name()] = in
+			d.front[p.Name()] = p.Front
 		}
 		d.mu.Unlock()
 		l, err := in.DialLink(ctx)

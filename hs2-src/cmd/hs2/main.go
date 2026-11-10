@@ -128,6 +128,13 @@ func (fc *fileConfig) UnmarshalJSON(b []byte) error {
 		Front    *struct {
 			PrivateKey string `json:"private_key"`
 		} `json:"front"`
+		LB *struct {
+			Iran, Kharej []struct {
+				Front *struct {
+					PrivateKey string `json:"private_key"`
+				} `json:"front"`
+			}
+		} `json:"lb"`
 	}
 	_ = json.Unmarshal(b, &probe) // the full decode above already validated b
 	fc.maxLinksSet = probe.MaxLinks != nil
@@ -136,6 +143,22 @@ func (fc *fileConfig) UnmarshalJSON(b []byte) error {
 	// and never encodes it.
 	if probe.Front != nil && fc.Front != nil {
 		fc.Front.PrivateKey = probe.Front.PrivateKey
+	}
+	// Same for the per-IP fronts of the lb lists (phase 3).
+	if probe.LB != nil && fc.LB != nil {
+		cp := func(dst []lbIP, src []struct {
+			Front *struct {
+				PrivateKey string `json:"private_key"`
+			} `json:"front"`
+		}) {
+			for i := range dst {
+				if i < len(src) && src[i].Front != nil && dst[i].Front != nil {
+					dst[i].Front.PrivateKey = src[i].Front.PrivateKey
+				}
+			}
+		}
+		cp(fc.LB.Iran, probe.LB.Iran)
+		cp(fc.LB.Kharej, probe.LB.Kharej)
 	}
 	return nil
 }

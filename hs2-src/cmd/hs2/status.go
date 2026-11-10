@@ -222,20 +222,20 @@ type liveStatus struct {
 	ObsCtrlRTTLightP99 float64 `json:"obs_ctrl_rtt_light_p99_ms,omitempty"`
 	ObsCtrlRTTHeavyP50 float64 `json:"obs_ctrl_rtt_heavy_p50_ms,omitempty"`
 	ObsCtrlRTTHeavyP99 float64 `json:"obs_ctrl_rtt_heavy_p99_ms,omitempty"`
-	ObsOpenP50          float64 `json:"obs_open_p50_ms,omitempty"`
-	ObsOpenP99          float64 `json:"obs_open_p99_ms,omitempty"`
-	ObsOpenErr          uint64  `json:"obs_open_err,omitempty"`
-	ObsUDPQueueP99KB    float64 `json:"obs_udp_queue_p99_kb,omitempty"`
-	ObsUDPDrops         uint64  `json:"obs_udp_drops,omitempty"`
-	ObsExitDials        uint64  `json:"obs_exit_dials,omitempty"`
-	ObsExitNoAddr       uint64  `json:"obs_exit_noaddr,omitempty"`
-	ObsExitRefused      uint64  `json:"obs_exit_refused,omitempty"`
-	ObsExitTimeout      uint64  `json:"obs_exit_timeout,omitempty"`
-	ObsExitOther        uint64  `json:"obs_exit_other,omitempty"`
-	ObsExitRotated      uint64  `json:"obs_exit_rotated,omitempty"`   // since start: dials that needed another 127.0.0.x (HS2_EXIT_SRC_ROTATE)
-	ObsL3DupSent        uint64  `json:"obs_l3_dup_sent,omitempty"`    // last minute: TUN packets sent over two links (HS2_L3_DUP)
-	ObsL3DupDropped     uint64  `json:"obs_l3_dup_dropped,omitempty"` // last minute: second copies dropped
-	ObsL3DupSaved       uint64  `json:"obs_l3_dup_saved,omitempty"`   // last minute: packets whose second copy came first
+	ObsOpenP50         float64 `json:"obs_open_p50_ms,omitempty"`
+	ObsOpenP99         float64 `json:"obs_open_p99_ms,omitempty"`
+	ObsOpenErr         uint64  `json:"obs_open_err,omitempty"`
+	ObsUDPQueueP99KB   float64 `json:"obs_udp_queue_p99_kb,omitempty"`
+	ObsUDPDrops        uint64  `json:"obs_udp_drops,omitempty"`
+	ObsExitDials       uint64  `json:"obs_exit_dials,omitempty"`
+	ObsExitNoAddr      uint64  `json:"obs_exit_noaddr,omitempty"`
+	ObsExitRefused     uint64  `json:"obs_exit_refused,omitempty"`
+	ObsExitTimeout     uint64  `json:"obs_exit_timeout,omitempty"`
+	ObsExitOther       uint64  `json:"obs_exit_other,omitempty"`
+	ObsExitRotated     uint64  `json:"obs_exit_rotated,omitempty"`   // since start: dials that needed another 127.0.0.x (HS2_EXIT_SRC_ROTATE)
+	ObsL3DupSent       uint64  `json:"obs_l3_dup_sent,omitempty"`    // last minute: TUN packets sent over two links (HS2_L3_DUP)
+	ObsL3DupDropped    uint64  `json:"obs_l3_dup_dropped,omitempty"` // last minute: second copies dropped
+	ObsL3DupSaved      uint64  `json:"obs_l3_dup_saved,omitempty"`   // last minute: packets whose second copy came first
 	// HS2_DUP_PATHS, last minute: second copies (TUN packets; mconn light
 	// subs) on another path than the first copy, or on the same one.
 	ObsL3DupPathOther uint64 `json:"obs_l3_dup_path_other,omitempty"`
@@ -334,12 +334,16 @@ type liveStatus struct {
 	AWCeilCuts    uint64 `json:"aw_ceil_cuts,omitempty"`
 	AWUsedPeakMiB int64  `json:"aw_used_peak_mib,omitempty"`
 	AWStreams     int    `json:"aw_streams,omitempty"`
-	AWSubWin      int64  `json:"aw_sub_win,omitempty"` // HS2_STRIPE_SUB_WIN_MB: stripe subs given the larger window
-	AWHeavySubs   int64  `json:"aw_heavy_subs,omitempty"`   // HS2_STRIPE_AW_HEAVY: subs kept adaptive
-	AWStrictCuts  uint64 `json:"aw_strict_cuts,omitempty"`  // HS2_STRIPE_AW_HEAVY: light-neighbour cuts of those subs
+	AWSubWin      int64  `json:"aw_sub_win,omitempty"`     // HS2_STRIPE_SUB_WIN_MB: stripe subs given the larger window
+	AWHeavySubs   int64  `json:"aw_heavy_subs,omitempty"`  // HS2_STRIPE_AW_HEAVY: subs kept adaptive
+	AWStrictCuts  uint64 `json:"aw_strict_cuts,omitempty"` // HS2_STRIPE_AW_HEAVY: light-neighbour cuts of those subs
 
 	// Reality front counters (authed links, fallback splices, reject reasons).
 	Reality *tlscarrier.RealityStats `json:"reality,omitempty"`
+	// Per-IP fronts (phase 3): the listening side's IPs (kind + reality/tls/cover
+	// counters) and the dialing side's paths (kind + "both" fallback state).
+	Fronts     []frontIPStatus   `json:"fronts,omitempty"`
+	FrontPaths []frontPathStatus `json:"front_paths,omitempty"`
 }
 
 // fillAutoWin copies the smux autowin budget counters.
@@ -625,6 +629,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		if rs := tlscarrier.RealityStatsNow(); fc.Front.NormKind() == tlscarrier.FrontReality || rs.Authed+rs.FallbackConns > 0 || len(rs.Rejected) > 0 {
 			ls.Reality = &rs
 		}
+		ls.Fronts, ls.FrontPaths = frontStatusNow(), frontPathsNow(lbCur(fc))
 		if len(s.Paths) > 0 {
 			ls.LBPaths, ls.LBTotal, ls.LBSide = s.Paths, s.PathTotal, s.PathSide
 			ls.LBMode = lbModeName(lbCur(fc))

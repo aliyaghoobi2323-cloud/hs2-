@@ -30,8 +30,8 @@ func TestFrontProfileDefaults(t *testing.T) {
 		if p.Validate() == nil {
 			t.Fatalf("%s: an incomplete/unknown front must be refused", k)
 		}
-		if k == "reality" {
-			continue // phase 2: has a dialer
+		if k == "reality" || k == "both" {
+			continue // phases 2+3: have a dialer
 		}
 		if _, err := DialerFor(p); !errors.Is(err, ErrFrontUnsupported) {
 			t.Fatalf("%s: DialerFor err %v", k, err)
@@ -105,8 +105,8 @@ func TestTLSFrontRoundTrip(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	// an unsupported front fails before any byte is sent
-	if _, err := DialPathFront(context.Background(), DialPath{Addr: ln.Addr().String(), Key: key, Profile: &FrontProfile{Kind: "both"}}); !errors.Is(err, ErrFrontUnsupported) {
-		t.Fatalf("both: %v", err)
+	if _, err := DialPathFront(context.Background(), DialPath{Addr: ln.Addr().String(), Key: key, Profile: &FrontProfile{Kind: "zzz"}}); !errors.Is(err, ErrFrontUnsupported) {
+		t.Fatalf("zzz: %v", err)
 	}
 	// an incomplete reality profile fails before any byte is sent
 	if _, err := DialPathFront(context.Background(), DialPath{Addr: ln.Addr().String(), Key: key, Profile: &FrontProfile{Kind: "reality"}}); err == nil {

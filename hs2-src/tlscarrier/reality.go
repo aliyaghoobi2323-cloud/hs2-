@@ -467,7 +467,7 @@ func (RealityFront) DialFront(_ context.Context, p DialPath) (*Carrier, error) {
 	}
 	raw, err := dialRawTCP(p)
 	if err != nil {
-		return nil, err
+		return nil, &ConnectError{err}
 	}
 	var authKey []byte
 	var verified bool
@@ -568,13 +568,21 @@ type RealityServer struct {
 	baseLen int // DER length of an unpadded throw-away cert
 	// DialTarget dials the target (tests override; nil = TCP 5 s).
 	DialTarget func(ctx context.Context, addr string) (net.Conn, error)
+	// Hybrid ("both", phase 3): a hello without a valid reality signal whose
+	// SNI TLSName accepts goes to TLS (the tls front's Server.Handle over the
+	// already-read bytes); anything else is cover (the target splice).
+	TLS     *Server
+	TLSName func(local net.Addr, sni string) bool
+	// Counters of this listener (one per lb IP): reality / tls / cover.
+	Counters FrontCounters
 }
 
 var _ Acceptor = (*RealityServer)(nil)
 
-// NewRealityServer builds the listener of a validated reality profile.
+// NewRealityServer builds the listener of a validated reality (or "both")
+// profile.
 func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
-	if p == nil || p.NormKind() != FrontReality {
+	if p == nil || (p.NormKind() != FrontReality && p.NormKind() != FrontBoth) {
 		return nil, errors.New("reality: not a reality profile")
 	}
 	if err := p.validateReality(); err != nil {
@@ -837,19 +845,37 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	if hello != nil {
 		authKey, reason = r.check(hello)
 	}
+	if authKey == nil && hello != nil && r.TLS != nil && r.TLSName != nil && r.TLSName(raw.LocalAddr(), hello.sni) {
+		// "both": our own tls name -> the tls front (its own cover included).
+		go func() {
+			getTarget(true)
+			if target != nil {
+				target.Close()
+			}
+		}()
+		r.Counters.TLS.Add(1)
+		r.TLS.Handle(ctx, &prefixConn{Conn: raw, pre: buf}, onTunnel)
+		return
+	}
 	if authKey == nil {
 		realityReject(reason)
+		r.Counters.Rejected.Add(1)
 		getTarget(true)
 		r.fallback(ctx, raw, target, buf[sent:])
 		return
 	}
-	// Authenticated: drop the target and serve TLS 1.3 ourselves.
-	go func() {
-		getTarget(true)
-		if target != nil {
-			target.Close()
-		}
-	}()
+	// Authenticated. The listener only answers as the target would: when the
+	// target cannot be reached neither can we (no reality without a reachable
+	// target; a "both" dialer then falls back to tls). The dial started at
+	// accept, so this rarely waits.
+	getTarget(true)
+	if target == nil {
+		realityReject("target_down")
+		r.Counters.Rejected.Add(1)
+		raw.Close()
+		return
+	}
+	target.Close()
 	r.serveTunnel(ctx, raw, buf, hello, authKey, onTunnel)
 }
 
@@ -932,6 +958,7 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 	}
 	tconn.SetDeadline(time.Time{})
 	realityStats.authed.Add(1)
+	r.Counters.Reality.Add(1)
 	onTunnel(&Carrier{conn: tconn})
 }
 
@@ -945,6 +972,7 @@ func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, p
 	}
 	defer target.Close()
 	realityStats.fbConns.Add(1)
+	r.Counters.Cover.Add(1)
 	if len(pending) > 0 {
 		if _, err := target.Write(pending); err != nil {
 			return

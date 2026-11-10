@@ -185,3 +185,9 @@ func (e LBAdvertIP) String() string {
 	}
 	return fmt.Sprintf("{%s %d front=%s}", e.IP, e.Weight, e.Front.NormKind())
 }
+
+// EncodeLBAdvertWire is the listening side's announcement as sent (entries +
+// the front ext), for tests and tools that check what leaves the host.
+func EncodeLBAdvertWire(l []LBAdvertIP) []byte {
+	return append(encodeAdvert(l), encodeFrontExt(l)...)
+}

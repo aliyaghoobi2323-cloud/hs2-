@@ -120,7 +120,9 @@ func lbPathsAdvert(fc fileConfig, adv []engine.LBAdvertIP) ([]engine.LBPath, err
 		for _, x := range remote { // keep this side's per-address sni
 			if ip := net.ParseIP(x.IP); ip != nil && ip.String() == a.IP {
 				e.SNI = x.SNI
-				if e.Front == nil { // the announced front wins; else this side's
+				// Precedence (phase 3): this side's explicit front > the
+				// announced one > (later, pathFront) the tunnel's.
+				if !x.Front.IsDefault() {
 					e.Front = x.Front
 				}
 			}
@@ -283,6 +285,9 @@ func reloadLB(why string) {
 	rt.rebuildLocked("reload, " + why)
 	if rt.ln != nil {
 		rt.syncListenersLocked()
+	}
+	if m := curFrontMux.Load(); m != nil { // per-IP fronts: new links only
+		m.rebuild(next)
 	}
 	if rt.adv != nil {
 		rt.adv.SetMine(lbOwnAdvert(next))
