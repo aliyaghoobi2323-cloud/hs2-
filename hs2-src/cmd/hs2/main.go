@@ -249,6 +249,8 @@ func main() {
 		configCmd(os.Args[2:])
 	case "ports":
 		portsCmd(os.Args[2:])
+	case "alert":
+		alertCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])
 	default:
