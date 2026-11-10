@@ -1092,6 +1092,48 @@ journalctl -u hs2 -f
   on both servers to confirm they run the same build (the `hs2-menu` banner
   shows it too).
 
+### Safe config changes: history, preview, trial apply, rollback
+
+Every config change can go through a preview + trial + automatic-rollback
+path (the tunnel manager's **Edit config** uses it when the binary supports
+it; `hs2 apply --supported` prints `apply-v1`):
+
+```
+hs2 config history  -u hs2-de1                 # stored versions (last 50)
+hs2 config show     -u hs2-de1 [--version N]
+hs2 config diff     -u hs2-de1 --new new.json  # or --version N; marks [bilateral] fields
+hs2 config validate -u hs2-de1 --new new.json  # hs2 check + host cross-checks
+hs2 apply    -u hs2-de1 --new new.json [--confirm-within 5m] [--health-gate]
+hs2 apply    --confirm -u hs2-de1              # keep it
+hs2 apply    --status  -u hs2-de1
+hs2 rollback -u hs2-de1 [--to N]
+hs2 config lock | unlock | lock-status         # one admin at a time
+```
+
+- **History:** `/var/lib/hs2/history/<unit>/NNNN-<time>-<reason>.json` (+ a
+  `.dropins.json` snapshot of `/etc/systemd/system/<unit>.service.d`).
+- **Diff** is semantic (JSON keys, `Environment=` keys of drop-ins); secrets
+  are never printed. Fields that must match the other server (`shared_key`,
+  `carrier`, `encap`, `proto`, `sni`, `mtu`, `reverse`, `forward_ports`, the
+  `addr` port, `lb`, noise keys) are marked **bilateral**, and `hs2 apply`
+  says what the other server must change.
+- **Validate** adds: port conflicts with the other tunnels in `/etc/hs2` and
+  with services already listening, IPs that must exist on this server
+  (`bind_local_ip`, `user_listen_ip`, a listening `addr`, own `lb` list),
+  readable `cert_file`/`key_file`, `lb` weights summing to 100.
+- **Apply:** snapshot → atomic write → restart in a transient systemd service
+  (an SSH drop changes nothing) → health gate (unit active, no `panic:` in the
+  log, steady for 8 s; with `--health-gate` also ≥ 1 serving link, all within
+  60 s) → trial. Not confirmed in time, or unhealthy during the trial →
+  automatic rollback to the snapshot + restart. A transient timer
+  (`hs2-apply-expire-*`) is a second, independent guard. State:
+  `/var/lib/hs2/apply/<unit>.json`.
+- **Lock:** `/run/hs2/admin.lock` (owner, pid, tty, time); a lock whose
+  process is gone or that is older than 2 h is stale and taken over;
+  `--force` breaks a live one with a warning.
+- **Audit log:** `/var/log/hs2-changes.log` (who, tty, unit, action, reason,
+  changed keys, result).
+
 ### Alerts (Telegram, optional)
 
 `hs2 alert -c /etc/hs2/config.json` checks one tunnel and sends short alerts.

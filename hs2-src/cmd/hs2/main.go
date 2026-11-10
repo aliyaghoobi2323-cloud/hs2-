@@ -247,6 +247,10 @@ func main() {
 		recommendLinksCmd(os.Args[2:])
 	case "config":
 		configCmd(os.Args[2:])
+	case "apply":
+		applyCmd(os.Args[2:])
+	case "rollback":
+		rollbackCmd(os.Args[2:])
 	case "ports":
 		portsCmd(os.Args[2:])
 	case "alert":

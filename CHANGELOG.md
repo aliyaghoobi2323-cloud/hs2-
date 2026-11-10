@@ -21,6 +21,23 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M1 — safe-change infrastructure (binary + small installer hook)
+
+- New `hs2 config history|show|diff|validate|lock|unlock|lock-status`,
+  `hs2 apply` (trial with confirm timer, health gate, automatic rollback that
+  survives an SSH drop via `systemd-run` + an expiry timer) and
+  `hs2 rollback`. Versioned per-unit history (last 50, with drop-in
+  snapshots), semantic diff with **bilateral** marking, host cross-checks,
+  admin lock with stale detection, audit log `/var/log/hs2-changes.log`.
+- `install.sh`: the tunnel manager's **Edit config** saves through
+  `hs2 apply` (Enter = confirm, `n` = roll back, no answer in 5 min =
+  automatic rollback) when the binary answers `hs2 apply --supported`;
+  older binaries keep the classic path. New test
+  `install/tests/tm_safe_apply_test.sh`.
+- No new menu screens yet (M2+); the old menu is unchanged otherwise.
+
+---
+
 ## Track A — installer robustness (install.sh; no binary change)
 
 ### A1 — binary verification & upgrade safety

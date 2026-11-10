@@ -3217,6 +3217,25 @@ tm_bilateral_warn(){ # changed-list
   hr
 }
 
+# tm_safe_apply UNIT CFG NEWFILE — the editor's save through `hs2 apply`: the
+# old config is stored in /var/lib/hs2/history, the new one runs in trial mode
+# (restart detached from this SSH session) and rolls back by itself unless
+# confirmed within 5 minutes or if the tunnel does not come up healthy.
+tm_safe_apply(){ # unit cfg newfile
+  local u="$1" cfg="$2" new="$3" a
+  cp -p "$cfg" "$cfg.prev"
+  if ! "$BIN" apply -u "$u" -c "$cfg" --new "$new" --confirm-within 5m --reason menu-edit; then
+    tm_edit_cleanup; err "The change was not kept — $u runs the previous config (see: $BIN config history -u $u)."; return 0
+  fi
+  tm_edit_cleanup
+  read -rp "Keep the new config? (n = roll back now; no answer in 5 min = automatic roll back) [Y/n]: " a </dev/tty || a=n
+  case "${a:-y}" in
+    n|N|no) "$BIN" rollback -u "$u" -c "$cfg" || true ;;
+    *) "$BIN" apply --confirm -u "$u" || warn "Not confirmed — $u rolls back to the previous config by itself." ;;
+  esac
+  return 0
+}
+
 tm_edit(){
   local u="$1" cfg="$2" ed edname d tmp c a since changed erc
   local -a edcmd
@@ -3268,6 +3287,9 @@ tm_edit(){
     read -rp "  Choose [1]: " c </dev/tty || c=2
     case "${c:-1}" in 2) tm_edit_cleanup; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
   done
+  # A binary with safe apply (history, trial mode, automatic rollback) takes
+  # over from here; an older one keeps the classic path below.
+  if "$BIN" apply --supported >/dev/null 2>&1; then tm_safe_apply "$u" "$cfg" "$tmp"; return 0; fi
   cp -p "$cfg" "$cfg.prev"
   # Capture which bilateral (must-match-the-peer) fields the edit changed, while
   # $cfg is still the OLD file and $tmp holds the NEW one (before the swap).
