@@ -123,6 +123,8 @@ type q2Path struct {
 	lastRead time.Time
 	hold     time.Duration
 	uncutAt  time.Time
+	okRuns     int // HS2_LB_FAST_RECOVER: raw readings in a row under the bar
+	fastResets int // HS2_LB_FAST_RECOVER: smoothed-loss resets
 	factor   float64 // the edge's applied weight (the dialing side keeps its own)
 	target   float64
 	reason   string
@@ -183,6 +185,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 	isBad := func(l float64) bool {
 		return l > lb2CutLoss && (len(rs) < 2 || l > 2*best+0.01)
 	}
+	okBar0 := j.okBar()
 	for k, r := range rs {
 		q := j.path(k)
 		q.raw = r.loss
@@ -203,6 +206,9 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 				a = q2Alpha(lb2AlphaUp, dt)
 			}
 			q.queueMs += a * (r.queueMs - q.queueMs)
+		}
+		if fastRecoverFold(q, r.loss, okBar0, now) {
+			j.log("lb auto2: path %s fast recovery: raw loss %.1f%% under %.1f%% %d readings in a row — smoothed loss reset", k, 100*r.loss, 100*okBar0, q.okRuns)
 		}
 		q.fail = r.fail
 		q.have, q.lastRead = true, now
@@ -248,7 +254,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			} else {
 				q.hold = lb2Hold
 			}
-			j.log("lb auto2: path %s cut (%s); recovery after %s under %.1f%%", k, why, fmtDur(q.hold), 100*okBar)
+			j.log("lb auto2: path %s cut (%s); recovery after %s under %.1f%%", k, why, fmtDur(recoverHold(q)), 100*okBar)
 			continue
 		}
 		if !q.cut {
@@ -261,8 +267,9 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		} else if q.lastRead.Equal(now) {
 			q.okSince = time.Time{}
 		}
-		quiet := now.Sub(q.lastRead) >= lb2Quiet && now.Sub(q.cutAt) >= q.hold
-		if (!q.okSince.IsZero() && now.Sub(q.okSince) >= q.hold) || quiet {
+		hold := recoverHold(q)
+		quiet := now.Sub(q.lastRead) >= lb2Quiet && now.Sub(q.cutAt) >= hold
+		if (!q.okSince.IsZero() && now.Sub(q.okSince) >= hold) || quiet {
 			q.cut, q.uncutAt, q.bad = false, now, 0
 			what := "loss back under " + ftoa1(100*okBar) + "%"
 			if quiet {
