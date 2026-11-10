@@ -53,12 +53,12 @@ func TestApplyDefaults(t *testing.T) {
 		lbIPCutGrace != 20*time.Second || !tlscarrier.QuietIdle || !tlscarrier.Batch || !tlscarrier.Resume {
 		t.Fatal("edge: production set not in force")
 	}
-	if lbFillPct != 0 || lbSparePerRound != 1 || lbRecConfirm {
+	if lbFillPct != 0 || lbSparePerRound != 1 || lbRecConfirm || lbFlapPen {
 		t.Fatal("edge: exit-only keys on")
 	}
 
 	ApplyDefaults(false)
-	if lbFillPct != 25 || lbSparePerRound != 3 || !lbRecConfirm {
+	if lbFillPct != 25 || lbSparePerRound != 3 || !lbRecConfirm || !lbFlapPen {
 		t.Fatal("exit: exit-only keys off")
 	}
 	if stripeAWHeavy != 0 || stripeAWSolo || pickLane != 0 || linkProbation || partialRefill {
@@ -67,8 +67,9 @@ func TestApplyDefaults(t *testing.T) {
 
 	os.Setenv("HS2_MCONN_STRIPE", "0")
 	os.Setenv("HS2_SMUX_AUTOWIN", "")
+	os.Setenv("HS2_LB_FLAP_PEN", "0")
 	ApplyDefaults(false)
-	if stripeK.Load() != 0 || smuxAutoWin != nil {
+	if stripeK.Load() != 0 || smuxAutoWin != nil || lbFlapPen {
 		t.Fatal("explicit off lost")
 	}
 	if !mconnLite.Load() {
@@ -82,7 +83,7 @@ func TestApplyDefaults(t *testing.T) {
 	if ApplyDefaults(true) != nil {
 		t.Fatal("legacy: defaults applied")
 	}
-	if mconnOn.Load() || lbAuto2 || tlscarrier.QuietIdle {
+	if mconnOn.Load() || lbAuto2 || tlscarrier.QuietIdle || lbFlapPen {
 		t.Fatal("legacy: defaults in force")
 	}
 }

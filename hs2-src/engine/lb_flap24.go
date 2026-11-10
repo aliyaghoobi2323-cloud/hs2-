@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// flap24: HS2_LB_FLAP_PEN=1 (off by default) — a FLAPPING path (one
+// flap24: HS2_LB_FLAP_PEN=1 (default on for the exit side, envdef.Table) — a FLAPPING path (one
 // local>remote pair: a load-dependent lossy route that reads clean while cut
 // and breaks again when its users return) is kept out for a long time.
 //
@@ -27,7 +27,9 @@ import (
 //     of the paths healthy. If the other paths degrade (half of them cut or
 //     lossy, the best of them over lb2CutLoss, fewer than 2 healthy, all
 //     paths lossy) every penalty lifts at once and the normal hold applies.
-var lbFlapPen = os.Getenv("HS2_LB_FLAP_PEN") == "1"
+//
+// lbFlapPen is read in loadEnvKeys (defaults22.go), through the table.
+var lbFlapPen bool
 
 func envSecs(k string, def time.Duration) time.Duration {
 	if n, err := strconv.Atoi(os.Getenv(k)); err == nil && n > 0 {

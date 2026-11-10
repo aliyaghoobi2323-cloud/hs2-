@@ -59,6 +59,7 @@ func loadEnvKeys() {
 	lbFillPct = fillPctFromEnv(envDefault("HS2_LB_FILL_PCT"))
 	lbSparePerRound = sparePerRoundFromEnv(envDefault("HS2_LB_SPARE_PER_ROUND"), lbFillPct)
 	lbRecConfirm = envOn("HS2_LB_REC_CONFIRM")
+	lbFlapPen = envOn("HS2_LB_FLAP_PEN")
 }
 
 // msFromEnv is envMsDefault on a value already read.
