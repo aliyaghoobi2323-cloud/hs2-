@@ -243,3 +243,28 @@ func TestReloadLBSwitchesFronts(t *testing.T) {
 // quietLog: the size-mirror goroutines may log after a test ends (t.Logf
 // would panic then).
 func quietLog(string, ...any) {}
+
+// Phase 4: a reality/both IP must not use a server name our tls front takes.
+func TestLBFrontTLSNameOverlap(t *testing.T) {
+	rf := func(names ...string) *tlscarrier.FrontProfile {
+		return &tlscarrier.FrontProfile{Kind: "both", ServerNames: names}
+	}
+	local := []lbIP{{IP: "10.0.0.1", SNI: "c.ours.ir"}, {IP: "10.0.0.2", SNI: "*.wild.ir"}}
+	fc := fileConfig{SNI: "Top.Ours.ir."}
+	for _, c := range []struct {
+		names []string
+		bad   bool
+	}{
+		{[]string{"www.site.ir"}, false},
+		{[]string{"www.site.ir", "c.ours.ir"}, true},
+		{[]string{"top.ours.ir"}, true},  // case and trailing dot
+		{[]string{"a.wild.ir"}, true},    // under the wildcard
+		{[]string{"a.b.wild.ir"}, false}, // two labels below: not covered
+		{[]string{"wild.ir"}, false},
+	} {
+		err := tlsNameOverlap(fc, local, lbIP{IP: "10.0.0.3", Front: rf(c.names...)})
+		if (err != nil) != c.bad {
+			t.Fatalf("%v: err %v, want bad=%v", c.names, err, c.bad)
+		}
+	}
+}

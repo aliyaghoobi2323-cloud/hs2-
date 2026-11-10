@@ -315,3 +315,46 @@ func TestMergeListeners(t *testing.T) {
 		t.Fatalf("after close: %v", err)
 	}
 }
+
+// Phase 4: a path that fails fast during the start grace (a reality-only IP
+// whose target is down: EOF right after the hello) backs off exponentially
+// instead of taking ~600 dials in 30 s, is still not cooled, and the pool
+// keeps growing on the other paths.
+func TestLBStartGraceFastFailBackoff(t *testing.T) {
+	paths := append(twoPaths(40, 30), LBPath{Local: "10.0.0.3", Remote: "10.1.0.1", Addr: "10.1.0.1:443", Weight: 30})
+	lb, _ := NewLB(paths, nil)
+	clock := time.Unix(1e9, 0)
+	lb.now = func() time.Time { return clock }
+	bad := 0
+	var held []any
+	for step := 0; step < 3000; step++ { // 30 s in 10 ms steps, one dial each
+		clock = clock.Add(10 * time.Millisecond)
+		v, err := lb.dialVia(func(p LBPath) (any, error) {
+			if p.Local == "10.0.0.3" {
+				bad++
+				return nil, errors.New("EOF")
+			}
+			return new(int), nil
+		})
+		if err == nil {
+			held = append(held, v)
+			if len(held) > 200 { // keep the pool below its share pressure
+				lb.release(held[0])
+				held = held[1:]
+			}
+		}
+	}
+	if bad > 25 {
+		t.Fatalf("%d dials to the failing path in the 30 s grace, want <= 25", bad)
+	}
+	if bad < lbGraceFreeFails {
+		t.Fatalf("only %d dials to the failing path", bad)
+	}
+	st := lb.Stats()
+	if st[2].State != "ok" {
+		t.Fatalf("failing path %q within the grace, want ok (not cooled)", st[2].State)
+	}
+	if st[0].Links+st[1].Links < 190 {
+		t.Fatalf("pool %d/%d did not grow on the good paths", st[0].Links, st[1].Links)
+	}
+}

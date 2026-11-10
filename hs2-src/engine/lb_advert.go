@@ -432,7 +432,7 @@ func (b *LB) remapLocked(next []LBPath) {
 	}
 	n := len(next)
 	links, fails, total := make([]int, n), make([]int, n), make([]uint64, n)
-	until, probing := make([]time.Time, n), make([]bool, n)
+	until, probing, backoff := make([]time.Time, n), make([]bool, n), make([]time.Time, n)
 	mult, qual := ones(n), make([]lbQual, n)
 	dials, dfails, rebal := make([]int, n), make([]int, n), make([]uint64, n)
 	to := map[int]int{}
@@ -444,6 +444,9 @@ func (b *LB) remapLocked(next []LBPath) {
 		to[i] = j
 		links[j], fails[j], total[j] = b.links[i], b.fails[i], b.total[i]
 		until[j], probing[j] = b.until[i], b.probing[i]
+		if i < len(b.backoff) {
+			backoff[j] = b.backoff[i]
+		}
 		mult[j], qual[j] = b.mult[i], b.qual[i]
 		dials[j], dfails[j], rebal[j] = b.dials[i], b.dfails[i], b.rebal[i]
 		if p.Gone {
@@ -461,6 +464,7 @@ func (b *LB) remapLocked(next []LBPath) {
 	b.paths, b.links, b.fails, b.total = next, links, fails, total
 	b.until, b.probing, b.mult, b.qual = until, probing, mult, qual
 	b.dials, b.dfails, b.rebal = dials, dfails, rebal
+	b.backoff = backoff
 }
 
 // dropDrainedLocked removes draining paths that have no link left.

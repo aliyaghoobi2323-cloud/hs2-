@@ -87,6 +87,9 @@ type realityLab struct {
 	dprof *FrontProfile // dialer profile
 	key   []byte
 	srv   *RealityServer
+	// setup: tests change srv fields under it; the accept loop takes it
+	// before each AcceptFront (a happens-before edge for -race).
+	setup *sync.Mutex
 }
 
 func newRealityLab(t *testing.T, target string, mod func(*FrontProfile)) *realityLab {
@@ -109,19 +112,22 @@ func newRealityLab(t *testing.T, target string, mod func(*FrontProfile)) *realit
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { ln.Close() })
+	setup := &sync.Mutex{}
 	go func() {
 		for {
 			c, err := ln.Accept()
 			if err != nil {
 				return
 			}
+			setup.Lock()
+			setup.Unlock()
 			go srv.AcceptFront(context.Background(), c, func(car *Carrier) {
 				go func() { io.Copy(car.RawConn(), car.RawConn()); car.Close() }()
 			})
 		}
 	}()
 	dp := &FrontProfile{Kind: "reality", ServerNames: []string{"www.target.test"}, PublicKey: pub, ShortIDs: []string{"a1b2c3d4"}}
-	return &realityLab{addr: ln.Addr().String(), prof: lp, dprof: dp, key: key, srv: srv}
+	return &realityLab{addr: ln.Addr().String(), prof: lp, dprof: dp, key: key, srv: srv, setup: setup}
 }
 
 func (l *realityLab) dial(p *FrontProfile) (*Carrier, error) {
@@ -559,4 +565,60 @@ func TestRealitySizeMirror(t *testing.T) {
 	if l.srv.CertPad.Load() != n {
 		t.Fatalf("mirror stored %d, want %d", l.srv.CertPad.Load(), n)
 	}
+}
+
+// Phase 4: the authenticated handshake copies the target's group and ALPN
+// (an X25519-only target with http/1.1), tickets stay off, the throw-away cert
+// is exactly the target chain's size every time, and the tunnel still works.
+func TestRealityMirrorTarget(t *testing.T) {
+	cert := testCert(t, "www.target.test")
+	tln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert},
+		CurvePreferences: []tls.CurveID{tls.X25519}, NextProtos: []string{"http/1.1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tln.Close()
+	go func() {
+		for {
+			c, err := tln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { c.(*tls.Conn).Handshake(); c.Close() }()
+		}
+	}()
+	l := newRealityLab(t, tln.Addr().String(), nil)
+	if c := l.srv.tunnelTLSConfig(&cert); !c.SessionTicketsDisabled || len(c.CurvePreferences) != 0 {
+		t.Fatalf("unmeasured config: %+v", c)
+	}
+	n, err := l.srv.targetChainSize(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := l.srv.Mirror()
+	if m == nil || m.Curve != tls.X25519 || m.ALPN != "http/1.1" {
+		t.Fatalf("mirror %+v", m)
+	}
+	c := l.srv.tunnelTLSConfig(&cert)
+	if len(c.CurvePreferences) != 1 || c.CurvePreferences[0] != tls.X25519 || len(c.NextProtos) != 1 || c.NextProtos[0] != "http/1.1" || !c.SessionTicketsDisabled {
+		t.Fatalf("mirrored config: curves %v alpn %v tickets-off %v", c.CurvePreferences, c.NextProtos, c.SessionTicketsDisabled)
+	}
+	for _, target := range []int64{n + 200, 1500, 2600, 4200} {
+		l.srv.CertPad.Store(target)
+		for i := 0; i < 20; i++ {
+			cc, err := l.srv.makeCert(make([]byte, 32), "www.target.test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := int64(len(cc.Certificate[0])); got != target {
+				t.Fatalf("cert %d B, want exactly %d", got, target)
+			}
+		}
+	}
+	l.srv.CertPad.Store(2600)
+	car, err := l.dial(l.dprof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	car.Close()
 }

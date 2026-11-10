@@ -178,6 +178,9 @@ func validateLBFronts(fc fileConfig) error {
 				if err := validateRealityTarget(e.Front); err != nil {
 					return fmt.Errorf("%s: %v", where, err)
 				}
+				if err := tlsNameOverlap(fc, local, e); err != nil {
+					return fmt.Errorf("%s: %v", where, err)
+				}
 			case isRemote && !listens:
 				if e.Front.PublicKey == "" && e.Front.PrivateKey == "" {
 					return fmt.Errorf(`%s: the dialing side needs "public_key" (or leave the front out: the listener announces it)`, where)
@@ -190,6 +193,34 @@ func validateLBFronts(fc fileConfig) error {
 		return err
 	}
 	return check(remote, true)
+}
+
+// tlsNameOverlap refuses a reality/"both" IP whose server_names include a name
+// the tls front of this side accepts (the top-level sni or any per-IP sni):
+// on a "both" port such a hello would be taken by the tls front instead of
+// reaching the target (a prober would see our cert for the target's name),
+// and on a "reality" IP our own tls dialer would get the target. A wildcard
+// sni ("*.site.ir") overlaps every name one label below it.
+func tlsNameOverlap(fc fileConfig, local []lbIP, e lbIP) error {
+	norm := func(s string) string { return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".") }
+	var ours []string
+	if fc.SNI != "" {
+		ours = append(ours, norm(fc.SNI))
+	}
+	for _, x := range local {
+		if x.SNI != "" {
+			ours = append(ours, norm(x.SNI))
+		}
+	}
+	for _, sn := range e.Front.ServerNames {
+		n := norm(sn)
+		for _, o := range ours {
+			if o == n || (strings.HasPrefix(o, "*.") && strings.Count(n, ".") >= 1 && n[strings.Index(n, ".")+1:] == o[2:]) {
+				return fmt.Errorf("server_name %q is also our tls sni %q: a reality/both IP needs server names the tls front does not use", sn, o)
+			}
+		}
+	}
+	return nil
 }
 
 // lbLists returns this side's (local) and the other side's (remote) lists.

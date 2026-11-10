@@ -106,6 +106,16 @@ var (
 	// (an older peer that never listens there) is cooled lbFailMax failures
 	// after the grace, as before.
 	lbStartGrace = 30 * time.Second
+	// Within the start grace a path that keeps failing (e.g. a reality-only
+	// IP whose target is down answers EOF at once) is not cooled, but past
+	// lbGraceFreeFails failures in a row it is skipped for an exponential
+	// backoff (lbGraceBackoff doubling, capped at lbGraceBackoffMax): without
+	// it the lab saw ~600 dials in 30 s on such a path and the pool grew to
+	// only 13 links (crowd p99 2.7 s). The free failures keep the startup race
+	// (an extra address refusing a few dials) unaffected.
+	lbGraceFreeFails  = 6
+	lbGraceBackoff    = 250 * time.Millisecond
+	lbGraceBackoffMax = 4 * time.Second
 )
 
 // startedLocked reports whether failed dials may cool a path: the peer has
@@ -123,6 +133,7 @@ type LB struct {
 	total   []uint64
 	until   []time.Time // cooling until (zero = not cooled)
 	probing []bool      // the one probe dial after a cooldown is in flight
+	backoff []time.Time // start grace: skipped until (not a cooldown, no probe)
 	held    map[any]int // live link -> path index
 	hooks   map[any]lbHooks
 	auto    bool      // mode auto: weights follow path quality (lb_auto.go)
@@ -174,7 +185,7 @@ func NewLB(paths []LBPath, logf func(string, ...any)) (*LB, error) {
 	}
 	n := len(paths)
 	return &LB{paths: append([]LBPath(nil), paths...), links: make([]int, n), fails: make([]int, n),
-		total: make([]uint64, n), until: make([]time.Time, n), probing: make([]bool, n),
+		total: make([]uint64, n), until: make([]time.Time, n), probing: make([]bool, n), backoff: make([]time.Time, n),
 		held: map[any]int{}, hooks: map[any]lbHooks{}, mult: ones(n), qual: make([]lbQual, n),
 		qprev: map[any]qPrev{}, dials: make([]int, n), dfails: make([]int, n), rebal: make([]uint64, n),
 		now: time.Now, log: logf}, nil
@@ -211,7 +222,7 @@ func (b *LB) eligibleLocked(i int, now time.Time) bool {
 	if b.paths[i].Primary {
 		return true
 	}
-	return !b.paths[i].Gone && b.until[i].IsZero()
+	return !b.paths[i].Gone && b.until[i].IsZero() && (i >= len(b.backoff) || !now.Before(b.backoff[i]))
 }
 
 // acquire picks the path for the next dial and reserves a link on it.
@@ -387,6 +398,12 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 			if !wasCool {
 				b.log("lb: path %s cooled for %s after %d failed dial(s): %v — its share goes to the other paths", p.Name(), fmtDur(cd), b.fails[i], err)
 			}
+		} else if !p.Primary && b.fails[i] > lbGraceFreeFails && i < len(b.backoff) {
+			d := lbGraceBackoff << min(b.fails[i]-lbGraceFreeFails-1, 16)
+			if d > lbGraceBackoffMax || d <= 0 {
+				d = lbGraceBackoffMax
+			}
+			b.backoff[i] = b.now().Add(d)
 		}
 		return
 	}
@@ -395,6 +412,9 @@ func (b *LB) resultLocked(i int, probe bool, link any, err error) {
 	}
 	b.fails[i] = 0
 	b.until[i] = time.Time{}
+	if i < len(b.backoff) {
+		b.backoff[i] = time.Time{}
+	}
 	if b.upAt.IsZero() {
 		b.upAt = b.now()
 	}

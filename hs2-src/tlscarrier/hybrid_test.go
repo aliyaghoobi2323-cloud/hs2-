@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -15,8 +17,10 @@ func hybridLab(t *testing.T, target string) (*realityLab, string) {
 	l := newRealityLab(t, target, func(p *FrontProfile) { p.Kind = FrontBoth })
 	be, stop := backend(t)
 	t.Cleanup(stop)
+	l.setup.Lock()
 	l.srv.TLS = &Server{SharedKey: l.key, Cert: testCert(t, "tun.ours.test"), BackendAddr: be}
 	l.srv.TLSName = func(_ net.Addr, sni string) bool { return sni == "tun.ours.test" }
+	l.setup.Unlock()
 	return l, be
 }
 
@@ -212,5 +216,77 @@ func TestBothProfile(t *testing.T) {
 	p.ShortIDs = nil
 	if p.Validate() == nil {
 		t.Fatal("both without short_ids accepted")
+	}
+}
+
+// Phase 4: on a "both" port our own tls dials never contact the target (it
+// is dialed lazily, only for hellos that are not ours); cover splices are
+// capped per client /24 and the excess gets a FIN (EOF, not a reset) after
+// its hello, without the target.
+func TestHybridLazyTargetAndCap(t *testing.T) {
+	rt := newRawTarget(t, "TARGET-ANSWER", 0)
+	l, _ := hybridLab(t, rt.ln.Addr().String())
+	var dials atomic.Int64
+	l.setup.Lock()
+	l.srv.DialTarget = func(ctx context.Context, addr string) (net.Conn, error) {
+		dials.Add(1)
+		var d net.Dialer
+		return d.DialContext(ctx, "tcp", addr)
+	}
+	l.srv.fbMaxNet = 2
+	l.setup.Unlock()
+	for i := 0; i < 3; i++ {
+		tc, err := DialPathFront(context.Background(), DialPath{Addr: l.addr, SNI: "tun.ours.test", Key: l.key, Connect: 2 * time.Second})
+		if err != nil {
+			t.Fatalf("tls via both: %v", err)
+		}
+		echoOK(t, tc)
+		tc.Close()
+	}
+	if n := dials.Load(); n != 0 {
+		t.Fatalf("our tls dials contacted the target %d times", n)
+	}
+	var open []net.Conn
+	for i := 0; i < 2; i++ { // two covers held open
+		c, err := net.Dial("tcp", l.addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Write(helloBytes(t, "other.example"))
+		c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		b := make([]byte, 64)
+		if n, _ := c.Read(b); string(b[:n]) != "TARGET-ANSWER" {
+			t.Fatalf("cover %d: %q", i, b[:n])
+		}
+		open = append(open, c)
+	}
+	if n := dials.Load(); n != 2 {
+		t.Fatalf("target dials %d, want 2 (covers only)", n)
+	}
+	before := RealityStatsNow().Rejected["fallback_cap"]
+	c, err := net.Dial("tcp", l.addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Write(helloBytes(t, "other.example"))
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	b := make([]byte, 64)
+	n, rerr := c.Read(b)
+	c.Close()
+	if n != 0 || rerr != io.EOF {
+		t.Fatalf("over the cap: %q %v, want a clean EOF", b[:n], rerr)
+	}
+	if RealityStatsNow().Rejected["fallback_cap"] != before+1 || dials.Load() != 2 {
+		t.Fatalf("cap: rejected %v, target dials %d", RealityStatsNow().Rejected, dials.Load())
+	}
+	for _, o := range open {
+		o.Close()
+	}
+	time.Sleep(200 * time.Millisecond)
+	l.srv.fbMu.Lock()
+	all := l.srv.fbAll
+	l.srv.fbMu.Unlock()
+	if all != 0 {
+		t.Fatalf("cover slots not released: %d", all)
 	}
 }

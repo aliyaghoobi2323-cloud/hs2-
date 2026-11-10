@@ -52,6 +52,10 @@ type FrontProfile struct {
 	// direction, then FallbackRateBps", 0 = the defaults (256 KB, 64 KB/s);
 	// FallbackMaxSeconds caps a spliced connection (0 = 600 s).
 	FallbackMaxSeconds int64 `json:"fallback_max_seconds,omitempty"`
+	// FallbackMaxConns / FallbackMaxPerNet cap the concurrent cover splices
+	// of this listener (IP) and per client /24 (IPv6 /64); 0 = 256 / 16.
+	FallbackMaxConns  int `json:"fallback_max_conns,omitempty"`
+	FallbackMaxPerNet int `json:"fallback_max_per_net,omitempty"`
 	// ForceTarget accepts a target on a multi-tenant CDN (refused otherwise).
 	ForceTarget bool `json:"force_target,omitempty"`
 }
@@ -72,7 +76,7 @@ func (p *FrontProfile) IsDefault() bool {
 	}
 	return p.NormKind() == FrontTLS && p.Target == "" && len(p.ServerNames) == 0 &&
 		p.PublicKey == "" && p.PrivateKey == "" && len(p.ShortIDs) == 0 &&
-		p.FallbackMaxBytes == 0 && p.FallbackRateBps == 0 && p.FallbackMaxSeconds == 0 && !p.ForceTarget
+		p.FallbackMaxBytes == 0 && p.FallbackRateBps == 0 && p.FallbackMaxSeconds == 0 && p.FallbackMaxConns == 0 && p.FallbackMaxPerNet == 0 && !p.ForceTarget
 }
 
 // Validate checks a profile: tls, or reality (phase 2) with its fields.

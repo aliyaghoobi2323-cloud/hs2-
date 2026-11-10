@@ -70,6 +70,8 @@ const (
 	DefaultFallbackMaxBytes   = 256 << 10
 	DefaultFallbackRateBps    = 64 << 10
 	DefaultFallbackMaxSeconds = 600
+	DefaultFallbackMaxConns   = 256
+	DefaultFallbackMaxPerNet  = 16
 )
 
 // realityCertOID is the private extension carrying the cert's tag.
@@ -566,6 +568,10 @@ type RealityServer struct {
 	// (StartSizeMirror keeps it fresh).
 	CertPad atomic.Int64
 	baseLen int // DER length of an unpadded throw-away cert
+	// mirror: the target's observed handshake choices (StartSizeMirror),
+	// copied by the authenticated handshake so a passive observer sees the
+	// target's ServerHello group and ALPN (phase 4).
+	mirror atomic.Pointer[targetMirror]
 	// DialTarget dials the target (tests override; nil = TCP 5 s).
 	DialTarget func(ctx context.Context, addr string) (net.Conn, error)
 	// Hybrid ("both", phase 3): a hello without a valid reality signal whose
@@ -575,6 +581,59 @@ type RealityServer struct {
 	TLSName func(local net.Addr, sni string) bool
 	// Counters of this listener (one per lb IP): reality / tls / cover.
 	Counters FrontCounters
+	// concurrent cover splices: this listener and per client /24 (/64)
+	fbMu            sync.Mutex
+	fbAll           int
+	fbNet           map[string]int
+	fbMax, fbMaxNet int
+}
+
+func clientNet(a net.Addr) string {
+	ta, ok := a.(*net.TCPAddr)
+	if !ok {
+		return ""
+	}
+	if v4 := ta.IP.To4(); v4 != nil {
+		return v4.Mask(net.CIDRMask(24, 32)).String()
+	}
+	return ta.IP.Mask(net.CIDRMask(64, 128)).String()
+}
+
+// fbAcquire takes a cover-splice slot for a client; false when this listener
+// or the client's /24 is at its cap.
+func (r *RealityServer) fbAcquire(a net.Addr) (release func(), ok bool) {
+	k := clientNet(a)
+	r.fbMu.Lock()
+	defer r.fbMu.Unlock()
+	if r.fbNet == nil {
+		r.fbNet = map[string]int{}
+	}
+	if r.fbMax > 0 && r.fbAll >= r.fbMax || r.fbMaxNet > 0 && r.fbNet[k] >= r.fbMaxNet {
+		return nil, false
+	}
+	r.fbAll++
+	r.fbNet[k]++
+	return func() {
+		r.fbMu.Lock()
+		r.fbAll--
+		if r.fbNet[k]--; r.fbNet[k] <= 0 {
+			delete(r.fbNet, k)
+		}
+		r.fbMu.Unlock()
+	}, true
+}
+
+// capClose ends a connection over the cover cap after its hello was read: a
+// FIN (CloseWrite), then the client's remaining bytes are drained for up to
+// 2 s so the close never becomes an RST (closing with unread data does) —
+// what a busy server that accepts and then hangs up looks like.
+func capClose(c net.Conn) {
+	if cw, ok := c.(interface{ CloseWrite() error }); ok {
+		cw.CloseWrite()
+	}
+	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	io.Copy(io.Discard, io.LimitReader(c, 64<<10))
+	c.Close()
 }
 
 var _ Acceptor = (*RealityServer)(nil)
@@ -619,6 +678,14 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 	if r.maxDur == 0 {
 		r.maxDur = DefaultFallbackMaxSeconds * time.Second
 	}
+	r.fbMax, r.fbMaxNet = p.FallbackMaxConns, p.FallbackMaxPerNet
+	if r.fbMax <= 0 {
+		r.fbMax = DefaultFallbackMaxConns
+	}
+	if r.fbMaxNet <= 0 {
+		r.fbMaxNet = DefaultFallbackMaxPerNet
+	}
+	r.fbNet = map[string]int{}
 	if inner != nil {
 		inner.init()
 	}
@@ -629,6 +696,17 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 	r.baseLen = len(c.Certificate[0])
 	return r, nil
 }
+
+// targetMirror is what the target chose for a Chrome-like offer (X25519MLKEM768
+// + X25519, ALPN h2/http1.1): the key-share group and ALPN.
+type targetMirror struct {
+	Curve tls.CurveID
+	ALPN  string
+}
+
+// Mirror returns the target's observed group and ALPN (nil before the first
+// measurement).
+func (r *RealityServer) Mirror() *targetMirror { return r.mirror.Load() }
 
 // targetChainSize is what the target's Certificate message carries: the
 // chain's DER bytes plus the per-entry overhead beyond the first entry (our
@@ -654,7 +732,9 @@ func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
 		return 0, err
 	}
 	var n int64
-	for i, crt := range c.ConnectionState().PeerCertificates {
+	cs := c.ConnectionState()
+	r.mirror.Store(&targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol})
+	for i, crt := range cs.PeerCertificates {
 		n += int64(len(crt.Raw))
 		if i > 0 {
 			n += 5
@@ -758,6 +838,26 @@ func (c *prefixConn) Read(b []byte) (int, error) {
 // NetConn exposes the socket (Carrier.TCPConn walks wrappers with it).
 func (c *prefixConn) NetConn() net.Conn { return c.Conn }
 
+func (r *RealityServer) dialTarget(ctx context.Context, tch chan<- struct {
+	c   net.Conn
+	err error
+}) {
+	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var c net.Conn
+	var err error
+	if r.DialTarget != nil {
+		c, err = r.DialTarget(dctx, r.prof.Target)
+	} else {
+		var d net.Dialer
+		c, err = d.DialContext(dctx, "tcp", r.prof.Target)
+	}
+	tch <- struct {
+		c   net.Conn
+		err error
+	}{c, err}
+}
+
 // AcceptFront: read the ClientHello (bounded, with a deadline) while
 // forwarding it to the target as it arrives; an authenticated hello gets our
 // own TLS 1.3 and the tunnel auth, anything else the target, byte for byte.
@@ -769,29 +869,39 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 			tc.SetKeepAlivePeriod(quietKeepAlive)
 		}
 	}
-	type dres struct {
+	type dres = struct {
 		c   net.Conn
 		err error
 	}
 	tch := make(chan dres, 1)
-	dctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	go func() {
-		defer cancel()
-		var c net.Conn
-		var err error
-		if r.DialTarget != nil {
-			c, err = r.DialTarget(dctx, r.prof.Target)
-		} else {
-			var d net.Dialer
-			c, err = d.DialContext(dctx, "tcp", r.prof.Target)
+	// "both" (phase 4): the target is dialed lazily — only once the hello is
+	// not ours (or is not a complete hello in the first read: a prober's
+	// partial bytes still reach the target as they arrive). Our own tls
+	// dials never touch the target. "reality" dials at accept (an
+	// authenticated hello needs the target up, see below).
+	lazy := r.TLS != nil && r.TLSName != nil
+	started := false
+	startDial := func() {
+		if started {
+			return
 		}
-		tch <- dres{c, err}
-	}()
+		started = true
+		go r.dialTarget(ctx, tch)
+	}
+	if !lazy {
+		startDial()
+	}
 	var target net.Conn
 	targetErr := false
 	getTarget := func(block bool) {
 		if target != nil || targetErr {
 			return
+		}
+		if !started {
+			if !block {
+				return
+			}
+			startDial()
 		}
 		if block {
 			x := <-tch
@@ -804,6 +914,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 		default:
 		}
 	}
+	_ = dres{}
 	buf := make([]byte, 0, 4096)
 	sent := 0
 	tmp := make([]byte, 4096)
@@ -828,6 +939,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 			hello = h
 			break
 		}
+		startDial() // a partial hello: the target sees the bytes as they come
 		if err != nil {
 			reason = "read"
 			if ne, ok := err.(net.Error); ok && ne.Timeout() {
@@ -847,12 +959,14 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	}
 	if authKey == nil && hello != nil && r.TLS != nil && r.TLSName != nil && r.TLSName(raw.LocalAddr(), hello.sni) {
 		// "both": our own tls name -> the tls front (its own cover included).
-		go func() {
-			getTarget(true)
-			if target != nil {
-				target.Close()
-			}
-		}()
+		if started {
+			go func() {
+				getTarget(true)
+				if target != nil {
+					target.Close()
+				}
+			}()
+		}
 		r.Counters.TLS.Add(1)
 		r.TLS.Handle(ctx, &prefixConn{Conn: raw, pre: buf}, onTunnel)
 		return
@@ -860,6 +974,21 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	if authKey == nil {
 		realityReject(reason)
 		r.Counters.Rejected.Add(1)
+		release, ok := r.fbAcquire(raw.RemoteAddr())
+		if !ok {
+			realityReject("fallback_cap")
+			if started {
+				go func() {
+					getTarget(true)
+					if target != nil {
+						target.Close()
+					}
+				}()
+			}
+			capClose(raw)
+			return
+		}
+		defer release()
 		getTarget(true)
 		r.fallback(ctx, raw, target, buf[sent:])
 		return
@@ -885,23 +1014,61 @@ func (r *RealityServer) makeCert(authKey []byte, sni string) (*tls.Certificate, 
 		return nil, err
 	}
 	val := append([]byte{0x04, 32}, certTag(authKey, spki)...) // OCTET STRING
-	exts := []pkix.Extension{{Id: realityCertOID, Value: val}}
-	if pad := r.CertPad.Load() - int64(r.baseLen) - 24; r.baseLen > 0 && pad > 0 {
-		p := make([]byte, pad)
-		rand.Read(p)
-		v, _ := asn1.Marshal(p)
-		exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 55738, 1, 2}, Value: v})
+	want := r.CertPad.Load()
+	pad := want - int64(r.baseLen) - 24
+	if r.baseLen == 0 || pad < 0 {
+		pad = 0
 	}
-	sn, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
-	now := time.Now()
-	tmpl := &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: sni}, DNSNames: []string{sni},
-		NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), ExtraExtensions: exts,
-		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &r.certKey.PublicKey, r.certKey)
-	if err != nil {
-		return nil, err
+	// Exact size, no jitter: the ECDSA signature's DER is 70-72 bytes, so
+	// re-sign until it is 71 (about half the tries); then nudge the padding
+	// until the DER is exactly the target's chain size (a passive observer
+	// saw 441-443 B vs the target's fixed 417 B before).
+	var der []byte
+	for try := 0; try < 64; try++ {
+		exts := []pkix.Extension{{Id: realityCertOID, Value: val}}
+		if pad > 0 {
+			p := make([]byte, pad)
+			rand.Read(p)
+			v, _ := asn1.Marshal(p)
+			exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 55738, 1, 2}, Value: v})
+		}
+		sn, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
+		sn.SetBit(sn, 119, 1) // fixed serial length
+		now := time.Now()
+		tmpl := &x509.Certificate{SerialNumber: sn, Subject: pkix.Name{CommonName: sni}, DNSNames: []string{sni},
+			NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), ExtraExtensions: exts,
+			KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+		der, err = x509.CreateCertificate(rand.Reader, tmpl, tmpl, &r.certKey.PublicKey, r.certKey)
+		if err != nil {
+			return nil, err
+		}
+		if c, perr := x509.ParseCertificate(der); perr != nil || len(c.Signature) != 71 {
+			continue
+		}
+		if r.baseLen == 0 || pad == 0 || int64(len(der)) == want {
+			break
+		}
+		pad += want - int64(len(der))
+		if pad < 1 {
+			pad = 1
+		}
 	}
 	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: r.certKey}, nil
+}
+
+func (r *RealityServer) tunnelTLSConfig(cert *tls.Certificate) *tls.Config {
+	tcfg := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert},
+		NextProtos: []string{"h2", "http/1.1"}, SessionTicketsDisabled: true}
+	if m := r.mirror.Load(); m != nil {
+		if m.Curve != 0 {
+			tcfg.CurvePreferences = []tls.CurveID{m.Curve}
+		}
+		tcfg.NextProtos = nil
+		if m.ALPN != "" {
+			tcfg.NextProtos = []string{m.ALPN}
+		}
+	}
+	return tcfg
 }
 
 func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byte, h *realityHello, authKey []byte, onTunnel func(*Carrier)) {
@@ -911,8 +1078,7 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 		raw.Close()
 		return
 	}
-	tcfg := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert},
-		NextProtos: []string{"h2", "http/1.1"}, SessionTicketsDisabled: true}
+	tcfg := r.tunnelTLSConfig(cert)
 	tconn := tls.Server(&prefixConn{Conn: wrapBatch(raw), pre: pre}, tcfg)
 	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
 	if err := tconn.Handshake(); err != nil {

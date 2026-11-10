@@ -511,3 +511,117 @@ call, game, iperf down x8, T=45 s.
   so a prober that knows our tls name sees nginx for TLS and the target for
   plain HTTP. For `both`, point the tls cover at the target (or use a tls
   name that is the target's) — phase 4.
+
+## 8. Phase 4: leftovers, fingerprints, performance (2026-11-11)
+
+### 8.1 Fixes (code + tests)
+
+* **Start-up storm** (`engine/lb.go`): within the LB start grace a non-primary
+  path is still never cooled, but after `lbGraceFreeFails`=6 failures in a row
+  it is skipped for an exponential backoff (250 ms doubling, cap 4 s;
+  `LB.backoff`, kept across `remapLocked`, cleared by a success). The first 6
+  failures are free so the startup race (`TestLBStartupRaceNoCooling`) is
+  unchanged. `TestLBStartGraceFastFailBackoff`: a path failing on every dial
+  for the whole 30 s grace (10 ms dial cadence) gets <= 25 dials (was one per
+  dial: ~3000 in the test, ~600 in the lab), stays `ok`, and the pool grows on
+  the other paths.
+* **Validation** (`cmd/hs2/lb.go` `tlsNameOverlap`): a reality/both IP whose
+  `server_names` include a name our tls front takes (top-level `sni` or any
+  per-IP `sni`; case/trailing dot normalised; `*.x` covers one label below) is
+  refused (`TestLBFrontTLSNameOverlap`). NOT done: the warning when our tls
+  sni does not resolve to that IP.
+* **Lazy target dial on "both"** (`AcceptFront`): the target is dialed only
+  when the first read is not a complete hello (garbage/partial: the prober's
+  bytes still reach the target as they come) or a complete hello is not ours;
+  our tls dials never contact the target. `reality` IPs still dial at accept
+  (an authenticated hello needs the target up). `TestHybridLazyTargetAndCap`:
+  3 tls dials -> 0 target dials. NOT measured yet: the cover timing cost of the
+  lazy dial (one listener->target connect in series, ~0.7 ms on loopback).
+* **Cover-splice caps**: `fallback_max_conns` (per listener IP, default 256)
+  and `fallback_max_per_net` (per client /24, IPv6 /64, default 16). Over the
+  cap the hello is read, then FIN (CloseWrite), the rest drained 2 s (so the
+  close is never an RST), no target contact; reason `rejected.fallback_cap`.
+  Rationale: a busy server that accepts and hangs up; an RST or a silent
+  stall would be rarer patterns. Tested in `TestHybridLazyTargetAndCap`
+  (clean EOF, slots released).
+* **Fingerprint mirroring** (`tunnelTLSConfig`, `targetMirror`): the size
+  mirror's probe (Chrome-like offer: X25519MLKEM768+X25519, ALPN h2/http1.1)
+  now also records the target's group and ALPN; the authenticated handshake
+  uses exactly that group (`CurvePreferences`) and ALPN (none if the target
+  has none). The throw-away cert is EXACTLY the target chain's size, no
+  jitter (fixed serial length, ECDSA signature re-signed until 71 B, padding
+  nudged until equal). `TestRealityMirrorTarget`.
+
+### 8.2 Fingerprint comparison (lab 2, nginx 1.24/OpenSSL 3.0.13)
+
+ClientHello (tls and reality fronts vs uTLS Chrome 133; curl-impersonate not
+available offline): JA4 `t13d1516h2_8daaf6152771_d8a2da3f94cd` identical,
+JA3n identical (JA3 changes per connection, as Chrome's: extension order
+shuffled, 400/400 distinct), GREASE, key shares (GREASE, 0x11ec 1216 B, 0x1d
+32 B), ECH GREASE, record sizes 1715-1811, ALPN identical. The reality
+session_id is AES-GCM output: byte chi2 249 (df 255) vs random 226; no layout
+difference to the tls front. Prober without the key: byte-identical to nginx
+(spliced), time to ServerHello +0.66 ms (listener->target RTT; keep the
+target close).
+
+Authenticated client vs the target, passive observer (30 conns each):
+
+| item | before (be79c990) | after (phase 4) | nginx ECDSA 387 B chain | after, RSA 2181 B chain | nginx RSA | severity / status |
+|---|---|---|---|---|---|---|
+| ServerHello group / size | 0x11ec / 1210 | 0x1d / 122 | 0x1d / 122 | 0x1d / 122 | 0x1d / 122 | high -> fixed |
+| EncryptedExtensions | 36 (h2) | 42 | 42 | 42 | 42 | med-high -> fixed |
+| Certificate record | 441-443 jitter | 442 fixed | 417 | 2211 | 2211 | med -> fixed for real chains; floor ~411 B (lab chain smaller) |
+| CertificateVerify | 95-97 | 95-97 | 95-97 | 95-97 | 281 | high for RSA targets -> OPEN |
+| NewSessionTicket | none | none (Go would send 1x139 B inside its first flight: Go-only, kept off) | 2 (266/282) after client Finished | none | 2 | med -> OPEN |
+| first server flight | 1866-1869 | ~790 | 760-762 | ~2560 | 2740 | follows the rows above |
+| time to first server byte | 1.40 ms | 1.36 ms | 0.49 ms | 1.95 ms | 1.30 ms | low (cert build + sign) -> OPEN |
+
+Open, with the plan: (1) RSA target: when the mirrored leaf is RSA, use a
+throw-away RSA key of the same size (CertificateVerify rsa_pss 2048 = 256 B
+sig); (2) NST: after the client's Finished, send N padded records of the
+target's NST sizes (measure N/sizes in the mirror probe: read ~100 ms after
+the handshake); the dialer discards them — a wire change for the dialer, so
+version it; (3) cert floor: log a warning when the target chain is smaller
+than our minimum; (4) pre-build certs to cut the +0.6-0.9 ms.
+
+### 8.3 Performance A/B (lab 1, reverse l3mtcp, crowd 3000, 1% loss, 150 links)
+
+Note: `LOSS` in the lab runner is a fraction: the phase-2 runs (6.5) also had
+1% loss (measured drop 0.98%), not 0.01%. Same binary (be79c990), 6
+interleaved reps x 4 cases x 2 arms, 48 runs: links 150/150, 0 failures,
+churn 0; R runs: `reality.authed` 150, `fallback_conns` 0.
+
+| case | metric | T (tls) | R (reality) | R-T | Welch t |
+|---|---|--:|--:|--:|--:|
+| down8 | Mbps | 1357.5 | 1420.4 | +4.6% | +1.83 |
+| down8 | call p99 ms | 174.5 | 195.5 | +12.0% | +0.81 |
+| down8 | crowd p99 ms | 157.6 | 157.4 | -0.1% | +0.08 |
+| light | call p99 ms | 182.5 | 174.2 | -4.5% | -0.15 |
+| light | crowd p99 ms | 149.8 | 151.1 | +0.8% | +0.67 |
+| light | echo p99 ms | 136.1 | 139.2 | +2.3% | -0.02 |
+| down1 | Mbps | 821.8 | 655.2 | -20.3% | -0.92 |
+| down1 | crowd p99 ms | 149.9 | 153.2 | +2.2% | +1.38 |
+| up8 | Mbps | 1719.8 | 1519.8 | -11.6% | -1.12 |
+| up8 | crowd p99 ms | 159.0 | 158.8 | -0.1% | -0.20 |
+
+No |t| > 2 in 23 comparisons (down1 single stream at 1% loss swings 294-1068
+Mbps in both arms). Raw: lab 1 `/opt/hs2lab/r35/p4/res/ab4.jsonl`.
+
+LB, 3 paths (A tls, B reality, C both; 1000mbit/40ms/1% each; crowd 3000,
+call, game, iperf down x8; 45 s):
+
+| run | heavy Mbps | failures | crowd p99 | links A/B/C | share |
+|---|--:|---|--:|---|---|
+| eq0 | 1185 | 0 | 173 ms | 59/36/58 | 39/24/38% |
+| eq1 | 1259 | 0 | 168 ms | 57/37/56 | 38/25/37% |
+| eq2 | 1146 | 0 | 167 ms | 59/35/58 | 39/23/38% |
+| B worse (+80 ms, 3% corrupt) | 1040 | 0 | 1230 ms | 60/28/65 | 39/18/42% |
+
+Findings for the LB (OPEN): (a) with equal paths the reality-only path B
+settles at ~37 links instead of ~51: at ~10 s one B dial fails with
+`reading server proof: i/o timeout` and auto2 lowers B to x0.17 citing
+`loss 1.1%` (the same loss as A and C), and the share does not recover in
+the run — the LB is biased by the front's startup failures, not by quality.
+(b) when B really degrades, auto2 cuts it (x0.10, `loss 4.2%`) but only idle
+links retire (37 -> 28), so crowd p99 rises to 1.23 s: light users stay
+behind a bad path — against the "light users never behind heavy/bad" rule.
