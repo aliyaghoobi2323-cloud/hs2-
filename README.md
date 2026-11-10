@@ -827,11 +827,60 @@ applies, so either one caps it).
   way (for example its 7-day session-ticket lifetime), so a real nginx
   backend remains the stronger cover.
 
-### Optional DPI hardening keys (environment, all off by default)
+### Production defaults (on by default for reverse `l3mtcp`)
 
-Set them in the hs2 service's environment (e.g. a systemd drop-in with
+Since build `defaults22`, a plain install needs **no** `Environment=` lines:
+on the `l3mtcp` carrier in **reverse** mode, every key the reference tunnel
+runs is **on by default**, per side, exactly as that tunnel runs it. Every
+other carrier (`mtcp`, `tls`, `udp`, `auto`, `dgtun`, `reality`, `noise`)
+and direct mode keep the old defaults (all off). The service log says what is
+in force at start: `defaults: production set on (edge side, N keys from
+defaults; ...)`.
+
+- **Turn one key off:** set it explicitly, e.g. `Environment=HS2_QUIET_IDLE=0`
+  (an explicit value always wins: `0`, `off` or an empty `HS2_X=` mean what
+  they always meant — off).
+- **Change one value:** set it, e.g. `Environment=HS2_MCONN_STRIPE=4`.
+- **Old behaviour, all keys off:** `Environment=HS2_DEFAULTS=legacy` (or `0`);
+  then only the keys you set explicitly apply, as before `defaults22`.
+
+| key | default | side |
+|-----|---------|------|
+| `HS2_SHAPE_FAST`, `HS2_SHAPE_SMALL`, `HS2_SHAPE_BULK` | `1` | both |
+| `HS2_L3_LANE`, `HS2_HEAVY_BACKLOG`, `HS2_L3_DUP`, `HS2_FAST_LINK` | `1` | both |
+| `HS2_MCONN` | `lite` | both |
+| `HS2_MCONN_BATCH`, `HS2_MCONN_DEADLINE_FIX`, `HS2_MCONN_CLOSE_HS` | `1` | both |
+| `HS2_MCONN_CALL`, `HS2_MCONN_CALL_AVOID` | `1` | both |
+| `HS2_MCONN_STRIPE` | `8` | both |
+| `HS2_MCONN_STRIPE_UP`, `HS2_MCONN_STRIPE_SHARE`, `HS2_MCONN_STRIPE_REL` | `1` | both |
+| `HS2_MCONN_STRIPE_QWIN_MS` | `8000` | both |
+| `HS2_QUIET_IDLE`, `HS2_TLS_RESUME`, `HS2_AUTH_PAD`, `HS2_COVER_NGINX` | `1` | both |
+| `HS2_LB_AUTO2`, `HS2_LB_CUT_DRAIN`, `HS2_LB_FAST_RECOVER` | `1` | both |
+| `HS2_LB_START_GRACE_S` | `20` | both |
+| `HS2_SMUX_AUTOWIN`, `HS2_SMUX_AUTOWIN_REL` | `1` | both |
+| `HS2_SMUX_AUTOWIN_SHARE_MB` | `32` | both |
+| `HS2_LINK_PROBATION`, `HS2_PARTIAL_REFILL` | `1` | Iran (edge) |
+| `HS2_PICK_LANE` | `on` | Iran (edge) |
+| `HS2_STRIPE_AW_SOLO` | `1` | Iran (edge) |
+| `HS2_STRIPE_AW_HEAVY` | `2` | Iran (edge) |
+| `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
+| `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
+| `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
+
+Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain) and every
+key not in this table. The side is the config's `mode`: `dial` = Iran (edge),
+`listen` = kharej (exit). Every default-on key works against an older peer
+(new behaviour is announced by a capability bit or carried in a field older
+builds already parse), so either server may be upgraded first.
+
+### Optional DPI hardening keys (environment)
+
+On reverse `l3mtcp`, `HS2_QUIET_IDLE`, `HS2_TLS_RESUME`, `HS2_AUTH_PAD` and
+`HS2_COVER_NGINX` are **on by default** on both servers (see *Production
+defaults* above); turn one off with `=0`. On other carriers they are off
+unless set in the service's environment (e.g. a systemd drop-in with
 `Environment=HS2_QUIET_IDLE=1`). With all of them off the tunnel's bytes on
-the wire are exactly as before. Set the first three on **both** servers.
+the wire are exactly as before.
 
 - `HS2_QUIET_IDLE=1` — idle links (no users) are nearly silent like a
   browser's idle connection: TCP keepalive 45 s, one control ping/pong every
@@ -849,14 +898,16 @@ the wire are exactly as before. Set the first three on **both** servers.
   the reality carrier's Chrome 120). Unset it to roll back.
 - `HS2_COVER_NGINX=1` — see above.
 
-### Throughput and load-balancing keys (environment, all off by default)
+### Throughput and load-balancing keys (environment)
 
 These keys came out of a field-tuning round on a busy multi-IP tunnel
 (reverse `l3mtcp`, ~12k users, ~80 ms RTT, 0.5–1.5 % path loss). Each was
 A/B-tested in a production-like lab (≥ 6 interleaved runs with a crowd of
 light users) and then measured in production; a key was kept only if light
-users (web, calls, games, ping) got no slower. With all of them off the
-binary behaves exactly as before. Set them in the service's systemd drop-in.
+users (web, calls, games, ping) got no slower. On reverse `l3mtcp` they are
+**on by default** with the values and sides below (except
+`HS2_MCONN_STRIPE_JUMP_MS`); turn one off with `=0`, or all of them with
+`HS2_DEFAULTS=legacy`. On other carriers they stay off unless set.
 
 **Window (smux) — single-connection speed.** The receive window of a stream
 used to be a fixed 2 MiB, which caps one connection at ~200 Mbit/s at 80 ms.
@@ -900,7 +951,9 @@ used to be a fixed 2 MiB, which caps one connection at ~200 Mbit/s at 80 ms.
   45 min to come back now returns in 30–80 s once its loss is gone.
   (`HS2_LB_REC_DEBUG=1` logs every reading of a cut path.)
 
-Recommended set, as running on the reference tunnel:
+The set running on the reference tunnel (on reverse `l3mtcp` the defaults
+now apply it with no `Environment=` line; listed for other carriers and
+older builds):
 
 ```
 # Iran (edge)

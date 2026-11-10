@@ -1465,6 +1465,33 @@ each read the queue they all built as its own.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
 
+## Phase D22 — the production key set on by default (reverse `l3mtcp`)
+
+A plain install (no `Environment=` lines) now behaves like the reference
+tunnel: on the `l3mtcp` carrier in reverse mode, the 37 keys that tunnel runs
+are on by default, each on the side it runs on (29 on both servers, 5 only
+on Iran/edge, 3 only on kharej/exit). The table and its rules live in one
+place (`hs2-src/envdef`); see README, *Production defaults*.
+
+- **Explicit always wins.** A key set in the environment keeps its old
+  meaning, whatever its value: `HS2_X=0`, `off` or an empty `HS2_X=` turn
+  that one key off; a number replaces the default value.
+- **`HS2_DEFAULTS=legacy`** (or `0`) keeps the table dormant: every key is
+  back to its old default (off) unless set explicitly.
+- **Scope.** Only `l3mtcp` (`l3`) in reverse mode. `mtcp`, `tls`, `udp`,
+  `auto`, `dgtun`, `reality`, `noise` and direct mode keep the old defaults.
+  The table is read after the config (the side comes from `mode`: `dial` =
+  edge, `listen` = exit), before anything starts; the start-up log lists the
+  defaults in force.
+- **Left off:** `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain).
+- **Mixed versions.** Every default-on key works against the previous
+  published binary (each new behaviour is announced by a capability bit or is
+  carried in a field older builds already parse); checked in the lab both
+  ways (new Iran + old kharej, old Iran + new kharej).
+- **Tests:** `envdef` (table, sides, legacy, explicit override),
+  `TestApplyDefaults` (engine, both sides), `TestDefaultsApply` (cmd/hs2,
+  which carriers).
+
 ## Phase U21 — adaptive windows and a faster load balancer (all keys opt-in)
 
 A field-tuning round on a busy reverse `l3mtcp` tunnel (several Iran IPs,
