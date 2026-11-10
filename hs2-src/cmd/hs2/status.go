@@ -325,6 +325,24 @@ type liveStatus struct {
 	StripeBusyLinks   int64   `json:"stripe_busy_links,omitempty"`
 	StripeStepRebase  uint64  `json:"stripe_step_rebase,omitempty"`
 	StripeJumpHold    uint64  `json:"stripe_jump_hold,omitempty"`
+	// smux autowin (HS2_SMUX_AUTOWIN)
+	AWGrows       uint64 `json:"aw_grows,omitempty"`
+	AWQueueCuts   uint64 `json:"aw_queue_cuts,omitempty"`
+	AWNeighCuts   uint64 `json:"aw_neighbor_cuts,omitempty"`
+	AWShareCuts   uint64 `json:"aw_share_cuts,omitempty"`
+	AWCeilCuts    uint64 `json:"aw_ceil_cuts,omitempty"`
+	AWUsedPeakMiB int64  `json:"aw_used_peak_mib,omitempty"`
+	AWStreams     int    `json:"aw_streams,omitempty"`
+}
+
+// fillAutoWin copies the smux autowin budget counters.
+func fillAutoWin(ls *liveStatus) {
+	s, ok := engine.SmuxAutoWinStats()
+	if !ok {
+		return
+	}
+	ls.AWGrows, ls.AWQueueCuts, ls.AWNeighCuts = s.Grows, s.QueueCuts, s.NeighborCuts
+	ls.AWShareCuts, ls.AWCeilCuts, ls.AWUsedPeakMiB, ls.AWStreams = s.ShareCuts, s.CeilCuts, s.Peak>>20, s.Streams
 }
 
 // fillStripe copies the stripe's diagnostics (HS2_MCONN_STRIPE).
@@ -656,6 +674,7 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 		// instead of sending under its rate on an asymmetrically loaded box.
 		udpcarrier.SetHostSaturated(hs.Saturated)
 		ow.fill(&ls, engine.Observed())
+		fillAutoWin(&ls)
 		fillMConn(&ls, engine.MConnObserved())
 		fillSmuxWin(&ls)
 		fillStripe(&ls, engine.StripeObserved())
