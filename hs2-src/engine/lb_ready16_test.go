@@ -134,6 +134,28 @@ func TestQ2RecConfirm(t *testing.T) {
 	if c, d := run(true, true); !c {
 		t.Fatalf("confirm: a still-bad path recovered after %s", d)
 	}
+	// A lone bad reading from a big sample (a path still carrying heavy flows)
+	// resets okSince as without the key.
+	{
+		oc, of := lbRecConfirm, lbFastRecover
+		lbRecConfirm, lbFastRecover = true, true
+		j := newQ2Judge(0.1, "kharej", "Iran", nil)
+		now := time.Unix(1000, 0)
+		q2feed(j, &now, 3, good)
+		q2feed(j, &now, 8, bad)
+		q := j.p["k>a"]
+		q.hold = lb2HoldMax
+		q2feed(j, &now, 3, good)
+		if q.okSince.IsZero() {
+			t.Fatal("no okSince after good readings")
+		}
+		now = now.Add(5 * time.Second)
+		j.update(now, 5*time.Second, map[string]q2Reading{"k>a": {loss: 0.15, segs: 13000}, "k>b": {loss: 0.003}, "k>c": {loss: 0.003}})
+		if !q.cut || !q.okSince.IsZero() {
+			t.Fatalf("big-sample bad reading: cut=%v okSince=%v", q.cut, q.okSince)
+		}
+		lbRecConfirm, lbFastRecover = oc, of
+	}
 	// Short hold: same as without the key on clean readings.
 	oc, of := lbRecConfirm, lbFastRecover
 	lbRecConfirm, lbFastRecover = true, true
