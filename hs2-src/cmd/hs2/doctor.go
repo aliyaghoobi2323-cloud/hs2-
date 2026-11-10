@@ -29,10 +29,21 @@ import (
 func doctorCmd(args []string) {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
+	deep := fs.Bool("deep", false, "also inspect the whole server: NIC/softirq, CPU pressure, path quality without the tunnel, Reality dest, x-ui churn, hs2 health (~10 s, read-only)")
+	lang := fs.String("lang", "en", "language of the deep report: en | fa")
 	fs.Parse(args)
-	if *cfgPath == "" {
-		fmt.Println("usage: hs2 doctor -c config.json")
+	if *lang == "fa" {
+		deepLang = "fa"
+	}
+	if *cfgPath == "" && !*deep {
+		fmt.Println("usage: hs2 doctor -c config.json [--deep] [--lang fa]   |   hs2 doctor --deep [--lang fa]")
 		os.Exit(2)
+	}
+	if *cfgPath == "" {
+		if deepDoctor("") > 0 {
+			os.Exit(1)
+		}
+		return
 	}
 
 	d := &doctorReport{}
@@ -82,7 +93,11 @@ func doctorCmd(args []string) {
 
 	fmt.Printf("hs2 doctor — %s\n", *cfgPath)
 	d.print()
-	if d.fails > 0 {
+	deepBad := 0
+	if *deep {
+		deepBad = deepDoctor(*cfgPath)
+	}
+	if d.fails > 0 || deepBad > 0 {
 		os.Exit(1)
 	}
 }

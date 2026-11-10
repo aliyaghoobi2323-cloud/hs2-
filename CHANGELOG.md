@@ -1917,6 +1917,33 @@ reproduced it once the regime matched the field — asymmetric **and** starved.
   to the current simulator; README's status fields and the `carriers` line
   format; VALIDATION's rollback target, V11 and V12.
 
+### D1 — the server doctor (`hs2 doctor --deep`, read-only)
+- `hs2 doctor --deep [-c config] [--lang fa]` inspects the whole server in
+  about 3–10 s and prints one finding per check: severity (OK / WARN / BAD,
+  INFO, SKIP), what was seen, why it matters and what to do; `--lang fa`
+  prints it in Persian. With `-c` it runs after the usual checklist. It only
+  reads (/proc, /sys, the status files, journalctl, ≤10 pings per path) and
+  never changes anything; a missing tool or file is a SKIP with a note. Exit
+  1 when a BAD finding (or a doctor FAIL) is seen.
+- Checks, from problems found in production: **NIC & softirq** (rx queues,
+  which core the NIC's rx interrupts land on over 3 s, that core's softirq
+  and idle share, the RPS mask, and whether hs2/xray still run on that core —
+  advice: CPUAffinity without it); **CPU pressure** (PSI some avg10/avg60,
+  top processes, WARN above 15%); **path quality** (a plain ICMP ping,
+  source-bound per LB path, compared with the tunnel links' RTT and loss —
+  "the IP queues and loses even without the tunnel → network/provider, not
+  hs2", or "the bare path is clean, the delay is added on the servers"); a
+  **whole-network congestion** hint when every path pings far above its
+  lowest RTT; **Reality dest** (xray/x-ui config: a dest on a multi-tenant
+  CDN, how many of xray's connections go to it, limitFallback advice; never
+  prints keys or ids); **x-ui churn** ("Remove Inbound User" and node-sync
+  errors in the last hour); **hs2 health** (links serving/target, stale
+  status, LB paths cut or lowered and why, restarts, panics in the last
+  hour).
+- Installer: the tunnel manager's **Diagnose** runs the deep doctor (an older
+  binary falls back to the plain one), and the main menu gains
+  **9) Server doctor**; both ask English/Persian once (or `HS2_LANG=fa|en`).
+
 ## Verification, every phase
 
 - Go: `go test ./...` and `go test -race ./...`.

@@ -3761,7 +3761,15 @@ tm_delete(){ # unit
 tm_doctor(){ # unit cfg
   local u="$1" cfg="$2" out
   if [ -z "$cfg" ]; then warn "Cannot find $u's config path (its service file may be hand-edited)."; pause; return 0; fi
-  out=$("$BIN" doctor -c "$cfg" 2>&1) || true
+  info "Checking this tunnel and the server (about 10 s, read-only)…"
+  # --deep adds the server checks (NIC/softirq, CPU pressure, path quality
+  # without the tunnel, Reality dest, x-ui churn, hs2 health); an older
+  # binary rejects the flag, so fall back to the plain doctor.
+  doctor_lang >/dev/null
+  out=$("$BIN" doctor -c "$cfg" --deep --lang "$HS2_DOCTOR_LANG" 2>&1) || true
+  if printf '%s' "$out" | grep -q "flag provided but not defined"; then
+    out=$("$BIN" doctor -c "$cfg" 2>&1) || true
+  fi
   if printf '%s' "$out" | grep -q "unknown command"; then
     warn "This hs2 binary is too old for 'doctor'. Upgrade first (menu → 5, or 'u' here)."; pause; return 0
   fi
@@ -3769,6 +3777,36 @@ tm_doctor(){ # unit cfg
   printf '%s\n' "$out" | sed 's/^/  /' >&2
   hr
   pause
+}
+
+# doctor_lang: sets and prints the deep doctor's language (HS2_DOCTOR_LANG) —
+# HS2_LANG=fa (or en) when set, else asked once per run. Call it outside $(…)
+# so the answer is kept.
+doctor_lang(){
+  if [ -z "${HS2_DOCTOR_LANG:-}" ]; then
+    case "${HS2_LANG:-}" in
+      fa|en) HS2_DOCTOR_LANG="$HS2_LANG" ;;
+      *) local a; read -rp "  Report language — 1) English  2) فارسی [1]: " a </dev/tty || a=1
+         case "$a" in 2|fa|FA) HS2_DOCTOR_LANG=fa ;; *) HS2_DOCTOR_LANG=en ;; esac ;;
+    esac
+  fi
+  printf '%s' "$HS2_DOCTOR_LANG"
+}
+
+# server_doctor: `hs2 doctor --deep` for the whole server (every running
+# tunnel, NIC/softirq, CPU pressure, paths, Reality dest, x-ui). Read-only.
+server_doctor(){
+  local out
+  if [ ! -x "$BIN" ]; then warn "hs2 is not installed yet."; return 0; fi
+  info "Inspecting this server (about 10 s, read-only — nothing is changed)…"
+  doctor_lang >/dev/null
+  out=$("$BIN" doctor --deep --lang "$HS2_DOCTOR_LANG" 2>&1) || true
+  if printf '%s' "$out" | grep -q "unknown command\|flag provided but not defined"; then
+    warn "This hs2 binary is too old for the server doctor. Upgrade first (menu → 5)."; return 0
+  fi
+  echo >&2; hr; say " ${C_B}Server doctor${C_0}"; hr
+  printf '%s\n' "$out" | sed 's/^/  /' >&2
+  hr
 }
 
 # tm_cert_side CFG: true on the side that holds and serves the certificate
@@ -4762,7 +4800,7 @@ tm_tunnel_menu(){
     say "  8) Tuning (kernel network tuning — auto by RAM/CPU, or manual)"
     if tm_has_ports "$cfg"; then say "  p) Ports — user ports and where each one goes"; fi
     if lb_supported "$cfg"; then say "  l) Load balancing — several addresses per side, share of each, certificates"; fi
-    say "  d) Diagnose (health check — config, endpoint, certificate, tuning)"
+    say "  d) Diagnose (health check — config, endpoint, certificate, tuning, and the server: NIC, CPU, paths, xray)"
     if tm_cert_side "$cfg"; then say "  c) Certificate — expiry, renewal check, renew now"; fi
     say "  u) Upgrade THIS tunnel to the latest binary (restarts only this one)"
     say "  9) Delete this tunnel (service, config and tun interface)"
@@ -5239,9 +5277,10 @@ main_menu(){
     echo "    6) Backup current config" >&2
     echo "    7) Restore a backup" >&2
     echo "    8) Uninstall hs2 (removes ALL tunnels; asks before removing the program)" >&2
+    echo "    9) Server doctor  (what is wrong on this server and what to do — read-only)" >&2
     echo "    0) Exit" >&2
     echo >&2
-    read -rp "Choose [0-8]: " CH </dev/tty || exit 0
+    read -rp "Choose [0-9]: " CH </dev/tty || exit 0
     case "$CH" in
       1) setup_kharej; exit 0 ;;
       2) setup_iran; exit 0 ;;
@@ -5251,6 +5290,7 @@ main_menu(){
       6) backup >/dev/null; pause ;;
       7) restore; exit 0 ;;
       8) uninstall; exit 0 ;;
+      9) server_doctor; pause ;;
       0|q|Q) exit 0 ;;
       *) warn "Invalid choice: pick a number from the list." ;;
     esac

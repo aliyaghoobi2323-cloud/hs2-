@@ -1067,6 +1067,17 @@ journalctl -u hs2 -f
   that frees it, an overdue renewal, the certbot timer or cron job), the tun device, kernel tuning vs. what is actually applied,
   and a clock reminder (link auth is minute-bound). Also in the tunnel manager
   as **Diagnose**. It only reads — safe to run any time (it never runs certbot).
+- **`hs2 doctor --deep [-c config] [--lang fa]`** — the server doctor: in
+  about 10 s it inspects the whole server and explains each finding in plain
+  language (OK / WARN / BAD, what, why it matters, what to do; `--lang fa`
+  for Persian): NIC queues and the core the NIC's rx softirq lands on (and
+  whether hs2/xray still run there), CPU pressure (PSI) and the top
+  processes, each path's plain ping next to the tunnel's own RTT/loss (a
+  provider problem vs. one on the servers), network-wide congestion, a
+  Reality inbound whose dest is a shared CDN (others can use your IP as a
+  clean IP), x-ui user churn and node-sync errors, and hs2's own health
+  (links, LB cuts, restarts, panics). Read-only; a missing tool is skipped
+  with a note. In the menu: **9) Server doctor**, and **Diagnose** per tunnel.
 - **`hs2 ports -c /etc/hs2/config.json`** — the user ports and where each one
   goes, as this server knows it (see *per-port targets* above); with `add`,
   `remove`, `default` or `udp` it changes this server's half (also in the
