@@ -167,3 +167,38 @@ real smux stream with the base code embedded verbatim
 | 4 `both` | an `Acceptor` that peeks the ClientHello and dispatches to the tls `Server` or the reality acceptor. |
 | 5 per-IP profiles end to end | `lbIP.Front` validation accepts reality/both; listener builds per-IP acceptors; `lbAnnouncedFront` announces (PrivateKey never leaves, json "-"); dialer's `LBPath.Front` from the advert; status shows the front per path (`LBPathStat`, `LBAdvertIP.String`). Old dialers ignore the ext and keep dialing tls (works with `both`). |
 | 6 validation | A/A and probe batteries, active-probe of the splice, mixed-version, doctor checks. |
+
+## 5. Phase 1 validation (lab, 2026-11-11)
+
+Binaries built from source with the same Go: base `5ae865ee` vs `reality35`.
+
+* Tests (lab 3): `go vet` clean; full engine suite (`-timeout 40m`) ok;
+  tlscarrier, cmd/hs2, envdef ok; third_party/smux (own module) ok. New:
+  `tlscarrier/front_test.go`, `engine/front_advert_test.go`,
+  `cmd/hs2/front_test.go`.
+* A/A (labs 1+2, `labslot.sh --all`, u21cmp.sh prod env, l3mtcp reverse,
+  3000mbit/40ms/100ms queue/0.01% loss, 150 links, crowd 3000, T=25s),
+  6 interleaved rotated reps per case, A = base/base, B = new/new:
+
+| case  | metric | A mean | B mean | B-A | Welch t |
+|-------|--------|-------:|-------:|----:|--------:|
+| down1 | Mbps | 843.9 | 889.0 | +5.3% | +0.59 |
+| down1 | call p99 ms | 188.8 | 179.3 | -5.0% | -1.53 |
+| down8 | Mbps | 1492.8 | 1483.5 | -0.6% | -0.18 |
+| down8 | call p99 ms | 186.3 | 197.4 | +6.0% | +0.79 |
+| up8   | Mbps | 1605.7 | 1558.1 | -3.0% | -0.93 |
+| up8   | call p99 ms | 195.7 | 180.9 | -7.5% | -0.82 |
+| light | call p99 ms | 178.3 | 181.8 | +1.9% | +0.46 |
+| light | game p99 ms | 141.7 | 138.8 | -2.0% | -0.48 |
+| light | crowd p99 ms | 150.9 | 154.2 | +2.2% | +1.83 |
+
+  No metric differs significantly (of ~30 comparisons the largest |t| are
+  2.12 ping p99 down8 and 2.08 echo p99 light, in opposite directions; links
+  150/150 and 0 failures in every run). The change touches only link
+  establishment, not the data path.
+* Mixed versions (light case, 6 reps reverse + 1 direct): C = old Iran + new
+  kharej, D = new Iran + old kharej: all came up to 150/150 links and passed
+  traffic with 0 failures, in reverse and in direct mode.
+* Active-probe battery (`probe30-battery.py`, 20 probes incl. slow/idle) on a
+  base vs refactored listener with the same config: identical results (status
+  line, headers, length, close kind, timing).
