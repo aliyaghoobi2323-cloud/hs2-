@@ -1465,6 +1465,32 @@ each read the queue they all built as its own.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
 
+## Phase R29 — flapping-path penalty on by default; single-queue NIC notes
+
+- **Flapping-path penalty** (`HS2_LB_FLAP_PEN`, lb auto2): a local→remote
+  IP pair with ≥ 4 relative cuts in 60 min (lossy and clearly worse than the
+  best path; whole-IP verdicts, forced cuts and "all paths lossy" do not
+  count) is kept out for 30 min, doubling on each repeat up to 2 h. At most
+  ~1/3 of the paths are penalized at once, never leaving fewer than 2 healthy
+  paths or under 60 % healthy; all penalties lift at once if the other paths
+  degrade. A penalized path keeps probing and can return early (clean for a
+  third of its penalty) on a 30-min probation. Tuning keys
+  `HS2_LB_FLAP_N`, `_WIN_S`, `_HOLD_S`, `_MAX_S`, `_PROB_S`, `_EARLY_DIV`.
+  Lab: cut cycles and lossy-exposure seconds fell in 6/6 interleaved runs,
+  crowd p99 −12.7 ms, no light-user cost; in production on the reference
+  tunnel's kharej since 2026-11-10.
+- **On by default** for the exit side (kharej, `mode: listen`) on reverse
+  `l3mtcp`, through the central table (`hs2-src/envdef`; now 38 keys: 29 on
+  both servers, 5 Iran/edge only, 4 kharej/exit only). `HS2_DEFAULTS=legacy`
+  turns it off; an explicit `HS2_LB_FLAP_PEN=0` wins.
+- **README:** the key in *Production defaults* and *Throughput and
+  load-balancing keys*; a new note, *Single-queue virtio NIC (one rx
+  interrupt core)* — how to spot it and the optional manual steps that
+  helped on the reference server (CPU affinity off the rx-IRQ core, RFS,
+  `netdev_budget`). Nothing there is applied by hs2 or the installer.
+- **Tests:** `TestFlapPen*` (engine), `envdef` (table size, exit side),
+  `TestApplyDefaults` (on for exit, off for edge, explicit `0`, legacy).
+
 ## Phase D22 — the production key set on by default (reverse `l3mtcp`)
 
 A plain install (no `Environment=` lines) now behaves like the reference

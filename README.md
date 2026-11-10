@@ -866,6 +866,7 @@ defaults; ...)`.
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
 | `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
+| `HS2_LB_FLAP_PEN` | `1` | kharej (exit) |
 
 Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain) and every
 key not in this table. The side is the config's `mode`: `dial` = Iran (edge),
@@ -950,6 +951,27 @@ used to be a fixed 2 MiB, which caps one connection at ~200 Mbit/s at 80 ms.
   A path that is really still bad stays cut. Production: a cut path that took
   45 min to come back now returns in 30–80 s once its loss is gone.
   (`HS2_LB_REC_DEBUG=1` logs every reading of a cut path.)
+- `HS2_LB_FLAP_PEN=1` — kharej (the side whose judge decides; on by default
+  since build `rel29`). A *flapping* path — one local→remote IP pair that
+  reads clean while cut and breaks again as soon as its users return — is
+  kept out for a long time instead of being let back every few minutes. A
+  pair with ≥ 4 **relative** cuts (lossy and clearly worse than the best
+  path) within 60 min is penalized: it stays cut for 30 min, doubling on each
+  repeat up to 2 h. Whole-IP verdicts, forced cuts and "every path is lossy"
+  never count. Safeguards: at most ~1/3 of the paths are penalized at once
+  (none with fewer than 3 paths), never leaving fewer than 2 healthy paths or
+  under 60 % of the paths healthy; if the other paths degrade (half of them
+  cut or lossy, the best one over the cut bar, all lossy) every penalty lifts
+  at once. A penalized path keeps its probe links, so its loss is still read:
+  clean for a third of its penalty, it returns early on probation (one more
+  relative cut within 30 min → the next, doubled, penalty at once). Tuning
+  keys (rarely needed): `HS2_LB_FLAP_N` (4), `HS2_LB_FLAP_WIN_S` (3600),
+  `HS2_LB_FLAP_HOLD_S` (1800), `HS2_LB_FLAP_MAX_S` (7200),
+  `HS2_LB_FLAP_PROB_S` (1800), `HS2_LB_FLAP_EARLY_DIV` (3). Lab (6
+  interleaved A/B runs with a flapping path and a light-user crowd): cut
+  cycles and seconds of users on a lossy path fell in 6/6 runs, crowd p99
+  −12.7 ms, no light-user cost. In production on the reference tunnel's
+  kharej since 2026-11-10.
 
 The set running on the reference tunnel (on reverse `l3mtcp` the defaults
 now apply it with no `Environment=` line; listed for other carriers and
@@ -965,6 +987,7 @@ HS2_SMUX_AUTOWIN=1 HS2_SMUX_AUTOWIN_REL=1 HS2_SMUX_AUTOWIN_SHARE_MB=32
 HS2_MCONN_STRIPE_JUMP_MS=1500
 HS2_LB_FAST_RECOVER=1 HS2_LB_START_GRACE_S=20
 HS2_LB_FILL_PCT=25 HS2_LB_SPARE_PER_ROUND=3 HS2_LB_REC_CONFIRM=1
+HS2_LB_FLAP_PEN=1
 ```
 
 Measured on that tunnel at peak hour (iperf3, 8 s each; raw = the same two
@@ -1027,3 +1050,45 @@ servers); the tunnel port must differ from the panel port on the kharej server.
 - The installer applies BBR/fq kernel tuning system-wide
   (`/etc/sysctl.d/99-hs2.conf`); hs2 also sets BBR on its own sockets.
 - Building from source, the architecture, and the test lab: `hs2-src/BUILD.md`.
+
+### Single-queue virtio NIC (one rx interrupt core)
+
+Many VPSes have a virtio NIC with a single rx/tx queue: every received packet
+raises its interrupt (and its softirq work) on **one** CPU core. At peak that
+core can run out long before the others do, and the tunnel's own threads
+landing on it make it worse. These are **optional manual steps** — hs2 and
+the installer apply none of them (its automatic tuning covers sysctls sized
+from RAM/cores only, not IRQ or CPU placement).
+
+How to see it:
+
+- `ethtool -l eth0` — `Combined: 1` under *Current hardware settings* means
+  one queue.
+- `grep -E 'virtio|eth0' /proc/interrupts` — the `input.0` (rx) counter grows
+  on one CPU column only; that is the rx-IRQ core.
+- `mpstat -P ALL 1` at peak — that core shows a high `%soft` and little
+  `%idle` while the others have room.
+
+What helped on the reference kharej server (say the rx-IRQ core is CPU 0 of
+4; adjust to yours, and replace `eth0` with the NIC name):
+
+```
+# 1. keep the rx-IRQ core free for the NIC: run the hs2 units on the others
+#    (a drop-in per tunnel unit, e.g. /etc/systemd/system/hs2.service.d/cpu.conf)
+[Service]
+CPUAffinity=1 2 3
+#    then: systemctl daemon-reload && systemctl restart hs2
+
+# 2. RFS: steer each flow's softirq work to the core its socket runs on
+sysctl -w net.core.rps_sock_flow_entries=32768
+echo 32768 > /sys/class/net/eth0/queues/rx-0/rps_flow_cnt
+
+# 3. a larger softirq budget per poll
+sysctl -w net.core.netdev_budget=600
+```
+
+Result there: the rx-IRQ core's idle at peak went from ~22 % to ~45 %. To
+keep the sysctls across reboots put them in a file of your own under
+`/etc/sysctl.d/` (not `99-hs2.conf`, which hs2 rewrites); `rps_flow_cnt` is
+not a sysctl and needs a boot-time unit or udev rule. With several queues
+(`Combined:` > 1) none of this is needed.
