@@ -601,3 +601,62 @@ func TestAutoWindowOffThenOn(t *testing.T) {
 	rs.Close()
 	waitFor(t, func() bool { return aw.Budget.Stats().Used == 0 }, "budget returned")
 }
+
+// SetAutoWindowStrictNeighbor (hs2 HS2_STRIPE_AW_HEAVY): under Rel a light
+// user on the same session holds the marked heavy stream at NeighborMax at
+// once (no queue proof needed); an unmarked one may grow on a clean path.
+func TestAutoWindowStrictNeighbourRel(t *testing.T) {
+	for _, strict := range []bool{true, false} {
+		aw := newAW(64<<20, 2<<20)
+		aw.NeighborMax = 256 << 10
+		aw.Rel = true
+		cli, srv := pair(t, 20*time.Millisecond, awConfig(nil), awConfig(aw))
+		lightAcc := make(chan *Stream, 1)
+		go func() {
+			st, _ := srv.AcceptStream()
+			lightAcc <- st
+			io.Copy(io.Discard, st)
+		}()
+		lc, err := cli.OpenStream()
+		if err != nil {
+			t.Fatal(err)
+		}
+		lc.Write([]byte("x"))
+		<-lightAcc
+		stop := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case <-stop:
+					return
+				case <-time.After(20 * time.Millisecond):
+					lc.Write(make([]byte, 300))
+				}
+			}
+		}()
+		heavyDone := make(chan struct{})
+		go func() {
+			st, _ := srv.AcceptStream()
+			if strict {
+				st.SetAutoWindowStrictNeighbor()
+			}
+			io.CopyN(io.Discard, st, 8<<20)
+			close(heavyDone)
+		}()
+		hc, err := cli.OpenStream()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hc.Write(make([]byte, 8<<20))
+		<-heavyDone
+		close(stop)
+		st := aw.Budget.Stats()
+		t.Logf("strict=%v %+v", strict, st)
+		if strict && st.Peak > 256<<10-64<<10 {
+			t.Fatalf("a strict stream grew past the neighbour cap: %d", st.Peak)
+		}
+		if !strict && st.Peak <= 256<<10-64<<10 {
+			t.Fatalf("Rel capped an unmarked stream on a clean path: %d", st.Peak)
+		}
+	}
+}

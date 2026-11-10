@@ -131,6 +131,7 @@ type WindowBudget struct {
 	grows, denied, shrinks  atomic.Uint64
 	queueCuts, neighborCuts atomic.Uint64
 	shareCuts               atomic.Uint64 // shrinks to the AutoWindow.Share cap
+	strictCuts              atomic.Uint64 // neighbour cuts of SetAutoWindowStrictNeighbor streams
 	// queueAt: unix ns of the last slow probe of a grown stream (any
 	// session); queueN counts those within the current queueHold
 	queueAt  atomic.Int64
@@ -243,6 +244,7 @@ type WindowBudgetStats struct {
 	Ceil                    int64  // the process-wide growth allowance now (AIMD)
 	CeilCuts                uint64 // its cuts by a path queue
 	ShareCuts               uint64 // shrinks to the AutoWindow.Share cap
+	StrictCuts              uint64 // neighbour cuts of SetAutoWindowStrictNeighbor streams
 	HeavyN                  int    // heavy grown streams (AutoWindow.Share)
 }
 
@@ -255,7 +257,7 @@ func (b *WindowBudget) Stats() WindowBudgetStats {
 		Grows: b.grows.Load(), Denied: b.denied.Load(), Shrinks: b.shrinks.Load(),
 		QueueCuts: b.queueCuts.Load(), NeighborCuts: b.neighborCuts.Load(),
 		Ceil: b.ceiling(time.Now()), CeilCuts: b.ceilCuts.Load(),
-		ShareCuts: b.shareCuts.Load(), HeavyN: int(b.heavyN.Load())}
+		ShareCuts: b.shareCuts.Load(), StrictCuts: b.strictCuts.Load(), HeavyN: int(b.heavyN.Load())}
 }
 
 func (b *WindowBudget) take(n int64) bool {
@@ -369,6 +371,7 @@ type streamAW struct {
 	off        bool   // SetAutoWindowOff: upstream rules
 	offWin     uint32 // SetOffWindow: the fixed window while off (0: MaxStreamBuffer)
 	offDiv     uint32 // SetOffWindow: an update every offWin/offDiv read while off (0: 2)
+	strictNb   bool   // SetAutoWindowStrictNeighbor: the neighbour cap without Rel's queue proof
 
 	recent  [awRecent]time.Duration // the last probe samples (queue rule)
 	nRecent int
@@ -521,7 +524,7 @@ func (s *Stream) awPushed(n uint32) {
 			return
 		}
 	}
-	if nb := uint32(a.cfg.NeighborMax); a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && (a.nRecent >= awRecent || a.cfg.NeighborOne) {
+	if nb := uint32(a.cfg.NeighborMax); a.cfg.Rel && !a.strictNb && nb > 0 && a.win > max(nb, a.base) && (a.nRecent >= awRecent || a.cfg.NeighborOne) {
 		// a light neighbour is capped against only while this stream's own
 		// probes (its link) show a queue beyond the jitter: two in a row
 		// (NeighborOne: this one) over qLow halve the window; no growth
@@ -537,10 +540,13 @@ func (s *Stream) awPushed(n uint32) {
 			s.awShrinkLocked(max(nb, a.base, a.win/2), now)
 			return
 		}
-	} else if nb := uint32(a.cfg.NeighborMax); !a.cfg.Rel && nb > 0 && nb < limit && s.sess.awNeighborsLocked(s, now) {
+	} else if nb := uint32(a.cfg.NeighborMax); (!a.cfg.Rel || a.strictNb) && nb > 0 && nb < limit && s.sess.awNeighborsLocked(s, now) {
 		limit = max(nb, a.base)
 		if a.win > limit {
 			b.neighborCuts.Add(1)
+			if a.strictNb {
+				b.strictCuts.Add(1)
+			}
 			s.awShrinkLocked(limit, now)
 			return
 		}
@@ -698,9 +704,12 @@ func (s *Stream) awTick(now time.Time, pressured bool, fair uint32) bool {
 	if pressured && a.win > a.base+fair && now.Sub(a.limitedAt) > b.holdP {
 		shrink = true // the largest windows give way first
 	}
-	if nb := uint32(a.cfg.NeighborMax); !a.cfg.Rel && nb > 0 && a.win > max(nb, a.base) && s.sess.awNeighborsLocked(s, now) {
+	if nb := uint32(a.cfg.NeighborMax); (!a.cfg.Rel || a.strictNb) && nb > 0 && a.win > max(nb, a.base) && s.sess.awNeighborsLocked(s, now) {
 		shrink, nw = true, max(nb, a.base) // a light user came to this link: at once
 		b.neighborCuts.Add(1)
+		if a.strictNb {
+			b.strictCuts.Add(1)
+		}
 	}
 	if sc := a.shareCap(); sc > 0 && a.win > sc {
 		shrink, nw = true, sc // more heavy streams than when it grew: down to the share
@@ -907,6 +916,22 @@ func (s *Stream) SetOffWindow(n, div int) {
 			a.pendingUPD = true
 		}
 	}
+	s.bufferLock.Unlock()
+}
+
+// SetAutoWindowStrictNeighbor: this stream's window is held to
+// AutoWindow.NeighborMax whenever a light user receives on the same session,
+// at once, even under Rel (which otherwise caps only while the stream's own
+// probes show a queue). For hs2's stripe subs and heavy primaries given the
+// adaptive window (HS2_STRIPE_AW_HEAVY): they grow only on links that carry
+// no light user and give the growth back the moment one appears. No-op
+// without AutoWindow.
+func (s *Stream) SetAutoWindowStrictNeighbor() {
+	if s.aw == nil {
+		return
+	}
+	s.bufferLock.Lock()
+	s.aw.strictNb = true
 	s.bufferLock.Unlock()
 }
 

@@ -118,6 +118,15 @@ func autoWinOffForStripe(lm *LinkManager, st any) {
 	if smuxAutoWin == nil || !mconnStripeWanted(lm) {
 		return
 	}
+	if stripeAWHeavy > 0 {
+		// HS2_STRIPE_AW_HEAVY: the adaptive window stays on; 1: held to the
+		// base at once while a light user receives on the same link
+		stripeAWHeavyN.Add(1)
+		if o, ok := st.(interface{ SetAutoWindowStrictNeighbor() }); ok && stripeAWHeavy == 1 {
+			o.SetAutoWindowStrictNeighbor()
+		}
+		return
+	}
 	if o, ok := st.(interface{ SetAutoWindowOff() }); ok {
 		o.SetAutoWindowOff()
 	}
@@ -150,6 +159,42 @@ const stripeAWSettle = 3 * time.Second
 // stripe widens later the width change turns it off again, as before.
 var stripeAWSolo = os.Getenv("HS2_STRIPE_AW_SOLO") == "1"
 
+// stripeAWHeavy: HS2_STRIPE_AW_HEAVY=1 (Iran, off by default). Every sub of
+// a stripe-capable connection — the primary and the stripe subs — keeps the
+// adaptive window from its first byte instead of the fixed 2 MiB until the
+// stripe settles (the lab, 3 Gbit/s, 74 ms, 1% loss, 3000 light users, 8
+// downloads: the stripe width moved 0-2 all the time, so the subs never
+// settled and each active link sat app-limited at ~2 MiB in flight; a 4 MiB
+// window on every stream gave +40% but light users' p99 +20 ms). The growth
+// is held where a light user is: these streams take the light-neighbour cap
+// strictly (smux SetAutoWindowStrictNeighbor: at once whenever a light user
+// receives on the same link, without Rel's queue proof), so only a link that
+// carries heavy traffic alone grows a window; the queue rule, the share and
+// the process-wide allowance apply as for every stream. Width changes no
+// longer toggle the window (stripeAutoWinLocked).
+//
+// =2: the same, but under the light-neighbour rule every stream has (with
+// HS2_SMUX_AUTOWIN_REL: capped only while its own probes show a queue). The
+// lab with 3000 light users over 150 links: every link carries light users,
+// so under =1 the subs hardly grew (4 grows in a down8 run, 3 cut at once).
+var stripeAWHeavy = stripeAWHeavyFromEnv(os.Getenv("HS2_STRIPE_AW_HEAVY"))
+
+func stripeAWHeavyFromEnv(v string) int {
+	switch strings.TrimSpace(v) {
+	case "1":
+		return 1
+	case "2":
+		return 2
+	}
+	return 0
+}
+
+// stripeAWHeavyN: streams opened under HS2_STRIPE_AW_HEAVY (status aw_heavy_subs).
+var stripeAWHeavyN atomic.Int64
+
+// StripeAWHeavyN: streams opened under HS2_STRIPE_AW_HEAVY so far.
+func StripeAWHeavyN() int64 { return stripeAWHeavyN.Load() }
+
 // stripeAW is an mConn's state for this (Iran, under m.mu).
 type stripeAW struct {
 	on    bool
@@ -159,7 +204,7 @@ type stripeAW struct {
 
 // stripeAutoWinLocked runs with the stripe's growth tick (stripeTickLocked).
 func (m *mConn) stripeAutoWinLocked(now time.Time) {
-	if smuxAutoWin == nil || !m.iran || (m.stN == 0 && !stripeAWSolo) {
+	if smuxAutoWin == nil || !m.iran || stripeAWHeavy > 0 || (m.stN == 0 && !stripeAWSolo) {
 		return
 	}
 	a := &m.stAW
