@@ -600,7 +600,12 @@ func (p *exitPool) addSpares(n int) int {
 		}
 	}
 	started := 0
-	for pending < n && len(p.slots) < p.want+lb2SpareMax && !p.outage && p.want > 0 {
+	limit := p.want + lb2SpareMax
+	if lbFillPct > 0 { // lb_fill17.go: slots of links the edge holds retiring do not block spares
+		limit = fillLimit(p.want)
+		n = min(n, lb2SpareMax) // at most lb2SpareMax pending at once
+	}
+	for pending < n && len(p.slots) < limit && !p.outage && p.want > 0 {
 		p.startSlotLocked()
 		p.slots[len(p.slots)-1].spare = true
 		pending++

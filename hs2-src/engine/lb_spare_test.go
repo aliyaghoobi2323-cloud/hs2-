@@ -162,6 +162,81 @@ func TestExitPoolSpareDialsBeyondTarget(t *testing.T) {
 	})
 }
 
+// HS2_LB_FILL_PCT: slots already over the target (links the edge holds
+// retiring) no longer block spares; the cap is target+N%, with at most
+// lb2SpareMax spares pending at once.
+func TestExitPoolFillPctSparesPastRetiring(t *testing.T) {
+	old := lbFillPct
+	defer func() { lbFillPct = old }()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var dialed atomic.Int32
+	hold := make(chan struct{})
+	p := newExitPool(ctx, 1, 100, func() (dialedLink, error) {
+		dialed.Add(1)
+		return nopLink{}, nil
+	}, nil)
+	p.gate = newDialGate(8, func() time.Duration { return 0 })
+	p.serve = func(ctx context.Context, car dialedLink) string {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+		}
+		return ""
+	}
+	p.setTarget(20)
+	spareWait(t, func() bool { return dialed.Load() == 20 })
+	p.setTarget(16) // 4 slots now over the target: links the edge holds retiring
+	lbFillPct = 0
+	if n := p.addSpares(1); n != 0 {
+		t.Fatalf("key off: started %d spares past retiring slots, want 0", n)
+	}
+	lbFillPct = 25 // cap 16+4 = 20: full
+	if n := p.addSpares(1); n != 0 {
+		t.Fatalf("at the cap: started %d", n)
+	}
+	lbFillPct = 50 // cap 24
+	if n := p.addSpares(5); n != lb2SpareMax {
+		t.Fatalf("started %d spares, want %d (pending at most)", n, lb2SpareMax)
+	}
+	spareWait(t, func() bool { return dialed.Load() == 20+int32(lb2SpareMax) })
+	spareWait(t, func() bool { // dialed: no longer pending
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		for _, s := range p.slots {
+			if s.spare {
+				return false
+			}
+		}
+		return true
+	})
+	for i := 0; i < 10; i++ {
+		p.addSpares(1)
+		spareWait(t, func() bool {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			for _, s := range p.slots {
+				if s.spare {
+					return false
+				}
+			}
+			return true
+		})
+	}
+	p.mu.Lock()
+	slots := len(p.slots)
+	p.mu.Unlock()
+	if slots != 24 {
+		t.Fatalf("%d slots, want the cap 24", slots)
+	}
+	close(hold) // links end: over target, their slots retire
+	spareWait(t, func() bool {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		return len(p.slots) == 16
+	})
+}
+
 type nopLink struct{}
 
 func (nopLink) Close() error { return nil }
