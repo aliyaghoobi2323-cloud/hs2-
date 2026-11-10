@@ -849,6 +849,91 @@ the wire are exactly as before. Set the first three on **both** servers.
   the reality carrier's Chrome 120). Unset it to roll back.
 - `HS2_COVER_NGINX=1` — see above.
 
+### Throughput and load-balancing keys (environment, all off by default)
+
+These keys came out of a field-tuning round on a busy multi-IP tunnel
+(reverse `l3mtcp`, ~12k users, ~80 ms RTT, 0.5–1.5 % path loss). Each was
+A/B-tested in a production-like lab (≥ 6 interleaved runs with a crowd of
+light users) and then measured in production; a key was kept only if light
+users (web, calls, games, ping) got no slower. With all of them off the
+binary behaves exactly as before. Set them in the service's systemd drop-in.
+
+**Window (smux) — single-connection speed.** The receive window of a stream
+used to be a fixed 2 MiB, which caps one connection at ~200 Mbit/s at 80 ms.
+
+- `HS2_SMUX_AUTOWIN=1`, `HS2_SMUX_AUTOWIN_REL=1`, `HS2_SMUX_AUTOWIN_SHARE_MB=32`
+  — on **both** servers. The window of a heavy stream grows on the side that
+  *receives* the data (kharej for uploads, Iran for downloads) while probes
+  show no queue, and shrinks at once when a queue or a light user on the same
+  link appears. All grown windows share a 32 MiB budget. Production: upload
+  on one connection 155 → ~1300 Mbit/s, upload on 8 connections 1.2 → 2–3
+  Gbit/s, light users unchanged.
+- `HS2_STRIPE_AW_SOLO=1` — **Iran** only. A connection that striping has not
+  spread over several links keeps the adaptive window (it used to be pinned at
+  2 MiB). Production: download on one connection ~190 → ~550 Mbit/s.
+- `HS2_STRIPE_AW_HEAVY=2` — **Iran** only. Every sub-stream of a stripeable
+  connection (the primary and the stripes) keeps the adaptive window from the
+  start, with the normal light-neighbour rule. Lab: download on one connection
+  +43 % (16 runs, no light-user cost); production at peak hour: 126–174 →
+  744–1090 Mbit/s. (`=1` adds a strict neighbour cap — rejected, no gain.)
+- `HS2_MCONN_STRIPE_JUMP_MS=1500` — kharej. Harmless; no measurable gain in
+  production. Kept for parity with the lab.
+
+**Load balancing (lb auto2, several IPs).**
+
+- `HS2_LB_FAST_RECOVER=1` — both servers. A path whose raw loss stays under
+  the bar for 3 readings in a row has its smoothed loss reset, and its first
+  recovery hold is 10 s instead of 30 s. Lab: links on a recovered IP 22 → 38.
+- `HS2_LB_START_GRACE_S=20` — both servers. No whole-IP cut in the first 20 s
+  after start (a restart's own loss is nobody's fault). A restart no longer
+  cuts paths.
+- `HS2_LB_FILL_PCT=25` and `HS2_LB_SPARE_PER_ROUND=3` — kharej (the side that
+  dials). Retiring links on a path that lost its share no longer block new
+  links on the healthy paths (slots may go up to target + 25 %), and a
+  rebalance round may ask for up to 3 spares instead of 1. Lab: healthy paths
+  reach 90 % of their target in ~150 s (before: never within the run);
+  production: under-filled paths 14/20 → 19–20/20 in 10 min.
+- `HS2_LB_REC_CONFIRM=1` — kharej. While a path is cut, one bad reading from a
+  tiny sample (a cut path keeps only ~2 links) no longer restarts its recovery
+  clock: that takes 2 bad readings in a row, or one with ≥ 5000 segments.
+  A path that is really still bad stays cut. Production: a cut path that took
+  45 min to come back now returns in 30–80 s once its loss is gone.
+  (`HS2_LB_REC_DEBUG=1` logs every reading of a cut path.)
+
+Recommended set, as running on the reference tunnel:
+
+```
+# Iran (edge)
+HS2_SMUX_AUTOWIN=1 HS2_SMUX_AUTOWIN_REL=1 HS2_SMUX_AUTOWIN_SHARE_MB=32
+HS2_STRIPE_AW_SOLO=1 HS2_STRIPE_AW_HEAVY=2
+HS2_LB_FAST_RECOVER=1 HS2_LB_START_GRACE_S=20
+# kharej (exit)
+HS2_SMUX_AUTOWIN=1 HS2_SMUX_AUTOWIN_REL=1 HS2_SMUX_AUTOWIN_SHARE_MB=32
+HS2_MCONN_STRIPE_JUMP_MS=1500
+HS2_LB_FAST_RECOVER=1 HS2_LB_START_GRACE_S=20
+HS2_LB_FILL_PCT=25 HS2_LB_SPARE_PER_ROUND=3 HS2_LB_REC_CONFIRM=1
+```
+
+Measured on that tunnel at peak hour (iperf3, 8 s each; raw = the same two
+servers without the tunnel):
+
+| test | tunnel | raw path |
+|------|--------|----------|
+| download, 8 connections | 1587 Mbit/s | 1973 Mbit/s |
+| upload, 8 connections | 2727 Mbit/s | 7093 Mbit/s |
+| upload, 1 connection | 948 Mbit/s | 1560 Mbit/s |
+
+The raw path itself carries only ~2 Gbit/s down, so the tunnel's download is
+at ~80 % of what the path allows.
+
+**Tried and rejected** (the keys stay in the binary, off): a larger fixed
+window for every stream or for stripes only (`HS2_STRIPE_SUB_WIN_MB`), finer
+window updates (`HS2_STRIPE_SUB_DIV`), letting the window grow on probes that
+saw loss, a looser stripe gate, extra spare links (`SPARE_FIX/SPARE_MAX`),
+and a gradual ramp back for a recovered path. Each either gained nothing or
+made light users slower (crowd p95 +2 to +15 ms, calls or ping p99 +7 to
++45 ms).
+
 ## Managing
 
 ```bash

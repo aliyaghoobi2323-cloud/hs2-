@@ -1465,6 +1465,47 @@ each read the queue they all built as its own.
 - A transport checksum that computes to 0 is written as 0xffff, as the kernel
   does (for udp, 0 means "no checksum").
 
+## Phase U21 — adaptive windows and a faster load balancer (all keys opt-in)
+
+A field-tuning round on a busy reverse `l3mtcp` tunnel (several Iran IPs,
+~12k users, ~80 ms RTT). Every key is off by default; with none set the
+binary behaves as before. Each change was A/B-tested in a production-like lab
+(≥ 6 interleaved runs, crowd of light users, permutation tests) and kept only
+if light users got no slower; then deployed and measured in production. The
+README section *Throughput and load-balancing keys* lists the keys and the
+recommended set.
+
+- **U1 — adaptive smux window** (`HS2_SMUX_AUTOWIN`, `_REL`, `_SHARE_MB`). The
+  receiving side grows a heavy stream's window while probes show no queue and
+  shrinks it on a queue or a light neighbour; one shared budget. Upload on
+  one connection 155 → ~1300 Mbit/s in production.
+- **U2 — the download cap found.** Iran turned the adaptive window off for
+  every stripeable connection and only turned it back on at stripe width ≥ 2,
+  so an un-striped download sat at 2 MiB (~200 Mbit/s at 80 ms).
+  `HS2_STRIPE_AW_SOLO=1` (width 1 for 3 s keeps autowin) and
+  `HS2_STRIPE_AW_HEAVY=2` (every sub keeps it from the start): download on one
+  connection ~190 → 744–1090 Mbit/s at peak hour. Status counters `aw_*`.
+- **U3 — load balancer: recover and restart.** `HS2_LB_FAST_RECOVER`
+  (3 clean raw readings reset the smoothed loss; first hold 10 s) and
+  `HS2_LB_START_GRACE_S` (no whole-IP cut right after start).
+- **U4 — load balancer: refill healthy paths.** `HS2_LB_FILL_PCT` lets spares
+  past retiring links (slot cap target + N %), `HS2_LB_SPARE_PER_ROUND` asks
+  for up to K spares per round. Healthy paths 14/20 → 19–20/20 in 10 min.
+- **U5 — load balancer: a cut path comes back.** `HS2_LB_REC_CONFIRM`: a
+  single bad reading from a tiny sample no longer resets a cut path's
+  recovery clock (2 in a row, or one with ≥ 5000 segments). A path that took
+  45 min to return now returns in 30–80 s; a path still bad stays cut.
+- **Rejected, kept off:** `HS2_STRIPE_SUB_WIN_MB`, `HS2_STRIPE_SUB_DIV`,
+  `HS2_STRIPE_AW_HEAVY=1`, loss-tolerant window growth, a looser stripe gate,
+  spare-link bundles, a gradual ramp for a recovered path — no gain or a
+  light-user cost.
+- **Measured limit.** At peak hour the raw path between the two reference
+  servers carries ~2 Gbit/s down; the tunnel reaches ~1.6 Gbit/s (80 %).
+  Upload on 8 connections reaches 2.7 Gbit/s.
+- **Verification.** `go vet`, the full engine suite (`-timeout 40m`, ~610 s),
+  `third_party/smux` and `cmd/hs2` green; an A/A run showed the unified build
+  equivalent to the per-side builds it replaced.
+
 ## Phase CA — optional ICMP traffic-shape camouflage (`HS2_ICMP_CAMO`)
 
 A field report had an IP carrying the icmp tunnel filtered at the border, the
