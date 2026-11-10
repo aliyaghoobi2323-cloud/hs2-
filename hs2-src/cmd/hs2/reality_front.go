@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
@@ -114,6 +115,7 @@ func realityAcceptor(fc fileConfig, srv *tlscarrier.Server, logf func(string, ..
 	}
 	r, err := tlscarrier.NewRealityServer(f, srv)
 	must(err)
+	r.StartSizeMirror(context.Background(), 0, logf)
 	logf("front: reality, server_names %v, target %s, fallback free %d B then %d B/s (0 = defaults 256 KB, 64 KB/s)", f.ServerNames, f.Target, f.FallbackMaxBytes, f.FallbackRateBps)
 	return r
 }

@@ -503,3 +503,60 @@ func TestRealityVsTLSFront(t *testing.T) {
 		t.Fatal("a tls-front dial authenticated on a reality listener")
 	}
 }
+
+// Size mirroring: the throw-away cert grows to about the target's chain.
+func TestRealitySizeMirror(t *testing.T) {
+	cert := testCert(t, "www.target.test")
+	cert.Certificate = [][]byte{cert.Certificate[0], cert.Certificate[0]} // a 2-entry chain
+	tln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tln.Close()
+	go func() {
+		for {
+			c, err := tln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { c.(*tls.Conn).Handshake(); c.Close() }()
+		}
+	}()
+	l := newRealityLab(t, tln.Addr().String(), nil)
+	n, err := l.srv.targetChainSize(context.Background())
+	if err != nil || n < 300 {
+		t.Fatalf("chain size %d %v", n, err)
+	}
+	want := int64(2*len(cert.Certificate[0]) + 5)
+	if n != want {
+		t.Fatalf("chain size %d, want %d", n, want)
+	}
+	for _, target := range []int64{n, 1500, 4200} {
+		l.srv.CertPad.Store(target)
+		c, err := l.srv.makeCert(make([]byte, 32), "www.target.test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := int64(len(c.Certificate[0]))
+		if target > int64(l.srv.baseLen)+40 && (got < target-16 || got > target+16) {
+			t.Fatalf("padded to %d, want about %d (base %d)", got, target, l.srv.baseLen)
+		}
+	}
+	// a tunnel still works with a padded cert
+	l.srv.CertPad.Store(4200)
+	car, err := l.dial(l.dprof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	car.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	l.srv.CertPad.Store(0)
+	l.srv.StartSizeMirror(ctx, time.Hour, nil)
+	for i := 0; i < 50 && l.srv.CertPad.Load() == 0; i++ {
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	if l.srv.CertPad.Load() != n {
+		t.Fatalf("mirror stored %d, want %d", l.srv.CertPad.Load(), n)
+	}
+}

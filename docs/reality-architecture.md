@@ -312,9 +312,12 @@ profile is still refused; per-IP reality in lb refused).
   short ids; `pathFront` falls back to the tunnel's front.
 * `both`: peek the hello (`parseRealityHello`) and dispatch: valid signal ->
   `RealityServer.serveTunnel`, else the tls `Server.Handle` on a prefixConn.
-* Size mirroring: `RealityServer.CertPad` pads the throw-away cert (private
-  extension 1.3.6.1.4.1.55738.1.2); fill it from a cached fetch of the
-  target's real chain size (every few hours). Not wired yet. The ServerHello
+* Size mirroring (done in phase 2): `StartSizeMirror` (started by the
+  listener in cmd/hs2) fetches the target's chain at start and every 3 h
+  (`targetChainSize`: DER bytes + 5 B per extra entry) into `CertPad`; the
+  throw-away cert is padded with private extension 1.3.6.1.4.1.55738.1.2 to
+  within a few bytes of it (`TestRealitySizeMirror`). Still open: the
+  CertificateVerify size (ECDSA P-256 vs an RSA target) and the ServerHello
   key-share group (our crypto/tls picks X25519MLKEM768 when offered) should
-  follow the target's choice too.
+  follow the target's choice.
 * Doctor: run `checkTarget` (`hs2 reality check-target`) from `hs2 doctor`.

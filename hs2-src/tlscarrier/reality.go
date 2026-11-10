@@ -561,8 +561,11 @@ type RealityServer struct {
 	rateBps  int64
 	maxDur   time.Duration
 	// CertPad, if > 0, pads the throw-away certificate to about this many
-	// bytes (size mirroring of the target's chain; phase 3 fills it).
+	// bytes: size mirroring of the target's certificate chain, so the
+	// encrypted Certificate message is about as long as the target's
+	// (StartSizeMirror keeps it fresh).
 	CertPad atomic.Int64
+	baseLen int // DER length of an unpadded throw-away cert
 	// DialTarget dials the target (tests override; nil = TCP 5 s).
 	DialTarget func(ctx context.Context, addr string) (net.Conn, error)
 }
@@ -611,7 +614,69 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 	if inner != nil {
 		inner.init()
 	}
+	c, err := r.makeCert(make([]byte, 32), p.ServerNames[0])
+	if err != nil {
+		return nil, err
+	}
+	r.baseLen = len(c.Certificate[0])
 	return r, nil
+}
+
+// targetChainSize is what the target's Certificate message carries: the
+// chain's DER bytes plus the per-entry overhead beyond the first entry (our
+// message has one entry).
+func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
+	var raw net.Conn
+	var err error
+	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	if r.DialTarget != nil {
+		raw, err = r.DialTarget(dctx, r.prof.Target)
+	} else {
+		var d net.Dialer
+		raw, err = d.DialContext(dctx, "tcp", r.prof.Target)
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer raw.Close()
+	raw.SetDeadline(time.Now().Add(8 * time.Second))
+	c := tls.Client(raw, &tls.Config{ServerName: r.prof.ServerNames[0], InsecureSkipVerify: true, NextProtos: []string{"h2", "http/1.1"}})
+	if err := c.Handshake(); err != nil {
+		return 0, err
+	}
+	var n int64
+	for i, crt := range c.ConnectionState().PeerCertificates {
+		n += int64(len(crt.Raw))
+		if i > 0 {
+			n += 5
+		}
+	}
+	return n, nil
+}
+
+// StartSizeMirror measures the target's certificate chain now and every
+// `every` (0 = 3 h) until ctx ends, and pads the throw-away certificate to it.
+func (r *RealityServer) StartSizeMirror(ctx context.Context, every time.Duration, logf func(string, ...any)) {
+	if every <= 0 {
+		every = 3 * time.Hour
+	}
+	go func() {
+		for {
+			if n, err := r.targetChainSize(ctx); err == nil {
+				if old := r.CertPad.Swap(n); old != n && logf != nil {
+					logf("front: reality: target certificate chain %d B; mirroring its size", n)
+				}
+			} else if logf != nil {
+				logf("front: reality: could not measure the target's certificate chain: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(every):
+			}
+		}
+	}()
 }
 
 // check opens the signal of a complete hello. It returns the authKey or the
@@ -795,8 +860,8 @@ func (r *RealityServer) makeCert(authKey []byte, sni string) (*tls.Certificate, 
 	}
 	val := append([]byte{0x04, 32}, certTag(authKey, spki)...) // OCTET STRING
 	exts := []pkix.Extension{{Id: realityCertOID, Value: val}}
-	if pad := r.CertPad.Load(); pad > 600 {
-		p := make([]byte, pad-600)
+	if pad := r.CertPad.Load() - int64(r.baseLen) - 24; r.baseLen > 0 && pad > 0 {
+		p := make([]byte, pad)
 		rand.Read(p)
 		v, _ := asn1.Marshal(p)
 		exts = append(exts, pkix.Extension{Id: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 55738, 1, 2}, Value: v})
