@@ -373,3 +373,141 @@ profile is still refused; per-IP reality in lb refused).
 * A hello that stalls part-way is spliced after 10 s (target already has the
   bytes, its own timeout applies); target bytes that arrive before the hello
   is complete are relayed only once the decision is made.
+
+## 7. Phase 3: per-IP fronts, announcements, "both", fallback, live switch
+
+Code: `cmd/hs2/front.go` (publicFront, lbAnnouncedFront, `frontMux`, status),
+`cmd/hs2/lb.go` (`validateLBFronts`), `cmd/hs2/lbreload.go` (precedence,
+reload hook), `cmd/hs2/main.go` (per-IP private keys), `tlscarrier/hybrid.go`
+(`BothFront`, `BothPolicy`, `FrontCounters`, `ConnectError`),
+`tlscarrier/reality.go` (hybrid dispatch, `target_down`),
+`engine/lb.go` (path dialer rebuilt when its front changes).
+
+### 7.1 Config (listening side; the dialer needs nothing)
+
+```
+"lb": {"enabled": true, "mode": "auto",
+  "iran": [                                  (reverse: Iran listens)
+    {"ip": "A", "weight": 40},                                   tls (absent = tls)
+    {"ip": "B", "weight": 30, "front": {"kind": "reality",
+        "target": "www.site.ir:443", "server_names": ["www.site.ir"],
+        "private_key": "...", "short_ids": ["61bbbd5ea44185c5"]}},
+    {"ip": "C", "weight": 30, "sni": "c.ours.ir", "cert_file": "...", "key_file": "...",
+     "front": {"kind": "both", "target": "www.site.ir:443", "server_names": ["www.site.ir"],
+        "private_key": "...", "short_ids": ["0c0c0c0c"]}}],
+  "kharej": [{"ip": "K", "weight": 100}]}
+```
+
+* One `RealityServer` per listening IP with its own target, names, key,
+  short ids, replay memory and counters (`frontMux`, dispatch by the local
+  IP of the accepted socket; IPs without a front use the tunnel's front).
+* `private_key` is read from THIS file only (`fileConfig.UnmarshalJSON`
+  copies `lb.<side>[i].front.private_key`; the profile type never
+  (de)serialises it).
+* Validation per IP (`validateLBFronts`, also on SIGHUP): listening side needs
+  `private_key` and a single-tenant target (CDN refusal, names of the target,
+  `force_target`); a dialer that names a remote front explicitly needs
+  `public_key` (or a copied `private_key`, from which the public one is
+  derived). The tunnel-level `front` cannot be `both` (per IP only).
+
+### 7.2 Announcement and precedence
+
+The listening side announces per IP only `publicFront`: `kind`,
+`server_names`, `short_ids`, `public_key` (derived from the private key when
+not written). Never the private key, the target or the fallback limits
+(`TestLBPerIPFrontProfiles` checks the whole wire advert). tls IPs announce
+nothing (stage-6 bytes unchanged). Dialer: explicit remote `front` in its own
+lb list > announced > tunnel `front` > tls. Old listener (no ext) -> tls; old
+dialer (ignores the ext) -> tls: it works on `tls` and `both` IPs, not on a
+`reality`-only IP (that answers like the target) — migrate with `both` first.
+Profile change (reload on the listener or a new announcement): new links use
+the new front (the engine's per-path dialer is rebuilt when `LBPath.Front`
+changes); established links keep running and age out; nothing is dropped.
+
+### 7.3 Hybrid "both" listener (one port)
+
+Classification of a complete ClientHello: valid reality signal -> reality;
+else SNI in our tls names (top-level `sni` + every per-IP `sni` of this side)
+-> the tls front (`Server.Handle` over the already-read bytes, so its
+nginx-identical cover applies); else -> cover: splice to the reality target
+with the fallback limits. The target dial starts at accept for every
+connection, as in phase 2, so the target also sees the first bytes of a tls
+hello it is then dropped from (it learns our tls SNI; accepted).
+
+New listener rule (also for `reality`): an authenticated hello is served only
+if the target dial succeeded (`rejected.target_down`, conn closed). The
+listener never answers while the site it imitates is unreachable; a `both`
+dialer then uses tls.
+
+### 7.4 Auto-fallback (dialer, "both")
+
+`BothFront` + `BothPolicy` per path (`local>remote:port`): reality first; a
+reality failure after the TCP connect is retried with tls in the same dial
+(so a front failure never shows as path loss to the LB); a TCP connect
+failure (`ConnectError`) is returned as is (path problem, no tls retry).
+After N=3 reality failures in a row the path dials tls only for 10 min
+(logged: `front both: ... dialing tls for 10m0s`), then tries reality again;
+a reality success resets the count. A path where both fronts fail returns an
+error and the LB cuts it as usual.
+
+### 7.5 Status
+
+Listening side: `"fronts": [{"ip", "kind", "counters": {"reality", "tls",
+"cover", "rejected"}}]`; dialing side: `"front_paths": [{"path", "kind",
+"both": {"mode", "cool_until", "consec_fails", "reality_ok", "reality_fail",
+"tls_ok", "tls_fail", "fallbacks", "connect_fail"}}]`; plus the phase-2
+process-wide `"reality"` block (now with `target_down`).
+
+### 7.6 Phase-3 validation (2026-11-11)
+
+Unit tests (lab 3): `tlscarrier/hybrid_test.go` — `TestHybridClassify`
+(one "both" port: reality dial -> reality, tls dial with our name -> tls,
+Chrome hellos for a foreign name and for the reality name without the signal
+-> the target's bytes exactly, a tls client with a foreign SNI never reaches
+the tunnel), `TestBothFallbackTargetDown` (target down -> `target_down` x3,
+each dial still succeeds via tls, cool-down entered once, expires after 10
+min), `TestBothPolicyStateMachine` (N, cool-down, reset, connect errors are
+the path's, both fronts failing -> error), `TestBothProfile`.
+`cmd/hs2/front_lb_test.go` — `TestLBPerIPFrontProfiles` (per-IP private key
+from the file; announced = kind/names/short ids/public key only, checked on
+the whole wire advert; per-IP refusal of CDN target, missing private key,
+missing short ids, unknown kind, foreign names; dialer needs a key; tunnel
+`both` refused), `TestLBFrontPrecedence` (explicit > announced > tunnel; no
+announcement = tls; public key derived from a copied private key),
+`TestFrontMuxDispatchAndReload` (dispatch by local IP, unchanged listener kept
+across a reload, tls->both / both->reality), `TestReloadLBSwitchesFronts`
+(the SIGHUP path). Phase-1/2 tests adjusted (`both` now has a dialer).
+
+Lab 1 (`/opt/hs2lab/r35/p3`, one slot): reverse l3mtcp, lb auto, 3 paths
+(1000mbit/40ms/0.01% each), Iran listens on A 192.168.50.1 (tls), B 51.1
+(reality), C 52.1 (both), target `openssl s_server` in the Iran netns; the
+kharej has NO front config (everything from the announcement); crowd 3000,
+call, game, iperf down x8, T=45 s.
+
+| run | event | heavy Mbps | conn/echo/call/game/crowd failures | crowd p99 | links end (A/B/C) | fronts |
+|-----|-------|-----------:|------------------------|----------:|-------------------|--------|
+| switch | t=15 s SIGHUP: C both->reality, A tls->both | 1132 | 0/0/0/0/0 | 171 ms | 58/38/57, churn 0 | after: A both reality 15, C reality 16 new links |
+| tdown | t=15 s target killed | 908 | 0/0/0/0/0 | 164 ms | 58/37/57, churn 0 | C: 4 reality fails -> tls (19 tls links), B: established links keep serving |
+| tdown0 | target killed at start | 954 | 0/0/0/0/0 | 2683 ms | 75/0/75 | B cooled (599 failed dials), C tls 73 |
+
+* Status: Iran `fronts` per IP (e.g. B `reality 38, cover 2`, C `reality 36,
+  tls 21, rejected 4`), kharej `front_paths` (C `mode tls, fallbacks 1`).
+* The 2-3 `cover`/`sni` rejects on B at start are tls dials made before the
+  announcement arrived (a reality-only IP answers them as the target). A
+  `both` IP takes them over tls.
+* Target down while running: established reality links are not touched
+  (they do not use the target), so B keeps its links and gets no new ones; the
+  LB does not cut a path whose links are healthy.
+* Finding (LB, phase 4): a reality-only path that fails FAST at start (EOF
+  right after the hello) is not cooled during the LB start grace
+  (`startedLocked`), so ~600 dials in 30 s starve the pool growth (13 links
+  for ~30 s, crowd p99 2.7 s, still 0 failures).
+* Probe battery (lab 3, `battery.py` = probe30-battery with host:port
+  targets, fast probes): listener IPs 127.0.0.1 tls / .2 reality / .3 both,
+  target `openssl s_server`. Tunnel sni = another name: B == target 18/18,
+  C == target 18/18. Tunnel sni = the probe's SNI: B == target 18/18, C ==
+  the tls IP (nginx cover) 17/18; the one difference is plain HTTP on the
+  port: a "both" IP splices non-TLS bytes to the target (no SNI to classify),
+  so a prober that knows our tls name sees nginx for TLS and the target for
+  plain HTTP. For `both`, point the tls cover at the target (or use a tls
+  name that is the target's) — phase 4.

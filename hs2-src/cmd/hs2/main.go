@@ -1111,6 +1111,7 @@ func must(err error) {
 
 // newLB builds the dialing side's balancer from the lb config (validated).
 func newLB(fc fileConfig, logf func(string, ...any)) *engine.LB {
+	tlscarrier.DefaultBothPolicy.Logf = logf // "both" paths: reality -> tls fallback lines
 	paths, err := lbPathsAdvert(fc, nil) // Source: local
 	if err != nil {
 		log.Fatalf("config: %v", err)
