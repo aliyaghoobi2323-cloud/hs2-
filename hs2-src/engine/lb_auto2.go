@@ -127,6 +127,7 @@ type q2Path struct {
 	uncutAt    time.Time
 	okRuns     int     // HS2_LB_FAST_RECOVER: raw readings in a row under the bar
 	fastResets int     // HS2_LB_FAST_RECOVER: smoothed-loss resets
+	flap       q2Flap  // HS2_LB_FLAP_PEN
 	overRuns   int     // HS2_LB_REC_CONFIRM: raw readings in a row at/over the bar while cut
 	factor     float64 // the edge's applied weight (the dialing side keeps its own)
 	target     float64
@@ -251,6 +252,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		} else if s := ipBad[re]; s != "" {
 			why = s
 		}
+		relCut := why == "" && !j.allBad // the relative path rule alone (HS2_LB_FLAP_PEN)
 		if !q.cut && (q.bad >= lb2CutRuns || why != "") {
 			q.cut, q.cutAt, q.okSince, q.overRuns = true, now, time.Time{}, 0
 			if why == "" {
@@ -263,12 +265,18 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 				q.hold = lb2Hold
 			}
 			j.log("lb auto2: path %s cut (%s); recovery after %s under %.1f%%", k, why, fmtDur(recoverHold(q)), 100*okBar)
+			if relCut {
+				j.flapNoteCut(k, q, now) // HS2_LB_FLAP_PEN
+			}
 			continue
 		}
 		if !q.cut {
 			continue
 		}
 		hold := recoverHold(q)
+		if q.flap.pen {
+			hold = flapHold(q, now)
+		}
 		confirmOK := false
 		hadOK := q.okSince
 		if lbRecConfirm {
@@ -299,6 +307,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		}
 		if (!lbRecConfirm && !q.okSince.IsZero() && now.Sub(q.okSince) >= hold) || confirmOK || quiet {
 			q.cut, q.uncutAt, q.bad, q.overRuns = false, now, 0, 0
+			j.flapRecovered(k, q, now)
 			what := "loss back under " + ftoa1(100*okBar) + "%"
 			if quiet {
 				what = "no reading for " + fmtDur(now.Sub(q.lastRead)) + ": probing"
@@ -306,6 +315,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			j.log("lb auto2: path %s recovering (%s) — its share comes back step by step", k, what)
 		}
 	}
+	j.flapRelease(now)
 	for ip := range j.verdicts {
 		still := false
 		for k, q := range j.p {
