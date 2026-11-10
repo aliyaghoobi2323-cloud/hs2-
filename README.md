@@ -1070,7 +1070,7 @@ How to see it:
   `%idle` while the others have room.
 
 What helped on the reference kharej server (say the rx-IRQ core is CPU 0 of
-4; adjust to yours, and replace `eth0` with the NIC name):
+4; adjust to yours):
 
 ```
 # 1. keep the rx-IRQ core free for the NIC: run the hs2 units on the others
@@ -1078,17 +1078,19 @@ What helped on the reference kharej server (say the rx-IRQ core is CPU 0 of
 [Service]
 CPUAffinity=1 2 3
 #    then: systemctl daemon-reload && systemctl restart hs2
+#    optionally keep other heavy processes off it too, e.g. a panel's xray:
+#    taskset -a -cp 1-3 $(pidof xray)
 
-# 2. RFS: steer each flow's softirq work to the core its socket runs on
-sysctl -w net.core.rps_sock_flow_entries=32768
-echo 32768 > /sys/class/net/eth0/queues/rx-0/rps_flow_cnt
-
-# 3. a larger softirq budget per poll
+# 2. a larger softirq budget per poll
 sysctl -w net.core.netdev_budget=600
 ```
 
 Result there: the rx-IRQ core's idle at peak went from ~22 % to ~45 %. To
-keep the sysctls across reboots put them in a file of your own under
-`/etc/sysctl.d/` (not `99-hs2.conf`, which hs2 rewrites); `rps_flow_cnt` is
-not a sysctl and needs a boot-time unit or udev rule. With several queues
+keep the sysctl across reboots put it in a file of your own under
+`/etc/sysctl.d/` (not `99-hs2.conf`, which hs2 rewrites). With several queues
 (`Combined:` > 1) none of this is needed.
+
+Tried and **not** kept: RFS (`net.core.rps_sock_flow_entries` +
+`rx-0/rps_flow_cnt`). On the reference server single-stream upload got
+worse with it (one connection 20–90 Mbit/s with RFS vs 177–590 without;
+eight connections mixed), so it was turned back off.

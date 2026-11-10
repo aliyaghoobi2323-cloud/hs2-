@@ -1486,8 +1486,11 @@ each read the queue they all built as its own.
 - **README:** the key in *Production defaults* and *Throughput and
   load-balancing keys*; a new note, *Single-queue virtio NIC (one rx
   interrupt core)* — how to spot it and the optional manual steps that
-  helped on the reference server (CPU affinity off the rx-IRQ core, RFS,
-  `netdev_budget`). Nothing there is applied by hs2 or the installer.
+  helped on the reference server (hs2 — and optionally other heavy
+  processes — kept off the rx-IRQ core with `CPUAffinity=`/`taskset`, and
+  `net.core.netdev_budget=600`: that core's idle at peak ~22 % → ~45 %).
+  RFS was tried and not kept (single-stream upload regressed). Nothing
+  there is applied by hs2 or the installer.
 - **Tests:** `TestFlapPen*` (engine), `envdef` (table size, exit side),
   `TestApplyDefaults` (on for exit, off for edge, explicit `0`, legacy).
 
