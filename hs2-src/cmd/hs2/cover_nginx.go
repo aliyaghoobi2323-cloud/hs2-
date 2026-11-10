@@ -42,6 +42,7 @@ const (
 
 // serveNginxCover serves page on ln the way nginx would.
 func serveNginxCover(ln net.Listener, page []byte, modtime time.Time) {
+	files := nginxCoverFiles(page, modtime)
 	for {
 		c, err := ln.Accept()
 		if err != nil {
@@ -50,7 +51,7 @@ func serveNginxCover(ln net.Listener, page []byte, modtime time.Time) {
 			}
 			continue
 		}
-		go nginxConn(c, page, modtime)
+		go nginxConnFiles(c, files, modtime)
 	}
 }
 
@@ -60,9 +61,13 @@ func nginxETag(modtime time.Time, size int) string {
 }
 
 func nginxConn(c net.Conn, page []byte, modtime time.Time) {
+	nginxConnFiles(c, nginxCoverFiles(page, modtime), modtime)
+}
+
+// nginxConnFiles serves one connection from files ("/" is the page).
+func nginxConnFiles(c net.Conn, files map[string]*coverFile, modtime time.Time) {
 	defer c.Close()
-	br := bufio.NewReaderSize(c, 8<<10)
-	etag := nginxETag(modtime, len(page))
+	br := bufio.NewReaderSize(c, nginxHeadMax+512)
 	first := true
 	for {
 		wait := nginxKeepaliveTimeout
@@ -71,6 +76,18 @@ func nginxConn(c net.Conn, page []byte, modtime time.Time) {
 		}
 		first = false
 		c.SetReadDeadline(time.Now().Add(wait))
+		// nginx parses the request line as it arrives and answers 400 at the
+		// first byte that cannot be part of one — a probe's random bytes get
+		// their 400 at once, not a read waiting for a newline (cover_head.go).
+		code, detail, err := nginxCheckHead(br)
+		if err != nil {
+			return // idle, timed out or gone: nginx just closes
+		}
+		if code != 0 {
+			io.WriteString(c, tlscarrier.NginxError(code, detail, time.Now(), true))
+			nginxLinger(c)
+			return
+		}
 		req, err := http.ReadRequest(br)
 		if err != nil {
 			var ne net.Error
@@ -78,10 +95,11 @@ func nginxConn(c net.Conn, page []byte, modtime time.Time) {
 				return // idle or gone: nginx just closes
 			}
 			io.WriteString(c, tlscarrier.NginxError(400, "", time.Now(), true))
+			nginxLinger(c)
 			return
 		}
 		c.SetReadDeadline(time.Now().Add(nginxHeaderTimeout))
-		resp := nginxRespond(req, page, modtime, etag, time.Now())
+		resp := nginxRespondFiles(req, files, modtime, time.Now())
 		// whatever body the request carried is not ours to keep
 		io.Copy(io.Discard, io.LimitReader(req.Body, 1<<20))
 		req.Body.Close()
@@ -91,21 +109,28 @@ func nginxConn(c net.Conn, page []byte, modtime time.Time) {
 	}
 }
 
-// nginxRespond builds the whole response to one request.
+// nginxRespond builds the whole response to one request for the page alone.
 func nginxRespond(req *http.Request, page []byte, modtime time.Time, etag string, now time.Time) []byte {
-	isPage := req.URL.Path == "/" || req.URL.Path == "/index.html"
+	p := &coverFile{body: page, ctype: "text/html", etag: etag}
+	return nginxRespondFiles(req, map[string]*coverFile{"/": p, "/index.html": p}, modtime, now)
+}
+
+// nginxRespondFiles builds the whole response to one request.
+func nginxRespondFiles(req *http.Request, files map[string]*coverFile, modtime time.Time, now time.Time) []byte {
+	f := files[req.URL.Path]
 	closeConn := req.Close
 	switch {
 	case req.Method != http.MethodGet && req.Method != http.MethodHead && req.Method != http.MethodPost:
 		return []byte(nginxErrorKA(405, now, closeConn))
-	case !isPage:
+	case f == nil:
 		return []byte(nginxErrorKA(404, now, closeConn))
 	case req.Method == http.MethodPost:
 		return []byte(nginxErrorKA(405, now, closeConn))
 	}
+	page := f.body
 	rec := &coverRecorder{h: http.Header{}}
-	rec.h.Set("Content-Type", "text/html")
-	rec.h.Set("ETag", etag)
+	rec.h.Set("Content-Type", f.ctype)
+	rec.h.Set("ETag", f.etag)
 	rec.h.Set("Cache-Control", "max-age=3600")
 	rec.h.Set("Expires", now.Add(time.Hour).UTC().Format(http.TimeFormat))
 	http.ServeContent(rec, req, "", modtime, bytes.NewReader(page))

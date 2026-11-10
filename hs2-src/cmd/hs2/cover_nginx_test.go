@@ -88,7 +88,7 @@ func TestNginxCover(t *testing.T) {
 		}
 	}
 	// same connection (keep-alive): 404, 304, 206, HEAD, 405
-	head, body = rawExchange(t, c, br, "GET /robots.txt HTTP/1.1\r\nHost: a\r\n\r\n")
+	head, body = rawExchange(t, c, br, "GET /nothing-here.txt HTTP/1.1\r\nHost: a\r\n\r\n")
 	if head[0] != "HTTP/1.1 404 Not Found" || body != tlscarrier.NginxErrorPage(404, "") || names(head) != "Server,Date,Content-Type,Content-Length,Connection" {
 		t.Fatalf("404: %q %q", head, body)
 	}

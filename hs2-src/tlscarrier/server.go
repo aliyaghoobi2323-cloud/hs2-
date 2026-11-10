@@ -63,11 +63,18 @@ func (s *Server) newTLSConfig() *tls.Config {
 
 // firstReadTimeout is how long a connection may stay silent after the TLS
 // handshake. A real client sends its auth record at once; this only bounds idle
-// probes, roughly like a web server's header timeout. Kept modest on purpose:
-// lengthening it toward nginx's 60s default would make a flood of idle probes
-// hold goroutines longer (against the probe-load constraint) for only a soft
-// timing-coherence gain, and the per-connection probe shield is not built yet.
-const firstReadTimeout = 30 * time.Second
+// probes. With HS2_COVER_NGINX it is nginx's client_header_timeout (60 s), and
+// the close is quiet — no close_notify, as nginx shuts a timed-out SSL
+// connection down (c->timedout → SSL_set_quiet_shutdown) — so an idle probe
+// times us exactly like the nginx we present as. Without it (the Go-style
+// cover) the old 30 s + close_notify stays. Tunnel links never wait here: the
+// auth record is their first write after the handshake.
+func firstReadTimeout() time.Duration {
+	if CoverNginx {
+		return 60 * time.Second
+	}
+	return 30 * time.Second
+}
 
 // handshakeTimeout bounds the TLS handshake (from accept to a finished
 // handshake), so the most a flood of half-open connections can hold a
@@ -152,11 +159,16 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	// write) or whatever a browser/probe says. Reading one record — not a
 	// fixed byte count — means a short probe is answered by the backend at
 	// once instead of hanging on a read no web server would make.
-	tconn.SetDeadline(time.Now().Add(firstReadTimeout))
+	tconn.SetDeadline(time.Now().Add(firstReadTimeout()))
 	buf := make([]byte, 16<<10)
 	n, err := tconn.Read(buf)
 	first := buf[:n]
 	if n == 0 {
+		var ne net.Error
+		if CoverNginx && errors.As(err, &ne) && ne.Timeout() {
+			raw.Close() // nginx's client_header_timeout: quiet SSL shutdown
+			return
+		}
 		tconn.Close()
 		return
 	}
@@ -220,11 +232,32 @@ func (s *Server) forward(ctx context.Context, tconn *tls.Conn, already []byte, b
 			return
 		}
 	}
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(up, tconn); done <- struct{}{} }()
-	go func() { io.Copy(tconn, up); done <- struct{}{} }()
+	fromClient := make(chan struct{}, 1)
+	fromBackend := make(chan int64, 1)
+	go func() { io.Copy(up, tconn); fromClient <- struct{}{} }()
+	go func() { n, _ := io.Copy(tconn, up); fromBackend <- n }()
 	select {
 	case <-ctx.Done():
-	case <-done:
+	case <-fromClient:
+	case n := <-fromBackend:
+		if !CoverNginx {
+			return
+		}
+		if n == 0 {
+			// The cover closed without a word (its header timeout on a
+			// stalled or partial request): nginx closes quietly there, with
+			// no close_notify.
+			tconn.NetConn().Close()
+			return
+		}
+		// After its response the cover lingers (cover_head.go nginxLinger):
+		// let what the client still sends drain through to it instead of
+		// resetting the connection under the response, then close.
+		tconn.CloseWrite()
+		select {
+		case <-ctx.Done():
+		case <-fromClient:
+		case <-time.After(30 * time.Second):
+		}
 	}
 }
