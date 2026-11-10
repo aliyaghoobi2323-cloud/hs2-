@@ -223,7 +223,7 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 			// counts up over the ticks until they make a reading (lb_spare.go).
 			sj, rj, ok := b.carryLocked(j, segs[j], retr[j])
 			if ok {
-				r := q2Reading{loss: float64(rj) / float64(sj)}
+				r := q2Reading{loss: float64(rj) / float64(sj), segs: sj}
 				if d := delays[j]; len(d) > 0 {
 					sort.Float64s(d)
 					r.queueMs = d[len(d)/2]

@@ -106,28 +106,31 @@ type q2Reading struct {
 	loss    float64 // resent share
 	queueMs float64
 	fail    float64
+	segs    uint64 // segments the reading counted (0: unknown; HS2_LB_REC_DEBUG)
 }
 
 // q2Path is one path's judged state.
 type q2Path struct {
-	ewma     float64
-	queueMs  float64
-	fail     float64
-	have     bool
-	raw      float64 // the latest reading
-	bad      int     // readings running over lb2CutLoss
-	cut      bool
-	cutWhy   string
-	cutAt    time.Time
-	okSince  time.Time
-	lastRead time.Time
-	hold     time.Duration
-	uncutAt  time.Time
-	okRuns     int // HS2_LB_FAST_RECOVER: raw readings in a row under the bar
-	fastResets int // HS2_LB_FAST_RECOVER: smoothed-loss resets
-	factor   float64 // the edge's applied weight (the dialing side keeps its own)
-	target   float64
-	reason   string
+	ewma       float64
+	queueMs    float64
+	fail       float64
+	have       bool
+	raw        float64 // the latest reading
+	segs       uint64  // its sample (0: unknown)
+	bad        int     // readings running over lb2CutLoss
+	cut        bool
+	cutWhy     string
+	cutAt      time.Time
+	okSince    time.Time
+	lastRead   time.Time
+	hold       time.Duration
+	uncutAt    time.Time
+	okRuns     int     // HS2_LB_FAST_RECOVER: raw readings in a row under the bar
+	fastResets int     // HS2_LB_FAST_RECOVER: smoothed-loss resets
+	overRuns   int     // HS2_LB_REC_CONFIRM: raw readings in a row at/over the bar while cut
+	factor     float64 // the edge's applied weight (the dialing side keeps its own)
+	target     float64
+	reason     string
 }
 
 // q2Judge judges a set of paths named "local>remote".
@@ -211,7 +214,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		if fastRecoverFold(q, r.loss, okBar0, now) && q.fastResets == 1 {
 			j.log("lb auto2: path %s fast recovery: raw loss %.1f%% under %.1f%% %d readings in a row — smoothed loss reset", k, 100*r.loss, 100*okBar0, q.okRuns)
 		}
-		q.fail = r.fail
+		q.fail, q.segs = r.fail, r.segs
 		q.have, q.lastRead = true, now
 		if isBad(r.loss) {
 			q.bad++
@@ -249,7 +252,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			why = s
 		}
 		if !q.cut && (q.bad >= lb2CutRuns || why != "") {
-			q.cut, q.cutAt, q.okSince = true, now, time.Time{}
+			q.cut, q.cutAt, q.okSince, q.overRuns = true, now, time.Time{}, 0
 			if why == "" {
 				why = fmt.Sprintf("loss %.1f%%", 100*q.raw)
 			}
@@ -265,17 +268,37 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 		if !q.cut {
 			continue
 		}
-		if q.ewma < okBar && q.lastRead.Equal(now) {
+		hold := recoverHold(q)
+		confirmOK := false
+		hadOK := q.okSince
+		if lbRecConfirm {
+			if q.lastRead.Equal(now) {
+				confirmOK = recConfirmStep(q, okBar, now, hold)
+			}
+		} else if q.ewma < okBar && q.lastRead.Equal(now) {
 			if q.okSince.IsZero() {
 				q.okSince = now
 			}
 		} else if q.lastRead.Equal(now) {
 			q.okSince = time.Time{}
 		}
-		hold := recoverHold(q)
+		if lbRecDebug && q.lastRead.Equal(now) {
+			ev := ""
+			if !hadOK.IsZero() && q.okSince.IsZero() {
+				ev = " OKSINCE-RESET"
+			}
+			ok := "-"
+			if !q.okSince.IsZero() {
+				ok = fmtDur(now.Sub(q.okSince))
+			}
+			j.log("lb recdbg: path %s cut %s raw %.2f%% segs %d ewma %.2f%% bar %.2f%% okFor %s hold %s okRuns %d overRuns %d%s", k, fmtDur(now.Sub(q.cutAt)), 100*q.raw, q.segs, 100*q.ewma, 100*okBar, ok, fmtDur(hold), q.okRuns, q.overRuns, ev)
+		}
 		quiet := now.Sub(q.lastRead) >= lb2Quiet && now.Sub(q.cutAt) >= hold
-		if (!q.okSince.IsZero() && now.Sub(q.okSince) >= hold) || quiet {
-			q.cut, q.uncutAt, q.bad = false, now, 0
+		if lbRecConfirm && confirmOK && q.ewma > q.raw {
+			q.ewma = q.raw // a lone spike does not hold the recovered path's weight down
+		}
+		if (!lbRecConfirm && !q.okSince.IsZero() && now.Sub(q.okSince) >= hold) || confirmOK || quiet {
+			q.cut, q.uncutAt, q.bad, q.overRuns = false, now, 0, 0
 			what := "loss back under " + ftoa1(100*okBar) + "%"
 			if quiet {
 				what = "no reading for " + fmtDur(now.Sub(q.lastRead)) + ": probing"

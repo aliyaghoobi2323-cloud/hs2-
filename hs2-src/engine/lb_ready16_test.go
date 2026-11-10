@@ -87,3 +87,62 @@ func TestQ2StartGraceNoIPCut(t *testing.T) {
 		t.Fatal("no IP cut after the grace")
 	}
 }
+
+// HS2_LB_REC_CONFIRM: a cut path with a long (flap-doubled) hold whose tiny
+// samples read a lone spike over the bar now and then still recovers after
+// its hold; a path whose readings stay over the bar in a row stays cut.
+func TestQ2RecConfirm(t *testing.T) {
+	good := map[string]float64{"k>a": 0.003, "k>b": 0.003, "k>c": 0.003}
+	bad := map[string]float64{"k>a": 0.07, "k>b": 0.003, "k>c": 0.003}
+	spike := map[string]float64{"k>a": 0.05, "k>b": 0.003, "k>c": 0.003}
+	run := func(confirm bool, still bool) (cut bool, took time.Duration) {
+		oc, of := lbRecConfirm, lbFastRecover
+		lbRecConfirm, lbFastRecover = confirm, true
+		defer func() { lbRecConfirm, lbFastRecover = oc, of }()
+		j := newQ2Judge(0.1, "kharej", "Iran", nil)
+		now := time.Unix(1000, 0)
+		q2feed(j, &now, 3, good)
+		q2feed(j, &now, 8, bad)
+		if !j.p["k>a"].cut {
+			t.Fatal("not cut")
+		}
+		j.p["k>a"].hold = lb2HoldMax // a flapped path: 5 min hold
+		start := now
+		for i := 0; i < 240 && j.p["k>a"].cut; i++ { // 20 min
+			switch {
+			case still && i%2 == 0:
+				q2feed(j, &now, 1, bad)
+			case still:
+				q2feed(j, &now, 1, spike)
+			case i%9 == 8: // a lone spike every 45 s
+				q2feed(j, &now, 1, spike)
+			default:
+				q2feed(j, &now, 1, good)
+			}
+		}
+		return j.p["k>a"].cut, now.Sub(start)
+	}
+	c0, t0 := run(false, false)
+	c1, t1 := run(true, false)
+	t.Logf("healthy path with lone spikes, 5 min hold: off cut=%v %s, on cut=%v %s", c0, t0, c1, t1)
+	if c1 || t1 > lb2HoldMax+30*time.Second {
+		t.Fatalf("confirm: still cut=%v after %s", c1, t1)
+	}
+	if !c0 {
+		t.Fatalf("baseline recovered in %s: the test does not show the spike reset", t0)
+	}
+	if c, d := run(true, true); !c {
+		t.Fatalf("confirm: a still-bad path recovered after %s", d)
+	}
+	// Short hold: same as without the key on clean readings.
+	oc, of := lbRecConfirm, lbFastRecover
+	lbRecConfirm, lbFastRecover = true, true
+	defer func() { lbRecConfirm, lbFastRecover = oc, of }()
+	j := newQ2Judge(0.1, "kharej", "Iran", nil)
+	now := time.Unix(1000, 0)
+	q2feed(j, &now, 3, good)
+	q2feed(j, &now, 8, bad)
+	if d := recoverAfter(j, &now, "k>a", good); d > 35*time.Second {
+		t.Fatalf("confirm: first recovery took %s", d)
+	}
+}
