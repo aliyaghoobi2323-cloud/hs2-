@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
@@ -184,6 +185,43 @@ func (m *mConn) stripeAutoWinLocked(now time.Time) {
 	}
 }
 
+// stripeSubWin: HS2_STRIPE_SUB_WIN_MB (Iran, 0/off by default, 3-8): the fixed
+// smux window of a stripe sub (not the primary) while its adaptive window is
+// off. The lab (3 Gbit/s, 74 ms, 1% loss, 3000 light users, 8 downloads):
+// every striped sub's link sat app-limited at ~1.6 MB unacked with nothing
+// unsent — window-bound on 2 MiB, each loss stalling in-order delivery a round
+// trip or two, ~70 Mbit/s a sub, 1.2 Gbit/s for the 8. Stripe subs ride links
+// no user rides (stripeAlone), and the kharej gate still cuts their number
+// when the path queues, so a larger window there does not sit ahead of a
+// light user. The primary keeps 2 MiB.
+var stripeSubWin = stripeSubWinFromEnv(os.Getenv("HS2_STRIPE_SUB_WIN_MB"))
+
+func stripeSubWinFromEnv(v string) int {
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n <= 2 {
+		return 0
+	}
+	return min(n, 8) << 20 // within the session's 8 MiB receive bucket
+}
+
+// stripeSubWinLocked (Iran, under m.mu): s just joined the stripe.
+func (m *mConn) stripeSubWinLocked(s *msub) {
+	if stripeSubWin == 0 || smuxAutoWin == nil || !m.iran {
+		return
+	}
+	var st any = s.rw
+	if ms, ok := s.rw.(*mconnSub); ok {
+		st = ms.stream
+	}
+	if o, ok := st.(interface{ SetOffWindow(int) }); ok {
+		o.SetOffWindow(stripeSubWin)
+		stripeSubWinN.Add(1)
+	}
+}
+
+// stripeSubWinN: stripe subs given HS2_STRIPE_SUB_WIN_MB (status aw_sub_win).
+var stripeSubWinN atomic.Int64
+
 func (m *mConn) subsAutoWinLocked(on bool) {
 	for _, s := range m.subs {
 		if s.retired || s.dead {
@@ -202,3 +240,6 @@ func (m *mConn) subsAutoWinLocked(on bool) {
 		}
 	}
 }
+
+// StripeSubWinN: stripe subs given HS2_STRIPE_SUB_WIN_MB so far.
+func StripeSubWinN() int64 { return stripeSubWinN.Load() }

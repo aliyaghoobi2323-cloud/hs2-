@@ -363,6 +363,7 @@ func (m *mConn) openStripe(avoid []any, raw bool) {
 func (m *mConn) stripeJoinLocked(s *msub) {
 	s.stripe = true
 	m.stN++
+	m.stripeSubWinLocked(s) // HS2_STRIPE_SUB_WIN_MB (smux_autowin.go)
 	s.lastHole = time.Now() // it lacks what was sent before it joined
 	c := getChunk(mRecStripe)
 	s.push(c)

@@ -332,7 +332,7 @@ func TestAutoWindowMixedPeers(t *testing.T) {
 // out after half of it was read (upstream's bytes); with it on, the first
 // update still carries the base window.
 func TestAutoWindowOffWireUnchanged(t *testing.T) {
-	for _, mode := range []string{"off", "on", "on-then-SetAutoWindowOff"} {
+	for _, mode := range []string{"off", "on", "on-then-SetAutoWindowOff", "SetOffWindow"} {
 		on := mode == "on"
 		var aw *AutoWindow
 		if mode != "off" {
@@ -389,6 +389,10 @@ func TestAutoWindowOffWireUnchanged(t *testing.T) {
 		if mode == "on-then-SetAutoWindowOff" {
 			st.SetAutoWindowOff()
 		}
+		if mode == "SetOffWindow" {
+			st.SetAutoWindowOff()
+			st.SetOffWindow(128 << 10)
+		}
 		for i := 0; i < 12; i++ {
 			if _, err := io.ReadFull(st, buf); err != nil {
 				t.Fatal(err)
@@ -413,6 +417,14 @@ func TestAutoWindowOffWireUnchanged(t *testing.T) {
 			// base window, every 16 KiB (64 KiB / 4)
 			if len(upds) < 6 || upds[0] != [2]uint32{16 << 10, 64 << 10} {
 				t.Fatalf("on: %v", upds)
+			}
+			continue
+		}
+		if mode == "SetOffWindow" {
+			// the larger fixed window, every half of it
+			w := [][2]uint32{{16 << 10, 128 << 10}, {80 << 10, 128 << 10}, {144 << 10, 128 << 10}}
+			if len(upds) != len(w) || upds[0] != w[0] || upds[1] != w[1] || upds[2] != w[2] {
+				t.Fatalf("%s: got %v want %v", mode, upds, w)
 			}
 			continue
 		}

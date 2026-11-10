@@ -366,7 +366,8 @@ type streamAW struct {
 	tickRead   uint32
 	tickAt     time.Time
 	closed     bool
-	off        bool // SetAutoWindowOff: upstream rules
+	off        bool   // SetAutoWindowOff: upstream rules
+	offWin     uint32 // SetOffWindow: the fixed window while off (0: MaxStreamBuffer)
 
 	recent  [awRecent]time.Duration // the last probe samples (queue rule)
 	nRecent int
@@ -396,6 +397,14 @@ func newStreamAW(cfg *AutoWindow, base int) *streamAW {
 func (s *Stream) awConsumed(n uint32) (uint32, uint32) {
 	a := s.aw
 	if a.off { // upstream, byte for byte
+		if w := a.offWin; w > 0 {
+			// SetOffWindow: the same rule with a larger fixed window
+			if s.incr >= w/2 || s.numRead == n || (a.pendingUPD && n > 0) {
+				s.incr, a.pendingUPD = 0, false
+				return s.numRead, w
+			}
+			return 0, 0
+		}
 		if s.incr >= uint32(s.sess.config.MaxStreamBuffer/2) || s.numRead == n {
 			s.incr = 0
 			return s.numRead, 0
@@ -869,6 +878,28 @@ func min64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+// SetOffWindow sets the fixed window a stream advertises while its adaptive
+// window is off (SetAutoWindowOff), n bytes (0: MaxStreamBuffer, upstream's).
+// Used for hs2's striped mconn subs on Iran's side: alone on their links (no
+// light user rides them), their in-order delivery stalls a round trip or two
+// at every loss, so a 2 MiB window moved ~70-100 Mbit/s per sub at 1% loss.
+// The next read sends the new window. The session's receive bucket is not
+// raised: n should stay within it. No-op without AutoWindow.
+func (s *Stream) SetOffWindow(n int) {
+	if s.aw == nil || n < 0 {
+		return
+	}
+	s.bufferLock.Lock()
+	a := s.aw
+	if uint32(n) != a.offWin {
+		a.offWin = uint32(n)
+		if a.off {
+			a.pendingUPD = true
+		}
+	}
+	s.bufferLock.Unlock()
 }
 
 // SetAutoWindowOn undoes SetAutoWindowOff: the stream starts over from its

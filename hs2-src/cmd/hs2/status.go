@@ -333,6 +333,7 @@ type liveStatus struct {
 	AWCeilCuts    uint64 `json:"aw_ceil_cuts,omitempty"`
 	AWUsedPeakMiB int64  `json:"aw_used_peak_mib,omitempty"`
 	AWStreams     int    `json:"aw_streams,omitempty"`
+	AWSubWin      int64  `json:"aw_sub_win,omitempty"` // HS2_STRIPE_SUB_WIN_MB: stripe subs given the larger window
 }
 
 // fillAutoWin copies the smux autowin budget counters.
@@ -343,6 +344,7 @@ func fillAutoWin(ls *liveStatus) {
 	}
 	ls.AWGrows, ls.AWQueueCuts, ls.AWNeighCuts = s.Grows, s.QueueCuts, s.NeighborCuts
 	ls.AWShareCuts, ls.AWCeilCuts, ls.AWUsedPeakMiB, ls.AWStreams = s.ShareCuts, s.CeilCuts, s.Peak>>20, s.Streams
+	ls.AWSubWin = engine.StripeSubWinN()
 }
 
 // fillStripe copies the stripe's diagnostics (HS2_MCONN_STRIPE).
