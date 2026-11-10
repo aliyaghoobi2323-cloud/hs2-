@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -179,7 +180,7 @@ func checkTarget(target, sni string) int {
 	t0 := time.Now()
 	d := &net.Dialer{Timeout: 8 * time.Second}
 	c, err := tls.DialWithDialer(d, "tcp", target, &tls.Config{ServerName: sni, NextProtos: []string{"h2", "http/1.1"},
-		CurvePreferences: []tls.CurveID{tls.X25519}, MinVersion: tls.VersionTLS12})
+		CurvePreferences: []tls.CurveID{tls.X25519}, MinVersion: tls.VersionTLS12, InsecureSkipVerify: true})
 	if err != nil {
 		fmt.Printf("BAD   TLS to %s (sni %s): %v\n", target, sni, err)
 		return 1
@@ -199,10 +200,19 @@ func checkTarget(target, sni string) int {
 		crt := cs.PeerCertificates[0]
 		fmt.Printf("INFO  cert SANs %v, issuer %q, chain %d certs\n", crt.DNSNames, crt.Issuer.CommonName, len(cs.PeerCertificates))
 		if err := crt.VerifyHostname(sni); err != nil {
-			fmt.Printf("BAD   certificate does not cover %s\n", sni)
+			fmt.Printf("BAD   certificate does not cover %s (%v)\n", sni, err)
 			bad++
 		} else {
-			fmt.Printf("OK    certificate covers %s (verified chain: %v)\n", sni, len(cs.VerifiedChains) > 0)
+			fmt.Printf("OK    certificate covers %s\n", sni)
+		}
+		inter := x509.NewCertPool()
+		for _, x := range cs.PeerCertificates[1:] {
+			inter.AddCert(x)
+		}
+		if _, err := crt.Verify(x509.VerifyOptions{DNSName: sni, Intermediates: inter}); err != nil {
+			fmt.Printf("WARN  chain does not verify against the system roots: %v\n", err)
+		} else {
+			fmt.Println("OK    chain verifies against the system roots")
 		}
 	}
 	fmt.Printf("INFO  handshake %v\n", hs.Round(time.Millisecond))
