@@ -321,3 +321,55 @@ profile is still refused; per-IP reality in lb refused).
   key-share group (our crypto/tls picks X25519MLKEM768 when offered) should
   follow the target's choice.
 * Doctor: run `checkTarget` (`hs2 reality check-target`) from `hs2 doctor`.
+
+### 6.5 Phase-2 validation (lab, 2026-11-11)
+
+* Lab 3 on HEAD 02847b4b: `go vet ./...` clean; full engine suite
+  (`-timeout 40m`) ok (601 s); tlscarrier, cmd/hs2, reality, envdef ok.
+* Lab 1, `labslot.sh --all`, u21cmp.sh prod env, l3mtcp **reverse**,
+  3000mbit/40ms/100ms queue/0.01% loss, 150 links, crowd 3000, T=20 s, 6
+  interleaved rotated reps per case. Same binary in both arms: T = tls front,
+  R = reality front on both sides (the Iran listener's target = a local
+  `openssl s_server` in its netns). Status file of the Iran listener during R
+  runs: `"reality": {"authed": 150, "fallback_conns": 0}` (every link through
+  the reality handshake).
+
+| case  | metric | T (tls) | R (reality) | R-T | Welch t |
+|-------|--------|--------:|------------:|----:|--------:|
+| light | call p99 ms  | 179.7 | 191.1 | +6.3% | +1.28 |
+| light | game p99 ms  | 135.4 | 139.4 | +3.0% | +0.46 |
+| light | crowd p99 ms | 149.0 | 150.7 | +1.1% | +0.81 |
+| light | echo p99 ms  | 102.2 | 121.8 | +19.1% | +2.21 |
+| down1 | Mbps         | 757.2 | 697.4 | -7.9% | -0.66 |
+| down1 | ping p99 ms  | 130.2 | 109.9 | -15.6% | -2.04 |
+| down8 | Mbps         | 1381.5 | 1479.8 | +7.1% | +1.69 |
+| down8 | call p99 ms  | 196.5 | 189.5 | -3.6% | -0.62 |
+| up8   | Mbps         | 1639.7 | 1564.7 | -4.6% | -1.18 |
+| up8   | call p99 ms  | 181.3 | 192.4 | +6.1% | +0.71 |
+
+  Links 150/150 and 0 failures in all 48 runs. Of 24 comparisons the two with
+  |t| > 2 point in opposite directions (echo p99 light worse, ping p99 down1
+  better): noise, as in the phase-1 A/A. The front only changes link
+  establishment; the data path (crypto/tls TLS 1.3 under smux) is the same.
+* Direct mode (kharej listens with the reality front, Iran dials): light and
+  down8 came up 150/150 with 0 failures.
+* Active-probe battery (`probe30-battery.py`, lab 2): nginx 1.24 directly vs
+  an hs2 reality listener whose target is that nginx: all 19 probe classes
+  (paths, keep-alive, plain HTTP on the TLS port, random bytes, bad methods,
+  long headers/URI, no SNI, ALPN, partial request stall 60 s, idle 60 s)
+  identical in status line, headers, length, close kind and timing.
+* `hs2 reality check-target 127.0.0.1:18443 probe.test` on the lab nginx:
+  TLS 1.3 / X25519 OK, ALPN, SANs (reported BAD: the lab cert has only a CN),
+  chain WARN (self-signed), handshake 2 ms, `HTTP/1.1 200 OK`.
+
+### 6.6 Known limits (for phase 3+)
+
+* Every connection dials the target at accept (Xray-style, so a prober's
+  bytes reach the target as they arrive): an authenticated link also opens
+  and drops one target connection. No cap yet on concurrent fallback splices.
+* A man in the middle that holds a client's hello and sends it first gets our
+  ServerHello (Go's) instead of the target's before the replay cache can
+  help; it cannot finish the handshake. Same limit as Xray REALITY.
+* A hello that stalls part-way is spliced after 10 s (target already has the
+  bytes, its own timeout applies); target bytes that arrive before the hello
+  is complete are relayed only once the decision is made.
