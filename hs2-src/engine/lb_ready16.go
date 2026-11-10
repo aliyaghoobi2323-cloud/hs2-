@@ -32,6 +32,9 @@ func fastRecoverFold(q *q2Path, raw, okBar float64, now time.Time) bool {
 	if !lbFastRecover {
 		return false
 	}
+	if q.cut && q.okRuns == 0 {
+		q.fastResets = 0 // a new cut episode: log its first reset again
+	}
 	if raw < okBar {
 		q.okRuns++
 	} else {

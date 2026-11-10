@@ -207,7 +207,7 @@ func (j *q2Judge) update(now time.Time, dt time.Duration, rs map[string]q2Readin
 			}
 			q.queueMs += a * (r.queueMs - q.queueMs)
 		}
-		if fastRecoverFold(q, r.loss, okBar0, now) {
+		if fastRecoverFold(q, r.loss, okBar0, now) && q.fastResets == 1 {
 			j.log("lb auto2: path %s fast recovery: raw loss %.1f%% under %.1f%% %d readings in a row — smoothed loss reset", k, 100*r.loss, 100*okBar0, q.okRuns)
 		}
 		q.fail = r.fail
@@ -1058,7 +1058,10 @@ func (j *q2Judge) forceCut(k, why string, now time.Time) {
 		why = "the dialing side cut it"
 	}
 	q.cutWhy = why
-	if !q.uncutAt.IsZero() && now.Sub(q.uncutAt) < lb2FlapWin && q.hold > 0 {
+	if lbFastRecover && q.okRuns >= lbFastOKRuns && q.hold > 0 {
+		// HS2_LB_FAST_RECOVER: our own raw readings are still good — the
+		// dialing side's verdict lags ours; not a new cut, the hold stays.
+	} else if !q.uncutAt.IsZero() && now.Sub(q.uncutAt) < lb2FlapWin && q.hold > 0 {
 		q.hold = min(2*q.hold, lb2HoldMax)
 	} else {
 		q.hold = lb2Hold
