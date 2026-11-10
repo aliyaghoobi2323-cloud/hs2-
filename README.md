@@ -9,6 +9,12 @@ smux stream over a pool of real TLS 1.3 links (Chrome fingerprint, real
 certificate, active-probe resistance). The kharej server opens its own
 connection to the panel. There is never TCP inside TCP.
 
+**Operations.** Two read-only helpers for day-to-day running: the **server doctor**
+(`hs2 doctor --deep [--lang fa]`, menu **9) Server doctor**) says what is wrong on
+this server and what to do, and **alerts** (`hs2 alert`, tunnel manager
+**a) Alerts (Telegram)**) watch each tunnel and send short alerts plus a daily
+summary. See [Managing](#managing).
+
 ## What it does
 
 - Opens user ports on the Iran server and forwards them to a panel inbound on
@@ -1055,7 +1061,7 @@ made light users slower (crowd p95 +2 to +15 ms, calls or ping p99 +7 to
 ## Managing
 
 ```bash
-hs2-menu           # 3 = tunnel manager, 4 = status/logs, 5 = upgrade, 8 = uninstall
+hs2-menu           # 3 = tunnel manager, 4 = status/logs, 5 = upgrade, 8 = uninstall, 9 = server doctor
 systemctl status hs2
 journalctl -u hs2 -f
 ```
