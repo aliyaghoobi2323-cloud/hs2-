@@ -46,7 +46,7 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   defaults and rejections, multi-tunnel names/ifaces/subnets/ports,
   pre-flight fixtures, non-interactive create incl. dry run and removal of
   an unhealthy unit, wizard abort and answers, SSH guard, best local IP),
-  `install/tests/tunnels_menu_test.sh` (16 pty checks).
+  `install/tests/tunnels_menu_test.sh` (15 pty checks).
 - `install/tests/lb_menu_test.sh`: the three "live table" checks were stale
   since 9a6a42ac (the live view gained AUTO/NEW columns and "(…, the config)"
   in its last-load line); expectations updated, 38/38 pass with go on PATH.
