@@ -204,17 +204,30 @@ func stripeSubWinFromEnv(v string) int {
 	return min(n, 8) << 20 // within the session's 8 MiB receive bucket
 }
 
+// stripeSubDiv: HS2_STRIPE_SUB_DIV (Iran, 0/off by default, 3-16): a stripe
+// sub's window update every 1/N of its window instead of every half — the
+// sender releases N times smaller bursts (each update let a window-bound sub
+// burst 1 MiB at BBR's pacing rate, ~1.2 Gbit/s a link, into the path the
+// kharej gate watches), and keeps more of the window in flight.
+var stripeSubDiv = func() int {
+	n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("HS2_STRIPE_SUB_DIV")))
+	if err != nil || n <= 2 {
+		return 0
+	}
+	return min(n, 16)
+}()
+
 // stripeSubWinLocked (Iran, under m.mu): s just joined the stripe.
 func (m *mConn) stripeSubWinLocked(s *msub) {
-	if stripeSubWin == 0 || smuxAutoWin == nil || !m.iran {
+	if stripeSubWin == 0 && stripeSubDiv == 0 || smuxAutoWin == nil || !m.iran {
 		return
 	}
 	var st any = s.rw
 	if ms, ok := s.rw.(*mconnSub); ok {
 		st = ms.stream
 	}
-	if o, ok := st.(interface{ SetOffWindow(int) }); ok {
-		o.SetOffWindow(stripeSubWin)
+	if o, ok := st.(interface{ SetOffWindow(int, int) }); ok {
+		o.SetOffWindow(stripeSubWin, stripeSubDiv)
 		stripeSubWinN.Add(1)
 	}
 }

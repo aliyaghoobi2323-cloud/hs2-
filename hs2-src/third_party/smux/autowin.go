@@ -368,6 +368,7 @@ type streamAW struct {
 	closed     bool
 	off        bool   // SetAutoWindowOff: upstream rules
 	offWin     uint32 // SetOffWindow: the fixed window while off (0: MaxStreamBuffer)
+	offDiv     uint32 // SetOffWindow: an update every offWin/offDiv read while off (0: 2)
 
 	recent  [awRecent]time.Duration // the last probe samples (queue rule)
 	nRecent int
@@ -397,9 +398,14 @@ func newStreamAW(cfg *AutoWindow, base int) *streamAW {
 func (s *Stream) awConsumed(n uint32) (uint32, uint32) {
 	a := s.aw
 	if a.off { // upstream, byte for byte
-		if w := a.offWin; w > 0 {
-			// SetOffWindow: the same rule with a larger fixed window
-			if s.incr >= w/2 || s.numRead == n || (a.pendingUPD && n > 0) {
+		if a.offWin > 0 || a.offDiv > 2 {
+			// SetOffWindow: the same rule with its fixed window and cadence
+			w := a.offWin
+			if w == 0 {
+				w = uint32(s.sess.config.MaxStreamBuffer)
+			}
+			d := max(a.offDiv, 2)
+			if s.incr >= w/d || s.numRead == n || (a.pendingUPD && n > 0) {
 				s.incr, a.pendingUPD = 0, false
 				return s.numRead, w
 			}
@@ -886,15 +892,17 @@ func min64(a, b int64) int64 {
 // light user rides them), their in-order delivery stalls a round trip or two
 // at every loss, so a 2 MiB window moved ~70-100 Mbit/s per sub at 1% loss.
 // The next read sends the new window. The session's receive bucket is not
-// raised: n should stay within it. No-op without AutoWindow.
-func (s *Stream) SetOffWindow(n int) {
-	if s.aw == nil || n < 0 {
+// raised: n should stay within it. div > 2: a window update every n/div read
+// instead of every half (smaller releases at the sender: less burst).
+// No-op without AutoWindow.
+func (s *Stream) SetOffWindow(n, div int) {
+	if s.aw == nil || n < 0 || div < 0 {
 		return
 	}
 	s.bufferLock.Lock()
 	a := s.aw
-	if uint32(n) != a.offWin {
-		a.offWin = uint32(n)
+	if uint32(n) != a.offWin || uint32(div) != a.offDiv {
+		a.offWin, a.offDiv = uint32(n), uint32(div)
 		if a.off {
 			a.pendingUPD = true
 		}
