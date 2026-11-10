@@ -173,7 +173,7 @@ func TestFrontMuxDispatchAndReload(t *testing.T) {
 	fc := parseFC(t, lbFrontConf(t, priv, "", ""))
 	got := make(chan string, 4)
 	def := &tagAcc{name: "default", got: got}
-	m := newFrontMux(fc, def, &tlscarrier.Server{SharedKey: []byte("0123456789abcdef0123456789abcdef")}, t.Logf)
+	m := newFrontMux(fc, def, &tlscarrier.Server{SharedKey: []byte("0123456789abcdef0123456789abcdef")}, quietLog)
 	defer curFrontMux.Store(nil)
 	tab := *m.byIP.Load()
 	if len(tab) != 2 || tab["10.0.0.2"].kind != "reality" || tab["10.0.0.3"].kind != "both" || tab["10.0.0.3"].rs.TLS == nil {
@@ -223,14 +223,14 @@ func TestReloadLBSwitchesFronts(t *testing.T) {
 	raw := lbFrontConf(t, priv, "", "")
 	os.WriteFile(path, []byte(raw), 0o600)
 	fc := parseFC(t, raw)
-	m := newFrontMux(fc, &tagAcc{got: make(chan string, 1)}, &tlscarrier.Server{SharedKey: []byte("0123456789abcdef0123456789abcdef")}, t.Logf)
+	m := newFrontMux(fc, &tagAcc{got: make(chan string, 1)}, &tlscarrier.Server{SharedKey: []byte("0123456789abcdef0123456789abcdef")}, quietLog)
 	defer curFrontMux.Store(nil)
 	oldPath := configPath
 	configPath = path
 	defer func() { configPath = oldPath }()
 	lbRunMu.Lock()
 	prev := lbRun
-	lbRun = &lbRuntime{fc: fc, logf: t.Logf}
+	lbRun = &lbRuntime{fc: fc, logf: quietLog}
 	lbRunMu.Unlock()
 	defer func() { lbRunMu.Lock(); lbRun = prev; lbRunMu.Unlock() }()
 	os.WriteFile(path, []byte(strings.Replace(raw, `"kind":"both"`, `"kind":"reality"`, 1)), 0o600)
@@ -239,3 +239,7 @@ func TestReloadLBSwitchesFronts(t *testing.T) {
 		t.Fatalf("after SIGHUP reload: %s", k)
 	}
 }
+
+// quietLog: the size-mirror goroutines may log after a test ends (t.Logf
+// would panic then).
+func quietLog(string, ...any) {}
