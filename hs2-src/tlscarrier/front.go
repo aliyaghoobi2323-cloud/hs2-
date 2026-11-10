@@ -49,6 +49,12 @@ type FrontProfile struct {
 	// Fallback (splice to Target) limits for unauthenticated connections.
 	FallbackMaxBytes int64 `json:"fallback_max_bytes,omitempty"` // 0: unlimited
 	FallbackRateBps  int64 `json:"fallback_rate_bps,omitempty"`  // 0: unlimited
+	// reality (phase 2): the splice limits are "free up to FallbackMaxBytes per
+	// direction, then FallbackRateBps", 0 = the defaults (256 KB, 64 KB/s);
+	// FallbackMaxSeconds caps a spliced connection (0 = 600 s).
+	FallbackMaxSeconds int64 `json:"fallback_max_seconds,omitempty"`
+	// ForceTarget accepts a target on a multi-tenant CDN (refused otherwise).
+	ForceTarget bool `json:"force_target,omitempty"`
 }
 
 // NormKind is the profile's kind with "" meaning "tls".
@@ -67,15 +73,17 @@ func (p *FrontProfile) IsDefault() bool {
 	}
 	return p.NormKind() == FrontTLS && p.Target == "" && len(p.ServerNames) == 0 &&
 		p.PublicKey == "" && p.PrivateKey == "" && len(p.ShortIDs) == 0 &&
-		p.FallbackMaxBytes == 0 && p.FallbackRateBps == 0
+		p.FallbackMaxBytes == 0 && p.FallbackRateBps == 0 && p.FallbackMaxSeconds == 0 && !p.ForceTarget
 }
 
-// Validate checks a profile. Phase 1 accepts only the tls kind.
+// Validate checks a profile: tls, or reality (phase 2) with its fields.
 func (p *FrontProfile) Validate() error {
 	switch k := p.NormKind(); k {
 	case FrontTLS:
 		return nil
-	case FrontReality, FrontBoth:
+	case FrontReality:
+		return p.validateReality()
+	case FrontBoth:
 		return fmt.Errorf("front %q is not supported by this build yet", k)
 	default:
 		return fmt.Errorf("unknown front kind %q", k)
@@ -136,6 +144,8 @@ func DialerFor(p *FrontProfile) (Dialer, error) {
 	switch p.NormKind() {
 	case FrontTLS:
 		return TLSFront{}, nil
+	case FrontReality:
+		return RealityFront{}, nil
 	}
 	return nil, fmt.Errorf("%w: %q", ErrFrontUnsupported, p.NormKind())
 }

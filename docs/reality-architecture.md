@@ -19,7 +19,7 @@ FRONT variants:
 | kind      | what the censor sees | status |
 |-----------|----------------------|--------|
 | `tls`     | own cert/domain, uTLS Chrome ClientHello, nginx-identical cover (tlscarrier) | phase 1 (today's code, wrapped) |
-| `reality` | SNI of a real site; hidden signal in the ClientHello session_id (x25519 ECDH with the listener's static key + short id); temporary cert verified by the shared secret; unauthenticated connections spliced byte-for-byte to the real target, with byte/rate limits | later |
+| `reality` | SNI of a real site; hidden signal in the ClientHello session_id (x25519 ECDH with the listener's static key + short id); temporary cert verified by the shared secret; unauthenticated connections spliced byte-for-byte to the real target, with byte/rate limits | phase 2 (per-tunnel `front`) |
 | `both`    | hybrid on one port: per-ClientHello classification (reality signal present -> reality, else the tls front) | later |
 
 Front profiles are per IP in the `lb` section, announced by the listening side
@@ -202,3 +202,119 @@ Binaries built from source with the same Go: base `5ae865ee` vs `reality35`.
 * Active-probe battery (`probe30-battery.py`, 20 probes incl. slow/idle) on a
   base vs refactored listener with the same config: identical results (status
   line, headers, length, close kind, timing).
+
+## 6. Phase 2: the reality front (per tunnel)
+
+Code: `tlscarrier/reality.go` (dial + listen + fallback + counters),
+`cmd/hs2/reality_front.go` (config block, validation, wiring, `hs2 reality
+keygen`, `hs2 reality check-target`). Default stays `tls`; reality only when a
+tunnel has `"front": {"kind":"reality", ...}`.
+
+### 6.1 Config
+
+```
+"front": {"kind": "reality",
+  "target": "www.site.ir:443",            listener: the real site (host:port)
+  "server_names": ["www.site.ir"],         SNIs accepted (listener) / sent (dialer: the path's sni if listed, else the first)
+  "private_key": "...",                    listener only (hs2 reality keygen); read from the local file only
+  "public_key": "...",                     dialer
+  "short_ids": ["61bbbd5ea44185c5"],       hex, 0..16 digits; the dialer sends the first
+  "fallback_max_bytes": 262144, "fallback_rate_bps": 65536, "fallback_max_seconds": 600,   0 = these defaults
+  "force_target": false}                   accept a multi-tenant-CDN target / foreign names
+```
+
+Who needs what: the TLS listener of the links (direct: kharej `mode:listen`;
+reverse: Iran `mode:dial` + `reverse`) needs `private_key` + `target`; the
+dialer needs `public_key`. Carriers mtcp / l3mtcp / tls (the front is below
+them). Load-time checks (`validateFront`, also in `hs2 check`): the generic
+profile check; a target or server name on a multi-tenant CDN (the
+`multiTenantCDN` list of doctor_deep.go: Cloudflare, Fastly, Akamai,
+CloudFront, Google, Azure CDN, CDN77, Gcore, Bunny...) is refused unless
+`force_target`; server names must be the target host, a subdomain or a parent
+of it (IP targets skip this). `FrontProfile.PrivateKey` keeps `json:"-"`:
+`fileConfig.UnmarshalJSON` copies `front.private_key` from THIS side's file
+only, so an announced profile can never carry or leak one. lb per-IP reality
+fronts are still refused (phase 3); an lb path without its own front uses the
+tunnel's (`pathFront`).
+
+### 6.2 Crypto
+
+Dial (`RealityFront.DialFront`): the uTLS `clientHello` preset (Chrome 133,
+same as the tls front; no session resumption), `BuildHandshakeState`, then
+
+```
+eph     = KeyShareKeys.Ecdhe (the 0x001d share; else the hybrid's X25519 part)
+shared  = X25519(eph, listener static public)
+authKey = HKDF-SHA256(shared, salt = client_random[0:20], info "hs2-reality-v1"), 32 B
+plain   = [ver=1][0 0 0][unix time u32 BE][short_id 8]                    16 B
+sid     = AES-256-GCM(authKey).Seal(nonce = client_random[20:32], plain,
+          aad = the ClientHello handshake message with session_id zeroed)  32 B
+```
+
+written into the hello's 32-byte session_id (`Raw[39:71]`). Every byte of the
+hello is authenticated (AAD), so a modified hello fails. Then a normal TLS 1.3
+handshake with the listener; `VerifyPeerCertificate` accepts only a leaf with
+extension 1.3.6.1.4.1.55738.1.1 = OCTET STRING(HMAC-SHA256(authKey,
+"hs2-reality-cert" || SPKI)); TLS 1.3 CertificateVerify proves the listener
+holds that key. No CA. Then the unchanged tunnel auth (`makeClientAuth` /
+`readServerProof`, tls-exporter bound, mutual): a reality key without the
+tunnel's shared key gets nothing.
+
+Listen (`RealityServer.AcceptFront`): dial the target at once (5 s) while
+reading the ClientHello (deadline 10 s, <= 32 KB, reassembled across records);
+client bytes are forwarded to the target as they arrive. Garbage is detected
+from the first bytes (record type 22, version 3, handshake type 1) and spliced
+at once. For a complete hello: SNI in server_names, 32-byte session_id, X25519
+share(s) (0x001d, else the X25519MLKEM768 tail) -> AEAD open -> version ->
+|now - time| <= 90 s -> known short_id -> replay cache (`replayMem`, 5 min >=
+the +-90 s window, keyed by the sealed session_id). Pass: the target conn is
+dropped and crypto/tls (TLS 1.3 only, ALPN h2/http1.1, no tickets) runs over
+the already-read bytes + the socket with a throw-away cert (a per-listener
+ECDSA P-256 key; per connection a cert carrying the tag, CN/SAN = the SNI) ->
+tunnel auth -> `onTunnel`. Fail: `fallback` splices the whole connection byte
+for byte (the already-read bytes first), never decrypted or altered; per
+direction free up to `fallback_max_bytes`, then `fallback_rate_bps`;
+`fallback_max_seconds` deadline on both sockets. Target unreachable -> the
+client conn just closes.
+
+Counters (`tlscarrier.RealityStatsNow`, status file `"reality"`): `authed`,
+`fallback_conns`, `fallback_bytes`, `rejected{reason}` with reasons
+not_hello, read, timeout, sni, no_session_id, no_x25519, signal (AEAD),
+version, time, short_id, replay, target_dial, cert, handshake, tunnel_auth,
+tunnel_replay.
+
+### 6.3 Tests
+
+`tlscarrier/reality_test.go`: the tunnel works (both short ids); rejects with
+the right reason and the target's answer for a wrong public key, wrong short
+id, wrong SNI, client clock +-100 s (60 s passes), a plain Chrome hello
+(random session_id); an authenticated hello captured and replayed -> `replay`;
+tampered at the session_id, the random and the last extension byte ->
+rejected; the bytes reach the target exactly. Probe transcripts (Chrome hellos
+with right/wrong SNI, plain HTTP, a truncated record, garbage): the target
+receives exactly what the prober sent and the prober exactly what the target
+answered. A real TLS target: a standard TLS client gets the target's own
+certificate and body through the listener. Fallback limits (400 KB with 64 KB
+free at 256 KB/s = about 1.3 s) and the max duration. A tls-front dial never
+authenticates on a reality listener. `cmd/hs2/reality_front_test.go`: CDN
+target/name refused (unless forced), foreign server names, carrier, missing
+keys per side (direct/reverse), private key read from the local file only.
+Phase-1 tests adjusted (reality now has a dialer; an incomplete reality
+profile is still refused; per-IP reality in lb refused).
+
+### 6.4 Phase-3 hooks
+
+* `lbIP.Front`: drop the "per lb IP is not supported" refusal in
+  `lbSideWeights`; build one `RealityServer` per local IP (`listenLB` + a
+  per-IP Acceptor, like `certSelector`).
+* Announcement: `lbAnnouncedFront` already sends the profile without the
+  private key; the dialer's `LBPath.Front` then carries public key, names and
+  short ids; `pathFront` falls back to the tunnel's front.
+* `both`: peek the hello (`parseRealityHello`) and dispatch: valid signal ->
+  `RealityServer.serveTunnel`, else the tls `Server.Handle` on a prefixConn.
+* Size mirroring: `RealityServer.CertPad` pads the throw-away cert (private
+  extension 1.3.6.1.4.1.55738.1.2); fill it from a cached fetch of the
+  target's real chain size (every few hours). Not wired yet. The ServerHello
+  key-share group (our crypto/tls picks X25519MLKEM768 when offered) should
+  follow the target's choice too.
+* Doctor: run `checkTarget` (`hs2 reality check-target`) from `hs2 doctor`.

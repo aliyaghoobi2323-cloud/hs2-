@@ -105,6 +105,9 @@ type fileConfig struct {
 	RemoteStatic string `json:"remote_static"`
 	PSK          string `json:"psk"`
 
+	// link front (reality_front.go): absent = tls (today); "kind":"reality".
+	Front *tlscarrier.FrontProfile `json:"front,omitempty"`
+
 	// multipath load balancing (lb.go). Absent = off.
 	LB *lbConfig `json:"lb,omitempty"`
 
@@ -122,9 +125,18 @@ func (fc *fileConfig) UnmarshalJSON(b []byte) error {
 	}
 	var probe struct {
 		MaxLinks *int `json:"max_links"`
+		Front    *struct {
+			PrivateKey string `json:"private_key"`
+		} `json:"front"`
 	}
 	_ = json.Unmarshal(b, &probe) // the full decode above already validated b
 	fc.maxLinksSet = probe.MaxLinks != nil
+	// The front's private key is read from THIS side's config only: the
+	// profile type never decodes it (an announced profile cannot carry one)
+	// and never encodes it.
+	if probe.Front != nil && fc.Front != nil {
+		fc.Front.PrivateKey = probe.Front.PrivateKey
+	}
 	return nil
 }
 
@@ -239,6 +251,8 @@ func main() {
 		checkCmd(os.Args[2:])
 	case "doctor":
 		doctorCmd(os.Args[2:])
+	case "reality":
+		realityCmd(os.Args[2:])
 	case "status":
 		statusCmd(os.Args[2:])
 	case "tune":
@@ -353,6 +367,9 @@ func runCmd(args []string) {
 		log.Printf("egress: all tunnel connections will leave from %s", fc.BindLocalIP)
 	}
 	if err := validateLB(fc); err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := validateFront(fc); err != nil {
 		log.Fatalf("config: %v", err)
 	}
 	applyDefaults(fc)
@@ -513,14 +530,15 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 			cfg.Advert = setupLB(fc, nil, ln, logf)
 			srv := &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 			srv.BackendFor = coverBackends(fc, logf)
-			cfg.RevServer = srv // the "tls" front's listen side (tlscarrier/front.go)
+			cfg.RevServer = realityAcceptor(fc, srv, logf) // the front's listen side (tlscarrier/front.go)
 			cfg.RevListener = ln
 			logf("stream edge (reverse): listening for kharej links on %s", fc.Addr)
 		} else {
-			cfg.Dialer = engine.NewMTCPDialer(fc.Addr, fc.SNI, key, fc.BindLocalIP)
+			cfg.Dialer = tunnelDialer(fc, key)
 			if lbOn(fc) {
 				lb := newLB(fc, logf)
 				cfg.Dialer = engine.NewLBLinkDialer(lb, func(p engine.LBPath) engine.LinkDialer {
+					p.Front = pathFront(fc, p.Front)
 					return lbPathDialer(p, lbSNIFor(lbCur(fc), p.Remote), key)
 				})
 				cfg.LB = true
@@ -558,17 +576,17 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 		cfg.RevLinks = engine.WarmSize(min, max)
 		// The dial side of the link front (tlscarrier/front.go): "tls" today.
 		cfg.RevDial = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialPathFront(ctx, tlscarrier.DialPath{Addr: fc.Addr, SNI: fc.SNI, BindIP: fc.BindLocalIP, Key: key})
+			return tlscarrier.DialPathFront(ctx, tlscarrier.DialPath{Addr: fc.Addr, SNI: fc.SNI, BindIP: fc.BindLocalIP, Key: key, Profile: tunnelFront(fc)})
 		}
 		cfg.RevDialScout = func() (*tlscarrier.Carrier, error) {
-			return tlscarrier.DialPathFront(ctx, tlscarrier.DialPath{Addr: fc.Addr, SNI: fc.SNI, BindIP: fc.BindLocalIP, Key: key, Connect: 2 * time.Second})
+			return tlscarrier.DialPathFront(ctx, tlscarrier.DialPath{Addr: fc.Addr, SNI: fc.SNI, BindIP: fc.BindLocalIP, Key: key, Connect: 2 * time.Second, Profile: tunnelFront(fc)})
 		}
 		if lbOn(fc) {
 			cfg.LB = true
 			cfg.RevLB = newLB(fc, logf)
 			cfg.Advert = setupLB(fc, cfg.RevLB, nil, logf)
 			cfg.RevDialPath = func(p engine.LBPath, scout bool) (*tlscarrier.Carrier, error) {
-				dp := tlscarrier.DialPath{Addr: p.Addr, SNI: lbSNIFor(lbCur(fc), p.Remote), BindIP: p.Local, Key: key, Profile: p.Front}
+				dp := tlscarrier.DialPath{Addr: p.Addr, SNI: lbSNIFor(lbCur(fc), p.Remote), BindIP: p.Local, Key: key, Profile: pathFront(fc, p.Front)}
 				if scout {
 					dp.Connect = 2 * time.Second
 				}
@@ -588,7 +606,7 @@ func runStream(ctx context.Context, fc fileConfig, withTUN bool, links int) {
 	cfg.Advert = setupLB(fc, nil, ln, logf)
 	srv := &tlscarrier.Server{SharedKey: key, GetCertificate: cs.getCertificate, BackendAddr: streamBackend(fc), Logf: logf}
 	srv.BackendFor = coverBackends(fc, logf)
-	cfg.Server = srv // the "tls" front's listen side (tlscarrier/front.go)
+	cfg.Server = realityAcceptor(fc, srv, logf) // the front's listen side (tlscarrier/front.go)
 	must(engine.RunKharej(ctx, cfg))
 }
 

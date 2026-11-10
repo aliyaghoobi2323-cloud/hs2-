@@ -189,6 +189,9 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 			warn(`"bind_local_ip" has no effect here: this side listens (set the listen IP in "addr")`)
 		}
 	}
+	if err := validateFront(fc); err != nil {
+		bad("%v", err)
+	}
 	if err := validateLB(fc); err != nil {
 		bad("%v", err)
 	} else if lbOn(fc) {

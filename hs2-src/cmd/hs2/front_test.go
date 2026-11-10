@@ -56,11 +56,11 @@ func TestLBFrontConfigPlumbing(t *testing.T) {
 	if n == 0 {
 		t.Fatalf("no path to 10.0.0.2: %v", paths)
 	}
-	// phase 1: reality is refused in the config
+	// an incomplete reality profile is refused (and per-IP reality is phase 3)
 	bad := strings.Replace(raw, `"front":{"kind":"tls"}`, `"front":{"kind":"reality"}`, 1)
 	var fb fileConfig
 	json.Unmarshal([]byte(bad), &fb)
-	if _, _, err := lbSideWeights("local", fb.LB.Kharej, "10.0.0.1", true); err == nil || !strings.Contains(err.Error(), "not supported") {
+	if _, _, err := lbSideWeights("local", fb.LB.Kharej, "10.0.0.1", true); err == nil {
 		t.Fatalf("reality accepted: %v", err)
 	}
 	// and a path with an unsupported front gets a dialer that always fails

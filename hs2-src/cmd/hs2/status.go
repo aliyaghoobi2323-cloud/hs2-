@@ -15,6 +15,7 @@ import (
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/encap"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tune"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/udpcarrier"
 )
@@ -336,6 +337,9 @@ type liveStatus struct {
 	AWSubWin      int64  `json:"aw_sub_win,omitempty"` // HS2_STRIPE_SUB_WIN_MB: stripe subs given the larger window
 	AWHeavySubs   int64  `json:"aw_heavy_subs,omitempty"`   // HS2_STRIPE_AW_HEAVY: subs kept adaptive
 	AWStrictCuts  uint64 `json:"aw_strict_cuts,omitempty"`  // HS2_STRIPE_AW_HEAVY: light-neighbour cuts of those subs
+
+	// Reality front counters (authed links, fallback splices, reject reasons).
+	Reality *tlscarrier.RealityStats `json:"reality,omitempty"`
 }
 
 // fillAutoWin copies the smux autowin budget counters.
@@ -618,6 +622,9 @@ func startStatusWriter(ctx context.Context, fc fileConfig, cfgPath string, stats
 			ls.LB, ls.LBText = s.LB, engine.LBLine(s.LB)
 		}
 		ls.lbStatus = lbStatusNow()
+		if rs := tlscarrier.RealityStatsNow(); fc.Front.NormKind() == tlscarrier.FrontReality || rs.Authed+rs.FallbackConns > 0 || len(rs.Rejected) > 0 {
+			ls.Reality = &rs
+		}
 		if len(s.Paths) > 0 {
 			ls.LBPaths, ls.LBTotal, ls.LBSide = s.Paths, s.PathTotal, s.PathSide
 			ls.LBMode = lbModeName(lbCur(fc))

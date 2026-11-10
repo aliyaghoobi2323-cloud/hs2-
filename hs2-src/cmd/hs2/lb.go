@@ -64,6 +64,9 @@ func lbSideWeights(name string, list []lbIP, prim string, strict bool) (ips []st
 		if err := e.Front.Validate(); err != nil {
 			return nil, nil, fmt.Errorf(`"lb.%s": %s: %v`, name, k, err)
 		}
+		if e.Front.NormKind() != tlscarrier.FrontTLS { // per-IP fronts: phase 3; use the tunnel's "front"
+			return nil, nil, fmt.Errorf(`"lb.%s": %s: front %q per lb IP is not supported by this build yet (set it on the tunnel: "front")`, name, k, e.Front.NormKind())
+		}
 		sum += e.Weight
 		if k == prim {
 			primListed = true
