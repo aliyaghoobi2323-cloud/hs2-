@@ -63,12 +63,12 @@ func (s *Server) newTLSConfig() *tls.Config {
 
 // firstReadTimeout is how long a connection may stay silent after the TLS
 // handshake. A real client sends its auth record at once; this only bounds idle
-// probes. With HS2_COVER_NGINX it is nginx's client_header_timeout (60 s), and
-// the close is quiet — no close_notify, as nginx shuts a timed-out SSL
-// connection down (c->timedout → SSL_set_quiet_shutdown) — so an idle probe
-// times us exactly like the nginx we present as. Without it (the Go-style
-// cover) the old 30 s + close_notify stays. Tunnel links never wait here: the
-// auth record is their first write after the handshake.
+// probes. With HS2_COVER_NGINX it is nginx's client_header_timeout (60 s): a
+// real nginx 1.24 closes a TLS connection that never sent a byte after 60 s
+// with a close_notify (measured side by side in the lab), and so do we — an
+// idle probe times us exactly like the nginx we present as (it was 30 s).
+// Without the key (the Go-style cover) the old 30 s stays. Tunnel links never
+// wait here: the auth record is their first write after the handshake.
 func firstReadTimeout() time.Duration {
 	if CoverNginx {
 		return 60 * time.Second
@@ -164,11 +164,6 @@ func (s *Server) Handle(ctx context.Context, raw net.Conn, onTunnel func(*Carrie
 	n, err := tconn.Read(buf)
 	first := buf[:n]
 	if n == 0 {
-		var ne net.Error
-		if CoverNginx && errors.As(err, &ne) && ne.Timeout() {
-			raw.Close() // nginx's client_header_timeout: quiet SSL shutdown
-			return
-		}
 		tconn.Close()
 		return
 	}
@@ -245,8 +240,8 @@ func (s *Server) forward(ctx context.Context, tconn *tls.Conn, already []byte, b
 		}
 		if n == 0 {
 			// The cover closed without a word (its header timeout on a
-			// stalled or partial request): nginx closes quietly there, with
-			// no close_notify.
+			// stalled or partial request): nginx 1.24 closes quietly there, with
+			// no close_notify (measured side by side in the lab).
 			tconn.NetConn().Close()
 			return
 		}
