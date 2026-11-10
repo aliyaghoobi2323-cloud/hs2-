@@ -257,6 +257,10 @@ func main() {
 		alertCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])
+	case "dashboard":
+		dashboardCmd(os.Args[2:])
+	case "stats":
+		statsCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)

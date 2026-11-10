@@ -1134,6 +1134,64 @@ hs2 config lock | unlock | lock-status         # one admin at a time
 - **Audit log:** `/var/log/hs2-changes.log` (who, tty, unit, action, reason,
   changed keys, result).
 
+### New menu (preview) and live dashboard
+
+The redesigned menu is opt-in until the redesign is finished; the classic
+menu stays the default:
+
+```
+hs2-menu --new        # the new menu        (or HS2_MENU=new hs2-menu)
+hs2-menu --classic    # the classic menu    (or HS2_MENU=classic hs2-menu)
+```
+
+`n` in the classic menu opens the new one and `c` in the new one goes back;
+**9) Menu settings → hs2-menu opens** makes the new menu the default
+(`default_menu=new`). Order of precedence: the flag, then `HS2_MENU`, then
+`menu.conf`, then classic.
+
+Header: `server · N tunnels · users · Mbit · health · active warnings`. Items:
+1) Live dashboard 2) Tunnels 3) Load balancing & IPs 4) Security &
+camouflage 5) Speed & performance 6) Monitoring & alerts 7) Server doctor
+(`hs2 doctor --deep`) 8) Maintenance (upgrade, backup, restore, **change
+history** = `hs2 config history`, **roll back the last change** =
+`hs2 rollback`, status, uninstall) 9) Menu settings. Items 2–5 still open the
+classic screens (marked "[preview]"). Screens that change a config hold the
+admin lock (`hs2 config lock`) while they are open; another admin's lock is
+shown with its owner and can be broken only after a question.
+
+**Menu settings** (`/etc/hs2/menu.conf`, `key=value`): `lang=fa|en` (Persian
+needs a UTF-8 locale; otherwise English is used), `mode=simple|advanced`
+(advanced shows a description under the items and the build stamp; later
+milestones hide expert options in simple mode), `color=on|off`,
+`default_menu=classic|new`, and the optional history sampler below.
+
+**Live dashboard** (`hs2 dashboard`, read-only, never takes the lock):
+
+```
+hs2 dashboard [--lang fa] [--width N] [--color off] [--ascii]   # live, 3 s refresh
+hs2 dashboard --once                                           # one frame
+hs2 dashboard --header                                         # the header line only
+hs2 dashboard --paths                                          # with vs without tunnel ping per LB IP
+```
+
+One block per tunnel (from `/etc/hs2/*.json`, `/run/hs2/*.status.json`,
+`systemctl`): role, mode, carrier, dialing/listening side, state (running /
+starting / stale / stopped / failed / unknown), users, Mbit (down/up per
+direction when LB reports it), links serving/target, link RTT p50/p99, LB
+paths ok/lowered/cut, restarts, active alerts (`/var/lib/hs2/alert-*.json`) and
+a 24 h text sparkline of RTT and Mbit. Keys: `q`/Enter back, `l` logs,
+`d` server doctor, `p` path check (pings each LB IP without the tunnel, ~3 s;
+only on demand). Not a tty: one frame without escape codes. Below 60 columns
+one value per line; without a UTF-8 locale ASCII and English.
+
+**24 h history:** `hs2 stats sample` folds each running tunnel's status into
+hourly aggregates (RTT p50 average, worst p99, Mbit average/peak, peak users)
+kept for 7 days in `/var/lib/hs2/stats-<unit>.json` (a few KB). It is taken
+by the alert check (`hs2 alert`, every 60 s when alerts are on) and,
+optionally, by `hs2-stats.timer` (every 5 min, `Nice=19`; **9) Menu settings
+→ 24 h history sampler**). `hs2 stats show -u <unit>` prints the hours.
+Without either, the dashboard says "no data yet".
+
 ### Alerts (Telegram, optional)
 
 `hs2 alert -c /etc/hs2/config.json` checks one tunnel and sends short alerts.

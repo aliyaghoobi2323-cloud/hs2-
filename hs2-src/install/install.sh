@@ -11,6 +11,7 @@
 #  and "hs2-<name>". The name is chosen where the setup link is made and
 #  travels in the link, with the tunnel's own tun subnet.
 #      hs2-menu                   (this menu, installed locally by setup/upgrade)
+#      hs2-menu --new             (the redesigned menu + live dashboard; preview, --classic = the old one)
 # ============================================================================
 set -euo pipefail
 # Create every file and directory root-only by default (configs hold the tunnel
@@ -5354,9 +5355,289 @@ upgrade(){ # [tunnel]
   info "Tunnel manager: run  hs2-menu  → 3"
 }
 
+# ---------- the new menu (menu redesign M2; opt-in until M7) ----------------
+# `hs2-menu --new` (or HS2_MENU=new, or "default_menu=new" in menu.conf, set
+# from its own Menu settings) opens it; `hs2-menu --classic` / HS2_MENU=classic
+# always opens the classic menu above, which stays the default until the
+# redesign's tests (M7) pass. The new menu is a thin shell: the live dashboard
+# and the header are rendered by `hs2 dashboard`; items 2-5 still open the
+# classic screens (M3-M5 replace them).
+MENU_CONF=$CFG_DIR/menu.conf
+NM_LANG=en; NM_MODE=simple; NM_COLOR=on
+mc_get(){ { sed -n "s/^$1=//p" "$MENU_CONF" 2>/dev/null || true; } | tail -1; }
+mc_set(){ # key value — atomic rewrite, other keys kept
+  local tmp
+  mkdir -p "$(dirname "$MENU_CONF")"
+  tmp=$(mktemp "$MENU_CONF.XXXXXX") || return 1
+  { { grep -v "^$1=" "$MENU_CONF" 2>/dev/null || true; }; echo "$1=$2"; } > "$tmp"
+  chmod 644 "$tmp"; mv -f "$tmp" "$MENU_CONF"
+}
+nm_utf8(){ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 0 ;; esac; return 1; }
+nm_load(){
+  NM_LANG=$(mc_get lang); case "$NM_LANG" in fa|en) ;; *) NM_LANG=fa ;; esac
+  nm_utf8 || NM_LANG=en                       # Persian needs a UTF-8 terminal
+  NM_MODE=$(mc_get mode); case "$NM_MODE" in simple|advanced) ;; *) NM_MODE=simple ;; esac
+  NM_COLOR=$(mc_get color); case "$NM_COLOR" in on|off) ;; *) NM_COLOR=on ;; esac
+  if [ "$NM_COLOR" = off ]; then C_G=; C_R=; C_Y=; C_B=; C_D=; C_0=; fi
+  HS2_DOCTOR_LANG=$NM_LANG
+}
+nm_t(){ if [ "$NM_LANG" = fa ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+nm_pause(){ read -rp "$(nm_t "Press Enter to continue… " "برای ادامه Enter بزنید… ")" _ </dev/tty || true; }
+nm_has_dash(){ [ -x "$BIN" ] && "$BIN" dashboard --header --width 40 >/dev/null 2>&1; }
+nm_dash_flags(){ printf -- '--lang %s' "$NM_LANG"; [ "$NM_COLOR" = off ] && printf ' --color off'; return 0; }
+
+nm_header(){
+  local h=""
+  # shellcheck disable=SC2046
+  if [ -x "$BIN" ]; then h=$("$BIN" dashboard --header $(nm_dash_flags) --color "$([ "$NM_COLOR" = on ] && [ -t 2 ] && echo on || echo off)" 2>/dev/null || true); fi
+  if [ -z "$h" ]; then
+    local n; n=$(tm_units | grep -c . || true)
+    h="$(hostname -s 2>/dev/null || echo server) · $n $(nm_t "tunnel(s)" "تونل")"
+  fi
+  say ""; say " $h"
+}
+
+# nm_pick_unit: sets NM_U/NM_CFG (one tunnel: that one; several: asks).
+nm_pick_unit(){
+  local units=() c i=1 u
+  mapfile -t units < <(tm_units)
+  if [ ${#units[@]} -eq 0 ]; then warn "$(nm_t "No tunnel on this server yet — set one up in 2) Tunnels." "هنوز تونلی روی این سرور نیست — از ۲) تونل‌ها بسازید.")"; return 1; fi
+  if [ ${#units[@]} -eq 1 ]; then NM_U=${units[0]}; NM_CFG=$(tm_cfg "$NM_U"); return 0; fi
+  for u in "${units[@]}"; do say "   $i) $u — $(unit_desc "$u")"; i=$((i + 1)); done
+  read -rp "$(nm_t "Which tunnel? " "کدام تونل؟ ")" c </dev/tty || return 1
+  case "$c" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$c" -ge 1 ] && [ "$c" -le ${#units[@]} ] || return 1
+  NM_U=${units[$((10#$c-1))]}; NM_CFG=$(tm_cfg "$NM_U")
+}
+
+# The admin lock (hs2 config lock, menu M1) is held while an edit screen is
+# open, so two admins never change the same server at once; hs2 apply and
+# hs2 rollback run from here see HS2_LOCK_PID and share it. An older binary
+# without the lock just goes on.
+nm_lock(){
+  local out a
+  export HS2_LOCK_PID=$$
+  [ -x "$BIN" ] || return 0
+  if out=$("$BIN" config lock --pid $$ --lang "$NM_LANG" 2>&1); then return 0; fi
+  case "$out" in *"unknown command"*|*usage*|*"flag provided"*) return 0 ;; esac
+  warn "$out"
+  read -rp "$(nm_t "Break the other admin's lock? [y/N]: " "قفل مدیر دیگر شکسته شود؟ [y/N]: ")" a </dev/tty || a=n
+  case "$a" in [yY]*) "$BIN" config lock --pid $$ --force >/dev/null 2>&1 || true; return 0 ;; esac
+  return 1
+}
+nm_unlock(){ [ -x "$BIN" ] && "$BIN" config unlock --pid $$ >/dev/null 2>&1; return 0; }
+nm_edit(){ # screen function and its args, run under the admin lock
+  nm_lock || return 0
+  "$@" || true
+  nm_unlock
+}
+nm_soon(){ # milestone
+  say "  ${C_Y}$(nm_t "[preview] The redesigned screen arrives in $1 — this opens the classic screen for now." "[پیش‌نمایش] صفحهٔ جدید در $1 می‌آید — فعلاً صفحهٔ کلاسیک باز می‌شود.")${C_0}"
+}
+
+nm_dashboard(){
+  if ! nm_has_dash; then
+    warn "$(nm_t "This hs2 binary has no live dashboard yet — showing the classic status. Upgrade in 8) Maintenance." "این باینری داشبورد زنده ندارد — وضعیت کلاسیک نمایش داده می‌شود. از ۸) نگهداری به‌روز کنید.")"
+    status; nm_pause; return 0
+  fi
+  # shellcheck disable=SC2046
+  "$BIN" dashboard $(nm_dash_flags) </dev/tty || true
+  return 0
+}
+
+nm_tunnels(){
+  local c
+  nm_soon M3
+  say "   1) $(nm_t "Tunnel manager (list · start/stop · edit · logs · delete)" "مدیر تونل (فهرست · شروع/توقف · ویرایش · لاگ · حذف)")"
+  say "   2) $(nm_t "New tunnel — Kharej (foreign server)" "تونل جدید — خارج")"
+  say "   3) $(nm_t "New tunnel — Iran" "تونل جدید — ایران")"
+  say "   0) $(nm_t Back بازگشت)"
+  read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+  case "$c" in
+    1) nm_edit tunnel_manager ;;
+    2) nm_lock && { setup_kharej; exit 0; } ;;
+    3) nm_lock && { setup_iran; exit 0; } ;;
+  esac
+  return 0
+}
+nm_lb(){
+  nm_soon M4
+  nm_pick_unit || return 0
+  if lb_supported "$NM_CFG"; then nm_edit tm_lb "$NM_U" "$NM_CFG"
+  else warn "$(nm_t "$NM_U's carrier has no load balancing (mtcp / l3mtcp only)." "حامل $NM_U لودبالانس ندارد (فقط mtcp / l3mtcp).")"; nm_pause; fi
+  return 0
+}
+nm_security(){
+  local c
+  nm_soon M5
+  nm_pick_unit || return 0
+  say "   1) $(nm_t "Certificate (expiry, renewal, renew now)" "گواهی (انقضا، تمدید، تمدید فوری)")"
+  say "   2) $(nm_t "Edit config (cover page, camouflage fields)" "ویرایش پیکربندی (صفحهٔ پوششی، فیلدهای استتار)")"
+  say "   0) $(nm_t Back بازگشت)"
+  read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+  case "$c" in
+    1) if tm_cert_side "$NM_CFG"; then nm_edit tm_cert "$NM_U" "$NM_CFG"; else warn "$(nm_t "This side holds no certificate." "این سمت گواهی ندارد.")"; nm_pause; fi ;;
+    2) nm_edit tm_edit "$NM_U" "$NM_CFG" ;;
+  esac
+  return 0
+}
+nm_speed(){
+  local c
+  nm_soon M5
+  nm_pick_unit || return 0
+  say "   1) $(nm_t "Kernel network tuning" "تنظیم شبکهٔ کرنل")"
+  say "   2) $(nm_t "Live pattern monitor (parallel links)" "پایش زندهٔ الگو (لینک‌های موازی)")"
+  if tm_has_ports "$NM_CFG"; then say "   3) $(nm_t "Ports (user ports and where each one goes)" "پورت‌ها (پورت کاربران و مقصد هرکدام)")"; fi
+  say "   0) $(nm_t Back بازگشت)"
+  read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+  case "$c" in
+    1) nm_edit tm_tune "$NM_U" "$NM_CFG" ;;
+    2) tm_monitor "$NM_U" "$NM_CFG" ;;
+    3) tm_has_ports "$NM_CFG" && nm_edit tm_ports "$NM_U" "$NM_CFG" ;;
+  esac
+  return 0
+}
+nm_alerts(){ nm_pick_unit || return 0; nm_edit tm_alerts "$NM_U" "$NM_CFG"; return 0; }
+nm_doctor(){ server_doctor; nm_pause; return 0; }
+
+nm_maint(){
+  local c a
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "8) Maintenance" "۸) نگهداری")${C_0}"; hr
+    say "   1) $(nm_t "Upgrade (new binary, keep config)" "به‌روزرسانی (باینری جدید، پیکربندی می‌ماند)")"
+    say "   2) $(nm_t "Backup current config" "پشتیبان‌گیری از پیکربندی")"
+    say "   3) $(nm_t "Restore a backup" "بازگردانی پشتیبان")"
+    say "   4) $(nm_t "Change history (config versions)" "تاریخچهٔ تغییرات (نسخه‌های پیکربندی)")"
+    say "   5) $(nm_t "Roll back the last change" "برگرداندن آخرین تغییر")"
+    say "   6) $(nm_t "Status / logs" "وضعیت / لاگ")"
+    say "   7) $(nm_t "Uninstall hs2 (removes ALL tunnels)" "حذف hs2 (همهٔ تونل‌ها حذف می‌شوند)")"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      1) nm_lock && { upgrade; exit 0; } ;;
+      2) backup >/dev/null; nm_pause ;;
+      3) nm_lock && { restore; exit 0; } ;;
+      4) if nm_pick_unit; then "$BIN" config history -u "$NM_U" --lang "$NM_LANG" >&2 || true; nm_pause; fi ;;
+      5) if nm_pick_unit; then
+           "$BIN" config history -u "$NM_U" --lang "$NM_LANG" 2>/dev/null | tail -n 5 >&2 || true
+           read -rp "$(nm_t "Roll $NM_U back to the version before its current config (restarts it)? [y/N]: " "$NM_U به نسخهٔ پیش از پیکربندی فعلی برگردد (ری‌استارت می‌شود)؟ [y/N]: ")" a </dev/tty || a=n
+           case "$a" in [yY]*) nm_lock && { "$BIN" rollback -u "$NM_U" --lang "$NM_LANG" >&2 || true; nm_unlock; } ;; *) say "  $(nm_t "Nothing changed." "تغییری داده نشد.")" ;; esac
+           nm_pause
+         fi ;;
+      6) status; nm_pause ;;
+      7) nm_lock && { uninstall; exit 0; } ;;
+      0|b|B|q|"") return 0 ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+  return 0
+}
+
+nm_stats_timer_on(){ systemctl is-enabled hs2-stats.timer >/dev/null 2>&1; }
+nm_stats_timer(){ # on|off — the optional 24 h history sampler (every 5 min, a few ms)
+  if [ "$1" = on ]; then
+    cat > "$UNIT_DIR/hs2-stats.service" <<EOF
+[Unit]
+Description=hs2 dashboard history sample (hs2 stats sample)
+[Service]
+Type=oneshot
+Nice=19
+ExecStart=$BIN stats sample
+EOF
+    cat > "$UNIT_DIR/hs2-stats.timer" <<EOF
+[Unit]
+Description=hs2 dashboard history (every 5 min)
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload; systemctl enable --now hs2-stats.timer >/dev/null 2>&1 || true
+  else
+    systemctl disable --now hs2-stats.timer >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/hs2-stats.timer" "$UNIT_DIR/hs2-stats.service"; systemctl daemon-reload
+  fi
+}
+
+nm_settings(){
+  local c v
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "9) Menu settings" "۹) تنظیمات منو")${C_0}  ($MENU_CONF)"; hr
+    say "   1) $(nm_t Language زبان): $NM_LANG   (fa / en)"
+    say "   2) $(nm_t Mode حالت): $NM_MODE   (simple / advanced)"
+    say "   3) $(nm_t Colour رنگ): $NM_COLOR"
+    v=$(mc_get default_menu); say "   4) $(nm_t "hs2-menu opens" "hs2-menu باز می‌کند"): ${v:-classic}   (classic / new)"
+    if nm_stats_timer_on; then v=on; else v=off; fi
+    say "   5) $(nm_t "24 h history sampler (hs2-stats.timer, every 5 min)" "نمونه‌گیر تاریخچهٔ ۲۴ ساعته (hs2-stats.timer، هر ۵ دقیقه)"): $v"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      1) if [ "$NM_LANG" = fa ]; then mc_set lang en; else mc_set lang fa; fi
+         nm_load; nm_utf8 || warn "Persian needs a UTF-8 terminal (LANG=…UTF-8); English is used here." ;;
+      2) if [ "$NM_MODE" = simple ]; then mc_set mode advanced; else mc_set mode simple; fi; nm_load ;;
+      3) if [ "$NM_COLOR" = on ]; then mc_set color off; else mc_set color on
+           C_G=$'\033[1;32m'; C_R=$'\033[1;31m'; C_Y=$'\033[1;33m'; C_B=$'\033[1;34m'; C_D=$'\033[2m'; C_0=$'\033[0m'; fi; nm_load ;;
+      4) if [ "$(mc_get default_menu)" = new ]; then mc_set default_menu classic; else mc_set default_menu new; fi ;;
+      5) if nm_stats_timer_on; then nm_stats_timer off; else nm_stats_timer on; fi ;;
+      0|b|B|q|"") return 0 ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+}
+
+nm_main(){
+  local c adv
+  nm_load
+  while :; do
+    nm_header
+    adv=""; [ "$NM_MODE" = advanced ] && adv=1
+    if [ -n "$adv" ]; then local b; b=$(bin_build "$BIN"); [ -n "$b" ] && say "   ${C_D}$b${C_0}"; fi
+    hr
+    say "  1) $(nm_t "Live dashboard" "داشبورد زنده")"
+    [ -n "$adv" ] && say "     ${C_D}$(nm_t "per tunnel: users, Mbit, RTT, links, LB paths, alerts, 24 h history" "هر تونل: کاربر، Mbit، RTT، لینک، مسیرهای LB، هشدار، تاریخچهٔ ۲۴ ساعته")${C_0}"
+    say "  2) $(nm_t "Tunnels" "تونل‌ها")"
+    say "  3) $(nm_t "Load balancing & IPs" "لودبالانس و IPها")"
+    say "  4) $(nm_t "Security & camouflage" "امنیت و استتار")"
+    say "  5) $(nm_t "Speed & performance" "سرعت و کارایی")"
+    say "  6) $(nm_t "Monitoring & alerts" "پایش و هشدارها")"
+    say "  7) $(nm_t "Server doctor" "پزشک سرور")"
+    [ -n "$adv" ] && say "     ${C_D}$(nm_t "hs2 doctor --deep: NIC, CPU, paths, Reality, x-ui (read-only)" "hs2 doctor --deep: کارت شبکه، پردازنده، مسیرها، Reality، x-ui (فقط خواندنی)")${C_0}"
+    say "  8) $(nm_t "Maintenance" "نگهداری")"
+    say "  9) $(nm_t "Menu settings" "تنظیمات منو")"
+    say "  0) $(nm_t "Exit" "خروج")"
+    say "  ${C_D}c) $(nm_t "classic menu" "منوی کلاسیک")${C_0}"
+    read -rp "$(nm_t "Choose [0-9]: " "انتخاب [0-9]: ")" c </dev/tty || exit 0
+    case "$c" in
+      1) nm_dashboard ;;
+      2) nm_tunnels ;;
+      3) nm_lb ;;
+      4) nm_security ;;
+      5) nm_speed ;;
+      6) nm_alerts ;;
+      7) nm_doctor ;;
+      8) nm_maint ;;
+      9) nm_settings ;;
+      c|C) nm_unlock; main_menu ;;
+      0|q|Q) exit 0 ;;
+      *) warn "$(nm_t "Invalid choice: pick a number from the list." "انتخاب نامعتبر: یک عدد از فهرست بزنید.")" ;;
+    esac
+  done
+}
+
+# menu_entry: which menu a bare `hs2-menu` opens — the flag, else HS2_MENU,
+# else menu.conf's default_menu, else the classic one.
+menu_entry(){
+  local m="${NM_FORCE:-${HS2_MENU:-}}"
+  [ -n "$m" ] || m=$(mc_get default_menu)
+  if [ "$m" = new ]; then nm_main; else main_menu; fi
+}
+
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
 case "${1:-}" in
   ''|menu)   ;;                                   # no argument → the interactive menu below
+  --new)     NM_FORCE=new ;;                      # the redesigned menu (preview until M7)
+  --classic) NM_FORCE=classic ;;                  # the classic menu (default)
   manage)    tunnel_manager; exit 0 ;;
   upgrade)   upgrade "${2:-}"; exit 0 ;;
   backup)    backup >/dev/null; exit 0 ;;
@@ -5366,7 +5647,7 @@ case "${1:-}" in
   cleanup)   kernel_cleanup; exit 0 ;;
   version)   "$BIN" version 2>/dev/null || die "hs2 is not installed on this server."; exit 0 ;;
   *) err "unknown command: $1"
-     say "Usage: bash install.sh [manage | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
+     say "Usage: bash install.sh [--new | --classic | manage | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
      say "       (no argument opens the menu)"
      # HS2_DIED=1 like die/bail: this is a deliberate usage error, so the EXIT
      # trap must NOT add its "stopped unexpectedly / report to the developer" note.
@@ -5399,6 +5680,7 @@ main_menu(){
     echo "    7) Restore a backup" >&2
     echo "    8) Uninstall hs2 (removes ALL tunnels; asks before removing the program)" >&2
     echo "    9) Server doctor  (what is wrong on this server and what to do — read-only)" >&2
+    echo "    n) New menu (preview: live dashboard, menu settings — also: hs2-menu --new)" >&2
     echo "    0) Exit" >&2
     echo >&2
     read -rp "Choose [0-9]: " CH </dev/tty || exit 0
@@ -5412,9 +5694,10 @@ main_menu(){
       7) restore; exit 0 ;;
       8) uninstall; exit 0 ;;
       9) server_doctor; pause ;;
+      n|N) nm_main ;;
       0|q|Q) exit 0 ;;
       *) warn "Invalid choice: pick a number from the list." ;;
     esac
   done
 }
-main_menu
+menu_entry

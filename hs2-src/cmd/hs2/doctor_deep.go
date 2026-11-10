@@ -771,6 +771,14 @@ func checkPaths(env *deepEnv, st []namedStatus) []finding {
 	if len(paths) == 0 {
 		return []finding{{Sev: "SKIP", Area: area, What: tr("no tunnel path with a peer IP found (no running LB tunnel / no dial address)", "مسیری با IP طرف مقابل پیدا نشد (تونل LB فعال یا آدرس dial نیست)")}}
 	}
+	pingPaths(env, paths)
+	return judgePaths(paths)
+}
+
+// pingPaths pings every path's peer from its local IP (10 x 0.2 s, in
+// parallel) and stores the result on the probe. Shared with the dashboard's
+// on-demand path check.
+func pingPaths(env *deepEnv, paths []*pathProbe) {
 	var wg sync.WaitGroup
 	for _, p := range paths {
 		wg.Add(1)
@@ -785,7 +793,6 @@ func checkPaths(env *deepEnv, st []namedStatus) []finding {
 		}(p)
 	}
 	wg.Wait()
-	return judgePaths(paths)
 }
 
 // judgePaths turns the ping results and the tunnel's own figures into

@@ -21,6 +21,27 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M2 — new main menu + live dashboard (binary + installer)
+
+- New `hs2 dashboard` (live every 3 s / `--once` / `--header` / `--paths`,
+  `--lang fa|en`, width-aware down to < 60 columns, ASCII + English when the
+  locale is not UTF-8, one plain frame when not a tty). Read-only.
+- New `hs2 stats sample|show`: hourly aggregates for 7 days in
+  `/var/lib/hs2/stats-<unit>.json`; sampled by `hs2 alert` and by an optional
+  `hs2-stats.timer` (menu settings).
+- `doctor_deep`: the path pings are factored into `pingPaths` (shared with the
+  dashboard's path check); findings unchanged.
+- `install.sh`: the new menu (`hs2-menu --new`, `HS2_MENU=new`, or
+  `default_menu=new` in `/etc/hs2/menu.conf`); the classic menu stays the
+  default and gains `n) New menu`. Menu settings (language, simple/advanced,
+  colour, default menu, history timer) persist in `/etc/hs2/menu.conf`. Edit
+  screens run under the admin lock. Maintenance adds change history and
+  rollback of the last change. Items 2–5 open the classic screens for now.
+- Tests: `cmd/hs2/dashboard_test.go` (rendering at 50/60/80/120 columns,
+  fa/en, ASCII, missing/stale status, no tunnels; stats aggregation and
+  retention), `install/tests/new_menu_test.sh` (24 pty checks: navigation,
+  settings persistence, lock, maintenance, menu selection, locale fallback).
+
 ## Menu redesign M1 — safe-change infrastructure (binary + small installer hook)
 
 - New `hs2 config history|show|diff|validate|lock|unlock|lock-status`,

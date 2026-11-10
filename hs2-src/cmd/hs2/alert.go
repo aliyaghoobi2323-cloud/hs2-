@@ -269,6 +269,10 @@ func runAlertOnce(cfg alertCfg, cfgPath, unit, stateDir string, dry bool) {
 	if err := saveAlertState(sp, st); err != nil {
 		fmt.Fprintln(os.Stderr, "hs2 alert: state:", err)
 	}
+	// the dashboard's 24 h history rides on the alert check (stats.go)
+	if err := sampleStatsFor(cfgPath, unit, statusRunDir, stateDir, now); err != nil {
+		fmt.Fprintln(os.Stderr, "hs2 alert: stats:", err)
+	}
 }
 
 // deliver writes every message to the journal and the log file, then (if

@@ -162,7 +162,7 @@ class World:
         self.sb, self.hs2, self.probe = sb, hs2, probe
         self.lib = os.path.join(sb, "lib.sh")
         lines = open(INST).read().rstrip("\n").split("\n")
-        assert lines[-1].strip() == "main_menu", "install.sh no longer ends with main_menu"
+        assert lines[-1].strip() in ("main_menu", "menu_entry"), "install.sh no longer ends with its menu call"
         body = "\n".join(lines[:-1]) + "\n"
         body = re.sub(r'^\[ "\$\(id -u\)" = 0 \] \|\| die .*$', ":", body, flags=re.M)
         open(self.lib, "w").write(body)
