@@ -2166,3 +2166,210 @@ connections from our IP slows the pool build that way; the 3 s
   the heavy streams at the kill (which links each of the 8 streams' stripes
   were on, whether the dead ones are replaced), and test with
   `HS2_MCONN_STRIPE_JUMP_MS` on the Iran side too (it is kharej-only today).
+
+### 11.6 rel47 (2026-11-11): Reality with LB across IPs — mixed fronts, target trouble, live switch, lb edits
+
+Branch rel47 = rel45 (64aee0b6) + the commits below. Harness
+`hs2-src/lab/r47` (lab 1 `/opt/hs2lab/r47`): reverse l3mtcp, 3 lb paths, 150
+links, 74 ms RTT, 1 % loss, crowd 3000 + call + game + iperf down x8; A
+192.168.50.1 tls (primary), B 51.1 pure reality with its own breakable target
+(`tgt.py` in a netns), C 52.1 both; the kharej has no front config
+(announcement only). Arms interleaved over 3 slots, n per arm in the tables.
+Binary: build e301ff085d28, sha256 0db7d2c5…. Commits: 2cb71354 (LB
+start), 36f57485 + e301ff08 (plain tls to a pure reality IP), the binary.
+
+#### 11.6.1 Results per item
+
+Medians [min-max] of the run p99s (ms) and Mbps; "fails" = crowd/call/game
+losses + connect failures summed over the arm's runs.
+
+**1. Mixed fronts, no event (`b`, 45 s, rel45 binary).**
+
+| | mix (A tls, B reality, C both) n4 | all tls n3 |
+|---|---|---|
+| crowd p99 | 163 [151-317] | 158 [151-172] |
+| call p99 | 196 [169-495] | 209 [183-237] |
+| ping p99 | 144 [116-249] | 170 [139-199] |
+| Mbps | 1256 [1178-1330] | 1196 [1006-1344] |
+| links A/B/C at the end (weights 34/33/33) | 51/50/49 in 4/4 | 51/50/49 (one 51/49/50) |
+| judge lowerings / cuts / cools | 0 / 0 / 0 | 1 lowering of B (loss 1.7 %) / 0 / 0 |
+| fails | 0 | 1 |
+
+Judge readings per path are alike across fronts (`lb_text`: loss 1.0-1.1 %,
+queue 3-11 ms on every path in every mix run). The reality handshake's
+target round trip happens before the link carries data and never shows in a
+reading.
+
+**2. Path B degrades at 15 s (`c`: +80 ms, 3 % corrupt; 60 s).**
+
+| | mix, rel45 n7 | mix, LB fix n5 | all tls, rel45 n6 | all tls, LB fix n3 |
+|---|---|---|---|---|
+| crowd p99 | 278 [236-343] | 277 [270-391] | 276 [260-378] | 276 [275-280] |
+| ping p99 | 204 [174-445] | 314 [214-535] | 243 [134-406] | 236 [221-291] |
+| game p99 | 203 [141-494] | 167 [153-619] | 150 [130-271] | 153 [153-286] |
+| call p99 | 328 [161-921] | 373 [229-1022] | 206 [187-333] | 198 [174-213] |
+| Mbps | 1055 [921-1160] | 960 [815-1210] | 966 [759-1158] | 1058 [1010-1178] |
+| fails | 5 | 0 | 0 | 0 |
+
+The LB acts the same on the reality path as on tls in every run: "clear
+degradation in one reading … lowered at once", cut ~5 s later, the rescue
+moves copy subs off its links ("placed off call links" 136-316), call late
+fires. Crowd p99 is equal. **The call is not**: in 4 of 12 mix runs its p50
+is 545-600 ms with 84 % of packets late (bimodal: the other runs p50 80 ms),
+in 2 more ~145 ms / 45 % late; never in the 9 tls runs. See 11.6.5.
+
+**3. B's target breaks at 8 s, healthy again at 32 s (25 s in `L` runs);
+75 % of the links killed 12 s into the probe so B must redial (50 s, `L` 75 s).**
+
+| | ctl n2+2L | blk (blackhole) n2+2L | rej (RST) n2+2L | slow (+2.5 s) n2 |
+|---|---|---|---|---|
+| crowd p99 | 154 / L 219 | 155 / L 168 | 156 / L 203 | 154 |
+| call p99 | 215 / L 228 | 225 / L 203 | 183 / L 245 | 191 |
+| listener rejects on B | 0 | target_slow 14-18 | target_down 12-21 | handshake 2-5, hello_late 30-39 (served) |
+| rejects on A / C | 0 | 0 | 0 | 0 |
+| judge lowering / cut of B | 0 | 0 | 0 | 0 |
+| B cooled (EOF dials) | 0 | 1 of 4 (26) | 2 of 4 (15, 19) | 0 |
+| B back to its share | - | 4 of 4 | 2 of 2 L (ended cooled in the short runs: cooled at 30 s, cooldown 20 s) | links kept up |
+
+The crowd/call losses (~1600-1950 per run) are the kill's, equal in ctl.
+Only B's links fail; A and C never see a reject; no lowering, no flap (one
+cool, one back at most).
+
+**4. Live front switch of A under load (A tls -> both 10 s -> reality 16 s ->
+both 24 s -> tls 30 s, SIGHUP, LB active; n2).** 0 failed requests; crowd
+p99 177/279, call 189/330; links 51/50/49 at the end; the listener logs the
+30 s switch grace on tls -> reality; no proof timeout from the switches
+(the one in run 2 is B's cold start, see 11.6.3).
+
+**5. lb edits with mixed fronts.** `TestLBEditsKeepMixedFronts`: park,
+unpark, weights, add-ip, remove-ip on a listener with tls / reality / both
+IPs keep every remaining IP's whole profile including its private key
+(`withOwnList` + `keepPrivateKeys`, matched by IP: removing B shifts C's
+index), every edited file validates, and the announcement lists exactly the
+remaining IPs' public profiles. Cold-dialer restart with mixed fronts (the
+harness restarts the dialer every run): with remembered fronts B and C dial
+`both` until the announcement (0 proof timeouts in 14 such runs); cold, B
+(pure reality) is dialed tls before the announcement (11.6.3).
+
+**6. Judge inputs**: 11.6.4.
+
+**Start placement (11.6.2), `st`, mix, no event, 30 s, cold dialer.**
+
+| | rel45 n4 | LB fix n4 |
+|---|---|---|
+| links A/B/C at 3 s | 18/5/17, 21/0/20, 21/0/20, … | 13/13/13, 13/13/12, 13/13/13, 13/13/12 |
+| at 6 s | 34/33/33, 51/0/49, 45/11/44 | 34/33/33 |
+| crowd p99 | 202 [162-267] | 183 [159-210] |
+| ping p99 | 188 [132-236] | 170 [140-184] |
+
+
+#### 11.6.2 Start back-off from refusals before the peer listens (fixed, engine/lb.go)
+
+Both sides start together and the kharej dials ~1 s before Iran listens:
+every address refuses. The pool dials in a burst, so the ~50 refusals of
+that second spread over the paths, and each non-primary path past
+`lbGraceFreeFails` (6) went into the start back-off (doubling to 4 s; phase 4
+added it for a reality-only IP whose target is down). When Iran came up the
+redial burst found only the primary eligible: all 100 start links on A
+(`[100,0,2]` at 6 s), the pool full at `min_links`, B and C fed only by the
+rebalance's spare dials (`[100,25,34]` at the end of a 65 s run); A carried
+the whole heavy flow, was lowered and cut under scenario c, call p99 6 s,
+crowd p99 597 ms (`c-mixtr-2`). A milder form (one path starved:
+`[51,0,49]`, `[47,7,46]` at 6 s, back to equal only at ~20 s) was in ~1 of 5
+runs of every arm, tls included. Front-independent, but it is the LB's
+start with reality-era back-off.
+
+Fix: the start back-off applies only once the peer has been reachable (a
+dial worked on some path, `upAt`), and the first success clears the other
+paths' failure counts and back-off (failures from before the peer listened
+say nothing about a path). A path that fails after that (a reality-only IP
+whose target is down) still backs off and is cooled after the grace, as
+before. Test `TestLBPeerNotUpYetNoBackoff` (45 refused dials in flight, then
+the peer up: base `[100,0,0]`, fixed >= 25 per path; a path failing with the
+peer up still backs off).
+
+#### 11.6.3 A plain tls dial to a pure reality IP waited 10 s (fixed, tlscarrier + cmd/hs2)
+
+A dialer that does not know an IP is pure reality yet (cold start before the
+first announcement, or remembered fronts older than the IP's switch) dials it
+with plain tls; the listener splices the hello to the target and the dial
+waits out the 10 s auth deadline (`reading server proof: i/o timeout`).
+§11.5.2's fail-fast covered only the tls leg of a path WITH a profile. Lab
+(`BTLS=1`: A, the primary, pure reality; B tls; C both): ~10-15 start links
+stuck 10 s, the pool half built at 10 s, crowd p99 471-1439 ms, the call
+probe died in one run (`c-mixr`, n=4).
+
+Fix: `tlscarrier.DialPath.PeerTargetNames` — the dialer's LB runtime keeps
+the server_names of the peer's reality/both fronts (the announcement, else
+the remembered ones) and a plain tls path reads them when the certificate
+arrives (so a dial in flight when the first announcement lands still gets
+them): a leaf for one of those names and not for our SNI fails the
+handshake with `ErrTargetAnswered`. No names known = the old behaviour; a
+peer's tls IP (our cert) is never refused. Test
+`TestPlainTLSPeerTargetNames`.
+
+#### 11.6.4 Judge inputs (item 6, code + lab)
+
+* `lb_judgedata.go` (`HS2_LB_JUDGE_DATA=1`): a reading's fail share counts
+  only dials that failed before TCP connected (`*net.OpError` Op "dial":
+  refused, SYN timeout, a DPI RST to the SYN), and only with >= 4 dials in
+  the tick. Everything after the connect — a DPI reset after the hello
+  (read ECONNRESET), EOF, the proof timeout, `ErrTargetAnswered` — is never
+  a quality input (`TestJudgeFailFrontNotLoss`).
+* Every failed dial still counts on the path in `resultLocked` (fails, start
+  back-off, cooling after `lbFailMax` past the grace). That is where a DPI
+  reset of a reality handshake lands: the path stops getting dials, as for
+  tls.
+* Our target's trouble: `target_slow` (no connect in 3 s) and `target_down`
+  close the conn, the dialer sees EOF. On a `both` path BothFront retries tls
+  in the same dial (no failure reaches the LB; after 3 in a row tls-only for
+  10 min). On a reality-only path it is a dial failure: correct — the IP
+  cannot give new links — and never a quality input. `target_hello_late`
+  serves the link (no failure at all). The dialer cannot tell a DPI reset
+  from `target_down` (both: the IP gives no new links), and the right action
+  is the same.
+* Lab: in all 8 target-trouble runs the judge never lowered or cut B
+  (0 `lb auto2` lines for B); B was cooled once in 3 runs (after 15-26 EOF
+  dials, past the start grace), back once, no flapping.
+
+#### 11.6.5 Open, with a plan
+
+* **A call wholly on a degraded reality path (c, mix only).** In 4 of 12
+  mix runs the call's p50 is 545-600 ms after B degrades (84 % late), in 2
+  more ~145 ms; 0 of 9 tls runs. Crowd, ping and game are not affected, and
+  the LB's actions on B are the same as with tls. Reading: all of the call's
+  subs sit on B's links — call late needs subs on two paths, the lowered-path
+  rescue moves copy subs, and the stuck-call rescue (`HS2_LB_CALL_RESCUE`)
+  is off by its §8.11 verdict, so nothing moves such a call. Why only with
+  mixed fronts is not proven; the likely cause is placement at the call's
+  start: B's reality links come up later (each waits for its target's
+  ServerHello; the lab target is a Python server in a netns) and are the
+  emptiest links when the call opens its subs. Plan: (1) traced runs
+  (`XENV=HS2_MCONN_TRACE=1`, arm `c:mixtrC` in go47.sh; 3 queued at the
+  end of this session) to log each sub's path at the call's start and at
+  the cut; (2) if confirmed, place a call's subs on two paths or more when
+  the pool has them (path diversity in the call pick, not only link
+  business), and/or let the stuck trigger (every sub on one lowered path)
+  run under `HS2_LB_CALL_LATE` alone; (3) c mix vs tls, n>=8 each.
+* **A pure reality primary with a cold dialer (`p`, `BTLS=1`).** 11.6.3's
+  fix shortens the window (dials whose certificate or proof wait overlaps the
+  first announcement now fail at once) but the dials whose handshake
+  finished before ANY name was known still wait their 10 s when the
+  announcement comes after them and the proof read is not re-checked in time
+  (`proof` 1 per run in `p-new`, cover 6-7 vs 13 with rel45). Plan: measure
+  `p-newc` (final binary, 4 queued) against `p-old` at n>=6; if a stall
+  remains, re-check in-flight dials on the announcement itself (wake the
+  watchers instead of their 100 ms tick), and recommend `hs2 reality pin`
+  or `both` (not pure reality) for the tunnel's primary IP in the menu.
+* **A whole-peer outage in the middle of a run** (the listener restarts): the
+  same class as 11.6.2 after the start grace — every non-primary path is
+  cooled for `lbCooldown` after `lbFailMax` refusals while the primary is
+  not, so the rebuilt pool lands on the primary for a cooldown. Not
+  measured. Plan: a lab event that stops Iran for 3 s under load; if it
+  reproduces, do not count a refusal against a path while no path has a
+  live link (the peer is down, not the path).
+* **c-mixr (rel45, B tls degraded, A pure reality primary, remembered fronts
+  from an earlier run)**: crowd p99 471-1439, the call probe died in one run.
+  It combines the stale-cache stall of 11.6.3 with the degraded path; rerun
+  with the final binary after the item above.
+

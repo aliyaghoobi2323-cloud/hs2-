@@ -19,6 +19,31 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel47 — Reality with LB across IPs: mixed fronts, target trouble, start fixes (binary)
+
+- **LB start (fixed)**: when the dialer starts ~1 s before the peer listens,
+  the refused dials of that second no longer put the non-primary paths into
+  the start back-off; the first successful dial clears it. Before, the redial
+  burst could put all 100 start links on the primary (`[100,0,2]` at 6 s,
+  call p99 6 s in the lab); a milder starved path was in ~1 of 5 runs of every
+  front, tls included.
+- **Plain tls dial to a pure reality IP (fixed)**: a dialer that does not
+  know yet that an IP is pure reality (cold start before the announcement,
+  or remembered fronts older than the switch) failed only after the 10 s
+  auth deadline. Now a plain tls path checks the certificate against the
+  peer's announced/remembered reality server names — at the handshake and,
+  while it waits for the proof, every 100 ms — and fails at once
+  (`ErrTargetAnswered`). A peer's own tls IP is never refused.
+- Verified on the lab (docs/reality-architecture.md §11.6, harness
+  `hs2-src/lab/r47`): mixed fronts (tls / reality / both) place links by
+  weight, the judge scores them alike (no false lowering or cut), a reality
+  path that degrades is cut/rescued like tls; a broken target on one reality
+  IP stays on that IP (no judge input, cooled once at most, recovers);
+  live front switches under load lose nothing; `hs2 lb` edits keep every
+  IP's profile and key.
+- Tests: `TestLBPeerNotUpYetNoBackoff`, `TestPlainTLSPeerTargetNames`,
+  `TestLBEditsKeepMixedFronts`, `TestRealityCarrierTCPConn`.
+
 ## rel45 — no stall when an IP switches both -> reality; reality vs tls measured (binary)
 
 - **Switch grace (listener)**: an IP switched live from tls or `both` to pure
