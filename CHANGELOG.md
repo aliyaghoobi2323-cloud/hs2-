@@ -19,6 +19,50 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## up57 — upload stripe: early upgrade, per-path gate; where the light users' cost came from (binary; keys off by default)
+
+On top of up56 (412b9397). All new keys are Iran-side and **off**; no wire
+change (old peers work both ways — lab: new Iran/old exit and old Iran/new
+exit, single upload, 0 crowd failures, no protocol errors).
+
+- **`HS2_MCONN_STRIPE_FAST_EARLY_MS=N`** (with FAST, 50-500): a raw
+  connection's first second is sampled every N ms, so a fast upload (≥
+  `HS2_MCONN_STRIPE_FAST_MBIT`) starts the raw → stripe upgrade at ~2N ms
+  instead of at 2 s, before the raw link's queue fills (the up56 handshake
+  waited ~4 s for it). Only uploads; downloads keep the 1 s ticks.
+- **`HS2_MCONN_STRIPE_UP_PATHQ=1`**: the upload gate also takes the light
+  users' queue per path (Iran's local IP of the link; worst path with ≥ 4
+  active light links); it only ever closes the gate earlier.
+- **`HS2_MCONN_STRIPE_UP_NOSHARE=1`**: an upload's stripe sub never takes a
+  light user's link (STRIPE_SHARE's shared pick). Lab: no measurable effect
+  (Q vs S n=6/6, light p99 ±8 ms p ≥ 0.17) — kept off.
+- Where the +7..+15 ms light p99 came from: **CPU contention in the lab
+  slot**, not the path queue or link sharing. Per-path netem backlog and the
+  light links' srtt (ss, every 0.2 s) barely moved with FAST (median +0-1 ms,
+  p90 +1 ms); the slot's 7 cores went from 72-76 % busy (A) to 80-86 % (Q).
+  Three parallel slots per host made it far worse (A alone 781 Mbit/s and
+  crowd p99 81 ms vs 330 / 186 with three slots). On the whole lab (20
+  cores) the cost is gone within ~1-2 ms.
+- Lab (rel53 production keys, reverse l3mtcp, 3 paths × 1 Gbit/s, 37 ms each
+  way, 100-150 links, crowd 3000 + call + game, 12 s heavy; arm A = FAST off,
+  Q = FAST + EARLY_MS=200 + PATHQ; interleaved; MW two-sided p):
+  - whole lab, single upload, n=13/13: mean 587 → 936 Mbit/s (p<0.001),
+    seconds 1-5 526 → 847 (+61 %, p<0.001); per-second medians A 373 670 558
+    549 563 560 439 574 634 644 762 764, Q 342 974 850 853 877 976 1080 873
+    848 868 1123 1033; light p99 crowd +0.9 ms (p=0.058), game +1.7
+    (p=0.13), call −3.1 (p=0.44), echo +0.4 (p=0.28), ping −0.4 (p=0.82).
+  - whole lab, upload with 30 % link kill at 8 s, n=5/6: 517 → 833
+    (p=0.008); light p99 within ±1 ms (p ≥ 0.12).
+  - one 7-core slot, n=12/12: single upload 497 → 772 (p<0.001), seconds 1-5
+    410 → 630 (+54 %); light p99 crowd +4.9 (p=0.03), echo +15 (p=0.012),
+    game +7.9, call +6.2; d1 444 → 731 with crowd +17.7 (p=0.022); c, u8,
+    d8 (n=3-6) faster, light p99 mixed.
+- Verdict: the throughput and first-seconds targets are met; the strict
+  "light p99 p > 0.2" is not (crowd +0.9 ms p=0.058, game +1.7 ms p=0.13 on
+  the whole lab), so the defaults stay **off**. The ready default patch
+  (`HS2_MCONN_STRIPE_FAST=1`, `_FAST_EARLY_MS=200`, `_UP_PATHQ=1` on the
+  edge in envdef, with tests) waits for the operator's call.
+
 ## up56 — upload stripe: link reserve, instant pool target, seconds 1-5 (binary; keys off by default)
 
 On top of up55 (9331efc1). Every change is behind `HS2_MCONN_STRIPE_FAST`
