@@ -912,6 +912,7 @@ defaults; ...)`.
 | `HS2_PICK_LANE` | `on` | Iran (edge) |
 | `HS2_STRIPE_AW_SOLO` | `1` | Iran (edge) |
 | `HS2_STRIPE_AW_HEAVY` | `2` | Iran (edge) |
+| `HS2_LB_RESCUE` | `1` | Iran (edge) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
 | `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
@@ -919,7 +920,9 @@ defaults; ...)`.
 
 Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain), `HS2_LB_EVAC`
 (light-user evacuation off cut paths: no measurable gain in the lab, see
-`docs/reality-architecture.md` 8.4) and every
+`docs/reality-architecture.md` 8.4), `HS2_LB_FAST_VERDICT` (floor a path at
+its first clearly bad reading: no measurable gain, the plain rule already does
+it, 8.5) and every
 key not in this table. The side is the config's `mode`: `dial` = Iran (edge),
 `listen` = kharej (exit). Every default-on key works against an older peer
 (new behaviour is announced by a capability bit or carried in a field older

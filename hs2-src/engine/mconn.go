@@ -1939,7 +1939,9 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			recvd := r.next
 			r.mu.Unlock()
 			if m.liteWantDualLocked(now, recvd) {
-				if m.upgradeCappedLocked(now) {
+				// HS2_LB_RESCUE (lb_rescue.go): a light connection whose one
+				// sub is on a lowered path gets its copy past the budget.
+				if m.upgradeCappedLocked(now) && !(m.rescueWantLocked(live[0]) && rescueAllow(now)) {
 					obs.mconnLiteCapped.Add(1)
 					m.tr.ev("lite: upgrade refused (duplication cap)")
 				} else if now.Before(m.lightRetryAt) {
@@ -1958,6 +1960,16 @@ func (m *mConn) tick(now time.Time) time.Duration {
 		case len(live) >= 2:
 			p := m.primary.Load()
 			hs := false
+			if c := m.rescueDualLocked(live, p, now); c != nil { // HS2_LB_RESCUE (lb_rescue.go)
+				m.closeReqLocked(c)
+				hs = true
+			}
+			if lbRescue {
+				// look again in a second: a path may be lowered any moment
+				// (waking only while some link is marked would leave a dual
+				// connection asleep up to mLiteIdle after the marking)
+				at(mLitePoll)
+			}
 			for _, s := range live {
 				if s == p || len(s.q) > 0 || s.cur != nil {
 					continue

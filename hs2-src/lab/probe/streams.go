@@ -54,6 +54,48 @@ type crowdResult struct {
 	P95   float64 `json:"p95_ms"`
 	P99   float64 `json:"p99_ms"`
 	Max   float64 `json:"max_ms"`
+	// Win: per -crowdwin window (from the start, seconds)
+	Win []crowdWinResult `json:"win,omitempty"`
+}
+
+type crowdWinResult struct {
+	From float64 `json:"from"`
+	To   float64 `json:"to"`
+	N    int     `json:"n"`
+	P95  float64 `json:"p95_ms"`
+	P99  float64 `json:"p99_ms"`
+}
+
+// crowdWin / probeStart: -crowdwin and the probe's start (crowd windows).
+var (
+	crowdWin   string
+	probeStart time.Time
+)
+
+// crowdWindows splits the crowd's latencies (at seconds ts from the start)
+// at the -crowdwin boundaries.
+func crowdWindows(ts, lat []float64) []crowdWinResult {
+	if crowdWin == "" {
+		return nil
+	}
+	b := []float64{0}
+	for _, f := range strings.Split(crowdWin, ",") {
+		if v, err := strconv.ParseFloat(strings.TrimSpace(f), 64); err == nil {
+			b = append(b, v)
+		}
+	}
+	b = append(b, 1e9)
+	var out []crowdWinResult
+	for i := 0; i+1 < len(b); i++ {
+		var w []float64
+		for k, t := range ts {
+			if t >= b[i] && t < b[i+1] {
+				w = append(w, lat[k])
+			}
+		}
+		out = append(out, crowdWinResult{From: b[i], To: b[i+1], N: len(w), P95: pct(w, .95), P99: pct(w, .99)})
+	}
+	return out
 }
 
 // parseRate reads "2mbit", "500kbit", "1.5m", "64k" or plain bits/s.
@@ -270,7 +312,7 @@ func serveRequests(c net.Conn, blob []byte) {
 func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring func() bool, stop <-chan struct{}) *crowdResult {
 	res := &crowdResult{Conns: n}
 	var mu sync.Mutex
-	var lat []float64
+	var lat, lts []float64
 	var open atomic.Int32
 	var wg sync.WaitGroup
 	maxReply = max(maxReply, crowdMinReply)
@@ -343,6 +385,7 @@ func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring f
 					if ok && measuring() {
 						mu.Lock()
 						lat = append(lat, ms(time.Since(s)))
+						lts = append(lts, s.Sub(probeStart).Seconds())
 						mu.Unlock()
 					}
 				}
@@ -374,5 +417,6 @@ func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring f
 	wg.Wait()
 	res.N = len(lat)
 	res.P50, res.P95, res.P99, res.Max = pct(lat, .5), pct(lat, .95), pct(lat, .99), pct(lat, 1)
+	res.Win = crowdWindows(lts, append([]float64(nil), lat...))
 	return res
 }

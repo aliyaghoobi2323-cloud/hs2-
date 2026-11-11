@@ -62,6 +62,8 @@ func loadEnvKeys() {
 	lbFlapPen = envOn("HS2_LB_FLAP_PEN")
 	lbJudgeData = envOn("HS2_LB_JUDGE_DATA")
 	lbEvac = envOn("HS2_LB_EVAC")
+	lbRescue = envOn("HS2_LB_RESCUE")
+	lbFastVerdict = envOn("HS2_LB_FAST_VERDICT")
 }
 
 // msFromEnv is envMsDefault on a value already read.

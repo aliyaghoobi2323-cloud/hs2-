@@ -45,6 +45,8 @@ import (
 // survives), but the crowd p99 after the cut was the same with and without
 // it (~320 ms): the 1.2-1.5 s whole-run p99 is the ~12 s BEFORE the cut,
 // when a third of the crowd is on B and the judge still needs its readings.
+// Superseded for the pre-cut window by HS2_LB_RESCUE (lb_rescue.go), which
+// closes no user connection at all.
 var lbEvac bool // loadEnvKeys: HS2_LB_EVAC
 
 // evacSkipCopy / evacSkipBusy: streams lightStreams passed over (copy-only;

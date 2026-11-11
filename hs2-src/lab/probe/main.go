@@ -174,6 +174,7 @@ func main() {
 	jGameTMin := flag.Duration("jgametmin", 20*time.Second, "journey: shortest game")
 	jGameTMax := flag.Duration("jgametmax", 40*time.Second, "journey: longest game")
 	jRotate := flag.Bool("jrotate", true, "journey: user i starts its first round at phase i%4 so a short run samples every phase")
+	flag.StringVar(&crowdWin, "crowdwin", "", "crowd: also report p95/p99 per window, boundaries in seconds from the start, e.g. \"15,25\" (windows warm-15, 15-25, 25-end)")
 	jSeed := flag.Uint64("jseed", 0, "journey: nonzero = the same phase plan (sizes, gaps, durations) every run with this seed, for A/B pairs")
 	flag.Parse()
 	if *late > 0 && *echoDelay == 0 {
@@ -189,6 +190,7 @@ func main() {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	start := time.Now()
+	probeStart = start
 	measuring := func() bool { return time.Since(start) > *warm }
 	for i := 0; i < *bulk+*up; i++ {
 		isUp := i >= *bulk

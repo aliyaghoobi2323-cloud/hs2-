@@ -56,12 +56,15 @@ func TestApplyDefaults(t *testing.T) {
 	if lbFillPct != 0 || lbSparePerRound != 1 || lbRecConfirm || lbFlapPen {
 		t.Fatal("edge: exit-only keys on")
 	}
+	if !lbRescue || lbFastVerdict {
+		t.Fatal("edge: HS2_LB_RESCUE should default on, HS2_LB_FAST_VERDICT off")
+	}
 
 	ApplyDefaults(false)
 	if lbFillPct != 25 || lbSparePerRound != 3 || !lbRecConfirm || !lbFlapPen {
 		t.Fatal("exit: exit-only keys off")
 	}
-	if stripeAWHeavy != 0 || stripeAWSolo || pickLane != 0 || linkProbation || partialRefill {
+	if stripeAWHeavy != 0 || stripeAWSolo || pickLane != 0 || linkProbation || partialRefill || lbRescue {
 		t.Fatal("exit: edge-only keys on")
 	}
 

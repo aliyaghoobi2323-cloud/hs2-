@@ -715,3 +715,123 @@ call-rate, mid-request and copy-only streams untouched; per-call bound),
 `TestEvacDue`, `TestEvacPerTickBound` (pool-wide bound; non-cut retiring and
 serving links untouched), envdef/defaults tests. Raw: lab 1
 `/opt/hs2lab/r35/c/res/*`, `an.py`.
+
+### 8.5 Phase 4d: light users behind a path that goes bad mid-run (2026-11-11)
+
+Lab 1 (`/opt/hs2lab/r35/d`), same setup as 8.4 (3 paths A tls / B reality / C
+both, 1000mbit/40ms/1% each, reverse l3mtcp, crowd 3000, call, game, iperf
+down x8, 60 s), but B degrades at **t = 15 s** (`15:bbad`: netem on both
+directions changed to +80 ms and 3% corrupt mid-run), and the probe reports the
+crowd per window (`-crowdwin 15,27`: 3-15 s before, 15-27 s around the
+verdicts, 27-60 s after).
+
+**What the whole-run p99 really was.** With the degradation at 15 s the first
+reading after it already lowers B to the floor (`1.00→0.10 (lower: loss 2.3%,
+queue 135ms)`, every run, base binary): the delay over the busy links' minimum
+shows the +80 ms at once, and q2Goodness squared gives 0.10. The cut follows a
+reading later and the cut drain starts. Still, after the cut the crowd's p95
+DOUBLES for everyone (170 → 334 ms) and its p99 stays at ~525 ms for the rest
+of the run. Cause: lite's dual connections. Before 15 s a light connection's
+copy sub is placed like any light sub, so about one in nine of the crowd has
+BOTH subs on B; those connections have no good copy to read, the cut drain
+only stops new connections, and lite never replaces a busy second sub. The
+3-15 s window (before B degrades) has its own p99 of 0.6-1.4 s: the start
+burst (3000 connections opened in 2 s while the pool grows), the same in
+every arm.
+
+**Fast first verdict** (`lb_fastverdict.go`, `HS2_LB_FAST_VERDICT`, default
+OFF). A reading whose raw loss is over lb2CutLoss and over 2× the best other
+path + 1 point AND whose delay is over the best other path's by 40 ms, with
+>= 1000 segments, while some path is not bad and after the judge's first 10 s,
+sets the path's target to the floor at once (the cut rule is unchanged). It
+fires in every bad run and never with equal paths, but it changes nothing
+measurable: the plain rule already floors B at that reading (see above). Kept
+as a guard for a degradation whose loss leads its delay; off by default.
+
+**Rescue** (`lb_rescue.go`, `HS2_LB_RESCUE`, edge, default ON). Nothing is
+closed that a user would see:
+- the edge marks the links of every path the dialing side's fresh report has
+  at factor <= 0.25 or cut (and nothing when every path is lowered);
+- a lite connection with ONE sub on a marked link gets lite's own upgrade to
+  dual even past the duplication budget (lite's own light test still
+  applies: not heavy, not a call, under mDupMaxRate);
+- a light dual connection with EVERY sub on marked links gives up its copy
+  sub through the close handshake (`HS2_MCONN_CLOSE_HS`, default on: the exit
+  stops sending on it and names its end offset, so no byte rides only there);
+  a second later lite upgrades it again, and steering puts the new copy on a
+  good path;
+- at most 400 such actions a second over the process; a dual connection
+  looks once a second while the key is on.
+
+The 4 resets of the 8.4 EVAC run were single-sub connections closed by the
+evacuation: a closed stream of a connection without a live copy is a reset
+whatever the idle signal (no request boundary is visible in the bytes). The
+rescue never closes a connection's last sub, so it cannot reset one.
+
+B degrades at 15 s (n=4 each, interleaved; medians, ranges; crowd ms):
+
+| arm | crowd p95 | crowd p99 | p99 mean±sd | 15-27 s p95/p99 | 27-60 s p95/p99 | call p99 | ping p99 | heavy Mbps | crowd fail |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| base (248436d1 rules) | 312 (301-317) | 556 (538-588) | 560±22 | 335 / 522 | 334 / 526 | 570 (401-5632) | 230 | 994 | 0,0,0,0 |
+| + fast verdict | 291 (283-298) | 537 (511-570) | 539±26 | 318 / 512 | 319 / 516 | 693 (192-920) | 198 | 1026 | 0,0,0,0 |
+| + fast verdict + rescue | **180** (167-188) | **385** (355-410) | 384±27 | 198 / 448 | **179 / 283** | 336 (190-408) | 172 | 1043 | 0,0,0,0 |
+| rescue only (no fast verdict) | 185 (174-195) | 388 (378-398) | 388±14 | 214 / 455 | 182 / 286 | 321 | 348 (206-490) | 996 | 0,0 (n=2) |
+
+Rescue: 247-293 copy subs moved off B per run, 0 single-sub upgrades past the
+budget (the budget did not bind here), crowd p99 -31% over the whole run
+(Welch t ~ 10), -46% after the cut, p95 back to the pre-degradation level;
+no crowd failure, heavy unchanged.
+
+Equal paths, no degradation (45 s, n=3 each, interleaved):
+
+| arm | crowd p95 | crowd p99 | 27-45 s p95/p99 | call p99 | ping p99 | heavy | fast verdicts | crowd fail |
+|---|--:|--:|--:|--:|--:|--:|--:|---|
+| base | 117 (112-124) | 169 (161-176) | 112 / 158 | 202 (197-282) | 129 (119-133) | 1050 | 0 | 0,0,0 |
+| + fast verdict + rescue | 118 (112-142) | 165 (160-218) | 116 / 160 | 185 (173-197) | 136 (97-152) | 1050 | 0 | 0,0,0 |
+
+No fast verdict in any equal run. In one of the three key-on runs path C read
+4.0% at ~15 s (a real transient under the 8-stream download; the plain rule
+lowered it 1.00→0.19 and the edge cut it on its own 4.4% reading, recovered
+20 s later) and the rescue moved 336 copy subs off it; that run is the 142 /
+218 one (its 3-15 s window, before anything happened, was already the worst
+start of the six: p99 1.9 s). The other two key-on runs equal the base runs
+(112/160, 118/165). Medians: crowd p95 +1 ms, p99 -4 ms, call p99 -17 ms,
+ping p99 +7 ms with overlapping ranges.
+
+All-tls fronts (`PLAIN=1`), B degrades at 15 s (n=2 each):
+
+| arm | crowd p95 | crowd p99 | 27-60 s p95/p99 | call p99 | ping p99 | heavy | crowd fail |
+|---|--:|--:|--:|--:|--:|--:|---|
+| base | 291 (284-297) | 498 (492-504) | 333 / 514 | 324 | 273 | 900 | 0,0 |
+| + fast verdict + rescue | 172 (171-174) | 320 (307-334) | 173 / 263 | 324 | 168 | 948 | 0,0 |
+
+The same gain with every front tls: an LB / mconn effect, not reality's.
+
+**Defaults.** `HS2_LB_RESCUE=1` on the edge (envdef, Iran side; the exit
+needs nothing new: it already reports the factors and reads CLOSE-REQ): whole-run
+crowd p99 -31% with B going bad (-36% all-tls), p95 back to the
+pre-degradation level, zero crowd failures in 12 key-on runs, heavy
+unchanged, equal paths unchanged by median. With an older exit (no fresh
+report) nothing is marked; with `HS2_MCONN_CLOSE_HS` off only the
+single-sub part works. `HS2_LB_FAST_VERDICT` stays off: no measurable effect
+here (the plain rule already floors such a path at the same reading); its
+guards are tested and it never fired with equal paths. `HS2_LB_EVAC` stays
+off (it can reset single-sub connections; the rescue covers its purpose
+without closing anything).
+
+Left open: the 3-15 s start window (crowd p99 0.4-1.9 s in every arm, before
+any path is bad): 3000 connections opened in 2 s while the pool grows from a
+few links — the start burst, a separate lead (8.4 (c) fixed the dial side of
+it, not the placement of the first connections).
+
+Tests: `TestFastVerdictClearDegradation`, `TestFastVerdictGuards` (small
+sample, loss alone, delay alone, under 2× best + 1 pt, every path bad, start
+grace; a good reading clears it), `TestRescueMarkUnmark`,
+`TestRescueRateBound`, `TestSteerRescueMarks` (lowered and cut paths marked,
+recovered unmarked, every path lowered: nothing), `TestMConnRescueCappedSingle`
+(past the budget, copy avoids the marked link), `TestMConnRescueSparesOthers`
+(unmarked link, a download: untouched), `TestMConnRescueDualAllLowered`
+(copy given up through the handshake and reopened while pings run both ways:
+no ping lost), `TestMConnRescueDualKeyOff`. Raw: lab 1 `/opt/hs2lab/r35/d/res`,
+`an.py`; the probe's `-crowdwin` flag and the `bbad` event are in this
+commit / `ir.sh`.
