@@ -7,6 +7,9 @@
 #   - install.sh.sha256 (what install_self checks a network-fetched menu script
 #     against) matches the committed install.sh — EDIT install.sh then forget to
 #     regenerate this and hs2-menu silently stops installing on curl|bash hosts.
+#   - gofmt -l over hs2-src is empty, EXCEPT the vendored upstream uTLS files
+#     under hs2-src/third_party/utls (upstream's own formatting; only the hs2
+#     additions there, hs2_*.go, are checked). Skipped when gofmt is missing.
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../../.." && pwd)
@@ -42,6 +45,18 @@ if [ -f "$ROOT/install.sh.sha256" ]; then
   fi
 else
   bad "install.sh.sha256 exists"
+fi
+
+GOFMT=$(command -v gofmt 2>/dev/null || { [ -x /usr/local/go/bin/gofmt ] && echo /usr/local/go/bin/gofmt; })
+if [ -n "$GOFMT" ] && [ -d "$ROOT/hs2-src" ]; then
+  unformatted=$(cd "$ROOT/hs2-src" && "$GOFMT" -l . 2>&1 | grep -Ev '^third_party/utls/' ;     cd "$ROOT/hs2-src" && ls third_party/utls/hs2_*.go >/dev/null 2>&1 && "$GOFMT" -l third_party/utls/hs2_*.go 2>&1)
+  if [ -z "$unformatted" ]; then
+    ok "gofmt clean (vendored upstream third_party/utls excluded)"
+  else
+    bad "gofmt clean (vendored upstream third_party/utls excluded): $(echo $unformatted)"
+  fi
+else
+  echo "SKIP gofmt (no gofmt on PATH)"
 fi
 
 exit $fail
