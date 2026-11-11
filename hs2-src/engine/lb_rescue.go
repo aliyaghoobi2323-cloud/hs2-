@@ -157,11 +157,15 @@ func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
 // less (or cut) per the dialing side's fresh report. Caller holds m.mu.
 func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	st := m.steer
-	if lbCallRescue && lbCallStuck { // HS2_LB_CALL_STUCK (lb_call_stuck.go)
+	if lbCallRescue && lbCallStuck || lbCallLate { // HS2_LB_CALL_STUCK, HS2_LB_CALL_LATE (lb_call_late.go)
 		st.callPaths = callPathMark(st.callPaths, byPath)
 		if o := callStuckOpened.Load(); o != st.stuckLogged {
 			st.stuckLogged = o
 			st.logs = append(st.logs, fmt.Sprintf("lb call stuck: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d", o, callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load()))
+		}
+		if o := callLateOpened.Load(); o != st.lateLogged {
+			st.lateLogged = o
+			st.logs = append(st.logs, fmt.Sprintf("lb call late: fresh subs %d, late subs given up %d", o, callLateMoved.Load()))
 		}
 	}
 	if !lbRescue {

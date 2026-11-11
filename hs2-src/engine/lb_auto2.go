@@ -744,6 +744,7 @@ type lbSteerState struct {
 	rescueLogged int64
 	callPaths    map[any]bool // HS2_LB_CALL_STUCK: links whose path is recorded (lb_call_stuck.go)
 	stuckLogged  int64
+	lateLogged   int64 // HS2_LB_CALL_LATE: callLateOpened at the last log line
 }
 
 func newSteerState() *lbSteerState {
