@@ -66,7 +66,7 @@ func TestRefillWaitBound(t *testing.T) {
 	}
 }
 
-// leaveHeld on a waiter the hold already answered keeps that placement.
+// leaveHeldBounded on a waiter the hold already answered keeps that placement.
 func TestRefillLeaveHeldAnswered(t *testing.T) {
 	r := newRefillRig(t, 4, 1)
 	r.addLink()
@@ -79,11 +79,54 @@ func TestRefillLeaveHeldAnswered(t *testing.T) {
 	}
 	l := r.addLink()
 	r.step()
-	ml := r.m.leaveHeld(w)
-	if ml == nil || ml.link != l {
+	ml, done := r.m.leaveHeldBounded(w)
+	if !done || ml == nil || ml.link != l {
 		t.Fatal("answered placement lost")
 	}
 	if u := r.m.users.Load(); u != 2 {
 		t.Fatalf("%d users, want 2", u)
 	}
+}
+
+// At the bound a waiter goes only to a link under twice the fair-share cap;
+// when every link is that full it stays queued.
+func TestRefillWaitBoundCap(t *testing.T) {
+	r := newRefillRig(t, 100, 1)
+	l := r.addLink()
+	for i := 0; i < 2; i++ { // cap 1 (per_link 1, few connections): 2 = 2x cap
+		r.m.mu.Lock()
+		ml := r.m.mlOf2(l)
+		r.m.placeLocked(ml)
+		r.m.mu.Unlock()
+	}
+	_, _, ok, w := r.m.pickHeld()
+	if ok || w == nil {
+		t.Fatal("not queued")
+	}
+	if ml, done := r.m.leaveHeldBounded(w); done || ml != nil {
+		t.Fatal("placed on a link at twice the cap")
+	}
+	if len(r.m.hold.queue) != 1 {
+		t.Fatal("waiter left the queue")
+	}
+	l2 := r.addLink()
+	r.m.mu.Lock()
+	r.m.placeLocked(r.m.mlOf2(l2)) // under the cap x2 but not under the cap
+	r.m.mu.Unlock()
+	ml, done := r.m.leaveHeldBounded(w)
+	if !done || ml == nil || ml.link != l2 {
+		t.Fatal("not placed on the link with room under twice the cap")
+	}
+	if len(r.m.hold.queue) != 0 || r.usersOn(l2) != 2 {
+		t.Fatal("queue or count wrong")
+	}
+}
+
+func (m *LinkManager) mlOf2(l Link) *managedLink {
+	for _, ml := range m.links {
+		if ml.link == l {
+			return ml
+		}
+	}
+	return nil
 }

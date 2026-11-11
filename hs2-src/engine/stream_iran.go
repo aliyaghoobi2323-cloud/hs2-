@@ -328,28 +328,14 @@ func pickWait(ctx context.Context, lm *LinkManager, hold bool) (Link, func(), bo
 		} else if l, rel, ok, w := lm.pickHeld(); ok {
 			return l, rel, true
 		} else if w != nil {
-			bound, stop := refillWaitTimer() // HS2_REFILL_WAIT_MS (refill_wait.go)
-			select {
-			case ml := <-w.ch:
-				stop()
-				if ml != nil {
-					return ml.link, lm.releaseFor(ml), true
-				}
-				continue // the hold ended with no link up: the ordinary wait
-			case <-bound:
-				if ml := lm.leaveHeld(w); ml != nil {
-					return ml.link, lm.releaseFor(ml), true
-				}
-				if l, rel, ok := lm.Pick(); ok {
-					refillWaitCut.Add(1)
-					return l, rel, true
-				}
-				continue
-			case <-ctx.Done():
-				stop()
-				lm.cancelHeld(w)
+			ml, ok := lm.waitHeld(ctx, w) // HS2_REFILL_WAIT_MS (refill_wait.go)
+			if !ok {
 				return nil, nil, false
 			}
+			if ml != nil {
+				return ml.link, lm.releaseFor(ml), true
+			}
+			continue // the hold ended with no link up: the ordinary wait
 		}
 		select {
 		case <-ctx.Done():
