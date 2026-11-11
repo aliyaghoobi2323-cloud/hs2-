@@ -203,3 +203,31 @@ func readPadsThenProof(r io.Reader, key, nonce, ekm []byte) error {
 	}
 	return ErrServerProof
 }
+
+// firstEncrypted is the length of the first application_data record (in
+// TLS 1.3 the server's EncryptedExtensions; 0: none yet).
+func (t *recordTap) firstEncrypted() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, l := range t.lens {
+		if l > 0 {
+			return l
+		}
+	}
+	return 0
+}
+
+// eeSNIAck tells from the target's EncryptedExtensions record length rec
+// whether it acked the SNI (§11.8.3). The record we would send without the
+// ack: EE header 4 + extension list length 2 + ALPN (4+2+1+len) when one was
+// negotiated, + 1 inner content type + 16 AEAD tag (every TLS 1.3 suite). An
+// ack is an empty server_name, 4 B more. Anything else (another extension,
+// record padding, EE coalesced with the Certificate in one record) is not
+// an ack we can mirror: false, as before the fork.
+func eeSNIAck(rec int, alpn string) bool {
+	base := 4 + 2 + 1 + 16
+	if alpn != "" {
+		base += 4 + 2 + 1 + len(alpn)
+	}
+	return rec == base+4
+}

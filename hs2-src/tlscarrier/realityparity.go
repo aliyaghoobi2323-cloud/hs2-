@@ -18,9 +18,11 @@ package tlscarrier
 import (
 	"crypto/tls"
 	"encoding/binary"
+	"io"
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	utls "github.com/refraction-networking/utls"
@@ -191,11 +193,21 @@ func (r *RealityServer) spliceLimits(h *realityHello) (free, rate int64) {
 	return free, rate
 }
 
+// realityKeyLog: tests only (TestRealityEEParity decrypts our EE); nil in
+// production.
+var realityKeyLog atomic.Pointer[io.Writer]
+
 // toUTLSConfig converts the authenticated handshake's config (built as a
 // crypto/tls one, tunnelTLSConfig) for the uTLS server, staples the target's
 // OCSP response / SCTs and pins the key-share group the target chose.
 func (r *RealityServer) toUTLSConfig(c *tls.Config, th targetHello, ok bool) *utls.Config {
 	u := &utls.Config{MinVersion: utls.VersionTLS13, NextProtos: c.NextProtos, SessionTicketsDisabled: true}
+	if w := realityKeyLog.Load(); w != nil {
+		u.KeyLogWriter = *w
+	}
+	if m := r.mirror.Load(); m != nil {
+		u.ServerNameAck = m.SNIAck // EE as long as the target's (§11.8.3)
+	}
 	for _, cv := range c.CurvePreferences {
 		u.CurvePreferences = append(u.CurvePreferences, utls.CurveID(cv))
 	}
