@@ -19,6 +19,88 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel54 — release candidate: mem55 memory fix + fast upload on by default (binary)
+
+From rel53 (18c5a999): merge of mem55 (size-classed mconn chunks) and up57
+(up54–up57 upload-stripe work), then the operator-approved Iran-side
+defaults. Only `CHANGELOG.md` conflicted (both entries kept); every commit
+builds and vets.
+
+- **New defaults (production table: reverse `l3mtcp`, Iran/edge only, not
+  under `HS2_DEFAULTS=legacy`)**: `HS2_MCONN_STRIPE_FAST=1` (with its
+  standing reserve `HS2_MCONN_STRIPE_FAST_RESERVE`, default 3),
+  `HS2_MCONN_STRIPE_FAST_EARLY_MS=200`, `HS2_MCONN_STRIPE_UP_PATHQ=1`. The
+  EARLY_MS and PATHQ keys are now read by `loadEnvKeys` from the envdef
+  table instead of their own `init`. Still off: `HS2_MCONN_STRIPE_XDIR`,
+  `HS2_MCONN_STRIPE_UP_NOSHARE`, `HS2_STRIPE_UP_SUB_WIN_MB` (kharej). The
+  start log shows them (`defaults: production set on (edge side, 11 keys …)`).
+  Turn off: `HS2_MCONN_STRIPE_FAST=0` (all of FAST, reserve, EARLY_MS) or
+  `HS2_MCONN_STRIPE_FAST_RESERVE=0`, `HS2_MCONN_STRIPE_FAST_EARLY_MS=0`,
+  `HS2_MCONN_STRIPE_UP_PATHQ=0` one at a time. No wire change.
+- **Confirmation** (whole lab per run, `labslot.sh --all`, one run at a time
+  per host, arms interleaved; A = rel53 binary, B = rel54 with its defaults;
+  reverse l3mtcp, LB 3 paths × 1 Gbit/s 37 ms, 100–150 links, crowd 3000,
+  call 2 Mbit/s, game; 12 s heavy; Mann-Whitney p):
+  | class | A rel53 | B rel54 | diff | p |
+  |---|---|---|---|---|
+  | u1 mean Mbit/s (lab2, n=11/12) | 537 | 769 | +232 (+43 %) | 0.002 |
+  | u1 seconds 1–5 mean | 469 | 647 | +177 (+38 %) | 0.004 |
+  | u1 per-second median A | 368 590 470 448 472 461 408 536 631 575 677 641 | | | |
+  | u1 per-second median B | 310 792 648 660 773 750 851 813 827 807 751 730 | | | |
+  | u1 light p99 crowd / call / game / echo / ping ms | 81.5 / 85.2 / 81.6 / 85.6 / 78.6 | 82.3 / 83.3 / 83.5 / 80.8 / 78.9 | +0.8 / −1.9 / +1.9 / −4.8 / +0.3 | 0.78 / 0.64 / 0.83 / 0.88 / 0.93 |
+  | c = u1 + 75 % link kill at 6 s (lab2, n=6/6) mean | 196 | 674 | +478 | 0.005 |
+  | c per-second median A | 353 556 475 461 339 173 0 0 0 0 0 0 | | | |
+  | c per-second median B | 342 807 745 784 930 621 277 547 676 776 869 721 | | | |
+  | c light p99 crowd / call / game / echo / ping | 85.9 / 88.0 / 80.5 / 79.8 / 82.0 | 84.8 / 86.1 / 87.5 / 79.4 / 81.4 | −1.1 / −1.9 / **+7.0** / −0.4 / −0.6 | 0.69 / 0.69 / 0.17 / 0.38 / 0.58 |
+  | d1 mean (lab3, n=5/5) | 639 | 703 | +64 | 0.30 |
+  | d1 mean (lab2, n=5/6) | 475 | 682 | +207 | 0.036 |
+  | d1 light p99 crowd / call / game (lab3) | 81.6 / 82.5 / 82.8 | 81.5 / 85.9 / 82.6 | −0.1 / +3.4 / −0.3 | 1.0 / 0.30 / 1.0 |
+  | d1 light p99 crowd / call / game (lab2) | 85.5 / 88.4 / 87.5 | 91.5 / 91.8 / 88.9 | +6.1 / +3.4 / +1.4 | 0.17 / 0.93 / 0.93 |
+  | u8 mean (lab3, n=8/10) | 2360 | 2479 | +119 | 0.12 |
+  | u8 seconds 1–5 | 2132 | 2458 | +326 | 0.004 |
+  | u8 light p99 crowd / call / game / echo / ping | 119.5 / 129.9 / 153.7 / 104.3 / 103.2 | 137.7 / 134.5 / 101.8 / 102.0 / 95.9 | **+18.2** / +4.6 / −51.9 / −2.3 / −7.4 | **0.10** / 0.89 / 0.20 / 0.76 / 0.53 |
+  | d8 mean (lab3, n=6/6) | 1896 | 1851 | −45 | 0.81 |
+  | d8 light p99 crowd / call / game / echo / ping | 99.7 / 93.1 / 94.5 / 86.1 / 88.3 | 98.5 / 116.1 / 95.0 / 89.8 / 84.1 | −1.2 / +23.0 / +0.5 / +3.7 / −4.2 | 0.81 / 0.38 / 0.81 / 1.0 / 0.30 |
+
+  Isolation arm C (rel54 with `HS2_MCONN_STRIPE_FAST=0`, lab2 d1 n=6): 429
+  Mbit/s vs A 475 (p=0.93) and B 682 (p=0.02): the size-classed chunks
+  alone do not change d1. **Open: u8 crowd p99 +18 ms** (median 114 → 138; p=0.10 at n=8/10, p=0.043
+  at the interim n=7/8, when call was +44 ms p=0.032). Not under the
+  p < 0.05 stop rule at the final n, but too large to call verified: rel54
+  is **not** a verified release candidate until a u8 retest (plan in
+  `rel54-notes.md` of the operator). No other class has a light p99 worse by > 3 ms
+  with p < 0.05. The c arm A's upload stops after the kill (0 Mbit/s from
+  second 7), B keeps ~700, so B's light users share the paths with a live
+  upload there.
+- **Memory soak** (lab1 slot0, the rel53 soak: crowd 3000, heavy 8 down,
+  calls, 30 % link kill every 3 min, SIGHUP every 10 min, 30 min):
+  Iran RSS start / warm (300 s) / 600 s / 1200 s / end 327 / 620 / 624 /
+  648 / 696 MB, peak 696 MB at 1688 s, slope after warm-up +3.2 MB/min
+  (rel53 in the same soak: untraced mem55 window 320 / 610 / 631 / 642 / 642
+  MB, +3.0 MB/min; rel53 lab1 slot1 646 / 689 / 1688 / 1831 / 1808 MB, peak
+  1888, +35 MB/min; traced rel53 peak 1238 MB). No 1 GB+ peak; the
+  ≤ 2 MB/min target is still not met (as in mem55: the rest is not chunks).
+  Kharej 570 → 902 MB.
+- **Final checks** (clean clone of the bundle): gofmt 0 files (third_party/utls excluded), `go vet ./...`
+  clean; `go test ./... -timeout 40m`: all packages ok except
+  `udpcarrier TestLabAdaptiveStep` under load (package untouched; alone
+  ×3 ok); `-race` on engine, envdef, cmd/hs2: no DATA RACE, three timing
+  failures under load — `TestStripeAllDieGraceRejoins` and
+  `TestMConnStripeSlots` pass alone ×3, `TestStatsRoundTripSlowVsFastReader`
+  fails under `-race` on rel53 too (2/3, same host) and passes without
+  `-race`; installer sh tests all pass except two real-vim cases of
+  `tm_edit_test.sh` on the loaded lab1 (installer untouched since rel53;
+  alone on lab3 it passes, rc=0 fail=0 twice);
+  `multi_tunnel_test.py` alone on lab2 (no mtir/mtkh netns, 7.9 GB free):
+  first run 2 failures in step 10 uninstall (ir) (pty prompt timeout),
+  second run 57 PASS / 0 FAIL (rc 0). Intermediate commits build and vet.
+- **Mixed versions** (whole lab, 120 s single upload + light users):
+  rel54 Iran / rel53 kharej 839 Mbit/s, rel53 Iran / rel54 kharej 1457,
+  rel54 Iran / r31 kharej 965, r31 Iran / rel54 kharej 1235 — every run 0
+  crowd failures, 0 call/echo loss, 0 ping loss, 150 links, no panic.
+- Binary d7457e60fc97, sha256 `10b0df74…c9458`.
+
+
 ## mem55 — Iran-side memory: size-classed mconn chunks (binary)
 
 Traced soak on lab1 (reverse l3mtcp, LB 3 paths, crowd 3000, heavy 8 down,
