@@ -38,6 +38,8 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   streams dead, every flow back within 0-6 s, no 30 s hang, no reset.
   c1/s: no regression beyond noise. See docs/reality-architecture.md
   §11.6.6 (incl. the single-upload numbers).
+- multi_tunnel: 57/57 on lab 3 alone with the release binary (rel46's lab 1
+  failures were host load; two concurrent runs collide on the fixed netns names).
 - **`HS2_MCONN_STRIPE_RESEND=1` is now a production default on both sides**
   (`envdef`; `=0` turns it off). Binary build 5712ea8a30c7, sha256
   0595213f….

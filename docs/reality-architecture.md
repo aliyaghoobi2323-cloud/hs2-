@@ -2336,6 +2336,14 @@ follows it). A mixed pair (new Iran, old exit) loses nothing over today: the
 old exit ends a connection whose subs all died, the join is refused and Iran
 ends it after the 3 s grace instead of at once.
 
+**multi_tunnel (rel46 open item).** On lab 3, alone, with the release binary:
+57/57 PASS (incl. `10 uninstall (ir)`). rel46's two failures on lab 1 were the
+uninstall prompt not appearing within the test's 60 s prompt wait while five
+tunnels were removed on a host at load ~30 — the host, not the binary. A
+first rel49 run on lab 3 broke at step 3 because another agent ran
+multi_tunnel at the same time: the test's netns names (`mtir`, `mtkh`) are
+fixed, so two runs on one host destroy each other — run it once per host.
+
 Release binary: build 5712ea8a30c7 (CGO_ENABLED=0, -trimpath -ldflags="-s -w"), sha256 0595213f….
 
 #### 11.6.5 Reality Mbps vs AES-128: not the cipher
