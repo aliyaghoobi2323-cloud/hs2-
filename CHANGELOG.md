@@ -19,6 +19,57 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## up56 — upload stripe: link reserve, instant pool target, seconds 1-5 (binary; keys off by default)
+
+On top of up55 (9331efc1). Every change is behind `HS2_MCONN_STRIPE_FAST`
+(Iran/edge, still **off**).
+
+- **`HS2_MCONN_STRIPE_FAST_RESERVE=N`** (with FAST; default 3, 0 off, at
+  most 6): the pool keeps N idle links set aside for the stripe at all times,
+  on top of the autopilot's target (capped by max_links; a set-aside link is
+  heavy for every light pick), renewed each health tick; a sub that takes one
+  asks for its replacement at once (one per link taken). Status
+  `stripe_fast_reserved`, `stripe_fast_refills`.
+- **Instant pool target** (FAST): a stripe's request raises the pool target
+  by the new links right away (`stripeWantRaiseLocked`), instead of at the
+  next 2 s health tick — the lab log showed the reserve's replacements and
+  the doubling chain's links set aside in batches exactly 2 s apart.
+  Status `stripe_fast_bumps`.
+- The doubling chain resumes the moment the raw → stripe upgrade's handshake
+  ends (manager kick; `stripe_fast_hs_kicks`).
+- Log: a connection whose subs all ended after the peer's FIN now ends with
+  "mconn: peer closed (every sub ended after its FIN)" instead of "every sub
+  died" (no wire change).
+- Lab (lab3 only — lab1 was fully used by mem55; rel53 production keys,
+  reverse l3mtcp, 3 paths, 100-150 links, crowd 3000 + call + game, 37 ms
+  each way, 1 Gbit/s, 12 s heavy, arms interleaved over 3 slots; MW = Mann-
+  Whitney two-sided p):
+  - single upload, A (FAST off) vs J (FAST + reserve + instant target),
+    n=12/12: mean 511 → 889 Mbit/s (p<0.001), p10-second 400 → 415,
+    seconds 1-5 441 → 485 (+10 %, p=0.40). Per-second medians A 337 487 490
+    503 486 492 435 560 568 587 669 728, J 364 476 419 483 662 989 1280 1472
+    1076 1033 1145 1334. Light users' p99 (mean): crowd 93 → 108 (+15,
+    p=0.007), call 108 → 116 (+8, p=0.08), game 96 → 104 (+8, p=0.31), echo
+    98 → 102 (p=0.54).
+  - the reserve alone (G, n=12+12 in two rounds) did not move seconds 1-5
+    (385-412 vs F 445 vs A 376-428): the links are there, the time goes to
+    the raw → stripe upgrade handshake (the logged run: `tick held hs=true`
+    4 s into the upload; Iran's UPGRADE waits until the exit has read the raw
+    sub up to the boundary, i.e. the raw link's whole in-flight queue).
+  - tighter upload gate (`HS2_MCONN_STRIPE_UP_QMS=2`, arms H/K): light p99
+    back within ±7 ms of A (p ≥ 0.2) with mean +163-299 Mbit/s, but seconds
+    1-5 not up and the TUN ping p99 +13 ms (K, p=0.018).
+  - multi-stream download (s = d8), n=8/6: unchanged (1638 vs 1614, p=0.95;
+    light p99 −3..−13). Upload with 30 % link kill at 8 s (c), n=8/7: mean
+    388 → 712 (p=0.002), light p99 +6..+16 (p ≥ 0.12). u8 1917 → 2176
+    (p=0.056). Single download (the reserve serves download stripes too),
+    d1 J n=6/6: 409 → 819 (p=0.005), light p99 within ±4 (p ≥ 0.47); an
+    earlier d1 G round n=8/8 had crowd +27 (p=0.014), game +23 (p=0.018).
+- Verdict: median and p10 up, but seconds 1-5 only +10 % (target +50 %) and
+  the light users' crowd p99 +15 ms (p=0.007) under one upload — acceptance
+  not met, the FAST default stays **off**. The trade: +70 % single-upload
+  throughput for +8-15 ms crowd/call p99 while that upload runs.
+
 ## up55 — fast upload stripe widening (binary; keys off by default)
 
 On top of rel53 (18c5a999) with up54's `HS2_MCONN_STRIPE_XDIR` (off) and its
