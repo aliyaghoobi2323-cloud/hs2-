@@ -19,6 +19,34 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rev53b — long-uptime review of the data plane (source only, no binary)
+
+An independent review for bugs that show only after long uptime, many users
+and churn. Fixed (each with a test that fails before the fix):
+
+- **Receive memory amplification** (`engine/mconn.go`): the receive limits
+  (`mRecvBuf`, `oooMax`) count payload bytes, but every waiting record held a
+  whole 16 KB chunk. A reader that stops while the other end writes small
+  messages (a backgrounded phone, a push channel, a destination that never
+  reads an upload) pinned ~650 MB for 4 MB of 100 B records — any user could do
+  it to the exit. A record up to 4 KB that has to wait is now copied out of its
+  chunk (`compactRecv`); the no-backlog path is unchanged.
+  `TestMConnSmallRecordsHeldMemory`: x164 before, x1 after.
+- **Clock steps** (`engine/monoclock.go`): 37 hot-path atomics (`lastRecv`,
+  dgtun mute/retire/drop marks, log limiters, stripe rebuild window...) held
+  wall-clock `UnixNano`, so an NTP step moved them all (a step back of an hour
+  kept a dgtun link muted for that hour; a step forward made every sub look
+  idle). They now use `monoNano`/`monoTime` (monotonic).
+  `TestNoWallClockNanosInEngine` guards against new ones.
+- **A panic in a front's handshake killed the whole process**
+  (`engine/panicguard.go`): the link listeners now run `AcceptFront` under
+  `guardAccept` — that conn is closed and counted, with one log line (and stack)
+  at most every 10 s. The tunnel's own code after the handshake is not covered
+  on purpose (a recovered panic there could leave a shared lock held).
+  `TestGuardAcceptPanicFlood`.
+- **LB path view kept counters for every path ever seen** (`engine/lbview.go`).
+  `TestLBViewForgetsGonePaths`: 201 entries before, 2 after.
+
 ## rel52 — final release candidate: everything since rel40, with EE parity (binary)
 
 One binary (build c4562e3dbbed, sha256 bea01c7c…; rel52b) = rel51 + ee51 + the rel52
