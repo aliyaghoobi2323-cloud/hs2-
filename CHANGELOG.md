@@ -19,6 +19,56 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel54c — fast upload on by default again (operator's decision) (binary)
+
+From rel54b (16897189, tag v-rel54). One change: `HS2_MCONN_STRIPE_FAST=1`
+is back in the Iran (edge) default table. The operator accepted the measured
+cost of rel54b's acceptance (whole lab, u1 n=12, during one heavy upload):
+light p99 crowd +3.0 ms, echo +7.7 ms, ping +2.0, game +1.6 ms, in exchange
+for +35–60 % single-connection upload. `HS2_MCONN_STRIPE_FAST_EARLY_MS=200`,
+`HS2_MCONN_STRIPE_FAST_SOLO=1`, `HS2_MCONN_STRIPE_UP_PATHQ=1` and the reserve
+(`HS2_MCONN_STRIPE_FAST_RESERVE`, code default 3) are unchanged. The edge log
+now says "12 keys from defaults" (rel54b: 11). Turn it off with
+`Environment=HS2_MCONN_STRIPE_FAST=0` on Iran.
+
+- **No protocol change:** the diff from rel54b is `envdef.go` (one table row)
+  and its test; the fast rule only changes how the Iran sender widens its own
+  stripe, so an old kharej (r31, rel53) is unaffected (mixed runs below).
+- **Confirmation** (whole lab per run via `labslot.sh --all`, all three hosts,
+  arms interleaved; Y = rel54b binary 70cc33e4, Z = rel54c 19f63b6b, both with
+  the production defaults; Mann-Whitney):
+  | mode | n Y/Z | Mbit/s Y → Z | s1–5 | crowd p99 | call | game | echo | ping |
+  |---|---|---|---|---|---|---|---|---|
+  | u1 | 12/13 | 590 → 725 (+23 %, p=0.12) | 519 → 654 (p=0.068) | +0.7 (p=0.57) | −9.8 (0.46) | +2.8 (0.40) | +1.2 (0.27) | +0.2 (0.77) |
+  | u8 | 6/5 | 2316 → 2442 (p=0.12) | 2044 → 2273 (p=0.055) | +13.5 (p=0.055) | −0.6 (1.0) | −13.5 (0.17) | −11.3 (0.52) | −8.4 (0.17) |
+  | c (link kill at 6 s) | 6/6 | 304 → 702 (p=0.005) | 540 → 772 (p=0.020) | +4.1 (p=0.30) | +2.0 (0.17) | +1.3 (0.69) | +1.0 (0.17) | +1.4 (0.47) |
+
+  The defaults engage: every Z run logs "edge side, 12 keys from defaults"
+  with `HS2_MCONN_STRIPE_FAST=1` (Y: 11 keys, no FAST), and the Iran status
+  shows the fast path at work (`stripe_fast_chained` > 0 in 13/13 u1, 6/6 c,
+  5/6 u8 runs; median chained 3, early 1, reserved 3, bumps 7–9; Y: all 0).
+  Against rel54b's FAST=1 build (574c2599, arm XF, lab3, n=4 each, interleaved)
+  rel54c is the same: u1 752 vs 807 Mbit/s (p=0.89), crowd −0.1, echo −0.1.
+  This short confirmation shows a smaller u1 gain than rel54b's acceptance
+  (+23 % here, +35 % there at n=12) and no significant light cost on u1; the
+  u8 crowd +13.5 ms (p=0.055, n=6/5) is in the range rel54b's isolation saw
+  for FAST with eight uploads (B vs F +9.5, p=0.11; X vs A +5.3, p=0.69).
+  Two runs lost their iperf3 heavy flow to "Address already in use" (one Y,
+  one Z; harness) and are left out.
+- Final checks: clean tree of e241d5dd (lab2): gofmt 0 files
+  (third_party/utls excluded), `go vet ./...` clean, `go test ./... -timeout
+  40m` all ok (rc 0, TestStripeAllDieGraceRejoins included), `-race` on
+  envdef and the 66 engine `Stripe*` tests: ok, no DATA RACE; 24 installer sh
+  tests incl. release_files: all rc 0, 0 FAIL. `multi_tunnel_test.py`: lab1
+  55/2 (the known step 10 uninstall (ir) pty prompt timeout; another agent's
+  whole-lab runs were going on there), then alone on lab3 (no mtir/mtkh
+  netns, 2.6 GB free in /tmp) 57 PASS / 0 FAIL. Mixed versions (lab3, 130 s
+  upload + light users, 150 links, no panic, 0 crowd fail, 0 call/echo/game
+  /ping loss): rel54c Iran / r31 kharej 773 Mbit/s (crowd p99 122, echo 160
+  in that run; repeat 910, crowd 81.9, echo 79.8; rel54b control 1006, 87.8,
+  81.6), r31 Iran / rel54c kharej 1401 Mbit/s (crowd 84.0, echo 80.8).
+- Binary 584e2279, sha256 `19f63b6b…ad343`; `C:\h2w\bin54c\`.
+
 ## rel54b — fast upload off by default; `HS2_MCONN_STRIPE_FAST_SOLO` (binary)
 
 From rel54 (9eb3b199). Goal: remove the light-user cost of the fast upload
