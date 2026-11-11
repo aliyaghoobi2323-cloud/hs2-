@@ -1021,16 +1021,35 @@ bilateral.
 Findings from the lab demo (fixed or guarded here):
 
 * A wildcard listener (`addr 0.0.0.0:P`, what `hs2 tunnel create` writes)
-  makes `lbOwnAdvert` nil: the dialer never learns any front. `hs2 reality
-  front` refuses with the fix (set `addr` to the IP). Plan: announce the
-  explicit lb list when the primary is a wildcard (lbreload.go, LB owner).
+  made `lbOwnAdvert` nil: the dialer never learned any front. Fixed (menu38):
+  such a listener announces its explicit lb list (`lbWildcardAdvert`,
+  weights as written when they sum to 100, else scaled to 100; an empty list
+  still announces nothing). The dialer needs nothing new: `lbPathsAdvert`
+  already takes remote IPs, weights and fronts from any announcement and
+  keeps its primary. `hs2 reality front` refuses only a list the
+  announcement cannot be built from. Lab: a `tunnel create` tunnel with the
+  default 0.0.0.0, tls -> reality -> tls -> reality -> both under load, 0
+  failed requests, the dialer dials reality (TestLBWildcardAdvert).
 * `syncListenersLocked` closed the `::` listener of a wildcard addr on any lb
   reload (prim "0.0.0.0" vs "::"): fixed (an unspecified listener of addr is
-  never closed).
+  never closed; TestSyncListenersKeepsWildcard).
 * "both" serves tls only for `tlsNames` (top-level / per-IP sni): a tunnel
   without an sni needs one first (refused with the reason).
 * Pure "reality" refuses a dialer that has not heard the key (after its
   restart it dials before the announcement): warned; order tls -> both ->
   reality.
-* `tls` removes the front block (key included): a later reality gets a new
-  key (announced).
+* `tls` used to remove the front block (key included), so a later reality
+  got a new key. Now (menu38) `tls` keeps key, target and short ids in a
+  `{"kind":"tls",...}` block; frontMux, the announcement (publicFront),
+  status and doctor treat a "tls" block exactly like no block, and switching
+  back to reality / both reuses the key (no new key distribution; a dialer
+  with a pinned public_key keeps working). A block without a key is still
+  removed.
+* Open (not changed here): `hs2 tunnel create` on the listening side does
+  not write the domain as "sni", so "both" on such a tunnel first needs an
+  sni (per IP `lb.<side>[].sni` reloads without a restart). Plan: write
+  "sni" = domain on the listener at create/join (buildConfig) after checking
+  the classic-installer parity tests. Also `hs2 lb add-ip` of the only IP on
+  a dialer without bind_local_ip fails the weight check (primary "" joins
+  with 50 %): the documented `tunnel join --update` path works; plan: use the
+  added IP as the primary when the dialer has no bind and one public IP.

@@ -32,12 +32,17 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   fronts are not "bilateral"), backup, safe apply with a **reload** (SIGHUP)
   instead of a restart: established links keep running; the confirm timer and
   the automatic rollback reload too. A new key pair + short id is generated
-  when the IP has none; `reality -> both` keeps key and target; `tls` removes
-  the block. The target is checked first (a rejected target is refused unless
+  when the IP has none; `reality -> both` keeps key and target; `tls` keeps
+  key, target and short ids in a `{"kind":"tls",...}` block (served and
+  announced exactly like no block), so switching back to reality / both
+  reuses the same key; a block without a key is removed. The target is checked first (a rejected target is refused unless
   `--force-target`).
-- Pre-flight refusals with the reason: a wildcard listen address (`addr
-  0.0.0.0:P`) makes the announcement empty, so the dialer would never learn
-  the front (set `addr` to this IP first); `both` without any sni (no domain)
+- A wildcard listener (`addr 0.0.0.0:P` / `[::]:P` / `:P`, the default of
+  `hs2 tunnel create`) announces its explicit lb list (`lbWildcardAdvert`:
+  the weights as written when they sum to 100, else scaled to 100), so its
+  per-IP fronts reach the dialer; before, its announcement was empty.
+- Pre-flight refusals with the reason: an lb list the announcement cannot be
+  built from (the dialer would never learn the front); `both` without any sni (no domain)
   would send every tls dialer to the cover target. A warning for pure
   `reality` unless the IP is already `both` (a dialer that has not heard the
   key, e.g. right after its restart, is refused): order tls -> both ->
@@ -89,6 +94,21 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   back by reload after 30 s; check-target ACCEPT github.com, REJECT
   www.cloudflare.com / cdnjs.cloudflare.com (name) and www.npmjs.com (address
   range).
+- Leftovers (branch menu38): the wildcard announcement above; the kept key
+  on `tls`; tests `TestLBWildcardAdvert` (as-is / scaled weights, fronts
+  carried, the dialer's paths from it, a kept key not announced),
+  `TestSyncListenersKeepsWildcard` (an lb reload never closes the `::` /
+  `0.0.0.0` listener of a wildcard addr), `TestFrontSpecEdit` (tls keeps the
+  key, back to reality reuses it), `TestFrontPreflight`. Lab demo (labs 2/3,
+  tunnel made by `hs2 tunnel create` with the default `addr 0.0.0.0:8443`,
+  lb with the primary IP): the dialer took the front from the announcement;
+  tls -> reality -> tls -> reality -> both (one key throughout, the same
+  md5 before and after) under a request every 0.3 s and a 200 MB download:
+  519/519 + 462/462 requests OK (a dialer restart fell inside the second
+  run), the download complete; after that restart 7 links authenticated over
+  reality (listener counters 7/1/0/0; the 1 tls link was dialed before the
+  announcement arrived and "both" accepted it); a
+  client without the key (sni github.com) got github.com's certificate.
 
 ## Menu redesign M6 — Monitoring & alerts, Server doctor with safe fixes (binary + installer)
 
