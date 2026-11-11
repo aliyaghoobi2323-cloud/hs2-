@@ -81,9 +81,12 @@ func TestMConnRescueCappedSingle(t *testing.T) {
 // lite connection of a real crowd is): the rescue reaches its rate timer
 // too. Before the fix a raw connection on a lowered link stayed single under
 // a binding budget (lab k runs: 0-4 copies past the budget for a crowd of
-// 3000). Not on a lowered link, it stays raw and single.
+// 3000). Not on a lowered link, it stays raw and single. HS2_LB_RESCUE_RAW
+// (default off) gates it.
 func TestMConnRescueCappedRaw(t *testing.T) {
 	withRescue(t, true)
+	lbRescueRaw = true
+	t.Cleanup(func() { lbRescueRaw = false })
 	before := runtime.NumGoroutine()
 	n, iran, exit := newRawPair(t)
 	liteBud.add(time.Now().Unix(), 1_000_000, 100_000) // budget exhausted
@@ -244,4 +247,75 @@ func TestSteerRescueMarks(t *testing.T) {
 	if rescueLowKey(Link(lb1)) {
 		t.Fatal("no fresh report: marked")
 	}
+}
+
+// HS2_LB_RESCUE_RAW off (the default): a raw connection on a lowered link
+// stays single under a binding budget.
+func TestMConnRescueRawOffByDefault(t *testing.T) {
+	withRescue(t, true)
+	before := runtime.NumGoroutine()
+	n, iran, exit := newRawPair(t)
+	liteBud.add(time.Now().Unix(), 1_000_000, 100_000)
+	rescueMark(nil, []any{0})
+	time.Sleep(mLiteAfter + 1500*time.Millisecond)
+	if liveSubs(iran) != 1 || n.link(1) != nil || !iran.rawW.Load() {
+		t.Fatalf("raw connection rescued with HS2_LB_RESCUE_RAW off: %d subs", liveSubs(iran))
+	}
+	resetLiteBudget()
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+// A raw rescue whose handshake cannot finish for longer than mLiteIdle (the
+// exit's raw write on the first sub is stuck: a lowered path) keeps its
+// second sub: closing it as idle ended the connection (subDied while
+// handshaking — lab, HS2_LB_RESCUE_RAW: 14-30 crowd failures a run, every
+// one at 10-11 s into the handshake). Once the write goes through, the
+// handshake ends and data flows both ways.
+func TestMConnRescueRawSlowHandshake(t *testing.T) {
+	withRescue(t, true)
+	lbRescueRaw = true
+	oldIdle := mLiteIdle
+	mLiteIdle = 2 * time.Second
+	t.Cleanup(func() { lbRescueRaw, mLiteIdle = false, oldIdle })
+	before := runtime.NumGoroutine()
+	n, iran, exit := newRawPair(t)
+	liteBud.add(time.Now().Unix(), 1_000_000, 100_000)
+	rescueMark(nil, []any{0})
+	gate := make(chan struct{})
+	n.link(0).exit.gate.Store(&gate) // the exit's raw writes on link 0 hang
+	down := randBytes(8<<10, 41)
+	wrote := make(chan error, 1)
+	go func() { _, err := exit.Write(down); wrote <- err }()
+	mWaitFor(t, "raw rescue upgrade", mLiteAfter+3*time.Second, func() bool { return liveSubs(iran) == 2 })
+	time.Sleep(mLiteIdle + 2*time.Second) // the handshake is stuck behind the exit's write
+	if liveSubs(iran) != 2 || mEnded(iran) {
+		t.Fatalf("second sub closed during the handshake: %d subs, ended %v", liveSubs(iran), mEnded(iran))
+	}
+	close(gate)
+	if err := readN(iran, down); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
+	}
+	up, down2 := randBytes(32<<10, 42), randBytes(32<<10, 43)
+	both(t,
+		func() error { return xfer(iran, up, 4<<10, 0) },
+		func() error { return xfer(exit, down2, 4<<10, 0) },
+		func() error { return readN(exit, up) },
+		func() error { return readN(iran, down2) },
+	)
+	if !rawDone(iran) || mEnded(iran) {
+		t.Fatalf("after the transfer: raw handshake over %v, ended %v", rawDone(iran), mEnded(iran))
+	}
+	resetLiteBudget()
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+func mEnded(m *mConn) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ended
 }

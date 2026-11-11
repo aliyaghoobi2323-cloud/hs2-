@@ -46,6 +46,18 @@ import (
 // failures in 12 runs, heavy unchanged; equal paths unchanged by median.
 var lbRescue bool // loadEnvKeys: HS2_LB_RESCUE
 
+// lbRescueRaw (HS2_LB_RESCUE_RAW=1, edge, default off, with HS2_LB_RESCUE):
+// the single-sub rescue also for a connection whose first sub is still raw
+// (capMConnRaw, mconn_raw.go) — nearly every single-sub connection of a
+// crowd. Without it the single-sub part reaches only connections that were
+// dual once (lab, budget forced binding: 0-4 copies past the budget a run;
+// with it 1130-1215 and crowd p95 586 -> 225 ms). Off by default: the raw
+// upgrade's handshake then has to finish over the lowered path (each side
+// reads the other's raw bytes up to the boundary there), it can take
+// seconds, and a sub dying during it ends the connection by design — 14-30
+// crowd failures a run of 3000 (docs/reality-architecture.md 8.8).
+var lbRescueRaw bool // loadEnvKeys: HS2_LB_RESCUE_RAW
+
 var (
 	rescueFactor = 0.25
 	rescuePerSec = int64(400)
@@ -120,7 +132,7 @@ func (m *mConn) rescueWantLocked(live *msub) bool {
 // upgrade (rescueWantLocked), away from the lowered path. Returns the sub to
 // close, or nil. Caller holds m.mu, Iran side, lite.
 func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
-	if !lbRescue || !mconnCloseHS.Load() || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight || p == nil {
+	if !lbRescue || !mconnCloseHS.Load() || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight || p == nil || m.handshaking {
 		return nil
 	}
 	var c *msub

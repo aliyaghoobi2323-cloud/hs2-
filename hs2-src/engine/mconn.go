@@ -1974,6 +1974,16 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				if s == p || len(s.q) > 0 || s.cur != nil {
 					continue
 				}
+				if m.handshaking {
+					// a raw upgrade not agreed yet (mconn_raw.go): a sub
+					// closed now ends the connection (subDied), and the
+					// handshake can take seconds when the first sub's path
+					// is slow (the peer's raw write in flight there must
+					// end first) — lab, HS2_LB_RESCUE_RAW: 14-30 crowd
+					// connections a run ended at mLiteIdle this way
+					at(mLitePoll)
+					continue
+				}
 				if m.stripeWarmKeepLocked(s, now) { // HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go)
 					continue
 				}
