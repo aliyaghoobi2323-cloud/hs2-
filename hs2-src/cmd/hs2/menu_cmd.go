@@ -64,10 +64,10 @@ func menuConfigCmd(sub string, args []string) {
 			fmt.Println(tr("no stored versions yet", "هنوز نسخه‌ای ذخیره نشده"))
 			return
 		}
-		cur, _ := os.ReadFile(path)
+		cur := currentVersion(*unit, path, vs)
 		for _, v := range vs {
 			mark := ""
-			if b, err := os.ReadFile(v.Path); err == nil && string(b) == string(cur) {
+			if v.N == cur {
 				mark = "  <- " + tr("current", "فعلی")
 			}
 			fmt.Printf("%4d  %s  %s%s\n", v.N, v.Time.Format("2006-01-02 15:04:05"), v.Reason, mark)
@@ -158,6 +158,28 @@ func menuConfigCmd(sub string, args []string) {
 		}
 		fmt.Printf("held by %s pid %d %s since %s%s\n", l.Owner, l.PID, l.TTY, time.Unix(l.Time, 0).Format("2006-01-02 15:04:05"), st)
 	}
+}
+
+// currentVersion is the NEWEST stored version equal to the live config and
+// drop-ins (several versions can hold the same bytes: a pre-apply snapshot
+// and its rollback); 0 = none.
+func currentVersion(unit, path string, vs []cfgVersion) int {
+	cur, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	di := readDropins(unit)
+	for i := len(vs) - 1; i >= 0; i-- {
+		if b, err := os.ReadFile(vs[i].Path); err == nil && string(b) == string(cur) && sameDropins(vs[i].dropins(), di) {
+			return vs[i].N
+		}
+	}
+	for i := len(vs) - 1; i >= 0; i-- { // the drop-ins changed by hand since
+		if b, err := os.ReadFile(vs[i].Path); err == nil && string(b) == string(cur) {
+			return vs[i].N
+		}
+	}
+	return 0
 }
 
 func applyCmd(args []string) {

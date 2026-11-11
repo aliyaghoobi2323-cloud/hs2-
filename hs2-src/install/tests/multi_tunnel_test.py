@@ -644,7 +644,11 @@ def main():
                 for f in os.listdir(st):
                     if f.endswith(".sup"):
                         try:
-                            os.kill(int(open(os.path.join(st, f)).read().strip() or 0), signal.SIGTERM)
+                            # the supervisors ignore SIGTERM (they restart
+                            # their daemon on it): SIGKILL, never pid 0 / 1
+                            pid = int(open(os.path.join(st, f)).read().strip() or 0)
+                            if pid > 1 and pid != os.getpid():
+                                os.kill(pid, signal.SIGKILL)
                         except (OSError, ValueError):
                             pass
         time.sleep(1)

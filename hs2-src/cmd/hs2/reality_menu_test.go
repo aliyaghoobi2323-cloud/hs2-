@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -254,5 +256,50 @@ func TestFrontStateRender(t *testing.T) {
 	deepLang = "en"
 	if !strings.Contains(b.String(), "5/1/2/0") || !strings.Contains(b.String(), "سمت شنونده") {
 		t.Fatalf("render:\n%s", b.String())
+	}
+}
+
+// M6 leftover: delete removed the unit but left <unit>.service.d behind.
+func TestDeleteRemovesDropinDir(t *testing.T) {
+	menuEnv(t)
+	oc, od := certDir, deletedRoot
+	t.Cleanup(func() { certDir, deletedRoot = oc, od })
+	certDir = t.TempDir()
+	os.MkdirAll(filepath.Join(systemdDir, "hs2-x.service.d"), 0o755)
+	os.WriteFile(filepath.Join(systemdDir, "hs2-x.service"), []byte("[Service]\n"), 0o644)
+	os.WriteFile(filepath.Join(systemdDir, "hs2-x.service.d", "50-preset.conf"), []byte("[Service]\nEnvironment=A=1\n"), 0o644)
+	cfg := configForUnit("hs2-x")
+	os.WriteFile(cfg, []byte(`{"mode":"dial"}`), 0o600)
+	deletedRoot = t.TempDir()
+	dir, err := backupTunnel("hs2-x", cfg, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "hs2-x.service.d", "50-preset.conf")); err != nil || !strings.Contains(string(b), "A=1") {
+		t.Fatalf("drop-in not backed up: %v", err)
+	}
+	removeUnitFiles("hs2-x", cfg)
+	if _, err := os.Stat(filepath.Join(systemdDir, "hs2-x.service.d")); !os.IsNotExist(err) {
+		t.Fatalf("drop-in dir left behind: %v", err)
+	}
+}
+
+// M6 leftover: config history marked every version equal to the live
+// config as current; only the newest one is.
+func TestHistoryOneCurrent(t *testing.T) {
+	menuEnv(t)
+	cfg := configForUnit("hs2-h")
+	a, b := []byte(`{"max_links":8}`), []byte(`{"max_links":16}`)
+	now := time.Now()
+	saveVersion("hs2-h", a, nil, "pre-apply", now)
+	saveVersion("hs2-h", b, nil, "apply", now.Add(time.Second))
+	saveVersion("hs2-h", a, nil, "rollback-1", now.Add(2*time.Second))
+	os.WriteFile(cfg, a, 0o600)
+	vs, _ := listVersions("hs2-h")
+	if len(vs) != 3 {
+		t.Fatalf("versions %d", len(vs))
+	}
+	if c := currentVersion("hs2-h", cfg, vs); c != vs[2].N {
+		t.Fatalf("current v%d, want v%d", c, vs[2].N)
 	}
 }

@@ -1007,8 +1007,11 @@ func tunnelDeleteCmd(args []string) {
 	}
 	fmt.Println(tr("backup: ", "پشتیبان: ") + dir)
 	realCreator{}.remove(u, path)
-	restore := fmt.Sprintf("cp %s %s/ && cp %s %s/ && systemctl daemon-reload && systemctl enable --now %s",
-		filepath.Join(dir, filepath.Base(path)), filepath.Dir(path), filepath.Join(dir, u+".service"), systemdDir, u)
+	restore := fmt.Sprintf("cp %s %s/ && cp %s %s/", filepath.Join(dir, filepath.Base(path)), filepath.Dir(path), filepath.Join(dir, u+".service"), systemdDir)
+	if _, err := os.Stat(filepath.Join(dir, u+".service.d")); err == nil {
+		restore += fmt.Sprintf(" && cp -r %s %s/", filepath.Join(dir, u+".service.d"), systemdDir)
+	}
+	restore += " && systemctl daemon-reload && systemctl enable --now " + u
 	fmt.Printf(tr("%s deleted. Restore: %s\n", "%s حذف شد. بازگردانی: %s\n"), u, restore)
 }
 
@@ -1027,6 +1030,17 @@ func backupTunnel(unit, cfgPath string, now time.Time) (string, error) {
 		}
 		if err := os.WriteFile(filepath.Join(dir, filepath.Base(f)), b, 0o600); err != nil {
 			return "", err
+		}
+	}
+	if di := readDropins(unit); len(di) > 0 {
+		dd := filepath.Join(dir, unit+".service.d")
+		if err := os.MkdirAll(dd, 0o700); err != nil {
+			return "", err
+		}
+		for n, c := range di {
+			if err := os.WriteFile(filepath.Join(dd, filepath.Base(n)), []byte(c), 0o600); err != nil {
+				return "", err
+			}
 		}
 	}
 	snapshotCurrent(unit, cfgPath, "pre-delete", now)
@@ -1121,12 +1135,20 @@ func (realCreator) healthy(unit string) bool {
 
 func (realCreator) remove(unit, cfgPath string) {
 	exec.Command("systemctl", "disable", "--now", unit).Run()
+	removeUnitFiles(unit, cfgPath)
+	exec.Command("systemctl", "daemon-reload").Run()
+	exec.Command("systemctl", "reset-failed", unit).Run()
+}
+
+// removeUnitFiles removes the tunnel's unit file, its drop-in directory
+// (presets, toggles, CPUAffinity: backed up by backupTunnel), config and
+// self-signed certificate.
+func removeUnitFiles(unit, cfgPath string) {
 	os.Remove(filepath.Join(systemdDir, unit+".service"))
+	os.RemoveAll(filepath.Join(systemdDir, unit+".service.d"))
 	os.Remove(cfgPath)
 	os.Remove(filepath.Join(certDir, unit+".crt"))
 	os.Remove(filepath.Join(certDir, unit+".key"))
-	exec.Command("systemctl", "daemon-reload").Run()
-	exec.Command("systemctl", "reset-failed", unit).Run()
 }
 
 func (realCreator) stats(on bool) {
