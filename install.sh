@@ -5467,6 +5467,13 @@ nm_tunnels_classic(){
 nm_tun(){ "$BIN" tunnel "$@" --lang "$NM_LANG" </dev/tty || true; }  # never trips set -e
 nm_tunnels(){
   local c u code
+  if [ ! -x "$BIN" ]; then
+    # A fresh server: install the binary first, so the wizard (not the
+    # classic setup screens) builds the first tunnel. A subshell: a failed
+    # download dies there and the menu stays.
+    read -rp "$(nm_t "hs2 is not installed on this server yet — install it now? [Y/n]: " "hs2 هنوز روی این سرور نصب نیست — الان نصب شود؟ [Y/n]: ")" c </dev/tty || c=n
+    case "$c" in [nN]*) ;; *) nm_lock && { ( install_binary ) || true; nm_unlock; } ;; esac
+  fi
   if ! nm_has_tunnel; then nm_tunnels_classic; return 0; fi
   while :; do
     echo >&2; hr; say " ${C_B}$(nm_t "Tunnels" "تونل‌ها")${C_0}"; hr

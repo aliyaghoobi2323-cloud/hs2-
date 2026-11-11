@@ -135,11 +135,11 @@ func normalize(s *tunnelSpec, h tunHostEnv) error {
 		s.Front = "tls"
 	}
 	if s.Front == "reality" {
-		return errors.New(tr("the Reality front is coming in a later release (M5) — use tls for now",
-			"جلوی Reality در نسخهٔ بعدی (M5) می‌آید — فعلاً tls را انتخاب کنید"))
+		return errors.New(tr("create the tunnel with tls, then switch an IP with no downtime: hs2 reality front (menu: Security & camouflage → Front of an IP)",
+			"تونل را با tls بسازید، سپس یک IP را بدون قطعی عوض کنید: hs2 reality front (منو: امنیت و استتار ← پوشش یک IP)"))
 	}
 	if s.Front != "tls" {
-		return fmt.Errorf("front %q: tls (reality: coming)", s.Front)
+		return fmt.Errorf("front %q: tls at create (reality / both: hs2 reality front after create)", s.Front)
 	}
 	if s.Name == "" {
 		s.Name = freeUnitName(h)
@@ -212,6 +212,25 @@ func parsePortList(s string) ([]int, error) {
 }
 
 func otherConfigs(h tunHostEnv) []tunnelCfg { return listTunnelConfigs(h.etcDir) }
+
+// joinFreeName: a joined code whose tunnel name is already used on this server
+// (both sides default to "hs2") gets a free name instead of failing at the
+// last step; returns the taken name ("" = no change).
+func joinFreeName(s *tunnelSpec, h tunHostEnv) string {
+	if s.Name == "" {
+		return ""
+	}
+	taken := h.unitFile != nil && h.unitFile(s.Name)
+	for _, t := range otherConfigs(h) {
+		taken = taken || t.unit == s.Name
+	}
+	if !taken {
+		return ""
+	}
+	old := s.Name
+	s.Name = freeUnitName(h)
+	return old
+}
 
 func freeUnitName(h tunHostEnv) string {
 	taken := map[string]bool{}
@@ -490,8 +509,8 @@ func preflight(s tunnelSpec, cfg []byte, cfgPath string, h tunHostEnv) []preChec
 	// TLS: domain + certificate (listener only holds the cert)
 	if s.tlsFront() && s.listener() {
 		if s.Domain == "" {
-			add(tr("domain", "دامنه"), "warn", tr("no domain: the tunnel works with a self-signed cover certificate (weaker camouflage). Better: a domain + Let's Encrypt (ACME HTTP-01, or DNS-01 when port 80 is busy), or the Reality front (coming)",
-				"بدون دامنه: تونل با گواهی خودامضا کار می‌کند (استتار ضعیف‌تر). بهتر: دامنه + Let's Encrypt (ACME HTTP-01 یا DNS-01 وقتی پورت ۸۰ اشغال است) یا جلوی Reality (به‌زودی)"))
+			add(tr("domain", "دامنه"), "warn", tr("no domain: the tunnel works with a self-signed cover certificate (weaker camouflage). Better: a domain + Let's Encrypt (ACME HTTP-01, or DNS-01 when port 80 is busy), or the Reality front (after create: Security & camouflage → Front of an IP)",
+				"بدون دامنه: تونل با گواهی خودامضا کار می‌کند (استتار ضعیف‌تر). بهتر: دامنه + Let's Encrypt (ACME HTTP-01 یا DNS-01 وقتی پورت ۸۰ اشغال است) یا جلوی Reality (پس از ساخت: امنیت و استتار ← پوشش یک IP)"))
 		} else if h.lookup != nil {
 			ips, err := h.lookup(s.Domain)
 			switch {

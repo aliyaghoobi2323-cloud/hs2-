@@ -374,7 +374,7 @@ func TestWizardAbortAndAnswers(t *testing.T) {
 		}
 	}
 	// iran, reverse, tun+mtcp, TLS (Reality first: refused, then TLS), public IP default, port, user ports, domain, cert self, charts yes
-	in := "2\n2\n2\n2\n1\n\n9443\n443,8443\n\nself\ny\n"
+	in := "2\n2\n2\n2\n\n9443\n443,8443\n\nself\ny\n"
 	var s tunnelSpec
 	var sb strings.Builder
 	if err := wizard(asker{bufio.NewReader(strings.NewReader(in)), &sb}, &s, false, false, h); err != nil {
@@ -383,8 +383,8 @@ func TestWizardAbortAndAnswers(t *testing.T) {
 	if s.Role != "iran" || s.Direction != "reverse" || s.Carrier != "l3mtcp" || s.PublicIP != "203.0.113.5" || s.Port != 9443 || s.UserPorts != "443,8443" || s.Cert != "self" || !s.Stats {
 		t.Fatalf("%+v", s)
 	}
-	if !strings.Contains(sb.String(), "Reality is not available") {
-		t.Fatal("reality placeholder not shown")
+	if s.Front != "tls" || !strings.Contains(sb.String(), "Security & camouflage") || strings.Contains(sb.String(), "coming") {
+		t.Fatal("reality: create with tls + the per-IP hint")
 	}
 }
 
@@ -429,5 +429,20 @@ func TestTunnelListRender(t *testing.T) {
 	out := renderTunnelList(rows)
 	if len(rows) != 1 || !strings.Contains(out, "hs2-a") || !strings.Contains(out, "active") || !strings.Contains(out, "→ 127.0.0.1:2083") {
 		t.Fatalf("%s", out)
+	}
+}
+
+// M7: both sides default to the name "hs2", so joining the other server's code
+// on a server that already runs a tunnel failed at the very last step.
+func TestJoinFreeName(t *testing.T) {
+	h := fakeHost(t)
+	h.unitFile = func(n string) bool { return n == "hs2" }
+	s := tunnelSpec{Name: "hs2"}
+	if old := joinFreeName(&s, h); old != "hs2" || s.Name == "hs2" || s.Name == "" {
+		t.Fatalf("%q %q", old, s.Name)
+	}
+	s = tunnelSpec{Name: "edge"}
+	if old := joinFreeName(&s, h); old != "" || s.Name != "edge" {
+		t.Fatalf("%q %q", old, s.Name)
 	}
 }

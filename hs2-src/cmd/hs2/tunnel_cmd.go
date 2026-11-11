@@ -173,7 +173,7 @@ type asker struct {
 
 // ask prints a question; "" keeps def; "q" or EOF aborts the wizard.
 func (a asker) ask(q, def string) (string, error) {
-	if def != "" {
+	if def != "" && !strings.HasSuffix(q, "]") { // "… [y/N]" already shows it
 		fmt.Fprintf(a.out, "%s [%s]: ", q, def)
 	} else {
 		fmt.Fprintf(a.out, "%s: ", q)
@@ -240,15 +240,13 @@ func wizard(a asker, s *tunnelSpec, advanced, joining bool, h tunHostEnv) error 
 		}
 		s.Carrier, s.Encap = []string{"mtcp", "l3mtcp", "dgtun", "dgtun"}[n-1], []string{"", "", "udp", "icmp"}[n-1]
 		if s.Carrier != "dgtun" {
-			for {
-				n, err = a.choose(tr("4/6 Front (what a censor sees):", "۴/۶ جلو (آنچه سانسورچی می‌بیند):"), []string{"TLS", tr("Reality — coming (M5)", "Reality — به‌زودی (M5)")}, 1)
-				if err != nil {
-					return err
-				}
-				if n == 1 {
-					break
-				}
-				w("  %s\n", tr("Reality is not available in this release yet — TLS for now.", "Reality هنوز در این نسخه نیست — فعلاً TLS."))
+			n, err = a.choose(tr("4/6 Front (what a censor sees):", "۴/۶ جلو (آنچه سانسورچی می‌بیند):"), []string{"TLS", tr("Reality — switched on per IP after create (no downtime)", "Reality — پس از ساخت، برای هر IP روشن می‌شود (بدون قطعی)")}, 1)
+			if err != nil {
+				return err
+			}
+			if n == 2 {
+				w("  %s\n", tr("The tunnel is created with TLS; then switch an IP to reality / both with no downtime: menu 4) Security & camouflage → 2) Front of an IP (or: hs2 reality front -u NAME --ip IP reality --target HOST:443).",
+					"تونل با TLS ساخته می‌شود؛ سپس یک IP را بدون قطعی به reality / both ببرید: منوی ۴) امنیت و استتار ← ۲) پوشش یک IP (یا: hs2 reality front -u NAME --ip IP reality --target HOST:443)."))
 			}
 			s.Front = "tls"
 		}
@@ -573,6 +571,12 @@ func tunnelJoinCmd(args []string) {
 	set(&s.BindIP, *bind)
 	if *upd {
 		os.Exit(joinUpdate(s, *within, *yes, *dry))
+	}
+	if *name == "" {
+		if old := joinFreeName(&s, h); old != "" {
+			fmt.Printf(tr("note: a tunnel named %s already exists here — this one is created as %s (--name to choose; --update to update %s from the code instead)\n",
+				"توجه: تونلی به نام %s اینجا هست — این یکی با نام %s ساخته می‌شود (--name برای نام دلخواه؛ --update برای به‌روزرسانی %s از روی کد)\n"), old, s.Name, old)
+		}
 	}
 	fmt.Printf(tr("Joining %s as %s (%s, %s)\n", "پیوستن به %s به‌عنوان %s (%s، %s)\n"), c.Name, s.Role, s.Direction, s.Carrier)
 	inter := !*yes && isTTY(os.Stdin)
