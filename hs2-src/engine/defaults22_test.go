@@ -56,7 +56,7 @@ func TestApplyDefaults(t *testing.T) {
 	if lbFillPct != 0 || lbSparePerRound != 1 || lbRecConfirm || lbFlapPen {
 		t.Fatal("edge: exit-only keys on")
 	}
-	if !lbRescue || lbFastVerdict {
+	if !lbRescue || lbFastVerdict || lbRescueRaw {
 		t.Fatal("edge: HS2_LB_RESCUE should default on, HS2_LB_FAST_VERDICT off")
 	}
 

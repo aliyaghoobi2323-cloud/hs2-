@@ -39,16 +39,29 @@ import (
 //     side's fresh report: a path that recovers leaves it; the copies then
 //     follow lite's own rules (an idle second sub closes after mLiteIdle).
 //
-// Default on (edge, envdef). Lab (reality phase 4d, docs/reality-architecture.md
+// Default on (edge, envdef), with HS2_LB_RESCUE_CALLFREE (lb_rescue_callfree.go,
+// 8.9: copies off the call's links; without it call p99 367 vs 207 ms). Lab (reality phase 4d, docs/reality-architecture.md
 // 8.5; B +80 ms 3% corrupt from t=15 s): crowd p99 over the run 556 -> 385 ms
 // (all-tls 498 -> 320), p95 312 -> 180, after the cut 526 -> 283 ms; ~250-300
 // copy subs moved off B a run (the budget part did not bind there); 0 crowd
 // failures in 12 runs, heavy unchanged; equal paths unchanged by median.
 var lbRescue bool // loadEnvKeys: HS2_LB_RESCUE
 
+// lbRescueRaw (HS2_LB_RESCUE_RAW=1, edge, default off, with HS2_LB_RESCUE):
+// the single-sub rescue also for a connection whose first sub is still raw
+// (capMConnRaw, mconn_raw.go) — nearly every single-sub connection of a
+// crowd. Without it the single-sub part reaches only connections that were
+// dual once (lab, budget forced binding: 0-4 copies past the budget a run;
+// with it 1130-1215 and crowd p95 586 -> 225 ms). Off by default: the raw
+// upgrade's handshake then has to finish over the lowered path (each side
+// reads the other's raw bytes up to the boundary there), it can take
+// seconds, and a sub dying during it ends the connection by design — 14-30
+// crowd failures a run of 3000 (docs/reality-architecture.md 8.8).
+var lbRescueRaw bool // loadEnvKeys: HS2_LB_RESCUE_RAW
+
 var (
 	rescueFactor = 0.25
-	rescuePerSec = int64(400)
+	rescuePerSec = int64(100) // HS2_LB_RESCUE_PER_SEC (lb_rescue_callfree.go); was 400
 	rescueSec    atomic.Int64 // the current second (unix)
 	rescueN      atomic.Int64 // upgrades in it
 	// rescueTotal / rescueRefused: upgrades done / refused by the rate bound.
@@ -120,7 +133,7 @@ func (m *mConn) rescueWantLocked(live *msub) bool {
 // upgrade (rescueWantLocked), away from the lowered path. Returns the sub to
 // close, or nil. Caller holds m.mu, Iran side, lite.
 func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
-	if !lbRescue || !mconnCloseHS.Load() || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight || p == nil {
+	if !lbRescue || !mconnCloseHS.Load() || m.heavy || m.dupOff || m.callUp || m.callOn || m.wantBulk || m.mode != planeLight || p == nil || m.handshaking {
 		return nil
 	}
 	var c *msub
@@ -169,7 +182,7 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	}
 	if t := rescueTotal.Load(); len(low) > 0 && (len(st.rescued) == 0 || t != st.rescueLogged) {
 		st.rescueLogged = t
-		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load()))
+		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d, placed off call links %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load(), rescueCallFreeN.Load()))
 	}
 	st.rescued = rescueMark(st.rescued, low)
 }

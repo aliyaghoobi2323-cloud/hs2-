@@ -1006,6 +1006,205 @@ before trusting the call column here (the 3-path runs of 8.6 showed call p99
 336 vs 570 the other way). Rows mix the 35d binary (2 reps per arm) and this
 tree's (2 reps; base there = `HS2_LB_RESCUE=0`).
 
+### 8.8 Phase 5b (2026-11-11, branch reality37): rescue under a binding budget found, all-tls call p99
+
+**(a) Why the single-sub rescue barely fired (8.7 (b)).** Debug counters in a
+lab k run (budget forced binding by a lab-only build, mLiteCapPct = 0; B +80
+ms 3% corrupt from 15 s; crowd 3000, iperf down x8) showed the guards of
+`rescueWantLocked` were never the problem: over the whole run lite's
+single-sub upgrade rule (mConn.tick) ran only ~50 times, 1 of them on a
+lowered link. Nearly every single-sub crowd connection is **raw**
+(capMConnRaw, mconn_raw.go): its upgrade rule is the raw timer `rawTick`,
+which asked only the budget and never the rescue. The 0 and 4 copies of 8.7
+were connections that had been dual once and fell back to the records path.
+`TestMConnRescueCappedSingle` passed because `newLitePair` is not raw.
+Fix: `rawTick` asks `rescueWantLocked` like the tick does
+(`TestMConnRescueCappedRaw`, fails without the fix).
+
+With that, the rescue reached the crowd (1118-1215 copies past the budget a
+run, 192-278 copy subs moved) but 20-30 crowd connections failed a run (0
+without the rescue). Counters on every end while a raw upgrade was still in
+its handshake: all were the second sub, closed by Iran itself 10-11 s into the
+handshake. The handshake waits for the exit's raw write in flight on the first
+sub (upgradeSendExit takes the raw write lock before naming its boundary) and
+the first sub is on the lowered path, so it can take seconds; meanwhile Iran's
+lite rule saw the second sub idle for mLiteIdle (10 s), closed it, and a sub
+dying in the handshake ends the connection by design. Fix: no idle close of a
+sub while the connection is handshaking (and no dual-rescue CLOSE-REQ then);
+no unit test reproduces it yet: a fake-net test (the exit's raw write held
+past mLiteIdle) passed without the fix alone and was flaky in the full suite,
+so it was dropped; the lab rows below are the proof. Open: a reproducer.
+
+The raw part ships behind `HS2_LB_RESCUE_RAW` (edge, **default off**): the
+default budget (5% of all bytes, downloads included) did not bind in any lab
+run (8.7), so the default changes nothing measurable, and the raw upgrade on a
+lowered path is the one place the rescue can still cost a connection.
+
+Lab 1, k runs (budget forced binding, lab-only build), interleaved; medians
+(ranges), ms:
+
+| arm | n | crowd p95 | crowd p99 | 15-27 s p95/p99 | 27+ s p95/p99 | call p99 | crowd fail | copies past budget |
+|---|--:|--:|--:|--|--|--:|--|--|
+| rescue off (`HS2_LB_RESCUE=0`) | 4 | 568 (545-614) | 877 (815-1355) | 576 / 822 | 606 / 885 | 237 (181-922) | 0 ×4 | — |
+| raw rescue, before the handshake fix | 4 | 225 (223-234) | 538 (517-579) | 361 / 678 | 192 / 271 | 215 (204-909) | 30, 30, 20, 29 | 1118-1215 |
+| rescue off, 2nd set | 4 | 562 (550-580) | 888 (819-948) | 574 / 831 | 607 / 869 | 396 (174-703) | 0 ×4 | — |
+| raw rescue + handshake fix (`HS2_LB_RESCUE_RAW=1`) | 4 | 213 (210-217) | 532 (511-544) | 339 / 673 | 184 / 258 | 764 (181-1054) | **0 ×4** | 1118-1155 |
+
+With the fix the failures are gone (0 in 4 runs, 1118-1155 copies past the
+budget a run) and the crowd gain stays: p95 -62%, p99 -40%, after the cut p99
+869 -> 258 ms. But call p99 (764 vs 396 by median) and ping p99 (311 vs 161)
+are worse — the same tail cost as (b) below, larger with ~1100 copies a run.
+So `HS2_LB_RESCUE_RAW` stays off until (b) is fixed.
+
+**(b) All-tls call p99 with the rescue (8.7 (c)).** Six more interleaved reps
+per arm (fresh binary of this tree, default budget; base = `HS2_LB_RESCUE=0`,
+rescue arm with HS2_LB_FAST_VERDICT=1 as in 8.7):
+
+| arm | n | crowd p95 | crowd p99 | 27+ s p95/p99 | call p99 | ping p99 | heavy | fail |
+|---|--:|--:|--:|--|--:|--:|--:|--|
+| rescue off | 6 | 286 (279-296) | 490 (482-493) | 330 / 505 | 207 (171-424) | 197 | 1021 | 0 ×6 |
+| fast verdict + rescue | 6 | 173 (170-182) | 323 (312-344) | 173 / 260 | 367 (170-980) | 236 | 1018 | 0 ×6 |
+
+Call p99 per run, rescue: 195, 903, 191, 170, 539, 980 (8.7: 542, 416, and
+621 rescue-only); off: 171, 372, 188, 200, 215, 424 (8.7: 177, 398). The
+regression is real in the tail: off never passed 424 ms in 8 runs, the
+rescue went past 500 ms in 5 of 9. The crowd gain holds (p95 -40%, after the
+cut p99 -48%, no failure). Not fixed here (no lab time left in this run).
+Leads, in order: the rescue's burst at the lowering — ~1100 upgrades and
+~300 CLOSE-REQs within 2-3 s (rescuePerSec 400) onto the good paths' links,
+some of them the call's — so (1) place rescue copies away from links
+carrying a call sub (the HS2_MCONN_CALL_AVOID list, reversed) and (2) lower
+rescuePerSec to ~100; measure call p99 per 1 s window around the cut to
+confirm the burst first.
+
+**(c) Start window v3 (HS2_REFILL_WAIT_MS by queued bytes).** Not started:
+the lab time of this run went to (a) and (b). Plan unchanged from 8.7: place
+a leaver on the link with the fewest queued/unacked bytes (the smux send
+queue, not the connection count), re-place a start-window connection's
+primary once the pool is up via lite's dual upgrade, and dial the exit's
+first batches faster; acceptance as in the brief (≥4 interleaved reps,
+start p99 much lower, whole crowd p95 ≤ +2 ms, no call/ping p99 regression).
+
+Final tree (lab 3, clean `git archive`): gofmt (changed files) clean, `go
+vet ./...`, tlscarrier, cmd/hs2, reality, envdef ok, `-race` on
+Rescue/MConnRaw/Defaults22 ok; full engine suite (-timeout 40m): every test
+passed except the dropped flaky test above (removed after, its subset re-run
+ok with -race).
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an37.py k|c`, runs `*-r*`), drivers
+`go37.sh`, `go37b.sh`, `drv37.sh`.
+
+### 8.9 Phase 5c (2026-11-11, branch reality38): rescue off the call's links, start window v3
+
+**(a) All-tls call p99 with the rescue (8.8 (b)).** The lead of 8.8: when a
+path is lowered the rescue opens copy subs and sends CLOSE-REQs in a burst
+(rescuePerSec was 400) onto the good paths' light links, some of them the
+call's. Fix (`lb_rescue_callfree.go`):
+- Iran marks the links of a call-like connection (callRollLocked's sample,
+  or callUp / callOn; refreshed every window, a mark lasts callFreeTTL 5 s);
+- a rescue copy (the one live sub on a lowered link, not a call itself)
+  carries a mark in its avoid list and goes to a light link with **no call
+  mark and not lowered** (pickRescueLocked, by pickPlaneTiers' order); only
+  when there is none, the usual light pick;
+- rescuePerSec 400 -> 100 (`HS2_LB_RESCUE_PER_SEC`): the ~300 copy subs a
+  run come over ~4 s instead of ~1 s (166-414 refused by the bound a run,
+  each retried a second later by the lite poll).
+
+`HS2_LB_RESCUE_CALLFREE` (edge, **default on** with the rescue). The probe now
+reports the call's p99 and max per 1 s of send time (`sec_p99`, `sec_max`).
+
+Lab 1, scenario (c) (all-tls, B +80 ms 3% corrupt from 15 s, crowd 3000,
+call, game, iperf down x8), interleaved, this tree; rescue arm with
+HS2_LB_FAST_VERDICT=1 as in 8.7/8.8; medians (ranges), ms:
+
+| arm | n | crowd p95 | crowd p99 | 15-27 s p95/p99 | 27+ s p95/p99 | call p99 | ping p99 | heavy | fail |
+|---|--:|--:|--:|--|--|--:|--:|--:|--|
+| rescue off (`HS2_LB_RESCUE=0`) | 6 | 285 (268-302) | 494 (486-505) | 329 / 510 | 332 / 512 | 316 (188-1101) | 294 | 1043 | 0 ×6 |
+| rescue + callfree + 100/s | 6 | 178 (174-181) | 326 (304-385) | 218 / 454 | 178 / 259 | **223 (199-405)** | 193 | 983 | 0 ×6 |
+
+Call p99 per run, rescue: 345, 212, 405, 234, 199, 209; off: 409, 1101,
+223, 188, 211, 474 (the 1101 run was at 700-900 ms per second from 12 s on,
+before the cut: not the rescue's). Without that run the off arm's median is
+also 223. So the call is no worse than without the rescue (8.8: 367 vs 207,
+five of nine rescue runs past 500 ms; here none past 405), and the crowd gain
+holds: p95 -38%, p99 -34%, after the cut p99 512 -> 259, no failure. Per
+second, the worst call second of the rescue runs near the cut was 463 ms
+(21 s), off 1157 (21 s, the bad run) and 612 (20 s): both arms have their
+spikes in the cut window — the path going bad, not the rescue's burst.
+
+The probe's seconds count from its own start, evidently ~3 s after the event clock
+(seconds 0-2 are its warm-up), so the cut at 15 s is probe second ~12. Runs
+with the call at 650-1150 ms in EVERY second from ~12 s to the end happen in
+both arms (c off r381; k off r382, k raw r383): the call's own subs sit on B
+and nothing moves a call (the rescue skips calls by design: callUp / callOn).
+That, not the rescue, is the call p99 tail left in (c) and (k). Next lead:
+let a call whose every sub is on a lowered path get a new pair sub off it
+(HS2_MCONN_CALL_AVOID's placement), as the dual rescue does for light users.
+
+Equal paths (b), n=4+4 (45 s, no event): crowd p95 126 (123-130) vs off 121
+(115-127), p99 173 vs 170, call p99 202 vs 206, ping p99 143 vs 148; no path
+is ever lowered there (no rescue log line in any run), so the rescue code
+does not run: noise (8.7 had it the other way, 115 vs 120).
+
+k (budget forced binding, lab-only build with mLiteCapPct = 0, raw rescue on:
+`HS2_LB_RESCUE_RAW=1` + callfree + 100/s), n=4+4:
+
+| arm | n | crowd p95 | crowd p99 | 15-27 s p95/p99 | 27+ s p95/p99 | call p99 | ping p99 | fail | copies past budget |
+|---|--:|--:|--:|--|--|--:|--:|--|--|
+| rescue off | 4 | 578 (539-595) | 906 (822-957) | 599 / 862 | 612 / 900 | 328 (175-890) | 161 | 0 ×4 | — |
+| raw rescue + callfree + 100/s | 4 | 241 (241-242) | 606 (539-647) | 483 / 734 | 189 / 260 | 543 (169-1032) | 158 | 0 ×4 | 914-959 |
+
+Call p99 per run, raw: 169, 292, 795, 1032 (the 1032 run: call stuck on B
+from the cut, see above); off: 177, 479, 890 (stuck), 175. One raw run (795)
+has a cut-window burst (1182 ms at probe second 22) the off runs do not. Ping
+p99 is now equal (158 vs 161; 8.8: 311 vs 161). So `HS2_LB_RESCUE_RAW` stays
+**off**: better than 8.8 but not proven free for the call with n=4.
+
+Confirmation with the same binary and probe, the 8.8 behaviour
+(`HS2_LB_RESCUE_CALLFREE=0 HS2_LB_RESCUE_PER_SEC=400`), n=3 after the runs
+above: call p99 525, 438 and **6533 ms**, crowd p95 189 (173-194), ping p99
+225 (184-477). Its per-second call p99 is not one burst at the cut: it stays
+250-800 ms in many seconds after it (copies keep landing on the call's links
+as connections cycle through upgrade, idle close and re-upgrade), and the
+6533 run moved 1684 copy subs off (normally 260-340) with a 3-7 s call stall
+at probe seconds 40-47. With callfree the placed-off-call count equals the
+re-upgrades (253-312 a run) and no run of the new setting had a call second
+past 540 ms. So the cause was placement on the call's links
+(sustained, not only the burst), and keeping the copies off them fixes it.
+
+**(b) Start window v3 (`HS2_REFILL_WAIT_BYTES=1` with `HS2_REFILL_WAIT_MS=300`,
+edge, default off).** A connection leaving the hold at the bound goes to the
+serving link under 2× the fair-share cap that moved the fewest bytes in the
+last sample (managedLink.rate, both directions; ties: fewer users) instead of
+Pick's connection-count order (`refill_wait.go` pickByBytesLocked,
+`TestRefillWaitBoundBytes`). The exit-side send queue is not visible at the
+edge (the exit's stats record has no queued bytes), so the link's byte rate
+is the proxy. Lab 1, equal paths (45 s, `-crowdwin 5,10,15`), interleaved,
+base = this tree with the key off:
+
+| arm | n | 0-5 s crowd p95 / p99 | whole crowd p95 | whole p99 | 15-45 s p95 | call p99 | ping p99 | heavy Mbps |
+|---|--:|--|--:|--:|--:|--:|--:|--:|
+| base | 4 | 637 / 1101 (772-1697) | 120 (115-127) | 169 | 117 | 197 (181-241) | 112 (98-130) | 1261 (1083-1317) |
+| v3 | 4 | 114 / **161 (160-162)** | 117 (116-126) | 162 | 118 | 210 (173-240) | 142 (116-153) | 1066 (1013-1272) |
+
+Start p99 7× lower in every run (v2 of 8.7 still had a 761 ms run), the whole
+crowd p95 not higher (117 vs 120; v1 was +4-5), the 15-45 s p95 +1, call p99
+equal within the ranges. Not accepted yet: ping p99 +30 ms by median (ranges
+barely overlap) and heavy -15% by median (ranges overlap; 8.7's base had 1126
+and ping 134, so both may be noise of n=4). **Default stays off.** Next: 4-6
+more interleaved reps of v3 vs base; if ping p99 and heavy hold, turn it on
+(envdef edge, with HS2_REFILL_WAIT_MS=300).
+
+Final tree (lab 3, clean bundle): gofmt (changed files) clean, `go vet ./...`,
+reality, tlscarrier, cmd/hs2, envdef ok, full engine suite ok (625 s,
+-timeout 40m), `-race` on TestRescue*/TestMConnRescue*/TestRefillWait*/
+TestCallAvoidMark/TestMConnPickPlane ok.
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an38.py c|b|k|s`, runs `*-r38*`),
+drivers `go38.sh`, `go38x.sh`, `go38k.sh`, `go38o.sh`, `go38s.sh`; binaries
+hs2-r38, hs2-r38k (mLiteCapPct 0), hs2-r38v; probe with per-second stats in
+/tmp/sp3d30/probe (the old one in /opt/hs2lab/r36/probe.bak37).
+
 ## 9. Phase 5 = menu M5: Security & camouflage (branch menu37)
 
 Operator surface for the per-IP fronts: `cmd/hs2/reality_menu.go` (commands

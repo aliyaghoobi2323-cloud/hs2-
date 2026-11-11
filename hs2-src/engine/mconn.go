@@ -1953,6 +1953,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					avoid := make([]any, 0, 1+len(m.deadKeys))
 					avoid = append(avoid, live[0].key)
 					avoid = m.callAvoidLocked(append(avoid, m.deadKeys...)) // HS2_MCONN_CALL_AVOID
+					avoid = m.rescueAvoidLocked(avoid, live[0].key)         // HS2_LB_RESCUE_CALLFREE
 					go m.openLight(avoid)
 				}
 			}
@@ -1972,6 +1973,16 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			}
 			for _, s := range live {
 				if s == p || len(s.q) > 0 || s.cur != nil {
+					continue
+				}
+				if m.handshaking {
+					// a raw upgrade not agreed yet (mconn_raw.go): a sub
+					// closed now ends the connection (subDied), and the
+					// handshake can take seconds when the first sub's path
+					// is slow (the peer's raw write in flight there must
+					// end first) — lab, HS2_LB_RESCUE_RAW: 14-30 crowd
+					// connections a run ended at mLiteIdle this way
+					at(mLitePoll)
 					continue
 				}
 				if m.stripeWarmKeepLocked(s, now) { // HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go)

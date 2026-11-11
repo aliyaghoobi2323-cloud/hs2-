@@ -212,7 +212,8 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 		}
 	}
 	callLog(now)
-	m.callMarkLocked(now) // HS2_MCONN_STRIPE_CALLFREE (mconn_stripe_callfree.go)
+	m.callMarkLocked(now)             // HS2_MCONN_STRIPE_CALLFREE (mconn_stripe_callfree.go)
+	m.rescueCallMarkLocked(now, like) // HS2_LB_RESCUE_CALLFREE (lb_rescue_callfree.go)
 	if m.callOn {
 		return false
 	}
@@ -487,6 +488,18 @@ func (m *mConn) callAvoidLocked(avoid []any) []any {
 
 // pickPlaneCall is pickPlane, or with the mark the call placement.
 func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) {
+	avoid, resc := takeRescueMark(avoid) // HS2_LB_RESCUE_CALLFREE (lb_rescue_callfree.go)
+	if resc && p == planeLight {
+		pool := m.exitInfo.Load()
+		m.mu.Lock()
+		if ml := m.pickRescueLocked(avoid, pool); ml != nil {
+			rescueCallFreeN.Add(1)
+			m.placeLocked(ml)
+			m.mu.Unlock()
+			return ml.link, m.releaseFor(ml), true
+		}
+		m.mu.Unlock()
+	}
 	mark := false
 	for i, a := range avoid {
 		if _, ok := a.(callAvoidMark); ok {

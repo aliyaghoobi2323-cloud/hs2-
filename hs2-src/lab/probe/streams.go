@@ -30,18 +30,21 @@ import (
 
 // streamResult is the JSON summary of one call or game stream.
 type streamResult struct {
-	Sent    int       `json:"sent"`           // frames scheduled after warm-up
-	N       int       `json:"n"`              // of them, echoed back before the end
-	Lost    int       `json:"lost"`           // never came back (counted as late too)
-	P50     float64   `json:"p50_ms"`         // round-trip time
-	P95     float64   `json:"p95_ms"`         //
-	P99     float64   `json:"p99_ms"`         //
-	Max     float64   `json:"max_ms"`         //
-	Jitter  float64   `json:"jitter_ms"`      // mean |rtt[i] - rtt[i-1]|, in arrival order
-	LatePct float64   `json:"late_pct"`       // share of Sent with rtt > -latems, or lost
-	Mbps    float64   `json:"mbps,omitempty"` // offered rate, one direction (call)
-	Error   string    `json:"error,omitempty"`
-	rtts    []float64 // the samples, for callers that aggregate several streams
+	Sent    int     `json:"sent"`           // frames scheduled after warm-up
+	N       int     `json:"n"`              // of them, echoed back before the end
+	Lost    int     `json:"lost"`           // never came back (counted as late too)
+	P50     float64 `json:"p50_ms"`         // round-trip time
+	P95     float64 `json:"p95_ms"`         //
+	P99     float64 `json:"p99_ms"`         //
+	Max     float64 `json:"max_ms"`         //
+	Jitter  float64 `json:"jitter_ms"`      // mean |rtt[i] - rtt[i-1]|, in arrival order
+	LatePct float64 `json:"late_pct"`       // share of Sent with rtt > -latems, or lost
+	Mbps    float64 `json:"mbps,omitempty"` // offered rate, one direction (call)
+	// SecP99 / SecMax: per 1 s of send time from the probe start, the rtt p99 / max (-1: no sample)
+	SecP99 []float64 `json:"sec_p99,omitempty"`
+	SecMax []float64 `json:"sec_max,omitempty"`
+	Error  string    `json:"error,omitempty"`
+	rtts   []float64 // the samples, for callers that aggregate several streams
 }
 
 // crowdResult is the JSON summary of the crowd load.
@@ -167,6 +170,7 @@ func runStream(sp streamSpec, stop <-chan struct{}) *streamResult {
 	var sent, recv atomic.Int64 // counted frames only
 	var writerDone atomic.Bool
 	var rtts []float64
+	var secs []int
 	var jsum float64
 	var jn int
 	readerDone := make(chan struct{})
@@ -191,6 +195,7 @@ func runStream(sp streamSpec, stop <-chan struct{}) *streamResult {
 			}
 			rtt := ms(time.Since(sp.start) - ts)
 			rtts = append(rtts, rtt)
+			secs = append(secs, int(ts/time.Second))
 			if prev >= 0 {
 				jsum += math.Abs(rtt - prev)
 				jn++
@@ -249,6 +254,7 @@ loop:
 	res.Sent = int(sent.Load())
 	res.N = len(rtts)
 	res.rtts = rtts
+	res.SecP99, res.SecMax = perSecond(secs, rtts)
 	res.Lost = max(res.Sent-res.N, 0)
 	res.P50, res.P95, res.P99, res.Max = pct(rtts, .5), pct(rtts, .95), pct(rtts, .99), pct(rtts, 1)
 	if jn > 0 {
@@ -419,4 +425,26 @@ func runCrowd(addr string, n int, every time.Duration, maxReply int, measuring f
 	res.P50, res.P95, res.P99, res.Max = pct(lat, .5), pct(lat, .95), pct(lat, .99), pct(lat, 1)
 	res.Win = crowdWindows(lts, append([]float64(nil), lat...))
 	return res
+}
+
+// perSecond: the p99 and max of lat per whole second sec (-1 where empty).
+func perSecond(sec []int, lat []float64) (p99, mx []float64) {
+	n := 0
+	for _, s := range sec {
+		n = max(n, s+1)
+	}
+	by := make([][]float64, n)
+	for i, s := range sec {
+		if s >= 0 {
+			by[s] = append(by[s], lat[i])
+		}
+	}
+	for _, v := range by {
+		if len(v) == 0 {
+			p99, mx = append(p99, -1), append(mx, -1)
+			continue
+		}
+		p99, mx = append(p99, pct(v, .99)), append(mx, pct(v, 1))
+	}
+	return
 }

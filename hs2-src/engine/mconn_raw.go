@@ -339,13 +339,20 @@ func (m *mConn) rawTick() {
 	}
 	if m.liteWantDualLocked(now, uint64(m.rawRecvd.Load())) {
 		switch {
-		case m.upgradeCappedLocked(now):
+		// HS2_LB_RESCUE_RAW (lb_rescue.go): a light raw connection on a
+		// lowered path gets its copy past the budget, as in mConn.tick (most
+		// single-sub lite connections are raw: without this the rescue never
+		// reaches them — lab k runs, 0-4 copies a run). Off by default: the
+		// raw handshake then runs over the lowered path, and a sub dying in
+		// it ends the connection (lab: 14-30 crowd failures a run).
+		case m.upgradeCappedLocked(now) && !(lbRescueRaw && m.rescueWantLocked(m.raw1) && rescueAllow(now)):
 			obs.mconnLiteCapped.Add(1)
 			m.tr.ev("lite: upgrade refused (duplication cap)")
 		case now.Before(m.lightRetryAt):
 		default:
 			m.lightOpening = true
 			avoid := m.callAvoidLocked(append([]any{m.raw1.key}, m.deadKeys...)) // HS2_MCONN_CALL_AVOID
+			avoid = m.rescueAvoidLocked(avoid, m.raw1.key)                       // HS2_LB_RESCUE_CALLFREE
 			m.mu.Unlock()
 			obs.mconnLiteUpgrade.Add(1)
 			m.upgradeRaw(avoid) // in the timer's own goroutine

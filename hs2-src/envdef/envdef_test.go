@@ -52,6 +52,8 @@ func TestSides(t *testing.T) {
 		{"HS2_LB_JUDGE_DATA", "1", "1"},
 		{"HS2_LB_EVAC", "", ""},
 		{"HS2_LB_RESCUE", "1", ""},
+		{"HS2_LB_RESCUE_RAW", "", ""},
+		{"HS2_LB_RESCUE_CALLFREE", "1", ""},
 		{"HS2_LB_FAST_VERDICT", "", ""},
 		{"HS2_REFILL_WAIT_MS", "", ""},
 		{"HS2_MCONN_STRIPE", "8", "8"},
@@ -116,7 +118,7 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 40 {
-		t.Fatalf("table has %d keys, want 40", len(Table))
+	if len(Table) != 41 {
+		t.Fatalf("table has %d keys, want 41", len(Table))
 	}
 }

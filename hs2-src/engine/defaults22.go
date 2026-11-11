@@ -63,8 +63,11 @@ func loadEnvKeys() {
 	lbJudgeData = envOn("HS2_LB_JUDGE_DATA")
 	lbEvac = envOn("HS2_LB_EVAC")
 	lbRescue = envOn("HS2_LB_RESCUE")
+	lbRescueRaw = envOn("HS2_LB_RESCUE_RAW")
+	lbRescueCallFree = envOn("HS2_LB_RESCUE_CALLFREE")
 	lbFastVerdict = envOn("HS2_LB_FAST_VERDICT")
 	refillWait = msFromEnv(envDefault("HS2_REFILL_WAIT_MS"), 0)
+	refillWaitBytes = envOn("HS2_REFILL_WAIT_BYTES")
 }
 
 // msFromEnv is envMsDefault on a value already read.

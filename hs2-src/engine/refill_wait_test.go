@@ -130,3 +130,30 @@ func (m *LinkManager) mlOf2(l Link) *managedLink {
 	}
 	return nil
 }
+
+// v3 (HS2_REFILL_WAIT_BYTES): at the bound a waiter goes to the link under
+// twice the cap that moved the fewest bytes, even with more connections; a
+// link at twice the cap is still never taken.
+func TestRefillWaitBoundBytes(t *testing.T) {
+	refillWaitBytes = true
+	t.Cleanup(func() { refillWaitBytes = false })
+	r := newRefillRig(t, 100, 4)
+	busy, quiet := r.addLink(), r.addLink()
+	r.m.mu.Lock()
+	r.m.mlOf2(busy).rate = 4 << 20
+	r.m.placeLocked(r.m.mlOf2(quiet))
+	r.m.placeLocked(r.m.mlOf2(quiet))
+	r.m.mu.Unlock()
+	r.m.mu.Lock()
+	ml := r.m.pickByBytesLocked(3)
+	r.m.mu.Unlock()
+	if ml == nil || ml.link != quiet {
+		t.Fatal("v3 did not pick the link with the fewest bytes")
+	}
+	r.m.mu.Lock()
+	ml = r.m.pickByBytesLocked(2) // quiet is at the limit
+	r.m.mu.Unlock()
+	if ml == nil || ml.link != busy {
+		t.Fatal("v3 took a link at the limit")
+	}
+}
