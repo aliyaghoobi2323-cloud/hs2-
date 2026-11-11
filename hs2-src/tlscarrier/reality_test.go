@@ -469,7 +469,7 @@ func TestRealityFallbackLimits(t *testing.T) {
 	})
 	s0 := RealityStatsNow()
 	c, _ := net.Dial("tcp", l.addr)
-	c.Write([]byte("GET / HTTP/1.1\r\n\r\n"))
+	c.Write(plainHello(t, "www.target.test")) // a visitor of our server name (sec41: strangers get less)
 	t0 := time.Now()
 	c.SetReadDeadline(time.Now().Add(10 * time.Second))
 	n, _ := io.CopyN(io.Discard, c, 1+400<<10)
@@ -483,7 +483,7 @@ func TestRealityFallbackLimits(t *testing.T) {
 		t.Fatalf("elapsed %v, want about 1.3 s", el)
 	}
 	s1 := RealityStatsNow()
-	if s1.FallbackConns != s0.FallbackConns+1 || s1.FallbackBytes-s0.FallbackBytes < 400<<10 || s1.Rejected["not_hello"] != s0.Rejected["not_hello"]+1 {
+	if s1.FallbackConns != s0.FallbackConns+1 || s1.FallbackBytes-s0.FallbackBytes < 400<<10 || s1.Rejected["signal"] != s0.Rejected["signal"]+1 {
 		t.Fatalf("counters %v -> %v", s0, s1)
 	}
 	// max duration

@@ -142,6 +142,9 @@ func checkConfig(raw []byte, localIP func(net.IP) bool, now time.Time) (errs, wa
 		bad(`unknown "carrier" %q (mtcp, l3mtcp, tls, udp, auto, dgtun)`, fc.Carrier)
 		return
 	}
+	if carrier == "reality" {
+		warn("%s", legacyRealityWarning)
+	}
 	stream := carrier == "mtcp" || carrier == "l3mtcp" || carrier == "l3" || carrier == "tls"
 	dgtun := carrier == "dgtun"
 	withTUN := carrier != "mtcp"

@@ -498,7 +498,15 @@ func runCmd(args []string) {
 // edge dials in direct and listens in reverse, and vice versa for the exit.
 func dialing(fc fileConfig) bool { return (fc.Mode == "dial") != fc.Reverse }
 
+// legacyRealityWarning (sec41): the old "carrier":"reality" (package reality)
+// is not the reality FRONT. Its session-id signal has no time window and no
+// replay memory (a captured hello replayed any time gets OUR certificate
+// instead of the cover site's: an active probe tells), and its cover splice
+// has no limits (a free relay to cover_addr).
+const legacyRealityWarning = `"carrier": "reality" is the OLD experimental carrier: replayable by an active prober and an unlimited relay to cover_addr. Use "carrier": "l3mtcp" (or mtcp/tls) with "front": {"kind": "reality", ...} instead (hs2 reality front).`
+
 func runReality(ctx context.Context, eng *engine.Engine, fc fileConfig) {
+	log.Printf("WARNING: %s", legacyRealityWarning)
 	key := unhex(fc.SharedKey)
 	if dialing(fc) {
 		d := engine.NewRealityDialer(fc.Addr, fc.SNI, key)
