@@ -1943,3 +1943,54 @@ up, p50 105/177 ms, max 148/197 ms in process), `TestRealitySlowTargetBounded`
 
 The pre-hello caps (64 per /24) did not reject anything in the 150-link burst
 (the dialer's hello follows the TCP handshake at once).
+
+### 11.4 Lab 1 re-measure (rel44 binary; s41 harness: reverse l3mtcp, 3 paths, 150 links, crowd/call/game, 74 ms RTT, target on the listener's host)
+
+Medians [min-max]; arms interleaved, 3 slots in parallel. `b40re` = rel40
+binary, all IPs reality (dialer pinned); `r44re` = rel44 reality (pinned);
+`r44tl` = rel44 tls; `r44an` = rel44 started tls, switched to both at 8 s and
+to pure reality at 14 s while running (SIGHUP on the listener), dialer NOT
+pinned (it learns from the announcement). `proof` = dialer log lines
+"reading server proof" per run.
+
+| c1 (1 % loss, P8 down) | b40re n4 | r44re n7 | r44tl n7 | r44an n3 |
+|---|---|---|---|---|
+| Mbps | 1217 [1063-1272] | 1193 [1017-1433] | 1283 [1140-1371] | 1177 [1176-1222] |
+| crowd p99 ms | 156 [152-170] | 154 [151-214] | 152 [149-155] | 151 [151-154] |
+| ping p99 ms | 143 [125-237] | 130 [106-176] | 123 [98-147] | 125 [121-149] |
+| 100 links up s | 4.1 | 2.2 | 2.1 | 2.0 |
+| 150 links s | 20.0 | 20.0 | 20.1 | 26.2 [18.2-26.4] |
+| proof timeouts | 0 | 0 | 0 | 0-1 |
+
+| u8 (P8 up, 75 % links killed at 12 s) | b40re n4 | r44re n4 | r44tl n4 |
+|---|---|---|---|
+| crowd p99 ms | 163 | 159 | 150 |
+| ping p99 ms | 158 | 143 | 122 |
+| rebuild t90 s | 4.0 | 3.8 | 3.8 |
+| proof timeouts | 0 | 0 | 0 |
+
+c0 (lossless, n2 each): Mbps 1705 / 1608 / 1698, crowd p99 133 / 139 / 123,
+ping p99 119 / 136 / 132 (b40re / r44re / r44tl). u8 Mbps is not usable in
+this harness: the iperf3 control connection rides a killed link in most runs
+("control socket has closed unexpectedly") in every arm.
+
+Reading: reality (rel44) is within the run-to-run spread of tls on Mbps and
+crowd p99; its ping p99 median is 7-20 ms higher than tls in c1/u8 with
+overlapping ranges at n=4-7 (not resolved at this n; n>=8 is the next step,
+see below). The 100-link setup of rel44 is 2 s vs 4 s for rel40 (start42's
+start gate), equal for tls and reality. The burst of 150 link dials and the
+75 % kill (~110 redials at once) showed no proof timeout with a pinned key.
+The announcement arm shows the one remaining transition cost: when the
+listener switches both -> reality, a dial already decided on the dialer's
+"both" tls fallback is spliced to the target and waits out the 10 s auth
+deadline (1 link in 2 of 3 runs, the 150th link 6 s later); counters show
+2-3 cover connections per run, all from that window.
+
+Scenario c of §8.13 (path B degrades at 15 s) with the rel44 binary, n=4+4:
+base (`HS2_START_DIAL=0 HS2_REFILL_WAIT_MS=0`) vs defaults: start p99 371 vs
+338, crowd p99 322 vs 280, ping 208 vs 168, Mbps 961 vs 1071, 0 failures in
+both.
+
+Not measured on the lab: link setup with a target ~70 ms from the listener
+(the harness target is on the listener's host); the in-process burst gives
+150 links in 197 ms with a 70 ms target vs 148 ms with a 1 ms one.
