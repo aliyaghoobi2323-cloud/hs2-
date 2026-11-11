@@ -19,6 +19,29 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel48 — direct-mode `both` fixed; rotate-sid; target suite; mode matrix (binary)
+
+- **Direct mode + `both` (fixed)**: a direct-mode listener has no `sni`
+  (the installer writes it on the dialer only), so a `both` IP spliced every
+  tls hello to the target: a dialer without the key never connected and the
+  tls half of `both` never worked. With no `sni`, the names of this side's
+  certificates are now our tls names (`TestTLSNamesFromCert`).
+- **`hs2 reality rotate-sid -u U (--ip IP|--all)`**: a new short id first,
+  the previous one still accepted until the next rotation, so no dial is
+  refused (lab: a plain replace left a pinned dialer unable to rebuild after
+  a link kill; two-step rebuilt in ~5 s).
+- **Target suite**: `check-target`/`targets` report the TLS 1.3 suite the
+  target picks and note AES-256 (suite parity follows it);
+  `HS2_REALITY_PREFER_AES128=1` ranks AES-128 targets first (default off).
+- Lab (docs/reality-architecture.md §11.7, harness `hs2-src/lab/s48`): mode
+  matrix direct mtcp/l3mtcp/tls and reverse mtcp/tls x tls/reality/both with
+  lb (3 IPs; the tls carrier has no lb), 74 ms, crowd + heavy, 75 % kill:
+  every cell up, probes get the right certificate, doctor 0 problems, cold
+  restart 2.3-2.6 s to the first link; direct l3mtcp x8 tls 726 / reality 551
+  / reality with an AES-128 target 669 Mbit/s (n small, open). Scale: 6 IPs
+  with per-IP keys and 2 targets, placement = weights 40/20/15/10/10/5.
+- Release binary: build d3e00fa31aba, sha256 a8863c4c….
+
 ## rel45 — no stall when an IP switches both -> reality; reality vs tls measured (binary)
 
 - **Switch grace (listener)**: an IP switched live from tls or `both` to pure

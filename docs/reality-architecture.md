@@ -2166,3 +2166,158 @@ connections from our IP slows the pool build that way; the 3 s
   the heavy streams at the kill (which links each of the 8 streams' stripes
   were on, whether the dead ones are replaced), and test with
   `HS2_MCONN_STRIPE_JUMP_MS` on the Iran side too (it is kharej-only today).
+
+### 11.7 rel48 (2026-11-11): mode matrix with LB, direct `both` fixed, ideas pass
+
+Branch rel48 = rel45 (64aee0b6) + the commits below. Lab 2, harness
+`hs2-src/lab/s48` (smuxwin labsrc2 copy + the s45 run.sh patch), 3 slots in
+parallel, arms interleaved per round. Reverse l3mtcp is rel47's (mixed fronts,
+path degrade, live switch, lb add/remove, judge) and is not repeated here
+except for the scale case. Every cell: 3 lb IPs (the tls carrier: one, see
+below), netem 37 ms each way (74 ms RTT), 1 Gbit/s, crowd 3000 + call + game +
+heavy download x8, 75 % of the links killed at 12 s (`m`); a single-connection
+download alone (`s`); the same load with a cold dialer restart at 16 s instead
+of the kill (`k`). In every run the listener's front is the same on all IPs,
+the dialer pins the key for pure reality only (`both` learns it from the
+announcement), a non-authenticated `openssl s_client` from the dialer's
+namespace asks for the target's name and for our tls name at 9 s, and
+`hs2 doctor -c` runs on both configs. The env keys are the s45 set on both
+sides in every cell (envdef's production defaults apply to reverse l3mtcp
+only, so they are passed explicitly). Binary: rel45 (e31a18af…) for tls and
+reality, the rel48 build for direct `both` (the fix below).
+
+#### 11.7.1 Direct mode + `both`: the tunnel never came up (fixed)
+
+Found by the matrix: `d mtcp both` and `d l3mtcp both` had 0 links for the
+whole run (`dials failing … EOF`), and the probe with our tls name got the
+target's certificate. A direct-mode listener (kharej) has no `"sni"` in its
+config — the installer writes `sni` on the dialing side only (install.sh, the
+three direct `"mode": "listen"` templates) — so `tlsNames` was empty and a
+`both` IP classified every non-reality hello as cover: a dialer without the
+key (cold start, or before the first announcement) was spliced to the target
+on every dial, never heard the announcement, and the tls half of `both` never
+worked. Reverse mode was fine (the Iran listener's config carries `sni`).
+Doctor said `0 problems` on both sides (no false BAD, but a missed one). The
+menu (`hs2 reality front … both`) refused it via `frontPreflight` ("no
+domain"), so only a hand-edited or migrated config hit it.
+
+Fix (`cmd/hs2/front.go`): with no `sni` at all, the names of this side's
+certificates (`cert_file`, and each lb IP's `cert_file`; DNS SANs, else a
+non-IP CN) are our tls names — the names our tls front proves anyway. An
+explicit `sni` still wins. Test `TestTLSNamesFromCert`. With the rel48 build
+direct `both` comes up (table), the probe with our name gets our certificate
+and the one with the target's name gets the target's, and the dialer writes
+`peer-fronts.json` from the first announcement. The menu's preflight now
+accepts `both` on a direct listener that has a certificate.
+
+#### 11.7.2 The matrix
+
+| dir | carrier | front | Mbps x8 (m) | Mbps x1 (s) | crowd p95 | crowd p99 | ping p99 | rebuild t50/t90 s | probe tgt/our | doctor problems | cold restart first/90% s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| d | l3mtcp | both | 597 [527-668] n2 | 1172 [1144-1200] n2 | 162 [139-186] n2 | 576 [402-750] n2 | 211 [199-223] n2 | 3.3 [3.0-3.6] / 6.5 [6.4-6.5] | 3/3 | 0 | 2.43/9.0 |
+| d | l3mtcp | r128 (AES-128 target) | 669 [642-805] n3 | - | 158 [140-175] n3 | 733 [442-891] n3 | 198 [181-202] n3 | 3.0 [3.0-3.6] / 6.5 [6.2-6.7] | 6/0 | 0 | - |
+| d | l3mtcp | reality | 551 [383-726] n4 | 1099 [1099-1099] n1 | 187 [142-200] n4 | 1104 [439-1561] n4 | 202 [190-275] n4 | 3.5 [3.2-3.6] / 6.4 [6.1-6.8] | 10/0 | 0 | 2.42/16.28 |
+| d | l3mtcp | tls | 726 [531-779] n4 | 1270 [1270-1270] n1 | 132 [105-166] n4 | 692 [382-926] n4 | 157 [125-253] n4 | 3.6 [3.1-3.6] / 6.3 [6.0-6.7] | 0/10 | 0 | 2.46/8.54 |
+| d | mtcp | both | 450 [0-613] n3 | 1071 [982-1161] n2 | 124 [90-192] n3 | 849 [264-1449] n3 | - | 3.1 [2.6-3.5] / 6.4 [6.1-6.5] | 4/4 | 0 | 2.26/8.45 |
+| d | mtcp | reality | 791 [618-816] n3 | 1172 [1172-1172] n1 | 130 [122-161] n3 | 635 [305-1249] n3 | - | 3.6 [2.7-3.6] / 6.5 [6.2-6.6] | 8/0 | 0 | 2.31/8.77 |
+| d | mtcp | tls | 421 [380-461] n2 | 1028 [1028-1028] n1 | 119 [82-176] n3 | 1203 [229-1495] n3 | - | 2.8 [2.7-2.9] / 6.4 [6.0-6.4] | 0/8 | 0 | 2.4/8.38 |
+| d | tls | reality | 226 [210-233] n3 | 484 [484-484] n1 | 313 [265-336] n3 | 1410 [1038-1500] n3 | 392 [323-401] n3 | 1.7 [1.7-1.8] / 1.7 [1.7-1.8] | 8/0 | 0 | 2.51/2.63 |
+| d | tls | tls | 209 [197-226] n3 | 684 [684-684] n1 | 292 [223-313] n3 | 1286 [1137-1470] n3 | 334 [281-344] n3 | 1.7 [1.6-1.7] / 1.7 [1.6-1.7] | 0/8 | 0 | 2.56/2.69 |
+| r | mtcp | both | 540 [513-621] n3 | 858 [858-858] n1 | 159 [103-187] n3 | 262 [187-310] n3 | - | 1.7 [1.6-1.9] / 4.0 [3.9-4.3] | 4/4 | 0 | 2.29/6.49 |
+| r | mtcp | reality | 384 [358-701] n3 | 811 [811-811] n1 | 144 [108-155] n3 | 228 [213-348] n3 | - | 1.7 [1.5-1.7] / 4.2 [3.8-4.3] | 8/0 | 0 | 2.3/6.45 |
+| r | mtcp | tls | 516 [403-722] n3 | 1214 [1214-1214] n1 | 121 [119-137] n3 | 204 [176-252] n3 | - | 1.5 [1.5-1.6] / 3.8 [3.8-4.0] | 0/8 | 0 | 2.31/6.38 |
+| r | tls | reality | 232 [227-237] n2 | 474 [474-474] n1 | 147 [130-165] n2 | 663 [547-779] n2 | 374 [366-383] n2 | 0.2 [0.2-0.2] / 0.2 [0.2-0.2] | 6/0 | 0 | 2.3/2.38 |
+| r | tls | tls | 153 [147-232] n3 | 553 [553-553] n1 | 212 [117-299] n3 | 651 [347-1096] n3 | 360 [350-377] n3 | 0.2 [0.2-0.4] / 0.2 [0.2-0.4] | 0/8 | 0 | 2.29/2.41 |
+
+Notes:
+
+* Mbps x8 is the whole 29 s iperf3 run including the kill at 12 s; crowd
+  p95/p99 likewise (the killed links' streams fail: ~1.7 % of the crowd
+  requests in every mtcp/l3mtcp cell, the same for every front; the tls
+  carrier loses all 3000 crowd connections with its one link). Ping is the
+  hs0 side channel: l3mtcp and the tls carrier only.
+* **The tls carrier has no lb** (`validateLB`: mtcp/l3mtcp only) and `both`
+  is per lb IP, so its cells run on one IP with tls or reality as the
+  tunnel's front, and the kill takes its one link (100 %). It is rebuilt in
+  0.4 s (reverse, from the log) / 1.7 s (direct, sampled); reality costs
+  nothing there.
+* rebuild t50/t90: seconds from the kill until the Iran side's link count is
+  back to 50 % / 90 % (`killrebuild.py`); the pool redials at ~15-21 links/s
+  over 3 IPs (5-7 per IP pair per second) whatever the front.
+* probe tgt/our: how many `openssl s_client` probes got the target's
+  certificate / ours (2 per run: target's name, our tls name). Pure reality
+  answers both with the target (correct: every non-reality hello is cover);
+  tls answers both with ours; `both` answers each name with its owner.
+* doctor problems: the sum of `N problems` over both sides' `doctor -c`; 0
+  everywhere (warnings only: min_links 100, kernel tuning in a netns, the
+  listener's "reality cold start" warning when every IP is pure reality —
+  true, the lab's dialer is pinned).
+* cold restart: the dialer killed (exact PID) at 16 s, its warm file and
+  status removed, started again: seconds to the first link / to 90 % of the
+  links it had.
+
+Where the fronts differ (n is small, see 11.7.5):
+
+* **direct l3mtcp, Mbps x8 with the kill:** tls 726 (n4), reality 551 (n4),
+  `r128` (reality with a target that picks AES-128) 669 (n3), both 597 (n2).
+  Reality is 24 % below tls; an AES-128 target recovers most of it (-8 %).
+  Same direction as §11.5.1 (c1: -11 %, suite parity suspected); this is the
+  first arm with AES-128 interleaved in every round.
+* **single connection (n=1 per cell):** reality below tls in 4 of 5 cells
+  (l3mtcp d 1099 vs 1270, mtcp r 811 vs 1214, tls carrier d 484 vs 684,
+  r 474 vs 553), above in direct mtcp (1172 vs 1028).
+* **direct mtcp x8:** reality 791 vs tls 421 — the opposite sign, inside the
+  noise of the post-kill heavy flow (§11.5.3: the heavy flow can freeze after
+  a 75 % kill, any front).
+* Latency: crowd p95 / ping p99 in direct l3mtcp 187 / 202 ms reality vs 132 /
+  157 tls (n4); reverse mtcp crowd p95 equal (144 vs 121, ranges overlap).
+* Rebuild after the kill and the cold restart do not depend on the front
+  (direct t90 6.3-6.5 s, reverse 3.8-4.2 s; first link 2.3-2.6 s after a
+  restart everywhere), except one direct l3mtcp reality restart that needed
+  16.3 s to 90 % of its links (n1; first link 2.4 s).
+
+#### 11.7.3 Scale: 6 IPs, unequal weights, per-IP keys and targets
+
+`rl3mtcp-reality-sc-1` (n=1; the second run was cut by the time limit):
+reverse l3mtcp, 6 Iran IPs with weights 40/20/15/10/10/5, pure reality on
+all, **a different key pair and short id per IP and two targets** (IPs
+alternate between two `openssl s_server`s), heavy x4 + crowd, path c (weight
+15) at 30 % loss from 12 to 32 s of the probe.
+
+* All 6 paths came up with their own keys (reality authenticated on every
+  IP; the per-IP profile works end to end).
+* Placement (dialer links per path, mean over 6-14 s): 40.9 / 20.4 / 15.4 /
+  10.0 / 10.0 / 5.0 — exactly the weights; at the end (152 links) 68 / 32 /
+  20 / 14 / 14 / 7.
+* Judge: path c's link target went 20 -> 2 four seconds after its loss began
+  (status t 19 -> 23), so new streams avoid it; its 20 links stayed open (the
+  state field stays `ok`: a lowered target, not a cut path). It had not come
+  back 11 s after the loss ended (target 3 at the end of the run).
+* 1187 Mbit/s, crowd p99 164 ms.
+
+#### 11.7.4 Ideas pass
+
+| idea | expected gain | risk | measured | state |
+|---|---|---|---|---|
+| per-IP targets / keys / short ids | a leaked key or a bad target hits one IP, not all | none (config already per IP: `lb.<side>[].front`; the menu makes a key per IP) | scale case: 6 IPs, 6 keys, 2 targets, all up, placement = weights | already supported; nothing to switch on |
+| `hs2 reality rotate-sid` (new short id first, previous kept until the next rotation) | short-id rotation without refused dials, also for a pinned dialer | none (opt-in command; the listener accepts any listed id, the dialer uses the first) | direct mtcp, pinned dialer, rotation at 10 s, 75 % kill at 16 s: two-step back to 150 links, t90 5.2 / 4.6 s; a plain replace never rebuilt (27 / 28 links left, n=2 each) | new command (`TestRotateShortIDs`); use it instead of editing short_ids |
+| spread link handshakes over time | fewer simultaneous Reality handshakes per IP pair | slower pool rebuild | already paced: after a 75 % kill the pool redials 15-21 links/s over 3 IPs (5-7 per pair per second), start ~25/s | not prototyped: no burst to remove; the tell is the link COUNT per pair (doctor's "link count visibility"), not the rate |
+| one target connection pool for parity | cut one target RTT per authenticated link | the per-link target dial IS the timing parity of a spliced connection | §11.5.4: a 70 ms target does not change pool setup (100 links 4.1 s either way) | rejected |
+| prefer AES-128 targets | AES-256 suite parity costs Mbps | none at runtime (target ranking only) | direct l3mtcp x8: r128 669 vs reality 551 vs tls 726 Mbit/s (n3/4/4) | check-target/targets report the suite (`suite`, AES-256 note, `TestTargetSuiteRank`); ranking behind `HS2_REALITY_PREFER_AES128=1`, **default off** until n>=6 in c0/c1 |
+
+#### 11.7.5 Open, with a plan
+
+* **n.** The 55-minute budget gave n=2-4 for the x8 arms, n=1 for the
+  single-connection and restart arms, one scale run and n=2 per rotate arm
+  (the rest of the queue — m round 3 for some cells, s rounds 2-3, sc-2,
+  rotate round 3 — was stopped, nothing half-run kept). Plan: rerun
+  `hs2-src/lab/s48` jobs `s` x3 and r128/reality/tls `m` x6 interleaved, plus
+  c0/c1 (no kill) for the AES-128 question; turn `HS2_REALITY_PREFER_AES128`
+  on by default if r128 beats reality at p<0.05 with no latency cost.
+* **Direct `both` arm used the rel48 build** (the other arms rel45; the fix
+  only changes the empty-name case). One of its runs lost the heavy flow to a
+  harness port clash (`--cport 41000` vs the direct dialer's ephemeral link
+  ports); `w.sh` now reserves 41000-41063 (`ip_local_reserved_ports`).
+* **Judge recovery** in the scale case: not back within 11 s after the loss
+  ended; rerun sc with T=75 s to time the recovery.
+* Direct l3mtcp reality cold restart 16.3 s to 90 % (n1): rerun `k` x3.

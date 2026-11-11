@@ -4,6 +4,8 @@
 # is no lb, i.e. the tls carrier). The dialer pins the key for pure reality only.
 # FARM=r128: reality with an AES-128 target (127.0.0.1:9445). SCALE=1: per-IP keys (k0..k5) and two targets. CK=1 on the dialer: cold restart at 16 s.
 F=$3; D=/opt/hs2lab/r48; B=${HS2BIN:-$D/hs2}
+# the heavy test's data streams bind --cport 41000+i: keep the dialer's link sockets off them (direct mode)
+sysctl -qw net.ipv4.ip_local_reserved_ports=41000-41063 2>/dev/null
 OUT=${P3_OUT:-/tmp/p3}; mkdir -p $OUT
 ROLE=$(python3 - "$F" "${FARM:-tls}" "${SCALE:-0}" <<"PY"
 import json,sys
