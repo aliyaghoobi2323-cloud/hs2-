@@ -90,6 +90,12 @@ type callState struct {
 	callLikeAt   time.Time // the last call-like send window (HS2_LB_CALL_RESCUE)
 	callRescueAt time.Time // no fresh call-rescue sub before (lb_call_rescue.go)
 
+	// HS2_LB_CALL_STUCK (lb_call_stuck.go)
+	stuckSince    time.Time // every sub busy since
+	callStuckAt   time.Time // no trigger before
+	stuckOpenedAt time.Time // the last trigger
+	stuckKeys     []any     // the subs' keys at it (nil: none pending)
+
 	callPairAt int // paired copies: the next chunk's first sub (HS2_MCONN_CALL_SUBS)
 
 	// HS2_MCONN_CALL_PICK: the subs' link scores, read at scoreAt
@@ -494,11 +500,24 @@ func (m *mConn) callAvoidLocked(avoid []any) []any {
 
 // pickPlaneCall is pickPlane, or with the mark the call placement.
 func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) {
-	avoid, cresc := takeCallRescueMark(avoid) // HS2_LB_CALL_RESCUE (lb_call_rescue.go)
+	avoid, stuckPath, stuck := takeCallStuckMark(avoid) // HS2_LB_CALL_STUCK (lb_call_stuck.go)
+	avoid, cresc := takeCallRescueMark(avoid)           // HS2_LB_CALL_RESCUE (lb_call_rescue.go)
+	if stuck && p == planeLight {
+		pool := m.exitInfo.Load()
+		m.mu.Lock()
+		ml := m.pickCallRescueLocked(avoid, pool, func(ml *managedLink) bool { return mlPath(ml) != stuckPath })
+		if ml != nil {
+			m.placeLocked(ml)
+			m.mu.Unlock()
+			return ml.link, m.releaseFor(ml), true
+		}
+		m.mu.Unlock()
+		return nil, nil, false // no link off that path: a sub there would not help
+	}
 	if cresc && p == planeLight {
 		pool := m.exitInfo.Load()
 		m.mu.Lock()
-		if ml := m.pickCallRescueLocked(avoid, pool); ml != nil {
+		if ml := m.pickCallRescueLocked(avoid, pool, nil); ml != nil {
 			m.placeLocked(ml)
 			m.mu.Unlock()
 			return ml.link, m.releaseFor(ml), true

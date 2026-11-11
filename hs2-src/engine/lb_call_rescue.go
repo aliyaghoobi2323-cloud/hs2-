@@ -142,13 +142,13 @@ func takeCallRescueMark(avoid []any) ([]any, bool) {
 
 // pickCallRescueLocked (under m.mu): the call placement off every lowered
 // link, then any light link off them; nil when there is none.
-func (m *LinkManager) pickCallRescueLocked(avoid []any, pool *peerInfo) *managedLink {
+func (m *LinkManager) pickCallRescueLocked(avoid []any, pool *peerInfo, also func(*managedLink) bool) *managedLink {
 	if ml := m.pickPlaneTiers(planeLight, avoid, pool, func(ml *managedLink) bool {
-		return !rescueLowKey(ml.link) && ml.heavy == 0 && !stripeOn(ml) && !ml.degraded && !ml.draining && !ml.suspect && linkCopies(ml.link) == 0
+		return !rescueLowKey(ml.link) && (also == nil || also(ml)) && ml.heavy == 0 && !stripeOn(ml) && !ml.degraded && !ml.draining && !ml.suspect && linkCopies(ml.link) == 0
 	}); ml != nil {
 		return ml
 	}
 	return m.pickPlaneTiers(planeLight, avoid, pool, func(ml *managedLink) bool {
-		return !rescueLowKey(ml.link)
+		return !rescueLowKey(ml.link) && (also == nil || also(ml))
 	})
 }

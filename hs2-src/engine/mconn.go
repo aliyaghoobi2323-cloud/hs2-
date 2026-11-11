@@ -1969,6 +1969,12 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			if m.callRescueLocked(live, now) { // HS2_LB_CALL_RESCUE (lb_call_rescue.go)
 				hs = true
 			}
+			if g, d := m.callStuckLocked(live, now); g || d > 0 { // HS2_LB_CALL_STUCK (lb_call_stuck.go)
+				hs = hs || g
+				if d > 0 {
+					at(d)
+				}
+			}
 			if lbRescue {
 				// look again in a second: a path may be lowered any moment
 				// (waking only while some link is marked would leave a dual

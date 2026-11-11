@@ -742,6 +742,8 @@ type lbSteerState struct {
 	logs         []string
 	rescued      map[any]bool // HS2_LB_RESCUE: links marked lowered (lb_rescue.go)
 	rescueLogged int64
+	callPaths    map[any]bool // HS2_LB_CALL_STUCK: links whose path is recorded (lb_call_stuck.go)
+	stuckLogged  int64
 }
 
 func newSteerState() *lbSteerState {
