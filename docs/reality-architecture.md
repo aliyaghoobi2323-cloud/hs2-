@@ -1296,3 +1296,8 @@ driver `go39.sh` (PLANTAG r39c / r39k / r39b), binaries hs2-r39, hs2-r39k
 (mLiteCapPct 0). In slot mode the slots' probe must be the per-second one
 (`/tmp/sp3d3{1,2}/probe` copied from /tmp/sp3d30; run.sh builds an old one
 when missing — the first k and b runs were lost to that and rerun).
+
+Final tree (lab 3, clean `git archive`): gofmt (changed files) clean, `go vet
+./...`, `-race` on TestMConnCallRescue*/TestCallRescueMark/TestMConnRescue*/
+TestRescue*/TestCallAvoidMark ok, reality, tlscarrier, cmd/hs2, envdef ok,
+full engine suite ok (639 s, -timeout 40m).
