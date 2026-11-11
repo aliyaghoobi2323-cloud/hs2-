@@ -54,6 +54,8 @@ func TestSides(t *testing.T) {
 		{"HS2_LB_RESCUE", "1", ""},
 		{"HS2_LB_RESCUE_RAW", "", ""},
 		{"HS2_LB_RESCUE_CALLFREE", "1", ""},
+		{"HS2_LB_CALL_RESCUE", "", ""},
+		{"HS2_REFILL_WAIT_BYTES", "", ""},
 		{"HS2_LB_FAST_VERDICT", "", ""},
 		{"HS2_REFILL_WAIT_MS", "", ""},
 		{"HS2_MCONN_STRIPE", "8", "8"},

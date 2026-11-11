@@ -1204,3 +1204,95 @@ Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an38.py c|b|k|s`, runs `*-r38*`),
 drivers `go38.sh`, `go38x.sh`, `go38k.sh`, `go38o.sh`, `go38s.sh`; binaries
 hs2-r38, hs2-r38k (mLiteCapPct 0), hs2-r38v; probe with per-second stats in
 /tmp/sp3d30/probe (the old one in /opt/hs2lab/r36/probe.bak37).
+
+### 8.10 Phase 5d (2026-11-11, branch reality39): a call stuck on a lowered path, start window v3 at n=10
+
+**(a) Call rescue (`HS2_LB_CALL_RESCUE`, edge, default off; `lb_call_rescue.go`).**
+Cause (8.9): a call whose every sub sits on path B when B goes bad stays
+there to the end — the rescue skips calls (callUp / callOn), lite closes only
+idle second subs, and the call's pair subs are opened only up to
+mconnCallSubs. With the key, on Iran, for a call-like lite connection
+(callOn / callUp, or a call-like send window within callRescueTTL = 30 s; a
+call stuck on a bad path stops looking steady):
+- every live sub on a lowered or cut link: one fresh sub with the call
+  placement (HS2_MCONN_CALL_AVOID's filter) and off every lowered link
+  (`callRescueMark`, `pickCallRescueLocked`; fallback: any light link off the
+  lowered ones), at most once per second per connection;
+- once some live sub is off the lowered links and has read a byte from the
+  peer, the lowered subs are given up through the close handshake (no byte
+  rides only there); the good sub is never closed, so the connection never
+  has no sub; without HS2_MCONN_CLOSE_HS nothing is closed;
+- a call's own upgrade (one sub) carries the mark too, and passes the
+  duplication budget when its one sub is on a lowered link (rescueAllow).
+The rescue log line now also counts `calls: fresh subs N, lowered subs given
+up M`. Tests: `TestMConnCallRescueAllLowered` (a 2 Mbit/s call on two subs,
+both links lowered: a fresh sub with the mark avoiding both, both lowered subs
+given up, the call keeps flowing, never zero subs, no leak; -race ok),
+`TestMConnCallRescueKeyOff`, `TestCallRescueMark`.
+
+Lab 1, interleaved, **three slot-mode drivers in parallel** (labslot slots
+0/1/2, 6-7 cores each, not `--all`: c, k and b+s ran at the same time, so the
+absolute numbers are not comparable with 8.9's; arms within a driver are).
+base = the current default (rescue + callfree, FAST_VERDICT as in 8.9), cr =
+base + `HS2_LB_CALL_RESCUE=1`. The first three cr runs of c and k had the call
+mark's TTL at 5 s, the rest 30 s. Medians (ranges), ms:
+
+| scenario | arm | n | crowd p95 | crowd p99 | call p99 | ping p99 | heavy | fail |
+|---|---|--:|--:|--:|--:|--:|--:|--|
+| c (all-tls, B bad at 15 s) | base | 6 | 176 (171-185) | 331 | 204 (177-945) | 196 | 924 | 0 ×6 |
+| c | cr | 6 | 175 (172-183) | 331 | 355 (184-824) | 182 | 992 | 0 ×6 |
+| k (budget forced binding, RAW off) | base | 6 | 587 (556-617) | 880 | 529 (258-943) | 159 | 1006 | 0 ×6 |
+| k | cr | 6 | 561 (544-570) | 838 | **211 (176-260)** | 148 | 998 | 0 ×6 |
+| k | cr + `HS2_LB_RESCUE_RAW=1` | 4 | 241 (241-243) | 598 | 201 (182-248) | 172 (109-422) | 999 | 0 ×4 |
+| b (equal paths) | base | 4 | 125 (120-129) | 174 | 192 | 136 | 1152 | 0 ×4 |
+| b | cr | 4 | 122 (120-124) | 169 | 199 | 118 | 1154 | 0 ×4 |
+
+c per run, cr: 186, 315, 395, 824, 184, 757; base: 373, 191, 207, 945, 201,
+177. The per-second call p99 shows why c is not fixed: the stuck runs (base
+r393, cr r393 and r395) go to 700-950 ms at probe second 11-12, the cut
+itself, but the path is lowered only ~7.5 s later (r393: cut 03:27:21, first
+rescue line 03:27:28.7) and the call rescue acts within 2 s of that (fresh
+sub and both lowered subs given up by 03:27:30.7). So cr ends the stuck
+stretch (cr r393 back to ~330 ms at second 21, r395 at 19; base r393 stays at
+700-1090 ms to second 59) but the 8-9 s before it are enough for a 60 s run's
+p99. k: all six base runs had a call second past 250 ms through most of the
+run; four of six cr runs had at most three. The counters engaged in three k
+runs and three c runs (the placement part — a call's upgrade or pair sub off
+the lowered links — has no counter). b: nothing lowered, no change.
+
+**Verdict: `HS2_LB_CALL_RESCUE` stays off** — k accepted (call p99 -60%,
+crowd equal, 0 fails), b unchanged, but c, the other required scenario, is not
+better by median (355 vs 204: one more stuck run in the cr arm, both arms'
+stalls start at the cut). The key is kept: it fixes the "stuck to the end"
+part. Plan: trigger on the call's own evidence instead of the path verdict —
+when every sub of a call is on one path and its subs' TCP_INFO shows loss
+recovery / unsent backlog (`subTCP` / `tcpBusy`, already read by
+HS2_MCONN_CALL_PICK) for ~500 ms, or its receive gap grows, open the fresh
+sub on another path at once (no wait for the ~7 s lowering), then measure c
+and k again (n=6+6).
+
+`HS2_LB_RESCUE_RAW` stays **off**: with the call rescue the call is equal (201
+vs 211) and the crowd far better (p95 241 vs 561), but ping p99 is worse by
+median (172 vs 148) with one 422 ms run.
+
+**(b) Start window v3 (`HS2_REFILL_WAIT_MS=300` + `HS2_REFILL_WAIT_BYTES=1`),
+six more reps (slot mode, interleaved), n=10 with 8.9's four:**
+
+| arm | n | 0-5 s crowd p99 | whole crowd p95 | call p99 | ping p99 | heavy Mbps |
+|---|--:|--:|--:|--:|--:|--:|
+| base (w0) | 10 | 1345 (756-2530) | 120 (115-132) | 200 (173-241) | 129 (98-171), mean 128 | 1136 (960-1317), mean 1145 |
+| v3 | 10 | **162 (160-170)** | 119 (116-135) | 206 (173-240) | 143 (116-159), mean 142 | 1111 (913-1346), mean 1119 |
+
+The new six alone: ping p99 143 vs 136, heavy 1142 vs 1108. Heavy is equal
+(Mann-Whitney U 44.5 of 100). Ping p99 is +14 ms by mean and higher in both
+batches (+30 with n=4, +7 with n=6); U = 75.5 of 100, two-sided p ~0.06:
+borderline, not clearly noise. **Default stays off**: the start p99 gain is
+large (-88%), but a light user's ping p99 cost of ~10% is the "tiny
+regression for a big gain" case the operator decides. Turning it on is one
+line in envdef (edge: `HS2_REFILL_WAIT_MS=300`, `HS2_REFILL_WAIT_BYTES=1`).
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an38.py c|k|b|s r39`, runs `*-r39*`),
+driver `go39.sh` (PLANTAG r39c / r39k / r39b), binaries hs2-r39, hs2-r39k
+(mLiteCapPct 0). In slot mode the slots' probe must be the per-second one
+(`/tmp/sp3d3{1,2}/probe` copied from /tmp/sp3d30; run.sh builds an old one
+when missing — the first k and b runs were lost to that and rerun).
