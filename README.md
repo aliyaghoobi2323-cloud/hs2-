@@ -771,7 +771,7 @@ What changes for an existing deployment after the upgrade:
 | `HS2_LB_JUDGE_DATA` — the LB judge counts only dials that failed before TCP connected (a front's handshake failure no longer lowers a path) | both sides | off | **on** |
 | `HS2_LB_RESCUE` — a light user whose only sub sits on a lowered / cut path gets a copy on a good path, at once | Iran (edge) | off | **on** |
 | `HS2_LB_RESCUE_CALLFREE` — those rescue copies stay off the links a call is using | Iran (edge) | off | **on** |
-| `HS2_LB_CALL_LATE` — a call whose copy on one path runs >= 100 ms and twice behind its copy on another gets a fresh sub off that path and gives the late one up (acts only with `HS2_LB_RESCUE` on) | Iran (edge) | off | **on** |
+| `HS2_LB_CALL_LATE` — a call whose copy on one path runs >= 100 ms and twice behind its copy on another gets a fresh sub off that path and gives the late one up (acts only with `HS2_LB_RESCUE` on; since rel51 it also runs the stuck-call trigger: a call whose subs all sit on one path whose sockets stay in loss recovery / backlog for 500 ms, or that receives nothing for 600 ms while sending, gets a fresh sub off that path) | Iran (edge) | off | **on** |
 | `hs2-menu` with no argument | installer | classic menu | **new menu** (classic: `c`, `hs2-menu --classic`, `HS2_MENU=classic`, `default_menu=classic` in `/etc/hs2/menu.conf`) |
 
 The four keys are part of the production default table, so (like every key
@@ -782,7 +782,7 @@ value. The service log names what is in force at start (`defaults: production
 set on (…)`).
 
 Still **off** by default (nothing changes unless you set them):
-`HS2_LB_CALL_RESCUE`, `HS2_LB_CALL_STUCK` (acts only under `HS2_LB_CALL_RESCUE`),
+`HS2_LB_CALL_RESCUE`, (`HS2_LB_CALL_STUCK=0` turns the stuck-call trigger off; since rel51 it runs under `HS2_LB_CALL_RESCUE` or `HS2_LB_CALL_LATE`),
 `HS2_LB_RESCUE_RAW`, `HS2_LB_EVAC`, `HS2_LB_FAST_VERDICT`. (`HS2_REFILL_WAIT_MS`,
 `HS2_REFILL_WAIT_BYTES` and `HS2_START_DIAL` are on by default after rel40,
 branch start42: see the default table below.)

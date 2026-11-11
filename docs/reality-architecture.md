@@ -2894,3 +2894,78 @@ recovered) and the uTLS vs crypto/tls write path under loss.
 
 Release binary: build f2ec4e506acd (the resend off by default: behaviour =
 rel45), sha256 b2f39c97….
+
+### 11.10 rel51 (2026-11-11): release candidate — merge, the stuck call under call late, the whole-peer outage, stripe checks
+
+Branch rel51 = rel50 (130fb320) + merge rel47 (§11.6) + merge rel49 (its
+§11.6 became §11.9: 11.9.5 rel49, 11.9.6 AES) + the commits below. Binary
+build c0c1afbb7de6 (`CGO_ENABLED=0 -trimpath -ldflags="-s -w"`), sha256
+95379063f2ed0b38625dac62670059db284fc436c309dc1b53b08881087b39f0.
+
+#### 11.10.1 A call wholly on one degraded path (§11.6.5 item 1)
+
+Code: the stuck-call trigger (`lb_call_stuck.go`, 8.11: every sub of a call
+on one path, sockets in recovery/backlog 500 ms or a 600 ms receive gap while
+sending -> a fresh sub off that path) ran only under `HS2_LB_CALL_RESCUE`,
+which is off by default; `HS2_LB_CALL_LATE` (on) needs subs on two paths. So
+with production defaults nothing moved a call whose subs all sat on B. Fix:
+the trigger runs under `HS2_LB_CALL_RESCUE` **or** `HS2_LB_CALL_LATE`
+(`callStuckOnLocked`; `HS2_LB_CALL_STUCK=0` still turns it off).
+`TestCallStuckUnderCallLateAlone`.
+
+Lab 1, r47 harness (`go51.sh` arms on the lab copy), interleaved over 3
+slots; `m51` = rel51, `m51a` = the merged tree without this commit (traced
+with `HS2_MCONN_TRACE=1`), `t51` = rel51 all tls. Medians [min-max], ms:
+
+| arm | n | call p50 | call p99 | crowd p99 | game p99 | Mbps |
+|---|---|---|---|---|---|---|
+| c mix rel51 | 8 | 80 [78-93] | 176 [166-232] | 271 [260-290] | 150 [138-561] | 1101 |
+| c mix before (traced) | 4 | 81 [80-88] | 210 [185-267] | 283 [257-299] | 153 [147-164] | 1094 |
+| c all tls rel51 | 4 | 79 [77-84] | 167 [164-186] | 279 [267-308] | 150 [130-166] | 1076 |
+| b mix rel51 / before | 4/4 | 78 / 81 | 189 / 190 | 151 / 157 | 141 / 157 | 1269 / 1178 |
+| s switch rel51 / before | 4/4 | 79 / 82 | 185 / 192 | 154 / 163 | 158 / 155 | 1176 / 1314 |
+
+No bimodal run (call p50 545-600 ms) in either c mix arm this time (0/8 and
+0/4; rel47 had 4/12), so the fix is shown harmless and engaged (the trigger
+fired in 1 of 8 runs: "lb call stuck: fresh subs 1 (busy 1)", that run's
+call p50 80 ms), not yet shown to remove the bad mode. Open: (1) 2 of 8 c mix
+rel51 runs had game p99 470/561 ms (10-11 % late), 0/4 in the other arms;
+in one of them the stuck trigger never fired, so it is not this change —
+next: the same reading for the game (all its subs on B), trace n>=8;
+(2) s Mbps 1176 vs 1314 at n=4 with overlapping ranges: rerun n=8.
+
+#### 11.10.2 A whole-peer outage in the middle of a run (§11.6.5 item 3)
+
+Code reading confirmed it: past the start grace, with every link gone the
+pool's parallel redials fail on every path; each non-primary path reaches
+`lbFailMax` and is cooled for `lbCooldown` (60 s), the primary never is, so
+the rebuilt pool lands on the primary. Fix (`engine/lb.go`): a failed dial
+while no path holds a live link (and not a cooldown probe) neither cools nor
+backs off; the first dial that works again clears the other uncooled paths'
+failures. A path that fails while another carries links is cooled as before.
+`TestLBPeerOutageNoCool` (fails on the tree before, passes after; -race
+clean). The 3 s Iran stop under load in the lab was not run (time): plan —
+an `irstop` event in r47 `ir.sh` (SIGSTOP the Iran process for 3 s), arms
+rel51 vs before, n>=4, links per path 20 s after.
+
+#### 11.10.3 Stripe follow-ups (§11.9.5 open items)
+
+c1, lab 2 alone, n=8+8 interleaved, one binary, `HS2_MCONN_STRIPE_RESEND`
+1 vs 0 on both sides (checked in `/proc/PID/environ`): median 1285 vs 1211
+Mbit/s, mean 1265 vs 1175; Mann-Whitney U=40/64, exact p=0.44 — no cost,
+nothing to cap. u8 with resend, n=6, vs c0 n=6 (whole 30 s run): crowd p99
+203 vs 165, call p99 227 vs 174, game p99 168 vs 159 ms; no run froze;
+crowd fails ~1.7 % (the killed links). The light-user cost is the kill
+itself; narrowing a striped connection while the pool rebuilds was not
+tried: next, the same u8 with a p99 window over the 10 s after the kill,
+n>=6 per arm, before any change.
+
+#### 11.10.4 Flaky tests
+
+`tlscarrier/TestRealityRSAKeyAndTicketPads`: the test read the target's
+record sequence with a fixed 300 ms deadline and could see only the first of
+two ticket records under load (1 fail in 180 loaded runs). It now waits up
+to 10 s for both (0 in 90). `ports_menu_test.sh`: not reproduced (6 loaded
+runs with go on PATH, 38/38 each); reading: all input is typed ahead through
+`printf | script`; if a menu read flushes or times out, keys are lost —
+next: 20+ looped runs keeping the failing output.

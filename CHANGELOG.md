@@ -19,6 +19,43 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel51 — release candidate: everything since rel40 in one build (binary)
+
+One binary (build c0c1afbb7de6, sha256 95379063…) that merges rel47, rel49
+and rel50 (with rel44–rel46 and rel48 underneath). What changed since rel40,
+per area (details in the per-release entries below and in
+docs/reality-architecture.md §11):
+
+- **Start and LB** — branch start42 start window (refill wait, start dial,
+  on by default); rel47: refused dials before the peer listens no longer put
+  the extra paths into the start back-off. **rel51: a whole-peer outage
+  (every link gone, every path refusing) no longer cools the non-primary
+  paths** — before, the rebuilt pool sat on the primary for a 60 s cooldown;
+  the first dial that works again starts the other paths clean
+  (`TestLBPeerOutageNoCool`, fails without the fix).
+- **Calls** — **rel51: the stuck-call trigger (`HS2_LB_CALL_STUCK`) also runs
+  under `HS2_LB_CALL_LATE` alone** (the production default; before it needed
+  the off-by-default `HS2_LB_CALL_RESCUE`). Call late needs a call's subs on
+  two paths; a call wholly on one degraded path had nothing to move it
+  (`TestCallStuckUnderCallLateAlone`). Lab (mixed fronts, scenario c, B
+  degraded at 15 s): see §11.10.
+- **Reality** — rel44 cold dialer, suite parity without the global lock,
+  bounded target wait; rel45 no 10 s stall on a both -> reality switch;
+  rel47 a plain tls dial to a pure-reality IP fails fast; rel48 direct-mode
+  `both` fixed, rotate-sid, target suite report; rel50 `both` downgrades
+  only on real refusals, the classic installer writes the tls name on the
+  listener, the legacy `"carrier": "reality"` warning in the menu. The
+  Reality/tls throughput gap is not reproduced (§11.8).
+- **Heavy upload after a link kill (u8)** — rel49: the failed write is kept
+  and resent, last-sub grace (`HS2_MCONN_STRIPE_GRACE_MS`, 3 s);
+  `HS2_MCONN_STRIPE_RESEND=1` default on both sides. rel51 check: c1 with
+  resend on vs off, n=8+8 interleaved on one lab: median 1285 vs 1211
+  Mbit/s, Mann-Whitney p=0.44 — no throughput cost.
+- **Tests** — `TestRealityRSAKeyAndTicketPads` made deterministic (it read
+  the target's ticket records with a fixed 300 ms window; under load the
+  second record arrived later: 1 fail in 180 loaded runs before, 0 in 90
+  after).
+
 ## rel50 — Reality throughput gap measured out; `both` downgrades only on real refusals; installer names (binary)
 
 - **Throughput gap (item 1): not a Reality cost.** Interleaved tls / reality /
