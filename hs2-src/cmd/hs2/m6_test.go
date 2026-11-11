@@ -328,3 +328,18 @@ func TestUnitFromStatusFile(t *testing.T) {
 		}
 	}
 }
+
+func TestDoctorLeftoverStatus(t *testing.T) {
+	etc := t.TempDir()
+	_ = os.WriteFile(filepath.Join(etc, "de1.json"), []byte("{}"), 0o600)
+	env := &deepEnv{etc: etc}
+	if leftoverStatus(env, "etc-hs2-de1.json") {
+		t.Fatal("a live tunnel's status is not leftover")
+	}
+	if !leftoverStatus(env, "etc-hs2-gone.json") || !leftoverStatus(env, "tmp-tmp.X-ir.json") {
+		t.Fatal("deleted tunnel / test-run status must be leftover")
+	}
+	if leftoverStatus(&deepEnv{}, "tmp-x.json") {
+		t.Fatal("without etc: old behaviour")
+	}
+}

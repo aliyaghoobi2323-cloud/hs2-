@@ -386,3 +386,17 @@ func hasHS2(comms []string) bool {
 	}
 	return false
 }
+
+// leftoverStatus: a status file whose tunnel config is not in env.etc any
+// more (a deleted tunnel), or of a config outside it (a test run) — reported
+// as INFO, not as a stopped tunnel. Without env.etc (tests): never.
+func leftoverStatus(env *deepEnv, file string) bool {
+	if env.etc == "" {
+		return false
+	}
+	if !strings.HasPrefix(file, "etc-hs2-") {
+		return true
+	}
+	_, err := os.Stat(filepath.Join(env.etc, strings.TrimPrefix(file, "etc-hs2-")))
+	return os.IsNotExist(err)
+}

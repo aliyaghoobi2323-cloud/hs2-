@@ -45,15 +45,18 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 - Fix: the doctor's "restarts / panics" lines counted every `hs2*` unit
   (`hs2-coreguard`, `hs2-alert-*`, …) as a tunnel; only units whose
   `ExecStart` is `hs2 run -c /etc/hs2/<name>.json` are counted now.
+- Doctor: a stale status file that belongs to no config in `/etc/hs2` (a deleted
+  tunnel, a test run) is INFO with the `rm` command, not "BAD — the tunnel is
+  probably stopped".
 - Installer: screens 6 and 7 of the new menu (`nm_alerts`, `nm_doctor`); an
   older binary (no `hs2 alert --supported` / `hs2 doctor --supported`) gets the
   classic screens. The `max-throughput` preset is labelled "experimental, not
   recommended" in the menu and `hs2 perf presets` (not A/B-proven).
-- Tests: `cmd/hs2/m6_test.go` (10 tests: alert.conf validation and atomic
+- Tests: `cmd/hs2/m6_test.go` (11 tests: alert.conf validation and atomic
   set/token/rule, quiet hours across midnight, disable + summary items,
   history filter, Telegram check direct/proxy/blocked, fix mapping incl. never
   x-ui/xray, apply-fix safety (no run, stale run, gone unit), coreguard
-  filtering, monitoring + budget checks); `install/tests/alerts_doctor_menu_test.sh`
+  filtering, monitoring + budget checks, leftover status files); `install/tests/alerts_doctor_menu_test.sh`
   (26 pty checks); `new_menu_test.sh` keeps testing the classic fallbacks.
 
 ---

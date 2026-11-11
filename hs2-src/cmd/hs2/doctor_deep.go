@@ -1300,6 +1300,10 @@ func checkHS2Health(env *deepEnv, st []namedStatus) []finding {
 			f.What = fmt.Sprintf(tr("%s %s: %d link(s) up, %d user(s), %.0f Mbit/s", "%s %s: %d لینک بالا، %d کاربر، %.0f مگابیت"), ls.Role, ls.Carrier, ls.Links, ls.Users, ls.Mbit)
 		}
 		switch {
+		case s.age > 30 && leftoverStatus(env, s.file):
+			f.Sev = "INFO"
+			f.What = fmt.Sprintf(tr("status file is %ds old and belongs to no tunnel config in %s (a deleted tunnel or a test run)", "فایل وضعیت %d ثانیه قدیمی است و به هیچ پیکربندی تونلی در %s تعلق ندارد (تونل حذف‌شده یا یک اجرای آزمایشی)"), s.age, env.etc)
+			f.Do = tr("harmless; remove it: rm "+filepath.Join(env.runDir, s.file+".status.json"), "بی‌خطر است؛ حذفش کنید: rm "+filepath.Join(env.runDir, s.file+".status.json"))
 		case s.age > 30:
 			f.Sev = "BAD"
 			f.What = fmt.Sprintf(tr("status is %ds old — the tunnel is probably stopped", "وضعیت %d ثانیه قدیمی است — احتمالاً تونل متوقف شده"), s.age)
