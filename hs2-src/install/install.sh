@@ -5717,14 +5717,22 @@ nm_alerts(){
     nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
     case "$c" in
       0|b|B|q|"") return 0 ;;
-      1) read -rsp "$(nm_t "Bot token from @BotFather (input hidden, empty = remove): " "توکن ربات از @BotFather (ورودی پنهان، خالی = حذف): ")" v </dev/tty || v=""; echo >&2
-         printf '%s\n' "$v" | "$BIN" alert conf token --lang "$NM_LANG" >&2 || true; v=""; nm_pause ;;
-      2) nm_ask v "$(nm_t "Chat id (123456789, -100… or @channel; empty = remove): " "شناسهٔ چت (123456789، -100… یا @channel؛ خالی = حذف): ")"
-         "$BIN" alert conf set "chat_id=$v" --lang "$NM_LANG" >&2 || true; nm_pause ;;
+      1) read -rsp "$(nm_t "Bot token from @BotFather (input hidden; Enter = keep, - = remove): " "توکن ربات از @BotFather (ورودی پنهان؛ Enter = بدون تغییر، - = حذف): ")" v </dev/tty || v=""; echo >&2
+         case "$v" in
+           "") ;;
+           -) printf '\n' | "$BIN" alert conf token --lang "$NM_LANG" >&2 || true ;;
+           *) printf '%s\n' "$v" | "$BIN" alert conf token --lang "$NM_LANG" >&2 || true ;;
+         esac
+         v=""; nm_pause ;;
+      2) nm_ask v "$(nm_t "Chat id (123456789, -100… or @channel; Enter = keep, - = remove): " "شناسهٔ چت (123456789، -100… یا @channel؛ Enter = بدون تغییر، - = حذف): ")"
+         case "$v" in "") ;; -) "$BIN" alert conf set "chat_id=" --lang "$NM_LANG" >&2 || true; nm_pause ;; *) "$BIN" alert conf set "chat_id=$v" --lang "$NM_LANG" >&2 || true; nm_pause ;; esac ;;
       3) "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true
-         nm_ask v "$(nm_t "Proxy (socks5://host:port or http://host:port; empty = none): " "پراکسی (socks5://host:port یا http://host:port؛ خالی = ندارد): ")"
-         "$BIN" alert conf set "proxy=$v" --lang "$NM_LANG" >&2 || true
-         [ -n "$v" ] && { "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true; }
+         nm_ask v "$(nm_t "Proxy (socks5://host:port or http://host:port; Enter = keep, - = none): " "پراکسی (socks5://host:port یا http://host:port؛ Enter = بدون تغییر، - = ندارد): ")"
+         case "$v" in
+           "") ;;
+           -) "$BIN" alert conf set "proxy=" --lang "$NM_LANG" >&2 || true ;;
+           *) "$BIN" alert conf set "proxy=$v" --lang "$NM_LANG" >&2 && { "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true; } ;;
+         esac
          nm_pause ;;
       4) nm_ask v "$(nm_t "Language [fa/en]: " "زبان [fa/en]: ")"
          [ -n "$v" ] && { "$BIN" alert conf set "lang=$v" --lang "$NM_LANG" >&2 || true; nm_pause; } ;;

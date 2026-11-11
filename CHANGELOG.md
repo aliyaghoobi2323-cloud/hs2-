@@ -54,7 +54,7 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   history filter, Telegram check direct/proxy/blocked, fix mapping incl. never
   x-ui/xray, apply-fix safety (no run, stale run, gone unit), coreguard
   filtering, monitoring + budget checks); `install/tests/alerts_doctor_menu_test.sh`
-  (24 pty checks); `new_menu_test.sh` keeps testing the classic fallbacks.
+  (26 pty checks); `new_menu_test.sh` keeps testing the classic fallbacks.
 
 ---
 

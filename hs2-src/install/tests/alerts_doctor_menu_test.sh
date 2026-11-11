@@ -75,6 +75,10 @@ check "6: the token is never in argv or printed (only the pty echo of the typed 
 out=$(run '6\n2\n-100123\n\n3\nsocks5://127.0.0.1:1080\n\n4\nfa\n\n0\n0\n')
 check "6: chat id, proxy (after a reachability check), language" 'grep -q "^alert conf set chat_id=-100123" "$T/calls" && grep -q "^alert telegram-check" "$T/calls" && grep -q "^alert conf set proxy=socks5://127.0.0.1:1080" "$T/calls" && grep -q "^alert conf set lang=fa" "$T/calls"'
 check "6: Iran server without Telegram: the proxy hint is shown" 'echo "$out" | grep -q "NOT reachable from this server (typical on Iran servers): set a proxy"'
+out=$(run '6\n1\n\n\n2\n\n3\n\n\n0\n0\n')
+check "6: Enter keeps token, chat id and proxy (nothing written)" '! grep -q "^alert conf token" "$T/calls" && ! grep -q "^alert conf set" "$T/calls"'
+out=$(run '6\n1\n-\n\n2\n-\n\n3\n-\n\n0\n0\n')
+check "6: - removes token, chat id and proxy" '[ "$(cat "$T/token")" = "" ] && grep -q "^alert conf set chat_id= " "$T/calls" && grep -q "^alert conf set proxy= " "$T/calls"'
 out=$(run '6\n7\n8\n7\n9\n7\n42\n0\n0\n')
 check "6: alert kind toggles (rtt OFF → on, psi on → off), unknown number refused" 'grep -q "^alert rule rtt on" "$T/calls" && grep -q "^alert rule psi off" "$T/calls" && echo "$out" | grep -q "No such alert kind"'
 out=$(run '6\n8\ncpu_pressure_pct=40\n\n9\n23:30-07:00\n\ns\n21:00\nusers,cuts\n\ns\n\nall\n\n0\n0\n')
