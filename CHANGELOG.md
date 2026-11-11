@@ -19,6 +19,46 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## up55 — fast upload stripe widening (binary; keys off by default)
+
+On top of rel53 (18c5a999) with up54's `HS2_MCONN_STRIPE_XDIR` (off) and its
+diagnostic line.
+
+- **`HS2_MCONN_STRIPE_FAST=1`** (Iran/edge, off): a heavy upload stripes
+  after one hot sample (downloads keep `stripeHotTicks`=4), the width doubles
+  while every sub carries `HS2_MCONN_STRIPE_FAST_MBIT` (30) — the first growth
+  1 → 3, then n → 2n up to K (and STRIPE_UP's cap), each extra sub opened right
+  after the previous one through the same picker (share / keep-free rules
+  unchanged) — the pool is asked for that many links at once
+  (`stripeWantHint`, not one per pick), and a failed open is retried every
+  250-500 ms (6 tries) instead of waiting 2 s. Status:
+  `stripe_fast_chained`, `stripe_fast_early`, `stripe_fast_retry`.
+- **`HS2_STRIPE_UP_SUB_WIN_MB=N`** (kharej/exit, off, 3-8): a fixed smux
+  window for an upload's stripe subs. Rejected in the lab (light users' p99
+  worse, throughput not better than FAST alone); kept off.
+- Lab (lab3, rel53 production keys, reverse l3mtcp, 3 paths, 100-150 links,
+  crowd 3000 + call + game, 37 ms each way, 1 Gbit/s; HEAVY_OMIT=0, 12 s):
+  single upload mean median 364 → 595 Mbit/s, p10 293 → 373 (n=12/16); u8
+  927 → 1329; d1/d8 unchanged (no code path). Seconds 1-5 only 318 → 336:
+  the stripe waits for the pool to dial links no user rides (~1.5-2 s a
+  round) and both arms dip at second 2 (the raw → lite upgrade). Light-user
+  p99 under a single upload +15-20 ms median (crowd 114 → 129, call 127 →
+  138) — within the run-to-run spread (d1, where nothing differs: crowd 101
+  vs 154) but not proven equal, so the default stays off for the operator's
+  call.
+- Per-sub cap: `ss -ti` of Iran's link sockets during an upload: every busy
+  link app-limited, `rwnd_limited` ~1 %, ~1300-1500 segments (~2 MiB)
+  unacked — the exit's smux window, which the adaptive rule hardly grows
+  for an upload (`aw_kh` peak 2 MiB, 1-2 grows a run): ~220 Mbit/s a sub at
+  75 ms.
+- Upload end: "every sub died" (RESEND on; "a sub died holding the only
+  copy" with it off) is the exit closing the connection after its target
+  (the iperf3 server, told TEST_END over the direct control path) closed with
+  data still in flight in the tunnel (sent 730.6 vs received 711.6 Mbit/s):
+  the exit's log shows a local close of every sub (`read/write on closed
+  pipe`), Iran then sees `peerFin` and EOF on each sub, `rst=false`. Not a
+  tunnel fault; only the label is misleading.
+
 ## rel53 — release candidate: the three rev53 reviews merged (binary)
 
 Merges rev53a (installer/menu), rev53b (data plane) and rev53c (operations)
