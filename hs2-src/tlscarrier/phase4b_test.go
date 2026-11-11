@@ -151,10 +151,14 @@ func TestRealityRSAKeyAndTicketPads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tc.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
-	tc.Read(make([]byte, 1))
-	tc.Close()
+	// wait until the tap has read both tickets: a fixed 300 ms read returned
+	// after the first one and, under load, last() ran before the tap's copy
+	// goroutine had read the second (flaky "records: ... target [... 266]")
 	want := tp.last()
+	for dl := time.Now().Add(10 * time.Second); len(want) < 8 && time.Now().Before(dl); want = tp.last() {
+		time.Sleep(5 * time.Millisecond)
+	}
+	tc.Close()
 	got := dial()
 	t.Logf("target records %v", want)
 	t.Logf("ours (new dialer) %v", got)
