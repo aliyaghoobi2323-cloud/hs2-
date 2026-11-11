@@ -771,9 +771,10 @@ What changes for an existing deployment after the upgrade:
 | `HS2_LB_JUDGE_DATA` — the LB judge counts only dials that failed before TCP connected (a front's handshake failure no longer lowers a path) | both sides | off | **on** |
 | `HS2_LB_RESCUE` — a light user whose only sub sits on a lowered / cut path gets a copy on a good path, at once | Iran (edge) | off | **on** |
 | `HS2_LB_RESCUE_CALLFREE` — those rescue copies stay off the links a call is using | Iran (edge) | off | **on** |
+| `HS2_LB_CALL_LATE` — a call whose copy on one path runs >= 100 ms and twice behind its copy on another gets a fresh sub off that path and gives the late one up (acts only with `HS2_LB_RESCUE` on) | Iran (edge) | off | **on** |
 | `hs2-menu` with no argument | installer | classic menu | **new menu** (classic: `c`, `hs2-menu --classic`, `HS2_MENU=classic`, `default_menu=classic` in `/etc/hs2/menu.conf`) |
 
-The three keys are part of the production default table, so (like every key
+The four keys are part of the production default table, so (like every key
 in it) they apply only on **reverse `l3mtcp`** tunnels and not under
 `HS2_DEFAULTS=legacy`; every other carrier and direct mode keep all keys off,
 exactly as in r31. Every other key of that table already had its r31 / r34
@@ -786,10 +787,11 @@ Still **off** by default (nothing changes unless you set them):
 `HS2_LB_EVAC`, `HS2_LB_FAST_VERDICT`.
 
 Restore the old behaviour:
-- **exactly r31 / r34:** turn the three new keys off in the tunnel's unit (a
+- **exactly r31 / r34:** turn the four new keys off in the tunnel's unit (a
   drop-in, e.g. `systemctl edit hs2`):
   `Environment=HS2_LB_JUDGE_DATA=0` (both servers),
-  `Environment=HS2_LB_RESCUE=0 HS2_LB_RESCUE_CALLFREE=0` (Iran), then
+  `Environment=HS2_LB_RESCUE=0 HS2_LB_RESCUE_CALLFREE=0 HS2_LB_CALL_LATE=0`
+  (Iran), then
   `systemctl restart hs2`;
 - **the whole default table off** (as before `defaults22`, older than r31):
   `Environment=HS2_DEFAULTS=legacy`;

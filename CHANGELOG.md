@@ -23,7 +23,7 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ## Release rel40 — Reality front, the new menu, LB rescue (binary + installer)
 
-Summary of everything since r34 (branches int39 + reality40), one binary for
+Summary of everything since r34 (branches int39 + reality40 + reality41), one binary for
 both servers. An r31 / r34 config runs unchanged; see README "Upgrading from
 r31 / r34" for the exact default changes and how to restore the old behaviour.
 
@@ -46,6 +46,12 @@ r31 / r34" for the exact default changes and how to restore the old behaviour.
   only sub sits on a lowered / cut path gets a copy on a good path at once; with
   **`HS2_LB_RESCUE_CALLFREE`** (also on at the edge) those copies stay off a
   call's links (§8.6–8.9).
+- **`HS2_LB_CALL_LATE`, on by default at the edge** (with the rescue): a call
+  whose copy on one path runs >= 100 ms and twice behind its copy on another
+  (socket srtt, 1 s) gets a fresh sub off that path and no more copies on the
+  late one, which is then given up: call p99 after a path degrades -29 % (c)
+  and -69 % (k), never fired on equal / steady paths (§8.12). With it, a
+  per-sub line in the `HS2_MCONN_TRACE` trace (TCP_INFO per sub).
 - **`HS2_LB_JUDGE_DATA`, on by default on both sides**: the LB judge counts only
   dials that failed before TCP connected, so a front's handshake failure no
   longer lowers an equal path (§8.5).
