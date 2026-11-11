@@ -96,6 +96,12 @@ type callState struct {
 	stuckOpenedAt time.Time // the last trigger
 	stuckKeys     []any     // the subs' keys at it (nil: none pending)
 
+	// HS2_LB_CALL_LATE (lb_call_late.go)
+	lateSince    time.Time // a late copy since
+	lateOpenedAt time.Time // the last trigger
+	lateKey      any       // the late sub's key (nil: none pending)
+	lateLive     []any     // the subs' keys at the trigger
+
 	callPairAt int // paired copies: the next chunk's first sub (HS2_MCONN_CALL_SUBS)
 
 	// HS2_MCONN_CALL_PICK: the subs' link scores, read at scoreAt
@@ -310,23 +316,38 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 		return false, false
 	}
 	var live [mCallSubsMax + 2]*msub
-	n := 0
+	n, nLate := 0, 0
 	for _, s := range m.subs {
 		if !s.retired && !s.dead && n < len(live) {
 			live[n] = s
 			n++
+			if s.callLate {
+				nLate++
+			}
 		}
 	}
-	if n < 3 {
+	all := live[:n]
+	cand := all
+	var on [mCallSubsMax + 2]*msub
+	if nLate > 0 && n-nLate >= 2 { // HS2_LB_CALL_LATE: both copies on timely subs
+		k := 0
+		for _, s := range all {
+			if !s.callLate {
+				on[k] = s
+				k++
+			}
+		}
+		cand, n = on[:k], k
+	} else if n < 3 {
 		return false, false
 	}
 	var pick [2]*msub
 	k := 0
 	if mconnCallPick {
-		pick, k = m.callPickLocked(live[:n], n, c.n)
+		pick, k = m.callPickLocked(cand, n, c.n)
 	} else {
 		for i := 0; i < n && k < 2; i++ {
-			if s := live[(m.callPairAt+i)%n]; s.fits(c.n) {
+			if s := cand[(m.callPairAt+i)%n]; s.fits(c.n) {
 				pick[k] = s
 				k++
 			}
@@ -344,7 +365,7 @@ func (m *mConn) callPairLocked(c *mchunk) (ok, wait bool) {
 		s.lastPush = now
 	}
 	if k < 2 {
-		for _, s := range live[:n] {
+		for _, s := range all {
 			if s != pick[0] {
 				s.lastHole = now
 			}

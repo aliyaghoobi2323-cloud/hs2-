@@ -93,6 +93,7 @@ var Table = []Key{
 	{"HS2_LB_JUDGE_DATA", "1", Both},
 	{"HS2_LB_RESCUE", "1", Edge},
 	{"HS2_LB_RESCUE_CALLFREE", "1", Edge},
+	{"HS2_LB_CALL_LATE", "1", Edge},
 }
 
 var byName = func() map[string]Key {

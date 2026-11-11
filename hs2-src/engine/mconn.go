@@ -360,6 +360,9 @@ type msub struct {
 
 	hdr   [mDataHdr]byte // reader only
 	rxEnd uint64         // reader (then under m.mu): end offset of the last byte read on it
+
+	tr       mtraceSub // HS2_MCONN_TRACE per-sub counters (under m.r.mu)
+	callLate bool      // HS2_LB_CALL_LATE: its call copy is late, no pair copy on it (under m.mu)
 }
 
 func (s *msub) close() {
@@ -508,7 +511,8 @@ type mConn struct {
 	liteSent   uint64
 	liteRecvd  uint64
 
-	tr    *mtrace // HS2_MCONN_TRACE (nil when off)
+	tr    *mtrace   // HS2_MCONN_TRACE (nil when off)
+	trRx  *mtraceRx // per-sub trace (mconn_trace_subs.go; under r.mu)
 	nsubs int
 
 	rawState  // lite with capMConnRaw: the first sub carries raw bytes until an upgrade
@@ -530,6 +534,9 @@ func newMConn(id uint64, iran bool, open mOpener) *mConn {
 	m.r.cond.L = &m.r.mu
 	m.r.lastProgress = time.Now()
 	m.tr = newMTrace(id, iran)
+	if m.tr != nil {
+		m.trRx = &mtraceRx{}
+	}
 	obs.mconnOpen.Add(1)
 	obs.mconnDual.Add(1) // m.state
 	if mconnLite.Load() {
@@ -1414,6 +1421,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			end = r.finOff
 		}
 		if end <= r.next || r.coveredLocked(off, end) {
+			m.traceDupLocked(s, off, end, n)
 			r.mu.Unlock()
 			putChunk(c) // the other copy came first
 			return
@@ -1430,6 +1438,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			r.pullLocked()
 			r.lastProgress = time.Now()
 			r.cond.Broadcast()
+			m.traceFirstLocked(s, end, n)
 			m.traceRecvLocked(s, n)
 			r.mu.Unlock()
 			m.noteSaved(s)
@@ -1450,6 +1459,7 @@ func (m *mConn) deliver(s *msub, off uint64, c *mchunk, n int) {
 			liteBud.add(time.Now().Unix(), n, 0)
 		}
 		r.insertLocked(rchunk{c: c, off: off, b: c.buf[:n]})
+		m.traceFirstLocked(s, end, n)
 		m.traceRecvLocked(s, n)
 		r.mu.Unlock()
 		m.noteSaved(s)
@@ -1879,6 +1889,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			wake = d
 		}
 	}
+	m.traceSubsTick(now)
 	if stalled, pending := m.gapCheck(now); stalled {
 		m.end(errMConnGap, true)
 		return 0
@@ -1970,6 +1981,12 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				hs = true
 			}
 			if g, d := m.callStuckLocked(live, now); g || d > 0 { // HS2_LB_CALL_STUCK (lb_call_stuck.go)
+				hs = hs || g
+				if d > 0 {
+					at(d)
+				}
+			}
+			if g, d := m.callLateLocked(live, now); g || d > 0 { // HS2_LB_CALL_LATE (lb_call_late.go)
 				hs = hs || g
 				if d > 0 {
 					at(d)
