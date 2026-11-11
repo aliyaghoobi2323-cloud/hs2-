@@ -190,6 +190,69 @@ def walk(m, main, lang):
             return
 
 
+SET_ITEM = {"lang": "1", "mode": "2", "color": "3", "default_menu": "4"}
+SET_RE = {"lang": r"1\) \S+: (fa|en)\b", "mode": r"2\) \S+: (simple|advanced)\b",
+          "color": r"3\) \S+: (on|off)\b", "default_menu": r"4\) .*?: (new|classic)\b"}
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def settings_read(m):
+    """Wait for the settings prompt; return the values shown on that screen."""
+    m.exp(SUB)
+    scr = ANSI.sub("", m.c.before or "")
+    scr = scr[scr.rfind("1) "):] if "1) " in scr else scr
+    v = {}
+    for k, r in SET_RE.items():
+        f = re.findall(r, scr)
+        v[k] = f[-1] if f else None
+    return v
+
+
+def menu_conf():
+    try:
+        return dict(l.strip().split("=", 1) for l in open("/etc/hs2/menu.conf") if "=" in l)
+    except OSError:
+        return {}
+
+
+def settings_round(name, want):
+    """Open the menu, set `want` via the settings screen, check menu.conf, then
+    start the menu again and check the screen shows `want`. Records one line
+    per round; returns True when everything matched."""
+    note = ""
+    ok = False
+    m = M(name, cols=80)
+    try:
+        m.exp([MAIN_FA, MAIN_EN])
+        m.send("9")
+        cur = settings_read(m)
+        before = dict(cur)
+        for k in ("lang", "mode", "color", "default_menu"):
+            if cur[k] != want[k]:
+                m.send(SET_ITEM[k])
+                cur = settings_read(m)
+                if cur[k] != want[k]:
+                    raise RuntimeError("%s toggle: screen shows %r, want %r" % (k, cur[k], want[k]))
+        m.send("0")
+        m.exp([MAIN_FA, MAIN_EN])
+        conf = menu_conf()
+        bad = {k: conf.get(k) for k in want if conf.get(k, "new" if k == "default_menu" else None) != want[k]}
+        m.close()
+        m = M(name + "-reread", cols=80)
+        m.exp([MAIN_FA, MAIN_EN])
+        m.send("9")
+        again = settings_read(m)
+        m.send("0")
+        m.exp([MAIN_FA, MAIN_EN])
+        ok = not bad and again == want and not m.bad()
+        note = "before %s; menu.conf mismatches %s; next start shows %s" % (before, bad, again)
+    except Exception as e:
+        note = str(e)
+    m.close()
+    result("settings round %s -> %s" % (name, want), ok, note)
+    return ok
+
+
 def step_sections():
     # en / simple / colour, 100 col
     m = M("sections-en", env={"LANG": "C"})
@@ -198,27 +261,16 @@ def step_sections():
         walk(m, MAIN_EN, "en simple ascii")
     finally:
         m.close()
-    # settings: advanced, fa, colour off; 80 col; then walk again
-    m = M("settings", cols=80)
-    try:
-        i = m.exp([MAIN_FA, MAIN_EN])
-        m.send("9")
-        m.exp(SUB)
-        cur = m.seen
-        if "Language" in cur and ": en" in cur or "زبان: en" in cur:
-            m.send("1")
-            m.exp(SUB)
-        m.send("2")
-        m.exp(SUB)
-        m.send("3")
-        m.exp(SUB)
-        m.send("0")
-        m.exp(MAIN_FA)
-        conf = open("/etc/hs2/menu.conf").read() if os.path.exists("/etc/hs2/menu.conf") else ""
-        result("settings persist (fa, advanced, colour off) in menu.conf", "lang=fa" in conf and "mode=advanced" in conf and "color=off" in conf, conf)
-    except Exception as e:
-        result("settings persist (fa, advanced, colour off) in menu.conf", False, str(e))
-    m.close()
+    # settings: each item is a toggle, so the check reads the screen, toggles
+    # only what differs from the target and re-reads after every press; then
+    # menu.conf must hold the target and a fresh start must show it again.
+    # Done in both directions (en/simple/on/new, then fa/advanced/off/classic);
+    # default_menu ends back on "new". Leaves fa/advanced/colour off for the
+    # walk below.
+    ok_all = settings_round("settings-b", {"lang": "en", "mode": "simple", "color": "on", "default_menu": "new"})
+    ok_all = settings_round("settings-a", {"lang": "fa", "mode": "advanced", "color": "off", "default_menu": "classic"}) and ok_all
+    ok_all = settings_round("settings-c", {"lang": "fa", "mode": "advanced", "color": "off", "default_menu": "new"}) and ok_all
+    result("settings persist (lang / mode / colour / default menu, both directions, read back on the next start)", ok_all, "")
     m = M("sections-fa-adv-80", cols=80, env={"NO_COLOR": "1"})
     try:
         m.exp(MAIN_FA)
