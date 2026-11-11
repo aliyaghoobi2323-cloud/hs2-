@@ -1389,6 +1389,24 @@ Common flags (before or after the positional value): `--confirm-within 5m`,
   wildcard listener (`addr 0.0.0.0:P`, the `hs2 tunnel create` default) too:
   it announces its explicit lb list. `hs2 reality front … tls` keeps the
   reality key, so a later switch back needs no new key.
+- **Reality target by listener side**: the censor sees the SNI and the IP
+  that answers it, so the target depends on which server is the TLS listener
+  (any carrier: mtcp, l3mtcp, tls). **Reverse** mode: the Iran server listens;
+  pick an **Iranian** site hosted on Iranian IPs (the splice to it leaves from
+  Iran too). **Direct** mode: the kharej server listens; pick a **foreign**
+  site, best on the same provider / ASN (e.g. Hetzner for a Hetzner server).
+  `hs2 reality targets -u U` reads the side from the tunnel's config (or
+  `--side iran|kharej`), checks that side's vetted list and shows per row the
+  country / ASN and why it was accepted or rejected; `hs2 reality check-target
+  HOST -u U` and `hs2 reality front` reject a target whose IPs are in the
+  wrong country (MISMATCH) and any site on a multi-tenant CDN: Cloudflare,
+  Fastly, Akamai, CloudFront and the Iranian ArvanCloud, Sotoon CDN and Derak
+  (by IP range / ASN, response headers or a shared certificate). Country / ASN
+  come from a built-in table plus, when reachable, the Team Cymru DNS whois
+  (1.5 s timeout; `--offline` turns it off); when neither knows the IP, a TCP
+  connect under 10 ms from the listener counts as "same region". The doctor's
+  front category warns when a configured target does not match the side.
+  Vetted lists and evidence: `docs/reality-architecture.md` §9.1.
 - **Weights** must name every IP of this side and sum to 100 (`--equal`
   splits evenly, the remainder to the first).
 - **Park** sets the IP's weight to 0 and gives its share to the others in

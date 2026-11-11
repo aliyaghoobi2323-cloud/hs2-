@@ -145,7 +145,7 @@ func tunnelDialer(fc fileConfig, key []byte) engine.LinkDialer {
 	return d
 }
 
-const realityUsage = "usage: hs2 reality keygen | check-target host[:443] [server_name] | targets [--add h,h] | status -u U | front -u U --ip IP tls|reality|both [--target host:443] | rotate-key -u U (--ip IP|--all)"
+const realityUsage = "usage: hs2 reality keygen | check-target host[:443] [server_name] [-u U] | targets [-u U | --side iran|kharej] [--add h,h] | status -u U | front -u U --ip IP tls|reality|both [--target host:443] | rotate-key -u U (--ip IP|--all)"
 
 // realityCmd: hs2 reality keygen | check-target | targets | status | front | rotate-key
 func realityCmd(args []string) {
