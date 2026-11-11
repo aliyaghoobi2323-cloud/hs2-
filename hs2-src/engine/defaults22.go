@@ -65,6 +65,7 @@ func loadEnvKeys() {
 	lbRescue = envOn("HS2_LB_RESCUE")
 	lbRescueRaw = envOn("HS2_LB_RESCUE_RAW")
 	lbRescueCallFree = envOn("HS2_LB_RESCUE_CALLFREE")
+	lbCallRescue = envOn("HS2_LB_CALL_RESCUE")
 	lbFastVerdict = envOn("HS2_LB_FAST_VERDICT")
 	refillWait = msFromEnv(envDefault("HS2_REFILL_WAIT_MS"), 0)
 	refillWaitBytes = envOn("HS2_REFILL_WAIT_BYTES")

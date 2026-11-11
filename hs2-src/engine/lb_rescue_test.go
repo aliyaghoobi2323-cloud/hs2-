@@ -265,3 +265,160 @@ func TestMConnRescueRawOffByDefault(t *testing.T) {
 	closeAndWait(t, iran, exit)
 	noLeak(t, before)
 }
+
+func withCallRescue(t *testing.T, on bool) {
+	t.Helper()
+	old := lbCallRescue
+	lbCallRescue = on
+	t.Cleanup(func() { lbCallRescue = old })
+}
+
+// subOnKeys: a live (not retired) sub of m rides one of keys.
+func subOnKeys(m *mConn, keys ...any) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.subs {
+		if s.retired || s.dead {
+			continue
+		}
+		for _, k := range keys {
+			if s.key == k {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// HS2_LB_CALL_RESCUE (lb_call_rescue.go): a call whose subs are all on
+// lowered links gets a fresh sub with the call-rescue placement, then gives
+// the lowered ones up through the close handshake; the call keeps flowing
+// and at no time has no sub.
+func TestMConnCallRescueAllLowered(t *testing.T) {
+	withRescue(t, true)
+	withCallRescue(t, true)
+	setCloseHS(t, true)
+	setCall(t, "1")
+	before := runtime.NumGoroutine()
+	n, iran, exit := newLitePair(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var lat atomic.Int64
+	callStream(iran, exit, 2500, stop, &wg, &lat)
+	mWaitFor(t, "call on two subs", mLiteAfter+4*time.Second, func() bool {
+		return liveSubs(iran) == 2 && liveSubs(exit) == 2
+	})
+	o0, m0 := callRescueOpened.Load(), callRescueMoved.Load()
+	rescueMark(nil, []any{0, 1}) // the call's path lowered
+	var zero atomic.Bool
+	watch := make(chan struct{})
+	go func() {
+		defer close(watch)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if liveSubs(iran) == 0 {
+				zero.Store(true)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	mWaitFor(t, "call moved off the lowered links", 5*time.Second, func() bool {
+		return callRescueOpened.Load() > o0 && callRescueMoved.Load() > m0 && !subOnKeys(iran, 0, 1)
+	})
+	l := n.link(2)
+	if l == nil || l.plane != planeLight {
+		t.Fatal("no fresh light sub")
+	}
+	marked := false
+	for _, a := range l.avoid {
+		if _, ok := a.(callRescueMark); ok {
+			marked = true
+		}
+	}
+	if !marked || !containsKey(l.avoid, 0) || !containsKey(l.avoid, 1) {
+		t.Fatalf("fresh sub avoid %v: want the call-rescue mark and the lowered links", l.avoid)
+	}
+	lat.Store(0)
+	time.Sleep(500 * time.Millisecond)
+	if lat.Load() == 0 {
+		t.Fatal("the call stopped flowing after the move")
+	}
+	close(stop)
+	wg.Wait()
+	<-watch
+	if zero.Load() {
+		t.Fatal("the connection was left with no sub")
+	}
+	if modeOf(iran) != planeLight || n.count(planeBulk) != 0 {
+		t.Fatal("left light mode")
+	}
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+func containsKey(avoid []any, k any) bool {
+	for _, a := range avoid {
+		if a == k {
+			return true
+		}
+	}
+	return false
+}
+
+// Key off: the call stays on its lowered links (8.9's behaviour).
+func TestMConnCallRescueKeyOff(t *testing.T) {
+	withRescue(t, true)
+	withCallRescue(t, false)
+	setCloseHS(t, true)
+	setCall(t, "1")
+	before := runtime.NumGoroutine()
+	n, iran, exit := newLitePair(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	var lat atomic.Int64
+	callStream(iran, exit, 2500, stop, &wg, &lat)
+	mWaitFor(t, "call on two subs", mLiteAfter+4*time.Second, func() bool {
+		return liveSubs(iran) == 2 && liveSubs(exit) == 2
+	})
+	rescueMark(nil, []any{0, 1})
+	time.Sleep(2500 * time.Millisecond)
+	if n.count(planeLight) != 2 || !subOnKeys(iran, 0) || !subOnKeys(iran, 1) {
+		t.Fatalf("key off: %d light opens", n.count(planeLight))
+	}
+	close(stop)
+	wg.Wait()
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
+// The mark is added only for a call with the keys on, and stripped.
+func TestCallRescueMark(t *testing.T) {
+	withRescue(t, true)
+	m := &mConn{iran: true, lite: true}
+	m.callOn = true
+	now := time.Now()
+	if got := m.callRescueAvoidLocked([]any{1}, now); len(got) != 1 {
+		t.Fatal("mark with the key off")
+	}
+	withCallRescue(t, true)
+	got := m.callRescueAvoidLocked([]any{1}, now)
+	if len(got) != 2 {
+		t.Fatal("no mark")
+	}
+	m.callOn = false
+	if len(m.callRescueAvoidLocked([]any{1}, now)) != 1 {
+		t.Fatal("mark for a non-call")
+	}
+	m.callLikeAt = now.Add(-time.Second)
+	if len(m.callRescueAvoidLocked([]any{1}, now)) != 2 {
+		t.Fatal("no mark within callFreeTTL of a call-like window")
+	}
+	rest, ok := takeCallRescueMark(got)
+	if !ok || len(rest) != 1 || rest[0] != 1 {
+		t.Fatalf("take: %v %v", rest, ok)
+	}
+}

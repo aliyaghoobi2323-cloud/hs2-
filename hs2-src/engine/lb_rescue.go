@@ -157,6 +157,13 @@ func (m *mConn) rescueDualLocked(live []*msub, p *msub, now time.Time) *msub {
 // less (or cut) per the dialing side's fresh report. Caller holds m.mu.
 func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	st := m.steer
+	if lbCallRescue && lbCallStuck { // HS2_LB_CALL_STUCK (lb_call_stuck.go)
+		st.callPaths = callPathMark(st.callPaths, byPath)
+		if o := callStuckOpened.Load(); o != st.stuckLogged {
+			st.stuckLogged = o
+			st.logs = append(st.logs, fmt.Sprintf("lb call stuck: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d", o, callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load()))
+		}
+	}
 	if !lbRescue {
 		return
 	}
@@ -182,7 +189,7 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	}
 	if t := rescueTotal.Load(); len(low) > 0 && (len(st.rescued) == 0 || t != st.rescueLogged) {
 		st.rescueLogged = t
-		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d, placed off call links %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load(), rescueCallFreeN.Load()))
+		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d, placed off call links %d; calls: fresh subs %d, lowered subs given up %d; stuck calls: fresh subs %d (busy %d, gap %d, rate-refused %d), subs given up %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load(), rescueCallFreeN.Load(), callRescueOpened.Load(), callRescueMoved.Load(), callStuckOpened.Load(), callStuckBusyN.Load(), callStuckGapN.Load(), callStuckRefused.Load(), callStuckMoved.Load()))
 	}
 	st.rescued = rescueMark(st.rescued, low)
 }
