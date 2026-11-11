@@ -51,7 +51,7 @@ func loadEnvKeys() {
 	stripeShare = envOn("HS2_MCONN_STRIPE_SHARE")
 	stripeRel = envOn("HS2_MCONN_STRIPE_REL")
 	stripeFast.Store(envOn("HS2_MCONN_STRIPE_FAST"))                                               // up55 (mconn_stripe_fast.go)
-	stripeFastSolo.Store(envOn("HS2_MCONN_STRIPE_FAST_SOLO"))                                       // rel54b (mconn_stripe_fast.go)
+	stripeFastSolo.Store(envOn("HS2_MCONN_STRIPE_FAST_SOLO"))                                      // rel54b (mconn_stripe_fast.go)
 	stripeFastEarly.Store(int64(stripeEarlyFromEnv(envDefault("HS2_MCONN_STRIPE_FAST_EARLY_MS")))) // up57 (mconn_stripe_early.go)
 	stripeUpPathQOn.Store(envOn("HS2_MCONN_STRIPE_UP_PATHQ"))                                      // up57 (mconn_stripe_pathq.go)
 	stripeResend.Store(envOn("HS2_MCONN_STRIPE_RESEND"))
