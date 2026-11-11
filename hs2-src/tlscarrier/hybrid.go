@@ -3,6 +3,7 @@ package tlscarrier
 import (
 	"context"
 	"errors"
+	"io"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -27,6 +28,17 @@ import (
 // problem never shows as a path loss to the LB; only a path where both fronts
 // fail returns an error (and is cut as usual). After N reality failures in a
 // row the path dials tls only for a cool-down, then tries reality again.
+//
+// rel50: only a failure that our listener or the key explains counts toward
+// the cool-down (RealityRefusal): the certificate did not prove the key
+// (ErrRealityCert: wrong key/short id, clock skew, the target answered) or our
+// listener refused the hello with a clean close (EOF: target down or slow on
+// the listener). A reset, a timeout or any other network error during the
+// reality handshake is a PATH problem: it is returned to the LB as a failed
+// dial (no tls retry, no count), so a censor that resets reality handshakes
+// cannot push a path onto tls for the cool-down. A tls dial that the reality
+// target answers (ErrTargetAnswered: the listener is pure reality now) ends
+// the cool-down at once.
 
 // FrontCounters are one listener's (one lb IP's) classification counters.
 type FrontCounters struct {
@@ -88,6 +100,34 @@ type BothPathStats struct {
 	TLSFail     int64  `json:"tls_fail"`
 	Fallbacks   int64  `json:"fallbacks"` // cool-downs entered
 	ConnectFail int64  `json:"connect_fail"`
+	// PathFail: reality handshakes that failed with a reset/timeout/network
+	// error (a path problem: returned to the LB, no tls retry, not counted).
+	PathFail int64 `json:"path_fail,omitempty"`
+}
+
+// RealityRefusal: err is a reality failure that our listener or the key
+// explains (counts toward the tls cool-down), not a path problem.
+func RealityRefusal(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrRealityCert) || errors.Is(err, ErrTargetAnswered) {
+		return true
+	}
+	// our listener refused the hello with a clean close (target down/slow)
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+// realityOn ends k's cool-down (the listener is pure reality now).
+func (p *BothPolicy) realityOn(k string) {
+	p.mu.Lock()
+	b := p.path(k)
+	was := !b.coolUntil.IsZero()
+	b.coolUntil, b.fails = time.Time{}, 0
+	p.mu.Unlock()
+	if was && p.Logf != nil {
+		p.Logf("front both: %s: the tls dial reached the reality target: back to reality", k)
+	}
 }
 
 // DefaultBothPolicy is the process-wide policy of "both" paths.
@@ -230,9 +270,16 @@ func (b BothFront) DialFront(ctx context.Context, p DialPath) (*Carrier, error) 
 			pol.count(k, func(s *BothPathStats) { s.ConnectFail++ })
 			return nil, err
 		}
+		if !RealityRefusal(err) { // reset/timeout: the path's, for the LB
+			pol.count(k, func(s *BothPathStats) { s.PathFail++ })
+			return nil, err
+		}
 		pol.RealityFail(k, err)
 	}
 	c, err := td.DialFront(ctx, p)
+	if errors.Is(err, ErrTargetAnswered) {
+		pol.realityOn(k)
+	}
 	pol.count(k, func(s *BothPathStats) {
 		if err == nil {
 			s.TLSOK++

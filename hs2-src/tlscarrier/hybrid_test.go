@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -165,7 +168,7 @@ func (f *fakeDialer) DialFront(context.Context, DialPath) (*Carrier, error) {
 func TestBothPolicyStateMachine(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	pol := &BothPolicy{N: 2, Cool: time.Minute, Now: func() time.Time { return now }}
-	r, s := &fakeDialer{err: errors.New("handshake")}, &fakeDialer{}
+	r, s := &fakeDialer{err: ErrRealityCert}, &fakeDialer{}
 	b := BothFront{Policy: pol, reality: r, tls: s}
 	p := DialPath{Addr: "10.0.0.1:443", BindIP: "10.0.0.2", Profile: &FrontProfile{Kind: "both", PublicKey: "x", ServerNames: []string{"a"}, ShortIDs: []string{"a1"}}}
 	b.DialFront(context.Background(), p) // reality fail 1 -> tls
@@ -193,7 +196,7 @@ func TestBothPolicyStateMachine(t *testing.T) {
 		t.Fatalf("connect error handling: tls %d %+v", s.calls, pol.Stats()[0])
 	}
 	// both fronts fail -> the dial fails (the LB cuts the path as usual)
-	r.err, s.err = errors.New("hs"), errors.New("hs")
+	r.err, s.err = io.EOF, errors.New("hs")
 	if _, err := b.DialFront(context.Background(), p); err == nil {
 		t.Fatal("both failing must fail")
 	}
@@ -288,5 +291,53 @@ func TestHybridLazyTargetAndCap(t *testing.T) {
 	l.srv.fbMu.Unlock()
 	if all != 0 {
 		t.Fatalf("cover slots not released: %d", all)
+	}
+}
+
+// rel50: a censor that resets (or blackholes) reality handshakes must not
+// push the path onto tls: those failures go to the LB as path failures, with
+// no tls retry and no cool-down; key/listener refusals still count, and a tls
+// dial answered by the target ends a cool-down.
+func TestBothResetIsPathProblem(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	pol := &BothPolicy{N: 2, Cool: 10 * time.Minute, Now: func() time.Time { return now }}
+	r, s := &fakeDialer{err: syscall.ECONNRESET}, &fakeDialer{}
+	b := BothFront{Policy: pol, reality: r, tls: s}
+	p := DialPath{Addr: "10.0.0.1:443", Profile: &FrontProfile{Kind: "both", PublicKey: "x", ServerNames: []string{"a"}, ShortIDs: []string{"a1"}}}
+	for i := 0; i < 10; i++ {
+		if _, err := b.DialFront(context.Background(), p); err == nil {
+			t.Fatal("a reset must surface as a failed dial")
+		}
+	}
+	r.err = os.ErrDeadlineExceeded
+	if _, err := b.DialFront(context.Background(), p); err == nil {
+		t.Fatal("a timeout must surface")
+	}
+	st := pol.Stats()[0]
+	if s.calls != 0 || st.Mode != FrontReality || st.ConsecFails != 0 || st.Fallbacks != 0 || st.PathFail != 11 {
+		t.Fatalf("resets downgraded: tls calls %d %+v", s.calls, st)
+	}
+	for _, e := range []error{ErrRealityCert, fmt.Errorf("remote error: %w", ErrRealityCert), io.EOF, io.ErrUnexpectedEOF} {
+		if !RealityRefusal(e) {
+			t.Fatalf("%v must count", e)
+		}
+	}
+	for _, e := range []error{syscall.ECONNRESET, os.ErrDeadlineExceeded, errors.New("x")} {
+		if RealityRefusal(e) {
+			t.Fatalf("%v must not count", e)
+		}
+	}
+	// key refusals still downgrade ...
+	r.err = ErrRealityCert
+	b.DialFront(context.Background(), p)
+	b.DialFront(context.Background(), p)
+	if st := pol.Stats()[0]; st.Mode != FrontTLS || st.Fallbacks != 1 {
+		t.Fatalf("cert failures did not cool down: %+v", st)
+	}
+	// ... and a tls dial answered by the target ends the cool-down
+	s.err = fmt.Errorf("handshake: %w", ErrTargetAnswered)
+	b.DialFront(context.Background(), p)
+	if pol.UseTLS(BothPathKey(p)) {
+		t.Fatal("ErrTargetAnswered did not end the cool-down")
 	}
 }
