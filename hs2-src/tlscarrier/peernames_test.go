@@ -52,6 +52,26 @@ func TestPlainTLSPeerTargetNames(t *testing.T) {
 	case <-time.After(1500 * time.Millisecond): // waiting for the proof: the old path
 	}
 
+	// the names arrive while the dial waits for its proof (the first
+	// announcement lands after the certificate): the wait ends at once
+	names.Store(&[]string{})
+	t0 = time.Now()
+	late := make(chan error, 1)
+	go func() { _, err := DialPathFront(context.Background(), plain); late <- err }()
+	time.Sleep(400 * time.Millisecond)
+	names.Store(&known)
+	select {
+	case err := <-late:
+		if !errors.Is(err, ErrTargetAnswered) {
+			t.Fatalf("names known mid-dial: %v (want ErrTargetAnswered)", err)
+		}
+		if took := time.Since(t0); took > 2*time.Second {
+			t.Fatalf("names known mid-dial: failed after %v", took)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("names known mid-dial: still waiting for the proof")
+	}
+
 	// a tls IP of the same peer (our own cert for our SNI) is never refused
 	be, stop := backend(t)
 	t.Cleanup(stop)
