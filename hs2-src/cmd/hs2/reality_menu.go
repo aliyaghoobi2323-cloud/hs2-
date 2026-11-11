@@ -551,6 +551,12 @@ func realityFrontCmd(sub string, args []string) int {
 				return 1
 			}
 		}
+		if spec.Kind == tlscarrier.FrontReality {
+			if ls, ok := readLive(path); !ok || frontKindOf(ls, *ip) != tlscarrier.FrontBoth {
+				fmt.Println(tr("WARN: a 'reality' IP refuses every dialer that has not learned its key yet (after a restart the other server dials before it hears the announcement). Safer order: tls -> both -> (check `hs2 reality status` on the other server) -> reality.",
+					"هشدار: IP با 'reality' هر شماره‌گیری را که هنوز کلیدش را نگرفته رد می‌کند (پس از ری‌استارت سرور مقابل پیش از شنیدن اعلام شماره می‌گیرد). ترتیب امن‌تر: tls -> both -> (بررسی `hs2 reality status` روی سرور مقابل) -> reality."))
+			}
+		}
 		reason = "front-" + spec.Kind
 	case "rotate-key":
 		lb, _ := m["lb"].(map[string]any)
@@ -586,12 +592,56 @@ func realityFrontCmd(sub string, args []string) int {
 		fmt.Println("ERROR: " + err.Error())
 		return 1
 	}
+	if sub == "front" && pos[0] != tlscarrier.FrontTLS {
+		var nfc fileConfig
+		if err := json.Unmarshal(nb, &nfc); err != nil {
+			fmt.Println("ERROR: " + err.Error())
+			return 1
+		}
+		if msg := frontPreflight(nfc, pos[0], path); msg != "" {
+			fmt.Println("ERROR: " + msg)
+			return 1
+		}
+	}
 	rc := safeApplyMode(*unit, path, cur, nb, reason, *within, *yes, *dry, lbOn(fc))
 	if rc == 0 && !*dry {
 		fmt.Println(tr("Bilateral: nothing to run on the other server — it learns the front from the announcement (hs2 reality status -u U shows which front each IP really uses).",
 			"دوطرفه: روی سرور مقابل کاری لازم نیست — front را از اعلام می‌گیرد (hs2 reality status -u U نشان می‌دهد هر IP واقعاً از کدام front استفاده می‌کند)."))
 	}
 	return rc
+}
+
+// frontPreflight refuses a reality / both front the other server could
+// never use: "" = fine.
+//   - the announcement (which carries the front, its public key and short
+//     ids to the dialer) is empty while this side listens on a wildcard
+//     address: the dialer would keep dialing tls, and a "reality" IP would
+//     then refuse every new link;
+//   - "both" answers tls only for the tunnel's own server names (sni): a
+//     tunnel without one would send every tls dialer to the cover target.
+func frontPreflight(fc fileConfig, kind, cfgPath string) string {
+	if lbOwnAdvert(fc) == nil {
+		h, p, _ := net.SplitHostPort(fc.Addr)
+		return fmt.Sprintf(tr("this server listens on the wildcard %s: the announcement that carries the front to the other server needs an exact address. First set "addr" in %s to <this IP>:%s (menu 2) Tunnels -> edit, or the config editor; a restart), then retry. (%s)",
+			"این سرور روی نشانی عمومی %s گوش می‌دهد: اعلامی که front را به سرور مقابل می‌برد نشانی دقیق می‌خواهد. اول "addr" را در %s به <IP همین سرور>:%s تغییر دهید (منوی ۲) تونل‌ها -> ویرایش، یا ویرایشگر پیکربندی؛ با ری‌استارت)، سپس دوباره. (%s)"),
+			firstNonEmpty(h, "*")+":"+p, cfgPath, p, fc.Addr)
+	}
+	if kind == tlscarrier.FrontBoth && len(tlsNames(fc)) == 0 {
+		return tr("'both' answers tls only for the tunnel's server name (sni), and this tunnel has none (no domain): tls dialers would be sent to the cover target. Set the same sni on both servers first, or use 'reality' once the other server shows it in `hs2 reality status`.",
+			"'both' فقط برای نام سرور (sni) تونل tls پاسخ می‌دهد و این تونل sni ندارد (بدون دامنه): شماره‌گیرهای tls به هدف پوششی فرستاده می‌شوند. اول sni یکسان روی هر دو سرور بگذارید، یا وقتی سرور مقابل در `hs2 reality status` آن را نشان داد از 'reality' استفاده کنید.")
+	}
+	return ""
+}
+
+// frontKindOf: the front ip serves now per the status file ("" = unknown).
+func frontKindOf(ls liveStatus, ip string) string {
+	p := net.ParseIP(ip)
+	for _, f := range ls.Fronts {
+		if net.ParseIP(f.IP).Equal(p) {
+			return f.Kind
+		}
+	}
+	return ""
 }
 
 // frontState is `hs2 reality status`: per IP (listening side) or per path

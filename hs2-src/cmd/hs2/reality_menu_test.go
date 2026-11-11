@@ -260,6 +260,36 @@ func TestFrontStateRender(t *testing.T) {
 }
 
 // M6 leftover: delete removed the unit but left <unit>.service.d behind.
+func TestFrontDiffOneSidedAndHidden(t *testing.T) {
+	if isBilateral("lb.kharej.0.front.kind") || !isBilateral("lb.kharej.0.ip") && !isBilateral("lb") {
+		t.Fatal("bilateral rules")
+	}
+	if !sensitiveKey("lb.kharej.0.front.private_key") || !sensitiveKey("front.private_key") || sensitiveKey("lb.kharej.0.front.public_key") {
+		t.Fatal("private keys must be hidden in diffs")
+	}
+}
+
+func TestFrontPreflight(t *testing.T) {
+	var fc fileConfig
+	json.Unmarshal([]byte(m5Cfg), &fc) // addr 0.0.0.0:443: no announcement
+	if msg := frontPreflight(fc, "reality", "/etc/hs2/x.json"); !strings.Contains(msg, "wildcard") {
+		t.Fatalf("wildcard listener accepted: %q", msg)
+	}
+	fc.Addr = "10.0.0.1:443"
+	priv, _, _ := tlscarrier.RealityKeygen()
+	fc.LB.Kharej[1].Front.PrivateKey = priv
+	if msg := frontPreflight(fc, "reality", "/etc/hs2/x.json"); msg != "" {
+		t.Fatalf("exact listener refused: %q", msg)
+	}
+	if msg := frontPreflight(fc, "both", "/etc/hs2/x.json"); !strings.Contains(msg, "sni") {
+		t.Fatalf("both without an sni accepted: %q", msg)
+	}
+	fc.SNI = "t.example.ir"
+	if msg := frontPreflight(fc, "both", "/etc/hs2/x.json"); msg != "" {
+		t.Fatalf("both with an sni refused: %q", msg)
+	}
+}
+
 func TestDeleteRemovesDropinDir(t *testing.T) {
 	menuEnv(t)
 	oc, od := certDir, deletedRoot

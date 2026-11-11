@@ -29,6 +29,11 @@ func addrPortChanged(o, n string) bool {
 }
 
 func isBilateral(path string) bool {
+	// An lb IP's front lives on the listening side only: the dialer learns
+	// it from the announcement (menu M5).
+	if strings.HasPrefix(path, "lb.") && strings.Contains(path, ".front") {
+		return false
+	}
 	for _, k := range bilateralKeys {
 		if path == k || strings.HasPrefix(path, k+".") {
 			return true
@@ -43,7 +48,8 @@ func sensitiveKey(path string) bool {
 	case "shared_key", "psk", "local_priv", "cover_seed":
 		return true
 	}
-	return false
+	// reality private keys (tunnel front and per lb IP)
+	return strings.HasSuffix(path, ".private_key") || path == "private_key"
 }
 
 type diffEntry struct {

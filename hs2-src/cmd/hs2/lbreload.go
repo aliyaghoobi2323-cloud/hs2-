@@ -306,10 +306,16 @@ func (rt *lbRuntime) syncListenersLocked() {
 	if ip := net.ParseIP(host); ip != nil {
 		prim = ip.String()
 	}
+	unspec := func(s string) bool {
+		p := net.ParseIP(s)
+		return s == "" || (p != nil && p.IsUnspecified())
+	}
 	have := map[string]bool{}
 	for _, ip := range rt.ln.ListenIPs() {
 		have[ip] = true
-		if ip != prim && !want[ip] {
+		// addr's own listener stays; a wildcard addr ("0.0.0.0:P", ":P")
+		// shows up as "::" or "0.0.0.0" — never close it on a reload.
+		if ip != prim && !want[ip] && !(unspec(ip) && unspec(prim)) {
 			rt.ln.RemoveListener(ip)
 			rt.logf("lb: stopped listening on %s (removed from the list; its links end with their users)", ip)
 		}
