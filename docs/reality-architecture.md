@@ -528,15 +528,15 @@ call, game, iperf down x8, T=45 s.
 * **Validation** (`cmd/hs2/lb.go` `tlsNameOverlap`): a reality/both IP whose
   `server_names` include a name our tls front takes (top-level `sni` or any
   per-IP `sni`; case/trailing dot normalised; `*.x` covers one label below) is
-  refused (`TestLBFrontTLSNameOverlap`). NOT done: the warning when our tls
-  sni does not resolve to that IP.
+  refused (`TestLBFrontTLSNameOverlap`). The warning when our tls sni does
+  not resolve to that IP: done in phase 4b (8.4).
 * **Lazy target dial on "both"** (`AcceptFront`): the target is dialed only
   when the first read is not a complete hello (garbage/partial: the prober's
   bytes still reach the target as they come) or a complete hello is not ours;
   our tls dials never contact the target. `reality` IPs still dial at accept
   (an authenticated hello needs the target up). `TestHybridLazyTargetAndCap`:
-  3 tls dials -> 0 target dials. NOT measured yet: the cover timing cost of the
-  lazy dial (one listener->target connect in series, ~0.7 ms on loopback).
+  3 tls dials -> 0 target dials. Timing cost measured and closed in phase 4b
+  (8.4: pre-dial after 10 ms of silence).
 * **Cover-splice caps**: `fallback_max_conns` (per listener IP, default 256)
   and `fallback_max_per_net` (per client /24, IPv6 /64, default 16). Over the
   cap the hello is read, then FIN (CloseWrite), the rest drained 2 s (so the
@@ -571,12 +571,13 @@ Authenticated client vs the target, passive observer (30 conns each):
 | ServerHello group / size | 0x11ec / 1210 | 0x1d / 122 | 0x1d / 122 | 0x1d / 122 | 0x1d / 122 | high -> fixed |
 | EncryptedExtensions | 36 (h2) | 42 | 42 | 42 | 42 | med-high -> fixed |
 | Certificate record | 441-443 jitter | 442 fixed | 417 | 2211 | 2211 | med -> fixed for real chains; floor ~411 B (lab chain smaller) |
-| CertificateVerify | 95-97 | 95-97 | 95-97 | 95-97 | 281 | high for RSA targets -> OPEN |
-| NewSessionTicket | none | none (Go would send 1x139 B inside its first flight: Go-only, kept off) | 2 (266/282) after client Finished | none | 2 | med -> OPEN |
+| CertificateVerify | 95-97 | 95-97 | 95-97 | 95-97 | 281 | high for RSA targets -> fixed in 4b (281) |
+| NewSessionTicket | none | none (Go would send 1x139 B inside its first flight: Go-only, kept off) | 2 (266/282) after client Finished | none | 2 | med -> fixed in 4b |
 | first server flight | 1866-1869 | ~790 | 760-762 | ~2560 | 2740 | follows the rows above |
 | time to first server byte | 1.40 ms | 1.36 ms | 0.49 ms | 1.95 ms | 1.30 ms | low (cert build + sign) -> OPEN |
 
-Open, with the plan: (1) RSA target: when the mirrored leaf is RSA, use a
+(Phase 4b closed (1)-(3) and cut the cert build of (4) to 0.2 ms; see 8.4.)
+Open at phase 4, with the plan: (1) RSA target: when the mirrored leaf is RSA, use a
 throw-away RSA key of the same size (CertificateVerify rsa_pss 2048 = 256 B
 sig); (2) NST: after the client's Finished, send N padded records of the
 target's NST sizes (measure N/sizes in the mirror probe: read ~100 ms after
@@ -625,3 +626,97 @@ the run — the LB is biased by the front's startup failures, not by quality.
 (b) when B really degrades, auto2 cuts it (x0.10, `loss 4.2%`) but only idle
 links retire (37 -> 28), so crowd p99 rises to 1.23 s: light users stay
 behind a bad path — against the "light users never behind heavy/bad" rule.
+
+### 8.4 Phase 4b: front / crypto / cover leftovers (2026-11-11, branch reality35b)
+
+Code: `tlscarrier/reality.go`, `tlscarrier/realitymirror.go`,
+`tlscarrier/server.go`, `cmd/hs2/front_dns.go`; tests
+`tlscarrier/phase4b_test.go`, `cmd/hs2/front_dns_test.go`.
+
+1. **One origin on "both"** (`Server.handle` with a cover dialer,
+   `RealityServer.dialCoverHTTP`): a client that completes a handshake with
+   OUR certificate (our tls SNI) but does not authenticate is proxied, after
+   decryption, to the reality target over TLS (the target's own name, ALPN
+   http/1.1) instead of the local cover backend. Plain HTTP, other SNIs and
+   our SNI now all show the target's HTTP server. `TestHybridOneOriginCover`:
+   direct / other SNI / our SNI = `200 server="target-origin"`, plain HTTP on
+   the port = the target's own 400. Probe battery (lab 2, nginx 1.24 target,
+   18 fast probes): tunnel sni = the probe's SNI: both == target **18/18**
+   (was 17/18: plain HTTP differed), reality == target 18/18; tunnel sni =
+   another name: both 18/18, reality 18/18. The handshake on our SNI still
+   shows our certificate (it is our name).
+2. **SNI DNS warning** (`sniResolveWarnings`): every listening lb IP with a
+   tls or both front whose sni (per-IP, else top-level) does not resolve to
+   that IP, or does not resolve at all, is logged at load and at each reload
+   (`front: WARNING ...`, in the background: load never waits on DNS) and is
+   a `warn` line `front sni dns` in `hs2 doctor`. Wildcards, IP literals and
+   reality-only IPs are skipped. `TestSNIResolveWarnings`.
+3. **Lazy dial timing** (`TestHybridCoverTimingParity`, 30 ms
+   listener->target connect, median of 7, time from the prober's hello to the
+   first target byte):
+
+   | prober | reality (dial at accept) | both, lazy only (phase 4) | both + pre-dial (4b) |
+   |---|--:|--:|--:|
+   | hello right after connect | 30.7 ms | 30.6 ms | 30.7 ms |
+   | hello 100 ms after connect | 0.18 ms | **30.6 ms** | 0.19 ms |
+
+   A prober that connects and waits saw one extra listener->target connect
+   with the phase-4 lazy dial. Now a "both" connection with no complete hello
+   after `lazyPreDial` = 10 ms dials the target anyway. Our own tls dialer
+   sends its hello at once, so it still never contacts the target
+   (`TestHybridLazyTargetAndCap`: 0 target dials). Immediate hellos were
+   already at parity (the eager dial only overlaps the accept->hello gap).
+4. **RSA leaf -> RSA key** (`useLeafKey`, `cachedKey`): the mirror probe
+   records the target leaf's key type and size; the throw-away cert then
+   carries an RSA (or ECDSA P-384/521) key of that size, generated once per
+   process outside the handshake path. All throw-away certs are now SIGNED by
+   a per-listener Ed25519 issuer key (only our dialer sees that signature,
+   and it checks only the tag): the fixed 64 B signature makes the exact size
+   one signing (with a cached pad hint). Cert build 1.0-1.3 ms -> 0.20-0.23
+   ms (`BenchmarkRealityMakeCert`, lab 2: 1.003 signings/op, was ~4).
+5. **NewSessionTicket parity** (`padRecord`, `readPadsThenProof`,
+   `realityCapPad`): the mirror probe reads the target's records after its
+   Finished (`recordTap`) and samples ticket sizes over 4 probes per refresh
+   (OpenSSL: 266 or 282 B, independently per ticket). Right after the
+   client's Finished the listener writes as many application_data records as
+   the target sends tickets (TLS 1.3 hides the inner type), each sized at
+   random from the samples: marker(HMAC(ekm)) || u16 n || n random bytes.
+   Go's own in-flight 139 B ticket stays off. Versioned: the dialer sets bit 0
+   of the signal's byte 1 (old listeners ignore bytes 1-3); the listener sends
+   pads only to such a dialer, so old dialers get none and keep working
+   (`TestRealityRSAKeyAndTicketPads`: new dialer `.. 281 53 {266,282}
+   {266,282} proof`, old dialer `.. 281 53 proof`).
+6. **Cert size floor**: a minimal form (no subject, no key usages, 64-bit
+   serial) is used when the target chain is below our normal cert (P-256:
+   427 B normal, 333 B minimal); gaps up to 90 B ride inside the tag's OCTET
+   STRING (older dialers read only Value[2:34]), larger ones in the pad
+   extension; exact to the byte (`TestRealityMinimalCert`). A target chain
+   below the minimum logs `WARNING the target's certificate chain (..) is
+   smaller than our smallest throw-away certificate`.
+
+Fingerprint re-run (lab 2, nginx 1.24 / OpenSSL 3.0.13, passive relay, 30
+authenticated connections each; ours = commit 034a354f):
+
+| item | ours, EC 387 B chain | nginx EC | ours, RSA 2181 B chain | nginx RSA |
+|---|---|---|---|---|
+| ServerHello group / size | 0x1d / 122 | 0x1d / 122 | 0x1d / 122 | 0x1d / 122 |
+| EncryptedExtensions | 42 | 42 | 42 | 42 |
+| Certificate record | **417** (was 442) | 417 | 2211 | 2211 |
+| CertificateVerify | 95-97 | 95-97 | **281** (was 95-97) | 281 |
+| server first flight | 760-762 | 760-762 | **2740** (was ~2560) | 2740 |
+| records after client Finished | **2 x {266,282}** + proof | 2 x {266,282} + HTTP | **2 x {266,282}** + proof | 2 x {266,282} |
+| ticket pairs 266/266, 282/266, 266/282, 282/282 | 15/4/7/4 | 8/7/9/6 | 5/8/12/5 | 7/7/6/10 |
+| client Finished -> 1st ticket | 0.16 ms | 0.25 ms | 0.14 ms | 0.23 ms |
+| time to first server byte (median) | 1.38 ms | 0.63 ms | 3.16 ms | 1.43 ms |
+
+(The EC run's 266/266 excess: the first connections came before the 4
+ticket samples were in, using one probe's sizes.)
+
+Left: (a) time to first server byte is still +0.7 ms (EC) and +1.7 ms (RSA)
+over a co-located target. The cert build is no longer the cost (0.2 ms);
+for RSA, Go's RSA-PSS 2048 CertificateVerify signature is ~1.3 ms slower
+than OpenSSL's and cannot be precomputed (it signs the transcript). Below
+WAN jitter but measurable on a quiet path; plan: profile the authenticated
+path (signal check, Go handshake) and keep the target close. (b) The first
+~1 s after start uses one probe's ticket sizes. (c) Pads only for dialers
+of this version: an old dialer's connection still shows no tickets.
