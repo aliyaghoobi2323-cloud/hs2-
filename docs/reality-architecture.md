@@ -1005,3 +1005,91 @@ is noisy in both arms (177-542) and higher by median with the rescue
 before trusting the call column here (the 3-path runs of 8.6 showed call p99
 336 vs 570 the other way). Rows mix the 35d binary (2 reps per arm) and this
 tree's (2 reps; base there = `HS2_LB_RESCUE=0`).
+
+### 8.8 Phase 5b (2026-11-11, branch reality37): rescue under a binding budget found, all-tls call p99
+
+**(a) Why the single-sub rescue barely fired (8.7 (b)).** Debug counters in a
+lab k run (budget forced binding by a lab-only build, mLiteCapPct = 0; B +80
+ms 3% corrupt from 15 s; crowd 3000, iperf down x8) showed the guards of
+`rescueWantLocked` were never the problem: over the whole run lite's
+single-sub upgrade rule (mConn.tick) ran only ~50 times, 1 of them on a
+lowered link. Nearly every single-sub crowd connection is **raw**
+(capMConnRaw, mconn_raw.go): its upgrade rule is the raw timer `rawTick`,
+which asked only the budget and never the rescue. The 0 and 4 copies of 8.7
+were connections that had been dual once and fell back to the records path.
+`TestMConnRescueCappedSingle` passed because `newLitePair` is not raw.
+Fix: `rawTick` asks `rescueWantLocked` like the tick does
+(`TestMConnRescueCappedRaw`, fails without the fix).
+
+With that, the rescue reached the crowd (1118-1215 copies past the budget a
+run, 192-278 copy subs moved) but 20-30 crowd connections failed a run (0
+without the rescue). Counters on every end while a raw upgrade was still in
+its handshake: all were the second sub, closed by Iran itself 10-11 s into the
+handshake. The handshake waits for the exit's raw write in flight on the first
+sub (upgradeSendExit takes the raw write lock before naming its boundary) and
+the first sub is on the lowered path, so it can take seconds; meanwhile Iran's
+lite rule saw the second sub idle for mLiteIdle (10 s), closed it, and a sub
+dying in the handshake ends the connection by design. Fix: no idle close of a
+sub while the connection is handshaking (and no dual-rescue CLOSE-REQ then);
+no unit test reproduces it yet: a fake-net test (the exit's raw write held
+past mLiteIdle) passed without the fix alone and was flaky in the full suite,
+so it was dropped; the lab rows below are the proof. Open: a reproducer.
+
+The raw part ships behind `HS2_LB_RESCUE_RAW` (edge, **default off**): the
+default budget (5% of all bytes, downloads included) did not bind in any lab
+run (8.7), so the default changes nothing measurable, and the raw upgrade on a
+lowered path is the one place the rescue can still cost a connection.
+
+Lab 1, k runs (budget forced binding, lab-only build), interleaved; medians
+(ranges), ms:
+
+| arm | n | crowd p95 | crowd p99 | 15-27 s p95/p99 | 27+ s p95/p99 | call p99 | crowd fail | copies past budget |
+|---|--:|--:|--:|--|--|--:|--|--|
+| rescue off (`HS2_LB_RESCUE=0`) | 4 | 568 (545-614) | 877 (815-1355) | 576 / 822 | 606 / 885 | 237 (181-922) | 0 ×4 | — |
+| raw rescue, before the handshake fix | 4 | 225 (223-234) | 538 (517-579) | 361 / 678 | 192 / 271 | 215 (204-909) | 30, 30, 20, 29 | 1118-1215 |
+| rescue off, 2nd set | 4 | 562 (550-580) | 888 (819-948) | 574 / 831 | 607 / 869 | 396 (174-703) | 0 ×4 | — |
+| raw rescue + handshake fix (`HS2_LB_RESCUE_RAW=1`) | 4 | 213 (210-217) | 532 (511-544) | 339 / 673 | 184 / 258 | 764 (181-1054) | **0 ×4** | 1118-1155 |
+
+With the fix the failures are gone (0 in 4 runs, 1118-1155 copies past the
+budget a run) and the crowd gain stays: p95 -62%, p99 -40%, after the cut p99
+869 -> 258 ms. But call p99 (764 vs 396 by median) and ping p99 (311 vs 161)
+are worse — the same tail cost as (b) below, larger with ~1100 copies a run.
+So `HS2_LB_RESCUE_RAW` stays off until (b) is fixed.
+
+**(b) All-tls call p99 with the rescue (8.7 (c)).** Six more interleaved reps
+per arm (fresh binary of this tree, default budget; base = `HS2_LB_RESCUE=0`,
+rescue arm with HS2_LB_FAST_VERDICT=1 as in 8.7):
+
+| arm | n | crowd p95 | crowd p99 | 27+ s p95/p99 | call p99 | ping p99 | heavy | fail |
+|---|--:|--:|--:|--|--:|--:|--:|--|
+| rescue off | 6 | 286 (279-296) | 490 (482-493) | 330 / 505 | 207 (171-424) | 197 | 1021 | 0 ×6 |
+| fast verdict + rescue | 6 | 173 (170-182) | 323 (312-344) | 173 / 260 | 367 (170-980) | 236 | 1018 | 0 ×6 |
+
+Call p99 per run, rescue: 195, 903, 191, 170, 539, 980 (8.7: 542, 416, and
+621 rescue-only); off: 171, 372, 188, 200, 215, 424 (8.7: 177, 398). The
+regression is real in the tail: off never passed 424 ms in 8 runs, the
+rescue went past 500 ms in 5 of 9. The crowd gain holds (p95 -40%, after the
+cut p99 -48%, no failure). Not fixed here (no lab time left in this run).
+Leads, in order: the rescue's burst at the lowering — ~1100 upgrades and
+~300 CLOSE-REQs within 2-3 s (rescuePerSec 400) onto the good paths' links,
+some of them the call's — so (1) place rescue copies away from links
+carrying a call sub (the HS2_MCONN_CALL_AVOID list, reversed) and (2) lower
+rescuePerSec to ~100; measure call p99 per 1 s window around the cut to
+confirm the burst first.
+
+**(c) Start window v3 (HS2_REFILL_WAIT_MS by queued bytes).** Not started:
+the lab time of this run went to (a) and (b). Plan unchanged from 8.7: place
+a leaver on the link with the fewest queued/unacked bytes (the smux send
+queue, not the connection count), re-place a start-window connection's
+primary once the pool is up via lite's dual upgrade, and dial the exit's
+first batches faster; acceptance as in the brief (≥4 interleaved reps,
+start p99 much lower, whole crowd p95 ≤ +2 ms, no call/ping p99 regression).
+
+Final tree (lab 3, clean `git archive`): gofmt (changed files) clean, `go
+vet ./...`, tlscarrier, cmd/hs2, reality, envdef ok, `-race` on
+Rescue/MConnRaw/Defaults22 ok; full engine suite (-timeout 40m): every test
+passed except the dropped flaky test above (removed after, its subset re-run
+ok with -race).
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an37.py k|c`, runs `*-r*`), drivers
+`go37.sh`, `go37b.sh`, `drv37.sh`.
