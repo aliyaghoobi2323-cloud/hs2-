@@ -263,3 +263,118 @@ func TestParkSweepDeletedTunnel(t *testing.T) {
 		t.Fatalf("timer not removed: %v", calls)
 	}
 }
+
+// M4 bug: on a dialer without bind_local_ip the first add-ip of the server's
+// only IP failed the weight check (the default path joined with 50 %). The
+// added IP becomes the primary; add / remove / weights / park keep the config
+// valid on both kinds of dialer (no bind; a bound primary left unlisted).
+func TestDialerNoBindLBOps(t *testing.T) {
+	old := routeSrc
+	defer func() { routeSrc = old }()
+	routeSrc = func(string) string { return "" }
+	valid := func(nb []byte) fileConfig {
+		t.Helper()
+		var fc fileConfig
+		if err := json.Unmarshal(nb, &fc); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateLB(fc); err != nil {
+			t.Fatalf("%v\n%s", err, nb)
+		}
+		return fc
+	}
+	op := func(raw []byte, f func(fileConfig, []lbIP) ([]lbIP, error)) []byte {
+		t.Helper()
+		var fc fileConfig
+		json.Unmarshal(raw, &fc)
+		nb, err := withOwnList(raw, fc, func(l []lbIP) ([]lbIP, error) { return f(fc, l) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return nb
+	}
+	add := func(ip string, w int, pub ...string) func(fileConfig, []lbIP) ([]lbIP, error) {
+		return func(fc fileConfig, l []lbIP) ([]lbIP, error) { return addIPList(fc, l, lbIP{IP: ip}, w, pub) }
+	}
+	for _, raw := range []string{
+		// kharej dialing in reverse, no bind
+		`{"mode":"listen","reverse":true,"carrier":"l3mtcp","addr":"5.5.5.5:443","shared_key":"k"}`,
+		// iran dialing kharej (direct mtcp), no bind
+		`{"mode":"dial","carrier":"mtcp","addr":"5.5.5.5:443","shared_key":"k"}`,
+	} {
+		// only IP, default weight
+		fc := valid(op([]byte(raw), add("9.9.9.9", -1, "9.9.9.9")))
+		own := fc.LB.Kharej
+		if fc.Mode == "dial" {
+			own = fc.LB.Iran
+		}
+		if fc.BindLocalIP != "9.9.9.9" || len(own) != 1 || own[0].Weight != 100 {
+			t.Fatalf("%+v", fc)
+		}
+		// only IP with an explicit weight
+		fc = valid(op([]byte(raw), add("9.9.9.9", 30, "9.9.9.9")))
+		if fc.BindLocalIP != "9.9.9.9" {
+			t.Fatalf("%+v", fc)
+		}
+		// two public IPs: the other one joins as the primary
+		nb := op([]byte(raw), add("8.8.8.8", -1, "9.9.9.9", "8.8.8.8"))
+		fc = valid(nb)
+		if fc.BindLocalIP != "9.9.9.9" {
+			t.Fatalf("%s", nb)
+		}
+		// a third, then weights, park, remove the primary, remove the rest
+		nb = valid2(t, op(nb, add("7.7.7.7", 20, "9.9.9.9", "8.8.8.8", "7.7.7.7")))
+		nb = valid2(t, op(nb, func(_ fileConfig, l []lbIP) ([]lbIP, error) {
+			return parseWeights("9.9.9.9=50,8.8.8.8=30,7.7.7.7=20", l)
+		}))
+		nb = valid2(t, op(nb, func(_ fileConfig, l []lbIP) ([]lbIP, error) { return parkWeights(l, "8.8.8.8") }))
+		// remove-ip of the bound primary (lbChangeCmd clears the bind first):
+		// a listed IP takes its place
+		var bfc fileConfig
+		json.Unmarshal(nb, &bfc)
+		bfc.BindLocalIP = ""
+		nb2, err := withOwnList(nb, bfc, func(l []lbIP) ([]lbIP, error) { return removeIP(l, "9.9.9.9") })
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fc = valid(nb2); fc.BindLocalIP != "8.8.8.8" {
+			t.Fatalf("%s", nb2)
+		}
+		// the bound primary deliberately left unlisted: it stays bound and
+		// joins with its equal share; the listed weights are scaled to fit
+		nb = valid2(t, op(nb, func(_ fileConfig, l []lbIP) ([]lbIP, error) { return removeIP(l, "9.9.9.9") }))
+		if fc = valid(nb); fc.BindLocalIP != "9.9.9.9" {
+			t.Fatalf("%s", nb)
+		}
+		nb = valid2(t, op(nb, func(_ fileConfig, l []lbIP) ([]lbIP, error) { return parseWeights("8.8.8.8=60,7.7.7.7=40", l) }))
+		nb = valid2(t, op(nb, func(_ fileConfig, l []lbIP) ([]lbIP, error) { return removeIP(l, "8.8.8.8") }))
+		nb = valid2(t, op(nb, func(_ fileConfig, l []lbIP) ([]lbIP, error) { return removeIP(l, "7.7.7.7") }))
+		if !strings.Contains(string(nb), `"shared_key": "k"`) {
+			t.Fatal("other keys lost")
+		}
+	}
+	// the default route's source wins over the list order
+	routeSrc = func(string) string { return "8.8.8.8" }
+	fc := valid(op([]byte(`{"mode":"dial","carrier":"mtcp","addr":"5.5.5.5:443"}`), add("8.8.8.8", -1, "9.9.9.9", "8.8.8.8")))
+	if fc.BindLocalIP != "8.8.8.8" {
+		t.Fatalf("%+v", fc)
+	}
+	// a listener's list is untouched (no bind written)
+	nb := op([]byte(`{"mode":"listen","carrier":"mtcp","addr":"0.0.0.0:443"}`), add("9.9.9.9", -1, "9.9.9.9"))
+	if strings.Contains(string(nb), "bind_local_ip") {
+		t.Fatalf("%s", nb)
+	}
+	valid(nb)
+}
+
+func valid2(t *testing.T, nb []byte) []byte {
+	t.Helper()
+	var fc fileConfig
+	if err := json.Unmarshal(nb, &fc); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLB(fc); err != nil {
+		t.Fatalf("%v\n%s", err, nb)
+	}
+	return nb
+}

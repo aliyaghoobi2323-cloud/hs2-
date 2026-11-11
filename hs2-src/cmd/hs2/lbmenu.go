@@ -818,12 +818,164 @@ func withOwnList(b []byte, fc fileConfig, f func([]lbIP) ([]lbIP, error)) ([]byt
 	}
 	lb.Enabled = true
 	m["lb"] = lb
+	if bind, scaled := dialerPrimary(fc, nl); bind != "" {
+		m["bind_local_ip"] = bind
+	} else if scaled != nil {
+		if own == "iran" {
+			lb.Iran = scaled
+		} else {
+			lb.Kharej = scaled
+		}
+		m["lb"] = lb
+	}
 	out, err := marshalConfig(m)
 	if err != nil {
 		return nil, err
 	}
 	// lbIP's front never marshals its private key: keep the file's.
 	return keepPrivateKeys(b, out), nil
+}
+
+// addIPList: add-ip on this side's list l (p = add.IP; weight -1 = split
+// equally; pubIPs = this server's public IPs).
+func addIPList(fc fileConfig, l []lbIP, add lbIP, weight int, pubIPs []string) ([]lbIP, error) {
+	p := net.ParseIP(add.IP)
+	for _, e := range l {
+		if net.ParseIP(e.IP).Equal(p) {
+			return nil, fmt.Errorf(tr("%s is already in the list", "%s همین حالا در فهرست است"), p)
+		}
+	}
+	if len(l) == 0 {
+		// the primary joins the list with its own weight, so the
+		// split is explicit
+		pi, pk := lbPrimaries(fc)
+		prim := pk
+		if own, _ := lbSide(fc); own == "iran" {
+			prim = pi
+		}
+		if prim == "" { // a wildcard listener: its public IP is the primary
+			prim = firstOther(pubIPs, p.String())
+		}
+		if prim != "" && prim != p.String() {
+			l = append(l, lbIP{IP: prim})
+		}
+	}
+	l = append(l, add)
+	if weight >= 0 {
+		l[len(l)-1].Weight = weight
+		rest := 100 - weight
+		others := l[:len(l)-1]
+		if len(others) > 0 {
+			eq := splitEqual(others)
+			for i := range eq {
+				eq[i].Weight = eq[i].Weight * rest / 100
+			}
+			s := 0
+			for _, e := range eq {
+				s += e.Weight
+			}
+			eq[0].Weight += rest - s
+			copy(l, eq)
+		} else if dialing(fc) { // alone in a dialer's strict list: all of it
+			l[0].Weight = 100
+		}
+		return l, nil
+	}
+	return splitEqual(l), nil
+}
+
+// removeIP: remove-ip on this side's list (the rest split equally).
+func removeIP(l []lbIP, ip string) ([]lbIP, error) {
+	p := net.ParseIP(ip)
+	var out []lbIP
+	for _, e := range l {
+		if p == nil || !net.ParseIP(e.IP).Equal(p) {
+			out = append(out, e)
+		}
+	}
+	if len(out) == len(l) {
+		return nil, fmt.Errorf(tr("%s is not in the list", "%s در فهرست نیست"), ip)
+	}
+	if len(out) == 0 {
+		return []lbIP{}, nil
+	}
+	return splitEqual(out), nil
+}
+
+// routeSrc: the source IP the kernel picks towards dst ("" = unknown); a var
+// for the tests.
+var routeSrc = func(dst string) string {
+	if net.ParseIP(dst) == nil {
+		return ""
+	}
+	out, _ := exec.Command("ip", "route", "get", dst).Output()
+	f := strings.Fields(string(out))
+	for i := 0; i+1 < len(f); i++ {
+		if f[i] == "src" {
+			return f[i+1]
+		}
+	}
+	return ""
+}
+
+// dialerPrimary keeps a dialing side's own list exact. A dialer's primary is
+// its bind_local_ip; one that is not listed joins the dialer's (strict) list
+// with an equal share, so a list written with weights summing to 100 failed
+// the weight check (add-ip of the server's only IP: [ip 100] + default 50).
+//   - no bind_local_ip: the listed IP the default route leaves from (else the
+//     first listed) becomes the primary (returned as bind): the same path, now
+//     explicit, and the list's 100 stays exact;
+//   - a bound primary deliberately left unlisted (or just removed): the listed
+//     weights are scaled to 100 minus its equal share (returned as scaled).
+//
+// Both "" / nil: nothing to change.
+func dialerPrimary(fc fileConfig, nl []lbIP) (bind string, scaled []lbIP) {
+	if !dialing(fc) || len(nl) == 0 {
+		return "", nil
+	}
+	cur := ""
+	if ip := net.ParseIP(fc.BindLocalIP); ip != nil {
+		cur = ip.String()
+	}
+	listed := func(ip string) bool {
+		for _, e := range nl {
+			if p := net.ParseIP(e.IP); p != nil && p.String() == ip {
+				return true
+			}
+		}
+		return false
+	}
+	if cur == "" {
+		host, _, _ := net.SplitHostPort(fc.Addr)
+		if src := net.ParseIP(routeSrc(host)); src != nil && listed(src.String()) {
+			return src.String(), nil
+		}
+		return net.ParseIP(nl[0].IP).String(), nil
+	}
+	if listed(cur) {
+		return "", nil
+	}
+	sum := 0
+	for _, e := range nl {
+		sum += e.Weight
+	}
+	if sum != 100 {
+		return "", nil
+	}
+	target := 100 - 100/(len(nl)+1)
+	out := append([]lbIP(nil), nl...)
+	s := 0
+	for i := range out {
+		out[i].Weight = out[i].Weight * target / 100
+		s += out[i].Weight
+	}
+	for i := range out { // the remainder to the first live IP
+		if out[i].Weight > 0 || i == len(out)-1 {
+			out[i].Weight += target - s
+			break
+		}
+	}
+	return "", out
 }
 
 func loadConfigMap(b []byte) (map[string]any, error) {
@@ -897,64 +1049,17 @@ func lbChangeCmd(sub string, args []string) int {
 			return 1
 		}
 		nb, err = withOwnList(cur, fc, func(l []lbIP) ([]lbIP, error) {
-			for _, e := range l {
-				if net.ParseIP(e.IP).Equal(p) {
-					return nil, fmt.Errorf(tr("%s is already in the list", "%s همین حالا در فهرست است"), p)
-				}
-			}
-			if len(l) == 0 {
-				// the primary joins the list with its own weight, so the
-				// split is explicit
-				pi, pk := lbPrimaries(fc)
-				prim := pk
-				if own, _ := lbSide(fc); own == "iran" {
-					prim = pi
-				}
-				if prim == "" { // a wildcard listener: its public IP is the primary
-					prim = firstOther(localPublicIPs(), p.String())
-				}
-				if prim != "" && prim != p.String() {
-					l = append(l, lbIP{IP: prim})
-				}
-			}
-			l = append(l, lbIP{IP: p.String(), SNI: *sni, CertFile: *cert, KeyFile: *key})
-			if *weight >= 0 {
-				l[len(l)-1].Weight = *weight
-				rest := 100 - *weight
-				others := l[:len(l)-1]
-				if len(others) > 0 {
-					eq := splitEqual(others)
-					for i := range eq {
-						eq[i].Weight = eq[i].Weight * rest / 100
-					}
-					s := 0
-					for _, e := range eq {
-						s += e.Weight
-					}
-					eq[0].Weight += rest - s
-					copy(l, eq)
-				}
-				return l, nil
-			}
-			return splitEqual(l), nil
+			return addIPList(fc, l, lbIP{IP: p.String(), SNI: *sni, CertFile: *cert, KeyFile: *key}, *weight, localPublicIPs())
 		})
 	case "remove-ip":
 		p := net.ParseIP(*ip)
-		nb, err = withOwnList(cur, fc, func(l []lbIP) ([]lbIP, error) {
-			var out []lbIP
-			for _, e := range l {
-				if p == nil || !net.ParseIP(e.IP).Equal(p) {
-					out = append(out, e)
-				}
-			}
-			if len(out) == len(l) {
-				return nil, fmt.Errorf(tr("%s is not in the list", "%s در فهرست نیست"), *ip)
-			}
-			if len(out) == 0 {
-				return []lbIP{}, nil
-			}
-			return splitEqual(out), nil
-		})
+		rfc := fc
+		if b := net.ParseIP(fc.BindLocalIP); dialing(fc) && b != nil && p != nil && b.Equal(p) {
+			// removing a dialer's bound primary: a listed IP takes its place
+			// (with nothing left the bind stays: the only path there is)
+			rfc.BindLocalIP = ""
+		}
+		nb, err = withOwnList(cur, rfc, func(l []lbIP) ([]lbIP, error) { return removeIP(l, *ip) })
 	case "mode":
 		if len(pos) != 1 || (pos[0] != "fixed" && pos[0] != "auto") {
 			fmt.Println("usage: hs2 lb mode -u U fixed|auto")
