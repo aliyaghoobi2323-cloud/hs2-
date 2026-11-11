@@ -622,8 +622,8 @@ func realityFrontCmd(sub string, args []string) int {
 func frontPreflight(fc fileConfig, kind, cfgPath string) string {
 	if lbOwnAdvert(fc) == nil {
 		h, p, _ := net.SplitHostPort(fc.Addr)
-		return fmt.Sprintf(tr("this server listens on the wildcard %s: the announcement that carries the front to the other server needs an exact address. First set "addr" in %s to <this IP>:%s (menu 2) Tunnels -> edit, or the config editor; a restart), then retry. (%s)",
-			"این سرور روی نشانی عمومی %s گوش می‌دهد: اعلامی که front را به سرور مقابل می‌برد نشانی دقیق می‌خواهد. اول "addr" را در %s به <IP همین سرور>:%s تغییر دهید (منوی ۲) تونل‌ها -> ویرایش، یا ویرایشگر پیکربندی؛ با ری‌استارت)، سپس دوباره. (%s)"),
+		return fmt.Sprintf(tr("this server listens on the wildcard %s: the announcement that carries the front to the other server needs an exact address. First set addr in %s to <this IP>:%s (menu 2) Tunnels -> edit, or the config editor; a restart), then retry. (%s)",
+			"این سرور روی نشانی عمومی %s گوش می‌دهد: اعلامی که front را به سرور مقابل می‌برد نشانی دقیق می‌خواهد. اول addr را در %s به <IP همین سرور>:%s تغییر دهید (منوی ۲) تونل‌ها -> ویرایش، یا ویرایشگر پیکربندی؛ با ری‌استارت)، سپس دوباره. (%s)"),
 			firstNonEmpty(h, "*")+":"+p, cfgPath, p, fc.Addr)
 	}
 	if kind == tlscarrier.FrontBoth && len(tlsNames(fc)) == 0 {
