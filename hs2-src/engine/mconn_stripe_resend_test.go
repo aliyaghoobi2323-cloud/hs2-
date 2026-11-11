@@ -154,3 +154,50 @@ func TestStripeAllDieGraceRejoins(t *testing.T) {
 		t.Fatal("no grace or no rejoin counted")
 	}
 }
+
+// The lab u8 gap (rel49): the record whose write FAILS on a dying stripe sub
+// was released by the writer before subDied collected the dead sub's chunks,
+// so the resend never carried it and the receiver waited behind it (a 22-byte
+// or one-chunk hole, mGapTimeout). Now it is kept and resent: a striped
+// download whose stripe sub's write fails (and whose link then dies)
+// completes byte-exact, several times over.
+func TestStripeFailedWriteResent(t *testing.T) {
+	old := stripeResend
+	stripeResend = true
+	t.Cleanup(func() { stripeResend = old })
+	for i := range 3 {
+		setStripeRate(t, 200<<10)
+		setLite(t, true)
+		resetLiteBudget()
+		id := uint64(70 + i)
+		n := &tNet{exit: newMConnExit(id)}
+		rateLinks(n, 2<<20)
+		iran, err := newMConnIran(id, n.open)
+		if err != nil {
+			t.Fatal(err)
+		}
+		iran.setStripe(3)
+		data := randBytes(8<<20, id)
+		go func() {
+			mWaitFor(t, "stripe", 10*time.Second, func() bool { return stripeSubs(iran) == 2 })
+			time.Sleep(200 * time.Millisecond)
+			l := n.link(1)
+			l.exit.failW.Store(true) // the exit's next write on it fails: the link dies
+		}()
+		errs := make(chan error, 2)
+		go func() { errs <- xfer(n.exit, data, 32<<10, 0) }()
+		go func() { errs <- readN(iran, data) }()
+		for range 2 {
+			select {
+			case err := <-errs:
+				if err != nil {
+					t.Fatalf("round %d: %v", i, err)
+				}
+			case <-time.After(20 * time.Second):
+				t.Fatalf("round %d: download hung (a gap the resend did not fill)", i)
+			}
+		}
+		iran.abort()
+		n.exit.abort()
+	}
+}

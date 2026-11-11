@@ -25,6 +25,7 @@ type tSub struct {
 	wrote  atomic.Int64
 	raw    bool        // the first sub of a raw pair (mconnRaw)
 	drop   atomic.Bool // writes "succeed" and vanish (a link's buffers lost at its reset)
+	failW  atomic.Bool // the next write fails, nothing of it delivered, and the link dies
 	closed atomic.Bool
 	dead   chan struct{}
 	once   sync.Once
@@ -50,6 +51,10 @@ func (t *tSub) Write(p []byte) (int, error) {
 	}
 	if t.drop.Load() {
 		return len(p), nil
+	}
+	if t.failW.Load() {
+		t.Close()
+		return 0, io.ErrClosedPipe
 	}
 	n, err := t.Conn.Write(p)
 	t.wrote.Add(int64(n))
