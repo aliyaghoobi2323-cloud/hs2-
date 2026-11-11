@@ -913,10 +913,17 @@ defaults; ...)`.
 | `HS2_STRIPE_AW_SOLO` | `1` | Iran (edge) |
 | `HS2_STRIPE_AW_HEAVY` | `2` | Iran (edge) |
 | `HS2_LB_RESCUE`, `HS2_LB_RESCUE_CALLFREE` | `1` | Iran (edge) |
+| `HS2_LB_CALL_LATE` | `1` | Iran (edge) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
 | `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
 | `HS2_LB_FLAP_PEN` | `1` | kharej (exit) |
+
+`HS2_LB_CALL_LATE` (since 8.12): a call whose copy on one path runs >= 100 ms
+and twice behind its copy on another (socket srtt, 1 s) gets a fresh sub off
+that path and no more copies on the late one, which is then given up: call
+p99 after a path degrades -29% (c) and -69% (k), never fired on equal/steady
+paths; `=0` turns it off.
 
 Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain), `HS2_LB_EVAC`
 (light-user evacuation off cut paths: no measurable gain in the lab, see

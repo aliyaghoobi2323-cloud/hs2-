@@ -5,7 +5,8 @@ import (
 	"time"
 )
 
-// A call's late copy (HS2_LB_CALL_LATE, docs/reality-architecture.md 8.12).
+// A call's late copy (HS2_LB_CALL_LATE, edge, default on in envdef;
+// docs/reality-architecture.md 8.12).
 //
 // Lab trace (8.12, scenario c, HS2_MCONN_TRACE per-sub lines): after path B
 // degrades, a call with one sub on B and one on another path keeps both

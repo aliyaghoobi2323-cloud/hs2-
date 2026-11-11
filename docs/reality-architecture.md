@@ -1378,3 +1378,122 @@ clean, `go vet ./...`, `-race` on TestMConnCallStuck*/TestCallStuck*/
 TestMConnCallRescue*/TestCallRescueMark/TestMConnRescue*/TestRescue*/
 TestCallAvoidMark ok, reality, tlscarrier, cmd/hs2, envdef ok, full engine
 suite ok (667 s, -timeout 40m).
+
+### 8.12 Phase 5f (2026-11-11, branch reality41): a call's late copy
+
+**Trace (`HS2_MCONN_TRACE`, new per-sub line; `mconn_trace_subs.go`).** Once a
+second, per traced connection and side, one `subs:` line: for each sub its
+socket's addresses, the path (Iran), the KB it delivered first and the KB
+that came after the other copy, the worst lag of its copies behind the first
+one, its send queue and the socket's TCP_INFO (srtt, ca_state, unacked, lost,
+retrans, notsent, cwnd). Nothing runs with the trace off (one nil check).
+
+Three traced c runs (base, binary hs2-r41t), the run with the 300-570 ms
+seconds (c-tr-r41t3: call p99 399, seconds 21 458, 31 459, 51-52 575/547):
+the call had sub 0 on path C (192.168.52.1) and sub 1 on path B
+(192.168.51.1). Before the cut both subs were first for about half the bytes
+(lag ~100 ms, srtt 81 both). From the cut on, sub 1 (B) was first for **0 KB
+every second** to the end, its copies 325-970 ms behind sub 0's, its socket
+srtt 240 ms (C: 80) and in recovery most of the time. Both directions show it
+(Iran receive and Kharej receive). So the call had ONE useful copy: each loss
+recovery on C's socket (1% loss, ca_state 3 every few seconds) stalled the
+call until C retransmitted or B's late copy came: "gap filled after 199 ms by
+sub 1" at mconn second 21.8 (Iran), "235 ms by sub 1" at 31.7 (Kharej), "247
+ms by sub 1" at 52.7 (Iran) — exactly the probe's bad seconds 21, 31, 51-52.
+No send queue anywhere (q=0, notsent 0, write wait 0): not hypothesis 2 (A's
+queue behind the crowd moved off B), and not hypothesis 1 (with two subs
+every chunk goes on both; CALL_PICK only chooses among three or more).
+Root cause: **the call's second copy stays on the degraded path** — the stuck
+trigger (8.11) needs every sub on one path, the lowered-path rescue (8.10)
+every sub on a lowered link, and lite never moves a call's copy sub.
+
+**Fix (`HS2_LB_CALL_LATE`, edge; `lb_call_late.go`).** On Iran, for a call
+(the call rescue's call test, without needing `HS2_LB_CALL_RESCUE`) with two
+live subs or more on two known paths or more, sampled every 100 ms:
+- a sub whose socket srtt is >= 100 ms above the best sub's (on another
+  path) and >= twice it, without a break for 1 s, is the late copy;
+- one fresh sub with the call placement off every link of that path (the
+  stuck trigger's `callStuckMark`);
+- from then on the late sub gets no call pair copy while two other subs are
+  live (`callPairLocked`: with the fresh sub, both copies of each chunk ride
+  the two timely subs); it is given up through the close handshake once a sub
+  opened after the trigger is live (its lastRecv, set at the open and on
+  every record, is past the trigger, as in 8.11's give-up; never the last
+  sub); a late sub already handled with
+  two timely subs beside it triggers nothing more;
+- bounds shared with the stuck trigger: one trigger per connection per 5 s,
+  20 per second in the process. Log: `lb call late: fresh subs N, late subs
+  given up M`.
+
+The first version (no pair exclusion, no "already handled" guard) was
+traced in one run (c-trfxv1-x4100): the trigger fired 1 s after the cut
+(srtt 241 vs 82 ms) and the fresh sub on A read at once, but the late sub was
+not given up (its link had no close handshake: `subCloseHS` false), so the
+trigger fired again every 5 s (11 subs by the end) and with three subs or
+more `callPairLocked` still put every other chunk's copy on B. Its three runs
+are kept apart (`fxv1`). v2 is the code above.
+
+Tests: `TestCallLateLocked` (1 s unbroken evidence, a break restarts it, the
+mark, pending give-up only once a sub opened since the trigger is there, not the old good sub, one
+trigger per 5 s, no trigger on one path, equal srtt, key off, not a call),
+`TestCallPairSkipsLate` (a late sub and two timely: every chunk on both
+timely subs, none on the late one; a late sub and one timely: the usual dual
+mode); -race ok.
+
+Lab 1, interleaved, three slot-mode drivers in parallel (c / k / b / s spread
+over all three slots), binary hs2-r41 (k: hs2-r41k, mLiteCapPct 0). base =
+the current default (rescue + callfree + FAST_VERDICT as in 8.11), fx = base
++ `HS2_LB_CALL_LATE=1` (v2). "15-31 max" = the worst per-second call p99 in
+probe seconds 15-31 of a run (the stretch after the cut); median (range),
+ms:
+
+| scenario | arm | n | crowd p95 | crowd p99 | call p99 | call 15-31 max | ping p99 | heavy | fail | late triggers (runs) |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--|--|
+| c (all-tls, B bad at 15 s) | base | 9 | 175 (172-187) | 341 | 397 (179-945) | 319 (227-1025), mean 477 | 237 | 974 | 0 ×9 | 0 |
+| c | fx | 9 | 180 (171-199) | 345 | **281 (197-366)** | **242 (215-427), mean 293** | 190 | 1035 | 0 ×9 | 8 of 9 |
+| k (budget forced binding) | base | 4 | 581 (568-605) | 885 | 723 (174-1454) | 699 | 259 | 963 | 0 ×4 | 0 |
+| k | fx | 4 | 568 (558-573) | 892 | **222 (201-242)** | 187 | 140 | 951 | 0 ×4 | 4 of 4 |
+| b (equal paths) | base | 4 | 129 (127-140) | 189 | 215 | 239 | 150 | 1175 | 0 ×4 | 0 |
+| b | fx | 4 | 127 (120-133) | 175 (165-1242) | 187 | 224 | 130 | 1089 | 0 ×4 | **0** |
+| s (steady) | base | 4 | 126 (122-133) | 171 (167-1598) | 207 | 222 | 136 | 1084 | 0 ×4 | 0 |
+| s | fx | 4 | 127 (126-131) | 172 | 188 | 200 | 153 | 1211 | 0 ×4 | **0** |
+
+c per run (call p99 / 15-31 max), fx: 197/241, 211/231, 281/217, 281/360,
+276/335, 207/215, 300/216, 307/386, 366/427; base: 193/245, 522/773,
+417/319, 944/1024, 489/642, 182/267, 396/528, 179/227, 220/260. The worst
+base runs (r4102, r4104, r4105: the call's copy on B for the whole run) are
+gone; the fx runs' remaining 300-430 ms seconds are on the timely subs' own
+losses (two timely copies now, so both must stall). The mean of the 15-31 s
+median second is 177 vs 258. Crowd p95 +5 ms by median (means 181 vs 177)
+is inside the run-to-run spread (8.11: +2-6 ms with the same arms), crowd
+p99 equal, ping p99 lower. k: every fx run triggered (the call's copy on the
+lowered B) and the call p99 is -69%. b and s: **no trigger in 8 runs**, so the
+code changed nothing there but a TCP_INFO read per call sub every 100 ms; b's
+1242 crowd p99 is the start window (0-15 s p99 2794, the usual spread, 8.10),
+s's ping p99 +17 ms and b's heavy -7% are runs with the key idle (ranges
+overlap: s ping base 123-151 / fx 137-161, b heavy 1123-1244 / 1062-1264).
+Triggers that did not give the late sub up (c: 4 of 8 runs with "given up 0")
+are links without the close handshake; the late sub then stays without call
+copies (the pair rule), and lite's idle rule may close it later.
+
+**Verdict: `HS2_LB_CALL_LATE=1` is on by default (edge, envdef)** — c call
+p99 -29% and the post-cut seconds -24% by median (-39% by mean), k -69%, 0
+fails, no trigger on equal/steady paths. It needs `HS2_LB_RESCUE` (default
+on, edge); it works with `HS2_LB_CALL_RESCUE` off (the default) or on.
+
+Open: why some links refuse the close handshake (`peerCloseHS` false for the
+late sub's link in c-trfxv1-x4100; its idle sub on another link closed fine):
+plan — log the link's peerInfo (V2, flags) at the failed give-up in a traced
+c run and check whether reverse links on B announce flagMConnCloseHS.
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an41.py c|k|b|s r41` for the table and
+the trigger counters, `an38.py` for the per-second line; runs `*-r41NN`,
+traces `c-tr-r41t1..3`, `c-trfxv1-x4100`), driver `go41.sh` (PLANTAG
+r41e1-3; arm fx = `$FIX`).
+
+Final tree (lab 3, clean `git archive` of the code commit): gofmt (changed
+files) clean, `go vet ./...`, `-race` on TestCallLate*/TestCallPair*/
+TestCallStuck*/TestMConnCallStuck*/TestMConnCallPaired/TestMConnCallRescue*/
+TestCallRescueMark/TestCallAvoidMark/TestMConnCallPick* ok, reality,
+tlscarrier, cmd/hs2, envdef ok, full engine suite ok (665 s, -timeout 40m);
+the default commit (envdef only) re-ran envdef and cmd/hs2.
