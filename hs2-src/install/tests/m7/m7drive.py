@@ -193,6 +193,7 @@ def walk(m, main, lang):
 SET_ITEM = {"lang": "1", "mode": "2", "color": "3", "default_menu": "4"}
 SET_RE = {"lang": r"1\) \S+: (fa|en)\b", "mode": r"2\) \S+: (simple|advanced)\b",
           "color": r"3\) \S+: (on|off)\b", "default_menu": r"4\) .*?: (new|classic)\b"}
+SET_DEFAULT = {"lang": "fa", "mode": "simple", "color": "on", "default_menu": "new"}
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
@@ -236,7 +237,8 @@ def settings_round(name, want):
         m.send("0")
         m.exp([MAIN_FA, MAIN_EN])
         conf = menu_conf()
-        bad = {k: conf.get(k) for k in want if conf.get(k, "new" if k == "default_menu" else None) != want[k]}
+        # a key never written means the menu's default (nm_load / menu_entry)
+        bad = {k: conf.get(k) for k in want if conf.get(k, SET_DEFAULT[k]) != want[k]}
         m.close()
         m = M(name + "-reread", cols=80)
         m.exp([MAIN_FA, MAIN_EN])
@@ -253,6 +255,21 @@ def settings_round(name, want):
     return ok
 
 
+def step_settings():
+    # settings: each item is a toggle, so the check reads the screen, toggles
+    # only what differs from the target and re-reads after every press; then
+    # menu.conf must hold the target and a fresh start must show it again.
+    # Done in both directions (en/simple/on/new, fa/advanced/off/classic, then
+    # en/simple/on/new again so those values are written, not just defaults);
+    # default_menu ends back on "new". Leaves fa/advanced/colour off for the
+    # walk below.
+    ok_all = settings_round("settings-b", {"lang": "en", "mode": "simple", "color": "on", "default_menu": "new"})
+    ok_all = settings_round("settings-a", {"lang": "fa", "mode": "advanced", "color": "off", "default_menu": "classic"}) and ok_all
+    ok_all = settings_round("settings-d", {"lang": "en", "mode": "simple", "color": "on", "default_menu": "new"}) and ok_all
+    ok_all = settings_round("settings-c", {"lang": "fa", "mode": "advanced", "color": "off", "default_menu": "new"}) and ok_all
+    result("settings persist (lang / mode / colour / default menu, both directions, read back on the next start)", ok_all, "")
+
+
 def step_sections():
     # en / simple / colour, 100 col
     m = M("sections-en", env={"LANG": "C"})
@@ -261,16 +278,7 @@ def step_sections():
         walk(m, MAIN_EN, "en simple ascii")
     finally:
         m.close()
-    # settings: each item is a toggle, so the check reads the screen, toggles
-    # only what differs from the target and re-reads after every press; then
-    # menu.conf must hold the target and a fresh start must show it again.
-    # Done in both directions (en/simple/on/new, then fa/advanced/off/classic);
-    # default_menu ends back on "new". Leaves fa/advanced/colour off for the
-    # walk below.
-    ok_all = settings_round("settings-b", {"lang": "en", "mode": "simple", "color": "on", "default_menu": "new"})
-    ok_all = settings_round("settings-a", {"lang": "fa", "mode": "advanced", "color": "off", "default_menu": "classic"}) and ok_all
-    ok_all = settings_round("settings-c", {"lang": "fa", "mode": "advanced", "color": "off", "default_menu": "new"}) and ok_all
-    result("settings persist (lang / mode / colour / default menu, both directions, read back on the next start)", ok_all, "")
+    step_settings()
     m = M("sections-fa-adv-80", cols=80, env={"NO_COLOR": "1"})
     try:
         m.exp(MAIN_FA)
@@ -346,7 +354,8 @@ def step_classic():
 
 
 STEPS = {"fresh": step_fresh_create, "join": step_join, "sections": step_sections, "lock": step_lock,
-         "nonroot": step_nonroot, "classic": step_classic}
+         "nonroot": step_nonroot, "classic": step_classic,
+         "settings": step_settings}
 
 
 def step_lbadd(ip, which="2"):

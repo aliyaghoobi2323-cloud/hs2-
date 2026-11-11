@@ -757,6 +757,49 @@ run `cd /root/hs2 && bash install.sh upgrade`.
 Existing configs keep their mode. To switch, edit `"carrier"` in
 `/etc/hs2/config.json` on both servers and `systemctl restart hs2`.
 
+### Upgrading from r31 / r34 (rel40)
+
+An r31 or r34 config runs **unchanged** on rel40: no new field is required,
+nothing is rewritten, and a config without a `front` keeps the TLS front on
+every IP (Reality is used only after you turn it on per IP, `hs2 reality
+front` / new menu → 4). Behaviour changes only where a **new default** applies.
+
+What changes for an existing deployment after the upgrade:
+
+| what | where | before (r31 / r34) | after (rel40) |
+|------|-------|--------------------|---------------|
+| `HS2_LB_JUDGE_DATA` — the LB judge counts only dials that failed before TCP connected (a front's handshake failure no longer lowers a path) | both sides | off | **on** |
+| `HS2_LB_RESCUE` — a light user whose only sub sits on a lowered / cut path gets a copy on a good path, at once | Iran (edge) | off | **on** |
+| `HS2_LB_RESCUE_CALLFREE` — those rescue copies stay off the links a call is using | Iran (edge) | off | **on** |
+| `hs2-menu` with no argument | installer | classic menu | **new menu** (classic: `c`, `hs2-menu --classic`, `HS2_MENU=classic`, `default_menu=classic` in `/etc/hs2/menu.conf`) |
+
+The three keys are part of the production default table, so (like every key
+in it) they apply only on **reverse `l3mtcp`** tunnels and not under
+`HS2_DEFAULTS=legacy`; every other carrier and direct mode keep all keys off,
+exactly as in r31. Every other key of that table already had its r31 / r34
+value. The service log names what is in force at start (`defaults: production
+set on (…)`).
+
+Still **off** by default (nothing changes unless you set them):
+`HS2_LB_CALL_RESCUE`, `HS2_LB_CALL_STUCK` (acts only under `HS2_LB_CALL_RESCUE`),
+`HS2_LB_RESCUE_RAW`, `HS2_REFILL_WAIT_MS`, `HS2_REFILL_WAIT_BYTES`,
+`HS2_LB_EVAC`, `HS2_LB_FAST_VERDICT`.
+
+Restore the old behaviour:
+- **exactly r31 / r34:** turn the three new keys off in the tunnel's unit (a
+  drop-in, e.g. `systemctl edit hs2`):
+  `Environment=HS2_LB_JUDGE_DATA=0` (both servers),
+  `Environment=HS2_LB_RESCUE=0 HS2_LB_RESCUE_CALLFREE=0` (Iran), then
+  `systemctl restart hs2`;
+- **the whole default table off** (as before `defaults22`, older than r31):
+  `Environment=HS2_DEFAULTS=legacy`;
+- **the classic menu:** `default_menu=classic` (new menu → 9 → 4).
+
+Mixed versions: rel40 and r31 interoperate in both directions (tested: new
+kharej + old Iran and old kharej + new Iran, reverse `l3mtcp` with lb, 130 s
+of traffic each, 0 loss), so either server may be upgraded first; upgrade the
+other one soon after so both run the same defaults.
+
 ## Stream modes (TLS)
 
 These ride TLS and need a domain + certificate (see Requirements). The installer's

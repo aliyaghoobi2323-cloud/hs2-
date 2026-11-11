@@ -21,6 +21,48 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Release rel40 — Reality front, the new menu, LB rescue (binary + installer)
+
+Summary of everything since r34 (branches int39 + reality40), one binary for
+both servers. An r31 / r34 config runs unchanged; see README "Upgrading from
+r31 / r34" for the exact default changes and how to restore the old behaviour.
+
+- **Reality front, per IP** (Reality phases 1–5): each listening IP has a front
+  `tls` (the default — what every existing config keeps), `reality` or `both`
+  (reality with a TLS fallback and cool-down on the dialing side). `hs2 reality
+  front | rotate-key | targets | check-target | status`, announced to the peer
+  in the lb list; fingerprint and performance checks in
+  `docs/reality-architecture.md` §1–9.
+- **The new menu is the default** (M1–M7): bare `hs2-menu` opens it — dashboard,
+  tunnels (wizard, connection code, edit, renew, clone), LB & IPs, security &
+  camouflage, performance, monitoring & alerts, doctor, maintenance, settings —
+  with safe apply (trial, confirm in place, automatic rollback). The classic
+  menu stays one key away: `c`, `hs2-menu --classic`, `HS2_MENU=classic`,
+  `default_menu=classic`.
+- **Doctor and alerts screens**: `hs2 doctor [--deep] [--fix]` (network, CPU,
+  tunnel, reality, panel; safe fixes with rollback) and `hs2 alert` (optional
+  Telegram), new menu → 6 / 7.
+- **LB rescue, on by default at the edge** (`HS2_LB_RESCUE`): a light user whose
+  only sub sits on a lowered / cut path gets a copy on a good path at once; with
+  **`HS2_LB_RESCUE_CALLFREE`** (also on at the edge) those copies stay off a
+  call's links (§8.6–8.9).
+- **`HS2_LB_JUDGE_DATA`, on by default on both sides**: the LB judge counts only
+  dials that failed before TCP connected, so a front's handshake failure no
+  longer lowers an equal path (§8.5).
+- **Off by default, for the operator to decide** (measured, not adopted):
+  `HS2_LB_CALL_RESCUE` with its stuck-call trigger `HS2_LB_CALL_STUCK` (§8.10–
+  8.11), `HS2_LB_RESCUE_RAW` (§8.8–8.9), `HS2_REFILL_WAIT_MS` /
+  `HS2_REFILL_WAIT_BYTES` (§8.7, §8.10).
+- **M7 checklist**: the settings-persistence check in `m7drive.py` now reads
+  the screen, toggles only what differs and verifies menu.conf and the next
+  start, in both directions; re-run on the lab.
+
+Upgrade test (labs 2/3): r31 binary + an r31-style reverse `l3mtcp` config with
+lb, upgraded in place with `install.sh upgrade` on both sides: tunnel back,
+8/8 links, traffic both ways, config byte-identical, menu opens, `hs2 doctor
+--deep` 0 bad / 0 warnings on both. Mixed versions (new kharej + old Iran and
+old kharej + new Iran): 130 s of traffic each, 0 % loss.
+
 ## Menu redesign M7 — lab test, fixes, the new menu becomes the default (binary + installer)
 
 Full pty-driven lab test on two real servers (labs 2/3) with real tunnels;
