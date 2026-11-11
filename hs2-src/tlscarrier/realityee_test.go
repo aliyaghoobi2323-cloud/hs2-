@@ -342,3 +342,32 @@ func TestRealityEEParity(t *testing.T) {
 		}
 	}
 }
+
+// ee51: the post-Finished records are replayed as one observed sequence
+// (count and order), not as random picks: www.digikala.com sends two tickets
+// then a 57 B h2 SETTINGS record; random picks gave [306 306 306] / [57 306
+// 306] on the lab.
+func TestRealityPostFinishedSequence(t *testing.T) {
+	cert := testCert(t, "www.target.test")
+	l := newRealityLab(t, ticketTarget(t, cert, []int{306, 306, 57}), nil)
+	if _, err := l.srv.targetChainSize(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	l.srv.sampleNST(context.Background())
+	if m := l.srv.Mirror(); len(m.NSTSeqs) != nstProbes {
+		t.Fatalf("sequences %v", m.NSTSeqs)
+	}
+	px := newTapProxy(t, l.addr)
+	for i := 0; i < 12; i++ {
+		car, err := DialPathFront(context.Background(), DialPath{Addr: px.addr, Key: l.key, Profile: l.dprof, Connect: 2 * time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		echoOK(t, car)
+		car.Close()
+		// ServerHello(-) CCS(-) EE Cert CV Fin, then the target's sequence
+		if got := px.last(); len(got) < 9 || fmt.Sprint(got[6:9]) != "[306 306 57]" {
+			t.Fatalf("dial %d: records %v, want [306 306 57] after Finished", i, got)
+		}
+	}
+}

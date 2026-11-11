@@ -792,6 +792,11 @@ type targetMirror struct {
 	// NSTSizes: every ticket record length seen over nstProbes probes (an
 	// OpenSSL ticket is 266 or 282 B at random): a pad picks one of these.
 	NSTSizes []int
+	// NSTSeqs: each probe's whole post-Finished record sequence (ee51). A pad
+	// replays one of them, so the count and the order are the target's: a
+	// target that sends an h2 SETTINGS record (57 B) after its two tickets
+	// (www.digikala.com) is not mirrored as tickets of random sizes.
+	NSTSeqs [][]int
 	// OCSP / SCTs: what the target staples in its Certificate message (the
 	// authenticated handshake staples the same, so the record is as long)
 	OCSP []byte
@@ -815,11 +820,16 @@ func (r *RealityServer) sampleNST(ctx context.Context) {
 		return
 	}
 	sizes := append([]int(nil), m.NST...)
+	seqs := [][]int{m.NST}
 	for i := 1; i < nstProbes; i++ {
-		sizes = append(sizes, r.probeNST(ctx)...)
+		seq := r.probeNST(ctx)
+		sizes = append(sizes, seq...)
+		if len(seq) > 0 { // an empty one is a failed probe (m.NST is not empty)
+			seqs = append(seqs, seq)
+		}
 	}
 	m2 := *m
-	m2.NSTSizes = sizes
+	m2.NSTSizes, m2.NSTSeqs = sizes, seqs
 	r.mirror.CompareAndSwap(m, &m2)
 }
 
@@ -909,6 +919,7 @@ func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
 		}
 	}
 	m.NSTSizes = append([]int(nil), m.NST...)
+	m.NSTSeqs = [][]int{m.NST}
 	r.mirror.Store(m)
 	for i, crt := range cs.PeerCertificates {
 		n += int64(len(crt.Raw))
@@ -1493,8 +1504,11 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 	// that skips them. Go's own ticket (one 139 B record inside the first
 	// flight, before the client's Finished) stays off: a Go-only pattern.
 	if m := r.mirror.Load(); m != nil && caps&realityCapPad != 0 && len(m.NST) > 0 {
-		for range m.NST {
-			l := m.NSTSizes[mrand.IntN(len(m.NSTSizes))]
+		seq := m.NST
+		if len(m.NSTSeqs) > 0 {
+			seq = m.NSTSeqs[mrand.IntN(len(m.NSTSeqs))]
+		}
+		for _, l := range seq {
 			if p := padRecord(ekm, l); p != nil {
 				if _, err := tconn.Write(p); err != nil {
 					raw.Close()
