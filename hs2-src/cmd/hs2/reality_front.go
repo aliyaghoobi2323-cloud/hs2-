@@ -145,7 +145,7 @@ func tunnelDialer(fc fileConfig, key []byte) engine.LinkDialer {
 	return d
 }
 
-const realityUsage = "usage: hs2 reality keygen | check-target host[:443] [server_name] [-u U] | targets [-u U | --side iran|kharej] [--add h,h] | status -u U | front -u U --ip IP tls|reality|both [--target host:443] | rotate-key -u U (--ip IP|--all)"
+const realityUsage = "usage: hs2 reality keygen | check-target host[:443] [server_name] [-u U] | targets [-u U | --side iran|kharej] [--add h,h] | status -u U | front -u U --ip IP tls|reality|both [--target host:443] | rotate-key -u U (--ip IP|--all) | pin-code -u U (listener) | pin -u U CODE (dialer)"
 
 // realityCmd: hs2 reality keygen | check-target | targets | status | front | rotate-key
 func realityCmd(args []string) {
@@ -158,10 +158,14 @@ func realityCmd(args []string) {
 		os.Exit(realityFrontCmd(args[0], args[1:]))
 	case "status":
 		os.Exit(realityStatusCmd(args[1:]))
+	case "pin":
+		os.Exit(realityPinCmd(args[1:]))
+	case "pin-code":
+		os.Exit(realityPinCodeCmd(args[1:]))
 	case "targets":
 		os.Exit(realityTargetsCmd(args[1:]))
 	case "--supported":
-		fmt.Println("front rotate-key status targets check-target keygen")
+		fmt.Println("front rotate-key status targets check-target keygen pin pin-code")
 	case "keygen":
 		priv, pub, err := tlscarrier.RealityKeygen()
 		must(err)

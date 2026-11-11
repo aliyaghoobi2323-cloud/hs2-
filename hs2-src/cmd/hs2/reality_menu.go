@@ -523,6 +523,7 @@ func realityFrontCmd(sub string, args []string) int {
 	within := fs.Duration("confirm-within", 5*time.Minute, "trial time before the automatic rollback")
 	yes := fs.Bool("yes", false, "apply without asking")
 	dry := fs.Bool("dry-run", false, "show the change only")
+	keyed := fs.Bool("dialer-has-key", false, "front reality on the last tls-capable IP: confirm the dialer has the key (pinned or remembered)")
 	lang := langFlag(fs)
 	pos := parseInterleaved(fs, args)
 	setLang(*lang)
@@ -641,8 +642,19 @@ func realityFrontCmd(sub string, args []string) int {
 			fmt.Println("ERROR: " + msg)
 			return 1
 		}
+		if msg := coldDialerGuard(nfc, pos[0], path, *keyed); msg != "" {
+			fmt.Println("ERROR: " + msg)
+			printPinHint(*unit, nfc)
+			return 1
+		}
 	}
 	rc := safeApplyMode(*unit, path, cur, nb, reason, *within, *yes, *dry, lbOn(fc))
+	if rc == 0 && !*dry && (sub == "rotate-key" || pos[0] != tlscarrier.FrontTLS) {
+		var nfc fileConfig
+		if json.Unmarshal(nb, &nfc) == nil {
+			printPinHint(*unit, nfc)
+		}
+	}
 	if rc == 0 && !*dry {
 		fmt.Println(tr("Bilateral: nothing to run on the other server — it learns the front from the announcement (hs2 reality status -u U shows which front each IP really uses).",
 			"دوطرفه: روی سرور مقابل کاری لازم نیست — front را از اعلام می‌گیرد (hs2 reality status -u U نشان می‌دهد هر IP واقعاً از کدام front استفاده می‌کند)."))
@@ -669,6 +681,31 @@ func frontPreflight(fc fileConfig, kind, cfgPath string) string {
 			"'both' فقط برای نام سرور (sni) تونل tls پاسخ می‌دهد و این تونل sni ندارد (بدون دامنه): شماره‌گیرهای tls به هدف پوششی فرستاده می‌شوند. اول sni یکسان روی هر دو سرور بگذارید، یا وقتی سرور مقابل در `hs2 reality status` آن را نشان داد از 'reality' استفاده کنید.")
 	}
 	return ""
+}
+
+// coldDialerGuard refuses a "reality" front that would leave the listening
+// side with no tls-capable IP while nothing shows the dialer has the key: a
+// dialer that restarts without the key could then never reach this server
+// (frontcache.go). Proof: a reality-authenticated link on any IP in the live
+// counters (the dialer used the key, so it has it and remembers it), or
+// --dialer-has-key (the operator pinned it: hs2 reality pin). "" = fine.
+func coldDialerGuard(fc fileConfig, kind, cfgPath string, confirmed bool) string {
+	if kind != tlscarrier.FrontReality || confirmed {
+		return ""
+	}
+	pure, tlsOK := listenFrontSplit(fc)
+	if len(tlsOK) > 0 || len(pure) == 0 {
+		return ""
+	}
+	if ls, ok := readLive(cfgPath); ok {
+		for _, f := range ls.Fronts {
+			if f.Counters != nil && f.Counters.Reality > 0 {
+				return ""
+			}
+		}
+	}
+	return tr("this would make EVERY IP pure 'reality', and nothing shows the other server has the key yet (no reality-authenticated link in the live counters): after its next restart it could not reach this server at all. First run 'both' until `hs2 reality status` on the other server shows reality in use, or pin the key there (command below) and add --dialer-has-key.",
+		"با این کار همهٔ IPها فقط 'reality' می‌شوند و هنوز نشانه‌ای نیست که سرور مقابل کلید را دارد (هیچ لینک احرازشده با reality در شمارنده‌های زنده نیست): پس از ری‌استارت بعدی اصلاً به این سرور نمی‌رسد. اول 'both' بگذارید تا `hs2 reality status` روی سرور مقابل reality را در حال استفاده نشان دهد، یا کلید را آنجا ثبت کنید (دستور زیر) و --dialer-has-key بدهید.")
 }
 
 // frontKindOf: the front ip serves now per the status file ("" = unknown).

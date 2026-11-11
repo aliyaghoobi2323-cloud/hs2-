@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
+	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
 )
 
 // Multipath LB, stage 6: the listening side announces its own addresses
@@ -40,6 +41,10 @@ type lbRuntime struct {
 	loadedAt time.Time
 	note     string // the local remote list differs from the announced one
 	logf     func(string, ...any)
+	// remembered fronts (dialing side, frontcache.go): the last announced
+	// public profiles, used until the first announcement of this run.
+	frontsPath string
+	fronts     map[string]*tlscarrier.FrontProfile
 }
 
 var (
@@ -257,6 +262,10 @@ func setupLB(fc fileConfig, lb *engine.LB, ln net.Listener, logf func(string, ..
 		onPeer = rt.applyAdvert
 	}
 	rt.adv = engine.NewLBAdvert(lbOwnAdvert(fc), onPeer, logf)
+	if lb != nil {
+		rt.frontsPath = peerFrontsPath(configPath)
+		rt.loadFrontsLocked("start")
+	}
 	lbRunMu.Lock()
 	lbRun = rt
 	lbRunMu.Unlock()
@@ -269,6 +278,30 @@ func (rt *lbRuntime) applyAdvert(adv []engine.LBAdvertIP) {
 	defer rt.mu.Unlock()
 	rt.peer = append([]engine.LBAdvertIP(nil), adv...)
 	rt.rebuildLocked("the other server's announcement")
+	if m := advertFronts(adv); !frontsEqual(m, rt.fronts) {
+		if err := savePeerFronts(rt.frontsPath, lbPeerKey(rt.fc), "announcement", m); err != nil {
+			rt.logf("front: could not remember the announced fronts in %s: %v (a restart before the next announcement may not reach a pure reality IP)", rt.frontsPath, err)
+		} else {
+			rt.fronts = m
+			if rt.frontsPath != "" {
+				rt.logf("front: remembered %d announced front(s) in %s (used at the next start until the announcement arrives)", len(m), rt.frontsPath)
+			}
+		}
+	}
+}
+
+// loadFrontsLocked reads the remembered fronts and, while no announcement has
+// arrived yet, puts them on the paths.
+func (rt *lbRuntime) loadFrontsLocked(why string) {
+	m, err := loadPeerFronts(rt.frontsPath, lbPeerKey(rt.fc))
+	if err != nil {
+		rt.logf("front: remembered fronts: %v", err)
+	}
+	prev := rt.fronts
+	rt.fronts = m
+	if rt.peer == nil && !frontsEqual(m, prev) {
+		rt.rebuildLocked("remembered fronts (" + why + ")")
+	}
 }
 
 // rebuildLocked recomputes the dialing side's paths from the current config
@@ -285,6 +318,11 @@ func (rt *lbRuntime) rebuildLocked(why string) {
 	if err != nil {
 		rt.logf("lb: %s: %v — keeping the current paths", why, err)
 		return
+	}
+	if rt.peer == nil && len(rt.fronts) > 0 { // no announcement yet this run
+		if n := overlayPeerFronts(paths, rt.fronts); n > 0 {
+			rt.logf("front: %d path(s) dial the remembered front (reality first, tls fallback) until the announcement arrives", n)
+		}
 	}
 	if err := rt.lb.SetPaths(paths); err != nil {
 		rt.logf("lb: %s: %v — keeping the current paths", why, err)
@@ -318,6 +356,12 @@ func reloadLB(why string) {
 	}
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
+	if rt.lb != nil && rt.peer == nil { // hs2 reality pin while waiting
+		old := rt.fronts
+		if m, _ := loadPeerFronts(rt.frontsPath, lbPeerKey(rt.fc)); !frontsEqual(m, old) {
+			rt.loadFrontsLocked("reload, " + why)
+		}
+	}
 	if !lbOn(nf) {
 		rt.logf("lb: reload (%s): lb is off in the file — turning it off needs a restart; keeping the current paths", why)
 		return

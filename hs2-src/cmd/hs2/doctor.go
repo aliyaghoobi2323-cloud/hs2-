@@ -101,6 +101,7 @@ func doctorCmd(args []string) {
 			checkLBCerts(d, fc)
 			checkLBAdvert(d, *cfgPath)
 			checkFrontSNI(d, fc)
+			checkColdDialer(d, fc, *cfgPath)
 			checkACME(d, fc)
 			checkTun(d, fc)
 			checkTuning(d, fc)
