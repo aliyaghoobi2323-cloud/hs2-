@@ -377,6 +377,9 @@ func (m *LinkManager) endRefill(now time.Time, why string) {
 		line = fmt.Sprintf("refill: hold ended at its %s limit with %d of %d links up — %d connection(s) waited (longest %s); at most %d open connections on one link (the hold allowed %d)",
 			fmtDur(h.limit()), S, T, h.held, secs(h.longest), most, h.topCap)
 	}
+	if line != "" && refillWait > 0 {
+		line += fmt.Sprintf("; %d left the hold at the %s wait bound (HS2_REFILL_WAIT_MS) so far", refillWaitCut.Load(), fmtDur(refillWait))
+	}
 	if line != "" {
 		h.last, h.lastAt = line[len("refill: "):], now
 	}
