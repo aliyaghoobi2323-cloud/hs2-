@@ -516,7 +516,9 @@ norm_unit(){ # name
   n=${n%.service}
   case "$n" in ''|hs2) echo hs2; return 0 ;; esac
   n=${n#hs2-}
-  case "$n" in ''|*[!a-z0-9-]*|-*|*-|menu) return 1 ;; esac
+  # stats, lb-park, coreguard, alert-*: hs2's own helper units (hs2-stats.service
+  # etc.) — a tunnel with that name was overwritten when the helper was enabled.
+  case "$n" in ''|*[!a-z0-9-]*|-*|*-|menu|stats|lb-park|coreguard|alert-*) return 1 ;; esac
   [ ${#n} -le 20 ] || return 1
   echo "hs2-$n"
 }
@@ -2573,6 +2575,13 @@ remove_tunnel(){ # unit
     fi
     rm -rf "${UNIT_DIR:?}/$u.service.d"
   fi
+  # Its alert timer (hs2-alert-UNIT.timer): left behind, it went on firing every
+  # 60 s against a tunnel that no longer exists.
+  if [ -n "$u" ] && [ -e "$UNIT_DIR/hs2-alert-$u.timer" ]; then
+    systemctl disable --now "hs2-alert-$u.timer" >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/hs2-alert-$u.timer" "$UNIT_DIR/hs2-alert-$u.service"
+    info "Removed its alert timer (hs2-alert-$u.timer)."
+  fi
   systemctl daemon-reload 2>/dev/null || true
   systemctl reset-failed "$u" >/dev/null 2>&1 || true
   kernel_cleanup
@@ -2609,6 +2618,17 @@ uninstall(){
   case "$a" in "REMOVE ALL") ;; *) info "Nothing removed."; return 0 ;; esac
   auto_backup
   for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
+  # hs2's server-wide helper timers (24 h history sampler, lb park restore):
+  # with every tunnel gone they only fail every few minutes — and keep running
+  # $BIN after it is removed below.
+  local h
+  for h in hs2-stats hs2-lb-park; do
+    if [ -e "$UNIT_DIR/$h.timer" ] || [ -e "$UNIT_DIR/$h.service" ]; then
+      systemctl disable --now "$h.timer" >/dev/null 2>&1 || true
+      rm -f "$UNIT_DIR/$h.timer" "$UNIT_DIR/$h.service"
+    fi
+  done
+  systemctl daemon-reload 2>/dev/null || true
   rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
   # What the daemons left in /run/hs2: warm-start records and status files of
   # tunnels that are gone, and the (now empty) ping-guard marker folder.
@@ -2717,7 +2737,17 @@ status_fresh(){
 tm_units(){
   local f
   for f in "$UNIT_DIR/hs2.service" "$UNIT_DIR"/hs2-*.service; do
-    { [ -f "$f" ] || [ -L "$f" ]; } && basename "$f" .service
+    { [ -f "$f" ] || [ -L "$f" ]; } || continue
+    # hs2's helper units (the history sampler, the lb park timer, the alert
+    # timers, the core guard) are not tunnels: listed, they showed up in the
+    # manager as broken tunnels and upgrade/uninstall/backup walked them. One
+    # that really runs a tunnel (a tunnel made before the names were reserved)
+    # is still listed.
+    case "${f##*/}" in
+      hs2-stats.service|hs2-lb-park.service|hs2-coreguard.service|hs2-alert-*.service)
+        grep -q ' run -c ' "$f" 2>/dev/null || continue ;;
+    esac
+    basename "$f" .service
   done
   return 0
 }

@@ -108,7 +108,8 @@ bash -c "source '$T/cp.sh'; cfg_put '$T/cp/missing.json' '$T/cp/c.json'"; rc=$?
 check "cfg_put: a failed copy returns non-zero and leaves the config intact" '[ $rc != 0 ] && grep -q "\"a\":3" "$T/cp/c.json" && [ "$(ls "$T/cp" | wc -l)" = 3 ]'
 if [ "$(id -u)" = 0 ] && command -v unshare >/dev/null 2>&1; then
   # A REAL full disk: a 64 KiB tmpfs in a private mount namespace.
-  head -c 200000 /dev/urandom | base64 -w0 > "$T/cp/big.json"
+  # (deterministic filler: random data could contain "keep" by chance)
+  head -c 200000 /dev/zero | tr '\0' x > "$T/cp/big.json"
   mkdir -p "$T/cp/fs"
   out=$(unshare -m bash -c "mount -t tmpfs -o size=64k tmpfs '$T/cp/fs' || exit 9
     printf '{\"keep\":1}\n' > '$T/cp/fs/c.json'
@@ -160,6 +161,35 @@ out=$(bash -c "source '$T/di_run.sh'; dropin_use_bin hs2-t1; echo END" 2>&1)
 check "dropin_use_bin: a second run changes nothing (idempotent, no reload)" '! echo "$out" | grep -q "ran another binary" && [ ! -s "$T/sdlog" ]'
 check "upgrade points drop-ins at the new binary and checks the running exe" 'sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "dropin_use_bin \"\$u\"" && sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "unit_exe \"\$u\""'
 check "backup includes the unit's drop-in folder" 'sed -n "/^backup(){/,/^}/p" "$INST" | grep -qF "\$u.service.d\")"'
+
+# ---- helper units are not tunnels; their names are reserved (rev53a) ----------
+# tm_units globbed hs2-*.service, so hs2-stats / hs2-lb-park / hs2-alert-<u>
+# showed up as (broken) tunnels and upgrade/backup/uninstall walked them; and a
+# tunnel named "stats" got its unit overwritten when the sampler was enabled.
+sed -n '/^tm_units(){/,/^}/p;/^norm_unit(){/,/^}/p' "$INST" > "$T/un.sh"
+U2="$T/units"; mkdir -p "$U2"
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/config.json\n' > "$U2/hs2.service"
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/hs2-de1.json\n' > "$U2/hs2-de1.service"
+printf '[Service]\nType=oneshot\nExecStart=/usr/local/bin/hs2 stats sample\n' > "$U2/hs2-stats.service"
+printf '[Service]\nType=oneshot\nExecStart=/usr/local/bin/hs2 lb park --sweep\n' > "$U2/hs2-lb-park.service"
+printf '[Service]\nType=oneshot\nExecStart=/usr/local/bin/hs2 alert -c /etc/hs2/hs2-de1.json -u hs2-de1\n' > "$U2/hs2-alert-hs2-de1.service"
+printf '[Service]\nExecStart=/usr/local/bin/hs2-coreguard --watch\n' > "$U2/hs2-coreguard.service"
+ln -s /dev/null "$U2/hs2-masked.service"
+out=$(bash -c "set -euo pipefail; UNIT_DIR='$U2'; source '$T/un.sh'; tm_units | tr '\n' ' '" 2>&1)
+check "tm_units: only tunnels (and a masked tunnel) are listed, not hs2's helper units" '[ "$out" = "hs2 hs2-de1 hs2-masked " ]'
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/hs2-stats.json\n' > "$U2/hs2-stats.service"
+out=$(bash -c "set -euo pipefail; UNIT_DIR='$U2'; source '$T/un.sh'; tm_units | tr '\n' ' '" 2>&1)
+check "tm_units: an older TUNNEL that happens to be named hs2-stats is still listed" 'echo "$out" | grep -q "hs2-stats "'
+for n in stats lb-park coreguard alert-hs2 hs2-alert-x menu; do
+  r=$(bash -c "source '$T/un.sh'; norm_unit '$n' && echo ACCEPTED || echo REJECTED" 2>&1)
+  check "norm_unit: the helper name '$n' is rejected as a tunnel name" '[ "$r" = REJECTED ]'
+done
+for n in de1 stats2 alerts lb; do
+  r=$(bash -c "source '$T/un.sh'; norm_unit '$n'" 2>&1)
+  check "norm_unit: '$n' is still a valid tunnel name" '[ "$r" = "hs2-$n" ]'
+done
+check "remove_tunnel also removes the tunnel's alert timer" 'sed -n "/^remove_tunnel(){/,/^}/p" "$INST" | grep -q "disable --now \"hs2-alert-\$u.timer\""'
+check "uninstall also removes the helper timers (hs2-stats, hs2-lb-park)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "for h in hs2-stats hs2-lb-park"'
 
 
 exit $fail

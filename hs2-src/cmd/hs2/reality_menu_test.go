@@ -375,9 +375,21 @@ func TestDeleteRemovesDropinDir(t *testing.T) {
 	if b, err := os.ReadFile(filepath.Join(dir, "hs2-x.service.d", "50-preset.conf")); err != nil || !strings.Contains(string(b), "A=1") {
 		t.Fatalf("drop-in not backed up: %v", err)
 	}
+	// rev53a: its alert timer went on running every 60 s after the delete
+	os.WriteFile(filepath.Join(systemdDir, "hs2-alert-hs2-x.timer"), []byte("[Timer]\n"), 0o644)
+	os.WriteFile(filepath.Join(systemdDir, "hs2-alert-hs2-x.service"), []byte("[Service]\n"), 0o644)
+	os.WriteFile(filepath.Join(systemdDir, "hs2-alert-hs2-y.timer"), []byte("[Timer]\n"), 0o644)
 	removeUnitFiles("hs2-x", cfg)
 	if _, err := os.Stat(filepath.Join(systemdDir, "hs2-x.service.d")); !os.IsNotExist(err) {
 		t.Fatalf("drop-in dir left behind: %v", err)
+	}
+	for _, f := range []string{"hs2-alert-hs2-x.timer", "hs2-alert-hs2-x.service"} {
+		if _, err := os.Stat(filepath.Join(systemdDir, f)); !os.IsNotExist(err) {
+			t.Fatalf("%s left behind: %v", f, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(systemdDir, "hs2-alert-hs2-y.timer")); err != nil {
+		t.Fatalf("another tunnel's alert timer was removed: %v", err)
 	}
 }
 

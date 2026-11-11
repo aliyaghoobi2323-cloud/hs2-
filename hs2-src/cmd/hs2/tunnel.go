@@ -76,7 +76,23 @@ func unitNameErr(n string) error {
 	if !unitRe.MatchString(n) {
 		return fmt.Errorf("tunnel name %q: use hs2 or hs2-<letters/digits>", n)
 	}
+	if reservedUnit(n) {
+		return fmt.Errorf(tr("tunnel name %q is reserved for an hs2 helper service — pick another name", "نام تونل %q برای یک سرویس کمکی hs2 رزرو است — نام دیگری بدهید"), n)
+	}
 	return nil
+}
+
+// reservedUnit: the unit names hs2's own helper services use (the history
+// sampler, the lb park timer, the per-tunnel alert timers, the menu, the core
+// guard). A tunnel with one of these names had its unit file overwritten when
+// the helper was turned on (hs2-stats.service) — or deleted when it was turned
+// off — and the menus listed the helpers as broken tunnels.
+func reservedUnit(n string) bool {
+	switch n {
+	case "hs2-stats", "hs2-lb-park", "hs2-menu", "hs2-coreguard":
+		return true
+	}
+	return strings.HasPrefix(n, "hs2-alert-")
 }
 
 func randHex(n int) string {
