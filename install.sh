@@ -834,6 +834,46 @@ restart_unit(){ # unit
   [ "${after:-0}" != 0 ] && [ "$after" != "${before:-0}" ]
 }
 
+# dropin_exec_sync UNIT: a drop-in (systemctl edit → override.conf) whose
+# ExecStart= runs ANOTHER hs2 binary (a hand-copied /usr/local/bin/hs2-r31,
+# /root/hs2/hs2 …) wins over the unit file, so an upgrade would replace $BIN,
+# restart the tunnel and still run the old build. Point such an ExecStart at
+# $BIN (same arguments; the file is kept as NAME.pre-upgrade, which systemd
+# ignores) and say so. Only an `X run …` line is touched — a drop-in that wraps
+# hs2 in something else is reported, never edited.
+dropin_exec_sync(){ # unit
+  local u="$1" d="$UNIT_DIR/$1.service.d" f b changed=0
+  [ -d "$d" ] || return 0
+  for f in "$d"/*.conf; do
+    [ -f "$f" ] || continue
+    b=$(sed -n 's/^[[:space:]]*ExecStart=[-@:+!]*\([^[:space:]]\{1,\}\).*/\1/p' "$f" | tail -1)
+    [ -n "$b" ] && [ "$b" != "$BIN" ] || continue
+    if ! grep -qE '^[[:space:]]*ExecStart=[-@:+!]*[^[:space:]]+[[:space:]]+run([[:space:]]|$)' "$f"; then
+      grep -qE "^[[:space:]]*ExecStart=.*[[:space:]]$BIN[[:space:]]+run([[:space:]]|\$)" "$f" ||
+        warn "$u: $f sets ExecStart=$b … (not an 'hs2 run' line) — left as is; check it runs $BIN."
+      continue
+    fi
+    cp -p "$f" "$f.pre-upgrade"
+    sed -i -E "s#^([[:space:]]*ExecStart=[-@:+!]*)[^[:space:]]+([[:space:]]+run([[:space:]]|\$))#\1$BIN\2#" "$f"
+    warn "$u: its drop-in $f ran another binary ($b) — it now runs $BIN (old file: $f.pre-upgrade)."
+    changed=1
+  done
+  [ "$changed" = 0 ] || systemctl daemon-reload
+  return 0
+}
+
+# running_exe_ok UNIT: the unit's running process is $BIN (not an old copy a
+# drop-in or a hand edit still points at).
+running_exe_ok(){ # unit
+  local pid exe
+  pid=$(tm_prop "$1" MainPID)
+  [ "${pid:-0}" != 0 ] || return 0
+  exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || return 0
+  [ "$exe" = "$BIN" ] && return 0
+  err "$1 runs $exe, not the upgraded $BIN — see: systemctl cat $1"
+  return 1
+}
+
 write_service(){
   local role="$1"
   unit_unmask "$UNIT"   # before writing: a masked unit file is a /dev/null symlink
@@ -2541,6 +2581,12 @@ remove_tunnel(){ # unit
     rm -f "$CFG_DIR/certs/$u.crt" "$CFG_DIR/certs/$u.key"
     rmdir "$CFG_DIR/certs" 2>/dev/null || true
   fi
+  # its alert check (hs2-alert-UNIT.timer/.service): not a tunnel unit, so
+  # tm_units does not list it — remove it with the tunnel it watches
+  if [ -n "$u" ] && { [ -e "$UNIT_DIR/hs2-alert-$u.timer" ] || [ -e "$UNIT_DIR/hs2-alert-$u.service" ]; }; then
+    systemctl disable --now "hs2-alert-$u.timer" >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/hs2-alert-$u.timer" "$UNIT_DIR/hs2-alert-$u.service"
+  fi
   # the live status file, and the warm-start record next to it (same name, .warm)
   rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$sp" "${sp%.status.json}.warm"
   # Its systemd drop-ins (systemctl edit / set-property make them): useless
@@ -2588,6 +2634,14 @@ uninstall(){
   case "$a" in "REMOVE ALL") ;; *) info "Nothing removed."; return 0 ;; esac
   auto_backup
   for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
+  # the server-wide helper timers (24 h history, LB park restore)
+  local t
+  for t in hs2-stats hs2-lb-park; do
+    [ -e "$UNIT_DIR/$t.timer" ] || [ -e "$UNIT_DIR/$t.service" ] || continue
+    systemctl disable --now "$t.timer" >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/$t.timer" "$UNIT_DIR/$t.service"
+  done
+  systemctl daemon-reload 2>/dev/null || true
   rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
   # What the daemons left in /run/hs2: warm-start records and status files of
   # tunnels that are gone, and the (now empty) ping-guard marker folder.
@@ -2693,10 +2747,19 @@ status_fresh(){
 # tm_units lists every tunnel (hs2.service first, then hs2-*.service by name).
 # A MASKED unit is a /dev/null symlink, not a tunnel file — it is listed too, so
 # setting one up again (which unmasks it) and the manager can see it.
+# The helper units share the hs2- prefix (hs2-alert-<unit>, hs2-stats,
+# hs2-lb-park …) and are NOT tunnels: a oneshot unit is skipped. Without this,
+# upgrade treated hs2-alert-hs2.service (ExecStart=… alert -c CONFIG) as a
+# tunnel, rewrote it as `hs2 run -c CONFIG` and started a second daemon on the
+# live tunnel's config.
 tm_units(){
   local f
   for f in "$UNIT_DIR/hs2.service" "$UNIT_DIR"/hs2-*.service; do
-    { [ -f "$f" ] || [ -L "$f" ]; } && basename "$f" .service
+    { [ -f "$f" ] || [ -L "$f" ]; } || continue
+    if [ -f "$f" ] && ! [ -L "$f" ] && grep -qE '^[[:space:]]*Type[[:space:]]*=[[:space:]]*oneshot' "$f" 2>/dev/null; then
+      continue
+    fi
+    basename "$f" .service
   done
   return 0
 }
@@ -5038,6 +5101,10 @@ backup(){
   # cert, so renewal keeps working after a restore.
   for u in $units; do
     [ -f "$UNIT_DIR/$u.service" ] && items+=("${UNIT_DIR#/}/$u.service")
+    # its drop-ins too (systemctl edit / perf / cores): a production unit keeps
+    # its HS2_ keys and limits there, and a restore without them silently runs
+    # the tunnel on different settings
+    [ -d "$UNIT_DIR/$u.service.d" ] && items+=("${UNIT_DIR#/}/$u.service.d")
     c=$(tm_cfg "$u")
     for p in "$c" "$c.prev"; do [ -n "$c" ] && [ -f "$p" ] && items+=("${p#/}"); done
     for p in "$(jget "$c" cert_file)" "$(jget "$c" key_file)"; do
@@ -5307,8 +5374,28 @@ auto_backup(){
 # checked). With a tunnel name it upgrades only that one; with none, all of
 # them. Either way the user sees the exact restart list and confirms first — a
 # restart briefly drops that tunnel's traffic, which matters on a busy tunnel.
+# heal_alert_units: an older upgrade rewrote hs2-alert-<unit>.service (the
+# alert check, a oneshot) as a TUNNEL unit — a second `hs2 run -c` on the same
+# config as <unit>, running beside the real tunnel. Such a unit (named
+# hs2-alert-X, running X's own config) is put back as the alert check.
+heal_alert_units(){
+  local f n x c
+  for f in "$UNIT_DIR"/hs2-alert-*.service; do
+    [ -f "$f" ] || continue
+    grep -qE '^ExecStart=[^ ]+ run -c ' "$f" || continue
+    n=$(basename "$f" .service); x=${n#hs2-alert-}
+    [ -f "$UNIT_DIR/$x.service" ] || continue
+    c=$(tm_cfg "$n"); [ -n "$c" ] && [ "$c" = "$(tm_cfg "$x")" ] || continue
+    warn "$n ran a second copy of tunnel $x (left by an older upgrade) — it is the alert check again."
+    systemctl disable --now "$n.service" >/dev/null 2>&1 || true
+    alert_enable "$x" "$c"
+  done
+  return 0
+}
+
 upgrade(){ # [tunnel]
   local all units u role fails=0 a
+  heal_alert_units
   all=$(tm_units)
   [ -n "$all" ] || die "hs2 is not installed on this server (no tunnel). Run without 'upgrade' to install."
   if [ -n "${1:-}" ]; then
@@ -5353,8 +5440,9 @@ upgrade(){ # [tunnel]
     # sure it starts on boot.
     role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
     write_service "$role"
+    dropin_exec_sync "$u"
     systemctl enable "$u" >/dev/null 2>&1 || true
-    if restart_unit "$u"; then
+    if restart_unit "$u" && running_exe_ok "$u"; then
       ok "$u upgraded and running (autostart: $(systemctl is-enabled "$u" 2>/dev/null || true))."
       if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-60}"; then
         warn "$u has not reconnected yet. If the OTHER server still runs the old version, upgrade it"
