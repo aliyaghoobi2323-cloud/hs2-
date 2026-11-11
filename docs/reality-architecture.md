@@ -930,3 +930,78 @@ recovered unmarked, every path lowered: nothing), `TestMConnRescueCappedSingle`
 no ping lost), `TestMConnRescueDualKeyOff`. Raw: lab 1 `/opt/hs2lab/r35/d/res`,
 `an.py`; the probe's `-crowdwin` flag and the `bbad` event are in this
 commit / `ir.sh`.
+
+### 8.7 Phase 5 (2026-11-11, branch reality36): start window, rescue under a binding budget
+
+Branch reality36 = reality35b (8.4) + reality35c (8.5, 8.6) merged; the only
+conflict was this file (both added an "8.4": phase 4b stays 8.4, 4c is 8.5,
+4d is 8.6). Final tree: gofmt clean, `go vet ./...`, engine suite (619 s),
+tlscarrier, cmd/hs2, reality, envdef all ok, `-race` on the new tests ok
+(lab 3).
+
+**(a) Start window.** Cause of the 0.4-1.9 s crowd p99 in the first seconds
+(before any path is bad): the refill hold (refill.go). At a start the exit
+dials its links in batches (1, ~7, ~20, ~33 per path at 0, 2, 4, 6 s); 2700
+of the 3000 crowd connections wait in the hold for a link under the
+fair-share cap, the longest 1.0-2.3 s, and the first request of a waiting
+connection waits with it. `HS2_REFILL_WAIT_MS=N` (edge, `refill_wait.go`,
+default OFF): a connection that has waited N ms leaves the queue for the
+least-loaded link (v1: any; v2: only a link under 2× the fair-share cap,
+else it keeps waiting and looks again N ms later). Lab 1, equal paths
+(45 s, crowd 3000, call, game, iperf down x8, `-crowdwin 5,10,15`),
+interleaved; medians (ranges), ms:
+
+| arm | n | 0-5 s crowd p95/p99 | whole crowd p95 | whole crowd p99 | 15-45 s p95 | call p99 | ping p99 | heavy Mbps | busiest link |
+|---|--:|--|--:|--:|--:|--:|--:|--:|--|
+| base (key off) | 8 | 438 / 1006 (534-1946) | 120 (114-129) | 165 (161-183) | 115 | 182 (175-198) | 134 | 1126 | 68-80 |
+| v1 300 ms, any link | 5 | 128 / 170 (159-173) | 124 (115-131) | 164 (160-166) | 124 | 190 (167-225) | 122 | 1081 | 81-93 |
+| v2 300 ms, < 2× cap | 4 | 129 / 173 (160-761) | 120 (114-138) | 162 (160-169) | 118 | 213 (185-229) | 140 | 1216 | 77-141 |
+
+Both cut the start p99 ~6× (1006 → 170 ms; 1700-2000 connections leave the
+hold at the bound, longest wait 0.3 s). Neither passes: v1 raises the whole
+crowd p95 +4-5 ms and the 15-45 s p95 +9 ms (the connections that left early
+stay on the first links: busiest 81-93 vs 68-80); v2 keeps the whole p95 by
+median (mean +3) but call p99 rises +31 ms (185-229 vs 175-198) and one run
+of four still had a 761 ms start (every link at 2× the cap, the bound did not
+help). **Default stays off.** Next: place the leavers by the links' queued
+bytes rather than connection counts, or let lite's dual upgrade re-place a
+start-window connection's primary once the pool is up (the copy goes to a
+new link anyway); also faster initial dialing at the exit (the batches above
+are the real limit).
+
+**(b) Rescue when the duplication budget binds.** A heavier crowd download
+mix (replies up to 32 KB, no iperf, B bad at 15 s, n=2+2) does NOT make the
+budget bind: the edge's budget counts every byte it sends and receives
+(liteBud), the copies it sends are only the light users' uploads, so dup is
+far under 5% (0 upgrades refused, 0 copies past the budget, 244-270 copy subs
+moved by the dual part). To make it bind, a lab-only build set mLiteCapPct
+to 0 (k runs, B bad at 15 s, iperf down x8, n=2 each): whole crowd p95
+539/593 (rescue on) vs 560/572 (`HS2_LB_RESCUE=0`), p99 817/863 vs 834/872;
+copies given past the budget: **0 and 4** over the whole run. So the
+single-sub part does not reach most single-sub connections when the budget
+binds (unit tests pass: `TestMConnRescueCappedSingle`). Open: trace a k run
+(mconn trace on a sample) to find which guard (`rescueWantLocked`: dupOff,
+mode, or the lite poll not rearmed after a refusal) stops it; until then the
+rescue's measured gain is the dual part (8.6), which does not depend on the
+budget.
+
+Equal paths (b) and all-tls (c) with more reps: see the table below (fresh
+binary of this tree; base = `HS2_LB_RESCUE=0`, since the rescue is a default
+now).
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an2.py s|u|k|b|c`), drivers `drv*.sh`.
+
+| scenario, arm | n | crowd p95 | crowd p99 | 27+ s p95/p99 | call p99 | ping p99 | heavy | crowd fail |
+|---|--:|--:|--:|--|--:|--:|--:|--|
+| (b) equal, rescue off | 4 | 120 (112-124) | 173 (161-182) | 112-116 / 158-161 | 193 (184-282) | 124 (95-133) | 1091 | 0 ×4 |
+| (b) equal, fast verdict + rescue | 4 | 115 (112-142) | 163 (160-218) | 114 / 160 | 181 (173-197) | 142 (97-152) | 1105 | 0 ×4 |
+| (c) all-tls, B bad at 15 s, rescue off | 4 | 290 (284-297) | 498 (492-504) | 333 / 512 | 288 (177-451) | 229 (169-311) | 951 | 0 ×4 |
+| (c) all-tls, fast verdict + rescue | 4 | 176 (171-182) | 321 (307-334) | 180 / 268 | 430 (204-542) | 201 (143-391) | 1016 | 0 ×4 |
+
+(b): unchanged by median (the one 218 ms run is the C-transient run of 8.6);
+(c): crowd p95 -39%, p99 -36%, after the cut p99 -48%, no failure; call p99
+is noisy in both arms (177-542) and higher by median with the rescue
+(430 vs 288; one rescue-only rep 621): a lead to check with more reps
+before trusting the call column here (the 3-path runs of 8.6 showed call p99
+336 vs 570 the other way). Rows mix the 35d binary (2 reps per arm) and this
+tree's (2 reps; base there = `HS2_LB_RESCUE=0`).

@@ -922,7 +922,7 @@ Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain), `HS2_LB_EVAC
 (light-user evacuation off cut paths: no measurable gain in the lab, see
 `docs/reality-architecture.md` 8.5), `HS2_LB_FAST_VERDICT` (floor a path at
 its first clearly bad reading: no measurable gain, the plain rule already does
-it, 8.6) and every
+it, 8.6), `HS2_REFILL_WAIT_MS` (bound on a start-hold wait: start p99 -80% but crowd p95 or call p99 worse, 8.7) and every
 key not in this table. The side is the config's `mode`: `dial` = Iran (edge),
 `listen` = kharej (exit). Every default-on key works against an older peer
 (new behaviour is announced by a capability bit or carried in a field older
