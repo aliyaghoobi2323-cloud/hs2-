@@ -228,15 +228,13 @@ func (b *LB) measure(dt time.Duration) map[int]q2Reading {
 					sort.Float64s(d)
 					r.queueMs = d[len(d)/2]
 				}
-				if b.dials[j] > 0 {
-					r.fail = float64(b.dfails[j]) / float64(b.dials[j])
-				}
+				r.fail = judgeFail(b.dials[j], b.dfails[j], b.cfails[j])
 				raw[j] = r
 			}
 		} else {
 			b.qual[j] = lbUpdateQual(b.qual[j], segs[j], retr[j], delays[j], b.dials[j], b.dfails[j])
 		}
-		b.dials[j], b.dfails[j] = 0, 0
+		b.dials[j], b.dfails[j], b.cfails[j] = 0, 0, 0
 	}
 	return raw
 }

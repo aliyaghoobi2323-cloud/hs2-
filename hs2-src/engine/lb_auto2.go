@@ -386,6 +386,9 @@ func (j *q2Judge) targets() {
 				if q.queueMs > 25 {
 					q.reason += fmt.Sprintf(", queue %.0fms", q.queueMs)
 				}
+				if q.fail > 0 {
+					q.reason += fmt.Sprintf(", dial fail %.0f%%", 100*q.fail)
+				}
 			}
 		}
 	}

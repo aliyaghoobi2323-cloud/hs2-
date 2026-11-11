@@ -181,6 +181,9 @@ type LinkManager struct {
 	ctlDrain       int           // reverse: draining links whose slot the exit is asked to replace
 	forced         atomic.Int64  // ... of which trickling ones on links retiring retireForce+
 	forcedCut      atomic.Int64  // ... of which on cut-drained links (cutDrainForce+, lb_cutdrain.go)
+	evacuated      atomic.Int64  // light connections moved off cut paths, not yet logged (lb_evac.go)
+	evacTotal      atomic.Int64  // ... since start (status)
+	evacLogAt      time.Time
 
 	// drainIdle: idle-connection reclaim on retiring links, ns (0 = never).
 	drainIdle atomic.Int64
@@ -1147,8 +1150,14 @@ func (m *LinkManager) drainTick() {
 			l.Close() // DropLink then finds nothing and stays quiet
 		}(ml.link)
 	}
-	cutForced := 0
+	cutForced, evacLeft := 0, evacPerTick
 	for _, ml := range reclaim {
+		if evacDue(ml, now) && evacLeft > 0 && now.Sub(ml.retireSince) < cutDrainForce { // HS2_LB_EVAC (lb_evac.go)
+			n := min(evacPerLink, evacLeft)
+			evacLeft -= n
+			go m.evacLight(ml, now, n, time.Sleep)
+			continue
+		}
 		force := now.Sub(ml.retireSince) >= retireForce
 		if !force && ml.cutDrain && now.Sub(ml.retireSince) >= cutDrainForce && cutForced < cutDrainForcePerTick {
 			force = true // a few cut-drained links a tick: their users reconnect gradually, not as one burst
@@ -1160,6 +1169,11 @@ func (m *LinkManager) drainTick() {
 	}
 	for _, h := range held {
 		m.log("mtcp: %s", h)
+	}
+	if n := m.evacuated.Load(); n > 0 && now.Sub(m.evacLogAt) >= 10*time.Second {
+		m.evacuated.Add(-n)
+		m.evacLogAt = now
+		m.log("mtcp: lb evac: %d light connection(s) closed between requests on cut-path links (%d since start) — they reconnect onto good paths; heavy ones stay (passed over: %d copy-only, %d busy, %d mid-request)", n, m.evacTotal.Load(), evacSkipCopy.Swap(0), evacSkipBusy.Swap(0), evacSpared.Swap(0))
 	}
 	if heldN > len(held) {
 		m.log("mtcp: %d more retiring links held %s+ (same reasons)", heldN-len(held), fmtDur(heldLogFirst))

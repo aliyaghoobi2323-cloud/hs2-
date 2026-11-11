@@ -75,6 +75,9 @@ func TestApplyDefaults(t *testing.T) {
 	if !mconnLite.Load() {
 		t.Fatal("other defaults lost with one key off")
 	}
+	if !lbJudgeData || lbEvac {
+		t.Fatal("HS2_LB_JUDGE_DATA should default on, HS2_LB_EVAC off")
+	}
 
 	os.Setenv("HS2_DEFAULTS", "legacy")
 	envdef.Deactivate()
@@ -83,7 +86,7 @@ func TestApplyDefaults(t *testing.T) {
 	if ApplyDefaults(true) != nil {
 		t.Fatal("legacy: defaults applied")
 	}
-	if mconnOn.Load() || lbAuto2 || tlscarrier.QuietIdle || lbFlapPen {
+	if mconnOn.Load() || lbAuto2 || tlscarrier.QuietIdle || lbFlapPen || lbJudgeData {
 		t.Fatal("legacy: defaults in force")
 	}
 }
