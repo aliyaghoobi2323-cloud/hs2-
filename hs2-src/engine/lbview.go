@@ -273,6 +273,14 @@ func (v *pathView) build(defs []LBPathView, links []pathLink) ([]LBPathView, *LB
 			delete(v.prev, k)
 		}
 	}
+	// a path that is neither known (defs) nor carries a link is gone: drop its
+	// counters, or a long run whose address lists change keeps one per path
+	// ever seen
+	for k := range v.acc {
+		if _, ok := idx[k]; !ok {
+			delete(v.acc, k)
+		}
+	}
 	var nps []uint64
 	tot := &LBPathView{State: "ok"}
 	for i := range rows {
