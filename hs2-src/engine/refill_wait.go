@@ -159,3 +159,14 @@ func (m *LinkManager) spreadLine() string {
 	return fmt.Sprintf("link spread: %d serving links, %d users, mean %.1f, p90 %d, max %d, %d links above 1.5x mean; %d left the start hold at the bound so far",
 		len(u), sum, mean, u[len(u)*9/10], u[len(u)-1], over, refillWaitCut.Load())
 }
+
+// refillCompleteMin: with the start-window bound on (HS2_REFILL_WAIT_MS > 0)
+// a start episode whose pool is complete stays on at least this long after it
+// began. With the exit's start dial (HS2_START_DIAL) the pool can be complete
+// before most users have connected; the episode then ended and the crowd
+// arriving a second later was placed by plain Pick — flowing streams first,
+// open connections last — which put 227 connections on one link (the fair
+// share was 40) for the rest of a lab run (docs 8.13). While the episode is
+// on, every link holds at most the fair share; with the pool complete nobody
+// waits for that. A partial-loss episode ends as before.
+var refillCompleteMin = 5 * time.Second

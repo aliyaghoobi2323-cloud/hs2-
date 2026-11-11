@@ -94,6 +94,9 @@ var Table = []Key{
 	{"HS2_LB_RESCUE", "1", Edge},
 	{"HS2_LB_RESCUE_CALLFREE", "1", Edge},
 	{"HS2_LB_CALL_LATE", "1", Edge},
+	{"HS2_START_DIAL", "1", Exit},
+	{"HS2_REFILL_WAIT_MS", "300", Edge},
+	{"HS2_REFILL_WAIT_BYTES", "1", Edge},
 }
 
 var byName = func() map[string]Key {

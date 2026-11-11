@@ -286,16 +286,17 @@ func (m *LinkManager) refillStep(now time.Time) bool {
 	S, _ := m.countsLocked()
 	T, _ := m.refillTargetLocked()
 	e := now.Sub(m.hold.start)
+	h0 := &m.hold
 	var why string
 	switch {
 	case !m.hold.on:
 		m.mu.Unlock()
 		return true
-	case S >= T:
+	case S >= T && (refillWait <= 0 || h0.partial || e >= refillCompleteMin):
 		why = "complete"
 	case e >= m.hold.limit():
 		why = "limit"
-	case S > 0 && now.Sub(m.hold.lastLink) >= refillStall:
+	case S > 0 && S < T && now.Sub(m.hold.lastLink) >= refillStall:
 		why = "stalled"
 	default:
 		m.admitLocked(now)

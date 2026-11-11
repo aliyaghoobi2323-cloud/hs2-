@@ -157,3 +157,46 @@ func TestRefillWaitBoundBytes(t *testing.T) {
 		t.Fatal("v3 took a link at the limit")
 	}
 }
+
+// With the bound on, a start episode whose pool is complete early stays on
+// until refillCompleteMin, so the crowd that arrives next is still capped at
+// the fair share; with the bound off it ends at once.
+func TestRefillCompleteMin(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		old := refillWait
+		refillWait = 0
+		if on {
+			refillWait = 300 * time.Millisecond
+		}
+		r := newRefillRig(t, 2, 1)
+		a := r.addLink()
+		r.addLink()
+		r.advance(time.Second)
+		ended := r.step()
+		if ended == on {
+			t.Fatalf("bound %v: episode ended %v at 1 s with the pool complete", on, ended)
+		}
+		if on {
+			// The crowd arrives: each link takes at most the fair share.
+			for i := 0; i < 6; i++ {
+				if _, _, ok, w := r.m.pickHeld(); !ok && w != nil {
+					r.advance(100 * time.Millisecond)
+					if r.step() {
+						t.Fatal("episode ended before refillCompleteMin")
+					}
+					if ml := <-w.ch; ml == nil {
+						t.Fatalf("connection %d not placed", i)
+					}
+				}
+			}
+			if u := r.usersOn(a); u != 3 {
+				t.Fatalf("%d users on link a, want 3 (the fair share of 6 over 2)", u)
+			}
+			r.advance(refillCompleteMin)
+			if !r.step() {
+				t.Fatal("episode still on after refillCompleteMin")
+			}
+		}
+		refillWait = old
+	}
+}
