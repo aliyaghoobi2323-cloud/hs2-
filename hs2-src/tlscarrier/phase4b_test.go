@@ -126,6 +126,7 @@ func TestRealityRSAKeyAndTicketPads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	l.srv.sampleNST(context.Background())
 	m := l.srv.Mirror()
 	if m.KeyKind != "rsa" || m.KeyBits != 2048 || fmt.Sprint(m.NST) != "[266 282]" {
 		t.Fatalf("mirror %+v", m)
@@ -161,8 +162,11 @@ func TestRealityRSAKeyAndTicketPads(t *testing.T) {
 	if len(got) < 8 || len(want) < 8 {
 		t.Fatalf("records: ours %v target %v", got, want)
 	}
-	if fmt.Sprint(got[3:8]) != fmt.Sprint(want[3:8]) {
+	if fmt.Sprint(got[3:6]) != fmt.Sprint(want[3:6]) || got[6]+got[7] < 2*266 || got[6] > 282 || got[7] > 282 || got[6]%16 != 10 || got[7]%16 != 10 {
 		t.Fatalf("Cert/CV/Fin/tickets: ours %v, target %v", got[3:8], want[3:8])
+	}
+	if m := l.srv.Mirror(); len(m.NSTSizes) != 2*nstProbes {
+		t.Fatalf("ticket size samples %v", m.NSTSizes)
 	}
 	if got[4] != 281 {
 		t.Fatalf("CertificateVerify record %d, want 281 (rsa_pss 2048)", got[4])
@@ -336,4 +340,38 @@ func TestHybridCoverTimingParity(t *testing.T) {
 	if d := res["both/0s"] - res["eager/0s"]; d > 10*time.Millisecond {
 		t.Fatalf("immediate hello: both %v vs eager %v", res["both/0s"], res["eager/0s"])
 	}
+}
+
+// Cost of the per-connection throw-away cert (the handshake's critical path).
+func BenchmarkRealityMakeCert(b *testing.B) {
+	t := &testing.T{}
+	for _, c := range []struct {
+		name string
+		kind string
+		bits int
+		want int64
+	}{{"ec-min-387", "ecdsa", 256, 387}, {"ec-2181", "ecdsa", 256, 2181}, {"rsa-2181", "rsa", 2048, 2181}} {
+		b.Run(c.name, func(b *testing.B) {
+			priv, _, _ := RealityKeygen()
+			r, err := NewRealityServer(&FrontProfile{Kind: "reality", Target: "127.0.0.1:1", ServerNames: []string{"www.target.test"},
+				PrivateKey: priv, ShortIDs: []string{"a1"}}, &Server{SharedKey: make([]byte, 32)})
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err := r.useLeafKey(c.kind, c.bits); err != nil {
+				b.Fatal(err)
+			}
+			r.CertPad.Store(c.want)
+			ak := make([]byte, 32)
+			b.ResetTimer()
+			t0 := certTries.Load()
+			for i := 0; i < b.N; i++ {
+				if _, err := r.makeCert(ak, "www.target.test"); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportMetric(float64(certTries.Load()-t0)/float64(b.N), "signs/op")
+		})
+	}
+	_ = t
 }

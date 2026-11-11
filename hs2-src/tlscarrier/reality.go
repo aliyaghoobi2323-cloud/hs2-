@@ -34,6 +34,7 @@ import (
 	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/hkdf"
 	"crypto/hmac"
@@ -51,6 +52,7 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	mrand "math/rand/v2"
 	"net"
 	"sort"
 	"strings"
@@ -567,7 +569,9 @@ type RealityServer struct {
 	priv     *ecdh.PrivateKey
 	shortIDs map[[8]byte]bool
 	names    map[string]bool
-	certKey  *ecdsa.PrivateKey // the default (P-256) throw-away key
+	certKey  *ecdsa.PrivateKey  // the default (P-256) throw-away key
+	issuer   ed25519.PrivateKey // signs the throw-away certs (fixed-size signature)
+	padHint  sync.Map           // cert pad sizes that hit the wanted size
 	// key: the throw-away cert's key in use (the target leaf's type/size once
 	// measured, phase 4), with its cert base sizes.
 	key atomic.Pointer[certKey]
@@ -674,7 +678,11 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &RealityServer{prof: *p, inner: inner, priv: priv, certKey: ck, replay: newReplayMem(),
+	_, iss, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	r := &RealityServer{prof: *p, inner: inner, priv: priv, certKey: ck, issuer: iss, replay: newReplayMem(),
 		shortIDs: map[[8]byte]bool{}, names: map[string]bool{}}
 	for _, s := range p.ShortIDs {
 		id, _ := parseShortID(s)
@@ -715,10 +723,7 @@ func NewRealityServer(p *FrontProfile, inner *Server) (*RealityServer, error) {
 
 // newCertKey measures the cert base sizes (normal and minimal form) of a key.
 func (r *RealityServer) newCertKey(s crypto.Signer, kind string, bits int) (*certKey, error) {
-	k := &certKey{signer: s, kind: kind, bits: bits}
-	if kind == "ecdsa" {
-		k.sigLen = ecdsaSigLen(bits)
-	}
+	k := &certKey{signer: s, kind: kind, bits: bits} // signed by the Ed25519 issuer: fixed size
 	for _, minimal := range []bool{false, true} {
 		der, err := r.buildCert(k, make([]byte, 32), r.prof.ServerNames[0], 0, minimal)
 		if err != nil {
@@ -765,7 +770,69 @@ type targetMirror struct {
 	// target's post-handshake NewSessionTickets (phase 4)
 	KeyKind string
 	KeyBits int
-	NST     []int
+	NST     []int // one probe's ticket records (the count)
+	// NSTSizes: every ticket record length seen over nstProbes probes (an
+	// OpenSSL ticket is 266 or 282 B at random): a pad picks one of these.
+	NSTSizes []int
+}
+
+// nstProbes: handshakes per mirror refresh that sample the ticket sizes.
+const nstProbes = 4
+
+// sampleNST adds nstProbes-1 more ticket size samples to the mirror (after
+// the cert size is installed: the first connections are not kept waiting).
+func (r *RealityServer) sampleNST(ctx context.Context) {
+	m := r.mirror.Load()
+	if m == nil || len(m.NST) == 0 {
+		return
+	}
+	sizes := append([]int(nil), m.NST...)
+	for i := 1; i < nstProbes; i++ {
+		sizes = append(sizes, r.probeNST(ctx)...)
+	}
+	m2 := *m
+	m2.NSTSizes = sizes
+	r.mirror.CompareAndSwap(m, &m2)
+}
+
+// drainFor reads (and drops) whatever comes for d: a ticket is consumed
+// inside Read, but a server that sends application data would end Read early.
+func drainFor(c *tls.Conn, d time.Duration) {
+	c.SetReadDeadline(time.Now().Add(d))
+	b := make([]byte, 4096)
+	for {
+		if _, err := c.Read(b); err != nil {
+			return
+		}
+	}
+}
+
+// probeNST does one handshake with the target and returns its ticket record
+// lengths.
+func (r *RealityServer) probeNST(ctx context.Context) []int {
+	dctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var raw net.Conn
+	var err error
+	if r.DialTarget != nil {
+		raw, err = r.DialTarget(dctx, r.prof.Target)
+	} else {
+		var d net.Dialer
+		raw, err = d.DialContext(dctx, "tcp", r.prof.Target)
+	}
+	if err != nil {
+		return nil
+	}
+	defer raw.Close()
+	raw.SetDeadline(time.Now().Add(8 * time.Second))
+	tap := &recordTap{Conn: raw}
+	c := tls.Client(tap, &tls.Config{ServerName: r.prof.ServerNames[0], InsecureSkipVerify: true, NextProtos: []string{"h2", "http/1.1"}})
+	if c.Handshake() != nil {
+		return nil
+	}
+	i0 := tap.count()
+	drainFor(c, nstWait)
+	return tap.since(i0)
 }
 
 // Mirror returns the target's observed group and ALPN (nil before the first
@@ -799,8 +866,7 @@ func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
 	// The tickets come after our Finished (which Handshake just sent): every
 	// record from here on within nstWait is one.
 	i0 := tap.count()
-	c.SetReadDeadline(time.Now().Add(nstWait))
-	c.Read(make([]byte, 1))
+	drainFor(c, nstWait)
 	var n int64
 	cs := c.ConnectionState()
 	m := &targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol, NST: tap.since(i0)}
@@ -812,6 +878,7 @@ func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
 			m.KeyKind = "" // keep the default key
 		}
 	}
+	m.NSTSizes = append([]int(nil), m.NST...)
 	r.mirror.Store(m)
 	for i, crt := range cs.PeerCertificates {
 		n += int64(len(crt.Raw))
@@ -838,6 +905,7 @@ func (r *RealityServer) StartSizeMirror(ctx context.Context, every time.Duration
 						logf("front: reality: WARNING the target's certificate chain (%d B) is smaller than our smallest throw-away certificate (%d B): an authenticated handshake's Certificate record is %d B longer than the target's (a passive observer can tell); pick a target with a larger chain", n, k.minLen, int64(k.minLen)-n)
 					}
 				}
+				r.sampleNST(ctx)
 			} else if logf != nil {
 				logf("front: reality: could not measure the target's certificate chain: %v", err)
 			}
@@ -926,6 +994,9 @@ func (c *prefixConn) Read(b []byte) (int, error) {
 
 // NetConn exposes the socket (Carrier.TCPConn walks wrappers with it).
 func (c *prefixConn) NetConn() net.Conn { return c.Conn }
+
+// certTries counts throw-away cert signings (benchmarks).
+var certTries atomic.Int64
 
 // lazyPreDial: a "both" connection without a complete hello after this long
 // dials the target anyway (see AcceptFront).
@@ -1187,6 +1258,13 @@ func (r *RealityServer) buildCert(k *certKey, authKey []byte, sni string, want i
 	default:
 		pad = gap - 24
 	}
+	// the pad sizes that hit want last time (DER length bytes make the first
+	// estimate miss by a byte or two): one signing per cert
+	hk := fmt.Sprintf("%p/%d/%v/%d", k, want, minimal, len(sni))
+	if v, ok := r.padHint.Load(hk); ok && want > 0 && gap > 0 {
+		h := v.([2]int64)
+		extra, pad = h[0], h[1]
+	}
 	var der []byte
 	var err2 error
 	for try := 0; try < 64; try++ {
@@ -1217,7 +1295,15 @@ func (r *RealityServer) buildCert(k *certKey, authKey []byte, sni string, want i
 				NotBefore: now.Add(-time.Hour), NotAfter: now.Add(90 * 24 * time.Hour), ExtraExtensions: exts,
 				KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
 		}
-		der, err2 = x509.CreateCertificate(rand.Reader, tmpl, tmpl, k.signer.Public(), k.signer)
+		// Always signed by an Ed25519 issuer key: the cert's own signature is
+		// seen by nobody but our dialer (which checks only the tag), only its
+		// SIZE shows and the padding fixes that. Ed25519's fixed 64-byte
+		// signature makes the size exact in one signing (ECDSA's 70-72 B DER
+		// took ~4 signings, ~1 ms per cert on the handshake path; an RSA
+		// self-signature ~1.5 ms each). The SPKI is the mirrored key, so
+		// CertificateVerify is the target's size.
+		der, err2 = x509.CreateCertificate(rand.Reader, tmpl, tmpl, k.signer.Public(), r.issuer)
+		certTries.Add(1)
 		if err2 != nil {
 			return nil, err2
 		}
@@ -1227,6 +1313,9 @@ func (r *RealityServer) buildCert(k *certKey, authKey []byte, sni string, want i
 			}
 		}
 		d := want - int64(len(der))
+		if d == 0 && (extra > 0 || pad > 0) {
+			r.padHint.Store(hk, [2]int64{extra, pad})
+		}
 		if extra == 0 && pad == 0 || d == 0 {
 			break
 		}
@@ -1285,7 +1374,8 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 	// that skips them. Go's own ticket (one 139 B record inside the first
 	// flight, before the client's Finished) stays off: a Go-only pattern.
 	if m := r.mirror.Load(); m != nil && caps&realityCapPad != 0 && len(m.NST) > 0 {
-		for _, l := range m.NST {
+		for range m.NST {
+			l := m.NSTSizes[mrand.IntN(len(m.NSTSizes))]
 			if p := padRecord(ekm, l); p != nil {
 				if _, err := tconn.Write(p); err != nil {
 					raw.Close()
