@@ -2310,7 +2310,25 @@ whole rate while the others hung behind their holes.)
 
 No 30 s hang (`mGapTimeout`) and no reset in any r49f run.
 
-RESULTS_PLACEHOLDER
+No regression elsewhere beyond the labs' noise (labs 1 and 2 shared with
+three other agents; lab 1 load ~30):
+
+| | r45 | r49f | note |
+|---|---|---|---|
+| u1 (ONE upload connection, no kill: the stripe's own speed), Mbit/s | n=10, mean 643, median 639 | n=9, mean 671, median 595 | one more r49f run lost to an iperf3 `--cport` clash (harness) |
+| c1 Mbit/s, lab 1 / lab 2 | 1238 / 1185 (n=5+5) | 1083 / 1117 (n=4+4) | medians 1216 vs 1094 and 1182 vs 1202 |
+| c1 ping / call p99 ms, lab 1 | 221 / 313 | 356 / 519 (medians 253 / 351) | one slow run under load |
+| c1 ping / call p99 ms, lab 2 | 283 / 375 | 208 / 284 | |
+| s ping p99 ms, lab 1 / lab 2 | 198 / 83 | 88 / 157 | n=2 vs 1 each: noise |
+| u8 ping / call p99 ms, lab 1 | 229 / 290 | 188 / 213 | |
+| u8 ping / call p99 ms, lab 2 | 192 / 210 | 320 / 455 | the upload is ALIVE after the kill now and shares the 25 % of links left with the light users (in r45 it was dead) |
+
+Open: c1 Mbit/s leans 5-10 % lower by mean (one lab, not the other; rel46
+saw -4 %); a quiet-lab c1 battery (n>=8, Mann-Whitney) should confirm or
+clear it. The u8 light-user p99 on lab 2 is the cost of the upload surviving
+on a quarter of the links; light-user protection under a mass link kill
+(scavenger width for a striped connection while the pool rebuilds) is the
+next item if it shows again.
 
 Defaults: `HS2_MCONN_STRIPE_RESEND=1` is in the production table
 (`envdef`, side both; read in `loadEnvKeys`; `=0` turns it off; the grace
@@ -2318,7 +2336,7 @@ follows it). A mixed pair (new Iran, old exit) loses nothing over today: the
 old exit ends a connection whose subs all died, the join is refused and Iran
 ends it after the 3 s grace instead of at once.
 
-Release binary: build e67f92630c71, sha256 946414fa….
+Release binary: build 5712ea8a30c7 (CGO_ENABLED=0, -trimpath -ldflags="-s -w"), sha256 0595213f….
 
 #### 11.6.5 Reality Mbps vs AES-128: not the cipher
 

@@ -39,8 +39,8 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   c1/s: no regression beyond noise. See docs/reality-architecture.md
   §11.6.6 (incl. the single-upload numbers).
 - **`HS2_MCONN_STRIPE_RESEND=1` is now a production default on both sides**
-  (`envdef`; `=0` turns it off). Binary build e67f92630c71, sha256
-  946414fa….
+  (`envdef`; `=0` turns it off). Binary build 5712ea8a30c7, sha256
+  0595213f….
 
 ## rel46 — the u8 upload freeze: production has it, root cause found, fix kept off (binary)
 
