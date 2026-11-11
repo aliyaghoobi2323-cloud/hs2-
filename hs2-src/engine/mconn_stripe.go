@@ -151,6 +151,7 @@ type stripeState struct {
 	stN       int  // subs ever marked stripe (0: the stripe rule is never looked at)
 	stHot     int  // Iran: consecutive samples at the growth rate
 	stUp      bool // Iran: the upload is gated too (HS2_MCONN_STRIPE_UP, mconn_stripe_up.go)
+	stGrowUp  bool // Iran: the last growth was for an upload (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
 
 	stWarmUntil time.Time // Iran: its stripe subs are kept until then (HS2_MCONN_STRIPE_SHARE, mconn_stripe_share.go)
 
@@ -269,6 +270,7 @@ func (m *mConn) stripeTickLocked(now time.Time, sent, recvd uint64) bool {
 		r.mu.Unlock()
 	}
 	m.stOpening = true
+	m.stGrowUp = up
 	m.tr.ev("stripe: grow %d -> %d (%.1f Mbit/s)", n, n+1, rate*8/1e6)
 	return true
 }
@@ -294,7 +296,11 @@ func (m *mConn) stripeAvoidLocked() []any {
 			avoid = append(avoid, s.key)
 		}
 	}
-	return append(avoid, m.deadKeys...)
+	avoid = append(avoid, m.deadKeys...)
+	if stripeXDir {
+		avoid = append(avoid, stripeDirHint{up: m.stGrowUp}) // HS2_MCONN_STRIPE_XDIR (mconn_stripe_xdir.go)
+	}
+	return avoid
 }
 
 // stripeIdleLocked (Iran, manager): give the slot back once no stripe sub is
@@ -605,8 +611,17 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 			}
 		}
 	}
-	shared := false
-	if (chosen == nil || !bestRes && free-1 < stripeKeepFree) && stripeShare {
+	hint, hinted := stripeDirOf(avoid)
+	shared, xdir := false, false
+	if (chosen == nil || !bestRes && free-1 < stripeKeepFree) && hinted {
+		// HS2_MCONN_STRIPE_XDIR (mconn_stripe_xdir.go): a link only the other
+		// direction's stripes ride, before a light user's link
+		if ml := m.pickStripeXDirLocked(avoid, pool, hint.up); ml != nil {
+			chosen, bestRes, xdir = ml, false, true
+			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
+		}
+	}
+	if !xdir && (chosen == nil || !bestRes && free-1 < stripeKeepFree) && stripeShare {
 		// HS2_MCONN_STRIPE_SHARE (mconn_stripe_share.go): a busy pool has no
 		// link without a user — a lightly loaded one instead
 		if ml := m.pickStripeSharedLocked(avoid, pool); ml != nil {
@@ -614,7 +629,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 			bestUsers, bestRecent = int(ml.users.Load()), ml.recent
 		}
 	}
-	if !shared && (chosen == nil || !bestRes && free-1 < stripeKeepFree) {
+	if !shared && !xdir && (chosen == nil || !bestRes && free-1 < stripeKeepFree) {
 		stripeDiag.pickNone.Add(1)
 		if stripeAlone {
 			m.stripeAskLocked(m.now())
@@ -633,6 +648,10 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 	if shared {
 		chosen.stShared.Add(1)
 	}
+	dirN := stripeDirN(chosen, hint.up, hinted)
+	if dirN != nil {
+		dirN.Add(1)
+	}
 	if chosen.mtr != nil && stripeAlone {
 		// the TUN lane (HS2_L3_LANE) reads heavyN: heavy now, not at the
 		// sampler's next tick (which keeps it while the link is held)
@@ -641,7 +660,7 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 		}
 	}
 	if stripeLog {
-		log.Printf("stripe pick: link %d set-aside=%v shared=%v users=%d recent=%d free=%d", chosen.id, bestRes, shared, bestUsers, bestRecent, free)
+		log.Printf("stripe pick: link %d set-aside=%v shared=%v xdir=%v users=%d recent=%d free=%d", chosen.id, bestRes, shared, xdir, bestUsers, bestRecent, free)
 	}
 	rel := m.releaseFor(chosen)
 	var once sync.Once
@@ -651,6 +670,9 @@ func (m *LinkManager) pickStripe(avoid []any) (Link, func(), bool) {
 			stripeHold(chosen, -1)
 			if shared {
 				chosen.stShared.Add(-1)
+			}
+			if dirN != nil {
+				dirN.Add(-1)
 			}
 		})
 	}, true
