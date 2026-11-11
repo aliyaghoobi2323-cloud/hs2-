@@ -95,7 +95,9 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   www.cloudflare.com / cdnjs.cloudflare.com (name) and www.npmjs.com (address
   range).
 - Leftovers (branch menu38): the wildcard announcement above; the kept key
-  on `tls`; tests `TestLBWildcardAdvert` (as-is / scaled weights, fronts
+  on `tls`; `hs2 tunnel create` / `join` write the domain as "sni" on the
+  listening side too (before: the dialer only), so "both" works on a created
+  tunnel without setting an sni by hand; tests `TestLBWildcardAdvert` (as-is / scaled weights, fronts
   carried, the dialer's paths from it, a kept key not announced),
   `TestSyncListenersKeepsWildcard` (an lb reload never closes the `::` /
   `0.0.0.0` listener of a wildcard addr), `TestFrontSpecEdit` (tls keeps the

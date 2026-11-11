@@ -1045,11 +1045,15 @@ Findings from the lab demo (fixed or guarded here):
   back to reality / both reuses the key (no new key distribution; a dialer
   with a pinned public_key keeps working). A block without a key is still
   removed.
-* Open (not changed here): `hs2 tunnel create` on the listening side does
-  not write the domain as "sni", so "both" on such a tunnel first needs an
-  sni (per IP `lb.<side>[].sni` reloads without a restart). Plan: write
-  "sni" = domain on the listener at create/join (buildConfig) after checking
-  the classic-installer parity tests. Also `hs2 lb add-ip` of the only IP on
+* `hs2 tunnel create` / `join` did not write the domain as "sni" on the
+  listening side (only the dialer got it), so "both" on such a tunnel was
+  refused until an sni was set by hand (the lab demo set a per-IP
+  `lb.<side>[].sni`, which reloads without a restart). Fixed (menu38):
+  buildConfig writes "sni" = domain on the listener too; codes / clones made
+  from a listener config now carry the domain. The classic installer still
+  writes it on the dialer only (an existing listener: set "sni" or a per-IP
+  sni before "both").
+* Open: `hs2 lb add-ip` of the only IP on
   a dialer without bind_local_ip fails the weight check (primary "" joins
   with 50 %): the documented `tunnel join --update` path works; plan: use the
   added IP as the primary when the dialer has no bind and one public IP.
