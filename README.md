@@ -782,7 +782,7 @@ front` / new menu → 4). Behaviour changes only where a **new default** applies
 
 What changes for an existing deployment after the upgrade:
 
-| what | where | before (r31 / r34) | after (rel52 / rel53) |
+| what | where | before (r31 / r34) | after (rel52 / rel53 / rel54) |
 |------|-------|--------------------|---------------|
 | `HS2_LB_JUDGE_DATA` — the LB judge counts only dials that failed before TCP connected (a front's handshake failure no longer lowers a path) | both sides | off | **on** |
 | `HS2_LB_RESCUE` — a light user whose only sub sits on a lowered / cut path gets a copy on a good path, at once | Iran (edge) | off | **on** |
@@ -791,9 +791,12 @@ What changes for an existing deployment after the upgrade:
 | `HS2_REFILL_WAIT_MS` / `HS2_REFILL_WAIT_BYTES` — after a link loss the edge holds a new connection up to 300 ms for a link with the fewest bytes (branch start42) | Iran (edge) | off | **300 / 1** |
 | `HS2_START_DIAL` — the first pool, and a pool back after an outage, dial through a start gate (32 at a time) | kharej (exit) | off | **on** |
 | `HS2_MCONN_STRIPE_RESEND` — a striped connection's failed write is kept and resent when its link dies, with a 3 s last-sub grace (`HS2_MCONN_STRIPE_GRACE_MS`; rel49) | both sides | off | **on** |
+| `HS2_MCONN_STRIPE_FAST` — a single upload's stripe widens fast (doubling chain, several pool links at once, 3 standing reserve links `HS2_MCONN_STRIPE_FAST_RESERVE`, 0 = no reserve; rel54) | Iran (edge) | off | **on** |
+| `HS2_MCONN_STRIPE_FAST_EARLY_MS` — in a raw connection's first second the upload rate is sampled every 200 ms, so a fast upload upgrades to stripe in ~400 ms (rel54) | Iran (edge) | off | **200** |
+| `HS2_MCONN_STRIPE_UP_PATHQ` — the upload stripe gate reads the light users' queue per path, not only the overall one (rel54) | Iran (edge) | off | **on** |
 | `hs2-menu` with no argument | installer | classic menu | **new menu** (classic: `c`, `hs2-menu --classic`, `HS2_MENU=classic`, `default_menu=classic` in `/etc/hs2/menu.conf`) |
 
-These eight keys are part of the production default table, so (like every key
+These keys (eight since rel52, three more Iran-side upload keys in rel54) are part of the production default table, so (like every key
 in it) they apply only on **reverse `l3mtcp`** tunnels and not under
 `HS2_DEFAULTS=legacy`; every other carrier and direct mode keep all keys off,
 exactly as in r31. Every other key of that table already had its r31 / r34
@@ -810,7 +813,7 @@ window is per tunnel; a first lab u8 battery gained (n=6+6) but the
 confirmation round did not replicate it on either lab, so it stays a lab
 key — `docs/reality-architecture.md` §11.11.7), and the lab-only
 trace keys `HS2_MCONN_TRACE`, `HS2_MCONN_TRACE_PORT`, `HS2_MCONN_TRACE_GAME`
-(rel52: also traces game-like light two-way connections).
+(rel52: also traces game-like light two-way connections); the up54–up57 lab keys `HS2_MCONN_STRIPE_XDIR`, `HS2_MCONN_STRIPE_UP_NOSHARE` (Iran) and `HS2_STRIPE_UP_SUB_WIN_MB` (kharej) stay off.
 
 Behaviour that changed without a key since r31: a whole-peer outage no longer
 cools the non-primary LB paths (rel51); refused dials before the peer listens
@@ -826,6 +829,10 @@ Restore the old behaviour:
   `Environment=HS2_LB_RESCUE=0 HS2_LB_RESCUE_CALLFREE=0 HS2_LB_CALL_LATE=0 HS2_REFILL_WAIT_MS=0 HS2_REFILL_WAIT_BYTES=0`
   (Iran), `Environment=HS2_START_DIAL=0` (kharej), then
   `systemctl restart hs2`;
+- **rel54's fast upload only:** on Iran
+  `Environment=HS2_MCONN_STRIPE_FAST=0` (turns FAST, its reserve and
+  EARLY_MS off), or one part at a time: `HS2_MCONN_STRIPE_FAST_RESERVE=0`,
+  `HS2_MCONN_STRIPE_FAST_EARLY_MS=0`, `HS2_MCONN_STRIPE_UP_PATHQ=0`;
 - **the whole default table off** (as before `defaults22`, older than r31):
   `Environment=HS2_DEFAULTS=legacy`;
 - **the classic menu:** `default_menu=classic` (new menu → 9 → 4).
@@ -995,6 +1002,9 @@ defaults; ...)`.
 | `HS2_LB_CALL_LATE` | `1` | Iran (edge) |
 | `HS2_REFILL_WAIT_MS` | `300` | Iran (edge) |
 | `HS2_REFILL_WAIT_BYTES` | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_FAST` (rel54; reserve `HS2_MCONN_STRIPE_FAST_RESERVE`, default 3) | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_FAST_EARLY_MS` (rel54) | `200` | Iran (edge) |
+| `HS2_MCONN_STRIPE_UP_PATHQ` (rel54) | `1` | Iran (edge) |
 | `HS2_START_DIAL` | `1` | kharej (exit) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |

@@ -98,6 +98,11 @@ var Table = []Key{
 	{"HS2_START_DIAL", "1", Exit},
 	{"HS2_REFILL_WAIT_MS", "300", Edge},
 	{"HS2_REFILL_WAIT_BYTES", "1", Edge},
+	// up57: a single upload's stripe widens fast and early (Iran, the
+	// stripe's sender); the upload gate reads the light users' queue per path
+	{"HS2_MCONN_STRIPE_FAST", "1", Edge},
+	{"HS2_MCONN_STRIPE_FAST_EARLY_MS", "200", Edge},
+	{"HS2_MCONN_STRIPE_UP_PATHQ", "1", Edge},
 }
 
 var byName = func() map[string]Key {

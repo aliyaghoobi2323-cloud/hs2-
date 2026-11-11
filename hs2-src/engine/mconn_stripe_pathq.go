@@ -2,7 +2,6 @@ package engine
 
 import (
 	"net"
-	"os"
 	"slices"
 	"sync/atomic"
 	"time"
@@ -29,8 +28,6 @@ var stripeUpPathQOn atomic.Bool
 // stripePathQMin: active light links a path needs before its own median
 // counts (fewer: one stale srtt would hold the gate shut).
 const stripePathQMin = 4
-
-func init() { stripeUpPathQOn.Store(os.Getenv("HS2_MCONN_STRIPE_UP_PATHQ") == "1") }
 
 // linkPathOf: the local IP of an edge link's socket ("" when unknown).
 func linkPathOf(l *mtcpLink) string {

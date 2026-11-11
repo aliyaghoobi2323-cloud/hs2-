@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -27,10 +26,6 @@ import (
 // 1 s ticks and their rules (stripeHotTicks for a download). No wire change:
 // the upgrade is the same handshake, earlier.
 var stripeFastEarly atomic.Int64
-
-func init() {
-	stripeFastEarly.Store(int64(stripeEarlyFromEnv(os.Getenv("HS2_MCONN_STRIPE_FAST_EARLY_MS"))))
-}
 
 func stripeEarlyFromEnv(v string) time.Duration {
 	n, err := strconv.Atoi(strings.TrimSpace(v))
