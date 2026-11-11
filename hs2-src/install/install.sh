@@ -5360,8 +5360,28 @@ auto_backup(){
 # checked). With a tunnel name it upgrades only that one; with none, all of
 # them. Either way the user sees the exact restart list and confirms first — a
 # restart briefly drops that tunnel's traffic, which matters on a busy tunnel.
+# heal_alert_units: an older upgrade rewrote hs2-alert-<unit>.service (the
+# alert check, a oneshot) as a TUNNEL unit — a second `hs2 run -c` on the same
+# config as <unit>, running beside the real tunnel. Such a unit (named
+# hs2-alert-X, running X's own config) is put back as the alert check.
+heal_alert_units(){
+  local f n x c
+  for f in "$UNIT_DIR"/hs2-alert-*.service; do
+    [ -f "$f" ] || continue
+    grep -qE '^ExecStart=[^ ]+ run -c ' "$f" || continue
+    n=$(basename "$f" .service); x=${n#hs2-alert-}
+    [ -f "$UNIT_DIR/$x.service" ] || continue
+    c=$(tm_cfg "$n"); [ -n "$c" ] && [ "$c" = "$(tm_cfg "$x")" ] || continue
+    warn "$n ran a second copy of tunnel $x (left by an older upgrade) — it is the alert check again."
+    systemctl disable --now "$n.service" >/dev/null 2>&1 || true
+    alert_enable "$x" "$c"
+  done
+  return 0
+}
+
 upgrade(){ # [tunnel]
   local all units u role fails=0 a
+  heal_alert_units
   all=$(tm_units)
   [ -n "$all" ] || die "hs2 is not installed on this server (no tunnel). Run without 'upgrade' to install."
   if [ -n "${1:-}" ]; then

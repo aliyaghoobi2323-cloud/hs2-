@@ -66,4 +66,16 @@ printf '[Unit]\nDescription=x\n[Service]\nType=oneshot\nNice=19\nExecStart=/usr/
 ln -s /dev/null "$T/u2/hs2-masked.service"
 got=$(bash -c "UNIT_DIR='$T/u2'; source '$T/tmu.sh'; tm_units" | tr '\n' ' ')
 check "tm_units: tunnels and a masked unit, never hs2-alert-*/hs2-stats (got: $got)" '[ "$got" = "hs2 hs2-de1 hs2-masked " ]'
+# heal_alert_units: an alert unit an older upgrade turned into a 2nd tunnel daemon
+sed -n '/^heal_alert_units(){/,/^}/p;/^tm_cfg(){/p' "$INST" > "$T/heal.sh"
+mkdir -p "$T/u3"
+printf '[Service]\nType=simple\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/config.json\n' > "$T/u3/hs2.service"
+cp "$T/u3/hs2.service" "$T/u3/hs2-alert-hs2.service"
+printf '[Service]\nType=simple\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/other.json\n' > "$T/u3/hs2-alert-x.service"
+: > "$T/sd"
+out=$(PATH="$T/bin:$PATH" bash -c "warn(){ echo WARN: \$* >&2; }; alert_enable(){ echo \"alert_enable \$1 \$2\"; }
+UNIT_DIR='$T/u3'; source '$T/heal.sh'; heal_alert_units" 2>&1)
+check "heal: hs2-alert-hs2 running hs2's config is stopped and re-made as the alert check" 'echo "$out" | grep -qx "alert_enable hs2 /etc/hs2/config.json" && grep -q "disable --now hs2-alert-hs2.service" "$T/sd"'
+check "heal: a real tunnel named alert-x (own config, no unit x) is left alone" '! echo "$out" | grep -q "alert_enable x"'
+check "upgrade heals before listing tunnels" 'echo "$body" | grep -q "^  heal_alert_units"'
 exit $fail
