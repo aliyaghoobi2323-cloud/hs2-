@@ -60,7 +60,7 @@ var lbRescueRaw bool // loadEnvKeys: HS2_LB_RESCUE_RAW
 
 var (
 	rescueFactor = 0.25
-	rescuePerSec = int64(400)
+	rescuePerSec = int64(100) // HS2_LB_RESCUE_PER_SEC (lb_rescue_callfree.go); was 400
 	rescueSec    atomic.Int64 // the current second (unix)
 	rescueN      atomic.Int64 // upgrades in it
 	// rescueTotal / rescueRefused: upgrades done / refused by the rate bound.
@@ -181,7 +181,7 @@ func (m *LinkManager) steerRescueLocked(byPath map[string][]*managedLink) {
 	}
 	if t := rescueTotal.Load(); len(low) > 0 && (len(st.rescued) == 0 || t != st.rescueLogged) {
 		st.rescueLogged = t
-		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load()))
+		st.logs = append(st.logs, fmt.Sprintf("lb rescue: %d link(s) on lowered paths — copies given past the budget so far %d, copy subs moved off %d (refused by the rate bound %d, placed off call links %d)", len(low), t-rescueDual.Load(), rescueDual.Load(), rescueRefused.Load(), rescueCallFreeN.Load()))
 	}
 	st.rescued = rescueMark(st.rescued, low)
 }

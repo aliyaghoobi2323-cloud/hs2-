@@ -57,7 +57,11 @@ func (m *LinkManager) leaveHeldBounded(w *holdWaiter) (ml *managedLink, done boo
 		if q != w {
 			continue
 		}
-		ml = m.pickLocked(refillWaitCapX * m.refillCapLocked())
+		if refillWaitBytes {
+			ml = m.pickByBytesLocked(refillWaitCapX * m.refillCapLocked()) // v3
+		} else {
+			ml = m.pickLocked(refillWaitCapX * m.refillCapLocked())
+		}
 		if ml == nil {
 			m.mu.Unlock()
 			return nil, false
@@ -93,4 +97,27 @@ func (m *LinkManager) waitHeld(ctx context.Context, w *holdWaiter) (ml *managedL
 			return nil, false
 		}
 	}
+}
+
+// refillWaitBytes (HS2_REFILL_WAIT_BYTES=1, edge, default off; v3 of the
+// bound): a connection leaving the hold at the bound goes to the serving link
+// under the limit that moved the fewest bytes in the last sample (rate, both
+// directions; ties: fewer users), not by Pick's connection counts. v2 put the
+// leavers by counts and still sent them to links whose queues were the
+// slowest at the start (docs/reality-architecture.md 8.7, 8.9).
+var refillWaitBytes bool // loadEnvKeys
+
+// pickByBytesLocked: the serving link with users < limit and the lowest byte
+// rate; nil when none. Caller holds m.mu.
+func (m *LinkManager) pickByBytesLocked(limit int) *managedLink {
+	var best *managedLink
+	for _, ml := range m.links {
+		if !ml.serving() || !m.infoReadyLocked(ml) || stripeOn(ml) || int(ml.users.Load()) >= limit {
+			continue
+		}
+		if best == nil || ml.rate < best.rate || (ml.rate == best.rate && ml.users.Load() < best.users.Load()) {
+			best = ml
+		}
+	}
+	return best
 }

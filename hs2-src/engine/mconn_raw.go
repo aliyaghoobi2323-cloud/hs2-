@@ -352,6 +352,7 @@ func (m *mConn) rawTick() {
 		default:
 			m.lightOpening = true
 			avoid := m.callAvoidLocked(append([]any{m.raw1.key}, m.deadKeys...)) // HS2_MCONN_CALL_AVOID
+			avoid = m.rescueAvoidLocked(avoid, m.raw1.key)                       // HS2_LB_RESCUE_CALLFREE
 			m.mu.Unlock()
 			obs.mconnLiteUpgrade.Add(1)
 			m.upgradeRaw(avoid) // in the timer's own goroutine

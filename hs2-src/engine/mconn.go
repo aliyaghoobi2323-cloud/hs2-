@@ -1953,6 +1953,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					avoid := make([]any, 0, 1+len(m.deadKeys))
 					avoid = append(avoid, live[0].key)
 					avoid = m.callAvoidLocked(append(avoid, m.deadKeys...)) // HS2_MCONN_CALL_AVOID
+					avoid = m.rescueAvoidLocked(avoid, live[0].key)         // HS2_LB_RESCUE_CALLFREE
 					go m.openLight(avoid)
 				}
 			}
