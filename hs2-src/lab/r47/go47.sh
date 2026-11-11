@@ -11,6 +11,7 @@ for spec in $PLAN; do
     b:tls) PLAIN=1 T=45s r $D/run1.sh b-tls-$i "";;
     c:mix) T=60s r $D/run1.sh c-mix-$i "15:bbad";;
     c:mixr) BTLS=1 T=60s r $D/run1.sh c-mixr-$i "15:bbad";;
+    c:mixtrC) HS2BIN=hs2-r47c XENV=HS2_MCONN_TRACE=1 T=60s r $D/run1.sh c-mixtrC-$i "15:bbad";;
     c:mixtr) XENV=HS2_MCONN_TRACE=1 T=60s r $D/run1.sh c-mixtr-$i "15:bbad";;
     c:tlstr) PLAIN=1 XENV=HS2_MCONN_TRACE=1 T=60s r $D/run1.sh c-tlstr-$i "15:bbad";;
     st:old) HS2BIN=hs2-r45 T=30s r $D/run1.sh st-old-$i "";;
@@ -18,6 +19,7 @@ for spec in $PLAN; do
     c:mixN) HS2BIN=hs2-r47 T=60s r $D/run1.sh c-mixN-$i "15:bbad";;
     c:tlsN) PLAIN=1 HS2BIN=hs2-r47 T=60s r $D/run1.sh c-tlsN-$i "15:bbad";;
     p:old) BTLS=1 HS2BIN=hs2-r45 T=40s r $D/run1.sh p-old-$i "";;
+    p:newc) BTLS=1 HS2BIN=hs2-r47c T=40s r $D/run1.sh p-newc-$i "";;
     p:new) BTLS=1 HS2BIN=hs2-r47b T=40s r $D/run1.sh p-new-$i "";;
     c:mixB) HS2BIN=hs2-r47b T=60s r $D/run1.sh c-mixB-$i "15:bbad";;
     c:tls) PLAIN=1 T=60s r $D/run1.sh c-tls-$i "15:bbad";;

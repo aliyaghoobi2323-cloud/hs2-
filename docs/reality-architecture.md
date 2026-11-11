@@ -2351,15 +2351,14 @@ peer's tls IP (our cert) is never refused. Test
   the pool has them (path diversity in the call pick, not only link
   business), and/or let the stuck trigger (every sub on one lowered path)
   run under `HS2_LB_CALL_LATE` alone; (3) c mix vs tls, n>=8 each.
-* **A pure reality primary with a cold dialer (`p`, `BTLS=1`).** 11.6.3's
-  fix shortens the window (dials whose certificate or proof wait overlaps the
-  first announcement now fail at once) but the dials whose handshake
-  finished before ANY name was known still wait their 10 s when the
-  announcement comes after them and the proof read is not re-checked in time
-  (`proof` 1 per run in `p-new`, cover 6-7 vs 13 with rel45). Plan: measure
-  `p-newc` (final binary, 4 queued) against `p-old` at n>=6; if a stall
-  remains, re-check in-flight dials on the announcement itself (wake the
-  watchers instead of their 100 ms tick), and recommend `hs2 reality pin`
+* **A pure reality primary with a cold dialer (`p`, `BTLS=1`, 40 s): the
+  user-side effect is not yet measured at n.** With the handshake-time check
+  only (`p-new`, n2) a 10 s proof wait was still in each run (the
+  certificate came before the announcement); with the final binary (proof
+  wait re-checked every 100 ms, `p-newc-1`) the run had 0 proof timeouts and
+  1 `ErrTargetAnswered`, links 51/50/49, crowd p99 270. rel45 (`p-old`, n2):
+  1 proof timeout per run, crowd p99 199/252. Plan: `p-newc` vs `p-old` at
+  n>=6 (go47.sh arms `p:newc` / `p:old`), and recommend `hs2 reality pin`
   or `both` (not pure reality) for the tunnel's primary IP in the menu.
 * **A whole-peer outage in the middle of a run** (the listener restarts): the
   same class as 11.6.2 after the start grace — every non-primary path is
