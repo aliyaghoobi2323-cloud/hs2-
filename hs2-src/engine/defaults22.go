@@ -70,6 +70,7 @@ func loadEnvKeys() {
 	lbFastVerdict = envOn("HS2_LB_FAST_VERDICT")
 	refillWait = msFromEnv(envDefault("HS2_REFILL_WAIT_MS"), 0)
 	refillWaitBytes = envOn("HS2_REFILL_WAIT_BYTES")
+	startDial = envOn("HS2_START_DIAL")
 }
 
 // msFromEnv is envMsDefault on a value already read.
