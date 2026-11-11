@@ -18,6 +18,8 @@ case $V in
   s) HV=""; T=30s;;
   u8) HV=up; T=30s; KA=12; HCTL=direct;;
   u1) HV=up; HP=1; T=30s; HCTL=direct;;  # one upload connection, no kill (stripe speed)
+  u8w) HV=up; T=22s; KA=12; HCTL=direct; export PROBE_EXTRA="-warm 12s";;  # rel52: u8, light-user stats only over the 10 s after the kill (12-22 s)
+  u8n) HV=up; T=22s; KA=0; HCTL=direct; export PROBE_EXTRA="-warm 12s";;   # rel52: the same window, no kill (control)
 esac
 export HOME=/root GOPATH=/root/go PATH=$PATH:/usr/local/go/bin MODE=l3mtcp EMU=kernel RATE=1000mbit DELAY=37ms QUEUE=100ms
 export T BULK=0 CALL=2mbit GAME=1 MIN_LINKS=100 MAX_LINKS=150 CROWD=3000 REVERSE=1 NOWARM=1 WORKDIR=/tmp/s49w PATHS=3 LB_MODE=auto LOSS KILL_AT=$KA

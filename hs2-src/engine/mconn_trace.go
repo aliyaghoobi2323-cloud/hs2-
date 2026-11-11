@@ -16,17 +16,23 @@ import (
 // moved between mTraceMinRate and mTraceMaxRate over the first mTraceWindow
 // (events before the decision are kept in a small buffer and written then) —
 // or, with HS2_MCONN_TRACE_PORT=<port>, for the connections of that port only.
+// HS2_MCONN_TRACE_GAME=1 (rel52, lab) also traces game-like connections: a
+// light two-way stream (mTraceGameMin..mTraceGameMax in the window, the smaller
+// direction at least half the larger, so crowd request/reply pairs stay out).
 // When off, an mConn carries a nil *mtrace and every hook is one nil check.
 
 var (
 	mtraceOn   = os.Getenv("HS2_MCONN_TRACE") == "1"
 	mtracePort = func() int { n, _ := strconv.Atoi(os.Getenv("HS2_MCONN_TRACE_PORT")); return n }()
+	mtraceGame = os.Getenv("HS2_MCONN_TRACE_GAME") == "1"
 )
 
 const (
 	mTraceWindow  = 10 * time.Second
 	mTraceMinRate = 1_000_000 / 8 * 10 // bytes in the window (1 Mbit/s)
 	mTraceMaxRate = 4_000_000 / 8 * 10 // 4 Mbit/s
+	mTraceGameMin = 8_000 / 8 * 10     // 8 kbit/s
+	mTraceGameMax = 200_000 / 8 * 10   // 200 kbit/s
 	mTraceReport  = time.Second
 	mTraceSlow    = 50 * time.Millisecond
 	mTraceBufMax  = 64
@@ -96,9 +102,12 @@ func (t *mtrace) decideLocked(now time.Time) {
 	if t.state != 0 || mtracePort != 0 || now.Sub(t.t0) < mTraceWindow {
 		return
 	}
-	v := max(t.sent.Load(), t.recvd.Load())
+	sent, recvd := t.sent.Load(), t.recvd.Load()
+	v := max(sent, recvd)
 	if v >= mTraceMinRate && v <= mTraceMaxRate {
 		t.enableLocked("call-like volume")
+	} else if mtraceGame && v >= mTraceGameMin && v <= mTraceGameMax && 2*min(sent, recvd) >= v {
+		t.enableLocked("game-like volume")
 	} else {
 		t.state = -1
 		t.buf = nil
