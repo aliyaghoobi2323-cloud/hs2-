@@ -834,6 +834,46 @@ restart_unit(){ # unit
   [ "${after:-0}" != 0 ] && [ "$after" != "${before:-0}" ]
 }
 
+# dropin_exec_sync UNIT: a drop-in (systemctl edit → override.conf) whose
+# ExecStart= runs ANOTHER hs2 binary (a hand-copied /usr/local/bin/hs2-r31,
+# /root/hs2/hs2 …) wins over the unit file, so an upgrade would replace $BIN,
+# restart the tunnel and still run the old build. Point such an ExecStart at
+# $BIN (same arguments; the file is kept as NAME.pre-upgrade, which systemd
+# ignores) and say so. Only an `X run …` line is touched — a drop-in that wraps
+# hs2 in something else is reported, never edited.
+dropin_exec_sync(){ # unit
+  local u="$1" d="$UNIT_DIR/$1.service.d" f b changed=0
+  [ -d "$d" ] || return 0
+  for f in "$d"/*.conf; do
+    [ -f "$f" ] || continue
+    b=$(sed -n 's/^[[:space:]]*ExecStart=[-@:+!]*\([^[:space:]]\{1,\}\).*/\1/p' "$f" | tail -1)
+    [ -n "$b" ] && [ "$b" != "$BIN" ] || continue
+    if ! grep -qE '^[[:space:]]*ExecStart=[-@:+!]*[^[:space:]]+[[:space:]]+run([[:space:]]|$)' "$f"; then
+      grep -qE "^[[:space:]]*ExecStart=.*[[:space:]]$BIN[[:space:]]+run([[:space:]]|\$)" "$f" ||
+        warn "$u: $f sets ExecStart=$b … (not an 'hs2 run' line) — left as is; check it runs $BIN."
+      continue
+    fi
+    cp -p "$f" "$f.pre-upgrade"
+    sed -i -E "s#^([[:space:]]*ExecStart=[-@:+!]*)[^[:space:]]+([[:space:]]+run([[:space:]]|\$))#\1$BIN\2#" "$f"
+    warn "$u: its drop-in $f ran another binary ($b) — it now runs $BIN (old file: $f.pre-upgrade)."
+    changed=1
+  done
+  [ "$changed" = 0 ] || systemctl daemon-reload
+  return 0
+}
+
+# running_exe_ok UNIT: the unit's running process is $BIN (not an old copy a
+# drop-in or a hand edit still points at).
+running_exe_ok(){ # unit
+  local pid exe
+  pid=$(tm_prop "$1" MainPID)
+  [ "${pid:-0}" != 0 ] || return 0
+  exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || return 0
+  [ "$exe" = "$BIN" ] && return 0
+  err "$1 runs $exe, not the upgraded $BIN — see: systemctl cat $1"
+  return 1
+}
+
 write_service(){
   local role="$1"
   unit_unmask "$UNIT"   # before writing: a masked unit file is a /dev/null symlink
@@ -5353,8 +5393,9 @@ upgrade(){ # [tunnel]
     # sure it starts on boot.
     role=kharej; grep -q '"mode"[[:space:]]*:[[:space:]]*"dial"' "$CFG" && role=iran
     write_service "$role"
+    dropin_exec_sync "$u"
     systemctl enable "$u" >/dev/null 2>&1 || true
-    if restart_unit "$u"; then
+    if restart_unit "$u" && running_exe_ok "$u"; then
       ok "$u upgraded and running (autostart: $(systemctl is-enabled "$u" 2>/dev/null || true))."
       if ! verify_tunnel "$CFG" "${HS2_VERIFY_SECS:-60}"; then
         warn "$u has not reconnected yet. If the OTHER server still runs the old version, upgrade it"
