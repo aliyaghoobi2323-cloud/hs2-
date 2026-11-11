@@ -1142,6 +1142,9 @@ func (realCreator) healthy(unit string) bool {
 
 func (realCreator) remove(unit, cfgPath string) {
 	exec.Command("systemctl", "disable", "--now", unit).Run()
+	// its alert timer (hs2-alert-UNIT.timer): left behind it ran every 60 s
+	// forever against a tunnel that is gone
+	exec.Command("systemctl", "disable", "--now", "hs2-alert-"+unit+".timer").Run()
 	removeUnitFiles(unit, cfgPath)
 	exec.Command("systemctl", "daemon-reload").Run()
 	exec.Command("systemctl", "reset-failed", unit).Run()
@@ -1153,6 +1156,8 @@ func (realCreator) remove(unit, cfgPath string) {
 func removeUnitFiles(unit, cfgPath string) {
 	os.Remove(filepath.Join(systemdDir, unit+".service"))
 	os.RemoveAll(filepath.Join(systemdDir, unit+".service.d"))
+	os.Remove(filepath.Join(systemdDir, "hs2-alert-"+unit+".timer"))
+	os.Remove(filepath.Join(systemdDir, "hs2-alert-"+unit+".service"))
 	os.Remove(cfgPath)
 	os.Remove(filepath.Join(certDir, unit+".crt"))
 	os.Remove(filepath.Join(certDir, unit+".key"))

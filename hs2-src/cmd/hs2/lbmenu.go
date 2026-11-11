@@ -902,6 +902,21 @@ func removeIP(l []lbIP, ip string) ([]lbIP, error) {
 	return splitEqual(out), nil
 }
 
+// userIP: an IP the operator typed for --ip, in canonical form; brackets
+// around an IPv6 address are allowed, a zone (%eth0) and the unspecified
+// address are not.
+func userIP(s string) (string, bool) {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+		s = s[1 : len(s)-1]
+	}
+	p := net.ParseIP(s)
+	if p == nil || p.IsUnspecified() {
+		return "", false
+	}
+	return p.String(), true
+}
+
 // routeSrc: the source IP the kernel picks towards dst ("" = unknown); a var
 // for the tests.
 var routeSrc = func(dst string) string {
@@ -1012,6 +1027,18 @@ func lbChangeCmd(sub string, args []string) int {
 	setLang(*lang)
 	if sub == "park" && *sweep {
 		return parkSweep(time.Now())
+	}
+	switch sub {
+	case "add-ip", "remove-ip", "park", "unpark":
+		// "[2001:db8::1]" (as written in addr) is accepted; a zone
+		// (fe80::1%eth0) or a non-IP is refused HERE — park/unpark went
+		// on with net.ParseIP(...) == nil, i.e. the IP "<nil>".
+		v, ok := userIP(*ip)
+		if !ok {
+			fmt.Printf(tr("ERROR: --ip %q is not an IP address (IPv4, or IPv6 without a %%zone)\n", "خطا: --ip %q یک آدرس IP نیست (IPv4، یا IPv6 بدون %%zone)\n"), *ip)
+			return 1
+		}
+		*ip = v
 	}
 	if !*dry {
 		rel, err := acquireLock(os.Getpid(), false, time.Now())

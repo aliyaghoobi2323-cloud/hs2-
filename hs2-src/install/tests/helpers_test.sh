@@ -89,5 +89,129 @@ check "remove_tunnel deletes the tunnel's warm record with its status file" 'sed
 check "uninstall clears /run/hs2 (warm records, status files, the ping-guard folder)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rm -f /run/hs2/\*.warm" && sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rmdir /run/hs2/icmp-echo-ignore"'
 check "remove_tunnel deletes the unit's systemd drop-in folder (a real-server report: an empty hs2.service.d stayed)" 'sed -n "/^remove_tunnel(){/,/^}/p" "$INST" | grep -q "rm -rf \"\${UNIT_DIR:?}/\$u.service.d\""'
 check "uninstall asks before removing the program and hs2-menu (default: keep)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "rm -f \"\$BIN\" \"\$MENU_BIN\""'
+# ---- cfg_put: config replace is atomic (rev53a) -------------------------------
+# The menus used `cat NEW > CFG`, which truncates CFG first: on a full disk the
+# tunnel's config was left empty/half-written, and the rollback `cat CFG.prev >
+# CFG` failed the same way. cfg_put writes beside CFG and renames only a
+# complete copy; on failure CFG is untouched and the status is non-zero.
+sed -n '/^cfg_put(){/,/^}/p' "$INST" > "$T/cp.sh"
+check "cfg_put exists in install.sh" 'grep -q "^cfg_put(){" "$T/cp.sh"'
+pat='cat "[$](cfg|tmp|new|1)([.]prev)?" > "[$](cfg|1)"'
+check "no menu path writes a tunnel config with a truncating cat any more" '! grep -nE "$pat" "$INST"'
+mkdir -p "$T/cp"; printf '{"a":1}\n' > "$T/cp/c.json"; chmod 600 "$T/cp/c.json"; printf '{"a":2}\n' > "$T/cp/n.json"
+bash -c "source '$T/cp.sh'; cfg_put '$T/cp/n.json' '$T/cp/c.json'"; rc=$?
+check "cfg_put: replaces the config, keeps mode 600, leaves no temp file" '[ $rc = 0 ] && grep -q "\"a\":2" "$T/cp/c.json" && [ "$(stat -c %a "$T/cp/c.json")" = 600 ] && [ "$(ls "$T/cp" | wc -l)" = 2 ]'
+ln -s c.json "$T/cp/link.json"; printf '{"a":3}\n' > "$T/cp/n.json"
+bash -c "source '$T/cp.sh'; cfg_put '$T/cp/n.json' '$T/cp/link.json'"
+check "cfg_put: a symlinked config is written through (the link stays a link)" '[ -L "$T/cp/link.json" ] && grep -q "\"a\":3" "$T/cp/c.json"'
+bash -c "source '$T/cp.sh'; cfg_put '$T/cp/missing.json' '$T/cp/c.json'"; rc=$?
+check "cfg_put: a failed copy returns non-zero and leaves the config intact" '[ $rc != 0 ] && grep -q "\"a\":3" "$T/cp/c.json" && [ "$(ls "$T/cp" | wc -l)" = 3 ]'
+if [ "$(id -u)" = 0 ] && command -v unshare >/dev/null 2>&1; then
+  # A REAL full disk: a 64 KiB tmpfs in a private mount namespace.
+  # (deterministic filler: random data could contain "keep" by chance)
+  head -c 200000 /dev/zero | tr '\0' x > "$T/cp/big.json"
+  mkdir -p "$T/cp/fs"
+  out=$(unshare -m bash -c "mount -t tmpfs -o size=64k tmpfs '$T/cp/fs' || exit 9
+    printf '{\"keep\":1}\n' > '$T/cp/fs/c.json'
+    source '$T/cp.sh'
+    if cfg_put '$T/cp/big.json' '$T/cp/fs/c.json'; then echo PUT=0; else echo PUT=1; fi
+    cat '$T/cp/fs/c.json'; ls '$T/cp/fs' | wc -l" 2>&1)
+  check "cfg_put on a FULL disk: fails, the config keeps its old content, no temp left" 'echo "$out" | grep -qx PUT=1 && echo "$out" | grep -qx "{\"keep\":1}" && echo "$out" | tail -1 | grep -qx 1'
+  # the old way, for contrast: the truncating cat destroys the config
+  out=$(unshare -m bash -c "mount -t tmpfs -o size=64k tmpfs '$T/cp/fs' || exit 9
+    printf '{\"keep\":1}\n' > '$T/cp/fs/c.json'; cat '$T/cp/big.json' > '$T/cp/fs/c.json' 2>/dev/null; grep -c keep '$T/cp/fs/c.json'" 2>&1)
+  check "(contrast) the old truncating cat on a full disk loses the config" 'echo "$out" | tail -1 | grep -qx 0'
+else
+  echo "SKIP cfg_put full-disk test (needs root + unshare)"
+fi
+# ---- drop-in ExecStart overrides (rev53a) -------------------------------------
+# A classic install runs a tunnel through a drop-in such as 40-tunnel1.conf
+# (ExecStart= reset + ExecStart=/opt/x/hs2 run -c /etc/hs2/t1.json). tm_cfg read
+# only the unit file (wrong config), and upgrade replaced $BIN but restarted the
+# tunnel on the drop-in's OLD binary while reporting it "upgraded".
+sed -n '/^tm_cfg(){/,/^}/p;/^tm_dropin_execs(){/,/^}/p;/^dropin_use_bin(){/,/^}/p' "$INST" > "$T/di.sh"
+for f in tm_cfg tm_dropin_execs dropin_use_bin; do check "$f exists in install.sh" "grep -q '^$f(){' '$T/di.sh'"; done
+SD="$T/sd"; mkdir -p "$SD/hs2-t1.service.d" "$SD/hs2-plain.service.d"
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/hs2-t1.json\n' > "$SD/hs2-t1.service"
+printf '[Service]\nExecStart=\nExecStart=/opt/hs2-old/hs2 run -c /etc/hs2/tunnel1.json\n' > "$SD/hs2-t1.service.d/40-tunnel1.conf"
+printf '[Service]\nCPUAffinity=0 1\n' > "$SD/hs2-t1.service.d/50-cpu.conf"
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/plain.json\n' > "$SD/hs2-plain.service"
+printf '[Service]\nLimitNOFILE=4096\n' > "$SD/hs2-plain.service.d/10-limits.conf"
+cat > "$T/di_run.sh" <<RUN
+set -euo pipefail
+warn(){ echo "WARN: \$*" >&2; }; systemctl(){ echo "systemctl \$*" >> "$T/sdlog"; }
+UNIT_DIR="$SD"; BIN=/usr/local/bin/hs2
+source "$T/di.sh"
+RUN
+out=$(bash -c "source '$T/di_run.sh'; tm_cfg hs2-t1; tm_cfg hs2-plain; tm_cfg hs2-none; echo END" 2>&1)
+check "tm_cfg: a drop-in's ExecStart -c wins over the unit file" '[ "$(echo "$out" | sed -n 1p)" = /etc/hs2/tunnel1.json ]'
+check "tm_cfg: a unit without an ExecStart drop-in keeps its own -c" '[ "$(echo "$out" | sed -n 2p)" = /etc/hs2/plain.json ]'
+check "tm_cfg: an unknown unit prints nothing and is no error under set -e" '[ "$(echo "$out" | sed -n 3p)" = END ]'
+out=$(bash -c "source '$T/di_run.sh'; tm_dropin_execs hs2-t1; tm_dropin_execs hs2-plain; echo END" 2>&1)
+check "tm_dropin_execs: only the drop-in that sets ExecStart is listed" '[ "$out" = "$(printf "%s\nEND" "$SD/hs2-t1.service.d/40-tunnel1.conf")" ]'
+: > "$T/sdlog"
+out=$(bash -c "source '$T/di_run.sh'; dropin_use_bin hs2-t1; dropin_use_bin hs2-plain; echo END" 2>&1)
+check "dropin_use_bin: the override now runs the upgraded \$BIN with its own -c" 'grep -qx "ExecStart=/usr/local/bin/hs2 run -c /etc/hs2/tunnel1.json" "$SD/hs2-t1.service.d/40-tunnel1.conf"'
+check "dropin_use_bin: the ExecStart= reset line is kept" 'grep -qx "ExecStart=" "$SD/hs2-t1.service.d/40-tunnel1.conf"'
+check "dropin_use_bin: the original is kept as .pre-upgrade (ignored by systemd)" 'grep -q /opt/hs2-old/hs2 "$SD/hs2-t1.service.d/40-tunnel1.conf.pre-upgrade"'
+check "dropin_use_bin: says what it changed and reloads systemd once" 'echo "$out" | grep -q "ran another binary" && [ "$(grep -c daemon-reload "$T/sdlog")" = 1 ]'
+check "dropin_use_bin: other drop-ins are untouched, no temp files left" '[ "$(cat "$SD/hs2-t1.service.d/50-cpu.conf")" = "$(printf "[Service]\nCPUAffinity=0 1")" ] && [ "$(ls "$SD/hs2-t1.service.d" | wc -l)" = 3 ] && [ "$(ls "$SD/hs2-plain.service.d" | wc -l)" = 1 ]'
+: > "$T/sdlog"
+out=$(bash -c "source '$T/di_run.sh'; dropin_use_bin hs2-t1; echo END" 2>&1)
+check "dropin_use_bin: a second run changes nothing (idempotent, no reload)" '! echo "$out" | grep -q "ran another binary" && [ ! -s "$T/sdlog" ]'
+check "upgrade points drop-ins at the new binary and checks the running exe" 'sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "dropin_use_bin \"\$u\"" && sed -n "/^upgrade(){/,/^}/p" "$INST" | grep -q "unit_exe \"\$u\""'
+check "backup includes the unit's drop-in folder" 'sed -n "/^backup(){/,/^}/p" "$INST" | grep -qF "\$u.service.d\")"'
+
+# ---- helper units are not tunnels; their names are reserved (rev53a) ----------
+# tm_units globbed hs2-*.service, so hs2-stats / hs2-lb-park / hs2-alert-<u>
+# showed up as (broken) tunnels and upgrade/backup/uninstall walked them; and a
+# tunnel named "stats" got its unit overwritten when the sampler was enabled.
+sed -n '/^tm_units(){/,/^}/p;/^norm_unit(){/,/^}/p' "$INST" > "$T/un.sh"
+U2="$T/units"; mkdir -p "$U2"
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/config.json\n' > "$U2/hs2.service"
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/hs2-de1.json\n' > "$U2/hs2-de1.service"
+printf '[Service]\nType=oneshot\nExecStart=/usr/local/bin/hs2 stats sample\n' > "$U2/hs2-stats.service"
+printf '[Service]\nType=oneshot\nExecStart=/usr/local/bin/hs2 lb park --sweep\n' > "$U2/hs2-lb-park.service"
+printf '[Service]\nType=oneshot\nExecStart=/usr/local/bin/hs2 alert -c /etc/hs2/hs2-de1.json -u hs2-de1\n' > "$U2/hs2-alert-hs2-de1.service"
+printf '[Service]\nExecStart=/usr/local/bin/hs2-coreguard --watch\n' > "$U2/hs2-coreguard.service"
+ln -s /dev/null "$U2/hs2-masked.service"
+out=$(bash -c "set -euo pipefail; UNIT_DIR='$U2'; source '$T/un.sh'; tm_units | tr '\n' ' '" 2>&1)
+check "tm_units: only tunnels (and a masked tunnel) are listed, not hs2's helper units" '[ "$out" = "hs2 hs2-de1 hs2-masked " ]'
+printf '[Service]\nExecStart=/usr/local/bin/hs2 run -c /etc/hs2/hs2-stats.json\n' > "$U2/hs2-stats.service"
+out=$(bash -c "set -euo pipefail; UNIT_DIR='$U2'; source '$T/un.sh'; tm_units | tr '\n' ' '" 2>&1)
+check "tm_units: an older TUNNEL that happens to be named hs2-stats is still listed" 'echo "$out" | grep -q "hs2-stats "'
+for n in stats lb-park coreguard alert-hs2 hs2-alert-x menu; do
+  r=$(bash -c "source '$T/un.sh'; norm_unit '$n' && echo ACCEPTED || echo REJECTED" 2>&1)
+  check "norm_unit: the helper name '$n' is rejected as a tunnel name" '[ "$r" = REJECTED ]'
+done
+for n in de1 stats2 alerts lb; do
+  r=$(bash -c "source '$T/un.sh'; norm_unit '$n'" 2>&1)
+  check "norm_unit: '$n' is still a valid tunnel name" '[ "$r" = "hs2-$n" ]'
+done
+check "remove_tunnel also removes the tunnel's alert timer" 'sed -n "/^remove_tunnel(){/,/^}/p" "$INST" | grep -q "disable --now \"hs2-alert-\$u.timer\""'
+check "uninstall also removes the helper timers (hs2-stats, hs2-lb-park)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "for h in hs2-stats hs2-lb-park"'
+
+# ---- parse_link: a tampered link cannot inject JSON (rev53a) -------------------
+# Link fields go verbatim into JSON strings (and udp as a bare value) of this
+# server's config; a '"' let a link add keys that still parse (last key wins).
+sed -n '/^decode_link(){/p;/^valid_uint(){/,/^}/p;/^parse_link(){/,/^}/p' "$INST" | sed 's#</dev/tty#<"$LINKIN"#' > "$T/pl.sh"
+mklink(){ printf '%s' "$1" | base64 -w0; }
+pl(){ # decoded link -> PARSED:<sni>|<udp> or the die message
+  printf 'hs2://%s\n' "$(mklink "$1")" > "$T/linkin"
+  bash -c "set -euo pipefail; die(){ echo \"DIE: \$*\"; exit 1; }; LINKIN='$T/linkin'; source '$T/pl.sh'; parse_link; echo \"PARSED:\$DOMAIN|\$UDP|\$SHARED\"" 2>&1
+}
+out=$(pl '203.0.113.5:443|t.example.com|c2VjcmV0K2tleS89|127.0.0.1:8443|mtcp|false|tcp|direct|1380||||')
+check "parse_link: a normal link parses" '[ "$out" = "PARSED:t.example.com|false|c2VjcmV0K2tleS89" ]'
+out=$(pl '[2001:db8::5]:443|t.example.com|abc|127.0.0.1:8443|mtcp|true|tcp|direct|||||')
+check "parse_link: an IPv6 endpoint link parses" 'echo "$out" | grep -q "^PARSED:t.example.com|true|abc$"'
+out=$(pl '203.0.113.5:443|x","forward_ports":"22|abc|127.0.0.1:8443|mtcp|false|tcp|direct|||||')
+check "parse_link: a '\"' in a field (JSON key injection) is refused" 'echo "$out" | grep -q "^DIE: the link carries an invalid character"'
+out=$(pl '203.0.113.5:443|t.example.com|ab\c|127.0.0.1:8443|mtcp|false|tcp|direct|||||')
+check "parse_link: a backslash in a field is refused" 'echo "$out" | grep -q "^DIE:"'
+out=$(pl '203.0.113.5:443|t.example.com|abc|127.0.0.1:8443|mtcp|true,"forward_ports":"22"|tcp|direct|||||')
+check "parse_link: udp must be exactly true/false (it is a bare JSON value)" 'echo "$out" | grep -q "^DIE:"'
+out=$(pl '203.0.113.5:443|t.example.com|abc|127.0.0.1:8443|mtcp|true,x:1|tcp|direct|||||')
+check "parse_link: udp with no quote at all is refused too" 'echo "$out" | grep -q "^DIE: the link carries an invalid udp field"'
+
 
 exit $fail
