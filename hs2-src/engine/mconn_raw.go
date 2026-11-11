@@ -339,7 +339,11 @@ func (m *mConn) rawTick() {
 	}
 	if m.liteWantDualLocked(now, uint64(m.rawRecvd.Load())) {
 		switch {
-		case m.upgradeCappedLocked(now):
+		// HS2_LB_RESCUE (lb_rescue.go): a light raw connection on a lowered
+		// path gets its copy past the budget, as in mConn.tick (most
+		// single-sub lite connections are raw: without this the rescue
+		// never reached them — lab k runs, 0-4 copies a run).
+		case m.upgradeCappedLocked(now) && !(m.rescueWantLocked(m.raw1) && rescueAllow(now)):
 			obs.mconnLiteCapped.Add(1)
 			m.tr.ev("lite: upgrade refused (duplication cap)")
 		case now.Before(m.lightRetryAt):

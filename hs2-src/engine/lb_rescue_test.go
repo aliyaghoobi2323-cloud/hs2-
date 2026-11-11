@@ -77,6 +77,45 @@ func TestMConnRescueCappedSingle(t *testing.T) {
 	noLeak(t, before)
 }
 
+// The same on a raw first sub (capMConnRaw: what nearly every single-sub
+// lite connection of a real crowd is): the rescue reaches its rate timer
+// too. Before the fix a raw connection on a lowered link stayed single under
+// a binding budget (lab k runs: 0-4 copies past the budget for a crowd of
+// 3000). Not on a lowered link, it stays raw and single.
+func TestMConnRescueCappedRaw(t *testing.T) {
+	withRescue(t, true)
+	before := runtime.NumGoroutine()
+	n, iran, exit := newRawPair(t)
+	liteBud.add(time.Now().Unix(), 1_000_000, 100_000) // budget exhausted
+	rescueMark(nil, []any{7})                          // some other link
+	time.Sleep(mLiteAfter + 1500*time.Millisecond)
+	if liveSubs(iran) != 1 || n.link(1) != nil {
+		t.Fatalf("upgraded off a lowered path: %d subs", liveSubs(iran))
+	}
+	liteBud.add(time.Now().Unix(), 1_000_000, 100_000)
+	rescueMark(map[any]bool{7: true}, []any{0}) // now link 0 (the raw sub's)
+	mWaitFor(t, "raw rescue upgrade", mLiteAfter+3*time.Second, func() bool {
+		return liveSubs(iran) == 2 && liveSubs(exit) == 2 && !iran.rawW.Load()
+	})
+	if l := n.link(1); l.plane != planeLight || len(l.avoid) == 0 || l.avoid[0] != 0 {
+		t.Fatalf("copy: plane %v avoid %v, want light avoiding link 0", l.plane, l.avoid)
+	}
+	up, down := randBytes(64<<10, 31), randBytes(64<<10, 32)
+	both(t,
+		func() error { return xfer(iran, up, 4<<10, 0) },
+		func() error { return xfer(exit, down, 4<<10, 0) },
+		func() error { return readN(exit, up) },
+		func() error { return readN(iran, down) },
+	)
+	if !rawDone(iran) {
+		t.Fatal("raw handshake not over after a two-way transfer")
+	}
+	rescueMark(map[any]bool{0: true}, nil)
+	resetLiteBudget()
+	closeAndWait(t, iran, exit)
+	noLeak(t, before)
+}
+
 // Not on a lowered path, or a download: the budget still refuses.
 func TestMConnRescueSparesOthers(t *testing.T) {
 	withRescue(t, true)
