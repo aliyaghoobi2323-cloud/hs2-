@@ -19,6 +19,27 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel44 — Reality cold dialer, parity without a lock, bounded target wait (binary + menu)
+
+- **Cold dialer fixed**: the dialing side remembers the announced reality
+  profiles (public key, short ids, server names per IP) in
+  `<config>.peer-fronts.json` (atomic, 0600) and dials them as `both` at the
+  next start until the announcement arrives, so a restart no longer leaves a
+  tunnel whose IPs are all pure `reality` down. New `hs2 reality pin-code`
+  (listener) / `hs2 reality pin` (dialer), printed by `hs2 reality front`;
+  menu screen 4 `p) Pin code`; `front … reality` refuses the last tls-capable
+  IP without proof the dialer has the key (`--dialer-has-key`); doctor check
+  `reality cold start`.
+- **Parity suite per connection**: the sec41 linkname swap of uTLS's global
+  TLS 1.3 preference list under a lock (serialised handshakes; a data race
+  with uTLS clients) is replaced by a per-connection restriction of the
+  parsed client hello.
+- **Target wait bounded to 3 s** on authenticated links (`target_slow`,
+  `target_hello_late`), instead of up to 5 + 10 s inside the dialer's single
+  10 s deadline ("reading server proof: i/o timeout").
+- Merged: sec41 (Reality security review), target43 (side-aware targets),
+  start42 (start window). See docs/reality-architecture.md §11.
+
 ## After rel40 — branch start42: the start window (binary)
 
 - **`HS2_START_DIAL` (kharej, on by default)**: the first 4 s of the exit's pool

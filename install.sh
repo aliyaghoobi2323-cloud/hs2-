@@ -5637,6 +5637,7 @@ nm_security(){
     say "   5) $(nm_t "Rotate the Reality keys (every reality / both IP)" "چرخش کلیدهای Reality (همهٔ IPهای reality / both)")"
     say "   6) $(nm_t "Doctor: fronts (target reachable and on the listener's side, key mismatch, fallbacks)" "پزشک: پوشش‌ها (دسترسی هدف و همخوانی با سمت شنونده، ناهمخوانی کلید، بازگشت به tls)")"
     say "   7) $(nm_t "Certificate (expiry, renewal, renew now)" "گواهی (انقضا، تمدید، تمدید فوری)")"
+    say "   p) $(nm_t "Pin code for a pure-reality IP (listener: print the command; dialer: paste it)" "کد ثبت برای IP فقط-reality (شنونده: چاپ دستور؛ شماره‌گیر: چسباندن آن)")"
     if [ "$NM_MODE" = advanced ]; then
       say "   8) $(nm_t "Rotate the key of one IP" "چرخش کلید یک IP")   9) $(nm_t "New key pair (print only)" "جفت‌کلید تازه (فقط نمایش)")"
       say "   e) $(nm_t "Edit config (cover page, camouflage fields)" "ویرایش پیکربندی (صفحهٔ پوششی، فیلدهای استتار)")"
@@ -5669,6 +5670,13 @@ nm_security(){
          [ -n "$t" ] && { nm_rx check-target "$t" -u "$NM_U"; nm_pause; } ;;
       5) nm_lock && { nm_rx rotate-key -u "$NM_U" --all; nm_unlock; nm_pause; } ;;
       6) nm_doctor_run front; nm_pause ;;
+      p|P) if "$BIN" reality pin-code -u "$NM_U" --lang "$NM_LANG" </dev/null 2>/dev/null | grep -q '^hs2 reality pin '; then
+             nm_rx pin-code -u "$NM_U"; nm_pause
+           else
+             nm_ask pc "$(nm_t "Paste the code (hs2rp1.…) printed on the listening server, Enter = cancel: " "کد (hs2rp1.…) چاپ‌شده روی سرور شنونده را بچسبانید، Enter = لغو: ")"
+             pc=${pc##* }
+             [ -n "$pc" ] && nm_lock && { nm_rx pin -u "$NM_U" "$pc"; nm_unlock; nm_pause; }
+           fi ;;
       7) if tm_cert_side "$NM_CFG"; then nm_edit tm_cert "$NM_U" "$NM_CFG"; else warn "$(nm_t "This side holds no certificate." "این سمت گواهی ندارد.")"; nm_pause; fi ;;
       8) [ "$NM_MODE" = advanced ] || continue
          nm_ask ip "$(nm_t "IP whose key to rotate: " "IP برای چرخش کلید: ")"

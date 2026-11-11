@@ -1848,3 +1848,98 @@ Remaining known limits:
   (SNI <-> IP mismatch), and the listener->target connection made for every
   visitor remain visible to a censor that correlates flows or resolves the
   SNI.
+
+## 11. rel44 (2026-11-11): cold dialer, parity without a global lock, bounded target wait
+
+Branch rel44 = rel40 + sec41 + target43 + start42.
+
+### 11.1 The cold dialer (fixed)
+
+A dialing side learns each listening IP's front (kind, public key, short ids,
+server names) from the lb announcement, which travels over a link. With
+every listening IP on pure `reality`, a dialer that starts cold (new install,
+restart, reboot) has no key: its tls hellos are spliced to the target (the
+dialer then waits for the server proof until its 10 s auth deadline, logged
+as `reading server proof: i/o timeout`), no link ever comes up, and it never
+hears the announcement. The tunnel stayed down unless `public_key` was pinned
+in the dialer's config.
+
+Fix (`cmd/hs2/frontcache.go`):
+
+* **Remembered fronts.** The dialer writes the announced public profiles to
+  `<config>.peer-fronts.json` (atomic: temp file in the same directory, fsync,
+  rename, fsync dir; mode 0600; public parts only, bound to the tunnel's
+  `addr`) whenever the announcement changes them, and loads them at start.
+  Until the first announcement of the run, a path without its own front dials
+  the remembered profile as **`both`** (reality first, tls at once on the same
+  path if reality fails), so a remembered profile is never worse than none: a
+  listener that went back to tls while the dialer was down is still reached.
+  The first announcement replaces the remembered profiles; an all-tls
+  announcement removes the file. A SIGHUP while no announcement has arrived
+  re-reads it.
+* **Pin code** (bilateral, like the join code): `hs2 reality pin-code -u U`
+  on the listener prints `hs2 reality pin -u U hs2rp1.…`; run on the dialer it
+  writes the same file (and reloads the tunnel). `hs2 reality front` and
+  `rotate-key` print the command after a reality/both change; menu screen 4
+  has `p) Pin code` (listener: print, dialer: paste).
+* **Guard.** `hs2 reality front … reality` refuses to make the LAST
+  tls-capable IP pure reality unless the live counters show a
+  reality-authenticated link (the dialer has the key, and rel44 dialers keep
+  it) or `--dialer-has-key` is given; it prints the pin command.
+* **Doctor** `reality cold start`: listener — WARN when every IP is pure
+  reality; dialer — OK with remembered/pinned keys, WARN when a path uses pure
+  reality and the key is neither pinned nor remembered.
+
+Tests: `TestColdDialerRemembersFronts` (a real RealityServer: a cold dialer
+dials tls and is refused — the bug; after an announcement the file is 0600 and
+public-only; a new runtime dials the remembered profile as both and gets in;
+an all-tls announcement removes the file), `TestRealityPinCode`,
+`TestColdDialerGuard`.
+
+Lab demo (lab 3, loopback, rel44 binary, 2 listening IPs, mtcp): phase 0 —
+listener pure reality, cold dialer without file: 0 links, fetch fails,
+`reading server proof` (the bug); phase 1 — listener `both`, dialer learns,
+file written 0600; phase 2 — listener pure reality (SIGHUP), links keep
+running; phase 3 — dialer restarted: `2 path(s) dial the remembered front`,
+first fetch through the tunnel 200 after 0.19 s, 8/8 links; doctor OK on the
+dialer, WARN on the listener (every IP pure reality).
+
+### 11.2 Suite parity without the global preference lock (fixed)
+
+sec41 made the target's TLS 1.3 suite the uTLS server's choice by swapping
+uTLS's package-level preference list (linkname) under a mutex held from
+before the handshake to its first write. Review:
+
+* It serialised every authenticated handshake's whole server flight
+  (key exchange, certificate, signature).
+* It was a **data race**: uTLS clients read the same list when they build a
+  hello (`makeClientHelloForApplyPreset`); `go test -race` on the parity test
+  flagged it. Any process with a uTLS client and the reality listener (the
+  mirror probe, cover dials, tests) could read a torn slice.
+
+Now `onlySuite13` (GetConfigForClient) rewrites, per connection, the parsed
+client hello's TLS 1.3 suites so the target's suite is the only one the
+server sees offered; the transcript uses the hello's original bytes, so the
+wire and the Finished are unchanged. No global state, no lock; the parity
+test (3 suites) and `-race` pass.
+
+### 11.3 Bounded target wait on authenticated links (fixed)
+
+An authenticated link waited for the target's connect (up to 5 s) and then
+its ServerHello (up to 10 s), while the dialer has ONE 10 s deadline for
+handshake + auth: a slow target (a SYN lost under a burst of 150 link dials,
+a site throttling many connections from one IP) made the link fail late as
+`reading server proof: i/o timeout` (seen in start42 and reality35 runs).
+Now the target's part is bounded by `authTargetBudget` = 3 s: no connect in
+time = `target_slow`, rejected at once ("both" falls back to tls); connected
+but no ServerHello in time = served with the mirrored defaults
+(`target_hello_late` counter in `hs2 reality status`). Target RTT is still
+added once to each link's setup (parity: a spliced connection's timing).
+
+Tests: `TestRealityBurstDial` (150 links at once, target 1 ms and 70 ms: all
+up, p50 105/177 ms, max 148/197 ms in process), `TestRealitySlowTargetBounded`
+(silent target: link up at 3 s; blackholed target: fails at 3 s),
+`TestRealityTargetDownFast`.
+
+The pre-hello caps (64 per /24) did not reject anything in the 150-link burst
+(the dialer's hello follows the TCP handshake at once).

@@ -1421,6 +1421,16 @@ Common flags (before or after the positional value): `--confirm-within 5m`,
   connect under 10 ms from the listener counts as "same region". The doctor's
   front category warns when a configured target does not match the side.
   Vetted lists and evidence: `docs/reality-architecture.md` §9.1.
+- **Pure `reality` and a restarting dialer**: the dialing server learns
+  each IP's reality key from the announcement and keeps it on disk
+  (`<config>.peer-fronts.json`, 0600), so after a restart it dials the
+  remembered key (as `both`) until the announcement arrives. For a dialer
+  that never heard it (new install, or down during a key change), run
+  `hs2 reality pin-code -u U` on the listening server and paste the printed
+  `hs2 reality pin -u U hs2rp1.…` on the dialing one (menu screen 4, `p`).
+  `hs2 reality front … reality` refuses to make the last tls-capable IP pure
+  reality until the dialer has shown it has the key (or `--dialer-has-key`);
+  the doctor's `reality cold start` check covers both sides.
 - **Weights** must name every IP of this side and sum to 100 (`--equal`
   splits evenly, the remainder to the first).
 - **Park** sets the IP's weight to 0 and gives its share to the others in
