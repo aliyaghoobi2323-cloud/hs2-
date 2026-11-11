@@ -679,6 +679,9 @@ func safeApplyMode(unit, path string, cur, nb []byte, reason string, within time
 	}
 	printState(st)
 	fmt.Printf(tr("Confirm when it works: hs2 apply --confirm -u %s  (otherwise it rolls back by itself in %s)\n", "وقتی کار کرد تأیید کنید: hs2 apply --confirm -u %s  (وگرنه پس از %s خودش برمی‌گردد)\n"), cleanUnit(unit), within)
+	if !yes {
+		offerConfirm(unit, st, within)
+	}
 	return 0
 }
 

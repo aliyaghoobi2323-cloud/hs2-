@@ -307,5 +307,35 @@ def step_classic():
 
 STEPS = {"fresh": step_fresh_create, "join": step_join, "sections": step_sections, "lock": step_lock,
          "nonroot": step_nonroot, "classic": step_classic}
+
+
+def step_lbadd(ip, which="2"):
+    """LB & IPs → add the server's only IP on a dialer without bind_local_ip
+    (the M4 bug), apply, confirm in place; the tunnel must stay up."""
+    m = M("lbadd", env={"LANG": "C"})
+    try:
+        m.exp(MAIN_EN)
+        m.send("3")
+        i = m.exp([SUB, r"Which tunnel\? "])
+        if i == 1:
+            m.send(which)
+            m.exp(SUB)
+        m.send("4")
+        m.exp(r"Local IP to add: ")
+        m.send(ip)
+        answer_loop(m, [(r"Apply now.*\[y/N\]: $", "y"), (r"Keep the change\?.*\[y/N\]: $", "y")], PAUSE, 240)
+        out = m.seen
+        m.send("")
+        m.exp(SUB)
+        ok = "confirmed" in out and "ERROR" not in out and "weights must sum" not in out
+        result("LB add-ip of the only IP on a dialer without bind (M4) + confirm in the menu", ok and not m.bad(), m.bad() or out[-300:])
+        m.send("0")
+        m.exp(MAIN_EN)
+    except Exception as e:
+        result("LB add-ip via menu", False, str(e))
+    m.close()
+
+
+STEPS["lbadd"] = step_lbadd
 if __name__ == "__main__":
     STEPS[sys.argv[1]](*sys.argv[2:])

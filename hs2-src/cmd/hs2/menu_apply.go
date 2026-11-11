@@ -515,6 +515,16 @@ func restoreVersionMode(ops sysOps, unit, cfg string, n int, reason string, relo
 }
 
 // confirmApply ends a trial successfully.
+// errHealthPending: confirm before the health gate has finished (its text in
+// the language chosen at run time).
+var errHealthPending error = healthPending{}
+
+type healthPending struct{}
+
+func (healthPending) Error() string {
+	return tr("the health check is still running — try again in a few seconds", "بررسی سلامت هنوز در جریان است — چند ثانیه دیگر دوباره بزنید")
+}
+
 func confirmApply(ops sysOps, unit string) error {
 	var st applyState
 	err := withState(unit, func(s *applyState) error {
@@ -524,7 +534,7 @@ func confirmApply(ops sysOps, unit string) error {
 			st = *s
 			return nil
 		case stRestarting, stHealth:
-			return errors.New(tr("the health check is still running — try again in a few seconds", "بررسی سلامت هنوز در جریان است — چند ثانیه دیگر دوباره بزنید"))
+			return errHealthPending
 		case "":
 			return errors.New(tr("no apply to confirm", "اعمالی برای تأیید نیست"))
 		default:
@@ -545,4 +555,37 @@ func expireApply(ops sysOps, unit string) {
 	if st, ok := loadState(unit); ok && st.live() && ops.now().Unix() >= st.Deadline {
 		doRollback(ops, unit, "not confirmed in time (expiry timer)")
 	}
+}
+
+// offerConfirm: an interactive change (the menu) is confirmed right there —
+// the operator checks the tunnel, then answers y; anything else leaves the
+// automatic rollback running. Before this the menu printed only the
+// `hs2 apply --confirm` command, so a menu change rolled back by itself unless
+// the operator went to a shell.
+func offerConfirm(unit string, st applyState, within time.Duration) {
+	if !st.live() || !isTTY(os.Stdin) {
+		return
+	}
+	in := asker{bufioReader(), os.Stdout}
+	v, err := in.ask(fmt.Sprintf(tr("Check it now (dashboard, users). Keep the change? y = confirm, Enter = let it roll back by itself in %s [y/N]",
+		"اکنون بررسی کنید (داشبورد، کاربران). تغییر بماند؟ y = تأیید، Enter = خودش پس از %s برمی‌گردد [y/N]"), within), "n")
+	if err != nil || (v != "y" && v != "Y") {
+		fmt.Println(tr("Not confirmed — it rolls back by itself unless you run: hs2 apply --confirm -u "+cleanUnit(unit),
+			"تأیید نشد — خودش برمی‌گردد مگر اجرا کنید: hs2 apply --confirm -u "+cleanUnit(unit)))
+		return
+	}
+	// a quick y: wait for the health gate (it ends in trial, or rolls back)
+	err = confirmApply(realOps{}, unit)
+	for i := 0; errors.Is(err, errHealthPending) && i < 90; i++ {
+		if i == 0 {
+			fmt.Println(tr("waiting for the health check…", "در انتظار بررسی سلامت…"))
+		}
+		time.Sleep(time.Second)
+		err = confirmApply(realOps{}, unit)
+	}
+	if err != nil {
+		fmt.Println("ERROR: " + err.Error())
+		return
+	}
+	fmt.Println(tr("confirmed — the new config stays.", "تأیید شد — پیکربندی جدید می‌ماند."))
 }

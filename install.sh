@@ -65,7 +65,8 @@ TUN_ENCAP=udp
 TUN_PROTO=""
 
 # ---------- pretty output (all to stderr so $(...) captures only real values) --
-_c(){ printf '\033[%sm%s\033[0m\n' "$1" "$2" >&2; }
+# colour off (menu setting "color=off", or NO_COLOR set): plain text
+_c(){ if [ -n "${HS2_NOCOLOR:-}${NO_COLOR:-}" ]; then printf '%s\n' "$2" >&2; else printf '\033[%sm%s\033[0m\n' "$1" "$2" >&2; fi; }
 info(){ _c '1;34' "→ $1"; }
 ok(){   _c '1;32' "✓ $1"; }
 warn(){ _c '1;33' "! $1"; }
@@ -5378,7 +5379,8 @@ nm_load(){
   nm_utf8 || NM_LANG=en                       # Persian needs a UTF-8 terminal
   NM_MODE=$(mc_get mode); case "$NM_MODE" in simple|advanced) ;; *) NM_MODE=simple ;; esac
   NM_COLOR=$(mc_get color); case "$NM_COLOR" in on|off) ;; *) NM_COLOR=on ;; esac
-  if [ "$NM_COLOR" = off ]; then C_G=; C_R=; C_Y=; C_B=; C_D=; C_0=; fi
+  [ -n "${NO_COLOR:-}" ] && NM_COLOR=off
+  if [ "$NM_COLOR" = off ]; then C_G=; C_R=; C_Y=; C_B=; C_D=; C_0=; HS2_NOCOLOR=1; else HS2_NOCOLOR=; fi
   HS2_DOCTOR_LANG=$NM_LANG
 }
 nm_t(){ if [ "$NM_LANG" = fa ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
