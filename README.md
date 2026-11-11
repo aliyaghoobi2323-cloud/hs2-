@@ -783,8 +783,9 @@ set on (…)`).
 
 Still **off** by default (nothing changes unless you set them):
 `HS2_LB_CALL_RESCUE`, `HS2_LB_CALL_STUCK` (acts only under `HS2_LB_CALL_RESCUE`),
-`HS2_LB_RESCUE_RAW`, `HS2_REFILL_WAIT_MS`, `HS2_REFILL_WAIT_BYTES`,
-`HS2_LB_EVAC`, `HS2_LB_FAST_VERDICT`.
+`HS2_LB_RESCUE_RAW`, `HS2_LB_EVAC`, `HS2_LB_FAST_VERDICT`. (`HS2_REFILL_WAIT_MS`,
+`HS2_REFILL_WAIT_BYTES` and `HS2_START_DIAL` are on by default after rel40,
+branch start42: see the default table below.)
 
 Restore the old behaviour:
 - **exactly r31 / r34:** turn the four new keys off in the tunnel's unit (a
@@ -959,6 +960,9 @@ defaults; ...)`.
 | `HS2_STRIPE_AW_HEAVY` | `2` | Iran (edge) |
 | `HS2_LB_RESCUE`, `HS2_LB_RESCUE_CALLFREE` | `1` | Iran (edge) |
 | `HS2_LB_CALL_LATE` | `1` | Iran (edge) |
+| `HS2_REFILL_WAIT_MS` | `300` | Iran (edge) |
+| `HS2_REFILL_WAIT_BYTES` | `1` | Iran (edge) |
+| `HS2_START_DIAL` | `1` | kharej (exit) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |
 | `HS2_LB_SPARE_PER_ROUND` | `3` | kharej (exit) |
 | `HS2_LB_REC_CONFIRM` | `1` | kharej (exit) |
@@ -970,11 +974,21 @@ that path and no more copies on the late one, which is then given up: call
 p99 after a path degrades -29% (c) and -69% (k), never fired on equal/steady
 paths; `=0` turns it off.
 
+The start window (since 8.13, branch start42): after a start the kharej dials
+its first pool through a start gate (`HS2_START_DIAL`, 32 at a time, 10-35 ms
+apart, the first 4 s only, again after an outage at most once a minute), so
+the pool is up ~2.5 s after the first link instead of ~10 s; on Iran a new
+connection leaves the start hold after 300 ms for the link that moved the
+fewest bytes under 2x the fair share (`HS2_REFILL_WAIT_MS=300`,
+`HS2_REFILL_WAIT_BYTES=1`), and the hold stays on at least 5 s. Lab: crowd p99
+of the first 5 s 1419 -> 157 ms, whole-run ping / call / heavy equal, busiest
+link 72 -> 64. Off: `HS2_START_DIAL=0` (kharej), `HS2_REFILL_WAIT_MS=0` (Iran).
+
 Not on by default: `HS2_MCONN_STRIPE_JUMP_MS` (no measurable gain), `HS2_LB_EVAC`
 (light-user evacuation off cut paths: no measurable gain in the lab, see
 `docs/reality-architecture.md` 8.5), `HS2_LB_FAST_VERDICT` (floor a path at
 its first clearly bad reading: no measurable gain, the plain rule already does
-it, 8.6), `HS2_REFILL_WAIT_MS` (bound on a start-hold wait: start p99 -80% but crowd p95 or call p99 worse, 8.7), `HS2_REFILL_WAIT_BYTES` (v3 of the start-hold bound: start p99 1345 -> 162 ms and heavy equal over n=10, but ping p99 +14 ms, borderline, in both batches: a trade-off for the operator, 8.10), `HS2_LB_CALL_RESCUE` (a call whose subs are all on a lowered path gets a fresh sub off it and gives the lowered ones up: k call p99 529 -> 211 ms, but c not better, 204 vs 355, the path's verdict comes ~7 s after the cut, 8.10; with its stuck-call trigger `HS2_LB_CALL_STUCK`, on under it, a call all on one path whose sockets are in loss recovery or backlog for 500 ms moves at once: it ended the one stuck c run in ~2 s and fired 0 times on equal/steady paths, but c by median is still not better, 212 vs 196 ms, n=9, 8.11), `HS2_LB_RESCUE_RAW` (the rescue also for raw single-sub connections when the duplication budget binds, which the default budget did not in the lab; call p99 not yet proven unchanged, 8.8, 8.9) and every
+it, 8.6), `HS2_LB_CALL_RESCUE` (a call whose subs are all on a lowered path gets a fresh sub off it and gives the lowered ones up: k call p99 529 -> 211 ms, but c not better, 204 vs 355, the path's verdict comes ~7 s after the cut, 8.10; with its stuck-call trigger `HS2_LB_CALL_STUCK`, on under it, a call all on one path whose sockets are in loss recovery or backlog for 500 ms moves at once: it ended the one stuck c run in ~2 s and fired 0 times on equal/steady paths, but c by median is still not better, 212 vs 196 ms, n=9, 8.11), `HS2_LB_RESCUE_RAW` (the rescue also for raw single-sub connections when the duplication budget binds, which the default budget did not in the lab; call p99 not yet proven unchanged, 8.8, 8.9) and every
 key not in this table. The side is the config's `mode`: `dial` = Iran (edge),
 `listen` = kharej (exit). Every default-on key works against an older peer
 (new behaviour is announced by a capability bit or carried in a field older
