@@ -64,7 +64,7 @@ check "add IP with an empty answer does nothing" '! grep -q "^lb add-ip" "$T/cal
 out=$(run '3\n7\n2.2.2.2\n6\n\n8\n2.2.2.2\n\n0\n0\n')
 check "park for N hours and unpark under the lock" 'locked "lb park -u hs2-a --ip 2.2.2.2 --hours 6" && locked "lb unpark -u hs2-a --ip 2.2.2.2"'
 out=$(MODE=advanced run '3\n4\n3.3.3.3\nsni.example\n/c.pem\n/k.pem\n\n9\n1.1.1.1=70,2.2.2.2=30\n\nm\nfixed\n\n0\n0\n')
-check "advanced: add IP with per-IP SNI/cert/key + front note" 'grep -q "^lb add-ip -u hs2-a --ip 3.3.3.3 --sni sni.example --cert /c.pem --key /k.pem --lang en" "$T/calls" && echo "$out" | grep -q "Reality per IP arrives in M5"'
+check "advanced: add IP with per-IP SNI/cert/key + front note" 'grep -q "^lb add-ip -u hs2-a --ip 3.3.3.3 --sni sni.example --cert /c.pem --key /k.pem --lang en" "$T/calls" && echo "$out" | grep -q "switch to reality / both in 4) Security"'
 check "advanced: weights editor and mode fixed under the lock" 'locked "lb weights -u hs2-a 1.1.1.1=70,2.2.2.2=30" && locked "lb mode -u hs2-a fixed"'
 out=$(run '3\n9\n0\n0\n')
 check "simple mode: hidden items do nothing" '! grep -q "^lb weights" "$T/calls"'

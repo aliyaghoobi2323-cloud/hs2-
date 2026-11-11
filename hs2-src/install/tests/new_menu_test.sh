@@ -82,7 +82,7 @@ out=$(run '4
 0
 0
 ')
-check "4) security: still marked as a preview of M5" 'echo "$out" | grep -q "arrives in M5"'
+check "4) security: the M5 Security & camouflage screen (hs2 reality status)" 'grep -q "^reality status -u hs2-x" "$T/calls" && ! echo "$out" | grep -q "arrives in M5"'
 out=$(run 'x\n0\n')
 check "invalid choice survives (menu drawn again)" 'echo "$out" | grep -q "Invalid choice" && [ "$(echo "$out" | grep -c "1) Live dashboard")" -ge 2 ]'
 out=$(run '9\n4\n0\n0\n')

@@ -5566,7 +5566,7 @@ nm_lb(){
            nm_ask w "$(nm_t "SNI on this IP (Enter = the tunnel's): " "SNI روی این IP (Enter = همان تونل): ")"; [ -n "$w" ] && ex+=(--sni "$w")
            nm_ask w "$(nm_t "Certificate file on this IP (Enter = the tunnel's): " "فایل گواهی روی این IP (Enter = همان تونل): ")"
            if [ -n "$w" ]; then ex+=(--cert "$w"); nm_ask h "$(nm_t "Key file: " "فایل کلید: ")"; ex+=(--key "$h"); fi
-           say "   $(nm_t "Front on this IP: tls (Reality per IP arrives in M5)" "پوشش روی این IP: tls (Reality برای هر IP در M5 می‌آید)")"
+           say "   $(nm_t "Front on this IP: tls (switch to reality / both in 4) Security & camouflage)" "پوشش روی این IP: tls (تغییر به reality / both در ۴) امنیت و استتار)")"
          fi
          nm_lock && { nm_lbx add-ip -u "$NM_U" --ip "$ip" ${ex[@]+"${ex[@]}"}; nm_unlock; nm_pause; } ;;
       5) nm_ask ip "$(nm_t "Local IP to remove: " "IP محلی برای حذف: ")"
@@ -5586,9 +5586,16 @@ nm_lb(){
     esac
   done
 }
-nm_security(){
+# Screen 4 "Security & camouflage" (menu M5 = Reality phase 5): `hs2 reality
+# status|front|targets|check-target|rotate-key|keygen`. A front (tls / reality
+# / both) is per lb IP on the LISTENING server; the dialing server learns it
+# from the announcement, so the change is one-sided, previewed as a diff and
+# applied with the safe apply as a reload (no downtime, auto-rollback). The
+# certificate and the cover page keep their classic screens.
+nm_has_realityx(){ [ -x "$BIN" ] && "$BIN" reality --supported >/dev/null 2>&1; }
+nm_rx(){ "$BIN" reality "$@" --lang "$NM_LANG" </dev/tty || true; }   # never trips set -e
+nm_security_classic(){
   local c
-  nm_soon M5
   nm_pick_unit || return 0
   say "   1) $(nm_t "Certificate (expiry, renewal, renew now)" "گواهی (انقضا، تمدید، تمدید فوری)")"
   say "   2) $(nm_t "Edit config (cover page, camouflage fields)" "ویرایش پیکربندی (صفحهٔ پوششی، فیلدهای استتار)")"
@@ -5599,6 +5606,62 @@ nm_security(){
     2) nm_edit tm_edit "$NM_U" "$NM_CFG" ;;
   esac
   return 0
+}
+nm_security(){
+  local c ip k t s ex
+  if ! nm_has_realityx; then nm_security_classic; return 0; fi
+  nm_pick_unit || return 0
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "4) Security & camouflage" "۴) امنیت و استتار") — $NM_U${C_0}"; hr
+    nm_rx status -u "$NM_U"
+    say "   1) $(nm_t "Refresh" "تازه‌سازی")"
+    say "   2) $(nm_t "Front of an IP: tls / reality / both (preview, safe apply, no downtime)" "پوشش یک IP: tls / reality / both (پیش‌نمایش، اعمال امن، بدون قطعی)")"
+    say "   3) $(nm_t "Pick a Reality target (check the candidates)" "انتخاب هدف Reality (بررسی نامزدها)")"
+    say "   4) $(nm_t "Check one target (TLS 1.3, X25519, h2, CDN, latency)" "بررسی یک هدف (TLS 1.3، X25519، h2، CDN، تأخیر)")"
+    say "   5) $(nm_t "Rotate the Reality keys (every reality / both IP)" "چرخش کلیدهای Reality (همهٔ IPهای reality / both)")"
+    say "   6) $(nm_t "Doctor: fronts (target reachable, key mismatch, fallbacks)" "پزشک: پوشش‌ها (دسترسی هدف، ناهمخوانی کلید، بازگشت به tls)")"
+    say "   7) $(nm_t "Certificate (expiry, renewal, renew now)" "گواهی (انقضا، تمدید، تمدید فوری)")"
+    if [ "$NM_MODE" = advanced ]; then
+      say "   8) $(nm_t "Rotate the key of one IP" "چرخش کلید یک IP")   9) $(nm_t "New key pair (print only)" "جفت‌کلید تازه (فقط نمایش)")"
+      say "   e) $(nm_t "Edit config (cover page, camouflage fields)" "ویرایش پیکربندی (صفحهٔ پوششی، فیلدهای استتار)")"
+    fi
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|"") return 0 ;;
+      1) ;;
+      2) nm_ask ip "$(nm_t "IP of this server: " "IP همین سرور: ")"
+         [ -n "$ip" ] || continue
+         say "   1) tls   2) reality   3) both ($(nm_t "reality, and tls for clients without the key" "reality و tls برای کلاینت بدون کلید"))"
+         nm_ask k "$(nm_t "Front: " "پوشش: ")"
+         case "$k" in 1|tls) k=tls ;; 2|reality) k=reality ;; 3|both) k=both ;; *) continue ;; esac
+         ex=()
+         if [ "$k" != tls ]; then
+           nm_ask t "$(nm_t "Target host[:443] (Enter = keep the current one): " "هدف host[:443] (Enter = همان فعلی): ")"
+           [ -n "$t" ] && ex+=(--target "$t")
+           if [ "$NM_MODE" = advanced ]; then
+             nm_ask s "$(nm_t "Server name (Enter = the target's): " "نام سرور (Enter = همان هدف): ")"; [ -n "$s" ] && ex+=(--sni "$s")
+           fi
+         fi
+         nm_lock && { nm_rx front -u "$NM_U" --ip "$ip" "$k" ${ex[@]+"${ex[@]}"}; nm_unlock; nm_pause; } ;;
+      3) nm_ask t "$(nm_t "More candidates, comma separated (Enter = none): " "نامزدهای بیشتر، با کاما (Enter = هیچ): ")"
+         info "$(nm_t "Checking the candidates (about 10 s)…" "بررسی نامزدها (حدود ۱۰ ثانیه)…")"
+         if [ -n "$t" ]; then nm_rx targets --add "$t"; else nm_rx targets; fi
+         nm_pause ;;
+      4) nm_ask t "$(nm_t "Target host[:443]: " "هدف host[:443]: ")"
+         [ -n "$t" ] && { nm_rx check-target "$t"; nm_pause; } ;;
+      5) nm_lock && { nm_rx rotate-key -u "$NM_U" --all; nm_unlock; nm_pause; } ;;
+      6) nm_doctor_run front; nm_pause ;;
+      7) if tm_cert_side "$NM_CFG"; then nm_edit tm_cert "$NM_U" "$NM_CFG"; else warn "$(nm_t "This side holds no certificate." "این سمت گواهی ندارد.")"; nm_pause; fi ;;
+      8) [ "$NM_MODE" = advanced ] || continue
+         nm_ask ip "$(nm_t "IP whose key to rotate: " "IP برای چرخش کلید: ")"
+         [ -n "$ip" ] && nm_lock && { nm_rx rotate-key -u "$NM_U" --ip "$ip"; nm_unlock; nm_pause; } ;;
+      9) [ "$NM_MODE" = advanced ] || continue
+         nm_rx keygen; nm_pause ;;
+      e|E) [ "$NM_MODE" = advanced ] && nm_edit tm_edit "$NM_U" "$NM_CFG" ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
 }
 # Screen 5 "Speed & performance" (menu M4): `hs2 perf …`. Presets / toggles /
 # CPUAffinity are drop-ins applied with the safe apply (auto-rollback);
@@ -5685,10 +5748,11 @@ nm_alert_units(){ # per-tunnel state lines
     if alert_timer_on "$u"; then say "   $u: ${C_G}$(nm_t ON روشن)${C_0}"; else say "   $u: ${C_D}$(nm_t OFF خاموش)${C_0}"; fi
   done
 }
-nm_alert_kind(){ # N → name (1-11)
+nm_alert_kind(){ # N → name (1-13)
   case "$1" in
     1) echo unit ;; 2) echo restart ;; 3) echo panic ;; 4) echo dead ;; 5) echo links ;; 6) echo ipcut ;;
     7) echo flap ;; 8) echo rtt ;; 9) echo psi ;; 10) echo cert ;; 11) echo probe ;;
+    12) echo fallback ;; 13) echo rtarget ;;
   esac
 }
 nm_alerts(){
@@ -5743,7 +5807,7 @@ nm_alerts(){
            elif alert_timer_on "$NM_U"; then alert_disable "$NM_U"; else alert_enable "$NM_U" "$NM_CFG"; fi
            nm_pause
          fi ;;
-      7) nm_ask v "$(nm_t "Alert kind number (1-11): " "شمارهٔ نوع هشدار (1 تا 11): ")"
+      7) nm_ask v "$(nm_t "Alert kind number (1-13): " "شمارهٔ نوع هشدار (1 تا 13): ")"
          k=$(nm_alert_kind "$v")
          if [ -z "$k" ]; then warn "$(nm_t "No such alert kind." "چنین نوعی نیست.")"
          elif "$BIN" alert conf show 2>/dev/null | grep -Eq "^ +$v\) +$k +OFF"; then "$BIN" alert rule "$k" on --lang "$NM_LANG" >&2 || true
@@ -5784,7 +5848,7 @@ nm_doctor_kind(){ # N → kind of fix N of the last run
   grep -o '"kind":"[a-z]*"' "$NM_DOC_FIXES_FILE" 2>/dev/null | sed -n "${1}p" | cut -d'"' -f4 || true
 }
 nm_doctor(){
-  local c v h cats=(network cpu tunnel reality panel)
+  local c v h cats=(network cpu tunnel reality panel front)
   if ! nm_has_docfix; then server_doctor; nm_pause; return 0; fi
   NM_DOC_FIXES=0
   while :; do
@@ -5795,6 +5859,7 @@ nm_doctor(){
     say "   4) $(nm_t "Tunnel (health, restarts, monitoring, certificates)" "تونل (سلامت، ری‌استارت، پایش، گواهی)")"
     say "   5) $(nm_t "Reality / xray dest" "Reality / مقصد xray")"
     say "   6) $(nm_t "Panel (x-ui): advice only" "پنل (x-ui): فقط توصیه")"
+    say "   7) $(nm_t "Tunnel fronts (Reality target, keys, fallback to tls)" "پوشش تونل (هدف Reality، کلیدها، بازگشت به tls)")"
     if [ "${NM_DOC_FIXES:-0}" -gt 0 ]; then say "   f) $(nm_t "Apply a fix (number from the report; preview first)" "اعمال یک اصلاح (شماره از گزارش؛ اول پیش‌نمایش)") [$NM_DOC_FIXES]"; fi
     say "   r) $(nm_t "Save a report file for support" "ذخیرهٔ فایل گزارش برای پشتیبانی")"
     say "   0) $(nm_t Back بازگشت)"
@@ -5802,7 +5867,7 @@ nm_doctor(){
     case "$c" in
       0|b|B|q|"") return 0 ;;
       1) nm_doctor_run; nm_pause ;;
-      [2-6]) nm_doctor_run "${cats[$((c - 2))]}"; nm_pause ;;
+      [2-7]) nm_doctor_run "${cats[$((c - 2))]}"; nm_pause ;;
       f|F) nm_ask v "$(nm_t "Fix number: " "شمارهٔ اصلاح: ")"
            case "$v" in ''|*[!0-9]*) continue ;; esac
            case "$(nm_doctor_kind "$v")" in
