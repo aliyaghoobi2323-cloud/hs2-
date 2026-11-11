@@ -86,12 +86,15 @@ func stripeDiagGate(why, w, live int, qRaw, q, base time.Duration, busy int) {
 
 // StripeSnap: وضعیت stripe برای hs2 status.
 type StripeSnap struct {
-	Active, RxActive                   int32  // اتصال‌های دارای جای stripe (ایران / گیرندهٔ خارج)
-	Subs, Bytes, SubBytes, Refused     uint64 // از آغاز
-	Cuts                               uint64
-	Grow, Cut, Band, Hold, Token, Full uint64 // تصمیم‌های دروازه به تفکیک علت
-	Closed, NoMeasure                  uint64
-	GrowUnused, GrowRate, PickNone     uint64
+	Active, RxActive                    int32  // اتصال‌های دارای جای stripe (ایران / گیرندهٔ خارج)
+	Subs, Bytes, SubBytes, Refused      uint64 // از آغاز
+	Cuts                                uint64
+	Grow, Cut, Band, Hold, Token, Full  uint64 // تصمیم‌های دروازه به تفکیک علت
+	Closed, NoMeasure                   uint64
+	GrowUnused, GrowRate, PickNone      uint64
+	FastChained, FastEarly, FastRetry   uint64 // HS2_MCONN_STRIPE_FAST (mconn_stripe_fast.go)
+	FastReserved                        int64  // up56: HS2_MCONN_STRIPE_FAST_RESERVE idle links
+	FastRefills, FastHsKicks, FastBumps uint64 // up56
 	// بازهٔ گذشته (از خواندن قبلی)
 	Decisions          uint64
 	WAvg, LiveAvg      float64
@@ -115,6 +118,8 @@ func StripeObserved() StripeSnap {
 		Hold: d.dec[gwHold].Load(), Token: d.dec[gwToken].Load(), Full: d.dec[gwFull].Load(),
 		Closed: d.closed.Load(), NoMeasure: d.noMeas.Load(),
 		GrowUnused: d.growUnused.Load(), GrowRate: d.growRate.Load(), PickNone: d.pickNone.Load(),
+		FastChained: stripeFastStat.chained.Load(), FastEarly: stripeFastStat.early.Load(), FastRetry: stripeFastStat.retries.Load(),
+		FastReserved: stripeFastStat.reserved.Load(), FastRefills: stripeFastStat.refills.Load(), FastHsKicks: stripeFastStat.hsKicks.Load(), FastBumps: stripeFastStat.bumps.Load(),
 		QRawUs: d.lastQRaw.Load(), QUs: d.lastQ.Load(), BaseUs: d.lastBase.Load(), BusyLinks: d.lastBusy.Load(),
 	}
 	stripePathQ.mu.Lock()

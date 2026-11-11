@@ -51,8 +51,15 @@ func (m *LinkManager) stripeAdoptLocked(ml *managedLink, now time.Time) {
 	}
 }
 
-// stripeAskLocked (under m.mu): the stripe found no link; ask for one.
-func (m *LinkManager) stripeAskLocked(now time.Time) {
+// stripeAskLocked (under m.mu): the stripe found no link; ask for one —
+// or, with a want hint (HS2_MCONN_STRIPE_FAST, mconn_stripe_fast.go), for
+// as many as the fast growth still opens (at least; never added up, so a
+// retried pick does not inflate the request).
+func (m *LinkManager) stripeAskLocked(now time.Time, want int) {
+	if want > 0 {
+		m.stripeWantRaiseLocked(now, want) // up56: the pool's target at once
+		return
+	}
 	m.stripeWant = min(m.stripeWant+1, stripeWantCap())
 	m.stripeWantUntil = now.Add(stripeWantFor)
 }
@@ -67,6 +74,7 @@ func (m *LinkManager) stripeExtra() int {
 	now := m.now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.stripeReserveLocked(now) // HS2_MCONN_STRIPE_FAST_RESERVE (mconn_stripe_fast.go)
 	n := 0
 	for _, ml := range m.links {
 		if !ml.stripeRes.IsZero() && (now.Sub(ml.stripeRes) > stripeResFor || !ml.link.Alive()) {

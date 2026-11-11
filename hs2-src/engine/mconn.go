@@ -261,6 +261,10 @@ var (
 	errMConnAborted  = errors.New("mconn: aborted")
 	errMConnBulkDied = errors.New("mconn: bulk sub died")
 	errMConnSubsDied = errors.New("mconn: every sub died")
+	// errMConnPeerDone (up56): every sub ended after the peer's FIN - the far
+	// end closed normally (its server closed before the bytes in flight
+	// arrived), not a dead path; the log said "every sub died" for both.
+	errMConnPeerDone = errors.New("mconn: peer closed (every sub ended after its FIN)")
 	errMConnLost     = errors.New("mconn: a sub died holding the only copy of some bytes")
 	errMConnProto    = errors.New("mconn: bad record")
 	errMConnGap      = errors.New("mconn: missing bytes never arrived")
@@ -1836,6 +1840,9 @@ func (m *mConn) subDied(s *msub, cause error) {
 		m.graceOpenLocked(time.Now())
 	case len(m.subs) == 0 || m.onlyClosingLocked():
 		endErr = errMConnSubsDied
+		if m.peerFin {
+			endErr = errMConnPeerDone
+		}
 	case m.mode == planeBulk:
 		// a light sub of a switched connection: nothing rides on it now
 	case !resent && (lost || m.holeRecentLocked() && !m.stripeQuietLocked(s)):

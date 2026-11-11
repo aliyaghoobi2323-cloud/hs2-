@@ -270,6 +270,9 @@ type managedLink struct {
 	stripeRes time.Time
 	// stShared: shared stripe subs on this link (HS2_MCONN_STRIPE_SHARE)
 	stShared atomic.Int32
+	// stUpN / stDnN: stripe subs on this link placed for an upload / a
+	// download (HS2_MCONN_STRIPE_XDIR, mconn_stripe_xdir.go)
+	stUpN, stDnN atomic.Int32
 
 	dead atomic.Bool
 	born time.Time
