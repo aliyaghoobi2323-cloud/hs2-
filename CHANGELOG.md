@@ -19,6 +19,29 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## ee51 — Reality: EncryptedExtensions parity (uTLS fork) and post-Finished order (binary)
+
+- **EE 32 vs 36 B closed.** uTLS v1.8.0 vendored as
+  `hs2-src/third_party/utls` (`replace` in go.mod) with one opt-in addition:
+  `Config.ServerNameAck` acks the client's SNI in EncryptedExtensions (an
+  empty `server_name`, as OpenSSL / Go 1.27 / www.microsoft.com /
+  www.digikala.com send it). The mirror probe reads the target's EE record
+  length and sets it only for targets that ack. Lab: every record of the
+  authenticated handshake equals the target's for both targets (EE 36 = 36).
+- **Post-Finished records replayed in the target's order.** A target that
+  sends an h2 SETTINGS record after its tickets (www.digikala.com: 306 306
+  57) got random sizes before (`[306 306 306]`); a pad now replays one whole
+  observed sequence (`NSTSeqs`).
+- **Dialer unchanged:** ClientHello bytes (deterministic fingerprints) and
+  shapes (Chrome / Firefox, 300 each) identical before and after the fork.
+- Tests: `TestRealityEEParity` (decrypts both EEs; upstream-uTLS, fork-ack,
+  Go 1.27 and two `openssl s_server` targets), `TestRealityPostFinishedSequence`,
+  `TestHS2EncryptedExtensionsServerNameAck` (fork module). Full suite on a
+  clean bundle (lab 3): gofmt 0, `go vet ./...` ok, `go test ./...` ok
+  except `TestMeteredConnBlockedTime` (engine, timing: 22 % under load
+  average 120 from a neighbour job; 5/5 pass alone), `-race` tlscarrier ok,
+  the fork module's own suite ok. `docs/reality-architecture.md` §11.8.3.
+
 ## rel50 — Reality throughput gap measured out; `both` downgrades only on real refusals; installer names (binary)
 
 - **Throughput gap (item 1): not a Reality cost.** Interleaved tls / reality /

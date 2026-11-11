@@ -905,7 +905,7 @@ type Config struct {
 
 	// [hs2] ServerNameAck makes a TLS 1.3 server send an empty server_name
 	// extension in its EncryptedExtensions when the client sent an SNI (what
-	// OpenSSL does; crypto/tls and upstream uTLS never do). The reality
+	// OpenSSL and Go 1.27 crypto/tls do; upstream uTLS never does). The reality
 	// listener sets it when its target acks, so the EncryptedExtensions record
 	// is as long as the target's. Ignored by clients.
 	ServerNameAck bool

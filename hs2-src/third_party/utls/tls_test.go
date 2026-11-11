@@ -879,6 +879,8 @@ func TestCloneNonFuncFields(t *testing.T) {
 			f.Set(reflect.ValueOf(VerifyClientCertIfGiven))
 		case "InsecureSkipVerify", "InsecureSkipTimeVerify", "SessionTicketsDisabled", "DynamicRecordSizingDisabled", "PreferServerCipherSuites", "OmitEmptyPsk", "PreferSkipResumptionOnNilExtension":
 			f.Set(reflect.ValueOf(true))
+		case "ServerNameAck": // [hs2]
+			f.Set(reflect.ValueOf(true))
 		case "InsecureServerNameToVerify":
 			f.Set(reflect.ValueOf("c"))
 		case "MinVersion", "MaxVersion":
