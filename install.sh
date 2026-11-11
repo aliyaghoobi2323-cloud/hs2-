@@ -1887,6 +1887,20 @@ parse_link(){
   local DEC; DEC=$(decode_link "$RAW") || die "invalid link"
   IFS='|' read -r ENDPOINT DOMAIN SHARED PANEL CARRIER UDP TRANSPORT DIRECTION MTU ENCAP PROTO LNAME LSUBNET <<< "$DEC"
   [ -n "$ENDPOINT" ] && [ -n "$SHARED" ] || die "link is missing fields"
+  # Every field lands verbatim in a JSON string of THIS server's config (and
+  # some in commands). A '"' or '\' in a hand-made or tampered link let it
+  # write extra JSON keys that still parse (the last duplicate key wins in
+  # hs2) — e.g. an sni of  x", "forward_ports": "22  — so refuse any field with
+  # a JSON-breaking character, whitespace or a control character.
+  local _f
+  for _f in "$ENDPOINT" "$DOMAIN" "$SHARED" "$PANEL" "$CARRIER" "$UDP" "$TRANSPORT" "$DIRECTION" "$MTU" "$ENCAP" "$PROTO" "$LNAME" "$LSUBNET"; do
+    case "$_f" in
+      *'"'*|*'\'*|*[[:space:]]*|*[[:cntrl:]]*) die "the link carries an invalid character in a field — regenerate it on the OTHER server (never edit a link by hand)." ;;
+    esac
+  done
+  # udp is written as a BARE JSON value, so it must be exactly true/false
+  # (true,"forward_ports":"22" has no quote-free escape otherwise).
+  case "${UDP:-}" in ''|true|false) ;; *) die "the link carries an invalid udp field — regenerate it on the OTHER server." ;; esac
   CARRIER=${CARRIER:-mtcp}; UDP=${UDP:-false}
   if [ -z "$TRANSPORT" ]; then
     case "$CARRIER" in udp) TRANSPORT=udp ;; auto) TRANSPORT=auto ;; *) TRANSPORT=tcp ;; esac

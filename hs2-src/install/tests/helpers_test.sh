@@ -191,5 +191,27 @@ done
 check "remove_tunnel also removes the tunnel's alert timer" 'sed -n "/^remove_tunnel(){/,/^}/p" "$INST" | grep -q "disable --now \"hs2-alert-\$u.timer\""'
 check "uninstall also removes the helper timers (hs2-stats, hs2-lb-park)" 'sed -n "/^uninstall(){/,/^}/p" "$INST" | grep -q "for h in hs2-stats hs2-lb-park"'
 
+# ---- parse_link: a tampered link cannot inject JSON (rev53a) -------------------
+# Link fields go verbatim into JSON strings (and udp as a bare value) of this
+# server's config; a '"' let a link add keys that still parse (last key wins).
+sed -n '/^decode_link(){/p;/^valid_uint(){/,/^}/p;/^parse_link(){/,/^}/p' "$INST" | sed 's#</dev/tty#<"$LINKIN"#' > "$T/pl.sh"
+mklink(){ printf '%s' "$1" | base64 -w0; }
+pl(){ # decoded link -> PARSED:<sni>|<udp> or the die message
+  printf 'hs2://%s\n' "$(mklink "$1")" > "$T/linkin"
+  bash -c "set -euo pipefail; die(){ echo \"DIE: \$*\"; exit 1; }; LINKIN='$T/linkin'; source '$T/pl.sh'; parse_link; echo \"PARSED:\$DOMAIN|\$UDP|\$SHARED\"" 2>&1
+}
+out=$(pl '203.0.113.5:443|t.example.com|c2VjcmV0K2tleS89|127.0.0.1:8443|mtcp|false|tcp|direct|1380||||')
+check "parse_link: a normal link parses" '[ "$out" = "PARSED:t.example.com|false|c2VjcmV0K2tleS89" ]'
+out=$(pl '[2001:db8::5]:443|t.example.com|abc|127.0.0.1:8443|mtcp|true|tcp|direct|||||')
+check "parse_link: an IPv6 endpoint link parses" 'echo "$out" | grep -q "^PARSED:t.example.com|true|abc$"'
+out=$(pl '203.0.113.5:443|x","forward_ports":"22|abc|127.0.0.1:8443|mtcp|false|tcp|direct|||||')
+check "parse_link: a '\"' in a field (JSON key injection) is refused" 'echo "$out" | grep -q "^DIE: the link carries an invalid character"'
+out=$(pl '203.0.113.5:443|t.example.com|ab\c|127.0.0.1:8443|mtcp|false|tcp|direct|||||')
+check "parse_link: a backslash in a field is refused" 'echo "$out" | grep -q "^DIE:"'
+out=$(pl '203.0.113.5:443|t.example.com|abc|127.0.0.1:8443|mtcp|true,"forward_ports":"22"|tcp|direct|||||')
+check "parse_link: udp must be exactly true/false (it is a bare JSON value)" 'echo "$out" | grep -q "^DIE:"'
+out=$(pl '203.0.113.5:443|t.example.com|abc|127.0.0.1:8443|mtcp|true,x:1|tcp|direct|||||')
+check "parse_link: udp with no quote at all is refused too" 'echo "$out" | grep -q "^DIE: the link carries an invalid udp field"'
+
 
 exit $fail
