@@ -10,7 +10,8 @@ import (
 	"time"
 )
 
-// HS2_MCONN_STRIPE_RESEND (default OFF, lab only; 1 = on): a striping
+// HS2_MCONN_STRIPE_RESEND (production default ON, both sides, since rel49;
+// 0 = off): a striping
 // connection survives the death of one of its subs.
 //
 // A stripe puts each chunk on ONE sub. When a link dies (reset, ss -K, a
@@ -29,16 +30,21 @@ import (
 // chunk that did arrive is harmless; one that did not fills the gap. No wire
 // change: an older peer just sees DATA records it may already hold.
 //
-// Not covered (unchanged): the connection's last sub dying (no live sub to
-// resend on), and bytes older than stripeKeepAge still unread by the peer.
+// The connection's last sub dying is covered by the grace below
+// (HS2_MCONN_STRIPE_GRACE_MS); bytes older than stripeKeepAge still unread by
+// the peer are not.
 //
-// Status (rel46, docs/reality-architecture.md §11.6): off by default. In the
-// lab u8 it ends the resets (no errMConnLost) but not the freeze: a
-// connection whose subs all die still ends ("every sub died"), and some
-// survivors stall a few seconds after the kill with a gap the resend did not
-// fill — for a real app a hang until mGapTimeout, worse than the old reset.
+// Status (rel49, docs/reality-architecture.md §11.6.6): on by default. rel46
+// left two failures: (1) a connection whose subs all died ended — now the
+// grace; (2) survivors stalled a few seconds after the kill behind a hole of
+// one record — the record whose write FAILED on the dying sub: writeLoop
+// released it before subDied collected the sub's chunks, so no resend carried
+// it. writeLoop now keeps it too.
 
-var stripeResend = envBoolDefault("HS2_MCONN_STRIPE_RESEND", false)
+// stripeResend: read by loadEnvKeys (defaults22.go); production default ON
+// on both sides since rel49 (envdef.Table), HS2_MCONN_STRIPE_RESEND=0 turns
+// it off.
+var stripeResend bool
 
 const (
 	// stripeKeepAge: how long a written chunk is kept for a resend. A link

@@ -17,6 +17,7 @@ case $V in
   c0) ;; c1) LOSS=0.01;;
   s) HV=""; T=30s;;
   u8) HV=up; T=30s; KA=12; HCTL=direct;;
+  u1) HV=up; HP=1; T=30s; HCTL=direct;;  # one upload connection, no kill (stripe speed)
 esac
 export HOME=/root GOPATH=/root/go PATH=$PATH:/usr/local/go/bin MODE=l3mtcp EMU=kernel RATE=1000mbit DELAY=37ms QUEUE=100ms
 export T BULK=0 CALL=2mbit GAME=1 MIN_LINKS=100 MAX_LINKS=150 CROWD=3000 REVERSE=1 NOWARM=1 WORKDIR=/tmp/s49w PATHS=3 LB_MODE=auto LOSS KILL_AT=$KA
