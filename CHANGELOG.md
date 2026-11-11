@@ -111,6 +111,12 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   reality (listener counters 7/1/0/0; the 1 tls link was dialed before the
   announcement arrived and "both" accepted it); a
   client without the key (sni github.com) got github.com's certificate.
+  Second run with the final binary (the listener now gets "sni" from
+  create): tls -> reality -> both with no sni set by hand, 281/282 requests
+  OK (the one failure falls in a deliberate dialer restart, not in a front
+  switch), 7 reality links after the restart.
+- `alerts_doctor_menu_test.sh`: a check no longer runs under pipefail (`echo
+  "$out" | grep -q` could fail by SIGPIPE on a busy host; seen once).
 
 ## Menu redesign M6 — Monitoring & alerts, Server doctor with safe fixes (binary + installer)
 
