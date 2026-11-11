@@ -60,7 +60,7 @@ func upPair(t *testing.T, id uint64, perLink int64, k int, up bool) (*tNet, *mCo
 	if err != nil {
 		t.Fatal(err)
 	}
-	iran.setStripe(k)
+	iran.setStripe(k, nil)
 	if up {
 		iran.setStripeUp()
 	}
@@ -326,7 +326,7 @@ func TestMConnStripeUploadFromRaw(t *testing.T) {
 	t.Cleanup(resetLiteBudget)
 	n.hook = func(l *tLink) { l.iran.rate.Store(1 << 20) }
 	n.link(0).iran.rate.Store(1 << 20)
-	iran.setStripe(4)
+	iran.setStripe(4, nil)
 	iran.setStripeUp()
 	d := upload(t, iran, exit, 12<<20)
 	if iran.rawW.Load() {

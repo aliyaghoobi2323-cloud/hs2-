@@ -359,7 +359,7 @@ func TestMConnStripeGatedFromRaw(t *testing.T) {
 			n, iran, exit := newRawPair(t)
 			n.hook = func(l *tLink) { l.exit.rate.Store(1 << 20) }
 			n.link(0).exit.rate.Store(1 << 20)
-			iran.setStripe(4)
+			iran.setStripe(4, nil)
 			stop := make(chan struct{})
 			defer close(stop)
 			if flap {

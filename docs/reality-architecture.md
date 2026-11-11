@@ -3109,9 +3109,8 @@ A/B on lab 2, one binary, the key on the Iran side, u8w, n=6+6 interleaved:
 Engaged in 6/6 key-on runs (one window per kill, pool 99-116 -> 29-56) and
 0/6 off. It stays **off by default** pending acceptance (n=6). Plan for
 default-on: a second battery with c0/c1/u1 (no kill) showing it never
-fires without a mass loss, and u8w n>=8 on lab 1. Limit: one process-wide
-window, so a server with several tunnels narrows all its uploads when one
-pool collapses.
+fires without a mass loss, and u8w n>=8 on lab 1 (done: §11.11.7). The
+window was process-wide in a5316087; since §11.11.7 it is per pool.
 
 #### 11.11.5 ports_menu_test.sh flakiness
 
@@ -3142,3 +3141,61 @@ config unchanged, 20 s 0 % loss (doctor then: 1 BAD on lab 2 = CPU pressure
 from the u8 battery running there, not the tunnel). The upgrade/mixed runs
 before the last step used rel52 builds of fe481c10 and 781db358 (no code change since
 but the lab trace and the off-by-default rebuild key).
+
+#### 11.11.7 HS2_MCONN_STRIPE_REBUILD: confirmation round — not accepted, stays off (rel52b)
+
+Code: the window is now **per pool** (`poolPeak.until` on each
+`LinkManager`; a striped connection reads its own pool's window through
+`stPool`), so on a server with several tunnels only the collapsed tunnel's
+uploads narrow; the key is read with the other default-table keys in
+`loadEnvKeys` (atomic, so tests that flip it are race-free). Not in the
+default table. `TestStripeRebuildWindow` adds: a second pool is not
+narrowed, a nil pool never is, and a one-path cut (150 -> 100) opens nothing.
+One binary for every arm below (this tree), the key only on the Iran side;
+triggers = "(HS2_MCONN_STRIPE_REBUILD)" lines in the Iran log; medians
+[min-max]; p = two-sided Mann-Whitney (exact, or 20000 permutations).
+
+(a) No mass loss (s49, lab 2, interleaved, n=6+6 each; Mbps of `s` is not
+measured): **0 triggers in 48 runs**; no metric differs at p<0.05 except
+`s` ping p99, lower with the key (83 vs 100, p=0.03) — the key never
+fired, so that is noise.
+
+| scenario | key | Mbps | ping p99 | crowd p99 | call p99 | late % |
+|---|---|---|---|---|---|---|
+| c0 | off / on | 1337 / 1131 (p=0.24) | 166 / 170 | 163 / 197 (p=0.13) | 175 / 200 (p=0.13) | 3 / 5 |
+| c1 | off / on | 1240 / 1255 (p=0.82) | 209 / 196 | 210 / 217 | 253 / 256 | 20 / 17 |
+| u1 (one upload) | off / on | 611 / 654 (p=0.59) | 138 / 132 | 129 / 128 | 131 / 145 | 1 / 1 |
+| s | off / on | — | 100 / 83 (p=0.03) | 82 / 83 | 102 / 84 | 0 / 0 |
+
+(c) An LB cut of one bad path (r47 scenario c, lab 1: B degraded at 15 s,
+lowered and cut by auto2 within ~15 s, its links retired one at a time by
+the cut drain, the pool stays at 149-150), n=10+10: **0 triggers**; Mbps
+1049 vs 1076 (p=0.22), crowd p99 288 vs 297 (p=0.79), call p99 240 vs 218
+(p=0.73), late 7 vs 7 % (p=0.97), game p99 181 vs 163 (p=0.28). A one-path cut cannot reach "under half"
+with three paths, and the drain is gradual anyway.
+
+(b) u8w (75 % kill at 12 s, stats over 12-22 s): it engaged in every key-on
+run (pool 108-116 -> 30-55) and never with the key off, but the gain of
+§11.11.4 did **not** replicate:
+
+| run | n | crowd p99 off / on | call late % off / on | crowd fails off / on | Mbps off / on |
+|---|---|---|---|---|---|
+| lab 2, §11.11.4 | 6+6 | 265 / 196 (p=0.03) | 47 / 7 (p=0.03) | — | 956 / 1072 |
+| **lab 1** | 12+12 | 221 / **268** (p=0.06) | 81 / 47 (p=0.07) | 1700 / 1628 (p=0.21) | 1134 / 1220 (p=0.83) |
+| **lab 2 again** | 6+6 | 194 / 204 (p=0.70) | 37 / 28 (p=0.94) | 1628 / **1686 (p=0.04)** | 1433 / 1194 (p=0.18) |
+
+On lab 1 the crowd p99 got worse with the key (only the call late share
+improved, p=0.07); on lab 2 the rerun shows no gain and slightly more crowd
+failures; one key-on lab 2 run lost the iperf control connection at the
+kill (0 Mbps; 1 of 76 u8 runs on both labs, no off-arm case). Call p99 of
+some lab 1 runs is -1 (no call sample in the window) in both arms.
+
+**Decision: not accepted; `HS2_MCONN_STRIPE_REBUILD` stays off by default**
+(lab key only). It never fires without a mass loss and costs nothing when
+idle, but its effect after a kill is inconsistent across labs and runs
+(crowd p99 better in one battery, worse in another), so it does not meet
+the bar for a production default. Plan: if revisited, measure what the
+light users wait for in the 10 s window (sub placement vs pool refill
+order: `HS2_MCONN_TRACE` on the crowd port) before narrowing anything, and
+need one direction across both labs at n>=12.
+

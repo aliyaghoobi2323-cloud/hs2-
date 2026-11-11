@@ -789,9 +789,10 @@ Still **off** by default (nothing changes unless you set them):
 `HS2_LB_RESCUE_RAW`, `HS2_LB_EVAC`, `HS2_LB_FAST_VERDICT`,
 `HS2_MCONN_STRIPE_REBUILD` (rel52, Iran: after the pool falls under half of its
 recent peak, a striped upload uses one stripe sub beside its primary for
-`HS2_MCONN_STRIPE_REBUILD_MS`, default 5000, while the pool rebuilds; lab u8:
-crowd p99 265 -> 196 ms, call late 47 -> 7 %, n=6+6; not yet accepted as a
-default), and the lab-only
+`HS2_MCONN_STRIPE_REBUILD_MS`, default 5000, while that pool rebuilds; the
+window is per tunnel; a first lab u8 battery gained (n=6+6) but the
+confirmation round did not replicate it on either lab, so it stays a lab
+key — `docs/reality-architecture.md` §11.11.7), and the lab-only
 trace keys `HS2_MCONN_TRACE`, `HS2_MCONN_TRACE_PORT`, `HS2_MCONN_TRACE_GAME`
 (rel52: also traces game-like light two-way connections).
 

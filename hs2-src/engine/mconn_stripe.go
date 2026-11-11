@@ -159,6 +159,8 @@ type stripeState struct {
 	stAW stripeAW // Iran: the adaptive smux window of a settled stripe (smux_autowin.go)
 
 	stripeGate // sender: the scavenger's width (mconn_stripe_scav.go)
+
+	stPool *poolPeak // Iran: the pool's rebuild window (HS2_MCONN_STRIPE_REBUILD; nil: none)
 }
 
 // stripeN: some sub was ever marked stripe (cheap gate for the send path).
@@ -166,9 +168,10 @@ func (m *mConn) stripeN() bool { return m.stN > 0 }
 
 // setStripe (Iran, right after newMConnIran): this connection may stripe
 // over up to k subs.
-func (m *mConn) setStripe(k int) {
+func (m *mConn) setStripe(k int, pool *poolPeak) {
 	m.mu.Lock()
 	m.stK = k
+	m.stPool = pool
 	m.mu.Unlock()
 }
 
@@ -451,8 +454,8 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 		w = 1 // HS2_MCONN_STRIPE_UP: never narrower than the ungated pair before it (mconn_stripe_up.go)
 	}
 	if m.iran {
-		if c := stripeRebuildCap(time.Now()); c >= 0 && (w < 0 || w > c) {
-			w = c // HS2_MCONN_STRIPE_REBUILD: the pool is rebuilding after a mass loss
+		if c := m.stPool.rebuildCap(time.Now()); c >= 0 && (w < 0 || w > c) {
+			w = c // HS2_MCONN_STRIPE_REBUILD: this pool is rebuilding after a mass loss
 		}
 	}
 	for i := range nsubs {

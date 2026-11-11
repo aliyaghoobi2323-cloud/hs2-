@@ -51,6 +51,7 @@ func loadEnvKeys() {
 	stripeShare = envOn("HS2_MCONN_STRIPE_SHARE")
 	stripeRel = envOn("HS2_MCONN_STRIPE_REL")
 	stripeResend.Store(envOn("HS2_MCONN_STRIPE_RESEND"))
+	stripeRebuildOn.Store(envOn("HS2_MCONN_STRIPE_REBUILD"))
 	lbCutDrain = envOn("HS2_LB_CUT_DRAIN")
 	stripeQWin = msFromEnv(envDefault("HS2_MCONN_STRIPE_QWIN_MS"), 0)
 	smuxAutoWin = autoWinFromEnv(envDefault)

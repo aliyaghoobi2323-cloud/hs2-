@@ -25,7 +25,7 @@ func stripeLinkDeath(t *testing.T, resend bool) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iran.setStripe(3)
+	iran.setStripe(3, nil)
 	data := randBytes(12<<20, 61)
 	go func() {
 		mWaitFor(t, "stripe", 10*time.Second, func() bool { return stripeSubs(iran) == 2 })
@@ -96,7 +96,7 @@ func stripeAllDie(t *testing.T, grace time.Duration) error {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iran.setStripe(3)
+	iran.setStripe(3, nil)
 	data := randBytes(12<<20, 62)
 	go func() {
 		mWaitFor(t, "stripe", 10*time.Second, func() bool { return stripeSubs(iran) == 2 })
@@ -177,7 +177,7 @@ func TestStripeFailedWriteResent(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		iran.setStripe(3)
+		iran.setStripe(3, nil)
 		data := randBytes(8<<20, id)
 		go func() {
 			mWaitFor(t, "stripe", 10*time.Second, func() bool { return stripeSubs(iran) == 2 })

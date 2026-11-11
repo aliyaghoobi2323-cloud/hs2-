@@ -72,7 +72,7 @@ func TestMConnStripeGrowsAndSpreads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iran.setStripe(4)
+	iran.setStripe(4, nil)
 	exit := n.exit
 	d := stripeDownload(t, n, iran, exit, size)
 	if k := stripeSubs(iran); k != 3 {
@@ -124,7 +124,7 @@ func TestMConnStripeFromRaw(t *testing.T) {
 	n, iran, exit := newRawPair(t)
 	n.hook = func(l *tLink) { l.exit.rate.Store(1 << 20) }
 	n.link(0).exit.rate.Store(1 << 20)
-	iran.setStripe(3)
+	iran.setStripe(3, nil)
 	down, up := randBytes(8<<20, 41), randBytes(256<<10, 42)
 	both(t,
 		func() error { return xfer(exit, down, 32<<10, 0) },
@@ -160,7 +160,7 @@ func TestMConnStripeStalledSub(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iran.setStripe(3)
+	iran.setStripe(3, nil)
 	data := randBytes(16<<20, 9)
 	go func() {
 		mWaitFor(t, "stripe", 10*time.Second, func() bool { return stripeSubs(iran) == 2 })
@@ -190,7 +190,7 @@ func TestMConnStripeSlots(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	iran.setStripe(2)
+	iran.setStripe(2, nil)
 	stripeDownload(t, n, iran, n.exit, 6<<20)
 	if stripeStat.active.Load() != a0+1 {
 		t.Fatalf("active %d, want %d", stripeStat.active.Load(), a0+1)

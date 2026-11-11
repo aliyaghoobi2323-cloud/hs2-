@@ -55,14 +55,21 @@ docs/reality-architecture.md §11):
   falls under half of its recent peak, striped uploads use one stripe sub
   beside the primary for `HS2_MCONN_STRIPE_REBUILD_MS` (5000). Lab 2, n=6+6:
   crowd p99 265 -> 196 ms (p=0.03), call late 47 -> 7 % (p=0.03), Mbps not
-  lower (956 vs 1072); engaged 6/6, 0/6 off. Off until accepted.
+  lower (956 vs 1072); engaged 6/6, 0/6 off. **rel52b confirmation round:
+  not accepted, stays off.** 0 triggers in 48 no-kill runs (c0/c1/u1/s,
+  n=6+6 each, no significant regression) and in an LB cut of one path
+  (scenario c, n=10+10); but after the kill the gain did not replicate (lab 1
+  n=12+12: crowd p99 221 -> 268 ms, p=0.06, call late 81 -> 47 %, p=0.07;
+  lab 2 rerun n=6+6: no gain, crowd fails slightly up, p=0.04). The window
+  is now per pool (per tunnel), not process-wide.
 - **Scenario s** — rel52 vs before the call-stuck change, n=8+8: Mbps 1185 vs 1138, Mann-Whitney p=0.57 (the rel51 1176 vs 1314 at n=4 was noise).
 - **Release tooling** — gofmt excludes the vendored upstream uTLS files
   (only `third_party/utls/hs2_*.go` is checked); `release_files_test.sh`
   runs that check when gofmt is on PATH.
 - **Tests** — `TestRealityRSAKeyAndTicketPads` deterministic (rel51);
   `ports_menu_test.sh`: 105 looped real runs at load up to 45, 105 pass, not
-  reproduced; new `TestMTraceGameBand`, `TestStripeRebuildWindow`.
+  reproduced; new `TestMTraceGameBand`, `TestStripeRebuildWindow` (rel52b:
+  also a second pool not narrowed, a one-path cut opens nothing).
 
 Defaults that change for an **r31** deployment (reverse l3mtcp only; not
 under `HS2_DEFAULTS=legacy`): `HS2_LB_JUDGE_DATA` (both), `HS2_LB_RESCUE`,
