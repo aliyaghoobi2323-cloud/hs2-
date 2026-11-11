@@ -190,7 +190,13 @@ func normalize(s *tunnelSpec, h tunHostEnv) error {
 		s.Iface = freeIface(h)
 	}
 	if s.listener() && s.tlsFront() && s.Cert == "" {
+		// a domain: its Let's Encrypt pair; none (a non-interactive join of
+		// the dialer's code): self-signed, as the wizard defaults — "auto"
+		// with no domain pointed at /etc/letsencrypt/live//fullchain.pem
 		s.Cert = "auto"
+		if s.Domain == "" {
+			s.Cert = "self"
+		}
 	}
 	return nil
 }

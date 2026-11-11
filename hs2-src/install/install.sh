@@ -11,7 +11,7 @@
 #  and "hs2-<name>". The name is chosen where the setup link is made and
 #  travels in the link, with the tunnel's own tun subnet.
 #      hs2-menu                   (this menu, installed locally by setup/upgrade)
-#      hs2-menu --new             (the redesigned menu + live dashboard; preview, --classic = the old one)
+#      hs2-menu --classic         (the classic menu; the redesigned one is the default since M7, --new forces it)
 # ============================================================================
 set -euo pipefail
 # Create every file and directory root-only by default (configs hold the tunnel
@@ -65,7 +65,8 @@ TUN_ENCAP=udp
 TUN_PROTO=""
 
 # ---------- pretty output (all to stderr so $(...) captures only real values) --
-_c(){ printf '\033[%sm%s\033[0m\n' "$1" "$2" >&2; }
+# colour off (menu setting "color=off", or NO_COLOR set): plain text
+_c(){ if [ -n "${HS2_NOCOLOR:-}${NO_COLOR:-}" ]; then printf '%s\n' "$2" >&2; else printf '\033[%sm%s\033[0m\n' "$1" "$2" >&2; fi; }
 info(){ _c '1;34' "→ $1"; }
 ok(){   _c '1;32' "✓ $1"; }
 warn(){ _c '1;33' "! $1"; }
@@ -2533,6 +2534,13 @@ remove_tunnel(){ # unit
     if [ -z "$other" ]; then ip link del "$ifc" 2>/dev/null || true; fi
   fi
   local sp; sp=$(status_path "$cfg")
+  # The self-signed pair `hs2 tunnel create` generated for this tunnel
+  # ($CFG_DIR/certs/UNIT.crt/.key, named by the config): its private key must
+  # not outlive the tunnel (hs2 tunnel delete removes it too; the backup keeps it).
+  if [ -n "$u" ] && [ -f "$cfg" ] && grep -q "\"cert_file\": *\"$CFG_DIR/certs/$u.crt\"" "$cfg" 2>/dev/null; then
+    rm -f "$CFG_DIR/certs/$u.crt" "$CFG_DIR/certs/$u.key"
+    rmdir "$CFG_DIR/certs" 2>/dev/null || true
+  fi
   # the live status file, and the warm-start record next to it (same name, .warm)
   rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$sp" "${sp%.status.json}.warm"
   # Its systemd drop-ins (systemctl edit / set-property make them): useless
@@ -5355,11 +5363,11 @@ upgrade(){ # [tunnel]
   info "Tunnel manager: run  hs2-menu  → 3"
 }
 
-# ---------- the new menu (menu redesign M2; opt-in until M7) ----------------
-# `hs2-menu --new` (or HS2_MENU=new, or "default_menu=new" in menu.conf, set
-# from its own Menu settings) opens it; `hs2-menu --classic` / HS2_MENU=classic
-# always opens the classic menu above, which stays the default until the
-# redesign's tests (M7) pass. The new menu is a thin shell: the live dashboard
+# ---------- the new menu (menu redesign M2-M6; the default since M7) ---------
+# A bare `hs2-menu` opens it (M7: the full lab test passed); `hs2-menu
+# --classic`, HS2_MENU=classic or "default_menu=classic" in menu.conf (Menu
+# settings → 4) open the classic menu above, which stays reachable (also "c"
+# in the new menu). The new menu is a thin shell: the live dashboard
 # and the header are rendered by `hs2 dashboard`; items 2-5 still open the
 # classic screens (M3-M5 replace them).
 MENU_CONF=$CFG_DIR/menu.conf
@@ -5378,7 +5386,8 @@ nm_load(){
   nm_utf8 || NM_LANG=en                       # Persian needs a UTF-8 terminal
   NM_MODE=$(mc_get mode); case "$NM_MODE" in simple|advanced) ;; *) NM_MODE=simple ;; esac
   NM_COLOR=$(mc_get color); case "$NM_COLOR" in on|off) ;; *) NM_COLOR=on ;; esac
-  if [ "$NM_COLOR" = off ]; then C_G=; C_R=; C_Y=; C_B=; C_D=; C_0=; fi
+  [ -n "${NO_COLOR:-}" ] && NM_COLOR=off
+  if [ "$NM_COLOR" = off ]; then C_G=; C_R=; C_Y=; C_B=; C_D=; C_0=; HS2_NOCOLOR=1; else HS2_NOCOLOR=; fi
   HS2_DOCTOR_LANG=$NM_LANG
 }
 nm_t(){ if [ "$NM_LANG" = fa ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
@@ -5467,6 +5476,13 @@ nm_tunnels_classic(){
 nm_tun(){ "$BIN" tunnel "$@" --lang "$NM_LANG" </dev/tty || true; }  # never trips set -e
 nm_tunnels(){
   local c u code
+  if [ ! -x "$BIN" ]; then
+    # A fresh server: install the binary first, so the wizard (not the
+    # classic setup screens) builds the first tunnel. A subshell: a failed
+    # download dies there and the menu stays.
+    read -rp "$(nm_t "hs2 is not installed on this server yet — install it now? [Y/n]: " "hs2 هنوز روی این سرور نصب نیست — الان نصب شود؟ [Y/n]: ")" c </dev/tty || c=n
+    case "$c" in [nN]*) ;; *) nm_lock && { ( install_binary ) || true; nm_unlock; } ;; esac
+  fi
   if ! nm_has_tunnel; then nm_tunnels_classic; return 0; fi
   while :; do
     echo >&2; hr; say " ${C_B}$(nm_t "Tunnels" "تونل‌ها")${C_0}"; hr
@@ -5956,7 +5972,7 @@ nm_settings(){
     say "   1) $(nm_t Language زبان): $NM_LANG   (fa / en)"
     say "   2) $(nm_t Mode حالت): $NM_MODE   (simple / advanced)"
     say "   3) $(nm_t Colour رنگ): $NM_COLOR"
-    v=$(mc_get default_menu); say "   4) $(nm_t "hs2-menu opens" "hs2-menu باز می‌کند"): ${v:-classic}   (classic / new)"
+    v=$(mc_get default_menu); say "   4) $(nm_t "hs2-menu opens" "hs2-menu باز می‌کند"): ${v:-new}   (new / classic)"
     if nm_stats_timer_on; then v=on; else v=off; fi
     say "   5) $(nm_t "24 h history sampler (hs2-stats.timer, every 5 min)" "نمونه‌گیر تاریخچهٔ ۲۴ ساعته (hs2-stats.timer، هر ۵ دقیقه)"): $v"
     say "   0) $(nm_t Back بازگشت)"
@@ -5967,7 +5983,7 @@ nm_settings(){
       2) if [ "$NM_MODE" = simple ]; then mc_set mode advanced; else mc_set mode simple; fi; nm_load ;;
       3) if [ "$NM_COLOR" = on ]; then mc_set color off; else mc_set color on
            C_G=$'\033[1;32m'; C_R=$'\033[1;31m'; C_Y=$'\033[1;33m'; C_B=$'\033[1;34m'; C_D=$'\033[2m'; C_0=$'\033[0m'; fi; nm_load ;;
-      4) if [ "$(mc_get default_menu)" = new ]; then mc_set default_menu classic; else mc_set default_menu new; fi ;;
+      4) if [ "$(mc_get default_menu)" = classic ]; then mc_set default_menu new; else mc_set default_menu classic; fi ;;
       5) if nm_stats_timer_on; then nm_stats_timer off; else nm_stats_timer on; fi ;;
       0|b|B|q|"") return 0 ;;
       *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
@@ -6015,18 +6031,18 @@ nm_main(){
 }
 
 # menu_entry: which menu a bare `hs2-menu` opens — the flag, else HS2_MENU,
-# else menu.conf's default_menu, else the classic one.
+# else menu.conf's default_menu, else the new one (the default since M7).
 menu_entry(){
   local m="${NM_FORCE:-${HS2_MENU:-}}"
   [ -n "$m" ] || m=$(mc_get default_menu)
-  if [ "$m" = new ]; then nm_main; else main_menu; fi
+  if [ "$m" = classic ]; then main_menu; else nm_main; fi
 }
 
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
 case "${1:-}" in
   ''|menu)   ;;                                   # no argument → the interactive menu below
-  --new)     NM_FORCE=new ;;                      # the redesigned menu (preview until M7)
-  --classic) NM_FORCE=classic ;;                  # the classic menu (default)
+  --new)     NM_FORCE=new ;;                      # the redesigned menu (the default since M7)
+  --classic) NM_FORCE=classic ;;                  # the classic menu (still reachable)
   manage)    tunnel_manager; exit 0 ;;
   upgrade)   upgrade "${2:-}"; exit 0 ;;
   backup)    backup >/dev/null; exit 0 ;;
@@ -6069,7 +6085,7 @@ main_menu(){
     echo "    7) Restore a backup" >&2
     echo "    8) Uninstall hs2 (removes ALL tunnels; asks before removing the program)" >&2
     echo "    9) Server doctor  (what is wrong on this server and what to do — read-only)" >&2
-    echo "    n) New menu (preview: live dashboard, menu settings — also: hs2-menu --new)" >&2
+    echo "    n) New menu (the default: live dashboard, safe changes — hs2-menu opens it)" >&2
     echo "    0) Exit" >&2
     echo >&2
     read -rp "Choose [0-9]: " CH </dev/tty || exit 0

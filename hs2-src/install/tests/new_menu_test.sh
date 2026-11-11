@@ -85,16 +85,19 @@ out=$(run '4
 check "4) security: the M5 Security & camouflage screen (hs2 reality status)" 'grep -q "^reality status -u hs2-x" "$T/calls" && ! echo "$out" | grep -q "arrives in M5"'
 out=$(run 'x\n0\n')
 check "invalid choice survives (menu drawn again)" 'echo "$out" | grep -q "Invalid choice" && [ "$(echo "$out" | grep -c "1) Live dashboard")" -ge 2 ]'
-out=$(run '9\n4\n0\n0\n')
-check "settings: default menu → new" 'grep -qx "default_menu=new" "$T/menu.conf"'
-
-out=$(ENTRY=1 run '0\n')
-check "hs2-menu: default_menu=new opens the new menu" '! grep -q CLASSIC "$T/calls" && echo "$out" | grep -q "Live dashboard"'
-out=$(ENTRY=1 HMENU=classic run '0\n')
-check "HS2_MENU=classic overrides menu.conf" 'grep -q CLASSIC "$T/calls"'
 rm -f "$T/menu.conf"
 out=$(ENTRY=1 run '0\n')
-check "hs2-menu: classic stays the default" 'grep -q CLASSIC "$T/calls"'
+check "hs2-menu: the new menu is the default (M7)" '! grep -q CLASSIC "$T/calls" && grep -q "^dashboard --header" "$T/calls"'
+out=$(run '9\n4\n0\n0\n')
+check "settings: default menu → classic" 'grep -qx "default_menu=classic" "$T/menu.conf"'
+out=$(ENTRY=1 run '0\n')
+check "hs2-menu: default_menu=classic opens the classic menu" 'grep -q CLASSIC "$T/calls"'
+out=$(ENTRY=1 HMENU=new run '0\n')
+check "HS2_MENU=new overrides menu.conf" '! grep -q CLASSIC "$T/calls" && grep -q "^dashboard --header" "$T/calls"'
+out=$(run '9\n4\n0\n0\n')
+check "settings: default menu → new again" 'grep -qx "default_menu=new" "$T/menu.conf"'
+out=$(ENTRY=1 HMENU=classic run '0\n')
+check "HS2_MENU=classic overrides menu.conf" 'grep -q CLASSIC "$T/calls"'
 out=$(TLANG=C run '0\n')
 check "non-UTF-8 locale: English" 'echo "$out" | grep -q "1) Live dashboard" && ! echo "$out" | grep -q "داشبورد"'
 exit "$fail"

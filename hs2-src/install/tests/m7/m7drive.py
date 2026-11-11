@@ -237,18 +237,6 @@ def step_lock():
     b = None
     try:
         a.exp(MAIN_EN)
-        a.send("3")  # LB screen
-        i = a.exp([SUB, r"Which tunnel\? "])
-        if i == 1:
-            a.send("1")
-            a.exp(SUB)
-        a.send("6")  # equal split -> takes the lock (then releases); hold with tunnel edit instead
-        a.exp([PAUSE, SUB], 120)
-        # hold the lock: Security -> e/2 edit config screen (classic editor under nm_edit)
-        a.send("")
-        a.exp(SUB)
-        a.send("0")
-        a.exp(MAIN_EN)
         a.send("2")
         a.exp(SUB)
         a.send("n")  # wizard holds the lock while it asks

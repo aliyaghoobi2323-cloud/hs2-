@@ -225,7 +225,7 @@ func TestNormalizeRejectsAndDefaults(t *testing.T) {
 	if err := normalize(&s, h); err != nil {
 		t.Fatal(err)
 	}
-	if s.Carrier != "l3mtcp" || s.Name != "hs2" || s.Iface != "hs0" || len(s.SharedKey) != 64 || s.MTU != 1380 || s.Expose != "127.0.0.1:443" || s.Cert != "auto" {
+	if s.Carrier != "l3mtcp" || s.Name != "hs2" || s.Iface != "hs0" || len(s.SharedKey) != 64 || s.MTU != 1380 || s.Expose != "127.0.0.1:443" || s.Cert != "self" {
 		t.Fatalf("defaults %+v", s)
 	}
 }
@@ -444,5 +444,22 @@ func TestJoinFreeName(t *testing.T) {
 	s = tunnelSpec{Name: "edge"}
 	if old := joinFreeName(&s, h); old != "" || s.Name != "edge" {
 		t.Fatalf("%q %q", old, s.Name)
+	}
+}
+
+// M7: a non-interactive join on the listening side with no domain got
+// cert "auto" = /etc/letsencrypt/live//fullchain.pem and failed hs2 check.
+func TestNormalizeListenerNoDomainSelfCert(t *testing.T) {
+	h := fakeHost(t)
+	s := tunnelSpec{Role: "iran", Direction: "reverse", Carrier: "l3mtcp", Port: 9443, UserPorts: "8443", PublicIP: "203.0.113.5"}
+	if err := normalize(&s, h); err != nil {
+		t.Fatal(err)
+	}
+	if s.Cert != "self" {
+		t.Fatalf("cert %q", s.Cert)
+	}
+	s = tunnelSpec{Role: "iran", Direction: "reverse", Carrier: "l3mtcp", Port: 9443, UserPorts: "8443", PublicIP: "203.0.113.5", Domain: "a.example.com"}
+	if err := normalize(&s, h); err != nil || s.Cert != "auto" {
+		t.Fatalf("cert %q %v", s.Cert, err)
 	}
 }
