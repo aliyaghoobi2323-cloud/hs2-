@@ -11,7 +11,10 @@
 set -uo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd); INST="$HERE/../install.sh"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-fail=0; check(){ if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
+# no pipefail inside a check: `echo "$out" | grep -q X` exits grep at the first
+# match and the echo then dies of SIGPIPE, which pipefail would turn into a
+# false FAIL on a busy host (seen once under parallel load)
+fail=0; check(){ if (set +o pipefail; eval "$2"); then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi; }
 command -v script >/dev/null 2>&1 || { echo "SKIP (script(1) not installed)"; exit 0; }
 awk '/^case "\$\{1:-\}" in$/{exit} {print}' "$INST" > "$T/core.sh"
 TOKEN=987654321:SecretTokenValueXYZ_abcdefghijklm
