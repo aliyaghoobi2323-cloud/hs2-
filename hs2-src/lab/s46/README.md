@@ -11,7 +11,7 @@ the environment adds kharej env. Variants c0, c1, s (crowd/call/game, no
 heavy), u8 (8 uploads, 75 % of the links killed at 12 s).
 `run2.sh` = run1.sh with `irF2.sh`/`khF2.sh`: arm `r128` (reality, the
 openssl target limited to TLS_AES_128_GCM_SHA256) and a per-second `ss -ti`
-summary of the link sockets on kharej (prepared, not yet run: `kh-ss.txt`: n, sum cwnd, mean rtt,
+summary of the link sockets on kharej (`kh-ss.txt`: n, sum cwnd, mean rtt,
 sum retrans, sum delivery rate Mbit/s).
 `drv.sh JOBS` / `drv2.sh JOBS`: 3 slots, lines "NAME FARM V BIN [IR env]".
 `hs.py res` prints each run's per-second heavy series; `sum.py res` groups by

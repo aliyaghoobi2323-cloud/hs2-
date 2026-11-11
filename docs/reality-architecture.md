@@ -2259,12 +2259,32 @@ the upload alive after the kill than with it dead (the light users share the
 4. Until then production behaves as before: a striped upload is reset when
    one of its links dies.
 
-#### 11.6.5 Not done: reality Mbps vs AES-128
+#### 11.6.5 Reality Mbps vs AES-128: not the cipher
 
-The r128 / reality / tls interleaved battery (n>=8, c0 and c1, `ss -ti` per
-second) did not run in rel46 (time went to 11.6.1-11.6.3). The harness is
-ready (`lab/s46/run2.sh`, arm `r128`, kharej `kh-ss.txt`), untested; jobs:
-`c1|c0 x r128|reality|tls`, arm order rotated per round, 4 rounds per lab.
+Lab 2, rel46 build (c981cdaa, the resend on — no link dies in c0/c1),
+`lab/s46/run2.sh`, arms r128 (reality, the openssl target limited to
+TLS_AES_128_GCM_SHA256, checked in `ps`), reality (target AES-256 by suite
+parity), tls (Go: AES-128), all three in every round, order rotated, n=8
+each; kharej `ss -ti` of the 150 link sockets every second (means over the
+heavy window). Means ± sd, Mann-Whitney p (5000 permutations):
+
+| | tls | r128 | reality | p reality/tls | p r128/tls | p reality/r128 |
+|---|---|---|---|---|---|---|
+| c0 Mbps | 1601 ± 105 | 1668 ± 145 | 1607 ± 116 | 0.57 | 0.38 | 0.51 |
+| c1 Mbps | 1312 ± 93 | 1251 ± 139 | 1169 ± 134 | 0.063 | 0.57 | 0.38 |
+| c1 sum cwnd (segments) | 73677 | 72637 | 71008 | 0.72 | 0.79 | 0.96 |
+| c1 mean rtt ms | 79.2 | 80.2 | 79.9 | 0.50 | 0.73 | 0.96 |
+| c1 retrans / s | 1432 | 1405 | 1293 | 0.041 | 0.88 | 0.07 |
+| c1 ping p99 ms | 169 | 146 | 152 | 0.38 | 0.24 | 0.53 |
+
+Lossless (c0) reality = tls (1607 vs 1601) at the higher rate, where a
+cipher cost would show most; it does not. In c1 the -11 % shows again
+(p 0.063 here, 0.009 in rel45) and r128 sits between, significant against
+neither, with the same cwnd and rtt; reality's lower retransmits/s follow
+its lower rate. So AES-256 is not the cause and the target picker stays as it
+is (no AES-128 preference). The c1 gap appears only under loss; next: one
+link's tcpdump per arm in c1 (record sizes, how a lost segment's record is
+recovered) and the uTLS vs crypto/tls write path under loss.
 
 Release binary: build f2ec4e506acd (the resend off by default: behaviour =
 rel45), sha256 b2f39c97….

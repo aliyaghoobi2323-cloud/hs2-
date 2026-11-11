@@ -37,8 +37,10 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
   `TestStripeLinkDeathResend`.
 - `HS2_MCONN_STRIPE_JUMP_MS` on Iran: no help (2/4 frozen).
 - Lab harness `hs2-src/lab/s46` (several binaries per battery, r31 with the
-  production env, the `r128` arm and a per-second `ss -ti` sampler — the
-  AES-128 battery did not run yet).
+  production env, the `r128` arm and a per-second `ss -ti` sampler).
+- **Reality Mbps vs AES-128**: not the cipher. n=8 interleaved: c0 reality
+  1607 = tls 1601; c1 reality 1169 vs tls 1312 (p 0.063), r128 1251 in
+  between (n.s.), same cwnd/rtt. Target picker unchanged.
 - Binary: build f2ec4e506acd, behaviour = rel45.
 
 ## rel45 — no stall when an IP switches both -> reality; reality vs tls measured (binary)
