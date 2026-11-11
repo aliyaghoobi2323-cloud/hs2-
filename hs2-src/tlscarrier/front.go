@@ -129,7 +129,11 @@ func (TLSFront) DialFront(_ context.Context, p DialPath) (*Carrier, error) {
 	if c <= 0 {
 		c = 8 * time.Second
 	}
-	return DialFromTimeout(p.Addr, p.SNI, p.Key, p.BindIP, c)
+	var names []string
+	if k := p.Profile.NormKind(); k == FrontBoth || k == FrontReality {
+		names = p.Profile.ServerNames // the tls leg of "both": see ErrTargetAnswered
+	}
+	return dialTLS(p.Addr, p.SNI, p.Key, p.BindIP, c, names)
 }
 
 // AcceptFront is the "tls" front's listen side: exactly Handle.

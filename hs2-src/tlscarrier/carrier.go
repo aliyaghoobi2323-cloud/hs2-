@@ -3,11 +3,13 @@ package tlscarrier
 import (
 	"context"
 	"crypto/rand"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -166,6 +168,20 @@ func DialFrom(addr, sni string, sharedKey []byte, bindIP string) (*Carrier, erro
 // keeps a dial's SYNs close together (the kernel spaces a hanging connect's
 // retransmits 1, 2, 4 s apart), for a caller that retries anyway.
 func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration) (*Carrier, error) {
+	return dialTLS(addr, sni, sharedKey, bindIP, connect, nil)
+}
+
+// ErrTargetAnswered: a tls dial to a reality-capable listener got the
+// reality target's certificate (a name of the profile's server_names, not
+// our SNI): the listener is pure reality now and spliced the hello to the
+// target. Failing at the handshake saves waiting for a proof that never
+// comes (the 10 s auth deadline, rel45).
+var ErrTargetAnswered = errors.New("tlscarrier: tls dial answered by the reality target (the listener is pure reality now)")
+
+// dialTLS is DialFromTimeout; targetNames (the path's reality server_names,
+// nil for a plain tls path) make a certificate for one of them that is not
+// for sni fail the handshake with ErrTargetAnswered.
+func dialTLS(addr, sni string, sharedKey []byte, bindIP string, connect time.Duration, targetNames []string) (*Carrier, error) {
 	d := net.Dialer{Timeout: connect}
 	if bindIP != "" {
 		ip := net.ParseIP(bindIP)
@@ -191,6 +207,9 @@ func DialFromTimeout(addr, sni string, sharedKey []byte, bindIP string, connect 
 	}
 	tuneTCP(raw)
 	cfg := &utls.Config{ServerName: sni, InsecureSkipVerify: true}
+	if len(targetNames) > 0 {
+		cfg.VerifyPeerCertificate = targetCertCheck(sni, targetNames)
+	}
 	u, err := newClientConn(wrapBatch(raw), cfg, addr, clientHello)
 	if err != nil {
 		raw.Close()
@@ -239,3 +258,25 @@ func clientEKM(u *utls.UConn, cfg *utls.Config) ([]byte, error) {
 var _ = binary.BigEndian
 var _ = rand.Read
 var _ = context.Background
+
+// targetCertCheck: the leaf is for one of targetNames and not for sni.
+func targetCertCheck(sni string, targetNames []string) func([][]byte, [][]*x509.Certificate) error {
+	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+		if len(rawCerts) == 0 {
+			return nil
+		}
+		c, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return nil
+		}
+		if sni != "" && c.VerifyHostname(sni) == nil {
+			return nil
+		}
+		for _, n := range targetNames {
+			if n != "" && !strings.EqualFold(n, sni) && c.VerifyHostname(n) == nil {
+				return ErrTargetAnswered
+			}
+		}
+		return nil
+	}
+}

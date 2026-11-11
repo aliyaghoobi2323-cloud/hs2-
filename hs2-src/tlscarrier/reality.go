@@ -605,6 +605,13 @@ type RealityServer struct {
 	// already-read bytes); anything else is cover (the target splice).
 	TLS     *Server
 	TLSName func(local net.Addr, sni string) bool
+	// TLSUntil, when set on a pure "reality" listener (with TLS/TLSName),
+	// keeps the tls half of "both" for hellos with our tls name until then:
+	// the grace after a live both -> reality switch, so a dial the dialer had
+	// already decided on its tls fallback is served instead of spliced to
+	// the target (where it waited out its 10 s auth deadline, rel45). The
+	// target is still dialed at accept (reality timing), not lazily.
+	TLSUntil time.Time
 	// Counters of this listener (one per lb IP): reality / tls / cover.
 	Counters FrontCounters
 	// concurrent cover splices: this listener and per client /24 (/64)
@@ -1102,7 +1109,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	// partial bytes still reach the target as they arrive). Our own tls
 	// dials never touch the target. "reality" dials at accept (an
 	// authenticated hello needs the target up, see below).
-	lazy := r.TLS != nil && r.TLSName != nil
+	lazy := r.TLS != nil && r.TLSName != nil && r.TLSUntil.IsZero()
 	var dialOnce sync.Once
 	var startedA atomic.Bool
 	startDial := func() {
@@ -1196,7 +1203,7 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 	if hello != nil {
 		authKey, caps, reason = r.checkCaps(hello)
 	}
-	if authKey == nil && hello != nil && r.TLS != nil && r.TLSName != nil && r.TLSName(raw.LocalAddr(), hello.sni) {
+	if authKey == nil && hello != nil && r.tlsHalf(raw.LocalAddr(), hello.sni) {
 		// "both": our own tls name -> the tls front. Its cover is the target
 		// too (phase 4): an unauthenticated request after our handshake is
 		// proxied to the target over TLS, so plain HTTP, other SNIs and our
@@ -1612,4 +1619,16 @@ func (r *RealityServer) limitedCopy(dst, src net.Conn, maxBytes, rateBps int64, 
 			return
 		}
 	}
+}
+
+// tlsHalf: a hello without the reality signal for sni goes to our tls front
+// ("both", or a pure reality listener still inside its switch grace).
+func (r *RealityServer) tlsHalf(local net.Addr, sni string) bool {
+	if r.TLS == nil || r.TLSName == nil {
+		return false
+	}
+	if !r.TLSUntil.IsZero() && !time.Now().Before(r.TLSUntil) {
+		return false
+	}
+	return r.TLSName(local, sni)
 }

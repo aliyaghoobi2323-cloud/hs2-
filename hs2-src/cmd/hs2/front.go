@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"net"
+	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/engine"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -79,6 +82,9 @@ type frontMux struct {
 
 	mu   sync.Mutex // serialises rebuilds
 	byIP atomic.Pointer[map[string]*frontEntry]
+	// built: the first rebuild is done (a switch grace only applies to a
+	// live switch, not to the start)
+	built bool
 }
 
 type frontEntry struct {
@@ -153,6 +159,17 @@ func (m *frontMux) rebuild(fc fileConfig) {
 			if kind == tlscarrier.FrontBoth {
 				rs.TLS = m.srv
 				rs.TLSName = func(_ net.Addr, sni string) bool { return names[strings.ToLower(sni)] }
+			} else if g := switchGrace(m.built, old[k], tunnelFront(m.fc).NormKind()); g > 0 {
+				// a live switch from a front that served our tls name (tls or
+				// "both") to pure reality: dials the dialer already sent with tls
+				// (its "both" fallback, or a path that has not yet heard the
+				// announcement) are still served for a few seconds instead of
+				// spliced to the target, where they waited out the dialer's 10 s
+				// auth deadline (rel45).
+				rs.TLS = m.srv
+				rs.TLSName = func(_ net.Addr, sni string) bool { return names[strings.ToLower(sni)] }
+				rs.TLSUntil = time.Now().Add(g)
+				m.logf("front: %s: our tls name is still served for %v (switch grace)", k, g)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			rs.StartSizeMirror(ctx, 0, m.logf)
@@ -171,6 +188,7 @@ func (m *frontMux) rebuild(fc fileConfig) {
 			m.logf("front: %s back to the tunnel's front; established links keep running", k)
 		}
 	}
+	m.built = true
 	m.fc = fc
 	m.byIP.Store(&next)
 	warnSNIResolve(fc, m.logf)
@@ -260,4 +278,30 @@ func frontPathsNow(fc fileConfig) []frontPathStatus {
 		return nil
 	}
 	return out
+}
+
+// realitySwitchGraceDur: how long a listening IP switched live to pure
+// reality still answers our own tls name (HS2_REALITY_SWITCH_GRACE_S, 0 =
+// off). 30 s covers the dialer's 10 s auth deadline of a dial sent just
+// before the switch and its next announcement.
+var realitySwitchGraceDur = func() time.Duration {
+	if v, err := strconv.Atoi(os.Getenv("HS2_REALITY_SWITCH_GRACE_S")); err == nil && v >= 0 {
+		return time.Duration(v) * time.Second
+	}
+	return 30 * time.Second
+}()
+
+// switchGrace: the grace of a new pure reality entry replacing old (nil =
+// the IP served the tunnel's front, of kind defKind). None at start.
+func switchGrace(built bool, old *frontEntry, defKind string) time.Duration {
+	if !built {
+		return 0
+	}
+	if old == nil && defKind != "" && defKind != tlscarrier.FrontTLS {
+		return 0 // the tunnel's own front was not tls either
+	}
+	if old != nil && old.kind != tlscarrier.FrontBoth && old.kind != tlscarrier.FrontTLS {
+		return 0 // reality -> reality (a key or name change): no tls before either
+	}
+	return realitySwitchGraceDur
 }

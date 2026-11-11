@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -26,6 +28,12 @@ func startPprof() {
 	if ip := net.ParseIP(host); err != nil || ip == nil || !ip.IsLoopback() {
 		log.Printf("pprof: HS2_PPROF=%q refused — it must be a loopback address such as 127.0.0.1:6060", addr)
 		return
+	}
+	// HS2_PPROF_LOCKS=N also samples lock contention (1 in N mutex events)
+	// and blocking (events of N µs or more): /debug/pprof/mutex and /block.
+	if n, err := strconv.Atoi(os.Getenv("HS2_PPROF_LOCKS")); err == nil && n > 0 {
+		runtime.SetMutexProfileFraction(n)
+		runtime.SetBlockProfileRate(n * 1000)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/debug/pprof/", pprof.Index)
