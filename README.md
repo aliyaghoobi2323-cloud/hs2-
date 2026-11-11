@@ -791,7 +791,8 @@ What changes for an existing deployment after the upgrade:
 | `HS2_REFILL_WAIT_MS` / `HS2_REFILL_WAIT_BYTES` — after a link loss the edge holds a new connection up to 300 ms for a link with the fewest bytes (branch start42) | Iran (edge) | off | **300 / 1** |
 | `HS2_START_DIAL` — the first pool, and a pool back after an outage, dial through a start gate (32 at a time) | kharej (exit) | off | **on** |
 | `HS2_MCONN_STRIPE_RESEND` — a striped connection's failed write is kept and resent when its link dies, with a 3 s last-sub grace (`HS2_MCONN_STRIPE_GRACE_MS`; rel49) | both sides | off | **on** |
-| `HS2_MCONN_STRIPE_FAST` — a single upload's stripe widens fast (doubling chain, several pool links at once, 3 standing reserve links `HS2_MCONN_STRIPE_FAST_RESERVE`, 0 = no reserve; rel54) | Iran (edge) | off | **on** |
+| `HS2_MCONN_STRIPE_FAST` — a single upload's stripe widens fast (doubling chain, several pool links at once, 3 standing reserve links `HS2_MCONN_STRIPE_FAST_RESERVE`, 0 = no reserve; rel54). **Not a default since rel54b** (whole-lab u1: +35 % but light p99 crowd +3 ms, echo +8 ms); turn on with `HS2_MCONN_STRIPE_FAST=1` | Iran (edge) | off | off |
+| `HS2_MCONN_STRIPE_FAST_SOLO` — the fast rule only for an upload that stripes alone; while another upload stripes, uploads widen the rel53 way (rel54b) | Iran (edge) | off | **on** |
 | `HS2_MCONN_STRIPE_FAST_EARLY_MS` — in a raw connection's first second the upload rate is sampled every 200 ms, so a fast upload upgrades to stripe in ~400 ms (rel54) | Iran (edge) | off | **200** |
 | `HS2_MCONN_STRIPE_UP_PATHQ` — the upload stripe gate reads the light users' queue per path, not only the overall one (rel54) | Iran (edge) | off | **on** |
 | `hs2-menu` with no argument | installer | classic menu | **new menu** (classic: `c`, `hs2-menu --classic`, `HS2_MENU=classic`, `default_menu=classic` in `/etc/hs2/menu.conf`) |
@@ -829,10 +830,12 @@ Restore the old behaviour:
   `Environment=HS2_LB_RESCUE=0 HS2_LB_RESCUE_CALLFREE=0 HS2_LB_CALL_LATE=0 HS2_REFILL_WAIT_MS=0 HS2_REFILL_WAIT_BYTES=0`
   (Iran), `Environment=HS2_START_DIAL=0` (kharej), then
   `systemctl restart hs2`;
-- **rel54's fast upload only:** on Iran
-  `Environment=HS2_MCONN_STRIPE_FAST=0` (turns FAST, its reserve and
-  EARLY_MS off), or one part at a time: `HS2_MCONN_STRIPE_FAST_RESERVE=0`,
+- **rel54's fast upload** (off by default since rel54b): on Iran
+  `Environment=HS2_MCONN_STRIPE_FAST=1` turns FAST, its reserve and EARLY_MS
+  on; with it, one part at a time: `HS2_MCONN_STRIPE_FAST_RESERVE=0`,
   `HS2_MCONN_STRIPE_FAST_EARLY_MS=0`, `HS2_MCONN_STRIPE_UP_PATHQ=0`;
+  `HS2_MCONN_STRIPE_FAST_SOLO=0` gives every parallel upload the fast rule
+  again (rel54 before rel54b);
 - **the whole default table off** (as before `defaults22`, older than r31):
   `Environment=HS2_DEFAULTS=legacy`;
 - **the classic menu:** `default_menu=classic` (new menu → 9 → 4).
@@ -1002,8 +1005,8 @@ defaults; ...)`.
 | `HS2_LB_CALL_LATE` | `1` | Iran (edge) |
 | `HS2_REFILL_WAIT_MS` | `300` | Iran (edge) |
 | `HS2_REFILL_WAIT_BYTES` | `1` | Iran (edge) |
-| `HS2_MCONN_STRIPE_FAST` (rel54; reserve `HS2_MCONN_STRIPE_FAST_RESERVE`, default 3) | `1` | Iran (edge) |
-| `HS2_MCONN_STRIPE_FAST_EARLY_MS` (rel54) | `200` | Iran (edge) |
+| `HS2_MCONN_STRIPE_FAST_SOLO` (rel54b; only with `HS2_MCONN_STRIPE_FAST=1`) | `1` | Iran (edge) |
+| `HS2_MCONN_STRIPE_FAST_EARLY_MS` (rel54; only with `HS2_MCONN_STRIPE_FAST=1`) | `200` | Iran (edge) |
 | `HS2_MCONN_STRIPE_UP_PATHQ` (rel54) | `1` | Iran (edge) |
 | `HS2_START_DIAL` | `1` | kharej (exit) |
 | `HS2_LB_FILL_PCT` | `25` | kharej (exit) |

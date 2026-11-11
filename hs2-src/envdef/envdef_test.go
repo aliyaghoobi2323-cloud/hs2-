@@ -63,7 +63,7 @@ func TestSides(t *testing.T) {
 		{"HS2_MCONN_STRIPE", "8", "8"},
 		{"HS2_MCONN_STRIPE_JUMP_MS", "", ""},
 		{"HS2_MCONN_STRIPE_RESEND", "1", "1"},
-		{"HS2_MCONN_STRIPE_FAST", "1", ""},
+		{"HS2_MCONN_STRIPE_FAST", "", ""},
 		{"HS2_MCONN_STRIPE_FAST_EARLY_MS", "200", ""},
 		{"HS2_MCONN_STRIPE_FAST_SOLO", "1", ""},
 		{"HS2_MCONN_STRIPE_UP_PATHQ", "1", ""},
@@ -128,7 +128,7 @@ func TestTableUnique(t *testing.T) {
 		}
 		seen[k.Name] = true
 	}
-	if len(Table) != 50 {
-		t.Fatalf("table has %d keys, want 50", len(Table))
+	if len(Table) != 49 {
+		t.Fatalf("table has %d keys, want 49", len(Table))
 	}
 }
