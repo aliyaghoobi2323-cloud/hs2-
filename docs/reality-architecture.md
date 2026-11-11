@@ -1301,3 +1301,80 @@ Final tree (lab 3, clean `git archive`): gofmt (changed files) clean, `go vet
 ./...`, `-race` on TestMConnCallRescue*/TestCallRescueMark/TestMConnRescue*/
 TestRescue*/TestCallAvoidMark ok, reality, tlscarrier, cmd/hs2, envdef ok,
 full engine suite ok (639 s, -timeout 40m).
+
+### 8.11 Phase 5e (2026-11-11, branch reality40): a stuck call caught by its own signals
+
+**Trigger (`HS2_LB_CALL_STUCK`, on under `HS2_LB_CALL_RESCUE`; `=0` turns it
+off; `lb_call_stuck.go`).** 8.10's call rescue waits for the path's verdict
+(~7.5 s after the cut). Now, on Iran, for a call (callRescueOnLocked) with two
+live subs or more ALL on links of one path (the steering tick records each
+link's path, `callPathMark`), sampled every 100 ms while that holds:
+- every sub's socket in loss recovery or with more than 64 KB unsent
+  (TCP_INFO through `tcpBusy`, as HS2_MCONN_CALL_PICK reads it) without a
+  break for 500 ms, or a receive gap of 600 ms on all subs while this side
+  kept sending (a push in the last 200 ms);
+- then at once one fresh sub with the call-rescue placement off every link of
+  that path (`callStuckMark`; no link off it: no sub is opened);
+- the subs live at the trigger are given up through the close handshake only
+  once a sub opened after it has read a byte from the peer; never the last
+  sub; nothing read within 5 s: nothing closed, evidence read anew;
+- one trigger per connection per 5 s (no flapping), 20 a second per process.
+Counters in the log: `lb call stuck: fresh subs N (busy B, gap G,
+rate-refused R), subs given up M`, and the same in the rescue line. Tests:
+`TestMConnCallStuckBusy` (both sockets busy: fresh sub with the mark for path
+B within 2 s, old subs given up after it read, call flows, never zero subs,
+one trigger, no leak), `TestMConnCallStuckNoFalse` (healthy / two paths / key
+off: no trigger), `TestCallStuckLocked` (500 ms unbroken, flap guard, gap
+alone, gap without sends is no evidence, process bound, mark, path record).
+
+Lab 1, interleaved, three slot-mode drivers in parallel (c / k / b+s, then
+extra s and c reps in all three slots), binary hs2-r40 (k: hs2-r40k,
+mLiteCapPct 0). base = the current default (rescue + callfree + FAST_VERDICT
+as in 8.10), cr = base + `HS2_LB_CALL_RESCUE=1` (with the new trigger).
+Medians (ranges), ms:
+
+| scenario | arm | n | crowd p95 | crowd p99 | call p99 | ping p99 | heavy | fail | stuck triggers |
+|---|---|--:|--:|--:|--:|--:|--:|--|--:|
+| c (all-tls, B bad at 15 s) | base | 9 | 176 (173-186) | 349 | 196 (175-1017) | 170 | 1000 | 0 ×9 | 0 |
+| c | cr | 9 | 177 (170-188) | 341 | 212 (173-628) | 170 | 1023 | 0 ×9 | 1 (r401) |
+| k (budget forced binding) | base | 6 | 577 (553-586) | 874 | 339 (177-726) | 172 | 1062 | 0 ×6 | 0 |
+| k | cr | 6 | 561 (543-591) | 879 | **198 (172-274)** | 175 | 1006 | 0 ×6 | 0 |
+| b (equal paths) | base | 4 | 121 (116-125) | 168 | 194 | 139 | 1288 | 0 ×4 | 0 |
+| b | cr | 4 | 127 (124-133) | 172 | 191 | 126 | 1185 | 0 ×4 | **0** |
+| s (steady) | base | 8 | 122 (117-136) | 168 | 188 | 154 | 1116 | 0 ×8 | 0 |
+| s | cr | 8 | 124 (121-139) | 172 | 188 | 146 | 1196 | 0 ×8 | **0** |
+
+c per run, cr: 628, 180, 176, 173, 447, 365, 212, 568, 184; base: 1017, 379,
+404, 196, 187, 175, 568, 191, 191. The trigger works where it is meant to:
+in cr r401 the call's two subs were on B and stalled at probe second 12
+(780 ms); both sockets busy for 500 ms fired it, a fresh sub on A read, both
+B subs were given up, and the call was at ~250-450 ms from second 15 on (base
+r401, the same case without it: 700-1300 ms every second to the end). But it
+fired in 1 run of 9; the other high cr runs (r405 447, r406 365, r408 568)
+had no trigger: their bad seconds (15-31) come while the call is NOT all on
+one path (a copy on A already), the same post-cut stretches base r402/r403/
+r407 show (380-570). By median c is not better (212 vs 196; the means 326 vs
+368). k is the 8.10 gain again (the lowered-path part; the new trigger never
+fired there). b and s: no trigger in 12 cr runs, call and ping equal; the s
+start window (0-5 s crowd p95: base 457 (171-1857), cr 751 (156-1264)) is
+the usual start-window spread, not the key (nothing fired). Crowd p95 +2-6
+ms in b/s is inside the run-to-run spread (8.10: b cr 122 vs base 125).
+
+**Verdict: `HS2_LB_CALL_RESCUE` stays off** — c, a required scenario, is not
+lower by median. The new trigger is kept (on under the key): it removes the
+"stuck to the end" case from the cut onward, not 7.5 s later, and never fired
+on healthy paths. Plan: what is left in c is a call with copies on both paths
+whose seconds 15-31 are still 300-570 ms; next, trace one such call
+(HS2_MCONN_TRACE on the probe's call) to see which side's copy is late
+(upstream picks with HS2_MCONN_CALL_PICK off, or A's queue behind the crowd
+moved off B), then measure c n=9+9 again with the fix and the key on.
+
+Raw: lab 1 `/opt/hs2lab/r36/d/res` (`an38.py c|k|b|s r40`, runs `*-r40*`,
+`stuck40.sh` for the counters), driver `go40.sh` (PLANTAG r40c/r40k/r40b,
+r40s1-3, r40c1-3).
+
+Final tree (lab 3, clean `git archive` of 04aff51b): gofmt (changed files)
+clean, `go vet ./...`, `-race` on TestMConnCallStuck*/TestCallStuck*/
+TestMConnCallRescue*/TestCallRescueMark/TestMConnRescue*/TestRescue*/
+TestCallAvoidMark ok, reality, tlscarrier, cmd/hs2, envdef ok, full engine
+suite ok (667 s, -timeout 40m).
