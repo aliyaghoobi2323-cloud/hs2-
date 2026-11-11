@@ -1235,6 +1235,14 @@ func upgradeBinary(src, unit string) error {
 	fmt.Println(tr("binary upgraded to: ", "باینری به‌روز شد به: ") + strings.TrimSpace(string(out)))
 	exec.Command("systemctl", "restart", unit).Run()
 	if (realCreator{}).healthy(unit) {
+		// A drop-in whose ExecStart= names another binary (a classic
+		// /usr/local/bin/hs2-r31 run …) wins over the unit: the tunnel came
+		// back up, but on the OLD build. Say so instead of "upgraded".
+		if exe := unitMainExe(unit); !exeIsBin(exe, hs2BinPath) {
+			return fmt.Errorf(tr("%s restarted but runs %s, not the upgraded %s — a drop-in overrides ExecStart (systemctl cat %s); run `bash install.sh upgrade` to point it at %s",
+				"%s دوباره بالا آمد اما %s را اجرا می‌کند نه %s به‌روزشده — یک drop-in مقدار ExecStart را عوض کرده (systemctl cat %s)؛ با `bash install.sh upgrade` به %s برمی‌گردد"),
+				unit, exe, hs2BinPath, unit, hs2BinPath)
+		}
 		return nil
 	}
 	if old, err := os.ReadFile(prev); err == nil {
@@ -1243,4 +1251,32 @@ func upgradeBinary(src, unit string) error {
 		exec.Command("systemctl", "restart", unit).Run()
 	}
 	return fmt.Errorf(tr("%s did not stay up on the new binary — the old binary was restored", "%s با باینری جدید بالا نماند — باینری قبلی برگردانده شد"), unit)
+}
+
+// unitMainExe: the binary unit's main process runs ("" = no process / unknown).
+func unitMainExe(unit string) string {
+	out, err := exec.Command("systemctl", "show", "-p", "MainPID", "--value", unit).Output()
+	pid := strings.TrimSpace(string(out))
+	if err != nil || pid == "" || pid == "0" {
+		return ""
+	}
+	exe, err := os.Readlink("/proc/" + pid + "/exe")
+	if err != nil {
+		return ""
+	}
+	return exe
+}
+
+// exeIsBin: exe (a /proc/PID/exe target, "" = unknown) is bin. /proc gives the
+// resolved path, so bin is compared resolved too; " (deleted)" (the process
+// still runs the inode bin had before the rename) is not bin.
+func exeIsBin(exe, bin string) bool {
+	if exe == "" {
+		return true
+	}
+	if exe == bin {
+		return true
+	}
+	r, err := filepath.EvalSymlinks(bin)
+	return err == nil && r == exe
 }

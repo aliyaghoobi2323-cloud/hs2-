@@ -40,20 +40,24 @@ func (c *recConn) snap() [][]byte {
 // withShapeBulk turns HS2_SHAPE_BULK on for one test, with this hold. The
 // cleanup lets a pending hold timer fire before the keys change back.
 func withShapeBulk(t *testing.T, small bool, hold time.Duration) {
-	ob, osm, oh := shapeBulk, shapeSmall, shapeBulkHold
-	shapeBulk, shapeSmall, shapeBulkHold = true, small, hold
+	ob, osm, oh := shapeBulk.Load(), shapeSmall.Load(), shapeBulkHold
+	shapeBulk.Store(true)
+	shapeSmall.Store(small)
+	shapeBulkHold = hold
 	t.Cleanup(func() {
 		time.Sleep(3 * hold)
-		shapeBulk, shapeSmall, shapeBulkHold = ob, osm, oh
+		shapeBulk.Store(ob)
+		shapeSmall.Store(osm)
+		shapeBulkHold = oh
 	})
 }
 
 // noShapeBulk pins HS2_SHAPE_BULK off for a test of the default shaper, so
 // the suite also passes with the key on in the environment.
 func noShapeBulk(t *testing.T) {
-	ob := shapeBulk
-	shapeBulk = false
-	t.Cleanup(func() { shapeBulk = ob })
+	ob := shapeBulk.Load()
+	shapeBulk.Store(false)
+	t.Cleanup(func() { shapeBulk.Store(ob) })
 }
 
 func decodeRecs(t *testing.T, recs [][]byte) []byte {

@@ -27,7 +27,7 @@ func init() { loadEnvKeys() }
 // loadEnvKeys (re)reads every key of the default table with each key's own
 // parser, as it was read before the table existed.
 func loadEnvKeys() {
-	shapeSmall = envOn("HS2_SHAPE_SMALL")
+	shapeSmall.Store(envOn("HS2_SHAPE_SMALL"))
 	linkProbation = envOn("HS2_LINK_PROBATION")
 	partialRefill = envOn("HS2_PARTIAL_REFILL")
 	pickLane = parseLane(envDefault("HS2_PICK_LANE"))
@@ -38,7 +38,7 @@ func loadEnvKeys() {
 	setMConnMode(envDefault("HS2_MCONN"))
 	fastLink = envOn("HS2_FAST_LINK")
 	mconnBatch.Store(envOn("HS2_MCONN_BATCH"))
-	shapeBulk = envOn("HS2_SHAPE_BULK")
+	shapeBulk.Store(envOn("HS2_SHAPE_BULK"))
 	quietIdle = envOn("HS2_QUIET_IDLE")
 	mconnDeadlineFix.Store(envOn("HS2_MCONN_DEADLINE_FIX"))
 	mconnCloseHS.Store(envOn("HS2_MCONN_CLOSE_HS"))

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"sync/atomic"
 	"time"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
@@ -39,7 +40,7 @@ import (
 // (crypto/tls and utls dynamic record sizing), as Google's and Cloudflare's
 // servers do. Only the sender changes: the decoder takes any frame up to
 // shapeMaxFrame, so one side may run it alone. Off, nothing here runs.
-var shapeBulk bool // loadEnvKeys
+var shapeBulk atomic.Bool // loadEnvKeys (atomic: tests toggle it under live sessions)
 
 const (
 	// shapeBulkRecord is one full record's plaintext: the TLS maximum
@@ -104,7 +105,7 @@ func (c *shapedConn) writeBulk(p []byte, records, padded *int) (int, error) {
 // bytes: a small size for a small one (HS2_SHAPE_SMALL), else at least a
 // draw from the bulk distribution, as the default shaper pads a tail.
 func (c *shapedConn) tailTarget(need int) int {
-	if shapeSmall && need <= obfs.SmallMax {
+	if shapeSmall.Load() && need <= obfs.SmallMax {
 		return obfs.SmallTarget(need, c.uniform(), c.uniform())
 	}
 	return min(max(need, c.sample()), shapeBulkRecord)

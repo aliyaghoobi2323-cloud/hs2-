@@ -116,9 +116,9 @@ func TestShapeFastBatchesRecords(t *testing.T) {
 // the stream decodes as before.
 func TestShapeSmallRecords(t *testing.T) {
 	noShapeBulk(t) // these sizes are the default shaper's
-	old := shapeSmall
-	shapeSmall = true
-	defer func() { shapeSmall = old }()
+	old := shapeSmall.Load()
+	shapeSmall.Store(true)
+	defer func() { shapeSmall.Store(old) }()
 	rb := &recBatcher{}
 	sc := newShapedConn(rb, nil)
 	var want []byte

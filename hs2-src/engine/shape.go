@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/obfs"
 	"github.com/hosseintaghipoursori-alt/hs2-tunnel/tlscarrier"
@@ -71,7 +72,7 @@ var shapeCork = os.Getenv("HS2_SHAPE_CORK") == "1"
 // download — window updates, keepalives — and interactive traffic stop
 // costing ~1 KiB a message. Only the sender changes; the decoder takes any
 // size, so one side may run it alone.
-var shapeSmall bool // HS2_SHAPE_SMALL (loadEnvKeys, defaults22.go)
+var shapeSmall atomic.Bool // HS2_SHAPE_SMALL (loadEnvKeys, defaults22.go)
 
 func newShapedConn(c net.Conn, s *obfs.LengthSampler) *shapedConn {
 	if s == nil {
@@ -120,8 +121,8 @@ func (c *shapedConn) Write(p []byte) (n int, err error) {
 	// A write that fits one small record (a window update, a keepalive, a
 	// stream header, a game datagram) is padded to a small size with
 	// HS2_SHAPE_SMALL, not to a bulk-sized one.
-	small := shapeSmall && len(p)+shapeHdrLen <= obfs.SmallMax
-	if shapeBulk {
+	small := shapeSmall.Load() && len(p)+shapeHdrLen <= obfs.SmallMax
+	if shapeBulk.Load() {
 		// HS2_SHAPE_BULK (shape_bulk.go): full-size records like a web
 		// server's. A small write takes the small path below, unless bytes
 		// a bulk write left waiting go out with it in one record.

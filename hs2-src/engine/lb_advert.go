@@ -400,8 +400,13 @@ func (b *LB) SetPaths(paths []LBPath) error {
 		return fmt.Errorf("lb: %d primary paths (want 1)", np)
 	}
 	// HS2_LB_AUTO2: a path added here gets its two links at once (lb_spare.go),
-	// after the lock is released.
-	defer func() { go b.fillMin() }()
+	// after the lock is released. (auto2On is read here, not in the goroutine:
+	// with the key off nothing is started that could outlive the caller.)
+	defer func() {
+		if b.auto2On() {
+			go b.fillMin()
+		}
+	}()
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	next := append([]LBPath(nil), paths...)

@@ -183,7 +183,14 @@ func TestMConnStripeStalledSub(t *testing.T) {
 func TestMConnStripeSlots(t *testing.T) {
 	setStripeRate(t, 200<<10)
 	setLite(t, true)
-	a0 := stripeStat.active.Load()
+	// The connection's own slot flag, not the process-wide counter: striping
+	// connections other tests left running take and give back slots at any
+	// moment, so `active == a0+1` flaked (rev53b: 1 in ~8 full runs).
+	holds := func(m *mConn) bool {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		return m.stActive
+	}
 	n := &tNet{exit: newMConnExit(34)}
 	rateLinks(n, 2<<20)
 	iran, err := newMConnIran(34, n.open)
@@ -192,12 +199,12 @@ func TestMConnStripeSlots(t *testing.T) {
 	}
 	iran.setStripe(2, nil)
 	stripeDownload(t, n, iran, n.exit, 6<<20)
-	if stripeStat.active.Load() != a0+1 {
-		t.Fatalf("active %d, want %d", stripeStat.active.Load(), a0+1)
+	if !holds(iran) {
+		t.Fatal("a striping download holds no stripe slot")
 	}
 	closeAndWait(t, iran, n.exit)
-	if stripeStat.active.Load() != a0 {
-		t.Fatalf("slot not given back: %d", stripeStat.active.Load())
+	if holds(iran) {
+		t.Fatal("slot not given back")
 	}
 }
 
