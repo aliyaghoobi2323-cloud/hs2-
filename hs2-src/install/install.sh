@@ -2581,6 +2581,12 @@ remove_tunnel(){ # unit
     rm -f "$CFG_DIR/certs/$u.crt" "$CFG_DIR/certs/$u.key"
     rmdir "$CFG_DIR/certs" 2>/dev/null || true
   fi
+  # its alert check (hs2-alert-UNIT.timer/.service): not a tunnel unit, so
+  # tm_units does not list it — remove it with the tunnel it watches
+  if [ -n "$u" ] && { [ -e "$UNIT_DIR/hs2-alert-$u.timer" ] || [ -e "$UNIT_DIR/hs2-alert-$u.service" ]; }; then
+    systemctl disable --now "hs2-alert-$u.timer" >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/hs2-alert-$u.timer" "$UNIT_DIR/hs2-alert-$u.service"
+  fi
   # the live status file, and the warm-start record next to it (same name, .warm)
   rm -f "$UNIT_DIR/$u.service" "$cfg" "$cfg.prev" "$cfg.pre-replace" "$sp" "${sp%.status.json}.warm"
   # Its systemd drop-ins (systemctl edit / set-property make them): useless
@@ -2628,6 +2634,14 @@ uninstall(){
   case "$a" in "REMOVE ALL") ;; *) info "Nothing removed."; return 0 ;; esac
   auto_backup
   for u in $units; do info "Removing $u…"; remove_tunnel "$u"; done
+  # the server-wide helper timers (24 h history, LB park restore)
+  local t
+  for t in hs2-stats hs2-lb-park; do
+    [ -e "$UNIT_DIR/$t.timer" ] || [ -e "$UNIT_DIR/$t.service" ] || continue
+    systemctl disable --now "$t.timer" >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/$t.timer" "$UNIT_DIR/$t.service"
+  done
+  systemctl daemon-reload 2>/dev/null || true
   rm -f /etc/sysctl.d/99-hs2.conf /etc/modules-load.d/hs2.conf
   # What the daemons left in /run/hs2: warm-start records and status files of
   # tunnels that are gone, and the (now empty) ping-guard marker folder.
