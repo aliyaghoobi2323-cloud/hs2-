@@ -621,3 +621,22 @@ func TestAlertLogRotates(t *testing.T) {
 		t.Fatalf("log not rotated: %v %v", err1, err2)
 	}
 }
+
+// rev53c: one bad line used to end parsing — a typo above bot_token left the
+// timer running with no Telegram at all, and only a journal line said so.
+func TestAlertConfBadLineKeepsTheRest(t *testing.T) {
+	c, err := parseAlertConf("lang=farsi\nresend_min=x\nbot_token=1:A\nchat_id=7\nquiet_hours=23:00-07:00\n")
+	if err == nil || !strings.Contains(err.Error(), "line 1") {
+		t.Fatalf("first bad line not reported: %v", err)
+	}
+	d := defaultAlertCfg()
+	if c.BotToken != "1:A" || c.ChatID != "7" || c.Quiet != "23:00-07:00" || c.Lang != d.Lang || c.ResendMin != d.ResendMin {
+		t.Fatalf("lines after a bad one lost or bad value applied: %+v", c)
+	}
+	p := filepath.Join(t.TempDir(), "alert.conf")
+	os.WriteFile(p, []byte("probe=icmp\nbot_token=1:A\n"), 0o600)
+	c, _ = loadAlertConf(p)
+	if !strings.Contains(c.ConfErr, "line 1") || c.BotToken != "1:A" {
+		t.Fatalf("ConfErr %q token %q", c.ConfErr, c.BotToken)
+	}
+}

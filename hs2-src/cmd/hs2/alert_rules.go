@@ -126,6 +126,7 @@ type alertCfg struct {
 	Host         string          // label in messages (default: hostname)
 	Disabled     map[string]bool // alert kinds never sent (disable=)
 	Quiet        string          // quiet_hours HH:MM-HH:MM: only critical to Telegram
+	ConfErr      string          // the first bad line of alert.conf (skipped; reported once)
 	SummaryItems []string        // summary_items (nil = all)
 }
 
@@ -154,6 +155,7 @@ type alertState struct {
 	LastCheck int64                   `json:"last_check"`
 	Recent    []string                `json:"recent,omitempty"`   // last messages (for the menu)
 	FrontFB   map[string]int64        `json:"front_fb,omitempty"` // "both" path -> fallbacks counter seen last
+	ConfErr   string                  `json:"conf_err,omitempty"` // alert.conf error already reported
 	Pending   []string                `json:"pending,omitempty"`  // lines Telegram has not taken yet (sent first at the next check)
 }
 

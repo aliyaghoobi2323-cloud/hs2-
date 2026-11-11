@@ -36,6 +36,10 @@ func parseAlertConf(text string) (alertCfg, error) {
 	c := defaultAlertCfg()
 	sc := bufio.NewScanner(strings.NewReader(text))
 	ln := 0
+	// a bad line is skipped and reported, the rest is still read: one typo
+	// (lang=farsi) must not silently drop the bot_token below it, which left
+	// the timer sending nothing to Telegram with only a journal line saying so
+	var firstErr error
 	for sc.Scan() {
 		ln++
 		l := strings.TrimSpace(sc.Text())
@@ -44,7 +48,8 @@ func parseAlertConf(text string) (alertCfg, error) {
 		}
 		k, v, ok := strings.Cut(l, "=")
 		if !ok {
-			return c, fmt.Errorf("line %d: want key=value", ln)
+			firstErr = firstNonNil(firstErr, fmt.Errorf("line %d: want key=value", ln))
+			continue
 		}
 		k = strings.ToLower(strings.TrimSpace(k))
 		v = strings.TrimSpace(v)
@@ -60,6 +65,7 @@ func parseAlertConf(text string) (alertCfg, error) {
 		}
 		var err error
 		var f float64
+		prev := c // a bad value leaves the key at its default
 		switch k {
 		case "bot_token":
 			c.BotToken = v
@@ -71,17 +77,20 @@ func parseAlertConf(text string) (alertCfg, error) {
 			c.APIURL = v
 		case "lang":
 			if v != "fa" && v != "en" {
-				return c, fmt.Errorf("line %d: lang is fa or en", ln)
+				err = fmt.Errorf("line %d: lang is fa or en", ln)
+			} else {
+				c.Lang = v
 			}
-			c.Lang = v
 		case "summary_time":
 			var h, m int
 			if v != "off" && v != "" {
 				if _, e := fmt.Sscanf(v, "%d:%d", &h, &m); e != nil || h > 23 || m > 59 || h < 0 || m < 0 {
-					return c, fmt.Errorf("line %d: summary_time is HH:MM or off", ln)
+					err = fmt.Errorf("line %d: summary_time is HH:MM or off", ln)
 				}
 			}
-			c.SummaryAt = v
+			if err == nil {
+				c.SummaryAt = v
+			}
 		case "resend_min":
 			f, err = num()
 			c.ResendMin = int(f)
@@ -102,9 +111,10 @@ func parseAlertConf(text string) (alertCfg, error) {
 			c.FlapCuts = int(f)
 		case "probe":
 			if v != "off" && v != "tcp" && v != "tls" {
-				return c, fmt.Errorf("line %d: probe is off, tcp or tls", ln)
+				err = fmt.Errorf("line %d: probe is off, tcp or tls", ln)
+			} else {
+				c.Probe = v
 			}
-			c.Probe = v
 		case "log_file":
 			c.LogFile = v
 		case "host":
@@ -129,12 +139,13 @@ func parseAlertConf(text string) (alertCfg, error) {
 		default:
 			// unknown keys are ignored (newer menu, older binary)
 		}
-		if err != nil {
-			if strings.HasPrefix(err.Error(), "line ") {
-				return c, err
-			}
-			return c, fmt.Errorf("line %d: %v", ln, err)
+		if err != nil && !strings.HasPrefix(err.Error(), "line ") {
+			err = fmt.Errorf("line %d: %v", ln, err)
 		}
+		if err != nil {
+			c = prev
+		}
+		firstErr = firstNonNil(firstErr, err)
 	}
 	if c.ResendMin < 1 {
 		c.ResendMin = 1
@@ -145,7 +156,14 @@ func parseAlertConf(text string) (alertCfg, error) {
 	if c.RTTFactor < 1 {
 		c.RTTFactor = 1
 	}
-	return c, sc.Err()
+	return c, firstNonNil(firstErr, sc.Err())
+}
+
+func firstNonNil(a, b error) error {
+	if a != nil {
+		return a
+	}
+	return b
 }
 
 func loadAlertConf(path string) (alertCfg, []string) {
@@ -163,6 +181,7 @@ func loadAlertConf(path string) (alertCfg, []string) {
 	c, err := parseAlertConf(string(b))
 	if err != nil {
 		warns = append(warns, path+": "+err.Error())
+		c.ConfErr = path + ": " + err.Error()
 	}
 	return c, warns
 }
@@ -271,6 +290,15 @@ func runAlertOnce(cfg alertCfg, cfgPath, unit, stateDir string, dry bool) {
 	st := loadAlertState(sp)
 	msgs := filterDisabled(cfg, evalAlerts(cfg, st, snap))
 	sortMsgs(msgs)
+	if cfg.ConfErr != st.ConfErr {
+		// once per new error: the timer keeps running on the good lines, and
+		// the operator learns the bad one is ignored
+		if cfg.ConfErr != "" {
+			msgs = append(msgs, alertMsg{Key: "conf", Sev: sevWarn, Text: cfg.ConfErr + " — " +
+				alertText(cfg.Lang).pick("این خط نادیده گرفته شد؛ بقیهٔ تنظیمات اجرا می‌شود", "this line is ignored; the rest is in force")})
+		}
+		st.ConfErr = cfg.ConfErr
+	}
 	if dueSummary(cfg, st, now) {
 		msgs = append(msgs, alertMsg{Key: "summary", Sev: sevInfo, Text: takeSummary(cfg, st, now)})
 	}
