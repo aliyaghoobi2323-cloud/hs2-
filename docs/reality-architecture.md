@@ -1553,6 +1553,126 @@ Findings from the lab demo (fixed or guarded here):
   remove-ip of the bound primary moves it to a listed IP. Lab-verified via
   the menu (health gate + confirm, 8/8 links).
 
+### 9.1 Side-aware Reality targets (branch target43, 2026-11-11)
+
+**Which server listens.** `tunnelListens(fc)` = `(mode == "dial") == reverse`;
+the carrier does not change it (mtcp, l3mtcp and tls use the same
+`tlscarrier.Server` on the same side, §2.1):
+
+| mode | mtcp | l3mtcp | tls | the censor sees |
+|------|------|--------|-----|-----------------|
+| direct (`reverse:false`) | kharej listens | kharej listens | kharej listens | a foreign IP answering the SNI |
+| reverse (`reverse:true`) | Iran listens | Iran listens | Iran listens | an Iranian IP answering the SNI |
+
+So the target must match the listener's country: an Iranian site on Iranian
+IPs for reverse (production), a foreign site (best on the listener's own
+provider / ASN) for direct. A foreign name on an Iranian IP, or the other
+way round, is an SNI <-> IP mismatch tell, and a fallback splice to a target
+across the border is slow and unusual in itself.
+
+**Code** (`cmd/hs2/reality_side.go`, kept apart from tlscarrier/reality):
+`sideOfConfig` (listener side and its IPs; seen from the dialer: the peers),
+`resolveSide` (`--side iran|kharej` before `-u U`'s config), `geoOf` (offline
+table of Iranian / Hetzner / OVH prefixes plus `knownASNs`, which overrides
+the registry country: Respina AS42337 is registered AE; then the Team Cymru
+DNS whois `origin.asn.cymru.com` with a 1.5 s timeout unless `--offline`),
+`applySide` (match / mismatch / unknown: a geo-certain mismatch is BAD, a
+latency-only guess WARN; unknown geo with a TCP connect from the listener
+under 10 ms = same region, over 70 ms from an Iran listener = probably
+abroad), `targetRTT` (best of two TCP connects to the resolved IP, no DNS in
+the time), `checkSide` (probeTarget + side verdict), `frontSideFinding`
+(doctor: WARN on mismatch, OK on match). `cdnHeader` now names ArvanCloud
+(`server: ArvanCloud`, `ar-*`), Derak (`server: DERAK.CLOUD`, `derak-*`)
+and Sotoon CDN (`server: Sotoon CDN`, `x-zrk-*`); their ASNs (205585,
+60423, 202319) and prefixes reject by IP even without headers, as do the
+global CDN ASNs (Cloudflare, Fastly, Akamai, CDN77, Gcore, Link11).
+ArvanCloud's cloud-server ASN 202468 is not a CDN (single-tenant VMs).
+`hs2 reality front` runs the same side check before it applies.
+Menu screen 4: the picker and the one-target check pass `-u <tunnel>`; the
+screen explains the rule (fa/en) and each row shows `match|mismatch CC ASN`
+and the reason.
+
+**Evidence** (lab 2, 5.160.110.234, a Tehran DC, 2026-11-11: `hs2 reality
+targets --json`, Team Cymru, ping; RTT = ICMP from lab 2, handshake = TCP +
+TLS from lab 2 including DNS). Lab 3 confirms: TCP connect to
+www.digikala.com 0.9 ms, to www.hetzner.com 70.7 ms.
+
+Iranian candidates that pass (TLS 1.3, X25519 alone, h2, certificate covers
+the name, not a multi-tenant CDN), now `realityCandidatesIran`:
+
+| target | IP / ASN | issuer | chain B | handshake ms | RTT ms |
+|--------|----------|--------|---------|--------------|--------|
+| www.digikala.com | 185.188.106.12 AS43211 Digikala (own "DigiCDN Edge") | Certum DV | 6470 | 59 | 0.4 |
+| www.aparat.com | 185.147.179.11 AS44932 Sabaidea | Certum DV | 4988 | 78 | 0.4 |
+| www.filimo.com | 185.147.178.23 AS44932 Sabaidea | Certum DV | 5949 | 82 | 0.4 |
+| torob.com | 81.12.31.29 AS215708 MobinIDC | Certum DV | 4986 | 79 | - |
+| myket.ir | 185.120.222.22 AS43754 Asiatech | Certum DV | 4981 | 82 | 0.4 |
+| eitaa.com | 2.189.58.6 AS202798 Eitaa | Certum DV | 5944 | 78 | - |
+| web.bale.ai | 2.189.68.126 AS48159 TIC | Certum DV | 5937 | 90 | 1.4 |
+| www.mehrnews.com | 185.226.142.142 AS34412 SabaHost | Certum DV | 5951 | 54 | 0.5 |
+| www.khabaronline.ir | 37.156.145.182 AS43754 Asiatech | Let's Encrypt YE1 | 3413 | 77 | 0.8 |
+| www.hamshahrionline.ir | 5.160.218.165 AS42337 Respina | Let's Encrypt YE1 | 3418 | 80 | 0.5 |
+| www.parsonline.com | 31.214.231.121 AS16322 ParsOnline | Certum DV | 4995 | 81 | 0.6 |
+| www.digikalajet.com | AS43211 Digikala | Certum DV | 6481 | 77 | - |
+| www.jabama.com | AS34947 Alibaba Travels | Certum DV | 5327 | 85 | - |
+| www.sharif.edu | AS12660 Sharif University (redirects to sharif.ir) | LiteSSL | 4606 | 161 | - |
+
+All negotiated TLS 1.3 with X25519 offered alone and ALPN h2.
+
+Rejected Iranian sites: on **ArvanCloud CDN** AS205585: www.isna.ir,
+www.irna.ir, www.bmi.ir, snapp.ir, snappfood.ir, tapsi.ir, www.ninisite.com,
+www.anten.ir, www.okala.com, www.banimode.com, www.sanjesh.org, ut.ac.ir,
+www.snapptrip.com, www.flightio.com, www.snapp.market, www.arvancloud.ir.
+On **Sotoon CDN** AS202319: divar.ir, cafebazaar.ir, bale.ai, www.zoomit.ir,
+www.yektanet.com (the old picker accepted these). **Derak** AS60423:
+derak.cloud (also refuses X25519 alone). TLS 1.2 only: www.mci.ir,
+www.alibaba.ir, www.asiatech.ir, www.shaparak.ir, www.irib.ir,
+web.rubika.ir. No h2: irancell.ir, my.irancell.ir, www.tci.ir, www.sep.ir,
+www.shatel.ir, www.afranet.com, www.farsnews.ir. X25519 alone refused:
+www.namava.ir, www.yjc.ir, rubika.ir, www.sheypoor.com, www.iranserver.com,
+www.shad.ir. Certificate does not cover the name: www.bankmellat.ir.
+Unreachable or no DNS from the lab: www.varzesh3.com, www.tasnimnews.com,
+www.telewebion.com, www.snapp.ir. Left out on purpose (PaaS edges are
+multi-tenant): liara.ir, www.hamravesh.com, parspack.com (on Cloudflare).
+
+Foreign candidates near Hetzner Germany that pass, now
+`realityCandidatesForeign` (RTT from Iran lab 2; from a Hetzner listener the
+same-ASN ones are about 1 ms):
+
+| target | IP / ASN | issuer | chain B | RTT from Iran ms |
+|--------|----------|--------|---------|------------------|
+| www.hetzner.com, docs.hetzner.com, accounts.hetzner.com | 213.133.116.44-46 AS24940 Hetzner DE | Thawte TLS RSA CA G1 | 2533 | 73 |
+| nextcloud.com | 65.109.84.172 AS24940 Hetzner | Let's Encrypt YE1 | 3435 | 90 |
+| www.ovhcloud.com | 198.27.92.14 AS16276 OVH | Let's Encrypt YE2 | 3438 | 83 |
+| www.heise.de | 193.99.144.85 AS12306 Plusline DE | Let's Encrypt YR2 | 4044 | 93 |
+| www.check24.de | 89.191.81.11 AS34624 DE | ZeroSSL ECC | 3232 | 72 |
+| www.gmx.net, web.de | 217.72.199.107 AS8560 IONOS DE | Telekom Security OV | 5790 | 86 |
+| www.wikipedia.org | 185.15.59.224 AS14907 Wikimedia | Let's Encrypt YE2 | 4115 | 74 |
+| www.debian.org | AS5408 GRNET and mirrors | Let's Encrypt YR1 | 4304 | - |
+| github.com | 140.82.121.3 AS36459 GitHub | Sectigo | 2725 | 77 |
+
+Rejected foreign: Akamai: www.apple.com, www.samsung.com (both passed the
+old header check; caught now by ASN), www.microsoft.com, www.bahn.de,
+www.sap.com, www.mobile.de, www.hosteurope.de. Fastly: www.mozilla.org,
+addons.mozilla.org, www.zeit.de, www.kernel.org, www.postgresql.org.
+CloudFront: www.lovelive-anime.jp, www.t-online.de. Cloudflare:
+www.contabo.com. Link11 (DDoS front): www.spiegel.de. No h2: www.tum.de,
+www.mpg.de, www.strato.de, ftp.fau.de, www.uni-heidelberg.de. TLS 1.2:
+www.netcup.de, www.ionos.de.
+
+**Limits, and what to do when none pass.** Most big Iranian sites sit behind
+ArvanCloud or Sotoon, so the Iranian list is short (14 of about 70) and can
+change any day; the picker re-checks live. Best for reverse mode, in order:
+(1) a real site of your own on the Iran listener (nginx, TLS 1.3 + h2, a real
+certificate for a name whose A record is that IP), so name and IP match
+exactly; (2) a large single-operator Iranian site from the list; (3) keep
+the IP on `tls` / `both` until one passes. Never a site on ArvanCloud, Sotoon
+or Derak CDN. The online Cymru lookup is optional; without it unknown IPs
+fall back to the latency rule (listener only) and a WARN asks for a hand
+check. Not done: a live check from a real kharej host (production kharej
+hosts are off limits), so same-ASN latency from Hetzner is inferred, not
+measured.
+
 ## 10. Security review sec41 (2026-11-11, branch sec41)
 
 Adversarial review of the reality front (code + lab 2/3 attack, prober on

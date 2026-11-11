@@ -24,7 +24,7 @@ case "$1 ${2:-}" in
   "reality status") echo "hs2-a — running — listening side: the fronts are chosen here"
                     echo "IP               config     in use   target                     links: reality/tls/cover/rejected"
                     echo "1.1.1.1          both       both     www.site.ir:443            12/3/1/0"; exit 0 ;;
-  "reality targets") echo "1   github.com                 ACCEPT  40"; echo "2   www.cloudflare.com         REJECT  12       on Cloudflare"; exit 0 ;;
+  "reality targets") echo "Listener: the IRAN server (reverse mode: kharej dials into it)."; echo "1   www.digikala.com:443       ACCEPT  56     match IR AS43211 Digikala side OK"; echo "2   www.hetzner.com:443        REJECT  236    mismatch DE AS24940      MISMATCH: the Iran server listens"; echo "3   www.isna.ir:443            REJECT  84     match IR AS205585        on ArvanCloud, a multi-tenant CDN"; exit 0 ;;
   "reality check-target") echo "VERDICT: ACCEPT — usable as a reality target"; exit 0 ;;
   "reality front") echo "~ lb.kharej[0].front.kind: tls -> reality"; exit 0 ;;
   "doctor --deep") echo "[OK  ] front hs2-a: reality target www.site.ir:443 reachable"; exit 0 ;;
@@ -64,17 +64,17 @@ check "invalid front choice does nothing" '! grep -q "^reality front" "$T/calls"
 out=$(run '4\n2\n\n0\n0\n')
 check "empty IP does nothing" '! grep -q "^reality front" "$T/calls"'
 out=$(run '4\n3\n\n\n4\ngithub.com\n\n0\n0\n')
-check "target picker and one-target check (read-only, no lock)" 'grep -q "^reality targets --lang en" "$T/calls" && grep -q "^reality check-target github.com --lang en" "$T/calls" && echo "$out" | grep -q "REJECT" && ! grep -q "^config lock" "$T/calls"'
+check "target picker and one-target check (read-only, no lock)" 'grep -q "^reality targets -u hs2-a --lang en" "$T/calls" && grep -q "^reality check-target github.com -u hs2-a --lang en" "$T/calls" && echo "$out" | grep -q "depends on which server LISTENS" && echo "$out" | grep -q "MISMATCH" && echo "$out" | grep -q "REJECT" && ! grep -q "^config lock" "$T/calls"'
 out=$(run '4\n3\nmy.site.ir\n\n0\n0\n')
-check "picker with extra candidates" 'grep -q "^reality targets --add my.site.ir --lang en" "$T/calls"'
+check "picker with extra candidates" 'grep -q "^reality targets -u hs2-a --add my.site.ir --lang en" "$T/calls"'
 out=$(run '4\n5\n\n6\n\n0\n0\n')
 check "rotate all keys under the lock; doctor front category" 'locked "reality rotate-key -u hs2-a --all" && grep -q "^doctor --deep --fixes --only front" "$T/calls"'
 out=$(run '4\n7\n0\n0\n')
 check "certificate keeps the classic screen" 'grep -q "^CLASSIC-CERT" "$T/calls"'
 out=$(MODE=advanced run '4\n2\n1.1.1.1\n2\nwww.site.ir\nalt.site.ir\n\n8\n1.1.1.1\n\n9\n\ne\n0\n0\n')
 check "advanced: server name, one-IP rotation, keygen, config editor" 'grep -q "^reality front -u hs2-a --ip 1.1.1.1 reality --target www.site.ir --sni alt.site.ir --lang en" "$T/calls" && locked "reality rotate-key -u hs2-a --ip 1.1.1.1" && grep -q "^reality keygen --lang en" "$T/calls" && grep -q "^CLASSIC-EDIT" "$T/calls"'
-out=$(MLANG=fa run '4\n0\n0\n')
-check "fa texts" 'echo "$out" | grep -q "امنیت و استتار" && echo "$out" | grep -q "پوشش یک IP" && grep -q "^reality status -u hs2-a --lang fa" "$T/calls"'
+out=$(MLANG=fa run '4\n3\n\n\n0\n0\n')
+check "fa texts" 'echo "$out" | grep -q "امنیت و استتار" && echo "$out" | grep -q "پوشش یک IP" && echo "$out" | grep -q "به سرورِ شنونده بستگی دارد" && grep -q "^reality targets -u hs2-a --lang fa" "$T/calls" && grep -q "^reality status -u hs2-a --lang fa" "$T/calls"'
 out=$(XLANG=C COLS=40 run '4\nx\n0\n0\n')
 check "narrow non-UTF-8 TTY: invalid choice survives" 'echo "$out" | grep -q "Invalid choice" && [ "$(echo "$out" | grep -c "Security & camouflage")" -ge 2 ]'
 out=$(OLDBIN=1 run '4\n2\n0\n')

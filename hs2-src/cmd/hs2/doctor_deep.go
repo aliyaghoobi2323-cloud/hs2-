@@ -1032,6 +1032,7 @@ func multiTenantCDN(host string) string {
 		{"cloudfront", "CloudFront"}, {"google", "Google"}, {"gstatic", "Google"}, {"youtube", "Google"},
 		{"azureedge", "Azure CDN"}, {"cdn77", "CDN77"}, {"gcore", "Gcore"}, {"bunny", "Bunny"},
 		{"discord", "Cloudflare"}, {"speedtest", "Cloudflare"},
+		{"arvancdn", "ArvanCloud"}, {"arvancloud", "ArvanCloud"}, {"derak", "Derak"}, {"sotoon", "Sotoon CDN"},
 	} {
 		if strings.Contains(h, c.key) {
 			return c.name

@@ -4,8 +4,8 @@ package main
 //
 //	hs2 reality front -u U --ip IP tls|reality|both [--target host:443] [--sni name] [--new-key]
 //	hs2 reality rotate-key -u U (--ip IP | --all)
-//	hs2 reality targets [--add host,host] [--json]
-//	hs2 reality check-target host[:443] [server_name] [--json]
+//	hs2 reality targets [-u U | --side iran|kharej] [--add host,host] [--offline] [--json]
+//	hs2 reality check-target host[:443] [server_name] [-u U | --side iran|kharej] [--offline] [--json]
 //	hs2 reality status -u U [--json]
 //	hs2 reality keygen
 //
@@ -51,6 +51,10 @@ type targetCheck struct {
 	CertCovers  bool     `json:"cert_covers"`
 	CertBytes   int      `json:"cert_bytes"`
 	HandshakeMs float64  `json:"handshake_ms"`
+	ConnectMs   float64  `json:"connect_ms,omitempty"` // TCP connect (~1 RTT) from this server
+	Geo         []ipGeo  `json:"geo,omitempty"`        // the target's IPs: country / ASN
+	Listener    string   `json:"listener,omitempty"`   // iran | kharej (side-aware checks)
+	SideMatch   string   `json:"side_match,omitempty"` // match | mismatch | unknown
 	CDN         string   `json:"cdn,omitempty"`
 	Issuer      string   `json:"issuer,omitempty"`
 	Bad         []string `json:"bad,omitempty"`  // reasons to reject
@@ -84,8 +88,12 @@ func cdnHeader(name, value string) string {
 		return "Google"
 	case n == "x-cdn" && v != "":
 		return value
-	case n == "server" && (strings.Contains(v, "arvancloud") || strings.Contains(v, "derakcloud")):
-		return value
+	case n == "server" && strings.Contains(v, "arvancloud"), n == "ar-poweredby", n == "ar-request-id", n == "ar-sid", n == "ar-cache":
+		return "ArvanCloud"
+	case n == "server" && strings.Contains(v, "derak"), strings.HasPrefix(n, "derak-"):
+		return "Derak"
+	case n == "server" && strings.Contains(v, "sotoon"), strings.HasPrefix(n, "x-zrk-"):
+		return "Sotoon CDN"
 	}
 	return ""
 }
@@ -222,7 +230,7 @@ func probeTarget(target, sni string, roots *x509.CertPool) targetCheck {
 }
 
 func finishCheck(r targetCheck) targetCheck {
-	if r.CDN != "" {
+	if r.CDN != "" && !r.cdnNoted() {
 		r.Bad = append(r.Bad, fmt.Sprintf(tr("on %s, a multi-tenant CDN: any stranger can reach every site of it through our listener, and the CDN's own fingerprint differs", "روی %s است، یک CDN چندمستأجره: هر غریبه‌ای از راه شنونده به همهٔ سایت‌های آن می‌رسد و اثر انگشت CDN فرق دارد"), r.CDN))
 	}
 	r.OK = len(r.Bad) == 0
@@ -270,6 +278,12 @@ func printTargetCheck(w io.Writer, r targetCheck) {
 		fmt.Fprintf(w, "  %s TLS 1.3\n  %s X25519\n  %s ALPN h2\n  %s %s\n", yn(r.TLS13), yn(r.X25519), yn(r.H2), yn(r.CertCovers), tr("certificate covers the name", "گواهی نام را پوشش می‌دهد"))
 		fmt.Fprintf(w, "  INFO %s %d B, %s %q, %s %.0f ms\n", tr("chain", "زنجیره"), r.CertBytes, tr("issuer", "صادرکننده"), r.Issuer, tr("handshake", "دست‌دهی"), r.HandshakeMs)
 	}
+	for _, g := range r.Geo {
+		fmt.Fprintf(w, "  INFO %s %s: %s\n", tr("target IP", "IP هدف"), g.IP, g.label())
+	}
+	if r.ConnectMs > 0 {
+		fmt.Fprintf(w, "  INFO %s %.1f ms\n", tr("TCP connect from this server", "اتصال TCP از این سرور"), r.ConnectMs)
+	}
 	for _, s := range r.Info {
 		fmt.Fprintln(w, "  INFO "+s)
 	}
@@ -286,16 +300,22 @@ func printTargetCheck(w io.Writer, r targetCheck) {
 	}
 }
 
-// realityCandidates are the built-in candidate targets of the picker: large,
-// single-operator sites with TLS 1.3 + h2. The check decides; the list only
-// saves typing (hs2 reality targets --add …).
-var realityCandidates = []string{
-	"www.lovelive-anime.jp", "addons.mozilla.org", "www.mozilla.org", "github.com",
-	"www.apple.com", "www.microsoft.com", "www.amazon.com", "www.yahoo.com",
-	"www.digikala.com", "www.aparat.com", "www.varzesh3.com",
+// cdnNoted: the CDN reason is already in Bad (finishCheck runs again after
+// the side check).
+func (r targetCheck) cdnNoted() bool {
+	for _, b := range r.Bad {
+		if strings.Contains(b, r.CDN) && (strings.Contains(b, "CDN") || strings.Contains(b, "چندمستأجره")) {
+			return true
+		}
+	}
+	return false
 }
 
-func checkTargets(list []string) []targetCheck {
+// checkTargets checks the candidates in parallel with the side verdict
+// (reality_side.go; the side's own candidate list is candidatesFor):
+// accepted first, then side matches, then the fastest.
+func checkTargets(list []string, s realitySide, online bool) []targetCheck {
+	lgeo := geoOfIPs(s.ListenerIPs, online)
 	out := make([]targetCheck, len(list))
 	var wg sync.WaitGroup
 	sem := make(chan struct{}, 6)
@@ -309,7 +329,7 @@ func checkTargets(list []string) []targetCheck {
 			if hh, _, err := net.SplitHostPort(t); err == nil {
 				h = hh
 			}
-			out[i] = probeTarget(t, h, nil)
+			out[i] = checkSide(t, h, s, lgeo, online)
 		}(i, t)
 	}
 	wg.Wait()
@@ -317,21 +337,31 @@ func checkTargets(list []string) []targetCheck {
 		if out[a].OK != out[b].OK {
 			return out[a].OK
 		}
+		if (out[a].SideMatch == sideMatch) != (out[b].SideMatch == sideMatch) {
+			return out[a].SideMatch == sideMatch
+		}
 		return out[a].HandshakeMs < out[b].HandshakeMs
 	})
 	return out
 }
 
 func renderTargets(w io.Writer, rs []targetCheck) {
-	fmt.Fprintf(w, "%-3s %-26s %-7s %-8s %s\n", "#", tr("target", "هدف"), tr("verdict", "نتیجه"), "ms", tr("why", "چرا"))
+	fmt.Fprintf(w, "%-3s %-26s %-7s %-6s %-24s %s\n", "#", tr("target", "هدف"), tr("verdict", "نتیجه"), "ms", tr("where (side)", "کجا (سمت)"), tr("why", "چرا"))
 	for i, r := range rs {
 		v := "ACCEPT"
-		why := strings.Join(r.Warn, "; ")
+		why := strings.Join(append(append([]string{}, r.Warn...), r.Info...), "; ")
 		if !r.OK {
 			v = "REJECT"
 			why = strings.Join(r.Bad, "; ")
 		}
-		fmt.Fprintf(w, "%-3d %-26s %-7s %-8.0f %s\n", i+1, clip(r.Target, 26), v, r.HandshakeMs, clip(why, 90))
+		where := "-"
+		if len(r.Geo) > 0 {
+			where = r.Geo[0].label()
+		}
+		if r.SideMatch != "" && r.SideMatch != sideUnknown {
+			where = r.SideMatch + " " + where
+		}
+		fmt.Fprintf(w, "%-3d %-26s %-7s %-6.0f %-24s %s\n", i+1, clip(r.Target, 26), v, r.HandshakeMs, clip(where, 24), clip(why, 110))
 	}
 }
 
@@ -552,7 +582,8 @@ func realityFrontCmd(sub string, args []string) int {
 				sn, _ = l[0].(string)
 			}
 			fmt.Printf(tr("checking the target %s ...\n", "بررسی هدف %s ...\n"), t)
-			r := probeTarget(t, sn, nil)
+			s := sideOfConfig(fc)
+			r := checkSide(t, sn, s, geoOfIPs(s.ListenerIPs, true), true)
 			printTargetCheck(os.Stdout, r)
 			if !r.OK && !*force {
 				fmt.Println(tr("ERROR: the target is rejected — pick another (hs2 reality targets) or add --force-target", "خطا: هدف رد شد — هدف دیگری انتخاب کنید (hs2 reality targets) یا --force-target بدهید"))
@@ -797,25 +828,33 @@ func realityTargetsCmd(args []string) int {
 	add := fs.String("add", "", "more candidates, comma separated")
 	only := fs.Bool("only", false, "check only the --add candidates")
 	js := fs.Bool("json", false, "machine-readable")
+	unit := fs.String("u", "hs2", "tunnel whose listener side decides the candidates")
+	side := fs.String("side", "", "iran|kharej: where the TLS listener is (default: from the tunnel's config)")
+	offline := fs.Bool("offline", false, "no online ASN lookup (offline table and latency only)")
 	lang := langFlag(fs)
 	fs.Parse(args)
 	setLang(*lang)
+	s := resolveSide(*side, *unit, flagGiven(fs, "u"))
 	var list []string
 	if !*only {
-		list = append(list, realityCandidates...)
+		list = append(list, candidatesFor(s)...)
 	}
 	for _, s := range strings.Split(*add, ",") {
 		if s = strings.TrimSpace(s); s != "" {
 			list = append(list, s)
 		}
 	}
-	rs := checkTargets(list)
+	rs := checkTargets(list, s, !*offline)
 	if *js {
 		b, _ := json.MarshalIndent(rs, "", "  ")
 		fmt.Println(string(b))
 		return 0
 	}
+	fmt.Println(describeSide(s, geoOfIPs(s.ListenerIPs, !*offline)))
 	renderTargets(os.Stdout, rs)
+	if s.Known && !anyAccepted(rs) {
+		fmt.Println(noneAcceptedAdvice(s))
+	}
 	fmt.Println(tr("Use one: hs2 reality front -u U --ip IP reality --target HOST:443", "استفاده: hs2 reality front -u U --ip IP reality --target HOST:443"))
 	return 0
 }
@@ -823,18 +862,25 @@ func realityTargetsCmd(args []string) int {
 func realityCheckTargetCmd(args []string) int {
 	fs := flag.NewFlagSet("reality check-target", flag.ExitOnError)
 	js := fs.Bool("json", false, "machine-readable")
+	unit := fs.String("u", "hs2", "tunnel whose listener side the target must match")
+	side := fs.String("side", "", "iran|kharej: where the TLS listener is (default: from the tunnel's config)")
+	offline := fs.Bool("offline", false, "no online ASN lookup (offline table and latency only)")
 	lang := langFlag(fs)
 	pos := parseInterleaved(fs, args)
 	setLang(*lang)
 	if len(pos) < 1 {
-		fmt.Println("usage: hs2 reality check-target host[:443] [server_name] [--json]")
+		fmt.Println("usage: hs2 reality check-target host[:443] [server_name] [-u U | --side iran|kharej] [--offline] [--json]")
 		return 2
 	}
 	sni := ""
 	if len(pos) > 1 {
 		sni = pos[1]
 	}
-	r := probeTarget(pos[0], sni, nil)
+	s := resolveSide(*side, *unit, flagGiven(fs, "u"))
+	r := checkSide(pos[0], sni, s, geoOfIPs(s.ListenerIPs, !*offline), !*offline)
+	if !*js {
+		fmt.Println(describeSide(s, nil))
+	}
 	if *js {
 		b, _ := json.MarshalIndent(r, "", "  ")
 		fmt.Println(string(b))
@@ -885,6 +931,7 @@ func checkFronts(statuses []namedStatus, cfgOf func(unit string) (fileConfig, bo
 						Do:  tr("pick another target: hs2 reality targets; then hs2 reality front -u U --ip IP reality --target NEW", "هدف دیگری انتخاب کنید: hs2 reality targets؛ سپس hs2 reality front -u U --ip IP reality --target NEW")})
 				} else {
 					out = append(out, finding{Sev: "OK", Area: area, What: fmt.Sprintf(tr("reality target %s reachable", "هدف Reality %s در دسترس است"), f.Target)})
+					out = append(out, frontSideFinding(fc, f.Target, area)...)
 				}
 			}
 			if nRealityIPs == 0 {

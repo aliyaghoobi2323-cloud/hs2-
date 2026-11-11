@@ -5633,9 +5633,9 @@ nm_security(){
     say "   1) $(nm_t "Refresh" "تازه‌سازی")"
     say "   2) $(nm_t "Front of an IP: tls / reality / both (preview, safe apply, no downtime)" "پوشش یک IP: tls / reality / both (پیش‌نمایش، اعمال امن، بدون قطعی)")"
     say "   3) $(nm_t "Pick a Reality target (check the candidates)" "انتخاب هدف Reality (بررسی نامزدها)")"
-    say "   4) $(nm_t "Check one target (TLS 1.3, X25519, h2, CDN, latency)" "بررسی یک هدف (TLS 1.3، X25519، h2، CDN، تأخیر)")"
+    say "   4) $(nm_t "Check one target (TLS 1.3, X25519, h2, CDN, country vs listener side, latency)" "بررسی یک هدف (TLS 1.3، X25519، h2، CDN، کشور در برابر سمت شنونده، تأخیر)")"
     say "   5) $(nm_t "Rotate the Reality keys (every reality / both IP)" "چرخش کلیدهای Reality (همهٔ IPهای reality / both)")"
-    say "   6) $(nm_t "Doctor: fronts (target reachable, key mismatch, fallbacks)" "پزشک: پوشش‌ها (دسترسی هدف، ناهمخوانی کلید، بازگشت به tls)")"
+    say "   6) $(nm_t "Doctor: fronts (target reachable and on the listener's side, key mismatch, fallbacks)" "پزشک: پوشش‌ها (دسترسی هدف و همخوانی با سمت شنونده، ناهمخوانی کلید، بازگشت به tls)")"
     say "   7) $(nm_t "Certificate (expiry, renewal, renew now)" "گواهی (انقضا، تمدید، تمدید فوری)")"
     if [ "$NM_MODE" = advanced ]; then
       say "   8) $(nm_t "Rotate the key of one IP" "چرخش کلید یک IP")   9) $(nm_t "New key pair (print only)" "جفت‌کلید تازه (فقط نمایش)")"
@@ -5660,12 +5660,13 @@ nm_security(){
            fi
          fi
          nm_lock && { nm_rx front -u "$NM_U" --ip "$ip" "$k" ${ex[@]+"${ex[@]}"}; nm_unlock; nm_pause; } ;;
-      3) nm_ask t "$(nm_t "More candidates, comma separated (Enter = none): " "نامزدهای بیشتر، با کاما (Enter = هیچ): ")"
-         info "$(nm_t "Checking the candidates (about 10 s)…" "بررسی نامزدها (حدود ۱۰ ثانیه)…")"
-         if [ -n "$t" ]; then nm_rx targets --add "$t"; else nm_rx targets; fi
+      3) say "   $(nm_t "The right target depends on which server LISTENS: reverse mode = the Iran server (pick an Iranian site hosted in Iran), direct mode = the kharej server (pick a foreign site, best on the same provider). Each row says why it was accepted or rejected; MISMATCH = wrong country for this listener." "هدف درست به سرورِ شنونده بستگی دارد: حالت معکوس = سرور ایران (سایت ایرانی میزبانی‌شده در ایران)، حالت مستقیم = سرور خارج (سایت خارجی، بهتر از همان ارائه‌دهنده). هر سطر دلیل پذیرش یا رد را می‌گوید؛ ناهمخوانی (MISMATCH) = کشور نادرست برای این شنونده.")"
+         nm_ask t "$(nm_t "More candidates, comma separated (Enter = none): " "نامزدهای بیشتر، با کاما (Enter = هیچ): ")"
+         info "$(nm_t "Checking the candidates of this tunnel's listener side (about 10 s)…" "بررسی نامزدهای سمت شنوندهٔ این تونل (حدود ۱۰ ثانیه)…")"
+         if [ -n "$t" ]; then nm_rx targets -u "$NM_U" --add "$t"; else nm_rx targets -u "$NM_U"; fi
          nm_pause ;;
       4) nm_ask t "$(nm_t "Target host[:443]: " "هدف host[:443]: ")"
-         [ -n "$t" ] && { nm_rx check-target "$t"; nm_pause; } ;;
+         [ -n "$t" ] && { nm_rx check-target "$t" -u "$NM_U"; nm_pause; } ;;
       5) nm_lock && { nm_rx rotate-key -u "$NM_U" --all; nm_unlock; nm_pause; } ;;
       6) nm_doctor_run front; nm_pause ;;
       7) if tm_cert_side "$NM_CFG"; then nm_edit tm_cert "$NM_U" "$NM_CFG"; else warn "$(nm_t "This side holds no certificate." "این سمت گواهی ندارد.")"; nm_pause; fi ;;
