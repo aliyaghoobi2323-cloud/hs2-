@@ -1259,7 +1259,10 @@ cert_renewal_to_webroot(){
       printf '%s = %s\n' "$d" "$root"
     done < <(cert_domains "$cert" | tr ' ' '\n')
   } >> "$tmp"
-  cat "$tmp" > "$conf"; rm -f "$tmp"
+  # atomic (cfg_put): a truncating write on a full disk left certbot with an
+  # empty renewal file, i.e. a certificate that silently stops renewing
+  if ! cfg_put "$tmp" "$conf"; then rm -f "$tmp"; err "Could not rewrite $conf (disk full?) — left as it was."; return 1; fi
+  rm -f "$tmp"
   mkdir -p "$root/.well-known/acme-challenge"
   return 0
 }
