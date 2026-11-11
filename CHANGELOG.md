@@ -21,6 +21,160 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M6 — Monitoring & alerts, Server doctor with safe fixes (binary + installer)
+
+- New `hs2 alert conf show|set|token`, `hs2 alert rule NAME on|off`,
+  `hs2 alert history`, `hs2 alert summary-now`, `hs2 alert telegram-check`
+  (`cmd/hs2/alert_conf.go`). `alert.conf` writes are validated (chat id,
+  proxy URL, numbers, lists, HH:MM) and atomic with mode 600; the bot token is
+  accepted only on stdin and is never printed. New keys `disable=` (alert kinds
+  never sent), `quiet_hours=` (only critical alerts and the "resolved" of a
+  critical one reach Telegram; may cross midnight; everything is still logged
+  with `[quiet hours: not sent]`), `summary_items=` (daily summary content).
+  The reachability check tells an Iran server without Telegram access to set a
+  proxy. `summary-now` sends the day so far without resetting it.
+- New `hs2 doctor --only CAT`, `--fixes`, `--report FILE`, `--fix N`
+  (`cmd/hs2/doctor_fix.go`): findings are grouped in network / cpu / tunnel /
+  reality / panel; new checks for `netdev_budget` against `time_squeeze`, the
+  24 h sampler and per-tunnel alert timers, and tunnel certificate expiry.
+  Numbered safe fixes reuse M4 mechanisms (CPUAffinity safe apply with
+  auto-rollback, measured netdev_budget, timed LB park), the stats timer, a
+  `certbot renew --dry-run`; x-ui / xray / Reality / panel findings never get
+  a fix. A fix checks its tunnel still exists, refuses a run older than 30 min
+  and explains non-root.
+- Fix: the doctor's "restarts / panics" lines counted every `hs2*` unit
+  (`hs2-coreguard`, `hs2-alert-*`, …) as a tunnel; only units whose
+  `ExecStart` is `hs2 run -c /etc/hs2/<name>.json` are counted now.
+- Doctor: a stale status file that belongs to no config in `/etc/hs2` (a deleted
+  tunnel, a test run) is INFO with the `rm` command, not "BAD — the tunnel is
+  probably stopped".
+- Installer: screens 6 and 7 of the new menu (`nm_alerts`, `nm_doctor`); an
+  older binary (no `hs2 alert --supported` / `hs2 doctor --supported`) gets the
+  classic screens. The `max-throughput` preset is labelled "experimental, not
+  recommended" in the menu and `hs2 perf presets` (not A/B-proven).
+- Tests: `cmd/hs2/m6_test.go` (11 tests: alert.conf validation and atomic
+  set/token/rule, quiet hours across midnight, disable + summary items,
+  history filter, Telegram check direct/proxy/blocked, fix mapping incl. never
+  x-ui/xray, apply-fix safety (no run, stale run, gone unit), coreguard
+  filtering, monitoring + budget checks, leftover status files); `install/tests/alerts_doctor_menu_test.sh`
+  (26 pty checks); `new_menu_test.sh` keeps testing the classic fallbacks.
+
+---
+
+## Menu redesign M4 — Load balancing & IPs, Speed & performance (binary + installer)
+
+- New `hs2 lb show|history|suggest|add-ip|remove-ip|weights|mode|park|unpark|parks`
+  (`cmd/hs2/lbmenu.go`): live path table (share/eff, links, users, Mbit,
+  loss, RTT, auto factor + reason, state, cuts in 24 h from the journal),
+  local-IP suggestion by ping (loss, then RTT; current primary kept within
+  1 ms / 1 %), add/remove IP with interface check and per-IP SNI/cert
+  (front: tls; Reality in M5), weights (sum 100) / equal split / mode, and
+  "park an IP for N hours" restored by `hs2-lb-park.timer` (persistent
+  unit, survives reboot; restore via safe apply, confirmed on the next run,
+  gives up after 3 rollbacks). Every change: diff + safe apply + bilateral
+  `join --update` code.
+- New `hs2 perf show|presets|preset|set|unset|nic|cores|kernel|speedtest`
+  (`cmd/hs2/perf.go`): presets production / low-cpu / max-throughput /
+  min-latency and per-key toggles as one `50-hs2-perf.conf` drop-in,
+  effective-key view (set / default / off), single-queue NIC + rx-IRQ core
+  detection with a `CPUAffinity` drop-in for hs2 units only, kernel view +
+  `netdev_budget=600` measured before/after with automatic revert, iperf3
+  speed test through a local user port only.
+- Safe apply (`menu_apply.go`): `applyReq.NewDropins` — drop-in changes are
+  diffed, snapshotted and rolled back like the config.
+- Fix (`menu_validate.go`): `isEdge` was "mode dial XOR reverse", so on the
+  kharej side of a reverse tunnel the validator took the Iran lb list as its
+  own (and counted user ports on the wrong side): `join --update` carrying an
+  lb section failed with "… is not an address of this server". Iran is mode
+  `dial` in both directions.
+- `hs2 tunnel join`: flags after the code are parsed too
+  (`join --update CODE --yes` used to ignore `--yes`).
+- M3 leftovers: `hs2 stats timer on|off|status` writes/enables its own
+  `hs2-stats.{service,timer}` (wizard and menu setting use it; older
+  binaries keep the installer's units); `tm_edit_test.sh` uses its own fake
+  hs2 instead of the host's `/usr/local/bin/hs2`; `multi_tunnel_test.py`
+  scenario 2 waits up to 10 s for tunnel 1's PID on both sides and reports
+  a missing unit as a FAIL instead of crashing with `KeyError: 'hs2'`.
+- `install.sh`: new-menu items 3 and 5 are the new screens (simple/advanced,
+  fa/en, admin lock around every change); old binaries fall back to the
+  classic screens.
+- Tests: `cmd/hs2/lbmenu_test.go`, `perf_test.go` (path table rendering and
+  alignment, journal event parsing, IP ranking, weights validation,
+  park/unpark weights and timer logic, own-list sides, reverse validator,
+  interleaved flags, presets → env per side, effective keys incl. legacy, NIC
+  fixtures, cores guard, budget verdict, iperf parsing, drop-in apply +
+  rollback, stats timer units), `install/tests/lb_perf_menu_test.sh`
+  (22 pty checks); `new_menu_test.sh`: item 5 is now the Speed screen,
+  item 4 still the M5 preview (25 checks).
+
+## Menu redesign M3 — Tunnels: wizard, connection code, edit, renew, clone (binary + installer)
+
+- New `hs2 tunnel list|create|join|code|clone|edit|renew|start|stop|restart|logs|delete|preflight`
+  (`cmd/hs2/tunnel.go`, `tunnel_cmd.go`, `tunnel_code.go`). Creation wizard
+  (interactive, `--advanced`, or `--from-json … --yes`) with pre-flight
+  checks; nothing is written before the summary is accepted, and a unit that
+  does not stay up is removed again.
+- Connection code `hs2://v2.<base64url JSON>` (versioned, secrets listed and
+  masked on display, short check line); `join` reads it (and classic v1
+  links), `join --update` updates an existing tunnel through safe apply.
+- Edit per section via semantic diff + `hs2 apply --confirm-within`, with
+  the other server's required change printed as a `join --update` code; SSH
+  over the tunnel is detected (user port / route via the tunnel interface).
+- `renew` (backup, `--upgrade-from` binary with automatic restore, rebuild,
+  `--pick-ip` best local IP by ping) and
+  `clone --to-code`.
+- `install.sh`: new-menu item 2 is the Tunnels screen (list, wizard, join,
+  per-tunnel actions under the admin lock); old binaries fall back to the
+  classic screens. The 24 h sampler timer stays off by default and is offered
+  in the wizard's last step.
+- Tests: `cmd/hs2/tunnel_test.go` (code round trip / versioning / v1 links /
+  secret masking, join mirrors creator for direct, reverse, IPv6 and dgtun,
+  defaults and rejections, multi-tunnel names/ifaces/subnets/ports,
+  pre-flight fixtures, non-interactive create incl. dry run and removal of
+  an unhealthy unit, wizard abort and answers, SSH guard, best local IP),
+  `install/tests/tunnels_menu_test.sh` (15 pty checks).
+- `install/tests/lb_menu_test.sh`: the three "live table" checks were stale
+  since 9a6a42ac (the live view gained AUTO/NEW columns and "(…, the config)"
+  in its last-load line); expectations updated, 38/38 pass with go on PATH.
+
+## Menu redesign M2 — new main menu + live dashboard (binary + installer)
+
+- New `hs2 dashboard` (live every 3 s / `--once` / `--header` / `--paths`,
+  `--lang fa|en`, width-aware down to < 60 columns, ASCII + English when the
+  locale is not UTF-8, one plain frame when not a tty). Read-only.
+- New `hs2 stats sample|show`: hourly aggregates for 7 days in
+  `/var/lib/hs2/stats-<unit>.json`; sampled by `hs2 alert` and by an optional
+  `hs2-stats.timer` (menu settings).
+- `doctor_deep`: the path pings are factored into `pingPaths` (shared with the
+  dashboard's path check); findings unchanged.
+- `install.sh`: the new menu (`hs2-menu --new`, `HS2_MENU=new`, or
+  `default_menu=new` in `/etc/hs2/menu.conf`); the classic menu stays the
+  default and gains `n) New menu`. Menu settings (language, simple/advanced,
+  colour, default menu, history timer) persist in `/etc/hs2/menu.conf`. Edit
+  screens run under the admin lock. Maintenance adds change history and
+  rollback of the last change. Items 2–5 open the classic screens for now.
+- Tests: `cmd/hs2/dashboard_test.go` (rendering at 50/60/80/120 columns,
+  fa/en, ASCII, missing/stale status, no tunnels; stats aggregation and
+  retention), `install/tests/new_menu_test.sh` (24 pty checks: navigation,
+  settings persistence, lock, maintenance, menu selection, locale fallback).
+
+## Menu redesign M1 — safe-change infrastructure (binary + small installer hook)
+
+- New `hs2 config history|show|diff|validate|lock|unlock|lock-status`,
+  `hs2 apply` (trial with confirm timer, health gate, automatic rollback that
+  survives an SSH drop via `systemd-run` + an expiry timer) and
+  `hs2 rollback`. Versioned per-unit history (last 50, with drop-in
+  snapshots), semantic diff with **bilateral** marking, host cross-checks,
+  admin lock with stale detection, audit log `/var/log/hs2-changes.log`.
+- `install.sh`: the tunnel manager's **Edit config** saves through
+  `hs2 apply` (Enter = confirm, `n` = roll back, no answer in 5 min =
+  automatic rollback) when the binary answers `hs2 apply --supported`;
+  older binaries keep the classic path. New test
+  `install/tests/tm_safe_apply_test.sh`.
+- No new menu screens yet (M2+); the old menu is unchanged otherwise.
+
+---
+
 ## Track A — installer robustness (install.sh; no binary change)
 
 ### A1 — binary verification & upgrade safety

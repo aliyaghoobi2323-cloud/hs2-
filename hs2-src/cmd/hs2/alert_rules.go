@@ -104,21 +104,24 @@ type panicLine struct {
 
 // alertCfg holds the thresholds (and the channels, see alert.go).
 type alertCfg struct {
-	BotToken    string
-	ChatID      string
-	Proxy       string
-	APIURL      string // default https://api.telegram.org (tests point it at a fake)
-	Lang        string // fa | en
-	SummaryAt   string // HH:MM local, "" / "off" = no summary
-	ResendMin   int
-	RTTFactor   float64
-	RTTMinAddMs float64
-	PSIPct      float64
-	CertDays    int
-	FlapCuts    int
-	Probe       string // off | tcp | tls
-	LogFile     string
-	Host        string // label in messages (default: hostname)
+	BotToken     string
+	ChatID       string
+	Proxy        string
+	APIURL       string // default https://api.telegram.org (tests point it at a fake)
+	Lang         string // fa | en
+	SummaryAt    string // HH:MM local, "" / "off" = no summary
+	ResendMin    int
+	RTTFactor    float64
+	RTTMinAddMs  float64
+	PSIPct       float64
+	CertDays     int
+	FlapCuts     int
+	Probe        string // off | tcp | tls
+	LogFile      string
+	Host         string          // label in messages (default: hostname)
+	Disabled     map[string]bool // alert kinds never sent (disable=)
+	Quiet        string          // quiet_hours HH:MM-HH:MM: only critical to Telegram
+	SummaryItems []string        // summary_items (nil = all)
 }
 
 func defaultAlertCfg() alertCfg {
@@ -219,6 +222,7 @@ type alertMsg struct {
 	Key  string
 	Sev  string
 	Text string // body without the host header
+	Was  string // resolved (sevOK): the severity it had (quiet hours let a critical one through)
 }
 
 // rtt baseline: one sample per rttSampleEvery per key, 24 h kept.
@@ -247,7 +251,7 @@ func evalAlerts(cfg alertCfg, st *alertState, s alertSnap) []alertMsg {
 			st.Streak[key] = 0
 			if a := st.Active[key]; a != nil {
 				delete(st.Active, key)
-				out = append(out, alertMsg{Key: key, Sev: sevOK, Text: tx.resolved(a.Text, now.Sub(time.Unix(a.Since, 0)))})
+				out = append(out, alertMsg{Key: key, Sev: sevOK, Was: a.Sev, Text: tx.resolved(a.Text, now.Sub(time.Unix(a.Since, 0)))})
 			}
 			return
 		}
@@ -421,7 +425,7 @@ func evalAlerts(cfg alertCfg, st *alertState, s alertSnap) []alertMsg {
 		a := st.Active[k]
 		delete(st.Active, k)
 		st.Streak[k] = 0
-		out = append(out, alertMsg{Key: k, Sev: sevOK, Text: tx.resolved(a.Text, now.Sub(time.Unix(a.Since, 0)))})
+		out = append(out, alertMsg{Key: k, Sev: sevOK, Was: a.Sev, Text: tx.resolved(a.Text, now.Sub(time.Unix(a.Since, 0)))})
 	}
 	for k := range st.Streak {
 		if !seen[k] && st.Active[k] == nil {
@@ -702,7 +706,7 @@ func takeSummary(cfg alertCfg, st *alertState, now time.Time) string {
 	for _, ip := range ips {
 		cuts = append(cuts, fmt.Sprintf("%s×%d", ip, d.Cuts[ip]))
 	}
-	text := alertText(cfg.Lang).summary(d, worstH, worstV, cuts)
+	text := alertText(cfg.Lang).summary(d, worstH, worstV, cuts, cfg.SummaryItems...)
 	st.LastSum = now.Format("2006-01-02")
 	st.Day = alertDay{Since: now.Unix()}
 	st.fill(now)

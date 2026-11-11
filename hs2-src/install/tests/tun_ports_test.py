@@ -130,7 +130,7 @@ def make_lib(sb):
     """install.sh as a library: without the trailing `main_menu` call and the
     top-level root check (the functions under test need neither)."""
     lines = open(INST).read().rstrip("\n").split("\n")
-    assert lines[-1].strip() == "main_menu", "install.sh no longer ends with main_menu"
+    assert lines[-1].strip() in ("main_menu", "menu_entry"), "install.sh no longer ends with its menu call"
     body = "\n".join(lines[:-1]) + "\n"
     body = re.sub(r'^\[ "\$\(id -u\)" = 0 \] \|\| die .*$', ":", body, flags=re.M)
     lib = os.path.join(sb, "lib.sh")

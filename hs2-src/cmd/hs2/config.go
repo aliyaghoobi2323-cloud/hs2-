@@ -59,6 +59,10 @@ var configKeys = map[string]configKey{
 }
 
 func configCmd(args []string) {
+	if len(args) > 0 && menuSubs[args[0]] {
+		menuConfigCmd(args[0], args[1:])
+		return
+	}
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
 	cfgPath := fs.String("c", "", "config file (JSON)")
 	fs.Parse(args)

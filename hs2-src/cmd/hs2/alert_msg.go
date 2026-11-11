@@ -113,7 +113,7 @@ func (t alertTexts) test() string {
 	return t.pick("پیام آزمایشی hs2 alert — ارسال کار می‌کند", "hs2 alert test message — delivery works")
 }
 
-func (t alertTexts) summary(d alertDay, worstH string, worstV float64, cuts []string) string {
+func (t alertTexts) summary(d alertDay, worstH string, worstV float64, cuts []string, items ...string) string {
 	c := strings.Join(cuts, " ")
 	if c == "" {
 		c = t.pick("هیچ", "none")
@@ -122,11 +122,24 @@ func (t alertTexts) summary(d alertDay, worstH string, worstV float64, cuts []st
 	if worstH != "" {
 		w = fmt.Sprintf("%s:00 (%.0f ms)", worstH, worstV)
 	}
-	return t.pick(
-		fmt.Sprintf("خلاصه روزانه: بیشینه کاربر %d · بیشینه %.0f Mbit/s · بدترین ساعت تأخیر %s · قطعی‌ها: %s · ری‌استارت %d · هشدار %d",
-			d.PeakUsers, d.PeakMbit, w, c, d.Restarts, d.Alerts),
-		fmt.Sprintf("daily summary: peak users %d · peak %.0f Mbit/s · worst RTT hour %s · cuts: %s · restarts %d · alerts %d",
-			d.PeakUsers, d.PeakMbit, w, c, d.Restarts, d.Alerts))
+	if len(items) == 0 {
+		items = summaryItemNames
+	}
+	part := map[string]string{
+		"users":    t.pick(fmt.Sprintf("بیشینه کاربر %d", d.PeakUsers), fmt.Sprintf("peak users %d", d.PeakUsers)),
+		"mbit":     t.pick(fmt.Sprintf("بیشینه %.0f Mbit/s", d.PeakMbit), fmt.Sprintf("peak %.0f Mbit/s", d.PeakMbit)),
+		"rtt":      t.pick("بدترین ساعت تأخیر "+w, "worst RTT hour "+w),
+		"cuts":     t.pick("قطعی‌ها: "+c, "cuts: "+c),
+		"restarts": t.pick(fmt.Sprintf("ری‌استارت %d", d.Restarts), fmt.Sprintf("restarts %d", d.Restarts)),
+		"alerts":   t.pick(fmt.Sprintf("هشدار %d", d.Alerts), fmt.Sprintf("alerts %d", d.Alerts)),
+	}
+	var ps []string
+	for _, it := range items {
+		if p, ok := part[it]; ok {
+			ps = append(ps, p)
+		}
+	}
+	return t.pick("خلاصه روزانه: ", "daily summary: ") + strings.Join(ps, " · ")
 }
 
 // sevMark prefixes a message with its severity.

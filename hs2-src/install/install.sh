@@ -11,6 +11,7 @@
 #  and "hs2-<name>". The name is chosen where the setup link is made and
 #  travels in the link, with the tunnel's own tun subnet.
 #      hs2-menu                   (this menu, installed locally by setup/upgrade)
+#      hs2-menu --new             (the redesigned menu + live dashboard; preview, --classic = the old one)
 # ============================================================================
 set -euo pipefail
 # Create every file and directory root-only by default (configs hold the tunnel
@@ -3217,6 +3218,25 @@ tm_bilateral_warn(){ # changed-list
   hr
 }
 
+# tm_safe_apply UNIT CFG NEWFILE — the editor's save through `hs2 apply`: the
+# old config is stored in /var/lib/hs2/history, the new one runs in trial mode
+# (restart detached from this SSH session) and rolls back by itself unless
+# confirmed within 5 minutes or if the tunnel does not come up healthy.
+tm_safe_apply(){ # unit cfg newfile
+  local u="$1" cfg="$2" new="$3" a
+  cp -p "$cfg" "$cfg.prev"
+  if ! "$BIN" apply -u "$u" -c "$cfg" --new "$new" --confirm-within 5m --reason menu-edit; then
+    tm_edit_cleanup; err "The change was not kept — $u runs the previous config (see: $BIN config history -u $u)."; return 0
+  fi
+  tm_edit_cleanup
+  read -rp "Keep the new config? (n = roll back now; no answer in 5 min = automatic roll back) [Y/n]: " a </dev/tty || a=n
+  case "${a:-y}" in
+    n|N|no) "$BIN" rollback -u "$u" -c "$cfg" || true ;;
+    *) "$BIN" apply --confirm -u "$u" || warn "Not confirmed — $u rolls back to the previous config by itself." ;;
+  esac
+  return 0
+}
+
 tm_edit(){
   local u="$1" cfg="$2" ed edname d tmp c a since changed erc
   local -a edcmd
@@ -3268,6 +3288,9 @@ tm_edit(){
     read -rp "  Choose [1]: " c </dev/tty || c=2
     case "${c:-1}" in 2) tm_edit_cleanup; info "Changes thrown away. Nothing was changed."; return 0 ;; esac
   done
+  # A binary with safe apply (history, trial mode, automatic rollback) takes
+  # over from here; an older one keeps the classic path below.
+  if "$BIN" apply --supported >/dev/null 2>&1; then tm_safe_apply "$u" "$cfg" "$tmp"; return 0; fi
   cp -p "$cfg" "$cfg.prev"
   # Capture which bilateral (must-match-the-peer) fields the edit changed, while
   # $cfg is still the OLD file and $tmp holds the NEW one (before the swap).
@@ -5332,9 +5355,613 @@ upgrade(){ # [tunnel]
   info "Tunnel manager: run  hs2-menu  → 3"
 }
 
+# ---------- the new menu (menu redesign M2; opt-in until M7) ----------------
+# `hs2-menu --new` (or HS2_MENU=new, or "default_menu=new" in menu.conf, set
+# from its own Menu settings) opens it; `hs2-menu --classic` / HS2_MENU=classic
+# always opens the classic menu above, which stays the default until the
+# redesign's tests (M7) pass. The new menu is a thin shell: the live dashboard
+# and the header are rendered by `hs2 dashboard`; items 2-5 still open the
+# classic screens (M3-M5 replace them).
+MENU_CONF=$CFG_DIR/menu.conf
+NM_LANG=en; NM_MODE=simple; NM_COLOR=on
+mc_get(){ { sed -n "s/^$1=//p" "$MENU_CONF" 2>/dev/null || true; } | tail -1; }
+mc_set(){ # key value — atomic rewrite, other keys kept
+  local tmp
+  mkdir -p "$(dirname "$MENU_CONF")"
+  tmp=$(mktemp "$MENU_CONF.XXXXXX") || return 1
+  { { grep -v "^$1=" "$MENU_CONF" 2>/dev/null || true; }; echo "$1=$2"; } > "$tmp"
+  chmod 644 "$tmp"; mv -f "$tmp" "$MENU_CONF"
+}
+nm_utf8(){ case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in *[Uu][Tt][Ff]-8*|*[Uu][Tt][Ff]8*) return 0 ;; esac; return 1; }
+nm_load(){
+  NM_LANG=$(mc_get lang); case "$NM_LANG" in fa|en) ;; *) NM_LANG=fa ;; esac
+  nm_utf8 || NM_LANG=en                       # Persian needs a UTF-8 terminal
+  NM_MODE=$(mc_get mode); case "$NM_MODE" in simple|advanced) ;; *) NM_MODE=simple ;; esac
+  NM_COLOR=$(mc_get color); case "$NM_COLOR" in on|off) ;; *) NM_COLOR=on ;; esac
+  if [ "$NM_COLOR" = off ]; then C_G=; C_R=; C_Y=; C_B=; C_D=; C_0=; fi
+  HS2_DOCTOR_LANG=$NM_LANG
+}
+nm_t(){ if [ "$NM_LANG" = fa ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+nm_pause(){ read -rp "$(nm_t "Press Enter to continue… " "برای ادامه Enter بزنید… ")" _ </dev/tty || true; }
+nm_has_dash(){ [ -x "$BIN" ] && "$BIN" dashboard --header --width 40 >/dev/null 2>&1; }
+nm_dash_flags(){ printf -- '--lang %s' "$NM_LANG"; [ "$NM_COLOR" = off ] && printf ' --color off'; return 0; }
+
+nm_header(){
+  local h=""
+  # shellcheck disable=SC2046
+  if [ -x "$BIN" ]; then h=$("$BIN" dashboard --header $(nm_dash_flags) --color "$([ "$NM_COLOR" = on ] && [ -t 2 ] && echo on || echo off)" 2>/dev/null || true); fi
+  if [ -z "$h" ]; then
+    local n; n=$(tm_units | grep -c . || true)
+    h="$(hostname -s 2>/dev/null || echo server) · $n $(nm_t "tunnel(s)" "تونل")"
+  fi
+  say ""; say " $h"
+}
+
+# nm_pick_unit: sets NM_U/NM_CFG (one tunnel: that one; several: asks).
+nm_pick_unit(){
+  local units=() c i=1 u
+  mapfile -t units < <(tm_units)
+  if [ ${#units[@]} -eq 0 ]; then warn "$(nm_t "No tunnel on this server yet — set one up in 2) Tunnels." "هنوز تونلی روی این سرور نیست — از ۲) تونل‌ها بسازید.")"; return 1; fi
+  if [ ${#units[@]} -eq 1 ]; then NM_U=${units[0]}; NM_CFG=$(tm_cfg "$NM_U"); return 0; fi
+  for u in "${units[@]}"; do say "   $i) $u — $(unit_desc "$u")"; i=$((i + 1)); done
+  read -rp "$(nm_t "Which tunnel? " "کدام تونل؟ ")" c </dev/tty || return 1
+  case "$c" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$c" -ge 1 ] && [ "$c" -le ${#units[@]} ] || return 1
+  NM_U=${units[$((10#$c-1))]}; NM_CFG=$(tm_cfg "$NM_U")
+}
+
+# The admin lock (hs2 config lock, menu M1) is held while an edit screen is
+# open, so two admins never change the same server at once; hs2 apply and
+# hs2 rollback run from here see HS2_LOCK_PID and share it. An older binary
+# without the lock just goes on.
+nm_lock(){
+  local out a
+  export HS2_LOCK_PID=$$
+  [ -x "$BIN" ] || return 0
+  if out=$("$BIN" config lock --pid $$ --lang "$NM_LANG" 2>&1); then return 0; fi
+  case "$out" in *"unknown command"*|*usage*|*"flag provided"*) return 0 ;; esac
+  warn "$out"
+  read -rp "$(nm_t "Break the other admin's lock? [y/N]: " "قفل مدیر دیگر شکسته شود؟ [y/N]: ")" a </dev/tty || a=n
+  case "$a" in [yY]*) "$BIN" config lock --pid $$ --force >/dev/null 2>&1 || true; return 0 ;; esac
+  return 1
+}
+nm_unlock(){ [ -x "$BIN" ] && "$BIN" config unlock --pid $$ >/dev/null 2>&1; return 0; }
+nm_edit(){ # screen function and its args, run under the admin lock
+  nm_lock || return 0
+  "$@" || true
+  nm_unlock
+}
+nm_soon(){ # milestone
+  say "  ${C_Y}$(nm_t "[preview] The redesigned screen arrives in $1 — this opens the classic screen for now." "[پیش‌نمایش] صفحهٔ جدید در $1 می‌آید — فعلاً صفحهٔ کلاسیک باز می‌شود.")${C_0}"
+}
+
+nm_dashboard(){
+  if ! nm_has_dash; then
+    warn "$(nm_t "This hs2 binary has no live dashboard yet — showing the classic status. Upgrade in 8) Maintenance." "این باینری داشبورد زنده ندارد — وضعیت کلاسیک نمایش داده می‌شود. از ۸) نگهداری به‌روز کنید.")"
+    status; nm_pause; return 0
+  fi
+  # shellcheck disable=SC2046
+  "$BIN" dashboard $(nm_dash_flags) </dev/tty || true
+  return 0
+}
+
+# Screen 2 "Tunnels" (menu M3). The logic lives in `hs2 tunnel …` (Go); this
+# screen only renders its output and passes the choices through. A binary
+# without `hs2 tunnel` falls back to the classic tunnel manager / setup.
+nm_has_tunnel(){ [ -x "$BIN" ] && "$BIN" tunnel list >/dev/null 2>&1; }
+nm_tunnels_classic(){
+  local c
+  nm_soon M3
+  say "   1) $(nm_t "Tunnel manager (list · start/stop · edit · logs · delete)" "مدیر تونل (فهرست · شروع/توقف · ویرایش · لاگ · حذف)")"
+  say "   2) $(nm_t "New tunnel — Kharej (foreign server)" "تونل جدید — خارج")"
+  say "   3) $(nm_t "New tunnel — Iran" "تونل جدید — ایران")"
+  say "   0) $(nm_t Back بازگشت)"
+  read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+  case "$c" in
+    1) nm_edit tunnel_manager ;;
+    2) nm_lock && { setup_kharej; exit 0; } ;;
+    3) nm_lock && { setup_iran; exit 0; } ;;
+  esac
+  return 0
+}
+nm_tun(){ "$BIN" tunnel "$@" --lang "$NM_LANG" </dev/tty || true; }  # never trips set -e
+nm_tunnels(){
+  local c u code
+  if ! nm_has_tunnel; then nm_tunnels_classic; return 0; fi
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "Tunnels" "تونل‌ها")${C_0}"; hr
+    "$BIN" tunnel list --lang "$NM_LANG" >&2 2>/dev/null || true
+    echo >&2
+    say "   n) $(nm_t "New tunnel (wizard)" "تونل جدید (راهنمای گام‌به‌گام)")"
+    [ "$NM_MODE" = advanced ] && say "   a) $(nm_t "New tunnel — advanced (dgtun udp/icmp, name, MTU, source IP)" "تونل جدید — پیشرفته (dgtun udp/icmp، نام، MTU، IP مبدأ)")"
+    say "   j) $(nm_t "Join with a connection code from the other server" "پیوستن با کد اتصال سرور مقابل")"
+    say "   #) $(nm_t "Number of a tunnel: manage it" "شمارهٔ تونل: مدیریت آن")"
+    say "   c) $(nm_t "Classic setup screens" "صفحه‌های راه‌اندازی کلاسیک")"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      0|"") return 0 ;;
+      n|N) nm_lock && { nm_tun create; nm_unlock; nm_pause; } ;;
+      a|A) nm_lock && { nm_tun create --advanced; nm_unlock; nm_pause; } ;;
+      j|J) read -rp "$(nm_t "Paste the hs2:// code: " "کد hs2:// را بچسبانید: ")" code </dev/tty || code=""
+           if [ -n "$code" ]; then nm_lock && { nm_tun join "$code"; nm_unlock; nm_pause; }; fi ;;
+      c|C) nm_tunnels_classic ;;
+      *[!0-9]*) warn "$(nm_t "Unknown choice." "گزینهٔ نامعتبر.")" ;;
+      *) u=$("$BIN" tunnel list --names 2>/dev/null | sed -n "${c}p")
+         if [ -n "$u" ]; then nm_tunnel_actions "$u"; else warn "$(nm_t "No tunnel #$c." "تونل شمارهٔ $c نیست.")"; fi ;;
+    esac
+  done
+}
+nm_tunnel_actions(){ # unit
+  local u="$1" c kv
+  while :; do
+    echo >&2; hr; say " ${C_B}$u${C_0}"; hr
+    say "   1) $(nm_t Start شروع)   2) $(nm_t Stop توقف)   3) $(nm_t Restart ری‌استارت)"
+    say "   4) $(nm_t "Edit (network · transport · security · performance · LB) — safe apply" "ویرایش (شبکه · انتقال · امنیت · کارایی · LB) — اعمال امن")"
+    say "   5) $(nm_t Logs لاگ‌ها)"
+    say "   6) $(nm_t "Connection code for the other server" "کد اتصال برای سرور مقابل")"
+    say "   7) $(nm_t "Clone code (recreate this side on another server)" "کد کلون (ساخت همین سمت روی سرور دیگر)")"
+    say "   8) $(nm_t "Renew / migrate (backup, rebuild config, best local IP)" "تمدید / مهاجرت (پشتیبان، بازسازی پیکربندی، بهترین IP محلی)")"
+    say "   9) $(nm_t "Delete (two-step confirm, backup first)" "حذف (تأیید دومرحله‌ای، اول پشتیبان)")"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      0|"") return 0 ;;
+      1) nm_tun start -u "$u"; nm_pause ;;
+      2) nm_lock && { nm_tun stop -u "$u"; nm_unlock; nm_pause; } ;;
+      3) nm_lock && { nm_tun restart -u "$u"; nm_unlock; nm_pause; } ;;
+      4) nm_tun edit -u "$u"
+         read -rp "$(nm_t "key=value to change (Enter = none): " "کلید=مقدار برای تغییر (Enter = هیچ): ")" kv </dev/tty || kv=""
+         if [ -n "$kv" ]; then nm_lock && { nm_tun edit -u "$u" --set "$kv"; nm_unlock; nm_pause; }; fi ;;
+      5) nm_tun logs -u "$u" -n 60; nm_pause ;;
+      6) nm_tun code -u "$u"; nm_pause ;;
+      7) nm_tun clone -u "$u" --to-code; nm_pause ;;
+      8) nm_lock && { nm_tun renew -u "$u" --pick-ip; nm_unlock; nm_pause; } ;;
+      9) nm_lock && { nm_tun delete -u "$u"; nm_unlock; nm_pause; }
+         "$BIN" tunnel list --names 2>/dev/null | grep -qx "$u" || return 0 ;;
+    esac
+  done
+}
+# Screen 3 "Load balancing & IPs" (menu M4). The logic lives in `hs2 lb …`
+# (Go); this screen renders its output and passes the choices through. Every
+# change: semantic diff + safe apply (auto-rollback) under the admin lock. A
+# binary without `hs2 lb` falls back to the classic LB screen.
+nm_has_lb(){ [ -x "$BIN" ] && "$BIN" lb --supported >/dev/null 2>&1; }
+nm_lbx(){ "$BIN" lb "$@" --lang "$NM_LANG" </dev/tty || true; }   # never trips set -e
+nm_lb_classic(){
+  nm_soon M4
+  nm_pick_unit || return 0
+  if lb_supported "$NM_CFG"; then nm_edit tm_lb "$NM_U" "$NM_CFG"
+  else warn "$(nm_t "$NM_U's carrier has no load balancing (mtcp / l3mtcp only)." "حامل $NM_U لودبالانس ندارد (فقط mtcp / l3mtcp).")"; nm_pause; fi
+  return 0
+}
+nm_ask(){ local __v; read -rp "$2" __v </dev/tty || __v=""; printf -v "$1" '%s' "$__v"; }
+nm_lb(){
+  local c ip w h ex
+  if ! nm_has_lb; then nm_lb_classic; return 0; fi
+  nm_pick_unit || return 0
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "Load balancing & IPs" "لودبالانس و IPها") — $NM_U${C_0}"; hr
+    nm_lbx show -u "$NM_U"
+    say "   1) $(nm_t "Refresh" "تازه‌سازی")   2) $(nm_t "Cut history (24 h)" "تاریخچهٔ قطع (۲۴ ساعت)")"
+    say "   3) $(nm_t "Suggest the primary IP (ping the peer from each local IP)" "پیشنهاد IP اصلی (پینگ سرور مقابل از هر IP محلی)")"
+    say "   4) $(nm_t "Add a local IP" "افزودن IP محلی")   5) $(nm_t "Remove a local IP" "حذف IP محلی")"
+    say "   6) $(nm_t "Split weights equally" "تقسیم مساوی وزن‌ها")"
+    say "   7) $(nm_t "Park an IP for N hours (weight 0, restored by itself)" "پارک یک IP برای N ساعت (وزن ۰، خودکار برمی‌گردد)")   8) $(nm_t "Unpark" "خروج از پارک")"
+    if [ "$NM_MODE" = advanced ]; then
+      say "   9) $(nm_t "Weights editor (ip=w,…; sum 100)" "ویرایش وزن‌ها (ip=w,…؛ جمع ۱۰۰)")   m) $(nm_t "Mode fixed / auto" "حالت ثابت / خودکار")"
+      say "   c) $(nm_t "Classic LB screen" "صفحهٔ کلاسیک LB")"
+    fi
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|"") return 0 ;;
+      1) ;;
+      2) nm_lbx history -u "$NM_U"; nm_pause ;;
+      3) nm_lbx suggest -u "$NM_U"; nm_pause ;;
+      4) nm_ask ip "$(nm_t "Local IP to add: " "IP محلی برای افزودن: ")"
+         [ -n "$ip" ] || continue
+         ex=()
+         if [ "$NM_MODE" = advanced ]; then
+           nm_ask w "$(nm_t "SNI on this IP (Enter = the tunnel's): " "SNI روی این IP (Enter = همان تونل): ")"; [ -n "$w" ] && ex+=(--sni "$w")
+           nm_ask w "$(nm_t "Certificate file on this IP (Enter = the tunnel's): " "فایل گواهی روی این IP (Enter = همان تونل): ")"
+           if [ -n "$w" ]; then ex+=(--cert "$w"); nm_ask h "$(nm_t "Key file: " "فایل کلید: ")"; ex+=(--key "$h"); fi
+           say "   $(nm_t "Front on this IP: tls (Reality per IP arrives in M5)" "پوشش روی این IP: tls (Reality برای هر IP در M5 می‌آید)")"
+         fi
+         nm_lock && { nm_lbx add-ip -u "$NM_U" --ip "$ip" ${ex[@]+"${ex[@]}"}; nm_unlock; nm_pause; } ;;
+      5) nm_ask ip "$(nm_t "Local IP to remove: " "IP محلی برای حذف: ")"
+         [ -n "$ip" ] && nm_lock && { nm_lbx remove-ip -u "$NM_U" --ip "$ip"; nm_unlock; nm_pause; } ;;
+      6) nm_lock && { nm_lbx weights -u "$NM_U" --equal; nm_unlock; nm_pause; } ;;
+      7) nm_ask ip "$(nm_t "IP to park: " "IP برای پارک: ")"; nm_ask h "$(nm_t "Hours: " "ساعت: ")"
+         [ -n "$ip" ] && [ -n "$h" ] && nm_lock && { nm_lbx park -u "$NM_U" --ip "$ip" --hours "$h"; nm_unlock; nm_pause; } ;;
+      8) nm_ask ip "$(nm_t "IP to unpark: " "IP برای خروج از پارک: ")"
+         [ -n "$ip" ] && nm_lock && { nm_lbx unpark -u "$NM_U" --ip "$ip"; nm_unlock; nm_pause; } ;;
+      9) [ "$NM_MODE" = advanced ] || continue
+         nm_ask w "$(nm_t "Weights (ip=w,ip=w; sum 100): " "وزن‌ها (ip=w,ip=w؛ جمع ۱۰۰): ")"
+         [ -n "$w" ] && nm_lock && { nm_lbx weights -u "$NM_U" "$w"; nm_unlock; nm_pause; } ;;
+      m|M) [ "$NM_MODE" = advanced ] || continue
+         nm_ask w "$(nm_t "Mode (fixed/auto): " "حالت (fixed/auto): ")"
+         case "$w" in fixed|auto) nm_lock && { nm_lbx mode -u "$NM_U" "$w"; nm_unlock; nm_pause; } ;; esac ;;
+      c|C) [ "$NM_MODE" = advanced ] && lb_supported "$NM_CFG" && nm_edit tm_lb "$NM_U" "$NM_CFG" ;;
+    esac
+  done
+}
+nm_security(){
+  local c
+  nm_soon M5
+  nm_pick_unit || return 0
+  say "   1) $(nm_t "Certificate (expiry, renewal, renew now)" "گواهی (انقضا، تمدید، تمدید فوری)")"
+  say "   2) $(nm_t "Edit config (cover page, camouflage fields)" "ویرایش پیکربندی (صفحهٔ پوششی، فیلدهای استتار)")"
+  say "   0) $(nm_t Back بازگشت)"
+  read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+  case "$c" in
+    1) if tm_cert_side "$NM_CFG"; then nm_edit tm_cert "$NM_U" "$NM_CFG"; else warn "$(nm_t "This side holds no certificate." "این سمت گواهی ندارد.")"; nm_pause; fi ;;
+    2) nm_edit tm_edit "$NM_U" "$NM_CFG" ;;
+  esac
+  return 0
+}
+# Screen 5 "Speed & performance" (menu M4): `hs2 perf …`. Presets / toggles /
+# CPUAffinity are drop-ins applied with the safe apply (auto-rollback);
+# netdev_budget is measured before/after and reverted when worse. x-ui / xray
+# units are never touched. A binary without `hs2 perf`: the classic items.
+nm_has_perf(){ [ -x "$BIN" ] && "$BIN" perf --supported >/dev/null 2>&1; }
+nm_perf(){ "$BIN" perf "$@" --lang "$NM_LANG" </dev/tty || true; }
+nm_speed_classic(){
+  local c
+  nm_soon M4
+  nm_pick_unit || return 0
+  say "   1) $(nm_t "Kernel network tuning" "تنظیم شبکهٔ کرنل")"
+  say "   2) $(nm_t "Live pattern monitor (parallel links)" "پایش زندهٔ الگو (لینک‌های موازی)")"
+  if tm_has_ports "$NM_CFG"; then say "   3) $(nm_t "Ports (user ports and where each one goes)" "پورت‌ها (پورت کاربران و مقصد هرکدام)")"; fi
+  say "   0) $(nm_t Back بازگشت)"
+  read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+  case "$c" in
+    1) nm_edit tm_tune "$NM_U" "$NM_CFG" ;;
+    2) tm_monitor "$NM_U" "$NM_CFG" ;;
+    3) tm_has_ports "$NM_CFG" && nm_edit tm_ports "$NM_U" "$NM_CFG" ;;
+  esac
+  return 0
+}
+nm_speed(){
+  local c p kv adv=()
+  if ! nm_has_perf; then nm_speed_classic; return 0; fi
+  nm_pick_unit || return 0
+  [ "$NM_MODE" = advanced ] && adv=(--advanced)
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "Speed & performance" "سرعت و کارایی") — $NM_U${C_0}"; hr
+    nm_perf show -u "$NM_U" ${adv[@]+"${adv[@]}"}
+    say "   1) $(nm_t "Presets (production · low-cpu · min-latency · max-throughput: experimental, not recommended)" "پیش‌تنظیم‌ها (تولید · CPU کم · کمترین تأخیر · بیشترین سرعت: آزمایشی، توصیه نمی‌شود)")"
+    say "   2) $(nm_t "Turn a feature on/off (KEY=VALUE)" "روشن/خاموش کردن یک قابلیت (KEY=VALUE)")"
+    say "   3) $(nm_t "Cores & NIC (keep the rx core free for hs2)" "هسته‌ها و کارت شبکه (آزاد نگه داشتن هستهٔ دریافت)")"
+    say "   4) $(nm_t "Kernel (bbr, qdisc, buffers, netdev_budget)" "کرنل (bbr، qdisc، بافرها، netdev_budget)")"
+    say "   5) $(nm_t "Speed test through the tunnel (iperf3)" "آزمون سرعت از داخل تونل (iperf3)")"
+    say "   6) $(nm_t "Classic: kernel tuning · live monitor · ports" "کلاسیک: تنظیم کرنل · پایش زنده · پورت‌ها")"
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|"") return 0 ;;
+      1) nm_perf presets
+         nm_ask p "$(nm_t "Preset name (Enter = none): " "نام پیش‌تنظیم (Enter = هیچ): ")"
+         [ -n "$p" ] && nm_lock && { nm_perf preset -u "$NM_U" "$p"; nm_unlock; nm_pause; } ;;
+      2) nm_ask kv "$(nm_t "KEY=VALUE to set, or -KEY to unset (Enter = none): " "KEY=VALUE برای تنظیم، یا -KEY برای حذف (Enter = هیچ): ")"
+         case "$kv" in
+           "") ;;
+           -*) nm_lock && { nm_perf unset -u "$NM_U" "${kv#-}"; nm_unlock; nm_pause; } ;;
+           *=*) nm_lock && { nm_perf set -u "$NM_U" "$kv"; nm_unlock; nm_pause; } ;;
+         esac ;;
+      3) nm_perf nic
+         nm_ask p "$(nm_t "Keep which core free for the NIC (number; c = clear; Enter = none): " "کدام هسته برای کارت شبکه آزاد بماند (شماره؛ c = حذف؛ Enter = هیچ): ")"
+         case "$p" in
+           c|C) nm_lock && { nm_perf cores -u "$NM_U" --clear; nm_unlock; nm_pause; } ;;
+           *[!0-9]*|"") ;;
+           *) nm_lock && { nm_perf cores -u "$NM_U" --keep "$p"; nm_unlock; nm_pause; } ;;
+         esac ;;
+      4) nm_perf kernel
+         nm_ask p "$(nm_t "Try netdev_budget=600 (measured, reverted if worse)? [y/N/r=revert]: " "netdev_budget=600 امتحان شود (اندازه‌گیری، اگر بدتر شد برمی‌گردد)؟ [y/N/r=برگرداندن]: ")"
+         case "$p" in
+           y|Y) nm_lock && { nm_perf kernel --budget 600 --yes; nm_unlock; nm_pause; } ;;
+           r|R) nm_lock && { nm_perf kernel --revert-budget; nm_unlock; nm_pause; } ;;
+         esac ;;
+      5) nm_perf speedtest
+         nm_ask p "$(nm_t "User port whose target is the peer's iperf3 (Enter = none): " "پورت کاربری که مقصدش iperf3 سرور مقابل است (Enter = هیچ): ")"
+         case "$p" in ""|*[!0-9]*) ;; *) nm_perf speedtest --port "$p"; nm_pause ;; esac ;;
+      6) nm_speed_classic ;;
+    esac
+  done
+}
+# Screen 6 "Monitoring & alerts" (menu M6): `hs2 alert conf|rule|history|
+# summary-now|telegram-check`. Settings live in /etc/hs2/alert.conf (mode 600,
+# shared by every tunnel); each tunnel has its own hs2-alert-<unit>.timer. The
+# bot token is read hidden and handed to hs2 on stdin — never on a command
+# line, never echoed, never logged. A binary without these: the classic screen.
+nm_has_alertx(){ [ -x "$BIN" ] && "$BIN" alert --supported >/dev/null 2>&1; }
+nm_alx(){ "$BIN" alert "$@" --lang "$NM_LANG" </dev/tty || true; }
+nm_alerts_classic(){ nm_soon M6; nm_pick_unit || return 0; nm_edit tm_alerts "$NM_U" "$NM_CFG"; return 0; }
+nm_alert_units(){ # per-tunnel state lines
+  local u units=()
+  mapfile -t units < <(tm_units)
+  [ ${#units[@]} -gt 0 ] || { say "   $(nm_t "(no tunnel yet — alerts watch tunnels)" "(هنوز تونلی نیست — هشدار تونل‌ها را می‌پاید)")"; return 0; }
+  for u in "${units[@]}"; do
+    if alert_timer_on "$u"; then say "   $u: ${C_G}$(nm_t ON روشن)${C_0}"; else say "   $u: ${C_D}$(nm_t OFF خاموش)${C_0}"; fi
+  done
+}
+nm_alert_kind(){ # N → name (1-11)
+  case "$1" in
+    1) echo unit ;; 2) echo restart ;; 3) echo panic ;; 4) echo dead ;; 5) echo links ;; 6) echo ipcut ;;
+    7) echo flap ;; 8) echo rtt ;; 9) echo psi ;; 10) echo cert ;; 11) echo probe ;;
+  esac
+}
+nm_alerts(){
+  local c v k
+  if ! nm_has_alertx; then nm_alerts_classic; return 0; fi
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "6) Monitoring & alerts" "۶) پایش و هشدارها")${C_0}  ($ALERT_CONF)"; hr
+    [ "$(id -u)" = 0 ] || warn "$(nm_t "Not root: settings and timers cannot be changed here (run: sudo hs2-menu)." "کاربر root نیستید: تنظیمات و تایمرها این‌جا تغییر نمی‌کنند (اجرا کنید: sudo hs2-menu).")"
+    "$BIN" alert conf show --lang "$NM_LANG" >&2 2>/dev/null || true
+    say "  $(nm_t "watched tunnels (every 60 s):" "تونل‌های پایش‌شده (هر ۶۰ ثانیه):")"
+    nm_alert_units
+    hr
+    say "   1) $(nm_t "Telegram bot token (hidden)" "توکن ربات تلگرام (پنهان)")"
+    say "   2) $(nm_t "Telegram chat id" "شناسهٔ چت تلگرام")"
+    say "   3) $(nm_t "Proxy (Iran servers usually need one)" "پراکسی (سرور ایران معمولاً لازم دارد)")"
+    say "   4) $(nm_t "Message language (fa / en)" "زبان پیام‌ها (fa / en)")"
+    say "   5) $(nm_t "Check Telegram reachability + send a test message" "بررسی دسترسی به تلگرام + پیام آزمایشی")"
+    say "   6) $(nm_t "Alerts on/off for a tunnel" "روشن/خاموش کردن هشدار یک تونل")"
+    say "   7) $(nm_t "Turn one alert kind on/off (number from the list)" "روشن/خاموش کردن یک نوع هشدار (شماره از فهرست)")"
+    say "   8) $(nm_t "Thresholds (KEY=VALUE, e.g. cpu_pressure_pct=40)" "آستانه‌ها (KEY=VALUE، مثلاً cpu_pressure_pct=40)")"
+    say "   9) $(nm_t "Quiet hours (only critical alerts at night)" "ساعت سکوت (شب فقط هشدار بحرانی)")"
+    say "   s) $(nm_t "Daily summary: time and content" "خلاصهٔ روزانه: ساعت و محتوا")"
+    say "   h) $(nm_t "History of the last 7 days" "تاریخچهٔ ۷ روز گذشته")"
+    say "   n) $(nm_t "Send the summary now" "فرستادن خلاصه همین حالا")"
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|b|B|q|"") return 0 ;;
+      1) read -rsp "$(nm_t "Bot token from @BotFather (input hidden; Enter = keep, - = remove): " "توکن ربات از @BotFather (ورودی پنهان؛ Enter = بدون تغییر، - = حذف): ")" v </dev/tty || v=""; echo >&2
+         case "$v" in
+           "") ;;
+           -) printf '\n' | "$BIN" alert conf token --lang "$NM_LANG" >&2 || true ;;
+           *) printf '%s\n' "$v" | "$BIN" alert conf token --lang "$NM_LANG" >&2 || true ;;
+         esac
+         v=""; nm_pause ;;
+      2) nm_ask v "$(nm_t "Chat id (123456789, -100… or @channel; Enter = keep, - = remove): " "شناسهٔ چت (123456789، -100… یا @channel؛ Enter = بدون تغییر، - = حذف): ")"
+         case "$v" in "") ;; -) "$BIN" alert conf set "chat_id=" --lang "$NM_LANG" >&2 || true; nm_pause ;; *) "$BIN" alert conf set "chat_id=$v" --lang "$NM_LANG" >&2 || true; nm_pause ;; esac ;;
+      3) "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true
+         nm_ask v "$(nm_t "Proxy (socks5://host:port or http://host:port; Enter = keep, - = none): " "پراکسی (socks5://host:port یا http://host:port؛ Enter = بدون تغییر، - = ندارد): ")"
+         case "$v" in
+           "") ;;
+           -) "$BIN" alert conf set "proxy=" --lang "$NM_LANG" >&2 || true ;;
+           *) "$BIN" alert conf set "proxy=$v" --lang "$NM_LANG" >&2 && { "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true; } ;;
+         esac
+         nm_pause ;;
+      4) nm_ask v "$(nm_t "Language [fa/en]: " "زبان [fa/en]: ")"
+         [ -n "$v" ] && { "$BIN" alert conf set "lang=$v" --lang "$NM_LANG" >&2 || true; nm_pause; } ;;
+      5) "$BIN" alert telegram-check --lang "$NM_LANG" >&2 || true
+         if nm_pick_unit; then "$BIN" alert -c "$NM_CFG" -u "$NM_U" -test >&2 || true; fi; nm_pause ;;
+      6) if nm_pick_unit; then
+           if [ "$(id -u)" != 0 ]; then warn "$(nm_t "Needs root (sudo hs2-menu)." "نیاز به root دارد (sudo hs2-menu).")"
+           elif alert_timer_on "$NM_U"; then alert_disable "$NM_U"; else alert_enable "$NM_U" "$NM_CFG"; fi
+           nm_pause
+         fi ;;
+      7) nm_ask v "$(nm_t "Alert kind number (1-11): " "شمارهٔ نوع هشدار (1 تا 11): ")"
+         k=$(nm_alert_kind "$v")
+         if [ -z "$k" ]; then warn "$(nm_t "No such alert kind." "چنین نوعی نیست.")"
+         elif "$BIN" alert conf show 2>/dev/null | grep -Eq "^ +$v\) +$k +OFF"; then "$BIN" alert rule "$k" on --lang "$NM_LANG" >&2 || true
+         else "$BIN" alert rule "$k" off --lang "$NM_LANG" >&2 || true; fi ;;
+      8) say "  ${C_D}resend_min · rtt_factor · rtt_min_add_ms · cpu_pressure_pct · cert_days · flap_cuts · probe=off|tcp|tls${C_0}"
+         nm_ask v "KEY=VALUE: "
+         case "$v" in *=*) "$BIN" alert conf set "$v" --lang "$NM_LANG" >&2 || true; nm_pause ;; esac ;;
+      9) nm_ask v "$(nm_t "Quiet hours HH:MM-HH:MM (e.g. 23:30-07:00, may cross midnight) or off: " "ساعت سکوت HH:MM-HH:MM (مثلاً 23:30-07:00، از نیمه‌شب هم می‌گذرد) یا off: ")"
+         [ -n "$v" ] && { "$BIN" alert conf set "quiet_hours=$v" --lang "$NM_LANG" >&2 || true; nm_pause; } ;;
+      s|S) nm_ask v "$(nm_t "Summary time HH:MM or off (Enter = keep): " "ساعت خلاصه HH:MM یا off (Enter = بدون تغییر): ")"
+         [ -n "$v" ] && { "$BIN" alert conf set "summary_time=$v" --lang "$NM_LANG" >&2 || true; }
+         nm_ask v "$(nm_t "Content: comma list of users,mbit,rtt,cuts,restarts,alerts (Enter = keep, all = everything): " "محتوا: فهرست با کاما از users,mbit,rtt,cuts,restarts,alerts (Enter = بدون تغییر، all = همه): ")"
+         case "$v" in "") ;; all) "$BIN" alert conf set "summary_items=" --lang "$NM_LANG" >&2 || true ;; *) "$BIN" alert conf set "summary_items=$v" --lang "$NM_LANG" >&2 || true ;; esac
+         nm_pause ;;
+      h|H) nm_alx history --days 7 >&2; nm_pause ;;
+      n|N) nm_alx summary-now >&2; nm_pause ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+}
+
+# Screen 7 "Server doctor" (menu M6): `hs2 doctor --deep --fixes [--only CAT]`.
+# Each finding with a safe automatic fix gets a number; `hs2 doctor --fix N`
+# shows the preview and runs an hs2 command that has its own safety net (safe
+# apply with auto-rollback, measured-and-reverted, timed park, dry run). x-ui /
+# xray / panel findings never get a fix: advice text only.
+nm_has_docfix(){ [ -x "$BIN" ] && "$BIN" doctor --supported >/dev/null 2>&1; }
+nm_doctor_run(){ # [category]
+  local only=() out
+  [ -n "${1:-}" ] && only=(--only "$1")
+  info "$(nm_t "Inspecting this server (about 10 s, read-only)…" "در حال بررسی سرور (حدود ۱۰ ثانیه، فقط خواندنی)…")"
+  out=$("$BIN" doctor --deep --fixes ${only[@]+"${only[@]}"} --lang "$NM_LANG" 2>&1) || true
+  printf '%s\n' "$out" | sed 's/^/  /' >&2
+  NM_DOC_FIXES=$(printf '%s\n' "$out" | grep -cE '^ +(fix:|اصلاح:) [0-9]+\)' || true)
+}
+NM_DOC_FIXES_FILE=/run/hs2/doctor-fixes.json
+nm_doctor_kind(){ # N → kind of fix N of the last run
+  grep -o '"kind":"[a-z]*"' "$NM_DOC_FIXES_FILE" 2>/dev/null | sed -n "${1}p" | cut -d'"' -f4 || true
+}
+nm_doctor(){
+  local c v h cats=(network cpu tunnel reality panel)
+  if ! nm_has_docfix; then server_doctor; nm_pause; return 0; fi
+  NM_DOC_FIXES=0
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "7) Server doctor" "۷) پزشک سرور")${C_0}"; hr
+    say "   1) $(nm_t "Run all checks" "اجرای همهٔ بررسی‌ها")"
+    say "   2) $(nm_t "Network (NIC, paths without the tunnel)" "شبکه (کارت شبکه، مسیرها بدون تونل)")"
+    say "   3) $(nm_t "CPU (pressure, netdev_budget)" "پردازنده (فشار، netdev_budget)")"
+    say "   4) $(nm_t "Tunnel (health, restarts, monitoring, certificates)" "تونل (سلامت، ری‌استارت، پایش، گواهی)")"
+    say "   5) $(nm_t "Reality / xray dest" "Reality / مقصد xray")"
+    say "   6) $(nm_t "Panel (x-ui): advice only" "پنل (x-ui): فقط توصیه")"
+    if [ "${NM_DOC_FIXES:-0}" -gt 0 ]; then say "   f) $(nm_t "Apply a fix (number from the report; preview first)" "اعمال یک اصلاح (شماره از گزارش؛ اول پیش‌نمایش)") [$NM_DOC_FIXES]"; fi
+    say "   r) $(nm_t "Save a report file for support" "ذخیرهٔ فایل گزارش برای پشتیبانی")"
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|b|B|q|"") return 0 ;;
+      1) nm_doctor_run; nm_pause ;;
+      [2-6]) nm_doctor_run "${cats[$((c - 2))]}"; nm_pause ;;
+      f|F) nm_ask v "$(nm_t "Fix number: " "شمارهٔ اصلاح: ")"
+           case "$v" in ''|*[!0-9]*) continue ;; esac
+           case "$(nm_doctor_kind "$v")" in
+             alerts) nm_alerts; continue ;;
+             park) nm_ask h "$(nm_t "Park for how many hours [6]: " "چند ساعت پارک شود [6]: ")"; case "$h" in ''|*[!0-9.]*) h=6 ;; esac ;;
+             *) h=6 ;;
+           esac
+           nm_lock && { "$BIN" doctor --fix "$v" --hours "$h" --lang "$NM_LANG" </dev/tty >&2 || true; nm_unlock; }
+           nm_pause ;;
+      r|R) if [ "$(id -u)" = 0 ]; then v="/root/hs2-doctor-$(date +%Y%m%d-%H%M%S).txt"; else v="${HOME:-/tmp}/hs2-doctor-$(date +%Y%m%d-%H%M%S).txt"; fi
+           info "$(nm_t "Inspecting this server (about 10 s, read-only)…" "در حال بررسی سرور (حدود ۱۰ ثانیه، فقط خواندنی)…")"
+           "$BIN" doctor --deep --report "$v" --lang "$NM_LANG" >/dev/null 2>&1 || true
+           if [ -s "$v" ]; then ok "$(nm_t "Report saved: $v (no keys or passwords in it)" "گزارش ذخیره شد: $v (بدون کلید یا رمز)")"; else warn "$(nm_t "Could not write $v" "نوشتن $v ممکن نشد")"; fi
+           nm_pause ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+}
+
+nm_maint(){
+  local c a
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "8) Maintenance" "۸) نگهداری")${C_0}"; hr
+    say "   1) $(nm_t "Upgrade (new binary, keep config)" "به‌روزرسانی (باینری جدید، پیکربندی می‌ماند)")"
+    say "   2) $(nm_t "Backup current config" "پشتیبان‌گیری از پیکربندی")"
+    say "   3) $(nm_t "Restore a backup" "بازگردانی پشتیبان")"
+    say "   4) $(nm_t "Change history (config versions)" "تاریخچهٔ تغییرات (نسخه‌های پیکربندی)")"
+    say "   5) $(nm_t "Roll back the last change" "برگرداندن آخرین تغییر")"
+    say "   6) $(nm_t "Status / logs" "وضعیت / لاگ")"
+    say "   7) $(nm_t "Uninstall hs2 (removes ALL tunnels)" "حذف hs2 (همهٔ تونل‌ها حذف می‌شوند)")"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      1) nm_lock && { upgrade; exit 0; } ;;
+      2) backup >/dev/null; nm_pause ;;
+      3) nm_lock && { restore; exit 0; } ;;
+      4) if nm_pick_unit; then "$BIN" config history -u "$NM_U" --lang "$NM_LANG" >&2 || true; nm_pause; fi ;;
+      5) if nm_pick_unit; then
+           "$BIN" config history -u "$NM_U" --lang "$NM_LANG" 2>/dev/null | tail -n 5 >&2 || true
+           read -rp "$(nm_t "Roll $NM_U back to the version before its current config (restarts it)? [y/N]: " "$NM_U به نسخهٔ پیش از پیکربندی فعلی برگردد (ری‌استارت می‌شود)؟ [y/N]: ")" a </dev/tty || a=n
+           case "$a" in [yY]*) nm_lock && { "$BIN" rollback -u "$NM_U" --lang "$NM_LANG" >&2 || true; nm_unlock; } ;; *) say "  $(nm_t "Nothing changed." "تغییری داده نشد.")" ;; esac
+           nm_pause
+         fi ;;
+      6) status; nm_pause ;;
+      7) nm_lock && { uninstall; exit 0; } ;;
+      0|b|B|q|"") return 0 ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+  return 0
+}
+
+nm_stats_timer_on(){ systemctl is-enabled hs2-stats.timer >/dev/null 2>&1; }
+nm_stats_timer(){ # on|off — the optional 24 h history sampler (every 5 min, a few ms)
+  # a binary that writes its own units (hs2 stats timer) does it; older ones: here
+  if "$BIN" stats timer status >/dev/null 2>&1; then "$BIN" stats timer "$1" >/dev/null 2>&1 || true; return 0; fi
+  if [ "$1" = on ]; then
+    cat > "$UNIT_DIR/hs2-stats.service" <<EOF
+[Unit]
+Description=hs2 dashboard history sample (hs2 stats sample)
+[Service]
+Type=oneshot
+Nice=19
+ExecStart=$BIN stats sample
+EOF
+    cat > "$UNIT_DIR/hs2-stats.timer" <<EOF
+[Unit]
+Description=hs2 dashboard history (every 5 min)
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+[Install]
+WantedBy=timers.target
+EOF
+    systemctl daemon-reload; systemctl enable --now hs2-stats.timer >/dev/null 2>&1 || true
+  else
+    systemctl disable --now hs2-stats.timer >/dev/null 2>&1 || true
+    rm -f "$UNIT_DIR/hs2-stats.timer" "$UNIT_DIR/hs2-stats.service"; systemctl daemon-reload
+  fi
+}
+
+nm_settings(){
+  local c v
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "9) Menu settings" "۹) تنظیمات منو")${C_0}  ($MENU_CONF)"; hr
+    say "   1) $(nm_t Language زبان): $NM_LANG   (fa / en)"
+    say "   2) $(nm_t Mode حالت): $NM_MODE   (simple / advanced)"
+    say "   3) $(nm_t Colour رنگ): $NM_COLOR"
+    v=$(mc_get default_menu); say "   4) $(nm_t "hs2-menu opens" "hs2-menu باز می‌کند"): ${v:-classic}   (classic / new)"
+    if nm_stats_timer_on; then v=on; else v=off; fi
+    say "   5) $(nm_t "24 h history sampler (hs2-stats.timer, every 5 min)" "نمونه‌گیر تاریخچهٔ ۲۴ ساعته (hs2-stats.timer، هر ۵ دقیقه)"): $v"
+    say "   0) $(nm_t Back بازگشت)"
+    read -rp "$(nm_t "Choose: " "انتخاب: ")" c </dev/tty || return 0
+    case "$c" in
+      1) if [ "$NM_LANG" = fa ]; then mc_set lang en; else mc_set lang fa; fi
+         nm_load; nm_utf8 || warn "Persian needs a UTF-8 terminal (LANG=…UTF-8); English is used here." ;;
+      2) if [ "$NM_MODE" = simple ]; then mc_set mode advanced; else mc_set mode simple; fi; nm_load ;;
+      3) if [ "$NM_COLOR" = on ]; then mc_set color off; else mc_set color on
+           C_G=$'\033[1;32m'; C_R=$'\033[1;31m'; C_Y=$'\033[1;33m'; C_B=$'\033[1;34m'; C_D=$'\033[2m'; C_0=$'\033[0m'; fi; nm_load ;;
+      4) if [ "$(mc_get default_menu)" = new ]; then mc_set default_menu classic; else mc_set default_menu new; fi ;;
+      5) if nm_stats_timer_on; then nm_stats_timer off; else nm_stats_timer on; fi ;;
+      0|b|B|q|"") return 0 ;;
+      *) warn "$(nm_t "Invalid choice." "انتخاب نامعتبر.")" ;;
+    esac
+  done
+}
+
+nm_main(){
+  local c adv
+  nm_load
+  while :; do
+    nm_header
+    adv=""; [ "$NM_MODE" = advanced ] && adv=1
+    if [ -n "$adv" ]; then local b; b=$(bin_build "$BIN"); [ -n "$b" ] && say "   ${C_D}$b${C_0}"; fi
+    hr
+    say "  1) $(nm_t "Live dashboard" "داشبورد زنده")"
+    [ -n "$adv" ] && say "     ${C_D}$(nm_t "per tunnel: users, Mbit, RTT, links, LB paths, alerts, 24 h history" "هر تونل: کاربر، Mbit، RTT، لینک، مسیرهای LB، هشدار، تاریخچهٔ ۲۴ ساعته")${C_0}"
+    say "  2) $(nm_t "Tunnels" "تونل‌ها")"
+    say "  3) $(nm_t "Load balancing & IPs" "لودبالانس و IPها")"
+    say "  4) $(nm_t "Security & camouflage" "امنیت و استتار")"
+    say "  5) $(nm_t "Speed & performance" "سرعت و کارایی")"
+    say "  6) $(nm_t "Monitoring & alerts" "پایش و هشدارها")"
+    say "  7) $(nm_t "Server doctor" "پزشک سرور")"
+    [ -n "$adv" ] && say "     ${C_D}$(nm_t "hs2 doctor --deep: NIC, CPU, paths, Reality, x-ui; numbered safe fixes with preview" "hs2 doctor --deep: کارت شبکه، پردازنده، مسیرها، Reality، x-ui؛ اصلاح امن شماره‌دار با پیش‌نمایش")${C_0}"
+    say "  8) $(nm_t "Maintenance" "نگهداری")"
+    say "  9) $(nm_t "Menu settings" "تنظیمات منو")"
+    say "  0) $(nm_t "Exit" "خروج")"
+    say "  ${C_D}c) $(nm_t "classic menu" "منوی کلاسیک")${C_0}"
+    read -rp "$(nm_t "Choose [0-9]: " "انتخاب [0-9]: ")" c </dev/tty || exit 0
+    case "$c" in
+      1) nm_dashboard ;;
+      2) nm_tunnels ;;
+      3) nm_lb ;;
+      4) nm_security ;;
+      5) nm_speed ;;
+      6) nm_alerts ;;
+      7) nm_doctor ;;
+      8) nm_maint ;;
+      9) nm_settings ;;
+      c|C) nm_unlock; main_menu ;;
+      0|q|Q) exit 0 ;;
+      *) warn "$(nm_t "Invalid choice: pick a number from the list." "انتخاب نامعتبر: یک عدد از فهرست بزنید.")" ;;
+    esac
+  done
+}
+
+# menu_entry: which menu a bare `hs2-menu` opens — the flag, else HS2_MENU,
+# else menu.conf's default_menu, else the classic one.
+menu_entry(){
+  local m="${NM_FORCE:-${HS2_MENU:-}}"
+  [ -n "$m" ] || m=$(mc_get default_menu)
+  if [ "$m" = new ]; then nm_main; else main_menu; fi
+}
+
 # Non-interactive: bash install.sh upgrade   (or: curl … | bash -s upgrade)
 case "${1:-}" in
   ''|menu)   ;;                                   # no argument → the interactive menu below
+  --new)     NM_FORCE=new ;;                      # the redesigned menu (preview until M7)
+  --classic) NM_FORCE=classic ;;                  # the classic menu (default)
   manage)    tunnel_manager; exit 0 ;;
   upgrade)   upgrade "${2:-}"; exit 0 ;;
   backup)    backup >/dev/null; exit 0 ;;
@@ -5344,7 +5971,7 @@ case "${1:-}" in
   cleanup)   kernel_cleanup; exit 0 ;;
   version)   "$BIN" version 2>/dev/null || die "hs2 is not installed on this server."; exit 0 ;;
   *) err "unknown command: $1"
-     say "Usage: bash install.sh [manage | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
+     say "Usage: bash install.sh [--new | --classic | manage | upgrade [tunnel] | backup | restore [file] | status | uninstall | cleanup | version]"
      say "       (no argument opens the menu)"
      # HS2_DIED=1 like die/bail: this is a deliberate usage error, so the EXIT
      # trap must NOT add its "stopped unexpectedly / report to the developer" note.
@@ -5377,6 +6004,7 @@ main_menu(){
     echo "    7) Restore a backup" >&2
     echo "    8) Uninstall hs2 (removes ALL tunnels; asks before removing the program)" >&2
     echo "    9) Server doctor  (what is wrong on this server and what to do — read-only)" >&2
+    echo "    n) New menu (preview: live dashboard, menu settings — also: hs2-menu --new)" >&2
     echo "    0) Exit" >&2
     echo >&2
     read -rp "Choose [0-9]: " CH </dev/tty || exit 0
@@ -5390,9 +6018,10 @@ main_menu(){
       7) restore; exit 0 ;;
       8) uninstall; exit 0 ;;
       9) server_doctor; pause ;;
+      n|N) nm_main ;;
       0|q|Q) exit 0 ;;
       *) warn "Invalid choice: pick a number from the list." ;;
     esac
   done
 }
-main_menu
+menu_entry

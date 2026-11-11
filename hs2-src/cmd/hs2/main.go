@@ -284,12 +284,26 @@ func main() {
 		recommendLinksCmd(os.Args[2:])
 	case "config":
 		configCmd(os.Args[2:])
+	case "apply":
+		applyCmd(os.Args[2:])
+	case "rollback":
+		rollbackCmd(os.Args[2:])
 	case "ports":
 		portsCmd(os.Args[2:])
 	case "alert":
 		alertCmd(os.Args[2:])
 	case "cleanup":
 		cleanupCmd(os.Args[2:])
+	case "dashboard":
+		dashboardCmd(os.Args[2:])
+	case "tunnel":
+		tunnelCmd(os.Args[2:])
+	case "stats":
+		statsCmd(os.Args[2:])
+	case "lb":
+		lbCmd(os.Args[2:])
+	case "perf":
+		perfCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)

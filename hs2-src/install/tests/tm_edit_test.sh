@@ -37,10 +37,16 @@ printf '#!/bin/bash\nkill -TERM "$PPID"\n' > "$T/ed_kill.sh"
 printf '#!/bin/bash\nd=$(dirname "$1"); b=$(basename "$1")\ncp "$1" "$d/.$b.swp"; cp "$1" "$1~"; cp "$1" "$d/#$b#"\nprintf "\\n" >> "$1"\n' > "$T/ed_side.sh"
 # a change, then a non-zero exit (what vim's :cq does)
 printf '#!/bin/bash\nprintf "\\n" >> "$1"\nexit 1\n' > "$T/ed_cq.sh"
-chmod +x "$T/ed_change.sh" "$T/ed_kill.sh" "$T/ed_side.sh" "$T/ed_cq.sh"
+# The test's own hs2 stand-in: it does not answer `apply --supported`, so
+# tm_edit takes its own (classic) apply path whatever is installed on the host
+# (/usr/local/bin/hs2 of a newer build would otherwise switch it to the M1
+# safe apply and the test would depend on the host).
+printf '#!/bin/sh\nexit 2\n' > "$T/fake_hs2"
+chmod +x "$T/ed_change.sh" "$T/ed_kill.sh" "$T/ed_side.sh" "$T/ed_cq.sh" "$T/fake_hs2"
 
 cat > "$T/inner.sh" <<'INNER'
 source "$T/core.sh" >/dev/null 2>&1
+BIN="$T/fake_hs2"
 CFG_DIR="$T/cfg"; mkdir -p "$CFG_DIR"; CFGF="$CFG_DIR/hs2-x.json"; echo '{"mode":"listen"}' > "$CFGF"
 tm_cfg(){ echo "$CFGF"; }; tm_details(){ :; }; tm_autostart(){ return 0; }
 say(){ :; }; info(){ :; }; ok(){ :; }; warn(){ :; }; err(){ :; }; hr(){ :; }

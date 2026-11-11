@@ -162,7 +162,7 @@ class World:
         self.sb, self.hs2, self.probe = sb, hs2, probe
         self.lib = os.path.join(sb, "lib.sh")
         lines = open(INST).read().rstrip("\n").split("\n")
-        assert lines[-1].strip() == "main_menu", "install.sh no longer ends with main_menu"
+        assert lines[-1].strip() in ("main_menu", "menu_entry"), "install.sh no longer ends with its menu call"
         body = "\n".join(lines[:-1]) + "\n"
         body = re.sub(r'^\[ "\$\(id -u\)" = 0 \] \|\| die .*$', ":", body, flags=re.M)
         open(self.lib, "w").write(body)
@@ -232,6 +232,17 @@ get_cert(){ printf "%s|%s" "$TEST_CERT" "$TEST_KEY"; }
 
     def pids(self, s):
         return {u: self.pid(s, u) for u in self.units(s)}
+
+    def wait_pid(self, s, u, timeout=10):
+        """MainPID of u once its unit exists and its process runs (0 after
+        timeout). Under a loaded full-suite run a restart from the previous
+        scenario can still be in flight when the next one reads the PIDs."""
+        deadline = time.time() + timeout
+        while True:
+            p = self.pid(s, u) if u in self.units(s) else 0
+            if p or time.time() >= deadline:
+                return p
+            time.sleep(0.25)
 
     def active(self, s, u):
         return self.sd(s, "is-active", u) == "active"
@@ -341,7 +352,9 @@ def scenarios(w):
     res("1 users on iran:8443 reach the kharej panel", ok, info)
 
     # ---- 2. "de1", reverse, tun over TLS (mtcp) ------------------------------
-    before = (w.pids(kh), w.pids(ir))
+    before = ({"hs2": w.wait_pid(kh, "hs2")}, {"hs2": w.wait_pid(ir, "hs2")})
+    res("2 precondition: tunnel 1 (hs2) runs on both servers", before[0]["hs2"] > 0 and before[1]["hs2"] > 0,
+        "kh %s ir %s" % (w.units(kh), w.units(ir)))
     rc, out = w.run(ir, "setup_iran", [(DIR, "2"), (NAME, "de1"), (PUB_I, ""), (TRANSPORT, "4"), (ENCAP, "6"),
                                        (TLS_TUN, "1"), (TPORT_I, "2097"), (USERIP, ""), (PORTS, "9443"),
                                        (DOM_I, "test.local"), (IFACE, ""), (MTU, ""), (UDPQ, "n")])
@@ -359,7 +372,9 @@ def scenarios(w):
         and "Tunnel is UP" in out and ck2 is not None, out[-500:])
     res("2 the subnet from the link, and it differs from tunnel 1", ck2 and ci2 and block(ck2["local_cidr"]) == block(ci2["local_cidr"])
         and block(ck2["local_cidr"]) != block(c["local_cidr"]), "%s %s" % (ck2 and ck2.get("local_cidr"), ci2 and ci2.get("local_cidr")))
-    res("2 tunnel 1 was not touched (same PIDs on both servers)", w.pids(kh)["hs2"] == before[0]["hs2"] and w.pids(ir)["hs2"] == before[1]["hs2"])
+    after = (w.wait_pid(kh, "hs2"), w.wait_pid(ir, "hs2"))
+    res("2 tunnel 1 was not touched (same PIDs on both servers)", before[0]["hs2"] > 0 and after == (before[0]["hs2"], before[1]["hs2"]),
+        "before %s after %s" % ((before[0]["hs2"], before[1]["hs2"]), after))
     for port in ("8443", "9443"):
         ok, info = w.traffic(port)
         res("2 both tunnels carry traffic: iran:%s" % port, ok, info)
