@@ -5522,12 +5522,69 @@ nm_tunnel_actions(){ # unit
     esac
   done
 }
-nm_lb(){
+# Screen 3 "Load balancing & IPs" (menu M4). The logic lives in `hs2 lb …`
+# (Go); this screen renders its output and passes the choices through. Every
+# change: semantic diff + safe apply (auto-rollback) under the admin lock. A
+# binary without `hs2 lb` falls back to the classic LB screen.
+nm_has_lb(){ [ -x "$BIN" ] && "$BIN" lb --supported >/dev/null 2>&1; }
+nm_lbx(){ "$BIN" lb "$@" --lang "$NM_LANG" </dev/tty || true; }   # never trips set -e
+nm_lb_classic(){
   nm_soon M4
   nm_pick_unit || return 0
   if lb_supported "$NM_CFG"; then nm_edit tm_lb "$NM_U" "$NM_CFG"
   else warn "$(nm_t "$NM_U's carrier has no load balancing (mtcp / l3mtcp only)." "حامل $NM_U لودبالانس ندارد (فقط mtcp / l3mtcp).")"; nm_pause; fi
   return 0
+}
+nm_ask(){ local __v; read -rp "$2" __v </dev/tty || __v=""; printf -v "$1" '%s' "$__v"; }
+nm_lb(){
+  local c ip w h ex
+  if ! nm_has_lb; then nm_lb_classic; return 0; fi
+  nm_pick_unit || return 0
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "Load balancing & IPs" "لودبالانس و IPها") — $NM_U${C_0}"; hr
+    nm_lbx show -u "$NM_U"
+    say "   1) $(nm_t "Refresh" "تازه‌سازی")   2) $(nm_t "Cut history (24 h)" "تاریخچهٔ قطع (۲۴ ساعت)")"
+    say "   3) $(nm_t "Suggest the primary IP (ping the peer from each local IP)" "پیشنهاد IP اصلی (پینگ سرور مقابل از هر IP محلی)")"
+    say "   4) $(nm_t "Add a local IP" "افزودن IP محلی")   5) $(nm_t "Remove a local IP" "حذف IP محلی")"
+    say "   6) $(nm_t "Split weights equally" "تقسیم مساوی وزن‌ها")"
+    say "   7) $(nm_t "Park an IP for N hours (weight 0, restored by itself)" "پارک یک IP برای N ساعت (وزن ۰، خودکار برمی‌گردد)")   8) $(nm_t "Unpark" "خروج از پارک")"
+    if [ "$NM_MODE" = advanced ]; then
+      say "   9) $(nm_t "Weights editor (ip=w,…; sum 100)" "ویرایش وزن‌ها (ip=w,…؛ جمع ۱۰۰)")   m) $(nm_t "Mode fixed / auto" "حالت ثابت / خودکار")"
+      say "   c) $(nm_t "Classic LB screen" "صفحهٔ کلاسیک LB")"
+    fi
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|"") return 0 ;;
+      1) ;;
+      2) nm_lbx history -u "$NM_U"; nm_pause ;;
+      3) nm_lbx suggest -u "$NM_U"; nm_pause ;;
+      4) nm_ask ip "$(nm_t "Local IP to add: " "IP محلی برای افزودن: ")"
+         [ -n "$ip" ] || continue
+         ex=()
+         if [ "$NM_MODE" = advanced ]; then
+           nm_ask w "$(nm_t "SNI on this IP (Enter = the tunnel's): " "SNI روی این IP (Enter = همان تونل): ")"; [ -n "$w" ] && ex+=(--sni "$w")
+           nm_ask w "$(nm_t "Certificate file on this IP (Enter = the tunnel's): " "فایل گواهی روی این IP (Enter = همان تونل): ")"
+           if [ -n "$w" ]; then ex+=(--cert "$w"); nm_ask h "$(nm_t "Key file: " "فایل کلید: ")"; ex+=(--key "$h"); fi
+           say "   $(nm_t "Front on this IP: tls (Reality per IP arrives in M5)" "پوشش روی این IP: tls (Reality برای هر IP در M5 می‌آید)")"
+         fi
+         nm_lock && { nm_lbx add-ip -u "$NM_U" --ip "$ip" ${ex[@]+"${ex[@]}"}; nm_unlock; nm_pause; } ;;
+      5) nm_ask ip "$(nm_t "Local IP to remove: " "IP محلی برای حذف: ")"
+         [ -n "$ip" ] && nm_lock && { nm_lbx remove-ip -u "$NM_U" --ip "$ip"; nm_unlock; nm_pause; } ;;
+      6) nm_lock && { nm_lbx weights -u "$NM_U" --equal; nm_unlock; nm_pause; } ;;
+      7) nm_ask ip "$(nm_t "IP to park: " "IP برای پارک: ")"; nm_ask h "$(nm_t "Hours: " "ساعت: ")"
+         [ -n "$ip" ] && [ -n "$h" ] && nm_lock && { nm_lbx park -u "$NM_U" --ip "$ip" --hours "$h"; nm_unlock; nm_pause; } ;;
+      8) nm_ask ip "$(nm_t "IP to unpark: " "IP برای خروج از پارک: ")"
+         [ -n "$ip" ] && nm_lock && { nm_lbx unpark -u "$NM_U" --ip "$ip"; nm_unlock; nm_pause; } ;;
+      9) [ "$NM_MODE" = advanced ] || continue
+         nm_ask w "$(nm_t "Weights (ip=w,ip=w; sum 100): " "وزن‌ها (ip=w,ip=w؛ جمع ۱۰۰): ")"
+         [ -n "$w" ] && nm_lock && { nm_lbx weights -u "$NM_U" "$w"; nm_unlock; nm_pause; } ;;
+      m|M) [ "$NM_MODE" = advanced ] || continue
+         nm_ask w "$(nm_t "Mode (fixed/auto): " "حالت (fixed/auto): ")"
+         case "$w" in fixed|auto) nm_lock && { nm_lbx mode -u "$NM_U" "$w"; nm_unlock; nm_pause; } ;; esac ;;
+      c|C) [ "$NM_MODE" = advanced ] && lb_supported "$NM_CFG" && nm_edit tm_lb "$NM_U" "$NM_CFG" ;;
+    esac
+  done
 }
 nm_security(){
   local c
@@ -5543,9 +5600,15 @@ nm_security(){
   esac
   return 0
 }
-nm_speed(){
+# Screen 5 "Speed & performance" (menu M4): `hs2 perf …`. Presets / toggles /
+# CPUAffinity are drop-ins applied with the safe apply (auto-rollback);
+# netdev_budget is measured before/after and reverted when worse. x-ui / xray
+# units are never touched. A binary without `hs2 perf`: the classic items.
+nm_has_perf(){ [ -x "$BIN" ] && "$BIN" perf --supported >/dev/null 2>&1; }
+nm_perf(){ "$BIN" perf "$@" --lang "$NM_LANG" </dev/tty || true; }
+nm_speed_classic(){
   local c
-  nm_soon M5
+  nm_soon M4
   nm_pick_unit || return 0
   say "   1) $(nm_t "Kernel network tuning" "تنظیم شبکهٔ کرنل")"
   say "   2) $(nm_t "Live pattern monitor (parallel links)" "پایش زندهٔ الگو (لینک‌های موازی)")"
@@ -5558,6 +5621,53 @@ nm_speed(){
     3) tm_has_ports "$NM_CFG" && nm_edit tm_ports "$NM_U" "$NM_CFG" ;;
   esac
   return 0
+}
+nm_speed(){
+  local c p kv adv=()
+  if ! nm_has_perf; then nm_speed_classic; return 0; fi
+  nm_pick_unit || return 0
+  [ "$NM_MODE" = advanced ] && adv=(--advanced)
+  while :; do
+    echo >&2; hr; say " ${C_B}$(nm_t "Speed & performance" "سرعت و کارایی") — $NM_U${C_0}"; hr
+    nm_perf show -u "$NM_U" ${adv[@]+"${adv[@]}"}
+    say "   1) $(nm_t "Presets (production · low-cpu · max-throughput · min-latency)" "پیش‌تنظیم‌ها (تولید · CPU کم · بیشترین سرعت · کمترین تأخیر)")"
+    say "   2) $(nm_t "Turn a feature on/off (KEY=VALUE)" "روشن/خاموش کردن یک قابلیت (KEY=VALUE)")"
+    say "   3) $(nm_t "Cores & NIC (keep the rx core free for hs2)" "هسته‌ها و کارت شبکه (آزاد نگه داشتن هستهٔ دریافت)")"
+    say "   4) $(nm_t "Kernel (bbr, qdisc, buffers, netdev_budget)" "کرنل (bbr، qdisc، بافرها، netdev_budget)")"
+    say "   5) $(nm_t "Speed test through the tunnel (iperf3)" "آزمون سرعت از داخل تونل (iperf3)")"
+    say "   6) $(nm_t "Classic: kernel tuning · live monitor · ports" "کلاسیک: تنظیم کرنل · پایش زنده · پورت‌ها")"
+    say "   0) $(nm_t Back بازگشت)"
+    nm_ask c "$(nm_t "Choose: " "انتخاب: ")"
+    case "$c" in
+      0|"") return 0 ;;
+      1) nm_perf presets
+         nm_ask p "$(nm_t "Preset name (Enter = none): " "نام پیش‌تنظیم (Enter = هیچ): ")"
+         [ -n "$p" ] && nm_lock && { nm_perf preset -u "$NM_U" "$p"; nm_unlock; nm_pause; } ;;
+      2) nm_ask kv "$(nm_t "KEY=VALUE to set, or -KEY to unset (Enter = none): " "KEY=VALUE برای تنظیم، یا -KEY برای حذف (Enter = هیچ): ")"
+         case "$kv" in
+           "") ;;
+           -*) nm_lock && { nm_perf unset -u "$NM_U" "${kv#-}"; nm_unlock; nm_pause; } ;;
+           *=*) nm_lock && { nm_perf set -u "$NM_U" "$kv"; nm_unlock; nm_pause; } ;;
+         esac ;;
+      3) nm_perf nic
+         nm_ask p "$(nm_t "Keep which core free for the NIC (number; c = clear; Enter = none): " "کدام هسته برای کارت شبکه آزاد بماند (شماره؛ c = حذف؛ Enter = هیچ): ")"
+         case "$p" in
+           c|C) nm_lock && { nm_perf cores -u "$NM_U" --clear; nm_unlock; nm_pause; } ;;
+           *[!0-9]*|"") ;;
+           *) nm_lock && { nm_perf cores -u "$NM_U" --keep "$p"; nm_unlock; nm_pause; } ;;
+         esac ;;
+      4) nm_perf kernel
+         nm_ask p "$(nm_t "Try netdev_budget=600 (measured, reverted if worse)? [y/N/r=revert]: " "netdev_budget=600 امتحان شود (اندازه‌گیری، اگر بدتر شد برمی‌گردد)؟ [y/N/r=برگرداندن]: ")"
+         case "$p" in
+           y|Y) nm_lock && { nm_perf kernel --budget 600 --yes; nm_unlock; nm_pause; } ;;
+           r|R) nm_lock && { nm_perf kernel --revert-budget; nm_unlock; nm_pause; } ;;
+         esac ;;
+      5) nm_perf speedtest
+         nm_ask p "$(nm_t "User port whose target is the peer's iperf3 (Enter = none): " "پورت کاربری که مقصدش iperf3 سرور مقابل است (Enter = هیچ): ")"
+         case "$p" in ""|*[!0-9]*) ;; *) nm_perf speedtest --port "$p"; nm_pause ;; esac ;;
+      6) nm_speed_classic ;;
+    esac
+  done
 }
 nm_alerts(){ nm_pick_unit || return 0; nm_edit tm_alerts "$NM_U" "$NM_CFG"; return 0; }
 nm_doctor(){ server_doctor; nm_pause; return 0; }
@@ -5597,6 +5707,8 @@ nm_maint(){
 
 nm_stats_timer_on(){ systemctl is-enabled hs2-stats.timer >/dev/null 2>&1; }
 nm_stats_timer(){ # on|off — the optional 24 h history sampler (every 5 min, a few ms)
+  # a binary that writes its own units (hs2 stats timer) does it; older ones: here
+  if "$BIN" stats timer status >/dev/null 2>&1; then "$BIN" stats timer "$1" >/dev/null 2>&1 || true; return 0; fi
   if [ "$1" = on ]; then
     cat > "$UNIT_DIR/hs2-stats.service" <<EOF
 [Unit]

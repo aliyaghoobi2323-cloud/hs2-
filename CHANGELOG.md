@@ -21,6 +21,51 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M4 — Load balancing & IPs, Speed & performance (binary + installer)
+
+- New `hs2 lb show|history|suggest|add-ip|remove-ip|weights|mode|park|unpark|parks`
+  (`cmd/hs2/lbmenu.go`): live path table (share/eff, links, users, Mbit,
+  loss, RTT, auto factor + reason, state, cuts in 24 h from the journal),
+  local-IP suggestion by ping (loss, then RTT; current primary kept within
+  1 ms / 1 %), add/remove IP with interface check and per-IP SNI/cert
+  (front: tls; Reality in M5), weights (sum 100) / equal split / mode, and
+  "park an IP for N hours" restored by `hs2-lb-park.timer` (persistent
+  unit, survives reboot; restore via safe apply, confirmed on the next run,
+  gives up after 3 rollbacks). Every change: diff + safe apply + bilateral
+  `join --update` code.
+- New `hs2 perf show|presets|preset|set|unset|nic|cores|kernel|speedtest`
+  (`cmd/hs2/perf.go`): presets production / low-cpu / max-throughput /
+  min-latency and per-key toggles as one `50-hs2-perf.conf` drop-in,
+  effective-key view (set / default / off), single-queue NIC + rx-IRQ core
+  detection with a `CPUAffinity` drop-in for hs2 units only, kernel view +
+  `netdev_budget=600` measured before/after with automatic revert, iperf3
+  speed test through a local user port only.
+- Safe apply (`menu_apply.go`): `applyReq.NewDropins` — drop-in changes are
+  diffed, snapshotted and rolled back like the config.
+- Fix (`menu_validate.go`): `isEdge` was "mode dial XOR reverse", so on the
+  kharej side of a reverse tunnel the validator took the Iran lb list as its
+  own (and counted user ports on the wrong side): `join --update` carrying an
+  lb section failed with "… is not an address of this server". Iran is mode
+  `dial` in both directions.
+- `hs2 tunnel join`: flags after the code are parsed too
+  (`join --update CODE --yes` used to ignore `--yes`).
+- M3 leftovers: `hs2 stats timer on|off|status` writes/enables its own
+  `hs2-stats.{service,timer}` (wizard and menu setting use it; older
+  binaries keep the installer's units); `tm_edit_test.sh` uses its own fake
+  hs2 instead of the host's `/usr/local/bin/hs2`; `multi_tunnel_test.py`
+  scenario 2 waits up to 10 s for tunnel 1's PID on both sides and reports
+  a missing unit as a FAIL instead of crashing with `KeyError: 'hs2'`.
+- `install.sh`: new-menu items 3 and 5 are the new screens (simple/advanced,
+  fa/en, admin lock around every change); old binaries fall back to the
+  classic screens.
+- Tests: `cmd/hs2/lbmenu_test.go`, `perf_test.go` (path table rendering and
+  alignment, journal event parsing, IP ranking, weights validation,
+  park/unpark weights and timer logic, own-list sides, reverse validator,
+  interleaved flags, presets → env per side, effective keys incl. legacy, NIC
+  fixtures, cores guard, budget verdict, iperf parsing, drop-in apply +
+  rollback, stats timer units), `install/tests/lb_perf_menu_test.sh`
+  (22 pty checks).
+
 ## Menu redesign M3 — Tunnels: wizard, connection code, edit, renew, clone (binary + installer)
 
 - New `hs2 tunnel list|create|join|code|clone|edit|renew|start|stop|restart|logs|delete|preflight`

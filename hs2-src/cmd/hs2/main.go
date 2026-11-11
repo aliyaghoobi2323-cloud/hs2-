@@ -263,6 +263,10 @@ func main() {
 		tunnelCmd(os.Args[2:])
 	case "stats":
 		statsCmd(os.Args[2:])
+	case "lb":
+		lbCmd(os.Args[2:])
+	case "perf":
+		perfCmd(os.Args[2:])
 	default:
 		fmt.Println("unknown command")
 		os.Exit(2)

@@ -1155,7 +1155,8 @@ camouflage 5) Speed & performance 6) Monitoring & alerts 7) Server doctor
 (`hs2 doctor --deep`) 8) Maintenance (upgrade, backup, restore, **change
 history** = `hs2 config history`, **roll back the last change** =
 `hs2 rollback`, status, uninstall) 9) Menu settings. Item 2 is the Tunnels
-screen (next section); items 3–5 still open the classic screens (marked
+screen, 3 Load balancing & IPs and 5 Speed & performance have their own
+screens (sections below); item 4 still opens the classic screens (marked
 "[preview]"). Screens that change a config hold the
 admin lock (`hs2 config lock`) while they are open; another admin's lock is
 shown with its owner and can be broken only after a question.
@@ -1279,7 +1280,128 @@ point the peer at the new server afterwards.
 
 **24 h charts:** the sampler timer stays **off by default** (the alert check
 already samples when alerts are on); the wizard's last step offers it and
-enables `hs2-stats.timer` when the installer has written it (menu settings).
+`hs2 stats timer on` writes and enables `hs2-stats.service` +
+`hs2-stats.timer` itself (`off` disables and removes them, `status` prints
+on/off), so it no longer depends on the installer having written them; the
+menu setting uses the same command.
+
+### Load balancing & IPs (new menu → 3)
+
+Every action is an `hs2 lb` command (a binary without it falls back to the
+classic LB screen). Changes go through the semantic diff + `hs2 apply
+--confirm-within` (health gate, automatic rollback) under the admin lock:
+
+```
+hs2 lb show    -u U [--lang fa]          # config summary + live path table + cuts in the last 24 h
+hs2 lb history -u U [--hours 24]         # cut / recovering / flapping events per path (journal)
+hs2 lb suggest -u U [--peer IP]          # ping the peer from every local public IP, rank, suggest the primary
+hs2 lb add-ip  -u U --ip X [--weight W] [--sni S] [--cert F --key F] [--front tls]
+hs2 lb remove-ip -u U --ip X
+hs2 lb weights -u U ip=w,ip=w,… | --equal   # every IP of this side, sum 100
+hs2 lb mode    -u U fixed|auto
+hs2 lb park    -u U --ip X --hours N     # weight 0 until then, restored by itself
+hs2 lb unpark  -u U --ip X
+hs2 lb parks                             # parked IPs of all tunnels
+```
+
+Common flags (before or after the positional value): `--confirm-within 5m`,
+`--yes`, `--dry-run`, `--lang fa`.
+
+- **Path table** (the live LB page as columns): path, configured share /
+  effective share (auto), links live/target, users, Mbit down/up, loss
+  down/up, RTT p50/p99, auto factor + reason, state (cooling, degraded,
+  draining, primary, …) and the number of cuts of that path in the last
+  24 h (from `journalctl -u <unit>`: the `lb auto2: path … cut` lines).
+- **Suggest**: 5 pings from each local public IP to each peer IP (the peer's
+  primary + its lb list, or `--peer`), ranked by loss (1 % steps) then RTT;
+  the current primary stays first within 1 ms / 1 %. It only suggests.
+- **Add IP**: the IP must exist on an interface of this server; on the first
+  add the primary joins the list explicitly (a wildcard listener: its first
+  public IP) and the weights are split equally (or `--weight W`, the others
+  scaled to the rest). Per-IP `--sni` / `--cert` / `--key` (TLS) are the lb
+  stage-3 fields; `--front` accepts `tls` only for now (Reality per IP
+  arrives with the security screen, M5).
+- **Weights** must name every IP of this side and sum to 100 (`--equal`
+  splits evenly, the remainder to the first).
+- **Park** sets the IP's weight to 0 and gives its share to the others in
+  proportion; never the only active IP. The park is stored in
+  `/var/lib/hs2/lb-park-<unit>.json` and `hs2-lb-park.timer` (a real unit,
+  every minute, so it survives a reboot) runs `hs2 lb park --sweep`: an
+  expired park is restored through the safe apply (the exact weights from
+  before the park when the set of IPs did not change, else an equal share),
+  the next run confirms the restore once its trial is healthy and only then
+  drops the park; after three restores that rolled back it gives up and
+  `hs2 lb show` says to run `hs2 lb unpark` by hand. The timer removes itself
+  when nothing is parked.
+- **Bilateral**: the lb lists live on both servers; after a change the
+  screen prints which fields the other server must change and a ready
+  `hs2 tunnel join --update '<code>'` for it.
+
+Before M4 the validator took the wrong "own lb list" on the kharej side of a
+reverse tunnel (it treated the side that *dials* as the Iran side), so a
+`join --update` that carried an lb section failed there with "… is not an
+address of this server"; fixed (Iran is mode `dial` in both directions).
+
+### Speed & performance (new menu → 5)
+
+Every action is an `hs2 perf` command (a binary without it: the classic
+kernel-tuning / live-monitor / ports items, which stay reachable as item 6).
+
+```
+hs2 perf show    -u U [--advanced]           # effective keys: set (which drop-in) / default / off
+hs2 perf presets                             # what each preset trades
+hs2 perf preset  -u U production|low-cpu|max-throughput|min-latency
+hs2 perf set     -u U KEY=VALUE [KEY=VALUE…] # documented keys only
+hs2 perf unset   -u U KEY [KEY…]
+hs2 perf nic                                 # queues, rx-IRQ core, softirq/idle per core (~2 s)
+hs2 perf cores   -u U --keep N | --clear     # CPUAffinity for an hs2 unit (never x-ui / xray)
+hs2 perf kernel  [--budget 600 [--measure 10s]] [--revert-budget]
+hs2 perf speedtest --port P [--secs 5] [--gap 3s]
+```
+
+- **Presets and toggles** are `Environment=` lines in one drop-in,
+  `/etc/systemd/system/<unit>.service.d/50-hs2-perf.conf`, applied with the
+  safe apply: the drop-ins are part of the diff and of the history snapshot,
+  and a rollback (not confirmed, unhealthy) restores the previous drop-ins.
+  Only the keys that act on this side are written (an Iran-only key never
+  lands on kharej).
+
+  | preset | keys | trade |
+  |--------|------|-------|
+  | `production` (recommended) | none — the code defaults (table above) | the A/B-tested set; removes `50-hs2-perf.conf` |
+  | `low-cpu` | `HS2_MCONN_STRIPE=0 HS2_SMUX_AUTOWIN=0 HS2_STRIPE_AW_SOLO=0 HS2_STRIPE_AW_HEAVY=0 HS2_L3_DUP=0` | less CPU per Mbit; one connection tops out near ~200 Mbit/s at 80 ms, no call duplication |
+  | `max-throughput` | `HS2_SMUX_AUTOWIN_SHARE_MB=64`, kharej `HS2_MCONN_STRIPE_JUMP_MS=1500` | more window memory; light users may queue a little more under very heavy load — not lab-proven beyond the defaults |
+  | `min-latency` | `HS2_SMUX_AUTOWIN_SHARE_MB=16 HS2_MCONN_STRIPE=4 HS2_STRIPE_AW_HEAVY=0` | big downloads slower, less queueing for calls / games |
+
+  `show` lists each documented key with a one-line explanation and where its
+  value comes from (`set: <drop-in>` — the last drop-in in name order wins —,
+  `default` when the production defaults apply to this carrier/side and
+  `HS2_DEFAULTS=legacy` is not set, else `off`). Simple mode hides the keys
+  without a plain explanation; `--advanced` shows all.
+- **Cores & NIC** reuses the server doctor's detection (sysfs queues, the
+  current `Combined:` of `ethtool -l`, two `/proc/interrupts` and
+  `/proc/stat` samples). With one rx queue (or ≥ 90 % of the rx interrupts
+  on one core) it offers to keep that core free for the hs2 units:
+  `60-hs2-cpu.conf` with `CPUAffinity=<all other cores>`, previewed as a diff
+  and applied with the safe apply (auto-rollback). Only units named `hs2…`
+  are accepted; x-ui / xray are **never** changed — the screen only repeats
+  the optional, manual `taskset` advice for a panel's xray.
+- **Kernel** shows congestion control, qdisc, buffers, `netdev_budget`,
+  `netdev_budget_usecs`, `netdev_max_backlog`, and offers
+  `net.core.netdev_budget=600`: it measures the rx core's softirq/idle for
+  `--measure` (10 s), writes `/etc/sysctl.d/90-hs2-netdev-budget.conf`
+  (with the previous value as a comment) + `sysctl -w`, measures again and
+  reverts by itself if idle dropped or softirq grew by more than 3 points.
+  `--revert-budget` removes the file and restores the previous value. RFS is
+  **not** offered (tested and rejected, see "Single-queue virtio NIC").
+- **Speed test** through the tunnel: prerequisites — `iperf3` on both
+  servers, `iperf3 -s -B 127.0.0.1 -D` on kharej, and a user port on Iran
+  whose target is `127.0.0.1:5201` on kharej (e.g. `hs2 tunnel join …
+  --expose 127.0.0.1:5201` on kharej, or a per-port target). Then
+  `hs2 perf speedtest --port P` runs down1 / down8 / up1 / up8
+  (`iperf3 -c 127.0.0.1 -p P [-R] [-P 8]`, 5 s each, 3 s apart). It only
+  ever connects to `127.0.0.1:P`, i.e. through the tunnel — never a raw
+  multi-Gbit test to another host.
 
 ### Alerts (Telegram, optional)
 

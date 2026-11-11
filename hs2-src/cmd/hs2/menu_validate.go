@@ -64,8 +64,13 @@ func hostPorts(fc fileConfig) []int {
 	return ps
 }
 
-// isEdge: the Iran side (user ports). Direct: mode dial; reverse: mode listen.
-func isEdge(fc fileConfig) bool { return (fc.Mode == "dial") != fc.Reverse }
+// isEdge: the Iran side (user ports, the edge). It is mode "dial" in both
+// directions — reverse only flips who opens the tunnel connection (the edge
+// then listens on addr and the exit dials it), as runCmd/applyDefaults and
+// lbPrimaries read it. (Until M4 this was "dial XOR reverse", which took the
+// kharej side of a reverse tunnel for the edge: its own lb list was the Iran
+// list, so `hs2 tunnel join --update` with lb failed there.)
+func isEdge(fc fileConfig) bool { return fc.Mode == "dial" }
 
 // crossCheck runs the host checks; cur is the unit's current config (nil when
 // new): ports it already holds are expected to be in use by itself.

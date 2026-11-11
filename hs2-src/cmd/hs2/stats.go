@@ -17,6 +17,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"time"
@@ -188,8 +189,11 @@ func sampleStatsFor(cfgPath, unit, runDir, stateDir string, now time.Time) error
 }
 
 func statsCmd(args []string) {
+	if len(args) > 0 && args[0] == "timer" {
+		os.Exit(statsTimerCmd(args[1:]))
+	}
 	if len(args) == 0 || (args[0] != "sample" && args[0] != "show") {
-		fmt.Println("usage: hs2 stats sample [--etc DIR] [--run DIR] [--state DIR]  |  hs2 stats show -u <unit>")
+		fmt.Println("usage: hs2 stats sample [--etc DIR] [--run DIR] [--state DIR]  |  hs2 stats show -u <unit>  |  hs2 stats timer on|off|status")
 		os.Exit(2)
 	}
 	fs := flag.NewFlagSet("stats", flag.ExitOnError)
@@ -241,4 +245,89 @@ func listTunnelConfigs(dir string) []tunnelCfg {
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].unit < out[b].unit })
 	return out
+}
+
+// ---- the optional sampler timer (hs2-stats.timer) --------------------------
+//
+// hs2 writes its own units, so the wizard (and the menu) can turn the sampler
+// on without the installer having written them first.
+
+const statsTimerName = "hs2-stats.timer"
+
+func statsUnitTexts(bin string) (svc, timer string) {
+	svc = "[Unit]\nDescription=hs2 dashboard history sample (hs2 stats sample)\n[Service]\nType=oneshot\nNice=19\nExecStart=" + bin + " stats sample\n"
+	timer = "[Unit]\nDescription=hs2 dashboard history (every 5 min)\n[Timer]\nOnBootSec=2min\nOnUnitActiveSec=5min\n[Install]\nWantedBy=timers.target\n"
+	return
+}
+
+// writeStatsUnits writes hs2-stats.{service,timer} into dir; reports whether
+// anything changed.
+func writeStatsUnits(dir, bin string) (bool, error) {
+	svc, tm := statsUnitTexts(bin)
+	changed := false
+	for name, body := range map[string]string{"hs2-stats.service": svc, statsTimerName: tm} {
+		p := filepath.Join(dir, name)
+		if b, err := os.ReadFile(p); err == nil && string(b) == body {
+			continue
+		}
+		if err := writeFileAtomic(p, []byte(body)); err != nil {
+			return changed, err
+		}
+		changed = true
+	}
+	return changed, nil
+}
+
+func selfBin() string {
+	if p, err := os.Executable(); err == nil {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return p
+	}
+	return "/usr/local/bin/hs2"
+}
+
+// statsTimer turns the sampler on (write units, enable --now) or off
+// (disable --now, remove units).
+func statsTimer(on bool, dir, bin string, sc func(args ...string) error) error {
+	if on {
+		if _, err := writeStatsUnits(dir, bin); err != nil {
+			return err
+		}
+		sc("daemon-reload")
+		return sc("enable", "--now", statsTimerName)
+	}
+	sc("disable", "--now", statsTimerName)
+	os.Remove(filepath.Join(dir, statsTimerName))
+	os.Remove(filepath.Join(dir, "hs2-stats.service"))
+	sc("daemon-reload")
+	return nil
+}
+
+func realSystemctl(args ...string) error { return exec.Command("systemctl", args...).Run() }
+
+func statsTimerCmd(args []string) int {
+	if len(args) != 1 {
+		fmt.Println("usage: hs2 stats timer on|off|status")
+		return 2
+	}
+	switch args[0] {
+	case "on", "off":
+		if err := statsTimer(args[0] == "on", systemdDir, selfBin(), realSystemctl); err != nil {
+			fmt.Println("ERROR: " + err.Error())
+			return 1
+		}
+		fmt.Println(statsTimerName + ": " + args[0])
+	case "status":
+		if exec.Command("systemctl", "is-enabled", statsTimerName).Run() == nil {
+			fmt.Println("on")
+		} else {
+			fmt.Println("off")
+		}
+	default:
+		fmt.Println("usage: hs2 stats timer on|off|status")
+		return 2
+	}
+	return 0
 }

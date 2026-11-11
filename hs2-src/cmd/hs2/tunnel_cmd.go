@@ -535,10 +535,11 @@ func tunnelJoinCmd(args []string) {
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		code, args = args[0], args[1:]
 	}
-	fs.Parse(args)
+	// flags may follow the code too ("join --update CODE --yes")
+	pos := parseInterleaved(fs, args)
 	deepLang = *lang
-	if code == "" && fs.NArg() > 0 {
-		code = fs.Arg(0)
+	if code == "" && len(pos) > 0 {
+		code = pos[0]
 	}
 	if code == "" {
 		die("usage: hs2 tunnel join <code> [flags]")
@@ -1123,9 +1124,10 @@ func (realCreator) stats(on bool) {
 	if !on {
 		return
 	}
-	if err := exec.Command("systemctl", "enable", "--now", "hs2-stats.timer").Run(); err != nil {
-		fmt.Println(tr("note: the 24h chart sampler is installed by the installer (menu → Settings → charts); hs2-stats.timer not found here.",
-			"توجه: نمونه‌بردار نمودار ۲۴ساعته را نصب‌کننده نصب می‌کند (منو ← تنظیمات ← نمودار)؛ hs2-stats.timer اینجا نیست."))
+	if err := statsTimer(true, systemdDir, selfBin(), realSystemctl); err != nil {
+		fmt.Println(tr("note: could not turn on the 24h chart sampler (hs2-stats.timer): ", "توجه: نمونه‌بردار نمودار ۲۴ساعته (hs2-stats.timer) روشن نشد: ") + err.Error())
+	} else {
+		fmt.Println(tr("24h charts: hs2-stats.timer on (every 5 min).", "نمودار ۲۴ساعته: hs2-stats.timer روشن شد (هر ۵ دقیقه)."))
 	}
 }
 

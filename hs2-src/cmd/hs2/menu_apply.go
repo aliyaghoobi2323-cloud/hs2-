@@ -277,6 +277,10 @@ type applyReq struct {
 	New               []byte
 	Within            time.Duration
 	HealthGate        bool
+	// NewDropins (menu M4): the unit's drop-in directory after the change
+	// (file name -> content; nil = unchanged). Presets, feature toggles and
+	// CPUAffinity are drop-ins; a rollback restores the snapshot's set.
+	NewDropins map[string]string
 }
 
 // startApply does the caller's part: snapshot, write, hand over to the
@@ -291,7 +295,16 @@ func startApply(ops sysOps, r applyReq) (applyState, []diffEntry, error) {
 	if err != nil {
 		return applyState{}, nil, err
 	}
-	d, err := semanticDiff(cur, r.New, nil, nil)
+	if r.New == nil {
+		r.New = cur
+	}
+	oldDI := readDropins(r.Unit)
+	var d []diffEntry
+	if r.NewDropins != nil {
+		d, err = semanticDiff(cur, r.New, oldDI, r.NewDropins)
+	} else {
+		d, err = semanticDiff(cur, r.New, nil, nil)
+	}
 	if err != nil {
 		return applyState{}, nil, err
 	}
@@ -304,6 +317,15 @@ func startApply(ops sysOps, r applyReq) (applyState, []diffEntry, error) {
 	}
 	if err := writeFileAtomic(r.Cfg, r.New); err != nil {
 		return applyState{}, d, err
+	}
+	if r.NewDropins != nil {
+		if changed, err := restoreDropins(r.Unit, r.NewDropins); err != nil {
+			writeFileAtomic(r.Cfg, cur)
+			restoreDropins(r.Unit, oldDI)
+			return applyState{}, d, err
+		} else if changed {
+			ops.daemonReload()
+		}
 	}
 	to, err := saveVersion(r.Unit, r.New, readDropins(r.Unit), "apply-"+r.Reason, now)
 	if err != nil {
