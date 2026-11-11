@@ -87,6 +87,9 @@ type callState struct {
 	txPrev   float64
 	txRecvd  uint64 // receive offset at the window start
 
+	callLikeAt   time.Time // the last call-like send window (HS2_LB_CALL_RESCUE)
+	callRescueAt time.Time // no fresh call-rescue sub before (lb_call_rescue.go)
+
 	callPairAt int // paired copies: the next chunk's first sub (HS2_MCONN_CALL_SUBS)
 
 	// HS2_MCONN_CALL_PICK: the subs' link scores, read at scoreAt
@@ -203,6 +206,9 @@ func (m *mConn) callRollLocked(now time.Time, w time.Duration, sent int, dupOff 
 	}
 	m.txRecvd = next
 	like := w < 2*mHeavyWindow && callLikeSample(uint64(sent), got, w, &m.txPrev, &m.txStreak)
+	if like {
+		m.callLikeAt = now
+	}
 	was := m.callOn
 	m.callOn = like && dupOff && !m.callCopyOff() && m.liveSubsLocked() >= 2 && !callCapped(now.Unix())
 	if m.callOn != was {
@@ -488,6 +494,17 @@ func (m *mConn) callAvoidLocked(avoid []any) []any {
 
 // pickPlaneCall is pickPlane, or with the mark the call placement.
 func (m *LinkManager) pickPlaneCall(p mPlane, avoid []any) (Link, func(), bool) {
+	avoid, cresc := takeCallRescueMark(avoid) // HS2_LB_CALL_RESCUE (lb_call_rescue.go)
+	if cresc && p == planeLight {
+		pool := m.exitInfo.Load()
+		m.mu.Lock()
+		if ml := m.pickCallRescueLocked(avoid, pool); ml != nil {
+			m.placeLocked(ml)
+			m.mu.Unlock()
+			return ml.link, m.releaseFor(ml), true
+		}
+		m.mu.Unlock()
+	}
 	avoid, resc := takeRescueMark(avoid) // HS2_LB_RESCUE_CALLFREE (lb_rescue_callfree.go)
 	if resc && p == planeLight {
 		pool := m.exitInfo.Load()

@@ -1941,7 +1941,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 			if m.liteWantDualLocked(now, recvd) {
 				// HS2_LB_RESCUE (lb_rescue.go): a light connection whose one
 				// sub is on a lowered path gets its copy past the budget.
-				if m.upgradeCappedLocked(now) && !(m.rescueWantLocked(live[0]) && rescueAllow(now)) {
+				if m.upgradeCappedLocked(now) && !(m.rescueWantLocked(live[0]) && rescueAllow(now)) && !m.callRescueSingleLocked(live[0], now) {
 					obs.mconnLiteCapped.Add(1)
 					m.tr.ev("lite: upgrade refused (duplication cap)")
 				} else if now.Before(m.lightRetryAt) {
@@ -1954,6 +1954,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 					avoid = append(avoid, live[0].key)
 					avoid = m.callAvoidLocked(append(avoid, m.deadKeys...)) // HS2_MCONN_CALL_AVOID
 					avoid = m.rescueAvoidLocked(avoid, live[0].key)         // HS2_LB_RESCUE_CALLFREE
+					avoid = m.callRescueAvoidLocked(avoid, now)             // HS2_LB_CALL_RESCUE
 					go m.openLight(avoid)
 				}
 			}
@@ -1965,6 +1966,9 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				m.closeReqLocked(c)
 				hs = true
 			}
+			if m.callRescueLocked(live, now) { // HS2_LB_CALL_RESCUE (lb_call_rescue.go)
+				hs = true
+			}
 			if lbRescue {
 				// look again in a second: a path may be lowered any moment
 				// (waking only while some link is marked would leave a dual
@@ -1972,7 +1976,7 @@ func (m *mConn) tick(now time.Time) time.Duration {
 				at(mLitePoll)
 			}
 			for _, s := range live {
-				if s == p || len(s.q) > 0 || s.cur != nil {
+				if s == p || s.retired || len(s.q) > 0 || s.cur != nil {
 					continue
 				}
 				if m.handshaking {
