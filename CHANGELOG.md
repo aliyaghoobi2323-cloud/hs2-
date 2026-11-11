@@ -73,7 +73,7 @@ the old behaviour back: README "Upgrading from r31 / r34".
 
 Final checks (lab 3, clean checkout of a5316087): gofmt 0, `go vet ./...`
 ok, `go test ./...` ok (rc=0), `-race` on the new/changed tests ok, sh
-tests 23/23, multi_tunnel alone (no mtir/mtkh netns before, /tmp 5.1 GB free) 46 PASS / 0 FAIL when this was written, still running (rel51: 57/0). Upgrade test (labs 2/3): r31 + an
+tests 23/23, multi_tunnel alone (no mtir/mtkh netns before, /tmp 5.1 GB free) rc=0, 57 PASS / 0 failures, no mtir/mtkh netns left after. Upgrade test (labs 2/3): r31 + an
 r31-style reverse l3mtcp lb config, `install.sh upgrade` in place on both
 sides: 8/8 links, config byte-identical, traffic 0 % loss, `hs2 doctor
 --deep` 0 bad / 0 warnings; mixed versions (new kharej + r31 Iran and the

@@ -3130,7 +3130,7 @@ Lab 3, clean checkout of a5316087 (the final code tree): gofmt 0 files
 post-Finished, ticket pads, stripe incl. rebuild, game trace; fork:
 ServerNameAck, Clone) ok; the fork's package ok (its `examples/`
 need network modules: not run); installer sh tests 23/23 (incl. release_files with the gofmt check, ports_menu 38/38) and tun_ports ok; multi_tunnel
-alone (no mtir/mtkh netns before, /tmp 5.1 GB free) 46 PASS / 0 FAIL when this was written, still running (rel51: 57/0).
+alone (no mtir/mtkh netns before, /tmp 5.1 GB free) rc=0, 57 PASS / 0 failures, no mtir/mtkh netns left after.
 
 Upgrade (labs 2/3, Iran = lab 2): r31 binary (15922dc1170f) + an r31-style
 reverse l3mtcp lb config, upgraded in place with `install.sh upgrade`
