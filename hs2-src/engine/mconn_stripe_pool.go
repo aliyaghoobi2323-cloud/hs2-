@@ -57,10 +57,10 @@ func (m *LinkManager) stripeAdoptLocked(ml *managedLink, now time.Time) {
 // retried pick does not inflate the request).
 func (m *LinkManager) stripeAskLocked(now time.Time, want int) {
 	if want > 0 {
-		m.stripeWant = min(max(m.stripeWant, want), stripeWantCap())
-	} else {
-		m.stripeWant = min(m.stripeWant+1, stripeWantCap())
+		m.stripeWantRaiseLocked(now, want) // up56: the pool's target at once
+		return
 	}
+	m.stripeWant = min(m.stripeWant+1, stripeWantCap())
 	m.stripeWantUntil = now.Add(stripeWantFor)
 }
 

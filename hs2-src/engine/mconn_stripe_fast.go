@@ -102,131 +102,44 @@ func (m *LinkManager) stripeReserveLocked(now time.Time) {
 	}
 	stripeFastStat.reserved.Store(int64(kept))
 	if kept < r {
-		m.stripeWant = min(max(m.stripeWant, r-kept), stripeWantCap())
-		m.stripeWantUntil = now.Add(stripeWantFor)
+		m.stripeWantRaiseLocked(now, r-kept)
 	}
 }
 
 // stripeReserveRefillLocked (pickStripe, under m.mu, a sub took a set-aside
-// link): ask the pool for its replacement now - and for the subs the fast
-// growth still opens (want) - instead of at the next health tick.
-func (m *LinkManager) stripeReserveRefillLocked(now time.Time, want int) {
+// link): ask the pool for its replacement now, not at the next health tick.
+// One more per link taken - the subs the fast growth still wants beyond it
+// are asked when a pick finds nothing (stripeAskLocked).
+func (m *LinkManager) stripeReserveRefillLocked(now time.Time) {
 	if stripeReserveN() <= 0 {
 		return
 	}
-	m.stripeWant = min(m.stripeWant+1+max(want-1, 0), stripeWantCap())
-	m.stripeWantUntil = now.Add(stripeWantFor)
+	m.stripeWantRaiseLocked(now, m.stripeWant+1)
 	stripeFastStat.refills.Add(1)
 }
 
-const (
-	stripeFastBackoff    = 250 * time.Millisecond
-	stripeFastBackoffJit = 250 * time.Millisecond
-)
-
-// stripeFastOn: the fast rule applies to this growth (an upload).
-func stripeFastOn(up bool) bool { return up && stripeFast.Load() }
-
-// stripeRetryLocked: when the next stripe open may be tried after a failed one.
-func (m *mConn) stripeRetryLocked(now time.Time) time.Time {
-	if m.stGrowUp && stripeFast.Load() {
-		m.stFastMore = 0
-		return now.Add(stripeFastBackoff + rand.N(stripeFastBackoffJit))
+// stripeWantRaiseLocked (under m.mu): the stripe wants w links (at least).
+// With HS2_MCONN_STRIPE_FAST the pool's target rises by the new ones at
+// once (up56): the target otherwise moves only at the next health tick
+// (healthTick, 2 s) - the up56 lab log showed the reserve's replacements
+// and the doubling chain's links set aside in batches exactly 2 s apart.
+// The next tick's decideTarget recomputes the same sum (stripeExtra counts
+// stripeWant), so nothing drifts.
+func (m *LinkManager) stripeWantRaiseLocked(now time.Time, w int) {
+	w = min(w, stripeWantCap())
+	m.stripeWantUntil = now.Add(stripeWantFor)
+	if w <= m.stripeWant {
+		return
 	}
-	return now.Add(mReopenBackoff)
-}
-
-// stripeFastPlanLocked (in stripeTickLocked, a growth n → n+1 decided): how
-// many more subs to open right after this one (0: none).
-func (m *mConn) stripeFastPlanLocked(n int, rate float64, up bool) int {
-	if !stripeFastOn(up) || rate < float64(n)*float64(stripeFastRate.Load()) {
-		return 0
+	d := w - m.stripeWant
+	m.stripeWant = w
+	if !stripeFast.Load() || m.pin.Load() > 0 {
+		return
 	}
-	more := max(n-1, 1) // n → 2n: this open plus n-1 more (the first growth: 1 → 3)
-	for more > 0 && !m.stripeKCapLocked(n+1+more-1, rate) {
-		more--
+	if t := int(m.target.Load()); t < m.max {
+		m.setTarget(min(t+d, m.max))
+		stripeFastStat.bumps.Add(1)
 	}
-	return more
-}
-
-// stripeFastNextLocked (openStripe, a sub just joined): open the next one of
-// the chain now. true: stOpening was set, the caller starts openStripe.
-func (m *mConn) stripeFastNextLocked() bool {
-	if m.stFastMore <= 0 {
-		return false
-	}
-	m.stFastMore--
-	if m.ended || m.closing || m.peerFin || m.wclosed || m.stOpening || m.callOn || m.callUp {
-		m.stFastMore = 0
-		return false
-	}
-	n := 1 + m.liveStripeLocked()
-	if !m.stripeKCapLocked(n, m.stFastRate) {
-		m.stFastMore = 0
-		return false
-	}
-	if m.stUp && n >= 2 && !m.stripeUpRoomLocked() {
-		m.stFastMore = 0
-		return false
-	}
-	m.stOpening = true
-	stripeFastStat.chained.Add(1)
-	return true
-}
-
-// stripeWantHint (in a stripe open's avoid list, never equal to a link): the
-// subs the fast growth still opens — the pool is asked for that many links at
-// once (pickStripe → stripeAskLocked) instead of one a pick.
-type stripeWantHint struct{ n int }
-
-func stripeWantOf(avoid []any) int {
-	for _, a := range avoid {
-		if h, ok := a.(stripeWantHint); ok {
-			return h.n
-		}
-	}
-	return 0
-}
-
-// stripeFastTries: a fast open that found no link retries this many times
-// (stripeFastBackoff + jitter apart, ~2 s in all) in its own goroutine, with
-// stOpening held: the pool's link set aside for it is taken within a few
-// hundred ms instead of at the next growth tick.
-const stripeFastTries = 6
-
-// stripeFastRetry (openStripe, no mu): wait and try again (true).
-func (m *mConn) stripeFastRetry(try int) bool {
-	if try >= stripeFastTries {
-		return false
-	}
-	m.mu.Lock()
-	ok := m.stGrowUp && stripeFast.Load() && !m.ended && !m.closing && !m.peerFin && !m.wclosed && !m.callOn && !m.callUp
-	m.mu.Unlock()
-	if !ok {
-		return false
-	}
-	time.Sleep(stripeFastBackoff + rand.N(stripeFastBackoffJit))
-	stripeFastStat.retries.Add(1)
-	return true
-}
-
-// stripeFastRawRetry (openStripe, a raw first sub, no mu): the upgrade
-// failed (still raw, nothing in flight); wait and try again (true) with
-// lightOpening set as rawTick sets it.
-func (m *mConn) stripeFastRawRetry(try int) bool {
-	m.mu.Lock()
-	still := m.rawW.Load() && !m.lightOpening
-	m.mu.Unlock()
-	if !still || !m.stripeFastRetry(try) {
-		return false
-	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.ended || m.closing || !m.rawW.Load() || m.lightOpening {
-		return false
-	}
-	m.lightOpening = true
-	return true
 }
 
 var stripeFastStat struct {
@@ -237,6 +150,7 @@ var stripeFastStat struct {
 	reserved atomic.Int64  // up56: idle links in the standing reserve (last health tick)
 	refills  atomic.Uint64 // up56: reserved links taken and asked again at once
 	hsKicks  atomic.Uint64 // up56: chains resumed the moment the upgrade's handshake ended
+	bumps    atomic.Uint64 // up56: pool targets raised at once for the stripe
 }
 
 // stripeUpSubWin: HS2_STRIPE_UP_SUB_WIN_MB (the exit, 0/off by default, 3-8):
