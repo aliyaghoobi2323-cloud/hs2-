@@ -19,6 +19,46 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## mem55 — Iran-side memory: size-classed mconn chunks (binary)
+
+Traced soak on lab1 (reverse l3mtcp, LB 3 paths, crowd 3000, heavy 8 down,
+calls, 30 % link kill every 3 min, SIGHUP every 10 min, `HS2_MEMTRACE=1`
+counting every chunk get/put and walking every live mConn every 5 s, heap
+after two forced GCs every 5 min):
+
+- **No lingering reference.** The chunk heap after GC follows the chunks
+  logically held (`gets − puts`): 306 MB at 2 min, 128 / 79 / 30 / 24 / 26 MB
+  at 5 / 11 / 17 / 23 / 29 min; live heap after GC 370–645 MB, flat after
+  ~10 min (the relay copy-buffer pool is a constant ~197 MB of it).
+- **What is held**: in steady state ~5 000 chunks, ~2 000 of them small send
+  records in sub queues (~115 B of payload each) and the rest in writers'
+  batches; at link kills the stripe's out-of-order list adds bursts of
+  50–135 MB of full records (`out` p50 541, p90 7 168, max 20 557 chunks).
+  Every chunk was one fixed 16 KB buffer (an 18 KB allocation), so 100 B
+  records cost ×160. The peak sets the GC heap goal (GOGC=100) and the RSS
+  follows the peak, then falls slowly (the scavenger): the traced rel53 run
+  went 318 → 1 238 MB (at 5.5 min) → 769 MB at 31 min.
+- **Fix**: `mchunk.buf` is a slice from size classes 512 B / 2 KB / 8 KB /
+  16 KB with one `sync.Pool` each; `Write` and the sub reader size the chunk
+  from the record (`getChunkN`), control records take 512 B, `getChunk(DATA)`
+  stays full-size. Tests: `TestMChunkClasses`,
+  `TestMChunkSmallWriteHeldMemory`.
+- Soaks after the fix (lab1, untraced, 31 min): 308 / 608 (5 min) / 625 /
+  672 / 718 MB, +4.1 MB/min after warm-up; rel53 untraced in the same
+  window 320 / 610 / 631 / 642 / 642 MB at 17 min, +3.0 MB/min. In this
+  window only the traced rel53 run had the standing small-record queues;
+  the traced fix runs had none (`out` max 543), so the soak does not yet
+  show the fix under the condition that reproduced. The ≤ 2 MB/min target
+  is **not met** by either build: the remaining slope is not chunks (chunk
+  heap after GC ~25 MB; the heap diff from 5 to 28 min is ~50 MB spread
+  over smux/tls buffers) — open, see mem55 notes.
+- c/s A/B on lab2 (4 rounds, rel53 and fix in parallel slots, 90 s, crowd
+  3000 + heavy 8 + call): heavy median 1326 (n=3, one iperf start failed)
+  vs 1346 Mbit/s, game ping p50 94 vs 93 ms, p99 178 vs 179 ms — no
+  regression.
+- `GOMEMLIMIT=700MiB` as a safety net held the RSS at ~500 MB but cost ~20 %
+  more CPU (2.30 vs 1.92 cores) in the same soak: not enabled by default.
+
 ## rel53 — release candidate: the three rev53 reviews merged (binary)
 
 Merges rev53a (installer/menu), rev53b (data plane) and rev53c (operations)

@@ -268,9 +268,9 @@ var (
 )
 
 // mchunk is one record on the send side (shared by every sub queue that holds
-// it, reference counted) or one received payload. Pooled.
+// it, reference counted) or one received payload. Pooled, in size classes.
 type mchunk struct {
-	buf  [mRecMax]byte
+	buf  []byte // len is the chunk's size class (mChunkClasses)
 	kind byte
 	off  uint64
 	n    int // payload bytes (DATA)
@@ -279,10 +279,49 @@ type mchunk struct {
 	copies int          // send side, under mConn.mu: subs holding or having written it
 }
 
-var mchunks = sync.Pool{New: func() any { return new(mchunk) }}
+// mChunkClasses: the chunk sizes. A chunk used to be one 16 KB buffer
+// whatever it carried, and a chunk is held as long as its bytes wait (in a
+// sub's send queue, a writer's batch, the receiver's ready or out-of-order
+// list). The bounds there count payload bytes, so small records were the
+// costly case: a 100-byte write queued on a lite sub's 32 KB queue held
+// ~16.4 KB (18 KB with the allocator's size class), and the Iran side of a
+// busy server (3000 users writing small messages, link kills that make every
+// queue stand) held hundreds of MB of mostly empty chunks; their peak set the
+// heap goal and the RSS grew with each new peak (mem55). A chunk now takes
+// the smallest class that fits its record.
+var mChunkClasses = [...]int{512, 2 << 10, 8 << 10, mRecMax}
 
+var mchunkPools [len(mChunkClasses)]sync.Pool
+
+func init() {
+	for i := range mchunkPools {
+		size := mChunkClasses[i]
+		mchunkPools[i].New = func() any { return &mchunk{buf: make([]byte, size)} }
+	}
+}
+
+// chunkClass: the index of the smallest class holding size bytes.
+func chunkClass(size int) int {
+	for i, c := range mChunkClasses {
+		if size <= c {
+			return i
+		}
+	}
+	return len(mChunkClasses) - 1
+}
+
+// getChunk: a chunk for a control record (FIN-sized at most), or a full one
+// for DATA (Write and the readers size theirs with getChunkN).
 func getChunk(kind byte) *mchunk {
-	c := mchunks.Get().(*mchunk)
+	if kind == mRecData {
+		return getChunkN(kind, mRecMax)
+	}
+	return getChunkN(kind, mFinLen)
+}
+
+// getChunkN: a chunk whose buf holds at least size bytes (at most mRecMax).
+func getChunkN(kind byte, size int) *mchunk {
+	c := mchunkPools[chunkClass(size)].Get().(*mchunk)
 	c.kind, c.off, c.n, c.copies = kind, 0, 0, 0
 	c.refs.Store(0)
 	c.buf[0] = kind
@@ -291,7 +330,7 @@ func getChunk(kind byte) *mchunk {
 
 func putChunk(c *mchunk) {
 	if c != nil { // nil: a compacted receive entry (compactLocked)
-		mchunks.Put(c)
+		mchunkPools[chunkClass(len(c.buf))].Put(c)
 	}
 }
 
@@ -788,7 +827,7 @@ func (m *mConn) Write(p []byte) (int, error) {
 	m.mu.Unlock()
 	written := 0
 	for len(p) > 0 {
-		c := getChunk(mRecData)
+		c := getChunkN(mRecData, mDataHdr+min(len(p), mChunkMax))
 		n := copy(c.buf[mDataHdr:], p)
 		c.n = n
 		binary.BigEndian.PutUint16(c.buf[9:11], uint16(n))
@@ -1367,7 +1406,7 @@ loop:
 				m.end(err, true)
 				break loop
 			}
-			c := getChunk(mRecData)
+			c := getChunkN(mRecData, n)
 			if _, err = io.ReadFull(s.rw, c.buf[:n]); err != nil {
 				putChunk(c)
 				break loop
