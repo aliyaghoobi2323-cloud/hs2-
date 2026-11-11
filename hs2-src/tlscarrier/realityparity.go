@@ -1,0 +1,251 @@
+package tlscarrier
+
+// sec41: the authenticated reality handshake answers exactly as the target
+// answered THIS client hello, and the cover splice is no free relay.
+//
+// Before, a passive observer saw on every authenticated link (lab 2026-11-11,
+// target www.microsoft.com, uTLS Chrome hello): cipher 0x1301 (Go's fixed
+// server preference) vs the target's 0x1302, a Finished of 53 B vs 69 B (the
+// SHA-256 vs SHA-384 suite), a Certificate record 2349 B shorter (the target
+// staples OCSP and SCTs), and a ServerHello one listener->target round trip
+// EARLIER than the target's own (the listener answered without waiting for
+// the target). Now the listener forwards the hello to the target, waits for
+// the target's ServerHello (the timing of a spliced connection), takes its
+// cipher suite and key-share group, and serves that with the uTLS server
+// (its TLS 1.3 preference list is set for the one handshake under a lock),
+// stapling the target's OCSP response and SCTs.
+
+import (
+	"crypto/tls"
+	"encoding/binary"
+	"net"
+	"strings"
+	"sync"
+	"time"
+	_ "unsafe" // go:linkname
+
+	utls "github.com/refraction-networking/utls"
+)
+
+// The uTLS server's TLS 1.3 preference lists (uTLS marks them for linkname,
+// go.dev/issue/67401). In this process only the reality listener's uTLS
+// server reads them (our uTLS clients use parrot presets with their own
+// cipher list).
+//
+//go:linkname utlsSuites13 github.com/refraction-networking/utls.defaultCipherSuitesTLS13
+var utlsSuites13 []uint16
+
+//go:linkname utlsSuites13NoAES github.com/refraction-networking/utls.defaultCipherSuitesTLS13NoAES
+var utlsSuites13NoAES []uint16
+
+var (
+	suiteMu                      sync.Mutex
+	suites13Orig, suites13NoAESO = append([]uint16(nil), utlsSuites13...), append([]uint16(nil), utlsSuites13NoAES...)
+)
+
+func preferSuite(l []uint16, s uint16) []uint16 {
+	out := []uint16{s}
+	for _, x := range l {
+		if x != s {
+			out = append(out, x)
+		}
+	}
+	return out
+}
+
+// lockSuite makes s the uTLS server's first TLS 1.3 choice until the returned
+// release runs (at the handshake's first write: the suite is chosen by then).
+// s == 0: the defaults, still under the lock (another handshake may have
+// changed them).
+func lockSuite(s uint16) (release func()) {
+	suiteMu.Lock()
+	if s != 0 {
+		utlsSuites13 = preferSuite(suites13Orig, s)
+		utlsSuites13NoAES = preferSuite(suites13NoAESO, s)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			utlsSuites13, utlsSuites13NoAES = suites13Orig, suites13NoAESO
+			suiteMu.Unlock()
+		})
+	}
+}
+
+// firstWriteConn runs f before its first Write.
+type firstWriteConn struct {
+	net.Conn
+	f func()
+}
+
+func (c *firstWriteConn) Write(b []byte) (int, error) {
+	if c.f != nil {
+		c.f()
+		c.f = nil
+	}
+	return c.Conn.Write(b)
+}
+
+func (c *firstWriteConn) NetConn() net.Conn { return c.Conn }
+
+// targetHello is what the target answered to the client's own hello.
+type targetHello struct {
+	suite, group uint16
+}
+
+// readTargetHello reads the target's first handshake record(s) up to its
+// ServerHello and returns the chosen suite and key-share group (ok=false:
+// no ServerHello in time, an alert, a HelloRetryRequest).
+func readTargetHello(c net.Conn, d time.Duration) (targetHello, bool) {
+	c.SetReadDeadline(time.Now().Add(d))
+	defer c.SetReadDeadline(time.Time{})
+	var buf []byte
+	tmp := make([]byte, 4096)
+	for len(buf) < 32<<10 {
+		if len(buf) >= 5 {
+			if buf[0] != 22 {
+				return targetHello{}, false
+			}
+			l := int(binary.BigEndian.Uint16(buf[3:5]))
+			if len(buf) >= 5+l {
+				return parseServerHello(buf[5 : 5+l])
+			}
+		}
+		n, err := c.Read(tmp)
+		buf = append(buf, tmp[:n]...)
+		if err != nil && n == 0 {
+			return targetHello{}, false
+		}
+	}
+	return targetHello{}, false
+}
+
+// hrrRandom marks a HelloRetryRequest (RFC 8446 4.1.3).
+var hrrRandom = []byte{0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11, 0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+	0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E, 0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C}
+
+func parseServerHello(m []byte) (targetHello, bool) {
+	var th targetHello
+	if len(m) < 4+2+32+1 || m[0] != 2 {
+		return th, false
+	}
+	p := m[4:]
+	if string(p[2:34]) == string(hrrRandom) {
+		return th, false
+	}
+	sl := int(p[34])
+	p = p[35:]
+	if len(p) < sl+2+1+2 {
+		return th, false
+	}
+	p = p[sl:]
+	th.suite = binary.BigEndian.Uint16(p)
+	el := int(binary.BigEndian.Uint16(p[3:]))
+	e := p[5:]
+	if len(e) < el {
+		return th, false
+	}
+	e = e[:el]
+	tls13 := false
+	for len(e) >= 4 {
+		id, l := binary.BigEndian.Uint16(e), int(binary.BigEndian.Uint16(e[2:]))
+		if len(e) < 4+l {
+			return th, false
+		}
+		d := e[4 : 4+l]
+		switch id {
+		case 43:
+			tls13 = l == 2 && binary.BigEndian.Uint16(d) == 0x0304
+		case 51:
+			if l >= 2 {
+				th.group = binary.BigEndian.Uint16(d)
+			}
+		}
+		e = e[4+l:]
+	}
+	if !tls13 || th.suite>>8 != 0x13 {
+		return th, false
+	}
+	return th, true
+}
+
+// ---- cover splice abuse limits ----
+
+// A hello whose SNI is not one of our server names (or no SNI, or not TLS at
+// all) is nobody's visit to the cover site: on a target behind a shared CDN
+// it is a stranger using our IP as a clean front for ANOTHER site (lab
+// 2026-11-11: target www.npmjs.com, SNI www.cloudflare.com -> 843 KB of
+// cloudflare.com through the listener). Such splices get a small free
+// allowance and a low rate: a probe's handshake and error page still pass
+// as they would, a relay is useless.
+const (
+	foreignFreeBytes = 32 << 10
+	foreignRateBps   = 8 << 10
+	// netFreeBudget: free (full-speed) cover bytes per client /24 (/64) per
+	// minute across ALL its connections; past it every new splice from that
+	// net starts at the rate cap (reconnecting no longer resets the
+	// allowance).
+	netFreeBudget = 4 << 20
+)
+
+type netBudget struct {
+	mu    sync.Mutex
+	epoch int64
+	used  map[string]int64
+}
+
+// take reserves up to want free bytes for net k this minute.
+func (b *netBudget) take(k string, want int64) int64 {
+	now := time.Now().Unix() / 60
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.used == nil || b.epoch != now || len(b.used) > 1<<16 {
+		b.used, b.epoch = map[string]int64{}, now
+	}
+	left := netFreeBudget - b.used[k]
+	if left <= 0 {
+		return 0
+	}
+	if want > left {
+		want = left
+	}
+	b.used[k] += want
+	return want
+}
+
+// spliceLimits are one cover splice's free bytes (per direction) and rate.
+func (r *RealityServer) spliceLimits(h *realityHello, a net.Addr) (free, rate int64) {
+	free, rate = r.maxBytes, r.rateBps
+	if h == nil || !r.names[strings.ToLower(h.sni)] {
+		if free > foreignFreeBytes {
+			free = foreignFreeBytes
+		}
+		if rate > foreignRateBps {
+			rate = foreignRateBps
+		}
+	}
+	// both directions draw on the net's budget
+	free = r.budget.take(clientNet(a), 2*free) / 2
+	return free, rate
+}
+
+// toUTLSConfig converts the authenticated handshake's config (built as a
+// crypto/tls one, tunnelTLSConfig) for the uTLS server, staples the target's
+// OCSP response / SCTs and pins the key-share group the target chose.
+func (r *RealityServer) toUTLSConfig(c *tls.Config, th targetHello, ok bool) *utls.Config {
+	u := &utls.Config{MinVersion: utls.VersionTLS13, NextProtos: c.NextProtos, SessionTicketsDisabled: true}
+	for _, cv := range c.CurvePreferences {
+		u.CurvePreferences = append(u.CurvePreferences, utls.CurveID(cv))
+	}
+	if ok && th.group != 0 {
+		u.CurvePreferences = []utls.CurveID{utls.CurveID(th.group)}
+	}
+	for _, crt := range c.Certificates {
+		uc := utls.Certificate{Certificate: crt.Certificate, PrivateKey: crt.PrivateKey}
+		if m := r.mirror.Load(); m != nil {
+			uc.OCSPStaple, uc.SignedCertificateTimestamps = m.OCSP, m.SCTs
+		}
+		u.Certificates = append(u.Certificates, uc)
+	}
+	return u
+}

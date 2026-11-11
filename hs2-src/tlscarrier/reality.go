@@ -605,6 +605,8 @@ type RealityServer struct {
 	fbAll           int
 	fbNet           map[string]int
 	fbMax, fbMaxNet int
+	// budget: free cover bytes per client net per minute (sec41)
+	budget netBudget
 }
 
 func clientNet(a net.Addr) string {
@@ -774,6 +776,10 @@ type targetMirror struct {
 	// NSTSizes: every ticket record length seen over nstProbes probes (an
 	// OpenSSL ticket is 266 or 282 B at random): a pad picks one of these.
 	NSTSizes []int
+	// OCSP / SCTs: what the target staples in its Certificate message (the
+	// authenticated handshake staples the same, so the record is as long)
+	OCSP []byte
+	SCTs [][]byte
 }
 
 // nstProbes: handshakes per mirror refresh that sample the ticket sizes.
@@ -869,7 +875,7 @@ func (r *RealityServer) targetChainSize(ctx context.Context) (int64, error) {
 	drainFor(c, nstWait)
 	var n int64
 	cs := c.ConnectionState()
-	m := &targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol, NST: tap.since(i0)}
+	m := &targetMirror{Curve: cs.CurveID, ALPN: cs.NegotiatedProtocol, NST: tap.since(i0), OCSP: cs.OCSPResponse, SCTs: cs.SignedCertificateTimestamps}
 	if len(cs.PeerCertificates) > 0 {
 		m.KeyKind, m.KeyBits = leafKey(cs.PeerCertificates[0])
 	}
@@ -1197,8 +1203,9 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 			return
 		}
 		defer release()
+		free, rate := r.spliceLimits(hello, raw.RemoteAddr())
 		getTarget(true)
-		r.fallback(ctx, raw, target, buf[sent:])
+		r.fallback(ctx, raw, target, buf[sent:], free, rate)
 		return
 	}
 	// Authenticated. The listener only answers as the target would: when the
@@ -1212,8 +1219,29 @@ func (r *RealityServer) AcceptFront(ctx context.Context, raw net.Conn, onTunnel 
 		raw.Close()
 		return
 	}
+	// Timing and choice parity (sec41): the target gets this very hello and
+	// our ServerHello leaves only once the target's has arrived (a spliced
+	// connection's timing), with the target's suite and group. The cert is
+	// made meanwhile.
+	type certRes struct {
+		c   *tls.Certificate
+		err error
+	}
+	cch := make(chan certRes, 1)
+	go func() { c, err := r.makeCert(authKey, hello.sni); cch <- certRes{c, err} }()
+	var th targetHello
+	thOK := false
+	if _, err := target.Write(buf[sent:]); err == nil {
+		th, thOK = readTargetHello(target, handshakeTimeout)
+	}
 	target.Close()
-	r.serveTunnel(ctx, raw, buf, hello, authKey, caps, onTunnel)
+	cr := <-cch
+	if cr.err != nil {
+		realityReject("cert")
+		raw.Close()
+		return
+	}
+	r.serveTunnel(ctx, raw, buf, hello, cr.c, th, thOK, caps, onTunnel)
 }
 
 func (r *RealityServer) makeCert(authKey []byte, sni string) (*tls.Certificate, error) {
@@ -1347,17 +1375,18 @@ func (r *RealityServer) tunnelTLSConfig(cert *tls.Certificate) *tls.Config {
 	return tcfg
 }
 
-func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byte, h *realityHello, authKey []byte, caps byte, onTunnel func(*Carrier)) {
-	cert, err := r.makeCert(authKey, h.sni)
-	if err != nil {
-		realityReject("cert")
-		raw.Close()
-		return
+func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byte, h *realityHello, cert *tls.Certificate, th targetHello, thOK bool, caps byte, onTunnel func(*Carrier)) {
+	ucfg := r.toUTLSConfig(r.tunnelTLSConfig(cert), th, thOK)
+	var suite uint16
+	if thOK {
+		suite = th.suite
 	}
-	tcfg := r.tunnelTLSConfig(cert)
-	tconn := tls.Server(&prefixConn{Conn: wrapBatch(raw), pre: pre}, tcfg)
+	release := lockSuite(suite)
+	tconn := utls.Server(&firstWriteConn{Conn: &prefixConn{Conn: wrapBatch(raw), pre: pre}, f: release}, ucfg)
 	tconn.SetDeadline(time.Now().Add(handshakeTimeout))
-	if err := tconn.Handshake(); err != nil {
+	err := tconn.Handshake()
+	release()
+	if err != nil {
 		realityReject("handshake")
 		raw.Close()
 		return
@@ -1422,7 +1451,7 @@ func (r *RealityServer) serveTunnel(ctx context.Context, raw net.Conn, pre []byt
 
 // fallback splices client <-> target byte for byte (pending = client bytes
 // read but not yet sent to the target), with the limits.
-func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, pending []byte) {
+func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, pending []byte, free, rate int64) {
 	defer client.Close()
 	if target == nil {
 		realityReject("target_dial")
@@ -1443,7 +1472,7 @@ func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, p
 	wg.Add(2)
 	cp := func(dst, src net.Conn) {
 		defer wg.Done()
-		r.limitedCopy(dst, src)
+		r.limitedCopy(dst, src, free, rate)
 		if c, ok := dst.(interface{ CloseWrite() error }); ok {
 			c.CloseWrite()
 		} else {
@@ -1464,14 +1493,14 @@ func (r *RealityServer) fallback(ctx context.Context, client, target net.Conn, p
 }
 
 // limitedCopy: free up to maxBytes, then at most rateBps.
-func (r *RealityServer) limitedCopy(dst, src net.Conn) {
+func (r *RealityServer) limitedCopy(dst, src net.Conn, maxBytes, rateBps int64) {
 	b := make([]byte, 32<<10)
 	var total int64
 	var start time.Time
 	var after int64
 	for {
 		chunk := b
-		if total >= r.maxBytes && len(chunk) > 16<<10 {
+		if total >= maxBytes && len(chunk) > 16<<10 {
 			chunk = b[:16<<10]
 		}
 		n, err := src.Read(chunk)
@@ -1481,14 +1510,14 @@ func (r *RealityServer) limitedCopy(dst, src net.Conn) {
 			}
 			total += int64(n)
 			realityStats.fbBytes.Add(int64(n))
-			if total > r.maxBytes {
+			if total > maxBytes {
 				if start.IsZero() {
 					start = time.Now()
-					after = total - r.maxBytes
+					after = total - maxBytes
 				} else {
 					after += int64(n)
 				}
-				want := time.Duration(float64(after) / float64(r.rateBps) * float64(time.Second))
+				want := time.Duration(float64(after) / float64(rateBps) * float64(time.Second))
 				if d := want - time.Since(start); d > 0 {
 					time.Sleep(d)
 				}
