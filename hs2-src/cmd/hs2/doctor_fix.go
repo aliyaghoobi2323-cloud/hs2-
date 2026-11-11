@@ -154,6 +154,9 @@ func applyFix(n int, yes bool, hours float64, in io.Reader, out io.Writer,
 	fixes, err := loadFixes(doctorFixesPath, time.Now())
 	if err != nil {
 		fmt.Fprintln(out, tr("ERROR: ", "خطا: ")+err.Error())
+		if os.Geteuid() != 0 {
+			fmt.Fprintln(out, tr("(the doctor saves its fixes only when run as root: sudo hs2-menu)", "(پزشک اصلاح‌ها را فقط با root ذخیره می‌کند: sudo hs2-menu)"))
+		}
 		return 1
 	}
 	if n < 1 || n > len(fixes) {
