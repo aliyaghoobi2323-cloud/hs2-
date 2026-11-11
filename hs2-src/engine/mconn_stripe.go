@@ -450,6 +450,11 @@ func (m *mConn) stripeSendLocked(c *mchunk) int {
 	if w == 0 && m.stUp {
 		w = 1 // HS2_MCONN_STRIPE_UP: never narrower than the ungated pair before it (mconn_stripe_up.go)
 	}
+	if m.iran {
+		if c := stripeRebuildCap(time.Now()); c >= 0 && (w < 0 || w > c) {
+			w = c // HS2_MCONN_STRIPE_REBUILD: the pool is rebuilding after a mass loss
+		}
+	}
 	for i := range nsubs {
 		s := m.subs[(m.stRR+i)%nsubs]
 		if s.retired || s.dead || (!s.stripe && s != p) {

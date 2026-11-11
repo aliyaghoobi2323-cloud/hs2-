@@ -110,6 +110,8 @@ const (
 )
 
 type LinkManager struct {
+	// peak: the reverse pool's recent peak (HS2_MCONN_STRIPE_REBUILD).
+	peak poolPeak
 	// pathCooled (nil: never) reports whether the balancer cooled a link's
 	// path (direct edge with lb); HS2_DUP_PATHS keeps second subs off it.
 	pathCooled func(Link) bool
@@ -476,6 +478,7 @@ func (m *LinkManager) AddLink(l Link, from string) int {
 	n := m.aliveLocked()
 	S, _ := m.countsLocked()
 	m.mu.Unlock()
+	m.peak.note(now, n)
 	if spare {
 		m.upLog.log("mtcp: reverse link %d up from %s (now %d) — spare: the pattern needs %d serving; it takes no connections and closes unless needed",
 			id, from, n, S)
@@ -542,6 +545,7 @@ func (m *LinkManager) DropLink(l Link, from string) {
 		m.exitInfo.Store(nil) // no link left: the next exit may be another process
 	}
 	m.mu.Unlock()
+	m.peak.note(time.Now(), n)
 	l.Close()
 	if id < 0 || m.closing.Load() {
 		return // already retired or reaped, or the whole pool is shutting down
