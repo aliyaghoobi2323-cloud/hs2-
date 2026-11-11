@@ -760,7 +760,11 @@ drop-ins, configs, certificates) and then restarts each tunnel and checks the
 (`ExecStart=/usr/local/bin/hs2-r31 run -c …`, common on hand-tuned servers) is
 pointed at `/usr/local/bin/hs2` with the same arguments; the old file is kept
 as `override.conf.pre-upgrade`. Check with `systemctl cat hs2` and
-`readlink /proc/$(systemctl show -p MainPID --value hs2)/exe`.
+`readlink /proc/$(systemctl show -p MainPID --value hs2)/exe`. A server where
+rel52's installer turned an alert check (`hs2-alert-<unit>.service`) into a
+second tunnel daemon is healed by the next upgrade (rel53): the unit is the
+alert check again and only one `hs2 run` per config is left. Upgrade with
+rel53's `install.sh`, not rel52's.
 
 **Roll back** the binary and units to before the upgrade:
 `cd /root/hs2 && bash install.sh restore` (the newest backup; or name a file
@@ -769,7 +773,7 @@ from `/root/hs2-backups/`). **Uninstall:** `bash install.sh uninstall`.
 Existing configs keep their mode. To switch, edit `"carrier"` in
 `/etc/hs2/config.json` on both servers and `systemctl restart hs2`.
 
-### Upgrading from r31 / r34 (rel40, rel52)
+### Upgrading from r31 / r34 (rel40, rel52, rel53)
 
 An r31 or r34 config runs **unchanged** on rel40: no new field is required,
 nothing is rewritten, and a config without a `front` keeps the TLS front on
@@ -778,7 +782,7 @@ front` / new menu → 4). Behaviour changes only where a **new default** applies
 
 What changes for an existing deployment after the upgrade:
 
-| what | where | before (r31 / r34) | after (rel52) |
+| what | where | before (r31 / r34) | after (rel52 / rel53) |
 |------|-------|--------------------|---------------|
 | `HS2_LB_JUDGE_DATA` — the LB judge counts only dials that failed before TCP connected (a front's handshake failure no longer lowers a path) | both sides | off | **on** |
 | `HS2_LB_RESCUE` — a light user whose only sub sits on a lowered / cut path gets a copy on a good path, at once | Iran (edge) | off | **on** |

@@ -19,6 +19,55 @@ fixed in a follow-up commit before the phase shipped.
 The published binary is static (`CGO_ENABLED=0`) and carries a build stamp
 visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
+## rel53 — release candidate: the three rev53 reviews merged (binary)
+
+Merges rev53a (installer/menu), rev53b (data plane) and rev53c (operations)
+on top of rel52 (7ad72f77). **rel52's installer has a critical bug** (with
+alerts on, `install.sh upgrade` turned `hs2-alert-<unit>.service` into a
+second `hs2 run` on the live tunnel's config) — rel53 fixes it and heals a
+server an older upgrade damaged; do not upgrade with rel52's `install.sh`.
+
+- **installer, one implementation** of what rev53a and rev53c fixed twice:
+  `dropin_exec_sync` (a drop-in `ExecStart=<other binary> run …` is pointed at
+  `/usr/local/bin/hs2`, written atomically, the original kept as
+  `*.pre-upgrade`, one `daemon-reload`, a wrapper such as `taskset … hs2 run`
+  only reported), `running_exe_ok` (after the restart `/proc/PID/exe` must be
+  the upgraded binary, compared resolved; otherwise the tunnel counts as
+  failed), `tm_units` (skips oneshot units **and** the reserved helper names
+  `hs2-stats`/`hs2-lb-park`/`hs2-coreguard`/`hs2-alert-*` unless the unit
+  really runs `run -c`), `heal_alert_units` before the tunnel list, drop-in
+  aware `tm_cfg`. Both branches' tests kept (`helpers_test.sh`,
+  `upgrade_dropin_test.sh`).
+- **menu (Go) upgrade path:** `upgradeBinary` no longer says "upgraded" when a
+  drop-in keeps the tunnel on another binary; it names the running exe and the
+  fix (`TestExeIsBin`).
+- **tests:** two `-race` reports that were test-only (a `fillMin` goroutine
+  started with HS2_LB_AUTO2 off outliving its test; `shapeSmall`/`shapeBulk`
+  toggled under sessions left by earlier tests — now atomics, same production
+  behaviour) and the flaky `TestMConnStripeSlots` (now checks the
+  connection's own slot, not the process-wide counter).
+- **Iran-side memory (investigated, not fixed in rel53):** the rel52 soak's
+  Iran RSS growth reproduces with the **r31 binary and r31 keys** on the same
+  harness (r31 1.58 GB vs rel53 1.70 GB after ~18 min), so it is not new in
+  rel52/rel53; what grows is live heap of 16 KB mconn receive chunks
+  (`msub.readLoop` → `getChunk`), not goroutines or fds, and it is not
+  sync.Pool caching (three forced GCs keep it). A traced run on a second lab
+  (no other jobs) stayed flat at the same point. Details and the plan:
+  `rel53-notes.md`.
+
+### rev53a — installer/menu review
+
+- upgrade with a drop-in whose `ExecStart=` runs another binary (see above);
+  `tm_cfg` reads the drop-in's `-c`; backups include the drop-ins.
+- `cfg_put`: every menu config write is atomic (temp file + rename, mode and
+  owner kept); a full disk no longer leaves an empty config (also the certbot
+  renewal file).
+- `hs2://` links: a field with `"`, `\`, whitespace or a control character,
+  or a `udp` other than true/false, is refused (it could inject JSON keys).
+- helper units are not tunnels and their names are reserved; deleting a
+  tunnel removes its alert timer, uninstall the stats / LB-park timers.
+- `hs2 lb --ip` accepts `[IPv6]`, rejects zones and invalid addresses.
+
 ## rev53b — long-uptime review of the data plane (source only, no binary)
 
 An independent review for bugs that show only after long uptime, many users
