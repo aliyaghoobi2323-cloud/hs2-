@@ -1325,8 +1325,8 @@ Common flags (before or after the positional value): `--confirm-within 5m`,
   add the primary joins the list explicitly (a wildcard listener: its first
   public IP) and the weights are split equally (or `--weight W`, the others
   scaled to the rest). Per-IP `--sni` / `--cert` / `--key` (TLS) are the lb
-  stage-3 fields; `--front` accepts `tls` only for now (Reality per IP
-  arrives with the security screen, M5).
+  stage-3 fields; `--front` accepts `tls`; switch the IP to reality / both afterwards with
+  `hs2 reality front` (screen 4, Security & camouflage, M5).
 - **Weights** must name every IP of this side and sum to 100 (`--equal`
   splits evenly, the remainder to the first).
 - **Park** sets the IP's weight to 0 and gives its share to the others in

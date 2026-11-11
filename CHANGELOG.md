@@ -21,6 +21,75 @@ visible in `hs2 version`; see `hs2-src/BUILD.md`.
 
 ---
 
+## Menu redesign M5 — Security & camouflage (= Reality phase 5; binary + installer)
+
+- `hs2 reality front -u U --ip IP tls|reality|both [--target host:443]
+  [--sni name] [--new-key] [--force-target] [--skip-check]`: the per-IP front
+  in this side's lb list. Only on the LISTENING server (the dialing server is
+  told the command to run on the other side); the dialer learns kind, server
+  names, public key and short ids from the announcement, so nothing runs on
+  the other server. Preview diff (private keys shown as `(hidden)`; per-IP
+  fronts are not "bilateral"), backup, safe apply with a **reload** (SIGHUP)
+  instead of a restart: established links keep running; the confirm timer and
+  the automatic rollback reload too. A new key pair + short id is generated
+  when the IP has none; `reality -> both` keeps key and target; `tls` removes
+  the block. The target is checked first (a rejected target is refused unless
+  `--force-target`).
+- Pre-flight refusals with the reason: a wildcard listen address (`addr
+  0.0.0.0:P`) makes the announcement empty, so the dialer would never learn
+  the front (set `addr` to this IP first); `both` without any sni (no domain)
+  would send every tls dialer to the cover target. A warning for pure
+  `reality` unless the IP is already `both` (a dialer that has not heard the
+  key, e.g. right after its restart, is refused): order tls -> both ->
+  reality.
+- `hs2 reality check-target host[:443] [sni] [--json]`: TLS 1.3, X25519
+  offered alone, ALPN h2, certificate covers the name, chain size, handshake
+  time (BAD > 1.5 s), multi-tenant CDN by name, Cloudflare address ranges, a
+  shared certificate (> 60 names) or the CDN's response headers (cf-ray,
+  x-amz-cf-id, x-served-by cache-, akamai, x-azure-ref, gws ...). Verdict
+  ACCEPT / REJECT with reasons; exit 1 on REJECT.
+- `hs2 reality targets [--add h,h] [--only] [--json]`: the target picker,
+  built-in candidates plus yours, checked in parallel, accepted first by
+  latency.
+- `hs2 reality rotate-key -u U (--ip IP | --all)`, `hs2 reality keygen`.
+- `hs2 reality status -u U [--json]`: per IP the configured and the in-use
+  front with reality/tls/cover/rejected link counters (listening side), per
+  path kind and "both" state (now reality / tls cool-down, ok/fail,
+  fallbacks) on the dialing side, reality stats and the front events of the
+  last 24 h.
+- Doctor category `front` (`hs2 doctor --deep --only front`, menu 7 -> 7):
+  reality target reachable, key / short id mismatch (no authenticated link
+  but >= 5 auth failures), splices that could not reach the target, a "both"
+  path that fell back to tls or has a high reality failure rate.
+- Alert kinds `fallback` (a "both" path in its tls cool-down, or >= 2 new
+  fallbacks between two checks) and `rtarget` (a reality target unreachable
+  two checks in a row), fa/en texts, switchable like the others.
+- Screen 4 of `hs2-menu --new`: live front state, front of an IP, target
+  picker, one-target check, key rotation, doctor fronts, certificate;
+  advanced: server name, one-IP rotation, keygen, config editor. Old binary:
+  the classic items.
+- Fixes found on the way: the M4 lb editors (`hs2 lb add-ip|remove-ip|
+  weights|park|unpark`) dropped every per-IP `front.private_key` (the lb list
+  round-trips through a type that never marshals it); an lb reload on a
+  wildcard listener (`addr 0.0.0.0:P`) closed the `::` listener and left the
+  tunnel without any listener.
+- M6 leftovers: `hs2 tunnel delete` backs up and removes the
+  `<unit>.service.d` drop-in directory (the restore line copies it back);
+  `hs2 config history` marks only the newest version equal to the live config
+  as current; `multi_tunnel_test.py` SIGKILLs its fakesd supervisors.
+- Tests: Go (front edit, private-key preservation, target check against local
+  TLS servers incl. one with Cloudflare headers, doctor fronts, alert rules,
+  reload-mode apply + rollback, fa status render, delete drop-ins, history
+  current, pre-flight, diff secrecy); pty `security_menu_test.sh` (17 checks).
+- Lab demo (labs 2/3, direct mtcp, kharej listens): tls -> reality -> both
+  under a 200 MB download plus a request every 0.3 s: 349/349 OK and the
+  download complete; after a dialer restart 7 new links authenticated over
+  reality; a client without the key (openssl / curl, sni github.com) got
+  github.com's real certificate and HTTP answer; an unconfirmed apply rolled
+  back by reload after 30 s; check-target ACCEPT github.com, REJECT
+  www.cloudflare.com / cdnjs.cloudflare.com (name) and www.npmjs.com (address
+  range).
+
 ## Menu redesign M6 — Monitoring & alerts, Server doctor with safe fixes (binary + installer)
 
 - New `hs2 alert conf show|set|token`, `hs2 alert rule NAME on|off`,

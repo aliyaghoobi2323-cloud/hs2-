@@ -1005,3 +1005,32 @@ is noisy in both arms (177-542) and higher by median with the rescue
 before trusting the call column here (the 3-path runs of 8.6 showed call p99
 336 vs 570 the other way). Rows mix the 35d binary (2 reps per arm) and this
 tree's (2 reps; base there = `HS2_LB_RESCUE=0`).
+
+## 9. Phase 5 = menu M5: Security & camouflage (branch menu37)
+
+Operator surface for the per-IP fronts: `cmd/hs2/reality_menu.go` (commands
+`front`, `rotate-key`, `targets`, `check-target`, `status`; doctor category
+`front`; the target list for the alerts) and screen 4 of `hs2-menu --new`
+(`install.sh nm_security`). A front change edits `lb.<own side>[ip].front` of
+the listening server and goes through the safe apply in **reload** mode
+(`applyReq.Reload`): SIGHUP runs `reloadLB` -> `frontMux.rebuild` (new links
+only) and `SetMine` (announcement), so established links stay; the rollback
+reloads too. Preview diffs hide `*.private_key` and do not mark per-IP fronts
+bilateral.
+
+Findings from the lab demo (fixed or guarded here):
+
+* A wildcard listener (`addr 0.0.0.0:P`, what `hs2 tunnel create` writes)
+  makes `lbOwnAdvert` nil: the dialer never learns any front. `hs2 reality
+  front` refuses with the fix (set `addr` to the IP). Plan: announce the
+  explicit lb list when the primary is a wildcard (lbreload.go, LB owner).
+* `syncListenersLocked` closed the `::` listener of a wildcard addr on any lb
+  reload (prim "0.0.0.0" vs "::"): fixed (an unspecified listener of addr is
+  never closed).
+* "both" serves tls only for `tlsNames` (top-level / per-IP sni): a tunnel
+  without an sni needs one first (refused with the reason).
+* Pure "reality" refuses a dialer that has not heard the key (after its
+  restart it dials before the announcement): warned; order tls -> both ->
+  reality.
+* `tls` removes the front block (key included): a later reality gets a new
+  key (announced).
